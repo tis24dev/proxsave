@@ -22,7 +22,6 @@ const (
 type screenEntry struct {
 	id     uint64
 	screen Screen
-	abort  func()
 }
 
 // rootModel renders the ProxSave frame and routes messages to the top screen
@@ -147,23 +146,34 @@ func (m rootModel) top() (Screen, bool) {
 	return nil, false
 }
 
-func (m rootModel) render() string {
-	w := max(m.width, minWidth)
-	h := max(m.height, minHeight)
+// bodyViewport is the single source of truth for the body area geometry. It
+// computes the inner width and body height exactly as render() lays out the
+// frame, returning the framed dimensions (w, h) and chrome strings so callers
+// need not recompute them. Both render() and translateMouse() go through here.
+func (m rootModel) bodyViewport() (w, h, innerW, bodyH int, header, rule, footer string) {
+	w = max(m.width, minWidth)
+	h = max(m.height, minHeight)
 	// lipgloss v2 sizes are border-box: Width/Height include border and
 	// padding. Inner content area = total minus border (2) minus padding (2).
-	innerW := w - 4
+	innerW = w - 4
 
 	top, hasTop := m.top()
 
 	// Chrome is cropped like the body: an over-long screen title or config
 	// path must never push the right border out or wrap the frame.
-	header := crop(m.renderHeader(innerW, top, hasTop), innerW, 1)
-	rule := theme.Subtle.Render(strings.Repeat("─", innerW))
-	footer := crop(m.renderFooter(innerW, top, hasTop), innerW, 2)
+	header = crop(m.renderHeader(innerW, top, hasTop), innerW, 1)
+	rule = theme.Subtle.Render(strings.Repeat("─", innerW))
+	footer = crop(m.renderFooter(innerW, top, hasTop), innerW, 2)
 
 	chromeH := lipgloss.Height(header) + lipgloss.Height(rule) + lipgloss.Height(footer)
-	bodyH := max(h-2-chromeH, 1)
+	bodyH = max(h-2-chromeH, 1)
+	return w, h, innerW, bodyH, header, rule, footer
+}
+
+func (m rootModel) render() string {
+	w, h, innerW, bodyH, header, rule, footer := m.bodyViewport()
+
+	top, hasTop := m.top()
 
 	body := ""
 	if hasTop {
@@ -240,21 +250,27 @@ func center(width int, s string) string {
 }
 
 // Body origin inside the frame: border (1) + horizontal padding (1)
-// columns, border (1) + header (1) + rule (1) rows. Keep in sync with
-// render().
+// columns, border (1) + header (1) + rule (1) rows. The body extent
+// (innerW x bodyH) comes from bodyViewport(); keep these origins in sync
+// with render()'s frame layout.
 const (
 	bodyOriginX = 2
 	bodyOriginY = 3
 )
 
-// translateMouse rebases mouse coordinates onto the body area. Clicks on
-// the chrome are swallowed (nil); wheel events pass through regardless of
+// translateMouse rebases mouse coordinates onto the body area. Clicks that
+// fall outside the body on ANY side (chrome above/left, footer/rule/border
+// below/right) are swallowed (nil); wheel events pass through regardless of
 // position so scrolling works wherever the pointer is.
 func (m rootModel) translateMouse(msg tea.Msg) tea.Msg {
+	_, _, innerW, bodyH, _, _, _ := m.bodyViewport()
 	rebase := func(mouse tea.Mouse) (tea.Mouse, bool) {
 		mouse.X -= bodyOriginX
 		mouse.Y -= bodyOriginY
-		return mouse, mouse.X >= 0 && mouse.Y >= 0
+		// Bound on all sides: a body-relative click at or past innerW/bodyH
+		// lands on chrome the router crops off-screen, so a component must
+		// never hit-test it as a real row.
+		return mouse, mouse.X >= 0 && mouse.Y >= 0 && mouse.X < innerW && mouse.Y < bodyH
 	}
 	switch mm := msg.(type) {
 	case tea.MouseClickMsg:

@@ -159,6 +159,9 @@ jobs:
           args: release --clean --config .github/.goreleaser.yml
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Baked into the binary via ldflags (support.supportEmail) — the maintainer
+          # support-email recipient. Empty (secret unset) just disables the support email.
+          EMAIL_SUPPORT: ${{ secrets.EMAIL_SUPPORT }}
 
       ########################################
       # SIGN SHA256SUMS (ECDSA P-256) + upload as a release asset

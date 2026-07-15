@@ -390,9 +390,8 @@ func (s *SecondaryStorage) List(ctx context.Context) (backups []*types.BackupMet
 
 	// Filter and parse backup files
 	for _, match := range matches {
-		// Skip associated files
-		if strings.HasSuffix(match, ".sha256") ||
-			strings.HasSuffix(match, ".metadata") {
+		// Skip associated sidecars (checksum/metadata/manifest); shared predicate.
+		if isBackupSidecar(match) {
 			continue
 		}
 

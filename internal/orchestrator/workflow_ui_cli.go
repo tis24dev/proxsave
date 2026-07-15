@@ -11,6 +11,7 @@ import (
 
 	"github.com/tis24dev/proxsave/internal/input"
 	"github.com/tis24dev/proxsave/internal/logging"
+	"github.com/tis24dev/proxsave/internal/ui/components"
 )
 
 type cliWorkflowUI struct {
@@ -29,13 +30,15 @@ func newCLIWorkflowUI(reader *bufio.Reader, logger *logging.Logger) *cliWorkflow
 }
 
 func (u *cliWorkflowUI) RunTask(ctx context.Context, title, initialMessage string, run func(ctx context.Context, report ProgressReporter) error) error {
+	// Scrub every dynamic value before it reaches the terminal: progress
+	// messages can embed remote/archive filenames (e.g. rclone lsf entries).
 	title = strings.TrimSpace(title)
 	if title != "" {
-		fmt.Fprintf(os.Stderr, "%s\n", title)
+		fmt.Fprintf(os.Stderr, "%s\n", components.SanitizeLine(title))
 	}
 	initialMessage = strings.TrimSpace(initialMessage)
 	if initialMessage != "" {
-		fmt.Fprintf(os.Stderr, "%s\n", initialMessage)
+		fmt.Fprintf(os.Stderr, "%s\n", components.SanitizeLine(initialMessage))
 	}
 
 	var lastPrinted time.Time
@@ -51,42 +54,46 @@ func (u *cliWorkflowUI) RunTask(ctx context.Context, title, initialMessage strin
 		}
 		lastPrinted = now
 		lastMessage = message
-		fmt.Fprintf(os.Stderr, "%s\n", message)
+		fmt.Fprintf(os.Stderr, "%s\n", components.SanitizeLine(message))
 	}
 
 	return run(ctx, report)
 }
 
 func (u *cliWorkflowUI) ShowMessage(ctx context.Context, title, message string) error {
-	if strings.TrimSpace(title) != "" {
-		fmt.Printf("\n%s\n", title)
+	// title/message can carry free-form external text: scrub escape/control bytes
+	// before printing to the terminal (same policy as the styled dashboard path).
+	if t := strings.TrimSpace(components.SanitizeText(title)); t != "" {
+		fmt.Printf("\n%s\n", t)
 	}
-	if strings.TrimSpace(message) != "" {
-		fmt.Println(message)
+	if m := strings.TrimSpace(components.SanitizeText(message)); m != "" {
+		fmt.Println(m)
 	}
 	return nil
 }
 
 func (u *cliWorkflowUI) ShowStatusResult(ctx context.Context, screenTitle string, level HealthcheckSetupLevel, keyword, explanation string) error {
 	// Non-fatal outcome (e.g. an empty-state): stdout, like ShowMessage, not stderr.
-	if strings.TrimSpace(screenTitle) != "" {
-		fmt.Printf("\n%s\n", strings.TrimSpace(screenTitle))
+	// keyword/explanation can embed external text (e.g. rclone output in a scan
+	// error), so scrub them before they reach the terminal.
+	if t := strings.TrimSpace(components.SanitizeText(screenTitle)); t != "" {
+		fmt.Printf("\n%s\n", t)
 	}
-	if strings.TrimSpace(keyword) != "" {
-		fmt.Printf("Status: %s\n", strings.TrimSpace(keyword))
+	if kw := strings.TrimSpace(components.SanitizeText(keyword)); kw != "" {
+		fmt.Printf("Status: %s\n", kw)
 	}
-	if strings.TrimSpace(explanation) != "" {
-		fmt.Println(strings.TrimSpace(explanation))
+	if exp := strings.TrimSpace(components.SanitizeText(explanation)); exp != "" {
+		fmt.Println(exp)
 	}
 	return nil
 }
 
 func (u *cliWorkflowUI) ShowError(ctx context.Context, title, message string) error {
-	if strings.TrimSpace(title) != "" {
-		fmt.Fprintf(os.Stderr, "\n%s\n", title)
+	if t := strings.TrimSpace(components.SanitizeText(title)); t != "" {
+		fmt.Fprintf(os.Stderr, "\n%s\n", t)
 	}
-	if strings.TrimSpace(message) != "" {
-		fmt.Fprintln(os.Stderr, message)
+	if m := strings.TrimSpace(components.SanitizeText(message)); m != "" {
+		fmt.Fprintln(os.Stderr, m)
 	}
 	return nil
 }
@@ -104,7 +111,7 @@ func (u *cliWorkflowUI) PromptDestinationDir(ctx context.Context, defaultDir str
 	if defaultDir == "" {
 		defaultDir = "./decrypt"
 	}
-	fmt.Printf("Enter destination directory (default: %s): ", defaultDir)
+	fmt.Printf("Enter destination directory (default: %s): ", components.SanitizeLine(defaultDir))
 	line, err := input.ReadLineWithContext(ctx, u.reader)
 	if err != nil {
 		return "", err
@@ -118,7 +125,7 @@ func (u *cliWorkflowUI) PromptDestinationDir(ctx context.Context, defaultDir str
 
 func (u *cliWorkflowUI) ResolveExistingPath(ctx context.Context, path, description, failure string) (ExistingPathDecision, string, error) {
 	if strings.TrimSpace(failure) != "" {
-		fmt.Fprintf(os.Stderr, "%s\n", strings.TrimSpace(failure))
+		fmt.Fprintf(os.Stderr, "%s\n", components.SanitizeText(strings.TrimSpace(failure)))
 	}
 
 	current := filepath.Clean(path)
@@ -127,7 +134,7 @@ func (u *cliWorkflowUI) ResolveExistingPath(ctx context.Context, path, descripti
 		desc = "file"
 	}
 
-	fmt.Printf("%s %s already exists.\n", titleCaser.String(desc), current)
+	fmt.Printf("%s %s already exists.\n", titleCaser.String(desc), components.SanitizeLine(current))
 	fmt.Println("  [1] Overwrite")
 	fmt.Println("  [2] Enter a different path")
 	fmt.Println("  [0] Exit")
@@ -149,7 +156,7 @@ func (u *cliWorkflowUI) ResolveExistingPath(ctx context.Context, path, descripti
 			}
 			trimmed, err := validateDistinctNewPathInput(newPath, current)
 			if err != nil {
-				fmt.Fprintln(os.Stderr, err.Error())
+				fmt.Fprintln(os.Stderr, components.SanitizeText(err.Error()))
 				continue
 			}
 			return PathDecisionNewPath, filepath.Clean(trimmed), nil
@@ -163,12 +170,13 @@ func (u *cliWorkflowUI) ResolveExistingPath(ctx context.Context, path, descripti
 
 func (u *cliWorkflowUI) PromptDecryptSecret(ctx context.Context, displayName, previousError string) (string, error) {
 	if strings.TrimSpace(previousError) != "" {
-		fmt.Fprintln(os.Stderr, strings.TrimSpace(previousError))
+		fmt.Fprintln(os.Stderr, components.SanitizeText(strings.TrimSpace(previousError)))
 	}
 
 	displayName = strings.TrimSpace(displayName)
 	if displayName != "" {
-		fmt.Printf("Enter decryption key or passphrase for %s (0 = exit): ", displayName)
+		// displayName is the manifest archive filename (cand.DisplayBase): scrub it.
+		fmt.Printf("Enter decryption key or passphrase for %s (0 = exit): ", components.SanitizeLine(displayName))
 	} else {
 		fmt.Print("Enter decryption key or passphrase (0 = exit): ")
 	}
@@ -259,7 +267,7 @@ func (u *cliWorkflowUI) ConfirmRestore(ctx context.Context) (bool, error) {
 
 func (u *cliWorkflowUI) ConfirmCompatibility(ctx context.Context, warning error) (bool, error) {
 	fmt.Println()
-	fmt.Printf("⚠ %v\n\n", warning)
+	fmt.Printf("⚠ %s\n\n", components.SanitizeText(fmt.Sprint(warning)))
 	fmt.Print("Do you want to continue anyway? This may cause system instability. (yes/no): ")
 
 	line, err := input.ReadLineWithContext(ctx, u.reader)
@@ -286,7 +294,7 @@ func (u *cliWorkflowUI) SelectClusterRestoreMode(ctx context.Context) (ClusterRe
 
 func (u *cliWorkflowUI) ConfirmContinueWithoutSafetyBackup(ctx context.Context, cause error) (bool, error) {
 	fmt.Println()
-	fmt.Printf("Safety backup failed: %v\n", cause)
+	fmt.Printf("Safety backup failed: %s\n", components.SanitizeText(fmt.Sprint(cause)))
 	fmt.Print("Continue without safety backup? (yes/no): ")
 	line, err := input.ReadLineWithContext(ctx, u.reader)
 	if err != nil {
@@ -304,11 +312,11 @@ func (u *cliWorkflowUI) ConfirmContinueWithPBSServicesRunning(ctx context.Contex
 func (u *cliWorkflowUI) ConfirmFstabMerge(ctx context.Context, title, message string, timeout time.Duration, defaultYes bool) (bool, error) {
 	title = strings.TrimSpace(title)
 	if title != "" {
-		fmt.Printf("\n%s\n", title)
+		fmt.Printf("\n%s\n", components.SanitizeLine(title))
 	}
 	message = strings.TrimSpace(message)
 	if message != "" {
-		fmt.Println(message)
+		fmt.Println(components.SanitizeText(message))
 		fmt.Println()
 	}
 	return promptYesNoWithCountdown(ctx, u.reader, u.logger, "Apply fstab merge?", timeout, defaultYes)
@@ -320,22 +328,26 @@ func (u *cliWorkflowUI) SelectExportNode(ctx context.Context, exportRoot, curren
 
 func (u *cliWorkflowUI) ConfirmApplyVMConfigs(ctx context.Context, sourceNode, currentNode string, count int) (bool, error) {
 	fmt.Println()
+	// sourceNode is a node directory name read from inside the backup archive;
+	// scrub it (and currentNode, for parity) before printing to the terminal.
+	src := components.SanitizeLine(sourceNode)
+	cur := components.SanitizeLine(currentNode)
 	if strings.TrimSpace(sourceNode) == strings.TrimSpace(currentNode) {
-		fmt.Printf("Found %d VM/CT configs for node %s\n", count, currentNode)
+		fmt.Printf("Found %d VM/CT configs for node %s\n", count, cur)
 	} else {
-		fmt.Printf("Found %d VM/CT configs for exported node %s (will apply to current node %s)\n", count, sourceNode, currentNode)
+		fmt.Printf("Found %d VM/CT configs for exported node %s (will apply to current node %s)\n", count, src, cur)
 	}
 	return promptYesNo(ctx, u.reader, "Apply all VM/CT configs via pvesh? (y/N): ")
 }
 
 func (u *cliWorkflowUI) ConfirmApplyStorageCfg(ctx context.Context, storageCfgPath string) (bool, error) {
 	fmt.Println()
-	fmt.Printf("Storage configuration found: %s\n", strings.TrimSpace(storageCfgPath))
+	fmt.Printf("Storage configuration found: %s\n", components.SanitizeLine(strings.TrimSpace(storageCfgPath)))
 	return promptYesNo(ctx, u.reader, "Apply storage.cfg via pvesh? (y/N): ")
 }
 
 func (u *cliWorkflowUI) ConfirmApplyDatacenterCfg(ctx context.Context, datacenterCfgPath string) (bool, error) {
 	fmt.Println()
-	fmt.Printf("Datacenter configuration found: %s\n", strings.TrimSpace(datacenterCfgPath))
+	fmt.Printf("Datacenter configuration found: %s\n", components.SanitizeLine(strings.TrimSpace(datacenterCfgPath)))
 	return promptYesNo(ctx, u.reader, "Apply datacenter.cfg via pvesh? (y/N): ")
 }

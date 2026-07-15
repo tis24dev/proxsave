@@ -90,7 +90,7 @@ func RunHealthcheckSetup(ctx context.Context, session *shell.Session, baseDir, c
 				if !cancelled {
 					result.CheckAttempts++
 					if res.HaveStatus {
-						sensors = health.SensorRows(res.RawStatus, result.HealthcheckHeartbeatInterval, time.Now())
+						sensors = health.SensorRows(res.RawStatus, result.HealthcheckHeartbeatInterval, result.HealthcheckUpdateInterval, time.Now())
 					} else {
 						sensors = nil
 					}
@@ -210,10 +210,12 @@ func buildHealthcheckPrompt(selfMode bool, magicLink, keyword, explanation strin
 	// state is yellow with NO symbol, so it reads yellow-without-triangle like the upgrade
 	// and Telegram check screens (only a real post-check warning carries the ⚠).
 	b.WriteString(theme.Text.Render("Status: "))
-	b.WriteString(renderHealthcheckLevel(level, keyword))
-	if explanation != "" {
+	b.WriteString(renderHealthcheckLevel(level, components.SanitizeText(keyword)))
+	// explanation embeds free-form probe error text (orNA(d.Err) read raw from the
+	// status file): scrub it before the verbatim styled-prompt path.
+	if exp := components.SanitizeText(explanation); exp != "" {
 		b.WriteString("\n")
-		b.WriteString(theme.Subtle.Render(explanation))
+		b.WriteString(theme.Subtle.Render(exp))
 	}
 
 	// Per-sensor list: what we actually transmit + its real state, one colored line each,
@@ -228,26 +230,18 @@ func buildHealthcheckPrompt(selfMode bool, magicLink, keyword, explanation strin
 				line += " (last ping " + s.Age + ")"
 			}
 			b.WriteString("\n")
-			b.WriteString(renderHealthcheckLevel(sensorSetupLevel(s.Level), line))
+			// s.Name is a status-file record key read raw: scrub the composed line.
+			b.WriteString(renderHealthcheckLevel(sensorSetupLevel(s.Level), components.SanitizeText(line)))
 		}
 	}
 	return b.String()
 }
 
-// renderHealthcheckLevel is the unified colored-keyword renderer shared by the Status line
-// and every sensor line: green ✓ (Ok), red ✗ (Error), yellow ⚠ (Warn), and yellow with NO
-// symbol (Neutral, the pre-check state).
+// renderHealthcheckLevel is the colored-keyword renderer shared by the Status line and every
+// sensor line. It delegates to the shared orchestrator.RenderStatusLevel so the healthcheck,
+// audit, daemon, and workflow screens can never drift apart.
 func renderHealthcheckLevel(level orchestrator.HealthcheckSetupLevel, text string) string {
-	switch level {
-	case orchestrator.HealthcheckSetupLevelOk:
-		return theme.SuccessText.Render(theme.SymbolSuccess + " " + text)
-	case orchestrator.HealthcheckSetupLevelError:
-		return theme.ErrorText.Render(theme.SymbolError + " " + text)
-	case orchestrator.HealthcheckSetupLevelNeutral:
-		return theme.WarningText.Render(text)
-	default: // HealthcheckSetupLevelWarn - a real post-check warning
-		return theme.WarningText.Render(theme.SymbolWarning + " " + text)
-	}
+	return orchestrator.RenderStatusLevel(level, text)
 }
 
 // sensorSetupLevel maps a health.SensorLevel onto the shared HealthcheckSetupLevel so the

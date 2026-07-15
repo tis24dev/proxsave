@@ -1,7 +1,8 @@
 // Package components provides the reusable Charm screens ProxSave flows are
-// built from: list selection, confirmation (with countdown), text input,
-// task progress, paged text, and notices. Every component embeds
-// shell.Resolver and is driven through shell.Ask.
+// built from: list selection, checkbox multi-select, single-screen grid forms,
+// confirmation (with countdown), text input, paged text, task progress, and the
+// streaming task viewport, plus notices. Every component embeds shell.Resolver and
+// is driven through shell.Ask.
 package components
 
 import (
@@ -44,7 +45,8 @@ type Selector[T any] struct {
 	prompt       string
 	promptStyled bool // prompt is pre-rendered (colors/box) - render verbatim, don't sanitize/wrap
 
-	lastRowsTop int // body row of the first visible item (set by View)
+	lastRowsTop   int // body row of the first visible item (set by View)
+	lastWindowEnd int // body row just past the last rendered item (set by View)
 }
 
 // SelectorOption customizes a Selector.
@@ -209,6 +211,12 @@ func (s *Selector[T]) Update(msg tea.Msg) (shell.Screen, tea.Cmd) {
 			return s, nil
 		}
 		vis := s.visible()
+		// Only clicks inside the rendered list band map to a row; reject the
+		// title/prompt/blank above and the padded/tail lines below, which when
+		// scrolled would otherwise map to a valid off-screen index.
+		if mouse.Y < s.lastRowsTop || mouse.Y >= s.lastWindowEnd {
+			return s, nil
+		}
 		row := mouse.Y - s.lastRowsTop + s.offset
 		if row >= 0 && row < len(vis) && !s.items[vis[row]].Separator {
 			s.cursor = row
@@ -348,6 +356,10 @@ func (s *Selector[T]) View(width, height int) string {
 	if s.offset < 0 {
 		s.offset = 0
 	}
+	// Rendered list band = [lastRowsTop, lastWindowEnd). lipgloss.Place top-pads
+	// the body, so a blank line sits below a scrolled window; clicks there (and on
+	// the trailing filter/no-match lines) must not map to an off-screen row.
+	s.lastWindowEnd = s.lastRowsTop + max(min(len(vis), s.offset+rows)-s.offset, 0)
 
 	showDigits := s.selectableCount() <= 9 && s.filter == ""
 	// Digit label per visible row = its selectable ordinal (separators get none);

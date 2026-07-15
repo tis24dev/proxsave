@@ -386,7 +386,7 @@ func (c *Collector) collectPVEClusterSnapshot(ctx context.Context, clustered boo
 	// sense of exclusion; the only way to drop them entirely is to also disable
 	// cluster backup.
 	if c.config.BackupClusterConfig && !c.config.BackupPVEACL {
-		c.logger.Warning("PVE access control: BACKUP_PVE_ACL=false excludes /etc/pve/priv/{shadow,token,tfa}.cfg, but the same secrets remain inside the cluster database config.db; set BACKUP_CLUSTER_CONFIG=false to exclude them entirely")
+		c.logger.Warning("PVE access control: BACKUP_PVE_ACL=false excludes /etc/pve/priv/{shadow,token,tfa}.cfg but the same secrets remain in the cluster database config.db. To exclude them entirely, set BACKUP_CLUSTER_CONFIG=false.")
 	}
 
 	if c.config.BackupClusterConfig {

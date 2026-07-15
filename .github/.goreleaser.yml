@@ -31,6 +31,7 @@ builds:
         -X github.com/tis24dev/proxsave/internal/version.Version={{ .Version }}
         -X github.com/tis24dev/proxsave/internal/version.Commit={{ .FullCommit }}
         -X github.com/tis24dev/proxsave/internal/version.Date={{ .Date }}
+        -X github.com/tis24dev/proxsave/internal/support.supportEmail={{ .Env.EMAIL_SUPPORT }}
 
 ###############################################
 # ARCHIVI — tar.gz (classic release)

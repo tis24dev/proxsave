@@ -14,6 +14,7 @@ import (
 	"github.com/tis24dev/proxsave/internal/environment"
 	"github.com/tis24dev/proxsave/internal/logging"
 	"github.com/tis24dev/proxsave/internal/orchestrator"
+	"github.com/tis24dev/proxsave/internal/support"
 	"github.com/tis24dev/proxsave/internal/types"
 )
 
@@ -31,6 +32,13 @@ type backupModeOptions struct {
 	heapProfilePath  string
 	serverIDValue    string
 	serverMACValue   string
+	// support arms support mode for this run: when set, the STREAMED path sends the
+	// maintainer email inside the viewport (see runBackupStreamed) instead of after
+	// the screen closes. supportMeta carries the GitHub nickname + issue the
+	// dashboard collected. The plain (CLI) path leaves these zero and relies on the
+	// deferred sender.
+	support     bool
+	supportMeta support.Meta
 }
 
 type backupModeResult struct {
@@ -38,6 +46,9 @@ type backupModeResult struct {
 	earlyErrorState *orchestrator.EarlyErrorState
 	supportStats    *orchestrator.BackupStats
 	exitCode        int
+	// supportEmailSent is set once the streamed run has already sent the support
+	// email (inside the viewport), so the deferred sender skips it - no double send.
+	supportEmailSent bool
 }
 
 // runBackupMode runs the backup, then (for a STANDALONE run) hands the outcome to the resident
@@ -49,13 +60,16 @@ func runBackupMode(opts backupModeOptions) backupModeResult {
 	// graphical session open for this backup: adopt it and stream the run
 	// in-graphics (runBackupStreamed). Every non-dashboard path (CLI, cron,
 	// daemon-supervised child) has no stashed session, so it runs the plain
-	// steps unchanged. The healthcheck handoff runs in BOTH branches.
-	var res backupModeResult
+	// steps unchanged.
+	//
+	// The manual-backup daemon handoff runs for both, but the streamed path runs
+	// it ITSELF, inside the viewport capture (runBackupStreamed), so its debug
+	// trace streams into the panel instead of printing to the plain scrollback
+	// after the session closes. Only the plain path hands off here.
 	if dashboardHandoffPending() {
-		res = runBackupStreamed(opts)
-	} else {
-		res = runBackupModeSteps(opts)
+		return runBackupStreamed(opts)
 	}
+	res := runBackupModeSteps(opts)
 	maybeHandoffManualBackup(opts, res)
 	return res
 }

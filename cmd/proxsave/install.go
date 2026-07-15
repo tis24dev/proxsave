@@ -369,6 +369,12 @@ func installBanner(installErr error) (title string, level installBannerLevel) {
 }
 
 func printInstallFooter(installErr error, configPath, baseDir, telegramCode, permStatus, permMessage string) {
+	printRunFooter(func() {
+		installFooterBody(installErr, configPath, baseDir, telegramCode, permStatus, permMessage)
+	})
+}
+
+func installFooterBody(installErr error, configPath, baseDir, telegramCode, permStatus, permMessage string) {
 	colorReset := "\033[0m"
 
 	title, level := installBanner(installErr)
@@ -441,7 +447,7 @@ func printInstallFooter(installErr error, configPath, baseDir, telegramCode, per
 	fmt.Println("  --decrypt          - Decrypt an existing backup archive")
 	fmt.Println("  --restore          - Run interactive restore workflow (select bundle, decrypt if needed, apply to system)")
 	fmt.Println("  --upgrade-config   - Upgrade configuration file using the embedded template (run after installing a new binary)")
-	fmt.Println("  --support          - Run in support mode (force debug log level and send email with attached log to github-support@tis24.it); available for standard backup and --restore")
+	fmt.Println("  --support          - Run in support mode (force debug log level and send email with attached log to the maintainer); available for standard backup and --restore")
 	fmt.Println()
 }
 

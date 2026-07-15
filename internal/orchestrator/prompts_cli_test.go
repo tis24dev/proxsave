@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -98,5 +99,42 @@ func TestPromptYesNoWithCountdown_TimeoutReturnsNo(test *testing.T) {
 	}
 	if result {
 		test.Fatalf("expected false on timeout")
+	}
+}
+
+// Even with defaultYes=true the countdown must advertise the TIMEOUT outcome (No),
+// not the Enter default, so the line never contradicts the always-No expiry. The
+// Enter default stays advertised via the [Y/n] hint.
+func TestPromptYesNoWithCountdown_CopyShowsTimeoutOutcome(test *testing.T) {
+	origStderr := os.Stderr
+	r, w, err := os.Pipe()
+	if err != nil {
+		test.Fatalf("pipe: %v", err)
+	}
+	os.Stderr = w
+	defer func() { os.Stderr = origStderr }()
+
+	reader := bufio.NewReader(strings.NewReader("yes\n"))
+	logger := logging.New(types.LogLevelInfo, false)
+	logger.SetOutput(io.Discard)
+
+	if _, err := promptYesNoWithCountdown(context.Background(), reader, logger, "Proceed?", 2*time.Second, true); err != nil {
+		_ = w.Close()
+		os.Stderr = origStderr
+		test.Fatalf("unexpected error: %v", err)
+	}
+	_ = w.Close()
+	os.Stderr = origStderr
+
+	out, _ := io.ReadAll(r)
+	got := string(out)
+	if !strings.Contains(got, "on timeout: No") {
+		test.Fatalf("prompt must advertise the timeout outcome, got %q", got)
+	}
+	if strings.Contains(got, "default: Yes") {
+		test.Fatalf("prompt must not advertise the Enter default as the timeout outcome, got %q", got)
+	}
+	if !strings.Contains(got, "[Y/n]") {
+		test.Fatalf("Enter default must stay advertised via the [Y/n] hint, got %q", got)
 	}
 }

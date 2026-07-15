@@ -110,10 +110,8 @@ func buildRestorePlanText(config *SelectiveRestoreConfig) string {
 
 	var b strings.Builder
 
-	b.WriteString("═══════════════════════════════════════════════════════════════\n")
-	b.WriteString("RESTORE PLAN\n")
-	b.WriteString("═══════════════════════════════════════════════════════════════\n\n")
-
+	// No ASCII banner: the Pager renders the styled "Restore plan" title, and the
+	// legacy box rule was cosmetically inconsistent with the Charm screens.
 	modeName := ""
 	switch config.Mode {
 	case RestoreModeFull:
@@ -157,7 +155,8 @@ func buildRestorePlanText(config *SelectiveRestoreConfig) string {
 	b.WriteString("  • Services may need to be restarted after restoration\n\n")
 	if (hasCategoryID(config.SelectedCategories, "pve_access_control") || hasCategoryID(config.SelectedCategories, "pbs_access_control")) &&
 		(!hasCategoryID(config.SelectedCategories, "network") || !hasCategoryID(config.SelectedCategories, "ssl")) {
-		b.WriteString("  • TFA/WebAuthn: for best 1:1 compatibility keep the same UI origin (FQDN/hostname and port) and restore 'network' + 'ssl'\n\n")
+		b.WriteString("  • TFA/WebAuthn: keep the same UI origin (FQDN/hostname and port) for 1:1\n")
+		b.WriteString("    compatibility, and restore 'network' + 'ssl'\n\n")
 	}
 
 	return b.String()

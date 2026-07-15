@@ -7,7 +7,73 @@ import (
 	"testing"
 
 	"charm.land/lipgloss/v2"
+
+	"github.com/tis24dev/proxsave/internal/ui/shell"
 )
+
+// TestFormGridTabReachesCancel: Tab/Down on the buttons row toggles Continue/Cancel
+// so Cancel is reachable via Tab (it used to snap back to Continue).
+func TestFormGridTabReachesCancel(t *testing.T) {
+	g := NewFormGrid("Config", []*FormField{{Label: "A", Kind: FieldToggle}})
+	cap := bindGrid(g)
+	press(t, g, "down") // A -> buttons (Continue focused)
+	if g.cursor != len(g.fields) || g.onCancel {
+		t.Fatalf("expected the buttons row with Continue focused (cursor=%d onCancel=%v)", g.cursor, g.onCancel)
+	}
+	press(t, g, "tab") // must reach Cancel, not snap back to Continue
+	if !g.onCancel {
+		t.Fatalf("tab on the buttons row must reach Cancel, got onCancel=%v", g.onCancel)
+	}
+	press(t, g, "enter") // Cancel resolves the back error
+	if !cap.resolved || cap.err == nil {
+		t.Fatalf("enter on Cancel must resolve an abort error, got %+v", cap)
+	}
+}
+
+// TestFormGridDownStaysOnContinue: down on the buttons row keeps Continue focused
+// (unlike tab, it does not toggle), so a "mash down then Enter" submit is reliable.
+func TestFormGridDownStaysOnContinue(t *testing.T) {
+	g := NewFormGrid("Config", []*FormField{{Label: "A", Kind: FieldToggle}})
+	for i := 0; i < 4; i++ {
+		press(t, g, "down") // 1st down -> buttons (Continue); the rest stay on Continue
+	}
+	if g.onCancel {
+		t.Fatalf("extra down on the buttons row must not toggle to Cancel, got onCancel=%v", g.onCancel)
+	}
+}
+
+// TestFormGridBlinkCmdOnFieldChange: moving to a text field returns the caret-blink
+// Cmd instead of dropping it (the caret stopped blinking after the first field).
+func TestFormGridBlinkCmdOnFieldChange(t *testing.T) {
+	g := NewFormGrid("Config", []*FormField{
+		{Label: "One", Kind: FieldText},
+		{Label: "Two", Kind: FieldText},
+	})
+	bindGrid(g)
+	_, cmd := g.Update(shell.KeyMsg("enter")) // field 0 -> field 1 (both text)
+	if cmd == nil {
+		t.Fatal("moving to a text field must return a blink Cmd")
+	}
+}
+
+// TestFormGridReservesButtonsAtSmallHeight: the buttons block is reserved first, so
+// at a tight height (that used to crop it from below) the buttons still render and
+// the body fits the budget.
+func TestFormGridReservesButtonsAtSmallHeight(t *testing.T) {
+	fields := make([]*FormField, 6)
+	for i := range fields {
+		fields[i] = &FormField{Label: fmt.Sprintf("Field %d", i), Description: "a hint", Kind: FieldToggle}
+	}
+	g := NewFormGrid("Config", fields)
+	bindGrid(g)
+	view := g.View(80, 4) // cursor on field 0 (a Description -> a footer line)
+	if n := len(strings.Split(view, "\n")); n > 4 {
+		t.Fatalf("body must fit the height budget (got %d lines, want <= 4):\n%s", n, view)
+	}
+	if !strings.Contains(view, "Continue") || !strings.Contains(view, "Cancel") {
+		t.Fatalf("buttons must always render at small heights:\n%s", view)
+	}
+}
 
 func gridFields() (toggle, path, cron *FormField) {
 	toggle = &FormField{Label: "Secondary storage", Kind: FieldToggle}
@@ -182,6 +248,152 @@ func TestFormGridHintWrapsAtReadableWidth(t *testing.T) {
 	}
 }
 
+func TestFormGridNoteAboveFields(t *testing.T) {
+	field := &FormField{Label: "GitHub nickname", Kind: FieldText}
+	g := NewFormGrid("Support", []*FormField{field},
+		WithFormGridNote(
+			"The full run log is emailed to the maintainer for support.",
+			"It may contain personal data such as this server's MAC address.",
+			"Continue only if you consent to sharing it.",
+		))
+	bindGrid(g)
+	view := g.View(100, 20)
+	lines := strings.Split(view, "\n")
+
+	idx := func(substr string) int {
+		for i, l := range lines {
+			if strings.Contains(l, substr) {
+				return i
+			}
+		}
+		return -1
+	}
+	noteTop := idx("emailed to the maintainer")
+	noteMid := idx("MAC address")
+	noteBot := idx("consent to sharing")
+	label := idx("GitHub nickname")
+	if noteTop < 0 || noteMid < 0 || noteBot < 0 {
+		t.Fatalf("all consent note lines must render:\n%s", view)
+	}
+	if label < 0 {
+		t.Fatalf("the field label must render:\n%s", view)
+	}
+	// The note sits ABOVE the fields, in order, one clause per line (never merged).
+	if !(noteTop < noteMid && noteMid < noteBot && noteBot < label) {
+		t.Fatalf("note must be above the fields, in order: top=%d mid=%d bot=%d label=%d\n%s",
+			noteTop, noteMid, noteBot, label, view)
+	}
+}
+
+// TestFormGridMouseClickBandRejectsOffscreen guards the two-sided hit-test band:
+// when the field window is scrolled, a click above lastRowsTop (title/intro/blank)
+// or on the blank separator at lastWindowEnd must NOT map to an off-screen field
+// (which would otherwise be silently focused and toggled/cycled).
+func TestFormGridMouseClickBandRejectsOffscreen(t *testing.T) {
+	fields := make([]*FormField, 12)
+	for i := range fields {
+		fields[i] = &FormField{Label: fmt.Sprintf("Toggle %d", i), Kind: FieldToggle}
+	}
+	g := NewFormGrid("Configuration", fields)
+	bindGrid(g)
+
+	// Scroll: move the cursor down so offset > 0 and fields stay hidden both
+	// ABOVE and BELOW the window.
+	for i := 0; i < 8; i++ {
+		press(t, g, "down")
+	}
+	g.View(80, 12)
+	if g.offset == 0 {
+		t.Fatalf("expected the window to scroll (offset>0), got offset=%d", g.offset)
+	}
+	if g.lastWindowEnd >= len(fields)+g.lastRowsTop {
+		t.Fatalf("test setup: window must not reach the last field (end=%d)", g.lastWindowEnd)
+	}
+
+	// Off-screen field ABOVE the window (index 0), and the field the blank at
+	// lastWindowEnd would (pre-fix) map to BELOW the window.
+	above := fields[0]
+	belowIdx := g.offset + (g.lastWindowEnd - g.lastRowsTop)
+	if belowIdx >= len(fields) {
+		t.Fatalf("test setup: expected an off-screen field below the window, belowIdx=%d", belowIdx)
+	}
+	below := fields[belowIdx]
+	if above.Bool || below.Bool {
+		t.Fatalf("test setup: off-screen toggles must start false")
+	}
+	cursor0, editing0 := g.cursor, g.editing
+
+	// CASE 1: click above lastRowsTop (the title/blank). Nothing may change.
+	g.Update(click(4, 1)) //nolint:errcheck
+	if above.Bool || below.Bool {
+		t.Fatalf("click above the window must not toggle an off-screen field (above=%v below=%v)", above.Bool, below.Bool)
+	}
+	if g.cursor != cursor0 || g.editing != editing0 {
+		t.Fatalf("click above the window must not move focus (cursor %d->%d editing %d->%d)", cursor0, g.cursor, editing0, g.editing)
+	}
+
+	// CASE 2: click on the blank separator at lastWindowEnd (below the window). The
+	// field this Y maps to (belowIdx) must stay untouched and focus must not move.
+	g.Update(click(4, g.lastWindowEnd)) //nolint:errcheck
+	if above.Bool || below.Bool {
+		t.Fatalf("click on the blank below the window must not toggle an off-screen field (above=%v below=%v)", above.Bool, below.Bool)
+	}
+	if g.cursor != cursor0 || g.editing != editing0 {
+		t.Fatalf("click below the window must not move focus (cursor %d->%d editing %d->%d)", cursor0, g.cursor, editing0, g.editing)
+	}
+}
+
+// TestFormGridMouseClickBelowWindowLeavesOffscreenSelectUnchanged mirrors CASE 2
+// of TestFormGridMouseClickBandRejectsOffscreen but for the FieldSelect branch:
+// a blank click at lastWindowEnd (below the scrolled window) must NOT cycle an
+// off-screen select's OptionIndex, and must not move focus.
+func TestFormGridMouseClickBelowWindowLeavesOffscreenSelectUnchanged(t *testing.T) {
+	fields := make([]*FormField, 12)
+	for i := range fields {
+		fields[i] = &FormField{
+			Label:   fmt.Sprintf("Select %d", i),
+			Kind:    FieldSelect,
+			Options: []string{"a", "b"}, // 2 options so a cycle is observable
+		}
+	}
+	g := NewFormGrid("Configuration", fields)
+	bindGrid(g)
+
+	// Scroll: move the cursor down so offset > 0 and fields stay hidden BELOW
+	// the window (same layout math as the FieldToggle band test).
+	for i := 0; i < 8; i++ {
+		press(t, g, "down")
+	}
+	g.View(80, 12)
+	if g.offset == 0 {
+		t.Fatalf("expected the window to scroll (offset>0), got offset=%d", g.offset)
+	}
+	if g.lastWindowEnd >= len(fields)+g.lastRowsTop {
+		t.Fatalf("test setup: window must not reach the last field (end=%d)", g.lastWindowEnd)
+	}
+
+	// The field the blank at lastWindowEnd would (pre-fix) map to BELOW the window.
+	belowIdx := g.offset + (g.lastWindowEnd - g.lastRowsTop)
+	if belowIdx >= len(fields) {
+		t.Fatalf("test setup: expected an off-screen field below the window, belowIdx=%d", belowIdx)
+	}
+	below := fields[belowIdx]
+	if below.OptionIndex != 0 {
+		t.Fatalf("test setup: off-screen select must start at index 0, got %d", below.OptionIndex)
+	}
+	cursor0, editing0 := g.cursor, g.editing
+
+	// Click on the blank separator at lastWindowEnd (below the window). The
+	// off-screen select this Y maps to must not cycle and focus must not move.
+	g.Update(click(4, g.lastWindowEnd)) //nolint:errcheck
+	if below.OptionIndex != 0 {
+		t.Fatalf("click on the blank below the window must not cycle an off-screen select (index=%d)", below.OptionIndex)
+	}
+	if g.cursor != cursor0 || g.editing != editing0 {
+		t.Fatalf("click below the window must not move focus (cursor %d->%d editing %d->%d)", cursor0, g.cursor, editing0, g.editing)
+	}
+}
+
 func TestSplitSentences(t *testing.T) {
 	got := splitSentences("Must be filesystem-mounted (e.g. /mnt/nas-backup). For direct network access use rclone.")
 	if len(got) != 2 {
@@ -216,5 +428,29 @@ func TestFormGridEscAndCancelButton(t *testing.T) {
 	press(t, g2, "enter")
 	if !cap2.resolved || !errors.Is(cap2.err, back) {
 		t.Fatalf("Cancel button must resolve back sentinel, got %+v", cap2)
+	}
+}
+
+// A FieldSelect with no Options must never divide by zero in the left/right/space
+// or mouse-click handlers (the modulo guard mirrors renderControl). Shipped
+// callers pass non-empty Options, but FormGrid/FieldSelect are reusable.
+func TestFormGridSelectEmptyOptionsNoPanic(t *testing.T) {
+	sel := &FormField{Label: "Empty select", Kind: FieldSelect, Options: nil}
+	g := NewFormGrid("Configuration", []*FormField{sel})
+	bindGrid(g)
+	g.View(100, 20) // populate lastRowsTop for the click below
+
+	// Cursor starts on the (only, active) select; none of these may panic.
+	press(t, g, "right")
+	press(t, g, "left")
+	press(t, g, "space")
+	if sel.OptionIndex != 0 {
+		t.Fatalf("empty-options index must stay 0, got %d", sel.OptionIndex)
+	}
+
+	// A mouse click on the select row must not panic either.
+	g.Update(click(4, g.lastRowsTop)) //nolint:errcheck
+	if sel.OptionIndex != 0 {
+		t.Fatalf("empty-options index must stay 0 after click, got %d", sel.OptionIndex)
 	}
 }

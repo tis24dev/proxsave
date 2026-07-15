@@ -10,6 +10,7 @@ import (
 	"github.com/tis24dev/proxsave/internal/logging"
 	"github.com/tis24dev/proxsave/internal/orchestrator"
 	"github.com/tis24dev/proxsave/internal/types"
+	"github.com/tis24dev/proxsave/internal/ui/components"
 )
 
 const rollbackCountdownDisplayDuration = 10 * time.Second
@@ -72,10 +73,11 @@ func printNetworkRollbackHeader(color, colorReset string) {
 func printNetworkRollbackStaticInfo(abortInfo *orchestrator.RestoreAbortInfo, status string) {
 	fmt.Printf("  Status: %s\n", status)
 	if knownValue(abortInfo.OriginalIP) {
-		fmt.Printf("  Pre-apply IP (from snapshot): %s\n", strings.TrimSpace(abortInfo.OriginalIP))
+		fmt.Printf("  Pre-apply IP (from snapshot): %s\n", components.SanitizeLine(strings.TrimSpace(abortInfo.OriginalIP)))
 	}
 	if knownValue(abortInfo.CurrentIP) {
-		fmt.Printf("  Post-apply IP (observed): %s\n", strings.TrimSpace(abortInfo.CurrentIP))
+		// CurrentIP is an unvalidated token from `ip -o addr` output: scrub it.
+		fmt.Printf("  Post-apply IP (observed): %s\n", components.SanitizeLine(strings.TrimSpace(abortInfo.CurrentIP)))
 	}
 	if strings.TrimSpace(abortInfo.NetworkRollbackLog) != "" {
 		fmt.Printf("  Rollback log: %s\n", strings.TrimSpace(abortInfo.NetworkRollbackLog))
@@ -118,7 +120,7 @@ func printDisarmedRollbackReconnectHint(abortInfo *orchestrator.RestoreAbortInfo
 	if markerExists || strings.TrimSpace(abortInfo.NetworkRollbackMarker) == "" || !knownValue(abortInfo.CurrentIP) {
 		return
 	}
-	fmt.Printf("Rollback will NOT run: reconnect using the post-apply IP: %s\n", strings.TrimSpace(abortInfo.CurrentIP))
+	fmt.Printf("Rollback will NOT run: reconnect using the post-apply IP: %s\n", components.SanitizeLine(strings.TrimSpace(abortInfo.CurrentIP)))
 }
 
 func knownValue(value string) bool {
@@ -147,7 +149,27 @@ func printNetworkRollbackLiveCountdown(deadline time.Time) {
 	}
 }
 
+// printRunFooter is the SINGLE place that gates every end-of-run CLI footer.
+// Route a footer's printing through here (as emit): it runs only for a
+// non-graphical run; a graphical run (launched from the dashboard, which adopts
+// the session) already shows its outcome on-screen, so any plain-scrollback CLI
+// footer, with its usage-commands and sponsors block, is redundant and would leak
+// after the alternate screen closes. To add a NEW suppressible footer, print it
+// via printRunFooter and nothing else needs to know about the gate.
+// dashboardRunWasGraphical() latches true only once a flow adopts the dashboard
+// session; a plain CLI/cron run never adopts, so the footer prints there as before.
+func printRunFooter(emit func()) {
+	if dashboardRunWasGraphical() {
+		return
+	}
+	emit()
+}
+
 func printFinalSummary(finalExitCode int) {
+	printRunFooter(func() { finalSummaryBody(finalExitCode) })
+}
+
+func finalSummaryBody(finalExitCode int) {
 	fmt.Println()
 
 	logger := logging.GetDefaultLogger()
@@ -261,6 +283,6 @@ func printFinalSummaryCommands() {
 	fmt.Println("  --restore          - Run interactive restore workflow (select bundle, decrypt if needed, apply to system)")
 	fmt.Println("  --cleanup-guards   - Remove leftover restore mount guards once the storage is back online")
 	fmt.Println("  --upgrade-config   - Upgrade configuration file using the embedded template (run after installing a new binary)")
-	fmt.Println("  --support          - Run in support mode (force debug log level and send email with attached log to github-support@tis24.it); available for standard backup and --restore")
+	fmt.Println("  --support          - Run in support mode (force debug log level and send email with attached log to the maintainer); available for standard backup and --restore")
 	fmt.Println()
 }

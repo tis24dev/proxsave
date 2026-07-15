@@ -13,6 +13,7 @@ import (
 
 	"github.com/tis24dev/proxsave/internal/input"
 	"github.com/tis24dev/proxsave/internal/logging"
+	"github.com/tis24dev/proxsave/internal/ui/components"
 )
 
 var restoreLogSequence uint64
@@ -186,7 +187,9 @@ func extractFullRestoreFstabInventory(ctx context.Context, archivePath, fsTempDi
 func confirmRestoreAction(ctx context.Context, reader *bufio.Reader, cand *backupCandidate, dest string) error {
 	manifest := cand.Manifest
 	fmt.Println()
-	fmt.Printf("Selected backup: %s (%s)\n", cand.DisplayBase, manifest.CreatedAt.Format("2006-01-02 15:04:05"))
+	// Sanitize the remote-derived archive filename before printing raw; it
+	// bypasses the NewSelector/NewConfirm scrub the graphical screens get.
+	fmt.Printf("Selected backup: %s (%s)\n", components.SanitizeLine(cand.DisplayBase), manifest.CreatedAt.Format("2006-01-02 15:04:05"))
 	cleanDest := filepath.Clean(strings.TrimSpace(dest))
 	if cleanDest == "" || cleanDest == "." {
 		cleanDest = string(os.PathSeparator)

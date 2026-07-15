@@ -54,6 +54,7 @@ func (f *FormField) active() bool { return f.Active == nil || f.Active() }
 type FormGrid struct {
 	shell.Resolver[struct{}]
 	title    string
+	intro    []string // consent/intro note rendered ABOVE the fields (one line each)
 	fields   []*FormField
 	backErr  error
 	cursor   int // index into fields; len(fields) = buttons row
@@ -76,6 +77,22 @@ type FormGridOption func(*FormGrid)
 // WithFormGridBack overrides the Esc/Cancel error (default shell.ErrAborted).
 func WithFormGridBack(err error) FormGridOption {
 	return func(g *FormGrid) { g.backErr = err }
+}
+
+// WithFormGridNote sets an intro/consent note rendered ABOVE the fields, one
+// line per string. Pass each clause as its own line (coherent, never broken
+// mid-sentence) — the grid does not re-wrap them. Lines are sanitized and empty
+// ones dropped.
+func WithFormGridNote(lines ...string) FormGridOption {
+	return func(g *FormGrid) {
+		note := make([]string, 0, len(lines))
+		for _, l := range lines {
+			if s := sanitizeLine(l); s != "" {
+				note = append(note, s)
+			}
+		}
+		g.intro = note
+	}
 }
 
 // NewFormGrid builds the grid. Field labels/descriptions are sanitized; the
@@ -115,8 +132,10 @@ func (g *FormGrid) firstActive() int {
 	return len(g.fields) // straight to buttons
 }
 
-// bindEditor attaches the shared text editor to the focused field.
-func (g *FormGrid) bindEditor() {
+// bindEditor attaches the shared text editor to the focused field and returns
+// the caret-blink Cmd (nil when the focused row is not an active text field), so
+// callers can keep the caret blinking on every field change, not just the first.
+func (g *FormGrid) bindEditor() tea.Cmd {
 	if g.editing >= 0 && g.editing < len(g.fields) {
 		g.fields[g.editing].Text = g.ti.Value()
 	}
@@ -131,31 +150,30 @@ func (g *FormGrid) bindEditor() {
 			} else {
 				g.ti.EchoMode = textinput.EchoNormal
 			}
-			g.ti.Focus()
 			g.editing = g.cursor
+			return g.ti.Focus()
 		}
 	}
+	return nil
 }
 
 // move advances the cursor to the next/previous active row (or the buttons
-// row past the end).
-func (g *FormGrid) move(delta int) {
+// row past the end) and returns the focused field's blink Cmd.
+func (g *FormGrid) move(delta int) tea.Cmd {
 	i := g.cursor
 	for {
 		i += delta
 		if i < 0 {
-			return
+			return nil
 		}
 		if i >= len(g.fields) {
 			g.cursor = len(g.fields)
 			g.onCancel = false
-			g.bindEditor()
-			return
+			return g.bindEditor()
 		}
 		if g.fields[i].active() {
 			g.cursor = i
-			g.bindEditor()
-			return
+			return g.bindEditor()
 		}
 	}
 }
@@ -183,8 +201,7 @@ func (g *FormGrid) submit() (shell.Screen, tea.Cmd) {
 		if err := f.Validate(f.Text); err != nil {
 			g.errMsg = fmt.Sprintf("%s: %v", f.Label, err)
 			g.cursor = i
-			g.bindEditor()
-			return g, nil
+			return g, g.bindEditor()
 		}
 	}
 	return g, g.Resolve(struct{}{}, nil)
@@ -193,13 +210,14 @@ func (g *FormGrid) submit() (shell.Screen, tea.Cmd) {
 func (g *FormGrid) Update(msg tea.Msg) (shell.Screen, tea.Cmd) {
 	switch mouse := msg.(type) {
 	case tea.MouseWheelMsg:
+		var cmd tea.Cmd
 		switch mouse.Button {
 		case tea.MouseWheelUp:
-			g.move(-1)
+			cmd = g.move(-1)
 		case tea.MouseWheelDown:
-			g.move(1)
+			cmd = g.move(1)
 		}
-		return g, nil
+		return g, cmd
 	case tea.MouseClickMsg:
 		if mouse.Button != tea.MouseLeft {
 			return g, nil
@@ -215,20 +233,29 @@ func (g *FormGrid) Update(msg tea.Msg) (shell.Screen, tea.Cmd) {
 			}
 			return g, nil
 		}
+		// Only clicks inside the rendered field window map to a field; reject the
+		// title/intro/blank above and the blank separator below (which, when
+		// scrolled, would otherwise hit an off-screen field).
+		if mouse.Y < g.lastRowsTop || mouse.Y >= g.lastWindowEnd {
+			return g, nil
+		}
 		row := mouse.Y - g.lastRowsTop + g.offset
+		var cmd tea.Cmd
 		if row >= 0 && row < len(g.fields) && g.fields[row].active() {
 			g.cursor = row
-			g.bindEditor()
+			cmd = g.bindEditor()
 			f := g.fields[row]
 			switch f.Kind {
 			case FieldToggle:
 				f.Bool = !f.Bool
 				g.errMsg = ""
 			case FieldSelect:
-				f.OptionIndex = (f.OptionIndex + 1) % len(f.Options)
+				if len(f.Options) > 0 {
+					f.OptionIndex = (f.OptionIndex + 1) % len(f.Options)
+				}
 			}
 		}
-		return g, nil
+		return g, cmd
 	}
 
 	key, ok := msg.(tea.KeyPressMsg)
@@ -247,8 +274,7 @@ func (g *FormGrid) Update(msg tea.Msg) (shell.Screen, tea.Cmd) {
 		return g, g.Resolve(struct{}{}, g.backErr)
 	case "up", "shift+tab":
 		if onButtons {
-			g.cursor = len(g.fields) // stay, move() handles from a field
-			// jump back to the last active field
+			// Jump back to the last active field (stay on the buttons row if none).
 			g.cursor = len(g.fields)
 			for i := len(g.fields) - 1; i >= 0; i-- {
 				if g.fields[i].active() {
@@ -256,14 +282,21 @@ func (g *FormGrid) Update(msg tea.Msg) (shell.Screen, tea.Cmd) {
 					break
 				}
 			}
-			g.bindEditor()
+			return g, g.bindEditor()
+		}
+		return g, g.move(-1)
+	case "tab":
+		if onButtons {
+			// Tab cycles Continue <-> Cancel so Cancel is reachable from the keyboard
+			// (it used to snap back to Continue, reachable only via left/right/click).
+			g.onCancel = !g.onCancel
 			return g, nil
 		}
-		g.move(-1)
-		return g, nil
-	case "down", "tab":
-		g.move(1)
-		return g, nil
+		return g, g.move(1)
+	case "down":
+		// Down advances toward the primary action; on the buttons row move(1) keeps
+		// Continue focused so a "mash down then Enter" submit stays reliable.
+		return g, g.move(1)
 	case "enter":
 		if onButtons {
 			if g.onCancel {
@@ -272,8 +305,7 @@ func (g *FormGrid) Update(msg tea.Msg) (shell.Screen, tea.Cmd) {
 			return g.submit()
 		}
 		g.errMsg = ""
-		g.move(1)
-		return g, nil
+		return g, g.move(1)
 	}
 
 	if onButtons {
@@ -302,6 +334,11 @@ func (g *FormGrid) Update(msg tea.Msg) (shell.Screen, tea.Cmd) {
 			return g, nil
 		}
 	case FieldSelect:
+		if len(f.Options) == 0 {
+			// A select with no options is not navigable; guard the modulo so
+			// left/right/space can never divide by zero (mirrors renderControl).
+			return g, nil
+		}
 		switch key.String() {
 		case "left":
 			f.OptionIndex = (f.OptionIndex - 1 + len(f.Options)) % len(f.Options)
@@ -432,13 +469,39 @@ func (g *FormGrid) View(width, height int) string {
 		footerHeight += lipgloss.Height(block)
 	}
 
+	// Intro/consent note rendered ABOVE the fields: fixed (never scrolled), one
+	// line per clause. Styled like the field hints for cosmetic consistency.
+	introWidth := min(width, 100)
+	intro := make([]string, 0, len(g.intro))
+	for _, line := range g.intro {
+		intro = append(intro, theme.Subtle.Width(introWidth).Render(line))
+	}
+	introHeight := 0
+	for _, block := range intro {
+		introHeight += lipgloss.Height(block)
+	}
+
 	// Scroll window over the field rows so buttons/footer stay visible.
 	head := 2 // title + blank
-	tailLines := 2 + footerHeight
-	if len(footer) > 0 {
-		tailLines++ // blank line between the buttons and the footer
+	if len(intro) > 0 {
+		head += introHeight + 1 // note lines + a blank separator before the fields
 	}
-	visible := max(height-head-tailLines, 1)
+	// Reserve the buttons block (blank + buttons = 2 rows) as the TOP priority so
+	// the actionable rows are never cropped from below (the router crops overflow
+	// from the bottom, like Confirm's budget). The footer (hint/error) is lower
+	// priority: drop it when there is no room, and let the field window shrink
+	// into the remainder (down to zero at extreme sizes, recoverable by enlarging).
+	buttonsLines := 2 // blank + buttons
+	footerBlock := footerHeight
+	if len(footer) > 0 {
+		footerBlock++ // blank line between the buttons and the footer
+	}
+	if height-head-buttonsLines-footerBlock < 0 {
+		footer = nil
+		footerBlock = 0
+	}
+	tailLines := buttonsLines + footerBlock
+	visible := max(height-head-tailLines, 0)
 	if g.cursor < len(g.fields) {
 		if g.cursor < g.offset {
 			g.offset = g.cursor
@@ -468,8 +531,15 @@ func (g *FormGrid) View(width, height int) string {
 	var b strings.Builder
 	b.WriteString(theme.Emphasis.Render(g.title))
 	b.WriteString("\n\n")
-	b.WriteString(strings.Join(windowed, "\n"))
-	b.WriteString("\n\n")
+	if len(intro) > 0 {
+		b.WriteString(strings.Join(intro, "\n"))
+		b.WriteString("\n\n")
+	}
+	if len(windowed) > 0 {
+		b.WriteString(strings.Join(windowed, "\n"))
+		b.WriteString("\n")
+	}
+	b.WriteString("\n")
 	b.WriteString(buttons)
 	if len(footer) > 0 {
 		// Same breathing room below the buttons as above them.

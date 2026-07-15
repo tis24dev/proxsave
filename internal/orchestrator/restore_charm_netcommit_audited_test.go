@@ -112,7 +112,7 @@ func TestNetworkCommitConfirm_ViewContract(t *testing.T) {
 	view := c.View(100, 30)
 	for _, want := range []string{
 		"Rollback in 30s",
-		"default: Let rollback run",
+		"on timeout: Let rollback run",
 		"COMMIT",
 		"Let rollback run",
 		"Network health: CRITICAL",

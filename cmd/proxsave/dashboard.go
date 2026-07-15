@@ -203,7 +203,7 @@ func runDashboardInstallChoice(ctx context.Context, session *shell.Session) (men
 	items := []components.SelectorItem[installChoice]{
 		{Label: "Edit install", Description: "re-run the interactive installation/setup (--install)", Value: installEdit},
 		{Label: "Wipe install", Description: "wipe the install directory (keep build/env/identity) then re-run the installer (--new-install)", Value: installWipe},
-		{Label: "Back", Value: installBack},
+		{Label: "Back", Description: "return to the dashboard menu", Value: installBack},
 	}
 	choice, err := shell.Ask(ctx, session, components.NewSelector(
 		"Install", items,
@@ -357,12 +357,16 @@ const daemonResultActionBack daemonResultAction = iota
 func buildDaemonResultPrompt(level orchestrator.HealthcheckSetupLevel, keyword, explanation string) string {
 	var b strings.Builder
 	b.WriteString(theme.Text.Render("Status: "))
-	b.WriteString(renderDaemonStatusLevel(level, keyword))
+	b.WriteString(renderDaemonStatusLevel(level, components.SanitizeText(keyword)))
 	// A what-to-do suggestion is shown only on a problem outcome (success passes ""), with a
-	// blank line separating it from the Status line.
-	if explanation != "" {
+	// blank line separating it from the Status line. keyword and explanation are free-form (may
+	// embed external tool output, error strings, or the daemon Version), so both are
+	// SanitizeText-scrubbed before theme rendering to keep raw ANSI/OSC/C0/C1 escapes out of the
+	// verbatim WithSelectorPromptStyled path. The scrub-then-render shape is BYTE-IDENTICAL to
+	// buildWorkflowStatusPrompt; the exp != "" guard preserves the success-passes-"" behavior.
+	if exp := components.SanitizeText(explanation); exp != "" {
 		b.WriteString("\n\n")
-		b.WriteString(theme.Subtle.Render(explanation))
+		b.WriteString(theme.Subtle.Render(exp))
 	}
 	return b.String()
 }
@@ -550,20 +554,10 @@ func runDashboardDaemonStatus(ctx context.Context, session *shell.Session, confi
 }
 
 // renderDaemonStatusLevel is the colored-keyword renderer for the daemon-status "Status:" line.
-// It replicates renderHealthcheckLevel (package-private to install) with the SAME theme constants,
-// so the two screens are visually identical: green ✓ (Ok), red ✗ (Error), yellow ⚠ (Warn), and
-// yellow with NO symbol (Neutral). The daemon screen only ever emits Ok/Warn today.
+// It delegates to the shared orchestrator.RenderStatusLevel so the daemon, workflow, and install
+// healthcheck/audit screens can never drift apart.
 func renderDaemonStatusLevel(level orchestrator.HealthcheckSetupLevel, text string) string {
-	switch level {
-	case orchestrator.HealthcheckSetupLevelOk:
-		return theme.SuccessText.Render(theme.SymbolSuccess + " " + text)
-	case orchestrator.HealthcheckSetupLevelError:
-		return theme.ErrorText.Render(theme.SymbolError + " " + text)
-	case orchestrator.HealthcheckSetupLevelNeutral:
-		return theme.WarningText.Render(text)
-	default: // HealthcheckSetupLevelWarn
-		return theme.WarningText.Render(theme.SymbolWarning + " " + text)
-	}
+	return orchestrator.RenderStatusLevel(level, text)
 }
 
 // buildDaemonStatusPrompt renders the styled prompt shown above the Check/Back choices (mirrors
@@ -571,25 +565,31 @@ func renderDaemonStatusLevel(level orchestrator.HealthcheckSetupLevel, text stri
 // explanation), then a Details block with the scheduler/service facts. The wording/logic of the
 // detail lines is unchanged from the old Notice body; only the presentation moved into the prompt.
 func buildDaemonStatusPrompt(level orchestrator.HealthcheckSetupLevel, keyword, explanation, mode, unit, active, optOut string, ds health.DaemonState) string {
+	// Every dynamic segment below carries text from outside this file (keyword/explanation from
+	// daemonStatusStyle, mode from the config file, active from systemctl, Version/Commit RAW from
+	// .daemon_info.json), so each is SanitizeText-scrubbed before theme rendering to keep raw
+	// ANSI/OSC/C0/C1 escapes out of the verbatim WithSelectorPromptStyled path. Compile-time
+	// literals (unit/optOut, the "Binary alignment" verdict) are left as-is: sanitizing them is a
+	// no-op.
 	var b strings.Builder
 	b.WriteString(theme.Text.Render("Resident backup daemon (runs scheduled backups + healthchecks reporting)."))
 	b.WriteString("\n\n")
 
 	b.WriteString(theme.Text.Render("Status: "))
-	b.WriteString(renderDaemonStatusLevel(level, keyword))
-	if explanation != "" {
+	b.WriteString(renderDaemonStatusLevel(level, components.SanitizeText(keyword)))
+	if exp := components.SanitizeText(explanation); exp != "" {
 		b.WriteString("\n")
-		b.WriteString(theme.Subtle.Render(explanation))
+		b.WriteString(theme.Subtle.Render(exp))
 	}
 
 	b.WriteString("\n\n")
 	b.WriteString(theme.Text.Render("Details:"))
 	b.WriteString("\n")
-	b.WriteString(theme.Text.Render("Scheduler mode: " + mode))
+	b.WriteString(theme.Text.Render("Scheduler mode: " + components.SanitizeText(mode)))
 	b.WriteString("\n")
 	b.WriteString(theme.Text.Render("Daemon service (proxsave-daemon.service): " + unit))
 	b.WriteString("\n")
-	b.WriteString(theme.Text.Render("Service state (systemctl is-active): " + active))
+	b.WriteString(theme.Text.Render("Service state (systemctl is-active): " + components.SanitizeText(active)))
 	b.WriteString("\n")
 	b.WriteString(theme.Text.Render("Opted out of auto-migration (--daemon-remove): " + optOut))
 	// The running version comes from the identity record (HaveInfo). The alignment verdict comes from
@@ -599,7 +599,7 @@ func buildDaemonStatusPrompt(level orchestrator.HealthcheckSetupLevel, keyword, 
 	// "behind".
 	if ds.HaveInfo {
 		b.WriteString("\n")
-		b.WriteString(theme.Text.Render("Running version: " + ds.Version + " (" + ds.Commit + ")"))
+		b.WriteString(theme.Text.Render("Running version: " + components.SanitizeText(ds.Version) + " (" + components.SanitizeText(ds.Commit) + ")"))
 	}
 	if ds.HaveInfo || ds.AlignChecked {
 		align := "unknown"
@@ -692,6 +692,13 @@ type dashboardHandoffState struct {
 	session   *shell.Session
 	bootstrap *logging.BootstrapLogger
 	entryMark int
+	// graphical latches true once a flow actually ADOPTS the handed-off session
+	// (adoptDashboardSession), i.e. the run was launched from the dashboard and
+	// ran in-graphics. Unlike session/bootstrap it is NOT cleared by adoption, so
+	// it still reports "this run was graphical" to the deferred final-summary
+	// footer, which is a CLI affordance suppressed for graphical runs. Reset only
+	// at end-of-process (releaseDashboardLeftovers) for test isolation.
+	graphical bool
 }
 
 var dashboardHandoff dashboardHandoffState
@@ -718,6 +725,17 @@ func dashboardHandoffPending() bool {
 	return dashboardHandoff.session != nil
 }
 
+// dashboardRunWasGraphical reports whether this run adopted the dashboard's
+// handed-off session (i.e. it was launched from the dashboard and ran
+// in-graphics). Unlike dashboardHandoffPending it stays true AFTER adoption, so
+// the deferred final-summary footer can be suppressed for graphical runs (the
+// outcome is already shown on-screen) while CLI/cron/daemon runs still print it.
+func dashboardRunWasGraphical() bool {
+	dashboardHandoff.mu.Lock()
+	defer dashboardHandoff.mu.Unlock()
+	return dashboardHandoff.graphical
+}
+
 // adoptDashboardSession consumes the stashed session (once): the flow's
 // chrome replaces the dashboard's and the console mute is lifted, right
 // before the flow applies its own session-scoped silencing.
@@ -727,6 +745,11 @@ func adoptDashboardSession(cfg shell.Config) *shell.Session {
 	bootstrap := dashboardHandoff.bootstrap
 	dashboardHandoff.session = nil
 	dashboardHandoff.bootstrap = nil
+	if session != nil {
+		// A real adoption: latch "this run is graphical" (never cleared here) so
+		// the deferred CLI footer is suppressed for the rest of the run.
+		dashboardHandoff.graphical = true
+	}
 	dashboardHandoff.mu.Unlock()
 	if session == nil {
 		return nil
@@ -747,6 +770,11 @@ func releaseDashboardLeftovers() {
 	mark := dashboardHandoff.entryMark
 	dashboardHandoff.session = nil
 	dashboardHandoff.bootstrap = nil
+	// Reset the graphical latch (before the nil-session early return: after a
+	// successful adoption session is already nil here). Runs at process end, so
+	// the footer has already read it; this is purely for test isolation across
+	// the shared package global.
+	dashboardHandoff.graphical = false
 	dashboardHandoff.mu.Unlock()
 	if session == nil {
 		return

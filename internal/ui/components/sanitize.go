@@ -26,6 +26,23 @@ func sanitize(s string) string {
 	}, s)
 }
 
+// SanitizeText is the exported form of sanitize, for callers OUTSIDE this
+// package (orchestrator, cmd) that build a PRE-STYLED prompt and must scrub
+// free-form / untrusted text (external tool output, error strings, remote
+// filenames) BEFORE it reaches the verbatim WithSelectorPromptStyled path. It
+// strips ANSI and C0/DEL/C1 control bytes while keeping newlines and tabs, so a
+// multi-line explanation survives. Use this denylist for human-readable text,
+// not an allowlist (which would mangle it).
+func SanitizeText(s string) string { return sanitize(s) }
+
+// SanitizeLine is the exported form of sanitizeLine, for callers OUTSIDE this
+// package that print an untrusted value into a SINGLE-line context (a table
+// cell, a filename, a menu row) via the plain CLI path, which bypasses the
+// NewSelector/NewConfirm constructor scrub the graphical screens get. It strips
+// ANSI + C0/DEL/C1 and collapses newlines/tabs to spaces so the row stays one
+// line.
+func SanitizeLine(s string) string { return sanitizeLine(s) }
+
 // sanitizeLine is sanitize for single-line contexts (labels): newlines and
 // tabs collapse to spaces.
 func sanitizeLine(s string) string {
@@ -53,6 +70,11 @@ func sanitizeStreamLine(s string) string {
 		} else if isSGR(seq) {
 			// A color/style escape (ESC[...m): keep it verbatim.
 			b.WriteString(seq)
+		} else if seq == "\n" || seq == "\t" || seq == "\r" {
+			// Standalone newline/tab/CR: flatten to a space so one physical row
+			// stays one logical line (tokenized apart from printable runs, these
+			// never reach stripStreamText).
+			b.WriteByte(' ')
 		}
 		// Any other escape (cursor moves, mode toggles, OSC, ...) is dropped.
 		s = s[n:]

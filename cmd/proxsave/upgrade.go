@@ -613,7 +613,7 @@ func verifyReleaseSignature(root *os.Root, checksumName, signatureName, pubKeyPE
 	}
 	digest := sha256.Sum256(data)
 	if !ecdsa.VerifyASN1(pub, digest[:], sig) {
-		return errors.New("SHA256SUMS signature verification failed — refusing to upgrade")
+		return errors.New("SHA256SUMS signature verification failed; refusing to upgrade")
 	}
 	return nil
 }
@@ -746,6 +746,12 @@ func closeIntoErr(errp *error, closer io.Closer, operation string) {
 }
 
 func printUpgradeFooter(upgradeErr error, version, configPath, baseDir, telegramCode, permStatus, permMessage string, cfgUpgradeResult *config.UpgradeResult, cfgUpgradeErr error, daemonRestart *RestartVerifyResult) {
+	printRunFooter(func() {
+		upgradeFooterBody(upgradeErr, version, configPath, baseDir, telegramCode, permStatus, permMessage, cfgUpgradeResult, cfgUpgradeErr, daemonRestart)
+	})
+}
+
+func upgradeFooterBody(upgradeErr error, version, configPath, baseDir, telegramCode, permStatus, permMessage string, cfgUpgradeResult *config.UpgradeResult, cfgUpgradeErr error, daemonRestart *RestartVerifyResult) {
 	colorReset := "\033[0m"
 
 	title := "Upgrade completed"

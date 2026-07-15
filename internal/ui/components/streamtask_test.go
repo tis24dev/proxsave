@@ -260,6 +260,33 @@ func TestStreamScreenScrollUpStopsFollow(t *testing.T) {
 	}
 }
 
+// TestStreamScreenWheelTogglesFollow covers the mouse-wheel branch (distinct
+// from the keyboard scroll above): a wheel-up leaves the bottom and stops
+// auto-follow; a wheel-down back to the bottom resumes it.
+func TestStreamScreenWheelTogglesFollow(t *testing.T) {
+	scr := newStreamScreen("Running backup", 1, func() {})
+	for i := 0; i < 100; i++ {
+		updated, _ := scr.Update(StreamLineMsg{Token: 1, Line: fmt.Sprintf("l%d", i)})
+		scr = updated.(*StreamTask)
+	}
+	scr.View(80, 10)
+	if !scr.follow {
+		t.Fatal("should start following")
+	}
+	updated, _ := scr.Update(wheel(false)) // wheel up
+	scr = updated.(*StreamTask)
+	if scr.follow {
+		t.Fatal("wheel up must stop auto-follow")
+	}
+	for i := 0; i < 20; i++ { // wheel down back to the bottom
+		updated, _ = scr.Update(wheel(true))
+		scr = updated.(*StreamTask)
+	}
+	if !scr.follow {
+		t.Fatal("wheel down to the bottom must resume auto-follow")
+	}
+}
+
 // runDriver runs RunStreamTask in an output session, waits for the emitted
 // lines and outcome to reach the buffer (proving the contained panel renders
 // them), then pumps Enter until it returns.

@@ -200,13 +200,6 @@ func (c *Confirm) Update(msg tea.Msg) (shell.Screen, tea.Cmd) {
 	return c, nil
 }
 
-func (c *Confirm) defaultLabel() string {
-	if c.defaultYes {
-		return c.yesLabel
-	}
-	return c.noLabel
-}
-
 // ReceivesBackgroundMessages keeps the countdown chain alive while buried
 // under another screen.
 func (c *Confirm) ReceivesBackgroundMessages() bool { return c.timeout > 0 }
@@ -227,9 +220,13 @@ func (c *Confirm) View(width, height int) string {
 		if left < 0 {
 			left = 0
 		}
+		// The countdown advertises the TIMEOUT outcome, which always resolves to No
+		// (c.noLabel), never the Enter default: a countdown-armed defaultYes prompt
+		// would otherwise read "default: Apply" while an expiry picks Skip. The Enter
+		// default stays advertised on the button ("(default)" marker).
 		countdown := theme.WarningText.Render(fmt.Sprintf(
-			"%s in %ds (at %s, default: %s)",
-			c.countdownPrefix, int(left.Seconds()), c.deadline.Format("15:04:05"), c.defaultLabel()))
+			"%s in %ds (at %s, on timeout: %s)",
+			c.countdownPrefix, int(left.Seconds()), c.deadline.Format("15:04:05"), c.noLabel))
 		tail = append(tail, countdown, "")
 	}
 	tail = append(tail, c.renderButtons(width))

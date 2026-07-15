@@ -490,6 +490,92 @@ func TestCloudStorageListParsesBackups(t *testing.T) {
 	}
 }
 
+// TestCloudStorageListSkipsManifestSidecar proves the uploaded .manifest.json is
+// classified as a sidecar and never counted as a standalone backup (PS-BH-002:
+// isBackupEntry used to match it on `-backup-`+`.tar` and inflate the count).
+func TestCloudStorageListSkipsManifestSidecar(t *testing.T) {
+	cfg := &config.Config{CloudEnabled: true, CloudRemote: "remote"}
+	cs := newCloudStorageForTest(cfg)
+	queue := &commandQueue{
+		t: t,
+		queue: []queuedResponse{
+			{
+				name: "rclone",
+				args: []string{"lsl", "remote:"},
+				out: strings.TrimSpace(`
+99999 2024-11-12 12:00:00 host-backup-20241112.tar.zst
+120 2024-11-12 12:00:00 host-backup-20241112.tar.zst.sha256
+340 2024-11-12 12:00:00 host-backup-20241112.tar.zst.manifest.json
+88 2024-11-12 12:00:00 host-backup-20241112.tar.zst.metadata
+`),
+			},
+		},
+	}
+	cs.execCommand = queue.exec
+
+	backups, err := cs.List(context.Background())
+	if err != nil {
+		t.Fatalf("List() error = %v", err)
+	}
+	if len(backups) != 1 {
+		t.Fatalf("List() = %d backups, want 1 (sha256/manifest/metadata are sidecars)", len(backups))
+	}
+	if backups[0].BackupFile != "host-backup-20241112.tar.zst" {
+		t.Fatalf("unexpected backup file %q", backups[0].BackupFile)
+	}
+}
+
+// TestCloudStorageDeleteRemovesManifestSidecar proves retention/delete now issues a
+// deletefile for the .manifest.json so it cannot orphan on the remote after the
+// archive and its other sidecars are removed (PS-BH-002).
+func TestCloudStorageDeleteRemovesManifestSidecar(t *testing.T) {
+	cfg := &config.Config{CloudEnabled: true, CloudRemote: "remote", BundleAssociatedFiles: false}
+	cs := newCloudStorageForTest(cfg)
+	listOutput := strings.TrimSpace(`
+100 2025-01-01 01:00:00 host-backup-20250101-010101.tar.zst
+10 2025-01-01 01:00:00 host-backup-20250101-010101.tar.zst.sha256
+20 2025-01-01 01:00:00 host-backup-20250101-010101.tar.zst.manifest.json
+10 2025-01-01 01:00:00 host-backup-20250101-010101.tar.zst.metadata
+10 2025-01-01 01:00:00 host-backup-20250101-010101.tar.zst.metadata.sha256
+`)
+	queue := &commandQueue{
+		t: t,
+		queue: []queuedResponse{
+			{name: "rclone", args: []string{"lsl", "remote:"}, out: listOutput},
+			{name: "rclone", args: []string{"deletefile", "remote:host-backup-20250101-010101.tar.zst"}},
+			{name: "rclone", args: []string{"deletefile", "remote:host-backup-20250101-010101.tar.zst.sha256"}},
+			{name: "rclone", args: []string{"deletefile", "remote:host-backup-20250101-010101.tar.zst.manifest.json"}},
+			{name: "rclone", args: []string{"deletefile", "remote:host-backup-20250101-010101.tar.zst.metadata"}},
+			{name: "rclone", args: []string{"deletefile", "remote:host-backup-20250101-010101.tar.zst.metadata.sha256"}},
+		},
+	}
+	cs.execCommand = queue.exec
+
+	backups, err := cs.List(context.Background())
+	if err != nil {
+		t.Fatalf("List() error = %v", err)
+	}
+	if len(backups) != 1 {
+		t.Fatalf("expected 1 backup (manifest is a sidecar), got %d", len(backups))
+	}
+	if err := cs.Delete(context.Background(), backups[0].BackupFile); err != nil {
+		t.Fatalf("Delete() error = %v", err)
+	}
+	var deletedManifest bool
+	for _, call := range queue.calls {
+		if len(call.args) == 2 && call.args[0] == "deletefile" &&
+			strings.HasSuffix(call.args[1], ".manifest.json") {
+			deletedManifest = true
+		}
+	}
+	if !deletedManifest {
+		t.Fatalf("expected a deletefile for the .manifest.json sidecar, calls=%v", queue.calls)
+	}
+	if len(queue.calls) != 6 {
+		t.Fatalf("expected 6 rclone calls (list + 5 deletes incl. manifest), got %d: %v", len(queue.calls), queue.calls)
+	}
+}
+
 func TestCloudStorageDeleteSkipsMissingBundleCandidates(t *testing.T) {
 	cfg := &config.Config{
 		CloudEnabled:          true,

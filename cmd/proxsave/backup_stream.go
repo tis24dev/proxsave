@@ -58,6 +58,29 @@ func captureRunOutput(bootstrap *logging.BootstrapLogger, emit func(line string)
 	}
 }
 
+// runStreamedEndOfRunActions runs the backup side effects that must appear
+// INSIDE the streamed viewport, in ONE place, so the RunStreamTask closure has a
+// single call and any future in-stream end-of-run action is added here:
+//   - the support email (support mode only): sent HERE inside the capture so its
+//     outcome streams into the viewport instead of printing to a screen already
+//     closed after Continue. The log-management phase (in backupStreamSteps) has
+//     closed the log file, so the email attaches the COMPLETE log. It sets
+//     res.supportEmailSent so the deferred sender skips it (no double send).
+//     envInfo is always set for a real run; guarded to never deref.
+//   - the daemon handoff: its debug trace streams into the viewport instead of
+//     the plain scrollback after the session closes (visible in support mode,
+//     where the run forces DEBUG logging).
+//
+// This is the in-STREAM case only. The fallback (session vanished) and the CLI
+// path hand off directly, without an in-viewport email.
+func runStreamedEndOfRunActions(ctx context.Context, opts backupModeOptions, res *backupModeResult) {
+	if opts.support && res.supportStats != nil && opts.envInfo != nil {
+		emitSupportEmail(ctx, opts.cfg, opts.logger, opts.envInfo.Type, res.supportStats, opts.supportMeta)
+		res.supportEmailSent = true
+	}
+	maybeHandoffManualBackup(opts, *res)
+}
+
 // runBackupStreamed runs the backup INSIDE the graphical dashboard ALTSCREEN
 // session, streaming its [ts] LEVEL log lines into a CONTAINED, scrollable,
 // COLORED viewport panel (components.RunStreamTask) so scrolling stays within the
@@ -82,8 +105,11 @@ func runBackupStreamed(opts backupModeOptions) backupModeResult {
 		UseColor: useColor,
 	})
 	if session == nil {
-		// The handoff vanished (CLI/cron/daemon): run the backup plain.
-		return backupStreamSteps(opts)
+		// The handoff vanished (CLI/cron/daemon): run the backup plain, then hand
+		// the outcome to the daemon (plain console, like the CLI path).
+		res := backupStreamSteps(opts)
+		maybeHandoffManualBackup(opts, res)
+		return res
 	}
 
 	var res backupModeResult
@@ -100,6 +126,7 @@ func runBackupStreamed(opts backupModeOptions) backupModeResult {
 			stepOpts := opts
 			stepOpts.ctx = taskCtx
 			res = backupStreamSteps(stepOpts)
+			runStreamedEndOfRunActions(taskCtx, opts, &res)
 			return buildBackupOutcomePrompt(res), nil
 		})
 	if streamErr != nil {

@@ -372,6 +372,68 @@ func TestBuildDaemonResultPrompt(t *testing.T) {
 	}
 }
 
+// assertNoRawInjection fails if the rendered prompt carries any raw terminal-control marker an
+// attacker could weaponize: an OSC title-set (ESC ] 0 ;), a bare BEL (0x07), the C1 CSI byte
+// (0x9b), or a CSI erase-screen (ESC [ 2 J). It asserts on ABSENCE of the INJECTED markers, not
+// "no ESC at all": theme rendering adds its own ESC[..m SGR color codes, which are legitimate.
+func assertNoRawInjection(t *testing.T, out string) {
+	t.Helper()
+	for _, bad := range []string{"\x1b]0;", "\x07", "\x9b", "\x1b[2J"} {
+		if strings.Contains(out, bad) {
+			t.Fatalf("prompt leaks raw control sequence %q into the terminal: %q", bad, out)
+		}
+	}
+}
+
+// TestBuildDaemonResultPromptSanitizesInjection: a keyword/explanation carrying raw escape bytes
+// (OSC title-set + BEL, a CSI erase-screen) must NOT reach the verbatim WithSelectorPromptStyled
+// path as raw sequences, while the human-readable text survives. This closes the injection path
+// for daemon action outcomes (restart keyword embeds the daemon Version; error explanations embed
+// external tool / error strings).
+func TestBuildDaemonResultPromptSanitizesInjection(t *testing.T) {
+	prompt := buildDaemonResultPrompt(
+		orchestrator.HealthcheckSetupLevelOk,
+		"restarted, aligned (v1.0\x1b]0;pwned\x07)",
+		"\x1b[2J\x07evil",
+	)
+	assertNoRawInjection(t, prompt)
+	// An OSC ("...pwned...") is stripped WHOLE, payload included; only text that
+	// sits outside any escape survives.
+	if strings.Contains(prompt, "pwned") {
+		t.Fatalf("OSC payload must be stripped with its escape: %q", prompt)
+	}
+	for _, want := range []string{"restarted, aligned (v1.0)", "evil"} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("sanitized prompt dropped legitimate text %q: %q", want, prompt)
+		}
+	}
+}
+
+// TestRestartKeywordVersionInjectionSanitized: a hostile daemon Version (RAW from
+// .daemon_info.json) reaches the restart-result keyword as "restarted, aligned (v<version>)",
+// then flows restartVerifyStatus -> buildDaemonResultPrompt. Confirm the Version-carrying keyword
+// actually goes through the sanitized builder (no separate raw render), so the escape is scrubbed
+// end-to-end.
+func TestRestartKeywordVersionInjectionSanitized(t *testing.T) {
+	hostile := RestartVerifyResult{
+		Restarted:    true,
+		ProcessAlive: true,
+		Aligned:      true,
+		FreshInfo:    true,
+		State:        health.DaemonState{Version: "1.0\x1b]0;pwned\x07"},
+	}
+	level, keyword, explanation := restartVerifyStatus(hostile)
+	// The raw Version rides in the keyword verbatim; the builder is the sanitize boundary.
+	if !strings.Contains(keyword, "\x1b]0;") {
+		t.Fatalf("expected the raw Version to ride in the keyword (sanitize happens in the builder): %q", keyword)
+	}
+	prompt := buildDaemonResultPrompt(level, keyword, explanation)
+	assertNoRawInjection(t, prompt)
+	if !strings.Contains(prompt, "restarted, aligned (v1.0)") || strings.Contains(prompt, "pwned") {
+		t.Fatalf("sanitized restart keyword should keep the plaintext version and drop the OSC payload: %q", prompt)
+	}
+}
+
 // TestDefaultBackupRunningNoLock: with no lock file at the resolved path, the production
 // probe reports "not running" (nothing to wait for).
 func TestDefaultBackupRunningNoLock(t *testing.T) {

@@ -823,6 +823,10 @@ func TestSecondaryStorage_List_SkipsMetadataShaFiles(t *testing.T) {
 	if err := os.WriteFile(backup+".sha256", []byte("hash"), 0o600); err != nil {
 		t.Fatalf("WriteFile: %v", err)
 	}
+	// The authoritative manifest sidecar must not be counted as a backup (PS-BH-002).
+	if err := os.WriteFile(backup+".manifest.json", []byte(`{"archive_path":"x"}`), 0o600); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
 
 	backups, err := storage.List(context.Background())
 	if err != nil {

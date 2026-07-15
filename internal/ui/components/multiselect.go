@@ -50,7 +50,8 @@ type MultiSelect[T any] struct {
 	detailPane  bool
 	detailTitle string
 
-	lastRowsTop int // body row of the first visible item (set by View)
+	lastRowsTop   int // body row of the first visible item (set by View)
+	lastWindowEnd int // body row just past the last rendered row (set by View)
 }
 
 // MultiSelectOption customizes a MultiSelect.
@@ -118,7 +119,7 @@ func (m *MultiSelect[T]) Title() string { return m.title }
 func (m *MultiSelect[T]) Help() string {
 	var help string
 	if m.actions {
-		help = "↑/↓ move · space toggle · enter act on row"
+		help = "↑/↓ move · space toggle · a all · i invert · enter act on row"
 	} else {
 		help = "↑/↓ move · space toggle · a all · i invert · enter confirm"
 	}
@@ -238,6 +239,13 @@ func (m *MultiSelect[T]) Update(msg tea.Msg) (shell.Screen, tea.Cmd) {
 		if mouse.Button != tea.MouseLeft {
 			return m, nil
 		}
+		// Only clicks inside the rendered row band map to a row; reject the
+		// title/blank above and the padded/tail lines below, which when scrolled
+		// would otherwise map to a valid off-screen item (or the hidden confirm
+		// button, silently resolving the screen).
+		if mouse.Y < m.lastRowsTop || mouse.Y >= m.lastWindowEnd {
+			return m, nil
+		}
 		row := mouse.Y - m.lastRowsTop + m.offset
 		if row < 0 || row >= m.totalRows() || row == m.spacerRow() {
 			return m, nil
@@ -332,6 +340,11 @@ func (m *MultiSelect[T]) View(width, height int) string {
 	if m.offset < 0 {
 		m.offset = 0
 	}
+	// Rendered row band = [lastRowsTop, lastWindowEnd) over items+spacer+buttons.
+	// lipgloss.Place top-pads the body (and a tall detail pane can overrun the list),
+	// so clicks below the window must not map to an off-screen row (or the hidden
+	// confirm button).
+	m.lastWindowEnd = m.lastRowsTop + max(min(m.totalRows(), m.offset+rows)-m.offset, 0)
 
 	// leftWidth is the list column width; with a detail pane the description takes
 	// the rest. Fall back to a single column when the terminal is too narrow.

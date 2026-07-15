@@ -77,7 +77,6 @@ type BackgroundMessageReceiver interface {
 type pushScreenMsg struct {
 	id     uint64
 	screen Screen
-	abort  func()
 }
 
 type removeScreenMsg struct {

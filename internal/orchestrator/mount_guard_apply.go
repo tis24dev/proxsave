@@ -251,7 +251,7 @@ func (a *pbsMountGuardApply) protectOfflineTarget(guardTarget string) {
 	if entries, err := mountGuardReadDir(guardTarget); err == nil && len(entries) > 0 {
 		a.warning("PBS mount guard: guard mount point %s is not empty (entries=%d)", guardTarget, len(entries))
 	}
-	a.warning("PBS mount guard: %s resolves to root filesystem (mount missing?) — bind-mounted a read-only guard to prevent writes until storage is available", guardTarget)
+	a.warning("PBS mount guard: %s resolves to root filesystem (mount missing?), bind-mounted a read-only guard to prevent writes until storage is available", guardTarget)
 }
 
 // warnOfflineTargetUnguarded is the warn-only fallback for when the read-only

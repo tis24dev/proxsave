@@ -28,7 +28,7 @@ build:
 	); \
 	COMMIT=$$(git rev-parse --short HEAD 2>/dev/null || echo dev); \
 	BUILD_TIME=$$(date -u +"%Y-%m-%dT%H:%M:%SZ"); \
-	go build -ldflags="-X 'main.buildTime=$$BUILD_TIME' -X 'github.com/tis24dev/proxsave/internal/version.Version=$$VERSION' -X 'github.com/tis24dev/proxsave/internal/version.Commit=$$COMMIT' -X 'github.com/tis24dev/proxsave/internal/version.Date=$$BUILD_TIME'" -o build/proxsave ./cmd/proxsave
+	go build -ldflags="-X 'main.buildTime=$$BUILD_TIME' -X 'github.com/tis24dev/proxsave/internal/version.Version=$$VERSION' -X 'github.com/tis24dev/proxsave/internal/version.Commit=$$COMMIT' -X 'github.com/tis24dev/proxsave/internal/version.Date=$$BUILD_TIME' -X 'github.com/tis24dev/proxsave/internal/support.supportEmail=$$EMAIL_SUPPORT'" -o build/proxsave ./cmd/proxsave
 
 # Build ottimizzato per release
 build-release:
@@ -54,7 +54,7 @@ build-release:
 	); \
 	COMMIT=$$(git rev-parse --short HEAD 2>/dev/null || echo dev); \
 	BUILD_TIME=$$(date -u +"%Y-%m-%dT%H:%M:%SZ"); \
-	go build -ldflags="-s -w -X 'main.buildTime=$$BUILD_TIME' -X 'github.com/tis24dev/proxsave/internal/version.Version=$$VERSION' -X 'github.com/tis24dev/proxsave/internal/version.Commit=$$COMMIT' -X 'github.com/tis24dev/proxsave/internal/version.Date=$$BUILD_TIME'" -o build/proxsave ./cmd/proxsave
+	go build -ldflags="-s -w -X 'main.buildTime=$$BUILD_TIME' -X 'github.com/tis24dev/proxsave/internal/version.Version=$$VERSION' -X 'github.com/tis24dev/proxsave/internal/version.Commit=$$COMMIT' -X 'github.com/tis24dev/proxsave/internal/version.Date=$$BUILD_TIME' -X 'github.com/tis24dev/proxsave/internal/support.supportEmail=$$EMAIL_SUPPORT'" -o build/proxsave ./cmd/proxsave
 
 # Test
 test:

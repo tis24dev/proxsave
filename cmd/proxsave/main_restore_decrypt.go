@@ -52,6 +52,13 @@ func finishFailedRestore(rt *appRuntime, err error, includeDecryptAbort bool) mo
 		logging.Warning("Restore workflow aborted by user")
 		return restoreModeResult(rt, exitCodeInterrupted)
 	}
+	if errors.Is(err, orchestrator.ErrDecryptNoBackups) && dashboardIsBareInvocation() {
+		// Dashboard bare invocation: the user already saw the graceful "Status:"
+		// empty-state screen, so exit cleanly with NO log line, mirroring the
+		// decrypt entrypoint (runDecryptOnlyMode). A CLI --restore is not bare, so
+		// it falls through and keeps its ERROR line (CLI-execution lines untouched).
+		return restoreModeResult(rt, types.ExitSuccess.Int())
+	}
 	logging.Error("Restore workflow failed: %v", err)
 	return restoreModeResult(rt, types.ExitGenericError.Int())
 }
@@ -102,12 +109,18 @@ func dispatchBackupMode(rt *appRuntime) modeResult {
 		heapProfilePath:  rt.heapProfilePath,
 		serverIDValue:    rt.serverIDValue,
 		serverMACValue:   rt.serverMACValue,
+		support:          rt.args.Support,
+		supportMeta: support.Meta{
+			GitHubUser: rt.args.SupportGitHubUser,
+			IssueID:    rt.args.SupportIssueID,
+		},
 	})
 	return modeResult{
-		orch:            result.orch,
-		earlyErrorState: result.earlyErrorState,
-		supportStats:    result.supportStats,
-		exitCode:        result.exitCode,
-		handled:         true,
+		orch:             result.orch,
+		earlyErrorState:  result.earlyErrorState,
+		supportStats:     result.supportStats,
+		supportEmailSent: result.supportEmailSent,
+		exitCode:         result.exitCode,
+		handled:          true,
 	}
 }

@@ -67,7 +67,7 @@ func (u *charmWorkflowUI) ShowStatusResult(ctx context.Context, screenTitle stri
 	errWorkflowStatusEsc := errors.New("workflow status: esc")
 	prompt := buildWorkflowStatusPrompt(level, keyword, explanation)
 	items := []components.SelectorItem[workflowStatusResultAction]{
-		{Label: "Continue", Description: "continue", Value: workflowStatusResultActionContinue},
+		{Label: "Continue", Description: "continue the workflow", Value: workflowStatusResultActionContinue},
 	}
 	for {
 		action, err := shell.Ask(ctx, u.session, components.NewSelector(
