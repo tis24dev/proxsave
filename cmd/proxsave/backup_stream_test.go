@@ -514,3 +514,28 @@ func pumpEnterBackup(t *testing.T, s *shell.Session, done <-chan backupModeResul
 		}
 	}
 }
+
+func TestAppendRunIssueSummary_NotifyErrorShownAsError(t *testing.T) {
+	logger := logging.New(types.LogLevelDebug, false)
+	logger.SetOutput(io.Discard)
+
+	// A notification failure logged inside the dispatch scope becomes a NOTIFY-ERR.
+	logger.EnterNotifyErrorScope()
+	logger.Error("Telegram: failed: connection refused")
+	logger.ExitNotifyErrorScope()
+
+	var b strings.Builder
+	appendRunIssueSummary(&b, logger)
+	out := ansi.Strip(b.String())
+
+	if strings.Contains(out, "NOTIFY-ERR") {
+		t.Fatalf("recap must not show the raw NOTIFY-ERR token: %q", out)
+	}
+	if !strings.Contains(out, "ERROR") {
+		t.Fatalf("a notify failure must be shown as ERROR in the recap: %q", out)
+	}
+	// The recap error count must include the notify failure (shown as an error).
+	if !strings.Contains(out, "1 error(s)") {
+		t.Fatalf("recap error count must include the notify failure: %q", out)
+	}
+}

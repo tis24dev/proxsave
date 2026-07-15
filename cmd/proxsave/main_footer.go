@@ -242,11 +242,13 @@ func printRunIssueSummary(logger *logging.Logger) {
 		return
 	}
 
+	// Notify/communication failures are warning-weight for the run status but are
+	// shown as errors in the recap, so count and render them under errors here.
 	fmt.Println("===========================================")
-	fmt.Printf("WARNINGS/ERRORS DURING RUN (warnings=%d errors=%d)\n", logger.WarningCount(), logger.ErrorCount())
+	fmt.Printf("WARNINGS/ERRORS DURING RUN (warnings=%d errors=%d)\n", logger.WarningCount(), logger.ErrorCount()+logger.NotifyCount())
 	fmt.Println()
 	for _, line := range issues {
-		fmt.Println(line)
+		fmt.Println(logging.NormalizeNotifyErrorToken(line))
 	}
 	fmt.Println("===========================================")
 	fmt.Println()

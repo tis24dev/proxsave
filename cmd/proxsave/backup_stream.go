@@ -313,13 +313,16 @@ func appendRunIssueSummary(b *strings.Builder, logger *logging.Logger) {
 		return
 	}
 
+	// Notify/communication failures are warning-weight for the run status but are
+	// shown as errors in the recap, so count them under errors here.
+	errCount := logger.ErrorCount() + logger.NotifyCount()
 	headerStyle := theme.WarningText
-	if logger.ErrorCount() > 0 {
+	if errCount > 0 {
 		headerStyle = theme.ErrorText
 	}
 	b.WriteString("\n\n")
 	b.WriteString(headerStyle.Render(fmt.Sprintf("%s Warnings/errors during run: %d warning(s), %d error(s)",
-		theme.SymbolWarning, logger.WarningCount(), logger.ErrorCount())))
+		theme.SymbolWarning, logger.WarningCount(), errCount)))
 
 	const maxLines = 10
 	shown := issues
@@ -328,7 +331,7 @@ func appendRunIssueSummary(b *strings.Builder, logger *logging.Logger) {
 	}
 	for _, line := range shown {
 		b.WriteString("\n")
-		b.WriteString(theme.Subtle.Render("  " + line))
+		b.WriteString(theme.Subtle.Render("  " + logging.NormalizeNotifyErrorToken(line)))
 	}
 	if extra := len(issues) - len(shown); extra > 0 {
 		b.WriteString("\n")
