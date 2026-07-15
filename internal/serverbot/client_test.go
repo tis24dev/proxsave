@@ -39,9 +39,21 @@ func TestNewNormalizesHostOnce(t *testing.T) {
 	}
 }
 
-func TestNewNilHTTPClientUsesDefault(t *testing.T) {
-	if New("h", nil, nil).http != http.DefaultClient {
-		t.Fatal("nil httpClient must fall back to http.DefaultClient")
+func TestNewNilHTTPClientOwnsClientAndRefusesRedirect(t *testing.T) {
+	c := New("h", nil, nil)
+	if c.http == nil {
+		t.Fatal("nil httpClient must yield a non-nil owned client")
+	}
+	// Must NOT reuse the shared global: setting CheckRedirect on http.DefaultClient
+	// would mutate every other user of the default client process-wide (F11-03).
+	if c.http == http.DefaultClient {
+		t.Fatal("nil httpClient must NOT reuse the shared http.DefaultClient")
+	}
+	if c.http.CheckRedirect == nil {
+		t.Fatal("owned client must refuse redirects (CheckRedirect set)")
+	}
+	if err := c.http.CheckRedirect(nil, []*http.Request{{}}); err == nil {
+		t.Error("CheckRedirect must return an error to refuse the redirect")
 	}
 }
 

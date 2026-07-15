@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"strings"
@@ -31,20 +32,36 @@ const (
 // authenticated notify call, and the fresh-token confirm without mutation.
 type Client struct {
 	base   string          // strings.TrimRight(host, "/") computed once
-	http   *http.Client    // nil at New -> http.DefaultClient (preserves the existing seam)
+	http   *http.Client    // owned copy of the caller's client with a no-redirect CheckRedirect
 	logger *logging.Logger // optional; debug only, NEVER a body, NEVER a secret
 }
 
-// New normalizes the host once. A nil httpClient falls back to http.DefaultClient.
+// New normalizes the host once and returns a Client whose http.Client refuses ALL
+// redirects. The caller's client (or a zero client when nil) is shallow-copied so its
+// Transport/pool and Timeout are preserved while CheckRedirect is overridden WITHOUT
+// mutating the caller's object -- critical because callers pass the shared, global
+// http.DefaultClient. The no-redirect policy therefore holds on every path through New.
 func New(serverAPIHost string, httpClient *http.Client, logger *logging.Logger) *Client {
-	if httpClient == nil {
-		httpClient = http.DefaultClient
+	var effective http.Client
+	if httpClient != nil {
+		effective = *httpClient // shallow copy: shares Transport/Jar, copies Timeout
 	}
+	effective.CheckRedirect = refuseRedirect
 	return &Client{
 		base:   strings.TrimRight(serverAPIHost, "/"),
-		http:   httpClient,
+		http:   &effective,
 		logger: logger,
 	}
+}
+
+// refuseRedirect fail-closes on ANY HTTP redirect. CheckRedirect is consulted only when
+// a 3xx with a Location would be followed; returning an error aborts BEFORE the follow-up
+// request is sent, so the per-request X-Server-Auth secret never leaves the origin host.
+// Go's stdlib strips only Authorization/Cookie/WWW-Authenticate cross-host, NOT custom
+// headers, so following a redirect would leak the relay secret. The bot-server API never
+// legitimately redirects. The error surfaces to Do as a *TransportError ("request").
+func refuseRedirect(_ *http.Request, via []*http.Request) error {
+	return fmt.Errorf("serverbot: refusing HTTP redirect after %d hop(s)", len(via))
 }
 
 // Do performs ONLY the shared transport surface, nothing semantic:
