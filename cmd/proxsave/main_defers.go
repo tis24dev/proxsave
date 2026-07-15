@@ -3,7 +3,6 @@ package main
 
 import (
 	"fmt"
-	"os"
 	"runtime/pprof"
 
 	"github.com/tis24dev/proxsave/internal/logging"
@@ -83,7 +82,7 @@ func closeRunProfiling(rt *appRuntime) {
 	if rt.heapProfilePath == "" {
 		return
 	}
-	f, err := os.Create(rt.heapProfilePath)
+	f, err := createProfileFile(rt.heapProfilePath)
 	if err != nil {
 		logging.Warning("Failed to create heap profile file: %v", err)
 		return
