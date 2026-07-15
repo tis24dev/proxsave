@@ -225,7 +225,7 @@ func (f *networkConfigUIApplyFlow) promptNICRepair() error {
 		"Repair now",
 		"Skip repair",
 		0,
-		false,
+		true,
 	)
 	if err != nil {
 		return err

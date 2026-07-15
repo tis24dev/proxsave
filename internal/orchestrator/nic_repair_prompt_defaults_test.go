@@ -81,3 +81,42 @@ func TestNICOverridesPromptDefaultsSafe(t *testing.T) {
 		t.Fatal("conflicts prompt must stay default-safe (defaultYes=false, noLabel is the safe Skip)")
 	}
 }
+
+// recordingApplyUI embeds the full fake RestoreWorkflowUI and records the
+// promptNICRepair confirmation; returning false (skip) avoids reaching the real
+// RepairNICNames.
+type recordingApplyUI struct {
+	*fakeRestoreWorkflowUI
+	got  recordedConfirm
+	seen bool
+}
+
+func (r *recordingApplyUI) ConfirmAction(_ context.Context, title, _, yesLabel, noLabel string, _ time.Duration, defaultYes bool) (bool, error) {
+	r.got = recordedConfirm{title, yesLabel, noLabel, defaultYes}
+	r.seen = true
+	return false, nil
+}
+
+// LIVE-NIC-COPY: the top-level "NIC name repair (recommended)" gate must default
+// to Repair now, consistent with the recommendation.
+func TestPromptNICRepairDefaultsRepair(t *testing.T) {
+	ui := &recordingApplyUI{fakeRestoreWorkflowUI: &fakeRestoreWorkflowUI{}}
+	f := &networkConfigUIApplyFlow{
+		ctx:         context.Background(),
+		ui:          ui,
+		logger:      logging.New(types.LogLevelError, false),
+		archivePath: "/nonexistent.tar.xz",
+	}
+	if err := f.promptNICRepair(); err != nil {
+		t.Fatalf("promptNICRepair: %v", err)
+	}
+	if !ui.seen {
+		t.Fatal("promptNICRepair did not confirm")
+	}
+	if !ui.got.defaultYes {
+		t.Fatalf("LIVE-NIC-COPY: promptNICRepair must default to Repair (defaultYes=true), got yes=%q default=%v", ui.got.yesLabel, ui.got.defaultYes)
+	}
+	if ui.got.yesLabel != "Repair now" {
+		t.Fatalf("repair must be the yes label, got %q", ui.got.yesLabel)
+	}
+}
