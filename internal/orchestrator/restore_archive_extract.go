@@ -76,7 +76,7 @@ func extractArchiveNative(ctx context.Context, opts restoreArchiveOptions) (err 
 	// archive, so selective restore never leaves a dangling link and full restore
 	// preserves the original file type (issue #70). Safe on every extraction: it
 	// never deletes and is a no-op when no dedup manifest is present.
-	if err := materializeDedupSymlinks(ctx, opts.archivePath, opts.destRoot, opts.logger); err != nil {
+	if err := materializeDedupSymlinks(ctx, opts.archivePath, opts.destRoot, opts.logger, opts.failOnPartialExtraction); err != nil {
 		// On the staged path (failOnPartialExtraction) an incompletely reconstructed
 		// dedup tree must not be applied to the live system; elsewhere it is a
 		// recoverable warning and the (kept) manifest lets a re-run finish.
@@ -312,7 +312,7 @@ type materializeTarget struct {
 // dedup canonical's category was not selected or its on-disk copy failed to extract,
 // and it never picks up stale live content (issue #70). It is a no-op when no
 // manifest is present (deduplication was off or found no duplicates).
-func materializeDedupSymlinks(ctx context.Context, archivePath, destRoot string, logger *logging.Logger) error {
+func materializeDedupSymlinks(ctx context.Context, archivePath, destRoot string, logger *logging.Logger, strict bool) error {
 	manifestTarget, _, err := sanitizeRestoreEntryTargetWithFS(restoreFS, destRoot, backup.DedupManifestRelPath)
 	if err != nil {
 		return nil
@@ -374,6 +374,12 @@ func materializeDedupSymlinks(ctx context.Context, archivePath, destRoot string,
 		}
 		if materialized > 0 || missing > 0 {
 			logger.Info("Dedup: materialized %d deduplicated file(s) from the archive; %d left as link(s) due to missing canonical content", materialized, missing)
+		}
+		if strict && missing > 0 {
+			// A staged/strict restore cannot apply a tree with dangling deduplicated
+			// links. Keep the manifest+state and fail closed, like the !completed branch.
+			logger.Warning("Dedup: %d deduplicated file(s) have no canonical in the archive; refusing to apply a partial staged restore", missing)
+			return fmt.Errorf("dedup materialization incomplete: %d deduplicated file(s) have no canonical in the archive; refusing to apply a partial staged restore", missing)
 		}
 	}
 
