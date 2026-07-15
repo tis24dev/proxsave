@@ -316,7 +316,7 @@ func runInstallTUI(ctx context.Context, configPath string, bootstrap *logging.Bo
 	if wizardData != nil {
 		wizardCronSchedule = cronutil.TimeToSchedule(wizardData.CronTime)
 	}
-	cronSchedule := buildInstallCronSchedule(skipConfigWizard, wizardCronSchedule)
+	cronSchedule := buildInstallCronSchedule(skipConfigWizard, wizardCronSchedule, configPath)
 	wizardMode := ""
 	if wizardData != nil {
 		wizardMode = wizardData.SchedulerMode

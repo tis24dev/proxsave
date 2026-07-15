@@ -48,6 +48,7 @@ type InstallWizardPrefill struct {
 	EmailDeliveryMethod string
 	EncryptionEnabled   bool
 	SchedulerMode       string // "cron" | "daemon" (empty on a fresh config)
+	SchedulerTime       string // HH:MM "Run at" time (empty on a fresh config)
 	HealthcheckMode     string // "off" | "centralized" | "self" (empty on a fresh/pre-daemon config)
 }
 
@@ -406,6 +407,7 @@ func DeriveInstallWizardPrefill(baseTemplate string) InstallWizardPrefill {
 
 	out.EncryptionEnabled = readTemplateBool(values, "ENCRYPT_ARCHIVE")
 	out.SchedulerMode = readTemplateString(values, "SCHEDULER_MODE")
+	out.SchedulerTime = readTemplateString(values, "SCHEDULER_TIME")
 
 	// Healthchecks mode: not-enabled -> "off"; otherwise the normalized MODE value
 	// (defaulting to centralized when MODE is absent but the connector is enabled).

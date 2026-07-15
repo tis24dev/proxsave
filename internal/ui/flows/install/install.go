@@ -62,6 +62,18 @@ func ResolveExistingConfig(ctx context.Context, session *shell.Session, configPa
 	return action, nil
 }
 
+// cronFieldDefault seeds the "Run at" field default from a stored HH:MM
+// SCHEDULER_TIME, falling back to cronutil.DefaultTime when empty or invalid, so
+// an Edit keeps the operator's run time instead of resetting it to 02:00 (F10-02).
+func cronFieldDefault(storedSchedulerTime string) string {
+	if t := strings.TrimSpace(storedSchedulerTime); t != "" {
+		if norm, err := cronutil.NormalizeTime(t, cronutil.DefaultTime); err == nil {
+			return norm
+		}
+	}
+	return cronutil.DefaultTime
+}
+
 // CollectWizardData shows the configuration wizard as ONE aligned form
 // (label column left, controls right, like the tview wizard it replaced),
 // prefilled from baseTemplate. Esc cancels the installation.
@@ -213,7 +225,7 @@ func CollectWizardData(ctx context.Context, session *shell.Session, baseTemplate
 		Label:       "Run at (HH:MM)",
 		Description: fmt.Sprintf("Daily backup time; default %s.", cronutil.DefaultTime),
 		Kind:        components.FieldText,
-		Text:        cronutil.DefaultTime,
+		Text:        cronFieldDefault(prefill.SchedulerTime),
 		Validate: func(v string) error {
 			_, err := cronutil.NormalizeTime(v, cronutil.DefaultTime)
 			return err

@@ -146,7 +146,7 @@ func runInstall(ctx context.Context, configPath string, bootstrap *logging.Boots
 		baseDir,
 		execInfo,
 		bootstrap,
-		buildInstallCronSchedule(configResult.SkipConfigWizard, configResult.CronSchedule),
+		buildInstallCronSchedule(configResult.SkipConfigWizard, configResult.CronSchedule, configPath),
 	)
 	// Reconcile the scheduler engine (daemon unit vs cron entry) as a mutually
 	// exclusive choice, INCLUDING the keep-existing path (SchedulerMode empty ->
@@ -544,7 +544,7 @@ func runConfigWizardCLI(ctx context.Context, reader *bufio.Reader, configPath, t
 	result.HealthcheckMode = hcMode
 
 	logging.DebugStepBootstrap(bootstrap, "install config wizard (cli)", "configuring run-at time")
-	cronTime, err := configureCronTimeFunc(ctx, reader, cronutil.DefaultTime)
+	cronTime, err := configureCronTimeFunc(ctx, reader, cronTimeDefault(fromExisting, template))
 	if err != nil {
 		return installConfigResult{}, wrapInstallError(err)
 	}
@@ -966,6 +966,26 @@ func healthcheckModeDefault(fromExisting bool, template string) string {
 	default:
 		return "centralized"
 	}
+}
+
+// cronTimeDefault seeds the "Run at" prompt default from the SCHEDULER_TIME stored
+// in an existing config (Edit path), mirroring schedulerEngineDefault /
+// healthcheckModeDefault, so a no-op edit keeps the operator's time instead of
+// resetting it to 02:00. Fresh/Overwrite/empty-base, or an unreadable/invalid
+// stored time, fall back to DefaultTime.
+func cronTimeDefault(fromExisting bool, template string) string {
+	if !fromExisting || strings.TrimSpace(template) == "" {
+		return cronutil.DefaultTime
+	}
+	stored := strings.TrimSpace(installer.DeriveInstallWizardPrefill(template).SchedulerTime)
+	if stored == "" {
+		return cronutil.DefaultTime
+	}
+	norm, err := cronutil.NormalizeTime(stored, cronutil.DefaultTime)
+	if err != nil {
+		return cronutil.DefaultTime
+	}
+	return norm
 }
 
 // configureHealthcheckMode prompts for the backup-monitoring mode (mirrors
