@@ -408,9 +408,15 @@ type nicRepairUI interface {
 // maybeRepairNICNamesTUI); the only mode-specific behavior comes from ui. Both
 // confirmations default to the non-destructive answer (do NOT skip the repair /
 // do NOT apply conflicting mappings) in both modes.
+// Seams for tests to drive the override/conflict prompts deterministically.
+var (
+	planNICNameRepairFn            = planNICNameRepair
+	detectNICNamingOverrideRulesFn = detectNICNamingOverrideRules
+)
+
 func repairNICNamesWithUI(ctx context.Context, ui nicRepairUI, logger *logging.Logger, archivePath string) *nicRepairResult {
 	logging.DebugStep(logger, "NIC repair", "Plan NIC name repair (archive=%s)", strings.TrimSpace(archivePath))
-	plan, err := planNICNameRepair(ctx, archivePath)
+	plan, err := planNICNameRepairFn(ctx, archivePath)
 	if err != nil {
 		logger.Warning("NIC name repair plan failed: %v", err)
 		return nil
@@ -430,7 +436,7 @@ func repairNICNamesWithUI(ctx context.Context, ui nicRepairUI, logger *logging.L
 		logger.Debug("NIC mapping details:\n%s", plan.Mapping.Details())
 
 		logging.DebugStep(logger, "NIC repair", "Detect persistent NIC naming overrides (udev/systemd)")
-		overrides, err := detectNICNamingOverrideRules(logger)
+		overrides, err := detectNICNamingOverrideRulesFn(logger)
 		if err != nil {
 			logger.Debug("NIC naming override detection failed: %v", err)
 		} else if overrides.Empty() {
@@ -448,7 +454,7 @@ func repairNICNamesWithUI(ctx context.Context, ui nicRepairUI, logger *logging.L
 			}
 			b.WriteString("Skip NIC name repair and keep restored interface names?")
 
-			skip, err := ui.ConfirmAction(ctx, "NIC naming overrides", b.String(), "Skip NIC repair", "Proceed", 0, false)
+			skip, err := ui.ConfirmAction(ctx, "NIC naming overrides", b.String(), "Skip NIC repair", "Proceed", 0, true)
 			if err != nil {
 				logger.Warning("NIC naming override prompt failed: %v", err)
 			} else if skip {
