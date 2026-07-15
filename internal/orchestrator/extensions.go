@@ -207,9 +207,10 @@ func (o *Orchestrator) refreshLogIssuesFromFile(stats *BackupStats, includeCateg
 	if includeCategories {
 		categoryLimit = 10
 	}
-	categories, errorCount, warningCount := ParseLogCounts(stats.LogFilePath, categoryLimit)
+	categories, errorCount, warningCount, notifyCount := ParseLogCounts(stats.LogFilePath, categoryLimit)
 	stats.ErrorCount = errorCount
 	stats.WarningCount = warningCount
+	stats.NotifyCount = notifyCount
 	if includeCategories {
 		stats.LogCategories = categories
 	} else {

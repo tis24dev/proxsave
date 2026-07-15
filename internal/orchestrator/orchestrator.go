@@ -154,8 +154,12 @@ type BackupStats struct {
 	CloudGFSCurrentYearly      int
 
 	// Error/warning counts
-	ErrorCount    int
-	WarningCount  int
+	ErrorCount   int
+	WarningCount int
+	// NotifyCount tallies notification/communication failures (NOTIFY-ERR): they
+	// display as errors but are warning-weight for the run status (never escalate
+	// the exit code / gauge to error).
+	NotifyCount   int
 	LogFilePath   string
 	LogCategories []notify.LogCategory
 
