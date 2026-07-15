@@ -521,3 +521,50 @@ func TestPackageLevelFatalUsesDefaultLoggerExitFunc(t *testing.T) {
 		t.Fatalf("package-level fatal log missing message: %s", buf.String())
 	}
 }
+
+func TestNotifyError_CountsAsNotifyNotError(t *testing.T) {
+	var buf bytes.Buffer
+	logger := New(types.LogLevelInfo, false)
+	logger.SetOutput(&buf)
+
+	logger.NotifyError("Telegram: failed: %s", "connection refused")
+
+	if got := logger.NotifyCount(); got != 1 {
+		t.Fatalf("NotifyCount = %d, want 1", got)
+	}
+	// A notification failure must NOT count as a backup error: it is warning-weight
+	// for the run status even though it displays as an error.
+	if got := logger.ErrorCount(); got != 0 {
+		t.Fatalf("ErrorCount = %d, want 0 (notify error must not count as error)", got)
+	}
+	if got := logger.WarningCount(); got != 0 {
+		t.Fatalf("WarningCount = %d, want 0", got)
+	}
+
+	out := buf.String()
+	if !strings.Contains(out, notifyErrorLabel) {
+		t.Fatalf("output missing %s token: %q", notifyErrorLabel, out)
+	}
+	if !strings.Contains(out, "Telegram: failed: connection refused") {
+		t.Fatalf("output missing message: %q", out)
+	}
+
+	issues := logger.IssueLines()
+	if len(issues) != 1 || !strings.Contains(issues[0], notifyErrorLabel) {
+		t.Fatalf("IssueLines = %v, want one %s line", issues, notifyErrorLabel)
+	}
+}
+
+func TestNormalizeNotifyErrorToken(t *testing.T) {
+	line := "[2026-07-16 10:00:00] " + notifyErrorLabel + "  Telegram: failed"
+	got := NormalizeNotifyErrorToken(line)
+	if strings.Contains(got, notifyErrorLabel) {
+		t.Fatalf("token not normalized away: %q", got)
+	}
+	if !strings.Contains(got, "ERROR") {
+		t.Fatalf("normalized line missing ERROR: %q", got)
+	}
+	if !strings.Contains(got, "Telegram: failed") {
+		t.Fatalf("normalized line dropped the message: %q", got)
+	}
+}

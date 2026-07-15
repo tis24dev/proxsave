@@ -46,7 +46,12 @@ type Logger struct {
 	fileSinkDisabled bool
 	warningCount     int64
 	errorCount       int64
-	issueLines       []string // Captured WARNING/ERROR/CRITICAL lines for end-of-run summary
+	// notifyCount tracks NOTIFY-ERR lines: notification/communication failures that
+	// display as errors but are warning-weight for the run status (never escalate the
+	// exit code / gauge to error). Kept separate from errorCount so a notify failure
+	// never looks like a backup error.
+	notifyCount int64
+	issueLines  []string // Captured WARNING/ERROR/CRITICAL lines for end-of-run summary
 	exitFunc         func(int)
 	secrets          []secretForm // registered secret values scrubbed from every log line
 }
@@ -328,11 +333,16 @@ func (l *Logger) logWithLabel(level types.LogLevel, label string, colorOverride 
 		return
 	}
 
-	// Track warning/error counters for summary/exit coloring
-	switch level {
-	case types.LogLevelWarning:
+	// Track warning/error counters for summary/exit coloring. A NOTIFY-ERR line
+	// (notification/communication failure) is emitted at error level but counts into
+	// notifyCount, not errorCount: it displays as an error yet is warning-weight for
+	// the run status.
+	switch {
+	case label == notifyErrorLabel:
+		l.notifyCount++
+	case level == types.LogLevelWarning:
 		l.warningCount++
-	case types.LogLevelError, types.LogLevelCritical:
+	case level == types.LogLevelError, level == types.LogLevelCritical:
 		l.errorCount++
 	}
 
@@ -422,6 +432,14 @@ func (l *Logger) ErrorCount() int64 {
 	return l.errorCount
 }
 
+// NotifyCount returns the number of NOTIFY-ERR entries emitted (notification/
+// communication failures shown as errors but treated as warning-weight).
+func (l *Logger) NotifyCount() int64 {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.notifyCount
+}
+
 // IssueLines returns a copy of captured WARNING/ERROR/CRITICAL log lines in
 // chronological order. Intended for end-of-run summaries.
 func (l *Logger) IssueLines() []string {
@@ -489,6 +507,28 @@ func (l *Logger) Warning(format string, args ...interface{}) {
 // Error writes an error log.
 func (l *Logger) Error(format string, args ...interface{}) {
 	l.log(types.LogLevelError, format, args...)
+}
+
+// notifyErrorLabel is the level token written for a NOTIFY-ERR line: a
+// notification/communication failure that must display as an error but stay
+// warning-weight for the run exit code / status gauge.
+const notifyErrorLabel = "NOTIFY-ERR"
+
+// NotifyError writes a notification/communication failure. It renders like an error
+// (red, captured in the issue summary) but is tallied into notifyCount rather than
+// errorCount, so it displays as ERROR yet never escalates the run status to error.
+// The run-side count logic buckets the NOTIFY-ERR token as warning-weight.
+func (l *Logger) NotifyError(format string, args ...interface{}) {
+	if l == nil {
+		return
+	}
+	l.logWithLabel(types.LogLevelError, notifyErrorLabel, "", format, args...)
+}
+
+// NormalizeNotifyErrorToken rewrites the NOTIFY-ERR level token in a captured issue
+// line to ERROR, so recap/footer renderers present notify failures as errors.
+func NormalizeNotifyErrorToken(line string) string {
+	return strings.Replace(line, notifyErrorLabel, "ERROR", 1)
 }
 
 // Critical writes a critical log.
