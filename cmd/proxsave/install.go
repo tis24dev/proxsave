@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	neturl "net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -34,6 +35,7 @@ type installConfigResult struct {
 	SkipConfigWizard bool
 	CronSchedule     string
 	SchedulerMode    string // "cron" | "daemon"
+	HealthcheckMode  string // "off" | "centralized" | "self" (self triggers the params screen)
 }
 
 func runInstall(ctx context.Context, configPath string, bootstrap *logging.BootstrapLogger) (err error) {
@@ -118,9 +120,20 @@ func runInstall(ctx context.Context, configPath string, bootstrap *logging.Boots
 			return err
 		}
 
-		// Healthchecks setup: if the daemon engine (centralized monitoring) was
-		// chosen, guide the user + show the portal magic-link + a connection check.
-		// Only renders when eligible (re-reads the written config), non-blocking.
+		// Self-mode healthchecks: collect the ping URLs BEFORE the healthcheck
+		// bootstrap re-reads the config (ordering invariant - the bootstrap keys
+		// eligibility off the written HEALTHCHECK_ALIVE_URL). Only when self was chosen.
+		if configResult.HealthcheckMode == "self" {
+			logging.DebugStepBootstrap(bootstrap, "install workflow (cli)", "healthcheck self params")
+			if err := runHealthcheckSelfParamsCLI(ctx, reader, baseDir, configPath, bootstrap); err != nil {
+				return err
+			}
+		}
+
+		// Healthchecks setup: if the daemon engine with monitoring was chosen, guide
+		// the user + (centralized) show the portal magic-link + a connection check, or
+		// (self) verify the pasted alive URL is reachable. Only renders when eligible
+		// (re-reads the written config), non-blocking.
 		logging.DebugStepBootstrap(bootstrap, "install workflow (cli)", "healthcheck setup")
 		if err := runHealthcheckSetupCLI(ctx, reader, baseDir, configPath, bootstrap); err != nil {
 			return err
@@ -151,7 +164,7 @@ func runInstall(ctx context.Context, configPath string, bootstrap *logging.Boots
 	// Best-effort post-install permission and ownership normalization so that
 	// the environment starts in a consistent state.
 	logging.DebugStepBootstrap(bootstrap, "install workflow (cli)", "normalizing permissions")
-	permStatus, permMessage = fixPermissionsAfterInstall(ctx, configPath, baseDir, bootstrap)
+	permStatus, permMessage = fixPermissionsAfterInstall(ctx, configPath, baseDir, bootstrap, nil)
 	logging.DebugStepBootstrap(bootstrap, "install workflow (cli)", "permissions status=%s", permStatus)
 
 	return nil
@@ -331,22 +344,40 @@ func runNewInstall(ctx context.Context, configPath string, bootstrap *logging.Bo
 	return newInstallRunInstallTUI(ctx, plan.ResolvedConfigPath, bootstrap)
 }
 
+// installBannerLevel classifies the install result for the completion banner.
+type installBannerLevel int
+
+const (
+	installBannerCompleted installBannerLevel = iota
+	installBannerAborted
+	installBannerFailed
+)
+
+// installBanner derives the completion banner title + severity from the install
+// result. Single extraction point reused by BOTH the CLI footer (printInstallFooter,
+// ANSI box) and the graphical finalization summary (buildInstallOutcomePrompt, themed),
+// so the two never drift.
+func installBanner(installErr error) (title string, level installBannerLevel) {
+	switch {
+	case installErr == nil:
+		return "Installation completed", installBannerCompleted
+	case isInstallAbortedError(installErr):
+		return "Installation aborted", installBannerAborted
+	default:
+		return "Installation failed", installBannerFailed
+	}
+}
+
 func printInstallFooter(installErr error, configPath, baseDir, telegramCode, permStatus, permMessage string) {
 	colorReset := "\033[0m"
 
-	title := "Go-based installation completed"
-	color := "\033[32m" // green by default
-
-	if installErr != nil {
-		if isInstallAbortedError(installErr) {
-			// User-driven abort (Ctrl+C, exit, setup aborted) -> SKIP color
-			color = "\033[35m"
-			title = "Go-based installation aborted"
-		} else {
-			// Any other error -> red
-			color = "\033[31m"
-			title = "Go-based installation failed"
-		}
+	title, level := installBanner(installErr)
+	color := "\033[32m" // green (completed)
+	switch level {
+	case installBannerAborted:
+		color = "\033[35m" // magenta (user-driven abort)
+	case installBannerFailed:
+		color = "\033[31m" // red (error)
 	}
 
 	fmt.Println()
@@ -372,7 +403,7 @@ func printInstallFooter(installErr error, configPath, baseDir, telegramCode, per
 	}
 
 	// For user-aborted runs, stop here to avoid showing next steps/commands.
-	if installErr != nil && isInstallAbortedError(installErr) {
+	if level == installBannerAborted {
 		return
 	}
 
@@ -468,6 +499,18 @@ func runConfigWizardCLI(ctx context.Context, reader *bufio.Reader, configPath, t
 	}
 	result.SchedulerMode = engine
 
+	// Healthchecks require the daemon (the sole pinger); with cron the mode is
+	// forced off and no prompt is shown, mirroring the TUI's Active gate.
+	hcMode := "off"
+	if engine == "daemon" {
+		logging.DebugStepBootstrap(bootstrap, "install config wizard (cli)", "configuring healthcheck mode")
+		hcMode, err = configureHealthcheckMode(ctx, reader, healthcheckModeDefault(fromExisting, template))
+		if err != nil {
+			return installConfigResult{}, wrapInstallError(err)
+		}
+	}
+	result.HealthcheckMode = hcMode
+
 	logging.DebugStepBootstrap(bootstrap, "install config wizard (cli)", "configuring run-at time")
 	cronTime, err := configureCronTimeFunc(ctx, reader, cronutil.DefaultTime)
 	if err != nil {
@@ -483,8 +526,28 @@ func runConfigWizardCLI(ctx context.Context, reader *bufio.Reader, configPath, t
 	template = config.RemoveRuntimeDerivedEnvKeys(template)
 	template = setEnvValue(template, "SCHEDULER_MODE", engine)
 	template = setEnvValue(template, "SCHEDULER_TIME", cronTime)
-	if engine == "daemon" {
+	// Write HEALTHCHECK_ENABLED + HEALTHCHECK_MODE from the explicit choice (cron
+	// and "off" disable it), replacing the old implicit daemon->enabled rule. The
+	// self-mode ping URLs are collected by runHealthcheckSelfParamsCLI after this
+	// write, before the healthcheck bootstrap re-reads the config. Reset
+	// HEALTHCHECK_ALIVE_URL/BACKUP_URL on every mode switch (parity with the TUI's
+	// ApplyInstallData) so a leftover self URL never lingers as the centralized
+	// cache; self rewrites them via the params screen, centralized/off stay blank.
+	switch hcMode {
+	case "self":
 		template = setEnvValue(template, "HEALTHCHECK_ENABLED", "true")
+		template = setEnvValue(template, "HEALTHCHECK_MODE", "self")
+		template = setEnvValue(template, "HEALTHCHECK_ALIVE_URL", "")
+		template = setEnvValue(template, "HEALTHCHECK_BACKUP_URL", "")
+	case "centralized":
+		template = setEnvValue(template, "HEALTHCHECK_ENABLED", "true")
+		template = setEnvValue(template, "HEALTHCHECK_MODE", "centralized")
+		template = setEnvValue(template, "HEALTHCHECK_ALIVE_URL", "")
+		template = setEnvValue(template, "HEALTHCHECK_BACKUP_URL", "")
+	default: // "off"
+		template = setEnvValue(template, "HEALTHCHECK_ENABLED", "false")
+		template = setEnvValue(template, "HEALTHCHECK_ALIVE_URL", "")
+		template = setEnvValue(template, "HEALTHCHECK_BACKUP_URL", "")
 	}
 	if err := writeConfigFile(configPath, tmpConfigPath, template); err != nil {
 		return installConfigResult{}, err
@@ -618,7 +681,7 @@ func resetInstallBaseDirWithContext(ctx context.Context, baseDir string, bootstr
 
 func printInstallBanner(configPath string) {
 	fmt.Println("===========================================")
-	fmt.Println("  ProxSave - Go Version")
+	fmt.Println("  ProxSave")
 	fmt.Printf("  Version: %s\n", buildinfo.String())
 	sig := buildSignature()
 	if strings.TrimSpace(sig) == "" {
@@ -853,6 +916,184 @@ func configureSchedulerEngine(ctx context.Context, reader *bufio.Reader, def str
 	default:
 		return def, nil
 	}
+}
+
+// healthcheckModeDefault picks the healthcheck-mode prompt default. Fresh/Overwrite
+// (or an Edit with an empty base) default to "centralized", paired with the daemon
+// default; an Edit of an existing config defaults to its stored mode so a no-op edit
+// never flips it.
+func healthcheckModeDefault(fromExisting bool, template string) string {
+	if !fromExisting || strings.TrimSpace(template) == "" {
+		return "centralized"
+	}
+	switch strings.ToLower(strings.TrimSpace(installer.DeriveInstallWizardPrefill(template).HealthcheckMode)) {
+	case "off":
+		return "off"
+	case "self":
+		return "self"
+	default:
+		return "centralized"
+	}
+}
+
+// configureHealthcheckMode prompts for the backup-monitoring mode (mirrors
+// configureSchedulerEngine). Called only with the daemon engine; the three values
+// are off/centralized/self and the config VALUES match those. "self" triggers the
+// ping-URL params screen later in the flow.
+func configureHealthcheckMode(ctx context.Context, reader *bufio.Reader, def string) (string, error) {
+	fmt.Println("\n--- Backup monitoring (healthchecks) ---")
+	fmt.Println("off         no monitoring")
+	fmt.Println("centralized ProxSave HC Server (zero setup, reuses the Telegram identity)")
+	fmt.Println("self        your own healthchecks/SaaS server (you paste the ping URLs next)")
+	raw, err := promptOptional(ctx, reader, fmt.Sprintf("Healthchecks monitoring: off, centralized, or self [%s]: ", def))
+	if err != nil {
+		return "", err
+	}
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "off":
+		return "off", nil
+	case "self":
+		return "self", nil
+	case "centralized":
+		return "centralized", nil
+	default:
+		return def, nil
+	}
+}
+
+// validateHealthcheckPingURLCLI is the CLI-side ping-URL validator, identical in
+// intent to the TUI's validateHealthcheckPingURL: an absolute http(s) URL with a
+// host. It is used for the required alive/backup URLs (empty rejected) via
+// promptNonEmpty's retry loop and, wrapped, for the optional URLs.
+func validateHealthcheckPingURLCLI(v string) error {
+	v = strings.TrimSpace(v)
+	if v == "" {
+		return fmt.Errorf("cannot be empty")
+	}
+	if !strings.HasPrefix(v, "http://") && !strings.HasPrefix(v, "https://") {
+		return fmt.Errorf("URL must start with http:// or https://")
+	}
+	u, err := neturl.ParseRequestURI(v)
+	if err != nil {
+		return fmt.Errorf("invalid URL: %v", err)
+	}
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return fmt.Errorf("URL must start with http:// or https://")
+	}
+	if u.Host == "" {
+		return fmt.Errorf("URL must include a host")
+	}
+	return nil
+}
+
+// promptHealthcheckRequiredURL prompts for a required ping URL, re-asking until the
+// value is a valid http(s) URL (parity with the TUI required-field validator).
+func promptHealthcheckRequiredURL(ctx context.Context, reader *bufio.Reader, question, def string) (string, error) {
+	for {
+		val, err := promptNonEmptyWithDefault(ctx, reader, question, def)
+		if err != nil {
+			return "", err
+		}
+		val = sanitizeEnvValue(val)
+		if verr := validateHealthcheckPingURLCLI(val); verr != nil {
+			fmt.Printf("%v\n", verr)
+			continue
+		}
+		return val, nil
+	}
+}
+
+// promptHealthcheckOptionalURL prompts for an optional ping URL: Enter keeps the
+// stored value / leaves it blank; a non-empty entry must be a valid http(s) URL.
+func promptHealthcheckOptionalURL(ctx context.Context, reader *bufio.Reader, question, def string) (string, error) {
+	for {
+		val, err := promptOptionalWithDefault(ctx, reader, question, def)
+		if err != nil {
+			return "", err
+		}
+		val = sanitizeEnvValue(val)
+		if strings.TrimSpace(val) == "" {
+			return "", nil
+		}
+		if verr := validateHealthcheckPingURLCLI(val); verr != nil {
+			fmt.Printf("%v\n", verr)
+			continue
+		}
+		return val, nil
+	}
+}
+
+// runHealthcheckSelfParamsCLI collects the self-mode full ping URLs (alive + backup
+// REQUIRED, updates + the four notify URLs OPTIONAL) and writes them into backup.env
+// via installer.ApplyHealthcheckSelfParams. It mirrors the TUI RunHealthcheckSelfParams
+// and MUST run before runHealthcheckSetupCLI so the bootstrap re-reads the alive URL.
+func runHealthcheckSelfParamsCLI(ctx context.Context, reader *bufio.Reader, baseDir, configPath string, bootstrap *logging.BootstrapLogger) error {
+	contentBytes, err := os.ReadFile(configPath)
+	if err != nil {
+		fmt.Printf("ERROR: unable to read configuration for healthcheck parameters: %v\n", err)
+		if bootstrap != nil {
+			bootstrap.Warning("Healthcheck self params: read config failed (non-blocking): %v", err)
+		}
+		return nil
+	}
+	template := string(contentBytes)
+	prefill := installer.DeriveHealthcheckSelfParams(template)
+
+	fmt.Println("\n--- Healthchecks parameters (self / personal server) ---")
+	fmt.Println("Paste the FULL ping URL of each check (e.g. https://hc-ping.com/<uuid>).")
+	fmt.Println("Alive and Backup are required; the rest are optional (press Enter to skip).")
+
+	alive, err := promptHealthcheckRequiredURL(ctx, reader, "Alive ping URL (HEALTHCHECK_ALIVE_URL): ", prefill.AliveURL)
+	if err != nil {
+		return skipOptionalInstallStepOnAbort(bootstrap, "Healthcheck parameters", err)
+	}
+	backup, err := promptHealthcheckRequiredURL(ctx, reader, "Backup ping URL (HEALTHCHECK_BACKUP_URL): ", prefill.BackupURL)
+	if err != nil {
+		return skipOptionalInstallStepOnAbort(bootstrap, "Healthcheck parameters", err)
+	}
+	updates, err := promptHealthcheckOptionalURL(ctx, reader, "Updates ping URL (HEALTHCHECK_UPDATES_URL, optional): ", prefill.UpdatesURL)
+	if err != nil {
+		return skipOptionalInstallStepOnAbort(bootstrap, "Healthcheck parameters", err)
+	}
+	notifyEmail, err := promptHealthcheckOptionalURL(ctx, reader, "Notify email ping URL (HEALTHCHECK_NOTIFY_EMAIL_URL, optional): ", prefill.NotifyEmailURL)
+	if err != nil {
+		return skipOptionalInstallStepOnAbort(bootstrap, "Healthcheck parameters", err)
+	}
+	notifyTelegram, err := promptHealthcheckOptionalURL(ctx, reader, "Notify Telegram ping URL (HEALTHCHECK_NOTIFY_TELEGRAM_URL, optional): ", prefill.NotifyTelegramURL)
+	if err != nil {
+		return skipOptionalInstallStepOnAbort(bootstrap, "Healthcheck parameters", err)
+	}
+	notifyGotify, err := promptHealthcheckOptionalURL(ctx, reader, "Notify Gotify ping URL (HEALTHCHECK_NOTIFY_GOTIFY_URL, optional): ", prefill.NotifyGotifyURL)
+	if err != nil {
+		return skipOptionalInstallStepOnAbort(bootstrap, "Healthcheck parameters", err)
+	}
+	notifyWebhook, err := promptHealthcheckOptionalURL(ctx, reader, "Notify webhook ping URL (HEALTHCHECK_NOTIFY_WEBHOOK_URL, optional): ", prefill.NotifyWebhookURL)
+	if err != nil {
+		return skipOptionalInstallStepOnAbort(bootstrap, "Healthcheck parameters", err)
+	}
+
+	params := installer.HealthcheckSelfParams{
+		AliveURL:          alive,
+		BackupURL:         backup,
+		UpdatesURL:        updates,
+		NotifyEmailURL:    notifyEmail,
+		NotifyTelegramURL: notifyTelegram,
+		NotifyGotifyURL:   notifyGotify,
+		NotifyWebhookURL:  notifyWebhook,
+	}
+	updated := installer.ApplyHealthcheckSelfParams(template, params)
+	if err := installer.WriteConfigFileAtomic(configPath, configPath+".tmp.hcself", updated); err != nil {
+		fmt.Printf("ERROR: unable to write healthcheck parameters: %v\n", err)
+		if bootstrap != nil {
+			bootstrap.Warning("Healthcheck self params: write config failed (non-blocking): %v", err)
+		}
+		return nil
+	}
+	fmt.Println("Saved healthchecks ping URLs.")
+	if bootstrap != nil {
+		bootstrap.Info("Healthcheck self params: saved ping URLs")
+	}
+	return nil
 }
 
 func configureCronTime(ctx context.Context, reader *bufio.Reader, defaultCron string) (string, error) {

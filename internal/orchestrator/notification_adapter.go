@@ -401,6 +401,23 @@ func (n *NotificationAdapter) recordNotifierStatus(stats *BackupStats, result *n
 	case "Email":
 		stats.EmailStatus = describeNotificationSeverity(result)
 	}
+
+	// Capture EVERY channel's outcome (incl. Gotify/Webhook, which have no legacy status
+	// field) as a severity keyed by display name, for the per-channel healthchecks sensors
+	// the daemon pings (Fase 2B / R4). describeNotificationSeverity is channel-agnostic.
+	setNotifyResult(stats, n.notifier.Name(), describeNotificationSeverity(result))
+}
+
+// setNotifyResult records channel -> severity into stats.NotifyResults, lazily allocating
+// the map. Safe on a nil stats / empty name.
+func setNotifyResult(stats *BackupStats, name, severity string) {
+	if stats == nil || name == "" {
+		return
+	}
+	if stats.NotifyResults == nil {
+		stats.NotifyResults = make(map[string]string)
+	}
+	stats.NotifyResults[name] = severity
 }
 
 func describeNotificationResult(result *notify.NotificationResult) string {

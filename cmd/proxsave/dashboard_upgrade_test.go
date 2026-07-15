@@ -1,0 +1,177 @@
+// Package main contains the proxsave command entrypoint.
+package main
+
+import (
+	"context"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/charmbracelet/x/ansi"
+
+	"github.com/tis24dev/proxsave/internal/cli"
+	"github.com/tis24dev/proxsave/internal/logging"
+	"github.com/tis24dev/proxsave/internal/ui/shell"
+	"github.com/tis24dev/proxsave/internal/uitest"
+)
+
+func TestUpgradeSafeToken(t *testing.T) {
+	cases := map[string]string{
+		"1.2.3":                 "1.2.3",
+		"v2.0.0-beta+meta_1":    "v2.0.0-beta+meta_1",
+		"  1.0.0  ":             "1.0.0",
+		"1.0\x1b.0":             "1.0.0",      // bare ESC stripped
+		"a\nb\tc\x00d":          "abcd",       // control chars stripped
+		"\x1b]0;pwn\x07 v9.9.9": "0pwnv9.9.9", // OSC control bytes stripped, letters survive (harmless as plain text)
+	}
+	for in, want := range cases {
+		if got := upgradeSafeToken(in); got != want {
+			t.Errorf("upgradeSafeToken(%q)=%q want %q", in, got, want)
+		}
+	}
+	if got := upgradeSafeToken(strings.Repeat("a", 100)); len([]rune(got)) != 40 {
+		t.Fatalf("length cap not applied: len=%d", len([]rune(got)))
+	}
+}
+
+func TestExtractReleaseNotes(t *testing.T) {
+	body := "Some header text\n" +
+		coderabbitNotesStart + "\n## Release Notes\n\n* **New Features**\n  * Thing\n" + coderabbitNotesEnd +
+		"\nfooter with a checklist"
+	got := extractReleaseNotes(body)
+	want := "## Release Notes\n\n* **New Features**\n  * Thing"
+	if got != want {
+		t.Fatalf("extractReleaseNotes = %q, want %q", got, want)
+	}
+	if extractReleaseNotes("no markers here at all") != "" {
+		t.Fatal("absent block must yield empty")
+	}
+	// Start marker but no end marker -> everything after start (trimmed).
+	if got := extractReleaseNotes(coderabbitNotesStart + "\ntail"); got != "tail" {
+		t.Fatalf("unterminated block = %q, want %q", got, "tail")
+	}
+}
+
+func TestRenderReleaseNotes(t *testing.T) {
+	// Control/ANSI bytes in the remote notes MUST be stripped; bold markers dropped;
+	// headers emphasized (the '##' prefix removed from the visible text).
+	notes := "## Release Notes\n* **New Features**\n  * shiny\x1b[31m red\x00 thing\ttabbed"
+	out := ansi.Strip(renderReleaseNotes(notes))
+	for _, bad := range []string{"\x1b", "\x00", "**", "## "} {
+		if strings.Contains(out, bad) {
+			t.Fatalf("renderReleaseNotes must strip %q, got %q", bad, out)
+		}
+	}
+	if !strings.Contains(out, "Release Notes") || !strings.Contains(out, "shiny") || !strings.Contains(out, "red") {
+		t.Fatalf("visible notes text must survive, got %q", out)
+	}
+	// Line-COUNT cap: a very long block is truncated with an ellipsis.
+	long := strings.Repeat("* line\n", 60)
+	capped := ansi.Strip(renderReleaseNotes(long))
+	if strings.Count(capped, "line") > 20 || !strings.Contains(capped, "...") {
+		t.Fatalf("long notes must be capped with an ellipsis, got %d lines", strings.Count(capped, "line"))
+	}
+	// Line-WIDTH cap: a single newline-free line is truncated so it can't soft-wrap the menu.
+	wide := ansi.Strip(renderReleaseNotes(strings.Repeat("x", 500)))
+	if len([]rune(strings.TrimSpace(wide))) > 110 || !strings.Contains(wide, "…") {
+		t.Fatalf("a very long single line must be width-capped, got %d runes", len([]rune(strings.TrimSpace(wide))))
+	}
+}
+
+// TestDashboardUpgradeScreen drives the in-session upgrade screen directly: Check (shows
+// the available version, sanitized) -> Run upgrade (calls the real upgrade with
+// Upgrade+AutoYes+ConfigPath, shows the success notice) -> Back.
+func TestDashboardUpgradeScreen(t *testing.T) {
+	origVer, origChk := dashboardUpgradeVersion, dashboardUpgradeCheck
+	origRun, origMute := dashboardUpgradeRun, dashboardUpgradeMute
+	t.Cleanup(func() {
+		dashboardUpgradeVersion, dashboardUpgradeCheck = origVer, origChk
+		dashboardUpgradeRun, dashboardUpgradeMute = origRun, origMute
+	})
+
+	gotVersion := ""
+	dashboardUpgradeVersion = func() string { return "1.0.0" }
+	dashboardUpgradeCheck = func(ctx context.Context, logger *logging.Logger, current string) *UpdateInfo {
+		gotVersion = current
+		// A hostile GitHub version with a non-allowlist byte ('!'): the screen MUST scrub
+		// it (a real ESC would be invisible after ansi.Strip, so '!' is the visible probe).
+		return &UpdateInfo{
+			NewVersion: true, Current: current, Latest: "2.0.0!", Tag: "v2.0.0",
+			Notes: "## Release Notes\n\n* **New Features**\n  * Shiny new widget",
+		}
+	}
+	var gotArgs *cli.Args
+	dashboardUpgradeRun = func(ctx context.Context, args *cli.Args, bl *logging.BootstrapLogger) int {
+		gotArgs = args
+		return 0 // success
+	}
+	dashboardUpgradeMute = func() func() { return func() {} } // no real stdio swap in tests
+
+	// Build an observed session eagerly (the shared seam creates it lazily via a flow).
+	driver := &newkeyUIDriver{t: t, buf: &shell.SyncBuffer{}, pushes: make(chan string, 64)}
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	driver.session = shell.StartObservedForTest(ctx, shell.Config{AppName: "ProxSave", Subtitle: "Dashboard"},
+		driver.buf, func(title string) { driver.pushes <- title })
+
+	done := make(chan struct{})
+	go func() {
+		runDashboardUpgrade(ctx, driver.session, "/tmp/backup.env")
+		close(done)
+	}()
+
+	// waitFor polls the accumulated output until it contains substr (the screen-title
+	// push can precede the rendered bytes, so a bare read races the flush).
+	waitFor := func(substr string) string {
+		deadline := time.After(uitest.Deadline(15 * time.Second))
+		for {
+			out := ansi.Strip(driver.buf.String())
+			if strings.Contains(out, substr) {
+				return out
+			}
+			select {
+			case <-deadline:
+				t.Fatalf("timed out waiting for %q in output, tail:\n%s", substr, tailStr(out))
+			case <-time.After(20 * time.Millisecond):
+			}
+		}
+	}
+
+	driver.waitScreen("Upgrade")
+	// Pre-check: yellow "NOT CHECKED", no symbol (uppercase, consistent with the other screens).
+	pre := waitFor("NOT CHECKED")
+	if strings.ContainsAny(pre, "✓✗⚠") {
+		t.Fatalf("pre-check must carry no ✓/✗/⚠ symbol: %q", tailStr(pre))
+	}
+
+	// Check: the loop re-renders the Upgrade screen with the available version + notes.
+	driver.keys("enter")
+	out := waitFor("2.0.0")
+	if gotVersion != "1.0.0" {
+		t.Fatalf("check must run against the current version, got %q", gotVersion)
+	}
+	if strings.Contains(out, "2.0.0!") {
+		t.Fatalf("the non-allowlist byte from the GitHub version must be scrubbed, out tail:\n%s", tailStr(out))
+	}
+	_ = waitFor("https://github.com/tis24dev/proxsave/releases/tag/v2.0.0") // release link under the version
+	_ = waitFor("Shiny new widget")                                         // the release-notes summary below
+	if strings.Contains(ansi.Strip(driver.buf.String()), "**New Features**") {
+		t.Fatalf("markdown bold markers must be stripped from the notes")
+	}
+
+	// Run upgrade (the button swapped to "Run upgrade").
+	driver.keys("enter")
+	driver.waitScreen("Upgrade complete")
+	if gotArgs == nil || !gotArgs.Upgrade || !gotArgs.UpgradeAutoYes || gotArgs.ConfigPath != "/tmp/backup.env" {
+		t.Fatalf("run upgrade must pass Upgrade+AutoYes+ConfigPath, got %+v", gotArgs)
+	}
+
+	driver.keys("enter")         // dismiss the notice
+	driver.waitScreen("Upgrade") // back on the screen (button reverted to Check upgrade)
+	driver.keys("down enter")    // Back -> return
+	select {
+	case <-done:
+	case <-time.After(uitest.Deadline(60 * time.Second)):
+		t.Fatal("upgrade screen did not return")
+	}
+}

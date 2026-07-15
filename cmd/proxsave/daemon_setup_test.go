@@ -109,6 +109,9 @@ func TestValidateDaemonCompatibility(t *testing.T) {
 		{"daemon + install rejected", cli.Args{Daemon: true, Install: true}, true},
 		{"daemon-setup + upgrade rejected", cli.Args{DaemonSetup: true, Upgrade: true}, true},
 		{"daemon + backup rejected", cli.Args{Daemon: true, Backup: true}, true},
+		{"daemon-status alone ok", cli.Args{DaemonStatus: true}, false},
+		{"daemon-status + setup rejected", cli.Args{DaemonStatus: true, DaemonSetup: true}, true},
+		{"daemon-status + backup rejected", cli.Args{DaemonStatus: true, Backup: true}, true},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

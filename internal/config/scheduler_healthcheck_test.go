@@ -97,6 +97,40 @@ func TestParseSchedulerHealthcheckValues(t *testing.T) {
 	}
 }
 
+// TestHealthcheckNotifyConfigParse proves the 8 self-mode per-channel notify keys
+// (HEALTHCHECK_NOTIFY_<CH>_URL / _ID for email/telegram/gotify/webhook) parse into their
+// Config fields. It mirrors the other HEALTHCHECK_* tests, which seed the raw map and call
+// parseHealthcheckSettings directly (getString reads c.raw, not the process environment).
+func TestHealthcheckNotifyConfigParse(t *testing.T) {
+	c := &Config{raw: map[string]string{
+		"HEALTHCHECK_NOTIFY_EMAIL_URL":    "https://hc/ping/e",
+		"HEALTHCHECK_NOTIFY_EMAIL_ID":     "eid",
+		"HEALTHCHECK_NOTIFY_TELEGRAM_URL": "https://hc/ping/t",
+		"HEALTHCHECK_NOTIFY_TELEGRAM_ID":  "tid",
+		"HEALTHCHECK_NOTIFY_GOTIFY_URL":   "https://hc/ping/g",
+		"HEALTHCHECK_NOTIFY_GOTIFY_ID":    "gid",
+		"HEALTHCHECK_NOTIFY_WEBHOOK_URL":  "https://hc/ping/w",
+		"HEALTHCHECK_NOTIFY_WEBHOOK_ID":   "wid",
+	}}
+	c.parseHealthcheckSettings()
+
+	cases := []struct{ name, got, want string }{
+		{"HealthcheckNotifyEmailURL", c.HealthcheckNotifyEmailURL, "https://hc/ping/e"},
+		{"HealthcheckNotifyEmailID", c.HealthcheckNotifyEmailID, "eid"},
+		{"HealthcheckNotifyTelegramURL", c.HealthcheckNotifyTelegramURL, "https://hc/ping/t"},
+		{"HealthcheckNotifyTelegramID", c.HealthcheckNotifyTelegramID, "tid"},
+		{"HealthcheckNotifyGotifyURL", c.HealthcheckNotifyGotifyURL, "https://hc/ping/g"},
+		{"HealthcheckNotifyGotifyID", c.HealthcheckNotifyGotifyID, "gid"},
+		{"HealthcheckNotifyWebhookURL", c.HealthcheckNotifyWebhookURL, "https://hc/ping/w"},
+		{"HealthcheckNotifyWebhookID", c.HealthcheckNotifyWebhookID, "wid"},
+	}
+	for _, tc := range cases {
+		if tc.got != tc.want {
+			t.Errorf("%s = %q, want %q", tc.name, tc.got, tc.want)
+		}
+	}
+}
+
 func TestSchedulerHealthcheckNormalizeFallback(t *testing.T) {
 	c := &Config{raw: map[string]string{
 		"SCHEDULER_MODE":   "garbage",
@@ -127,6 +161,11 @@ func TestRealTemplateContainsNewKeys(t *testing.T) {
 		"HEALTHCHECK_SEND_LOG=", "HEALTHCHECK_ALIVE_URL=", "HEALTHCHECK_BACKUP_URL=",
 		"HEALTHCHECK_PING_ENDPOINT=", "HEALTHCHECK_PING_KEY=", "HEALTHCHECK_ALIVE_ID=",
 		"HEALTHCHECK_BACKUP_ID=",
+		"HEALTHCHECK_UPDATES_URL=", "HEALTHCHECK_UPDATES_ID=", "HEALTHCHECK_UPDATE_INTERVAL=",
+		"HEALTHCHECK_NOTIFY_EMAIL_URL=", "HEALTHCHECK_NOTIFY_EMAIL_ID=",
+		"HEALTHCHECK_NOTIFY_TELEGRAM_URL=", "HEALTHCHECK_NOTIFY_TELEGRAM_ID=",
+		"HEALTHCHECK_NOTIFY_GOTIFY_URL=", "HEALTHCHECK_NOTIFY_GOTIFY_ID=",
+		"HEALTHCHECK_NOTIFY_WEBHOOK_URL=", "HEALTHCHECK_NOTIFY_WEBHOOK_ID=",
 	} {
 		if !strings.Contains(tmpl, key) {
 			t.Errorf("embedded template is missing new key %q", key)
@@ -208,6 +247,19 @@ func assertSafeDaemonDefaults(t *testing.T, raw map[string]string) {
 		{"HEALTHCHECK_PING_KEY", ""},
 		{"HEALTHCHECK_ALIVE_ID", ""},
 		{"HEALTHCHECK_BACKUP_ID", ""},
+		// New self-mode ping URLs/IDs: all empty so no accidental self activation
+		// (a non-empty default would ping a stale/attacker URL when self mode flips on).
+		{"HEALTHCHECK_UPDATES_URL", ""},
+		{"HEALTHCHECK_UPDATES_ID", ""},
+		{"HEALTHCHECK_UPDATE_INTERVAL", "5m"},
+		{"HEALTHCHECK_NOTIFY_EMAIL_URL", ""},
+		{"HEALTHCHECK_NOTIFY_EMAIL_ID", ""},
+		{"HEALTHCHECK_NOTIFY_TELEGRAM_URL", ""},
+		{"HEALTHCHECK_NOTIFY_TELEGRAM_ID", ""},
+		{"HEALTHCHECK_NOTIFY_GOTIFY_URL", ""},
+		{"HEALTHCHECK_NOTIFY_GOTIFY_ID", ""},
+		{"HEALTHCHECK_NOTIFY_WEBHOOK_URL", ""},
+		{"HEALTHCHECK_NOTIFY_WEBHOOK_ID", ""},
 	}
 	for _, w := range want {
 		got, ok := raw[w.key]

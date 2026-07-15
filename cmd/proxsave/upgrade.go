@@ -50,6 +50,59 @@ liDJEnB+RgiWOQR+6xLWeX7PyauuMxUh/HNnvBQAokK91fLWes4r9Xlwzw==
 
 type releaseInfo struct {
 	TagName string `json:"tag_name"`
+	Body    string `json:"body"`
+}
+
+// upgradeRestartsDaemon gates whether runUpgrade performs the automatic post-upgrade
+// daemon restart+verify itself (folding the outcome into the footer). The dashboard
+// upgrade wrapper sets it false for the duration of its run so IT drives the restart
+// inside a spinner and renders a notice instead -- runUpgrade's stdout (and thus the
+// footer) is muted in the dashboard, so its inline restart would be invisible and would
+// double-restart. Default true = the CLI --upgrade path restarts inline.
+var upgradeRestartsDaemon = true
+
+// upgradeHeartbeatInterval loads the heartbeat interval from the config, best-effort
+// (0 when unreadable). The interval only shapes the daemon-state Diagnosis shown for
+// display; the restart-verify SUCCESS gate (process-alive + aligned + fresh) does not
+// depend on it, so a 0 fallback never breaks verification.
+func upgradeHeartbeatInterval(configPath, baseDir string) time.Duration {
+	if cfg, err := config.LoadConfigWithBaseDir(configPath, baseDir); err == nil && cfg != nil {
+		return cfg.HealthcheckHeartbeatInterval
+	}
+	return 0
+}
+
+// upgradeBackupLockPath resolves the REAL backup lock file path (honouring a custom
+// LOCK_PATH), best-effort, mirroring upgradeHeartbeatInterval's config load. The
+// daemon-restart backup-wait probe MUST inspect this exact path -- the same
+// <cfg.LockPath>/.backup.lock the orchestrator's Checker acquires -- or a restart on a
+// custom-LOCK_PATH host would find no lock and could kill an in-progress backup. An
+// unreadable config falls back to the base-dir default lock path.
+func upgradeBackupLockPath(configPath, baseDir string) string {
+	cfg, err := config.LoadConfigWithBaseDir(configPath, baseDir)
+	if err != nil {
+		cfg = nil
+	}
+	return backupLockFilePath(cfg, baseDir)
+}
+
+// logUpgradeDaemonRestart mirrors the restart outcome to the bootstrap log (the CLI
+// path). It never fails the upgrade -- every outcome is informational.
+func logUpgradeDaemonRestart(bootstrap *logging.BootstrapLogger, rv *RestartVerifyResult) {
+	switch {
+	case rv == nil:
+		return
+	case rv.Err != nil:
+		bootstrap.Warning("Daemon restart failed: %v (it may still run the old binary; restart it manually).", rv.Err)
+	case rv.BackupWaitTimedOut:
+		bootstrap.Warning("A backup is running; daemon restart deferred. Restart when idle or the daemon stays on the old binary.")
+	case rv.TimedOut:
+		bootstrap.Warning("Daemon restarted but alignment check timeout")
+	case rv.Restarted && rv.ProcessAlive && rv.Aligned && rv.FreshInfo:
+		bootstrap.Println("Daemon restarted and now aligned with the new binary.")
+	default:
+		bootstrap.Warning("Daemon restarted but alignment could not be confirmed")
+	}
 }
 
 // runUpgrade orchestrates the upgrade flow:
@@ -91,7 +144,7 @@ func runUpgrade(ctx context.Context, args *cli.Args, bootstrap *logging.Bootstra
 	// Print version/banner header for upgrade mode
 	currentVersion := buildinfo.String()
 	bootstrap.Println("===========================================")
-	bootstrap.Println("  ProxSave - Go Version")
+	bootstrap.Println("  ProxSave")
 	bootstrap.Printf("  Version: %s", currentVersion)
 	if sig := buildSignature(); strings.TrimSpace(sig) != "" {
 		bootstrap.Printf("  Build Signature: %s", sig)
@@ -112,7 +165,7 @@ func runUpgrade(ctx context.Context, args *cli.Args, bootstrap *logging.Bootstra
 	// Discover the latest available release on GitHub and compare with the
 	// currently installed version before proceeding.
 	logging.DebugStepBootstrap(bootstrap, "upgrade workflow", "fetching latest release info")
-	tag, latestVersion, err := fetchLatestRelease(ctx)
+	tag, latestVersion, _, err := fetchLatestRelease(ctx)
 	if err != nil {
 		bootstrap.Error("ERROR: Failed to check latest release: %v", err)
 		workflowErr = err
@@ -188,8 +241,21 @@ func runUpgrade(ctx context.Context, args *cli.Args, bootstrap *logging.Bootstra
 	// --daemon-remove is never undone. Best-effort: a failure stays on cron and is
 	// only warned. (When staying on cron, the canonical /usr/local/bin/proxsave
 	// entry created at install keeps working across binary upgrades.)
+	var daemonRestart *RestartVerifyResult
 	if upgradeErr == nil {
 		maybeAutoMigrateDaemon(ctx, args.ConfigPath, baseDir, execPath, bootstrap)
+		// The new binary is on disk, but the resident daemon still runs the OLD one
+		// (systemd keeps the process alive across an in-place replace). Restart+verify
+		// it so the upgrade ends with the daemon aligned. This is automatic (no extra
+		// prompt) and NEVER changes the upgrade exit code -- the upgrade already
+		// succeeded. It first waits out any in-progress backup rather than killing it,
+		// and only runs when the daemon is actually active (a cron install has none).
+		if upgradeRestartsDaemon && daemonIsActive(ctx) {
+			bootstrap.Println("Restarting the resident daemon to load the new binary...")
+			rv := restartAndVerifyDaemon(ctx, baseDir, upgradeBackupLockPath(args.ConfigPath, baseDir), upgradeHeartbeatInterval(args.ConfigPath, baseDir))
+			daemonRestart = &rv
+			logUpgradeDaemonRestart(bootstrap, &rv)
+		}
 	} else {
 		logging.DebugStepBootstrap(bootstrap, "upgrade workflow", "binary install failed; leaving scheduler unchanged")
 	}
@@ -207,9 +273,9 @@ func runUpgrade(ctx context.Context, args *cli.Args, bootstrap *logging.Bootstra
 	}
 
 	logging.DebugStepBootstrap(bootstrap, "upgrade workflow", "normalizing permissions")
-	permStatus, permMessage := fixPermissionsAfterInstall(ctx, args.ConfigPath, baseDir, bootstrap)
+	permStatus, permMessage := fixPermissionsAfterInstall(ctx, args.ConfigPath, baseDir, bootstrap, nil)
 
-	printUpgradeFooter(upgradeErr, versionInstalled, args.ConfigPath, baseDir, telegramCode, permStatus, permMessage, cfgUpgradeResult, cfgUpgradeErr)
+	printUpgradeFooter(upgradeErr, versionInstalled, args.ConfigPath, baseDir, telegramCode, permStatus, permMessage, cfgUpgradeResult, cfgUpgradeErr, daemonRestart)
 
 	// A configuration-upgrade failure after a successful binary install must also be
 	// reflected in the exit code (the footer already shows "Configuration: ERROR"),
@@ -326,38 +392,43 @@ func resolveReleaseTarget(goos, goarch string) (string, string, error) {
 	return osName, "amd64", nil
 }
 
-func fetchLatestRelease(ctx context.Context) (string, string, error) {
+// fetchLatestRelease returns (tag, version, body, err) for the latest GitHub release.
+// body is the raw release description (used to surface the release notes); it is remote-
+// controlled, so every consumer that displays it MUST sanitize it first.
+func fetchLatestRelease(ctx context.Context) (string, string, string, error) {
 	apiURL := fmt.Sprintf("https://api.github.com/repos/%s/releases/latest", githubRepo)
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, apiURL, nil)
 	if err != nil {
-		return "", "", fmt.Errorf("failed to create request: %w", err)
+		return "", "", "", fmt.Errorf("failed to create request: %w", err)
 	}
 
 	client := &http.Client{Timeout: 15 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
-		return "", "", fmt.Errorf("failed to fetch latest release: %w", err)
+		return "", "", "", fmt.Errorf("failed to fetch latest release: %w", err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4*1024))
-		return "", "", fmt.Errorf("failed to fetch latest release: status %d, body: %s", resp.StatusCode, string(body))
+		return "", "", "", fmt.Errorf("failed to fetch latest release: status %d, body: %s", resp.StatusCode, string(body))
 	}
 
 	var info releaseInfo
-	if err := json.NewDecoder(resp.Body).Decode(&info); err != nil {
-		return "", "", fmt.Errorf("failed to parse release response: %w", err)
+	// Bound the JSON read: a release body (notes/changelog) is small, but the response
+	// is remote-controlled, so cap it defensively.
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 512*1024)).Decode(&info); err != nil {
+		return "", "", "", fmt.Errorf("failed to parse release response: %w", err)
 	}
 
 	tag := strings.TrimSpace(info.TagName)
 	if tag == "" {
-		return "", "", errors.New("empty tag_name in latest release response")
+		return "", "", "", errors.New("empty tag_name in latest release response")
 	}
 
 	version := strings.TrimPrefix(tag, "v")
-	return tag, version, nil
+	return tag, version, info.Body, nil
 }
 
 // compareVersions compares two semantic version strings (e.g. "0.11.2") and
@@ -671,15 +742,15 @@ func closeIntoErr(errp *error, closer io.Closer, operation string) {
 	}
 }
 
-func printUpgradeFooter(upgradeErr error, version, configPath, baseDir, telegramCode, permStatus, permMessage string, cfgUpgradeResult *config.UpgradeResult, cfgUpgradeErr error) {
+func printUpgradeFooter(upgradeErr error, version, configPath, baseDir, telegramCode, permStatus, permMessage string, cfgUpgradeResult *config.UpgradeResult, cfgUpgradeErr error, daemonRestart *RestartVerifyResult) {
 	colorReset := "\033[0m"
 
-	title := "Go-based upgrade completed"
+	title := "Upgrade completed"
 	color := "\033[32m" // green
 
 	if upgradeErr != nil {
 		color = "\033[31m"
-		title = "Go-based upgrade failed"
+		title = "Upgrade failed"
 	}
 
 	fmt.Println()
@@ -743,6 +814,15 @@ func printUpgradeFooter(upgradeErr error, version, configPath, baseDir, telegram
 		for _, warning := range cfgUpgradeResult.Warnings {
 			fmt.Printf("  - %s\n", warning)
 		}
+		fmt.Println()
+	}
+
+	if line, warn := summarizeRestartVerify(daemonRestart, version); line != "" {
+		color := "\033[32m" // green (success)
+		if warn {
+			color = "\033[33m" // yellow (non-blocking warning)
+		}
+		fmt.Printf("%s%s%s\n", color, line, colorReset)
 		fmt.Println()
 	}
 

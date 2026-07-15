@@ -17,7 +17,7 @@ func TestPrintInstallBanner(t *testing.T) {
 	output := captureStdout(t, func() {
 		printInstallBanner("/etc/proxmox-backup/backup.env")
 	})
-	if !strings.Contains(output, "ProxSave - Go Version") {
+	if !strings.Contains(output, "ProxSave") {
 		t.Fatalf("banner missing title: %q", output)
 	}
 	if !strings.Contains(output, "Version:") {
@@ -37,9 +37,9 @@ func TestPrintInstallFooterVariants(t *testing.T) {
 		err         error
 		wantSnippet string
 	}{
-		{"success", nil, "Go-based installation completed"},
-		{"aborted", wrapInstallError(errInteractiveAborted), "Go-based installation aborted"},
-		{"failure", errors.New("boom"), "Go-based installation failed"},
+		{"success", nil, "Installation completed"},
+		{"aborted", wrapInstallError(errInteractiveAborted), "Installation aborted"},
+		{"failure", errors.New("boom"), "Installation failed"},
 	}
 
 	for _, tt := range tests {
@@ -728,8 +728,9 @@ func TestRunConfigWizardCLIReturnsCronSchedule(t *testing.T) {
 	configPath := filepath.Join(cfgDir, "env", "backup.env")
 	tmpConfigPath := configPath + ".tmp"
 	// 6 toggle declines, empty scheduler-engine answer (defaults to daemon on a
-	// fresh install), then the run-at time.
-	reader := bufio.NewReader(strings.NewReader("n\nn\nn\nn\nn\nn\n\n03:15\n"))
+	// fresh install), empty healthcheck-mode answer (daemon-only prompt, defaults
+	// to centralized), then the run-at time.
+	reader := bufio.NewReader(strings.NewReader("n\nn\nn\nn\nn\nn\n\n\n03:15\n"))
 
 	var result installConfigResult
 	var err error

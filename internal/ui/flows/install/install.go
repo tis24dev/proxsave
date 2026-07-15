@@ -166,7 +166,7 @@ func CollectWizardData(ctx context.Context, session *shell.Session, baseTemplate
 		Kind:        components.FieldToggle,
 		Bool:        prefill.EncryptionEnabled,
 	}
-	schedulerOptions := []string{"Resident daemon (recommended)", "System cron"}
+	schedulerOptions := []string{"ProxSave local daemon", "System cron"}
 	schedulerValues := []string{"daemon", "cron"}
 	// Fresh install / Overwrite (empty base) defaults to the daemon. Editing an
 	// existing config defaults to its stored engine so a no-op edit never flips the
@@ -183,6 +183,32 @@ func CollectWizardData(ctx context.Context, session *shell.Session, baseTemplate
 		Options:     schedulerOptions,
 		OptionIndex: schedulerIndex,
 	}
+	// Healthchecks monitoring mode. Active only with the daemon engine (the daemon
+	// is the sole pinger); with cron it is dimmed and forced off in the data block.
+	// Fresh/Overwrite defaults to Centralized (paired with the daemon default);
+	// editing an existing config defaults to its stored mode so a no-op edit never
+	// flips it. The config VALUES stay "off"/"centralized"/"self" (UI labels differ).
+	hcOptions := []string{"Off", "ProxSave HC Server", "Your own server"}
+	hcValues := []string{"off", "centralized", "self"}
+	hcIndex := 1 // default: Centralized, paired with the daemon default
+	if strings.TrimSpace(baseTemplate) != "" {
+		switch strings.ToLower(strings.TrimSpace(prefill.HealthcheckMode)) {
+		case "off":
+			hcIndex = 0
+		case "self":
+			hcIndex = 2
+		default:
+			hcIndex = 1
+		}
+	}
+	healthcheck := &components.FormField{
+		Label:       "Healthchecks",
+		Description: "Backup monitoring (daemon only): Off, ProxSave HC Server (zero setup), or Your own server (self: paste the ping URLs).",
+		Kind:        components.FieldSelect,
+		Options:     hcOptions,
+		OptionIndex: hcIndex,
+		Active:      func() bool { return schedulerValues[scheduler.OptionIndex] == "daemon" },
+	}
 	cronField := &components.FormField{
 		Label:       "Run at (HH:MM)",
 		Description: fmt.Sprintf("Daily backup time; default %s.", cronutil.DefaultTime),
@@ -197,7 +223,7 @@ func CollectWizardData(ctx context.Context, session *shell.Session, baseTemplate
 	fields := []*components.FormField{
 		secondary, secondaryPath, secondaryLog,
 		cloud, cloudRemote, cloudLog,
-		firewall, telegram, email, method, encryption, scheduler, cronField,
+		firewall, telegram, email, method, encryption, scheduler, healthcheck, cronField,
 	}
 	if _, err := shell.Ask(ctx, session, components.NewFormGrid(
 		"Configuration", fields,
@@ -241,6 +267,12 @@ func CollectWizardData(ctx context.Context, session *shell.Session, baseTemplate
 	}
 	data.CronTime = normalized
 	data.SchedulerMode = schedulerValues[scheduler.OptionIndex]
+	// Healthchecks require the daemon (the sole pinger); cron forces the mode off.
+	if data.SchedulerMode == "daemon" {
+		data.HealthcheckMode = hcValues[healthcheck.OptionIndex]
+	} else {
+		data.HealthcheckMode = "off"
+	}
 
 	return data, nil
 }

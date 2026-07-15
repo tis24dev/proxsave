@@ -48,6 +48,7 @@ type InstallWizardPrefill struct {
 	EmailDeliveryMethod string
 	EncryptionEnabled   bool
 	SchedulerMode       string // "cron" | "daemon" (empty on a fresh config)
+	HealthcheckMode     string // "off" | "centralized" | "self" (empty on a fresh/pre-daemon config)
 }
 
 // InstallWizardData holds the collected installation data
@@ -67,6 +68,72 @@ type InstallWizardData struct {
 	CronTime               string // HH:MM (the "Run at" time)
 	EnableEncryption       bool
 	SchedulerMode          string // "cron" | "daemon"
+	HealthcheckMode        string // "off" | "centralized" | "self"; empty with daemon -> backward-compat centralized-on
+}
+
+// HealthcheckSelfParams holds the full ping URLs the self-mode params screen
+// collects. AliveURL and BackupURL are required by the UI; the remaining sensors
+// are optional. Each non-empty value is written verbatim into the matching
+// HEALTHCHECK_*_URL key (the daemon's selfURLs() already prefers the full-URL
+// branch over PING_ENDPOINT+ID), and empty values leave the key blank.
+type HealthcheckSelfParams struct {
+	AliveURL          string
+	BackupURL         string
+	UpdatesURL        string
+	NotifyEmailURL    string
+	NotifyTelegramURL string
+	NotifyGotifyURL   string
+	NotifyWebhookURL  string
+}
+
+// normalizeHealthcheckMode maps a raw mode string to one of "off" | "centralized"
+// | "self". Any unrecognised non-empty value falls back to "centralized"; an empty
+// value is returned as "" so callers can apply their own default (e.g. the
+// backward-compat daemon default in ApplyInstallData).
+func normalizeHealthcheckMode(v string) string {
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case "":
+		return ""
+	case "off":
+		return "off"
+	case "self":
+		return "self"
+	default:
+		return "centralized"
+	}
+}
+
+// ApplyHealthcheckSelfParams writes the self-mode full ping URLs into the template.
+// Every non-empty URL is set on its HEALTHCHECK_*_URL key; empty URLs are written as
+// blank so a cleared field wipes a stale value. It does NOT touch HEALTHCHECK_ENABLED
+// or HEALTHCHECK_MODE (ApplyInstallData owns those); it only fills the ping targets.
+func ApplyHealthcheckSelfParams(template string, p HealthcheckSelfParams) string {
+	set := func(tmpl, key, val string) string {
+		return setEnvValue(tmpl, key, strings.TrimSpace(val))
+	}
+	template = set(template, "HEALTHCHECK_ALIVE_URL", p.AliveURL)
+	template = set(template, "HEALTHCHECK_BACKUP_URL", p.BackupURL)
+	template = set(template, "HEALTHCHECK_UPDATES_URL", p.UpdatesURL)
+	template = set(template, "HEALTHCHECK_NOTIFY_EMAIL_URL", p.NotifyEmailURL)
+	template = set(template, "HEALTHCHECK_NOTIFY_TELEGRAM_URL", p.NotifyTelegramURL)
+	template = set(template, "HEALTHCHECK_NOTIFY_GOTIFY_URL", p.NotifyGotifyURL)
+	template = set(template, "HEALTHCHECK_NOTIFY_WEBHOOK_URL", p.NotifyWebhookURL)
+	return template
+}
+
+// DeriveHealthcheckSelfParams reads the self-mode full ping URLs back out of an
+// existing template so a re-run of the params screen defaults to the stored values.
+func DeriveHealthcheckSelfParams(template string) HealthcheckSelfParams {
+	values := parseEnvTemplate(template)
+	return HealthcheckSelfParams{
+		AliveURL:          readTemplateString(values, "HEALTHCHECK_ALIVE_URL"),
+		BackupURL:         readTemplateString(values, "HEALTHCHECK_BACKUP_URL"),
+		UpdatesURL:        readTemplateString(values, "HEALTHCHECK_UPDATES_URL"),
+		NotifyEmailURL:    readTemplateString(values, "HEALTHCHECK_NOTIFY_EMAIL_URL"),
+		NotifyTelegramURL: readTemplateString(values, "HEALTHCHECK_NOTIFY_TELEGRAM_URL"),
+		NotifyGotifyURL:   readTemplateString(values, "HEALTHCHECK_NOTIFY_GOTIFY_URL"),
+		NotifyWebhookURL:  readTemplateString(values, "HEALTHCHECK_NOTIFY_WEBHOOK_URL"),
+	}
 }
 
 // ExistingConfigAction represents how to handle an already-present configuration file.
@@ -170,15 +237,47 @@ func ApplyInstallData(baseTemplate string, data *InstallWizardData) (string, err
 
 	// Apply scheduler engine + the daily "Run at" time. SCHEDULER_TIME is a real
 	// daemon config key (unlike the removed CRON_* keys), so it is written here.
-	// When the daemon is chosen, enable the healthchecks connector so the dead-man
-	// switch is on out of the box (centralized mode resolves ping URLs at runtime).
 	mode := normalizeSchedulerMode(data.SchedulerMode)
 	template = setEnvValue(template, "SCHEDULER_MODE", mode)
 	if strings.TrimSpace(data.CronTime) != "" {
 		template = setEnvValue(template, "SCHEDULER_TIME", strings.TrimSpace(data.CronTime))
 	}
-	if mode == "daemon" {
+
+	// Apply the healthchecks connector mode. Healthchecks require the daemon (the
+	// sole pinger), so in cron mode the connector is always off. In daemon mode the
+	// user's explicit choice wins; an EMPTY choice with the daemon keeps the previous
+	// behaviour (centralized-on out of the box) so pre-UI callers still work.
+	hcMode := normalizeHealthcheckMode(data.HealthcheckMode)
+	if mode != "daemon" {
+		hcMode = "off"
+	} else if hcMode == "" {
+		hcMode = "centralized"
+	}
+	// HEALTHCHECK_ALIVE_URL/BACKUP_URL are dual-purpose (self: the user's full ping
+	// URLs; centralized: a cache the server auto-fills). Reset them symmetrically on
+	// every mode switch so a leftover self URL never lingers as the centralized cache
+	// (which the daemon would ping if the server fetch fails). Self rewrites them via
+	// the params screen right after; centralized/off leave them blank (the server
+	// repopulates the centralized cache on next fetch).
+	switch hcMode {
+	case "off":
+		template = setEnvValue(template, "HEALTHCHECK_ENABLED", "false")
+		template = setEnvValue(template, "HEALTHCHECK_ALIVE_URL", "")
+		template = setEnvValue(template, "HEALTHCHECK_BACKUP_URL", "")
+	case "self":
 		template = setEnvValue(template, "HEALTHCHECK_ENABLED", "true")
+		template = setEnvValue(template, "HEALTHCHECK_MODE", "self")
+		// Clear the centralized cache so a switch to self does not ping a stale
+		// server-minted URL before the params screen writes the user's own URLs.
+		template = setEnvValue(template, "HEALTHCHECK_ALIVE_URL", "")
+		template = setEnvValue(template, "HEALTHCHECK_BACKUP_URL", "")
+	default: // centralized
+		template = setEnvValue(template, "HEALTHCHECK_ENABLED", "true")
+		template = setEnvValue(template, "HEALTHCHECK_MODE", "centralized")
+		// Clear any leftover self URL so it can't be pinged as the centralized
+		// cache; the server repopulates this cache on the next fetch.
+		template = setEnvValue(template, "HEALTHCHECK_ALIVE_URL", "")
+		template = setEnvValue(template, "HEALTHCHECK_BACKUP_URL", "")
 	}
 
 	return template, nil
@@ -307,6 +406,18 @@ func DeriveInstallWizardPrefill(baseTemplate string) InstallWizardPrefill {
 
 	out.EncryptionEnabled = readTemplateBool(values, "ENCRYPT_ARCHIVE")
 	out.SchedulerMode = readTemplateString(values, "SCHEDULER_MODE")
+
+	// Healthchecks mode: not-enabled -> "off"; otherwise the normalized MODE value
+	// (defaulting to centralized when MODE is absent but the connector is enabled).
+	if readTemplateBool(values, "HEALTHCHECK_ENABLED") {
+		hcMode := normalizeHealthcheckMode(readTemplateString(values, "HEALTHCHECK_MODE"))
+		if hcMode == "" {
+			hcMode = "centralized"
+		}
+		out.HealthcheckMode = hcMode
+	} else {
+		out.HealthcheckMode = "off"
+	}
 
 	return out
 }

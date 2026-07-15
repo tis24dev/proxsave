@@ -34,6 +34,11 @@ func run() int {
 	// not just a heartbeat-derived guess. Set once here so the running binary always has
 	// it while unit tests (which never call run()) keep the unprobed heartbeat-only path.
 	orchestrator.DaemonPresenceProbe = daemonPresenceProbe
+	// Wire the record-independent /proc staleness fallback too, so the install/dashboard check catches
+	// a record-less-but-stale daemon (predates the identity-record feature or a bootstrap first-deploy)
+	// as BEHIND instead of a false WORKING. Parity with DaemonPresenceProbe: set once here, nil under
+	// unit tests (which never call run()), keeping the record-based path the sole signal there.
+	orchestrator.DaemonProcStale = procBinaryStaleProbe
 	runInfo := startMainRun()
 	defer finishMainRun(runInfo)
 	defer releaseDashboardLeftovers()

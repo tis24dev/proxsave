@@ -146,7 +146,7 @@ func TestRunHang(t *testing.T) {
 func TestTestPingUsesLogSuffix(t *testing.T) {
 	cap, rep, done := newServer(t, 200, true)
 	defer done()
-	if err := rep.TestPing(context.Background(), rep.aliveURL); err != nil {
+	if err := rep.TestPing(context.Background(), rep.urls[CheckKeyAlive]); err != nil {
 		t.Fatalf("TestPing: %v", err)
 	}
 	if g := cap.get(); g.path != "/ping/alive/log" {

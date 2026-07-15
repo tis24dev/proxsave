@@ -11,6 +11,7 @@ import (
 	"github.com/tis24dev/proxsave/internal/health"
 	"github.com/tis24dev/proxsave/internal/installer"
 	"github.com/tis24dev/proxsave/internal/orchestrator"
+	"github.com/tis24dev/proxsave/internal/uitest"
 )
 
 func healthcheckEligibleBootstrap(configPath, baseDir string) (orchestrator.HealthcheckSetupBootstrap, error) {
@@ -35,7 +36,7 @@ func TestRunHealthcheckSetupDashboardBack(t *testing.T) {
 		resCh <- struct{}{}
 	}()
 	d.waitScreen("Backup monitoring (healthchecks)")
-	deadline := time.After(10 * time.Second)
+	deadline := time.After(uitest.Deadline(10 * time.Second))
 	for !strings.Contains(ansi.Strip(d.buf.String()), "return to the dashboard menu") {
 		select {
 		case <-deadline:
@@ -73,7 +74,7 @@ func TestBuildHealthcheckPrompt(t *testing.T) {
 	link := "https://hc.proxsave.dev/l/Nr4vAebz5b"
 
 	// Ok level: green "✓ WORKING", the explanation on its own line, the link boxed.
-	v := buildHealthcheckPrompt(link, "WORKING", "It is reporting.", orchestrator.HealthcheckSetupLevelOk)
+	v := buildHealthcheckPrompt(false, link, "WORKING", "It is reporting.", orchestrator.HealthcheckSetupLevelOk, nil)
 	if !strings.Contains(ansi.Strip(v), "✓ WORKING") {
 		t.Fatalf("working keyword missing: %q", ansi.Strip(v))
 	}
@@ -88,7 +89,7 @@ func TestBuildHealthcheckPrompt(t *testing.T) {
 	}
 
 	// Error level: red "✗ REJECTED".
-	f := buildHealthcheckPrompt(link, "REJECTED", "bad creds", orchestrator.HealthcheckSetupLevelError)
+	f := buildHealthcheckPrompt(false, link, "REJECTED", "bad creds", orchestrator.HealthcheckSetupLevelError, nil)
 	if !strings.Contains(ansi.Strip(f), "✗ REJECTED") {
 		t.Fatalf("error keyword missing: %q", ansi.Strip(f))
 	}
@@ -96,8 +97,8 @@ func TestBuildHealthcheckPrompt(t *testing.T) {
 		t.Fatalf("REJECTED must be red")
 	}
 
-	// Warn level: yellow "⚠ NOT RUNNING".
-	w := buildHealthcheckPrompt(link, "NOT RUNNING", "daemon down", orchestrator.HealthcheckSetupLevelWarn)
+	// Warn level (a real post-check warning): yellow "⚠ NOT RUNNING" (with the triangle).
+	w := buildHealthcheckPrompt(false, link, "NOT RUNNING", "daemon down", orchestrator.HealthcheckSetupLevelWarn, nil)
 	if !strings.Contains(ansi.Strip(w), "⚠ NOT RUNNING") {
 		t.Fatalf("warn keyword missing: %q", ansi.Strip(w))
 	}
@@ -105,8 +106,20 @@ func TestBuildHealthcheckPrompt(t *testing.T) {
 		t.Fatalf("NOT RUNNING must be yellow")
 	}
 
+	// Neutral level (pre-check): yellow "NOT CHECKED" with NO triangle - like upgrade/telegram.
+	nn := buildHealthcheckPrompt(false, link, "NOT CHECKED", "Choose Check.", orchestrator.HealthcheckSetupLevelNeutral, nil)
+	if !strings.Contains(ansi.Strip(nn), "NOT CHECKED") {
+		t.Fatalf("neutral keyword missing: %q", ansi.Strip(nn))
+	}
+	if strings.ContainsAny(ansi.Strip(nn), "✓✗⚠") {
+		t.Fatalf("pre-check NOT CHECKED must carry NO triangle: %q", ansi.Strip(nn))
+	}
+	if !strings.Contains(nn, "234;179;8") { // yellow
+		t.Fatalf("NOT CHECKED must be yellow")
+	}
+
 	// No link -> no box; the explanation still renders verbatim.
-	n := ansi.Strip(buildHealthcheckPrompt("", "NOT CHECKED", "Choose Check.", orchestrator.HealthcheckSetupLevelWarn))
+	n := ansi.Strip(buildHealthcheckPrompt(false, "", "NOT CHECKED", "Choose Check.", orchestrator.HealthcheckSetupLevelNeutral, nil))
 	if strings.Contains(n, "╭") {
 		t.Fatalf("no link must render no box: %q", n)
 	}

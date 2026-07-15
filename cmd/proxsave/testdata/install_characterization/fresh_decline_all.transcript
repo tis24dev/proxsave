@@ -23,5 +23,10 @@ Enable email notifications? [y/N]:
 Enable backup encryption? [y/N]: 
 --- Scheduler ---
 Scheduler engine: daemon (resident, hang watchdog + healthchecks) or cron [daemon]: 
+--- Backup monitoring (healthchecks) ---
+off         no monitoring
+centralized ProxSave HC Server (zero setup, reuses the Telegram identity)
+self        your own healthchecks/SaaS server (you paste the ping URLs next)
+Healthchecks monitoring: off, centralized, or self [centralized]: 
 --- Schedule ---
 Run at (daily, HH:MM) [02:00]: 

@@ -20,8 +20,8 @@ func TestRecordPingRoundTripEachKind(t *testing.T) {
 		t.Fatalf("RecordPing heartbeat: %v", err)
 	}
 	st := mustLoad(t, base)
-	assertRecord(t, "heartbeat", st.Heartbeat, 1000, true, "")
-	if st.RunStarted != nil || st.RunFinished != nil || st.RunHang != nil {
+	assertRecord(t, "heartbeat", st.Record(KindHeartbeat), 1000, true, "")
+	if st.Record(KindRunStarted) != nil || st.Record(KindRunFinished) != nil || st.Record(KindRunHang) != nil {
 		t.Fatalf("only heartbeat should be set, got %+v", st)
 	}
 	if st.Mode != "centralized" {
@@ -32,9 +32,9 @@ func TestRecordPingRoundTripEachKind(t *testing.T) {
 		t.Fatalf("RecordPing start: %v", err)
 	}
 	st = mustLoad(t, base)
-	assertRecord(t, "heartbeat", st.Heartbeat, 1000, true, "") // still there
-	assertRecord(t, "run_started", st.RunStarted, 2000, true, "")
-	if st.RunFinished != nil || st.RunHang != nil {
+	assertRecord(t, "heartbeat", st.Record(KindHeartbeat), 1000, true, "") // still there
+	assertRecord(t, "run_started", st.Record(KindRunStarted), 2000, true, "")
+	if st.Record(KindRunFinished) != nil || st.Record(KindRunHang) != nil {
 		t.Fatalf("finished/hang should still be nil, got %+v", st)
 	}
 
@@ -42,8 +42,8 @@ func TestRecordPingRoundTripEachKind(t *testing.T) {
 		t.Fatalf("RecordPing finish: %v", err)
 	}
 	st = mustLoad(t, base)
-	assertRecord(t, "run_finished", st.RunFinished, 3000, true, "")
-	if st.Heartbeat == nil || st.RunStarted == nil || st.RunHang != nil {
+	assertRecord(t, "run_finished", st.Record(KindRunFinished), 3000, true, "")
+	if st.Record(KindHeartbeat) == nil || st.Record(KindRunStarted) == nil || st.Record(KindRunHang) != nil {
 		t.Fatalf("finish step: unexpected field state %+v", st)
 	}
 
@@ -51,8 +51,8 @@ func TestRecordPingRoundTripEachKind(t *testing.T) {
 		t.Fatalf("RecordPing hang: %v", err)
 	}
 	st = mustLoad(t, base)
-	assertRecord(t, "run_hang", st.RunHang, 4000, false, "timed out")
-	if st.Heartbeat == nil || st.RunStarted == nil || st.RunFinished == nil {
+	assertRecord(t, "run_hang", st.Record(KindRunHang), 4000, false, "timed out")
+	if st.Record(KindHeartbeat) == nil || st.Record(KindRunStarted) == nil || st.Record(KindRunFinished) == nil {
 		t.Fatalf("hang step: earlier records must persist, got %+v", st)
 	}
 }
@@ -119,19 +119,19 @@ func TestErrPopulatedOnlyOnFailure(t *testing.T) {
 	if err := RecordPing(base, "self", KindHeartbeat, 10, true, nil); err != nil {
 		t.Fatalf("RecordPing ok: %v", err)
 	}
-	if st := mustLoad(t, base); st.Heartbeat == nil || st.Heartbeat.Err != "" {
-		t.Fatalf("nil pingErr should leave Err empty, got %+v", st.Heartbeat)
+	if st := mustLoad(t, base); st.Record(KindHeartbeat) == nil || st.Record(KindHeartbeat).Err != "" {
+		t.Fatalf("nil pingErr should leave Err empty, got %+v", st.Record(KindHeartbeat))
 	}
 
 	if err := RecordPing(base, "self", KindHeartbeat, 20, false, errors.New("healthcheck alive: dial tcp: refused")); err != nil {
 		t.Fatalf("RecordPing fail: %v", err)
 	}
 	st := mustLoad(t, base)
-	if st.Heartbeat == nil || st.Heartbeat.OK {
-		t.Fatalf("failed ping should record OK=false, got %+v", st.Heartbeat)
+	if st.Record(KindHeartbeat) == nil || st.Record(KindHeartbeat).OK {
+		t.Fatalf("failed ping should record OK=false, got %+v", st.Record(KindHeartbeat))
 	}
-	if st.Heartbeat.Err != "healthcheck alive: dial tcp: refused" {
-		t.Fatalf("Err = %q, want the redacted ping error", st.Heartbeat.Err)
+	if st.Record(KindHeartbeat).Err != "healthcheck alive: dial tcp: refused" {
+		t.Fatalf("Err = %q, want the redacted ping error", st.Record(KindHeartbeat).Err)
 	}
 }
 
@@ -146,21 +146,21 @@ func TestNoURLErrorClassifiedAsReason(t *testing.T) {
 		t.Fatalf("RecordPing no-url: %v", err)
 	}
 	st := mustLoad(t, base)
-	if st.Heartbeat == nil || st.Heartbeat.OK {
-		t.Fatalf("no-url ping should record OK=false, got %+v", st.Heartbeat)
+	if st.Record(KindHeartbeat) == nil || st.Record(KindHeartbeat).OK {
+		t.Fatalf("no-url ping should record OK=false, got %+v", st.Record(KindHeartbeat))
 	}
-	if st.Heartbeat.Reason != ReasonNoURL {
-		t.Fatalf("Reason = %q, want %q", st.Heartbeat.Reason, ReasonNoURL)
+	if st.Record(KindHeartbeat).Reason != ReasonNoURL {
+		t.Fatalf("Reason = %q, want %q", st.Record(KindHeartbeat).Reason, ReasonNoURL)
 	}
-	if st.Heartbeat.Err != "" {
-		t.Fatalf("no-url ping must not populate Err, got %q", st.Heartbeat.Err)
+	if st.Record(KindHeartbeat).Err != "" {
+		t.Fatalf("no-url ping must not populate Err, got %q", st.Record(KindHeartbeat).Err)
 	}
 
 	// ErrNoBackupURL classifies the same way.
 	if err := RecordPing(base, "centralized", KindRunFinished, 20, false, ErrNoBackupURL); err != nil {
 		t.Fatalf("RecordPing no-url backup: %v", err)
 	}
-	if rf := mustLoad(t, base).RunFinished; rf == nil || rf.Reason != ReasonNoURL || rf.Err != "" {
+	if rf := mustLoad(t, base).Record(KindRunFinished); rf == nil || rf.Reason != ReasonNoURL || rf.Err != "" {
 		t.Fatalf("ErrNoBackupURL should be Reason=no_url + empty Err, got %+v", rf)
 	}
 
@@ -168,7 +168,7 @@ func TestNoURLErrorClassifiedAsReason(t *testing.T) {
 	if err := RecordPing(base, "centralized", KindHeartbeat, 30, false, errors.New("healthcheck alive: HTTP 500")); err != nil {
 		t.Fatalf("RecordPing real err: %v", err)
 	}
-	hb := mustLoad(t, base).Heartbeat
+	hb := mustLoad(t, base).Record(KindHeartbeat)
 	if hb.Reason != "" || hb.Err != "healthcheck alive: HTTP 500" {
 		t.Fatalf("real error should be Reason='' + Err set, got %+v", hb)
 	}
@@ -180,19 +180,6 @@ func TestStatusPathShape(t *testing.T) {
 	want := filepath.Join(base, "identity", ".healthcheck_status.json")
 	if got := StatusPath(base); got != want {
 		t.Fatalf("StatusPath = %q, want %q", got, want)
-	}
-}
-
-// TestUnknownKindError: a kind the switch does not recognize returns a non-nil
-// error and never creates the file (the write is skipped before it happens).
-func TestUnknownKindError(t *testing.T) {
-	base := t.TempDir()
-	err := RecordPing(base, "centralized", "bogus-kind", 1, true, nil)
-	if err == nil {
-		t.Fatalf("unknown kind should return an error")
-	}
-	if _, statErr := os.Stat(StatusPath(base)); !os.IsNotExist(statErr) {
-		t.Fatalf("unknown kind must not create the status file (stat err=%v)", statErr)
 	}
 }
 
@@ -246,7 +233,6 @@ func assertRecord(t *testing.T, name string, got *PingRecord, wantTS int64, want
 	}
 }
 
-func isZeroStatus(st Status) bool {
-	return st.Mode == "" && st.Heartbeat == nil && st.RunStarted == nil &&
-		st.RunFinished == nil && st.RunHang == nil
+func isZeroStatus(s Status) bool {
+	return len(s.Records) == 0 && s.Update == nil && s.Mode == ""
 }

@@ -1,8 +1,8 @@
 // Package health reports backup outcomes and a liveness heartbeat to a
 // healthchecks.io-compatible monitor (our self-hosted instance or the SaaS).
 //
-// It is deliberately dependency-light: an *http.Client plus two already-resolved
-// ping URLs (a "service alive" check and a "backup outcome" check). URL
+// It is deliberately dependency-light: an *http.Client plus a map of already-resolved
+// ping URLs keyed by check name ("alive", "backup", "updates", "notify-<channel>"). URL
 // resolution (centralized fetch from the proxsave_server, or self-mode
 // endpoint+slug assembly) lives elsewhere; this package only pings. The Reporter
 // takes no *logging.Logger, so it is trivially unit-testable without wiring a
@@ -45,71 +45,127 @@ var (
 	// succeeded). The daemon treats these as "not reportable yet", not fatal.
 	ErrNoAliveURL  = errors.New("healthcheck: alive ping url not configured")
 	ErrNoBackupURL = errors.New("healthcheck: backup ping url not configured")
+	// ErrNoUpdatesURL mirrors the two above for the updates-report ping: returned when
+	// ReportUpdate runs before the updates check URL is resolved. Treated as "not
+	// reportable yet", never fatal.
+	ErrNoUpdatesURL = errors.New("healthcheck: updates ping url not configured")
+	// ErrNoPingURL is the generic twin returned by Ping when a dynamic check name
+	// (e.g. a per-notification-channel check) has no resolved URL yet. Same "not
+	// reportable yet" meaning as the three named sentinels above.
+	ErrNoPingURL = errors.New("healthcheck: ping url not configured")
 )
+
+// IsNoURLErr reports whether err is any of the "url not resolved yet" sentinels, so
+// callers can record a no_url liveness trace instead of a genuine transmission error
+// without a brittle per-sentinel OR-chain.
+func IsNoURLErr(err error) bool {
+	return errors.Is(err, ErrNoAliveURL) || errors.Is(err, ErrNoBackupURL) ||
+		errors.Is(err, ErrNoUpdatesURL) || errors.Is(err, ErrNoPingURL)
+}
 
 // Reporter pings a healthchecks-compatible monitor. Zero value is not usable;
 // build one with NewReporter.
 type Reporter struct {
-	client    *http.Client
-	aliveURL  string
-	backupURL string
-	sendLog   bool
+	client  *http.Client
+	urls    map[string]string // check name -> normalized base ping URL
+	sendLog bool
 }
 
 // Config configures a Reporter. AliveURL/BackupURL are full ping URLs, e.g.
-// "https://hc.proxsave.dev/ping/<uuid>". Either may be empty (the matching ping
-// then returns ErrNo*URL). A nil Client gets a default with a bounded timeout.
+// "https://hc.proxsave.dev/ping/<uuid>"; either may be empty (the matching ping then
+// returns ErrNo*URL). Checks carries every OTHER check by name ("updates",
+// "notify-<channel>", ...) and is folded into the same url map. A nil Client gets a
+// default with a bounded timeout.
 type Config struct {
 	Client    *http.Client
 	AliveURL  string
 	BackupURL string
-	SendLog   bool // POST a log tail on non-success backup outcomes
+	Checks    map[string]string // dynamic check name -> full ping URL (updates, notify-*)
+	SendLog   bool              // POST a log tail on non-success backup outcomes
 }
 
-// NewReporter builds a Reporter from Config.
+// normalizeURL trims surrounding space and any trailing slash so a base URL joins
+// cleanly with a suffix.
+func normalizeURL(u string) string { return strings.TrimRight(strings.TrimSpace(u), "/") }
+
+// NewReporter builds a Reporter from Config. The url map is seeded from the named
+// AliveURL/BackupURL (which ride the frozen top-level wire keys) and then overlaid with
+// every non-empty Checks entry (updates, notify-*), so the whole dynamic map folds in
+// idempotently.
 func NewReporter(c Config) *Reporter {
 	client := c.Client
 	if client == nil {
 		client = &http.Client{Timeout: pingTimeout}
 	}
-	return &Reporter{
-		client:    client,
-		aliveURL:  strings.TrimRight(strings.TrimSpace(c.AliveURL), "/"),
-		backupURL: strings.TrimRight(strings.TrimSpace(c.BackupURL), "/"),
-		sendLog:   c.SendLog,
+	urls := make(map[string]string)
+	if a := normalizeURL(c.AliveURL); a != "" {
+		urls[CheckKeyAlive] = a
 	}
+	if b := normalizeURL(c.BackupURL); b != "" {
+		urls[CheckKeyBackup] = b
+	}
+	for name, u := range c.Checks {
+		if nu := normalizeURL(u); nu != "" {
+			urls[name] = nu
+		}
+	}
+	return &Reporter{client: client, urls: urls, sendLog: c.SendLog}
 }
 
+// HasCheck reports whether the named check URL is resolved.
+func (r *Reporter) HasCheck(name string) bool { return r.urls[name] != "" }
+
 // HasBackupURL reports whether the backup-outcome check URL is resolved.
-func (r *Reporter) HasBackupURL() bool { return r.backupURL != "" }
+func (r *Reporter) HasBackupURL() bool { return r.HasCheck(CheckKeyBackup) }
 
 // HasAliveURL reports whether the service-alive check URL is resolved.
-func (r *Reporter) HasAliveURL() bool { return r.aliveURL != "" }
+func (r *Reporter) HasAliveURL() bool { return r.HasCheck(CheckKeyAlive) }
+
+// HasUpdatesURL reports whether the updates-report check URL is resolved.
+func (r *Reporter) HasUpdatesURL() bool { return r.HasCheck(CheckKeyUpdates) }
+
+// pingCheck resolves the named check's base URL and pings base+suffix(+?rid). Returns
+// ErrNoPingURL when the name has no resolved URL. This is the single primitive behind
+// both the named wrappers and the generic Ping.
+func (r *Reporter) pingCheck(ctx context.Context, name, suffix, rid, body, label string) error {
+	base := r.urls[name]
+	if base == "" {
+		return ErrNoPingURL
+	}
+	return r.ping(ctx, pingURL(base, suffix, rid), body, label)
+}
+
+// Ping is the generic per-check ping: it pings the named check with the given suffix
+// ("/0", "/1", ...). Used for the dynamic per-notification-channel checks. suffix and
+// rid may be empty. Returns ErrNoPingURL if name is not resolved.
+func (r *Reporter) Ping(ctx context.Context, name, suffix, rid, body, label string) error {
+	return r.pingCheck(ctx, name, suffix, rid, body, label)
+}
 
 // Heartbeat pings the "service alive" check with a success ping. Called on a
 // fixed interval from the daemon so silence (host down / daemon dead) is detected
 // server-side.
 func (r *Reporter) Heartbeat(ctx context.Context) error {
-	if r.aliveURL == "" {
+	if !r.HasAliveURL() {
 		return ErrNoAliveURL
 	}
-	return r.ping(ctx, r.aliveURL, "", "alive")
+	return r.pingCheck(ctx, CheckKeyAlive, "", "", "", "alive")
 }
 
 // RunStarted pings /start on the backup-outcome check. rid correlates this with
 // the later outcome ping so the monitor can measure run duration.
 func (r *Reporter) RunStarted(ctx context.Context, rid string) error {
-	if r.backupURL == "" {
+	if !r.HasBackupURL() {
 		return ErrNoBackupURL
 	}
-	return r.ping(ctx, pingURL(r.backupURL, suffixStart, rid), "", "start")
+	return r.pingCheck(ctx, CheckKeyBackup, suffixStart, rid, "", "start")
 }
 
 // RunFinished pings the backup-outcome check with the run's exit status
 // (/<0-255>: 0 = success, non-zero = fail so the user is alerted). On a non-zero
 // outcome, and when SendLog is set, the log tail is attached as the POST body.
 func (r *Reporter) RunFinished(ctx context.Context, rid string, exitCode int, logTail string) error {
-	if r.backupURL == "" {
+	if !r.HasBackupURL() {
 		return ErrNoBackupURL
 	}
 	body := ""
@@ -117,28 +173,44 @@ func (r *Reporter) RunFinished(ctx context.Context, rid string, exitCode int, lo
 		body = logTail
 	}
 	suffix := "/" + strconv.Itoa(clampExit(exitCode))
-	return r.ping(ctx, pingURL(r.backupURL, suffix, rid), body, "finish")
+	return r.pingCheck(ctx, CheckKeyBackup, suffix, rid, body, "finish")
 }
 
 // RunHang pings /fail on the backup-outcome check when the supervised child
 // exceeded its budget and was killed (no exit code to report). The body records
 // the timeout so the monitor UI shows why.
 func (r *Reporter) RunHang(ctx context.Context, rid string, timeout time.Duration, logTail string) error {
-	if r.backupURL == "" {
+	if !r.HasBackupURL() {
 		return ErrNoBackupURL
 	}
 	body := fmt.Sprintf("timed out after %s", timeout)
 	if r.sendLog && logTail != "" {
 		body = body + "\n\n" + logTail
 	}
-	return r.ping(ctx, pingURL(r.backupURL, suffixFail, rid), body, "hang")
+	return r.pingCheck(ctx, CheckKeyBackup, suffixFail, rid, body, "hang")
+}
+
+// ReportUpdate pings the "updates" check with the update-availability signal:
+// available==false -> /0 (up to date; the check stays UP/green), available==true -> /1
+// (a non-zero "exit" so the check goes DOWN/red and fires the user's alerts), mirroring
+// RunFinished's /<code> convention. Whether the ping transmitted is a separate outcome
+// the caller records; this only encodes the signal.
+func (r *Reporter) ReportUpdate(ctx context.Context, available bool) error {
+	if !r.HasUpdatesURL() {
+		return ErrNoUpdatesURL
+	}
+	suffix := "/0"
+	if available {
+		suffix = "/1"
+	}
+	return r.pingCheck(ctx, CheckKeyUpdates, suffix, "", "", "updates")
 }
 
 // TestPing hits base + /log, which records a ping WITHOUT changing the check
 // state, and asserts a 2xx. Used by the install wizard connectivity test so a
 // "Verify" never leaves a spurious success/fail on the user's check.
 func (r *Reporter) TestPing(ctx context.Context, base string) error {
-	base = strings.TrimRight(strings.TrimSpace(base), "/")
+	base = normalizeURL(base)
 	if base == "" {
 		return ErrNoAliveURL
 	}

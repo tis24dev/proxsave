@@ -17,6 +17,7 @@ import (
 	"github.com/tis24dev/proxsave/internal/notify"
 	"github.com/tis24dev/proxsave/internal/orchestrator"
 	"github.com/tis24dev/proxsave/internal/ui/shell"
+	"github.com/tis24dev/proxsave/internal/uitest"
 )
 
 type driver struct {
@@ -43,7 +44,7 @@ func newDriver(t *testing.T) *driver {
 
 func (d *driver) waitScreen(title string) {
 	d.t.Helper()
-	deadline := time.After(60 * time.Second)
+	deadline := time.After(uitest.Deadline(60 * time.Second))
 	for {
 		select {
 		case got := <-d.pushes:
@@ -64,6 +65,27 @@ func (d *driver) keys(script string) {
 	d.t.Helper()
 	for _, msg := range shell.Keys(script) {
 		d.session.Send(msg)
+	}
+}
+
+// waitText blocks until the (ANSI-stripped) rendered buffer contains want, so tests
+// can assert on styled content that lands slightly after the screen-title push.
+func (d *driver) waitText(want string) {
+	d.t.Helper()
+	deadline := time.After(uitest.Deadline(60 * time.Second))
+	for {
+		if strings.Contains(ansi.Strip(d.buf.String()), want) {
+			return
+		}
+		select {
+		case <-deadline:
+			out := ansi.Strip(d.buf.String())
+			if len(out) > 2000 {
+				out = out[len(out)-2000:]
+			}
+			d.t.Fatalf("timed out waiting for text %q; output tail:\n%s", want, out)
+		case <-time.After(5 * time.Millisecond):
+		}
 	}
 }
 
@@ -130,10 +152,11 @@ func TestCollectWizardDataDeclineAll(t *testing.T) {
 		resCh <- result{data, err}
 	}()
 
-	// Single aligned form: inactive dependent rows are skipped, so Enter
-	// through the 8 active rows reaches Continue; the final Enter submits.
+	// Single aligned form: inactive dependent rows are skipped. Fresh install
+	// defaults to the daemon, so the Healthchecks row is active too: Enter through
+	// the 9 active rows reaches Continue; the final Enter submits.
 	d.waitScreen("Configuration")
-	for i := 0; i < 9; i++ {
+	for i := 0; i < 10; i++ {
 		d.keys("enter")
 	}
 
@@ -144,6 +167,10 @@ func TestCollectWizardDataDeclineAll(t *testing.T) {
 	data := res.data
 	if data.EnableSecondaryStorage || data.EnableCloudStorage || data.EnableEncryption {
 		t.Fatalf("decline-all produced enabled toggles: %+v", data)
+	}
+	// Fresh daemon default: Healthchecks defaults to centralized.
+	if data.SchedulerMode != "daemon" || data.HealthcheckMode != "centralized" {
+		t.Fatalf("fresh daemon must default Healthchecks to centralized: mode=%q hc=%q", data.SchedulerMode, data.HealthcheckMode)
 	}
 	if data.NotificationMode != "none" {
 		t.Fatalf("notification mode = %q, want none", data.NotificationMode)
@@ -269,6 +296,104 @@ func TestCollectWizardDataEditWithoutSchedulerModeDefaultsCron(t *testing.T) {
 	}
 }
 
+// collectWizardAsync runs CollectWizardData on baseTemplate and returns a channel
+// with the result so a driver can script keys against the form.
+func collectWizardAsync(t *testing.T, d *driver, baseTemplate string) chan struct {
+	data *installer.InstallWizardData
+	err  error
+} {
+	t.Helper()
+	resCh := make(chan struct {
+		data *installer.InstallWizardData
+		err  error
+	}, 1)
+	go func() {
+		data, err := CollectWizardData(context.Background(), d.session, baseTemplate)
+		resCh <- struct {
+			data *installer.InstallWizardData
+			err  error
+		}{data, err}
+	}()
+	return resCh
+}
+
+// TestCollectWizardDataHealthcheckSelect exercises the new Healthchecks FieldSelect:
+// on a fresh (daemon) install the row is active and cycles off/centralized/self, and
+// switching the scheduler to cron dims it and forces the mode off.
+func TestCollectWizardDataHealthcheckSelect(t *testing.T) {
+	// Self: from the daemon default (centralized) press right once -> self.
+	t.Run("daemon_self", func(t *testing.T) {
+		d := newDriver(t)
+		resCh := collectWizardAsync(t, d, "")
+		d.waitScreen("Configuration")
+		d.keys("down down down down down down down")  // 7 downs -> Healthchecks row
+		d.keys("right")                               // centralized -> self
+		d.keys("down down down down down down enter") // to Continue, submit
+		res := <-resCh
+		if res.err != nil {
+			t.Fatalf("unexpected error: %v", res.err)
+		}
+		if res.data.SchedulerMode != "daemon" || res.data.HealthcheckMode != "self" {
+			t.Fatalf("mode=%q hc=%q, want daemon/self", res.data.SchedulerMode, res.data.HealthcheckMode)
+		}
+	})
+
+	// Off: from the daemon default (centralized) press left once -> off.
+	t.Run("daemon_off", func(t *testing.T) {
+		d := newDriver(t)
+		resCh := collectWizardAsync(t, d, "")
+		d.waitScreen("Configuration")
+		d.keys("down down down down down down down") // 7 downs -> Healthchecks row
+		d.keys("left")                               // centralized -> off
+		d.keys("down down down down down down enter")
+		res := <-resCh
+		if res.err != nil {
+			t.Fatalf("unexpected error: %v", res.err)
+		}
+		if res.data.HealthcheckMode != "off" {
+			t.Fatalf("hc=%q, want off", res.data.HealthcheckMode)
+		}
+	})
+
+	// Cron forces off: switch the scheduler (row 6) to cron; the Healthchecks row
+	// then dims and the collected mode is forced off regardless of its select.
+	t.Run("cron_forces_off", func(t *testing.T) {
+		d := newDriver(t)
+		resCh := collectWizardAsync(t, d, "")
+		d.waitScreen("Configuration")
+		d.keys("down down down down down down") // 6 downs -> Scheduler row
+		d.keys("right")                         // daemon -> cron
+		d.keys("down down down down down down enter")
+		res := <-resCh
+		if res.err != nil {
+			t.Fatalf("unexpected error: %v", res.err)
+		}
+		if res.data.SchedulerMode != "cron" || res.data.HealthcheckMode != "off" {
+			t.Fatalf("mode=%q hc=%q, want cron/off", res.data.SchedulerMode, res.data.HealthcheckMode)
+		}
+	})
+
+	// Prefill round-trip: an existing daemon+self config prefills the row to self and
+	// a no-op edit preserves it.
+	t.Run("prefill_self_roundtrip", func(t *testing.T) {
+		d := newDriver(t)
+		template := config.DefaultEnvTemplate()
+		template = installer.SetEnvValueInTemplate(template, "SCHEDULER_MODE", "daemon")
+		template = installer.SetEnvValueInTemplate(template, "HEALTHCHECK_ENABLED", "true")
+		template = installer.SetEnvValueInTemplate(template, "HEALTHCHECK_MODE", "self")
+		resCh := collectWizardAsync(t, d, template)
+		d.waitScreen("Configuration")
+		d.keys("down down down down down down down down down down down down enter") // spam to Continue + submit
+		res := <-resCh
+		if res.err != nil {
+			t.Fatalf("unexpected error: %v", res.err)
+		}
+		if res.data.SchedulerMode != "daemon" || res.data.HealthcheckMode != "self" {
+			t.Fatalf("prefill lost: mode=%q hc=%q, want daemon/self", res.data.SchedulerMode, res.data.HealthcheckMode)
+		}
+	})
+}
+
 func TestCollectWizardDataEscCancels(t *testing.T) {
 	d := newDriver(t)
 	resCh := make(chan error, 1)
@@ -348,7 +473,14 @@ func TestRunPostInstallAudit(t *testing.T) {
 	// suggestion, then move to the Disable Selected button and press it (a plain
 	// Enter on the item now just toggles it - it no longer confirms the screen).
 	d.keys("space down down down enter")
-	d.waitScreen("Configuration updated")
+	// The outcome is now the shared styled "Post-install check" result screen (a
+	// selector with a colored Status keyword), not a Notice. Assert the green
+	// "✓ updated" keyword + the disabled-component line. In the install flow the
+	// leave item is "Continue" (mirrors the Telegram check that follows), NOT "Back".
+	d.waitScreen("Post-install check")
+	d.waitText("✓ updated")
+	d.waitText("Disabled 1 component(s): BACKUP_X")
+	d.waitText("Continue")
 	d.keys("enter")
 
 	res := <-resCh
@@ -371,6 +503,44 @@ func TestRunPostInstallAudit(t *testing.T) {
 	}
 }
 
+// TestRunPostInstallAuditNoSuggestions drives the empty-suggestions outcome: it must
+// render the shared styled "Post-install check" result screen with the green
+// "✓ no unused components" Status keyword (and, per the daemon-result convention, no
+// redundant explanation sentence), dismissible via Continue in the install flow.
+func TestRunPostInstallAuditNoSuggestions(t *testing.T) {
+	d := newDriver(t)
+
+	origCollect := auditCollect
+	auditCollect = func(ctx context.Context, execPath, cfgPath string) ([]installer.PostInstallAuditSuggestion, error) {
+		return nil, nil
+	}
+	t.Cleanup(func() { auditCollect = origCollect })
+
+	type result struct {
+		res installer.PostInstallAuditResult
+		err error
+	}
+	resCh := make(chan result, 1)
+	go func() {
+		res, err := RunPostInstallAudit(context.Background(), d.session, "/fake/proxsave", "/tmp/nonexistent.env", false)
+		resCh <- result{res, err}
+	}()
+
+	d.waitScreen("Post-install check") // the Run check confirm
+	d.keys("enter")                    // run the dry-run
+	d.waitScreen("Post-install check") // the outcome screen (same title)
+	d.waitText("✓ no unused components")
+	d.keys("enter") // dismiss via Back
+
+	res := <-resCh
+	if res.err != nil {
+		t.Fatalf("unexpected error: %v", res.err)
+	}
+	if !res.res.Ran || len(res.res.Suggestions) != 0 || len(res.res.AppliedKeys) != 0 {
+		t.Fatalf("unexpected result: %+v", res.res)
+	}
+}
+
 func TestRunPostInstallAuditSkipAndEsc(t *testing.T) {
 	d := newDriver(t)
 
@@ -384,13 +554,13 @@ func TestRunPostInstallAuditSkipAndEsc(t *testing.T) {
 		resCh <- result{res, err}
 	}()
 	d.waitScreen("Post-install check")
-	d.keys("tab enter") // choose Skip
+	d.keys("down enter") // choose Skip (the 2nd selector item, after Check)
 	res := <-resCh
 	if res.err != nil || res.res.Ran {
 		t.Fatalf("skip must not run the check: %+v", res)
 	}
 
-	// Ctrl+C on the confirm is a non-blocking skip too (parity with the
+	// Ctrl+C on the selector is a non-blocking skip too (parity with the
 	// CLI, where a prompt EOF abandons the optional step).
 	go func() {
 		res, err := RunPostInstallAudit(context.Background(), d.session, "/fake/proxsave", "/tmp/nonexistent.env", false)
@@ -437,19 +607,19 @@ func TestBuildTelegramPrompt(t *testing.T) {
 		t.Fatalf("partial must be yellow ⚠: %q", ansi.Strip(p))
 	}
 
-	// Action (not paired, 409) -> blue "ℹ NOT PAIRED YET (HTTP 409)".
+	// Action (not paired, 409) -> yellow "⚠ NOT PAIRED YET (HTTP 409)".
 	a := buildTelegramPrompt("1", "", false, "send the id", "Not paired yet", orchestrator.TelegramSeverityAction, 409)
-	if !strings.Contains(ansi.Strip(a), "ℹ NOT PAIRED YET") || !strings.Contains(a, "59;130;246") {
-		t.Fatalf("action must be blue ℹ: %q", ansi.Strip(a))
+	if !strings.Contains(ansi.Strip(a), "⚠ NOT PAIRED YET") || !strings.Contains(a, "234;179;8") {
+		t.Fatalf("action must be yellow ⚠: %q", ansi.Strip(a))
 	}
 	if !strings.Contains(ansi.Strip(a), "(HTTP 409)") {
 		t.Fatalf("action must show the HTTP code: %q", ansi.Strip(a))
 	}
 
-	// Unreachable (code 0) -> red "⚠ SERVER UNREACHABLE", no HTTP code.
+	// Unreachable (code 0) -> yellow "⚠ SERVER UNREACHABLE" (retryable), no HTTP code.
 	u := buildTelegramPrompt("1", "", false, "could not reach", "Server unreachable", orchestrator.TelegramSeverityUnreachable, 0)
-	if !strings.Contains(ansi.Strip(u), "⚠ SERVER UNREACHABLE") || !strings.Contains(u, "239;68;68") {
-		t.Fatalf("unreachable must be red ⚠: %q", ansi.Strip(u))
+	if !strings.Contains(ansi.Strip(u), "⚠ SERVER UNREACHABLE") || !strings.Contains(u, "234;179;8") {
+		t.Fatalf("unreachable must be yellow ⚠: %q", ansi.Strip(u))
 	}
 	if strings.Contains(ansi.Strip(u), "HTTP 0") {
 		t.Fatalf("code 0 must not show an HTTP code: %q", ansi.Strip(u))
@@ -461,10 +631,13 @@ func TestBuildTelegramPrompt(t *testing.T) {
 		t.Fatalf("fatal must be red ✗: %q", ansi.Strip(f))
 	}
 
-	// Neutral -> no keyword, message verbatim.
-	n := ansi.Strip(buildTelegramPrompt("1", "", false, "Not checked yet.", "", orchestrator.TelegramSeverityNeutral, 0))
-	if !strings.Contains(n, "Not checked yet.") || strings.Contains(n, "HTTP") {
-		t.Fatalf("neutral status wrong: %q", n)
+	// Neutral (pre-check) -> yellow "NOT CHECKED" (no symbol) + the guidance message.
+	n := buildTelegramPrompt("1", "", false, "Not checked yet.", "", orchestrator.TelegramSeverityNeutral, 0)
+	if !strings.Contains(ansi.Strip(n), "NOT CHECKED") || !strings.Contains(ansi.Strip(n), "Not checked yet.") {
+		t.Fatalf("neutral must show yellow NOT CHECKED + message: %q", ansi.Strip(n))
+	}
+	if !strings.Contains(n, "234;179;8") || strings.ContainsAny(ansi.Strip(n), "✓✗⚠ℹ") || strings.Contains(ansi.Strip(n), "HTTP") {
+		t.Fatalf("neutral must be yellow, no symbol, no HTTP: %q", ansi.Strip(n))
 	}
 }
 

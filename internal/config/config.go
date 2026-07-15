@@ -254,6 +254,20 @@ type Config struct {
 	HealthcheckPingKey           string // self mode: optional ping key for slug URLs
 	HealthcheckAliveID           string // self mode: UUID or slug of the service-alive check
 	HealthcheckBackupID          string // self mode: UUID or slug of the backup-outcome check
+	// Fase 1 updates sensor (daemon): whether a newer release is available.
+	HealthcheckUpdatesURL     string        // self mode: full updates check ping URL (optional)
+	HealthcheckUpdatesID      string        // self mode: UUID or slug of the updates check
+	HealthcheckUpdateInterval time.Duration // updates-check cadence (default 5m)
+	// Fase 2 per-notification-channel sensors (self mode only): full URL or check ID per
+	// channel. Centralized mode resolves these from the server, not from config.
+	HealthcheckNotifyEmailURL    string
+	HealthcheckNotifyEmailID     string
+	HealthcheckNotifyTelegramURL string
+	HealthcheckNotifyTelegramID  string
+	HealthcheckNotifyGotifyURL   string
+	HealthcheckNotifyGotifyID    string
+	HealthcheckNotifyWebhookURL  string
+	HealthcheckNotifyWebhookID   string
 
 	// Security features
 	CheckNetworkSecurity bool
@@ -834,6 +848,17 @@ func (c *Config) parseHealthcheckSettings() {
 	c.HealthcheckPingKey = strings.TrimSpace(c.getString("HEALTHCHECK_PING_KEY", ""))
 	c.HealthcheckAliveID = strings.TrimSpace(c.getString("HEALTHCHECK_ALIVE_ID", ""))
 	c.HealthcheckBackupID = strings.TrimSpace(c.getString("HEALTHCHECK_BACKUP_ID", ""))
+	c.HealthcheckUpdatesURL = strings.TrimSpace(c.getString("HEALTHCHECK_UPDATES_URL", ""))
+	c.HealthcheckUpdatesID = strings.TrimSpace(c.getString("HEALTHCHECK_UPDATES_ID", ""))
+	c.HealthcheckUpdateInterval = c.getDuration("HEALTHCHECK_UPDATE_INTERVAL", 5*time.Minute)
+	c.HealthcheckNotifyEmailURL = strings.TrimSpace(c.getString("HEALTHCHECK_NOTIFY_EMAIL_URL", ""))
+	c.HealthcheckNotifyEmailID = strings.TrimSpace(c.getString("HEALTHCHECK_NOTIFY_EMAIL_ID", ""))
+	c.HealthcheckNotifyTelegramURL = strings.TrimSpace(c.getString("HEALTHCHECK_NOTIFY_TELEGRAM_URL", ""))
+	c.HealthcheckNotifyTelegramID = strings.TrimSpace(c.getString("HEALTHCHECK_NOTIFY_TELEGRAM_ID", ""))
+	c.HealthcheckNotifyGotifyURL = strings.TrimSpace(c.getString("HEALTHCHECK_NOTIFY_GOTIFY_URL", ""))
+	c.HealthcheckNotifyGotifyID = strings.TrimSpace(c.getString("HEALTHCHECK_NOTIFY_GOTIFY_ID", ""))
+	c.HealthcheckNotifyWebhookURL = strings.TrimSpace(c.getString("HEALTHCHECK_NOTIFY_WEBHOOK_URL", ""))
+	c.HealthcheckNotifyWebhookID = strings.TrimSpace(c.getString("HEALTHCHECK_NOTIFY_WEBHOOK_ID", ""))
 }
 
 // normalizeSchedulerMode maps any unrecognised value to the safe default "cron".
@@ -960,7 +985,7 @@ func (c *Config) parseSystemSettings() {
 	c.PBSDatastorePaths = normalizeList(c.getStringSlice("PBS_DATASTORE_PATH", nil))
 }
 
-// Helper methods per ottenere valori tipizzati
+// Helper methods to obtain typed values
 
 func (c *Config) getString(key, defaultValue string) string {
 	upperKey := strings.ToUpper(key)

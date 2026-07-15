@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"strings"
 	"time"
 
 	"github.com/tis24dev/proxsave/internal/serverbot"
@@ -35,6 +36,32 @@ type CentralizedConfig struct {
 	BackupURL   string `json:"backup_ping_url"`
 	ProjectCode string `json:"project_code"`
 	LoginURL    string `json:"login_url"`
+	// Checks carries additive, OPTIONAL per-sensor ping URLs beyond the two frozen
+	// alive/backup keys (Fase 1: {"updates":"<ping-url>"}). An old server omits it; the
+	// completeness check below still requires only alive+backup, so a new client against
+	// an old server simply resolves no updates URL. Omitted when empty.
+	Checks map[string]string `json:"checks,omitempty"`
+}
+
+// Check-name vocabulary, shared by the Reporter url map, the Status.Records-derived
+// sensor names, and the CentralizedConfig.Checks wire keys. The rule is: the wire/client
+// key is the server hc slug with the leading "proxsave-" stripped once. alive/backup ride
+// the FROZEN top-level alive_ping_url/backup_ping_url wire fields, NOT the Checks map, so
+// their keys are internal-only (the url map and Has*URL accessors). updates + notify-<ch>
+// travel inside Checks.
+const (
+	CheckKeyAlive        = "alive"
+	CheckKeyBackup       = "backup"
+	CheckKeyUpdates      = "updates"
+	CheckKeyNotifyPrefix = "notify-" // per-notification-channel check key prefix (notify-email, ...)
+	SensorProxsavePrefix = "proxsave-"
+)
+
+// CheckKeyNotify returns the Checks/url-map key for a notification channel (lowercased),
+// e.g. CheckKeyNotify("email") == "notify-email". The server hc slug is
+// SensorProxsavePrefix+CheckKeyNotify(ch) = "proxsave-notify-email".
+func CheckKeyNotify(channel string) string {
+	return CheckKeyNotifyPrefix + strings.ToLower(strings.TrimSpace(channel))
 }
 
 // serverError is the {"error":...} envelope the proxsave_server returns on failure.
@@ -57,9 +84,33 @@ type serverError struct {
 // used by the install-time setup screen; the daemon's poll passes false so it
 // never triggers the server-side mint.
 func FetchCentralizedConfig(ctx context.Context, client *http.Client, serverAPIHost, serverID, secret string, includeLogin bool) (CentralizedConfig, error) {
+	return fetchConfig(ctx, client, serverAPIHost, serverID, secret, includeLogin, nil)
+}
+
+// FetchCentralizedConfigWithChannels is the daemon-only variant that ALSO sends the
+// authoritative enabled-notification set as ?channels so the server provisions one check per
+// enabled channel. channels is the lowercased set (e.g. ["email","telegram"]); an EMPTY
+// (non-nil) slice sends the "none" sentinel (pause all). It is a separate function from
+// FetchCentralizedConfig so the install-wizard/Phase-7 callers structurally CANNOT send
+// ?channels (only the daemon owns the authoritative set).
+func FetchCentralizedConfigWithChannels(ctx context.Context, client *http.Client, serverAPIHost, serverID, secret string, includeLogin bool, channels []string) (CentralizedConfig, error) {
+	return fetchConfig(ctx, client, serverAPIHost, serverID, secret, includeLogin, channels)
+}
+
+func fetchConfig(ctx context.Context, client *http.Client, serverAPIHost, serverID, secret string, includeLogin bool, channels []string) (CentralizedConfig, error) {
 	q := url.Values{"server_id": {serverID}}
 	if includeLogin {
 		q.Set("login", "1")
+	}
+	// A non-nil channels slice is the daemon's authoritative set; an empty one means "all
+	// notify channels disabled" and is sent as the explicit "none" sentinel (never an empty
+	// value, which a proxy could drop and silently turn into "leave alone").
+	if channels != nil {
+		v := strings.Join(channels, ",")
+		if v == "" {
+			v = "none"
+		}
+		q.Set("channels", v)
 	}
 	// Transport + auth (host normalize, X-Server-Auth, X-Proxsave-Version, timeout,
 	// bounded read, error redaction) is the shared serverbot brick; the endpoint

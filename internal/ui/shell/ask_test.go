@@ -8,6 +8,8 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+
+	"github.com/tis24dev/proxsave/internal/uitest"
 )
 
 // stubScreen resolves to its value on "enter". Init closes pushed, giving
@@ -60,7 +62,7 @@ func (s *stubScreen) waitPushed(t *testing.T) {
 	t.Helper()
 	select {
 	case <-s.pushed:
-	case <-time.After(5 * time.Second):
+	case <-time.After(uitest.Deadline(5 * time.Second)):
 		t.Fatal("screen was never pushed")
 	}
 }
@@ -84,7 +86,7 @@ func askResult[T any](t *testing.T, ch <-chan askOutcome[T]) (T, error) {
 	select {
 	case r := <-ch:
 		return r.v, r.err
-	case <-time.After(5 * time.Second):
+	case <-time.After(uitest.Deadline(5 * time.Second)):
 		t.Fatal("Ask did not return within timeout")
 		var zero T
 		return zero, nil
@@ -204,7 +206,7 @@ func TestCtrlCOnEmptyStackTerminatesProgram(t *testing.T) {
 	s.Send(KeyMsg("ctrl+c"))
 	select {
 	case <-s.Done():
-	case <-time.After(5 * time.Second):
+	case <-time.After(uitest.Deadline(5 * time.Second)):
 		t.Fatal("program did not terminate on empty-stack ctrl+c")
 	}
 	if err := s.Close(); err != nil {

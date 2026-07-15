@@ -8,8 +8,10 @@ import (
 	"strings"
 
 	"github.com/tis24dev/proxsave/internal/installer"
+	"github.com/tis24dev/proxsave/internal/orchestrator"
 	"github.com/tis24dev/proxsave/internal/ui/components"
 	"github.com/tis24dev/proxsave/internal/ui/shell"
+	"github.com/tis24dev/proxsave/internal/ui/theme"
 )
 
 // errAuditSkip is the local sentinel for skipping the audit selection.
@@ -18,29 +20,54 @@ var errAuditSkip = errors.New("post-install audit: skip")
 // auditCollect is an injection point for tests.
 var auditCollect = installer.CollectPostInstallDisableSuggestions
 
+// auditAction is the choice on the post-install check's initial screen: run the
+// dry-run or leave (mirrors the Telegram/Healthchecks check screens' Check + leave).
+type auditAction int
+
+const (
+	auditActionCheck auditAction = iota
+	auditActionLeave
+)
+
+// buildAuditPrompt renders the styled prompt shown above the Check/leave selector,
+// matching the pre-check "Status: NOT CHECKED" look of the Telegram/Healthchecks checks.
+func buildAuditPrompt() string {
+	var b strings.Builder
+	b.WriteString(theme.Text.Render("Detect unused backup components."))
+	b.WriteString("\n\n")
+	b.WriteString(theme.Text.Render("Status: "))
+	b.WriteString(renderHealthcheckLevel(orchestrator.HealthcheckSetupLevelNeutral, "NOT CHECKED"))
+	return b.String()
+}
+
 // RunPostInstallAudit runs the optional post-install check: dry-run collect,
 // multi-select of suggested disables, shared apply. Prompt aborts are
 // non-blocking (the install continues), matching both legacy fronts.
 func RunPostInstallAudit(ctx context.Context, session *shell.Session, execPath, configPath string, backToMenu bool) (installer.PostInstallAuditResult, error) {
 	result := installer.PostInstallAuditResult{}
 
-	declineLabel := "Skip"
+	// Mirror the Telegram/Healthchecks check screens: a styled "Status: NOT CHECKED"
+	// prompt above a "Check" + leave selector, instead of a bespoke Yes/No confirm.
+	leaveLabel, leaveDesc := "Skip", "skip the check"
 	if backToMenu {
-		declineLabel = "Back"
+		leaveLabel, leaveDesc = "Back", "return to the dashboard menu"
 	}
-	run, err := shell.Ask(ctx, session, components.NewConfirm(
-		"Post-install check",
-		"Run a dry-run to detect unused components and reduce warnings?\nThis may take a minute.",
-		components.WithLabels("Run check", declineLabel),
-		components.WithDefaultYes(true),
+	initItems := []components.SelectorItem[auditAction]{
+		{Label: "Check", Description: "run the dry-run to detect unused components", Value: auditActionCheck},
+		{Label: leaveLabel, Description: leaveDesc, Value: auditActionLeave},
+	}
+	action, err := shell.Ask(ctx, session, components.NewSelector(
+		"Post-install check", initItems,
+		components.WithSelectorPromptStyled[auditAction](buildAuditPrompt()),
+		components.WithSelectorBack[auditAction](errAuditSkip),
 	))
 	if err != nil {
-		if shell.IsAbort(err) {
+		if errors.Is(err, errAuditSkip) || shell.IsAbort(err) {
 			return result, nil
 		}
 		return result, err
 	}
-	if !run.Answer {
+	if action == auditActionLeave {
 		return result, nil
 	}
 	result.Ran = true
@@ -57,15 +84,15 @@ func RunPostInstallAudit(ctx context.Context, session *shell.Session, execPath, 
 	})
 	if collectErr != nil {
 		result.CollectErr = collectErr
-		_, _ = shell.Ask(ctx, session, components.NewNotice(components.NoticeWarning,
-			"Post-install check failed", fmt.Sprintf("Non-blocking: %v", collectErr)))
+		showAuditResult(ctx, session, "Post-install check", orchestrator.HealthcheckSetupLevelWarn,
+			"check failed", fmt.Sprintf("Non-blocking: %v", collectErr), backToMenu)
 		return result, nil
 	}
 	result.Suggestions = suggestions
 
 	if len(suggestions) == 0 {
-		_, _ = shell.Ask(ctx, session, components.NewNotice(components.NoticeSuccess,
-			"Post-install check", "No unused components detected. No changes required."))
+		showAuditResult(ctx, session, "Post-install check", orchestrator.HealthcheckSetupLevelOk,
+			"no unused components", "", backToMenu)
 		return result, nil
 	}
 
@@ -92,21 +119,55 @@ func RunPostInstallAudit(ctx context.Context, session *shell.Session, execPath, 
 		return result, err
 	}
 	if len(keys) == 0 {
-		_, _ = shell.Ask(ctx, session, components.NewNotice(components.NoticeInfo,
-			"Post-install check", "No changes selected. Nothing was modified."))
+		showAuditResult(ctx, session, "Post-install check", orchestrator.HealthcheckSetupLevelNeutral,
+			"no changes", "No components were selected; nothing was modified.", backToMenu)
 		return result, nil
 	}
 
 	if err := installer.ApplyAuditDisables(configPath, keys); err != nil {
-		_, _ = shell.Ask(ctx, session, components.NewNotice(components.NoticeError,
-			"Configuration update failed", err.Error()))
+		showAuditResult(ctx, session, "Post-install check", orchestrator.HealthcheckSetupLevelError,
+			"update failed", err.Error(), backToMenu)
 		return result, nil
 	}
 	result.AppliedKeys = normalizeAuditKeys(keys)
-	_, _ = shell.Ask(ctx, session, components.NewNotice(components.NoticeSuccess,
-		"Configuration updated", fmt.Sprintf("Disabled %d component(s): %s",
-			len(result.AppliedKeys), strings.Join(result.AppliedKeys, ", "))))
+	showAuditResult(ctx, session, "Post-install check", orchestrator.HealthcheckSetupLevelOk,
+		"updated", fmt.Sprintf("Disabled %d component(s): %s",
+			len(result.AppliedKeys), strings.Join(result.AppliedKeys, ", ")), backToMenu)
 	return result, nil
+}
+
+// auditResultAction is the single choice on a post-install audit outcome screen:
+// dismiss it and return to the caller (mirrors daemonResultAction on the dashboard).
+type auditResultAction int
+
+const auditResultActionBack auditResultAction = iota
+
+// showAuditResult presents a post-install audit outcome with the SAME styled look as the
+// healthcheck/daemon result screens: a "Status:" line with a colored keyword (green ✓ Ok,
+// red ✗ Error, yellow ⚠ Warn, yellow with no symbol Neutral, via renderHealthcheckLevel) and,
+// only when the explanation is non-empty, a blank line then a Subtle explanation, above a
+// single Back item. These are non-blocking informational outcomes (exactly like the Notices
+// they replaced): the result and any esc/abort are swallowed, never propagated as an error.
+func showAuditResult(ctx context.Context, session *shell.Session, title string, level orchestrator.HealthcheckSetupLevel, keyword, explanation string, backToMenu bool) {
+	errAuditResultEsc := errors.New("post-install audit result: esc")
+	prompt := theme.Text.Render("Status: ") + renderHealthcheckLevel(level, keyword)
+	if explanation != "" {
+		prompt += "\n\n" + theme.Subtle.Render(explanation)
+	}
+	// Mirror the Telegram/healthcheck check screens' leave item: the install flow
+	// continues forward ("Continue"); the dashboard returns to its menu ("Back").
+	leaveLabel, leaveDesc := "Continue", "continue the install"
+	if backToMenu {
+		leaveLabel, leaveDesc = "Back", "return to the dashboard menu"
+	}
+	items := []components.SelectorItem[auditResultAction]{
+		{Label: leaveLabel, Description: leaveDesc, Value: auditResultActionBack},
+	}
+	_, _ = shell.Ask(ctx, session, components.NewSelector(
+		title, items,
+		components.WithSelectorPromptStyled[auditResultAction](prompt),
+		components.WithSelectorBack[auditResultAction](errAuditResultEsc),
+	))
 }
 
 // auditComponentDetail is the side-pane text for a suggestion: the curated

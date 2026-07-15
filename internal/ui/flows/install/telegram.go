@@ -158,10 +158,12 @@ func RunTelegramSetup(ctx context.Context, session *shell.Session, baseDir, conf
 	}
 }
 
-// telegramSeverityStyle maps a check severity to a display style + symbol so each
-// state reads distinctly: green ✓ linked, yellow ⚠ partial, blue ℹ action-needed
-// (start bot / send ID), red ⚠ unreachable, red ✗ fatal. The bool is false for the
-// neutral (pre-check) state, which renders without a colored keyword.
+// telegramSeverityStyle maps a check RESULT severity to a display style + symbol, using
+// the SAME three pairings as the healthcheck/upgrade check screens: green ✓ positive,
+// yellow ⚠ warning/attention, red ✗ error. So: green ✓ linked; yellow ⚠ partial /
+// action-needed (start bot / send ID) / server-unreachable (all retryable); red ✗ fatal.
+// The bool is false only for the neutral (pre-check) state, rendered separately as a
+// yellow "NOT CHECKED" (no symbol).
 func telegramSeverityStyle(sev orchestrator.TelegramSetupSeverity) (lipgloss.Style, string, bool) {
 	switch sev {
 	case orchestrator.TelegramSeveritySuccess:
@@ -169,9 +171,9 @@ func telegramSeverityStyle(sev orchestrator.TelegramSetupSeverity) (lipgloss.Sty
 	case orchestrator.TelegramSeverityPartial:
 		return theme.WarningText, theme.SymbolWarning, true
 	case orchestrator.TelegramSeverityAction:
-		return theme.InfoText, theme.SymbolInfo, true
+		return theme.WarningText, theme.SymbolWarning, true
 	case orchestrator.TelegramSeverityUnreachable:
-		return theme.ErrorText, theme.SymbolWarning, true
+		return theme.WarningText, theme.SymbolWarning, true
 	case orchestrator.TelegramSeverityFatal:
 		return theme.ErrorText, theme.SymbolError, true
 	default:
@@ -220,7 +222,12 @@ func buildTelegramPrompt(serverID, identityFile string, identityPersisted bool, 
 	b.WriteString(theme.Text.Render("Status: "))
 	style, symbol, colored := telegramSeverityStyle(severity)
 	if !colored {
-		b.WriteString(theme.Text.Render(statusMsg))
+		// Pre-check: yellow "NOT CHECKED" (no symbol), same look as the healthcheck/upgrade
+		// screens, then the guidance message in plain text.
+		b.WriteString(theme.WarningText.Render("NOT CHECKED"))
+		if statusMsg != "" {
+			b.WriteString(theme.Text.Render(": " + statusMsg))
+		}
 		return b.String()
 	}
 	label := statusLabel

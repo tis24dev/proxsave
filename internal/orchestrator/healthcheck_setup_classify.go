@@ -18,9 +18,10 @@ const (
 type HealthcheckSetupLevel int
 
 const (
-	HealthcheckSetupLevelWarn  HealthcheckSetupLevel = iota // attention (yellow) - the default
-	HealthcheckSetupLevelOk                                 // working (green)
-	HealthcheckSetupLevelError                              // hard blocker (red)
+	HealthcheckSetupLevelWarn    HealthcheckSetupLevel = iota // attention (yellow) - the default
+	HealthcheckSetupLevelOk                                   // working (green)
+	HealthcheckSetupLevelError                                // hard blocker (red)
+	HealthcheckSetupLevelNeutral                              // pre-check (yellow, NO symbol) - set by the front-end, never by the classifier
 )
 
 // HealthcheckSetupState is the single mapping of a check result to user-facing copy +
@@ -91,7 +92,47 @@ func ClassifyHealthcheckSetupResult(res HealthcheckCheckResult) HealthcheckSetup
 		st.Message = "The monitoring status file could not be read, so the daemon state is unknown."
 		return st
 	}
+	// A running daemon on an OLDER binary than the one now on disk (an in-place upgrade replaced
+	// the file without a restart) needs a restart to load the update. This is DISTINCT from "not
+	// reporting yet" and takes precedence over the transmission-state headline. Only reported when
+	// alignment was actually determined (DaemonAlignChecked) by the record-independent /proc probe;
+	// when it could not be determined, alignment is UNKNOWN and must NOT read as behind. A record
+	// (DaemonHaveInfo) is not required, so any live daemon on a replaced binary is caught.
+	if res.DaemonAlignChecked && !res.DaemonAligned {
+		st.Level, st.Keyword = HealthcheckSetupLevelWarn, "BEHIND"
+		st.Message = "The monitoring daemon is running an older binary than the one now on disk; restart it to load the update."
+		return st
+	}
 	return applyHealthcheckDaemonState(st, res.Daemon)
+}
+
+// ClassifyHealthcheckSelfResult maps a self-mode check result to the SAME
+// HealthcheckSetupState the centralized classifier produces, so the CLI and TUI
+// renderers stay untouched. Self mode has no provisioning/daemon dimension: the
+// verdict is pure reachability of the user's own alive URL. A successful ping reads
+// REACHABLE (green, Verified so the install may Continue); a ping error reads
+// UNREACHABLE (yellow, retryable, NOT fatal); an empty/not-configured URL reads NOT
+// CONFIGURED (yellow). Self mode never mints a magic-link, so LoginURL stays empty.
+func ClassifyHealthcheckSelfResult(res HealthcheckCheckResult) HealthcheckSetupState {
+	st := HealthcheckSetupState{}
+	switch {
+	case errors.Is(res.Err, ErrHealthcheckSelfNotConfigured):
+		st.Level, st.Keyword = HealthcheckSetupLevelWarn, "NOT CONFIGURED"
+		st.Message = "No service-alive ping URL is configured for self mode yet. Enter the healthchecks parameters, then run the check."
+		return st
+	case res.Err != nil:
+		st.Level, st.Keyword = HealthcheckSetupLevelWarn, "UNREACHABLE"
+		st.Message = "Could not reach the healthchecks ping URL. Check the URL and this host's connectivity, then try again."
+		return st
+	case !res.Reachable:
+		st.Level, st.Keyword = HealthcheckSetupLevelWarn, "UNREACHABLE"
+		st.Message = "Could not confirm the healthchecks ping URL is reachable. Try the check again."
+		return st
+	}
+	st.Verified = true
+	st.Level, st.Keyword = HealthcheckSetupLevelOk, "REACHABLE"
+	st.Message = "The healthchecks ping URL responded; your self-hosted monitor is reachable from this host."
+	return st
 }
 
 // applyHealthcheckDaemonState maps the daemon diagnosis to the headline keyword/level and

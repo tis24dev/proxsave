@@ -384,7 +384,7 @@ dir: storage1
 		t.Fatalf("RecreateStorageDirectories error: %v", err)
 	}
 
-	// Verifica che le directory siano state create nonostante commenti e linee vuote
+	// Verify the directories were created despite comments and empty lines
 	if _, err := os.Stat(filepath.Join(baseDir, "dump")); err != nil {
 		t.Fatalf("expected dump subdir to exist: %v", err)
 	}
@@ -450,7 +450,7 @@ func TestCreatePVEStorageStructureCIFS(t *testing.T) {
 			t.Fatalf("expected cifs subdir %s: %v", sub, err)
 		}
 	}
-	// Verifica che non abbia creato snippets e private (specifici per dir)
+	// Verify it did not create snippets and private (dir-specific)
 	for _, sub := range []string{"snippets", "private"} {
 		if _, err := os.Stat(filepath.Join(baseCIFS, sub)); !os.IsNotExist(err) {
 			t.Fatalf("expected cifs to NOT have subdir %s", sub)

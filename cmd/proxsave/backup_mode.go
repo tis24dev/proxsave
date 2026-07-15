@@ -39,7 +39,17 @@ type backupModeResult struct {
 	exitCode        int
 }
 
+// runBackupMode runs the backup, then (for a STANDALONE run) hands the outcome to the resident
+// daemon to ping. The steps live in runBackupModeSteps; this wrapper adds the handoff so every
+// return path of the backup is covered by exactly one handoff decision (which itself no-ops on the
+// disabled/concurrency-skip/supervised-child/daemon-down paths).
 func runBackupMode(opts backupModeOptions) backupModeResult {
+	res := runBackupModeSteps(opts)
+	maybeHandoffManualBackup(opts, res)
+	return res
+}
+
+func runBackupModeSteps(opts backupModeOptions) backupModeResult {
 	orch, earlyErrorState, exitCode := initializeBackupOrchestrator(opts)
 	if earlyErrorState != nil {
 		return finishBackupMode(orch, earlyErrorState, nil, exitCode)

@@ -3,16 +3,23 @@ package main
 import (
 	"context"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/charmbracelet/x/ansi"
+
 	"github.com/tis24dev/proxsave/internal/cli"
 	"github.com/tis24dev/proxsave/internal/config"
+	"github.com/tis24dev/proxsave/internal/health"
 	"github.com/tis24dev/proxsave/internal/installer"
 	"github.com/tis24dev/proxsave/internal/logging"
+	"github.com/tis24dev/proxsave/internal/orchestrator"
 	"github.com/tis24dev/proxsave/internal/types"
 	"github.com/tis24dev/proxsave/internal/ui/components"
 	"github.com/tis24dev/proxsave/internal/ui/shell"
+	"github.com/tis24dev/proxsave/internal/ui/theme"
+	"github.com/tis24dev/proxsave/internal/uitest"
 )
 
 // installDashboardGates fixes the two gate seams for a test. It also pins the
@@ -109,7 +116,7 @@ func runDashboardWith(t *testing.T, keys string) (*cli.Args, int, bool) {
 	select {
 	case res := <-resCh:
 		return args, res.code, res.handled
-	case <-time.After(60 * time.Second):
+	case <-time.After(uitest.Deadline(60 * time.Second)):
 		t.Fatal("dashboard did not resolve")
 		return nil, 0, false
 	}
@@ -130,30 +137,22 @@ func TestDashboardActions(t *testing.T) {
 				t.Fatal("plain backup must not force debug log level")
 			}
 		}},
-		{"backup debug", "down enter", false, func(t *testing.T, args *cli.Args) {
-			if args.Restore || args.Decrypt || args.ForceNewKey || args.Install {
-				t.Fatalf("debug backup must not set mode flags: %+v", args)
-			}
-			if args.LogLevel != types.LogLevelDebug {
-				t.Fatalf("debug backup must force --log-level debug, got %v", args.LogLevel)
-			}
-		}},
-		{"restore", "down down enter", false, func(t *testing.T, args *cli.Args) {
+		{"restore", "down enter", false, func(t *testing.T, args *cli.Args) {
 			if !args.Restore {
 				t.Fatal("restore flag not set")
 			}
 		}},
-		{"decrypt", "down down down enter", false, func(t *testing.T, args *cli.Args) {
+		{"decrypt", "down down enter", false, func(t *testing.T, args *cli.Args) {
 			if !args.Decrypt {
 				t.Fatal("decrypt flag not set")
 			}
 		}},
-		{"newkey", "down down down down enter", false, func(t *testing.T, args *cli.Args) {
+		{"newkey", "down down down enter", false, func(t *testing.T, args *cli.Args) {
 			if !args.ForceNewKey {
 				t.Fatal("newkey flag not set")
 			}
 		}},
-		{"reconfigure", "down down down down down enter", false, func(t *testing.T, args *cli.Args) {
+		{"reconfigure", "down down down down enter", false, func(t *testing.T, args *cli.Args) {
 			if !args.Install {
 				t.Fatal("install flag not set")
 			}
@@ -181,10 +180,160 @@ func TestDashboardActions(t *testing.T) {
 	}
 }
 
-// TestDashboardDaemonStatusLoopsBack: Daemon status shows a read-only notice in
-// the live session and returns to the menu, setting no flag.
+// TestDaemonStatusStyleBehind: a daemon on an OLDER binary than the one on disk reads the
+// distinct "behind - restart needed" warning, which takes precedence over the heartbeat-derived
+// "running, not reporting" (that keeps rendering for an aligned daemon, so the two stay DISTINCT).
+func TestDaemonStatusStyleBehind(t *testing.T) {
+	behind := health.DaemonState{
+		HaveInfo:     true,
+		AlignChecked: true, // a real comparison ran and mismatched -> genuinely behind
+		Aligned:      false,
+		Active:       true,
+		Diagnosis:    health.Diagnosis{State: health.TxRunningNoReport},
+	}
+	level, outcome, expl := daemonStatusStyle(behind)
+	if level != orchestrator.HealthcheckSetupLevelWarn {
+		t.Fatalf("behind level = %v, want HealthcheckSetupLevelWarn", level)
+	}
+	if outcome != "behind - restart needed" {
+		t.Fatalf("behind outcome = %q, want %q", outcome, "behind - restart needed")
+	}
+	if !strings.Contains(expl, "restart") {
+		t.Fatalf("behind explanation should mention restart, got %q", expl)
+	}
+
+	// The SAME underlying TxRunningNoReport but ALIGNED must still read as the separate
+	// "running, not reporting" state, never conflated with "behind".
+	running := health.DaemonState{
+		HaveInfo:     true,
+		AlignChecked: true,
+		Aligned:      true,
+		Active:       true,
+		Diagnosis:    health.Diagnosis{State: health.TxRunningNoReport},
+	}
+	if _, gotOutcome, _ := daemonStatusStyle(running); gotOutcome != "running, not reporting" {
+		t.Fatalf("aligned running outcome = %q, want %q", gotOutcome, "running, not reporting")
+	}
+}
+
+// TestDaemonStatusStyleLevels: the healthy/beating daemon reads Ok (green ✓); every gap reads
+// Warn (yellow ⚠). This is the level mapping the styled Status line consumes.
+func TestDaemonStatusStyleLevels(t *testing.T) {
+	running := health.DaemonState{Diagnosis: health.Diagnosis{State: health.TxTransmitting}}
+	if level, outcome, _ := daemonStatusStyle(running); level != orchestrator.HealthcheckSetupLevelOk || outcome != "running" {
+		t.Fatalf("running -> (%v, %q), want (Ok, running)", level, outcome)
+	}
+	gaps := []struct {
+		name  string
+		state health.TxState
+	}{
+		{"not installed", health.TxNotInstalled},
+		{"not active", health.TxNotActive},
+		{"running no report", health.TxRunningNoReport},
+		{"stale", health.TxStale},
+		{"no heartbeat", health.TxNoHeartbeat},
+	}
+	for _, g := range gaps {
+		ds := health.DaemonState{Diagnosis: health.Diagnosis{State: g.state}}
+		if level, _, _ := daemonStatusStyle(ds); level != orchestrator.HealthcheckSetupLevelWarn {
+			t.Fatalf("%s level = %v, want HealthcheckSetupLevelWarn", g.name, level)
+		}
+	}
+}
+
+// TestRenderDaemonStatusLevel: the colored-keyword renderer prefixes the success symbol for Ok
+// and the warning symbol for Warn (same palette as the Telegram/Healthchecks screens), and emits
+// no symbol for the Neutral pre-check level.
+func TestRenderDaemonStatusLevel(t *testing.T) {
+	ok := ansi.Strip(renderDaemonStatusLevel(orchestrator.HealthcheckSetupLevelOk, "running"))
+	if !strings.Contains(ok, theme.SymbolSuccess) || !strings.Contains(ok, "running") {
+		t.Fatalf("Ok render = %q, want success symbol + text", ok)
+	}
+	warn := ansi.Strip(renderDaemonStatusLevel(orchestrator.HealthcheckSetupLevelWarn, "behind - restart needed"))
+	if !strings.Contains(warn, theme.SymbolWarning) || !strings.Contains(warn, "behind - restart needed") {
+		t.Fatalf("Warn render = %q, want warning symbol + text", warn)
+	}
+	neutral := ansi.Strip(renderDaemonStatusLevel(orchestrator.HealthcheckSetupLevelNeutral, "not checked"))
+	if strings.ContainsAny(neutral, theme.SymbolSuccess+theme.SymbolWarning+theme.SymbolError) {
+		t.Fatalf("Neutral render = %q, want no symbol", neutral)
+	}
+}
+
+// TestBuildDaemonStatusPrompt: the styled prompt carries the "Status: " header, the colored
+// keyword, the explanation, and the Details block (including the version + BEHIND alignment line
+// for a behind daemon) -- the same content the old Notice body carried, now above the selector.
+func TestBuildDaemonStatusPrompt(t *testing.T) {
+	behind := health.DaemonState{
+		HaveInfo:     true,
+		Version:      "1.2.3",
+		Commit:       "abc1234",
+		AlignChecked: true,
+		Aligned:      false,
+		Active:       true,
+		Diagnosis:    health.Diagnosis{State: health.TxRunningNoReport},
+	}
+	level, keyword, expl := daemonStatusStyle(behind)
+	prompt := ansi.Strip(buildDaemonStatusPrompt(level, keyword, expl, "daemon", "installed", "active", "no", behind))
+	for _, want := range []string{
+		"Status: ",
+		keyword,
+		expl,
+		"Details:",
+		"Scheduler mode: daemon",
+		"Daemon service (proxsave-daemon.service): installed",
+		"Service state (systemctl is-active): active",
+		"Opted out of auto-migration (--daemon-remove): no",
+		"Running version: 1.2.3 (abc1234)",
+		"Binary alignment: BEHIND (restart needed)",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("prompt missing %q\n---\n%s", want, prompt)
+		}
+	}
+}
+
+// TestDaemonStatusStyleBehindWithoutRecord: the record-less-but-stale daemon (HaveInfo=false, but
+// alignment determined by the /proc fallback) must now render "behind - restart needed". This is the
+// core of the fix: before, the behind gate required HaveInfo, so a record-less stale daemon read
+// GREEN. The gate is now AlignChecked && !Aligned && (Active || ProcessAlive), no record required.
+func TestDaemonStatusStyleBehindWithoutRecord(t *testing.T) {
+	behind := health.DaemonState{
+		HaveInfo:     false, // no identity record (predates the feature / bootstrap first-deploy)
+		AlignChecked: true,  // yet the /proc fallback determined alignment
+		Aligned:      false, // ...and found the running binary stale
+		Active:       true,
+		Diagnosis:    health.Diagnosis{State: health.TxRunningNoReport},
+	}
+	level, outcome, expl := daemonStatusStyle(behind)
+	if level != orchestrator.HealthcheckSetupLevelWarn {
+		t.Fatalf("behind level = %v, want HealthcheckSetupLevelWarn", level)
+	}
+	if outcome != "behind - restart needed" {
+		t.Fatalf("record-less behind outcome = %q, want %q", outcome, "behind - restart needed")
+	}
+	if !strings.Contains(expl, "restart") {
+		t.Fatalf("behind explanation should mention restart, got %q", expl)
+	}
+
+	// UNKNOWN alignment (AlignChecked=false) with no record must NOT read as behind -- it falls
+	// through to the transmission-state verdict.
+	unknown := behind
+	unknown.AlignChecked = false
+	if _, gotOutcome, _ := daemonStatusStyle(unknown); gotOutcome == "behind - restart needed" {
+		t.Fatalf("UNKNOWN alignment must not read as behind")
+	}
+}
+
+// TestDashboardDaemonStatusLoopsBack: Daemon status shows the styled selector screen in the
+// live session; Back (esc) returns to the menu, setting no flag.
 func TestDashboardDaemonStatusLoopsBack(t *testing.T) {
 	installDashboardGates(t, true, true) // stubs cron -> Install daemon + Daemon status
+	// Deterministic systemd verdict (avoid a real systemctl call): unit absent.
+	origProbe := daemonPresenceProbe
+	t.Cleanup(func() { daemonPresenceProbe = origProbe })
+	daemonPresenceProbe = func(context.Context) health.DaemonPresence {
+		return health.DaemonPresence{Probed: true, Installed: false}
+	}
 	driver := installDashboardSessionSeam(t)
 	args := &cli.Args{}
 	resCh := make(chan bool, 1)
@@ -194,8 +343,8 @@ func TestDashboardDaemonStatusLoopsBack(t *testing.T) {
 	}()
 	driver.waitScreen("Dashboard")
 	driver.keys("down down down down down down down down down down enter") // Daemon status (10 downs)
-	driver.waitScreen("Daemon status")                                     // the notice
-	driver.keys("enter")                                                   // dismiss
+	driver.waitScreen("Daemon status")                                     // the styled selector screen
+	driver.keys("esc")                                                     // Back to the menu
 	driver.waitScreen("Dashboard")                                         // back at the menu
 	driver.keys("esc")                                                     // exit
 	select {
@@ -203,7 +352,7 @@ func TestDashboardDaemonStatusLoopsBack(t *testing.T) {
 		if !handled {
 			t.Fatal("esc from menu must exit handled")
 		}
-	case <-time.After(60 * time.Second):
+	case <-time.After(uitest.Deadline(60 * time.Second)):
 		t.Fatal("dashboard did not resolve")
 	}
 	if args.DaemonSetup || args.DaemonRemove {
@@ -239,7 +388,7 @@ func TestDashboardDaemonInstallInSession(t *testing.T) {
 		if !handled {
 			t.Fatal("esc from menu must exit handled")
 		}
-	case <-time.After(60 * time.Second):
+	case <-time.After(uitest.Deadline(60 * time.Second)):
 		t.Fatal("dashboard did not resolve")
 	}
 	if applied != 1 {
@@ -276,7 +425,7 @@ func TestDashboardDaemonRemoveWhenActive(t *testing.T) {
 		resCh <- handled
 	}()
 	driver.waitScreen("Dashboard")
-	// Active state: Daemon group = "Disable daemon" (row 10, 9 downs) + "Daemon status".
+	// Active state: Daemon group = "Disable daemon" (row 10, 9 downs) + "Restart" + "Daemon status".
 	driver.keys("down down down down down down down down down enter") // Disable daemon
 	driver.waitScreen("Daemon disabled")                              // success notice
 	driver.keys("enter")                                              // dismiss
@@ -287,7 +436,7 @@ func TestDashboardDaemonRemoveWhenActive(t *testing.T) {
 		if !handled {
 			t.Fatal("esc must exit handled")
 		}
-	case <-time.After(60 * time.Second):
+	case <-time.After(uitest.Deadline(60 * time.Second)):
 		t.Fatal("dashboard did not resolve")
 	}
 	if reverted != 1 {
@@ -356,7 +505,7 @@ func TestDashboardDiagnosticsLoopBackToMenu(t *testing.T) {
 		if !res.handled || res.code != types.ExitSuccess.Int() {
 			t.Fatalf("esc from menu must exit cleanly, got %+v", res)
 		}
-	case <-time.After(60 * time.Second):
+	case <-time.After(uitest.Deadline(60 * time.Second)):
 		t.Fatal("dashboard did not resolve")
 	}
 	if tele != 1 || hc != 1 || audit != 1 {
@@ -395,7 +544,7 @@ func TestDashboardDiagnosticNotConfiguredShowsNotice(t *testing.T) {
 		if !handled {
 			t.Fatal("esc from menu must exit handled")
 		}
-	case <-time.After(60 * time.Second):
+	case <-time.After(uitest.Deadline(60 * time.Second)):
 		t.Fatal("dashboard did not resolve")
 	}
 	if tele != 1 {
@@ -426,7 +575,7 @@ func TestDashboardUIDeathIsExitNotBackup(t *testing.T) {
 		if !res.handled || res.code != types.ExitSuccess.Int() {
 			t.Fatalf("UI death must exit cleanly, got %+v", res)
 		}
-	case <-time.After(60 * time.Second):
+	case <-time.After(uitest.Deadline(60 * time.Second)):
 		t.Fatal("dashboard did not resolve after UI death")
 	}
 }
@@ -477,11 +626,11 @@ func TestDashboardFlowActionHandsSessionOver(t *testing.T) {
 		resCh <- outcome{code, handled}
 	}()
 	driver.waitScreen("Dashboard")
-	driver.keys("down down enter") // Restore (row 3, 2 downs)
+	driver.keys("down enter") // Restore (row 2, 1 down)
 	var res outcome
 	select {
 	case res = <-resCh:
-	case <-time.After(60 * time.Second):
+	case <-time.After(uitest.Deadline(60 * time.Second)):
 		t.Fatal("dashboard did not resolve")
 	}
 	if res.handled || !args.Restore {
@@ -517,7 +666,7 @@ func TestDashboardFlowActionHandsSessionOver(t *testing.T) {
 		if r.err != nil {
 			t.Fatalf("Ask on the adopted session must work, got %v", r.err)
 		}
-	case <-time.After(60 * time.Second):
+	case <-time.After(uitest.Deadline(60 * time.Second)):
 		t.Fatal("Ask on the adopted session did not resolve")
 	}
 	_ = s.Close()

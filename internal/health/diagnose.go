@@ -99,17 +99,18 @@ func Diagnose(st Status, heartbeatInterval time.Duration, now time.Time) Diagnos
 	staleAfter := heartbeatStaleAfter(heartbeatInterval)
 
 	d := Diagnosis{}
-	outcome := newerPing(st.RunFinished, st.RunHang)
+	outcome := newerPing(st.Record(KindRunFinished), st.Record(KindRunHang))
 	if outcome != nil {
 		d.HasOutcome = true
 		d.OutAge = now.Sub(time.Unix(outcome.TS, 0))
 	}
 
-	if st.Heartbeat == nil {
+	hb := st.Record(KindHeartbeat)
+	if hb == nil {
 		d.State = TxNoHeartbeat
 		return d
 	}
-	d.HbAge = now.Sub(time.Unix(st.Heartbeat.TS, 0))
+	d.HbAge = now.Sub(time.Unix(hb.TS, 0))
 	if d.HbAge > staleAfter {
 		d.State = TxStale
 		return d
@@ -117,13 +118,13 @@ func Diagnose(st Status, heartbeatInterval time.Duration, now time.Time) Diagnos
 
 	// Fresh heartbeat: the daemon process is alive.
 	d.DaemonUp = true
-	if !st.Heartbeat.OK {
-		if st.Heartbeat.Reason == ReasonNoURL {
+	if !hb.OK {
+		if hb.Reason == ReasonNoURL {
 			d.State = TxNotProvisioned
 			return d
 		}
 		d.State = TxUnreachable
-		d.Err = st.Heartbeat.Err
+		d.Err = hb.Err
 		return d
 	}
 	if outcome != nil && !outcome.OK {

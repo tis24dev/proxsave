@@ -41,10 +41,10 @@ func hcTransmittingChannel(cfg *config.Config, buf *bytes.Buffer) *HealthchecksC
 	ch.loadSecret = func(string) (string, error) { return "sekret", nil }
 	ch.now = func() time.Time { return hcNow }
 	ch.loadStatus = func(string) (health.Status, error) {
-		return health.Status{
-			Heartbeat:   &health.PingRecord{TS: hcNow.Add(-30 * time.Second).Unix(), OK: true},
-			RunFinished: &health.PingRecord{TS: hcNow.Add(-2 * time.Minute).Unix(), OK: true},
-		}, nil
+		return health.Status{Records: map[string]*health.PingRecord{
+			health.KindHeartbeat:   {TS: hcNow.Add(-30 * time.Second).Unix(), OK: true},
+			health.KindRunFinished: {TS: hcNow.Add(-2 * time.Minute).Unix(), OK: true},
+		}}, nil
 	}
 	return ch
 }
@@ -135,7 +135,7 @@ func TestHealthchecksSectionTransmittingNoOutcome(t *testing.T) {
 	ch.now = func() time.Time { return hcNow }
 	ch.loadStatus = func(string) (health.Status, error) {
 		// heartbeat only, no run outcome recorded yet
-		return health.Status{Heartbeat: &health.PingRecord{TS: hcNow.Add(-1 * time.Minute).Unix(), OK: true}}, nil
+		return health.Status{Records: map[string]*health.PingRecord{health.KindHeartbeat: {TS: hcNow.Add(-1 * time.Minute).Unix(), OK: true}}}, nil
 	}
 	// no captured link; mint is reachable but returns an error -> quiet info line
 	ch.mintLink = func(context.Context, string, string, string) (string, error) { return "", errors.New("bot down") }
@@ -158,7 +158,7 @@ func TestHealthchecksSectionHeartbeatStale(t *testing.T) {
 	ch.loadSecret = func(string) (string, error) { return "sekret", nil }
 	ch.now = func() time.Time { return hcNow }
 	ch.loadStatus = func(string) (health.Status, error) {
-		return health.Status{Heartbeat: &health.PingRecord{TS: hcNow.Add(-1 * time.Hour).Unix(), OK: true}}, nil
+		return health.Status{Records: map[string]*health.PingRecord{health.KindHeartbeat: {TS: hcNow.Add(-1 * time.Hour).Unix(), OK: true}}}, nil
 	}
 	// captured link so no mint is attempted
 	ch.mintLink = func(context.Context, string, string, string) (string, error) {
@@ -186,11 +186,11 @@ func TestHealthchecksSectionTransmitFailed(t *testing.T) {
 	ch.loadSecret = func(string) (string, error) { return "sekret", nil }
 	ch.now = func() time.Time { return hcNow }
 	ch.loadStatus = func(string) (health.Status, error) {
-		return health.Status{
-			Heartbeat:   &health.PingRecord{TS: hcNow.Add(-30 * time.Second).Unix(), OK: true},
-			RunHang:     &health.PingRecord{TS: hcNow.Add(-10 * time.Minute).Unix(), OK: true},                                                // older, ok
-			RunFinished: &health.PingRecord{TS: hcNow.Add(-2 * time.Minute).Unix(), OK: false, Err: "healthcheck finish: connection refused"}, // newer, failed
-		}, nil
+		return health.Status{Records: map[string]*health.PingRecord{
+			health.KindHeartbeat:   {TS: hcNow.Add(-30 * time.Second).Unix(), OK: true},
+			health.KindRunHang:     {TS: hcNow.Add(-10 * time.Minute).Unix(), OK: true},                                                // older, ok
+			health.KindRunFinished: {TS: hcNow.Add(-2 * time.Minute).Unix(), OK: false, Err: "healthcheck finish: connection refused"}, // newer, failed
+		}}, nil
 	}
 	ch.mintLink = func(context.Context, string, string, string) (string, error) {
 		t.Fatal("failed branch with a captured link must not mint")
@@ -225,11 +225,11 @@ func TestHealthchecksSectionUnreachable(t *testing.T) {
 	ch.loadSecret = func(string) (string, error) { return "sekret", nil }
 	ch.now = func() time.Time { return hcNow }
 	ch.loadStatus = func(string) (health.Status, error) {
-		return health.Status{
+		return health.Status{Records: map[string]*health.PingRecord{
 			// fresh (-2m, well within the default 10m stale window) but FAILED (real error)
-			Heartbeat:   &health.PingRecord{TS: hcNow.Add(-2 * time.Minute).Unix(), OK: false, Err: "healthcheck alive: connection refused"},
-			RunFinished: &health.PingRecord{TS: hcNow.Add(-1 * 24 * time.Hour).Unix(), OK: true}, // old ok outcome must not rescue
-		}, nil
+			health.KindHeartbeat:   {TS: hcNow.Add(-2 * time.Minute).Unix(), OK: false, Err: "healthcheck alive: connection refused"},
+			health.KindRunFinished: {TS: hcNow.Add(-1 * 24 * time.Hour).Unix(), OK: true}, // old ok outcome must not rescue
+		}}, nil
 	}
 	ch.mintLink = func(context.Context, string, string, string) (string, error) {
 		t.Fatal("a captured link must not mint")
@@ -280,7 +280,7 @@ func TestHealthchecksSectionStaleThresholdPinnedToInterval(t *testing.T) {
 			ch.loadSecret = func(string) (string, error) { return "sekret", nil }
 			ch.now = func() time.Time { return hcNow }
 			ch.loadStatus = func(string) (health.Status, error) {
-				return health.Status{Heartbeat: &health.PingRecord{TS: hcNow.Add(-tc.hbAge).Unix(), OK: true}}, nil
+				return health.Status{Records: map[string]*health.PingRecord{health.KindHeartbeat: {TS: hcNow.Add(-tc.hbAge).Unix(), OK: true}}}, nil
 			}
 			ch.mintLink = func(context.Context, string, string, string) (string, error) {
 				t.Fatal("a captured link must not mint")
@@ -307,11 +307,11 @@ func TestHealthchecksSectionNewerOutcomeWins(t *testing.T) {
 	ch.loadSecret = func(string) (string, error) { return "sekret", nil }
 	ch.now = func() time.Time { return hcNow }
 	ch.loadStatus = func(string) (health.Status, error) {
-		return health.Status{
-			Heartbeat:   &health.PingRecord{TS: hcNow.Add(-30 * time.Second).Unix(), OK: true},
-			RunFinished: &health.PingRecord{TS: hcNow.Add(-20 * time.Minute).Unix(), OK: false, Err: "old failure"}, // older, failed
-			RunHang:     &health.PingRecord{TS: hcNow.Add(-2 * time.Minute).Unix(), OK: true},                       // newer, ok
-		}, nil
+		return health.Status{Records: map[string]*health.PingRecord{
+			health.KindHeartbeat:   {TS: hcNow.Add(-30 * time.Second).Unix(), OK: true},
+			health.KindRunFinished: {TS: hcNow.Add(-20 * time.Minute).Unix(), OK: false, Err: "old failure"}, // older, failed
+			health.KindRunHang:     {TS: hcNow.Add(-2 * time.Minute).Unix(), OK: true},                       // newer, ok
+		}}, nil
 	}
 	ch.mintLink = func(context.Context, string, string, string) (string, error) {
 		t.Fatal("a captured link must not mint")
@@ -374,9 +374,9 @@ func TestHealthchecksSectionNotProvisioned(t *testing.T) {
 	ch.loadSecret = func(string) (string, error) { return "sekret", nil }
 	ch.now = func() time.Time { return hcNow }
 	ch.loadStatus = func(string) (health.Status, error) {
-		return health.Status{
-			Heartbeat: &health.PingRecord{TS: hcNow.Add(-30 * time.Second).Unix(), OK: false, Reason: health.ReasonNoURL},
-		}, nil
+		return health.Status{Records: map[string]*health.PingRecord{
+			health.KindHeartbeat: {TS: hcNow.Add(-30 * time.Second).Unix(), OK: false, Reason: health.ReasonNoURL},
+		}}, nil
 	}
 	ch.mintLink = func(context.Context, string, string, string) (string, error) {
 		t.Fatal("a captured link must not mint")

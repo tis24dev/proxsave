@@ -7,24 +7,30 @@ import (
 	"os"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/tis24dev/proxsave/internal/config"
 	"github.com/tis24dev/proxsave/internal/cron"
+	"github.com/tis24dev/proxsave/internal/health"
 	"github.com/tis24dev/proxsave/internal/installer"
 	"github.com/tis24dev/proxsave/internal/logging"
+	"github.com/tis24dev/proxsave/internal/orchestrator"
 	"github.com/tis24dev/proxsave/internal/safeexec"
 	"github.com/tis24dev/proxsave/internal/types"
 	"github.com/tis24dev/proxsave/pkg/utils"
 )
 
-// dispatchDaemonAdminMode handles the one-shot --daemon-setup / --daemon-remove
-// admin commands (switch the scheduler engine and the systemd unit / cron entry).
+// dispatchDaemonAdminMode handles the one-shot --daemon-setup / --daemon-remove admin
+// commands (switch the scheduler engine and the systemd unit / cron entry) and the
+// read-only --daemon-status report.
 func dispatchDaemonAdminMode(rt *appRuntime) modeResult {
 	switch {
 	case rt.args.DaemonSetup:
 		return modeResult{exitCode: runDaemonSetup(rt), handled: true}
 	case rt.args.DaemonRemove:
 		return modeResult{exitCode: runDaemonRemove(rt), handled: true}
+	case rt.args.DaemonStatus:
+		return modeResult{exitCode: runDaemonStatus(rt), handled: true}
 	}
 	return modeResult{exitCode: types.ExitSuccess.Int()}
 }
@@ -47,6 +53,73 @@ func runDaemonRemove(rt *appRuntime) int {
 	}
 	logging.Info("Daemon removed: reverted to the cron scheduler. Future upgrades will NOT reinstall it (DAEMON_OPT_OUT=true).")
 	return types.ExitSuccess.Int()
+}
+
+// runDaemonStatus prints the resident daemon's real state - the SAME combined verdict the dashboard
+// "Daemon status" screen shows (systemd presence refined with the heartbeat + the on-disk binary
+// alignment) - non-interactively, then exits. Exit 0 when the daemon is running and aligned,
+// non-zero otherwise, so scripts can gate on it.
+func runDaemonStatus(rt *appRuntime) int {
+	ctx := rt.ctx
+	mode := "unknown"
+	optOut := "unknown"
+	baseDir := ""
+	var interval time.Duration
+	if rt.cfg != nil {
+		mode = rt.cfg.SchedulerMode
+		optOut = "no"
+		if rt.cfg.DaemonOptOut {
+			optOut = "yes"
+		}
+		interval = rt.cfg.HealthcheckHeartbeatInterval
+		baseDir = strings.TrimSpace(rt.cfg.BaseDir)
+	}
+	if baseDir == "" {
+		baseDir, _ = detectedBaseDirOrFallback()
+	}
+	unit := "not installed"
+	if daemonUnitInstalled() {
+		unit = "installed"
+	}
+	active := daemonUnitActiveState(ctx)
+	if active == "" {
+		active = "unknown"
+	}
+	ds := health.CheckDaemonState(health.DaemonStateInput{
+		BaseDir:           baseDir,
+		SchedulerMode:     mode,
+		HeartbeatInterval: interval,
+		Now:               time.Now(),
+		Presence:          daemonPresenceProbe(ctx),
+		ProcAlive:         probeProxsaveDaemonAlive,
+		ProcStale:         procBinaryStaleProbe,
+	})
+	level, keyword, _ := daemonStatusStyle(ds)
+
+	logging.Info("Daemon status: %s", keyword)
+	logging.Info("Scheduler mode: %s", mode)
+	logging.Info("Daemon service (%s): %s", daemonUnitName, unit)
+	logging.Info("Service state (systemctl is-active): %s", active)
+	logging.Info("Opted out of auto-migration (--daemon-remove): %s", optOut)
+	if ds.HaveInfo {
+		logging.Info("Running version: %s (%s)", ds.Version, ds.Commit)
+	}
+	if ds.HaveInfo || ds.AlignChecked {
+		align := "unknown"
+		switch {
+		case !ds.AlignChecked:
+			align = "unknown"
+		case ds.Aligned:
+			align = "aligned"
+		default:
+			align = "BEHIND (restart needed)"
+		}
+		logging.Info("Binary alignment: %s", align)
+	}
+	if level == orchestrator.HealthcheckSetupLevelOk {
+		return types.ExitSuccess.Int()
+	}
+	return types.ExitGenericError.Int()
 }
 
 // applyDaemonMode switches an install to the resident daemon: install the systemd
@@ -81,7 +154,64 @@ func applyDaemonMode(ctx context.Context, cfg *config.Config, configPath, execTo
 	if err := runSystemctl(ctx, "try-restart", daemonUnitName); err != nil {
 		logging.Debug("daemon: try-restart to reload config failed: %v", err)
 	}
+	// Confirm the (re)started daemon actually came up ALIGNED with the binary now on
+	// disk before returning success. Best-effort: an unconfirmed alignment is only a
+	// warning (never fails --daemon-setup / the migration).
+	if cfg != nil && strings.TrimSpace(cfg.BaseDir) != "" {
+		verifyDaemonAlignedBestEffort(ctx, cfg.BaseDir, cfg.HealthcheckHeartbeatInterval)
+	}
 	return nil
+}
+
+// verifyDaemonAlignedBestEffort waits (poll-only, no restart) for the just-(re)started daemon to
+// become process-alive with an assessable alignment, then REPORTS its real state - the SAME verdict
+// --daemon-status gives (aligned / behind / not running) - never a bare "timeout". It NEVER fails
+// the caller (install / --daemon-setup): a behind or unconfirmed daemon is a warning, not an error.
+func verifyDaemonAlignedBestEffort(ctx context.Context, baseDir string, interval time.Duration) RestartVerifyResult {
+	logging.Info("Verifying daemon alignment...")
+	rv := verifyDaemonAligned(ctx, baseDir, interval)
+	if level, keyword := installVerifyVerdict(rv); level == orchestrator.HealthcheckSetupLevelOk {
+		logging.Info("Daemon verified: %s.", keyword)
+	} else {
+		logging.Warning("Daemon %s.", keyword)
+	}
+	return rv
+}
+
+// installVerifyVerdict maps a poll-only verify result (verifyDaemonAligned) to the
+// aligned / behind / not-running verdict as a (level, keyword) pair - the SAME verdict
+// --daemon-status reports. Shared by the log line (verifyDaemonAlignedBestEffort) and the
+// graphical install outcome (buildInstallOutcomePrompt) so they never diverge. It must NOT
+// go through restartVerifyStatus, whose success arm needs Restarted/FreshInfo that the
+// poll-only verify never sets - that mis-mapping made the install always say "not confirmed".
+func installVerifyVerdict(rv RestartVerifyResult) (orchestrator.HealthcheckSetupLevel, string) {
+	switch {
+	case rv.ProcessAlive && rv.Aligned:
+		keyword := "running and aligned"
+		if v := strings.TrimSpace(rv.State.Version); v != "" {
+			keyword += " (v" + v + ")"
+		}
+		return orchestrator.HealthcheckSetupLevelOk, keyword
+	case rv.ProcessAlive && rv.State.AlignChecked:
+		return orchestrator.HealthcheckSetupLevelWarn, "running but not aligned (behind)"
+	default:
+		return orchestrator.HealthcheckSetupLevelWarn, "not running"
+	}
+}
+
+// installVerifyContext resolves the base dir + heartbeat interval for a post-install
+// daemon verify from the just-written config (best-effort; ok=false when unreadable).
+func installVerifyContext(configPath string) (baseDir string, interval time.Duration, ok bool) {
+	detected, _ := detectedBaseDirOrFallback()
+	cfg, err := config.LoadConfigWithBaseDir(configPath, detected)
+	if err != nil || cfg == nil {
+		return "", 0, false
+	}
+	baseDir = detected
+	if strings.TrimSpace(cfg.BaseDir) != "" {
+		baseDir = cfg.BaseDir
+	}
+	return baseDir, cfg.HealthcheckHeartbeatInterval, true
 }
 
 // applyCronMode reverts an install to cron: remove the systemd unit, re-add the
@@ -157,7 +287,13 @@ func setBackupEnvKeys(configPath string, kv map[string]string) error {
 // it reads the mode from the just-written config. daemon -> install the unit and
 // drop the cron line; cron -> tear down any leftover daemon unit so a re-install
 // of a previously-daemon host can never end up double-scheduled (cron + unit).
-func reconcileSchedulerAfterInstall(ctx context.Context, wizardMode, configPath string, execInfo ExecInfo, bootstrap *logging.BootstrapLogger) {
+//
+// It returns the daemon restart-verify result and verified=true ONLY in the
+// daemon branch that actually ran verifyDaemonAlignedBestEffort; every other
+// path (install failed, verify context unreadable, or cron mode) returns a
+// zero result with verified=false. The existing statement call sites discard
+// both returns; only the TUI finalization captures them to render the outcome.
+func reconcileSchedulerAfterInstall(ctx context.Context, wizardMode, configPath string, execInfo ExecInfo, bootstrap *logging.BootstrapLogger) (rv RestartVerifyResult, verified bool) {
 	mode := strings.ToLower(strings.TrimSpace(wizardMode))
 	if mode != "cron" && mode != "daemon" {
 		mode = readConfiguredSchedulerMode(configPath)
@@ -166,13 +302,24 @@ func reconcileSchedulerAfterInstall(ctx context.Context, wizardMode, configPath 
 	if mode == "daemon" {
 		if err := installDaemonService(ctx, daemonExecPath, configPath, bootstrap); err != nil {
 			logging.Warning("Failed to enable the daemon service (staying on cron): %v", err)
-			return
+			return RestartVerifyResult{}, false
 		}
 		if err := removeCanonicalCronEntry(ctx, cronCorrectPaths(execInfo.ExecPath), bootstrap); err != nil {
 			logging.Warning("daemon: failed to remove the cron entry (the per-run lock mitigates double execution): %v", err)
 		}
+		// `enable --now` does NOT restart an ALREADY-running daemon, so a reinstall/reconfigure
+		// (or a rebuilt binary) would leave it on the OLD inode. Restart so the running process is
+		// the freshly installed binary before we report alignment.
+		if err := restartDaemonService(ctx); err != nil {
+			logging.Debug("daemon: restart to load the installed binary failed: %v", err)
+		}
 		logging.Info("Daemon mode enabled: %s is active and the cron entry was removed.", daemonUnitName)
-		return
+		// Report the daemon's real state (aligned / behind / not running), best-effort
+		// (a verify miss is only logged, never fails the install).
+		if baseDir, interval, ok := installVerifyContext(configPath); ok {
+			return verifyDaemonAlignedBestEffort(ctx, baseDir, interval), true
+		}
+		return RestartVerifyResult{}, false
 	}
 
 	// cron mode: a previously-installed daemon unit would double-schedule with the
@@ -186,6 +333,7 @@ func reconcileSchedulerAfterInstall(ctx context.Context, wizardMode, configPath 
 			logging.Info("Removed the previous daemon service; this host now uses the cron scheduler.")
 		}
 	}
+	return RestartVerifyResult{}, false
 }
 
 // readConfiguredSchedulerMode returns "daemon" or "cron" from an existing

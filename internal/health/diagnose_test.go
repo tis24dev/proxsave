@@ -24,47 +24,47 @@ func TestDiagnose(t *testing.T) {
 		},
 		{
 			name:      "stale heartbeat -> down/stuck",
-			st:        Status{Heartbeat: &PingRecord{TS: ts(time.Hour), OK: true}},
+			st:        Status{Records: map[string]*PingRecord{KindHeartbeat: {TS: ts(time.Hour), OK: true}}},
 			wantState: TxStale, wantUp: false,
 		},
 		{
 			name:      "fresh no_url -> not provisioned (daemon up)",
-			st:        Status{Heartbeat: &PingRecord{TS: ts(30 * time.Second), OK: false, Reason: ReasonNoURL}},
+			st:        Status{Records: map[string]*PingRecord{KindHeartbeat: {TS: ts(30 * time.Second), OK: false, Reason: ReasonNoURL}}},
 			wantState: TxNotProvisioned, wantUp: true,
 		},
 		{
 			name:      "fresh real error -> unreachable (daemon up)",
-			st:        Status{Heartbeat: &PingRecord{TS: ts(30 * time.Second), OK: false, Err: "healthcheck alive: connection refused"}},
+			st:        Status{Records: map[string]*PingRecord{KindHeartbeat: {TS: ts(30 * time.Second), OK: false, Err: "healthcheck alive: connection refused"}}},
 			wantState: TxUnreachable, wantUp: true,
 		},
 		{
 			name: "fresh ok + failed outcome -> transmit-failed",
-			st: Status{
-				Heartbeat:   &PingRecord{TS: ts(30 * time.Second), OK: true},
-				RunFinished: &PingRecord{TS: ts(2 * time.Minute), OK: false, Err: "healthcheck finish: HTTP 500"},
-			},
+			st: Status{Records: map[string]*PingRecord{
+				KindHeartbeat:   {TS: ts(30 * time.Second), OK: true},
+				KindRunFinished: {TS: ts(2 * time.Minute), OK: false, Err: "healthcheck finish: HTTP 500"},
+			}},
 			wantState: TxTransmitFailed, wantUp: true, wantOutcom: true,
 		},
 		{
 			name: "fresh ok + ok outcome -> transmitting",
-			st: Status{
-				Heartbeat:   &PingRecord{TS: ts(30 * time.Second), OK: true},
-				RunFinished: &PingRecord{TS: ts(2 * time.Minute), OK: true},
-			},
+			st: Status{Records: map[string]*PingRecord{
+				KindHeartbeat:   {TS: ts(30 * time.Second), OK: true},
+				KindRunFinished: {TS: ts(2 * time.Minute), OK: true},
+			}},
 			wantState: TxTransmitting, wantUp: true, wantOutcom: true,
 		},
 		{
 			name:      "fresh ok + no outcome -> transmitting",
-			st:        Status{Heartbeat: &PingRecord{TS: ts(30 * time.Second), OK: true}},
+			st:        Status{Records: map[string]*PingRecord{KindHeartbeat: {TS: ts(30 * time.Second), OK: true}}},
 			wantState: TxTransmitting, wantUp: true, wantOutcom: false,
 		},
 		{
 			name: "newer ok outcome supersedes older failure -> transmitting",
-			st: Status{
-				Heartbeat:   &PingRecord{TS: ts(30 * time.Second), OK: true},
-				RunFinished: &PingRecord{TS: ts(20 * time.Minute), OK: false, Err: "old"},
-				RunHang:     &PingRecord{TS: ts(2 * time.Minute), OK: true},
-			},
+			st: Status{Records: map[string]*PingRecord{
+				KindHeartbeat:   {TS: ts(30 * time.Second), OK: true},
+				KindRunFinished: {TS: ts(20 * time.Minute), OK: false, Err: "old"},
+				KindRunHang:     {TS: ts(2 * time.Minute), OK: true},
+			}},
 			wantState: TxTransmitting, wantUp: true, wantOutcom: true,
 		},
 	}
@@ -87,11 +87,11 @@ func TestDiagnose(t *testing.T) {
 func TestDiagnoseStaleThreshold(t *testing.T) {
 	now := time.Unix(1_700_000_000, 0)
 	// explicit 1m interval -> stale after 2m
-	fresh := Status{Heartbeat: &PingRecord{TS: now.Add(-90 * time.Second).Unix(), OK: true}}
+	fresh := Status{Records: map[string]*PingRecord{KindHeartbeat: {TS: now.Add(-90 * time.Second).Unix(), OK: true}}}
 	if d := Diagnose(fresh, time.Minute, now); !d.DaemonUp || d.State != TxTransmitting {
 		t.Fatalf("90s < 2x1m should be up+transmitting, got up=%t state=%q", d.DaemonUp, d.State)
 	}
-	stale := Status{Heartbeat: &PingRecord{TS: now.Add(-150 * time.Second).Unix(), OK: true}}
+	stale := Status{Records: map[string]*PingRecord{KindHeartbeat: {TS: now.Add(-150 * time.Second).Unix(), OK: true}}}
 	if d := Diagnose(stale, time.Minute, now); d.DaemonUp || d.State != TxStale {
 		t.Fatalf("150s > 2x1m should be down+stale, got up=%t state=%q", d.DaemonUp, d.State)
 	}

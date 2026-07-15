@@ -19,7 +19,6 @@ type Action int
 const (
 	ActionExit Action = iota
 	ActionBackup
-	ActionBackupDebug // same backup, forced --log-level debug
 	ActionRestore
 	ActionDecrypt
 	ActionNewKey
@@ -29,6 +28,7 @@ const (
 	ActionCheckTelegram
 	ActionCheckHealthcheck
 	ActionPostInstallCheck
+	ActionCheckUpgrade // check for a newer release and (on confirm) install it in-session
 	// Third group (daemon scheduler): setup/remove run the same admin path as the
 	// --daemon-setup / --daemon-remove flags; status runs a read-only screen.
 	ActionDaemonSetup   // install OR re-enable the resident daemon (--daemon-setup)
@@ -55,26 +55,28 @@ var errMenuExit = errors.New("dashboard: exit")
 // surprise backup out of a failed screen.
 func Run(ctx context.Context, session *shell.Session, daemon DaemonState) (Action, error) {
 	items := []components.SelectorItem[Action]{
-		// First group (backup runs): the primary action + a debug variant.
+		// Backup: the primary action.
 		{Label: "─── Backup ───", Separator: true},
 		{Label: "Run backup now", Description: "start a backup with the current configuration", Value: ActionBackup},
-		{Label: "Run backup now (debug)", Description: "start a backup with verbose debug logging (--log-level debug)", Value: ActionBackupDebug},
-		// Second group (maintenance): restore/decrypt and key/config management.
-		{Label: "─── Maintenance ───", Separator: true},
+		// Tools: operate on existing backups.
+		{Label: "─── Tools ───", Separator: true},
 		{Label: "Restore", Description: "restore a backup onto this system", Value: ActionRestore},
 		{Label: "Decrypt", Description: "convert an encrypted backup into a plaintext bundle", Value: ActionDecrypt},
+		// Maintenance: key/config management and updates.
+		{Label: "─── Maintenance ───", Separator: true},
 		{Label: "New encryption key", Description: "reset the AGE recipients and run the key setup", Value: ActionNewKey},
 		{Label: "Reconfigure", Description: "re-run the interactive installation/setup", Value: ActionReconfigure},
-		// Third group (diagnostics): re-open existing check screens.
-		{Label: "─── Diagnostics ───", Separator: true},
-		{Label: "Check Telegram", Description: "verify the Telegram relay pairing", Value: ActionCheckTelegram},
-		{Label: "Check healthchecks", Description: "verify backup monitoring and show the portal link", Value: ActionCheckHealthcheck},
-		{Label: "Post-install check", Description: "re-run the post-install audit", Value: ActionPostInstallCheck},
+		{Label: "Updates", Description: "check for a newer release and install it from here", Value: ActionCheckUpgrade},
+		// Diagnostic Checks: re-open existing check screens (the group already says "Check").
+		{Label: "─── Diagnostic Checks ───", Separator: true},
+		{Label: "Telegram", Description: "verify the Telegram relay pairing", Value: ActionCheckTelegram},
+		{Label: "Healthchecks", Description: "verify backup monitoring and show the portal link", Value: ActionCheckHealthcheck},
+		{Label: "Post-install", Description: "re-run the post-install audit", Value: ActionPostInstallCheck},
 	}
 
-	// Third group (daemon scheduler): context-aware - only the command that fits
-	// the current state, plus the read-only status. Setup/remove run the same admin
-	// path as the flags; status runs a screen in-session.
+	// Daemon scheduler group: context-aware - only the command that fits the current
+	// state, plus the read-only status. Setup/remove run the same admin path as the
+	// flags; status runs a screen in-session.
 	items = append(items, components.SelectorItem[Action]{Label: "─── Daemon ───", Separator: true})
 	switch daemon {
 	case DaemonStateActive:
@@ -87,6 +89,8 @@ func Run(ctx context.Context, session *shell.Session, daemon DaemonState) (Actio
 	}
 	items = append(items, components.SelectorItem[Action]{Label: "Daemon status", Description: "show the daemon service and scheduler state", Value: ActionDaemonStatus})
 
+	// Detach the standalone Exit from the Daemon group above with its own divider.
+	items = append(items, components.SelectorItem[Action]{Label: "──────────────", Separator: true})
 	items = append(items, components.SelectorItem[Action]{Label: "Exit", Description: "leave without doing anything", Value: ActionExit})
 	action, err := shell.Ask(ctx, session, components.NewSelector(
 		"Dashboard", items,

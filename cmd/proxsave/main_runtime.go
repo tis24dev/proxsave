@@ -3,8 +3,8 @@ package main
 
 import (
 	"context"
-	"io"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -22,7 +22,7 @@ import (
 
 func printVersionHeader(bootstrap *logging.BootstrapLogger, toolVersion string) {
 	bootstrap.Println("===========================================")
-	bootstrap.Println("  ProxSave - Go Version")
+	bootstrap.Println("  ProxSave")
 	bootstrap.Printf("  Version: %s", toolVersion)
 	if sig := buildSignature(); sig != "" {
 		bootstrap.Printf("  Build Signature: %s", sig)

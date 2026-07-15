@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/tis24dev/proxsave/internal/ui/shell"
+	"github.com/tis24dev/proxsave/internal/uitest"
 )
 
 type driver struct {
@@ -31,7 +32,7 @@ func newDriver(t *testing.T) *driver {
 
 func (d *driver) waitScreen(title string) {
 	d.t.Helper()
-	deadline := time.After(60 * time.Second)
+	deadline := time.After(uitest.Deadline(60 * time.Second))
 	for {
 		select {
 		case got := <-d.pushes:
@@ -75,7 +76,7 @@ func run(d *driver, ctx context.Context) <-chan struct {
 // N-th SELECTABLE row (the divider is invisible to the cursor).
 func TestMenuRowOrder(t *testing.T) {
 	expected := []Action{
-		ActionBackup, ActionBackupDebug, ActionRestore, ActionDecrypt, ActionNewKey, ActionReconfigure,
+		ActionBackup, ActionRestore, ActionDecrypt, ActionNewKey, ActionReconfigure, ActionCheckUpgrade,
 		ActionCheckTelegram, ActionCheckHealthcheck, ActionPostInstallCheck,
 		ActionDaemonSetup, ActionDaemonStatus, ActionExit,
 	}

@@ -361,6 +361,17 @@ func (s *Selector[T]) View(width, height int) string {
 		c++
 		ord[i] = c
 	}
+	// Widest selectable label, so descriptions align in one column instead of
+	// trailing each command name at a different offset.
+	maxLabel := 0
+	for i := range s.items {
+		if s.items[i].Separator {
+			continue
+		}
+		if w := ansi.StringWidth(s.items[i].Label); w > maxLabel {
+			maxLabel = w
+		}
+	}
 	for row := s.offset; row < len(vis) && row < s.offset+rows; row++ {
 		it := s.items[vis[row]]
 		if it.Separator {
@@ -375,7 +386,9 @@ func (s *Selector[T]) View(width, height int) string {
 		}
 		line := prefix + it.Label
 		if it.Description != "" {
-			line += "  " + it.Description
+			// Pad the label to the widest one so every description starts at the
+			// same column (aligned), instead of trailing each name.
+			line += strings.Repeat(" ", maxLabel-ansi.StringWidth(it.Label)) + "  " + it.Description
 		}
 		line = ansi.Truncate(line, width-2, "…")
 		if row == s.cursor {

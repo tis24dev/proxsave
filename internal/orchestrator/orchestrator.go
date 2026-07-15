@@ -164,6 +164,12 @@ type BackupStats struct {
 	ScriptVersion  string
 	TelegramStatus string
 	EmailStatus    string
+	// NotifyResults maps each dispatched notification channel's display name
+	// ("Email"/"Telegram"/"Gotify"/"Webhook") to its send severity
+	// ("ok"/"warning"/"error"/"disabled"). It is the per-channel outcome the daemon
+	// reads back (via the notify-results handoff file) to ping one healthchecks check
+	// per enabled channel (Fase 2B / R4). Nil until the first notifier records.
+	NotifyResults map[string]string
 	// HealthcheckLink is the RAW portal magic-link captured from this run's
 	// /api/notify response (dual-write in S3; empty until the server mints one).
 	// It is stored RAW and MUST be passed through serverbot.SanitizeLoginURL before
@@ -530,7 +536,7 @@ func (o *Orchestrator) RunGoBackup(ctx context.Context, envInfo *environment.Env
 	run := o.newBackupRunContext(ctx, envInfo, hostname)
 	done := logging.DebugStart(o.logger, "backup run", "type=%s hostname=%s", run.proxmoxType, hostname)
 	defer func() { done(err) }()
-	o.logger.Info("Starting Go-based backup orchestration for %s", run.proxmoxType)
+	o.logger.Info("Starting backup orchestration for %s", run.proxmoxType)
 
 	workspace := &backupWorkspace{
 		registry: o.cleanupPreviousExecutionArtifacts(ctx),
