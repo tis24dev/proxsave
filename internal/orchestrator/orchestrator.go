@@ -160,7 +160,11 @@ type BackupStats struct {
 	LogCategories []notify.LogCategory
 
 	// Exit code
-	ExitCode       int
+	ExitCode int
+	// Failed records that the backup run itself failed (runErr != nil). It is the
+	// authoritative status signal, decoupled from the ambiguous generic exit code that
+	// a warning-only run also carries. Notifications never set it (they are non-fatal).
+	Failed         bool
 	ScriptVersion  string
 	TelegramStatus string
 	EmailStatus    string
@@ -649,6 +653,7 @@ func (s *BackupStats) toPrometheusMetrics() *metrics.BackupMetrics {
 		StartTime:      s.StartTime,
 		EndTime:        s.EndTime,
 		Duration:       s.Duration,
+		Failed:         s.Failed,
 		ExitCode:       s.ExitCode,
 		ErrorCount:     s.ErrorCount,
 		WarningCount:   s.WarningCount,

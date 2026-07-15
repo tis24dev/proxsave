@@ -83,15 +83,21 @@ func TestPrometheusExporterNilMetrics(t *testing.T) {
 func TestPrometheusExporterStatusMapping(t *testing.T) {
 	cases := []struct {
 		name         string
+		failed       bool
 		exitCode     int
 		errorCount   int
 		warningCount int
 		wantStatus   int
 	}{
-		{"clean success", 0, 0, 0, 0},
-		{"warning only (promoted to generic exit code)", int(types.ExitGenericError), 0, 3, 1},
-		{"errors present", int(types.ExitBackupError), 2, 1, 2},
-		{"early abort without counts", int(types.ExitConfigError), 0, 0, 2},
+		{"clean success", false, 0, 0, 0, 0},
+		{"warning only (promoted to generic exit code)", false, int(types.ExitGenericError), 0, 3, 1},
+		{"errors present", false, int(types.ExitBackupError), 2, 1, 2},
+		{"early abort without counts", false, int(types.ExitConfigError), 0, 0, 2},
+		// F11-02: a genuine failure with only warnings logged (same counts as the
+		// warning-only case above) must be error, not warning. The Failed flag is
+		// authoritative regardless of the ambiguous ExitGenericError exit code.
+		{"failed run with only warnings is error", true, int(types.ExitGenericError), 0, 3, 2},
+		{"failed run clean is error", true, int(types.ExitBackupError), 0, 0, 2},
 	}
 
 	for _, tc := range cases {
@@ -101,6 +107,7 @@ func TestPrometheusExporterStatusMapping(t *testing.T) {
 			m := &BackupMetrics{
 				StartTime:    time.Unix(1000, 0),
 				EndTime:      time.Unix(1100, 0),
+				Failed:       tc.failed,
 				ExitCode:     tc.exitCode,
 				ErrorCount:   tc.errorCount,
 				WarningCount: tc.warningCount,

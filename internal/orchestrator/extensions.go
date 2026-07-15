@@ -256,6 +256,7 @@ func (o *Orchestrator) DispatchEarlyErrorNotification(ctx context.Context, early
 		Timestamp:    earlyErr.Timestamp,
 		StartTime:    earlyErr.Timestamp,
 		EndTime:      earlyErr.Timestamp,
+		Failed:       true, // an early-init failure IS a failed run (status=error)
 		ExitCode:     earlyErr.ExitCode.Int(),
 		ErrorCount:   1,
 		WarningCount: 0,

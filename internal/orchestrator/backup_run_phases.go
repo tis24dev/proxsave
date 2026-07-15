@@ -117,6 +117,11 @@ func (o *Orchestrator) finalizeFailedBackupStats(run *backupRunContext, runErr e
 		return
 	}
 
+	// The run genuinely failed: mark it so the status gauge reports error even if only
+	// warnings were counted at export time (F11-02). runErr comes ONLY from backup
+	// phases, never from the non-fatal notification path, so this never flips on a
+	// notification/communication error.
+	stats.Failed = true
 	o.ensureBackupStatsTiming(stats)
 	o.parseFailedBackupLogCounts(stats)
 	stats.ExitCode = backupFailureExitCode(runErr)

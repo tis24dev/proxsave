@@ -73,6 +73,26 @@ func TestCreateBackupArchiveClassifiesAgeRecipientFailureAsEncryption(t *testing
 	}
 }
 
+// F11-02: finalizeFailedBackupStats marks a genuine backup failure (runErr != nil) as
+// Failed, so the status gauge reports error even when only warnings were counted. A nil
+// runErr (a run whose only issue was a non-fatal notification/communication error, which
+// never sets runErr) must NOT set Failed, so such a run is never escalated to error.
+func TestFinalizeFailedBackupStats_SetsFailedOnlyOnGenuineFailure(t *testing.T) {
+	orch := New(newTestLogger(), false)
+
+	failRun := &backupRunContext{stats: &BackupStats{}}
+	orch.finalizeFailedBackupStats(failRun, errors.New("archive phase failed"))
+	if !failRun.stats.Failed {
+		t.Fatal("a non-nil runErr must set stats.Failed")
+	}
+
+	okRun := &backupRunContext{stats: &BackupStats{}}
+	orch.finalizeFailedBackupStats(okRun, nil)
+	if okRun.stats.Failed {
+		t.Fatal("a nil runErr must NOT set stats.Failed (notification errors must not escalate)")
+	}
+}
+
 func TestWriteArchiveChecksumPropagatesWriteError(t *testing.T) {
 	orch := New(newTestLogger(), false)
 	checksumPath := "/backups/test.tar.sha256"
