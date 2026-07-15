@@ -317,7 +317,12 @@ func formatBytesHR(bytes uint64) string {
 	}
 
 	val := float64(bytes) / float64(div)
-	units := []string{"KB", "MB", "GB", "TB", "PB"}
+	// EB covers the full uint64 range (max ~16 EiB -> exp=5); the clamp is a defensive
+	// backstop so no exponent can index past the slice and panic (P-07).
+	units := []string{"KB", "MB", "GB", "TB", "PB", "EB"}
+	if exp >= len(units) {
+		exp = len(units) - 1
+	}
 	return fmt.Sprintf("%.2f %s", val, units[exp])
 }
 
