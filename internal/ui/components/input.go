@@ -68,6 +68,11 @@ func WithInputBack(err error) InputOption {
 func NewInput(title, prompt string, opts ...InputOption) *Input {
 	in := &Input{title: sanitizeLine(title), prompt: sanitize(prompt), ti: textinput.New()}
 	in.ti.SetVirtualCursor(true)
+	// Disable the ctrl+v paste binding: it runs an external clipboard helper
+	// (atotto/clipboard) resolved by bare name via PATH, i.e. root code execution
+	// on a host with a non-standard PATH. Bracketed paste (tea.PasteMsg) is a
+	// separate, terminal-native path and stays enabled (F01-01).
+	in.ti.KeyMap.Paste.SetEnabled(false)
 	for _, opt := range opts {
 		opt(in)
 	}

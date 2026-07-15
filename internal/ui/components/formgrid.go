@@ -115,6 +115,10 @@ func NewFormGrid(title string, fields []*FormField, opts ...FormGridOption) *For
 		editing: -1,
 		ti:      textinput.New(),
 	}
+	// Disable the ctrl+v paste binding: it runs an external clipboard helper
+	// (atotto/clipboard) resolved by bare name via PATH, i.e. root code execution
+	// on a host with a non-standard PATH. Bracketed paste stays enabled (F01-01).
+	g.ti.KeyMap.Paste.SetEnabled(false)
 	for _, opt := range opts {
 		opt(g)
 	}
