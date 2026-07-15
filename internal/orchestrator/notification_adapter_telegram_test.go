@@ -119,6 +119,42 @@ func TestRecordNotifierStatus_TelegramFailedDeliveryDrivesSensorDown(t *testing.
 	}
 }
 
+// F11-05: the login_url piggybacked on the /api/notify metadata must pass the
+// same-domain trust gate before it is stashed on stats. A foreign phishing host (or an
+// unsanitized link) is dropped; a link on the bot-server's registrable domain is kept.
+func TestRecordNotifierStatus_TelegramLoginURLTrustGate(t *testing.T) {
+	cases := []struct {
+		name string
+		link string
+		want string
+	}{
+		{"same-domain kept", "https://hc.proxsave.dev/accounts/check_token/u/TOK/", "https://hc.proxsave.dev/accounts/check_token/u/TOK/"},
+		{"foreign host dropped", "https://phishing.evil/accounts/check_token/u/TOK/", ""},
+		{"unsanitized dropped", "https://hc.proxsave.dev/\x1b[2J", ""},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			logger := logging.New(types.LogLevelDebug, false)
+			logger.SetOutput(&bytes.Buffer{})
+			adapter := NewNotificationAdapter(&stubNotifier{name: "Telegram"}, logger)
+			result := &notify.NotificationResult{
+				Success: true,
+				Method:  "telegram",
+				Metadata: map[string]interface{}{
+					"relay_accepted": true,
+					"telegram_state": "delivered",
+					"login_url":      c.link,
+				},
+			}
+			stats := &BackupStats{}
+			adapter.recordNotifierStatus(stats, result)
+			if stats.HealthcheckLink != c.want {
+				t.Fatalf("login_url=%q: HealthcheckLink=%q, want %q", c.link, stats.HealthcheckLink, c.want)
+			}
+		})
+	}
+}
+
 func TestTelegramOutcome_PendingIsInProgress(t *testing.T) {
 	out, logger := telegramOutcome(t, &notify.NotificationResult{
 		Success:  true,

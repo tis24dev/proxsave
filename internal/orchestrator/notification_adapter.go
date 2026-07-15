@@ -8,6 +8,7 @@ import (
 
 	"github.com/tis24dev/proxsave/internal/logging"
 	"github.com/tis24dev/proxsave/internal/notify"
+	"github.com/tis24dev/proxsave/internal/serverbot"
 )
 
 // NotificationAdapter adapts notify.Notifier to NotificationChannel interface
@@ -391,11 +392,15 @@ func (n *NotificationAdapter) recordNotifierStatus(stats *BackupStats, result *n
 			stats.TelegramStatus = base
 		}
 		// Dual-write (S3): the relay may have piggybacked a fresh portal magic-link on
-		// the /api/notify response. Stash it RAW for the S4 healthchecks section; it is
-		// sanitized (serverbot.SanitizeLoginURL) only at that display boundary.
+		// the /api/notify response. Validate it at this capture boundary (sanitize AND
+		// require the bot-server's own registrable domain, TrustedLoginURL) so a hostile
+		// response cannot surface a foreign phishing host to root; the S4 display boundary
+		// re-sanitizes as a belt. A foreign/unsafe link is dropped, never stashed.
 		if result != nil && result.Metadata != nil {
 			if link, ok := result.Metadata["login_url"].(string); ok && link != "" {
-				stats.HealthcheckLink = link
+				if trusted := serverbot.TrustedLoginURL(link, defaultServerAPIHost); trusted != "" {
+					stats.HealthcheckLink = trusted
+				}
 			}
 		}
 	case "Email":

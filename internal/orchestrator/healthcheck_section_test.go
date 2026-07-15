@@ -406,16 +406,16 @@ func TestHealthchecksSectionMintsWhenNoCapture(t *testing.T) {
 	ch := hcTransmittingChannel(&config.Config{
 		HealthcheckEnabled: true,
 		HealthcheckMode:    "centralized",
-		ServerAPIHost:      "https://bot",
+		ServerAPIHost:      "https://bot.proxsave.dev",
 		ServerID:           "srv1",
 	}, &buf)
 	minted := 0
 	ch.mintLink = func(_ context.Context, host, serverID, secret string) (string, error) {
 		minted++
-		if host != "https://bot" || serverID != "srv1" || secret != "sekret" {
+		if host != "https://bot.proxsave.dev" || serverID != "srv1" || secret != "sekret" {
 			t.Fatalf("mint args host=%q id=%q secret=%q", host, serverID, secret)
 		}
-		return "https://hc/accounts/check_token/u/MINT/", nil
+		return "https://hc.proxsave.dev/accounts/check_token/u/MINT/", nil
 	}
 
 	stats := &BackupStats{} // no captured link -> mint once
@@ -423,13 +423,35 @@ func TestHealthchecksSectionMintsWhenNoCapture(t *testing.T) {
 	if minted != 1 {
 		t.Fatalf("mint called %d times, want 1", minted)
 	}
-	// The MINTED link is STORED RAW on stats (carried to the epilogue) but NOT displayed
-	// by this channel: the SOLE display boundary is logMonitoringPortalLink in cmd/proxsave.
-	if stats.HealthcheckLink != "https://hc/accounts/check_token/u/MINT/" {
+	// The MINTED link passes the same-domain trust gate (F11-05: hc.proxsave.dev shares the
+	// bot-server's registrable domain) and is STORED on stats (carried to the epilogue) but
+	// NOT displayed by this channel: the SOLE display boundary is logMonitoringPortalLink.
+	if stats.HealthcheckLink != "https://hc.proxsave.dev/accounts/check_token/u/MINT/" {
 		t.Fatalf("minted link must be stored on stats, got %q", stats.HealthcheckLink)
 	}
-	if strings.Contains(buf.String(), "https://hc/accounts/check_token/u/MINT/") || strings.Contains(buf.String(), "Healthchecks Portal") {
+	if strings.Contains(buf.String(), "https://hc.proxsave.dev/accounts/check_token/u/MINT/") || strings.Contains(buf.String(), "Healthchecks Portal") {
 		t.Fatalf("the channel must not display the minted link (moved to the epilogue), out=%q", buf.String())
+	}
+}
+
+// F11-05: a minted link on a host outside the bot-server's registrable domain (a hostile
+// mint response) must be DROPPED at the capture boundary, never stored on stats.
+func TestHealthchecksSectionDropsForeignMintedLink(t *testing.T) {
+	var buf bytes.Buffer
+	ch := hcTransmittingChannel(&config.Config{
+		HealthcheckEnabled: true,
+		HealthcheckMode:    "centralized",
+		ServerAPIHost:      "https://bot.proxsave.dev",
+		ServerID:           "srv1",
+	}, &buf)
+	ch.mintLink = func(context.Context, string, string, string) (string, error) {
+		return "https://phishing.evil/accounts/check_token/u/MINT/", nil
+	}
+
+	stats := &BackupStats{} // no captured link -> mint once, then dropped
+	_ = ch.Notify(context.Background(), stats)
+	if stats.HealthcheckLink != "" {
+		t.Fatalf("foreign minted link must be dropped, got %q", stats.HealthcheckLink)
 	}
 }
 

@@ -8,6 +8,7 @@ import (
 	"github.com/tis24dev/proxsave/internal/health"
 	"github.com/tis24dev/proxsave/internal/identity"
 	"github.com/tis24dev/proxsave/internal/logging"
+	"github.com/tis24dev/proxsave/internal/serverbot"
 )
 
 // healthchecksSectionName is the SINGLE source of truth for the Phase-7 section name.
@@ -123,12 +124,16 @@ func (h *HealthchecksChannel) Notify(ctx context.Context, stats *BackupStats) er
 			h.info("%s: portal link unavailable", healthchecksSectionName)
 		}
 	}
-	// STORE the RAW link on stats so a MINTED link is carried to the epilogue (a captured
-	// link is already there). This channel does NOT display it: the SOLE display boundary
-	// (sanitize + print) moved to logMonitoringPortalLink in cmd/proxsave, which prints
-	// it right after the Server MAC Address line. Never register the link as a secret.
+	// STORE the link on stats so a MINTED link is carried to the epilogue (a captured link
+	// is already there, validated by the dual-write gate). Validate the minted link at this
+	// capture boundary (TrustedLoginURL: sanitize AND require the bot-server's own
+	// registrable domain) so a hostile mint response cannot surface a foreign phishing host
+	// to root. A foreign/unsafe link is dropped. The SOLE display boundary (sanitize +
+	// print) is logMonitoringPortalLink in cmd/proxsave. Never register the link as a secret.
 	if link != "" && stats != nil {
-		stats.HealthcheckLink = link
+		if trusted := serverbot.TrustedLoginURL(link, defaultServerAPIHost); trusted != "" {
+			stats.HealthcheckLink = trusted
+		}
 	}
 	return nil
 }
