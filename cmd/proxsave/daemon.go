@@ -259,7 +259,7 @@ func (d *daemon) processManualOutcome(ctx context.Context) {
 	} else if perr != nil {
 		logging.Debug("daemon: manual outcome finish ping failed: %v", perr)
 	}
-	d.recordPing(health.KindRunFinished, perr)
+	d.recordOutcomePing(health.KindRunFinished, mo.ExitCode != 0, perr)
 
 	if rmErr := health.RemoveManualOutcome(d.cfg.BaseDir); rmErr != nil {
 		logging.Debug("daemon: remove manual outcome failed: %v", rmErr)
@@ -309,7 +309,7 @@ func (d *daemon) runOnce(parentCtx context.Context) {
 	}
 	r := d.getReporter()
 	rid := health.NewRunID()
-	d.reportBestEffort("start", func() error { return d.startPing(parentCtx, r, rid) })
+	d.reportBestEffort("start", false, func() error { return d.startPing(parentCtx, r, rid) })
 
 	runCtx, cancel := context.WithTimeout(parentCtx, d.maxRunDuration())
 	defer cancel()
@@ -340,13 +340,13 @@ func (d *daemon) runOnce(parentCtx context.Context) {
 
 	if runCtx.Err() == context.DeadlineExceeded {
 		logging.Error("daemon: backup exceeded %s and was killed (hang)", d.maxRunDuration())
-		d.reportBestEffort("hang", func() error { return d.hangPing(parentCtx, r, rid, logBody) })
+		d.reportBestEffort("hang", true, func() error { return d.hangPing(parentCtx, r, rid, logBody) })
 		return
 	}
 
 	code := exitCodeFromErr(runErr)
 	logging.Info("daemon: backup finished (rid=%s exit=%d)", rid, code)
-	d.reportBestEffort("finish", func() error { return d.finishPing(parentCtx, r, rid, code, logBody) })
+	d.reportBestEffort("finish", code != 0, func() error { return d.finishPing(parentCtx, r, rid, code, logBody) })
 
 	// The child reached Phase-7 and wrote its per-channel notify outcomes; ping one
 	// healthchecks check per channel it reported (Fase 2B / R4). Strictly after the child
@@ -386,7 +386,7 @@ func (d *daemon) hangPing(ctx context.Context, r backupReporter, rid, logTail st
 // transmitted: it is swallowed and NOT recorded (recording it would misreport a
 // failed ping). Every other result, success included, is a genuine transmission
 // attempt worth persisting so the run-side section can report the real state.
-func (d *daemon) reportBestEffort(label string, fn func() error) {
+func (d *daemon) reportBestEffort(label string, failed bool, fn func() error) {
 	done := logging.DebugStart(d.logger, "hc ping", "kind=%s", label)
 	err := fn()
 	done(err)
@@ -398,8 +398,9 @@ func (d *daemon) reportBestEffort(label string, fn func() error) {
 		// err is already redacted by the Reporter (redactURLErr strips the url).
 		logging.Debug("daemon: %s ping failed: %v", label, err)
 	}
-	// label is already the kind ("start"/"hang"/"finish" == KindRun*).
-	d.recordPing(label, err)
+	// label is already the kind ("start"/"hang"/"finish" == KindRun*). failed is the OUTCOME
+	// signal (a failed finish / any hang) so the local sensor renders red, not green (F09-02).
+	d.recordOutcomePing(label, failed, err)
 }
 
 // recordPing persists one real transmission outcome to the shared status file,
@@ -407,10 +408,10 @@ func (d *daemon) reportBestEffort(label string, fn func() error) {
 // concurrently and health.RecordPing is a read-modify-write. Best effort: a write
 // error must not break the daemon, so it is only logged at debug. The ping error
 // text is already redacted by the Reporter, so this never leaks a URL or secret.
-func (d *daemon) recordPing(kind string, pingErr error) {
+func (d *daemon) recordOutcomePing(kind string, failed bool, pingErr error) {
 	d.statusMu.Lock()
 	defer d.statusMu.Unlock()
-	if err := health.RecordPing(d.cfg.BaseDir, d.cfg.HealthcheckMode, kind, d.now().Unix(), pingErr == nil, pingErr); err != nil {
+	if err := health.RecordOutcomePing(d.cfg.BaseDir, d.cfg.HealthcheckMode, kind, d.now().Unix(), pingErr == nil, failed, pingErr); err != nil {
 		logging.Debug("daemon: record %s ping status failed: %v", kind, err)
 	}
 }
@@ -463,8 +464,9 @@ func (d *daemon) beat(ctx context.Context) {
 	} else if err != nil {
 		logging.Debug("daemon: heartbeat ping failed: %v", err)
 	}
-	// Always record: even a no-url beat proves the daemon is alive this tick.
-	d.recordPing(health.KindHeartbeat, err)
+	// Always record: even a no-url beat proves the daemon is alive this tick. The heartbeat has
+	// no outcome, so failed is always false.
+	d.recordOutcomePing(health.KindHeartbeat, false, err)
 }
 
 // daemonEvaluateUpdate is the update-check seam: production uses checkForUpdates (a live

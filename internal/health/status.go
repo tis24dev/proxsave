@@ -60,12 +60,13 @@ type PingRecord struct {
 	// transmit failure). The Reporter already strips the ping URL / check UUID from its
 	// errors (redactURLErr), so what lands here is safe to persist; omitted when empty.
 	Err string `json:"err,omitempty"`
-	// Down encodes the /1-vs-/0 SIGNAL for checks whose ping suffix carries a semantic
-	// (a per-notification-channel check pings /1 when the send failed, so the monitor goes
-	// DOWN/red, exactly like the updates sensor's /1). It is orthogonal to OK (which is only
-	// whether the ping transmitted): a perfectly transmitted /1 is OK==true AND Down==true.
-	// Unused (false) for the fixed alive/backup kinds, whose severity is the monitor's job.
-	// Omitted when false so old readers see byte-identical records on a downgrade.
+	// Down encodes the /1-vs-/0 SIGNAL for checks whose ping suffix carries a semantic. A
+	// per-notification-channel check pings /1 when the send failed; the backup finish/hang
+	// kinds set it when the backup OUTCOME failed (finish exit!=0, or a hang) so the LOCAL
+	// sensor panel is red for a failed backup instead of green (F09-02). It is orthogonal to
+	// OK (which is only whether the ping transmitted): a perfectly transmitted /fail is
+	// OK==true AND Down==true. Unused (false) for the alive heartbeat, whose liveness has no
+	// outcome. Omitted when false so old readers see byte-identical records on a downgrade.
 	Down bool `json:"down,omitempty"`
 }
 
@@ -224,13 +225,23 @@ func loadStatusForWrite(baseDir string) (Status, error) {
 // on failure. An unknown kind is a programming error and is returned WITHOUT
 // touching the file, never silently dropped.
 func RecordPing(baseDir, mode, kind string, ts int64, ok bool, pingErr error) error {
+	return RecordOutcomePing(baseDir, mode, kind, ts, ok, false, pingErr)
+}
+
+// RecordOutcomePing is RecordPing with the /1-vs-/0 outcome SIGNAL: failed sets PingRecord.Down
+// (the backup finish/hang kinds pass failed = exit!=0 / hang so the local sensor renders red for
+// a failed backup, F09-02). RecordPing is the failed==false shorthand for the kinds that have no
+// outcome (heartbeat/start). ts is the unix SECONDS of the attempt; ok is whether it transmitted;
+// pingErr is the (already redacted) error on failure. An unknown/empty kind is a caller bug and is
+// returned WITHOUT touching the file.
+func RecordOutcomePing(baseDir, mode, kind string, ts int64, ok, failed bool, pingErr error) error {
 	// Reject an empty kind (a caller bug) before the write so it cannot leave the file
 	// mutated (mode changed) without a record. Any non-empty kind is now valid: the map
 	// stores the fixed heartbeat/start/finish/hang AND dynamic notify-<ch> kinds.
 	if kind == "" {
 		return fmt.Errorf("healthcheck status: empty ping kind")
 	}
-	rec := &PingRecord{TS: ts, OK: ok}
+	rec := &PingRecord{TS: ts, OK: ok, Down: failed}
 	if pingErr != nil {
 		// A "no ping URL resolved" error means the daemon was alive and tried but has
 		// no endpoint yet (pairing pending / server unreachable). Persist it as a

@@ -77,6 +77,45 @@ func TestSensorRowsMapping(t *testing.T) {
 	}
 }
 
+// TestSensorRowsBackupFailed pins F09-02: the backup row carries the OUTCOME semantic like
+// the notify row, not just transmission. A fresh, transmitted finish that FAILED (Down=true,
+// the ping left the process but the backup exited non-zero) is red "failed", NOT green "ok".
+// A transmitted hang (Down=true) is likewise red. A transmitted successful finish (Down=false)
+// stays green "ok". Proves PingRecord.Down is orthogonal to OK for the backup kind.
+func TestSensorRowsBackupFailed(t *testing.T) {
+	now := time.Unix(10_000, 0)
+	fresh := int64(9_990)
+	interval := 5 * time.Minute
+
+	backupRow := func(st Status) SensorRow {
+		for _, r := range SensorRows(st, interval, interval, now) {
+			if r.Name == SensorBackup {
+				return r
+			}
+		}
+		t.Fatalf("no backup row")
+		return SensorRow{}
+	}
+
+	// Transmitted finish, backup FAILED (Down) -> red "failed".
+	st := Status{Records: map[string]*PingRecord{KindRunFinished: {TS: fresh, OK: true, Down: true}}}
+	if r := backupRow(st); r.Level != SensorError || r.State != "failed" {
+		t.Fatalf("failed finish backup row = %+v, want SensorError 'failed'", r)
+	}
+
+	// Transmitted hang (Down) -> red "failed".
+	st = Status{Records: map[string]*PingRecord{KindRunHang: {TS: fresh, OK: true, Down: true}}}
+	if r := backupRow(st); r.Level != SensorError || r.State != "failed" {
+		t.Fatalf("hang backup row = %+v, want SensorError 'failed'", r)
+	}
+
+	// Transmitted successful finish (no Down) -> stays green "ok".
+	st = Status{Records: map[string]*PingRecord{KindRunFinished: {TS: fresh, OK: true}}}
+	if r := backupRow(st); r.Level != SensorOk || r.State != "ok" {
+		t.Fatalf("successful finish backup row = %+v, want SensorOk 'ok'", r)
+	}
+}
+
 // TestSensorRowsUpToDateAndEmpty: a fresh, transmitted "up to date" update reads green
 // ("up to date"), and an empty status yields all-neutral "no data" rows with no age.
 func TestSensorRowsUpToDateAndEmpty(t *testing.T) {

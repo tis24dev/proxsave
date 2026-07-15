@@ -88,7 +88,15 @@ func SensorRows(st Status, heartbeatInterval, updateInterval time.Duration, now 
 	staleAfter := heartbeatStaleAfter(heartbeatInterval)
 
 	aliveLvl, aliveState, aliveAge := sensorLevel(st.Record(KindHeartbeat), staleAfter, now)
-	backupLvl, backupState, backupAge := sensorLevel(newerPing(st.Record(KindRunFinished), st.Record(KindRunHang)), 0, now)
+	// The backup row, like the notify rows below, carries the OUTCOME semantic and not just
+	// the transmission result: PingRecord.OK is only whether the finish/hang ping left the
+	// process, while Down is the /1 signal that the backup itself FAILED (finish exit!=0, or a
+	// hang). A fresh transmitted /fail is a healthy transmission of a RED outcome -> "failed".
+	backupRec := newerPing(st.Record(KindRunFinished), st.Record(KindRunHang))
+	backupLvl, backupState, backupAge := sensorLevel(backupRec, 0, now)
+	if backupLvl == SensorOk && backupRec != nil && backupRec.Down {
+		backupLvl, backupState = SensorError, "failed"
+	}
 
 	rows := []SensorRow{
 		{Name: SensorAlive, Level: aliveLvl, State: aliveState, Age: aliveAge},

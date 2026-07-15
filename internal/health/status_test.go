@@ -57,6 +57,28 @@ func TestRecordPingRoundTripEachKind(t *testing.T) {
 	}
 }
 
+// TestRecordOutcomePingDown pins F09-02 at the writer: a failed finish (failed=true) round-trips
+// PingRecord.Down=true, and RecordPing (the failed=false shorthand) leaves Down=false.
+func TestRecordOutcomePingDown(t *testing.T) {
+	base := t.TempDir()
+
+	if err := RecordOutcomePing(base, "self", KindRunFinished, 3000, true, true, nil); err != nil {
+		t.Fatalf("RecordOutcomePing failed finish: %v", err)
+	}
+	st := mustLoad(t, base)
+	if rec := st.Record(KindRunFinished); rec == nil || !rec.OK || !rec.Down {
+		t.Fatalf("failed finish record = %+v, want OK && Down", rec)
+	}
+
+	if err := RecordPing(base, "self", KindRunFinished, 4000, true, nil); err != nil {
+		t.Fatalf("RecordPing finish: %v", err)
+	}
+	st = mustLoad(t, base)
+	if rec := st.Record(KindRunFinished); rec == nil || !rec.OK || rec.Down {
+		t.Fatalf("successful finish record = %+v, want OK && !Down", rec)
+	}
+}
+
 // TestLoadStatusMissingFile: an untouched base dir has no file at all -> zero
 // Status, nil error (the "nothing recorded yet" path).
 func TestLoadStatusMissingFile(t *testing.T) {
