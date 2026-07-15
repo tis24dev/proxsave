@@ -104,6 +104,9 @@ func validateDaemonCompatibility(args *cli.Args) []string {
 	if daemonFlags > 1 {
 		return []string{"Only one of --daemon, --daemon-setup, --daemon-remove, --daemon-status may be used at a time."}
 	}
+	if args.DryRun && (args.Daemon || args.DaemonSetup || args.DaemonRemove) {
+		return []string{"--dry-run is not supported with --daemon, --daemon-setup, or --daemon-remove."}
+	}
 	incompatible := enabledModes([]incompatibleMode{
 		{enabled: args.Install, label: "--install"},
 		{enabled: args.NewInstall, label: "--new-install"},
