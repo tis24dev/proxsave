@@ -230,7 +230,11 @@ func applyIssueExitCode(stats *BackupStats) {
 		return
 	}
 
-	if stats.WarningCount > 0 && stats.ExitCode == types.ExitSuccess.Int() {
+	// Warnings and notify (notification/communication) issues are warning-weight:
+	// they promote a clean run to the generic exit code but never to backup error.
+	// The error branch above already returned for real errors, so a notify issue can
+	// never mask one.
+	if (stats.WarningCount > 0 || stats.NotifyCount > 0) && stats.ExitCode == types.ExitSuccess.Int() {
 		stats.ExitCode = types.ExitGenericError.Int()
 	}
 }

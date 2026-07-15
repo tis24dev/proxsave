@@ -21,10 +21,13 @@ type BackupMetrics struct {
 	EndTime   time.Time
 	Duration  time.Duration
 
-	Failed         bool // the backup run itself failed (runErr != nil); authoritative for status
-	ExitCode       int
-	ErrorCount     int
-	WarningCount   int
+	Failed       bool // the backup run itself failed (runErr != nil); authoritative for status
+	ExitCode     int
+	ErrorCount   int
+	WarningCount int
+	// NotifyCount tallies notification/communication failures: warning-weight for the
+	// status (never escalate to error), so a notify-only run is status 1, not 2.
+	NotifyCount    int
 	LocalBackups   int
 	SecBackups     int
 	CloudBackups   int
@@ -141,7 +144,10 @@ func (pe *PrometheusExporter) Export(m *BackupMetrics) (err error) {
 	switch {
 	case m.Failed || m.ErrorCount > 0:
 		status = 2
-	case m.WarningCount > 0:
+	case m.WarningCount > 0 || m.NotifyCount > 0:
+		// A notification/communication failure is warning-weight: it must keep the run
+		// at status 1 and, crucially, be checked BEFORE the non-zero-exit-code fallback
+		// below (a notify-only run carries the generic exit code) so it never reads as error.
 		status = 1
 	case m.ExitCode != 0:
 		status = 2

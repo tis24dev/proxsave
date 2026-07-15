@@ -661,6 +661,7 @@ func (s *BackupStats) toPrometheusMetrics() *metrics.BackupMetrics {
 		ExitCode:       s.ExitCode,
 		ErrorCount:     s.ErrorCount,
 		WarningCount:   s.WarningCount,
+		NotifyCount:    s.NotifyCount,
 		LocalBackups:   s.LocalBackups,
 		SecBackups:     s.SecondaryBackups,
 		CloudBackups:   s.CloudBackups,

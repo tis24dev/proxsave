@@ -87,17 +87,24 @@ func TestPrometheusExporterStatusMapping(t *testing.T) {
 		exitCode     int
 		errorCount   int
 		warningCount int
+		notifyCount  int
 		wantStatus   int
 	}{
-		{"clean success", false, 0, 0, 0, 0},
-		{"warning only (promoted to generic exit code)", false, int(types.ExitGenericError), 0, 3, 1},
-		{"errors present", false, int(types.ExitBackupError), 2, 1, 2},
-		{"early abort without counts", false, int(types.ExitConfigError), 0, 0, 2},
+		{"clean success", false, 0, 0, 0, 0, 0},
+		{"warning only (promoted to generic exit code)", false, int(types.ExitGenericError), 0, 3, 0, 1},
+		{"errors present", false, int(types.ExitBackupError), 2, 1, 0, 2},
+		{"early abort without counts", false, int(types.ExitConfigError), 0, 0, 0, 2},
 		// F11-02: a genuine failure with only warnings logged (same counts as the
 		// warning-only case above) must be error, not warning. The Failed flag is
 		// authoritative regardless of the ambiguous ExitGenericError exit code.
-		{"failed run with only warnings is error", true, int(types.ExitGenericError), 0, 3, 2},
-		{"failed run clean is error", true, int(types.ExitBackupError), 0, 0, 2},
+		{"failed run with only warnings is error", true, int(types.ExitGenericError), 0, 3, 0, 2},
+		{"failed run clean is error", true, int(types.ExitBackupError), 0, 0, 0, 2},
+		// A notification/communication failure is warning-weight: a clean backup with
+		// a notify-only issue (promoted to the generic exit code) stays status 1, and
+		// must NOT be misread as error by the non-zero-exit-code fallback.
+		{"notify-only is warning not error", false, int(types.ExitGenericError), 0, 0, 1, 1},
+		// A real error alongside a notify issue is still error.
+		{"real error with notify is error", false, int(types.ExitBackupError), 1, 0, 1, 2},
 	}
 
 	for _, tc := range cases {
@@ -111,6 +118,7 @@ func TestPrometheusExporterStatusMapping(t *testing.T) {
 				ExitCode:     tc.exitCode,
 				ErrorCount:   tc.errorCount,
 				WarningCount: tc.warningCount,
+				NotifyCount:  tc.notifyCount,
 			}
 			if err := exporter.Export(m); err != nil {
 				t.Fatalf("Export() error = %v", err)

@@ -65,6 +65,20 @@ func TestApplyIssueExitCode(t *testing.T) {
 			wantErrors: 1,
 			wantWarns:  1,
 		},
+		{
+			// A notification/communication failure is warning-weight: it promotes a
+			// clean run to the generic (warning) exit code, never to backup error.
+			name:     "notify-only promotes success to generic error",
+			stats:    BackupStats{NotifyCount: 1, ExitCode: types.ExitSuccess.Int()},
+			wantExit: types.ExitGenericError.Int(),
+		},
+		{
+			// A real backup error still wins: notify never masks it down to warning.
+			name:       "errors take precedence over notify",
+			stats:      BackupStats{ErrorCount: 1, NotifyCount: 1, ExitCode: types.ExitSuccess.Int()},
+			wantExit:   types.ExitBackupError.Int(),
+			wantErrors: 1,
+		},
 	}
 
 	for _, tt := range tests {
