@@ -816,6 +816,55 @@ func TestApplyPBSDatastoreCfgViaAPI_StrictFullFlow(t *testing.T) {
 	}
 }
 
+// P-08: when `datastore list` fails, the current PBS state is unknown. A strict Clean
+// 1:1 restore must fail closed (it cannot safely prune stale datastores), not silently
+// report success. Non-strict logs and continues (create/update self-heals).
+func TestApplyPBSDatastoreCfgViaAPI_ListFailure(t *testing.T) {
+	const listCmd = "proxmox-backup-manager datastore list --output-format=json"
+	const cfg = "datastore: ds1\n    path /p1\n    comment c1\n"
+
+	t.Run("strict fails closed", func(t *testing.T) {
+		stageRoot, fs, runner := setupPBSAPIApplyTestDeps(t)
+		logger := logging.New(types.LogLevelDebug, false)
+		writeStageFile(t, fs, stageRoot, "etc/proxmox-backup/datastore.cfg", cfg, 0o640)
+		runner.errs = map[string]error{listCmd: errors.New("list boom")}
+
+		err := applyPBSDatastoreCfgViaAPI(context.Background(), logger, stageRoot, true)
+		if err == nil {
+			t.Fatal("strict Clean 1:1 must fail closed when datastore list fails, got nil")
+		}
+		if !strings.Contains(err.Error(), "datastore list") {
+			t.Fatalf("error should name the list failure, got: %v", err)
+		}
+		for _, c := range runner.calls {
+			if strings.HasPrefix(c, "proxmox-backup-manager datastore create") ||
+				strings.HasPrefix(c, "proxmox-backup-manager datastore remove") {
+				t.Fatalf("strict must not mutate datastores after a failed list, saw: %s", c)
+			}
+		}
+	})
+
+	t.Run("non-strict logs and continues", func(t *testing.T) {
+		stageRoot, fs, runner := setupPBSAPIApplyTestDeps(t)
+		logger := logging.New(types.LogLevelDebug, false)
+		writeStageFile(t, fs, stageRoot, "etc/proxmox-backup/datastore.cfg", cfg, 0o640)
+		runner.errs = map[string]error{listCmd: errors.New("list boom")}
+
+		if err := applyPBSDatastoreCfgViaAPI(context.Background(), logger, stageRoot, false); err != nil {
+			t.Fatalf("non-strict must not fail on a list error (create/update self-heals), got: %v", err)
+		}
+		sawCreate := false
+		for _, c := range runner.calls {
+			if strings.HasPrefix(c, "proxmox-backup-manager datastore create ds1") {
+				sawCreate = true
+			}
+		}
+		if !sawCreate {
+			t.Fatalf("non-strict must still apply the desired datastore, calls=%v", runner.calls)
+		}
+	})
+}
+
 func TestApplyPBSDatastoreCfgViaAPI_CurrentPathsFallbacksAndStrictRemoveWarn(t *testing.T) {
 	stageRoot, fs, runner := setupPBSAPIApplyTestDeps(t)
 	logger := logging.New(types.LogLevelDebug, false)

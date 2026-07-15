@@ -368,9 +368,24 @@ func applyPBSDatastoreCfgViaAPI(ctx context.Context, logger *logging.Logger, sta
 		Path  string `json:"path"`
 	}
 	currentPaths := make(map[string]string)
-	if out, err := runPBSManager(ctx, "datastore", "list", "--output-format=json"); err == nil {
+	out, listErr := runPBSManager(ctx, "datastore", "list", "--output-format=json")
+	if listErr != nil {
+		// The current PBS state is unknown. A strict Clean 1:1 restore cannot safely prune
+		// stale datastores without it, so fail closed rather than silently report an
+		// incomplete clean (P-08). Non-strict logs and continues: it never prunes anyway,
+		// and the create/update loop below self-heals an already-existing datastore.
+		if strict {
+			return fmt.Errorf("datastore list failed, cannot enforce Clean 1:1: %w", listErr)
+		}
+		logger.Warning("PBS API apply: datastore list failed (%v); create/update will proceed, stale datastores are not pruned", listErr)
+	} else {
 		var rows []dsRow
-		if err := json.Unmarshal(unwrapPBSJSONData(out), &rows); err == nil {
+		if err := json.Unmarshal(unwrapPBSJSONData(out), &rows); err != nil {
+			if strict {
+				return fmt.Errorf("datastore list returned unparseable JSON, cannot enforce Clean 1:1: %w", err)
+			}
+			logger.Warning("PBS API apply: datastore list JSON parse failed (%v); stale datastores are not pruned", err)
+		} else {
 			for _, row := range rows {
 				name := strings.TrimSpace(row.Name)
 				if name == "" {
