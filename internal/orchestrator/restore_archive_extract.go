@@ -16,6 +16,14 @@ import (
 	"github.com/tis24dev/proxsave/internal/logging"
 )
 
+// Bounds on the dedup reads, kept as vars so a malicious or corrupt archive can
+// never OOM the (root) restore and tests can lower them. Dedup canonicals are
+// config files, so these are DoS backstops, not real-world limits.
+var (
+	maxDedupManifestBytes  int64 = 16 << 20 // 16 MiB
+	maxDedupCanonicalBytes int64 = 64 << 20 // 64 MiB
+)
+
 type restoreArchiveOptions struct {
 	archivePath string
 	destRoot    string
@@ -317,9 +325,22 @@ func materializeDedupSymlinks(ctx context.Context, archivePath, destRoot string,
 	if err != nil {
 		return nil
 	}
-	data, err := restoreFS.ReadFile(manifestTarget)
+	manifestFile, err := restoreFS.Open(manifestTarget)
 	if err != nil {
 		return nil // no dedup manifest: nothing to materialize
+	}
+	data, rerr := io.ReadAll(io.LimitReader(manifestFile, maxDedupManifestBytes+1))
+	_ = manifestFile.Close()
+	if rerr != nil {
+		return nil // unreadable manifest (matches the prior ReadFile-error behavior)
+	}
+	if int64(len(data)) > maxDedupManifestBytes {
+		logger.Warning("Dedup manifest exceeds %d bytes; refusing to load it", maxDedupManifestBytes)
+		if strict {
+			return fmt.Errorf("dedup manifest exceeds %d bytes; refusing to apply a partial staged restore", maxDedupManifestBytes)
+		}
+		removeDedupManifest(manifestTarget)
+		return nil
 	}
 	var entries []backup.DedupManifestEntry
 	if err := json.Unmarshal(data, &entries); err != nil {
@@ -449,10 +470,14 @@ func materializeFromArchive(ctx context.Context, archivePath string, needByCanon
 		if !ok {
 			continue
 		}
-		content, err := io.ReadAll(tr)
+		content, err := io.ReadAll(io.LimitReader(tr, maxDedupCanonicalBytes+1))
 		if err != nil {
 			logger.Warning("Dedup: failed to read canonical %q from the archive: %v", name, err)
 			continue // leave its duplicates as links (counted as missing below)
+		}
+		if int64(len(content)) > maxDedupCanonicalBytes {
+			logger.Warning("Dedup: canonical %q exceeds %d bytes; leaving its duplicate(s) as link(s)", name, maxDedupCanonicalBytes)
+			continue // not marked found -> counted missing -> strict fails closed
 		}
 		found[name] = true
 		for _, d := range dups {
