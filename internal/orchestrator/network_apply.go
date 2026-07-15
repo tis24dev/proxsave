@@ -412,6 +412,7 @@ type nicRepairUI interface {
 var (
 	planNICNameRepairFn            = planNICNameRepair
 	detectNICNamingOverrideRulesFn = detectNICNamingOverrideRules
+	applyNICNameRepairFn           = applyNICNameRepair
 )
 
 func repairNICNamesWithUI(ctx context.Context, ui nicRepairUI, logger *logging.Logger, archivePath string) *nicRepairResult {
