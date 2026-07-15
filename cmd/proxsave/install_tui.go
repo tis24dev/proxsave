@@ -371,6 +371,17 @@ func runInstallTUI(ctx context.Context, configPath string, bootstrap *logging.Bo
 		logging.DebugStepBootstrap(bootstrap, "install workflow (tui)", "session close: %v", closeErr)
 	}
 
+	// A signal (SIGINT/SIGTERM) that cancelled the run during the streamed
+	// finalization must not be reported as "Installation completed": RunStreamTask
+	// swallows the abort (streamErr is best-effort and ignored above), so err is
+	// still nil here even though the cron/scheduler finalization ran on a dead
+	// context and installed nothing. Mirror the CLI end-guard (runInstall) so the
+	// deferred footer shows the honest "Installation aborted" banner: suppressed
+	// for a dashboard-adopted run, printed to scrollback for a direct --install.
+	if ctx.Err() != nil {
+		return wrapInstallError(errInteractiveAborted)
+	}
+
 	return nil
 }
 

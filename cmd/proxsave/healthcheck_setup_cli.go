@@ -64,7 +64,7 @@ func runHealthcheckSetupCLI(ctx context.Context, reader *bufio.Reader, baseDir, 
 
 	check, err := healthcheckSetupPromptYesNo(ctx, reader, "Check the monitoring connection now? [Y/n]: ", true)
 	if err != nil {
-		return skipOptionalInstallStepOnAbort(bootstrap, "Healthcheck setup", err)
+		return skipOptionalInstallStepOnAbort(ctx, bootstrap, "Healthcheck setup", err)
 	}
 	if !check {
 		fmt.Println("Skipped. The daemon connects to the monitor on its first run.")
@@ -116,7 +116,7 @@ func runHealthcheckSetupCLI(ctx context.Context, reader *bufio.Reader, baseDir, 
 		fmt.Println(orchestrator.HealthcheckSetupRetryHint)
 		retry, err := healthcheckSetupPromptYesNo(ctx, reader, "Check again? [y/N]: ", false)
 		if err != nil {
-			return skipOptionalInstallStepOnAbort(bootstrap, "Healthcheck setup", err)
+			return skipOptionalInstallStepOnAbort(ctx, bootstrap, "Healthcheck setup", err)
 		}
 		if !retry {
 			fmt.Println("Not verified. The daemon will keep trying on its runs.")

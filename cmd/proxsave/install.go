@@ -167,16 +167,43 @@ func runInstall(ctx context.Context, configPath string, bootstrap *logging.Boots
 	permStatus, permMessage = fixPermissionsAfterInstall(ctx, configPath, baseDir, bootstrap, nil)
 	logging.DebugStepBootstrap(bootstrap, "install workflow (cli)", "permissions status=%s", permStatus)
 
+	// A signal (SIGINT/SIGTERM) that cancelled the run at any point after the
+	// config was written -- including DURING the cron/scheduler finalization,
+	// which then silently installs nothing on the dead context, and including the
+	// skip-wizard path that has no optional steps to catch it earlier -- must not
+	// be reported as "Installation completed". Surface it as an aborted install so
+	// the footer shows the honest banner (same taxonomy as the TUI).
+	if ctx.Err() != nil {
+		return wrapInstallError(errInteractiveAborted)
+	}
 	return nil
 }
 
-// skipOptionalInstallStepOnAbort turns a prompt error (Ctrl-D/EOF or a cancelled
-// context) from an optional install step — the post-install audit or the Telegram
-// setup — into a non-blocking outcome: the step is abandoned with a warning and
-// the caller continues the install so the entrypoint/cron finalization still
-// runs. This matches the TUI, which logs such errors as non-blocking warnings and
-// never aborts the install.
-func skipOptionalInstallStepOnAbort(bootstrap *logging.BootstrapLogger, step string, err error) error {
+// skipOptionalInstallStepOnAbort decides how a prompt error from an OPTIONAL
+// install step (post-install audit, Telegram pairing, healthcheck setup) affects
+// the install. It splits two cases the caller cannot tell apart from the error
+// value alone:
+//
+//   - Benign input skip (Ctrl-D/EOF at the prompt, run context still live): the
+//     step is accessory and the config is already written, so it is abandoned
+//     with a warning and the install CONTINUES to the entrypoint/cron
+//     finalization. This matches the TUI, which demotes such errors to a warning.
+//   - Real abort (SIGINT/SIGTERM cancelled the run context): the user asked to
+//     stop. Continuing would run the cron/scheduler finalization on a dead
+//     context, silently install NO scheduler, yet report "Installation completed"
+//     (false green). So propagate an aborted-install error instead, which renders
+//     the "Installation aborted" banner exactly like the TUI (mapUIDeath).
+//
+// ctx.Err() is the authoritative discriminator: the run context is WithCancel and
+// is cancelled only by the signal handler (setupRunContext), so it is non-nil
+// after Ctrl+C but nil for a plain EOF at an optional prompt.
+func skipOptionalInstallStepOnAbort(ctx context.Context, bootstrap *logging.BootstrapLogger, step string, err error) error {
+	if ctx.Err() != nil {
+		if bootstrap != nil {
+			bootstrap.Warning("%s aborted (interrupted by signal); stopping the install before finalization", step)
+		}
+		return wrapInstallError(errInteractiveAborted)
+	}
 	fmt.Printf("%s skipped (input aborted, non-blocking): %v\n", step, err)
 	if bootstrap != nil {
 		bootstrap.Warning("%s skipped (input aborted, non-blocking): %v", step, err)
@@ -188,7 +215,7 @@ func runPostInstallAuditCLI(ctx context.Context, reader *bufio.Reader, execPath,
 	fmt.Println("\n--- Post-install check (optional) ---")
 	run, err := promptYesNo(ctx, reader, "Run a dry-run to detect unused components and reduce warnings? [Y/n]: ", true)
 	if err != nil {
-		return skipOptionalInstallStepOnAbort(bootstrap, "Post-install audit", err)
+		return skipOptionalInstallStepOnAbort(ctx, bootstrap, "Post-install audit", err)
 	}
 	if !run {
 		if bootstrap != nil {
@@ -240,7 +267,7 @@ func runPostInstallAuditCLI(ctx context.Context, reader *bufio.Reader, execPath,
 
 	disableAny, err := promptYesNo(ctx, reader, "Disable any of the suggested components now (set KEY=false)? [y/N]: ", false)
 	if err != nil {
-		return skipOptionalInstallStepOnAbort(bootstrap, "Post-install audit", err)
+		return skipOptionalInstallStepOnAbort(ctx, bootstrap, "Post-install audit", err)
 	}
 	if !disableAny {
 		fmt.Println("No changes applied. You can disable unused components later by editing backup.env.")
@@ -254,7 +281,7 @@ func runPostInstallAuditCLI(ctx context.Context, reader *bufio.Reader, execPath,
 	for _, s := range suggestions {
 		disable, err := promptYesNo(ctx, reader, fmt.Sprintf("Disable %s? [y/N]: ", s.Key), false)
 		if err != nil {
-			return skipOptionalInstallStepOnAbort(bootstrap, "Post-install audit", err)
+			return skipOptionalInstallStepOnAbort(ctx, bootstrap, "Post-install audit", err)
 		}
 		if disable {
 			keys = append(keys, s.Key)
@@ -1050,31 +1077,31 @@ func runHealthcheckSelfParamsCLI(ctx context.Context, reader *bufio.Reader, base
 
 	alive, err := promptHealthcheckRequiredURL(ctx, reader, "Alive ping URL (HEALTHCHECK_ALIVE_URL): ", prefill.AliveURL)
 	if err != nil {
-		return skipOptionalInstallStepOnAbort(bootstrap, "Healthcheck parameters", err)
+		return skipOptionalInstallStepOnAbort(ctx, bootstrap, "Healthcheck parameters", err)
 	}
 	backup, err := promptHealthcheckRequiredURL(ctx, reader, "Backup ping URL (HEALTHCHECK_BACKUP_URL): ", prefill.BackupURL)
 	if err != nil {
-		return skipOptionalInstallStepOnAbort(bootstrap, "Healthcheck parameters", err)
+		return skipOptionalInstallStepOnAbort(ctx, bootstrap, "Healthcheck parameters", err)
 	}
 	updates, err := promptHealthcheckOptionalURL(ctx, reader, "Updates ping URL (HEALTHCHECK_UPDATES_URL, optional): ", prefill.UpdatesURL)
 	if err != nil {
-		return skipOptionalInstallStepOnAbort(bootstrap, "Healthcheck parameters", err)
+		return skipOptionalInstallStepOnAbort(ctx, bootstrap, "Healthcheck parameters", err)
 	}
 	notifyEmail, err := promptHealthcheckOptionalURL(ctx, reader, "Notify email ping URL (HEALTHCHECK_NOTIFY_EMAIL_URL, optional): ", prefill.NotifyEmailURL)
 	if err != nil {
-		return skipOptionalInstallStepOnAbort(bootstrap, "Healthcheck parameters", err)
+		return skipOptionalInstallStepOnAbort(ctx, bootstrap, "Healthcheck parameters", err)
 	}
 	notifyTelegram, err := promptHealthcheckOptionalURL(ctx, reader, "Notify Telegram ping URL (HEALTHCHECK_NOTIFY_TELEGRAM_URL, optional): ", prefill.NotifyTelegramURL)
 	if err != nil {
-		return skipOptionalInstallStepOnAbort(bootstrap, "Healthcheck parameters", err)
+		return skipOptionalInstallStepOnAbort(ctx, bootstrap, "Healthcheck parameters", err)
 	}
 	notifyGotify, err := promptHealthcheckOptionalURL(ctx, reader, "Notify Gotify ping URL (HEALTHCHECK_NOTIFY_GOTIFY_URL, optional): ", prefill.NotifyGotifyURL)
 	if err != nil {
-		return skipOptionalInstallStepOnAbort(bootstrap, "Healthcheck parameters", err)
+		return skipOptionalInstallStepOnAbort(ctx, bootstrap, "Healthcheck parameters", err)
 	}
 	notifyWebhook, err := promptHealthcheckOptionalURL(ctx, reader, "Notify webhook ping URL (HEALTHCHECK_NOTIFY_WEBHOOK_URL, optional): ", prefill.NotifyWebhookURL)
 	if err != nil {
-		return skipOptionalInstallStepOnAbort(bootstrap, "Healthcheck parameters", err)
+		return skipOptionalInstallStepOnAbort(ctx, bootstrap, "Healthcheck parameters", err)
 	}
 
 	params := installer.HealthcheckSelfParams{

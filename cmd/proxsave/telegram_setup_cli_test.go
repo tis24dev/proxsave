@@ -247,11 +247,14 @@ func TestRunTelegramSetupCLI_BootstrapErrorNonBlocking(t *testing.T) {
 	}
 }
 
-// TestRunTelegramSetupCLI_PromptAbortIsNonBlocking pins the CLI/TUI parity fix: a
-// prompt abort (Ctrl-D/EOF or cancel) during the optional Telegram verification
-// must NOT abort the install — it returns nil so runInstall still reaches the
-// entrypoint/cron finalization, matching the TUI which demotes Telegram errors to
-// a warning. Previously this returned wrapInstallError and aborted the install.
+// TestRunTelegramSetupCLI_PromptAbortIsNonBlocking pins the BENIGN half of the
+// optional-step contract: a plain input abort (Ctrl-D/EOF) with the run context
+// still LIVE during the optional Telegram verification must NOT abort the install.
+// It returns nil so runInstall still reaches the entrypoint/cron finalization,
+// matching the TUI which demotes Telegram errors to a warning. The other half (a
+// real Ctrl+C that cancels the run context) DOES abort, pinned by
+// TestRunTelegramSetupCLI_CancelledCtxAbortsInstall. (The context here is live, so
+// this stays non-blocking even though the stub returns errInteractiveAborted.)
 func TestRunTelegramSetupCLI_PromptAbortIsNonBlocking(t *testing.T) {
 	stubTelegramSetupCLIDeps(t)
 
@@ -276,6 +279,40 @@ func TestRunTelegramSetupCLI_PromptAbortIsNonBlocking(t *testing.T) {
 	}
 	if promptCalls != 1 {
 		t.Fatalf("expected the verification prompt to be exercised exactly once, got %d calls", promptCalls)
+	}
+}
+
+// TestRunTelegramSetupCLI_CancelledCtxAbortsInstall pins F10-01 end to end through
+// a real optional step: a Ctrl+C that cancels the run context during Telegram
+// setup must abort the install (isInstallAbortedError) so runInstall stops before
+// the cron/scheduler finalization instead of reporting a false-green "completed".
+// Contrast with TestRunTelegramSetupCLI_PromptAbortIsNonBlocking (live context).
+func TestRunTelegramSetupCLI_CancelledCtxAbortsInstall(t *testing.T) {
+	stubTelegramSetupCLIDeps(t)
+
+	telegramSetupBuildBootstrap = func(configPath, baseDir string) (orchestrator.TelegramSetupBootstrap, error) {
+		return orchestrator.TelegramSetupBootstrap{
+			Eligibility: orchestrator.TelegramSetupEligibleCentralized,
+			ServerID:    "12345",
+		}, nil
+	}
+	telegramSetupPromptYesNo = func(ctx context.Context, reader *bufio.Reader, question string, defaultYes bool) (bool, error) {
+		return false, errInteractiveAborted
+	}
+	telegramSetupCheckRegistration = func(ctx context.Context, serverAPIHost, serverID, baseDir string, logger *logging.Logger) notify.TelegramRegistrationResult {
+		t.Fatalf("registration check should not run when the prompt aborts")
+		return notify.TelegramRegistrationResult{}
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	err := runTelegramSetupCLI(ctx, bufio.NewReader(strings.NewReader("")), t.TempDir(), "/fake/backup.env", logging.NewBootstrapLogger())
+	if err == nil {
+		t.Fatal("Ctrl+C (cancelled context) during Telegram setup must abort the install, got nil")
+	}
+	if !isInstallAbortedError(err) {
+		t.Fatalf("returned error must be an install abort, got %v", err)
 	}
 }
 
