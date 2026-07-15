@@ -282,7 +282,7 @@ func (f *networkRollbackUIApplyFlow) rollbackStagedPreflightFailure(preflight ne
 	}
 	f.captureAfterRollbackDiagnostics()
 	f.warning(
-		"Network apply aborted: preflight validation failed (%s). Rolled back /etc/network/*, /etc/hosts, /etc/hostname, /etc/resolv.conf to the pre-restore state (rollback=%s).",
+		"Network apply aborted: preflight validation failed (%s). Rolled back the managed network configuration (/etc/network, /etc/netplan, /etc/systemd/network, /etc/NetworkManager/system-connections, /etc/hosts, /etc/hostname, /etc/resolv.conf) to the pre-restore state (rollback=%s).",
 		preflight.CommandLine(),
 		strings.TrimSpace(f.networkRollbackPath),
 	)
