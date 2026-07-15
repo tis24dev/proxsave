@@ -115,3 +115,46 @@ func TestWriteArchiveChecksumPropagatesWriteError(t *testing.T) {
 		t.Fatalf("expected checksum path in error, got %q", err.Error())
 	}
 }
+
+func TestFinalizeSuccessIssueStats_NotifyIssueBecomesWarning(t *testing.T) {
+	// A notify/communication failure is logged DURING dispatch, after the
+	// pre-notification snapshot. On a successful run the final re-parse must pick it
+	// up so it surfaces as a warning (status 1) instead of vanishing to success (0).
+	tempDir := t.TempDir()
+	logFile := filepath.Join(tempDir, "run.log")
+	content := "[2026-07-16 10:00:00] INFO     Backup completed\n" +
+		"[2026-07-16 10:00:01] NOTIFY-ERR Telegram: failed: connection refused\n"
+	if err := os.WriteFile(logFile, []byte(content), 0o644); err != nil {
+		t.Fatalf("write log: %v", err)
+	}
+
+	o := &Orchestrator{}
+	stats := &BackupStats{LogFilePath: logFile, ExitCode: types.ExitSuccess.Int()}
+	o.finalizeSuccessIssueStats(stats)
+
+	if stats.NotifyCount != 1 {
+		t.Fatalf("NotifyCount = %d, want 1", stats.NotifyCount)
+	}
+	if stats.ExitCode != types.ExitGenericError.Int() {
+		t.Fatalf("ExitCode = %d, want %d (notify issue must surface as warning, never 0)",
+			stats.ExitCode, types.ExitGenericError.Int())
+	}
+}
+
+func TestFinalizeSuccessIssueStats_CleanRunStaysSuccess(t *testing.T) {
+	tempDir := t.TempDir()
+	logFile := filepath.Join(tempDir, "clean.log")
+	content := "[2026-07-16 10:00:00] INFO     Backup completed\n"
+	if err := os.WriteFile(logFile, []byte(content), 0o644); err != nil {
+		t.Fatalf("write log: %v", err)
+	}
+
+	o := &Orchestrator{}
+	stats := &BackupStats{LogFilePath: logFile, ExitCode: types.ExitSuccess.Int()}
+	o.finalizeSuccessIssueStats(stats)
+
+	if stats.ExitCode != types.ExitSuccess.Int() {
+		t.Fatalf("ExitCode = %d, want %d (a clean run must stay success)",
+			stats.ExitCode, types.ExitSuccess.Int())
+	}
+}

@@ -107,8 +107,27 @@ func (o *Orchestrator) exportBackupMetrics(run *backupRunContext, runErr error) 
 	}
 
 	o.ensureBackupStatsTiming(stats)
+	// On a successful, non-dry run the pre-notification issue snapshot was taken before
+	// notifications ran, so a notify/communication failure logged during dispatch is not
+	// yet counted. Re-parse the log so it surfaces as a warning (status 1) instead of
+	// vanishing to success (0). Idempotent: a clean run stays success.
+	if runErr == nil && !o.dryRun {
+		o.finalizeSuccessIssueStats(stats)
+	}
 	stats.ExitCode = backupMetricsExitCode(stats, runErr)
 	o.exportPrometheusBackupMetrics(stats)
+}
+
+// finalizeSuccessIssueStats re-parses the run log after notifications on a successful
+// run and re-applies the exit code, so a notify/communication failure logged during
+// dispatch (after the pre-notification snapshot) surfaces as a warning rather than
+// vanishing to success. Mirrors finalizeDryRunIssueStats / parseFailedBackupLogCounts.
+func (o *Orchestrator) finalizeSuccessIssueStats(stats *BackupStats) {
+	if stats == nil || stats.LogFilePath == "" {
+		return
+	}
+	o.refreshLogIssuesFromFile(stats, false)
+	applyIssueExitCode(stats)
 }
 
 func (o *Orchestrator) finalizeFailedBackupStats(run *backupRunContext, runErr error) {
