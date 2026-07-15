@@ -75,6 +75,14 @@ func (o *Orchestrator) dispatchNotifications(ctx context.Context, stats *BackupS
 		return
 	}
 
+	// The whole notification subsystem (notifiers, adapter, serverbot client) shares
+	// this one logger instance. Bracket the sequential dispatch so any error/critical
+	// it logs is reclassified as a NOTIFY-ERR (display-error, warning-weight): a channel
+	// outage stays warning, never escalates the run to error. One governed boundary
+	// instead of patching each notifier's ~dozen error sites.
+	o.logger.EnterNotifyErrorScope()
+	defer o.logger.ExitNotifyErrorScope()
+
 	type notifierEntry struct {
 		name    string
 		enabled bool

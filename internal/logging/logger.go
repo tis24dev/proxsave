@@ -51,7 +51,13 @@ type Logger struct {
 	// exit code / gauge to error). Kept separate from errorCount so a notify failure
 	// never looks like a backup error.
 	notifyCount int64
-	issueLines  []string // Captured WARNING/ERROR/CRITICAL lines for end-of-run summary
+	// notifyErrorScope, when > 0, reclassifies every unlabeled error/critical logged
+	// through this logger as a NOTIFY-ERR (display-error, warning-weight). It brackets
+	// the notification dispatch, whose whole subsystem (notifiers, adapter, serverbot)
+	// shares this one logger instance, so a channel outage never escalates the run.
+	// Guarded by mu; nestable via Enter/ExitNotifyErrorScope.
+	notifyErrorScope int
+	issueLines       []string // Captured WARNING/ERROR/CRITICAL lines for end-of-run summary
 	exitFunc         func(int)
 	secrets          []secretForm // registered secret values scrubbed from every log line
 }
@@ -333,6 +339,15 @@ func (l *Logger) logWithLabel(level types.LogLevel, label string, colorOverride 
 		return
 	}
 
+	// Inside a notification-dispatch scope, an unlabeled error/critical is a
+	// notification/communication failure: emit it as a NOTIFY-ERR (display-error,
+	// warning-weight) so a channel outage never escalates the run status. Explicitly
+	// labeled lines (PHASE/STEP/SKIP, or an already-NOTIFY-ERR) are left untouched.
+	if l.notifyErrorScope > 0 && label == "" &&
+		(level == types.LogLevelError || level == types.LogLevelCritical) {
+		label = notifyErrorLabel
+	}
+
 	// Track warning/error counters for summary/exit coloring. A NOTIFY-ERR line
 	// (notification/communication failure) is emitted at error level but counts into
 	// notifyCount, not errorCount: it displays as an error yet is warning-weight for
@@ -529,6 +544,33 @@ func (l *Logger) NotifyError(format string, args ...interface{}) {
 // line to ERROR, so recap/footer renderers present notify failures as errors.
 func NormalizeNotifyErrorToken(line string) string {
 	return strings.Replace(line, notifyErrorLabel, "ERROR", 1)
+}
+
+// EnterNotifyErrorScope brackets a region (the notification dispatch) in which every
+// unlabeled error/critical logged through this logger is a notification/communication
+// failure: it displays as an error but is warning-weight for the run status. Balanced
+// by ExitNotifyErrorScope and nestable. Because the whole notification subsystem shares
+// this one logger instance, wrapping the (sequential) dispatch reclassifies every
+// channel failure in one place, with no per-call-site edits.
+func (l *Logger) EnterNotifyErrorScope() {
+	if l == nil {
+		return
+	}
+	l.mu.Lock()
+	l.notifyErrorScope++
+	l.mu.Unlock()
+}
+
+// ExitNotifyErrorScope ends one EnterNotifyErrorScope level.
+func (l *Logger) ExitNotifyErrorScope() {
+	if l == nil {
+		return
+	}
+	l.mu.Lock()
+	if l.notifyErrorScope > 0 {
+		l.notifyErrorScope--
+	}
+	l.mu.Unlock()
 }
 
 // Critical writes a critical log.
