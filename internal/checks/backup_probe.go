@@ -34,7 +34,9 @@ func DefaultBackupLockPath(baseDir string) string {
 // whether a backup currently holds the lock at lockPath. It is a read-only probe (stat +
 // read + signal-0) that reuses the EXACT stale/live decision CheckLockFile applies, so it
 // can never block a real backup (it never O_EXCL-creates the lock) and never holds it:
-//   - no lock file (or an unreadable stat)                 -> not in progress.
+//   - no lock file (IsNotExist)                            -> not in progress.
+//   - an unreadable stat (EACCES/EIO)                      -> fail closed: in progress
+//     (never let a restart interrupt a possibly-live backup).
 //   - a recorded pid on THIS host that is alive (kill 0 ->  -> in progress (a live backup).
 //     nil or EPERM)
 //   - a recorded pid on this host that is gone (ESRCH)      -> not in progress (stale lock).
@@ -49,7 +51,10 @@ func DefaultBackupLockPath(baseDir string) string {
 func BackupInProgress(lockPath string, maxLockAge time.Duration) bool {
 	info, err := osStat(lockPath)
 	if err != nil {
-		return false // missing lock (or unreadable): no backup is holding it
+		if os.IsNotExist(err) {
+			return false // no lock -> no backup is holding it
+		}
+		return true // stat failed (EACCES/EIO): fail closed, a backup may be running
 	}
 	age := time.Since(info.ModTime())
 
@@ -66,7 +71,10 @@ func BackupInProgress(lockPath string, maxLockAge time.Duration) bool {
 	if meta.PID > 0 && sameHost(meta.Host, hostname) {
 		switch killErr := killFunc(meta.PID, 0); {
 		case killErr == nil, errors.Is(killErr, syscall.EPERM):
-			return true // pid alive on this host -> a backup is in progress
+			if lockOwnerReused(meta) {
+				return false // pid reused -> stale lock, no backup running
+			}
+			return true // same process alive on this host -> a backup is in progress
 		case errors.Is(killErr, syscall.ESRCH):
 			return false // pid gone -> stale lock, no backup running
 		default:
