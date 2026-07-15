@@ -72,7 +72,7 @@ func extractArchiveNative(ctx context.Context, opts restoreArchiveOptions) (err 
 	defer extractionLog.close()
 	extractionLog.writeHeader(opts)
 
-	stats, err := processRestoreArchiveEntries(ctx, tar.NewReader(reader), opts, extractionLog)
+	stats, extractedSet, err := processRestoreArchiveEntries(ctx, tar.NewReader(reader), opts, extractionLog)
 	if err != nil {
 		return err
 	}
@@ -84,7 +84,7 @@ func extractArchiveNative(ctx context.Context, opts restoreArchiveOptions) (err 
 	// archive, so selective restore never leaves a dangling link and full restore
 	// preserves the original file type (issue #70). Safe on every extraction: it
 	// never deletes and is a no-op when no dedup manifest is present.
-	if err := materializeDedupSymlinks(ctx, opts.archivePath, opts.destRoot, opts.logger, opts.failOnPartialExtraction); err != nil {
+	if err := materializeDedupSymlinks(ctx, opts.archivePath, opts.destRoot, opts.logger, opts.failOnPartialExtraction, extractedSet); err != nil {
 		// On the staged path (failOnPartialExtraction) an incompletely reconstructed
 		// dedup tree must not be applied to the live system; elsewhere it is a
 		// recoverable warning and the (kept) manifest lets a re-run finish.
@@ -159,12 +159,18 @@ func (log *restoreExtractionLog) writeHeader(opts restoreArchiveOptions) {
 	_, _ = fmt.Fprintf(log.logFile, "\n")
 }
 
-func processRestoreArchiveEntries(ctx context.Context, tarReader *tar.Reader, opts restoreArchiveOptions, extractionLog *restoreExtractionLog) (restoreExtractionStats, error) {
+func processRestoreArchiveEntries(ctx context.Context, tarReader *tar.Reader, opts restoreArchiveOptions, extractionLog *restoreExtractionLog) (restoreExtractionStats, map[string]bool, error) {
 	var stats restoreExtractionStats
 	selectiveMode := len(opts.categories) > 0
+	// In selective mode, record what we actually extracted this run so dedup
+	// materialization can be gated to it (F-05-01). nil in full restore = no gate.
+	var extractedSet map[string]bool
+	if selectiveMode {
+		extractedSet = map[string]bool{}
+	}
 	for {
 		if err := ctx.Err(); err != nil {
-			return stats, err
+			return stats, extractedSet, err
 		}
 
 		header, err := tarReader.Next()
@@ -172,7 +178,7 @@ func processRestoreArchiveEntries(ctx context.Context, tarReader *tar.Reader, op
 			break
 		}
 		if err != nil {
-			return stats, fmt.Errorf("read tar header: %w", err)
+			return stats, extractedSet, fmt.Errorf("read tar header: %w", err)
 		}
 
 		if skipRestoreArchiveEntry(header, opts, selectiveMode, extractionLog, &stats) {
@@ -196,12 +202,15 @@ func processRestoreArchiveEntries(ctx context.Context, tarReader *tar.Reader, op
 		}
 
 		stats.filesExtracted++
+		if extractedSet != nil {
+			extractedSet[dedupCleanArchivePath(header.Name)] = true
+		}
 		extractionLog.recordRestored(header.Name)
 		if stats.filesExtracted%100 == 0 {
 			opts.logger.Debug("Extracted %d files...", stats.filesExtracted)
 		}
 	}
-	return stats, nil
+	return stats, extractedSet, nil
 }
 
 func isDedupManifestEntry(name string) bool {
@@ -320,7 +329,7 @@ type materializeTarget struct {
 // dedup canonical's category was not selected or its on-disk copy failed to extract,
 // and it never picks up stale live content (issue #70). It is a no-op when no
 // manifest is present (deduplication was off or found no duplicates).
-func materializeDedupSymlinks(ctx context.Context, archivePath, destRoot string, logger *logging.Logger, strict bool) error {
+func materializeDedupSymlinks(ctx context.Context, archivePath, destRoot string, logger *logging.Logger, strict bool, extractedSet map[string]bool) error {
 	manifestTarget, _, err := sanitizeRestoreEntryTargetWithFS(restoreFS, destRoot, backup.DedupManifestRelPath)
 	if err != nil {
 		return nil
@@ -356,6 +365,11 @@ func materializeDedupSymlinks(ctx context.Context, archivePath, destRoot string,
 	needByCanonical := map[string][]materializeTarget{}
 	for _, entry := range entries {
 		if strings.TrimSpace(entry.Path) == "" {
+			continue
+		}
+		if extractedSet != nil && !extractedSet[dedupCleanArchivePath(entry.Path)] {
+			// Selective restore: only rebuild duplicates actually extracted this run,
+			// never a pre-existing live symlink or an out-of-scope manifest entry (F-05-01).
 			continue
 		}
 		target, _, err := sanitizeRestoreEntryTargetWithFS(restoreFS, destRoot, entry.Path)

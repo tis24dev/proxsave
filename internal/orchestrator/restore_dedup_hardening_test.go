@@ -39,7 +39,7 @@ func TestMaterializeDedupStrictFailsOnMissingCanonical(t *testing.T) {
 
 	// strict=true: error + manifest kept.
 	archive, destRoot := newCase(t)
-	if err := materializeDedupSymlinks(context.Background(), archive, destRoot, logger, true); err == nil {
+	if err := materializeDedupSymlinks(context.Background(), archive, destRoot, logger, true, nil); err == nil {
 		t.Fatal("strict materialization must fail when a canonical is missing from the archive")
 	}
 	if _, err := os.Stat(manifestPath(destRoot)); err != nil {
@@ -48,7 +48,7 @@ func TestMaterializeDedupStrictFailsOnMissingCanonical(t *testing.T) {
 
 	// strict=false: nil, symlink kept (existing best-effort behavior).
 	archive, destRoot = newCase(t)
-	if err := materializeDedupSymlinks(context.Background(), archive, destRoot, logger, false); err != nil {
+	if err := materializeDedupSymlinks(context.Background(), archive, destRoot, logger, false, nil); err != nil {
 		t.Fatalf("best-effort must tolerate a missing canonical, got %v", err)
 	}
 	if info, err := os.Lstat(filepath.Join(destRoot, "b", "two.cfg")); err != nil || info.Mode()&os.ModeSymlink == 0 {
@@ -85,7 +85,7 @@ func TestMaterializeDedupManifestSizeCap(t *testing.T) {
 	logger := logging.New(types.LogLevelError, false)
 
 	// strict: error, manifest kept, symlink NOT materialized.
-	if err := materializeDedupSymlinks(context.Background(), archive, destRoot, logger, true); err == nil {
+	if err := materializeDedupSymlinks(context.Background(), archive, destRoot, logger, true, nil); err == nil {
 		t.Fatal("strict must refuse an oversized manifest")
 	}
 	if _, err := os.Stat(manifest); err != nil {
@@ -120,7 +120,7 @@ func TestMaterializeDedupCanonicalSizeCap(t *testing.T) {
 	logger := logging.New(types.LogLevelError, false)
 
 	// best-effort: symlink kept (canonical treated as missing).
-	if err := materializeDedupSymlinks(context.Background(), archive, destRoot, logger, false); err != nil {
+	if err := materializeDedupSymlinks(context.Background(), archive, destRoot, logger, false, nil); err != nil {
 		t.Fatalf("best-effort over-cap canonical should not error: %v", err)
 	}
 	if info, err := os.Lstat(filepath.Join(destRoot, "a", "two.cfg")); err != nil || info.Mode()&os.ModeSymlink == 0 {
@@ -136,7 +136,58 @@ func TestMaterializeDedupCanonicalSizeCap(t *testing.T) {
 		t.Fatal(err)
 	}
 	writeDedupManifestForTest(t, destRoot2, []backup.DedupManifestEntry{{Path: "a/two.cfg", Mode: 0o640}})
-	if err := materializeDedupSymlinks(context.Background(), archive, destRoot2, logger, true); err == nil {
+	if err := materializeDedupSymlinks(context.Background(), archive, destRoot2, logger, true, nil); err == nil {
 		t.Fatal("strict over-cap canonical must fail closed")
+	}
+}
+
+// F-05-01: in a selective restore, a manifest entry whose path was NOT extracted
+// this run (out of the selected scope, or a pre-existing live symlink) must be left
+// UNTOUCHED, not atomically replaced with archive content.
+func TestMaterializeDedupSelectiveScopeGate(t *testing.T) {
+	origFS := restoreFS
+	restoreFS = osFS{}
+	t.Cleanup(func() { restoreFS = origFS })
+
+	root := t.TempDir()
+	archive := writeTarArchiveForTest(t, root, map[string]string{
+		"a/one.cfg":    "payload", // canonical of the in-scope duplicate
+		"x/secret.cfg": "EVIL",    // canonical the out-of-scope entry points at
+	})
+
+	destRoot := t.TempDir()
+	// In-scope duplicate, extracted this run.
+	if err := os.MkdirAll(filepath.Join(destRoot, "b"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("../a/one.cfg", filepath.Join(destRoot, "b", "two.cfg")); err != nil {
+		t.Fatal(err)
+	}
+	// Out-of-scope pre-existing live symlink NOT extracted this run.
+	if err := os.Symlink("x/secret.cfg", filepath.Join(destRoot, "victim.cfg")); err != nil {
+		t.Fatal(err)
+	}
+	writeDedupManifestForTest(t, destRoot, []backup.DedupManifestEntry{
+		{Path: "b/two.cfg", Mode: 0o640},
+		{Path: "victim.cfg", Mode: 0o640},
+	})
+
+	extracted := map[string]bool{"b/two.cfg": true} // selective: only the in-scope name
+	logger := logging.New(types.LogLevelError, false)
+	if err := materializeDedupSymlinks(context.Background(), archive, destRoot, logger, false, extracted); err != nil {
+		t.Fatalf("materialize: %v", err)
+	}
+
+	// In-scope duplicate rebuilt.
+	if info, err := os.Lstat(filepath.Join(destRoot, "b", "two.cfg")); err != nil || info.Mode()&os.ModeSymlink != 0 {
+		t.Fatalf("in-scope duplicate must be materialized, info=%v err=%v", info, err)
+	}
+	// Out-of-scope symlink untouched (still a symlink, still pointing where it did).
+	info, err := os.Lstat(filepath.Join(destRoot, "victim.cfg"))
+	if err != nil || info.Mode()&os.ModeSymlink == 0 {
+		t.Fatalf("out-of-scope entry must be left as a symlink, info=%v err=%v", info, err)
+	}
+	if tgt, _ := os.Readlink(filepath.Join(destRoot, "victim.cfg")); tgt != "x/secret.cfg" {
+		t.Fatalf("out-of-scope symlink target changed to %q", tgt)
 	}
 }
