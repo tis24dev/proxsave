@@ -239,7 +239,7 @@ func (d *daemon) processManualOutcome(ctx context.Context) {
 	r := d.getReporter()
 	// Centralized lazy re-resolve (mirrors beat/updateTick's single re-resolve): if the backup URL
 	// is not resolved yet, try ONE rebuild so a daemon paired after startup can still ping.
-	if (r == nil || !r.HasBackupURL()) && d.cfg.HealthcheckMode == "centralized" {
+	if (r == nil || !r.HasBackupURL()) && d.cfg.HealthcheckMode == config.HealthcheckModeCentralized {
 		if nr := d.buildReporter(ctx); nr != nil && nr.HasBackupURL() {
 			d.setReporter(nr)
 			r = nr
@@ -438,7 +438,7 @@ func (d *daemon) heartbeatLoop(ctx context.Context) {
 
 func (d *daemon) beat(ctx context.Context) {
 	r := d.getReporter()
-	if (r == nil || !r.HasAliveURL()) && d.cfg.HealthcheckMode == "centralized" {
+	if (r == nil || !r.HasAliveURL()) && d.cfg.HealthcheckMode == config.HealthcheckModeCentralized {
 		if nr := d.buildReporter(ctx); nr != nil && nr.HasAliveURL() {
 			d.setReporter(nr)
 			r = nr
@@ -545,7 +545,7 @@ func (d *daemon) updateTick(ctx context.Context) {
 	r := d.getReporter()
 	// In centralized mode, lazily (re)resolve until the updates URL is present, so a daemon
 	// paired (or a server that adds the updates check) after startup eventually reports it.
-	if (r == nil || !r.HasUpdatesURL()) && d.cfg.HealthcheckMode == "centralized" {
+	if (r == nil || !r.HasUpdatesURL()) && d.cfg.HealthcheckMode == config.HealthcheckModeCentralized {
 		if nr := d.buildReporter(ctx); nr != nil && nr.HasUpdatesURL() {
 			d.setReporter(nr)
 			r = nr
@@ -601,7 +601,7 @@ func (d *daemon) buildReporter(ctx context.Context) *health.Reporter {
 	if !d.cfg.HealthcheckEnabled {
 		return nil
 	}
-	if d.cfg.HealthcheckMode == "self" {
+	if d.cfg.HealthcheckMode == config.HealthcheckModeSelf {
 		alive, backup, checks := d.selfURLs()
 		if alive == "" && backup == "" && len(checks) == 0 {
 			logging.Warning("daemon: healthcheck self mode enabled but no ping URLs configured")
@@ -817,7 +817,7 @@ func (d *daemon) reportNotifyOutcomes(ctx context.Context, r backupReporter, rid
 	// Resolve the reporter at most ONCE for the whole run: in centralized mode, if any
 	// channel still lacks a resolved check URL, try a single rebuild (mirrors beat's single
 	// re-resolve; never a per-channel re-fetch storm).
-	if d.cfg.HealthcheckMode == "centralized" && needsNotifyResolve(r, nr.Results) {
+	if d.cfg.HealthcheckMode == config.HealthcheckModeCentralized && needsNotifyResolve(r, nr.Results) {
 		if newR := d.buildReporter(ctx); newR != nil {
 			d.setReporter(newR)
 			r = newR

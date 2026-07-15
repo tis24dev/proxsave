@@ -839,7 +839,7 @@ func (c *Config) parseSchedulerSettings() {
 // parseHealthcheckSettings reads the healthchecks-connector keys (daemon only).
 func (c *Config) parseHealthcheckSettings() {
 	c.HealthcheckEnabled = c.getBool("HEALTHCHECK_ENABLED", false)
-	c.HealthcheckMode = normalizeHealthcheckMode(c.getString("HEALTHCHECK_MODE", "centralized"))
+	c.HealthcheckMode = normalizeHealthcheckMode(c.getString("HEALTHCHECK_MODE", HealthcheckModeCentralized))
 	c.HealthcheckHeartbeatInterval = c.getDuration("HEALTHCHECK_HEARTBEAT_INTERVAL", 5*time.Minute)
 	c.HealthcheckSendLog = c.getBool("HEALTHCHECK_SEND_LOG", true)
 	c.HealthcheckAliveURL = strings.TrimSpace(c.getString("HEALTHCHECK_ALIVE_URL", ""))
@@ -869,12 +869,19 @@ func normalizeSchedulerMode(v string) string {
 	return "cron"
 }
 
+// HealthcheckMode values. Centralized fetches ping URLs from the server; self
+// assembles them locally from a ping endpoint + check IDs.
+const (
+	HealthcheckModeCentralized = "centralized"
+	HealthcheckModeSelf        = "self"
+)
+
 // normalizeHealthcheckMode maps any unrecognised value to the default "centralized".
 func normalizeHealthcheckMode(v string) string {
-	if strings.ToLower(strings.TrimSpace(v)) == "self" {
-		return "self"
+	if strings.ToLower(strings.TrimSpace(v)) == HealthcheckModeSelf {
+		return HealthcheckModeSelf
 	}
-	return "centralized"
+	return HealthcheckModeCentralized
 }
 
 func (c *Config) parseCollectionSettings() error {
