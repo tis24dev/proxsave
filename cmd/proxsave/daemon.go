@@ -731,10 +731,15 @@ func (d *daemon) selfURLs() (string, string, map[string]string) {
 	addNotify("telegram", d.cfg.HealthcheckNotifyTelegramURL, d.cfg.HealthcheckNotifyTelegramID)
 	addNotify("gotify", d.cfg.HealthcheckNotifyGotifyURL, d.cfg.HealthcheckNotifyGotifyID)
 	addNotify("webhook", d.cfg.HealthcheckNotifyWebhookURL, d.cfg.HealthcheckNotifyWebhookID)
-	if d.cfg.HealthcheckAliveURL != "" || d.cfg.HealthcheckBackupURL != "" {
-		return d.cfg.HealthcheckAliveURL, d.cfg.HealthcheckBackupURL, checks
+	alive := strings.TrimSpace(d.cfg.HealthcheckAliveURL)
+	if alive == "" {
+		alive = build(d.cfg.HealthcheckAliveID)
 	}
-	return build(d.cfg.HealthcheckAliveID), build(d.cfg.HealthcheckBackupID), checks
+	backup := strings.TrimSpace(d.cfg.HealthcheckBackupURL)
+	if backup == "" {
+		backup = build(d.cfg.HealthcheckBackupID)
+	}
+	return alive, backup, checks
 }
 
 func (d *daemon) registerSecrets(urls ...string) {
