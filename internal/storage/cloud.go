@@ -742,16 +742,12 @@ func (c *CloudStorage) Store(ctx context.Context, backupFile string, metadata *t
 	c.logger.Debug("Cloud storage: upload retries=%d threads=%d bwlimit=%s",
 		c.config.RcloneRetries, c.config.RcloneTransfers, c.config.RcloneBandwidthLimit)
 
-	// Use OPERATION timeout for upload (long timeout). Guard >0 so
-	// RCLONE_TIMEOUT_OPERATION=0 means "unbounded upload" instead of
-	// WithTimeout(ctx, 0) (an already-expired ctx that fails every upload
-	// instantly). Consistent with UploadToRemotePath and remoteSHA256.
+	// Do NOT pre-bound all tasks under one shared RcloneTimeoutOperation budget: that
+	// let a slow copy consume the budget and starve the post-upload verify, failing a
+	// good object (F08-03). Each runUploadTask now owns an independent copy budget AND
+	// a fresh verify budget derived from the raw run ctx. The run ctx still bounds
+	// shutdown (cancel-only), and RcloneTimeoutOperation=0 stays unbounded per task.
 	uploadCtx := ctx
-	if c.config.RcloneTimeoutOperation > 0 {
-		var cancel context.CancelFunc
-		uploadCtx, cancel = context.WithTimeout(ctx, time.Duration(c.config.RcloneTimeoutOperation)*time.Second)
-		defer cancel()
-	}
 
 	tasks := make([]uploadTask, 0, 4)
 	tasks = append(tasks, uploadTask{
@@ -946,16 +942,16 @@ func (c *CloudStorage) shouldUseParallelUpload() bool {
 }
 
 func (c *CloudStorage) runUploadTask(parentCtx context.Context, task uploadTask) error {
-	// Guard >0 so RCLONE_TIMEOUT_OPERATION=0 stays unbounded rather than collapsing
-	// to an already-expired WithTimeout(parentCtx, 0).
-	taskCtx := parentCtx
+	// Copy gets its own budget. Guard >0 so RCLONE_TIMEOUT_OPERATION=0 stays unbounded
+	// rather than collapsing to an already-expired WithTimeout(parentCtx, 0).
+	copyCtx := parentCtx
 	if c.config.RcloneTimeoutOperation > 0 {
 		var cancel context.CancelFunc
-		taskCtx, cancel = context.WithTimeout(parentCtx, time.Duration(c.config.RcloneTimeoutOperation)*time.Second)
+		copyCtx, cancel = context.WithTimeout(parentCtx, time.Duration(c.config.RcloneTimeoutOperation)*time.Second)
 		defer cancel()
 	}
 
-	if err := c.uploadWithRetry(taskCtx, task.local, task.remote); err != nil {
+	if err := c.uploadWithRetry(copyCtx, task.local, task.remote); err != nil {
 		return err
 	}
 
@@ -963,7 +959,18 @@ func (c *CloudStorage) runUploadTask(parentCtx context.Context, task uploadTask)
 		return nil
 	}
 
-	ok, err := c.VerifyUpload(parentCtx, task.local, task.remote)
+	// Verify gets its OWN fresh budget from parentCtx, a sibling of copyCtx rather than
+	// a child of the copy-consumed ctx, so a large/slow copy that used its whole budget
+	// cannot starve the verify of a good, fully-uploaded object (F08-03). A verify that
+	// still exhausts this fresh budget stays a real failure (no size-only degrade).
+	verifyCtx := parentCtx
+	if c.config.RcloneTimeoutOperation > 0 {
+		var cancel context.CancelFunc
+		verifyCtx, cancel = context.WithTimeout(parentCtx, time.Duration(c.config.RcloneTimeoutOperation)*time.Second)
+		defer cancel()
+	}
+
+	ok, err := c.VerifyUpload(verifyCtx, task.local, task.remote)
 	if err != nil || !ok {
 		if err == nil {
 			err = fmt.Errorf("verification failed")
@@ -1028,27 +1035,34 @@ func (c *CloudStorage) wrapUploadError(localPath string, err error) error {
 // UploadToRemotePath uploads an arbitrary file to the provided remote path using
 // the same retry and verification logic used for backups.
 func (c *CloudStorage) UploadToRemotePath(ctx context.Context, localFile, remoteFile string, verify bool) error {
-	// Bound the whole operation (copy retries + verify) on one RcloneTimeoutOperation
-	// budget. This is the only upload entry point reachable with a deadline-less ctx:
-	// the cloud log dispatch passes the run ctx, which is cancel-only (no deadline),
-	// so without this a stalled rclone or dead/stale mount could hang shutdown. Like
-	// Store/runUploadTask (here one shared budget covers copy+verify); guarded >0 to
-	// avoid an already-expired WithTimeout(ctx, 0).
+	// Copy and verify each get an INDEPENDENT RcloneTimeoutOperation budget derived
+	// from the run ctx (cancel-only, no deadline: the cloud log dispatch passes it), so
+	// a stalled rclone or dead mount cannot hang shutdown AND a slow copy cannot starve
+	// the verify of a good object (F08-03). Guarded >0 to avoid an already-expired
+	// WithTimeout(ctx, 0); RCLONE_TIMEOUT_OPERATION=0 stays unbounded.
+	copyCtx := ctx
 	if c.config.RcloneTimeoutOperation > 0 {
 		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, time.Duration(c.config.RcloneTimeoutOperation)*time.Second)
+		copyCtx, cancel = context.WithTimeout(ctx, time.Duration(c.config.RcloneTimeoutOperation)*time.Second)
 		defer cancel()
 	}
-	if err := c.uploadWithRetry(ctx, localFile, remoteFile); err != nil {
+	if err := c.uploadWithRetry(copyCtx, localFile, remoteFile); err != nil {
 		return err
 	}
-	if verify {
-		if ok, err := c.VerifyUpload(ctx, localFile, remoteFile); err != nil || !ok {
-			if err == nil {
-				err = fmt.Errorf("verification failed")
-			}
-			return err
+	if !verify {
+		return nil
+	}
+	verifyCtx := ctx
+	if c.config.RcloneTimeoutOperation > 0 {
+		var cancel context.CancelFunc
+		verifyCtx, cancel = context.WithTimeout(ctx, time.Duration(c.config.RcloneTimeoutOperation)*time.Second)
+		defer cancel()
+	}
+	if ok, err := c.VerifyUpload(verifyCtx, localFile, remoteFile); err != nil || !ok {
+		if err == nil {
+			err = fmt.Errorf("verification failed")
 		}
+		return err
 	}
 	return nil
 }
