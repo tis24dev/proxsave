@@ -77,16 +77,17 @@ func TestClassifyHealthcheckSetupResult(t *testing.T) {
 		wantFatal    bool
 		wantLogin    string
 	}{
-		{"verified", HealthcheckCheckResult{Err: nil, Reachable: true, LoginURL: "https://hc/L"}, true, false, "https://hc/L"},
-		{"ready but not reachable -> retry", HealthcheckCheckResult{Err: nil, Reachable: false, LoginURL: "https://hc/L"}, false, false, "https://hc/L"},
+		{"verified", HealthcheckCheckResult{Err: nil, Reachable: true, LoginURL: "https://hc.proxsave.dev/L"}, true, false, "https://hc.proxsave.dev/L"},
+		{"ready but not reachable -> retry", HealthcheckCheckResult{Err: nil, Reachable: false, LoginURL: "https://hc.proxsave.dev/L"}, false, false, "https://hc.proxsave.dev/L"},
 		{"auth fatal", HealthcheckCheckResult{Err: health.ErrHCAuth}, false, true, ""},
 		{"unknown fatal", HealthcheckCheckResult{Err: health.ErrHCUnknown}, false, true, ""},
 		{"disabled fatal", HealthcheckCheckResult{Err: health.ErrHCDisabled}, false, true, ""},
 		{"not ready retry", HealthcheckCheckResult{Err: health.ErrHCNotReady}, false, false, ""},
-		{"network retry keeps login", HealthcheckCheckResult{Err: errors.New("dial"), LoginURL: "https://hc/L2"}, false, false, "https://hc/L2"},
-		{"hostile ansi login dropped", HealthcheckCheckResult{Err: nil, Reachable: true, LoginURL: "https://hc/\x1b[2Jx"}, true, false, ""},
-		{"c1 control login dropped", HealthcheckCheckResult{Err: nil, Reachable: true, LoginURL: "https://hc/\u009bx"}, true, false, ""},
+		{"network retry keeps login", HealthcheckCheckResult{Err: errors.New("dial"), LoginURL: "https://hc.proxsave.dev/L2"}, false, false, "https://hc.proxsave.dev/L2"},
+		{"hostile ansi login dropped", HealthcheckCheckResult{Err: nil, Reachable: true, LoginURL: "https://hc.proxsave.dev/\x1b[2Jx"}, true, false, ""},
+		{"c1 control login dropped", HealthcheckCheckResult{Err: nil, Reachable: true, LoginURL: "https://hc.proxsave.dev/\u009bx"}, true, false, ""},
 		{"non-https login dropped", HealthcheckCheckResult{Err: nil, Reachable: true, LoginURL: "ftp://evil/x"}, true, false, ""},
+		{"foreign host login dropped", HealthcheckCheckResult{Err: errors.New("dial"), LoginURL: "https://phishing.evil/accounts/check_token/L"}, false, false, ""},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

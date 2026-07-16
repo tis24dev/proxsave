@@ -28,8 +28,9 @@ const (
 // policy flags; both front-ends render it identically. Keyword is the short first-line
 // state word (WORKING / NOT RUNNING / ...); Message is the second-line explanation; Level
 // colors the keyword. The Message is always our OWN copy; LoginURL (server-minted) is
-// passed through serverbot.SanitizeLoginURL so a hostile/MITM'd server cannot inject
-// terminal escape sequences into the install console.
+// passed through serverbot.TrustedLoginURL so a hostile/MITM'd server cannot inject
+// terminal escape sequences NOR surface a foreign (phishing) host to root at the
+// install prompt: a login_url outside the trusted server domain is dropped to "".
 type HealthcheckSetupState struct {
 	Keyword  string
 	Message  string
@@ -47,7 +48,7 @@ type HealthcheckSetupState struct {
 // since monitoring cannot operate until they are resolved. Verified (the install Continue
 // latch) stays connectivity-based: the daemon legitimately has not started yet at install.
 func ClassifyHealthcheckSetupResult(res HealthcheckCheckResult) HealthcheckSetupState {
-	st := HealthcheckSetupState{LoginURL: serverbot.SanitizeLoginURL(res.LoginURL)}
+	st := HealthcheckSetupState{LoginURL: serverbot.TrustedLoginURL(res.LoginURL, defaultServerAPIHost)}
 
 	// 1) Hard provisioning blockers: monitoring cannot operate until fixed -> override.
 	switch {
