@@ -27,6 +27,13 @@ import (
 // ring (oldest wrapped rows drop together with their raw parent).
 const streamLineCap = 5000
 
+// streamLineWidthCap bounds the display width of a SINGLE line before wrapLine.
+// wrapLine is O(L^2/width) in one line's width, so a pathological multi-100k-cell
+// line (no newline) would block the event-loop goroutine on append and on every
+// resize. 8192 cells is about 100 rows at width 80, far beyond any readable line;
+// anything wider is truncated with a marker (unreadable in a TUI regardless).
+const streamLineWidthCap = 8192
+
 // streamFlushInterval is the coalescing window: emitted lines are buffered and
 // flushed as one StreamLinesMsg at most this often, so a debug run's firehose of
 // thousands of lines lands as a handful of batches instead of one s.Send (and
@@ -407,6 +414,9 @@ func wrapLines(lines []string, width int) []string {
 // content, and grapheme-safe (never over-width, never drops a glyph) for the
 // wide-rune edge the viewport itself mishandles.
 //
+//   - a single line wider than streamLineWidthCap cells is first truncated with a
+//     marker, so the O(L^2/width) loop below cannot block the event loop on a
+//     pathological line (F04-03); normal lines are far under the cap and untouched.
 //   - a line whose display width is <= width is returned unchanged (one row);
 //     this includes blank/empty lines (width 0), which stay one empty row - the
 //     section spacers survive 1:1.
@@ -432,6 +442,11 @@ func wrapLines(lines []string, width int) []string {
 func wrapLine(line string, width int) []string {
 	if width < 1 {
 		width = 1
+	}
+	if ansi.StringWidth(line) > streamLineWidthCap {
+		// Bound a pathological single line so the loop below stays O(cap^2/width);
+		// the marker is honest and no readable TUI line is anywhere near this wide.
+		line = ansi.Truncate(line, streamLineWidthCap, "...(truncated)")
 	}
 	lineWidth := ansi.StringWidth(line)
 	if lineWidth <= width {

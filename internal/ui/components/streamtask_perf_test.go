@@ -124,6 +124,20 @@ func TestBlankLineWrapsToOneRow(t *testing.T) {
 	}
 }
 
+// F04-03: a single pathologically long line must be capped before wrapLine so the
+// O(L^2/width) loop cannot block the event loop; the cap carries a marker.
+func TestWrapLineCapsPathologicalLine(t *testing.T) {
+	const width = 80
+	rows := wrapLine(strings.Repeat("z", 200_000), width)
+	maxRows := streamLineWidthCap/width + 2
+	if len(rows) > maxRows {
+		t.Fatalf("pathological line not capped: got %d rows, want <= %d", len(rows), maxRows)
+	}
+	if !strings.Contains(strings.Join(rows, ""), "(truncated)") {
+		t.Fatal("capped line must carry the truncation marker")
+	}
+}
+
 // TestIncrementalWrapIsBounded proves an append does NOT re-wrap the whole
 // buffer: after N lines are present, one more append adds only that line's
 // wrapped rows and leaves every earlier wrapped row byte-identical. This is the
