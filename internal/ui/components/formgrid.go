@@ -81,7 +81,7 @@ func WithFormGridBack(err error) FormGridOption {
 
 // WithFormGridNote sets an intro/consent note rendered ABOVE the fields, one
 // line per string. Pass each clause as its own line (coherent, never broken
-// mid-sentence) — the grid does not re-wrap them. Lines are sanitized and empty
+// mid-sentence); the grid does not re-wrap them. Lines are sanitized and empty
 // ones dropped.
 func WithFormGridNote(lines ...string) FormGridOption {
 	return func(g *FormGrid) {
