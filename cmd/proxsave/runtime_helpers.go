@@ -929,6 +929,48 @@ func dropCanonicalCronLines(lines, correctPaths []string) []string {
 	return kept
 }
 
+// repointLegacyCronLines repoints any cron line whose command token is exactly the
+// legacy /usr/local/bin/proxmox-backup symlink to the canonical /usr/local/bin/proxsave
+// entrypoint, preserving the schedule and args. Every other line is byte-preserved. Used
+// on upgrade BEFORE the legacy symlink is removed so no cron line is left orphaned (F10-03).
+func repointLegacyCronLines(lines []string) ([]string, bool) {
+	const legacy = "/usr/local/bin/proxmox-backup"
+	const canonical = "/usr/local/bin/proxsave"
+	out := make([]string, len(lines))
+	changed := false
+	for i, line := range lines {
+		if strings.Trim(cronCommandToken(line), "\"'") == legacy {
+			// cronCommandToken already excluded comments/env lines, and a schedule field
+			// is never a path, so the command is the first occurrence of legacy on the line.
+			out[i] = strings.Replace(line, legacy, canonical, 1)
+			changed = true
+			continue
+		}
+		out[i] = line
+	}
+	return out, changed
+}
+
+// repointLegacyCronEntries reads the crontab, repoints legacy proxmox-backup entries, and
+// writes back only if something changed. Best-effort: a crontab read/write failure logs and
+// continues (a cosmetic repoint must never fail the upgrade).
+func repointLegacyCronEntries(ctx context.Context, bootstrap *logging.BootstrapLogger) {
+	lines, err := crontabReadLines(ctx)
+	if err != nil {
+		logBootstrapDebug(bootstrap, "upgrade: read crontab for repoint failed: %v", err)
+		return
+	}
+	repointed, changed := repointLegacyCronLines(lines)
+	if !changed {
+		return
+	}
+	if err := crontabWriteLines(ctx, repointed); err != nil {
+		logBootstrapWarning(bootstrap, "upgrade: failed to repoint legacy cron entrypoint: %v", err)
+		return
+	}
+	logBootstrapInfo(bootstrap, "upgrade: repointed legacy proxmox-backup cron entry to the proxsave entrypoint")
+}
+
 // buildReinstallCronLines computes the crontab for a (re)install: it drops the
 // legacy Bash cron entry, every outdated proxsave/proxmox-backup binary entry and
 // any entry already targeting the canonical path, then appends a single fresh

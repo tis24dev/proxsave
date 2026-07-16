@@ -314,3 +314,30 @@ func TestDropCanonicalCronLines_BasenameMatch(t *testing.T) {
 		t.Errorf("unrelated line must survive:\n%s", joined)
 	}
 }
+
+// F10-03: repointLegacyCronLines repoints ONLY the exact /usr/local/bin/proxmox-backup
+// command token to /usr/local/bin/proxsave, preserving the schedule and args, and
+// leaves PBS binaries and proxsave lines untouched.
+func TestRepointLegacyCronLines(t *testing.T) {
+	lines := []string{
+		"0 5 * * * /usr/local/bin/proxmox-backup --backup",    // legacy -> repoint
+		"0 6 * * * /usr/bin/proxmox-backup-client backup ds:", // PBS -> keep
+		"0 7 * * * /usr/local/bin/proxsave --backup",          // already canonical -> keep
+		"# a comment",                                         // keep
+	}
+	out, changed := repointLegacyCronLines(lines)
+	if !changed {
+		t.Fatal("expected changed=true")
+	}
+	if out[0] != "0 5 * * * /usr/local/bin/proxsave --backup" {
+		t.Errorf("legacy line not repointed: %q", out[0])
+	}
+	if out[1] != lines[1] || out[2] != lines[2] || out[3] != lines[3] {
+		t.Errorf("non-legacy lines must be byte-preserved: %v", out)
+	}
+
+	out2, changed2 := repointLegacyCronLines([]string{"0 5 * * * /usr/local/bin/proxsave --backup"})
+	if changed2 || out2[0] != "0 5 * * * /usr/local/bin/proxsave --backup" {
+		t.Errorf("no legacy line -> changed=false, unchanged; got changed=%v out=%v", changed2, out2)
+	}
+}

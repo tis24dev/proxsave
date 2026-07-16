@@ -278,6 +278,10 @@ func upgradeFinalizePhase(ctx context.Context, args *cli.Args, bootstrap *loggin
 	if err := installSupportDocs(baseDir, bootstrap); err != nil {
 		bootstrap.Warning("Upgrade: failed to refresh documentation: %v", err)
 	}
+	// Repoint any legacy proxmox-backup cron line to the canonical proxsave entrypoint
+	// BEFORE ensureGoSymlink removes the /usr/local/bin/proxmox-backup symlink, so an
+	// older install's cron line is never left pointing at a removed symlink (F10-03).
+	repointLegacyCronEntries(ctx, bootstrap)
 	ensureGoSymlink(execPath, bootstrap)
 
 	// Auto-migrate cron installs to the resident daemon now that the new binary +
