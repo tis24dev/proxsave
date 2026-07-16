@@ -95,12 +95,13 @@ func WithFormGridNote(lines ...string) FormGridOption {
 	}
 }
 
-// NewFormGrid builds the grid. Field labels/descriptions are sanitized; the
-// field structs stay owned by the caller.
+// NewFormGrid builds the grid. Field labels, descriptions, options and text
+// prefills are sanitized; the field structs stay owned by the caller.
 func NewFormGrid(title string, fields []*FormField, opts ...FormGridOption) *FormGrid {
 	for _, f := range fields {
 		f.Label = sanitizeLine(f.Label)
 		f.Description = sanitizeLine(f.Description)
+		f.Text = sanitizeLine(f.Text)
 		for i := range f.Options {
 			f.Options[i] = sanitizeLine(f.Options[i])
 		}

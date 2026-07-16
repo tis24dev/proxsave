@@ -454,3 +454,21 @@ func TestFormGridSelectEmptyOptionsNoPanic(t *testing.T) {
 		t.Fatalf("empty-options index must stay 0 after click, got %d", sel.OptionIndex)
 	}
 }
+
+// F04-02: NewFormGrid must sanitize the FormField.Text prefill (config-on-disk /
+// restored backup) exactly like Label/Description/Options, so raw ESC/OSC/C0 in a
+// prefill cannot reach the terminal (display-spoofing to the root operator).
+func TestNewFormGridSanitizesTextPrefill(t *testing.T) {
+	fields := []*FormField{{Label: "Host", Kind: FieldText, Text: "foo\x1b[31mbar\x1b]0;evil\x07baz"}}
+	_ = NewFormGrid("T", fields)
+	got := fields[0].Text
+	if strings.ContainsRune(got, 0x1b) {
+		t.Fatalf("FormField.Text still contains ESC: %q", got)
+	}
+	if strings.ContainsRune(got, 0x07) {
+		t.Fatalf("FormField.Text still contains BEL: %q", got)
+	}
+	if got != "foobarbaz" {
+		t.Fatalf("sanitized Text = %q, want %q", got, "foobarbaz")
+	}
+}
