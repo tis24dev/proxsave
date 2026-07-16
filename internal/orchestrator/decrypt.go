@@ -124,7 +124,7 @@ func promptPathSelection(ctx context.Context, reader *bufio.Reader, options []de
 		fmt.Println("  [0] Exit")
 
 		fmt.Print("Choice: ")
-		choiceLine, err := input.ReadLineWithContext(ctx, reader)
+		choiceLine, err := input.ReadLineWithIdle(ctx, reader, cliIdleTimeout)
 		if err != nil {
 			return decryptPathOption{}, err
 		}
@@ -393,7 +393,7 @@ func promptCandidateSelection(ctx context.Context, reader *bufio.Reader, candida
 		fmt.Println("  [0] Exit")
 
 		fmt.Print("Choice: ")
-		choiceLine, err := input.ReadLineWithContext(ctx, reader)
+		choiceLine, err := input.ReadLineWithIdle(ctx, reader, cliIdleTimeout)
 		if err != nil {
 			return nil, err
 		}
@@ -421,7 +421,7 @@ func promptDestinationDir(ctx context.Context, reader *bufio.Reader, cfg *config
 		}
 	}
 	fmt.Printf("\nEnter destination directory for decrypted bundle [press Enter to use %s]: ", defaultDir)
-	inputLine, err := input.ReadLineWithContext(ctx, reader)
+	inputLine, err := input.ReadLineWithIdle(ctx, reader, cliIdleTimeout)
 	if err != nil {
 		return "", err
 	}

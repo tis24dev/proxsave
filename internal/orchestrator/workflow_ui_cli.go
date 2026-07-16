@@ -15,6 +15,11 @@ import (
 	"github.com/tis24dev/proxsave/internal/ui/components"
 )
 
+// cliIdleTimeout bounds each interactive restore/decrypt/age-setup read; on idle the
+// read aborts gracefully (zero mutation - it fires at a pre-write confirmation gate).
+// Var so tests can shrink it.
+var cliIdleTimeout = input.DefaultIdleTimeout
+
 type cliWorkflowUI struct {
 	reader *bufio.Reader
 	logger *logging.Logger
@@ -123,7 +128,7 @@ func (u *cliWorkflowUI) PromptDestinationDir(ctx context.Context, defaultDir str
 		defaultDir = "./decrypt"
 	}
 	fmt.Fprintf(u.w(), "Enter destination directory (default: %s): ", components.SanitizeLine(defaultDir))
-	line, err := input.ReadLineWithContext(ctx, u.reader)
+	line, err := input.ReadLineWithIdle(ctx, u.reader, cliIdleTimeout)
 	if err != nil {
 		return "", err
 	}
@@ -152,7 +157,7 @@ func (u *cliWorkflowUI) ResolveExistingPath(ctx context.Context, path, descripti
 
 	for {
 		fmt.Fprint(u.w(), "Choice: ")
-		inputLine, err := input.ReadLineWithContext(ctx, u.reader)
+		inputLine, err := input.ReadLineWithIdle(ctx, u.reader, cliIdleTimeout)
 		if err != nil {
 			return PathDecisionCancel, "", err
 		}
@@ -161,7 +166,7 @@ func (u *cliWorkflowUI) ResolveExistingPath(ctx context.Context, path, descripti
 			return PathDecisionOverwrite, "", nil
 		case "2":
 			fmt.Fprint(u.w(), "Enter new path: ")
-			newPath, err := input.ReadLineWithContext(ctx, u.reader)
+			newPath, err := input.ReadLineWithIdle(ctx, u.reader, cliIdleTimeout)
 			if err != nil {
 				return PathDecisionCancel, "", err
 			}
@@ -192,7 +197,7 @@ func (u *cliWorkflowUI) PromptDecryptSecret(ctx context.Context, displayName, pr
 		fmt.Fprint(u.w(), "Enter decryption key or passphrase (0 = exit): ")
 	}
 
-	inputBytes, err := input.ReadPasswordWithContext(ctx, readPassword, int(os.Stdin.Fd()))
+	inputBytes, err := input.ReadPasswordWithIdle(ctx, readPassword, int(os.Stdin.Fd()), cliIdleTimeout)
 	fmt.Fprintln(u.w())
 	if err != nil {
 		return "", err
@@ -227,7 +232,7 @@ func (u *cliWorkflowUI) SelectPBSRestoreBehavior(ctx context.Context) (PBSRestor
 
 	for {
 		fmt.Fprint(u.w(), "Choice: ")
-		line, err := input.ReadLineWithContext(ctx, u.reader)
+		line, err := input.ReadLineWithIdle(ctx, u.reader, cliIdleTimeout)
 		if err != nil {
 			return PBSRestoreBehaviorUnspecified, err
 		}
@@ -261,7 +266,7 @@ func (u *cliWorkflowUI) ConfirmRestore(ctx context.Context) (bool, error) {
 	fmt.Fprintln(u.w())
 	fmt.Fprint(u.w(), "This operation will overwrite existing configuration files on this system.\n\nProceed with overwrite? (yes/no): ")
 	for {
-		line, err := input.ReadLineWithContext(ctx, u.reader)
+		line, err := input.ReadLineWithIdle(ctx, u.reader, cliIdleTimeout)
 		if err != nil {
 			return false, err
 		}
@@ -281,7 +286,7 @@ func (u *cliWorkflowUI) ConfirmCompatibility(ctx context.Context, warning error)
 	fmt.Fprintf(u.w(), "⚠ %s\n\n", components.SanitizeText(fmt.Sprint(warning)))
 	fmt.Fprint(u.w(), "Do you want to continue anyway? This may cause system instability. (yes/no): ")
 
-	line, err := input.ReadLineWithContext(ctx, u.reader)
+	line, err := input.ReadLineWithIdle(ctx, u.reader, cliIdleTimeout)
 	if err != nil {
 		return false, err
 	}
@@ -307,7 +312,7 @@ func (u *cliWorkflowUI) ConfirmContinueWithoutSafetyBackup(ctx context.Context, 
 	fmt.Fprintln(u.w())
 	fmt.Fprintf(u.w(), "Safety backup failed: %s\n", components.SanitizeText(fmt.Sprint(cause)))
 	fmt.Fprint(u.w(), "Continue without safety backup? (yes/no): ")
-	line, err := input.ReadLineWithContext(ctx, u.reader)
+	line, err := input.ReadLineWithIdle(ctx, u.reader, cliIdleTimeout)
 	if err != nil {
 		return false, err
 	}

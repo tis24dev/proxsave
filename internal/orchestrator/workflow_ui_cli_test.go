@@ -4,11 +4,14 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"os"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/tis24dev/proxsave/internal/input"
 	"github.com/tis24dev/proxsave/internal/logging"
 	"github.com/tis24dev/proxsave/internal/types"
 )
@@ -197,5 +200,39 @@ func TestCLIWorkflowUIConfirmActionSanitizesMessage(t *testing.T) {
 	}
 	if !strings.Contains(out, "NIC map: eth0") || !strings.Contains(out, "eth1") {
 		t.Fatalf("ConfirmAction dropped legitimate message text: %q", out)
+	}
+}
+
+func TestCLIWorkflowUIReadAbortsWhenIdle(t *testing.T) {
+	orig := cliIdleTimeout
+	cliIdleTimeout = time.Millisecond
+	t.Cleanup(func() { cliIdleTimeout = orig })
+
+	pr, pw := io.Pipe()
+	defer pw.Close() // never deliver a line -> idle fires
+	u := &cliWorkflowUI{reader: bufio.NewReader(pr), logger: logging.New(types.LogLevelInfo, false), out: io.Discard}
+
+	_, err := u.PromptDestinationDir(context.Background(), "/tmp/dest")
+	if !errors.Is(err, input.ErrInputAborted) {
+		t.Fatalf("idle read must map to a graceful abort (ErrInputAborted); got %v", err)
+	}
+	if !errors.Is(err, input.ErrIdleTimeout) {
+		t.Fatalf("idle read should carry ErrIdleTimeout identity; got %v", err)
+	}
+}
+
+func TestPromptOptionAgeAbortsWhenIdle(t *testing.T) {
+	orig := cliIdleTimeout
+	cliIdleTimeout = time.Millisecond
+	t.Cleanup(func() { cliIdleTimeout = orig })
+
+	pr, pw := io.Pipe()
+	defer pw.Close()
+	_, err := promptOptionAge(context.Background(), bufio.NewReader(pr), "Select [1-4]: ")
+	// The idle read fires ErrIdleTimeout, which wraps ErrInputAborted and so rides the
+	// errors.Is(err, input.ErrInputAborted) boundary in mapInputAbortToAgeAbort
+	// (encryption.go), landing on the age flow's own graceful-abort sentinel.
+	if !errors.Is(err, ErrAgeRecipientSetupAborted) {
+		t.Fatalf("idle age prompt must map to a graceful abort (ErrAgeRecipientSetupAborted); got %v", err)
 	}
 }
