@@ -361,7 +361,7 @@ func (c *Checker) verifyBinaryIntegrity(ctx context.Context) {
 	info, err := safefs.Lstat(ctx, c.execPath, c.fsTimeout)
 	if err != nil {
 		if errors.Is(err, safefs.ErrTimeout) {
-			c.addWarning("Security check: stat of executable %s timed out after %s; skipping integrity check (dead/stale mount?)", c.execPath, c.fsTimeout)
+			c.addError("Security check: stat of executable %s timed out after %s; skipping integrity check (dead/stale mount?)", c.execPath, c.fsTimeout)
 			return
 		}
 		c.addError("Cannot stat executable %s: %v", c.execPath, err)
@@ -378,7 +378,7 @@ func (c *Checker) verifyBinaryIntegrity(ctx context.Context) {
 	if err != nil {
 		if errors.Is(err, safefs.ErrTimeout) {
 			// safefs.Open abandoned its worker on timeout; f is nil, nothing to close.
-			c.addWarning("Security check: opening executable %s timed out after %s; skipping integrity check (dead/stale mount?)", c.execPath, c.fsTimeout)
+			c.addError("Security check: opening executable %s timed out after %s; skipping integrity check (dead/stale mount?)", c.execPath, c.fsTimeout)
 			return
 		}
 		c.addError("Cannot open executable %s: %v", c.execPath, err)
@@ -507,7 +507,7 @@ func (c *Checker) verifyConfigFile(ctx context.Context) {
 	info, err := safefs.Stat(ctx, c.configPath, c.fsTimeout)
 	if err != nil {
 		if errors.Is(err, safefs.ErrTimeout) {
-			c.addWarning("Security check: stat of configuration file %s timed out after %s; skipping its checks (dead/stale mount?)", c.configPath, c.fsTimeout)
+			c.addError("Security check: stat of configuration file %s timed out after %s; skipping its checks (dead/stale mount?)", c.configPath, c.fsTimeout)
 			return
 		}
 		c.addError("Cannot stat configuration file %s: %v", c.configPath, err)

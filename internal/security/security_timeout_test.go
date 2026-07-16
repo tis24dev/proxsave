@@ -242,10 +242,11 @@ func TestVerifyBinaryIntegrityWarnsGroupOtherWritable(t *testing.T) {
 	}
 }
 
-// TestVerifyBinaryIntegritySkipsOnTimeout simulates a dead/stale mount under the
-// executable: the bounded Lstat times out, so the integrity check warns and skips
-// without erroring and without creating the .md5 hash file.
-func TestVerifyBinaryIntegritySkipsOnTimeout(t *testing.T) {
+// TestVerifyBinaryIntegrityExecTimeoutErrors: a wedged mount holding the
+// executable must FAIL the integrity check (fail-closed), not warn-and-skip.
+// expiredContext times out the exec Lstat, which now routes through addError so
+// ErrorCount>0 -- the same classification as a non-timeout stat error (F03-01).
+func TestVerifyBinaryIntegrityExecTimeoutErrors(t *testing.T) {
 	dir := t.TempDir()
 	execPath := filepath.Join(dir, "binary")
 	if err := os.WriteFile(execPath, []byte("content"), 0o700); err != nil {
@@ -257,11 +258,11 @@ func TestVerifyBinaryIntegritySkipsOnTimeout(t *testing.T) {
 
 	checker.verifyBinaryIntegrity(expiredContext(t))
 
-	if checker.result.ErrorCount() != 0 {
-		t.Fatalf("timeout must not error, got %d: %+v", checker.result.ErrorCount(), checker.result.Issues)
+	if checker.result.ErrorCount() == 0 {
+		t.Fatalf("exec-integrity timeout must fail closed (error), got %d errors: %+v", checker.result.ErrorCount(), checker.result.Issues)
 	}
 	if !containsIssue(checker.result, "timed out") {
-		t.Fatalf("expected a timeout warning, got %+v", checker.result.Issues)
+		t.Fatalf("expected the timeout message, got %+v", checker.result.Issues)
 	}
 	if _, err := os.Stat(execPath + ".md5"); !os.IsNotExist(err) {
 		t.Fatalf("must not create hash file on timeout; stat err = %v", err)
@@ -458,5 +459,29 @@ func TestVerifyBinaryIntegrityHashWriteTimeoutWarns(t *testing.T) {
 	}
 	if !containsIssue(checker.result, "Failed to update hash file") {
 		t.Fatalf("expected a failed-to-update-hash-file warning, got %+v", checker.result.Issues)
+	}
+}
+
+// TestVerifyConfigFileStatTimeoutErrors: a wedged mount holding the config file
+// must FAIL the config check (fail-closed), matching the non-timeout stat error
+// path at security.go:513 (F03-01).
+func TestVerifyConfigFileStatTimeoutErrors(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "backup.env")
+	if err := os.WriteFile(configPath, []byte("x=1\n"), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	checker := newChecker(t, &config.Config{})
+	checker.configPath = configPath
+	checker.fsTimeout = 30 * time.Second
+
+	checker.verifyConfigFile(expiredContext(t))
+
+	if checker.result.ErrorCount() == 0 {
+		t.Fatalf("config stat timeout must fail closed (error), got %d errors: %+v", checker.result.ErrorCount(), checker.result.Issues)
+	}
+	if !containsIssue(checker.result, "timed out") {
+		t.Fatalf("expected the timeout message, got %+v", checker.result.Issues)
 	}
 }
