@@ -51,6 +51,41 @@ func TestAtomicRootRewrite_RenameFailureKeepsOriginal(t *testing.T) {
 	}
 }
 
+// The atomic rewrite must preserve the file's existing mode. The old in-place
+// root.WriteFile left an existing file's permissions untouched; a fresh temp+rename
+// would otherwise impose its own creation mode and widen/narrow the optimized file.
+func TestAtomicRootRewrite_PreservesOriginalMode(t *testing.T) {
+	dir := t.TempDir()
+	fp := filepath.Join(dir, "priv.conf")
+	const original = "a\r\nb\r\n"
+	if err := os.WriteFile(fp, []byte(original), 0o600); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	if err := os.Chmod(fp, 0o600); err != nil { // WriteFile perm is umask-subject
+		t.Fatalf("chmod: %v", err)
+	}
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		t.Fatalf("open root: %v", err)
+	}
+	defer root.Close()
+
+	changed, err := normalizeTextFile(root, "priv.conf")
+	if err != nil {
+		t.Fatalf("rewrite: %v", err)
+	}
+	if !changed {
+		t.Fatal("expected the file to be normalized")
+	}
+	info, _ := os.Stat(fp)
+	if info.Mode().Perm() != 0o600 {
+		t.Fatalf("mode not preserved: got %o want 600", info.Mode().Perm())
+	}
+	if got, _ := os.ReadFile(fp); string(got) != "a\nb\n" {
+		t.Fatalf("content = %q", string(got))
+	}
+}
+
 // A per-file rewrite error must be surfaced as a Warning and the walk must continue
 // best-effort (returns nil), leaving the original untouched. The pre-fix code
 // discarded the error (err == nil && c), logging nothing.

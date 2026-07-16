@@ -457,13 +457,26 @@ var prefilterRootRename = func(root *os.Root, oldname, newname string) error {
 // error the temp is removed and name is left untouched, so a failed rewrite never
 // truncates the staged original. All I/O is confined to root (os.Root), so no path
 // escapes the staging tree (same traversal defense as normalizeTextFile).
-func atomicRootRewrite(root *os.Root, name string, data []byte, perm os.FileMode) error {
+func atomicRootRewrite(root *os.Root, name string, data []byte) error {
+	// Preserve the existing file's mode. The rewrite swaps the inode via rename, so
+	// unlike the old in-place root.WriteFile (which leaves an existing file's mode
+	// untouched) a fresh temp would otherwise impose its own creation mode and drop
+	// the source permission bits the collector preserved (backup fidelity).
+	perm := os.FileMode(0o600)
+	if fi, err := root.Lstat(name); err == nil {
+		perm = fi.Mode().Perm()
+	}
 	tmp := name + "." + randomHexSuffix() + ".tmp"
 	f, err := root.OpenFile(tmp, os.O_CREATE|os.O_WRONLY|os.O_EXCL, perm)
 	if err != nil {
 		return err
 	}
 	if _, err := f.Write(data); err != nil {
+		_ = f.Close()
+		_ = root.Remove(tmp)
+		return err
+	}
+	if err := f.Chmod(perm); err != nil {
 		_ = f.Close()
 		_ = root.Remove(tmp)
 		return err
@@ -492,7 +505,7 @@ func randomHexSuffix() string {
 
 // normalizeTextFile reads and rewrites name through root, an *os.Root opened on
 // the staging tree. Using os.Root confines all I/O inside that tree at the
-// syscall level, so a path that tried to escape (via "..") would be rejected —
+// syscall level, so a path that tried to escape (via "..") would be rejected;
 // no taint/path-traversal is possible (this is why there is no #nosec here).
 func normalizeTextFile(root *os.Root, name string) (bool, error) {
 	data, err := root.ReadFile(name)
@@ -503,7 +516,7 @@ func normalizeTextFile(root *os.Root, name string) (bool, error) {
 	if bytes.Equal(data, normalized) {
 		return false, nil
 	}
-	return true, atomicRootRewrite(root, name, normalized, defaultOptimizedFilePerm)
+	return true, atomicRootRewrite(root, name, normalized)
 }
 
 func normalizeConfigFile(root *os.Root, name string) (bool, error) {
@@ -529,5 +542,5 @@ func minifyJSON(root *os.Root, name string) (bool, error) {
 	if bytes.Equal(bytes.TrimSpace(data), minified) {
 		return false, nil
 	}
-	return true, atomicRootRewrite(root, name, minified, defaultOptimizedFilePerm)
+	return true, atomicRootRewrite(root, name, minified)
 }
