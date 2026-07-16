@@ -191,7 +191,7 @@ func daemonProblemForState(d health.Diagnosis) string {
 // runtime provisioning/transmission is the Phase-7 section's job (the daemon status file).
 func healthcheckConfigProblem(cfg *config.Config) string {
 	switch cfg.HealthcheckMode {
-	case "self":
+	case config.HealthcheckModeSelf:
 		// Self mode needs a check to ping: a full alive URL, or an alive check id (the
 		// ping endpoint defaults to a public host, so the id/URL is the discriminator).
 		// The service-alive (heartbeat / dead-man) check is the mandatory one; a

@@ -84,9 +84,9 @@ func (h *HealthchecksChannel) Notify(ctx context.Context, stats *BackupStats) er
 		return nil
 	}
 
-	if h.cfg.HealthcheckMode == "self" {
+	if h.cfg.HealthcheckMode == config.HealthcheckModeSelf {
 		h.info("✓ %s: self-hosted", healthchecksSectionName)
-		setHealthcheckStatus(stats, "self")
+		setHealthcheckStatus(stats, config.HealthcheckModeSelf)
 		return nil
 	}
 
