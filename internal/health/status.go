@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 // Ping kind constants. These are the values RecordPing accepts for the kind
@@ -324,6 +325,33 @@ func RecordNotifyPing(baseDir, mode, kind string, ts int64, ok, down bool, pingE
 		st.Records = make(map[string]*PingRecord)
 	}
 	st.Records[kind] = rec
+	st.Mode = mode
+	return writeStatus(baseDir, st)
+}
+
+// PruneNotifyRecords removes every persisted per-channel notify record (key prefix
+// CheckKeyNotifyPrefix) whose key is not in keep, so a disabled/removed channel stops
+// rendering a phantom sensor row. keep are full check keys (CheckKeyNotify(channel)). A
+// no-op keep set skips the write to avoid churn.
+func PruneNotifyRecords(baseDir, mode string, keep []string) error {
+	keepSet := make(map[string]bool, len(keep))
+	for _, k := range keep {
+		keepSet[k] = true
+	}
+	st, err := loadStatusForWrite(baseDir)
+	if err != nil {
+		return err
+	}
+	changed := false
+	for k := range st.Records {
+		if strings.HasPrefix(k, CheckKeyNotifyPrefix) && !keepSet[k] {
+			delete(st.Records, k)
+			changed = true
+		}
+	}
+	if !changed {
+		return nil
+	}
 	st.Mode = mode
 	return writeStatus(baseDir, st)
 }

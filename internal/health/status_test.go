@@ -258,3 +258,35 @@ func assertRecord(t *testing.T, name string, got *PingRecord, wantTS int64, want
 func isZeroStatus(s Status) bool {
 	return len(s.Records) == 0 && s.Update == nil && s.Mode == ""
 }
+
+// F09-07: PruneNotifyRecords drops persisted per-channel notify records not in keep, so a
+// disabled channel stops rendering a phantom sensor row; a non-notify record is untouched.
+func TestPruneNotifyRecords(t *testing.T) {
+	base := t.TempDir()
+	if err := RecordNotifyPing(base, "self", CheckKeyNotify("email"), 1, true, true, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := RecordNotifyPing(base, "self", CheckKeyNotify("telegram"), 2, true, false, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := RecordPing(base, "self", KindHeartbeat, 3, true, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := PruneNotifyRecords(base, "self", []string{CheckKeyNotify("telegram")}); err != nil {
+		t.Fatalf("PruneNotifyRecords: %v", err)
+	}
+	st, err := LoadStatus(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := st.Records[CheckKeyNotify("email")]; ok {
+		t.Fatal("email notify record must be pruned")
+	}
+	if _, ok := st.Records[CheckKeyNotify("telegram")]; !ok {
+		t.Fatal("telegram notify record must be kept")
+	}
+	if _, ok := st.Records[KindHeartbeat]; !ok {
+		t.Fatal("non-notify heartbeat record must be untouched")
+	}
+}

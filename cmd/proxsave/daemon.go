@@ -839,12 +839,14 @@ func (d *daemon) reportNotifyOutcomes(ctx context.Context, r backupReporter, rid
 		names = append(names, name)
 	}
 	sort.Strings(names) // deterministic ping/record order
+	keep := make([]string, 0, len(names))
 	for _, name := range names {
 		suffix, down, skip := severityToSuffix(nr.Results[name])
 		if skip {
 			continue // "disabled"/unknown: the child did not really send this channel
 		}
 		key := health.CheckKeyNotify(name)
+		keep = append(keep, key)
 		var perr error
 		if r == nil || !r.HasCheck(key) {
 			perr = health.ErrNoPingURL // not provisioned yet (self/old server) -> no_url trace
@@ -856,6 +858,10 @@ func (d *daemon) reportNotifyOutcomes(ctx context.Context, r backupReporter, rid
 		}
 		d.recordNotifyPing(key, down, perr)
 	}
+	// Prune notify rows for channels the child did NOT attempt this run (disabled/removed),
+	// so a stale channel stops showing a phantom row. Only reached after the rid guard, so a
+	// crashed/mismatched child never wipes a still-valid panel (F09-07).
+	d.pruneNotifyRecords(keep)
 }
 
 // needsNotifyResolve reports whether any pingable channel in results lacks a resolved check
@@ -894,6 +900,14 @@ func (d *daemon) recordNotifyPing(key string, down bool, pingErr error) {
 	defer d.statusMu.Unlock()
 	if err := health.RecordNotifyPing(d.cfg.BaseDir, d.cfg.HealthcheckMode, key, d.now().Unix(), pingErr == nil, down, pingErr); err != nil {
 		logging.Debug("daemon: record notify ping status failed: %v", err)
+	}
+}
+
+func (d *daemon) pruneNotifyRecords(keep []string) {
+	d.statusMu.Lock()
+	defer d.statusMu.Unlock()
+	if err := health.PruneNotifyRecords(d.cfg.BaseDir, d.cfg.HealthcheckMode, keep); err != nil {
+		logging.Debug("daemon: prune notify records failed: %v", err)
 	}
 }
 
