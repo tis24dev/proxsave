@@ -5,14 +5,16 @@ import (
 	"os"
 	"strings"
 
+	"github.com/tis24dev/proxsave/internal/logging"
 	"github.com/tis24dev/proxsave/internal/notify"
 )
 
 // notifyErrorToken is the level token the notify-scoped logger writes for a
-// notification/communication failure. Kept in sync with logging.notifyErrorLabel
-// (the end-to-end wiring test in Task 5 guards against drift). A NOTIFY-ERR line
-// displays as an error but is counted separately (warning-weight) for the run status.
-const notifyErrorToken = "NOTIFY-ERR"
+// notification/communication failure. Single-sourced from logging.NotifyErrorLabel
+// (the emitter) so the parser can never drift from it; a change to the value there
+// propagates here at compile time. A NOTIFY-ERR line displays as an error but is
+// counted separately (warning-weight) for the run status.
+const notifyErrorToken = logging.NotifyErrorLabel
 
 // ParseLogCounts parses a log file and returns error/warning/notify counts and
 // categorized issues. This is used both during backup completion and notification

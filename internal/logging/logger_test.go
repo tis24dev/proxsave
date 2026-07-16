@@ -542,16 +542,16 @@ func TestNotifyError_CountsAsNotifyNotError(t *testing.T) {
 	}
 
 	out := buf.String()
-	if !strings.Contains(out, notifyErrorLabel) {
-		t.Fatalf("output missing %s token: %q", notifyErrorLabel, out)
+	if !strings.Contains(out, NotifyErrorLabel) {
+		t.Fatalf("output missing %s token: %q", NotifyErrorLabel, out)
 	}
 	if !strings.Contains(out, "Telegram: failed: connection refused") {
 		t.Fatalf("output missing message: %q", out)
 	}
 
 	issues := logger.IssueLines()
-	if len(issues) != 1 || !strings.Contains(issues[0], notifyErrorLabel) {
-		t.Fatalf("IssueLines = %v, want one %s line", issues, notifyErrorLabel)
+	if len(issues) != 1 || !strings.Contains(issues[0], NotifyErrorLabel) {
+		t.Fatalf("IssueLines = %v, want one %s line", issues, NotifyErrorLabel)
 	}
 }
 
@@ -586,15 +586,15 @@ func TestNotifyErrorScope_ReclassifiesUnlabeledErrors(t *testing.T) {
 	if logger.ErrorCount() != 2 {
 		t.Fatalf("after scope: errorCount=%d, want 2", logger.ErrorCount())
 	}
-	if !strings.Contains(buf.String(), notifyErrorLabel) {
-		t.Fatalf("scoped error must render with the %s token: %q", notifyErrorLabel, buf.String())
+	if !strings.Contains(buf.String(), NotifyErrorLabel) {
+		t.Fatalf("scoped error must render with the %s token: %q", NotifyErrorLabel, buf.String())
 	}
 }
 
 func TestNormalizeNotifyErrorToken(t *testing.T) {
-	line := "[2026-07-16 10:00:00] " + notifyErrorLabel + "  Telegram: failed"
+	line := "[2026-07-16 10:00:00] " + NotifyErrorLabel + "  Telegram: failed"
 	got := NormalizeNotifyErrorToken(line)
-	if strings.Contains(got, notifyErrorLabel) {
+	if strings.Contains(got, NotifyErrorLabel) {
 		t.Fatalf("token not normalized away: %q", got)
 	}
 	if !strings.Contains(got, "ERROR") {

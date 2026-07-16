@@ -345,7 +345,7 @@ func (l *Logger) logWithLabel(level types.LogLevel, label string, colorOverride 
 	// labeled lines (PHASE/STEP/SKIP, or an already-NOTIFY-ERR) are left untouched.
 	if l.notifyErrorScope > 0 && label == "" &&
 		(level == types.LogLevelError || level == types.LogLevelCritical) {
-		label = notifyErrorLabel
+		label = NotifyErrorLabel
 	}
 
 	// Track warning/error counters for summary/exit coloring. A NOTIFY-ERR line
@@ -353,7 +353,7 @@ func (l *Logger) logWithLabel(level types.LogLevel, label string, colorOverride 
 	// notifyCount, not errorCount: it displays as an error yet is warning-weight for
 	// the run status.
 	switch {
-	case label == notifyErrorLabel:
+	case label == NotifyErrorLabel:
 		l.notifyCount++
 	case level == types.LogLevelWarning:
 		l.warningCount++
@@ -524,10 +524,10 @@ func (l *Logger) Error(format string, args ...interface{}) {
 	l.log(types.LogLevelError, format, args...)
 }
 
-// notifyErrorLabel is the level token written for a NOTIFY-ERR line: a
+// NotifyErrorLabel is the level token written for a NOTIFY-ERR line: a
 // notification/communication failure that must display as an error but stay
 // warning-weight for the run exit code / status gauge.
-const notifyErrorLabel = "NOTIFY-ERR"
+const NotifyErrorLabel = "NOTIFY-ERR"
 
 // NotifyError writes a notification/communication failure. It renders like an error
 // (red, captured in the issue summary) but is tallied into notifyCount rather than
@@ -537,13 +537,13 @@ func (l *Logger) NotifyError(format string, args ...interface{}) {
 	if l == nil {
 		return
 	}
-	l.logWithLabel(types.LogLevelError, notifyErrorLabel, "", format, args...)
+	l.logWithLabel(types.LogLevelError, NotifyErrorLabel, "", format, args...)
 }
 
 // NormalizeNotifyErrorToken rewrites the NOTIFY-ERR level token in a captured issue
 // line to ERROR, so recap/footer renderers present notify failures as errors.
 func NormalizeNotifyErrorToken(line string) string {
-	return strings.Replace(line, notifyErrorLabel, "ERROR", 1)
+	return strings.Replace(line, NotifyErrorLabel, "ERROR", 1)
 }
 
 // EnterNotifyErrorScope brackets a region (the notification dispatch) in which every

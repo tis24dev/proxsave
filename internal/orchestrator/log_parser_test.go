@@ -6,7 +6,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/tis24dev/proxsave/internal/logging"
 	"github.com/tis24dev/proxsave/internal/notify"
+	"github.com/tis24dev/proxsave/internal/types"
 )
 
 func TestParseLogCounts(t *testing.T) {
@@ -178,6 +180,41 @@ func TestParseLogCounts_NotifyErrorBucket(t *testing.T) {
 	}
 	if notifyCat.Type != "ERROR" {
 		t.Errorf("notify category Type = %q, want ERROR (must display as error)", notifyCat.Type)
+	}
+}
+
+// End-to-end wiring guard: a NOTIFY-ERR line emitted by the REAL logger must be
+// bucketed as a notify issue (not a plain error) by ParseLogCounts. Unlike the
+// hardcoded-literal bucket test, this exercises the emitter->file->parser path, so a
+// drift between logging.NotifyErrorLabel (emitter) and notifyErrorToken (parser)
+// would zero notifyCount and false-green the run, and this test would catch it.
+func TestParseLogCounts_NotifyErrorEndToEnd(t *testing.T) {
+	dir := t.TempDir()
+	logFile := filepath.Join(dir, "run.log")
+	f, err := os.Create(logFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	logger := logging.New(types.LogLevelDebug, false)
+	logger.SetOutput(f)
+	logger.NotifyError("Telegram: failed: %s", "connection refused")
+	_ = f.Close()
+
+	categories, errorCount, _, notifyCount := ParseLogCounts(logFile, 10)
+	if notifyCount != 1 {
+		t.Fatalf("notifyCount = %d, want 1 (real-logger NOTIFY-ERR line)", notifyCount)
+	}
+	if errorCount != 0 {
+		t.Fatalf("errorCount = %d, want 0 (a notify failure is not a plain error)", errorCount)
+	}
+	foundError := false
+	for i := range categories {
+		if categories[i].Type == "ERROR" {
+			foundError = true
+		}
+	}
+	if !foundError {
+		t.Fatalf("NOTIFY-ERR must display under an ERROR category, got %+v", categories)
 	}
 }
 
