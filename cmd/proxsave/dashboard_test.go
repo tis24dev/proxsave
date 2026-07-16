@@ -803,3 +803,29 @@ func TestDashboardExitStillClosesSession(t *testing.T) {
 		t.Fatal("backup must stash the session for in-graphics streaming")
 	}
 }
+
+// F04-04: an abandoned dashboard sub-screen must hit the idle timeout and let the
+// dashboard exit, not hang forever holding the terminal (root process).
+func TestDashboardSubScreenIdleTimeoutExits(t *testing.T) {
+	orig := dashboardIdleTimeout
+	dashboardIdleTimeout = 50 * time.Millisecond
+	t.Cleanup(func() { dashboardIdleTimeout = orig })
+
+	installDashboardGates(t, true, true)
+	driver := installDashboardSessionSeam(t)
+
+	done := make(chan struct{}, 1)
+	go func() {
+		maybeRunDashboard(context.Background(), &cli.Args{}, nil, "1.0.0")
+		done <- struct{}{}
+	}()
+	driver.waitScreen("Dashboard")
+	driver.keys("down down down down enter") // open the Install chooser sub-screen, then send nothing
+
+	select {
+	case <-done:
+		// The sub-screen (then the menu) hit the idle timeout and the dashboard exited.
+	case <-time.After(uitest.Deadline(5 * time.Second)):
+		t.Fatal("dashboard sub-screen hung: the idle timeout did not bound it")
+	}
+}

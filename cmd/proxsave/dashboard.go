@@ -27,7 +27,13 @@ import (
 )
 
 // dashboardIdleTimeout bounds how long the dashboard waits for a choice.
-const dashboardIdleTimeout = 10 * time.Minute
+var dashboardIdleTimeout = 10 * time.Minute
+
+// withDashboardIdle bounds an interactive dashboard screen with the idle timeout
+// so an abandoned sub-screen cannot hold the terminal indefinitely (F04-04).
+func withDashboardIdle(ctx context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(ctx, dashboardIdleTimeout)
+}
 
 // Test seams.
 var (
@@ -92,7 +98,7 @@ func maybeRunDashboard(ctx context.Context, args *cli.Args, bootstrap *logging.B
 		// Idle timeout: a pty-allocating wrapper (script, tmux, ssh -tt) that
 		// reaches the dashboard by accident must not hang forever. Exit, never
 		// fall through to a surprise backup.
-		menuCtx, cancelMenu := context.WithTimeout(ctx, dashboardIdleTimeout)
+		menuCtx, cancelMenu := withDashboardIdle(ctx)
 		action, err := menu.Run(menuCtx, session, dashboardDaemonState(args))
 		cancelMenu()
 		if err != nil {
@@ -112,7 +118,9 @@ func maybeRunDashboard(ctx context.Context, args *cli.Args, bootstrap *logging.B
 		// flow; Back re-opens the menu. The resolved action then falls through to the
 		// same flag dispatch below, so each install mode keeps its exact code path.
 		if action == menu.ActionInstallMenu {
-			sub, ok := runDashboardInstallChoice(ctx, session)
+			subCtx, cancelSub := withDashboardIdle(ctx)
+			sub, ok := runDashboardInstallChoice(subCtx, session)
+			cancelSub()
 			if !ok {
 				continue
 			}
@@ -122,7 +130,10 @@ func maybeRunDashboard(ctx context.Context, args *cli.Args, bootstrap *logging.B
 		// Diagnostics group: re-open an existing check screen in the live session
 		// and loop back to the menu. These never leave the dashboard, so the flag
 		// dispatch below is untouched.
-		if runDashboardDiagnostic(ctx, session, action, args, bootstrap) {
+		diagCtx, cancelDiag := withDashboardIdle(ctx)
+		handledDiag := runDashboardDiagnostic(diagCtx, session, action, args, bootstrap)
+		cancelDiag()
+		if handledDiag {
 			continue
 		}
 
@@ -162,7 +173,9 @@ func maybeRunDashboard(ctx context.Context, args *cli.Args, bootstrap *logging.B
 			// menu. On confirm, arm support mode (DEBUG + email) with the meta already
 			// collected (SupportMetaProvided skips the stdin intro), then fall through to
 			// the SAME handoff as Backup so the run streams in-graphics identically.
-			meta, ok := dashboardRunSupportForm(ctx, session)
+			formCtx, cancelForm := withDashboardIdle(ctx)
+			meta, ok := dashboardRunSupportForm(formCtx, session)
+			cancelForm()
 			if !ok {
 				continue
 			}
