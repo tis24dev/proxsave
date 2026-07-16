@@ -145,8 +145,25 @@ func TestRunNewKeyTUISavesRecipient(t *testing.T) {
 	if err != nil {
 		t.Fatalf("recipient file not written: %v", err)
 	}
-	if !strings.HasPrefix(strings.TrimSpace(string(data)), "age1") {
-		t.Fatalf("unexpected recipient content: %q", string(data))
+	// The recipient line lives alongside the co-located passphrase salt comment
+	// (a passphrase-derived recipient embeds "# passphrase-salt: ..." so deleting
+	// the sibling salt file cannot lose it). Assert both: a real recipient line
+	// and the co-located salt comment.
+	var gotRecipient, gotSaltComment bool
+	for _, line := range strings.Split(string(data), "\n") {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "age1") {
+			gotRecipient = true
+		}
+		if strings.HasPrefix(trimmed, "# passphrase-salt:") {
+			gotSaltComment = true
+		}
+	}
+	if !gotRecipient {
+		t.Fatalf("recipient line missing: %q", string(data))
+	}
+	if !gotSaltComment {
+		t.Fatalf("co-located passphrase salt comment missing: %q", string(data))
 	}
 }
 
