@@ -34,7 +34,7 @@ func TestMergePasswdPreservesRootSystemAndProtectsCollisions(t *testing.T) {
 		"zoe:x:1500\n"
 
 	hostSystem := lowIDNames(current, 2)
-	imported, merged := mergePasswd(current, backup, hostSystem, map[uint64]bool{})
+	imported, merged, _ := mergePasswd(current, backup, hostSystem, map[uint64]bool{})
 
 	if !strings.Contains(merged, "superadmin:x:0:0:root:") || strings.Contains(merged, "EVIL") {
 		t.Errorf("renamed root (uid 0) must be preserved and never clobbered:\n%s", merged)
@@ -76,7 +76,7 @@ func TestMergePasswdRejectsOverflowEscalationAndMalformedNames(t *testing.T) {
 		"good:x:1005:1005::/home/good:/bin/bash",     // legitimate regular user
 	}, "\n") + "\n"
 
-	imported, merged := mergePasswd(current, backup, hostSystem, hostSystemGIDs)
+	imported, merged, _ := mergePasswd(current, backup, hostSystem, hostSystemGIDs)
 
 	for _, bad := range []string{"over", "sentinel", "gid0", "psudo", "gidover", "EVIL", "ev/il", "4294967295"} {
 		if strings.Contains(merged, bad) {
@@ -121,7 +121,7 @@ func TestMergeShadowNeverLeavesImportedUserWithoutEntry(t *testing.T) {
 	current := "root:CURHASH:1::::::\nalice:ALICEHASH:1::::::\n"
 	// bob has a backup shadow line; carol is imported (passwd) but has NO backup shadow.
 	backup := "root:EVIL:1::::::\nbob:BOBHASH:1::::::\n"
-	merged := mergeShadow(current, backup, map[string]bool{"bob": true, "carol": true})
+	merged, _ := mergeShadow(current, backup, map[string]bool{"bob": true, "carol": true})
 
 	if !strings.Contains(merged, "root:CURHASH") || strings.Contains(merged, "EVIL") {
 		t.Errorf("root shadow must be preserved from host:\n%s", merged)
@@ -132,6 +132,38 @@ func TestMergeShadowNeverLeavesImportedUserWithoutEntry(t *testing.T) {
 	// carol must NOT be missing from shadow (no passwd<->shadow desync): locked placeholder.
 	if !strings.Contains(merged, "carol:*:::::::") {
 		t.Errorf("imported user 'carol' without backup shadow must get a locked placeholder, not be absent:\n%s", merged)
+	}
+}
+
+// F06-06: mergePasswd must flag a same-name host regular whose uid CHANGED (files
+// orphaned), and mergeShadow must flag a user forced to a locked placeholder.
+func TestMergePasswdAndShadowReportRiskyCollisions(t *testing.T) {
+	host := "dave:x:1002:1002::/home/dave:/bin/bash\neve:x:1003:1003::/home/eve:/bin/bash\n"
+	backup := "dave:x:1600:1600::/home/dave:/bin/sh\neve:x:1003:1003::/home/eve:/bin/sh\n"
+	imported, _, collisions := mergePasswd(host, backup, map[string]bool{}, map[uint64]bool{})
+	if !imported["dave"] || !imported["eve"] {
+		t.Fatalf("expected dave+eve imported, got %v", imported)
+	}
+	byName := map[string]accountCollision{}
+	for _, c := range collisions {
+		byName[c.name] = c
+	}
+	if c, ok := byName["dave"]; !ok || !c.uidChanged || c.oldUID != 1002 || c.newUID != 1600 {
+		t.Fatalf("dave must be a uid-changed collision (1002->1600), got %+v (ok=%v)", c, ok)
+	}
+	if c, ok := byName["eve"]; !ok || c.uidChanged {
+		t.Fatalf("eve is a same-uid overwrite, must not be flagged uidChanged, got %+v (ok=%v)", c, ok)
+	}
+	// backup shadow lacks dave -> forced-locked.
+	_, forcedLocked := mergeShadow("", "eve:$6$hash:19000:0:99999:7:::\n", imported)
+	found := false
+	for _, n := range forcedLocked {
+		if n == "dave" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("dave (no backup shadow) must be reported forced-locked, got %v", forcedLocked)
 	}
 }
 
@@ -194,7 +226,7 @@ func TestMergePasswdRejectsPrimaryGidIntoHostSystemGroup(t *testing.T) {
 		"dock:x:1004:1001::/home/dock:/bin/bash\n" + // primary gid = host docker (>=1000)
 		"ok:x:1003:1003::/home/ok:/bin/bash\n" // private primary gid
 
-	imported, merged := mergePasswd(current, backup, hostSystem, hostGIDs)
+	imported, merged, _ := mergePasswd(current, backup, hostSystem, hostGIDs)
 
 	if imported["evil"] || strings.Contains(merged, "evil") {
 		t.Errorf("user with primary gid=sudo must be rejected:\n%s", merged)
