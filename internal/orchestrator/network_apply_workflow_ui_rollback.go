@@ -148,7 +148,7 @@ func (f *networkRollbackUIApplyFlow) applyStagedNetworkFiles() error {
 	logging.DebugStep(f.logger, "network safe apply (ui)", "Apply staged network files to system paths (before NIC repair)")
 	applied, err := applyNetworkFilesFromStage(f.logger, f.stageRoot)
 	if err != nil {
-		return err
+		return f.rollbackStagedApplyFailure(err)
 	}
 	if len(applied) > 0 {
 		logging.DebugStep(f.logger, "network safe apply (ui)", "Staged network files written: %d", len(applied))
@@ -288,6 +288,38 @@ func (f *networkRollbackUIApplyFlow) rollbackStagedPreflightFailure(preflight ne
 	)
 	_ = f.ui.ShowError(f.ctx, "Network preflight failed", "Network configuration failed preflight and was rolled back automatically.")
 	return fmt.Errorf("network preflight validation failed; network files rolled back")
+}
+
+// rollbackStagedApplyFailure reverts a partial staged network apply, mirroring
+// rollbackStagedPreflightFailure. Unlike the preflight path (and unlike the non-UI
+// twin, which refuses to apply without a rollback backup), this apply CAN be
+// reached with an empty networkRollbackPath (run() proceeds when only the full
+// backup is present); in that case it logs honestly and returns the raw error
+// rather than calling rollbackNetworkFilesNow with an empty path (which would
+// return a generic "empty rollback backup path" error masking the real failure)
+// or escalating to the full backup (which would revert far more than network
+// files, breaking the network-only contract used everywhere else in this file).
+func (f *networkRollbackUIApplyFlow) rollbackStagedApplyFailure(applyErr error) error {
+	if strings.TrimSpace(f.networkRollbackPath) == "" {
+		f.warning("Network staged apply failed: %v; no network rollback backup available, the managed network config under /etc may be partially written (review before the next reload/reboot).", applyErr)
+		return applyErr
+	}
+	logging.DebugStep(f.logger, "network safe apply (ui)", "Staged apply failed: rolling back network files automatically")
+	rollbackLog, rbErr := rollbackNetworkFilesNow(f.ctx, f.logger, f.networkRollbackPath, f.diagnosticsDir)
+	if strings.TrimSpace(rollbackLog) != "" {
+		f.info("Network rollback log: %s", rollbackLog)
+	}
+	if rbErr != nil {
+		f.logError("Network staged apply failed (%v) and rollback failed: %v", applyErr, rbErr)
+		return fmt.Errorf("network staged apply failed; rollback attempt failed: %w", errors.Join(applyErr, rbErr))
+	}
+	f.captureAfterRollbackDiagnostics()
+	f.warning(
+		"Network staged apply failed (%v). Rolled back the managed network configuration (/etc/network, /etc/netplan, /etc/systemd/network, /etc/NetworkManager/system-connections, /etc/hosts, /etc/hostname) to the pre-restore state (rollback=%s).",
+		applyErr,
+		strings.TrimSpace(f.networkRollbackPath),
+	)
+	return applyErr
 }
 
 func (f *networkRollbackUIApplyFlow) captureAfterRollbackDiagnostics() {
