@@ -109,21 +109,22 @@ var streamToken atomic.Uint64
 // running and never automatically. While running Esc requests cancellation.
 type StreamTask struct {
 	shell.Resolver[StreamResult]
-	token      uint64
-	title      string
-	spin       spinner.Model
-	lines      []string // bounded ring of RAW retained log lines (with ANSI) - copy source
-	wrapped    []string // pre-soft-wrapped DISPLAY lines derived from lines at wrapWidth
-	wrapWidth  int      // the width wrapped was computed against (0 = not yet wrapped)
-	dirty      bool     // wrapped content changed since the last SetContentLines (View gate)
-	dropped    bool     // true once the ring has shed its oldest lines
-	done       bool
-	outcome    string
-	err        error
-	cancel     context.CancelFunc
-	cancelling bool
-	copied     bool // transient "log copied to clipboard" confirmation
-	vp         viewport.Model
+	token           uint64
+	title           string
+	spin            spinner.Model
+	lines           []string // bounded ring of RAW retained log lines (with ANSI) - copy source
+	wrapped         []string // pre-soft-wrapped DISPLAY lines derived from lines at wrapWidth
+	wrapWidth       int      // the width wrapped was computed against (0 = not yet wrapped)
+	dirty           bool     // wrapped content changed since the last SetContentLines (View gate)
+	dropped         bool     // true once the ring has shed its oldest lines
+	pendingDropRows int      // wrapped rows shed by ring-drops since the last View (261-6)
+	done            bool
+	outcome         string
+	err             error
+	cancel          context.CancelFunc
+	cancelling      bool
+	copied          bool // transient "log copied to clipboard" confirmation
+	vp              viewport.Model
 	// follow keeps the viewport pinned to the newest line (auto-scroll). It
 	// turns off the moment the user scrolls up, so a manual review is not
 	// yanked back to the bottom by the next streamed line; End/GotoBottom
@@ -192,6 +193,7 @@ func (t *StreamTask) appendRaw(raw string) {
 				dropRows += len(wrapLine(t.lines[i], t.wrapWidth))
 			}
 			t.wrapped = t.wrapped[dropRows:]
+			t.pendingDropRows += dropRows
 		}
 		t.lines = t.lines[drop:]
 		t.dropped = true
@@ -363,7 +365,13 @@ func (t *StreamTask) View(width, height int) string {
 	}
 	if t.follow {
 		t.vp.GotoBottom()
+	} else if t.pendingDropRows > 0 {
+		// A ring-drop shed rows from the front while the user was scrolled up; shift
+		// the offset by the same amount so the reviewed content stays pinned to the
+		// same logical lines instead of drifting (the viewport clamps to range).
+		t.vp.SetYOffset(t.vp.YOffset() - t.pendingDropRows)
 	}
+	t.pendingDropRows = 0
 
 	scroll := ""
 	if t.vp.TotalLineCount() > bodyH {

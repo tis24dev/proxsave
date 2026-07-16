@@ -348,3 +348,36 @@ func TestStreamEmitBufferCapsPending(t *testing.T) {
 		t.Fatalf("newest line must survive, got %q want %q", b.pending[len(b.pending)-1], last)
 	}
 }
+
+// 261-6: when the ring drops rows from the front while the user is scrolled up
+// (not following), the viewport offset must shift by the dropped rows so the
+// reviewed content stays pinned to the same logical lines instead of drifting.
+func TestStreamRingDropKeepsReviewedContentPinned(t *testing.T) {
+	scr := newStreamScreen("Running backup", 1, func() {})
+	for i := 0; i < streamLineCap; i++ {
+		updated, _ := scr.Update(StreamLineMsg{Token: 1, Line: fmt.Sprintf("l%d", i)})
+		scr = updated.(*StreamTask)
+	}
+	scr.View(80, 10)         // size + wrap + follow at bottom
+	for i := 0; i < 3; i++ { // scroll up a few rows -> stop follow, review recent history
+		updated, _ := scr.Update(shell.KeyMsg("up"))
+		scr = updated.(*StreamTask)
+	}
+	if scr.follow {
+		t.Fatal("scrolling up must stop follow")
+	}
+	topBefore := scr.wrapped[scr.vp.YOffset()]
+
+	for i := streamLineCap; i < streamLineCap+50; i++ { // feed more -> ring drops from the front
+		updated, _ := scr.Update(StreamLineMsg{Token: 1, Line: fmt.Sprintf("l%d", i)})
+		scr = updated.(*StreamTask)
+	}
+	if !scr.dropped {
+		t.Fatal("expected a ring-drop")
+	}
+	scr.View(80, 10)
+	topAfter := scr.wrapped[scr.vp.YOffset()]
+	if topAfter != topBefore {
+		t.Fatalf("reviewed content drifted after ring-drop: top was %q, now %q", topBefore, topAfter)
+	}
+}
