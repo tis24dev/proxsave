@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 
 	"github.com/tis24dev/proxsave/internal/logging"
 )
@@ -452,22 +453,31 @@ var prefilterRootRename = func(root *os.Root, oldname, newname string) error {
 	return root.Rename(oldname, newname)
 }
 
+// prefilterFileChown is the chown step of atomicRootRewrite, isolated as a var so
+// tests can assert the temp is chowned back to the source uid/gid without root.
+var prefilterFileChown = (*os.File).Chown
+
 // atomicRootRewrite writes data to name atomically within root: it O_EXCL-creates a
 // uniquely named temp sibling, writes+closes it, then renames it over name. On any
 // error the temp is removed and name is left untouched, so a failed rewrite never
 // truncates the staged original. All I/O is confined to root (os.Root), so no path
 // escapes the staging tree (same traversal defense as normalizeTextFile).
 func atomicRootRewrite(root *os.Root, name string, data []byte) error {
-	// Preserve the existing file's mode. The rewrite swaps the inode via rename, so
-	// unlike the old in-place root.WriteFile (which leaves an existing file's mode
-	// untouched) a fresh temp would otherwise impose its own creation mode and drop
-	// the source permission bits the collector preserved (backup fidelity).
+	// Preserve the existing file's mode AND ownership. The rewrite swaps the inode
+	// via rename, so unlike the old in-place root.WriteFile (which left an existing
+	// file's mode and uid/gid untouched) a fresh temp would otherwise carry the backup
+	// process's ownership and its own creation mode, dropping the permission bits and
+	// uid/gid the collector preserved (backup fidelity).
 	perm := os.FileMode(0o600)
+	uid, gid := -1, -1
 	if fi, err := root.Lstat(name); err == nil {
-		perm = fi.Mode().Perm()
+		perm = fi.Mode() & (os.ModePerm | os.ModeSetuid | os.ModeSetgid | os.ModeSticky)
+		if st, ok := fi.Sys().(*syscall.Stat_t); ok {
+			uid, gid = int(st.Uid), int(st.Gid)
+		}
 	}
 	tmp := name + "." + randomHexSuffix() + ".tmp"
-	f, err := root.OpenFile(tmp, os.O_CREATE|os.O_WRONLY|os.O_EXCL, perm)
+	f, err := root.OpenFile(tmp, os.O_CREATE|os.O_WRONLY|os.O_EXCL, perm.Perm())
 	if err != nil {
 		return err
 	}
@@ -475,6 +485,14 @@ func atomicRootRewrite(root *os.Root, name string, data []byte) error {
 		_ = f.Close()
 		_ = root.Remove(tmp)
 		return err
+	}
+	// Chown before Chmod: chown can clear setuid/setgid, so set the exact mode last.
+	if uid >= 0 {
+		if err := prefilterFileChown(f, uid, gid); err != nil {
+			_ = f.Close()
+			_ = root.Remove(tmp)
+			return err
+		}
 	}
 	if err := f.Chmod(perm); err != nil {
 		_ = f.Close()

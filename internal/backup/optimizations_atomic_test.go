@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 
 	"github.com/tis24dev/proxsave/internal/logging"
@@ -83,6 +84,47 @@ func TestAtomicRootRewrite_PreservesOriginalMode(t *testing.T) {
 	}
 	if got, _ := os.ReadFile(fp); string(got) != "a\nb\n" {
 		t.Fatalf("content = %q", string(got))
+	}
+}
+
+// The atomic rewrite must preserve the source file's uid/gid. The old in-place
+// root.WriteFile kept the same inode (owner intact); a temp+rename creates a fresh
+// inode owned by the backup process, so the fix must chown it back to the source.
+func TestAtomicRootRewrite_PreservesUidGid(t *testing.T) {
+	dir := t.TempDir()
+	fp := filepath.Join(dir, "owned.log")
+	if err := os.WriteFile(fp, []byte("p\r\nq\r\n"), 0o600); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	fi, err := os.Lstat(fp)
+	if err != nil {
+		t.Fatalf("lstat: %v", err)
+	}
+	st, ok := fi.Sys().(*syscall.Stat_t)
+	if !ok {
+		t.Skip("no syscall.Stat_t on this platform")
+	}
+	wantUID, wantGID := int(st.Uid), int(st.Gid)
+
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		t.Fatalf("open root: %v", err)
+	}
+	defer root.Close()
+
+	gotUID, gotGID := -1, -1
+	orig := prefilterFileChown
+	t.Cleanup(func() { prefilterFileChown = orig })
+	prefilterFileChown = func(f *os.File, uid, gid int) error {
+		gotUID, gotGID = uid, gid
+		return nil
+	}
+
+	if _, err := normalizeTextFile(root, "owned.log"); err != nil {
+		t.Fatalf("rewrite: %v", err)
+	}
+	if gotUID != wantUID || gotGID != wantGID {
+		t.Fatalf("chown args = (%d,%d); want source (%d,%d)", gotUID, gotGID, wantUID, wantGID)
 	}
 }
 
