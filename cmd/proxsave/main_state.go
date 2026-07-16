@@ -48,6 +48,10 @@ type appRunState struct {
 	// supportEmailSent is true once the streamed dashboard run has already sent the
 	// support email inside the viewport, so the deferred sender skips it.
 	supportEmailSent bool
+	// panicStack holds the ORIGINAL panic stack captured by capturePanicExit during the
+	// unwind, so finishMainRun prints the crash origin instead of the re-panic site. Empty
+	// on a clean run. See capturePanicExit / F02-15.
+	panicStack []byte
 }
 
 type modeResult struct {

@@ -31,6 +31,23 @@ func startMainRun() runBootstrap {
 	}
 }
 
+// capturePanicExit is deferred inside runRuntime BEFORE the summary footer (registered after
+// it, so LIFO runs this first). On a panic it makes the crash authoritative for BOTH the exit
+// code and the printed footer: it sets finalExitCode to the panic code and stashes the ORIGINAL
+// stack, then re-panics so finishMainRun stays the single os.Exit(13) site. On a clean return
+// (recover()==nil) it is a no-op and the success path is unchanged (F02-15).
+func capturePanicExit(state *appRunState) {
+	r := recover()
+	if r == nil {
+		return
+	}
+	if state != nil {
+		state.finalExitCode = types.ExitPanicError.Int()
+		state.panicStack = debug.Stack()
+	}
+	panic(r)
+}
+
 func finishMainRun(run runBootstrap) {
 	var panicErr error
 	exitAfterCleanup := false
@@ -52,6 +69,11 @@ func finishMainRun(run runBootstrap) {
 	}
 
 	stack := debug.Stack()
+	// capturePanicExit already ran earlier in the unwind and stashed the ORIGINAL crash
+	// stack; prefer it so the operator sees the panic origin, not this re-panic site.
+	if run.state != nil && len(run.state.panicStack) > 0 {
+		stack = run.state.panicStack
+	}
 	panicErr = fmt.Errorf("panic: %v", r)
 	exitAfterCleanup = true
 	if run.state != nil {
@@ -158,6 +180,11 @@ func runRuntime(rt *appRuntime, state *appRunState) int {
 	for _, deferredAction := range runDeferredActions(rt, state) {
 		defer deferredAction()
 	}
+	// Registered AFTER the deferred actions so LIFO runs it FIRST in a panic unwind, before
+	// the success footer (printFinalSummary) reads finalExitCode. Without it the footer,
+	// running earlier than finishMainRun, prints a GREEN success banner just before the
+	// process exits 13 (F02-15).
+	defer capturePanicExit(state)
 	state.showSummary = true
 
 	logRunContext(rt)
