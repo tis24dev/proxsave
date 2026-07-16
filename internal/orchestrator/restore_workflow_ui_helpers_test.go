@@ -40,7 +40,8 @@ type fakeRestoreWorkflowUI struct {
 	clusterRestoreModeCalls   int
 	lastCompatibilityWarning  error
 
-	shownMessages []string
+	shownMessages   []string
+	confirmMessages []string
 }
 
 func (f *fakeRestoreWorkflowUI) RunTask(ctx context.Context, title, initialMessage string, run func(ctx context.Context, report ProgressReporter) error) error {
@@ -133,6 +134,7 @@ func (f *fakeRestoreWorkflowUI) ConfirmApplyDatacenterCfg(ctx context.Context, d
 }
 
 func (f *fakeRestoreWorkflowUI) ConfirmAction(ctx context.Context, title, message, yesLabel, noLabel string, timeout time.Duration, defaultYes bool) (bool, error) {
+	f.confirmMessages = append(f.confirmMessages, message)
 	return f.confirmAction, f.confirmActionErr
 }
 

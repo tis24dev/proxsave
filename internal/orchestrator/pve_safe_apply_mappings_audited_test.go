@@ -99,3 +99,35 @@ func TestRunSafeClusterApply_AppliesRealStringArrayMappings(t *testing.T) {
 	}
 	t.Fatalf("expected a pvesh create call with prefix %q; calls=%#v", wantPrefix, runner.calls)
 }
+
+// F06-01: the mapping-apply confirm prompt must warn that mappings encode
+// specific PCI/USB device paths and cluster node names captured at backup time.
+func TestPVEMappingConfirmWarnsHardwareNodeMismatch(t *testing.T) {
+	origFS := restoreFS
+	t.Cleanup(func() { restoreFS = origFS })
+	restoreFS = osFS{}
+
+	exportRoot := t.TempDir()
+	mappingPath := filepath.Join(exportRoot, "var", "lib", "proxsave-info", "commands", "pve", "mapping_pci.json")
+	if err := os.MkdirAll(filepath.Dir(mappingPath), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(mappingPath, []byte(strings.TrimSpace(`[
+  {"id":"device1","map":["node=pve01,path=0000:01:00.0"]}
+]`)), 0o640); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+
+	ui := &fakeRestoreWorkflowUI{confirmAction: false}
+	if err := maybeApplyPVEClusterResourceMappingsWithUI(context.Background(), ui, newTestLogger(), exportRoot); err != nil {
+		t.Fatalf("maybeApplyPVEClusterResourceMappingsWithUI error: %v", err)
+	}
+
+	if len(ui.confirmMessages) == 0 {
+		t.Fatal("ConfirmAction was not called")
+	}
+	msg := ui.confirmMessages[len(ui.confirmMessages)-1]
+	if !strings.Contains(msg, "hardware") || !strings.Contains(msg, "node") {
+		t.Fatalf("mapping confirm message lacks the hardware/node caveat: %q", msg)
+	}
+}
