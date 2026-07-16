@@ -83,3 +83,30 @@ func TestValidateModeCompatibility(t *testing.T) {
 		})
 	}
 }
+
+func TestModeUseCLI(t *testing.T) {
+	orig := modeStdoutInteractive
+	t.Cleanup(func() { modeStdoutInteractive = orig })
+
+	cases := []struct {
+		name        string
+		forceCLI    bool
+		interactive bool
+		wantCLI     bool
+	}{
+		{"interactive-tui", false, true, false},
+		{"force-cli-on-tty", true, true, true},
+		{"non-tty-forces-cli", false, false, true},
+		{"force-cli-and-non-tty", true, false, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			modeStdoutInteractive = func() bool { return tc.interactive }
+			got := modeUseCLI(&cli.Args{ForceCLI: tc.forceCLI})
+			if got != tc.wantCLI {
+				t.Fatalf("modeUseCLI(forceCLI=%v, interactive=%v) = %v, want %v",
+					tc.forceCLI, tc.interactive, got, tc.wantCLI)
+			}
+		})
+	}
+}

@@ -200,11 +200,23 @@ func runUpgradeMode(ctx context.Context, args *cli.Args, bootstrap *logging.Boot
 	return runUpgrade(ctx, args, bootstrap), true
 }
 
+// modeStdoutInteractive gates the sibling entrypoints onto their clean-stdout CLI
+// variant when stdout is not a real terminal, mirroring dispatchRestoreMode (C6).
+// It is a var so tests can force the non-interactive branch.
+var modeStdoutInteractive = isTerminalInteractive
+
+// modeUseCLI reports whether a sibling entrypoint must take its clean-stdout CLI
+// variant: either the operator forced --cli, or stdout is not a real terminal (a
+// TUI would write AltScreen escapes into the redirected stream).
+func modeUseCLI(args *cli.Args) bool {
+	return args.ForceCLI || !modeStdoutInteractive()
+}
+
 func runNewKeyMode(ctx context.Context, args *cli.Args, bootstrap *logging.BootstrapLogger, _ string) (int, bool) {
 	if !args.ForceNewKey {
 		return types.ExitSuccess.Int(), false
 	}
-	newKeyCLI := args.ForceCLI
+	newKeyCLI := modeUseCLI(args)
 	logging.DebugStepBootstrap(bootstrap, "main run", "mode=newkey cli=%v", newKeyCLI)
 	if err := runNewKey(ctx, args.ConfigPath, cliFlowLogLevel(args), bootstrap, newKeyCLI); err != nil {
 		if isInstallAbortedError(err) || errors.Is(err, orchestrator.ErrAgeRecipientSetupAborted) {
@@ -220,7 +232,7 @@ func runDecryptOnlyMode(ctx context.Context, args *cli.Args, bootstrap *logging.
 	if !args.Decrypt {
 		return types.ExitSuccess.Int(), false
 	}
-	decryptCLI := args.ForceCLI
+	decryptCLI := modeUseCLI(args)
 	logging.DebugStepBootstrap(bootstrap, "main run", "mode=decrypt cli=%v", decryptCLI)
 	if err := runDecryptWorkflowOnly(ctx, args.ConfigPath, bootstrap, toolVersion, decryptCLI); err != nil {
 		if errors.Is(err, orchestrator.ErrDecryptAborted) {
@@ -245,7 +257,7 @@ func runNewInstallMode(ctx context.Context, args *cli.Args, bootstrap *logging.B
 	if !args.NewInstall {
 		return types.ExitSuccess.Int(), false
 	}
-	newInstallCLI := args.ForceCLI
+	newInstallCLI := modeUseCLI(args)
 	logging.DebugStepBootstrap(bootstrap, "main run", "mode=new-install cli=%v", newInstallCLI)
 	sessionLogger, cleanupSessionLog := startFlowSessionLog("new-install", cliFlowLogLevel(args), bootstrap)
 	defer cleanupSessionLog()
@@ -270,7 +282,8 @@ func runInstallMode(ctx context.Context, args *cli.Args, bootstrap *logging.Boot
 	if !args.Install {
 		return types.ExitSuccess.Int(), false
 	}
-	logging.DebugStepBootstrap(bootstrap, "main run", "mode=install cli=%v", args.ForceCLI)
+	installCLI := modeUseCLI(args)
+	logging.DebugStepBootstrap(bootstrap, "main run", "mode=install cli=%v", installCLI)
 	sessionLogger, cleanupSessionLog := startFlowSessionLog("install", cliFlowLogLevel(args), bootstrap)
 	defer cleanupSessionLog()
 	if sessionLogger != nil {
@@ -278,7 +291,7 @@ func runInstallMode(ctx context.Context, args *cli.Args, bootstrap *logging.Boot
 	}
 
 	var err error
-	if args.ForceCLI {
+	if installCLI {
 		err = runInstall(ctx, args.ConfigPath, bootstrap)
 	} else {
 		err = runInstallTUI(ctx, args.ConfigPath, bootstrap)
