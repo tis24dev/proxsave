@@ -4,9 +4,11 @@ import (
 	"bufio"
 	"context"
 	"errors"
+	"io"
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/tis24dev/proxsave/internal/input"
 )
@@ -98,5 +100,31 @@ func TestEnsureInteractiveStdinNotTTY(t *testing.T) {
 
 	if err := ensureInteractiveStdin(); err == nil {
 		t.Fatalf("expected error when stdin is not a terminal")
+	}
+}
+
+func TestPromptOptionalAbortsWhenIdle(t *testing.T) {
+	orig := promptIdleTimeout
+	promptIdleTimeout = time.Millisecond
+	t.Cleanup(func() { promptIdleTimeout = orig })
+
+	pr, pw := io.Pipe()
+	defer pw.Close() // never deliver -> idle fires
+	_, err := promptOptional(context.Background(), bufio.NewReader(pr), "Value: ")
+	if !errors.Is(err, errInteractiveAborted) {
+		t.Fatalf("idle install prompt must map to the interactive abort; got %v", err)
+	}
+}
+
+func TestPromptYesNoAbortsWhenIdle(t *testing.T) {
+	orig := promptIdleTimeout
+	promptIdleTimeout = time.Millisecond
+	t.Cleanup(func() { promptIdleTimeout = orig })
+
+	pr, pw := io.Pipe()
+	defer pw.Close()
+	_, err := promptYesNo(context.Background(), bufio.NewReader(pr), "Proceed? [y/N]: ", false)
+	if !errors.Is(err, errInteractiveAborted) {
+		t.Fatalf("idle yes/no must map to the interactive abort; got %v", err)
 	}
 }
