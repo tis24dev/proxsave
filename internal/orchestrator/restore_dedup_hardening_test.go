@@ -1,6 +1,8 @@
 package orchestrator
 
 import (
+	"archive/tar"
+	"bytes"
 	"context"
 	"os"
 	"path/filepath"
@@ -144,6 +146,48 @@ func TestMaterializeDedupCanonicalSizeCap(t *testing.T) {
 // F-05-01: in a selective restore, a manifest entry whose path was NOT extracted
 // this run (out of the selected scope, or a pre-existing live symlink) must be left
 // UNTOUCHED, not atomically replaced with archive content.
+// F-05-01 (full restore): the dedup scope gate must be active on full restore too,
+// not only selective. processRestoreArchiveEntries must return a NON-nil extractedSet
+// even with no categories, so materializeDedupSymlinks never clobbers a pre-existing
+// live symlink an out-of-scope/malicious manifest entry points at (worst case: /).
+func TestProcessRestoreArchiveEntries_FullRestoreGatesDedup(t *testing.T) {
+	origFS := restoreFS
+	restoreFS = osFS{}
+	t.Cleanup(func() { restoreFS = origFS })
+
+	var buf bytes.Buffer
+	tw := tar.NewWriter(&buf)
+	content := []byte("x")
+	if err := tw.WriteHeader(&tar.Header{Name: "foo.cfg", Mode: 0o644, Size: int64(len(content)), Typeflag: tar.TypeReg}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tw.Write(content); err != nil {
+		t.Fatal(err)
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	opts := restoreArchiveOptions{
+		destRoot:   t.TempDir(),
+		logger:     logging.New(types.LogLevelError, false),
+		categories: nil, // full restore
+	}
+	extractionLog := newRestoreExtractionLog(opts)
+	defer extractionLog.close()
+
+	_, extractedSet, err := processRestoreArchiveEntries(context.Background(), tar.NewReader(&buf), opts, extractionLog)
+	if err != nil {
+		t.Fatalf("process: %v", err)
+	}
+	if extractedSet == nil {
+		t.Fatal("full restore must build a non-nil extractedSet so the F-05-01 dedup scope gate is active")
+	}
+	if !extractedSet[dedupCleanArchivePath("foo.cfg")] {
+		t.Fatalf("extracted entry not recorded in set: %v", extractedSet)
+	}
+}
+
 // F-05-02 sibling: a corrupt (unparseable) dedup manifest must ALSO fail closed on
 // the strict/staged path (refuse to apply a partial restore) and keep the manifest,
 // mirroring the oversize guard; best-effort removes it and returns nil.

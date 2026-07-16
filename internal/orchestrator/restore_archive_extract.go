@@ -162,12 +162,11 @@ func (log *restoreExtractionLog) writeHeader(opts restoreArchiveOptions) {
 func processRestoreArchiveEntries(ctx context.Context, tarReader *tar.Reader, opts restoreArchiveOptions, extractionLog *restoreExtractionLog) (restoreExtractionStats, map[string]bool, error) {
 	var stats restoreExtractionStats
 	selectiveMode := len(opts.categories) > 0
-	// In selective mode, record what we actually extracted this run so dedup
-	// materialization can be gated to it (F-05-01). nil in full restore = no gate.
-	var extractedSet map[string]bool
-	if selectiveMode {
-		extractedSet = map[string]bool{}
-	}
+	// Record what we actually extracted this run so dedup materialization is gated to
+	// it (F-05-01): only a duplicate symlink created by THIS run is ever rebuilt, never
+	// a pre-existing live symlink an out-of-scope or malicious manifest entry points at.
+	// Built for full restore too (not just selective) so restore-to-/ is protected.
+	extractedSet := map[string]bool{}
 	for {
 		if err := ctx.Err(); err != nil {
 			return stats, extractedSet, err
@@ -377,7 +376,7 @@ func materializeDedupSymlinks(ctx context.Context, archivePath, destRoot string,
 			continue
 		}
 		if extractedSet != nil && !extractedSet[dedupCleanArchivePath(entry.Path)] {
-			// Selective restore: only rebuild duplicates actually extracted this run,
+			// Only rebuild duplicates actually extracted this run (selective AND full),
 			// never a pre-existing live symlink or an out-of-scope manifest entry (F-05-01).
 			continue
 		}
