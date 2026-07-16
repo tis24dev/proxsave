@@ -287,6 +287,15 @@ func (c *CollectorConfig) Validate() error {
 	if c.SystemRootPrefix != "" && !filepath.IsAbs(c.SystemRootPrefix) {
 		return fmt.Errorf("system root prefix must be an absolute path")
 	}
+	if c.SystemRootPrefix != "" {
+		info, err := statFunc(filepath.Clean(c.SystemRootPrefix))
+		if err != nil {
+			return fmt.Errorf("system root prefix %q not accessible: %w", c.SystemRootPrefix, err)
+		}
+		if !info.IsDir() {
+			return fmt.Errorf("system root prefix %q is not a directory", c.SystemRootPrefix)
+		}
+	}
 
 	return nil
 }

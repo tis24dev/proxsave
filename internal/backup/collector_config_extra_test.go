@@ -1,8 +1,10 @@
 package backup
 
 import (
+	"os"
 	"path/filepath"
 	"regexp"
+	"strings"
 	"testing"
 )
 
@@ -105,6 +107,37 @@ func TestCollectorConfigValidateRequiresAbsoluteSystemRootPrefix(t *testing.T) {
 	cfg.SystemRootPrefix = "relative/path"
 	if err := cfg.Validate(); err == nil {
 		t.Fatalf("expected error for relative system root prefix")
+	}
+}
+
+func TestCollectorConfigValidateRejectsNonexistentSystemRootPrefix(t *testing.T) {
+	base := t.TempDir()
+
+	// Nonexistent absolute path: error mentioning the prefix.
+	missing := filepath.Join(base, "does-not-exist")
+	cfg := &CollectorConfig{SystemRootPrefix: missing}
+	err := cfg.Validate()
+	if err == nil {
+		t.Fatalf("expected error for nonexistent system root prefix")
+	}
+	if !strings.Contains(err.Error(), missing) {
+		t.Fatalf("error should mention prefix %q, got %v", missing, err)
+	}
+
+	// Regular file (not a directory): error.
+	file := filepath.Join(base, "regular-file")
+	if err := os.WriteFile(file, []byte("x"), 0o600); err != nil {
+		t.Fatalf("write file: %v", err)
+	}
+	cfg = &CollectorConfig{SystemRootPrefix: file}
+	if err := cfg.Validate(); err == nil {
+		t.Fatalf("expected error for system root prefix that is a regular file")
+	}
+
+	// Existing directory: valid.
+	cfg = &CollectorConfig{SystemRootPrefix: base}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("existing directory prefix should be valid: %v", err)
 	}
 }
 
