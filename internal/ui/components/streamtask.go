@@ -46,6 +46,12 @@ const streamFlushInterval = 60 * time.Millisecond
 // without bound between ticks.
 const streamFlushCount = 256
 
+// streamPendingCap bounds the producer-side coalescing buffer. The display ring
+// keeps only the newest streamLineCap lines, so if the flusher's Send stalls on
+// UI backpressure the producer never needs more than that; the oldest overflow is
+// dropped so a wedged UI cannot grow this buffer without bound (262-9).
+const streamPendingCap = streamLineCap
+
 // StreamLineMsg appends one line to the running stream screen. Retained for
 // direct/legacy senders and unit tests; the production emit path coalesces into
 // StreamLinesMsg batches. Both are handled identically in Update.
@@ -533,6 +539,13 @@ func (b *streamEmitBuffer) emit(line string) {
 		return
 	}
 	b.pending = append(b.pending, line)
+	if len(b.pending) > streamPendingCap {
+		// Drop the oldest overflow (a wedged UI can only ever review the newest
+		// streamLineCap lines anyway). Copy into a fresh slice so the large backing
+		// array is released rather than retained by a reslice.
+		drop := len(b.pending) - streamPendingCap
+		b.pending = append([]string(nil), b.pending[drop:]...)
+	}
 	over := len(b.pending) >= streamFlushCount
 	b.mu.Unlock()
 	if over {

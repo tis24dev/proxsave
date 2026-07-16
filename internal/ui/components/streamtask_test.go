@@ -332,3 +332,19 @@ func TestRunStreamTaskDriverPropagatesError(t *testing.T) {
 		t.Fatalf("expected task error, got %v", err)
 	}
 }
+
+// 262-9: emit must bound the pending buffer so a stalled flusher (UI backpressure)
+// cannot grow it without limit; the newest lines survive.
+func TestStreamEmitBufferCapsPending(t *testing.T) {
+	b := &streamEmitBuffer{wake: make(chan struct{}, 1)} // no flusher goroutine
+	for i := 0; i < streamPendingCap*3; i++ {
+		b.emit(fmt.Sprintf("l%d", i))
+	}
+	if len(b.pending) > streamPendingCap {
+		t.Fatalf("pending must be capped at %d, got %d", streamPendingCap, len(b.pending))
+	}
+	last := fmt.Sprintf("l%d", streamPendingCap*3-1)
+	if b.pending[len(b.pending)-1] != last {
+		t.Fatalf("newest line must survive, got %q want %q", b.pending[len(b.pending)-1], last)
+	}
+}
