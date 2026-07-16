@@ -331,9 +331,9 @@ func (t *StreamTask) View(width, height int) string {
 	// the header, a rule, a scroll indicator row, and the outcome height; the
 	// REST goes to the viewport (the bounded, scrollable, colored box).
 	rule := theme.Subtle.Render(strings.Repeat("─", max(width, 1)))
-	reserved := lipglossCount(headerStr) + 1 /*rule*/ + 1 /*scroll row*/
+	reserved := lipglossCount(headerStr, width) + 1 /*rule*/ + 1 /*scroll row*/
 	if outcome != "" {
-		reserved += lipglossCount(outcome) + 1 /*rule below panel*/
+		reserved += lipglossCount(outcome, width) + 1 /*rule below panel*/
 	}
 	bodyH := height - reserved
 	if bodyH < 1 {
@@ -495,11 +495,23 @@ func wrapLine(line string, width int) []string {
 
 // lipglossCount returns the number of display rows a (possibly multi-line)
 // rendered block occupies.
-func lipglossCount(s string) int {
+func lipglossCount(s string, width int) int {
 	if s == "" {
 		return 0
 	}
-	return strings.Count(s, "\n") + 1
+	if width < 1 {
+		width = 1
+	}
+	rows := 0
+	for _, seg := range strings.Split(s, "\n") {
+		w := ansi.StringWidth(seg)
+		if w <= width {
+			rows++
+			continue
+		}
+		rows += (w + width - 1) / width
+	}
+	return rows
 }
 
 // streamEmitBuffer is the goroutine-safe, NON-BLOCKING seam between the run's

@@ -379,6 +379,24 @@ func TestStreamLinesMsgKeepsANSIAndBlanks(t *testing.T) {
 	}
 }
 
+// 261-7: lipglossCount must count the PHYSICAL rows a block occupies at the given
+// width (soft-wrapped), not just its literal newline count, or the header/outcome
+// height is under-reserved and the final status row is clipped on narrow terminals.
+func TestLipglossCountCountsWrappedRows(t *testing.T) {
+	if got := lipglossCount("", 40); got != 0 {
+		t.Fatalf("empty must be 0 rows, got %d", got)
+	}
+	if got := lipglossCount("short", 40); got != 1 {
+		t.Fatalf("short line must be 1 row, got %d", got)
+	}
+	if got := lipglossCount(strings.Repeat("x", 100), 40); got != 3 { // ceil(100/40)
+		t.Fatalf("100 cells at width 40 must be 3 rows, got %d", got)
+	}
+	if got := lipglossCount("a\n"+strings.Repeat("y", 81), 40); got != 4 { // 1 + ceil(81/40)=3
+		t.Fatalf("mixed block must be 4 rows, got %d", got)
+	}
+}
+
 // --- coalescing buffer (Part B) ----------------------------------------------
 
 // TestEmitBufferNeverBlocks proves the producer's emit never blocks on the UI:
