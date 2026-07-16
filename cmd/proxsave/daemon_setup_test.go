@@ -2,12 +2,16 @@
 package main
 
 import (
+	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/tis24dev/proxsave/internal/cli"
+	"github.com/tis24dev/proxsave/internal/config"
+	"github.com/tis24dev/proxsave/internal/logging"
 )
 
 func TestSetBackupEnvKeysReplacesAndAppends(t *testing.T) {
@@ -123,5 +127,43 @@ func TestValidateDaemonCompatibility(t *testing.T) {
 				t.Fatalf("expected no message, got %v", msgs)
 			}
 		})
+	}
+}
+
+// F09-06: applyCronMode must establish the cron fallback (persist SCHEDULER_MODE=cron)
+// BEFORE tearing down the daemon, so a teardown failure never leaves the host unscheduled
+// with a stale mode=daemon.
+func TestApplyCronMode_PersistsCronModeBeforeTeardown(t *testing.T) {
+	origRemove := removeDaemonServiceFn
+	origMigrate := migrateLegacyCronEntriesFn
+	t.Cleanup(func() {
+		removeDaemonServiceFn = origRemove
+		migrateLegacyCronEntriesFn = origMigrate
+	})
+	migrateCalled := false
+	migrateLegacyCronEntriesFn = func(context.Context, string, string, *logging.BootstrapLogger, string) {
+		migrateCalled = true
+	}
+	removeDaemonServiceFn = func(context.Context, *logging.BootstrapLogger) error {
+		return errors.New("teardown boom")
+	}
+
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "backup.env")
+	if err := os.WriteFile(configPath, []byte("SCHEDULER_MODE=daemon\nSCHEDULER_TIME=02:00\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg := &config.Config{BaseDir: dir, SchedulerTime: "02:00"}
+
+	err := applyCronMode(context.Background(), cfg, configPath, "/usr/local/bin/proxsave", nil, false)
+	if err == nil {
+		t.Fatal("teardown failure must still be returned")
+	}
+	if !migrateCalled {
+		t.Fatal("cron fallback (migrate) must run before teardown")
+	}
+	data, _ := os.ReadFile(configPath)
+	if !strings.Contains(string(data), "SCHEDULER_MODE=cron") {
+		t.Fatalf("SCHEDULER_MODE=cron must be persisted before teardown, got:\n%s", data)
 	}
 }

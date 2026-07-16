@@ -213,16 +213,22 @@ func installVerifyContext(configPath string) (baseDir string, interval time.Dura
 	return baseDir, cfg.HealthcheckHeartbeatInterval, true
 }
 
-// applyCronMode reverts an install to cron: remove the systemd unit, re-add the
-// canonical cron entry at the configured schedule, and record SCHEDULER_MODE=cron
-// (plus DAEMON_OPT_OUT=true when optOut, the --daemon-remove tombstone that stops
-// future upgrades from re-migrating).
+// Seams so a test can drive applyCronMode's ordering without touching the real crontab
+// or systemd unit.
+var (
+	removeDaemonServiceFn      = removeDaemonService
+	migrateLegacyCronEntriesFn = migrateLegacyCronEntries
+)
+
+// applyCronMode reverts an install to cron: re-add the canonical cron entry at the
+// configured schedule, record SCHEDULER_MODE=cron (plus DAEMON_OPT_OUT=true when optOut,
+// the --daemon-remove tombstone that stops future upgrades from re-migrating), and only
+// THEN remove the systemd unit. The cron fallback is established first so a teardown
+// failure never leaves the host unscheduled with a stale mode=daemon (F09-06).
 func applyCronMode(ctx context.Context, cfg *config.Config, configPath, execToken string, bootstrap *logging.BootstrapLogger, optOut bool) error {
-	if err := removeDaemonService(ctx, bootstrap); err != nil {
-		return err
-	}
-	// Re-install the single canonical cron line at the configured schedule.
-	migrateLegacyCronEntries(ctx, cfg.BaseDir, execToken, bootstrap, cron.TimeToSchedule(cfg.SchedulerTime))
+	// Establish the cron fallback FIRST: re-add the canonical cron line and persist
+	// SCHEDULER_MODE=cron before removing the daemon unit.
+	migrateLegacyCronEntriesFn(ctx, cfg.BaseDir, execToken, bootstrap, cron.TimeToSchedule(cfg.SchedulerTime))
 
 	kv := map[string]string{"SCHEDULER_MODE": "cron"}
 	if optOut {
@@ -231,7 +237,9 @@ func applyCronMode(ctx context.Context, cfg *config.Config, configPath, execToke
 	if err := setBackupEnvKeys(configPath, kv); err != nil {
 		logging.Warning("daemon: failed to record cron mode in %s: %v", configPath, err)
 	}
-	return nil
+	// Teardown last: a failure here leaves the host cron-scheduled with mode=cron, never
+	// unscheduled+stale. The per-run lock mitigates the transient double-schedule window.
+	return removeDaemonServiceFn(ctx, bootstrap)
 }
 
 // maybeAutoMigrateDaemon is the --upgrade retrofit: if the install is still on
