@@ -59,3 +59,11 @@ func TestPanicExitCodeSeverityIsError(t *testing.T) {
 		t.Fatalf("severity(panic) = %v, want severityError", sev)
 	}
 }
+
+// TestBackupSkippedExitSeverityIsWarning pins F09-03: a benign skip (exit 16) colors the CLI
+// footer YELLOW (warning), never green success nor red error.
+func TestBackupSkippedExitSeverityIsWarning(t *testing.T) {
+	if sev := exitCodeSeverity(types.ExitBackupSkipped.Int(), nil); sev != severityWarning {
+		t.Fatalf("severity(backup skipped) = %v, want severityWarning", sev)
+	}
+}

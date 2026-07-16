@@ -345,6 +345,14 @@ func (d *daemon) runOnce(parentCtx context.Context) {
 	}
 
 	code := exitCodeFromErr(runErr)
+	// A child that exits ExitBackupSkipped did NOT back up (another backup was already running,
+	// or BACKUP_ENABLED was re-read as false): there is no outcome to ping. Stay silent, exactly
+	// like the honest disabled skip above, so the backup-outcome check does not go a false green
+	// (F09-03). The real backup that holds the lock reports its own outcome.
+	if code == types.ExitBackupSkipped.Int() {
+		logging.Info("daemon: scheduled run skipped, no backup performed (rid=%s, no outcome ping)", rid)
+		return
+	}
 	logging.Info("daemon: backup finished (rid=%s exit=%d)", rid, code)
 	d.reportBestEffort("finish", code != 0, func() error { return d.finishPing(parentCtx, r, rid, code, logBody) })
 

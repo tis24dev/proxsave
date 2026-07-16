@@ -215,6 +215,10 @@ func exitCodeSeverity(exitCode int, logger *logging.Logger) exitSeverity {
 		return severityOK
 	case exitCode == types.ExitGenericError.Int():
 		return severityWarning
+	case exitCode == types.ExitBackupSkipped.Int():
+		// A benign skip (another backup running / disabled): non-blocking, colored yellow like a
+		// warning, never green success nor red error (F09-03).
+		return severityWarning
 	default:
 		return severityError
 	}

@@ -18,6 +18,7 @@ func TestExitCodeString(t *testing.T) {
 		{"permission error", ExitPermissionError, "permission error"},
 		{"verification error", ExitVerificationError, "verification error"},
 		{"encryption error", ExitEncryptionError, "encryption error"},
+		{"backup skipped", ExitBackupSkipped, "backup skipped"},
 		{"unknown", ExitCode(99), "unknown error"},
 	}
 
@@ -47,6 +48,7 @@ func TestExitCodeInt(t *testing.T) {
 		{"permission error", ExitPermissionError, 7},
 		{"verification error", ExitVerificationError, 8},
 		{"encryption error", ExitEncryptionError, 15},
+		{"backup skipped", ExitBackupSkipped, 16},
 	}
 
 	for _, tt := range tests {

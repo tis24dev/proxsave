@@ -52,6 +52,12 @@ const (
 
 	// ExitEncryptionError - Error during encryption setup or processing.
 	ExitEncryptionError ExitCode = 15
+
+	// ExitBackupSkipped - No backup was performed for a benign reason (another backup was already
+	// running, or BACKUP_ENABLED=false). NOT a failure: it is a distinct sentinel so the daemon
+	// does not ping a false-green finish for a child that never backed up, and the CLI footer
+	// colors it as a benign skip rather than success or error (F09-03).
+	ExitBackupSkipped ExitCode = 16
 )
 
 // String returns a human-readable description of the exit code.
@@ -89,6 +95,8 @@ func (e ExitCode) String() string {
 		return "security error"
 	case ExitEncryptionError:
 		return "encryption error"
+	case ExitBackupSkipped:
+		return "backup skipped"
 	default:
 		return "unknown error"
 	}

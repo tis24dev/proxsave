@@ -3,6 +3,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"os/exec"
 	"strings"
 	"sync"
@@ -11,6 +12,7 @@ import (
 
 	"github.com/tis24dev/proxsave/internal/config"
 	"github.com/tis24dev/proxsave/internal/health"
+	"github.com/tis24dev/proxsave/internal/types"
 )
 
 // fakeReporter records the daemon's healthchecks calls for assertions.
@@ -200,6 +202,20 @@ func TestRunOnceReportsHang(t *testing.T) {
 	s := rep.snapshot()
 	if s.hung != 1 || s.finished != 0 {
 		t.Fatalf("hang run: hung=%d finished=%d, want 1/0", s.hung, s.finished)
+	}
+}
+
+// TestRunOnceSuppressesFinishPingOnBackupSkipped pins F09-03: a supervised child that exits
+// ExitBackupSkipped (16) because another backup was already running did NOT back up, so runOnce
+// must NOT ping a finish (which would be a false green on the backup-outcome check). The start
+// ping already fired before the child ran; only finish/hang must be suppressed.
+func TestRunOnceSuppressesFinishPingOnBackupSkipped(t *testing.T) {
+	rep := &fakeReporter{backupURL: true}
+	d := newTestDaemon(t, rep, shCmd(fmt.Sprintf("exit %d", types.ExitBackupSkipped.Int())), time.Hour)
+	d.runOnce(context.Background())
+	s := rep.snapshot()
+	if s.finished != 0 || s.hung != 0 {
+		t.Fatalf("a skipped backup (exit %d) must NOT ping finish/hang, got finished=%d hung=%d", types.ExitBackupSkipped.Int(), s.finished, s.hung)
 	}
 }
 
