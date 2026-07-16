@@ -825,6 +825,7 @@ func TestValidateRecreationPath(t *testing.T) {
 		"/tank/pbs",
 		"/srv/pve/dump",
 		"/data/store",
+		"/run/media/user/disk",
 	}
 	for _, p := range accepted {
 		if err := validateRecreationPath(p); err != nil {
@@ -845,6 +846,9 @@ func TestValidateRecreationPath(t *testing.T) {
 		"/dev/shm",
 		"/root/.ssh",
 		"/boot/efi",
+		"/run/systemd/foo",
+		"/run",
+		"/run/media",
 	}
 	for _, p := range rejected {
 		if err := validateRecreationPath(p); err == nil {

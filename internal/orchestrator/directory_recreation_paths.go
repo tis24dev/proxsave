@@ -108,6 +108,12 @@ func validateRecreationPath(path string) error {
 		return fmt.Errorf("path %q resolves to the filesystem root", path)
 	}
 	for _, root := range recreationSystemCriticalRoots {
+		if root == "/run" && strings.HasPrefix(clean, "/run/media/") {
+			// /run/media/<user>/<label> is a legitimate removable-disk datastore
+			// mount root (see isConfirmableDatastoreMountRoot); do not treat it as
+			// system-critical. Bare /run and every other /run child stay blocked.
+			continue
+		}
 		if clean == root || strings.HasPrefix(clean, root+string(os.PathSeparator)) {
 			return fmt.Errorf("path %q is within system-critical directory %q", path, root)
 		}
