@@ -506,6 +506,126 @@ func TestPassphraseSaltForManifestReadErrorFailsClosed(t *testing.T) {
 	}
 }
 
+// recipientWriteErrFS wraps a FakeFS and fails the atomic write of one target
+// path (its ".proxsave.tmp.<nano>" OpenFile), so a test can force
+// coLocatePassphraseSalt's recipient-file rewrite to fail while every read still
+// succeeds.
+type recipientWriteErrFS struct {
+	*FakeFS
+	target string
+	err    error
+}
+
+func (r *recipientWriteErrFS) OpenFile(path string, flag int, perm os.FileMode) (*os.File, error) {
+	if strings.HasPrefix(path, r.target+".proxsave.tmp.") {
+		return nil, r.err
+	}
+	return r.FakeFS.OpenFile(path, flag, perm)
+}
+
+// TestWriteArchiveManifestBackfillsCoLocatedSalt drives an existing passphrase
+// install (salt only in the passphrase.salt sibling, recipient.txt without the
+// co-located comment) through writeArchiveManifest and asserts the salt is
+// backfilled into recipient.txt, so a later sibling deletion no longer loses it.
+func TestWriteArchiveManifestBackfillsCoLocatedSalt(t *testing.T) {
+	tmp := t.TempDir()
+	recipientPath := filepath.Join(tmp, "identity", "age", "recipient.txt")
+	o := newEncryptionTestOrchestrator(&config.Config{EncryptArchive: true, AgeRecipientFile: recipientPath})
+
+	// Old install: sibling salt present, recipient.txt carries only the recipient
+	// line (no co-located comment).
+	salt, err := o.getOrCreatePassphraseSalt(recipientPath)
+	if err != nil {
+		t.Fatalf("getOrCreatePassphraseSalt: %v", err)
+	}
+	rec, err := deriveDeterministicRecipientFromPassphraseWithSalt(testStrongPassphrase, salt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := writeRecipientFile(recipientPath, []string{rec}); err != nil {
+		t.Fatalf("writeRecipientFile: %v", err)
+	}
+	if content, _ := os.ReadFile(recipientPath); countSaltCommentLines(string(content)) != 0 {
+		t.Fatalf("precondition: recipient.txt already carries a salt comment:\n%s", content)
+	}
+
+	archiveDir := t.TempDir()
+	run := &backupRunContext{ctx: context.Background(), stats: &BackupStats{}}
+	artifacts := &backupArtifacts{archivePath: filepath.Join(archiveDir, "archive.tar.zst")}
+	if err := o.writeArchiveManifest(run, artifacts, "deadbeef"); err != nil {
+		t.Fatalf("writeArchiveManifest: %v", err)
+	}
+
+	// The salt is now co-located in recipient.txt (exactly one comment, matching
+	// the sibling).
+	content, err := os.ReadFile(recipientPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n := countSaltCommentLines(string(content)); n != 1 {
+		t.Fatalf("recipient.txt has %d salt comment lines after backfill, want 1:\n%s", n, content)
+	}
+	if wantLine := passphraseSaltCommentPrefix + " " + salt; !strings.Contains(string(content), wantLine+"\n") {
+		t.Fatalf("recipient.txt missing backfilled %q:\n%s", wantLine, content)
+	}
+
+	// Deleting the sibling no longer loses the salt: it resolves from recipient.txt.
+	if err := os.Remove(passphraseSaltFilePath(recipientPath)); err != nil {
+		t.Fatalf("remove sibling: %v", err)
+	}
+	got, err := o.passphraseSaltForManifest()
+	if err != nil || got != salt {
+		t.Fatalf("passphraseSaltForManifest after sibling deletion = (%q, %v), want (%q, nil)", got, err, salt)
+	}
+}
+
+// TestWriteArchiveManifestBackfillFailureIsNonFatal proves the backfill is
+// best-effort: when co-locating the salt into recipient.txt fails (FS seam write
+// error), writeArchiveManifest still succeeds and the salt still resolves from
+// the passphrase.salt sibling for this run.
+func TestWriteArchiveManifestBackfillFailureIsNonFatal(t *testing.T) {
+	fake := NewFakeFS()
+	t.Cleanup(func() { _ = fake.Cleanup() })
+	recipientPath := filepath.Join("identity", "age", "recipient.txt")
+
+	// Old install state inside the fake FS: sibling salt present, recipient.txt
+	// with only the recipient line (no co-located comment).
+	salt := randomSaltNamespaceV2 + "00112233445566778899aabbccddeeff"
+	if err := fake.WriteFile(passphraseSaltFilePath(recipientPath), []byte(salt+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	rec, err := deriveDeterministicRecipientFromPassphraseWithSalt(testStrongPassphrase, salt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := fake.WriteFile(recipientPath, []byte(rec+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	errFS := &recipientWriteErrFS{FakeFS: fake, target: recipientPath, err: os.ErrPermission}
+	o := newEncryptionTestOrchestrator(&config.Config{EncryptArchive: true, AgeRecipientFile: recipientPath})
+	o.fs = errFS
+
+	run := &backupRunContext{ctx: context.Background(), stats: &BackupStats{}}
+	artifacts := &backupArtifacts{archivePath: filepath.Join(fake.Root, "archive.tar.zst")}
+	if err := o.writeArchiveManifest(run, artifacts, "deadbeef"); err != nil {
+		t.Fatalf("writeArchiveManifest must not fail when the backfill write fails (best-effort): %v", err)
+	}
+
+	// The backfill write failed: recipient.txt still carries no comment.
+	if content, _ := fake.ReadFile(recipientPath); countSaltCommentLines(string(content)) != 0 {
+		t.Fatalf("recipient.txt unexpectedly gained a salt comment despite the write failure:\n%s", content)
+	}
+	// The salt still resolves from the sibling this run.
+	got, err := o.passphraseSaltForManifest()
+	if err != nil || got != salt {
+		t.Fatalf("passphraseSaltForManifest = (%q, %v), want (%q, nil) from the sibling", got, err, salt)
+	}
+	if run.stats.ManifestPath == "" {
+		t.Fatalf("manifest path must be recorded on success")
+	}
+}
+
 // TestWriteArchiveManifestAbortsOnUnreadableSalt is the caller-level guard: when
 // the salt is unreadable and encryption is on, the backup aborts with a
 // BackupError (non-zero exit) instead of emitting a silent-success undecryptable

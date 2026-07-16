@@ -279,6 +279,10 @@ func (o *Orchestrator) writeArchiveChecksum(workspace *backupWorkspace, artifact
 
 func (o *Orchestrator) writeArchiveManifest(run *backupRunContext, artifacts *backupArtifacts, checksum string) error {
 	manifestPath := artifacts.archivePath + ".manifest.json"
+	// Backfill existing passphrase installs before the manifest salt is read, so
+	// the read prefers the freshly co-located comment. Best-effort: it never
+	// fails the backup (see backfillCoLocatedPassphraseSalt).
+	o.backfillCoLocatedPassphraseSalt()
 	manifest, err := o.newArchiveManifest(run.stats, artifacts.archivePath, checksum)
 	if err != nil {
 		// Fail closed: an unreadable or empty passphrase salt would drop the salt

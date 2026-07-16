@@ -94,8 +94,14 @@ func (o *Orchestrator) coLocatePassphraseSalt(recipientPath string) error {
 		return nil
 	}
 
-	// The recipient file must exist to encrypt; read it to preserve its lines.
+	// The recipient file must exist to encrypt; read it to preserve its lines. A
+	// missing recipient file is a no-op (symmetric with the sibling-absent case):
+	// there is nothing to co-locate into, and the backup fails elsewhere if it
+	// truly needs the recipient.
 	content, err := fs.ReadFile(recipientPath)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
 	if err != nil {
 		return fmt.Errorf("read recipient file %s: %w", recipientPath, err)
 	}
@@ -177,6 +183,21 @@ func (o *Orchestrator) readPassphraseSalt(recipientPath string) (string, error) 
 	return salt, nil
 }
 
+// manifestRecipientPath resolves the recipient file whose passphrase salt flows
+// into the archive manifest: the configured AgeRecipientFile, or the default
+// path when unset. Both passphraseSaltForManifest and the backup-time backfill
+// use it so their view of the recipient file cannot drift.
+func (o *Orchestrator) manifestRecipientPath() string {
+	if o == nil || o.cfg == nil {
+		return ""
+	}
+	recipientPath := strings.TrimSpace(o.cfg.AgeRecipientFile)
+	if recipientPath == "" {
+		recipientPath = o.defaultAgeRecipientFile()
+	}
+	return recipientPath
+}
+
 // passphraseSaltForManifest returns the per-installation salt to embed in an
 // archive manifest, or "" when encryption is off or no passphrase salt exists
 // (X25519/SSH-only setups, or legacy installs still on the fixed salt). It
@@ -186,9 +207,20 @@ func (o *Orchestrator) passphraseSaltForManifest() (string, error) {
 	if o == nil || o.cfg == nil || !o.cfg.EncryptArchive {
 		return "", nil
 	}
-	recipientPath := strings.TrimSpace(o.cfg.AgeRecipientFile)
-	if recipientPath == "" {
-		recipientPath = o.defaultAgeRecipientFile()
+	return o.readPassphraseSalt(o.manifestRecipientPath())
+}
+
+// backfillCoLocatedPassphraseSalt migrates existing passphrase installs at
+// backup time by co-locating the salt from the passphrase.salt sibling into the
+// recipient file, so the sole salt record survives a later sibling deletion. It
+// is BEST-EFFORT and NEVER fails the backup: any error is logged at Debug and
+// swallowed. It is a no-op when encryption is off, for recipient-only setups
+// (no sibling), and when the comment is already present (idempotent).
+func (o *Orchestrator) backfillCoLocatedPassphraseSalt() {
+	if o == nil || o.cfg == nil || !o.cfg.EncryptArchive {
+		return
 	}
-	return o.readPassphraseSalt(recipientPath)
+	if err := o.coLocatePassphraseSalt(o.manifestRecipientPath()); err != nil && o.logger != nil {
+		o.logger.Debug("Passphrase salt backfill skipped (best-effort): %v", err)
+	}
 }
