@@ -19,8 +19,8 @@ func TestParseSchedulerHealthcheckDefaults(t *testing.T) {
 	if c.SchedulerTime != "02:00" {
 		t.Errorf("SchedulerTime = %q, want 02:00", c.SchedulerTime)
 	}
-	if c.MaxRunDuration != 6*time.Hour {
-		t.Errorf("MaxRunDuration = %s, want 6h", c.MaxRunDuration)
+	if c.MaxRunDuration != 1*time.Hour {
+		t.Errorf("MaxRunDuration = %s, want 1h", c.MaxRunDuration)
 	}
 	if c.DaemonOptOut {
 		t.Errorf("DaemonOptOut = true, want false")
@@ -145,8 +145,8 @@ func TestSchedulerHealthcheckNormalizeFallback(t *testing.T) {
 	if c.HealthcheckMode != "centralized" {
 		t.Errorf("garbage HEALTHCHECK_MODE should fall back to centralized, got %q", c.HealthcheckMode)
 	}
-	if c.MaxRunDuration != 6*time.Hour {
-		t.Errorf("unparseable MAX_RUN_DURATION should fall back to 6h, got %s", c.MaxRunDuration)
+	if c.MaxRunDuration != 1*time.Hour {
+		t.Errorf("unparseable MAX_RUN_DURATION should fall back to 1h, got %s", c.MaxRunDuration)
 	}
 }
 

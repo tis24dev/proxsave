@@ -83,7 +83,7 @@ ProxSave runs the backup either from a cron entry or from a resident systemd dae
 ```bash
 SCHEDULER_MODE=cron            # cron | daemon (any unrecognized value normalizes to cron)
 SCHEDULER_TIME=02:00           # daily HH:MM "Run at" time
-MAX_RUN_DURATION=6h            # daemon watchdog: hard timeout for one backup
+MAX_RUN_DURATION=1h            # daemon watchdog: hard timeout for one backup
 DAEMON_OPT_OUT=false           # set true by --daemon-remove; --upgrade won't re-migrate to the daemon
 ```
 

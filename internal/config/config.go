@@ -832,7 +832,7 @@ func (c *Config) parseNotificationSettings() {
 func (c *Config) parseSchedulerSettings() {
 	c.SchedulerMode = normalizeSchedulerMode(c.getString("SCHEDULER_MODE", "cron"))
 	c.SchedulerTime = strings.TrimSpace(c.getString("SCHEDULER_TIME", "02:00"))
-	c.MaxRunDuration = c.getDuration("MAX_RUN_DURATION", 6*time.Hour)
+	c.MaxRunDuration = c.getDuration("MAX_RUN_DURATION", 1*time.Hour)
 	c.DaemonOptOut = c.getBool("DAEMON_OPT_OUT", false)
 }
 

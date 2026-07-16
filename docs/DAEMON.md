@@ -130,7 +130,7 @@ The daemon coordinates through five small files under `<BASE_DIR>/identity/`, al
 # Scheduler engine
 SCHEDULER_MODE=cron            # cron | daemon
 SCHEDULER_TIME=02:00           # daily HH:MM ("Run at")
-MAX_RUN_DURATION=6h            # watchdog hard timeout for one backup
+MAX_RUN_DURATION=1h            # watchdog hard timeout for one backup
 DAEMON_OPT_OUT=false           # set true by --daemon-remove; upgrade won't re-migrate
 BACKUP_ENABLED=true            # false: daemon skips the scheduled run (backup check goes down)
 

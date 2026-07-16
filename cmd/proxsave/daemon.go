@@ -29,8 +29,10 @@ const (
 	daemonKillGrace = 30 * time.Second
 	// logTailBytes bounds the log excerpt POSTed with a non-success outcome.
 	logTailBytes = 8 * 1024
-	// defaultMaxRunDuration is the watchdog fallback when MAX_RUN_DURATION is unset.
-	defaultMaxRunDuration = 6 * time.Hour
+	// defaultMaxRunDuration is the watchdog fallback when MAX_RUN_DURATION is unset. A
+	// config backup (config files, not VM data) completes well under this; raise
+	// MAX_RUN_DURATION for an unusually large archive over a slow cloud upload.
+	defaultMaxRunDuration = 1 * time.Hour
 	// defaultHeartbeatInterval is the alive-ping fallback.
 	defaultHeartbeatInterval = 5 * time.Minute
 	// defaultUpdateInterval is the updates-check fallback cadence.

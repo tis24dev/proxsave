@@ -357,3 +357,11 @@ func TestMaxRunDurationFallback(t *testing.T) {
 		t.Fatalf("maxRunDuration() = %s, want 2h", d.maxRunDuration())
 	}
 }
+
+// F09-04: the watchdog fallback is 1h (a config backup completes well under it); raise
+// MAX_RUN_DURATION for an unusually large archive over a slow cloud upload.
+func TestDefaultMaxRunDurationIsOneHour(t *testing.T) {
+	if defaultMaxRunDuration != 1*time.Hour {
+		t.Fatalf("defaultMaxRunDuration = %v, want 1h", defaultMaxRunDuration)
+	}
+}
