@@ -1,6 +1,7 @@
 package main
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/tis24dev/proxsave/internal/logging"
@@ -284,5 +285,32 @@ func TestBuildReinstallCronLines(t *testing.T) {
 		if got[i] != want[i] {
 			t.Errorf("line[%d] = %q, want %q", i, got[i], want[i])
 		}
+	}
+}
+
+// F10-04: dropCanonicalCronLines must drop ANY proxsave/proxmox-backup cron line by
+// command-token basename (not only the exact canonical path), so a non-canonical or
+// hand-edited entry is removed and the removal log is truthful. PBS binaries and
+// unrelated lines survive.
+func TestDropCanonicalCronLines_BasenameMatch(t *testing.T) {
+	lines := []string{
+		"0 5 * * * /usr/local/bin/proxsave --backup",          // canonical -> drop
+		"0 6 * * * /opt/old/proxmox-backup --backup",          // non-canonical proxsave-owned -> drop
+		"0 7 * * * /usr/bin/proxmox-backup-client backup ds:", // PBS client -> keep
+		"0 8 * * * /usr/bin/rsync /a /b",                      // unrelated -> keep
+	}
+	kept := dropCanonicalCronLines(lines, []string{"/usr/local/bin/proxsave"})
+	joined := strings.Join(kept, "\n")
+	if strings.Contains(joined, "/usr/local/bin/proxsave --backup") {
+		t.Errorf("canonical proxsave line must be dropped:\n%s", joined)
+	}
+	if strings.Contains(joined, "/opt/old/proxmox-backup --backup") {
+		t.Errorf("non-canonical proxmox-backup line must be dropped:\n%s", joined)
+	}
+	if !strings.Contains(joined, "proxmox-backup-client") {
+		t.Errorf("PBS proxmox-backup-client line must survive:\n%s", joined)
+	}
+	if !strings.Contains(joined, "rsync") {
+		t.Errorf("unrelated line must survive:\n%s", joined)
 	}
 }

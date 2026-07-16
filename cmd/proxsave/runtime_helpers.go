@@ -908,16 +908,20 @@ func dropCanonicalCronLines(lines, correctPaths []string) []string {
 	kept := make([]string, 0, len(lines))
 	for _, line := range lines {
 		token := strings.Trim(cronCommandToken(line), "\"'")
-		canonical := false
-		if token != "" {
+		// Drop any proxsave/proxmox-backup cron line by command-token basename, not
+		// only the exact canonical path, so a non-canonical or hand-edited entry is
+		// removed too and the "removed" log is truthful (F10-04). The correctPaths
+		// exact match is kept as a belt-and-suspenders for an unusual token.
+		drop := commandTokenMatchesTarget(token)
+		if !drop && token != "" {
 			for _, p := range correctPaths {
 				if p != "" && token == p {
-					canonical = true
+					drop = true
 					break
 				}
 			}
 		}
-		if canonical {
+		if drop {
 			continue
 		}
 		kept = append(kept, line)
