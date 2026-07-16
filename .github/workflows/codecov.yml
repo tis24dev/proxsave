@@ -44,9 +44,26 @@ jobs:
           token: ${{ secrets.CODECOV_TOKEN }}
           files: coverage.out
           fail_ci_if_error: true
-          # Skip the GPG verification of the downloaded Codecov CLI: the runner
-          # cannot import Codecov's public key (gpg "no valid OpenPGP data found"
-          # -> "Can't check signature: No public key"), which otherwise aborts the
-          # upload. The CLI is still fetched over HTTPS from cli.codecov.io.
+          # Skip the GPG integrity check of the downloaded Codecov CLI wrapper.
+          # WHY: the wrapper imports Codecov's PGP public key from a keyserver at
+          # runtime, and that import is flaky on GitHub runners: gpg reports
+          # "no valid OpenPGP data found" -> "Can't check signature: No public
+          # key". With fail_ci_if_error: true (above) that failure aborts the
+          # whole upload step, so genuine coverage runs would fail CI on a
+          # transient keyserver hiccup rather than on a real problem.
+          #
+          # Compensating controls keep the residual risk low:
+          #  - codecov-action is pinned by full commit SHA (see uses: above), so
+          #    the wrapper code that runs is fixed, not a moving tag.
+          #  - the CLI itself is still fetched over HTTPS from cli.codecov.io.
+          #  - the only payload uploaded is coverage.out, a coverage report with
+          #    no source code or secrets in it.
+          #  - CODECOV_TOKEN is a scoped repo secret, not a broad credential.
+          #
+          # To re-enable genuine GPG verification: pin (vendor) the Codecov PGP
+          # public key in-repo and import it before this step, then run a CI
+          # dry-run on a branch to confirm the wrapper honors a pre-imported key
+          # instead of re-fetching from a keyserver.
+          #
           # NOTE: the input is spelled with an underscore (skip_validation).
           skip_validation: true
