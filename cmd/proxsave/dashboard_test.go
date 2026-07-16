@@ -712,7 +712,7 @@ func TestDashboardBareInvocationGateReal(t *testing.T) {
 // TestDashboardInteractiveGateUnderTest: under go test there is no terminal,
 // so the REAL interactive gate must be false (cron-safety default).
 func TestDashboardInteractiveGateUnderTest(t *testing.T) {
-	if isDashboardTerminalInteractive() {
+	if isTerminalInteractive() {
 		t.Fatal("gate must be false without a real terminal")
 	}
 }

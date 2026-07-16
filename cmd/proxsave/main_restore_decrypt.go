@@ -12,17 +12,24 @@ import (
 	"github.com/tis24dev/proxsave/internal/types"
 )
 
+// Test seams.
+var (
+	restoreIsInteractive = isTerminalInteractive
+	runRestoreCLIFn      = runRestoreCLI
+	runRestoreTUIFn      = runRestoreTUI
+)
+
 func dispatchRestoreMode(rt *appRuntime) modeResult {
 	if !rt.args.Restore {
 		return modeResult{exitCode: types.ExitSuccess.Int()}
 	}
 
-	restoreCLI := rt.args.ForceCLI
+	restoreCLI := rt.args.ForceCLI || !restoreIsInteractive()
 	logging.DebugStep(rt.logger, "main", "mode=restore cli=%v", restoreCLI)
 	if restoreCLI {
-		return runRestoreCLI(rt)
+		return runRestoreCLIFn(rt)
 	}
-	return runRestoreTUI(rt)
+	return runRestoreTUIFn(rt)
 }
 
 func runRestoreCLI(rt *appRuntime) modeResult {

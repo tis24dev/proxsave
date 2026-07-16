@@ -32,18 +32,19 @@ const dashboardIdleTimeout = 10 * time.Minute
 // Test seams.
 var (
 	dashboardIsBareInvocation = dashboardBareInvocationCheck
-	dashboardIsInteractive    = isDashboardTerminalInteractive
+	dashboardIsInteractive    = isTerminalInteractive
 )
 
 // dashboardBareInvocationCheck: only a completely bare `proxsave` (no flags
 // at all) is eligible for the dashboard.
 func dashboardBareInvocationCheck() bool { return len(os.Args) <= 1 }
 
-// isDashboardTerminalInteractive gates the dashboard conservatively: any
-// doubt means "behave exactly like today" (run the backup). Cron, systemd
-// timers, pipes and ssh-without-tty all fail the TTY checks; dumb/serial
-// terminals are excluded via TERM.
-func isDashboardTerminalInteractive() bool {
+// isTerminalInteractive reports whether stdin AND stdout are real interactive
+// terminals (non-dumb TERM). Shared by the dashboard and the restore dispatch:
+// any doubt means "behave predictably" (cron, systemd timers, pipes and
+// ssh-without-tty all fail the checks). Dumb/serial terminals are excluded via
+// TERM.
+func isTerminalInteractive() bool {
 	if !term.IsTerminal(int(os.Stdin.Fd())) || !term.IsTerminal(int(os.Stdout.Fd())) {
 		return false
 	}

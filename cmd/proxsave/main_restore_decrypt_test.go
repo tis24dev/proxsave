@@ -43,3 +43,40 @@ func TestFinishFailedRestoreNoBackupsMirrorsDecrypt(t *testing.T) {
 		}
 	})
 }
+
+// F01-03: without --cli, a non-TTY stdout must force the plain CLI restore
+// workflow, never the altscreen TUI (which would write escape bytes into the
+// redirected file). An interactive terminal must still get the TUI.
+func TestDispatchRestoreModeGatesTUIonNonTTY(t *testing.T) {
+	origInteractive := restoreIsInteractive
+	origCLI := runRestoreCLIFn
+	origTUI := runRestoreTUIFn
+	t.Cleanup(func() {
+		restoreIsInteractive = origInteractive
+		runRestoreCLIFn = origCLI
+		runRestoreTUIFn = origTUI
+	})
+
+	const cliSentinel = 111
+	const tuiSentinel = 222
+	runRestoreCLIFn = func(rt *appRuntime) modeResult { return modeResult{exitCode: cliSentinel, handled: true} }
+	runRestoreTUIFn = func(rt *appRuntime) modeResult { return modeResult{exitCode: tuiSentinel, handled: true} }
+
+	t.Run("non-TTY stdout forces the CLI branch", func(t *testing.T) {
+		restoreIsInteractive = func() bool { return false }
+		rt := &appRuntime{args: &cli.Args{Restore: true, ForceCLI: false}}
+		res := dispatchRestoreMode(rt)
+		if res.exitCode != cliSentinel {
+			t.Fatalf("exitCode=%d, want CLI sentinel %d (non-TTY must force the CLI restore, not the altscreen TUI)", res.exitCode, cliSentinel)
+		}
+	})
+
+	t.Run("interactive terminal keeps the TUI branch", func(t *testing.T) {
+		restoreIsInteractive = func() bool { return true }
+		rt := &appRuntime{args: &cli.Args{Restore: true, ForceCLI: false}}
+		res := dispatchRestoreMode(rt)
+		if res.exitCode != tuiSentinel {
+			t.Fatalf("exitCode=%d, want TUI sentinel %d (an interactive terminal must still get the TUI)", res.exitCode, tuiSentinel)
+		}
+	})
+}
