@@ -725,3 +725,68 @@ func TestReadPasswordWithContext_ClearsInflightAfterCompletedRetryConsumesResult
 	}
 	assertPasswordInflightCleared(t, fd)
 }
+
+func TestReadLineWithIdleTimesOut(t *testing.T) {
+	pr, pw := io.Pipe()
+	defer pw.Close() // release the blocked reader goroutine at test end
+	reader := bufio.NewReader(pr)
+
+	_, err := ReadLineWithIdle(context.Background(), reader, time.Millisecond)
+	if !errors.Is(err, ErrIdleTimeout) {
+		t.Fatalf("want ErrIdleTimeout, got %v", err)
+	}
+	if !errors.Is(err, ErrInputAborted) {
+		t.Fatalf("ErrIdleTimeout must wrap ErrInputAborted so existing abort paths catch it; got %v", err)
+	}
+	if !IsAborted(err) {
+		t.Fatalf("IsAborted must be true for an idle timeout; got %v", err)
+	}
+}
+
+func TestReadLineWithIdleReturnsData(t *testing.T) {
+	pr, pw := io.Pipe()
+	go func() { _, _ = pw.Write([]byte("hello\n")); _ = pw.Close() }()
+	reader := bufio.NewReader(pr)
+
+	line, err := ReadLineWithIdle(context.Background(), reader, time.Minute)
+	if err != nil {
+		t.Fatalf("unexpected err: %v", err)
+	}
+	if strings.TrimSpace(line) != "hello" {
+		t.Fatalf("want %q, got %q", "hello", line)
+	}
+}
+
+func TestReadLineWithIdleParentCancelStaysInputAborted(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // genuine SIGINT-like cancel, not an idle deadline
+	pr, pw := io.Pipe()
+	defer pw.Close()
+	reader := bufio.NewReader(pr)
+
+	_, err := ReadLineWithIdle(ctx, reader, time.Minute)
+	if !errors.Is(err, ErrInputAborted) {
+		t.Fatalf("want ErrInputAborted on cancel, got %v", err)
+	}
+	if errors.Is(err, ErrIdleTimeout) {
+		t.Fatalf("a genuine cancel must NOT be reported as an idle timeout; got %v", err)
+	}
+}
+
+func TestReadPasswordWithIdleTimesOut(t *testing.T) {
+	block := make(chan struct{})
+	defer close(block)
+	fake := func(int) ([]byte, error) { <-block; return nil, nil }
+
+	// fd 7 is dedicated to this test: the package-global passwordStates map keys
+	// in-flight reads by fd, and TestReadPasswordWithContext_DeadlineReturnsDeadlineExceeded
+	// leaves a completed, un-consumed in-flight read attached to fd 0. Reusing fd 0
+	// here would consume that stale result instead of hitting the idle deadline.
+	_, err := ReadPasswordWithIdle(context.Background(), fake, 7, time.Millisecond)
+	if !errors.Is(err, ErrIdleTimeout) {
+		t.Fatalf("want ErrIdleTimeout, got %v", err)
+	}
+	if !errors.Is(err, ErrInputAborted) {
+		t.Fatalf("ErrIdleTimeout must wrap ErrInputAborted; got %v", err)
+	}
+}

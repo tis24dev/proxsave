@@ -15,6 +15,7 @@ import (
 	"github.com/tis24dev/proxsave/internal/cli"
 	"github.com/tis24dev/proxsave/internal/config"
 	"github.com/tis24dev/proxsave/internal/health"
+	"github.com/tis24dev/proxsave/internal/input"
 	"github.com/tis24dev/proxsave/internal/installer"
 	"github.com/tis24dev/proxsave/internal/logging"
 	"github.com/tis24dev/proxsave/internal/orchestrator"
@@ -27,7 +28,7 @@ import (
 )
 
 // dashboardIdleTimeout bounds how long the dashboard waits for a choice.
-var dashboardIdleTimeout = 10 * time.Minute
+var dashboardIdleTimeout = input.DefaultIdleTimeout
 
 // withDashboardIdle bounds an interactive dashboard screen with the idle timeout
 // so an abandoned sub-screen cannot hold the terminal indefinitely (F04-04).
