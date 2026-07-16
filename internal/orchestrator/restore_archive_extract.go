@@ -318,6 +318,8 @@ func logRestoreExtractionSummary(opts restoreArchiveOptions, stats restoreExtrac
 type materializeTarget struct {
 	path string // absolute duplicate path under destRoot (currently a symlink)
 	mode os.FileMode
+	uid  *uint32 // source owner uid from the manifest; nil (old manifest) -> skip chown
+	gid  *uint32 // source owner gid from the manifest; nil (old manifest) -> skip chown
 }
 
 // materializeDedupSymlinks reads the dedup manifest written at backup time and
@@ -409,6 +411,8 @@ func materializeDedupSymlinks(ctx context.Context, archivePath, destRoot string,
 		needByCanonical[canonicalRel] = append(needByCanonical[canonicalRel], materializeTarget{
 			path: target,
 			mode: os.FileMode(entry.Mode).Perm(),
+			uid:  entry.Uid,
+			gid:  entry.Gid,
 		})
 	}
 
@@ -511,7 +515,7 @@ func materializeFromArchive(ctx context.Context, archivePath string, needByCanon
 		}
 		found[name] = true
 		for _, d := range dups {
-			if werr := writeMaterializedFile(d.path, content, d.mode); werr != nil {
+			if werr := writeMaterializedFile(d.path, content, d.mode, d.uid, d.gid, logger); werr != nil {
 				logger.Warning("Dedup: failed to materialize %s from archive: %v", name, werr)
 				writeOK = false // a transient write failure: keep the manifest for a retry
 				continue
@@ -535,7 +539,7 @@ func materializeFromArchive(ctx context.Context, archivePath string, needByCanon
 // writeMaterializedFile atomically replaces a path (typically a dedup symlink) with
 // a regular file holding content, via a sibling temp + rename so a crash never
 // leaves the path missing.
-func writeMaterializedFile(target string, content []byte, mode os.FileMode) error {
+func writeMaterializedFile(target string, content []byte, mode os.FileMode, uid, gid *uint32, logger *logging.Logger) error {
 	if mode == 0 {
 		mode = 0o600
 	}
@@ -548,6 +552,16 @@ func writeMaterializedFile(target string, content []byte, mode os.FileMode) erro
 		_ = tmp.Close()
 		_ = restoreFS.Remove(tmpPath)
 		return fmt.Errorf("write temp: %w", err)
+	}
+	// Restore the source owner recorded in the manifest (F07-04), BEFORE chmod since
+	// chown can strip setuid/setgid bits. Best-effort to match the normal
+	// extracted-file path (restore_archive_entries.go): an unprivileged run or a
+	// chown-unsupported FS must not fail the restore. A nil owner (pre-F07-04
+	// manifest) is left untouched, never forced to 0:0.
+	if uid != nil && gid != nil {
+		if err := atomicFileChown(tmp, int(*uid), int(*gid)); err != nil && logger != nil {
+			logger.Debug("Failed to chown materialized file %s: %v", target, err)
+		}
 	}
 	if err := atomicFileChmod(tmp, mode.Perm()); err != nil {
 		_ = tmp.Close()

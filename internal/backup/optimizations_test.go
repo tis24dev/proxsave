@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 
 	"github.com/tis24dev/proxsave/internal/logging"
@@ -363,5 +364,22 @@ func TestDeduplicationWritesManifest(t *testing.T) {
 	}
 	if entries[0].Mode != uint32(0o600) {
 		t.Fatalf("expected recorded mode 0600, got %o", entries[0].Mode)
+	}
+	// F07-04: the manifest records the source owner so the restore can chown the
+	// rebuilt file back to it. The canonical a/one.cfg is still a regular file with
+	// the same owner the deduplicated a/two.cfg had.
+	if entries[0].Uid == nil || entries[0].Gid == nil {
+		t.Fatalf("expected uid/gid recorded in manifest, got uid=%v gid=%v", entries[0].Uid, entries[0].Gid)
+	}
+	fi, err := os.Stat(filepath.Join(root, "a", "one.cfg"))
+	if err != nil {
+		t.Fatalf("stat canonical: %v", err)
+	}
+	st, ok := fi.Sys().(*syscall.Stat_t)
+	if !ok {
+		t.Skip("no syscall.Stat_t on this platform")
+	}
+	if *entries[0].Uid != st.Uid || *entries[0].Gid != st.Gid {
+		t.Fatalf("recorded owner (%d:%d) != source owner (%d:%d)", *entries[0].Uid, *entries[0].Gid, st.Uid, st.Gid)
 	}
 }

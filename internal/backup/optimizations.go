@@ -31,8 +31,10 @@ const DedupManifestRelPath = "var/lib/proxsave-info/dedup_manifest.json"
 
 // DedupManifestEntry records one file that deduplication replaced with a symlink.
 type DedupManifestEntry struct {
-	Path string `json:"path"` // path relative to the archive root, slash-separated
-	Mode uint32 `json:"mode"` // original regular-file permission bits
+	Path string  `json:"path"`          // path relative to the archive root, slash-separated
+	Mode uint32  `json:"mode"`          // original regular-file permission bits
+	Uid  *uint32 `json:"uid,omitempty"` // original owner uid; nil in pre-F07-04 manifests -> restore skips chown
+	Gid  *uint32 `json:"gid,omitempty"` // original owner gid; nil in pre-F07-04 manifests -> restore skips chown
 }
 
 // OptimizationConfig controls optional preprocessing steps executed before archiving.
@@ -155,10 +157,19 @@ func deduplicateFiles(ctx context.Context, logger *logging.Logger, root string) 
 			}
 			duplicates++
 			bytesReclaimed += info.Size()
-			manifest = append(manifest, DedupManifestEntry{
+			entry := DedupManifestEntry{
 				Path: filepath.ToSlash(rel),
 				Mode: uint32(info.Mode().Perm()),
-			})
+			}
+			// Record the source owner so the restore can chown the rebuilt file back
+			// to it (F07-04). Left nil on non-unix FileInfo -> the restore skips chown.
+			if st, ok := info.Sys().(*syscall.Stat_t); ok && st != nil {
+				uid := st.Uid
+				gid := st.Gid
+				entry.Uid = &uid
+				entry.Gid = &gid
+			}
+			manifest = append(manifest, entry)
 			replaced = append(replaced, dedupReplacement{
 				duplicate: path,
 				canonical: existing,
