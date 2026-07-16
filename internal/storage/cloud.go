@@ -772,7 +772,13 @@ func (c *CloudStorage) Store(ctx context.Context, backupFile string, metadata *t
 
 		for _, srcFile := range associatedFiles {
 			if _, err := safefs.Stat(ctx, srcFile, c.fsIoTimeout()); err != nil {
-				continue // Skip if missing or unreachable (a dead mount must not wedge the store)
+				// A dead mount must not wedge the store, so a timeout still skips the sidecar,
+				// but a TIMEOUT is not a MISSING file: surface it so a silently-dropped sidecar
+				// is visible instead of looking absent (F08-08).
+				if sidecarStatWarrantsWarning(err) {
+					c.logger.Warning("WARNING: Cloud Storage: skipping sidecar %s: filesystem timeout: %v", filepath.Base(srcFile), err)
+				}
+				continue // Skip if missing or unreachable
 			}
 
 			tasks = append(tasks, uploadTask{
@@ -795,12 +801,13 @@ func (c *CloudStorage) Store(ctx context.Context, backupFile string, metadata *t
 		}
 		c.logger.Warning("WARNING: Cloud Storage: Failed to upload %s: %v", target, err)
 		return &StorageError{
-			Location:    LocationCloud,
-			Operation:   op,
-			Path:        backupFile,
-			Err:         err,
-			IsCritical:  false,
-			Recoverable: true,
+			Location:     LocationCloud,
+			Operation:    op,
+			Path:         backupFile,
+			Err:          err,
+			IsCritical:   false,
+			Recoverable:  true,
+			PrimarySaved: !primaryFailed,
 		}
 	}
 
@@ -814,6 +821,14 @@ func (c *CloudStorage) Store(ctx context.Context, backupFile string, metadata *t
 	}
 
 	return nil
+}
+
+// sidecarStatWarrantsWarning reports whether a Stat error on an associated (sidecar) file
+// should be surfaced as a warning rather than silently skipped. A stalled-mount TIMEOUT is
+// warned (a silently dropped sidecar would otherwise look merely absent); a genuinely missing
+// file (os.ErrNotExist) or any other error stays a silent skip (F08-08).
+func sidecarStatWarrantsWarning(err error) bool {
+	return errors.Is(err, safefs.ErrTimeout)
 }
 
 func (c *CloudStorage) countBackups(ctx context.Context) int {

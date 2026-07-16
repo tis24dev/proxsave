@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/tis24dev/proxsave/internal/config"
+	"github.com/tis24dev/proxsave/internal/safefs"
 	"github.com/tis24dev/proxsave/internal/types"
 )
 
@@ -850,6 +851,10 @@ func TestCloudStorageStorePrimaryFailure(t *testing.T) {
 	if storageErr.Operation != "upload" {
 		t.Fatalf("StorageError.Operation = %s; want upload", storageErr.Operation)
 	}
+	// F08-08: the primary itself failed, so PrimarySaved must be false (generic "not saved").
+	if storageErr.PrimarySaved {
+		t.Fatalf("PrimarySaved = true; want false when the primary upload failed")
+	}
 }
 
 func TestCloudStorageStoreAssociatedFailure(t *testing.T) {
@@ -887,6 +892,25 @@ func TestCloudStorageStoreAssociatedFailure(t *testing.T) {
 	}
 	if storageErr.Operation != "upload_associated" {
 		t.Fatalf("StorageError.Operation = %s; want upload_associated", storageErr.Operation)
+	}
+	// F08-08: the primary archive uploaded+verified and only a sidecar failed, so PrimarySaved
+	// must be true so the caller does NOT log "Backup was not saved".
+	if !storageErr.PrimarySaved {
+		t.Fatalf("PrimarySaved = false; want true when only a sidecar upload failed")
+	}
+}
+
+// TestSidecarStatWarrantsWarning pins F08-08 part B: a stalled-mount TIMEOUT on a sidecar Stat
+// is warned (not silently skipped like a missing file), while a genuinely missing file is not.
+func TestSidecarStatWarrantsWarning(t *testing.T) {
+	if !sidecarStatWarrantsWarning(safefs.ErrTimeout) {
+		t.Fatalf("a filesystem timeout must warrant a warning")
+	}
+	if !sidecarStatWarrantsWarning(&safefs.TimeoutError{Op: "stat", Path: "/x"}) {
+		t.Fatalf("a *TimeoutError (wraps ErrTimeout) must warrant a warning")
+	}
+	if sidecarStatWarrantsWarning(os.ErrNotExist) {
+		t.Fatalf("a missing file must NOT warrant a warning (silent skip is fine)")
 	}
 }
 

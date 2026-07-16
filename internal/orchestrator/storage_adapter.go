@@ -2,6 +2,7 @@ package orchestrator
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/tis24dev/proxsave/internal/config"
@@ -97,7 +98,14 @@ func (s *StorageAdapter) Sync(ctx context.Context, stats *BackupStats) error {
 
 		// Non-critical error - log warning and continue
 		s.logger.Warning("WARNING: %s store operation failed: %v", s.backend.Name(), err)
-		s.logger.Warning("WARNING: Backup was not saved to %s", s.backend.Name())
+		// When the PRIMARY archive was saved and only a sidecar failed, do NOT claim the whole
+		// backup was not saved (that reads as data loss when the archive is safe, F08-08).
+		var se *storage.StorageError
+		if errors.As(err, &se) && se.PrimarySaved {
+			s.logger.Warning("WARNING: %s: primary backup saved, but a sidecar file was not uploaded", s.backend.Name())
+		} else {
+			s.logger.Warning("WARNING: Backup was not saved to %s", s.backend.Name())
+		}
 		hasErrors = true
 		// Don't return error - continue with retention
 	} else {
