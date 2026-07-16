@@ -293,11 +293,11 @@ func dashboardUpgradeRestartDaemon(ctx context.Context, session *shell.Session, 
 	}
 	baseDir, _ := detectedBaseDirOrFallback()
 	interval := upgradeHeartbeatInterval(configPath, baseDir)
-	lockPath := upgradeBackupLockPath(configPath, baseDir)
+	lockPath, lockKnown := upgradeBackupLockPath(configPath, baseDir)
 	var rv RestartVerifyResult
 	_ = components.RunTask(ctx, session, "Restarting daemon", "Loading the new binary...",
 		func(taskCtx context.Context, _ func(string)) error {
-			rv = restartAndVerifyDaemon(taskCtx, baseDir, lockPath, interval)
+			rv = restartAndVerifyDaemon(taskCtx, baseDir, lockPath, lockKnown, interval)
 			return nil
 		})
 	level, keyword, explanation := restartVerifyStatus(rv)

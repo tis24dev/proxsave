@@ -65,8 +65,12 @@ type RestartVerifyResult struct {
 	FreshInfo          bool
 	TimedOut           bool
 	BackupWaitTimedOut bool
-	State              health.DaemonState
-	Err                error
+	// LockPathUnknown is set when the config could not be read, so the REAL backup lock
+	// path is unknown. The restart is DEFERRED (fail-closed): restarting on the base-dir
+	// default path could miss an in-progress backup on a custom LOCK_PATH and kill it.
+	LockPathUnknown bool
+	State           health.DaemonState
+	Err             error
 }
 
 // defaultBackupRunning is the production backup-in-progress probe: it inspects the EXACT
@@ -83,15 +87,20 @@ func defaultBackupRunning(lockFilePath string) bool {
 // backupLockFilePath resolves the REAL backup lock FILE path from a loaded config, honouring
 // a custom LOCK_PATH: the orchestrator's Checker acquires <cfg.LockPath>/.backup.lock (see
 // configurePreBackupChecker), so the restart backup-wait probe must inspect that same file.
-// It falls back to the base-dir default (checks.DefaultBackupLockPath) when cfg is nil or
-// LOCK_PATH is unset, so a caller without a readable config still degrades safely.
-func backupLockFilePath(cfg *config.Config, baseDir string) string {
+// The second return, resolved, is false ONLY when cfg is nil (the config load failed): the
+// real lock path cannot be known then, so a custom LOCK_PATH could be missed by the base-dir
+// default. A readable config with an empty LOCK_PATH IS resolved (the base-dir default is the
+// real path in that case).
+func backupLockFilePath(cfg *config.Config, baseDir string) (string, bool) {
 	if cfg != nil {
 		if lp := strings.TrimSpace(cfg.LockPath); lp != "" {
-			return filepath.Join(lp, checks.BackupLockFileName)
+			return filepath.Join(lp, checks.BackupLockFileName), true
 		}
+		// A readable config with the default LOCK_PATH: the base-dir default IS the real path.
+		return checks.DefaultBackupLockPath(baseDir), true
 	}
-	return checks.DefaultBackupLockPath(baseDir)
+	// Config unreadable: the real lock path is unknown (a custom LOCK_PATH cannot be seen).
+	return checks.DefaultBackupLockPath(baseDir), false
 }
 
 // restartAndVerifyDaemon restarts the resident daemon and verifies it comes back fresh
@@ -110,10 +119,21 @@ func backupLockFilePath(cfg *config.Config, baseDir string) string {
 //
 // lockFilePath is the REAL backup lock file (from backupLockFilePath, honouring a custom
 // LOCK_PATH) the step-0 backup-wait probes; passing the wrong path defeats the wait and can
-// kill an in-progress backup, so callers derive it from the config they load.
-func restartAndVerifyDaemon(ctx context.Context, baseDir, lockFilePath string, interval time.Duration) RestartVerifyResult {
+// kill an in-progress backup, so callers derive it from the config they load. lockPathKnown
+// is that same call's resolved bool: false means the config was unreadable, so lockFilePath
+// is only the base-dir default guess, not necessarily the real path -- the restart is
+// DEFERRED (fail-closed) rather than risk killing a backup on a custom LOCK_PATH (F11-08).
+func restartAndVerifyDaemon(ctx context.Context, baseDir, lockFilePath string, lockPathKnown bool, interval time.Duration) RestartVerifyResult {
 	if ctx == nil {
 		ctx = context.Background()
+	}
+
+	// Fail-closed: if the config was unreadable the REAL backup lock path is unknown, so
+	// restarting on the base-dir default could miss a backup on a custom LOCK_PATH and
+	// kill it. Defer the restart instead; the new binary is already on disk, so this is
+	// retried at the next --upgrade or dashboard restart once the config is readable (F11-08).
+	if !lockPathKnown {
+		return RestartVerifyResult{LockPathUnknown: true}
 	}
 
 	// 0. Bounded backup-wait: never restart on top of a running, daemon-supervised backup.
@@ -248,6 +268,9 @@ func summarizeRestartVerify(rv *RestartVerifyResult, version string) (line strin
 	case rv.Err != nil:
 		return "Daemon: WARNING - restart failed: " + rv.Err.Error() +
 			" (the daemon may still run the old binary; restart it manually)", true
+	case rv.LockPathUnknown:
+		return "Daemon: WARNING - config unreadable; daemon restart deferred - " +
+			"restart when the config is readable or it stays on the old binary", true
 	case rv.BackupWaitTimedOut:
 		return "Daemon: WARNING - a backup is running; daemon restart deferred - " +
 			"restart when idle or it stays on the old binary", true

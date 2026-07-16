@@ -72,14 +72,19 @@ func upgradeHeartbeatInterval(configPath, baseDir string) time.Duration {
 	return 0
 }
 
+// upgradeLoadConfig is a seam so the upgrade backup-lock resolver can be driven with a
+// load error in tests without a real unreadable config on disk.
+var upgradeLoadConfig = config.LoadConfigWithBaseDir
+
 // upgradeBackupLockPath resolves the REAL backup lock file path (honouring a custom
 // LOCK_PATH), best-effort, mirroring upgradeHeartbeatInterval's config load. The
 // daemon-restart backup-wait probe MUST inspect this exact path -- the same
 // <cfg.LockPath>/.backup.lock the orchestrator's Checker acquires -- or a restart on a
-// custom-LOCK_PATH host would find no lock and could kill an in-progress backup. An
-// unreadable config falls back to the base-dir default lock path.
-func upgradeBackupLockPath(configPath, baseDir string) string {
-	cfg, err := config.LoadConfigWithBaseDir(configPath, baseDir)
+// custom-LOCK_PATH host would find no lock and could kill an in-progress backup. The second
+// return, resolved, is false when the config is unreadable: the restart must then DEFER
+// rather than probe a base-dir default guess that may not be the real path (F11-08).
+func upgradeBackupLockPath(configPath, baseDir string) (string, bool) {
+	cfg, err := upgradeLoadConfig(configPath, baseDir)
 	if err != nil {
 		cfg = nil
 	}
@@ -94,6 +99,8 @@ func logUpgradeDaemonRestart(bootstrap *logging.BootstrapLogger, rv *RestartVeri
 		return
 	case rv.Err != nil:
 		bootstrap.Warning("Daemon restart failed: %v (it may still run the old binary; restart it manually).", rv.Err)
+	case rv.LockPathUnknown:
+		bootstrap.Warning("Config unreadable; daemon restart deferred. Restart when the config is readable or the daemon stays on the old binary.")
 	case rv.BackupWaitTimedOut:
 		bootstrap.Warning("A backup is running; daemon restart deferred. Restart when idle or the daemon stays on the old binary.")
 	case rv.TimedOut:
@@ -300,7 +307,8 @@ func upgradeFinalizePhase(ctx context.Context, args *cli.Args, bootstrap *loggin
 		// and only runs when the daemon is actually active (a cron install has none).
 		if upgradeRestartsDaemon && daemonIsActive(ctx) {
 			bootstrap.Println("Restarting the resident daemon to load the new binary...")
-			rv := restartAndVerifyDaemon(ctx, baseDir, upgradeBackupLockPath(args.ConfigPath, baseDir), upgradeHeartbeatInterval(args.ConfigPath, baseDir))
+			lockPath, lockKnown := upgradeBackupLockPath(args.ConfigPath, baseDir)
+			rv := restartAndVerifyDaemon(ctx, baseDir, lockPath, lockKnown, upgradeHeartbeatInterval(args.ConfigPath, baseDir))
 			daemonRestart = &rv
 			logUpgradeDaemonRestart(bootstrap, &rv)
 		}

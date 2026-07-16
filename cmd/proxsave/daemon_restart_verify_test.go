@@ -84,7 +84,7 @@ func TestRestartAndVerifyDaemonSuccess(t *testing.T) {
 			return alignedFresh()
 		})
 
-	rv := restartAndVerifyDaemon(context.Background(), t.TempDir(), "", 0)
+	rv := restartAndVerifyDaemon(context.Background(), t.TempDir(), "", true, 0)
 
 	if restarts != 1 {
 		t.Fatalf("restart must run once, got %d", restarts)
@@ -111,7 +111,7 @@ func TestRestartAndVerifyDaemonTimedOut(t *testing.T) {
 			return health.DaemonState{ProcessAlive: true, Aligned: false, AlignChecked: false} // never aligns
 		})
 
-	rv := restartAndVerifyDaemon(context.Background(), t.TempDir(), "", 0)
+	rv := restartAndVerifyDaemon(context.Background(), t.TempDir(), "", true, 0)
 
 	if !rv.Restarted || !rv.TimedOut {
 		t.Fatalf("expected restarted+timed-out, got %+v", rv)
@@ -132,7 +132,7 @@ func TestRestartAndVerifyDaemonRestartError(t *testing.T) {
 		func(string) bool { return false },
 		func(health.DaemonStateInput) health.DaemonState { polls++; return alignedFresh() })
 
-	rv := restartAndVerifyDaemon(context.Background(), t.TempDir(), "", 0)
+	rv := restartAndVerifyDaemon(context.Background(), t.TempDir(), "", true, 0)
 
 	if rv.Err == nil || !errors.Is(rv.Err, sentinel) {
 		t.Fatalf("expected restart error, got %+v", rv)
@@ -156,7 +156,7 @@ func TestRestartAndVerifyDaemonBackupWaitThenRestart(t *testing.T) {
 		func(string) bool { probe++; return probe <= 3 }, // busy for the first 3 probes
 		func(health.DaemonStateInput) health.DaemonState { return alignedFresh() })
 
-	rv := restartAndVerifyDaemon(context.Background(), t.TempDir(), "", 0)
+	rv := restartAndVerifyDaemon(context.Background(), t.TempDir(), "", true, 0)
 
 	if probe < 4 {
 		t.Fatalf("expected to poll the backup probe until it freed, got %d", probe)
@@ -179,7 +179,7 @@ func TestRestartAndVerifyDaemonBackupNeverFree(t *testing.T) {
 		func(string) bool { return true }, // always busy
 		func(health.DaemonStateInput) health.DaemonState { return alignedFresh() })
 
-	rv := restartAndVerifyDaemon(context.Background(), t.TempDir(), "", 0)
+	rv := restartAndVerifyDaemon(context.Background(), t.TempDir(), "", true, 0)
 
 	if !rv.BackupWaitTimedOut {
 		t.Fatalf("expected BackupWaitTimedOut, got %+v", rv)
@@ -465,15 +465,14 @@ func TestDefaultBackupRunningNoLock(t *testing.T) {
 func TestBackupLockFilePathHonoursCustomLockPath(t *testing.T) {
 	baseDir := t.TempDir()
 	custom := t.TempDir() // a LOCK_PATH override that is NOT <baseDir>/lock
-	if got, want := backupLockFilePath(&config.Config{LockPath: custom}, baseDir),
-		filepath.Join(custom, checks.BackupLockFileName); got != want {
-		t.Fatalf("custom LOCK_PATH: got %q, want %q", got, want)
+	if got, _ := backupLockFilePath(&config.Config{LockPath: custom}, baseDir); got != filepath.Join(custom, checks.BackupLockFileName) {
+		t.Fatalf("custom LOCK_PATH: got %q, want %q", got, filepath.Join(custom, checks.BackupLockFileName))
 	}
-	if got, want := backupLockFilePath(&config.Config{}, baseDir), checks.DefaultBackupLockPath(baseDir); got != want {
-		t.Fatalf("blank LockPath must fall back: got %q, want %q", got, want)
+	if got, known := backupLockFilePath(&config.Config{}, baseDir); got != checks.DefaultBackupLockPath(baseDir) || !known {
+		t.Fatalf("blank LockPath must fall back and be known: got %q known=%v, want %q known=true", got, known, checks.DefaultBackupLockPath(baseDir))
 	}
-	if got, want := backupLockFilePath(nil, baseDir), checks.DefaultBackupLockPath(baseDir); got != want {
-		t.Fatalf("nil cfg must fall back: got %q, want %q", got, want)
+	if got, known := backupLockFilePath(nil, baseDir); got != checks.DefaultBackupLockPath(baseDir) || known {
+		t.Fatalf("nil cfg must fall back and be unknown: got %q known=%v, want %q known=false", got, known, checks.DefaultBackupLockPath(baseDir))
 	}
 }
 
@@ -498,7 +497,7 @@ func TestRestartAndVerifyDaemonFreshnessGate(t *testing.T) {
 			return health.DaemonState{ProcessAlive: true, Aligned: true, AlignChecked: true, StartTS: 100}
 		})
 
-	rv := restartAndVerifyDaemon(context.Background(), baseDir, "", 0)
+	rv := restartAndVerifyDaemon(context.Background(), baseDir, "", true, 0)
 
 	if !rv.Restarted || !rv.TimedOut {
 		t.Fatalf("same-or-older StartTS must NOT count as fresh; expected restarted+timed-out, got %+v", rv)
@@ -555,5 +554,30 @@ func TestDashboardDaemonRestartButton(t *testing.T) {
 	}
 	if args.DaemonSetup || args.DaemonRemove {
 		t.Fatalf("Restart button must set no flag: %+v", args)
+	}
+}
+
+// TestRestartDefersOnUnknownLockPath: when the config is unreadable the real lock
+// path is unknown, so the restart must be DEFERRED (fail-closed) rather than
+// restarting on the base-dir default path and killing a backup running on a custom
+// LOCK_PATH (F11-08). RED before the guard: lockPathKnown is ignored, the default
+// path shows "no backup", and daemonRestartService is called.
+func TestRestartDefersOnUnknownLockPath(t *testing.T) {
+	restarted := false
+	stubRestartSeams(t,
+		func(context.Context) error { restarted = true; return nil },
+		// A backup IS running on the custom path, but the resolver could not learn it;
+		// the default path (what a fallback would probe) shows nothing.
+		func(lockFilePath string) bool { return false },
+		func(health.DaemonStateInput) health.DaemonState { return alignedFresh() },
+	)
+
+	rv := restartAndVerifyDaemon(context.Background(), t.TempDir(), checks.DefaultBackupLockPath(t.TempDir()), false, 0)
+
+	if !rv.LockPathUnknown {
+		t.Fatalf("want LockPathUnknown=true (deferred), got %+v", rv)
+	}
+	if restarted {
+		t.Fatal("daemonRestartService must NOT run when the real lock path is unknown")
 	}
 }

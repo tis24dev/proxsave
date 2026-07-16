@@ -298,17 +298,17 @@ func runDashboardDaemonRestart(ctx context.Context, session *shell.Session, conf
 	// Fallback lock path (base-dir default) used only when the config is unreadable; the
 	// normal path resolves the REAL <cfg.LockPath>/.backup.lock so the backup-wait probe
 	// inspects the same lock the orchestrator acquires even under a custom LOCK_PATH.
-	lockPath := backupLockFilePath(nil, baseDir)
+	lockPath, lockKnown := backupLockFilePath(nil, baseDir)
 	if cfg, err := daemonStatusLoadConfig(configPath, baseDir); err == nil && cfg != nil {
 		interval = cfg.HealthcheckHeartbeatInterval
 		if strings.TrimSpace(cfg.BaseDir) != "" {
 			baseDir = cfg.BaseDir
 		}
-		lockPath = backupLockFilePath(cfg, baseDir)
+		lockPath, lockKnown = backupLockFilePath(cfg, baseDir)
 	}
 	var rv RestartVerifyResult
 	_ = components.RunTask(ctx, session, "Restarting daemon", "Restarting proxsave-daemon.service...", func(taskCtx context.Context, report func(string)) error {
-		rv = restartAndVerifyDaemon(taskCtx, baseDir, lockPath, interval)
+		rv = restartAndVerifyDaemon(taskCtx, baseDir, lockPath, lockKnown, interval)
 		return nil
 	})
 	level, keyword, explanation := restartVerifyStatus(rv)
@@ -325,6 +325,9 @@ func restartVerifyStatus(rv RestartVerifyResult) (orchestrator.HealthcheckSetupL
 	switch {
 	case rv.Err != nil:
 		return orchestrator.HealthcheckSetupLevelError, "RESTART FAILED", rv.Err.Error()
+	case rv.LockPathUnknown:
+		return orchestrator.HealthcheckSetupLevelWarn, "DEFERRED - CONFIG UNREADABLE",
+			"The config could not be read, so the real backup lock path is unknown; restart again once it is readable, or the daemon stays on the old binary."
 	case rv.BackupWaitTimedOut:
 		return orchestrator.HealthcheckSetupLevelWarn, "DEFERRED - BACKUP RUNNING",
 			"Restart again once the backup finishes, or the daemon stays on the old binary."
