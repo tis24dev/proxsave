@@ -28,6 +28,12 @@ var (
 // stdout-only, rather than for the full (generous) FS_IO_TIMEOUT.
 const logWriteTimeoutCap = 5 * time.Second
 
+// logSinkTimeoutStrikes is how many CONSECUTIVE write timeouts disable the file
+// sink. One transient stall keeps the sink armed; a genuinely dead mount latches
+// after this many strikes (bounded added latency ~= strikes * logWriteTimeoutCap
+// once). A successful write resets the count.
+const logSinkTimeoutStrikes = 3
+
 // Logger handles application logging.
 type Logger struct {
 	mu         sync.Mutex
@@ -44,8 +50,12 @@ type Logger struct {
 	// fileSinkDisabled is set after an open/write/close timeout so subsequent log
 	// lines skip the (dead) file and go to stdout only. Guarded by mu.
 	fileSinkDisabled bool
-	warningCount     int64
-	errorCount       int64
+	// consecutiveLogTimeouts counts back-to-back write timeouts; the sink is disabled
+	// only after logSinkTimeoutStrikes strikes so a single transient stall does not
+	// permanently truncate the on-disk log. A successful write resets it. Guarded by mu.
+	consecutiveLogTimeouts int
+	warningCount           int64
+	errorCount             int64
 	// notifyCount tracks NOTIFY-ERR lines: notification/communication failures that
 	// display as errors but are warning-weight for the run status (never escalate the
 	// exit code / gauge to error). Kept separate from errorCount so a notify failure
@@ -175,6 +185,10 @@ func (l *Logger) OpenLogFile(logPath string) error {
 
 	l.logFile = file
 	l.fileSinkDisabled = false
+	// A fresh mount must start with a clean strike count: OpenLogFile is the only
+	// re-enable path, so any stale count from a prior disable would otherwise let
+	// a single new timeout re-latch the sink and defeat the N-strike protection.
+	l.consecutiveLogTimeouts = 0
 	return nil
 }
 
@@ -194,8 +208,10 @@ func (l *Logger) openFileBounded(logPath string) (*os.File, error) {
 
 // writeFileLocked writes one preformatted line to the open log file, bounding the
 // (O_SYNC) write so a dead/stale mount cannot wedge the logger while it holds l.mu.
-// On a write timeout the sink is permanently disabled (subsequent lines skip the
-// file). Caller MUST hold l.mu and have checked logFile != nil && !fileSinkDisabled.
+// A single write timeout is a strike; only logSinkTimeoutStrikes CONSECUTIVE
+// strikes permanently disable the sink (subsequent lines then skip the file). A
+// non-timeout outcome resets the streak. Caller MUST hold l.mu and have checked
+// logFile != nil && !fileSinkDisabled.
 func (l *Logger) writeFileLocked(line string) {
 	f := l.logFile // local: a disable nils l.logFile, the abandoned goroutine keeps f
 	if l.ioTimeout <= 0 {
@@ -210,8 +226,14 @@ func (l *Logger) writeFileLocked(line string) {
 		return fileWrite(f, line)
 	})
 	if err != nil && errors.Is(err, safefs.ErrTimeout) {
-		l.disableFileSinkLocked(err)
+		l.consecutiveLogTimeouts++
+		if l.consecutiveLogTimeouts >= logSinkTimeoutStrikes {
+			l.disableFileSinkLocked(err)
+		}
+		return
 	}
+	// Any non-timeout outcome (a clean write or a non-timeout error) breaks the streak.
+	l.consecutiveLogTimeouts = 0
 }
 
 // disableFileSinkLocked turns the file sink off after a timed-out write so every
@@ -223,9 +245,23 @@ func (l *Logger) disableFileSinkLocked(cause error) {
 	if l.fileSinkDisabled {
 		return
 	}
+	timestamp := time.Now().Format(l.timeFormat)
+	// Best-effort bounded marker so the shipped/attached on-disk log self-documents
+	// the cut. Bounded via the same safefs path (min(ioTimeout, cap)) so it cannot
+	// re-wedge; its failure is ignored. disableFileSinkLocked is only reached with
+	// ioTimeout > 0 (the bounded write path), so mwt is always positive.
+	if f := l.logFile; f != nil {
+		mwt := l.ioTimeout
+		if mwt > logWriteTimeoutCap {
+			mwt = logWriteTimeoutCap
+		}
+		marker := fmt.Sprintf("[%s] %-8s log file sink disabled after I/O timeout; on-disk log truncated here\n", timestamp, types.LogLevelWarning.String())
+		_, _ = safefs.Run(context.Background(), "logwrite-marker", f.Name(), mwt, func() (int, error) {
+			return fileWrite(f, marker)
+		})
+	}
 	l.fileSinkDisabled = true
 	l.logFile = nil
-	timestamp := time.Now().Format(l.timeFormat)
 	warn := fmt.Sprintf("log file sink disabled after I/O timeout (%v); continuing on stdout only", cause)
 	// stdout only - never route this back through the (dead) file sink.
 	_, _ = fmt.Fprintf(l.output, "[%s] %-8s %s\n", timestamp, types.LogLevelWarning.String(), warn)
