@@ -18,15 +18,15 @@ func TestApplyInstallDataHealthcheckMode(t *testing.T) {
 		scheduler   string
 		hcMode      string
 		wantEnabled string // "" -> not asserted
-		wantMode    string // "" -> not asserted (off path never writes MODE)
+		wantMode    string // "" -> not asserted
 	}{
-		{"daemon off", "daemon", "off", "false", ""},
+		{"daemon off", "daemon", "off", "false", "off"},
 		{"daemon centralized", "daemon", "centralized", "true", "centralized"},
 		{"daemon self", "daemon", "self", "true", "self"},
 		{"daemon empty backward-compat", "daemon", "", "true", "centralized"},
-		{"cron forces off", "cron", "centralized", "false", ""},
-		{"cron self forces off", "cron", "self", "false", ""},
-		{"cron empty", "cron", "", "false", ""},
+		{"cron forces off", "cron", "centralized", "false", "off"},
+		{"cron self forces off", "cron", "self", "false", "off"},
+		{"cron empty", "cron", "", "false", "off"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -93,11 +93,11 @@ func TestApplyInstallDataClearsSelfURLsOnModeSwitch(t *testing.T) {
 		scheduler   string
 		hcMode      string
 		wantEnabled string
-		wantMode    string // "" -> not asserted (off never writes MODE)
+		wantMode    string // "" -> not asserted
 	}{
 		{"self -> centralized clears self urls", "daemon", "centralized", "true", "centralized"},
-		{"self -> off clears self urls", "daemon", "off", "false", ""},
-		{"self -> cron-disabled clears self urls", "cron", "centralized", "false", ""},
+		{"self -> off clears self urls", "daemon", "off", "false", "off"},
+		{"self -> cron-disabled clears self urls", "cron", "centralized", "false", "off"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -117,6 +117,31 @@ func TestApplyInstallDataClearsSelfURLsOnModeSwitch(t *testing.T) {
 				t.Fatalf("stale self urls not cleared: alive=%q backup=%q", raw["HEALTHCHECK_ALIVE_URL"], raw["HEALTHCHECK_BACKUP_URL"])
 			}
 		})
+	}
+}
+
+// F10-08: a self->self re-run must PRESERVE the user's ALIVE/BACKUP ping URLs (they are
+// only cleared on a genuine mode change), so an abort on the params screen never leaves
+// the monitor with an empty ping target. Also, the off branch now writes MODE=off.
+func TestApplyInstallDataSelfToSelfPreservesURLs(t *testing.T) {
+	baseTemplate := strings.Join([]string{
+		"HEALTHCHECK_ENABLED=true",
+		"HEALTHCHECK_MODE=self",
+		"HEALTHCHECK_ALIVE_URL=https://hc-ping.com/self-a",
+		"HEALTHCHECK_BACKUP_URL=https://hc-ping.com/self-b",
+		"",
+	}, "\n")
+	data := &InstallWizardData{BaseDir: "/data", SchedulerMode: "daemon", HealthcheckMode: "self"}
+	result, err := ApplyInstallData(baseTemplate, data)
+	if err != nil {
+		t.Fatalf("ApplyInstallData: %v", err)
+	}
+	raw := ParseEnvTemplate(result)
+	if raw["HEALTHCHECK_ALIVE_URL"] != "https://hc-ping.com/self-a" || raw["HEALTHCHECK_BACKUP_URL"] != "https://hc-ping.com/self-b" {
+		t.Fatalf("self->self must preserve URLs: alive=%q backup=%q", raw["HEALTHCHECK_ALIVE_URL"], raw["HEALTHCHECK_BACKUP_URL"])
+	}
+	if raw["HEALTHCHECK_MODE"] != "self" {
+		t.Fatalf("mode must stay self, got %q", raw["HEALTHCHECK_MODE"])
 	}
 }
 

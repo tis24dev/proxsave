@@ -255,30 +255,32 @@ func ApplyInstallData(baseTemplate string, data *InstallWizardData) (string, err
 		hcMode = "centralized"
 	}
 	// HEALTHCHECK_ALIVE_URL/BACKUP_URL are dual-purpose (self: the user's full ping
-	// URLs; centralized: a cache the server auto-fills). Reset them symmetrically on
-	// every mode switch so a leftover self URL never lingers as the centralized cache
-	// (which the daemon would ping if the server fetch fails). Self rewrites them via
-	// the params screen right after; centralized/off leave them blank (the server
-	// repopulates the centralized cache on next fetch).
+	// URLs; centralized: a cache the server auto-fills). Clear them ONLY on a genuine
+	// mode change so a leftover self URL never lingers as the centralized cache (which
+	// the daemon would ping if the server fetch fails). On a same-mode re-run keep them
+	// so the self params-screen prefill re-read recovers the user's own URLs and an abort
+	// never leaves the monitor without a ping target (F10-08). Every branch also writes
+	// HEALTHCHECK_MODE, so the off branch no longer leaves a stale MODE behind.
+	prevMode := DeriveInstallWizardPrefill(template).HealthcheckMode
+	clearURLs := func() {
+		if hcMode != prevMode {
+			template = setEnvValue(template, "HEALTHCHECK_ALIVE_URL", "")
+			template = setEnvValue(template, "HEALTHCHECK_BACKUP_URL", "")
+		}
+	}
 	switch hcMode {
 	case "off":
 		template = setEnvValue(template, "HEALTHCHECK_ENABLED", "false")
-		template = setEnvValue(template, "HEALTHCHECK_ALIVE_URL", "")
-		template = setEnvValue(template, "HEALTHCHECK_BACKUP_URL", "")
+		template = setEnvValue(template, "HEALTHCHECK_MODE", "off")
+		clearURLs()
 	case "self":
 		template = setEnvValue(template, "HEALTHCHECK_ENABLED", "true")
 		template = setEnvValue(template, "HEALTHCHECK_MODE", "self")
-		// Clear the centralized cache so a switch to self does not ping a stale
-		// server-minted URL before the params screen writes the user's own URLs.
-		template = setEnvValue(template, "HEALTHCHECK_ALIVE_URL", "")
-		template = setEnvValue(template, "HEALTHCHECK_BACKUP_URL", "")
+		clearURLs()
 	default: // centralized
 		template = setEnvValue(template, "HEALTHCHECK_ENABLED", "true")
 		template = setEnvValue(template, "HEALTHCHECK_MODE", "centralized")
-		// Clear any leftover self URL so it can't be pinged as the centralized
-		// cache; the server repopulates this cache on the next fetch.
-		template = setEnvValue(template, "HEALTHCHECK_ALIVE_URL", "")
-		template = setEnvValue(template, "HEALTHCHECK_BACKUP_URL", "")
+		clearURLs()
 	}
 
 	return template, nil

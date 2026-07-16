@@ -561,25 +561,31 @@ func runConfigWizardCLI(ctx context.Context, reader *bufio.Reader, configPath, t
 	// Write HEALTHCHECK_ENABLED + HEALTHCHECK_MODE from the explicit choice (cron
 	// and "off" disable it), replacing the old implicit daemon->enabled rule. The
 	// self-mode ping URLs are collected by runHealthcheckSelfParamsCLI after this
-	// write, before the healthcheck bootstrap re-reads the config. Reset
-	// HEALTHCHECK_ALIVE_URL/BACKUP_URL on every mode switch (parity with the TUI's
-	// ApplyInstallData) so a leftover self URL never lingers as the centralized
-	// cache; self rewrites them via the params screen, centralized/off stay blank.
+	// write, before the healthcheck bootstrap re-reads the config. Clear
+	// HEALTHCHECK_ALIVE_URL/BACKUP_URL ONLY on a genuine mode change (parity with the
+	// TUI's ApplyInstallData) so a same-mode re-run keeps the user's own self URLs and
+	// an abort never leaves the monitor without a ping target; the off branch also
+	// writes HEALTHCHECK_MODE=off so no stale MODE lingers (F10-08).
+	prevMode := installer.DeriveInstallWizardPrefill(template).HealthcheckMode
+	clearHCURLs := func() {
+		if hcMode != prevMode {
+			template = setEnvValue(template, "HEALTHCHECK_ALIVE_URL", "")
+			template = setEnvValue(template, "HEALTHCHECK_BACKUP_URL", "")
+		}
+	}
 	switch hcMode {
 	case "self":
 		template = setEnvValue(template, "HEALTHCHECK_ENABLED", "true")
 		template = setEnvValue(template, "HEALTHCHECK_MODE", "self")
-		template = setEnvValue(template, "HEALTHCHECK_ALIVE_URL", "")
-		template = setEnvValue(template, "HEALTHCHECK_BACKUP_URL", "")
+		clearHCURLs()
 	case "centralized":
 		template = setEnvValue(template, "HEALTHCHECK_ENABLED", "true")
 		template = setEnvValue(template, "HEALTHCHECK_MODE", "centralized")
-		template = setEnvValue(template, "HEALTHCHECK_ALIVE_URL", "")
-		template = setEnvValue(template, "HEALTHCHECK_BACKUP_URL", "")
+		clearHCURLs()
 	default: // "off"
 		template = setEnvValue(template, "HEALTHCHECK_ENABLED", "false")
-		template = setEnvValue(template, "HEALTHCHECK_ALIVE_URL", "")
-		template = setEnvValue(template, "HEALTHCHECK_BACKUP_URL", "")
+		template = setEnvValue(template, "HEALTHCHECK_MODE", "off")
+		clearHCURLs()
 	}
 	if err := writeConfigFile(configPath, tmpConfigPath, template); err != nil {
 		return installConfigResult{}, err
