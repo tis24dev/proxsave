@@ -408,8 +408,9 @@ func GetAllCategories() []Category {
 		{
 			ID:   "accounts",
 			Name: "System Accounts & Auth (WARNING)",
-			Description: "OS users/groups/passwords and sudoers (/etc/passwd,group,shadow,gshadow,sudoers). " +
-				"Applied with a safe merge that preserves the current host root and system accounts; " +
+			Description: "OS users/groups/passwords (/etc/passwd,group,shadow,gshadow) and /etc/sudoers. " +
+				"The account database is MERGED, preserving the current host root and system accounts; " +
+				"/etc/sudoers is REPLACED wholesale (after visudo -c validation) and /etc/sudoers.d is not included. " +
 				"WARNING: review before applying and prefer a matching/fresh host.",
 			Type: CategoryTypeCommon,
 			Paths: []string{

@@ -465,6 +465,107 @@ func TestApplySudoersSkipsOnVisudoFailure(t *testing.T) {
 	}
 }
 
+// TestApplySudoersCommitFailurePreservesCurrentFile: applySudoersFromStage routes
+// the /etc/sudoers write through writeFilesAtomic carrying the current bytes as the
+// rollback original (F06-07), instead of the plain writeFileAtomic (single write,
+// no tracked original) it used before. Force the rename to succeed but the
+// directory fsync to fail (committed==true, err!=nil - mirrors
+// TestApplyAccountsCommitRollbackRestoresCommittedFiles and the fs_atomic.go
+// dir-fsync refuter) and assert /etc/sudoers still holds the ORIGINAL bytes
+// instead of being left with the new (committed-but-reported-failed) staged
+// content.
+func TestApplySudoersCommitFailurePreservesCurrentFile(t *testing.T) {
+	origFS := restoreFS
+	t.Cleanup(func() { restoreFS = origFS })
+	fakeFS := NewFakeFS()
+	t.Cleanup(func() { _ = os.RemoveAll(fakeFS.Root) })
+	restoreFS = fakeFS
+	origCmd := restoreCmd
+	t.Cleanup(func() { restoreCmd = origCmd })
+	restoreCmd = fakeAccountsCmd{err: nil} // visudo -c succeeds
+	origTime := restoreTime
+	t.Cleanup(func() { restoreTime = origTime })
+	restoreTime = &FakeTime{Current: time.Unix(10, 0)}
+	origSync := atomicFileSync
+	t.Cleanup(func() { atomicFileSync = origSync })
+
+	const current = "root ALL=(ALL) ALL\n"
+	const staged = "root ALL=(ALL) ALL\nbob ALL=(ALL) NOPASSWD: ALL\n"
+	_ = fakeFS.WriteFile(etcSudoersPath, []byte(current), 0o440)
+	_ = fakeFS.WriteFile("/stage/etc/sudoers", []byte(staged), 0o440)
+
+	// Only fail the FIRST directory fsync: /etc/sudoers' own commit (a single-file
+	// batch), leaving the temp file's own (non-directory) fsync and the rollback
+	// write's directory fsync alone so the rollback itself succeeds.
+	calls := 0
+	atomicFileSync = func(f *os.File) error {
+		if f == nil {
+			return nil
+		}
+		info, err := f.Stat()
+		if err == nil && info != nil && info.IsDir() {
+			calls++
+			if calls == 1 {
+				return errors.New("forced dir fsync failure")
+			}
+		}
+		return nil
+	}
+
+	err := applySudoersFromStage(context.Background(), newTestLogger(), "/stage")
+	if err == nil {
+		t.Fatal("expected an error when the sudoers commit's directory fsync fails")
+	}
+	if got := readFake(t, fakeFS, etcSudoersPath); got != current {
+		t.Errorf("current /etc/sudoers must be preserved (rolled back to original) after a commit failure, got:\n%s", got)
+	}
+}
+
+// sudoersReadErrFS wraps a FakeFS and fails ReadFile for one path, so a test can
+// force a non-not-exist read error on the current /etc/sudoers.
+type sudoersReadErrFS struct {
+	*FakeFS
+	failPath string
+	err      error
+}
+
+func (r *sudoersReadErrFS) ReadFile(path string) ([]byte, error) {
+	if path == r.failPath {
+		return nil, r.err
+	}
+	return r.FakeFS.ReadFile(path)
+}
+
+// TestApplySudoersAbortsOnCurrentReadError: if the CURRENT /etc/sudoers cannot be
+// read for a reason OTHER than not-exist, applySudoersFromStage must ABORT before
+// writing, never proceeding with a nil rollback original (which a later commit
+// failure could apply as an empty /etc/sudoers, disabling sudo host-wide). The
+// current file must be left untouched.
+func TestApplySudoersAbortsOnCurrentReadError(t *testing.T) {
+	origFS := restoreFS
+	t.Cleanup(func() { restoreFS = origFS })
+	fakeFS := NewFakeFS()
+	t.Cleanup(func() { _ = os.RemoveAll(fakeFS.Root) })
+	origCmd := restoreCmd
+	t.Cleanup(func() { restoreCmd = origCmd })
+	restoreCmd = fakeAccountsCmd{err: nil} // visudo -c succeeds
+
+	const current = "root ALL=(ALL) ALL\n"
+	const staged = "root ALL=(ALL) ALL\nbob ALL=(ALL) NOPASSWD: ALL\n"
+	_ = fakeFS.WriteFile(etcSudoersPath, []byte(current), 0o440)
+	_ = fakeFS.WriteFile("/stage/etc/sudoers", []byte(staged), 0o440)
+
+	restoreFS = &sudoersReadErrFS{FakeFS: fakeFS, failPath: etcSudoersPath, err: errors.New("injected sudoers read error")}
+
+	err := applySudoersFromStage(context.Background(), newTestLogger(), "/stage")
+	if err == nil {
+		t.Fatal("applySudoersFromStage must abort when the current sudoers read fails (non-not-exist)")
+	}
+	if got := readFake(t, fakeFS, etcSudoersPath); got != current {
+		t.Errorf("current /etc/sudoers must be kept untouched when its read fails, got:\n%s", got)
+	}
+}
+
 func TestMaybeApplyAccountsFromStageGates(t *testing.T) {
 	origFS := restoreFS
 	t.Cleanup(func() { restoreFS = origFS })

@@ -191,7 +191,21 @@ func applySudoersFromStage(ctx context.Context, logger *logging.Logger, stageRoo
 		logger.Warning("Skipping /etc/sudoers restore: staged sudoers failed validation (visudo -c): %v", err)
 		return nil
 	}
-	if err := writeFileAtomic(etcSudoersPath, data, 0o440); err != nil {
+	// Snapshot the current /etc/sudoers as the rollback original and write through
+	// the same all-or-nothing machinery as the account DB files, so a write/commit
+	// failure preserves the current sudoers (F06-07) rather than the plain
+	// single-file writeFileAtomic which tracked no original. A missing file is a
+	// valid empty original, but any OTHER read error must abort BEFORE the write:
+	// proceeding with a nil original would let a later commit-failure rollback
+	// write an empty /etc/sudoers and disable sudo host-wide (matches the
+	// abort-on-real-error posture of readCurrentAccountFile).
+	current, err := restoreFS.ReadFile(etcSudoersPath)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("read current sudoers for rollback snapshot: %w", err)
+	}
+	if err := writeFilesAtomic([]atomicFileWrite{
+		{path: etcSudoersPath, data: data, original: current, perm: 0o440},
+	}); err != nil {
 		return err
 	}
 	logger.Info("Restored /etc/sudoers (validated with visudo -c)")
