@@ -1,7 +1,9 @@
 package orchestrator
 
 import (
+	"bytes"
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -95,6 +97,46 @@ func (r *recordingApplyUI) ConfirmAction(_ context.Context, title, _, yesLabel, 
 	r.got = recordedConfirm{title, yesLabel, noLabel, defaultYes}
 	r.seen = true
 	return false, nil
+}
+
+// failedNICRepairUI confirms the repair (repairNow=true) and returns a FAILED result.
+type failedNICRepairUI struct {
+	*fakeRestoreWorkflowUI
+}
+
+func (u *failedNICRepairUI) ConfirmAction(_ context.Context, _, _, _, _ string, _ time.Duration, _ bool) (bool, error) {
+	return true, nil // repair now
+}
+
+func (u *failedNICRepairUI) RepairNICNames(_ context.Context, _ string) (*nicRepairResult, error) {
+	return &nicRepairResult{Failed: true, FailedReason: "ifreload failed"}, nil
+}
+
+func (u *failedNICRepairUI) ShowMessage(_ context.Context, _, _ string) error { return nil }
+
+// ffa32ff follow-up: a FAILED NIC repair in the forward apply flow must be surfaced at
+// WARNING prominence (like the rollback and staged-auto paths), not only an info-level
+// modal, so all three flows report a failed repair consistently.
+func TestPromptNICRepairFailedIsWarning(t *testing.T) {
+	ui := &failedNICRepairUI{fakeRestoreWorkflowUI: &fakeRestoreWorkflowUI{}}
+	logger := logging.New(types.LogLevelDebug, false)
+	buf := &bytes.Buffer{}
+	logger.SetOutput(buf)
+	f := &networkConfigUIApplyFlow{
+		ctx:         context.Background(),
+		ui:          ui,
+		logger:      logger,
+		archivePath: "/x.tar.xz",
+	}
+	if err := f.promptNICRepair(); err != nil {
+		t.Fatalf("promptNICRepair: %v", err)
+	}
+	if logger.WarningCount() < 1 {
+		t.Fatalf("a failed NIC repair must be logged at warning prominence, WarningCount=%d log=%s", logger.WarningCount(), buf.String())
+	}
+	if !strings.Contains(buf.String(), "NIC name repair FAILED") {
+		t.Fatalf("warning must carry the repair summary, log=%s", buf.String())
+	}
 }
 
 // LIVE-NIC-COPY: the top-level "NIC name repair (recommended)" gate must default
