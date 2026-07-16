@@ -57,24 +57,37 @@ func (o *Orchestrator) getOrCreatePassphraseSalt(recipientPath string) (string, 
 }
 
 // readPassphraseSalt returns the persisted per-installation salt next to
-// recipientPath, or "" if it is absent/unreadable.
-func (o *Orchestrator) readPassphraseSalt(recipientPath string) string {
+// recipientPath. An absent salt file (ENOENT) yields ("", nil) so recipient-only
+// (X25519/SSH) and legacy fixed-salt setups keep succeeding with no manifest
+// salt. A salt file that exists but is unreadable or empty is fatal: emitting an
+// archive with an omitted salt in that case would be permanently undecryptable.
+func (o *Orchestrator) readPassphraseSalt(recipientPath string) (string, error) {
 	if strings.TrimSpace(recipientPath) == "" {
-		return ""
+		return "", nil
 	}
-	data, err := o.filesystem().ReadFile(passphraseSaltFilePath(recipientPath))
+	path := passphraseSaltFilePath(recipientPath)
+	data, err := o.filesystem().ReadFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return "", nil
+	}
 	if err != nil {
-		return ""
+		return "", fmt.Errorf("read passphrase salt %s: %w", path, err)
 	}
-	return strings.TrimSpace(string(data))
+	salt := strings.TrimSpace(string(data))
+	if salt == "" {
+		return "", fmt.Errorf("passphrase salt %s is empty", path)
+	}
+	return salt, nil
 }
 
 // passphraseSaltForManifest returns the per-installation salt to embed in an
 // archive manifest, or "" when encryption is off or no passphrase salt exists
-// (X25519/SSH-only setups, or legacy installs still on the fixed salt).
-func (o *Orchestrator) passphraseSaltForManifest() string {
+// (X25519/SSH-only setups, or legacy installs still on the fixed salt). It
+// returns a non-nil error when encryption is on and the salt file exists but is
+// unreadable or empty, so the caller can fail the backup closed.
+func (o *Orchestrator) passphraseSaltForManifest() (string, error) {
 	if o == nil || o.cfg == nil || !o.cfg.EncryptArchive {
-		return ""
+		return "", nil
 	}
 	recipientPath := strings.TrimSpace(o.cfg.AgeRecipientFile)
 	if recipientPath == "" {

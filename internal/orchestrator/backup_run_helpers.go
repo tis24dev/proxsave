@@ -279,7 +279,17 @@ func (o *Orchestrator) writeArchiveChecksum(workspace *backupWorkspace, artifact
 
 func (o *Orchestrator) writeArchiveManifest(run *backupRunContext, artifacts *backupArtifacts, checksum string) error {
 	manifestPath := artifacts.archivePath + ".manifest.json"
-	manifest := o.newArchiveManifest(run.stats, artifacts.archivePath, checksum)
+	manifest, err := o.newArchiveManifest(run.stats, artifacts.archivePath, checksum)
+	if err != nil {
+		// Fail closed: an unreadable or empty passphrase salt would drop the salt
+		// from the manifest and leave a passphrase-derived archive permanently
+		// undecryptable while the backup reports success.
+		return &BackupError{
+			Phase: "encryption",
+			Err:   fmt.Errorf("resolve passphrase salt for manifest: %w", err),
+			Code:  types.ExitEncryptionError,
+		}
+	}
 	if err := backup.CreateManifest(run.ctx, o.logger, manifest, manifestPath); err != nil {
 		return &BackupError{
 			Phase: "verification",
@@ -292,7 +302,11 @@ func (o *Orchestrator) writeArchiveManifest(run *backupRunContext, artifacts *ba
 	return nil
 }
 
-func (o *Orchestrator) newArchiveManifest(stats *BackupStats, archivePath, checksum string) *backup.Manifest {
+func (o *Orchestrator) newArchiveManifest(stats *BackupStats, archivePath, checksum string) (*backup.Manifest, error) {
+	passphraseSalt, err := o.passphraseSaltForManifest()
+	if err != nil {
+		return nil, err
+	}
 	return &backup.Manifest{
 		ArchivePath:      archivePath,
 		ArchiveSize:      stats.ArchiveSize,
@@ -310,8 +324,8 @@ func (o *Orchestrator) newArchiveManifest(stats *BackupStats, archivePath, check
 		ScriptVersion:    stats.ScriptVersion,
 		EncryptionMode:   o.archiveEncryptionMode(),
 		ClusterMode:      stats.ClusterMode,
-		PassphraseSalt:   o.passphraseSaltForManifest(),
-	}
+		PassphraseSalt:   passphraseSalt,
+	}, nil
 }
 
 func (o *Orchestrator) archiveEncryptionMode() string {

@@ -2,6 +2,8 @@ package orchestrator
 
 import (
 	"bytes"
+	"context"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -67,8 +69,8 @@ func TestGetOrCreatePassphraseSalt(t *testing.T) {
 	if salt2 != salt {
 		t.Fatalf("salt not stable across calls: %q vs %q", salt, salt2)
 	}
-	if got := o.readPassphraseSalt(recipientPath); got != salt {
-		t.Fatalf("readPassphraseSalt = %q, want %q", got, salt)
+	if got, err := o.readPassphraseSalt(recipientPath); err != nil || got != salt {
+		t.Fatalf("readPassphraseSalt = (%q, %v), want (%q, nil)", got, err, salt)
 	}
 }
 
@@ -194,20 +196,117 @@ func TestPassphraseSaltForManifest(t *testing.T) {
 	recipientPath := filepath.Join(t.TempDir(), "identity", "age", "recipient.txt")
 	o := &Orchestrator{cfg: &config.Config{EncryptArchive: true, AgeRecipientFile: recipientPath}}
 
-	if got := o.passphraseSaltForManifest(); got != "" {
-		t.Fatalf("expected empty salt before setup, got %q", got)
+	// (c) salt absent (ENOENT) -> ("", nil): recipient-only setups keep succeeding.
+	if got, err := o.passphraseSaltForManifest(); err != nil || got != "" {
+		t.Fatalf("expected (%q, nil) before setup, got (%q, %v)", "", got, err)
 	}
 
 	salt, err := o.getOrCreatePassphraseSalt(recipientPath)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := o.passphraseSaltForManifest(); got != salt {
-		t.Fatalf("passphraseSaltForManifest = %q, want %q", got, salt)
+	if got, err := o.passphraseSaltForManifest(); err != nil || got != salt {
+		t.Fatalf("passphraseSaltForManifest = (%q, %v), want (%q, nil)", got, err, salt)
 	}
 
+	// (d) encryption disabled -> ("", nil).
 	o.cfg.EncryptArchive = false
-	if got := o.passphraseSaltForManifest(); got != "" {
-		t.Fatalf("expected empty salt when encryption disabled, got %q", got)
+	if got, err := o.passphraseSaltForManifest(); err != nil || got != "" {
+		t.Fatalf("expected (%q, nil) when encryption disabled, got (%q, %v)", "", got, err)
+	}
+}
+
+// saltReadErrFS wraps a FakeFS and fails ReadFile for one path with a
+// non-not-exist error, so a test can force a strict read failure on the
+// passphrase salt file.
+type saltReadErrFS struct {
+	*FakeFS
+	failPath string
+	err      error
+}
+
+func (r *saltReadErrFS) ReadFile(path string) ([]byte, error) {
+	if path == r.failPath {
+		return nil, r.err
+	}
+	return r.FakeFS.ReadFile(path)
+}
+
+// TestPassphraseSaltForManifestEmptyFileFailsClosed: (a) EncryptArchive=true and
+// the salt file exists but is empty -> non-nil error. Emitting an archive with an
+// omitted manifest salt here would be permanently undecryptable, so fail closed.
+func TestPassphraseSaltForManifestEmptyFileFailsClosed(t *testing.T) {
+	recipientPath := filepath.Join(t.TempDir(), "identity", "age", "recipient.txt")
+	saltPath := passphraseSaltFilePath(recipientPath)
+	if err := os.MkdirAll(filepath.Dir(saltPath), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(saltPath, []byte("   \n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	o := &Orchestrator{cfg: &config.Config{EncryptArchive: true, AgeRecipientFile: recipientPath}}
+
+	got, err := o.passphraseSaltForManifest()
+	if err == nil {
+		t.Fatalf("empty salt file must fail closed, got (%q, nil)", got)
+	}
+	if got != "" {
+		t.Fatalf("salt on error = %q, want %q", got, "")
+	}
+}
+
+// TestPassphraseSaltForManifestReadErrorFailsClosed: (b) EncryptArchive=true and
+// the salt read fails with a non-ENOENT error (EACCES) -> non-nil error.
+func TestPassphraseSaltForManifestReadErrorFailsClosed(t *testing.T) {
+	fake := NewFakeFS()
+	t.Cleanup(func() { _ = fake.Cleanup() })
+	recipientPath := filepath.Join("identity", "age", "recipient.txt")
+	saltPath := passphraseSaltFilePath(recipientPath)
+	errFS := &saltReadErrFS{FakeFS: fake, failPath: saltPath, err: os.ErrPermission}
+	o := &Orchestrator{
+		cfg: &config.Config{EncryptArchive: true, AgeRecipientFile: recipientPath},
+		fs:  errFS,
+	}
+
+	got, err := o.passphraseSaltForManifest()
+	if err == nil {
+		t.Fatalf("unreadable salt must fail closed, got (%q, nil)", got)
+	}
+	if got != "" {
+		t.Fatalf("salt on error = %q, want %q", got, "")
+	}
+}
+
+// TestWriteArchiveManifestAbortsOnUnreadableSalt is the caller-level guard: when
+// the salt is unreadable and encryption is on, the backup aborts with a
+// BackupError (non-zero exit) instead of emitting a silent-success undecryptable
+// archive.
+func TestWriteArchiveManifestAbortsOnUnreadableSalt(t *testing.T) {
+	fake := NewFakeFS()
+	t.Cleanup(func() { _ = fake.Cleanup() })
+	recipientPath := filepath.Join("identity", "age", "recipient.txt")
+	saltPath := passphraseSaltFilePath(recipientPath)
+	errFS := &saltReadErrFS{FakeFS: fake, failPath: saltPath, err: os.ErrPermission}
+	o := &Orchestrator{
+		cfg: &config.Config{EncryptArchive: true, AgeRecipientFile: recipientPath},
+		fs:  errFS,
+	}
+
+	run := &backupRunContext{ctx: context.Background(), stats: &BackupStats{}}
+	artifacts := &backupArtifacts{archivePath: filepath.Join(fake.Root, "archive.tar.zst")}
+
+	err := o.writeArchiveManifest(run, artifacts, "deadbeef")
+	if err == nil {
+		t.Fatalf("writeArchiveManifest must abort when the salt is unreadable")
+	}
+	var be *BackupError
+	if !errors.As(err, &be) {
+		t.Fatalf("want *BackupError, got %T: %v", err, err)
+	}
+	if run.stats.ManifestPath != "" {
+		t.Fatalf("manifest path must not be recorded on abort, got %q", run.stats.ManifestPath)
+	}
+	if artifacts.manifestPath != "" {
+		t.Fatalf("artifacts manifest path must not be set on abort, got %q", artifacts.manifestPath)
 	}
 }
