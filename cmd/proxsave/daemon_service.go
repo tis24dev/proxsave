@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 	"unicode"
@@ -16,11 +17,14 @@ import (
 
 const (
 	daemonUnitName = "proxsave-daemon.service"
-	daemonUnitPath = "/etc/systemd/system/proxsave-daemon.service"
 	// daemonExecPath is the canonical entrypoint symlink the unit invokes (same
 	// path used for the crontab line); resolved by ensureGoSymlink at install.
 	daemonExecPath = "/usr/local/bin/proxsave"
 )
+
+// daemonUnitPath is the systemd unit path. A var (not const) so tests can point it
+// at a temp dir.
+var daemonUnitPath = "/etc/systemd/system/proxsave-daemon.service"
 
 // buildDaemonUnit renders the systemd unit. systemd is only the keep-alive
 // supervisor (Restart=always); the daemon schedules internally. A non-empty
@@ -84,8 +88,10 @@ func installDaemonService(ctx context.Context, execToken, configPath string, boo
 	}
 	unit := buildDaemonUnit(execToken, configPath)
 	// The unit path is a fixed constant and the content is our own template, so a
-	// plain write is safe here (no user-controlled path -> no G304/G306 class).
-	if err := os.WriteFile(daemonUnitPath, []byte(unit), 0o644); err != nil {
+	// plain write is safe here (no user-controlled path -> no G304/G306 class). The
+	// write is atomic (temp+rename+fsync) so a crash mid-write never leaves a
+	// truncated unit at this boot-critical path.
+	if err := writeUnitFileAtomic(daemonUnitPath, []byte(unit), 0o644); err != nil {
 		return fmt.Errorf("write %s: %w", daemonUnitPath, err)
 	}
 	logging.DebugStepBootstrap(bootstrap, "daemon", "wrote unit %s", daemonUnitPath)
@@ -96,6 +102,58 @@ func installDaemonService(ctx context.Context, execToken, configPath string, boo
 		return err
 	}
 	return nil
+}
+
+// unitRenameFunc is the rename step of writeUnitFileAtomic, isolated as a var so
+// tests can force a post-write failure and assert the previous unit is preserved.
+var unitRenameFunc = os.Rename
+
+// writeUnitFileAtomic writes data to path atomically and durably: it writes a temp
+// sibling, fsyncs it, chmods it, closes it, renames it over path, then fsyncs the
+// parent dir so the rename survives a crash. A failed write leaves the previous unit
+// (or none) in place, never a truncated unit.
+func writeUnitFileAtomic(path string, data []byte, perm os.FileMode) error {
+	dir := filepath.Dir(path)
+	f, err := os.CreateTemp(dir, "."+filepath.Base(path)+".tmp-*")
+	if err != nil {
+		return err
+	}
+	tmp := f.Name()
+	if _, err := f.Write(data); err != nil {
+		_ = f.Close()
+		_ = os.Remove(tmp)
+		return err
+	}
+	if err := f.Sync(); err != nil {
+		_ = f.Close()
+		_ = os.Remove(tmp)
+		return err
+	}
+	if err := f.Chmod(perm); err != nil {
+		_ = f.Close()
+		_ = os.Remove(tmp)
+		return err
+	}
+	if err := f.Close(); err != nil {
+		_ = os.Remove(tmp)
+		return err
+	}
+	if err := unitRenameFunc(tmp, path); err != nil {
+		_ = os.Remove(tmp)
+		return err
+	}
+	fsyncDir(dir)
+	return nil
+}
+
+// fsyncDir best-effort flushes a directory entry so a rename survives a crash.
+func fsyncDir(dir string) {
+	d, err := os.Open(dir)
+	if err != nil {
+		return
+	}
+	_ = d.Sync()
+	_ = d.Close()
 }
 
 // removeDaemonService disables+stops the unit and deletes it, then reloads

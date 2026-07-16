@@ -3,6 +3,9 @@ package main
 
 import (
 	"context"
+	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -71,5 +74,53 @@ func TestBuildDaemonUnitFallbacks(t *testing.T) {
 	}
 	if strings.Contains(u, "--config") {
 		t.Errorf("empty config should not emit --config:\n%s", u)
+	}
+}
+
+// A failed rename must leave the previous unit intact, never truncated: the in-place
+// os.WriteFile truncated the existing unit before it could fail.
+func TestWriteUnitFileAtomic_FailureKeepsPrevious(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "unit.service")
+	const old = "OLD-UNIT"
+	if err := os.WriteFile(path, []byte(old), 0o644); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	orig := unitRenameFunc
+	t.Cleanup(func() { unitRenameFunc = orig })
+	unitRenameFunc = func(oldname, newname string) error { return errors.New("rename boom") }
+
+	if err := writeUnitFileAtomic(path, []byte("NEW-UNIT-CONTENT"), 0o644); err == nil {
+		t.Fatal("want error, got nil")
+	}
+	got, _ := os.ReadFile(path)
+	if string(got) != old {
+		t.Fatalf("previous unit modified: got %q want %q", string(got), old)
+	}
+	entries, _ := os.ReadDir(dir)
+	for _, e := range entries {
+		if strings.Contains(e.Name(), ".tmp-") {
+			t.Fatalf("leftover temp: %s", e.Name())
+		}
+	}
+}
+
+func TestWriteUnitFileAtomic_WritesContentAndPerm(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "unit.service")
+	if err := writeUnitFileAtomic(path, []byte("hello"), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	got, _ := os.ReadFile(path)
+	if string(got) != "hello" {
+		t.Fatalf("content = %q", string(got))
+	}
+	info, _ := os.Stat(path)
+	if info.Mode().Perm() != 0o644 {
+		t.Fatalf("perm = %v", info.Mode().Perm())
+	}
+	entries, _ := os.ReadDir(dir)
+	if len(entries) != 1 {
+		t.Fatalf("unexpected dir entries: %v", entries)
 	}
 }
