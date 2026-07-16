@@ -850,11 +850,13 @@ func dropLegacyBashCronLines(lines []string, baseDir string, bootstrap *logging.
 	return kept
 }
 
-func filterCronLines(lines []string, correctPaths []string) ([]string, bool, []string) {
+// filterCronLines returns the crontab with every proxsave/proxmox-backup entry
+// that points to an outdated binary removed. Blank lines, comments, unrelated
+// operator jobs and any entry already targeting a canonical path are preserved.
+// The previous schedule is not remembered: a (re)install rewrites the proxsave
+// schedule from config (SCHEDULER_TIME) afterwards.
+func filterCronLines(lines []string, correctPaths []string) []string {
 	updatedLines := make([]string, 0, len(lines))
-	hasCurrentEntry := false
-	var replacedSchedules []string
-	seenSchedules := make(map[string]bool)
 
 	containsCorrectPath := func(line string) bool {
 		// Match the cron command token exactly, not as a substring: otherwise a
@@ -880,25 +882,17 @@ func filterCronLines(lines []string, correctPaths []string) ([]string, bool, []s
 			continue
 		}
 		if containsCorrectPath(line) {
-			hasCurrentEntry = true
 			updatedLines = append(updatedLines, line)
 			continue
 		}
 		if containsBinaryReference(line) {
-			// Remove proxsave/proxmox-backup entries that point to outdated binaries,
-			// remembering EACH distinct schedule so every rewritten entry can keep its
-			// own. Multiple legacy entries with different schedules must not collapse
-			// into a single rewritten entry (which would silently drop the others).
-			if sched := cronScheduleField(line); sched != "" && !seenSchedules[sched] {
-				seenSchedules[sched] = true
-				replacedSchedules = append(replacedSchedules, sched)
-			}
+			// Drop proxsave/proxmox-backup entries that point to an outdated binary.
 			continue
 		}
 		updatedLines = append(updatedLines, line)
 	}
 
-	return updatedLines, hasCurrentEntry, replacedSchedules
+	return updatedLines
 }
 
 // dropCanonicalCronLines removes every cron line whose command token already
@@ -979,32 +973,11 @@ func repointLegacyCronEntries(ctx context.Context, bootstrap *logging.BootstrapL
 // (CRON-INSTALL-002) and removes stale/duplicate entries (CRON-MIXED-001).
 func buildReinstallCronLines(lines []string, baseDir string, correctPaths []string, schedule, commandToken string, bootstrap *logging.BootstrapLogger) []string {
 	lines = dropLegacyBashCronLines(lines, baseDir, bootstrap)
-	updated, _, _ := filterCronLines(lines, correctPaths)
+	updated := filterCronLines(lines, correctPaths)
 	updated = dropCanonicalCronLines(updated, correctPaths)
 	// --backup pins the non-interactive behavior: even if a scheduler ever
 	// allocates a pty, the run can never land on the interactive dashboard.
 	return append(updated, fmt.Sprintf("%s %s --backup", schedule, commandToken))
-}
-
-// cronScheduleField returns the schedule portion of a cron line — the first five
-// time fields, or an "@" shorthand (e.g. @daily) — or "" if the line carries no
-// schedule (blank, comment, or env assignment).
-func cronScheduleField(line string) string {
-	trimmed := strings.TrimSpace(line)
-	if trimmed == "" || strings.HasPrefix(trimmed, "#") {
-		return ""
-	}
-	fields := strings.Fields(trimmed)
-	if len(fields) == 0 {
-		return ""
-	}
-	if strings.HasPrefix(fields[0], "@") {
-		return fields[0]
-	}
-	if len(fields) <= 5 {
-		return ""
-	}
-	return strings.Join(fields[:5], " ")
 }
 
 func logBootstrapWarning(bootstrap *logging.BootstrapLogger, format string, args ...interface{}) {

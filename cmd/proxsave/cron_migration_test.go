@@ -7,21 +7,19 @@ import (
 	"github.com/tis24dev/proxsave/internal/logging"
 )
 
-// audited: 2026-06-09 — filterCronLines now returns []string (all distinct removed
-// schedules) instead of a single string, so multiple legacy entries with different
-// schedules no longer collapse into one. Cases updated to the slice signature.
+// audited: 2026-07-16 filterCronLines returns only the filtered lines. The dead
+// hasCurrentEntry/replacedSchedules returns were removed (F12-01): the sole caller
+// rewrites the proxsave schedule from config, so no removed schedule is remembered.
 func TestFilterCronLines(t *testing.T) {
 	// Define the user's specific lines that must be preserved
 	userLine1 := "0 12 * * * /mnt/pve/nas/scripts/proxmox/proxmox-backup-client/backup_folders-nightly.sh 192.168.1.5 htpc-1 /mnt/pve/nas"
 	userLine2 := "0 2 * * * /mnt/pve/nas/scripts/proxmox/proxmox-backup-client/backup_folders-nightly.sh pbs.miodominio.com pbs1-test /mnt/pve/nas"
 
 	tests := []struct {
-		name          string
-		inputLines    []string
-		correctPaths  []string
-		wantLines     []string
-		wantHasEntry  bool
-		wantSchedules []string
+		name         string
+		inputLines   []string
+		correctPaths []string
+		wantLines    []string
 	}{
 		{
 			name: "Preserve proxmox-backup-client lines",
@@ -40,7 +38,6 @@ func TestFilterCronLines(t *testing.T) {
 				userLine2,
 				"0 3 * * * /usr/local/bin/proxsave",
 			},
-			wantHasEntry: true,
 		},
 		{
 			name: "Migrate legacy proxmox-backup symlink, keep schedule",
@@ -52,8 +49,6 @@ func TestFilterCronLines(t *testing.T) {
 			wantLines: []string{
 				userLine1,
 			},
-			wantHasEntry:  false,
-			wantSchedules: []string{"0 5 * * *"},
 		},
 		{
 			name: "Remove outdated binary reference",
@@ -65,8 +60,6 @@ func TestFilterCronLines(t *testing.T) {
 			wantLines: []string{
 				userLine1,
 			},
-			wantHasEntry:  false,
-			wantSchedules: []string{"0 2 * * *"},
 		},
 		{
 			name: "Preserve custom binary name proxmox-backup-new",
@@ -77,7 +70,6 @@ func TestFilterCronLines(t *testing.T) {
 			wantLines: []string{
 				"0 2 * * * /usr/local/bin/proxmox-backup-new",
 			},
-			wantHasEntry: false,
 		},
 		{
 			name: "Preserve proxmox-backup-dog",
@@ -88,7 +80,6 @@ func TestFilterCronLines(t *testing.T) {
 			wantLines: []string{
 				"0 2 * * * /usr/bin/proxmox-backup-dog",
 			},
-			wantHasEntry: false,
 		},
 		{
 			name: "Preserve proxmox-backup-test",
@@ -99,7 +90,6 @@ func TestFilterCronLines(t *testing.T) {
 			wantLines: []string{
 				"0 2 * * * /usr/bin/proxmox-backup-test --flag",
 			},
-			wantHasEntry: false,
 		},
 		{
 			name: "Mixed scenario",
@@ -117,8 +107,6 @@ func TestFilterCronLines(t *testing.T) {
 				userLine2,
 				"0 5 * * * /usr/local/bin/proxsave",
 			},
-			wantHasEntry:  true,
-			wantSchedules: []string{"0 4 * * *"},
 		},
 		{
 			// Regression: a different binary whose name merely shares the
@@ -134,7 +122,6 @@ func TestFilterCronLines(t *testing.T) {
 				"0 2 * * * /usr/local/bin/proxsavex",
 				userLine1,
 			},
-			wantHasEntry: false,
 		},
 		{
 			// Regression: a job whose COMMAND is a different binary but which passes
@@ -151,27 +138,12 @@ func TestFilterCronLines(t *testing.T) {
 				"0 4 * * * /usr/bin/cp /usr/local/bin/proxsave /backup/proxsave.bak",
 				userLine1,
 			},
-			wantHasEntry: false,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			gotLines, gotHasEntry, gotSchedules := filterCronLines(tt.inputLines, tt.correctPaths)
-
-			if gotHasEntry != tt.wantHasEntry {
-				t.Errorf("hasCurrentEntry = %v, want %v", gotHasEntry, tt.wantHasEntry)
-			}
-
-			if len(gotSchedules) != len(tt.wantSchedules) {
-				t.Errorf("replacedSchedules = %q, want %q", gotSchedules, tt.wantSchedules)
-			} else {
-				for i := range gotSchedules {
-					if gotSchedules[i] != tt.wantSchedules[i] {
-						t.Errorf("replacedSchedules[%d] = %q, want %q", i, gotSchedules[i], tt.wantSchedules[i])
-					}
-				}
-			}
+			gotLines := filterCronLines(tt.inputLines, tt.correctPaths)
 
 			if len(gotLines) != len(tt.wantLines) {
 				t.Fatalf("got %d lines, want %d lines\nGot:  %v\nWant: %v", len(gotLines), len(tt.wantLines), gotLines, tt.wantLines)
@@ -323,7 +295,7 @@ func TestRepointLegacyCronLines(t *testing.T) {
 		"0 5 * * * /usr/local/bin/proxmox-backup --backup",    // legacy -> repoint
 		"0 6 * * * /usr/bin/proxmox-backup-client backup ds:", // PBS -> keep
 		"0 7 * * * /usr/local/bin/proxsave --backup",          // already canonical -> keep
-		"# a comment",                                         // keep
+		"# a comment", // keep
 	}
 	out, changed := repointLegacyCronLines(lines)
 	if !changed {
