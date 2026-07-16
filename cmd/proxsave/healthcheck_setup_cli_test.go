@@ -144,7 +144,7 @@ func TestRunHealthcheckSetupCLI_VerifiedShowsMagicLink(t *testing.T) {
 			t.Fatalf("check got host=%q id=%q", host, id)
 		}
 		return orchestrator.HealthcheckCheckResult{
-			Err: nil, Reachable: true, LoginURL: "https://hc/accounts/check_token/u/MAGIC/",
+			Err: nil, Reachable: true, LoginURL: "https://hc.proxsave.dev/accounts/check_token/u/MAGIC/",
 			DaemonRead: true, Daemon: health.Diagnosis{State: health.TxTransmitting, DaemonUp: true},
 		}
 	}
@@ -153,7 +153,7 @@ func TestRunHealthcheckSetupCLI_VerifiedShowsMagicLink(t *testing.T) {
 			t.Fatalf("err: %v", err)
 		}
 	})
-	if !strings.Contains(out, "https://hc/accounts/check_token/u/MAGIC/") {
+	if !strings.Contains(out, "https://hc.proxsave.dev/accounts/check_token/u/MAGIC/") {
 		t.Fatalf("must show the magic-link, got: %q", out)
 	}
 	// The real state is shown, not a cosmetic "verified": a live transmitting daemon reads WORKING.
