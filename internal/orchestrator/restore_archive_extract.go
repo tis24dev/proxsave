@@ -335,7 +335,15 @@ func materializeDedupSymlinks(ctx context.Context, archivePath, destRoot string,
 	}
 	manifestFile, err := restoreFS.Open(manifestTarget)
 	if err != nil {
-		return nil // no dedup manifest: nothing to materialize
+		if os.IsNotExist(err) {
+			return nil // no dedup manifest: nothing to materialize
+		}
+		// The manifest exists but cannot be opened (EACCES/EIO): on the strict/staged
+		// path refuse to apply the tree, consistent with the read/parse/oversize guards.
+		if strict {
+			return fmt.Errorf("dedup manifest cannot be opened; refusing to apply a partial staged restore: %w", err)
+		}
+		return nil // best-effort: tolerate an unreadable manifest
 	}
 	data, rerr := io.ReadAll(io.LimitReader(manifestFile, maxDedupManifestBytes+1))
 	_ = manifestFile.Close()

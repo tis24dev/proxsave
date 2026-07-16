@@ -4,6 +4,7 @@ import (
 	"archive/tar"
 	"bytes"
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -12,6 +13,15 @@ import (
 	"github.com/tis24dev/proxsave/internal/logging"
 	"github.com/tis24dev/proxsave/internal/types"
 )
+
+// openErrFS delegates to osFS but forces Open to fail with a non-not-exist error, to
+// exercise the strict manifest Open-error guard (a transient EACCES/EIO, not ENOENT).
+type openErrFS struct {
+	osFS
+	err error
+}
+
+func (f openErrFS) Open(string) (*os.File, error) { return nil, f.err }
 
 // F-05-02: on the strict/staged path a duplicate whose canonical is missing from
 // the archive must make materialization FAIL (refuse to apply a dangling-link tree)
@@ -185,6 +195,38 @@ func TestProcessRestoreArchiveEntries_FullRestoreGatesDedup(t *testing.T) {
 	}
 	if !extractedSet[dedupCleanArchivePath("foo.cfg")] {
 		t.Fatalf("extracted entry not recorded in set: %v", extractedSet)
+	}
+}
+
+// F-05-02 sibling: a manifest that EXISTS but cannot be opened (non not-exist error,
+// e.g. EACCES/EIO) must fail closed on strict too, not just the read/parse legs. A
+// genuinely-absent manifest (not-exist) still returns nil (no dedup to materialize).
+func TestMaterializeDedupStrictFailsOnUnreadableManifest(t *testing.T) {
+	origFS := restoreFS
+	t.Cleanup(func() { restoreFS = origFS })
+	logger := logging.New(types.LogLevelError, false)
+
+	newCase := func(t *testing.T) (archive, destRoot string) {
+		restoreFS = osFS{}
+		root := t.TempDir()
+		archive = writeTarArchiveForTest(t, root, map[string]string{"unrelated.cfg": "x"})
+		destRoot = t.TempDir()
+		writeDedupManifestForTest(t, destRoot, []backup.DedupManifestEntry{{Path: "b/two.cfg", Mode: 0o640}})
+		return archive, destRoot
+	}
+
+	// strict=true: a non-not-exist Open error fails closed.
+	archive, destRoot := newCase(t)
+	restoreFS = openErrFS{err: errors.New("permission denied")}
+	if err := materializeDedupSymlinks(context.Background(), archive, destRoot, logger, true, nil); err == nil {
+		t.Fatal("strict materialization must fail when the manifest exists but cannot be opened")
+	}
+
+	// strict=false: tolerate (nil).
+	archive, destRoot = newCase(t)
+	restoreFS = openErrFS{err: errors.New("permission denied")}
+	if err := materializeDedupSymlinks(context.Background(), archive, destRoot, logger, false, nil); err != nil {
+		t.Fatalf("best-effort must tolerate an unreadable manifest, got %v", err)
 	}
 }
 
