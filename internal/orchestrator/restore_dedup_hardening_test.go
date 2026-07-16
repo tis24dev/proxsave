@@ -144,6 +144,51 @@ func TestMaterializeDedupCanonicalSizeCap(t *testing.T) {
 // F-05-01: in a selective restore, a manifest entry whose path was NOT extracted
 // this run (out of the selected scope, or a pre-existing live symlink) must be left
 // UNTOUCHED, not atomically replaced with archive content.
+// F-05-02 sibling: a corrupt (unparseable) dedup manifest must ALSO fail closed on
+// the strict/staged path (refuse to apply a partial restore) and keep the manifest,
+// mirroring the oversize guard; best-effort removes it and returns nil.
+func TestMaterializeDedupStrictFailsOnCorruptManifest(t *testing.T) {
+	origFS := restoreFS
+	restoreFS = osFS{}
+	t.Cleanup(func() { restoreFS = origFS })
+
+	newCase := func(t *testing.T) (archive, destRoot string) {
+		root := t.TempDir()
+		archive = writeTarArchiveForTest(t, root, map[string]string{"unrelated.cfg": "x"})
+		destRoot = t.TempDir()
+		mp := filepath.Join(destRoot, filepath.FromSlash(backup.DedupManifestRelPath))
+		if err := os.MkdirAll(filepath.Dir(mp), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(mp, []byte("{ this is not valid json"), 0o640); err != nil {
+			t.Fatal(err)
+		}
+		return archive, destRoot
+	}
+	manifestPath := func(destRoot string) string {
+		return filepath.Join(destRoot, filepath.FromSlash(backup.DedupManifestRelPath))
+	}
+	logger := logging.New(types.LogLevelError, false)
+
+	// strict=true: error + manifest kept.
+	archive, destRoot := newCase(t)
+	if err := materializeDedupSymlinks(context.Background(), archive, destRoot, logger, true, nil); err == nil {
+		t.Fatal("strict materialization must fail on a corrupt dedup manifest")
+	}
+	if _, err := os.Stat(manifestPath(destRoot)); err != nil {
+		t.Fatalf("strict failure must keep the manifest, stat err=%v", err)
+	}
+
+	// strict=false: nil, manifest removed (existing best-effort behavior).
+	archive, destRoot = newCase(t)
+	if err := materializeDedupSymlinks(context.Background(), archive, destRoot, logger, false, nil); err != nil {
+		t.Fatalf("best-effort must tolerate a corrupt manifest, got %v", err)
+	}
+	if _, err := os.Stat(manifestPath(destRoot)); !os.IsNotExist(err) {
+		t.Fatalf("best-effort must remove the corrupt manifest, stat err=%v", err)
+	}
+}
+
 func TestMaterializeDedupSelectiveScopeGate(t *testing.T) {
 	origFS := restoreFS
 	restoreFS = osFS{}

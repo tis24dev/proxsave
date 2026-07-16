@@ -341,6 +341,9 @@ func materializeDedupSymlinks(ctx context.Context, archivePath, destRoot string,
 	data, rerr := io.ReadAll(io.LimitReader(manifestFile, maxDedupManifestBytes+1))
 	_ = manifestFile.Close()
 	if rerr != nil {
+		if strict {
+			return fmt.Errorf("dedup manifest unreadable; refusing to apply a partial staged restore: %w", rerr)
+		}
 		return nil // unreadable manifest (matches the prior ReadFile-error behavior)
 	}
 	if int64(len(data)) > maxDedupManifestBytes {
@@ -353,9 +356,15 @@ func materializeDedupSymlinks(ctx context.Context, archivePath, destRoot string,
 	}
 	var entries []backup.DedupManifestEntry
 	if err := json.Unmarshal(data, &entries); err != nil {
-		// Corrupt manifest: nothing can be materialized, but do not leave the garbage
-		// (force-extracted under var/lib/proxsave-info) lingering on the restored system.
 		logger.Warning("Dedup manifest unreadable; skipping symlink materialization: %v", err)
+		if strict {
+			// A corrupt manifest means the extracted duplicates cannot be materialized;
+			// on the strict/staged path refuse to apply the tree (keep the manifest so a
+			// re-run can recover), consistent with the oversize and missing-canonical guards.
+			return fmt.Errorf("dedup manifest corrupt; refusing to apply a partial staged restore: %w", err)
+		}
+		// Best-effort: nothing can be materialized, but do not leave the garbage
+		// (force-extracted under var/lib/proxsave-info) lingering on the restored system.
 		removeDedupManifest(manifestTarget)
 		return nil
 	}
