@@ -216,6 +216,235 @@ func TestPassphraseSaltForManifest(t *testing.T) {
 	}
 }
 
+// countSaltCommentLines counts "# passphrase-salt:" comment lines in a
+// recipient-file body.
+func countSaltCommentLines(content string) int {
+	n := 0
+	for _, line := range strings.Split(content, "\n") {
+		if strings.HasPrefix(strings.TrimSpace(line), passphraseSaltCommentPrefix) {
+			n++
+		}
+	}
+	return n
+}
+
+// TestSetupCoLocatesPassphraseSaltInRecipientFile drives the passphrase setup
+// path end-to-end and asserts the salt is co-located inside recipient.txt as a
+// single "# passphrase-salt: <salt>" comment. Deleting the standalone
+// passphrase.salt sibling then no longer loses the salt: passphraseSaltForManifest
+// still returns it, sourced from the recipient file.
+func TestSetupCoLocatesPassphraseSaltInRecipientFile(t *testing.T) {
+	tmp := t.TempDir()
+	cfg := &config.Config{EncryptArchive: true, BaseDir: tmp}
+	o := newEncryptionTestOrchestrator(cfg)
+
+	ui := &mockAgeSetupUI{
+		AbortErr: ErrAgeRecipientSetupAborted,
+		Drafts: []*AgeRecipientDraft{
+			{Kind: AgeRecipientInputPassphrase, Passphrase: testStrongPassphrase},
+		},
+		AddMore: []bool{false},
+	}
+	if err := o.EnsureAgeRecipientsReadyWithUI(context.Background(), ui); err != nil {
+		t.Fatalf("EnsureAgeRecipientsReadyWithUI: %v", err)
+	}
+
+	target := filepath.Join(tmp, "identity", "age", "recipient.txt")
+	// The persisted sibling salt is the ground truth (idempotent read).
+	wantSalt, err := o.getOrCreatePassphraseSalt(target)
+	if err != nil {
+		t.Fatalf("getOrCreatePassphraseSalt: %v", err)
+	}
+
+	content, err := os.ReadFile(target)
+	if err != nil {
+		t.Fatalf("read recipient file: %v", err)
+	}
+	if n := countSaltCommentLines(string(content)); n != 1 {
+		t.Fatalf("recipient file has %d salt comment lines, want exactly 1:\n%s", n, content)
+	}
+	if wantLine := passphraseSaltCommentPrefix + " " + wantSalt; !strings.Contains(string(content), wantLine+"\n") {
+		t.Fatalf("recipient file missing %q:\n%s", wantLine, content)
+	}
+
+	// The recipient line must survive alongside the comment and still parse
+	// (the comment is skipped by readRecipientFile).
+	wantRec, err := deriveDeterministicRecipientFromPassphraseWithSalt(testStrongPassphrase, wantSalt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	recs, err := readRecipientFile(target)
+	if err != nil {
+		t.Fatalf("readRecipientFile: %v", err)
+	}
+	if len(recs) != 1 || recs[0] != wantRec {
+		t.Fatalf("readRecipientFile = %v, want [%s]", recs, wantRec)
+	}
+
+	// Delete the sibling: the co-located salt must keep the manifest salt available.
+	if err := os.Remove(passphraseSaltFilePath(target)); err != nil {
+		t.Fatalf("remove sibling salt: %v", err)
+	}
+	got, err := o.passphraseSaltForManifest()
+	if err != nil {
+		t.Fatalf("passphraseSaltForManifest after sibling deletion: %v", err)
+	}
+	if got != wantSalt {
+		t.Fatalf("passphraseSaltForManifest = %q, want %q (co-located salt lost)", got, wantSalt)
+	}
+}
+
+// TestCoLocatedSaltDecryptsAfterSiblingDeleted proves the BACKUP-SAFETY goal:
+// an archive encrypted to the passphrase recipient still decrypts after the
+// passphrase.salt sibling is deleted, because the salt is co-located in
+// recipient.txt and flows into the manifest.
+func TestCoLocatedSaltDecryptsAfterSiblingDeleted(t *testing.T) {
+	tmp := t.TempDir()
+	cfg := &config.Config{EncryptArchive: true, BaseDir: tmp}
+	o := newEncryptionTestOrchestrator(cfg)
+	ui := &mockAgeSetupUI{
+		AbortErr: ErrAgeRecipientSetupAborted,
+		Drafts:   []*AgeRecipientDraft{{Kind: AgeRecipientInputPassphrase, Passphrase: testStrongPassphrase}},
+		AddMore:  []bool{false},
+	}
+	if err := o.EnsureAgeRecipientsReadyWithUI(context.Background(), ui); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+	target := filepath.Join(tmp, "identity", "age", "recipient.txt")
+
+	recs, err := readRecipientFile(target)
+	if err != nil || len(recs) != 1 {
+		t.Fatalf("readRecipientFile = %v, %v", recs, err)
+	}
+	plaintext := []byte("passphrase archive payload")
+	ciphertext := encryptToRecipient(t, recs[0], plaintext)
+
+	// Simulate the live data-loss: delete the standalone salt file.
+	if err := os.Remove(passphraseSaltFilePath(target)); err != nil {
+		t.Fatalf("remove sibling: %v", err)
+	}
+
+	// The manifest salt is recovered from recipient.txt.
+	salt, err := o.passphraseSaltForManifest()
+	if err != nil || salt == "" {
+		t.Fatalf("passphraseSaltForManifest = (%q, %v), want non-empty salt", salt, err)
+	}
+	ids, err := parseIdentityInputWithSalts(testStrongPassphrase, []string{salt})
+	if err != nil {
+		t.Fatalf("parseIdentityInputWithSalts: %v", err)
+	}
+	r, err := age.Decrypt(bytes.NewReader(ciphertext), ids...)
+	if err != nil {
+		t.Fatalf("decrypt after sibling deletion failed: %v", err)
+	}
+	gotPlain, err := io.ReadAll(r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(gotPlain, plaintext) {
+		t.Fatalf("decrypted = %q, want %q", gotPlain, plaintext)
+	}
+}
+
+// TestSetupRecipientOnlyHasNoSaltComment ensures recipient-only (X25519) setups
+// never gain a salt comment: there is no passphrase.salt sibling to co-locate.
+func TestSetupRecipientOnlyHasNoSaltComment(t *testing.T) {
+	id, err := age.GenerateX25519Identity()
+	if err != nil {
+		t.Fatalf("GenerateX25519Identity: %v", err)
+	}
+	tmp := t.TempDir()
+	cfg := &config.Config{EncryptArchive: true, BaseDir: tmp}
+	o := newEncryptionTestOrchestrator(cfg)
+	ui := &mockAgeSetupUI{
+		AbortErr: ErrAgeRecipientSetupAborted,
+		Drafts:   []*AgeRecipientDraft{{Kind: AgeRecipientInputExisting, PublicKey: id.Recipient().String()}},
+		AddMore:  []bool{false},
+	}
+	if err := o.EnsureAgeRecipientsReadyWithUI(context.Background(), ui); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+	target := filepath.Join(tmp, "identity", "age", "recipient.txt")
+	content, err := os.ReadFile(target)
+	if err != nil {
+		t.Fatalf("read recipient file: %v", err)
+	}
+	if n := countSaltCommentLines(string(content)); n != 0 {
+		t.Fatalf("recipient-only setup gained %d salt comment(s):\n%s", n, content)
+	}
+	if _, err := os.Stat(passphraseSaltFilePath(target)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("recipient-only setup created a passphrase.salt sibling: %v", err)
+	}
+}
+
+// TestCoLocatePassphraseSaltIdempotent proves the helper is safe to re-run (as
+// Task 6 does at backup time for backfill): a second call neither duplicates the
+// comment nor rewrites the file, and it is a no-op when no sibling salt exists.
+func TestCoLocatePassphraseSaltIdempotent(t *testing.T) {
+	tmp := t.TempDir()
+	target := filepath.Join(tmp, "identity", "age", "recipient.txt")
+	o := &Orchestrator{}
+
+	salt, err := o.getOrCreatePassphraseSalt(target)
+	if err != nil {
+		t.Fatalf("getOrCreatePassphraseSalt: %v", err)
+	}
+	rec, err := deriveDeterministicRecipientFromPassphraseWithSalt(testStrongPassphrase, salt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := writeRecipientFile(target, []string{rec}); err != nil {
+		t.Fatalf("writeRecipientFile: %v", err)
+	}
+
+	if err := o.coLocatePassphraseSalt(target); err != nil {
+		t.Fatalf("coLocatePassphraseSalt (1): %v", err)
+	}
+	first, err := os.ReadFile(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n := countSaltCommentLines(string(first)); n != 1 {
+		t.Fatalf("after first co-locate: %d salt comments, want 1:\n%s", n, first)
+	}
+
+	// Second call must be a byte-for-byte no-op (single comment, no duplication).
+	if err := o.coLocatePassphraseSalt(target); err != nil {
+		t.Fatalf("coLocatePassphraseSalt (2): %v", err)
+	}
+	second, err := os.ReadFile(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(first, second) {
+		t.Fatalf("second co-locate changed the file:\nfirst=%q\nsecond=%q", first, second)
+	}
+	if info, err := os.Stat(target); err != nil {
+		t.Fatal(err)
+	} else if perm := info.Mode().Perm(); perm != 0o600 {
+		t.Fatalf("recipient file perm = %v, want 0600", perm)
+	}
+
+	// No sibling -> no-op even though recipient.txt exists.
+	if err := os.Remove(passphraseSaltFilePath(target)); err != nil {
+		t.Fatal(err)
+	}
+	recipientOnly := filepath.Join(t.TempDir(), "recipient.txt")
+	if err := writeRecipientFile(recipientOnly, []string{rec}); err != nil {
+		t.Fatal(err)
+	}
+	if err := o.coLocatePassphraseSalt(recipientOnly); err != nil {
+		t.Fatalf("coLocatePassphraseSalt recipient-only: %v", err)
+	}
+	content, err := os.ReadFile(recipientOnly)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n := countSaltCommentLines(string(content)); n != 0 {
+		t.Fatalf("recipient-only gained %d salt comment(s):\n%s", n, content)
+	}
+}
+
 // saltReadErrFS wraps a FakeFS and fails ReadFile for one path with a
 // non-not-exist error, so a test can force a strict read failure on the
 // passphrase salt file.
