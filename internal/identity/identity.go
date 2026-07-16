@@ -933,11 +933,15 @@ func identityPayloadHasKeyLabels(fileContent string, logger *logging.Logger) boo
 	return false
 }
 
-// atomicWriteIdentityFile writes data to path via a temp sibling + rename, so a crash
-// or write error never leaves a truncated/zero-byte identity or secret file. The
+// atomicWriteIdentityFile writes data to path via a temp sibling + rename, so a write
+// ERROR never leaves a truncated/zero-byte identity or secret file: on any error the
+// temp is removed and the existing file is left untouched. It deliberately does NOT
+// fsync (unlike the systemd-unit writer), so a power loss in the narrow window after
+// the rename can still lose the NEW content; that is acceptable here because the secret
+// is re-provisioned via TOFU and the server identity is re-derived on the next run. The
 // caller has already cleared the +i immutable attribute on any existing target
 // (renaming over an immutable file returns EPERM) and re-sets +i on the new inode
-// afterward. On any error the temp is removed and the original is left untouched.
+// afterward.
 func atomicWriteIdentityFile(path string, data []byte, perm os.FileMode) error {
 	dir := filepath.Dir(path)
 	f, err := identityCreateTempFunc(dir, "."+filepath.Base(path)+".tmp-*")
