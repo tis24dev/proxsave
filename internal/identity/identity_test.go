@@ -433,11 +433,11 @@ func TestWriteIdentityFileWithContext_RelocksOnCanceledContextBeforeWrite(t *tes
 	}
 
 	origSetImmutable := writeIdentityFileWithContextSetImmutable
-	origWriteFile := writeIdentityFileWithContextWriteFile
+	origCreateTemp := identityCreateTempFunc
 	origChmod := writeIdentityFileWithContextChmod
 	t.Cleanup(func() {
 		writeIdentityFileWithContextSetImmutable = origSetImmutable
-		writeIdentityFileWithContextWriteFile = origWriteFile
+		identityCreateTempFunc = origCreateTemp
 		writeIdentityFileWithContextChmod = origChmod
 	})
 
@@ -454,9 +454,9 @@ func TestWriteIdentityFileWithContext_RelocksOnCanceledContextBeforeWrite(t *tes
 		}
 		return nil
 	}
-	writeIdentityFileWithContextWriteFile = func(path string, data []byte, perm os.FileMode) error {
+	identityCreateTempFunc = func(dir, pattern string) (*os.File, error) {
 		t.Fatal("writeIdentityFileWithContext should not write after context cancellation")
-		return nil
+		return nil, nil
 	}
 	writeIdentityFileWithContextChmod = func(path string, mode os.FileMode) error {
 		t.Fatal("writeIdentityFileWithContext should not chmod after context cancellation")
@@ -501,11 +501,11 @@ func TestWriteIdentityFileWithContext_RelocksOnWriteError(t *testing.T) {
 	}
 
 	origSetImmutable := writeIdentityFileWithContextSetImmutable
-	origWriteFile := writeIdentityFileWithContextWriteFile
+	origCreateTemp := identityCreateTempFunc
 	origChmod := writeIdentityFileWithContextChmod
 	t.Cleanup(func() {
 		writeIdentityFileWithContextSetImmutable = origSetImmutable
-		writeIdentityFileWithContextWriteFile = origWriteFile
+		identityCreateTempFunc = origCreateTemp
 		writeIdentityFileWithContextChmod = origChmod
 	})
 
@@ -519,8 +519,8 @@ func TestWriteIdentityFileWithContext_RelocksOnWriteError(t *testing.T) {
 		return nil
 	}
 	writeErr := errors.New("write failed")
-	writeIdentityFileWithContextWriteFile = func(path string, data []byte, perm os.FileMode) error {
-		return writeErr
+	identityCreateTempFunc = func(dir, pattern string) (*os.File, error) {
+		return nil, writeErr
 	}
 	writeIdentityFileWithContextChmod = func(path string, mode os.FileMode) error {
 		t.Fatal("writeIdentityFileWithContext should not chmod after write failure")
@@ -1904,4 +1904,66 @@ func TestBuildIdentityKeyFieldEmptyMACs(t *testing.T) {
 	// Should not be empty (at minimum uuid entries if uuid available)
 	// Even with empty input, the function should not panic
 	_ = keyField
+}
+
+// A rename failure during the identity write must leave the original .server_identity
+// intact (atomicity); the in-place os.WriteFile truncated it before it could fail.
+func TestWriteIdentityFile_AtomicRenameFailureKeepsOriginal(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, ".server_identity")
+	const original = "ORIGINAL-IDENTITY\n"
+	if err := os.WriteFile(path, []byte(original), 0o600); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	origSI := writeIdentityFileWithContextSetImmutable
+	origRename := writeIdentityFileWithContextRename
+	t.Cleanup(func() {
+		writeIdentityFileWithContextSetImmutable = origSI
+		writeIdentityFileWithContextRename = origRename
+	})
+	writeIdentityFileWithContextSetImmutable = func(context.Context, string, bool, *logging.Logger) error { return nil }
+	writeIdentityFileWithContextRename = func(oldname, newname string) error { return errors.New("rename boom") }
+
+	if err := writeIdentityFileWithContext(context.Background(), path, "NEW-IDENTITY", nil); err == nil {
+		t.Fatal("want error from failed atomic write, got nil")
+	}
+	got, _ := os.ReadFile(path)
+	if string(got) != original {
+		t.Fatalf("original modified: got %q want %q", string(got), original)
+	}
+	entries, _ := os.ReadDir(dir)
+	for _, e := range entries {
+		if strings.Contains(e.Name(), ".tmp-") {
+			t.Fatalf("leftover temp: %s", e.Name())
+		}
+	}
+}
+
+// Same atomicity guarantee for the notify secret (both funnel through the one helper).
+func TestPersistNotifySecret_AtomicRenameFailureKeepsOriginal(t *testing.T) {
+	baseDir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(baseDir, identityDirName), 0o750); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	secretPath := NotifySecretPath(baseDir)
+	const original = "old-secret\n"
+	if err := os.WriteFile(secretPath, []byte(original), 0o600); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	origSI := writeIdentityFileWithContextSetImmutable
+	origRename := writeIdentityFileWithContextRename
+	t.Cleanup(func() {
+		writeIdentityFileWithContextSetImmutable = origSI
+		writeIdentityFileWithContextRename = origRename
+	})
+	writeIdentityFileWithContextSetImmutable = func(context.Context, string, bool, *logging.Logger) error { return nil }
+	writeIdentityFileWithContextRename = func(oldname, newname string) error { return errors.New("rename boom") }
+
+	if err := PersistNotifySecret(context.Background(), baseDir, "new-secret", nil); err == nil {
+		t.Fatal("want error, got nil")
+	}
+	got, _ := os.ReadFile(secretPath)
+	if string(got) != original {
+		t.Fatalf("original secret modified: got %q want %q", string(got), original)
+	}
 }
