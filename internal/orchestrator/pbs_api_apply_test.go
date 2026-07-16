@@ -865,6 +865,58 @@ func TestApplyPBSDatastoreCfgViaAPI_ListFailure(t *testing.T) {
 	})
 }
 
+// P-08: the strict unmarshal-failure guard (a datastore list that runs but returns
+// unparseable JSON) must ALSO fail closed and never mutate datastores; non-strict
+// logs and self-heals via create/update. This is the sibling of the list-error case.
+func TestApplyPBSDatastoreCfgViaAPI_UnparseableList(t *testing.T) {
+	const listCmd = "proxmox-backup-manager datastore list --output-format=json"
+	const cfg = "datastore: ds1\n    path /p1\n    comment c1\n"
+	// Valid envelope, but data is not an array of rows: unwrap succeeds, the inner
+	// Unmarshal into []dsRow fails, exercising the strict JSON-parse guard.
+	garbage := []byte(`{"data":"not-an-array"}`)
+
+	t.Run("strict fails closed", func(t *testing.T) {
+		stageRoot, fs, runner := setupPBSAPIApplyTestDeps(t)
+		logger := logging.New(types.LogLevelDebug, false)
+		writeStageFile(t, fs, stageRoot, "etc/proxmox-backup/datastore.cfg", cfg, 0o640)
+		runner.outputs = map[string][]byte{listCmd: garbage}
+
+		err := applyPBSDatastoreCfgViaAPI(context.Background(), logger, stageRoot, true)
+		if err == nil {
+			t.Fatal("strict Clean 1:1 must fail closed on an unparseable datastore list, got nil")
+		}
+		if !strings.Contains(err.Error(), "cannot enforce Clean 1:1") {
+			t.Fatalf("error should name the Clean 1:1 failure, got: %v", err)
+		}
+		for _, c := range runner.calls {
+			if strings.HasPrefix(c, "proxmox-backup-manager datastore create") ||
+				strings.HasPrefix(c, "proxmox-backup-manager datastore remove") {
+				t.Fatalf("strict must not mutate datastores after an unparseable list, saw: %s", c)
+			}
+		}
+	})
+
+	t.Run("non-strict logs and continues", func(t *testing.T) {
+		stageRoot, fs, runner := setupPBSAPIApplyTestDeps(t)
+		logger := logging.New(types.LogLevelDebug, false)
+		writeStageFile(t, fs, stageRoot, "etc/proxmox-backup/datastore.cfg", cfg, 0o640)
+		runner.outputs = map[string][]byte{listCmd: garbage}
+
+		if err := applyPBSDatastoreCfgViaAPI(context.Background(), logger, stageRoot, false); err != nil {
+			t.Fatalf("non-strict must not fail on an unparseable list (create/update self-heals), got: %v", err)
+		}
+		sawCreate := false
+		for _, c := range runner.calls {
+			if strings.HasPrefix(c, "proxmox-backup-manager datastore create ds1") {
+				sawCreate = true
+			}
+		}
+		if !sawCreate {
+			t.Fatalf("non-strict must still apply the desired datastore, calls=%v", runner.calls)
+		}
+	})
+}
+
 func TestApplyPBSDatastoreCfgViaAPI_CurrentPathsFallbacksAndStrictRemoveWarn(t *testing.T) {
 	stageRoot, fs, runner := setupPBSAPIApplyTestDeps(t)
 	logger := logging.New(types.LogLevelDebug, false)
