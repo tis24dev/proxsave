@@ -319,6 +319,11 @@ func TestWriteFilesAtomic_CommittedTrueDirFsyncFailRollsBackLiveFile(t *testing.
 	if strings.Contains(err.Error(), "CRITICAL") {
 		t.Fatalf("rollback should have succeeded (not CRITICAL): %v", err)
 	}
+	// F06-08: a single-fault (rollback succeeded) is a LEGITIMATE warning, NOT the inconsistent
+	// state -> it must NOT wrap ErrRestoreInconsistentState, so it stays downgradable.
+	if errors.Is(err, ErrRestoreInconsistentState) {
+		t.Fatalf("single-fault rollback-succeeded error must NOT wrap ErrRestoreInconsistentState: %v", err)
+	}
 
 	// A committed then was rolled back; B committed (rename ok) then dir-fsync failed,
 	// so B is live and must ALSO be reverted; C never committed.
@@ -401,6 +406,11 @@ func TestWriteFilesAtomic_RollbackAlsoFailsReturnsCritical(t *testing.T) {
 	// BOTH failed rollbacks must be named (proves the loop did not stop at the first).
 	if !strings.Contains(err.Error(), pA) || !strings.Contains(err.Error(), pB) {
 		t.Errorf("CRITICAL error should list both failed rollbacks %s and %s, got: %v", pA, pB, err)
+	}
+	// F06-08: the both-failed (inconsistent-state) branch must be a TYPED error so the restore
+	// aborts instead of downgrading to "completed with warnings".
+	if !errors.Is(err, ErrRestoreInconsistentState) {
+		t.Errorf("both-failed error must wrap ErrRestoreInconsistentState, got: %v", err)
 	}
 }
 

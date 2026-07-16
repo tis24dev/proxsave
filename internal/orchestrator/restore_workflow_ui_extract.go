@@ -357,7 +357,10 @@ func (w *restoreUIWorkflowRun) applyPBSMountGuards() error {
 
 func (w *restoreUIWorkflowRun) runStageApplyStep(step restoreStageApplyStep) error {
 	if err := step.run(); err != nil {
-		if restoreAbortOrInput(err) {
+		// A user abort or an inconsistent-state failure (a half-written auth DB, F06-08) must
+		// HALT the restore, not be downgraded to a warning: propagate it so the run ends with a
+		// non-zero outcome instead of "completed with warnings".
+		if restoreAbortOrInput(err) || errors.Is(err, ErrRestoreInconsistentState) {
 			return err
 		}
 		w.restoreHadWarnings = true

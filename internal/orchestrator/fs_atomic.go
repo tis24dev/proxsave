@@ -369,7 +369,10 @@ func writeFilesAtomic(writes []atomicFileWrite) error {
 		}
 
 		if len(rollbackFailed) > 0 {
-			return fmt.Errorf("CRITICAL: commit of %s failed and rollback of %v also failed; the on-disk file set may be inconsistent and manual recovery is required: %w", s.cleanPath, rollbackFailed, err)
+			// Typed as ErrRestoreInconsistentState so the restore workflow ABORTS (non-zero
+			// outcome) instead of downgrading this to "completed with warnings" (F06-08). Both
+			// the sentinel and the underlying commit error are wrapped for errors.Is.
+			return fmt.Errorf("CRITICAL: commit of %s failed and rollback of %v also failed; the on-disk file set may be inconsistent and manual recovery is required: %w: %w", s.cleanPath, rollbackFailed, ErrRestoreInconsistentState, err)
 		}
 		return fmt.Errorf("commit %s failed; already-written files were rolled back to their originals: %w", s.cleanPath, err)
 	}
