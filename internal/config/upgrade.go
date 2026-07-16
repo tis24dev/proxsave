@@ -190,6 +190,7 @@ func computeConfigUpgrade(configPath string) (*UpgradeResult, string, []byte, er
 	// CRON_* scheduling is managed via crontab, not backup.env.
 	// ENABLE_SMART_CHUNKING / CHUNK_SIZE_MB / CHUNK_THRESHOLD_MB belonged to the
 	// removed smart-chunking optimization and are no longer read by the binary.
+	// BACKUP_USER_HOMES was removed; /home is always part of a system backup.
 	deprecatedUpperKeys := map[string]struct{}{
 		"BASE_DIR":              {},
 		"CRON_SCHEDULE":         {},
@@ -198,6 +199,7 @@ func computeConfigUpgrade(configPath string) (*UpgradeResult, string, []byte, er
 		"ENABLE_SMART_CHUNKING": {},
 		"CHUNK_SIZE_MB":         {},
 		"CHUNK_THRESHOLD_MB":    {},
+		"BACKUP_USER_HOMES":     {},
 	}
 	skipOriginalLines := make([]bool, len(originalLines))
 	prunedLineCount := 0

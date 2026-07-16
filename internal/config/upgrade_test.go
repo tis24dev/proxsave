@@ -217,6 +217,59 @@ func TestUpgradeConfigPrunesCronKeys(t *testing.T) {
 	})
 }
 
+func TestUpgradeConfigPrunesBackupUserHomes(t *testing.T) {
+	template := "KEY1=default\n"
+	withTemplate(t, template, func() {
+		tmpDir := t.TempDir()
+		configPath := filepath.Join(tmpDir, "backup.env")
+		content := "BACKUP_USER_HOMES=false\nKEY1=custom\n"
+		if err := os.WriteFile(configPath, []byte(content), 0600); err != nil {
+			t.Fatalf("failed to seed config: %v", err)
+		}
+
+		plan, err := PlanUpgradeConfigFile(configPath)
+		if err != nil {
+			t.Fatalf("PlanUpgradeConfigFile returned error: %v", err)
+		}
+		if !plan.Changed {
+			t.Fatal("expected result.Changed=true when BACKUP_USER_HOMES is pruned")
+		}
+		if len(plan.MissingKeys) != 0 {
+			t.Fatalf("MissingKeys = %v; want []", plan.MissingKeys)
+		}
+		if len(plan.ExtraKeys) != 0 {
+			t.Fatalf("ExtraKeys = %v; want [] (BACKUP_USER_HOMES should be pruned, not preserved)", plan.ExtraKeys)
+		}
+		warnings := strings.Join(plan.Warnings, "\n")
+		if !strings.Contains(warnings, "Removed deprecated keys from backup.env:") {
+			t.Fatalf("expected the removed-deprecated-keys warning, got: %s", warnings)
+		}
+		if !strings.Contains(warnings, "BACKUP_USER_HOMES") {
+			t.Fatalf("expected warnings to mention BACKUP_USER_HOMES pruning, got: %s", warnings)
+		}
+
+		result, err := UpgradeConfigFile(configPath)
+		if err != nil {
+			t.Fatalf("UpgradeConfigFile returned error: %v", err)
+		}
+		if !result.Changed {
+			t.Fatal("expected result.Changed=true when BACKUP_USER_HOMES is pruned")
+		}
+
+		data, err := os.ReadFile(configPath)
+		if err != nil {
+			t.Fatalf("failed to read upgraded config: %v", err)
+		}
+		updated := string(data)
+		if strings.Contains(updated, "BACKUP_USER_HOMES") {
+			t.Fatalf("expected BACKUP_USER_HOMES to be removed, got:\n%s", updated)
+		}
+		if !strings.Contains(updated, "KEY1=custom") {
+			t.Fatalf("expected KEY1 preserved, got:\n%s", updated)
+		}
+	})
+}
+
 func TestPlanUpgradeEmptyPath(t *testing.T) {
 	if _, err := PlanUpgradeConfigFile("   "); err == nil {
 		t.Fatal("expected error for empty config path")
