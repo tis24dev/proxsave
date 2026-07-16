@@ -3,7 +3,9 @@ package backup
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -399,7 +401,9 @@ func prefilterFiles(ctx context.Context, logger *logging.Logger, root string, ma
 		ext := strings.ToLower(filepath.Ext(path))
 		switch ext {
 		case ".txt", ".log", ".md":
-			if c, err := normalizeTextFile(rootFS, rel); err == nil && c {
+			if c, err := normalizeTextFile(rootFS, rel); err != nil {
+				logger.Warning("Prefilter: failed to optimize %s (kept original): %v", rel, err)
+			} else if c {
 				changed = true
 			}
 		case ".conf", ".cfg", ".ini":
@@ -407,7 +411,9 @@ func prefilterFiles(ctx context.Context, logger *logging.Logger, root string, ma
 				stats.skippedStructured++
 				return nil
 			}
-			if c, err := normalizeConfigFile(rootFS, rel); err == nil && c {
+			if c, err := normalizeConfigFile(rootFS, rel); err != nil {
+				logger.Warning("Prefilter: failed to optimize %s (kept original): %v", rel, err)
+			} else if c {
 				changed = true
 			}
 		case ".json":
@@ -415,7 +421,9 @@ func prefilterFiles(ctx context.Context, logger *logging.Logger, root string, ma
 				stats.skippedStructured++
 				return nil
 			}
-			if c, err := minifyJSON(rootFS, rel); err == nil && c {
+			if c, err := minifyJSON(rootFS, rel); err != nil {
+				logger.Warning("Prefilter: failed to optimize %s (kept original): %v", rel, err)
+			} else if c {
 				changed = true
 			}
 		}
@@ -438,6 +446,50 @@ func prefilterFiles(ctx context.Context, logger *logging.Logger, root string, ma
 	return reclaimed, nil
 }
 
+// prefilterRootRename is the rename step of atomicRootRewrite, isolated as a var so
+// tests can force a post-write failure and assert the staged original is preserved.
+var prefilterRootRename = func(root *os.Root, oldname, newname string) error {
+	return root.Rename(oldname, newname)
+}
+
+// atomicRootRewrite writes data to name atomically within root: it O_EXCL-creates a
+// uniquely named temp sibling, writes+closes it, then renames it over name. On any
+// error the temp is removed and name is left untouched, so a failed rewrite never
+// truncates the staged original. All I/O is confined to root (os.Root), so no path
+// escapes the staging tree (same traversal defense as normalizeTextFile).
+func atomicRootRewrite(root *os.Root, name string, data []byte, perm os.FileMode) error {
+	tmp := name + "." + randomHexSuffix() + ".tmp"
+	f, err := root.OpenFile(tmp, os.O_CREATE|os.O_WRONLY|os.O_EXCL, perm)
+	if err != nil {
+		return err
+	}
+	if _, err := f.Write(data); err != nil {
+		_ = f.Close()
+		_ = root.Remove(tmp)
+		return err
+	}
+	if err := f.Close(); err != nil {
+		_ = root.Remove(tmp)
+		return err
+	}
+	if err := prefilterRootRename(root, tmp, name); err != nil {
+		_ = root.Remove(tmp)
+		return err
+	}
+	return nil
+}
+
+// randomHexSuffix returns a 16-hex-char token for a unique temp name, so the O_EXCL
+// create never clobbers a real staged file that happens to carry a fixed suffix (the
+// dedup path avoids fixed suffixes for the same reason).
+func randomHexSuffix() string {
+	var b [8]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return "tmp"
+	}
+	return hex.EncodeToString(b[:])
+}
+
 // normalizeTextFile reads and rewrites name through root, an *os.Root opened on
 // the staging tree. Using os.Root confines all I/O inside that tree at the
 // syscall level, so a path that tried to escape (via "..") would be rejected —
@@ -451,7 +503,7 @@ func normalizeTextFile(root *os.Root, name string) (bool, error) {
 	if bytes.Equal(data, normalized) {
 		return false, nil
 	}
-	return true, root.WriteFile(name, normalized, defaultOptimizedFilePerm)
+	return true, atomicRootRewrite(root, name, normalized, defaultOptimizedFilePerm)
 }
 
 func normalizeConfigFile(root *os.Root, name string) (bool, error) {
@@ -477,5 +529,5 @@ func minifyJSON(root *os.Root, name string) (bool, error) {
 	if bytes.Equal(bytes.TrimSpace(data), minified) {
 		return false, nil
 	}
-	return true, root.WriteFile(name, minified, defaultOptimizedFilePerm)
+	return true, atomicRootRewrite(root, name, minified, defaultOptimizedFilePerm)
 }
