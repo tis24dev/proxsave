@@ -3,6 +3,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"sort"
@@ -220,12 +221,40 @@ var (
 	migrateLegacyCronEntriesFn = migrateLegacyCronEntries
 )
 
+var (
+	// errDaemonTeardownBackupRunning defers a daemon revert because a backup is still running
+	// after the bounded wait; the caller reports it and leaves the daemon in place (never killing it).
+	errDaemonTeardownBackupRunning = errors.New("a backup is in progress; the daemon was not removed")
+	// errDaemonTeardownConfigUnreadable defers a daemon revert because the config (and thus the
+	// real backup lock path) could not be read; fail-closed so a backup on a custom LOCK_PATH is
+	// never killed blindly.
+	errDaemonTeardownConfigUnreadable = errors.New("the configuration could not be read; the daemon was not removed")
+)
+
 // applyCronMode reverts an install to cron: re-add the canonical cron entry at the
 // configured schedule, record SCHEDULER_MODE=cron (plus DAEMON_OPT_OUT=true when optOut,
 // the --daemon-remove tombstone that stops future upgrades from re-migrating), and only
 // THEN remove the systemd unit. The cron fallback is established first so a teardown
 // failure never leaves the host unscheduled with a stale mode=daemon (F09-06).
 func applyCronMode(ctx context.Context, cfg *config.Config, configPath, execToken string, bootstrap *logging.BootstrapLogger, optOut bool) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	// F09-05: never tear down the daemon on top of a running, daemon-supervised backup
+	// (removeDaemonService stops the unit, killing it). Mirror the restart guard (F11-08):
+	// resolve the REAL backup lock path and wait bounded for idle. If the config is unreadable
+	// or a backup will not free, abort the revert (nothing changed) so the caller can retry.
+	if cfg == nil {
+		return errDaemonTeardownConfigUnreadable
+	}
+	lockPath, lockKnown := backupLockFilePath(cfg, cfg.BaseDir)
+	if !lockKnown {
+		return errDaemonTeardownConfigUnreadable
+	}
+	if waitForBackupIdle(ctx, lockPath) {
+		return errDaemonTeardownBackupRunning
+	}
+
 	// Establish the cron fallback FIRST: re-add the canonical cron line and persist
 	// SCHEDULER_MODE=cron before removing the daemon unit.
 	migrateLegacyCronEntriesFn(ctx, cfg.BaseDir, execToken, bootstrap, cron.TimeToSchedule(cfg.SchedulerTime))

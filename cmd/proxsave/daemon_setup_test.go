@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/tis24dev/proxsave/internal/cli"
 	"github.com/tis24dev/proxsave/internal/config"
@@ -165,5 +166,101 @@ func TestApplyCronMode_PersistsCronModeBeforeTeardown(t *testing.T) {
 	data, _ := os.ReadFile(configPath)
 	if !strings.Contains(string(data), "SCHEDULER_MODE=cron") {
 		t.Fatalf("SCHEDULER_MODE=cron must be persisted before teardown, got:\n%s", data)
+	}
+}
+
+func TestApplyCronModeDefersWhileBackupRunning(t *testing.T) {
+	origRun := restartVerifyBackupRunning
+	origRemove := removeDaemonServiceFn
+	origMigrate := migrateLegacyCronEntriesFn
+	t.Cleanup(func() {
+		restartVerifyBackupRunning = origRun
+		removeDaemonServiceFn = origRemove
+		migrateLegacyCronEntriesFn = origMigrate
+	})
+	restartVerifyBackupRunning = func(string) bool { return true } // backup always running
+	removeCalled := false
+	removeDaemonServiceFn = func(context.Context, *logging.BootstrapLogger) error {
+		removeCalled = true
+		return nil
+	}
+	migrateCalled := false
+	migrateLegacyCronEntriesFn = func(context.Context, string, string, *logging.BootstrapLogger, string) {
+		migrateCalled = true
+	}
+
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "backup.env")
+	if err := os.WriteFile(configPath, []byte("SCHEDULER_MODE=daemon\nSCHEDULER_TIME=02:00\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg := &config.Config{BaseDir: dir, SchedulerTime: "02:00"}
+
+	// A tight parent deadline makes waitForBackupIdle's bounded wait elapse in ms
+	// (it wraps ctx with WithTimeout(ctx, backupWaitTimeout=4m); the tighter parent wins),
+	// so the guard defers without the real 4-minute wait.
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+
+	err := applyCronMode(ctx, cfg, configPath, "/usr/local/bin/proxsave", nil, true)
+	if !errors.Is(err, errDaemonTeardownBackupRunning) {
+		t.Fatalf("want errDaemonTeardownBackupRunning, got %v", err)
+	}
+	if removeCalled {
+		t.Fatal("SAFETY VIOLATION: removeDaemonServiceFn (systemctl stop) ran while a backup was running")
+	}
+	if migrateCalled {
+		t.Fatal("nothing must change on a defer: migrate must not run")
+	}
+}
+
+func TestApplyCronModeProceedsWhenIdle(t *testing.T) {
+	origRun := restartVerifyBackupRunning
+	origRemove := removeDaemonServiceFn
+	origMigrate := migrateLegacyCronEntriesFn
+	t.Cleanup(func() {
+		restartVerifyBackupRunning = origRun
+		removeDaemonServiceFn = origRemove
+		migrateLegacyCronEntriesFn = origMigrate
+	})
+	restartVerifyBackupRunning = func(string) bool { return false } // idle
+	removeCalled := false
+	removeDaemonServiceFn = func(context.Context, *logging.BootstrapLogger) error {
+		removeCalled = true
+		return nil
+	}
+	migrateLegacyCronEntriesFn = func(context.Context, string, string, *logging.BootstrapLogger, string) {}
+
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "backup.env")
+	if err := os.WriteFile(configPath, []byte("SCHEDULER_MODE=daemon\nSCHEDULER_TIME=02:00\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg := &config.Config{BaseDir: dir, SchedulerTime: "02:00"}
+
+	err := applyCronMode(context.Background(), cfg, configPath, "/usr/local/bin/proxsave", nil, true)
+	if err != nil {
+		t.Fatalf("idle host must proceed, got %v", err)
+	}
+	if !removeCalled {
+		t.Fatal("idle host: teardown must run (no false defer)")
+	}
+}
+
+func TestApplyCronModeFailsClosedOnNilConfig(t *testing.T) {
+	origRemove := removeDaemonServiceFn
+	t.Cleanup(func() { removeDaemonServiceFn = origRemove })
+	removeCalled := false
+	removeDaemonServiceFn = func(context.Context, *logging.BootstrapLogger) error {
+		removeCalled = true
+		return nil
+	}
+
+	err := applyCronMode(context.Background(), nil, "/nonexistent/backup.env", "/usr/local/bin/proxsave", nil, true)
+	if !errors.Is(err, errDaemonTeardownConfigUnreadable) {
+		t.Fatalf("nil config must fail closed, got %v", err)
+	}
+	if removeCalled {
+		t.Fatal("nil config: teardown must not run")
 	}
 }
