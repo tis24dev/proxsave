@@ -128,6 +128,28 @@ func TestRunIntro_FullFlowWithRetries(t *testing.T) {
 	}
 }
 
+// TestRunIntro_RejectsZeroIssue: "#0" is not a valid GitHub issue number (they start at 1),
+// so RunIntro must reject it, retry, and accept the next valid "#123".
+func TestRunIntro_RejectsZeroIssue(t *testing.T) {
+	withStdinFile(t, strings.Join([]string{
+		"y",    // accept
+		"y",    // has issue
+		"user", // nickname
+		"#0",   // invalid issue (zero -> retry)
+		"#123", // valid
+		"",
+	}, "\n"))
+	bootstrap := logging.NewBootstrapLogger()
+
+	meta, ok, interrupted := RunIntro(context.Background(), bootstrap)
+	if !ok || interrupted {
+		t.Fatalf("ok=%v interrupted=%v; want true/false", ok, interrupted)
+	}
+	if meta.IssueID != "#123" {
+		t.Fatalf("IssueID=%q; want %q", meta.IssueID, "#123")
+	}
+}
+
 func TestRunIntro_CanceledContextInterrupts(t *testing.T) {
 	// Provide at least one line so the read goroutine can complete and exit.
 	withStdinFile(t, "y\n")

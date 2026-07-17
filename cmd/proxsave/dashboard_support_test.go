@@ -21,7 +21,7 @@ func TestValidateSupportIssue(t *testing.T) {
 			t.Errorf("%q should be valid: %v", v, err)
 		}
 	}
-	for _, v := range []string{"", "1234", "#", "#abc", "abc", "#12a"} {
+	for _, v := range []string{"", "1234", "#", "#abc", "abc", "#12a", "#-1", "#+1", "#0", "#00"} {
 		if err := validateSupportIssue(v); err == nil {
 			t.Errorf("%q should be invalid", v)
 		}

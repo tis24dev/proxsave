@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"strconv"
 	"strings"
 
 	"github.com/tis24dev/proxsave/internal/support"
@@ -62,17 +61,8 @@ func runDashboardSupportForm(ctx context.Context, session *shell.Session) (suppo
 	}, true
 }
 
-// validateSupportIssue enforces the #<number> issue format (mirrors support.RunIntro).
+// validateSupportIssue enforces the #<number> issue format via the shared helper
+// (mirrors support.RunIntro).
 func validateSupportIssue(v string) error {
-	issue := strings.TrimSpace(v)
-	if issue == "" {
-		return fmt.Errorf("issue cannot be empty")
-	}
-	if !strings.HasPrefix(issue, "#") || len(issue) < 2 {
-		return fmt.Errorf("issue must start with '#' and a numeric id, e.g. #1234")
-	}
-	if _, err := strconv.Atoi(issue[1:]); err != nil {
-		return fmt.Errorf("issue must be #<number>, e.g. #1234")
-	}
-	return nil
+	return support.ValidateIssueID(v)
 }

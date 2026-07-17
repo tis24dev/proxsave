@@ -42,6 +42,27 @@ var newEmailNotifier = func(config notify.EmailConfig, proxmoxType types.Proxmox
 // backup run never calls RunIntro.
 var supportIdleTimeout = input.DefaultIdleTimeout
 
+// ValidateIssueID accepts a GitHub issue reference of the form #<positive-decimal>.
+// It rejects a missing/short token, a signed value (#-1/#+1), and #0/#00 (issue
+// numbers start at 1). Leading zeros (e.g. #01234) are accepted.
+func ValidateIssueID(v string) error {
+	s := strings.TrimSpace(v)
+	if !strings.HasPrefix(s, "#") || len(s) < 2 {
+		return fmt.Errorf("issue must be #<number>, for example #1234")
+	}
+	digits := s[1:]
+	for _, r := range digits {
+		if r < '0' || r > '9' {
+			return fmt.Errorf("issue must be #<number>, for example #1234")
+		}
+	}
+	n, err := strconv.Atoi(digits)
+	if err != nil || n <= 0 {
+		return fmt.Errorf("issue must be #<number>, for example #1234")
+	}
+	return nil
+}
+
 // RunIntro prompts for consent and GitHub metadata.
 // ok=false means the user declined or aborted; interrupted=true means context cancel / Ctrl+C.
 func RunIntro(ctx context.Context, bootstrap *logging.BootstrapLogger) (meta Meta, ok bool, interrupted bool) {
@@ -127,11 +148,7 @@ func RunIntro(ctx context.Context, bootstrap *logging.BootstrapLogger) (meta Met
 			fmt.Println("Issue number cannot be empty. Please try again.")
 			continue
 		}
-		if !strings.HasPrefix(issue, "#") || len(issue) < 2 {
-			fmt.Println("Issue must start with '#' and contain a numeric ID, for example: #1234.")
-			continue
-		}
-		if _, err := strconv.Atoi(issue[1:]); err != nil {
+		if err := ValidateIssueID(issue); err != nil {
 			fmt.Println("Issue must be in the format #1234 with a numeric ID. Please try again.")
 			continue
 		}
