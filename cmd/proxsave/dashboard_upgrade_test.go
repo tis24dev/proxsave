@@ -10,6 +10,8 @@ import (
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/tis24dev/proxsave/internal/cli"
+	"github.com/tis24dev/proxsave/internal/config"
+	"github.com/tis24dev/proxsave/internal/health"
 	"github.com/tis24dev/proxsave/internal/logging"
 	"github.com/tis24dev/proxsave/internal/ui/shell"
 	"github.com/tis24dev/proxsave/internal/uitest"
@@ -289,5 +291,85 @@ func TestDashboardUpgradeMenu(t *testing.T) {
 	case <-done:
 	case <-time.After(uitest.Deadline(60 * time.Second)):
 		t.Fatal("upgrade chooser did not return")
+	}
+}
+
+// TestDashboardUpgradeRestartDaemonRelaunchNote drives a daemon-ACTIVE upgrade: after the
+// upgrade installs and the resident daemon restarts cleanly (aligned), the result screen must
+// still tell the user their interactive process runs the old binary and must be relaunched --
+// the same relaunch note the daemon-inactive branch already shows. Both the "RESTARTED, ALIGNED"
+// keyword AND the "relaunch proxsave" note must appear.
+func TestDashboardUpgradeRestartDaemonRelaunchNote(t *testing.T) {
+	origVer, origChk := dashboardUpgradeVersion, dashboardUpgradeCheck
+	origRun, origInstalled, origLoad := dashboardUpgradeRun, daemonInstalledProbe, upgradeLoadConfig
+	t.Cleanup(func() {
+		dashboardUpgradeVersion, dashboardUpgradeCheck = origVer, origChk
+		dashboardUpgradeRun, daemonInstalledProbe, upgradeLoadConfig = origRun, origInstalled, origLoad
+	})
+
+	dashboardUpgradeVersion = func() string { return "1.0.0" }
+	dashboardUpgradeCheck = func(context.Context, *logging.Logger, string) *UpdateInfo {
+		return &UpdateInfo{NewVersion: true, Current: "1.0.0", Latest: "2.0.0", Tag: "v2.0.0"}
+	}
+	dashboardUpgradeRun = func(context.Context, *cli.Args, *logging.BootstrapLogger) int { return 0 }
+
+	// Daemon-ACTIVE path: an installed unit + active presence route the post-upgrade restart
+	// through restartAndVerifyDaemon. A readable (empty) config keeps the backup lock path
+	// KNOWN so the restart is not deferred.
+	daemonInstalledProbe = func() bool { return true }
+	upgradeLoadConfig = func(string, string) (*config.Config, error) { return &config.Config{}, nil }
+
+	// A clean, fresh, aligned restart: idle backup, no-op restart, and a state that is
+	// process-alive + aligned + fresh (StartTS far past any snapshot). stubRestartSeams also
+	// pins daemonPresenceProbe to Active so daemonIsActive is true.
+	shrinkRestartBudgets(t)
+	stubRestartSeams(t,
+		func(context.Context) error { return nil },
+		func(string) bool { return false },
+		func(health.DaemonStateInput) health.DaemonState {
+			return health.DaemonState{ProcessAlive: true, Aligned: true, AlignChecked: true, StartTS: 1 << 60, Version: "9.9.9"}
+		})
+
+	driver := &newkeyUIDriver{t: t, buf: &shell.SyncBuffer{}, pushes: make(chan string, 64)}
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	driver.session = shell.StartObservedForTest(ctx, shell.Config{AppName: "ProxSave", Subtitle: "Dashboard"},
+		driver.buf, func(title string) { driver.pushes <- title })
+
+	done := make(chan struct{})
+	go func() {
+		runDashboardUpgrade(ctx, driver.session, "/tmp/backup.env")
+		close(done)
+	}()
+
+	waitFor := func(substr string) {
+		deadline := time.After(uitest.Deadline(15 * time.Second))
+		for {
+			if strings.Contains(ansi.Strip(driver.buf.String()), substr) {
+				return
+			}
+			select {
+			case <-deadline:
+				t.Fatalf("timed out waiting for %q, tail:\n%s", substr, tailStr(ansi.Strip(driver.buf.String())))
+			case <-time.After(20 * time.Millisecond):
+			}
+		}
+	}
+
+	driver.waitScreen("Upgrade")
+	waitFor("2.0.0")     // auto-check found the update
+	driver.keys("enter") // Run upgrade
+	driver.waitScreen("Running upgrade")
+	driver.waitOutput("enter continue")
+	driver.keys("enter") // leave the stream panel -> daemon-active restart step
+	driver.waitScreen("Daemon restart")
+	waitFor("RESTARTED, ALIGNED") // the aligned success keyword
+	waitFor("relaunch proxsave")  // ...plus the relaunch note (absent in the active branch before the fix)
+
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(uitest.Deadline(60 * time.Second)):
+		t.Fatal("upgrade screen did not return")
 	}
 }

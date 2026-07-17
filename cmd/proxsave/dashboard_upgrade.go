@@ -301,5 +301,15 @@ func dashboardUpgradeRestartDaemon(ctx context.Context, session *shell.Session, 
 			return nil
 		})
 	level, keyword, explanation := restartVerifyStatus(rv)
+	// The daemon was restarted onto the new binary, but THIS interactive process is still
+	// the old one, so append the relaunch note (as the daemon-inactive branch above does).
+	// restartVerifyStatus is shared with the plain Restart button, where this note would be
+	// wrong, so append here rather than in the shared helper.
+	const relaunch = "This process still runs the old version; relaunch proxsave."
+	if strings.TrimSpace(explanation) == "" {
+		explanation = relaunch
+	} else {
+		explanation += " " + relaunch
+	}
 	showDaemonResultScreen(ctx, session, "Daemon restart", level, keyword, explanation)
 }
