@@ -507,6 +507,9 @@ func runDashboardDaemonStatus(ctx context.Context, session *shell.Session, confi
 				optOut = "yes"
 			}
 			interval = cfg.HealthcheckHeartbeatInterval
+			if strings.TrimSpace(cfg.BaseDir) != "" {
+				baseDir = cfg.BaseDir
+			}
 		}
 		unit := "not installed"
 		if daemonUnitInstalled() {
