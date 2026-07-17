@@ -817,9 +817,13 @@ func upgradeFooterBody(upgradeErr error, version, configPath, baseDir, telegramC
 	title := "Upgrade completed"
 	color := "\033[32m" // green
 
-	if upgradeErr != nil {
+	switch {
+	case upgradeErr != nil:
 		color = "\033[31m"
 		title = "Upgrade failed"
+	case cfgUpgradeErr != nil:
+		color = "\033[31m"
+		title = "Upgrade failed (configuration upgrade error)"
 	}
 
 	fmt.Println()
