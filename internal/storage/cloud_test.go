@@ -689,11 +689,11 @@ func TestCloudStorageStoreUploadsWithRemotePrefix(t *testing.T) {
 	queue := &commandQueue{
 		t: t,
 		queue: []queuedResponse{
-			{name: "rclone", args: []string{"copyto", "--progress", "--stats", "10s", backupFile, "remote:tenants/a/pbs1-backup.tar.zst"}},
+			{name: "rclone", args: []string{"copyto", backupFile, "remote:tenants/a/pbs1-backup.tar.zst"}},
 			{name: "rclone", args: []string{"lsl", "remote:tenants/a/pbs1-backup.tar.zst"}, out: "7 2025-11-13 10:00:00 pbs1-backup.tar.zst"},
-			{name: "rclone", args: []string{"copyto", "--progress", "--stats", "10s", backupFile + ".sha256", "remote:tenants/a/pbs1-backup.tar.zst.sha256"}},
-			{name: "rclone", args: []string{"copyto", "--progress", "--stats", "10s", backupFile + ".metadata", "remote:tenants/a/pbs1-backup.tar.zst.metadata"}},
-			{name: "rclone", args: []string{"copyto", "--progress", "--stats", "10s", backupFile + ".metadata.sha256", "remote:tenants/a/pbs1-backup.tar.zst.metadata.sha256"}},
+			{name: "rclone", args: []string{"copyto", backupFile + ".sha256", "remote:tenants/a/pbs1-backup.tar.zst.sha256"}},
+			{name: "rclone", args: []string{"copyto", backupFile + ".metadata", "remote:tenants/a/pbs1-backup.tar.zst.metadata"}},
+			{name: "rclone", args: []string{"copyto", backupFile + ".metadata.sha256", "remote:tenants/a/pbs1-backup.tar.zst.metadata.sha256"}},
 			{name: "rclone", args: []string{"lsl", "remote:tenants/a"}, out: "7 2025-11-13 10:00:00 pbs1-backup.tar.zst"},
 		},
 	}
@@ -733,12 +733,12 @@ func TestCloudStorageStoreUploadsManifest(t *testing.T) {
 	queue := &commandQueue{
 		t: t,
 		queue: []queuedResponse{
-			{name: "rclone", args: []string{"copyto", "--progress", "--stats", "10s", backupFile, "remote:tenants/a/pbs1-backup.tar.zst"}},
+			{name: "rclone", args: []string{"copyto", backupFile, "remote:tenants/a/pbs1-backup.tar.zst"}},
 			{name: "rclone", args: []string{"lsl", "remote:tenants/a/pbs1-backup.tar.zst"}, out: "7 2025-11-13 10:00:00 pbs1-backup.tar.zst"},
-			{name: "rclone", args: []string{"copyto", "--progress", "--stats", "10s", backupFile + ".sha256", "remote:tenants/a/pbs1-backup.tar.zst.sha256"}},
-			{name: "rclone", args: []string{"copyto", "--progress", "--stats", "10s", backupFile + ".manifest.json", "remote:tenants/a/pbs1-backup.tar.zst.manifest.json"}},
-			{name: "rclone", args: []string{"copyto", "--progress", "--stats", "10s", backupFile + ".metadata", "remote:tenants/a/pbs1-backup.tar.zst.metadata"}},
-			{name: "rclone", args: []string{"copyto", "--progress", "--stats", "10s", backupFile + ".metadata.sha256", "remote:tenants/a/pbs1-backup.tar.zst.metadata.sha256"}},
+			{name: "rclone", args: []string{"copyto", backupFile + ".sha256", "remote:tenants/a/pbs1-backup.tar.zst.sha256"}},
+			{name: "rclone", args: []string{"copyto", backupFile + ".manifest.json", "remote:tenants/a/pbs1-backup.tar.zst.manifest.json"}},
+			{name: "rclone", args: []string{"copyto", backupFile + ".metadata", "remote:tenants/a/pbs1-backup.tar.zst.metadata"}},
+			{name: "rclone", args: []string{"copyto", backupFile + ".metadata.sha256", "remote:tenants/a/pbs1-backup.tar.zst.metadata.sha256"}},
 			{name: "rclone", args: []string{"lsl", "remote:tenants/a"}, out: "7 2025-11-13 10:00:00 pbs1-backup.tar.zst"},
 		},
 	}
@@ -773,7 +773,7 @@ func TestCloudStorageStorePrefersBundleWhenPresent(t *testing.T) {
 	queue := &commandQueue{
 		t: t,
 		queue: []queuedResponse{
-			{name: "rclone", args: []string{"copyto", "--progress", "--stats", "10s", bundleFile, remoteFile}},
+			{name: "rclone", args: []string{"copyto", bundleFile, remoteFile}},
 			{name: "rclone", args: []string{"lsl", remoteFile}, out: "6 2025-11-13 10:00:00 pbs1-backup.tar.zst.bundle.tar"},
 			{name: "rclone", args: []string{"lsl", "remote:"}, out: "6 2025-11-13 10:00:00 pbs1-backup.tar.zst.bundle.tar"},
 		},
@@ -808,7 +808,7 @@ func TestCloudStorageStoreBundleInputSkipsDoubleBundleUpload(t *testing.T) {
 	queue := &commandQueue{
 		t: t,
 		queue: []queuedResponse{
-			{name: "rclone", args: []string{"copyto", "--progress", "--stats", "10s", bundleFile, remoteFile}},
+			{name: "rclone", args: []string{"copyto", bundleFile, remoteFile}},
 			{name: "rclone", args: []string{"lsl", remoteFile}, out: "6 2025-11-13 10:00:00 pbs1-backup.tar.zst.bundle.tar"},
 			{name: "rclone", args: []string{"lsl", "remote:"}, out: "6 2025-11-13 10:00:00 pbs1-backup.tar.zst.bundle.tar"},
 		},
@@ -840,7 +840,7 @@ func TestCloudStorageStorePrimaryFailure(t *testing.T) {
 	queue := &commandQueue{
 		t: t,
 		queue: []queuedResponse{
-			{name: "rclone", args: []string{"copyto", "--progress", "--stats", "10s", backupFile, "remote:pbs1-backup.tar.zst"}, err: errors.New("boom")},
+			{name: "rclone", args: []string{"copyto", backupFile, "remote:pbs1-backup.tar.zst"}, err: errors.New("boom")},
 		},
 	}
 	cs.execCommand = queue.exec
@@ -880,9 +880,9 @@ func TestCloudStorageStoreAssociatedFailure(t *testing.T) {
 	queue := &commandQueue{
 		t: t,
 		queue: []queuedResponse{
-			{name: "rclone", args: []string{"copyto", "--progress", "--stats", "10s", backupFile, "remote:pbs1-backup.tar.zst"}},
+			{name: "rclone", args: []string{"copyto", backupFile, "remote:pbs1-backup.tar.zst"}},
 			{name: "rclone", args: []string{"lsl", "remote:pbs1-backup.tar.zst"}, out: "7 2025-11-13 10:00:00 pbs1-backup.tar.zst"},
-			{name: "rclone", args: []string{"copyto", "--progress", "--stats", "10s", backupFile + ".sha256", "remote:pbs1-backup.tar.zst.sha256"}, err: errors.New("assoc failed")},
+			{name: "rclone", args: []string{"copyto", backupFile + ".sha256", "remote:pbs1-backup.tar.zst.sha256"}, err: errors.New("assoc failed")},
 		},
 	}
 	cs.execCommand = queue.exec
@@ -935,7 +935,7 @@ func TestCloudStorageUploadToRemotePath(t *testing.T) {
 	queue := &commandQueue{
 		t: t,
 		queue: []queuedResponse{
-			{name: "rclone", args: []string{"copyto", "--progress", "--stats", "10s", localFile, "other:logs/logfile.txt"}},
+			{name: "rclone", args: []string{"copyto", localFile, "other:logs/logfile.txt"}},
 			{name: "rclone", args: []string{"lsl", "other:logs/logfile.txt"}, out: "3 2025-11-13 10:00:00 logfile.txt"},
 		},
 	}

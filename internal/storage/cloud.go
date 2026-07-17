@@ -1067,8 +1067,13 @@ func (c *CloudStorage) UploadToRemotePath(ctx context.Context, localFile, remote
 	return nil
 }
 
-// rcloneCopy executes rclone copy command
-func (c *CloudStorage) rcloneCopy(ctx context.Context, localFile, remoteFile string) error {
+// buildRcloneUploadArgs assembles the argv for the headless rclone copy of a
+// single file (subcommand, configured flags, source and destination). proxsave
+// rclone runs are always headless (daemon/cron, no TTY), so --progress/--stats
+// are deliberately omitted: they yield nothing useful and accumulate stats
+// output in memory over multi-hour uploads that then bloats error messages
+// captured via CombinedOutput.
+func (c *CloudStorage) buildRcloneUploadArgs(localFile, remoteFile string) []string {
 	args := c.buildRcloneArgs("copyto")
 
 	// Add bandwidth limit if configured
@@ -1081,11 +1086,26 @@ func (c *CloudStorage) rcloneCopy(ctx context.Context, localFile, remoteFile str
 		args = append(args, "--transfers", fmt.Sprintf("%d", c.config.RcloneTransfers))
 	}
 
-	// Add progress and stats
-	args = append(args, "--progress", "--stats", "10s")
-
 	// Add source and destination
 	args = append(args, localFile, remoteFile)
+
+	return args
+}
+
+// truncateRcloneOutput bounds captured rclone output to its last maxTail bytes
+// before it is folded into an error message, so a long headless upload cannot
+// carry a multi-megabyte blob into the returned error.
+func truncateRcloneOutput(out []byte) []byte {
+	const maxTail = 4 << 10
+	if len(out) <= maxTail {
+		return out
+	}
+	return append([]byte("...(truncated)...\n"), out[len(out)-maxTail:]...)
+}
+
+// rcloneCopy executes rclone copy command
+func (c *CloudStorage) rcloneCopy(ctx context.Context, localFile, remoteFile string) error {
+	args := c.buildRcloneUploadArgs(localFile, remoteFile)
 
 	c.logger.Debug("Running: %s", strings.Join(args, " "))
 
@@ -1095,7 +1115,7 @@ func (c *CloudStorage) rcloneCopy(ctx context.Context, localFile, remoteFile str
 		if ctx.Err() == context.DeadlineExceeded {
 			return fmt.Errorf("rclone operation timeout")
 		}
-		return fmt.Errorf("rclone copy failed: %w: %s", err, strings.TrimSpace(string(output)))
+		return fmt.Errorf("rclone copy failed: %w: %s", err, strings.TrimSpace(string(truncateRcloneOutput(output))))
 	}
 
 	return nil
