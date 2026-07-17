@@ -222,6 +222,20 @@ func createBackupArchiveFile(ctx context.Context, archiver *backup.Archiver, tem
 	return nil
 }
 
+// promoteBackupArchive atomically moves the fully verified partial archive onto
+// its final path. Same-directory rename is atomic on a single filesystem, so a
+// reader of the final path never sees a partially written archive.
+func promoteBackupArchive(fs FS, partialPath, finalPath string) error {
+	return fs.Rename(partialPath, finalPath)
+}
+
+// discardPartialArchive best-effort removes a partial archive left by a failed
+// or cancelled backup so a truncated file never lingers on the backup path.
+// Absent partial is a no-op.
+func discardPartialArchive(fs FS, partialPath string) {
+	_ = fs.RemoveAll(partialPath)
+}
+
 func backupArchiveCreationError(err error) error {
 	phase := "archive"
 	code := types.ExitArchiveError
@@ -242,7 +256,9 @@ func (o *Orchestrator) skipDryRunArtifactVerification(stats *BackupStats, artifa
 }
 
 func (o *Orchestrator) recordArchiveSize(stats *BackupStats, artifacts *backupArtifacts) {
-	size, err := artifacts.archiver.GetArchiveSize(artifacts.archivePath)
+	// The archive lives at the partial path until it is promoted after checksum,
+	// so size the partial here. Sidecars still reference the final archivePath.
+	size, err := artifacts.archiver.GetArchiveSize(artifacts.partialPath)
 	if err != nil {
 		o.logger.Warning("Failed to get archive size: %v", err)
 		return

@@ -36,6 +36,7 @@ type backupArtifacts struct {
 	archiver     *backup.Archiver
 	archivePath  string
 	checksumPath string
+	partialPath  string
 	manifestPath string
 	bundlePath   string
 }
@@ -297,7 +298,11 @@ func (o *Orchestrator) createBackupArchive(run *backupRunContext, workspace *bac
 	archivePath := o.backupArchivePath(run, archiver)
 	o.logResolvedBackupCompression(run.stats)
 
-	if err := createBackupArchiveFile(run.ctx, archiver, workspace.tempDir, archivePath); err != nil {
+	partialPath := archivePath + ".partial"
+	if err := createBackupArchiveFile(run.ctx, archiver, workspace.tempDir, partialPath); err != nil {
+		// A failed or cancelled CreateArchive can leave a truncated partial; remove
+		// it so nothing lingers on the backup path.
+		discardPartialArchive(workspace.fs, partialPath)
 		return nil, err
 	}
 
@@ -305,6 +310,7 @@ func (o *Orchestrator) createBackupArchive(run *backupRunContext, workspace *bac
 	return &backupArtifacts{
 		archiver:     archiver,
 		archivePath:  archivePath,
+		partialPath:  partialPath,
 		checksumPath: archivePath + ".sha256",
 	}, nil
 }
@@ -319,15 +325,22 @@ func (o *Orchestrator) verifyAndWriteBackupArtifacts(run *backupRunContext, work
 	o.logStep(4, "Verification of archive and metadata generation")
 	o.recordArchiveSize(stats, artifacts)
 
-	if err := artifacts.archiver.VerifyArchive(run.ctx, artifacts.archivePath); err != nil {
+	if err := artifacts.archiver.VerifyArchive(run.ctx, artifacts.partialPath); err != nil {
+		discardPartialArchive(workspace.fs, artifacts.partialPath)
 		return &BackupError{Phase: "verification", Err: err, Code: types.ExitVerificationError}
 	}
 
-	checksum, err := o.generateArchiveChecksum(run.ctx, artifacts.archivePath)
+	checksum, err := o.generateArchiveChecksum(run.ctx, artifacts.partialPath)
 	if err != nil {
+		discardPartialArchive(workspace.fs, artifacts.partialPath)
 		return err
 	}
 	stats.Checksum = checksum
+
+	if err := promoteBackupArchive(workspace.fs, artifacts.partialPath, artifacts.archivePath); err != nil {
+		discardPartialArchive(workspace.fs, artifacts.partialPath)
+		return &BackupError{Phase: "archive", Err: fmt.Errorf("promote verified archive: %w", err), Code: types.ExitArchiveError}
+	}
 
 	if err := o.writeArchiveChecksum(workspace, artifacts, checksum); err != nil {
 		return &BackupError{
