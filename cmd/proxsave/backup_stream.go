@@ -184,17 +184,6 @@ func buildBackupOutcomePrompt(res backupModeResult) string {
 		b.WriteString("\n")
 		appendBackupStatsBlock(&b, st)
 
-		// Appended at the BOTTOM of the block: the run log path, then storage status,
-		// then centralized-mode identity.
-		//
-		// The run log file is CLOSED during the log-management phase before this
-		// outcome is built, so GetLogFilePath may be "" by now; runLogPath falls back
-		// to the LOG_FILE the runtime exports at startup.
-		if lp := runLogPath(); lp != "" {
-			b.WriteString("\n")
-			b.WriteString(theme.Text.Render("Log: " + lp))
-		}
-
 		// Secondary/Cloud storage status, only when they carry a meaningful
 		// (non-disabled) status, so a single-destination run stays terse.
 		if s := strings.TrimSpace(st.SecondaryStatus); s != "" && s != "disabled" {
@@ -217,6 +206,17 @@ func buildBackupOutcomePrompt(res backupModeResult) string {
 			b.WriteString("\n")
 			b.WriteString(theme.Text.Render("Healthchecks link: " + link))
 		}
+	}
+
+	// The run log path, shown regardless of supportStats so an early failure (nil
+	// stats) still points the operator at the diagnostic log.
+	//
+	// The run log file is CLOSED during the log-management phase before this
+	// outcome is built, so GetLogFilePath may be "" by now; runLogPath falls back
+	// to the LOG_FILE the runtime exports at startup (empty is guarded).
+	if lp := runLogPath(); lp != "" {
+		b.WriteString("\n")
+		b.WriteString(theme.Text.Render("Log: " + lp))
 	}
 
 	// Warnings/errors recap - the theme counterpart of the CLI footer's

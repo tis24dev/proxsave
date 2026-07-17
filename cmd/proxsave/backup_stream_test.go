@@ -135,6 +135,25 @@ func TestBuildBackupOutcomePromptLogLine(t *testing.T) {
 	}
 }
 
+// TestBuildBackupOutcomePromptEarlyFailureLogLine asserts the diagnostic "Log:"
+// line still renders on an early-failure outcome (supportStats nil), so an
+// operator whose run died before any stats were gathered still sees where the
+// log lives. The line is hoisted out of the supportStats block; runLogPath
+// falls back to the LOG_FILE env var as in tests.
+func TestBuildBackupOutcomePromptEarlyFailureLogLine(t *testing.T) {
+	prevLogger := logging.GetDefaultLogger()
+	logging.SetDefaultLogger(logging.New(types.LogLevelInfo, false))
+	t.Cleanup(func() { logging.SetDefaultLogger(prevLogger) })
+
+	t.Setenv("LOG_FILE", "/tmp/run.log")
+
+	res := backupModeResult{exitCode: types.ExitBackupError.Int()}
+	out := ansi.Strip(buildBackupOutcomePrompt(res))
+	if !strings.Contains(out, "Log: /tmp/run.log") {
+		t.Fatalf("early failure (nil stats) must still show the Log path:\n%s", out)
+	}
+}
+
 // TestBuildBackupOutcomePromptCentralizedIdentity asserts the centralized-mode
 // lines: the Telegram/relay ServerID and the SANITIZED Healthchecks link. A
 // hostile link is stripped by serverbot.SanitizeLoginURL (no line printed), and
