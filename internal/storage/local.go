@@ -188,6 +188,10 @@ func (l *LocalStorage) List(ctx context.Context) (backups []*types.BackupMetadat
 		if isBackupSidecar(match) {
 			continue
 		}
+		// Skip in-flight temp copies (.tmp-...) and partial archives (<name>.partial).
+		if isBackupTempArtifact(match) {
+			continue
+		}
 
 		// When bundling is enabled, skip standalone files that have a corresponding bundle
 		if l.config != nil && l.config.BundleAssociatedFiles {

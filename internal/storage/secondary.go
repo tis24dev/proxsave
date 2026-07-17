@@ -394,6 +394,10 @@ func (s *SecondaryStorage) List(ctx context.Context) (backups []*types.BackupMet
 		if isBackupSidecar(match) {
 			continue
 		}
+		// Skip in-flight temp copies (.tmp-...) and partial archives (<name>.partial).
+		if isBackupTempArtifact(match) {
+			continue
+		}
 
 		// When bundling is enabled, skip standalone files that have a corresponding bundle
 		if s.config != nil && s.config.BundleAssociatedFiles {

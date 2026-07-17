@@ -2,6 +2,7 @@ package storage
 
 import (
 	"errors"
+	"path/filepath"
 	"strings"
 )
 
@@ -32,6 +33,15 @@ func isBackupSidecar(path string) bool {
 	return strings.HasSuffix(path, ".sha256") ||
 		strings.HasSuffix(path, ".metadata") ||
 		strings.HasSuffix(path, ".manifest.json")
+}
+
+// isBackupTempArtifact reports whether a candidate path is an in-flight temp or
+// partial artifact (a .tmp-<...> temp copy, or a <name>.partial archive being
+// written before promotion) rather than a completed backup. Such files must
+// never be counted as backups by any List filter.
+func isBackupTempArtifact(path string) bool {
+	base := filepath.Base(path)
+	return strings.HasPrefix(base, ".tmp-") || strings.HasSuffix(path, ".partial")
 }
 
 // trimBundleSuffix removes the .bundle.tar suffix from a path if present.
