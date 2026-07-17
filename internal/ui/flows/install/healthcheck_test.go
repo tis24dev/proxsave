@@ -176,10 +176,12 @@ func TestRunHealthcheckSetup(t *testing.T) {
 	}
 
 	// Verified path: Check reaches the monitor + returns the magic-link, then Continue.
-	// The daemon reads as transmitting -> the headline is WORKING.
+	// The daemon reads as transmitting -> the headline is WORKING. The login_url must
+	// live on the bot-server's registrable domain (proxsave.dev): F11-05 gates it through
+	// serverbot.TrustedLoginURL, so an off-domain host is dropped and never surfaced.
 	healthcheckCheck = func(ctx context.Context, host, id, baseDir string, hbInterval time.Duration) orchestrator.HealthcheckCheckResult {
 		return orchestrator.HealthcheckCheckResult{
-			Err: nil, Reachable: true, LoginURL: "https://hc/accounts/check_token/u/MAGIC/",
+			Err: nil, Reachable: true, LoginURL: "https://hc.proxsave.dev/accounts/check_token/u/MAGIC/",
 			DaemonRead: true, Daemon: health.Diagnosis{State: health.TxTransmitting, DaemonUp: true},
 		}
 	}
