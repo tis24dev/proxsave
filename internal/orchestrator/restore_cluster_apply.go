@@ -139,7 +139,7 @@ func promptExportNodeSelection(ctx context.Context, reader *bufio.Reader, export
 		fmt.Println("  [0] Skip VM/CT apply")
 
 		fmt.Print("Choice: ")
-		line, err := input.ReadLineWithContext(ctx, reader)
+		line, err := input.ReadLineWithIdle(ctx, reader, cliIdleTimeout)
 		if err != nil {
 			return "", err
 		}
@@ -515,7 +515,7 @@ func promptClusterRestoreMode(ctx context.Context, reader *bufio.Reader) (int, e
 
 	for {
 		fmt.Print("Choice: ")
-		choiceLine, err := input.ReadLineWithContext(ctx, reader)
+		choiceLine, err := input.ReadLineWithIdle(ctx, reader, cliIdleTimeout)
 		if err != nil {
 			return 0, err
 		}

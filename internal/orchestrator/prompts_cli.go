@@ -15,7 +15,7 @@ import (
 
 func promptYesNo(ctx context.Context, reader *bufio.Reader, prompt string) (bool, error) {
 	fmt.Print(prompt)
-	line, err := input.ReadLineWithContext(ctx, reader)
+	line, err := input.ReadLineWithIdle(ctx, reader, cliIdleTimeout)
 	if err != nil {
 		return false, err
 	}

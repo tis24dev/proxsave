@@ -205,7 +205,7 @@ func confirmRestoreAction(ctx context.Context, reader *bufio.Reader, cand *backu
 
 	for {
 		fmt.Print("Confirmation: ")
-		line, err := input.ReadLineWithContext(ctx, reader)
+		line, err := input.ReadLineWithIdle(ctx, reader, cliIdleTimeout)
 		if err != nil {
 			return err
 		}
