@@ -87,9 +87,9 @@ func TestLocalStorageRetention_DoesNotCountBackupWhenArchiveRemovalFails(t *test
 
 	// applySimpleRetention expects the slice sorted newest-first.
 	backups := []*types.BackupMetadata{
-		{BackupFile: newest, Timestamp: now},
-		{BackupFile: good, Timestamp: now.Add(-24 * time.Hour)},
-		{BackupFile: bad, Timestamp: now.Add(-48 * time.Hour)},
+		{BackupFile: newest, Timestamp: now, Verified: true},
+		{BackupFile: good, Timestamp: now.Add(-24 * time.Hour), Verified: true},
+		{BackupFile: bad, Timestamp: now.Add(-48 * time.Hour), Verified: true},
 	}
 
 	deleted, err := local.applySimpleRetention(context.Background(), backups, 1)

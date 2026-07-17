@@ -629,10 +629,15 @@ func TestCloudStorageApplyRetentionDeletesOldest(t *testing.T) {
 	cs := newCloudStorageForTest(cfg)
 	cs.sleep = func(time.Duration) {}
 
+	// Each backup carries a .sha256 completion sidecar so List marks it Verified;
+	// retention only acts on verified entries.
 	listOutput := strings.TrimSpace(`
 100 2024-11-12 10:00:00 gamma-backup-3.tar.zst
+120 2024-11-12 10:00:00 gamma-backup-3.tar.zst.sha256
 100 2024-11-11 10:00:00 beta-backup-2.tar.zst
+120 2024-11-11 10:00:00 beta-backup-2.tar.zst.sha256
 100 2024-11-10 10:00:00 alpha-backup-1.tar.zst
+120 2024-11-10 10:00:00 alpha-backup-1.tar.zst.sha256
 `)
 	recountOutput := strings.TrimSpace(`
 100 2024-11-12 10:00:00 gamma-backup-3.tar.zst
@@ -1278,8 +1283,8 @@ func TestCloudStorageApplyGFSRetentionKeepsMinimumDailyBackup(t *testing.T) {
 
 	now := time.Now()
 	backups := []*types.BackupMetadata{
-		{BackupFile: "alpha-backup.tar.zst", Timestamp: now.Add(-48 * time.Hour)},
-		{BackupFile: "beta-backup.tar.zst", Timestamp: now.Add(-72 * time.Hour)},
+		{BackupFile: "alpha-backup.tar.zst", Timestamp: now.Add(-48 * time.Hour), Verified: true},
+		{BackupFile: "beta-backup.tar.zst", Timestamp: now.Add(-72 * time.Hour), Verified: true},
 	}
 	retentionCfg := RetentionConfig{Policy: "gfs", Daily: 0, Weekly: 0, Monthly: 0, Yearly: -1}
 

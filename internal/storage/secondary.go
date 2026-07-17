@@ -419,6 +419,7 @@ func (s *SecondaryStorage) List(ctx context.Context) (backups []*types.BackupMet
 			BackupFile: match,
 			Timestamp:  stat.ModTime(),
 			Size:       stat.Size(),
+			Verified:   backupHasCompletionSidecar(ctx, match, timeout),
 		})
 	}
 
@@ -573,6 +574,12 @@ func (s *SecondaryStorage) ApplyRetention(ctx context.Context, config RetentionC
 
 // applyGFSRetention applies GFS (Grandfather-Father-Son) retention policy
 func (s *SecondaryStorage) applyGFSRetention(ctx context.Context, backups []*types.BackupMetadata, config RetentionConfig) (int, error) {
+	eligible, inert := partitionRetentionEligible(backups)
+	for _, in := range inert {
+		s.logger.Warning("Secondary storage: backup %s ignored by retention (%s)", in.Backup.BackupFile, in.Reason)
+	}
+	backups = eligible
+
 	config = EffectiveGFSRetentionConfig(config)
 	s.logger.Debug("Applying GFS retention policy (daily=%d, weekly=%d, monthly=%d, yearly=%d)",
 		config.Daily, config.Weekly, config.Monthly, config.Yearly)
@@ -658,6 +665,12 @@ func (s *SecondaryStorage) applySimpleRetention(ctx context.Context, backups []*
 		s.logger.Debug("Retention disabled for secondary storage (maxBackups = %d)", maxBackups)
 		return 0, nil
 	}
+
+	eligible, inert := partitionRetentionEligible(backups)
+	for _, in := range inert {
+		s.logger.Warning("Secondary storage: backup %s ignored by retention (%s)", in.Backup.BackupFile, in.Reason)
+	}
+	backups = eligible
 
 	totalBackups := len(backups)
 	if totalBackups <= maxBackups {

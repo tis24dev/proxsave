@@ -666,6 +666,10 @@ func TestSecondaryStorage_ApplyRetention_SetsNoLogInfoWhenLogCountFails(t *testi
 		if err := os.Chtimes(path, ts, ts); err != nil {
 			t.Fatalf("Chtimes: %v", err)
 		}
+		// Completion sidecar so List marks the backup Verified (retention gate).
+		if err := os.WriteFile(path+".sha256", []byte("h"), 0o600); err != nil {
+			t.Fatalf("write sha256: %v", err)
+		}
 	}
 
 	deleted, err := storage.ApplyRetention(context.Background(), RetentionConfig{Policy: "simple", MaxBackups: 1})
@@ -705,6 +709,10 @@ func TestSecondaryStorage_ApplyRetention_GFS_SetsNoLogInfoWhenLogCountFails(t *t
 		}
 		if err := os.Chtimes(path, ts, ts); err != nil {
 			t.Fatalf("Chtimes: %v", err)
+		}
+		// Completion sidecar so List marks the backup Verified (retention gate).
+		if err := os.WriteFile(path+".sha256", []byte("h"), 0o600); err != nil {
+			t.Fatalf("write sha256: %v", err)
 		}
 	}
 

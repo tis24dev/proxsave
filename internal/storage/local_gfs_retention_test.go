@@ -34,9 +34,9 @@ func TestLocalStorageApplyGFSRetentionDeletesOldBackups(t *testing.T) {
 	}
 
 	backups := []*types.BackupMetadata{
-		{BackupFile: newestPath, Timestamp: now},
-		{BackupFile: middlePath, Timestamp: now.Add(-24 * time.Hour)},
-		{BackupFile: oldestPath, Timestamp: now.Add(-48 * time.Hour)},
+		{BackupFile: newestPath, Timestamp: now, Verified: true},
+		{BackupFile: middlePath, Timestamp: now.Add(-24 * time.Hour), Verified: true},
+		{BackupFile: oldestPath, Timestamp: now.Add(-48 * time.Hour), Verified: true},
 	}
 	retention := RetentionConfig{
 		Policy:  "gfs",

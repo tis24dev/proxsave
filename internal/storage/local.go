@@ -222,6 +222,7 @@ func (l *LocalStorage) List(ctx context.Context) (backups []*types.BackupMetadat
 			}
 		}
 
+		metadata.Verified = backupHasCompletionSidecar(ctx, match, timeout)
 		backups = append(backups, metadata)
 	}
 
@@ -486,6 +487,12 @@ func (l *LocalStorage) ApplyRetention(ctx context.Context, config RetentionConfi
 
 // applyGFSRetention applies GFS (Grandfather-Father-Son) retention policy
 func (l *LocalStorage) applyGFSRetention(ctx context.Context, backups []*types.BackupMetadata, config RetentionConfig) (int, error) {
+	eligible, inert := partitionRetentionEligible(backups)
+	for _, in := range inert {
+		l.logger.Warning("Local storage: backup %s ignored by retention (%s)", in.Backup.BackupFile, in.Reason)
+	}
+	backups = eligible
+
 	config = EffectiveGFSRetentionConfig(config)
 	l.logger.Debug("Applying GFS retention policy (daily=%d, weekly=%d, monthly=%d, yearly=%d)",
 		config.Daily, config.Weekly, config.Monthly, config.Yearly)
@@ -573,6 +580,12 @@ func (l *LocalStorage) applySimpleRetention(ctx context.Context, backups []*type
 		l.logger.Debug("Retention disabled for local storage (maxBackups = %d)", maxBackups)
 		return 0, nil
 	}
+
+	eligible, inert := partitionRetentionEligible(backups)
+	for _, in := range inert {
+		l.logger.Warning("Local storage: backup %s ignored by retention (%s)", in.Backup.BackupFile, in.Reason)
+	}
+	backups = eligible
 
 	totalBackups := len(backups)
 	if totalBackups <= maxBackups {

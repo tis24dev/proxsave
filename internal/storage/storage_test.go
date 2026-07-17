@@ -396,6 +396,12 @@ func TestLocalStorageApplyRetentionHasLogInfoFalseWhenLogGlobFails(t *testing.T)
 	if err := os.Chtimes(oldest, oldTime, oldTime); err != nil {
 		t.Fatalf("chtimes oldest: %v", err)
 	}
+	// Completion sidecars so List marks both backups Verified (retention gate).
+	for _, p := range []string{newest, oldest} {
+		if err := os.WriteFile(p+".sha256", []byte("h"), 0o600); err != nil {
+			t.Fatalf("write sha256: %v", err)
+		}
+	}
 
 	deleted, err := local.ApplyRetention(context.Background(), RetentionConfig{Policy: "simple", MaxBackups: 1})
 	if err != nil {
@@ -438,6 +444,12 @@ func TestLocalStorageApplyRetentionGFSInvokesGFSRetention(t *testing.T) {
 	}
 	if err := os.Chtimes(oldest, oldTime, oldTime); err != nil {
 		t.Fatalf("chtimes oldest: %v", err)
+	}
+	// Completion sidecars so List marks both backups Verified (retention gate).
+	for _, p := range []string{newest, oldest} {
+		if err := os.WriteFile(p+".sha256", []byte("h"), 0o600); err != nil {
+			t.Fatalf("write sha256: %v", err)
+		}
 	}
 
 	deleted, err := local.ApplyRetention(context.Background(), RetentionConfig{
@@ -1259,6 +1271,10 @@ func TestSecondaryStorageApplyRetentionSimple(t *testing.T) {
 	for i := 0; i < 4; i++ {
 		ts := baseTime.Add(-time.Duration(i) * time.Hour)
 		path := createSecondaryBackup(t, backupDir, logDir, "node-simple", ts)
+		// Completion sidecar so List marks the backup Verified (retention gate).
+		if err := os.WriteFile(path+".sha256", []byte("h"), 0o600); err != nil {
+			t.Fatalf("write sha256: %v", err)
+		}
 		infos = append(infos, backupInfo{path: path, ts: ts})
 	}
 
@@ -1329,7 +1345,10 @@ func TestSecondaryStorageApplyRetentionGFS(t *testing.T) {
 
 	for _, ts := range timestamps {
 		path := createSecondaryBackup(t, backupDir, logDir, "node-gfs", ts)
-		_ = path
+		// Completion sidecar so List marks the backup Verified (retention gate).
+		if err := os.WriteFile(path+".sha256", []byte("h"), 0o600); err != nil {
+			t.Fatalf("write sha256: %v", err)
+		}
 	}
 
 	deleted, err := storage.ApplyRetention(context.Background(), RetentionConfig{
