@@ -75,6 +75,26 @@ func TestFormGridReservesButtonsAtSmallHeight(t *testing.T) {
 	}
 }
 
+// TestFormGridClipsIntroToKeepButtons: a tall intro (the support consent note) must
+// be clipped so the buttons block still fits a short viewport, instead of pushing
+// Continue/Cancel past the bottom where the router crops them off-screen.
+func TestFormGridClipsIntroToKeepButtons(t *testing.T) {
+	field := &FormField{Label: "GitHub nickname", Kind: FieldText}
+	g := NewFormGrid("Support", []*FormField{field},
+		WithFormGridNote(
+			"Backup run in debug mode, log will be emailed to the maintainer.",
+			"The log may contain personal data such as this server's MAC address.",
+		))
+	bindGrid(g)
+	view := g.View(80, 6)
+	if n := len(strings.Split(view, "\n")); n > 6 {
+		t.Fatalf("intro must be clipped so the view fits the height budget (got %d lines, want <= 6):\n%s", n, view)
+	}
+	if !strings.Contains(view, "Continue") || !strings.Contains(view, "Cancel") {
+		t.Fatalf("buttons must always render even with a tall intro:\n%s", view)
+	}
+}
+
 func gridFields() (toggle, path, cron *FormField) {
 	toggle = &FormField{Label: "Secondary storage", Kind: FieldToggle}
 	path = &FormField{

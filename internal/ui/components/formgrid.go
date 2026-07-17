@@ -486,6 +486,40 @@ func (g *FormGrid) View(width, height int) string {
 		introHeight += lipgloss.Height(block)
 	}
 
+	// Clip the intro so the buttons block always fits: reserve title+blank=2, the
+	// intro separator=1 and the buttons=2 (like Confirm's budget), then keep only
+	// the intro lines that fit the remainder. When any line is dropped, replace the
+	// last kept line with a subtle truncation indicator so the crop is visible.
+	// Recompute introHeight from the clipped intro so head, the builder and
+	// g.lastRowsTop all derive from the same lines (hit-testing stays consistent).
+	if maxIntro := max(height-5, 0); len(intro) > 0 && introHeight > maxIntro {
+		kept := make([]string, 0, len(intro))
+		used := 0
+		dropped := false
+		for _, block := range intro {
+			h := lipgloss.Height(block)
+			if used+h > maxIntro {
+				dropped = true
+				break
+			}
+			kept = append(kept, block)
+			used += h
+		}
+		if dropped {
+			indicator := theme.Subtle.Width(introWidth).Render("note truncated, enlarge the terminal")
+			if len(kept) > 0 {
+				kept[len(kept)-1] = indicator
+			} else if maxIntro >= 1 {
+				kept = append(kept, indicator)
+			}
+		}
+		intro = kept
+		introHeight = 0
+		for _, block := range intro {
+			introHeight += lipgloss.Height(block)
+		}
+	}
+
 	// Scroll window over the field rows so buttons/footer stay visible.
 	head := 2 // title + blank
 	if len(intro) > 0 {
