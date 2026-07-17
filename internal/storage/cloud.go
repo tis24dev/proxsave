@@ -1589,7 +1589,11 @@ func (c *CloudStorage) deleteBackupInternal(ctx context.Context, backupFile stri
 
 	c.logger.Debug("Deleting cloud backup: %s", backupFile)
 
-	candidateNames := buildBackupCandidatePaths(baseName, c.config.BundleAssociatedFiles)
+	// Always include the bundle path so an orphan .bundle.tar (created while
+	// bundling was enabled, then disabled) is cleaned up. A missing remote
+	// object delete is tolerated, so this is behavior-preserving when no
+	// bundle exists on the remote.
+	candidateNames := buildBackupCandidatePaths(baseName, true)
 	logging.DebugStep(c.logger, "cloud delete", "candidates=%d", len(candidateNames))
 	relativeNames := make([]string, 0, len(candidateNames))
 	for _, name := range candidateNames {

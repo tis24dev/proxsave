@@ -367,7 +367,10 @@ func (l *LocalStorage) deleteBackupInternal(ctx context.Context, backupFile stri
 	l.logger.Debug("Local storage: deleting backup %s", filepath.Base(backupFile))
 
 	basePath, _ := trimBundleSuffix(backupFile)
-	filesToDelete := buildBackupCandidatePaths(basePath, l.config.BundleAssociatedFiles)
+	// Always include the bundle path so an orphan .bundle.tar (created while
+	// bundling was enabled, then disabled) is cleaned up. Remove of an absent
+	// bundle is a no-op, so this is behavior-preserving when no bundle exists.
+	filesToDelete := buildBackupCandidatePaths(basePath, true)
 
 	// Delete all files; collect real removal failures (not "already gone") and
 	// track whether the data archive itself (not just a sidecar) failed, so the

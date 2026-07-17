@@ -451,7 +451,10 @@ func (s *SecondaryStorage) deleteBackupInternal(ctx context.Context, backupFile 
 	s.logger.Debug("Deleting secondary backup: %s", backupFile)
 
 	basePath, _ := trimBundleSuffix(backupFile)
-	filesToDelete := buildBackupCandidatePaths(basePath, s.config.BundleAssociatedFiles)
+	// Always include the bundle path so an orphan .bundle.tar (created while
+	// bundling was enabled, then disabled) is cleaned up. Remove of an absent
+	// bundle is a no-op, so this is behavior-preserving when no bundle exists.
+	filesToDelete := buildBackupCandidatePaths(basePath, true)
 
 	// Delete all files; collect real removal failures (not "already gone") and
 	// track whether the data archive itself (not just a sidecar) failed, so the
