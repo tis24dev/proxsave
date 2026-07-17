@@ -445,6 +445,11 @@ func runDashboardDaemonAdmin(ctx context.Context, session *shell.Session, instal
 	})
 
 	if opErr != nil {
+		if errors.Is(opErr, errDaemonTeardownBackupRunning) {
+			showDaemonResultScreen(ctx, session, "Daemon disable deferred", orchestrator.HealthcheckSetupLevelWarn,
+				"DEFERRED - BACKUP RUNNING", "A backup is in progress; the daemon was NOT removed. Try again once the backup finishes.")
+			return
+		}
 		showDaemonResultScreen(ctx, session, title+" failed", orchestrator.HealthcheckSetupLevelError, "FAILED", opErr.Error())
 		return
 	}

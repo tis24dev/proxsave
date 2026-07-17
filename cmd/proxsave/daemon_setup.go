@@ -49,6 +49,14 @@ func runDaemonSetup(rt *appRuntime) int {
 func runDaemonRemove(rt *appRuntime) int {
 	logging.Info("Removing ProxSave daemon mode and reverting to cron...")
 	if err := applyCronMode(rt.ctx, rt.cfg, rt.args.ConfigPath, daemonSelfExecPath(), rt.bootstrap, true); err != nil {
+		if errors.Is(err, errDaemonTeardownBackupRunning) {
+			logging.Warning("daemon-remove deferred: a backup is in progress; the daemon was NOT removed. Retry when the backup finishes.")
+			return types.ExitGenericError.Int()
+		}
+		if errors.Is(err, errDaemonTeardownConfigUnreadable) {
+			logging.Error("daemon-remove aborted: the configuration could not be read; the daemon was NOT removed.")
+			return types.ExitGenericError.Int()
+		}
 		logging.Error("daemon-remove failed: %v", err)
 		return types.ExitGenericError.Int()
 	}

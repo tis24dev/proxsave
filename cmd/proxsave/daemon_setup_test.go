@@ -13,6 +13,7 @@ import (
 	"github.com/tis24dev/proxsave/internal/cli"
 	"github.com/tis24dev/proxsave/internal/config"
 	"github.com/tis24dev/proxsave/internal/logging"
+	"github.com/tis24dev/proxsave/internal/types"
 )
 
 func TestSetBackupEnvKeysReplacesAndAppends(t *testing.T) {
@@ -262,5 +263,44 @@ func TestApplyCronModeFailsClosedOnNilConfig(t *testing.T) {
 	}
 	if removeCalled {
 		t.Fatal("nil config: teardown must not run")
+	}
+}
+
+func TestRunDaemonRemoveDefersWhenBackupRunning(t *testing.T) {
+	origRun := restartVerifyBackupRunning
+	origRemove := removeDaemonServiceFn
+	origMigrate := migrateLegacyCronEntriesFn
+	t.Cleanup(func() {
+		restartVerifyBackupRunning = origRun
+		removeDaemonServiceFn = origRemove
+		migrateLegacyCronEntriesFn = origMigrate
+	})
+	restartVerifyBackupRunning = func(string) bool { return true }
+	removeCalled := false
+	removeDaemonServiceFn = func(context.Context, *logging.BootstrapLogger) error {
+		removeCalled = true
+		return nil
+	}
+	migrateLegacyCronEntriesFn = func(context.Context, string, string, *logging.BootstrapLogger, string) {}
+
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "backup.env")
+	if err := os.WriteFile(configPath, []byte("SCHEDULER_MODE=daemon\nSCHEDULER_TIME=02:00\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	rt := &appRuntime{
+		ctx:  ctx,
+		args: &cli.Args{ConfigPath: configPath},
+		cfg:  &config.Config{BaseDir: dir, SchedulerTime: "02:00"},
+	}
+
+	code := runDaemonRemove(rt)
+	if code != types.ExitGenericError.Int() {
+		t.Fatalf("a deferred daemon-remove must return non-zero, got %d", code)
+	}
+	if removeCalled {
+		t.Fatal("SAFETY VIOLATION: teardown ran while a backup was running")
 	}
 }
