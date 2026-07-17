@@ -88,3 +88,34 @@ func TestListMarksVerifiedFromSidecar(t *testing.T) {
 		t.Fatalf("bare .tar with no sidecar must be Verified=false")
 	}
 }
+
+// A verified entry whose Timestamp could not be determined (zero) must be
+// excluded from deletion (fail-safe), never deleted as the "oldest".
+func TestSimpleRetentionExcludesUndatableFromDelete(t *testing.T) {
+	dir := t.TempDir()
+	cfg := &config.Config{BackupPath: dir, BundleAssociatedFiles: false}
+	local, err := NewLocalStorage(cfg, newTestLogger())
+	if err != nil {
+		t.Fatalf("NewLocalStorage: %v", err)
+	}
+
+	newest := filepath.Join(dir, "newest-backup.tar.zst")
+	undatable := filepath.Join(dir, "undatable-backup.tar.zst")
+	for _, p := range []string{newest, undatable} {
+		if err := os.WriteFile(p, []byte("x"), 0o600); err != nil {
+			t.Fatalf("WriteFile(%s): %v", p, err)
+		}
+	}
+
+	backups := []*types.BackupMetadata{
+		{BackupFile: newest, Timestamp: time.Now(), Verified: true},
+		{BackupFile: undatable, Timestamp: time.Time{}, Verified: true}, // zero timestamp
+	}
+	// keep 1: naive retention deletes the "oldest" = the zero-timestamp entry.
+	if _, err := local.applySimpleRetention(context.Background(), backups, 1); err != nil {
+		t.Fatalf("applySimpleRetention: %v", err)
+	}
+	if _, err := os.Stat(undatable); err != nil {
+		t.Fatalf("undatable entry must NOT be deleted (fail-safe): %v", err)
+	}
+}

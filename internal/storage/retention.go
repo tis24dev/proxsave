@@ -32,6 +32,10 @@ func partitionRetentionEligible(backups []*types.BackupMetadata) (eligible []*ty
 			inert = append(inert, retentionInert{Backup: b, Reason: "no manifest/checksum"})
 			continue
 		}
+		if b.Timestamp.IsZero() {
+			inert = append(inert, retentionInert{Backup: b, Reason: "no reliable timestamp"})
+			continue
+		}
 		eligible = append(eligible, b)
 	}
 	return eligible, inert
