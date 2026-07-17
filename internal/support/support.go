@@ -36,6 +36,12 @@ var newEmailNotifier = func(config notify.EmailConfig, proxmoxType types.Proxmox
 	return notify.NewEmailNotifier(config, proxmoxType, logger)
 }
 
+// supportIdleTimeout bounds each interactive support prompt; on idle the read aborts
+// gracefully (the run then exits interrupted) instead of hanging forever. Var so tests
+// can shrink it. Only the explicit --support flow reaches these prompts; the automated
+// backup run never calls RunIntro.
+var supportIdleTimeout = input.DefaultIdleTimeout
+
 // RunIntro prompts for consent and GitHub metadata.
 // ok=false means the user declined or aborted; interrupted=true means context cancel / Ctrl+C.
 func RunIntro(ctx context.Context, bootstrap *logging.BootstrapLogger) (meta Meta, ok bool, interrupted bool) {
@@ -86,7 +92,7 @@ func RunIntro(ctx context.Context, bootstrap *logging.BootstrapLogger) (meta Met
 	// GitHub nickname
 	for {
 		fmt.Print("Enter your GitHub nickname: ")
-		line, err := input.ReadLineWithContext(ctx, reader)
+		line, err := input.ReadLineWithIdle(ctx, reader, supportIdleTimeout)
 		if err != nil {
 			if errors.Is(err, input.ErrInputAborted) || ctx.Err() == context.Canceled {
 				bootstrap.Warning("Support mode interrupted by signal")
@@ -107,7 +113,7 @@ func RunIntro(ctx context.Context, bootstrap *logging.BootstrapLogger) (meta Met
 	// GitHub issue number
 	for {
 		fmt.Print("Enter the GitHub issue number in the format #1234: ")
-		line, err := input.ReadLineWithContext(ctx, reader)
+		line, err := input.ReadLineWithIdle(ctx, reader, supportIdleTimeout)
 		if err != nil {
 			if errors.Is(err, input.ErrInputAborted) || ctx.Err() == context.Canceled {
 				bootstrap.Warning("Support mode interrupted by signal")
@@ -144,7 +150,7 @@ func RunIntro(ctx context.Context, bootstrap *logging.BootstrapLogger) (meta Met
 func promptYesNoSupport(ctx context.Context, reader *bufio.Reader, prompt string) (bool, error) {
 	for {
 		fmt.Print(prompt)
-		line, err := input.ReadLineWithContext(ctx, reader)
+		line, err := input.ReadLineWithIdle(ctx, reader, supportIdleTimeout)
 		if err != nil {
 			return false, err
 		}

@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -11,11 +12,31 @@ import (
 	"time"
 
 	"github.com/tis24dev/proxsave/internal/config"
+	"github.com/tis24dev/proxsave/internal/input"
 	"github.com/tis24dev/proxsave/internal/logging"
 	"github.com/tis24dev/proxsave/internal/notify"
 	"github.com/tis24dev/proxsave/internal/orchestrator"
 	"github.com/tis24dev/proxsave/internal/types"
 )
+
+// A support prompt left unattended must abort gracefully (the run then exits
+// interrupted) instead of hanging forever: an idle read maps to ErrInputAborted,
+// which RunIntro already treats as an interrupt.
+func TestSupportPromptAbortsWhenIdle(t *testing.T) {
+	orig := supportIdleTimeout
+	supportIdleTimeout = time.Millisecond
+	t.Cleanup(func() { supportIdleTimeout = orig })
+
+	pr, pw := io.Pipe()
+	defer pw.Close() // never deliver a line -> idle fires
+	_, err := promptYesNoSupport(context.Background(), bufio.NewReader(pr), "Continue? [y/N]: ")
+	if !errors.Is(err, input.ErrInputAborted) {
+		t.Fatalf("idle support prompt must map to a graceful abort (ErrInputAborted); got %v", err)
+	}
+	if !errors.Is(err, input.ErrIdleTimeout) {
+		t.Fatalf("idle support prompt should carry ErrIdleTimeout identity; got %v", err)
+	}
+}
 
 type fakeNotifier struct {
 	enabled bool
