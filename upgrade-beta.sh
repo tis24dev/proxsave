@@ -325,7 +325,13 @@ echo "[+] Installing beta binary -> ${TARGET_BIN}"
 # Conventional executable mode 0755 (owner rwx, group/other r-x). The binary runs
 # as root and only root can replace it; the security check verifies it is
 # root-owned and not group/other-writable, not an exact mode.
-mv proxsave "${TARGET_BIN}"
+if ! mv proxsave "${TARGET_BIN}"; then
+  echo "[!] Failed to install the beta binary (e.g. cross-device copy interrupted)."
+  echo "   Rolling back to the previous binary."
+  mv -f "${TARGET_BIN}.prev" "${TARGET_BIN}"
+  chmod 755 "${TARGET_BIN}"
+  exit 1
+fi
 chmod 755 "${TARGET_BIN}"
 
 # Sanity-check the swapped binary actually runs before finalizing. A corrupt or
