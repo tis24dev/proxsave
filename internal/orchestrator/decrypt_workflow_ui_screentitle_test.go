@@ -62,3 +62,41 @@ func TestSelectBackupCandidateEmptyStateUsesCallerScreenTitle(t *testing.T) {
 		})
 	}
 }
+
+// abortingSelectionUI drives selectBackupCandidateWithUI to its empty-state
+// branch and aborts at the status screen (Ctrl+C), returning ErrDecryptAborted
+// from ShowStatusResult.
+type abortingSelectionUI struct{}
+
+func (f *abortingSelectionUI) RunTask(ctx context.Context, title, initialMessage string, run func(ctx context.Context, report ProgressReporter) error) error {
+	return run(ctx, nil)
+}
+func (f *abortingSelectionUI) ShowMessage(ctx context.Context, title, message string) error {
+	return nil
+}
+func (f *abortingSelectionUI) ShowStatusResult(ctx context.Context, screenTitle string, level HealthcheckSetupLevel, keyword, explanation string) error {
+	return ErrDecryptAborted
+}
+func (f *abortingSelectionUI) ShowError(ctx context.Context, title, message string) error {
+	return nil
+}
+func (f *abortingSelectionUI) SelectBackupSource(ctx context.Context, options []decryptPathOption) (decryptPathOption, error) {
+	return options[len(options)-1], nil
+}
+func (f *abortingSelectionUI) SelectBackupCandidate(ctx context.Context, candidates []*backupCandidate) (*backupCandidate, error) {
+	return nil, fmt.Errorf("unexpected SelectBackupCandidate call")
+}
+
+// A user abort (Ctrl+C) at the empty-state status screen must surface as
+// ErrDecryptAborted, not the misleading ErrDecryptNoBackups that makes an
+// explicit --decrypt/--restore exit 1 instead of a clean user-abort exit 0.
+func TestSelectBackupCandidateSurfacesAbortAtEmptyState(t *testing.T) {
+	cfg := &config.Config{BackupPath: t.TempDir()} // empty dir => exactly one path option => no backups
+	logger := logging.New(types.LogLevelError, false)
+	ui := &abortingSelectionUI{}
+
+	_, err := selectBackupCandidateWithUI(context.Background(), ui, cfg, logger, "Decrypt", false)
+	if !errors.Is(err, ErrDecryptAborted) {
+		t.Fatalf("err=%v, want ErrDecryptAborted", err)
+	}
+}
