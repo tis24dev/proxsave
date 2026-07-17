@@ -221,6 +221,8 @@ func runInstallTUI(ctx context.Context, configPath string, bootstrap *logging.Bo
 					bootstrap.Info("Post-install audit: skipped by user")
 				case auditRes.CollectErr != nil:
 					bootstrap.Warning("Post-install audit failed (non-blocking): %v", auditRes.CollectErr)
+				case auditRes.ApplyErr != nil:
+					bootstrap.Warning("Post-install audit: apply failed (non-blocking): %v", auditRes.ApplyErr)
 				case len(auditRes.Suggestions) == 0:
 					bootstrap.Info("Post-install audit: no unused components detected")
 				default:

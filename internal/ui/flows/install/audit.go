@@ -125,6 +125,7 @@ func RunPostInstallAudit(ctx context.Context, session *shell.Session, execPath, 
 	}
 
 	if err := installer.ApplyAuditDisables(configPath, keys); err != nil {
+		result.ApplyErr = err
 		showAuditResult(ctx, session, "Post-install check", orchestrator.HealthcheckSetupLevelError,
 			"UPDATE FAILED", err.Error(), backToMenu)
 		return result, nil

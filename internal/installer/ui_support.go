@@ -36,6 +36,8 @@ type PostInstallAuditResult struct {
 	AppliedKeys []string
 	// CollectErr is set when the dry-run/suggestion collection failed.
 	CollectErr error
+	// ApplyErr is set when writing the selected disables to backup.env failed.
+	ApplyErr error
 }
 
 // TelegramSetupResult reports the outcome of the interactive Telegram
