@@ -25,7 +25,7 @@ func (c *cliWorkflowUI) ConfirmAction(ctx context.Context, title, message, yesLa
 		fmt.Println(components.SanitizeText(message))
 		fmt.Println()
 	}
-	question := title
+	question := components.SanitizeLine(title)
 	if question == "" {
 		question = "Proceed?"
 	}

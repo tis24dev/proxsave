@@ -203,6 +203,28 @@ func TestCLIWorkflowUIConfirmActionSanitizesMessage(t *testing.T) {
 	}
 }
 
+// TestCLIWorkflowUIConfirmActionSanitizesTitle: the title is echoed twice, once
+// as the printed header and once as the yes/no question. The header scrub alone
+// leaves the question path (question := title) leaking raw escapes to stdout;
+// inject into the title and assert both echoes are scrubbed. timeout=0 routes
+// the question through promptYesNoWithDefault -> fmt.Print (stdout), which
+// captureCLIStdout covers, so the assertion is load-bearing.
+func TestCLIWorkflowUIConfirmActionSanitizesTitle(t *testing.T) {
+	ui := newCLIWorkflowUI(bufio.NewReader(strings.NewReader("no\n")), nil)
+	out := captureCLIStdout(t, func() {
+		_, _ = ui.ConfirmAction(context.Background(), "Apply network config?\x1b]0;titlepwn\x07",
+			"", "Yes", "No", 0, false)
+	})
+	for _, bad := range []string{"\x1b]0;", "\x07", "titlepwn"} {
+		if strings.Contains(out, bad) {
+			t.Fatalf("ConfirmAction leaked injected title sequence %q: %q", bad, out)
+		}
+	}
+	if !strings.Contains(out, "Apply network config?") {
+		t.Fatalf("ConfirmAction dropped legitimate title text: %q", out)
+	}
+}
+
 func TestCLIWorkflowUIReadAbortsWhenIdle(t *testing.T) {
 	orig := cliIdleTimeout
 	cliIdleTimeout = time.Millisecond
