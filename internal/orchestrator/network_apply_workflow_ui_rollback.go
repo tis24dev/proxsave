@@ -256,6 +256,13 @@ func (f *networkRollbackUIApplyFlow) handlePreflightFailure(preflight networkPre
 	if f.canAskPreflightRollback(preflight) {
 		return f.confirmPreflightRollback(message)
 	}
+	if strings.TrimSpace(f.stageRoot) != "" {
+		// A staged apply already wrote the managed /etc network files (run() applies
+		// before preflight), and no rollback backup is available to revert them.
+		// Warn honestly rather than escalate to the full backup, which would revert
+		// far more than network files (network-only contract).
+		f.warning("Network apply aborted: preflight validation failed and no network rollback backup is available; the managed network configuration under /etc may be partially written (review before the next reload/reboot).")
+	}
 	return fmt.Errorf("network preflight validation failed; aborting live network apply")
 }
 
