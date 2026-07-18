@@ -2,15 +2,32 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"runtime/pprof"
+	"time"
 
+	"github.com/tis24dev/proxsave/internal/config"
 	"github.com/tis24dev/proxsave/internal/logging"
 	"github.com/tis24dev/proxsave/internal/orchestrator"
 	"github.com/tis24dev/proxsave/internal/support"
 )
 
 type runDeferredAction func()
+
+// newFinalizationContext returns a fresh, non-cancelled context for best-effort
+// run finalization (notify/email/log). The run ctx (rt.ctx) is cancelled on
+// SIGINT/SIGTERM, but finalization must still run on abort so the user is
+// notified and the log is closed. The notifiers self-bound internally (the email
+// relay uses cfg.WorkerTimeout), so this deadline is only a backstop against a
+// wedged finalization; size it from the configured email relay timeout.
+func newFinalizationContext(cfg *config.Config) (context.Context, context.CancelFunc) {
+	d := 30 * time.Second
+	if cfg != nil && cfg.WorkerTimeout > 0 {
+		d = time.Duration(cfg.WorkerTimeout) * time.Second
+	}
+	return context.WithTimeout(context.Background(), d)
+}
 
 func runDeferredActions(rt *appRuntime, state *appRunState) []runDeferredAction {
 	// runRuntime defers each returned action while iterating this slice, so these
@@ -55,7 +72,9 @@ func sendDeferredSupportEmail(rt *appRuntime, state *appRunState) {
 	if !rt.args.Support || state.pendingSupportStat == nil || state.supportEmailSent {
 		return
 	}
-	emitSupportEmail(rt.ctx, rt.cfg, rt.logger, rt.envInfo.Type, state.pendingSupportStat, support.Meta{
+	ctx, cancel := newFinalizationContext(rt.cfg)
+	defer cancel()
+	emitSupportEmail(ctx, rt.cfg, rt.logger, rt.envInfo.Type, state.pendingSupportStat, support.Meta{
 		GitHubUser: rt.args.SupportGitHubUser,
 		IssueID:    rt.args.SupportIssueID,
 	})
@@ -67,11 +86,13 @@ func dispatchDeferredEarlyErrorNotification(rt *appRuntime, state *appRunState) 
 	}
 	fmt.Println()
 	logging.Step("Sending error notifications")
-	stats := state.orch.DispatchEarlyErrorNotification(rt.ctx, state.earlyErrorState)
+	ctx, cancel := newFinalizationContext(rt.cfg)
+	defer cancel()
+	stats := state.orch.DispatchEarlyErrorNotification(ctx, state.earlyErrorState)
 	if stats != nil {
 		state.pendingSupportStat = stats
 	}
-	state.orch.FinalizeAndCloseLog(rt.ctx)
+	state.orch.FinalizeAndCloseLog(ctx)
 }
 
 func closeRunProfiling(rt *appRuntime) {

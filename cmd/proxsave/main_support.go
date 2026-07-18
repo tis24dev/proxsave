@@ -17,7 +17,7 @@ import (
 // viewport capture so the outcome is visible) and the deferred CLI sender. The
 // leading Step announces it in both places; SendEmail's own Info/Warning lines
 // report the actual hand-off or the skip.
-func emitSupportEmail(ctx context.Context, cfg *config.Config, logger *logging.Logger, proxmoxType types.ProxmoxType, stats *orchestrator.BackupStats, meta support.Meta) {
+var emitSupportEmail = func(ctx context.Context, cfg *config.Config, logger *logging.Logger, proxmoxType types.ProxmoxType, stats *orchestrator.BackupStats, meta support.Meta) {
 	logging.Step("Support mode - sending support email with attached log")
 	support.SendEmail(ctx, cfg, logger, proxmoxType, stats, meta, buildSignature())
 }
