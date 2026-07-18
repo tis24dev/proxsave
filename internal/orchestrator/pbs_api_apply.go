@@ -441,7 +441,14 @@ func applyPBSDatastoreCfgViaAPI(ctx context.Context, logger *logging.Logger, sta
 					}
 					createArgs := append([]string{"datastore", "create", name, path}, flags...)
 					if _, err := runPBSManager(ctx, createArgs...); err != nil {
-						return fmt.Errorf("datastore %s: recreate after path mismatch failed: %w", name, err)
+						// The datastore was removed but the create at the new path failed.
+						// Re-create it at its original path so it is not left deconfigured
+						// (remove has no --destroy-data, so the chunks are still on disk).
+						rollbackArgs := append([]string{"datastore", "create", name, currentPath}, flags...)
+						if _, rbErr := runPBSManager(ctx, rollbackArgs...); rbErr != nil {
+							return fmt.Errorf("datastore %s: path change to %s failed (%v) and rollback re-create at original path %s also failed (%v); the datastore is left removed, its data is still on disk and it must be re-created manually", name, path, err, currentPath, rbErr)
+						}
+						return fmt.Errorf("datastore %s: path change to %s failed (%w); the datastore was restored to its original path %s", name, path, err, currentPath)
 					}
 					continue
 				}
