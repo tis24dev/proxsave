@@ -1054,15 +1054,19 @@ func TestApplyPVEAccessControlFromStage_MountProbeBranches(t *testing.T) {
 
 	logger := newTestLogger()
 
-	t.Run("mount probe error only warns and continues", func(t *testing.T) {
+	t.Run("mount probe error refuses (fail-safe)", func(t *testing.T) {
 		mountGuardReadFile = func(path string) ([]byte, error) {
 			if path == "/proc/self/mountinfo" || path == "/proc/mounts" {
 				return nil, errors.New("probe failed")
 			}
 			return nil, os.ErrNotExist
 		}
-		if err := applyPVEAccessControlFromStage(context.Background(), logger, t.TempDir()); err != nil {
-			t.Fatalf("mount probe warning path should continue, got %v", err)
+		// cand-#5: a mount probe error must fail-safe (refuse), like a confirmed
+		// unmounted /etc/pve, so access-control/secret files are never shadow-written
+		// onto the root filesystem. Matches restore_sdn/firewall/ha.
+		err := applyPVEAccessControlFromStage(context.Background(), logger, t.TempDir())
+		if err == nil || !strings.Contains(err.Error(), "/etc/pve is not mounted") {
+			t.Fatalf("mount probe error must fail-safe refuse, got %v", err)
 		}
 	})
 
