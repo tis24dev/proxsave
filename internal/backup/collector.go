@@ -964,6 +964,7 @@ func (c *Collector) safeCopyDir(ctx context.Context, src, dest, description stri
 	// granularity (#59), then record the directory's FINAL status from the actual
 	// outcome below. Recording StatusCollected up front would misreport a directory
 	// whose ensureDir/walk later fails as successfully collected.
+	failedCount := 0
 	c.systemManifestDepth++
 	walkErr := func() error {
 		// Ensure destination exists
@@ -1015,7 +1016,19 @@ func (c *Collector) safeCopyDir(ctx context.Context, src, dest, description stri
 				return nil
 			}
 
-			return c.safeCopyFile(ctx, path, destPath, filepath.Base(path))
+			if err := c.safeCopyFile(ctx, path, destPath, filepath.Base(path)); err != nil {
+				// A cancelled context is a hard abort; any other per-file error is
+				// logged and skipped so one unreadable file does not abort the whole
+				// directory. safeCopyFile already counted it in FilesFailed, so do not
+				// re-increment here; failedCount drives the directory-level partial.
+				if ctxErr := ctx.Err(); ctxErr != nil {
+					return ctxErr
+				}
+				c.logger.Warning("Skipping unreadable file %s in %s: %v", path, description, err)
+				failedCount++
+				return nil
+			}
+			return nil
 		})
 	}()
 	c.systemManifestDepth--
@@ -1025,7 +1038,15 @@ func (c *Collector) safeCopyDir(ctx context.Context, src, dest, description stri
 		c.recordSystemManifestEntry(dest, ManifestEntry{Status: StatusFailed, Error: walkErr.Error()})
 		return walkErr
 	}
-	c.recordSystemManifestEntry(dest, ManifestEntry{Status: StatusCollected})
+	if failedCount > 0 {
+		c.recordSystemManifestEntry(dest, ManifestEntry{
+			Status: StatusFailed,
+			Error:  fmt.Sprintf("%d file(s) could not be collected", failedCount),
+		})
+		c.logger.Warning("Directory %s collected with %d unreadable file(s)", description, failedCount)
+	} else {
+		c.recordSystemManifestEntry(dest, ManifestEntry{Status: StatusCollected})
+	}
 
 	c.logger.Debug("Successfully collected %s: %s", description, src)
 	return nil
