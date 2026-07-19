@@ -398,7 +398,7 @@ func (l *LocalStorage) deleteBackupInternal(ctx context.Context, backupFile stri
 	}
 
 	// Best-effort: delete associated local log file for this backup
-	logDeleted := l.deleteAssociatedLog(backupFile)
+	logDeleted := l.deleteAssociatedLog(ctx, backupFile)
 
 	if len(failedFiles) > 0 {
 		if !dataFailed {
@@ -413,7 +413,7 @@ func (l *LocalStorage) deleteBackupInternal(ctx context.Context, backupFile stri
 
 // deleteAssociatedLog attempts to remove the local log file corresponding to a backup.
 // It is best-effort and never returns an error to the caller.
-func (l *LocalStorage) deleteAssociatedLog(backupFile string) bool {
+func (l *LocalStorage) deleteAssociatedLog(ctx context.Context, backupFile string) bool {
 	if l == nil || l.config == nil {
 		return false
 	}
@@ -430,7 +430,9 @@ func (l *LocalStorage) deleteAssociatedLog(backupFile string) bool {
 	logName := fmt.Sprintf("backup-%s-%s.log", host, ts)
 	fullPath := filepath.Join(logPath, logName)
 
-	if err := os.Remove(fullPath); err != nil {
+	// Bounded against a dead/stale mount: on a cancelled/expired ctx safefs
+	// returns immediately without running the remove (best-effort cleanup).
+	if err := safefs.Remove(ctx, fullPath, fsIoTimeout(l.config)); err != nil {
 		if !os.IsNotExist(err) {
 			l.logger.Debug("Local logs: failed to delete %s: %v", logName, err)
 		}
@@ -441,7 +443,7 @@ func (l *LocalStorage) deleteAssociatedLog(backupFile string) bool {
 	return true
 }
 
-func (l *LocalStorage) countLogFiles() int {
+func (l *LocalStorage) countLogFiles(ctx context.Context) int {
 	if l == nil || l.config == nil {
 		return -1
 	}
@@ -450,7 +452,10 @@ func (l *LocalStorage) countLogFiles() int {
 		return 0
 	}
 	pattern := filepath.Join(logPath, "backup-*.log")
-	matches, err := filepath.Glob(pattern)
+	// Bounded against a dead/stale mount, consistent with the main backup glob.
+	matches, err := safefs.Run(ctx, "local-log-glob", l.basePath, fsIoTimeout(l.config), func() ([]string, error) {
+		return filepath.Glob(pattern)
+	})
 	if err != nil {
 		l.logger.Debug("Local logs: failed to count log files: %v", err)
 		return -1
@@ -504,7 +509,7 @@ func (l *LocalStorage) applyGFSRetention(ctx context.Context, backups []*types.B
 	l.logger.Debug("Applying GFS retention policy (daily=%d, weekly=%d, monthly=%d, yearly=%d)",
 		config.Daily, config.Weekly, config.Monthly, config.Yearly)
 
-	initialLogs := l.countLogFiles()
+	initialLogs := l.countLogFiles(ctx)
 	logsDeleted := 0
 
 	// Classify backups according to GFS scheme
@@ -608,7 +613,7 @@ func (l *LocalStorage) applySimpleRetention(ctx context.Context, backups []*type
 		totalBackups, maxBackups, toDelete)
 
 	// Delete oldest backups (already sorted newest first)
-	initialLogs := l.countLogFiles()
+	initialLogs := l.countLogFiles(ctx)
 	logsDeleted := 0
 	deleted := 0
 	for i := totalBackups - 1; i >= maxBackups; i-- {

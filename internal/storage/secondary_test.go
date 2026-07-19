@@ -585,7 +585,7 @@ func TestSecondaryStorage_DeleteAssociatedLog_ReturnsFalseOnRemoveError(t *testi
 		t.Fatalf("WriteFile: %v", err)
 	}
 
-	if storage.deleteAssociatedLog(backupPath) {
+	if storage.deleteAssociatedLog(context.Background(), backupPath) {
 		t.Fatalf("expected deleteAssociatedLog to return false on remove error")
 	}
 }
@@ -935,7 +935,7 @@ func TestSecondaryStorage_DeleteAssociatedLog_EmptyConfigPaths(t *testing.T) {
 	storage, _ := NewSecondaryStorage(&config.Config{SecondaryEnabled: true, SecondaryPath: t.TempDir()}, logger)
 	storage.config = cfg
 
-	if storage.deleteAssociatedLog("node-backup-20240102-030405.tar.zst") {
+	if storage.deleteAssociatedLog(context.Background(), "node-backup-20240102-030405.tar.zst") {
 		t.Fatalf("expected false when log path is empty/whitespace")
 	}
 }

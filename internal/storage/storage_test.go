@@ -818,13 +818,13 @@ func TestLocalStorageDeleteAssociatedLogRemovesFile(t *testing.T) {
 		t.Fatalf("write log: %v", err)
 	}
 
-	if !local.deleteAssociatedLog(backupPath) {
+	if !local.deleteAssociatedLog(context.Background(), backupPath) {
 		t.Fatalf("deleteAssociatedLog() = false, want true")
 	}
 	if _, err := os.Stat(logPath); !os.IsNotExist(err) {
 		t.Fatalf("expected log %s to be removed, err=%v", logPath, err)
 	}
-	if local.deleteAssociatedLog(backupPath) {
+	if local.deleteAssociatedLog(context.Background(), backupPath) {
 		t.Fatalf("deleteAssociatedLog() should return false when log already removed")
 	}
 }
@@ -933,14 +933,14 @@ func TestLocalStorageCountLogFiles(t *testing.T) {
 
 	t.Run("nil receiver", func(t *testing.T) {
 		var local *LocalStorage
-		if local.countLogFiles() != -1 {
+		if local.countLogFiles(context.Background()) != -1 {
 			t.Fatalf("nil receiver should return -1")
 		}
 	})
 
 	t.Run("nil config", func(t *testing.T) {
 		local := &LocalStorage{logger: newTestLogger()}
-		if local.countLogFiles() != -1 {
+		if local.countLogFiles(context.Background()) != -1 {
 			t.Fatalf("nil config should return -1")
 		}
 	})
@@ -950,7 +950,7 @@ func TestLocalStorageCountLogFiles(t *testing.T) {
 			config: &config.Config{},
 			logger: newTestLogger(),
 		}
-		if local.countLogFiles() != 0 {
+		if local.countLogFiles(context.Background()) != 0 {
 			t.Fatalf("empty log path should return 0")
 		}
 	})
@@ -967,8 +967,8 @@ func TestLocalStorageCountLogFiles(t *testing.T) {
 			config: &config.Config{LogPath: logDir},
 			logger: newTestLogger(),
 		}
-		if local.countLogFiles() != 2 {
-			t.Fatalf("countLogFiles() = %d, want 2", local.countLogFiles())
+		if local.countLogFiles(context.Background()) != 2 {
+			t.Fatalf("countLogFiles() = %d, want 2", local.countLogFiles(context.Background()))
 		}
 	})
 
@@ -982,7 +982,7 @@ func TestLocalStorageCountLogFiles(t *testing.T) {
 			config: &config.Config{LogPath: badDir},
 			logger: newTestLogger(),
 		}
-		if local.countLogFiles() != -1 {
+		if local.countLogFiles(context.Background()) != -1 {
 			t.Fatalf("expected -1 for glob error")
 		}
 	})
@@ -1165,7 +1165,7 @@ func TestSecondaryStorageDeleteAssociatedLog(t *testing.T) {
 		t.Fatalf("write log: %v", err)
 	}
 
-	if deleted := storage.deleteAssociatedLog(backupPath); !deleted {
+	if deleted := storage.deleteAssociatedLog(context.Background(), backupPath); !deleted {
 		t.Fatalf("deleteAssociatedLog() = false, want true")
 	}
 	if _, err := os.Stat(logPath); !os.IsNotExist(err) {
@@ -1173,18 +1173,18 @@ func TestSecondaryStorageDeleteAssociatedLog(t *testing.T) {
 	}
 
 	// Running again should return false since log is gone.
-	if storage.deleteAssociatedLog(backupPath) {
+	if storage.deleteAssociatedLog(context.Background(), backupPath) {
 		t.Fatalf("deleteAssociatedLog() should fail when log is missing")
 	}
 
 	// Invalid backup name should not delete anything.
-	if storage.deleteAssociatedLog(filepath.Join(logDir, "invalid.tar")) {
+	if storage.deleteAssociatedLog(context.Background(), filepath.Join(logDir, "invalid.tar")) {
 		t.Fatalf("deleteAssociatedLog() should return false for invalid name")
 	}
 
 	// Nil receiver should be handled gracefully.
 	var nilStorage *SecondaryStorage
-	if nilStorage.deleteAssociatedLog(backupPath) {
+	if nilStorage.deleteAssociatedLog(context.Background(), backupPath) {
 		t.Fatalf("nil storage should not delete logs")
 	}
 }
@@ -1194,14 +1194,14 @@ func TestSecondaryStorageCountLogFiles(t *testing.T) {
 
 	t.Run("nil receiver", func(t *testing.T) {
 		var storage *SecondaryStorage
-		if storage.countLogFiles() != -1 {
+		if storage.countLogFiles(context.Background()) != -1 {
 			t.Fatalf("nil storage should return -1")
 		}
 	})
 
 	t.Run("nil config", func(t *testing.T) {
 		storage := &SecondaryStorage{logger: newTestLogger()}
-		if storage.countLogFiles() != -1 {
+		if storage.countLogFiles(context.Background()) != -1 {
 			t.Fatalf("nil config should return -1")
 		}
 	})
@@ -1211,7 +1211,7 @@ func TestSecondaryStorageCountLogFiles(t *testing.T) {
 			config: &config.Config{},
 			logger: newTestLogger(),
 		}
-		if storage.countLogFiles() != 0 {
+		if storage.countLogFiles(context.Background()) != 0 {
 			t.Fatalf("empty path should return 0")
 		}
 	})
@@ -1228,7 +1228,7 @@ func TestSecondaryStorageCountLogFiles(t *testing.T) {
 			config: &config.Config{SecondaryLogPath: logDir},
 			logger: newTestLogger(),
 		}
-		if got := storage.countLogFiles(); got != 3 {
+		if got := storage.countLogFiles(context.Background()); got != 3 {
 			t.Fatalf("countLogFiles() = %d, want 3", got)
 		}
 	})
@@ -1243,7 +1243,7 @@ func TestSecondaryStorageCountLogFiles(t *testing.T) {
 			config: &config.Config{SecondaryLogPath: badDir},
 			logger: newTestLogger(),
 		}
-		if got := storage.countLogFiles(); got != -1 {
+		if got := storage.countLogFiles(context.Background()); got != -1 {
 			t.Fatalf("expected -1 for glob error, got %d", got)
 		}
 	})

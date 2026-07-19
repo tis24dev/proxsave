@@ -482,7 +482,7 @@ func (s *SecondaryStorage) deleteBackupInternal(ctx context.Context, backupFile 
 	}
 
 	// Best-effort: delete associated secondary log file for this backup
-	logDeleted := s.deleteAssociatedLog(backupFile)
+	logDeleted := s.deleteAssociatedLog(ctx, backupFile)
 
 	if len(failedFiles) > 0 {
 		if !dataFailed {
@@ -497,7 +497,7 @@ func (s *SecondaryStorage) deleteBackupInternal(ctx context.Context, backupFile 
 
 // deleteAssociatedLog attempts to remove the secondary log file corresponding to a backup.
 // It is best-effort and never returns an error to the caller.
-func (s *SecondaryStorage) deleteAssociatedLog(backupFile string) bool {
+func (s *SecondaryStorage) deleteAssociatedLog(ctx context.Context, backupFile string) bool {
 	if s == nil || s.config == nil {
 		return false
 	}
@@ -515,7 +515,9 @@ func (s *SecondaryStorage) deleteAssociatedLog(backupFile string) bool {
 	logName := fmt.Sprintf("backup-%s-%s.log", host, ts)
 	fullPath := filepath.Join(logPath, logName)
 
-	if err := os.Remove(fullPath); err != nil {
+	// Bounded against a dead/stale mount: on a cancelled/expired ctx safefs
+	// returns immediately without running the remove (best-effort cleanup).
+	if err := safefs.Remove(ctx, fullPath, fsIoTimeout(s.config)); err != nil {
 		if !os.IsNotExist(err) {
 			s.logger.Debug("Secondary logs: failed to delete %s: %v", logName, err)
 		}
@@ -526,7 +528,7 @@ func (s *SecondaryStorage) deleteAssociatedLog(backupFile string) bool {
 	return true
 }
 
-func (s *SecondaryStorage) countLogFiles() int {
+func (s *SecondaryStorage) countLogFiles(ctx context.Context) int {
 	if s == nil || s.config == nil {
 		return -1
 	}
@@ -535,7 +537,10 @@ func (s *SecondaryStorage) countLogFiles() int {
 		return 0
 	}
 	pattern := filepath.Join(logPath, "backup-*.log")
-	matches, err := filepath.Glob(pattern)
+	// Bounded against a dead/stale mount, consistent with the main backup glob.
+	matches, err := safefs.Run(ctx, "secondary-log-glob", s.basePath, fsIoTimeout(s.config), func() ([]string, error) {
+		return filepath.Glob(pattern)
+	})
 	if err != nil {
 		s.logger.Debug("Secondary logs: failed to count log files: %v", err)
 		return -1
@@ -591,7 +596,7 @@ func (s *SecondaryStorage) applyGFSRetention(ctx context.Context, backups []*typ
 	s.logger.Debug("Applying GFS retention policy (daily=%d, weekly=%d, monthly=%d, yearly=%d)",
 		config.Daily, config.Weekly, config.Monthly, config.Yearly)
 
-	initialLogs := s.countLogFiles()
+	initialLogs := s.countLogFiles(ctx)
 	logsDeleted := 0
 
 	// Classify backups according to GFS scheme
@@ -693,7 +698,7 @@ func (s *SecondaryStorage) applySimpleRetention(ctx context.Context, backups []*
 		totalBackups, maxBackups, toDelete)
 
 	// Delete oldest backups (already sorted newest first)
-	initialLogs := s.countLogFiles()
+	initialLogs := s.countLogFiles(ctx)
 	logsDeleted := 0
 	deleted := 0
 	for i := totalBackups - 1; i >= maxBackups; i-- {
