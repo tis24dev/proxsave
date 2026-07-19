@@ -26,6 +26,10 @@ var lookPath = exec.LookPath
 
 var closeIntoErr = closeerr.CloseIntoErr
 
+// attachStderrLoggerFn is a seam over (*Archiver).attachStderrLogger so tests can
+// assert it is not reached on an early-return path.
+var attachStderrLoggerFn = (*Archiver).attachStderrLogger
+
 // ArchiverDeps groups external dependencies used by Archiver.
 type ArchiverDeps struct {
 	LookPath       func(string) (string, error)
@@ -665,10 +669,6 @@ func (a *Archiver) createXZArchive(ctx context.Context, sourceDir, outputPath st
 	if err != nil {
 		return err
 	}
-	if err := a.attachStderrLogger(cmd, "xz"); err != nil {
-		return fmt.Errorf("capture xz output: %w", err)
-	}
-
 	outFile, err := createBackupOutputFile(outputPath)
 	if err != nil {
 		return fmt.Errorf("failed to create output file: %w", err)
@@ -683,6 +683,9 @@ func (a *Archiver) createXZArchive(ctx context.Context, sourceDir, outputPath st
 	}
 	defer finalizeEncryptionInto(&err, finalizeEncryption)
 	cmd.Stdout = writer
+	if err := attachStderrLoggerFn(a, cmd, "xz"); err != nil {
+		return fmt.Errorf("capture xz output: %w", err)
+	}
 
 	errChan := make(chan error, 1)
 	go func() {
@@ -728,10 +731,6 @@ func (a *Archiver) createZstdArchive(ctx context.Context, sourceDir, outputPath 
 	if err != nil {
 		return err
 	}
-	if err := a.attachStderrLogger(cmd, "zstd"); err != nil {
-		return fmt.Errorf("capture zstd output: %w", err)
-	}
-
 	outFile, err := createBackupOutputFile(outputPath)
 	if err != nil {
 		return fmt.Errorf("failed to create output file: %w", err)
@@ -746,6 +745,9 @@ func (a *Archiver) createZstdArchive(ctx context.Context, sourceDir, outputPath 
 	}
 	defer finalizeEncryptionInto(&err, finalizeEncryption)
 	cmd.Stdout = writer
+	if err := attachStderrLoggerFn(a, cmd, "zstd"); err != nil {
+		return fmt.Errorf("capture zstd output: %w", err)
+	}
 
 	errChan := make(chan error, 1)
 	go func() {
