@@ -648,7 +648,7 @@ func (c *Collector) collectPVEStorageRuntime(ctx context.Context, commandsDir st
 	} else if len(storageData) > 0 {
 		storages, err := parseNodeStorageList(storageData)
 		if err != nil {
-			c.logger.Debug("Failed to parse storage status JSON: %v", err)
+			c.logger.Warning("Failed to parse storage status JSON: %v", err)
 		} else {
 			info.Storages = append(info.Storages, storages...)
 			sort.Slice(info.Storages, func(i, j int) bool {
