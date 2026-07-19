@@ -25,6 +25,8 @@ builds:
     goarch:
       - amd64
     mod_timestamp: "{{ .CommitTimestamp }}"
+    flags:
+      - -trimpath
     ldflags:
       - >-
         -s -w
