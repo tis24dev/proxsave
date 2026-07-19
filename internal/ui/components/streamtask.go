@@ -130,6 +130,11 @@ type StreamTask struct {
 	// yanked back to the bottom by the next streamed line; End/GotoBottom
 	// re-enables it.
 	follow bool
+	// notifyPushed, set by RunStreamTask, is fired once from Init (i.e. once the
+	// screen is on the stack) so the worker can order its completion send after
+	// the push.
+	notifyPushed func()
+	pushOnce     sync.Once
 }
 
 func newStreamScreen(title string, token uint64, cancel context.CancelFunc) *StreamTask {
@@ -156,7 +161,12 @@ func newStreamScreen(title string, token uint64, cancel context.CancelFunc) *Str
 // under another screen.
 func (t *StreamTask) ReceivesBackgroundMessages() bool { return true }
 
-func (t *StreamTask) Init() tea.Cmd { return t.spin.Tick }
+func (t *StreamTask) Init() tea.Cmd {
+	if t.notifyPushed != nil {
+		t.pushOnce.Do(t.notifyPushed)
+	}
+	return t.spin.Tick
+}
 
 func (t *StreamTask) Title() string { return t.title }
 
@@ -660,6 +670,16 @@ func RunStreamTask(ctx context.Context, s *shell.Session, title string, run func
 	scr := newStreamScreen(title, token, cancel)
 	buf := newStreamEmitBuffer(s, token)
 
+	// The stream screen must be on the stack before its StreamDoneMsg is processed:
+	// the router matches the done message by token, so a done that lands before the
+	// screen is pushed finds no match, is dropped, and Ask then blocks forever (the
+	// deadlock a fast/instant run can hit under the race detector). Init fires
+	// notifyPushed once the screen is pushed, so gate the completion send on it. If
+	// the program is gone before the push, bail without sending so the worker never
+	// leaks.
+	pushed := make(chan struct{})
+	scr.notifyPushed = func() { close(pushed) }
+
 	done := make(chan error, 1)
 	go func() {
 		outcome, rerr := run(taskCtx, buf.emit)
@@ -669,7 +689,11 @@ func RunStreamTask(ctx context.Context, s *shell.Session, title string, run func
 		// after Close, so a straggling producer goroutine can never send-after-done.
 		buf.Close()
 		done <- rerr
-		s.Send(StreamDoneMsg{Token: token, Outcome: outcome, Err: rerr})
+		select {
+		case <-pushed:
+			s.Send(StreamDoneMsg{Token: token, Outcome: outcome, Err: rerr})
+		case <-s.Done():
+		}
 	}()
 
 	res, askErr := shell.Ask(ctx, s, scr)

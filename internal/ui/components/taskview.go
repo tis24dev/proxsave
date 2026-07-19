@@ -3,6 +3,7 @@ package components
 import (
 	"context"
 	"strings"
+	"sync"
 	"sync/atomic"
 
 	"charm.land/bubbles/v2/spinner"
@@ -42,6 +43,10 @@ type Task struct {
 	spin       spinner.Model
 	cancel     context.CancelFunc
 	cancelling bool
+	// notifyPushed, set by RunTask, is fired once from Init (i.e. once the screen
+	// is on the stack) so the worker can order its completion send after the push.
+	notifyPushed func()
+	pushOnce     sync.Once
 }
 
 func newTaskScreen(title, initialMessage string, token uint64, cancel context.CancelFunc) *Task {
@@ -60,7 +65,12 @@ func newTaskScreen(title, initialMessage string, token uint64, cancel context.Ca
 // buried under another screen.
 func (t *Task) ReceivesBackgroundMessages() bool { return true }
 
-func (t *Task) Init() tea.Cmd { return t.spin.Tick }
+func (t *Task) Init() tea.Cmd {
+	if t.notifyPushed != nil {
+		t.pushOnce.Do(t.notifyPushed)
+	}
+	return t.spin.Tick
+}
 
 func (t *Task) Title() string { return t.title }
 
@@ -119,13 +129,27 @@ func RunTask(ctx context.Context, s *shell.Session, title, initialMessage string
 	token := taskToken.Add(1)
 	scr := newTaskScreen(title, initialMessage, token, cancel)
 
+	// The task screen must be on the stack before its TaskDoneMsg is processed:
+	// the router matches the done message by token, so a done that lands before
+	// the screen is pushed finds no match, is dropped, and Ask then blocks forever
+	// (the deadlock a fast/instant run can hit under the race detector). Init fires
+	// notifyPushed once the screen is pushed, so gate the completion send on it.
+	// An early progress message is harmless to drop (cosmetic). If the program is
+	// gone before the push, bail without sending so the worker never leaks.
+	pushed := make(chan struct{})
+	scr.notifyPushed = func() { close(pushed) }
+
 	done := make(chan error, 1)
 	go func() {
 		err := run(taskCtx, func(message string) {
 			s.Send(TaskProgressMsg{Token: token, Message: message})
 		})
 		done <- err
-		s.Send(TaskDoneMsg{Token: token, Err: err})
+		select {
+		case <-pushed:
+			s.Send(TaskDoneMsg{Token: token, Err: err})
+		case <-s.Done():
+		}
 	}()
 
 	res, askErr := shell.Ask(ctx, s, scr)
