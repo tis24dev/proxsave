@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/tis24dev/proxsave/internal/orchestrator"
+	"github.com/tis24dev/proxsave/internal/safefs"
 )
 
 // ErrInstallCancelled is returned when the user aborts the install wizard.
@@ -93,7 +94,7 @@ func ApplyAuditDisables(configPath string, keys []string) error {
 		return nil
 	}
 
-	contentBytes, err := os.ReadFile(configPath) // #nosec G304 -- admin-supplied config path
+	contentBytes, err := safefs.ReadFileUnderRoot(configPath)
 	if err != nil {
 		return fmt.Errorf("read configuration: %w", err)
 	}
