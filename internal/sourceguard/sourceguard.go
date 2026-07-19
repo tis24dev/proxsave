@@ -13,13 +13,13 @@ import "unicode"
 type Finding struct {
 	Line int
 	Rune rune
-	Why  string // "bidi/invisible format rune" or "Cyrillic/Greek homoglyph letter"
+	Why  string // "bidi/invisible format rune" or "confusable homoglyph letter (Cyrillic/Greek/Armenian/Cherokee/Coptic/fullwidth)"
 }
 
 // The reason strings, kept as constants so callers and tests agree.
 const (
 	whyFormat    = "bidi/invisible format rune"
-	whyHomoglyph = "Cyrillic/Greek homoglyph letter"
+	whyHomoglyph = "confusable homoglyph letter (Cyrillic/Greek/Armenian/Cherokee/Coptic/fullwidth)"
 )
 
 // rejectSet holds runes that are always deceptive in source: bidi
@@ -46,20 +46,42 @@ var rejectSet = map[rune]struct{}{
 	0x2068: {}, // FIRST STRONG ISOLATE
 	0x2069: {}, // POP DIRECTIONAL ISOLATE
 	0xFEFF: {}, // ZERO WIDTH NO-BREAK SPACE / BYTE ORDER MARK
+	0x180E: {}, // MONGOLIAN VOWEL SEPARATOR
+	0x2028: {}, // LINE SEPARATOR
+	0x2029: {}, // PARAGRAPH SEPARATOR
+	0xFFF9: {}, // INTERLINEAR ANNOTATION ANCHOR
+	0xFFFA: {}, // INTERLINEAR ANNOTATION SEPARATOR
+	0xFFFB: {}, // INTERLINEAR ANNOTATION TERMINATOR
 }
 
-// isHomoglyphLetter reports whether r is a Cyrillic (U+0400-U+04FF) or Greek
-// (U+0370-U+03FF) letter. Those blocks hold the glyphs that most often
-// impersonate Latin letters in identifiers and string literals (for example
-// Cyrillic 'a' U+0430 for Latin 'a'). Non-letter runes in those blocks
-// (punctuation, combining marks) are left alone.
-func isHomoglyphLetter(r rune) bool {
-	inCyrillic := r >= 0x0400 && r <= 0x04FF
-	inGreek := r >= 0x0370 && r <= 0x03FF
-	if !inCyrillic && !inGreek {
+// isFormatReject reports whether r is an always-deceptive format/invisible rune:
+// a member of rejectSet, or a deprecated Unicode tag character (U+E0000-E007F),
+// which are invisible and have been used to hide payloads in plain sight.
+func isFormatReject(r rune) bool {
+	if _, ok := rejectSet[r]; ok {
+		return true
+	}
+	return r >= 0xE0000 && r <= 0xE007F
+}
+
+// isConfusableLetter reports whether r is a letter from a script block whose
+// glyphs commonly impersonate Latin letters in identifiers and string literals
+// (a true homoglyph, visually identical to ASCII). The curated blocks are
+// Cyrillic, Greek, Armenian, Cherokee, Coptic, and the fullwidth ASCII variants.
+// Legitimate, visibly-distinct non-ASCII (accented Latin, CJK, letterlike
+// symbols) is deliberately NOT included, so real content is never flagged.
+func isConfusableLetter(r rune) bool {
+	switch {
+	case r >= 0x0400 && r <= 0x04FF, // Cyrillic
+		r >= 0x0370 && r <= 0x03FF, // Greek
+		r >= 0x0530 && r <= 0x058F, // Armenian
+		r >= 0x13A0 && r <= 0x13FF, // Cherokee
+		r >= 0x2C80 && r <= 0x2CFF, // Coptic
+		r >= 0xFF00 && r <= 0xFF5E: // Fullwidth ASCII variants
+		return unicode.IsLetter(r)
+	default:
 		return false
 	}
-	return unicode.IsLetter(r)
 }
 
 // ScanText reports deceptive runes in content. checkHomoglyphs is true only for
@@ -74,11 +96,11 @@ func ScanText(content string, checkHomoglyphs bool) []Finding {
 			line++
 			continue
 		}
-		if _, bad := rejectSet[r]; bad {
+		if isFormatReject(r) {
 			findings = append(findings, Finding{Line: line, Rune: r, Why: whyFormat})
 			continue
 		}
-		if checkHomoglyphs && isHomoglyphLetter(r) {
+		if checkHomoglyphs && isConfusableLetter(r) {
 			findings = append(findings, Finding{Line: line, Rune: r, Why: whyHomoglyph})
 		}
 	}

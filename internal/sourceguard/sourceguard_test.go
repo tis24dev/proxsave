@@ -95,6 +95,45 @@ func TestTrackedSourceHasNoDeceptiveUnicode(t *testing.T) {
 	}
 }
 
+// New invisibles beyond the original set (line separator + a deprecated tag
+// char) must be flagged. Runes as escapes so this file stays clean.
+func TestScanTextFlagsExtendedInvisibles(t *testing.T) {
+	got := ScanText("a\u2028b\U000e0041c", true)
+	if len(got) != 2 {
+		t.Fatalf("want 2 format findings (U+2028, U+E0041), got %d: %+v", len(got), got)
+	}
+	for _, f := range got {
+		if f.Why != whyFormat {
+			t.Errorf("finding %#U why = %q, want %q", f.Rune, f.Why, whyFormat)
+		}
+	}
+}
+
+// Each curated confusable block must be flagged as a homoglyph when
+// checkHomoglyphs is true, and NOT when false. Runes as escapes.
+func TestScanTextFlagsCuratedConfusableBlocks(t *testing.T) {
+	// Armenian U+0561, Cherokee U+13A0, Coptic U+2C81, Fullwidth-Latin U+FF41.
+	for _, r := range []rune{'\u0561', '\u13a0', '\u2c81', '\uff41'} {
+		in := string(r)
+		on := ScanText(in, true)
+		if len(on) != 1 || on[0].Why != whyHomoglyph || on[0].Rune != r {
+			t.Fatalf("ScanText(%#U, on) = %+v, want one %q finding", r, on, whyHomoglyph)
+		}
+		if off := ScanText(in, false); len(off) != 0 {
+			t.Fatalf("ScanText(%#U, off) = %+v, want none", r, off)
+		}
+	}
+}
+
+// FP guard: legitimate non-ASCII that is NOT a confusable homoglyph (accented
+// Latin, CJK) must never be flagged, even with checkHomoglyphs on. This pins the
+// curated-blocks decision. U+00E9 e-acute, U+4E16 CJK.
+func TestScanTextIgnoresLegitimateNonASCII(t *testing.T) {
+	if got := ScanText("caf\u00e9 \u4e16", true); len(got) != 0 {
+		t.Fatalf("legit non-ASCII (accented Latin, CJK) flagged: %+v", got)
+	}
+}
+
 // repoRoot walks up from the package dir until it finds go.mod, mirroring
 // repoRootForVersionTest in cmd/proxsave/main_go_version_test.go.
 func repoRoot(t *testing.T) string {
