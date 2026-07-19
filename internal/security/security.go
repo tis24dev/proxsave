@@ -1280,7 +1280,7 @@ func (c *Checker) ensureOwnershipAndPerm(ctx context.Context, path string, info 
 					c.addError("Security: refusing to chmod symlink %s", path)
 				} else if c.cfg.DryRun {
 					c.logger.Info("DRY RUN: would adjust permissions on %s to %o (current %o)", path, expectedPerm, perm)
-				} else if err := safefs.Chmod(ctx, path, expectedPerm, c.fsTimeout); err != nil {
+				} else if err := safefs.Lchmod(ctx, path, expectedPerm, c.fsTimeout); err != nil {
 					if errors.Is(err, safefs.ErrTimeout) {
 						c.addWarning("Security check: chmod on %s timed out after %s; leaving permissions unchanged (dead/stale mount?)", path, c.fsTimeout)
 					} else {

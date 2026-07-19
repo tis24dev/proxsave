@@ -189,9 +189,9 @@ func applyOwnershipWalkEntry(ctx context.Context, path string, d fs.DirEntry, wa
 		// by the Lchown above to backupUser:backupGroup, which is the whole point of
 		// SET_BACKUP_PERMISSIONS - while denying "others" entirely. Tightening to
 		// <=0700 would silently remove backup-group access; <=0600 would make the
-		// directory non-traversable. Routing the chmod through safefs.Chmod (variable
+		// directory non-traversable. Routing the chmod through safefs.Lchmod (variable
 		// mode) both bounds the call and structurally avoids the G302 finding.
-		if err := safefs.Chmod(ctx, path, 0o750, timeout); err != nil {
+		if err := safefs.Lchmod(ctx, path, 0o750, timeout); err != nil {
 			logger.Debug("chmod failed on %s: %v", path, err)
 		}
 	}
