@@ -179,8 +179,10 @@ func TestSanitizeLine(t *testing.T) {
 // are >= 0x20 and would otherwise pass the C0/C1 filter, defeating Trojan-source
 // display spoofing of filenames/values shown to root.
 func TestSanitizeDropsFormatAndBidiRunes(t *testing.T) {
-	// U+202E RIGHT-TO-LEFT OVERRIDE, U+200B ZERO WIDTH SPACE.
-	in := "a‮b​c"
+	// U+202E RIGHT-TO-LEFT OVERRIDE, U+200B ZERO WIDTH SPACE, written as \u
+	// escapes so the source stays free of literal deceptive runes (the guard
+	// needs no allowlist). The compiled string is identical to the raw form.
+	in := "a\u202eb\u200bc"
 	got := sanitize(in)
 	if got != "abc" {
 		t.Fatalf("sanitize(%q) = %q, want %q", in, got, "abc")
