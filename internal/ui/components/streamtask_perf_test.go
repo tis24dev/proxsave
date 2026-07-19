@@ -409,7 +409,9 @@ func TestEmitBufferNeverBlocks(t *testing.T) {
 	s := shell.StartForTestWithOutput(ctx, shell.Config{AppName: "ProxSave", Subtitle: "Backup"}, buf)
 	t.Cleanup(func() { _ = s.Close() })
 
-	b := newStreamEmitBuffer(s, 1)
+	ready := make(chan struct{})
+	close(ready) // no push gate in this direct-flush unit test
+	b := newStreamEmitBuffer(s, 1, ready)
 	defer b.Close()
 
 	const n = 50000
@@ -436,7 +438,9 @@ func TestEmitBufferCloseIdempotentNoLeak(t *testing.T) {
 	s := shell.StartForTestWithOutput(ctx, shell.Config{AppName: "ProxSave", Subtitle: "Backup"}, buf)
 	t.Cleanup(func() { _ = s.Close() })
 
-	b := newStreamEmitBuffer(s, 1)
+	ready := make(chan struct{})
+	close(ready) // no push gate in this direct-flush unit test
+	b := newStreamEmitBuffer(s, 1, ready)
 	b.emit("one")
 	b.emit("two")
 

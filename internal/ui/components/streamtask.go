@@ -542,17 +542,23 @@ type streamEmitBuffer struct {
 	pending []string
 	closed  bool
 
-	wake chan struct{}  // 1-deep, coalescing: "count threshold reached"
-	quit chan struct{}  // closed by Close to stop the flusher
-	wg   sync.WaitGroup // waits for the flusher goroutine to exit
+	wake  chan struct{}   // 1-deep, coalescing: "count threshold reached"
+	quit  chan struct{}   // closed by Close to stop the flusher
+	ready <-chan struct{} // closed once the stream screen is on the stack
+	wg    sync.WaitGroup  // waits for the flusher goroutine to exit
 }
 
-func newStreamEmitBuffer(s *shell.Session, token uint64) *streamEmitBuffer {
+// newStreamEmitBuffer starts the flusher. ready is closed once the stream screen
+// is pushed; the flusher holds every batch until then, so a StreamLinesMsg is
+// never sent before the screen exists (the router would drop it by token). A
+// pre-closed ready disables the gate (used by unit tests that drive flush directly).
+func newStreamEmitBuffer(s *shell.Session, token uint64, ready <-chan struct{}) *streamEmitBuffer {
 	b := &streamEmitBuffer{
 		s:     s,
 		token: token,
 		wake:  make(chan struct{}, 1),
 		quit:  make(chan struct{}),
+		ready: ready,
 	}
 	b.wg.Add(1)
 	go b.loop()
@@ -607,6 +613,15 @@ func (b *streamEmitBuffer) take() []string {
 func (b *streamEmitBuffer) flush() {
 	batch := b.take()
 	if len(batch) == 0 {
+		return
+	}
+	// Order the batch after the stream screen is on the stack: the router matches
+	// StreamLinesMsg by token, so a batch sent before the push is dropped. Bail if
+	// the program is gone first so a pre-push Close can never hang. Once ready is
+	// closed the receive is a no-op, so steady-state flushing is not delayed.
+	select {
+	case <-b.ready:
+	case <-b.s.Done():
 		return
 	}
 	b.s.Send(StreamLinesMsg{Token: b.token, Lines: batch})
@@ -668,17 +683,18 @@ func RunStreamTask(ctx context.Context, s *shell.Session, title string, run func
 
 	token := streamToken.Add(1)
 	scr := newStreamScreen(title, token, cancel)
-	buf := newStreamEmitBuffer(s, token)
 
-	// The stream screen must be on the stack before its StreamDoneMsg is processed:
-	// the router matches the done message by token, so a done that lands before the
-	// screen is pushed finds no match, is dropped, and Ask then blocks forever (the
-	// deadlock a fast/instant run can hit under the race detector). Init fires
-	// notifyPushed once the screen is pushed, so gate the completion send on it. If
-	// the program is gone before the push, bail without sending so the worker never
-	// leaks.
+	// The stream screen must be on the stack before its StreamLinesMsg batches and
+	// its StreamDoneMsg are processed: the router matches both by token, so any that
+	// lands before the screen is pushed finds no match and is dropped. A dropped
+	// done makes Ask block forever (the deadlock a fast/instant run can hit under
+	// the race detector); dropped line batches silently lose early output. Init
+	// fires notifyPushed once the screen is pushed, so gate both the line flush (via
+	// the buffer's ready channel) and the completion send on it. If the program is
+	// gone before the push, bail without sending so the worker never leaks.
 	pushed := make(chan struct{})
 	scr.notifyPushed = func() { close(pushed) }
+	buf := newStreamEmitBuffer(s, token, pushed)
 
 	done := make(chan error, 1)
 	go func() {
