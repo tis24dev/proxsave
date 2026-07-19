@@ -1877,7 +1877,7 @@ func (c *CloudStorage) applyGFSRetention(ctx context.Context, backups []*types.B
 	// Get statistics
 	stats := GetRetentionStats(classification)
 	kept := len(backups) - stats[CategoryDelete]
-	c.logger.Debug("GFS classification → daily: %d/%d, weekly: %d/%d, monthly: %d/%d, yearly: %d/%d, kept: %d, to_delete: %d",
+	c.logger.Debug("GFS classification -> daily: %d/%d, weekly: %d/%d, monthly: %d/%d, yearly: %d/%d, kept: %d, to_delete: %d",
 		stats[CategoryDaily], config.Daily,
 		stats[CategoryWeekly], config.Weekly,
 		stats[CategoryMonthly], config.Monthly,
@@ -1925,7 +1925,7 @@ func (c *CloudStorage) applySimpleRetention(ctx context.Context, backups []*type
 	toDelete := totalBackups - maxBackups
 	c.logger.Info("Applying simple retention policy: %d backups found, limit is %d, deleting %d oldest",
 		totalBackups, maxBackups, toDelete)
-	c.logger.Info("Simple retention → current: %d, limit: %d, to_delete: %d",
+	c.logger.Info("Simple retention -> current: %d, limit: %d, to_delete: %d",
 		totalBackups, maxBackups, toDelete)
 
 	// Collect oldest backups (already sorted newest first)

@@ -604,7 +604,7 @@ func (s *SecondaryStorage) applyGFSRetention(ctx context.Context, backups []*typ
 
 	// Get statistics
 	stats := GetRetentionStats(classification)
-	s.logger.Debug("GFS classification → daily: %d/%d, weekly: %d/%d, monthly: %d/%d, yearly: %d/%d, to_delete: %d",
+	s.logger.Debug("GFS classification -> daily: %d/%d, weekly: %d/%d, monthly: %d/%d, yearly: %d/%d, to_delete: %d",
 		stats[CategoryDaily], config.Daily,
 		stats[CategoryWeekly], config.Weekly,
 		stats[CategoryMonthly], config.Monthly,
@@ -694,7 +694,7 @@ func (s *SecondaryStorage) applySimpleRetention(ctx context.Context, backups []*
 	toDelete := totalBackups - maxBackups
 	s.logger.Info("Applying simple retention policy: %d backups found, limit is %d, deleting %d oldest",
 		totalBackups, maxBackups, toDelete)
-	s.logger.Info("Simple retention → current: %d, limit: %d, to_delete: %d",
+	s.logger.Info("Simple retention -> current: %d, limit: %d, to_delete: %d",
 		totalBackups, maxBackups, toDelete)
 
 	// Delete oldest backups (already sorted newest first)

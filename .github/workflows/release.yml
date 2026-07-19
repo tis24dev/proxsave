@@ -126,7 +126,7 @@ jobs:
           printf '%s\n' "$PROXSAVE_KEY_SIGNATURE" > "$KEY_FILE"
           # Derive the public key from the signing secret and compare its base64 body
           # to the pinned key install.sh ships, so a missing/wrong/corrupt secret fails
-          # HERE, before GoReleaser publishes — otherwise the tag would go live without a
+          # HERE, before GoReleaser publishes - otherwise the tag would go live without a
           # usable SHA256SUMS.sig and block every install/upgrade. We compare base64
           # bodies (not whole PEM files): install.sh stores the key as a shell-quoted
           # value (PUBKEY_PEM='-----BEGIN...'), so a naive PEM extraction is not openssl-
@@ -159,7 +159,7 @@ jobs:
           args: release --clean --config .github/.goreleaser.yml
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # Baked into the binary via ldflags (support.supportEmail) — the maintainer
+          # Baked into the binary via ldflags (support.supportEmail) - the maintainer
           # support-email recipient. Empty (secret unset) just disables the support email.
           EMAIL_SUPPORT: ${{ secrets.EMAIL_SUPPORT }}
 

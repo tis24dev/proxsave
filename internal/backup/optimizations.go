@@ -175,7 +175,7 @@ func deduplicateFiles(ctx context.Context, logger *logging.Logger, root string) 
 				canonical: existing,
 				mode:      info.Mode().Perm(),
 			})
-			logger.Debug("Deduplicated %s → %s", path, existing)
+			logger.Debug("Deduplicated %s -> %s", path, existing)
 		} else {
 			hashes[hash] = path
 		}

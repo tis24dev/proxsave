@@ -12,7 +12,7 @@ before:
     - go mod tidy
 
 ###############################################
-# BUILDS — principal binary
+# BUILDS - principal binary
 ###############################################
 builds:
   - id: proxsave
@@ -36,7 +36,7 @@ builds:
         -X github.com/tis24dev/proxsave/internal/support.supportEmail={{ .Env.EMAIL_SUPPORT }}
 
 ###############################################
-# ARCHIVI — tar.gz (classic release)
+# ARCHIVI - tar.gz (classic release)
 ###############################################
 archives:
   - id: archive
@@ -77,7 +77,7 @@ sboms:
       - "cyclonedx-json=$document"
 
 ###############################################
-# RELEASE — GitHub release + prerelease auto
+# RELEASE - GitHub release + prerelease auto
 ###############################################
 release:
   github:
@@ -88,7 +88,7 @@ release:
   name_template: "{{ .Tag }}"
 
 ###############################################
-# CHANGELOG — 
+# CHANGELOG - 
 ###############################################
 changelog:
   use: git
