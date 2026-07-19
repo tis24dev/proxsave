@@ -252,7 +252,7 @@ func printRunIssueSummary(logger *logging.Logger) {
 	fmt.Printf("WARNINGS/ERRORS DURING RUN (warnings=%d errors=%d)\n", logger.WarningCount(), logger.ErrorCount()+logger.NotifyCount())
 	fmt.Println()
 	for _, line := range issues {
-		fmt.Println(logging.NormalizeNotifyErrorToken(line))
+		fmt.Println(components.SanitizeLine(logging.NormalizeNotifyErrorToken(line)))
 	}
 	fmt.Println("===========================================")
 	fmt.Println()

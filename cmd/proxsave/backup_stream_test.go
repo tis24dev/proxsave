@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"io"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -556,5 +557,44 @@ func TestAppendRunIssueSummary_NotifyErrorShownAsError(t *testing.T) {
 	// The recap error count must include the notify failure (shown as an error).
 	if !strings.Contains(out, "1 error(s)") {
 		t.Fatalf("recap error count must include the notify failure: %q", out)
+	}
+}
+
+// A BEL (0x07) is a C0 control byte lipgloss never emits, so its survival in the
+// rendered recap proves the raw issue line was not sanitized.
+func TestAppendRunIssueSummaryStripsControlBytes(t *testing.T) {
+	lg := logging.New(types.LogLevelInfo, false)
+	lg.SetOutput(io.Discard)
+	lg.Warning("bad\x07line")
+
+	var b strings.Builder
+	appendRunIssueSummary(&b, lg)
+
+	if strings.Contains(b.String(), "\x07") {
+		t.Fatalf("recap must strip C0 control bytes from issue lines:\n%q", b.String())
+	}
+}
+
+func TestPrintRunIssueSummaryStripsControlBytes(t *testing.T) {
+	lg := logging.New(types.LogLevelInfo, false)
+	lg.SetOutput(io.Discard)
+	lg.Error("boom\x07here")
+
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("pipe: %v", err)
+	}
+	prev := os.Stdout
+	os.Stdout = w
+	printRunIssueSummary(lg)
+	_ = w.Close()
+	os.Stdout = prev
+
+	out, err := io.ReadAll(r)
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	if strings.Contains(string(out), "\x07") {
+		t.Fatalf("CLI issue summary must strip C0 control bytes:\n%q", string(out))
 	}
 }

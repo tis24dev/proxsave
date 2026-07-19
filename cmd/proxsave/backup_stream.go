@@ -331,7 +331,7 @@ func appendRunIssueSummary(b *strings.Builder, logger *logging.Logger) {
 	}
 	for _, line := range shown {
 		b.WriteString("\n")
-		b.WriteString(theme.Subtle.Render("  " + logging.NormalizeNotifyErrorToken(line)))
+		b.WriteString(theme.Subtle.Render("  " + components.SanitizeLine(logging.NormalizeNotifyErrorToken(line))))
 	}
 	if extra := len(issues) - len(shown); extra > 0 {
 		b.WriteString("\n")
