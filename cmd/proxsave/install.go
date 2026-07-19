@@ -18,6 +18,7 @@ import (
 	"github.com/tis24dev/proxsave/internal/installer"
 	"github.com/tis24dev/proxsave/internal/logging"
 	"github.com/tis24dev/proxsave/internal/safeexec"
+	"github.com/tis24dev/proxsave/internal/safefs"
 	buildinfo "github.com/tis24dev/proxsave/internal/version"
 )
 
@@ -1086,7 +1087,7 @@ func promptHealthcheckOptionalURL(ctx context.Context, reader *bufio.Reader, que
 // via installer.ApplyHealthcheckSelfParams. It mirrors the TUI RunHealthcheckSelfParams
 // and MUST run before runHealthcheckSetupCLI so the bootstrap re-reads the alive URL.
 func runHealthcheckSelfParamsCLI(ctx context.Context, reader *bufio.Reader, baseDir, configPath string, bootstrap *logging.BootstrapLogger) error {
-	contentBytes, err := os.ReadFile(configPath)
+	contentBytes, err := safefs.ReadFileUnderRoot(configPath)
 	if err != nil {
 		fmt.Printf("ERROR: unable to read configuration for healthcheck parameters: %v\n", err)
 		if bootstrap != nil {

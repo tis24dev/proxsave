@@ -7,6 +7,7 @@ import (
 
 	cronutil "github.com/tis24dev/proxsave/internal/cron"
 	"github.com/tis24dev/proxsave/internal/installer"
+	"github.com/tis24dev/proxsave/internal/safefs"
 )
 
 // resolveCronScheduleFromEnv returns a cron schedule string derived from the
@@ -49,7 +50,7 @@ func buildInstallCronSchedule(skipConfigWizard bool, cronSchedule, configPath st
 // the SCHEDULER_TIME stored in configPath, or "" when the file is unreadable or
 // carries no valid HH:MM time.
 func keptCronScheduleFromConfig(configPath string) string {
-	data, err := os.ReadFile(configPath)
+	data, err := safefs.ReadFileUnderRoot(configPath)
 	if err != nil {
 		return ""
 	}

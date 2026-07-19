@@ -5,7 +5,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
 	"sort"
 	"strings"
 	"time"
@@ -17,6 +16,7 @@ import (
 	"github.com/tis24dev/proxsave/internal/logging"
 	"github.com/tis24dev/proxsave/internal/orchestrator"
 	"github.com/tis24dev/proxsave/internal/safeexec"
+	"github.com/tis24dev/proxsave/internal/safefs"
 	"github.com/tis24dev/proxsave/internal/types"
 	"github.com/tis24dev/proxsave/pkg/utils"
 )
@@ -309,7 +309,7 @@ func maybeAutoMigrateDaemon(ctx context.Context, configPath, baseDir, execToken 
 // inline comments and ordering.
 func setBackupEnvKeys(configPath string, kv map[string]string) error {
 	// Operator-configured path (same trust level as the install/upgrade writers).
-	data, err := os.ReadFile(configPath)
+	data, err := safefs.ReadFileUnderRoot(configPath)
 	if err != nil {
 		return err
 	}
@@ -384,7 +384,7 @@ func reconcileSchedulerAfterInstall(ctx context.Context, wizardMode, configPath 
 // backup.env (default cron). Used for the keep-existing install path where the
 // wizard did not collect a mode.
 func readConfiguredSchedulerMode(configPath string) string {
-	data, err := os.ReadFile(configPath)
+	data, err := safefs.ReadFileUnderRoot(configPath)
 	if err != nil {
 		return "cron"
 	}

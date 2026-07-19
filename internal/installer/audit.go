@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
 	"os/exec"
 	"regexp"
 	"sort"
@@ -14,6 +13,7 @@ import (
 
 	"github.com/tis24dev/proxsave/internal/config"
 	"github.com/tis24dev/proxsave/internal/safeexec"
+	"github.com/tis24dev/proxsave/internal/safefs"
 )
 
 // PostInstallAuditSuggestion represents an optional feature that appears to be enabled
@@ -86,7 +86,7 @@ func CollectPostInstallDisableSuggestions(ctx context.Context, execPath, configP
 		return nil, fmt.Errorf("config path cannot be empty")
 	}
 
-	configBytes, err := os.ReadFile(configPath)
+	configBytes, err := safefs.ReadFileUnderRoot(configPath)
 	if err != nil {
 		return nil, fmt.Errorf("read configuration for audit: %w", err)
 	}
