@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/tis24dev/proxsave/internal/logging"
+	"github.com/tis24dev/proxsave/internal/safefs"
 )
 
 const maxArchiveInventoryBytes = 10 << 20 // 10 MiB
@@ -908,7 +909,7 @@ func isIfaceNameChar(ch byte) bool {
 }
 
 func readTrimmedLine(path string, max int) string {
-	data, err := os.ReadFile(path)
+	data, err := safefs.ReadFileUnderRoot(path)
 	if err != nil || len(data) == 0 {
 		return ""
 	}

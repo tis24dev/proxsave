@@ -12,6 +12,7 @@ import (
 	"github.com/tis24dev/proxsave/internal/installer"
 	"github.com/tis24dev/proxsave/internal/logging"
 	"github.com/tis24dev/proxsave/internal/orchestrator"
+	"github.com/tis24dev/proxsave/internal/safefs"
 	"github.com/tis24dev/proxsave/internal/ui/components"
 	"github.com/tis24dev/proxsave/internal/ui/flows/agesetup"
 	flowinstall "github.com/tis24dev/proxsave/internal/ui/flows/install"
@@ -138,7 +139,7 @@ func runInstallTUI(ctx context.Context, configPath string, bootstrap *logging.Bo
 		skipConfigWizard = true
 	case installer.ExistingConfigEdit:
 		logging.DebugStepBootstrap(bootstrap, "install workflow (tui)", "editing existing configuration")
-		content, readErr := os.ReadFile(configPath)
+		content, readErr := safefs.ReadFileUnderRoot(configPath)
 		if readErr != nil {
 			return fmt.Errorf("read existing configuration: %w", readErr)
 		}

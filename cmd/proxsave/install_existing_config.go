@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/tis24dev/proxsave/internal/config"
+	"github.com/tis24dev/proxsave/internal/safefs"
 )
 
 type existingConfigMode int
@@ -99,7 +100,7 @@ func resolveExistingConfigDecision(mode existingConfigMode, configPath string) (
 			AbortInstall:     false,
 		}, nil
 	case existingConfigEdit:
-		content, err := os.ReadFile(configPath)
+		content, err := safefs.ReadFileUnderRoot(configPath)
 		if err != nil {
 			return existingConfigDecision{}, fmt.Errorf("read existing configuration: %w", err)
 		}

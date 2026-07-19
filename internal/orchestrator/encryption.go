@@ -17,6 +17,7 @@ import (
 	"filippo.io/age"
 	"filippo.io/age/agessh"
 	"github.com/tis24dev/proxsave/internal/input"
+	"github.com/tis24dev/proxsave/internal/safefs"
 	"github.com/tis24dev/proxsave/pkg/bech32"
 	"golang.org/x/crypto/curve25519"
 	"golang.org/x/crypto/scrypt"
@@ -298,7 +299,7 @@ func parseRecipientString(value string) (age.Recipient, error) {
 }
 
 func readRecipientFile(path string) (recipients []string, err error) {
-	f, err := os.Open(path)
+	f, err := safefs.OpenFileUnderRoot(path, os.O_RDONLY, 0)
 	if err != nil {
 		return nil, err
 	}

@@ -296,7 +296,7 @@ func runPostInstallAuditCLI(ctx context.Context, reader *bufio.Reader, execPath,
 		return nil
 	}
 
-	contentBytes, err := os.ReadFile(configPath)
+	contentBytes, err := safefs.ReadFileUnderRoot(configPath)
 	if err != nil {
 		fmt.Printf("ERROR: Unable to update configuration (read failed): %v\n", err)
 		if bootstrap != nil {
