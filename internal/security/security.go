@@ -485,15 +485,33 @@ func (c *Checker) verifyBinaryIntegrity(ctx context.Context) {
 	}
 }
 
-// writeHashFile writes currentHash to hashFile under the fs timeout. os.WriteFile
-// opens the path, which a dead/stale mount can wedge, so the write is bounded
-// with safefs.Run; on timeout a *TimeoutError (wrapping safefs.ErrTimeout) is
-// returned and the caller surfaces it through its best-effort
-// "Failed to create/update hash file" warning. With c.fsTimeout <= 0 (legacy /
-// FS_IO_TIMEOUT unset) safefs.Run is a direct synchronous os.WriteFile.
+// writeHashFile writes currentHash to hashFile under the fs timeout. Opening the
+// path can wedge on a dead/stale mount, so the write is bounded with safefs.Run;
+// on timeout a *TimeoutError (wrapping safefs.ErrTimeout) is returned and the
+// caller surfaces it through its best-effort "Failed to create/update hash
+// file" warning. With c.fsTimeout <= 0 (legacy / FS_IO_TIMEOUT unset) safefs.Run
+// calls the write function directly and synchronously. The write itself mirrors
+// the read path: it opens the .md5 confined to its directory via os.OpenRoot and
+// writes through Root.OpenFile with a bare basename, so a symlink planted at the
+// final path component is refused rather than followed (F03-14).
 func (c *Checker) writeHashFile(ctx context.Context, hashFile, currentHash string) error {
 	_, err := safefs.Run(ctx, "writefile", hashFile, c.fsTimeout, func() (struct{}, error) {
-		return struct{}{}, os.WriteFile(hashFile, []byte(currentHash), 0o600)
+		// Mirror the read path (os.OpenRoot at ~:456): open the .md5 confined to
+		// the executable's directory with a bare basename so a symlink planted at
+		// the final component is refused (os.Root.OpenFile does not follow it),
+		// not followed off the exec dir.
+		root, rerr := os.OpenRoot(filepath.Dir(hashFile))
+		if rerr != nil {
+			return struct{}{}, rerr
+		}
+		defer func() { _ = root.Close() }()
+		f, ferr := root.OpenFile(filepath.Base(hashFile), os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
+		if ferr != nil {
+			return struct{}{}, ferr
+		}
+		defer func() { _ = f.Close() }()
+		_, werr := f.Write([]byte(currentHash))
+		return struct{}{}, werr
 	})
 	return err
 }
