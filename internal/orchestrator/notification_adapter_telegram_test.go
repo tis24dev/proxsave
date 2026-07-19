@@ -59,8 +59,8 @@ func TestTelegramOutcome_FailedIsWarningNotError(t *testing.T) {
 		Method:   "telegram",
 		Duration: 50 * time.Millisecond,
 		Metadata: map[string]interface{}{
-			"relay_accepted": true,
-			"telegram_state": "failed",
+			"relay_accepted":  true,
+			"telegram_state":  "failed",
 			"telegram_reason": "http_403",
 		},
 	})
@@ -157,8 +157,8 @@ func TestRecordNotifierStatus_TelegramLoginURLTrustGate(t *testing.T) {
 
 func TestTelegramOutcome_PendingIsInProgress(t *testing.T) {
 	out, logger := telegramOutcome(t, &notify.NotificationResult{
-		Success:  true,
-		Method:   "telegram",
+		Success: true,
+		Method:  "telegram",
 		Metadata: map[string]interface{}{
 			"relay_accepted": true,
 			"telegram_state": "pending",
@@ -216,8 +216,8 @@ func TestTelegramOutcome_FirstLineUsesAcceptanceDuration(t *testing.T) {
 // F2: with confirmation disabled the state is "unconfirmed" -> quiet, no warning.
 func TestTelegramOutcome_UnconfirmedIsQuietNotWarning(t *testing.T) {
 	out, logger := telegramOutcome(t, &notify.NotificationResult{
-		Success:  true,
-		Method:   "telegram",
+		Success: true,
+		Method:  "telegram",
 		Metadata: map[string]interface{}{
 			"relay_accepted": true,
 			"telegram_state": "unconfirmed",

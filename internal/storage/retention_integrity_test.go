@@ -31,7 +31,7 @@ func TestSimpleRetentionKeepsVerifiedOverUnverified(t *testing.T) {
 
 	now := time.Now()
 	backups := []*types.BackupMetadata{
-		{BackupFile: partial, Timestamp: now, Verified: false},                 // newest, unverified
+		{BackupFile: partial, Timestamp: now, Verified: false},                   // newest, unverified
 		{BackupFile: valid, Timestamp: now.Add(-24 * time.Hour), Verified: true}, // older, verified
 	}
 

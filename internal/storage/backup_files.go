@@ -26,6 +26,7 @@ var errBackupSidecarDeleteOnly = errors.New("backup archive deleted; associated 
 //  1. here (classification),
 //  2. buildBackupCandidatePaths below (the delete/retention enumeration),
 //  3. Orchestrator.removeAssociatedFiles in internal/orchestrator (raw-workspace cleanup).
+//
 // PS-BH-002 was exactly this drift: .manifest.json was added to the cloud upload set
 // but omitted here, so retention could not delete it (orphan accumulation) and List
 // counted it as a phantom backup.
