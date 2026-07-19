@@ -6,6 +6,17 @@ run:
 
 linters:
   default: standard
-
-issues:
-  new: true
+  exclusions:
+    # Deterministic whole-tree linting: report every issue in the tree, not only
+    # those on lines changed since HEAD~ (the former `issues.new: true`, which
+    # failed open on CI's shallow checkout and hid real issues locally).
+    rules:
+      # Writes to a terminal/UI writer never usefully error; checking the return
+      # of the fmt.Fprint family is noise.
+      - source: 'fmt\.Fprint(f|ln)?\('
+        linters:
+          - errcheck
+      # Deferred Close() and similar cleanup in tests is not worth error-checking.
+      - path: _test\.go
+        linters:
+          - errcheck

@@ -258,7 +258,7 @@ func lchmodNoFollow(path string, mode os.FileMode) error {
 	if err != nil {
 		return err
 	}
-	defer syscall.Close(fd)
+	defer func() { _ = syscall.Close(fd) }() // fchmod already applied; a close error on the fd is not meaningful
 	return syscall.Fchmod(fd, chmodSyscallMode(mode))
 }
 

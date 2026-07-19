@@ -201,9 +201,7 @@ func processRestoreArchiveEntries(ctx context.Context, tarReader *tar.Reader, op
 		}
 
 		stats.filesExtracted++
-		if extractedSet != nil {
-			extractedSet[dedupCleanArchivePath(header.Name)] = true
-		}
+		extractedSet[dedupCleanArchivePath(header.Name)] = true
 		extractionLog.recordRestored(header.Name)
 		if stats.filesExtracted%100 == 0 {
 			opts.logger.Debug("Extracted %d files...", stats.filesExtracted)
