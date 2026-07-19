@@ -18,6 +18,25 @@ import (
 	"github.com/tis24dev/proxsave/internal/ui/shell"
 )
 
+var runHealthcheckSelfParamsFn = flowinstall.RunHealthcheckSelfParams
+
+// applySelfHealthcheckParams runs the optional self-mode healthcheck-params step.
+// It returns a non-nil error ONLY when the step must abort the whole install
+// (session death, via fatal = mapUIDeath); a user cancel or any other step error
+// is non-blocking - the step is skipped with a warning, matching the sibling
+// optional install steps.
+func applySelfHealthcheckParams(ctx context.Context, session *shell.Session, baseDir, configPath string, bootstrap *logging.BootstrapLogger, fatal func(error) error) error {
+	if err := runHealthcheckSelfParamsFn(ctx, session, baseDir, configPath); err != nil {
+		if mapped := fatal(err); errors.Is(mapped, errInteractiveAborted) {
+			return mapped
+		}
+		if bootstrap != nil {
+			bootstrap.Warning("Healthcheck self params failed (non-blocking): %v", err)
+		}
+	}
+	return nil
+}
+
 // runInstallTUI runs the installation wizard on the Charm UI: one long-lived
 // Session drives every interactive step (existing-config decision, config
 // wizard, AGE setup, post-install audit, Telegram pairing) over the same
@@ -272,16 +291,8 @@ func runInstallTUI(ctx context.Context, configPath string, bootstrap *logging.Bo
 		// written HEALTHCHECK_ALIVE_URL). Only when self was chosen in the wizard.
 		if wizardData != nil && wizardData.HealthcheckMode == "self" {
 			logging.DebugStepBootstrap(bootstrap, "install workflow (tui)", "healthcheck self params")
-			if hcParamsErr := flowinstall.RunHealthcheckSelfParams(ctx, session, baseDir, configPath); hcParamsErr != nil {
-				if errors.Is(hcParamsErr, installer.ErrInstallCancelled) {
-					return wrapInstallError(errInteractiveAborted)
-				}
-				if mapped := mapUIDeath(hcParamsErr); errors.Is(mapped, errInteractiveAborted) {
-					return mapped
-				}
-				if bootstrap != nil {
-					bootstrap.Warning("Healthcheck self params failed (non-blocking): %v", hcParamsErr)
-				}
+			if err := applySelfHealthcheckParams(ctx, session, baseDir, configPath, bootstrap, mapUIDeath); err != nil {
+				return err
 			}
 		}
 
