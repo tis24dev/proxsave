@@ -327,9 +327,12 @@ func validateProfileDir(dir string) error {
 // truncate a pre-existing file (F02-06, CWE-59). The profile filenames are
 // predictable and /tmp is world-writable, so O_EXCL (no pre-existing symlink/file)
 // plus O_NOFOLLOW (final component not a symlink) close the truncate vector. 0600
-// keeps the artifacts root-only.
+// keeps the artifacts root-only. The create is additionally confined to the
+// profile directory via os.Root (structural gosec G304): O_EXCL over a
+// pre-existing symlink returns EEXIST, an escaping symlink is refused, and
+// os.Root still accepts O_NOFOLLOW (kept as belt-and-suspenders).
 func createProfileFile(path string) (*os.File, error) {
-	return os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL|syscall.O_NOFOLLOW, 0o600)
+	return safefs.OpenFileUnderRoot(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL|syscall.O_NOFOLLOW, 0o600)
 }
 
 // checkGoRuntimeVersion ensures the running binary was built with at least the specified Go version (semver: major.minor.patch).
