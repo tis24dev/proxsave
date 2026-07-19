@@ -175,6 +175,18 @@ func TestSanitizeLine(t *testing.T) {
 	}
 }
 
+// sanitize must drop Unicode Cf format runes (zero-width and bidi controls) that
+// are >= 0x20 and would otherwise pass the C0/C1 filter, defeating Trojan-source
+// display spoofing of filenames/values shown to root.
+func TestSanitizeDropsFormatAndBidiRunes(t *testing.T) {
+	// U+202E RIGHT-TO-LEFT OVERRIDE, U+200B ZERO WIDTH SPACE.
+	in := "a‮b​c"
+	got := sanitize(in)
+	if got != "abc" {
+		t.Fatalf("sanitize(%q) = %q, want %q", in, got, "abc")
+	}
+}
+
 // TestSanitizeStreamLine covers the color-preserving stream scrub directly: SGR
 // (color) escapes survive verbatim, every other escape (OSC, cursor/mode CSI) is
 // dropped WITH its payload, and C0/DEL/C1 plus newlines/tabs are flattened. The

@@ -2,6 +2,7 @@ package components
 
 import (
 	"strings"
+	"unicode"
 
 	"github.com/charmbracelet/x/ansi"
 )
@@ -20,6 +21,13 @@ func sanitize(s string) string {
 		// C0, DEL, and C1 (0x80-0x9F): C1 runes re-encode to real control
 		// bytes on non-UTF-8 consoles (0x9B is CSI on latin-1 serial).
 		if r < 0x20 || r == 0x7f || (r >= 0x80 && r <= 0x9f) {
+			return -1
+		}
+		// Unicode Cf format runes (zero-width U+200B-200F, bidi overrides
+		// U+202A-202E, isolates U+2066-2069) are >= 0x20 and pass the control
+		// filter above; drop them so a filename/value shown to root cannot spoof
+		// its display order (Trojan source).
+		if unicode.Is(unicode.Cf, r) {
 			return -1
 		}
 		return r
