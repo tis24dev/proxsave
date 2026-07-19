@@ -39,6 +39,12 @@ func buildDaemonUnit(execToken, configPath string) string {
 	if p := strings.TrimSpace(configPath); p != "" {
 		cmd += " --config " + p
 	}
+	// systemd expands %-specifiers in ExecStart (e.g. %h, %o); a '%' in the
+	// executable or config path would be mis-expanded and silently change the
+	// command line, so escape each '%' to the systemd literal '%%'. --daemon,
+	// --config, and the spaces carry no '%', so escaping the whole command is
+	// equivalent to escaping the two path tokens.
+	execStart := strings.ReplaceAll(cmd, "%", "%%")
 	return fmt.Sprintf(`[Unit]
 Description=ProxSave backup daemon
 Documentation=https://github.com/tis24dev/proxsave
@@ -53,7 +59,7 @@ RestartSec=10
 
 [Install]
 WantedBy=multi-user.target
-`, cmd)
+`, execStart)
 }
 
 // validateDaemonUnitToken rejects a token that would be word-split (or, for a

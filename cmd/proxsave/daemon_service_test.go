@@ -77,6 +77,16 @@ func TestBuildDaemonUnitFallbacks(t *testing.T) {
 	}
 }
 
+func TestBuildDaemonUnitEscapesPercent(t *testing.T) {
+	u := buildDaemonUnit("/usr/local/bin/proxsave", "/opt/proxsave/50%off/backup.env")
+	// The '%' in the config path must reach ExecStart as the systemd literal '%%',
+	// otherwise systemd expands it as a specifier and corrupts --config.
+	want := "ExecStart=/usr/local/bin/proxsave --daemon --config /opt/proxsave/50%%off/backup.env"
+	if !strings.Contains(u, want) {
+		t.Fatalf("percent in config path must be escaped in ExecStart\nwant substring: %q\ngot:\n%s", want, u)
+	}
+}
+
 // A failed rename must leave the previous unit intact, never truncated: the in-place
 // os.WriteFile truncated the existing unit before it could fail.
 func TestWriteUnitFileAtomic_FailureKeepsPrevious(t *testing.T) {
