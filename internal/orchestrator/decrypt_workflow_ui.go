@@ -188,7 +188,7 @@ func decryptArchiveWithSecretPrompt(ctx context.Context, encryptedPath, outputPa
 		identities, err := parseIdentityInputWithSalts(secret, extraSalts)
 		resetString(&secret)
 		if err != nil {
-			promptError = fmt.Sprintf("Invalid key or passphrase: %v", err)
+			promptError = "Invalid key or passphrase."
 			continue
 		}
 

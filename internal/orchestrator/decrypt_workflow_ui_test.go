@@ -10,6 +10,7 @@ import (
 
 	"github.com/tis24dev/proxsave/internal/backup"
 	"github.com/tis24dev/proxsave/internal/config"
+	"github.com/tis24dev/proxsave/internal/input"
 	"github.com/tis24dev/proxsave/internal/logging"
 	"github.com/tis24dev/proxsave/internal/types"
 )
@@ -370,6 +371,28 @@ func TestRunDecryptWorkflowWithUIRejectsTypedNilUI(t *testing.T) {
 	}
 	if got, want := err.Error(), "decrypt workflow UI not available"; got != want {
 		t.Fatalf("error=%q, want %q", got, want)
+	}
+}
+
+func TestDecryptArchiveWithSecretPromptGenericParseError(t *testing.T) {
+	var captured string
+	calls := 0
+	prompt := func(ctx context.Context, displayName, previousError string) (string, error) {
+		calls++
+		if calls == 1 {
+			// Malformed AGE-SECRET-KEY- input: parseIdentityInputWithSalts errors,
+			// driving the "Invalid key or passphrase" branch on the next prompt.
+			return "AGE-SECRET-KEY-1MALFORMED", nil
+		}
+		captured = previousError
+		return "", input.ErrInputAborted
+	}
+	err := decryptArchiveWithSecretPrompt(context.Background(), "", "", "archive", prompt, nil)
+	if !errors.Is(err, ErrDecryptAborted) {
+		t.Fatalf("expected ErrDecryptAborted after abort, got %v", err)
+	}
+	if captured != "Invalid key or passphrase." {
+		t.Fatalf("parse-error prompt must be generic with no key fragment, got %q", captured)
 	}
 }
 
