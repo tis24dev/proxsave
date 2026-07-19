@@ -7,6 +7,8 @@ import (
 	"testing"
 	"time"
 
+	tea "charm.land/bubbletea/v2"
+
 	"github.com/tis24dev/proxsave/internal/ui/shell"
 )
 
@@ -131,6 +133,33 @@ func TestConfirmDangerDisablesShortcuts(t *testing.T) {
 	press(t, c, "enter")
 	if !cap.resolved || cap.result.Answer {
 		t.Fatalf("enter on danger confirm must pick the focused default (No), got %+v", cap)
+	}
+}
+
+// TestConfirmDangerMouseClickDoesNotResolve: WithDanger must block a mouse
+// click-through confirm exactly like it blocks the single-key y/Y path (see
+// TestConfirmDangerDisablesShortcuts above): a left-click on Yes only focuses
+// Yes, it does not resolve.
+func TestConfirmDangerMouseClickDoesNotResolve(t *testing.T) {
+	c := NewConfirm("Danger", "Proceed?", WithDanger())
+	// View populates the button coordinates (yesX0/yesX1/lastButtonsY).
+	_ = c.View(80, 24)
+
+	click := tea.MouseClickMsg{Button: tea.MouseLeft, X: c.yesX0, Y: c.lastButtonsY}
+	m, cmd := c.Update(click)
+	cc := m.(*Confirm)
+	// A danger Yes-click must NOT resolve: no result command is emitted.
+	if cmd != nil {
+		t.Fatalf("danger Yes-click must not resolve (cmd should be nil), got a command")
+	}
+	_ = cc
+
+	// Control: without danger, the same click resolves Answer=true.
+	c2 := NewConfirm("Safe", "Proceed?")
+	_ = c2.View(80, 24)
+	click2 := tea.MouseClickMsg{Button: tea.MouseLeft, X: c2.yesX0, Y: c2.lastButtonsY}
+	if _, cmd2 := c2.Update(click2); cmd2 == nil {
+		t.Fatal("non-danger Yes-click must resolve (cmd should be non-nil)")
 	}
 }
 

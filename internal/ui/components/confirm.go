@@ -168,6 +168,14 @@ func (c *Confirm) Update(msg tea.Msg) (shell.Screen, tea.Cmd) {
 		}
 		switch {
 		case msg.X >= c.yesX0 && msg.X < c.yesX1:
+			// Parity with the y/Y key path: under danger a Yes-click only focuses
+			// Yes and requires a subsequent Enter, so a stray click cannot confirm
+			// a destructive action. The No-click below still resolves immediately
+			// (cancel is the safe direction).
+			if c.danger {
+				c.focusYes = true
+				return c, nil
+			}
 			return c, c.Resolve(ConfirmResult{Answer: true}, nil)
 		case msg.X >= c.noX0 && msg.X < c.noX1:
 			return c, c.Resolve(ConfirmResult{Answer: false}, nil)
