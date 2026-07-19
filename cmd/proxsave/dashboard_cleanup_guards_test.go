@@ -79,24 +79,20 @@ func stubGuardReport(t *testing.T, check, apply orchestrator.GuardCleanupReport)
 
 // runCleanupGuardsDriver navigates to Cleanup guards (11 downs) and returns the driver so
 // the test can drive the resulting screens, plus a channel with the dashboard result.
-func runCleanupGuardsDriver(t *testing.T, args *cli.Args) (*newkeyUIDriver, chan bool) {
+func runCleanupGuardsDriver(t *testing.T, args *cli.Args) (*newkeyUIDriver, <-chan dashboardResult) {
 	t.Helper()
 	installDashboardGates(t, true, true) // cron state -> Cleanup guards is the 12th selectable
 	driver := installDashboardSessionSeam(t)
-	resCh := make(chan bool, 1)
-	go func() {
-		_, handled := maybeRunDashboard(context.Background(), args, nil, "1.0.0")
-		resCh <- handled
-	}()
+	res := driver.spawn(args)
 	driver.waitScreen("Dashboard")
 	driver.keys("down down down down down down down down down down down enter") // Cleanup guards (11 downs)
-	return driver, resCh
+	return driver, res
 }
 
-func waitDashboardResolved(t *testing.T, resCh chan bool) {
+func waitDashboardResolved(t *testing.T, res <-chan dashboardResult) {
 	t.Helper()
 	select {
-	case <-resCh:
+	case <-res:
 	case <-time.After(uitest.Deadline(60 * time.Second)):
 		t.Fatal("dashboard did not resolve")
 	}

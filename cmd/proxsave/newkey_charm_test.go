@@ -11,6 +11,7 @@ import (
 
 	"github.com/charmbracelet/x/ansi"
 
+	"github.com/tis24dev/proxsave/internal/cli"
 	"github.com/tis24dev/proxsave/internal/ui/shell"
 	"github.com/tis24dev/proxsave/internal/uitest"
 )
@@ -107,6 +108,38 @@ func tailStr(s string) string {
 		return s
 	}
 	return s[len(s)-2000:]
+}
+
+// dashboardResult carries the (code, handled) pair maybeRunDashboard returns so a
+// spawned dashboard run can be joined and inspected through a single channel.
+type dashboardResult struct {
+	code    int
+	handled bool
+}
+
+// spawn runs maybeRunDashboard on its own goroutine and registers a cleanup that
+// cancels its context, closes the session, and JOINS the goroutine. Call it after
+// installDashboardGates / installDashboardSessionSeam: t.Cleanup is LIFO, so this
+// join runs before the gate cleanups restore the package globals maybeRunDashboard
+// reads (daemonStatusLoadConfig et al.), closing the -race flake on the
+// waitScreen-timeout (t.Fatal) path where the final result select is skipped.
+func (d *newkeyUIDriver) spawn(args *cli.Args) <-chan dashboardResult {
+	ctx, cancel := context.WithCancel(context.Background())
+	res := make(chan dashboardResult, 1)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		code, handled := maybeRunDashboard(ctx, args, nil, "1.0.0")
+		res <- dashboardResult{code: code, handled: handled}
+	}()
+	d.t.Cleanup(func() {
+		cancel()
+		if d.session != nil {
+			_ = d.session.Close()
+		}
+		<-done
+	})
+	return res
 }
 
 func TestRunNewKeyTUISavesRecipient(t *testing.T) {

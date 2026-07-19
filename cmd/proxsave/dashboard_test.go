@@ -102,20 +102,12 @@ func runDashboardWith(t *testing.T, keys string) (*cli.Args, int, bool) {
 	driver := installDashboardSessionSeam(t)
 
 	args := &cli.Args{}
-	type outcome struct {
-		code    int
-		handled bool
-	}
-	resCh := make(chan outcome, 1)
-	go func() {
-		code, handled := maybeRunDashboard(context.Background(), args, nil, "1.0.0")
-		resCh <- outcome{code, handled}
-	}()
+	res := driver.spawn(args)
 	driver.waitScreen("Dashboard")
 	driver.keys(keys)
 	select {
-	case res := <-resCh:
-		return args, res.code, res.handled
+	case r := <-res:
+		return args, r.code, r.handled
 	case <-time.After(uitest.Deadline(60 * time.Second)):
 		t.Fatal("dashboard did not resolve")
 		return nil, 0, false
@@ -184,11 +176,7 @@ func installChooserResult(t *testing.T, chooserKeys string, loopsBack bool) (*cl
 	installDashboardGates(t, true, true)
 	driver := installDashboardSessionSeam(t)
 	args := &cli.Args{}
-	resCh := make(chan bool, 1)
-	go func() {
-		_, handled := maybeRunDashboard(context.Background(), args, nil, "1.0.0")
-		resCh <- handled
-	}()
+	res := driver.spawn(args)
 	driver.waitScreen("Dashboard")
 	driver.keys("down down down down enter") // Install (4 downs) -> chooser
 	driver.waitScreen("Install")             // the in-session chooser
@@ -198,8 +186,8 @@ func installChooserResult(t *testing.T, chooserKeys string, loopsBack bool) (*cl
 		driver.keys("esc")             // exit it so maybeRunDashboard resolves
 	}
 	select {
-	case handled := <-resCh:
-		return args, handled
+	case r := <-res:
+		return args, r.handled
 	case <-time.After(uitest.Deadline(60 * time.Second)):
 		t.Fatal("dashboard did not resolve")
 		return nil, false
@@ -444,11 +432,7 @@ func TestDashboardDaemonStatusLoopsBack(t *testing.T) {
 	}
 	driver := installDashboardSessionSeam(t)
 	args := &cli.Args{}
-	resCh := make(chan bool, 1)
-	go func() {
-		_, handled := maybeRunDashboard(context.Background(), args, nil, "1.0.0")
-		resCh <- handled
-	}()
+	res := driver.spawn(args)
 	driver.waitScreen("Dashboard")
 	driver.keys("down down down down down down down down down down enter") // Daemon status (10 downs)
 	driver.waitScreen("Daemon status")                                     // the styled selector screen
@@ -456,8 +440,8 @@ func TestDashboardDaemonStatusLoopsBack(t *testing.T) {
 	driver.waitScreen("Dashboard")                                         // back at the menu
 	driver.keys("esc")                                                     // exit
 	select {
-	case handled := <-resCh:
-		if !handled {
+	case r := <-res:
+		if !r.handled {
 			t.Fatal("esc from menu must exit handled")
 		}
 	case <-time.After(uitest.Deadline(60 * time.Second)):
@@ -480,11 +464,7 @@ func TestDashboardDaemonInstallInSession(t *testing.T) {
 	}
 	driver := installDashboardSessionSeam(t)
 	args := &cli.Args{}
-	resCh := make(chan bool, 1)
-	go func() {
-		_, handled := maybeRunDashboard(context.Background(), args, nil, "1.0.0")
-		resCh <- handled
-	}()
+	res := driver.spawn(args)
 	driver.waitScreen("Dashboard")
 	driver.keys("down down down down down down down down down enter") // Install daemon (9 downs)
 	driver.waitScreen("Daemon installed")                             // success notice (after the RunTask)
@@ -492,8 +472,8 @@ func TestDashboardDaemonInstallInSession(t *testing.T) {
 	driver.waitScreen("Dashboard")                                    // looped back
 	driver.keys("esc")                                                // exit
 	select {
-	case handled := <-resCh:
-		if !handled {
+	case r := <-res:
+		if !r.handled {
 			t.Fatal("esc from menu must exit handled")
 		}
 	case <-time.After(uitest.Deadline(60 * time.Second)):
@@ -527,11 +507,7 @@ func TestDashboardDaemonRemoveWhenActive(t *testing.T) {
 	}
 	driver := installDashboardSessionSeam(t)
 	args := &cli.Args{}
-	resCh := make(chan bool, 1)
-	go func() {
-		_, handled := maybeRunDashboard(context.Background(), args, nil, "1.0.0")
-		resCh <- handled
-	}()
+	res := driver.spawn(args)
 	driver.waitScreen("Dashboard")
 	// Active state: Daemon group = "Disable daemon" (row 11, 10 downs) + "Restart" + "Daemon status".
 	driver.keys("down down down down down down down down down enter") // Disable daemon
@@ -540,8 +516,8 @@ func TestDashboardDaemonRemoveWhenActive(t *testing.T) {
 	driver.waitScreen("Dashboard")                                    // looped back
 	driver.keys("esc")
 	select {
-	case handled := <-resCh:
-		if !handled {
+	case r := <-res:
+		if !r.handled {
 			t.Fatal("esc must exit handled")
 		}
 	case <-time.After(uitest.Deadline(60 * time.Second)):
@@ -589,15 +565,7 @@ func TestDashboardDiagnosticsLoopBackToMenu(t *testing.T) {
 	stubDashboardDiagnostics(t, true, true, &tele, &hc, &audit)
 
 	args := &cli.Args{}
-	type outcome struct {
-		code    int
-		handled bool
-	}
-	resCh := make(chan outcome, 1)
-	go func() {
-		code, handled := maybeRunDashboard(context.Background(), args, nil, "1.0.0")
-		resCh <- outcome{code, handled}
-	}()
+	res := driver.spawn(args)
 
 	driver.waitScreen("Dashboard")
 	driver.keys("down down down down down down enter")      // Check Telegram (7th selectable)
@@ -609,9 +577,9 @@ func TestDashboardDiagnosticsLoopBackToMenu(t *testing.T) {
 	driver.keys("esc") // exit
 
 	select {
-	case res := <-resCh:
-		if !res.handled || res.code != types.ExitSuccess.Int() {
-			t.Fatalf("esc from menu must exit cleanly, got %+v", res)
+	case r := <-res:
+		if !r.handled || r.code != types.ExitSuccess.Int() {
+			t.Fatalf("esc from menu must exit cleanly, got %+v", r)
 		}
 	case <-time.After(uitest.Deadline(60 * time.Second)):
 		t.Fatal("dashboard did not resolve")
@@ -634,11 +602,7 @@ func TestDashboardDiagnosticNotConfiguredShowsNotice(t *testing.T) {
 	stubDashboardDiagnostics(t, false, true, &tele, &hc, &audit) // telegram not configured
 
 	args := &cli.Args{}
-	resCh := make(chan bool, 1)
-	go func() {
-		_, handled := maybeRunDashboard(context.Background(), args, nil, "1.0.0")
-		resCh <- handled
-	}()
+	res := driver.spawn(args)
 
 	driver.waitScreen("Dashboard")
 	driver.keys("down down down down down down enter") // Check Telegram (not configured)
@@ -649,8 +613,8 @@ func TestDashboardDiagnosticNotConfiguredShowsNotice(t *testing.T) {
 	driver.keys("esc")                                 // exit
 
 	select {
-	case handled := <-resCh:
-		if !handled {
+	case r := <-res:
+		if !r.handled {
 			t.Fatal("esc from menu must exit handled")
 		}
 	case <-time.After(uitest.Deadline(60 * time.Second)):
@@ -668,21 +632,13 @@ func TestDashboardUIDeathIsExitNotBackup(t *testing.T) {
 	driver := installDashboardSessionSeam(t)
 
 	args := &cli.Args{}
-	type outcome struct {
-		code    int
-		handled bool
-	}
-	resCh := make(chan outcome, 1)
-	go func() {
-		code, handled := maybeRunDashboard(context.Background(), args, nil, "1.0.0")
-		resCh <- outcome{code, handled}
-	}()
+	res := driver.spawn(args)
 	driver.waitScreen("Dashboard")
 	driver.cancel() // kill the UI program
 	select {
-	case res := <-resCh:
-		if !res.handled || res.code != types.ExitSuccess.Int() {
-			t.Fatalf("UI death must exit cleanly, got %+v", res)
+	case r := <-res:
+		if !r.handled || r.code != types.ExitSuccess.Int() {
+			t.Fatalf("UI death must exit cleanly, got %+v", r)
 		}
 	case <-time.After(uitest.Deadline(60 * time.Second)):
 		t.Fatal("dashboard did not resolve after UI death")
@@ -725,25 +681,17 @@ func TestDashboardFlowActionHandsSessionOver(t *testing.T) {
 	driver := installDashboardSessionSeam(t)
 
 	args := &cli.Args{}
-	type outcome struct {
-		code    int
-		handled bool
-	}
-	resCh := make(chan outcome, 1)
-	go func() {
-		code, handled := maybeRunDashboard(context.Background(), args, nil, "1.0.0")
-		resCh <- outcome{code, handled}
-	}()
+	res := driver.spawn(args)
 	driver.waitScreen("Dashboard")
 	driver.keys("down enter") // Restore (row 2, 1 down)
-	var res outcome
+	var r dashboardResult
 	select {
-	case res = <-resCh:
+	case r = <-res:
 	case <-time.After(uitest.Deadline(60 * time.Second)):
 		t.Fatal("dashboard did not resolve")
 	}
-	if res.handled || !args.Restore {
-		t.Fatalf("restore dispatch broken: handled=%v args=%+v", res.handled, args)
+	if r.handled || !args.Restore {
+		t.Fatalf("restore dispatch broken: handled=%v args=%+v", r.handled, args)
 	}
 	if !dashboardHandoffPending() {
 		t.Fatal("flow action must stash the session for adoption")
@@ -814,16 +762,12 @@ func TestDashboardSubScreenIdleTimeoutExits(t *testing.T) {
 	installDashboardGates(t, true, true)
 	driver := installDashboardSessionSeam(t)
 
-	done := make(chan struct{}, 1)
-	go func() {
-		maybeRunDashboard(context.Background(), &cli.Args{}, nil, "1.0.0")
-		done <- struct{}{}
-	}()
+	res := driver.spawn(&cli.Args{})
 	driver.waitScreen("Dashboard")
 	driver.keys("down down down down enter") // open the Install chooser sub-screen, then send nothing
 
 	select {
-	case <-done:
+	case <-res:
 		// The sub-screen (then the menu) hit the idle timeout and the dashboard exited.
 	case <-time.After(uitest.Deadline(5 * time.Second)):
 		t.Fatal("dashboard sub-screen hung: the idle timeout did not bound it")

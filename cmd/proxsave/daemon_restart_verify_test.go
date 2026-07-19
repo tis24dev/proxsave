@@ -529,11 +529,7 @@ func TestDashboardDaemonRestartButton(t *testing.T) {
 
 	driver := installDashboardSessionSeam(t)
 	args := &cli.Args{}
-	resCh := make(chan bool, 1)
-	go func() {
-		_, handled := maybeRunDashboard(context.Background(), args, nil, "1.0.0")
-		resCh <- handled
-	}()
+	res := driver.spawn(args)
 	driver.waitScreen("Dashboard")
 	// Active layout: Disable daemon (9 downs) -> Restart daemon (10 downs).
 	driver.keys("down down down down down down down down down down enter")
@@ -542,8 +538,8 @@ func TestDashboardDaemonRestartButton(t *testing.T) {
 	driver.waitScreen("Dashboard")
 	driver.keys("esc")
 	select {
-	case handled := <-resCh:
-		if !handled {
+	case r := <-res:
+		if !r.handled {
 			t.Fatal("esc must exit handled")
 		}
 	case <-time.After(60 * time.Second):

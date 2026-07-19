@@ -97,16 +97,12 @@ func TestDashboardSupportArmsBackup(t *testing.T) {
 	stubSupportForm(t, support.Meta{GitHubUser: "alice", IssueID: "#42"}, true)
 	driver := installDashboardSessionSeam(t)
 	args := &cli.Args{}
-	resCh := make(chan bool, 1)
-	go func() {
-		_, handled := maybeRunDashboard(context.Background(), args, nil, "1.0.0")
-		resCh <- handled
-	}()
+	res := driver.spawn(args)
 	driver.waitScreen("Dashboard")
 	driver.keys("down down down down down down down down down down down down enter") // Support (12 downs)
 	select {
-	case handled := <-resCh:
-		if handled {
+	case r := <-res:
+		if r.handled {
 			t.Fatal("support must fall through to the backup handoff (handled=false)")
 		}
 	case <-time.After(uitest.Deadline(60 * time.Second)):
@@ -127,18 +123,14 @@ func TestDashboardSupportCancelLoops(t *testing.T) {
 	stubSupportForm(t, support.Meta{}, false)
 	driver := installDashboardSessionSeam(t)
 	args := &cli.Args{}
-	resCh := make(chan bool, 1)
-	go func() {
-		_, handled := maybeRunDashboard(context.Background(), args, nil, "1.0.0")
-		resCh <- handled
-	}()
+	res := driver.spawn(args)
 	driver.waitScreen("Dashboard")
 	driver.keys("down down down down down down down down down down down down enter") // Support (12 downs)
 	driver.waitScreen("Dashboard")                                                   // form cancelled -> back to the menu
 	driver.keys("esc")                                                               // exit
 	select {
-	case handled := <-resCh:
-		if !handled {
+	case r := <-res:
+		if !r.handled {
 			t.Fatal("esc from the menu must exit handled")
 		}
 	case <-time.After(uitest.Deadline(60 * time.Second)):

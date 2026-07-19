@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"fmt"
 	"strings"
 	"testing"
@@ -87,26 +86,22 @@ func stubUpdateConfig(t *testing.T, plan, apply *config.UpgradeResult) *[]string
 // it: it lives UNDER "Upgrade" as the "Check config" button, not as a top-level menu row.
 // So it navigates to Upgrade (5 downs) then selects Check config (2nd item of the Upgrade
 // screen), and returns the driver positioned on the Update config check screen.
-func runUpdateConfigDriver(t *testing.T, args *cli.Args) (*newkeyUIDriver, chan bool) {
+func runUpdateConfigDriver(t *testing.T, args *cli.Args) (*newkeyUIDriver, <-chan dashboardResult) {
 	t.Helper()
 	installDashboardGates(t, true, true) // cron state -> Upgrade is the 6th selectable
 	driver := installDashboardSessionSeam(t)
-	resCh := make(chan bool, 1)
-	go func() {
-		_, handled := maybeRunDashboard(context.Background(), args, nil, "1.0.0")
-		resCh <- handled
-	}()
+	res := driver.spawn(args)
 	driver.waitScreen("Dashboard")
 	driver.keys("down down down down down enter") // Upgrade (5 downs) -> Upgrade chooser
 	driver.waitScreen("Upgrade")
 	driver.keys("down enter") // Check config (2nd item) -> Update config flow
-	return driver, resCh
+	return driver, res
 }
 
-func waitUpdateConfigResolved(t *testing.T, resCh chan bool) {
+func waitUpdateConfigResolved(t *testing.T, res <-chan dashboardResult) {
 	t.Helper()
 	select {
-	case <-resCh:
+	case <-res:
 	case <-time.After(uitest.Deadline(60 * time.Second)):
 		t.Fatal("dashboard did not resolve")
 	}
@@ -114,13 +109,13 @@ func waitUpdateConfigResolved(t *testing.T, resCh chan bool) {
 
 // escOutOfUpgrade escapes the Update config flow's return point (the Upgrade screen) back
 // to the menu and exits, so every driver test ends the same way.
-func escOutOfUpgrade(t *testing.T, driver *newkeyUIDriver, resCh chan bool) {
+func escOutOfUpgrade(t *testing.T, driver *newkeyUIDriver, res <-chan dashboardResult) {
 	t.Helper()
 	driver.waitScreen("Upgrade") // Update config returned to the Upgrade screen
 	driver.keys("esc")           // Back from Upgrade -> menu
 	driver.waitScreen("Dashboard")
 	driver.keys("esc") // exit
-	waitUpdateConfigResolved(t, resCh)
+	waitUpdateConfigResolved(t, res)
 }
 
 // TestDashboardUpdateConfigAvailableApply: a CHECK that finds new keys shows the Update
