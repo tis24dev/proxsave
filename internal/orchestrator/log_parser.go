@@ -7,6 +7,7 @@ import (
 
 	"github.com/tis24dev/proxsave/internal/logging"
 	"github.com/tis24dev/proxsave/internal/notify"
+	"github.com/tis24dev/proxsave/internal/safefs"
 )
 
 // notifyErrorToken is the level token the notify-scoped logger writes for a
@@ -25,7 +26,7 @@ func ParseLogCounts(logPath string, categoryLimit int) (categories []notify.LogC
 		return nil, 0, 0, 0
 	}
 
-	file, err := os.Open(logPath)
+	file, err := safefs.OpenFileUnderRoot(logPath, os.O_RDONLY, 0)
 	if err != nil {
 		return nil, 0, 0, 0
 	}

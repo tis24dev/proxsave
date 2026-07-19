@@ -11,13 +11,14 @@ import (
 	"os"
 	"strings"
 
+	"github.com/tis24dev/proxsave/internal/safefs"
 	"github.com/tis24dev/proxsave/internal/sourceguard"
 )
 
 func run(args []string, stdout, stderr io.Writer) int {
 	code := 0
 	for _, path := range args {
-		content, err := os.ReadFile(path)
+		content, err := safefs.ReadFileUnderRoot(path)
 		if err != nil {
 			fmt.Fprintf(stderr, "sourceguard: cannot read %s: %v\n", path, err)
 			code = 1
