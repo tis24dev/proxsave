@@ -132,7 +132,7 @@ func TestDashboardUpgradeScreen(t *testing.T) {
 	waitFor := func(substr string) string {
 		deadline := time.After(uitest.Deadline(15 * time.Second))
 		for {
-			out := ansi.Strip(driver.buf.String())
+			out := ansi.Strip(driver.buf.String()[driver.matchStart:]) // from the current screen, not stale earlier-screen text
 			if strings.Contains(out, substr) {
 				return out
 			}
@@ -271,7 +271,7 @@ func TestDashboardUpgradeMenu(t *testing.T) {
 	waitFor := func(substr string) {
 		deadline := time.After(uitest.Deadline(15 * time.Second))
 		for {
-			if strings.Contains(ansi.Strip(driver.buf.String()), substr) {
+			if strings.Contains(ansi.Strip(driver.buf.String()[driver.matchStart:]), substr) {
 				return
 			}
 			select {
@@ -345,7 +345,7 @@ func TestDashboardUpgradeRestartDaemonRelaunchNote(t *testing.T) {
 	waitFor := func(substr string) {
 		deadline := time.After(uitest.Deadline(15 * time.Second))
 		for {
-			if strings.Contains(ansi.Strip(driver.buf.String()), substr) {
+			if strings.Contains(ansi.Strip(driver.buf.String()[driver.matchStart:]), substr) {
 				return
 			}
 			select {

@@ -27,6 +27,13 @@ type newkeyUIDriver struct {
 	pushes  chan string
 	session *shell.Session
 	cancel  context.CancelFunc
+	// matchStart is the buffer offset of the current screen's render, updated by
+	// waitScreen on each screen transition. Output pollers (waitOutput / the
+	// per-test waitFor closures) match from here so they see the CURRENT screen's
+	// text and never a stale match from an earlier screen (e.g. a repeated
+	// "enter continue" from a prior run in a loop). It never rewinds (the buffer
+	// is append-only), so matching from it is always in range.
+	matchStart int
 }
 
 func installNewkeySessionSeam(t *testing.T) *newkeyUIDriver {
@@ -65,6 +72,10 @@ func (d *newkeyUIDriver) waitScreen(title string) {
 		select {
 		case got := <-d.pushes:
 			if got == title {
+				// Anchor subsequent output pollers to this screen's render, so a
+				// waitOutput/waitFor after a transition cannot match stale text left
+				// in the cumulative buffer by an earlier screen.
+				d.matchStart = d.buf.Len()
 				return
 			}
 		case <-deadline:
@@ -77,9 +88,13 @@ func (d *newkeyUIDriver) waitScreen(title string) {
 // current step (use waitScreen for screen transitions).
 func (d *newkeyUIDriver) waitOutput(text string) {
 	d.t.Helper()
+	// Match from the current screen's render (set by the last waitScreen), not the
+	// whole cumulative buffer, so a repeated string from an earlier screen (e.g. a
+	// prior run's "enter continue") cannot satisfy this wait before the CURRENT
+	// screen reaches that state.
 	deadline := time.Now().Add(uitest.Deadline(60 * time.Second))
 	for {
-		if strings.Contains(ansi.Strip(d.buf.String()), text) {
+		if strings.Contains(ansi.Strip(d.buf.String()[d.matchStart:]), text) {
 			return
 		}
 		if time.Now().After(deadline) {
