@@ -1,4 +1,4 @@
-.PHONY: build test clean run build-release test-coverage lint fmt deps help coverage coverage-check
+.PHONY: build test clean run build-release test-coverage lint fmt deps help coverage coverage-check hooks
 
 COVERAGE_THRESHOLD ?= 50.0
 TOOLCHAIN_FROM_MOD := $(shell awk '/^toolchain /{print $$2}' go.mod 2>/dev/null)
@@ -124,6 +124,11 @@ deps:
 	go mod download
 	go mod tidy
 
+# Enable the local Trojan-source pre-commit hook (CI enforces it regardless).
+hooks:
+	@git config core.hooksPath .githooks
+	@echo "core.hooksPath set to .githooks; pre-commit Trojan-source guard enabled."
+
 # Help
 help:
 	@echo "Available targets:"
@@ -138,3 +143,4 @@ help:
 	@echo "  clean         - Remove build artifacts"
 	@echo "  run           - Run in development mode"
 	@echo "  deps          - Download and tidy dependencies"
+	@echo "  hooks         - Enable the local pre-commit Trojan-source guard"
