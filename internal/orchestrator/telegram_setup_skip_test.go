@@ -20,6 +20,7 @@ func TestClassifyTelegramSetupSkip(t *testing.T) {
 		{"personal-mode", TelegramSetupBootstrap{Eligibility: TelegramSetupSkipPersonalMode}, "PERSONAL MODE", HealthcheckSetupLevelWarn, "personal-bot mode"},
 		{"identity-error", TelegramSetupBootstrap{Eligibility: TelegramSetupSkipIdentityUnavailable, IdentityDetectError: "read failed"}, "IDENTITY ERROR", HealthcheckSetupLevelWarn, "could not be read"},
 		{"no-identity", TelegramSetupBootstrap{Eligibility: TelegramSetupSkipIdentityUnavailable}, "NO IDENTITY", HealthcheckSetupLevelWarn, "No server identity"},
+		{"unknown-default", TelegramSetupBootstrap{}, "NOT CONFIGURED", HealthcheckSetupLevelWarn, "not configured"},
 	}
 	for _, tt := range cases {
 		t.Run(tt.name, func(t *testing.T) {

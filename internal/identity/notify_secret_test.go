@@ -265,3 +265,21 @@ func TestLockNotifySecretEmptyBaseDir(t *testing.T) {
 		t.Fatalf("LockNotifySecret(\"\") expected an error")
 	}
 }
+
+func TestRemoveNotifySecretIfMatchesEmptyBaseDir(t *testing.T) {
+	removed, err := RemoveNotifySecretIfMatches("", "3h64-dyi8-q3d6-wcm5")
+	if removed || err != nil {
+		t.Fatalf("RemoveNotifySecretIfMatches(\"\", ...) = (%v, %v), want (false, nil)", removed, err)
+	}
+}
+
+func TestRemoveNotifySecretIfMatchesAbsentFileIsNoOp(t *testing.T) {
+	// No secret on disk but a non-empty comparand: the guard re-reads under the lock, finds
+	// nothing (another path already cleared it), and reports removed=false without error.
+	// A nil logger is passed to exercise the variadic-logger branch.
+	baseDir := t.TempDir()
+	removed, err := RemoveNotifySecretIfMatches(baseDir, "3h64-dyi8-q3d6-wcm5", nil)
+	if removed || err != nil {
+		t.Fatalf("RemoveNotifySecretIfMatches(absent) = (%v, %v), want (false, nil)", removed, err)
+	}
+}

@@ -21,6 +21,7 @@ func TestClassifyHealthcheckSetupSkip(t *testing.T) {
 		{"self-no-url", HealthcheckSetupBootstrap{Eligibility: HealthcheckSetupSkipSelfMode}, "NOT CONFIGURED", HealthcheckSetupLevelWarn, "ping URL"},
 		{"no-identity", HealthcheckSetupBootstrap{Eligibility: HealthcheckSetupSkipIdentityUnavailable, ServerID: ""}, "NO IDENTITY", HealthcheckSetupLevelWarn, "No server identity"},
 		{"provisioning-missing-secret", HealthcheckSetupBootstrap{Eligibility: HealthcheckSetupSkipIdentityUnavailable, ServerID: "abcd1234", HasSecret: false}, "PROVISIONING", HealthcheckSetupLevelWarn, "provisioned automatically"},
+		{"unknown-default", HealthcheckSetupBootstrap{}, "NOT CONFIGURED", HealthcheckSetupLevelWarn, "not configured"},
 	}
 	for _, tt := range cases {
 		t.Run(tt.name, func(t *testing.T) {
