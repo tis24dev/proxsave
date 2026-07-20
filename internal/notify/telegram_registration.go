@@ -149,7 +149,16 @@ func checkTelegramRegistrationWithSecret(ctx context.Context, serverAPIHost, ser
 		logTelegramRegistrationDebug(logger, "Telegram registration: 200 body parsed (notifySecretPresent=%v len=%d)", secret != "", len(secret))
 	}
 
-	logTelegramRegistrationDebug(logger, "Telegram registration: response status=%d bodyBytes=%d bodyPreview=%q", resp.Status, len(body), truncateTelegramRegistrationBody(body, 200))
+	// SECRET-IN-LOG GUARD (defense-in-depth): a secret shorter than the mask threshold is
+	// NOT registered by the masker (logging's secretMinRegister skips it), so it would leak
+	// verbatim into the body preview below. The real server never issues one (19-char
+	// format), but redact the whole preview in that case rather than emit an unmaskable
+	// value. The floor itself is still enforced at persist time in ProvisionRelaySecret.
+	preview := truncateTelegramRegistrationBody(body, 200)
+	if resp.Status == http.StatusOK && secret != "" && len([]rune(secret)) < minRelaySecretLen {
+		preview = "(redacted: response carried an unmaskable short secret)"
+	}
+	logTelegramRegistrationDebug(logger, "Telegram registration: response status=%d bodyBytes=%d bodyPreview=%q", resp.Status, len(body), preview)
 
 	switch resp.Status {
 	case 200:

@@ -118,7 +118,7 @@ func TestRunHealthcheckSetupSelfBranch(t *testing.T) {
 		healthcheckSelfCheck = origSelf
 	})
 
-	healthcheckBuildBootstrap = func(configPath, baseDir string) (orchestrator.HealthcheckSetupBootstrap, error) {
+	healthcheckBuildBootstrap = func(ctx context.Context, configPath, baseDir string) (orchestrator.HealthcheckSetupBootstrap, error) {
 		return orchestrator.HealthcheckSetupBootstrap{
 			Eligibility:         orchestrator.HealthcheckSetupEligibleSelf,
 			HealthcheckMode:     "self",

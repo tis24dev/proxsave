@@ -153,6 +153,20 @@ func applyDaemonMode(ctx context.Context, cfg *config.Config, configPath, execTo
 		logging.Warning("daemon: failed to record SCHEDULER_MODE=daemon in %s: %v", configPath, err)
 		return nil
 	}
+	// One-shot relay-secret self-heal (hook a): a retrofitted centralized host can obtain the
+	// healthcheck relay secret WITHOUT Telegram pairing now that the server issues it for a
+	// chat-less known ServerID. Runs after HEALTHCHECK_ENABLED=true was written above but
+	// BEFORE the try-restart below: persisting+confirming the secret first means the restarted
+	// daemon finds it already on disk, so its startup self-heal (hook b) skips provisioning.
+	// This avoids a concurrent double-issuance race (hook a and a HC-enabled restarted daemon
+	// both minting a fresh secret, whose last-write-wins persist could leave the on-disk secret
+	// and the server hash mismatched and the host stuck failing centralized auth). The
+	// pre-restart daemon read config BEFORE the write above so it has HC disabled and never
+	// runs hook b meanwhile. Best-effort (the daemon's startup self-heal retries if this misses,
+	// e.g. the server change has not landed yet or the host is not known to the server yet).
+	if cfg != nil {
+		provisionRelaySecretOnDaemonSetup(ctx, configPath, cfg.BaseDir)
+	}
 	// installDaemonService already `enable --now`-started the daemon, but it read
 	// the config as it was BEFORE the write above. Restart it (only if running) so
 	// the resident process picks up HEALTHCHECK_ENABLED=true immediately instead of

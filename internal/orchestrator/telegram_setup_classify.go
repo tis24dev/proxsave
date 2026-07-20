@@ -76,3 +76,39 @@ func ClassifyTelegramSetupResult(res notify.TelegramRegistrationResult) Telegram
 			Message: SanitizeTelegramSetupStatusMessage(res.Status.Message)}
 	}
 }
+
+// ClassifyTelegramSetupSkip maps a NON-eligible TelegramSetupBootstrap (a skip verdict) to
+// display copy, so the dashboard can tell the user WHY pairing was not offered distinctly.
+// It mirrors ClassifyHealthcheckSetupSkip and returns the SAME shared HealthcheckSetupState
+// so the dashboard renders both twins through one path (showDaemonResultScreen). This fixes
+// the twin message-collapse bug: "disabled", "personal mode", "config error", and the two
+// identity causes no longer all read as one generic "not enabled" line. Only
+// Keyword/Level/Message are set.
+func ClassifyTelegramSetupSkip(res TelegramSetupBootstrap) HealthcheckSetupState {
+	st := HealthcheckSetupState{Level: HealthcheckSetupLevelWarn}
+	switch res.Eligibility {
+	case TelegramSetupSkipDisabled:
+		st.Keyword = "NOT ENABLED"
+		st.Message = "Telegram notifications are not enabled on this host."
+	case TelegramSetupSkipConfigError:
+		st.Level, st.Keyword = HealthcheckSetupLevelError, "CONFIG ERROR"
+		st.Message = "The configuration could not be loaded, so Telegram notifications could not be checked. Re-run the installer to repair it."
+	case TelegramSetupSkipPersonalMode:
+		st.Keyword = "PERSONAL MODE"
+		st.Message = "Telegram is set to personal-bot mode, which uses your own bot token and needs no centralized pairing check."
+	case TelegramSetupSkipIdentityUnavailable:
+		// Two distinct causes collapse here upstream: identity detection FAILED
+		// (IdentityDetectError set), or it succeeded but yielded no ServerID.
+		if res.IdentityDetectError != "" {
+			st.Keyword = "IDENTITY ERROR"
+			st.Message = "The server identity could not be read, so Telegram pairing could not be checked. Re-run the installer or regenerate the identity file."
+			return st
+		}
+		st.Keyword = "NO IDENTITY"
+		st.Message = "No server identity was found on this host, so Telegram pairing cannot be checked. Re-run the installer or regenerate the identity file."
+	default:
+		st.Keyword = "NOT CONFIGURED"
+		st.Message = "Telegram notifications are not configured on this host."
+	}
+	return st
+}
