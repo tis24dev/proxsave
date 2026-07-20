@@ -48,10 +48,10 @@ func writeHBFile(t *testing.T, path, content string) {
 // but still gets the corrected detection type (issue #255 backward compatibility).
 func TestRedetectPlainPrefixNeutralFraming(t *testing.T) {
 	root := t.TempDir()
+	// PVE is detected from the version file; /etc/pve is intentionally NOT created,
+	// so this also pins the warnHostBackupMountShape HostBackupMode guard: a plain
+	// prefix with a missing /etc/pve must still produce no bind-mount warning.
 	writeHBFile(t, filepath.Join(root, "etc/pve-manager/version"), "8.2.2\n")
-	if err := os.MkdirAll(filepath.Join(root, "etc/pve"), 0o755); err != nil {
-		t.Fatal(err)
-	}
 
 	out, info := runRedetect(t, root, false)
 	if info.Type != types.ProxmoxVE {
