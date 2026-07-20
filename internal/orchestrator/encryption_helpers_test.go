@@ -177,6 +177,43 @@ func TestParseRecipientString(t *testing.T) {
 	}
 }
 
+func TestNormalizeSSHKeyType(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{
+			name:  "mixed case type with body and comment",
+			input: "SSH-ED25519 AAAABODY user@host",
+			want:  "ssh-ed25519 AAAABODY user@host",
+		},
+		{
+			name:  "already lowercase unchanged",
+			input: "ssh-rsa AAAABODY",
+			want:  "ssh-rsa AAAABODY",
+		},
+		{
+			name:  "no whitespace lowercases whole value",
+			input: "SSH-ED25519",
+			want:  "ssh-ed25519",
+		},
+		{
+			name:  "tab separator preserves body case",
+			input: "SSH-RSA\tAAAABody",
+			want:  "ssh-rsa\tAAAABody",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := normalizeSSHKeyType(tt.input); got != tt.want {
+				t.Errorf("normalizeSSHKeyType(%q) = %q; want %q", tt.input, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestParseRecipientStrings(t *testing.T) {
 	validRecipient := "age1ql3z7hjy54pw3hyww5ayyfg7zqgvc7w3j2elw8zmrj2kg5sfn9aqmcac8p"
 

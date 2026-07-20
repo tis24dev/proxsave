@@ -27,7 +27,7 @@ jobs:
       # GO 1.25 - MAIN TOOLCHAIN
       ########################################
       - name: Set up Go (from go.mod)
-        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
         with:
           go-version-file: 'go.mod'
           cache: false
@@ -89,7 +89,7 @@ jobs:
       # UPLOAD SARIF
       ########################################
       - name: Upload GoSec SARIF
-        uses: github/codeql-action/upload-sarif@99df26d4f13ea111d4ec1a7dddef6063f76b97e9
+        uses: github/codeql-action/upload-sarif@7188fc363630916deb702c7fdcf4e481b751f97a
         with:
           sarif_file: gosec.sarif
 
