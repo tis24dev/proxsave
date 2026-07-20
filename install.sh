@@ -217,6 +217,24 @@ mv proxsave "${TARGET_BIN}"
 chmod 755 "${TARGET_BIN}"
 
 ###############################################
+# 12b) HA-LXC host-backup hint (issue #255)
+###############################################
+# When the Proxmox host root is bind-mounted read-only into this container, offer
+# the SYSTEM_ROOT_PREFIX + HOST_BACKUP_MODE configuration. Informational only: it
+# never writes config, so it is safe and idempotent.
+if grep -qE '[[:space:]]/host[[:space:]]' /proc/mounts 2>/dev/null; then
+  echo "--------------------------------------------"
+  echo "Detected a /host mount: this looks like an HA-LXC backup appliance."
+  echo "To back up the Proxmox host, set in backup.env:"
+  echo "  SYSTEM_ROOT_PREFIX=/host"
+  echo "  HOST_BACKUP_MODE=true"
+  echo "The host is expected to be mounted read-only, for example:"
+  echo "  pct set <CTID> -mp0 /,mp=/host,ro=1"
+  echo "  pct set <CTID> -mp1 /etc/pve,mp=/host/etc/pve,ro=1"
+  echo "--------------------------------------------"
+fi
+
+###############################################
 # 13) Run internal installer (--install or --new-install)
 ###############################################
 cd "${TARGET_DIR}"
