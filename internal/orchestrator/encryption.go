@@ -292,10 +292,27 @@ func parseRecipientString(value string) (age.Recipient, error) {
 	case strings.HasPrefix(value, "age1"):
 		return age.ParseX25519Recipient(value)
 	case strings.HasPrefix(strings.ToLower(value), "ssh-"):
-		return agessh.ParseRecipient(value)
+		// golang.org/x/crypto >= 0.54 rejects authorized_keys entries whose
+		// human-readable key type differs in case from the encoded type
+		// (e.g. "SSH-ED25519" vs "ssh-ed25519"). Normalize the leading type
+		// token to lowercase so mixed-case input still parses; the base64
+		// body and comment are left untouched.
+		return agessh.ParseRecipient(normalizeSSHKeyType(value))
 	default:
 		return nil, fmt.Errorf("unsupported AGE recipient format: %s", value)
 	}
+}
+
+// normalizeSSHKeyType lowercases only the leading key-type token of an SSH
+// authorized_keys line, leaving the base64 body and any trailing comment
+// intact. This restores tolerance for mixed-case key types after the stricter
+// type-match check introduced in golang.org/x/crypto 0.54.
+func normalizeSSHKeyType(value string) string {
+	i := strings.IndexFunc(value, unicode.IsSpace)
+	if i < 0 {
+		return strings.ToLower(value)
+	}
+	return strings.ToLower(value[:i]) + value[i:]
 }
 
 func readRecipientFile(path string) (recipients []string, err error) {
