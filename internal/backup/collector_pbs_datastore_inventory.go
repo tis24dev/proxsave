@@ -97,6 +97,7 @@ type pbsInventoryState struct {
 	mergedDatastores    []pbsDatastoreDefinition
 	referencedFiles     []string
 	hostCommandsEnabled bool
+	kernelSharedEnabled bool
 }
 
 func (c *Collector) initPBSDatastoreInventoryState(ctx context.Context, cliDatastores []pbsDatastore) (*pbsInventoryState, error) {
@@ -132,6 +133,7 @@ func (c *Collector) initPBSDatastoreInventoryState(ctx context.Context, cliDatas
 		mergedDatastores:    mergePBSDatastoreDefinitions(cliDatastores, configDatastores),
 		referencedFiles:     uniqueSortedStrings(append(extractCrypttabKeyFiles(report.Files["crypttab"].Content), extractFstabReferencedFiles(report.Files["fstab"].Content)...)),
 		hostCommandsEnabled: report.HostCommands,
+		kernelSharedEnabled: c.shouldRunKernelSharedCommands(),
 	}, nil
 }
 
@@ -354,7 +356,12 @@ func (c *Collector) populatePBSInventoryHostCommandsZFS(ctx context.Context, inv
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if !inventory.hostCommandsEnabled {
+	// ZFS is global kernel state (/dev/zfs), not namespace-scoped, so a privileged
+	// LXC sharing the host kernel reports the host pools accurately even when only
+	// the host filesystem is bind-mounted. Enable it under HOST_BACKUP_MODE (issue
+	// #255) while the device-visibility-dependent commands (dmsetup/lvm/mdadm/
+	// multipath/iscsi) stay gated by hostCommandsEnabled.
+	if !inventory.kernelSharedEnabled {
 		return nil
 	}
 	report := &inventory.report

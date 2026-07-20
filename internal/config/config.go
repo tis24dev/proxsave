@@ -337,6 +337,7 @@ type Config struct {
 	BackupScriptRepository  bool
 	BackupConfigFile        bool
 	SystemRootPrefix        string
+	HostBackupMode          bool
 	PVEConfigPath           string
 	PBSConfigPath           string
 	PVEClusterPath          string
@@ -988,6 +989,11 @@ func (c *Config) parseSystemSettings() {
 	// Optional system-root override (chroot/test fixture). Empty or "/" means real
 	// root; CollectorConfig.Validate rejects a non-absolute value.
 	c.SystemRootPrefix = strings.TrimSpace(c.getString("SYSTEM_ROOT_PREFIX", ""))
+	// HA-LXC host-backup mode (issue #255). SYSTEM_ROOT_PREFIX alone already drives
+	// prefix-aware detection and symlink resolution; this flag additionally frames
+	// the run as an appliance backing up a mounted host and gates the host-command
+	// handling. It is meaningful only together with a SYSTEM_ROOT_PREFIX.
+	c.HostBackupMode = c.getBool("HOST_BACKUP_MODE", false)
 	c.PBSDatastorePaths = normalizeList(c.getStringSlice("PBS_DATASTORE_PATH", nil))
 }
 

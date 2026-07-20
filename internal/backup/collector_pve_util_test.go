@@ -195,6 +195,9 @@ func TestCopyIfExists(t *testing.T) {
 // TestCephHasClusterConfig tests Ceph cluster configuration detection
 func TestCephHasClusterConfig(t *testing.T) {
 	tmpDir := t.TempDir()
+	// Zero-prefix collector: readSystemFileFollowingSymlinks falls back to os.ReadFile,
+	// so this preserves the original free-function behavior.
+	c := &Collector{config: &CollectorConfig{}}
 
 	tests := []struct {
 		name     string
@@ -249,7 +252,7 @@ some_other_key = value`,
 				}
 			}
 
-			result := cephHasClusterConfig(testDir)
+			result := c.cephHasClusterConfig(testDir)
 			if result != tt.expected {
 				t.Errorf("cephHasClusterConfig() = %v, want %v", result, tt.expected)
 			}
@@ -258,7 +261,7 @@ some_other_key = value`,
 
 	// Test nonexistent directory
 	t.Run("nonexistent directory", func(t *testing.T) {
-		result := cephHasClusterConfig(filepath.Join(tmpDir, "nonexistent"))
+		result := c.cephHasClusterConfig(filepath.Join(tmpDir, "nonexistent"))
 		if result {
 			t.Error("cephHasClusterConfig() should return false for nonexistent directory")
 		}

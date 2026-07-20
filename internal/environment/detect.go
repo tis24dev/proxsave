@@ -62,6 +62,13 @@ var (
 	debugBaseDir   = "/tmp"
 
 	runCommandFunc = runCommand
+
+	// rootPrefix re-anchors the hardcoded detection paths under a mounted host
+	// filesystem (SYSTEM_ROOT_PREFIX). Empty means detect against the real root,
+	// the historical behavior. It is a package-level seam, like statFunc and
+	// readFileFunc above, set only by DetectWith for the duration of a single
+	// bootstrap detection, which runs before any concurrent goroutine exists.
+	rootPrefix string
 )
 
 // DetectProxmoxType detects whether the system is running Proxmox VE or Proxmox Backup Server
@@ -109,6 +116,28 @@ type EnvironmentInfo struct {
 
 // Detect detects the Proxmox environment and returns detailed information
 func Detect() (*EnvironmentInfo, error) {
+	return DetectWith(DetectOptions{})
+}
+
+// DetectOptions tunes detection. RootPrefix, when set, points detection at a
+// Proxmox host filesystem mounted read-only under that prefix (SYSTEM_ROOT_PREFIX),
+// so ProxSave running inside an HA-LXC backup appliance detects the host rather
+// than the container it runs in (issue #255).
+type DetectOptions struct {
+	RootPrefix string
+}
+
+// DetectWith detects the Proxmox environment under the given options. With an
+// empty RootPrefix it is identical to the historical Detect(): detection reads the
+// real root and probes host commands. With a RootPrefix it re-anchors the
+// detection paths under the prefix and skips the host command probes, because
+// pveversion/proxmox-backup-manager executed inside the container answer for the
+// container, not for the mounted host.
+func DetectWith(opts DetectOptions) (*EnvironmentInfo, error) {
+	prev := rootPrefix
+	rootPrefix = strings.TrimSpace(opts.RootPrefix)
+	defer func() { rootPrefix = prev }()
+
 	info, err := detectEnvironmentInfo()
 	if info.Type == types.ProxmoxUnknown {
 		if err != nil {
@@ -117,6 +146,22 @@ func Detect() (*EnvironmentInfo, error) {
 		return info, fmt.Errorf("unable to detect Proxmox environment")
 	}
 	return info, err
+}
+
+// hostRooted reports whether detection is re-anchored under a host prefix.
+func hostRooted() bool {
+	return rootPrefix != "" && rootPrefix != string(filepath.Separator)
+}
+
+// resolveUnderPrefix re-anchors an absolute detection path under rootPrefix. The
+// detection paths are fixed literals (never attacker-controlled), so a plain join
+// mirroring collector.systemPath is sufficient and matches how the rest of
+// collection resolves system paths under the prefix.
+func resolveUnderPrefix(path string) string {
+	if !hostRooted() {
+		return path
+	}
+	return filepath.Join(rootPrefix, strings.TrimPrefix(path, string(filepath.Separator)))
 }
 
 func detectEnvironmentInfo() (*EnvironmentInfo, error) {
@@ -178,8 +223,10 @@ func combineVersions(pveVersion, pbsVersion string) string {
 }
 
 func detectPVE() (string, bool) {
-	if version, ok := detectPVEViaCommand(); ok {
-		return version, true
+	if !hostRooted() {
+		if version, ok := detectPVEViaCommand(); ok {
+			return version, true
+		}
 	}
 
 	if version, ok := detectPVEViaVersionFiles(); ok {
@@ -198,8 +245,10 @@ func detectPVE() (string, bool) {
 }
 
 func detectPBS() (string, bool) {
-	if version, ok := detectPBSViaCommand(); ok {
-		return version, true
+	if !hostRooted() {
+		if version, ok := detectPBSViaCommand(); ok {
+			return version, true
+		}
 	}
 
 	if version, ok := detectPBSViaVersionFile(); ok {
@@ -368,7 +417,7 @@ func extractPBSVersion(output string) string {
 }
 
 func containsAny(path string, tokens []string) bool {
-	data, err := readFileFunc(path)
+	data, err := readFileFunc(resolveUnderPrefix(path))
 	if err != nil {
 		return false
 	}
@@ -382,7 +431,7 @@ func containsAny(path string, tokens []string) bool {
 }
 
 func readAndTrim(path string) string {
-	data, err := readFileFunc(path)
+	data, err := readFileFunc(resolveUnderPrefix(path))
 	if err != nil {
 		return ""
 	}
@@ -391,7 +440,7 @@ func readAndTrim(path string) string {
 
 // fileExists checks if a file exists
 func fileExists(path string) bool {
-	info, err := statFunc(path)
+	info, err := statFunc(resolveUnderPrefix(path))
 	if err != nil {
 		return false
 	}
@@ -399,7 +448,7 @@ func fileExists(path string) bool {
 }
 
 func dirExists(path string) bool {
-	info, err := statFunc(path)
+	info, err := statFunc(resolveUnderPrefix(path))
 	if err != nil {
 		return false
 	}

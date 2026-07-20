@@ -1224,6 +1224,7 @@ func applyCollectorOverrides(cc *backup.CollectorConfig, cfg *config.Config) {
 	cc.BackupScriptRepository = cfg.BackupScriptRepository
 	cc.BackupConfigFile = cfg.BackupConfigFile
 	cc.SystemRootPrefix = cfg.SystemRootPrefix
+	cc.HostBackupMode = cfg.HostBackupMode
 	cc.ScriptRepositoryPath = cfg.BaseDir
 	if cfg.PxarDatastoreConcurrency > 0 {
 		cc.PxarDatastoreConcurrency = cfg.PxarDatastoreConcurrency
