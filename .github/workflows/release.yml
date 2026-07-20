@@ -86,6 +86,10 @@ jobs:
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
         with:
           go-version-file: 'go.mod'
+          # Privileged job (contents: write, id-token: write): opt out of the
+          # default Go cache to avoid cache-poisoning from lower-privileged
+          # workflows, matching codecov/codeql/security-ultimate.
+          cache: false
 
       - name: Show Go version
         run: go version
