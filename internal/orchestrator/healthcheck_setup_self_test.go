@@ -41,7 +41,7 @@ func TestBuildHealthcheckSetupBootstrapSelf(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			stubHealthcheckBootstrap(t, tc.cfg, nil, tc.serverID, tc.secret)
-			state, err := BuildHealthcheckSetupBootstrap("/cfg", "/base")
+			state, err := BuildHealthcheckSetupBootstrap(context.Background(), "/cfg", "/base")
 			if err != nil {
 				t.Fatalf("bootstrap returned error: %v", err)
 			}

@@ -34,7 +34,7 @@ func TestRunHealthcheckSetupCLI_SelfBranch(t *testing.T) {
 	stubHealthcheckSetupCLIDeps(t)
 	centralizedCalled := false
 	var gotURL string
-	healthcheckSetupBuildBootstrap = func(configPath, baseDir string) (orchestrator.HealthcheckSetupBootstrap, error) {
+	healthcheckSetupBuildBootstrap = func(ctx context.Context, configPath, baseDir string) (orchestrator.HealthcheckSetupBootstrap, error) {
 		return orchestrator.HealthcheckSetupBootstrap{
 			Eligibility:         orchestrator.HealthcheckSetupEligibleSelf,
 			HealthcheckMode:     "self",
@@ -103,7 +103,7 @@ func TestRunHealthcheckSelfParamsCLI(t *testing.T) {
 func TestRunHealthcheckSetupCLI_SkipWhenNotEligible(t *testing.T) {
 	stubHealthcheckSetupCLIDeps(t)
 	called := false
-	healthcheckSetupBuildBootstrap = func(configPath, baseDir string) (orchestrator.HealthcheckSetupBootstrap, error) {
+	healthcheckSetupBuildBootstrap = func(ctx context.Context, configPath, baseDir string) (orchestrator.HealthcheckSetupBootstrap, error) {
 		return orchestrator.HealthcheckSetupBootstrap{Eligibility: orchestrator.HealthcheckSetupSkipDisabled}, nil
 	}
 	healthcheckSetupCheck = func(ctx context.Context, host, id, baseDir string, hbInterval time.Duration) orchestrator.HealthcheckCheckResult {
@@ -129,7 +129,7 @@ func TestRunHealthcheckSetupCLI_SkipWhenNotEligible(t *testing.T) {
 
 func TestRunHealthcheckSetupCLI_VerifiedShowsMagicLink(t *testing.T) {
 	stubHealthcheckSetupCLIDeps(t)
-	healthcheckSetupBuildBootstrap = func(configPath, baseDir string) (orchestrator.HealthcheckSetupBootstrap, error) {
+	healthcheckSetupBuildBootstrap = func(ctx context.Context, configPath, baseDir string) (orchestrator.HealthcheckSetupBootstrap, error) {
 		return orchestrator.HealthcheckSetupBootstrap{
 			Eligibility:   orchestrator.HealthcheckSetupEligibleCentralized,
 			ServerID:      "123456789012",
@@ -165,7 +165,7 @@ func TestRunHealthcheckSetupCLI_VerifiedShowsMagicLink(t *testing.T) {
 func TestRunHealthcheckSetupCLI_DeclineCheck(t *testing.T) {
 	stubHealthcheckSetupCLIDeps(t)
 	checkCalled := false
-	healthcheckSetupBuildBootstrap = func(configPath, baseDir string) (orchestrator.HealthcheckSetupBootstrap, error) {
+	healthcheckSetupBuildBootstrap = func(ctx context.Context, configPath, baseDir string) (orchestrator.HealthcheckSetupBootstrap, error) {
 		return orchestrator.HealthcheckSetupBootstrap{Eligibility: orchestrator.HealthcheckSetupEligibleCentralized, ServerID: "1", ServerAPIHost: "h"}, nil
 	}
 	healthcheckSetupPromptYesNo = func(ctx context.Context, r *bufio.Reader, q string, d bool) (bool, error) {
@@ -188,7 +188,7 @@ func TestRunHealthcheckSetupCLI_DeclineCheck(t *testing.T) {
 
 func TestRunHealthcheckSetupCLI_FatalStopsRetry(t *testing.T) {
 	stubHealthcheckSetupCLIDeps(t)
-	healthcheckSetupBuildBootstrap = func(configPath, baseDir string) (orchestrator.HealthcheckSetupBootstrap, error) {
+	healthcheckSetupBuildBootstrap = func(ctx context.Context, configPath, baseDir string) (orchestrator.HealthcheckSetupBootstrap, error) {
 		return orchestrator.HealthcheckSetupBootstrap{Eligibility: orchestrator.HealthcheckSetupEligibleCentralized, ServerID: "1", ServerAPIHost: "h"}, nil
 	}
 	prompts := 0

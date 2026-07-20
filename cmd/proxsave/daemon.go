@@ -20,6 +20,7 @@ import (
 	"github.com/tis24dev/proxsave/internal/health"
 	"github.com/tis24dev/proxsave/internal/identity"
 	"github.com/tis24dev/proxsave/internal/logging"
+	"github.com/tis24dev/proxsave/internal/notify"
 	"github.com/tis24dev/proxsave/internal/types"
 	"github.com/tis24dev/proxsave/internal/version"
 )
@@ -76,10 +77,11 @@ type daemon struct {
 	configPath string
 	now        func() time.Time
 
-	mu           sync.Mutex
-	reporter     backupReporter
-	fetchWarned  bool // centralized fetch already warned once (throttle recurring WARN)
-	updateWarned bool // an update is already known available (WARN once per transition)
+	mu            sync.Mutex
+	reporter      backupReporter
+	fetchWarned   bool      // centralized fetch already warned once (throttle recurring WARN)
+	updateWarned  bool      // an update is already known available (WARN once per transition)
+	provisionLast time.Time // last relay-secret self-heal attempt (throttle); guarded by mu
 	// newBackupCmd builds the child backup command; overridable in tests.
 	newBackupCmd func(ctx context.Context) *exec.Cmd
 
@@ -624,8 +626,26 @@ func (d *daemon) buildReporter(ctx context.Context) *health.Reporter {
 	}
 
 	// centralized
-	alive, backup, checks, err := d.fetchCentralized(ctx)
+	alive, backup, checks, secretUsed, err := d.fetchCentralized(ctx)
 	if err != nil {
+		// A DEFINITIVE auth rejection (ErrHCAuth) means the on-disk relay secret no longer
+		// matches the server's stored hash (a server DB restore/rollback, or a lost
+		// double-issuance race). Clear it so the next throttled maybeProvisionRelaySecret
+		// mints a fresh one - restoring the Telegram path's self-heal. ONLY ErrHCAuth: a
+		// transient / unreachable / not-ready / unknown error must NOT churn a
+		// possibly-good secret (a working confirmed secret never returns 401/403). The clear
+		// is value-guarded under LockNotifySecret against the EXACT secret fetchCentralized
+		// used (secretUsed), so a concurrent hook that persisted+confirmed a fresh secret in
+		// the meantime is never clobbered (which would strand the host).
+		if errors.Is(err, health.ErrHCAuth) {
+			if cleared, rmErr := identity.RemoveNotifySecretIfMatches(d.cfg.BaseDir, secretUsed); rmErr != nil {
+				logging.Debug("daemon: clear rejected relay secret failed: %v", rmErr)
+			} else if cleared {
+				logging.Debug("daemon: relay secret rejected by server (auth); cleared for re-provisioning")
+			} else {
+				logging.Debug("daemon: relay secret rejected by server (auth) but on-disk secret changed concurrently; keeping it")
+			}
+		}
 		// The heartbeat loop retries this every interval; warn ONCE (so the
 		// operator sees healthchecks isn't working, e.g. Telegram not paired yet),
 		// then drop to Debug to avoid a recurring WARN every few minutes.
@@ -666,19 +686,113 @@ func (d *daemon) registerReporterSecrets(alive, backup string, checks map[string
 // fetchCentralized asks the proxsave_server for this client's ping URLs, reusing
 // the same identity/secret as /api/notify. The optional updates URL rides in the additive
 // Checks map (absent on old servers -> "").
-func (d *daemon) fetchCentralized(ctx context.Context) (string, string, map[string]string, error) {
+func (d *daemon) fetchCentralized(ctx context.Context) (alive, backup string, checks map[string]string, secretUsed string, err error) {
 	secret, _ := identity.LoadNotifySecret(d.cfg.BaseDir)
 	if strings.TrimSpace(secret) == "" {
-		return "", "", nil, fmt.Errorf("no relay secret on disk (pair Telegram first)")
+		// No relay secret yet. Attempt a THROTTLED, Telegram-independent provisioning (hook b):
+		// the server now issues the relay secret for a chat-less known ServerID. On success,
+		// continue with the fresh secret; otherwise degrade gracefully (buildReporter warns once,
+		// the heartbeat loop retries, and beats still record no_url).
+		secret = d.maybeProvisionRelaySecret(ctx)
+		if strings.TrimSpace(secret) == "" {
+			return "", "", nil, "", fmt.Errorf("no relay secret on disk (centralized provisioning pending)")
+		}
 	}
 	// Send the authoritative enabled-notification set so the server provisions one check per
 	// enabled channel (Fase 2C). Always non-nil in centralized mode (empty -> "none" sentinel).
 	channels := enabledNotifyChannels(d.cfg)
-	cfg, err := health.FetchCentralizedConfigWithChannels(ctx, nil, d.cfg.ServerAPIHost, d.cfg.ServerID, secret, false, channels)
-	if err != nil {
-		return "", "", nil, err
+	// Return the exact secret sent to the server as secretUsed so buildReporter can
+	// value-guard an ErrHCAuth secret removal against precisely this comparand.
+	cfg, ferr := health.FetchCentralizedConfigWithChannels(ctx, nil, d.cfg.ServerAPIHost, d.cfg.ServerID, secret, false, channels)
+	if ferr != nil {
+		return "", "", nil, secret, ferr
 	}
-	return cfg.AliveURL, cfg.BackupURL, cfg.Checks, nil
+	return cfg.AliveURL, cfg.BackupURL, cfg.Checks, secret, nil
+}
+
+// daemonProvisionRetryInterval throttles the daemon's relay-secret self-heal so a persistent
+// provisioning failure (server down, or the host not yet known to the server) does not hit the
+// server on every heartbeat interval.
+const daemonProvisionRetryInterval = 15 * time.Minute
+
+// provisionRelaySecretFn is the relay-secret provisioner seam (stubbed in tests so the
+// self-heal logic is exercised without touching the network).
+var provisionRelaySecretFn = notify.ProvisionRelaySecret
+
+// provisionRelaySecretBestEffort attempts one relay-secret provisioning for a centralized
+// healthcheck host that has none on disk, so centralized monitoring works WITHOUT Telegram
+// pairing. Best-effort and non-blocking: it returns the relay secret now on disk, or "" when
+// provisioning is not applicable (self mode / disabled / no ServerID) or the attempt failed.
+// It NEVER returns/propagates an error. When a secret is already present it returns it
+// unchanged (never overwrites a possibly-confirmed secret). Callers gate frequency: the
+// daemon throttles via provisionLast; the one-shot daemon-setup path runs it once.
+func provisionRelaySecretBestEffort(ctx context.Context, cfg *config.Config, logger *logging.Logger) string {
+	if cfg == nil || !cfg.HealthcheckEnabled || cfg.HealthcheckMode != config.HealthcheckModeCentralized {
+		return ""
+	}
+	baseDir := strings.TrimSpace(cfg.BaseDir)
+	if baseDir == "" {
+		return ""
+	}
+	if s, _ := identity.LoadNotifySecret(baseDir); strings.TrimSpace(s) != "" {
+		return strings.TrimSpace(s) // already provisioned; do not churn
+	}
+	serverID := strings.TrimSpace(cfg.ServerID)
+	if serverID == "" {
+		return ""
+	}
+	if _, err := provisionRelaySecretFn(ctx, cfg.ServerAPIHost, serverID, baseDir, logger); err != nil {
+		logging.Debug("daemon: relay-secret provisioning attempt failed (will retry later): %v", err)
+		return ""
+	}
+	// Reload regardless of the provisioned flag: ProvisionRelaySecret returns false when it
+	// adopts a secret a concurrent provisioner persisted under the cross-process lock, so a
+	// usable secret may be on disk even then; LoadNotifySecret yields "" when there is
+	// genuinely none, degrading gracefully.
+	s, _ := identity.LoadNotifySecret(baseDir)
+	return strings.TrimSpace(s)
+}
+
+// maybeProvisionRelaySecret is the daemon's throttled relay-secret self-heal (hook b). It
+// returns a freshly persisted secret, or "" when throttled / not applicable / failed. The
+// throttle is recorded even on failure so a down server is not hit every heartbeat.
+func (d *daemon) maybeProvisionRelaySecret(ctx context.Context) string {
+	d.mu.Lock()
+	if !d.provisionLast.IsZero() && d.now().Sub(d.provisionLast) < daemonProvisionRetryInterval {
+		d.mu.Unlock()
+		return ""
+	}
+	d.provisionLast = d.now()
+	d.mu.Unlock()
+	return provisionRelaySecretBestEffort(ctx, d.cfg, d.logger)
+}
+
+// provisionRelaySecretOnDaemonSetup is the one-shot relay-secret self-heal (hook a) run during
+// --daemon-setup / the upgrade migration, right after HEALTHCHECK_ENABLED=true is written. It
+// re-reads the just-written config (the caller's cfg predates the write, so its
+// HealthcheckEnabled is stale), resolves the ServerID from the identity file when backup.env
+// carries none, and provisions the relay secret so a retrofitted centralized host obtains it
+// WITHOUT Telegram pairing. Best-effort and non-blocking.
+func provisionRelaySecretOnDaemonSetup(ctx context.Context, configPath, baseDir string) {
+	baseDir = strings.TrimSpace(baseDir)
+	if baseDir == "" {
+		return
+	}
+	cfg, err := config.LoadConfigWithBaseDir(configPath, baseDir)
+	if err != nil || cfg == nil {
+		logging.Debug("daemon-setup: relay-secret provisioning skipped: config reload failed: %v", err)
+		return
+	}
+	if strings.TrimSpace(cfg.ServerID) == "" {
+		// identity.DetectWithContext has a write side effect (creates .server_identity if
+		// absent) - acceptable in this setup/write context.
+		if info, derr := identity.DetectWithContext(ctx, baseDir, nil); derr == nil && info != nil {
+			cfg.ServerID = strings.TrimSpace(info.ServerID)
+		}
+	}
+	if provisionRelaySecretBestEffort(ctx, cfg, nil) != "" {
+		logging.Info("Centralized monitoring: relay secret provisioned for this host.")
+	}
 }
 
 // enabledNotifyChannels returns the lowercased notification-channel names enabled in cfg,

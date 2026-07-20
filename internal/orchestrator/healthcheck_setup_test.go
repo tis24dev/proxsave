@@ -18,17 +18,20 @@ import (
 
 func stubHealthcheckBootstrap(t *testing.T, cfg *config.Config, cfgErr error, serverID string, secret string) {
 	t.Helper()
-	oc, oi, os := healthcheckSetupLoadConfig, healthcheckSetupIdentityDetect, healthcheckSetupLoadSecret
+	oc, oi, osec, op := healthcheckSetupLoadConfig, healthcheckSetupIdentityDetect, healthcheckSetupLoadSecret, healthcheckSetupProvisionSecret
 	t.Cleanup(func() {
 		healthcheckSetupLoadConfig = oc
 		healthcheckSetupIdentityDetect = oi
-		healthcheckSetupLoadSecret = os
+		healthcheckSetupLoadSecret = osec
+		healthcheckSetupProvisionSecret = op
 	})
 	healthcheckSetupLoadConfig = func(configPath, baseDir string) (*config.Config, error) { return cfg, cfgErr }
 	healthcheckSetupIdentityDetect = func(baseDir string, logger *logging.Logger) (*identity.Info, error) {
 		return &identity.Info{ServerID: serverID}, nil
 	}
 	healthcheckSetupLoadSecret = func(baseDir string) string { return secret }
+	// Default: provisioning is a no-op (no network), so a missing secret stays a skip.
+	healthcheckSetupProvisionSecret = func(ctx context.Context, serverAPIHost, serverID, baseDir string) bool { return false }
 }
 
 func TestBuildHealthcheckSetupBootstrap(t *testing.T) {
@@ -53,7 +56,7 @@ func TestBuildHealthcheckSetupBootstrap(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			stubHealthcheckBootstrap(t, tc.cfg, tc.cfgErr, tc.serverID, tc.secret)
-			state, err := BuildHealthcheckSetupBootstrap("/cfg", "/base")
+			state, err := BuildHealthcheckSetupBootstrap(context.Background(), "/cfg", "/base")
 			if err != nil {
 				t.Fatalf("bootstrap returned error (must be non-blocking): %v", err)
 			}
@@ -67,6 +70,72 @@ func TestBuildHealthcheckSetupBootstrap(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestBuildHealthcheckSetupBootstrapProvisionsMissingSecret pins hook c: a centralized host
+// with a resolved ServerID but NO secret on disk attempts provisioning; when it succeeds
+// (a secret then appears on disk) the verdict flips from SkipIdentityUnavailable to
+// EligibleCentralized, and the provision seam is called with the resolved host + ServerID.
+// A failed attempt keeps the skip verdict.
+func TestBuildHealthcheckSetupBootstrapProvisionsMissingSecret(t *testing.T) {
+	oc, oi, osl, op := healthcheckSetupLoadConfig, healthcheckSetupIdentityDetect, healthcheckSetupLoadSecret, healthcheckSetupProvisionSecret
+	t.Cleanup(func() {
+		healthcheckSetupLoadConfig = oc
+		healthcheckSetupIdentityDetect = oi
+		healthcheckSetupLoadSecret = osl
+		healthcheckSetupProvisionSecret = op
+	})
+	cfg := &config.Config{HealthcheckEnabled: true, HealthcheckMode: "centralized", ServerAPIHost: "https://h"}
+	healthcheckSetupLoadConfig = func(configPath, baseDir string) (*config.Config, error) { return cfg, nil }
+	healthcheckSetupIdentityDetect = func(baseDir string, logger *logging.Logger) (*identity.Info, error) {
+		return &identity.Info{ServerID: "123456789012"}, nil
+	}
+	secret := "" // absent at first
+	healthcheckSetupLoadSecret = func(baseDir string) string { return secret }
+
+	t.Run("provision success -> eligible", func(t *testing.T) {
+		secret = ""
+		called := false
+		var gotHost, gotID string
+		healthcheckSetupProvisionSecret = func(ctx context.Context, host, id, baseDir string) bool {
+			called = true
+			gotHost, gotID = host, id
+			secret = "3h64-dyi8-q3d6-wcm5" // provisioning made a secret appear on disk
+			return true
+		}
+		state, err := BuildHealthcheckSetupBootstrap(context.Background(), "/cfg", "/base")
+		if err != nil {
+			t.Fatalf("bootstrap must never error: %v", err)
+		}
+		if !called {
+			t.Fatal("provision seam must be called when the secret is absent")
+		}
+		if gotHost != "https://h" || gotID != "123456789012" {
+			t.Fatalf("provision seam args = (%q,%q), want (https://h,123456789012)", gotHost, gotID)
+		}
+		if state.Eligibility != HealthcheckSetupEligibleCentralized || !state.HasSecret {
+			t.Fatalf("after provisioning want EligibleCentralized+HasSecret, got %+v", state)
+		}
+	})
+
+	t.Run("provision failure -> skip, still non-blocking", func(t *testing.T) {
+		secret = ""
+		called := false
+		healthcheckSetupProvisionSecret = func(ctx context.Context, host, id, baseDir string) bool {
+			called = true
+			return false // e.g. server change not landed yet / host unknown
+		}
+		state, err := BuildHealthcheckSetupBootstrap(context.Background(), "/cfg", "/base")
+		if err != nil {
+			t.Fatalf("bootstrap must never error even on provision failure: %v", err)
+		}
+		if !called {
+			t.Fatal("provision seam must still be attempted")
+		}
+		if state.Eligibility != HealthcheckSetupSkipIdentityUnavailable || state.HasSecret {
+			t.Fatalf("failed provisioning must stay SkipIdentityUnavailable, got %+v", state)
+		}
+	})
 }
 
 func TestClassifyHealthcheckSetupResult(t *testing.T) {

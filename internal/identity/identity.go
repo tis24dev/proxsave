@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"crypto/sha256"
+	"crypto/subtle"
 	"encoding/base64"
 	"errors"
 	"fmt"
@@ -18,6 +19,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/tis24dev/proxsave/internal/logging"
@@ -25,13 +27,19 @@ import (
 )
 
 const (
-	identityDirName       = "identity"
-	identityFileName      = ".server_identity"
-	notifySecretFileName  = ".notify_secret"
-	maxProcVersionBytes   = 100
-	maxMachineIDBytes     = 32
-	systemKeyPrefixLength = 8
-	serverIDLength        = 16
+	identityDirName          = "identity"
+	identityFileName         = ".server_identity"
+	notifySecretFileName     = ".notify_secret"
+	notifySecretLockFileName = ".notify_secret.lock"
+	maxProcVersionBytes      = 100
+	maxMachineIDBytes        = 32
+	systemKeyPrefixLength    = 8
+	serverIDLength           = 16
+	// NotifySecretMinLen mirrors logging.secretMinRegister (6): a secret shorter than this
+	// is NOT masked in logs, so a too-short value must never reach disk (and later a log
+	// line). Enforced at the single sink (PersistNotifySecret) so every caller is covered;
+	// exported so the relay provisioner shares the one floor instead of duplicating it.
+	NotifySecretMinLen = 6
 )
 
 // notifySecretFormat matches the server's generate_notify_secret output: lowercase
@@ -67,6 +75,14 @@ func PersistNotifySecret(ctx context.Context, baseDir, secret string, logger *lo
 	if !notifySecretFormat.MatchString(secret) {
 		logDebug(logger, "Identity: PersistNotifySecret: malformed secret, refusing (len=%d)", len(secret))
 		return fmt.Errorf("refusing to persist a malformed notify secret")
+	}
+	// Length floor at the single sink: a secret below NotifySecretMinLen is not masked in
+	// logs (redact.go secretMinRegister), so refuse it here so NO caller - the new relay
+	// provisioner and the legacy Telegram path alike - can write an unmaskable value. The
+	// server format is 19 chars, so a real secret never trips this; it is a defensive floor.
+	if n := len([]rune(secret)); n < NotifySecretMinLen {
+		logDebug(logger, "Identity: PersistNotifySecret: secret below min length, refusing (len=%d min=%d)", n, NotifySecretMinLen)
+		return fmt.Errorf("refusing to persist a notify secret shorter than %d runes", NotifySecretMinLen)
 	}
 	dir := filepath.Join(baseDir, identityDirName)
 	if err := os.MkdirAll(dir, 0o750); err != nil { // same mode as Detect
@@ -143,6 +159,129 @@ func readFileUnderRoot(dir, name string) ([]byte, error) {
 	defer func() { _ = f.Close() }()
 
 	return io.ReadAll(f)
+}
+
+// LockNotifySecret takes an exclusive advisory (flock LOCK_EX) lock on a sidecar lock
+// file in the identity directory, creating the directory and lock file when absent, so
+// relay-secret provisioning (issue -> persist -> confirm) is serialized ACROSS PROCESSES.
+// It exists because a concurrent hook a (installer) and hook b (enable-now daemon) can run
+// against the same server_id, and two DISTINCT minted secrets strand the host (last-write
+// wins on disk vs confirm-locks-reissue on the server). It returns an unlock func the
+// caller MUST defer and call exactly once. The lock file is opened confined to the identity
+// directory via os.Root (the basename is a constant, mirroring LoadNotifySecret).
+func LockNotifySecret(baseDir string) (unlock func(), err error) {
+	baseDir = strings.TrimSpace(baseDir)
+	if baseDir == "" {
+		return nil, fmt.Errorf("base directory is empty; cannot lock notify secret")
+	}
+	dir := filepath.Join(baseDir, identityDirName)
+	if err := os.MkdirAll(dir, 0o750); err != nil {
+		return nil, fmt.Errorf("failed to create identity directory %s: %w", dir, err)
+	}
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		return nil, err
+	}
+	f, err := root.OpenFile(notifySecretLockFileName, os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		_ = root.Close()
+		return nil, err
+	}
+	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX); err != nil {
+		_ = f.Close()
+		_ = root.Close()
+		return nil, fmt.Errorf("flock notify secret: %w", err)
+	}
+	return func() {
+		_ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
+		_ = f.Close()
+		_ = root.Close()
+	}, nil
+}
+
+// RemoveNotifySecret deletes the persisted relay secret, first clearing the immutable
+// (+i) attribute (unlinking an immutable file returns EPERM) and confining the unlink to
+// the identity directory via os.Root (mirrors LoadNotifySecret). It is the remediation for
+// a secret the server has DEFINITIVELY rejected (health.ErrHCAuth): clearing it lets the
+// next provisioning cycle mint a fresh one, restoring the Telegram path's self-heal. An
+// absent file (or absent identity dir) is a no-op, so this is idempotent.
+func RemoveNotifySecret(baseDir string, logger ...*logging.Logger) error {
+	var lg *logging.Logger
+	if len(logger) > 0 {
+		lg = logger[0]
+	}
+	baseDir = strings.TrimSpace(baseDir)
+	if baseDir == "" {
+		return nil
+	}
+	dir := filepath.Join(baseDir, identityDirName)
+	path := filepath.Join(dir, notifySecretFileName)
+	// Clear +i first so the unlink is permitted; best-effort, exactly like the write path.
+	if err := writeIdentityFileWithContextSetImmutable(context.Background(), path, false, lg); err != nil {
+		logDebug(lg, "Identity: RemoveNotifySecret: clear immutable failed for %s: %v", path, err)
+	}
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		return err
+	}
+	defer func() { _ = root.Close() }()
+	if err := root.Remove(notifySecretFileName); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		return err
+	}
+	logDebug(lg, "Identity: RemoveNotifySecret: removed %s", path)
+	return nil
+}
+
+// RemoveNotifySecretIfMatches deletes the persisted relay secret ONLY when the on-disk value
+// still equals rejected, all UNDER LockNotifySecret. It is the value-guarded ErrHCAuth
+// remediation: buildReporter loaded secret S_old and the server rejected it (403), so the
+// daemon must clear S_old to trigger a re-provision - but NEVER a fresh confirmed S_new that a
+// concurrent provisioner (hook a installer / hook c manual Check / hook b daemon) persisted in
+// the meantime, since deleting that would strand the host with no centralized healthcheck
+// until a manual server-side secret_confirmed reset. It re-reads the secret under the same
+// lock the provisioners hold and constant-time-compares it to rejected; on a mismatch (or an
+// empty rejected comparand, or an already-absent file) it leaves the file in place and returns
+// removed=false. Returns removed=true only when it actually unlinked.
+func RemoveNotifySecretIfMatches(baseDir, rejected string, logger ...*logging.Logger) (removed bool, err error) {
+	var lg *logging.Logger
+	if len(logger) > 0 {
+		lg = logger[0]
+	}
+	baseDir = strings.TrimSpace(baseDir)
+	if baseDir == "" {
+		return false, nil
+	}
+	rejected = strings.TrimSpace(rejected)
+	if rejected == "" {
+		// No comparand: never delete blindly (that is exactly the unconditional-remove
+		// regression this function replaces).
+		return false, nil
+	}
+	unlock, lerr := LockNotifySecret(baseDir)
+	if lerr != nil {
+		return false, lerr
+	}
+	defer unlock()
+	// Re-read UNDER the lock: a concurrent provisioner may have replaced S_old with a fresh
+	// confirmed S_new after the caller's rejected fetch.
+	current, _ := LoadNotifySecret(baseDir, lg)
+	if current == "" {
+		return false, nil // already cleared by another path; nothing to do
+	}
+	if subtle.ConstantTimeCompare([]byte(current), []byte(rejected)) != 1 {
+		logDebug(lg, "Identity: RemoveNotifySecretIfMatches: on-disk secret changed since rejection; keeping it")
+		return false, nil
+	}
+	if rmErr := RemoveNotifySecret(baseDir, lg); rmErr != nil {
+		return false, rmErr
+	}
+	return true, nil
 }
 
 // Info contains server identity information.

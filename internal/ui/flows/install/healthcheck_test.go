@@ -14,7 +14,7 @@ import (
 	"github.com/tis24dev/proxsave/internal/uitest"
 )
 
-func healthcheckEligibleBootstrap(configPath, baseDir string) (orchestrator.HealthcheckSetupBootstrap, error) {
+func healthcheckEligibleBootstrap(ctx context.Context, configPath, baseDir string) (orchestrator.HealthcheckSetupBootstrap, error) {
 	return orchestrator.HealthcheckSetupBootstrap{
 		Eligibility:   orchestrator.HealthcheckSetupEligibleCentralized,
 		ServerID:      "12345678",
@@ -146,7 +146,7 @@ func TestRunHealthcheckSetup(t *testing.T) {
 		healthcheckCheck = origCheck
 	})
 
-	healthcheckBuildBootstrap = func(configPath, baseDir string) (orchestrator.HealthcheckSetupBootstrap, error) {
+	healthcheckBuildBootstrap = func(ctx context.Context, configPath, baseDir string) (orchestrator.HealthcheckSetupBootstrap, error) {
 		return orchestrator.HealthcheckSetupBootstrap{
 			Eligibility:   orchestrator.HealthcheckSetupEligibleCentralized,
 			ServerID:      "12345678",
@@ -213,7 +213,7 @@ func TestRunHealthcheckSetup(t *testing.T) {
 	}
 
 	// Not eligible: no screen, Shown=false.
-	healthcheckBuildBootstrap = func(configPath, baseDir string) (orchestrator.HealthcheckSetupBootstrap, error) {
+	healthcheckBuildBootstrap = func(ctx context.Context, configPath, baseDir string) (orchestrator.HealthcheckSetupBootstrap, error) {
 		return orchestrator.HealthcheckSetupBootstrap{Eligibility: orchestrator.HealthcheckSetupSkipDisabled}, nil
 	}
 	notShown, err := RunHealthcheckSetup(context.Background(), d.session, t.TempDir(), "/tmp/backup.env", false)

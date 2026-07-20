@@ -54,11 +54,11 @@ func ClassifyHealthcheckSetupResult(res HealthcheckCheckResult) HealthcheckSetup
 	switch {
 	case errors.Is(res.Err, health.ErrHCAuth):
 		st.Fatal, st.Level, st.Keyword = true, HealthcheckSetupLevelError, "REJECTED"
-		st.Message = "The monitoring server rejected this host's credentials. Complete Telegram pairing, then reinstall to retry."
+		st.Message = "The monitoring server rejected this host's credentials. The relay credential is re-provisioned automatically on the next daemon run; if this persists the server may have reset this host's registration."
 		return st
 	case errors.Is(res.Err, health.ErrHCUnknown):
 		st.Fatal, st.Level, st.Keyword = true, HealthcheckSetupLevelError, "NOT REGISTERED"
-		st.Message = "This host is not registered on the server yet. Complete Telegram pairing first."
+		st.Message = "This host is not registered on the server yet. It is registered automatically on the next daemon run (no Telegram pairing needed); if this persists the monitoring server is unreachable from this host."
 		return st
 	case errors.Is(res.Err, health.ErrHCDisabled):
 		st.Fatal, st.Level, st.Keyword = true, HealthcheckSetupLevelError, "DISABLED"
@@ -180,6 +180,51 @@ func applyHealthcheckDaemonState(st HealthcheckSetupState, d health.Diagnosis) H
 	default:
 		st.Level, st.Keyword = HealthcheckSetupLevelWarn, "UNKNOWN"
 		st.Message = "The monitoring daemon state could not be determined."
+	}
+	return st
+}
+
+// ClassifyHealthcheckSetupSkip maps a NON-eligible HealthcheckSetupBootstrap (a skip
+// verdict, i.e. the setup screen has nothing to check) to display copy, so the CLI and
+// dashboard can tell the user WHY distinctly instead of one generic "not enabled" line.
+// It is the mirror of ClassifyHealthcheckSetupResult (which classifies the eligible check
+// outcome) and the single source of truth for that copy, so both front-ends read
+// identically. Only Keyword/Level/Message are set (a skip has no login URL or daemon
+// state). The centralized missing-secret state is Option-A aware: the relay credential is
+// provisioned automatically on the next daemon run (NO Telegram pairing is required); a
+// persistent missing secret means the monitoring server is unreachable from this host.
+func ClassifyHealthcheckSetupSkip(res HealthcheckSetupBootstrap) HealthcheckSetupState {
+	st := HealthcheckSetupState{Level: HealthcheckSetupLevelWarn}
+	switch res.Eligibility {
+	case HealthcheckSetupSkipDisabled:
+		st.Keyword = "NOT ENABLED"
+		st.Message = "Backup monitoring is not enabled on this host. Switch to the daemon scheduler with monitoring enabled to use it."
+	case HealthcheckSetupSkipConfigError:
+		st.Level, st.Keyword = HealthcheckSetupLevelError, "CONFIG ERROR"
+		st.Message = "The configuration could not be loaded, so backup monitoring could not be checked. Re-run the installer to repair it."
+	case HealthcheckSetupSkipSelfMode:
+		st.Keyword = "NOT CONFIGURED"
+		st.Message = "Self-mode monitoring is selected but no service-alive ping URL is configured yet. Enter the healthchecks parameters to finish setup."
+	case HealthcheckSetupSkipIdentityUnavailable:
+		// Two distinct causes collapse into this eligibility upstream: no ServerID at all,
+		// or a ServerID with no relay secret on disk yet. res.ServerID splits them (a
+		// ServerID-less host never has HasSecret set).
+		if res.ServerID == "" {
+			st.Keyword = "NO IDENTITY"
+			st.Message = "No server identity was found on this host, so centralized monitoring cannot be provisioned. Re-run the installer or regenerate the identity file."
+			return st
+		}
+		// ServerID present, relay secret still absent: A-aware. Provisioning is automatic on
+		// the next daemon run and needs NO Telegram pairing; a persistent gap means the
+		// monitoring server is unreachable from this host.
+		st.Keyword = "PROVISIONING"
+		st.Message = "Centralized monitoring is enabled; the relay credential is provisioned automatically on the next daemon run. If this state persists, the monitoring server is unreachable from this host."
+	default:
+		// EligibilityUnknown (zero value) or an eligible verdict reaching the skip path
+		// defensively -- never happens from the dashboard, which only calls this when the
+		// screen was not shown.
+		st.Keyword = "NOT CONFIGURED"
+		st.Message = "Backup monitoring is not configured on this host."
 	}
 	return st
 }

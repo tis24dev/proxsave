@@ -1,11 +1,13 @@
 package orchestrator
 
 import (
+	"context"
 	"strings"
 	"time"
 
 	"github.com/tis24dev/proxsave/internal/config"
 	"github.com/tis24dev/proxsave/internal/identity"
+	"github.com/tis24dev/proxsave/internal/notify"
 )
 
 // HealthcheckSetupMaxVerificationAttempts bounds how many connection checks the
@@ -64,16 +66,26 @@ var (
 		s, _ := identity.LoadNotifySecret(baseDir)
 		return s
 	}
+	// healthcheckSetupProvisionSecret is the eligibility self-heal (hook c): when the
+	// ServerID is resolved but no relay secret is on disk, attempt one Telegram-independent
+	// provisioning. Best-effort - the seam swallows the error and returns whether a secret
+	// was persisted, so the caller preserves its never-error / never-block contract.
+	healthcheckSetupProvisionSecret = func(ctx context.Context, serverAPIHost, serverID, baseDir string) bool {
+		provisioned, _ := notify.ProvisionRelaySecret(ctx, serverAPIHost, serverID, baseDir, nil)
+		return provisioned
+	}
 )
 
 // BuildHealthcheckSetupBootstrap re-reads the just-written config (the same
 // single-source-of-truth approach Telegram uses) and decides whether the
 // centralized healthchecks setup screen should appear. Eligible requires: the
 // daemon engine was chosen (HEALTHCHECK_ENABLED=true), centralized mode, a resolved
-// ServerID, and a relay secret on disk (from Telegram pairing, needed for the
-// authenticated fetch). All skip paths return (state, nil) - never an error - so
-// the step is fully non-blocking.
-func BuildHealthcheckSetupBootstrap(configPath, baseDir string) (HealthcheckSetupBootstrap, error) {
+// ServerID, and a relay secret on disk (needed for the authenticated fetch). When
+// the secret is absent it is provisioned on demand from the server keyed on the
+// ServerID (no Telegram pairing required); only if that still fails does the step
+// skip. All skip paths return (state, nil) - never an error - so the step is fully
+// non-blocking.
+func BuildHealthcheckSetupBootstrap(ctx context.Context, configPath, baseDir string) (HealthcheckSetupBootstrap, error) {
 	state := HealthcheckSetupBootstrap{}
 
 	cfg, err := healthcheckSetupLoadConfig(configPath, baseDir)
@@ -123,6 +135,20 @@ func BuildHealthcheckSetupBootstrap(configPath, baseDir string) (HealthcheckSetu
 	}
 
 	state.HasSecret = strings.TrimSpace(healthcheckSetupLoadSecret(baseDir)) != ""
+	if !state.HasSecret {
+		// Self-heal (hook c): the ServerID is resolved but no relay secret is on disk.
+		// Attempt one Telegram-independent provisioning (the server now issues the relay
+		// secret for a chat-less known ServerID), gated STRICTLY on the secret being absent.
+		// The seam never returns an error and the network call is bounded (5s handshake +
+		// 5s confirm), so this preserves the "never returns an error, never blocks" contract:
+		// on any failure we fall through to SkipIdentityUnavailable exactly as before.
+		// Reload UNCONDITIONALLY, regardless of the return value: ProvisionRelaySecret
+		// returns false when it adopts a secret a concurrent provisioner persisted under
+		// the cross-process lock, so gating the reload on a true return would miss a
+		// usable credential that is already on disk and wrongly report SkipIdentityUnavailable.
+		_ = healthcheckSetupProvisionSecret(ctx, state.ServerAPIHost, state.ServerID, baseDir)
+		state.HasSecret = strings.TrimSpace(healthcheckSetupLoadSecret(baseDir)) != ""
+	}
 	if !state.HasSecret {
 		state.Eligibility = HealthcheckSetupSkipIdentityUnavailable
 		return state, nil

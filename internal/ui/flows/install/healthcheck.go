@@ -38,9 +38,20 @@ const (
 // daemon engine with centralized monitoring was chosen and the identity/secret
 // exist (decided by BuildHealthcheckSetupBootstrap re-reading the written config).
 func RunHealthcheckSetup(ctx context.Context, session *shell.Session, baseDir, configPath string, backToMenu bool) (installer.HealthcheckSetupResult, error) {
-	state, err := healthcheckBuildBootstrap(configPath, baseDir)
-	if err != nil {
-		return installer.HealthcheckSetupResult{}, err
+	// BuildHealthcheckSetupBootstrap can run an up-to-10s relay-secret provisioning handshake
+	// (hook c) when this centralized host has a resolved ServerID but no secret on disk yet.
+	// Run it under the SAME spinner the connection check uses so the screen shows progress
+	// instead of appearing frozen; an already-provisioned host returns instantly.
+	var state orchestrator.HealthcheckSetupBootstrap
+	var bootErr error
+	if runErr := components.RunTask(ctx, session, "Checking monitoring setup", "Reading configuration...", func(taskCtx context.Context, report func(string)) error {
+		state, bootErr = healthcheckBuildBootstrap(taskCtx, configPath, baseDir)
+		return nil
+	}); runErr != nil {
+		return installer.HealthcheckSetupResult{}, runErr
+	}
+	if bootErr != nil {
+		return installer.HealthcheckSetupResult{}, bootErr
 	}
 	result := installer.HealthcheckSetupResult{
 		HealthcheckSetupBootstrap: state,

@@ -28,7 +28,10 @@ func logHealthcheckSetupBootstrapOutcome(bootstrap *logging.BootstrapLogger, sta
 	case orchestrator.HealthcheckSetupSkipSelfMode:
 		logBootstrapInfo(bootstrap, "Healthcheck setup: self mode but no alive URL configured yet (skipping)")
 	case orchestrator.HealthcheckSetupSkipIdentityUnavailable:
-		logBootstrapWarning(bootstrap, "Healthcheck setup: identity/relay secret unavailable; skipping (pair Telegram to enable centralized monitoring)")
+		// A-aware: no ServerID vs missing relay secret read distinctly, and the
+		// missing-secret copy no longer says "pair Telegram" (the relay secret is now
+		// provisioned automatically without Telegram). Shared with the dashboard notice.
+		logBootstrapWarning(bootstrap, "Healthcheck setup: %s", orchestrator.ClassifyHealthcheckSetupSkip(state).Message)
 	}
 	// SkipDisabled (cron mode) is a silent skip, mirroring Telegram when disabled.
 }
@@ -38,7 +41,7 @@ func logHealthcheckSetupBootstrapOutcome(bootstrap *logging.BootstrapLogger, sta
 // non-blocking connection check with retry/skip. Only renders when the daemon
 // engine with centralized monitoring was chosen and the identity/secret exist.
 func runHealthcheckSetupCLI(ctx context.Context, reader *bufio.Reader, baseDir, configPath string, bootstrap *logging.BootstrapLogger) error {
-	state, err := healthcheckSetupBuildBootstrap(configPath, baseDir)
+	state, err := healthcheckSetupBuildBootstrap(ctx, configPath, baseDir)
 	if err != nil {
 		logBootstrapWarning(bootstrap, "Healthcheck setup bootstrap failed (non-blocking): %v", err)
 		return nil

@@ -257,13 +257,19 @@ func runDashboardDiagnostic(ctx context.Context, session *shell.Session, action 
 		logging.DebugStepBootstrap(bootstrap, "dashboard", "action=check-telegram")
 		res, _ := dashboardRunTelegramSetup(ctx, session, baseDir, configPath)
 		if !res.Shown {
-			dashboardNotConfiguredNotice(ctx, session, "Telegram", "Telegram notifications are not enabled (centralized) on this host.")
+			// Distinct copy per skip verdict (disabled / personal / config / identity),
+			// so the twin no longer collapses to one generic "not enabled" line.
+			st := orchestrator.ClassifyTelegramSetupSkip(res.TelegramSetupBootstrap)
+			showDaemonResultScreen(ctx, session, "Telegram", st.Level, st.Keyword, st.Message)
 		}
 	case menu.ActionCheckHealthcheck:
 		logging.DebugStepBootstrap(bootstrap, "dashboard", "action=check-healthcheck")
 		res, _ := dashboardRunHealthcheckSetup(ctx, session, baseDir, configPath)
 		if !res.Shown {
-			dashboardNotConfiguredNotice(ctx, session, "Backup monitoring", "Backup monitoring (healthchecks) is not enabled on this host.")
+			// Distinct copy per skip verdict; the centralized missing-secret state is
+			// A-aware (auto-provisioned on the next daemon run, no Telegram pairing).
+			st := orchestrator.ClassifyHealthcheckSetupSkip(res.HealthcheckSetupBootstrap)
+			showDaemonResultScreen(ctx, session, "Backup monitoring", st.Level, st.Keyword, st.Message)
 		}
 	case menu.ActionPostInstallCheck:
 		logging.DebugStepBootstrap(bootstrap, "dashboard", "action=post-install-check")
@@ -674,14 +680,6 @@ var (
 		return flowinstall.RunPostInstallAudit(ctx, session, execPath, configPath, true)
 	}
 )
-
-// dashboardNotConfiguredNotice shows a not-configured diagnostic when a screen has
-// nothing to show because the feature is not enabled on this host. It reuses the
-// shared styled result screen (showDaemonResultScreen) so it reads
-// "Status: ⚠ NOT CONFIGURED" exactly like the configured check screens.
-func dashboardNotConfiguredNotice(ctx context.Context, session *shell.Session, title, msg string) {
-	showDaemonResultScreen(ctx, session, title, orchestrator.HealthcheckSetupLevelWarn, "NOT CONFIGURED", msg)
-}
 
 // testDashboardSession lets tests inject a renderless session (the seam used
 // to be newAgeSetupSession; the handoff needs the dashboard to own a real
