@@ -1,0 +1,44 @@
+name: License Check
+
+on:
+  pull_request:
+    branches: [ main, dev ]
+    paths:
+      - 'go.mod'
+      - 'go.sum'
+      - '.github/workflows/license-check.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  license-check:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          # No later step uses the git remote, so don't leave the GITHUB_TOKEN in .git/config.
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
+        with:
+          go-version-file: 'go.mod'
+          cache: false
+
+      - name: Install go-licenses
+        run: go install github.com/google/go-licenses@v1.6.0
+
+      # Authoritative license gate. go-licenses reads the actual LICENSE files
+      # from the module cache and classifies each linked dependency, so vanity
+      # import paths like golang.org/x/* resolve to their real license
+      # (BSD-3-Clause) instead of the null/"Unknown" that GitHub's dependency
+      # graph reports for freshly published versions. Fails the PR if any
+      # dependency carries a license outside the allow-list.
+      - name: Check dependency licenses
+        run: |
+          export PATH="$(go env GOPATH)/bin:$PATH"
+          go-licenses check ./... \
+            --allowed_licenses=MIT,Apache-2.0,BSD-2-Clause,BSD-3-Clause,ISC
