@@ -49,8 +49,13 @@ func ProvisionRelaySecret(ctx context.Context, serverAPIHost, serverID, baseDir 
 	defer unlock()
 	// Re-check UNDER the lock: if a concurrent minter already persisted a secret, adopt it
 	// instead of minting a competing one. Returns (false, nil) - nothing to provision - so
-	// the caller reads the winner's secret from disk on its next fetch.
-	if s, _ := identity.LoadNotifySecret(baseDir); strings.TrimSpace(s) != "" {
+	// the caller reads the winner's secret from disk on its next fetch. A real read error
+	// (the file exists but could not be read) is surfaced rather than swallowed: proceeding
+	// would mint a fresh secret OVER a value we failed to read. Missing/empty/malformed still
+	// yields ("", nil) per the loader contract, so we fall through and provision.
+	if s, err := identity.LoadNotifySecret(baseDir); err != nil {
+		return false, fmt.Errorf("relay provision: re-check load: %w", err)
+	} else if strings.TrimSpace(s) != "" {
 		logTelegramRegistrationDebug(logger, "relay provision: secret already present under lock (adopting; nothing to provision)")
 		return false, nil
 	}
