@@ -17,7 +17,7 @@ import (
 func runConfiguredBackup(opts backupModeOptions, orch *orchestrator.Orchestrator) (*orchestrator.BackupStats, *orchestrator.EarlyErrorState, int) {
 	if !opts.cfg.BackupEnabled {
 		logging.Warning("Backup is disabled in configuration")
-		return nil, nil, types.ExitSuccess.Int()
+		return nil, nil, types.ExitBackupSkipped.Int()
 	}
 
 	skip, earlyErrorState, exitCode := runPreBackupChecks(opts, orch)
@@ -26,8 +26,9 @@ func runConfiguredBackup(opts backupModeOptions, orch *orchestrator.Orchestrator
 	}
 	if skip {
 		// Benign concurrency skip (another backup is already running): no failure
-		// notification, exit 0. The deferred ReleaseBackupLock is a no-op because
-		// this process never acquired the lock.
+		// notification, ExitBackupSkipped (16) so the daemon does not ping a false-green
+		// finish and the CLI footer shows a skip, not success. The deferred ReleaseBackupLock
+		// is a no-op because this process never acquired the lock.
 		return nil, nil, exitCode
 	}
 
@@ -43,8 +44,9 @@ func runConfiguredBackup(opts backupModeOptions, orch *orchestrator.Orchestrator
 
 	persistBackupStats(orch, stats)
 	logBackupStatistics(stats)
-	logging.Info("✓ Go backup orchestration completed")
+	logging.Info("✓ Backup completed")
 	logServerIdentityValues(opts.serverIDValue, opts.serverMACValue)
+	logMonitoringPortalLink(stats)
 
 	if opts.heapProfilePath != "" {
 		logging.Info("Heap profiling saved: %s", opts.heapProfilePath)
@@ -56,14 +58,15 @@ func runConfiguredBackup(opts backupModeOptions, orch *orchestrator.Orchestrator
 
 // runPreBackupChecks returns (skip, earlyError, exitCode). skip=true means a
 // benign concurrency skip (another backup is already running): no early error,
-// no notification, exit 0.
+// no notification, ExitBackupSkipped (16) so the daemon suppresses a false-green
+// finish and the CLI footer shows a skip rather than success (F09-03).
 func runPreBackupChecks(opts backupModeOptions, orch *orchestrator.Orchestrator) (bool, *orchestrator.EarlyErrorState, int) {
 	preCheckDone := logging.DebugStart(opts.logger, "pre-backup checks", "")
 	if err := orch.RunPreBackupChecks(opts.ctx); err != nil {
 		preCheckDone(err)
 		if errors.Is(err, orchestrator.ErrBackupInProgress) {
 			logging.Warning("Skipping backup: %v", err)
-			return true, nil, types.ExitSuccess.Int()
+			return true, nil, types.ExitBackupSkipped.Int()
 		}
 		logging.Error("Pre-backup validation failed: %v", err)
 		return false, &orchestrator.EarlyErrorState{
@@ -106,58 +109,90 @@ func persistBackupStats(orch *orchestrator.Orchestrator, stats *orchestrator.Bac
 }
 
 func logBackupStatistics(stats *orchestrator.BackupStats) {
+	// The block is now debug-only; a standard run shows it in the graphical
+	// outcome recap (buildBackupOutcomePrompt) instead. Guard before the blank
+	// spacers too, so a standard run shows no orphan blank lines.
+	if logging.GetDefaultLogger().GetLevel() < types.LogLevelDebug {
+		return
+	}
 	fmt.Println()
-	logging.Info("=== Backup Statistics ===")
-	logging.Info("Files collected: %d", stats.FilesCollected)
+	logging.Debug("=== Backup Statistics ===")
+	logging.Debug("Files collected: %d", stats.FilesCollected)
 	if stats.FilesFailed > 0 {
-		logging.Warning("Files failed: %d", stats.FilesFailed)
+		// The PVE/PBS collection summary carries the Files-failed warning now.
+		logging.Debug("Files failed: %d", stats.FilesFailed)
 	}
-	logging.Info("Directories created: %d", stats.DirsCreated)
-	logging.Info("Data collected: %s", formatBytes(stats.BytesCollected))
-	logging.Info("Archive size: %s", formatBytes(stats.ArchiveSize))
+	logging.Debug("Directories created: %d", stats.DirsCreated)
+	logging.Debug("Data collected: %s", formatBytes(stats.BytesCollected))
+	logging.Debug("Archive size: %s", formatBytes(stats.ArchiveSize))
 	logCompressionRatio(stats)
-	logging.Info("Compression used: %s (level %d, mode %s)", stats.Compression, stats.CompressionLevel, stats.CompressionMode)
+	logging.Debug("Compression used: %s (level %d, mode %s)", stats.Compression, stats.CompressionLevel, stats.CompressionMode)
 	if stats.RequestedCompression != stats.Compression {
-		logging.Info("Requested compression: %s", stats.RequestedCompression)
+		logging.Debug("Requested compression: %s", stats.RequestedCompression)
 	}
-	logging.Info("Duration: %s", formatDuration(stats.Duration))
+	logging.Debug("Duration: %s", formatDuration(stats.Duration))
 	logBackupArtifactPaths(stats)
 	fmt.Println()
 }
 
 func logCompressionRatio(stats *orchestrator.BackupStats) {
+	logging.Debug("Compression ratio: %s", compressionRatioText(stats))
+}
+
+// compressionRatioText renders the compression-ratio value shared by the
+// debug-only log block (logCompressionRatio) and the graphical outcome recap
+// (appendBackupStatsBlock), so the two never drift.
+func compressionRatioText(stats *orchestrator.BackupStats) string {
 	switch {
 	case stats.CompressionSavingsPercent > 0:
-		logging.Info("Compression ratio: %.1f%%", stats.CompressionSavingsPercent)
+		return fmt.Sprintf("%.1f%%", stats.CompressionSavingsPercent)
 	case stats.CompressionRatioPercent > 0:
-		logging.Info("Compression ratio: %.1f%%", stats.CompressionRatioPercent)
+		return fmt.Sprintf("%.1f%%", stats.CompressionRatioPercent)
 	case stats.BytesCollected > 0:
 		ratio := float64(stats.ArchiveSize) / float64(stats.BytesCollected) * 100
-		logging.Info("Compression ratio: %.1f%%", ratio)
+		return fmt.Sprintf("%.1f%%", ratio)
 	default:
-		logging.Info("Compression ratio: N/A")
+		return "N/A"
 	}
 }
 
 func logBackupArtifactPaths(stats *orchestrator.BackupStats) {
 	if stats.BundleCreated {
-		logging.Info("Bundle path: %s", stats.ArchivePath)
-		logging.Info("Bundle contents: archive + checksum + metadata")
+		logging.Debug("Bundle path: %s", stats.ArchivePath)
+		logging.Debug("Bundle contents: archive + checksum + metadata")
 		return
 	}
 
-	logging.Info("Archive path: %s", stats.ArchivePath)
+	logging.Debug("Archive path: %s", stats.ArchivePath)
 	if stats.ManifestPath != "" {
-		logging.Info("Manifest path: %s", stats.ManifestPath)
+		logging.Debug("Manifest path: %s", stats.ManifestPath)
 	}
 	if stats.Checksum != "" {
-		logging.Info("Archive checksum (SHA256): %s", stats.Checksum)
+		logging.Debug("Archive checksum (SHA256): %s", stats.Checksum)
+	}
+}
+
+// consoleStatusGlyph returns a TEXT-presentation glyph (all width 1, terminal-stable)
+// for the console "Exit status" line, matching the plain checkmarks used everywhere
+// else in the run output. It deliberately avoids notify.GetStatusEmoji, whose
+// emoji-presentation glyphs (e.g. "⚠️" = U+26A0 U+FE0F) render at a width the terminal
+// and lipgloss disagree on, shifting the framed graphical panel's border by one column.
+func consoleStatusGlyph(status notify.NotificationStatus) string {
+	switch status {
+	case notify.StatusSuccess:
+		return "✓"
+	case notify.StatusWarning:
+		return "⚠"
+	case notify.StatusFailure:
+		return "✗"
+	default:
+		return "•"
 	}
 }
 
 func logBackupExitStatus(exitCode int) {
 	status := notify.StatusFromExitCode(exitCode)
 	statusLabel := strings.ToUpper(status.String())
-	emoji := notify.GetStatusEmoji(status)
-	logging.Info("Exit status: %s %s (code=%d)", emoji, statusLabel, exitCode)
+	glyph := consoleStatusGlyph(status)
+	logging.Info("Exit status: %s %s (code=%d)", glyph, statusLabel, exitCode)
 }

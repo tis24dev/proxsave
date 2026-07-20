@@ -13,6 +13,7 @@ import (
 
 	"github.com/tis24dev/proxsave/internal/input"
 	"github.com/tis24dev/proxsave/internal/logging"
+	"github.com/tis24dev/proxsave/internal/ui/components"
 )
 
 // runSafeClusterApply applies selected cluster configs via pvesh without touching config.db.
@@ -128,16 +129,17 @@ func promptExportNodeSelection(ctx context.Context, reader *bufio.Reader, export
 	for {
 		fmt.Println()
 		fmt.Printf("WARNING: VM/CT configs in this backup are stored under different node names.\n")
-		fmt.Printf("Current node: %s\n", currentNode)
+		// Sanitize backup-derived node names before printing (terminal-escape injection guard).
+		fmt.Printf("Current node: %s\n", components.SanitizeLine(currentNode))
 		fmt.Println("Select which exported node to import VM/CT configs from (they will be applied to the current node):")
 		for idx, node := range exportNodes {
 			qemuCount, lxcCount := countVMConfigsForNode(exportRoot, node)
-			fmt.Printf("  [%d] %s (qemu=%d, lxc=%d)\n", idx+1, node, qemuCount, lxcCount)
+			fmt.Printf("  [%d] %s (qemu=%d, lxc=%d)\n", idx+1, components.SanitizeLine(node), qemuCount, lxcCount)
 		}
 		fmt.Println("  [0] Skip VM/CT apply")
 
 		fmt.Print("Choice: ")
-		line, err := input.ReadLineWithContext(ctx, reader)
+		line, err := input.ReadLineWithIdle(ctx, reader, cliIdleTimeout)
 		if err != nil {
 			return "", err
 		}
@@ -513,7 +515,7 @@ func promptClusterRestoreMode(ctx context.Context, reader *bufio.Reader) (int, e
 
 	for {
 		fmt.Print("Choice: ")
-		choiceLine, err := input.ReadLineWithContext(ctx, reader)
+		choiceLine, err := input.ReadLineWithIdle(ctx, reader, cliIdleTimeout)
 		if err != nil {
 			return 0, err
 		}

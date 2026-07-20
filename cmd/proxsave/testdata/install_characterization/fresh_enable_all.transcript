@@ -1,0 +1,36 @@
+
+--- Secondary storage ---
+Configure an additional local path for redundant copies.
+IMPORTANT: Secondary path must be a filesystem-mounted directory (e.g., /mnt/nas-backup)
+Network shares must be mounted BEFORE running this backup tool.
+For direct network access without mounting, use cloud storage (rclone) instead.
+(You can change these settings later in backup.env)
+Enable secondary backup path? [y/N]: Secondary backup path (SECONDARY_PATH): Secondary log path (SECONDARY_LOG_PATH, optional - press Enter to skip): 
+--- Cloud storage (rclone) ---
+Remember to configure rclone manually before enabling cloud backups.
+Enable cloud backups? [y/N]: Rclone remote for backups (e.g. myremote:pbs-backups): [GoogleDrive] Rclone remote for logs (e.g. myremote:/logs): [/proxsave/log] 
+--- Firewall rules ---
+Enable collection of firewall rules (e.g., iptables/nftables).
+(You can change this later in backup.env via BACKUP_FIREWALL_RULES)
+Backup firewall rules? [y/N]: 
+--- Telegram ---
+Enable Telegram notifications (centralized)? [y/N]: 
+--- Email ---
+Default email delivery uses the ProxSave Cloud Relay, with local sendmail as failover.
+ProxSave does not collect raw SMTP settings; choose pmf only when Proxmox Notifications is configured.
+Enable email notifications? [y/N]: Email delivery methods:
+  relay    ProxSave Cloud Relay over outbound HTTPS (default)
+  sendmail Local /usr/sbin/sendmail (fallback/default failover; requires a local MTA)
+  pmf      Proxmox Notifications via proxmox-mail-forward (SMTP lives in Proxmox)
+Email delivery method [relay]: 
+--- Encryption ---
+Enable backup encryption? [y/N]: 
+--- Scheduler ---
+Scheduler engine: daemon (resident, hang watchdog + healthchecks) or cron [daemon]: 
+--- Backup monitoring (healthchecks) ---
+off         no monitoring
+centralized ProxSave HC Server (zero setup, reuses the Telegram identity)
+self        your own healthchecks/SaaS server (you paste the ping URLs next)
+Healthchecks monitoring: off, centralized, or self [centralized]: 
+--- Schedule ---
+Run at (daily, HH:MM) [02:00]: 

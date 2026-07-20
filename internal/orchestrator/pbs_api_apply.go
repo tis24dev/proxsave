@@ -368,9 +368,24 @@ func applyPBSDatastoreCfgViaAPI(ctx context.Context, logger *logging.Logger, sta
 		Path  string `json:"path"`
 	}
 	currentPaths := make(map[string]string)
-	if out, err := runPBSManager(ctx, "datastore", "list", "--output-format=json"); err == nil {
+	out, listErr := runPBSManager(ctx, "datastore", "list", "--output-format=json")
+	if listErr != nil {
+		// The current PBS state is unknown. A strict Clean 1:1 restore cannot safely prune
+		// stale datastores without it, so fail closed rather than silently report an
+		// incomplete clean (P-08). Non-strict logs and continues: it never prunes anyway,
+		// and the create/update loop below self-heals an already-existing datastore.
+		if strict {
+			return fmt.Errorf("datastore list failed, cannot enforce Clean 1:1: %w", listErr)
+		}
+		logger.Warning("PBS API apply: datastore list failed (%v); create/update will proceed, stale datastores are not pruned", listErr)
+	} else {
 		var rows []dsRow
-		if err := json.Unmarshal(unwrapPBSJSONData(out), &rows); err == nil {
+		if err := json.Unmarshal(unwrapPBSJSONData(out), &rows); err != nil {
+			if strict {
+				return fmt.Errorf("datastore list returned unparseable JSON, cannot enforce Clean 1:1: %w", err)
+			}
+			logger.Warning("PBS API apply: datastore list JSON parse failed (%v); stale datastores are not pruned", err)
+		} else {
 			for _, row := range rows {
 				name := strings.TrimSpace(row.Name)
 				if name == "" {
@@ -426,7 +441,14 @@ func applyPBSDatastoreCfgViaAPI(ctx context.Context, logger *logging.Logger, sta
 					}
 					createArgs := append([]string{"datastore", "create", name, path}, flags...)
 					if _, err := runPBSManager(ctx, createArgs...); err != nil {
-						return fmt.Errorf("datastore %s: recreate after path mismatch failed: %w", name, err)
+						// The datastore was removed but the create at the new path failed.
+						// Re-create it at its original path so it is not left deconfigured
+						// (remove has no --destroy-data, so the chunks are still on disk).
+						rollbackArgs := append([]string{"datastore", "create", name, currentPath}, flags...)
+						if _, rbErr := runPBSManager(ctx, rollbackArgs...); rbErr != nil {
+							return fmt.Errorf("datastore %s: path change to %s failed (%v) and rollback re-create at original path %s also failed (%v); the datastore is left removed, its data is still on disk and it must be re-created manually", name, path, err, currentPath, rbErr)
+						}
+						return fmt.Errorf("datastore %s: path change to %s failed (%w); the datastore was restored to its original path %s", name, path, err, currentPath)
 					}
 					continue
 				}

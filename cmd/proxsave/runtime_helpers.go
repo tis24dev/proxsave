@@ -18,7 +18,9 @@ import (
 
 	"github.com/tis24dev/proxsave/internal/config"
 	"github.com/tis24dev/proxsave/internal/logging"
+	"github.com/tis24dev/proxsave/internal/orchestrator"
 	"github.com/tis24dev/proxsave/internal/safeexec"
+	"github.com/tis24dev/proxsave/internal/serverbot"
 	"github.com/tis24dev/proxsave/internal/storage"
 	"github.com/tis24dev/proxsave/internal/types"
 	"github.com/tis24dev/proxsave/pkg/utils"
@@ -256,6 +258,22 @@ func logServerIdentityValues(serverID, mac string) {
 	}
 }
 
+// logMonitoringPortalLink is the SOLE display boundary for the portal magic-link. The
+// Healthchecks section carries the link RAW on stats.HealthcheckLink (captured this run
+// or best-effort minted); this sanitizes it once with serverbot.SanitizeLoginURL and,
+// only if it survives, prints it as the "Healthchecks Portal" line. It is called in the
+// backup epilogue right after the Server MAC Address line so the link appears at the
+// very end of the run. It never registers the link as a log secret (it must stay
+// visible) and prints nothing for a nil stats, empty, or hostile link.
+func logMonitoringPortalLink(stats *orchestrator.BackupStats) {
+	if stats == nil {
+		return
+	}
+	if safe := serverbot.SanitizeLoginURL(stats.HealthcheckLink); safe != "" {
+		logging.Info("Healthchecks Portal: %s", safe)
+	}
+}
+
 func resolveHostname() string {
 	if path, err := exec.LookPath("hostname"); err == nil {
 		cmdCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
@@ -293,7 +311,7 @@ func validateFutureFeatures(cfg *config.Config) error {
 		}
 	}
 	if cfg.CloudEnabled && cfg.CloudRemote == "" {
-		logging.Warning("Cloud backup enabled but CLOUD_REMOTE is empty – disabling cloud storage for this run")
+		logging.Warning("Cloud backup enabled but CLOUD_REMOTE is empty, disabling cloud storage for this run")
 		cfg.CloudEnabled = false
 		cfg.CloudRemote = ""
 		cfg.CloudLogPath = ""
@@ -832,11 +850,13 @@ func dropLegacyBashCronLines(lines []string, baseDir string, bootstrap *logging.
 	return kept
 }
 
-func filterCronLines(lines []string, correctPaths []string) ([]string, bool, []string) {
+// filterCronLines returns the crontab with every proxsave/proxmox-backup entry
+// that points to an outdated binary removed. Blank lines, comments, unrelated
+// operator jobs and any entry already targeting a canonical path are preserved.
+// The previous schedule is not remembered: a (re)install rewrites the proxsave
+// schedule from config (SCHEDULER_TIME) afterwards.
+func filterCronLines(lines []string, correctPaths []string) []string {
 	updatedLines := make([]string, 0, len(lines))
-	hasCurrentEntry := false
-	var replacedSchedules []string
-	seenSchedules := make(map[string]bool)
 
 	containsCorrectPath := func(line string) bool {
 		// Match the cron command token exactly, not as a substring: otherwise a
@@ -862,25 +882,17 @@ func filterCronLines(lines []string, correctPaths []string) ([]string, bool, []s
 			continue
 		}
 		if containsCorrectPath(line) {
-			hasCurrentEntry = true
 			updatedLines = append(updatedLines, line)
 			continue
 		}
 		if containsBinaryReference(line) {
-			// Remove proxsave/proxmox-backup entries that point to outdated binaries,
-			// remembering EACH distinct schedule so every rewritten entry can keep its
-			// own. Multiple legacy entries with different schedules must not collapse
-			// into a single rewritten entry (which would silently drop the others).
-			if sched := cronScheduleField(line); sched != "" && !seenSchedules[sched] {
-				seenSchedules[sched] = true
-				replacedSchedules = append(replacedSchedules, sched)
-			}
+			// Drop proxsave/proxmox-backup entries that point to an outdated binary.
 			continue
 		}
 		updatedLines = append(updatedLines, line)
 	}
 
-	return updatedLines, hasCurrentEntry, replacedSchedules
+	return updatedLines
 }
 
 // dropCanonicalCronLines removes every cron line whose command token already
@@ -890,21 +902,67 @@ func dropCanonicalCronLines(lines, correctPaths []string) []string {
 	kept := make([]string, 0, len(lines))
 	for _, line := range lines {
 		token := strings.Trim(cronCommandToken(line), "\"'")
-		canonical := false
-		if token != "" {
+		// Drop any proxsave/proxmox-backup cron line by command-token basename, not
+		// only the exact canonical path, so a non-canonical or hand-edited entry is
+		// removed too and the "removed" log is truthful (F10-04). The correctPaths
+		// exact match is kept as a belt-and-suspenders for an unusual token.
+		drop := commandTokenMatchesTarget(token)
+		if !drop && token != "" {
 			for _, p := range correctPaths {
 				if p != "" && token == p {
-					canonical = true
+					drop = true
 					break
 				}
 			}
 		}
-		if canonical {
+		if drop {
 			continue
 		}
 		kept = append(kept, line)
 	}
 	return kept
+}
+
+// repointLegacyCronLines repoints any cron line whose command token is exactly the
+// legacy /usr/local/bin/proxmox-backup symlink to the canonical /usr/local/bin/proxsave
+// entrypoint, preserving the schedule and args. Every other line is byte-preserved. Used
+// on upgrade BEFORE the legacy symlink is removed so no cron line is left orphaned (F10-03).
+func repointLegacyCronLines(lines []string) ([]string, bool) {
+	const legacy = "/usr/local/bin/proxmox-backup"
+	const canonical = "/usr/local/bin/proxsave"
+	out := make([]string, len(lines))
+	changed := false
+	for i, line := range lines {
+		if strings.Trim(cronCommandToken(line), "\"'") == legacy {
+			// cronCommandToken already excluded comments/env lines, and a schedule field
+			// is never a path, so the command is the first occurrence of legacy on the line.
+			out[i] = strings.Replace(line, legacy, canonical, 1)
+			changed = true
+			continue
+		}
+		out[i] = line
+	}
+	return out, changed
+}
+
+// repointLegacyCronEntries reads the crontab, repoints legacy proxmox-backup entries, and
+// writes back only if something changed. Best-effort: a crontab read/write failure logs and
+// continues (a cosmetic repoint must never fail the upgrade).
+func repointLegacyCronEntries(ctx context.Context, bootstrap *logging.BootstrapLogger) {
+	lines, err := crontabReadLines(ctx)
+	if err != nil {
+		logBootstrapDebug(bootstrap, "upgrade: read crontab for repoint failed: %v", err)
+		return
+	}
+	repointed, changed := repointLegacyCronLines(lines)
+	if !changed {
+		return
+	}
+	if err := crontabWriteLines(ctx, repointed); err != nil {
+		logBootstrapWarning(bootstrap, "upgrade: failed to repoint legacy cron entrypoint: %v", err)
+		return
+	}
+	logBootstrapInfo(bootstrap, "upgrade: repointed legacy proxmox-backup cron entry to the proxsave entrypoint")
 }
 
 // buildReinstallCronLines computes the crontab for a (re)install: it drops the
@@ -915,30 +973,11 @@ func dropCanonicalCronLines(lines, correctPaths []string) []string {
 // (CRON-INSTALL-002) and removes stale/duplicate entries (CRON-MIXED-001).
 func buildReinstallCronLines(lines []string, baseDir string, correctPaths []string, schedule, commandToken string, bootstrap *logging.BootstrapLogger) []string {
 	lines = dropLegacyBashCronLines(lines, baseDir, bootstrap)
-	updated, _, _ := filterCronLines(lines, correctPaths)
+	updated := filterCronLines(lines, correctPaths)
 	updated = dropCanonicalCronLines(updated, correctPaths)
-	return append(updated, fmt.Sprintf("%s %s", schedule, commandToken))
-}
-
-// cronScheduleField returns the schedule portion of a cron line — the first five
-// time fields, or an "@" shorthand (e.g. @daily) — or "" if the line carries no
-// schedule (blank, comment, or env assignment).
-func cronScheduleField(line string) string {
-	trimmed := strings.TrimSpace(line)
-	if trimmed == "" || strings.HasPrefix(trimmed, "#") {
-		return ""
-	}
-	fields := strings.Fields(trimmed)
-	if len(fields) == 0 {
-		return ""
-	}
-	if strings.HasPrefix(fields[0], "@") {
-		return fields[0]
-	}
-	if len(fields) <= 5 {
-		return ""
-	}
-	return strings.Join(fields[:5], " ")
+	// --backup pins the non-interactive behavior: even if a scheduler ever
+	// allocates a pty, the run can never land on the interactive dashboard.
+	return append(updated, fmt.Sprintf("%s %s --backup", schedule, commandToken))
 }
 
 func logBootstrapWarning(bootstrap *logging.BootstrapLogger, format string, args ...interface{}) {

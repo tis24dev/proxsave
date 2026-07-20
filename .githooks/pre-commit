@@ -1,0 +1,12 @@
+#!/bin/sh
+# Trojan-source guard: block a commit that stages deceptive Unicode.
+# Backstop is CI (the internal/sourceguard whole-tree test); this is the local
+# fast-feedback copy. Bypass in an emergency with `git commit --no-verify`.
+files=$(git diff --cached --name-only --diff-filter=ACM | grep -E '\.(go|md|sh|ya?ml|txt|tmpl|env)$' || true)
+[ -z "$files" ] && exit 0
+# shellcheck disable=SC2086
+if ! go run ./internal/sourceguard/cmd/sourceguard $files; then
+	echo "pre-commit: deceptive Unicode found (see above); commit blocked. Fix, or bypass with --no-verify." >&2
+	exit 1
+fi
+exit 0

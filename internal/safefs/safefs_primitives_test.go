@@ -206,3 +206,60 @@ func TestPrimitives_SucceedOnHealthyFS(t *testing.T) {
 		t.Fatalf("Lchown: %v", err)
 	}
 }
+
+func TestLchmod(t *testing.T) {
+	dir := t.TempDir()
+
+	// Regular file: Lchmod sets the mode.
+	reg := filepath.Join(dir, "file")
+	if err := os.WriteFile(reg, []byte("x"), 0o600); err != nil {
+		t.Fatalf("seed file: %v", err)
+	}
+	if err := Lchmod(context.Background(), reg, 0o640, time.Second); err != nil {
+		t.Fatalf("Lchmod regular file: %v", err)
+	}
+	fi, err := os.Lstat(reg)
+	if err != nil {
+		t.Fatalf("lstat file: %v", err)
+	}
+	if fi.Mode().Perm() != 0o640 {
+		t.Fatalf("regular file mode = %o; want 0640", fi.Mode().Perm())
+	}
+
+	// Directory: Lchmod sets the mode.
+	sub := filepath.Join(dir, "sub")
+	if err := os.Mkdir(sub, 0o700); err != nil {
+		t.Fatalf("seed dir: %v", err)
+	}
+	if err := Lchmod(context.Background(), sub, 0o750, time.Second); err != nil {
+		t.Fatalf("Lchmod dir: %v", err)
+	}
+	fi, err = os.Lstat(sub)
+	if err != nil {
+		t.Fatalf("lstat dir: %v", err)
+	}
+	if fi.Mode().Perm() != 0o750 {
+		t.Fatalf("dir mode = %o; want 0750", fi.Mode().Perm())
+	}
+
+	// Symlink to a sentinel: Lchmod must refuse (not follow) and leave the
+	// sentinel's mode untouched.
+	sentinel := filepath.Join(dir, "sentinel")
+	if err := os.WriteFile(sentinel, []byte("s"), 0o600); err != nil {
+		t.Fatalf("seed sentinel: %v", err)
+	}
+	link := filepath.Join(dir, "link")
+	if err := os.Symlink(sentinel, link); err != nil {
+		t.Fatalf("seed symlink: %v", err)
+	}
+	if err := Lchmod(context.Background(), link, 0o777, time.Second); err == nil {
+		t.Fatal("Lchmod on a symlink must return an error, not follow it")
+	}
+	fi, err = os.Lstat(sentinel)
+	if err != nil {
+		t.Fatalf("lstat sentinel: %v", err)
+	}
+	if fi.Mode().Perm() != 0o600 {
+		t.Fatalf("sentinel mode = %o; Lchmod followed the symlink", fi.Mode().Perm())
+	}
+}

@@ -15,6 +15,10 @@ var (
 	errInteractiveAborted = input.ErrInputAborted
 )
 
+// promptIdleTimeout bounds each install/new-install prompt read; on idle the prompt
+// aborts gracefully (zero mutation). Var so tests can shrink it.
+var promptIdleTimeout = input.DefaultIdleTimeout
+
 func ensureInteractiveStdin() error {
 	if !term.IsTerminal(int(os.Stdin.Fd())) {
 		return fmt.Errorf("install wizard requires an interactive terminal (stdin is not a TTY)")
@@ -28,7 +32,7 @@ func promptYesNo(ctx context.Context, reader *bufio.Reader, question string, def
 			return false, errInteractiveAborted
 		}
 		fmt.Print(question)
-		resp, err := input.ReadLineWithContext(ctx, reader)
+		resp, err := input.ReadLineWithIdle(ctx, reader, promptIdleTimeout)
 		if err != nil {
 			return false, err
 		}
@@ -112,7 +116,7 @@ func promptOptional(ctx context.Context, reader *bufio.Reader, question string) 
 		return "", errInteractiveAborted
 	}
 	fmt.Print(question)
-	resp, err := input.ReadLineWithContext(ctx, reader)
+	resp, err := input.ReadLineWithIdle(ctx, reader, promptIdleTimeout)
 	if err != nil {
 		return "", err
 	}

@@ -16,6 +16,14 @@ import (
 // ErrRestoreAborted is returned when a restore workflow is intentionally aborted by the user.
 var ErrRestoreAborted = errors.New("restore workflow aborted by user")
 
+// ErrRestoreInconsistentState marks a restore failure where an atomic multi-file write both
+// failed to commit AND failed to roll the originals back, so the on-disk set is inconsistent and
+// needs manual recovery (e.g. a half-written auth database). Unlike an ordinary staged-apply
+// error, which is downgraded to a warning so the restore finishes "with warnings", this one must
+// ABORT the restore with a non-zero outcome so the inconsistency is never reported as success
+// (F06-08). It is NOT ErrRestoreAborted (a benign user cancel): it is a hard failure.
+var ErrRestoreInconsistentState = errors.New("restore left an inconsistent on-disk state; manual recovery required")
+
 // RestoreAbortInfo contains information about an aborted restore with network rollback.
 type RestoreAbortInfo struct {
 	NetworkRollbackArmed  bool

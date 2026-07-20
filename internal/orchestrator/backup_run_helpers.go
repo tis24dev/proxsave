@@ -222,6 +222,20 @@ func createBackupArchiveFile(ctx context.Context, archiver *backup.Archiver, tem
 	return nil
 }
 
+// promoteBackupArchive atomically moves the fully verified partial archive onto
+// its final path. Same-directory rename is atomic on a single filesystem, so a
+// reader of the final path never sees a partially written archive.
+func promoteBackupArchive(fs FS, partialPath, finalPath string) error {
+	return fs.Rename(partialPath, finalPath)
+}
+
+// discardPartialArchive best-effort removes a partial archive left by a failed
+// or cancelled backup so a truncated file never lingers on the backup path.
+// Absent partial is a no-op.
+func discardPartialArchive(fs FS, partialPath string) {
+	_ = fs.RemoveAll(partialPath)
+}
+
 func backupArchiveCreationError(err error) error {
 	phase := "archive"
 	code := types.ExitArchiveError
@@ -242,7 +256,9 @@ func (o *Orchestrator) skipDryRunArtifactVerification(stats *BackupStats, artifa
 }
 
 func (o *Orchestrator) recordArchiveSize(stats *BackupStats, artifacts *backupArtifacts) {
-	size, err := artifacts.archiver.GetArchiveSize(artifacts.archivePath)
+	// The archive lives at the partial path until it is promoted after checksum,
+	// so size the partial here. Sidecars still reference the final archivePath.
+	size, err := artifacts.archiver.GetArchiveSize(artifacts.partialPath)
 	if err != nil {
 		o.logger.Warning("Failed to get archive size: %v", err)
 		return
@@ -279,7 +295,21 @@ func (o *Orchestrator) writeArchiveChecksum(workspace *backupWorkspace, artifact
 
 func (o *Orchestrator) writeArchiveManifest(run *backupRunContext, artifacts *backupArtifacts, checksum string) error {
 	manifestPath := artifacts.archivePath + ".manifest.json"
-	manifest := o.newArchiveManifest(run.stats, artifacts.archivePath, checksum)
+	// Backfill existing passphrase installs before the manifest salt is read, so
+	// the read prefers the freshly co-located comment. Best-effort: it never
+	// fails the backup (see backfillCoLocatedPassphraseSalt).
+	o.backfillCoLocatedPassphraseSalt()
+	manifest, err := o.newArchiveManifest(run.stats, artifacts.archivePath, checksum)
+	if err != nil {
+		// Fail closed: an unreadable or empty passphrase salt would drop the salt
+		// from the manifest and leave a passphrase-derived archive permanently
+		// undecryptable while the backup reports success.
+		return &BackupError{
+			Phase: "encryption",
+			Err:   fmt.Errorf("resolve passphrase salt for manifest: %w", err),
+			Code:  types.ExitEncryptionError,
+		}
+	}
 	if err := backup.CreateManifest(run.ctx, o.logger, manifest, manifestPath); err != nil {
 		return &BackupError{
 			Phase: "verification",
@@ -292,7 +322,11 @@ func (o *Orchestrator) writeArchiveManifest(run *backupRunContext, artifacts *ba
 	return nil
 }
 
-func (o *Orchestrator) newArchiveManifest(stats *BackupStats, archivePath, checksum string) *backup.Manifest {
+func (o *Orchestrator) newArchiveManifest(stats *BackupStats, archivePath, checksum string) (*backup.Manifest, error) {
+	passphraseSalt, err := o.passphraseSaltForManifest()
+	if err != nil {
+		return nil, err
+	}
 	return &backup.Manifest{
 		ArchivePath:      archivePath,
 		ArchiveSize:      stats.ArchiveSize,
@@ -310,8 +344,8 @@ func (o *Orchestrator) newArchiveManifest(stats *BackupStats, archivePath, check
 		ScriptVersion:    stats.ScriptVersion,
 		EncryptionMode:   o.archiveEncryptionMode(),
 		ClusterMode:      stats.ClusterMode,
-		PassphraseSalt:   o.passphraseSaltForManifest(),
-	}
+		PassphraseSalt:   passphraseSalt,
+	}, nil
 }
 
 func (o *Orchestrator) archiveEncryptionMode() string {

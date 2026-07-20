@@ -143,7 +143,7 @@ func ShowRestoreModeMenuWithReader(ctx context.Context, reader *bufio.Reader, lo
 	fmt.Print("Choice: ")
 
 	for {
-		line, err := input.ReadLineWithContext(ctx, reader)
+		line, err := input.ReadLineWithIdle(ctx, reader, cliIdleTimeout)
 		if err != nil {
 			if errors.Is(err, input.ErrInputAborted) || errors.Is(err, context.Canceled) {
 				return "", ErrRestoreAborted
@@ -233,7 +233,7 @@ func ShowCategorySelectionMenuWithReader(ctx context.Context, reader *bufio.Read
 		fmt.Println("  0      - Cancel")
 		fmt.Print("\nChoice: ")
 
-		inputLine, err := input.ReadLineWithContext(ctx, reader)
+		inputLine, err := input.ReadLineWithIdle(ctx, reader, cliIdleTimeout)
 		if err != nil {
 			if errors.Is(err, input.ErrInputAborted) || errors.Is(err, context.Canceled) {
 				return nil, ErrRestoreAborted
@@ -428,7 +428,7 @@ func ConfirmRestoreOperationWithReader(ctx context.Context, reader *bufio.Reader
 		fmt.Println("═══════════════════════════════════════════════════════════════")
 		fmt.Print("Type 'RESTORE' to proceed or 'cancel' to abort: ")
 
-		inputLine, err := input.ReadLineWithContext(ctx, reader)
+		inputLine, err := input.ReadLineWithIdle(ctx, reader, cliIdleTimeout)
 		if err != nil {
 			if errors.Is(err, input.ErrInputAborted) || errors.Is(err, context.Canceled) {
 				return false, ErrRestoreAborted

@@ -108,6 +108,12 @@ func validateRecreationPath(path string) error {
 		return fmt.Errorf("path %q resolves to the filesystem root", path)
 	}
 	for _, root := range recreationSystemCriticalRoots {
+		if root == "/run" && strings.HasPrefix(clean, "/run/media/") {
+			// /run/media/<user>/<label> is a legitimate removable-disk datastore
+			// mount root (see isConfirmableDatastoreMountRoot); do not treat it as
+			// system-critical. Bare /run and every other /run child stay blocked.
+			continue
+		}
 		if clean == root || strings.HasPrefix(clean, root+string(os.PathSeparator)) {
 			return fmt.Errorf("path %q is within system-critical directory %q", path, root)
 		}
@@ -226,12 +232,12 @@ func shouldSkipUnmountedStorageMount(basePath string, hasData bool, logger *logg
 	}
 	onRootFS, _, err := isPathOnRootFilesystem(basePath)
 	if err != nil {
-		logger.Warning("Storage mount preflight: cannot determine whether %s is on the root filesystem: %v — proceeding with directory creation", basePath, err)
+		logger.Warning("Storage mount preflight: cannot determine whether %s is on the root filesystem: %v; proceeding with directory creation", basePath, err)
 		return false
 	}
 	suspicious := isSuspiciousDatastoreMountLocation(basePath) || zfsLikely
 	if rootFilesystemMountShouldSkip(onRootFS, suspicious, hasData, false) {
-		logger.Warning("Storage mount preflight: %s resolves to the root filesystem (mount missing?) — skipping directory creation to avoid writing to the wrong disk; mount the storage disk / import the pool first", basePath)
+		logger.Warning("Storage mount preflight: %s resolves to the root filesystem (mount missing?), skipping directory creation to avoid writing to the wrong disk; mount the storage disk / import the pool first", basePath)
 		return true
 	}
 	return false

@@ -103,7 +103,7 @@ func maybeApplyPVEClusterResourceMappingsWithUI(ctx context.Context, ui RestoreW
 		summary = fmt.Sprintf("total=%d", total)
 	}
 
-	message := fmt.Sprintf("Found %d resource mapping(s) (%s) in the backup.\n\nRecommended: apply mappings before VM/CT configs if your guests use mapping=<id> for PCI/USB passthrough.", total, summary)
+	message := fmt.Sprintf("Found %d resource mapping(s) (%s) in the backup.\n\nRecommended: apply mappings before VM/CT configs if your guests use mapping=<id> for PCI/USB passthrough.\n\nCaution: mappings reference specific PCI/USB device paths and cluster node names captured at backup time. Apply only on the originating node/hardware, or review each mapping before applying elsewhere.", total, summary)
 	applyNow, err := ui.ConfirmAction(ctx, "Apply PVE resource mappings (pvesh)", message, "Apply now", "Skip apply", 0, false)
 	if err != nil {
 		return err

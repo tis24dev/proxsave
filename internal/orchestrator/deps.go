@@ -72,6 +72,16 @@ type Deps struct {
 	Command  CommandRunner
 }
 
+// osFS is the production passthrough for the injected FS interface. Its methods
+// forward to os.* verbatim and are deliberately NOT confined through os.Root: the
+// seam is used generically via restoreFS across the orchestrator with per-call
+// trust contexts (absolute system paths, /sys symlinks, operator-chosen restore
+// targets), and confining the generic seam would refuse legitimate reads such as
+// restoreFS.ReadFile("/etc/resolv.conf") when that is a symlink into /run on a
+// systemd host. Path safety is enforced at the concrete call sites where the
+// trust boundary is known (see safefs.OpenFileUnderRoot / ReadFileUnderRoot).
+// gosec flags the raw os.* here (G304); that is an accepted false positive at the
+// dependency-injection boundary, not a suppression.
 type osFS struct{}
 
 func (osFS) Stat(path string) (os.FileInfo, error)  { return os.Stat(path) }

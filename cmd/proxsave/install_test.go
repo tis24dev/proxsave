@@ -17,7 +17,7 @@ func TestPrintInstallBanner(t *testing.T) {
 	output := captureStdout(t, func() {
 		printInstallBanner("/etc/proxmox-backup/backup.env")
 	})
-	if !strings.Contains(output, "ProxSave - Go Version") {
+	if !strings.Contains(output, "ProxSave") {
 		t.Fatalf("banner missing title: %q", output)
 	}
 	if !strings.Contains(output, "Version:") {
@@ -37,9 +37,9 @@ func TestPrintInstallFooterVariants(t *testing.T) {
 		err         error
 		wantSnippet string
 	}{
-		{"success", nil, "Go-based installation completed"},
-		{"aborted", wrapInstallError(errInteractiveAborted), "Go-based installation aborted"},
-		{"failure", errors.New("boom"), "Go-based installation failed"},
+		{"success", nil, "Installation completed"},
+		{"aborted", wrapInstallError(errInteractiveAborted), "Installation aborted"},
+		{"failure", errors.New("boom"), "Installation failed"},
 	}
 
 	for _, tt := range tests {
@@ -269,7 +269,7 @@ func TestPrepareBaseTemplateExistingSkip(t *testing.T) {
 	var skip bool
 	var err error
 	captureStdout(t, func() {
-		tmpl, skip, err = prepareBaseTemplate(context.Background(), reader, cfgFile)
+		tmpl, skip, _, err = prepareBaseTemplate(context.Background(), reader, cfgFile)
 	})
 	if err != nil {
 		t.Fatalf("prepareBaseTemplate error: %v", err)
@@ -289,7 +289,7 @@ func TestPrepareBaseTemplateOverwrite(t *testing.T) {
 	var skip bool
 	var err error
 	captureStdout(t, func() {
-		tmpl, skip, err = prepareBaseTemplate(context.Background(), reader, cfgFile)
+		tmpl, skip, _, err = prepareBaseTemplate(context.Background(), reader, cfgFile)
 	})
 	if err != nil {
 		t.Fatalf("prepareBaseTemplate error: %v", err)
@@ -309,7 +309,7 @@ func TestPrepareBaseTemplateEditExisting(t *testing.T) {
 	var skip bool
 	var err error
 	captureStdout(t, func() {
-		tmpl, skip, err = prepareBaseTemplate(context.Background(), reader, cfgFile)
+		tmpl, skip, _, err = prepareBaseTemplate(context.Background(), reader, cfgFile)
 	})
 	if err != nil {
 		t.Fatalf("prepareBaseTemplate error: %v", err)
@@ -325,7 +325,7 @@ func TestPrepareBaseTemplateEditExisting(t *testing.T) {
 func TestPrepareBaseTemplateCancel(t *testing.T) {
 	cfgFile := createTempFile(t, "EXISTING=1\n")
 	reader := bufio.NewReader(strings.NewReader("0\n"))
-	_, _, err := prepareBaseTemplate(context.Background(), reader, cfgFile)
+	_, _, _, err := prepareBaseTemplate(context.Background(), reader, cfgFile)
 	if !errors.Is(err, errInteractiveAborted) {
 		t.Fatalf("expected interactive abort, got %v", err)
 	}
@@ -727,7 +727,10 @@ func TestRunConfigWizardCLIReturnsCronSchedule(t *testing.T) {
 	cfgDir := t.TempDir()
 	configPath := filepath.Join(cfgDir, "env", "backup.env")
 	tmpConfigPath := configPath + ".tmp"
-	reader := bufio.NewReader(strings.NewReader("n\nn\nn\nn\nn\nn\n03:15\n"))
+	// 6 toggle declines, empty scheduler-engine answer (defaults to daemon on a
+	// fresh install), empty healthcheck-mode answer (daemon-only prompt, defaults
+	// to centralized), then the run-at time.
+	reader := bufio.NewReader(strings.NewReader("n\nn\nn\nn\nn\nn\n\n\n03:15\n"))
 
 	var result installConfigResult
 	var err error
@@ -739,6 +742,9 @@ func TestRunConfigWizardCLIReturnsCronSchedule(t *testing.T) {
 	}
 	if result.SkipConfigWizard {
 		t.Fatal("expected SkipConfigWizard=false")
+	}
+	if result.SchedulerMode != "daemon" {
+		t.Fatalf("fresh install should default to daemon, got %q", result.SchedulerMode)
 	}
 	if result.EnableEncryption {
 		t.Fatal("expected EnableEncryption=false")
@@ -759,7 +765,8 @@ func TestRunConfigWizardCLIReturnsCronSchedule(t *testing.T) {
 func TestRunConfigWizardCLIEditExistingRemovesRuntimeDerivedKeys(t *testing.T) {
 	cfgFile := createTempFile(t, "BASE_DIR=/custom\nCRON_HOUR=2\nMARKER=1\n")
 	tmpConfigPath := cfgFile + ".tmp"
-	reader := bufio.NewReader(strings.NewReader("2\nn\nn\nn\nn\nn\nn\n03:15\n"))
+	// "2" = overwrite/keep decision, 6 toggle declines, empty scheduler answer, run-at.
+	reader := bufio.NewReader(strings.NewReader("2\nn\nn\nn\nn\nn\nn\n\n03:15\n"))
 
 	var err error
 	captureStdout(t, func() {

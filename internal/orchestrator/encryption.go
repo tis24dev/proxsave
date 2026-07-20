@@ -17,6 +17,7 @@ import (
 	"filippo.io/age"
 	"filippo.io/age/agessh"
 	"github.com/tis24dev/proxsave/internal/input"
+	"github.com/tis24dev/proxsave/internal/safefs"
 	"github.com/tis24dev/proxsave/pkg/bech32"
 	"golang.org/x/crypto/curve25519"
 	"golang.org/x/crypto/scrypt"
@@ -124,7 +125,7 @@ func (o *Orchestrator) isInteractiveShell() bool {
 func promptOptionAge(ctx context.Context, reader *bufio.Reader, prompt string) (string, error) {
 	for {
 		fmt.Print(prompt)
-		line, err := input.ReadLineWithContext(ctx, reader)
+		line, err := input.ReadLineWithIdle(ctx, reader, cliIdleTimeout)
 		if err != nil {
 			return "", mapInputAbortToAgeAbort(err)
 		}
@@ -141,7 +142,7 @@ func promptOptionAge(ctx context.Context, reader *bufio.Reader, prompt string) (
 
 func promptPublicRecipientAge(ctx context.Context, reader *bufio.Reader) (string, error) {
 	fmt.Print("Paste your AGE public recipient (starts with \"age1...\"). Press Enter when done: ")
-	line, err := input.ReadLineWithContext(ctx, reader)
+	line, err := input.ReadLineWithIdle(ctx, reader, cliIdleTimeout)
 	if err != nil {
 		return "", mapInputAbortToAgeAbort(err)
 	}
@@ -164,7 +165,7 @@ func promptPrivateKeyRecipientAge(ctx context.Context) (string, error) {
 
 func promptPrivateKeyValueAge(ctx context.Context) (string, error) {
 	fmt.Print("Paste your AGE private key (not stored; input is not echoed). Press Enter when done: ")
-	secretBytes, err := input.ReadPasswordWithContext(ctx, readPassword, int(os.Stdin.Fd()))
+	secretBytes, err := input.ReadPasswordWithIdle(ctx, readPassword, int(os.Stdin.Fd()), cliIdleTimeout)
 	fmt.Println()
 	if err != nil {
 		return "", mapInputAbortToAgeAbort(err)
@@ -200,7 +201,7 @@ func promptPassphraseRecipientAge(ctx context.Context) (string, error) {
 // promptAndConfirmPassphrase asks the user to enter a passphrase twice and checks strength.
 func promptAndConfirmPassphraseAge(ctx context.Context) (string, error) {
 	fmt.Print("Enter the passphrase to derive your AGE public key (input is not echoed). Press Enter when done: ")
-	passBytes, err := input.ReadPasswordWithContext(ctx, readPassword, int(os.Stdin.Fd()))
+	passBytes, err := input.ReadPasswordWithIdle(ctx, readPassword, int(os.Stdin.Fd()), cliIdleTimeout)
 	fmt.Println()
 	if err != nil {
 		return "", mapInputAbortToAgeAbort(err)
@@ -218,7 +219,7 @@ func promptAndConfirmPassphraseAge(ctx context.Context) (string, error) {
 	zeroBytes(trimmed)
 
 	fmt.Print("Re-enter the passphrase to confirm: ")
-	confirmBytes, err := input.ReadPasswordWithContext(ctx, readPassword, int(os.Stdin.Fd()))
+	confirmBytes, err := input.ReadPasswordWithIdle(ctx, readPassword, int(os.Stdin.Fd()), cliIdleTimeout)
 	fmt.Println()
 	if err != nil {
 		resetString(&pass)
@@ -242,7 +243,7 @@ func promptAndConfirmPassphraseAge(ctx context.Context) (string, error) {
 
 func promptYesNoAge(ctx context.Context, reader *bufio.Reader, prompt string) (bool, error) {
 	fmt.Print(prompt)
-	line, err := input.ReadLineWithContext(ctx, reader)
+	line, err := input.ReadLineWithIdle(ctx, reader, cliIdleTimeout)
 	if err != nil {
 		return false, mapInputAbortToAgeAbort(err)
 	}
@@ -298,7 +299,7 @@ func parseRecipientString(value string) (age.Recipient, error) {
 }
 
 func readRecipientFile(path string) (recipients []string, err error) {
-	f, err := os.Open(path)
+	f, err := safefs.OpenFileUnderRoot(path, os.O_RDONLY, 0)
 	if err != nil {
 		return nil, err
 	}

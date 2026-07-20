@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/tis24dev/proxsave/internal/config"
+	"github.com/tis24dev/proxsave/internal/safefs"
 	"github.com/tis24dev/proxsave/internal/types"
 )
 
@@ -490,6 +491,92 @@ func TestCloudStorageListParsesBackups(t *testing.T) {
 	}
 }
 
+// TestCloudStorageListSkipsManifestSidecar proves the uploaded .manifest.json is
+// classified as a sidecar and never counted as a standalone backup (PS-BH-002:
+// isBackupEntry used to match it on `-backup-`+`.tar` and inflate the count).
+func TestCloudStorageListSkipsManifestSidecar(t *testing.T) {
+	cfg := &config.Config{CloudEnabled: true, CloudRemote: "remote"}
+	cs := newCloudStorageForTest(cfg)
+	queue := &commandQueue{
+		t: t,
+		queue: []queuedResponse{
+			{
+				name: "rclone",
+				args: []string{"lsl", "remote:"},
+				out: strings.TrimSpace(`
+99999 2024-11-12 12:00:00 host-backup-20241112.tar.zst
+120 2024-11-12 12:00:00 host-backup-20241112.tar.zst.sha256
+340 2024-11-12 12:00:00 host-backup-20241112.tar.zst.manifest.json
+88 2024-11-12 12:00:00 host-backup-20241112.tar.zst.metadata
+`),
+			},
+		},
+	}
+	cs.execCommand = queue.exec
+
+	backups, err := cs.List(context.Background())
+	if err != nil {
+		t.Fatalf("List() error = %v", err)
+	}
+	if len(backups) != 1 {
+		t.Fatalf("List() = %d backups, want 1 (sha256/manifest/metadata are sidecars)", len(backups))
+	}
+	if backups[0].BackupFile != "host-backup-20241112.tar.zst" {
+		t.Fatalf("unexpected backup file %q", backups[0].BackupFile)
+	}
+}
+
+// TestCloudStorageDeleteRemovesManifestSidecar proves retention/delete now issues a
+// deletefile for the .manifest.json so it cannot orphan on the remote after the
+// archive and its other sidecars are removed (PS-BH-002).
+func TestCloudStorageDeleteRemovesManifestSidecar(t *testing.T) {
+	cfg := &config.Config{CloudEnabled: true, CloudRemote: "remote", BundleAssociatedFiles: false}
+	cs := newCloudStorageForTest(cfg)
+	listOutput := strings.TrimSpace(`
+100 2025-01-01 01:00:00 host-backup-20250101-010101.tar.zst
+10 2025-01-01 01:00:00 host-backup-20250101-010101.tar.zst.sha256
+20 2025-01-01 01:00:00 host-backup-20250101-010101.tar.zst.manifest.json
+10 2025-01-01 01:00:00 host-backup-20250101-010101.tar.zst.metadata
+10 2025-01-01 01:00:00 host-backup-20250101-010101.tar.zst.metadata.sha256
+`)
+	queue := &commandQueue{
+		t: t,
+		queue: []queuedResponse{
+			{name: "rclone", args: []string{"lsl", "remote:"}, out: listOutput},
+			{name: "rclone", args: []string{"deletefile", "remote:host-backup-20250101-010101.tar.zst"}},
+			{name: "rclone", args: []string{"deletefile", "remote:host-backup-20250101-010101.tar.zst.sha256"}},
+			{name: "rclone", args: []string{"deletefile", "remote:host-backup-20250101-010101.tar.zst.manifest.json"}},
+			{name: "rclone", args: []string{"deletefile", "remote:host-backup-20250101-010101.tar.zst.metadata"}},
+			{name: "rclone", args: []string{"deletefile", "remote:host-backup-20250101-010101.tar.zst.metadata.sha256"}},
+		},
+	}
+	cs.execCommand = queue.exec
+
+	backups, err := cs.List(context.Background())
+	if err != nil {
+		t.Fatalf("List() error = %v", err)
+	}
+	if len(backups) != 1 {
+		t.Fatalf("expected 1 backup (manifest is a sidecar), got %d", len(backups))
+	}
+	if err := cs.Delete(context.Background(), backups[0].BackupFile); err != nil {
+		t.Fatalf("Delete() error = %v", err)
+	}
+	var deletedManifest bool
+	for _, call := range queue.calls {
+		if len(call.args) == 2 && call.args[0] == "deletefile" &&
+			strings.HasSuffix(call.args[1], ".manifest.json") {
+			deletedManifest = true
+		}
+	}
+	if !deletedManifest {
+		t.Fatalf("expected a deletefile for the .manifest.json sidecar, calls=%v", queue.calls)
+	}
+	if len(queue.calls) != 6 {
+		t.Fatalf("expected 6 rclone calls (list + 5 deletes incl. manifest), got %d: %v", len(queue.calls), queue.calls)
+	}
+}
+
 func TestCloudStorageDeleteSkipsMissingBundleCandidates(t *testing.T) {
 	cfg := &config.Config{
 		CloudEnabled:          true,
@@ -542,10 +629,15 @@ func TestCloudStorageApplyRetentionDeletesOldest(t *testing.T) {
 	cs := newCloudStorageForTest(cfg)
 	cs.sleep = func(time.Duration) {}
 
+	// Each backup carries a .sha256 completion sidecar so List marks it Verified;
+	// retention only acts on verified entries.
 	listOutput := strings.TrimSpace(`
 100 2024-11-12 10:00:00 gamma-backup-3.tar.zst
+120 2024-11-12 10:00:00 gamma-backup-3.tar.zst.sha256
 100 2024-11-11 10:00:00 beta-backup-2.tar.zst
+120 2024-11-11 10:00:00 beta-backup-2.tar.zst.sha256
 100 2024-11-10 10:00:00 alpha-backup-1.tar.zst
+120 2024-11-10 10:00:00 alpha-backup-1.tar.zst.sha256
 `)
 	recountOutput := strings.TrimSpace(`
 100 2024-11-12 10:00:00 gamma-backup-3.tar.zst
@@ -597,11 +689,11 @@ func TestCloudStorageStoreUploadsWithRemotePrefix(t *testing.T) {
 	queue := &commandQueue{
 		t: t,
 		queue: []queuedResponse{
-			{name: "rclone", args: []string{"copyto", "--progress", "--stats", "10s", backupFile, "remote:tenants/a/pbs1-backup.tar.zst"}},
+			{name: "rclone", args: []string{"copyto", backupFile, "remote:tenants/a/pbs1-backup.tar.zst"}},
 			{name: "rclone", args: []string{"lsl", "remote:tenants/a/pbs1-backup.tar.zst"}, out: "7 2025-11-13 10:00:00 pbs1-backup.tar.zst"},
-			{name: "rclone", args: []string{"copyto", "--progress", "--stats", "10s", backupFile + ".sha256", "remote:tenants/a/pbs1-backup.tar.zst.sha256"}},
-			{name: "rclone", args: []string{"copyto", "--progress", "--stats", "10s", backupFile + ".metadata", "remote:tenants/a/pbs1-backup.tar.zst.metadata"}},
-			{name: "rclone", args: []string{"copyto", "--progress", "--stats", "10s", backupFile + ".metadata.sha256", "remote:tenants/a/pbs1-backup.tar.zst.metadata.sha256"}},
+			{name: "rclone", args: []string{"copyto", backupFile + ".sha256", "remote:tenants/a/pbs1-backup.tar.zst.sha256"}},
+			{name: "rclone", args: []string{"copyto", backupFile + ".metadata", "remote:tenants/a/pbs1-backup.tar.zst.metadata"}},
+			{name: "rclone", args: []string{"copyto", backupFile + ".metadata.sha256", "remote:tenants/a/pbs1-backup.tar.zst.metadata.sha256"}},
 			{name: "rclone", args: []string{"lsl", "remote:tenants/a"}, out: "7 2025-11-13 10:00:00 pbs1-backup.tar.zst"},
 		},
 	}
@@ -641,12 +733,12 @@ func TestCloudStorageStoreUploadsManifest(t *testing.T) {
 	queue := &commandQueue{
 		t: t,
 		queue: []queuedResponse{
-			{name: "rclone", args: []string{"copyto", "--progress", "--stats", "10s", backupFile, "remote:tenants/a/pbs1-backup.tar.zst"}},
+			{name: "rclone", args: []string{"copyto", backupFile, "remote:tenants/a/pbs1-backup.tar.zst"}},
 			{name: "rclone", args: []string{"lsl", "remote:tenants/a/pbs1-backup.tar.zst"}, out: "7 2025-11-13 10:00:00 pbs1-backup.tar.zst"},
-			{name: "rclone", args: []string{"copyto", "--progress", "--stats", "10s", backupFile + ".sha256", "remote:tenants/a/pbs1-backup.tar.zst.sha256"}},
-			{name: "rclone", args: []string{"copyto", "--progress", "--stats", "10s", backupFile + ".manifest.json", "remote:tenants/a/pbs1-backup.tar.zst.manifest.json"}},
-			{name: "rclone", args: []string{"copyto", "--progress", "--stats", "10s", backupFile + ".metadata", "remote:tenants/a/pbs1-backup.tar.zst.metadata"}},
-			{name: "rclone", args: []string{"copyto", "--progress", "--stats", "10s", backupFile + ".metadata.sha256", "remote:tenants/a/pbs1-backup.tar.zst.metadata.sha256"}},
+			{name: "rclone", args: []string{"copyto", backupFile + ".sha256", "remote:tenants/a/pbs1-backup.tar.zst.sha256"}},
+			{name: "rclone", args: []string{"copyto", backupFile + ".manifest.json", "remote:tenants/a/pbs1-backup.tar.zst.manifest.json"}},
+			{name: "rclone", args: []string{"copyto", backupFile + ".metadata", "remote:tenants/a/pbs1-backup.tar.zst.metadata"}},
+			{name: "rclone", args: []string{"copyto", backupFile + ".metadata.sha256", "remote:tenants/a/pbs1-backup.tar.zst.metadata.sha256"}},
 			{name: "rclone", args: []string{"lsl", "remote:tenants/a"}, out: "7 2025-11-13 10:00:00 pbs1-backup.tar.zst"},
 		},
 	}
@@ -681,7 +773,7 @@ func TestCloudStorageStorePrefersBundleWhenPresent(t *testing.T) {
 	queue := &commandQueue{
 		t: t,
 		queue: []queuedResponse{
-			{name: "rclone", args: []string{"copyto", "--progress", "--stats", "10s", bundleFile, remoteFile}},
+			{name: "rclone", args: []string{"copyto", bundleFile, remoteFile}},
 			{name: "rclone", args: []string{"lsl", remoteFile}, out: "6 2025-11-13 10:00:00 pbs1-backup.tar.zst.bundle.tar"},
 			{name: "rclone", args: []string{"lsl", "remote:"}, out: "6 2025-11-13 10:00:00 pbs1-backup.tar.zst.bundle.tar"},
 		},
@@ -716,7 +808,7 @@ func TestCloudStorageStoreBundleInputSkipsDoubleBundleUpload(t *testing.T) {
 	queue := &commandQueue{
 		t: t,
 		queue: []queuedResponse{
-			{name: "rclone", args: []string{"copyto", "--progress", "--stats", "10s", bundleFile, remoteFile}},
+			{name: "rclone", args: []string{"copyto", bundleFile, remoteFile}},
 			{name: "rclone", args: []string{"lsl", remoteFile}, out: "6 2025-11-13 10:00:00 pbs1-backup.tar.zst.bundle.tar"},
 			{name: "rclone", args: []string{"lsl", "remote:"}, out: "6 2025-11-13 10:00:00 pbs1-backup.tar.zst.bundle.tar"},
 		},
@@ -748,7 +840,7 @@ func TestCloudStorageStorePrimaryFailure(t *testing.T) {
 	queue := &commandQueue{
 		t: t,
 		queue: []queuedResponse{
-			{name: "rclone", args: []string{"copyto", "--progress", "--stats", "10s", backupFile, "remote:pbs1-backup.tar.zst"}, err: errors.New("boom")},
+			{name: "rclone", args: []string{"copyto", backupFile, "remote:pbs1-backup.tar.zst"}, err: errors.New("boom")},
 		},
 	}
 	cs.execCommand = queue.exec
@@ -763,6 +855,10 @@ func TestCloudStorageStorePrimaryFailure(t *testing.T) {
 	}
 	if storageErr.Operation != "upload" {
 		t.Fatalf("StorageError.Operation = %s; want upload", storageErr.Operation)
+	}
+	// F08-08: the primary itself failed, so PrimarySaved must be false (generic "not saved").
+	if storageErr.PrimarySaved {
+		t.Fatalf("PrimarySaved = true; want false when the primary upload failed")
 	}
 }
 
@@ -784,9 +880,9 @@ func TestCloudStorageStoreAssociatedFailure(t *testing.T) {
 	queue := &commandQueue{
 		t: t,
 		queue: []queuedResponse{
-			{name: "rclone", args: []string{"copyto", "--progress", "--stats", "10s", backupFile, "remote:pbs1-backup.tar.zst"}},
+			{name: "rclone", args: []string{"copyto", backupFile, "remote:pbs1-backup.tar.zst"}},
 			{name: "rclone", args: []string{"lsl", "remote:pbs1-backup.tar.zst"}, out: "7 2025-11-13 10:00:00 pbs1-backup.tar.zst"},
-			{name: "rclone", args: []string{"copyto", "--progress", "--stats", "10s", backupFile + ".sha256", "remote:pbs1-backup.tar.zst.sha256"}, err: errors.New("assoc failed")},
+			{name: "rclone", args: []string{"copyto", backupFile + ".sha256", "remote:pbs1-backup.tar.zst.sha256"}, err: errors.New("assoc failed")},
 		},
 	}
 	cs.execCommand = queue.exec
@@ -801,6 +897,25 @@ func TestCloudStorageStoreAssociatedFailure(t *testing.T) {
 	}
 	if storageErr.Operation != "upload_associated" {
 		t.Fatalf("StorageError.Operation = %s; want upload_associated", storageErr.Operation)
+	}
+	// F08-08: the primary archive uploaded+verified and only a sidecar failed, so PrimarySaved
+	// must be true so the caller does NOT log "Backup was not saved".
+	if !storageErr.PrimarySaved {
+		t.Fatalf("PrimarySaved = false; want true when only a sidecar upload failed")
+	}
+}
+
+// TestSidecarStatWarrantsWarning pins F08-08 part B: a stalled-mount TIMEOUT on a sidecar Stat
+// is warned (not silently skipped like a missing file), while a genuinely missing file is not.
+func TestSidecarStatWarrantsWarning(t *testing.T) {
+	if !sidecarStatWarrantsWarning(safefs.ErrTimeout) {
+		t.Fatalf("a filesystem timeout must warrant a warning")
+	}
+	if !sidecarStatWarrantsWarning(&safefs.TimeoutError{Op: "stat", Path: "/x"}) {
+		t.Fatalf("a *TimeoutError (wraps ErrTimeout) must warrant a warning")
+	}
+	if sidecarStatWarrantsWarning(os.ErrNotExist) {
+		t.Fatalf("a missing file must NOT warrant a warning (silent skip is fine)")
 	}
 }
 
@@ -820,7 +935,7 @@ func TestCloudStorageUploadToRemotePath(t *testing.T) {
 	queue := &commandQueue{
 		t: t,
 		queue: []queuedResponse{
-			{name: "rclone", args: []string{"copyto", "--progress", "--stats", "10s", localFile, "other:logs/logfile.txt"}},
+			{name: "rclone", args: []string{"copyto", localFile, "other:logs/logfile.txt"}},
 			{name: "rclone", args: []string{"lsl", "other:logs/logfile.txt"}, out: "3 2025-11-13 10:00:00 logfile.txt"},
 		},
 	}
@@ -1168,8 +1283,8 @@ func TestCloudStorageApplyGFSRetentionKeepsMinimumDailyBackup(t *testing.T) {
 
 	now := time.Now()
 	backups := []*types.BackupMetadata{
-		{BackupFile: "alpha-backup.tar.zst", Timestamp: now.Add(-48 * time.Hour)},
-		{BackupFile: "beta-backup.tar.zst", Timestamp: now.Add(-72 * time.Hour)},
+		{BackupFile: "alpha-backup.tar.zst", Timestamp: now.Add(-48 * time.Hour), Verified: true},
+		{BackupFile: "beta-backup.tar.zst", Timestamp: now.Add(-72 * time.Hour), Verified: true},
 	}
 	retentionCfg := RetentionConfig{Policy: "gfs", Daily: 0, Weekly: 0, Monthly: 0, Yearly: -1}
 

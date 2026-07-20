@@ -140,10 +140,22 @@ func applyAccountsFromStage(ctx context.Context, logger *logging.Logger, stageRo
 	hostGroupGID := groupGIDsByName(currentGroup)
 	hostGIDs := gidValueSet(hostGroupGID)
 
-	importedUsers, mergedPasswd := mergePasswd(currentPasswd, stagedPasswd, hostSystemUsers, hostGIDs)
-	mergedShadow := mergeShadow(currentShadow, stagedShadow, importedUsers)
+	importedUsers, mergedPasswd, collisions := mergePasswd(currentPasswd, stagedPasswd, hostSystemUsers, hostGIDs)
+	mergedShadow, forcedLocked := mergeShadow(currentShadow, stagedShadow, importedUsers)
 	importedGroups, mergedGroup := mergeGroup(currentGroup, stagedGroup, hostGroupGID, hostGIDs, importedUsers)
 	mergedGshadow := mergeGshadow(currentGshadow, stagedGshadow, importedGroups)
+
+	// Surface the risky sub-cases (F06-06). A plain same-uid overwrite is by-design
+	// and stays silent; warn only when the host uid changed (files orphaned) or the
+	// shadow was forced to a locked placeholder (backup had no valid hash).
+	for _, c := range collisions {
+		if c.uidChanged {
+			logger.Warning("Account %q: host uid %d overwritten with backup uid %d; files still owned by the old uid are now orphaned", c.name, c.oldUID, c.newUID)
+		}
+	}
+	for _, name := range forcedLocked {
+		logger.Warning("Account %q: the backup had no valid shadow entry, its password was set to LOCKED", name)
+	}
 
 	// Write the four auth-DB files all-or-nothing: a failure partway through must never
 	// leave the host with an inconsistent passwd/shadow/group/gshadow set (lockout
@@ -179,7 +191,21 @@ func applySudoersFromStage(ctx context.Context, logger *logging.Logger, stageRoo
 		logger.Warning("Skipping /etc/sudoers restore: staged sudoers failed validation (visudo -c): %v", err)
 		return nil
 	}
-	if err := writeFileAtomic(etcSudoersPath, data, 0o440); err != nil {
+	// Snapshot the current /etc/sudoers as the rollback original and write through
+	// the same all-or-nothing machinery as the account DB files, so a write/commit
+	// failure preserves the current sudoers (F06-07) rather than the plain
+	// single-file writeFileAtomic which tracked no original. A missing file is a
+	// valid empty original, but any OTHER read error must abort BEFORE the write:
+	// proceeding with a nil original would let a later commit-failure rollback
+	// write an empty /etc/sudoers and disable sudo host-wide (matches the
+	// abort-on-real-error posture of readCurrentAccountFile).
+	current, err := restoreFS.ReadFile(etcSudoersPath)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("read current sudoers for rollback snapshot: %w", err)
+	}
+	if err := writeFilesAtomic([]atomicFileWrite{
+		{path: etcSudoersPath, data: data, original: current, perm: 0o440},
+	}); err != nil {
 		return err
 	}
 	logger.Info("Restored /etc/sudoers (validated with visudo -c)")
@@ -197,14 +223,25 @@ func readCurrentAccountFile(path string) (string, error) {
 	return string(data), nil
 }
 
+// accountCollision records a same-name host regular account (uid >= threshold)
+// being overwritten by a backup entry. Reported so the caller can warn when the
+// uid changes (the old uid's files are now orphaned).
+type accountCollision struct {
+	name           string
+	oldUID, newUID uint64
+	uidChanged     bool
+}
+
 // mergePasswd keeps every current entry and imports each backup user that is a
 // regular account (uid >= threshold, >= passwdMinFields, not NIS, not "root", and
 // whose name does not collide with a host system account). Returns the imported
-// names and the merged file.
-func mergePasswd(current, backup string, hostSystemUsers map[string]bool, hostGIDs map[uint64]bool) (map[string]bool, string) {
+// names, the merged file, and any same-name collisions with a pre-existing host
+// regular account (for risky-overwrite reporting; see accountCollision).
+func mergePasswd(current, backup string, hostSystemUsers map[string]bool, hostGIDs map[uint64]bool) (map[string]bool, string, []accountCollision) {
 	lines := splitNonEmptyLines(current)
 	index := indexByName(lines)
 	imported := map[string]bool{}
+	var collisions []accountCollision
 	for _, line := range splitNonEmptyLines(backup) {
 		if isNISLine(line) {
 			continue
@@ -231,26 +268,37 @@ func mergePasswd(current, backup string, hostSystemUsers map[string]bool, hostGI
 			continue
 		}
 		imported[name] = true
+		if i, exists := index[name]; exists {
+			oldUID := uint64(0)
+			if oldParts := strings.Split(lines[i], ":"); len(oldParts) > 2 {
+				oldUID, _ = parseAccountID(oldParts[2])
+			}
+			collisions = append(collisions, accountCollision{name: name, oldUID: oldUID, newUID: uid, uidChanged: oldUID != uid})
+		}
 		upsert(&lines, index, name, line)
 	}
-	return imported, joinLines(lines)
+	return imported, joinLines(lines), collisions
 }
 
 // mergeShadow keeps every current line and, for each imported user, sets the
 // backup shadow line; if the backup lacks a (valid) line, a locked placeholder is
-// written so an imported passwd user is never left without a shadow entry.
-func mergeShadow(current, backup string, imported map[string]bool) string {
+// written so an imported passwd user is never left without a shadow entry. The
+// second return value lists users that hit this forced-locked fallback (for
+// risky-overwrite reporting).
+func mergeShadow(current, backup string, imported map[string]bool) (string, []string) {
 	lines := splitNonEmptyLines(current)
 	index := indexByName(lines)
 	backupByName := byName(backup)
+	var forcedLocked []string
 	for _, name := range sortedKeys(imported) {
 		line, ok := backupByName[name]
 		if !ok || len(strings.Split(line, ":")) < shadowMinFields {
 			line = name + lockedShadowSuffix
+			forcedLocked = append(forcedLocked, name)
 		}
 		upsert(&lines, index, name, line)
 	}
-	return joinLines(lines)
+	return joinLines(lines), forcedLocked
 }
 
 // mergeGroup keeps every current group and NEVER overwrites an existing host group.

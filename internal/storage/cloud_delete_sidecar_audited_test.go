@@ -27,10 +27,15 @@ func TestCloudStorageApplyRetention_CountsBackupWhenOnlySidecarDeleteFails(t *te
 	cs := newCloudStorageForTest(cfg)
 	cs.sleep = func(time.Duration) {}
 
+	// Each backup carries a .sha256 completion sidecar so List marks it Verified;
+	// retention only acts on verified entries.
 	listOutput := strings.TrimSpace(`
 100 2024-11-12 10:00:00 gamma-backup-3.tar.zst
+120 2024-11-12 10:00:00 gamma-backup-3.tar.zst.sha256
 100 2024-11-11 10:00:00 beta-backup-2.tar.zst
+120 2024-11-11 10:00:00 beta-backup-2.tar.zst.sha256
 100 2024-11-10 10:00:00 alpha-backup-1.tar.zst
+120 2024-11-10 10:00:00 alpha-backup-1.tar.zst.sha256
 `)
 	recountOutput := strings.TrimSpace(`
 100 2024-11-12 10:00:00 gamma-backup-3.tar.zst

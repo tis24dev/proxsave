@@ -3,13 +3,16 @@ package backup
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 
 	"github.com/tis24dev/proxsave/internal/logging"
 )
@@ -28,8 +31,10 @@ const DedupManifestRelPath = "var/lib/proxsave-info/dedup_manifest.json"
 
 // DedupManifestEntry records one file that deduplication replaced with a symlink.
 type DedupManifestEntry struct {
-	Path string `json:"path"` // path relative to the archive root, slash-separated
-	Mode uint32 `json:"mode"` // original regular-file permission bits
+	Path string  `json:"path"`          // path relative to the archive root, slash-separated
+	Mode uint32  `json:"mode"`          // original regular-file permission bits
+	Uid  *uint32 `json:"uid,omitempty"` // original owner uid; nil in pre-F07-04 manifests -> restore skips chown
+	Gid  *uint32 `json:"gid,omitempty"` // original owner gid; nil in pre-F07-04 manifests -> restore skips chown
 }
 
 // OptimizationConfig controls optional preprocessing steps executed before archiving.
@@ -152,16 +157,25 @@ func deduplicateFiles(ctx context.Context, logger *logging.Logger, root string) 
 			}
 			duplicates++
 			bytesReclaimed += info.Size()
-			manifest = append(manifest, DedupManifestEntry{
+			entry := DedupManifestEntry{
 				Path: filepath.ToSlash(rel),
 				Mode: uint32(info.Mode().Perm()),
-			})
+			}
+			// Record the source owner so the restore can chown the rebuilt file back
+			// to it (F07-04). Left nil on non-unix FileInfo -> the restore skips chown.
+			if st, ok := info.Sys().(*syscall.Stat_t); ok && st != nil {
+				uid := st.Uid
+				gid := st.Gid
+				entry.Uid = &uid
+				entry.Gid = &gid
+			}
+			manifest = append(manifest, entry)
 			replaced = append(replaced, dedupReplacement{
 				duplicate: path,
 				canonical: existing,
 				mode:      info.Mode().Perm(),
 			})
-			logger.Debug("Deduplicated %s → %s", path, existing)
+			logger.Debug("Deduplicated %s -> %s", path, existing)
 		} else {
 			hashes[hash] = path
 		}
@@ -399,7 +413,9 @@ func prefilterFiles(ctx context.Context, logger *logging.Logger, root string, ma
 		ext := strings.ToLower(filepath.Ext(path))
 		switch ext {
 		case ".txt", ".log", ".md":
-			if c, err := normalizeTextFile(rootFS, rel); err == nil && c {
+			if c, err := normalizeTextFile(rootFS, rel); err != nil {
+				logger.Warning("Prefilter: failed to optimize %s (kept original): %v", rel, err)
+			} else if c {
 				changed = true
 			}
 		case ".conf", ".cfg", ".ini":
@@ -407,7 +423,9 @@ func prefilterFiles(ctx context.Context, logger *logging.Logger, root string, ma
 				stats.skippedStructured++
 				return nil
 			}
-			if c, err := normalizeConfigFile(rootFS, rel); err == nil && c {
+			if c, err := normalizeConfigFile(rootFS, rel); err != nil {
+				logger.Warning("Prefilter: failed to optimize %s (kept original): %v", rel, err)
+			} else if c {
 				changed = true
 			}
 		case ".json":
@@ -415,7 +433,9 @@ func prefilterFiles(ctx context.Context, logger *logging.Logger, root string, ma
 				stats.skippedStructured++
 				return nil
 			}
-			if c, err := minifyJSON(rootFS, rel); err == nil && c {
+			if c, err := minifyJSON(rootFS, rel); err != nil {
+				logger.Warning("Prefilter: failed to optimize %s (kept original): %v", rel, err)
+			} else if c {
 				changed = true
 			}
 		}
@@ -438,9 +458,83 @@ func prefilterFiles(ctx context.Context, logger *logging.Logger, root string, ma
 	return reclaimed, nil
 }
 
+// prefilterRootRename is the rename step of atomicRootRewrite, isolated as a var so
+// tests can force a post-write failure and assert the staged original is preserved.
+var prefilterRootRename = func(root *os.Root, oldname, newname string) error {
+	return root.Rename(oldname, newname)
+}
+
+// prefilterFileChown is the chown step of atomicRootRewrite, isolated as a var so
+// tests can assert the temp is chowned back to the source uid/gid without root.
+var prefilterFileChown = (*os.File).Chown
+
+// atomicRootRewrite writes data to name atomically within root: it O_EXCL-creates a
+// uniquely named temp sibling, writes+closes it, then renames it over name. On any
+// error the temp is removed and name is left untouched, so a failed rewrite never
+// truncates the staged original. All I/O is confined to root (os.Root), so no path
+// escapes the staging tree (same traversal defense as normalizeTextFile).
+func atomicRootRewrite(root *os.Root, name string, data []byte) error {
+	// Preserve the existing file's mode AND ownership. The rewrite swaps the inode
+	// via rename, so unlike the old in-place root.WriteFile (which left an existing
+	// file's mode and uid/gid untouched) a fresh temp would otherwise carry the backup
+	// process's ownership and its own creation mode, dropping the permission bits and
+	// uid/gid the collector preserved (backup fidelity).
+	perm := os.FileMode(0o600)
+	uid, gid := -1, -1
+	if fi, err := root.Lstat(name); err == nil {
+		perm = fi.Mode() & (os.ModePerm | os.ModeSetuid | os.ModeSetgid | os.ModeSticky)
+		if st, ok := fi.Sys().(*syscall.Stat_t); ok {
+			uid, gid = int(st.Uid), int(st.Gid)
+		}
+	}
+	tmp := name + "." + randomHexSuffix() + ".tmp"
+	f, err := root.OpenFile(tmp, os.O_CREATE|os.O_WRONLY|os.O_EXCL, perm.Perm())
+	if err != nil {
+		return err
+	}
+	if _, err := f.Write(data); err != nil {
+		_ = f.Close()
+		_ = root.Remove(tmp)
+		return err
+	}
+	// Chown before Chmod: chown can clear setuid/setgid, so set the exact mode last.
+	if uid >= 0 {
+		if err := prefilterFileChown(f, uid, gid); err != nil {
+			_ = f.Close()
+			_ = root.Remove(tmp)
+			return err
+		}
+	}
+	if err := f.Chmod(perm); err != nil {
+		_ = f.Close()
+		_ = root.Remove(tmp)
+		return err
+	}
+	if err := f.Close(); err != nil {
+		_ = root.Remove(tmp)
+		return err
+	}
+	if err := prefilterRootRename(root, tmp, name); err != nil {
+		_ = root.Remove(tmp)
+		return err
+	}
+	return nil
+}
+
+// randomHexSuffix returns a 16-hex-char token for a unique temp name, so the O_EXCL
+// create never clobbers a real staged file that happens to carry a fixed suffix (the
+// dedup path avoids fixed suffixes for the same reason).
+func randomHexSuffix() string {
+	var b [8]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return "tmp"
+	}
+	return hex.EncodeToString(b[:])
+}
+
 // normalizeTextFile reads and rewrites name through root, an *os.Root opened on
 // the staging tree. Using os.Root confines all I/O inside that tree at the
-// syscall level, so a path that tried to escape (via "..") would be rejected —
+// syscall level, so a path that tried to escape (via "..") would be rejected;
 // no taint/path-traversal is possible (this is why there is no #nosec here).
 func normalizeTextFile(root *os.Root, name string) (bool, error) {
 	data, err := root.ReadFile(name)
@@ -451,7 +545,7 @@ func normalizeTextFile(root *os.Root, name string) (bool, error) {
 	if bytes.Equal(data, normalized) {
 		return false, nil
 	}
-	return true, root.WriteFile(name, normalized, defaultOptimizedFilePerm)
+	return true, atomicRootRewrite(root, name, normalized)
 }
 
 func normalizeConfigFile(root *os.Root, name string) (bool, error) {
@@ -477,5 +571,5 @@ func minifyJSON(root *os.Root, name string) (bool, error) {
 	if bytes.Equal(bytes.TrimSpace(data), minified) {
 		return false, nil
 	}
-	return true, root.WriteFile(name, minified, defaultOptimizedFilePerm)
+	return true, atomicRootRewrite(root, name, minified)
 }

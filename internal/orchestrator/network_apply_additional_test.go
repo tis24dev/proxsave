@@ -863,7 +863,7 @@ func TestMaybeRepairNICNamesCLI_SkippedWhenArchiveMissing(t *testing.T) {
 	}
 }
 
-func TestMaybeRepairNICNamesCLI_ReturnsNilOnPlanError(t *testing.T) {
+func TestMaybeRepairNICNamesCLI_SurfacesPlanError(t *testing.T) {
 	origFS := restoreFS
 	t.Cleanup(func() { restoreFS = origFS })
 
@@ -876,8 +876,13 @@ func TestMaybeRepairNICNamesCLI_ReturnsNilOnPlanError(t *testing.T) {
 	}
 
 	reader := bufio.NewReader(strings.NewReader(""))
-	if got := maybeRepairNICNamesCLI(context.Background(), reader, newDiscardLogger(), "/backup.zip"); got != nil {
-		t.Fatalf("expected nil on plan error, got %#v", got)
+	// B/C2: a plan error must NOT be swallowed - surface it as a Failed result.
+	got := maybeRepairNICNamesCLI(context.Background(), reader, newDiscardLogger(), "/backup.zip")
+	if got == nil {
+		t.Fatal("expected a non-nil Failed result on plan error, got nil")
+	}
+	if !got.Failed || strings.TrimSpace(got.FailedReason) == "" {
+		t.Fatalf("expected Failed result with a reason on plan error, got %#v", got)
 	}
 }
 
@@ -1384,7 +1389,7 @@ func TestMaybeRepairNICNamesCLI_MoreThan32ConflictsTriggersTruncationBranch(t *t
 	}
 }
 
-func TestMaybeRepairNICNamesCLI_ReturnsNilOnApplyError(t *testing.T) {
+func TestMaybeRepairNICNamesCLI_SurfacesApplyError(t *testing.T) {
 	origFS := restoreFS
 	origTime := restoreTime
 	origSysNet := sysClassNetPath
@@ -1428,8 +1433,14 @@ func TestMaybeRepairNICNamesCLI_ReturnsNilOnApplyError(t *testing.T) {
 	restoreFS = mkdirAllFailFS{FS: fakeFS, failPath: "/tmp/proxsave", err: errors.New("boom")}
 
 	reader := bufio.NewReader(strings.NewReader(""))
-	if got := maybeRepairNICNamesCLI(context.Background(), reader, newDiscardLogger(), "/backup.tar"); got != nil {
-		t.Fatalf("expected nil on apply error, got %#v", got)
+	// B/C2: an apply error must NOT be swallowed - surface it as a Failed result
+	// so the commit screen can show it instead of a false success.
+	got := maybeRepairNICNamesCLI(context.Background(), reader, newDiscardLogger(), "/backup.tar")
+	if got == nil {
+		t.Fatal("expected a non-nil Failed result on apply error, got nil")
+	}
+	if !got.Failed || !strings.Contains(got.FailedReason, "boom") {
+		t.Fatalf("expected Failed result mentioning the apply error, got %#v", got)
 	}
 }
 

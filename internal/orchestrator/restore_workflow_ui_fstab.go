@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/tis24dev/proxsave/internal/logging"
+	"github.com/tis24dev/proxsave/internal/ui/components"
 )
 
 type fstabMergeUIPrompt struct {
@@ -108,7 +109,8 @@ func (p fstabMergeUIPrompt) writeRemapSummary(msg *strings.Builder) {
 func (p fstabMergeUIPrompt) writeProposedMounts(msg *strings.Builder) {
 	msg.WriteString("\nProposed mounts (safe):\n")
 	for _, mount := range p.analysis.ProposedMounts {
-		fmt.Fprintf(msg, "  - %s -> %s (%s)\n", mount.Device, mount.MountPoint, mount.Type)
+		// Sanitize backup-derived fstab fields (terminal-escape injection guard); keep message structure.
+		fmt.Fprintf(msg, "  - %s -> %s (%s)\n", components.SanitizeLine(mount.Device), components.SanitizeLine(mount.MountPoint), components.SanitizeLine(mount.Type))
 	}
 }
 
@@ -118,7 +120,8 @@ func (p fstabMergeUIPrompt) writeSkippedMounts(msg *strings.Builder) {
 	}
 	msg.WriteString("\nMounts found but not auto-proposed:\n")
 	for _, mount := range p.analysis.SkippedMounts {
-		fmt.Fprintf(msg, "  - %s -> %s (%s)\n", mount.Device, mount.MountPoint, mount.Type)
+		// Sanitize backup-derived fstab fields (terminal-escape injection guard); keep message structure.
+		fmt.Fprintf(msg, "  - %s -> %s (%s)\n", components.SanitizeLine(mount.Device), components.SanitizeLine(mount.MountPoint), components.SanitizeLine(mount.Type))
 	}
 	msg.WriteString("\nHint: verify disks/UUIDs and options (nofail/_netdev) before adding them.\n")
 }

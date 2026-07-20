@@ -238,9 +238,11 @@ func (c *Checker) CheckDiskSpace() CheckResult {
 }
 
 type lockFileMetadata struct {
-	PID       int
-	Host      string
-	Timestamp string
+	PID            int
+	Host           string
+	Timestamp      string
+	StartTime      uint64
+	StartTimeKnown bool
 }
 
 func parseLockFileMetadata(content []byte) lockFileMetadata {
@@ -256,9 +258,30 @@ func parseLockFileMetadata(content []byte) lockFileMetadata {
 			meta.Host = strings.TrimSpace(strings.TrimPrefix(line, "host="))
 		case strings.HasPrefix(line, "time="):
 			meta.Timestamp = strings.TrimSpace(strings.TrimPrefix(line, "time="))
+		case strings.HasPrefix(line, "starttime="):
+			if v, err := strconv.ParseUint(strings.TrimSpace(strings.TrimPrefix(line, "starttime=")), 10, 64); err == nil {
+				meta.StartTime = v
+				meta.StartTimeKnown = true
+			}
 		}
 	}
 	return meta
+}
+
+// lockOwnerReused reports whether the alive pid recorded in meta is provably a
+// DIFFERENT process than the one that wrote the lock (its start-time no longer
+// matches). It returns false when reuse cannot be proven (an old-format lock with
+// no recorded start-time, or an unreadable current start-time), so a live lock is
+// never wrongly removed.
+func lockOwnerReused(meta lockFileMetadata) bool {
+	if !meta.StartTimeKnown {
+		return false
+	}
+	cur, ok := procStartTimeFunc(meta.PID)
+	if !ok {
+		return false
+	}
+	return cur != meta.StartTime
 }
 
 func sameHost(a, b string) bool {
@@ -336,11 +359,23 @@ func (c *Checker) CheckLockFile() CheckResult {
 			// This avoids false positives/negatives when the lock file resides on shared storage.
 			killErr := killFunc(meta.PID, 0)
 			if killErr == nil || errors.Is(killErr, syscall.EPERM) {
-				result.Message = formatInProgress(age, meta)
-				c.logger.Error("%s", result.Message)
-				return result
-			}
-			if errors.Is(killErr, syscall.ESRCH) {
+				// pid alive on this host. Confirm it is still the SAME process that
+				// wrote the lock; a reused pid (start-time changed) means the lock is
+				// stale and must not block a new backup.
+				if lockOwnerReused(meta) {
+					c.logger.Warning("Removing stale lock file (pid %d reused, age: %v)", meta.PID, age)
+					if err := osRemove(lockPath); err != nil {
+						result.Error = fmt.Errorf("failed to remove stale lock: %w", err)
+						result.Message = result.Error.Error()
+						return result
+					}
+					// fall through to create a fresh lock below
+				} else {
+					result.Message = formatInProgress(age, meta)
+					c.logger.Error("%s", result.Message)
+					return result
+				}
+			} else if errors.Is(killErr, syscall.ESRCH) {
 				c.logger.Warning("Removing stale lock file (pid %d not running, age: %v)", meta.PID, age)
 				if err := osRemove(lockPath); err != nil {
 					result.Error = fmt.Errorf("failed to remove stale lock: %w", err)
@@ -401,6 +436,9 @@ func (c *Checker) CheckLockFile() CheckResult {
 
 		hostname, _ := os.Hostname()
 		lockContent := fmt.Sprintf("pid=%d\nhost=%s\ntime=%s\n", os.Getpid(), hostname, time.Now().Format(time.RFC3339))
+		if st, ok := procStartTimeFunc(os.Getpid()); ok {
+			lockContent += fmt.Sprintf("starttime=%d\n", st)
+		}
 		if _, err := f.WriteString(lockContent); err != nil {
 			if closeErr := f.Close(); closeErr != nil {
 				c.logger.Warning("Failed to close lock file %s: %v", lockPath, closeErr)

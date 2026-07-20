@@ -27,6 +27,11 @@ import (
 )
 
 var ErrDecryptAborted = errors.New("decrypt workflow aborted by user")
+
+// ErrDecryptNoBackups is the graceful empty-state: every backup source was
+// exhausted (already shown to the user as a "Status:" screen). Callers treat it
+// like an abort - a clean exit, NOT a logged ERROR.
+var ErrDecryptNoBackups = errors.New("no usable backup sources available")
 var titleCaser = cases.Title(language.English)
 
 type decryptSourceType int
@@ -83,7 +88,10 @@ func RunDecryptWorkflowWithDeps(ctx context.Context, deps *Deps, version string)
 	defer func() { done(err) }()
 
 	ui := newCLIWorkflowUI(bufio.NewReader(os.Stdin), logger)
-	return runDecryptWorkflowWithUI(ctx, cfg, logger, version, ui)
+	// The CLI already surfaces the bundle path through the logger lines
+	// printed during the run; the returned path is for full-screen UIs.
+	_, err = runDecryptWorkflowWithUI(ctx, cfg, logger, version, ui)
+	return err
 }
 
 // RunDecryptWorkflow is the legacy entrypoint that builds default deps.
@@ -104,7 +112,7 @@ func selectDecryptCandidate(ctx context.Context, reader *bufio.Reader, cfg *conf
 	defer func() { done(err) }()
 
 	ui := newCLIWorkflowUI(reader, logger)
-	return selectBackupCandidateWithUI(ctx, ui, cfg, logger, requireEncrypted)
+	return selectBackupCandidateWithUI(ctx, ui, cfg, logger, "Decrypt", requireEncrypted)
 }
 
 func promptPathSelection(ctx context.Context, reader *bufio.Reader, options []decryptPathOption) (decryptPathOption, error) {
@@ -116,7 +124,7 @@ func promptPathSelection(ctx context.Context, reader *bufio.Reader, options []de
 		fmt.Println("  [0] Exit")
 
 		fmt.Print("Choice: ")
-		choiceLine, err := input.ReadLineWithContext(ctx, reader)
+		choiceLine, err := input.ReadLineWithIdle(ctx, reader, cliIdleTimeout)
 		if err != nil {
 			return decryptPathOption{}, err
 		}
@@ -385,7 +393,7 @@ func promptCandidateSelection(ctx context.Context, reader *bufio.Reader, candida
 		fmt.Println("  [0] Exit")
 
 		fmt.Print("Choice: ")
-		choiceLine, err := input.ReadLineWithContext(ctx, reader)
+		choiceLine, err := input.ReadLineWithIdle(ctx, reader, cliIdleTimeout)
 		if err != nil {
 			return nil, err
 		}
@@ -413,7 +421,7 @@ func promptDestinationDir(ctx context.Context, reader *bufio.Reader, cfg *config
 		}
 	}
 	fmt.Printf("\nEnter destination directory for decrypted bundle [press Enter to use %s]: ", defaultDir)
-	inputLine, err := input.ReadLineWithContext(ctx, reader)
+	inputLine, err := input.ReadLineWithIdle(ctx, reader, cliIdleTimeout)
 	if err != nil {
 		return "", err
 	}

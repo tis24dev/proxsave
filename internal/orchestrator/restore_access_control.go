@@ -689,7 +689,12 @@ func applyPVEAccessControlFromStage(ctx context.Context, logger *logging.Logger,
 		mounted, mountErr := isMounted("/etc/pve")
 		if mountErr != nil {
 			logger.Warning("PVE access control: unable to check pmxcfs mount status for /etc/pve: %v", mountErr)
-		} else if !mounted {
+		}
+		// Fail-safe (matches restore_sdn/firewall/ha): isMounted returns mounted=false on a
+		// probe error, so a separate `if !mounted` refuses on BOTH a confirmed unmounted
+		// /etc/pve AND an unresolvable mount probe, rather than falling through and
+		// shadow-writing access-control/secret files onto the root filesystem.
+		if !mounted {
 			return fmt.Errorf("refusing PVE access control apply: /etc/pve is not mounted (pmxcfs not available)")
 		}
 	}

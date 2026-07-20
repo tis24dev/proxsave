@@ -44,6 +44,7 @@ const (
 	brickPVEAggregateReplicationStatus BrickID = "pve_aggregate_replication_status"
 	brickPVEVersionInfo                BrickID = "pve_version_info"
 	brickPVEManifestFinalize           BrickID = "pve_manifest_finalize"
+	brickPVEFinalizeSummary            BrickID = "pve_finalize_summary"
 
 	brickPBSValidate                            BrickID = "pbs_validate"
 	brickPBSConfigDirectoryCopy                 BrickID = "pbs_config_directory_copy"

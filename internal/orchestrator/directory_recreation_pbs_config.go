@@ -8,10 +8,11 @@ import (
 	"strings"
 
 	"github.com/tis24dev/proxsave/internal/logging"
+	"github.com/tis24dev/proxsave/internal/safefs"
 )
 
 func normalizePBSDatastoreCfg(path string, logger *logging.Logger) error {
-	raw, err := os.ReadFile(path)
+	raw, err := safefs.ReadFileUnderRoot(path)
 	if err != nil {
 		return fmt.Errorf("read datastore.cfg: %w", err)
 	}

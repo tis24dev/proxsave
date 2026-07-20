@@ -104,7 +104,7 @@ func logManualZFSImportInstructions(logger *logging.Logger, importablePools []st
 	logger.Info("  3. Verify pool status:     zpool status")
 	logger.Info("")
 	logger.Info("  If pools fail to import, check:")
-	logger.Info("  - journalctl -u zfs-import@<pool-name>.service oppure import@<pool-name>.service")
+	logger.Info("  - journalctl -u zfs-import@<pool-name>.service or import@<pool-name>.service")
 	logger.Info("  - zpool import -d /dev/disk/by-id")
 	logger.Info("")
 }

@@ -2,11 +2,42 @@ package orchestrator
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"path/filepath"
 	"testing"
 
 	"github.com/tis24dev/proxsave/internal/types"
 )
+
+// TestRunStageApplyStep_InconsistentStateHalts pins F06-08: a step returning
+// ErrRestoreInconsistentState (an auth-DB left half-written) must PROPAGATE (halt the restore),
+// not be swallowed into restoreHadWarnings like an ordinary staged-apply error.
+func TestRunStageApplyStep_InconsistentStateHalts(t *testing.T) {
+	w := &restoreUIWorkflowRun{ctx: context.Background(), logger: newTestLogger()}
+
+	inconsistent := restoreStageApplyStep{name: "System accounts staged apply", run: func() error {
+		return fmt.Errorf("commit failed and rollback also failed: %w", ErrRestoreInconsistentState)
+	}}
+	if err := w.runStageApplyStep(inconsistent); !errors.Is(err, ErrRestoreInconsistentState) {
+		t.Fatalf("inconsistent-state step must halt (return the error), got: %v", err)
+	}
+	if w.restoreHadWarnings {
+		t.Fatalf("inconsistent state must NOT be downgraded to a warning")
+	}
+
+	// An ordinary step error is still swallowed to a warning (returns nil), unchanged.
+	w2 := &restoreUIWorkflowRun{ctx: context.Background(), logger: newTestLogger()}
+	ordinary := restoreStageApplyStep{name: "PVE staged config apply", run: func() error {
+		return errors.New("some non-fatal apply glitch")
+	}}
+	if err := w2.runStageApplyStep(ordinary); err != nil {
+		t.Fatalf("ordinary step error must be downgraded (return nil), got: %v", err)
+	}
+	if !w2.restoreHadWarnings {
+		t.Fatalf("ordinary step error must set restoreHadWarnings")
+	}
+}
 
 func TestRunClusterSafeApplySkipsWhenExportExtractionIncomplete(t *testing.T) {
 	logger := newTestLogger()

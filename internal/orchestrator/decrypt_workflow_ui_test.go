@@ -10,6 +10,7 @@ import (
 
 	"github.com/tis24dev/proxsave/internal/backup"
 	"github.com/tis24dev/proxsave/internal/config"
+	"github.com/tis24dev/proxsave/internal/input"
 	"github.com/tis24dev/proxsave/internal/logging"
 	"github.com/tis24dev/proxsave/internal/types"
 )
@@ -24,6 +25,10 @@ func (f *fakeDecryptWorkflowUI) RunTask(ctx context.Context, title, initialMessa
 
 func (f *fakeDecryptWorkflowUI) ShowMessage(ctx context.Context, title, message string) error {
 	panic("unexpected ShowMessage call")
+}
+
+func (f *fakeDecryptWorkflowUI) ShowStatusResult(ctx context.Context, screenTitle string, level HealthcheckSetupLevel, keyword, explanation string) error {
+	panic("unexpected ShowStatusResult call")
 }
 
 func (f *fakeDecryptWorkflowUI) ShowError(ctx context.Context, title, message string) error {
@@ -280,7 +285,7 @@ func TestSelectBackupCandidateWithUIRejectsTypedNilUI(t *testing.T) {
 	var typedNil *fakeDecryptWorkflowUI
 	var ui BackupSelectionUI = typedNil
 
-	_, err := selectBackupCandidateWithUI(context.Background(), ui, cfg, logger, false)
+	_, err := selectBackupCandidateWithUI(context.Background(), ui, cfg, logger, "Decrypt", false)
 	if err == nil {
 		t.Fatal("expected error for typed-nil UI")
 	}
@@ -344,7 +349,7 @@ func TestRunDecryptWorkflowWithUIRejectsMissingUI(t *testing.T) {
 	logger := logging.New(types.LogLevelError, false)
 	cfg := &config.Config{}
 
-	err := runDecryptWorkflowWithUI(context.Background(), cfg, logger, "1.0.0", nil)
+	_, err := runDecryptWorkflowWithUI(context.Background(), cfg, logger, "1.0.0", nil)
 	if err == nil {
 		t.Fatal("expected error for missing UI")
 	}
@@ -360,12 +365,34 @@ func TestRunDecryptWorkflowWithUIRejectsTypedNilUI(t *testing.T) {
 	var typedNil *fakeDecryptWorkflowUI
 	var ui DecryptWorkflowUI = typedNil
 
-	err := runDecryptWorkflowWithUI(context.Background(), cfg, logger, "1.0.0", ui)
+	_, err := runDecryptWorkflowWithUI(context.Background(), cfg, logger, "1.0.0", ui)
 	if err == nil {
 		t.Fatal("expected error for typed-nil UI")
 	}
 	if got, want := err.Error(), "decrypt workflow UI not available"; got != want {
 		t.Fatalf("error=%q, want %q", got, want)
+	}
+}
+
+func TestDecryptArchiveWithSecretPromptGenericParseError(t *testing.T) {
+	var captured string
+	calls := 0
+	prompt := func(ctx context.Context, displayName, previousError string) (string, error) {
+		calls++
+		if calls == 1 {
+			// Malformed AGE-SECRET-KEY- input: parseIdentityInputWithSalts errors,
+			// driving the "Invalid key or passphrase" branch on the next prompt.
+			return "AGE-SECRET-KEY-1MALFORMED", nil
+		}
+		captured = previousError
+		return "", input.ErrInputAborted
+	}
+	err := decryptArchiveWithSecretPrompt(context.Background(), "", "", "archive", prompt, nil)
+	if !errors.Is(err, ErrDecryptAborted) {
+		t.Fatalf("expected ErrDecryptAborted after abort, got %v", err)
+	}
+	if captured != "Invalid key or passphrase." {
+		t.Fatalf("parse-error prompt must be generic with no key fragment, got %q", captured)
 	}
 }
 

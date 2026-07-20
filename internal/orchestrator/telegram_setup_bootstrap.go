@@ -8,7 +8,7 @@ import (
 	"github.com/tis24dev/proxsave/internal/identity"
 )
 
-const defaultTelegramServerAPIHost = "https://bot.tis24.it:1443"
+const defaultServerAPIHost = "https://bot.proxsave.dev"
 
 // TelegramSetupMaxVerificationAttempts bounds how many registration checks the
 // install wizard runs before it stops offering another check and requires the
@@ -93,7 +93,7 @@ func BuildTelegramSetupBootstrap(configPath, baseDir string) (TelegramSetupBoots
 	if cfg != nil {
 		state.TelegramEnabled = cfg.TelegramEnabled
 		state.TelegramMode = strings.ToLower(strings.TrimSpace(cfg.TelegramBotType))
-		state.ServerAPIHost = strings.TrimSpace(cfg.TelegramServerAPIHost)
+		state.ServerAPIHost = strings.TrimSpace(cfg.ServerAPIHost)
 	}
 
 	if !state.TelegramEnabled {
@@ -105,7 +105,7 @@ func BuildTelegramSetupBootstrap(configPath, baseDir string) (TelegramSetupBoots
 		state.TelegramMode = "centralized"
 	}
 	if state.ServerAPIHost == "" {
-		state.ServerAPIHost = defaultTelegramServerAPIHost
+		state.ServerAPIHost = defaultServerAPIHost
 	}
 
 	if state.TelegramMode == "personal" {

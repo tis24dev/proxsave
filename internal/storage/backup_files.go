@@ -2,6 +2,7 @@ package storage
 
 import (
 	"errors"
+	"path/filepath"
 	"strings"
 )
 
@@ -14,9 +15,34 @@ const bundleSuffix = ".bundle.tar"
 var errBackupSidecarDeleteOnly = errors.New("backup archive deleted; associated file(s) could not be removed")
 
 // isBackupSidecar reports whether a candidate path is an associated sidecar
-// (checksum/metadata) rather than the backup data archive itself.
+// (checksum, metadata, or manifest) rather than the backup data archive itself.
+//
+// Scope: this is the source of truth ONLY for CLASSIFICATION ("is this a standalone
+// backup?"), shared by every storage List filter (local/secondary/cloud) and by the
+// retention delete accounting. It is NOT the source of truth for the set of files a
+// backup enumerates to create or delete.
+//
+// Anti-drift: adding a new sidecar suffix means updating THREE places, not one:
+//  1. here (classification),
+//  2. buildBackupCandidatePaths below (the delete/retention enumeration),
+//  3. Orchestrator.removeAssociatedFiles in internal/orchestrator (raw-workspace cleanup).
+//
+// PS-BH-002 was exactly this drift: .manifest.json was added to the cloud upload set
+// but omitted here, so retention could not delete it (orphan accumulation) and List
+// counted it as a phantom backup.
 func isBackupSidecar(path string) bool {
-	return strings.HasSuffix(path, ".sha256") || strings.HasSuffix(path, ".metadata")
+	return strings.HasSuffix(path, ".sha256") ||
+		strings.HasSuffix(path, ".metadata") ||
+		strings.HasSuffix(path, ".manifest.json")
+}
+
+// isBackupTempArtifact reports whether a candidate path is an in-flight temp or
+// partial artifact (a .tmp-<...> temp copy, or a <name>.partial archive being
+// written before promotion) rather than a completed backup. Such files must
+// never be counted as backups by any List filter.
+func isBackupTempArtifact(path string) bool {
+	base := filepath.Base(path)
+	return strings.HasPrefix(base, ".tmp-") || strings.HasSuffix(path, ".partial")
 }
 
 // trimBundleSuffix removes the .bundle.tar suffix from a path if present.
@@ -61,18 +87,21 @@ func buildBackupCandidatePaths(base string, includeBundle bool) []string {
 		return true
 	}
 
-	files := make([]string, 0, 5)
+	candidates := []string{
+		base,
+		base + ".sha256",
+		base + ".manifest.json",
+		base + ".metadata",
+		base + ".metadata.sha256",
+	}
+	// Cap: every candidate plus at most one bundle path. Derived from len so it
+	// cannot re-diverge when a suffix is added to the list above.
+	files := make([]string, 0, len(candidates)+1)
 	if includeBundle {
 		bundlePath := bundlePathFor(base)
 		if add(bundlePath) {
 			files = append(files, bundlePath)
 		}
-	}
-	candidates := []string{
-		base,
-		base + ".sha256",
-		base + ".metadata",
-		base + ".metadata.sha256",
 	}
 	for _, c := range candidates {
 		if add(c) {

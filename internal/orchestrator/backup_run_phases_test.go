@@ -73,6 +73,26 @@ func TestCreateBackupArchiveClassifiesAgeRecipientFailureAsEncryption(t *testing
 	}
 }
 
+// F11-02: finalizeFailedBackupStats marks a genuine backup failure (runErr != nil) as
+// Failed, so the status gauge reports error even when only warnings were counted. A nil
+// runErr (a run whose only issue was a non-fatal notification/communication error, which
+// never sets runErr) must NOT set Failed, so such a run is never escalated to error.
+func TestFinalizeFailedBackupStats_SetsFailedOnlyOnGenuineFailure(t *testing.T) {
+	orch := New(newTestLogger(), false)
+
+	failRun := &backupRunContext{stats: &BackupStats{}}
+	orch.finalizeFailedBackupStats(failRun, errors.New("archive phase failed"))
+	if !failRun.stats.Failed {
+		t.Fatal("a non-nil runErr must set stats.Failed")
+	}
+
+	okRun := &backupRunContext{stats: &BackupStats{}}
+	orch.finalizeFailedBackupStats(okRun, nil)
+	if okRun.stats.Failed {
+		t.Fatal("a nil runErr must NOT set stats.Failed (notification errors must not escalate)")
+	}
+}
+
 func TestWriteArchiveChecksumPropagatesWriteError(t *testing.T) {
 	orch := New(newTestLogger(), false)
 	checksumPath := "/backups/test.tar.sha256"
@@ -93,5 +113,48 @@ func TestWriteArchiveChecksumPropagatesWriteError(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), checksumPath) {
 		t.Fatalf("expected checksum path in error, got %q", err.Error())
+	}
+}
+
+func TestFinalizeSuccessIssueStats_NotifyIssueBecomesWarning(t *testing.T) {
+	// A notify/communication failure is logged DURING dispatch, after the
+	// pre-notification snapshot. On a successful run the final re-parse must pick it
+	// up so it surfaces as a warning (status 1) instead of vanishing to success (0).
+	tempDir := t.TempDir()
+	logFile := filepath.Join(tempDir, "run.log")
+	content := "[2026-07-16 10:00:00] INFO     Backup completed\n" +
+		"[2026-07-16 10:00:01] NOTIFY-ERR Telegram: failed: connection refused\n"
+	if err := os.WriteFile(logFile, []byte(content), 0o644); err != nil {
+		t.Fatalf("write log: %v", err)
+	}
+
+	o := &Orchestrator{}
+	stats := &BackupStats{LogFilePath: logFile, ExitCode: types.ExitSuccess.Int()}
+	o.finalizeSuccessIssueStats(stats)
+
+	if stats.NotifyCount != 1 {
+		t.Fatalf("NotifyCount = %d, want 1", stats.NotifyCount)
+	}
+	if stats.ExitCode != types.ExitGenericError.Int() {
+		t.Fatalf("ExitCode = %d, want %d (notify issue must surface as warning, never 0)",
+			stats.ExitCode, types.ExitGenericError.Int())
+	}
+}
+
+func TestFinalizeSuccessIssueStats_CleanRunStaysSuccess(t *testing.T) {
+	tempDir := t.TempDir()
+	logFile := filepath.Join(tempDir, "clean.log")
+	content := "[2026-07-16 10:00:00] INFO     Backup completed\n"
+	if err := os.WriteFile(logFile, []byte(content), 0o644); err != nil {
+		t.Fatalf("write log: %v", err)
+	}
+
+	o := &Orchestrator{}
+	stats := &BackupStats{LogFilePath: logFile, ExitCode: types.ExitSuccess.Int()}
+	o.finalizeSuccessIssueStats(stats)
+
+	if stats.ExitCode != types.ExitSuccess.Int() {
+		t.Fatalf("ExitCode = %d, want %d (a clean run must stay success)",
+			stats.ExitCode, types.ExitSuccess.Int())
 	}
 }

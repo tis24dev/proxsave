@@ -59,7 +59,9 @@ func TestMaterializeDedupSymlinksFullRestore(t *testing.T) {
 	}
 	writeDedupManifestForTest(t, destRoot, []backup.DedupManifestEntry{{Path: "a/two.cfg", Mode: 0o640}})
 
-	materializeDedupSymlinks(context.Background(), archive, destRoot, logging.New(types.LogLevelError, false))
+	if err := materializeDedupSymlinks(context.Background(), archive, destRoot, logging.New(types.LogLevelError, false), false, nil); err != nil {
+		t.Fatalf("materialize dedup symlinks: %v", err)
+	}
 
 	two := filepath.Join(destRoot, "a", "two.cfg")
 	info, err := os.Lstat(two)
@@ -104,7 +106,9 @@ func TestMaterializeDedupCrossCategoryRebuildsFromArchive(t *testing.T) {
 	}
 	writeDedupManifestForTest(t, destRoot, []backup.DedupManifestEntry{{Path: "b/two.cfg", Mode: 0o640}})
 
-	materializeDedupSymlinks(context.Background(), archive, destRoot, logging.New(types.LogLevelError, false))
+	if err := materializeDedupSymlinks(context.Background(), archive, destRoot, logging.New(types.LogLevelError, false), false, nil); err != nil {
+		t.Fatalf("materialize dedup symlinks: %v", err)
+	}
 
 	two := filepath.Join(destRoot, "b", "two.cfg")
 	info, err := os.Lstat(two)
@@ -144,7 +148,7 @@ func TestMaterializeDedupReturnsErrorWhenIncomplete(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // canceled before the archive scan: materialization cannot complete
 
-	if err := materializeDedupSymlinks(ctx, archive, destRoot, logging.New(types.LogLevelError, false)); err == nil {
+	if err := materializeDedupSymlinks(ctx, archive, destRoot, logging.New(types.LogLevelError, false), false, nil); err == nil {
 		t.Fatal("materializeDedupSymlinks must return an error when materialization is incomplete (canceled scan)")
 	}
 	// The manifest must be kept (not removed) so a re-run can finish.
@@ -173,7 +177,9 @@ func TestMaterializeDedupMissingCanonicalKeepsSymlink(t *testing.T) {
 	}
 	writeDedupManifestForTest(t, destRoot, []backup.DedupManifestEntry{{Path: "b/two.cfg", Mode: 0o640}})
 
-	materializeDedupSymlinks(context.Background(), archive, destRoot, logging.New(types.LogLevelError, false))
+	if err := materializeDedupSymlinks(context.Background(), archive, destRoot, logging.New(types.LogLevelError, false), false, nil); err != nil {
+		t.Fatalf("materialize dedup symlinks: %v", err)
+	}
 
 	info, err := os.Lstat(filepath.Join(destRoot, "b", "two.cfg"))
 	if err != nil {
@@ -209,7 +215,9 @@ func TestMaterializeDedupUsesArchiveNotStaleDisk(t *testing.T) {
 	}
 	writeDedupManifestForTest(t, destRoot, []backup.DedupManifestEntry{{Path: "a/two.cfg", Mode: 0o640}})
 
-	materializeDedupSymlinks(context.Background(), archive, destRoot, logging.New(types.LogLevelError, false))
+	if err := materializeDedupSymlinks(context.Background(), archive, destRoot, logging.New(types.LogLevelError, false), false, nil); err != nil {
+		t.Fatalf("materialize dedup symlinks: %v", err)
+	}
 
 	data, err := os.ReadFile(filepath.Join(destRoot, "a", "two.cfg"))
 	if err != nil {

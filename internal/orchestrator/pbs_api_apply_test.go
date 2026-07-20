@@ -816,6 +816,171 @@ func TestApplyPBSDatastoreCfgViaAPI_StrictFullFlow(t *testing.T) {
 	}
 }
 
+// P-09: when a strict path change removes a datastore and the create at the NEW
+// path fails, the datastore must be re-created at its ORIGINAL path so it is not
+// left deconfigured.
+func TestApplyPBSDatastoreCfgViaAPI_StrictRecreatesOriginalOnCreateFail(t *testing.T) {
+	stageRoot, fs, runner := setupPBSAPIApplyTestDeps(t)
+	logger := logging.New(types.LogLevelDebug, false)
+
+	writeStageFile(t, fs, stageRoot, "etc/proxmox-backup/datastore.cfg",
+		"datastore: ds1\n    path /new1\n    comment c1\n", 0o640)
+
+	runner.outputs = map[string][]byte{
+		"proxmox-backup-manager datastore list --output-format=json": []byte(`{"data":[{"name":"ds1","path":"/old1"}]}`),
+	}
+	// The create at the NEW path fails; the rollback create at the ORIGINAL path succeeds.
+	runner.errs = map[string]error{
+		"proxmox-backup-manager datastore create ds1 /new1 --comment c1": errors.New("boom"),
+	}
+
+	err := applyPBSDatastoreCfgViaAPI(context.Background(), logger, stageRoot, true)
+	if err == nil {
+		t.Fatal("expected an error reporting the failed path change")
+	}
+	// The datastore was re-created at its original path /old1.
+	foundRollback := false
+	for _, c := range runner.calls {
+		if c == "proxmox-backup-manager datastore create ds1 /old1 --comment c1" {
+			foundRollback = true
+		}
+	}
+	if !foundRollback {
+		t.Fatalf("expected a re-create at the original path /old1, calls=%v", runner.calls)
+	}
+	if !strings.Contains(err.Error(), "/old1") && !strings.Contains(strings.ToLower(err.Error()), "restored") && !strings.Contains(strings.ToLower(err.Error()), "original") {
+		t.Fatalf("error must report restoration to the original path, got: %v", err)
+	}
+}
+
+// If BOTH the new-path create and the original-path rollback create fail, the
+// error must report both and that the datastore is left removed.
+func TestApplyPBSDatastoreCfgViaAPI_StrictReportsBothCreateFailures(t *testing.T) {
+	stageRoot, fs, runner := setupPBSAPIApplyTestDeps(t)
+	logger := logging.New(types.LogLevelDebug, false)
+
+	writeStageFile(t, fs, stageRoot, "etc/proxmox-backup/datastore.cfg",
+		"datastore: ds1\n    path /new1\n    comment c1\n", 0o640)
+
+	runner.outputs = map[string][]byte{
+		"proxmox-backup-manager datastore list --output-format=json": []byte(`{"data":[{"name":"ds1","path":"/old1"}]}`),
+	}
+	runner.errs = map[string]error{
+		"proxmox-backup-manager datastore create ds1 /new1 --comment c1": errors.New("boom-new"),
+		"proxmox-backup-manager datastore create ds1 /old1 --comment c1": errors.New("boom-old"),
+	}
+
+	err := applyPBSDatastoreCfgViaAPI(context.Background(), logger, stageRoot, true)
+	if err == nil {
+		t.Fatal("expected an error when both creates fail")
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, "boom-new") || !strings.Contains(msg, "boom-old") {
+		t.Fatalf("error must report both create failures, got: %v", err)
+	}
+}
+
+// P-08: when `datastore list` fails, the current PBS state is unknown. A strict Clean
+// 1:1 restore must fail closed (it cannot safely prune stale datastores), not silently
+// report success. Non-strict logs and continues (create/update self-heals).
+func TestApplyPBSDatastoreCfgViaAPI_ListFailure(t *testing.T) {
+	const listCmd = "proxmox-backup-manager datastore list --output-format=json"
+	const cfg = "datastore: ds1\n    path /p1\n    comment c1\n"
+
+	t.Run("strict fails closed", func(t *testing.T) {
+		stageRoot, fs, runner := setupPBSAPIApplyTestDeps(t)
+		logger := logging.New(types.LogLevelDebug, false)
+		writeStageFile(t, fs, stageRoot, "etc/proxmox-backup/datastore.cfg", cfg, 0o640)
+		runner.errs = map[string]error{listCmd: errors.New("list boom")}
+
+		err := applyPBSDatastoreCfgViaAPI(context.Background(), logger, stageRoot, true)
+		if err == nil {
+			t.Fatal("strict Clean 1:1 must fail closed when datastore list fails, got nil")
+		}
+		if !strings.Contains(err.Error(), "datastore list") {
+			t.Fatalf("error should name the list failure, got: %v", err)
+		}
+		for _, c := range runner.calls {
+			if strings.HasPrefix(c, "proxmox-backup-manager datastore create") ||
+				strings.HasPrefix(c, "proxmox-backup-manager datastore remove") {
+				t.Fatalf("strict must not mutate datastores after a failed list, saw: %s", c)
+			}
+		}
+	})
+
+	t.Run("non-strict logs and continues", func(t *testing.T) {
+		stageRoot, fs, runner := setupPBSAPIApplyTestDeps(t)
+		logger := logging.New(types.LogLevelDebug, false)
+		writeStageFile(t, fs, stageRoot, "etc/proxmox-backup/datastore.cfg", cfg, 0o640)
+		runner.errs = map[string]error{listCmd: errors.New("list boom")}
+
+		if err := applyPBSDatastoreCfgViaAPI(context.Background(), logger, stageRoot, false); err != nil {
+			t.Fatalf("non-strict must not fail on a list error (create/update self-heals), got: %v", err)
+		}
+		sawCreate := false
+		for _, c := range runner.calls {
+			if strings.HasPrefix(c, "proxmox-backup-manager datastore create ds1") {
+				sawCreate = true
+			}
+		}
+		if !sawCreate {
+			t.Fatalf("non-strict must still apply the desired datastore, calls=%v", runner.calls)
+		}
+	})
+}
+
+// P-08: the strict unmarshal-failure guard (a datastore list that runs but returns
+// unparseable JSON) must ALSO fail closed and never mutate datastores; non-strict
+// logs and self-heals via create/update. This is the sibling of the list-error case.
+func TestApplyPBSDatastoreCfgViaAPI_UnparseableList(t *testing.T) {
+	const listCmd = "proxmox-backup-manager datastore list --output-format=json"
+	const cfg = "datastore: ds1\n    path /p1\n    comment c1\n"
+	// Valid envelope, but data is not an array of rows: unwrap succeeds, the inner
+	// Unmarshal into []dsRow fails, exercising the strict JSON-parse guard.
+	garbage := []byte(`{"data":"not-an-array"}`)
+
+	t.Run("strict fails closed", func(t *testing.T) {
+		stageRoot, fs, runner := setupPBSAPIApplyTestDeps(t)
+		logger := logging.New(types.LogLevelDebug, false)
+		writeStageFile(t, fs, stageRoot, "etc/proxmox-backup/datastore.cfg", cfg, 0o640)
+		runner.outputs = map[string][]byte{listCmd: garbage}
+
+		err := applyPBSDatastoreCfgViaAPI(context.Background(), logger, stageRoot, true)
+		if err == nil {
+			t.Fatal("strict Clean 1:1 must fail closed on an unparseable datastore list, got nil")
+		}
+		if !strings.Contains(err.Error(), "cannot enforce Clean 1:1") {
+			t.Fatalf("error should name the Clean 1:1 failure, got: %v", err)
+		}
+		for _, c := range runner.calls {
+			if strings.HasPrefix(c, "proxmox-backup-manager datastore create") ||
+				strings.HasPrefix(c, "proxmox-backup-manager datastore remove") {
+				t.Fatalf("strict must not mutate datastores after an unparseable list, saw: %s", c)
+			}
+		}
+	})
+
+	t.Run("non-strict logs and continues", func(t *testing.T) {
+		stageRoot, fs, runner := setupPBSAPIApplyTestDeps(t)
+		logger := logging.New(types.LogLevelDebug, false)
+		writeStageFile(t, fs, stageRoot, "etc/proxmox-backup/datastore.cfg", cfg, 0o640)
+		runner.outputs = map[string][]byte{listCmd: garbage}
+
+		if err := applyPBSDatastoreCfgViaAPI(context.Background(), logger, stageRoot, false); err != nil {
+			t.Fatalf("non-strict must not fail on an unparseable list (create/update self-heals), got: %v", err)
+		}
+		sawCreate := false
+		for _, c := range runner.calls {
+			if strings.HasPrefix(c, "proxmox-backup-manager datastore create ds1") {
+				sawCreate = true
+			}
+		}
+		if !sawCreate {
+			t.Fatalf("non-strict must still apply the desired datastore, calls=%v", runner.calls)
+		}
+	})
+}
+
 func TestApplyPBSDatastoreCfgViaAPI_CurrentPathsFallbacksAndStrictRemoveWarn(t *testing.T) {
 	stageRoot, fs, runner := setupPBSAPIApplyTestDeps(t)
 	logger := logging.New(types.LogLevelDebug, false)
@@ -905,8 +1070,11 @@ func TestApplyPBSDatastoreCfgViaAPI_StrictPathMismatchRecreateFails(t *testing.T
 	if err == nil {
 		t.Fatalf("expected error")
 	}
-	if !strings.Contains(err.Error(), "recreate after path mismatch failed") {
-		t.Fatalf("unexpected error: %s", err.Error())
+	// The create at the new path fails but the rollback re-create at the original
+	// path succeeds (only the /new create is stubbed to fail), so the datastore is
+	// restored rather than left deconfigured (P-09).
+	if !strings.Contains(err.Error(), "/old") && !strings.Contains(strings.ToLower(err.Error()), "restored") && !strings.Contains(strings.ToLower(err.Error()), "original") {
+		t.Fatalf("error must report restoration to the original path, got: %s", err.Error())
 	}
 }
 

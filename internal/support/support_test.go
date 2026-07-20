@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -11,11 +12,31 @@ import (
 	"time"
 
 	"github.com/tis24dev/proxsave/internal/config"
+	"github.com/tis24dev/proxsave/internal/input"
 	"github.com/tis24dev/proxsave/internal/logging"
 	"github.com/tis24dev/proxsave/internal/notify"
 	"github.com/tis24dev/proxsave/internal/orchestrator"
 	"github.com/tis24dev/proxsave/internal/types"
 )
+
+// A support prompt left unattended must abort gracefully (the run then exits
+// interrupted) instead of hanging forever: an idle read maps to ErrInputAborted,
+// which RunIntro already treats as an interrupt.
+func TestSupportPromptAbortsWhenIdle(t *testing.T) {
+	orig := supportIdleTimeout
+	supportIdleTimeout = time.Millisecond
+	t.Cleanup(func() { supportIdleTimeout = orig })
+
+	pr, pw := io.Pipe()
+	defer pw.Close() // never deliver a line -> idle fires
+	_, err := promptYesNoSupport(context.Background(), bufio.NewReader(pr), "Continue? [y/N]: ")
+	if !errors.Is(err, input.ErrInputAborted) {
+		t.Fatalf("idle support prompt must map to a graceful abort (ErrInputAborted); got %v", err)
+	}
+	if !errors.Is(err, input.ErrIdleTimeout) {
+		t.Fatalf("idle support prompt should carry ErrIdleTimeout identity; got %v", err)
+	}
+}
 
 type fakeNotifier struct {
 	enabled bool
@@ -107,6 +128,28 @@ func TestRunIntro_FullFlowWithRetries(t *testing.T) {
 	}
 }
 
+// TestRunIntro_RejectsZeroIssue: "#0" is not a valid GitHub issue number (they start at 1),
+// so RunIntro must reject it, retry, and accept the next valid "#123".
+func TestRunIntro_RejectsZeroIssue(t *testing.T) {
+	withStdinFile(t, strings.Join([]string{
+		"y",    // accept
+		"y",    // has issue
+		"user", // nickname
+		"#0",   // invalid issue (zero -> retry)
+		"#123", // valid
+		"",
+	}, "\n"))
+	bootstrap := logging.NewBootstrapLogger()
+
+	meta, ok, interrupted := RunIntro(context.Background(), bootstrap)
+	if !ok || interrupted {
+		t.Fatalf("ok=%v interrupted=%v; want true/false", ok, interrupted)
+	}
+	if meta.IssueID != "#123" {
+		t.Fatalf("IssueID=%q; want %q", meta.IssueID, "#123")
+	}
+}
+
 func TestRunIntro_CanceledContextInterrupts(t *testing.T) {
 	// Provide at least one line so the read goroutine can complete and exit.
 	withStdinFile(t, "y\n")
@@ -181,7 +224,9 @@ func TestSendEmail_NewNotifierErrorHandled(t *testing.T) {
 
 func TestSendEmail_SubjectCompositionAndSend(t *testing.T) {
 	orig := newEmailNotifier
-	t.Cleanup(func() { newEmailNotifier = orig })
+	origEmail := supportEmail
+	t.Cleanup(func() { newEmailNotifier = orig; supportEmail = origEmail })
+	supportEmail = "maint@example.com" // injected via ldflags (EMAIL_SUPPORT) in real builds; set here for the test
 
 	var captured notify.EmailConfig
 	fake := &fakeNotifier{enabled: true}
@@ -200,7 +245,7 @@ func TestSendEmail_SubjectCompositionAndSend(t *testing.T) {
 
 	SendEmail(context.Background(), cfg, logger, types.ProxmoxVE, stats, Meta{GitHubUser: " alice ", IssueID: " #123 "}, " sig ")
 
-	if captured.Recipient != "github-support@tis24.it" {
+	if captured.Recipient != "maint@example.com" {
 		t.Fatalf("Recipient=%q", captured.Recipient)
 	}
 	if captured.From != "from@example.com" {
@@ -215,5 +260,27 @@ func TestSendEmail_SubjectCompositionAndSend(t *testing.T) {
 	}
 	if fake.sent != 1 || fake.last == nil {
 		t.Fatalf("expected fake notifier to be called once")
+	}
+}
+
+// TestSendEmail_SkipsWhenNoRecipient: a build without the EMAIL_SUPPORT secret (supportEmail
+// empty) must not attempt to send — it warns and returns without building a notifier.
+func TestSendEmail_SkipsWhenNoRecipient(t *testing.T) {
+	orig := newEmailNotifier
+	origEmail := supportEmail
+	t.Cleanup(func() { newEmailNotifier = orig; supportEmail = origEmail })
+	supportEmail = "" // no recipient baked into this build
+
+	built := false
+	newEmailNotifier = func(notify.EmailConfig, types.ProxmoxType, *logging.Logger) (notify.Notifier, error) {
+		built = true
+		return &fakeNotifier{enabled: true}, nil
+	}
+
+	stats := &orchestrator.BackupStats{ExitCode: 0, Hostname: "host", ArchivePath: "/tmp/a.tar"}
+	SendEmail(context.Background(), &config.Config{}, logging.New(types.LogLevelDebug, false), types.ProxmoxVE, stats, Meta{}, "sig")
+
+	if built {
+		t.Fatal("SendEmail must not build a notifier when no recipient is configured")
 	}
 }

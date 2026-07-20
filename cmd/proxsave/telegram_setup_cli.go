@@ -68,7 +68,7 @@ func runTelegramSetupCLI(ctx context.Context, reader *bufio.Reader, baseDir, con
 
 	check, err := telegramSetupPromptYesNo(ctx, reader, "Check Telegram pairing now? [Y/n]: ", true)
 	if err != nil {
-		return skipOptionalInstallStepOnAbort(bootstrap, "Telegram setup", err)
+		return skipOptionalInstallStepOnAbort(ctx, bootstrap, "Telegram setup", err)
 	}
 	if !check {
 		fmt.Println("Skipped verification. You can verify later by running proxsave.")
@@ -121,7 +121,7 @@ func runTelegramSetupCLI(ctx context.Context, reader *bufio.Reader, baseDir, con
 		fmt.Println(orchestrator.TelegramSetupRetryHint)
 		retry, err := telegramSetupPromptYesNo(ctx, reader, "Check again? [y/N]: ", false)
 		if err != nil {
-			return skipOptionalInstallStepOnAbort(bootstrap, "Telegram setup", err)
+			return skipOptionalInstallStepOnAbort(ctx, bootstrap, "Telegram setup", err)
 		}
 		if !retry {
 			fmt.Println("Verification not completed. You can retry later by running proxsave.")

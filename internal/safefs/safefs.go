@@ -17,6 +17,7 @@ var (
 	osReadDir     = os.ReadDir
 	osMkdirAll    = os.MkdirAll
 	osChmod       = os.Chmod
+	osLchmod      = lchmodNoFollow
 	osLchown      = os.Lchown
 	osOpen        = os.Open
 	osRemove      = os.Remove
@@ -233,6 +234,48 @@ func Chmod(ctx context.Context, path string, mode os.FileMode, timeout time.Dura
 		return struct{}{}, chmod(path, mode)
 	})
 	return err
+}
+
+// Lchmod is the symlink-safe counterpart to Chmod: it refuses (rather than
+// follows) a symlink at the final path component, closing the TOCTOU window
+// between an earlier symlink check and the chmod. Bounded like Chmod.
+func Lchmod(ctx context.Context, path string, mode os.FileMode, timeout time.Duration) error {
+	lchmod := osLchmod
+	_, err := runLimited(ctx, timeout, &TimeoutError{Op: "lchmod", Path: path, Timeout: effectiveTimeout(ctx, timeout)}, func() (struct{}, error) {
+		return struct{}{}, lchmod(path, mode)
+	})
+	return err
+}
+
+// lchmodNoFollow opens path with O_NOFOLLOW (a symlink final component fails with
+// ELOOP) and fchmods the resulting descriptor, so a symlink swapped in after an
+// earlier stat cannot redirect the chmod to another target. O_RDONLY (0) opens
+// regular files and directories for a root caller; O_NONBLOCK avoids blocking on
+// an unexpected FIFO/device; O_PATH is not used because fchmod on an O_PATH fd
+// returns EBADF.
+func lchmodNoFollow(path string, mode os.FileMode) error {
+	fd, err := syscall.Open(path, syscall.O_NOFOLLOW|syscall.O_CLOEXEC|syscall.O_NONBLOCK, 0)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = syscall.Close(fd) }() // fchmod already applied; a close error on the fd is not meaningful
+	return syscall.Fchmod(fd, chmodSyscallMode(mode))
+}
+
+// chmodSyscallMode maps an os.FileMode to the uint32 the fchmod syscall expects,
+// mirroring the standard library: permission bits plus setuid/setgid/sticky.
+func chmodSyscallMode(mode os.FileMode) uint32 {
+	m := uint32(mode.Perm())
+	if mode&os.ModeSetuid != 0 {
+		m |= syscall.S_ISUID
+	}
+	if mode&os.ModeSetgid != 0 {
+		m |= syscall.S_ISGID
+	}
+	if mode&os.ModeSticky != 0 {
+		m |= syscall.S_ISVTX
+	}
+	return m
 }
 
 // Lchown is the bounded counterpart to os.Lchown (equivalent to syscall.Lchown).

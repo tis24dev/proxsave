@@ -3,28 +3,29 @@ package orchestrator
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"strings"
 	"time"
 
-	"github.com/tis24dev/proxsave/internal/input"
+	"github.com/tis24dev/proxsave/internal/ui/components"
 )
 
 func (c *cliWorkflowUI) ConfirmAction(ctx context.Context, title, message, yesLabel, noLabel string, timeout time.Duration, defaultYes bool) (bool, error) {
 	_ = yesLabel
 	_ = noLabel
 
+	// message embeds backup-derived data (NIC names, PVE pool IDs); scrub the
+	// printed values, mirroring the charm ConfirmAction's NewConfirm scrub.
 	title = strings.TrimSpace(title)
 	if title != "" {
-		fmt.Printf("\n%s\n", title)
+		fmt.Printf("\n%s\n", components.SanitizeLine(title))
 	}
 	message = strings.TrimSpace(message)
 	if message != "" {
-		fmt.Println(message)
+		fmt.Println(components.SanitizeText(message))
 		fmt.Println()
 	}
-	question := title
+	question := components.SanitizeLine(title)
 	if question == "" {
 		question = "Proceed?"
 	}
@@ -37,41 +38,14 @@ func (c *cliWorkflowUI) RepairNICNames(ctx context.Context, archivePath string) 
 
 func (c *cliWorkflowUI) PromptNetworkCommit(ctx context.Context, remaining time.Duration, health networkHealthReport, nicRepair *nicRepairResult, diagnosticsDir string) (bool, error) {
 	if strings.TrimSpace(diagnosticsDir) != "" {
-		fmt.Printf("Network diagnostics saved under: %s\n", strings.TrimSpace(diagnosticsDir))
+		fmt.Printf("Network diagnostics saved under: %s\n", components.SanitizeLine(strings.TrimSpace(diagnosticsDir)))
 	}
-	fmt.Println(health.Details())
+	fmt.Println(components.SanitizeText(health.Details()))
 	if health.Severity == networkHealthCritical {
 		fmt.Println("CRITICAL: Connectivity checks failed. Recommended action: do NOT commit and let rollback run.")
 	}
 	if nicRepair != nil && strings.TrimSpace(nicRepair.Summary()) != "" {
-		fmt.Printf("\nNIC repair: %s\n", nicRepair.Summary())
+		fmt.Printf("\nNIC repair: %s\n", components.SanitizeText(nicRepair.Summary()))
 	}
 	return promptNetworkCommitWithCountdown(ctx, c.reader, c.logger, remaining)
-}
-
-func (u *tuiWorkflowUI) ConfirmAction(ctx context.Context, title, message, yesLabel, noLabel string, timeout time.Duration, defaultYes bool) (bool, error) {
-	title = strings.TrimSpace(title)
-	if title == "" {
-		title = "Confirm"
-	}
-	message = strings.TrimSpace(message)
-	if timeout > 0 {
-		return promptYesNoTUIWithCountdown(ctx, u.logger, title, u.configPath, u.buildSig, message, yesLabel, noLabel, timeout, defaultYes)
-	}
-	return promptYesNoTUIFunc(ctx, title, u.configPath, u.buildSig, message, yesLabel, noLabel, defaultYes)
-}
-
-func (u *tuiWorkflowUI) RepairNICNames(ctx context.Context, archivePath string) (*nicRepairResult, error) {
-	return repairNICNamesWithUI(ctx, u, u.logger, archivePath), nil
-}
-
-func (u *tuiWorkflowUI) PromptNetworkCommit(ctx context.Context, remaining time.Duration, health networkHealthReport, nicRepair *nicRepairResult, diagnosticsDir string) (bool, error) {
-	if err := ctx.Err(); err != nil {
-		return false, err
-	}
-	committed, err := promptNetworkCommitTUI(ctx, remaining, health, nicRepair, diagnosticsDir, u.configPath, u.buildSig)
-	if err != nil && errors.Is(err, input.ErrInputAborted) {
-		return false, err
-	}
-	return committed, err
 }

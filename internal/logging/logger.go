@@ -28,6 +28,12 @@ var (
 // stdout-only, rather than for the full (generous) FS_IO_TIMEOUT.
 const logWriteTimeoutCap = 5 * time.Second
 
+// logSinkTimeoutStrikes is how many CONSECUTIVE write timeouts disable the file
+// sink. One transient stall keeps the sink armed; a genuinely dead mount latches
+// after this many strikes (bounded added latency ~= strikes * logWriteTimeoutCap
+// once). A successful write resets the count.
+const logSinkTimeoutStrikes = 3
+
 // Logger handles application logging.
 type Logger struct {
 	mu         sync.Mutex
@@ -44,8 +50,23 @@ type Logger struct {
 	// fileSinkDisabled is set after an open/write/close timeout so subsequent log
 	// lines skip the (dead) file and go to stdout only. Guarded by mu.
 	fileSinkDisabled bool
-	warningCount     int64
-	errorCount       int64
+	// consecutiveLogTimeouts counts back-to-back write timeouts; the sink is disabled
+	// only after logSinkTimeoutStrikes strikes so a single transient stall does not
+	// permanently truncate the on-disk log. A successful write resets it. Guarded by mu.
+	consecutiveLogTimeouts int
+	warningCount           int64
+	errorCount             int64
+	// notifyCount tracks NOTIFY-ERR lines: notification/communication failures that
+	// display as errors but are warning-weight for the run status (never escalate the
+	// exit code / gauge to error). Kept separate from errorCount so a notify failure
+	// never looks like a backup error.
+	notifyCount int64
+	// notifyErrorScope, when > 0, reclassifies every unlabeled error/critical logged
+	// through this logger as a NOTIFY-ERR (display-error, warning-weight). It brackets
+	// the notification dispatch, whose whole subsystem (notifiers, adapter, serverbot)
+	// shares this one logger instance, so a channel outage never escalates the run.
+	// Guarded by mu; nestable via Enter/ExitNotifyErrorScope.
+	notifyErrorScope int
 	issueLines       []string // Captured WARNING/ERROR/CRITICAL lines for end-of-run summary
 	exitFunc         func(int)
 	secrets          []secretForm // registered secret values scrubbed from every log line
@@ -88,6 +109,20 @@ func New(level types.LogLevel, useColor bool) *Logger {
 		timeFormat: "2006-01-02 15:04:05",
 		exitFunc:   os.Exit,
 	}
+}
+
+// SwapOutput replaces the console writer and returns the previous one, so
+// full-screen UI sessions can silence the console for their lifetime (log
+// files are unaffected) and restore it afterwards.
+func (l *Logger) SwapOutput(w io.Writer) io.Writer {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	prev := l.output
+	if w == nil {
+		w = os.Stdout
+	}
+	l.output = w
+	return prev
 }
 
 // SetOutput sets the logger output writer.
@@ -150,6 +185,10 @@ func (l *Logger) OpenLogFile(logPath string) error {
 
 	l.logFile = file
 	l.fileSinkDisabled = false
+	// A fresh mount must start with a clean strike count: OpenLogFile is the only
+	// re-enable path, so any stale count from a prior disable would otherwise let
+	// a single new timeout re-latch the sink and defeat the N-strike protection.
+	l.consecutiveLogTimeouts = 0
 	return nil
 }
 
@@ -169,8 +208,10 @@ func (l *Logger) openFileBounded(logPath string) (*os.File, error) {
 
 // writeFileLocked writes one preformatted line to the open log file, bounding the
 // (O_SYNC) write so a dead/stale mount cannot wedge the logger while it holds l.mu.
-// On a write timeout the sink is permanently disabled (subsequent lines skip the
-// file). Caller MUST hold l.mu and have checked logFile != nil && !fileSinkDisabled.
+// A single write timeout is a strike; only logSinkTimeoutStrikes CONSECUTIVE
+// strikes permanently disable the sink (subsequent lines then skip the file). A
+// non-timeout outcome resets the streak. Caller MUST hold l.mu and have checked
+// logFile != nil && !fileSinkDisabled.
 func (l *Logger) writeFileLocked(line string) {
 	f := l.logFile // local: a disable nils l.logFile, the abandoned goroutine keeps f
 	if l.ioTimeout <= 0 {
@@ -185,8 +226,14 @@ func (l *Logger) writeFileLocked(line string) {
 		return fileWrite(f, line)
 	})
 	if err != nil && errors.Is(err, safefs.ErrTimeout) {
-		l.disableFileSinkLocked(err)
+		l.consecutiveLogTimeouts++
+		if l.consecutiveLogTimeouts >= logSinkTimeoutStrikes {
+			l.disableFileSinkLocked(err)
+		}
+		return
 	}
+	// Any non-timeout outcome (a clean write or a non-timeout error) breaks the streak.
+	l.consecutiveLogTimeouts = 0
 }
 
 // disableFileSinkLocked turns the file sink off after a timed-out write so every
@@ -198,9 +245,23 @@ func (l *Logger) disableFileSinkLocked(cause error) {
 	if l.fileSinkDisabled {
 		return
 	}
+	timestamp := time.Now().Format(l.timeFormat)
+	// Best-effort bounded marker so the shipped/attached on-disk log self-documents
+	// the cut. Bounded via the same safefs path (min(ioTimeout, cap)) so it cannot
+	// re-wedge; its failure is ignored. disableFileSinkLocked is only reached with
+	// ioTimeout > 0 (the bounded write path), so mwt is always positive.
+	if f := l.logFile; f != nil {
+		mwt := l.ioTimeout
+		if mwt > logWriteTimeoutCap {
+			mwt = logWriteTimeoutCap
+		}
+		marker := fmt.Sprintf("[%s] %-8s log file sink disabled after I/O timeout; on-disk log truncated here\n", timestamp, types.LogLevelWarning.String())
+		_, _ = safefs.Run(context.Background(), "logwrite-marker", f.Name(), mwt, func() (int, error) {
+			return fileWrite(f, marker)
+		})
+	}
 	l.fileSinkDisabled = true
 	l.logFile = nil
-	timestamp := time.Now().Format(l.timeFormat)
 	warn := fmt.Sprintf("log file sink disabled after I/O timeout (%v); continuing on stdout only", cause)
 	// stdout only - never route this back through the (dead) file sink.
 	_, _ = fmt.Fprintf(l.output, "[%s] %-8s %s\n", timestamp, types.LogLevelWarning.String(), warn)
@@ -251,6 +312,57 @@ func (l *Logger) GetLevel() types.LogLevel {
 	return l.level
 }
 
+// levelColorCode returns the ANSI color code for a level using the standard
+// console palette. It is the single source of truth for the level->color
+// mapping shared by the main Logger and FormatConsoleLogLine.
+func levelColorCode(level types.LogLevel) string {
+	switch level {
+	case types.LogLevelDebug:
+		return "\033[36m" // Cyan
+	case types.LogLevelInfo:
+		return "\033[32m" // Green
+	case types.LogLevelWarning:
+		return "\033[33m" // Yellow
+	case types.LogLevelError:
+		return "\033[31m" // Red
+	case types.LogLevelCritical:
+		return "\033[1;31m" // Bold Red
+	}
+	return ""
+}
+
+// assembleConsoleLine is the single source of truth for the stdout console log
+// format. Both the main Logger and FormatConsoleLogLine build their output from
+// this one Sprintf so the two can never drift. colorCode/resetCode are empty
+// when color is disabled.
+func assembleConsoleLine(timestamp, colorCode, levelStr, resetCode, message string) string {
+	return fmt.Sprintf("[%s] %s%-8s%s %s\n",
+		timestamp,
+		colorCode,
+		levelStr,
+		resetCode,
+		message,
+	)
+}
+
+// FormatConsoleLogLine returns the exact stdout console format used by the main
+// Logger for a standard (unlabelled) level:
+//
+//	[<timestamp>] <color><LEVEL padded %-8s><reset> <message>\n
+//
+// The color is applied only when useColor is true, using the same palette as
+// the main Logger (see levelColorCode). This shared formatter lets the
+// BootstrapLogger print early semantic lines with the same prefix as the main
+// Logger, so the console format stays consistent across the whole run.
+func FormatConsoleLogLine(timestamp string, level types.LogLevel, message string, useColor bool) string {
+	var colorCode, resetCode string
+	if useColor {
+		resetCode = "\033[0m"
+		colorCode = levelColorCode(level)
+	}
+	return assembleConsoleLine(timestamp, colorCode, level.String(), resetCode, message)
+}
+
 // log is the internal method used to write logs.
 func (l *Logger) log(level types.LogLevel, format string, args ...interface{}) {
 	l.logWithLabel(level, "", "", format, args...)
@@ -263,11 +375,25 @@ func (l *Logger) logWithLabel(level types.LogLevel, label string, colorOverride 
 		return
 	}
 
-	// Track warning/error counters for summary/exit coloring
-	switch level {
-	case types.LogLevelWarning:
+	// Inside a notification-dispatch scope, an unlabeled error/critical is a
+	// notification/communication failure: emit it as a NOTIFY-ERR (display-error,
+	// warning-weight) so a channel outage never escalates the run status. Explicitly
+	// labeled lines (PHASE/STEP/SKIP, or an already-NOTIFY-ERR) are left untouched.
+	if l.notifyErrorScope > 0 && label == "" &&
+		(level == types.LogLevelError || level == types.LogLevelCritical) {
+		label = NotifyErrorLabel
+	}
+
+	// Track warning/error counters for summary/exit coloring. A NOTIFY-ERR line
+	// (notification/communication failure) is emitted at error level but counts into
+	// notifyCount, not errorCount: it displays as an error yet is warning-weight for
+	// the run status.
+	switch {
+	case label == NotifyErrorLabel:
+		l.notifyCount++
+	case level == types.LogLevelWarning:
 		l.warningCount++
-	case types.LogLevelError, types.LogLevelCritical:
+	case level == types.LogLevelError, level == types.LogLevelCritical:
 		l.errorCount++
 	}
 
@@ -292,29 +418,16 @@ func (l *Logger) logWithLabel(level types.LogLevel, label string, colorOverride 
 		if colorOverride != "" {
 			colorCode = colorOverride
 		} else {
-			switch level {
-			case types.LogLevelDebug:
-				colorCode = "\033[36m" // Cyan
-			case types.LogLevelInfo:
-				colorCode = "\033[32m" // Green
-			case types.LogLevelWarning:
-				colorCode = "\033[33m" // Yellow
-			case types.LogLevelError:
-				colorCode = "\033[31m" // Red
-			case types.LogLevelCritical:
-				colorCode = "\033[1;31m" // Bold Red
-			}
+			colorCode = levelColorCode(level)
 		}
 	}
 
-	// Format for stdout (with colors if enabled).
-	outputStdout := fmt.Sprintf("[%s] %s%-8s%s %s\n",
-		timestamp,
-		colorCode,
-		levelStr,
-		resetCode,
-		message,
-	)
+	// Format for stdout (with colors if enabled). Built from the shared
+	// assembler so this and FormatConsoleLogLine can never drift. levelStr may
+	// be a label override (PHASE/STEP/SKIP) and colorCode a color override, so
+	// this path passes the resolved parts rather than calling
+	// FormatConsoleLogLine directly.
+	outputStdout := assembleConsoleLine(timestamp, colorCode, levelStr, resetCode, message)
 
 	// Format for file (without colors).
 	outputFile := fmt.Sprintf("[%s] %-8s %s\n",
@@ -368,6 +481,14 @@ func (l *Logger) ErrorCount() int64 {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	return l.errorCount
+}
+
+// NotifyCount returns the number of NOTIFY-ERR entries emitted (notification/
+// communication failures shown as errors but treated as warning-weight).
+func (l *Logger) NotifyCount() int64 {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.notifyCount
 }
 
 // IssueLines returns a copy of captured WARNING/ERROR/CRITICAL log lines in
@@ -437,6 +558,55 @@ func (l *Logger) Warning(format string, args ...interface{}) {
 // Error writes an error log.
 func (l *Logger) Error(format string, args ...interface{}) {
 	l.log(types.LogLevelError, format, args...)
+}
+
+// NotifyErrorLabel is the level token written for a NOTIFY-ERR line: a
+// notification/communication failure that must display as an error but stay
+// warning-weight for the run exit code / status gauge.
+const NotifyErrorLabel = "NOTIFY-ERR"
+
+// NotifyError writes a notification/communication failure. It renders like an error
+// (red, captured in the issue summary) but is tallied into notifyCount rather than
+// errorCount, so it displays as ERROR yet never escalates the run status to error.
+// The run-side count logic buckets the NOTIFY-ERR token as warning-weight.
+func (l *Logger) NotifyError(format string, args ...interface{}) {
+	if l == nil {
+		return
+	}
+	l.logWithLabel(types.LogLevelError, NotifyErrorLabel, "", format, args...)
+}
+
+// NormalizeNotifyErrorToken rewrites the NOTIFY-ERR level token in a captured issue
+// line to ERROR, so recap/footer renderers present notify failures as errors.
+func NormalizeNotifyErrorToken(line string) string {
+	return strings.Replace(line, NotifyErrorLabel, "ERROR", 1)
+}
+
+// EnterNotifyErrorScope brackets a region (the notification dispatch) in which every
+// unlabeled error/critical logged through this logger is a notification/communication
+// failure: it displays as an error but is warning-weight for the run status. Balanced
+// by ExitNotifyErrorScope and nestable. Because the whole notification subsystem shares
+// this one logger instance, wrapping the (sequential) dispatch reclassifies every
+// channel failure in one place, with no per-call-site edits.
+func (l *Logger) EnterNotifyErrorScope() {
+	if l == nil {
+		return
+	}
+	l.mu.Lock()
+	l.notifyErrorScope++
+	l.mu.Unlock()
+}
+
+// ExitNotifyErrorScope ends one EnterNotifyErrorScope level.
+func (l *Logger) ExitNotifyErrorScope() {
+	if l == nil {
+		return
+	}
+	l.mu.Lock()
+	if l.notifyErrorScope > 0 {
+		l.notifyErrorScope--
+	}
+	l.mu.Unlock()
 }
 
 // Critical writes a critical log.

@@ -24,10 +24,10 @@ jobs:
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
 
       ########################################
-      # GO 1.25 — MAIN TOOLCHAIN
+      # GO 1.25 - MAIN TOOLCHAIN
       ########################################
       - name: Set up Go (from go.mod)
-        uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
         with:
           go-version-file: 'go.mod'
           cache: false
@@ -36,7 +36,7 @@ jobs:
         run: go version
 
       ########################################
-      # STATICCHECK — RUNS NATIVELY ON GO 1.25
+      # STATICCHECK - RUNS NATIVELY ON GO 1.25
       ########################################
       - name: Install Staticcheck
         run: go install honnef.co/go/tools/cmd/staticcheck@2025.1.1
@@ -45,7 +45,7 @@ jobs:
         run: staticcheck ./... || true
 
       ########################################
-      # GOVULNCHECK — NATIVE
+      # GOVULNCHECK - NATIVE
       ########################################
       - name: Install govulncheck
         run: go install golang.org/x/vuln/cmd/govulncheck@latest
@@ -57,10 +57,10 @@ jobs:
         run: govulncheck ./...
 
       ########################################
-      # GOSEC — runs under the project's Go (from go.mod, currently 1.25).
+      # GOSEC - runs under the project's Go (from go.mod, currently 1.25).
       # gosec must be a version that supports the project's Go: support for Go
       # 1.25 landed in gosec v2.25.0, so the old v2.20.0 (built for Go ≤1.22)
-      # could not type-check this code — combined with -no-fail/|| true it would
+      # could not type-check this code - combined with -no-fail/|| true it would
       # silently emit an empty SARIF. Keep gosec current with the Go toolchain.
       ########################################
       - name: Install GoSec
@@ -89,7 +89,7 @@ jobs:
       # UPLOAD SARIF
       ########################################
       - name: Upload GoSec SARIF
-        uses: github/codeql-action/upload-sarif@8aad20d150bbac5944a9f9d289da16a4b0d87c1e
+        uses: github/codeql-action/upload-sarif@99df26d4f13ea111d4ec1a7dddef6063f76b97e9
         with:
           sarif_file: gosec.sarif
 

@@ -8,6 +8,7 @@ import (
 
 	"github.com/tis24dev/proxsave/internal/logging"
 	"github.com/tis24dev/proxsave/internal/notify"
+	"github.com/tis24dev/proxsave/internal/serverbot"
 )
 
 // NotificationAdapter adapts notify.Notifier to NotificationChannel interface
@@ -316,7 +317,12 @@ func formatBytesHR(bytes uint64) string {
 	}
 
 	val := float64(bytes) / float64(div)
-	units := []string{"KB", "MB", "GB", "TB", "PB"}
+	// EB covers the full uint64 range (max ~16 EiB -> exp=5); the clamp is a defensive
+	// backstop so no exponent can index past the slice and panic (P-07).
+	units := []string{"KB", "MB", "GB", "TB", "PB", "EB"}
+	if exp >= len(units) {
+		exp = len(units) - 1
+	}
 	return fmt.Sprintf("%.2f %s", val, units[exp])
 }
 
@@ -390,9 +396,39 @@ func (n *NotificationAdapter) recordNotifierStatus(stats *BackupStats, result *n
 		} else {
 			stats.TelegramStatus = base
 		}
+		// Dual-write (S3): the relay may have piggybacked a fresh portal magic-link on
+		// the /api/notify response. Validate it at this capture boundary (sanitize AND
+		// require the bot-server's own registrable domain, TrustedLoginURL) so a hostile
+		// response cannot surface a foreign phishing host to root; the S4 display boundary
+		// re-sanitizes as a belt. A foreign/unsafe link is dropped, never stashed.
+		if result != nil && result.Metadata != nil {
+			if link, ok := result.Metadata["login_url"].(string); ok && link != "" {
+				if trusted := serverbot.TrustedLoginURL(link, defaultServerAPIHost); trusted != "" {
+					stats.HealthcheckLink = trusted
+				}
+			}
+		}
 	case "Email":
 		stats.EmailStatus = describeNotificationSeverity(result)
 	}
+
+	// Capture EVERY channel's outcome (incl. Gotify/Webhook, which have no legacy status
+	// field) as a severity keyed by display name, for the per-channel healthchecks sensors
+	// the daemon pings (Fase 2B / R4). notifierSensorSeverity is channel-agnostic but also
+	// downgrades a relay-accepted-but-undelivered Telegram message to a sensor failure.
+	setNotifyResult(stats, n.notifier.Name(), notifierSensorSeverity(result))
+}
+
+// setNotifyResult records channel -> severity into stats.NotifyResults, lazily allocating
+// the map. Safe on a nil stats / empty name.
+func setNotifyResult(stats *BackupStats, name, severity string) {
+	if stats == nil || name == "" {
+		return
+	}
+	if stats.NotifyResults == nil {
+		stats.NotifyResults = make(map[string]string)
+	}
+	stats.NotifyResults[name] = severity
 }
 
 func describeNotificationResult(result *notify.NotificationResult) string {
@@ -428,6 +464,37 @@ func describeNotificationSeverity(result *notify.NotificationResult) string {
 		return "warning"
 	}
 	return "ok"
+}
+
+// telegramDeliveryFailed reports whether a relay-accepted Telegram notification
+// came back from the delivery poll as a DEFINITIVE failure (bot blocked, gave up
+// after TTL). It gates on the relay_accepted VALUE so a never-accepted POST
+// (Success=false, no telegram_state) is not counted here, and only "failed"
+// counts, not "pending"/"unconfirmed" (which may still deliver or are simply not
+// confirmed). Other channels never set these keys, so it is a no-op for them.
+func telegramDeliveryFailed(result *notify.NotificationResult) bool {
+	if result == nil || result.Metadata == nil {
+		return false
+	}
+	if accepted, _ := result.Metadata["relay_accepted"].(bool); !accepted {
+		return false
+	}
+	state, _ := result.Metadata["telegram_state"].(string)
+	return state == "failed"
+}
+
+// notifierSensorSeverity is the severity recorded for the per-channel monitoring
+// sensor the daemon pings. It is describeNotificationSeverity plus one refinement:
+// a relay-accepted Telegram message whose delivery poll came back "failed" drives
+// the sensor DOWN ("error"), even though result.Success stays true. Server
+// acceptance is the run's success signal (see recordRelayAcceptedAndPoll), but the
+// per-channel sensor must reflect that the message was never delivered; otherwise
+// it would report "ok" on an undelivered message and defeat per-channel monitoring.
+func notifierSensorSeverity(result *notify.NotificationResult) string {
+	if telegramDeliveryFailed(result) {
+		return "error"
+	}
+	return describeNotificationSeverity(result)
 }
 
 // logTelegramOutcome prints the two-response result for the Telegram RELAY path:

@@ -1,12 +1,10 @@
 package orchestrator
 
 import (
-	"context"
-	"errors"
 	"strings"
 	"testing"
 
-	"github.com/rivo/tview"
+	"charm.land/lipgloss/v2"
 )
 
 func TestFilterAndSortCategoriesForSystem(t *testing.T) {
@@ -36,6 +34,32 @@ func TestFilterAndSortCategoriesForSystem(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// The restore plan is shown in a non-wrapping Pager, so an over-width line is
+// truncated (only reachable via horizontal scroll). Every static plan line must
+// fit a conventional 80-column terminal. The TFA/WebAuthn advisory is the tightest
+// line; a config that arms it plus short paths must keep every line within 80.
+func TestBuildRestorePlanTextLinesFit80Columns(t *testing.T) {
+	config := &SelectiveRestoreConfig{
+		Mode:       RestoreModeCustom,
+		SystemType: SystemTypePVE,
+		SelectedCategories: []Category{
+			// pve_access_control without network+ssl arms the TFA/WebAuthn advisory.
+			{ID: "pve_access_control", Name: "Access control", Description: "Users, roles, TFA", Paths: []string{"./etc/pve/user.cfg"}},
+		},
+	}
+
+	text := buildRestorePlanText(config)
+
+	if !strings.Contains(text, "TFA/WebAuthn") {
+		t.Fatalf("expected the TFA/WebAuthn advisory to be present:\n%s", text)
+	}
+	for _, line := range strings.Split(text, "\n") {
+		if w := lipgloss.Width(line); w > 80 {
+			t.Errorf("plan line exceeds 80 columns (%d): %q", w, line)
+		}
 	}
 }
 
@@ -71,135 +95,4 @@ func TestBuildRestorePlanText(t *testing.T) {
 	if !strings.Contains(text, "Existing files at these locations will be OVERWRITTEN") {
 		t.Fatalf("missing warning text")
 	}
-}
-
-func TestBuildRestoreWizardPageReturnsFlex(t *testing.T) {
-	content := tview.NewBox()
-	page := buildRestoreWizardPage("Title", "/etc/proxsave/backup.env", "sig", content)
-	if page == nil {
-		t.Fatalf("expected non-nil page")
-	}
-	if _, ok := page.(*tview.Flex); !ok {
-		t.Fatalf("expected *tview.Flex, got %T", page)
-	}
-}
-
-func TestPromptCompatibilityTUIUsesWarningText(t *testing.T) {
-	restore := stubPromptYesNo(func(ctx context.Context, title, configPath, buildSig, message, yesLabel, noLabel string, defaultYes bool) (bool, error) {
-		if title != "Compatibility warning" {
-			t.Fatalf("unexpected title %q", title)
-		}
-		if !strings.Contains(message, "boom") {
-			t.Fatalf("missing error text: %s", message)
-		}
-		if yesLabel != "Continue anyway" || noLabel != "Abort restore" {
-			t.Fatalf("unexpected button labels %q/%q", yesLabel, noLabel)
-		}
-		return true, nil
-	})
-	defer restore()
-
-	ok, err := promptCompatibilityTUI(context.Background(), "cfg", "sig", errors.New("boom"))
-	if err != nil || !ok {
-		t.Fatalf("promptCompatibilityTUI returned %v, %v", ok, err)
-	}
-}
-
-func TestPromptCompatibilityTUIEscapesBracketedWarningText(t *testing.T) {
-	restore := stubPromptYesNo(func(ctx context.Context, title, configPath, buildSig, message, yesLabel, noLabel string, defaultYes bool) (bool, error) {
-		if !strings.Contains(message, tview.Escape("bad [warning]")) {
-			t.Fatalf("expected escaped bracketed warning, got %q", message)
-		}
-		return true, nil
-	})
-	defer restore()
-
-	ok, err := promptCompatibilityTUI(context.Background(), "cfg", "sig", errors.New("bad [warning]"))
-	if err != nil || !ok {
-		t.Fatalf("promptCompatibilityTUI returned %v, %v", ok, err)
-	}
-}
-
-func TestPromptContinueWithoutSafetyBackupTUI(t *testing.T) {
-	restore := stubPromptYesNo(func(ctx context.Context, title, configPath, buildSig, message, yesLabel, noLabel string, defaultYes bool) (bool, error) {
-		if title != "Safety backup failed" {
-			t.Fatalf("unexpected title %q", title)
-		}
-		if !strings.Contains(message, "failure") {
-			t.Fatalf("missing cause text: %s", message)
-		}
-		return false, nil
-	})
-	defer restore()
-
-	ok, err := promptContinueWithoutSafetyBackupTUI(context.Background(), "cfg", "sig", errors.New("failure"))
-	if err != nil {
-		t.Fatalf("promptContinueWithoutSafetyBackupTUI error: %v", err)
-	}
-	if ok {
-		t.Fatalf("expected false decision")
-	}
-}
-
-func TestPromptContinueWithoutSafetyBackupTUIEscapesBracketedCause(t *testing.T) {
-	restore := stubPromptYesNo(func(ctx context.Context, title, configPath, buildSig, message, yesLabel, noLabel string, defaultYes bool) (bool, error) {
-		if !strings.Contains(message, tview.Escape("bad [cause]")) {
-			t.Fatalf("expected escaped bracketed cause, got %q", message)
-		}
-		return false, nil
-	})
-	defer restore()
-
-	ok, err := promptContinueWithoutSafetyBackupTUI(context.Background(), "cfg", "sig", errors.New("bad [cause]"))
-	if err != nil {
-		t.Fatalf("promptContinueWithoutSafetyBackupTUI error: %v", err)
-	}
-	if ok {
-		t.Fatalf("expected false decision")
-	}
-}
-
-func TestPromptContinueWithPBSServicesTUI(t *testing.T) {
-	restore := stubPromptYesNo(func(ctx context.Context, title, configPath, buildSig, message, yesLabel, noLabel string, defaultYes bool) (bool, error) {
-		if title != "PBS services running" {
-			t.Fatalf("unexpected title %q", title)
-		}
-		if yesLabel != "Continue restore" || noLabel != "Abort restore" {
-			t.Fatalf("unexpected button labels %q/%q", yesLabel, noLabel)
-		}
-		return true, nil
-	})
-	defer restore()
-
-	ok, err := promptContinueWithPBSServicesTUI(context.Background(), "cfg", "sig")
-	if err != nil || !ok {
-		t.Fatalf("promptContinueWithPBSServicesTUI returned %v, %v", ok, err)
-	}
-}
-
-func TestConfirmOverwriteTUI(t *testing.T) {
-	restore := stubPromptYesNo(func(ctx context.Context, title, configPath, buildSig, message, yesLabel, noLabel string, defaultYes bool) (bool, error) {
-		if title != "Confirm overwrite" {
-			t.Fatalf("unexpected title %q", title)
-		}
-		if yesLabel != "Overwrite and restore" || noLabel != "Cancel" {
-			t.Fatalf("unexpected labels %q/%q", yesLabel, noLabel)
-		}
-		if !strings.Contains(message, "overwrite existing configuration files") {
-			t.Fatalf("missing warning text: %s", message)
-		}
-		return true, nil
-	})
-	defer restore()
-
-	ok, err := confirmOverwriteTUI(context.Background(), "cfg", "sig")
-	if err != nil || !ok {
-		t.Fatalf("confirmOverwriteTUI returned %v, %v", ok, err)
-	}
-}
-
-func stubPromptYesNo(fn func(ctx context.Context, title, configPath, buildSig, message, yesLabel, noLabel string, defaultYes bool) (bool, error)) func() {
-	orig := promptYesNoTUIFunc
-	promptYesNoTUIFunc = fn
-	return func() { promptYesNoTUIFunc = orig }
 }

@@ -1,0 +1,299 @@
+// Package health reports backup outcomes and a liveness heartbeat to a
+// healthchecks.io-compatible monitor (our self-hosted instance or the SaaS).
+//
+// It is deliberately dependency-light: an *http.Client plus a map of already-resolved
+// ping URLs keyed by check name ("alive", "backup", "updates", "notify-<channel>"). URL
+// resolution (centralized fetch from the proxsave_server, or self-mode
+// endpoint+slug assembly) lives elsewhere; this package only pings. The Reporter
+// takes no *logging.Logger, so it is trivially unit-testable without wiring a
+// logger; the daemon that wires it registers the ping URLs as log secrets.
+// (The package as a whole does now touch logging transitively via the
+// centralized-config fetch in config.go -> serverbot; the Reporter itself does not.)
+package health
+
+import (
+	"context"
+	"crypto/rand"
+	"errors"
+	"fmt"
+	"io"
+	"net/http"
+	"net/url"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/tis24dev/proxsave/internal/version"
+)
+
+// Ping suffixes on a healthchecks check URL (same identifier, different suffix).
+const (
+	suffixStart = "/start" // run started (pair with ?rid for duration)
+	suffixFail  = "/fail"  // definitive failure (used for the hang case)
+	suffixLog   = "/log"   // records a ping WITHOUT changing check state (test only)
+)
+
+// healthchecks accepts a diagnostic body up to 100 kB (UTF-8).
+const maxPingBody = 100 * 1024
+
+// pingTimeout bounds a single ping; a slow/down monitor must never stall the daemon.
+const pingTimeout = 10 * time.Second
+
+var (
+	// ErrNoAliveURL / ErrNoBackupURL are returned when a ping is attempted before
+	// the corresponding check URL has been resolved (e.g. centralized fetch not yet
+	// succeeded). The daemon treats these as "not reportable yet", not fatal.
+	ErrNoAliveURL  = errors.New("healthcheck: alive ping url not configured")
+	ErrNoBackupURL = errors.New("healthcheck: backup ping url not configured")
+	// ErrNoUpdatesURL mirrors the two above for the updates-report ping: returned when
+	// ReportUpdate runs before the updates check URL is resolved. Treated as "not
+	// reportable yet", never fatal.
+	ErrNoUpdatesURL = errors.New("healthcheck: updates ping url not configured")
+	// ErrNoPingURL is the generic twin returned by Ping when a dynamic check name
+	// (e.g. a per-notification-channel check) has no resolved URL yet. Same "not
+	// reportable yet" meaning as the three named sentinels above.
+	ErrNoPingURL = errors.New("healthcheck: ping url not configured")
+)
+
+// IsNoURLErr reports whether err is any of the "url not resolved yet" sentinels, so
+// callers can record a no_url liveness trace instead of a genuine transmission error
+// without a brittle per-sentinel OR-chain.
+func IsNoURLErr(err error) bool {
+	return errors.Is(err, ErrNoAliveURL) || errors.Is(err, ErrNoBackupURL) ||
+		errors.Is(err, ErrNoUpdatesURL) || errors.Is(err, ErrNoPingURL)
+}
+
+// Reporter pings a healthchecks-compatible monitor. Zero value is not usable;
+// build one with NewReporter.
+type Reporter struct {
+	client  *http.Client
+	urls    map[string]string // check name -> normalized base ping URL
+	sendLog bool
+}
+
+// Config configures a Reporter. AliveURL/BackupURL are full ping URLs, e.g.
+// "https://hc.proxsave.dev/ping/<uuid>"; either may be empty (the matching ping then
+// returns ErrNo*URL). Checks carries every OTHER check by name ("updates",
+// "notify-<channel>", ...) and is folded into the same url map. A nil Client gets a
+// default with a bounded timeout.
+type Config struct {
+	Client    *http.Client
+	AliveURL  string
+	BackupURL string
+	Checks    map[string]string // dynamic check name -> full ping URL (updates, notify-*)
+	SendLog   bool              // POST a log tail on non-success backup outcomes
+}
+
+// normalizeURL trims surrounding space and any trailing slash so a base URL joins
+// cleanly with a suffix.
+func normalizeURL(u string) string { return strings.TrimRight(strings.TrimSpace(u), "/") }
+
+// NewReporter builds a Reporter from Config. The url map is seeded from the named
+// AliveURL/BackupURL (which ride the frozen top-level wire keys) and then overlaid with
+// every non-empty Checks entry (updates, notify-*), so the whole dynamic map folds in
+// idempotently.
+func NewReporter(c Config) *Reporter {
+	client := c.Client
+	if client == nil {
+		client = &http.Client{Timeout: pingTimeout}
+	}
+	urls := make(map[string]string)
+	if a := normalizeURL(c.AliveURL); a != "" {
+		urls[CheckKeyAlive] = a
+	}
+	if b := normalizeURL(c.BackupURL); b != "" {
+		urls[CheckKeyBackup] = b
+	}
+	for name, u := range c.Checks {
+		if nu := normalizeURL(u); nu != "" {
+			urls[name] = nu
+		}
+	}
+	return &Reporter{client: client, urls: urls, sendLog: c.SendLog}
+}
+
+// HasCheck reports whether the named check URL is resolved.
+func (r *Reporter) HasCheck(name string) bool { return r.urls[name] != "" }
+
+// HasBackupURL reports whether the backup-outcome check URL is resolved.
+func (r *Reporter) HasBackupURL() bool { return r.HasCheck(CheckKeyBackup) }
+
+// HasAliveURL reports whether the service-alive check URL is resolved.
+func (r *Reporter) HasAliveURL() bool { return r.HasCheck(CheckKeyAlive) }
+
+// HasUpdatesURL reports whether the updates-report check URL is resolved.
+func (r *Reporter) HasUpdatesURL() bool { return r.HasCheck(CheckKeyUpdates) }
+
+// pingCheck resolves the named check's base URL and pings base+suffix(+?rid). Returns
+// ErrNoPingURL when the name has no resolved URL. This is the single primitive behind
+// both the named wrappers and the generic Ping.
+func (r *Reporter) pingCheck(ctx context.Context, name, suffix, rid, body, label string) error {
+	base := r.urls[name]
+	if base == "" {
+		return ErrNoPingURL
+	}
+	return r.ping(ctx, pingURL(base, suffix, rid), body, label)
+}
+
+// Ping is the generic per-check ping: it pings the named check with the given suffix
+// ("/0", "/1", ...). Used for the dynamic per-notification-channel checks. suffix and
+// rid may be empty. Returns ErrNoPingURL if name is not resolved.
+func (r *Reporter) Ping(ctx context.Context, name, suffix, rid, body, label string) error {
+	return r.pingCheck(ctx, name, suffix, rid, body, label)
+}
+
+// Heartbeat pings the "service alive" check with a success ping. Called on a
+// fixed interval from the daemon so silence (host down / daemon dead) is detected
+// server-side.
+func (r *Reporter) Heartbeat(ctx context.Context) error {
+	if !r.HasAliveURL() {
+		return ErrNoAliveURL
+	}
+	return r.pingCheck(ctx, CheckKeyAlive, "", "", "", "alive")
+}
+
+// RunStarted pings /start on the backup-outcome check. rid correlates this with
+// the later outcome ping so the monitor can measure run duration.
+func (r *Reporter) RunStarted(ctx context.Context, rid string) error {
+	if !r.HasBackupURL() {
+		return ErrNoBackupURL
+	}
+	return r.pingCheck(ctx, CheckKeyBackup, suffixStart, rid, "", "start")
+}
+
+// RunFinished pings the backup-outcome check with the run's exit status
+// (/<0-255>: 0 = success, non-zero = fail so the user is alerted). On a non-zero
+// outcome, and when SendLog is set, the log tail is attached as the POST body.
+func (r *Reporter) RunFinished(ctx context.Context, rid string, exitCode int, logTail string) error {
+	if !r.HasBackupURL() {
+		return ErrNoBackupURL
+	}
+	body := ""
+	if r.sendLog && exitCode != 0 {
+		body = logTail
+	}
+	suffix := "/" + strconv.Itoa(clampExit(exitCode))
+	return r.pingCheck(ctx, CheckKeyBackup, suffix, rid, body, "finish")
+}
+
+// RunHang pings /fail on the backup-outcome check when the supervised child
+// exceeded its budget and was killed (no exit code to report). The body records
+// the timeout so the monitor UI shows why.
+func (r *Reporter) RunHang(ctx context.Context, rid string, timeout time.Duration, logTail string) error {
+	if !r.HasBackupURL() {
+		return ErrNoBackupURL
+	}
+	body := fmt.Sprintf("timed out after %s", timeout)
+	if r.sendLog && logTail != "" {
+		body = body + "\n\n" + logTail
+	}
+	return r.pingCheck(ctx, CheckKeyBackup, suffixFail, rid, body, "hang")
+}
+
+// ReportUpdate pings the "updates" check with the update-availability signal:
+// available==false -> /0 (up to date; the check stays UP/green), available==true -> /1
+// (a non-zero "exit" so the check goes DOWN/red and fires the user's alerts), mirroring
+// RunFinished's /<code> convention. Whether the ping transmitted is a separate outcome
+// the caller records; this only encodes the signal.
+func (r *Reporter) ReportUpdate(ctx context.Context, available bool) error {
+	if !r.HasUpdatesURL() {
+		return ErrNoUpdatesURL
+	}
+	suffix := "/0"
+	if available {
+		suffix = "/1"
+	}
+	return r.pingCheck(ctx, CheckKeyUpdates, suffix, "", "", "updates")
+}
+
+// TestPing hits base + /log, which records a ping WITHOUT changing the check
+// state, and asserts a 2xx. Used by the install wizard connectivity test so a
+// "Verify" never leaves a spurious success/fail on the user's check.
+func (r *Reporter) TestPing(ctx context.Context, base string) error {
+	base = normalizeURL(base)
+	if base == "" {
+		return ErrNoAliveURL
+	}
+	return r.ping(ctx, base+suffixLog, "", "log")
+}
+
+// ping does one POST to a check URL. POST (not GET) is used uniformly so an
+// optional diagnostic body can ride along; an empty body is a plain ping. Errors
+// carry only the label + status, never the URL (the check UUID is a low-capability
+// secret).
+func (r *Reporter) ping(ctx context.Context, u, body, label string) error {
+	reqCtx, cancel := context.WithTimeout(ctx, pingTimeout)
+	defer cancel()
+
+	var rdr io.Reader
+	if body != "" {
+		if len(body) > maxPingBody { // keep the TAIL (most recent lines)
+			body = body[len(body)-maxPingBody:]
+		}
+		rdr = strings.NewReader(body)
+	}
+	req, err := http.NewRequestWithContext(reqCtx, http.MethodPost, u, rdr)
+	if err != nil {
+		return fmt.Errorf("healthcheck %s: %w", label, redactURLErr(err))
+	}
+	req.Header.Set("User-Agent", "proxsave/"+version.String())
+
+	resp, err := r.client.Do(req)
+	if err != nil {
+		return fmt.Errorf("healthcheck %s: %w", label, redactURLErr(err))
+	}
+	defer func() { _ = resp.Body.Close() }()
+	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1024))
+
+	if resp.StatusCode/100 != 2 {
+		return fmt.Errorf("healthcheck %s: HTTP %d", label, resp.StatusCode)
+	}
+	return nil
+}
+
+// redactURLErr strips the URL from a *url.Error so it never reaches a log or a
+// caller: the ping URL embeds the check UUID (a low-capability secret). net's
+// *url.Error.Error() prints the full URL verbatim; we keep only the operation +
+// underlying transport error. Kept local (not logging.RedactURLError) so the
+// Reporter stays *logging.Logger-free; it is the byte-identical twin of
+// logging.RedactURLError (the canonical copy serverbot uses) -- keep them in sync.
+func redactURLErr(err error) error {
+	var ue *url.Error
+	if errors.As(err, &ue) {
+		return fmt.Errorf("%s: %w", ue.Op, ue.Err)
+	}
+	return err
+}
+
+// pingURL joins a check base URL with a suffix and an optional rid query.
+func pingURL(base, suffix, rid string) string {
+	u := base + suffix
+	if rid != "" {
+		u += "?rid=" + url.QueryEscape(rid)
+	}
+	return u
+}
+
+// clampExit bounds an exit code into the /<0-255> ping range healthchecks accepts.
+func clampExit(code int) int {
+	if code < 0 {
+		return 255
+	}
+	if code > 255 {
+		return 255
+	}
+	return code
+}
+
+// NewRunID returns a random RFC-4122 v4 UUID string for use as a run correlation
+// id (rid). Falls back to a timestamp-free zero-ish value only if the system CSPRNG
+// fails, which in practice does not happen.
+func NewRunID() string {
+	var b [16]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return "00000000-0000-4000-8000-000000000000"
+	}
+	b[6] = (b[6] & 0x0f) | 0x40 // version 4
+	b[8] = (b[8] & 0x3f) | 0x80 // variant 10
+	return fmt.Sprintf("%x-%x-%x-%x-%x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:16])
+}

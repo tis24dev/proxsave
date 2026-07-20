@@ -159,7 +159,18 @@ func readTarEntry(ctx context.Context, archivePath, name string, maxBytes int64)
 	if err != nil {
 		return nil, fmt.Errorf("create decompression reader: %w", err)
 	}
-	defer closeDecompressionReader(reader, &err, "close decompression reader")
+	// We stop reading as soon as we find the wanted entry; a piped decompressor
+	// (xz/zstd/bzip2/lzma) then dies on SIGPIPE and its close/Wait returns an
+	// EXPECTED error. Swallow a close error only on the success path; a genuine
+	// mid-stream decompression failure before the entry is still surfaced via the
+	// read error below (gotEntry stays false).
+	gotEntry := false
+	defer func() {
+		cerr := reader.Close()
+		if cerr != nil && err == nil && !gotEntry {
+			err = fmt.Errorf("close decompression reader: %w", cerr)
+		}
+	}()
 
 	wantA := strings.TrimPrefix(strings.TrimSpace(name), "./")
 	wantB := "./" + wantA
@@ -191,14 +202,15 @@ func readTarEntry(ctx context.Context, archivePath, name string, maxBytes int64)
 			limit = header.Size
 		}
 		lr := io.LimitReader(tarReader, limit+1)
-		data, err := io.ReadAll(lr)
-		if err != nil {
-			return nil, err
+		content, rerr := io.ReadAll(lr)
+		if rerr != nil {
+			return nil, rerr
 		}
-		if int64(len(data)) > limit {
+		if int64(len(content)) > limit {
 			return nil, fmt.Errorf("archive entry %s too large (%d bytes)", header.Name, header.Size)
 		}
-		return data, nil
+		gotEntry = true
+		return content, nil
 	}
 }
 

@@ -361,7 +361,7 @@ func (c *Checker) verifyBinaryIntegrity(ctx context.Context) {
 	info, err := safefs.Lstat(ctx, c.execPath, c.fsTimeout)
 	if err != nil {
 		if errors.Is(err, safefs.ErrTimeout) {
-			c.addWarning("Security check: stat of executable %s timed out after %s; skipping integrity check (dead/stale mount?)", c.execPath, c.fsTimeout)
+			c.addError("Security check: stat of executable %s timed out after %s; skipping integrity check (dead/stale mount?)", c.execPath, c.fsTimeout)
 			return
 		}
 		c.addError("Cannot stat executable %s: %v", c.execPath, err)
@@ -378,7 +378,7 @@ func (c *Checker) verifyBinaryIntegrity(ctx context.Context) {
 	if err != nil {
 		if errors.Is(err, safefs.ErrTimeout) {
 			// safefs.Open abandoned its worker on timeout; f is nil, nothing to close.
-			c.addWarning("Security check: opening executable %s timed out after %s; skipping integrity check (dead/stale mount?)", c.execPath, c.fsTimeout)
+			c.addError("Security check: opening executable %s timed out after %s; skipping integrity check (dead/stale mount?)", c.execPath, c.fsTimeout)
 			return
 		}
 		c.addError("Cannot open executable %s: %v", c.execPath, err)
@@ -395,7 +395,17 @@ func (c *Checker) verifyBinaryIntegrity(ctx context.Context) {
 		c.addError("Executable %s changed during integrity check; aborting", c.execPath)
 		return
 	}
-	c.ensureOwnershipAndPermFromFD(f, openedInfo, 0o700, fmt.Sprintf("Executable %s", c.execPath))
+	execDesc := fmt.Sprintf("Executable %s", c.execPath)
+	// For the executable, integrity means root-owned and not writable by group or
+	// other; the exact owner mode is intentionally not enforced. A self-managed 0700
+	// binary and a package-managed 0755 /usr/bin binary are equally tamper-proof (only
+	// root can replace either), and the binary is public compiled code, so demanding
+	// exactly 0700 would only raise false positives on FHS-packaged installs. Passing
+	// expectedPerm 0 runs the root:root ownership check without the exact-mode check;
+	// the group/other-write guard follows. The key/config/backup paths keep their
+	// strict 0700/0600 checks.
+	c.ensureOwnershipAndPermFromFD(f, openedInfo, 0, execDesc)
+	c.ensureExecutableOwnerWriteOnly(f, openedInfo, execDesc)
 
 	currentHash, err := checksumReader(f)
 	if err != nil {
@@ -475,15 +485,33 @@ func (c *Checker) verifyBinaryIntegrity(ctx context.Context) {
 	}
 }
 
-// writeHashFile writes currentHash to hashFile under the fs timeout. os.WriteFile
-// opens the path, which a dead/stale mount can wedge, so the write is bounded
-// with safefs.Run; on timeout a *TimeoutError (wrapping safefs.ErrTimeout) is
-// returned and the caller surfaces it through its best-effort
-// "Failed to create/update hash file" warning. With c.fsTimeout <= 0 (legacy /
-// FS_IO_TIMEOUT unset) safefs.Run is a direct synchronous os.WriteFile.
+// writeHashFile writes currentHash to hashFile under the fs timeout. Opening the
+// path can wedge on a dead/stale mount, so the write is bounded with safefs.Run;
+// on timeout a *TimeoutError (wrapping safefs.ErrTimeout) is returned and the
+// caller surfaces it through its best-effort "Failed to create/update hash
+// file" warning. With c.fsTimeout <= 0 (legacy / FS_IO_TIMEOUT unset) safefs.Run
+// calls the write function directly and synchronously. The write itself mirrors
+// the read path: it opens the .md5 confined to its directory via os.OpenRoot and
+// writes through Root.OpenFile with a bare basename, so a symlink planted at the
+// final path component is refused rather than followed (F03-14).
 func (c *Checker) writeHashFile(ctx context.Context, hashFile, currentHash string) error {
 	_, err := safefs.Run(ctx, "writefile", hashFile, c.fsTimeout, func() (struct{}, error) {
-		return struct{}{}, os.WriteFile(hashFile, []byte(currentHash), 0o600)
+		// Mirror the read path (os.OpenRoot at ~:456): open the .md5 confined to
+		// the executable's directory with a bare basename so a symlink planted at
+		// the final component is refused (os.Root.OpenFile does not follow it),
+		// not followed off the exec dir.
+		root, rerr := os.OpenRoot(filepath.Dir(hashFile))
+		if rerr != nil {
+			return struct{}{}, rerr
+		}
+		defer func() { _ = root.Close() }()
+		f, ferr := root.OpenFile(filepath.Base(hashFile), os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
+		if ferr != nil {
+			return struct{}{}, ferr
+		}
+		defer func() { _ = f.Close() }()
+		_, werr := f.Write([]byte(currentHash))
+		return struct{}{}, werr
 	})
 	return err
 }
@@ -497,7 +525,7 @@ func (c *Checker) verifyConfigFile(ctx context.Context) {
 	info, err := safefs.Stat(ctx, c.configPath, c.fsTimeout)
 	if err != nil {
 		if errors.Is(err, safefs.ErrTimeout) {
-			c.addWarning("Security check: stat of configuration file %s timed out after %s; skipping its checks (dead/stale mount?)", c.configPath, c.fsTimeout)
+			c.addError("Security check: stat of configuration file %s timed out after %s; skipping its checks (dead/stale mount?)", c.configPath, c.fsTimeout)
 			return
 		}
 		c.addError("Cannot stat configuration file %s: %v", c.configPath, err)
@@ -1270,7 +1298,7 @@ func (c *Checker) ensureOwnershipAndPerm(ctx context.Context, path string, info 
 					c.addError("Security: refusing to chmod symlink %s", path)
 				} else if c.cfg.DryRun {
 					c.logger.Info("DRY RUN: would adjust permissions on %s to %o (current %o)", path, expectedPerm, perm)
-				} else if err := safefs.Chmod(ctx, path, expectedPerm, c.fsTimeout); err != nil {
+				} else if err := safefs.Lchmod(ctx, path, expectedPerm, c.fsTimeout); err != nil {
 					if errors.Is(err, safefs.ErrTimeout) {
 						c.addWarning("Security check: chmod on %s timed out after %s; leaving permissions unchanged (dead/stale mount?)", path, c.fsTimeout)
 					} else {
@@ -1370,6 +1398,39 @@ func (c *Checker) ensureOwnershipAndPermFromFD(f *os.File, info os.FileInfo, exp
 	}
 
 	return info
+}
+
+// ensureExecutableOwnerWriteOnly flags an executable that is writable by group or
+// other — the only permission state that lets a non-owner tamper with it. The exact
+// owner mode is deliberately not enforced: 0755 (package-managed /usr/bin) and 0700
+// (self-managed /opt) are both acceptable. When AUTO_FIX_PERMISSIONS is on it clears
+// only the offending group/other write bits (perm &^ 0o022); it never widens the mode.
+func (c *Checker) ensureExecutableOwnerWriteOnly(f *os.File, info os.FileInfo, description string) {
+	if f == nil || info == nil {
+		return
+	}
+	perm := info.Mode().Perm()
+	if perm&0o022 == 0 {
+		return
+	}
+
+	path := f.Name()
+	if path == "" {
+		path = "<opened file>"
+	}
+	fixed := perm &^ 0o022
+	c.bannerWarning(fmt.Sprintf("group/other-writable executable %s (current %o)", path, perm))
+	if c.cfg.AutoFixPermissions {
+		if c.cfg.DryRun {
+			c.logger.Info("DRY RUN: would adjust permissions on %s to %o (current %o)", path, fixed, perm)
+		} else if err := syscall.Fchmod(int(f.Fd()), uint32(fixed)); err != nil {
+			c.addWarning("Failed to adjust permissions on %s: %v", path, err)
+		} else {
+			c.logger.Info("Adjusted permissions on %s to %o", path, fixed)
+		}
+	} else {
+		c.addWarning("%s must not be writable by group or other (current %o)", description, perm)
+	}
 }
 
 var kernelProcessPrefixes = []string{

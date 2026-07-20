@@ -1,6 +1,7 @@
 package orchestrator
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"io"
@@ -304,6 +305,83 @@ func TestStorageAdapterSync_NonCriticalStoreErrorFinalizesErrorAndContinues(t *t
 	}
 	if stats.SecondaryRetentionPolicy != "simple" {
 		t.Fatalf("SecondaryRetentionPolicy = %q; want simple", stats.SecondaryRetentionPolicy)
+	}
+}
+
+// TestStorageAdapterSync_SidecarOnlyFailureHeadline pins F08-08: when the backend reports a
+// non-critical store error whose primary archive WAS saved (StorageError.PrimarySaved), the
+// adapter must NOT log "Backup was not saved" (the primary is safe); it logs a sidecar-specific
+// line instead.
+func TestStorageAdapterSync_SidecarOnlyFailureHeadline(t *testing.T) {
+	var buf bytes.Buffer
+	logger := logging.New(types.LogLevelDebug, false)
+	logger.SetOutput(&buf)
+
+	backend := &fakeStorageBackend{
+		name:     "cloud",
+		location: storage.LocationCloud,
+		enabled:  true,
+		critical: false,
+		detectFilesystemFn: func(context.Context) (*storage.FilesystemInfo, error) {
+			return &storage.FilesystemInfo{Type: storage.FilesystemExt4}, nil
+		},
+		storeFn: func(context.Context, string, *types.BackupMetadata) error {
+			return &storage.StorageError{
+				Location:     storage.LocationCloud,
+				Operation:    "upload_associated",
+				Path:         "/tmp/archive.tar",
+				Err:          errors.New("sidecar upload failed"),
+				PrimarySaved: true,
+			}
+		},
+	}
+
+	adapter := NewStorageAdapter(backend, logger, &config.Config{})
+	stats := sampleAdapterStats()
+	if err := adapter.Sync(context.Background(), stats); err != nil {
+		t.Fatalf("Sync returned error: %v; want nil for non-critical sidecar-only error", err)
+	}
+
+	out := buf.String()
+	if strings.Contains(out, "Backup was not saved") {
+		t.Fatalf("must NOT claim the backup was not saved when the primary is saved:\n%s", out)
+	}
+	if !strings.Contains(out, "sidecar") {
+		t.Fatalf("expected a sidecar-specific warning, got:\n%s", out)
+	}
+}
+
+func TestStorageAdapterSync_NonCriticalStoreErrorHeadlineWhenPrimaryFailed(t *testing.T) {
+	var buf bytes.Buffer
+	logger := logging.New(types.LogLevelDebug, false)
+	logger.SetOutput(&buf)
+
+	backend := &fakeStorageBackend{
+		name:     "cloud",
+		location: storage.LocationCloud,
+		enabled:  true,
+		critical: false,
+		detectFilesystemFn: func(context.Context) (*storage.FilesystemInfo, error) {
+			return &storage.FilesystemInfo{Type: storage.FilesystemExt4}, nil
+		},
+		storeFn: func(context.Context, string, *types.BackupMetadata) error {
+			// Primary itself failed: PrimarySaved stays false -> generic "not saved" headline.
+			return &storage.StorageError{
+				Location:  storage.LocationCloud,
+				Operation: "upload",
+				Path:      "/tmp/archive.tar",
+				Err:       errors.New("primary upload failed"),
+			}
+		},
+	}
+
+	adapter := NewStorageAdapter(backend, logger, &config.Config{})
+	stats := sampleAdapterStats()
+	if err := adapter.Sync(context.Background(), stats); err != nil {
+		t.Fatalf("Sync returned error: %v", err)
+	}
+	if out := buf.String(); !strings.Contains(out, "Backup was not saved") {
+		t.Fatalf("primary-failed store error must keep the 'Backup was not saved' headline, got:\n%s", out)
 	}
 }
 

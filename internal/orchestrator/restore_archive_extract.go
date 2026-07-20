@@ -16,6 +16,14 @@ import (
 	"github.com/tis24dev/proxsave/internal/logging"
 )
 
+// Bounds on the dedup reads, kept as vars so a malicious or corrupt archive can
+// never OOM the (root) restore and tests can lower them. Dedup canonicals are
+// config files, so these are DoS backstops, not real-world limits.
+var (
+	maxDedupManifestBytes  int64 = 16 << 20 // 16 MiB
+	maxDedupCanonicalBytes int64 = 64 << 20 // 64 MiB
+)
+
 type restoreArchiveOptions struct {
 	archivePath string
 	destRoot    string
@@ -64,7 +72,7 @@ func extractArchiveNative(ctx context.Context, opts restoreArchiveOptions) (err 
 	defer extractionLog.close()
 	extractionLog.writeHeader(opts)
 
-	stats, err := processRestoreArchiveEntries(ctx, tar.NewReader(reader), opts, extractionLog)
+	stats, extractedSet, err := processRestoreArchiveEntries(ctx, tar.NewReader(reader), opts, extractionLog)
 	if err != nil {
 		return err
 	}
@@ -76,7 +84,7 @@ func extractArchiveNative(ctx context.Context, opts restoreArchiveOptions) (err 
 	// archive, so selective restore never leaves a dangling link and full restore
 	// preserves the original file type (issue #70). Safe on every extraction: it
 	// never deletes and is a no-op when no dedup manifest is present.
-	if err := materializeDedupSymlinks(ctx, opts.archivePath, opts.destRoot, opts.logger); err != nil {
+	if err := materializeDedupSymlinks(ctx, opts.archivePath, opts.destRoot, opts.logger, opts.failOnPartialExtraction, extractedSet); err != nil {
 		// On the staged path (failOnPartialExtraction) an incompletely reconstructed
 		// dedup tree must not be applied to the live system; elsewhere it is a
 		// recoverable warning and the (kept) manifest lets a re-run finish.
@@ -151,12 +159,17 @@ func (log *restoreExtractionLog) writeHeader(opts restoreArchiveOptions) {
 	_, _ = fmt.Fprintf(log.logFile, "\n")
 }
 
-func processRestoreArchiveEntries(ctx context.Context, tarReader *tar.Reader, opts restoreArchiveOptions, extractionLog *restoreExtractionLog) (restoreExtractionStats, error) {
+func processRestoreArchiveEntries(ctx context.Context, tarReader *tar.Reader, opts restoreArchiveOptions, extractionLog *restoreExtractionLog) (restoreExtractionStats, map[string]bool, error) {
 	var stats restoreExtractionStats
 	selectiveMode := len(opts.categories) > 0
+	// Record what we actually extracted this run so dedup materialization is gated to
+	// it (F-05-01): only a duplicate symlink created by THIS run is ever rebuilt, never
+	// a pre-existing live symlink an out-of-scope or malicious manifest entry points at.
+	// Built for full restore too (not just selective) so restore-to-/ is protected.
+	extractedSet := map[string]bool{}
 	for {
 		if err := ctx.Err(); err != nil {
-			return stats, err
+			return stats, extractedSet, err
 		}
 
 		header, err := tarReader.Next()
@@ -164,7 +177,7 @@ func processRestoreArchiveEntries(ctx context.Context, tarReader *tar.Reader, op
 			break
 		}
 		if err != nil {
-			return stats, fmt.Errorf("read tar header: %w", err)
+			return stats, extractedSet, fmt.Errorf("read tar header: %w", err)
 		}
 
 		if skipRestoreArchiveEntry(header, opts, selectiveMode, extractionLog, &stats) {
@@ -188,12 +201,13 @@ func processRestoreArchiveEntries(ctx context.Context, tarReader *tar.Reader, op
 		}
 
 		stats.filesExtracted++
+		extractedSet[dedupCleanArchivePath(header.Name)] = true
 		extractionLog.recordRestored(header.Name)
 		if stats.filesExtracted%100 == 0 {
 			opts.logger.Debug("Extracted %d files...", stats.filesExtracted)
 		}
 	}
-	return stats, nil
+	return stats, extractedSet, nil
 }
 
 func isDedupManifestEntry(name string) bool {
@@ -302,6 +316,8 @@ func logRestoreExtractionSummary(opts restoreArchiveOptions, stats restoreExtrac
 type materializeTarget struct {
 	path string // absolute duplicate path under destRoot (currently a symlink)
 	mode os.FileMode
+	uid  *uint32 // source owner uid from the manifest; nil (old manifest) -> skip chown
+	gid  *uint32 // source owner gid from the manifest; nil (old manifest) -> skip chown
 }
 
 // materializeDedupSymlinks reads the dedup manifest written at backup time and
@@ -312,20 +328,50 @@ type materializeTarget struct {
 // dedup canonical's category was not selected or its on-disk copy failed to extract,
 // and it never picks up stale live content (issue #70). It is a no-op when no
 // manifest is present (deduplication was off or found no duplicates).
-func materializeDedupSymlinks(ctx context.Context, archivePath, destRoot string, logger *logging.Logger) error {
+func materializeDedupSymlinks(ctx context.Context, archivePath, destRoot string, logger *logging.Logger, strict bool, extractedSet map[string]bool) error {
 	manifestTarget, _, err := sanitizeRestoreEntryTargetWithFS(restoreFS, destRoot, backup.DedupManifestRelPath)
 	if err != nil {
 		return nil
 	}
-	data, err := restoreFS.ReadFile(manifestTarget)
+	manifestFile, err := restoreFS.Open(manifestTarget)
 	if err != nil {
-		return nil // no dedup manifest: nothing to materialize
+		if os.IsNotExist(err) {
+			return nil // no dedup manifest: nothing to materialize
+		}
+		// The manifest exists but cannot be opened (EACCES/EIO): on the strict/staged
+		// path refuse to apply the tree, consistent with the read/parse/oversize guards.
+		if strict {
+			return fmt.Errorf("dedup manifest cannot be opened; refusing to apply a partial staged restore: %w", err)
+		}
+		return nil // best-effort: tolerate an unreadable manifest
+	}
+	data, rerr := io.ReadAll(io.LimitReader(manifestFile, maxDedupManifestBytes+1))
+	_ = manifestFile.Close()
+	if rerr != nil {
+		if strict {
+			return fmt.Errorf("dedup manifest unreadable; refusing to apply a partial staged restore: %w", rerr)
+		}
+		return nil // unreadable manifest (matches the prior ReadFile-error behavior)
+	}
+	if int64(len(data)) > maxDedupManifestBytes {
+		logger.Warning("Dedup manifest exceeds %d bytes; refusing to load it", maxDedupManifestBytes)
+		if strict {
+			return fmt.Errorf("dedup manifest exceeds %d bytes; refusing to apply a partial staged restore", maxDedupManifestBytes)
+		}
+		removeDedupManifest(manifestTarget)
+		return nil
 	}
 	var entries []backup.DedupManifestEntry
 	if err := json.Unmarshal(data, &entries); err != nil {
-		// Corrupt manifest: nothing can be materialized, but do not leave the garbage
-		// (force-extracted under var/lib/proxsave-info) lingering on the restored system.
 		logger.Warning("Dedup manifest unreadable; skipping symlink materialization: %v", err)
+		if strict {
+			// A corrupt manifest means the extracted duplicates cannot be materialized;
+			// on the strict/staged path refuse to apply the tree (keep the manifest so a
+			// re-run can recover), consistent with the oversize and missing-canonical guards.
+			return fmt.Errorf("dedup manifest corrupt; refusing to apply a partial staged restore: %w", err)
+		}
+		// Best-effort: nothing can be materialized, but do not leave the garbage
+		// (force-extracted under var/lib/proxsave-info) lingering on the restored system.
 		removeDedupManifest(manifestTarget)
 		return nil
 	}
@@ -335,6 +381,11 @@ func materializeDedupSymlinks(ctx context.Context, archivePath, destRoot string,
 	needByCanonical := map[string][]materializeTarget{}
 	for _, entry := range entries {
 		if strings.TrimSpace(entry.Path) == "" {
+			continue
+		}
+		if extractedSet != nil && !extractedSet[dedupCleanArchivePath(entry.Path)] {
+			// Only rebuild duplicates actually extracted this run (selective AND full),
+			// never a pre-existing live symlink or an out-of-scope manifest entry (F-05-01).
 			continue
 		}
 		target, _, err := sanitizeRestoreEntryTargetWithFS(restoreFS, destRoot, entry.Path)
@@ -358,6 +409,8 @@ func materializeDedupSymlinks(ctx context.Context, archivePath, destRoot string,
 		needByCanonical[canonicalRel] = append(needByCanonical[canonicalRel], materializeTarget{
 			path: target,
 			mode: os.FileMode(entry.Mode).Perm(),
+			uid:  entry.Uid,
+			gid:  entry.Gid,
 		})
 	}
 
@@ -374,6 +427,12 @@ func materializeDedupSymlinks(ctx context.Context, archivePath, destRoot string,
 		}
 		if materialized > 0 || missing > 0 {
 			logger.Info("Dedup: materialized %d deduplicated file(s) from the archive; %d left as link(s) due to missing canonical content", materialized, missing)
+		}
+		if strict && missing > 0 {
+			// A staged/strict restore cannot apply a tree with dangling deduplicated
+			// links. Keep the manifest+state and fail closed, like the !completed branch.
+			logger.Warning("Dedup: %d deduplicated file(s) have no canonical in the archive; refusing to apply a partial staged restore", missing)
+			return fmt.Errorf("dedup materialization incomplete: %d deduplicated file(s) have no canonical in the archive; refusing to apply a partial staged restore", missing)
 		}
 	}
 
@@ -443,14 +502,18 @@ func materializeFromArchive(ctx context.Context, archivePath string, needByCanon
 		if !ok {
 			continue
 		}
-		content, err := io.ReadAll(tr)
+		content, err := io.ReadAll(io.LimitReader(tr, maxDedupCanonicalBytes+1))
 		if err != nil {
 			logger.Warning("Dedup: failed to read canonical %q from the archive: %v", name, err)
 			continue // leave its duplicates as links (counted as missing below)
 		}
+		if int64(len(content)) > maxDedupCanonicalBytes {
+			logger.Warning("Dedup: canonical %q exceeds %d bytes; leaving its duplicate(s) as link(s)", name, maxDedupCanonicalBytes)
+			continue // not marked found -> counted missing -> strict fails closed
+		}
 		found[name] = true
 		for _, d := range dups {
-			if werr := writeMaterializedFile(d.path, content, d.mode); werr != nil {
+			if werr := writeMaterializedFile(d.path, content, d.mode, d.uid, d.gid, logger); werr != nil {
 				logger.Warning("Dedup: failed to materialize %s from archive: %v", name, werr)
 				writeOK = false // a transient write failure: keep the manifest for a retry
 				continue
@@ -474,7 +537,7 @@ func materializeFromArchive(ctx context.Context, archivePath string, needByCanon
 // writeMaterializedFile atomically replaces a path (typically a dedup symlink) with
 // a regular file holding content, via a sibling temp + rename so a crash never
 // leaves the path missing.
-func writeMaterializedFile(target string, content []byte, mode os.FileMode) error {
+func writeMaterializedFile(target string, content []byte, mode os.FileMode, uid, gid *uint32, logger *logging.Logger) error {
 	if mode == 0 {
 		mode = 0o600
 	}
@@ -487,6 +550,16 @@ func writeMaterializedFile(target string, content []byte, mode os.FileMode) erro
 		_ = tmp.Close()
 		_ = restoreFS.Remove(tmpPath)
 		return fmt.Errorf("write temp: %w", err)
+	}
+	// Restore the source owner recorded in the manifest (F07-04), BEFORE chmod since
+	// chown can strip setuid/setgid bits. Best-effort to match the normal
+	// extracted-file path (restore_archive_entries.go): an unprivileged run or a
+	// chown-unsupported FS must not fail the restore. A nil owner (pre-F07-04
+	// manifest) is left untouched, never forced to 0:0.
+	if uid != nil && gid != nil {
+		if err := atomicFileChown(tmp, int(*uid), int(*gid)); err != nil && logger != nil {
+			logger.Debug("Failed to chown materialized file %s: %v", target, err)
+		}
 	}
 	if err := atomicFileChmod(tmp, mode.Perm()); err != nil {
 		_ = tmp.Close()

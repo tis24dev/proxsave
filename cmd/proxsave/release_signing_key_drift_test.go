@@ -33,17 +33,21 @@ func keyB64(t *testing.T, name, s string) string {
 	return b.String()
 }
 
-// TestReleaseSigningKeyNoDrift guards the three pinned copies of the release
+// TestReleaseSigningKeyNoDrift guards the five pinned copies of the release
 // signing public key against drifting apart: the Go constant
-// (releaseSigningPubKeyPEM), the installer (install.sh) and the release workflow
-// (release.yml) must all embed the exact same key, or signature verification
-// would pass in one place and fail in another.
+// (releaseSigningPubKeyPEM), the installer (install.sh), the release workflow
+// (release.yml), the provenance verification doc
+// (docs/PROVENANCE_VERIFICATION.md) and the beta upgrade script
+// (upgrade-beta.sh) must all embed the exact same key, or signature
+// verification would pass in one place and fail in another.
 func TestReleaseSigningKeyNoDrift(t *testing.T) {
 	want := keyB64(t, "releaseSigningPubKeyPEM", releaseSigningPubKeyPEM)
 
 	for _, f := range []struct{ name, path string }{
 		{"install.sh", "../../install.sh"},
 		{"release.yml", "../../.github/workflows/release.yml"},
+		{"PROVENANCE_VERIFICATION.md", "../../docs/PROVENANCE_VERIFICATION.md"},
+		{"upgrade-beta.sh", "../../upgrade-beta.sh"},
 	} {
 		data, err := os.ReadFile(f.path)
 		if err != nil {

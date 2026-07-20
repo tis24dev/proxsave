@@ -521,3 +521,86 @@ func TestPackageLevelFatalUsesDefaultLoggerExitFunc(t *testing.T) {
 		t.Fatalf("package-level fatal log missing message: %s", buf.String())
 	}
 }
+
+func TestNotifyError_CountsAsNotifyNotError(t *testing.T) {
+	var buf bytes.Buffer
+	logger := New(types.LogLevelInfo, false)
+	logger.SetOutput(&buf)
+
+	logger.NotifyError("Telegram: failed: %s", "connection refused")
+
+	if got := logger.NotifyCount(); got != 1 {
+		t.Fatalf("NotifyCount = %d, want 1", got)
+	}
+	// A notification failure must NOT count as a backup error: it is warning-weight
+	// for the run status even though it displays as an error.
+	if got := logger.ErrorCount(); got != 0 {
+		t.Fatalf("ErrorCount = %d, want 0 (notify error must not count as error)", got)
+	}
+	if got := logger.WarningCount(); got != 0 {
+		t.Fatalf("WarningCount = %d, want 0", got)
+	}
+
+	out := buf.String()
+	if !strings.Contains(out, NotifyErrorLabel) {
+		t.Fatalf("output missing %s token: %q", NotifyErrorLabel, out)
+	}
+	if !strings.Contains(out, "Telegram: failed: connection refused") {
+		t.Fatalf("output missing message: %q", out)
+	}
+
+	issues := logger.IssueLines()
+	if len(issues) != 1 || !strings.Contains(issues[0], NotifyErrorLabel) {
+		t.Fatalf("IssueLines = %v, want one %s line", issues, NotifyErrorLabel)
+	}
+}
+
+func TestNotifyErrorScope_ReclassifiesUnlabeledErrors(t *testing.T) {
+	var buf bytes.Buffer
+	logger := New(types.LogLevelDebug, false)
+	logger.SetOutput(&buf)
+
+	// Outside the scope, Error is a normal backup error.
+	logger.Error("outside error")
+	if logger.ErrorCount() != 1 || logger.NotifyCount() != 0 {
+		t.Fatalf("outside scope: errorCount=%d notifyCount=%d, want 1/0", logger.ErrorCount(), logger.NotifyCount())
+	}
+
+	logger.EnterNotifyErrorScope()
+	logger.Error("channel failed")              // reclassified to NOTIFY-ERR
+	logger.Warning("a warning stays a warning") // warnings are untouched
+	logger.ExitNotifyErrorScope()
+
+	if logger.NotifyCount() != 1 {
+		t.Fatalf("scoped error must be a notify error: notifyCount=%d, want 1", logger.NotifyCount())
+	}
+	if logger.ErrorCount() != 1 {
+		t.Fatalf("scoped error must NOT add to errorCount: errorCount=%d, want 1 (the outside one)", logger.ErrorCount())
+	}
+	if logger.WarningCount() != 1 {
+		t.Fatalf("a warning inside the scope must stay a warning: warningCount=%d, want 1", logger.WarningCount())
+	}
+
+	// After exiting the scope, Error is a normal backup error again.
+	logger.Error("after scope")
+	if logger.ErrorCount() != 2 {
+		t.Fatalf("after scope: errorCount=%d, want 2", logger.ErrorCount())
+	}
+	if !strings.Contains(buf.String(), NotifyErrorLabel) {
+		t.Fatalf("scoped error must render with the %s token: %q", NotifyErrorLabel, buf.String())
+	}
+}
+
+func TestNormalizeNotifyErrorToken(t *testing.T) {
+	line := "[2026-07-16 10:00:00] " + NotifyErrorLabel + "  Telegram: failed"
+	got := NormalizeNotifyErrorToken(line)
+	if strings.Contains(got, NotifyErrorLabel) {
+		t.Fatalf("token not normalized away: %q", got)
+	}
+	if !strings.Contains(got, "ERROR") {
+		t.Fatalf("normalized line missing ERROR: %q", got)
+	}
+	if !strings.Contains(got, "Telegram: failed") {
+		t.Fatalf("normalized line dropped the message: %q", got)
+	}
+}

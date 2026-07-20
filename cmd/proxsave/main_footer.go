@@ -10,6 +10,7 @@ import (
 	"github.com/tis24dev/proxsave/internal/logging"
 	"github.com/tis24dev/proxsave/internal/orchestrator"
 	"github.com/tis24dev/proxsave/internal/types"
+	"github.com/tis24dev/proxsave/internal/ui/components"
 )
 
 const rollbackCountdownDisplayDuration = 10 * time.Second
@@ -72,10 +73,11 @@ func printNetworkRollbackHeader(color, colorReset string) {
 func printNetworkRollbackStaticInfo(abortInfo *orchestrator.RestoreAbortInfo, status string) {
 	fmt.Printf("  Status: %s\n", status)
 	if knownValue(abortInfo.OriginalIP) {
-		fmt.Printf("  Pre-apply IP (from snapshot): %s\n", strings.TrimSpace(abortInfo.OriginalIP))
+		fmt.Printf("  Pre-apply IP (from snapshot): %s\n", components.SanitizeLine(strings.TrimSpace(abortInfo.OriginalIP)))
 	}
 	if knownValue(abortInfo.CurrentIP) {
-		fmt.Printf("  Post-apply IP (observed): %s\n", strings.TrimSpace(abortInfo.CurrentIP))
+		// CurrentIP is an unvalidated token from `ip -o addr` output: scrub it.
+		fmt.Printf("  Post-apply IP (observed): %s\n", components.SanitizeLine(strings.TrimSpace(abortInfo.CurrentIP)))
 	}
 	if strings.TrimSpace(abortInfo.NetworkRollbackLog) != "" {
 		fmt.Printf("  Rollback log: %s\n", strings.TrimSpace(abortInfo.NetworkRollbackLog))
@@ -118,7 +120,7 @@ func printDisarmedRollbackReconnectHint(abortInfo *orchestrator.RestoreAbortInfo
 	if markerExists || strings.TrimSpace(abortInfo.NetworkRollbackMarker) == "" || !knownValue(abortInfo.CurrentIP) {
 		return
 	}
-	fmt.Printf("Rollback will NOT run: reconnect using the post-apply IP: %s\n", strings.TrimSpace(abortInfo.CurrentIP))
+	fmt.Printf("Rollback will NOT run: reconnect using the post-apply IP: %s\n", components.SanitizeLine(strings.TrimSpace(abortInfo.CurrentIP)))
 }
 
 func knownValue(value string) bool {
@@ -147,7 +149,27 @@ func printNetworkRollbackLiveCountdown(deadline time.Time) {
 	}
 }
 
+// printRunFooter is the SINGLE place that gates every end-of-run CLI footer.
+// Route a footer's printing through here (as emit): it runs only for a
+// non-graphical run; a graphical run (launched from the dashboard, which adopts
+// the session) already shows its outcome on-screen, so any plain-scrollback CLI
+// footer, with its usage-commands and sponsors block, is redundant and would leak
+// after the alternate screen closes. To add a NEW suppressible footer, print it
+// via printRunFooter and nothing else needs to know about the gate.
+// dashboardRunWasGraphical() latches true only once a flow adopts the dashboard
+// session; a plain CLI/cron run never adopts, so the footer prints there as before.
+func printRunFooter(emit func()) {
+	if dashboardRunWasGraphical() {
+		return
+	}
+	emit()
+}
+
 func printFinalSummary(finalExitCode int) {
+	printRunFooter(func() { finalSummaryBody(finalExitCode) })
+}
+
+func finalSummaryBody(finalExitCode int) {
 	fmt.Println()
 
 	logger := logging.GetDefaultLogger()
@@ -164,18 +186,52 @@ func finalSummarySignature() string {
 	return summarySig
 }
 
-func finalSummaryColor(finalExitCode int, logger *logging.Logger) string {
+// exitSeverity is the display-only classification of a run's exit code, shared
+// by the final summary footer and the backup outcome banner so both color the
+// SAME exit code identically. It carries no exit semantics of its own.
+type exitSeverity int
+
+const (
+	severityOK exitSeverity = iota
+	severityWarning
+	severityError
+	severityInterrupted
+)
+
+// exitCodeSeverity classifies an exit code into an exitSeverity, encoding the
+// EXACT decision tree finalSummaryColor has always used: an interrupt (Ctrl+C)
+// is its own bucket; a clean 0 is a warning if the run logged warnings, else OK;
+// ExitGenericError is a non-fatal warning; everything else is an error. logger
+// may be nil (treated as no warnings).
+func exitCodeSeverity(exitCode int, logger *logging.Logger) exitSeverity {
 	hasWarnings := logger != nil && logger.HasWarnings()
 
 	switch {
-	case finalExitCode == exitCodeInterrupted:
+	case exitCode == exitCodeInterrupted:
+		return severityInterrupted
+	case exitCode == 0 && hasWarnings:
+		return severityWarning
+	case exitCode == 0:
+		return severityOK
+	case exitCode == types.ExitGenericError.Int():
+		return severityWarning
+	case exitCode == types.ExitBackupSkipped.Int():
+		// A benign skip (another backup running / disabled): non-blocking, colored yellow like a
+		// warning, never green success nor red error (F09-03).
+		return severityWarning
+	default:
+		return severityError
+	}
+}
+
+func finalSummaryColor(finalExitCode int, logger *logging.Logger) string {
+	switch exitCodeSeverity(finalExitCode, logger) {
+	case severityInterrupted:
 		return "\033[35m" // magenta for Ctrl+C
-	case finalExitCode == 0 && hasWarnings:
-		return "\033[33m" // yellow for success with warnings
-	case finalExitCode == 0:
+	case severityWarning:
+		return "\033[33m" // yellow for success-with-warnings or non-fatal generic error
+	case severityOK:
 		return "\033[32m" // green for clean success
-	case finalExitCode == types.ExitGenericError.Int():
-		return "\033[33m" // yellow for generic error (non-fatal)
 	default:
 		return "\033[31m" // red for all other errors
 	}
@@ -190,11 +246,13 @@ func printRunIssueSummary(logger *logging.Logger) {
 		return
 	}
 
+	// Notify/communication failures are warning-weight for the run status but are
+	// shown as errors in the recap, so count and render them under errors here.
 	fmt.Println("===========================================")
-	fmt.Printf("WARNINGS/ERRORS DURING RUN (warnings=%d errors=%d)\n", logger.WarningCount(), logger.ErrorCount())
+	fmt.Printf("WARNINGS/ERRORS DURING RUN (warnings=%d errors=%d)\n", logger.WarningCount(), logger.ErrorCount()+logger.NotifyCount())
 	fmt.Println()
 	for _, line := range issues {
-		fmt.Println(line)
+		fmt.Println(components.SanitizeLine(logging.NormalizeNotifyErrorToken(line)))
 	}
 	fmt.Println("===========================================")
 	fmt.Println()
@@ -219,19 +277,18 @@ func printFinalSummaryCommands() {
 	fmt.Println("https://github.com/sponsors/tis24dev")
 	fmt.Println()
 	fmt.Println("Commands:")
-	fmt.Println("  proxsave (alias: proxmox-backup) - Start backup")
+	fmt.Println("  proxsave (alias: proxmox-backup) - Open the interactive dashboard (runs the backup directly when non-interactive, e.g. cron)")
+	fmt.Println("  --backup           - Run a backup now (what bare proxsave does when non-interactive)")
 	fmt.Println("  --help             - Show all options")
 	fmt.Println("  --dry-run          - Test without changes")
 	fmt.Println("  --install          - Re-run interactive installation/setup")
 	fmt.Println("  --new-install      - Wipe installation directory (keep build/env/identity) then run installer")
-	fmt.Println("  --env-migration    - Run installer and migrate legacy Bash backup.env to Go template")
-	fmt.Println("  --env-migration-dry-run - Preview installer/migration without writing files")
 	fmt.Println("  --upgrade          - Update proxsave binary to latest release (also adds missing keys to backup.env)")
 	fmt.Println("  --newkey           - Generate a new encryption key for backups")
 	fmt.Println("  --decrypt          - Decrypt an existing backup archive")
 	fmt.Println("  --restore          - Run interactive restore workflow (select bundle, decrypt if needed, apply to system)")
 	fmt.Println("  --cleanup-guards   - Remove leftover restore mount guards once the storage is back online")
 	fmt.Println("  --upgrade-config   - Upgrade configuration file using the embedded template (run after installing a new binary)")
-	fmt.Println("  --support          - Run in support mode (force debug log level and send email with attached log to github-support@tis24.it); available for standard backup and --restore")
+	fmt.Println("  --support          - Run in support mode (force debug log level and send email with attached log to the maintainer); available for standard backup and --restore")
 	fmt.Println()
 }

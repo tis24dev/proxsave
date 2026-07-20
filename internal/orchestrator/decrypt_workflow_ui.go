@@ -31,7 +31,7 @@ func isNilInterface(v any) bool {
 	}
 }
 
-func selectBackupCandidateWithUI(ctx context.Context, ui BackupSelectionUI, cfg *config.Config, logger *logging.Logger, requireEncrypted bool) (candidate *backupCandidate, err error) {
+func selectBackupCandidateWithUI(ctx context.Context, ui BackupSelectionUI, cfg *config.Config, logger *logging.Logger, screenTitle string, requireEncrypted bool) (candidate *backupCandidate, err error) {
 	done := logging.DebugStart(logger, "select backup candidate (ui)", "requireEncrypted=%v", requireEncrypted)
 	defer func() { done(err) }()
 
@@ -76,13 +76,15 @@ func selectBackupCandidateWithUI(ctx context.Context, ui BackupSelectionUI, cfg 
 
 		if scanErr != nil {
 			logger.Warning("Failed to inspect %s: %v", option.Path, scanErr)
-			_ = ui.ShowError(ctx, "Backup scan failed", fmt.Sprintf("Failed to inspect %s: %v", option.Path, scanErr))
+			if statusErr := ui.ShowStatusResult(ctx, screenTitle, HealthcheckSetupLevelWarn, "SCAN FAILED", fmt.Sprintf("Failed to inspect %s: %v", option.Path, scanErr)); statusErr != nil {
+				return nil, statusErr
+			}
 			if option.IsRclone {
 				// For rclone remotes, persistent failures are unlikely to self-heal,
 				// so remove the option to avoid a broken loop.
 				pathOptions = removeDecryptPathOption(pathOptions, option)
 				if len(pathOptions) == 0 {
-					return nil, fmt.Errorf("no usable backup sources available")
+					return nil, ErrDecryptNoBackups
 				}
 			}
 			continue
@@ -90,10 +92,12 @@ func selectBackupCandidateWithUI(ctx context.Context, ui BackupSelectionUI, cfg 
 
 		if len(candidates) == 0 {
 			logger.Warning("No backups found in %s", option.Path)
-			_ = ui.ShowError(ctx, "No backups found", fmt.Sprintf("No backups found in %s.", option.Path))
+			if statusErr := ui.ShowStatusResult(ctx, screenTitle, HealthcheckSetupLevelWarn, "NO BACKUPS FOUND", fmt.Sprintf("No backups found in %s.", option.Path)); statusErr != nil {
+				return nil, statusErr
+			}
 			pathOptions = removeDecryptPathOption(pathOptions, option)
 			if len(pathOptions) == 0 {
-				return nil, fmt.Errorf("no usable backup sources available")
+				return nil, ErrDecryptNoBackups
 			}
 			continue
 		}
@@ -102,10 +106,12 @@ func selectBackupCandidateWithUI(ctx context.Context, ui BackupSelectionUI, cfg 
 			encrypted := filterEncryptedCandidates(candidates)
 			if len(encrypted) == 0 {
 				logger.Warning("No encrypted backups found in %s", option.Path)
-				_ = ui.ShowError(ctx, "No encrypted backups", fmt.Sprintf("No encrypted backups found in %s.", option.Path))
+				if statusErr := ui.ShowStatusResult(ctx, screenTitle, HealthcheckSetupLevelWarn, "NO ENCRYPTED BACKUPS", fmt.Sprintf("No encrypted backups found in %s.", option.Path)); statusErr != nil {
+					return nil, statusErr
+				}
 				pathOptions = removeDecryptPathOption(pathOptions, option)
 				if len(pathOptions) == 0 {
-					return nil, fmt.Errorf("no usable backup sources available")
+					return nil, ErrDecryptNoBackups
 				}
 				continue
 			}
@@ -182,7 +188,7 @@ func decryptArchiveWithSecretPrompt(ctx context.Context, encryptedPath, outputPa
 		identities, err := parseIdentityInputWithSalts(secret, extraSalts)
 		resetString(&secret)
 		if err != nil {
-			promptError = fmt.Sprintf("Invalid key or passphrase: %v", err)
+			promptError = "Invalid key or passphrase."
 			continue
 		}
 
@@ -216,15 +222,18 @@ func preparePlainBundleWithUI(ctx context.Context, cand *backupCandidate, versio
 	}, timeout)
 }
 
-func runDecryptWorkflowWithUI(ctx context.Context, cfg *config.Config, logger *logging.Logger, version string, ui DecryptWorkflowUI) (err error) {
+// runDecryptWorkflowWithUI drives the decrypt workflow through the given UI
+// and returns the path of the produced bundle so callers can surface it
+// after their UI releases the terminal.
+func runDecryptWorkflowWithUI(ctx context.Context, cfg *config.Config, logger *logging.Logger, version string, ui DecryptWorkflowUI) (bundlePath string, err error) {
 	if cfg == nil {
-		return fmt.Errorf("configuration not available")
+		return "", fmt.Errorf("configuration not available")
 	}
 	if logger == nil {
 		logger = logging.GetDefaultLogger()
 	}
 	if isNilInterface(ui) {
-		return fmt.Errorf("decrypt workflow UI not available")
+		return "", fmt.Errorf("decrypt workflow UI not available")
 	}
 	done := logging.DebugStart(logger, "decrypt workflow (ui)", "version=%s", version)
 	defer func() { done(err) }()
@@ -237,14 +246,14 @@ func runDecryptWorkflowWithUI(ctx context.Context, cfg *config.Config, logger *l
 		}
 	}()
 
-	candidate, err := selectBackupCandidateWithUI(ctx, ui, cfg, logger, true)
+	candidate, err := selectBackupCandidateWithUI(ctx, ui, cfg, logger, "Decrypt", true)
 	if err != nil {
-		return err
+		return "", err
 	}
 
 	prepared, err := preparePlainBundleWithUI(ctx, candidate, version, logger, ui, fsIoTimeoutFromConfig(cfg))
 	if err != nil {
-		return err
+		return "", err
 	}
 	defer prepared.Cleanup()
 
@@ -254,11 +263,11 @@ func runDecryptWorkflowWithUI(ctx context.Context, cfg *config.Config, logger *l
 	}
 	destDir, err := ui.PromptDestinationDir(ctx, defaultDir)
 	if err != nil {
-		return err
+		return "", err
 	}
 
 	if err := restoreFS.MkdirAll(destDir, 0o755); err != nil {
-		return fmt.Errorf("create destination directory: %w", err)
+		return "", fmt.Errorf("create destination directory: %w", err)
 	}
 	destDir, _ = filepath.Abs(destDir)
 	logger.Info("Destination directory: %s", destDir)
@@ -266,7 +275,7 @@ func runDecryptWorkflowWithUI(ctx context.Context, cfg *config.Config, logger *l
 	destArchivePath := filepath.Join(destDir, filepath.Base(prepared.ArchivePath))
 	destArchivePath, err = ensureWritablePathWithUI(ctx, ui, destArchivePath, "decrypted archive")
 	if err != nil {
-		return err
+		return "", err
 	}
 
 	workDir := filepath.Dir(prepared.ArchivePath)
@@ -274,7 +283,7 @@ func runDecryptWorkflowWithUI(ctx context.Context, cfg *config.Config, logger *l
 	tempArchivePath := filepath.Join(workDir, archiveBase)
 	if tempArchivePath != prepared.ArchivePath {
 		if err := moveFileSafe(prepared.ArchivePath, tempArchivePath); err != nil {
-			return fmt.Errorf("move decrypted archive within temp dir: %w", err)
+			return "", fmt.Errorf("move decrypted archive within temp dir: %w", err)
 		}
 	}
 
@@ -283,35 +292,35 @@ func runDecryptWorkflowWithUI(ctx context.Context, cfg *config.Config, logger *l
 
 	metadataPath := tempArchivePath + ".metadata"
 	if err := backup.CreateManifest(ctx, logger, &manifestCopy, metadataPath); err != nil {
-		return fmt.Errorf("write metadata: %w", err)
+		return "", fmt.Errorf("write metadata: %w", err)
 	}
 
 	checksumPath := tempArchivePath + ".sha256"
 	if err := restoreFS.WriteFile(checksumPath, []byte(fmt.Sprintf("%s  %s\n", prepared.Checksum, filepath.Base(tempArchivePath))), 0o640); err != nil {
-		return fmt.Errorf("write checksum file: %w", err)
+		return "", fmt.Errorf("write checksum file: %w", err)
 	}
 
 	logger.Info("Creating decrypted bundle...")
 	o := &Orchestrator{logger: logger, fs: osFS{}}
-	bundlePath, err := o.createBundle(ctx, tempArchivePath)
+	tempBundlePath, err := o.createBundle(ctx, tempArchivePath)
 	if err != nil {
-		return err
+		return "", err
 	}
 
 	logicalBundlePath := destArchivePath + ".bundle.tar"
 	targetBundlePath := strings.TrimSuffix(logicalBundlePath, ".bundle.tar") + ".decrypted.bundle.tar"
 	targetBundlePath, err = ensureWritablePathWithUI(ctx, ui, targetBundlePath, "decrypted bundle")
 	if err != nil {
-		return err
+		return "", err
 	}
 
 	if err := restoreFS.Remove(targetBundlePath); err != nil && !errors.Is(err, os.ErrNotExist) {
 		logger.Warning("Failed to remove existing bundle target: %v", err)
 	}
-	if err := moveFileSafe(bundlePath, targetBundlePath); err != nil {
-		return fmt.Errorf("move decrypted bundle: %w", err)
+	if err := moveFileSafe(tempBundlePath, targetBundlePath); err != nil {
+		return "", fmt.Errorf("move decrypted bundle: %w", err)
 	}
 
 	logger.Info("Decrypted bundle created: %s", targetBundlePath)
-	return nil
+	return targetBundlePath, nil
 }

@@ -23,8 +23,44 @@ type Meta struct {
 	IssueID    string
 }
 
+// supportEmail is the maintainer recipient for the support email. It is INJECTED at build
+// time via ldflags from the EMAIL_SUPPORT secret
+// (-X github.com/tis24dev/proxsave/internal/support.supportEmail=...), never hardcoded. An
+// empty value (a dev build without the secret) disables the support email with a warning.
+var supportEmail string
+
+// SupportEmailConfigured reports whether the maintainer recipient was baked into this build.
+func SupportEmailConfigured() bool { return strings.TrimSpace(supportEmail) != "" }
+
 var newEmailNotifier = func(config notify.EmailConfig, proxmoxType types.ProxmoxType, logger *logging.Logger) (notify.Notifier, error) {
 	return notify.NewEmailNotifier(config, proxmoxType, logger)
+}
+
+// supportIdleTimeout bounds each interactive support prompt; on idle the read aborts
+// gracefully (the run then exits interrupted) instead of hanging forever. Var so tests
+// can shrink it. Only the explicit --support flow reaches these prompts; the automated
+// backup run never calls RunIntro.
+var supportIdleTimeout = input.DefaultIdleTimeout
+
+// ValidateIssueID accepts a GitHub issue reference of the form #<positive-decimal>.
+// It rejects a missing/short token, a signed value (#-1/#+1), and #0/#00 (issue
+// numbers start at 1). Leading zeros (e.g. #01234) are accepted.
+func ValidateIssueID(v string) error {
+	s := strings.TrimSpace(v)
+	if !strings.HasPrefix(s, "#") || len(s) < 2 {
+		return fmt.Errorf("issue must be #<number>, for example #1234")
+	}
+	digits := s[1:]
+	for _, r := range digits {
+		if r < '0' || r > '9' {
+			return fmt.Errorf("issue must be #<number>, for example #1234")
+		}
+	}
+	n, err := strconv.Atoi(digits)
+	if err != nil || n <= 0 {
+		return fmt.Errorf("issue must be #<number>, for example #1234")
+	}
+	return nil
 }
 
 // RunIntro prompts for consent and GitHub metadata.
@@ -77,7 +113,7 @@ func RunIntro(ctx context.Context, bootstrap *logging.BootstrapLogger) (meta Met
 	// GitHub nickname
 	for {
 		fmt.Print("Enter your GitHub nickname: ")
-		line, err := input.ReadLineWithContext(ctx, reader)
+		line, err := input.ReadLineWithIdle(ctx, reader, supportIdleTimeout)
 		if err != nil {
 			if errors.Is(err, input.ErrInputAborted) || ctx.Err() == context.Canceled {
 				bootstrap.Warning("Support mode interrupted by signal")
@@ -98,7 +134,7 @@ func RunIntro(ctx context.Context, bootstrap *logging.BootstrapLogger) (meta Met
 	// GitHub issue number
 	for {
 		fmt.Print("Enter the GitHub issue number in the format #1234: ")
-		line, err := input.ReadLineWithContext(ctx, reader)
+		line, err := input.ReadLineWithIdle(ctx, reader, supportIdleTimeout)
 		if err != nil {
 			if errors.Is(err, input.ErrInputAborted) || ctx.Err() == context.Canceled {
 				bootstrap.Warning("Support mode interrupted by signal")
@@ -112,11 +148,7 @@ func RunIntro(ctx context.Context, bootstrap *logging.BootstrapLogger) (meta Met
 			fmt.Println("Issue number cannot be empty. Please try again.")
 			continue
 		}
-		if !strings.HasPrefix(issue, "#") || len(issue) < 2 {
-			fmt.Println("Issue must start with '#' and contain a numeric ID, for example: #1234.")
-			continue
-		}
-		if _, err := strconv.Atoi(issue[1:]); err != nil {
+		if err := ValidateIssueID(issue); err != nil {
 			fmt.Println("Issue must be in the format #1234 with a numeric ID. Please try again.")
 			continue
 		}
@@ -126,7 +158,7 @@ func RunIntro(ctx context.Context, bootstrap *logging.BootstrapLogger) (meta Met
 
 	fmt.Println()
 	fmt.Println("Support mode confirmed.")
-	fmt.Println("The run will execute in DEBUG mode and a support email with the full log will be sent to github-support@tis24.it at the end.")
+	fmt.Println("The run will execute in DEBUG mode and a support email with the full log will be sent to the maintainer at the end.")
 	fmt.Println()
 
 	return meta, true, false
@@ -135,7 +167,7 @@ func RunIntro(ctx context.Context, bootstrap *logging.BootstrapLogger) (meta Met
 func promptYesNoSupport(ctx context.Context, reader *bufio.Reader, prompt string) (bool, error) {
 	for {
 		fmt.Print(prompt)
-		line, err := input.ReadLineWithContext(ctx, reader)
+		line, err := input.ReadLineWithIdle(ctx, reader, supportIdleTimeout)
 		if err != nil {
 			return false, err
 		}
@@ -186,6 +218,11 @@ func SendEmail(ctx context.Context, cfg *config.Config, logger *logging.Logger, 
 		logging.Warning("Support mode: cannot send support email because stats are nil")
 		return
 	}
+	recipient := strings.TrimSpace(supportEmail)
+	if recipient == "" {
+		logging.Warning("Support mode: support email recipient is not configured in this build (EMAIL_SUPPORT); skipping the support email")
+		return
+	}
 
 	subject := "SUPPORT REQUEST"
 	if strings.TrimSpace(meta.GitHubUser) != "" || strings.TrimSpace(meta.IssueID) != "" {
@@ -213,7 +250,7 @@ func SendEmail(ctx context.Context, cfg *config.Config, logger *logging.Logger, 
 		DeliveryMethod:   notify.EmailDeliverySendmail,
 		FallbackSendmail: false,
 		AttachLogFile:    true,
-		Recipient:        "github-support@tis24.it",
+		Recipient:        recipient,
 		From:             from,
 		SubjectOverride:  subject,
 	}
@@ -231,5 +268,5 @@ func SendEmail(ctx context.Context, cfg *config.Config, logger *logging.Logger, 
 		return
 	}
 
-	logging.Info("Support mode: support email handed off to local MTA for github-support@tis24.it (check mailq and /var/log/mail.log for delivery)")
+	logging.Info("Support mode: support email handed off to local MTA for %s (check mailq and /var/log/mail.log for delivery)", recipient)
 }

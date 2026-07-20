@@ -225,7 +225,7 @@ func (f *networkConfigUIApplyFlow) promptNICRepair() error {
 		"Repair now",
 		"Skip repair",
 		0,
-		false,
+		true,
 	)
 	if err != nil {
 		return err
@@ -240,6 +240,13 @@ func (f *networkConfigUIApplyFlow) promptNICRepair() error {
 		return err
 	}
 	if repair != nil && strings.TrimSpace(repair.Summary()) != "" {
+		// Match the rollback and staged-auto flows: a FAILED repair is a warning, an
+		// applied/skipped one is info, so a failure has the same prominence everywhere.
+		if repair.Failed {
+			f.warning("%s", repair.Summary())
+		} else {
+			f.info("%s", repair.Summary())
+		}
 		_ = f.ui.ShowMessage(f.ctx, "NIC repair result", repair.Summary())
 	}
 	return nil

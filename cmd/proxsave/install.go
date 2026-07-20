@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	neturl "net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -14,16 +15,17 @@ import (
 	"github.com/tis24dev/proxsave/internal/config"
 	cronutil "github.com/tis24dev/proxsave/internal/cron"
 	"github.com/tis24dev/proxsave/internal/identity"
+	"github.com/tis24dev/proxsave/internal/installer"
 	"github.com/tis24dev/proxsave/internal/logging"
 	"github.com/tis24dev/proxsave/internal/safeexec"
-	"github.com/tis24dev/proxsave/internal/tui/wizard"
+	"github.com/tis24dev/proxsave/internal/safefs"
 	buildinfo "github.com/tis24dev/proxsave/internal/version"
 )
 
 var (
 	newInstallEnsureInteractiveStdin = ensureInteractiveStdin
 	newInstallConfirmCLI             = confirmNewInstallCLI
-	newInstallConfirmTUI             = wizard.ConfirmNewInstall
+	newInstallConfirmTUI             = confirmNewInstallCharm
 	newInstallRunInstall             = runInstall
 	newInstallRunInstallTUI          = runInstallTUI
 	configureCronTimeFunc            = configureCronTime
@@ -33,6 +35,8 @@ type installConfigResult struct {
 	EnableEncryption bool
 	SkipConfigWizard bool
 	CronSchedule     string
+	SchedulerMode    string // "cron" | "daemon"
+	HealthcheckMode  string // "off" | "centralized" | "self" (self triggers the params screen)
 }
 
 func runInstall(ctx context.Context, configPath string, bootstrap *logging.BootstrapLogger) (err error) {
@@ -116,6 +120,25 @@ func runInstall(ctx context.Context, configPath string, bootstrap *logging.Boots
 		if err := runTelegramSetupCLI(ctx, reader, baseDir, configPath, bootstrap); err != nil {
 			return err
 		}
+
+		// Self-mode healthchecks: collect the ping URLs BEFORE the healthcheck
+		// bootstrap re-reads the config (ordering invariant - the bootstrap keys
+		// eligibility off the written HEALTHCHECK_ALIVE_URL). Only when self was chosen.
+		if configResult.HealthcheckMode == "self" {
+			logging.DebugStepBootstrap(bootstrap, "install workflow (cli)", "healthcheck self params")
+			if err := runHealthcheckSelfParamsCLI(ctx, reader, baseDir, configPath, bootstrap); err != nil {
+				return err
+			}
+		}
+
+		// Healthchecks setup: if the daemon engine with monitoring was chosen, guide
+		// the user + (centralized) show the portal magic-link + a connection check, or
+		// (self) verify the pasted alive URL is reachable. Only renders when eligible
+		// (re-reads the written config), non-blocking.
+		logging.DebugStepBootstrap(bootstrap, "install workflow (cli)", "healthcheck setup")
+		if err := runHealthcheckSetupCLI(ctx, reader, baseDir, configPath, bootstrap); err != nil {
+			return err
+		}
 	}
 
 	logging.DebugStepBootstrap(bootstrap, "install workflow (cli)", "finalizing symlinks and cron")
@@ -124,8 +147,12 @@ func runInstall(ctx context.Context, configPath string, bootstrap *logging.Boots
 		baseDir,
 		execInfo,
 		bootstrap,
-		buildInstallCronSchedule(configResult.SkipConfigWizard, configResult.CronSchedule),
+		buildInstallCronSchedule(configResult.SkipConfigWizard, configResult.CronSchedule, configPath),
 	)
+	// Reconcile the scheduler engine (daemon unit vs cron entry) as a mutually
+	// exclusive choice, INCLUDING the keep-existing path (SchedulerMode empty ->
+	// read from the kept config), so a re-install never leaves both active.
+	reconcileSchedulerAfterInstall(ctx, configResult.SchedulerMode, configPath, execInfo, bootstrap)
 
 	logging.DebugStepBootstrap(bootstrap, "install workflow (cli)", "detecting telegram identity")
 	telegramCode = detectTelegramCodeWithContext(ctx, baseDir)
@@ -138,19 +165,46 @@ func runInstall(ctx context.Context, configPath string, bootstrap *logging.Boots
 	// Best-effort post-install permission and ownership normalization so that
 	// the environment starts in a consistent state.
 	logging.DebugStepBootstrap(bootstrap, "install workflow (cli)", "normalizing permissions")
-	permStatus, permMessage = fixPermissionsAfterInstall(ctx, configPath, baseDir, bootstrap)
+	permStatus, permMessage = fixPermissionsAfterInstall(ctx, configPath, baseDir, bootstrap, nil)
 	logging.DebugStepBootstrap(bootstrap, "install workflow (cli)", "permissions status=%s", permStatus)
 
+	// A signal (SIGINT/SIGTERM) that cancelled the run at any point after the
+	// config was written -- including DURING the cron/scheduler finalization,
+	// which then silently installs nothing on the dead context, and including the
+	// skip-wizard path that has no optional steps to catch it earlier -- must not
+	// be reported as "Installation completed". Surface it as an aborted install so
+	// the footer shows the honest banner (same taxonomy as the TUI).
+	if ctx.Err() != nil {
+		return wrapInstallError(errInteractiveAborted)
+	}
 	return nil
 }
 
-// skipOptionalInstallStepOnAbort turns a prompt error (Ctrl-D/EOF or a cancelled
-// context) from an optional install step — the post-install audit or the Telegram
-// setup — into a non-blocking outcome: the step is abandoned with a warning and
-// the caller continues the install so the entrypoint/cron finalization still
-// runs. This matches the TUI, which logs such errors as non-blocking warnings and
-// never aborts the install.
-func skipOptionalInstallStepOnAbort(bootstrap *logging.BootstrapLogger, step string, err error) error {
+// skipOptionalInstallStepOnAbort decides how a prompt error from an OPTIONAL
+// install step (post-install audit, Telegram pairing, healthcheck setup) affects
+// the install. It splits two cases the caller cannot tell apart from the error
+// value alone:
+//
+//   - Benign input skip (Ctrl-D/EOF at the prompt, run context still live): the
+//     step is accessory and the config is already written, so it is abandoned
+//     with a warning and the install CONTINUES to the entrypoint/cron
+//     finalization. This matches the TUI, which demotes such errors to a warning.
+//   - Real abort (SIGINT/SIGTERM cancelled the run context): the user asked to
+//     stop. Continuing would run the cron/scheduler finalization on a dead
+//     context, silently install NO scheduler, yet report "Installation completed"
+//     (false green). So propagate an aborted-install error instead, which renders
+//     the "Installation aborted" banner exactly like the TUI (mapUIDeath).
+//
+// ctx.Err() is the authoritative discriminator: the run context is WithCancel and
+// is cancelled only by the signal handler (setupRunContext), so it is non-nil
+// after Ctrl+C but nil for a plain EOF at an optional prompt.
+func skipOptionalInstallStepOnAbort(ctx context.Context, bootstrap *logging.BootstrapLogger, step string, err error) error {
+	if ctx.Err() != nil {
+		if bootstrap != nil {
+			bootstrap.Warning("%s aborted (interrupted by signal); stopping the install before finalization", step)
+		}
+		return wrapInstallError(errInteractiveAborted)
+	}
 	fmt.Printf("%s skipped (input aborted, non-blocking): %v\n", step, err)
 	if bootstrap != nil {
 		bootstrap.Warning("%s skipped (input aborted, non-blocking): %v", step, err)
@@ -162,7 +216,7 @@ func runPostInstallAuditCLI(ctx context.Context, reader *bufio.Reader, execPath,
 	fmt.Println("\n--- Post-install check (optional) ---")
 	run, err := promptYesNo(ctx, reader, "Run a dry-run to detect unused components and reduce warnings? [Y/n]: ", true)
 	if err != nil {
-		return skipOptionalInstallStepOnAbort(bootstrap, "Post-install audit", err)
+		return skipOptionalInstallStepOnAbort(ctx, bootstrap, "Post-install audit", err)
 	}
 	if !run {
 		if bootstrap != nil {
@@ -175,7 +229,7 @@ func runPostInstallAuditCLI(ctx context.Context, reader *bufio.Reader, execPath,
 		bootstrap.Info("Post-install audit: running dry-run (this may take a minute)")
 	}
 
-	suggestions, err := wizard.CollectPostInstallDisableSuggestions(ctx, execPath, configPath)
+	suggestions, err := installer.CollectPostInstallDisableSuggestions(ctx, execPath, configPath)
 	if err != nil {
 		fmt.Printf("WARNING: Post-install check failed (non-blocking): %v\n", err)
 		if bootstrap != nil {
@@ -214,7 +268,7 @@ func runPostInstallAuditCLI(ctx context.Context, reader *bufio.Reader, execPath,
 
 	disableAny, err := promptYesNo(ctx, reader, "Disable any of the suggested components now (set KEY=false)? [y/N]: ", false)
 	if err != nil {
-		return skipOptionalInstallStepOnAbort(bootstrap, "Post-install audit", err)
+		return skipOptionalInstallStepOnAbort(ctx, bootstrap, "Post-install audit", err)
 	}
 	if !disableAny {
 		fmt.Println("No changes applied. You can disable unused components later by editing backup.env.")
@@ -228,7 +282,7 @@ func runPostInstallAuditCLI(ctx context.Context, reader *bufio.Reader, execPath,
 	for _, s := range suggestions {
 		disable, err := promptYesNo(ctx, reader, fmt.Sprintf("Disable %s? [y/N]: ", s.Key), false)
 		if err != nil {
-			return skipOptionalInstallStepOnAbort(bootstrap, "Post-install audit", err)
+			return skipOptionalInstallStepOnAbort(ctx, bootstrap, "Post-install audit", err)
 		}
 		if disable {
 			keys = append(keys, s.Key)
@@ -242,7 +296,7 @@ func runPostInstallAuditCLI(ctx context.Context, reader *bufio.Reader, execPath,
 		return nil
 	}
 
-	contentBytes, err := os.ReadFile(configPath)
+	contentBytes, err := safefs.ReadFileUnderRoot(configPath)
 	if err != nil {
 		fmt.Printf("ERROR: Unable to update configuration (read failed): %v\n", err)
 		if bootstrap != nil {
@@ -318,22 +372,46 @@ func runNewInstall(ctx context.Context, configPath string, bootstrap *logging.Bo
 	return newInstallRunInstallTUI(ctx, plan.ResolvedConfigPath, bootstrap)
 }
 
+// installBannerLevel classifies the install result for the completion banner.
+type installBannerLevel int
+
+const (
+	installBannerCompleted installBannerLevel = iota
+	installBannerAborted
+	installBannerFailed
+)
+
+// installBanner derives the completion banner title + severity from the install
+// result. Single extraction point reused by BOTH the CLI footer (printInstallFooter,
+// ANSI box) and the graphical finalization summary (buildInstallOutcomePrompt, themed),
+// so the two never drift.
+func installBanner(installErr error) (title string, level installBannerLevel) {
+	switch {
+	case installErr == nil:
+		return "Installation completed", installBannerCompleted
+	case isInstallAbortedError(installErr):
+		return "Installation aborted", installBannerAborted
+	default:
+		return "Installation failed", installBannerFailed
+	}
+}
+
 func printInstallFooter(installErr error, configPath, baseDir, telegramCode, permStatus, permMessage string) {
+	printRunFooter(func() {
+		installFooterBody(installErr, configPath, baseDir, telegramCode, permStatus, permMessage)
+	})
+}
+
+func installFooterBody(installErr error, configPath, baseDir, telegramCode, permStatus, permMessage string) {
 	colorReset := "\033[0m"
 
-	title := "Go-based installation completed"
-	color := "\033[32m" // green by default
-
-	if installErr != nil {
-		if isInstallAbortedError(installErr) {
-			// User-driven abort (Ctrl+C, exit, setup aborted) -> SKIP color
-			color = "\033[35m"
-			title = "Go-based installation aborted"
-		} else {
-			// Any other error -> red
-			color = "\033[31m"
-			title = "Go-based installation failed"
-		}
+	title, level := installBanner(installErr)
+	color := "\033[32m" // green (completed)
+	switch level {
+	case installBannerAborted:
+		color = "\033[35m" // magenta (user-driven abort)
+	case installBannerFailed:
+		color = "\033[31m" // red (error)
 	}
 
 	fmt.Println()
@@ -359,12 +437,11 @@ func printInstallFooter(installErr error, configPath, baseDir, telegramCode, per
 	}
 
 	// For user-aborted runs, stop here to avoid showing next steps/commands.
-	if installErr != nil && isInstallAbortedError(installErr) {
+	if level == installBannerAborted {
 		return
 	}
 
 	fmt.Println("Next steps:")
-	fmt.Println("0. If you need, start migration from old backup.env:  proxsave --env-migration (alias: proxmox-backup --env-migration)")
 	if strings.TrimSpace(configPath) != "" {
 		fmt.Printf("1. Edit configuration: %s\n", configPath)
 	} else {
@@ -387,7 +464,8 @@ func printInstallFooter(installErr error, configPath, baseDir, telegramCode, per
 	fmt.Println("https://github.com/sponsors/tis24dev")
 	fmt.Println()
 	fmt.Println("Commands:")
-	fmt.Println("  proxsave (alias: proxmox-backup) - Start backup")
+	fmt.Println("  proxsave (alias: proxmox-backup) - Open the interactive dashboard (runs the backup directly when non-interactive, e.g. cron)")
+	fmt.Println("  --backup           - Run a backup now (what bare proxsave does when non-interactive)")
 	fmt.Println("  --help             - Show all options")
 	fmt.Println("  --dry-run          - Test without changes")
 	fmt.Println("  --install          - Re-run interactive installation/setup")
@@ -397,7 +475,7 @@ func printInstallFooter(installErr error, configPath, baseDir, telegramCode, per
 	fmt.Println("  --decrypt          - Decrypt an existing backup archive")
 	fmt.Println("  --restore          - Run interactive restore workflow (select bundle, decrypt if needed, apply to system)")
 	fmt.Println("  --upgrade-config   - Upgrade configuration file using the embedded template (run after installing a new binary)")
-	fmt.Println("  --support          - Run in support mode (force debug log level and send email with attached log to github-support@tis24.it); available for standard backup and --restore")
+	fmt.Println("  --support          - Run in support mode (force debug log level and send email with attached log to the maintainer); available for standard backup and --restore")
 	fmt.Println()
 }
 
@@ -415,7 +493,7 @@ func runConfigWizardCLI(ctx context.Context, reader *bufio.Reader, configPath, t
 	defer func() { done(err) }()
 
 	logging.DebugStepBootstrap(bootstrap, "install config wizard (cli)", "preparing base template")
-	template, skipConfigWizard, err := prepareBaseTemplate(ctx, reader, configPath)
+	template, skipConfigWizard, fromExisting, err := prepareBaseTemplate(ctx, reader, configPath)
 	if err != nil {
 		return installConfigResult{}, wrapInstallError(err)
 	}
@@ -447,19 +525,69 @@ func runConfigWizardCLI(ctx context.Context, reader *bufio.Reader, configPath, t
 		return installConfigResult{}, wrapInstallError(err)
 	}
 
-	logging.DebugStepBootstrap(bootstrap, "install config wizard (cli)", "configuring cron time")
-	cronTime, err := configureCronTimeFunc(ctx, reader, cronutil.DefaultTime)
+	logging.DebugStepBootstrap(bootstrap, "install config wizard (cli)", "configuring scheduler engine")
+	engine, err := configureSchedulerEngine(ctx, reader, schedulerEngineDefault(fromExisting, template))
+	if err != nil {
+		return installConfigResult{}, wrapInstallError(err)
+	}
+	result.SchedulerMode = engine
+
+	// Healthchecks require the daemon (the sole pinger); with cron the mode is
+	// forced off and no prompt is shown, mirroring the TUI's Active gate.
+	hcMode := "off"
+	if engine == "daemon" {
+		logging.DebugStepBootstrap(bootstrap, "install config wizard (cli)", "configuring healthcheck mode")
+		hcMode, err = configureHealthcheckMode(ctx, reader, healthcheckModeDefault(fromExisting, template))
+		if err != nil {
+			return installConfigResult{}, wrapInstallError(err)
+		}
+	}
+	result.HealthcheckMode = hcMode
+
+	logging.DebugStepBootstrap(bootstrap, "install config wizard (cli)", "configuring run-at time")
+	cronTime, err := configureCronTimeFunc(ctx, reader, cronTimeDefault(fromExisting, template))
 	if err != nil {
 		return installConfigResult{}, wrapInstallError(err)
 	}
 	result.CronSchedule = cronutil.TimeToSchedule(cronTime)
 
 	if bootstrap != nil {
-		bootstrap.Info("Cron schedule selected: %s", cronTime)
+		bootstrap.Info("Scheduler: %s, run at %s", engine, cronTime)
 	}
 
 	logging.DebugStepBootstrap(bootstrap, "install config wizard (cli)", "writing configuration")
 	template = config.RemoveRuntimeDerivedEnvKeys(template)
+	template = setEnvValue(template, "SCHEDULER_MODE", engine)
+	template = setEnvValue(template, "SCHEDULER_TIME", cronTime)
+	// Write HEALTHCHECK_ENABLED + HEALTHCHECK_MODE from the explicit choice (cron
+	// and "off" disable it), replacing the old implicit daemon->enabled rule. The
+	// self-mode ping URLs are collected by runHealthcheckSelfParamsCLI after this
+	// write, before the healthcheck bootstrap re-reads the config. Clear
+	// HEALTHCHECK_ALIVE_URL/BACKUP_URL ONLY on a genuine mode change (parity with the
+	// TUI's ApplyInstallData) so a same-mode re-run keeps the user's own self URLs and
+	// an abort never leaves the monitor without a ping target; the off branch also
+	// writes HEALTHCHECK_MODE=off so no stale MODE lingers (F10-08).
+	prevMode := installer.DeriveInstallWizardPrefill(template).HealthcheckMode
+	clearHCURLs := func() {
+		if hcMode != prevMode {
+			template = setEnvValue(template, "HEALTHCHECK_ALIVE_URL", "")
+			template = setEnvValue(template, "HEALTHCHECK_BACKUP_URL", "")
+		}
+	}
+	switch hcMode {
+	case "self":
+		template = setEnvValue(template, "HEALTHCHECK_ENABLED", "true")
+		template = setEnvValue(template, "HEALTHCHECK_MODE", "self")
+		clearHCURLs()
+	case "centralized":
+		template = setEnvValue(template, "HEALTHCHECK_ENABLED", "true")
+		template = setEnvValue(template, "HEALTHCHECK_MODE", "centralized")
+		clearHCURLs()
+	default: // "off"
+		template = setEnvValue(template, "HEALTHCHECK_ENABLED", "false")
+		template = setEnvValue(template, "HEALTHCHECK_MODE", "off")
+		clearHCURLs()
+	}
 	if err := writeConfigFile(configPath, tmpConfigPath, template); err != nil {
 		return installConfigResult{}, err
 	}
@@ -592,7 +720,7 @@ func resetInstallBaseDirWithContext(ctx context.Context, baseDir string, bootstr
 
 func printInstallBanner(configPath string) {
 	fmt.Println("===========================================")
-	fmt.Println("  ProxSave - Go Version")
+	fmt.Println("  ProxSave")
 	fmt.Printf("  Version: %s\n", buildinfo.String())
 	sig := buildSignature()
 	if strings.TrimSpace(sig) == "" {
@@ -604,19 +732,19 @@ func printInstallBanner(configPath string) {
 	fmt.Printf("Configuration file: %s\n\n", configPath)
 }
 
-func prepareBaseTemplate(ctx context.Context, reader *bufio.Reader, configPath string) (string, bool, error) {
+func prepareBaseTemplate(ctx context.Context, reader *bufio.Reader, configPath string) (string, bool, bool, error) {
 	decision, err := prepareExistingConfigDecisionCLI(ctx, reader, configPath)
 	if err != nil {
-		return "", false, err
+		return "", false, false, err
 	}
 	if decision.AbortInstall {
-		return "", false, errInteractiveAborted
+		return "", false, false, errInteractiveAborted
 	}
 	if decision.SkipConfigWizard {
 		fmt.Println("Existing configuration detected, keeping current backup.env and skipping configuration wizard.")
-		return "", true, nil
+		return "", true, false, nil
 	}
-	return decision.BaseTemplate, false, nil
+	return decision.BaseTemplate, false, decision.FromExistingFile, nil
 }
 
 func configureSecondaryStorage(ctx context.Context, reader *bufio.Reader, template string) (string, error) {
@@ -626,7 +754,7 @@ func configureSecondaryStorage(ctx context.Context, reader *bufio.Reader, templa
 	fmt.Println("Network shares must be mounted BEFORE running this backup tool.")
 	fmt.Println("For direct network access without mounting, use cloud storage (rclone) instead.")
 	fmt.Println("(You can change these settings later in backup.env)")
-	prefill := wizard.DeriveInstallWizardPrefill(template)
+	prefill := installer.DeriveInstallWizardPrefill(template)
 	enableSecondary, err := confirmDefault(ctx, reader, "Enable secondary backup path?", prefill.SecondaryEnabled)
 	if err != nil {
 		return "", err
@@ -668,7 +796,7 @@ func configureSecondaryStorage(ctx context.Context, reader *bufio.Reader, templa
 func configureCloudStorage(ctx context.Context, reader *bufio.Reader, template string) (string, error) {
 	fmt.Println("\n--- Cloud storage (rclone) ---")
 	fmt.Println("Remember to configure rclone manually before enabling cloud backups.")
-	prefill := wizard.DeriveInstallWizardPrefill(template)
+	prefill := installer.DeriveInstallWizardPrefill(template)
 	enableCloud, err := confirmDefault(ctx, reader, "Enable cloud backups?", prefill.CloudEnabled)
 	if err != nil {
 		return "", err
@@ -699,7 +827,7 @@ func configureFirewallRules(ctx context.Context, reader *bufio.Reader, template 
 	fmt.Println("\n--- Firewall rules ---")
 	fmt.Println("Enable collection of firewall rules (e.g., iptables/nftables).")
 	fmt.Println("(You can change this later in backup.env via BACKUP_FIREWALL_RULES)")
-	enable, err := confirmDefault(ctx, reader, "Backup firewall rules?", wizard.DeriveInstallWizardPrefill(template).FirewallEnabled)
+	enable, err := confirmDefault(ctx, reader, "Backup firewall rules?", installer.DeriveInstallWizardPrefill(template).FirewallEnabled)
 	if err != nil {
 		return "", err
 	}
@@ -712,7 +840,7 @@ func configureFirewallRules(ctx context.Context, reader *bufio.Reader, template 
 }
 
 func configureNotifications(ctx context.Context, reader *bufio.Reader, template string) (string, error) {
-	prefill := wizard.DeriveInstallWizardPrefill(template)
+	prefill := installer.DeriveInstallWizardPrefill(template)
 	fmt.Println("\n--- Telegram ---")
 	enableTelegram, err := confirmDefault(ctx, reader, "Enable Telegram notifications (centralized)?", prefill.TelegramEnabled)
 	if err != nil {
@@ -730,7 +858,7 @@ func configureNotifications(ctx context.Context, reader *bufio.Reader, template 
 	}
 
 	fmt.Println("\n--- Email ---")
-	fmt.Println("Default email delivery uses the TIS24 cloud relay, with local sendmail as failover.")
+	fmt.Println("Default email delivery uses the ProxSave Cloud Relay, with local sendmail as failover.")
 	fmt.Println("ProxSave does not collect raw SMTP settings; choose pmf only when Proxmox Notifications is configured.")
 	enableEmail, err := confirmDefault(ctx, reader, "Enable email notifications?", prefill.EmailEnabled)
 	if err != nil {
@@ -758,7 +886,7 @@ func promptEmailDeliveryMethod(ctx context.Context, reader *bufio.Reader, defaul
 	}
 
 	fmt.Println("Email delivery methods:")
-	fmt.Println("  relay    TIS24 cloud relay over outbound HTTPS (default)")
+	fmt.Println("  relay    ProxSave Cloud Relay over outbound HTTPS (default)")
 	fmt.Println("  sendmail Local /usr/sbin/sendmail (fallback/default failover; requires a local MTA)")
 	fmt.Println("  pmf      Proxmox Notifications via proxmox-mail-forward (SMTP lives in Proxmox)")
 	for {
@@ -781,7 +909,7 @@ func promptEmailDeliveryMethod(ctx context.Context, reader *bufio.Reader, defaul
 
 func configureEncryption(ctx context.Context, reader *bufio.Reader, template *string) (bool, error) {
 	fmt.Println("\n--- Encryption ---")
-	enableEncryption, err := confirmDefault(ctx, reader, "Enable backup encryption?", wizard.DeriveInstallWizardPrefill(*template).EncryptionEnabled)
+	enableEncryption, err := confirmDefault(ctx, reader, "Enable backup encryption?", installer.DeriveInstallWizardPrefill(*template).EncryptionEnabled)
 	if err != nil {
 		return false, err
 	}
@@ -793,10 +921,244 @@ func configureEncryption(ctx context.Context, reader *bufio.Reader, template *st
 	return enableEncryption, nil
 }
 
+// schedulerEngineDefault picks the engine prompt default. Fresh installs and
+// Overwrite (both start from the embedded template) default to the resident
+// daemon, matching the Charm front-end and the daemon-by-default intent. Only an
+// Edit of an existing config defaults to its stored SCHEDULER_MODE, so a no-op
+// edit never flips the scheduler; an old config without the key stays on cron.
+func schedulerEngineDefault(fromExisting bool, template string) string {
+	// Fresh/Overwrite, or an Edit whose base is effectively empty, are "start from
+	// scratch" -> daemon (this also keeps the empty-base boundary identical to the
+	// Charm front-end, which keys off an empty base template).
+	if !fromExisting || strings.TrimSpace(template) == "" {
+		return "daemon"
+	}
+	switch strings.ToLower(strings.TrimSpace(installer.DeriveInstallWizardPrefill(template).SchedulerMode)) {
+	case "daemon":
+		return "daemon"
+	default:
+		return "cron"
+	}
+}
+
+func configureSchedulerEngine(ctx context.Context, reader *bufio.Reader, def string) (string, error) {
+	fmt.Println("\n--- Scheduler ---")
+	raw, err := promptOptional(ctx, reader, fmt.Sprintf("Scheduler engine: daemon (resident, hang watchdog + healthchecks) or cron [%s]: ", def))
+	if err != nil {
+		return "", err
+	}
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "cron":
+		return "cron", nil
+	case "daemon":
+		return "daemon", nil
+	default:
+		return def, nil
+	}
+}
+
+// healthcheckModeDefault picks the healthcheck-mode prompt default. Fresh/Overwrite
+// (or an Edit with an empty base) default to "centralized", paired with the daemon
+// default; an Edit of an existing config defaults to its stored mode so a no-op edit
+// never flips it.
+func healthcheckModeDefault(fromExisting bool, template string) string {
+	if !fromExisting || strings.TrimSpace(template) == "" {
+		return "centralized"
+	}
+	switch strings.ToLower(strings.TrimSpace(installer.DeriveInstallWizardPrefill(template).HealthcheckMode)) {
+	case "off":
+		return "off"
+	case "self":
+		return "self"
+	default:
+		return "centralized"
+	}
+}
+
+// cronTimeDefault seeds the "Run at" prompt default from the SCHEDULER_TIME stored
+// in an existing config (Edit path), mirroring schedulerEngineDefault /
+// healthcheckModeDefault, so a no-op edit keeps the operator's time instead of
+// resetting it to 02:00. Fresh/Overwrite/empty-base, or an unreadable/invalid
+// stored time, fall back to DefaultTime.
+func cronTimeDefault(fromExisting bool, template string) string {
+	if !fromExisting || strings.TrimSpace(template) == "" {
+		return cronutil.DefaultTime
+	}
+	stored := strings.TrimSpace(installer.DeriveInstallWizardPrefill(template).SchedulerTime)
+	if stored == "" {
+		return cronutil.DefaultTime
+	}
+	norm, err := cronutil.NormalizeTime(stored, cronutil.DefaultTime)
+	if err != nil {
+		return cronutil.DefaultTime
+	}
+	return norm
+}
+
+// configureHealthcheckMode prompts for the backup-monitoring mode (mirrors
+// configureSchedulerEngine). Called only with the daemon engine; the three values
+// are off/centralized/self and the config VALUES match those. "self" triggers the
+// ping-URL params screen later in the flow.
+func configureHealthcheckMode(ctx context.Context, reader *bufio.Reader, def string) (string, error) {
+	fmt.Println("\n--- Backup monitoring (healthchecks) ---")
+	fmt.Println("off         no monitoring")
+	fmt.Println("centralized ProxSave HC Server (zero setup, reuses the Telegram identity)")
+	fmt.Println("self        your own healthchecks/SaaS server (you paste the ping URLs next)")
+	raw, err := promptOptional(ctx, reader, fmt.Sprintf("Healthchecks monitoring: off, centralized, or self [%s]: ", def))
+	if err != nil {
+		return "", err
+	}
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "off":
+		return "off", nil
+	case "self":
+		return "self", nil
+	case "centralized":
+		return "centralized", nil
+	default:
+		return def, nil
+	}
+}
+
+// validateHealthcheckPingURLCLI is the CLI-side ping-URL validator, identical in
+// intent to the TUI's validateHealthcheckPingURL: an absolute http(s) URL with a
+// host. It is used for the required alive/backup URLs (empty rejected) via
+// promptNonEmpty's retry loop and, wrapped, for the optional URLs.
+func validateHealthcheckPingURLCLI(v string) error {
+	v = strings.TrimSpace(v)
+	if v == "" {
+		return fmt.Errorf("cannot be empty")
+	}
+	if !strings.HasPrefix(v, "http://") && !strings.HasPrefix(v, "https://") {
+		return fmt.Errorf("URL must start with http:// or https://")
+	}
+	u, err := neturl.ParseRequestURI(v)
+	if err != nil {
+		return fmt.Errorf("invalid URL: %v", err)
+	}
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return fmt.Errorf("URL must start with http:// or https://")
+	}
+	if u.Host == "" {
+		return fmt.Errorf("URL must include a host")
+	}
+	return nil
+}
+
+// promptHealthcheckRequiredURL prompts for a required ping URL, re-asking until the
+// value is a valid http(s) URL (parity with the TUI required-field validator).
+func promptHealthcheckRequiredURL(ctx context.Context, reader *bufio.Reader, question, def string) (string, error) {
+	for {
+		val, err := promptNonEmptyWithDefault(ctx, reader, question, def)
+		if err != nil {
+			return "", err
+		}
+		val = sanitizeEnvValue(val)
+		if verr := validateHealthcheckPingURLCLI(val); verr != nil {
+			fmt.Printf("%v\n", verr)
+			continue
+		}
+		return val, nil
+	}
+}
+
+// promptHealthcheckOptionalURL prompts for an optional ping URL: Enter keeps the
+// stored value / leaves it blank; a non-empty entry must be a valid http(s) URL.
+func promptHealthcheckOptionalURL(ctx context.Context, reader *bufio.Reader, question, def string) (string, error) {
+	for {
+		val, err := promptOptionalWithDefault(ctx, reader, question, def)
+		if err != nil {
+			return "", err
+		}
+		val = sanitizeEnvValue(val)
+		if strings.TrimSpace(val) == "" {
+			return "", nil
+		}
+		if verr := validateHealthcheckPingURLCLI(val); verr != nil {
+			fmt.Printf("%v\n", verr)
+			continue
+		}
+		return val, nil
+	}
+}
+
+// runHealthcheckSelfParamsCLI collects the self-mode full ping URLs (alive + backup
+// REQUIRED, updates + the four notify URLs OPTIONAL) and writes them into backup.env
+// via installer.ApplyHealthcheckSelfParams. It mirrors the TUI RunHealthcheckSelfParams
+// and MUST run before runHealthcheckSetupCLI so the bootstrap re-reads the alive URL.
+func runHealthcheckSelfParamsCLI(ctx context.Context, reader *bufio.Reader, baseDir, configPath string, bootstrap *logging.BootstrapLogger) error {
+	contentBytes, err := safefs.ReadFileUnderRoot(configPath)
+	if err != nil {
+		fmt.Printf("ERROR: unable to read configuration for healthcheck parameters: %v\n", err)
+		if bootstrap != nil {
+			bootstrap.Warning("Healthcheck self params: read config failed (non-blocking): %v", err)
+		}
+		return nil
+	}
+	template := string(contentBytes)
+	prefill := installer.DeriveHealthcheckSelfParams(template)
+
+	fmt.Println("\n--- Healthchecks parameters (self / personal server) ---")
+	fmt.Println("Paste the FULL ping URL of each check (e.g. https://hc-ping.com/<uuid>).")
+	fmt.Println("Alive and Backup are required; the rest are optional (press Enter to skip).")
+
+	alive, err := promptHealthcheckRequiredURL(ctx, reader, "Alive ping URL (HEALTHCHECK_ALIVE_URL): ", prefill.AliveURL)
+	if err != nil {
+		return skipOptionalInstallStepOnAbort(ctx, bootstrap, "Healthcheck parameters", err)
+	}
+	backup, err := promptHealthcheckRequiredURL(ctx, reader, "Backup ping URL (HEALTHCHECK_BACKUP_URL): ", prefill.BackupURL)
+	if err != nil {
+		return skipOptionalInstallStepOnAbort(ctx, bootstrap, "Healthcheck parameters", err)
+	}
+	updates, err := promptHealthcheckOptionalURL(ctx, reader, "Updates ping URL (HEALTHCHECK_UPDATES_URL, optional): ", prefill.UpdatesURL)
+	if err != nil {
+		return skipOptionalInstallStepOnAbort(ctx, bootstrap, "Healthcheck parameters", err)
+	}
+	notifyEmail, err := promptHealthcheckOptionalURL(ctx, reader, "Notify email ping URL (HEALTHCHECK_NOTIFY_EMAIL_URL, optional): ", prefill.NotifyEmailURL)
+	if err != nil {
+		return skipOptionalInstallStepOnAbort(ctx, bootstrap, "Healthcheck parameters", err)
+	}
+	notifyTelegram, err := promptHealthcheckOptionalURL(ctx, reader, "Notify Telegram ping URL (HEALTHCHECK_NOTIFY_TELEGRAM_URL, optional): ", prefill.NotifyTelegramURL)
+	if err != nil {
+		return skipOptionalInstallStepOnAbort(ctx, bootstrap, "Healthcheck parameters", err)
+	}
+	notifyGotify, err := promptHealthcheckOptionalURL(ctx, reader, "Notify Gotify ping URL (HEALTHCHECK_NOTIFY_GOTIFY_URL, optional): ", prefill.NotifyGotifyURL)
+	if err != nil {
+		return skipOptionalInstallStepOnAbort(ctx, bootstrap, "Healthcheck parameters", err)
+	}
+	notifyWebhook, err := promptHealthcheckOptionalURL(ctx, reader, "Notify webhook ping URL (HEALTHCHECK_NOTIFY_WEBHOOK_URL, optional): ", prefill.NotifyWebhookURL)
+	if err != nil {
+		return skipOptionalInstallStepOnAbort(ctx, bootstrap, "Healthcheck parameters", err)
+	}
+
+	params := installer.HealthcheckSelfParams{
+		AliveURL:          alive,
+		BackupURL:         backup,
+		UpdatesURL:        updates,
+		NotifyEmailURL:    notifyEmail,
+		NotifyTelegramURL: notifyTelegram,
+		NotifyGotifyURL:   notifyGotify,
+		NotifyWebhookURL:  notifyWebhook,
+	}
+	updated := installer.ApplyHealthcheckSelfParams(template, params)
+	if err := installer.WriteConfigFileAtomic(configPath, configPath+".tmp.hcself", updated); err != nil {
+		fmt.Printf("ERROR: unable to write healthcheck parameters: %v\n", err)
+		if bootstrap != nil {
+			bootstrap.Warning("Healthcheck self params: write config failed (non-blocking): %v", err)
+		}
+		return nil
+	}
+	fmt.Println("Saved healthchecks ping URLs.")
+	if bootstrap != nil {
+		bootstrap.Info("Healthcheck self params: saved ping URLs")
+	}
+	return nil
+}
+
 func configureCronTime(ctx context.Context, reader *bufio.Reader, defaultCron string) (string, error) {
 	fmt.Println("\n--- Schedule ---")
 	for {
-		cronTime, err := promptOptional(ctx, reader, fmt.Sprintf("Cron time for daily proxsave job (HH:MM) [%s]: ", defaultCron))
+		cronTime, err := promptOptional(ctx, reader, fmt.Sprintf("Run at (daily, HH:MM) [%s]: ", defaultCron))
 		if err != nil {
 			return "", err
 		}

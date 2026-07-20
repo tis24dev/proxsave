@@ -53,6 +53,15 @@ func TestValidateModeCompatibility(t *testing.T) {
 			want: []string{"Cannot use --upgrade together with --install or --new-install."},
 		},
 		{
+			name: "upgrade localfile allowed",
+			args: &cli.Args{Upgrade: true, LocalFile: true},
+		},
+		{
+			name: "localfile without upgrade rejected",
+			args: &cli.Args{LocalFile: true},
+			want: []string{"The --localfile flag only applies to --upgrade (use: --upgrade --localfile)."},
+		},
+		{
 			name: "accumulates all compatibility violations",
 			args: &cli.Args{CleanupGuards: true, Support: true, Decrypt: true, Install: true, NewInstall: true, Upgrade: true},
 			want: []string{
@@ -70,6 +79,33 @@ func TestValidateModeCompatibility(t *testing.T) {
 			got := validateModeCompatibility(tt.args)
 			if !reflect.DeepEqual(got, tt.want) {
 				t.Fatalf("validateModeCompatibility() = %#v, want %#v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestModeUseCLI(t *testing.T) {
+	orig := modeStdoutInteractive
+	t.Cleanup(func() { modeStdoutInteractive = orig })
+
+	cases := []struct {
+		name        string
+		forceCLI    bool
+		interactive bool
+		wantCLI     bool
+	}{
+		{"interactive-tui", false, true, false},
+		{"force-cli-on-tty", true, true, true},
+		{"non-tty-forces-cli", false, false, true},
+		{"force-cli-and-non-tty", true, false, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			modeStdoutInteractive = func() bool { return tc.interactive }
+			got := modeUseCLI(&cli.Args{ForceCLI: tc.forceCLI})
+			if got != tc.wantCLI {
+				t.Fatalf("modeUseCLI(forceCLI=%v, interactive=%v) = %v, want %v",
+					tc.forceCLI, tc.interactive, got, tc.wantCLI)
 			}
 		})
 	}

@@ -585,7 +585,7 @@ func TestSecondaryStorage_DeleteAssociatedLog_ReturnsFalseOnRemoveError(t *testi
 		t.Fatalf("WriteFile: %v", err)
 	}
 
-	if storage.deleteAssociatedLog(backupPath) {
+	if storage.deleteAssociatedLog(context.Background(), backupPath) {
 		t.Fatalf("expected deleteAssociatedLog to return false on remove error")
 	}
 }
@@ -666,6 +666,10 @@ func TestSecondaryStorage_ApplyRetention_SetsNoLogInfoWhenLogCountFails(t *testi
 		if err := os.Chtimes(path, ts, ts); err != nil {
 			t.Fatalf("Chtimes: %v", err)
 		}
+		// Completion sidecar so List marks the backup Verified (retention gate).
+		if err := os.WriteFile(path+".sha256", []byte("h"), 0o600); err != nil {
+			t.Fatalf("write sha256: %v", err)
+		}
 	}
 
 	deleted, err := storage.ApplyRetention(context.Background(), RetentionConfig{Policy: "simple", MaxBackups: 1})
@@ -705,6 +709,10 @@ func TestSecondaryStorage_ApplyRetention_GFS_SetsNoLogInfoWhenLogCountFails(t *t
 		}
 		if err := os.Chtimes(path, ts, ts); err != nil {
 			t.Fatalf("Chtimes: %v", err)
+		}
+		// Completion sidecar so List marks the backup Verified (retention gate).
+		if err := os.WriteFile(path+".sha256", []byte("h"), 0o600); err != nil {
+			t.Fatalf("write sha256: %v", err)
 		}
 	}
 
@@ -823,6 +831,10 @@ func TestSecondaryStorage_List_SkipsMetadataShaFiles(t *testing.T) {
 	if err := os.WriteFile(backup+".sha256", []byte("hash"), 0o600); err != nil {
 		t.Fatalf("WriteFile: %v", err)
 	}
+	// The authoritative manifest sidecar must not be counted as a backup (PS-BH-002).
+	if err := os.WriteFile(backup+".manifest.json", []byte(`{"archive_path":"x"}`), 0o600); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
 
 	backups, err := storage.List(context.Background())
 	if err != nil {
@@ -923,7 +935,7 @@ func TestSecondaryStorage_DeleteAssociatedLog_EmptyConfigPaths(t *testing.T) {
 	storage, _ := NewSecondaryStorage(&config.Config{SecondaryEnabled: true, SecondaryPath: t.TempDir()}, logger)
 	storage.config = cfg
 
-	if storage.deleteAssociatedLog("node-backup-20240102-030405.tar.zst") {
+	if storage.deleteAssociatedLog(context.Background(), "node-backup-20240102-030405.tar.zst") {
 		t.Fatalf("expected false when log path is empty/whitespace")
 	}
 }

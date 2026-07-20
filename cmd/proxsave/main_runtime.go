@@ -4,12 +4,14 @@ package main
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"runtime"
 	"runtime/pprof"
 	"strconv"
 	"strings"
+	"syscall"
 
 	"github.com/tis24dev/proxsave/internal/cli"
 	"github.com/tis24dev/proxsave/internal/config"
@@ -21,7 +23,7 @@ import (
 
 func printVersionHeader(bootstrap *logging.BootstrapLogger, toolVersion string) {
 	bootstrap.Println("===========================================")
-	bootstrap.Println("  ProxSave - Go Version")
+	bootstrap.Println("  ProxSave")
 	bootstrap.Printf("  Version: %s", toolVersion)
 	if sig := buildSignature(); sig != "" {
 		bootstrap.Printf("  Build Signature: %s", sig)
@@ -180,6 +182,12 @@ func initializeRunLogger(rt *appRuntime) *logging.Logger {
 	if rt.args.Restore {
 		logger = initializeRestoreSessionLogger(rt, logger)
 	}
+	if dashboardHandoffPending() {
+		// The dashboard's alternate screen is still up: keep the fresh run
+		// logger off the console until the flow adopts the session (the
+		// adoption lifts the mute; the flow then applies its own).
+		logger.SwapOutput(io.Discard)
+	}
 	logging.SetDefaultLogger(logger)
 	rt.bootstrap.SetLevel(rt.logLevel)
 	return logger
@@ -251,7 +259,7 @@ func initializeRunProfiling(rt *appRuntime) {
 		return // could not create the local profile dir; skip profiling (best-effort)
 	}
 	cpuProfilePath := filepath.Join(profileDir, fmt.Sprintf("cpu-%s-%s.pprof", rt.hostname, rt.timestampStr))
-	f, err := os.Create(cpuProfilePath)
+	f, err := createProfileFile(cpuProfilePath)
 	if err != nil {
 		logging.Warning("Failed to create CPU profile file: %v", err)
 		return
@@ -269,14 +277,62 @@ func initializeRunProfiling(rt *appRuntime) {
 // buildProfileDir creates and returns the local temp directory used for BOTH the cpu
 // and heap pprof output (<profileBaseDir>/proxsave). It is intentionally OFF LOG_PATH
 // so a dead/stale LOG_PATH mount can never wedge profiling I/O. Returns "" (after a
-// warning) if the directory cannot be created, signalling the caller to skip profiling.
+// warning) if the directory cannot be created or fails the safety guard, signalling
+// the caller to skip profiling (best-effort; the backup flow is never affected).
 func buildProfileDir() string {
 	profileDir := filepath.Join(profileBaseDir, "proxsave")
 	if err := os.MkdirAll(profileDir, defaultDirPerm); err != nil {
 		logging.Warning("Failed to create temp profile directory %s: %v", profileDir, err)
 		return ""
 	}
+	if err := validateProfileDir(profileDir); err != nil {
+		logging.Warning("Refusing unsafe profile directory %s: %v", profileDir, err)
+		return ""
+	}
 	return profileDir
+}
+
+// profileEUID is a seam so tests can force an owner mismatch in validateProfileDir.
+var profileEUID = func() int { return os.Geteuid() }
+
+// validateProfileDir rejects a profile directory that a local unprivileged user
+// could have interposed before us (F02-06, CWE-59). /tmp is world-writable + sticky,
+// so on a first run the attacker may pre-create <base>/proxsave as a symlink to a dir
+// they control, or as a directory they own, and MkdirAll would accept both. Reject a
+// symlink, a non-directory, a foreign-owned dir, or a group/other-writable dir (where
+// they could plant symlink files).
+func validateProfileDir(dir string) error {
+	info, err := os.Lstat(dir)
+	if err != nil {
+		return err
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("profile dir is a symlink: %s", dir)
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("profile path is not a directory: %s", dir)
+	}
+	if st, ok := info.Sys().(*syscall.Stat_t); ok {
+		if int(st.Uid) != profileEUID() {
+			return fmt.Errorf("profile dir owner uid %d != euid %d: %s", st.Uid, profileEUID(), dir)
+		}
+	}
+	if info.Mode().Perm()&0o022 != 0 {
+		return fmt.Errorf("profile dir is group/other-writable (%#o): %s", info.Mode().Perm(), dir)
+	}
+	return nil
+}
+
+// createProfileFile opens a pprof output file refusing to follow symlinks or to
+// truncate a pre-existing file (F02-06, CWE-59). The profile filenames are
+// predictable and /tmp is world-writable, so O_EXCL (no pre-existing symlink/file)
+// plus O_NOFOLLOW (final component not a symlink) close the truncate vector. 0600
+// keeps the artifacts root-only. The create is additionally confined to the
+// profile directory via os.Root (structural gosec G304): O_EXCL over a
+// pre-existing symlink returns EEXIST, an escaping symlink is refused, and
+// os.Root still accepts O_NOFOLLOW (kept as belt-and-suspenders).
+func createProfileFile(path string) (*os.File, error) {
+	return safefs.OpenFileUnderRoot(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL|syscall.O_NOFOLLOW, 0o600)
 }
 
 // checkGoRuntimeVersion ensures the running binary was built with at least the specified Go version (semver: major.minor.patch).
@@ -315,7 +371,7 @@ func checkGoRuntimeVersion(minimum string) error {
 	}
 
 	if !meetsMinimum(rtMaj, rtMin, rtPatch, minMaj, minMin, minPatch) {
-		return fmt.Errorf("go runtime version %s is below required %s — rebuild with go %s or set GOTOOLCHAIN=auto", rt, "go"+minimum, "go"+minimum)
+		return fmt.Errorf("go runtime version %s is below required %s; rebuild with go %s or set GOTOOLCHAIN=auto", rt, "go"+minimum, "go"+minimum)
 	}
 	return nil
 }

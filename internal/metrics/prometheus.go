@@ -21,9 +21,13 @@ type BackupMetrics struct {
 	EndTime   time.Time
 	Duration  time.Duration
 
-	ExitCode       int
-	ErrorCount     int
-	WarningCount   int
+	Failed       bool // the backup run itself failed (runErr != nil); authoritative for status
+	ExitCode     int
+	ErrorCount   int
+	WarningCount int
+	// NotifyCount tallies notification/communication failures: warning-weight for the
+	// status (never escalate to error), so a notify-only run is status 1, not 2.
+	NotifyCount    int
 	LocalBackups   int
 	SecBackups     int
 	CloudBackups   int
@@ -58,7 +62,7 @@ func (pe *PrometheusExporter) Export(m *BackupMetrics) (err error) {
 	}
 
 	// 0755 on purpose (not 0750): this is the Prometheus textfile-collector
-	// directory, which node_exporter — typically a non-root user — must be able to
+	// directory, which node_exporter (typically a non-root user) must be able to
 	// traverse and read to scrape the metrics file.
 	// #nosec G301 -- world-traversable is required for the non-root metrics scraper.
 	if err := os.MkdirAll(pe.textfileDir, 0o755); err != nil {
@@ -126,16 +130,24 @@ func (pe *PrometheusExporter) Export(m *BackupMetrics) (err error) {
 		endTs = float64(m.StartTime.Unix() + int64(m.Duration.Seconds()))
 	}
 
-	// Status gauge: 0=success, 1=warning, 2=error. Classify by the error/warning
-	// counts rather than the exit code alone: a warning-only run is promoted to a
-	// non-zero (generic) exit code upstream, so keying off m.ExitCode != 0 used to
-	// report a warning-only backup as an error (PS-BH-004). A non-zero exit code
-	// with no counted errors/warnings (e.g. an early abort) still maps to error.
+	// Status gauge: 0=success, 1=warning, 2=error. A genuinely FAILED backup run
+	// (m.Failed, set from runErr != nil) is authoritative -> error, even when the
+	// terminal [ERROR] line was not yet counted at export time and only warnings were
+	// logged (F11-02: keying off counts+exit-code alone masked such a failure as a
+	// warning, because the generic failure exit code collides with the warning-only
+	// promotion code). A warning-only run is NOT a failure (m.Failed == false): it is
+	// promoted to a non-zero (generic) exit code upstream but must stay status=1, not 2
+	// (PS-BH-004). Notification/communication errors never set m.Failed, so they never
+	// escalate a run to error. A non-zero exit code with no failure and no counted
+	// errors/warnings (e.g. an early abort) still maps to error.
 	status := 0
 	switch {
-	case m.ErrorCount > 0:
+	case m.Failed || m.ErrorCount > 0:
 		status = 2
-	case m.WarningCount > 0:
+	case m.WarningCount > 0 || m.NotifyCount > 0:
+		// A notification/communication failure is warning-weight: it must keep the run
+		// at status 1 and, crucially, be checked BEFORE the non-zero-exit-code fallback
+		// below (a notify-only run carries the generic exit code) so it never reads as error.
 		status = 1
 	case m.ExitCode != 0:
 		status = 2

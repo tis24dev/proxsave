@@ -138,6 +138,11 @@ type StorageError struct {
 	Err         error
 	IsCritical  bool
 	Recoverable bool
+	// PrimarySaved is true when the PRIMARY archive uploaded and verified but a later step
+	// (a sidecar file) failed. It lets a caller phrase the outcome as "primary saved, sidecar
+	// failed" instead of the misleading "backup was not saved" (F08-08). Default false means
+	// "not applicable / primary not confirmed saved", which keeps the generic wording.
+	PrimarySaved bool
 }
 
 func (e *StorageError) Error() string {

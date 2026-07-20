@@ -15,6 +15,7 @@ Complete troubleshooting guide for Proxsave with common issues, solutions, and d
   - [Restore Issues](#7-restore-issues)
 - [Debug Procedures](#debug-procedures)
 - [Getting Help](#getting-help)
+- [Exit Codes](#exit-codes)
 - [Related Documentation](#related-documentation)
 
 ---
@@ -159,7 +160,7 @@ Linux permission modes and `root:root` ownership are often synthetic on CIFS/SMB
 ```bash
 # Check valid values
 nano configs/backup.env
-COMPRESSION_TYPE=xz    # Valid: xz, zstd, gzip, bzip2, lz4
+COMPRESSION_TYPE=xz    # Valid: gzip, bzip2, xz, lzma, zstd (also pigz; none to disable)
 ```
 
 **Test configuration**:
@@ -310,7 +311,7 @@ iptables -L -n | grep -i drop
 
 ---
 
-#### Restore/Decrypt: stuck on “Scanning backup path…” or timeout (cloud/rclone)
+#### Restore/Decrypt: stuck on "Scanning backup path..." or timeout (cloud/rclone)
 
 **Cause**: ProxSave scans cloud backups by listing the remote (`rclone lsf`) and inspecting each candidate by reading the manifest/metadata (`rclone cat`). Each rclone call is protected by `RCLONE_TIMEOUT_CONNECTION` (the timer resets per command). On slow remotes or very large directories this can time out.
 
@@ -590,7 +591,7 @@ This mode uses Proxmox Notifications via `proxmox-mail-forward`. It is the recom
   - **PVE**: `pvesh get /access/users/root@pam` → fallback to `pveum user list` → fallback to `/etc/pve/user.cfg`
   - **PBS**: `proxmox-backup-manager user list` → fallback to `/etc/proxmox-backup/user.cfg`
   - **Dual**: intentionally reuses the **PVE** path for `root@pam` email discovery
-- Relay blocks `root@…` recipients; use a real non-root mailbox for `EMAIL_RECIPIENT`.
+- Relay blocks `root@...` recipients; use a real non-root mailbox for `EMAIL_RECIPIENT`.
 - If `EMAIL_FALLBACK_SENDMAIL=true`, ProxSave will fall back to local `/usr/sbin/sendmail` when relay delivery fails. If relay cannot start because no recipient is available, sendmail cannot help either; configure `EMAIL_RECIPIENT` or the `root@pam` email in Proxmox.
 - Check the proxsave logs for `email-relay` warnings/errors.
 - `Email relay accepted request ...` means the relay accepted the submission. It does **not** guarantee final inbox delivery; later provider-side failures/bounces are outside the ProxSave process.
@@ -824,13 +825,10 @@ proxsave --dry-run --log-level debug
 # Check output for loaded config values
 ```
 
-**Expected dry-run output**:
-```
-[DRY-RUN] Configuration loaded from: configs/backup.env
-[DRY-RUN] CLOUD_ENABLED: true
-[DRY-RUN] CLOUD_REMOTE: gdrive:pbs-backups
-[DRY-RUN] Would create backup...
-```
+Dry-run runs the full workflow at the chosen log level but makes no changes (no archive
+written, no upload, no retention delete). With `--log-level debug` the loaded
+configuration and the actions ProxSave *would* take are written to the log, so use it to
+confirm the config parsed as expected before a real run.
 
 ---
 
@@ -1024,10 +1022,40 @@ proxsave --support
 **Support mode workflow**:
 1. Requests GitHub username and issue number
 2. Runs backup with DEBUG logging
-3. Emails log to `github-support@tis24.it`
+3. Emails the log to the maintainer address baked into the build (injected at build time, not hardcoded; a dev build without it skips the email and logs a warning)
 4. Requires existing GitHub issue for tracking
 
 **Note**: Logs may contain file paths and hostnames. Credentials are never logged.
+
+---
+
+## Exit Codes
+
+`proxsave` returns a specific exit code so scripts and the daemon can react to the
+failure class. `0` is success; any non-zero code is a failure.
+
+| Code | Name | Meaning |
+|------|------|---------|
+| `0` | success | Execution completed successfully |
+| `1` | generic error | Unspecified error |
+| `2` | configuration error | Invalid or missing configuration |
+| `3` | environment error | Invalid or unsupported Proxmox environment |
+| `4` | backup error | Error during the backup operation (generic) |
+| `5` | storage error | Error during storage operations |
+| `6` | network error | Network error (upload, notifications, and so on) |
+| `7` | permission error | Permission error |
+| `8` | verification error | Integrity verification failed |
+| `9` | collection error | Error collecting configuration files |
+| `10` | archive error | Error creating the archive |
+| `11` | compression error | Error during compression |
+| `12` | disk space error | Insufficient disk space |
+| `13` | panic error | An unhandled panic was caught |
+| `14` | security error | The security check reported errors |
+| `15` | encryption error | Error during encryption setup or processing |
+
+A backup that finishes with warnings (no errors) is promoted from `0` to exit `1`
+(generic error) before the notification phase; a run that raised errors becomes `4`
+(backup error) when its code is still `0`/`1`, otherwise it keeps its more specific code.
 
 ---
 
@@ -1036,7 +1064,6 @@ proxsave --support
 ### Configuration & Setup
 - **[Configuration Guide](CONFIGURATION.md)** - Complete variable reference
 - **[CLI Reference](CLI_REFERENCE.md)** - All command-line flags
-- **[Migration Guide](MIGRATION_GUIDE.md)** - backup.env config migration to Go
 
 ### Operations
 - **[Cloud Storage Guide](CLOUD_STORAGE.md)** - rclone configuration and troubleshooting
@@ -1106,7 +1133,7 @@ A: Use `--dry-run` mode: `proxsave --dry-run --log-level debug`
 A: Update your configuration: `proxsave --upgrade-config`
 
 **Q: Can I run backup while another backup is in progress?**
-A: No. Proxsave uses a lock file (`BACKUP_PATH/.backup.lock`) to prevent concurrent runs. The lock stores `pid/host/time`; on the same host, proxsave checks PID liveness to avoid “stuck” locks after an interrupted run.
+A: No. Proxsave uses a lock file (`.backup.lock` under `LOCK_PATH`, default `<BASE_DIR>/lock/.backup.lock`) to prevent concurrent runs. The lock stores `pid/host/time`; on the same host, proxsave checks PID liveness to avoid "stuck" locks after an interrupted run.
 
 **Q: Backup hangs during PVE datastore detection when a network storage is unreachable.**
 A: Set `FS_IO_TIMEOUT` to cap how long proxsave waits on any individual filesystem syscall (stat/readdir/open/read/write/close/glob/copy/hash) across the preflight, logging, storage, cloud and restore paths, and `PVESH_TIMEOUT` to cap `pvesh` calls. This reduces the likelihood of indefinite hangs when a storage becomes unreachable mid-run.

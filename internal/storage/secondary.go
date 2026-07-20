@@ -390,9 +390,12 @@ func (s *SecondaryStorage) List(ctx context.Context) (backups []*types.BackupMet
 
 	// Filter and parse backup files
 	for _, match := range matches {
-		// Skip associated files
-		if strings.HasSuffix(match, ".sha256") ||
-			strings.HasSuffix(match, ".metadata") {
+		// Skip associated sidecars (checksum/metadata/manifest); shared predicate.
+		if isBackupSidecar(match) {
+			continue
+		}
+		// Skip in-flight temp copies (.tmp-...) and partial archives (<name>.partial).
+		if isBackupTempArtifact(match) {
 			continue
 		}
 
@@ -420,6 +423,7 @@ func (s *SecondaryStorage) List(ctx context.Context) (backups []*types.BackupMet
 			BackupFile: match,
 			Timestamp:  stat.ModTime(),
 			Size:       stat.Size(),
+			Verified:   backupHasCompletionSidecar(ctx, match, timeout),
 		})
 	}
 
@@ -447,7 +451,10 @@ func (s *SecondaryStorage) deleteBackupInternal(ctx context.Context, backupFile 
 	s.logger.Debug("Deleting secondary backup: %s", backupFile)
 
 	basePath, _ := trimBundleSuffix(backupFile)
-	filesToDelete := buildBackupCandidatePaths(basePath, s.config.BundleAssociatedFiles)
+	// Always include the bundle path so an orphan .bundle.tar (created while
+	// bundling was enabled, then disabled) is cleaned up. Remove of an absent
+	// bundle is a no-op, so this is behavior-preserving when no bundle exists.
+	filesToDelete := buildBackupCandidatePaths(basePath, true)
 
 	// Delete all files; collect real removal failures (not "already gone") and
 	// track whether the data archive itself (not just a sidecar) failed, so the
@@ -475,7 +482,7 @@ func (s *SecondaryStorage) deleteBackupInternal(ctx context.Context, backupFile 
 	}
 
 	// Best-effort: delete associated secondary log file for this backup
-	logDeleted := s.deleteAssociatedLog(backupFile)
+	logDeleted := s.deleteAssociatedLog(ctx, backupFile)
 
 	if len(failedFiles) > 0 {
 		if !dataFailed {
@@ -490,7 +497,7 @@ func (s *SecondaryStorage) deleteBackupInternal(ctx context.Context, backupFile 
 
 // deleteAssociatedLog attempts to remove the secondary log file corresponding to a backup.
 // It is best-effort and never returns an error to the caller.
-func (s *SecondaryStorage) deleteAssociatedLog(backupFile string) bool {
+func (s *SecondaryStorage) deleteAssociatedLog(ctx context.Context, backupFile string) bool {
 	if s == nil || s.config == nil {
 		return false
 	}
@@ -508,7 +515,9 @@ func (s *SecondaryStorage) deleteAssociatedLog(backupFile string) bool {
 	logName := fmt.Sprintf("backup-%s-%s.log", host, ts)
 	fullPath := filepath.Join(logPath, logName)
 
-	if err := os.Remove(fullPath); err != nil {
+	// Bounded against a dead/stale mount: on a cancelled/expired ctx safefs
+	// returns immediately without running the remove (best-effort cleanup).
+	if err := safefs.Remove(ctx, fullPath, fsIoTimeout(s.config)); err != nil {
 		if !os.IsNotExist(err) {
 			s.logger.Debug("Secondary logs: failed to delete %s: %v", logName, err)
 		}
@@ -519,7 +528,7 @@ func (s *SecondaryStorage) deleteAssociatedLog(backupFile string) bool {
 	return true
 }
 
-func (s *SecondaryStorage) countLogFiles() int {
+func (s *SecondaryStorage) countLogFiles(ctx context.Context) int {
 	if s == nil || s.config == nil {
 		return -1
 	}
@@ -528,7 +537,10 @@ func (s *SecondaryStorage) countLogFiles() int {
 		return 0
 	}
 	pattern := filepath.Join(logPath, "backup-*.log")
-	matches, err := filepath.Glob(pattern)
+	// Bounded against a dead/stale mount, consistent with the main backup glob.
+	matches, err := safefs.Run(ctx, "secondary-log-glob", s.basePath, fsIoTimeout(s.config), func() ([]string, error) {
+		return filepath.Glob(pattern)
+	})
 	if err != nil {
 		s.logger.Debug("Secondary logs: failed to count log files: %v", err)
 		return -1
@@ -574,11 +586,17 @@ func (s *SecondaryStorage) ApplyRetention(ctx context.Context, config RetentionC
 
 // applyGFSRetention applies GFS (Grandfather-Father-Son) retention policy
 func (s *SecondaryStorage) applyGFSRetention(ctx context.Context, backups []*types.BackupMetadata, config RetentionConfig) (int, error) {
+	eligible, inert := partitionRetentionEligible(backups)
+	for _, in := range inert {
+		s.logger.Warning("Secondary storage: backup %s ignored by retention (%s)", in.Backup.BackupFile, in.Reason)
+	}
+	backups = eligible
+
 	config = EffectiveGFSRetentionConfig(config)
 	s.logger.Debug("Applying GFS retention policy (daily=%d, weekly=%d, monthly=%d, yearly=%d)",
 		config.Daily, config.Weekly, config.Monthly, config.Yearly)
 
-	initialLogs := s.countLogFiles()
+	initialLogs := s.countLogFiles(ctx)
 	logsDeleted := 0
 
 	// Classify backups according to GFS scheme
@@ -586,7 +604,7 @@ func (s *SecondaryStorage) applyGFSRetention(ctx context.Context, backups []*typ
 
 	// Get statistics
 	stats := GetRetentionStats(classification)
-	s.logger.Debug("GFS classification → daily: %d/%d, weekly: %d/%d, monthly: %d/%d, yearly: %d/%d, to_delete: %d",
+	s.logger.Debug("GFS classification -> daily: %d/%d, weekly: %d/%d, monthly: %d/%d, yearly: %d/%d, to_delete: %d",
 		stats[CategoryDaily], config.Daily,
 		stats[CategoryWeekly], config.Weekly,
 		stats[CategoryMonthly], config.Monthly,
@@ -660,6 +678,12 @@ func (s *SecondaryStorage) applySimpleRetention(ctx context.Context, backups []*
 		return 0, nil
 	}
 
+	eligible, inert := partitionRetentionEligible(backups)
+	for _, in := range inert {
+		s.logger.Warning("Secondary storage: backup %s ignored by retention (%s)", in.Backup.BackupFile, in.Reason)
+	}
+	backups = eligible
+
 	totalBackups := len(backups)
 	if totalBackups <= maxBackups {
 		s.logger.Debug("Secondary storage: %d backups (within retention limit of %d)", totalBackups, maxBackups)
@@ -670,11 +694,11 @@ func (s *SecondaryStorage) applySimpleRetention(ctx context.Context, backups []*
 	toDelete := totalBackups - maxBackups
 	s.logger.Info("Applying simple retention policy: %d backups found, limit is %d, deleting %d oldest",
 		totalBackups, maxBackups, toDelete)
-	s.logger.Info("Simple retention → current: %d, limit: %d, to_delete: %d",
+	s.logger.Info("Simple retention -> current: %d, limit: %d, to_delete: %d",
 		totalBackups, maxBackups, toDelete)
 
 	// Delete oldest backups (already sorted newest first)
-	initialLogs := s.countLogFiles()
+	initialLogs := s.countLogFiles(ctx)
 	logsDeleted := 0
 	deleted := 0
 	for i := totalBackups - 1; i >= maxBackups; i-- {

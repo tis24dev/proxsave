@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/tis24dev/proxsave/internal/health"
 	"github.com/tis24dev/proxsave/internal/safefs"
 	"github.com/tis24dev/proxsave/internal/storage"
 	"github.com/tis24dev/proxsave/internal/types"
@@ -74,6 +75,14 @@ func (o *Orchestrator) dispatchNotifications(ctx context.Context, stats *BackupS
 		return
 	}
 
+	// The whole notification subsystem (notifiers, adapter, serverbot client) shares
+	// this one logger instance. Bracket the sequential dispatch so any error/critical
+	// it logs is reclassified as a NOTIFY-ERR (display-error, warning-weight): a channel
+	// outage stays warning, never escalates the run to error. One governed boundary
+	// instead of patching each notifier's ~dozen error sites.
+	o.logger.EnterNotifyErrorScope()
+	defer o.logger.ExitNotifyErrorScope()
+
 	type notifierEntry struct {
 		name    string
 		enabled bool
@@ -93,6 +102,13 @@ func (o *Orchestrator) dispatchNotifications(ctx context.Context, stats *BackupS
 		{name: "Telegram", enabled: cfg != nil && cfg.TelegramEnabled},
 		{name: "Gotify", enabled: cfg != nil && cfg.GotifyEnabled},
 		{name: "Webhook", enabled: cfg != nil && cfg.WebhookEnabled},
+		// R3 (Fase 1): Healthchecks stays LAST in this dispatch order; do not reorder it
+		// without re-checking the magic-link capture + outcome semantics below.
+		// Always-visible healthchecks status; LAST so the Telegram relay above has
+		// already captured any portal magic-link onto stats.HealthcheckLink. Gated on
+		// HEALTHCHECK_ENABLED (independent of Telegram). Same const as Name() so it is
+		// dispatched exactly once.
+		{name: healthchecksSectionName, enabled: cfg != nil && cfg.HealthcheckEnabled},
 	}
 
 	channelsByName := make(map[string]NotificationChannel, len(o.notificationChannels))
@@ -130,6 +146,13 @@ func (o *Orchestrator) dispatchNotifications(ctx context.Context, stats *BackupS
 			} else {
 				o.logger.Warning("%s: enabled but not initialized", entry.name)
 			}
+			// An enabled channel that failed to initialize sent nothing: record an "error"
+			// outcome so its per-channel healthchecks sensor goes DOWN instead of silently
+			// absent. The Healthchecks section entry is a reporting surface, not a notify
+			// channel, so it never gets a per-channel result.
+			if entry.name != healthchecksSectionName {
+				setNotifyResult(stats, entry.name, "error")
+			}
 			continue
 		}
 
@@ -143,6 +166,28 @@ func (o *Orchestrator) dispatchNotifications(ctx context.Context, stats *BackupS
 			continue
 		}
 		_ = ch.Notify(ctx, stats)
+	}
+
+	// Hand the per-channel outcomes to the daemon (Fase 2B): env-gated, so only the daemon's
+	// supervised child (which has EnvRunID set) writes; a bare `proxsave --backup` no-ops.
+	o.persistNotifyResults(stats)
+}
+
+// persistNotifyResults writes the per-channel notify outcomes to the handoff file the daemon
+// reads after the child exits, to ping one healthchecks check per channel. Best-effort and
+// env-gated on EnvRunID (set only by the daemon on its child), so a non-daemon run leaves no
+// stray file. Writes an empty results object when nothing was recorded so the daemon can tell
+// "child ran, nothing to report" from "child crashed" (a missing/stale file).
+func (o *Orchestrator) persistNotifyResults(stats *BackupStats) {
+	if o.cfg == nil || strings.TrimSpace(o.cfg.BaseDir) == "" || stats == nil {
+		return
+	}
+	rid := strings.TrimSpace(os.Getenv(health.EnvRunID))
+	if rid == "" {
+		return
+	}
+	if err := health.WriteNotifyResults(o.cfg.BaseDir, rid, time.Now().Unix(), stats.NotifyResults); err != nil {
+		o.logger.Debug("notify results handoff write failed: %v", err)
 	}
 }
 
@@ -170,9 +215,10 @@ func (o *Orchestrator) refreshLogIssuesFromFile(stats *BackupStats, includeCateg
 	if includeCategories {
 		categoryLimit = 10
 	}
-	categories, errorCount, warningCount := ParseLogCounts(stats.LogFilePath, categoryLimit)
+	categories, errorCount, warningCount, notifyCount := ParseLogCounts(stats.LogFilePath, categoryLimit)
 	stats.ErrorCount = errorCount
 	stats.WarningCount = warningCount
+	stats.NotifyCount = notifyCount
 	if includeCategories {
 		stats.LogCategories = categories
 	} else {
@@ -192,7 +238,11 @@ func applyIssueExitCode(stats *BackupStats) {
 		return
 	}
 
-	if stats.WarningCount > 0 && stats.ExitCode == types.ExitSuccess.Int() {
+	// Warnings and notify (notification/communication) issues are warning-weight:
+	// they promote a clean run to the generic exit code but never to backup error.
+	// The error branch above already returned for real errors, so a notify issue can
+	// never mask one.
+	if (stats.WarningCount > 0 || stats.NotifyCount > 0) && stats.ExitCode == types.ExitSuccess.Int() {
 		stats.ExitCode = types.ExitGenericError.Int()
 	}
 }
@@ -219,6 +269,7 @@ func (o *Orchestrator) DispatchEarlyErrorNotification(ctx context.Context, early
 		Timestamp:    earlyErr.Timestamp,
 		StartTime:    earlyErr.Timestamp,
 		EndTime:      earlyErr.Timestamp,
+		Failed:       true, // an early-init failure IS a failed run (status=error)
 		ExitCode:     earlyErr.ExitCode.Int(),
 		ErrorCount:   1,
 		WarningCount: 0,

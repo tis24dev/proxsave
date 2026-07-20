@@ -71,9 +71,12 @@ func maybeInstallNetworkConfigFromStage(
 
 	logging.DebugStep(logger, "network staged install", "Attempt automatic NIC name repair (safe mappings only)")
 	if repair := maybeRepairNICNamesAuto(ctx, logger, archivePath); repair != nil {
-		if repair.Applied() || repair.SkippedReason != "" {
+		switch {
+		case repair.Failed:
+			logger.Warning("%s", repair.Summary())
+		case repair.Applied() || repair.SkippedReason != "":
 			logger.Info("%s", repair.Summary())
-		} else {
+		default:
 			logger.Debug("%s", repair.Summary())
 		}
 	}
@@ -143,13 +146,12 @@ func maybeRepairNICNamesAuto(ctx context.Context, logger *logging.Logger, archiv
 	done := logging.DebugStart(logger, "NIC repair auto", "archive=%s", strings.TrimSpace(archivePath))
 	defer func() { done(nil) }()
 
-	plan, err := planNICNameRepair(ctx, archivePath)
+	plan, err := planNICNameRepairFn(ctx, archivePath)
 	if err != nil {
-		logger.Warning("NIC name repair failed: %v", err)
-		return nil
+		return &nicRepairResult{AppliedAt: nowRestore(), Failed: true, FailedReason: fmt.Sprintf("could not read backup network inventory: %v", err)}
 	}
 
-	overrides, err := detectNICNamingOverrideRules(logger)
+	overrides, err := detectNICNamingOverrideRulesFn(logger)
 	if err != nil {
 		logger.Debug("NIC naming override detection failed: %v", err)
 	} else if !overrides.Empty() {
@@ -168,10 +170,9 @@ func maybeRepairNICNamesAuto(ctx context.Context, logger *logging.Logger, archiv
 		}
 	}
 
-	result, err := applyNICNameRepair(logger, plan, false)
+	result, err := applyNICNameRepairFn(logger, plan, false)
 	if err != nil {
-		logger.Warning("NIC name repair failed: %v", err)
-		return nil
+		return &nicRepairResult{AppliedAt: nowRestore(), Failed: true, FailedReason: fmt.Sprintf("apply failed: %v", err)}
 	}
 	return result
 }

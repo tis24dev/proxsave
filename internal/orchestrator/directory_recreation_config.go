@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/tis24dev/proxsave/internal/logging"
+	"github.com/tis24dev/proxsave/internal/safefs"
 )
 
 type pveStorageEntry struct {
@@ -28,7 +29,7 @@ func loadPVEStorageEntries(path string, logger *logging.Logger) (entries []pveSt
 	}
 
 	logger.Info("Parsing storage.cfg to recreate storage directories...")
-	file, err := os.Open(path)
+	file, err := safefs.OpenFileUnderRoot(path, os.O_RDONLY, 0)
 	if err != nil {
 		return nil, fmt.Errorf("open storage.cfg: %w", err)
 	}
@@ -51,7 +52,7 @@ func loadPBSDatastoreEntries(path string, logger *logging.Logger) (entries []pbs
 	}
 
 	logger.Info("Parsing datastore.cfg to recreate datastore directories...")
-	file, err := os.Open(path)
+	file, err := safefs.OpenFileUnderRoot(path, os.O_RDONLY, 0)
 	if err != nil {
 		return nil, fmt.Errorf("open datastore.cfg: %w", err)
 	}

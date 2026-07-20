@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/tis24dev/proxsave/internal/safeexec"
 	"github.com/tis24dev/proxsave/internal/types"
@@ -186,13 +187,13 @@ type Config struct {
 	AgeRecipientFile      string
 
 	// Telegram Notifications
-	TelegramEnabled       bool
-	TelegramBotType       string // "personal" or "centralized"
-	TelegramBotToken      string // For personal mode
-	TelegramChatID        string // For personal mode
-	TelegramServerAPIHost string // For centralized mode
-	ServerID              string // Server identifier for centralized mode
-	TelegramNotifySecret  string // Deprecated: no longer read from backup.env; the relay secret is provisioned via TOFU into the immutable identity file. Kept "" for compatibility.
+	TelegramEnabled      bool
+	TelegramBotType      string // "personal" or "centralized"
+	TelegramBotToken     string // For personal mode
+	TelegramChatID       string // For personal mode
+	ServerAPIHost        string // Shared bot-server base host (Telegram relay + centralized healthchecks); centralized mode
+	ServerID             string // Server identifier for centralized mode
+	TelegramNotifySecret string // Deprecated: no longer read from backup.env; the relay secret is provisioned via TOFU into the immutable identity file. Kept "" for compatibility.
 
 	// Telegram delivery confirmation (two-response CLI): poll the server for the
 	// real Telegram delivery outcome after the relay accepts the notification.
@@ -234,6 +235,39 @@ type Config struct {
 	// Metrics
 	MetricsEnabled bool
 	MetricsPath    string
+
+	// Scheduler engine (cron vs resident daemon). Defaults keep existing installs
+	// on cron; the install wizard and the --upgrade auto-migration are what set daemon.
+	SchedulerMode  string        // "cron" | "daemon"
+	SchedulerTime  string        // daily HH:MM ("Run at") used by daemon mode
+	MaxRunDuration time.Duration // daemon watchdog: hard timeout for one supervised backup
+	DaemonOptOut   bool          // true after --daemon-remove; --upgrade won't re-install the daemon
+
+	// Healthchecks connector (dead-man switch + backup outcome), used by the daemon.
+	HealthcheckEnabled           bool
+	HealthcheckMode              string // "centralized" (fetch ping-urls from the server) | "self"
+	HealthcheckHeartbeatInterval time.Duration
+	HealthcheckSendLog           bool
+	HealthcheckAliveURL          string // centralized cache (auto-filled from the server)
+	HealthcheckBackupURL         string // centralized cache (auto-filled from the server)
+	HealthcheckPingEndpoint      string // self mode: ping base
+	HealthcheckPingKey           string // self mode: optional ping key for slug URLs
+	HealthcheckAliveID           string // self mode: UUID or slug of the service-alive check
+	HealthcheckBackupID          string // self mode: UUID or slug of the backup-outcome check
+	// Fase 1 updates sensor (daemon): whether a newer release is available.
+	HealthcheckUpdatesURL     string        // self mode: full updates check ping URL (optional)
+	HealthcheckUpdatesID      string        // self mode: UUID or slug of the updates check
+	HealthcheckUpdateInterval time.Duration // updates-check cadence (default 5m)
+	// Fase 2 per-notification-channel sensors (self mode only): full URL or check ID per
+	// channel. Centralized mode resolves these from the server, not from config.
+	HealthcheckNotifyEmailURL    string
+	HealthcheckNotifyEmailID     string
+	HealthcheckNotifyTelegramURL string
+	HealthcheckNotifyTelegramID  string
+	HealthcheckNotifyGotifyURL   string
+	HealthcheckNotifyGotifyID    string
+	HealthcheckNotifyWebhookURL  string
+	HealthcheckNotifyWebhookID   string
 
 	// Security features
 	CheckNetworkSecurity bool
@@ -433,6 +467,8 @@ func (c *Config) parse() error {
 	c.parseStorageSettings()
 	c.parseRetentionSettings()
 	c.parseNotificationSettings()
+	c.parseSchedulerSettings()
+	c.parseHealthcheckSettings()
 	if err := c.parseCollectionSettings(); err != nil {
 		return err
 	}
@@ -734,7 +770,7 @@ func (c *Config) parseNotificationSettings() {
 	c.TelegramBotType = c.getString("BOT_TELEGRAM_TYPE", "centralized")
 	c.TelegramBotToken = c.getString("TELEGRAM_BOT_TOKEN", "")
 	c.TelegramChatID = c.getString("TELEGRAM_CHAT_ID", "")
-	c.TelegramServerAPIHost = "https://bot.tis24.it:1443"
+	c.ServerAPIHost = "https://bot.proxsave.dev"
 	c.ServerID = ""
 	c.TelegramNotifySecret = "" // no longer read from backup.env; provisioned via TOFU into the immutable identity file
 	c.TelegramConfirmDelivery = c.getBool("TELEGRAM_CONFIRM_DELIVERY", true)
@@ -790,6 +826,64 @@ func (c *Config) parseNotificationSettings() {
 	}
 }
 
+// parseSchedulerSettings reads the scheduler-engine keys. All defaults keep the
+// current behaviour (cron), so a config merged by --upgrade is inert until the
+// wizard or the auto-migration flips SCHEDULER_MODE to daemon.
+func (c *Config) parseSchedulerSettings() {
+	c.SchedulerMode = normalizeSchedulerMode(c.getString("SCHEDULER_MODE", "cron"))
+	c.SchedulerTime = strings.TrimSpace(c.getString("SCHEDULER_TIME", "02:00"))
+	c.MaxRunDuration = c.getDuration("MAX_RUN_DURATION", 1*time.Hour)
+	c.DaemonOptOut = c.getBool("DAEMON_OPT_OUT", false)
+}
+
+// parseHealthcheckSettings reads the healthchecks-connector keys (daemon only).
+func (c *Config) parseHealthcheckSettings() {
+	c.HealthcheckEnabled = c.getBool("HEALTHCHECK_ENABLED", false)
+	c.HealthcheckMode = normalizeHealthcheckMode(c.getString("HEALTHCHECK_MODE", HealthcheckModeCentralized))
+	c.HealthcheckHeartbeatInterval = c.getDuration("HEALTHCHECK_HEARTBEAT_INTERVAL", 5*time.Minute)
+	c.HealthcheckSendLog = c.getBool("HEALTHCHECK_SEND_LOG", true)
+	c.HealthcheckAliveURL = strings.TrimSpace(c.getString("HEALTHCHECK_ALIVE_URL", ""))
+	c.HealthcheckBackupURL = strings.TrimSpace(c.getString("HEALTHCHECK_BACKUP_URL", ""))
+	c.HealthcheckPingEndpoint = strings.TrimSpace(c.getString("HEALTHCHECK_PING_ENDPOINT", "https://hc-ping.com"))
+	c.HealthcheckPingKey = strings.TrimSpace(c.getString("HEALTHCHECK_PING_KEY", ""))
+	c.HealthcheckAliveID = strings.TrimSpace(c.getString("HEALTHCHECK_ALIVE_ID", ""))
+	c.HealthcheckBackupID = strings.TrimSpace(c.getString("HEALTHCHECK_BACKUP_ID", ""))
+	c.HealthcheckUpdatesURL = strings.TrimSpace(c.getString("HEALTHCHECK_UPDATES_URL", ""))
+	c.HealthcheckUpdatesID = strings.TrimSpace(c.getString("HEALTHCHECK_UPDATES_ID", ""))
+	c.HealthcheckUpdateInterval = c.getDuration("HEALTHCHECK_UPDATE_INTERVAL", 5*time.Minute)
+	c.HealthcheckNotifyEmailURL = strings.TrimSpace(c.getString("HEALTHCHECK_NOTIFY_EMAIL_URL", ""))
+	c.HealthcheckNotifyEmailID = strings.TrimSpace(c.getString("HEALTHCHECK_NOTIFY_EMAIL_ID", ""))
+	c.HealthcheckNotifyTelegramURL = strings.TrimSpace(c.getString("HEALTHCHECK_NOTIFY_TELEGRAM_URL", ""))
+	c.HealthcheckNotifyTelegramID = strings.TrimSpace(c.getString("HEALTHCHECK_NOTIFY_TELEGRAM_ID", ""))
+	c.HealthcheckNotifyGotifyURL = strings.TrimSpace(c.getString("HEALTHCHECK_NOTIFY_GOTIFY_URL", ""))
+	c.HealthcheckNotifyGotifyID = strings.TrimSpace(c.getString("HEALTHCHECK_NOTIFY_GOTIFY_ID", ""))
+	c.HealthcheckNotifyWebhookURL = strings.TrimSpace(c.getString("HEALTHCHECK_NOTIFY_WEBHOOK_URL", ""))
+	c.HealthcheckNotifyWebhookID = strings.TrimSpace(c.getString("HEALTHCHECK_NOTIFY_WEBHOOK_ID", ""))
+}
+
+// normalizeSchedulerMode maps any unrecognised value to the safe default "cron".
+func normalizeSchedulerMode(v string) string {
+	if strings.ToLower(strings.TrimSpace(v)) == "daemon" {
+		return "daemon"
+	}
+	return "cron"
+}
+
+// HealthcheckMode values. Centralized fetches ping URLs from the server; self
+// assembles them locally from a ping endpoint + check IDs.
+const (
+	HealthcheckModeCentralized = "centralized"
+	HealthcheckModeSelf        = "self"
+)
+
+// normalizeHealthcheckMode maps any unrecognised value to the default "centralized".
+func normalizeHealthcheckMode(v string) string {
+	if strings.ToLower(strings.TrimSpace(v)) == HealthcheckModeSelf {
+		return HealthcheckModeSelf
+	}
+	return HealthcheckModeCentralized
+}
+
 func (c *Config) parseCollectionSettings() error {
 	if patterns := c.getStringSlice("BACKUP_EXCLUDE_PATTERNS", nil); patterns != nil {
 		c.ExcludePatterns = patterns
@@ -836,8 +930,7 @@ func (c *Config) parsePVESettings() error {
 	}
 	c.PVEBackupIncludePattern = strings.TrimSpace(c.getString("PVE_BACKUP_INCLUDE_PATTERN", ""))
 	// Default false to match the shipped template (backup.env). On a Ceph host that
-	// omits the key, set BACKUP_CEPH_CONFIG=true to capture /etc/ceph. (env-migration
-	// preserves a legacy value and only auto-disables it when Ceph is absent.)
+	// omits the key, set BACKUP_CEPH_CONFIG=true to capture /etc/ceph.
 	c.BackupCephConfig = c.getBool("BACKUP_CEPH_CONFIG", false)
 	c.CephConfigPath = c.getString("CEPH_CONFIG_PATH", "/etc/ceph")
 	c.PVEConfigPath = c.getString("PVE_CONFIG_PATH", "/etc/pve")
@@ -898,7 +991,7 @@ func (c *Config) parseSystemSettings() {
 	c.PBSDatastorePaths = normalizeList(c.getStringSlice("PBS_DATASTORE_PATH", nil))
 }
 
-// Helper methods per ottenere valori tipizzati
+// Helper methods to obtain typed values
 
 func (c *Config) getString(key, defaultValue string) string {
 	upperKey := strings.ToUpper(key)
@@ -919,6 +1012,17 @@ func (c *Config) getInt(key string, defaultValue int) int {
 	if val, ok := c.raw[key]; ok {
 		if intVal, err := strconv.Atoi(val); err == nil {
 			return intVal
+		}
+	}
+	return defaultValue
+}
+
+// getDuration parses a Go duration string (e.g. "6h", "5m"); a missing, empty,
+// unparseable, or non-positive value yields the default.
+func (c *Config) getDuration(key string, defaultValue time.Duration) time.Duration {
+	if val, ok := c.raw[strings.ToUpper(key)]; ok {
+		if d, err := time.ParseDuration(strings.TrimSpace(val)); err == nil && d > 0 {
+			return d
 		}
 	}
 	return defaultValue

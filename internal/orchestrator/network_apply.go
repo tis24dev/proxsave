@@ -408,12 +408,19 @@ type nicRepairUI interface {
 // maybeRepairNICNamesTUI); the only mode-specific behavior comes from ui. Both
 // confirmations default to the non-destructive answer (do NOT skip the repair /
 // do NOT apply conflicting mappings) in both modes.
+// Seams for tests to drive the override/conflict prompts deterministically.
+var (
+	planNICNameRepairFn            = planNICNameRepair
+	detectNICNamingOverrideRulesFn = detectNICNamingOverrideRules
+	applyNICNameRepairFn           = applyNICNameRepair
+)
+
 func repairNICNamesWithUI(ctx context.Context, ui nicRepairUI, logger *logging.Logger, archivePath string) *nicRepairResult {
 	logging.DebugStep(logger, "NIC repair", "Plan NIC name repair (archive=%s)", strings.TrimSpace(archivePath))
-	plan, err := planNICNameRepair(ctx, archivePath)
+	plan, err := planNICNameRepairFn(ctx, archivePath)
 	if err != nil {
 		logger.Warning("NIC name repair plan failed: %v", err)
-		return nil
+		return &nicRepairResult{AppliedAt: nowRestore(), Failed: true, FailedReason: fmt.Sprintf("could not read backup network inventory: %v", err)}
 	}
 	if plan == nil {
 		return nil
@@ -430,7 +437,7 @@ func repairNICNamesWithUI(ctx context.Context, ui nicRepairUI, logger *logging.L
 		logger.Debug("NIC mapping details:\n%s", plan.Mapping.Details())
 
 		logging.DebugStep(logger, "NIC repair", "Detect persistent NIC naming overrides (udev/systemd)")
-		overrides, err := detectNICNamingOverrideRules(logger)
+		overrides, err := detectNICNamingOverrideRulesFn(logger)
 		if err != nil {
 			logger.Debug("NIC naming override detection failed: %v", err)
 		} else if overrides.Empty() {
@@ -448,7 +455,7 @@ func repairNICNamesWithUI(ctx context.Context, ui nicRepairUI, logger *logging.L
 			}
 			b.WriteString("Skip NIC name repair and keep restored interface names?")
 
-			skip, err := ui.ConfirmAction(ctx, "NIC naming overrides", b.String(), "Skip NIC repair", "Proceed", 0, false)
+			skip, err := ui.ConfirmAction(ctx, "NIC naming overrides", b.String(), "Skip NIC repair", "Proceed", 0, true)
 			if err != nil {
 				logger.Warning("NIC naming override prompt failed: %v", err)
 			} else if skip {
@@ -493,7 +500,7 @@ func repairNICNamesWithUI(ctx context.Context, ui nicRepairUI, logger *logging.L
 	result, err := applyNICNameRepair(logger, plan, includeConflicts)
 	if err != nil {
 		logger.Warning("NIC name repair failed: %v", err)
-		return nil
+		return &nicRepairResult{AppliedAt: nowRestore(), Failed: true, FailedReason: fmt.Sprintf("apply failed: %v", err)}
 	}
 
 	// Surface the outcome in both modes (this was previously CLI-only): the
@@ -749,9 +756,9 @@ func buildRollbackScript(markerPath, backupPath, logPath string, restartNetworki
 		`  echo "[ERROR] Extract phase failed (exit=$RC) - skipping prune phase" >> "$LOG"`,
 		`fi`,
 		// Prune phase
-		`if [ "$TAR_OK" -eq 1 ] && [ -d /etc/network ]; then`,
+		`if [ "$TAR_OK" -eq 1 ] && { [ -d /etc/network ] || [ -d /etc/netplan ] || [ -d /etc/systemd/network ] || [ -d /etc/NetworkManager/system-connections ]; }; then`,
 		`  echo "[INFO] --- PRUNE PHASE ---" >> "$LOG"`,
-		`  echo "[DEBUG] Scope: /etc/network (+ /etc/cloud/cloud.cfg.d/99-disable-network-config.cfg, /etc/dnsmasq.d/lxc-vmbr1.conf)" >> "$LOG"`,
+		`  echo "[DEBUG] Scope: /etc/network /etc/netplan /etc/systemd/network /etc/NetworkManager/system-connections (+ /etc/cloud/cloud.cfg.d/99-disable-network-config.cfg, /etc/dnsmasq.d/lxc-vmbr1.conf)" >> "$LOG"`,
 		`  (`,
 		`    set +e`,
 		`    echo "[DEBUG] Creating temp files for prune operation..."`,
@@ -774,13 +781,21 @@ func buildRollbackScript(markerPath, backupPath, logPath string, restartNetworki
 		`    echo "[DEBUG] Archive contains $MANIFEST_COUNT entries"`,
 		`    echo "[DEBUG] Normalizing manifest paths..."`,
 		`    sed 's#^\./##' "$MANIFEST_ALL" > "$MANIFEST"`,
-		`    if ! grep -q '^etc/network/' "$MANIFEST"; then`,
-		`      echo "[WARN] Rollback archive does not include etc/network - skipping prune phase"`,
+		`    if ! grep -qE '^etc/(network|netplan|systemd/network|NetworkManager/system-connections)/' "$MANIFEST"; then`,
+		`      echo "[WARN] Rollback archive does not include any managed network dir - skipping prune phase"`,
 		`      rm -f "$MANIFEST_ALL" "$MANIFEST" "$CANDIDATES" "$CLEANUP"`,
 		`      exit 0`,
 		`    fi`,
-		`    echo "[DEBUG] Scanning current filesystem under /etc/network..."`,
-		`    find /etc/network -mindepth 1 \( -type f -o -type l \) -print > "$CANDIDATES" 2>/dev/null || true`,
+		`    echo "[DEBUG] Scanning current filesystem under managed network dirs..."`,
+		`    NET_DIRS=""`,
+		`    for d in /etc/network /etc/netplan /etc/systemd/network /etc/NetworkManager/system-connections; do`,
+		`      [ -d "$d" ] && NET_DIRS="$NET_DIRS $d"`,
+		`    done`,
+		`    if [ -n "$NET_DIRS" ]; then`,
+		`      find $NET_DIRS -mindepth 1 \( -type f -o -type l \) -print > "$CANDIDATES" 2>/dev/null || true`,
+		`    else`,
+		`      : > "$CANDIDATES"`,
+		`    fi`,
 		`    CANDIDATES_COUNT=$(wc -l < "$CANDIDATES")`,
 		`    echo "[DEBUG] Found $CANDIDATES_COUNT files/links on disk"`,
 		`    echo "[DEBUG] Computing cleanup list (present on disk, absent in backup)..."`,

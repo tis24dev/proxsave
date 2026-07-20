@@ -15,7 +15,7 @@ import (
 
 func promptYesNo(ctx context.Context, reader *bufio.Reader, prompt string) (bool, error) {
 	fmt.Print(prompt)
-	line, err := input.ReadLineWithContext(ctx, reader)
+	line, err := input.ReadLineWithIdle(ctx, reader, cliIdleTimeout)
 	if err != nil {
 		return false, err
 	}
@@ -72,14 +72,13 @@ func promptYesNoWithCountdown(ctx context.Context, reader *bufio.Reader, logger 
 
 	deadlineHHMMSS := deadline.Format("15:04:05")
 	timeoutSeconds := int(timeout.Seconds())
-	defaultLabel := "No"
-	if defaultYes {
-		defaultLabel = "Yes"
-	}
 
+	// The countdown advertises the TIMEOUT outcome (always No), not the Enter
+	// default, so a defaultYes prompt never reads "default: Yes" while an expiry
+	// picks No. The Enter default stays advertised via the [Y/n] hint.
 	// Print a single prompt line to avoid interfering with interactive input on
 	// terminals that don't handle repeated carriage-return updates well (e.g. IPMI/serial).
-	fmt.Fprintf(os.Stderr, "Auto-skip in %ds (at %s, default: %s)... %s %s ", timeoutSeconds, deadlineHHMMSS, defaultLabel, question, defStr)
+	fmt.Fprintf(os.Stderr, "Auto-skip in %ds (at %s, on timeout: No)... %s %s ", timeoutSeconds, deadlineHHMMSS, question, defStr)
 
 	logging.DebugStep(logger, "prompt yes/no", "Waiting for user input (no live countdown)")
 	line, err := input.ReadLineWithContext(ctxTimeout, reader)

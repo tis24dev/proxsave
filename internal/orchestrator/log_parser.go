@@ -5,19 +5,30 @@ import (
 	"os"
 	"strings"
 
+	"github.com/tis24dev/proxsave/internal/logging"
 	"github.com/tis24dev/proxsave/internal/notify"
+	"github.com/tis24dev/proxsave/internal/safefs"
 )
 
-// ParseLogCounts parses a log file and returns error/warning counts and categorized issues
-// This is used both during backup completion and notification generation
-func ParseLogCounts(logPath string, categoryLimit int) (categories []notify.LogCategory, errorCount, warningCount int) {
+// notifyErrorToken is the level token the notify-scoped logger writes for a
+// notification/communication failure. Single-sourced from logging.NotifyErrorLabel
+// (the emitter) so the parser can never drift from it; a change to the value there
+// propagates here at compile time. A NOTIFY-ERR line displays as an error but is
+// counted separately (warning-weight) for the run status.
+const notifyErrorToken = logging.NotifyErrorLabel
+
+// ParseLogCounts parses a log file and returns error/warning/notify counts and
+// categorized issues. This is used both during backup completion and notification
+// generation. notifyCount tallies NOTIFY-ERR lines (notification/communication
+// failures) which display as errors but are warning-weight for the run status.
+func ParseLogCounts(logPath string, categoryLimit int) (categories []notify.LogCategory, errorCount, warningCount, notifyCount int) {
 	if strings.TrimSpace(logPath) == "" {
-		return nil, 0, 0
+		return nil, 0, 0, 0
 	}
 
-	file, err := os.Open(logPath)
+	file, err := safefs.OpenFileUnderRoot(logPath, os.O_RDONLY, 0)
 	if err != nil {
-		return nil, 0, 0
+		return nil, 0, 0, 0
 	}
 	defer func() { _ = file.Close() }()
 
@@ -40,11 +51,21 @@ func ParseLogCounts(logPath string, categoryLimit int) (categories []notify.LogC
 			errorCount++
 		case "warning":
 			warningCount++
+		case "notify_error":
+			// Notification/communication failure: warning-weight for the run
+			// status, but shown as an error in the category list.
+			notifyCount++
 		}
 
 		label, example := splitCategoryAndExample(message)
 		if label == "" {
 			continue
+		}
+
+		// A notify-error displays as ERROR even though it is counted separately.
+		categoryType := strings.ToUpper(entryType)
+		if entryType == "notify_error" {
+			categoryType = "ERROR"
 		}
 
 		key := entryType + "::" + label
@@ -56,7 +77,7 @@ func ParseLogCounts(logPath string, categoryLimit int) (categories []notify.LogC
 		} else {
 			categoryMap[key] = &notify.LogCategory{
 				Label:   label,
-				Type:    strings.ToUpper(entryType),
+				Type:    categoryType,
 				Count:   1,
 				Example: example,
 			}
@@ -64,7 +85,7 @@ func ParseLogCounts(logPath string, categoryLimit int) (categories []notify.LogC
 	}
 
 	if len(categoryMap) == 0 {
-		return nil, errorCount, warningCount
+		return nil, errorCount, warningCount, notifyCount
 	}
 
 	list := make([]notify.LogCategory, 0, len(categoryMap))
@@ -76,9 +97,9 @@ func ParseLogCounts(logPath string, categoryLimit int) (categories []notify.LogC
 	sortLogCategories(list)
 
 	if categoryLimit > 0 && len(list) > categoryLimit {
-		return list[:categoryLimit], errorCount, warningCount
+		return list[:categoryLimit], errorCount, warningCount, notifyCount
 	}
-	return list, errorCount, warningCount
+	return list, errorCount, warningCount, notifyCount
 }
 
 // sortLogCategories sorts log categories by priority
@@ -163,6 +184,14 @@ func classifyLogLine(line string) (entryType, message string) {
 					return "", ""
 				}
 				return "error", msg
+			case notifyErrorToken:
+				// Notification/communication failure: displays as an error but is
+				// counted separately (warning-weight) for the run status.
+				msg = sanitizeLogMessage(msg)
+				if msg == "" {
+					return "", ""
+				}
+				return "notify_error", msg
 			default:
 				return "", ""
 			}

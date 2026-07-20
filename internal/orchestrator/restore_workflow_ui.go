@@ -30,7 +30,7 @@ func fallbackRestoreDecisionInfoFromManifest(manifest *backup.Manifest) *Restore
 }
 
 func prepareRestoreBundleWithUI(ctx context.Context, cfg *config.Config, logger *logging.Logger, version string, ui RestoreWorkflowUI) (*backupCandidate, *preparedBundle, error) {
-	candidate, err := selectBackupCandidateWithUI(ctx, ui, cfg, logger, false)
+	candidate, err := selectBackupCandidateWithUI(ctx, ui, cfg, logger, "Restore", false)
 	if err != nil {
 		return nil, nil, err
 	}

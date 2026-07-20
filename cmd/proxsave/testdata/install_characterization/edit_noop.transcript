@@ -1,0 +1,37 @@
+<TMPDIR>/backup.env already exists.
+Choose how to proceed:
+  [1] Overwrite (start from embedded template)
+  [2] Edit existing (use current file as base)
+  [3] Keep existing & continue (skip configuration wizard)
+  [0] Cancel installation
+Choice [3]: 
+--- Secondary storage ---
+Configure an additional local path for redundant copies.
+IMPORTANT: Secondary path must be a filesystem-mounted directory (e.g., /mnt/nas-backup)
+Network shares must be mounted BEFORE running this backup tool.
+For direct network access without mounting, use cloud storage (rclone) instead.
+(You can change these settings later in backup.env)
+Enable secondary backup path? [Y/n]: Secondary backup path (SECONDARY_PATH): [/mnt/nas-backup] Secondary log path (SECONDARY_LOG_PATH, optional - press Enter to skip): [/mnt/nas-backup/log] 
+--- Cloud storage (rclone) ---
+Remember to configure rclone manually before enabling cloud backups.
+Enable cloud backups? [Y/n]: Rclone remote for backups (e.g. myremote:pbs-backups): [myremote:pbs-backups] Rclone remote for logs (e.g. myremote:/logs): [myremote:/logs] 
+--- Firewall rules ---
+Enable collection of firewall rules (e.g., iptables/nftables).
+(You can change this later in backup.env via BACKUP_FIREWALL_RULES)
+Backup firewall rules? [Y/n]: 
+--- Telegram ---
+Enable Telegram notifications (centralized)? [Y/n]: 
+--- Email ---
+Default email delivery uses the ProxSave Cloud Relay, with local sendmail as failover.
+ProxSave does not collect raw SMTP settings; choose pmf only when Proxmox Notifications is configured.
+Enable email notifications? [Y/n]: Email delivery methods:
+  relay    ProxSave Cloud Relay over outbound HTTPS (default)
+  sendmail Local /usr/sbin/sendmail (fallback/default failover; requires a local MTA)
+  pmf      Proxmox Notifications via proxmox-mail-forward (SMTP lives in Proxmox)
+Email delivery method [pmf]: 
+--- Encryption ---
+Enable backup encryption? [Y/n]: 
+--- Scheduler ---
+Scheduler engine: daemon (resident, hang watchdog + healthchecks) or cron [cron]: 
+--- Schedule ---
+Run at (daily, HH:MM) [02:00]: 

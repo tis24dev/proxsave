@@ -742,16 +742,12 @@ func (c *CloudStorage) Store(ctx context.Context, backupFile string, metadata *t
 	c.logger.Debug("Cloud storage: upload retries=%d threads=%d bwlimit=%s",
 		c.config.RcloneRetries, c.config.RcloneTransfers, c.config.RcloneBandwidthLimit)
 
-	// Use OPERATION timeout for upload (long timeout). Guard >0 so
-	// RCLONE_TIMEOUT_OPERATION=0 means "unbounded upload" instead of
-	// WithTimeout(ctx, 0) (an already-expired ctx that fails every upload
-	// instantly). Consistent with UploadToRemotePath and remoteSHA256.
+	// Do NOT pre-bound all tasks under one shared RcloneTimeoutOperation budget: that
+	// let a slow copy consume the budget and starve the post-upload verify, failing a
+	// good object (F08-03). Each runUploadTask now owns an independent copy budget AND
+	// a fresh verify budget derived from the raw run ctx. The run ctx still bounds
+	// shutdown (cancel-only), and RcloneTimeoutOperation=0 stays unbounded per task.
 	uploadCtx := ctx
-	if c.config.RcloneTimeoutOperation > 0 {
-		var cancel context.CancelFunc
-		uploadCtx, cancel = context.WithTimeout(ctx, time.Duration(c.config.RcloneTimeoutOperation)*time.Second)
-		defer cancel()
-	}
 
 	tasks := make([]uploadTask, 0, 4)
 	tasks = append(tasks, uploadTask{
@@ -772,7 +768,13 @@ func (c *CloudStorage) Store(ctx context.Context, backupFile string, metadata *t
 
 		for _, srcFile := range associatedFiles {
 			if _, err := safefs.Stat(ctx, srcFile, c.fsIoTimeout()); err != nil {
-				continue // Skip if missing or unreachable (a dead mount must not wedge the store)
+				// A dead mount must not wedge the store, so a timeout still skips the sidecar,
+				// but a TIMEOUT is not a MISSING file: surface it so a silently-dropped sidecar
+				// is visible instead of looking absent (F08-08).
+				if sidecarStatWarrantsWarning(err) {
+					c.logger.Warning("WARNING: Cloud Storage: skipping sidecar %s: filesystem timeout: %v", filepath.Base(srcFile), err)
+				}
+				continue // Skip if missing or unreachable
 			}
 
 			tasks = append(tasks, uploadTask{
@@ -795,12 +797,13 @@ func (c *CloudStorage) Store(ctx context.Context, backupFile string, metadata *t
 		}
 		c.logger.Warning("WARNING: Cloud Storage: Failed to upload %s: %v", target, err)
 		return &StorageError{
-			Location:    LocationCloud,
-			Operation:   op,
-			Path:        backupFile,
-			Err:         err,
-			IsCritical:  false,
-			Recoverable: true,
+			Location:     LocationCloud,
+			Operation:    op,
+			Path:         backupFile,
+			Err:          err,
+			IsCritical:   false,
+			Recoverable:  true,
+			PrimarySaved: !primaryFailed,
 		}
 	}
 
@@ -814,6 +817,14 @@ func (c *CloudStorage) Store(ctx context.Context, backupFile string, metadata *t
 	}
 
 	return nil
+}
+
+// sidecarStatWarrantsWarning reports whether a Stat error on an associated (sidecar) file
+// should be surfaced as a warning rather than silently skipped. A stalled-mount TIMEOUT is
+// warned (a silently dropped sidecar would otherwise look merely absent); a genuinely missing
+// file (os.ErrNotExist) or any other error stays a silent skip (F08-08).
+func sidecarStatWarrantsWarning(err error) bool {
+	return errors.Is(err, safefs.ErrTimeout)
 }
 
 func (c *CloudStorage) countBackups(ctx context.Context) int {
@@ -931,16 +942,16 @@ func (c *CloudStorage) shouldUseParallelUpload() bool {
 }
 
 func (c *CloudStorage) runUploadTask(parentCtx context.Context, task uploadTask) error {
-	// Guard >0 so RCLONE_TIMEOUT_OPERATION=0 stays unbounded rather than collapsing
-	// to an already-expired WithTimeout(parentCtx, 0).
-	taskCtx := parentCtx
+	// Copy gets its own budget. Guard >0 so RCLONE_TIMEOUT_OPERATION=0 stays unbounded
+	// rather than collapsing to an already-expired WithTimeout(parentCtx, 0).
+	copyCtx := parentCtx
 	if c.config.RcloneTimeoutOperation > 0 {
 		var cancel context.CancelFunc
-		taskCtx, cancel = context.WithTimeout(parentCtx, time.Duration(c.config.RcloneTimeoutOperation)*time.Second)
+		copyCtx, cancel = context.WithTimeout(parentCtx, time.Duration(c.config.RcloneTimeoutOperation)*time.Second)
 		defer cancel()
 	}
 
-	if err := c.uploadWithRetry(taskCtx, task.local, task.remote); err != nil {
+	if err := c.uploadWithRetry(copyCtx, task.local, task.remote); err != nil {
 		return err
 	}
 
@@ -948,7 +959,18 @@ func (c *CloudStorage) runUploadTask(parentCtx context.Context, task uploadTask)
 		return nil
 	}
 
-	ok, err := c.VerifyUpload(parentCtx, task.local, task.remote)
+	// Verify gets its OWN fresh budget from parentCtx, a sibling of copyCtx rather than
+	// a child of the copy-consumed ctx, so a large/slow copy that used its whole budget
+	// cannot starve the verify of a good, fully-uploaded object (F08-03). A verify that
+	// still exhausts this fresh budget stays a real failure (no size-only degrade).
+	verifyCtx := parentCtx
+	if c.config.RcloneTimeoutOperation > 0 {
+		var cancel context.CancelFunc
+		verifyCtx, cancel = context.WithTimeout(parentCtx, time.Duration(c.config.RcloneTimeoutOperation)*time.Second)
+		defer cancel()
+	}
+
+	ok, err := c.VerifyUpload(verifyCtx, task.local, task.remote)
 	if err != nil || !ok {
 		if err == nil {
 			err = fmt.Errorf("verification failed")
@@ -1013,33 +1035,45 @@ func (c *CloudStorage) wrapUploadError(localPath string, err error) error {
 // UploadToRemotePath uploads an arbitrary file to the provided remote path using
 // the same retry and verification logic used for backups.
 func (c *CloudStorage) UploadToRemotePath(ctx context.Context, localFile, remoteFile string, verify bool) error {
-	// Bound the whole operation (copy retries + verify) on one RcloneTimeoutOperation
-	// budget. This is the only upload entry point reachable with a deadline-less ctx:
-	// the cloud log dispatch passes the run ctx, which is cancel-only (no deadline),
-	// so without this a stalled rclone or dead/stale mount could hang shutdown. Like
-	// Store/runUploadTask (here one shared budget covers copy+verify); guarded >0 to
-	// avoid an already-expired WithTimeout(ctx, 0).
+	// Copy and verify each get an INDEPENDENT RcloneTimeoutOperation budget derived
+	// from the run ctx (cancel-only, no deadline: the cloud log dispatch passes it), so
+	// a stalled rclone or dead mount cannot hang shutdown AND a slow copy cannot starve
+	// the verify of a good object (F08-03). Guarded >0 to avoid an already-expired
+	// WithTimeout(ctx, 0); RCLONE_TIMEOUT_OPERATION=0 stays unbounded.
+	copyCtx := ctx
 	if c.config.RcloneTimeoutOperation > 0 {
 		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, time.Duration(c.config.RcloneTimeoutOperation)*time.Second)
+		copyCtx, cancel = context.WithTimeout(ctx, time.Duration(c.config.RcloneTimeoutOperation)*time.Second)
 		defer cancel()
 	}
-	if err := c.uploadWithRetry(ctx, localFile, remoteFile); err != nil {
+	if err := c.uploadWithRetry(copyCtx, localFile, remoteFile); err != nil {
 		return err
 	}
-	if verify {
-		if ok, err := c.VerifyUpload(ctx, localFile, remoteFile); err != nil || !ok {
-			if err == nil {
-				err = fmt.Errorf("verification failed")
-			}
-			return err
+	if !verify {
+		return nil
+	}
+	verifyCtx := ctx
+	if c.config.RcloneTimeoutOperation > 0 {
+		var cancel context.CancelFunc
+		verifyCtx, cancel = context.WithTimeout(ctx, time.Duration(c.config.RcloneTimeoutOperation)*time.Second)
+		defer cancel()
+	}
+	if ok, err := c.VerifyUpload(verifyCtx, localFile, remoteFile); err != nil || !ok {
+		if err == nil {
+			err = fmt.Errorf("verification failed")
 		}
+		return err
 	}
 	return nil
 }
 
-// rcloneCopy executes rclone copy command
-func (c *CloudStorage) rcloneCopy(ctx context.Context, localFile, remoteFile string) error {
+// buildRcloneUploadArgs assembles the argv for the headless rclone copy of a
+// single file (subcommand, configured flags, source and destination). proxsave
+// rclone runs are always headless (daemon/cron, no TTY), so --progress/--stats
+// are deliberately omitted: they yield nothing useful and accumulate stats
+// output in memory over multi-hour uploads that then bloats error messages
+// captured via CombinedOutput.
+func (c *CloudStorage) buildRcloneUploadArgs(localFile, remoteFile string) []string {
 	args := c.buildRcloneArgs("copyto")
 
 	// Add bandwidth limit if configured
@@ -1052,11 +1086,26 @@ func (c *CloudStorage) rcloneCopy(ctx context.Context, localFile, remoteFile str
 		args = append(args, "--transfers", fmt.Sprintf("%d", c.config.RcloneTransfers))
 	}
 
-	// Add progress and stats
-	args = append(args, "--progress", "--stats", "10s")
-
 	// Add source and destination
 	args = append(args, localFile, remoteFile)
+
+	return args
+}
+
+// truncateRcloneOutput bounds captured rclone output to its last maxTail bytes
+// before it is folded into an error message, so a long headless upload cannot
+// carry a multi-megabyte blob into the returned error.
+func truncateRcloneOutput(out []byte) []byte {
+	const maxTail = 4 << 10
+	if len(out) <= maxTail {
+		return out
+	}
+	return append([]byte("...(truncated)...\n"), out[len(out)-maxTail:]...)
+}
+
+// rcloneCopy executes rclone copy command
+func (c *CloudStorage) rcloneCopy(ctx context.Context, localFile, remoteFile string) error {
+	args := c.buildRcloneUploadArgs(localFile, remoteFile)
 
 	c.logger.Debug("Running: %s", strings.Join(args, " "))
 
@@ -1066,7 +1115,7 @@ func (c *CloudStorage) rcloneCopy(ctx context.Context, localFile, remoteFile str
 		if ctx.Err() == context.DeadlineExceeded {
 			return fmt.Errorf("rclone operation timeout")
 		}
-		return fmt.Errorf("rclone copy failed: %w: %s", err, strings.TrimSpace(string(output)))
+		return fmt.Errorf("rclone copy failed: %w: %s", err, strings.TrimSpace(string(truncateRcloneOutput(output))))
 	}
 
 	return nil
@@ -1461,10 +1510,27 @@ func (c *CloudStorage) buildBackupMetadata(entries []lslEntry, snapshot map[stri
 			BackupFile: filename,
 			Timestamp:  timestamp,
 			Size:       size,
+			Verified:   remoteBackupHasCompletionSidecar(filename, snapshot),
 		})
 	}
 
 	return backups
+}
+
+// remoteBackupHasCompletionSidecar reports whether an authoritative completion
+// sidecar (.manifest.json or .sha256) is present alongside the archive in the
+// already-listed remote snapshot (no extra network call). A bundle is treated as
+// verified because it is only produced after verify plus sidecars.
+func remoteBackupHasCompletionSidecar(filename string, snapshot map[string]struct{}) bool {
+	if strings.HasSuffix(filename, bundleSuffix) {
+		return true
+	}
+	for _, suffix := range []string{".manifest.json", ".sha256"} {
+		if _, ok := snapshot[filename+suffix]; ok {
+			return true
+		}
+	}
+	return false
 }
 
 func (c *CloudStorage) isBackupEntry(filename string, snapshot map[string]struct{}) bool {
@@ -1479,9 +1545,9 @@ func (c *CloudStorage) isBackupEntry(filename string, snapshot map[string]struct
 		return false
 	}
 
-	// Skip associated files
-	if strings.HasSuffix(filename, ".sha256") ||
-		strings.HasSuffix(filename, ".metadata") {
+	// Skip associated sidecars (checksum/metadata/manifest); shared with the
+	// local/secondary List filters and the delete accounting via isBackupSidecar.
+	if isBackupSidecar(filename) {
 		return false
 	}
 
@@ -1543,7 +1609,11 @@ func (c *CloudStorage) deleteBackupInternal(ctx context.Context, backupFile stri
 
 	c.logger.Debug("Deleting cloud backup: %s", backupFile)
 
-	candidateNames := buildBackupCandidatePaths(baseName, c.config.BundleAssociatedFiles)
+	// Always include the bundle path so an orphan .bundle.tar (created while
+	// bundling was enabled, then disabled) is cleaned up. A missing remote
+	// object delete is tolerated, so this is behavior-preserving when no
+	// bundle exists on the remote.
+	candidateNames := buildBackupCandidatePaths(baseName, true)
 	logging.DebugStep(c.logger, "cloud delete", "candidates=%d", len(candidateNames))
 	relativeNames := make([]string, 0, len(candidateNames))
 	for _, name := range candidateNames {
@@ -1791,6 +1861,12 @@ func (c *CloudStorage) ApplyRetention(ctx context.Context, config RetentionConfi
 
 // applyGFSRetention applies GFS (Grandfather-Father-Son) retention policy
 func (c *CloudStorage) applyGFSRetention(ctx context.Context, backups []*types.BackupMetadata, config RetentionConfig) (int, error) {
+	eligible, inert := partitionRetentionEligible(backups)
+	for _, in := range inert {
+		c.logger.Warning("Cloud storage: backup %s ignored by retention (%s)", in.Backup.BackupFile, in.Reason)
+	}
+	backups = eligible
+
 	config = EffectiveGFSRetentionConfig(config)
 	c.logger.Debug("Applying GFS retention policy (daily=%d, weekly=%d, monthly=%d, yearly=%d)",
 		config.Daily, config.Weekly, config.Monthly, config.Yearly)
@@ -1801,7 +1877,7 @@ func (c *CloudStorage) applyGFSRetention(ctx context.Context, backups []*types.B
 	// Get statistics
 	stats := GetRetentionStats(classification)
 	kept := len(backups) - stats[CategoryDelete]
-	c.logger.Debug("GFS classification → daily: %d/%d, weekly: %d/%d, monthly: %d/%d, yearly: %d/%d, kept: %d, to_delete: %d",
+	c.logger.Debug("GFS classification -> daily: %d/%d, weekly: %d/%d, monthly: %d/%d, yearly: %d/%d, kept: %d, to_delete: %d",
 		stats[CategoryDaily], config.Daily,
 		stats[CategoryWeekly], config.Weekly,
 		stats[CategoryMonthly], config.Monthly,
@@ -1833,6 +1909,12 @@ func (c *CloudStorage) applySimpleRetention(ctx context.Context, backups []*type
 		return 0, nil
 	}
 
+	eligible, inert := partitionRetentionEligible(backups)
+	for _, in := range inert {
+		c.logger.Warning("Cloud storage: backup %s ignored by retention (%s)", in.Backup.BackupFile, in.Reason)
+	}
+	backups = eligible
+
 	totalBackups := len(backups)
 	if totalBackups <= maxBackups {
 		c.logger.Debug("Cloud storage: %d backups (within retention limit of %d)", totalBackups, maxBackups)
@@ -1843,7 +1925,7 @@ func (c *CloudStorage) applySimpleRetention(ctx context.Context, backups []*type
 	toDelete := totalBackups - maxBackups
 	c.logger.Info("Applying simple retention policy: %d backups found, limit is %d, deleting %d oldest",
 		totalBackups, maxBackups, toDelete)
-	c.logger.Info("Simple retention → current: %d, limit: %d, to_delete: %d",
+	c.logger.Info("Simple retention -> current: %d, limit: %d, to_delete: %d",
 		totalBackups, maxBackups, toDelete)
 
 	// Collect oldest backups (already sorted newest first)

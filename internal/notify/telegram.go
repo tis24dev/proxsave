@@ -1,7 +1,6 @@
 package notify
 
 import (
-	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
@@ -17,25 +16,13 @@ import (
 
 	"github.com/tis24dev/proxsave/internal/identity"
 	"github.com/tis24dev/proxsave/internal/logging"
-	"github.com/tis24dev/proxsave/internal/version"
+	"github.com/tis24dev/proxsave/internal/serverbot"
 )
 
 // errRelayAuthRejected signals the relay rejected our per-server secret (HTTP
 // 401/403): the secret is stale or rotated and should be dropped + reprovisioned
 // rather than treated as a permanent delivery failure.
 var errRelayAuthRejected = errors.New("relay auth rejected")
-
-// proxsaveVersionHeader carries the running ProxSave version so the central
-// server can gate version-specific behavior (e.g. the one-time secret handoff).
-const proxsaveVersionHeader = "X-Proxsave-Version"
-
-// proxsaveProvisionHeader marks a real provisioning call (issue/re-issue the relay
-// secret). Sent ONLY by the two provisioning paths, never the bare status probe.
-const proxsaveProvisionHeader = "X-Proxsave-Provision"
-
-// proxsaveNotifyIDHeader carries a client-generated id that makes the enqueue
-// idempotent and is the handle the client polls for the real delivery outcome.
-const proxsaveNotifyIDHeader = "X-Notify-Id"
 
 // newNotifyID returns a random 32-hex-char id (<=128, matching the server's cap).
 // Generated ONCE per Send and reused across the relay POST + status poll (and any
@@ -48,14 +35,6 @@ func newNotifyID() string {
 		return fmt.Sprintf("t%d", time.Now().UnixNano())
 	}
 	return hex.EncodeToString(b[:])
-}
-
-// setProxsaveVersionHeader stamps an outbound central-server request with the
-// normalized ProxSave version (e.g. "0.28.0").
-func setProxsaveVersionHeader(req *http.Request) string {
-	v := version.String()
-	req.Header.Set(proxsaveVersionHeader, v)
-	return v
 }
 
 // TelegramMode represents the Telegram bot configuration mode
@@ -213,9 +192,9 @@ func (t *TelegramNotifier) Send(ctx context.Context, data *NotificationData) (*N
 	if t.config.Mode == TelegramModeCentralized && t.config.NotifySecret != "" {
 		t.logger.Debug("Telegram: using server-side relay path (bot token stays on host)")
 		message := t.buildMessage(data)
-		status, err := t.sendViaRelay(ctx, message, notifyID)
+		status, loginURL, err := t.sendViaRelay(ctx, message, notifyID)
 		if err == nil {
-			t.recordRelayAcceptedAndPoll(ctx, result, notifyID, status, time.Since(startTime))
+			t.recordRelayAcceptedAndPoll(ctx, result, notifyID, status, loginURL, time.Since(startTime))
 			result.Success = true
 			result.Duration = time.Since(startTime)
 			return result, nil
@@ -258,7 +237,7 @@ func (t *TelegramNotifier) Send(ctx context.Context, data *NotificationData) (*N
 		if t.config.NotifySecret != "" {
 			t.logger.Debug("Telegram: fetch provisioned a fresh relay secret; relaying this run")
 			message := t.buildMessage(data)
-			status, err := t.sendViaRelay(ctx, message, notifyID)
+			status, loginURL, err := t.sendViaRelay(ctx, message, notifyID)
 			if err != nil {
 				t.logger.Warning("WARNING: Failed to send Telegram notification via relay: %v", err)
 				result.Metadata["relay_accepted"] = false
@@ -267,7 +246,7 @@ func (t *TelegramNotifier) Send(ctx context.Context, data *NotificationData) (*N
 				result.Duration = time.Since(startTime)
 				return result, nil // Non-critical error, don't abort backup
 			}
-			t.recordRelayAcceptedAndPoll(ctx, result, notifyID, status, time.Since(startTime))
+			t.recordRelayAcceptedAndPoll(ctx, result, notifyID, status, loginURL, time.Since(startTime))
 			result.Success = true
 			result.Duration = time.Since(startTime)
 			return result, nil
@@ -306,44 +285,28 @@ func (t *TelegramNotifier) Send(ctx context.Context, data *NotificationData) (*N
 
 // fetchCentralizedCredentials fetches bot credentials from central server
 func (t *TelegramNotifier) fetchCentralizedCredentials(ctx context.Context) (string, string, error) {
-	// Build API URL
-	apiURL := fmt.Sprintf("%s/api/get-chat-id?server_id=%s",
-		strings.TrimRight(t.config.ServerAPIHost, "/"),
-		url.QueryEscape(t.config.ServerID))
-
-	// Create request with 5-second timeout
-	reqCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
-	defer cancel()
-
-	req, err := http.NewRequestWithContext(reqCtx, "GET", apiURL, nil)
-	if err != nil {
-		return "", "", fmt.Errorf("failed to create request: %w", err)
-	}
-	pv := setProxsaveVersionHeader(req)
-	// Only ask the server to (re)issue a relay secret when we can actually persist
-	// it (BaseDir set). Otherwise the 200 body's secret is discarded below and every
-	// run would churn a fresh unconfirmed token server-side.
+	// Only ask the server to (re)issue a relay secret when we can actually persist it
+	// (BaseDir set). Otherwise the 200 body's secret is discarded below and every run
+	// would churn a fresh unconfirmed token server-side. Pre-auth call: NO X-Server-Auth
+	// (Secret left empty). Transport + version header + bounded read via serverbot,
+	// reusing t.client (the test seam).
 	provisionIntent := t.config.BaseDir != ""
-	if provisionIntent {
-		req.Header.Set(proxsaveProvisionHeader, "1")
-	}
-	t.logger.Debug("Telegram: get-chat-id GET (serverID=%q X-Proxsave-Version=%q provisionIntent=%v)", t.config.ServerID, pv, provisionIntent)
-
-	// Make request
-	resp, err := t.client.Do(req)
+	t.logger.Debug("Telegram: get-chat-id GET /api/get-chat-id (serverID=%q provisionIntent=%v)", t.config.ServerID, provisionIntent)
+	resp, err := serverbot.New(t.config.ServerAPIHost, t.client, t.logger).Do(ctx, serverbot.Request{
+		Method:    http.MethodGet,
+		Path:      "/api/get-chat-id",
+		Query:     url.Values{"server_id": {t.config.ServerID}},
+		Provision: provisionIntent,
+		Timeout:   5 * time.Second,
+		MaxBytes:  8192,
+	})
 	if err != nil {
 		return "", "", fmt.Errorf("API request failed: %w", err)
 	}
-	defer func() { _ = resp.Body.Close() }()
-
-	// Read response
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return "", "", fmt.Errorf("failed to read response: %w", err)
-	}
+	body := resp.Body
 
 	// Handle HTTP status codes
-	switch resp.StatusCode {
+	switch resp.Status {
 	case 200:
 		// Success - parse response
 		var response telegramCentralizedResponse
@@ -393,73 +356,72 @@ func (t *TelegramNotifier) fetchCentralizedCredentials(ctx context.Context) (str
 	case 422:
 		return "", "", fmt.Errorf("invalid SERVER_ID (HTTP 422)")
 	default:
-		return "", "", fmt.Errorf("unexpected status %d: %s", resp.StatusCode, string(body))
+		return "", "", fmt.Errorf("unexpected status %d: %s", resp.Status, string(body))
 	}
 }
 
-// sendViaRelay sends a message through the authenticated server-side relay so
-// the bot token never leaves this host. The per-server secret is sent only in
-// the X-Server-Auth header; any returned error string is scrubbed of it.
-func (t *TelegramNotifier) sendViaRelay(ctx context.Context, message, notifyID string) (int, error) {
-	endpoint := strings.TrimRight(t.config.ServerAPIHost, "/") + "/api/notify"
-
-	payload := struct {
-		ServerID string `json:"server_id"`
-		Message  string `json:"message"`
-	}{
-		ServerID: t.config.ServerID,
-		Message:  message,
+// showPortalLink parses login_url RAW from the /api/notify response body and returns
+// it for capture (the S3 dual-write flows it to BackupStats.HealthcheckLink). Since S4
+// the DISPLAY lives entirely in the orchestrator's Healthchecks section, which is the
+// sole sanitize (serverbot.SanitizeLoginURL) + emit boundary -- so this is capture-only
+// and no longer logs. The link is never registered as a log secret (it must stay
+// visible at that display boundary).
+func (t *TelegramNotifier) showPortalLink(body []byte) string {
+	var r struct {
+		LoginURL string `json:"login_url"`
 	}
-	body, err := json.Marshal(payload)
+	if json.Unmarshal(body, &r) != nil {
+		return ""
+	}
+	return strings.TrimSpace(r.LoginURL)
+}
+
+// sendViaRelay POSTs the message through the authenticated server-side relay (the
+// bot token never leaves this host). Transport+auth (host, X-Server-Auth, version,
+// notify-id, timeout, bounded read, error redaction) is the serverbot brick; the
+// status vocabulary below stays here. Returns the RAW status, the RAW portal magic-
+// link captured on 200/202 (dual-write), and an error on the failure codes.
+func (t *TelegramNotifier) sendViaRelay(ctx context.Context, message, notifyID string) (int, string, error) {
+	t.logger.Debug("Telegram: relay POST /api/notify (serverID=%q msgLen=%d notifyID=%q)", t.config.ServerID, len(message), notifyID)
+	resp, err := serverbot.New(t.config.ServerAPIHost, t.client, t.logger).Do(ctx, serverbot.Request{
+		Method: http.MethodPost,
+		Path:   "/api/notify",
+		Body: struct {
+			ServerID string `json:"server_id"`
+			Message  string `json:"message"`
+		}{ServerID: t.config.ServerID, Message: message},
+		Secret:   t.config.NotifySecret,
+		NotifyID: notifyID,
+		Timeout:  5 * time.Second,
+		MaxBytes: 8192,
+	})
 	if err != nil {
-		return 0, fmt.Errorf("failed to encode relay request: %w", err)
+		// serverbot already redacted; wrap defensively with the exact secret too.
+		return 0, "", fmt.Errorf("relay request failed: %s", logging.RedactSecrets(err.Error(), t.config.NotifySecret))
 	}
 
-	// 5-second timeout, mirroring fetchCentralizedCredentials.
-	reqCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
-	defer cancel()
-
-	req, err := http.NewRequestWithContext(reqCtx, "POST", endpoint, bytes.NewReader(body))
-	if err != nil {
-		return 0, fmt.Errorf("failed to create relay request: %w", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("X-Server-Auth", t.config.NotifySecret)
-	if notifyID != "" {
-		req.Header.Set(proxsaveNotifyIDHeader, notifyID)
-	}
-	pv := setProxsaveVersionHeader(req)
-	t.logger.Debug("Telegram: relay POST %s (serverID=%q msgLen=%d notifyID=%q X-Proxsave-Version=%q)", endpoint, t.config.ServerID, len(message), notifyID, pv)
-
-	resp, err := t.client.Do(req)
-	if err != nil {
-		return 0, fmt.Errorf("relay request failed: %s", logging.RedactSecrets(err.Error(), t.config.NotifySecret))
-	}
-	defer func() { _ = resp.Body.Close() }()
-
-	switch resp.StatusCode {
+	switch resp.Status {
 	case 200, 202:
 		// 200 = legacy synchronous relay (outbox kill-switch off) = already
 		// delivered. 202 = accepted onto the durable outbox; the real delivery
 		// outcome is learned via the status poll.
-		t.logger.Debug("Telegram: relay accepted (HTTP %d notifyID=%q)", resp.StatusCode, notifyID)
-		return resp.StatusCode, nil
+		t.logger.Debug("Telegram: relay accepted (HTTP %d notifyID=%q)", resp.Status, notifyID)
+		// The server piggybacks a fresh portal magic-link on the response UNTIL the
+		// user logs into their monitoring portal the first time, then stops. Capture
+		// it RAW onto stats.HealthcheckLink; the backup epilogue is the sole display
+		// boundary (sanitized) - this path does not log it.
+		return resp.Status, t.showPortalLink(resp.Body), nil
 	case 401, 403:
-		return resp.StatusCode, fmt.Errorf("%w (HTTP %d)", errRelayAuthRejected, resp.StatusCode)
+		return resp.Status, "", fmt.Errorf("%w (HTTP %d)", errRelayAuthRejected, resp.Status)
 	case 404:
-		return resp.StatusCode, fmt.Errorf("server unknown (HTTP 404)")
+		return resp.Status, "", fmt.Errorf("server unknown (HTTP 404)")
 	case 409:
-		return resp.StatusCode, fmt.Errorf("registration missing (HTTP 409)")
+		return resp.Status, "", fmt.Errorf("registration missing (HTTP 409)")
 	case 413:
-		return resp.StatusCode, fmt.Errorf("message too long (HTTP 413)")
+		return resp.Status, "", fmt.Errorf("message too long (HTTP 413)")
 	default:
-		respBody, _ := io.ReadAll(resp.Body)
-		snippet := string(respBody)
-		if len(snippet) > 200 {
-			snippet = snippet[:200]
-		}
-		return resp.StatusCode, fmt.Errorf("relay returned status %d: %s",
-			resp.StatusCode, logging.RedactSecrets(snippet, t.config.NotifySecret))
+		return resp.Status, "", fmt.Errorf("relay returned status %d: %s",
+			resp.Status, logging.RedactSecrets(resp.Snippet(200), t.config.NotifySecret))
 	}
 }
 
@@ -469,9 +431,14 @@ func (t *TelegramNotifier) sendViaRelay(ctx context.Context, message, notifyID s
 // result.Metadata (relay_accepted, notify_id, telegram_state, telegram_message_id,
 // telegram_reason); it NEVER changes result.Success -- server acceptance is the
 // success signal, the delivery outcome is a separate best-effort line.
-func (t *TelegramNotifier) recordRelayAcceptedAndPoll(ctx context.Context, result *NotificationResult, notifyID string, httpStatus int, acceptDuration time.Duration) {
+func (t *TelegramNotifier) recordRelayAcceptedAndPoll(ctx context.Context, result *NotificationResult, notifyID string, httpStatus int, loginURL string, acceptDuration time.Duration) {
 	result.Metadata["relay_accepted"] = true
 	result.Metadata["notify_id"] = notifyID
+	// Dual-write (S3): carry the RAW portal magic-link up so the orchestrator adapter
+	// can stash it on BackupStats.HealthcheckLink for the S4 healthchecks section.
+	if loginURL != "" {
+		result.Metadata["login_url"] = loginURL
+	}
 	// Time to server ACCEPTANCE only (before any delivery poll), so the adapter's
 	// first line reports true relay latency, not latency + the poll budget.
 	result.Metadata["relay_accept_duration"] = acceptDuration

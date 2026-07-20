@@ -36,6 +36,7 @@ type backupArtifacts struct {
 	archiver     *backup.Archiver
 	archivePath  string
 	checksumPath string
+	partialPath  string
 	manifestPath string
 	bundlePath   string
 }
@@ -107,8 +108,27 @@ func (o *Orchestrator) exportBackupMetrics(run *backupRunContext, runErr error) 
 	}
 
 	o.ensureBackupStatsTiming(stats)
+	// On a successful, non-dry run the pre-notification issue snapshot was taken before
+	// notifications ran, so a notify/communication failure logged during dispatch is not
+	// yet counted. Re-parse the log so it surfaces as a warning (status 1) instead of
+	// vanishing to success (0). Idempotent: a clean run stays success.
+	if runErr == nil && !o.dryRun {
+		o.finalizeSuccessIssueStats(stats)
+	}
 	stats.ExitCode = backupMetricsExitCode(stats, runErr)
 	o.exportPrometheusBackupMetrics(stats)
+}
+
+// finalizeSuccessIssueStats re-parses the run log after notifications on a successful
+// run and re-applies the exit code, so a notify/communication failure logged during
+// dispatch (after the pre-notification snapshot) surfaces as a warning rather than
+// vanishing to success. Mirrors finalizeDryRunIssueStats / parseFailedBackupLogCounts.
+func (o *Orchestrator) finalizeSuccessIssueStats(stats *BackupStats) {
+	if stats == nil || stats.LogFilePath == "" {
+		return
+	}
+	o.refreshLogIssuesFromFile(stats, false)
+	applyIssueExitCode(stats)
 }
 
 func (o *Orchestrator) finalizeFailedBackupStats(run *backupRunContext, runErr error) {
@@ -117,6 +137,11 @@ func (o *Orchestrator) finalizeFailedBackupStats(run *backupRunContext, runErr e
 		return
 	}
 
+	// The run genuinely failed: mark it so the status gauge reports error even if only
+	// warnings were counted at export time (F11-02). runErr comes ONLY from backup
+	// phases, never from the non-fatal notification path, so this never flips on a
+	// notification/communication error.
+	stats.Failed = true
 	o.ensureBackupStatsTiming(stats)
 	o.parseFailedBackupLogCounts(stats)
 	stats.ExitCode = backupFailureExitCode(runErr)
@@ -273,7 +298,11 @@ func (o *Orchestrator) createBackupArchive(run *backupRunContext, workspace *bac
 	archivePath := o.backupArchivePath(run, archiver)
 	o.logResolvedBackupCompression(run.stats)
 
-	if err := createBackupArchiveFile(run.ctx, archiver, workspace.tempDir, archivePath); err != nil {
+	partialPath := archivePath + ".partial"
+	if err := createBackupArchiveFile(run.ctx, archiver, workspace.tempDir, partialPath); err != nil {
+		// A failed or cancelled CreateArchive can leave a truncated partial; remove
+		// it so nothing lingers on the backup path.
+		discardPartialArchive(workspace.fs, partialPath)
 		return nil, err
 	}
 
@@ -281,6 +310,7 @@ func (o *Orchestrator) createBackupArchive(run *backupRunContext, workspace *bac
 	return &backupArtifacts{
 		archiver:     archiver,
 		archivePath:  archivePath,
+		partialPath:  partialPath,
 		checksumPath: archivePath + ".sha256",
 	}, nil
 }
@@ -295,15 +325,22 @@ func (o *Orchestrator) verifyAndWriteBackupArtifacts(run *backupRunContext, work
 	o.logStep(4, "Verification of archive and metadata generation")
 	o.recordArchiveSize(stats, artifacts)
 
-	if err := artifacts.archiver.VerifyArchive(run.ctx, artifacts.archivePath); err != nil {
+	if err := artifacts.archiver.VerifyArchive(run.ctx, artifacts.partialPath); err != nil {
+		discardPartialArchive(workspace.fs, artifacts.partialPath)
 		return &BackupError{Phase: "verification", Err: err, Code: types.ExitVerificationError}
 	}
 
-	checksum, err := o.generateArchiveChecksum(run.ctx, artifacts.archivePath)
+	checksum, err := o.generateArchiveChecksum(run.ctx, artifacts.partialPath)
 	if err != nil {
+		discardPartialArchive(workspace.fs, artifacts.partialPath)
 		return err
 	}
 	stats.Checksum = checksum
+
+	if err := promoteBackupArchive(workspace.fs, artifacts.partialPath, artifacts.archivePath); err != nil {
+		discardPartialArchive(workspace.fs, artifacts.partialPath)
+		return &BackupError{Phase: "archive", Err: fmt.Errorf("promote verified archive: %w", err), Code: types.ExitArchiveError}
+	}
 
 	if err := o.writeArchiveChecksum(workspace, artifacts, checksum); err != nil {
 		return &BackupError{

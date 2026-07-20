@@ -154,16 +154,37 @@ type BackupStats struct {
 	CloudGFSCurrentYearly      int
 
 	// Error/warning counts
-	ErrorCount    int
-	WarningCount  int
+	ErrorCount   int
+	WarningCount int
+	// NotifyCount tallies notification/communication failures (NOTIFY-ERR): they
+	// display as errors but are warning-weight for the run status (never escalate
+	// the exit code / gauge to error).
+	NotifyCount   int
 	LogFilePath   string
 	LogCategories []notify.LogCategory
 
 	// Exit code
-	ExitCode       int
+	ExitCode int
+	// Failed records that the backup run itself failed (runErr != nil). It is the
+	// authoritative status signal, decoupled from the ambiguous generic exit code that
+	// a warning-only run also carries. Notifications never set it (they are non-fatal).
+	Failed         bool
 	ScriptVersion  string
 	TelegramStatus string
 	EmailStatus    string
+	// NotifyResults maps each dispatched notification channel's display name
+	// ("Email"/"Telegram"/"Gotify"/"Webhook") to its send severity
+	// ("ok"/"warning"/"error"/"disabled"). It is the per-channel outcome the daemon
+	// reads back (via the notify-results handoff file) to ping one healthchecks check
+	// per enabled channel (Fase 2B / R4). Nil until the first notifier records.
+	NotifyResults map[string]string
+	// HealthcheckLink is the RAW portal magic-link captured from this run's
+	// /api/notify response (dual-write in S3; empty until the server mints one).
+	// It is stored RAW and MUST be passed through serverbot.SanitizeLoginURL before
+	// any display (the healthchecks Phase-7 section, S4). HealthcheckStatus is that
+	// section's state (S4). Neither is registered as a log secret.
+	HealthcheckLink   string
+	HealthcheckStatus string
 
 	// Version update information
 	NewVersionAvailable bool
@@ -523,7 +544,7 @@ func (o *Orchestrator) RunGoBackup(ctx context.Context, envInfo *environment.Env
 	run := o.newBackupRunContext(ctx, envInfo, hostname)
 	done := logging.DebugStart(o.logger, "backup run", "type=%s hostname=%s", run.proxmoxType, hostname)
 	defer func() { done(err) }()
-	o.logger.Info("Starting Go-based backup orchestration for %s", run.proxmoxType)
+	o.logger.Info("Starting backup orchestration for %s", run.proxmoxType)
 
 	workspace := &backupWorkspace{
 		registry: o.cleanupPreviousExecutionArtifacts(ctx),
@@ -636,9 +657,11 @@ func (s *BackupStats) toPrometheusMetrics() *metrics.BackupMetrics {
 		StartTime:      s.StartTime,
 		EndTime:        s.EndTime,
 		Duration:       s.Duration,
+		Failed:         s.Failed,
 		ExitCode:       s.ExitCode,
 		ErrorCount:     s.ErrorCount,
 		WarningCount:   s.WarningCount,
+		NotifyCount:    s.NotifyCount,
 		LocalBackups:   s.LocalBackups,
 		SecBackups:     s.SecondaryBackups,
 		CloudBackups:   s.CloudBackups,

@@ -124,6 +124,11 @@ type BackupMetadata struct {
 
 	// Version is the backup format version
 	Version string
+
+	// Verified reports whether an authoritative completion sidecar (.manifest.json
+	// or .sha256) exists for this backup. An unverified entry (a partial or a
+	// mystery file) is inert for retention: never kept as a slot, never deleted.
+	Verified bool
 }
 
 // StorageLocation represents a storage destination.

@@ -164,16 +164,16 @@ func TestVerifyBinaryIntegrityDryRunDoesNotCreateHash(t *testing.T) {
 	}
 }
 
-// TestVerifyBinaryIntegrityFromFDDryRunDoesNotChmod verifies that a dry-run does
-// not fchmod the executable (ensureOwnershipAndPermFromFD) when its mode differs
-// from the expected 0o700.
+// TestVerifyBinaryIntegrityFromFDDryRunDoesNotChmod verifies that a dry-run does not
+// fchmod the executable (ensureExecutableOwnerWriteOnly) even when it is genuinely
+// group/other-writable — the one permission state the guard would otherwise correct.
 func TestVerifyBinaryIntegrityFromFDDryRunDoesNotChmod(t *testing.T) {
 	dir := t.TempDir()
 	execPath := filepath.Join(dir, "binary")
 	if err := os.WriteFile(execPath, []byte("content"), 0o700); err != nil {
 		t.Fatalf("write exec: %v", err)
 	}
-	if err := os.Chmod(execPath, 0o755); err != nil { // wrong perm vs expected 0o700
+	if err := os.Chmod(execPath, 0o777); err != nil { // group/other-writable: the guard would fix it
 		t.Fatalf("chmod: %v", err)
 	}
 
@@ -184,15 +184,69 @@ func TestVerifyBinaryIntegrityFromFDDryRunDoesNotChmod(t *testing.T) {
 	if err != nil {
 		t.Fatalf("stat: %v", err)
 	}
-	if info.Mode().Perm() != 0o755 {
-		t.Fatalf("dry-run must not fchmod the executable; perm = %o, want 755", info.Mode().Perm())
+	if info.Mode().Perm() != 0o777 {
+		t.Fatalf("dry-run must not fchmod the executable; perm = %o, want 777", info.Mode().Perm())
 	}
 }
 
-// TestVerifyBinaryIntegritySkipsOnTimeout simulates a dead/stale mount under the
-// executable: the bounded Lstat times out, so the integrity check warns and skips
-// without erroring and without creating the .md5 hash file.
-func TestVerifyBinaryIntegritySkipsOnTimeout(t *testing.T) {
+// TestVerifyBinaryIntegrityFixesGroupOtherWritable verifies that with AUTO_FIX on the
+// guard clears only the group/other write bits of a writable executable (0o777 ->
+// 0o755, i.e. perm &^ 0o022) rather than forcing an exact mode.
+func TestVerifyBinaryIntegrityFixesGroupOtherWritable(t *testing.T) {
+	dir := t.TempDir()
+	execPath := filepath.Join(dir, "binary")
+	if err := os.WriteFile(execPath, []byte("content"), 0o755); err != nil {
+		t.Fatalf("write exec: %v", err)
+	}
+	if err := os.Chmod(execPath, 0o777); err != nil { // group/other-writable
+		t.Fatalf("chmod: %v", err)
+	}
+
+	checker := newCheckerWithExec(t, &config.Config{AutoFixPermissions: true, AutoUpdateHashes: false}, execPath)
+	checker.verifyBinaryIntegrity(context.Background())
+
+	info, err := os.Stat(execPath)
+	if err != nil {
+		t.Fatalf("stat: %v", err)
+	}
+	if info.Mode().Perm() != 0o755 {
+		t.Fatalf("guard must clear only the group/other write bits; perm = %o, want 755", info.Mode().Perm())
+	}
+}
+
+// TestVerifyBinaryIntegrityWarnsGroupOtherWritable verifies that with AUTO_FIX off a
+// group/other-writable executable is warned about and left untouched — and that a
+// conventional 0o755 binary raises no such warning.
+func TestVerifyBinaryIntegrityWarnsGroupOtherWritable(t *testing.T) {
+	dir := t.TempDir()
+	execPath := filepath.Join(dir, "binary")
+	if err := os.WriteFile(execPath, []byte("content"), 0o755); err != nil {
+		t.Fatalf("write exec: %v", err)
+	}
+	if err := os.Chmod(execPath, 0o777); err != nil { // group/other-writable
+		t.Fatalf("chmod: %v", err)
+	}
+
+	checker := newCheckerWithExec(t, &config.Config{AutoFixPermissions: false, AutoUpdateHashes: false}, execPath)
+	checker.verifyBinaryIntegrity(context.Background())
+
+	if !containsIssue(checker.result, "must not be writable by group or other") {
+		t.Fatalf("expected group/other-writable warning, got %+v", checker.result.Issues)
+	}
+	info, err := os.Stat(execPath)
+	if err != nil {
+		t.Fatalf("stat: %v", err)
+	}
+	if info.Mode().Perm() != 0o777 {
+		t.Fatalf("warn-only must not chmod the executable; perm = %o, want 777", info.Mode().Perm())
+	}
+}
+
+// TestVerifyBinaryIntegrityExecTimeoutErrors: a wedged mount holding the
+// executable must FAIL the integrity check (fail-closed), not warn-and-skip.
+// expiredContext times out the exec Lstat, which now routes through addError so
+// ErrorCount>0 -- the same classification as a non-timeout stat error (F03-01).
+func TestVerifyBinaryIntegrityExecTimeoutErrors(t *testing.T) {
 	dir := t.TempDir()
 	execPath := filepath.Join(dir, "binary")
 	if err := os.WriteFile(execPath, []byte("content"), 0o700); err != nil {
@@ -204,11 +258,11 @@ func TestVerifyBinaryIntegritySkipsOnTimeout(t *testing.T) {
 
 	checker.verifyBinaryIntegrity(expiredContext(t))
 
-	if checker.result.ErrorCount() != 0 {
-		t.Fatalf("timeout must not error, got %d: %+v", checker.result.ErrorCount(), checker.result.Issues)
+	if checker.result.ErrorCount() == 0 {
+		t.Fatalf("exec-integrity timeout must fail closed (error), got %d errors: %+v", checker.result.ErrorCount(), checker.result.Issues)
 	}
 	if !containsIssue(checker.result, "timed out") {
-		t.Fatalf("expected a timeout warning, got %+v", checker.result.Issues)
+		t.Fatalf("expected the timeout message, got %+v", checker.result.Issues)
 	}
 	if _, err := os.Stat(execPath + ".md5"); !os.IsNotExist(err) {
 		t.Fatalf("must not create hash file on timeout; stat err = %v", err)
@@ -405,5 +459,29 @@ func TestVerifyBinaryIntegrityHashWriteTimeoutWarns(t *testing.T) {
 	}
 	if !containsIssue(checker.result, "Failed to update hash file") {
 		t.Fatalf("expected a failed-to-update-hash-file warning, got %+v", checker.result.Issues)
+	}
+}
+
+// TestVerifyConfigFileStatTimeoutErrors: a wedged mount holding the config file
+// must FAIL the config check (fail-closed), matching the non-timeout stat error
+// path at security.go:513 (F03-01).
+func TestVerifyConfigFileStatTimeoutErrors(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "backup.env")
+	if err := os.WriteFile(configPath, []byte("x=1\n"), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	checker := newChecker(t, &config.Config{})
+	checker.configPath = configPath
+	checker.fsTimeout = 30 * time.Second
+
+	checker.verifyConfigFile(expiredContext(t))
+
+	if checker.result.ErrorCount() == 0 {
+		t.Fatalf("config stat timeout must fail closed (error), got %d errors: %+v", checker.result.ErrorCount(), checker.result.Issues)
+	}
+	if !containsIssue(checker.result, "timed out") {
+		t.Fatalf("expected the timeout message, got %+v", checker.result.Issues)
 	}
 }

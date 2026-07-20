@@ -6,6 +6,8 @@ Complete reference for all 200+ configuration variables in `configs/backup.env`.
 
 - [Configuration File Location](#configuration-file-location)
 - [General Settings](#general-settings)
+- [Scheduler engine](#scheduler-engine)
+- [Healthchecks connector (daemon)](#healthchecks-connector-daemon)
 - [Restore Behavior & Dual-Role Hosts](#restore-behavior--dual-role-hosts)
 - [Security Settings](#security-settings)
 - [Disk Space](#disk-space)
@@ -30,8 +32,8 @@ Complete reference for all 200+ configuration variables in `configs/backup.env`.
 
 ## Configuration File Location
 
-**Default**: `/opt/proxsave/configs/backup.env`
-**Custom**: Specify with `--config` flag
+**Default**: `configs/backup.env`, resolved under the detected install directory (`BASE_DIR`), so typically `/opt/proxsave/configs/backup.env`.
+**Custom**: specify with `--config`. An absolute path is used as-is; a relative path is joined onto the install directory, not the current working directory.
 
 ```bash
 # Use custom config file
@@ -69,6 +71,59 @@ PROFILING_ENABLED=true             # true | false (profiles written under /tmp/p
 | `standard` | Basic operation logging |
 | `advanced` | Detailed command execution, file operations |
 | `extreme` | Full verbose output including rclone/compression internals |
+
+At the config layer `standard` resolves to the `info` log level and both `advanced` and `extreme` resolve to `debug`. `--log-level` overrides `DEBUG_LEVEL` for a run (see [CLI_REFERENCE.md](CLI_REFERENCE.md)).
+
+---
+
+## Scheduler engine
+
+ProxSave runs the backup either from a cron entry or from a resident systemd daemon. The behavior is documented in [DAEMON.md](DAEMON.md); the keys are:
+
+```bash
+SCHEDULER_MODE=cron            # cron | daemon (any unrecognized value normalizes to cron)
+SCHEDULER_TIME=02:00           # daily HH:MM "Run at" time
+MAX_RUN_DURATION=1h            # daemon watchdog: hard timeout for one backup
+DAEMON_OPT_OUT=false           # set true by --daemon-remove; --upgrade won't re-migrate to the daemon
+```
+
+The compiled default for `SCHEDULER_MODE` is `cron`, but a fresh install defaults to the daemon and writes `SCHEDULER_MODE=daemon`.
+
+---
+
+## Healthchecks connector (daemon)
+
+The daemon can push to an external [healthchecks](https://healthchecks.io/) monitor. The four checks and the centralized-vs-self behavior are documented in [DAEMON.md](DAEMON.md); the keys are:
+
+```bash
+HEALTHCHECK_ENABLED=false      # forced true by --daemon-setup / --upgrade auto-migration
+HEALTHCHECK_MODE=centralized   # centralized (fetch URLs from the server) | self
+HEALTHCHECK_HEARTBEAT_INTERVAL=5m
+HEALTHCHECK_UPDATE_INTERVAL=5m
+HEALTHCHECK_SEND_LOG=true
+
+# Centralized cache (auto-filled from the server; do not edit)
+HEALTHCHECK_ALIVE_URL=
+HEALTHCHECK_BACKUP_URL=
+
+# Self mode
+HEALTHCHECK_PING_ENDPOINT=https://hc-ping.com
+HEALTHCHECK_PING_KEY=
+HEALTHCHECK_ALIVE_ID=
+HEALTHCHECK_BACKUP_ID=
+HEALTHCHECK_UPDATES_URL=
+HEALTHCHECK_UPDATES_ID=
+HEALTHCHECK_NOTIFY_EMAIL_URL=
+HEALTHCHECK_NOTIFY_EMAIL_ID=
+HEALTHCHECK_NOTIFY_TELEGRAM_URL=
+HEALTHCHECK_NOTIFY_TELEGRAM_ID=
+HEALTHCHECK_NOTIFY_GOTIFY_URL=
+HEALTHCHECK_NOTIFY_GOTIFY_ID=
+HEALTHCHECK_NOTIFY_WEBHOOK_URL=
+HEALTHCHECK_NOTIFY_WEBHOOK_ID=
+```
+
+`HEALTHCHECK_ENABLED` parses as `false` by default, but `--daemon-setup` and the `--upgrade` auto-migration force it to `true` when enabling the daemon.
 
 ---
 
@@ -280,6 +335,8 @@ MIN_DISK_SPACE_CLOUD_GB=1          # Cloud storage (not enforced for remote)
 
 **Behavior**: Backup aborts if available space < minimum threshold.
 
+**Defaults**: when a key is absent the compiled fallback is `10` GB, and any value `<= 0` is coerced to `10`. `MIN_DISK_SPACE_SECONDARY_GB` and `MIN_DISK_SPACE_CLOUD_GB` fall back to whatever `MIN_DISK_SPACE_PRIMARY_GB` resolves to. The `1` shown above is an example, not the fallback.
+
 ---
 
 ## Storage Paths
@@ -311,7 +368,7 @@ LOG_PATH=${BASE_DIR}/log
 
 ```bash
 # Compression algorithm
-COMPRESSION_TYPE=xz                # none | gzip | pigz | bzip2 | xz | lzma | zstd
+COMPRESSION_TYPE=xz                # none | gz | pigz | bz2 | xz | lzma | zst (gzip/bzip2/zstd accepted as aliases)
 
 # Compression level
 COMPRESSION_LEVEL=9                # Range depends on algorithm (see table below)
@@ -323,17 +380,19 @@ COMPRESSION_THREADS=0              # 0 = auto, >0 = fixed thread count
 COMPRESSION_MODE=ultra             # fast | standard | maximum | ultra
 ```
 
+The canonical algorithm values are the short forms `gz`, `pigz`, `bz2`, `xz`, `lzma`, `zst` (plus `none`); `gzip`, `bzip2`, and `zstd` are accepted as aliases. Compiled fallbacks when a key is absent are `COMPRESSION_TYPE=xz`, `COMPRESSION_LEVEL=6`, `COMPRESSION_MODE=standard`. The shipped template sets `9` / `ultra` (the values above), so a copied template compresses harder than the bare defaults.
+
 ### Compression Algorithm Details
 
 | Algorithm | Level Range | Notes |
 |-----------|-------------|-------|
 | `none` | 0 | No compression |
-| `gzip` | 1-9 | Single-threaded, widely compatible |
+| `gz` (alias `gzip`) | 1-9 | Single-threaded, widely compatible |
 | `pigz` | 1-9 | Parallel gzip, faster on multi-core |
-| `bzip2` | 1-9 | Higher compression, slower |
+| `bz2` (alias `bzip2`) | 1-9 | Higher compression, slower |
 | `xz` | 0-9 | Excellent compression, supports `--extreme` |
 | `lzma` | 0-9 | Similar to xz |
-| `zstd` | 1-22 | Fast, good compression (>19 uses `--ultra`) |
+| `zst` (alias `zstd`) | 1-22 | Fast, good compression (>19 uses `--ultra`) |
 
 ### Compression Modes
 
@@ -341,8 +400,8 @@ COMPRESSION_MODE=ultra             # fast | standard | maximum | ultra
 |------|-------------|
 | `fast` | Lower levels, faster execution |
 | `standard` | Balanced |
-| `maximum` | Level 9 for gzip/bzip2/xz, level 19 for zstd |
-| `ultra` | Adds `--extreme` for xz/lzma, level 22 for zstd |
+| `maximum` | Level 9 for gz/bz2/xz, level 19 for zst |
+| `ultra` | Adds `--extreme` for xz/lzma, level 22 for zst |
 
 ### Examples
 
@@ -386,7 +445,7 @@ PREFILTER_MAX_FILE_SIZE_MB=8       # Skip prefilter for files >8MB
 - **Deduplication**: Detects duplicate data blocks (reduces storage)
 - **Prefilter**: Applies safe, semantic-preserving normalization to small text/JSON files to improve compression (e.g. removes CR from CRLF line endings and minifies JSON). It does **not** reorder, de-indent, or strip structured configuration files, and it avoids touching Proxmox/PBS structured config paths (e.g. `etc/pve/**`, `etc/proxmox-backup/**`).
 
-### Prefilter (`ENABLE_PREFILTER`) — details and risks
+### Prefilter (`ENABLE_PREFILTER`): details and risks
 
 **What it does** (on the *staged* backup tree, before compression):
 - Removes `\r` from CRLF text files (`.txt`, `.log`, `.md`, `.conf`, `.cfg`, `.ini`) to normalize line endings
@@ -406,7 +465,7 @@ PREFILTER_MAX_FILE_SIZE_MB=8       # Skip prefilter for files >8MB
 - If you need maximum fidelity (bit-for-bit) of text/JSON formatting as originally collected (CRLF preservation, JSON pretty-printing, etc.)
 - If you prefer the most conservative pipeline possible (forensics/compliance)
 
-**Important**: Prefilter never edits files on the host system — it only operates on the temporary staging directory that will be archived.
+**Important**: Prefilter never edits files on the host system; it only operates on the temporary staging directory that will be archived.
 
 ---
 
@@ -658,10 +717,10 @@ RCLONE_TIMEOUT_CONNECTION=30       # Remote accessibility check (also used as pe
 RCLONE_TIMEOUT_OPERATION=300       # Upload/download operations (5 minutes default)
 
 # Bandwidth limit
-RCLONE_BANDWIDTH_LIMIT=            # Empty = unlimited, "10M" = 10 MB/s
+RCLONE_BANDWIDTH_LIMIT=            # empty = unlimited (compiled default); the template ships "10M"
 
 # Parallel transfers inside rclone
-RCLONE_TRANSFERS=16                # Number of simultaneous file transfers
+RCLONE_TRANSFERS=16                # simultaneous transfers (compiled fallback 4; the template ships 16)
 
 # Retry attempts
 RCLONE_RETRIES=3                   # Retry count for failed operations
@@ -751,6 +810,8 @@ MAX_CLOUD_BACKUPS=15               # Cloud storage
 
 **Example**: With `MAX_LOCAL_BACKUPS=30` and daily backups, keeps last 30 days.
 
+**Compiled fallbacks** (when a key is absent): `MAX_LOCAL_BACKUPS=7`, `MAX_SECONDARY_BACKUPS=14`, `MAX_CLOUD_BACKUPS=30`. The shipped template sets all three to `15` (the values above).
+
 ### 2. GFS Retention (Grandfather-Father-Son)
 
 ```bash
@@ -763,6 +824,8 @@ RETENTION_WEEKLY=4                 # Keep 4 weekly backups (1 per ISO week)
 RETENTION_MONTHLY=12               # Keep 12 monthly backups (1 per month)
 RETENTION_YEARLY=3                 # Keep 3 yearly backups (1 per year)
 ```
+
+**Compiled fallbacks** are all `0`: GFS keeps nothing until you set `RETENTION_POLICY=gfs` and at least one tier. The `7/4/12/3` above are example/template values, not the defaults. `RETENTION_DAILY` is forced to at least `1` (0 is treated as 1).
 
 ### GFS Algorithm
 
@@ -845,6 +908,11 @@ BOT_TELEGRAM_TYPE=centralized      # centralized | personal
 # Personal mode settings
 TELEGRAM_BOT_TOKEN=                # Bot token (from @BotFather)
 TELEGRAM_CHAT_ID=                  # Chat ID (your user ID or group ID)
+
+# Two-response delivery confirmation
+TELEGRAM_CONFIRM_DELIVERY=true     # poll the relay to confirm delivery after sending
+TELEGRAM_CONFIRM_TIMEOUT_SECONDS=10
+TELEGRAM_CONFIRM_INTERVAL_SECONDS=1
 ```
 
 **Bot types**:
@@ -906,7 +974,7 @@ The value `pmf` may also be written as `proxmox`, `proxmox-notifications`, or `p
 **Notes**:
 - Allowed values for `EMAIL_DELIVERY_METHOD` are: `pmf`, `relay`, `sendmail` (invalid values will skip Email with a warning).
 - `EMAIL_FALLBACK_SENDMAIL=true` controls local `/usr/sbin/sendmail` failover. `EMAIL_FALLBACK_PMF` is accepted only as a transitional alias from older templates.
-- `relay` requires a real mailbox recipient and blocks `root@…` recipients; set `EMAIL_RECIPIENT` to a non-root mailbox if needed.
+- `relay` requires a real mailbox recipient and blocks `root@` recipients; set `EMAIL_RECIPIENT` to a non-root mailbox if needed.
 - Default install behavior is `relay -> sendmail`.
 - If you manually set `EMAIL_DELIVERY_METHOD=pmf`, fallback order is `pmf -> relay -> sendmail` when `EMAIL_FALLBACK_SENDMAIL=true`.
 - When logs say the relay "accepted request", it means the worker and upstream email API accepted the submission. It does **not** guarantee final inbox delivery (the message may still bounce, be deferred, or land in spam later).
@@ -1057,7 +1125,7 @@ CEPH_CONFIG_PATH=/etc/ceph         # Ceph config directory
 BACKUP_VM_CONFIGS=true             # VM/CT config files
 ```
 
-**Note (PVE snapshot behavior)**: ProxSave snapshots `PVE_CONFIG_PATH` for completeness. When a PVE feature is disabled, proxsave also excludes its well-known files from that snapshot to avoid “still included via full directory copy” surprises (e.g. `qemu-server/` + `lxc/` for `BACKUP_VM_CONFIGS=false`, `firewall/` + `host.fw` for `BACKUP_PVE_FIREWALL=false`, `user.cfg`/`domains.cfg` plus the credential files `priv/shadow.cfg`/`priv/token.cfg`/`priv/tfa.cfg` for `BACKUP_PVE_ACL=false` (ACLs are stored in `user.cfg` on PVE), `jobs.cfg` + `vzdump.cron` for `BACKUP_PVE_JOBS=false`, `corosync.conf` (and `config.db` capture) for `BACKUP_CLUSTER_CONFIG=false`).
+**Note (PVE snapshot behavior)**: ProxSave snapshots `PVE_CONFIG_PATH` for completeness. When a PVE feature is disabled, proxsave also excludes its well-known files from that snapshot to avoid "still included via full directory copy" surprises (e.g. `qemu-server/` + `lxc/` for `BACKUP_VM_CONFIGS=false`, `firewall/` + `host.fw` for `BACKUP_PVE_FIREWALL=false`, `user.cfg`/`domains.cfg` plus the credential files `priv/shadow.cfg`/`priv/token.cfg`/`priv/tfa.cfg` for `BACKUP_PVE_ACL=false` (ACLs are stored in `user.cfg` on PVE), `jobs.cfg` + `vzdump.cron` for `BACKUP_PVE_JOBS=false`, `corosync.conf` (and `config.db` capture) for `BACKUP_CLUSTER_CONFIG=false`).
 
 > **Security note**: `/etc/pve` is a pmxcfs mount backed by the cluster database `config.db`. Setting `BACKUP_PVE_ACL=false` removes the flat `priv/*` credential files from the snapshot, but the same secrets remain inside `config.db` (captured when `BACKUP_CLUSTER_CONFIG=true`). To exclude PVE access-control secrets from the backup entirely, set both `BACKUP_PVE_ACL=false` and `BACKUP_CLUSTER_CONFIG=false`. ProxSave logs a WARNING during backup when this combination leaves secrets in `config.db`.
 
@@ -1138,7 +1206,7 @@ SYSTEM_ROOT_PREFIX=                # Optional alternate root for system collecti
 # Use this to point the collector at a chroot/test fixture without touching the host FS.
 ```
 
-**Note**: `${PVE_CONFIG_PATH}` (and other `${VAR}` references) are resolved from the same `backup.env` file too — you don’t need to `export` them.
+**Note**: `${PVE_CONFIG_PATH}` (and other `${VAR}` references) are resolved from the same `backup.env` file too, so you do not need to `export` them.
 
 **Use case**: Working with mounted snapshots or mirrors at non-standard paths.
 
@@ -1196,7 +1264,7 @@ BACKUP_SCRIPT_REPOSITORY=false     # Snapshot the ProxSave install dir (excludes
 BACKUP_CONFIG_FILE=true            # Include this backup.env configuration file in the backup
 ```
 
-**Note (SSH keys)**: `BACKUP_SSH_KEYS=false` also suppresses `.ssh/` directories when collecting home directories (root and users), so keys aren’t included indirectly via `BACKUP_ROOT_HOME`/home collection.
+**Note (SSH keys)**: `BACKUP_SSH_KEYS=false` also suppresses `.ssh/` directories when collecting home directories (root and users), so keys are not included indirectly via `BACKUP_ROOT_HOME`/home collection.
 
 **Note**: `BACKUP_CONFIG_FILE=true` automatically includes the `configs/backup.env` file in the backup archive. This is highly recommended for disaster recovery, as it allows you to restore your exact backup configuration along with the system files. If you have sensitive credentials in `backup.env`, ensure your backups are encrypted (`ENCRYPT_ARCHIVE=true`).
 

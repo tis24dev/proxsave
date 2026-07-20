@@ -6,7 +6,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/tis24dev/proxsave/internal/logging"
 	"github.com/tis24dev/proxsave/internal/notify"
+	"github.com/tis24dev/proxsave/internal/types"
 )
 
 func TestParseLogCounts(t *testing.T) {
@@ -28,7 +30,7 @@ func TestParseLogCounts(t *testing.T) {
 	}
 
 	// Parse the log file
-	categories, errorCount, warningCount := ParseLogCounts(logFile, 10)
+	categories, errorCount, warningCount, _ := ParseLogCounts(logFile, 10)
 
 	// Verify counts
 	if errorCount != 2 {
@@ -77,7 +79,7 @@ func TestParseLogCountsEmptyFile(t *testing.T) {
 		t.Fatalf("Failed to create empty log file: %v", err)
 	}
 
-	categories, errorCount, warningCount := ParseLogCounts(logFile, 10)
+	categories, errorCount, warningCount, _ := ParseLogCounts(logFile, 10)
 
 	if errorCount != 0 {
 		t.Errorf("Expected 0 errors in empty file, got %d", errorCount)
@@ -91,7 +93,7 @@ func TestParseLogCountsEmptyFile(t *testing.T) {
 }
 
 func TestParseLogCountsNonExistentFile(t *testing.T) {
-	categories, errorCount, warningCount := ParseLogCounts("/nonexistent/file.log", 10)
+	categories, errorCount, warningCount, _ := ParseLogCounts("/nonexistent/file.log", 10)
 
 	if errorCount != 0 {
 		t.Errorf("Expected 0 errors for nonexistent file, got %d", errorCount)
@@ -124,7 +126,7 @@ func TestParseLogCountsCategoryLimit(t *testing.T) {
 	}
 
 	// Parse with limit of 3
-	categories, errorCount, warningCount := ParseLogCounts(logFile, 3)
+	categories, errorCount, warningCount, _ := ParseLogCounts(logFile, 3)
 
 	// Counts should be correct regardless of limit
 	if errorCount != 5 {
@@ -137,6 +139,82 @@ func TestParseLogCountsCategoryLimit(t *testing.T) {
 	// Categories should be limited to 3
 	if len(categories) != 3 {
 		t.Errorf("Expected 3 categories (limited), got %d", len(categories))
+	}
+}
+
+func TestParseLogCounts_NotifyErrorBucket(t *testing.T) {
+	tempDir := t.TempDir()
+	logFile := filepath.Join(tempDir, "notify.log")
+
+	// One real backup ERROR, one NOTIFY-ERR (notification failure), one WARNING.
+	content := "[2026-07-16 10:00:00] INFO     Starting backup\n" +
+		"[2026-07-16 10:00:01] ERROR    Database connection failed - real backup error\n" +
+		"[2026-07-16 10:00:02] NOTIFY-ERR Telegram: failed: connection refused\n" +
+		"[2026-07-16 10:00:03] [WARNING] Disk space low\n"
+
+	if err := os.WriteFile(logFile, []byte(content), 0644); err != nil {
+		t.Fatalf("write log: %v", err)
+	}
+
+	categories, errorCount, warningCount, notifyCount := ParseLogCounts(logFile, 10)
+
+	if errorCount != 1 {
+		t.Errorf("errorCount = %d, want 1 (only the real backup error)", errorCount)
+	}
+	if notifyCount != 1 {
+		t.Errorf("notifyCount = %d, want 1 (the NOTIFY-ERR line)", notifyCount)
+	}
+	if warningCount != 1 {
+		t.Errorf("warningCount = %d, want 1", warningCount)
+	}
+
+	// The notify failure must still DISPLAY as an error category (Type=ERROR).
+	var notifyCat *notify.LogCategory
+	for i := range categories {
+		if strings.Contains(categories[i].Label, "Telegram") || strings.Contains(categories[i].Example, "Telegram") {
+			notifyCat = &categories[i]
+		}
+	}
+	if notifyCat == nil {
+		t.Fatalf("notify failure absent from categories: %+v", categories)
+	}
+	if notifyCat.Type != "ERROR" {
+		t.Errorf("notify category Type = %q, want ERROR (must display as error)", notifyCat.Type)
+	}
+}
+
+// End-to-end wiring guard: a NOTIFY-ERR line emitted by the REAL logger must be
+// bucketed as a notify issue (not a plain error) by ParseLogCounts. Unlike the
+// hardcoded-literal bucket test, this exercises the emitter->file->parser path, so a
+// drift between logging.NotifyErrorLabel (emitter) and notifyErrorToken (parser)
+// would zero notifyCount and false-green the run, and this test would catch it.
+func TestParseLogCounts_NotifyErrorEndToEnd(t *testing.T) {
+	dir := t.TempDir()
+	logFile := filepath.Join(dir, "run.log")
+	f, err := os.Create(logFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	logger := logging.New(types.LogLevelDebug, false)
+	logger.SetOutput(f)
+	logger.NotifyError("Telegram: failed: %s", "connection refused")
+	_ = f.Close()
+
+	categories, errorCount, _, notifyCount := ParseLogCounts(logFile, 10)
+	if notifyCount != 1 {
+		t.Fatalf("notifyCount = %d, want 1 (real-logger NOTIFY-ERR line)", notifyCount)
+	}
+	if errorCount != 0 {
+		t.Fatalf("errorCount = %d, want 0 (a notify failure is not a plain error)", errorCount)
+	}
+	foundError := false
+	for i := range categories {
+		if categories[i].Type == "ERROR" {
+			foundError = true
+		}
+	}
+	if !foundError {
+		t.Fatalf("NOTIFY-ERR must display under an ERROR category, got %+v", categories)
 	}
 }
 

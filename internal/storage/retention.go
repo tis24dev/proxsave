@@ -1,13 +1,62 @@
 package storage
 
 import (
+	"context"
 	"fmt"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/tis24dev/proxsave/internal/config"
+	"github.com/tis24dev/proxsave/internal/safefs"
 	"github.com/tis24dev/proxsave/internal/types"
 )
+
+// retentionInert is a backup entry excluded from retention accounting, with the
+// reason for the exclusion (used only for the operator warning).
+type retentionInert struct {
+	Backup *types.BackupMetadata
+	Reason string
+}
+
+// partitionRetentionEligible splits backups into those eligible for retention
+// classification (a verified backup) and inert entries retention must neither
+// keep as a slot nor delete. Fail-safe: an unverifiable entry is never counted
+// toward the keep limit and never selected for deletion.
+func partitionRetentionEligible(backups []*types.BackupMetadata) (eligible []*types.BackupMetadata, inert []retentionInert) {
+	for _, b := range backups {
+		if b == nil {
+			continue
+		}
+		if !b.Verified {
+			inert = append(inert, retentionInert{Backup: b, Reason: "no manifest/checksum"})
+			continue
+		}
+		if b.Timestamp.IsZero() {
+			inert = append(inert, retentionInert{Backup: b, Reason: "no reliable timestamp"})
+			continue
+		}
+		eligible = append(eligible, b)
+	}
+	return eligible, inert
+}
+
+// backupHasCompletionSidecar reports whether an authoritative completion sidecar
+// (.manifest.json or .sha256) exists next to the archive. These are written
+// fatally at the end of a successful backup, so their presence is the reliable
+// "backup completed" signal (.metadata is best-effort and not used). A bundle is
+// treated as verified because it is only produced after verify plus sidecars.
+func backupHasCompletionSidecar(ctx context.Context, archivePath string, timeout time.Duration) bool {
+	if strings.HasSuffix(archivePath, bundleSuffix) {
+		return true
+	}
+	for _, suffix := range []string{".manifest.json", ".sha256"} {
+		if _, err := safefs.Stat(ctx, archivePath+suffix, timeout); err == nil {
+			return true
+		}
+	}
+	return false
+}
 
 // RetentionConfig defines the retention policy configuration
 type RetentionConfig struct {

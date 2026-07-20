@@ -1,6 +1,9 @@
 package orchestrator
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 // TestPVEAccessControlCategoryMatchesRestoreConstants locks the authoritative
 // pve_access_control file set. The same list is duplicated as exclusion patterns
@@ -64,5 +67,29 @@ func TestPBSAccessControlCategoryContainsRestoreConstants(t *testing.T) {
 		if !have[w] {
 			t.Errorf("pbs_access_control category missing %q; keep it in sync with restore_access_control.go constants and internal/backup/collector_pbs.go pbsUserConfigSecretExcludes", w)
 		}
+	}
+}
+
+// TestAccountsCategoryDescriptionDistinguishesMergeFromReplace: the "accounts"
+// category bundles the passwd/group/shadow/gshadow database (MERGED, preserving
+// the current host root and system accounts) with /etc/sudoers (REPLACED wholesale
+// after visudo -c validation). A description that only says "safe merge" for the
+// whole category misleads a reviewer about the sudoers behavior (F06-07), so it
+// must call out both verbs and note /etc/sudoers.d is not included.
+func TestAccountsCategoryDescriptionDistinguishesMergeFromReplace(t *testing.T) {
+	cat := GetCategoryByID("accounts", GetAllCategories())
+	if cat == nil {
+		t.Fatal("accounts category not found")
+	}
+
+	desc := strings.ToUpper(cat.Description)
+	if !strings.Contains(desc, "MERGED") {
+		t.Errorf("accounts category description must state the account database is MERGED, got: %s", cat.Description)
+	}
+	if !strings.Contains(desc, "REPLACED") {
+		t.Errorf("accounts category description must state /etc/sudoers is REPLACED, got: %s", cat.Description)
+	}
+	if !strings.Contains(desc, "SUDOERS.D") {
+		t.Errorf("accounts category description must note /etc/sudoers.d is not included, got: %s", cat.Description)
 	}
 }

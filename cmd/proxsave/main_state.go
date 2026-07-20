@@ -45,14 +45,22 @@ type appRunState struct {
 	orch               *orchestrator.Orchestrator
 	earlyErrorState    *orchestrator.EarlyErrorState
 	pendingSupportStat *orchestrator.BackupStats
+	// supportEmailSent is true once the streamed dashboard run has already sent the
+	// support email inside the viewport, so the deferred sender skips it.
+	supportEmailSent bool
+	// panicStack holds the ORIGINAL panic stack captured by capturePanicExit during the
+	// unwind, so finishMainRun prints the crash origin instead of the re-panic site. Empty
+	// on a clean run. See capturePanicExit / F02-15.
+	panicStack []byte
 }
 
 type modeResult struct {
-	orch            *orchestrator.Orchestrator
-	earlyErrorState *orchestrator.EarlyErrorState
-	supportStats    *orchestrator.BackupStats
-	exitCode        int
-	handled         bool
+	orch             *orchestrator.Orchestrator
+	earlyErrorState  *orchestrator.EarlyErrorState
+	supportStats     *orchestrator.BackupStats
+	supportEmailSent bool
+	exitCode         int
+	handled          bool
 }
 
 type appDeps struct {
@@ -76,4 +84,5 @@ func (state *appRunState) applyModeResult(result modeResult) {
 	state.orch = result.orch
 	state.earlyErrorState = result.earlyErrorState
 	state.pendingSupportStat = result.supportStats
+	state.supportEmailSent = result.supportEmailSent
 }

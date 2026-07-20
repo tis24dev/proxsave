@@ -33,6 +33,7 @@ func validateModeCompatibility(args *cli.Args) []string {
 		validateSupportCompatibility,
 		validateInstallCompatibility,
 		validateUpgradeCompatibility,
+		validateDaemonCompatibility,
 	} {
 		if messages := rule(args); len(messages) > 0 {
 			allMessages = append(allMessages, messages...)
@@ -74,6 +75,53 @@ func validateUpgradeCompatibility(args *cli.Args) []string {
 	if args.Upgrade && (args.Install || args.NewInstall) {
 		return []string{"Cannot use --upgrade together with --install or --new-install."}
 	}
+	if args.LocalFile && !args.Upgrade {
+		return []string{"The --localfile flag only applies to --upgrade (use: --upgrade --localfile)."}
+	}
+	return nil
+}
+
+func validateDaemonCompatibility(args *cli.Args) []string {
+	daemonFlags := 0
+	label := ""
+	for _, f := range []struct {
+		on   bool
+		name string
+	}{
+		{args.Daemon, "--daemon"},
+		{args.DaemonSetup, "--daemon-setup"},
+		{args.DaemonRemove, "--daemon-remove"},
+		{args.DaemonStatus, "--daemon-status"},
+	} {
+		if f.on {
+			daemonFlags++
+			label = f.name
+		}
+	}
+	if daemonFlags == 0 {
+		return nil
+	}
+	if daemonFlags > 1 {
+		return []string{"Only one of --daemon, --daemon-setup, --daemon-remove, --daemon-status may be used at a time."}
+	}
+	if args.DryRun && (args.Daemon || args.DaemonSetup || args.DaemonRemove) {
+		return []string{"--dry-run is not supported with --daemon, --daemon-setup, or --daemon-remove."}
+	}
+	incompatible := enabledModes([]incompatibleMode{
+		{enabled: args.Install, label: "--install"},
+		{enabled: args.NewInstall, label: "--new-install"},
+		{enabled: args.Upgrade, label: "--upgrade"},
+		{enabled: args.Restore, label: "--restore"},
+		{enabled: args.Decrypt, label: "--decrypt"},
+		{enabled: args.ForceNewKey, label: "--newkey"},
+		{enabled: args.Backup, label: "--backup"},
+		{enabled: args.Support, label: "--support"},
+		{enabled: args.UpgradeConfig || args.UpgradeConfigDry || args.UpgradeConfigJSON, label: "--upgrade-config"},
+		{enabled: args.CleanupGuards, label: "--cleanup-guards"},
+	})
+	if len(incompatible) > 0 {
+		return []string{fmt.Sprintf("%s cannot be combined with: %s", label, strings.Join(incompatible, ", "))}
+	}
 	return nil
 }
 
@@ -86,7 +134,6 @@ func cleanupGuardsIncompatibleModes(args *cli.Args) []string {
 		{enabled: args.NewInstall, label: "--new-install"},
 		{enabled: args.Upgrade, label: "--upgrade"},
 		{enabled: args.ForceNewKey, label: "--newkey"},
-		{enabled: args.EnvMigration || args.EnvMigrationDry, label: "--env-migration/--env-migration-dry-run"},
 		{enabled: args.UpgradeConfig || args.UpgradeConfigDry || args.UpgradeConfigJSON, label: "--upgrade-config/--upgrade-config-dry-run/--upgrade-config-json"},
 	})
 }
@@ -96,7 +143,6 @@ func supportIncompatibleModes(args *cli.Args) []string {
 		{enabled: args.Decrypt, label: "--decrypt"},
 		{enabled: args.Install, label: "--install"},
 		{enabled: args.NewInstall, label: "--new-install"},
-		{enabled: args.EnvMigration || args.EnvMigrationDry, label: "--env-migration"},
 		{enabled: args.UpgradeConfig || args.UpgradeConfigDry || args.UpgradeConfigJSON, label: "--upgrade-config"},
 		{enabled: args.ForceNewKey, label: "--newkey"},
 	})
@@ -154,11 +200,23 @@ func runUpgradeMode(ctx context.Context, args *cli.Args, bootstrap *logging.Boot
 	return runUpgrade(ctx, args, bootstrap), true
 }
 
+// modeStdoutInteractive gates the sibling entrypoints onto their clean-stdout CLI
+// variant when stdout is not a real terminal, mirroring dispatchRestoreMode (C6).
+// It is a var so tests can force the non-interactive branch.
+var modeStdoutInteractive = isTerminalInteractive
+
+// modeUseCLI reports whether a sibling entrypoint must take its clean-stdout CLI
+// variant: either the operator forced --cli, or stdout is not a real terminal (a
+// TUI would write AltScreen escapes into the redirected stream).
+func modeUseCLI(args *cli.Args) bool {
+	return args.ForceCLI || !modeStdoutInteractive()
+}
+
 func runNewKeyMode(ctx context.Context, args *cli.Args, bootstrap *logging.BootstrapLogger, _ string) (int, bool) {
 	if !args.ForceNewKey {
 		return types.ExitSuccess.Int(), false
 	}
-	newKeyCLI := args.ForceCLI
+	newKeyCLI := modeUseCLI(args)
 	logging.DebugStepBootstrap(bootstrap, "main run", "mode=newkey cli=%v", newKeyCLI)
 	if err := runNewKey(ctx, args.ConfigPath, cliFlowLogLevel(args), bootstrap, newKeyCLI); err != nil {
 		if isInstallAbortedError(err) || errors.Is(err, orchestrator.ErrAgeRecipientSetupAborted) {
@@ -174,11 +232,18 @@ func runDecryptOnlyMode(ctx context.Context, args *cli.Args, bootstrap *logging.
 	if !args.Decrypt {
 		return types.ExitSuccess.Int(), false
 	}
-	decryptCLI := args.ForceCLI
+	decryptCLI := modeUseCLI(args)
 	logging.DebugStepBootstrap(bootstrap, "main run", "mode=decrypt cli=%v", decryptCLI)
 	if err := runDecryptWorkflowOnly(ctx, args.ConfigPath, bootstrap, toolVersion, decryptCLI); err != nil {
 		if errors.Is(err, orchestrator.ErrDecryptAborted) {
 			bootstrap.Info("Decrypt workflow aborted by user")
+			return types.ExitSuccess.Int(), true
+		}
+		if errors.Is(err, orchestrator.ErrDecryptNoBackups) && dashboardIsBareInvocation() {
+			// ONLY the interactive dashboard (bare invocation): the user already saw the
+			// graceful "Status:" empty-state screen, so exit cleanly with NO log line. A
+			// CLI --decrypt execution falls through and keeps its original ERROR line
+			// (its CLI-execution lines are left untouched).
 			return types.ExitSuccess.Int(), true
 		}
 		bootstrap.Error("ERROR: %v", err)
@@ -192,7 +257,7 @@ func runNewInstallMode(ctx context.Context, args *cli.Args, bootstrap *logging.B
 	if !args.NewInstall {
 		return types.ExitSuccess.Int(), false
 	}
-	newInstallCLI := args.ForceCLI
+	newInstallCLI := modeUseCLI(args)
 	logging.DebugStepBootstrap(bootstrap, "main run", "mode=new-install cli=%v", newInstallCLI)
 	sessionLogger, cleanupSessionLog := startFlowSessionLog("new-install", cliFlowLogLevel(args), bootstrap)
 	defer cleanupSessionLog()
@@ -217,7 +282,8 @@ func runInstallMode(ctx context.Context, args *cli.Args, bootstrap *logging.Boot
 	if !args.Install {
 		return types.ExitSuccess.Int(), false
 	}
-	logging.DebugStepBootstrap(bootstrap, "main run", "mode=install cli=%v", args.ForceCLI)
+	installCLI := modeUseCLI(args)
+	logging.DebugStepBootstrap(bootstrap, "main run", "mode=install cli=%v", installCLI)
 	sessionLogger, cleanupSessionLog := startFlowSessionLog("install", cliFlowLogLevel(args), bootstrap)
 	defer cleanupSessionLog()
 	if sessionLogger != nil {
@@ -225,7 +291,7 @@ func runInstallMode(ctx context.Context, args *cli.Args, bootstrap *logging.Boot
 	}
 
 	var err error
-	if args.ForceCLI {
+	if installCLI {
 		err = runInstall(ctx, args.ConfigPath, bootstrap)
 	} else {
 		err = runInstallTUI(ctx, args.ConfigPath, bootstrap)

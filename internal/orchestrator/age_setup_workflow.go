@@ -194,6 +194,14 @@ func (o *Orchestrator) runAgeSetupWorkflow(ctx context.Context, candidatePath st
 		return nil, nil, err
 	}
 
+	// Co-locate the passphrase salt inside the recipient file so deleting the
+	// standalone passphrase.salt sibling no longer loses it. Best-effort: a
+	// failure here must not fail setup, and it is a no-op for recipient-only
+	// setups (no sibling to co-locate).
+	if err := o.coLocatePassphraseSalt(targetPath); err != nil && o.logger != nil {
+		o.logger.Warning("Encryption setup: failed to co-locate the passphrase salt in %s: %v", targetPath, err)
+	}
+
 	if o.logger != nil {
 		o.logger.Info("Saved %d AGE recipient(s) to %s", len(recipients), targetPath)
 		if backupPath != "" {

@@ -156,9 +156,10 @@ type Info struct {
 var (
 	hostnameFunc                             = os.Hostname
 	readFirstLineFunc                        = readFirstLine
-	writeIdentityFileWithContextWriteFile    = os.WriteFile
 	writeIdentityFileWithContextChmod        = os.Chmod
 	writeIdentityFileWithContextSetImmutable = setImmutableAttributeWithContext
+	identityCreateTempFunc                   = os.CreateTemp
+	writeIdentityFileWithContextRename       = os.Rename
 )
 
 // Detect resolves the server identity (ID + MAC address) and ensures persistence.
@@ -932,6 +933,43 @@ func identityPayloadHasKeyLabels(fileContent string, logger *logging.Logger) boo
 	return false
 }
 
+// atomicWriteIdentityFile writes data to path via a temp sibling + rename, so a write
+// ERROR never leaves a truncated/zero-byte identity or secret file: on any error the
+// temp is removed and the existing file is left untouched. It deliberately does NOT
+// fsync (unlike the systemd-unit writer), so a power loss in the narrow window after
+// the rename can still lose the NEW content; that is acceptable here because the secret
+// is re-provisioned via TOFU and the server identity is re-derived on the next run. The
+// caller has already cleared the +i immutable attribute on any existing target
+// (renaming over an immutable file returns EPERM) and re-sets +i on the new inode
+// afterward.
+func atomicWriteIdentityFile(path string, data []byte, perm os.FileMode) error {
+	dir := filepath.Dir(path)
+	f, err := identityCreateTempFunc(dir, "."+filepath.Base(path)+".tmp-*")
+	if err != nil {
+		return err
+	}
+	tmp := f.Name()
+	if _, err := f.Write(data); err != nil {
+		_ = f.Close()
+		_ = os.Remove(tmp)
+		return err
+	}
+	if err := f.Chmod(perm); err != nil {
+		_ = f.Close()
+		_ = os.Remove(tmp)
+		return err
+	}
+	if err := f.Close(); err != nil {
+		_ = os.Remove(tmp)
+		return err
+	}
+	if err := writeIdentityFileWithContextRename(tmp, path); err != nil {
+		_ = os.Remove(tmp)
+		return err
+	}
+	return nil
+}
+
 func writeIdentityFileWithContext(ctx context.Context, path, content string, logger *logging.Logger) (err error) {
 	if ctx == nil {
 		ctx = context.Background()
@@ -958,8 +996,8 @@ func writeIdentityFileWithContext(ctx context.Context, path, content string, log
 		return err
 	}
 
-	if err := writeIdentityFileWithContextWriteFile(path, []byte(content), 0o600); err != nil {
-		logDebug(logger, "Identity: writeIdentityFile: os.WriteFile failed: %v", err)
+	if err := atomicWriteIdentityFile(path, []byte(content), 0o600); err != nil {
+		logDebug(logger, "Identity: writeIdentityFile: atomic write failed: %v", err)
 		return err
 	}
 
