@@ -21,9 +21,9 @@ set -euo pipefail
 #                           month-old beta is never installed over a newer stable).
 #
 # Usage:
-#   sh upgrade-beta.sh                 # newest release; installs it only if it is a beta (needs jq)
-#   sh upgrade-beta.sh -y              # same, no confirmation prompt
-#   sh upgrade-beta.sh v5.0.0-beta1    # force a specific tag (escape hatch, no jq needed)
+#   bash upgrade-beta.sh                 # newest release; installs it only if it is a beta (jq optional)
+#   bash upgrade-beta.sh -y              # same, no confirmation prompt
+#   bash upgrade-beta.sh v5.0.0-beta1    # force a specific tag (escape hatch, skips the release lookup)
 ###############################################
 
 ###############################################
@@ -84,7 +84,7 @@ liDJEnB+RgiWOQR+6xLWeX7PyauuMxUh/HNnvBQAokK91fLWes4r9Xlwzw==
 if [ ! -x "${TARGET_BIN}" ]; then
   echo "❌ No existing ProxSave install found at ${TARGET_BIN}"
   echo "   This script upgrades an existing install to a beta. Install first:"
-  echo "   sh install.sh"
+  echo "   bash install.sh"
   exit 1
 fi
 
@@ -156,20 +156,40 @@ if [ -n "${TAG_ARG}" ]; then
   echo " Requested tag:      ${BETA_TAG}"
   echo "--------------------------------------------"
 else
-  if ! command -v jq >/dev/null 2>&1; then
-    echo "❌ jq is required to detect the newest release."
-    echo "   Install jq, or pass a tag explicitly: sh upgrade-beta.sh vX.Y.Z-beta1"
-    exit 1
-  fi
   # /releases (the LIST endpoint) includes prereleases and is newest-first, so the
-  # first non-draft entry is the most recent release overall (stable or beta).
+  # first entry is the most recent release overall (stable or beta). jq is used
+  # when present; otherwise fall back to a first-match parse of the raw list JSON
+  # so a stock system without jq still works (mirrors install.sh's tag detection).
+  # The anonymous API never returns drafts, so the first entry is the newest
+  # published release either way.
   RELEASES_JSON="$(fetch "https://api.github.com/repos/${REPO}/releases")"
-  LATEST_TAG="$(jq -r 'map(select(.draft == false)) | .[0].tag_name // empty' <<<"${RELEASES_JSON}")"
-  LATEST_PRE="$(jq -r 'map(select(.draft == false)) | (.[0].prerelease // false) | tostring' <<<"${RELEASES_JSON}")"
+  LATEST_TAG=""
+  LATEST_PRE=""
+  if command -v jq >/dev/null 2>&1; then
+    LATEST_TAG="$(jq -r 'map(select(.draft == false)) | .[0].tag_name // empty' <<<"${RELEASES_JSON}" 2>/dev/null || true)"
+    LATEST_PRE="$(jq -r 'map(select(.draft == false)) | (.[0].prerelease // false) | tostring' <<<"${RELEASES_JSON}" 2>/dev/null || true)"
+  fi
+  # Fallback (no jq, or jq failed): the list is newest-first, so the first
+  # tag_name occurrence in the raw JSON is the newest release. This mirrors
+  # install.sh's tag detection idiom.
+  if [ -z "${LATEST_TAG}" ] && [[ ${RELEASES_JSON} =~ \"tag_name\"[[:space:]]*:[[:space:]]*\"([^\"]+)\" ]]; then
+    LATEST_TAG="${BASH_REMATCH[1]}"
+  fi
+  # Derive prerelease from the resolved tag's semver pre-release suffix rather than
+  # a second, independent scan of the list. Keying off the already-resolved tag_name
+  # ties the tag and its type to the same release by construction, so they can never
+  # be taken from two different objects. This project tags betas with a pre-release
+  # identifier (-beta / -rc); stable tags have none.
+  if [ -z "${LATEST_PRE}" ] && [ -n "${LATEST_TAG}" ]; then
+    case "${LATEST_TAG}" in
+      *-*) LATEST_PRE="true" ;;
+      *)   LATEST_PRE="false" ;;
+    esac
+  fi
 
   if [ -z "${LATEST_TAG}" ]; then
     echo "❌ No release found for ${REPO} (the API may be rate-limited)."
-    echo "   You can pass a tag explicitly: sh upgrade-beta.sh vX.Y.Z-beta1"
+    echo "   You can pass a tag explicitly: bash upgrade-beta.sh vX.Y.Z-beta1"
     exit 1
   fi
 
@@ -209,7 +229,7 @@ else
       echo "ℹ The newest beta (${BETA_TAG}) is OLDER than your installed version (${CURRENT_VERSION})."
       echo "  Installing it would be a downgrade. Refusing."
       echo "  To force this specific beta anyway:"
-      echo "    sh upgrade-beta.sh ${BETA_TAG}"
+      echo "    bash upgrade-beta.sh ${BETA_TAG}"
       exit 0
     fi
   fi
@@ -233,7 +253,7 @@ if [ "${ASSUME_YES}" -ne 1 ]; then
     esac
   else
     echo "❌ Not attached to a terminal and -y was not given; refusing to install a beta unattended."
-    echo "   Re-run interactively, or pass -y to confirm: sh upgrade-beta.sh -y"
+    echo "   Re-run interactively, or pass -y to confirm: bash upgrade-beta.sh -y"
     exit 1
   fi
 fi
