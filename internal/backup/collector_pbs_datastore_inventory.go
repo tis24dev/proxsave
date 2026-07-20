@@ -279,10 +279,17 @@ func (c *Collector) populatePBSInventoryHostCommandsCore(ctx context.Context, in
 		return nil
 	}
 
+	reason := "system_root_prefix is not host root; skipping host-only commands"
+	if inventory.kernelSharedEnabled {
+		// Under HOST_BACKUP_MODE the shared-kernel ZFS commands still run (see
+		// populatePBSInventoryHostCommandsZFS), so the marker must not claim all
+		// host commands were skipped.
+		reason = "system_root_prefix is host root (host-backup mode); namespace and device-scoped commands skipped, shared-kernel ZFS commands collected"
+	}
 	report.Commands["host_commands_skipped"] = inventoryCommandSnapshot{
 		Command: "host_commands",
 		Skipped: true,
-		Reason:  "system_root_prefix is not host root; skipping host-only commands",
+		Reason:  reason,
 	}
 	return nil
 }

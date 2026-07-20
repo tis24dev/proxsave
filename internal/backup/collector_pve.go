@@ -2519,7 +2519,14 @@ func (c *Collector) cephConfigPaths() []string {
 	if c.config.CephConfigPath != "" {
 		add(c.config.CephConfigPath)
 	}
-	add(filepath.Join(c.effectivePVEConfigPath(), "ceph"))
+	// add() applies systemPath itself, so feed it the UN-prefixed pve config path;
+	// effectivePVEConfigPath() is already prefixed and would double-prefix to
+	// PREFIX/PREFIX/etc/pve/ceph.
+	pveConfigRoot := strings.TrimSpace(c.config.PVEConfigPath)
+	if pveConfigRoot == "" {
+		pveConfigRoot = "/etc/pve"
+	}
+	add(filepath.Join(pveConfigRoot, "ceph"))
 	add("/etc/ceph")
 	return paths
 }

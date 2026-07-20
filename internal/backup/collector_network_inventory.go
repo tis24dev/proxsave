@@ -46,7 +46,15 @@ func (c *Collector) collectNetworkInventory(ctx context.Context, commandsDir, in
 	sysNet := c.systemPath("/sys/class/net")
 	entries, err := os.ReadDir(sysNet)
 	if err != nil {
-		c.logger.Debug("Network inventory skipped: unable to read %s: %v", sysNet, err)
+		// Under a prefix this is the common case when the host root bind mount does
+		// not carry sysfs (a non-recursive bind of / leaves PREFIX/sys empty). Surface
+		// it as a bare fact so the missing inventory reads as "host sysfs not carried",
+		// not "collection broke". Never fails the backup.
+		if c.hostRootPrefixActive() {
+			c.logger.Info("Network inventory unavailable: %s is not readable; the host sysfs is not carried by the bind mount", sysNet)
+		} else {
+			c.logger.Debug("Network inventory skipped: unable to read %s: %v", sysNet, err)
+		}
 		return nil
 	}
 
@@ -57,13 +65,14 @@ func (c *Collector) collectNetworkInventory(ctx context.Context, commandsDir, in
 		inv.Hostname = host
 	}
 	if !c.shouldRunHostCommands() {
-		// Interface facts come from the host sysfs under the prefix (accurate), but
-		// udevadm/ethtool query the running network namespace, which is the
-		// container's, so their per-interface fields (udev properties, permanent MAC)
-		// are intentionally absent rather than container data mislabeled as host data.
+		// Interface facts are read from sysfs under the prefix (which reflects the host
+		// only when the host sysfs is carried under the prefix), but udevadm/ethtool
+		// query the running network namespace, which is the container's, so their
+		// per-interface fields (udev properties, permanent MAC) are intentionally absent
+		// rather than container data mislabeled as host data.
 		inv.HostCommandsSkipped = true
 		inv.HostCommandsReason = "system root prefix set; namespace-scoped commands (udevadm/ethtool) describe the container, not the host"
-		c.logger.Info("Network inventory: host commands skipped under system root prefix; interface data collected from host sysfs")
+		c.logger.Info("Network inventory: host commands skipped under system root prefix; interface data read from sysfs under the prefix")
 	}
 
 	for _, entry := range entries {

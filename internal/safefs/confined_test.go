@@ -160,17 +160,52 @@ func TestReadFileInRootConfinesHostileAbsoluteTarget(t *testing.T) {
 	}
 }
 
-func TestReadFileInRootRefusesRelativeEscape(t *testing.T) {
+func TestReadFileInRootConfinesRelativeEscape(t *testing.T) {
 	root := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(root, "etc"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	// A relative target climbing above root is refused by os.Root at Lstat time.
+	// A relative target climbing above root is lexically collapsed by filepath.Clean
+	// (the leading ".." above root are dropped) and re-anchored under root, so it
+	// resolves to root/etc/passwd, never the machine's real /etc/passwd.
 	if err := os.Symlink("../../../../etc/passwd", filepath.Join(root, "etc/climb")); err != nil {
 		t.Fatal(err)
 	}
+	// With no in-root target the read fails rather than reaching the real file.
 	if _, err := ReadFileInRoot(root, "/etc/climb"); err == nil {
-		t.Fatal("expected error for relative escape target")
+		t.Fatal("expected error resolving relative escape with no in-root target")
+	}
+	// With a decoy inside root, the read is confined to it, proving containment.
+	if err := os.WriteFile(filepath.Join(root, "etc/passwd"), []byte("CONFINED\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	got, err := ReadFileInRoot(root, "/etc/climb")
+	if err != nil {
+		t.Fatalf("ReadFileInRoot: %v", err)
+	}
+	if string(got) != "CONFINED\n" {
+		t.Fatalf("got %q want confined decoy", got)
+	}
+}
+
+// TestReadFileInRootRefusesIntermediateAbsoluteSymlinkDir documents that an
+// intermediate directory component that is itself an absolute symlink is not
+// re-anchored: os.Root refuses it and the read fails closed (safe). The real
+// Proxmox layout uses a final-component symlink, which is handled.
+func TestReadFileInRootRefusesIntermediateAbsoluteSymlinkDir(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "etc/pve"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "etc/pve/ceph.conf"), []byte("fsid=1\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// etc/cephdir is an absolute-symlink DIRECTORY; the file under it is a real file.
+	if err := os.Symlink("/etc/pve", filepath.Join(root, "etc/cephdir")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ReadFileInRoot(root, "/etc/cephdir/ceph.conf"); err == nil {
+		t.Fatal("expected fail-closed error for an intermediate absolute-symlink directory")
 	}
 }
 

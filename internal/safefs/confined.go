@@ -49,15 +49,24 @@ func ReadFileUnderRoot(path string) ([]byte, error) {
 }
 
 // ReadFileInRoot reads absPath interpreted relative to root, following symlink
-// chains but confining every hop inside root. It exists because os.Root does NOT
-// re-anchor an absolute symlink target: os.Root.Open on a component whose target
-// is an absolute path (for example /etc/ceph/ceph.conf -> /etc/pve/ceph.conf on a
-// Proxmox host) is refused with "path escapes from parent", so a bare
-// os.OpenRoot(root).Open(rel) cannot read such a file. This helper instead walks
-// the chain by hand with Lstat/Readlink and re-anchors every absolute target back
-// under root, so /etc/ceph/ceph.conf resolves to root/etc/pve/ceph.conf and a
-// hostile target like /etc/shadow re-anchors to root/etc/shadow, never the real
-// host file. Relative "../" escapes are refused by os.Root at the syscall level.
+// chains but confining every resolved path inside root. It exists because os.Root
+// does NOT re-anchor an absolute symlink target: os.Root.Open on a component whose
+// target is an absolute path (for example /etc/ceph/ceph.conf -> /etc/pve/ceph.conf
+// on a Proxmox host) is refused with "path escapes from parent", so a bare
+// os.OpenRoot(root).Open(rel) cannot read such a file. This helper instead resolves
+// the WHOLE-PATH symlink at each hop by hand with Lstat/Readlink and re-anchors an
+// absolute target back under root, so /etc/ceph/ceph.conf resolves to
+// root/etc/pve/ceph.conf and a hostile target like /etc/shadow re-anchors to
+// root/etc/shadow, never the real host file.
+//
+// Scope and containment, precisely:
+//   - It re-anchors a symlink whose whole current path resolves to a symlink (the
+//     Proxmox /etc/ceph/ceph.conf case). An INTERMEDIATE directory component that is
+//     itself an absolute symlink is not re-anchored: os.Root.Lstat refuses it with
+//     "path escapes from parent", so such a layout fails closed (safe, but not read).
+//   - A relative "../" target is lexically collapsed and re-anchored under root by
+//     filepath.Clean (leading ".." above root are dropped), so it stays confined;
+//     os.Root is the syscall-level backstop, not the primary guard for that case.
 //
 // Use it to read a system file under a SYSTEM_ROOT_PREFIX when the file may be an
 // absolute symlink into another prefixed subtree. It is read-only and never
