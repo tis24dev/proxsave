@@ -87,7 +87,7 @@ func TestProvisionRelaySecretShortSecretRefused(t *testing.T) {
 	logger, _ := newProvisionTestLogger()
 	baseDir := t.TempDir()
 	var capture provisionCapture
-	// "abc" is 3 runes (< minRelaySecretLen) and would NOT be masked in logs.
+	// "abc" is 3 runes (< identity.NotifySecretMinLen) and would NOT be masked in logs.
 	server := routingSecretServer(t, `{"notify_secret":"abc","status":200}`, http.StatusOK, &capture)
 	defer server.Close()
 

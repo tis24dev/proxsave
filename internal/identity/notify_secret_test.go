@@ -140,7 +140,7 @@ func TestRemoveNotifySecret(t *testing.T) {
 
 func TestPersistNotifySecretRejectsTooShort(t *testing.T) {
 	baseDir := t.TempDir()
-	// A single lowercase char passes notifySecretFormat but is below notifySecretMinLen (6):
+	// A single lowercase char passes notifySecretFormat but is below NotifySecretMinLen (6):
 	// it would be UNMASKABLE in logs (redact.go secretMinRegister), so persist must refuse it.
 	if err := PersistNotifySecret(context.Background(), baseDir, "a", nil); err == nil {
 		t.Fatalf("PersistNotifySecret() expected an error for a sub-threshold secret")

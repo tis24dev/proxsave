@@ -142,9 +142,12 @@ func BuildHealthcheckSetupBootstrap(ctx context.Context, configPath, baseDir str
 		// The seam never returns an error and the network call is bounded (5s handshake +
 		// 5s confirm), so this preserves the "never returns an error, never blocks" contract:
 		// on any failure we fall through to SkipIdentityUnavailable exactly as before.
-		if healthcheckSetupProvisionSecret(ctx, state.ServerAPIHost, state.ServerID, baseDir) {
-			state.HasSecret = strings.TrimSpace(healthcheckSetupLoadSecret(baseDir)) != ""
-		}
+		// Reload UNCONDITIONALLY, regardless of the return value: ProvisionRelaySecret
+		// returns false when it adopts a secret a concurrent provisioner persisted under
+		// the cross-process lock, so gating the reload on a true return would miss a
+		// usable credential that is already on disk and wrongly report SkipIdentityUnavailable.
+		_ = healthcheckSetupProvisionSecret(ctx, state.ServerAPIHost, state.ServerID, baseDir)
+		state.HasSecret = strings.TrimSpace(healthcheckSetupLoadSecret(baseDir)) != ""
 	}
 	if !state.HasSecret {
 		state.Eligibility = HealthcheckSetupSkipIdentityUnavailable

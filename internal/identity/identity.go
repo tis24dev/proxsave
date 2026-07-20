@@ -35,10 +35,11 @@ const (
 	maxMachineIDBytes        = 32
 	systemKeyPrefixLength    = 8
 	serverIDLength           = 16
-	// notifySecretMinLen mirrors logging.secretMinRegister (6): a secret shorter than this
+	// NotifySecretMinLen mirrors logging.secretMinRegister (6): a secret shorter than this
 	// is NOT masked in logs, so a too-short value must never reach disk (and later a log
-	// line). Enforced at the single sink (PersistNotifySecret) so every caller is covered.
-	notifySecretMinLen = 6
+	// line). Enforced at the single sink (PersistNotifySecret) so every caller is covered;
+	// exported so the relay provisioner shares the one floor instead of duplicating it.
+	NotifySecretMinLen = 6
 )
 
 // notifySecretFormat matches the server's generate_notify_secret output: lowercase
@@ -75,13 +76,13 @@ func PersistNotifySecret(ctx context.Context, baseDir, secret string, logger *lo
 		logDebug(logger, "Identity: PersistNotifySecret: malformed secret, refusing (len=%d)", len(secret))
 		return fmt.Errorf("refusing to persist a malformed notify secret")
 	}
-	// Length floor at the single sink: a secret below notifySecretMinLen is not masked in
+	// Length floor at the single sink: a secret below NotifySecretMinLen is not masked in
 	// logs (redact.go secretMinRegister), so refuse it here so NO caller - the new relay
 	// provisioner and the legacy Telegram path alike - can write an unmaskable value. The
 	// server format is 19 chars, so a real secret never trips this; it is a defensive floor.
-	if len([]rune(secret)) < notifySecretMinLen {
-		logDebug(logger, "Identity: PersistNotifySecret: secret below min length, refusing (len=%d min=%d)", len([]rune(secret)), notifySecretMinLen)
-		return fmt.Errorf("refusing to persist a notify secret shorter than %d runes", notifySecretMinLen)
+	if n := len([]rune(secret)); n < NotifySecretMinLen {
+		logDebug(logger, "Identity: PersistNotifySecret: secret below min length, refusing (len=%d min=%d)", n, NotifySecretMinLen)
+		return fmt.Errorf("refusing to persist a notify secret shorter than %d runes", NotifySecretMinLen)
 	}
 	dir := filepath.Join(baseDir, identityDirName)
 	if err := os.MkdirAll(dir, 0o750); err != nil { // same mode as Detect

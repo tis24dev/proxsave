@@ -155,7 +155,7 @@ func checkTelegramRegistrationWithSecret(ctx context.Context, serverAPIHost, ser
 	// format), but redact the whole preview in that case rather than emit an unmaskable
 	// value. The floor itself is still enforced at persist time in ProvisionRelaySecret.
 	preview := truncateTelegramRegistrationBody(body, 200)
-	if resp.Status == http.StatusOK && secret != "" && len([]rune(secret)) < minRelaySecretLen {
+	if resp.Status == http.StatusOK && secret != "" && len([]rune(secret)) < identity.NotifySecretMinLen {
 		preview = "(redacted: response carried an unmaskable short secret)"
 	}
 	logTelegramRegistrationDebug(logger, "Telegram registration: response status=%d bodyBytes=%d bodyPreview=%q", resp.Status, len(body), preview)

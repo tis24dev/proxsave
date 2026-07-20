@@ -741,14 +741,14 @@ func provisionRelaySecretBestEffort(ctx context.Context, cfg *config.Config, log
 	if serverID == "" {
 		return ""
 	}
-	provisioned, err := provisionRelaySecretFn(ctx, cfg.ServerAPIHost, serverID, baseDir, logger)
-	if err != nil {
+	if _, err := provisionRelaySecretFn(ctx, cfg.ServerAPIHost, serverID, baseDir, logger); err != nil {
 		logging.Debug("daemon: relay-secret provisioning attempt failed (will retry later): %v", err)
 		return ""
 	}
-	if !provisioned {
-		return ""
-	}
+	// Reload regardless of the provisioned flag: ProvisionRelaySecret returns false when it
+	// adopts a secret a concurrent provisioner persisted under the cross-process lock, so a
+	// usable secret may be on disk even then; LoadNotifySecret yields "" when there is
+	// genuinely none, degrading gracefully.
 	s, _ := identity.LoadNotifySecret(baseDir)
 	return strings.TrimSpace(s)
 }

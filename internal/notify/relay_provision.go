@@ -10,13 +10,6 @@ import (
 	"github.com/tis24dev/proxsave/internal/logging"
 )
 
-// minRelaySecretLen is the shortest relay secret ProvisionRelaySecret will persist. It
-// mirrors logging's secretMinRegister (6): a secret shorter than this is NOT masked in
-// logs (redact.go skips it), so refusing to persist one keeps a too-short, unmaskable
-// value from ever reaching disk (and later a log line). The server format is 19 chars, so
-// this never rejects a real secret; it is a defensive floor.
-const minRelaySecretLen = 6
-
 // ProvisionRelaySecret performs the get-chat-id handshake WITH provision intent and, on a
 // 200 that issues a notify_secret, persists it (immutable identity file) and confirms it
 // back to the server so the centralized healthcheck fetch can authenticate WITHOUT any
@@ -36,7 +29,7 @@ const minRelaySecretLen = 6
 //   - a non-200 handshake            -> (false, err)
 //   - a 200 that issued no secret    -> (false, nil)   [nothing to adopt]
 //   - an empty baseDir               -> (false, err)
-//   - an issued secret < minRelaySecretLen runes -> (false, err)  [defensive floor]
+//   - an issued secret < identity.NotifySecretMinLen runes -> (false, err)  [defensive floor]
 //   - a persist failure              -> (false, err)
 //
 // Callers MUST treat a non-nil err as "retry later" and NEVER block on it.
@@ -74,11 +67,12 @@ func ProvisionRelaySecret(ctx context.Context, serverAPIHost, serverID, baseDir 
 		logTelegramRegistrationDebug(logger, "relay provision: 200 without token (nothing to provision)")
 		return false, nil
 	}
-	// Defensive length floor: an issued secret shorter than minRelaySecretLen is not masked
-	// in logs, so refuse it rather than write an unmaskable value to disk. (Server format is
-	// 19 chars, so a real secret never trips this.)
-	if len([]rune(secret)) < minRelaySecretLen {
-		return false, fmt.Errorf("relay provision: issued secret too short (<%d runes); refusing to persist", minRelaySecretLen)
+	// Defensive length floor (shared with the persistence sink): an issued secret shorter
+	// than identity.NotifySecretMinLen is not masked in logs, so refuse it rather than write
+	// an unmaskable value to disk. (Server format is 19 chars, so a real secret never trips
+	// this.)
+	if len([]rune(secret)) < identity.NotifySecretMinLen {
+		return false, fmt.Errorf("relay provision: issued secret too short (<%d runes); refusing to persist", identity.NotifySecretMinLen)
 	}
 	if err := identity.PersistNotifySecret(ctx, baseDir, secret, logger); err != nil {
 		return false, fmt.Errorf("relay provision: persist failed: %w", err)
