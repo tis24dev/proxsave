@@ -46,12 +46,14 @@ func (c *Collector) collectNetworkInventory(ctx context.Context, commandsDir, in
 	sysNet := c.systemPath("/sys/class/net")
 	entries, err := os.ReadDir(sysNet)
 	if err != nil {
-		// Under a prefix this is the common case when the host root bind mount does
-		// not carry sysfs (a non-recursive bind of / leaves PREFIX/sys empty). Surface
-		// it as a bare fact so the missing inventory reads as "host sysfs not carried",
-		// not "collection broke". Never fails the backup.
-		if c.hostRootPrefixActive() {
-			c.logger.Info("Network inventory unavailable: %s is not readable; the host sysfs is not carried by the bind mount", sysNet)
+		// In host-backup mode this is the common case when the host root bind mount
+		// does not carry sysfs (a non-recursive bind of / leaves PREFIX/sys empty).
+		// Surface it as a bare fact so the missing inventory reads as "host sysfs not
+		// carried", not "collection broke". A plain prefix (chroot/snapshot/CI) keeps
+		// the neutral debug line with the real error, since there is no bind mount to
+		// blame. Never fails the backup either way.
+		if c.config.HostBackupMode && c.hostRootPrefixActive() {
+			c.logger.Info("Network inventory unavailable: %s is not readable; the host sysfs may not be carried by the host mount", sysNet)
 		} else {
 			c.logger.Debug("Network inventory skipped: unable to read %s: %v", sysNet, err)
 		}
