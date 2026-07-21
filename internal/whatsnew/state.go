@@ -17,6 +17,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+
+	"github.com/Masterminds/semver/v3"
 )
 
 // State is the persisted seen-flag. One field: the newest notes version the user
@@ -26,10 +28,12 @@ type State struct {
 	LastSeenNotesVersion string `json:"last_seen_notes_version,omitempty"`
 }
 
-// ErrStateParse marks LoadState's malformed-JSON failure (as opposed to a genuine
-// read/permission error). A writer treats a parse error as a corrupt file to
-// quarantine and overwrite via loadStateForWrite; every other LoadState error is
-// propagated. Matched with errors.Is, mirroring health.ErrStatusParse.
+// ErrStateParse marks LoadState's UNUSABLE-content failure (as opposed to a genuine
+// read/permission error): malformed JSON, OR a syntactically valid flag whose stored
+// last_seen version is not valid semver (a garbage or empty string). Both are unusable by
+// the semver gate and would otherwise silence the feature forever, so a writer treats them
+// as a corrupt file to quarantine and overwrite via loadStateForWrite; every other
+// LoadState error is propagated. Matched with errors.Is, mirroring health.ErrStatusParse.
 var ErrStateParse = errors.New("whatsnew state parse")
 
 // corruptStateHook, if set, is invoked with the quarantine path whenever
@@ -54,8 +58,10 @@ func StatePath(baseDir string) string {
 // LoadState reads the flag tolerantly, mirroring health.LoadStatus. A missing OR
 // empty file is a normal "nothing acknowledged yet" state and yields the zero State
 // with present=false and a nil error. present is true ONLY when a non-empty file
-// parsed cleanly. Malformed JSON returns the zero State, present=false, and an error
-// wrapping ErrStateParse so the gate fails toward silence and a writer can self-heal.
+// parsed cleanly AND carries a valid-semver version. Malformed JSON, or a valid flag
+// whose stored version is not valid semver (garbage or empty), returns the zero State,
+// present=false, and an error wrapping ErrStateParse so the gate fails toward silence and
+// a writer can self-heal.
 func LoadState(baseDir string) (State, bool, error) {
 	var st State
 	data, err := os.ReadFile(StatePath(baseDir))
@@ -73,6 +79,14 @@ func LoadState(baseDir string) (State, bool, error) {
 		// it as unreadable rather than trusting garbage. Wrap ErrStateParse so a writer
 		// can tell recoverable corruption from a genuine read/permission error.
 		return State{}, false, fmt.Errorf("%w: %w", ErrStateParse, err)
+	}
+	if _, verr := semver.NewVersion(st.LastSeenNotesVersion); verr != nil {
+		// A syntactically valid JSON flag whose stored version is not valid semver (garbage
+		// or empty) is unusable: the semver gate can never compare it, so left as-is it would
+		// silence the feature forever. Treat it as corrupt (ErrStateParse) so a writer
+		// self-heals it, exactly like malformed JSON. MarkSeen only ever writes a non-empty
+		// semver, so this never rejects a flag the app itself produced.
+		return State{}, false, fmt.Errorf("%w: invalid last_seen version %q: %w", ErrStateParse, st.LastSeenNotesVersion, verr)
 	}
 	return st, true, nil
 }

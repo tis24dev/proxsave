@@ -119,6 +119,46 @@ func TestLoadStateMalformedJSON(t *testing.T) {
 	}
 }
 
+// TestLoadStateNonSemverVersion: a syntactically valid JSON flag whose stored version is
+// not valid semver (a garbage string, or an empty version via a bare {}) is treated as
+// corrupt -- ErrStateParse, present=false, zero State -- so a writer self-heals it instead
+// of the feature silencing forever. MarkSeen only ever writes a non-empty semver, so this
+// never rejects a flag the app itself produced.
+func TestLoadStateNonSemverVersion(t *testing.T) {
+	cases := []struct {
+		name    string
+		content string
+	}{
+		{"garbage version", `{"last_seen_notes_version":"garbage"}`},
+		{"empty version object", `{}`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			base := t.TempDir()
+			path := StatePath(base)
+			if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
+				t.Fatalf("mkdir identity dir: %v", err)
+			}
+			if err := os.WriteFile(path, []byte(tc.content), 0o600); err != nil {
+				t.Fatalf("write flag: %v", err)
+			}
+			st, present, err := LoadState(base)
+			if err == nil {
+				t.Fatalf("LoadState on %s should error", tc.name)
+			}
+			if !errors.Is(err, ErrStateParse) {
+				t.Fatalf("error = %v, want errors.Is ErrStateParse", err)
+			}
+			if present {
+				t.Fatalf("present = true on %s, want false", tc.name)
+			}
+			if st.LastSeenNotesVersion != "" {
+				t.Fatalf("State should be zero on %s, got %+v", tc.name, st)
+			}
+		})
+	}
+}
+
 // TestMarkSeenSelfHealsCorruptFile (STATE-06 self-heal SEAM): pre-write garbage at
 // StatePath, then MarkSeen succeeds, quarantines the garbage to StatePath+".corrupt",
 // and the primary file is valid JSON holding the new version.
