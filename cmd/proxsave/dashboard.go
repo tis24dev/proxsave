@@ -23,8 +23,10 @@ import (
 	"github.com/tis24dev/proxsave/internal/ui/components"
 	flowinstall "github.com/tis24dev/proxsave/internal/ui/flows/install"
 	"github.com/tis24dev/proxsave/internal/ui/flows/menu"
+	whatsnewflow "github.com/tis24dev/proxsave/internal/ui/flows/whatsnew"
 	"github.com/tis24dev/proxsave/internal/ui/shell"
 	"github.com/tis24dev/proxsave/internal/ui/theme"
+	whatsnew "github.com/tis24dev/proxsave/internal/whatsnew"
 )
 
 // dashboardIdleTimeout bounds how long the dashboard waits for a choice.
@@ -41,6 +43,39 @@ var (
 	dashboardIsBareInvocation = dashboardBareInvocationCheck
 	dashboardIsInteractive    = isTerminalInteractive
 )
+
+// Screen 0 (what's new) seams: package vars mirror the dashboard seam idiom
+// (dashboardIsBareInvocation/readBuildInfo) so the mandatory continue-only-write
+// test can drive the Decide/Run/MarkSeen outcomes without a real TTY or disk. The
+// same whatsnewSaveSeen var is reused by the install seed in main_modes.go, so the
+// continue-write and the seed share one spyable write path (open question A1).
+var (
+	whatsnewDecide   = whatsnew.Decide
+	whatsnewRun      = whatsnewflow.Run
+	whatsnewSaveSeen = whatsnew.MarkSeen
+)
+
+// maybeShowWhatsnew shows Screen 0 once, before the first menu.Run, when
+// whatsnewDecide reports the installed version carries unseen notes. It fails toward
+// SILENCE: any Decide error or a not-unseen verdict returns without touching the
+// flag (mirroring the diagnostics screens that swallow errors so a broken state file
+// never aborts or hangs the dashboard). The flow is bounded by withDashboardIdle so
+// an accidental pty cannot hang it, and the seen-flag is cleared ONLY on an explicit
+// continue (err == nil): a timeout (context.DeadlineExceeded) or Esc
+// (shell.ErrAborted) is a non-nil error and must leave the flag untouched, so the
+// write sits inside `if err == nil`, never in a defer/teardown (SCRN-03, Pitfall 9).
+func maybeShowWhatsnew(ctx context.Context, session *shell.Session, baseDir, toolVersion string) {
+	show, body, err := whatsnewDecide(baseDir, toolVersion)
+	if err != nil || !show {
+		return
+	}
+	wnCtx, cancelWN := withDashboardIdle(ctx)
+	err = whatsnewRun(wnCtx, session, body)
+	cancelWN()
+	if err == nil {
+		_ = whatsnewSaveSeen(baseDir, toolVersion)
+	}
+}
 
 // dashboardBareInvocationCheck: only a completely bare `proxsave` (no flags
 // at all) is eligible for the dashboard.
@@ -94,6 +129,15 @@ func maybeRunDashboard(ctx context.Context, args *cli.Args, bootstrap *logging.B
 			_ = session.Close()
 		}
 	}()
+
+	// Screen 0 (what's new): shown once, before the first menu.Run. No extra TTY or
+	// bare-invocation check is needed here -- reaching this line already guarantees
+	// bare + interactive (the early return at the top of maybeRunDashboard), so
+	// Screen 0 stays bare-interactive-only (SCRN-02/05). The base is resolved via the
+	// same detectedBaseDirOrFallback the install seed uses, so write-path == read-path
+	// (open question A1).
+	baseDir, _ := detectedBaseDirOrFallback()
+	maybeShowWhatsnew(ctx, session, baseDir, toolVersion)
 
 	for {
 		// Idle timeout: a pty-allocating wrapper (script, tmux, ssh -tt) that
