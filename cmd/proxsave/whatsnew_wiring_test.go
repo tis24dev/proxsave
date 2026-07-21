@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/tis24dev/proxsave/internal/cli"
@@ -119,6 +121,131 @@ func TestMaybeShowWhatsnewGateSkips(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestMaybeShowWhatsnewSelfHeal (STATE-06): a corrupt seen-flag on the interactive path
+// self-heals (quarantine to .corrupt + re-seed last_seen=current) and stays silent (no
+// Screen 0); any NON-parse Decide error writes nothing, so a real IO fault is not masked.
+func TestMaybeShowWhatsnewSelfHeal(t *testing.T) {
+	t.Run("corrupt flag re-seeds and stays silent", func(t *testing.T) {
+		stubWhatsnewSeams(t) // restore the real seams after; only whatsnewRun is spied
+		base := t.TempDir()
+		if err := os.MkdirAll(filepath.Dir(whatsnew.StatePath(base)), 0o755); err != nil {
+			t.Fatalf("mkdir: %v", err)
+		}
+		if err := os.WriteFile(whatsnew.StatePath(base), []byte("{not json"), 0o644); err != nil {
+			t.Fatalf("write garbage: %v", err)
+		}
+		runCalls := 0
+		whatsnewRun = func(ctx context.Context, session *shell.Session, body string) error {
+			runCalls++
+			return nil
+		}
+		// whatsnewDecide and whatsnewSaveSeen stay REAL, so the real ErrStateParse -> MarkSeen
+		// self-heal path is exercised end to end.
+
+		maybeShowWhatsnew(context.Background(), nil, base, "0.30.0")
+
+		if runCalls != 0 {
+			t.Fatalf("whatsnewRun called %d times on a corrupt flag, want 0 (no Screen 0)", runCalls)
+		}
+		st, present, err := whatsnew.LoadState(base)
+		if err != nil {
+			t.Fatalf("LoadState after self-heal: %v", err)
+		}
+		if !present || st.LastSeenNotesVersion != "0.30.0" {
+			t.Fatalf("self-heal state = (present=%v, %q), want (true, \"0.30.0\")", present, st.LastSeenNotesVersion)
+		}
+		if _, err := os.Stat(whatsnew.StatePath(base) + ".corrupt"); err != nil {
+			t.Fatalf("expected .corrupt sidecar: %v", err)
+		}
+	})
+
+	t.Run("non-parse error does not write", func(t *testing.T) {
+		stubWhatsnewSeams(t)
+		whatsnewDecide = func(baseDir, curr string) (bool, string, error) {
+			return false, "", errors.New("io")
+		}
+		saveCalls := 0
+		whatsnewSaveSeen = func(baseDir, v string) error {
+			saveCalls++
+			return nil
+		}
+		runCalls := 0
+		whatsnewRun = func(ctx context.Context, session *shell.Session, body string) error {
+			runCalls++
+			return nil
+		}
+
+		maybeShowWhatsnew(context.Background(), nil, t.TempDir(), "0.30.0")
+
+		if saveCalls != 0 {
+			t.Fatalf("whatsnewSaveSeen called %d times on a non-parse error, want 0", saveCalls)
+		}
+		if runCalls != 0 {
+			t.Fatalf("whatsnewRun called %d times on a non-parse error, want 0", runCalls)
+		}
+	})
+}
+
+// TestMaybeWarnWhatsnewSelfHeal (STATE-06): a corrupt seen-flag on the non-interactive path
+// self-heals and emits no WARNING (only a bare-fact DEBUG self-heal line); a NON-parse gate
+// error writes nothing and keeps the generic gate-error DEBUG line.
+func TestMaybeWarnWhatsnewSelfHeal(t *testing.T) {
+	t.Run("corrupt flag re-seeds and stays silent", func(t *testing.T) {
+		base := t.TempDir()
+		if err := os.MkdirAll(filepath.Dir(whatsnew.StatePath(base)), 0o755); err != nil {
+			t.Fatalf("mkdir: %v", err)
+		}
+		if err := os.WriteFile(whatsnew.StatePath(base), []byte("{not json"), 0o644); err != nil {
+			t.Fatalf("write garbage: %v", err)
+		}
+		logger, buf := captureLogger(t)
+
+		maybeWarnWhatsnew(logger, base, "0.30.0") // real ShouldWarn + real MarkSeen
+
+		if got := logger.WarningCount(); got != 0 {
+			t.Fatalf("WarningCount = %d on a corrupt flag, want 0", got)
+		}
+		st, present, err := whatsnew.LoadState(base)
+		if err != nil {
+			t.Fatalf("LoadState after self-heal: %v", err)
+		}
+		if !present || st.LastSeenNotesVersion != "0.30.0" {
+			t.Fatalf("self-heal state = (present=%v, %q), want (true, \"0.30.0\")", present, st.LastSeenNotesVersion)
+		}
+		if _, err := os.Stat(whatsnew.StatePath(base) + ".corrupt"); err != nil {
+			t.Fatalf("expected .corrupt sidecar: %v", err)
+		}
+		if !strings.Contains(buf.String(), "self-healed") {
+			t.Fatalf("missing self-heal DEBUG line\n%s", buf.String())
+		}
+	})
+
+	t.Run("non-parse error does not write", func(t *testing.T) {
+		stubWhatsnewSeams(t)
+		stubWhatsnewShouldWarn(t, func(baseDir, current string) (bool, string, error) {
+			return false, "", errors.New("io")
+		})
+		saveCalls := 0
+		whatsnewSaveSeen = func(baseDir, v string) error {
+			saveCalls++
+			return nil
+		}
+		logger, buf := captureLogger(t)
+
+		maybeWarnWhatsnew(logger, t.TempDir(), "0.30.0")
+
+		if saveCalls != 0 {
+			t.Fatalf("whatsnewSaveSeen called %d times on a non-parse error, want 0", saveCalls)
+		}
+		if got := logger.WarningCount(); got != 0 {
+			t.Fatalf("WarningCount = %d, want 0", got)
+		}
+		if !strings.Contains(buf.String(), "gate error") {
+			t.Fatalf("missing generic gate-error DEBUG line\n%s", buf.String())
+		}
+	})
 }
 
 // TestMaybeRunDashboardScreen0 covers the two product-path integration truths:

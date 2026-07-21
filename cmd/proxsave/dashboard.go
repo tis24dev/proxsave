@@ -57,16 +57,26 @@ var (
 
 // maybeShowWhatsnew shows Screen 0 once, before the first menu.Run, when
 // whatsnewDecide reports the installed version carries unseen notes. It fails toward
-// SILENCE: any Decide error or a not-unseen verdict returns without touching the
-// flag (mirroring the diagnostics screens that swallow errors so a broken state file
-// never aborts or hangs the dashboard). The flow is bounded by withDashboardIdle so
-// an accidental pty cannot hang it, and the seen-flag is cleared ONLY on an explicit
-// continue (err == nil): a timeout (context.DeadlineExceeded) or Esc
+// SILENCE: a not-unseen verdict returns without touching the flag (mirroring the
+// diagnostics screens that swallow errors so a broken state file never aborts or hangs
+// the dashboard). A corrupt seen-flag (errors.Is(err, whatsnew.ErrStateParse))
+// self-heals: it quarantines the unreadable file to .corrupt and re-seeds
+// last_seen=current via whatsnewSaveSeen, then stays silent, so the next run reads a
+// clean flag instead of nagging forever; any non-parse Decide error still returns
+// WITHOUT writing, so a real IO/permission fault is never masked. The flow is bounded by
+// withDashboardIdle so an accidental pty cannot hang it, and the seen-flag is cleared
+// ONLY on an explicit continue (err == nil): a timeout (context.DeadlineExceeded) or Esc
 // (shell.ErrAborted) is a non-nil error and must leave the flag untouched, so the
 // write sits inside `if err == nil`, never in a defer/teardown (SCRN-03, Pitfall 9).
 func maybeShowWhatsnew(ctx context.Context, session *shell.Session, baseDir, toolVersion string) {
 	show, body, err := whatsnewDecide(baseDir, toolVersion)
-	if err != nil || !show {
+	if err != nil {
+		if errors.Is(err, whatsnew.ErrStateParse) {
+			_ = whatsnewSaveSeen(baseDir, toolVersion) // best-effort self-heal, stay silent
+		}
+		return
+	}
+	if !show {
 		return
 	}
 	wnCtx, cancelWN := withDashboardIdle(ctx)
