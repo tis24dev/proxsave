@@ -154,13 +154,25 @@ func resolveTelegramLinkState(body []byte) TelegramLinkState {
 	if err := json.Unmarshal(body, &sig); err != nil {
 		return TelegramLinkStateRelayOnly
 	}
-	if ls := strings.TrimSpace(sig.LinkState); ls != "" {
+	return linkStateFromFields(sig.LinkState, sig.ChatID)
+}
+
+// linkStateFromFields is the single source of the linked-vs-relay-only precedence,
+// applied to already-extracted link_state and chat_id values: an explicit
+// link_state wins (case-insensitive "linked" -> Linked, anything else ->
+// RelayOnly); with no link_state, a non-empty chat_id -> Linked, empty ->
+// RelayOnly. resolveTelegramLinkState feeds it the JSON-parsed signal; the
+// get-chat-id diagnostic in telegram.go feeds it the response struct, so both read
+// the same discriminator and cannot diverge on edge cases (link_state "linked"
+// with empty chat_id, or an unrecognized link_state with a chat_id present).
+func linkStateFromFields(linkState, chatID string) TelegramLinkState {
+	if ls := strings.TrimSpace(linkState); ls != "" {
 		if strings.EqualFold(ls, "linked") {
 			return TelegramLinkStateLinked
 		}
 		return TelegramLinkStateRelayOnly
 	}
-	if strings.TrimSpace(sig.ChatID) != "" {
+	if strings.TrimSpace(chatID) != "" {
 		return TelegramLinkStateLinked
 	}
 	return TelegramLinkStateRelayOnly

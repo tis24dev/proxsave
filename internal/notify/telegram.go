@@ -318,7 +318,7 @@ func (t *TelegramNotifier) fetchCentralizedCredentials(ctx context.Context) (str
 		// link_state "relay_only"; provisioning below still fires on 200 +
 		// notify_secret regardless of chat_id, so this line is purely diagnostic but
 		// now reports the two meanings distinctly.
-		relayOnly := strings.TrimSpace(response.ChatID) == "" || strings.EqualFold(strings.TrimSpace(response.LinkState), "relay_only")
+		relayOnly := linkStateFromFields(response.LinkState, response.ChatID) == TelegramLinkStateRelayOnly
 		t.logger.Debug("Telegram: get-chat-id 200 (notifySecretPresent=%v botTokenPresent=%v chatIDPresent=%v linkState=%q relayOnly=%v)",
 			response.NotifySecret != "", response.BotToken != "", response.ChatID != "", response.LinkState, relayOnly)
 

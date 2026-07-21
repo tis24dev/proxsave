@@ -181,3 +181,60 @@ func TestCheckTelegramRegistrationLinkStateDiscriminator(t *testing.T) {
 		})
 	}
 }
+
+// TestResolveTelegramLinkState exercises the parser directly, independent of HTTP
+// handling, to lock the fail-safe and case-insensitivity guarantees: an
+// unparseable body must never read as a false Linked, and only the explicit
+// "linked" token (any casing) resolves to Linked.
+func TestResolveTelegramLinkState(t *testing.T) {
+	cases := []struct {
+		name string
+		body string
+		want TelegramLinkState
+	}{
+		{"non-json-body-falls-back-relay-only", "not-json", TelegramLinkStateRelayOnly},
+		{"truncated-json-falls-back-relay-only", "{", TelegramLinkStateRelayOnly},
+		{"empty-body-falls-back-relay-only", "", TelegramLinkStateRelayOnly},
+		{"link-state-uppercase-linked", `{"link_state":"LINKED"}`, TelegramLinkStateLinked},
+		{"link-state-mixed-case-linked", `{"link_state":"Linked"}`, TelegramLinkStateLinked},
+		{"link-state-unknown-value-relay-only", `{"link_state":"something-else","chat_id":"123"}`, TelegramLinkStateRelayOnly},
+		{"link-state-linked-empty-chat-id", `{"link_state":"linked"}`, TelegramLinkStateLinked},
+		{"no-link-state-chat-id-linked", `{"chat_id":"123"}`, TelegramLinkStateLinked},
+		{"no-link-state-no-chat-id-relay-only", `{}`, TelegramLinkStateRelayOnly},
+	}
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := resolveTelegramLinkState([]byte(tt.body)); got != tt.want {
+				t.Fatalf("resolveTelegramLinkState(%q) = %v, want %v", tt.body, got, tt.want)
+			}
+		})
+	}
+}
+
+// TestLinkStateFromFields pins the shared precedence helper that both
+// resolveTelegramLinkState and the get-chat-id diagnostic in telegram.go consume,
+// covering the two edge cases where the old inline diagnostic diverged: an explicit
+// "linked" with empty chat_id (must be Linked), and an unrecognized link_state with
+// a chat_id present (must be RelayOnly).
+func TestLinkStateFromFields(t *testing.T) {
+	cases := []struct {
+		name      string
+		linkState string
+		chatID    string
+		want      TelegramLinkState
+	}{
+		{"linked-token-empty-chat-id", "linked", "", TelegramLinkStateLinked},
+		{"linked-token-case-insensitive", "LiNkEd", "", TelegramLinkStateLinked},
+		{"unknown-link-state-with-chat-id", "foo", "123", TelegramLinkStateRelayOnly},
+		{"relay-only-token-overrides-chat-id", "relay_only", "123", TelegramLinkStateRelayOnly},
+		{"no-link-state-chat-id-linked", "", "123", TelegramLinkStateLinked},
+		{"no-link-state-no-chat-id-relay-only", "", "", TelegramLinkStateRelayOnly},
+	}
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := linkStateFromFields(tt.linkState, tt.chatID); got != tt.want {
+				t.Fatalf("linkStateFromFields(%q,%q) = %v, want %v", tt.linkState, tt.chatID, got, tt.want)
+			}
+		})
+	}
+}
