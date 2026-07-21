@@ -68,8 +68,9 @@ const whatsnewScreenTimeout = 10 * time.Minute
 // SILENCE: a not-unseen verdict returns without touching the flag (mirroring the
 // diagnostics screens that swallow errors so a broken state file never aborts or hangs
 // the dashboard). A corrupt seen-flag (errors.Is(err, whatsnew.ErrStateParse))
-// self-heals: it quarantines the unreadable file to .corrupt and re-seeds
-// last_seen=current via whatsnewSaveSeen, then stays silent, so the next run reads a
+// self-heals best-effort: it quarantines the unreadable file to .corrupt and re-seeds
+// last_seen=current via whatsnewSaveSeen (the write is best-effort and silent; a failure
+// just leaves the flag for the next run), then stays silent, so the next run reads a
 // clean flag instead of nagging forever; any non-parse Decide error still returns
 // WITHOUT writing, so a real IO/permission fault is never masked. The flow is bounded by
 // the dedicated total whatsnewScreenTimeout so an accidental pty cannot hang it, and the

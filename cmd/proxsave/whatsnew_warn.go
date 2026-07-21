@@ -20,8 +20,9 @@ var whatsnewShouldWarn = whatsnew.ShouldWarn
 // logger call: one filesystem read via the gate, a semver compare, then a buffered write, so
 // it never touches backup outcome or timing (NOTF-03). It fails toward SILENCE: on a gate error
 // or a seen verdict it emits only DEBUG lines, never the WARNING. A corrupt seen-flag
-// (errors.Is(err, whatsnew.ErrStateParse)) self-heals: it quarantines the unreadable file to
-// .corrupt and re-seeds last_seen=current via whatsnewSaveSeen, then stays silent; any non-parse
+// (errors.Is(err, whatsnew.ErrStateParse)) self-heals best-effort: it quarantines the unreadable
+// file to .corrupt and re-seeds last_seen=current via whatsnewSaveSeen (a failed write logs a
+// distinct DEBUG line and leaves the flag for the next run), then stays silent; any non-parse
 // error still emits only the generic gate-error DEBUG line without writing. The DEBUG bracket
 // lines are bare-fact English; the single imperative lives only in the locked WARNING copy.
 func maybeWarnWhatsnew(logger *logging.Logger, baseDir, toolVersion string) {

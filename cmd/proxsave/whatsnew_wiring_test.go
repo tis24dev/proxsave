@@ -250,6 +250,34 @@ func TestMaybeWarnWhatsnewSelfHeal(t *testing.T) {
 			t.Fatalf("missing generic gate-error DEBUG line\n%s", buf.String())
 		}
 	})
+
+	t.Run("self-heal write failure logs the failure line, no false success", func(t *testing.T) {
+		stubWhatsnewSeams(t)
+		stubWhatsnewShouldWarn(t, func(baseDir, current string) (bool, string, error) {
+			return false, "", whatsnew.ErrStateParse // corrupt flag path
+		})
+		saveCalls := 0
+		whatsnewSaveSeen = func(baseDir, v string) error {
+			saveCalls++
+			return errors.New("write failed") // read-only identity dir
+		}
+		logger, buf := captureLogger(t)
+
+		maybeWarnWhatsnew(logger, t.TempDir(), "0.30.0")
+
+		if saveCalls != 1 {
+			t.Fatalf("whatsnewSaveSeen calls = %d, want 1 (self-heal attempted)", saveCalls)
+		}
+		if got := logger.WarningCount(); got != 0 {
+			t.Fatalf("WarningCount = %d, want 0", got)
+		}
+		if !strings.Contains(buf.String(), "self-heal write failed") {
+			t.Fatalf("missing write-failure DEBUG line\n%s", buf.String())
+		}
+		if strings.Contains(buf.String(), "self-healed") {
+			t.Fatalf("must not claim self-healed when the write failed\n%s", buf.String())
+		}
+	})
 }
 
 // TestMaybeShowWhatsnewTimeout (SCRN-04): Screen 0 runs under a dedicated total
