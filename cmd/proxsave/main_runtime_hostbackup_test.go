@@ -13,9 +13,11 @@ import (
 	"github.com/tis24dev/proxsave/internal/types"
 )
 
-// runRedetect drives redetectHostBackupEnvironment with a mirrored bootstrap
-// logger and returns everything it printed plus the resulting envInfo.
-func runRedetect(t *testing.T, prefix string, hostBackup bool) (string, *environment.EnvironmentInfo) {
+// runRedetectWithLive drives redetectHostBackupEnvironment with a mirrored
+// bootstrap logger, seeding the pre-config live-container type, and returns
+// everything it printed plus the resulting envInfo. Seeding a non-Unknown live type
+// is what exposes the retain-live-type leak: a prefix run must overwrite it.
+func runRedetectWithLive(t *testing.T, prefix string, hostBackup bool, liveType types.ProxmoxType) (string, *environment.EnvironmentInfo) {
 	t.Helper()
 	boot := logging.NewBootstrapLogger()
 	boot.SetConsoleQuiet(true)
@@ -27,10 +29,17 @@ func runRedetect(t *testing.T, prefix string, hostBackup bool) (string, *environ
 	rt := &appRuntime{
 		bootstrap: boot,
 		cfg:       &config.Config{SystemRootPrefix: prefix, HostBackupMode: hostBackup},
-		envInfo:   &environment.EnvironmentInfo{Type: types.ProxmoxUnknown},
+		envInfo:   &environment.EnvironmentInfo{Type: liveType},
 	}
 	redetectHostBackupEnvironment(rt)
 	return buf.String(), rt.envInfo
+}
+
+// runRedetect is the common case: the live type is unknown (no Proxmox seen in the
+// container) and only the prefix detection matters.
+func runRedetect(t *testing.T, prefix string, hostBackup bool) (string, *environment.EnvironmentInfo) {
+	t.Helper()
+	return runRedetectWithLive(t, prefix, hostBackup, types.ProxmoxUnknown)
 }
 
 func writeHBFile(t *testing.T, path, content string) {
@@ -114,5 +123,70 @@ func TestRedetectHostBackupWithoutPrefixWarns(t *testing.T) {
 	out, _ := runRedetect(t, "", true)
 	if !strings.Contains(out, "SYSTEM_ROOT_PREFIX is empty") {
 		t.Fatalf("expected an empty-prefix warning, got:\n%s", out)
+	}
+}
+
+// TestRedetectFailedPrefixNeverRetainsLivePVE is the greptile-P1 regression: a live
+// PVE system whose prefix has no Proxmox markers must NOT keep the live PVE type
+// (which would ship a hollow archive labeled valid PVE). It must fail closed to
+// Unknown, and since the live system is a Proxmox this is a mis-mount, so it warns
+// even without HOST_BACKUP_MODE.
+func TestRedetectFailedPrefixNeverRetainsLivePVE(t *testing.T) {
+	root := t.TempDir() // empty: no Proxmox markers under the prefix
+
+	out, info := runRedetectWithLive(t, root, false, types.ProxmoxVE)
+	if info.Type != types.ProxmoxUnknown {
+		t.Fatalf("envInfo.Type = %v, want ProxmoxUnknown (must not retain the live PVE type)", info.Type)
+	}
+	if !strings.Contains(strings.ToUpper(out), "WARNING") || !strings.Contains(out, "detected on the live system") {
+		t.Fatalf("expected a mis-mount warning without HOST_BACKUP_MODE, got:\n%s", out)
+	}
+}
+
+// TestRedetectFailedPrefixHostBackupFailsClosedAndWarns: host-backup mode with a
+// prefix that has no host mounted fails closed to Unknown and warns, with no PVE
+// banner.
+func TestRedetectFailedPrefixHostBackupFailsClosedAndWarns(t *testing.T) {
+	root := t.TempDir()
+
+	out, info := runRedetectWithLive(t, root, true, types.ProxmoxVE)
+	if info.Type != types.ProxmoxUnknown {
+		t.Fatalf("envInfo.Type = %v, want ProxmoxUnknown", info.Type)
+	}
+	if !strings.Contains(out, "host filesystem may not be mounted") {
+		t.Fatalf("expected the not-mounted warning, got:\n%s", out)
+	}
+	if strings.Contains(out, "✓ Proxmox Type") {
+		t.Fatalf("failed detection must not print a type banner, got:\n%s", out)
+	}
+}
+
+// TestRedetectFailedPrefixPlainStaysQuiet is the no-spam contract: a non-Proxmox
+// live system (plain chroot/snapshot/CI) with an empty prefix and no
+// HOST_BACKUP_MODE fails closed to Unknown quietly, emitting neither warning
+// message (asserted on the message fragments rather than the "WARNING" level tag,
+// since the interpolated prefix path echoes the test name).
+func TestRedetectFailedPrefixPlainStaysQuiet(t *testing.T) {
+	root := t.TempDir()
+
+	out, info := runRedetectWithLive(t, root, false, types.ProxmoxUnknown)
+	if info.Type != types.ProxmoxUnknown {
+		t.Fatalf("envInfo.Type = %v, want ProxmoxUnknown", info.Type)
+	}
+	if strings.Contains(out, "may not be mounted") || strings.Contains(out, "detected on the live system") {
+		t.Fatalf("a plain prefix on a non-Proxmox host must not warn, got:\n%s", out)
+	}
+}
+
+// TestRedetectFailedPrefixNeverRetainsLivePBS mirrors the PVE regression for PBS.
+func TestRedetectFailedPrefixNeverRetainsLivePBS(t *testing.T) {
+	root := t.TempDir()
+
+	out, info := runRedetectWithLive(t, root, false, types.ProxmoxBS)
+	if info.Type != types.ProxmoxUnknown {
+		t.Fatalf("envInfo.Type = %v, want ProxmoxUnknown (must not retain the live PBS type)", info.Type)
+	}
+	if !strings.Contains(strings.ToUpper(out), "WARNING") || !strings.Contains(out, "detected on the live system") {
+		t.Fatalf("expected a mis-mount warning, got:\n%s", out)
 	}
 }

@@ -67,26 +67,37 @@ func redetectHostBackupEnvironment(rt *appRuntime) {
 		return
 	}
 
-	// DetectWith returns an error only when the type is unknown; that condition is
-	// handled below and its message is subsumed by the specific warning, so the
-	// error value itself is not needed here.
-	info, _ := environment.DetectWith(environment.DetectOptions{RootPrefix: prefix})
-	if info == nil || info.Type == types.ProxmoxUnknown {
-		// The type stays unknown: keep the pre-config detection and, only when the
-		// operator explicitly opted into host-backup mode, surface a single warning
-		// (a plain prefix run, e.g. chroot/snapshot/CI, must not be spammed). The
-		// generic DetectWith error is subsumed by this message, so it is not logged
-		// separately.
-		if rt.cfg.HostBackupMode {
-			rt.bootstrap.Warning("WARNING: no Proxmox host detected under SYSTEM_ROOT_PREFIX=%s; the host filesystem may not be mounted", prefix)
+	// Under a prefix the container ProxSave runs in is NOT the backup target: the
+	// target is the Proxmox host mounted under the prefix. DetectHostUnderPrefix uses
+	// ONLY the re-anchored filesystem markers (the same ones bare-metal PVE/PBS
+	// detection uses; host command probes are skipped) and never returns nil or a
+	// live-container type. Its result REPLACES envInfo unconditionally, so the
+	// pre-config live-container type can never survive a prefix run and mislabel a
+	// hollow archive as a valid backup.
+	liveType := types.ProxmoxUnknown
+	if rt.envInfo != nil {
+		liveType = rt.envInfo.Type
+	}
+	info := environment.DetectHostUnderPrefix(prefix)
+	rt.envInfo = info
+
+	if info.Type == types.ProxmoxUnknown {
+		// Fail closed: PVE/PBS collectors are skipped and the manifest records
+		// "unknown" instead of a false type over an empty tree. Warn when the
+		// operator signaled host intent: either HOST_BACKUP_MODE is set, or the live
+		// system itself IS a Proxmox (a Proxmox host/container pointed at a prefix
+		// with no Proxmox under it is a mis-mount). A plain prefix run
+		// (chroot/snapshot/CI) on a non-Proxmox live system stays quiet to avoid spam.
+		switch {
+		case rt.cfg.HostBackupMode:
+			rt.bootstrap.Warning("WARNING: no Proxmox host detected under SYSTEM_ROOT_PREFIX=%s; the host filesystem may not be mounted (archive labeled unknown)", prefix)
+		case liveType.SupportsPVE() || liveType.SupportsPBS():
+			rt.bootstrap.Warning("WARNING: %s detected on the live system but none under SYSTEM_ROOT_PREFIX=%s; the host filesystem may not be mounted (archive labeled unknown)", liveType, prefix)
+		default:
+			rt.bootstrap.Debug("no Proxmox detected under SYSTEM_ROOT_PREFIX=%s; archive labeled unknown", prefix)
 		}
 		return
 	}
-
-	// A detected type is a strict correctness improvement for any prefix run, so the
-	// envInfo is overwritten regardless of the flag. Only the framing (banner label
-	// and the pmxcfs mount-shape warning) is host-backup specific.
-	rt.envInfo = info
 	if rt.cfg.HostBackupMode {
 		rt.bootstrap.Printf("✓ Proxmox Type (host-backup mode, %s): %s", prefix, info.Type)
 	} else {

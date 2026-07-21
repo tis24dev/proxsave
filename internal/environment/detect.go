@@ -174,6 +174,23 @@ func DetectWith(opts DetectOptions) (*EnvironmentInfo, error) {
 	return info, err
 }
 
+// DetectHostUnderPrefix detects a Proxmox host whose filesystem is mounted under
+// prefix (SYSTEM_ROOT_PREFIX, issue #255). It uses ONLY the re-anchored filesystem
+// markers that bare-metal PVE/PBS detection uses; it never runs the host command
+// probes, which answer for the appliance container rather than the mounted host. It
+// NEVER returns nil and NEVER returns a live-container type: when no host markers
+// are present under the prefix it returns a ProxmoxUnknown EnvironmentInfo (fail
+// closed), so a caller cannot inherit the container type and label a hollow archive
+// as a valid PVE/PBS backup. The caller is responsible for screening an empty or
+// root prefix before calling.
+func DetectHostUnderPrefix(prefix string) *EnvironmentInfo {
+	info, _ := DetectWith(DetectOptions{RootPrefix: prefix})
+	if info == nil { // defensive; detectEnvironmentInfo never yields nil today
+		return &EnvironmentInfo{Type: types.ProxmoxUnknown, Version: "unknown"}
+	}
+	return info
+}
+
 // hostRooted reports whether detection is re-anchored under a host prefix.
 func hostRooted() bool {
 	return rootPrefix != "" && rootPrefix != string(filepath.Separator)
