@@ -26,6 +26,32 @@ var (
 	pveLegacyFile  = defaultPVELegacyFile
 	pbsVersionFile = defaultPBSVersionFile
 
+	// dpkgStatusFile is the Debian package database. Under a mounted host prefix it
+	// is the persistent, authoritative record of what is installed AND its version,
+	// unlike the pmxcfs-backed version files which vanish when the /etc/pve bind is
+	// not mounted. It is the reliable offline version source for both PVE and PBS.
+	dpkgStatusFile = "/var/lib/dpkg/status"
+
+	// pveClusterDB is the pmxcfs SQLite backing store. It exists on every PVE host
+	// (clustered or standalone), lives on the persistent root filesystem, and
+	// survives with no pmxcfs FUSE bind, so it identifies a mounted PVE host even
+	// when /etc/pve is an empty mountpoint. Nothing but PVE creates it.
+	pveClusterDB = "/var/lib/pve-cluster/config.db"
+
+	// pveBinaryCandidates and pbsBinaryCandidates are product-specific binaries
+	// installed under /usr, present whenever the mount carries /usr even if /etc and
+	// /var are excluded. They are only stat-probed, never executed (executing a host
+	// binary from inside the backup appliance would answer for the appliance).
+	pveBinaryCandidates = []string{"/usr/bin/pmxcfs", "/usr/bin/pveversion", "/usr/bin/pvesh", "/usr/sbin/qm", "/usr/sbin/pct"}
+	// PBS server binaries only (proxmox-backup-proxy/manager); the client
+	// (proxmox-backup-client) ships on PVE hosts too, so it is excluded to avoid a
+	// false PBS positive on a PVE-only host.
+	pbsBinaryCandidates = []string{"/usr/sbin/proxmox-backup-proxy", "/usr/bin/proxmox-backup-manager", "/usr/sbin/proxmox-backup-manager"}
+
+	// Package data directories, on-disk and product-specific.
+	pveShareDir = "/usr/share/pve-manager"
+	pbsShareDir = "/usr/share/proxmox-backup"
+
 	additionalPaths = []string{"/usr/bin", "/usr/sbin", "/bin", "/sbin"}
 
 	pveDirCandidates = []string{
@@ -233,6 +259,25 @@ func detectPVE() (string, bool) {
 		return version, true
 	}
 
+	// dpkg is version-bearing and reliable offline, so it precedes the version-less
+	// markers below and recovers the real version even when the pmxcfs version files
+	// are absent.
+	if version, ok := dpkgPackageInstalled("pve-manager"); ok {
+		return version, true
+	}
+
+	if fileExists(pveClusterDB) {
+		return "unknown", true
+	}
+
+	if fileExistsAny(pveBinaryCandidates) {
+		return "unknown", true
+	}
+
+	if dirExists(pveShareDir) {
+		return "unknown", true
+	}
+
 	if ok := detectPVEViaSources(); ok {
 		return "unknown", true
 	}
@@ -255,6 +300,18 @@ func detectPBS() (string, bool) {
 		return version, true
 	}
 
+	if version, ok := dpkgPackageInstalled("proxmox-backup-server"); ok {
+		return version, true
+	}
+
+	if fileExistsAny(pbsBinaryCandidates) {
+		return "unknown", true
+	}
+
+	if dirExists(pbsShareDir) {
+		return "unknown", true
+	}
+
 	if ok := detectPBSViaSources(); ok {
 		return "unknown", true
 	}
@@ -264,6 +321,55 @@ func detectPBS() (string, bool) {
 	}
 
 	return "", false
+}
+
+// fileExistsAny reports whether any candidate resolves to a regular file under the
+// active prefix (fileExists applies resolveUnderPrefix).
+func fileExistsAny(paths []string) bool {
+	for _, p := range paths {
+		if fileExists(p) {
+			return true
+		}
+	}
+	return false
+}
+
+// dpkgPackageInstalled reports whether the dpkg status database under the active
+// prefix records pkg as installed, returning its Version. It matches an anchored
+// "Package:" field plus a "Status: ... installed" line so a Depends: mention in
+// another stanza, or a residual "deinstall ok config-files" entry, never counts as
+// installed. Stanzas are blank-line separated.
+func dpkgPackageInstalled(pkg string) (string, bool) {
+	data, err := readFileFunc(resolveUnderPrefix(dpkgStatusFile))
+	if err != nil {
+		return "", false
+	}
+	for _, stanza := range strings.Split(string(data), "\n\n") {
+		if dpkgStanzaField(stanza, "Package") != pkg {
+			continue
+		}
+		if !strings.HasSuffix(dpkgStanzaField(stanza, "Status"), " installed") {
+			return "", false
+		}
+		version := dpkgStanzaField(stanza, "Version")
+		if version == "" {
+			version = "unknown"
+		}
+		return version, true
+	}
+	return "", false
+}
+
+// dpkgStanzaField returns the trimmed value of the first "Key: value" line in a
+// stanza, anchored at column 0 so an indented continuation line never matches.
+func dpkgStanzaField(stanza, key string) string {
+	prefix := key + ":"
+	for _, line := range strings.Split(stanza, "\n") {
+		if strings.HasPrefix(line, prefix) {
+			return strings.TrimSpace(line[len(prefix):])
+		}
+	}
+	return ""
 }
 
 func detectPVEViaCommand() (string, bool) {
@@ -516,6 +622,22 @@ func writeDetectionDebug() string {
 	builder.WriteString("=== APT source files check ===\n")
 	for _, source := range append(pveSourceFiles, pbsSourceFiles...) {
 		fmt.Fprintf(&builder, "%s exists: %s\n", source, boolToYes(fileExists(source)))
+	}
+	builder.WriteString("\n")
+
+	builder.WriteString("=== Offline host markers check ===\n")
+	fmt.Fprintf(&builder, "%s exists: %s\n", pveClusterDB, boolToYes(fileExists(pveClusterDB)))
+	for _, bin := range append(append([]string{}, pveBinaryCandidates...), pbsBinaryCandidates...) {
+		fmt.Fprintf(&builder, "%s exists: %s\n", bin, boolToYes(fileExists(bin)))
+	}
+	fmt.Fprintf(&builder, "%s exists: %s\n", pveShareDir, boolToYes(dirExists(pveShareDir)))
+	fmt.Fprintf(&builder, "%s exists: %s\n", pbsShareDir, boolToYes(dirExists(pbsShareDir)))
+	fmt.Fprintf(&builder, "%s exists: %s\n", dpkgStatusFile, boolToYes(fileExists(dpkgStatusFile)))
+	if _, ok := dpkgPackageInstalled("pve-manager"); ok {
+		builder.WriteString("dpkg pve-manager: installed\n")
+	}
+	if _, ok := dpkgPackageInstalled("proxmox-backup-server"); ok {
+		builder.WriteString("dpkg proxmox-backup-server: installed\n")
 	}
 	builder.WriteString("\n")
 

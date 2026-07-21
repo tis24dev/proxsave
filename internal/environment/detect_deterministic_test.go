@@ -269,6 +269,12 @@ func TestDetectPVE_FallbackOrder(t *testing.T) {
 	setValue(t, &additionalPaths, []string{})
 	setValue(t, &pveSourceFiles, []string{})
 	setValue(t, &pveDirCandidates, []string{})
+	// Null the offline-marker seams so the fallback-order subtests do not consult the
+	// build host's real /var/lib/dpkg/status, config.db, /usr binaries or share dir.
+	setValue(t, &dpkgStatusFile, filepath.Join(tmpDir, "missing-dpkg-status"))
+	setValue(t, &pveClusterDB, filepath.Join(tmpDir, "missing-config-db"))
+	setValue(t, &pveBinaryCandidates, []string{})
+	setValue(t, &pveShareDir, filepath.Join(tmpDir, "missing-pve-share"))
 
 	t.Run("via command", func(t *testing.T) {
 		setValue(t, &lookPathFunc, func(string) (string, error) { return "/fake/pveversion", nil })
@@ -352,6 +358,11 @@ func TestDetectPBS_FallbackOrder(t *testing.T) {
 	setValue(t, &additionalPaths, []string{})
 	setValue(t, &pbsSourceFiles, []string{})
 	setValue(t, &pbsDirCandidates, []string{})
+	// Null the offline-marker seams so the fallback-order subtests do not consult the
+	// build host's real /var/lib/dpkg/status, /usr binaries or share dir.
+	setValue(t, &dpkgStatusFile, filepath.Join(tmpDir, "missing-dpkg-status"))
+	setValue(t, &pbsBinaryCandidates, []string{})
+	setValue(t, &pbsShareDir, filepath.Join(tmpDir, "missing-pbs-share"))
 
 	t.Run("via command", func(t *testing.T) {
 		setValue(t, &lookPathFunc, func(string) (string, error) { return "/fake/proxmox-backup-manager", nil })
