@@ -3,7 +3,9 @@ package main
 import (
 	"bytes"
 	"errors"
-	"os"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -33,9 +35,11 @@ func captureLogger(t *testing.T) (*logging.Logger, *bytes.Buffer) {
 }
 
 // singleEmittedWarning asserts the logger captured EXACTLY ONE warning/error issue line and
-// returns its message (the text after the level token). IssueLines uses the fixed
-// "[ts] LEVEL msg" capture format, so this pins the copy with an equality check that Contains
-// cannot give: a trailing or leading addition to the format string fails it.
+// returns its message BYTE-EXACT. IssueLines uses the fixed "[<ts>] %-8s %s" capture format
+// (logger.go): after the "WARNING" token comes the one-space %-8s pad plus the one-space field
+// separator, i.e. exactly two spaces, then the verbatim message. Stripping exactly that
+// two-space separator (never TrimSpace) means ANY addition to the copy -- including a leading
+// or trailing whitespace edit -- changes the returned message and fails the equality check.
 func singleEmittedWarning(t *testing.T, logger *logging.Logger) string {
 	t.Helper()
 	lines := logger.IssueLines()
@@ -46,7 +50,11 @@ func singleEmittedWarning(t *testing.T, logger *logging.Logger) string {
 	if i < 0 {
 		t.Fatalf("captured issue is not a WARNING: %q", lines[0])
 	}
-	return strings.TrimSpace(lines[0][i+len("WARNING"):])
+	rest := lines[0][i+len("WARNING"):]
+	if !strings.HasPrefix(rest, "  ") {
+		t.Fatalf("unexpected issue-line separator, want two spaces after WARNING: %q", lines[0])
+	}
+	return strings.TrimPrefix(rest, "  ")
 }
 
 const lockedWarnCopy = "ProxSave 0.30.0 has unseen release notes. Open proxsave to view the new features."
@@ -166,38 +174,88 @@ func TestMaybeWarnWhatsnewDeliveredToEmailCategories(t *testing.T) {
 	if warningCount != 1 {
 		t.Fatalf("ParseLogCounts warningCount = %d, want 1", warningCount)
 	}
+	// Assert a WARNING category carrying our copy was captured. Match on containment (not
+	// exact equality) so this delivery test stays decoupled from ParseLogCounts' Label
+	// truncation(120)/split(" - "); the byte-exact copy lock lives in TestMaybeWarnWhatsnewCopy.
 	found := false
 	for _, c := range cats {
-		if c.Type == "WARNING" && c.Label == lockedWarnCopy {
+		if c.Type == "WARNING" && c.Label != "" && strings.Contains(lockedWarnCopy, c.Label) {
 			found = true
 			break
 		}
 	}
 	if !found {
-		t.Fatalf("locked warning copy not captured as a WARNING LogCategory: %+v", cats)
+		t.Fatalf("the warning was not captured as a WARNING LogCategory carrying the copy: %+v", cats)
 	}
 }
 
-// TestWhatsnewWarnWiredAfterUpdateCheck is a source guard for the single wiring line. The
+// TestWhatsnewWarnWiredInBootstrap is a STRUCTURAL (AST) guard for the single wiring line. The
 // behavioral call lives inside bootstrapRuntime, which cannot be unit-invoked cheaply (it runs
-// a real GitHub update probe and a full config load), so this cheaply catches accidental
-// removal or relocation: the nudge MUST be called, and AFTER checkForUpdates (co-located with
-// the update notice, NOTF-01), never before it or wrapped in an "update available" branch.
-func TestWhatsnewWarnWiredAfterUpdateCheck(t *testing.T) {
-	src, err := os.ReadFile("main_runtime.go")
+// a real GitHub update probe and a full config load). Parsing the AST -- not scanning text --
+// pins that maybeWarnWhatsnew is an UNCONDITIONAL top-level statement of bootstrapRuntime,
+// AFTER the checkForUpdates assignment. This catches what a substring scan cannot: a
+// commented-out call (not an AST node), a call wrapped in an if/branch (not a direct body
+// statement), a call relocated into another function, and outright deletion -- all of which
+// would break NOTF-01 (nudge on every non-interactive run, independent of update state).
+func TestWhatsnewWarnWiredInBootstrap(t *testing.T) {
+	fset := token.NewFileSet()
+	f, err := parser.ParseFile(fset, "main_runtime.go", nil, 0)
 	if err != nil {
-		t.Fatalf("read main_runtime.go: %v", err)
+		t.Fatalf("parse main_runtime.go: %v", err)
 	}
-	s := string(src)
-	iUpd := strings.Index(s, "checkForUpdates(")
-	iWarn := strings.Index(s, "maybeWarnWhatsnew(")
-	if iUpd < 0 {
-		t.Fatal("checkForUpdates call not found in main_runtime.go")
+
+	var fn *ast.FuncDecl
+	for _, d := range f.Decls {
+		if fd, ok := d.(*ast.FuncDecl); ok && fd.Name.Name == "bootstrapRuntime" {
+			fn = fd
+			break
+		}
 	}
-	if iWarn < 0 {
-		t.Fatal("maybeWarnWhatsnew wiring missing from main_runtime.go (NOTF-01 delivery removed)")
+	if fn == nil || fn.Body == nil {
+		t.Fatal("bootstrapRuntime not found in main_runtime.go")
 	}
-	if iWarn < iUpd {
-		t.Fatal("maybeWarnWhatsnew must be wired AFTER checkForUpdates (co-located with the update notice)")
+
+	// directCallName returns the callee name only when s is a DIRECT call statement (a bare
+	// call, or an assignment whose single RHS is a call). A call nested inside an if/for/etc.
+	// is not a direct body statement, so it yields "" -- which is exactly how a branch-wrapped
+	// nudge gets rejected.
+	directCallName := func(s ast.Stmt) string {
+		var call *ast.CallExpr
+		switch st := s.(type) {
+		case *ast.ExprStmt:
+			call, _ = st.X.(*ast.CallExpr)
+		case *ast.AssignStmt:
+			if len(st.Rhs) == 1 {
+				call, _ = st.Rhs[0].(*ast.CallExpr)
+			}
+		}
+		if call == nil {
+			return ""
+		}
+		if id, ok := call.Fun.(*ast.Ident); ok {
+			return id.Name
+		}
+		return ""
+	}
+
+	idxUpd, idxWarn := -1, -1
+	for i, s := range fn.Body.List {
+		switch directCallName(s) {
+		case "checkForUpdates":
+			idxUpd = i
+		case "maybeWarnWhatsnew":
+			idxWarn = i
+		}
+	}
+
+	if idxUpd < 0 {
+		t.Fatal("checkForUpdates is not a direct statement in bootstrapRuntime")
+	}
+	if idxWarn < 0 {
+		t.Fatal("maybeWarnWhatsnew is not an unconditional top-level call in bootstrapRuntime " +
+			"(deleted, commented out, wrapped in a branch, or moved) -> NOTF-01 delivery not guaranteed")
+	}
+	if idxWarn <= idxUpd {
+		t.Fatal("maybeWarnWhatsnew must be a direct statement AFTER checkForUpdates in bootstrapRuntime")
 	}
 }
