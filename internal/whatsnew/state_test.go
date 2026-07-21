@@ -159,6 +159,22 @@ func TestLoadStateNonSemverVersion(t *testing.T) {
 	}
 }
 
+// TestMarkSeenRejectsNonSemver: MarkSeen refuses a non-semver (or empty) version and writes
+// no file, so the write side never produces a flag LoadState would reject as corrupt.
+func TestMarkSeenRejectsNonSemver(t *testing.T) {
+	for _, v := range []string{"garbage", "", "pr-v0.30.0-beta5-dev.8+gsha.dirty"} {
+		t.Run(v, func(t *testing.T) {
+			base := t.TempDir()
+			if err := MarkSeen(base, v); err == nil {
+				t.Fatalf("MarkSeen(%q) err = nil, want non-nil (refuse non-semver)", v)
+			}
+			if _, err := os.Stat(StatePath(base)); !os.IsNotExist(err) {
+				t.Fatalf("MarkSeen(%q) wrote a flag; stat err = %v, want not-exist", v, err)
+			}
+		})
+	}
+}
+
 // TestMarkSeenSelfHealsCorruptFile (STATE-06 self-heal SEAM): pre-write garbage at
 // StatePath, then MarkSeen succeeds, quarantines the garbage to StatePath+".corrupt",
 // and the primary file is valid JSON holding the new version.

@@ -111,11 +111,20 @@ func loadStateForWrite(baseDir string) (State, error) {
 }
 
 // MarkSeen atomically persists last_seen = version, creating identity/ on demand. It
-// first self-heals a corrupt file (quarantine to .corrupt, continue from zero) so a
-// garbage flag never blocks acknowledgement. The write is the writeJSONAtomic idiom
+// refuses a non-semver (or empty) version so the flag it writes is always readable by
+// LoadState. It then self-heals a corrupt file (quarantine to .corrupt, continue from
+// zero) so a garbage flag never blocks acknowledgement. The write is the writeJSONAtomic idiom
 // from internal/health/status.go byte-for-byte (MkdirAll 0o750 -> MarshalIndent ->
 // WriteFile ".tmp" 0o600 -> Rename, remove tmp on rename failure).
 func MarkSeen(baseDir, version string) error {
+	// Persist only a valid-semver version, so the write side agrees with LoadState's read
+	// side: writing a non-semver (or empty) version would create a flag LoadState rejects as
+	// corrupt, so a self-heal that re-seeds a non-semver toolVersion (a dev/make build not
+	// caught by IsDevBuild) would churn on every run. All callers are best-effort (the seed
+	// and the two wirings discard the error), so refusing here just skips the useless write.
+	if _, err := semver.NewVersion(version); err != nil {
+		return fmt.Errorf("refusing to persist non-semver whatsnew version %q: %w", version, err)
+	}
 	st, err := loadStateForWrite(baseDir)
 	if err != nil {
 		return err
