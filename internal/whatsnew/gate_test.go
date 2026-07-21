@@ -181,6 +181,9 @@ func TestIsDevBuild(t *testing.T) {
 		{"1.0.0", false},
 		{"0.30.0-beta5", false},
 		{"0.30.0-rc1", false},
+		// Prerelease first dot-identifier must equal "dev" EXACTLY (not a prefix/substring).
+		{"0.30.0-dev2", false},
+		{"0.30.0-development", false},
 		// Non-semver is NOT dev here (IsUnseen fails toward silence on it).
 		{"not-a-version", false},
 	}

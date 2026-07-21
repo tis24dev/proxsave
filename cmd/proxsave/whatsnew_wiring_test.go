@@ -3,6 +3,9 @@ package main
 import (
 	"context"
 	"errors"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"os"
 	"path/filepath"
 	"strings"
@@ -272,9 +275,15 @@ func TestMaybeShowWhatsnewTimeout(t *testing.T) {
 		if !gotOK {
 			t.Fatal("Screen 0 run context carries no deadline; want a total whatsnewScreenTimeout cap")
 		}
+		// Assert against HARDCODED literals (not the production const): pin the absolute
+		// 10-minute value so a const change to another duration is caught here, instead of
+		// a self-referential bound that tracks whatever the const becomes.
+		if whatsnewScreenTimeout != 10*time.Minute {
+			t.Fatalf("whatsnewScreenTimeout = %v, want 10m0s (SCRN-04 total cap)", whatsnewScreenTimeout)
+		}
 		remaining := time.Until(gotDeadline)
-		if remaining <= whatsnewScreenTimeout-time.Minute || remaining > whatsnewScreenTimeout {
-			t.Fatalf("Screen 0 deadline remaining = %v, want in (%v, %v]", remaining, whatsnewScreenTimeout-time.Minute, whatsnewScreenTimeout)
+		if remaining <= 9*time.Minute || remaining > 10*time.Minute {
+			t.Fatalf("Screen 0 deadline remaining = %v, want in (9m0s, 10m0s]", remaining)
 		}
 	})
 
@@ -300,6 +309,60 @@ func TestMaybeShowWhatsnewTimeout(t *testing.T) {
 			t.Fatalf("whatsnewSaveSeen called %d times on a cancelled run, want 0", saveCalls)
 		}
 	})
+}
+
+// TestScreen0UsesDedicatedTimeout is a STRUCTURAL (AST) guard that Screen 0 is bounded by the
+// DEDICATED whatsnewScreenTimeout, NOT the shared withDashboardIdle. A behavioral deadline test
+// cannot tell the two apart today (dashboardIdleTimeout == whatsnewScreenTimeout == 10m), so this
+// pins SCRN-04's intent -- a knob distinct from the menu/sub-screen idle cap -- against a silent
+// revert to withDashboardIdle or a future change to dashboardIdleTimeout. Mirrors the AST idiom of
+// TestWhatsnewWarnWiredInBootstrap.
+func TestScreen0UsesDedicatedTimeout(t *testing.T) {
+	fset := token.NewFileSet()
+	f, err := parser.ParseFile(fset, "dashboard.go", nil, 0)
+	if err != nil {
+		t.Fatalf("parse dashboard.go: %v", err)
+	}
+	var fn *ast.FuncDecl
+	for _, d := range f.Decls {
+		if fd, ok := d.(*ast.FuncDecl); ok && fd.Name.Name == "maybeShowWhatsnew" {
+			fn = fd
+			break
+		}
+	}
+	if fn == nil || fn.Body == nil {
+		t.Fatal("maybeShowWhatsnew not found in dashboard.go")
+	}
+
+	usesDedicated, usesSharedIdle := false, false
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		call, ok := n.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		switch fun := call.Fun.(type) {
+		case *ast.SelectorExpr: // context.WithTimeout(ctx, whatsnewScreenTimeout)
+			if pkg, ok := fun.X.(*ast.Ident); ok && pkg.Name == "context" && fun.Sel.Name == "WithTimeout" {
+				if len(call.Args) == 2 {
+					if id, ok := call.Args[1].(*ast.Ident); ok && id.Name == "whatsnewScreenTimeout" {
+						usesDedicated = true
+					}
+				}
+			}
+		case *ast.Ident: // withDashboardIdle(ctx)
+			if fun.Name == "withDashboardIdle" {
+				usesSharedIdle = true
+			}
+		}
+		return true
+	})
+
+	if !usesDedicated {
+		t.Fatal("maybeShowWhatsnew must bound Screen 0 with context.WithTimeout(ctx, whatsnewScreenTimeout) (SCRN-04 dedicated cap)")
+	}
+	if usesSharedIdle {
+		t.Fatal("maybeShowWhatsnew must NOT use the shared withDashboardIdle for Screen 0 (SCRN-04 requires a dedicated timeout distinct from the menu idle cap)")
+	}
 }
 
 // TestMaybeRunDashboardScreen0 covers the two product-path integration truths:

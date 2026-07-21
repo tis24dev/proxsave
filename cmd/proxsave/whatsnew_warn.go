@@ -33,8 +33,13 @@ func maybeWarnWhatsnew(logger *logging.Logger, baseDir, toolVersion string) {
 	switch {
 	case err != nil:
 		if errors.Is(err, whatsnew.ErrStateParse) {
-			_ = whatsnewSaveSeen(baseDir, toolVersion)
-			logger.Debug("Release notes check self-healed: corrupt seen-flag quarantined to .corrupt and re-seeded to the current version")
+			// Log the ACTUAL self-heal outcome: a best-effort MarkSeen can fail (read-only
+			// identity dir), and the DEBUG line must not claim a re-seed that did not happen.
+			if serr := whatsnewSaveSeen(baseDir, toolVersion); serr != nil {
+				logger.Debug("Release notes check: corrupt seen-flag self-heal write failed: %v", serr)
+			} else {
+				logger.Debug("Release notes check self-healed: corrupt seen-flag quarantined to .corrupt and re-seeded to the current version")
+			}
 		} else {
 			logger.Debug("Release notes check skipped: gate error: %v", err)
 		}
