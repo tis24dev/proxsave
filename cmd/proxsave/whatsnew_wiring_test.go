@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/tis24dev/proxsave/internal/cli"
 	"github.com/tis24dev/proxsave/internal/ui/shell"
@@ -244,6 +245,59 @@ func TestMaybeWarnWhatsnewSelfHeal(t *testing.T) {
 		}
 		if !strings.Contains(buf.String(), "gate error") {
 			t.Fatalf("missing generic gate-error DEBUG line\n%s", buf.String())
+		}
+	})
+}
+
+// TestMaybeShowWhatsnewTimeout (SCRN-04): Screen 0 runs under a dedicated total
+// whatsnewScreenTimeout, and a cancelled/timed-out run leaves the seen-flag unwritten.
+func TestMaybeShowWhatsnewTimeout(t *testing.T) {
+	t.Run("dedicated 10-minute total deadline applied", func(t *testing.T) {
+		stubWhatsnewSeams(t)
+		whatsnewDecide = func(baseDir, curr string) (bool, string, error) {
+			return true, "body", nil
+		}
+		var (
+			gotDeadline time.Time
+			gotOK       bool
+		)
+		whatsnewRun = func(ctx context.Context, session *shell.Session, body string) error {
+			gotDeadline, gotOK = ctx.Deadline()
+			return nil
+		}
+		whatsnewSaveSeen = func(baseDir, v string) error { return nil } // no real disk write
+
+		maybeShowWhatsnew(context.Background(), nil, "/tmp/whatsnew-timeout", "0.30.0")
+
+		if !gotOK {
+			t.Fatal("Screen 0 run context carries no deadline; want a total whatsnewScreenTimeout cap")
+		}
+		remaining := time.Until(gotDeadline)
+		if remaining <= whatsnewScreenTimeout-time.Minute || remaining > whatsnewScreenTimeout {
+			t.Fatalf("Screen 0 deadline remaining = %v, want in (%v, %v]", remaining, whatsnewScreenTimeout-time.Minute, whatsnewScreenTimeout)
+		}
+	})
+
+	t.Run("cancelled parent leaves the flag unwritten", func(t *testing.T) {
+		stubWhatsnewSeams(t)
+		whatsnewDecide = func(baseDir, curr string) (bool, string, error) {
+			return true, "body", nil
+		}
+		whatsnewRun = func(ctx context.Context, session *shell.Session, body string) error {
+			return ctx.Err()
+		}
+		saveCalls := 0
+		whatsnewSaveSeen = func(baseDir, v string) error {
+			saveCalls++
+			return nil
+		}
+
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		maybeShowWhatsnew(ctx, nil, "/tmp/whatsnew-timeout", "0.30.0")
+
+		if saveCalls != 0 {
+			t.Fatalf("whatsnewSaveSeen called %d times on a cancelled run, want 0", saveCalls)
 		}
 	})
 }
