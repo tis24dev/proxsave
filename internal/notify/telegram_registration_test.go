@@ -86,3 +86,98 @@ func TestCheckTelegramRegistrationSendsVersionHeader(t *testing.T) {
 		t.Fatalf("X-Proxsave-Provision = %q, want empty on the public status path", capturedProvision)
 	}
 }
+
+// TestCheckTelegramRegistrationLinkStateDiscriminator locks the linked-vs-relay-only
+// signal interpretation on a 200: Code stays 200 for BOTH so the provisioning gates
+// keep firing; LinkState and Message distinguish chat-linked from chat-less
+// (Option A). It covers all four contract paths: link_state present ("linked" /
+// "relay_only") takes precedence, and link_state absent falls back to chat_id. It
+// also proves notify_secret is NOT a discriminator (present in the relay-only case
+// yet LinkState stays RelayOnly, and present in a linked case yet LinkState stays
+// Linked).
+func TestCheckTelegramRegistrationLinkStateDiscriminator(t *testing.T) {
+	logger := logging.New(types.LogLevelDebug, false)
+
+	const linkedMsg = "200 - Registration active"
+	const relayMsg = "200 - Relay provisioned (no Telegram chat)"
+
+	cases := []struct {
+		name        string
+		body        string
+		wantState   TelegramLinkState
+		wantMessage string
+	}{
+		{
+			// Chat-linked: chat_id present, no link_state. notify_secret also present
+			// (linked hosts get one on provision) yet the host is still Linked -> proves
+			// notify_secret is not the discriminator.
+			name:        "linked-chat-id-no-link-state",
+			body:        `{"chat_id":"123456","notify_secret":"` + provisionTestSecret + `"}`,
+			wantState:   TelegramLinkStateLinked,
+			wantMessage: linkedMsg,
+		},
+		{
+			// Chat-less (Option A): notify_secret issued, NO chat_id, no link_state.
+			name:        "relay-only-secret-no-chat-id",
+			body:        `{"notify_secret":"` + provisionTestSecret + `"}`,
+			wantState:   TelegramLinkStateRelayOnly,
+			wantMessage: relayMsg,
+		},
+		{
+			// link_state="relay_only" wins even though a chat_id is present (precedence
+			// of the explicit server field over the chat_id fallback).
+			name:        "link-state-relay-only-overrides-chat-id",
+			body:        `{"chat_id":"123456","notify_secret":"` + provisionTestSecret + `","link_state":"relay_only"}`,
+			wantState:   TelegramLinkStateRelayOnly,
+			wantMessage: relayMsg,
+		},
+		{
+			// link_state="linked" wins even with NO chat_id (precedence, linked direction).
+			name:        "link-state-linked-overrides-missing-chat-id",
+			body:        `{"notify_secret":"` + provisionTestSecret + `","link_state":"linked"}`,
+			wantState:   TelegramLinkStateLinked,
+			wantMessage: linkedMsg,
+		},
+		{
+			// link_state absent, no chat_id -> fallback yields relay-only.
+			name:        "no-link-state-no-chat-id-falls-back-relay-only",
+			body:        `{}`,
+			wantState:   TelegramLinkStateRelayOnly,
+			wantMessage: relayMsg,
+		},
+		{
+			// link_state absent, chat_id present -> fallback yields linked.
+			name:        "no-link-state-with-chat-id-falls-back-linked",
+			body:        `{"chat_id":"987654"}`,
+			wantState:   TelegramLinkStateLinked,
+			wantMessage: linkedMsg,
+		},
+	}
+
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(http.StatusOK)
+				_, _ = w.Write([]byte(tt.body))
+			}))
+			defer server.Close()
+
+			status := CheckTelegramRegistration(context.Background(), server.URL, "server-123", logger)
+
+			// Code MUST stay 200 for BOTH meanings so provisioning gates keep firing.
+			if status.Code != 200 {
+				t.Fatalf("Code = %d, want 200", status.Code)
+			}
+			if status.Error != nil {
+				t.Fatalf("unexpected error: %v", status.Error)
+			}
+			if status.LinkState != tt.wantState {
+				t.Fatalf("LinkState = %v, want %v (body=%s)", status.LinkState, tt.wantState, tt.body)
+			}
+			// Linked copy must stay byte-identical; relay-only copy is the distinct line.
+			if status.Message != tt.wantMessage {
+				t.Fatalf("Message = %q, want %q (body=%s)", status.Message, tt.wantMessage, tt.body)
+			}
+		})
+	}
+}

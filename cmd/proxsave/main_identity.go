@@ -76,6 +76,15 @@ func checkTelegramServerStatus(rt *appRuntime) (string, bool) {
 		rt.cfg.TelegramEnabled = false
 		return status.Message, false
 	}
-	logging.Debug("Remote server contacted: Bot token / chat ID verified (handshake)")
+	// Error == nil means a 200: Telegram stays ENABLED. That is correct even for a
+	// relay-only (chat-less) host -- centralized monitoring works without a chat, and
+	// the relay path is ready the moment the user links one. status.Message already
+	// carries the distinct "200 - Relay provisioned (no Telegram chat)" line into the
+	// "Server Telegram: %s" boot log; add a clearer debug line for the chat-less case.
+	if status.Code == 200 && status.LinkState == notify.TelegramLinkStateRelayOnly {
+		logging.Debug("Remote server contacted: relay provisioned, no Telegram chat bound yet (monitoring works; link a chat in the bot to receive messages)")
+	} else {
+		logging.Debug("Remote server contacted: Bot token / chat ID verified (handshake)")
+	}
 	return status.Message, true
 }
