@@ -1204,11 +1204,18 @@ PBS_DATASTORE_PATH=                # e.g., "/mnt/pbs1,/mnt/pbs2"
 # System root override (testing/chroot)
 SYSTEM_ROOT_PREFIX=                # Optional alternate root for system collection. Empty or "/" = real root.
 # Use this to point the collector at a chroot/test fixture without touching the host FS.
+
+# HA-LXC host-backup mode (issue #255)
+HOST_BACKUP_MODE=false             # Appliance backing up a host mounted read-only at SYSTEM_ROOT_PREFIX. No effect without a prefix.
 ```
 
 **Note**: `${PVE_CONFIG_PATH}` (and other `${VAR}` references) are resolved from the same `backup.env` file too, so you do not need to `export` them.
 
 **Use case**: Working with mounted snapshots or mirrors at non-standard paths.
+
+**HA-LXC appliance (`HOST_BACKUP_MODE`)**: run ProxSave inside a privileged LXC that backs up the Proxmox host bind-mounted read-only. A non-empty `SYSTEM_ROOT_PREFIX` already makes Proxmox detection and absolute-symlink resolution prefix-aware. `HOST_BACKUP_MODE=true` additionally frames the run as a host-backup appliance and enables the ZFS inventory, which reports the host pools accurately because a privileged LXC shares the host kernel. Namespace-scoped and cluster-daemon commands (udevadm, ethtool, pvesh, ceph) stay skipped under a prefix because they would describe the container, not the host; their data is collected from the host files instead. Symlink targets are stored verbatim, so a backup taken this way restores onto a real host unchanged.
+
+Set `HOST_BACKUP_MODE=true` only in a privileged LXC that shares the host `/dev/zfs` and owns no independent ZFS pools of its own, otherwise the ZFS inventory could record the container's pools as the host's. The host network inventory relies on the host `/sys/class/net`, so it is only complete if the host sysfs is carried under the prefix (a plain non-recursive bind of `/` does not carry it); when it is absent ProxSave logs that the host sysfs is not available rather than reporting container interfaces.
 
 ### System Collectors
 

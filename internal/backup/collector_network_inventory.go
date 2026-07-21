@@ -14,9 +14,11 @@ import (
 )
 
 type networkInventory struct {
-	GeneratedAt string                    `json:"generated_at"`
-	Hostname    string                    `json:"hostname"`
-	Interfaces  []networkInterfaceProfile `json:"interfaces"`
+	GeneratedAt         string                    `json:"generated_at"`
+	Hostname            string                    `json:"hostname"`
+	HostCommandsSkipped bool                      `json:"host_commands_skipped,omitempty"`
+	HostCommandsReason  string                    `json:"host_commands_skipped_reason,omitempty"`
+	Interfaces          []networkInterfaceProfile `json:"interfaces"`
 }
 
 type networkInterfaceProfile struct {
@@ -44,7 +46,17 @@ func (c *Collector) collectNetworkInventory(ctx context.Context, commandsDir, in
 	sysNet := c.systemPath("/sys/class/net")
 	entries, err := os.ReadDir(sysNet)
 	if err != nil {
-		c.logger.Debug("Network inventory skipped: unable to read %s: %v", sysNet, err)
+		// In host-backup mode this is the common case when the host root bind mount
+		// does not carry sysfs (a non-recursive bind of / leaves PREFIX/sys empty).
+		// Surface it as a bare fact so the missing inventory reads as "host sysfs not
+		// carried", not "collection broke". A plain prefix (chroot/snapshot/CI) keeps
+		// the neutral debug line with the real error, since there is no bind mount to
+		// blame. Never fails the backup either way.
+		if c.config.HostBackupMode && c.hostRootPrefixActive() {
+			c.logger.Info("Network inventory unavailable: %s is not readable; the host sysfs may not be carried by the host mount", sysNet)
+		} else {
+			c.logger.Debug("Network inventory skipped: unable to read %s: %v", sysNet, err)
+		}
 		return nil
 	}
 
@@ -53,6 +65,16 @@ func (c *Collector) collectNetworkInventory(ctx context.Context, commandsDir, in
 	}
 	if host, err := os.Hostname(); err == nil {
 		inv.Hostname = host
+	}
+	if !c.shouldRunHostCommands() {
+		// Interface facts are read from sysfs under the prefix (which reflects the host
+		// only when the host sysfs is carried under the prefix), but udevadm/ethtool
+		// query the running network namespace, which is the container's, so their
+		// per-interface fields (udev properties, permanent MAC) are intentionally absent
+		// rather than container data mislabeled as host data.
+		inv.HostCommandsSkipped = true
+		inv.HostCommandsReason = "system root prefix set; namespace-scoped commands (udevadm/ethtool) describe the container, not the host"
+		c.logger.Info("Network inventory: host commands skipped under system root prefix; interface data read from sysfs under the prefix")
 	}
 
 	for _, entry := range entries {
@@ -129,9 +151,41 @@ func (c *Collector) collectNetworkInventory(ctx context.Context, commandsDir, in
 	return nil
 }
 
+// shouldRunHostCommands reports whether host-scoped commands may run against the
+// live system. It stays false whenever a SYSTEM_ROOT_PREFIX is set, because the
+// commands it gates (udevadm, ethtool, and the PBS block-device inventory:
+// blkid/lsblk/findmnt/dmsetup/lvm/mdadm/multipath/iscsi) query the running
+// network, mount and device namespaces. In an HA-LXC backup appliance those are
+// the container's namespaces, not the mounted host's, so running them under a
+// prefix would record container state mislabeled as host state. Under a prefix the
+// file-derived inventory (host sysfs, /etc, fstab, crypttab) is used instead, and
+// the ZFS subset is handled separately by shouldRunKernelSharedCommands (issue
+// #255).
 func (c *Collector) shouldRunHostCommands() bool {
 	root := strings.TrimSpace(c.config.SystemRootPrefix)
 	return root == "" || root == string(filepath.Separator)
+}
+
+// hostRootPrefixActive reports whether a non-trivial SYSTEM_ROOT_PREFIX is set, so
+// the appliance is collecting from a mounted host root rather than its own root.
+func (c *Collector) hostRootPrefixActive() bool {
+	root := strings.TrimSpace(c.config.SystemRootPrefix)
+	return root != "" && root != string(filepath.Separator)
+}
+
+// shouldRunKernelSharedCommands reports whether commands that read GLOBAL kernel
+// state may run. Unlike the namespace/device-scoped commands gated by
+// shouldRunHostCommands, ZFS state lives in the shared kernel (/dev/zfs), so a
+// privileged LXC reports the host pools accurately even when only the host
+// filesystem is bind-mounted. It returns true on a real root (like
+// shouldRunHostCommands) and, additionally, under HOST_BACKUP_MODE with a
+// SYSTEM_ROOT_PREFIX set (issue #255).
+func (c *Collector) shouldRunKernelSharedCommands() bool {
+	if c.shouldRunHostCommands() {
+		return true
+	}
+	root := strings.TrimSpace(c.config.SystemRootPrefix)
+	return c.config.HostBackupMode && root != "" && root != string(filepath.Separator)
 }
 
 func (c *Collector) readUdevProperties(ctx context.Context, netPath string) (map[string]string, error) {

@@ -36,7 +36,43 @@ type TelegramRegistrationStatus struct {
 	Code    int
 	Message string
 	Error   error
+
+	// LinkState is meaningful ONLY on a 200 (Code == 200). It reports whether the
+	// centralized server has a real Telegram chat bound to this ServerID
+	// (TelegramLinkStateLinked) or issued a relay-only provisioning with NO chat
+	// (TelegramLinkStateRelayOnly, Option A: centralized monitoring works without
+	// any Telegram chat). It rides ALONGSIDE Code, which stays 200 for BOTH cases
+	// so every provisioning gate (Code == 200 && secret != "") keeps firing and
+	// chat-less hosts still provision; only copy/verdict consumers read LinkState.
+	// It defaults to TelegramLinkStateUnknown -- left on every non-200 result and
+	// unread there (consumers gate on Code first, exactly as they do for Provision).
+	LinkState TelegramLinkState
 }
+
+// TelegramLinkState is the resolved chat-link verdict for a get-chat-id 200. It
+// distinguishes the TWO meanings of an HTTP 200 so copy/verdict consumers (the
+// boot log and the pairing-wizard classifier) can tell a real Telegram chat link
+// from Option A's chat-less relay. Code stays 200 for BOTH cases so every
+// provisioning gate (Code == 200 && secret != "") keeps firing and chat-less
+// hosts still provision; only copy/verdict consumers read this field.
+type TelegramLinkState int
+
+const (
+	// TelegramLinkStateUnknown is the zero value: not determined. It is left on
+	// every non-200 result and on a bare hand-built 200 stub, and consumers keep
+	// their legacy verified behavior for it (they gate on Code first). A real 200
+	// from checkTelegramRegistrationWithSecret is ALWAYS resolved to Linked or
+	// RelayOnly, never Unknown.
+	TelegramLinkStateUnknown TelegramLinkState = iota
+	// TelegramLinkStateLinked: a real Telegram chat is bound to this ServerID
+	// (server link_state == "linked", or a non-empty chat_id in the fallback).
+	TelegramLinkStateLinked
+	// TelegramLinkStateRelayOnly: Option A. Centralized monitoring is provisioned
+	// (a notify_secret is issued) but NO Telegram chat is bound, so no Telegram
+	// message will ever arrive until the user links one (server link_state ==
+	// "relay_only", or a 200 with an empty chat_id in the fallback).
+	TelegramLinkStateRelayOnly
+)
 
 // StatusCodeMissingServerID is a sentinel (non-HTTP, negative) status Code set when
 // the local server identity is missing, so the classifier can give identity-specific
@@ -90,6 +126,56 @@ func parseTelegramBotToken(body []byte) string {
 		return ""
 	}
 	return strings.TrimSpace(parsed.BotToken)
+}
+
+// telegramLinkSignal carries the two additive discriminator fields lifted from a
+// get-chat-id 200 body: the server's explicit link_state ("linked" | "relay_only")
+// when present, and chat_id used as the fallback discriminator. notify_secret is
+// deliberately NOT part of this signal: it is issued in BOTH the chat-linked and
+// the relay-only (Option A) payloads, so it can never discriminate the two.
+type telegramLinkSignal struct {
+	LinkState string `json:"link_state"`
+	ChatID    string `json:"chat_id"`
+}
+
+// resolveTelegramLinkState resolves the linked-vs-relay-only discriminator per the
+// decided contract, consulted ONLY on a 200: PREFER the additive server field
+// link_state when present (link_state == "linked" -> Linked; anything else, e.g.
+// "relay_only", -> RelayOnly); OTHERWISE fall back to chat_id presence (non-empty
+// chat_id == Linked, empty == RelayOnly). notify_secret is present in BOTH cases
+// and is intentionally excluded. Best-effort: a non-JSON body resolves to
+// RelayOnly (fail-safe: an unparseable 200 never reads as a false Linked).
+// Additive and order-independent -- encoding/json ignores every other field, so
+// an old body without link_state parses cleanly and falls back to chat_id.
+// Case-insensitive on link_state so server casing drift still resolves only the
+// explicit "linked" token as Linked; any unrecognized value resolves to RelayOnly.
+func resolveTelegramLinkState(body []byte) TelegramLinkState {
+	var sig telegramLinkSignal
+	if err := json.Unmarshal(body, &sig); err != nil {
+		return TelegramLinkStateRelayOnly
+	}
+	return linkStateFromFields(sig.LinkState, sig.ChatID)
+}
+
+// linkStateFromFields is the single source of the linked-vs-relay-only precedence,
+// applied to already-extracted link_state and chat_id values: an explicit
+// link_state wins (case-insensitive "linked" -> Linked, anything else ->
+// RelayOnly); with no link_state, a non-empty chat_id -> Linked, empty ->
+// RelayOnly. resolveTelegramLinkState feeds it the JSON-parsed signal; the
+// get-chat-id diagnostic in telegram.go feeds it the response struct, so both read
+// the same discriminator and cannot diverge on edge cases (link_state "linked"
+// with empty chat_id, or an unrecognized link_state with a chat_id present).
+func linkStateFromFields(linkState, chatID string) TelegramLinkState {
+	if ls := strings.TrimSpace(linkState); ls != "" {
+		if strings.EqualFold(ls, "linked") {
+			return TelegramLinkStateLinked
+		}
+		return TelegramLinkStateRelayOnly
+	}
+	if strings.TrimSpace(chatID) != "" {
+		return TelegramLinkStateLinked
+	}
+	return TelegramLinkStateRelayOnly
 }
 
 // checkTelegramRegistrationWithSecret is the single shared implementation of the
@@ -162,8 +248,18 @@ func checkTelegramRegistrationWithSecret(ctx context.Context, serverAPIHost, ser
 
 	switch resp.Status {
 	case 200:
-		logTelegramRegistrationDebug(logger, "Telegram registration: status 200 (active)")
-		return TelegramRegistrationStatus{Code: 200, Message: "200 - Registration active"}, secret
+		// KEEP Code = 200 for BOTH meanings so the provisioning gates keep firing and
+		// chat-less hosts still provision. The linked-vs-relay-only distinction rides
+		// on LinkState + a distinct Message, read only by copy/verdict consumers.
+		// Discriminator: prefer the server's link_state, else fall back to chat_id
+		// presence (see resolveTelegramLinkState). notify_secret is issued in BOTH
+		// cases, so it is NEVER used to discriminate here.
+		if resolveTelegramLinkState(body) == TelegramLinkStateLinked {
+			logTelegramRegistrationDebug(logger, "Telegram registration: status 200 (linked; Telegram chat active)")
+			return TelegramRegistrationStatus{Code: 200, Message: "200 - Registration active", LinkState: TelegramLinkStateLinked}, secret
+		}
+		logTelegramRegistrationDebug(logger, "Telegram registration: status 200 (relay-only; no Telegram chat, Option A)")
+		return TelegramRegistrationStatus{Code: 200, Message: "200 - Relay provisioned (no Telegram chat)", LinkState: TelegramLinkStateRelayOnly}, secret
 	case 403:
 		logTelegramRegistrationDebug(logger, "Telegram registration: status 403 (bot not started / first contact)")
 		return TelegramRegistrationStatus{Code: 403, Message: "403 - Start the bot and send the Server ID", Error: fmt.Errorf("%s", body)}, ""

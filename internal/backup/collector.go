@@ -235,6 +235,7 @@ type CollectorConfig struct {
 	BackupScriptRepository  bool
 	BackupConfigFile        bool
 	SystemRootPrefix        string
+	HostBackupMode          bool
 
 	// PXAR scanning tuning
 	PxarDatastoreConcurrency int

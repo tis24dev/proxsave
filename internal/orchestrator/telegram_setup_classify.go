@@ -40,6 +40,21 @@ type TelegramSetupState struct {
 func ClassifyTelegramSetupResult(res notify.TelegramRegistrationResult) TelegramSetupState {
 	switch res.Status.Code {
 	case 200:
+		// Option A (chat-less): a get-chat-id 200 has TWO meanings and the client
+		// keeps Code==200 for BOTH so the provisioning gates keep firing. But a
+		// relay-only 200 means centralized monitoring is active WITHOUT any linked
+		// Telegram chat, so it MUST NOT read as Verified/"Linked" - no message will
+		// ever arrive until the user pairs a chat. Consult the additive link-state
+		// discriminator BEFORE the provision switch, because a relay secret can be
+		// persisted/confirmed even when no chat is linked (Provision alone cannot
+		// tell the two 200 meanings apart). Distinct code, retryable, A-aware, NOT
+		// fatal (a later Check can link a chat). A bare 200 stub or an old server
+		// leaves LinkState Unknown -> unchanged verified path below, so the ~1244
+		// linked hosts stay byte-identical.
+		if res.Status.LinkState == notify.TelegramLinkStateRelayOnly {
+			return TelegramSetupState{Code: "centralized_no_telegram", Label: "No Telegram chat", Severity: TelegramSeverityAction, Verified: false,
+				Message: "Centralized monitoring is active, but no Telegram chat is linked yet. Start the bot and send the Server ID to link a chat, then press Check again."}
+		}
 		switch res.Provision {
 		case notify.TelegramProvisionPersistFailed:
 			return TelegramSetupState{Code: "linked_token_unsaved", Label: "Linked (finishing setup)", Severity: TelegramSeverityPartial, Verified: true, Partial: true,

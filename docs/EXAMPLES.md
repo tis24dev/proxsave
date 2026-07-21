@@ -903,6 +903,40 @@ SYSTEM_ROOT_PREFIX=/mnt/snapshot-root proxsave
 
 ---
 
+## HA-LXC Backup Appliance (`HOST_BACKUP_MODE`)
+
+**Scenario**: Run ProxSave inside a privileged LXC that backs up the Proxmox host, with the host filesystem bind-mounted read-only into the container (issue #255).
+
+**Use case**:
+- A dedicated, restartable backup appliance for a Proxmox VE or PBS host
+- Keeping ProxSave and its dependencies out of the host root
+
+### Setup Steps
+
+```bash
+# 1) On the Proxmox host, bind-mount the host root and pmxcfs read-only into the CT
+pct set <CTID> -mp0 /,mp=/host,ro=1
+pct set <CTID> -mp1 /etc/pve,mp=/host/etc/pve,ro=1
+
+# 2) In the container's configs/backup.env
+SYSTEM_ROOT_PREFIX=/host
+HOST_BACKUP_MODE=true
+BACKUP_ENABLED=true
+
+# 3) Dry-run, then run
+proxsave --dry-run
+proxsave
+```
+
+### Expected Results
+- Proxmox type is detected from the mounted host (`/host/etc/pve`, `/host/etc/proxmox-backup`), not the container.
+- Absolute symlinks such as `/etc/ceph/ceph.conf -> /etc/pve/ceph.conf` resolve under the prefix, so Ceph configuration is collected.
+- ZFS pool state is collected (shared kernel); namespace-scoped and cluster-daemon commands (udevadm, ethtool, pvesh, ceph) are skipped and their data comes from the host files.
+- Symlink targets are stored verbatim, so the archive restores onto a real host unchanged.
+- No writes to the host filesystem.
+
+---
+
 ## Example 10: Dual PVE+PBS Host
 
 **Scenario**: A single node runs both Proxmox VE and Proxmox Backup Server.

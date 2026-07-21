@@ -77,6 +77,7 @@ type telegramCentralizedResponse struct {
 	Status       int    `json:"status"`
 	Message      string `json:"message,omitempty"`
 	NotifySecret string `json:"notify_secret"` // TOFU one-time provisioning
+	LinkState    string `json:"link_state"`    // "linked" | "relay_only"; additive, order-independent, ignored by old servers/clients
 }
 
 // Token and ChatID validation regex patterns
@@ -313,7 +314,13 @@ func (t *TelegramNotifier) fetchCentralizedCredentials(ctx context.Context) (str
 		if err := json.Unmarshal(body, &response); err != nil {
 			return "", "", fmt.Errorf("failed to parse response: %w", err)
 		}
-		t.logger.Debug("Telegram: get-chat-id 200 (notifySecretPresent=%v botTokenPresent=%v chatIDPresent=%v)", response.NotifySecret != "", response.BotToken != "", response.ChatID != "")
+		// Chat-less (Option A) bodies carry an empty chat_id and (optionally)
+		// link_state "relay_only"; provisioning below still fires on 200 +
+		// notify_secret regardless of chat_id, so this line is purely diagnostic but
+		// now reports the two meanings distinctly.
+		relayOnly := linkStateFromFields(response.LinkState, response.ChatID) == TelegramLinkStateRelayOnly
+		t.logger.Debug("Telegram: get-chat-id 200 (notifySecretPresent=%v botTokenPresent=%v chatIDPresent=%v linkState=%q relayOnly=%v)",
+			response.NotifySecret != "", response.BotToken != "", response.ChatID != "", response.LinkState, relayOnly)
 
 		// Adopt-on-token-present: whenever a 200 carries a notify_secret, the
 		// server wants the client to (re)adopt it, so we OVERWRITE any existing

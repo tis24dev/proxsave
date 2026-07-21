@@ -2,7 +2,6 @@ package environment
 
 import (
 	"errors"
-	"path/filepath"
 	"testing"
 
 	"github.com/tis24dev/proxsave/internal/types"
@@ -10,16 +9,8 @@ import (
 
 func isolateDetectionFallbacks(t *testing.T) {
 	t.Helper()
-	tmpDir := t.TempDir()
-
 	setValue(t, &additionalPaths, []string{})
-	setValue(t, &pveSourceFiles, []string{})
-	setValue(t, &pbsSourceFiles, []string{})
-	setValue(t, &pveDirCandidates, []string{})
-	setValue(t, &pbsDirCandidates, []string{})
-	setValue(t, &pveVersionFile, filepath.Join(tmpDir, "missing-pve-version"))
-	setValue(t, &pveLegacyFile, filepath.Join(tmpDir, "missing-pve-legacy"))
-	setValue(t, &pbsVersionFile, filepath.Join(tmpDir, "missing-pbs-version"))
+	nullFilesystemMarkerSeams(t, t.TempDir())
 }
 
 func TestDetectHybridInstallationDual(t *testing.T) {

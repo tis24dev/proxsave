@@ -1497,6 +1497,23 @@ func TestParseSystemSettingsSystemRootPrefix(t *testing.T) {
 	})
 }
 
+func TestParseSystemSettingsHostBackupMode(t *testing.T) {
+	t.Run("parses truthy value", func(t *testing.T) {
+		cfg := &Config{raw: map[string]string{"HOST_BACKUP_MODE": "true"}}
+		cfg.parseSystemSettings()
+		if !cfg.HostBackupMode {
+			t.Fatal("HostBackupMode should be true")
+		}
+	})
+	t.Run("defaults to false when unset", func(t *testing.T) {
+		cfg := &Config{raw: map[string]string{}}
+		cfg.parseSystemSettings()
+		if cfg.HostBackupMode {
+			t.Fatal("HostBackupMode should default to false")
+		}
+	})
+}
+
 func TestParseSystemSettingsScriptRepositoryDefaultsFalse(t *testing.T) {
 	// A config missing the key must default to false, matching the shipped template
 	// (#69), so it does not silently snapshot /opt/proxsave.

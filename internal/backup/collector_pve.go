@@ -1789,6 +1789,16 @@ func (c *Collector) collectPVECephRuntime(ctx context.Context) error {
 		return fmt.Errorf("failed to create ceph directory: %w", err)
 	}
 
+	if c.config.HostBackupMode && c.hostRootPrefixActive() {
+		// The Ceph CLI talks to the live cluster over the pmxcfs socket, which is not
+		// reachable from the appliance container, so ceph -s would fail and write
+		// nothing. Emit a positive marker so the missing runtime files read as "not
+		// applicable in host-backup mode", not "collection broke"; the Ceph
+		// configuration itself is captured from the file tree (issue #255).
+		c.logger.Info("Ceph runtime status unavailable in host-backup mode (cluster socket not reachable from the appliance); Ceph configuration captured from %s", c.effectivePVEConfigPath())
+		return nil
+	}
+
 	if _, err := c.depLookPath("ceph"); err != nil {
 		c.logger.Debug("Ceph CLI not available, skipping Ceph command outputs")
 		return nil
@@ -2467,7 +2477,7 @@ func (c *Collector) isServiceActive(ctx context.Context, service string) bool {
 
 func (c *Collector) isCephConfigured(ctx context.Context) bool {
 	for _, path := range c.cephConfigPaths() {
-		if cephHasClusterConfig(path) || cephHasKeyring(path) {
+		if c.cephHasClusterConfig(path) || cephHasKeyring(path) {
 			return true
 		}
 	}
@@ -2509,14 +2519,21 @@ func (c *Collector) cephConfigPaths() []string {
 	if c.config.CephConfigPath != "" {
 		add(c.config.CephConfigPath)
 	}
-	add(filepath.Join(c.effectivePVEConfigPath(), "ceph"))
+	// add() applies systemPath itself, so feed it the UN-prefixed pve config path;
+	// effectivePVEConfigPath() is already prefixed and would double-prefix to
+	// PREFIX/PREFIX/etc/pve/ceph.
+	pveConfigRoot := strings.TrimSpace(c.config.PVEConfigPath)
+	if pveConfigRoot == "" {
+		pveConfigRoot = "/etc/pve"
+	}
+	add(filepath.Join(pveConfigRoot, "ceph"))
 	add("/etc/ceph")
 	return paths
 }
 
-func cephHasClusterConfig(path string) bool {
+func (c *Collector) cephHasClusterConfig(path string) bool {
 	confPath := filepath.Join(path, "ceph.conf")
-	data, err := os.ReadFile(confPath)
+	data, err := c.readSystemFileFollowingSymlinks(confPath)
 	if err != nil {
 		return false
 	}
@@ -2527,6 +2544,33 @@ func cephHasClusterConfig(path string) bool {
 		}
 	}
 	return false
+}
+
+// readSystemFileFollowingSymlinks reads a system file that may be reached through
+// an absolute symlink into another subtree. Both the real-root and the
+// SYSTEM_ROOT_PREFIX cases resolve through safefs.ReadFileInRoot, which re-anchors
+// an absolute symlink target under the root (so /etc/ceph/ceph.conf ->
+// /etc/pve/ceph.conf reads ROOT/etc/pve/ceph.conf instead of escaping) and stays
+// confined at the syscall level via os.Root. On a real root the confinement root is
+// "/", so re-anchoring is a no-op that resolves to the same absolute file a plain
+// os.ReadFile would, while keeping the read out of a raw variable sink (structural
+// gosec G304 remedy, not a suppression). Read-only; never writes under the root.
+// This is the read side of the fix; copySymlinkFile keeps storing link targets
+// verbatim so a restore onto a real host recreates the link correctly (issue #255).
+func (c *Collector) readSystemFileFollowingSymlinks(path string) ([]byte, error) {
+	root := strings.TrimSpace(c.config.SystemRootPrefix)
+	if root == "" {
+		root = string(filepath.Separator)
+	}
+	cleanRoot := filepath.Clean(root)
+	rel := path
+	switch {
+	case path == cleanRoot:
+		rel = "/"
+	case strings.HasPrefix(path, cleanRoot+string(filepath.Separator)):
+		rel = strings.TrimPrefix(path, cleanRoot)
+	}
+	return safefs.ReadFileInRoot(cleanRoot, rel)
 }
 
 func cephHasKeyring(path string) bool {

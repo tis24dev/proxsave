@@ -50,6 +50,88 @@ func detectAndPrintEnvironment(bootstrap *logging.BootstrapLogger) *environment.
 	return envInfo
 }
 
+// redetectHostBackupEnvironment re-runs Proxmox detection under SYSTEM_ROOT_PREFIX
+// once config is loaded, so an HA-LXC backup appliance reports the mounted host
+// (issue #255) rather than the container the pre-config best-effort detection saw.
+// The corrected envInfo is what reaches the collector, backup phases, stats and the
+// archive manifest, and detection must run before collection (a ProxmoxUnknown type
+// skips all PVE/PBS collection and silently under-restores), so it is fixed here
+// before any of those consume it. A non-empty prefix alone drives this; the
+// HOST_BACKUP_MODE flag is not required for the detection correctness fix.
+func redetectHostBackupEnvironment(rt *appRuntime) {
+	prefix := strings.TrimSpace(rt.cfg.SystemRootPrefix)
+	if prefix == "" || prefix == string(filepath.Separator) {
+		if rt.cfg.HostBackupMode {
+			rt.bootstrap.Warning("WARNING: HOST_BACKUP_MODE is set but SYSTEM_ROOT_PREFIX is empty; host-backup mode has no effect")
+		}
+		return
+	}
+
+	// Under a prefix the container ProxSave runs in is NOT the backup target: the
+	// target is the Proxmox host mounted under the prefix. DetectHostUnderPrefix uses
+	// ONLY the re-anchored filesystem markers (the same ones bare-metal PVE/PBS
+	// detection uses; host command probes are skipped) and never returns nil or a
+	// live-container type. Its result REPLACES envInfo unconditionally, so the
+	// pre-config live-container type can never survive a prefix run and mislabel a
+	// hollow archive as a valid backup.
+	liveType := types.ProxmoxUnknown
+	if rt.envInfo != nil {
+		liveType = rt.envInfo.Type
+	}
+	info := environment.DetectHostUnderPrefix(prefix)
+	rt.envInfo = info
+
+	if info.Type == types.ProxmoxUnknown {
+		// Fail closed: PVE/PBS collectors are skipped and the manifest records
+		// "unknown" instead of a false type over an empty tree. Warn when the
+		// operator signaled host intent: either HOST_BACKUP_MODE is set, or the live
+		// system itself IS a Proxmox (a Proxmox host/container pointed at a prefix
+		// with no Proxmox under it is a mis-mount). A plain prefix run
+		// (chroot/snapshot/CI) on a non-Proxmox live system stays quiet to avoid spam.
+		switch {
+		case rt.cfg.HostBackupMode:
+			rt.bootstrap.Warning("WARNING: no Proxmox host detected under SYSTEM_ROOT_PREFIX=%s; the host filesystem may not be mounted (archive labeled unknown)", prefix)
+		case liveType.SupportsPVE() || liveType.SupportsPBS():
+			rt.bootstrap.Warning("WARNING: %s detected on the live system but none under SYSTEM_ROOT_PREFIX=%s; the host filesystem may not be mounted (archive labeled unknown)", liveType, prefix)
+		default:
+			rt.bootstrap.Debug("no Proxmox detected under SYSTEM_ROOT_PREFIX=%s; archive labeled unknown", prefix)
+		}
+		return
+	}
+	if rt.cfg.HostBackupMode {
+		rt.bootstrap.Printf("✓ Proxmox Type (host-backup mode, %s): %s", prefix, info.Type)
+	} else {
+		rt.bootstrap.Printf("✓ Proxmox Type (prefix %s): %s", prefix, info.Type)
+	}
+	if info.Type == types.ProxmoxDual {
+		rt.bootstrap.Printf("  PVE Version: %s", info.PVEVersion)
+		rt.bootstrap.Printf("  PBS Version: %s", info.PBSVersion)
+	} else {
+		rt.bootstrap.Printf("  Version: %s", info.Version)
+	}
+	rt.bootstrap.Println("")
+	warnHostBackupMountShape(rt, prefix, info.Type)
+}
+
+// warnHostBackupMountShape surfaces the most likely host-backup misconfiguration:
+// the host root is mounted (mp0) but the pmxcfs bind (mp1 /etc/pve) is not, so
+// cluster and Ceph configuration would be silently missing. It only warns; a
+// partial mount never fails the backup. It applies only to host-backup mode on a
+// PVE or dual host: PBS has no /etc/pve, and a plain prefix (snapshot/chroot) has
+// no bind mount to be missing, so neither is warned about.
+func warnHostBackupMountShape(rt *appRuntime, prefix string, detected types.ProxmoxType) {
+	if !rt.cfg.HostBackupMode {
+		return
+	}
+	if detected != types.ProxmoxVE && detected != types.ProxmoxDual {
+		return
+	}
+	pvePath := filepath.Join(prefix, "etc", "pve")
+	if info, err := os.Stat(pvePath); err != nil || !info.IsDir() {
+		rt.bootstrap.Warning("WARNING: %s is not present; the /etc/pve bind mount may be missing (cluster and Ceph config will be incomplete)", pvePath)
+	}
+}
+
 func bootstrapRuntime(ctx context.Context, args *cli.Args, bootstrap *logging.BootstrapLogger, envInfo *environment.EnvironmentInfo, toolVersion string) (*appRuntime, int, bool) {
 	rt := &appRuntime{
 		ctx:              ctx,
@@ -66,6 +148,7 @@ func bootstrapRuntime(ctx context.Context, args *cli.Args, bootstrap *logging.Bo
 		return nil, exitCode, false
 	}
 	rt.cfg = cfg
+	redetectHostBackupEnvironment(rt)
 	rt.initialEnvBaseDir = initialEnvBaseDir
 	rt.autoBaseDirFound = autoFound
 	rt.dryRun = args.DryRun || cfg.DryRun

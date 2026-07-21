@@ -97,6 +97,7 @@ type pbsInventoryState struct {
 	mergedDatastores    []pbsDatastoreDefinition
 	referencedFiles     []string
 	hostCommandsEnabled bool
+	kernelSharedEnabled bool
 }
 
 func (c *Collector) initPBSDatastoreInventoryState(ctx context.Context, cliDatastores []pbsDatastore) (*pbsInventoryState, error) {
@@ -132,6 +133,7 @@ func (c *Collector) initPBSDatastoreInventoryState(ctx context.Context, cliDatas
 		mergedDatastores:    mergePBSDatastoreDefinitions(cliDatastores, configDatastores),
 		referencedFiles:     uniqueSortedStrings(append(extractCrypttabKeyFiles(report.Files["crypttab"].Content), extractFstabReferencedFiles(report.Files["fstab"].Content)...)),
 		hostCommandsEnabled: report.HostCommands,
+		kernelSharedEnabled: c.shouldRunKernelSharedCommands(),
 	}, nil
 }
 
@@ -277,10 +279,17 @@ func (c *Collector) populatePBSInventoryHostCommandsCore(ctx context.Context, in
 		return nil
 	}
 
+	reason := "system_root_prefix is not host root; skipping host-only commands"
+	if inventory.kernelSharedEnabled {
+		// Under HOST_BACKUP_MODE the shared-kernel ZFS commands still run (see
+		// populatePBSInventoryHostCommandsZFS), so the marker must not claim all
+		// host commands were skipped.
+		reason = "system_root_prefix is host root (host-backup mode); namespace and device-scoped commands skipped, shared-kernel ZFS commands collected"
+	}
 	report.Commands["host_commands_skipped"] = inventoryCommandSnapshot{
 		Command: "host_commands",
 		Skipped: true,
-		Reason:  "system_root_prefix is not host root; skipping host-only commands",
+		Reason:  reason,
 	}
 	return nil
 }
@@ -354,7 +363,12 @@ func (c *Collector) populatePBSInventoryHostCommandsZFS(ctx context.Context, inv
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if !inventory.hostCommandsEnabled {
+	// ZFS is global kernel state (/dev/zfs), not namespace-scoped, so a privileged
+	// LXC sharing the host kernel reports the host pools accurately even when only
+	// the host filesystem is bind-mounted. Enable it under HOST_BACKUP_MODE (issue
+	// #255) while the device-visibility-dependent commands (dmsetup/lvm/mdadm/
+	// multipath/iscsi) stay gated by hostCommandsEnabled.
+	if !inventory.kernelSharedEnabled {
 		return nil
 	}
 	report := &inventory.report

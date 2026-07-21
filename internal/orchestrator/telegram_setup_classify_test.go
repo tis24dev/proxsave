@@ -107,6 +107,20 @@ func TestClassifyTelegramSetupResult(t *testing.T) {
 			wantCode:    "unexpected_response",
 			wantMessage: "x",
 		},
+		{
+			name:         "200-relay-only-chatless",
+			res:          notify.TelegramRegistrationResult{Status: notify.TelegramRegistrationStatus{Code: 200, LinkState: notify.TelegramLinkStateRelayOnly}},
+			wantCode:     "centralized_no_telegram",
+			wantMessage:  "Centralized monitoring is active, but no Telegram chat is linked yet. Start the bot and send the Server ID to link a chat, then press Check again.",
+			wantVerified: false,
+		},
+		{
+			name:         "200-linked-explicit",
+			res:          notify.TelegramRegistrationResult{Status: notify.TelegramRegistrationStatus{Code: 200, LinkState: notify.TelegramLinkStateLinked}, Provision: notify.TelegramProvisionConfirmed},
+			wantCode:     "linked_confirmed",
+			wantMessage:  "Linked successfully.",
+			wantVerified: true,
+		},
 	}
 
 	for _, tt := range cases {
@@ -128,6 +142,70 @@ func TestClassifyTelegramSetupResult(t *testing.T) {
 				t.Fatalf("Fatal=%v, want %v", st.Fatal, tt.wantFatal)
 			}
 		})
+	}
+}
+
+// TestClassifyTelegramSetupResult_RelayOnlyNotVerified pins the Option A fix: a
+// chat-less 200 (centralized monitoring active, notify_secret issued, but NO
+// Telegram chat) classifies as a DISTINCT, non-Verified, non-Fatal, retryable
+// state, so the pairing wizard never shows green "Linked" for a host that will
+// never receive a Telegram message. The LinkState discriminator is consulted
+// BEFORE the provision switch, so it holds even when a relay secret was confirmed.
+func TestClassifyTelegramSetupResult_RelayOnlyNotVerified(t *testing.T) {
+	for _, prov := range []notify.TelegramProvisionOutcome{
+		notify.TelegramProvisionNotApplicable,
+		notify.TelegramProvisionNoToken,
+		notify.TelegramProvisionConfirmed,
+		notify.TelegramProvisionPersistFailed,
+		notify.TelegramProvisionConfirmFailed,
+		notify.TelegramProvisionClean,
+	} {
+		st := ClassifyTelegramSetupResult(notify.TelegramRegistrationResult{
+			Status:    notify.TelegramRegistrationStatus{Code: 200, LinkState: notify.TelegramLinkStateRelayOnly},
+			Provision: prov,
+		})
+		if st.Verified {
+			t.Fatalf("relay-only 200 (provision=%d) must NOT be Verified", prov)
+		}
+		if st.Fatal {
+			t.Fatalf("relay-only 200 (provision=%d) must NOT be Fatal (a later Check can link a chat)", prov)
+		}
+		if st.Partial {
+			t.Fatalf("relay-only 200 (provision=%d) must NOT be Partial", prov)
+		}
+		if st.Code != "centralized_no_telegram" {
+			t.Fatalf("relay-only 200 (provision=%d) Code=%q, want centralized_no_telegram", prov, st.Code)
+		}
+		if st.Severity != TelegramSeverityAction {
+			t.Fatalf("relay-only 200 (provision=%d) Severity=%d, want Action(%d)", prov, st.Severity, TelegramSeverityAction)
+		}
+		if st.Label == "" {
+			t.Fatalf("relay-only 200 (provision=%d) has an empty Label", prov)
+		}
+	}
+
+	// A relay-only state must be DISTINCT from the linked verdict.
+	relay := ClassifyTelegramSetupResult(notify.TelegramRegistrationResult{
+		Status: notify.TelegramRegistrationStatus{Code: 200, LinkState: notify.TelegramLinkStateRelayOnly},
+	})
+	linked := ClassifyTelegramSetupResult(notify.TelegramRegistrationResult{
+		Status:    notify.TelegramRegistrationStatus{Code: 200, LinkState: notify.TelegramLinkStateLinked},
+		Provision: notify.TelegramProvisionConfirmed,
+	})
+	if relay.Code == linked.Code {
+		t.Fatalf("relay-only and linked 200 must classify distinctly, both got %q", relay.Code)
+	}
+	if !linked.Verified || linked.Code != "linked_confirmed" || linked.Message != "Linked successfully." {
+		t.Fatalf("linked 200 must stay Verified linked_confirmed \"Linked successfully.\", got Verified=%v Code=%q Message=%q", linked.Verified, linked.Code, linked.Message)
+	}
+
+	// Backward compat: a 200 with no LinkState (old server -> Unknown zero value)
+	// keeps the legacy Verified behavior (chat_id fallback resolves linked upstream).
+	unknown := ClassifyTelegramSetupResult(notify.TelegramRegistrationResult{
+		Status: notify.TelegramRegistrationStatus{Code: 200},
+	})
+	if !unknown.Verified || unknown.Code != "linked_confirmed" {
+		t.Fatalf("200 with Unknown LinkState must stay Verified linked_confirmed, got Verified=%v Code=%q", unknown.Verified, unknown.Code)
 	}
 }
 

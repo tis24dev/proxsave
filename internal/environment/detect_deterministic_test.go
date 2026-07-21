@@ -20,6 +20,30 @@ func setValue[T any](t *testing.T, target *T, value T) {
 	t.Cleanup(func() { *target = original })
 }
 
+// nullFilesystemMarkerSeams points every filesystem-marker detection seam at absent
+// paths or empty lists so an unprefixed detection test cannot consult the build
+// host's real markers. The suite is run with `make test` on a PVE host, where the
+// real dpkg status, config.db, /usr binaries and share dirs would otherwise flip a
+// test that expects a non-Proxmox verdict. It does NOT touch the command seams
+// (lookPathFunc/runCommandFunc); callers set those. A subtest may override any seam
+// afterward (setValue restores per-subtest).
+func nullFilesystemMarkerSeams(t *testing.T, tmpDir string) {
+	t.Helper()
+	setValue(t, &pveVersionFile, filepath.Join(tmpDir, "missing-pve-version"))
+	setValue(t, &pveLegacyFile, filepath.Join(tmpDir, "missing-pve-legacy"))
+	setValue(t, &pbsVersionFile, filepath.Join(tmpDir, "missing-pbs-version"))
+	setValue(t, &pveSourceFiles, []string{})
+	setValue(t, &pbsSourceFiles, []string{})
+	setValue(t, &pveDirCandidates, []string{})
+	setValue(t, &pbsDirCandidates, []string{})
+	setValue(t, &dpkgStatusFile, filepath.Join(tmpDir, "missing-dpkg-status"))
+	setValue(t, &pveClusterDB, filepath.Join(tmpDir, "missing-config-db"))
+	setValue(t, &pveBinaryCandidates, []string{})
+	setValue(t, &pbsBinaryCandidates, []string{})
+	setValue(t, &pveShareDir, filepath.Join(tmpDir, "missing-pve-share"))
+	setValue(t, &pbsShareDir, filepath.Join(tmpDir, "missing-pbs-share"))
+}
+
 func TestExtendPath_EmptyPATH(t *testing.T) {
 	separator := string(os.PathListSeparator)
 	setValue(t, &additionalPaths, []string{"/custom/bin", "/custom/sbin"})
@@ -267,8 +291,7 @@ func TestDetectViaSources_Branches(t *testing.T) {
 func TestDetectPVE_FallbackOrder(t *testing.T) {
 	tmpDir := t.TempDir()
 	setValue(t, &additionalPaths, []string{})
-	setValue(t, &pveSourceFiles, []string{})
-	setValue(t, &pveDirCandidates, []string{})
+	nullFilesystemMarkerSeams(t, tmpDir)
 
 	t.Run("via command", func(t *testing.T) {
 		setValue(t, &lookPathFunc, func(string) (string, error) { return "/fake/pveversion", nil })
@@ -350,8 +373,7 @@ func TestDetectPVE_FallbackOrder(t *testing.T) {
 func TestDetectPBS_FallbackOrder(t *testing.T) {
 	tmpDir := t.TempDir()
 	setValue(t, &additionalPaths, []string{})
-	setValue(t, &pbsSourceFiles, []string{})
-	setValue(t, &pbsDirCandidates, []string{})
+	nullFilesystemMarkerSeams(t, tmpDir)
 
 	t.Run("via command", func(t *testing.T) {
 		setValue(t, &lookPathFunc, func(string) (string, error) { return "/fake/proxmox-backup-manager", nil })
@@ -430,13 +452,7 @@ func TestDetectProxmox_Branches(t *testing.T) {
 	tmpDir := t.TempDir()
 	setValue(t, &additionalPaths, []string{})
 	setValue(t, &debugBaseDir, tmpDir)
-	setValue(t, &pveSourceFiles, []string{})
-	setValue(t, &pbsSourceFiles, []string{})
-	setValue(t, &pveDirCandidates, []string{})
-	setValue(t, &pbsDirCandidates, []string{})
-	setValue(t, &pveVersionFile, filepath.Join(tmpDir, "missing-pve-version"))
-	setValue(t, &pveLegacyFile, filepath.Join(tmpDir, "missing-pve-legacy"))
-	setValue(t, &pbsVersionFile, filepath.Join(tmpDir, "missing-pbs-version"))
+	nullFilesystemMarkerSeams(t, tmpDir)
 
 	t.Run("pve", func(t *testing.T) {
 		setValue(t, &lookPathFunc, func(binary string) (string, error) {
@@ -502,13 +518,7 @@ func TestDetect_Branches(t *testing.T) {
 	tmpDir := t.TempDir()
 	setValue(t, &additionalPaths, []string{})
 	setValue(t, &debugBaseDir, tmpDir)
-	setValue(t, &pveSourceFiles, []string{})
-	setValue(t, &pbsSourceFiles, []string{})
-	setValue(t, &pveDirCandidates, []string{})
-	setValue(t, &pbsDirCandidates, []string{})
-	setValue(t, &pveVersionFile, filepath.Join(tmpDir, "missing-pve-version"))
-	setValue(t, &pveLegacyFile, filepath.Join(tmpDir, "missing-pve-legacy"))
-	setValue(t, &pbsVersionFile, filepath.Join(tmpDir, "missing-pbs-version"))
+	nullFilesystemMarkerSeams(t, tmpDir)
 
 	t.Run("unknown", func(t *testing.T) {
 		setValue(t, &lookPathFunc, func(string) (string, error) { return "", errors.New("not found") })
@@ -549,13 +559,7 @@ func TestDetect_Branches(t *testing.T) {
 func TestGetVersion_Branches(t *testing.T) {
 	tmpDir := t.TempDir()
 	setValue(t, &additionalPaths, []string{})
-	setValue(t, &pveSourceFiles, []string{})
-	setValue(t, &pbsSourceFiles, []string{})
-	setValue(t, &pveDirCandidates, []string{})
-	setValue(t, &pbsDirCandidates, []string{})
-	setValue(t, &pveVersionFile, filepath.Join(tmpDir, "missing-pve-version"))
-	setValue(t, &pveLegacyFile, filepath.Join(tmpDir, "missing-pve-legacy"))
-	setValue(t, &pbsVersionFile, filepath.Join(tmpDir, "missing-pbs-version"))
+	nullFilesystemMarkerSeams(t, tmpDir)
 
 	t.Run("pve success", func(t *testing.T) {
 		setValue(t, &lookPathFunc, func(binary string) (string, error) {
