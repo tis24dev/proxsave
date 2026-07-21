@@ -68,3 +68,24 @@ func Decide(baseDir, current string) (show bool, body string, err error) {
 	}
 	return true, RenderBody(current, LookupNotes(from, current)), nil
 }
+
+// ShouldWarn is the non-interactive counterpart of Decide, used by the run-log nudge on
+// automated/non-interactive runs. It shares the exact IsDevBuild + LoadState + IsUnseen
+// core as Decide (minus LookupNotes/RenderBody): instead of composing a notes body it
+// returns the normalized (v-stripped) current version for the caller's warning copy. Like
+// Decide it fails toward SILENCE: every error path and every not-unseen path returns
+// show=false with an empty version, so the nudge can only ever go quiet, never show-all.
+func ShouldWarn(baseDir, current string) (show bool, version string, err error) {
+	if IsDevBuild(current) {
+		return false, "", nil
+	}
+	state, present, err := LoadState(baseDir)
+	if err != nil {
+		return false, "", err
+	}
+	unseen, err := IsUnseen(current, state.LastSeenNotesVersion, present)
+	if err != nil || !unseen {
+		return false, "", err
+	}
+	return true, strings.TrimPrefix(strings.TrimSpace(current), "v"), nil
+}

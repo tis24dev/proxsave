@@ -1,6 +1,8 @@
 package whatsnew
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -41,6 +43,115 @@ func TestIsUnseen(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestShouldWarn covers the non-interactive gate: it shares the IsDevBuild+LoadState+
+// IsUnseen core with Decide and returns the v-stripped current version only when unseen
+// (absent or older last-seen), while every seen/downgrade/dev-build/parse-error path
+// fails toward silence (show=false, empty version).
+func TestShouldWarn(t *testing.T) {
+	t.Run("absent flag shows normalized version", func(t *testing.T) {
+		base := t.TempDir()
+		show, ver, err := ShouldWarn(base, "0.30.0")
+		if err != nil {
+			t.Fatalf("ShouldWarn absent flag: unexpected err %v", err)
+		}
+		if !show || ver != "0.30.0" {
+			t.Fatalf("ShouldWarn absent flag = (%v, %q), want (true, \"0.30.0\")", show, ver)
+		}
+	})
+
+	t.Run("older last-seen shows", func(t *testing.T) {
+		base := t.TempDir()
+		if err := MarkSeen(base, "0.29.0"); err != nil {
+			t.Fatalf("MarkSeen: %v", err)
+		}
+		show, ver, err := ShouldWarn(base, "0.30.0")
+		if err != nil {
+			t.Fatalf("ShouldWarn older last-seen: unexpected err %v", err)
+		}
+		if !show || ver != "0.30.0" {
+			t.Fatalf("ShouldWarn older last-seen = (%v, %q), want (true, \"0.30.0\")", show, ver)
+		}
+	})
+
+	t.Run("seen is silent", func(t *testing.T) {
+		base := t.TempDir()
+		if err := MarkSeen(base, "0.30.0"); err != nil {
+			t.Fatalf("MarkSeen: %v", err)
+		}
+		show, ver, err := ShouldWarn(base, "0.30.0")
+		if err != nil {
+			t.Fatalf("ShouldWarn seen: unexpected err %v", err)
+		}
+		if show || ver != "" {
+			t.Fatalf("ShouldWarn seen = (%v, %q), want (false, \"\")", show, ver)
+		}
+	})
+
+	t.Run("downgrade is silent", func(t *testing.T) {
+		base := t.TempDir()
+		if err := MarkSeen(base, "0.30.0"); err != nil {
+			t.Fatalf("MarkSeen: %v", err)
+		}
+		show, ver, err := ShouldWarn(base, "0.29.0")
+		if err != nil {
+			t.Fatalf("ShouldWarn downgrade: unexpected err %v", err)
+		}
+		if show || ver != "" {
+			t.Fatalf("ShouldWarn downgrade = (%v, %q), want (false, \"\")", show, ver)
+		}
+	})
+
+	t.Run("dev build short-circuits before state read", func(t *testing.T) {
+		base := t.TempDir()
+		show, ver, err := ShouldWarn(base, "0.0.0-dev")
+		if err != nil {
+			t.Fatalf("ShouldWarn dev build: unexpected err %v", err)
+		}
+		if show || ver != "" {
+			t.Fatalf("ShouldWarn dev build = (%v, %q), want (false, \"\")", show, ver)
+		}
+	})
+
+	t.Run("version is v-stripped", func(t *testing.T) {
+		base := t.TempDir()
+		show, ver, err := ShouldWarn(base, "v0.30.0")
+		if err != nil {
+			t.Fatalf("ShouldWarn v-prefixed: unexpected err %v", err)
+		}
+		if !show || ver != "0.30.0" {
+			t.Fatalf("ShouldWarn v-prefixed = (%v, %q), want (true, \"0.30.0\")", show, ver)
+		}
+	})
+
+	t.Run("corrupt flag fails toward silence", func(t *testing.T) {
+		base := t.TempDir()
+		if err := os.MkdirAll(filepath.Dir(StatePath(base)), 0o755); err != nil {
+			t.Fatalf("mkdir: %v", err)
+		}
+		if err := os.WriteFile(StatePath(base), []byte("{not json"), 0o644); err != nil {
+			t.Fatalf("write garbage: %v", err)
+		}
+		show, ver, err := ShouldWarn(base, "0.30.0")
+		if err == nil {
+			t.Fatalf("ShouldWarn corrupt flag err = nil, want non-nil")
+		}
+		if show || ver != "" {
+			t.Fatalf("ShouldWarn corrupt flag = (%v, %q), want (false, \"\")", show, ver)
+		}
+	})
+
+	t.Run("unparseable current fails toward silence", func(t *testing.T) {
+		base := t.TempDir()
+		show, ver, err := ShouldWarn(base, "not-a-version")
+		if err == nil {
+			t.Fatalf("ShouldWarn unparseable current err = nil, want non-nil")
+		}
+		if show || ver != "" {
+			t.Fatalf("ShouldWarn unparseable current = (%v, %q), want (false, \"\")", show, ver)
+		}
+	})
 }
 
 // TestIsDevBuild smoke-tests the dev/pseudo-version guard SEAM (full STATE-05 matrix is
