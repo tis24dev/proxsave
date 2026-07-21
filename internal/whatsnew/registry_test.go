@@ -1,8 +1,11 @@
 package whatsnew
 
 import (
+	"os"
 	"strings"
 	"testing"
+
+	"github.com/Masterminds/semver/v3"
 )
 
 // TestLookupNotesPlaceholderInRange: the (0.29.0, 0.30.0] range returns exactly the
@@ -106,4 +109,133 @@ func TestRenderBodyGlyphFree(t *testing.T) {
 			t.Fatalf("body contains banned glyph %q", banned)
 		}
 	}
+}
+
+// TestRenderBodyCTA verifies the optional call-to-action block renders as an UNBULLETED
+// title under a blank line with its detail lines bulleted (uses a synthetic note so it does
+// not couple to the shipped 0.30 copy).
+func TestRenderBodyCTA(t *testing.T) {
+	body := RenderBody("0.30.0", []Note{{
+		Version:  "0.30.0",
+		Lines:    []string{"a highlight"},
+		CTATitle: "Recommended: do the thing",
+		CTALines: []string{"open the menu"},
+	}})
+	if !strings.Contains(body, "- a highlight\n") {
+		t.Fatalf("missing bulleted highlight\n%s", body)
+	}
+	if !strings.Contains(body, "\nRecommended: do the thing\n") {
+		t.Fatalf("CTA title not rendered as an unbulleted header under a blank line\n%s", body)
+	}
+	if !strings.Contains(body, "- open the menu\n") {
+		t.Fatalf("CTA detail not bulleted\n%s", body)
+	}
+	if strings.Contains(body, "- Recommended: do the thing") {
+		t.Fatalf("CTA title must not be bulleted\n%s", body)
+	}
+}
+
+// assertCleanNoteLine holds the house content rules for any registry copy line: non-blank,
+// no leftover "Placeholder", terse (<=120 chars), and pure ASCII (so no em-dash, en-dash,
+// or emoji slips into a shipped note).
+func assertCleanNoteLine(t *testing.T, version, line string) {
+	t.Helper()
+	if strings.TrimSpace(line) == "" {
+		t.Fatalf("%s: empty/blank note line", version)
+	}
+	if strings.Contains(strings.ToLower(line), "placeholder") {
+		t.Fatalf("%s: leftover placeholder text: %q", version, line)
+	}
+	if len(line) > 120 {
+		t.Fatalf("%s: note line too long (%d > 120): %q", version, len(line), line)
+	}
+	for _, r := range line {
+		if r > 127 {
+			t.Fatalf("%s: non-ASCII rune %q in %q (no em-dash/en-dash/emoji)", version, r, line)
+		}
+	}
+}
+
+// noteCopyLines flattens every human-facing string of a Note (highlights + CTA title +
+// CTA details) for the content-rule checks.
+func noteCopyLines(n Note) []string {
+	all := append([]string{}, n.Lines...)
+	if n.CTATitle != "" {
+		all = append(all, n.CTATitle)
+	}
+	return append(all, n.CTALines...)
+}
+
+// TestRegistryWellFormed is the ALWAYS-ON lint that runs on every PR (a plain unit test):
+// the whole compiled-in registry must be non-empty, strictly ascending by unique semver
+// key, and every entry must carry highlight lines and only clean copy (no placeholder, no
+// forbidden glyph, terse). It catches a malformed edit at authoring time, independent of any
+// release.
+func TestRegistryWellFormed(t *testing.T) {
+	if len(notes) == 0 {
+		t.Fatal("registry is empty; at least one Note{} is required")
+	}
+	seen := map[string]bool{}
+	var prev *semver.Version
+	for i, n := range notes {
+		v, err := semver.NewVersion(n.Version)
+		if err != nil {
+			t.Fatalf("notes[%d].Version %q is not valid semver: %v", i, n.Version, err)
+		}
+		if seen[v.String()] {
+			t.Fatalf("notes[%d]: duplicate version %q", i, n.Version)
+		}
+		seen[v.String()] = true
+		if prev != nil && !v.GreaterThan(prev) {
+			t.Fatalf("notes[%d] version %q not strictly ascending after %q (keep the registry append-only and ordered)", i, n.Version, prev.String())
+		}
+		prev = v
+		if len(n.Lines) == 0 {
+			t.Fatalf("notes[%d] (%s) has no highlight lines", i, n.Version)
+		}
+		if len(n.Lines) > 8 {
+			t.Fatalf("notes[%d] (%s) has %d highlights; keep Screen 0 terse (<=8)", i, n.Version, len(n.Lines))
+		}
+		if n.CTATitle == "" && len(n.CTALines) > 0 {
+			t.Fatalf("notes[%d] (%s) has CTA lines without a CTATitle", i, n.Version)
+		}
+		for _, line := range noteCopyLines(n) {
+			assertCleanNoteLine(t, n.Version, line)
+		}
+	}
+}
+
+// TestReleaseNotesPresent is the RELEASE GATE, inert unless WHATSNEW_REQUIRE_VERSION is set
+// (the release CI sets it to the release tag). It is final-only: a prerelease is skipped
+// (betas inherit the final's notes). When enforced it FAILS the release unless the released
+// version has a real, well-formed what's-new entry in the registry.
+func TestReleaseNotesPresent(t *testing.T) {
+	req := strings.TrimSpace(os.Getenv("WHATSNEW_REQUIRE_VERSION"))
+	if req == "" {
+		t.Skip("WHATSNEW_REQUIRE_VERSION not set; release-notes gate is inert outside the release CI")
+	}
+	want, err := semver.NewVersion(req)
+	if err != nil {
+		t.Fatalf("WHATSNEW_REQUIRE_VERSION %q is not a valid release version: %v", req, err)
+	}
+	if want.Prerelease() != "" {
+		t.Skipf("release %q is a prerelease; what's-new notes are required only for final releases", req)
+	}
+	for _, n := range notes {
+		v, err := semver.NewVersion(n.Version)
+		if err != nil {
+			continue
+		}
+		if !v.Equal(want) {
+			continue
+		}
+		if len(n.Lines) == 0 {
+			t.Fatalf("what's-new entry for %s has no highlight lines", req)
+		}
+		for _, line := range noteCopyLines(n) {
+			assertCleanNoteLine(t, n.Version, line)
+		}
+		return // found and well-formed
+	}
+	t.Fatalf("no what's-new entry for release %s in internal/whatsnew/registry.go; add a Note{} before releasing", req)
 }

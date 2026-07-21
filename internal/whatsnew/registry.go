@@ -7,24 +7,33 @@ import (
 	"github.com/Masterminds/semver/v3"
 )
 
-// Note is one release's what's-new entry: a semver key and its body lines. Lines are
-// plain terse English (no em-dash, no en-dash, no emoji); the Pager sanitizes and wraps
-// them, so they are never hand-styled here and carry no glyphs.
+// Note is one release's what's-new entry: a semver key, its highlight body lines, and an
+// optional call-to-action block (a title plus its own detail lines). All copy is plain
+// terse English (no em-dash, no en-dash, no emoji); the Pager sanitizes and wraps it, so
+// it is never hand-styled here and carries no glyphs.
 type Note struct {
-	Version string
-	Lines   []string
+	Version  string
+	Lines    []string // highlights, one plain "- " bullet each
+	CTATitle string   // optional call-to-action header, rendered under a blank line
+	CTALines []string // optional call-to-action detail bullets, shown under CTATitle
 }
 
-// notes is the compiled-in, version-keyed registry. Phase 1 ships ONE placeholder 0.30.0
-// entry; the real 0.30 content is a separate milestone, so this copy is intentionally
-// generic. Keep entries semver-keyed and append-only. A white-box test may temporarily
-// swap this var to exercise the multi-version catch-up ordering.
+// notes is the compiled-in, version-keyed registry. Keep entries semver-keyed and
+// append-only; a release PR is gated (release-guard) on the released version carrying a
+// real, well-formed entry here. A white-box test may temporarily swap this var to
+// exercise the multi-version catch-up ordering.
 var notes = []Note{
 	{
 		Version: "0.30.0",
 		Lines: []string{
-			"Placeholder release note. Real 0.30 content lands in a later milestone.",
-			"See the changelog at https://github.com/tis24dev/proxsave for details.",
+			"New: a one-time what's new screen after each upgrade (you are looking at it)",
+			"Host backup mode for Proxmox HA and LXC clusters",
+			"Safer confined file reads (safefs), hardened path handling",
+			"Clearer Telegram pairing status with distinct states and errors",
+		},
+		CTATitle: "Recommended: enable backup monitoring",
+		CTALines: []string{
+			"Open proxsave and choose \"Backup monitoring\" to get alerts if a backup stops running",
 		},
 	},
 }
@@ -61,9 +70,10 @@ func LookupNotes(from, to string) []Note {
 // RenderBody builds the plain, \n-separated Pager body. It is NOT hand-styled or
 // colored (the Pager sanitizes and wraps it): the first line is the version header
 // "ProxSave <current>", a blank line, then the change-list header, then either the
-// UI-SPEC empty-state line (so continue is always reachable and the flag can clear) or
-// each note line prefixed with a plain ASCII "- " bullet. No theme import, no glyph
-// constant; the pure state tier stays stdlib-plus-semver only.
+// UI-SPEC empty-state line (so continue is always reachable and the flag can clear) or,
+// per note, each highlight line prefixed with a plain ASCII "- " bullet followed by an
+// optional call-to-action block (a blank line, the CTATitle, then its "- " bullets). No
+// theme import, no glyph constant; the pure state tier stays stdlib-plus-semver only.
 func RenderBody(current string, notes []Note) string {
 	var b strings.Builder
 	b.WriteString("ProxSave " + current + "\n\n")
@@ -75,6 +85,15 @@ func RenderBody(current string, notes []Note) string {
 	for _, n := range notes {
 		for _, line := range n.Lines {
 			b.WriteString("- " + line + "\n")
+		}
+		if n.CTATitle != "" || len(n.CTALines) > 0 {
+			b.WriteString("\n")
+			if n.CTATitle != "" {
+				b.WriteString(n.CTATitle + "\n")
+			}
+			for _, line := range n.CTALines {
+				b.WriteString("- " + line + "\n")
+			}
 		}
 	}
 	return b.String()

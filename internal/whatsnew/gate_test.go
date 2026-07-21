@@ -219,7 +219,8 @@ func TestDevBuildGateSilent(t *testing.T) {
 }
 
 // TestDecideAbsentFlagShows: a temp base with an absent flag and current 0.30.0 shows the
-// screen with a non-empty body containing the placeholder note.
+// screen with a non-empty body carrying the version header, the change-list header, and at
+// least one bulleted highlight (structural, so it does not couple to the exact 0.30 copy).
 func TestDecideAbsentFlagShows(t *testing.T) {
 	base := t.TempDir()
 	show, body, err := Decide(base, "0.30.0")
@@ -232,8 +233,11 @@ func TestDecideAbsentFlagShows(t *testing.T) {
 	if !strings.Contains(body, "ProxSave 0.30.0") {
 		t.Fatalf("body missing version header\n%s", body)
 	}
-	if !strings.Contains(body, "Placeholder release note.") {
-		t.Fatalf("body missing placeholder note\n%s", body)
+	if !strings.Contains(body, "What changed in this version:") {
+		t.Fatalf("body missing change-list header\n%s", body)
+	}
+	if !strings.Contains(body, "\n- ") {
+		t.Fatalf("body missing a bulleted highlight\n%s", body)
 	}
 }
 
