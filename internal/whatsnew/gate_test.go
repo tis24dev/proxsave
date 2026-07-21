@@ -154,26 +154,64 @@ func TestShouldWarn(t *testing.T) {
 	})
 }
 
-// TestIsDevBuild smoke-tests the dev/pseudo-version guard SEAM (full STATE-05 matrix is
-// Phase 3).
+// TestIsDevBuild is the full STATE-05 matrix: the broadened classifier catches the
+// make-build (X.Y.Z-dev.N+gSHA), dirty-metadata (X.Y.Z+gSHA), and prerelease-dev
+// (X.Y.Z-dev[.N]) forms plus the retained literal/pseudo cases, while clean releases,
+// legit beta/rc prereleases, and any non-semver string stay non-dev.
 func TestIsDevBuild(t *testing.T) {
 	cases := []struct {
 		current string
 		want    bool
 	}{
+		// Broadened (STATE-05): make-build, dirty-metadata, prerelease-dev.
+		{"0.30.0-dev.5+gabc1234", true},   // prerelease dev.5 + metadata
+		{"0.30.0-dev.5", true},            // prerelease first id dev
+		{"0.30.0-dev", true},              // prerelease exactly dev
+		{"0.30.0+gabc1234", true},         // metadata present (dirty)
+		{"v0.30.0-dev.5+gabc1234", true},  // v-prefix tolerated
+		// Existing (must stay true).
 		{"", true},
 		{"0.0.0-dev", true},
 		{"v0.0.0-dev", true},
 		{"v0.0.0-20260101120000-abcdef123456", true}, // Go pseudo-version
 		{"0.0.0-20260101120000-abcdef123456", true},
+		// Clean releases and legit prereleases (must stay false).
 		{"0.30.0", false},
 		{"v0.30.0", false},
+		{"1.0.0", false},
 		{"0.30.0-beta5", false},
+		{"0.30.0-rc1", false},
+		// Non-semver is NOT dev here (IsUnseen fails toward silence on it).
+		{"not-a-version", false},
 	}
 	for _, tc := range cases {
 		if got := IsDevBuild(tc.current); got != tc.want {
 			t.Fatalf("IsDevBuild(%q) = %v, want %v", tc.current, got, tc.want)
 		}
+	}
+}
+
+// TestDevBuildGateSilent: on every make-build dev format, the broadened IsDevBuild
+// short-circuits both gate entry points before any state read, so Decide and ShouldWarn
+// return (false, "", nil) even over a TempDir base with an absent flag (STATE-05).
+func TestDevBuildGateSilent(t *testing.T) {
+	devVersions := []string{
+		"0.30.0-dev.5+gabc1234",
+		"0.30.0-dev.5",
+		"0.30.0-dev",
+		"0.30.0+gabc1234",
+		"v0.30.0-dev.5+gabc1234",
+	}
+	for _, v := range devVersions {
+		t.Run(v, func(t *testing.T) {
+			base := t.TempDir()
+			if show, body, err := Decide(base, v); show || body != "" || err != nil {
+				t.Fatalf("Decide(%q) = (%v, %q, %v), want (false, \"\", nil)", v, show, body, err)
+			}
+			if show, ver, err := ShouldWarn(base, v); show || ver != "" || err != nil {
+				t.Fatalf("ShouldWarn(%q) = (%v, %q, %v), want (false, \"\", nil)", v, show, ver, err)
+			}
+		})
 	}
 }
 
@@ -222,5 +260,39 @@ func TestDecideAfterMarkSeenSilent(t *testing.T) {
 	}
 	if show || body != "" {
 		t.Fatalf("Decide after MarkSeen = (%v, %q), want (false, \"\")", show, body)
+	}
+}
+
+// TestDecideDowngradeSilent (STATE-08): a reinstall/downgrade older than last-seen does
+// not fire Screen 0. IsUnseen's cur.GreaterThan(last) is false when current < last-seen;
+// this pins Decide's downgrade silence, which TestDecideAfterMarkSeenSilent (equal case)
+// did not cover.
+func TestDecideDowngradeSilent(t *testing.T) {
+	base := t.TempDir()
+	if err := MarkSeen(base, "0.30.0"); err != nil {
+		t.Fatalf("MarkSeen: %v", err)
+	}
+	show, body, err := Decide(base, "0.29.0")
+	if err != nil {
+		t.Fatalf("Decide downgrade: unexpected err %v", err)
+	}
+	if show || body != "" {
+		t.Fatalf("Decide downgrade = (%v, %q), want (false, \"\")", show, body)
+	}
+}
+
+// TestShouldWarnDowngradeSilent (STATE-08): the non-interactive entry point is silent on a
+// downgrade too, complementing the existing TestShouldWarn "downgrade is silent" subtest.
+func TestShouldWarnDowngradeSilent(t *testing.T) {
+	base := t.TempDir()
+	if err := MarkSeen(base, "0.30.0"); err != nil {
+		t.Fatalf("MarkSeen: %v", err)
+	}
+	show, ver, err := ShouldWarn(base, "0.29.0")
+	if err != nil {
+		t.Fatalf("ShouldWarn downgrade: unexpected err %v", err)
+	}
+	if show || ver != "" {
+		t.Fatalf("ShouldWarn downgrade = (%v, %q), want (false, \"\")", show, ver)
 	}
 }

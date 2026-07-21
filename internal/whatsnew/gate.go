@@ -6,19 +6,43 @@ import (
 	"github.com/Masterminds/semver/v3"
 )
 
-// IsDevBuild is the dev/pseudo-version guard SEAM. A dev build or a Go pseudo-version
-// must never gate the what's-new screen (a developer running an untagged binary is not
-// a released upgrade). Phase 1 establishes only the call seam and a smoke test; the full
-// STATE-05 enforcement plus its dedicated matrix is Phase 3. Returns true for an empty
-// version, the "0.0.0-dev" placeholder (with or without a leading v), or any value whose
-// v-stripped form has the "0.0.0-" prefix (the Go pseudo-version heuristic
-// v0.0.0-<timestamp>-<hash>).
+// IsDevBuild is the dev/pseudo-version guard: a dev build or a Go pseudo-version must
+// never gate the what's-new screen (a developer running an untagged or dirty binary is
+// not a released upgrade). STATE-05 is enforced here. Returns true for an empty version,
+// the "0.0.0-dev" placeholder (with or without a leading v), any value whose v-stripped
+// form has the "0.0.0-" prefix (the Go pseudo-version heuristic v0.0.0-<timestamp>-<hash>),
+// any build carrying semver metadata (the make-build "X.Y.Z-dev.N+gSHA" or a dirty
+// "X.Y.Z+gSHA"), or any build whose prerelease's first dot-identifier is "dev" (e.g.
+// "X.Y.Z-dev" or "X.Y.Z-dev.N"). A non-semver string is NOT classified dev here: IsUnseen
+// already fails toward silence on an unparseable current. Clean releases (0.30.0, 1.0.0)
+// and legit beta/rc prereleases (0.30.0-beta5, 0.30.0-rc1) carry no metadata and no "dev"
+// prerelease, so they still gate.
 func IsDevBuild(current string) bool {
 	c := strings.TrimSpace(current)
 	if c == "" || c == "0.0.0-dev" || c == "v0.0.0-dev" {
 		return true
 	}
-	return strings.HasPrefix(strings.TrimPrefix(c, "v"), "0.0.0-")
+	stripped := strings.TrimPrefix(c, "v")
+	if strings.HasPrefix(stripped, "0.0.0-") {
+		return true // Go pseudo-version heuristic (v0.0.0-<timestamp>-<hash>)
+	}
+	v, err := semver.NewVersion(stripped)
+	if err != nil {
+		return false // non-semver is NOT dev; IsUnseen fails toward silence on it
+	}
+	if v.Metadata() != "" {
+		return true // build metadata (+gSHA / dirty) marks an untagged or dirty build
+	}
+	if pre := v.Prerelease(); pre != "" {
+		first := pre
+		if i := strings.IndexByte(pre, '.'); i >= 0 {
+			first = pre[:i]
+		}
+		if first == "dev" {
+			return true // "X.Y.Z-dev" or "X.Y.Z-dev.N" development prerelease
+		}
+	}
+	return false
 }
 
 // IsUnseen reports whether the installed version carries notes the user has not
