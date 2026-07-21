@@ -174,18 +174,24 @@ func TestMaybeWarnWhatsnewDeliveredToEmailCategories(t *testing.T) {
 	if warningCount != 1 {
 		t.Fatalf("ParseLogCounts warningCount = %d, want 1", warningCount)
 	}
-	// Assert a WARNING category carrying our copy was captured. Match on containment (not
-	// exact equality) so this delivery test stays decoupled from ParseLogCounts' Label
-	// truncation(120)/split(" - "); the byte-exact copy lock lives in TestMaybeWarnWhatsnewCopy.
+	// The delivered label is byte-exact on the file-sink path. Reconstruct exactly what
+	// ParseLogCounts derives from the message (splitCategoryAndExample: split on " - ", then
+	// truncate to 120) and require EQUALITY, so a corruption of the file-sink message fails
+	// here (a mere substring would not), while a future reword of the copy auto-tracks. For
+	// the current copy (no " - ", < 120 chars) expectLabel == lockedWarnCopy.
+	expectLabel := strings.TrimSpace(strings.SplitN(lockedWarnCopy, " - ", 2)[0])
+	if len(expectLabel) > 120 {
+		expectLabel = expectLabel[:117] + "..."
+	}
 	found := false
 	for _, c := range cats {
-		if c.Type == "WARNING" && c.Label != "" && strings.Contains(lockedWarnCopy, c.Label) {
+		if c.Type == "WARNING" && c.Label == expectLabel {
 			found = true
 			break
 		}
 	}
 	if !found {
-		t.Fatalf("the warning was not captured as a WARNING LogCategory carrying the copy: %+v", cats)
+		t.Fatalf("delivered WARNING LogCategory label != expected %q: %+v", expectLabel, cats)
 	}
 }
 
