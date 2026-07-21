@@ -35,8 +35,10 @@ func TestCephHasClusterConfigFollowsAbsoluteSymlinkUnderPrefix(t *testing.T) {
 	}
 }
 
-// TestReadSystemFileFollowingSymlinksNoPrefix keeps the real-root path a plain
-// os.ReadFile (backward compatibility).
+// TestReadSystemFileFollowingSymlinksNoPrefix pins the real-root contract: a plain
+// regular file reads back byte-for-byte. With no prefix the read is confined to
+// root "/" via os.Root (structural G304 remedy), which resolves to the same file a
+// plain os.ReadFile would.
 func TestReadSystemFileFollowingSymlinksNoPrefix(t *testing.T) {
 	dir := t.TempDir()
 	p := filepath.Join(dir, "file.txt")
@@ -50,5 +52,29 @@ func TestReadSystemFileFollowingSymlinksNoPrefix(t *testing.T) {
 	}
 	if string(got) != "data" {
 		t.Fatalf("got %q want data", got)
+	}
+}
+
+// TestReadSystemFileFollowingSymlinksNoPrefixFollowsSymlink proves the real-root
+// read still follows a symlink to its target (the os.Root confinement must not
+// break symlink resolution the way a bare os.OpenRoot(dir).Open would refuse an
+// escaping final component). The link and target sit in the same directory.
+func TestReadSystemFileFollowingSymlinksNoPrefixFollowsSymlink(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "target.txt")
+	if err := os.WriteFile(target, []byte("linked-data"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(dir, "link.conf")
+	if err := os.Symlink("target.txt", link); err != nil {
+		t.Fatal(err)
+	}
+	c := &Collector{config: &CollectorConfig{}}
+	got, err := c.readSystemFileFollowingSymlinks(link)
+	if err != nil {
+		t.Fatalf("readSystemFileFollowingSymlinks: %v", err)
+	}
+	if string(got) != "linked-data" {
+		t.Fatalf("got %q want linked-data", got)
 	}
 }

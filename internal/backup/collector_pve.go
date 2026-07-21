@@ -2547,28 +2547,30 @@ func (c *Collector) cephHasClusterConfig(path string) bool {
 }
 
 // readSystemFileFollowingSymlinks reads a system file that may be reached through
-// an absolute symlink into another subtree. On a real root it is a plain
-// os.ReadFile. Under a SYSTEM_ROOT_PREFIX it resolves the file through
-// safefs.ReadFileInRoot, which re-anchors an absolute symlink target under the
-// prefix (so /etc/ceph/ceph.conf -> /etc/pve/ceph.conf reads
-// PREFIX/etc/pve/ceph.conf instead of escaping to the container root) and stays
-// confined at the syscall level. Read-only; never writes under the prefix. This is
-// the read side of the fix; copySymlinkFile keeps storing link targets verbatim so
-// a restore onto a real host recreates the link correctly (issue #255).
+// an absolute symlink into another subtree. Both the real-root and the
+// SYSTEM_ROOT_PREFIX cases resolve through safefs.ReadFileInRoot, which re-anchors
+// an absolute symlink target under the root (so /etc/ceph/ceph.conf ->
+// /etc/pve/ceph.conf reads ROOT/etc/pve/ceph.conf instead of escaping) and stays
+// confined at the syscall level via os.Root. On a real root the confinement root is
+// "/", so re-anchoring is a no-op that resolves to the same absolute file a plain
+// os.ReadFile would, while keeping the read out of a raw variable sink (structural
+// gosec G304 remedy, not a suppression). Read-only; never writes under the root.
+// This is the read side of the fix; copySymlinkFile keeps storing link targets
+// verbatim so a restore onto a real host recreates the link correctly (issue #255).
 func (c *Collector) readSystemFileFollowingSymlinks(path string) ([]byte, error) {
-	prefix := strings.TrimSpace(c.config.SystemRootPrefix)
-	if prefix == "" || prefix == string(filepath.Separator) {
-		return os.ReadFile(path)
+	root := strings.TrimSpace(c.config.SystemRootPrefix)
+	if root == "" {
+		root = string(filepath.Separator)
 	}
-	cleanPrefix := filepath.Clean(prefix)
+	cleanRoot := filepath.Clean(root)
 	rel := path
 	switch {
-	case path == cleanPrefix:
+	case path == cleanRoot:
 		rel = "/"
-	case strings.HasPrefix(path, cleanPrefix+string(filepath.Separator)):
-		rel = strings.TrimPrefix(path, cleanPrefix)
+	case strings.HasPrefix(path, cleanRoot+string(filepath.Separator)):
+		rel = strings.TrimPrefix(path, cleanRoot)
 	}
-	return safefs.ReadFileInRoot(cleanPrefix, rel)
+	return safefs.ReadFileInRoot(cleanRoot, rel)
 }
 
 func cephHasKeyring(path string) bool {
