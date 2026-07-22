@@ -134,6 +134,19 @@ func TestRenderBodyActions(t *testing.T) {
 	}
 }
 
+// TestRenderBodyNoActionsOmitsHeader pins that a note WITHOUT actions renders no actions
+// section at all (guards the `len(n.Actions) > 0` branch: a mutation that always rendered the
+// header would emit a dangling empty "What you need to do now:" and is caught here).
+func TestRenderBodyNoActionsOmitsHeader(t *testing.T) {
+	body := RenderBody("0.30.0", []Note{{
+		Version: "0.30.0",
+		Lines:   []string{"a highlight"},
+	}})
+	if strings.Contains(body, "What you need to do now:") {
+		t.Fatalf("actionless note must not render the actions header\n%s", body)
+	}
+}
+
 // TestRenderBodyMultiNoteSeparator pins the blank line between consecutive notes in a
 // catch-up, so a later note's highlights never glue directly under the prior note's actions
 // bullets (which would misattribute them to the actions header).
