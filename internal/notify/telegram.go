@@ -201,7 +201,7 @@ func (t *TelegramNotifier) Send(ctx context.Context, data *NotificationData) (*N
 			return result, nil
 		}
 		if !errors.Is(err, errRelayAuthRejected) {
-			t.logger.Warning("WARNING: Failed to send Telegram notification via relay: %v", err)
+			t.logger.Debug("Telegram: relay send failed (surfaced once by the notification adapter): %v", err)
 			result.Metadata["relay_accepted"] = false
 			result.Success = false
 			result.Error = err
@@ -225,7 +225,7 @@ func (t *TelegramNotifier) Send(ctx context.Context, data *NotificationData) (*N
 		var err error
 		botToken, chatID, err = t.fetchCentralizedCredentials(ctx) // may TOFU-provision+persist+set NotifySecret
 		if err != nil {
-			t.logger.Warning("WARNING: Failed to fetch Telegram credentials: %v", err)
+			t.logger.Debug("Telegram: failed to fetch credentials (surfaced once by the notification adapter): %v", err)
 			result.Success = false
 			result.Error = err
 			result.Duration = time.Since(startTime)
@@ -240,7 +240,7 @@ func (t *TelegramNotifier) Send(ctx context.Context, data *NotificationData) (*N
 			message := t.buildMessage(data)
 			status, loginURL, err := t.sendViaRelay(ctx, message, notifyID)
 			if err != nil {
-				t.logger.Warning("WARNING: Failed to send Telegram notification via relay: %v", err)
+				t.logger.Debug("Telegram: relay send failed (surfaced once by the notification adapter): %v", err)
 				result.Metadata["relay_accepted"] = false
 				result.Success = false
 				result.Error = err
@@ -257,7 +257,7 @@ func (t *TelegramNotifier) Send(ctx context.Context, data *NotificationData) (*N
 	// Validate credentials
 	if botToken == "" || chatID == "" {
 		err := fmt.Errorf("missing bot token or chat ID")
-		t.logger.Warning("WARNING: Telegram notification skipped: %v", err)
+		t.logger.Debug("Telegram: notification skipped (surfaced once by the notification adapter): %v", err)
 		result.Success = false
 		result.Error = err
 		result.Duration = time.Since(startTime)
@@ -271,7 +271,7 @@ func (t *TelegramNotifier) Send(ctx context.Context, data *NotificationData) (*N
 	t.logger.Debug("Telegram: legacy direct send via bot token (token leaves host; mode=%s)", t.config.Mode)
 	err := t.sendToTelegram(ctx, botToken, chatID, message)
 	if err != nil {
-		t.logger.Warning("WARNING: Failed to send Telegram notification: %v", err)
+		t.logger.Debug("Telegram: legacy direct send failed (surfaced once by the notification adapter): %v", err)
 		result.Success = false
 		result.Error = err
 		result.Duration = time.Since(startTime)

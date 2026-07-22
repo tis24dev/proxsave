@@ -100,7 +100,7 @@ func (g *GotifyNotifier) Send(ctx context.Context, data *NotificationData) (*Not
 
 	endpoint, err := g.buildEndpoint()
 	if err != nil {
-		g.logger.Warning("WARNING: Invalid Gotify configuration: %v", err)
+		g.logger.Debug("Gotify: invalid configuration (surfaced once by the notification adapter): %v", err)
 		result.Success = false
 		result.Error = err
 		result.Duration = time.Since(start)
@@ -116,7 +116,7 @@ func (g *GotifyNotifier) Send(ctx context.Context, data *NotificationData) (*Not
 	body, err := json.Marshal(payload)
 	if err != nil {
 		err = fmt.Errorf("failed to marshal Gotify payload: %w", err)
-		g.logger.Warning("WARNING: %v", err)
+		g.logger.Debug("Gotify send failed (surfaced once by the notification adapter): %v", err)
 		result.Success = false
 		result.Error = err
 		result.Duration = time.Since(start)
@@ -126,7 +126,7 @@ func (g *GotifyNotifier) Send(ctx context.Context, data *NotificationData) (*Not
 	req, err := http.NewRequestWithContext(ctx, "POST", endpoint, bytes.NewReader(body))
 	if err != nil {
 		err = fmt.Errorf("failed to create Gotify request: %w", err)
-		g.logger.Warning("WARNING: %v", err)
+		g.logger.Debug("Gotify send failed (surfaced once by the notification adapter): %v", err)
 		result.Success = false
 		result.Error = err
 		result.Duration = time.Since(start)
@@ -139,7 +139,7 @@ func (g *GotifyNotifier) Send(ctx context.Context, data *NotificationData) (*Not
 		// The token is in the URL query, URL-encoded inside the *url.Error;
 		// RedactSecrets masks both the raw and URL-encoded forms.
 		err = fmt.Errorf("gotify request failed: %s", logging.RedactSecrets(err.Error(), g.config.Token))
-		g.logger.Warning("WARNING: %v", err)
+		g.logger.Debug("Gotify send failed (surfaced once by the notification adapter): %v", err)
 		result.Success = false
 		result.Error = err
 		result.Duration = time.Since(start)
@@ -152,7 +152,7 @@ func (g *GotifyNotifier) Send(ctx context.Context, data *NotificationData) (*Not
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		err = fmt.Errorf("gotify returned HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(respBody)))
-		g.logger.Warning("WARNING: %v", err)
+		g.logger.Debug("Gotify send failed (surfaced once by the notification adapter): %v", err)
 		result.Success = false
 		result.Error = err
 		result.Duration = time.Since(start)

@@ -471,8 +471,10 @@ func (w *WebhookNotifier) sendToEndpoint(ctx context.Context, endpoint config.We
 		}
 	}
 
-	// All retries exhausted
-	w.logger.Error("❌ Webhook '%s' failed after %d attempt(s): %v", endpoint.Name, maxRetries+1, lastErr)
+	// All retries exhausted. The per-endpoint failure is surfaced ONCE by the caller
+	// loop ("Endpoint '<name>' failed"); keep this inner line at Debug so a failed
+	// endpoint is not double-logged.
+	w.logger.Debug("Webhook '%s' failed after %d attempt(s): %v", endpoint.Name, maxRetries+1, lastErr)
 	return fmt.Errorf("webhook failed after %d attempts: %w", maxRetries+1, lastErr)
 }
 

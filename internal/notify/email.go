@@ -196,12 +196,12 @@ func (e *EmailNotifier) Send(ctx context.Context, data *NotificationData) (*Noti
 		e.logger.Debug("Email recipient not configured, attempting auto-detection...")
 		detectedRecipient, err := e.detectRecipient(ctx)
 		if err != nil {
-			e.logger.Warning("WARNING: Failed to detect email recipient: %v", err)
+			e.logger.Debug("Email: recipient auto-detection failed (surfaced by the adapter on a terminal skip): %v", err)
 			switch e.config.DeliveryMethod {
 			case EmailDeliveryPMF:
 				e.logger.Info("  Proceeding anyway because EMAIL_DELIVERY_METHOD=pmf routes via Proxmox Notifications; recipient is only used for the To: header")
 			default:
-				e.logger.Warning("WARNING: Email notification skipped because no valid recipient is available")
+				e.logger.Debug("Email: skipped, no valid recipient (surfaced once by the notification adapter)")
 				e.logger.Info("  Configure EMAIL_RECIPIENT or set an email address for root@pam inside Proxmox")
 				result.Success = false
 				result.Duration = time.Since(startTime)
@@ -220,7 +220,7 @@ func (e *EmailNotifier) Send(ctx context.Context, data *NotificationData) (*Noti
 	if recipient == "" {
 		switch e.config.DeliveryMethod {
 		case EmailDeliveryRelay, EmailDeliverySendmail:
-			e.logger.Warning("WARNING: Email recipient is empty after configuration/detection")
+			e.logger.Debug("Email: recipient empty after configuration/detection (surfaced once by the notification adapter)")
 			e.logger.Info("  Configure EMAIL_RECIPIENT or set an email address for root@pam inside Proxmox")
 			result.Success = false
 			result.Duration = time.Since(startTime)
@@ -246,9 +246,9 @@ func (e *EmailNotifier) Send(ctx context.Context, data *NotificationData) (*Noti
 			e.logger.Debug("Email fallback decision: stage=preflight reason=%s cause=%v", preflightFallbackReason, preflightFallbackCause)
 		} else {
 			if autoDetected {
-				e.logger.Warning("WARNING: Auto-detected recipient %s belongs to root and will be rejected", redactedRecipient)
+				e.logger.Debug("Email: auto-detected recipient %s belongs to root and will be rejected (surfaced once by the notification adapter)", redactedRecipient)
 			} else {
-				e.logger.Warning("WARNING: Configured email recipient %s belongs to root and will be rejected", redactedRecipient)
+				e.logger.Debug("Email: configured recipient %s belongs to root and will be rejected (surfaced once by the notification adapter)", redactedRecipient)
 			}
 			e.logger.Info("  Configure EMAIL_RECIPIENT with a non-root mailbox to enable notifications")
 			result.Success = false
@@ -273,7 +273,7 @@ func (e *EmailNotifier) Send(ctx context.Context, data *NotificationData) (*Noti
 		redactedRecipient := redactEmail(recipient)
 		switch e.config.DeliveryMethod {
 		case EmailDeliveryRelay, EmailDeliverySendmail:
-			e.logger.Warning("WARNING: Invalid email recipient format: %s", redactedRecipient)
+			e.logger.Debug("Email: invalid recipient format %s (surfaced once by the notification adapter)", redactedRecipient)
 			e.logger.Info("  Configure EMAIL_RECIPIENT with a valid email address")
 			result.Success = false
 			result.Duration = time.Since(startTime)
@@ -345,7 +345,7 @@ func (e *EmailNotifier) Send(ctx context.Context, data *NotificationData) (*Noti
 
 	if err != nil {
 		// Both primary and fallback failed (or no fallback configured)
-		e.logger.Warning("WARNING: Failed to send email notification: %v", err)
+		e.logger.Debug("Email: send failed (surfaced once by the notification adapter): %v", err)
 		result.Success = false
 		result.Error = err
 		return result, nil // Non-critical error
@@ -353,8 +353,10 @@ func (e *EmailNotifier) Send(ctx context.Context, data *NotificationData) (*Noti
 
 	// Success (either primary or fallback)
 	if result.UsedFallback {
-		// Fallback succeeded after relay failure
-		e.logger.Warning("⚠️ Email sent via fallback after primary delivery failure")
+		// Fallback succeeded after relay failure. The adapter emits the single
+		// "sent via fallback" WARNING for the channel; keep this at Debug so it is
+		// not double-reported.
+		e.logger.Debug("Email: sent via fallback after primary delivery failure")
 	}
 
 	// Log according to delivery method to avoid implying guaranteed inbox delivery
