@@ -67,7 +67,7 @@ func TestMaybeWarnWhatsnewUnseen(t *testing.T) {
 	})
 	logger, buf := captureLogger(t)
 
-	maybeWarnWhatsnew(logger, "/base", "0.30.0")
+	maybeWarnWhatsnew(logger, "/base", "0.30.0", false)
 
 	if got := logger.WarningCount(); got != 1 {
 		t.Fatalf("WarningCount = %d, want 1", got)
@@ -87,7 +87,7 @@ func TestMaybeWarnWhatsnewSeen(t *testing.T) {
 	})
 	logger, buf := captureLogger(t)
 
-	maybeWarnWhatsnew(logger, "/base", "0.30.0")
+	maybeWarnWhatsnew(logger, "/base", "0.30.0", false)
 
 	if got := logger.WarningCount(); got != 0 {
 		t.Fatalf("WarningCount = %d, want 0", got)
@@ -108,7 +108,7 @@ func TestMaybeWarnWhatsnewGateError(t *testing.T) {
 	})
 	logger, buf := captureLogger(t)
 
-	maybeWarnWhatsnew(logger, "/base", "0.30.0")
+	maybeWarnWhatsnew(logger, "/base", "0.30.0", false)
 
 	if got := logger.WarningCount(); got != 0 {
 		t.Fatalf("WarningCount = %d, want 0 (fail toward silence)", got)
@@ -129,7 +129,7 @@ func TestMaybeWarnWhatsnewCopy(t *testing.T) {
 	})
 	logger, _ := captureLogger(t)
 
-	maybeWarnWhatsnew(logger, "/base", "0.30.0")
+	maybeWarnWhatsnew(logger, "/base", "0.30.0", false)
 
 	got := singleEmittedWarning(t, logger)
 	if got != lockedWarnCopy {
@@ -146,7 +146,7 @@ func TestMaybeWarnWhatsnewNilLogger(t *testing.T) {
 		return true, "0.30.0", nil
 	})
 	// Must not panic.
-	maybeWarnWhatsnew(nil, "/base", "0.30.0")
+	maybeWarnWhatsnew(nil, "/base", "0.30.0", false)
 }
 
 // TestMaybeWarnWhatsnewDeliveredToEmailCategories exercises the REAL gate (no stub) and the
@@ -164,7 +164,7 @@ func TestMaybeWarnWhatsnewDeliveredToEmailCategories(t *testing.T) {
 		t.Fatalf("OpenLogFile: %v", err)
 	}
 
-	maybeWarnWhatsnew(logger, base, "v0.30.0") // real ShouldWarn; v-prefix exercises the v-strip
+	maybeWarnWhatsnew(logger, base, "v0.30.0", false) // real ShouldWarn; v-prefix exercises the v-strip
 
 	if err := logger.CloseLogFile(); err != nil {
 		t.Fatalf("CloseLogFile: %v", err)

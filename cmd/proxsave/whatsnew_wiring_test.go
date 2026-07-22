@@ -240,7 +240,7 @@ func TestMaybeWarnWhatsnewSelfHeal(t *testing.T) {
 		}
 		logger, buf := captureLogger(t)
 
-		maybeWarnWhatsnew(logger, base, "0.30.0") // real ShouldWarn + real MarkSeen
+		maybeWarnWhatsnew(logger, base, "0.30.0", false) // real ShouldWarn + real MarkSeen
 
 		if got := logger.WarningCount(); got != 0 {
 			t.Fatalf("WarningCount = %d on a corrupt flag, want 0", got)
@@ -272,7 +272,7 @@ func TestMaybeWarnWhatsnewSelfHeal(t *testing.T) {
 		}
 		logger, buf := captureLogger(t)
 
-		maybeWarnWhatsnew(logger, t.TempDir(), "0.30.0")
+		maybeWarnWhatsnew(logger, t.TempDir(), "0.30.0", false)
 
 		if saveCalls != 0 {
 			t.Fatalf("whatsnewSaveSeen called %d times on a non-parse error, want 0", saveCalls)
@@ -295,7 +295,7 @@ func TestMaybeWarnWhatsnewSelfHeal(t *testing.T) {
 		}
 		logger, buf := captureLogger(t)
 
-		maybeWarnWhatsnew(logger, base, "0.30.0") // real ShouldWarn + real MarkSeen
+		maybeWarnWhatsnew(logger, base, "0.30.0", false) // real ShouldWarn + real MarkSeen
 
 		if got := logger.WarningCount(); got != 0 {
 			t.Fatalf("WarningCount = %d on a non-semver flag, want 0", got)
@@ -327,7 +327,7 @@ func TestMaybeWarnWhatsnewSelfHeal(t *testing.T) {
 		}
 		logger, buf := captureLogger(t)
 
-		maybeWarnWhatsnew(logger, t.TempDir(), "0.30.0")
+		maybeWarnWhatsnew(logger, t.TempDir(), "0.30.0", false)
 
 		if saveCalls != 1 {
 			t.Fatalf("whatsnewSaveSeen calls = %d, want 1 (self-heal attempted)", saveCalls)
@@ -340,6 +340,31 @@ func TestMaybeWarnWhatsnewSelfHeal(t *testing.T) {
 		}
 		if strings.Contains(buf.String(), "self-healed") {
 			t.Fatalf("must not claim self-healed when the write failed\n%s", buf.String())
+		}
+	})
+
+	t.Run("dry-run skips the self-heal write", func(t *testing.T) {
+		stubWhatsnewSeams(t)
+		stubWhatsnewShouldWarn(t, func(baseDir, current string) (bool, string, error) {
+			return false, "", whatsnew.ErrStateParse // corrupt flag path
+		})
+		saveCalls := 0
+		whatsnewSaveSeen = func(baseDir, v string) error {
+			saveCalls++
+			return nil
+		}
+		logger, buf := captureLogger(t)
+
+		maybeWarnWhatsnew(logger, t.TempDir(), "0.30.0", true) // dry-run: must not mutate the FS
+
+		if saveCalls != 0 {
+			t.Fatalf("whatsnewSaveSeen called %d times under dry-run, want 0 (no FS mutation)", saveCalls)
+		}
+		if got := logger.WarningCount(); got != 0 {
+			t.Fatalf("WarningCount = %d, want 0", got)
+		}
+		if !strings.Contains(buf.String(), "skipped (dry-run)") {
+			t.Fatalf("missing dry-run skip DEBUG line\n%s", buf.String())
 		}
 	})
 }

@@ -78,7 +78,7 @@ func TestVERF01(t *testing.T) {
 			if err := logger.OpenLogFile(logPath); err != nil {
 				t.Fatalf("OpenLogFile: %v", err)
 			}
-			maybeWarnWhatsnew(logger, base, "0.30.0")
+			maybeWarnWhatsnew(logger, base, "0.30.0", false)
 			if err := logger.CloseLogFile(); err != nil {
 				t.Fatalf("CloseLogFile: %v", err)
 			}

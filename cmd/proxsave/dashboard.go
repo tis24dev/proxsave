@@ -82,7 +82,9 @@ func maybeShowWhatsnew(ctx context.Context, session *shell.Session, baseDir, too
 	show, body, err := whatsnewDecide(baseDir, toolVersion)
 	if err != nil {
 		if errors.Is(err, whatsnew.ErrStateParse) {
-			_ = whatsnewSaveSeen(baseDir, toolVersion) // best-effort self-heal, stay silent
+			// Best-effort self-heal, stay silent. No dry-run gate here (unlike maybeWarnWhatsnew):
+			// the dashboard is bare-invocation-only, so the --dry-run flag can never coexist with it.
+			_ = whatsnewSaveSeen(baseDir, toolVersion)
 		}
 		return
 	}

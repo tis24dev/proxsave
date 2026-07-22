@@ -22,10 +22,12 @@ var whatsnewShouldWarn = whatsnew.ShouldWarn
 // or a seen verdict it emits only DEBUG lines, never the WARNING. A corrupt seen-flag
 // (errors.Is(err, whatsnew.ErrStateParse)) self-heals best-effort: it quarantines the unreadable
 // file to .corrupt and re-seeds last_seen=current via whatsnewSaveSeen (a failed write logs a
-// distinct DEBUG line and leaves the flag for the next run), then stays silent; any non-parse
-// error still emits only the generic gate-error DEBUG line without writing. The DEBUG bracket
-// lines are bare-fact English; the single imperative lives only in the locked WARNING copy.
-func maybeWarnWhatsnew(logger *logging.Logger, baseDir, toolVersion string) {
+// distinct DEBUG line and leaves the flag for the next run), then stays silent; under --dry-run
+// (dryRun) even that self-heal write is skipped (logged) so the backup preflight never mutates
+// the filesystem. Any non-parse error emits only the generic gate-error DEBUG line without
+// writing. The DEBUG bracket lines are bare-fact English; the single imperative lives only in
+// the locked WARNING copy.
+func maybeWarnWhatsnew(logger *logging.Logger, baseDir, toolVersion string, dryRun bool) {
 	if logger == nil {
 		return
 	}
@@ -34,12 +36,20 @@ func maybeWarnWhatsnew(logger *logging.Logger, baseDir, toolVersion string) {
 	switch {
 	case err != nil:
 		if errors.Is(err, whatsnew.ErrStateParse) {
-			// Log the ACTUAL self-heal outcome: a best-effort MarkSeen can fail (read-only
-			// identity dir), and the DEBUG line must not claim a re-seed that did not happen.
-			if serr := whatsnewSaveSeen(baseDir, toolVersion); serr != nil {
-				logger.Debug("Release notes check: corrupt seen-flag self-heal write failed: %v", serr)
-			} else {
-				logger.Debug("Release notes check self-healed: corrupt seen-flag quarantined to .corrupt and re-seeded to the current version")
+			// Corrupt seen-flag self-heal. Under --dry-run the preflight must not mutate the
+			// filesystem, so skip the quarantine+re-seed write and just log; the flag heals on
+			// the next non-dry run. Otherwise log the ACTUAL outcome (a best-effort MarkSeen can
+			// fail on a read-only identity dir; the DEBUG line must not claim a re-seed that did
+			// not happen).
+			switch {
+			case dryRun:
+				logger.Debug("Release notes check: corrupt seen-flag self-heal skipped (dry-run)")
+			default:
+				if serr := whatsnewSaveSeen(baseDir, toolVersion); serr != nil {
+					logger.Debug("Release notes check: corrupt seen-flag self-heal write failed: %v", serr)
+				} else {
+					logger.Debug("Release notes check self-healed: corrupt seen-flag quarantined to .corrupt and re-seeded to the current version")
+				}
 			}
 		} else {
 			logger.Debug("Release notes check skipped: gate error: %v", err)

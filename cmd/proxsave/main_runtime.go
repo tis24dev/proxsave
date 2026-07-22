@@ -168,7 +168,14 @@ func bootstrapRuntime(ctx context.Context, args *cli.Args, bootstrap *logging.Bo
 	initializeRunLogFile(rt)
 	bootstrap.Flush(rt.logger)
 	rt.updateInfo = checkForUpdates(ctx, rt.logger, toolVersion)
-	maybeWarnWhatsnew(rt.logger, rt.cfg.BaseDir, toolVersion)
+	// Resolve the seen-flag base with the SAME executable-detected resolver the dashboard
+	// Screen 0 and the install seed use (detectedBaseDirOrFallback), not rt.cfg.BaseDir: the
+	// read here must match those writes on every host. cfg.BaseDir is derived from and equal to
+	// this today (config BASE_DIR is deprecated/ignored), but going through the config package
+	// couples the warn path to that invariant, so resolve it directly. Under --dry-run the
+	// self-heal write is skipped inside maybeWarnWhatsnew (rt.dryRun).
+	whatsnewBaseDir, _ := detectedBaseDirOrFallback()
+	maybeWarnWhatsnew(rt.logger, whatsnewBaseDir, toolVersion, rt.dryRun)
 	applyRunPermissions(rt)
 	initializeRunProfiling(rt)
 	rt.unprivilegedInfo = environment.DetectUnprivilegedContainer()
