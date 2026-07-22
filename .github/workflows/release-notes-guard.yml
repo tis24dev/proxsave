@@ -32,7 +32,7 @@ jobs:
           ref: ${{ github.event.pull_request.head.sha }}
           persist-credentials: false
 
-      - name: Resolve release tag from PR marker
+      - name: Classify PR
         id: gate
         shell: bash
         env:
@@ -44,26 +44,33 @@ jobs:
         run: |
           set -euo pipefail
 
-          # Trust gate: enforce ONLY on the internal release path (same-repo dev -> main).
-          # This check uses the GitHub context only (no PR code), and it runs BEFORE the
-          # PR's own release-policy.sh is sourced, so an untrusted fork can never execute
-          # head code here (mirrors why release-guard checks out the base policy).
+          # Trust gate: ONLY the internal release path (same-repo dev -> main) may run the
+          # PR's own Go code. This check uses the GitHub context alone (no PR code) and runs
+          # BEFORE the PR's release-policy.sh is sourced, so an untrusted fork can never
+          # execute head code here (this is why release-guard.yml checks out the base policy;
+          # this workflow needs head to test head, so it gates on same-repo first instead).
           if [[ "${PR_HEAD_REPO}" != "${REPOSITORY}" || "${PR_BASE_REF}" != "main" || "${PR_HEAD_REF}" != "dev" ]]; then
-            echo "::notice::Not an internal dev -> main release PR; skipping the release-notes gate."
+            echo "::notice::Not an internal dev -> main PR; skipping the what's-new guards."
+            echo "internal=false" >> "${GITHUB_OUTPUT}"
             echo "enforce=false" >> "${GITHUB_OUTPUT}"
             exit 0
           fi
 
+          # Same-repo dev -> main: head is trusted, so the registry lint runs on EVERY such
+          # PR (release or maintenance) as a second checkpoint at the release boundary.
+          echo "internal=true" >> "${GITHUB_OUTPUT}"
+
           if [[ ! -f .github/scripts/release-policy.sh ]]; then
-            echo "::notice::Release policy not present on head; skipping."
+            echo "::notice::Release policy not present on head; version-specific notes gate skipped."
             echo "enforce=false" >> "${GITHUB_OUTPUT}"
             exit 0
           fi
           source .github/scripts/release-policy.sh
 
-          # Maintenance dev -> main PRs carry no release marker; do not gate them.
+          # Maintenance dev -> main PRs carry no release marker: still lint the registry, but
+          # do not enforce the version-specific notes gate.
           if ! TAG="$(extract_pr_marker release-tag)"; then
-            echo "::notice::No release marker in PR body; maintenance PR, skipping the notes gate."
+            echo "::notice::No release marker; maintenance PR (registry still linted, version gate skipped)."
             echo "enforce=false" >> "${GITHUB_OUTPUT}"
             exit 0
           fi
@@ -74,13 +81,23 @@ jobs:
           echo "::notice::Enforcing what's-new notes for release ${TAG}."
 
       - name: Setup Go
-        if: steps.gate.outputs.enforce == 'true'
+        if: steps.gate.outputs.internal == 'true'
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
         with:
           go-version-file: go.mod
           cache: true
           cache-dependency-path: go.sum
 
+      # Dedicated, named home for the always-on registry lint at the release boundary, so it
+      # never depends only on another workflow happening to run `go test` on the package.
+      - name: Lint the what's-new registry
+        if: steps.gate.outputs.internal == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          go test ./internal/whatsnew/ -run TestRegistryWellFormed -v
+
+      # Version-specific gate: a FINAL release must carry a well-formed what's-new entry.
       - name: Require what's-new notes for the release
         if: steps.gate.outputs.enforce == 'true'
         shell: bash
