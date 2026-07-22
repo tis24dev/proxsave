@@ -163,6 +163,33 @@ func TestParseUpgradeAutoYes(t *testing.T) {
 	}
 }
 
+// TestParseUpgradeAutoYesWithLocalfile pins the ordering contract upgrade-beta.sh depends on:
+// `--upgrade y --localfile` must set BOTH UpgradeAutoYes (the `y` sits immediately after
+// --upgrade, where extractUpgradeAutoYesArgs looks) AND LocalFile. If the token were placed
+// after --localfile it would NOT be read as auto-yes, so this guards the script's finalize
+// invocation against a silent regression that would re-introduce the pty stall.
+func TestParseUpgradeAutoYesWithLocalfile(t *testing.T) {
+	args := parseWithArgs(t, []string{"--upgrade", "y", "--localfile"})
+	if !args.Upgrade {
+		t.Fatal("Upgrade must be set")
+	}
+	if !args.UpgradeAutoYes {
+		t.Fatal("`--upgrade y --localfile` must set UpgradeAutoYes (y must sit immediately after --upgrade)")
+	}
+	if !args.LocalFile {
+		t.Fatal("`--upgrade y --localfile` must set LocalFile")
+	}
+}
+
+func TestParseShowWhatsnew(t *testing.T) {
+	if args := parseWithArgs(t, nil); args.ShowWhatsnew {
+		t.Fatal("ShowWhatsnew must default to false")
+	}
+	if args := parseWithArgs(t, []string{"--show-whatsnew"}); !args.ShowWhatsnew {
+		t.Fatal("ShowWhatsnew should be true when --show-whatsnew is provided")
+	}
+}
+
 func parseWithArgs(t *testing.T, cliArgs []string) *Args {
 	t.Helper()
 	origCommandLine := flag.CommandLine

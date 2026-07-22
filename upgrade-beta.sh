@@ -368,12 +368,22 @@ fi
 ###############################################
 cd "${TARGET_DIR}"
 
+# Propagate the script's unattended -y to the finalize so the freshly installed binary does
+# NOT open the interactive what's-new screen under an allocated pty (ssh -tt, CI, Ansible):
+# proxsave treats a `y` token IMMEDIATELY AFTER --upgrade as auto-yes (non-interactive
+# intent), so it must sit between --upgrade and --localfile. Without -y (a human at a real
+# terminal) no token is added and the what's-new screen opens as intended after the upgrade.
+YES_TOKEN=""
+if [ "${ASSUME_YES}" -eq 1 ]; then
+  YES_TOKEN="y"
+fi
+
 echo "[+] Finalizing: ${TARGET_BIN} --upgrade --localfile"
 # The beta binary is already swapped in and verified to run. If the local finalize
 # fails (daemon migrate/restart, backup.env merge, permission fixes -- the parts
 # that touch the live system), surface the rollback path explicitly: set -e would
 # otherwise abort here and never print the footer that documents .prev.
-if ! "${TARGET_BIN}" --upgrade --localfile; then
+if ! "${TARGET_BIN}" --upgrade ${YES_TOKEN} --localfile; then
   echo "--------------------------------------------"
   echo "❌ Finalize failed. The beta binary IS installed but the local upgrade did"
   echo "   not complete (backup.env / daemon / permissions may be half-applied)."

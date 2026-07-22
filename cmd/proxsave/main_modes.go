@@ -178,6 +178,7 @@ func enabledModes(modes []incompatibleMode) []string {
 
 func dispatchPreRuntimeModes(ctx context.Context, args *cli.Args, bootstrap *logging.BootstrapLogger, toolVersion string) (int, bool) {
 	for _, handler := range []preRuntimeModeHandler{
+		runShowWhatsnewMode,
 		runUpgradeMode,
 		runNewKeyMode,
 		runDecryptOnlyMode,
@@ -216,6 +217,20 @@ func runUpgradeMode(ctx context.Context, args *cli.Args, bootstrap *logging.Boot
 	}
 	logging.DebugStepBootstrap(bootstrap, "main run", "mode=upgrade")
 	return runUpgrade(ctx, args, bootstrap), true
+}
+
+// runShowWhatsnewMode handles --show-whatsnew: open Screen 0 (what's new) once and exit.
+// This is the mode the upgrade flow re-invokes on the freshly installed binary so Screen 0
+// opens at the end of every interactive upgrade, rendered by the binary that carries the
+// notes. It never fails the process (Screen 0 is best-effort and self-heals), so it always
+// returns ExitSuccess.
+func runShowWhatsnewMode(ctx context.Context, args *cli.Args, bootstrap *logging.BootstrapLogger, toolVersion string) (int, bool) {
+	if !args.ShowWhatsnew {
+		return types.ExitSuccess.Int(), false
+	}
+	logging.DebugStepBootstrap(bootstrap, "main run", "mode=show-whatsnew")
+	showWhatsnewScreen(ctx, args, toolVersion)
+	return types.ExitSuccess.Int(), true
 }
 
 // modeStdoutInteractive gates the sibling entrypoints onto their clean-stdout CLI

@@ -83,7 +83,9 @@ func maybeShowWhatsnew(ctx context.Context, session *shell.Session, baseDir, too
 	if err != nil {
 		if errors.Is(err, whatsnew.ErrStateParse) {
 			// Best-effort self-heal, stay silent. No dry-run gate here (unlike maybeWarnWhatsnew):
-			// the dashboard is bare-invocation-only, so the --dry-run flag can never coexist with it.
+			// both callers guarantee no --dry-run before reaching this point -- the dashboard is
+			// bare-invocation-only, and showWhatsnewScreen (the --show-whatsnew entry) returns early
+			// under args.DryRun -- so the --dry-run flag can never coexist with this write.
 			_ = whatsnewSaveSeen(baseDir, toolVersion)
 		}
 		return
@@ -97,6 +99,54 @@ func maybeShowWhatsnew(ctx context.Context, session *shell.Session, baseDir, too
 	if err == nil {
 		_ = whatsnewSaveSeen(baseDir, toolVersion)
 	}
+}
+
+// showWhatsnewScreen runs ONLY Screen 0 (what's new) and returns, without the dashboard
+// menu. It is the body of the --show-whatsnew mode that the upgrade flow re-invokes on the
+// freshly installed binary, so Screen 0 opens at the end of every interactive upgrade,
+// rendered by the binary that actually carries the notes (each binary compiles in its own
+// notes registry, so the download path -- where the OLD binary drives finalize -- MUST
+// hand off to the installed binary to show the new release's notes). It builds its own
+// shell.Session (the upgrade has none) using the same testDashboardSession seam as the
+// dashboard, and delegates to maybeShowWhatsnew so the seen-flag gating, self-heal, timeout,
+// and write-only-on-continue behavior are identical and the seen-flag write dedupes against
+// the dashboard trigger. Interactive-gated so an automated/piped re-invocation is a no-op.
+func showWhatsnewScreen(ctx context.Context, args *cli.Args, toolVersion string) {
+	if !dashboardIsInteractive() {
+		return
+	}
+	// --dry-run must not mutate the filesystem: maybeShowWhatsnew's self-heal and
+	// continue-write both write the seen-flag, so a dry-run invocation of this (non-bare)
+	// entry point skips Screen 0 entirely. The upgrade flow never passes --dry-run to the
+	// re-invoked child; this guards a manual `proxsave --show-whatsnew --dry-run`.
+	if args != nil && args.DryRun {
+		return
+	}
+	var session *shell.Session
+	if s := testDashboardSession; s != nil {
+		session = s(ctx)
+	} else {
+		buildSig := buildSignature()
+		if strings.TrimSpace(buildSig) == "" {
+			buildSig = "n/a"
+		}
+		configPath := ""
+		if args != nil {
+			configPath = args.ConfigPath
+		}
+		session = shell.Start(ctx, shell.Config{
+			AppName:    "ProxSave",
+			Subtitle:   "Dashboard",
+			Version:    toolVersion,
+			ConfigPath: configPath,
+			BuildSig:   buildSig,
+			UseColor:   true,
+		})
+	}
+	defer func() { _ = session.Close() }()
+
+	baseDir, _ := detectedBaseDirOrFallback()
+	maybeShowWhatsnew(ctx, session, baseDir, toolVersion)
 }
 
 // dashboardBareInvocationCheck: only a completely bare `proxsave` (no flags

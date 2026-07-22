@@ -46,7 +46,12 @@ type Args struct {
 	UpgradeConfig     bool
 	UpgradeConfigDry  bool
 	UpgradeConfigJSON bool
-	CleanupGuards     bool
+	// ShowWhatsnew runs ONLY Screen 0 (what's new) once and exits. Internal plumbing:
+	// the upgrade flow re-invokes the freshly installed binary with this flag so Screen 0
+	// opens at the end of every upgrade, rendered by the binary that actually carries the
+	// notes (the notes registry is compiled into each binary).
+	ShowWhatsnew  bool
+	CleanupGuards bool
 	Backup            bool
 	Daemon            bool
 	DaemonSetup       bool
@@ -130,6 +135,9 @@ func Parse() *Args {
 
 	flag.BoolVar(&args.UpgradeConfigJSON, "upgrade-config-json", false,
 		"Upgrade configuration file using the embedded template and print JSON summary to stdout (for internal use by --upgrade)")
+
+	flag.BoolVar(&args.ShowWhatsnew, "show-whatsnew", false,
+		"Show the what's-new screen once and exit (for internal use by --upgrade)")
 
 	// Custom usage message
 	flag.Usage = func() {
