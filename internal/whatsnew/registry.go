@@ -68,17 +68,21 @@ var notes = []Note{
 	},
 }
 
-// LookupNotes returns the notes for versions in the half-open range (from, to],
-// ascending by parsed semver. The lower bound is exclusive (an equal from never
-// re-shows a version the user already saw) and the upper bound is inclusive. An
-// unparseable bound, an inverted range, or simply no matching entry yields an empty
-// slice, never an error and never the whole registry (fail toward silence).
+// LookupNotes returns the notes for versions in the half-open range (from, to], ascending by
+// parsed semver. Both bounds are FINALIZED (prerelease/metadata stripped) before filtering,
+// so a prerelease build sees its final line's notes: with to=0.30.0-beta6 the upper bound
+// becomes 0.30.0 and the 0.30.0 entry is IN range (notes are keyed to FINAL releases, so every
+// build of a line maps to that line's final notes). The lower bound is exclusive (an equal,
+// finalized, from never re-shows a version the user already saw on any build of that line) and
+// the upper bound is inclusive. An unparseable bound, an inverted range, or simply no matching
+// entry yields an empty slice, never an error and never the whole registry (fail toward silence).
 func LookupNotes(from, to string) []Note {
 	lo, errLo := semver.NewVersion(from)
 	hi, errHi := semver.NewVersion(to)
 	if errLo != nil || errHi != nil {
 		return nil
 	}
+	lo, hi = finalize(lo), finalize(hi)
 	var out []Note
 	for _, n := range notes {
 		v, err := semver.NewVersion(n.Version)

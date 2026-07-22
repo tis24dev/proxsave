@@ -66,6 +66,19 @@ func TestLookupNotesMultiEntryOrdering(t *testing.T) {
 	}
 }
 
+// TestLookupNotesBetaUpperBound (reviewer #1): a prerelease upper bound is finalized, so a
+// beta of a line returns that line's FINAL entry instead of an empty range; a beta lower bound
+// is finalized too, so a user who saw the line on an earlier beta does not re-see it.
+func TestLookupNotesBetaUpperBound(t *testing.T) {
+	got := LookupNotes("0.0.0", "0.30.0-beta6")
+	if len(got) != 1 || got[0].Version != "0.30.0" {
+		t.Fatalf("LookupNotes(0.0.0, 0.30.0-beta6) = %+v, want the 0.30.0 entry", got)
+	}
+	if got := LookupNotes("0.30.0-beta5", "0.30.0-beta6"); len(got) != 0 {
+		t.Fatalf("LookupNotes(0.30.0-beta5, 0.30.0-beta6) = %+v, want empty (same line already seen)", got)
+	}
+}
+
 // TestRenderBodyEmptyState: RenderBody(current, nil) contains the version header, the
 // change-list header, and the UI-SPEC empty-state line.
 func TestRenderBodyEmptyState(t *testing.T) {

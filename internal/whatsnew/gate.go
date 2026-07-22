@@ -53,16 +53,6 @@ func finalize(v *semver.Version) *semver.Version {
 	return semver.New(v.Major(), v.Minor(), v.Patch(), "", "")
 }
 
-// finalizedString parses s and returns its finalized (X.Y.Z) form; an unparseable string is
-// passed through unchanged so a downstream semver parse still fails toward silence.
-func finalizedString(s string) string {
-	v, err := semver.NewVersion(s)
-	if err != nil {
-		return s
-	}
-	return finalize(v).String()
-}
-
 // IsUnseen reports whether the installed version carries notes the user has not
 // acknowledged. It fails toward SILENCE: an unparseable current version returns
 // (false, err), never (true, _). An absent flag (present=false) is "unseen" (STATE-04,
@@ -90,11 +80,10 @@ func IsUnseen(current, lastSeen string, present bool) (bool, error) {
 // and semver gates, and (only when unseen) composes the notes body. It returns
 // (show, body, err). Every error path and every not-unseen path returns show=false with
 // an empty body, so the feature can only ever fail toward silence, never toward
-// "show everything". The notes range is (finalized from, finalized current] where from is
-// "0.0.0" for an absent flag (a real upgrader catches up from the beginning) or the last-seen
-// version otherwise; both bounds are finalized so a prerelease build sees its final line's
-// notes (a beta of 0.30.0 gets the 0.30.0 entry). RenderBody's header still shows the RAW
-// running build, so a beta honestly reads "ProxSave 0.30.0-beta6" above the 0.30.0 notes.
+// "show everything". The notes range is (from, current], which LookupNotes finalizes (strips
+// prerelease/metadata) so a prerelease build sees its final line's notes (a beta of 0.30.0
+// gets the 0.30.0 entry). RenderBody's header still shows the RAW running build, so a beta
+// honestly reads "ProxSave 0.30.0-beta6" above the 0.30.0 notes.
 func Decide(baseDir, current string) (show bool, body string, err error) {
 	if IsDevBuild(current) {
 		return false, "", nil
@@ -111,7 +100,7 @@ func Decide(baseDir, current string) (show bool, body string, err error) {
 	if present {
 		from = state.LastSeenNotesVersion
 	}
-	return true, RenderBody(current, LookupNotes(finalizedString(from), finalizedString(current))), nil
+	return true, RenderBody(current, LookupNotes(from, current)), nil
 }
 
 // ShouldWarn is the non-interactive counterpart of Decide, used by the run-log nudge on
