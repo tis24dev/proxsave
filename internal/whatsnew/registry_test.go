@@ -124,7 +124,9 @@ func TestRenderBodyCTA(t *testing.T) {
 	if !strings.Contains(body, "- a highlight\n") {
 		t.Fatalf("missing bulleted highlight\n%s", body)
 	}
-	if !strings.Contains(body, "\nRecommended: do the thing\n") {
+	// The double "\n\n" pins the BLANK LINE before the CTA title (a single "\n" would be
+	// satisfied by the preceding bullet's own newline, letting a dropped separator survive).
+	if !strings.Contains(body, "\n\nRecommended: do the thing\n") {
 		t.Fatalf("CTA title not rendered as an unbulleted header under a blank line\n%s", body)
 	}
 	if !strings.Contains(body, "- open the menu\n") {
@@ -132,6 +134,19 @@ func TestRenderBodyCTA(t *testing.T) {
 	}
 	if strings.Contains(body, "- Recommended: do the thing") {
 		t.Fatalf("CTA title must not be bulleted\n%s", body)
+	}
+}
+
+// TestRenderBodyMultiNoteSeparator pins the blank line between consecutive notes in a
+// catch-up, so a later note's highlights never glue directly under the prior note's CTA
+// bullets (which would misattribute them to the CTA header).
+func TestRenderBodyMultiNoteSeparator(t *testing.T) {
+	body := RenderBody("0.31.0", []Note{
+		{Version: "0.30.0", Lines: []string{"first"}, CTATitle: "Recommended: x", CTALines: []string{"do x"}},
+		{Version: "0.31.0", Lines: []string{"second"}},
+	})
+	if !strings.Contains(body, "- do x\n\n- second\n") {
+		t.Fatalf("consecutive notes not separated by a blank line\n---body---\n%s", body)
 	}
 }
 

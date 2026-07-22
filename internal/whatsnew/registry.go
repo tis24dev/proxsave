@@ -33,7 +33,7 @@ var notes = []Note{
 		},
 		CTATitle: "Recommended: enable backup monitoring",
 		CTALines: []string{
-			"Open proxsave and choose \"Backup monitoring\" to get alerts if a backup stops running",
+			"Run proxsave --install and enable Backup monitoring (daemon scheduler) for alerts when a backup stops running",
 		},
 	},
 }
@@ -82,7 +82,10 @@ func RenderBody(current string, notes []Note) string {
 		b.WriteString("This version has updates. See the changelog for details.\n")
 		return b.String()
 	}
-	for _, n := range notes {
+	for i, n := range notes {
+		if i > 0 {
+			b.WriteString("\n") // blank line between consecutive notes in a multi-version catch-up
+		}
 		for _, line := range n.Lines {
 			b.WriteString("- " + line + "\n")
 		}
