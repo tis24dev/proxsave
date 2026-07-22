@@ -45,13 +45,32 @@ func IsDevBuild(current string) bool {
 	return false
 }
 
+// finalize returns v with its prerelease and build metadata stripped, so every build of an
+// X.Y.Z line (0.30.0-beta6, 0.30.0+meta, 0.30.0) collapses to the same finalized X.Y.Z. The
+// what's-new feature keys notes to FINAL releases, so a beta must see (and acknowledge) its
+// line's notes exactly once across the whole line, not empty on the beta then again on the final.
+func finalize(v *semver.Version) *semver.Version {
+	return semver.New(v.Major(), v.Minor(), v.Patch(), "", "")
+}
+
+// finalizedString parses s and returns its finalized (X.Y.Z) form; an unparseable string is
+// passed through unchanged so a downstream semver parse still fails toward silence.
+func finalizedString(s string) string {
+	v, err := semver.NewVersion(s)
+	if err != nil {
+		return s
+	}
+	return finalize(v).String()
+}
+
 // IsUnseen reports whether the installed version carries notes the user has not
 // acknowledged. It fails toward SILENCE: an unparseable current version returns
 // (false, err), never (true, _). An absent flag (present=false) is "unseen" (STATE-04,
 // the real-upgrader case). A parse error on lastSeen while the flag is present also
-// returns (false, err) so a corrupt flag stays silent until Phase 3 self-heals it.
-// Masterminds/semver tolerates a missing "v" on either side and orders prereleases
-// correctly (0.30.0-beta5 < 0.30.0).
+// returns (false, err) so a corrupt flag stays silent. The comparison is on the FINALIZED
+// versions (prerelease/metadata stripped), so a user who acknowledged a line on any beta is
+// not re-shown on the final: 0.30.0-beta6 and 0.30.0 are the same notes line.
+// Masterminds/semver tolerates a missing "v" on either side.
 func IsUnseen(current, lastSeen string, present bool) (bool, error) {
 	cur, err := semver.NewVersion(current)
 	if err != nil {
@@ -62,18 +81,20 @@ func IsUnseen(current, lastSeen string, present bool) (bool, error) {
 	}
 	last, err := semver.NewVersion(lastSeen)
 	if err != nil {
-		return false, err // corrupt last-seen: fail toward silence (Phase 3 self-heals)
+		return false, err // corrupt last-seen: fail toward silence
 	}
-	return cur.GreaterThan(last), nil
+	return finalize(cur).GreaterThan(finalize(last)), nil
 }
 
 // Decide is the single dashboard entry point: it loads the flag, applies the dev-build
 // and semver gates, and (only when unseen) composes the notes body. It returns
 // (show, body, err). Every error path and every not-unseen path returns show=false with
 // an empty body, so the feature can only ever fail toward silence, never toward
-// "show everything". The notes range is (from, current] where from is "0.0.0" for an
-// absent flag (a real upgrader catches up from the beginning) or the last-seen version
-// otherwise.
+// "show everything". The notes range is (finalized from, finalized current] where from is
+// "0.0.0" for an absent flag (a real upgrader catches up from the beginning) or the last-seen
+// version otherwise; both bounds are finalized so a prerelease build sees its final line's
+// notes (a beta of 0.30.0 gets the 0.30.0 entry). RenderBody's header still shows the RAW
+// running build, so a beta honestly reads "ProxSave 0.30.0-beta6" above the 0.30.0 notes.
 func Decide(baseDir, current string) (show bool, body string, err error) {
 	if IsDevBuild(current) {
 		return false, "", nil
@@ -90,7 +111,7 @@ func Decide(baseDir, current string) (show bool, body string, err error) {
 	if present {
 		from = state.LastSeenNotesVersion
 	}
-	return true, RenderBody(current, LookupNotes(from, current)), nil
+	return true, RenderBody(current, LookupNotes(finalizedString(from), finalizedString(current))), nil
 }
 
 // ShouldWarn is the non-interactive counterpart of Decide, used by the run-log nudge on

@@ -7,9 +7,10 @@ import (
 	"testing"
 )
 
-// TestIsUnseen covers the semver gate matrix: upgrade fires, equal/downgrade do not,
-// prerelease ordering is correct, a missing v is tolerated, an absent flag is unseen,
-// and every unparseable input fails toward silence (false + non-nil error).
+// TestIsUnseen covers the semver gate matrix: upgrade fires, equal/downgrade do not, a beta
+// and the final of the same X.Y.Z line collapse to one notes line (finalized compare), a
+// missing v is tolerated, an absent flag is unseen, and every unparseable input fails toward
+// silence (false + non-nil error).
 func TestIsUnseen(t *testing.T) {
 	cases := []struct {
 		name     string
@@ -22,8 +23,8 @@ func TestIsUnseen(t *testing.T) {
 		{"newer fires", "0.30.0", "0.29.0", true, true, false},
 		{"equal does not fire", "0.30.0", "0.30.0", true, false, false},
 		{"downgrade does not fire", "0.29.0", "0.30.0", true, false, false},
-		{"prerelease before release is unseen", "0.30.0", "0.30.0-beta5", true, true, false},
-		{"release after prerelease already seen", "0.30.0-beta5", "0.30.0", true, false, false},
+		{"final stays seen after acknowledging a beta of the same line", "0.30.0", "0.30.0-beta5", true, false, false},
+		{"beta stays seen after acknowledging the final of the same line", "0.30.0-beta5", "0.30.0", true, false, false},
 		{"missing v tolerated", "0.30.0", "v0.29.0", true, true, false},
 		{"absent flag is unseen", "0.30.0", "", false, true, false},
 		{"unparseable current fails toward silence", "not-a-version", "0.29.0", true, false, true},
@@ -301,5 +302,31 @@ func TestShouldWarnDowngradeSilent(t *testing.T) {
 	}
 	if show || ver != "" {
 		t.Fatalf("ShouldWarn downgrade = (%v, %q), want (false, \"\")", show, ver)
+	}
+}
+
+// TestDecideBetaShowsFinalNotes (reviewer finding #1): a prerelease build of a line shows that
+// line's FINAL notes (not the empty-state), and after acknowledging on the beta the final
+// upgrade is silent -- the line's notes are seen exactly once across the whole X.Y.Z line.
+func TestDecideBetaShowsFinalNotes(t *testing.T) {
+	base := t.TempDir()
+	show, body, err := Decide(base, "0.30.0-beta6")
+	if err != nil || !show {
+		t.Fatalf("Decide(beta) = (%v, _, %v), want show=true, nil err", show, err)
+	}
+	if !strings.Contains(body, "\n- ") {
+		t.Fatalf("beta body has no bulleted highlight (rendered empty-state?)\n%s", body)
+	}
+	if strings.Contains(body, "This version has updates. See the changelog") {
+		t.Fatalf("beta rendered the empty-state instead of the final notes\n%s", body)
+	}
+	if err := MarkSeen(base, "0.30.0-beta6"); err != nil {
+		t.Fatalf("MarkSeen: %v", err)
+	}
+	if show, _, err := Decide(base, "0.30.0"); show || err != nil {
+		t.Fatalf("Decide(final after beta ack) = (%v, _, %v), want (false, _, nil)", show, err)
+	}
+	if show, _, err := ShouldWarn(base, "0.30.0"); show || err != nil {
+		t.Fatalf("ShouldWarn(final after beta ack) = (%v, _, %v), want (false, _, nil)", show, err)
 	}
 }
