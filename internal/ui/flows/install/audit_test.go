@@ -52,6 +52,31 @@ func TestAuditResultPromptPreservesNewline(t *testing.T) {
 	}
 }
 
+// TestDisabledComponentsSummaryColumn pins the UPDATED explanation as a header line followed
+// by ONE "- KEY" per line, so a long disabled-component list renders as a readable column
+// instead of a single truncated comma-joined line. It also guards against a regression to the
+// old ", "-joined format.
+func TestDisabledComponentsSummaryColumn(t *testing.T) {
+	keys := []string{"BACKUP_CLUSTER_CONFIG", "BACKUP_DATASTORE_CONFIGS", "BACKUP_PBS_NODE_CONFIG"}
+	got := disabledComponentsSummary(keys)
+
+	if !strings.HasPrefix(got, "Disabled 3 component(s):") {
+		t.Fatalf("summary must start with the count header, got %q", got)
+	}
+	for _, k := range keys {
+		if !strings.Contains(got, "\n- "+k) {
+			t.Fatalf("key %q must be on its own bulleted line, got %q", k, got)
+		}
+	}
+	if strings.Contains(got, ", ") {
+		t.Fatalf("keys must not be comma-joined on one line (column layout), got %q", got)
+	}
+	// One header line + one line per key.
+	if n := strings.Count(got, "\n"); n != len(keys) {
+		t.Fatalf("expected %d newlines (one per key), got %d in %q", len(keys), n, got)
+	}
+}
+
 // TestRunPostInstallAuditApplyFailure proves an ApplyAuditDisables write failure is now
 // recorded on the result (ApplyErr set, no keys applied), so the caller can distinguish it
 // from the benign "nothing selected" no-op instead of logging both as a clean run. The
