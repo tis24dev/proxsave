@@ -89,8 +89,17 @@ func installDashboardSessionSeam(t *testing.T) *newkeyUIDriver {
 	testDashboardSession = func(ctx context.Context) *shell.Session {
 		return newAgeSetupSession(ctx, shell.Config{AppName: "ProxSave", Subtitle: "Dashboard"})
 	}
+	// Neutralize the Screen 0 (what's new) hook for the menu-driving tests: these
+	// drive keys for the MENU, never for Screen 0, so a real Decide (which reports
+	// unseen under the test base) would block the flow on input the driver never
+	// sends. Stubbing Decide to "nothing to show" keeps maybeRunDashboard's path
+	// byte-identical to before this hook existed. The Screen 0 behavior itself is
+	// covered by whatsnew_wiring_test.go.
+	origDecide := whatsnewDecide
+	whatsnewDecide = func(baseDir, current string) (bool, string, error) { return false, "", nil }
 	t.Cleanup(func() {
 		testDashboardSession = orig
+		whatsnewDecide = origDecide
 		releaseDashboardLeftovers()
 	})
 	return d

@@ -4,6 +4,9 @@
 /AGENTS.md
 /CLAUDE.md
 
+# GSD workspace — all Claude/GSD planning projects, local-only
+/gsd/
+
 # Build artifacts — compiled binary (root build) and Makefile output dir
 /proxsave
 /build/

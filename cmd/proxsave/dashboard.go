@@ -23,8 +23,10 @@ import (
 	"github.com/tis24dev/proxsave/internal/ui/components"
 	flowinstall "github.com/tis24dev/proxsave/internal/ui/flows/install"
 	"github.com/tis24dev/proxsave/internal/ui/flows/menu"
+	whatsnewflow "github.com/tis24dev/proxsave/internal/ui/flows/whatsnew"
 	"github.com/tis24dev/proxsave/internal/ui/shell"
 	"github.com/tis24dev/proxsave/internal/ui/theme"
+	whatsnew "github.com/tis24dev/proxsave/internal/whatsnew"
 )
 
 // dashboardIdleTimeout bounds how long the dashboard waits for a choice.
@@ -41,6 +43,61 @@ var (
 	dashboardIsBareInvocation = dashboardBareInvocationCheck
 	dashboardIsInteractive    = isTerminalInteractive
 )
+
+// Screen 0 (what's new) seams: package vars mirror the dashboard seam idiom
+// (dashboardIsBareInvocation/readBuildInfo) so the mandatory continue-only-write
+// test can drive the Decide/Run/MarkSeen outcomes without a real TTY or disk. The
+// same whatsnewSaveSeen var is reused by the install seed in main_modes.go, so the
+// continue-write and the seed share one spyable write path (open question A1).
+var (
+	whatsnewDecide   = whatsnew.Decide
+	whatsnewRun      = whatsnewflow.Run
+	whatsnewSaveSeen = whatsnew.MarkSeen
+)
+
+// whatsnewScreenTimeout is the TOTAL cap on Screen 0 (SCRN-04): a single
+// context.WithTimeout around the flow run, NOT an idle-reset. On expiry the run's context
+// cancels, whatsnewRun returns a non-nil deadline error, and the seen-flag is left
+// untouched (the write sits inside `if err == nil`), so the fallback warning keeps firing
+// on the next non-interactive run. Dedicated to Screen 0 and deliberately distinct from
+// the shared withDashboardIdle/dashboardIdleTimeout used by the menu loop and sub-screens.
+const whatsnewScreenTimeout = 10 * time.Minute
+
+// maybeShowWhatsnew shows Screen 0 once, before the first menu.Run, when
+// whatsnewDecide reports the installed version carries unseen notes. It fails toward
+// SILENCE: a not-unseen verdict returns without touching the flag (mirroring the
+// diagnostics screens that swallow errors so a broken state file never aborts or hangs
+// the dashboard). A corrupt seen-flag (errors.Is(err, whatsnew.ErrStateParse))
+// self-heals best-effort: it quarantines the unreadable file to .corrupt and re-seeds
+// last_seen=current via whatsnewSaveSeen (the write is best-effort and silent; a failure
+// just leaves the flag for the next run), then stays silent, so the next run reads a
+// clean flag instead of nagging forever; any non-parse Decide error still returns
+// WITHOUT writing, so a real IO/permission fault is never masked. The flow is bounded by
+// the dedicated total whatsnewScreenTimeout so an accidental pty cannot hang it, and the
+// seen-flag is cleared ONLY on an explicit continue (err == nil): a timeout
+// (context.DeadlineExceeded) or Esc (shell.ErrAborted) is a non-nil error and must leave
+// the flag untouched, so the write sits inside `if err == nil`, never in a
+// defer/teardown (SCRN-03, SCRN-04, Pitfall 9).
+func maybeShowWhatsnew(ctx context.Context, session *shell.Session, baseDir, toolVersion string) {
+	show, body, err := whatsnewDecide(baseDir, toolVersion)
+	if err != nil {
+		if errors.Is(err, whatsnew.ErrStateParse) {
+			// Best-effort self-heal, stay silent. No dry-run gate here (unlike maybeWarnWhatsnew):
+			// the dashboard is bare-invocation-only, so the --dry-run flag can never coexist with it.
+			_ = whatsnewSaveSeen(baseDir, toolVersion)
+		}
+		return
+	}
+	if !show {
+		return
+	}
+	wnCtx, cancel := context.WithTimeout(ctx, whatsnewScreenTimeout)
+	defer cancel()
+	err = whatsnewRun(wnCtx, session, body)
+	if err == nil {
+		_ = whatsnewSaveSeen(baseDir, toolVersion)
+	}
+}
 
 // dashboardBareInvocationCheck: only a completely bare `proxsave` (no flags
 // at all) is eligible for the dashboard.
@@ -94,6 +151,15 @@ func maybeRunDashboard(ctx context.Context, args *cli.Args, bootstrap *logging.B
 			_ = session.Close()
 		}
 	}()
+
+	// Screen 0 (what's new): shown once, before the first menu.Run. No extra TTY or
+	// bare-invocation check is needed here -- reaching this line already guarantees
+	// bare + interactive (the early return at the top of maybeRunDashboard), so
+	// Screen 0 stays bare-interactive-only (SCRN-02/05). The base is resolved via the
+	// same detectedBaseDirOrFallback the install seed uses, so write-path == read-path
+	// (open question A1).
+	baseDir, _ := detectedBaseDirOrFallback()
+	maybeShowWhatsnew(ctx, session, baseDir, toolVersion)
 
 	for {
 		// Idle timeout: a pty-allocating wrapper (script, tmux, ssh -tt) that
