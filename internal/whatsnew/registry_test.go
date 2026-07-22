@@ -111,38 +111,35 @@ func TestRenderBodyGlyphFree(t *testing.T) {
 	}
 }
 
-// TestRenderBodyCTA verifies the optional call-to-action block renders as an UNBULLETED
-// title under a blank line with its detail lines bulleted (uses a synthetic note so it does
-// not couple to the shipped 0.30 copy).
-func TestRenderBodyCTA(t *testing.T) {
+// TestRenderBodyActions verifies the optional actions section renders under the FIXED header
+// "What you need to do now:" (unbulleted, under a blank line) with its action lines bulleted
+// (uses a synthetic note so it does not couple to the shipped 0.30 copy).
+func TestRenderBodyActions(t *testing.T) {
 	body := RenderBody("0.30.0", []Note{{
-		Version:  "0.30.0",
-		Lines:    []string{"a highlight"},
-		CTATitle: "Recommended: do the thing",
-		CTALines: []string{"open the menu"},
+		Version: "0.30.0",
+		Lines:   []string{"a highlight"},
+		Actions: []string{"do the thing"},
 	}})
 	if !strings.Contains(body, "- a highlight\n") {
 		t.Fatalf("missing bulleted highlight\n%s", body)
 	}
-	// The double "\n\n" pins the BLANK LINE before the CTA title (a single "\n" would be
-	// satisfied by the preceding bullet's own newline, letting a dropped separator survive).
-	if !strings.Contains(body, "\n\nRecommended: do the thing\n") {
-		t.Fatalf("CTA title not rendered as an unbulleted header under a blank line\n%s", body)
+	// The double "\n\n" pins the BLANK LINE before the FIXED actions header (a single "\n"
+	// would be satisfied by the preceding bullet's own newline, letting a dropped separator
+	// survive); the fixed header text itself is pinned here too.
+	if !strings.Contains(body, "\n\nWhat you need to do now:\n- do the thing\n") {
+		t.Fatalf("actions section not rendered with the fixed header + blank line\n%s", body)
 	}
-	if !strings.Contains(body, "- open the menu\n") {
-		t.Fatalf("CTA detail not bulleted\n%s", body)
-	}
-	if strings.Contains(body, "- Recommended: do the thing") {
-		t.Fatalf("CTA title must not be bulleted\n%s", body)
+	if strings.Contains(body, "- What you need to do now:") {
+		t.Fatalf("actions header must not be bulleted\n%s", body)
 	}
 }
 
 // TestRenderBodyMultiNoteSeparator pins the blank line between consecutive notes in a
-// catch-up, so a later note's highlights never glue directly under the prior note's CTA
-// bullets (which would misattribute them to the CTA header).
+// catch-up, so a later note's highlights never glue directly under the prior note's actions
+// bullets (which would misattribute them to the actions header).
 func TestRenderBodyMultiNoteSeparator(t *testing.T) {
 	body := RenderBody("0.31.0", []Note{
-		{Version: "0.30.0", Lines: []string{"first"}, CTATitle: "Recommended: x", CTALines: []string{"do x"}},
+		{Version: "0.30.0", Lines: []string{"first"}, Actions: []string{"do x"}},
 		{Version: "0.31.0", Lines: []string{"second"}},
 	})
 	if !strings.Contains(body, "- do x\n\n- second\n") {
@@ -171,14 +168,10 @@ func assertCleanNoteLine(t *testing.T, version, line string) {
 	}
 }
 
-// noteCopyLines flattens every human-facing string of a Note (highlights + CTA title +
-// CTA details) for the content-rule checks.
+// noteCopyLines flattens every human-facing string of a Note (highlights + actions) for the
+// content-rule checks.
 func noteCopyLines(n Note) []string {
-	all := append([]string{}, n.Lines...)
-	if n.CTATitle != "" {
-		all = append(all, n.CTATitle)
-	}
-	return append(all, n.CTALines...)
+	return append(append([]string{}, n.Lines...), n.Actions...)
 }
 
 // TestRegistryWellFormed is the ALWAYS-ON lint that runs on every PR (a plain unit test):
@@ -210,9 +203,6 @@ func TestRegistryWellFormed(t *testing.T) {
 		}
 		if len(n.Lines) > 8 {
 			t.Fatalf("notes[%d] (%s) has %d highlights; keep Screen 0 terse (<=8)", i, n.Version, len(n.Lines))
-		}
-		if n.CTATitle == "" && len(n.CTALines) > 0 {
-			t.Fatalf("notes[%d] (%s) has CTA lines without a CTATitle", i, n.Version)
 		}
 		for _, line := range noteCopyLines(n) {
 			assertCleanNoteLine(t, n.Version, line)

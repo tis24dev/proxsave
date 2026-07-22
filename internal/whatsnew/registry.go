@@ -7,33 +7,63 @@ import (
 	"github.com/Masterminds/semver/v3"
 )
 
-// Note is one release's what's-new entry: a semver key, its highlight body lines, and an
-// optional call-to-action block (a title plus its own detail lines). All copy is plain
-// terse English (no em-dash, no en-dash, no emoji); the Pager sanitizes and wraps it, so
-// it is never hand-styled here and carries no glyphs.
+// Fixed Screen 0 section headers. The template is fixed: these headers are always the same
+// across every release; a Note never carries its own title, only the content under them.
+const (
+	headerChanges = "What changed in this version:"
+	headerActions = "What you need to do now:"
+)
+
+// Note is one release's what's-new entry: a semver key, its highlight lines, and an optional
+// list of actions the user must still take. All copy is plain terse English (no em-dash,
+// en-dash, or emoji); the Pager sanitizes and wraps it, so it is never hand-styled here and
+// carries no glyphs. The two section HEADERS are fixed (see the consts above), never
+// per-release.
 type Note struct {
-	Version  string
-	Lines    []string // highlights, one plain "- " bullet each
-	CTATitle string   // optional call-to-action header, rendered under a blank line
-	CTALines []string // optional call-to-action detail bullets, shown under CTATitle
+	Version string
+	Lines   []string // highlights, one plain "- " bullet each (under headerChanges)
+	Actions []string // optional user TODOs, one "- " bullet each (under headerActions)
 }
 
-// notes is the compiled-in, version-keyed registry. Keep entries semver-keyed and
-// append-only; a release PR is gated (release-guard) on the released version carrying a
-// real, well-formed entry here. A white-box test may temporarily swap this var to
-// exercise the multi-version catch-up ordering.
+// HOW TO ADD A RELEASE ENTRY (Screen 0 population guide)
+//
+// Screen 0 has a FIXED template with FIXED section headers (see headerChanges/headerActions
+// and RenderBody). Never invent a per-release title; only fill the two content slices:
+//
+//	Lines   -> shown under "What changed in this version:"
+//	Actions -> shown under "What you need to do now:" (the whole section is omitted when empty)
+//
+// Append one Note per FINAL release only (no beta/rc: the release gate is final-only and
+// betas inherit the final's notes). Keep this slice append-only and strictly ascending by
+// semver key; the release CI (release-notes-guard) BLOCKS a final release whose version has
+// no well-formed entry here, so add the entry in the release PR.
+//
+// Lines: ONLY genuinely new user features, or concrete changes to how the user uses the
+// tool. State the capability from the user's point of view, not the technical detail (e.g.
+// "backup monitoring is new", not "monitoring decoupled from Telegram"). One change per line,
+// 1 to 8 terse bullets. NOT: this what's-new screen itself or other meta, internal refactors
+// or security hardening, UX polish, or anything that already existed in an earlier release.
+//
+// Actions: only a REAL step the user must take. "On by default" does NOT mean nothing to do:
+// if a default-on feature still needs configuring, that configuration goes here. Always point
+// to the DASHBOARD path, never a CLI command when a dashboard path exists, and VERIFY every
+// menu label and navigation step against the current code before writing it (labels drift; a
+// wrong or nonexistent label is a bug). Omit Actions entirely when there is genuinely nothing
+// the user must do.
+//
+// Style (enforced by TestRegistryWellFormed, blocking): pure ASCII (no em-dash, en-dash, or
+// emoji), no "placeholder", each line at most 120 chars, non-blank, English, terse.
 var notes = []Note{
 	{
 		Version: "0.30.0",
 		Lines: []string{
-			"New: a one-time what's new screen after each upgrade (you are looking at it)",
-			"Host backup mode for Proxmox HA and LXC clusters",
-			"Safer confined file reads (safefs), hardened path handling",
-			"Clearer Telegram pairing status with distinct states and errors",
+			"New interactive dashboard to run backups, restores, checks, and setup",
+			"Scheduled backups now run from a resident daemon (replaces cron, reversible), on by default",
+			"Backup monitoring (healthchecks) is on by default and alerts you if a backup stops running",
+			"Host backup mode: back up a Proxmox host from an LXC or HA-LXC appliance",
 		},
-		CTATitle: "Recommended: enable backup monitoring",
-		CTALines: []string{
-			"Run proxsave --install and enable Backup monitoring (daemon scheduler) for alerts when a backup stops running",
+		Actions: []string{
+			"In the dashboard, open Healthchecks and follow the portal link to set a password and alert channels",
 		},
 	},
 }
@@ -67,17 +97,17 @@ func LookupNotes(from, to string) []Note {
 	return out
 }
 
-// RenderBody builds the plain, \n-separated Pager body. It is NOT hand-styled or
-// colored (the Pager sanitizes and wraps it): the first line is the version header
-// "ProxSave <current>", a blank line, then the change-list header, then either the
-// UI-SPEC empty-state line (so continue is always reachable and the flag can clear) or,
-// per note, each highlight line prefixed with a plain ASCII "- " bullet followed by an
-// optional call-to-action block (a blank line, the CTATitle, then its "- " bullets). No
-// theme import, no glyph constant; the pure state tier stays stdlib-plus-semver only.
+// RenderBody builds the plain, \n-separated Pager body. It is NOT hand-styled or colored
+// (the Pager sanitizes and wraps it): the version header "ProxSave <current>", a blank line,
+// the fixed changes header, then either the UI-SPEC empty-state line (so continue is always
+// reachable and the flag can clear) or, per note, each highlight as a plain ASCII "- " bullet
+// followed, when the note has actions, by a blank line, the fixed actions header, and its
+// "- " bullets. Section headers are the fixed consts, never per-release. No theme import, no
+// glyph constant; the pure state tier stays stdlib-plus-semver only.
 func RenderBody(current string, notes []Note) string {
 	var b strings.Builder
 	b.WriteString("ProxSave " + current + "\n\n")
-	b.WriteString("What changed in this version:\n")
+	b.WriteString(headerChanges + "\n")
 	if len(notes) == 0 {
 		b.WriteString("This version has updates. See the changelog for details.\n")
 		return b.String()
@@ -89,12 +119,9 @@ func RenderBody(current string, notes []Note) string {
 		for _, line := range n.Lines {
 			b.WriteString("- " + line + "\n")
 		}
-		if n.CTATitle != "" || len(n.CTALines) > 0 {
-			b.WriteString("\n")
-			if n.CTATitle != "" {
-				b.WriteString(n.CTATitle + "\n")
-			}
-			for _, line := range n.CTALines {
+		if len(n.Actions) > 0 {
+			b.WriteString("\n" + headerActions + "\n")
+			for _, line := range n.Actions {
 				b.WriteString("- " + line + "\n")
 			}
 		}
