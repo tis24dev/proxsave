@@ -25,6 +25,10 @@ var (
 	ErrHCNotReady = errors.New("healthcheck config: provisioning not ready")
 	// ErrHCDisabled: healthcheck provisioning is turned off on the server.
 	ErrHCDisabled = errors.New("healthcheck config: disabled on server")
+	// ErrHCParked: the server purged this host's row (its unused account was parked,
+	// design 11.2). Definitive like ErrHCAuth: the stale relay secret must be cleared
+	// so the next run re-provisions and the returning host is re-admitted.
+	ErrHCParked = errors.New("healthcheck config: server parked")
 )
 
 // CentralizedConfig is the proxsave_server's answer for a client's two ping URLs.
@@ -148,6 +152,11 @@ func fetchConfig(ctx context.Context, client *http.Client, serverAPIHost, server
 		return CentralizedConfig{}, ErrHCAuth
 	case http.StatusNotFound:
 		return CentralizedConfig{}, ErrHCUnknown
+	case http.StatusGone:
+		// 410 SERVER_PARKED: the row was purged but this host still holds the old
+		// token. Treat like a definitive auth rejection so the daemon clears the
+		// stale secret and re-provisions (which re-admits the returning host).
+		return CentralizedConfig{}, ErrHCParked
 	case http.StatusServiceUnavailable:
 		// The server returns HC_DISABLED (feature off) or HC_NOT_READY (provisioning
 		// not done yet). Distinguish so the daemon logs the right thing.

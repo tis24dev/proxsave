@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -110,6 +111,37 @@ func TestBuildReporterClearsSecretOnAuthReject(t *testing.T) {
 	}
 	if s, _ := identity.LoadNotifySecret(base); s != "" {
 		t.Fatalf("relay secret must be cleared after ErrHCAuth, still on disk: %q", s)
+	}
+}
+
+// A 410 SERVER_PARKED (ErrHCParked) is as definitive as an auth reject: the row was
+// purged, so the on-disk secret must be cleared for re-provisioning (design 11.2).
+func TestBuildReporterClearsSecretOnParked(t *testing.T) {
+	base := t.TempDir()
+	if err := identity.PersistNotifySecret(context.Background(), base, relayTestSecret, nil); err != nil {
+		t.Fatalf("seed secret: %v", err)
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusGone) // parked -> ErrHCParked
+		_, _ = io.WriteString(w, `{"error":"SERVER_PARKED"}`)
+	}))
+	defer server.Close()
+
+	d := &daemon{
+		cfg: &config.Config{
+			HealthcheckEnabled: true,
+			HealthcheckMode:    config.HealthcheckModeCentralized,
+			BaseDir:            base,
+			ServerID:           "123456789012",
+			ServerAPIHost:      server.URL,
+		},
+		now: time.Now,
+	}
+	if r := d.buildReporter(context.Background()); r != nil {
+		t.Fatalf("expected nil reporter after parked (no cached URLs), got %v", r)
+	}
+	if s, _ := identity.LoadNotifySecret(base); s != "" {
+		t.Fatalf("relay secret must be cleared after ErrHCParked, still on disk: %q", s)
 	}
 }
 

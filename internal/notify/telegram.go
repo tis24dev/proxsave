@@ -24,6 +24,12 @@ import (
 // rather than treated as a permanent delivery failure.
 var errRelayAuthRejected = errors.New("relay auth rejected")
 
+// errRelayParked signals the relay purged this host's row (HTTP 410 SERVER_PARKED,
+// design 11.2): the token authenticates nothing until the host is re-admitted, so it
+// is handled exactly like errRelayAuthRejected (drop the in-memory secret + reprovision
+// this run). The definitive on-disk clear happens on the healthcheck path (ErrHCParked).
+var errRelayParked = errors.New("relay server parked")
+
 // newNotifyID returns a random 32-hex-char id (<=128, matching the server's cap).
 // Generated ONCE per Send and reused across the relay POST + status poll (and any
 // relay retry) so the server-side idempotency dedupe never double-queues.
@@ -200,7 +206,7 @@ func (t *TelegramNotifier) Send(ctx context.Context, data *NotificationData) (*N
 			result.Duration = time.Since(startTime)
 			return result, nil
 		}
-		if !errors.Is(err, errRelayAuthRejected) {
+		if !errors.Is(err, errRelayAuthRejected) && !errors.Is(err, errRelayParked) {
 			t.logger.Debug("Telegram: relay send failed (surfaced once by the notification adapter): %v", err)
 			result.Metadata["relay_accepted"] = false
 			result.Success = false
@@ -208,11 +214,13 @@ func (t *TelegramNotifier) Send(ctx context.Context, data *NotificationData) (*N
 			result.Duration = time.Since(startTime)
 			return result, nil // Non-critical error, don't abort backup
 		}
-		// The relay rejected our per-server secret (stale/rotated). Drop it and fall
-		// through to the fetch path below, which reprovisions a fresh secret and
-		// relays this run (or falls back to the legacy bot-token path). Bounded: the
-		// fetch path retries the relay at most once and never loops back here.
-		t.logger.Warning("Telegram: relay auth rejected; dropping stale relay secret and reprovisioning")
+		// The relay rejected our per-server secret: stale/rotated (auth) or the host's
+		// row was purged and parked (410 SERVER_PARKED). Either way drop the in-memory
+		// secret and fall through to the fetch path below, which reprovisions a fresh
+		// secret (a parked host is re-admitted as a recreation) and relays this run (or
+		// falls back to the legacy bot-token path). Bounded: the fetch path retries the
+		// relay at most once and never loops back here.
+		t.logger.Warning("Telegram: relay rejected our secret (auth/parked); dropping it and reprovisioning")
 		t.config.NotifySecret = ""
 	}
 
@@ -420,6 +428,9 @@ func (t *TelegramNotifier) sendViaRelay(ctx context.Context, message, notifyID s
 		return resp.Status, t.showPortalLink(resp.Body), nil
 	case 401, 403:
 		return resp.Status, "", fmt.Errorf("%w (HTTP %d)", errRelayAuthRejected, resp.Status)
+	case 410:
+		// SERVER_PARKED: the row was purged; the secret is dead until re-admission.
+		return resp.Status, "", fmt.Errorf("%w (HTTP 410)", errRelayParked)
 	case 404:
 		return resp.Status, "", fmt.Errorf("server unknown (HTTP 404)")
 	case 409:

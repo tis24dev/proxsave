@@ -97,6 +97,7 @@ func TestFetchCentralizedConfigErrors(t *testing.T) {
 		{"auth 401", 401, `{"error":"AUTH_INVALID"}`, ErrHCAuth},
 		{"auth 403", 403, `{"error":"AUTH_INVALID"}`, ErrHCAuth},
 		{"unknown 404", 404, `{"error":"SERVER_UNKNOWN"}`, ErrHCUnknown},
+		{"parked 410", 410, `{"error":"SERVER_PARKED"}`, ErrHCParked},
 		{"disabled 503", 503, `{"error":"HC_DISABLED"}`, ErrHCDisabled},
 		{"not ready 503", 503, `{"error":"HC_NOT_READY"}`, ErrHCNotReady},
 	}
@@ -134,7 +135,7 @@ func TestFetchCentralizedConfigGenericStatus(t *testing.T) {
 	if err == nil {
 		t.Fatalf("expected error on HTTP 500")
 	}
-	for _, sentinel := range []error{ErrHCAuth, ErrHCUnknown, ErrHCNotReady, ErrHCDisabled} {
+	for _, sentinel := range []error{ErrHCAuth, ErrHCUnknown, ErrHCNotReady, ErrHCDisabled, ErrHCParked} {
 		if errors.Is(err, sentinel) {
 			t.Fatalf("500 should be a generic error, not %v", sentinel)
 		}

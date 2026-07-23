@@ -628,22 +628,25 @@ func (d *daemon) buildReporter(ctx context.Context) *health.Reporter {
 	// centralized
 	alive, backup, checks, secretUsed, err := d.fetchCentralized(ctx)
 	if err != nil {
-		// A DEFINITIVE auth rejection (ErrHCAuth) means the on-disk relay secret no longer
-		// matches the server's stored hash (a server DB restore/rollback, or a lost
-		// double-issuance race). Clear it so the next throttled maybeProvisionRelaySecret
-		// mints a fresh one - restoring the Telegram path's self-heal. ONLY ErrHCAuth: a
-		// transient / unreachable / not-ready / unknown error must NOT churn a
-		// possibly-good secret (a working confirmed secret never returns 401/403). The clear
-		// is value-guarded under LockNotifySecret against the EXACT secret fetchCentralized
-		// used (secretUsed), so a concurrent hook that persisted+confirmed a fresh secret in
-		// the meantime is never clobbered (which would strand the host).
-		if errors.Is(err, health.ErrHCAuth) {
+		// A DEFINITIVE rejection means the on-disk relay secret is no longer usable:
+		//   ErrHCAuth   - the secret no longer matches the server's stored hash (a
+		//                 server DB restore/rollback, or a lost double-issuance race);
+		//   ErrHCParked - the server purged this host's row (its unused account was
+		//                 parked, design 11.2), so the token authenticates nothing.
+		// Both clear the secret so the next throttled maybeProvisionRelaySecret mints a
+		// fresh one (a parked host is re-admitted as a recreation) - restoring the
+		// self-heal. ONLY these two: a transient / unreachable / not-ready / unknown
+		// error must NOT churn a possibly-good secret. The clear is value-guarded under
+		// LockNotifySecret against the EXACT secret fetchCentralized used (secretUsed),
+		// so a concurrent hook that persisted+confirmed a fresh secret is never
+		// clobbered (which would strand the host).
+		if errors.Is(err, health.ErrHCAuth) || errors.Is(err, health.ErrHCParked) {
 			if cleared, rmErr := identity.RemoveNotifySecretIfMatches(d.cfg.BaseDir, secretUsed); rmErr != nil {
 				logging.Debug("daemon: clear rejected relay secret failed: %v", rmErr)
 			} else if cleared {
-				logging.Debug("daemon: relay secret rejected by server (auth); cleared for re-provisioning")
+				logging.Debug("daemon: relay secret rejected by server (auth/parked); cleared for re-provisioning")
 			} else {
-				logging.Debug("daemon: relay secret rejected by server (auth) but on-disk secret changed concurrently; keeping it")
+				logging.Debug("daemon: relay secret rejected by server (auth/parked) but on-disk secret changed concurrently; keeping it")
 			}
 		}
 		// The heartbeat loop retries this every interval; warn ONCE (so the
