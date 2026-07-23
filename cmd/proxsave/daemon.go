@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"hash/fnv"
 	"io"
 	"os"
 	"os/exec"
@@ -77,11 +78,11 @@ type daemon struct {
 	configPath string
 	now        func() time.Time
 
-	mu            sync.Mutex
-	reporter      backupReporter
-	fetchWarned   bool      // centralized fetch already warned once (throttle recurring WARN)
-	updateWarned  bool      // an update is already known available (WARN once per transition)
-	provisionLast time.Time // last relay-secret self-heal attempt (throttle); guarded by mu
+	mu               sync.Mutex
+	reporter         backupReporter
+	fetchWarned      bool      // centralized fetch already warned once (throttle recurring WARN)
+	updateWarned     bool      // an update is already known available (WARN once per transition)
+	provisionRetryAt time.Time // next relay-secret self-heal attempt; guarded by mu
 	// newBackupCmd builds the child backup command; overridable in tests.
 	newBackupCmd func(ctx context.Context) *exec.Cmd
 
@@ -713,61 +714,108 @@ func (d *daemon) fetchCentralized(ctx context.Context) (alive, backup string, ch
 	return cfg.AliveURL, cfg.BackupURL, cfg.Checks, secret, nil
 }
 
-// daemonProvisionRetryInterval throttles the daemon's relay-secret self-heal so a persistent
-// provisioning failure (server down, or the host not yet known to the server) does not hit the
-// server on every heartbeat interval.
-const daemonProvisionRetryInterval = 15 * time.Minute
+const (
+	// daemonProvisionRetryInterval is the local retry floor: a persistent failure
+	// must not hit the relay on every heartbeat interval.
+	daemonProvisionRetryInterval = 15 * time.Minute
+	// daemonProvisionMaxRetryJitter spreads clients released from the same global
+	// admission window without materially extending the server's Retry-After.
+	daemonProvisionMaxRetryJitter = 5 * time.Minute
+)
+
+// daemonProvisionRetryJitter is deterministic per server_id, so no shared random
+// source or persisted state is needed. It uses up to 10% of Retry-After, capped at
+// five minutes. A stable spread is sufficient to avoid a synchronized retry herd.
+func daemonProvisionRetryJitter(serverID string, retryAfter time.Duration) time.Duration {
+	window := retryAfter / 10
+	if window > daemonProvisionMaxRetryJitter {
+		window = daemonProvisionMaxRetryJitter
+	}
+	if window <= 0 {
+		return 0
+	}
+	h := fnv.New64a()
+	_, _ = h.Write([]byte(serverID))
+	return time.Duration(h.Sum64() % uint64(window+1))
+}
 
 // provisionRelaySecretFn is the relay-secret provisioner seam (stubbed in tests so the
 // self-heal logic is exercised without touching the network).
 var provisionRelaySecretFn = notify.ProvisionRelaySecret
 
-// provisionRelaySecretBestEffort attempts one relay-secret provisioning for a centralized
-// healthcheck host that has none on disk, so centralized monitoring works WITHOUT Telegram
-// pairing. Best-effort and non-blocking: it returns the relay secret now on disk, or "" when
-// provisioning is not applicable (self mode / disabled / no ServerID) or the attempt failed.
-// It NEVER returns/propagates an error. When a secret is already present it returns it
-// unchanged (never overwrites a possibly-confirmed secret). Callers gate frequency: the
-// daemon throttles via provisionLast; the one-shot daemon-setup path runs it once.
-func provisionRelaySecretBestEffort(ctx context.Context, cfg *config.Config, logger *logging.Logger) string {
+// provisionRelaySecretAttempt performs the best-effort attempt and also returns
+// server-directed backpressure. It never propagates an error: Retry-After is the
+// only semantic detail the daemon needs from a handled 429.
+func provisionRelaySecretAttempt(
+	ctx context.Context, cfg *config.Config, logger *logging.Logger,
+) (string, time.Duration) {
 	if cfg == nil || !cfg.HealthcheckEnabled || cfg.HealthcheckMode != config.HealthcheckModeCentralized {
-		return ""
+		return "", 0
 	}
 	baseDir := strings.TrimSpace(cfg.BaseDir)
 	if baseDir == "" {
-		return ""
+		return "", 0
 	}
 	if s, _ := identity.LoadNotifySecret(baseDir); strings.TrimSpace(s) != "" {
-		return strings.TrimSpace(s) // already provisioned; do not churn
+		return strings.TrimSpace(s), 0 // already provisioned; do not churn
 	}
 	serverID := strings.TrimSpace(cfg.ServerID)
 	if serverID == "" {
-		return ""
+		return "", 0
 	}
 	if _, err := provisionRelaySecretFn(ctx, cfg.ServerAPIHost, serverID, baseDir, logger); err != nil {
+		var limited *notify.RelayProvisionRateLimitError
+		if errors.As(err, &limited) {
+			logging.Debug(
+				"daemon: relay-secret provisioning rate limited (server backoff honored)")
+			return "", limited.RetryAfter
+		}
 		logging.Debug("daemon: relay-secret provisioning attempt failed (will retry later): %v", err)
-		return ""
+		return "", 0
 	}
 	// Reload regardless of the provisioned flag: ProvisionRelaySecret returns false when it
 	// adopts a secret a concurrent provisioner persisted under the cross-process lock, so a
 	// usable secret may be on disk even then; LoadNotifySecret yields "" when there is
 	// genuinely none, degrading gracefully.
 	s, _ := identity.LoadNotifySecret(baseDir)
-	return strings.TrimSpace(s)
+	return strings.TrimSpace(s), 0
+}
+
+// provisionRelaySecretBestEffort keeps the one-shot setup callers' established
+// string-only contract. They run once and therefore do not need Retry-After.
+func provisionRelaySecretBestEffort(
+	ctx context.Context, cfg *config.Config, logger *logging.Logger,
+) string {
+	secret, _ := provisionRelaySecretAttempt(ctx, cfg, logger)
+	return secret
 }
 
 // maybeProvisionRelaySecret is the daemon's throttled relay-secret self-heal (hook b). It
 // returns a freshly persisted secret, or "" when throttled / not applicable / failed. The
-// throttle is recorded even on failure so a down server is not hit every heartbeat.
+// local retry floor is installed BEFORE the network call so concurrent heartbeat
+// paths cannot duplicate an attempt. A longer server Retry-After extends that
+// deadline and adds bounded deterministic jitter.
 func (d *daemon) maybeProvisionRelaySecret(ctx context.Context) string {
+	now := d.now()
 	d.mu.Lock()
-	if !d.provisionLast.IsZero() && d.now().Sub(d.provisionLast) < daemonProvisionRetryInterval {
+	if !d.provisionRetryAt.IsZero() && now.Before(d.provisionRetryAt) {
 		d.mu.Unlock()
 		return ""
 	}
-	d.provisionLast = d.now()
+	d.provisionRetryAt = now.Add(daemonProvisionRetryInterval)
 	d.mu.Unlock()
-	return provisionRelaySecretBestEffort(ctx, d.cfg, d.logger)
+
+	secret, retryAfter := provisionRelaySecretAttempt(ctx, d.cfg, d.logger)
+	if retryAfter > daemonProvisionRetryInterval {
+		retryAt := d.now().Add(
+			retryAfter + daemonProvisionRetryJitter(d.cfg.ServerID, retryAfter))
+		d.mu.Lock()
+		if retryAt.After(d.provisionRetryAt) {
+			d.provisionRetryAt = retryAt
+		}
+		d.mu.Unlock()
+	}
+	return secret
 }
 
 // provisionRelaySecretOnDaemonSetup is the one-shot relay-secret self-heal (hook a) run during

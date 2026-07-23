@@ -3,12 +3,14 @@ package notify
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/tis24dev/proxsave/internal/identity"
 )
@@ -24,6 +26,7 @@ type relayCapture struct {
 	version       string
 	serverIDBody  string
 	authHeader    string // X-Server-Auth on the provision call (must stay empty)
+	retryAfter    string // optional response Retry-After
 	confirmHits   int
 	confirmAuth   string
 }
@@ -47,6 +50,9 @@ func relayProvisionServer(t *testing.T, provisionStatus int, provisionBody strin
 			b, _ := io.ReadAll(r.Body)
 			_ = json.Unmarshal(b, &body)
 			capt.serverIDBody = body.ServerID
+			if capt.retryAfter != "" {
+				w.Header().Set("Retry-After", capt.retryAfter)
+			}
 			w.WriteHeader(provisionStatus)
 			_, _ = w.Write([]byte(provisionBody))
 		case "/api/confirm-secret":
@@ -121,11 +127,38 @@ func TestProvisionRelaySecretAlreadyProvisioned(t *testing.T) {
 	}
 }
 
+func TestProvisionRelaySecretRejectsMalformedAlreadyProvisioned200(t *testing.T) {
+	for _, body := range []string{
+		`not-json`,
+		`{"status":"something_else"}`,
+		`{}`,
+	} {
+		t.Run(body, func(t *testing.T) {
+			logger, _ := newProvisionTestLogger()
+			baseDir := t.TempDir()
+			var capt relayCapture
+			server := relayProvisionServer(
+				t, http.StatusOK, body, http.StatusOK, &capt)
+			defer server.Close()
+
+			provisioned, err := ProvisionRelaySecret(
+				context.Background(), server.URL,
+				"1234567890123456", baseDir, logger)
+			if provisioned || err == nil {
+				t.Fatalf("malformed 200 must fail: got (%v,%v)", provisioned, err)
+			}
+			if loaded, _ := identity.LoadNotifySecret(baseDir); loaded != "" {
+				t.Fatalf("malformed 200 must persist nothing, got %q", loaded)
+			}
+		})
+	}
+}
+
 // Mandatory contract 7: a 429 persists nothing and is a retryable failure.
 func TestProvisionRelaySecretRateLimitedRetryable(t *testing.T) {
 	logger, _ := newProvisionTestLogger()
 	baseDir := t.TempDir()
-	var capt relayCapture
+	capt := relayCapture{retryAfter: "7200"}
 	server := relayProvisionServer(t, http.StatusTooManyRequests, `{"error":"RELAY_RATE_LIMITED"}`, http.StatusOK, &capt)
 	defer server.Close()
 
@@ -133,11 +166,30 @@ func TestProvisionRelaySecretRateLimitedRetryable(t *testing.T) {
 	if provisioned || err == nil {
 		t.Fatalf("429 must be a retryable failure: got (%v,%v)", provisioned, err)
 	}
+	var limited *RelayProvisionRateLimitError
+	if !errors.As(err, &limited) {
+		t.Fatalf("429 error type = %T, want *RelayProvisionRateLimitError", err)
+	}
+	if limited.RetryAfter != 2*time.Hour {
+		t.Fatalf("RetryAfter = %v, want 2h", limited.RetryAfter)
+	}
 	if loaded, _ := identity.LoadNotifySecret(baseDir); loaded != "" {
 		t.Fatalf("429 must persist nothing, got %q", loaded)
 	}
 	if capt.confirmHits != 0 {
 		t.Fatalf("429 -> no confirm, got %d", capt.confirmHits)
+	}
+}
+
+func TestParseRelayProvisionRetryAfterClampsBeforeDurationOverflow(t *testing.T) {
+	// 2^55 seconds multiplied by 1e9ns wraps a time.Duration to zero. The
+	// parser must clamp in integer seconds before converting.
+	const wrapsDurationToZero = "36028797018963968"
+	if got := parseRelayProvisionRetryAfter(
+		wrapsDurationToZero, time.Unix(0, 0),
+	); got != relayProvisionMaxRetryAfter {
+		t.Fatalf("huge Retry-After = %v, want clamp %v",
+			got, relayProvisionMaxRetryAfter)
 	}
 }
 

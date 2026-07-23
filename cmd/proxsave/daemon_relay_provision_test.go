@@ -11,6 +11,7 @@ import (
 	"github.com/tis24dev/proxsave/internal/config"
 	"github.com/tis24dev/proxsave/internal/identity"
 	"github.com/tis24dev/proxsave/internal/logging"
+	"github.com/tis24dev/proxsave/internal/notify"
 )
 
 const relayTestSecret = "3h64-dyi8-q3d6-wcm5"
@@ -200,5 +201,59 @@ func TestDaemonMaybeProvisionRelaySecretThrottle(t *testing.T) {
 	d.maybeProvisionRelaySecret(context.Background())
 	if called != 2 {
 		t.Fatalf("after throttle window must re-attempt, called=%d", called)
+	}
+}
+
+func TestDaemonMaybeProvisionRelaySecretHonorsLongerServerBackoff(t *testing.T) {
+	orig := provisionRelaySecretFn
+	t.Cleanup(func() { provisionRelaySecretFn = orig })
+	called := 0
+	provisionRelaySecretFn = func(
+		ctx context.Context, host, id, baseDir string,
+		logger *logging.Logger,
+	) (bool, error) {
+		called++
+		return false, &notify.RelayProvisionRateLimitError{
+			RetryAfter: 2 * time.Hour,
+		}
+	}
+	start := time.Unix(1_700_000_000, 0)
+	now := start
+	d := &daemon{
+		cfg: &config.Config{
+			HealthcheckEnabled: true,
+			HealthcheckMode:    config.HealthcheckModeCentralized,
+			BaseDir:            t.TempDir(),
+			ServerID:           "1234567890123456",
+			ServerAPIHost:      "https://h",
+		},
+		now: func() time.Time { return now },
+	}
+
+	d.maybeProvisionRelaySecret(context.Background())
+	if called != 1 {
+		t.Fatalf("first attempt must call the provisioner, called=%d", called)
+	}
+	now = start.Add(2*time.Hour - time.Second)
+	d.maybeProvisionRelaySecret(context.Background())
+	if called != 1 {
+		t.Fatalf("must not retry before server Retry-After, called=%d", called)
+	}
+	// The deterministic anti-herd jitter is bounded to five minutes.
+	now = start.Add(2*time.Hour + daemonProvisionMaxRetryJitter + time.Second)
+	d.maybeProvisionRelaySecret(context.Background())
+	if called != 2 {
+		t.Fatalf("must retry after Retry-After plus max jitter, called=%d", called)
+	}
+}
+
+func TestDaemonProvisionRetryJitterIsStableAndBounded(t *testing.T) {
+	a := daemonProvisionRetryJitter("1234567890123456", 2*time.Hour)
+	b := daemonProvisionRetryJitter("1234567890123456", 2*time.Hour)
+	if a != b {
+		t.Fatalf("jitter must be stable per server: %v != %v", a, b)
+	}
+	if a < 0 || a > daemonProvisionMaxRetryJitter {
+		t.Fatalf("jitter %v outside [0,%v]", a, daemonProvisionMaxRetryJitter)
 	}
 }

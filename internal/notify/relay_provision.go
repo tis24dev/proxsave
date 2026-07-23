@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -14,6 +15,54 @@ import (
 
 // provisionTimeout bounds the relay-provision POST; callers retry on the next run.
 const provisionTimeout = 5 * time.Second
+
+// relayProvisionMaxRetryAfter bounds a server-supplied Retry-After. The relay's
+// longest rolling admission window is 24h; a larger value is treated as 24h so a
+// malformed response cannot suppress self-healing indefinitely.
+const relayProvisionMaxRetryAfter = 24 * time.Hour
+
+// RelayProvisionRateLimitError is returned for HTTP 429. RetryAfter is zero when
+// the header is absent/invalid; callers then keep their existing local retry floor.
+// A typed error lets the daemon honor server backpressure without exposing or
+// logging the untrusted response body.
+type RelayProvisionRateLimitError struct {
+	RetryAfter time.Duration
+}
+
+func (e *RelayProvisionRateLimitError) Error() string {
+	if e != nil && e.RetryAfter > 0 {
+		return fmt.Sprintf("relay provision: rate limited (HTTP 429; retry after %s)", e.RetryAfter)
+	}
+	return "relay provision: rate limited (HTTP 429)"
+}
+
+func parseRelayProvisionRetryAfter(raw string, now time.Time) time.Duration {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return 0
+	}
+	if seconds, err := strconv.ParseInt(raw, 10, 64); err == nil {
+		if seconds <= 0 {
+			return 0
+		}
+		if seconds > int64(relayProvisionMaxRetryAfter/time.Second) {
+			return relayProvisionMaxRetryAfter
+		}
+		return time.Duration(seconds) * time.Second
+	}
+	when, err := http.ParseTime(raw)
+	if err != nil {
+		return 0
+	}
+	d := when.Sub(now)
+	if d <= 0 {
+		return 0
+	}
+	if d > relayProvisionMaxRetryAfter {
+		return relayProvisionMaxRetryAfter
+	}
+	return d
+}
 
 // relayProvisionResponse is the JSON of POST /api/relay/provision: a 201 carries
 // notify_secret; a 200 carries status=="already_provisioned". The RELAY_* error field
@@ -26,9 +75,10 @@ type relayProvisionResponse struct {
 // provisionViaRelay POSTs the dedicated, Telegram-independent provisioning endpoint
 // POST /api/relay/provision (unauthenticated: the endpoint ISSUES the per-server token)
 // with {server_id} plus the shared X-Proxsave-Version header. It returns:
-//   (secret, false, nil) on 201 with a notify_secret          -> adopt + confirm
-//   ("", true, nil)      on 200 already_provisioned            -> nothing to adopt
-//   ("", false, err)     on 429 (retryable) / any other code / transport error
+//
+//	(secret, false, nil) on 201 with a notify_secret          -> adopt + confirm
+//	("", true, nil)      on 200 already_provisioned            -> nothing to adopt
+//	("", false, err)     on 429 (retryable) / any other code / transport error
 //
 // The untrusted response body is NEVER embedded in the returned error (only the status
 // code), and the issued secret is registered with the logger's masker before any later
@@ -61,6 +111,13 @@ func provisionViaRelay(ctx context.Context, serverAPIHost, serverID string, logg
 		}
 		return secret, false, nil
 	case http.StatusOK: // 200: already provisioned + confirmed server-side
+		var body relayProvisionResponse
+		if jerr := resp.JSON(&body); jerr != nil {
+			return "", false, fmt.Errorf("relay provision: bad 200 JSON: %w", jerr)
+		}
+		if body.Status != "already_provisioned" {
+			return "", false, fmt.Errorf("relay provision: unexpected 200 status")
+		}
 		// No new token is minted. We have nothing to adopt this run; a lost local
 		// secret is not recoverable here (the row self-heals via purge + recreation
 		// later, or a fresh recreation re-issues). Do NOT try to read a token that
@@ -68,7 +125,10 @@ func provisionViaRelay(ctx context.Context, serverAPIHost, serverID string, logg
 		return "", true, nil
 	case http.StatusTooManyRequests: // 429: rolling/total admission cap
 		// A TEMPORARY refusal. Persist nothing; the caller retries on the next run.
-		return "", false, fmt.Errorf("relay provision: rate limited (HTTP 429)")
+		return "", false, &RelayProvisionRateLimitError{
+			RetryAfter: parseRelayProvisionRetryAfter(
+				resp.Header.Get("Retry-After"), time.Now()),
+		}
 	default:
 		// 400 / 422 / 426 / 500 / 503 / ... The body is untrusted, so the error
 		// carries only the status code.

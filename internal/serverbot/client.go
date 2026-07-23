@@ -70,7 +70,8 @@ func refuseRedirect(_ *http.Request, via []*http.Request) error {
 //  3. headers: ALWAYS X-Proxsave-Version; X-Server-Auth iff Secret != ""; X-Proxsave-
 //     Provision:"1" iff Provision; X-Notify-Id iff NotifyID != ""; Content-Type iff Body != nil
 //  4. execute; body = io.ReadAll(io.LimitReader(rc, req.MaxBytes or 8192))
-//  5. return (&Response{Status, Body}, nil) for ANY completed exchange, including non-2xx
+//  5. return (&Response{Status, cloned Header, Body}, nil) for ANY completed exchange,
+//     including non-2xx
 //
 // LOAD-BEARING: an HTTP status is NEVER an error. err != nil only on an encode/build/
 // dial/read failure, and that error is a *TransportError whose message is already
@@ -139,5 +140,9 @@ func (c *Client) Do(ctx context.Context, req Request) (*Response, error) {
 		// Debug only: method + path + status. NEVER the body, NEVER the secret.
 		c.logger.Debug("serverbot: %s %s -> %d", method, req.Path, resp.StatusCode)
 	}
-	return &Response{Status: resp.StatusCode, Body: body}, nil
+	return &Response{
+		Status: resp.StatusCode,
+		Header: resp.Header.Clone(),
+		Body:   body,
+	}, nil
 }
