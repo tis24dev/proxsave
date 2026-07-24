@@ -188,7 +188,22 @@ func ProvisionRelaySecret(ctx context.Context, serverAPIHost, serverID, baseDir 
 		return false, err
 	}
 	if alreadyProvisioned {
-		logTelegramRegistrationDebug(logger, "relay provision: server reports already provisioned (nothing to adopt)")
+		// This branch is reached only with NO local secret (re-checked under the lock
+		// above) yet the server reports a CONFIRMED registration. The server re-mints for
+		// an UNCONFIRMED row (returning 201), so this is specifically the confirmed-then-
+		// lost case: the server keeps only the secret's sha256 and cannot hand back the
+		// plaintext, and re-minting a confirmed token for an unauthenticated caller would
+		// let anyone knowing the 16-digit server_id rotate another host's secret. There is
+		// therefore no safe in-band recovery, so surface it at WARNING (not a silent Debug)
+		// instead of returning a misleading success. An eligible chat-less row still self-
+		// heals through the server-side purge + recreation, which re-issues a fresh token.
+		if logger != nil {
+			logger.Warning("Relay provisioning: server_id is already provisioned server-side " +
+				"but no local relay secret is present; a confirmed token cannot be re-minted " +
+				"automatically. Centralized healthcheck config fetch and relay notifications stay " +
+				"unavailable until the server-side row is purged and recreated (automatic once the " +
+				"row is purge-eligible) or cleared by an operator.")
+		}
 		return false, nil
 	}
 	// Defensive length floor (shared with the persistence sink): an issued secret shorter

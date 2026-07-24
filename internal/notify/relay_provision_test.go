@@ -110,7 +110,7 @@ func TestProvisionRelaySecretPostsToRelayProvision(t *testing.T) {
 // Mandatory contract 6: a 200 already_provisioned does not try to read a non-existent
 // token; nothing is persisted and confirm is not called.
 func TestProvisionRelaySecretAlreadyProvisioned(t *testing.T) {
-	logger, _ := newProvisionTestLogger()
+	logger, buf := newProvisionTestLogger()
 	baseDir := t.TempDir()
 	var capt relayCapture
 	server := relayProvisionServer(t, http.StatusOK, `{"status":"already_provisioned"}`, http.StatusOK, &capt)
@@ -125,6 +125,12 @@ func TestProvisionRelaySecretAlreadyProvisioned(t *testing.T) {
 	}
 	if capt.confirmHits != 0 {
 		t.Fatalf("already_provisioned -> no confirm, got %d", capt.confirmHits)
+	}
+	// The stuck state (confirmed server-side, no local secret, not re-mintable) must be
+	// surfaced, not swallowed at Debug, so an operator can see a host that cannot recover
+	// in-band.
+	if !strings.Contains(buf.String(), "already provisioned server-side") {
+		t.Fatalf("already_provisioned with no local secret must WARN about the unrecoverable state; log was:\n%s", buf.String())
 	}
 }
 
