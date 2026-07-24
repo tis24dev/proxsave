@@ -178,7 +178,11 @@ func (w *WebhookNotifier) Send(ctx context.Context, data *NotificationData) (*No
 
 		err := w.sendToEndpoint(ctx, endpoint, data)
 		if err != nil {
-			w.logger.Error("❌ Endpoint '%s' failed: %v", endpoint.Name, err)
+			// The notification adapter is the single terminal voice for the channel
+			// (it warns once on the aggregate outcome), so keep this per-endpoint line
+			// at Debug to avoid a double-reported failure. err can also carry a raw
+			// upstream body, which must not surface above Debug from here.
+			w.logger.Debug("❌ Endpoint '%s' failed: %v", endpoint.Name, err)
 			failureCount++
 			lastErr = err
 		} else {
