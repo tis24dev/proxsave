@@ -577,6 +577,18 @@ func TestRunBackupStreamedReplaysPreStreamBacklog(t *testing.T) {
 	waitFor(t, &buf, "Environment: dual")
 	waitFor(t, &buf, "Initializing backup orchestrator")
 
+	// Presence is not enough: the whole point is order. The replayed backlog must
+	// precede the live step line, exactly as the on-disk log records it
+	// (banner -> environment -> orchestrator init). A regression that streamed the
+	// step line first would still satisfy the three waitFor calls above.
+	frame := ansi.Strip(buf.String())
+	iBanner := strings.Index(frame, "ProxSaveBanner")
+	iEnv := strings.Index(frame, "Environment: dual")
+	iInit := strings.Index(frame, "Initializing backup orchestrator")
+	if !(iBanner >= 0 && iBanner < iEnv && iEnv < iInit) {
+		t.Fatalf("stream out of order: banner=%d environment=%d init=%d (want banner < environment < init)", iBanner, iEnv, iInit)
+	}
+
 	_ = pumpEnterBackup(t, session, resCh)
 
 	// The mirror is detached once the backlog is replayed, so a line logged after
