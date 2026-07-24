@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -514,6 +515,75 @@ func TestRunBackupStreamedHandsOffInStream(t *testing.T) {
 	waitFor(t, &buf, "manual backup handoff")
 	waitFor(t, &buf, "enter continue")
 	_ = pumpEnterBackup(t, session, resCh)
+}
+
+// TestRunBackupStreamedReplaysPreStreamBacklog is the guard for the fix: the
+// streamed viewport must show the lines logged BEFORE it existed (banner ->
+// environment -> preflight), not start mid-run at "Initializing backup
+// orchestrator". It reproduces the pre-viewport phase the way initializeRunLogger
+// wires it on a dashboard handoff - the run logger mirrors its full colored stream
+// into a backlog while the console is muted - including a RAW banner line flushed
+// via AppendRaw (which the console path deliberately skips, so only the mirror
+// carries it). runBackupStreamed must replay that backlog into the panel ahead of
+// the live step line.
+func TestRunBackupStreamedReplaysPreStreamBacklog(t *testing.T) {
+	prevLogger := logging.GetDefaultLogger()
+	lg := logging.New(types.LogLevelInfo, false)
+	lg.SetOutput(io.Discard) // muted console, as during a dashboard handoff
+	logging.SetDefaultLogger(lg)
+	t.Cleanup(func() { logging.SetDefaultLogger(prevLogger) })
+
+	// Wire the mirror + backlog exactly like initializeRunLogger, then log the
+	// early lines: a raw banner (file/mirror only, never on the console path) and a
+	// normal INFO line. An open log file lets AppendRaw exercise its file branch too.
+	backlog := logging.NewLineBacklog(1024)
+	lg.SetMirror(backlog)
+	if err := lg.OpenLogFile(filepath.Join(t.TempDir(), "run.log")); err != nil {
+		t.Fatalf("open log file: %v", err)
+	}
+	lg.AppendRaw("===== ProxSaveBanner =====")
+	logging.Info("Environment: dual pve=9.1.9")
+	dashboardStreamBacklog = backlog
+	t.Cleanup(func() { dashboardStreamBacklog = nil })
+
+	prevSteps := backupStreamSteps
+	backupStreamSteps = func(opts backupModeOptions) backupModeResult {
+		logging.Info("Initializing backup orchestrator")
+		return backupModeResult{
+			exitCode:     types.ExitSuccess.Int(),
+			supportStats: &orchestrator.BackupStats{FilesCollected: 1, LocalStatus: "ok"},
+		}
+	}
+	t.Cleanup(func() { backupStreamSteps = prevSteps })
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	var buf shell.SyncBuffer
+	session := shell.StartForTestWithOutput(ctx, shell.Config{AppName: "ProxSave", Subtitle: "Backup"}, &buf)
+
+	bootstrap := logging.NewBootstrapLogger()
+	stashDashboardSession(session, bootstrap)
+	t.Cleanup(releaseDashboardLeftovers)
+
+	resCh := make(chan backupModeResult, 1)
+	go func() {
+		resCh <- runBackupStreamed(backupModeOptions{ctx: ctx, bootstrap: bootstrap, cfg: &config.Config{}})
+	}()
+
+	// The pre-viewport backlog (banner via AppendRaw + the environment line) must
+	// stream into the panel, followed by the live step line.
+	waitFor(t, &buf, "ProxSaveBanner")
+	waitFor(t, &buf, "Environment: dual")
+	waitFor(t, &buf, "Initializing backup orchestrator")
+
+	_ = pumpEnterBackup(t, session, resCh)
+
+	// The mirror is detached once the backlog is replayed, so a line logged after
+	// the run does not keep feeding the (now stale) backlog.
+	if got := logging.GetDefaultLogger(); got != nil {
+		got.SetMirror(nil) // idempotent; asserts the symbol exists / no panic
+	}
 }
 
 // pumpEnterBackup sends Enter until runBackupStreamed returns its result.
