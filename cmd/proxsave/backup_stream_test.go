@@ -585,7 +585,7 @@ func TestRunBackupStreamedReplaysPreStreamBacklog(t *testing.T) {
 	iBanner := strings.Index(frame, "ProxSaveBanner")
 	iEnv := strings.Index(frame, "Environment: dual")
 	iInit := strings.Index(frame, "Initializing backup orchestrator")
-	if !(iBanner >= 0 && iBanner < iEnv && iEnv < iInit) {
+	if iBanner < 0 || iBanner >= iEnv || iEnv >= iInit {
 		t.Fatalf("stream out of order: banner=%d environment=%d init=%d (want banner < environment < init)", iBanner, iEnv, iInit)
 	}
 
