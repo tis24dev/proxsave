@@ -35,8 +35,9 @@ func ifGuardsUpgradeSuccessAndCallsWhatsnew(ifs *ast.IfStmt) bool {
 		return false
 	}
 	// Both binary-install and config-upgrade success must be required, in either order.
-	if !((isErrNilCheck(land.X, "upgradeErr") && isErrNilCheck(land.Y, "cfgUpgradeErr")) ||
-		(isErrNilCheck(land.X, "cfgUpgradeErr") && isErrNilCheck(land.Y, "upgradeErr"))) {
+	forward := isErrNilCheck(land.X, "upgradeErr") && isErrNilCheck(land.Y, "cfgUpgradeErr")
+	reverse := isErrNilCheck(land.X, "cfgUpgradeErr") && isErrNilCheck(land.Y, "upgradeErr")
+	if !forward && !reverse {
 		return false
 	}
 	if ifs.Body == nil {
