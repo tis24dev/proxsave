@@ -196,8 +196,9 @@ func TestShowWhatsnewScreenSkipsUnderDryRun(t *testing.T) {
 }
 
 // TestShowWhatsnewScreenDelegatesWhenInteractive: on an interactive terminal showWhatsnewScreen
-// builds a session and delegates to maybeShowWhatsnew, keyed on the RUNNING binary's version
-// (the value passed in), so it renders from the binary's own compiled-in notes registry.
+// resolves the SHOW/skip decision keyed on the RUNNING binary's version (the value passed in),
+// so it renders from the binary's own compiled-in notes registry. Decide returns no-show here,
+// so the session is intentionally never built (that path is covered separately).
 func TestShowWhatsnewScreenDelegatesWhenInteractive(t *testing.T) {
 	origInter := dashboardIsInteractive
 	origSess := testDashboardSession
@@ -226,6 +227,82 @@ func TestShowWhatsnewScreenDelegatesWhenInteractive(t *testing.T) {
 	}
 	if gotVersion != "0.30.0-beta6" {
 		t.Fatalf("Decide called with version %q, want the running binary version 0.30.0-beta6", gotVersion)
+	}
+}
+
+// TestShowWhatsnewScreenSkipsSessionWhenNothingUnseen guards the terminal-leak fix: when
+// Decide reports nothing unseen, --show-whatsnew must return WITHOUT building a Bubble Tea
+// session. The standalone entry Closes its program immediately after Screen 0, so starting
+// one for a no-op quits before the input reader consumes the terminal's async mode-2026/2027
+// capability-query replies, which then leak into the parent shell ("2026: command not found").
+func TestShowWhatsnewScreenSkipsSessionWhenNothingUnseen(t *testing.T) {
+	origInter := dashboardIsInteractive
+	origSess := testDashboardSession
+	origDecide := whatsnewDecide
+	dashboardIsInteractive = func() bool { return true }
+	sessionBuilt := false
+	testDashboardSession = func(ctx context.Context) *shell.Session {
+		sessionBuilt = true
+		return shell.StartForTest(ctx, shell.Config{AppName: "ProxSave", Subtitle: "Dashboard"})
+	}
+	whatsnewDecide = func(baseDir, current string) (bool, string, error) { return false, "", nil }
+	t.Cleanup(func() {
+		dashboardIsInteractive = origInter
+		testDashboardSession = origSess
+		whatsnewDecide = origDecide
+		releaseDashboardLeftovers()
+	})
+
+	showWhatsnewScreen(context.Background(), &cli.Args{}, "0.30.0-beta7")
+	if sessionBuilt {
+		t.Fatal("nothing-unseen showWhatsnewScreen must NOT build a session (a started-then-closed program leaks the terminal's query replies)")
+	}
+}
+
+// TestShowWhatsnewScreenBuildsSessionWhenUnseen: when Decide reports unseen notes, the
+// standalone --show-whatsnew entry builds a session and renders Screen 0 with the resolved
+// body, then clears the seen-flag on a clean continue.
+func TestShowWhatsnewScreenBuildsSessionWhenUnseen(t *testing.T) {
+	origInter := dashboardIsInteractive
+	origSess := testDashboardSession
+	origDecide := whatsnewDecide
+	origRun := whatsnewRun
+	origSave := whatsnewSaveSeen
+	dashboardIsInteractive = func() bool { return true }
+	sessionBuilt := false
+	testDashboardSession = func(ctx context.Context) *shell.Session {
+		sessionBuilt = true
+		return shell.StartForTest(ctx, shell.Config{AppName: "ProxSave", Subtitle: "Dashboard"})
+	}
+	whatsnewDecide = func(baseDir, current string) (bool, string, error) { return true, "NOTES-BODY", nil }
+	gotBody := ""
+	whatsnewRun = func(ctx context.Context, session *shell.Session, body string) error {
+		if session == nil {
+			t.Error("whatsnewRun received a nil session")
+		}
+		gotBody = body
+		return nil
+	}
+	saved := false
+	whatsnewSaveSeen = func(baseDir, version string) error { saved = true; return nil }
+	t.Cleanup(func() {
+		dashboardIsInteractive = origInter
+		testDashboardSession = origSess
+		whatsnewDecide = origDecide
+		whatsnewRun = origRun
+		whatsnewSaveSeen = origSave
+		releaseDashboardLeftovers()
+	})
+
+	showWhatsnewScreen(context.Background(), &cli.Args{}, "0.30.0-beta7")
+	if !sessionBuilt {
+		t.Fatal("unseen showWhatsnewScreen must build a session to render Screen 0")
+	}
+	if gotBody != "NOTES-BODY" {
+		t.Fatalf("whatsnewRun body = %q, want the resolved body NOTES-BODY", gotBody)
+	}
+	if !saved {
+		t.Fatal("a clean continue must clear the seen-flag")
 	}
 }
 

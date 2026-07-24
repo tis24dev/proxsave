@@ -79,24 +79,43 @@ const whatsnewScreenTimeout = 10 * time.Minute
 // the flag untouched, so the write sits inside `if err == nil`, never in a
 // defer/teardown (SCRN-03, SCRN-04, Pitfall 9).
 func maybeShowWhatsnew(ctx context.Context, session *shell.Session, baseDir, toolVersion string) {
-	show, body, err := whatsnewDecide(baseDir, toolVersion)
-	if err != nil {
-		if errors.Is(err, whatsnew.ErrStateParse) {
-			// Best-effort self-heal, stay silent. No dry-run gate here (unlike maybeWarnWhatsnew):
-			// both callers guarantee no --dry-run before reaching this point -- the dashboard is
-			// bare-invocation-only, and showWhatsnewScreen (the --show-whatsnew entry) returns early
-			// under args.DryRun -- so the --dry-run flag can never coexist with this write.
-			_ = whatsnewSaveSeen(baseDir, toolVersion)
-		}
-		return
-	}
+	show, body := whatsnewResolve(baseDir, toolVersion)
 	if !show {
 		return
 	}
+	whatsnewRender(ctx, session, baseDir, toolVersion, body)
+}
+
+// whatsnewResolve makes the Screen 0 SHOW/skip decision WITHOUT touching any TTY, so a
+// caller can decide before starting a Bubble Tea program. It mirrors maybeShowWhatsnew's
+// fail-toward-silence contract: a not-unseen verdict, or any non-parse Decide error,
+// returns show=false; a corrupt seen-flag (whatsnew.ErrStateParse) self-heals best-effort
+// (re-seed last_seen=current via whatsnewSaveSeen, silent) and also returns show=false. No
+// dry-run gate is needed here: both callers guarantee no --dry-run before reaching this
+// point (the dashboard is bare-invocation-only; showWhatsnewScreen returns early under
+// args.DryRun), so the self-heal write can never coexist with --dry-run. Callers MUST NOT
+// start a session unless this returns show=true: starting one only to Close it on a no-op
+// leaks the terminal's async capability-query responses (mode 2026/2027) into the shell.
+func whatsnewResolve(baseDir, toolVersion string) (show bool, body string) {
+	show, body, err := whatsnewDecide(baseDir, toolVersion)
+	if err != nil {
+		if errors.Is(err, whatsnew.ErrStateParse) {
+			_ = whatsnewSaveSeen(baseDir, toolVersion)
+		}
+		return false, ""
+	}
+	return show, body
+}
+
+// whatsnewRender pushes Screen 0 (body) onto session, bounded by the total
+// whatsnewScreenTimeout, and clears the seen-flag ONLY on an explicit continue
+// (err == nil): a timeout (context.DeadlineExceeded) or Esc (shell.ErrAborted) is a
+// non-nil error and leaves the flag untouched, so the write stays out of any
+// defer/teardown and the fallback warning keeps firing next run (SCRN-03/04, Pitfall 9).
+func whatsnewRender(ctx context.Context, session *shell.Session, baseDir, toolVersion, body string) {
 	wnCtx, cancel := context.WithTimeout(ctx, whatsnewScreenTimeout)
 	defer cancel()
-	err = whatsnewRun(wnCtx, session, body)
-	if err == nil {
+	if whatsnewRun(wnCtx, session, body) == nil {
 		_ = whatsnewSaveSeen(baseDir, toolVersion)
 	}
 }
@@ -106,11 +125,14 @@ func maybeShowWhatsnew(ctx context.Context, session *shell.Session, baseDir, too
 // freshly installed binary, so Screen 0 opens at the end of every interactive upgrade,
 // rendered by the binary that actually carries the notes (each binary compiles in its own
 // notes registry, so the download path -- where the OLD binary drives finalize -- MUST
-// hand off to the installed binary to show the new release's notes). It builds its own
-// shell.Session (the upgrade has none) using the same testDashboardSession seam as the
-// dashboard, and delegates to maybeShowWhatsnew so the seen-flag gating, self-heal, timeout,
-// and write-only-on-continue behavior are identical and the seen-flag write dedupes against
-// the dashboard trigger. Interactive-gated so an automated/piped re-invocation is a no-op.
+// hand off to the installed binary to show the new release's notes). It shares the exact
+// gating/self-heal (whatsnewResolve) and render/continue-write (whatsnewRender) helpers with
+// the dashboard's maybeShowWhatsnew, so the seen-flag behavior is identical and dedupes
+// against the dashboard trigger, and it builds its own shell.Session (the upgrade has none)
+// via the same testDashboardSession seam. Crucially it resolves the SHOW/skip decision
+// BEFORE building the session, so a no-op re-invocation never starts a TTY program (which
+// would leak the terminal's async mode-2026/2027 replies into the shell). Interactive-gated
+// so an automated/piped re-invocation is a no-op.
 func showWhatsnewScreen(ctx context.Context, args *cli.Args, toolVersion string) {
 	if !dashboardIsInteractive() {
 		return
@@ -122,6 +144,18 @@ func showWhatsnewScreen(ctx context.Context, args *cli.Args, toolVersion string)
 	if args != nil && args.DryRun {
 		return
 	}
+	// Decide BEFORE starting a Bubble Tea program. Unlike the dashboard (which keeps its
+	// program alive for the menu loop that drains the terminal's replies), this entry
+	// Closes immediately after Screen 0, so a program started for a no-op quits before the
+	// input reader consumes the terminal's async mode-2026/2027 capability-query responses,
+	// which then leak into the parent shell as stray input ("2026: command not found"). So
+	// a not-unseen verdict (or a corrupt-flag self-heal) must never spin up a TTY at all.
+	baseDir, _ := detectedBaseDirOrFallback()
+	show, body := whatsnewResolve(baseDir, toolVersion)
+	if !show {
+		return
+	}
+
 	var session *shell.Session
 	if s := testDashboardSession; s != nil {
 		session = s(ctx)
@@ -145,8 +179,7 @@ func showWhatsnewScreen(ctx context.Context, args *cli.Args, toolVersion string)
 	}
 	defer func() { _ = session.Close() }()
 
-	baseDir, _ := detectedBaseDirOrFallback()
-	maybeShowWhatsnew(ctx, session, baseDir, toolVersion)
+	whatsnewRender(ctx, session, baseDir, toolVersion, body)
 }
 
 // dashboardBareInvocationCheck: only a completely bare `proxsave` (no flags

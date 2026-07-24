@@ -440,15 +440,17 @@ func TestScreen0UsesDedicatedTimeout(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parse dashboard.go: %v", err)
 	}
+	// The render + timeout live in whatsnewRender (shared by maybeShowWhatsnew and the
+	// standalone showWhatsnewScreen), so the dedicated-cap guard inspects that helper.
 	var fn *ast.FuncDecl
 	for _, d := range f.Decls {
-		if fd, ok := d.(*ast.FuncDecl); ok && fd.Name.Name == "maybeShowWhatsnew" {
+		if fd, ok := d.(*ast.FuncDecl); ok && fd.Name.Name == "whatsnewRender" {
 			fn = fd
 			break
 		}
 	}
 	if fn == nil || fn.Body == nil {
-		t.Fatal("maybeShowWhatsnew not found in dashboard.go")
+		t.Fatal("whatsnewRender not found in dashboard.go")
 	}
 
 	usesDedicated, usesSharedIdle := false, false
@@ -475,10 +477,10 @@ func TestScreen0UsesDedicatedTimeout(t *testing.T) {
 	})
 
 	if !usesDedicated {
-		t.Fatal("maybeShowWhatsnew must bound Screen 0 with context.WithTimeout(ctx, whatsnewScreenTimeout) (SCRN-04 dedicated cap)")
+		t.Fatal("whatsnewRender must bound Screen 0 with context.WithTimeout(ctx, whatsnewScreenTimeout) (SCRN-04 dedicated cap)")
 	}
 	if usesSharedIdle {
-		t.Fatal("maybeShowWhatsnew must NOT use the shared withDashboardIdle for Screen 0 (SCRN-04 requires a dedicated timeout distinct from the menu idle cap)")
+		t.Fatal("whatsnewRender must NOT use the shared withDashboardIdle for Screen 0 (SCRN-04 requires a dedicated timeout distinct from the menu idle cap)")
 	}
 }
 
