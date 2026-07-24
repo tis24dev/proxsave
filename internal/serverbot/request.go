@@ -2,6 +2,7 @@ package serverbot
 
 import (
 	"encoding/json"
+	"net/http"
 	"net/url"
 	"strings"
 	"time"
@@ -23,12 +24,13 @@ type Request struct {
 	MaxBytes  int64         // response read cap; 0 -> 8192
 }
 
-// Response carries the RAW HTTP status (load-bearing: the caller maps semantics) and
-// the bounded body. It never contains endpoint DTOs (e.g. login_url): the caller
-// parses those from Body.
+// Response carries the RAW HTTP status and a clone of the response headers
+// (load-bearing: the caller maps endpoint semantics), plus the bounded body. It
+// never contains endpoint DTOs (e.g. login_url): the caller parses those from Body.
 type Response struct {
-	Status int    // raw HTTP status code
-	Body   []byte // io.ReadAll(io.LimitReader(body, MaxBytes)); never unbounded
+	Status int         // raw HTTP status code
+	Header http.Header // cloned before the transport response is closed
+	Body   []byte      // io.ReadAll(io.LimitReader(body, MaxBytes)); never unbounded
 }
 
 // JSON unmarshals the body into v.

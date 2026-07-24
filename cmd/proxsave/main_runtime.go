@@ -278,6 +278,14 @@ func initializeRunLogger(rt *appRuntime) *logging.Logger {
 		// logger off the console until the flow adopts the session (the
 		// adoption lifts the mute; the flow then applies its own).
 		logger.SwapOutput(io.Discard)
+		// Tee the full colored stream into a backlog IN PARALLEL to the (muted)
+		// console AND the file, so the streamed backup can replay everything the
+		// on-disk log already has - banner, environment, preflight - captured from
+		// here (before bootstrap.Flush) instead of starting mid-run at
+		// "Initializing backup orchestrator". runBackupStreamed drains and detaches
+		// it once its viewport exists.
+		dashboardStreamBacklog = logging.NewLineBacklog(dashboardStreamBacklogMaxLines)
+		logger.SetMirror(dashboardStreamBacklog)
 	}
 	logging.SetDefaultLogger(logger)
 	rt.bootstrap.SetLevel(rt.logLevel)

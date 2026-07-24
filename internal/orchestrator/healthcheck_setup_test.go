@@ -150,6 +150,7 @@ func TestClassifyHealthcheckSetupResult(t *testing.T) {
 		{"ready but not reachable -> retry", HealthcheckCheckResult{Err: nil, Reachable: false, LoginURL: "https://hc.proxsave.dev/L"}, false, false, "https://hc.proxsave.dev/L"},
 		{"auth fatal", HealthcheckCheckResult{Err: health.ErrHCAuth}, false, true, ""},
 		{"unknown fatal", HealthcheckCheckResult{Err: health.ErrHCUnknown}, false, true, ""},
+		{"parked fatal", HealthcheckCheckResult{Err: health.ErrHCParked}, false, true, ""},
 		{"disabled fatal", HealthcheckCheckResult{Err: health.ErrHCDisabled}, false, true, ""},
 		{"not ready retry", HealthcheckCheckResult{Err: health.ErrHCNotReady}, false, false, ""},
 		{"network retry keeps login", HealthcheckCheckResult{Err: errors.New("dial"), LoginURL: "https://hc.proxsave.dev/L2"}, false, false, "https://hc.proxsave.dev/L2"},

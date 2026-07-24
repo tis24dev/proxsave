@@ -3,6 +3,7 @@ package notify
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"strings"
@@ -391,5 +392,36 @@ func TestTelegramRelayErrorRedactsSecret(t *testing.T) {
 	}
 	if strings.Contains(relayErr.Error(), secret) {
 		t.Fatalf("error string leaked the NotifySecret: %q", relayErr.Error())
+	}
+}
+
+func TestTelegramRelayParkedReturnsSentinel(t *testing.T) {
+	logger := logging.New(types.LogLevelDebug, false)
+	client := &http.Client{
+		Transport: roundTripperFunc(func(req *http.Request) (*http.Response, error) {
+			return &http.Response{
+				StatusCode: http.StatusGone,
+				Body:       io.NopCloser(strings.NewReader(`{"error":"SERVER_PARKED"}`)),
+				Header:     make(http.Header),
+			}, nil
+		}),
+	}
+	notifier, err := NewTelegramNotifier(TelegramConfig{
+		Enabled:       true,
+		Mode:          TelegramModeCentralized,
+		ServerAPIHost: "https://central.test",
+		ServerID:      "server-123",
+		NotifySecret:  "relay-secret-value-parked-000001",
+	}, logger)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	notifier.client = client
+	status, _, relayErr := notifier.sendViaRelay(context.Background(), "hello", "notify-parked-1")
+	if status != http.StatusGone {
+		t.Fatalf("status = %d, want 410", status)
+	}
+	if !errors.Is(relayErr, errRelayParked) {
+		t.Fatalf("err = %v, want errRelayParked", relayErr)
 	}
 }

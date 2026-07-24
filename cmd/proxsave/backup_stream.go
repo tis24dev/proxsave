@@ -27,6 +27,40 @@ var backupStreamSteps = runBackupModeSteps
 // session so the emitted lines and the outcome can be asserted.
 var backupAdoptSession = adoptDashboardSession
 
+// dashboardStreamBacklogMaxLines bounds the pre-viewport backlog. A run's early
+// phase (banner -> environment -> security preflight, before the backup steps)
+// logs on the order of a few dozen lines at INFO and a couple hundred at DEBUG, so
+// this never drops in practice; it only backstops a pathological producer.
+const dashboardStreamBacklogMaxLines = 4096
+
+// dashboardStreamBacklog holds the run logger's colored line stream captured
+// BEFORE the graphical viewport exists (wired by initializeRunLogger on a
+// dashboard handoff). runBackupStreamed drains it into the viewport, then detaches
+// the mirror so the live stream is not double-captured. Single-use per process
+// (proxsave runs once); nil when there is no handoff (CLI/cron/daemon).
+var dashboardStreamBacklog *logging.LineBacklog
+
+// replayDashboardStreamBacklog flushes the pre-viewport backlog into the streamed
+// panel, in order, BEFORE the live capture is installed, so the viewport shows the
+// SAME complete flow the on-disk log has instead of starting mid-run. It first
+// detaches the logger mirror, THEN emits each retained line; the caller installs
+// captureRunOutput only after this returns, so no line can ever reach both the
+// backlog and the live pipe. A nil backlog (no handoff) is a no-op. Called once.
+func replayDashboardStreamBacklog(emit func(line string)) {
+	backlog := dashboardStreamBacklog
+	dashboardStreamBacklog = nil
+	if backlog == nil {
+		return
+	}
+	// Detach the mirror while the console is still muted and before the live pipe
+	// exists: from here the run's remaining lines reach the panel only through the
+	// capture the caller installs next, so nothing is double-captured.
+	logging.GetDefaultLogger().SetMirror(nil)
+	for _, line := range backlog.Lines() {
+		emit(line)
+	}
+}
+
 // captureRunOutput routes BOTH the loggers (default + colored bootstrap mirror)
 // AND raw os.Stdout through a SINGLE pipe into emit, so everything a run prints -
 // colored logger lines AND the raw fmt.Println blank spacers between sections -
@@ -115,6 +149,13 @@ func runBackupStreamed(opts backupModeOptions) backupModeResult {
 	var res backupModeResult
 	streamErr := components.RunStreamTask(opts.ctx, session, "Running backup",
 		func(taskCtx context.Context, emit func(line string)) (string, error) {
+			// Replay everything logged BEFORE this viewport existed (banner,
+			// environment, identity, security preflight) so the panel shows the
+			// same complete run the on-disk log has. Done FIRST - it detaches the
+			// mirror before captureRunOutput installs the live pipe, so no line can
+			// ever reach both the backlog and the live capture (no double).
+			replayDashboardStreamBacklog(emit)
+
 			// Route the default + COLORED bootstrap-mirror loggers AND raw os.Stdout
 			// (the fmt.Println section spacers the CLI prints) through one pipe into
 			// the panel; restored on return/panic. So the panel shows the SAME lines -

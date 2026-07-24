@@ -175,6 +175,30 @@ func TestDoNon2xxIsNotError(t *testing.T) {
 	}
 }
 
+func TestDoReturnsClonedResponseHeaders(t *testing.T) {
+	wireHeader := make(http.Header)
+	wireHeader.Set("Retry-After", "7200")
+	c := clientWithRT(func(r *http.Request) (*http.Response, error) {
+		resp := stubResp(http.StatusTooManyRequests, "limited")
+		resp.Header = wireHeader
+		return resp, nil
+	})
+
+	resp, err := c.Do(context.Background(), Request{Path: "/api/relay/provision"})
+	if err != nil {
+		t.Fatalf("Do: %v", err)
+	}
+	if got := resp.Header.Get("Retry-After"); got != "7200" {
+		t.Fatalf("Retry-After = %q, want 7200", got)
+	}
+	// Response owns a clone: later transport mutation must not rewrite the
+	// endpoint-specific backoff decision.
+	wireHeader.Set("Retry-After", "1")
+	if got := resp.Header.Get("Retry-After"); got != "7200" {
+		t.Fatalf("Response.Header aliases transport header: got %q", got)
+	}
+}
+
 func TestDoTransportErrorRedacted(t *testing.T) {
 	secret := "supersecret-token-value"
 	// inner error also carries the secret in text (contrived) to prove RedactSecrets.

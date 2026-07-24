@@ -60,6 +60,10 @@ func ClassifyHealthcheckSetupResult(res HealthcheckCheckResult) HealthcheckSetup
 		st.Fatal, st.Level, st.Keyword = true, HealthcheckSetupLevelError, "NOT REGISTERED"
 		st.Message = "This host is not registered on the server yet. It is registered automatically on the next daemon run (no Telegram pairing needed); if this persists the monitoring server is unreachable from this host."
 		return st
+	case errors.Is(res.Err, health.ErrHCParked):
+		st.Fatal, st.Level, st.Keyword = true, HealthcheckSetupLevelError, "PARKED"
+		st.Message = "The monitoring server had removed this host's unused account. The relay credential is cleared and re-provisioned automatically on the next daemon run, which re-registers this host."
+		return st
 	case errors.Is(res.Err, health.ErrHCDisabled):
 		st.Fatal, st.Level, st.Keyword = true, HealthcheckSetupLevelError, "DISABLED"
 		st.Message = "Centralized monitoring is currently disabled on the server; nothing to configure here."

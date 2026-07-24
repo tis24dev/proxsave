@@ -76,10 +76,14 @@ func (n *NotificationAdapter) Notify(ctx context.Context, stats *BackupStats) er
 	if n.notifier.Name() == "Telegram" && n.logTelegramOutcome(result) {
 		// handled by the relay-aware two-line logger
 	} else if !result.Success {
-		// Complete failure
-		n.logger.Warning("%s: failure reported", n.notifier.Name())
+		// Complete failure. The adapter is the SINGLE voice for a channel's terminal
+		// outcome (each notifier demotes its own terminal-failure line to Debug).
+		// result.Error can carry raw upstream response bodies (a webhook endpoint's
+		// reply, etc.), so keep the WARNING generic -- like the fallback branch below --
+		// and surface the unsanitized detail only at Debug.
+		n.logger.Warning("❌ %s: notification failed", n.notifier.Name())
 		if result.Error != nil {
-			n.logger.Debug("  Error: %v", result.Error)
+			n.logger.Debug("  %s failure detail: %v", n.notifier.Name(), result.Error)
 		}
 	} else if result.UsedFallback {
 		// Fallback succeeded after primary method failed

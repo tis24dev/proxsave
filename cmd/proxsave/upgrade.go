@@ -333,6 +333,18 @@ func upgradeFinalizePhase(ctx context.Context, args *cli.Args, bootstrap *loggin
 
 	printUpgradeFooter(upgradeErr, versionInstalled, args.ConfigPath, baseDir, telegramCode, permStatus, permMessage, cfgUpgradeResult, cfgUpgradeErr, daemonRestart)
 
+	// After a FULLY successful upgrade (binary AND configuration), open Screen 0 (what's
+	// new) for the freshly installed release by re-invoking the installed binary with
+	// --show-whatsnew. The notes registry is compiled into each binary, so the INSTALLED
+	// binary -- not necessarily this process (the download path finalizes from the OLD
+	// binary) -- is the one that must render them. Best-effort and gated (interactive AND
+	// not auto-yes) inside the helper; never changes the exit code. A config-upgrade
+	// failure (cfgUpgradeErr) leaves the footer showing "Configuration: ERROR" and a
+	// nonzero exit, so opening a celebratory notes screen there would contradict it.
+	if upgradeErr == nil && cfgUpgradeErr == nil {
+		runWhatsnewAfterUpgrade(ctx, execPath, args, bootstrap)
+	}
+
 	// The workflow span error mirrors the exit code's reasoning: a binary-install
 	// failure, or a config-upgrade failure after a good install (the footer already
 	// shows "Configuration: ERROR"), so automation and the trace agree.
@@ -970,4 +982,54 @@ func upgradeConfigWithBinary(ctx context.Context, execPath, configPath string) (
 		return nil, fmt.Errorf("invalid JSON from upgrade-config-json: %w (stdout=%q)", err, preview)
 	}
 	return &result, nil
+}
+
+// whatsnewAfterUpgradeInteractive reports whether the terminal can drive the post-upgrade
+// Screen 0. It is a var so tests can force the branch without a real TTY.
+var whatsnewAfterUpgradeInteractive = isTerminalInteractive
+
+// shouldRunWhatsnewAfterUpgrade decides whether to open Screen 0 at the end of an upgrade.
+// It requires an interactive terminal AND that the operator did NOT request auto-yes
+// (`--upgrade y`). Auto-yes signals non-interactive intent even when a pty IS allocated
+// (ssh -tt, Ansible with a pty, `script -c`), where isTerminalInteractive() alone is true;
+// opening a screen that waits for a human keypress there would stall the process until the
+// Screen 0 timeout on an otherwise successful automated upgrade, so auto-yes must skip it.
+func shouldRunWhatsnewAfterUpgrade(args *cli.Args) bool {
+	if args == nil || args.UpgradeAutoYes {
+		return false
+	}
+	return whatsnewAfterUpgradeInteractive()
+}
+
+// runWhatsnewAfterUpgrade re-invokes the freshly installed binary (execPath) with
+// --show-whatsnew so Screen 0 (what's new) opens at the END of a successful interactive
+// upgrade. It MUST be the installed binary that renders it: the notes registry is compiled
+// into each binary, so on the download path -- where THIS process is still the OLD binary --
+// only execPath knows the new release's notes. Stdio is inherited so the child paints the
+// TUI on the real terminal. Gated by shouldRunWhatsnewAfterUpgrade (interactive AND not
+// auto-yes) so an automated upgrade never blocks, and best-effort so a render failure never
+// changes the upgrade's exit code.
+func runWhatsnewAfterUpgrade(ctx context.Context, execPath string, args *cli.Args, bootstrap *logging.BootstrapLogger) {
+	if !shouldRunWhatsnewAfterUpgrade(args) {
+		return
+	}
+	execPath = strings.TrimSpace(execPath)
+	if execPath == "" {
+		return
+	}
+	cmdArgs := []string{"--show-whatsnew"}
+	if configPath := strings.TrimSpace(args.ConfigPath); configPath != "" {
+		cmdArgs = append([]string{"--config", configPath}, cmdArgs...)
+	}
+	cmd, err := safeexec.TrustedCommandContext(ctx, execPath, cmdArgs...)
+	if err != nil {
+		logging.DebugStepBootstrap(bootstrap, "upgrade workflow", "what's-new screen skipped: %v", err)
+		return
+	}
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	if err := cmd.Run(); err != nil {
+		logging.DebugStepBootstrap(bootstrap, "upgrade workflow", "what's-new screen exited with error: %v", err)
+	}
 }

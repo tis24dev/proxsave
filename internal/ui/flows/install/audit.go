@@ -132,9 +132,21 @@ func RunPostInstallAudit(ctx context.Context, session *shell.Session, execPath, 
 	}
 	result.AppliedKeys = normalizeAuditKeys(keys)
 	showAuditResult(ctx, session, "Post-install check", orchestrator.HealthcheckSetupLevelOk,
-		"UPDATED", fmt.Sprintf("Disabled %d component(s): %s",
-			len(result.AppliedKeys), strings.Join(result.AppliedKeys, ", ")), backToMenu)
+		"UPDATED", disabledComponentsSummary(result.AppliedKeys), backToMenu)
 	return result, nil
+}
+
+// disabledComponentsSummary renders the "UPDATED" explanation as a header line followed by
+// ONE component key per line (a "- " bulleted column), so a long list stays readable instead
+// of collapsing into a single truncated line. The result screen (auditResultPrompt ->
+// SanitizeText -> theme.Subtle) preserves newlines, so each key gets its own row.
+func disabledComponentsSummary(keys []string) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "Disabled %d component(s):", len(keys))
+	for _, k := range keys {
+		b.WriteString("\n- " + k)
+	}
+	return b.String()
 }
 
 // auditResultAction is the single choice on a post-install audit outcome screen:

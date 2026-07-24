@@ -172,9 +172,9 @@ func (t *StreamTask) Title() string { return t.title }
 
 func (t *StreamTask) Help() string {
 	if t.done {
-		return "↑/↓ scroll · c copy log · enter continue"
+		return "↑/↓ scroll · c copy full log · shift/option+drag to select a section · enter continue"
 	}
-	return "↑/↓ scroll · c copy log · esc cancel"
+	return "↑/↓ scroll · c copy full log · shift/option+drag to select a section · esc cancel"
 }
 
 // appendRaw appends one already-sanitized raw line to the ring, enforces the

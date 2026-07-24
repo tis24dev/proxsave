@@ -475,11 +475,14 @@ func TestRunPostInstallAudit(t *testing.T) {
 	d.keys("space down down down enter")
 	// The outcome is now the shared styled "Post-install check" result screen (a
 	// selector with a colored Status keyword), not a Notice. Assert the green
-	// "✓ UPDATED" keyword + the disabled-component line. In the install flow the
-	// leave item is "Continue" (mirrors the Telegram check that follows), NOT "Back".
+	// "✓ UPDATED" keyword + the disabled-component summary, which is now a header
+	// line plus one "- KEY" column row (so a long list is not truncated). In the
+	// install flow the leave item is "Continue" (mirrors the Telegram check that
+	// follows), NOT "Back".
 	d.waitScreen("Post-install check")
 	d.waitText("✓ UPDATED")
-	d.waitText("Disabled 1 component(s): BACKUP_X")
+	d.waitText("Disabled 1 component(s):")
+	d.waitText("- BACKUP_X")
 	d.waitText("Continue")
 	d.keys("enter")
 

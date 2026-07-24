@@ -62,6 +62,57 @@ func (w *lineWriter) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
+// LineBacklog is a bounded, thread-safe io.Writer that retains the most recent
+// complete lines written to it (ANSI escapes PRESERVED, like NewLineWriterRaw), so
+// a late-attaching consumer can replay everything produced before it existed. It
+// is the buffer behind Logger.SetMirror: the run logger tees its colored stream
+// here while the graphical viewport does not yet exist, then the viewport drains
+// Lines() once it is on the stack. Retention is bounded: the newest max lines are
+// always kept and the total never exceeds 2*max (older lines are dropped in an
+// amortized compaction, since a wedged/absent consumer can only ever review the
+// newest anyway).
+type LineBacklog struct {
+	mu    sync.Mutex
+	lines []string
+	max   int
+	w     io.Writer // NewLineWriterRaw(b.append): splits on '\n', keeps ANSI
+}
+
+// NewLineBacklog returns a LineBacklog that always retains the newest max complete
+// lines (and at most 2*max at any instant). A non-positive max is clamped to 1.
+func NewLineBacklog(max int) *LineBacklog {
+	if max <= 0 {
+		max = 1
+	}
+	b := &LineBacklog{max: max}
+	b.w = NewLineWriterRaw(b.append)
+	return b
+}
+
+// Write feeds bytes through the line splitter; complete lines are retained.
+func (b *LineBacklog) Write(p []byte) (int, error) { return b.w.Write(p) }
+
+func (b *LineBacklog) append(line string) {
+	b.mu.Lock()
+	b.lines = append(b.lines, line)
+	// Amortized trim: let the slice grow to 2*max, then compact to the newest max
+	// in one copy. This keeps the steady-state cost O(1) per line (instead of an
+	// O(max) copy on every line past the cap) while never retaining more than 2*max
+	// lines. The compaction copies into a fresh slice so the large backing array is
+	// released rather than pinned by a reslice.
+	if len(b.lines) > 2*b.max {
+		b.lines = append([]string(nil), b.lines[len(b.lines)-b.max:]...)
+	}
+	b.mu.Unlock()
+}
+
+// Lines returns a snapshot copy of the retained lines, oldest first.
+func (b *LineBacklog) Lines() []string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return append([]string(nil), b.lines...)
+}
+
 // CaptureConsole is the SINGLE place that wires the loggers to w so a full-screen
 // UI (or any phase that wants its own log lines) can stream them. It:
 //

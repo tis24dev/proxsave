@@ -4,55 +4,178 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/tis24dev/proxsave/internal/identity"
 	"github.com/tis24dev/proxsave/internal/logging"
+	"github.com/tis24dev/proxsave/internal/serverbot"
 )
 
-// ProvisionRelaySecret performs the get-chat-id handshake WITH provision intent and, on a
-// 200 that issues a notify_secret, persists it (immutable identity file) and confirms it
-// back to the server so the centralized healthcheck fetch can authenticate WITHOUT any
-// Telegram pairing. Now that the server issues the relay secret for a chat-less known
-// ServerID, this is the generic, Telegram-independent provisioning entry point used by the
-// healthcheck self-heal hooks.
+// provisionTimeout bounds the relay-provision POST; callers retry on the next run.
+const provisionTimeout = 5 * time.Second
+
+// relayProvisionMaxRetryAfter bounds a server-supplied Retry-After. The relay's
+// longest rolling admission window is 24h; a larger value is treated as 24h so a
+// malformed response cannot suppress self-healing indefinitely.
+const relayProvisionMaxRetryAfter = 24 * time.Hour
+
+// RelayProvisionRateLimitError is returned for HTTP 429. RetryAfter is zero when
+// the header is absent/invalid; callers then keep their existing local retry floor.
+// A typed error lets the daemon honor server backpressure without exposing or
+// logging the untrusted response body.
+type RelayProvisionRateLimitError struct {
+	RetryAfter time.Duration
+}
+
+func (e *RelayProvisionRateLimitError) Error() string {
+	if e != nil && e.RetryAfter > 0 {
+		return fmt.Sprintf("relay provision: rate limited (HTTP 429; retry after %s)", e.RetryAfter)
+	}
+	return "relay provision: rate limited (HTTP 429)"
+}
+
+func parseRelayProvisionRetryAfter(raw string, now time.Time) time.Duration {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return 0
+	}
+	if seconds, err := strconv.ParseInt(raw, 10, 64); err == nil {
+		if seconds <= 0 {
+			return 0
+		}
+		if seconds > int64(relayProvisionMaxRetryAfter/time.Second) {
+			return relayProvisionMaxRetryAfter
+		}
+		return time.Duration(seconds) * time.Second
+	}
+	when, err := http.ParseTime(raw)
+	if err != nil {
+		return 0
+	}
+	d := when.Sub(now)
+	if d <= 0 {
+		return 0
+	}
+	if d > relayProvisionMaxRetryAfter {
+		return relayProvisionMaxRetryAfter
+	}
+	return d
+}
+
+// relayProvisionResponse is the JSON of POST /api/relay/provision: a 201 carries
+// notify_secret; a 200 carries status=="already_provisioned". The RELAY_* error field
+// is deliberately NOT decoded here (untrusted text); the status code drives the logic.
+type relayProvisionResponse struct {
+	NotifySecret string `json:"notify_secret"`
+	Status       string `json:"status"`
+}
+
+// provisionViaRelay POSTs the dedicated, Telegram-independent provisioning endpoint
+// POST /api/relay/provision (unauthenticated: the endpoint ISSUES the per-server token)
+// with {server_id} plus the shared X-Proxsave-Version header. It returns:
 //
-// It reuses the exact three bricks the Telegram path uses -
-// checkTelegramRegistrationWithSecret(provision=true), identity.PersistNotifySecret, and
-// confirmTelegramRelaySecret - so both paths share one wire contract and one log-masking
-// path. The issued secret is registered with the logger's masker inside
-// checkTelegramRegistrationWithSecret BEFORE any body preview is logged.
+//	(secret, false, nil) on 201 with a notify_secret          -> adopt + confirm
+//	("", true, nil)      on 200 already_provisioned            -> nothing to adopt
+//	("", false, err)     on 429 (retryable) / any other code / transport error
+//
+// The untrusted response body is NEVER embedded in the returned error (only the status
+// code), and the issued secret is registered with the logger's masker before any later
+// log line can preview it.
+func provisionViaRelay(ctx context.Context, serverAPIHost, serverID string, logger *logging.Logger) (string, bool, error) {
+	resp, err := serverbot.New(serverAPIHost, http.DefaultClient, logger).Do(ctx, serverbot.Request{
+		Method: http.MethodPost,
+		Path:   "/api/relay/provision",
+		Body: struct {
+			ServerID string `json:"server_id"`
+		}{ServerID: serverID},
+		Timeout:  provisionTimeout,
+		MaxBytes: 8192,
+	})
+	if err != nil {
+		return "", false, fmt.Errorf("relay provision: request failed: %w", err)
+	}
+	switch resp.Status {
+	case http.StatusCreated: // 201: fresh token issued
+		var body relayProvisionResponse
+		if jerr := resp.JSON(&body); jerr != nil {
+			return "", false, fmt.Errorf("relay provision: bad 201 JSON: %w", jerr)
+		}
+		secret := strings.TrimSpace(body.NotifySecret)
+		if secret == "" {
+			return "", false, fmt.Errorf("relay provision: 201 without notify_secret")
+		}
+		if logger != nil {
+			logger.RegisterSecret(secret)
+		}
+		return secret, false, nil
+	case http.StatusOK: // 200: already provisioned + confirmed server-side
+		var body relayProvisionResponse
+		if jerr := resp.JSON(&body); jerr != nil {
+			return "", false, fmt.Errorf("relay provision: bad 200 JSON: %w", jerr)
+		}
+		if body.Status != "already_provisioned" {
+			return "", false, fmt.Errorf("relay provision: unexpected 200 status")
+		}
+		// No new token is minted. We have nothing to adopt this run; a lost local
+		// secret is not recoverable here (the row self-heals via purge + recreation
+		// later, or a fresh recreation re-issues). Do NOT try to read a token that
+		// is not in the body.
+		return "", true, nil
+	case http.StatusTooManyRequests: // 429: rolling/total admission cap
+		// A TEMPORARY refusal. Persist nothing; the caller retries on the next run.
+		return "", false, &RelayProvisionRateLimitError{
+			RetryAfter: parseRelayProvisionRetryAfter(
+				resp.Header.Get("Retry-After"), time.Now()),
+		}
+	default:
+		// 400 / 422 / 426 / 500 / 503 / ... The body is untrusted, so the error
+		// carries only the status code.
+		return "", false, fmt.Errorf("relay provision: unexpected status %d", resp.Status)
+	}
+}
+
+// ProvisionRelaySecret provisions this host's per-server relay token WITHOUT any Telegram
+// pairing, via the dedicated POST /api/relay/provision endpoint: on a 201 it persists the
+// issued token (immutable identity file) and confirms it (/api/confirm-secret) so the
+// centralized healthcheck fetch and the notify relay can authenticate. This is the generic
+// provisioning entry point used by the healthcheck self-heal hooks and the SERVER_PARKED
+// recovery path.
+//
+// The legacy /api/get-chat-id handshake is intentionally NOT used here: for a chat-less
+// (Telegram-independent) server it returns 409 before ever issuing a token, so Option A
+// could never provision through it. get-chat-id remains the Telegram/v0.29 path unchanged.
 //
 // Returns provisioned=true once the secret is on disk (a confirm failure is NON-FATAL: the
 // hash the server stored on issuance already authenticates the fetch, and the server
 // re-confirms on the next run). Every other outcome returns (false, err-or-nil):
-//   - a non-200 handshake            -> (false, err)
-//   - a 200 that issued no secret    -> (false, nil)   [nothing to adopt]
-//   - an empty baseDir               -> (false, err)
-//   - an issued secret < identity.NotifySecretMinLen runes -> (false, err)  [defensive floor]
-//   - a persist failure              -> (false, err)
+//   - a non-201 refusal (429 retryable, or another code) -> (false, err)
+//   - a 200 already_provisioned (nothing to adopt)        -> (false, nil)
+//   - a 201 with no token                                 -> (false, err)
+//   - an empty baseDir                                    -> (false, err)
+//   - an issued secret < identity.NotifySecretMinLen runes -> (false, err) [defensive floor]
+//   - a persist failure                                   -> (false, err)
 //
 // Callers MUST treat a non-nil err as "retry later" and NEVER block on it.
 func ProvisionRelaySecret(ctx context.Context, serverAPIHost, serverID, baseDir string, logger *logging.Logger) (bool, error) {
 	if strings.TrimSpace(baseDir) == "" {
 		return false, fmt.Errorf("relay provision: empty baseDir, cannot persist relay secret")
 	}
-	// Serialize the entire issue -> persist -> confirm across processes. Hook a (installer)
-	// and hook b (an enable-now daemon) can run concurrently against the same server_id;
-	// two DISTINCT minted secrets would strand the host (last-write-wins on disk vs the
-	// server's confirm-locks-reissue). An exclusive advisory lock on the identity dir makes
-	// exactly one minter win; the loser adopts the winner's on-disk secret below.
+	// Serialize issue -> persist -> confirm across processes. Hook a (installer) and
+	// hook b (an enable-now daemon) can run concurrently against the same server_id; two
+	// DISTINCT minted secrets would strand the host (last-write-wins on disk vs the
+	// server's confirm-locks-reissue). An exclusive advisory lock on the identity dir
+	// makes exactly one minter win; the loser adopts the winner's on-disk secret below.
 	unlock, err := identity.LockNotifySecret(baseDir)
 	if err != nil {
 		return false, fmt.Errorf("relay provision: lock: %w", err)
 	}
 	defer unlock()
 	// Re-check UNDER the lock: if a concurrent minter already persisted a secret, adopt it
-	// instead of minting a competing one. Returns (false, nil) - nothing to provision - so
-	// the caller reads the winner's secret from disk on its next fetch. A real read error
-	// (the file exists but could not be read) is surfaced rather than swallowed: proceeding
-	// would mint a fresh secret OVER a value we failed to read. Missing/empty/malformed still
-	// yields ("", nil) per the loader contract, so we fall through and provision.
+	// instead of minting a competing one. A real read error (the file exists but could not
+	// be read) is surfaced rather than swallowed; missing/empty/malformed yields ("", nil)
+	// per the loader contract, so we fall through and provision.
 	if s, err := identity.LoadNotifySecret(baseDir); err != nil {
 		return false, fmt.Errorf("relay provision: re-check load: %w", err)
 	} else if strings.TrimSpace(s) != "" {
@@ -60,16 +183,27 @@ func ProvisionRelaySecret(ctx context.Context, serverAPIHost, serverID, baseDir 
 		return false, nil
 	}
 
-	status, secret := checkTelegramRegistrationWithSecret(ctx, serverAPIHost, serverID, true, logger)
-	if status.Code != 200 {
-		// Do NOT wrap the raw server body (status.Error) into the returned error: it is
-		// untrusted text. The status code alone is enough for the caller to degrade/retry.
-		return false, fmt.Errorf("relay provision: get-chat-id returned status %d", status.Code)
+	secret, alreadyProvisioned, err := provisionViaRelay(ctx, serverAPIHost, serverID, logger)
+	if err != nil {
+		return false, err
 	}
-	if secret == "" {
-		// Linked/known but the server issued no (new) token - e.g. the secret is already
-		// confirmed server-side. Nothing to adopt; not an error.
-		logTelegramRegistrationDebug(logger, "relay provision: 200 without token (nothing to provision)")
+	if alreadyProvisioned {
+		// This branch is reached only with NO local secret (re-checked under the lock
+		// above) yet the server reports a CONFIRMED registration. The server re-mints for
+		// an UNCONFIRMED row (returning 201), so this is specifically the confirmed-then-
+		// lost case: the server keeps only the secret's sha256 and cannot hand back the
+		// plaintext, and re-minting a confirmed token for an unauthenticated caller would
+		// let anyone knowing the 16-digit server_id rotate another host's secret. There is
+		// therefore no safe in-band recovery, so surface it at WARNING (not a silent Debug)
+		// instead of returning a misleading success. An eligible chat-less row still self-
+		// heals through the server-side purge + recreation, which re-issues a fresh token.
+		if logger != nil {
+			logger.Warning("Relay provisioning: server_id is already provisioned server-side " +
+				"but no local relay secret is present; a confirmed token cannot be re-minted " +
+				"automatically. Centralized healthcheck config fetch and relay notifications stay " +
+				"unavailable until the server-side row is purged and recreated (automatic once the " +
+				"row is purge-eligible) or cleared by an operator.")
+		}
 		return false, nil
 	}
 	// Defensive length floor (shared with the persistence sink): an issued secret shorter

@@ -70,6 +70,14 @@ type Logger struct {
 	issueLines       []string // Captured WARNING/ERROR/CRITICAL lines for end-of-run summary
 	exitFunc         func(int)
 	secrets          []secretForm // registered secret values scrubbed from every log line
+	// mirror is an optional COLORED tap that receives a copy of every line the
+	// logger records, on BOTH the standard path (logWithLabel) AND the raw path
+	// (AppendRaw). It is parallel to the file sink, not to the console: the console
+	// can be muted (SwapOutput to io.Discard during a UI handoff) while the mirror
+	// still captures the full stream, so a late-attaching graphical viewport can
+	// replay everything the on-disk log already has (banner, environment, preflight)
+	// instead of starting mid-run. nil disables it. Guarded by mu.
+	mirror io.Writer
 }
 
 // RegisterSecret records a secret value so it is masked out of every subsequent
@@ -134,6 +142,19 @@ func (l *Logger) SetOutput(w io.Writer) {
 		return
 	}
 	l.output = w
+}
+
+// SetMirror sets (or clears, with nil) the optional COLORED mirror tap. Every
+// line the logger records is copied to w in the same colored "[ts] LEVEL msg"
+// shape the console uses, on both the standard and the raw (AppendRaw) paths,
+// independently of the console writer (which a UI handoff may mute). A late
+// graphical consumer sets it before the run's early lines are logged, drains the
+// captured lines when its viewport exists, then clears it (SetMirror(nil)) so the
+// live stream is not double-captured.
+func (l *Logger) SetMirror(w io.Writer) {
+	l.mu.Lock()
+	l.mirror = w
+	l.mu.Unlock()
 }
 
 // SetIOTimeout bounds subsequent log-file open/write/close operations so a dead or
@@ -448,6 +469,12 @@ func (l *Logger) logWithLabel(level types.LogLevel, label string, colorOverride 
 	// Write to stdout with colors.
 	_, _ = fmt.Fprint(l.output, outputStdout)
 
+	// Mirror the COLORED line to the optional tap (parallel to the file sink, so a
+	// muted console never starves it). In-memory, non-blocking; never wedges l.mu.
+	if l.mirror != nil {
+		_, _ = io.WriteString(l.mirror, outputStdout)
+	}
+
 	// If a log file is open and not disabled, write there too (without colors),
 	// bounded so a dead/stale mount cannot wedge logging while holding l.mu.
 	if l.logFile != nil && !l.fileSinkDisabled {
@@ -631,10 +658,18 @@ func (l *Logger) Fatal(exitCode types.ExitCode, format string, args ...interface
 func (l *Logger) AppendRaw(message string) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
+	timestamp := time.Now().Format(l.timeFormat)
+	// Mirror the raw line to the COLORED tap as an INFO-level line (the same shape
+	// the file records it, and the same color logWithLabel gives Info), so a
+	// graphical viewport replays the early banner even though the console path
+	// deliberately skips raw lines. Done before the file-sink guard so a viewport
+	// never depends on the log file being open.
+	if l.mirror != nil {
+		_, _ = io.WriteString(l.mirror, FormatConsoleLogLine(timestamp, types.LogLevelInfo, message, l.useColor))
+	}
 	if l.logFile == nil || l.fileSinkDisabled {
 		return
 	}
-	timestamp := time.Now().Format(l.timeFormat)
 	output := fmt.Sprintf("[%s] %-8s %s\n",
 		timestamp,
 		types.LogLevelInfo.String(),
