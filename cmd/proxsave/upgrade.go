@@ -333,13 +333,15 @@ func upgradeFinalizePhase(ctx context.Context, args *cli.Args, bootstrap *loggin
 
 	printUpgradeFooter(upgradeErr, versionInstalled, args.ConfigPath, baseDir, telegramCode, permStatus, permMessage, cfgUpgradeResult, cfgUpgradeErr, daemonRestart)
 
-	// After a successful upgrade, open Screen 0 (what's new) for the freshly installed
-	// release by re-invoking the installed binary with --show-whatsnew. The notes registry
-	// is compiled into each binary, so the INSTALLED binary -- not necessarily this process
-	// (the download path finalizes from the OLD binary) -- is the one that must render them.
-	// Best-effort and gated (interactive AND not auto-yes) inside the helper; never changes
-	// the exit code.
-	if upgradeErr == nil {
+	// After a FULLY successful upgrade (binary AND configuration), open Screen 0 (what's
+	// new) for the freshly installed release by re-invoking the installed binary with
+	// --show-whatsnew. The notes registry is compiled into each binary, so the INSTALLED
+	// binary -- not necessarily this process (the download path finalizes from the OLD
+	// binary) -- is the one that must render them. Best-effort and gated (interactive AND
+	// not auto-yes) inside the helper; never changes the exit code. A config-upgrade
+	// failure (cfgUpgradeErr) leaves the footer showing "Configuration: ERROR" and a
+	// nonzero exit, so opening a celebratory notes screen there would contradict it.
+	if upgradeErr == nil && cfgUpgradeErr == nil {
 		runWhatsnewAfterUpgrade(ctx, execPath, args, bootstrap)
 	}
 

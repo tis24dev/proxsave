@@ -12,17 +12,31 @@ import (
 	"github.com/tis24dev/proxsave/internal/ui/shell"
 )
 
-// ifGuardsUpgradeSuccessAndCallsWhatsnew reports whether ifs is exactly
-// `if upgradeErr == nil { ... runWhatsnewAfterUpgrade(...) ... }`: the success gate on the
-// upgrade error AND a direct call to the Screen 0 re-invocation helper in its body.
-func ifGuardsUpgradeSuccessAndCallsWhatsnew(ifs *ast.IfStmt) bool {
-	be, ok := ifs.Cond.(*ast.BinaryExpr)
+// isErrNilCheck reports whether e is `<name> == nil`.
+func isErrNilCheck(e ast.Expr, name string) bool {
+	be, ok := e.(*ast.BinaryExpr)
 	if !ok || be.Op != token.EQL {
 		return false
 	}
 	x, ok1 := be.X.(*ast.Ident)
 	y, ok2 := be.Y.(*ast.Ident)
-	if !ok1 || !ok2 || x.Name != "upgradeErr" || y.Name != "nil" {
+	return ok1 && ok2 && x.Name == name && y.Name == "nil"
+}
+
+// ifGuardsUpgradeSuccessAndCallsWhatsnew reports whether ifs is
+// `if upgradeErr == nil && cfgUpgradeErr == nil { ... runWhatsnewAfterUpgrade(...) ... }`:
+// Screen 0 opens only after a FULLY successful upgrade (binary AND configuration), and its
+// body directly calls the Screen 0 re-invocation helper. Gating on the binary result alone
+// would open a celebratory notes screen even when the config upgrade failed (footer shows
+// "Configuration: ERROR", nonzero exit).
+func ifGuardsUpgradeSuccessAndCallsWhatsnew(ifs *ast.IfStmt) bool {
+	land, ok := ifs.Cond.(*ast.BinaryExpr)
+	if !ok || land.Op != token.LAND {
+		return false
+	}
+	// Both binary-install and config-upgrade success must be required, in either order.
+	if !((isErrNilCheck(land.X, "upgradeErr") && isErrNilCheck(land.Y, "cfgUpgradeErr")) ||
+		(isErrNilCheck(land.X, "cfgUpgradeErr") && isErrNilCheck(land.Y, "upgradeErr"))) {
 		return false
 	}
 	if ifs.Body == nil {
@@ -45,8 +59,9 @@ func ifGuardsUpgradeSuccessAndCallsWhatsnew(ifs *ast.IfStmt) bool {
 }
 
 // TestUpgradeShowsWhatsnewAfterFooter is a STRUCTURAL (AST) guard for the core requirement:
-// Screen 0 (what's new) must open at the END of every successful upgrade. It parses
-// upgradeFinalizePhase and pins that `if upgradeErr == nil { runWhatsnewAfterUpgrade(...) }`
+// Screen 0 (what's new) must open at the END of every FULLY successful upgrade. It parses
+// upgradeFinalizePhase and pins that
+// `if upgradeErr == nil && cfgUpgradeErr == nil { runWhatsnewAfterUpgrade(...) }`
 // exists AND appears AFTER the printUpgradeFooter call. Parsing the AST -- not scanning text
 // -- catches a commented-out call, a call moved out of the success gate (which would fire
 // Screen 0 even on a failed upgrade), a call relocated before the footer, and outright
@@ -100,7 +115,7 @@ func TestUpgradeShowsWhatsnewAfterFooter(t *testing.T) {
 	}
 	if idxHook < 0 {
 		t.Fatal("Screen 0 hook missing: upgradeFinalizePhase must contain " +
-			"`if upgradeErr == nil { runWhatsnewAfterUpgrade(...) }` so Screen 0 opens at the end of every successful upgrade")
+			"`if upgradeErr == nil && cfgUpgradeErr == nil { runWhatsnewAfterUpgrade(...) }` so Screen 0 opens only at the end of a fully successful upgrade")
 	}
 	if idxHook <= idxFooter {
 		t.Fatal("the Screen 0 hook (runWhatsnewAfterUpgrade) must come AFTER printUpgradeFooter")
