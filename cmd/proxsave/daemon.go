@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"hash/fnv"
 	"io"
+	"math"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -736,7 +737,11 @@ func daemonProvisionRetryJitter(serverID string, retryAfter time.Duration) time.
 	}
 	h := fnv.New64a()
 	_, _ = h.Write([]byte(serverID))
-	return time.Duration(h.Sum64() % uint64(window+1))
+	// Mask to 63 bits so the sum is a valid non-negative int64 (the conversion cannot
+	// overflow), then reduce it modulo the window in signed space. window is in
+	// (0, 5min], so int64(window)+1 is a small positive divisor and the remainder is a
+	// bounded Duration.
+	return time.Duration(int64(h.Sum64()&math.MaxInt64) % (int64(window) + 1))
 }
 
 // provisionRelaySecretFn is the relay-secret provisioner seam (stubbed in tests so the
