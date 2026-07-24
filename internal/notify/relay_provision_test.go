@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -294,5 +295,152 @@ func TestProvisionRelaySecretAdoptsExistingSecretUnderLock(t *testing.T) {
 	}
 	if loaded, _ := identity.LoadNotifySecret(baseDir); loaded != provisionTestSecret {
 		t.Fatalf("existing secret must be left untouched, got %q", loaded)
+	}
+}
+
+// RelayProvisionRateLimitError.Error must mention the code and, only when present, the
+// backoff; the nil receiver must still yield a non-empty string.
+func TestRelayProvisionRateLimitErrorMessage(t *testing.T) {
+	withRA := &RelayProvisionRateLimitError{RetryAfter: 90 * time.Second}
+	if got := withRA.Error(); !strings.Contains(got, "429") || !strings.Contains(got, "1m30s") {
+		t.Fatalf("Error() with RetryAfter = %q, want 429 + 1m30s", got)
+	}
+	noRA := &RelayProvisionRateLimitError{}
+	if got := noRA.Error(); !strings.Contains(got, "429") || strings.Contains(got, "1m30s") {
+		t.Fatalf("Error() without RetryAfter = %q, want plain 429", got)
+	}
+	var nilErr *RelayProvisionRateLimitError
+	if got := nilErr.Error(); got == "" {
+		t.Fatalf("nil receiver Error() must be non-empty")
+	}
+}
+
+// Exercise every parseRelayProvisionRetryAfter branch: absent, non-positive seconds,
+// unparseable, integer seconds, and the HTTP-date path (future, past, beyond the cap).
+func TestParseRelayProvisionRetryAfterBranches(t *testing.T) {
+	now := time.Unix(1_000_000, 0).UTC()
+	cases := []struct {
+		name string
+		raw  string
+		want time.Duration
+	}{
+		{"empty", "", 0},
+		{"whitespace", "   ", 0},
+		{"zero", "0", 0},
+		{"negative", "-5", 0},
+		{"garbage", "not-a-date", 0},
+		{"seconds", "120", 2 * time.Minute},
+		{"httpdate-future", now.Add(3 * time.Minute).Format(http.TimeFormat), 3 * time.Minute},
+		{"httpdate-past", now.Add(-time.Minute).Format(http.TimeFormat), 0},
+		{"httpdate-beyond-max", now.Add(48 * time.Hour).Format(http.TimeFormat), relayProvisionMaxRetryAfter},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := parseRelayProvisionRetryAfter(tc.raw, now); got != tc.want {
+				t.Fatalf("parse(%q) = %v, want %v", tc.raw, got, tc.want)
+			}
+		})
+	}
+}
+
+// An unexpected status (e.g. 500) is a retryable failure whose error carries only the
+// status code, never the untrusted response body.
+func TestProvisionRelaySecretUnexpectedStatus(t *testing.T) {
+	logger, _ := newProvisionTestLogger()
+	baseDir := t.TempDir()
+	var capt relayCapture
+	server := relayProvisionServer(t, http.StatusInternalServerError, `{"error":"boom-secret-detail"}`, http.StatusOK, &capt)
+	defer server.Close()
+
+	provisioned, err := ProvisionRelaySecret(context.Background(), server.URL, "1234567890123456", baseDir, logger)
+	if provisioned || err == nil {
+		t.Fatalf("500 must fail: got (%v,%v)", provisioned, err)
+	}
+	if strings.Contains(err.Error(), "boom-secret-detail") {
+		t.Fatalf("error leaked the response body: %v", err)
+	}
+	if !strings.Contains(err.Error(), "500") {
+		t.Fatalf("error should carry the status code, got %v", err)
+	}
+	if loaded, _ := identity.LoadNotifySecret(baseDir); loaded != "" {
+		t.Fatalf("500 must persist nothing, got %q", loaded)
+	}
+}
+
+// A 201 with a truncated JSON body fails the decode without persisting anything.
+func TestProvisionRelaySecretBad201JSON(t *testing.T) {
+	logger, _ := newProvisionTestLogger()
+	baseDir := t.TempDir()
+	var capt relayCapture
+	server := relayProvisionServer(t, http.StatusCreated, `{"notify_secret":`, http.StatusOK, &capt)
+	defer server.Close()
+
+	provisioned, err := ProvisionRelaySecret(context.Background(), server.URL, "1234567890123456", baseDir, logger)
+	if provisioned || err == nil {
+		t.Fatalf("bad 201 JSON must fail: got (%v,%v)", provisioned, err)
+	}
+	if loaded, _ := identity.LoadNotifySecret(baseDir); loaded != "" {
+		t.Fatalf("bad 201 must persist nothing, got %q", loaded)
+	}
+}
+
+// A transport failure (server closed before the call) is a retryable error and persists
+// nothing.
+func TestProvisionRelaySecretTransportError(t *testing.T) {
+	logger, _ := newProvisionTestLogger()
+	baseDir := t.TempDir()
+	var capt relayCapture
+	server := relayProvisionServer(t, http.StatusCreated, `{"notify_secret":"`+provisionTestSecret+`"}`, http.StatusOK, &capt)
+	url := server.URL
+	server.Close() // connection refused on the next dial
+
+	provisioned, err := ProvisionRelaySecret(context.Background(), url, "1234567890123456", baseDir, logger)
+	if provisioned || err == nil {
+		t.Fatalf("transport error must fail: got (%v,%v)", provisioned, err)
+	}
+	if loaded, _ := identity.LoadNotifySecret(baseDir); loaded != "" {
+		t.Fatalf("transport error must persist nothing, got %q", loaded)
+	}
+}
+
+// When baseDir is an existing regular file the identity lock cannot be created, so the
+// provisioner fails before any network call.
+func TestProvisionRelaySecretLockFailureOnFileBaseDir(t *testing.T) {
+	logger, _ := newProvisionTestLogger()
+	fileBaseDir := filepath.Join(t.TempDir(), "not-a-dir")
+	if err := os.WriteFile(fileBaseDir, []byte("x"), 0o600); err != nil {
+		t.Fatalf("seed file: %v", err)
+	}
+	var capt relayCapture
+	server := relayProvisionServer(t, http.StatusCreated, `{"notify_secret":"`+provisionTestSecret+`"}`, http.StatusOK, &capt)
+	defer server.Close()
+
+	provisioned, err := ProvisionRelaySecret(context.Background(), server.URL, "1234567890123456", fileBaseDir, logger)
+	if provisioned || err == nil {
+		t.Fatalf("file baseDir must fail at the lock step: got (%v,%v)", provisioned, err)
+	}
+	if capt.provisionHits != 0 {
+		t.Fatalf("lock failure must not contact the server, got %d", capt.provisionHits)
+	}
+}
+
+// A real read error on the under-lock re-check (the secret path is a directory, not a
+// file) aborts before any network call, rather than being swallowed as "no secret".
+func TestProvisionRelaySecretLoadErrorUnderLock(t *testing.T) {
+	logger, _ := newProvisionTestLogger()
+	baseDir := t.TempDir()
+	if err := os.MkdirAll(identity.NotifySecretPath(baseDir), 0o755); err != nil {
+		t.Fatalf("make secret path a directory: %v", err)
+	}
+	var capt relayCapture
+	server := relayProvisionServer(t, http.StatusCreated, `{"notify_secret":"`+provisionTestSecret+`"}`, http.StatusOK, &capt)
+	defer server.Close()
+
+	provisioned, err := ProvisionRelaySecret(context.Background(), server.URL, "1234567890123456", baseDir, logger)
+	if provisioned || err == nil {
+		t.Fatalf("a re-check load error must fail: got (%v,%v)", provisioned, err)
+	}
+	if capt.provisionHits != 0 {
+		t.Fatalf("a load error must abort before contacting the server, got %d", capt.provisionHits)
 	}
 }
