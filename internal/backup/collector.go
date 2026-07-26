@@ -130,6 +130,11 @@ func (c *Collector) depRunCommandWithEnv(ctx context.Context, extraEnv []string,
 // depRunCommandCaptured runs a command with stdout and stderr kept apart. A Collector
 // wired only with the merged-output hooks falls back to them, reporting the merged text
 // as stdout and no stderr.
+//
+// Any injected hook wins over the package-level runner, extraEnv or not: a caller that
+// supplied a runner never wants a real command executed behind its back. RunCommand
+// cannot carry extraEnv, so a Collector wired with only that hook runs the command
+// without the extra environment; the fact is logged rather than worked around.
 func (c *Collector) depRunCommandCaptured(ctx context.Context, extraEnv []string, name string, args ...string) ([]byte, []byte, error) {
 	if c.deps.RunCommandCaptured != nil {
 		return c.deps.RunCommandCaptured(ctx, extraEnv, name, args...)
@@ -140,6 +145,13 @@ func (c *Collector) depRunCommandCaptured(ctx context.Context, extraEnv []string
 	}
 	if c.deps.RunCommandWithEnv != nil {
 		out, err := c.deps.RunCommandWithEnv(ctx, extraEnv, name, args...)
+		return out, nil, err
+	}
+	if c.deps.RunCommand != nil {
+		if c.logger != nil {
+			c.logger.Debug("Running %s through the RunCommand hook, which cannot carry %d extra environment variable(s)", name, len(extraEnv))
+		}
+		out, err := c.deps.RunCommand(ctx, name, args...)
 		return out, nil, err
 	}
 	return runCommandCapturedWithEnv(ctx, extraEnv, name, args...)

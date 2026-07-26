@@ -155,6 +155,43 @@ func TestDatastoreEnumerationWarningCarriesStderr(t *testing.T) {
 	}
 }
 
+// An injected runner must never be bypassed: falling through to the real runner because
+// the path needs extra environment would execute the command against the host.
+func TestExtraEnvPathNeverEscapesAnInjectedRunner(t *testing.T) {
+	called := false
+	deps := CollectorDeps{
+		LookPath: func(name string) (string, error) {
+			return "/bin/" + name, nil
+		},
+		RunCommand: func(ctx context.Context, name string, args ...string) ([]byte, error) {
+			called = true
+			return []byte(diskListStdout), nil
+		},
+	}
+	collector := NewCollectorWithDeps(newTestLogger(), GetDefaultCollectorConfig(), t.TempDir(), types.ProxmoxBS, false, deps)
+	collector.config.PBSRepository = "root@pam@localhost:store"
+	output := filepath.Join(collector.tempDir, "var/lib/proxsave-info", "commands", "pbs", "snapshots.json")
+
+	if err := collector.safeCmdOutputWithPBSAuth(context.Background(),
+		commandSpec("proxmox-backup-client", "snapshot", "list", "--output-format=json"),
+		output,
+		"Snapshot list",
+		false); err != nil {
+		t.Fatalf("safeCmdOutputWithPBSAuth: %v", err)
+	}
+	if !called {
+		t.Fatal("the injected RunCommand hook was bypassed for an extraEnv path")
+	}
+
+	data, err := os.ReadFile(output)
+	if err != nil {
+		t.Fatalf("read snapshots.json: %v", err)
+	}
+	if string(data) != diskListStdout {
+		t.Fatalf("artifact mismatch: %q", string(data))
+	}
+}
+
 // Existing suites inject the legacy combined-output hooks; they must keep working.
 func TestLegacyRunCommandDepStillFeedsArtifact(t *testing.T) {
 	deps := CollectorDeps{
