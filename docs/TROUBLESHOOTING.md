@@ -13,6 +13,7 @@ Complete troubleshooting guide for Proxsave with common issues, solutions, and d
   - [Disk Space Issues](#5-disk-space-issues)
   - [Email Notification Issues](#6-email-notification-issues)
   - [Restore Issues](#7-restore-issues)
+  - [Backup Monitoring Issues](#8-backup-monitoring-issues)
 - [Debug Procedures](#debug-procedures)
 - [Getting Help](#getting-help)
 - [Exit Codes](#exit-codes)
@@ -752,6 +753,80 @@ chattr -i /mnt/pve/<id>
 
 ---
 
+### 8. Backup Monitoring Issues
+
+The full status vocabulary, both the check-screen keywords and the per-sensor states, is documented in [HEALTHCHECKS.md](HEALTHCHECKS.md#troubleshooting). This section covers the cases that send people looking for a fix.
+
+#### The monitoring check never leaves `PROVISIONING`
+
+**Symptoms**:
+- The install screen or the dashboard `Healthchecks` check keeps reporting `PROVISIONING`.
+
+**Cause**:
+- Centralized monitoring provisions this host's credential automatically on a daemon run. No Telegram pairing and no API key are involved. A state that never advances means the request is not getting through.
+
+**Resolution**:
+```bash
+# 1. Is the daemon actually running? It is what provisions.
+proxsave --daemon-status
+systemctl status proxsave-daemon.service
+
+# 2. Watch it try
+journalctl -u proxsave-daemon.service -f
+```
+- Provisioning retries are throttled to roughly every 15 minutes, so give it one interval before concluding anything.
+- If the daemon reports the server is unreachable, this is outbound connectivity from the host, not a ProxSave setting.
+
+#### No monitoring portal link is shown
+
+**Symptoms**:
+- The dashboard check or the end of a run shows no `Healthchecks Portal:` line.
+
+**Cause**:
+- The server stops minting links once you have logged into the portal for the first time. This is the expected steady state: from then on you log in with the password you set.
+- Before that first login, minting is best effort and stays quiet when it fails.
+- A link that is not a clean http(s) URL on the monitoring server's own domain is dropped on purpose, so a tampered response cannot show you a phishing address.
+
+**Resolution**:
+- Log in with your password. If you never set one, open the dashboard `Healthchecks` check again to request a fresh link.
+
+#### A backup ran but `proxsave-backup` stayed silent
+
+**Symptoms**:
+- You ran a backup by hand or from the dashboard, and the monitor recorded nothing.
+
+**Cause**:
+- Only the resident daemon pings. A standalone run hands its outcome off to the daemon, which then pings. The handoff needs a live daemon and is discarded when older than 15 minutes.
+
+**Resolution**:
+- Start the daemon before running standalone backups, or let the daemon run the scheduled backup.
+
+#### Self mode: `UNREACHABLE`
+
+**Symptoms**:
+- The self-mode check cannot reach your ping URL.
+
+**Resolution**:
+```bash
+# The check uses /log, which records a ping without changing check state
+curl -fsS -X POST "https://your-monitor.example/<uuid>/log" && echo OK
+```
+- Confirm the URL is the **full** ping URL of that check. When you configure IDs instead, the daemon builds `<HEALTHCHECK_PING_ENDPOINT>/<HEALTHCHECK_PING_KEY>/<id>`, or `<endpoint>/<id>` with no key. A full `*_URL` always wins over the matching `*_ID`.
+
+#### Sensors read `not provisioned` or `transmit failed`
+
+**Symptoms**:
+- The `Sensors:` list shows those states instead of `ok`.
+
+**Cause**:
+- `not provisioned` means the daemon tried to report but has no URL for that check yet. In centralized mode the URLs are still being fetched; in self mode that check is simply not configured, which is fine if you did not want it.
+- `transmit failed` means the ping did not reach the monitor. It is usually transient.
+
+**Resolution**:
+- The daemon warns once when it cannot reach the monitor, then drops to debug so a recurring failure does not flood the journal. Raise `DEBUG_LEVEL` to see each attempt.
+
+---
+
 ## Debug Procedures
 
 ### Enable Debug Logging
@@ -1069,6 +1144,8 @@ A backup that finishes with warnings (no errors) is promoted from `0` to exit `1
 - **[Cloud Storage Guide](CLOUD_STORAGE.md)** - rclone configuration and troubleshooting
 - **[Encryption Guide](ENCRYPTION.md)** - AGE encryption setup
 - **[Restore Guide](RESTORE_GUIDE.md)** - Restore operations
+- **[Backup Monitoring](HEALTHCHECKS.md)** - Monitored checks, the monitoring portal, and status vocabulary
+- **[Resident Daemon](DAEMON.md)** - Scheduler engines, watchdog, and service management
 
 ### Reference
 - **[Examples](EXAMPLES.md)** - Real-world scenarios

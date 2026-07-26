@@ -165,6 +165,29 @@ The new-key flow is the exception: it uses a separate `agesetup` adapter via `ru
 
 Every flow that owns a session swaps its console output to `io.Discard` for the session lifetime, because raw stdout corrupts the altscreen diff renderer, and defers `Close` so it runs LIFO (terminal restored before the writer comes back). The streamed backup instead redirects `os.Stdout` and captures both loggers into the panel's pipe, so the panel shows the same colored lines and blank-line spacers in the same order as the CLI.
 
+## The healthchecks setup screen
+
+`install.RunHealthcheckSetup` (`internal/ui/flows/install/healthcheck.go`) is one screen serving two callers: the install wizard and the dashboard's `Healthchecks` diagnostic check. The `backToMenu` flag is the only difference. It relabels `Check` to `Re-check` and `Skip`/`Continue` to `Back`, and it makes the check run automatically on entry instead of waiting for a keypress. Nothing else forks, so the two surfaces cannot drift.
+
+Structure worth knowing before touching it:
+
+- **The bootstrap can do network work.** `orchestrator.BuildHealthcheckSetupBootstrap` may run a relay-secret provisioning handshake of up to ten seconds when a centralized host has a resolved Server ID but no secret on disk. It is wrapped in the same `components.RunTask` spinner the connection check uses, so the screen shows progress instead of looking frozen. An already-provisioned host returns immediately.
+- **Eligibility decides whether the screen exists at all.** Only the centralized and self verdicts render; every other verdict sets `Shown=false` and returns. The skip reasons are classified separately by `orchestrator.ClassifyHealthcheckSetupSkip` so the caller can say *why* rather than printing one generic line.
+- **The classifiers own all user-facing copy.** `ClassifyHealthcheckSetupResult`, `ClassifyHealthcheckSelfResult`, and `ClassifyHealthcheckSetupSkip` return a `HealthcheckSetupState` (keyword, message, level, plus the `Verified` and `Fatal` policy flags). `cmd/proxsave/healthcheck_setup_cli.go` renders the same struct, which is what keeps the TUI and `--cli` wordings identical. Add a state there, not in a renderer.
+- **`Verified` latches and `Fatal` removes `Check`.** A hard blocker means another attempt cannot help, so the action disappears rather than inviting a pointless retry. `HealthcheckSetupMaxVerificationAttempts` caps the rest. Esc skips unless already verified.
+- **Self mode swaps three things**: the check seam, the classifier, and the intro copy. The magic-link box and the sensor list stay naturally empty, so there is no self-mode branch in the renderer.
+- **Ordering constraint.** `RunHealthcheckSelfParams` must run *before* `RunHealthcheckSetup`, because the bootstrap re-reads the alive URL from the just-written `backup.env`. The params screen is the only one of the two that writes config; the check screen writes nothing.
+
+Rendering goes through `WithSelectorPromptStyled`, the intentional sanitizer bypass, so everything untrusted is scrubbed by the builder itself:
+
+- the status keyword and its explanation run through `components.SanitizeText`, because the explanation embeds probe error text read raw from the status file;
+- each sensor line is composed then sanitized, because the sensor name is a status-file record key;
+- the portal magic link is validated *upstream* at the capture boundary by `serverbot.TrustedLoginURL`, which is `SanitizeLoginURL` (http(s), printable ASCII) plus a same-registrable-domain check against the bot server. A link that fails either test is dropped to empty and the box is skipped.
+
+Colors come from `renderHealthcheckLevel`, which delegates to `orchestrator.RenderStatusLevel`, and `sensorSetupLevel`, which maps a `health.SensorLevel` onto the same four levels rather than introducing a second palette switch. The rows themselves are built by `health.SensorRows(status, heartbeatInterval, updateInterval, now)`, with `now` injected so the staleness branches stay deterministic in tests.
+
+The user-facing meaning of every keyword and sensor state is in [HEALTHCHECKS.md](HEALTHCHECKS.md).
+
 ## Writing a new screen or flow
 
 To add a component screen:

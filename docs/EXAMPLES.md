@@ -1032,7 +1032,8 @@ journalctl -u proxsave-daemon.service -f      # follow its log
 proxsave --daemon-remove                       # revert to a cron entry
 ```
 
-See [DAEMON.md](DAEMON.md) for the healthchecks modes (centralized vs self) and the full
+See [DAEMON.md](DAEMON.md) for the daemon itself and [HEALTHCHECKS.md](HEALTHCHECKS.md)
+for the monitoring modes (centralized vs self), the monitoring portal, and the full
 configuration keys.
 
 ---

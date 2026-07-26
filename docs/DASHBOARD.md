@@ -179,7 +179,7 @@ Your monitoring portal (single-use link, valid ~1h):
 
 Open it to set a password and configure alert channels. The link is single-use and valid for about an hour. If you run your own healthchecks server (self mode), the check instead confirms that your alive URL is reachable and shows no link. After each check a `Sensors:` list shows one colored line per monitored check with its state and last-ping age.
 
-See [DAEMON.md](DAEMON.md) for the monitoring model.
+See [HEALTHCHECKS.md](HEALTHCHECKS.md) for the monitoring model, what each status keyword means, and what to do about it.
 
 ### Post-install
 

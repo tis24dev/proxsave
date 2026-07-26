@@ -9,7 +9,8 @@ model, the portal magic-link, and the log-redaction rules that keep secrets out 
 the logs.
 
 For the full list of `backup.env` keys see [CONFIGURATION.md](CONFIGURATION.md).
-For the per-channel healthchecks sensors and the resident daemon that pings them see
+For the per-channel healthchecks sensors, the monitoring portal, and what each state
+means see [HEALTHCHECKS.md](HEALTHCHECKS.md); for the daemon that pings them see
 [DAEMON.md](DAEMON.md).
 
 ## The one invariant: notifications never abort the backup
@@ -42,7 +43,8 @@ There are two independent layers, and it helps to keep them apart:
   `disabled`) is handed to the resident daemon, which turns it into a per-channel
   `proxsave-notify-<channel>` healthchecks sensor (`/0` up, `/1` down). Alongside it,
   an always-visible **Healthchecks** section prints the current transmission status.
-  This is the "is my monitoring actually working" layer. See [DAEMON.md](DAEMON.md).
+  This is the "is my monitoring actually working" layer. See
+  [HEALTHCHECKS.md](HEALTHCHECKS.md).
 
 The two tiers are decoupled on purpose. A Telegram message the relay accepted but
 Telegram did not deliver keeps the run green (Tier 1 success), yet drives the
@@ -229,6 +231,9 @@ DOWN), even though the run stays green. Only `failed` counts; `pending` and
 not report "ok" and defeat the monitoring.
 
 ## The portal magic-link
+
+This section is the mechanics. What the portal is for, and what a user is meant to do
+with the link, is in [HEALTHCHECKS.md](HEALTHCHECKS.md#your-monitoring-portal).
 
 The bot-server can piggyback a fresh portal login link on its `/api/notify` response
 (field `login_url`), until the user's first portal login, after which it stops. The
