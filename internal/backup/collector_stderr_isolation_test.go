@@ -1,13 +1,16 @@
 package backup
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
+	"github.com/tis24dev/proxsave/internal/logging"
 	"github.com/tis24dev/proxsave/internal/types"
 )
 
@@ -124,6 +127,31 @@ func TestFailedCommandSummaryStillIncludesStderr(t *testing.T) {
 	}
 	if result.outputSummary != "permission denied" {
 		t.Fatalf("summary must include stderr, got %q", result.outputSummary)
+	}
+}
+
+// `exit status N` alone says nothing; the datastore enumeration warning has to carry
+// what the command printed on stderr.
+func TestDatastoreEnumerationWarningCarriesStderr(t *testing.T) {
+	buf := &bytes.Buffer{}
+	logger := logging.New(types.LogLevelDebug, false)
+	logger.SetOutput(buf)
+
+	deps := CollectorDeps{
+		LookPath: func(name string) (string, error) {
+			return "/bin/" + name, nil
+		},
+		RunCommandCaptured: func(ctx context.Context, extraEnv []string, name string, args ...string) ([]byte, []byte, error) {
+			return nil, []byte("permission denied (run as root)\n"), errors.New("exit status 2")
+		},
+	}
+	collector := NewCollectorWithDeps(logger, GetDefaultCollectorConfig(), t.TempDir(), types.ProxmoxBS, false, deps)
+
+	if _, err := collector.getDatastoreList(context.Background()); err != nil {
+		t.Fatalf("getDatastoreList: %v", err)
+	}
+	if !strings.Contains(buf.String(), "permission denied (run as root)") {
+		t.Fatalf("warning must quote stderr, log:\n%s", buf.String())
 	}
 }
 

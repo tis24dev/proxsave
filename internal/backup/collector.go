@@ -1164,10 +1164,12 @@ func (c *Collector) runAndClassifyCommand(ctx context.Context, spec CommandSpec,
 
 	out, stderr, err := c.depRunCommandCaptured(runCtx, nil, spec.Name, spec.Args...)
 	result.output = out
-	// Failure handling reads both streams: exit reasons, privilege hints and the
-	// systemctl markers matched below are printed on stderr.
-	combined := mergeCommandStreams(out, stderr)
 	if err != nil {
+		// Failure handling reads both streams: exit reasons, privilege hints and the
+		// systemctl markers matched below are printed on stderr. Merging happens here
+		// and not before the check so a successful command never pays for a full copy
+		// of its (potentially large) stdout.
+		combined := mergeCommandStreams(out, stderr)
 		if isContextCancellationError(runCtx, err) {
 			if isNonCriticalPveshDeadline(ctx, runCtx, spec, opts.critical) {
 				result.classification = commandRunNonCriticalFailure

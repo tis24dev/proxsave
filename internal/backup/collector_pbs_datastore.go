@@ -1,6 +1,7 @@
 package backup
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -795,14 +796,20 @@ func (c *Collector) getDatastoreList(ctx context.Context) ([]pbsDatastore, error
 	} else {
 		// stdout only: warnings printed on stderr would otherwise break the JSON parse
 		// below and silently drop the whole datastore list.
-		output, _, err := c.depRunCommandCaptured(ctx, nil, "proxmox-backup-manager", "datastore", "list", "--output-format=json")
+		output, stderr, err := c.depRunCommandCaptured(ctx, nil, "proxmox-backup-manager", "datastore", "list", "--output-format=json")
 		if err != nil {
 			if ctxErr := ctx.Err(); ctxErr != nil {
 				return nil, ctxErr
 			}
 			c.incFilesFailed()
-			c.logger.Warning("PBS datastore enumeration via proxmox-backup-manager failed; per-datastore status may be incomplete (raw datastore.cfg is still collected): %v", err)
+			// The exit error is usually just "exit status N"; the actionable reason
+			// (permissions, auth, broken config) is on stderr.
+			c.logger.Warning("PBS datastore enumeration via proxmox-backup-manager failed; per-datastore status may be incomplete (raw datastore.cfg is still collected): %v. Output: %s",
+				err, summarizeCommandOutputText(mergeCommandStreams(output, stderr)))
 		} else {
+			if len(bytes.TrimSpace(stderr)) > 0 {
+				c.logger.Debug("`proxmox-backup-manager datastore list` wrote to stderr while succeeding: %s", summarizeCommandOutputText(string(stderr)))
+			}
 			var entries []datastoreEntry
 			if err := json.Unmarshal(output, &entries); err != nil {
 				c.incFilesFailed()
