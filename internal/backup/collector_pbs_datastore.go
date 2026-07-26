@@ -793,7 +793,9 @@ func (c *Collector) getDatastoreList(ctx context.Context) ([]pbsDatastore, error
 	if _, err := c.depLookPath("proxmox-backup-manager"); err != nil {
 		c.logger.Debug("Skipping PBS datastore CLI enumeration: proxmox-backup-manager not available: %v", err)
 	} else {
-		output, err := c.depRunCommand(ctx, "proxmox-backup-manager", "datastore", "list", "--output-format=json")
+		// stdout only: warnings printed on stderr would otherwise break the JSON parse
+		// below and silently drop the whole datastore list.
+		output, _, err := c.depRunCommandCaptured(ctx, nil, "proxmox-backup-manager", "datastore", "list", "--output-format=json")
 		if err != nil {
 			if ctxErr := ctx.Err(); ctxErr != nil {
 				return nil, ctxErr

@@ -127,6 +127,24 @@ func (c *Collector) depRunCommandWithEnv(ctx context.Context, extraEnv []string,
 	return runCommandWithEnv(ctx, extraEnv, name, args...)
 }
 
+// depRunCommandCaptured runs a command with stdout and stderr kept apart. A Collector
+// wired only with the merged-output hooks falls back to them, reporting the merged text
+// as stdout and no stderr.
+func (c *Collector) depRunCommandCaptured(ctx context.Context, extraEnv []string, name string, args ...string) ([]byte, []byte, error) {
+	if c.deps.RunCommandCaptured != nil {
+		return c.deps.RunCommandCaptured(ctx, extraEnv, name, args...)
+	}
+	if len(extraEnv) == 0 && c.deps.RunCommand != nil {
+		out, err := c.deps.RunCommand(ctx, name, args...)
+		return out, nil, err
+	}
+	if c.deps.RunCommandWithEnv != nil {
+		out, err := c.deps.RunCommandWithEnv(ctx, extraEnv, name, args...)
+		return out, nil, err
+	}
+	return runCommandCapturedWithEnv(ctx, extraEnv, name, args...)
+}
+
 type CommandSpec struct {
 	Name string
 	Args []string
@@ -1074,11 +1092,30 @@ type commandRunOptions struct {
 }
 
 type commandRunResult struct {
+	// output is stdout alone; stderr never reaches the collected artifact.
 	output         []byte
 	classification commandRunClassification
 	exitCode       int
 	outputSummary  string
 	contextInfo    unprivilegedContainerContext
+}
+
+// mergeCommandStreams builds the text used for diagnostics. Artifacts keep stdout alone,
+// but a failing command usually explains itself on stderr, so summaries need both.
+func mergeCommandStreams(stdout, stderr []byte) string {
+	if len(stderr) == 0 {
+		return string(stdout)
+	}
+	if len(stdout) == 0 {
+		return string(stderr)
+	}
+	var buf bytes.Buffer
+	buf.Write(stdout)
+	if stdout[len(stdout)-1] != '\n' {
+		buf.WriteByte('\n')
+	}
+	buf.Write(stderr)
+	return buf.String()
 }
 
 func (c *Collector) runAndClassifyCommand(ctx context.Context, spec CommandSpec, opts commandRunOptions) (commandRunResult, error) {
@@ -1125,13 +1162,16 @@ func (c *Collector) runAndClassifyCommand(ctx context.Context, spec CommandSpec,
 		defer cancel()
 	}
 
-	out, err := c.depRunCommand(runCtx, spec.Name, spec.Args...)
+	out, stderr, err := c.depRunCommandCaptured(runCtx, nil, spec.Name, spec.Args...)
 	result.output = out
+	// Failure handling reads both streams: exit reasons, privilege hints and the
+	// systemctl markers matched below are printed on stderr.
+	combined := mergeCommandStreams(out, stderr)
 	if err != nil {
 		if isContextCancellationError(runCtx, err) {
 			if isNonCriticalPveshDeadline(ctx, runCtx, spec, opts.critical) {
 				result.classification = commandRunNonCriticalFailure
-				result.outputSummary = summarizeCommandOutputText(string(out))
+				result.outputSummary = summarizeCommandOutputText(combined)
 				timeoutSeconds := 0
 				if c.config != nil {
 					timeoutSeconds = c.config.PveshTimeoutSeconds
@@ -1147,7 +1187,7 @@ func (c *Collector) runAndClassifyCommand(ctx context.Context, spec CommandSpec,
 			}
 			return result, err
 		}
-		result.outputSummary = summarizeCommandOutputText(string(out))
+		result.outputSummary = summarizeCommandOutputText(combined)
 		if opts.critical {
 			c.incFilesFailed()
 			result.classification = commandRunCriticalFailure
@@ -1158,7 +1198,7 @@ func (c *Collector) runAndClassifyCommand(ctx context.Context, spec CommandSpec,
 		if errors.As(err, &exitErr) {
 			exitCode = exitErr.ExitCode()
 		}
-		outputText := strings.TrimSpace(string(out))
+		outputText := strings.TrimSpace(combined)
 		result.exitCode = exitCode
 		result.outputSummary = summarizeCommandOutputText(outputText)
 		result.classification = commandRunNonCriticalFailure
@@ -1239,6 +1279,14 @@ func (c *Collector) runAndClassifyCommand(ctx context.Context, spec CommandSpec,
 			)
 		}
 		return result, nil
+	}
+
+	if len(bytes.TrimSpace(stderr)) > 0 {
+		// The command succeeded, so its stdout is the artifact; stderr is only noise
+		// worth keeping for troubleshooting (e.g. smartctl failures reported by
+		// `proxmox-backup-manager disk list`).
+		c.logger.Debug("Command `%s` wrote to stderr while succeeding (%s): %s",
+			cmdString, opts.description, summarizeCommandOutputText(string(stderr)))
 	}
 
 	result.classification = commandRunSucceeded
@@ -1353,19 +1401,25 @@ func (c *Collector) safeCmdOutputWithPBSAuth(ctx context.Context, spec CommandSp
 	}
 
 	cmdString := spec.String()
-	out, err := c.depRunCommandWithEnv(ctx, extraEnv, spec.Name, spec.Args...)
+	out, stderr, err := c.depRunCommandCaptured(ctx, extraEnv, spec.Name, spec.Args...)
 	if err != nil {
+		summary := summarizeCommandOutputText(mergeCommandStreams(out, stderr))
 		if critical {
 			c.incFilesFailed()
-			return fmt.Errorf("critical command `%s` failed for %s: %w (output: %s)", cmdString, description, err, summarizeCommandOutputText(string(out)))
+			return fmt.Errorf("critical command `%s` failed for %s: %w (output: %s)", cmdString, description, err, summary)
 		}
 		c.logger.Warning("Skipping %s: command `%s` failed (%v). Non-critical; backup continues. Ensure the PBS CLI is available and has proper permissions. Output: %s",
 			description,
 			cmdString,
 			err,
-			summarizeCommandOutputText(string(out)),
+			summary,
 		)
 		return nil // Non-critical failure
+	}
+
+	if len(bytes.TrimSpace(stderr)) > 0 {
+		c.logger.Debug("Command `%s` wrote to stderr while succeeding (%s): %s",
+			cmdString, description, summarizeCommandOutputText(string(stderr)))
 	}
 
 	if err := c.writeReportFile(output, out); err != nil {
@@ -1461,19 +1515,25 @@ func (c *Collector) safeCmdOutputWithPBSAuthForDatastore(ctx context.Context, sp
 	}
 
 	cmdString := spec.String()
-	out, err := c.depRunCommandWithEnv(ctx, extraEnv, spec.Name, spec.Args...)
+	out, stderr, err := c.depRunCommandCaptured(ctx, extraEnv, spec.Name, spec.Args...)
 	if err != nil {
+		summary := summarizeCommandOutputText(mergeCommandStreams(out, stderr))
 		if critical {
 			c.incFilesFailed()
-			return fmt.Errorf("critical command `%s` failed for %s: %w (output: %s)", cmdString, description, err, summarizeCommandOutputText(string(out)))
+			return fmt.Errorf("critical command `%s` failed for %s: %w (output: %s)", cmdString, description, err, summary)
 		}
 		c.logger.Warning("Skipping %s: command `%s` failed (%v). Non-critical; backup continues. Ensure the PBS CLI is available and has proper permissions. Output: %s",
 			description,
 			cmdString,
 			err,
-			summarizeCommandOutputText(string(out)),
+			summary,
 		)
 		return nil // Non-critical failure
+	}
+
+	if len(bytes.TrimSpace(stderr)) > 0 {
+		c.logger.Debug("Command `%s` wrote to stderr while succeeding (%s): %s",
+			cmdString, description, summarizeCommandOutputText(string(stderr)))
 	}
 
 	if err := c.writeReportFile(output, out); err != nil {
