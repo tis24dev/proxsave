@@ -13,18 +13,18 @@ import (
 
 func TestSafeCmdOutputWithPBSAuthSetsEnv(t *testing.T) {
 	origLookPath := execLookPath
-	origRun := runCommandWithEnv
+	origRun := runCommandCapturedWithEnv
 	t.Cleanup(func() {
 		execLookPath = origLookPath
-		runCommandWithEnv = origRun
+		runCommandCapturedWithEnv = origRun
 	})
 
 	execLookPath = func(string) (string, error) { return "/bin/echo", nil }
 
 	var capturedEnv []string
-	runCommandWithEnv = func(ctx context.Context, extraEnv []string, name string, args ...string) ([]byte, error) {
+	runCommandCapturedWithEnv = func(ctx context.Context, extraEnv []string, name string, args ...string) ([]byte, []byte, error) {
 		capturedEnv = append([]string(nil), extraEnv...)
-		return []byte("ok"), nil
+		return []byte("ok"), nil, nil
 	}
 
 	cfg := GetDefaultCollectorConfig()
@@ -52,18 +52,18 @@ func TestSafeCmdOutputWithPBSAuthSetsEnv(t *testing.T) {
 
 func TestSafeCmdOutputWithPBSAuthForDatastoreBuildsRepo(t *testing.T) {
 	origLookPath := execLookPath
-	origRun := runCommandWithEnv
+	origRun := runCommandCapturedWithEnv
 	t.Cleanup(func() {
 		execLookPath = origLookPath
-		runCommandWithEnv = origRun
+		runCommandCapturedWithEnv = origRun
 	})
 
 	execLookPath = func(string) (string, error) { return "/bin/echo", nil }
 
 	var capturedEnv []string
-	runCommandWithEnv = func(ctx context.Context, extraEnv []string, name string, args ...string) ([]byte, error) {
+	runCommandCapturedWithEnv = func(ctx context.Context, extraEnv []string, name string, args ...string) ([]byte, []byte, error) {
 		capturedEnv = append([]string(nil), extraEnv...)
-		return []byte("ok"), nil
+		return []byte("ok"), nil, nil
 	}
 
 	cfg := GetDefaultCollectorConfig()
@@ -110,18 +110,18 @@ func TestPBSRepositoryWithDatastorePreservesHostPortAndIPv6(t *testing.T) {
 
 func TestSafeCmdOutputWithPBSAuthForDatastoreSkipsWhenNoCredentials(t *testing.T) {
 	origLookPath := execLookPath
-	origRun := runCommandWithEnv
+	origRun := runCommandCapturedWithEnv
 	t.Cleanup(func() {
 		execLookPath = origLookPath
-		runCommandWithEnv = origRun
+		runCommandCapturedWithEnv = origRun
 	})
 
 	execLookPath = func(string) (string, error) { return "/bin/echo", nil }
 
 	called := false
-	runCommandWithEnv = func(ctx context.Context, extraEnv []string, name string, args ...string) ([]byte, error) {
+	runCommandCapturedWithEnv = func(ctx context.Context, extraEnv []string, name string, args ...string) ([]byte, []byte, error) {
 		called = true
-		return []byte("ok"), nil
+		return []byte("ok"), nil, nil
 	}
 
 	cfg := GetDefaultCollectorConfig()
@@ -145,18 +145,18 @@ func TestSafeCmdOutputWithPBSAuthForDatastoreSkipsWhenNoCredentials(t *testing.T
 
 func TestSafeCmdOutputWithPBSAuthForDatastoreDefaultsUserWhenRepoEmpty(t *testing.T) {
 	origLookPath := execLookPath
-	origRun := runCommandWithEnv
+	origRun := runCommandCapturedWithEnv
 	t.Cleanup(func() {
 		execLookPath = origLookPath
-		runCommandWithEnv = origRun
+		runCommandCapturedWithEnv = origRun
 	})
 
 	execLookPath = func(string) (string, error) { return "/bin/echo", nil }
 
 	var capturedEnv []string
-	runCommandWithEnv = func(ctx context.Context, extraEnv []string, name string, args ...string) ([]byte, error) {
+	runCommandCapturedWithEnv = func(ctx context.Context, extraEnv []string, name string, args ...string) ([]byte, []byte, error) {
 		capturedEnv = append([]string(nil), extraEnv...)
-		return []byte("ok"), nil
+		return []byte("ok"), nil, nil
 	}
 
 	cfg := GetDefaultCollectorConfig()
@@ -207,16 +207,16 @@ func TestSafeCmdOutputWithPBSAuthCriticalCommandNotAvailableIncrementsFilesFaile
 
 func TestSafeCmdOutputWithPBSAuthDryRunSkipsExecution(t *testing.T) {
 	origLookPath := execLookPath
-	origRun := runCommandWithEnv
+	origRun := runCommandCapturedWithEnv
 	t.Cleanup(func() {
 		execLookPath = origLookPath
-		runCommandWithEnv = origRun
+		runCommandCapturedWithEnv = origRun
 	})
 
 	execLookPath = func(string) (string, error) { return "/bin/echo", nil }
-	runCommandWithEnv = func(ctx context.Context, extraEnv []string, name string, args ...string) ([]byte, error) {
-		t.Fatalf("runCommandWithEnv should not be called in dry-run")
-		return nil, nil
+	runCommandCapturedWithEnv = func(ctx context.Context, extraEnv []string, name string, args ...string) ([]byte, []byte, error) {
+		t.Fatalf("runCommandCapturedWithEnv should not be called in dry-run")
+		return nil, nil, nil
 	}
 
 	cfg := GetDefaultCollectorConfig()
@@ -232,15 +232,15 @@ func TestSafeCmdOutputWithPBSAuthDryRunSkipsExecution(t *testing.T) {
 
 func TestSafeCmdOutputWithPBSAuthWriteFailureIncrementsFilesFailed(t *testing.T) {
 	origLookPath := execLookPath
-	origRun := runCommandWithEnv
+	origRun := runCommandCapturedWithEnv
 	t.Cleanup(func() {
 		execLookPath = origLookPath
-		runCommandWithEnv = origRun
+		runCommandCapturedWithEnv = origRun
 	})
 
 	execLookPath = func(string) (string, error) { return "/bin/echo", nil }
-	runCommandWithEnv = func(ctx context.Context, extraEnv []string, name string, args ...string) ([]byte, error) {
-		return []byte("ok"), nil
+	runCommandCapturedWithEnv = func(ctx context.Context, extraEnv []string, name string, args ...string) ([]byte, []byte, error) {
+		return []byte("ok"), nil, nil
 	}
 
 	cfg := GetDefaultCollectorConfig()
@@ -288,15 +288,15 @@ func TestSafeCmdOutputWithPBSAuthNonCriticalCommandNotAvailableIsSkipped(t *test
 
 func TestSafeCmdOutputWithPBSAuthNonCriticalCommandFailureIsSwallowed(t *testing.T) {
 	origLookPath := execLookPath
-	origRun := runCommandWithEnv
+	origRun := runCommandCapturedWithEnv
 	t.Cleanup(func() {
 		execLookPath = origLookPath
-		runCommandWithEnv = origRun
+		runCommandCapturedWithEnv = origRun
 	})
 
 	execLookPath = func(string) (string, error) { return "/bin/echo", nil }
-	runCommandWithEnv = func(ctx context.Context, extraEnv []string, name string, args ...string) ([]byte, error) {
-		return []byte("nope"), os.ErrInvalid
+	runCommandCapturedWithEnv = func(ctx context.Context, extraEnv []string, name string, args ...string) ([]byte, []byte, error) {
+		return []byte("nope"), nil, os.ErrInvalid
 	}
 
 	cfg := GetDefaultCollectorConfig()
@@ -312,15 +312,15 @@ func TestSafeCmdOutputWithPBSAuthNonCriticalCommandFailureIsSwallowed(t *testing
 
 func TestSafeCmdOutputWithPBSAuthEnsureDirFailureReturnsError(t *testing.T) {
 	origLookPath := execLookPath
-	origRun := runCommandWithEnv
+	origRun := runCommandCapturedWithEnv
 	t.Cleanup(func() {
 		execLookPath = origLookPath
-		runCommandWithEnv = origRun
+		runCommandCapturedWithEnv = origRun
 	})
 
 	execLookPath = func(string) (string, error) { return "/bin/echo", nil }
-	runCommandWithEnv = func(ctx context.Context, extraEnv []string, name string, args ...string) ([]byte, error) {
-		return []byte("ok"), nil
+	runCommandCapturedWithEnv = func(ctx context.Context, extraEnv []string, name string, args ...string) ([]byte, []byte, error) {
+		return []byte("ok"), nil, nil
 	}
 
 	cfg := GetDefaultCollectorConfig()
@@ -338,15 +338,15 @@ func TestSafeCmdOutputWithPBSAuthEnsureDirFailureReturnsError(t *testing.T) {
 
 func TestSafeCmdOutputWithPBSAuthCriticalFailureIncrementsFilesFailed(t *testing.T) {
 	origLookPath := execLookPath
-	origRun := runCommandWithEnv
+	origRun := runCommandCapturedWithEnv
 	t.Cleanup(func() {
 		execLookPath = origLookPath
-		runCommandWithEnv = origRun
+		runCommandCapturedWithEnv = origRun
 	})
 
 	execLookPath = func(string) (string, error) { return "/bin/echo", nil }
-	runCommandWithEnv = func(ctx context.Context, extraEnv []string, name string, args ...string) ([]byte, error) {
-		return []byte("nope"), os.ErrInvalid
+	runCommandCapturedWithEnv = func(ctx context.Context, extraEnv []string, name string, args ...string) ([]byte, []byte, error) {
+		return []byte("nope"), nil, os.ErrInvalid
 	}
 
 	cfg := GetDefaultCollectorConfig()
@@ -362,17 +362,17 @@ func TestSafeCmdOutputWithPBSAuthCriticalFailureIncrementsFilesFailed(t *testing
 
 func TestSafeCmdOutputWithPBSAuthForDatastoreAppendsDatastoreAndIncludesFingerprint(t *testing.T) {
 	origLookPath := execLookPath
-	origRun := runCommandWithEnv
+	origRun := runCommandCapturedWithEnv
 	t.Cleanup(func() {
 		execLookPath = origLookPath
-		runCommandWithEnv = origRun
+		runCommandCapturedWithEnv = origRun
 	})
 
 	execLookPath = func(string) (string, error) { return "/bin/echo", nil }
 	var capturedEnv []string
-	runCommandWithEnv = func(ctx context.Context, extraEnv []string, name string, args ...string) ([]byte, error) {
+	runCommandCapturedWithEnv = func(ctx context.Context, extraEnv []string, name string, args ...string) ([]byte, []byte, error) {
 		capturedEnv = append([]string(nil), extraEnv...)
-		return []byte("ok"), nil
+		return []byte("ok"), nil, nil
 	}
 
 	cfg := GetDefaultCollectorConfig()
@@ -396,15 +396,15 @@ func TestSafeCmdOutputWithPBSAuthForDatastoreAppendsDatastoreAndIncludesFingerpr
 
 func TestSafeCmdOutputWithPBSAuthForDatastoreNonCriticalFailureReturnsNil(t *testing.T) {
 	origLookPath := execLookPath
-	origRun := runCommandWithEnv
+	origRun := runCommandCapturedWithEnv
 	t.Cleanup(func() {
 		execLookPath = origLookPath
-		runCommandWithEnv = origRun
+		runCommandCapturedWithEnv = origRun
 	})
 
 	execLookPath = func(string) (string, error) { return "/bin/echo", nil }
-	runCommandWithEnv = func(ctx context.Context, extraEnv []string, name string, args ...string) ([]byte, error) {
-		return []byte("nope"), os.ErrInvalid
+	runCommandCapturedWithEnv = func(ctx context.Context, extraEnv []string, name string, args ...string) ([]byte, []byte, error) {
+		return []byte("nope"), nil, os.ErrInvalid
 	}
 
 	cfg := GetDefaultCollectorConfig()
@@ -484,16 +484,16 @@ func TestSafeCmdOutputWithPBSAuthForDatastoreCriticalCommandNotAvailableIncremen
 
 func TestSafeCmdOutputWithPBSAuthForDatastoreDryRunSkipsExecution(t *testing.T) {
 	origLookPath := execLookPath
-	origRun := runCommandWithEnv
+	origRun := runCommandCapturedWithEnv
 	t.Cleanup(func() {
 		execLookPath = origLookPath
-		runCommandWithEnv = origRun
+		runCommandCapturedWithEnv = origRun
 	})
 
 	execLookPath = func(string) (string, error) { return "/bin/echo", nil }
-	runCommandWithEnv = func(ctx context.Context, extraEnv []string, name string, args ...string) ([]byte, error) {
-		t.Fatalf("runCommandWithEnv should not be called in dry-run")
-		return nil, nil
+	runCommandCapturedWithEnv = func(ctx context.Context, extraEnv []string, name string, args ...string) ([]byte, []byte, error) {
+		t.Fatalf("runCommandCapturedWithEnv should not be called in dry-run")
+		return nil, nil, nil
 	}
 
 	cfg := GetDefaultCollectorConfig()
@@ -512,15 +512,15 @@ func TestSafeCmdOutputWithPBSAuthForDatastoreDryRunSkipsExecution(t *testing.T) 
 
 func TestSafeCmdOutputWithPBSAuthForDatastoreCriticalFailureIncrementsFilesFailed(t *testing.T) {
 	origLookPath := execLookPath
-	origRun := runCommandWithEnv
+	origRun := runCommandCapturedWithEnv
 	t.Cleanup(func() {
 		execLookPath = origLookPath
-		runCommandWithEnv = origRun
+		runCommandCapturedWithEnv = origRun
 	})
 
 	execLookPath = func(string) (string, error) { return "/bin/echo", nil }
-	runCommandWithEnv = func(ctx context.Context, extraEnv []string, name string, args ...string) ([]byte, error) {
-		return []byte("nope"), os.ErrInvalid
+	runCommandCapturedWithEnv = func(ctx context.Context, extraEnv []string, name string, args ...string) ([]byte, []byte, error) {
+		return []byte("nope"), nil, os.ErrInvalid
 	}
 
 	cfg := GetDefaultCollectorConfig()
@@ -539,15 +539,15 @@ func TestSafeCmdOutputWithPBSAuthForDatastoreCriticalFailureIncrementsFilesFaile
 
 func TestSafeCmdOutputWithPBSAuthForDatastoreWriteFailureIncrementsFilesFailed(t *testing.T) {
 	origLookPath := execLookPath
-	origRun := runCommandWithEnv
+	origRun := runCommandCapturedWithEnv
 	t.Cleanup(func() {
 		execLookPath = origLookPath
-		runCommandWithEnv = origRun
+		runCommandCapturedWithEnv = origRun
 	})
 
 	execLookPath = func(string) (string, error) { return "/bin/echo", nil }
-	runCommandWithEnv = func(ctx context.Context, extraEnv []string, name string, args ...string) ([]byte, error) {
-		return []byte("ok"), nil
+	runCommandCapturedWithEnv = func(ctx context.Context, extraEnv []string, name string, args ...string) ([]byte, []byte, error) {
+		return []byte("ok"), nil, nil
 	}
 
 	cfg := GetDefaultCollectorConfig()
@@ -570,15 +570,15 @@ func TestSafeCmdOutputWithPBSAuthForDatastoreWriteFailureIncrementsFilesFailed(t
 
 func TestSafeCmdOutputWithPBSAuthForDatastoreEnsureDirFailureReturnsError(t *testing.T) {
 	origLookPath := execLookPath
-	origRun := runCommandWithEnv
+	origRun := runCommandCapturedWithEnv
 	t.Cleanup(func() {
 		execLookPath = origLookPath
-		runCommandWithEnv = origRun
+		runCommandCapturedWithEnv = origRun
 	})
 
 	execLookPath = func(string) (string, error) { return "/bin/echo", nil }
-	runCommandWithEnv = func(ctx context.Context, extraEnv []string, name string, args ...string) ([]byte, error) {
-		return []byte("ok"), nil
+	runCommandCapturedWithEnv = func(ctx context.Context, extraEnv []string, name string, args ...string) ([]byte, []byte, error) {
+		return []byte("ok"), nil, nil
 	}
 
 	cfg := GetDefaultCollectorConfig()

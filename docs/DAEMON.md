@@ -1,6 +1,8 @@
-# Resident daemon + healthchecks monitoring
+# Resident daemon
 
-ProxSave can run as a **resident daemon** instead of a one-shot `cron` job. The daemon schedules and supervises each backup, adds a hang watchdog, and reports to an external [healthchecks](https://healthchecks.io/) monitor so silent failures (a crash before notifying, a run that hangs, a host that is simply down) are caught by an external dead-man switch.
+ProxSave can run as a **resident daemon** instead of a one-shot `cron` job. The daemon schedules and supervises each backup, adds a hang watchdog, and reports to an external monitor so silent failures (a crash before notifying, a run that hangs, a host that is simply down) are caught by an external dead-man switch.
+
+This document covers the daemon itself. The monitoring side, which checks exist, what they cover, and how to configure the centralized or self-hosted monitor, is in [HEALTHCHECKS.md](HEALTHCHECKS.md).
 
 ## Why
 
@@ -10,40 +12,17 @@ A pure "notify only on failure" model is blind to the worst failures: the proces
 
 - **Schedules** the daily backup itself (replacing the crontab entry) at the `SCHEDULER_TIME` ("Run at") time.
 - **Supervises** each run as a child process (`proxsave --backup`) under a `MAX_RUN_DURATION` timeout. A run that overruns gets `SIGTERM`, then `SIGKILL` after a 30-second grace, and is reported as a **hang**.
-- **Reports** four kinds of monitored checks (see below). systemd (`proxsave-daemon.service`, `Restart=always`) is only the keep-alive supervisor; the daemon schedules internally.
+- **Reports** four families of monitored checks: daemon liveness, the backup outcome, release updates, and one per notification channel. See [HEALTHCHECKS.md](HEALTHCHECKS.md).
 
-## The monitored checks
-
-The daemon reports **four** check families to the monitor, each shown as a `proxsave-*` check:
-
-| Check | When it pings | Meaning |
-|-------|---------------|---------|
-| `proxsave-alive` | a heartbeat every `HEALTHCHECK_HEARTBEAT_INTERVAL` (and once at startup) | if the daemon dies or the host goes down, this check stops pinging and the monitor alarms on the silence |
-| `proxsave-backup` | per run: `/start` at launch, then the child's exit code, or `/fail` on a hang | `/0` is success (green); any non-zero exit code makes the check go DOWN (red); `/fail` is the hang case |
-| `proxsave-updates` | every `HEALTHCHECK_UPDATE_INTERVAL` (and once at startup) | `/0` when up to date, `/1` when a newer release exists (the check goes DOWN so you get alerted to upgrade) |
-| `proxsave-notify-<channel>` | after each run, one per channel the backup child attempted | `/0` when that channel delivered cleanly, `/1` on a warning or error (the check goes DOWN) |
-
-Notes on the exact semantics:
-
-- The `proxsave-backup` finish ping is always `/` plus the run's exit status (clamped to 0..255). There is no separate "warning" suffix: exit `1` simply pings `/1`, and a start failure or an external kill is reported as a non-zero code too. When `HEALTHCHECK_SEND_LOG` is on, a bounded log tail (up to about 8 KiB) rides along as the request body on a **supervised** run's non-zero exit or hang. A standalone (manual or dashboard) backup hands off only its exit code, so its finish ping carries no log tail.
-- The `proxsave-updates` check only flips to `/0` on a definite up-to-date answer. An inconclusive check (GitHub unreachable or rate-limited) re-affirms the last verdict rather than flapping a real `/1` back to `/0`.
-- The `proxsave-notify-<channel>` checks are driven by what the backup child actually attempted (recorded per run), not by cached config, so a channel toggled off does not leave a stale DOWN.
-- One notify check exists per enabled channel among email, telegram, gotify, and webhook. In centralized mode the daemon tells the server which channels are enabled so it provisions exactly those checks.
+systemd (`proxsave-daemon.service`, `Restart=always`) is only the keep-alive supervisor; the daemon schedules internally.
 
 ### BACKUP_ENABLED=false
 
-When `BACKUP_ENABLED=false`, the daemon skips the scheduled run entirely: no child process, no backup-outcome ping, so `proxsave-backup` honestly goes down (no false green). The `proxsave-alive` heartbeat keeps signalling, so you can still tell the daemon is up.
+When `BACKUP_ENABLED=false`, the daemon skips the scheduled run entirely: no child process, no backup-outcome ping, so `proxsave-backup` honestly goes down (no false green). The liveness heartbeat keeps signalling, so you can still tell the daemon is up.
 
 ## Standalone backups: the SIGUSR1 handoff
 
-A backup run outside the daemon (by hand, or the dashboard "run now") does not ping the monitor itself. The resident daemon is the sole pinger. Instead, a standalone run drops a handoff file (`.manual_backup_outcome.json`) and wakes the daemon with `SIGUSR1`; the daemon then pings `proxsave-backup` with that run's outcome. A handoff older than 15 minutes is dropped without pinging (so a long-past run never flips the check), and if no live daemon is found nothing pings.
-
-## Two modes
-
-- **centralized** (default): the daemon fetches its ping URLs from the ProxSave server (`GET /api/healthcheck/config`), reusing the SAME identity it already uses for Telegram notifications (`server_id` + relay secret). No manual setup, no API key on the client. It requires the client to have been paired on Telegram (that is where the relay secret comes from). If the fetch fails, the daemon falls back to the cached `HEALTHCHECK_ALIVE_URL` / `HEALTHCHECK_BACKUP_URL`.
-- **self**: point the daemon at your own healthchecks (self-hosted or SaaS). Set `HEALTHCHECK_PING_ENDPOINT` (plus optional `HEALTHCHECK_PING_KEY`) and the per-check IDs, or give full per-check URLs. Self mode covers all four check families: `*_ALIVE_*`, `*_BACKUP_*`, `*_UPDATES_*`, and the `*_NOTIFY_<CHANNEL>_*` keys (a URL and an ID per channel). A full `*_URL` takes precedence over the matching `*_ID`.
-
-A client without a relay secret still gets the daemon (scheduling + hang watchdog); the healthcheck reporting stays off until `self` mode is configured.
+A backup run outside the daemon (by hand, or the dashboard "run now") does not ping the monitor itself. The resident daemon is the sole pinger. Instead, a standalone run drops a handoff file (`.manual_backup_outcome.json`) and wakes the daemon with `SIGUSR1`; the daemon then pings the backup check with that run's outcome. A handoff older than 15 minutes is dropped without pinging (so a long-past run never flips the check), and if no live daemon is found nothing pings.
 
 ## Binary alignment after an upgrade
 
@@ -77,7 +56,7 @@ The last two lines (`Running version:` and `Binary alignment:`) appear only when
 
 ## Install
 
-New installs default to the daemon. The install wizard (TUI and `--cli`) asks for the **Scheduler engine** (daemon or cron) just before the **Run at** time. Choosing the daemon installs `proxsave-daemon.service`, removes the cron entry, and turns on centralized healthchecks.
+New installs default to the daemon. The install wizard (TUI and `--cli`) asks for the **Scheduler engine** (daemon or cron) just before the **Run at** time. Choosing the daemon installs `proxsave-daemon.service`, removes the cron entry, and turns on centralized monitoring. The wizard then asks for the monitoring mode; see [HEALTHCHECKS.md](HEALTHCHECKS.md).
 
 ## Retrofit existing installs
 
@@ -134,35 +113,11 @@ MAX_RUN_DURATION=1h            # watchdog hard timeout for one backup
 DAEMON_OPT_OUT=false           # set true by --daemon-remove; upgrade won't re-migrate
 BACKUP_ENABLED=true            # false: daemon skips the scheduled run (backup check goes down)
 
-# Healthchecks
+# Monitoring: enabled here, configured in HEALTHCHECKS.md
 HEALTHCHECK_ENABLED=false      # forced true by --daemon-setup / auto-migration
-HEALTHCHECK_MODE=centralized   # centralized (fetch from server) | self
-HEALTHCHECK_HEARTBEAT_INTERVAL=5m
-HEALTHCHECK_UPDATE_INTERVAL=5m
-HEALTHCHECK_SEND_LOG=true      # attach a log tail on a failed/hung run
-
-# Centralized cache (auto-filled from the server; do not edit)
-HEALTHCHECK_ALIVE_URL=
-HEALTHCHECK_BACKUP_URL=
-
-# Self mode
-HEALTHCHECK_PING_ENDPOINT=https://hc-ping.com
-HEALTHCHECK_PING_KEY=
-HEALTHCHECK_ALIVE_ID=
-HEALTHCHECK_BACKUP_ID=
-HEALTHCHECK_UPDATES_URL=
-HEALTHCHECK_UPDATES_ID=
-HEALTHCHECK_NOTIFY_EMAIL_URL=
-HEALTHCHECK_NOTIFY_EMAIL_ID=
-HEALTHCHECK_NOTIFY_TELEGRAM_URL=
-HEALTHCHECK_NOTIFY_TELEGRAM_ID=
-HEALTHCHECK_NOTIFY_GOTIFY_URL=
-HEALTHCHECK_NOTIFY_GOTIFY_ID=
-HEALTHCHECK_NOTIFY_WEBHOOK_URL=
-HEALTHCHECK_NOTIFY_WEBHOOK_ID=
 ```
 
-In self mode you only need the checks you actually want: set the endpoint plus the alive and backup IDs to get the two core checks, and add the updates and per-channel notify IDs (or full URLs) to report those too. In centralized mode the server resolves all of these for you.
+The `HEALTHCHECK_*` keys that decide *where* and *what* the daemon reports live in [HEALTHCHECKS.md](HEALTHCHECKS.md).
 
 See [CONFIGURATION.md](CONFIGURATION.md) for the full variable reference and [CLI_REFERENCE.md](CLI_REFERENCE.md) for the `--daemon-*` flags.
 

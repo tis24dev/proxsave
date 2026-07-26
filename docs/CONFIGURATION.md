@@ -93,7 +93,7 @@ The compiled default for `SCHEDULER_MODE` is `cron`, but a fresh install default
 
 ## Healthchecks connector (daemon)
 
-The daemon can push to an external [healthchecks](https://healthchecks.io/) monitor. The four checks and the centralized-vs-self behavior are documented in [DAEMON.md](DAEMON.md); the keys are:
+The daemon can push to an external [healthchecks](https://healthchecks.io/) monitor. The four checks, the monitoring portal, and the centralized-vs-self behavior are documented in [HEALTHCHECKS.md](HEALTHCHECKS.md); the keys are:
 
 ```bash
 HEALTHCHECK_ENABLED=false      # forced true by --daemon-setup / --upgrade auto-migration

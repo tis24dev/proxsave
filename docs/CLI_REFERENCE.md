@@ -103,7 +103,7 @@ proxsave -h
 | `--version` | `-v` | Display version information |
 | `--help` | `-h` | Show help message |
 | `--backup` | | Run the backup now and skip the interactive dashboard. This is the default behavior when proxsave runs non-interactively (cron, pipe, systemd). |
-| `--daemon` | | Run as the resident backup daemon (schedules + supervises runs, reports to healthchecks). Invoked by `proxsave-daemon.service`; not run by hand. See [docs/DAEMON.md](DAEMON.md). |
+| `--daemon` | | Run as the resident backup daemon (schedules + supervises runs, reports to healthchecks). Invoked by `proxsave-daemon.service`; not run by hand. See [docs/DAEMON.md](DAEMON.md) and [docs/HEALTHCHECKS.md](HEALTHCHECKS.md). |
 | `--daemon-setup` | | Switch this install to daemon mode: install+enable the service and remove the cron entry. |
 | `--daemon-remove` | | Revert to the cron scheduler, disable the service, and block future upgrades from reinstalling the daemon. |
 | `--daemon-status` | | Print the daemon status (scheduler mode, service state, running version, binary alignment) and exit. Exit code is `0` only when the daemon is running and aligned, non-zero otherwise, so scripts can gate on it. |
