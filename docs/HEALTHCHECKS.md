@@ -30,14 +30,20 @@ The daemon reports four families of checks, each shown on the monitor as a
 | `proxsave-alive` | immediately at daemon start, then every `HEALTHCHECK_HEARTBEAT_INTERVAL` | the daemon and the host are up. Stops when either dies, and the monitor alarms on the silence |
 | `proxsave-backup` | per run: `/start` at launch, then the run's exit code, or `/fail` on a hang | whether the backup ran and how it ended |
 | `proxsave-updates` | immediately at daemon start, then every `HEALTHCHECK_UPDATE_INTERVAL` | `/0` when up to date, `/1` when a newer release exists, so the check goes down and tells you to upgrade |
-| `proxsave-notify-<channel>` | after each run, one per channel the backup attempted | whether that notification channel actually delivered |
+| `proxsave-notify-<channel>` | after each daemon-supervised run, one per channel the backup attempted | whether that notification channel actually delivered |
+
+A run you start yourself, from the dashboard or by hand, leaves the per-channel checks
+untouched. Only `proxsave-backup` picks up a standalone run, through the handoff
+described below.
 
 ### Ping details
 
 The exact wire behavior, in case you are reading the monitor's event log:
 
-- Every ping is a POST, bounded at 10 seconds. A slow or down monitor never stalls the
-  daemon and never delays a backup.
+- Every ping is a POST, bounded at 10 seconds, with no retry. A slow or down monitor
+  cannot stall the daemon for longer than that. The one ping on the critical path is
+  the run start ping, which is sent before the backup child is launched, so an
+  unreachable monitor can delay the start of a scheduled backup by up to 10 seconds.
 - The run start ping carries `?rid=<uuid>`, a fresh run id, so the monitor can pair it
   with the finish ping and measure the run's duration.
 - The finish ping is `/` plus the run's exit status, clamped into 0..255. There is no
@@ -45,6 +51,10 @@ The exact wire behavior, in case you are reading the monitor's event log:
   kill reports a non-zero code the same way. `/0` is the only green outcome.
 - A hang pings `/fail` with a `timed out after <duration>` body, because a killed child
   has no exit code to report.
+- A scheduled run that finds another backup already holding the lock is the one case
+  where a start ping gets no finish: the daemon has already pinged `/start`, the child
+  exits with the skipped code, and there is no outcome to report, so it stays silent.
+  In the monitor's event log that shows up as a started run that never finished.
 - With `HEALTHCHECK_SEND_LOG=true`, a log tail rides along as the request body on a
   **supervised** run that failed or hung. The daemon keeps the last 8 KiB of the run's
   output for this, and the ping body is hard-capped at 100 kB regardless. A standalone
@@ -96,42 +106,64 @@ persists it. No Telegram pairing, no account, no key to copy. It is the same ide
 the centralized Telegram relay uses, so a host that already sends Telegram
 notifications is already provisioned.
 
-Once provisioned, the daemon fetches its ping URLs from the server and starts
-reporting. If a later fetch fails, it falls back to the URLs cached in `backup.env`
-(`HEALTHCHECK_ALIVE_URL` and `HEALTHCHECK_BACKUP_URL`), so a transient server outage
-does not stop reporting. It warns once and then keeps retrying quietly.
+Once provisioned, the daemon fetches its ping URLs from the server on every cycle and
+keeps them in memory only. It warns once on a failed fetch and then keeps retrying
+quietly.
+
+There is a fallback to `HEALTHCHECK_ALIVE_URL` and `HEALTHCHECK_BACKUP_URL` in
+`backup.env`, but nothing fills those in for you: a centralized fetch is never written
+back to the file, so on a wizard-installed centralized host they are empty and the
+fallback resolves to nothing. While the server is unreachable that host reports
+nothing at all, and the gap shows up as a missed heartbeat on the monitor. If you want
+a cushion, paste the two URLs in yourself once you know them.
 
 The credential also self-heals. If the server ever rejects it, or reports that this
 host's account was parked for being unused, the daemon clears the stale credential and
 provisions a fresh one on its next attempt, which re-registers the host. Transient
-errors never touch a working credential. Provisioning retries are throttled to roughly
-every 15 minutes, spread out per host, and the daemon honors a server-side back-off
-when it is asked to wait.
+errors never touch a working credential. Provisioning retries are throttled to one
+attempt every 15 minutes. If the server asks for a longer wait, the daemon honors it
+and adds a small per-host offset (up to a tenth of the requested wait, capped at five
+minutes) so a fleet coming back at once does not arrive in lockstep.
 
 ### Your monitoring portal
 
 Every centralized host gets its own portal on the monitoring server, where you can see
 each check's state and history and decide how you want to be alerted.
 
-You reach it through a **single-use login link**, valid for about an hour, which
-ProxSave shows you in three places:
+ProxSave shows you how to reach it in three places:
 
 - during the install wizard, on the monitoring screen, in both the TUI and `--cli`;
 - in the dashboard, under `Healthchecks` in the diagnostic checks;
-- at the end of a backup run, on the `Healthchecks Portal:` line.
+- at the end of a backup run, in the log epilogue and in the run screen's outcome box.
 
-Open it and **set a password**. That is what turns the link into an account you can log
-into later, and it is the point at which you can configure alert channels, email and
-the rest, so the monitor can reach you when a check goes down.
+What it shows depends on whether you have given yourself a portal password yet.
+
+**Before you have a password**, you get a **single-use login link**, valid for about an
+hour. Open it and **set a password**. That is what turns the link into an account you
+can log into later, and it is the point at which you can configure alert channels,
+email and the rest, so the monitor can reach you when a check goes down. Until then the
+server mints a fresh link every time, so a link that expired is never a problem: just
+open the dashboard check again.
+
+**Once you have a password**, the link stops being minted and its place is taken by the
+portal's own address plus the identity you sign in with. That identity is an **email
+address**, not a username. Sign in there with the password you chose.
+
+The exact wording differs a little per surface. The log epilogue prints
+`Healthchecks Portal:` followed by `Healthchecks Login:`, the run screen prints
+`Healthchecks link:` for the single-use link and `Healthchecks portal:` /
+`Healthchecks login:` for the second state, and the wizard and dashboard box the same
+values with a short caption.
 
 Two things worth knowing:
 
-- The server stops minting new links after your first login, since from then on you
-  have a password. Before that first login, every place listed above hands you a fresh
-  one, so a link that expired is never a problem: just open the dashboard check again.
+- Setting a password, not opening the link, is what retires the link. Looking around
+  the portal and closing the tab changes nothing: you keep getting fresh links until
+  you actually choose a password.
 - ProxSave never opens or follows the link, it only prints it. It also refuses to print
   anything that is not a clean http(s) URL on the monitoring server's own domain, so a
-  tampered response cannot put a phishing address in front of you.
+  tampered response cannot put a phishing address in front of you. The same applies to
+  the portal address in the second state.
 
 ## Self mode: your own healthchecks
 
@@ -176,12 +208,15 @@ fills in for you. In centralized mode, do not edit them.
 
 **Install wizard.** With the daemon engine selected, step 8 asks for the monitoring
 mode, then a screen verifies the connection. In centralized mode it also boxes the
-portal link. `--cli` installs show the same information as plain text.
+portal: a fresh login link, or the portal address plus your sign-in identity once you
+have a password. `--cli` installs show the same information as plain text.
 
 **Dashboard.** `Healthchecks` under the diagnostic checks runs on entry and reports the
-real operational state, not just one-shot reachability. In centralized mode it boxes a
-fresh portal link. Under the verdict, a `Sensors:` list gives one colored line per
-monitored check with its state and the age of its last ping.
+real operational state, not just one-shot reachability. In centralized mode it boxes
+the portal, in whichever of the two states applies. Under the verdict, a `Sensors:`
+list gives one colored line per monitored check with its state and the age of its last
+ping. That list is centralized only: the self-mode check is a plain reachability probe
+and reads no daemon state, so it has no rows to show.
 
 **End of a backup run.** The run prints a `Healthchecks` line reporting whether the
 daemon is actually transmitting. This section sends nothing itself: the daemon is the
@@ -209,7 +244,7 @@ fully healthy centralized state; in self mode it is `REACHABLE`.
 | `NOT INSTALLED` | the monitor is reachable but the daemon service is not installed | `proxsave --daemon-setup` |
 | `NOT RUNNING` | the service is installed and stopped, or never wrote a heartbeat | `systemctl start proxsave-daemon.service` |
 | `RUNNING, NOT REPORTING` | the process is up but has written no heartbeat yet | usually a stale build; restart the service |
-| `STALE` | the last heartbeat is older than twice the heartbeat interval, with a one-minute floor so a single slipped tick does not read as down | the daemon is stopped or wedged; check `journalctl -u proxsave-daemon.service` |
+| `STALE` | the last heartbeat is older than twice the heartbeat interval, and the interval is floored at one minute first, so the smallest stale window is two minutes | the daemon is stopped or wedged; check `journalctl -u proxsave-daemon.service`. On a systemd host you will normally see `RUNNING, NOT REPORTING` instead: an active unit with a stale heartbeat is reclassified, so `STALE` surfaces only when systemd could not be asked |
 | `BEHIND` | the running daemon is on an older binary than the one on disk | restart the service so it loads the upgrade |
 | `NOT PROVISIONED` | the daemon runs but has no ping target yet | centralized: wait for provisioning. Self: the ping URLs are missing |
 | `MONITOR UNREACHABLE` | the daemon runs but its pings do not arrive | outbound connectivity from this host |
@@ -250,13 +285,22 @@ happens, so an old timestamp on them is not a fault.
 
 ### The portal link is not shown
 
-Expected once you have logged into the portal for the first time: the server stops
-minting links from then on, and you log in with the password you set. Before that first
-login, a missing link means the mint attempt did not succeed, which is best effort and
-deliberately quiet. Open the dashboard check again to get another one.
+If you see the portal address and a `Login:` line instead, that is the expected state
+once you have set a portal password: the server stops minting links from then on. Sign
+in at that address, with that identity, using the password you chose.
 
-A link is also dropped, silently, if it does not pass the trust rules: it must be a
-clean http(s) URL on the monitoring server's own domain.
+If you see nothing at all about the portal, the mint attempt did not succeed. It is
+best effort and deliberately quiet, so there is no error to read. Open the dashboard
+check again to get another one. Note that ProxSave will not guess: it only shows the
+address-and-identity form when the server confirms a password exists, so a failed
+attempt shows nothing rather than sending you to a sign-in page you have no password
+for.
+
+Opening the link is not what retires it. If you opened the portal once, never chose a
+password, and now see no link, that is a failed mint and not the expected end state.
+
+A link or address is also dropped, silently, if it does not pass the trust rules: it
+must be a clean http(s) URL on the monitoring server's own domain.
 
 ### A backup ran but the check stayed silent
 
@@ -273,8 +317,14 @@ journalctl -u proxsave-daemon.service -f
 ```
 
 The daemon warns once when it cannot reach the monitoring server and then drops to
-debug, so a recurring failure is quiet by design. Raise `DEBUG_LEVEL` if you need to
-see each attempt.
+debug, so a recurring failure is quiet by design. To see each attempt, raise
+`DEBUG_LEVEL` in `backup.env` and then restart the service: the daemon reads its log
+level once at startup and has no reload path, so the change does nothing until it
+comes back up.
+
+```bash
+systemctl restart proxsave-daemon.service
+```
 
 ## Configuration keys
 

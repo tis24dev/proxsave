@@ -780,15 +780,30 @@ journalctl -u proxsave-daemon.service -f
 #### No monitoring portal link is shown
 
 **Symptoms**:
-- The dashboard check or the end of a run shows no `Healthchecks Portal:` line.
+- The dashboard check or the end of a run shows a `Healthchecks Portal:` address and a `Healthchecks Login:` identity instead of a single-use link, or shows nothing about the portal at all.
 
 **Cause**:
-- The server stops minting links once you have logged into the portal for the first time. This is the expected steady state: from then on you log in with the password you set.
-- Before that first login, minting is best effort and stays quiet when it fails.
-- A link that is not a clean http(s) URL on the monitoring server's own domain is dropped on purpose, so a tampered response cannot show you a phishing address.
+- The server stops minting links once you have set your own portal password. That is the expected steady state, and it is why you see an address plus an identity: sign in there with the password you chose. Opening the link is not what retires it, only choosing a password is.
+- If nothing at all is printed, the mint did not succeed. It is best effort and stays quiet when it fails. ProxSave will not fall back to the address form on its own: it shows that only when the server confirms a password exists, so it never sends you to a sign-in page you have no password for.
+- A link or address that is not a clean http(s) URL on the monitoring server's own domain is dropped on purpose, so a tampered response cannot show you a phishing address.
 
 **Resolution**:
-- Log in with your password. If you never set one, open the dashboard `Healthchecks` check again to request a fresh link.
+- If you see the address and identity, sign in with the password you set.
+- If you see nothing, open the dashboard `Healthchecks` check again to request a fresh link. Repeat failures mean the monitoring server could not be reached; check outbound connectivity from the host.
+
+#### Every backup reports warnings and the monitor went red right after an upgrade
+
+**Symptoms**:
+- Backups that clearly succeeded finish with "completed with warnings", exit `1` instead of `0`, and the `proxsave-backup` check goes down.
+- It started right after an upgrade and repeats on every scheduled run.
+- The run log carries `ProxSave <version> has unseen release notes. Open proxsave to view the new features.`
+
+**Cause**:
+- After a version bump ProxSave has release notes waiting for you. Until someone acknowledges them, every run logs that line at WARNING level. A warning promotes a clean run from exit `0` to exit `1`, and the daemon pings the backup check with that code, so `/1` takes the check down on a backup that was fine.
+- It only bites unattended upgrades. `--upgrade` shows the screen for you on an interactive terminal, which clears the flag; an upgrade run from a script or over a pipe skips it.
+
+**Resolution**:
+- Run `proxsave --show-whatsnew` once on the host, or open the dashboard and page through the release-notes screen. Either clears the flag and the next run is green again.
 
 #### A backup ran but `proxsave-backup` stayed silent
 
@@ -1107,7 +1122,9 @@ proxsave --support
 ## Exit Codes
 
 `proxsave` returns a specific exit code so scripts and the daemon can react to the
-failure class. `0` is success; any non-zero code is a failure.
+failure class. `0` is success. Every non-zero code is a failure except `16`, which
+means a backup was deliberately not performed, so a wrapper that treats "non-zero" as
+"page someone" will raise false alarms on overlapping runs and on paused hosts.
 
 | Code | Name | Meaning |
 |------|------|---------|
@@ -1127,6 +1144,8 @@ failure class. `0` is success; any non-zero code is a failure.
 | `13` | panic error | An unhandled panic was caught |
 | `14` | security error | The security check reported errors |
 | `15` | encryption error | Error during encryption setup or processing |
+| `16` | backup skipped | No backup was performed, for a benign reason: another backup already held the lock, or `BACKUP_ENABLED=false`. Not a failure |
+| `130` | interrupted | The run was cancelled with Ctrl+C (128 plus SIGINT) |
 
 A backup that finishes with warnings (no errors) is promoted from `0` to exit `1`
 (generic error) before the notification phase; a run that raised errors becomes `4`

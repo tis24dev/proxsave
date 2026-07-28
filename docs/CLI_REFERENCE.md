@@ -107,6 +107,7 @@ proxsave -h
 | `--daemon-setup` | | Switch this install to daemon mode: install+enable the service and remove the cron entry. |
 | `--daemon-remove` | | Revert to the cron scheduler, disable the service, and block future upgrades from reinstalling the daemon. |
 | `--daemon-status` | | Print the daemon status (scheduler mode, service state, running version, binary alignment) and exit. Exit code is `0` only when the daemon is running and aligned, non-zero otherwise, so scripts can gate on it. |
+| `--show-whatsnew` | | Show the release-notes screen once and exit, then mark it seen. `--upgrade` calls it for you on an interactive terminal; run it by hand after an unattended upgrade to stop the "unseen release notes" warning. |
 
 ---
 
@@ -777,6 +778,12 @@ USE_COLOR=false proxsave
 | `13` | panic error | Unhandled panic caught |
 | `14` | security error | Errors detected by the security check |
 | `15` | encryption error | Error during encryption setup or processing |
+| `16` | backup skipped | No backup was performed, for a benign reason: another backup already held the lock, or `BACKUP_ENABLED=false`. Not a failure |
+| `130` | interrupted | The run was cancelled with Ctrl+C (128 plus SIGINT) |
+
+**Note**: `16` is the one non-zero code that does not mean something went wrong. A
+wrapper of the form `proxsave --backup || alert` will page you every time two runs
+overlap unless it excludes it.
 
 **Note**: Cloud storage is non-critical. A cloud upload failure does **not** abort the
 run with a storage error (`5`): the local backup is kept, but the failure is recorded as a

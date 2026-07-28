@@ -72,7 +72,7 @@ The groups and their items:
   Upgrade           check for a newer release and install it from here
 ─── Diagnostic Checks ───
   Telegram          verify the Telegram relay pairing
-  Healthchecks      verify backup monitoring and show the portal link
+  Healthchecks      verify backup monitoring and show the portal details
   Post-install      re-run the post-install audit
 ─── Daemon ───
   (context-aware, see below)
@@ -168,16 +168,29 @@ If Telegram is not in centralized mode on this host, the screen reads `Status: �
 
 ### Healthchecks
 
-Verifies backup monitoring and, in centralized mode, boxes a single-use link to your monitoring portal:
+Verifies backup monitoring and, in centralized mode, boxes the way into your monitoring portal. Until you set a portal password that is a single-use link:
 
 ```
-Your monitoring portal (single-use link, valid ~1h):
-╭────────────────────────────────────────╮
-│  https://...                            │
-╰────────────────────────────────────────╯
+╭──────────────────────────────────────────────╮
+│  Your monitoring portal (single-use link,    │
+│  valid ~1h):                                 │
+│  https://...                                 │
+╰──────────────────────────────────────────────╯
+Open it to set a password and configure alert channels.
 ```
 
-Open it to set a password and configure alert channels. The link is single-use and valid for about an hour. If you run your own healthchecks server (self mode), the check instead confirms that your alive URL is reachable and shows no link. After each check a `Sensors:` list shows one colored line per monitored check with its state and last-ping age.
+Once you have a password the server stops minting links and the box shows the portal address plus the identity you sign in with, which is an email address:
+
+```
+╭──────────────────────────────────────────────╮
+│  Your monitoring portal:                     │
+│  https://...                                 │
+│  Login: ...                                  │
+╰──────────────────────────────────────────────╯
+Sign in with the password you set.
+```
+
+If you run your own healthchecks server (self mode), the check instead confirms that your alive URL is reachable and shows no portal box. After each check a `Sensors:` list shows one colored line per monitored check with its state and last-ping age; that list is centralized only.
 
 See [HEALTHCHECKS.md](HEALTHCHECKS.md) for the monitoring model, what each status keyword means, and what to do about it.
 

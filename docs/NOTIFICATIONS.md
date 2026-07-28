@@ -236,21 +236,32 @@ This section is the mechanics. What the portal is for, and what a user is meant 
 with the link, is in [HEALTHCHECKS.md](HEALTHCHECKS.md#your-monitoring-portal).
 
 The bot-server can piggyback a fresh portal login link on its `/api/notify` response
-(field `login_url`), until the user's first portal login, after which it stops. The
-Healthchecks section can also mint one best-effort via
+(field `login_url`), and keeps doing so until the user sets their own portal password,
+after which it stops. The Healthchecks section can also mint one best-effort via
 `GET /api/healthcheck/config?server_id=<id>&login=1` (the daemon's own polls pass no
 `login=1`, so only install-time and run-phase callers request a mint).
+
+That config answer also carries three additive fields the notify response does not:
+`portal_url` and `portal_login`, the portal's sign-in page and the identity that signs
+in there, and `password_set`, the server's authoritative answer about whether a
+password exists. `password_set` is read as a pointer so that "the server could not
+confirm it" stays distinct from an explicit false: the address-and-identity form is
+shown only on an explicit true, never inferred from a missing `login_url`, because a
+failed mint looks identical from the outside.
 
 The link is short-lived (about an hour), single-use, and display-only (ProxSave never
 fetches it). It is handled with one specific discipline:
 
 - It is carried **raw** end-to-end (through `result.Metadata["login_url"]` onto
   `stats.HealthcheckLink`) and is **never** registered as a log secret, because it has
-  to stay visible when printed.
-- It is sanitized through `serverbot.SanitizeLoginURL` at exactly **one** display
-  boundary (`logMonitoringPortalLink`), which prints
-  `Healthchecks Portal: <url>` right after the Server MAC address line at the end of
-  the run.
+  to stay visible when printed. The portal address and identity are carried the same
+  way, on `stats.HealthcheckPortalURL` and `stats.HealthcheckPortalLogin`.
+- The link and the portal address are sanitized through `serverbot.SanitizeLoginURL`
+  at the display boundary; the identity, which is not a URL and would fail that gate,
+  goes through its sibling `serverbot.SanitizePortalLogin`. The run epilogue
+  (`logMonitoringPortalLink`) prints `Healthchecks Portal: <url>`, plus a
+  `Healthchecks Login: <identity>` line in the second state, right after the Server MAC
+  address line. The run screen renders the same values with its own labels.
 
 `SanitizeLoginURL` is the single guard against a hostile or MITM bot-server injecting
 terminal escapes into your console: it returns the link only if it is a clean
@@ -365,6 +376,7 @@ logger for scrubbing, and what deliberately does not:
 | Webhook endpoint URL / token / secret / pass | yes | the URL is often the secret (Discord, Slack) |
 | Cloudflare relay worker token + HMAC secret | **no** | shared public anti-abuse credential, not confidential |
 | Portal magic-link (`login_url`) | **no** | must stay visible when printed; guarded by `SanitizeLoginURL` instead |
+| Portal address and sign-in identity (`portal_url`, `portal_login`) | **no** | same reason; guarded by `SanitizeLoginURL` and `SanitizePortalLogin` |
 
 The primitives (`internal/logging/redact.go`):
 
@@ -441,7 +453,8 @@ A channel is anything that implements `notify.Notifier`
 | `notify-telegram` sensor DOWN but run green | message accepted but not delivered (Tier 2 is stricter than Tier 1) | fix the delivery cause above; the run staying green is by design |
 | Email relay `INVALID_SIGNATURE` | report shape changed, HMAC no longer matches; or a private worker misconfigured | keep the stock report shape; check `CLOUDFLARE_*` if self-hosting |
 | Email: "recipient is not allowed (root accounts are blocked)" | `relay` method with a `root@` recipient and no sendmail fallback | set a real recipient, enable `EMAIL_FALLBACK_SENDMAIL`, or use `sendmail`/`pmf` |
-| No portal link printed | link already consumed (first login done), or it failed the sanitizer | expected after first login; minting is best-effort and quiet |
+| Portal address and a `Login:` line instead of a link | you have set a portal password, so the server stopped minting links | expected; sign in at that address with that identity |
+| Nothing printed about the portal at all | the mint did not succeed, or the value failed the sanitizer | minting is best effort and quiet; run the dashboard check again. Opening the link is not what retires it, so this is never the expected end state |
 
 See [CONFIGURATION.md](CONFIGURATION.md) for every key, [DAEMON.md](DAEMON.md) for the
 monitoring sensors, and [INSTALL.md](INSTALL.md) for the Telegram pairing wizard.
