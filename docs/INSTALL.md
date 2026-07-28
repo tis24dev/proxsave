@@ -25,7 +25,7 @@
    bash -c "$(curl -fsSL https://raw.githubusercontent.com/tis24dev/proxsave/main/install.sh)"
    ```
 
-   or: if you need a fully clean reinstall use: (preserves `build/`, `env/`, and `identity/`)
+   or, if you need a fully clean reinstall. This keeps `build/`, `env/` and `identity/` and **deletes everything else under the base directory**, which with stock paths means your local backup archives in `backup/`, the logs in `log/`, and `configs/backup.env`. Both installers ask for confirmation first, defaulting to no. Do not run it as a way to reset the configuration unless your backups also live on secondary or cloud storage:
 
    ```bash
    bash -c "$(curl -fsSL https://raw.githubusercontent.com/tis24dev/proxsave/main/install.sh)" _ --new-install
@@ -191,7 +191,8 @@ The installation wizard creates your configuration file interactively:
 ```bash
 ./build/proxsave --install
 
-# Or perform a clean reinstall (keeps build/, env/, and identity/)
+# Or perform a clean reinstall. Keeps build/, env/ and identity/; deletes everything
+# else under the base directory, local backup archives and configs/backup.env included.
 ./build/proxsave --new-install
 ```
 

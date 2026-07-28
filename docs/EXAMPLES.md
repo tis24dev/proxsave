@@ -886,16 +886,24 @@ BACKUP_ENABLED=true
 
 ### Setup Steps
 
+`SYSTEM_ROOT_PREFIX` is **not** one of the keys ProxSave reads from the environment, so it has to go in a config file. Setting it on the command line is silently ignored and the run collects the live root instead, which is the one mistake here that produces a plausible-looking archive of the wrong system.
+
 ```bash
 # 1) Mount or prepare the alternate root
 mount /dev/vg0/snap /mnt/snapshot-root   # example
 
-# 2) Run a dry-run
-SYSTEM_ROOT_PREFIX=/mnt/snapshot-root proxsave --dry-run
+# 2) Put the prefix in a dedicated config file
+cp /opt/proxsave/configs/backup.env /opt/proxsave/configs/snapshot.env
+sed -i 's|^SYSTEM_ROOT_PREFIX=.*|SYSTEM_ROOT_PREFIX=/mnt/snapshot-root|' /opt/proxsave/configs/snapshot.env
 
-# 3) Run the actual backup (optional)
-SYSTEM_ROOT_PREFIX=/mnt/snapshot-root proxsave
+# 3) Run a dry-run against it
+proxsave -c /opt/proxsave/configs/snapshot.env --dry-run
+
+# 4) Run the actual backup (optional)
+proxsave -c /opt/proxsave/configs/snapshot.env
 ```
+
+Check the dry-run output names paths under `/mnt/snapshot-root` before running for real.
 
 ### Expected Results
 - Collected files reflect the contents of `/mnt/snapshot-root/etc`, `/var`, `/root`, `/home`, etc.

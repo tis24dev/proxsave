@@ -212,6 +212,11 @@ it cannot be kept secret on the client side. The token name is literally
 `v1_public_...`. It only gates the free shared relay worker, whose real protection is
 server-side (rate limiting, per-request `server_mac`/`server_id`); it grants no access to
 user data or the host. The two sites carry a `#nosec G101` documenting this, and the Code
-Scanning alert is dismissed accordingly. Operators who want a private relay can point
-`CLOUDFLARE_*` / the relay config at their own worker with their own secret. See
+Scanning alert is dismissed accordingly.
+
+There is currently **no way to point the relay at your own worker**. The URL, the token
+and the HMAC secret are compiled-in constants with no configuration key behind them, so
+adding `CLOUDFLARE_WORKER_URL` or anything similar to `backup.env` does nothing, silently.
+If you do not want your reports transiting a shared third-party relay, use
+`EMAIL_DELIVERY_METHOD=sendmail` or `pmf` and deliver through your own MTA. See
 [NOTIFICATIONS.md](NOTIFICATIONS.md#the-shared-cloud-relay-worker).

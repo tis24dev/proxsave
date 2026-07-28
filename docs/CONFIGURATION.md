@@ -362,6 +362,20 @@ LOG_PATH=${BASE_DIR}/log
 
 **Path resolution**: `${BASE_DIR}` expands automatically from the installed `proxsave` executable path. Scalar string values also support `$VAR` / `${VAR}` expansion (config keys first, then environment variables), but `BASE_DIR` itself is not configurable from `backup.env` or the parent environment.
 
+### Legacy key names
+
+Five keys have a legacy alias from the Bash-era configuration, and **the legacy name wins when both are present**:
+
+| Legacy name (wins) | Canonical name |
+|---|---|
+| `LOCAL_BACKUP_PATH` | `BACKUP_PATH` |
+| `LOCAL_LOG_PATH` | `LOG_PATH` |
+| `ENABLE_SECONDARY_BACKUP` | `SECONDARY_ENABLED` |
+| `SECONDARY_BACKUP_PATH` | `SECONDARY_PATH` |
+| `PROMETHEUS_ENABLED` | `METRICS_ENABLED` |
+
+This matters after `--upgrade-config`, which keeps unknown keys in a "Custom keys" section while also adding the template's canonical line. A config inherited from an older install can end up with both, and editing the canonical one then has no effect: the backups keep landing wherever the legacy key points. Grep your `backup.env` for the left column and delete those lines once you have moved the value across. The cloud aliases behave the same way and are listed in [CLOUD_STORAGE.md](CLOUD_STORAGE.md).
+
 ---
 
 ## Compression Settings
@@ -825,7 +839,9 @@ RETENTION_MONTHLY=12               # Keep 12 monthly backups (1 per month)
 RETENTION_YEARLY=3                 # Keep 3 yearly backups (1 per year)
 ```
 
-**Compiled fallbacks** are all `0`: GFS keeps nothing until you set `RETENTION_POLICY=gfs` and at least one tier. The `7/4/12/3` above are example/template values, not the defaults. `RETENTION_DAILY` is forced to at least `1` (0 is treated as 1).
+**`RETENTION_POLICY=gfs` is the switch, and it is enough on its own.** The four tiers have a compiled fallback of `0`, and the `7/4/12/3` above are template examples, not defaults. Setting only the policy line does not mean "keep everything until I pick tiers": it activates GFS with every tier at zero, which means `RETENTION_DAILY` is forced up to `1`, weekly and monthly keep nothing, and yearly keeps one backup per past year. Everything else is classified for deletion and really is deleted, on local, secondary and cloud storage, on the very next run.
+
+Set the tiers in the same edit as the policy.
 
 ### GFS Algorithm
 

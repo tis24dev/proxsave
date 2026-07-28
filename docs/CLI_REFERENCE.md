@@ -122,7 +122,8 @@ proxsave --install
 # Interactive installation wizard (CLI mode - for debugging)
 proxsave --install --cli
 
-# Clean reinstall (wipes install dir except build/env/identity, then runs wizard)
+# Clean reinstall: wipes the install dir except build/, env/ and identity/, then runs
+# the wizard. With stock paths that deletes local backup archives and configs/backup.env.
 proxsave --new-install
 
 # Clean reinstall with CLI mode
@@ -234,7 +235,7 @@ See also: [upgrading configuration](#configuration-upgrade)
 | Flag | Description |
 |------|-------------|
 | `--install` | Interactive installation wizard |
-| `--new-install` | Wipe install directory (preserve build/env/identity) then launch wizard |
+| `--new-install` | Wipe the install directory, keeping only `build/`, `env/` and `identity/`, then launch the wizard. With stock paths this deletes your local backup archives and `configs/backup.env` |
 | `--upgrade` | Download and install latest ProxSave binary from GitHub releases |
 | `--upgrade-config` | Merge current config with latest template |
 | `--upgrade-config-dry-run` | Preview config upgrade without changes |
@@ -575,7 +576,11 @@ proxsave --support
 
 ## Scheduling with Cron
 
-> On fresh installs ProxSave schedules backups through the **resident daemon** (`proxsave-daemon.service`) by default; see [DAEMON.md](DAEMON.md). The daemon runs once daily, so every schedule below (hourly, every 6 hours, weekly, several times a day) requires the daemon-less **cron** engine. To use one, install with the cron engine or run `proxsave --daemon-remove` first. Do not add a cron entry while the daemon is active, or the backup runs twice.
+> On fresh installs ProxSave schedules backups through the **resident daemon** (`proxsave-daemon.service`) by default; see [DAEMON.md](DAEMON.md). The daemon runs once daily, so every schedule below (hourly, every 6 hours, weekly, several times a day) requires the daemon-less **cron** engine. Do not add a cron entry while the daemon is active, or the backup runs twice.
+
+> **ProxSave owns your crontab, so a hand-written schedule does not survive.** `--install`, `--new-install` and `--daemon-remove` each rewrite it: they delete **every** cron line whose command is named `proxsave` or `proxmox-backup`, not only the one they wrote themselves, and append a single daily entry at `SCHEDULER_TIME`. A custom cadence from this section is therefore silently downgraded to daily the next time you reconfigure. `--upgrade` is the exception: it only repoints legacy paths and leaves the schedule alone.
+>
+> The practical order is: run `proxsave --daemon-remove` first, which switches to cron and writes the daily line for you, **then** edit that line to the cadence you want. Adding a second entry afterwards leaves two, and both will fire.
 
 ### Cron Setup
 
@@ -671,7 +676,7 @@ crontab -e
 | `--log-level <level>` | `-l` | Set log level (debug\|info\|warning\|error\|critical) |
 | `--cli` | - | Force CLI mode instead of TUI (only for: --install, --new-install, --newkey, --decrypt, --restore) |
 | `--install` | - | Interactive installation wizard |
-| `--new-install` | - | Wipe install dir (preserve build/env/identity) then run wizard |
+| `--new-install` | - | Wipe the install dir, keeping only `build/`, `env/` and `identity/`, then run the wizard. Deletes local backups and `configs/backup.env` with stock paths |
 | `--upgrade` | - | Download and install latest binary from GitHub releases |
 | `--upgrade-config` | - | Upgrade config from embedded template |
 | `--upgrade-config-dry-run` | - | Preview config upgrade |
@@ -732,7 +737,16 @@ proxsave --support
 
 ## Environment Variables
 
-While most configuration is in `configs/backup.env`, these environment variables can override settings:
+While most configuration is in `configs/backup.env`, some settings can also be set in the environment for a single run.
+
+**Only a fixed allowlist of keys is honoured.** ProxSave reads a hardcoded list of about a hundred names out of the environment; every other key in the shipped template, roughly half of them, is ignored. There is no warning and no log line when that happens: the run silently uses the value from the file. If a key is not on the list, the file is the only way to set it.
+
+Two consequences worth knowing:
+
+- Keys that look obviously overridable often are not. `SYSTEM_ROOT_PREFIX` and `HOST_BACKUP_MODE` are two examples, so `SYSTEM_ROOT_PREFIX=/mnt/snapshot proxsave` does not back up the mounted root, it backs up the live one.
+- An empty value is treated as absent, so a key cannot be cleared from the environment: `GOTIFY_TOKEN= proxsave` leaves the file's token in place.
+
+The ones below are on the list and are the ones worth using:
 
 ```bash
 # Config file location: there is no env var for this; use the -c / --config CLI flag
@@ -754,7 +768,7 @@ DEBUG_LEVEL=extreme proxsave --log-level debug
 USE_COLOR=false proxsave
 ```
 
-**Priority**: Environment variables > Configuration file > Defaults, except `BASE_DIR`, which is always runtime-detected.
+**Priority**: for a key on the allowlist, environment variable > configuration file > default. For every other key the environment is not consulted at all. `BASE_DIR` is always runtime-detected and is not overridable from either place.
 
 ---
 

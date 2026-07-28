@@ -407,7 +407,7 @@ RETENTION_YEARLY=3
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `CLOUD_ENABLED` | `false` | Enable cloud storage |
-| `CLOUD_REMOTE` | _(empty)_ | rclone remote **name** from `rclone config` (legacy `remote:path` still supported). Required only when cloud is enabled: if empty, cloud is **silently disabled** even with `CLOUD_ENABLED=true`. |
+| `CLOUD_REMOTE` | _(empty)_ | rclone remote **name** from `rclone config` (legacy `remote:path` still supported). **Required** when `CLOUD_ENABLED=true`: leaving it empty is a hard configuration error, and the run aborts with exit `2` before anything is backed up, locally included. Set both keys together, or neither. |
 | `CLOUD_REMOTE_PATH` | _(empty)_ | Folder path/prefix inside the remote (e.g., `/proxsave/backup`) |
 | `CLOUD_LOG_PATH` | _(empty)_ | Optional log folder (recommended: path-only on the same remote; use `otherremote:/path` only when using a different remote) |
 | `CLOUD_UPLOAD_MODE` | `parallel` | `parallel` or `sequential` |
@@ -490,7 +490,8 @@ You can choose the style you prefer; they are equivalent from the tool's point o
 - Organizing multiple servers' backups: `server1/`, `server2/`
 - Separating environments: `production/`, `staging/`
 - Version control: `v1/`, `v2/`
-- Or leave empty to store in remote root
+
+> **Give every host its own prefix.** Retention lists the remote **recursively** and matches on the filename alone, with no host filter and no depth limit, so anything under the listed root that looks like a ProxSave backup counts toward this host's `MAX_CLOUD_BACKUPS` and is eligible for deletion once the limit is passed. A host left at the remote root on a shared remote will happily prune other hosts' backups out of `server1/` and `server2/`. Leave `CLOUD_REMOTE_PATH` empty only when the remote, or the sub-path in `CLOUD_REMOTE`, belongs to this host alone.
 
 ---
 

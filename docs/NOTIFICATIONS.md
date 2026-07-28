@@ -313,9 +313,14 @@ distributed binary and are published in the repository, so they cannot be kept s
 on the client. They only gate the free shared worker, whose real protection is
 server-side rate limiting keyed on `server_mac` / `server_id`. Both sites carry a
 `#nosec G101` documenting this. See
-[SECURITY.md](SECURITY.md#hardcoded-relay-credential-g101). Operators who want a
-private relay can point `CLOUDFLARE_WORKER_URL` / `CLOUDFLARE_WORKER_TOKEN` /
-`CLOUDFLARE_HMAC_SECRET` at their own worker.
+[SECURITY.md](SECURITY.md#hardcoded-relay-credential-g101).
+
+The worker URL, token and HMAC secret are **compiled-in constants with no configuration
+key behind them**. `CLOUDFLARE_WORKER_URL`, `CLOUDFLARE_WORKER_TOKEN` and
+`CLOUDFLARE_HMAC_SECRET` are not read from `backup.env` or the environment: adding them
+produces no error, no log line and no change, and mail keeps going through the shared
+worker. Pointing the relay at a private worker is not supported today. To keep reports
+off a third-party relay entirely, use `EMAIL_DELIVERY_METHOD=sendmail` or `pmf`.
 
 The JSON report body (`buildReportData`) must byte-match the legacy Bash
 `collect_email_report_data()` output, otherwise the worker's HMAC signature check
@@ -451,7 +456,7 @@ A channel is anything that implements `notify.Notifier`
 | Telegram: "could not send to ProxSave server" repeatedly | stale relay secret or unknown server | the client reprovisions once automatically; if it persists, re-pair (`--install` Telegram step) |
 | `426` on `get-chat-id` | server needs a newer client to finish pairing | upgrade ProxSave to v0.28.0 or later |
 | `notify-telegram` sensor DOWN but run green | message accepted but not delivered (Tier 2 is stricter than Tier 1) | fix the delivery cause above; the run staying green is by design |
-| Email relay `INVALID_SIGNATURE` | report shape changed, HMAC no longer matches; or a private worker misconfigured | keep the stock report shape; check `CLOUDFLARE_*` if self-hosting |
+| Email relay `INVALID_SIGNATURE` | report shape changed, HMAC no longer matches; or a private worker misconfigured | keep the stock report shape; the relay endpoint is not configurable, so a shape change is the only cause |
 | Email: "recipient is not allowed (root accounts are blocked)" | `relay` method with a `root@` recipient and no sendmail fallback | set a real recipient, enable `EMAIL_FALLBACK_SENDMAIL`, or use `sendmail`/`pmf` |
 | Portal address and a `Login:` line instead of a link | you have set a portal password, so the server stopped minting links | expected; sign in at that address with that identity |
 | Nothing printed about the portal at all | the mint did not succeed, or the value failed the sanitizer | minting is best effort and quiet; run the dashboard check again. Opening the link is not what retires it, so this is never the expected end state |
