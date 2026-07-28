@@ -580,7 +580,9 @@ proxsave --support
 
 > **ProxSave owns your crontab, so a hand-written schedule does not survive.** `--install`, `--new-install` and `--daemon-remove` each rewrite it: they delete **every** cron line whose command is named `proxsave` or `proxmox-backup`, not only the one they wrote themselves, and append a single daily entry at `SCHEDULER_TIME`. A custom cadence from this section is therefore silently downgraded to daily the next time you reconfigure. `--upgrade` is the exception: it only repoints legacy paths and leaves the schedule alone.
 >
-> The practical order is: run `proxsave --daemon-remove` first, which switches to cron and writes the daily line for you, **then** edit that line to the cadence you want. Adding a second entry afterwards leaves two, and both will fire.
+> The practical order is: run `proxsave --daemon-remove` first, which switches to cron, writes the daily line for you, and records the opt-out, **then** edit that line to the cadence you want. Adding a second entry afterwards leaves two, and both will fire.
+>
+> That opt-out is also what makes the line survive. `--upgrade` runs the daemon auto-migration, which deletes every proxsave cron entry and moves the host to the once-daily daemon, and it skips that only when the config already says `SCHEDULER_MODE=daemon` or when `--daemon-remove` has written `DAEMON_OPT_OUT=true`. A cron install that has never run `--daemon-remove` loses its hand-edited schedule at the next upgrade. `--daemon-setup` removes it too.
 
 ### Cron Setup
 
@@ -739,7 +741,7 @@ proxsave --support
 
 While most configuration is in `configs/backup.env`, some settings can also be set in the environment for a single run.
 
-**Only a fixed allowlist of keys is honoured.** ProxSave reads a hardcoded list of about a hundred names out of the environment; every other key in the shipped template, roughly half of them, is ignored. There is no warning and no log line when that happens: the run silently uses the value from the file. If a key is not on the list, the file is the only way to set it.
+**Only a fixed allowlist of keys is honoured.** ProxSave reads a hardcoded list of about a hundred `backup.env` names out of the environment; every other key in the shipped template, roughly half of them, is ignored. There is no warning and no log line when that happens: the run silently uses the value from the file. The three PBS auth keys (`PBS_REPOSITORY`, `PBS_PASSWORD`, `PBS_FINGERPRINT`) are handled separately and the environment wins over the file for them. For anything else not on the list, the file is the only way to set it.
 
 Two consequences worth knowing:
 
@@ -768,7 +770,7 @@ DEBUG_LEVEL=extreme proxsave --log-level debug
 USE_COLOR=false proxsave
 ```
 
-**Priority**: for a key on the allowlist, environment variable > configuration file > default. For every other key the environment is not consulted at all. `BASE_DIR` is always runtime-detected and is not overridable from either place.
+**Priority**: for a key on the allowlist, environment variable > configuration file > default. One exception: if the file still carries the **legacy alias** of that key (see Legacy key names in [CONFIGURATION.md](CONFIGURATION.md)), the legacy line in the file wins over the environment, because the allowlist only carries the canonical name. For every other key the environment is not consulted at all. `BASE_DIR` is always runtime-detected and is not overridable from either place.
 
 ---
 

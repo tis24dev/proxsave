@@ -903,7 +903,7 @@ proxsave -c /opt/proxsave/configs/snapshot.env --dry-run
 proxsave -c /opt/proxsave/configs/snapshot.env
 ```
 
-Check the dry-run output names paths under `/mnt/snapshot-root` before running for real.
+Confirm the prefix took effect before running for real. On a Proxmox snapshot the run header names it (`Proxmox Type (prefix /mnt/snapshot-root): ...`); on a plain chroot or fixture that line is debug-only, so run the dry-run with `--log-level debug` and check the collected paths resolve under `/mnt/snapshot-root`. Collection lines at the default level name the category, not the path, so they cannot tell you which root was used.
 
 ### Expected Results
 - Collected files reflect the contents of `/mnt/snapshot-root/etc`, `/var`, `/root`, `/home`, etc.

@@ -51,10 +51,11 @@ The exact wire behavior, in case you are reading the monitor's event log:
   kill reports a non-zero code the same way. `/0` is the only green outcome.
 - A hang pings `/fail` with a `timed out after <duration>` body, because a killed child
   has no exit code to report.
-- A scheduled run that finds another backup already holding the lock is the one case
-  where a start ping gets no finish: the daemon has already pinged `/start`, the child
-  exits with the skipped code, and there is no outcome to report, so it stays silent.
-  In the monitor's event log that shows up as a started run that never finished.
+- A start ping goes unanswered whenever the run produces no outcome to report: the
+  child exits with the skipped code (another backup holds the lock, or it re-read
+  `BACKUP_ENABLED` as false), or the daemon was stopped while the child was still
+  running. The daemon has already pinged `/start` and then deliberately stays silent,
+  which in the monitor's event log shows up as a started run that never finished.
 - With `HEALTHCHECK_SEND_LOG=true`, a log tail rides along as the request body on a
   **supervised** run that failed or hung. The daemon keeps the last 8 KiB of the run's
   output for this, and the ping body is hard-capped at 100 kB regardless. A standalone
@@ -106,16 +107,21 @@ persists it. No Telegram pairing, no account, no key to copy. It is the same ide
 the centralized Telegram relay uses, so a host that already sends Telegram
 notifications is already provisioned.
 
-Once provisioned, the daemon fetches its ping URLs from the server on every cycle and
-keeps them in memory only. It warns once on a failed fetch and then keeps retrying
-quietly.
+Once provisioned, the daemon fetches its ping URLs from the server at startup and
+keeps them in memory only. While a URL is still unresolved it retries on each
+heartbeat; once resolved it reuses the same URLs until the service restarts, so a
+server-side change to them is picked up at the next restart. It warns once on a failed
+fetch and then keeps retrying quietly.
 
-There is a fallback to `HEALTHCHECK_ALIVE_URL` and `HEALTHCHECK_BACKUP_URL` in
-`backup.env`, but nothing fills those in for you: a centralized fetch is never written
-back to the file, so on a wizard-installed centralized host they are empty and the
-fallback resolves to nothing. While the server is unreachable that host reports
-nothing at all, and the gap shows up as a missed heartbeat on the monitor. If you want
-a cushion, paste the two URLs in yourself once you know them.
+An outage of the provisioning server therefore does not stop a daemon that is already
+reporting: the pings go to the monitoring host, not to the config API. What it does
+block is a daemon that has not resolved its URLs yet, for example one that started
+while the server was down. There is a fallback to `HEALTHCHECK_ALIVE_URL` and
+`HEALTHCHECK_BACKUP_URL` in `backup.env` for exactly that case, but nothing fills them
+in for you: a centralized fetch is never written back to the file, so on a
+wizard-installed centralized host they are empty and the fallback resolves to nothing.
+That host reports nothing until the fetch succeeds, and the gap shows up as a missed
+heartbeat.
 
 The credential also self-heals. If the server ever rejects it, or reports that this
 host's account was parked for being unused, the daemon clears the stale credential and
@@ -149,10 +155,11 @@ open the dashboard check again.
 portal's own address plus the identity you sign in with. That identity is an **email
 address**, not a username. Sign in there with the password you chose.
 
-The exact wording differs a little per surface. The log epilogue prints
-`Healthchecks Portal:` followed by `Healthchecks Login:`, the run screen prints
-`Healthchecks link:` for the single-use link and `Healthchecks portal:` /
-`Healthchecks login:` for the second state, and the wizard and dashboard box the same
+The exact wording differs a little per surface. The log epilogue uses
+`Healthchecks Portal:` for both states, the link and the sign-in address alike, and
+adds a `Healthchecks Login:` line only in the second. The run screen distinguishes them
+by name: `Healthchecks link:` for the single-use link, `Healthchecks portal:` and
+`Healthchecks login:` for the second state. The wizard and dashboard box the same
 values with a short caption.
 
 Two things worth knowing:
@@ -202,7 +209,7 @@ setup.
 
 Note that `HEALTHCHECK_ALIVE_URL` and `HEALTHCHECK_BACKUP_URL` do double duty: in self
 mode they are your own ping URLs, and in centralized mode they are the cache the server
-fills in for you. In centralized mode, do not edit them.
+fills in for you. In centralized mode they are an optional fallback cache that nothing auto-fills, so leave them empty unless you deliberately want one.
 
 ## Where monitoring shows up
 
@@ -335,7 +342,7 @@ HEALTHCHECK_HEARTBEAT_INTERVAL=5m
 HEALTHCHECK_UPDATE_INTERVAL=5m
 HEALTHCHECK_SEND_LOG=true      # attach a log tail on a failed or hung supervised run
 
-# Centralized cache, filled in from the server. Do not edit.
+# Centralized: optional fallback cache, nothing auto-fills it.
 HEALTHCHECK_ALIVE_URL=
 HEALTHCHECK_BACKUP_URL=
 

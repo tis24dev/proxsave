@@ -1125,9 +1125,11 @@ proxsave --support
 ## Exit Codes
 
 `proxsave` returns a specific exit code so scripts and the daemon can react to the
-failure class. `0` is success. Every non-zero code is a failure except `16`, which
-means a backup was deliberately not performed, so a wrapper that treats "non-zero" as
-"page someone" will raise false alarms on overlapping runs and on paused hosts.
+failure class. Three of them are not failures: `1` is also what a backup that succeeded
+with warnings returns, `16` means no backup was performed for a benign reason, and
+`130` means the run was cancelled by hand. Only `2` through `15` are unambiguous
+failures. A wrapper that treats "non-zero" as "page someone" raises false alarms on
+warning-only runs, on overlapping runs, on paused hosts, and on anything you Ctrl+C.
 
 | Code | Name | Meaning |
 |------|------|---------|

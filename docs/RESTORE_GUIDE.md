@@ -424,9 +424,9 @@ Phase 5: Mode Selection & Category Choice
   ├─ If Custom: Interactive category selection
   └─ Build final category list
 
-Phase 6: Cluster Restore Mode (PVE Cluster Backups Only)
-  ├─ SKIPPED if backup is from standalone node
-  ├─ Detect if backup ClusterMode = "cluster"
+Phase 6: Cluster Restore Mode (PVE backups carrying pve_cluster)
+  ├─ SKIPPED if the archive has no pve_cluster payload, or the category is not selected
+  ├─ Detect the pve_cluster payload in the archive (not the manifest ClusterMode)
   ├─ Prompt: SAFE (export+API) vs RECOVERY (full restore)
   ├─ SAFE: Redirect pve_cluster to export-only, apply via pvesh
   └─ RECOVERY: Proceed with direct database restore
@@ -563,7 +563,7 @@ This guide intentionally shows the operator-facing outcomes only. The exact
 metadata precedence, host detection order, and capability-overlap rules are
 documented in [RESTORE_TECHNICAL.md](RESTORE_TECHNICAL.md#phase-3-system-detection--compatibility).
 
-#### Phase 6: Cluster Restore Mode (PVE Cluster Backups Only)
+#### Phase 6: Cluster Restore Mode (PVE backups carrying pve_cluster)
 
 This phase runs whenever the archive carries a `pve_cluster` payload (`/var/lib/pve-cluster/`) and that category is part of the restore. That is decided from the archive contents, not from the manifest, so a **standalone** PVE backup normally reaches it too: see [PVE Restore: Standalone vs Cluster](#pve-restore-standalone-vs-cluster). On a standalone node, RECOVERY is the answer that writes the database back.
 
@@ -778,7 +778,7 @@ That matters because a standalone PVE backup normally does carry that payload: `
 
 On a standalone node the prompt still appears, and the answer that does what you want is **RECOVERY**: it writes `config.db` back. There is no split-brain risk to protect against on a single node.
 
-Choosing SAFE on a standalone restore is the trap: the cluster database is redirected to the export directory and **never written**, so the restore completes without restoring the thing you came for.
+SAFE never writes `config.db`: it exports the cluster database and reapplies the rest of the selected categories through `pvesh`. If you are rebuilding a node whose pmxcfs is empty or broken, that is not what you want, so answer RECOVERY. On a standalone node that is already running, where you only want the backed-up configuration merged back in, SAFE is still the safer answer.
 
 With RECOVERY selected:
 
@@ -851,7 +851,7 @@ Preparing system for cluster database restore...
 
 | Use Case | Recommended Mode |
 |----------|------------------|
-| Recovering a single standalone node | Standalone (automatic) |
+| Recovering a single standalone node | RECOVERY (the prompt still appears) |
 | Recovering specific VM configs from cluster backup | Cluster SAFE |
 | Recovering storage definitions from cluster backup | Cluster SAFE |
 | Full disaster recovery, cluster destroyed | Cluster RECOVERY |

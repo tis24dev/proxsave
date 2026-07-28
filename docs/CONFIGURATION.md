@@ -378,7 +378,7 @@ Five keys have a legacy alias from the Bash-era configuration, and **the legacy 
 
 These seven are the ones where the legacy name is checked first. Other pairs, such as `MAX_LOCAL_BACKUPS` / `LOCAL_RETENTION_DAYS` or `AGE_RECIPIENT` / `AGE_RECIPIENTS`, list the canonical name first and are harmless.
 
-This matters after `--upgrade-config`, which keeps unknown keys in a "Custom keys" section while also adding the template's canonical line, and does not prune any of these. A config inherited from an older install can end up with both, and editing the canonical one then has no effect: the backups keep landing wherever the legacy key points. Grep your `backup.env` for the left column and delete those lines once you have moved the value across. The cloud aliases behave the same way and are listed in [CLOUD_STORAGE.md](CLOUD_STORAGE.md).
+This matters after `--upgrade-config`, which keeps unknown keys in a "Custom keys" section while also adding the template's canonical line, and does not prune any of these. A config inherited from an older install can end up with both, and editing the canonical one then has no effect: the backups keep landing wherever the legacy key points. Grep your `backup.env` for the left column and delete those lines once you have moved the value across. Two more cloud pairs are listed in [CLOUD_STORAGE.md](CLOUD_STORAGE.md), where the canonical name wins instead, so check that table rather than assuming.
 
 ---
 

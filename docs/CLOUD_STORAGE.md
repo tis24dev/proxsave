@@ -512,10 +512,12 @@ You can choose the style you prefer; they are equivalent from the tool's point o
 
 Two things to know before you tune.
 
-`RCLONE_TRANSFERS` is the knob that matters, because it controls parallelism **inside**
-a single rclone upload. `CLOUD_UPLOAD_MODE` and `CLOUD_PARALLEL_MAX_JOBS` control how
-many files ProxSave uploads at once, and under the default bundle layout there is only
-ever one, so they do nothing unless you set `BUNDLE_ASSOCIATED_FILES=false`.
+Every upload is a single-file `rclone copyto`, and under the default bundle layout
+there is exactly one per backup. So `RCLONE_TRANSFERS` has nothing to parallelize
+either: like `CLOUD_UPLOAD_MODE` and `CLOUD_PARALLEL_MAX_JOBS`, it only starts mattering
+once `BUNDLE_ASSOCIATED_FILES=false` gives rclone more than one file. What actually
+moves the needle on a single large object is `RCLONE_BANDWIDTH_LIMIT` and the backend's
+own chunk and concurrency options, which belong in the rclone remote definition.
 
 Integer keys are parsed strictly and fall back to their default without a warning if
 parsing fails, so write a number: `RCLONE_TRANSFERS=16`, never `8-16`. A range silently

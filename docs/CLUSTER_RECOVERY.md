@@ -435,7 +435,7 @@ Remove it manually if restore was successful: rm /tmp/proxsave/restore_backup_20
 
 ProxSave stops `pve-cluster`, `pvedaemon`, `pveproxy`, `pvestatd`, unmounts `/etc/pve`, extracts `/var/lib/pve-cluster/` (config.db), then restarts the four services. It does not print a per-service checkmark line for each one. No `/etc/pve` files are written directly: config.db owns them, so `/etc/pve` is repopulated from the restored database a moment after pmxcfs remounts, not by the file-extraction phase.
 
-Had you chosen SAFE, this step would instead apply what the selected categories actually exported, through `pvesh` on the running cluster, with no service stop and no config.db write. Note that in STORAGE mode that is the storage stack only: the VM/CT and datacenter configs live in `pve_config_export`, which is export-only and is stripped from STORAGE, so SAFE has nothing to apply for them. Use FULL, or CUSTOM including `pve_config_export`, when you want the guest configs applied.
+Had you chosen SAFE, this step would instead apply what the selected categories actually exported, through `pvesh` on the running cluster, with no service stop and no config.db write. Note what STORAGE mode does not carry: the VM/CT configs live in `pve_config_export`, which is export-only and is stripped from STORAGE, so none are applied. `storage.cfg` and `datacenter.cfg` belong to `storage_pve` and are still applied through `pvesh`, as are pools and resource mappings. Use FULL, or CUSTOM including `pve_config_export`, when you want the guest configs applied.
 
 #### Step 5: Verification
 
@@ -1711,7 +1711,9 @@ ls /tmp/psrecover        # <host>-backup-<ts>.tar.xz (plus .age if encrypted), .
 #      age -d -i /path/to/key.txt -o /tmp/psrecover/archive.tar.xz /tmp/psrecover/archive.tar.xz.age
 
 #    Then pull the cluster database out of the inner archive (xz by default):
-tar -xJf /tmp/psrecover/<host>-backup-<ts>.tar.xz --strip-components=3 \
+#    Entries are stored with a leading ./ so there are four components to strip, and
+#    -xf lets tar auto-detect the compression whatever COMPRESSION_TYPE was.
+tar -xf /tmp/psrecover/<host>-backup-<ts>.tar.xz --strip-components=4 \
     -C /var/lib/pve-cluster \
     ./var/lib/pve-cluster/
 
