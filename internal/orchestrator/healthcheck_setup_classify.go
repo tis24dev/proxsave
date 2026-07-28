@@ -36,8 +36,15 @@ type HealthcheckSetupState struct {
 	Message  string
 	Level    HealthcheckSetupLevel
 	LoginURL string
-	Verified bool // provisioning ready AND monitor reachable -> Continue/return allowed
-	Fatal    bool // another check cannot help -> do NOT offer Check again
+	// PortalURL/PortalLogin are the sign-in page and identity to render INSTEAD of
+	// LoginURL. They are populated only when the server confirmed the operator has their
+	// own portal password, so a non-empty PortalURL is itself the "show state B" signal
+	// and no front-end has to reason about the flag. Same gates as LoginURL: the URL must
+	// clear TrustedLoginURL, the identity SanitizePortalLogin.
+	PortalURL   string
+	PortalLogin string
+	Verified    bool // provisioning ready AND monitor reachable -> Continue/return allowed
+	Fatal       bool // another check cannot help -> do NOT offer Check again
 }
 
 // ClassifyHealthcheckSetupResult maps a HealthcheckCheckResult to display state. The
@@ -49,6 +56,14 @@ type HealthcheckSetupState struct {
 // latch) stays connectivity-based: the daemon legitimately has not started yet at install.
 func ClassifyHealthcheckSetupResult(res HealthcheckCheckResult) HealthcheckSetupState {
 	st := HealthcheckSetupState{LoginURL: serverbot.TrustedLoginURL(res.LoginURL, defaultServerAPIHost)}
+	// The portal fallback is carried ONLY on an explicit password_set=true. A nil flag
+	// means the server could not confirm the state (the mint failed), and telling an
+	// operator to "sign in with the password you set" when they never set one would send
+	// them to a page they cannot get past.
+	if res.PasswordSet != nil && *res.PasswordSet {
+		st.PortalURL = serverbot.TrustedLoginURL(res.PortalURL, defaultServerAPIHost)
+		st.PortalLogin = serverbot.SanitizePortalLogin(res.PortalLogin)
+	}
 
 	// 1) Hard provisioning blockers: monitoring cannot operate until fixed -> override.
 	switch {

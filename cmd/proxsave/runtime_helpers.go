@@ -258,19 +258,36 @@ func logServerIdentityValues(serverID, mac string) {
 	}
 }
 
-// logMonitoringPortalLink is the SOLE display boundary for the portal magic-link. The
-// Healthchecks section carries the link RAW on stats.HealthcheckLink (captured this run
-// or best-effort minted); this sanitizes it once with serverbot.SanitizeLoginURL and,
-// only if it survives, prints it as the "Healthchecks Portal" line. It is called in the
-// backup epilogue right after the Server MAC Address line so the link appears at the
-// very end of the run. It never registers the link as a log secret (it must stay
-// visible) and prints nothing for a nil stats, empty, or hostile link.
+// logMonitoringPortalLink is the display boundary for the portal line in the CLI/log
+// epilogue. The Healthchecks section carries the values RAW on stats (captured this run
+// or best-effort fetched); this sanitizes them once and prints at most one portal block,
+// right after the Server MAC Address line so it lands at the very end of the run.
+//
+// Two states, and the magic-link WINS when both are present: it signs the operator in
+// with one click, so it is strictly better than an address plus a password prompt.
+//
+//	link present -> "Healthchecks Portal: <single-use magic-link>"
+//	otherwise    -> "Healthchecks Portal: <sign-in page>" + "Healthchecks Login: <identity>"
+//
+// The second state only exists once the server confirmed the operator has their own
+// password, so the address is actionable rather than a dead end. Nothing is printed for a
+// nil stats or when every value fails its gate. Never registers any of it as a log secret
+// (it must stay visible).
 func logMonitoringPortalLink(stats *orchestrator.BackupStats) {
 	if stats == nil {
 		return
 	}
 	if safe := serverbot.SanitizeLoginURL(stats.HealthcheckLink); safe != "" {
 		logging.Info("Healthchecks Portal: %s", safe)
+		return
+	}
+	portal := serverbot.SanitizeLoginURL(stats.HealthcheckPortalURL)
+	if portal == "" {
+		return
+	}
+	logging.Info("Healthchecks Portal: %s", portal)
+	if login := serverbot.SanitizePortalLogin(stats.HealthcheckPortalLogin); login != "" {
+		logging.Info("Healthchecks Login: %s", login)
 	}
 }
 

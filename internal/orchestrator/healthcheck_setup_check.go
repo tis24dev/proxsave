@@ -23,9 +23,17 @@ var ErrHealthcheckSelfNotConfigured = errors.New("self healthcheck alive URL not
 // SAME source the run-start init check and the Phase-7 section use): the check thus
 // reports whether monitoring is actually running, not just one-shot reachability.
 type HealthcheckCheckResult struct {
-	Err       error
-	LoginURL  string
-	Reachable bool
+	Err      error
+	LoginURL string
+	// PortalURL/PortalLogin/PasswordSet mirror the server's portal state: the plain
+	// sign-in page, the identity that signs in there, and whether the operator already
+	// has a password of their own. They are what the screen shows INSTEAD of the
+	// magic-link once PasswordSet is an explicit true; a nil PasswordSet means the
+	// server could not confirm it and the screen must not claim either state.
+	PortalURL   string
+	PortalLogin string
+	PasswordSet *bool
+	Reachable   bool
 
 	Daemon     health.Diagnosis // daemon liveness/transmission diagnosed from the status file
 	DaemonRead bool             // false only if the status file existed but could not be read
@@ -124,6 +132,9 @@ func CheckHealthcheckConnection(ctx context.Context, serverAPIHost, serverID, ba
 		return res
 	}
 	res.LoginURL = cfg.LoginURL
+	res.PortalURL = cfg.PortalURL
+	res.PortalLogin = cfg.PortalLogin
+	res.PasswordSet = cfg.PasswordSet
 	if cfg.AliveURL != "" {
 		if perr := healthcheckSetupPing(ctx, cfg.AliveURL); perr != nil {
 			res.Err = perr

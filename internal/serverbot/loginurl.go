@@ -43,6 +43,32 @@ func TrustedLoginURL(raw, serverAPIHost string) string {
 	return safe
 }
 
+// portalLoginMaxLen caps the sign-in identity at the RFC 5321 maximum forward-path
+// length. The identity is a display string, so an over-long value is a hostile or
+// broken server, not a legitimate address.
+const portalLoginMaxLen = 254
+
+// SanitizePortalLogin returns the portal sign-in identity only if it is non-empty
+// printable ASCII (0x21-0x7e) within the address-length cap; otherwise "". It is the
+// sibling of SanitizeLoginURL for the value that is NOT a URL: the email an operator
+// types into the portal once they have a password. It deliberately has NO scheme check
+// and NO domain gate, because an identity is not navigable, and it deliberately does NOT
+// validate address syntax, because the server owns that vocabulary and a stricter client
+// would silently hide a legitimate identity. Same all-or-nothing, fail-closed contract as
+// SanitizeLoginURL: never truncated, "" on the first bad rune.
+func SanitizePortalLogin(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" || len(raw) > portalLoginMaxLen {
+		return ""
+	}
+	for _, r := range raw {
+		if r < 0x21 || r > 0x7e {
+			return ""
+		}
+	}
+	return raw
+}
+
 // sameRegistrableDomain reports whether both URLs resolve to the same registrable domain.
 // Heuristic: the last two dot-labels of the host (port stripped, lowercased). Sufficient
 // for the sole real deployment (*.proxsave.dev): bot.proxsave.dev and hc.proxsave.dev both

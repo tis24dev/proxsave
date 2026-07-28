@@ -25,7 +25,7 @@ const (
 )
 
 // newHCTestChannel builds a HealthchecksChannel with NIL seams
-// (loadSecret/mintLink/loadStatus/now); each test wires only the seams its branch needs,
+// (loadSecret/mintPortal/loadStatus/now); each test wires only the seams its branch needs,
 // so an unexpected call is a bug.
 func newHCTestChannel(cfg *config.Config, buf *bytes.Buffer) *HealthchecksChannel {
 	logger := logging.New(types.LogLevelInfo, false)
@@ -35,7 +35,7 @@ func newHCTestChannel(cfg *config.Config, buf *bytes.Buffer) *HealthchecksChanne
 
 // hcTransmittingChannel wires a channel into the centralized "transmitting" state (secret
 // present, fresh heartbeat, last outcome ok) so the magic-link tests can focus on the
-// link seam. The caller sets ch.mintLink / stats.HealthcheckLink as needed.
+// link seam. The caller sets ch.mintPortal / stats.HealthcheckLink as needed.
 func hcTransmittingChannel(cfg *config.Config, buf *bytes.Buffer) *HealthchecksChannel {
 	ch := newHCTestChannel(cfg, buf)
 	ch.loadSecret = func(string) (string, error) { return "sekret", nil }
@@ -57,9 +57,9 @@ func TestHealthchecksSectionSelfMode(t *testing.T) {
 		t.Fatal("self mode must not read the status file")
 		return health.Status{}, nil
 	}
-	ch.mintLink = func(context.Context, string, string, string) (string, error) {
+	ch.mintPortal = func(context.Context, string, string, string) (health.CentralizedConfig, error) {
 		t.Fatal("self mode must not fetch")
-		return "", nil
+		return health.CentralizedConfig{}, nil
 	}
 
 	stats := &BackupStats{}
@@ -82,9 +82,9 @@ func TestHealthchecksSectionNotConfigured(t *testing.T) {
 		t.Fatal("no-secret must not read the status file")
 		return health.Status{}, nil
 	}
-	ch.mintLink = func(context.Context, string, string, string) (string, error) {
+	ch.mintPortal = func(context.Context, string, string, string) (health.CentralizedConfig, error) {
 		t.Fatal("no-secret must not fetch")
-		return "", nil
+		return health.CentralizedConfig{}, nil
 	}
 
 	stats := &BackupStats{}
@@ -105,9 +105,9 @@ func TestHealthchecksSectionTransmitting(t *testing.T) {
 	var buf bytes.Buffer
 	ch := hcTransmittingChannel(&config.Config{HealthcheckEnabled: true, HealthcheckMode: "centralized"}, &buf)
 	// captured link -> no mint
-	ch.mintLink = func(context.Context, string, string, string) (string, error) {
+	ch.mintPortal = func(context.Context, string, string, string) (health.CentralizedConfig, error) {
 		t.Fatal("a captured link must NOT trigger a mint")
-		return "", nil
+		return health.CentralizedConfig{}, nil
 	}
 
 	stats := &BackupStats{HealthcheckLink: "https://hc/accounts/check_token/u/CAP/"}
@@ -142,7 +142,9 @@ func TestHealthchecksSectionTransmittingNoOutcome(t *testing.T) {
 		return health.Status{Records: map[string]*health.PingRecord{health.KindHeartbeat: {TS: hcNow.Add(-1 * time.Minute).Unix(), OK: true}}}, nil
 	}
 	// no captured link; mint is reachable but returns an error -> quiet info line
-	ch.mintLink = func(context.Context, string, string, string) (string, error) { return "", errors.New("bot down") }
+	ch.mintPortal = func(context.Context, string, string, string) (health.CentralizedConfig, error) {
+		return health.CentralizedConfig{}, errors.New("bot down")
+	}
 
 	stats := &BackupStats{}
 	_ = ch.Notify(context.Background(), stats)
@@ -165,9 +167,9 @@ func TestHealthchecksSectionHeartbeatStale(t *testing.T) {
 		return health.Status{Records: map[string]*health.PingRecord{health.KindHeartbeat: {TS: hcNow.Add(-1 * time.Hour).Unix(), OK: true}}}, nil
 	}
 	// captured link so no mint is attempted
-	ch.mintLink = func(context.Context, string, string, string) (string, error) {
+	ch.mintPortal = func(context.Context, string, string, string) (health.CentralizedConfig, error) {
 		t.Fatal("stale branch with a captured link must not mint")
-		return "", nil
+		return health.CentralizedConfig{}, nil
 	}
 
 	stats := &BackupStats{HealthcheckLink: "https://hc/accounts/check_token/u/CAP/"}
@@ -196,9 +198,9 @@ func TestHealthchecksSectionTransmitFailed(t *testing.T) {
 			health.KindRunFinished: {TS: hcNow.Add(-2 * time.Minute).Unix(), OK: false, Err: "healthcheck finish: connection refused"}, // newer, failed
 		}}, nil
 	}
-	ch.mintLink = func(context.Context, string, string, string) (string, error) {
+	ch.mintPortal = func(context.Context, string, string, string) (health.CentralizedConfig, error) {
 		t.Fatal("failed branch with a captured link must not mint")
-		return "", nil
+		return health.CentralizedConfig{}, nil
 	}
 
 	stats := &BackupStats{HealthcheckLink: "https://hc/accounts/check_token/u/CAP/"}
@@ -235,9 +237,9 @@ func TestHealthchecksSectionUnreachable(t *testing.T) {
 			health.KindRunFinished: {TS: hcNow.Add(-1 * 24 * time.Hour).Unix(), OK: true}, // old ok outcome must not rescue
 		}}, nil
 	}
-	ch.mintLink = func(context.Context, string, string, string) (string, error) {
+	ch.mintPortal = func(context.Context, string, string, string) (health.CentralizedConfig, error) {
 		t.Fatal("a captured link must not mint")
-		return "", nil
+		return health.CentralizedConfig{}, nil
 	}
 
 	stats := &BackupStats{HealthcheckLink: "https://hc/accounts/check_token/u/CAP/"}
@@ -286,9 +288,9 @@ func TestHealthchecksSectionStaleThresholdPinnedToInterval(t *testing.T) {
 			ch.loadStatus = func(string) (health.Status, error) {
 				return health.Status{Records: map[string]*health.PingRecord{health.KindHeartbeat: {TS: hcNow.Add(-tc.hbAge).Unix(), OK: true}}}, nil
 			}
-			ch.mintLink = func(context.Context, string, string, string) (string, error) {
+			ch.mintPortal = func(context.Context, string, string, string) (health.CentralizedConfig, error) {
 				t.Fatal("a captured link must not mint")
-				return "", nil
+				return health.CentralizedConfig{}, nil
 			}
 
 			stats := &BackupStats{HealthcheckLink: "https://hc/accounts/check_token/u/CAP/"}
@@ -317,9 +319,9 @@ func TestHealthchecksSectionNewerOutcomeWins(t *testing.T) {
 			health.KindRunHang:     {TS: hcNow.Add(-2 * time.Minute).Unix(), OK: true},                       // newer, ok
 		}}, nil
 	}
-	ch.mintLink = func(context.Context, string, string, string) (string, error) {
+	ch.mintPortal = func(context.Context, string, string, string) (health.CentralizedConfig, error) {
 		t.Fatal("a captured link must not mint")
-		return "", nil
+		return health.CentralizedConfig{}, nil
 	}
 
 	stats := &BackupStats{HealthcheckLink: "https://hc/accounts/check_token/u/CAP/"}
@@ -346,9 +348,9 @@ func TestHealthchecksSectionDaemonDown(t *testing.T) {
 	ch.loadSecret = func(string) (string, error) { return "sekret", nil }
 	ch.now = func() time.Time { return hcNow }
 	ch.loadStatus = func(string) (health.Status, error) { return health.Status{}, nil } // empty status file
-	ch.mintLink = func(context.Context, string, string, string) (string, error) {
+	ch.mintPortal = func(context.Context, string, string, string) (health.CentralizedConfig, error) {
 		t.Fatal("a captured link must not mint")
-		return "", nil
+		return health.CentralizedConfig{}, nil
 	}
 
 	stats := &BackupStats{HealthcheckLink: "https://hc/accounts/check_token/u/CAP/"}
@@ -382,9 +384,9 @@ func TestHealthchecksSectionNotProvisioned(t *testing.T) {
 			health.KindHeartbeat: {TS: hcNow.Add(-30 * time.Second).Unix(), OK: false, Reason: health.ReasonNoURL},
 		}}, nil
 	}
-	ch.mintLink = func(context.Context, string, string, string) (string, error) {
+	ch.mintPortal = func(context.Context, string, string, string) (health.CentralizedConfig, error) {
 		t.Fatal("a captured link must not mint")
-		return "", nil
+		return health.CentralizedConfig{}, nil
 	}
 
 	stats := &BackupStats{HealthcheckLink: "https://hc/accounts/check_token/u/CAP/"}
@@ -410,12 +412,12 @@ func TestHealthchecksSectionMintsWhenNoCapture(t *testing.T) {
 		ServerID:           "srv1",
 	}, &buf)
 	minted := 0
-	ch.mintLink = func(_ context.Context, host, serverID, secret string) (string, error) {
+	ch.mintPortal = func(_ context.Context, host, serverID, secret string) (health.CentralizedConfig, error) {
 		minted++
 		if host != "https://bot.proxsave.dev" || serverID != "srv1" || secret != "sekret" {
 			t.Fatalf("mint args host=%q id=%q secret=%q", host, serverID, secret)
 		}
-		return "https://hc.proxsave.dev/accounts/check_token/u/MINT/", nil
+		return health.CentralizedConfig{LoginURL: "https://hc.proxsave.dev/accounts/check_token/u/MINT/"}, nil
 	}
 
 	stats := &BackupStats{} // no captured link -> mint once
@@ -444,8 +446,8 @@ func TestHealthchecksSectionDropsForeignMintedLink(t *testing.T) {
 		ServerAPIHost:      "https://bot.proxsave.dev",
 		ServerID:           "srv1",
 	}, &buf)
-	ch.mintLink = func(context.Context, string, string, string) (string, error) {
-		return "https://phishing.evil/accounts/check_token/u/MINT/", nil
+	ch.mintPortal = func(context.Context, string, string, string) (health.CentralizedConfig, error) {
+		return health.CentralizedConfig{LoginURL: "https://phishing.evil/accounts/check_token/u/MINT/"}, nil
 	}
 
 	stats := &BackupStats{} // no captured link -> mint once, then dropped
@@ -458,7 +460,9 @@ func TestHealthchecksSectionDropsForeignMintedLink(t *testing.T) {
 func TestHealthchecksSectionMintFailIsQuiet(t *testing.T) {
 	var buf bytes.Buffer
 	ch := hcTransmittingChannel(&config.Config{HealthcheckEnabled: true, HealthcheckMode: "centralized"}, &buf)
-	ch.mintLink = func(context.Context, string, string, string) (string, error) { return "", errors.New("bot down") }
+	ch.mintPortal = func(context.Context, string, string, string) (health.CentralizedConfig, error) {
+		return health.CentralizedConfig{}, errors.New("bot down")
+	}
 
 	stats := &BackupStats{}
 	_ = ch.Notify(context.Background(), stats)
@@ -470,7 +474,7 @@ func TestHealthchecksSectionMintFailIsQuiet(t *testing.T) {
 	if strings.Contains(out, "Healthchecks Portal") {
 		t.Fatalf("a failed mint must not print a portal line, got: %q", out)
 	}
-	if !strings.Contains(out, "portal link unavailable") {
+	if !strings.Contains(out, "portal details unavailable") {
 		t.Fatalf("a failed mint must degrade to a quiet info line, got: %q", out)
 	}
 }
@@ -478,9 +482,9 @@ func TestHealthchecksSectionMintFailIsQuiet(t *testing.T) {
 func TestHealthchecksSectionHostileLinkSanitizedAway(t *testing.T) {
 	var buf bytes.Buffer
 	ch := hcTransmittingChannel(&config.Config{HealthcheckEnabled: true, HealthcheckMode: "centralized"}, &buf)
-	ch.mintLink = func(context.Context, string, string, string) (string, error) {
+	ch.mintPortal = func(context.Context, string, string, string) (health.CentralizedConfig, error) {
 		t.Fatal("a captured link (even hostile) must NOT trigger a mint")
-		return "", nil
+		return health.CentralizedConfig{}, nil
 	}
 
 	// captured RAW link is hostile (raw space). This channel carries it RAW and does NOT
@@ -511,9 +515,9 @@ func TestHealthchecksSectionStatusUnreadable(t *testing.T) {
 	ch.loadStatus = func(string) (health.Status, error) {
 		return health.Status{}, errors.New("parse healthcheck status: unexpected end of JSON input")
 	}
-	ch.mintLink = func(context.Context, string, string, string) (string, error) {
+	ch.mintPortal = func(context.Context, string, string, string) (health.CentralizedConfig, error) {
 		t.Fatal("a captured link must not mint")
-		return "", nil
+		return health.CentralizedConfig{}, nil
 	}
 
 	stats := &BackupStats{HealthcheckLink: "https://hc/accounts/check_token/u/CAP/"}
@@ -554,7 +558,9 @@ func TestHealthchecksSectionUnreadableButDaemonProbed(t *testing.T) {
 	ch.loadStatus = func(string) (health.Status, error) {
 		return health.Status{}, errors.New("parse healthcheck status: unexpected end of JSON input")
 	}
-	ch.mintLink = func(context.Context, string, string, string) (string, error) { return "", nil }
+	ch.mintPortal = func(context.Context, string, string, string) (health.CentralizedConfig, error) {
+		return health.CentralizedConfig{}, nil
+	}
 
 	stats := &BackupStats{}
 	_ = ch.Notify(context.Background(), stats)

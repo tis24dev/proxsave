@@ -81,7 +81,7 @@ func Run(ctx context.Context, session *shell.Session, daemon DaemonState) (Actio
 		// Diagnostic Checks: re-open existing check screens (the group already says "Check").
 		{Label: "─── Diagnostic Checks ───", Separator: true},
 		{Label: "Telegram", Description: "verify the Telegram relay pairing", Value: ActionCheckTelegram},
-		{Label: "Healthchecks", Description: "verify backup monitoring and show the portal link", Value: ActionCheckHealthcheck},
+		{Label: "Healthchecks", Description: "verify backup monitoring and show the portal details", Value: ActionCheckHealthcheck},
 		{Label: "Post-install", Description: "re-run the post-install audit", Value: ActionPostInstallCheck},
 	}
 
