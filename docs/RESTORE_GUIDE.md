@@ -168,7 +168,7 @@ Each category is handled in one of three ways:
 - **Merge (existing PBS)**: intended for restoring onto an already operational PBS; applies supported PBS categories via `proxmox-backup-manager` without deleting existing objects that are not in the backup.
 - **Clean 1:1 (fresh PBS install)**: intended for restoring onto a new, clean PBS; attempts to make supported PBS objects match the backup (may remove objects not in the backup).
 
-API apply is automatic for supported PBS staged categories; ProxSave may fall back to file-based staged apply only in **Clean 1:1** mode.
+API apply is automatic for supported PBS staged categories, and file-based fallback for those is offered only in **Clean 1:1** mode. A few PBS files are always written straight from the stage in both modes, because there is no stable API for them: `acme/accounts.cfg`, `acme/plugins.cfg`, `metricserver.cfg`, `proxy.cfg`, and the whole `pbs_tape` category. `proxy.cfg` in particular carries the listen address and certificate settings, so Merge mode is not a guarantee that nothing outside the API touches `/etc/proxmox-backup`.
 
 | Category | Name | Description | Paths |
 |----------|------|-------------|-------|
@@ -187,14 +187,14 @@ API apply is automatic for supported PBS staged categories; ProxSave may fall ba
 | Category | Name | Description | Paths |
 |----------|------|-------------|-------|
 | `filesystem` | Filesystem Configuration | Mount points and filesystems (/etc/fstab) - WARNING: Critical for boot | `./etc/fstab` |
-| `storage_stack` | Storage Stack (Mounts/Targets) | Storage stack configuration used by mounts (iSCSI/LVM/MDADM/multipath/autofs/crypttab) | `./etc/crypttab`<br>`./etc/iscsi/`<br>`./var/lib/iscsi/`<br>`./etc/multipath/`<br>`./etc/multipath.conf`<br>`./etc/mdadm/`<br>`./etc/lvm/backup/`<br>`./etc/lvm/archive/`<br>`./etc/autofs.conf`<br>`./etc/auto.master`<br>`./etc/auto.master.d/`<br>`./etc/auto.*` |
+| `storage_stack` | Storage Stack (Mounts/Targets) | Storage stack configuration used by mounts (iSCSI/LVM/MDADM/multipath/autofs/crypttab) | `./etc/crypttab`<br>`./etc/iscsi/`<br>`./var/lib/iscsi/`<br>`./etc/multipath/`<br>`./etc/multipath.conf`<br>`./etc/mdadm/`<br>`./etc/lvm/backup/`<br>`./etc/lvm/archive/`<br>`./etc/autofs.conf`<br>`./etc/auto.master`<br>`./etc/auto.master.d/`<br>`./etc/auto.*`<br>`./etc/keys/`<br>`./etc/luks-keys/`<br>`./etc/cryptsetup-keys.d/` |
 | `network` | Network Configuration | Network interfaces and routing | `./etc/network/`<br>`./etc/netplan/`<br>`./etc/systemd/network/`<br>`./etc/NetworkManager/system-connections/`<br>`./etc/hosts`<br>`./etc/hostname`<br>`./etc/resolv.conf`<br>`./etc/cloud/cloud.cfg.d/99-disable-network-config.cfg`<br>`./etc/dnsmasq.d/lxc-vmbr1.conf` |
 | `ssl` | SSL Certificates | SSL/TLS certificates and keys | `./etc/ssl/`<br>`./etc/proxmox-backup/proxy.pem`<br>`./etc/proxmox-backup/proxy.key`<br>`./etc/proxmox-backup/ssl/` |
 | `ssh` | SSH Configuration | SSH keys and authorized_keys | `./root/.ssh/`<br>`./etc/ssh/` |
 | `scripts` | Custom Scripts | User scripts and tools | `./usr/local/bin/`<br>`./usr/local/sbin/` |
 | `crontabs` | Scheduled Tasks | Cron jobs and systemd timers | `./etc/cron.d/`<br>`./etc/crontab`<br>`./var/spool/cron/` |
 | `services` | System Services | Systemd service configs and related system settings | `./etc/systemd/system/`<br>`./etc/default/`<br>`./etc/udev/rules.d/`<br>`./etc/apt/`<br>`./etc/logrotate.d/`<br>`./etc/timezone`<br>`./etc/sysctl.conf`<br>`./etc/sysctl.d/`<br>`./etc/modprobe.d/`<br>`./etc/modules`<br>`./etc/iptables/`<br>`./etc/nftables.conf`<br>`./etc/nftables.d/` |
-| `accounts` | System Accounts & Auth (WARNING) | Local system accounts and sudo policy, applied with a **safe merge** that preserves the current host root and system accounts (does not overwrite the auth database) | `./etc/passwd`<br>`./etc/group`<br>`./etc/shadow`<br>`./etc/gshadow`<br>`./etc/sudoers` |
+| `accounts` | System Accounts & Auth (WARNING) | Local system accounts and sudo policy, applied with a **safe merge** for `passwd`/`group`/`shadow`/`gshadow` that preserves the current host root and system accounts. `/etc/sudoers` is **replaced wholesale** with the backed-up file once `visudo -c` passes, so sudo rules added since the backup are lost; `/etc/sudoers.d` is not part of the category | `./etc/passwd`<br>`./etc/group`<br>`./etc/shadow`<br>`./etc/gshadow`<br>`./etc/sudoers` |
 | `user_data` | User Data (Home Directories) | Root and user home directories (/root and /home) | `./root/`<br>`./home/` |
 | `zfs` | ZFS Configuration | ZFS pool cache and configs | `./etc/zfs/`<br>`./etc/hostid` |
 | `proxsave_info` | ProxSave Diagnostics (Export Only) | **Export-only** ProxSave command outputs and inventory reports (never written to system) | `./var/lib/proxsave-info/`<br>`./manifest.json` |
@@ -900,9 +900,11 @@ Cluster backup detected. Choose how to restore the cluster database:
 
 **What it does**:
 - Does **NOT** write to `/var/lib/pve-cluster/config.db`
-- Exports all cluster files to a separate directory for review
+- Redirects the `pve_cluster` category into an export directory for review
 - Offers to apply configurations via `pvesh` API (non-destructive)
 - Preserves your current running cluster state
+
+> SAFE only redirects `pve_cluster`, whose paths are `./var/lib/pve-cluster/`. The `pvesh` apply below reads `/etc/pve/nodes/...`, `storage.cfg` and `datacenter.cfg` from the export, and those arrive only with the `pve_config_export` category. FULL includes it, CUSTOM includes it if you tick it, and **STORAGE and SYSTEM BASE strip it**, so in those modes the apply reports "No VM/CT configs found" and "No storage.cfg found in export" and does nothing.
 
 **When to use**:
 - Cluster is still operational
@@ -914,7 +916,7 @@ Cluster backup detected. Choose how to restore the cluster database:
 After export, the workflow offers interactive options to apply configurations via `pvesh`:
 1. **VM/CT configs**: Scans exported configs (under `/etc/pve/nodes/<node>/...`) and applies them via `pvesh set /nodes/<node>/qemu/<vmid>/config`
    - If the target node hostname differs from the hostname stored in the backup (common after hardware migration / reinstall), ProxSave detects the mismatch and prompts you to select the exported node directory to import from (instead of silently reporting "No VM/CT configs found").
-2. **Storage configuration**: Applies `storage.cfg` entries via `pvesh set /cluster/storage/<id>`
+2. **Storage configuration**: applies each `storage.cfg` block via `pvesh create /storage --storage=<id> --type=<type> ...`
 3. **Datacenter configuration**: Applies `datacenter.cfg` via `pvesh set /cluster/config`
 
 Each action prompts for confirmation before execution.
@@ -1458,7 +1460,9 @@ Apply storage.cfg via pvesh? (y/N): y
 
 Parses `storage.cfg` and applies each storage definition:
 - Each `storage: <name>` block is extracted
-- Applied via: `pvesh set /cluster/storage/<name> -conf <block>`
+- Applied via: `pvesh create /storage --storage=<id> --type=<type> --<key>=<value> ...`
+- Blocks are keyed on the `<type>: <id>` header (`dir: local`, `nfs: backup`); the older `storage: <id>` form is still accepted
+- There is no existence check and no update path: a storage that already exists makes `pvesh create` fail, and it is counted as a failure rather than updated. Remove or rename the existing definition first if you need it replaced
 - Existing storage with same name will be updated
 
 **Note**: Storage directories are NOT created automatically. Run `pvesm status` to verify, then create missing directories manually.
@@ -1834,7 +1838,9 @@ Multiple layers of protection prevent data loss and corruption during restore.
 
 ### 1. Safety Backup
 
-**Automatic** backup before ANY changes are written.
+**Automatic** backup before any changes are written, on the selective restore path.
+
+> There is one path without it. If ProxSave cannot analyse the archive's categories it announces `Backup category analysis failed; ProxSave will run a full restore (no selective modes)` and, after the same two confirmations, extracts the whole archive onto `/`. That flow takes **no safety backup**, does not stop the PVE or PBS services, and does not separate export-only categories, so there is no rollback tarball afterwards. If you see that message and you are not certain, abort and take your own copy first.
 
 **Location**: `/tmp/proxsave/restore_backup_YYYYMMDD_HHMMSS.tar.gz`
 
@@ -1882,8 +1888,15 @@ Type "RESTORE" (exact case) to proceed, or "cancel"/"0" to abort: _
 - If the user does not answer before the countdown reaches 0, ProxSave proceeds with a **safe default** (no destructive action) and logs the decision.
 
 Current auto-skip prompts:
-- **Smart `/etc/fstab` merge**: defaults to **Skip** unless the backup root (and swap, when comparable) match the current system; when they match, the default is **Yes**.
-- **Live network apply** ("Apply restored network configuration now..."): defaults to **No** (stays staged/on-disk only; no live reload).
+- **Smart `/etc/fstab` merge**
+- **Live network apply** ("Apply restored network configuration now...")
+- **PVE access control apply** (cluster-wide)
+- **PVE firewall apply**
+- **PVE HA apply**
+
+On timeout every one of them resolves to the **non-applying** answer, so an unattended restore leaves fstab, network, access control, firewall and HA staged on disk but not applied.
+
+That is worth separating from the Enter-key default, which the countdown does not follow. The fstab prompt defaults to **Yes** when the backup root, and swap where comparable, match the current system, so pressing Enter applies the merge. Letting the countdown run out still answers No. In other words the fstab merge is never applied unattended, however well the systems match.
 
 ### 3. Compatibility Validation
 
@@ -2071,7 +2084,7 @@ if cleanDestRoot == "/" && strings.HasPrefix(target, "/etc/pve") {
 
 ### 7. Service Management Fail-Fast
 
-**Service Stop**: If ANY service fails to stop → ABORT entire restore
+**Service Stop**: if a PVE cluster service fails to stop, the restore aborts. PBS is softer: if a PBS service will not stop you are asked `Continue restore with PBS services still running? (y/N)` and the restore proceeds if you say yes
 
 **Why?**:
 - Prevents partial corruption
@@ -2119,9 +2132,9 @@ grep "FAILED" /tmp/proxsave/restore_20251120_143052.log
 ### 9. Checksum Verification
 
 **SHA256 Verification**:
-- Backup checksum verified after decryption
-- Ensures backup integrity
-- Detects corruption or tampering
+- The archive is verified **before** decryption, against the staged encrypted artifact, using its `.sha256` sidecar or the manifest checksum
+- A checksum is also computed after decryption, but only to record it in the manifest copy; it is not compared against anything
+- A backup with neither a `.sha256` nor a manifest checksum is **dropped during discovery**, so it never appears in the selectable list. If a backup you expect is missing, check that its checksum file is still next to it
 
 **Behavior**:
 ```
