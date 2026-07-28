@@ -25,7 +25,7 @@ Proxsave integrates with [rclone](https://rclone.org/) to provide seamless cloud
 
 **Key capabilities**:
 - **Multi-provider support**: Google Drive, S3, Backblaze B2, OneDrive, MinIO, and 40+ more
-- **Non-blocking uploads**: Local backup completes first, cloud upload happens asynchronously
+- **Non-critical uploads**: the local backup is written first and an upload failure never fails the run. The upload itself is synchronous and inside the run, so it does add to the total duration: size your window accordingly
 - **Automatic retry logic**: Configurable retry attempts with exponential backoff
 - **Bandwidth management**: Upload rate limiting for shared networks
 - **Parallel/sequential modes**: Optimize for network speed and API limits
@@ -71,8 +71,7 @@ Proxsave uses a **3-tier storage system**:
    └─> SECONDARY_PATH/
 
 3. Upload to cloud (rclone)        ○ Optional (warn on failure)
-   ├─> Parallel mode: 2-4 jobs concurrently
-   ├─> Sequential mode: One at a time
+   ├─> One bundle per backup by default, so one upload
    ├─> Verification: size + SHA256 (size-only fallback if backend lacks native hash)
    └─> Retry: 3 attempts with backoff
 
@@ -102,12 +101,21 @@ not delete it (PS-BH-002).
 ProxSave never runs a free-form rclone command line. Every call is built from a fixed
 **subcommand allowlist**: `copyto`, `delete`, `deletefile`, `hashsum`, `ls`, `lsf`,
 `lsl`, `mkdir`, `touch` (anything else is rejected). Uploads use **`copyto`** (not
-`copy`), with `--progress --stats 10s` and, when set, `--bwlimit` and `--transfers`.
-Connectivity checks use `lsf` (plus `mkdir`, or `touch` + `deletefile` for the write
-test), and verification uses `lsl`/`ls` plus `hashsum sha256`. Timeouts are enforced
-with Go context deadlines rather than rclone flags, so ProxSave does not add
+`copy`), with `--bwlimit` and `--transfers` when set. Progress flags are deliberately
+omitted: these runs are headless, so there is no TTY to draw on. Connectivity checks
+use `lsf` (plus `mkdir`, or `touch` + `deletefile` for the write test) and add
+`--max-depth 1`; the log count adds `--files-only`; verification uses `lsl`/`ls` plus
+`hashsum sha256`, with `--download` when `CLOUD_VERIFY_DOWNLOAD=true`. Timeouts are
+enforced with Go context deadlines rather than rclone flags, so ProxSave does not add
 `--config`, `--timeout`, or `--contimeout`. `RCLONE_FLAGS`, if set, is appended to
-every one of these commands (see the Configuration Reference). The manual `rclone`
+every one of these commands (see the Configuration Reference).
+
+This describes the **backup** path. The restore and decrypt cloud scan builds its
+rclone calls separately: it uses `cat` to read manifests and `copyto --progress` to
+download, neither of which goes through the allowlist, and **none of them receive
+`RCLONE_FLAGS`**. If your remote needs a flag to work at all, a custom `--config` path
+or a provider option, backups will succeed and restores will not. Put such settings in
+the rclone remote definition itself, not in `RCLONE_FLAGS`. The manual `rclone`
 commands shown later in this guide are for you to run by hand and are not subject to
 this allowlist.
 
@@ -410,33 +418,38 @@ RETENTION_YEARLY=3
 | `CLOUD_REMOTE` | _(empty)_ | rclone remote **name** from `rclone config` (legacy `remote:path` still supported). **Required** when `CLOUD_ENABLED=true`: leaving it empty is a hard configuration error, and the run aborts with exit `2` before anything is backed up, locally included. Set both keys together, or neither. |
 | `CLOUD_REMOTE_PATH` | _(empty)_ | Folder path/prefix inside the remote (e.g., `/proxsave/backup`) |
 | `CLOUD_LOG_PATH` | _(empty)_ | Optional log folder (recommended: path-only on the same remote; use `otherremote:/path` only when using a different remote) |
-| `CLOUD_UPLOAD_MODE` | `parallel` | `parallel` or `sequential` |
-| `CLOUD_PARALLEL_MAX_JOBS` | `2` | Max concurrent uploads (parallel mode) |
-| `CLOUD_PARALLEL_VERIFICATION` | `true` | Also verify each associated/sidecar file (in parallel) |
+| `CLOUD_UPLOAD_MODE` | `parallel` | `parallel` or `sequential`. Inert under the default bundle layout: there is only one file to upload, so nothing runs concurrently either way |
+| `CLOUD_PARALLEL_MAX_JOBS` | `2` | Max concurrent uploads. Only has an effect with `BUNDLE_ASSOCIATED_FILES=false`, which is what creates more than one upload |
+| `CLOUD_PARALLEL_VERIFICATION` | `true` | Also verify each sidecar file. Only reachable with `BUNDLE_ASSOCIATED_FILES=false`; the setting is honoured in sequential mode too |
 | `CLOUD_VERIFY_CHECKSUM` | `true` | Compare remote SHA256 to the local checksum after upload; size-only fallback when the backend has no native hash |
 | `CLOUD_VERIFY_DOWNLOAD` | `false` | When the backend lacks native SHA256, download the object and hash it locally (uses bandwidth) |
 | `CLOUD_WRITE_HEALTHCHECK` | `false` | Use write test for connectivity check |
-| `RCLONE_TIMEOUT_CONNECTION` | `30` | Per-command timeout (seconds). Also used by restore/decrypt cloud scan (`rclone lsf` + per-backup manifest/metadata read). |
+| `RCLONE_TIMEOUT_CONNECTION` | `30` | Seconds. On the backup path this is the budget for the **whole** accessibility check, up to 3 attempts with 2s and 4s backoffs between them and up to 3 rclone calls each, not per command. The restore/decrypt cloud scan does apply it per command. Raise it if a slow remote makes the preflight give up |
 | `RCLONE_TIMEOUT_OPERATION` | `300` | Per-operation upload timeout (seconds). `0` means **unbounded** uploads (no per-op deadline). Management/query ops (list, delete, retention) are always bounded: they use this value when it is > 0, otherwise a built-in 300s floor. So raising it also raises the management ceiling, and a positive value below 300 also shortens management ops. |
-| `RCLONE_BANDWIDTH_LIMIT` | _(empty)_ | Upload rate limit (e.g., `5M` = 5 MB/s) |
-| `RCLONE_TRANSFERS` | `4` | Number of parallel transfers |
+| `RCLONE_BANDWIDTH_LIMIT` | _(empty)_, template ships `10M` | Upload rate limit (e.g., `5M` = 5 MB/s) |
+| `RCLONE_TRANSFERS` | `4`, template ships `16` | Number of parallel transfers |
 | `RCLONE_RETRIES` | `3` | Retry attempts on failure |
 | `RCLONE_VERIFY_METHOD` | `primary` | How the remote object is located for verification: `primary` (`rclone lsl`) or `alternative` (`rclone ls`). The SHA256 comparison (see `CLOUD_VERIFY_CHECKSUM`) runs on top of either. |
 | `CLOUD_BATCH_SIZE` | `20` | Files per batch (deletion) |
 | `CLOUD_BATCH_PAUSE` | `1` | Seconds between batches |
-| `MAX_CLOUD_BACKUPS` | `30` | Simple retention (ignored if GFS enabled) |
+| `MAX_CLOUD_BACKUPS` | `30`, template ships `15` | Simple retention (ignored if GFS enabled) |
 | `RCLONE_FLAGS` | _(empty)_ | Extra global rclone flags, split on whitespace and injected verbatim into **every** rclone command (right after the subcommand). No shell quoting or validation, so keep each flag a single token (e.g. `--fast-list --checkers 8`). |
 | `BUNDLE_ASSOCIATED_FILES` | `true` | Bundle the archive and its sidecars into one `.bundle.tar` before upload (the default cloud layout). Set `false` to upload the raw archive plus separate sidecars. See [Cloud layout](#cloud-layout-bundle-vs-raw). |
 
 **Legacy env-var aliases.** For backward compatibility ProxSave also accepts these
-older names (the value is read from whichever is set):
+older names. **When both are present the winner is not consistent**, so never leave
+both in the file:
 
-- `CLOUD_ENABLED` accepts `ENABLE_CLOUD_BACKUP`
-- `CLOUD_REMOTE` accepts `RCLONE_REMOTE`
-- `MAX_CLOUD_BACKUPS` accepts `CLOUD_RETENTION_DAYS`
-- `RCLONE_TIMEOUT_CONNECTION` accepts `CLOUD_CONNECTIVITY_TIMEOUT`
+| Canonical | Legacy alias | Which wins if both are set |
+|---|---|---|
+| `CLOUD_ENABLED` | `ENABLE_CLOUD_BACKUP` | the legacy key, even with an empty value |
+| `CLOUD_REMOTE` | `RCLONE_REMOTE` | the legacy key |
+| `MAX_CLOUD_BACKUPS` | `CLOUD_RETENTION_DAYS` | the canonical key |
+| `RCLONE_TIMEOUT_CONNECTION` | `CLOUD_CONNECTIVITY_TIMEOUT` | the canonical key |
 
-Prefer the canonical names on the left in new configs.
+So adding `CLOUD_REMOTE=NewRemote` to a config that still carries
+`RCLONE_REMOTE=OldRemote` keeps uploading to `OldRemote`. Prefer the canonical names in
+new configs, and delete the legacy line rather than leaving it alongside.
 
 For complete configuration reference, see: **[Configuration Guide](CONFIGURATION.md)**
 
@@ -497,6 +510,17 @@ You can choose the style you prefer; they are equivalent from the tool's point o
 
 ## Performance Tuning
 
+Two things to know before you tune.
+
+`RCLONE_TRANSFERS` is the knob that matters, because it controls parallelism **inside**
+a single rclone upload. `CLOUD_UPLOAD_MODE` and `CLOUD_PARALLEL_MAX_JOBS` control how
+many files ProxSave uploads at once, and under the default bundle layout there is only
+ever one, so they do nothing unless you set `BUNDLE_ASSOCIATED_FILES=false`.
+
+Integer keys are parsed strictly and fall back to their default without a warning if
+parsing fails, so write a number: `RCLONE_TRANSFERS=16`, never `8-16`. A range silently
+becomes the default.
+
 ### By Network Type
 
 #### Fast Network (Fiber, LAN, Datacenter)
@@ -550,8 +574,8 @@ CLOUD_BATCH_PAUSE=2
 
 ```bash
 RCLONE_TIMEOUT_CONNECTION=30
-RCLONE_TRANSFERS=8-16
-CLOUD_BATCH_SIZE=50-100
+RCLONE_TRANSFERS=16
+CLOUD_BATCH_SIZE=100
 CLOUD_BATCH_PAUSE=1
 ```
 
@@ -564,7 +588,7 @@ CLOUD_BATCH_PAUSE=1
 
 ```bash
 RCLONE_TIMEOUT_CONNECTION=45
-RCLONE_TRANSFERS=2-4
+RCLONE_TRANSFERS=4
 CLOUD_BATCH_SIZE=20
 CLOUD_BATCH_PAUSE=2
 ```
@@ -576,9 +600,15 @@ CLOUD_BATCH_PAUSE=2
 
 #### MinIO (Self-hosted LAN)
 
+> A LAN remote still needs the host to have outbound internet. Every run does a network
+> preflight (it dials `1.1.1.1:443`, then `8.8.8.8:53`) and, if neither answers, disables
+> cloud storage for that run and logs a warning naming the reason, however reachable
+> your MinIO box is. On an air-gapped or egress-filtered host set
+> `DISABLE_NETWORK_PREFLIGHT=true`; see [CONFIGURATION.md](CONFIGURATION.md).
+
 ```bash
 RCLONE_TIMEOUT_CONNECTION=10
-RCLONE_TRANSFERS=8+
+RCLONE_TRANSFERS=8
 CLOUD_BATCH_SIZE=100
 CLOUD_BATCH_PAUSE=0
 ```
@@ -612,9 +642,12 @@ make build
 DRY_RUN=true ./build/proxsave
 
 # Check output:
-# ✓ "Cloud storage initialized: gdrive:pbs-backups"
-# ✓ "Cloud remote gdrive is accessible"
-# ✓ "[DRY-RUN] Would upload backup to cloud storage"
+# ✓ "Cloud remote gdrive:pbs-backups is accessible"
+# ✓ "✓ Cloud storage initialized (present N backups)"
+#
+# A dry run returns before the storage phase, so there is no upload line to look for.
+# You will see "Storage dispatch skipped (dry run mode)" instead. Reaching the two
+# lines above already proves the remote is configured and reachable.
 ```
 
 ### Real Backup Test
