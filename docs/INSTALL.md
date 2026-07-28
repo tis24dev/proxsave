@@ -36,8 +36,10 @@
 2. Run your first backup
 
    ```bash
-   proxsave
+   proxsave --backup
    ```
+
+   Bare `proxsave` on a terminal opens the interactive dashboard instead, where `Backup` is the first entry. It runs the backup directly only when there is no terminal attached, which is what cron and the daemon do. See [DASHBOARD.md](DASHBOARD.md).
 
 > **Release integrity & authenticity.** `install.sh` and `proxsave --upgrade`
 > verify every release before installing it: `SHA256SUMS` is checked against the
@@ -55,13 +57,14 @@
 proxsave --dry-run
 
 # Real backup
-proxsave
+proxsave --backup
 
-# View logs
-tail -f log/backup-$(hostname)-*.log
+# View logs. The filename carries the FQDN, not the short hostname, and LOG_PATH
+# defaults to /opt/proxsave/log, so glob the directory rather than guessing the name.
+ls -t /opt/proxsave/log/backup-*.log | head -1 | xargs tail -f
 
 # Check backup files
-ls -lh backup/
+ls -lh /opt/proxsave/backup/
 ```
 
 ---
@@ -206,6 +209,7 @@ In **Keep existing & continue** mode, config-dependent post-steps are skipped:
 - AGE setup
 - Post-install check wizard
 - Telegram pairing wizard
+- Backup monitoring (healthchecks) verification, and the self-mode ping-URL form with it
 
 Final install steps still run:
 - Support docs installation
@@ -237,7 +241,7 @@ When the daemon engine is selected with monitoring on, the installer opens a **B
 - **Sensors**: after a check, one colored line per monitored check with its state and last-ping age
 - **Actions**: `Check` (repeatable up to the attempt cap), then `Continue` once verified or `Skip` to move on. A hard blocker removes `Check`, since another attempt cannot help
 
-The screen is skipped, with the reason logged, when monitoring is off, the config cannot be loaded, self mode has no alive URL yet, or the host has no server identity.
+The screen is skipped, with the reason logged, when monitoring is off, the config cannot be loaded, self mode has no alive URL yet, or the host has no server identity. It is also skipped, along with every other config-dependent post-step, when you answer **Keep existing & continue** at the existing-configuration prompt.
 
 Centralized mode needs no pairing and no API key: the credential is provisioned automatically. `PROVISIONING` simply means it has not completed yet.
 

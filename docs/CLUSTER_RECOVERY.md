@@ -158,6 +158,8 @@ Use SAFE when the node or cluster is up and you want to merge the backed-up conf
 
 If the backup's VM/CT configs are stored under a node name that does not match the current host (a hostname change), SAFE handles it for you: it warns, and either auto-selects the single exported node or asks which exported node to import the guest configs from. The chosen configs are applied to the current node. You do not need to copy `/etc/pve/nodes/...` by hand.
 
+This applies only when the guest configs are actually in the export, which means the restore included `pve_config_export`. FULL includes it; CUSTOM includes it if you select it; STORAGE and SYSTEM BASE strip export-only categories, so in those modes SAFE applies no guest config and the node-name handling never runs.
+
 ### RECOVERY (the destructive, offline choice)
 
 RECOVERY restores the entire cluster database by overwriting `/var/lib/pve-cluster/`. To do that safely it:
@@ -433,7 +435,7 @@ Remove it manually if restore was successful: rm /tmp/proxsave/restore_backup_20
 
 ProxSave stops `pve-cluster`, `pvedaemon`, `pveproxy`, `pvestatd`, unmounts `/etc/pve`, extracts `/var/lib/pve-cluster/` (config.db), then restarts the four services. It does not print a per-service checkmark line for each one. No `/etc/pve` files are written directly: config.db owns them, so `/etc/pve` is repopulated from the restored database a moment after pmxcfs remounts, not by the file-extraction phase.
 
-Had you chosen SAFE, this step would instead apply the exported storage, datacenter, pool, and VM/CT configs through `pvesh` on the running cluster, with no service stop and no config.db write.
+Had you chosen SAFE, this step would instead apply what the selected categories actually exported, through `pvesh` on the running cluster, with no service stop and no config.db write. Note that in STORAGE mode that is the storage stack only: the VM/CT and datacenter configs live in `pve_config_export`, which is export-only and is stripped from STORAGE, so SAFE has nothing to apply for them. Use FULL, or CUSTOM including `pve_config_export`, when you want the guest configs applied.
 
 #### Step 5: Verification
 
@@ -1076,9 +1078,14 @@ proxsave --restore
 # Select: [2] STORAGE only
 # At the cluster prompt choose RECOVERY: this restores the backup's config.db,
 # which still references the OLD hostname. You fix those references in the
-# steps below. (If the node is already up and you would rather keep it running,
-# SAFE applies the configs via the API and auto-handles the VM/CT node-name
-# mismatch, which makes most of the manual fixes below unnecessary.)
+# steps below.
+#
+# SAFE is NOT a shortcut here. In STORAGE mode the selected categories carry no
+# guest configs at all (pve_config_export is export-only and STORAGE strips
+# export-only categories), so SAFE would redirect the cluster database to the
+# export directory, apply no VM/CT config, and never run the node-name mismatch
+# handling. The API-apply path with the node-name handling needs FULL, or CUSTOM
+# with pve_config_export selected.
 ```
 
 #### Step 2: Fix Corosync Configuration
@@ -1691,9 +1698,20 @@ umount -f /etc/pve 2>/dev/null
 # 3. Backup current (broken) config
 mv /var/lib/pve-cluster /var/lib/pve-cluster.broken
 
-# 4. Manually extract config.db from backup
-mkdir -p /var/lib/pve-cluster
-tar -xzf /path/to/backup.bundle.tar --strip-components=3 \
+# 4. Manually extract config.db from backup.
+#    The bundle is an UNCOMPRESSED tar holding the inner archive and its sidecars under
+#    basename-only names, so it has no ./var/... paths of its own: unwrap it first.
+mkdir -p /tmp/psrecover /var/lib/pve-cluster
+tar -xf /path/to/backup.bundle.tar -C /tmp/psrecover
+ls /tmp/psrecover        # <host>-backup-<ts>.tar.xz (plus .age if encrypted), .metadata, .sha256
+
+#    If the archive ends in .age, decrypt it first:
+#      proxsave --decrypt
+#    or, with the age CLI:
+#      age -d -i /path/to/key.txt -o /tmp/psrecover/archive.tar.xz /tmp/psrecover/archive.tar.xz.age
+
+#    Then pull the cluster database out of the inner archive (xz by default):
+tar -xJf /tmp/psrecover/<host>-backup-<ts>.tar.xz --strip-components=3 \
     -C /var/lib/pve-cluster \
     ./var/lib/pve-cluster/
 

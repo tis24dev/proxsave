@@ -565,9 +565,9 @@ documented in [RESTORE_TECHNICAL.md](RESTORE_TECHNICAL.md#phase-3-system-detecti
 
 #### Phase 6: Cluster Restore Mode (PVE Cluster Backups Only)
 
-**This phase is SKIPPED for standalone backups** - the workflow proceeds directly to Phase 7.
+This phase runs whenever the archive carries a `pve_cluster` payload (`/var/lib/pve-cluster/`) and that category is part of the restore. That is decided from the archive contents, not from the manifest, so a **standalone** PVE backup normally reaches it too: see [PVE Restore: Standalone vs Cluster](#pve-restore-standalone-vs-cluster). On a standalone node, RECOVERY is the answer that writes the database back.
 
-When the backup was created from a **cluster node** (manifest `ClusterMode = "cluster"`) and `pve_cluster` category is selected:
+When the payload is present and the `pve_cluster` category is selected:
 
 ```
 Cluster backup detected. Choose how to restore the cluster database:
@@ -762,30 +762,36 @@ The restore workflow behaves differently based on whether the backup originated 
 
 ### Detection
 
-The system reads the `ClusterMode` field from the backup manifest:
-- **Standalone**: `ClusterMode = "standalone"` or empty
-- **Cluster**: `ClusterMode = "cluster"`
+The prompt is decided by the **payload**, not by the manifest: it appears whenever the archive carries anything under the `pve_cluster` category (`/var/lib/pve-cluster/`) and that category is part of the restore. The manifest's `ClusterMode` field is only used to log a warning when the two disagree.
+
+That matters because a standalone PVE backup normally does carry that payload: `config.db` is collected whenever `BACKUP_CLUSTER_CONFIG` is on, which is the default, and the PVE info files are written under `var/lib/pve-cluster/info` on every PVE run. So **expect the SAFE/RECOVERY prompt on a standalone PVE restore too**.
 
 ### Behavior Comparison
 
-| Scenario | ClusterMode | SAFE/RECOVERY Prompt | Restore Behavior |
-|----------|-------------|----------------------|------------------|
-| **Standalone** | `standalone` | NOT shown | Database restored directly |
-| **Cluster + SAFE** | `cluster` | Shown, choice 1 | Export only + pvesh API apply |
-| **Cluster + RECOVERY** | `cluster` | Shown, choice 2 | Database restored directly |
+| Scenario | SAFE/RECOVERY Prompt | Restore Behavior |
+|----------|----------------------|------------------|
+| **No `pve_cluster` payload, or category not selected** | NOT shown | Nothing cluster-related is restored |
+| **Payload present, SAFE** | Shown, choice 1 | Export only, no `config.db` write, `pvesh` API apply |
+| **Payload present, RECOVERY** | Shown, choice 2 | Database restored directly |
 
 ### Standalone Restore
 
-When restoring from a **standalone PVE backup**:
+On a standalone node the prompt still appears, and the answer that does what you want is **RECOVERY**: it writes `config.db` back. There is no split-brain risk to protect against on a single node.
 
-1. **No additional prompts** - The workflow proceeds directly
-2. **Direct database restore** - `/var/lib/pve-cluster/config.db` is overwritten
-3. **Automatic service management** - PVE services are stopped, database restored, services restarted
-4. **No isolation required** - Single node has no split-brain risk
+Choosing SAFE on a standalone restore is the trap: the cluster database is redirected to the export directory and **never written**, so the restore completes without restoring the thing you came for.
+
+With RECOVERY selected:
+
+1. **Direct database restore** - `/var/lib/pve-cluster/config.db` is overwritten
+2. **Automatic service management** - PVE services are stopped, database restored, services restarted
+3. **No isolation required** - Single node has no split-brain risk
 
 ```
 Detected system type: Proxmox Virtual Environment (PVE)
-[Backup is from standalone node - no SAFE/RECOVERY prompt]
+
+Cluster payload detected. Choose how to restore the cluster database:
+  [1] SAFE  [2] RECOVERY
+> 2
 
 Preparing system for cluster database restore: stopping PVE services...
 Stopping pve-cluster, pvedaemon, pveproxy, pvestatd...
