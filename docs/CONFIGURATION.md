@@ -102,7 +102,10 @@ HEALTHCHECK_HEARTBEAT_INTERVAL=5m
 HEALTHCHECK_UPDATE_INTERVAL=5m
 HEALTHCHECK_SEND_LOG=true
 
-# Centralized cache (auto-filled from the server; do not edit)
+# Dual purpose. In SELF mode these are the two required ping URLs and you fill them in
+# yourself (they take precedence over the *_ID keys below). In CENTRALIZED mode they are
+# a fallback cache that nothing auto-fills, so leave them empty unless you deliberately
+# want one.
 HEALTHCHECK_ALIVE_URL=
 HEALTHCHECK_BACKUP_URL=
 
@@ -224,9 +227,6 @@ SAFE_KERNEL_PROCESSES="regex:^card[0-9]+-crtc[0-9]+$,regex:^drbd_[wrs]_.+,regex:
 # Useful for benign tools such as Frigate's ffmpeg -f concat demuxer.
 # SAFE_PROCESSES="ffmpeg"
 
-# Skip permission checks (use only for testing)
-SKIP_PERMISSION_CHECK=false                     # true | false
-
 # Permission management (Bash-compatible behavior)
 BACKUP_USER=backup                              # System user for backup/log directory ownership
 BACKUP_GROUP=backup                             # System group for backup/log directory ownership
@@ -267,9 +267,9 @@ proxsave runs two independent process detectors, and their allowlists are **not*
 - A **plain entry** matches any token that **starts with** it. For example `ncat` matches `ncat` and `/usr/bin/ncat`, but no longer matches the substring inside `concat`; note that `ssh` would also match `sshd`.
 - Use **`regex:^name$`** for an exact match, or **`name*`** / **`regex:pattern`** for explicit wildcard/regex control (case-insensitive).
 
-**Bracketed "kernel-style" detector** (`SAFE_BRACKET_PROCESSES` and `SAFE_KERNEL_PROCESSES`) handles the `Suspicious kernel-style process: ...` warning. It fires for any process the host's `ps` reports inside square brackets, such as a real kernel thread (`[kworker/0:1]`) or a container worker an unprivileged LXC exposes to the host (`[celeryd: celery@paperless:ForkPoolWorker-3057]`). It matches a **single name** (the text *between* the brackets), case-insensitively, and behaves differently from the scan above:
+**Bracketed "kernel-style" detector** (`SAFE_BRACKET_PROCESSES` and `SAFE_KERNEL_PROCESSES`) handles the `Suspicious kernel-style process: ...` warning. It fires for a process the host's `ps` reports inside square brackets that is not recognised as a genuine kernel thread. Real kernel threads are filtered out before your lists are consulted, by a built-in prefix allowlist (`kworker`, `kthreadd`, `kswapd`, `rcu_`, `nfsd`, the ZFS `arc_`/`txg_`/`z_`/`spl_` families and about forty more) and then by a parent-is-pid-2 heuristic, so `[kworker/0:1]` never raises it. What does raise it is something like a container worker an unprivileged LXC exposes to the host (`[celeryd: celery@paperless:ForkPoolWorker-3057]`). It matches a **single name** (the text *between* the brackets), case-insensitively, and behaves differently from the scan above:
 
-- A **plain entry is an exact, whole-name match** (not a prefix). `celeryd` does **not** match `celeryd: celery@paperless:ForkPoolWorker-3057`.
+- A **plain entry is an exact, whole-name match** (not a prefix). `celeryd` does **not** match `celeryd: celery@paperless:ForkPoolWorker-3057`. This applies to the entries you configure; the built-in kernel allowlist above matches on prefix.
 - Use **`name*`** for a prefix match or **`regex:pattern`** for an unanchored regex. The celery worker above is matched by `celeryd*` or `regex:^celeryd`, but not by a plain `celeryd` or by an anchored `regex:^celeryd$`.
 - `SAFE_PROCESSES` has **no effect** on this detector. Allowlist bracketed processes via `SAFE_BRACKET_PROCESSES` (or `SAFE_KERNEL_PROCESSES`).
 
@@ -372,9 +372,13 @@ Five keys have a legacy alias from the Bash-era configuration, and **the legacy 
 | `LOCAL_LOG_PATH` | `LOG_PATH` |
 | `ENABLE_SECONDARY_BACKUP` | `SECONDARY_ENABLED` |
 | `SECONDARY_BACKUP_PATH` | `SECONDARY_PATH` |
+| `ENABLE_CLOUD_BACKUP` | `CLOUD_ENABLED` |
+| `RCLONE_REMOTE` | `CLOUD_REMOTE` |
 | `PROMETHEUS_ENABLED` | `METRICS_ENABLED` |
 
-This matters after `--upgrade-config`, which keeps unknown keys in a "Custom keys" section while also adding the template's canonical line. A config inherited from an older install can end up with both, and editing the canonical one then has no effect: the backups keep landing wherever the legacy key points. Grep your `backup.env` for the left column and delete those lines once you have moved the value across. The cloud aliases behave the same way and are listed in [CLOUD_STORAGE.md](CLOUD_STORAGE.md).
+These seven are the ones where the legacy name is checked first. Other pairs, such as `MAX_LOCAL_BACKUPS` / `LOCAL_RETENTION_DAYS` or `AGE_RECIPIENT` / `AGE_RECIPIENTS`, list the canonical name first and are harmless.
+
+This matters after `--upgrade-config`, which keeps unknown keys in a "Custom keys" section while also adding the template's canonical line, and does not prune any of these. A config inherited from an older install can end up with both, and editing the canonical one then has no effect: the backups keep landing wherever the legacy key points. Grep your `backup.env` for the left column and delete those lines once you have moved the value across. The cloud aliases behave the same way and are listed in [CLOUD_STORAGE.md](CLOUD_STORAGE.md).
 
 ---
 
@@ -422,9 +426,10 @@ The canonical algorithm values are the short forms `gz`, `pigz`, `bz2`, `xz`, `l
 **Fast backup** (large files, quick compression):
 ```bash
 COMPRESSION_TYPE=zstd
-COMPRESSION_LEVEL=3
 COMPRESSION_MODE=fast
 ```
+
+`COMPRESSION_MODE` **replaces** `COMPRESSION_LEVEL`, it does not bias it. `fast` forces level 1, `maximum` and `ultra` force 9 (19 and 22 for zstd), whatever you wrote in `COMPRESSION_LEVEL`, with no warning. Set the level only with `COMPRESSION_MODE=standard`.
 
 **Maximum compression** (archival, storage limited):
 ```bash
@@ -501,15 +506,16 @@ DISABLE_NETWORK_PREFLIGHT=false    # false = check, true = skip
 ## Collection Exclusions
 
 ```bash
-# Glob patterns to exclude (space or comma separated)
-BACKUP_EXCLUDE_PATTERNS="*/cache/**, /var/tmp/**, *.log"
+# Glob patterns to exclude. Separators: comma, semicolon, pipe or newline. NOT space.
+BACKUP_EXCLUDE_PATTERNS="**/cache/**, /var/tmp/**, *.log"
 ```
 
 ### Pattern Syntax
 
-- `*`: Match any file
-- `**`: Match any directory recursively
-- Example: `*/cache/**` excludes all `cache/` subdirectories
+- `*`: matches anything **within one path segment**; it does not cross a `/`
+- `**`: matches across separators, so this is the one to use for "at any depth"
+- Example: `**/cache/**` excludes `cache/` directories anywhere. `*/cache/**` only matches a `cache` directory one level down, which is almost never what you want
+- Separate patterns with commas. A space is **not** a separator: `"*.log */cache/**"` is read as one pattern containing a space, which matches nothing and is not reported as an error
 
 ### Exclusion Behavior (Guaranteed)
 
@@ -836,7 +842,7 @@ RETENTION_POLICY=gfs               # Activates GFS mode
 RETENTION_DAILY=7                  # Keep last 7 daily backups (minimum accepted is 1; 0 treated as 1)
 RETENTION_WEEKLY=4                 # Keep 4 weekly backups (1 per ISO week)
 RETENTION_MONTHLY=12               # Keep 12 monthly backups (1 per month)
-RETENTION_YEARLY=3                 # Keep 3 yearly backups (1 per year)
+RETENTION_YEARLY=3                 # Keep 3 yearly backups (1 per year). 0 means keep ALL years, not off
 ```
 
 **`RETENTION_POLICY=gfs` is the switch, and it is enough on its own.** The four tiers have a compiled fallback of `0`, and the `7/4/12/3` above are template examples, not defaults. Setting only the policy line does not mean "keep everything until I pick tiers": it activates GFS with every tier at zero, which means `RETENTION_DAILY` is forced up to `1`, weekly and monthly keep nothing, and yearly keeps one backup per past year. Everything else is classified for deletion and really is deleted, on local, secondary and cloud storage, on the very next run.
@@ -1131,7 +1137,10 @@ PVESH_TIMEOUT=15                   # Timeout (seconds) for each `pvesh` call (0=
 FS_IO_TIMEOUT=30                   # Per-operation timeout (seconds) for filesystem syscalls (stat/readdir/open/read/write/close/glob/copy/hash) across the preflight, logging, storage, cloud and restore paths. Prevents hangs on dead/unreachable mounts (0=disabled)
 BACKUP_SMALL_PVE_BACKUPS=false     # Include small backups only
 MAX_PVE_BACKUP_SIZE=100M           # Max size for "small" backups
-PVE_BACKUP_INCLUDE_PATTERN=        # Glob patterns to include
+PVE_BACKUP_INCLUDE_PATTERN=        # A single literal substring, not a glob and not a list
+                                   # Matched with a plain "contains" against the full path,
+                                   # so use e.g. vzdump-qemu-100, never *.vma.zst.
+                                   # A pattern that matches nothing copies nothing, silently
 
 # Ceph configuration
 BACKUP_CEPH_CONFIG=false           # Ceph cluster config
@@ -1265,8 +1274,9 @@ BACKUP_FIREWALL_RULES=false        # iptables, nftables
 # Installed packages
 BACKUP_INSTALLED_PACKAGES=true     # dpkg -l, apt-mark showmanual
 
-# Custom script directory
-BACKUP_SCRIPT_DIR=true             # /opt/proxsave directory
+# Local admin scripts
+BACKUP_SCRIPT_DIR=true             # /usr/local/bin and /usr/local/sbin
+                                   # Not the ProxSave install dir: that is BACKUP_SCRIPT_REPOSITORY
 
 # Critical system files
 BACKUP_CRITICAL_FILES=true         # /etc/fstab, /etc/hostname, /etc/resolv.conf
