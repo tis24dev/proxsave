@@ -28,7 +28,7 @@ This guide covers the most common issues encountered when using Proxsave, along 
 **Before troubleshooting**:
 1. Check you're running the latest version: `proxsave --version`
 2. Try dry-run mode first: `proxsave --dry-run --log-level debug`
-3. Review logs in `LOG_PATH/backup-$(hostname)-*.log`
+3. Review the newest log in `LOG_PATH` (the filename carries the FQDN, so glob the directory rather than guessing): `ls -t /opt/proxsave/log/backup-*.log | head -1`
 
 ---
 
@@ -124,9 +124,11 @@ proxsave --config /etc/pbs/prod.env
 
 **Solution**:
 ```bash
-# Fix permissions manually
-chmod 700 /opt/proxsave/backup
-chmod 700 /opt/proxsave/log
+# Fix permissions manually. 755 is what the security check expects for these two:
+# setting 700 makes every run warn and, with AUTO_FIX_PERMISSIONS on (the default),
+# chmod them straight back.
+chmod 755 /opt/proxsave/backup
+chmod 755 /opt/proxsave/log
 chmod 600 /opt/proxsave/configs/backup.env
 
 # Or enable auto-fix in config
@@ -137,8 +139,8 @@ AUTO_FIX_PERMISSIONS=true
 **Recommended permissions**:
 ```
 /opt/proxsave/           755 (drwxr-xr-x)
-├── backup/                    700 (drwx------)
-├── log/                       700 (drwx------)
+├── backup/                    755 (drwxr-xr-x)
+├── log/                       755 (drwxr-xr-x)
 ├── configs/
 │   └── backup.env             600 (-rw-------)
 ├── identity/                  700 (drwx------)
@@ -381,7 +383,7 @@ CLOUD_BATCH_PAUSE=3  # Wait 3 seconds between batches
 
 **Google Drive**:
 ```bash
-RCLONE_TRANSFERS=2-4
+RCLONE_TRANSFERS=2
 CLOUD_BATCH_SIZE=10
 CLOUD_BATCH_PAUSE=2
 ```
@@ -571,7 +573,7 @@ If Email is enabled but you don't see it being dispatched, ensure `EMAIL_DELIVER
 This mode uses Proxmox Notifications via `proxmox-mail-forward`. It is the recommended mode on Proxmox hosts when you expected SMTP settings in ProxSave: configure SMTP targets/matchers in Proxmox, then let ProxSave hand the message to Proxmox.
 
 - `EMAIL_RECIPIENT` is optional in this mode and is only used for the `To:` header.
-- If PMF fails and `EMAIL_FALLBACK_SENDMAIL=true`, ProxSave tries the relay first and then local sendmail.
+- If PMF fails, ProxSave tries the shared cloud relay next. That leg is **not** gated on `EMAIL_FALLBACK_SENDMAIL`: it runs whenever the recipient is set and is not a `root@` address, so choosing `pmf` with the flag off does not keep the report inside Proxmox. Only the final local-sendmail leg consults the flag. To avoid the relay entirely use `EMAIL_DELIVERY_METHOD=sendmail`.
 - Verify `proxmox-mail-forward` exists:
   ```bash
   test -x /usr/libexec/proxmox-mail-forward && echo "proxmox-mail-forward OK" || echo "proxmox-mail-forward not found"
@@ -649,18 +651,19 @@ This mode uses `/usr/sbin/sendmail`, so your node must have a working local MTA 
 
 ---
 
-#### Error: `Backup path full` warnings but backup succeeds
+#### Warning: `... storage may fail due to insufficient space`
 
-**Cause**: Warning threshold triggered, but backup still fits.
+**Cause**: a non-critical destination (secondary or cloud) is below its required free space, so the run warns and carries on. The primary destination is critical instead: if it is short of space the run stops with a disk-space error rather than warning.
 
 **Solution**:
 ```bash
-# Adjust warning threshold
+# The required space is max(MIN_DISK_SPACE_<TIER>_GB, estimated size x SAFETY_FACTOR),
+# so the MIN_DISK_SPACE_* keys are a FLOOR, not a warning threshold. Raising one makes
+# the check stricter. The template ships 1 GB for the primary tier.
 nano configs/backup.env
-MIN_DISK_SPACE_PRIMARY_GB=5  # Lower threshold
+MIN_DISK_SPACE_SECONDARY_GB=1
 
-# Or increase disk space
-# Add more storage or clean unnecessary files
+# Or free up space on that destination
 ```
 
 ---
@@ -1198,8 +1201,8 @@ df -h /opt/proxsave
 
 # 5. Check permissions
 ls -la /opt/proxsave/backup /opt/proxsave/log
-# backup: drwx------
-# log: drwx------
+# backup: drwxr-xr-x
+# log: drwxr-xr-x
 
 # 6. Test rclone (if cloud enabled)
 rclone listremotes

@@ -586,7 +586,7 @@ proxsave
 # - Configure SMTP/Sendmail targets and matchers in Proxmox Notifications
 # - ProxSave does not need SMTP host/port/user/password
 # - EMAIL_RECIPIENT is optional (only used for the To: header)
-# - With EMAIL_FALLBACK_SENDMAIL=true, fallback order is pmf -> relay -> sendmail
+# - If PMF fails the relay is tried next regardless of EMAIL_FALLBACK_SENDMAIL, which only gates the final local-sendmail leg. Use EMAIL_DELIVERY_METHOD=sendmail to stay off the relay entirely
 # - Optional quick check (runs the forwarder directly; run as root):
 printf "To: root\nSubject: proxsave test\n\nHello from proxsave\n" | sudo /usr/libexec/proxmox-mail-forward
 ```
