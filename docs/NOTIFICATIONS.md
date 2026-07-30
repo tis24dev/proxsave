@@ -320,7 +320,10 @@ key behind them**. `CLOUDFLARE_WORKER_URL`, `CLOUDFLARE_WORKER_TOKEN` and
 `CLOUDFLARE_HMAC_SECRET` are not read from `backup.env` or the environment: adding them
 produces no error, no log line and no change, and mail keeps going through the shared
 worker. Pointing the relay at a private worker is not supported today. To keep reports
-off a third-party relay entirely, use `EMAIL_DELIVERY_METHOD=sendmail` or `pmf`.
+off a third-party relay entirely, use `EMAIL_DELIVERY_METHOD=sendmail`: it is the only
+method with no relay fallback. `pmf` is not an alternative. When `proxmox-mail-forward`
+fails and a non-root recipient is configured, ProxSave tries the shared relay **first** and
+only then sendmail, and no configuration key disables that hop.
 
 The JSON report body (`buildReportData`) must byte-match the legacy Bash
 `collect_email_report_data()` output, otherwise the worker's HMAC signature check

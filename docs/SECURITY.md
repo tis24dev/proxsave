@@ -29,7 +29,10 @@ The interesting boundaries are the few places where **untrusted content** enters
 - **Release artifacts.** `install.sh` and `proxsave --upgrade` check the detached ECDSA
   P-256 signature over `SHA256SUMS` against a public key pinned in the tool itself, then
   check the downloaded archive's SHA256 against that authenticated list. A missing or
-  invalid signature aborts. Every release also publishes SLSA build provenance, but that
+  invalid signature aborts. That is the **download** path only: `proxsave --upgrade
+  --localfile` skips the release check and the download, so it verifies nothing at all and
+  just finalizes around the binary already on disk. Every release also publishes SLSA build
+  provenance, but that
   attestation is **not** part of the automatic path: verifying it is a separate manual
   step with the GitHub CLI (see
   [PROVENANCE_VERIFICATION.md](PROVENANCE_VERIFICATION.md)).
@@ -37,7 +40,10 @@ The interesting boundaries are the few places where **untrusted content** enters
 ## Execution model
 
 Every external process ProxSave runs goes through `internal/safeexec`, which builds argv
-directly and never wraps a caller's command in a shell. Several callers do invoke `/bin/sh`
+directly and never wraps a caller's command in a shell. The single exception is the resident
+daemon's backup child (see **Self re-execution** below), which re-execs the running binary
+with a raw `exec.CommandContext` under a documented `#nosec G204`, bypassing the allowlist.
+Several callers do invoke `/bin/sh`
 on purpose, but only one of them puts shell **text** on a command line: the background
 rollback timer runs `sh -c '<compile-time constant>'` and passes the sleep seconds and the
 script path as positional parameters. The others hand a shell nothing but the path of a
@@ -157,12 +163,15 @@ aborts the run rather than letting it proceed on an unverified binary or config.
 The bound is per syscall and it does not cover the whole preflight. Once the executable is
 open, the fstat on it and the SHA256 read of the entire binary are raw unbounded calls, and
 inside the private-key scan the directory walk is bounded but the per-file open and read
-are not. A mount that goes stale inside one of those windows still wedges the preflight.
-Under the resident daemon the hang watchdog (see [DAEMON.md](DAEMON.md)) at least detects
-and reports it, though it cannot kill a process stuck in uninterruptible sleep. The daemon
-only supervises `--backup` children, so a restore, a manual run, or a dashboard "run now"
-has no watchdog at all and nothing bounds the wedge there. `FS_IO_TIMEOUT=0` disables
-bounding everywhere.
+are not. A mount that goes stale inside one of those windows still wedges the preflight, and
+**the daemon watchdog does not save you there**. A child that merely overruns
+`MAX_RUN_DURATION` gets `SIGTERM`, then `SIGKILL` after a 30s grace, and is reported as a
+hang. A child stuck in uninterruptible sleep is not reported at all: the daemon reports only
+after the child is reaped, and a D-state process is never reaped, so the daemon blocks in the
+same wedge and stops scheduling. Only the monitor's silence on the missing finish ping
+catches that case (see [DAEMON.md](DAEMON.md)). The daemon also supervises `--backup`
+children only, so a restore, a manual run, or a dashboard "run now" has no watchdog at all.
+`FS_IO_TIMEOUT=0` disables bounding everywhere.
 
 **Preflight configuration keys** (`backup.env`):
 
