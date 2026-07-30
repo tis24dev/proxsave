@@ -62,8 +62,10 @@ on a command line (see **Generated rollback scripts** below).
 - **`/proc` access is narrowed.** `ProcPath(pid, leaf)` only permits the leaves `comm`,
   `status`, and `exe`, so an arbitrary `/proc` path can never be constructed.
 - **The allowlist includes `sh`**, along with `cat` and `tail`. Those two take an ordinary
-  argv that is often a computed path (`tail -n <n> <logfile>`, `cat <procfile>`), which
-  carries no metacharacter interpretation. `sh` appears in two shapes. The background
+  argv, which carries no metacharacter interpretation. `cat` is the one that takes a
+  computed path (`cat <SYSTEM_ROOT_PREFIX>/proc/cmdline`); the single non-test `tail` call
+  site passes a package-level literal mail-log path and varies only the line count. `sh`
+  appears in two shapes. The background
   rollback timer runs `sh -c '<constant template>'` and feeds the sleep seconds and the
   script path as positional parameters `$1`/`$2`, never interpolated into the command
   text. The immediate rollback runs `sh <scriptPath>`, and the `systemd-run` timers run
@@ -92,8 +94,9 @@ input: the three runtime values are composed from a fixed `/tmp/proxsave` base, 
 compile-time prefix, and a timestamp. **That provenance is the guarantee.** A `shellQuote`
 helper is applied on the way in, but it only quotes a value containing whitespace or one of
 `"'\$&;|<>`, so in practice every one of these paths is emitted verbatim, and its trigger
-set omits the backtick, the glob characters, `(`, `)` and `#`. Treat it as incidental, not
-as the control.
+set omits the backtick, the glob characters `*` `?` `[` `]`, the grouping `(` `)`, the
+comment `#`, tilde expansion `~` and brace expansion `{` `}`. Treat it as incidental, not as
+the control.
 
 ## Security preflight
 
@@ -103,6 +106,14 @@ order: dependency availability, executable integrity, config file, sensitive fil
 directories, secure-account files, and a private-key scan; then, only if
 `CHECK_NETWORK_SECURITY` is on (default off), the network block, whose two real checks
 each need a second key of their own; and finally, always, the suspicious-process scan.
+
+The resident daemon and the `--daemon-*` admin commands are dispatched before it and skip it
+(each supervised backup child runs its own). The same preflight also runs once at the end of
+`--install` and `--upgrade`, but there the gates are **overridden in code**:
+`SECURITY_CHECK_ENABLED`, `AUTO_FIX_PERMISSIONS` and `CONTINUE_ON_SECURITY_ISSUES` are all
+forced to `true`, and the network block is forced off. So an upgrade runs the preflight and
+auto-fixes modes and ownership even on a host where you turned both off, and it can never
+abort the upgrade.
 
 **Executable integrity.** The binary is `Lstat`-ed and **refused if it is a symlink**,
 then opened and re-checked with `os.SameFile` to catch a swap during the check (a
@@ -129,9 +140,10 @@ warning to review manually.
 
 **Network checks** are doubly gated, and `CHECK_NETWORK_SECURITY` on its own buys you
 almost nothing. With it on and nothing else, ProxSave runs `ss -tuln` and logs one
-informational line counting the services listening on non-loopback addresses. That line is
-never a warning, and "non-loopback" counts the `0.0.0.0` and `::` wildcards, so it is not a
-statement about internet reachability. The firewall check needs `CHECK_FIREWALL=true` as
+informational line counting the services listening on non-loopback addresses, and only when
+that count is non-zero; if `ss` is not on `PATH` the check returns silently, with no line and
+no warning. That line is never a warning either, and "non-loopback" counts the `0.0.0.0` and
+`::` wildcards, so it is not a statement about internet reachability. The firewall check needs `CHECK_FIREWALL=true` as
 well: it runs `iptables -L -n` and warns when no rules are present. The suspicious-port
 check needs `CHECK_OPEN_PORTS=true` as well: it runs `ss -tulnap` and warns for every
 public listener whose port is in `SUSPICIOUS_PORTS` and not covered by a `program:port`
@@ -192,18 +204,22 @@ children only, so a restore, a manual run, or a dashboard "run now" has no watch
 `SET_BACKUP_PERMISSIONS` is not a passive opt-out. When it is true, every run walks
 `BACKUP_PATH`, `LOG_PATH`, `SECONDARY_PATH` and `SECONDARY_LOG_PATH` **recursively, before
 the preflight**, sets every entry to `BACKUP_USER:BACKUP_GROUP`, and sets directories to
-`0750`; files keep their mode. `--install` and `--upgrade` each run the same pass once more
-at the end, and both force it to mutate: the finalization pass hardcodes `dryRun=false`, so
-`DRY_RUN=true` does not hold the recursive chown back there.
+`0750`; files keep their mode. `--install` and `--upgrade` never reach that pre-preflight
+pass, because they are dispatched before the runtime is built; the finalization pass at the
+end of each is the only one they run, and it forces the mutation: it hardcodes
+`dryRun=false`, so `DRY_RUN=true` does not hold the recursive chown back there.
 
 The preflight skip is keyed on the **flag alone**, not on the chown having succeeded:
 whenever `SET_BACKUP_PERMISSIONS=true`, those four paths are skipped entirely, the mode
 check as well as the ownership check (a missing directory is still created at `0755`
 first). That matters, because the pass changes nothing when `BACKUP_USER` or `BACKUP_GROUP`
 is empty or cannot be resolved on the host, when the path sits on a filesystem without Unix
-ownership, or under `--dry-run` (the install and upgrade finalization above is the
-exception: it always mutates). In each of those cases the ownership stays as it was **and**
-the check that would have flagged it is off.
+ownership, under `--dry-run` (the install and upgrade finalization above is the exception:
+it always mutates), and when the path does not exist or is not a directory at that moment.
+That last case is the common one on a `SECONDARY_PATH` whose mount is not up yet: the
+preflight then creates the directory itself at `0755` `root:root` and skips it, so the run
+ends with a root-owned directory and no warning. In each of these cases the ownership stays
+as it was **and** the check that would have flagged it is off.
 
 Ownership is applied with `lchown`, so a symlink is never followed out of the backup tree,
 and no failure aborts the run. Only the per-path failures warn (an empty or unresolvable
@@ -263,8 +279,9 @@ syscall by `FS_IO_TIMEOUT` (default 30s): the call runs in a worker goroutine, a
 timeout it is **abandoned** (the kernel call is not cancelled, the operation returns
 `ErrTimeout`, and the caller skips rather than wedging). File copies use a per-chunk
 no-progress budget, and the bounded directory walk never follows symlinks. This is the
-layer beneath the daemon's hang watchdog (see [DAEMON.md](DAEMON.md)); the logger caps
-its own log-write budget at 5s and then falls back to stdout only.
+layer beneath the daemon's hang watchdog (see [DAEMON.md](DAEMON.md)). The logger bounds
+each log write by `min(FS_IO_TIMEOUT, 5s)` and drops to stdout only after **three
+consecutive** write timeouts; with `FS_IO_TIMEOUT=0` its writes are unbounded too.
 
 ## Read-only bind-mount guards
 
