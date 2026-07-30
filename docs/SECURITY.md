@@ -37,10 +37,12 @@ The interesting boundaries are the few places where **untrusted content** enters
 ## Execution model
 
 Every external process ProxSave runs goes through `internal/safeexec`, which builds argv
-directly and never asks a shell to parse a command line. ProxSave does generate shell
-scripts in one area, the restore rollback timers; those are written to a file and run by
-path, so generated text never travels as shell code on a command line (see **Generated
-rollback scripts** below).
+directly and never wraps a caller's command in a shell. One caller does invoke a shell on
+purpose, the background rollback timer, and the text that shell parses is a compile-time
+constant; only the positional parameters vary. ProxSave also generates shell scripts in one
+area, the restore rollback machinery; those are written to a file and run by path, so
+generated text never travels as shell code on a command line (see **Generated rollback
+scripts** below).
 
 - **No shell, argv only.** `safeexec.CommandContext(ctx, name, args...)` requires `name`
   to be an exact key in a static, package-level allowlist (76 literal command names
@@ -75,13 +77,16 @@ rejects control characters and any `..` parent-directory traversal.
 
 **Generated rollback scripts.** The rollback machinery for network, HA, firewall, and PVE
 access control builds a `/bin/sh` script in Go, writes it with mode `0640`, and hands the
-path to `sh`: immediately, through a `systemd-run` timer, or through a `nohup` fallback.
-Each script embeds three values, the log path, the marker path, and the rollback archive
-path. None of them is operator, backup, or server input; all three are composed from a
-fixed `/tmp/proxsave` base, a compile-time prefix, and a timestamp. **That provenance is
-the guarantee.** A `shellQuote` helper single-quotes those values as a second layer, but
-its metacharacter set does not include the backtick, so treat it as defence in depth, not
-as the control.
+path to `sh`. All four arm a **deferred** run through a `systemd-run` timer, falling back to
+a `nohup` background timer when `systemd-run` is unavailable; only the network flow also has
+an immediate path that runs its script inline. Each script embeds three runtime values, the
+log path, the marker path, and the rollback archive path (the access-control script adds
+five compile-time `/etc/pve` target paths). None of them is operator, backup, or server
+input: the three runtime values are composed from a fixed `/tmp/proxsave` base, a
+compile-time prefix, and a timestamp. **That provenance is the guarantee.** A `shellQuote`
+helper is applied on the way in, but it only quotes a value containing whitespace or one of
+`"'\$&;|<>`, so in practice every one of these paths is emitted verbatim, and its trigger
+set omits the backtick and the glob characters. Treat it as incidental, not as the control.
 
 ## Security preflight
 
@@ -130,21 +135,27 @@ in the user `SAFE_PROCESSES` allowlist and, for bracketed kernel-style names,
 `SAFE_BRACKET_PROCESSES` / `SAFE_KERNEL_PROCESSES` plus kernel-thread heuristics.
 
 **Abort semantics.** Warnings never abort. An **error** aborts the run with exit code
-`ExitSecurityError` (14) unless `CONTINUE_ON_SECURITY_ISSUES=true`, or unless
-`ABORT_ON_SECURITY_ISSUES=false` is set while `CONTINUE_ON_SECURITY_ISSUES` is absent;
-with neither set, the default is to abort on error.
+`ExitSecurityError` (14) unless `CONTINUE_ON_SECURITY_ISSUES=true`; with the key unset, the
+default is to abort on error. A legacy `ABORT_ON_SECURITY_ISSUES` is consulted only when
+`CONTINUE_ON_SECURITY_ISSUES` is absent from the file entirely, which on a stock install it
+never is (the template ships it and `--upgrade` back-fills missing template keys), so
+setting it has no effect. Use `CONTINUE_ON_SECURITY_ISSUES`.
 
-**Timeouts are not all warnings.** Preflight filesystem calls go through `internal/safefs`
-and are bounded by `FS_IO_TIMEOUT` (see below), so a dead or stale mount cannot wedge the
-run. Most checks treat a timeout as a **warning** and skip: the sensitive files, the
-directories, the secure-account files, the `<exe>.md5` hash file, the identity private-key
-scan, and the shared ownership/permission helper. Three are deliberately **fail-closed**: a
-timeout on the `Lstat` or `Open` of the executable itself, or on the `Stat` of the
-configuration file, is recorded as an **error**, so a mount gone dead under the binary or
-under `backup.env` aborts the run rather than letting it proceed on an unverified binary or
-config. The bound is per syscall, not total: inside the private-key scan the directory walk
-is bounded but the per-file content read is not. `FS_IO_TIMEOUT=0` disables bounding
-everywhere.
+**Timeouts are not all warnings.** Most preflight filesystem calls go through
+`internal/safefs` and are bounded by `FS_IO_TIMEOUT` (see below). Most checks treat a
+timeout as a **warning** and skip: the sensitive files, the directories, the secure-account
+files, the `<exe>.md5` hash file, the identity private-key scan, and the shared
+ownership/permission helper. Three are deliberately **fail-closed**: a timeout on the
+`Lstat` or `Open` of the executable itself, or on the `Stat` of the configuration file, is
+recorded as an **error**, so a mount gone dead under the binary or under `backup.env`
+aborts the run rather than letting it proceed on an unverified binary or config.
+
+The bound is per syscall and it does not cover the whole preflight. Once the executable is
+open, the fstat on it and the SHA256 read of the entire binary are raw unbounded calls, and
+inside the private-key scan the directory walk is bounded but the per-file open and read
+are not. A mount that goes stale inside one of those windows still wedges the preflight;
+the daemon's hang watchdog (see [DAEMON.md](DAEMON.md)) is the layer that catches that.
+`FS_IO_TIMEOUT=0` disables bounding everywhere.
 
 **Preflight configuration keys** (`backup.env`):
 
@@ -165,16 +176,24 @@ everywhere.
 `SET_BACKUP_PERMISSIONS` is not a passive opt-out. When it is true, every run walks
 `BACKUP_PATH`, `LOG_PATH`, `SECONDARY_PATH` and `SECONDARY_LOG_PATH` **recursively, before
 the preflight**, sets every entry to `BACKUP_USER:BACKUP_GROUP`, and sets directories to
-`0750`; files keep their mode. An install runs the same pass once at the end. Because those
-four paths are then no longer `root:root` at `0755`, the preflight skips them entirely, the
-mode check as well as the ownership check (a missing directory is still created at `0755`
-first). Nothing is changed when `BACKUP_USER` or `BACKUP_GROUP` is empty or cannot be
-resolved on the host, when the path sits on a filesystem without Unix ownership, or under
-`--dry-run`. Ownership is applied with `lchown`, so a symlink is never followed out of the
-backup tree, and every failure is a warning. Note that the code default for `BACKUP_USER`
-and `BACKUP_GROUP` is empty while the shipped template sets `backup:backup`, so a
-hand-written config with this flag on and no user set is a silent no-op that still disables
-the preflight check. See [CONFIGURATION.md](CONFIGURATION.md).
+`0750`; files keep their mode. An install runs the same pass once at the end.
+
+The preflight skip is keyed on the **flag alone**, not on the chown having succeeded:
+whenever `SET_BACKUP_PERMISSIONS=true`, those four paths are skipped entirely, the mode
+check as well as the ownership check (a missing directory is still created at `0755`
+first). That matters, because the pass changes nothing when `BACKUP_USER` or `BACKUP_GROUP`
+is empty or cannot be resolved on the host, when the path sits on a filesystem without Unix
+ownership, or under `--dry-run`. In each of those cases the ownership stays as it was **and**
+the check that would have flagged it is off.
+
+Ownership is applied with `lchown`, so a symlink is never followed out of the backup tree,
+and no failure aborts the run. Only the per-path failures warn (an empty or unresolvable
+`BACKUP_USER`/`BACKUP_GROUP`, a failed stat or filesystem probe). A chown or chmod that
+fails on an individual entry, and a subtree skipped after a walk error or a per-directory
+timeout, are logged at **debug** level only, so a partially converted tree looks like a
+clean run at the default log level. Note that the code default for `BACKUP_USER` and
+`BACKUP_GROUP` is empty while the shipped template sets `backup:backup`. See
+[CONFIGURATION.md](CONFIGURATION.md).
 
 ## Secret redaction in logs
 
