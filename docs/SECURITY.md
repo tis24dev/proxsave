@@ -37,12 +37,12 @@ The interesting boundaries are the few places where **untrusted content** enters
 ## Execution model
 
 Every external process ProxSave runs goes through `internal/safeexec`, which builds argv
-directly and never wraps a caller's command in a shell. One caller does invoke a shell on
-purpose, the background rollback timer, and the text that shell parses is a compile-time
-constant; only the positional parameters vary. ProxSave also generates shell scripts in one
-area, the restore rollback machinery; those are written to a file and run by path, so
-generated text never travels as shell code on a command line (see **Generated rollback
-scripts** below).
+directly and never wraps a caller's command in a shell. Several callers do invoke `/bin/sh`
+on purpose, but only one of them puts shell **text** on a command line: the background
+rollback timer runs `sh -c '<compile-time constant>'` and passes the sleep seconds and the
+script path as positional parameters. The others hand a shell nothing but the path of a
+script ProxSave generated and wrote to disk, so generated text never travels as shell code
+on a command line (see **Generated rollback scripts** below).
 
 - **No shell, argv only.** `safeexec.CommandContext(ctx, name, args...)` requires `name`
   to be an exact key in a static, package-level allowlist (76 literal command names
@@ -78,15 +78,16 @@ rejects control characters and any `..` parent-directory traversal.
 **Generated rollback scripts.** The rollback machinery for network, HA, firewall, and PVE
 access control builds a `/bin/sh` script in Go, writes it with mode `0640`, and hands the
 path to `sh`. All four arm a **deferred** run through a `systemd-run` timer, falling back to
-a `nohup` background timer when `systemd-run` is unavailable; only the network flow also has
-an immediate path that runs its script inline. Each script embeds three runtime values, the
+a `nohup` background timer when `systemd-run` is unavailable **or its invocation fails**;
+only the network flow also has an immediate path that runs its script inline. Each script embeds three runtime values, the
 log path, the marker path, and the rollback archive path (the access-control script adds
 five compile-time `/etc/pve` target paths). None of them is operator, backup, or server
 input: the three runtime values are composed from a fixed `/tmp/proxsave` base, a
 compile-time prefix, and a timestamp. **That provenance is the guarantee.** A `shellQuote`
 helper is applied on the way in, but it only quotes a value containing whitespace or one of
 `"'\$&;|<>`, so in practice every one of these paths is emitted verbatim, and its trigger
-set omits the backtick and the glob characters. Treat it as incidental, not as the control.
+set omits the backtick, the glob characters, `(`, `)` and `#`. Treat it as incidental, not
+as the control.
 
 ## Security preflight
 
@@ -108,7 +109,10 @@ ever widening.
 
 **Permissions and ownership.** Sensitive files are enforced at `0600` (the config file,
 `identity/.server_identity`, the AGE recipient file, and every `secure_account/*.json`),
-directories at `0700`/`0755`, all owned `root:root`. With `AUTO_FIX_PERMISSIONS`
+directories at `0700`/`0755`, all owned `root:root`. The exception is `BACKUP_PATH`,
+`LOG_PATH`, `SECONDARY_PATH` and `SECONDARY_LOG_PATH`: their owner **and** mode checks are
+skipped entirely when `SET_BACKUP_PERMISSIONS=true` (see below) or when the path sits on a
+filesystem without Unix ownership. With `AUTO_FIX_PERMISSIONS`
 (default `true`) a wrong mode or owner is corrected, **except** that ProxSave refuses to
 `chmod` or `chown` a **symlink** (that refusal is an error, not a silent fix). Symlink
 status is re-derived with `Lstat`, so a fix never follows a link.
@@ -153,9 +157,12 @@ aborts the run rather than letting it proceed on an unverified binary or config.
 The bound is per syscall and it does not cover the whole preflight. Once the executable is
 open, the fstat on it and the SHA256 read of the entire binary are raw unbounded calls, and
 inside the private-key scan the directory walk is bounded but the per-file open and read
-are not. A mount that goes stale inside one of those windows still wedges the preflight;
-the daemon's hang watchdog (see [DAEMON.md](DAEMON.md)) is the layer that catches that.
-`FS_IO_TIMEOUT=0` disables bounding everywhere.
+are not. A mount that goes stale inside one of those windows still wedges the preflight.
+Under the resident daemon the hang watchdog (see [DAEMON.md](DAEMON.md)) at least detects
+and reports it, though it cannot kill a process stuck in uninterruptible sleep. The daemon
+only supervises `--backup` children, so a restore, a manual run, or a dashboard "run now"
+has no watchdog at all and nothing bounds the wedge there. `FS_IO_TIMEOUT=0` disables
+bounding everywhere.
 
 **Preflight configuration keys** (`backup.env`):
 
@@ -176,14 +183,17 @@ the daemon's hang watchdog (see [DAEMON.md](DAEMON.md)) is the layer that catche
 `SET_BACKUP_PERMISSIONS` is not a passive opt-out. When it is true, every run walks
 `BACKUP_PATH`, `LOG_PATH`, `SECONDARY_PATH` and `SECONDARY_LOG_PATH` **recursively, before
 the preflight**, sets every entry to `BACKUP_USER:BACKUP_GROUP`, and sets directories to
-`0750`; files keep their mode. An install runs the same pass once at the end.
+`0750`; files keep their mode. `--install` and `--upgrade` each run the same pass once more
+at the end, and both force it to mutate: the finalization pass hardcodes `dryRun=false`, so
+`DRY_RUN=true` does not hold the recursive chown back there.
 
 The preflight skip is keyed on the **flag alone**, not on the chown having succeeded:
 whenever `SET_BACKUP_PERMISSIONS=true`, those four paths are skipped entirely, the mode
 check as well as the ownership check (a missing directory is still created at `0755`
 first). That matters, because the pass changes nothing when `BACKUP_USER` or `BACKUP_GROUP`
 is empty or cannot be resolved on the host, when the path sits on a filesystem without Unix
-ownership, or under `--dry-run`. In each of those cases the ownership stays as it was **and**
+ownership, or under `--dry-run` (the install and upgrade finalization above is the
+exception: it always mutates). In each of those cases the ownership stays as it was **and**
 the check that would have flagged it is off.
 
 Ownership is applied with `lchown`, so a symlink is never followed out of the backup tree,
@@ -297,5 +307,8 @@ There is currently **no way to point the relay at your own worker**. The URL, th
 and the HMAC secret are compiled-in constants with no configuration key behind them, so
 adding `CLOUDFLARE_WORKER_URL` or anything similar to `backup.env` does nothing, silently.
 If you do not want your reports transiting a shared third-party relay, use
-`EMAIL_DELIVERY_METHOD=sendmail` or `pmf` and deliver through your own MTA. See
-[NOTIFICATIONS.md](NOTIFICATIONS.md#the-shared-cloud-relay-worker).
+`EMAIL_DELIVERY_METHOD=sendmail`: it is the only method with no relay fallback. `pmf` is
+**not** an alternative here. When `proxmox-mail-forward` fails and a non-root recipient is
+configured, ProxSave tries the shared relay **first** and only then sendmail, and no
+configuration key disables that hop (`EMAIL_FALLBACK_SENDMAIL` gates the sendmail leg only).
+See [NOTIFICATIONS.md](NOTIFICATIONS.md#the-shared-cloud-relay-worker).
