@@ -26,13 +26,21 @@ The interesting boundaries are the few places where **untrusted content** enters
 - **Backup-derived and server-derived display strings.** Text pulled from a backup
   (filenames, config values) or returned by the central relay/monitor is scrubbed of
   terminal escapes before it is printed (see below).
-- **Release artifacts.** Downloads are verified before use (ECDSA P-256 signature plus
-  SLSA build provenance; see [PROVENANCE_VERIFICATION.md](PROVENANCE_VERIFICATION.md)).
+- **Release artifacts.** `install.sh` and `proxsave --upgrade` check the detached ECDSA
+  P-256 signature over `SHA256SUMS` against a public key pinned in the tool itself, then
+  check the downloaded archive's SHA256 against that authenticated list. A missing or
+  invalid signature aborts. Every release also publishes SLSA build provenance, but that
+  attestation is **not** part of the automatic path: verifying it is a separate manual
+  step with the GitHub CLI (see
+  [PROVENANCE_VERIFICATION.md](PROVENANCE_VERIFICATION.md)).
 
 ## Execution model
 
-Every external process ProxSave runs goes through `internal/safeexec`. Nothing ProxSave
-builds is ever handed to a shell interpreter.
+Every external process ProxSave runs goes through `internal/safeexec`, which builds argv
+directly and never asks a shell to parse a command line. ProxSave does generate shell
+scripts in one area, the restore rollback timers; those are written to a file and run by
+path, so generated text never travels as shell code on a command line (see **Generated
+rollback scripts** below).
 
 - **No shell, argv only.** `safeexec.CommandContext(ctx, name, args...)` requires `name`
   to be an exact key in a static, package-level allowlist (76 literal command names
@@ -45,10 +53,13 @@ builds is ever handed to a shell interpreter.
   the same way.
 - **`/proc` access is narrowed.** `ProcPath(pid, leaf)` only permits the leaves `comm`,
   `status`, and `exe`, so an arbitrary `/proc` path can never be constructed.
-- **The allowlist includes `sh`**, along with `cat`/`tail`/`echo`, but these are invoked
-  only with a fixed, constant argv. For example the background network rollback runs
-  `sh -c '<constant template>'` and feeds the untrusted values (sleep seconds, script
-  path) as positional parameters `$1`/`$2`, never interpolated into the command text.
+- **The allowlist includes `sh`**, along with `cat` and `tail`. Those two take an ordinary
+  argv that is often a computed path (`tail -n <n> <logfile>`, `cat <procfile>`), which
+  carries no metacharacter interpretation. `sh` appears in two shapes. The background
+  rollback timer runs `sh -c '<constant template>'` and feeds the sleep seconds and the
+  script path as positional parameters `$1`/`$2`, never interpolated into the command
+  text. The immediate rollback runs `sh <scriptPath>`, and the `systemd-run` timers run
+  `/bin/sh <scriptPath>`; there the argument is only a path to a script ProxSave wrote.
 
 **Self re-execution.** When ProxSave runs its own binary, the path is validated by
 `ValidateTrustedExecutablePath`: it must be absolute, a regular file, have the execute
@@ -62,14 +73,24 @@ literal arguments (`--backup [--config ...]`) under a documented `#nosec G204` w
 `/`, `\`, or `:`, and any whitespace or control character; `ValidateRemoteRelativePath`
 rejects control characters and any `..` parent-directory traversal.
 
+**Generated rollback scripts.** The rollback machinery for network, HA, firewall, and PVE
+access control builds a `/bin/sh` script in Go, writes it with mode `0640`, and hands the
+path to `sh`: immediately, through a `systemd-run` timer, or through a `nohup` fallback.
+Each script embeds three values, the log path, the marker path, and the rollback archive
+path. None of them is operator, backup, or server input; all three are composed from a
+fixed `/tmp/proxsave` base, a compile-time prefix, and a timestamp. **That provenance is
+the guarantee.** A `shellQuote` helper single-quotes those values as a second layer, but
+its metacharacter set does not include the backtick, so treat it as defence in depth, not
+as the control.
+
 ## Security preflight
 
-Before a backup, ProxSave runs a preflight (`internal/security`, `security.Run`), gated
-by `SECURITY_CHECK_ENABLED` (default `true`). Checks run in this order: dependency
-availability, executable integrity, config file, sensitive files, directories,
-secure-account files, and a private-key scan; then, only if
-`CHECK_NETWORK_SECURITY` is on (default off), the firewall and open-port checks; and
-finally, always, the suspicious-process scan.
+Before a backup **or a restore**, ProxSave runs a preflight (`internal/security`,
+`security.Run`), gated by `SECURITY_CHECK_ENABLED` (default `true`). Checks run in this
+order: dependency availability, executable integrity, config file, sensitive files,
+directories, secure-account files, and a private-key scan; then, only if
+`CHECK_NETWORK_SECURITY` is on (default off), the network block, whose two real checks
+each need a second key of their own; and finally, always, the suspicious-process scan.
 
 **Executable integrity.** The binary is `Lstat`-ed and **refused if it is a symlink**,
 then opened and re-checked with `os.SameFile` to catch a swap during the check (a
@@ -91,18 +112,39 @@ status is re-derived with `Lstat`, so a fix never follows a link.
 `AGE-SECRET-KEY-`, `BEGIN AGE PRIVATE KEY`, and `OPENSSH PRIVATE KEY`; a match is a
 warning to review manually.
 
-**Network and process checks** (opt-in via `CHECK_NETWORK_SECURITY`). The firewall check
-runs `iptables -L -n` and warns when no rules are present; the open-port check compares
-listeners against `SUSPICIOUS_PORTS` with a `program:port` `PORT_WHITELIST`. The
-suspicious-process scan matches against `SUSPICIOUS_PROCESSES` (with a built-in list),
-exempting anything in the user `SAFE_PROCESSES` allowlist and, for bracketed kernel-style
-names, `SAFE_BRACKET_PROCESSES` / `SAFE_KERNEL_PROCESSES` plus kernel-thread heuristics.
+**Network checks** are doubly gated, and `CHECK_NETWORK_SECURITY` on its own buys you
+almost nothing. With it on and nothing else, ProxSave runs `ss -tuln` and logs one
+informational line counting the services listening on non-loopback addresses. That line is
+never a warning, and "non-loopback" counts the `0.0.0.0` and `::` wildcards, so it is not a
+statement about internet reachability. The firewall check needs `CHECK_FIREWALL=true` as
+well: it runs `iptables -L -n` and warns when no rules are present. The suspicious-port
+check needs `CHECK_OPEN_PORTS=true` as well: it runs `ss -tulnap` and warns for every
+public listener whose port is in `SUSPICIOUS_PORTS` and not covered by a `program:port`
+entry in `PORT_WHITELIST`. Those two list keys are read by that check alone. All three
+switches default off and ship off. None of these checks can abort a run: they only ever
+add warnings.
+
+**The suspicious-process scan** is gated by none of them and runs whenever the preflight
+runs. It matches against `SUSPICIOUS_PROCESSES` (with a built-in list), exempting anything
+in the user `SAFE_PROCESSES` allowlist and, for bracketed kernel-style names,
+`SAFE_BRACKET_PROCESSES` / `SAFE_KERNEL_PROCESSES` plus kernel-thread heuristics.
 
 **Abort semantics.** Warnings never abort. An **error** aborts the run with exit code
-`ExitSecurityError` unless `CONTINUE_ON_SECURITY_ISSUES=true`; with neither
-`CONTINUE_ON_SECURITY_ISSUES` nor `ABORT_ON_SECURITY_ISSUES` set, the default is to
-abort on error. Every preflight syscall is bounded by `FS_IO_TIMEOUT` (see below): on a
-dead or stale mount the check **warns and skips** rather than wedging the run.
+`ExitSecurityError` (14) unless `CONTINUE_ON_SECURITY_ISSUES=true`, or unless
+`ABORT_ON_SECURITY_ISSUES=false` is set while `CONTINUE_ON_SECURITY_ISSUES` is absent;
+with neither set, the default is to abort on error.
+
+**Timeouts are not all warnings.** Preflight filesystem calls go through `internal/safefs`
+and are bounded by `FS_IO_TIMEOUT` (see below), so a dead or stale mount cannot wedge the
+run. Most checks treat a timeout as a **warning** and skip: the sensitive files, the
+directories, the secure-account files, the `<exe>.md5` hash file, the identity private-key
+scan, and the shared ownership/permission helper. Three are deliberately **fail-closed**: a
+timeout on the `Lstat` or `Open` of the executable itself, or on the `Stat` of the
+configuration file, is recorded as an **error**, so a mount gone dead under the binary or
+under `backup.env` aborts the run rather than letting it proceed on an unverified binary or
+config. The bound is per syscall, not total: inside the private-key scan the directory walk
+is bounded but the per-file content read is not. `FS_IO_TIMEOUT=0` disables bounding
+everywhere.
 
 **Preflight configuration keys** (`backup.env`):
 
@@ -113,8 +155,26 @@ dead or stale mount the check **warns and skips** rather than wedging the run.
 | `AUTO_UPDATE_HASHES` | `true` | create/refresh the `<exe>.md5` integrity hash |
 | `CONTINUE_ON_SECURITY_ISSUES` | `false` | if false, a security error aborts the run |
 | `FS_IO_TIMEOUT` | `30` | per-syscall bound (seconds) for filesystem I/O; `0` = unbounded |
-| `CHECK_NETWORK_SECURITY` | `false` | enable the firewall and open-port checks |
-| `SET_BACKUP_PERMISSIONS` | `false` | skip root-ownership enforcement on the backup/log dirs (externally managed) |
+| `CHECK_NETWORK_SECURITY` | `false` | master switch for the network block; on its own it only logs a count of public listeners |
+| `CHECK_FIREWALL` | `false` | run the `iptables` rule check (needs `CHECK_NETWORK_SECURITY` too) |
+| `CHECK_OPEN_PORTS` | `false` | run the suspicious-port check (needs `CHECK_NETWORK_SECURITY` too) |
+| `SUSPICIOUS_PORTS` | built-in list | ports the suspicious-port check flags; read by that check only |
+| `PORT_WHITELIST` | _(empty)_ | `program:port` pairs exempted from the suspicious-port warning |
+| `SET_BACKUP_PERMISSIONS` | `false` | when true, the run chowns the backup/log dirs to `BACKUP_USER:BACKUP_GROUP`, and the preflight then skips their owner **and mode** checks |
+
+`SET_BACKUP_PERMISSIONS` is not a passive opt-out. When it is true, every run walks
+`BACKUP_PATH`, `LOG_PATH`, `SECONDARY_PATH` and `SECONDARY_LOG_PATH` **recursively, before
+the preflight**, sets every entry to `BACKUP_USER:BACKUP_GROUP`, and sets directories to
+`0750`; files keep their mode. An install runs the same pass once at the end. Because those
+four paths are then no longer `root:root` at `0755`, the preflight skips them entirely, the
+mode check as well as the ownership check (a missing directory is still created at `0755`
+first). Nothing is changed when `BACKUP_USER` or `BACKUP_GROUP` is empty or cannot be
+resolved on the host, when the path sits on a filesystem without Unix ownership, or under
+`--dry-run`. Ownership is applied with `lchown`, so a symlink is never followed out of the
+backup tree, and every failure is a warning. Note that the code default for `BACKUP_USER`
+and `BACKUP_GROUP` is empty while the shipped template sets `backup:backup`, so a
+hand-written config with this flag on and no user set is a silent no-op that still disables
+the preflight check. See [CONFIGURATION.md](CONFIGURATION.md).
 
 ## Secret redaction in logs
 
