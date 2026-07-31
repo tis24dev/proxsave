@@ -141,6 +141,16 @@ func runInstall(ctx context.Context, configPath string, bootstrap *logging.Boots
 		}
 	}
 
+	// Keep-existing kept the operator's backup.env untouched, so nothing has carried
+	// the adopted run time into it. Write it now, past every interactive step: the
+	// install is committed, and buildInstallCronSchedule below reads the value from
+	// the file.
+	if configResult.SkipConfigWizard {
+		if seed := seedSchedulerTimeFromCrontabFn(ctx, configPath); seed.Note != "" {
+			logBootstrapInfo(bootstrap, "%s", seed.Note)
+		}
+	}
+
 	logging.DebugStepBootstrap(bootstrap, "install workflow (cli)", "finalizing symlinks and cron")
 	runPostInstallSymlinksAndCron(
 		ctx,
@@ -746,16 +756,15 @@ func prepareBaseTemplate(ctx context.Context, reader *bufio.Reader, configPath s
 	// crontab is the only record of the operator's run time, so adopt it before
 	// either happens; a config that already carries the key is left untouched.
 	//
-	// Seeding WRITES backup.env, so it runs only once the operator has committed to
-	// keeping (Keep existing) or editing (Edit existing) that file - never on the
-	// Cancel path, which must leave the host byte-identical, and never on Overwrite,
-	// where the wizard collects a fresh time and an adoption note would be a lie.
-	if decision.SkipConfigWizard || decision.FromExistingFile {
-		if seed := seedSchedulerTimeFromCrontabFn(ctx, configPath); seed.Note != "" {
+	// Nothing is written to backup.env here. On Edit the wizard rewrites the whole
+	// file at the end from BaseTemplate, so the adopted time only has to reach that
+	// in-memory template - otherwise cronTimeDefault would still offer 02:00 for the
+	// "Run at" prompt. Cancelling anywhere later then leaves the host byte-identical,
+	// which a write at this point would not. Keep existing has no wizard to carry the
+	// value, so its write is deferred to the commit point in runInstall.
+	if decision.FromExistingFile {
+		if seed := deriveSchedulerTimeFromCrontabFn(ctx, configPath); seed.Note != "" {
 			logBootstrapInfo(bootstrap, "%s", seed.Note)
-			// Edit: the decision already read the file into BaseTemplate, so mirror the
-			// seeded value into the in-memory copy the wizard prefills from. Otherwise
-			// cronTimeDefault would still offer 02:00 for the "Run at" prompt.
 			if seed.Time != "" && decision.BaseTemplate != "" {
 				decision.BaseTemplate = setEnvValue(decision.BaseTemplate, "SCHEDULER_TIME", seed.Time)
 			}

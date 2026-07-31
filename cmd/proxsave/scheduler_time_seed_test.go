@@ -12,7 +12,6 @@ import (
 
 	cronutil "github.com/tis24dev/proxsave/internal/cron"
 	"github.com/tis24dev/proxsave/internal/installer"
-	"github.com/tis24dev/proxsave/internal/safefs"
 )
 
 // stubCrontabLines swaps the crontab read seam so the SCHEDULER_TIME seeding can be
@@ -255,23 +254,27 @@ func TestSeededTimeDrivesInstallSchedule(t *testing.T) {
 	}
 }
 
-// TestPrepareBaseTemplateSeedsOnlyAfterTheOperatorCommits pins WHERE the seeding
-// may write: it persists SCHEDULER_TIME, so an install the operator cancels must
-// leave backup.env byte-identical, and Overwrite must neither write nor claim an
-// adoption for a file the wizard is about to replace.
-func TestPrepareBaseTemplateSeedsOnlyAfterTheOperatorCommits(t *testing.T) {
+// TestPrepareBaseTemplateNeverWritesDuringTheInteractivePhase pins where the adopted
+// time may land. The seeding PERSISTS SCHEDULER_TIME, so no answer may write
+// backup.env while the operator can still walk away: cancelling at the prompt, or
+// several screens into the wizard, must leave the host byte-identical.
+//
+// Edit still has to SEE the adopted time - the wizard prefills "Run at" from the
+// template it is handed - so it travels in memory and reaches disk only when the
+// wizard rewrites the file at the end.
+func TestPrepareBaseTemplateNeverWritesDuringTheInteractivePhase(t *testing.T) {
 	const preThirty = "SCHEDULER_MODE=cron\n"
 
 	tests := []struct {
-		name       string
-		answer     string
-		wantSeeded bool
-		wantAbort  bool
+		name        string
+		answer      string
+		wantPrefill bool
+		wantAbort   bool
 	}{
-		{name: "cancel leaves the config untouched", answer: "0\n", wantAbort: true},
+		{name: "cancel", answer: "0\n", wantAbort: true},
 		{name: "overwrite does not adopt", answer: "1\n"},
-		{name: "edit existing adopts", answer: "2\n", wantSeeded: true},
-		{name: "keep existing adopts", answer: "3\n", wantSeeded: true},
+		{name: "edit adopts in memory only", answer: "2\n", wantPrefill: true},
+		{name: "keep existing defers its write", answer: "3\n"},
 	}
 
 	for _, tt := range tests {
@@ -296,38 +299,33 @@ func TestPrepareBaseTemplateSeedsOnlyAfterTheOperatorCommits(t *testing.T) {
 			if readErr != nil {
 				t.Fatalf("read back: %v", readErr)
 			}
-			seeded := strings.Contains(string(data), "SCHEDULER_TIME=21:00")
-			if seeded != tt.wantSeeded {
-				t.Fatalf("config seeded = %v, want %v:\n%s", seeded, tt.wantSeeded, data)
+			if string(data) != preThirty {
+				t.Fatalf("the interactive phase must not write backup.env:\n%s", data)
 			}
-			if !tt.wantSeeded && string(data) != preThirty {
-				t.Fatalf("config was modified:\n%s", data)
-			}
-			// Edit hands the wizard an in-memory copy read BEFORE the seeding, so the
-			// adopted time must be mirrored into it or the "Run at" prompt still offers
-			// the 02:00 default.
-			if tt.answer == "2\n" && cronTimeDefault(true, tmpl) != "21:00" {
-				t.Fatalf("edit template prefill = %q, want 21:00", cronTimeDefault(true, tmpl))
+
+			if got := cronTimeDefault(true, tmpl) == "21:00"; got != tt.wantPrefill {
+				t.Fatalf("template prefill = %v, want %v (tmpl=%q)", got, tt.wantPrefill, tmpl)
 			}
 		})
 	}
 }
 
-// TestSeedSchedulerTimeForExistingConfig is the TUI twin of the CLI test above:
-// the seeding persists SCHEDULER_TIME, so only the two answers that COMMIT to the
-// existing backup.env may reach it.
-func TestSeedSchedulerTimeForExistingConfig(t *testing.T) {
+// TestDeriveSchedulerTimeForExistingConfig is the TUI twin of the CLI test above:
+// same gate on which answers adopt the crontab time, and the same rule that the
+// interactive phase must not write backup.env. The TUI carries the value into
+// baseTemplate instead, and ApplyInstallData persists it only if the wizard finishes.
+func TestDeriveSchedulerTimeForExistingConfig(t *testing.T) {
 	const preThirty = "SCHEDULER_MODE=cron\n"
 
 	tests := []struct {
-		name       string
-		action     installer.ExistingConfigAction
-		wantSeeded bool
+		name     string
+		action   installer.ExistingConfigAction
+		wantTime string
 	}{
-		{name: "cancel leaves the config untouched", action: installer.ExistingConfigCancel},
-		{name: "overwrite does not adopt", action: installer.ExistingConfigOverwrite},
-		{name: "edit existing adopts", action: installer.ExistingConfigEdit, wantSeeded: true},
-		{name: "keep existing adopts", action: installer.ExistingConfigKeepContinue, wantSeeded: true},
+		{name: "cancel adopts nothing", action: installer.ExistingConfigCancel},
+		{name: "overwrite adopts nothing", action: installer.ExistingConfigOverwrite},
+		{name: "edit adopts", action: installer.ExistingConfigEdit, wantTime: "21:00"},
+		{name: "keep existing adopts", action: installer.ExistingConfigKeepContinue, wantTime: "21:00"},
 	}
 
 	for _, tt := range tests {
@@ -338,11 +336,11 @@ func TestSeedSchedulerTimeForExistingConfig(t *testing.T) {
 			}
 			stubCrontabLines(t, []string{"0 21 * * * /usr/local/bin/proxsave --backup"}, nil)
 
-			seed := seedSchedulerTimeForExistingConfig(context.Background(), tt.action, cfg, nil)
-			if got := seed.Time == "21:00"; got != tt.wantSeeded {
-				t.Fatalf("seed = %+v, want seeded = %v", seed, tt.wantSeeded)
+			seed := deriveSchedulerTimeForExistingConfig(context.Background(), tt.action, cfg, nil)
+			if seed.Time != tt.wantTime {
+				t.Fatalf("seed.Time = %q, want %q", seed.Time, tt.wantTime)
 			}
-			if !tt.wantSeeded && seed.Note != "" {
+			if tt.wantTime == "" && seed.Note != "" {
 				t.Errorf("no adoption note expected for this answer, got %q", seed.Note)
 			}
 
@@ -350,38 +348,10 @@ func TestSeedSchedulerTimeForExistingConfig(t *testing.T) {
 			if err != nil {
 				t.Fatalf("read back: %v", err)
 			}
-			if seeded := strings.Contains(string(data), "SCHEDULER_TIME=21:00"); seeded != tt.wantSeeded {
-				t.Fatalf("config seeded = %v, want %v:\n%s", seeded, tt.wantSeeded, data)
-			}
-			if !tt.wantSeeded && string(data) != preThirty {
-				t.Fatalf("config was modified:\n%s", data)
+			if string(data) != preThirty {
+				t.Fatalf("deriving must not write backup.env:\n%s", data)
 			}
 		})
-	}
-}
-
-// TestSeedSchedulerTimeForExistingConfigPrecedesTheEditRead replays the TUI's Edit
-// sequence in order - seed, then read the file into baseTemplate - and pins the
-// consequence of that ordering: the wizard's "Run at" field must prefill with the
-// adopted time. Reading first would prefill the 02:00 default instead.
-func TestSeedSchedulerTimeForExistingConfigPrecedesTheEditRead(t *testing.T) {
-	cfg := filepath.Join(t.TempDir(), "backup.env")
-	if err := os.WriteFile(cfg, []byte("SCHEDULER_MODE=cron\n"), 0o600); err != nil {
-		t.Fatalf("seed config: %v", err)
-	}
-	stubCrontabLines(t, []string{"0 21 * * * /usr/local/bin/proxsave --backup"}, nil)
-
-	seedSchedulerTimeForExistingConfig(context.Background(), installer.ExistingConfigEdit, cfg, nil)
-
-	content, err := safefs.ReadFileUnderRoot(cfg) // what the Edit branch does next
-	if err != nil {
-		t.Fatalf("read existing configuration: %v", err)
-	}
-	// This is the exact value the TUI's cronFieldDefault reads for the "Run at"
-	// field (its own fallback-to-DefaultTime behaviour is pinned by
-	// internal/ui/flows/install/cron_field_default_test.go).
-	if got := installer.DeriveInstallWizardPrefill(string(content)).SchedulerTime; got != "21:00" {
-		t.Fatalf("wizard prefill SchedulerTime = %q, want 21:00", got)
 	}
 }
 

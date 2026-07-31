@@ -82,6 +82,9 @@ type schedulerTimeSeed struct {
 // the callers without touching a real crontab (mirrors migrateLegacyCronEntriesFn).
 var seedSchedulerTimeFromCrontabFn = seedSchedulerTimeFromCrontab
 
+// deriveSchedulerTimeFromCrontabFn is the read-only twin of the seam above.
+var deriveSchedulerTimeFromCrontabFn = deriveSchedulerTimeFromCrontab
+
 // seedSchedulerTimeFromCrontab records the time the host ACTUALLY runs its backup
 // at into SCHEDULER_TIME, derived from the proxsave cron line, so the daemon that
 // replaces cron - and the cron line a (re)install rewrites from the config -
@@ -100,6 +103,22 @@ var seedSchedulerTimeFromCrontabFn = seedSchedulerTimeFromCrontab
 // schedule the daemon cannot express leaves the file untouched (DefaultTime keeps
 // applying).
 func seedSchedulerTimeFromCrontab(ctx context.Context, configPath string) schedulerTimeSeed {
+	seed := deriveSchedulerTimeFromCrontab(ctx, configPath)
+	if seed.Time == "" {
+		return seed
+	}
+	if err := setBackupEnvKeys(configPath, map[string]string{"SCHEDULER_TIME": seed.Time}); err != nil {
+		return schedulerTimeSeed{Note: fmt.Sprintf("Failed to record the existing cron run time %s as SCHEDULER_TIME: %v", seed.Time, err)}
+	}
+	return seed
+}
+
+// deriveSchedulerTimeFromCrontab is seedSchedulerTimeFromCrontab without the write.
+// It exists because the install wizard must NOT touch backup.env before the operator
+// has committed: on the Edit path the wizard rewrites the whole file at the end from
+// its in-memory template, so the adopted time only has to reach that template, and an
+// install cancelled halfway then leaves the host byte-identical.
+func deriveSchedulerTimeFromCrontab(ctx context.Context, configPath string) schedulerTimeSeed {
 	configPath = strings.TrimSpace(configPath)
 	if configPath == "" {
 		return schedulerTimeSeed{}
@@ -123,9 +142,6 @@ func seedSchedulerTimeFromCrontab(ctx context.Context, configPath string) schedu
 				cronutil.DefaultTime)}
 		}
 		return schedulerTimeSeed{}
-	}
-	if err := setBackupEnvKeys(configPath, map[string]string{"SCHEDULER_TIME": hhmm}); err != nil {
-		return schedulerTimeSeed{Note: fmt.Sprintf("Failed to record the existing cron run time %s as SCHEDULER_TIME: %v", hhmm, err)}
 	}
 	return schedulerTimeSeed{Time: hhmm, Note: fmt.Sprintf(
 		"SCHEDULER_TIME was not set: adopted %s from the existing proxsave cron entry so the daily run time does not change.", hhmm)}
@@ -153,28 +169,29 @@ func schedulerTimeFromCronLines(lines []string) (string, bool) {
 	return found, found != ""
 }
 
-// seedSchedulerTimeForExistingConfig is the TUI install's seeding gate, the twin
-// of the SkipConfigWizard||FromExistingFile condition in prepareBaseTemplate.
-//
-// The seeding PERSISTS SCHEDULER_TIME, so it may only run once the operator has
-// committed to the existing backup.env: Keep existing (the file survives as-is)
-// and Edit existing (it becomes the wizard's base). Cancel must leave the host
-// byte-identical, and Overwrite is about to replace the file, so an adoption note
-// there would describe a value nobody will ever use.
-//
-// The note goes to the bootstrap record only: console prints are quiet for the
-// session lifetime, so they cannot corrupt the alternate screen.
-func seedSchedulerTimeForExistingConfig(ctx context.Context, action installer.ExistingConfigAction, configPath string, bootstrap *logging.BootstrapLogger) schedulerTimeSeed {
-	switch action {
-	case installer.ExistingConfigKeepContinue, installer.ExistingConfigEdit:
-	default:
+// deriveSchedulerTimeForExistingConfig is the read-only twin used by the TUI before
+// the wizard runs: same gate, no write to backup.env.
+func deriveSchedulerTimeForExistingConfig(ctx context.Context, action installer.ExistingConfigAction, configPath string, bootstrap *logging.BootstrapLogger) schedulerTimeSeed {
+	if !existingConfigAdoptsCronTime(action) {
 		return schedulerTimeSeed{}
 	}
-	seed := seedSchedulerTimeFromCrontabFn(ctx, configPath)
+	seed := deriveSchedulerTimeFromCrontabFn(ctx, configPath)
 	if seed.Note != "" {
 		logBootstrapInfo(bootstrap, "%s", seed.Note)
 	}
 	return seed
+}
+
+// existingConfigAdoptsCronTime reports whether this answer commits to the existing
+// backup.env. Cancel must leave the host untouched, and Overwrite is about to replace
+// the file, so an adoption note there would describe a value nobody will use.
+func existingConfigAdoptsCronTime(action installer.ExistingConfigAction) bool {
+	switch action {
+	case installer.ExistingConfigKeepContinue, installer.ExistingConfigEdit:
+		return true
+	default:
+		return false
+	}
 }
 
 // hasProxsaveCronLine reports whether the crontab schedules proxsave at all (used
