@@ -57,7 +57,7 @@ func TestCloudStorageApplyRetention_CountsBackupWhenOnlySidecarDeleteFails(t *te
 			{name: "rclone", args: []string{"lsl", "remote:", "--max-depth", "1"}, out: recountOutput},
 		},
 	}
-	cs.execCommand = queue.exec
+	cs.execCommand = answerManifestCat(queue, "node")
 
 	deleted, err := cs.ApplyRetention(context.Background(), RetentionConfig{Policy: "simple", MaxBackups: 2})
 	if err != nil {

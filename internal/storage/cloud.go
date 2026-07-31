@@ -123,7 +123,12 @@ func validateRcloneArgs(args []string) error {
 		return fmt.Errorf("missing rclone subcommand")
 	}
 	switch args[0] {
-	case "copyto", "delete", "deletefile", "hashsum", "ls", "lsf", "lsl", "mkdir", "touch":
+	// "cat" is read-only and is here for retention's manifest attribution
+	// (remoteManifestHostname): it reads an archive's sidecar to learn which host
+	// owns the backup before retention may delete it. It cannot create, overwrite or
+	// remove anything, and the path it receives is built by remotePathFor, which
+	// path.Clean's the name and joins it under the configured prefix.
+	case "cat", "copyto", "delete", "deletefile", "hashsum", "ls", "lsf", "lsl", "mkdir", "touch":
 	default:
 		return fmt.Errorf("rclone subcommand not allowed: %s", args[0])
 	}

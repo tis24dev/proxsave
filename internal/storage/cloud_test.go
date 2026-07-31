@@ -62,6 +62,22 @@ func newCloudStorageForTest(cfg *config.Config) *CloudStorage {
 	return cs
 }
 
+// answerManifestCat wraps a strict commandQueue for tests that exercise retention
+// ACCOUNTING rather than attribution. Retention resolves each archive's owner first
+// (one `rclone cat` per archive), which is not what those tests are pinning, so the
+// cat calls are answered here with a manifest naming the fixture's host and never
+// reach the queue. Everything else is forwarded unchanged, so the delete assertions
+// keep their exact-argument matching.
+func answerManifestCat(queue *commandQueue, hostname string) func(context.Context, string, ...string) ([]byte, error) {
+	manifest := []byte(`{"hostname":"` + hostname + `"}`)
+	return func(ctx context.Context, name string, args ...string) ([]byte, error) {
+		if len(args) > 0 && args[0] == "cat" {
+			return manifest, nil
+		}
+		return queue.exec(ctx, name, args...)
+	}
+}
+
 func writeTestFile(t *testing.T, path, data string) {
 	t.Helper()
 	if err := os.WriteFile(path, []byte(data), 0o640); err != nil {
@@ -657,7 +673,7 @@ func TestCloudStorageApplyRetentionDeletesOldest(t *testing.T) {
 			{name: "rclone", args: []string{"lsl", "remote:", "--max-depth", "1"}, out: recountOutput},
 		},
 	}
-	cs.execCommand = queue.exec
+	cs.execCommand = answerManifestCat(queue, "node")
 
 	retentionCfg := RetentionConfig{Policy: "simple", MaxBackups: 2}
 	deleted, err := cs.ApplyRetention(context.Background(), retentionCfg)
