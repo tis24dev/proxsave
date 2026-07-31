@@ -61,7 +61,7 @@ func (w *restoreUIWorkflowRun) run() error {
 		return err
 	}
 	if fallbackToFullRestore {
-		return runFullRestoreWithUI(w.ctx, w.ui, w.candidate, w.prepared, w.destRoot, w.logger, w.cfg.DryRun)
+		return w.runFullRestore()
 	}
 	return w.runSelectiveRestore()
 }
