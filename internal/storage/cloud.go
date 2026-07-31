@@ -79,6 +79,9 @@ type CloudStorage struct {
 	remoteFiles    map[string]struct{}
 	logPathMu      sync.Mutex
 	logPathMissing bool
+	// hostname is this machine's name, resolved once at construction: retention
+	// only prunes backups this host owns.
+	hostname string
 }
 
 func (c *CloudStorage) remoteLabel() string {
@@ -238,6 +241,7 @@ func NewCloudStorage(cfg *config.Config, logger *logging.Logger) (*CloudStorage,
 	return &CloudStorage{
 		config:         cfg,
 		logger:         logger,
+		hostname:       resolveRetentionHostname(),
 		remote:         remoteName,
 		remotePrefix:   combinedPrefix,
 		uploadMode:     mode,
@@ -1410,9 +1414,20 @@ func (c *CloudStorage) List(ctx context.Context) (backups []*types.BackupMetadat
 	ctx, cancel := c.boundManagementCtx(ctx)
 	defer cancel()
 
-	// List files in remote
+	// List files in remote, one level only. Uploads always write at depth 0 under
+	// the configured prefix, so nothing of ours lives deeper, while a remote shared
+	// with other ProxSave hosts has THEIR prefixes as subdirectories. Without the
+	// cap, `lsl` recurses and those foreign archives enter this host's backup set -
+	// where retention counts them toward the keep limit and deletes them as the
+	// "oldest", irreversibly (the shipped RCLONE_FLAGS pass --drive-use-trash=false)
+	// and with only a Debug line naming the file.
+	//
+	// This is the same boundary the local and secondary backends already have for
+	// free: both list with filepath.Glob, whose `*` never crosses a separator, so
+	// they only ever see their own directory. The connectivity probes above already
+	// pass --max-depth 1 for the same reason.
 	args := c.buildRcloneArgs("lsl")
-	args = append(args, c.remoteBase())
+	args = append(args, c.remoteBase(), "--max-depth", "1")
 
 	logging.DebugStep(c.logger, "cloud list", "running rclone lsl")
 	output, err := c.exec(ctx, args[0], args[1:]...)
@@ -1846,6 +1861,12 @@ func (c *CloudStorage) ApplyRetention(ctx context.Context, config RetentionConfi
 	}
 
 	c.logger.Debug("Cloud storage: current backups detected: %d", len(backups))
+
+	// Attribute each candidate to its owning host (one manifest read per archive)
+	// and drop everything this host does not own, BEFORE anything is counted toward
+	// the keep limit or selected for deletion.
+	c.resolveRetentionOwners(ctx, backups)
+	backups = applyRetentionHostScope("Cloud storage", c.hostname, backups, c.logger)
 
 	if len(backups) == 0 {
 		c.logger.Debug("Cloud storage: no backups to apply retention")

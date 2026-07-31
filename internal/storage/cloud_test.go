@@ -465,7 +465,7 @@ func TestCloudStorageListParsesBackups(t *testing.T) {
 		queue: []queuedResponse{
 			{
 				name: "rclone",
-				args: []string{"lsl", "remote:"},
+				args: []string{"lsl", "remote:", "--max-depth", "1"},
 				out: strings.TrimSpace(`
 99999 2024-11-12 12:00:00 host-backup-20241112.tar.zst
 12000 2024-11-10 08:00:00 proxmox-backup-legacy.tar.gz
@@ -502,7 +502,7 @@ func TestCloudStorageListSkipsManifestSidecar(t *testing.T) {
 		queue: []queuedResponse{
 			{
 				name: "rclone",
-				args: []string{"lsl", "remote:"},
+				args: []string{"lsl", "remote:", "--max-depth", "1"},
 				out: strings.TrimSpace(`
 99999 2024-11-12 12:00:00 host-backup-20241112.tar.zst
 120 2024-11-12 12:00:00 host-backup-20241112.tar.zst.sha256
@@ -542,7 +542,7 @@ func TestCloudStorageDeleteRemovesManifestSidecar(t *testing.T) {
 	queue := &commandQueue{
 		t: t,
 		queue: []queuedResponse{
-			{name: "rclone", args: []string{"lsl", "remote:"}, out: listOutput},
+			{name: "rclone", args: []string{"lsl", "remote:", "--max-depth", "1"}, out: listOutput},
 			{name: "rclone", args: []string{"deletefile", "remote:host-backup-20250101-010101.tar.zst"}},
 			{name: "rclone", args: []string{"deletefile", "remote:host-backup-20250101-010101.tar.zst.sha256"}},
 			{name: "rclone", args: []string{"deletefile", "remote:host-backup-20250101-010101.tar.zst.manifest.json"}},
@@ -593,7 +593,7 @@ func TestCloudStorageDeleteSkipsMissingBundleCandidates(t *testing.T) {
 	queue := &commandQueue{
 		t: t,
 		queue: []queuedResponse{
-			{name: "rclone", args: []string{"lsl", "remote:"}, out: listOutput},
+			{name: "rclone", args: []string{"lsl", "remote:", "--max-depth", "1"}, out: listOutput},
 			{name: "rclone", args: []string{"deletefile", "remote:backup/host-backup-20250101-010101.tar.xz"}},
 			{name: "rclone", args: []string{"deletefile", "remote:backup/host-backup-20250101-010101.tar.xz.sha256"}},
 			{name: "rclone", args: []string{"deletefile", "remote:backup/host-backup-20250101-010101.tar.xz.metadata"}},
@@ -627,32 +627,34 @@ func TestCloudStorageApplyRetentionDeletesOldest(t *testing.T) {
 		BundleAssociatedFiles: false,
 	}
 	cs := newCloudStorageForTest(cfg)
+	// Retention only prunes backups this host owns; the fixture is host "node".
+	cs.hostname = "node"
 	cs.sleep = func(time.Duration) {}
 
 	// Each backup carries a .sha256 completion sidecar so List marks it Verified;
 	// retention only acts on verified entries.
 	listOutput := strings.TrimSpace(`
-100 2024-11-12 10:00:00 gamma-backup-3.tar.zst
-120 2024-11-12 10:00:00 gamma-backup-3.tar.zst.sha256
-100 2024-11-11 10:00:00 beta-backup-2.tar.zst
-120 2024-11-11 10:00:00 beta-backup-2.tar.zst.sha256
-100 2024-11-10 10:00:00 alpha-backup-1.tar.zst
-120 2024-11-10 10:00:00 alpha-backup-1.tar.zst.sha256
+100 2024-11-12 10:00:00 node-backup-20241112-100000.tar.zst
+120 2024-11-12 10:00:00 node-backup-20241112-100000.tar.zst.sha256
+100 2024-11-11 10:00:00 node-backup-20241111-100000.tar.zst
+120 2024-11-11 10:00:00 node-backup-20241111-100000.tar.zst.sha256
+100 2024-11-10 10:00:00 node-backup-20241110-100000.tar.zst
+120 2024-11-10 10:00:00 node-backup-20241110-100000.tar.zst.sha256
 `)
 	recountOutput := strings.TrimSpace(`
-100 2024-11-12 10:00:00 gamma-backup-3.tar.zst
-100 2024-11-11 10:00:00 beta-backup-2.tar.zst
+100 2024-11-12 10:00:00 node-backup-20241112-100000.tar.zst
+100 2024-11-11 10:00:00 node-backup-20241111-100000.tar.zst
 `)
 
 	queue := &commandQueue{
 		t: t,
 		queue: []queuedResponse{
-			{name: "rclone", args: []string{"lsl", "remote:"}, out: listOutput},
-			{name: "rclone", args: []string{"deletefile", "remote:alpha-backup-1.tar.zst"}},
-			{name: "rclone", args: []string{"deletefile", "remote:alpha-backup-1.tar.zst.sha256"}},
-			{name: "rclone", args: []string{"deletefile", "remote:alpha-backup-1.tar.zst.metadata"}},
-			{name: "rclone", args: []string{"deletefile", "remote:alpha-backup-1.tar.zst.metadata.sha256"}},
-			{name: "rclone", args: []string{"lsl", "remote:"}, out: recountOutput},
+			{name: "rclone", args: []string{"lsl", "remote:", "--max-depth", "1"}, out: listOutput},
+			{name: "rclone", args: []string{"deletefile", "remote:node-backup-20241110-100000.tar.zst"}},
+			{name: "rclone", args: []string{"deletefile", "remote:node-backup-20241110-100000.tar.zst.sha256"}},
+			{name: "rclone", args: []string{"deletefile", "remote:node-backup-20241110-100000.tar.zst.metadata"}},
+			{name: "rclone", args: []string{"deletefile", "remote:node-backup-20241110-100000.tar.zst.metadata.sha256"}},
+			{name: "rclone", args: []string{"lsl", "remote:", "--max-depth", "1"}, out: recountOutput},
 		},
 	}
 	cs.execCommand = queue.exec
@@ -694,7 +696,7 @@ func TestCloudStorageStoreUploadsWithRemotePrefix(t *testing.T) {
 			{name: "rclone", args: []string{"copyto", backupFile + ".sha256", "remote:tenants/a/pbs1-backup.tar.zst.sha256"}},
 			{name: "rclone", args: []string{"copyto", backupFile + ".metadata", "remote:tenants/a/pbs1-backup.tar.zst.metadata"}},
 			{name: "rclone", args: []string{"copyto", backupFile + ".metadata.sha256", "remote:tenants/a/pbs1-backup.tar.zst.metadata.sha256"}},
-			{name: "rclone", args: []string{"lsl", "remote:tenants/a"}, out: "7 2025-11-13 10:00:00 pbs1-backup.tar.zst"},
+			{name: "rclone", args: []string{"lsl", "remote:tenants/a", "--max-depth", "1"}, out: "7 2025-11-13 10:00:00 pbs1-backup.tar.zst"},
 		},
 	}
 	cs.execCommand = queue.exec
@@ -739,7 +741,7 @@ func TestCloudStorageStoreUploadsManifest(t *testing.T) {
 			{name: "rclone", args: []string{"copyto", backupFile + ".manifest.json", "remote:tenants/a/pbs1-backup.tar.zst.manifest.json"}},
 			{name: "rclone", args: []string{"copyto", backupFile + ".metadata", "remote:tenants/a/pbs1-backup.tar.zst.metadata"}},
 			{name: "rclone", args: []string{"copyto", backupFile + ".metadata.sha256", "remote:tenants/a/pbs1-backup.tar.zst.metadata.sha256"}},
-			{name: "rclone", args: []string{"lsl", "remote:tenants/a"}, out: "7 2025-11-13 10:00:00 pbs1-backup.tar.zst"},
+			{name: "rclone", args: []string{"lsl", "remote:tenants/a", "--max-depth", "1"}, out: "7 2025-11-13 10:00:00 pbs1-backup.tar.zst"},
 		},
 	}
 	cs.execCommand = queue.exec
@@ -775,7 +777,7 @@ func TestCloudStorageStorePrefersBundleWhenPresent(t *testing.T) {
 		queue: []queuedResponse{
 			{name: "rclone", args: []string{"copyto", bundleFile, remoteFile}},
 			{name: "rclone", args: []string{"lsl", remoteFile}, out: "6 2025-11-13 10:00:00 pbs1-backup.tar.zst.bundle.tar"},
-			{name: "rclone", args: []string{"lsl", "remote:"}, out: "6 2025-11-13 10:00:00 pbs1-backup.tar.zst.bundle.tar"},
+			{name: "rclone", args: []string{"lsl", "remote:", "--max-depth", "1"}, out: "6 2025-11-13 10:00:00 pbs1-backup.tar.zst.bundle.tar"},
 		},
 	}
 	cs.execCommand = queue.exec
@@ -810,7 +812,7 @@ func TestCloudStorageStoreBundleInputSkipsDoubleBundleUpload(t *testing.T) {
 		queue: []queuedResponse{
 			{name: "rclone", args: []string{"copyto", bundleFile, remoteFile}},
 			{name: "rclone", args: []string{"lsl", remoteFile}, out: "6 2025-11-13 10:00:00 pbs1-backup.tar.zst.bundle.tar"},
-			{name: "rclone", args: []string{"lsl", "remote:"}, out: "6 2025-11-13 10:00:00 pbs1-backup.tar.zst.bundle.tar"},
+			{name: "rclone", args: []string{"lsl", "remote:", "--max-depth", "1"}, out: "6 2025-11-13 10:00:00 pbs1-backup.tar.zst.bundle.tar"},
 		},
 	}
 	cs.execCommand = queue.exec
@@ -1316,7 +1318,7 @@ func TestCloudStorageGetStatsSummarizesList(t *testing.T) {
 		queue: []queuedResponse{
 			{
 				name: "rclone",
-				args: []string{"lsl", "remote:"},
+				args: []string{"lsl", "remote:", "--max-depth", "1"},
 				out: strings.TrimSpace(`
 10 2025-06-01 10:00:00 host-backup-20250601.tar.zst
 5 2025-05-30 08:00:00 host-backup-20250530.tar.zst

@@ -22,8 +22,11 @@ import (
 
 // LocalStorage implements the Storage interface for local filesystem storage
 type LocalStorage struct {
-	config     *config.Config
-	logger     *logging.Logger
+	config *config.Config
+	logger *logging.Logger
+	// hostname is this machine's name, resolved once at construction: retention
+	// only prunes backups this host owns.
+	hostname   string
 	basePath   string
 	fsDetector *FilesystemDetector
 	fsInfo     *FilesystemInfo
@@ -35,6 +38,7 @@ func NewLocalStorage(cfg *config.Config, logger *logging.Logger) (*LocalStorage,
 	return &LocalStorage{
 		config:     cfg,
 		logger:     logger,
+		hostname:   resolveRetentionHostname(),
 		basePath:   cfg.BackupPath,
 		fsDetector: NewFilesystemDetector(logger, WithIOTimeout(fsIoTimeout(cfg))),
 	}, nil
@@ -274,6 +278,7 @@ func (l *LocalStorage) loadMetadata(ctx context.Context, backupFile string) (*ty
 		Timestamp:   manifest.CreatedAt,
 		Size:        manifest.ArchiveSize,
 		Checksum:    manifest.SHA256,
+		Hostname:    manifest.Hostname,
 		ProxmoxType: types.ProxmoxType(manifest.ProxmoxType),
 		Compression: types.CompressionType(manifest.CompressionType),
 		Version:     manifest.ScriptVersion,
@@ -331,6 +336,7 @@ func (l *LocalStorage) loadMetadataFromBundle(bundlePath string) (*types.BackupM
 			Timestamp:   manifest.CreatedAt,
 			Size:        manifest.ArchiveSize,
 			Checksum:    manifest.SHA256,
+			Hostname:    manifest.Hostname,
 			ProxmoxType: types.ProxmoxType(manifest.ProxmoxType),
 			Compression: types.CompressionType(manifest.CompressionType),
 			Version:     manifest.ScriptVersion,
@@ -484,6 +490,10 @@ func (l *LocalStorage) ApplyRetention(ctx context.Context, config RetentionConfi
 			IsCritical: true,
 		}
 	}
+
+	// Drop anything this host does not own before counting or deleting: the
+	// "*-backup-*" glob that produced this list matches every hostname.
+	backups = applyRetentionHostScope("Local storage", l.hostname, backups, l.logger)
 
 	if len(backups) == 0 {
 		l.logger.Debug("Local storage: no backups to apply retention")

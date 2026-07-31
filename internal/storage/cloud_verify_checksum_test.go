@@ -330,7 +330,7 @@ func TestCloudStorageStoreRunsChecksumOnPrimary(t *testing.T) {
 			{name: "rclone", args: []string{"copyto", backupFile + ".sha256", "remote:tenants/a/pbs1-backup.tar.zst.sha256"}},
 			{name: "rclone", args: []string{"copyto", backupFile + ".metadata", "remote:tenants/a/pbs1-backup.tar.zst.metadata"}},
 			{name: "rclone", args: []string{"copyto", backupFile + ".metadata.sha256", "remote:tenants/a/pbs1-backup.tar.zst.metadata.sha256"}},
-			{name: "rclone", args: []string{"lsl", "remote:tenants/a"}, out: "7 2025-11-13 10:00:00 pbs1-backup.tar.zst"},
+			{name: "rclone", args: []string{"lsl", "remote:tenants/a", "--max-depth", "1"}, out: "7 2025-11-13 10:00:00 pbs1-backup.tar.zst"},
 		},
 	}
 	cs.execCommand = queue.exec

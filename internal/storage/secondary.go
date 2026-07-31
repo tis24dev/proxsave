@@ -21,8 +21,11 @@ import (
 // This is typically a network mount (NFS/CIFS) or another local path
 // All errors from secondary storage are NON-FATAL - they log warnings but don't abort the backup
 type SecondaryStorage struct {
-	config     *config.Config
-	logger     *logging.Logger
+	config *config.Config
+	logger *logging.Logger
+	// hostname is this machine's name, resolved once at construction: retention
+	// only prunes backups this host owns.
+	hostname   string
 	basePath   string
 	fsDetector *FilesystemDetector
 	fsInfo     *FilesystemInfo
@@ -34,6 +37,7 @@ func NewSecondaryStorage(cfg *config.Config, logger *logging.Logger) (*Secondary
 	return &SecondaryStorage{
 		config:     cfg,
 		logger:     logger,
+		hostname:   resolveRetentionHostname(),
 		basePath:   cfg.SecondaryPath,
 		fsDetector: NewFilesystemDetector(logger, WithIOTimeout(fsIoTimeout(cfg))),
 	}, nil
@@ -423,7 +427,13 @@ func (s *SecondaryStorage) List(ctx context.Context) (backups []*types.BackupMet
 			BackupFile: match,
 			Timestamp:  stat.ModTime(),
 			Size:       stat.Size(),
-			Verified:   backupHasCompletionSidecar(ctx, match, timeout),
+			// Attribute the backup to the host recorded in its manifest. The
+			// secondary location is routinely a NAS mount shared by several hosts
+			// (the setup the header of backup.env documents), so retention here must
+			// be able to tell whose backup this is; the "*-backup-*" glob above
+			// cannot, because its wildcard matches every hostname.
+			Hostname: manifestHostnameFromLocalArchive(ctx, match, timeout),
+			Verified: backupHasCompletionSidecar(ctx, match, timeout),
 		})
 	}
 
@@ -571,6 +581,11 @@ func (s *SecondaryStorage) ApplyRetention(ctx context.Context, config RetentionC
 			Recoverable: true,
 		}
 	}
+
+	// Drop anything this host does not own before counting or deleting. This matters
+	// most here: a shared NAS mount is the documented secondary layout, so several
+	// hosts routinely write into the same directory.
+	backups = applyRetentionHostScope("Secondary storage", s.hostname, backups, s.logger)
 
 	if len(backups) == 0 {
 		s.logger.Debug("Secondary storage: no backups to apply retention")

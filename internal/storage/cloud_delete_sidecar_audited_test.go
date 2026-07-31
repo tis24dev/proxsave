@@ -25,34 +25,36 @@ func TestCloudStorageApplyRetention_CountsBackupWhenOnlySidecarDeleteFails(t *te
 		BundleAssociatedFiles: false,
 	}
 	cs := newCloudStorageForTest(cfg)
+	// Retention only prunes backups this host owns; the fixture is host "node".
+	cs.hostname = "node"
 	cs.sleep = func(time.Duration) {}
 
 	// Each backup carries a .sha256 completion sidecar so List marks it Verified;
 	// retention only acts on verified entries.
 	listOutput := strings.TrimSpace(`
-100 2024-11-12 10:00:00 gamma-backup-3.tar.zst
-120 2024-11-12 10:00:00 gamma-backup-3.tar.zst.sha256
-100 2024-11-11 10:00:00 beta-backup-2.tar.zst
-120 2024-11-11 10:00:00 beta-backup-2.tar.zst.sha256
-100 2024-11-10 10:00:00 alpha-backup-1.tar.zst
-120 2024-11-10 10:00:00 alpha-backup-1.tar.zst.sha256
+100 2024-11-12 10:00:00 node-backup-20241112-100000.tar.zst
+120 2024-11-12 10:00:00 node-backup-20241112-100000.tar.zst.sha256
+100 2024-11-11 10:00:00 node-backup-20241111-100000.tar.zst
+120 2024-11-11 10:00:00 node-backup-20241111-100000.tar.zst.sha256
+100 2024-11-10 10:00:00 node-backup-20241110-100000.tar.zst
+120 2024-11-10 10:00:00 node-backup-20241110-100000.tar.zst.sha256
 `)
 	recountOutput := strings.TrimSpace(`
-100 2024-11-12 10:00:00 gamma-backup-3.tar.zst
-100 2024-11-11 10:00:00 beta-backup-2.tar.zst
+100 2024-11-12 10:00:00 node-backup-20241112-100000.tar.zst
+100 2024-11-11 10:00:00 node-backup-20241111-100000.tar.zst
 `)
 
 	queue := &commandQueue{
 		t: t,
 		queue: []queuedResponse{
-			{name: "rclone", args: []string{"lsl", "remote:"}, out: listOutput},
+			{name: "rclone", args: []string{"lsl", "remote:", "--max-depth", "1"}, out: listOutput},
 			// The data archive deletes fine...
-			{name: "rclone", args: []string{"deletefile", "remote:alpha-backup-1.tar.zst"}},
+			{name: "rclone", args: []string{"deletefile", "remote:node-backup-20241110-100000.tar.zst"}},
 			// ...but a sidecar deletion fails with a real (non-"not found") error.
-			{name: "rclone", args: []string{"deletefile", "remote:alpha-backup-1.tar.zst.sha256"}, out: "permission denied", err: errors.New("exit status 1")},
-			{name: "rclone", args: []string{"deletefile", "remote:alpha-backup-1.tar.zst.metadata"}},
-			{name: "rclone", args: []string{"deletefile", "remote:alpha-backup-1.tar.zst.metadata.sha256"}},
-			{name: "rclone", args: []string{"lsl", "remote:"}, out: recountOutput},
+			{name: "rclone", args: []string{"deletefile", "remote:node-backup-20241110-100000.tar.zst.sha256"}, out: "permission denied", err: errors.New("exit status 1")},
+			{name: "rclone", args: []string{"deletefile", "remote:node-backup-20241110-100000.tar.zst.metadata"}},
+			{name: "rclone", args: []string{"deletefile", "remote:node-backup-20241110-100000.tar.zst.metadata.sha256"}},
+			{name: "rclone", args: []string{"lsl", "remote:", "--max-depth", "1"}, out: recountOutput},
 		},
 	}
 	cs.execCommand = queue.exec
