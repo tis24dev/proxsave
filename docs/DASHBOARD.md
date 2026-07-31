@@ -168,7 +168,7 @@ If Telegram is not in centralized mode on this host, the screen reads `Status: �
 
 ### Healthchecks
 
-Verifies backup monitoring and, in centralized mode, boxes the way into your monitoring portal. Until you set a portal password that is a single-use link:
+Verifies backup monitoring and, in centralized mode, boxes the way into your monitoring portal. Until you set a portal password, the box shows a single-use link:
 
 ```
 ╭──────────────────────────────────────────────╮

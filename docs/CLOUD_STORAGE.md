@@ -433,7 +433,7 @@ RETENTION_YEARLY=3
 | `CLOUD_BATCH_SIZE` | `20` | Files per batch (deletion) |
 | `CLOUD_BATCH_PAUSE` | `1` | Seconds between batches |
 | `MAX_CLOUD_BACKUPS` | `30`, template ships `15` | Simple retention (ignored if GFS enabled) |
-| `RCLONE_FLAGS` | _(empty)_ | Extra global rclone flags, split on whitespace and injected verbatim into **every** rclone command (right after the subcommand). No shell quoting or validation, so keep each flag a single token (e.g. `--fast-list --checkers 8`). |
+| `RCLONE_FLAGS` | _(empty)_ | Extra global rclone flags, split on whitespace and injected verbatim into **every backup-path** rclone command (right after the subcommand). The restore and decrypt cloud scan builds its rclone calls separately and does **not** receive them — see [How ProxSave invokes rclone](#how-proxsave-invokes-rclone). No shell quoting or validation, so keep each flag a single token (e.g. `--fast-list --checkers 8`). |
 | `BUNDLE_ASSOCIATED_FILES` | `true` | Bundle the archive and its sidecars into one `.bundle.tar` before upload (the default cloud layout). Set `false` to upload the raw archive plus separate sidecars. See [Cloud layout](#cloud-layout-bundle-vs-raw). |
 
 **Legacy env-var aliases.** For backward compatibility ProxSave also accepts these

@@ -1703,17 +1703,22 @@ mv /var/lib/pve-cluster /var/lib/pve-cluster.broken
 #    basename-only names, so it has no ./var/... paths of its own: unwrap it first.
 mkdir -p /tmp/psrecover /var/lib/pve-cluster
 tar -xf /path/to/backup.bundle.tar -C /tmp/psrecover
-ls /tmp/psrecover        # <host>-backup-<ts>.tar.xz (plus .age if encrypted), .metadata, .sha256
+ls /tmp/psrecover        # <host>-backup-<ts>.<ext> (plus .age if encrypted), .metadata, .sha256
+
+#    <ext> follows the compression actually used, not the configured one: .tar.xz (default),
+#    .tar.gz (gzip/pigz, and the fallback whenever the requested tool is missing), .tar.bz2,
+#    .tar.lzma, .tar.zst, or plain .tar for COMPRESSION_TYPE=none. Take the name from ls:
+ARCHIVE=$(ls /tmp/psrecover/*-backup-* | grep -Ev '\.(metadata|sha256)$' | head -1)
 
 #    If the archive ends in .age, decrypt it first:
 #      proxsave --decrypt
 #    or, with the age CLI:
-#      age -d -i /path/to/key.txt -o /tmp/psrecover/archive.tar.xz /tmp/psrecover/archive.tar.xz.age
+#      age -d -i /path/to/key.txt -o "${ARCHIVE%.age}" "$ARCHIVE" && ARCHIVE="${ARCHIVE%.age}"
 
-#    Then pull the cluster database out of the inner archive (xz by default):
+#    Then pull the cluster database out of the inner archive.
 #    Entries are stored with a leading ./ so there are four components to strip, and
 #    -xf lets tar auto-detect the compression whatever COMPRESSION_TYPE was.
-tar -xf /tmp/psrecover/<host>-backup-<ts>.tar.xz --strip-components=4 \
+tar -xf "$ARCHIVE" --strip-components=4 \
     -C /var/lib/pve-cluster \
     ./var/lib/pve-cluster/
 

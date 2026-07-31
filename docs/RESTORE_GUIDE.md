@@ -786,7 +786,7 @@ With RECOVERY selected:
 2. **Automatic service management** - PVE services are stopped, database restored, services restarted
 3. **No isolation required** - Single node has no split-brain risk
 
-```
+```text
 Detected system type: Proxmox Virtual Environment (PVE)
 
 Cluster payload detected. Choose how to restore the cluster database:
@@ -1463,7 +1463,6 @@ Parses `storage.cfg` and applies each storage definition:
 - Applied via: `pvesh create /storage --storage=<id> --type=<type> --<key>=<value> ...`
 - Blocks are keyed on the `<type>: <id>` header (`dir: local`, `nfs: backup`); the older `storage: <id>` form is still accepted
 - There is no existence check and no update path: a storage that already exists makes `pvesh create` fail, and it is counted as a failure rather than updated. Remove or rename the existing definition first if you need it replaced
-- Existing storage with same name will be updated
 
 **Note**: Storage directories are NOT created automatically. Run `pvesm status` to verify, then create missing directories manually.
 

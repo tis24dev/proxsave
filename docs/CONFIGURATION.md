@@ -364,7 +364,7 @@ LOG_PATH=${BASE_DIR}/log
 
 ### Legacy key names
 
-Five keys have a legacy alias from the Bash-era configuration, and **the legacy name wins when both are present**:
+Seven keys have a legacy alias from the Bash-era configuration, and **the legacy name wins when both are present**:
 
 | Legacy name (wins) | Canonical name |
 |---|---|

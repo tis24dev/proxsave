@@ -28,7 +28,7 @@ This guide covers the most common issues encountered when using Proxsave, along 
 **Before troubleshooting**:
 1. Check you're running the latest version: `proxsave --version`
 2. Try dry-run mode first: `proxsave --dry-run --log-level debug`
-3. Review the newest log in `LOG_PATH` (the filename carries the FQDN, so glob the directory rather than guessing): `ls -t /opt/proxsave/log/backup-*.log | head -1`
+3. Review the newest log in `LOG_PATH` (default `/opt/proxsave/log`; use your own directory if `LOG_PATH` or `LOCAL_LOG_PATH` is set in `configs/backup.env`). The filename carries the FQDN, so glob the directory rather than guessing: `ls -t /opt/proxsave/log/backup-*.log | head -1`
 
 ---
 
