@@ -177,8 +177,16 @@ func manifestHostnameFromLocalArchive(ctx context.Context, archivePath string, t
 }
 
 // manifestFromBundle extracts the manifest entry from a bundle tar.
+//
+// The bundle path is built from a directory listing, so it reaches os as a variable.
+// It is opened through safefs.OpenFileUnderRoot, which confines the open to the
+// bundle's own parent directory at the syscall level: gosec G304 is answered by the
+// structure rather than by a suppression, and a final component that is an absolute
+// symlink - or one escaping that directory - is refused instead of followed. Reading
+// the parent directory is already a precondition here, since that is where the
+// listing came from.
 func manifestFromBundle(bundlePath string) (*backup.Manifest, error) {
-	file, err := os.Open(bundlePath)
+	file, err := safefs.OpenFileUnderRoot(bundlePath, os.O_RDONLY, 0)
 	if err != nil {
 		return nil, err
 	}

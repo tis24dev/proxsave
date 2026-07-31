@@ -301,7 +301,11 @@ func (l *LocalStorage) loadMetadata(ctx context.Context, backupFile string) (*ty
 func (l *LocalStorage) loadMetadataFromBundle(bundlePath string) (*types.BackupMetadata, error) {
 	l.logger.Debug("Local storage: loadMetadataFromBundle called for %s", bundlePath)
 
-	file, err := os.Open(bundlePath)
+	// Confined open (same reasoning as manifestFromBundle in backup_owner.go): the
+	// path comes from a directory listing, so it reaches os as a variable. Opening
+	// through the bundle's own parent directory answers gosec G304 structurally and
+	// refuses a final component that is an absolute or escaping symlink.
+	file, err := safefs.OpenFileUnderRoot(bundlePath, os.O_RDONLY, 0)
 	if err != nil {
 		l.logger.Debug("Local storage: failed to open bundle %s: %v", bundlePath, err)
 		return nil, err
