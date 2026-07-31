@@ -153,13 +153,28 @@ func schedulerTimeFromCronLines(lines []string) (string, bool) {
 	return found, found != ""
 }
 
-// seedSchedulerTimeTUI runs the seeding for one TUI install branch and records the
-// note. The note goes to the bootstrap record only: console prints are quiet for
-// the session lifetime, so they cannot corrupt the alternate screen.
-func seedSchedulerTimeTUI(ctx context.Context, configPath string, bootstrap *logging.BootstrapLogger) {
-	if seed := seedSchedulerTimeFromCrontabFn(ctx, configPath); seed.Note != "" {
+// seedSchedulerTimeForExistingConfig is the TUI install's seeding gate, the twin
+// of the SkipConfigWizard||FromExistingFile condition in prepareBaseTemplate.
+//
+// The seeding PERSISTS SCHEDULER_TIME, so it may only run once the operator has
+// committed to the existing backup.env: Keep existing (the file survives as-is)
+// and Edit existing (it becomes the wizard's base). Cancel must leave the host
+// byte-identical, and Overwrite is about to replace the file, so an adoption note
+// there would describe a value nobody will ever use.
+//
+// The note goes to the bootstrap record only: console prints are quiet for the
+// session lifetime, so they cannot corrupt the alternate screen.
+func seedSchedulerTimeForExistingConfig(ctx context.Context, action installer.ExistingConfigAction, configPath string, bootstrap *logging.BootstrapLogger) schedulerTimeSeed {
+	switch action {
+	case installer.ExistingConfigKeepContinue, installer.ExistingConfigEdit:
+	default:
+		return schedulerTimeSeed{}
+	}
+	seed := seedSchedulerTimeFromCrontabFn(ctx, configPath)
+	if seed.Note != "" {
 		logBootstrapInfo(bootstrap, "%s", seed.Note)
 	}
+	return seed
 }
 
 // hasProxsaveCronLine reports whether the crontab schedules proxsave at all (used

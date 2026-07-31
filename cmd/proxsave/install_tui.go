@@ -130,22 +130,23 @@ func runInstallTUI(ctx context.Context, configPath string, bootstrap *logging.Bo
 	var wizardData *installer.InstallWizardData
 	baseTemplate := ""
 
+	// Adopt the run time from the cron line this install is about to rewrite, now
+	// that the operator's answer is known. The gate lives inside the helper (Cancel
+	// and Overwrite never write); the POSITION matters too, and it is here rather
+	// than inside the Edit branch so the seeding always precedes the read into
+	// baseTemplate below - otherwise cronFieldDefault would offer the 02:00 default
+	// for "Run at" instead of the adopted time.
+	seedSchedulerTimeForExistingConfig(ctx, existingAction, configPath, bootstrap)
+
 	switch existingAction {
 	case installer.ExistingConfigCancel:
 		logging.DebugStepBootstrap(bootstrap, "install workflow (tui)", "user cancelled installation")
 		return wrapInstallError(errInteractiveAborted)
 	case installer.ExistingConfigKeepContinue:
 		logging.DebugStepBootstrap(bootstrap, "install workflow (tui)", "using existing configuration and skipping wizard")
-		// Adopt the run time from the cron line this install is about to rewrite,
-		// now that the operator has committed to keeping this file. See the CLI twin
-		// in prepareBaseTemplate for why Cancel and Overwrite are excluded.
-		seedSchedulerTimeTUI(ctx, configPath, bootstrap)
 		skipConfigWizard = true
 	case installer.ExistingConfigEdit:
 		logging.DebugStepBootstrap(bootstrap, "install workflow (tui)", "editing existing configuration")
-		// Seed BEFORE the read below, so baseTemplate carries the adopted time and
-		// cronFieldDefault offers it for "Run at" instead of the 02:00 default.
-		seedSchedulerTimeTUI(ctx, configPath, bootstrap)
 		content, readErr := safefs.ReadFileUnderRoot(configPath)
 		if readErr != nil {
 			return fmt.Errorf("read existing configuration: %w", readErr)
