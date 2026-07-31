@@ -109,7 +109,7 @@ func preparePreRuntimeArgs(ctx context.Context, bootstrap *logging.BootstrapLogg
 	if exitCode, handled := rejectIncompatibleModes(args, bootstrap); handled {
 		return args, exitCode, true
 	}
-	if exitCode, handled := runUpgradeConfigJSONMode(args); handled {
+	if exitCode, handled := runUpgradeConfigJSONMode(ctx, args); handled {
 		return args, exitCode, true
 	}
 	if exitCode, handled := dispatchPreRuntimeModes(ctx, args, bootstrap, toolVersion); handled {

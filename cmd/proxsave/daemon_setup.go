@@ -241,6 +241,9 @@ func installVerifyContext(configPath string) (baseDir string, interval time.Dura
 var (
 	removeDaemonServiceFn      = removeDaemonService
 	migrateLegacyCronEntriesFn = migrateLegacyCronEntries
+	// crontabReadLinesFn lets a test feed a synthetic crontab to the SCHEDULER_TIME
+	// seeding (seedSchedulerTimeFromCrontab) without touching the host's real one.
+	crontabReadLinesFn = crontabReadLines
 )
 
 var (

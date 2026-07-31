@@ -68,6 +68,14 @@ New installs default to the daemon. The install wizard (TUI and `--cli`) asks fo
 
 Enabling the daemon forces `HEALTHCHECK_ENABLED=true` even though its raw config default is `false`, so a retrofitted host gets the dead-man switch.
 
+### The run time is inherited, not reset
+
+`SCHEDULER_TIME` only exists since 0.30; on an older install the crontab line was the sole record of the run time. So before the config merge adds the key — and before the migration deletes that cron line — the existing proxsave cron entry is read and its time is written to `SCHEDULER_TIME`. A host running at 21:00 keeps running at 21:00.
+
+- A `SCHEDULER_TIME` you set yourself always wins; the crontab is only consulted when the key is absent or empty.
+- Only an unambiguous single daily entry is adopted (`MM HH * * *`, or `@daily`/`@midnight`). A sub-daily or multi-time cron entry (`*/15`, lists, ranges) is something the daemon cannot express: it is **not** guessed at, `SCHEDULER_TIME` stays at `02:00`, and the upgrade warns so you can set it yourself.
+- Two proxsave cron lines at different times are equally ambiguous and warn the same way.
+
 ## systemd unit
 
 `proxsave-daemon.service` at `/etc/systemd/system/proxsave-daemon.service`:

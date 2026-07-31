@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"testing"
@@ -75,7 +76,7 @@ func stubUpdateConfig(t *testing.T, plan, apply *config.UpgradeResult) *[]string
 		*calls = append(*calls, "plan")
 		return plan, nil
 	}
-	updateConfigApply = func(string, string) (*config.UpgradeResult, error) {
+	updateConfigApply = func(context.Context, string, string) (*config.UpgradeResult, error) {
 		*calls = append(*calls, "apply")
 		return apply, nil
 	}

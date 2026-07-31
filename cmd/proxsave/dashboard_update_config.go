@@ -12,8 +12,12 @@ import (
 
 // Seams for testing without touching a real config file.
 var (
-	updateConfigPlan  = config.PlanUpgradeConfigFile
-	updateConfigApply = config.UpgradeConfigFileWithBaseDir
+	updateConfigPlan = config.PlanUpgradeConfigFile
+	// updateConfigApply goes through applyConfigUpgrade, not the bare merge: the
+	// dashboard is the third writer that would materialize SCHEDULER_TIME=02:00
+	// while the crontab still holds the operator's real run time, arming the reset
+	// for the next install or daemon migration.
+	updateConfigApply = applyConfigUpgrade
 )
 
 // runDashboardUpdateConfig merges new template keys into the config file from the
@@ -36,7 +40,7 @@ func runDashboardUpdateConfig(ctx context.Context, session *shell.Session, confi
 		},
 		func() (dashboardApplyResult, error) {
 			baseDir, _ := detectedBaseDirOrFallback()
-			result, err := updateConfigApply(configPath, baseDir)
+			result, err := updateConfigApply(ctx, configPath, baseDir)
 			if err != nil {
 				return dashboardApplyResult{}, err
 			}

@@ -83,6 +83,17 @@ func runInstall(ctx context.Context, configPath string, bootstrap *logging.Boots
 	reader := bufio.NewReader(os.Stdin)
 	printInstallBanner(configPath)
 
+	// This install is about to rewrite the proxsave cron line FROM the config
+	// (buildInstallCronSchedule below) and may hand the schedule to the daemon
+	// (reconcileSchedulerAfterInstall). On a host that predates SCHEDULER_TIME the
+	// crontab is the only record of the operator's run time, so adopt it now -
+	// before the wizard reads the config for its "Run at" default (cronTimeDefault)
+	// and before the crontab is rewritten. A config that already carries the key is
+	// left untouched.
+	if seed := seedSchedulerTimeFromCrontabFn(ctx, configPath); seed.Note != "" {
+		logBootstrapInfo(bootstrap, "%s", seed.Note)
+	}
+
 	logging.DebugStepBootstrap(bootstrap, "install workflow (cli)", "running config wizard")
 	configResult, err := runConfigWizardCLI(ctx, reader, configPath, tmpConfigPath, baseDir, bootstrap)
 	if err != nil {
