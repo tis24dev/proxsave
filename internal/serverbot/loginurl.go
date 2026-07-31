@@ -69,6 +69,33 @@ func SanitizePortalLogin(raw string) string {
 	return raw
 }
 
+// TrustedPortalFallback is the ONE place the portal-fallback admission rule lives:
+// the sign-in page and identity are usable only when the server EXPLICITLY confirmed
+// the operator has their own portal password, and each half must clear its own gate.
+//
+// passwordSet is a tri-state on purpose. A nil flag means the server could not tell
+// us - a failed mint is indistinguishable from a password-set account from the
+// outside - and telling an operator to "sign in with the password you set" when they
+// never set one sends them to a page they cannot get past. So nil and false are both
+// refusals, and the caller gets "" for both halves.
+//
+// The gates differ because the two values differ: the URL is navigable, so it must
+// clear the registrable-domain trust check (a foreign sign-in page surfaced to root
+// is a phishing vector); the identity is not navigable and only needs the
+// printable-ASCII gate. They are independent - one failing its gate drops only that
+// half, so a hostile identity never costs the operator the address.
+//
+// Callers must not re-implement any part of this: both producers of the fallback
+// (ClassifyHealthcheckSetupResult for the setup screens, HealthchecksChannel's
+// storePortalFallback for the run epilogue) go through here, so the rule cannot
+// drift between the two surfaces.
+func TrustedPortalFallback(portalURL, portalLogin string, passwordSet *bool, serverAPIHost string) (url, login string) {
+	if passwordSet == nil || !*passwordSet {
+		return "", ""
+	}
+	return TrustedLoginURL(portalURL, serverAPIHost), SanitizePortalLogin(portalLogin)
+}
+
 // sameRegistrableDomain reports whether both URLs resolve to the same registrable domain.
 // Heuristic: the last two dot-labels of the host (port stripped, lowercased). Sufficient
 // for the sole real deployment (*.proxsave.dev): bot.proxsave.dev and hc.proxsave.dev both

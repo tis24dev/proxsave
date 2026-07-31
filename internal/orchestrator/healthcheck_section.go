@@ -143,22 +143,22 @@ func (h *HealthchecksChannel) Notify(ctx context.Context, stats *BackupStats) er
 }
 
 // storePortalFallback records the portal address + sign-in identity the epilogue shows
-// INSTEAD of the magic-link. It writes them ONLY when the server explicitly confirmed
-// password_set: absent means the server could not tell (a failed mint looks the same as a
-// password-set account from the outside), and asserting "sign in with your password" to an
-// operator who never set one would strand them. The URL goes through the same
-// registrable-domain trust gate as the link, so a hostile response cannot point root at a
-// foreign sign-in page; the identity is not navigable and only needs the printable-ASCII
-// gate. Either half failing its gate drops only that half.
+// INSTEAD of the magic-link. The admission rule (explicit password_set, plus the
+// per-half trust/sanitize gates) lives in serverbot.TrustedPortalFallback, shared with
+// ClassifyHealthcheckSetupResult so the two surfaces cannot drift.
+//
+// Each half is stored only when it survives its gate, so a refusal never blanks a
+// value an earlier call already recorded.
 func (h *HealthchecksChannel) storePortalFallback(cfg health.CentralizedConfig, stats *BackupStats) {
-	if stats == nil || cfg.PasswordSet == nil || !*cfg.PasswordSet {
+	if stats == nil {
 		return
 	}
-	if trusted := serverbot.TrustedLoginURL(cfg.PortalURL, defaultServerAPIHost); trusted != "" {
-		stats.HealthcheckPortalURL = trusted
+	portalURL, portalLogin := serverbot.TrustedPortalFallback(cfg.PortalURL, cfg.PortalLogin, cfg.PasswordSet, defaultServerAPIHost)
+	if portalURL != "" {
+		stats.HealthcheckPortalURL = portalURL
 	}
-	if login := serverbot.SanitizePortalLogin(cfg.PortalLogin); login != "" {
-		stats.HealthcheckPortalLogin = login
+	if portalLogin != "" {
+		stats.HealthcheckPortalLogin = portalLogin
 	}
 }
 

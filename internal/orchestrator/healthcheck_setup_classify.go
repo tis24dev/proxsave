@@ -56,14 +56,10 @@ type HealthcheckSetupState struct {
 // latch) stays connectivity-based: the daemon legitimately has not started yet at install.
 func ClassifyHealthcheckSetupResult(res HealthcheckCheckResult) HealthcheckSetupState {
 	st := HealthcheckSetupState{LoginURL: serverbot.TrustedLoginURL(res.LoginURL, defaultServerAPIHost)}
-	// The portal fallback is carried ONLY on an explicit password_set=true. A nil flag
-	// means the server could not confirm the state (the mint failed), and telling an
-	// operator to "sign in with the password you set" when they never set one would send
-	// them to a page they cannot get past.
-	if res.PasswordSet != nil && *res.PasswordSet {
-		st.PortalURL = serverbot.TrustedLoginURL(res.PortalURL, defaultServerAPIHost)
-		st.PortalLogin = serverbot.SanitizePortalLogin(res.PortalLogin)
-	}
+	// The portal fallback's admission rule (explicit password_set, plus the per-half
+	// trust/sanitize gates) lives in serverbot.TrustedPortalFallback, shared with the
+	// run epilogue's storePortalFallback so the two surfaces cannot drift.
+	st.PortalURL, st.PortalLogin = serverbot.TrustedPortalFallback(res.PortalURL, res.PortalLogin, res.PasswordSet, defaultServerAPIHost)
 
 	// 1) Hard provisioning blockers: monitoring cannot operate until fixed -> override.
 	switch {
