@@ -114,16 +114,25 @@ func RunHealthcheckSetup(ctx context.Context, session *shell.Session, baseDir, c
 					}
 					result.LastFatal = st.Fatal
 					result.LastMessage = st.Message
+					// Both blocks are LATCHES: a later Re-check that hits a transport
+					// hiccup returns neither field, takes neither branch, and so must not
+					// blank a block the user is reading.
+					//
+					// They are mutually exclusive per check, and the portal WINS when it
+					// arrives, because the two states are ordered in time: the server
+					// mints a link only while the operator has no password, and reports
+					// password_set only once they do. So a check that returns the portal
+					// is proof the link has been used and is now spent - keeping it
+					// latched would leave the box showing a dead single-use URL for
+					// exactly the operator who followed the instructions. This mirrors
+					// ClassifyHealthcheckSetupResult's contract ("render INSTEAD of
+					// LoginURL") and the CLI's printHealthcheckPortal, which is stateless
+					// and already prefers the portal for the current check.
 					if link := strings.TrimSpace(st.LoginURL); link != "" {
 						magicLink = link
 						result.MagicLinkSeen = true
-					}
-					// The portal fallback is a LATCH like magicLink: a later Re-check
-					// that hits a transport hiccup must not blank a block the user is
-					// reading. It arrives only on a confirmed password_set, and once a
-					// password exists the server never mints a link again, so the two
-					// latches cannot fight over the box.
-					if portal := strings.TrimSpace(st.PortalURL); portal != "" {
+					} else if portal := strings.TrimSpace(st.PortalURL); portal != "" {
+						magicLink = ""
 						portalURL = portal
 						portalLogin = strings.TrimSpace(st.PortalLogin)
 					}
