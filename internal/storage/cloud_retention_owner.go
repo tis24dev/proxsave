@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"strings"
+	"sync"
 
 	"github.com/tis24dev/proxsave/internal/backup"
 	"github.com/tis24dev/proxsave/internal/types"
@@ -22,12 +23,50 @@ import (
 // ours" - a backup whose manifest cannot be read is left alone rather than deleted
 // on a guess.
 func (c *CloudStorage) resolveRetentionOwners(ctx context.Context, backups []*types.BackupMetadata) {
+	pending := make([]*types.BackupMetadata, 0, len(backups))
 	for _, b := range backups {
 		if b == nil || strings.TrimSpace(b.Hostname) != "" {
 			continue
 		}
-		b.Hostname = c.remoteManifestHostname(ctx, b.BackupFile)
+		pending = append(pending, b)
 	}
+	if len(pending) == 0 {
+		return
+	}
+
+	// One round trip per archive, so a large remote is worth parallelising. Bounded by
+	// the same CLOUD_PARALLEL_MAX_JOBS the upload path uses, rather than a second knob:
+	// both are round trips to the same remote and the operator already tuned that
+	// number for it. Each goroutine writes only its own entry, so no lock is needed.
+	//
+	// NOTE: this deliberately does NOT skip archives whose filename token names another
+	// host. The manifest is the authoritative owner and may say the backup is ours even
+	// when the filename does not - skipping those would silently stop rotating them.
+	workers := c.parallelJobs
+	if workers < 1 {
+		workers = 1
+	}
+	if workers > len(pending) {
+		workers = len(pending)
+	}
+
+	var wg sync.WaitGroup
+	sem := make(chan struct{}, workers)
+	for _, b := range pending {
+		b := b
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			select {
+			case sem <- struct{}{}:
+				defer func() { <-sem }()
+			case <-ctx.Done():
+				return
+			}
+			b.Hostname = c.remoteManifestHostname(ctx, b.BackupFile)
+		}()
+	}
+	wg.Wait()
 }
 
 // remoteManifestSuffixes are the sidecar names an archive's manifest can carry,

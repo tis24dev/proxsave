@@ -427,12 +427,12 @@ func (s *SecondaryStorage) List(ctx context.Context) (backups []*types.BackupMet
 			BackupFile: match,
 			Timestamp:  stat.ModTime(),
 			Size:       stat.Size(),
-			// Attribute the backup to the host recorded in its manifest. The
-			// secondary location is routinely a NAS mount shared by several hosts
-			// (the setup the header of backup.env documents), so retention here must
-			// be able to tell whose backup this is; the "*-backup-*" glob above
-			// cannot, because its wildcard matches every hostname.
-			Hostname: manifestHostnameFromLocalArchive(ctx, match, timeout),
+			// Hostname is deliberately NOT resolved here: attributing a backup costs a
+			// stat plus a manifest open and parse, and a bundle additionally a tar
+			// scan. List also backs countBackups - which runs after every Store - and
+			// GetStats, neither of which needs an owner, and the secondary location is
+			// typically the slowest one (a NAS mount). ApplyRetention fills it in for
+			// the entries it is about to judge, the same way the cloud backend does.
 			Verified: backupHasCompletionSidecar(ctx, match, timeout),
 		})
 	}
@@ -582,9 +582,12 @@ func (s *SecondaryStorage) ApplyRetention(ctx context.Context, config RetentionC
 		}
 	}
 
-	// Drop anything this host does not own before counting or deleting. This matters
-	// most here: a shared NAS mount is the documented secondary layout, so several
-	// hosts routinely write into the same directory.
+	// Attribute each candidate to its owning host, then drop anything this host does
+	// not own before counting or deleting. This matters most here: a shared NAS mount
+	// is the documented secondary layout, so several hosts routinely write into the
+	// same directory, and the "*-backup-*" glob that produced this list matches every
+	// hostname.
+	s.resolveRetentionOwners(ctx, backups)
 	backups = applyRetentionHostScope("Secondary storage", s.hostname, backups, s.logger)
 
 	if len(backups) == 0 {
@@ -597,6 +600,20 @@ func (s *SecondaryStorage) ApplyRetention(ctx context.Context, config RetentionC
 		return s.applyGFSRetention(ctx, backups, config)
 	}
 	return s.applySimpleRetention(ctx, backups, config.MaxBackups)
+}
+
+// resolveRetentionOwners fills in each candidate's Hostname from its manifest. It is
+// the secondary twin of CloudStorage.resolveRetentionOwners and exists for the same
+// reason: only retention needs to know who owns a backup, so only retention pays for
+// finding out.
+func (s *SecondaryStorage) resolveRetentionOwners(ctx context.Context, backups []*types.BackupMetadata) {
+	timeout := fsIoTimeout(s.config)
+	for _, b := range backups {
+		if b == nil || strings.TrimSpace(b.Hostname) != "" {
+			continue
+		}
+		b.Hostname = manifestHostnameFromLocalArchive(ctx, b.BackupFile, timeout)
+	}
 }
 
 // applyGFSRetention applies GFS (Grandfather-Father-Son) retention policy

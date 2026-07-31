@@ -1,12 +1,9 @@
 package storage
 
 import (
-	"archive/tar"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -301,64 +298,39 @@ func (l *LocalStorage) loadMetadata(ctx context.Context, backupFile string) (*ty
 func (l *LocalStorage) loadMetadataFromBundle(bundlePath string) (*types.BackupMetadata, error) {
 	l.logger.Debug("Local storage: loadMetadataFromBundle called for %s", bundlePath)
 
-	// Confined open (same reasoning as manifestFromBundle in backup_owner.go): the
-	// path comes from a directory listing, so it reaches os as a variable. Opening
-	// through the bundle's own parent directory answers gosec G304 structurally and
-	// refuses a final component that is an absolute or escaping symlink.
-	file, err := safefs.OpenFileUnderRoot(bundlePath, os.O_RDONLY, 0)
+	// One reader for both callers: manifestFromBundle owns the tar scan and the
+	// confined open, this function only maps the result. The two used to be separate
+	// copies and had already drifted (bundleSuffix here, the ".bundle.tar" literal
+	// there).
+	manifest, err := manifestFromBundle(bundlePath)
 	if err != nil {
-		l.logger.Debug("Local storage: failed to open bundle %s: %v", bundlePath, err)
+		l.logger.Debug("Local storage: failed to read manifest from bundle %s: %v", bundlePath, err)
 		return nil, err
 	}
-	defer func() { _ = file.Close() }()
 
-	tr := tar.NewReader(file)
-	expectedName := strings.TrimSuffix(filepath.Base(bundlePath), ".bundle.tar") + ".metadata"
-	l.logger.Debug("Local storage: expecting metadata entry %s in bundle %s", expectedName, filepath.Base(bundlePath))
+	metadata := &types.BackupMetadata{
+		BackupFile:  bundlePath,
+		Timestamp:   manifest.CreatedAt,
+		Size:        manifest.ArchiveSize,
+		Checksum:    manifest.SHA256,
+		Hostname:    manifest.Hostname,
+		ProxmoxType: types.ProxmoxType(manifest.ProxmoxType),
+		Compression: types.CompressionType(manifest.CompressionType),
+		Version:     manifest.ScriptVersion,
+	}
 
-	for {
-		hdr, err := tr.Next()
-		if err == io.EOF {
-			l.logger.Warning("Local storage: metadata %s not found inside bundle %s", expectedName, filepath.Base(bundlePath))
-			return nil, fmt.Errorf("metadata %s not found in bundle %s", expectedName, filepath.Base(bundlePath))
-		}
-		if err != nil {
-			return nil, fmt.Errorf("read bundle %s: %w", filepath.Base(bundlePath), err)
-		}
-
-		if filepath.Base(hdr.Name) != expectedName {
-			continue
-		}
-
-		var manifest backup.Manifest
-		if err := json.NewDecoder(tr).Decode(&manifest); err != nil {
-			return nil, fmt.Errorf("parse manifest from bundle %s: %w", filepath.Base(bundlePath), err)
-		}
-
-		metadata := &types.BackupMetadata{
-			BackupFile:  bundlePath,
-			Timestamp:   manifest.CreatedAt,
-			Size:        manifest.ArchiveSize,
-			Checksum:    manifest.SHA256,
-			Hostname:    manifest.Hostname,
-			ProxmoxType: types.ProxmoxType(manifest.ProxmoxType),
-			Compression: types.CompressionType(manifest.CompressionType),
-			Version:     manifest.ScriptVersion,
-		}
-
-		if metadata.Timestamp.IsZero() || metadata.Size == 0 {
-			if stat, statErr := os.Stat(bundlePath); statErr == nil {
-				if metadata.Timestamp.IsZero() {
-					metadata.Timestamp = stat.ModTime()
-				}
-				if metadata.Size == 0 {
-					metadata.Size = stat.Size()
-				}
+	if metadata.Timestamp.IsZero() || metadata.Size == 0 {
+		if stat, statErr := os.Stat(bundlePath); statErr == nil {
+			if metadata.Timestamp.IsZero() {
+				metadata.Timestamp = stat.ModTime()
+			}
+			if metadata.Size == 0 {
+				metadata.Size = stat.Size()
 			}
 		}
-
-		return metadata, nil
 	}
+
+	return metadata, nil
 }
 
 // Delete removes a backup file and its associated files

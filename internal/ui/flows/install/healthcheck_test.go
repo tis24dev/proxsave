@@ -203,13 +203,7 @@ func TestRunHealthcheckSetup(t *testing.T) {
 		healthcheckCheck = origCheck
 	})
 
-	healthcheckBuildBootstrap = func(ctx context.Context, configPath, baseDir string) (orchestrator.HealthcheckSetupBootstrap, error) {
-		return orchestrator.HealthcheckSetupBootstrap{
-			Eligibility:   orchestrator.HealthcheckSetupEligibleCentralized,
-			ServerID:      "12345678",
-			ServerAPIHost: "https://h",
-		}, nil
-	}
+	healthcheckBuildBootstrap = healthcheckEligibleBootstrap
 
 	type result struct {
 		res installer.HealthcheckSetupResult

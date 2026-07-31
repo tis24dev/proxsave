@@ -1272,7 +1272,6 @@ func TestSecondaryStorageApplyRetentionSimple(t *testing.T) {
 	storage.hostname = "node-simple"
 
 	baseTime := time.Date(2024, time.January, 10, 12, 0, 0, 0, time.UTC)
-	_ = baseTime
 	type backupInfo struct {
 		path string
 		ts   time.Time

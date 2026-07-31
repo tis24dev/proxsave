@@ -2,7 +2,7 @@
 package orchestrator
 
 import (
-	"fmt"
+	"errors"
 	"path/filepath"
 	"strings"
 )
@@ -49,7 +49,7 @@ func (w *restoreUIWorkflowRun) runFullRestore() error {
 
 func (w *restoreUIWorkflowRun) validateFullRestoreCandidate() error {
 	if w.candidate == nil || w.prepared == nil || w.prepared.ArchivePath == "" {
-		return fmt.Errorf("invalid restore candidate")
+		return errors.New("invalid restore candidate")
 	}
 	return nil
 }
