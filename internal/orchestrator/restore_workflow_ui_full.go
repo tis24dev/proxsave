@@ -136,6 +136,10 @@ func (f *fullRestoreUIFlow) extractAndMergeFstab(fsTempDir string) error {
 		f.logger.Warning("Failed to extract filesystem config for merge: %v", err)
 		return nil
 	}
+	// The selective path does this too. Without it remapFstabDevicesFromInventory has
+	// nothing to map against, so the merge silently proposes the backup's raw device
+	// names instead of this system's UUID/LABEL.
+	extractFstabInventoryInto(f.ctx, f.prepared.ArchivePath, fsTempDir, f.logger)
 	currentFstab := filepath.Join(f.destRoot, "etc", "fstab")
 	backupFstab := filepath.Join(fsTempDir, "etc", "fstab")
 	if err := smartMergeFstabWithUI(f.ctx, f.logger, f.ui, currentFstab, backupFstab, f.dryRun); err != nil {

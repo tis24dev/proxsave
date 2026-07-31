@@ -1067,34 +1067,6 @@ func TestPromptClusterRestoreMode(t *testing.T) {
 	}
 }
 
-func TestConfirmRestoreAction(t *testing.T) {
-	cand := &backupCandidate{
-		Manifest: &backup.Manifest{
-			CreatedAt:   time.Now(),
-			ArchivePath: "test.tar",
-		},
-		DisplayBase: "test-backup",
-	}
-
-	// Accept
-	reader := bufio.NewReader(strings.NewReader("RESTORE\n"))
-	if err := confirmRestoreAction(context.Background(), reader, cand, "/tmp"); err != nil {
-		t.Fatalf("confirmRestoreAction accept error: %v", err)
-	}
-
-	// Abort
-	reader = bufio.NewReader(strings.NewReader("0\n"))
-	if err := confirmRestoreAction(context.Background(), reader, cand, "/tmp"); err != ErrRestoreAborted {
-		t.Fatalf("expected ErrRestoreAborted, got %v", err)
-	}
-
-	// Invalid then accept
-	reader = bufio.NewReader(strings.NewReader("foo\nRESTORE\n"))
-	if err := confirmRestoreAction(context.Background(), reader, cand, "/tmp"); err != nil {
-		t.Fatalf("confirmRestoreAction retry error: %v", err)
-	}
-}
-
 func TestShowRestorePlanOutputsPaths(t *testing.T) {
 	logger := logging.New(types.LogLevelError, false)
 	categories := []Category{

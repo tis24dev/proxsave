@@ -3,7 +3,6 @@ package orchestrator
 import (
 	"bufio"
 	"context"
-	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -177,34 +176,5 @@ func TestDescribeBackupCandidate_SanitizesManifestFields(t *testing.T) {
 	}
 	if !strings.Contains(display.Summary, "pve") {
 		t.Fatalf("Summary lost legitimate hostname text: %q", display.Summary)
-	}
-}
-
-// TestConfirmRestoreAction_SanitizesDisplayBase proves the LEAK-2 fix: the CLI
-// confirmation prints the remote-derived archive filename scrubbed. We drive
-// the prompt to cancel (input "0") after the line is printed.
-func TestConfirmRestoreAction_SanitizesDisplayBase(t *testing.T) {
-	cand := &backupCandidate{
-		DisplayBase: "arch\x1b]0;pwned\x07ive.tar.xz\x9b",
-		Manifest:    &backup.Manifest{CreatedAt: time.Date(2026, time.March, 22, 12, 21, 22, 0, time.UTC)},
-	}
-	reader := bufio.NewReader(strings.NewReader("0\n"))
-
-	var abortErr error
-	stdout := captureCLIStdout(t, func() {
-		abortErr = confirmRestoreAction(context.Background(), reader, cand, "/")
-	})
-
-	if !errors.Is(abortErr, ErrRestoreAborted) {
-		t.Fatalf("expected ErrRestoreAborted, got: %v", abortErr)
-	}
-	for _, marker := range rawEscapeMarkers {
-		if strings.Contains(stdout, marker) {
-			t.Fatalf("confirmRestoreAction output retained raw escape %q: %q", marker, stdout)
-		}
-	}
-	// The legitimate filename fragments must still print.
-	if !strings.Contains(stdout, "arch") || !strings.Contains(stdout, "ive.tar.xz") {
-		t.Fatalf("expected sanitized filename in output, got %q", stdout)
 	}
 }

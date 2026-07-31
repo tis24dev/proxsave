@@ -2,18 +2,14 @@
 package orchestrator
 
 import (
-	"bufio"
 	"context"
-	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync/atomic"
 
-	"github.com/tis24dev/proxsave/internal/input"
 	"github.com/tis24dev/proxsave/internal/logging"
-	"github.com/tis24dev/proxsave/internal/ui/components"
 )
 
 var restoreLogSequence uint64
@@ -80,144 +76,6 @@ func exportDestRoot(baseDir string) string {
 		base = "/opt/proxsave"
 	}
 	return filepath.Join(base, fmt.Sprintf("proxmox-config-export-%s", nowRestore().Format("20060102-150405")))
-}
-
-// runFullRestore performs a full restore without selective options (fallback)
-func runFullRestore(ctx context.Context, reader *bufio.Reader, candidate *backupCandidate, prepared *preparedBundle, destRoot string, logger *logging.Logger, dryRun bool) error {
-	if err := confirmRestoreAction(ctx, reader, candidate, destRoot); err != nil {
-		return err
-	}
-
-	safeFstabMerge := destRoot == "/" && isRealRestoreFS(restoreFS)
-	if safeFstabMerge {
-		logger.Warning("Full restore safety: /etc/fstab will not be overwritten; Smart Merge will be applied after extraction.")
-	}
-
-	if err := extractPlainArchive(ctx, prepared.ArchivePath, destRoot, logger, fullRestoreSkipFn(safeFstabMerge)); err != nil {
-		return err
-	}
-
-	if safeFstabMerge {
-		if err := runFullRestoreFstabMerge(ctx, reader, prepared.ArchivePath, destRoot, logger, dryRun); err != nil {
-			return err
-		}
-	}
-
-	logger.Info("Restore completed successfully.")
-	return nil
-}
-
-func fullRestoreSkipFn(safeFstabMerge bool) func(name string) bool {
-	return func(name string) bool {
-		if !safeFstabMerge {
-			return false
-		}
-		clean := strings.TrimPrefix(strings.TrimSpace(name), "./")
-		clean = strings.TrimPrefix(clean, "/")
-		return clean == "etc/fstab"
-	}
-}
-
-func runFullRestoreFstabMerge(ctx context.Context, reader *bufio.Reader, archivePath, destRoot string, logger *logging.Logger, dryRun bool) error {
-	logger.Info("")
-	fsTempDir, err := restoreFS.MkdirTemp("", "proxsave-fstab-")
-	if err != nil {
-		logger.Warning("Failed to create temp dir for fstab merge: %v", err)
-		return nil
-	}
-	defer func() {
-		if err := restoreFS.RemoveAll(fsTempDir); err != nil {
-			logger.Debug("Failed to remove temporary fstab merge directory %s: %v", fsTempDir, err)
-		}
-	}()
-
-	if err := extractFullRestoreFstab(ctx, archivePath, fsTempDir, logger); err != nil {
-		logger.Warning("Failed to extract filesystem config for merge: %v", err)
-		return nil
-	}
-	extractFullRestoreFstabInventory(ctx, archivePath, fsTempDir, logger)
-	currentFstab := filepath.Join(destRoot, "etc", "fstab")
-	backupFstab := filepath.Join(fsTempDir, "etc", "fstab")
-	if err := SmartMergeFstab(ctx, logger, reader, currentFstab, backupFstab, dryRun); err != nil {
-		if errors.Is(err, ErrRestoreAborted) || input.IsAborted(err) {
-			logger.Info("Restore aborted by user during Smart Filesystem Configuration Merge.")
-			return err
-		}
-		logger.Warning("Smart Fstab Merge failed: %v", err)
-	}
-	return nil
-}
-
-func extractFullRestoreFstab(ctx context.Context, archivePath, fsTempDir string, logger *logging.Logger) error {
-	return extractArchiveNative(ctx, restoreArchiveOptions{
-		archivePath: archivePath,
-		destRoot:    fsTempDir,
-		logger:      logger,
-		categories: []Category{{
-			ID:    "filesystem",
-			Name:  "Filesystem Configuration",
-			Paths: []string{"./etc/fstab"},
-		}},
-		mode: RestoreModeCustom,
-	})
-}
-
-func extractFullRestoreFstabInventory(ctx context.Context, archivePath, fsTempDir string, logger *logging.Logger) {
-	invCategory := []Category{{
-		ID:   "fstab_inventory",
-		Name: "Fstab inventory (device mapping)",
-		Paths: []string{
-			"./var/lib/proxsave-info/commands/system/blkid.txt",
-			"./var/lib/proxsave-info/commands/system/lsblk_json.json",
-			"./var/lib/proxsave-info/commands/system/lsblk.txt",
-			"./var/lib/proxsave-info/commands/pbs/pbs_datastore_inventory.json",
-		},
-	}}
-	if err := extractArchiveNative(ctx, restoreArchiveOptions{
-		archivePath: archivePath,
-		destRoot:    fsTempDir,
-		logger:      logger,
-		categories:  invCategory,
-		mode:        RestoreModeCustom,
-	}); err != nil {
-		logger.Debug("Failed to extract fstab inventory data (continuing): %v", err)
-	}
-}
-
-func confirmRestoreAction(ctx context.Context, reader *bufio.Reader, cand *backupCandidate, dest string) error {
-	manifest := cand.Manifest
-	fmt.Println()
-	// Sanitize the remote-derived archive filename before printing raw; it
-	// bypasses the NewSelector/NewConfirm scrub the graphical screens get.
-	fmt.Printf("Selected backup: %s (%s)\n", components.SanitizeLine(cand.DisplayBase), manifest.CreatedAt.Format("2006-01-02 15:04:05"))
-	cleanDest := filepath.Clean(strings.TrimSpace(dest))
-	if cleanDest == "" || cleanDest == "." {
-		cleanDest = string(os.PathSeparator)
-	}
-	if cleanDest == string(os.PathSeparator) {
-		fmt.Println("Restore destination: / (system root; original paths will be preserved)")
-		fmt.Println("WARNING: This operation will overwrite configuration files on this system.")
-	} else {
-		fmt.Printf("Restore destination: %s (original paths will be preserved under this directory)\n", cleanDest)
-		fmt.Printf("WARNING: This operation will overwrite existing files under %s.\n", cleanDest)
-	}
-	fmt.Println("Type RESTORE to proceed or 0 to cancel.")
-
-	for {
-		fmt.Print("Confirmation: ")
-		line, err := input.ReadLineWithIdle(ctx, reader, cliIdleTimeout)
-		if err != nil {
-			return err
-		}
-		switch strings.TrimSpace(line) {
-		case "RESTORE":
-			return nil
-		case "0":
-			return ErrRestoreAborted
-		default:
-			fmt.Println("Please type RESTORE to confirm or 0 to cancel.")
-		}
-	}
 }
 
 func extractPlainArchive(ctx context.Context, archivePath, destRoot string, logger *logging.Logger, skipFn func(entryName string) bool) error {

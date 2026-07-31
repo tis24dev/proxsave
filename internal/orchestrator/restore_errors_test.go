@@ -15,7 +15,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tis24dev/proxsave/internal/backup"
 	"github.com/tis24dev/proxsave/internal/logging"
 )
 
@@ -1285,35 +1284,6 @@ func TestRunSafeClusterApply_NoVMConfigs(t *testing.T) {
 // confirmRestoreAction tests
 // --------------------------------------------------------------------------
 
-func TestConfirmRestoreAction_InvalidInput(t *testing.T) {
-	cand := &backupCandidate{
-		DisplayBase: "test-backup",
-		Manifest:    &backup.Manifest{CreatedAt: time.Now()},
-	}
-
-	// Input: invalid, then RESTORE
-	reader := bufio.NewReader(strings.NewReader("invalid\nRESTORE\n"))
-
-	err := confirmRestoreAction(context.Background(), reader, cand, "/")
-	if err != nil {
-		t.Fatalf("expected success after retry, got: %v", err)
-	}
-}
-
-func TestConfirmRestoreAction_Cancel(t *testing.T) {
-	cand := &backupCandidate{
-		DisplayBase: "test-backup",
-		Manifest:    &backup.Manifest{CreatedAt: time.Now()},
-	}
-
-	reader := bufio.NewReader(strings.NewReader("0\n"))
-
-	err := confirmRestoreAction(context.Background(), reader, cand, "/")
-	if !errors.Is(err, ErrRestoreAborted) {
-		t.Fatalf("expected ErrRestoreAborted, got: %v", err)
-	}
-}
-
 // --------------------------------------------------------------------------
 // sleepWithContext tests
 // --------------------------------------------------------------------------
@@ -1469,36 +1439,6 @@ func TestExtractSelectiveArchive_MkdirAllFails(t *testing.T) {
 // --------------------------------------------------------------------------
 // runFullRestore tests
 // --------------------------------------------------------------------------
-
-func TestRunFullRestore_ExtractError(t *testing.T) {
-	origFS := restoreFS
-	t.Cleanup(func() { restoreFS = origFS })
-
-	fakeFS := NewFakeFS()
-	t.Cleanup(func() { _ = os.RemoveAll(fakeFS.Root) })
-
-	// Create an invalid archive
-	archivePath := filepath.Join(fakeFS.Root, "bad.tar")
-	if err := os.WriteFile(archivePath, []byte("not a tar file"), 0o644); err != nil {
-		t.Fatalf("write: %v", err)
-	}
-
-	restoreFS = fakeFS
-
-	cand := &backupCandidate{
-		DisplayBase: "test-backup",
-		Manifest:    &backup.Manifest{CreatedAt: time.Now()},
-	}
-	prepared := &preparedBundle{ArchivePath: archivePath}
-
-	reader := bufio.NewReader(strings.NewReader("RESTORE\n"))
-	logger := logging.New(logging.GetDefaultLogger().GetLevel(), false)
-
-	err := runFullRestore(context.Background(), reader, cand, prepared, fakeFS.Root, logger, false)
-	if err == nil {
-		t.Fatalf("expected error from bad archive")
-	}
-}
 
 // --------------------------------------------------------------------------
 // extractSymlink edge case tests

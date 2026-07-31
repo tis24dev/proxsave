@@ -10,7 +10,6 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
-	"time"
 
 	"github.com/tis24dev/proxsave/internal/logging"
 )
@@ -39,59 +38,6 @@ type FstabAnalysisResult struct {
 	SwapDeviceBackup  string
 	ProposedMounts    []FstabEntry
 	SkippedMounts     []FstabEntry
-}
-
-// SmartMergeFstab is the main entry point for the intelligent fstab restore workflow
-func SmartMergeFstab(ctx context.Context, logger *logging.Logger, reader *bufio.Reader, currentFstabPath, backupFstabPath string, dryRun bool) error {
-	logger.Info("")
-	logger.Step("Smart Filesystem Configuration Merge")
-	logger.Debug("[FSTAB_MERGE] Starting analysis of %s vs backup %s...", currentFstabPath, backupFstabPath)
-
-	// 1. Parsing
-	currentEntries, currentRaw, err := parseFstab(currentFstabPath)
-	if err != nil {
-		return fmt.Errorf("failed to parse current fstab: %w", err)
-	}
-	backupEntries, _, err := parseFstab(backupFstabPath)
-	if err != nil {
-		return fmt.Errorf("failed to parse backup fstab: %w", err)
-	}
-
-	backupRoot := fstabBackupRootFromPath(backupFstabPath)
-	if backupRoot != "" {
-		if remapped, count := remapFstabDevicesFromInventory(logger, backupEntries, backupRoot); count > 0 {
-			backupEntries = remapped
-			logger.Info("Fstab device remap: converted %d entry(ies) from /dev/* to stable UUID/PARTUUID/LABEL based on ProxSave inventory", count)
-		} else {
-			backupEntries = remapped
-		}
-	}
-
-	// 2. Analysis
-	analysis := analyzeFstabMerge(logger, currentEntries, backupEntries)
-
-	// 3. User Interface & Prompt
-	printFstabAnalysis(logger, analysis)
-
-	if len(analysis.ProposedMounts) == 0 {
-		logger.Info("No new safe mounts found to restore. Keeping current fstab.")
-		return nil
-	}
-
-	defaultYes := analysis.RootComparable && analysis.RootMatch && (!analysis.SwapComparable || analysis.SwapMatch)
-	confirmMsg := "Do you want to add the missing mounts (NFS/CIFS and data mounts with verified UUID/LABEL)?"
-	confirmed, err := promptYesNoWithCountdown(ctx, reader, logger, confirmMsg, 90*time.Second, defaultYes)
-	if err != nil {
-		return err
-	}
-
-	if !confirmed {
-		logger.Info("Fstab merge skipped by user.")
-		return nil
-	}
-
-	// 4. Execution
-	return applyFstabMerge(ctx, logger, currentRaw, currentFstabPath, analysis.ProposedMounts, dryRun)
 }
 
 type fstabDeviceIdentity struct {
@@ -747,51 +693,6 @@ func ensureFstabOption(options, option string) string {
 		}
 	}
 	return opts + "," + opt
-}
-
-func printFstabAnalysis(logger *logging.Logger, res FstabAnalysisResult) {
-	fmt.Println()
-	logger.Info("fstab analysis:")
-
-	// Root Status
-	if !res.RootComparable {
-		logger.Warning("! Root filesystem: undetermined (missing entry in current/backup fstab)")
-	} else if res.RootMatch {
-		logger.Info("✓ Root filesystem: compatible (UUID kept from system)")
-	} else {
-		// ANSI Yellow/Red might be nice, but stick to standard logger for now.
-		logger.Warning("! Root UUID mismatch: Backup is from a different machine (System info preserved)")
-		logger.Debug("  Details: Current=%s, Backup=%s", res.RootDeviceCurrent, res.RootDeviceBackup)
-	}
-
-	// Swap Status
-	if !res.SwapComparable {
-		logger.Info("Swap: undetermined (missing entry in current/backup fstab)")
-	} else if res.SwapMatch {
-		logger.Info("✓ Swap: compatible")
-	} else {
-		logger.Warning("! Swap mismatch: keeping current swap configuration")
-		logger.Debug("  Details: Current=%s, Backup=%s", res.SwapDeviceCurrent, res.SwapDeviceBackup)
-	}
-
-	// New Entries
-	if len(res.ProposedMounts) > 0 {
-		logger.Info("+ %d safe mount(s) found in the backup but missing from the current system:", len(res.ProposedMounts))
-		for _, m := range res.ProposedMounts {
-			logger.Info("  %s -> %s (%s)", m.Device, m.MountPoint, m.Type)
-		}
-	} else {
-		logger.Info("✓ No additional mounts found in the backup.")
-	}
-
-	if len(res.SkippedMounts) > 0 {
-		logger.Warning("! %d mount(s) found but NOT auto-proposed (potentially risky):", len(res.SkippedMounts))
-		for _, m := range res.SkippedMounts {
-			logger.Warning("  %s -> %s (%s)", m.Device, m.MountPoint, m.Type)
-		}
-		logger.Info("  Hint: verify disks/UUIDs and options (nofail/_netdev) before adding them to /etc/fstab.")
-	}
-	fmt.Println()
 }
 
 func applyFstabMerge(ctx context.Context, logger *logging.Logger, currentRaw []string, targetPath string, newEntries []FstabEntry, dryRun bool) error {

@@ -116,7 +116,7 @@ func (w *restoreUIWorkflowRun) extractAndMergeFstab(fsTempDir string) error {
 	if _, err := extractSelectiveArchive(w.ctx, w.prepared.ArchivePath, fsTempDir, []Category{*fsCat}, RestoreModeCustom, w.logger); err != nil {
 		return w.handleFstabExtractError(err)
 	}
-	w.extractFstabInventory(fsTempDir)
+	extractFstabInventoryInto(w.ctx, w.prepared.ArchivePath, fsTempDir, w.logger)
 	currentFstab := filepath.Join(w.destRoot, "etc", "fstab")
 	backupFstab := filepath.Join(fsTempDir, "etc", "fstab")
 	if err := smartMergeFstabWithUI(w.ctx, w.logger, w.ui, currentFstab, backupFstab, w.cfg.DryRun); err != nil {
@@ -132,29 +132,6 @@ func (w *restoreUIWorkflowRun) handleFstabExtractError(err error) error {
 	w.restoreHadWarnings = true
 	w.logger.Warning("Failed to extract filesystem config for merge: %v", err)
 	return nil
-}
-
-func (w *restoreUIWorkflowRun) extractFstabInventory(fsTempDir string) {
-	inventoryCategory := []Category{{
-		ID:   "fstab_inventory",
-		Name: "Fstab inventory (device mapping)",
-		Paths: []string{
-			"./var/lib/proxsave-info/commands/system/blkid.txt",
-			"./var/lib/proxsave-info/commands/system/lsblk_json.json",
-			"./var/lib/proxsave-info/commands/system/lsblk.txt",
-			"./var/lib/proxsave-info/commands/pbs/pbs_datastore_inventory.json",
-		},
-	}}
-	err := extractArchiveNative(w.ctx, restoreArchiveOptions{
-		archivePath: w.prepared.ArchivePath,
-		destRoot:    fsTempDir,
-		logger:      w.logger,
-		categories:  inventoryCategory,
-		mode:        RestoreModeCustom,
-	})
-	if err != nil {
-		w.logger.Debug("Failed to extract fstab inventory data (continuing): %v", err)
-	}
 }
 
 func (w *restoreUIWorkflowRun) handleFstabMergeError(err error) error {
