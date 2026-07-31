@@ -2,7 +2,9 @@
 package main
 
 import (
+	"bufio"
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -248,6 +250,64 @@ func TestSeededTimeDrivesInstallSchedule(t *testing.T) {
 	}
 	if got := cronTimeDefault(true, string(data)); got != "21:00" {
 		t.Fatalf("cronTimeDefault = %q, want 21:00", got)
+	}
+}
+
+// TestPrepareBaseTemplateSeedsOnlyAfterTheOperatorCommits pins WHERE the seeding
+// may write: it persists SCHEDULER_TIME, so an install the operator cancels must
+// leave backup.env byte-identical, and Overwrite must neither write nor claim an
+// adoption for a file the wizard is about to replace.
+func TestPrepareBaseTemplateSeedsOnlyAfterTheOperatorCommits(t *testing.T) {
+	const preThirty = "SCHEDULER_MODE=cron\n"
+
+	tests := []struct {
+		name       string
+		answer     string
+		wantSeeded bool
+		wantAbort  bool
+	}{
+		{name: "cancel leaves the config untouched", answer: "0\n", wantAbort: true},
+		{name: "overwrite does not adopt", answer: "1\n"},
+		{name: "edit existing adopts", answer: "2\n", wantSeeded: true},
+		{name: "keep existing adopts", answer: "3\n", wantSeeded: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := createTempFile(t, preThirty)
+			stubCrontabLines(t, []string{"0 21 * * * /usr/local/bin/proxsave --backup"}, nil)
+
+			var tmpl string
+			var err error
+			captureStdout(t, func() {
+				tmpl, _, _, err = prepareBaseTemplate(context.Background(), bufio.NewReader(strings.NewReader(tt.answer)), cfg, nil)
+			})
+			if tt.wantAbort {
+				if !errors.Is(err, errInteractiveAborted) {
+					t.Fatalf("expected an interactive abort, got %v", err)
+				}
+			} else if err != nil {
+				t.Fatalf("prepareBaseTemplate: %v", err)
+			}
+
+			data, readErr := os.ReadFile(cfg)
+			if readErr != nil {
+				t.Fatalf("read back: %v", readErr)
+			}
+			seeded := strings.Contains(string(data), "SCHEDULER_TIME=21:00")
+			if seeded != tt.wantSeeded {
+				t.Fatalf("config seeded = %v, want %v:\n%s", seeded, tt.wantSeeded, data)
+			}
+			if !tt.wantSeeded && string(data) != preThirty {
+				t.Fatalf("config was modified:\n%s", data)
+			}
+			// Edit hands the wizard an in-memory copy read BEFORE the seeding, so the
+			// adopted time must be mirrored into it or the "Run at" prompt still offers
+			// the 02:00 default.
+			if tt.answer == "2\n" && cronTimeDefault(true, tmpl) != "21:00" {
+				t.Fatalf("edit template prefill = %q, want 21:00", cronTimeDefault(true, tmpl))
+			}
+		})
 	}
 }
 

@@ -83,17 +83,6 @@ func runInstall(ctx context.Context, configPath string, bootstrap *logging.Boots
 	reader := bufio.NewReader(os.Stdin)
 	printInstallBanner(configPath)
 
-	// This install is about to rewrite the proxsave cron line FROM the config
-	// (buildInstallCronSchedule below) and may hand the schedule to the daemon
-	// (reconcileSchedulerAfterInstall). On a host that predates SCHEDULER_TIME the
-	// crontab is the only record of the operator's run time, so adopt it now -
-	// before the wizard reads the config for its "Run at" default (cronTimeDefault)
-	// and before the crontab is rewritten. A config that already carries the key is
-	// left untouched.
-	if seed := seedSchedulerTimeFromCrontabFn(ctx, configPath); seed.Note != "" {
-		logBootstrapInfo(bootstrap, "%s", seed.Note)
-	}
-
 	logging.DebugStepBootstrap(bootstrap, "install workflow (cli)", "running config wizard")
 	configResult, err := runConfigWizardCLI(ctx, reader, configPath, tmpConfigPath, baseDir, bootstrap)
 	if err != nil {
@@ -504,7 +493,7 @@ func runConfigWizardCLI(ctx context.Context, reader *bufio.Reader, configPath, t
 	defer func() { done(err) }()
 
 	logging.DebugStepBootstrap(bootstrap, "install config wizard (cli)", "preparing base template")
-	template, skipConfigWizard, fromExisting, err := prepareBaseTemplate(ctx, reader, configPath)
+	template, skipConfigWizard, fromExisting, err := prepareBaseTemplate(ctx, reader, configPath, bootstrap)
 	if err != nil {
 		return installConfigResult{}, wrapInstallError(err)
 	}
@@ -743,13 +732,34 @@ func printInstallBanner(configPath string) {
 	fmt.Printf("Configuration file: %s\n\n", configPath)
 }
 
-func prepareBaseTemplate(ctx context.Context, reader *bufio.Reader, configPath string) (string, bool, bool, error) {
+func prepareBaseTemplate(ctx context.Context, reader *bufio.Reader, configPath string, bootstrap *logging.BootstrapLogger) (string, bool, bool, error) {
 	decision, err := prepareExistingConfigDecisionCLI(ctx, reader, configPath)
 	if err != nil {
 		return "", false, false, err
 	}
 	if decision.AbortInstall {
 		return "", false, false, errInteractiveAborted
+	}
+	// This install is about to rewrite the proxsave cron line FROM the config
+	// (buildInstallCronSchedule) and may hand the schedule to the daemon
+	// (reconcileSchedulerAfterInstall). On a host that predates SCHEDULER_TIME the
+	// crontab is the only record of the operator's run time, so adopt it before
+	// either happens; a config that already carries the key is left untouched.
+	//
+	// Seeding WRITES backup.env, so it runs only once the operator has committed to
+	// keeping (Keep existing) or editing (Edit existing) that file - never on the
+	// Cancel path, which must leave the host byte-identical, and never on Overwrite,
+	// where the wizard collects a fresh time and an adoption note would be a lie.
+	if decision.SkipConfigWizard || decision.FromExistingFile {
+		if seed := seedSchedulerTimeFromCrontabFn(ctx, configPath); seed.Note != "" {
+			logBootstrapInfo(bootstrap, "%s", seed.Note)
+			// Edit: the decision already read the file into BaseTemplate, so mirror the
+			// seeded value into the in-memory copy the wizard prefills from. Otherwise
+			// cronTimeDefault would still offer 02:00 for the "Run at" prompt.
+			if seed.Time != "" && decision.BaseTemplate != "" {
+				decision.BaseTemplate = setEnvValue(decision.BaseTemplate, "SCHEDULER_TIME", seed.Time)
+			}
+		}
 	}
 	if decision.SkipConfigWizard {
 		fmt.Println("Existing configuration detected, keeping current backup.env and skipping configuration wizard.")

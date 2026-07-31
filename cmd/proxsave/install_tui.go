@@ -116,16 +116,6 @@ func runInstallTUI(ctx context.Context, configPath string, bootstrap *logging.Bo
 		return stepErr
 	}
 
-	// Adopt the run time from the cron line this install is about to rewrite, BEFORE
-	// the Edit branch reads the file into baseTemplate (cronFieldDefault would
-	// otherwise offer 02:00) and before buildInstallCronSchedule / the scheduler
-	// reconcile read the config. No-op once SCHEDULER_TIME exists. The note goes to
-	// the bootstrap record only: console prints are quiet for the session lifetime
-	// so they cannot corrupt the alternate screen.
-	if seed := seedSchedulerTimeFromCrontabFn(ctx, configPath); seed.Note != "" {
-		logBootstrapInfo(bootstrap, "%s", seed.Note)
-	}
-
 	// Check if config exists
 	logging.DebugStepBootstrap(bootstrap, "install workflow (tui)", "checking existing configuration")
 	existingAction, err := flowinstall.ResolveExistingConfig(ctx, session, configPath)
@@ -146,9 +136,16 @@ func runInstallTUI(ctx context.Context, configPath string, bootstrap *logging.Bo
 		return wrapInstallError(errInteractiveAborted)
 	case installer.ExistingConfigKeepContinue:
 		logging.DebugStepBootstrap(bootstrap, "install workflow (tui)", "using existing configuration and skipping wizard")
+		// Adopt the run time from the cron line this install is about to rewrite,
+		// now that the operator has committed to keeping this file. See the CLI twin
+		// in prepareBaseTemplate for why Cancel and Overwrite are excluded.
+		seedSchedulerTimeTUI(ctx, configPath, bootstrap)
 		skipConfigWizard = true
 	case installer.ExistingConfigEdit:
 		logging.DebugStepBootstrap(bootstrap, "install workflow (tui)", "editing existing configuration")
+		// Seed BEFORE the read below, so baseTemplate carries the adopted time and
+		// cronFieldDefault offers it for "Run at" instead of the 02:00 default.
+		seedSchedulerTimeTUI(ctx, configPath, bootstrap)
 		content, readErr := safefs.ReadFileUnderRoot(configPath)
 		if readErr != nil {
 			return fmt.Errorf("read existing configuration: %w", readErr)

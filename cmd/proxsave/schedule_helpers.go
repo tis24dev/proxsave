@@ -8,6 +8,7 @@ import (
 
 	cronutil "github.com/tis24dev/proxsave/internal/cron"
 	"github.com/tis24dev/proxsave/internal/installer"
+	"github.com/tis24dev/proxsave/internal/logging"
 	"github.com/tis24dev/proxsave/internal/safefs"
 )
 
@@ -150,6 +151,15 @@ func schedulerTimeFromCronLines(lines []string) (string, bool) {
 		found = hhmm
 	}
 	return found, found != ""
+}
+
+// seedSchedulerTimeTUI runs the seeding for one TUI install branch and records the
+// note. The note goes to the bootstrap record only: console prints are quiet for
+// the session lifetime, so they cannot corrupt the alternate screen.
+func seedSchedulerTimeTUI(ctx context.Context, configPath string, bootstrap *logging.BootstrapLogger) {
+	if seed := seedSchedulerTimeFromCrontabFn(ctx, configPath); seed.Note != "" {
+		logBootstrapInfo(bootstrap, "%s", seed.Note)
+	}
 }
 
 // hasProxsaveCronLine reports whether the crontab schedules proxsave at all (used
