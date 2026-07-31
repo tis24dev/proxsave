@@ -141,6 +141,16 @@ func runInstall(ctx context.Context, configPath string, bootstrap *logging.Boots
 		}
 	}
 
+	// Keep-existing kept the operator's backup.env untouched, so nothing has carried
+	// the adopted run time into it. Write it now, past every interactive step: the
+	// install is committed, and buildInstallCronSchedule below reads the value from
+	// the file.
+	if configResult.SkipConfigWizard {
+		if seed := seedSchedulerTimeFromCrontabFn(ctx, configPath); seed.Note != "" {
+			logBootstrapInfo(bootstrap, "%s", seed.Note)
+		}
+	}
+
 	logging.DebugStepBootstrap(bootstrap, "install workflow (cli)", "finalizing symlinks and cron")
 	runPostInstallSymlinksAndCron(
 		ctx,
@@ -493,7 +503,7 @@ func runConfigWizardCLI(ctx context.Context, reader *bufio.Reader, configPath, t
 	defer func() { done(err) }()
 
 	logging.DebugStepBootstrap(bootstrap, "install config wizard (cli)", "preparing base template")
-	template, skipConfigWizard, fromExisting, err := prepareBaseTemplate(ctx, reader, configPath)
+	template, skipConfigWizard, fromExisting, err := prepareBaseTemplate(ctx, reader, configPath, bootstrap)
 	if err != nil {
 		return installConfigResult{}, wrapInstallError(err)
 	}
@@ -732,13 +742,33 @@ func printInstallBanner(configPath string) {
 	fmt.Printf("Configuration file: %s\n\n", configPath)
 }
 
-func prepareBaseTemplate(ctx context.Context, reader *bufio.Reader, configPath string) (string, bool, bool, error) {
+func prepareBaseTemplate(ctx context.Context, reader *bufio.Reader, configPath string, bootstrap *logging.BootstrapLogger) (string, bool, bool, error) {
 	decision, err := prepareExistingConfigDecisionCLI(ctx, reader, configPath)
 	if err != nil {
 		return "", false, false, err
 	}
 	if decision.AbortInstall {
 		return "", false, false, errInteractiveAborted
+	}
+	// This install is about to rewrite the proxsave cron line FROM the config
+	// (buildInstallCronSchedule) and may hand the schedule to the daemon
+	// (reconcileSchedulerAfterInstall). On a host that predates SCHEDULER_TIME the
+	// crontab is the only record of the operator's run time, so adopt it before
+	// either happens; a config that already carries the key is left untouched.
+	//
+	// Nothing is written to backup.env here. On Edit the wizard rewrites the whole
+	// file at the end from BaseTemplate, so the adopted time only has to reach that
+	// in-memory template - otherwise cronTimeDefault would still offer 02:00 for the
+	// "Run at" prompt. Cancelling anywhere later then leaves the host byte-identical,
+	// which a write at this point would not. Keep existing has no wizard to carry the
+	// value, so its write is deferred to the commit point in runInstall.
+	if decision.FromExistingFile {
+		if seed := deriveSchedulerTimeFromCrontabFn(ctx, configPath); seed.Note != "" {
+			logBootstrapInfo(bootstrap, "%s", seed.Note)
+			if seed.Time != "" && decision.BaseTemplate != "" {
+				decision.BaseTemplate = setEnvValue(decision.BaseTemplate, "SCHEDULER_TIME", seed.Time)
+			}
+		}
 	}
 	if decision.SkipConfigWizard {
 		fmt.Println("Existing configuration detected, keeping current backup.env and skipping configuration wizard.")

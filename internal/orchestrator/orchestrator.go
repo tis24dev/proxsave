@@ -185,6 +185,14 @@ type BackupStats struct {
 	// section's state (S4). Neither is registered as a log secret.
 	HealthcheckLink   string
 	HealthcheckStatus string
+	// HealthcheckPortalURL and HealthcheckPortalLogin are the fallback the epilogue
+	// shows INSTEAD of the magic-link once the operator has their own portal password:
+	// the plain sign-in page and the identity to sign in with. Both are RAW and gated at
+	// display (serverbot.SanitizeLoginURL / SanitizePortalLogin). They are only set when
+	// the server confirmed password_set, so an empty pair means "keep quiet", never
+	// "guess". Like the link, neither is registered as a log secret.
+	HealthcheckPortalURL   string
+	HealthcheckPortalLogin string
 
 	// Version update information
 	NewVersionAvailable bool

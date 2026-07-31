@@ -1,12 +1,14 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"strings"
 
 	cronutil "github.com/tis24dev/proxsave/internal/cron"
 	"github.com/tis24dev/proxsave/internal/installer"
+	"github.com/tis24dev/proxsave/internal/logging"
 	"github.com/tis24dev/proxsave/internal/safefs"
 )
 
@@ -63,4 +65,142 @@ func keptCronScheduleFromConfig(configPath string) string {
 		return ""
 	}
 	return cronutil.TimeToSchedule(norm)
+}
+
+// schedulerTimeSeed is the outcome of a SCHEDULER_TIME seeding attempt: Time is
+// the HH:MM written into backup.env ("" when nothing was written) and Note is a
+// one-line operator-facing explanation ("" when there is nothing to report). The
+// note is RETURNED rather than logged because --upgrade-config-json must keep
+// stdout pure JSON (upgradeConfigWithBinary json.Unmarshals the child's entire
+// stdout); that caller surfaces it as an UpgradeResult warning instead.
+type schedulerTimeSeed struct {
+	Time string
+	Note string
+}
+
+// seedSchedulerTimeFromCrontabFn is a seam so the install/upgrade tests can drive
+// the callers without touching a real crontab (mirrors migrateLegacyCronEntriesFn).
+var seedSchedulerTimeFromCrontabFn = seedSchedulerTimeFromCrontab
+
+// deriveSchedulerTimeFromCrontabFn is the read-only twin of the seam above.
+var deriveSchedulerTimeFromCrontabFn = deriveSchedulerTimeFromCrontab
+
+// seedSchedulerTimeFromCrontab records the time the host ACTUALLY runs its backup
+// at into SCHEDULER_TIME, derived from the proxsave cron line, so the daemon that
+// replaces cron - and the cron line a (re)install rewrites from the config -
+// inherit it instead of the 02:00 template default. SCHEDULER_TIME only exists
+// since 0.30: on every older install the crontab is the sole record of the
+// operator's run time, and both the config merge and the daemon migration used to
+// discard it.
+//
+// Precedence: an EXPLICIT operator SCHEDULER_TIME always wins; this only fills a
+// value the operator never set. "Never set" is KEY ABSENCE (or an empty value),
+// never a value comparison, which is why every caller runs this BEFORE the writer
+// that would materialize the template default. Once the key exists this is a
+// no-op, so it is safe to call on every install and every upgrade.
+//
+// Best-effort: an unreadable config or crontab, no proxsave cron line, or a
+// schedule the daemon cannot express leaves the file untouched (DefaultTime keeps
+// applying).
+func seedSchedulerTimeFromCrontab(ctx context.Context, configPath string) schedulerTimeSeed {
+	seed := deriveSchedulerTimeFromCrontab(ctx, configPath)
+	if seed.Time == "" {
+		return seed
+	}
+	if err := setBackupEnvKeys(configPath, map[string]string{"SCHEDULER_TIME": seed.Time}); err != nil {
+		return schedulerTimeSeed{Note: fmt.Sprintf("Failed to record the existing cron run time %s as SCHEDULER_TIME: %v", seed.Time, err)}
+	}
+	return seed
+}
+
+// deriveSchedulerTimeFromCrontab is seedSchedulerTimeFromCrontab without the write.
+// It exists because the install wizard must NOT touch backup.env before the operator
+// has committed: on the Edit path the wizard rewrites the whole file at the end from
+// its in-memory template, so the adopted time only has to reach that template, and an
+// install cancelled halfway then leaves the host byte-identical.
+func deriveSchedulerTimeFromCrontab(ctx context.Context, configPath string) schedulerTimeSeed {
+	configPath = strings.TrimSpace(configPath)
+	if configPath == "" {
+		return schedulerTimeSeed{}
+	}
+	data, err := safefs.ReadFileUnderRoot(configPath)
+	if err != nil {
+		return schedulerTimeSeed{}
+	}
+	if strings.TrimSpace(installer.DeriveInstallWizardPrefill(string(data)).SchedulerTime) != "" {
+		return schedulerTimeSeed{} // explicit operator value: never overridden
+	}
+	lines, err := crontabReadLinesFn(ctx)
+	if err != nil {
+		return schedulerTimeSeed{}
+	}
+	hhmm, ok := schedulerTimeFromCronLines(lines)
+	if !ok {
+		if hasProxsaveCronLine(lines) {
+			return schedulerTimeSeed{Note: fmt.Sprintf(
+				"The existing proxsave cron entry is not a single daily time; SCHEDULER_TIME stays at the %s default - set it in backup.env if the backup must run at another time.",
+				cronutil.DefaultTime)}
+		}
+		return schedulerTimeSeed{}
+	}
+	return schedulerTimeSeed{Time: hhmm, Note: fmt.Sprintf(
+		"SCHEDULER_TIME was not set: adopted %s from the existing proxsave cron entry so the daily run time does not change.", hhmm)}
+}
+
+// schedulerTimeFromCronLines derives the single daily HH:MM the proxsave cron
+// entries run at. It returns ok=false unless the crontab expresses exactly ONE
+// unambiguous daily time for proxsave: every proxsave-owned line (matched the same
+// way dropCanonicalCronLines matches the lines it deletes, so we read exactly what
+// is about to be removed) must convert to the same HH:MM. No proxsave line, a
+// schedule the daemon cannot express, or two proxsave lines at different times all
+// return false.
+func schedulerTimeFromCronLines(lines []string) (string, bool) {
+	found := ""
+	for _, line := range lines {
+		if !commandTokenMatchesTarget(strings.Trim(cronCommandToken(line), "\"'")) {
+			continue
+		}
+		hhmm := cronutil.ScheduleToTime(line)
+		if hhmm == "" || (found != "" && found != hhmm) {
+			return "", false
+		}
+		found = hhmm
+	}
+	return found, found != ""
+}
+
+// deriveSchedulerTimeForExistingConfig is the read-only twin used by the TUI before
+// the wizard runs: same gate, no write to backup.env.
+func deriveSchedulerTimeForExistingConfig(ctx context.Context, action installer.ExistingConfigAction, configPath string, bootstrap *logging.BootstrapLogger) schedulerTimeSeed {
+	if !existingConfigAdoptsCronTime(action) {
+		return schedulerTimeSeed{}
+	}
+	seed := deriveSchedulerTimeFromCrontabFn(ctx, configPath)
+	if seed.Note != "" {
+		logBootstrapInfo(bootstrap, "%s", seed.Note)
+	}
+	return seed
+}
+
+// existingConfigAdoptsCronTime reports whether this answer commits to the existing
+// backup.env. Cancel must leave the host untouched, and Overwrite is about to replace
+// the file, so an adoption note there would describe a value nobody will use.
+func existingConfigAdoptsCronTime(action installer.ExistingConfigAction) bool {
+	switch action {
+	case installer.ExistingConfigKeepContinue, installer.ExistingConfigEdit:
+		return true
+	default:
+		return false
+	}
+}
+
+// hasProxsaveCronLine reports whether the crontab schedules proxsave at all (used
+// to warn only when there was a schedule we refused to interpret).
+func hasProxsaveCronLine(lines []string) bool {
+	for _, line := range lines {
+		if commandTokenMatchesTarget(strings.Trim(cronCommandToken(line), "\"'")) {
+			return true
+		}
+	}
+	return false
 }

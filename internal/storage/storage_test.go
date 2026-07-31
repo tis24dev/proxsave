@@ -120,6 +120,9 @@ func TestLocalStorageListSkipsAssociatedFilesAndSortsByTimestamp(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewLocalStorage() error = %v", err)
 	}
+	// Retention only prunes backups this host owns, so the fixture must declare
+	// which host it is pretending to be (set per instance: the tests run parallel).
+	local.hostname = "node"
 
 	now := time.Now()
 	files := []struct {
@@ -229,6 +232,9 @@ func TestLocalStorageApplyRetentionDeletesOldBackups(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewLocalStorage() error = %v", err)
 	}
+	// Retention only prunes backups this host owns, so the fixture must declare
+	// which host it is pretending to be (set per instance: the tests run parallel).
+	local.hostname = "node"
 
 	now := time.Now()
 	type backupMeta struct {
@@ -237,7 +243,7 @@ func TestLocalStorageApplyRetentionDeletesOldBackups(t *testing.T) {
 	}
 	var metas []backupMeta
 	for i := 0; i < 4; i++ {
-		name := filepath.Join(dir, "node-backup-"+time.Now().Add(time.Duration(i)*time.Second).Format("150405")+".tar.zst")
+		name := filepath.Join(dir, "node-backup-"+time.Now().Add(time.Duration(i)*time.Second).Format("20060102-150405")+".tar.zst")
 		if err := os.WriteFile(name, []byte{byte(i)}, 0o600); err != nil {
 			t.Fatalf("write backup: %v", err)
 		}
@@ -379,6 +385,7 @@ func TestLocalStorageApplyRetentionHasLogInfoFalseWhenLogGlobFails(t *testing.T)
 	if err != nil {
 		t.Fatalf("NewLocalStorage() error = %v", err)
 	}
+	local.hostname = "node"
 
 	now := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
 	newest := filepath.Join(dir, "node-backup-20240101-000000.tar.zst")
@@ -428,6 +435,7 @@ func TestLocalStorageApplyRetentionGFSInvokesGFSRetention(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewLocalStorage() error = %v", err)
 	}
+	local.hostname = "node"
 
 	now := time.Date(2024, 1, 2, 0, 0, 0, 0, time.UTC)
 	newest := filepath.Join(dir, "node-backup-20240102-000000.tar.zst")
@@ -555,8 +563,8 @@ func TestLocalStorageLoadMetadataFromBundleOpenError(t *testing.T) {
 		t.Fatalf("NewLocalStorage() error = %v", err)
 	}
 
-	if _, err := local.loadMetadataFromBundle(filepath.Join(dir, "missing.bundle.tar")); err == nil {
-		t.Fatal("expected loadMetadataFromBundle() to fail for missing file")
+	if _, err := local.loadMetadataFromBundle(context.Background(), filepath.Join(dir, "missing.bundle.tar")); err == nil {
+		t.Fatal("expected loadMetadataFromBundle(context.Background(), ) to fail for missing file")
 	}
 }
 
@@ -574,8 +582,8 @@ func TestLocalStorageLoadMetadataFromBundleReadError(t *testing.T) {
 	if err := os.WriteFile(bundlePath, []byte("not a tar"), 0o600); err != nil {
 		t.Fatalf("write bundle: %v", err)
 	}
-	if _, err := local.loadMetadataFromBundle(bundlePath); err == nil {
-		t.Fatal("expected loadMetadataFromBundle() to fail for corrupted tar")
+	if _, err := local.loadMetadataFromBundle(context.Background(), bundlePath); err == nil {
+		t.Fatal("expected loadMetadataFromBundle(context.Background(), ) to fail for corrupted tar")
 	}
 }
 
@@ -613,8 +621,8 @@ func TestLocalStorageLoadMetadataFromBundleParseError(t *testing.T) {
 		t.Fatalf("close file: %v", err)
 	}
 
-	if _, err := local.loadMetadataFromBundle(bundlePath); err == nil {
-		t.Fatal("expected loadMetadataFromBundle() to fail for invalid manifest JSON")
+	if _, err := local.loadMetadataFromBundle(context.Background(), bundlePath); err == nil {
+		t.Fatal("expected loadMetadataFromBundle(context.Background(), ) to fail for invalid manifest JSON")
 	}
 }
 
@@ -670,9 +678,9 @@ func TestLocalStorageLoadMetadataFromBundleFallsBackToStat(t *testing.T) {
 		t.Fatalf("chtimes: %v", err)
 	}
 
-	meta, err := local.loadMetadataFromBundle(bundlePath)
+	meta, err := local.loadMetadataFromBundle(context.Background(), bundlePath)
 	if err != nil {
-		t.Fatalf("loadMetadataFromBundle() error = %v", err)
+		t.Fatalf("loadMetadataFromBundle(context.Background(), ) error = %v", err)
 	}
 	if !meta.Timestamp.Equal(modTime) {
 		t.Fatalf("Timestamp = %v, want %v", meta.Timestamp, modTime)
@@ -790,8 +798,8 @@ func TestLocalStorageLoadMetadataFromBundleMissingEntry(t *testing.T) {
 		t.Fatalf("close file: %v", err)
 	}
 
-	if _, err := local.loadMetadataFromBundle(bundlePath); err == nil {
-		t.Fatal("expected loadMetadataFromBundle() to fail when metadata entry missing")
+	if _, err := local.loadMetadataFromBundle(context.Background(), bundlePath); err == nil {
+		t.Fatal("expected loadMetadataFromBundle(context.Background(), ) to fail when metadata entry missing")
 	}
 }
 
@@ -1261,6 +1269,7 @@ func TestSecondaryStorageApplyRetentionSimple(t *testing.T) {
 		BundleAssociatedFiles: false,
 	}
 	storage := newSecondaryStorageForTest(t, cfg)
+	storage.hostname = "node-simple"
 
 	baseTime := time.Date(2024, time.January, 10, 12, 0, 0, 0, time.UTC)
 	type backupInfo struct {
@@ -1334,6 +1343,7 @@ func TestSecondaryStorageApplyRetentionGFS(t *testing.T) {
 		BundleAssociatedFiles: false,
 	}
 	storage := newSecondaryStorageForTest(t, cfg)
+	storage.hostname = "node-gfs"
 
 	now := time.Now()
 	timestamps := []time.Time{

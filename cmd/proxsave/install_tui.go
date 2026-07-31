@@ -130,6 +130,13 @@ func runInstallTUI(ctx context.Context, configPath string, bootstrap *logging.Bo
 	var wizardData *installer.InstallWizardData
 	baseTemplate := ""
 
+	// Adopt the run time from the cron line this install is about to rewrite, now that
+	// the operator's answer is known. Nothing is written to backup.env here: on Edit
+	// the value is mirrored into baseTemplate below and ApplyInstallData rewrites the
+	// file at the end, so cancelling later leaves the host byte-identical. Keep
+	// existing has no wizard to carry it, so its write is deferred to the commit point.
+	schedulerSeed := deriveSchedulerTimeForExistingConfig(ctx, existingAction, configPath, bootstrap)
+
 	switch existingAction {
 	case installer.ExistingConfigCancel:
 		logging.DebugStepBootstrap(bootstrap, "install workflow (tui)", "user cancelled installation")
@@ -144,6 +151,11 @@ func runInstallTUI(ctx context.Context, configPath string, bootstrap *logging.Bo
 			return fmt.Errorf("read existing configuration: %w", readErr)
 		}
 		baseTemplate = string(content)
+		if schedulerSeed.Time != "" {
+			// cronFieldDefault reads this to prefill "Run at"; without it the wizard
+			// would offer the 02:00 default instead of the host's real run time.
+			baseTemplate = setEnvValue(baseTemplate, "SCHEDULER_TIME", schedulerSeed.Time)
+		}
 	default:
 		logging.DebugStepBootstrap(bootstrap, "install workflow (tui)", "using embedded template")
 		// Overwrite: use embedded template (handled as empty base)
@@ -330,6 +342,15 @@ func runInstallTUI(ctx context.Context, configPath string, bootstrap *logging.Bo
 	if wizardData != nil {
 		wizardCronSchedule = cronutil.TimeToSchedule(wizardData.CronTime)
 	}
+	// Keep-existing kept backup.env untouched, so nothing has carried the adopted run
+	// time into it. Write it now, past every interactive step: the install is
+	// committed, and buildInstallCronSchedule below reads the value from the file.
+	if skipConfigWizard {
+		if seed := seedSchedulerTimeFromCrontabFn(ctx, configPath); seed.Note != "" {
+			logBootstrapInfo(bootstrap, "%s", seed.Note)
+		}
+	}
+
 	cronSchedule := buildInstallCronSchedule(skipConfigWizard, wizardCronSchedule, configPath)
 	wizardMode := ""
 	if wizardData != nil {

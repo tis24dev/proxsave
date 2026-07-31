@@ -655,6 +655,7 @@ func TestSecondaryStorage_ApplyRetention_SetsNoLogInfoWhenLogCountFails(t *testi
 		BundleAssociatedFiles: false,
 	}
 	storage, _ := NewSecondaryStorage(cfg, logger)
+	storage.hostname = "node-nolog"
 
 	baseTime := time.Date(2024, time.January, 10, 12, 0, 0, 0, time.UTC)
 	for i := 0; i < 2; i++ {
@@ -699,6 +700,7 @@ func TestSecondaryStorage_ApplyRetention_GFS_SetsNoLogInfoWhenLogCountFails(t *t
 		BundleAssociatedFiles: false,
 	}
 	storage, _ := NewSecondaryStorage(cfg, logger)
+	storage.hostname = "node-nolog-gfs"
 
 	now := time.Date(2024, time.January, 10, 12, 0, 0, 0, time.UTC)
 	for i := 0; i < 3; i++ {

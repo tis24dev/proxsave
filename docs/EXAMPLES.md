@@ -98,7 +98,7 @@ crontab -e
 
 ### Expected Results
 
-```
+```text
 Backup directory: /opt/proxsave/backup/
 - <hostname>-backup-20240115-020000.tar.xz.bundle.tar
 ```
@@ -169,7 +169,7 @@ proxsave
 
 ### Expected Results
 
-```
+```text
 Local (SSD):
 /opt/proxsave/backup/
 - 7 backups retained (latest week)
@@ -329,7 +329,7 @@ proxsave --decrypt
 ### Expected Results
 
 **Encrypted backup**:
-```
+```text
 pve01-backup-20240115-020000.tar.xz.age.bundle.tar     # Encrypted bundle (archive + metadata + checksum)
 ```
 
@@ -586,7 +586,7 @@ proxsave
 # - Configure SMTP/Sendmail targets and matchers in Proxmox Notifications
 # - ProxSave does not need SMTP host/port/user/password
 # - EMAIL_RECIPIENT is optional (only used for the To: header)
-# - With EMAIL_FALLBACK_SENDMAIL=true, fallback order is pmf -> relay -> sendmail
+# - If PMF fails the relay is tried next regardless of EMAIL_FALLBACK_SENDMAIL, which only gates the final local-sendmail leg. Use EMAIL_DELIVERY_METHOD=sendmail to stay off the relay entirely
 # - Optional quick check (runs the forwarder directly; run as root):
 printf "To: root\nSubject: proxsave test\n\nHello from proxsave\n" | sudo /usr/libexec/proxmox-mail-forward
 ```
@@ -886,16 +886,24 @@ BACKUP_ENABLED=true
 
 ### Setup Steps
 
+`SYSTEM_ROOT_PREFIX` is **not** one of the keys ProxSave reads from the environment, so it has to go in a config file. Setting it on the command line is silently ignored and the run collects the live root instead, which is the one mistake here that produces a plausible-looking archive of the wrong system.
+
 ```bash
 # 1) Mount or prepare the alternate root
 mount /dev/vg0/snap /mnt/snapshot-root   # example
 
-# 2) Run a dry-run
-SYSTEM_ROOT_PREFIX=/mnt/snapshot-root proxsave --dry-run
+# 2) Put the prefix in a dedicated config file
+cp /opt/proxsave/configs/backup.env /opt/proxsave/configs/snapshot.env
+sed -i 's|^SYSTEM_ROOT_PREFIX=.*|SYSTEM_ROOT_PREFIX=/mnt/snapshot-root|' /opt/proxsave/configs/snapshot.env
 
-# 3) Run the actual backup (optional)
-SYSTEM_ROOT_PREFIX=/mnt/snapshot-root proxsave
+# 3) Run a dry-run against it
+proxsave -c /opt/proxsave/configs/snapshot.env --dry-run
+
+# 4) Run the actual backup (optional)
+proxsave -c /opt/proxsave/configs/snapshot.env
 ```
+
+Confirm the prefix took effect before running for real. On a Proxmox snapshot the run header names it (`Proxmox Type (prefix /mnt/snapshot-root): ...`); on a plain chroot or fixture that line is debug-only, so run the dry-run with `--log-level debug` and check the collected paths resolve under `/mnt/snapshot-root`. Collection lines at the default level name the category, not the path, so they cannot tell you which root was used.
 
 ### Expected Results
 - Collected files reflect the contents of `/mnt/snapshot-root/etc`, `/var`, `/root`, `/home`, etc.

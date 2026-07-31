@@ -107,6 +107,7 @@ proxsave -h
 | `--daemon-setup` | | Switch this install to daemon mode: install+enable the service and remove the cron entry. |
 | `--daemon-remove` | | Revert to the cron scheduler, disable the service, and block future upgrades from reinstalling the daemon. |
 | `--daemon-status` | | Print the daemon status (scheduler mode, service state, running version, binary alignment) and exit. Exit code is `0` only when the daemon is running and aligned, non-zero otherwise, so scripts can gate on it. |
+| `--show-whatsnew` | | Show the release-notes screen once and exit, then mark it seen. `--upgrade` calls it for you on an interactive terminal; run it by hand after an unattended upgrade to stop the "unseen release notes" warning. |
 
 ---
 
@@ -121,7 +122,8 @@ proxsave --install
 # Interactive installation wizard (CLI mode - for debugging)
 proxsave --install --cli
 
-# Clean reinstall (wipes install dir except build/env/identity, then runs wizard)
+# Clean reinstall: wipes the install dir except build/, env/ and identity/, then runs
+# the wizard. With stock paths that deletes local backup archives and configs/backup.env.
 proxsave --new-install
 
 # Clean reinstall with CLI mode
@@ -233,7 +235,7 @@ See also: [upgrading configuration](#configuration-upgrade)
 | Flag | Description |
 |------|-------------|
 | `--install` | Interactive installation wizard |
-| `--new-install` | Wipe install directory (preserve build/env/identity) then launch wizard |
+| `--new-install` | Wipe the install directory, keeping only `build/`, `env/` and `identity/`, then launch the wizard. With stock paths this deletes your local backup archives and `configs/backup.env` |
 | `--upgrade` | Download and install latest ProxSave binary from GitHub releases |
 | `--upgrade-config` | Merge current config with latest template |
 | `--upgrade-config-dry-run` | Preview config upgrade without changes |
@@ -574,7 +576,13 @@ proxsave --support
 
 ## Scheduling with Cron
 
-> On fresh installs ProxSave schedules backups through the **resident daemon** (`proxsave-daemon.service`) by default; see [DAEMON.md](DAEMON.md). The daemon runs once daily, so every schedule below (hourly, every 6 hours, weekly, several times a day) requires the daemon-less **cron** engine. To use one, install with the cron engine or run `proxsave --daemon-remove` first. Do not add a cron entry while the daemon is active, or the backup runs twice.
+> On fresh installs ProxSave schedules backups through the **resident daemon** (`proxsave-daemon.service`) by default; see [DAEMON.md](DAEMON.md). The daemon runs once daily, so every schedule below (hourly, every 6 hours, weekly, several times a day) requires the daemon-less **cron** engine. Do not add a cron entry while the daemon is active, or the backup runs twice.
+
+> **ProxSave owns your crontab, so a hand-written schedule does not survive.** `--install`, `--new-install` and `--daemon-remove` each rewrite it: they delete **every** cron line whose command is named `proxsave` or `proxmox-backup`, not only the one they wrote themselves, and append a single daily entry at `SCHEDULER_TIME`. The deletion happens in both scheduler modes; whether the appended line stays depends on where the run ends. `--daemon-remove` ends on cron, so it keeps it. `--install` and `--new-install` write that line first and then, when the selected (or already configured) mode is `daemon`, drop it again while enabling the unit — so a daemon installation ends with no proxsave cron entry, unless the unit install itself fails and the host stays on cron with the line it just wrote. A custom cadence from this section is therefore silently downgraded to daily by a cron reinstall, and removed outright by a daemon one. `--upgrade` is the exception: it only repoints legacy paths and leaves the schedule alone.
+>
+> The practical order is: run `proxsave --daemon-remove` first, which switches to cron, writes the daily line for you, and records the opt-out, **then** edit that line to the cadence you want. Adding a second entry afterwards leaves two, and both will fire.
+>
+> That opt-out is also what makes the line survive. `--upgrade` runs the daemon auto-migration, which deletes every proxsave cron entry and moves the host to the once-daily daemon, and it skips that only when the config already says `SCHEDULER_MODE=daemon` or when `--daemon-remove` has written `DAEMON_OPT_OUT=true`. A cron install that has never run `--daemon-remove` loses its hand-edited schedule at the next upgrade. `--daemon-setup` removes it too.
 
 ### Cron Setup
 
@@ -670,7 +678,7 @@ crontab -e
 | `--log-level <level>` | `-l` | Set log level (debug\|info\|warning\|error\|critical) |
 | `--cli` | - | Force CLI mode instead of TUI (only for: --install, --new-install, --newkey, --decrypt, --restore) |
 | `--install` | - | Interactive installation wizard |
-| `--new-install` | - | Wipe install dir (preserve build/env/identity) then run wizard |
+| `--new-install` | - | Wipe the install dir, keeping only `build/`, `env/` and `identity/`, then run the wizard. Deletes local backups and `configs/backup.env` with stock paths |
 | `--upgrade` | - | Download and install latest binary from GitHub releases |
 | `--upgrade-config` | - | Upgrade config from embedded template |
 | `--upgrade-config-dry-run` | - | Preview config upgrade |
@@ -731,7 +739,16 @@ proxsave --support
 
 ## Environment Variables
 
-While most configuration is in `configs/backup.env`, these environment variables can override settings:
+While most configuration is in `configs/backup.env`, some settings can also be set in the environment for a single run.
+
+**Only a fixed allowlist of keys is honoured.** ProxSave reads a hardcoded list of about a hundred `backup.env` names out of the environment; every other key in the shipped template, roughly half of them, is ignored. There is no warning and no log line when that happens: the run silently uses the value from the file. The three PBS auth keys (`PBS_REPOSITORY`, `PBS_PASSWORD`, `PBS_FINGERPRINT`) are handled separately and the environment wins over the file for them. For anything else not on the list, the file is the only way to set it.
+
+Two consequences worth knowing:
+
+- Keys that look obviously overridable often are not. `SYSTEM_ROOT_PREFIX` and `HOST_BACKUP_MODE` are two examples, so `SYSTEM_ROOT_PREFIX=/mnt/snapshot proxsave` does not back up the mounted root, it backs up the live one.
+- An empty value is treated as absent, so a key cannot be cleared from the environment: `GOTIFY_TOKEN= proxsave` leaves the file's token in place.
+
+The ones below are on the list and are the ones worth using:
 
 ```bash
 # Config file location: there is no env var for this; use the -c / --config CLI flag
@@ -753,7 +770,7 @@ DEBUG_LEVEL=extreme proxsave --log-level debug
 USE_COLOR=false proxsave
 ```
 
-**Priority**: Environment variables > Configuration file > Defaults, except `BASE_DIR`, which is always runtime-detected.
+**Priority**: for a key on the allowlist, environment variable > configuration file > default. One exception: if the file still carries the **legacy alias** of that key (see Legacy key names in [CONFIGURATION.md](CONFIGURATION.md)), the legacy line in the file wins over the environment, because the allowlist only carries the canonical name. For every other key the environment is not consulted at all. `BASE_DIR` is always runtime-detected and is not overridable from either place.
 
 ---
 
@@ -777,6 +794,12 @@ USE_COLOR=false proxsave
 | `13` | panic error | Unhandled panic caught |
 | `14` | security error | Errors detected by the security check |
 | `15` | encryption error | Error during encryption setup or processing |
+| `16` | backup skipped | No backup was performed, for a benign reason: another backup already held the lock, or `BACKUP_ENABLED=false`. Not a failure |
+| `130` | interrupted | The run was cancelled with Ctrl+C (128 plus SIGINT) |
+
+**Note**: `16` is the one non-zero code that does not mean something went wrong. A
+wrapper of the form `proxsave --backup || alert` will page you every time two runs
+overlap unless it excludes it.
 
 **Note**: Cloud storage is non-critical. A cloud upload failure does **not** abort the
 run with a storage error (`5`): the local backup is kept, but the failure is recorded as a

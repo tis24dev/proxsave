@@ -4,7 +4,6 @@ package orchestrator
 import (
 	"context"
 	"errors"
-	"fmt"
 	"path/filepath"
 	"strings"
 
@@ -20,28 +19,30 @@ type fullRestoreUIFlow struct {
 	destRoot  string
 	logger    *logging.Logger
 	dryRun    bool
+	// plan is the synthesized full-restore plan; only ExportCategories is read, to
+	// keep export-only content out of the live system.
+	plan *RestorePlan
 }
 
-func runFullRestoreWithUI(ctx context.Context, ui RestoreWorkflowUI, candidate *backupCandidate, prepared *preparedBundle, destRoot string, logger *logging.Logger, dryRun bool) error {
-	flow := &fullRestoreUIFlow{
-		ctx:       ctx,
-		ui:        ui,
-		candidate: candidate,
-		prepared:  prepared,
-		destRoot:  destRoot,
-		logger:    logger,
-		dryRun:    dryRun,
+// newFullRestoreUIFlow builds the extraction half of the fallback from the shared
+// workflow state. The safety half (confirm ordering, safety backup, services) lives
+// in runFullRestore, which reuses the selective path's own methods.
+func newFullRestoreUIFlow(w *restoreUIWorkflowRun) *fullRestoreUIFlow {
+	return &fullRestoreUIFlow{
+		ctx:       w.ctx,
+		ui:        w.ui,
+		candidate: w.candidate,
+		prepared:  w.prepared,
+		destRoot:  w.destRoot,
+		logger:    w.logger,
+		dryRun:    w.cfg.DryRun,
+		plan:      w.plan,
 	}
-	return flow.run()
 }
 
-func (f *fullRestoreUIFlow) run() error {
-	if err := f.validate(); err != nil {
-		return err
-	}
-	if err := f.confirm(); err != nil {
-		return err
-	}
+// extract writes the archive out, skipping what must not reach the live system, and
+// then merges fstab. The plan is read here only for its ExportCategories.
+func (f *fullRestoreUIFlow) extract() error {
 	if f.safeFstabMerge() {
 		f.logger.Warning("Full restore safety: /etc/fstab will not be overwritten; Smart Merge will be applied after extraction.")
 	}
@@ -55,34 +56,45 @@ func (f *fullRestoreUIFlow) run() error {
 	return nil
 }
 
-func (f *fullRestoreUIFlow) validate() error {
-	if f.candidate == nil || f.prepared == nil || f.prepared.ArchivePath == "" {
-		return fmt.Errorf("invalid restore candidate")
-	}
-	return nil
-}
-
-func (f *fullRestoreUIFlow) confirm() error {
-	if err := f.ui.ShowMessage(f.ctx, "Full restore", "Backup category analysis failed; ProxSave will run a full restore (no selective modes)."); err != nil {
-		return err
-	}
-	confirmed, err := f.ui.ConfirmRestore(f.ctx)
-	if err != nil {
-		return err
-	}
-	if !confirmed {
-		return ErrRestoreAborted
-	}
-	return nil
-}
-
+// skipPath keeps two classes of entry out of a plain extraction: /etc/fstab, which
+// is merged afterwards instead of overwritten, and everything belonging to an
+// ExportOnly category. The selective path never writes export-only content to system
+// paths (splitRestoreCategories routes it to an export directory); before this, the
+// fallback wrote /etc/proxmox-backup/ and /var/lib/proxsave-info/ straight to /.
+//
+// The prefixes come from the plan's own ExportCategories, so there is no second list
+// to keep in step with categories.go.
 func (f *fullRestoreUIFlow) skipPath(name string) bool {
-	if !f.safeFstabMerge() {
+	clean := normalizeArchiveEntryPath(name)
+	if f.safeFstabMerge() && clean == "etc/fstab" {
+		return true
+	}
+	return f.isExportOnlyPath(clean)
+}
+
+func (f *fullRestoreUIFlow) isExportOnlyPath(clean string) bool {
+	if f.plan == nil || clean == "" {
 		return false
 	}
+	for _, cat := range f.plan.ExportCategories {
+		for _, p := range cat.Paths {
+			prefix := normalizeArchiveEntryPath(p)
+			if prefix == "" {
+				continue
+			}
+			if clean == prefix || strings.HasPrefix(clean, strings.TrimSuffix(prefix, "/")+"/") {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// normalizeArchiveEntryPath strips the "./" and "/" prefixes tar entries and category
+// paths carry, so the two can be compared.
+func normalizeArchiveEntryPath(name string) string {
 	clean := strings.TrimPrefix(strings.TrimSpace(name), "./")
-	clean = strings.TrimPrefix(clean, "/")
-	return clean == "etc/fstab"
+	return strings.TrimPrefix(clean, "/")
 }
 
 func (f *fullRestoreUIFlow) safeFstabMerge() bool {
@@ -124,6 +136,10 @@ func (f *fullRestoreUIFlow) extractAndMergeFstab(fsTempDir string) error {
 		f.logger.Warning("Failed to extract filesystem config for merge: %v", err)
 		return nil
 	}
+	// The selective path does this too. Without it remapFstabDevicesFromInventory has
+	// nothing to map against, so the merge silently proposes the backup's raw device
+	// names instead of this system's UUID/LABEL.
+	extractFstabInventoryInto(f.ctx, f.prepared.ArchivePath, fsTempDir, f.logger)
 	currentFstab := filepath.Join(f.destRoot, "etc", "fstab")
 	backupFstab := filepath.Join(fsTempDir, "etc", "fstab")
 	if err := smartMergeFstabWithUI(f.ctx, f.logger, f.ui, currentFstab, backupFstab, f.dryRun); err != nil {

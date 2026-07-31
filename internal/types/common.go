@@ -116,6 +116,13 @@ type BackupMetadata struct {
 	// Checksum is the SHA256 checksum of the backup file
 	Checksum string
 
+	// Hostname is the host that produced the backup, taken from the manifest
+	// ("hostname"). It is the same authoritative value the restore selector shows
+	// as its Hostname column (formatBackupCandidateHostname), so retention and the
+	// UI agree on who owns a backup instead of each guessing from the filename.
+	// Empty when no manifest could be read.
+	Hostname string
+
 	// ProxmoxType is the type of Proxmox environment (PVE/PBS)
 	ProxmoxType ProxmoxType
 

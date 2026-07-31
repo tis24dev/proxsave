@@ -37,8 +37,15 @@ type fakeRestoreWorkflowUI struct {
 	networkCommitErr       error
 
 	confirmCompatibilityCalls int
-	clusterRestoreModeCalls   int
-	lastCompatibilityWarning  error
+
+	// The reader-based SmartMergeFstab decided the default itself from a blank
+	// answer; smartMergeFstabWithUI computes it and hands it to the prompt, so the
+	// ported tests assert on what it passed.
+	fstabMergeCalls          int
+	lastFstabMergeDefaultYes bool
+	lastFstabMergeMessage    string
+	clusterRestoreModeCalls  int
+	lastCompatibilityWarning error
 
 	shownMessages   []string
 	confirmMessages []string
@@ -114,6 +121,9 @@ func (f *fakeRestoreWorkflowUI) ConfirmContinueWithPBSServicesRunning(ctx contex
 }
 
 func (f *fakeRestoreWorkflowUI) ConfirmFstabMerge(ctx context.Context, title, message string, timeout time.Duration, defaultYes bool) (bool, error) {
+	f.fstabMergeCalls++
+	f.lastFstabMergeDefaultYes = defaultYes
+	f.lastFstabMergeMessage = message
 	return f.confirmFstabMerge, f.confirmFstabMergeErr
 }
 

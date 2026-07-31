@@ -43,12 +43,14 @@ type HealthchecksChannel struct {
 	logger *logging.Logger
 
 	// Seams for tests (nil-safe): loadSecret reads the on-disk per-server relay secret
-	// (presence == "centralized monitoring provisioned"); mintLink best-effort fetches a
-	// fresh portal magic-link (login=1) when this run's relay did not already capture one;
-	// loadStatus reads the daemon's persisted ping outcomes; now clocks the freshness of
-	// those outcomes (injectable so the staleness branches are deterministic in tests).
+	// (presence == "centralized monitoring provisioned"); mintPortal best-effort fetches
+	// the portal state (login=1) when this run's relay did not already capture a link -
+	// the fresh magic-link while the operator has no password, plus the portal address,
+	// sign-in identity and password_set flag; loadStatus reads the daemon's persisted ping
+	// outcomes; now clocks the freshness of those outcomes (injectable so the staleness
+	// branches are deterministic in tests).
 	loadSecret func(baseDir string) (string, error)
-	mintLink   func(ctx context.Context, serverAPIHost, serverID, secret string) (string, error)
+	mintPortal func(ctx context.Context, serverAPIHost, serverID, secret string) (health.CentralizedConfig, error)
 	loadStatus func(baseDir string) (health.Status, error)
 	now        func() time.Time
 }
@@ -61,9 +63,8 @@ func NewHealthchecksChannel(cfg *config.Config, logger *logging.Logger) *Healthc
 		loadSecret: func(baseDir string) (string, error) {
 			return identity.LoadNotifySecret(baseDir)
 		},
-		mintLink: func(ctx context.Context, serverAPIHost, serverID, secret string) (string, error) {
-			c, err := health.FetchCentralizedConfig(ctx, nil, serverAPIHost, serverID, secret, true)
-			return c.LoginURL, err
+		mintPortal: func(ctx context.Context, serverAPIHost, serverID, secret string) (health.CentralizedConfig, error) {
+			return health.FetchCentralizedConfig(ctx, nil, serverAPIHost, serverID, secret, true)
 		},
 		loadStatus: health.LoadStatus,
 		now:        time.Now,
@@ -106,22 +107,25 @@ func (h *HealthchecksChannel) Notify(ctx context.Context, stats *BackupStats) er
 	// refined with the systemd state so a running-but-silent daemon is not called "down".
 	h.renderTransmissionStatus(ctx, stats)
 
-	// Portal magic-link: prefer the one THIS run's relay already captured (no network);
-	// else best-effort mint one (the server returns it only until the user's first
-	// login, so this self-limits). A mint failure is a QUIET Info, never a WARNING.
+	// Portal state: prefer the magic-link THIS run's relay already captured (no network).
+	// Only when there is none does the section pay for the fetch - which is exactly the
+	// case the operator has a password of their own (the server stops minting then), so
+	// the same call brings back the portal address + sign-in identity that REPLACE the
+	// link on screen. A fetch failure is a QUIET Info, never a WARNING.
 	link := ""
 	if stats != nil {
 		link = stats.HealthcheckLink
 	}
-	if link == "" && h.mintLink != nil {
+	if link == "" && h.mintPortal != nil {
 		// Network op: wrap in a shape-only debug envelope (no URL, no secret).
 		done := logging.DebugStart(h.logger, "hc portal mint", "have_capture=false")
-		minted, err := h.mintLink(ctx, h.cfg.ServerAPIHost, h.cfg.ServerID, secret)
+		cfg, err := h.mintPortal(ctx, h.cfg.ServerAPIHost, h.cfg.ServerID, secret)
 		done(err)
 		if err == nil {
-			link = minted
+			link = cfg.LoginURL
+			h.storePortalFallback(cfg, stats)
 		} else {
-			h.info("%s: portal link unavailable", healthchecksSectionName)
+			h.info("%s: portal details unavailable", healthchecksSectionName)
 		}
 	}
 	// STORE the link on stats so a MINTED link is carried to the epilogue (a captured link
@@ -136,6 +140,26 @@ func (h *HealthchecksChannel) Notify(ctx context.Context, stats *BackupStats) er
 		}
 	}
 	return nil
+}
+
+// storePortalFallback records the portal address + sign-in identity the epilogue shows
+// INSTEAD of the magic-link. The admission rule (explicit password_set, plus the
+// per-half trust/sanitize gates) lives in serverbot.TrustedPortalFallback, shared with
+// ClassifyHealthcheckSetupResult so the two surfaces cannot drift.
+//
+// Each half is stored only when it survives its gate, so a refusal never blanks a
+// value an earlier call already recorded.
+func (h *HealthchecksChannel) storePortalFallback(cfg health.CentralizedConfig, stats *BackupStats) {
+	if stats == nil {
+		return
+	}
+	portalURL, portalLogin := serverbot.TrustedPortalFallback(cfg.PortalURL, cfg.PortalLogin, cfg.PasswordSet, defaultServerAPIHost)
+	if portalURL != "" {
+		stats.HealthcheckPortalURL = portalURL
+	}
+	if portalLogin != "" {
+		stats.HealthcheckPortalLogin = portalLogin
+	}
 }
 
 // renderTransmissionStatus reads the daemon status file and reports the latest REAL

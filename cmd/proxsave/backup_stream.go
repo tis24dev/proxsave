@@ -243,9 +243,18 @@ func buildBackupOutcomePrompt(res backupModeResult) string {
 			b.WriteString("\n")
 			b.WriteString(theme.Text.Render("Server ID Telegram: " + id))
 		}
+		// Two states, magic-link first (one click signs the operator in); the portal
+		// address + identity are the fallback shown once they have their own password.
 		if link := serverbot.SanitizeLoginURL(st.HealthcheckLink); link != "" {
 			b.WriteString("\n")
 			b.WriteString(theme.Text.Render("Healthchecks link: " + link))
+		} else if portal := serverbot.SanitizeLoginURL(st.HealthcheckPortalURL); portal != "" {
+			b.WriteString("\n")
+			b.WriteString(theme.Text.Render("Healthchecks portal: " + portal))
+			if login := serverbot.SanitizePortalLogin(st.HealthcheckPortalLogin); login != "" {
+				b.WriteString("\n")
+				b.WriteString(theme.Text.Render("Healthchecks login: " + login))
+			}
 		}
 	}
 

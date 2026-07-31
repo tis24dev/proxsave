@@ -17,11 +17,11 @@ import (
 // TestVERF01 is the consolidated end-to-end verification of the "what's new" feature over
 // the REAL gate (Decide/ShouldWarn/MarkSeen/LoadState/StatePath) and the two wirings. Four
 // scenarios must hold together in one session:
-//   1. a fresh install (seeded to current) shows nothing on either channel;
-//   2. a real upgrader (absent flag) shows Screen 0 exactly once, then goes silent;
-//   3. a non-interactive run emits exactly one captured WARNING WITHOUT writing the flag,
-//      so the backup state is untouched and the warning re-fires on every run;
-//   4. a timeout/Esc leaves the flag unwritten, so ShouldWarn still reports unseen.
+//  1. a fresh install (seeded to current) shows nothing on either channel;
+//  2. a real upgrader (absent flag) shows Screen 0 exactly once, then goes silent;
+//  3. a non-interactive run emits exactly one captured WARNING WITHOUT writing the flag,
+//     so the backup state is untouched and the warning re-fires on every run;
+//  4. a timeout/Esc leaves the flag unwritten, so ShouldWarn still reports unseen.
 //
 // The live on-TTY paint of Screen 0 and the real --backup channel delivery stay manual UAT
 // (03-VALIDATION.md); everything gate/wiring is verified here.

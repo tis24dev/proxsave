@@ -72,6 +72,7 @@ func RunHealthcheckSetup(ctx context.Context, session *shell.Session, baseDir, c
 	statusExplanation := "Choose Check to verify the monitoring connection."
 	statusLevel := orchestrator.HealthcheckSetupLevelNeutral // pre-check: yellow, no symbol
 	magicLink := ""
+	portalURL, portalLogin := "", ""
 	var sensors []health.SensorRow // per-sensor rows, populated after each Check
 	// In the dashboard (backToMenu) the check runs automatically on entry, like Daemon
 	// status; the installer keeps it manual (the user presses Check).
@@ -113,9 +114,27 @@ func RunHealthcheckSetup(ctx context.Context, session *shell.Session, baseDir, c
 					}
 					result.LastFatal = st.Fatal
 					result.LastMessage = st.Message
+					// Both blocks are LATCHES: a later Re-check that hits a transport
+					// hiccup returns neither field, takes neither branch, and so must not
+					// blank a block the user is reading.
+					//
+					// They are mutually exclusive per check, and the portal WINS when it
+					// arrives, because the two states are ordered in time: the server
+					// mints a link only while the operator has no password, and reports
+					// password_set only once they do. So a check that returns the portal
+					// is proof the link has been used and is now spent - keeping it
+					// latched would leave the box showing a dead single-use URL for
+					// exactly the operator who followed the instructions. This mirrors
+					// ClassifyHealthcheckSetupResult's contract ("render INSTEAD of
+					// LoginURL") and the CLI's printHealthcheckPortal, which is stateless
+					// and already prefers the portal for the current check.
 					if link := strings.TrimSpace(st.LoginURL); link != "" {
 						magicLink = link
 						result.MagicLinkSeen = true
+					} else if portal := strings.TrimSpace(st.PortalURL); portal != "" {
+						magicLink = ""
+						portalURL = portal
+						portalLogin = strings.TrimSpace(st.PortalLogin)
 					}
 					if st.Verified {
 						result.Verified = true
@@ -133,7 +152,7 @@ func RunHealthcheckSetup(ctx context.Context, session *shell.Session, baseDir, c
 				}
 			}
 		}
-		prompt := buildHealthcheckPrompt(selfMode, magicLink, statusKeyword, statusExplanation, statusLevel, sensors)
+		prompt := buildHealthcheckPrompt(selfMode, magicLink, portalURL, portalLogin, statusKeyword, statusExplanation, statusLevel, sensors)
 
 		items := make([]components.SelectorItem[healthcheckAction], 0, 3)
 		if !result.LastFatal && (result.Verified || result.CheckAttempts < orchestrator.HealthcheckSetupMaxVerificationAttempts) {
@@ -184,12 +203,15 @@ func RunHealthcheckSetup(ctx context.Context, session *shell.Session, baseDir, c
 }
 
 // buildHealthcheckPrompt renders the styled prompt shown above the Check/Continue/
-// Skip choices: the guide, the portal magic-link boxed for emphasis, and a two-line
-// Status block - a state keyword (green only when monitoring is actually WORKING, red
-// on a hard blocker, yellow otherwise) on the first line and its plain-language
-// explanation on the second. The magic link is already sanitized upstream
-// (serverbot.SanitizeLoginURL: http(s), printable ASCII).
-func buildHealthcheckPrompt(selfMode bool, magicLink, keyword, explanation string, level orchestrator.HealthcheckSetupLevel, sensors []health.SensorRow) string {
+// Skip choices: the guide, the portal box, and a two-line Status block - a state keyword
+// (green only when monitoring is actually WORKING, red on a hard blocker, yellow
+// otherwise) on the first line and its plain-language explanation on the second.
+//
+// The portal box has two states and the magic-link wins: it signs the user in with one
+// click. portalURL/portalLogin are the fallback the server sends instead once the user
+// has their own password. Every value is already sanitized upstream
+// (serverbot.TrustedLoginURL / SanitizePortalLogin).
+func buildHealthcheckPrompt(selfMode bool, magicLink, portalURL, portalLogin, keyword, explanation string, level orchestrator.HealthcheckSetupLevel, sensors []health.SensorRow) string {
 	var b strings.Builder
 	b.WriteString(theme.Text.Render("Backup monitoring (healthchecks) is enabled for this host."))
 	b.WriteString("\n")
@@ -214,6 +236,21 @@ func buildHealthcheckPrompt(selfMode bool, magicLink, keyword, explanation strin
 		b.WriteString(box)
 		b.WriteString("\n")
 		b.WriteString(theme.Subtle.Render("Open it to set a password and configure alert channels."))
+		b.WriteString("\n\n")
+	} else if portalURL != "" {
+		inner := theme.Subtle.Render("Your monitoring portal:") +
+			"\n" + theme.Emphasis.Render(portalURL)
+		if portalLogin != "" {
+			inner += "\n" + theme.Emphasis.Render("Login: "+portalLogin)
+		}
+		box := lipgloss.NewStyle().
+			Border(lipgloss.RoundedBorder()).
+			BorderForeground(theme.Orange).
+			Padding(0, 1).
+			Render(inner)
+		b.WriteString(box)
+		b.WriteString("\n")
+		b.WriteString(theme.Subtle.Render("Sign in with the password you set."))
 		b.WriteString("\n\n")
 	}
 

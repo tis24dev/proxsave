@@ -28,7 +28,7 @@ This guide covers the most common issues encountered when using Proxsave, along 
 **Before troubleshooting**:
 1. Check you're running the latest version: `proxsave --version`
 2. Try dry-run mode first: `proxsave --dry-run --log-level debug`
-3. Review logs in `LOG_PATH/backup-$(hostname)-*.log`
+3. Review the newest log in `LOG_PATH` (default `/opt/proxsave/log`; use your own directory if `LOG_PATH` or `LOCAL_LOG_PATH` is set in `configs/backup.env`). The filename carries the FQDN, so glob the directory rather than guessing: `ls -t /opt/proxsave/log/backup-*.log | head -1`
 
 ---
 
@@ -124,9 +124,11 @@ proxsave --config /etc/pbs/prod.env
 
 **Solution**:
 ```bash
-# Fix permissions manually
-chmod 700 /opt/proxsave/backup
-chmod 700 /opt/proxsave/log
+# Fix permissions manually. 755 is what the security check expects for these two:
+# setting 700 makes every run warn and, with AUTO_FIX_PERMISSIONS on (the default),
+# chmod them straight back.
+chmod 755 /opt/proxsave/backup
+chmod 755 /opt/proxsave/log
 chmod 600 /opt/proxsave/configs/backup.env
 
 # Or enable auto-fix in config
@@ -135,10 +137,10 @@ AUTO_FIX_PERMISSIONS=true
 ```
 
 **Recommended permissions**:
-```
+```text
 /opt/proxsave/           755 (drwxr-xr-x)
-├── backup/                    700 (drwx------)
-├── log/                       700 (drwx------)
+├── backup/                    755 (drwxr-xr-x)
+├── log/                       755 (drwxr-xr-x)
 ├── configs/
 │   └── backup.env             600 (-rw-------)
 ├── identity/                  700 (drwx------)
@@ -381,7 +383,7 @@ CLOUD_BATCH_PAUSE=3  # Wait 3 seconds between batches
 
 **Google Drive**:
 ```bash
-RCLONE_TRANSFERS=2-4
+RCLONE_TRANSFERS=2
 CLOUD_BATCH_SIZE=10
 CLOUD_BATCH_PAUSE=2
 ```
@@ -571,7 +573,7 @@ If Email is enabled but you don't see it being dispatched, ensure `EMAIL_DELIVER
 This mode uses Proxmox Notifications via `proxmox-mail-forward`. It is the recommended mode on Proxmox hosts when you expected SMTP settings in ProxSave: configure SMTP targets/matchers in Proxmox, then let ProxSave hand the message to Proxmox.
 
 - `EMAIL_RECIPIENT` is optional in this mode and is only used for the `To:` header.
-- If PMF fails and `EMAIL_FALLBACK_SENDMAIL=true`, ProxSave tries the relay first and then local sendmail.
+- If PMF fails, ProxSave tries the shared cloud relay next. That leg is **not** gated on `EMAIL_FALLBACK_SENDMAIL`: it runs whenever the recipient is set and is not a `root@` address, so choosing `pmf` with the flag off does not keep the report inside Proxmox. Only the final local-sendmail leg consults the flag. To avoid the relay entirely use `EMAIL_DELIVERY_METHOD=sendmail`.
 - Verify `proxmox-mail-forward` exists:
   ```bash
   test -x /usr/libexec/proxmox-mail-forward && echo "proxmox-mail-forward OK" || echo "proxmox-mail-forward not found"
@@ -649,18 +651,19 @@ This mode uses `/usr/sbin/sendmail`, so your node must have a working local MTA 
 
 ---
 
-#### Error: `Backup path full` warnings but backup succeeds
+#### Warning: `... storage may fail due to insufficient space`
 
-**Cause**: Warning threshold triggered, but backup still fits.
+**Cause**: a non-critical destination (secondary or cloud) is below its required free space, so the run warns and carries on. The primary destination is critical instead: if it is short of space the run stops with a disk-space error rather than warning.
 
 **Solution**:
 ```bash
-# Adjust warning threshold
+# The required space is max(MIN_DISK_SPACE_<TIER>_GB, estimated size x SAFETY_FACTOR),
+# so the MIN_DISK_SPACE_* keys are a FLOOR, not a warning threshold. Raising one makes
+# the check stricter. The template ships 1 GB for the primary tier.
 nano configs/backup.env
-MIN_DISK_SPACE_PRIMARY_GB=5  # Lower threshold
+MIN_DISK_SPACE_SECONDARY_GB=1
 
-# Or increase disk space
-# Add more storage or clean unnecessary files
+# Or free up space on that destination
 ```
 
 ---
@@ -780,15 +783,30 @@ journalctl -u proxsave-daemon.service -f
 #### No monitoring portal link is shown
 
 **Symptoms**:
-- The dashboard check or the end of a run shows no `Healthchecks Portal:` line.
+- The dashboard check or the end of a run shows a `Healthchecks Portal:` address and a `Healthchecks Login:` identity instead of a single-use link, or shows nothing about the portal at all.
 
 **Cause**:
-- The server stops minting links once you have logged into the portal for the first time. This is the expected steady state: from then on you log in with the password you set.
-- Before that first login, minting is best effort and stays quiet when it fails.
-- A link that is not a clean http(s) URL on the monitoring server's own domain is dropped on purpose, so a tampered response cannot show you a phishing address.
+- The server stops minting links once you have set your own portal password. That is the expected steady state, and it is why you see an address plus an identity: sign in there with the password you chose. Opening the link is not what retires it, only choosing a password is.
+- If nothing at all is printed, the mint did not succeed. It is best effort and stays quiet when it fails. ProxSave will not fall back to the address form on its own: it shows that only when the server confirms a password exists, so it never sends you to a sign-in page you have no password for.
+- A link or address that is not a clean http(s) URL on the monitoring server's own domain is dropped on purpose, so a tampered response cannot show you a phishing address.
 
 **Resolution**:
-- Log in with your password. If you never set one, open the dashboard `Healthchecks` check again to request a fresh link.
+- If you see the address and identity, sign in with the password you set.
+- If you see nothing, open the dashboard `Healthchecks` check again to request a fresh link. Repeat failures mean the monitoring server could not be reached; check outbound connectivity from the host.
+
+#### Every backup reports warnings and the monitor went red right after an upgrade
+
+**Symptoms**:
+- Backups that clearly succeeded finish with "completed with warnings", exit `1` instead of `0`, and the `proxsave-backup` check goes down.
+- It started right after an upgrade and repeats on every scheduled run.
+- The run log carries `ProxSave <version> has unseen release notes. Open proxsave to view the new features.`
+
+**Cause**:
+- After a version bump ProxSave has release notes waiting for you. Until someone acknowledges them, every run logs that line at WARNING level. A warning promotes a clean run from exit `0` to exit `1`, and the daemon pings the backup check with that code, so `/1` takes the check down on a backup that was fine.
+- It only bites unattended upgrades. `--upgrade` shows the screen for you on an interactive terminal, which clears the flag; an upgrade run from a script or over a pipe skips it.
+
+**Resolution**:
+- Run `proxsave --show-whatsnew` once on the host, or open the dashboard and page through the release-notes screen. Either clears the flag and the next run is green again.
 
 #### A backup ran but `proxsave-backup` stayed silent
 
@@ -1057,7 +1075,7 @@ CLOUD_REMOTE=gdrive
 CLOUD_REMOTE_PATH=/pbs-backups
 COMPRESSION_TYPE=xz
 # ... other relevant settings
-```
+```text
 
 **Issue description**:
 Brief description of the problem...
@@ -1077,7 +1095,7 @@ What actually happens...
 ```
 [ERROR] Cloud upload failed: connection timeout
 ...
-```
+```text
 
 **Additional context**:
 Any other relevant information...
@@ -1107,7 +1125,11 @@ proxsave --support
 ## Exit Codes
 
 `proxsave` returns a specific exit code so scripts and the daemon can react to the
-failure class. `0` is success; any non-zero code is a failure.
+failure class. Three of them are not failures: `1` is also what a backup that succeeded
+with warnings returns, `16` means no backup was performed for a benign reason, and
+`130` means the run was cancelled by hand. Only `2` through `15` are unambiguous
+failures. A wrapper that treats "non-zero" as "page someone" raises false alarms on
+warning-only runs, on overlapping runs, on paused hosts, and on anything you Ctrl+C.
 
 | Code | Name | Meaning |
 |------|------|---------|
@@ -1127,6 +1149,8 @@ failure class. `0` is success; any non-zero code is a failure.
 | `13` | panic error | An unhandled panic was caught |
 | `14` | security error | The security check reported errors |
 | `15` | encryption error | Error during encryption setup or processing |
+| `16` | backup skipped | No backup was performed, for a benign reason: another backup already held the lock, or `BACKUP_ENABLED=false`. Not a failure |
+| `130` | interrupted | The run was cancelled with Ctrl+C (128 plus SIGINT) |
 
 A backup that finishes with warnings (no errors) is promoted from `0` to exit `1`
 (generic error) before the notification phase; a run that raised errors becomes `4`
@@ -1179,8 +1203,8 @@ df -h /opt/proxsave
 
 # 5. Check permissions
 ls -la /opt/proxsave/backup /opt/proxsave/log
-# backup: drwx------
-# log: drwx------
+# backup: drwxr-xr-x
+# log: drwxr-xr-x
 
 # 6. Test rclone (if cloud enabled)
 rclone listremotes

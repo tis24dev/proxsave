@@ -165,11 +165,11 @@ func TestIsDevBuild(t *testing.T) {
 		want    bool
 	}{
 		// Broadened (STATE-05): make-build, dirty-metadata, prerelease-dev.
-		{"0.30.0-dev.5+gabc1234", true},   // prerelease dev.5 + metadata
-		{"0.30.0-dev.5", true},            // prerelease first id dev
-		{"0.30.0-dev", true},              // prerelease exactly dev
-		{"0.30.0+gabc1234", true},         // metadata present (dirty)
-		{"v0.30.0-dev.5+gabc1234", true},  // v-prefix tolerated
+		{"0.30.0-dev.5+gabc1234", true},  // prerelease dev.5 + metadata
+		{"0.30.0-dev.5", true},           // prerelease first id dev
+		{"0.30.0-dev", true},             // prerelease exactly dev
+		{"0.30.0+gabc1234", true},        // metadata present (dirty)
+		{"v0.30.0-dev.5+gabc1234", true}, // v-prefix tolerated
 		// Existing (must stay true).
 		{"", true},
 		{"0.0.0-dev", true},

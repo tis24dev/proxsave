@@ -1,12 +1,9 @@
 package storage
 
 import (
-	"archive/tar"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -22,8 +19,11 @@ import (
 
 // LocalStorage implements the Storage interface for local filesystem storage
 type LocalStorage struct {
-	config     *config.Config
-	logger     *logging.Logger
+	config *config.Config
+	logger *logging.Logger
+	// hostname is this machine's name, resolved once at construction: retention
+	// only prunes backups this host owns.
+	hostname   string
 	basePath   string
 	fsDetector *FilesystemDetector
 	fsInfo     *FilesystemInfo
@@ -35,6 +35,7 @@ func NewLocalStorage(cfg *config.Config, logger *logging.Logger) (*LocalStorage,
 	return &LocalStorage{
 		config:     cfg,
 		logger:     logger,
+		hostname:   resolveRetentionHostname(),
 		basePath:   cfg.BackupPath,
 		fsDetector: NewFilesystemDetector(logger, WithIOTimeout(fsIoTimeout(cfg))),
 	}, nil
@@ -250,7 +251,7 @@ func (l *LocalStorage) loadMetadata(ctx context.Context, backupFile string) (*ty
 	if isBundle {
 		l.logger.Debug("Local storage: reading metadata from inside bundle %s", backupFile)
 		return safefs.Run(ctx, "local-bundle-meta", backupFile, timeout, func() (*types.BackupMetadata, error) {
-			return l.loadMetadataFromBundle(backupFile)
+			return l.loadMetadataFromBundle(ctx, backupFile)
 		})
 	}
 
@@ -274,6 +275,7 @@ func (l *LocalStorage) loadMetadata(ctx context.Context, backupFile string) (*ty
 		Timestamp:   manifest.CreatedAt,
 		Size:        manifest.ArchiveSize,
 		Checksum:    manifest.SHA256,
+		Hostname:    manifest.Hostname,
 		ProxmoxType: types.ProxmoxType(manifest.ProxmoxType),
 		Compression: types.CompressionType(manifest.CompressionType),
 		Version:     manifest.ScriptVersion,
@@ -293,62 +295,46 @@ func (l *LocalStorage) loadMetadata(ctx context.Context, backupFile string) (*ty
 	return metadata, nil
 }
 
-func (l *LocalStorage) loadMetadataFromBundle(bundlePath string) (*types.BackupMetadata, error) {
+func (l *LocalStorage) loadMetadataFromBundle(ctx context.Context, bundlePath string) (*types.BackupMetadata, error) {
 	l.logger.Debug("Local storage: loadMetadataFromBundle called for %s", bundlePath)
 
-	file, err := os.Open(bundlePath)
+	// One reader for both callers: manifestFromBundle owns the tar scan and the
+	// confined open, this function only maps the result. The two used to be separate
+	// copies and had already drifted (bundleSuffix here, the ".bundle.tar" literal
+	// there).
+	manifest, err := manifestFromBundle(bundlePath)
 	if err != nil {
-		l.logger.Debug("Local storage: failed to open bundle %s: %v", bundlePath, err)
+		l.logger.Debug("Local storage: failed to read manifest from bundle %s: %v", bundlePath, err)
 		return nil, err
 	}
-	defer func() { _ = file.Close() }()
 
-	tr := tar.NewReader(file)
-	expectedName := strings.TrimSuffix(filepath.Base(bundlePath), ".bundle.tar") + ".metadata"
-	l.logger.Debug("Local storage: expecting metadata entry %s in bundle %s", expectedName, filepath.Base(bundlePath))
+	metadata := &types.BackupMetadata{
+		BackupFile:  bundlePath,
+		Timestamp:   manifest.CreatedAt,
+		Size:        manifest.ArchiveSize,
+		Checksum:    manifest.SHA256,
+		Hostname:    manifest.Hostname,
+		ProxmoxType: types.ProxmoxType(manifest.ProxmoxType),
+		Compression: types.CompressionType(manifest.CompressionType),
+		Version:     manifest.ScriptVersion,
+	}
 
-	for {
-		hdr, err := tr.Next()
-		if err == io.EOF {
-			l.logger.Warning("Local storage: metadata %s not found inside bundle %s", expectedName, filepath.Base(bundlePath))
-			return nil, fmt.Errorf("metadata %s not found in bundle %s", expectedName, filepath.Base(bundlePath))
-		}
-		if err != nil {
-			return nil, fmt.Errorf("read bundle %s: %w", filepath.Base(bundlePath), err)
-		}
-
-		if filepath.Base(hdr.Name) != expectedName {
-			continue
-		}
-
-		var manifest backup.Manifest
-		if err := json.NewDecoder(tr).Decode(&manifest); err != nil {
-			return nil, fmt.Errorf("parse manifest from bundle %s: %w", filepath.Base(bundlePath), err)
-		}
-
-		metadata := &types.BackupMetadata{
-			BackupFile:  bundlePath,
-			Timestamp:   manifest.CreatedAt,
-			Size:        manifest.ArchiveSize,
-			Checksum:    manifest.SHA256,
-			ProxmoxType: types.ProxmoxType(manifest.ProxmoxType),
-			Compression: types.CompressionType(manifest.CompressionType),
-			Version:     manifest.ScriptVersion,
-		}
-
-		if metadata.Timestamp.IsZero() || metadata.Size == 0 {
-			if stat, statErr := os.Stat(bundlePath); statErr == nil {
-				if metadata.Timestamp.IsZero() {
-					metadata.Timestamp = stat.ModTime()
-				}
-				if metadata.Size == 0 {
-					metadata.Size = stat.Size()
-				}
+	// Bounded like every other filesystem access in this file. The caller already
+	// wraps this whole function in safefs.Run, but that bound only frees the CALLER:
+	// safefs abandons the worker rather than joining it, so a bare os.Stat on a stale
+	// mount would leave a goroutine pinned on it for the process lifetime.
+	if metadata.Timestamp.IsZero() || metadata.Size == 0 {
+		if stat, statErr := safefs.Stat(ctx, bundlePath, fsIoTimeout(l.config)); statErr == nil {
+			if metadata.Timestamp.IsZero() {
+				metadata.Timestamp = stat.ModTime()
+			}
+			if metadata.Size == 0 {
+				metadata.Size = stat.Size()
 			}
 		}
-
-		return metadata, nil
 	}
+
+	return metadata, nil
 }
 
 // Delete removes a backup file and its associated files
@@ -484,6 +470,10 @@ func (l *LocalStorage) ApplyRetention(ctx context.Context, config RetentionConfi
 			IsCritical: true,
 		}
 	}
+
+	// Drop anything this host does not own before counting or deleting: the
+	// "*-backup-*" glob that produced this list matches every hostname.
+	backups = applyRetentionHostScope("Local storage", l.hostname, backups, l.logger)
 
 	if len(backups) == 0 {
 		l.logger.Debug("Local storage: no backups to apply retention")

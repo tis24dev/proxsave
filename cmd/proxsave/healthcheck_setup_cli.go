@@ -61,7 +61,7 @@ func runHealthcheckSetupCLI(ctx context.Context, reader *bufio.Reader, baseDir, 
 	} else {
 		fmt.Println("The daemon reports each backup outcome + a liveness heartbeat to healthchecks,")
 		fmt.Println("so a silent failure (crash, hang, host down) is caught by an external monitor.")
-		fmt.Println("A personal monitoring portal has been provisioned for this host.")
+		fmt.Println("A personal monitoring portal is available for this host.")
 	}
 	fmt.Println()
 
@@ -89,15 +89,11 @@ func runHealthcheckSetupCLI(ctx context.Context, reader *bufio.Reader, baseDir, 
 			st = orchestrator.ClassifyHealthcheckSetupResult(res)
 		}
 
-		// Show the portal magic-link whenever the server minted one - even if the
-		// reachability ping then failed, the user can still open the portal.
-		if link := strings.TrimSpace(st.LoginURL); link != "" {
-			fmt.Println()
-			fmt.Println("Your monitoring portal (single-use link, valid ~1h):")
-			fmt.Printf("  %s\n", link)
-			fmt.Println("Open it to set a password and configure alert channels (email, etc.).")
-			fmt.Println()
-		}
+		// Show the portal whenever the server told us something about it - even if the
+		// reachability ping then failed, the user can still open it. The magic-link wins
+		// when present (one click, no password); the plain address + identity is what the
+		// server sends instead once the user has a password of their own.
+		printHealthcheckPortal(st)
 
 		printHealthcheckSetupStatus(st)
 
@@ -127,6 +123,35 @@ func runHealthcheckSetupCLI(ctx context.Context, reader *bufio.Reader, baseDir, 
 			return nil
 		}
 	}
+}
+
+// printHealthcheckPortal renders the portal block, or nothing when the server said
+// nothing usable. State A is the single-use magic-link; state B is the plain sign-in page
+// plus the identity to use, which the server sends only once the user has their own
+// password. The identity line is dropped on its own if it failed sanitization, so the
+// address still reaches the user.
+func printHealthcheckPortal(st orchestrator.HealthcheckSetupState) {
+	if link := strings.TrimSpace(st.LoginURL); link != "" {
+		fmt.Println()
+		fmt.Println("Your monitoring portal (single-use link, valid ~1h):")
+		fmt.Printf("  %s\n", link)
+		fmt.Println("Open it to set a password and configure alert channels (email, etc.).")
+		fmt.Println()
+		return
+	}
+	portal := strings.TrimSpace(st.PortalURL)
+	if portal == "" {
+		return
+	}
+	fmt.Println()
+	fmt.Println("Your monitoring portal:")
+	fmt.Printf("  %s\n", portal)
+	if login := strings.TrimSpace(st.PortalLogin); login != "" {
+		fmt.Printf("Sign in as %s with the password you set.\n", login)
+	} else {
+		fmt.Println("Sign in with the password you set.")
+	}
+	fmt.Println()
 }
 
 // printHealthcheckSetupStatus renders the real state as a two-line block: a symbol +

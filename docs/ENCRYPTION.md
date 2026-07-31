@@ -37,7 +37,7 @@ Proxsave uses the **[age](https://age-encryption.org/)** format (via `filippo.io
 | Feature | Description |
 |---------|-------------|
 | **Encryption algorithm** | ChaCha20-Poly1305 (AEAD) with X25519 key exchange |
-| **Key types** | Passphrase, X25519 key pair, or SSH public key (`ssh-ed25519` / `ssh-rsa`) |
+| **Key types** | Passphrase or X25519 key pair. SSH public keys (`ssh-ed25519` / `ssh-rsa`) are accepted as recipients but ProxSave cannot decrypt with the matching SSH private key: see the warning below |
 | **Multiple recipients** | Single backup can be decrypted with any configured recipient |
 | **Interactive setup** | `--newkey` (or the first encrypted run) helps you configure recipients |
 | **Streaming mode** | Encrypts during backup creation (no temporary plaintext) |
@@ -128,6 +128,16 @@ ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIExampleSSHpublicKeyForAgeRecipient
 - Blank lines and `#` comments ignored
 - Supported types: X25519 (`age1...`) and SSH public keys (`ssh-ed25519` / `ssh-rsa`); mix freely
 
+> **SSH keys encrypt, but ProxSave cannot decrypt with them.** `proxsave --decrypt` and `proxsave --restore` accept only an `AGE-SECRET-KEY-...` identity or a passphrase. Paste an SSH private key at the prompt and it is hashed as a passphrase, which derives the wrong identity and loops on "Provided key or passphrase does not match this archive."
+>
+> If you configure **only** SSH recipients, ProxSave cannot open its own archives. Always keep at least one `age1...` recipient or a passphrase alongside them.
+>
+> An archive encrypted to an SSH key can still be opened with the upstream `age` CLI, pointing `-i` at the SSH private key:
+>
+> ```bash
+> age -d -i ~/.ssh/id_ed25519 -o backup.tar.xz backup.tar.xz.age
+> ```
+
 ### Interactive Wizard
 
 You can create/update recipients in two ways:
@@ -176,7 +186,7 @@ proxsave
 
 **Encryption flow**:
 
-```
+```text
 ┌─────────────────────────────────────────────┐
 │  Phase 1: Backup Collection                 │
 │  - Gather PVE/PBS/System files              │
@@ -203,14 +213,14 @@ proxsave
 
 **Output file format**:
 
-```
+```text
 backup/
 └── pve-node1-backup-20240115-023000.tar.xz.age.bundle.tar   # Typical (bundling enabled)
 ```
 
 **If bundling is disabled** (`BUNDLE_ASSOCIATED_FILES=false`), proxsave keeps the raw artifacts:
 
-```
+```text
 backup/
 ├── pve-node1-backup-20240115-023000.tar.xz.age
 ├── pve-node1-backup-20240115-023000.tar.xz.age.sha256
@@ -291,7 +301,7 @@ proxsave --restore
 
 **Decryption options during restore**:
 - **Key or passphrase**: Prompted interactively when needed
-- **Multiple recipients**: Any recipient that matches the archive can decrypt it
+- **Multiple recipients**: Any X25519 recipient that matches the archive can decrypt it. An SSH recipient cannot be used here; see the warning in the recipients section
 
 ### Detailed Restore Documentation
 
@@ -527,7 +537,7 @@ age --decrypt -i /path/to/age-keys.txt host-backup-YYYYMMDD-HHMMSS.tar.xz.age > 
 
 ### File Locations
 
-```
+```text
 configs/
 └── backup.env                      # Environment variables
 
@@ -543,12 +553,12 @@ backup/
 ### Key Formats
 
 **Public key (X25519)**:
-```
+```text
 age1abc123def456ghi789jkl012mno345pqr678stu901vwx234yz567abc
 ```
 
 **Private key (X25519)**:
-```
+```text
 AGE-SECRET-KEY-1ABC123DEF456GHI789JKL012MNO345PQR678STU901VWX234YZ567ABC
 ```
 

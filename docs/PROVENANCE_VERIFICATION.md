@@ -12,7 +12,7 @@ Attestations use the SLSA (Supply-chain Levels for Software Artifacts) standard 
 
 Proxsave publishes a single build target, `linux/amd64`. The release assets for a tag `vX.Y.Z` are:
 
-```
+```text
 proxsave_X.Y.Z_linux_amd64                     # uncompressed binary
 proxsave_X.Y.Z_linux_amd64.tar.gz              # binary + LICENSE + README
 proxsave_X.Y.Z_linux_amd64.tar.gz.sbom.cdx.json
@@ -104,7 +104,7 @@ gh attestation verify "${ASSET}" --repo tis24dev/proxsave
 ```
 
 **Expected output:**
-```
+```text
 Loaded digest sha256:abc123... for file://proxsave_0.29.0_linux_amd64
 Loaded 1 attestation from GitHub API
 Verification succeeded!

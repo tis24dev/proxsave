@@ -63,7 +63,7 @@ var notes = []Note{
 			"Host backup mode: back up a Proxmox host from an LXC or HA-LXC appliance",
 		},
 		Actions: []string{
-			"In the dashboard, open Healthchecks and follow the portal link to set a password and alert channels",
+			"In the dashboard, open Healthchecks for your monitoring portal address and sign-in details",
 		},
 	},
 }

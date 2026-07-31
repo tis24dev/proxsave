@@ -82,7 +82,7 @@ func TestBuildHealthcheckPrompt(t *testing.T) {
 	link := "https://hc.proxsave.dev/l/Nr4vAebz5b"
 
 	// Ok level: green "✓ WORKING", the explanation on its own line, the link boxed.
-	v := buildHealthcheckPrompt(false, link, "WORKING", "It is reporting.", orchestrator.HealthcheckSetupLevelOk, nil)
+	v := buildHealthcheckPrompt(false, link, "", "", "WORKING", "It is reporting.", orchestrator.HealthcheckSetupLevelOk, nil)
 	if !strings.Contains(ansi.Strip(v), "✓ WORKING") {
 		t.Fatalf("working keyword missing: %q", ansi.Strip(v))
 	}
@@ -97,7 +97,7 @@ func TestBuildHealthcheckPrompt(t *testing.T) {
 	}
 
 	// Error level: red "✗ REJECTED".
-	f := buildHealthcheckPrompt(false, link, "REJECTED", "bad creds", orchestrator.HealthcheckSetupLevelError, nil)
+	f := buildHealthcheckPrompt(false, link, "", "", "REJECTED", "bad creds", orchestrator.HealthcheckSetupLevelError, nil)
 	if !strings.Contains(ansi.Strip(f), "✗ REJECTED") {
 		t.Fatalf("error keyword missing: %q", ansi.Strip(f))
 	}
@@ -106,7 +106,7 @@ func TestBuildHealthcheckPrompt(t *testing.T) {
 	}
 
 	// Warn level (a real post-check warning): yellow "⚠ NOT RUNNING" (with the triangle).
-	w := buildHealthcheckPrompt(false, link, "NOT RUNNING", "daemon down", orchestrator.HealthcheckSetupLevelWarn, nil)
+	w := buildHealthcheckPrompt(false, link, "", "", "NOT RUNNING", "daemon down", orchestrator.HealthcheckSetupLevelWarn, nil)
 	if !strings.Contains(ansi.Strip(w), "⚠ NOT RUNNING") {
 		t.Fatalf("warn keyword missing: %q", ansi.Strip(w))
 	}
@@ -115,7 +115,7 @@ func TestBuildHealthcheckPrompt(t *testing.T) {
 	}
 
 	// Neutral level (pre-check): yellow "NOT CHECKED" with NO triangle - like upgrade/telegram.
-	nn := buildHealthcheckPrompt(false, link, "NOT CHECKED", "Choose Check.", orchestrator.HealthcheckSetupLevelNeutral, nil)
+	nn := buildHealthcheckPrompt(false, link, "", "", "NOT CHECKED", "Choose Check.", orchestrator.HealthcheckSetupLevelNeutral, nil)
 	if !strings.Contains(ansi.Strip(nn), "NOT CHECKED") {
 		t.Fatalf("neutral keyword missing: %q", ansi.Strip(nn))
 	}
@@ -127,13 +127,70 @@ func TestBuildHealthcheckPrompt(t *testing.T) {
 	}
 
 	// No link -> no box; the explanation still renders verbatim.
-	n := ansi.Strip(buildHealthcheckPrompt(false, "", "NOT CHECKED", "Choose Check.", orchestrator.HealthcheckSetupLevelNeutral, nil))
+	n := ansi.Strip(buildHealthcheckPrompt(false, "", "", "", "NOT CHECKED", "Choose Check.", orchestrator.HealthcheckSetupLevelNeutral, nil))
 	if strings.Contains(n, "╭") {
 		t.Fatalf("no link must render no box: %q", n)
 	}
 	if !strings.Contains(n, "Choose Check.") {
 		t.Fatalf("explanation missing: %q", n)
 	}
+}
+
+// The magic-link and the portal blocks are both latched across checks, but they are
+// ordered in time: the server mints a link only while the operator has no portal
+// password, and reports password_set only once they do. So the exact flow the link
+// asks for - open it, set a password, come back and Re-check - must REPLACE the box,
+// not leave the spent single-use URL on screen behind a latch.
+func TestRunHealthcheckSetupPortalFallbackReplacesTheSpentMagicLink(t *testing.T) {
+	d := newDriver(t)
+	origBootstrap, origCheck := healthcheckBuildBootstrap, healthcheckCheck
+	t.Cleanup(func() { healthcheckBuildBootstrap = origBootstrap; healthcheckCheck = origCheck })
+	healthcheckBuildBootstrap = healthcheckEligibleBootstrap
+
+	const magicLink = "https://hc.proxsave.dev/accounts/check_token/u/MAGIC/"
+	passwordSet := true
+	checks := 0
+	healthcheckCheck = func(context.Context, string, string, string, time.Duration) orchestrator.HealthcheckCheckResult {
+		checks++
+		res := orchestrator.HealthcheckCheckResult{
+			Reachable: true, DaemonRead: true,
+			Daemon: health.Diagnosis{State: health.TxTransmitting, DaemonUp: true},
+		}
+		if checks == 1 {
+			// No password yet: the server mints a single-use link.
+			res.LoginURL = magicLink
+			return res
+		}
+		// The operator followed the link and set a password: from now on the server
+		// reports the portal instead and never mints another link.
+		res.PortalURL = "https://hc.proxsave.dev/projects/"
+		res.PortalLogin = "ops@example.com"
+		res.PasswordSet = &passwordSet
+		return res
+	}
+
+	resCh := make(chan struct{}, 1)
+	go func() {
+		_, _ = RunHealthcheckSetup(context.Background(), d.session, t.TempDir(), "/tmp/backup.env", false)
+		resCh <- struct{}{}
+	}()
+
+	d.waitScreen("Backup monitoring (healthchecks)")
+	d.keys("enter") // Check -> mints the magic-link
+	d.waitText("single-use link")
+
+	d.keys("enter") // Check again -> the server now reports the portal
+
+	// These three strings live ONLY in buildHealthcheckPrompt's portal branch, and
+	// that branch is unreachable while magicLink is non-empty (the magic-link block
+	// short-circuits it). So waiting for them IS the assertion that the latch was
+	// cleared: with the link still latched this times out instead of failing on a
+	// stale-link substring, which a partial-redraw buffer could not prove anyway.
+	d.waitText("Login: ops@example.com")
+	d.waitText("Sign in with the password you set.")
+
+	d.keys("down enter") // leave
+	<-resCh
 }
 
 func TestRunHealthcheckSetup(t *testing.T) {
@@ -146,13 +203,7 @@ func TestRunHealthcheckSetup(t *testing.T) {
 		healthcheckCheck = origCheck
 	})
 
-	healthcheckBuildBootstrap = func(ctx context.Context, configPath, baseDir string) (orchestrator.HealthcheckSetupBootstrap, error) {
-		return orchestrator.HealthcheckSetupBootstrap{
-			Eligibility:   orchestrator.HealthcheckSetupEligibleCentralized,
-			ServerID:      "12345678",
-			ServerAPIHost: "https://h",
-		}, nil
-	}
+	healthcheckBuildBootstrap = healthcheckEligibleBootstrap
 
 	type result struct {
 		res installer.HealthcheckSetupResult

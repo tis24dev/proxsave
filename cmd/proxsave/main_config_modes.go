@@ -16,7 +16,27 @@ import (
 
 type postHeaderConfigModeHandler func(context.Context, *cli.Args, *logging.BootstrapLogger) (int, bool)
 
-func runUpgradeConfigJSONMode(args *cli.Args) (int, bool) {
+// applyConfigUpgrade is the single in-process entry point for the backup.env
+// template merge. It seeds SCHEDULER_TIME from the live proxsave cron line BEFORE
+// the merge can materialize the template default (02:00): afterwards "absent" and
+// "explicitly 02:00" are indistinguishable, and on --upgrade the daemon
+// auto-migration deletes that cron line moments later, leaving the operator's real
+// run time nowhere on the system. The merge preserves existing user values, so the
+// seeded time survives and SCHEDULER_TIME is not even reported as an added key.
+//
+// The seeding note travels back as an UpgradeResult warning (the callers already
+// render those) instead of being logged, because this also runs in
+// --upgrade-config-json, whose stdout must stay pure JSON.
+func applyConfigUpgrade(ctx context.Context, configPath, baseDir string) (*config.UpgradeResult, error) {
+	seed := seedSchedulerTimeFromCrontabFn(ctx, configPath)
+	result, err := config.UpgradeConfigFileWithBaseDir(configPath, baseDir)
+	if result != nil && seed.Note != "" {
+		result.Warnings = append(result.Warnings, seed.Note)
+	}
+	return result, err
+}
+
+func runUpgradeConfigJSONMode(ctx context.Context, args *cli.Args) (int, bool) {
 	if !args.UpgradeConfigJSON {
 		return types.ExitSuccess.Int(), false
 	}
@@ -26,7 +46,7 @@ func runUpgradeConfigJSONMode(args *cli.Args) (int, bool) {
 	}
 
 	baseDir, _ := detectedBaseDirOrFallback()
-	result, err := config.UpgradeConfigFileWithBaseDir(args.ConfigPath, baseDir)
+	result, err := applyConfigUpgrade(ctx, args.ConfigPath, baseDir)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "ERROR: Failed to upgrade configuration: %v\n", err)
 		return types.ExitConfigError.Int(), true
@@ -54,7 +74,7 @@ func dispatchPostHeaderConfigModes(ctx context.Context, args *cli.Args, bootstra
 	return types.ExitSuccess.Int(), false
 }
 
-func runUpgradeConfigMode(_ context.Context, args *cli.Args, bootstrap *logging.BootstrapLogger) (int, bool) {
+func runUpgradeConfigMode(ctx context.Context, args *cli.Args, bootstrap *logging.BootstrapLogger) (int, bool) {
 	if !args.UpgradeConfig {
 		return types.ExitSuccess.Int(), false
 	}
@@ -66,7 +86,7 @@ func runUpgradeConfigMode(_ context.Context, args *cli.Args, bootstrap *logging.
 
 	bootstrap.Printf("Upgrading configuration file: %s", args.ConfigPath)
 	baseDir, _ := detectedBaseDirOrFallback()
-	result, err := config.UpgradeConfigFileWithBaseDir(args.ConfigPath, baseDir)
+	result, err := applyConfigUpgrade(ctx, args.ConfigPath, baseDir)
 	if err != nil {
 		bootstrap.Error("ERROR: Failed to upgrade configuration: %v", err)
 		return types.ExitConfigError.Int(), true

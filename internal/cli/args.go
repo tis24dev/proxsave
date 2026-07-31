@@ -52,11 +52,11 @@ type Args struct {
 	// notes (the notes registry is compiled into each binary).
 	ShowWhatsnew  bool
 	CleanupGuards bool
-	Backup            bool
-	Daemon            bool
-	DaemonSetup       bool
-	DaemonRemove      bool
-	DaemonStatus      bool
+	Backup        bool
+	Daemon        bool
+	DaemonSetup   bool
+	DaemonRemove  bool
+	DaemonStatus  bool
 }
 
 var osExit = os.Exit

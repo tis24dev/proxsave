@@ -40,6 +40,20 @@ type CentralizedConfig struct {
 	BackupURL   string `json:"backup_ping_url"`
 	ProjectCode string `json:"project_code"`
 	LoginURL    string `json:"login_url"`
+	// PortalURL and PortalLogin are the state-INDEPENDENT portal facts: the plain
+	// sign-in page and the identity that signs in there. The server derives both from
+	// its own constants (no provisioning round-trip), so they ride every answer for a
+	// provisioned host, including the daemon's plain poll. They are what replaces the
+	// magic-link on screen once the operator has a password of their own. PortalLogin
+	// is an EMAIL, not a URL: the portal authenticates by email address.
+	PortalURL   string `json:"portal_url"`
+	PortalLogin string `json:"portal_login"`
+	// PasswordSet is the server's authoritative "the operator has set their own portal
+	// password" answer. A POINTER so absent (the server could not confirm it: mint
+	// failed, or this was a plain poll) is distinguishable from an explicit false. Never
+	// infer it from an empty LoginURL: a failed mint looks identical and would tell a
+	// password-less operator to sign in with a password they never chose.
+	PasswordSet *bool `json:"password_set"`
 	// Checks carries additive, OPTIONAL per-sensor ping URLs beyond the two frozen
 	// alive/backup keys (Fase 1: {"updates":"<ping-url>"}). An old server omits it; the
 	// completeness check below still requires only alive+backup, so a new client against

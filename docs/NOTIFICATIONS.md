@@ -54,7 +54,7 @@ Telegram did not deliver keeps the run green (Tier 1 success), yet drives the
 
 Channels are wired and dispatched in a fixed order:
 
-```
+```text
 Email, Telegram, Gotify, Webhook, Healthchecks
 ```
 
@@ -196,7 +196,7 @@ distinct from `pending`) and no poll runs.
 
 Telegram prints **two lines**. The first is server acceptance, the second is delivery:
 
-```
+```text
 ✓ Telegram: sent to ProxSave server (in 240ms)
 ✓ Telegram: delivered to Telegram
 ```
@@ -236,21 +236,32 @@ This section is the mechanics. What the portal is for, and what a user is meant 
 with the link, is in [HEALTHCHECKS.md](HEALTHCHECKS.md#your-monitoring-portal).
 
 The bot-server can piggyback a fresh portal login link on its `/api/notify` response
-(field `login_url`), until the user's first portal login, after which it stops. The
-Healthchecks section can also mint one best-effort via
+(field `login_url`), and keeps doing so until the user sets their own portal password,
+after which it stops. The Healthchecks section can also mint one best-effort via
 `GET /api/healthcheck/config?server_id=<id>&login=1` (the daemon's own polls pass no
 `login=1`, so only install-time and run-phase callers request a mint).
+
+That config answer also carries three additive fields the notify response does not:
+`portal_url` and `portal_login`, the portal's sign-in page and the identity that signs
+in there, and `password_set`, the server's authoritative answer about whether a
+password exists. `password_set` is read as a pointer so that "the server could not
+confirm it" stays distinct from an explicit false: the address-and-identity form is
+shown only on an explicit true, never inferred from a missing `login_url`, because a
+failed mint looks identical from the outside.
 
 The link is short-lived (about an hour), single-use, and display-only (ProxSave never
 fetches it). It is handled with one specific discipline:
 
 - It is carried **raw** end-to-end (through `result.Metadata["login_url"]` onto
   `stats.HealthcheckLink`) and is **never** registered as a log secret, because it has
-  to stay visible when printed.
-- It is sanitized through `serverbot.SanitizeLoginURL` at exactly **one** display
-  boundary (`logMonitoringPortalLink`), which prints
-  `Healthchecks Portal: <url>` right after the Server MAC address line at the end of
-  the run.
+  to stay visible when printed. The portal address and identity are carried the same
+  way, on `stats.HealthcheckPortalURL` and `stats.HealthcheckPortalLogin`.
+- The link and the portal address are sanitized through `serverbot.SanitizeLoginURL`
+  at the display boundary; the identity, which is not a URL and would fail that gate,
+  goes through its sibling `serverbot.SanitizePortalLogin`. The run epilogue
+  (`logMonitoringPortalLink`) prints `Healthchecks Portal: <url>`, plus a
+  `Healthchecks Login: <identity>` line in the second state, right after the Server MAC
+  address line. The run screen renders the same values with its own labels.
 
 `SanitizeLoginURL` is the single guard against a hostile or MITM bot-server injecting
 terminal escapes into your console: it returns the link only if it is a clean
@@ -302,9 +313,17 @@ distributed binary and are published in the repository, so they cannot be kept s
 on the client. They only gate the free shared worker, whose real protection is
 server-side rate limiting keyed on `server_mac` / `server_id`. Both sites carry a
 `#nosec G101` documenting this. See
-[SECURITY.md](SECURITY.md#hardcoded-relay-credential-g101). Operators who want a
-private relay can point `CLOUDFLARE_WORKER_URL` / `CLOUDFLARE_WORKER_TOKEN` /
-`CLOUDFLARE_HMAC_SECRET` at their own worker.
+[SECURITY.md](SECURITY.md#hardcoded-relay-credential-g101).
+
+The worker URL, token and HMAC secret are **compiled-in constants with no configuration
+key behind them**. `CLOUDFLARE_WORKER_URL`, `CLOUDFLARE_WORKER_TOKEN` and
+`CLOUDFLARE_HMAC_SECRET` are not read from `backup.env` or the environment: adding them
+produces no error, no log line and no change, and mail keeps going through the shared
+worker. Pointing the relay at a private worker is not supported today. To keep reports
+off a third-party relay entirely, use `EMAIL_DELIVERY_METHOD=sendmail`: it is the only
+method with no relay fallback. `pmf` is not an alternative. When `proxmox-mail-forward`
+fails and a non-root recipient is configured, ProxSave tries the shared relay **first** and
+only then sendmail, and no configuration key disables that hop.
 
 The JSON report body (`buildReportData`) must byte-match the legacy Bash
 `collect_email_report_data()` output, otherwise the worker's HMAC signature check
@@ -365,6 +384,7 @@ logger for scrubbing, and what deliberately does not:
 | Webhook endpoint URL / token / secret / pass | yes | the URL is often the secret (Discord, Slack) |
 | Cloudflare relay worker token + HMAC secret | **no** | shared public anti-abuse credential, not confidential |
 | Portal magic-link (`login_url`) | **no** | must stay visible when printed; guarded by `SanitizeLoginURL` instead |
+| Portal address and sign-in identity (`portal_url`, `portal_login`) | **no** | same reason; guarded by `SanitizeLoginURL` and `SanitizePortalLogin` |
 
 The primitives (`internal/logging/redact.go`):
 
@@ -439,9 +459,10 @@ A channel is anything that implements `notify.Notifier`
 | Telegram: "could not send to ProxSave server" repeatedly | stale relay secret or unknown server | the client reprovisions once automatically; if it persists, re-pair (`--install` Telegram step) |
 | `426` on `get-chat-id` | server needs a newer client to finish pairing | upgrade ProxSave to v0.28.0 or later |
 | `notify-telegram` sensor DOWN but run green | message accepted but not delivered (Tier 2 is stricter than Tier 1) | fix the delivery cause above; the run staying green is by design |
-| Email relay `INVALID_SIGNATURE` | report shape changed, HMAC no longer matches; or a private worker misconfigured | keep the stock report shape; check `CLOUDFLARE_*` if self-hosting |
+| Email relay `INVALID_SIGNATURE` | the report shape changed so the HMAC no longer matches, or this binary's compiled-in relay secret is out of date | keep the stock report shape; the relay endpoint is not configurable, so there is no private worker to check. If the shape is untouched, upgrade: the secret is compiled in and a server-side rotation breaks an old binary |
 | Email: "recipient is not allowed (root accounts are blocked)" | `relay` method with a `root@` recipient and no sendmail fallback | set a real recipient, enable `EMAIL_FALLBACK_SENDMAIL`, or use `sendmail`/`pmf` |
-| No portal link printed | link already consumed (first login done), or it failed the sanitizer | expected after first login; minting is best-effort and quiet |
+| Portal address and a `Login:` line instead of a link | you have set a portal password, so the server stopped minting links | expected; sign in at that address with that identity |
+| Nothing printed about the portal at all | the mint did not succeed, or the value failed the sanitizer | minting is best effort and quiet; run the dashboard check again. Opening the link is not what retires it, so this is never the expected end state |
 
 See [CONFIGURATION.md](CONFIGURATION.md) for every key, [DAEMON.md](DAEMON.md) for the
 monitoring sensors, and [INSTALL.md](INSTALL.md) for the Telegram pairing wizard.

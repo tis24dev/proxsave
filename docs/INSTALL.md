@@ -25,7 +25,7 @@
    bash -c "$(curl -fsSL https://raw.githubusercontent.com/tis24dev/proxsave/main/install.sh)"
    ```
 
-   or: if you need a fully clean reinstall use: (preserves `build/`, `env/`, and `identity/`)
+   or, if you need a fully clean reinstall. This keeps `build/`, `env/` and `identity/` and **deletes everything else under the base directory**, which with stock paths means your local backup archives in `backup/`, the logs in `log/`, and `configs/backup.env`. Both installers ask for confirmation first, defaulting to no. Do not run it as a way to reset the configuration unless your backups also live on secondary or cloud storage:
 
    ```bash
    bash -c "$(curl -fsSL https://raw.githubusercontent.com/tis24dev/proxsave/main/install.sh)" _ --new-install
@@ -36,8 +36,10 @@
 2. Run your first backup
 
    ```bash
-   proxsave
+   proxsave --backup
    ```
+
+   Bare `proxsave` on a terminal opens the interactive dashboard instead, where `Backup` is the first entry. It runs the backup directly only when there is no terminal attached, which is what cron and the daemon do. See [DASHBOARD.md](DASHBOARD.md).
 
 > **Release integrity & authenticity.** `install.sh` and `proxsave --upgrade`
 > verify every release before installing it: `SHA256SUMS` is checked against the
@@ -55,13 +57,14 @@
 proxsave --dry-run
 
 # Real backup
-proxsave
+proxsave --backup
 
-# View logs
-tail -f log/backup-$(hostname)-*.log
+# View logs. The filename carries the FQDN, not the short hostname, and LOG_PATH
+# defaults to /opt/proxsave/log, so glob the directory rather than guessing the name.
+ls -t /opt/proxsave/log/backup-*.log | head -1 | xargs tail -f
 
 # Check backup files
-ls -lh backup/
+ls -lh /opt/proxsave/backup/
 ```
 
 ---
@@ -191,7 +194,8 @@ The installation wizard creates your configuration file interactively:
 ```bash
 ./build/proxsave --install
 
-# Or perform a clean reinstall (keeps build/, env/, and identity/)
+# Or perform a clean reinstall. Keeps build/, env/ and identity/; deletes everything
+# else under the base directory, local backup archives and configs/backup.env included.
 ./build/proxsave --new-install
 ```
 
@@ -205,6 +209,7 @@ In **Keep existing & continue** mode, config-dependent post-steps are skipped:
 - AGE setup
 - Post-install check wizard
 - Telegram pairing wizard
+- Backup monitoring (healthchecks) verification, and the self-mode ping-URL form with it
 
 Final install steps still run:
 - Support docs installation
@@ -220,7 +225,7 @@ Final install steps still run:
 5. **Notifications**: Enable Telegram (centralized) and Email notifications; Email asks for a delivery method and defaults to `relay` with `sendmail` failover. Use `pmf` only when you want Proxmox Notifications via `proxmox-mail-forward`.
 6. **Encryption**: AGE encryption setup (runs sub-wizard immediately if enabled)
 7. **Scheduler engine**: choose the ProxSave local daemon or system cron. Fresh installs and Overwrite default to the daemon (a resident systemd service with a hang watchdog and healthchecks); editing an existing config keeps its current engine. See [DAEMON.md](DAEMON.md).
-8. **Healthchecks** (daemon only): with the daemon engine, choose the monitoring mode: `Off`, `ProxSave HC Server` (centralized, zero setup, the default), or `Your own server` (self). Self mode opens a follow-up screen to paste your ping URLs, then a verification screen. Centralized mode goes straight to the verification screen, which also hands you a single-use link to your monitoring portal. With the cron engine this choice is dimmed and forced off. See [HEALTHCHECKS.md](HEALTHCHECKS.md).
+8. **Healthchecks** (daemon only): with the daemon engine, choose the monitoring mode: `Off`, `ProxSave HC Server` (centralized, zero setup, the default), or `Your own server` (self). Self mode opens a follow-up screen to paste your ping URLs, then a verification screen. Centralized mode goes straight to the verification screen, which also hands you the way into your monitoring portal: a single-use link until you set a portal password, the portal address and your sign-in identity afterwards. With the cron engine this choice is dimmed and forced off. See [HEALTHCHECKS.md](HEALTHCHECKS.md).
 9. **Run at (HH:MM)**: the daily backup time (default `02:00`), used by whichever engine you chose (the daemon's daily run, or the cron entry).
 10. **Post-install check (optional)**: Runs `proxsave --dry-run` and shows actionable warnings like `set BACKUP_*=false to disable`, allowing you to disable unused collectors and reduce WARNING noise
 11. **Telegram pairing (optional)**: If Telegram centralized mode is enabled and the installer can load a valid config plus a Server ID, it shows your Server ID and lets you verify pairing with the bot (retry/skip supported). Otherwise installation continues and logs why pairing was skipped.
@@ -231,17 +236,17 @@ When the daemon engine is selected with monitoring on, the installer opens a **B
 
 **What you see:**
 - A short explanation of what gets reported
-- **Centralized only**: your monitoring portal in a boxed **single-use link, valid about an hour**, with the instruction to open it and **set a password and configure alert channels**. That first login is what turns the link into an account you can return to
+- **Centralized only**: your monitoring portal, boxed. Which form it takes depends on whether you already have a portal password. Without one you get a **single-use link, valid about an hour**, with the instruction to open it and **set a password and configure alert channels**: choosing that password is what turns the link into an account you can return to. Once you have one, the box shows the portal address and the identity to sign in with instead, under `Sign in with the password you set.`
 - **Status**: a state keyword plus a plain-language explanation
 - **Sensors**: after a check, one colored line per monitored check with its state and last-ping age
 - **Actions**: `Check` (repeatable up to the attempt cap), then `Continue` once verified or `Skip` to move on. A hard blocker removes `Check`, since another attempt cannot help
 
-The screen is skipped, with the reason logged, when monitoring is off, the config cannot be loaded, self mode has no alive URL yet, or the host has no server identity.
+The screen is skipped, with the reason logged, when monitoring is off, the config cannot be loaded, self mode has no alive URL yet, or the host has no server identity. It is also skipped, along with every other config-dependent post-step, when you answer **Keep existing & continue** at the existing-configuration prompt.
 
 Centralized mode needs no pairing and no API key: the credential is provisioned automatically. `PROVISIONING` simply means it has not completed yet.
 
 **CLI mode:**
-- With `--install --cli` the installer applies the same rules and prints the same information as plain text, portal link and password instruction included, then asks whether to run the check now, with a retry loop.
+- With `--install --cli` the installer applies the same rules and prints the same information as plain text, portal details included in whichever of the two forms applies, then asks whether to run the check now, with a retry loop.
 
 Status keywords, sensor states, and what to do about each are in [HEALTHCHECKS.md](HEALTHCHECKS.md).
 

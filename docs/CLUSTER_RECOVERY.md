@@ -44,7 +44,7 @@ This guide covers **advanced cluster database recovery** using proxsave's restor
 
 ### Cluster Filesystem Components
 
-```
+```text
 ┌─────────────────────────────────────────────────────────────┐
 │                  Proxmox VE Cluster Stack                    │
 └─────────────────────────────────────────────────────────────┘
@@ -134,7 +134,7 @@ This is the single most important decision in a cluster restore, and ProxSave fo
 
 Whenever a PVE restore includes the `pve_cluster` category and the backup actually contains cluster data, ProxSave shows a second, mandatory prompt right after you pick the restore scope. FULL and STORAGE both include `pve_cluster`, so they always reach it; CUSTOM reaches it only if you select `PVE Cluster Configuration`. SYSTEM BASE does not include `pve_cluster`, so it never shows this prompt. In the CLI it reads:
 
-```
+```text
 Cluster backup detected. Choose how to restore the cluster database:
   [1] SAFE: Do NOT write /var/lib/pve-cluster/config.db. Export cluster files only (manual/apply via API).
   [2] RECOVERY: Restore full cluster database (/var/lib/pve-cluster). Use only when cluster is offline/isolated.
@@ -157,6 +157,8 @@ SAFE never writes config.db, never stops `pve-cluster`/`pvedaemon`/`pveproxy`/`p
 Use SAFE when the node or cluster is up and you want to merge the backed-up configuration back in without touching the live database. SAFE needs `pvesh` on PATH; without it, it logs a skip and applies nothing.
 
 If the backup's VM/CT configs are stored under a node name that does not match the current host (a hostname change), SAFE handles it for you: it warns, and either auto-selects the single exported node or asks which exported node to import the guest configs from. The chosen configs are applied to the current node. You do not need to copy `/etc/pve/nodes/...` by hand.
+
+This applies only when the guest configs are actually in the export, which means the restore included `pve_config_export`. FULL includes it; CUSTOM includes it if you select it; STORAGE and SYSTEM BASE strip export-only categories, so in those modes SAFE applies no guest config and the node-name handling never runs.
 
 ### RECOVERY (the destructive, offline choice)
 
@@ -194,7 +196,7 @@ If your restore scope includes the network category (FULL, SYSTEM BASE, or a CUS
 
 Before overwriting anything, ProxSave writes a safety backup of the current configuration to `/tmp/proxsave/restore_backup_<YYYYMMDD_HHMMSS>.tar.gz` and keeps it. At the end it prints where it is and how to remove it:
 
-```
+```text
 Safety backup preserved at: /tmp/proxsave/restore_backup_20251120_143052.tar.gz
 Remove it manually if restore was successful: rm /tmp/proxsave/restore_backup_20251120_143052.tar.gz
 ```
@@ -207,7 +209,7 @@ If any staged step fails, the run ends with `Restore completed with warnings.` r
 
 ### Decision Tree
 
-```
+```text
 ┌─────────────────────────────────────────────────┐
 │ What is your situation?                         │
 └─────────────────────────────────────────────────┘
@@ -367,7 +369,7 @@ proxsave --restore
 
 #### Step 3: Interactive Selection
 
-```
+```text
 Select backup source:
   [1] Primary backup path
 Select: 1
@@ -390,7 +392,7 @@ Select: 2 (STORAGE only)
 
 Because the backup contains cluster data, ProxSave now asks how to restore the cluster database (see [Cluster restore modes](#cluster-restore-modes-safe-vs-recovery)):
 
-```
+```text
 Cluster backup detected. Choose how to restore the cluster database:
   [1] SAFE: Do NOT write /var/lib/pve-cluster/config.db. Export cluster files only (manual/apply via API).
   [2] RECOVERY: Restore full cluster database (/var/lib/pve-cluster). Use only when cluster is offline/isolated.
@@ -400,7 +402,7 @@ Choice: 2 (RECOVERY)
 
 For a standalone node you are rebuilding from backup, RECOVERY is the right choice: the node is offline and you want its exact database back. On a node that is already up and running, choose SAFE instead. The STORAGE-mode restore plan on a PVE host is:
 
-```
+```text
 RESTORE PLAN:
   - PVE Cluster Configuration
   - PVE Storage Configuration
@@ -416,7 +418,7 @@ Type RESTORE to proceed or 0 to cancel: RESTORE
 
 Because you chose RECOVERY, ProxSave restores config.db with the cluster services stopped. The real log is terse; the sequence is:
 
-```
+```text
 Selected RECOVERY cluster restore: full cluster database will be restored; ensure other nodes are isolated
 
 Creating Safety backup of current configuration...
@@ -433,7 +435,7 @@ Remove it manually if restore was successful: rm /tmp/proxsave/restore_backup_20
 
 ProxSave stops `pve-cluster`, `pvedaemon`, `pveproxy`, `pvestatd`, unmounts `/etc/pve`, extracts `/var/lib/pve-cluster/` (config.db), then restarts the four services. It does not print a per-service checkmark line for each one. No `/etc/pve` files are written directly: config.db owns them, so `/etc/pve` is repopulated from the restored database a moment after pmxcfs remounts, not by the file-extraction phase.
 
-Had you chosen SAFE, this step would instead apply the exported storage, datacenter, pool, and VM/CT configs through `pvesh` on the running cluster, with no service stop and no config.db write.
+Had you chosen SAFE, this step would instead apply what the selected categories actually exported, through `pvesh` on the running cluster, with no service stop and no config.db write. Note what STORAGE mode does not carry: the VM/CT configs live in `pve_config_export`, which is export-only and is stripped from STORAGE, so none are applied. `storage.cfg` and `datacenter.cfg` belong to `storage_pve` and are still applied through `pvesh`, as are pools and resource mappings. Use FULL, or CUSTOM including `pve_config_export`, when you want the guest configs applied.
 
 #### Step 5: Verification
 
@@ -1076,9 +1078,14 @@ proxsave --restore
 # Select: [2] STORAGE only
 # At the cluster prompt choose RECOVERY: this restores the backup's config.db,
 # which still references the OLD hostname. You fix those references in the
-# steps below. (If the node is already up and you would rather keep it running,
-# SAFE applies the configs via the API and auto-handles the VM/CT node-name
-# mismatch, which makes most of the manual fixes below unnecessary.)
+# steps below.
+#
+# SAFE is NOT a shortcut here. In STORAGE mode the selected categories carry no
+# guest configs at all (pve_config_export is export-only and STORAGE strips
+# export-only categories), so SAFE would redirect the cluster database to the
+# export directory, apply no VM/CT config, and never run the node-name mismatch
+# handling. The API-apply path with the node-name handling needs FULL, or CUSTOM
+# with pve_config_export selected.
 ```
 
 #### Step 2: Fix Corosync Configuration
@@ -1691,9 +1698,27 @@ umount -f /etc/pve 2>/dev/null
 # 3. Backup current (broken) config
 mv /var/lib/pve-cluster /var/lib/pve-cluster.broken
 
-# 4. Manually extract config.db from backup
-mkdir -p /var/lib/pve-cluster
-tar -xzf /path/to/backup.bundle.tar --strip-components=3 \
+# 4. Manually extract config.db from backup.
+#    The bundle is an UNCOMPRESSED tar holding the inner archive and its sidecars under
+#    basename-only names, so it has no ./var/... paths of its own: unwrap it first.
+mkdir -p /tmp/psrecover /var/lib/pve-cluster
+tar -xf /path/to/backup.bundle.tar -C /tmp/psrecover
+ls /tmp/psrecover        # <host>-backup-<ts>.<ext> (plus .age if encrypted), .metadata, .sha256
+
+#    <ext> follows the compression actually used, not the configured one: .tar.xz (default),
+#    .tar.gz (gzip/pigz, and the fallback whenever the requested tool is missing), .tar.bz2,
+#    .tar.lzma, .tar.zst, or plain .tar for COMPRESSION_TYPE=none. Take the name from ls:
+ARCHIVE=$(ls /tmp/psrecover/*-backup-* | grep -Ev '\.(metadata|sha256)$' | head -1)
+
+#    If the archive ends in .age, decrypt it first:
+#      proxsave --decrypt
+#    or, with the age CLI:
+#      age -d -i /path/to/key.txt -o "${ARCHIVE%.age}" "$ARCHIVE" && ARCHIVE="${ARCHIVE%.age}"
+
+#    Then pull the cluster database out of the inner archive.
+#    Entries are stored with a leading ./ so there are four components to strip, and
+#    -xf lets tar auto-detect the compression whatever COMPRESSION_TYPE was.
+tar -xf "$ARCHIVE" --strip-components=4 \
     -C /var/lib/pve-cluster \
     ./var/lib/pve-cluster/
 

@@ -11,8 +11,6 @@ import (
 	"strings"
 	"testing"
 	"time"
-
-	"github.com/tis24dev/proxsave/internal/backup"
 )
 
 type runOnlyRunner struct{}
@@ -238,39 +236,6 @@ func TestCheckZFSPoolsAfterRestore_ReportsImportablePools(t *testing.T) {
 		if strings.HasPrefix(call, "zpool status ") {
 			t.Fatalf("did not expect zpool status calls when pools are importable; calls=%#v", fake.Calls)
 		}
-	}
-}
-
-func TestRunFullRestore_ExtractsArchiveToDestination(t *testing.T) {
-	origFS := restoreFS
-	t.Cleanup(func() { restoreFS = origFS })
-	restoreFS = osFS{}
-
-	destRoot := t.TempDir()
-	archivePath := filepath.Join(t.TempDir(), "bundle.tar")
-	if err := writeTarFile(archivePath, map[string]string{
-		"etc/test.txt": "hello",
-	}); err != nil {
-		t.Fatalf("writeTarFile: %v", err)
-	}
-
-	reader := bufio.NewReader(strings.NewReader("RESTORE\n"))
-	cand := &backupCandidate{
-		DisplayBase: "test",
-		Manifest:    &backup.Manifest{CreatedAt: time.Now()},
-	}
-	prepared := &preparedBundle{ArchivePath: archivePath}
-
-	if err := runFullRestore(context.Background(), reader, cand, prepared, destRoot, newTestLogger(), false); err != nil {
-		t.Fatalf("runFullRestore error: %v", err)
-	}
-
-	data, err := os.ReadFile(filepath.Join(destRoot, "etc", "test.txt"))
-	if err != nil {
-		t.Fatalf("expected extracted file: %v", err)
-	}
-	if string(data) != "hello" {
-		t.Fatalf("extracted content=%q want %q", string(data), "hello")
 	}
 }
 

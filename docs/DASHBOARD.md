@@ -21,7 +21,7 @@ To run a backup without the menu (from a script, or just deliberately), use `pro
 
 The menu waits up to 10 minutes for a choice. If nothing is selected in that window, ProxSave exits without action and prints:
 
-```
+```text
 Dashboard idle timeout: exiting without action. Use proxsave --backup for non-interactive runs.
 ```
 
@@ -53,14 +53,14 @@ Two keywords are worth calling out because they look similar but are not the sam
 
 The menu is titled `Dashboard` and is grouped. The prompt reads:
 
-```
+```text
 What do you want to do?
 (Non-interactive invocations, e.g. cron, run the backup directly.)
 ```
 
 The groups and their items:
 
-```
+```text
 ─── Backup ───
   Backup            start a backup with the current configuration
 ─── Tools ───
@@ -72,7 +72,7 @@ The groups and their items:
   Upgrade           check for a newer release and install it from here
 ─── Diagnostic Checks ───
   Telegram          verify the Telegram relay pairing
-  Healthchecks      verify backup monitoring and show the portal link
+  Healthchecks      verify backup monitoring and show the portal details
   Post-install      re-run the post-install audit
 ─── Daemon ───
   (context-aware, see below)
@@ -155,7 +155,7 @@ These verify a feature and return you to the menu. In the dashboard each check (
 
 Shown for centralized Telegram mode. It lists the pairing steps and boxes your Server ID to send to the bot:
 
-```
+```text
 Server ID (send this to the bot):
 ╭───────────────╮
 │  <your id>    │
@@ -168,16 +168,29 @@ If Telegram is not in centralized mode on this host, the screen reads `Status: �
 
 ### Healthchecks
 
-Verifies backup monitoring and, in centralized mode, boxes a single-use link to your monitoring portal:
+Verifies backup monitoring and, in centralized mode, boxes the way into your monitoring portal. Until you set a portal password, the box shows a single-use link:
 
-```
-Your monitoring portal (single-use link, valid ~1h):
-╭────────────────────────────────────────╮
-│  https://...                            │
-╰────────────────────────────────────────╯
+```text
+╭──────────────────────────────────────────────╮
+│  Your monitoring portal (single-use link,    │
+│  valid ~1h):                                 │
+│  https://...                                 │
+╰──────────────────────────────────────────────╯
+Open it to set a password and configure alert channels.
 ```
 
-Open it to set a password and configure alert channels. The link is single-use and valid for about an hour. If you run your own healthchecks server (self mode), the check instead confirms that your alive URL is reachable and shows no link. After each check a `Sensors:` list shows one colored line per monitored check with its state and last-ping age.
+Once you have a password the server stops minting links and the box shows the portal address plus the identity you sign in with, which is an email address:
+
+```text
+╭──────────────────────────────────────────────╮
+│  Your monitoring portal:                     │
+│  https://...                                 │
+│  Login: ...                                  │
+╰──────────────────────────────────────────────╯
+Sign in with the password you set.
+```
+
+If you run your own healthchecks server (self mode), the check instead confirms that your alive URL is reachable and shows no portal box. After each check a `Sensors:` list shows one colored line per monitored check with its state and last-ping age; that list is centralized only.
 
 See [HEALTHCHECKS.md](HEALTHCHECKS.md) for the monitoring model, what each status keyword means, and what to do about it.
 

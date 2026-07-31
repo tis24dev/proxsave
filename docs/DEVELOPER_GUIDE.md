@@ -95,7 +95,7 @@ go test ./...
 
 ## Project Structure
 
-```
+```text
 proxsave/
 ├── cmd/
 │   └── proxsave/              # Main entry point, CLI commands, and the resident daemon (daemon*.go)
@@ -728,7 +728,7 @@ rclone check /local/dir/ gdrive:pbs-backups/ --checksum
 
 Use this checklist when contributing:
 
-```
+```text
 Before Coding:
 □ Fork and clone repository
 □ Create feature branch
