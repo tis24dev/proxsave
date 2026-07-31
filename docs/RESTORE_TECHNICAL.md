@@ -33,7 +33,7 @@ and decision flow details.
 
 ### High-Level Architecture
 
-```
+```text
 ┌─────────────────────────────────────────────────────────┐
 │                    CLI Entry Point                       │
 │              cmd/proxsave/main.go                  │
@@ -64,7 +64,7 @@ and decision flow details.
 
 ### Data Flow
 
-```
+```text
 User Input (--restore flag)
   ↓
 Backup Selection
@@ -615,7 +615,7 @@ if err := w.confirmRestorePlan(); err != nil {
 ```
 
 **Mode Selection UI** (`ShowRestoreModeMenuWithReader()` in `selective.go`):
-```
+```text
 Select restore mode:
   [1] FULL restore - Restore everything from backup
   [2] STORAGE only - Cluster/storage + jobs
@@ -627,7 +627,7 @@ Your selection: _
 ```
 
 **Custom Selection UI** (`ShowCategorySelectionMenuWithReader()` in `selective.go`):
-```
+```text
 Available categories:
   [1] [ ] PVE Cluster Configuration
       Proxmox VE cluster configuration and database
@@ -1050,7 +1050,7 @@ func RunRestoreWorkflow(...) error {
 
 **PVE Service Dependency Graph**:
 
-```
+```text
 pve-cluster (pmxcfs)
     ↓ (provides /etc/pve via FUSE)
 pvedaemon
@@ -1066,7 +1066,7 @@ Start order: pve-cluster → pvedaemon → pveproxy → pvestatd
 
 **PBS Service Dependency Graph**:
 
-```
+```text
 proxmox-backup-proxy
     ↓ (provides web interface and API)
 proxmox-backup
@@ -1879,7 +1879,7 @@ func extractArchive(ctx context.Context, reader ArchiveReader, ...) error {
 ### Archive Scanning
 
 **Current**: Full archive scan for category analysis
-```
+```text
 Time Complexity: O(n) where n = number of files in archive
 Space Complexity: O(n) for path list
 ```
@@ -1908,7 +1908,7 @@ and staged), plus one more streaming pass for dedup materialization when a dedup
 is present. Each pass filters TAR entries by category, so a tier with no selected
 categories is skipped entirely.
 
-```
+```text
 Normal tier   -> destRoot (/)                     (skipped if empty)
 Export tier   -> proxmox-config-export-<ts>       (skipped if empty)
 Staged tier   -> /tmp/proxsave/restore-stage-*    (skipped if empty), then applied
@@ -1922,7 +1922,7 @@ strictly and applied separately so sensitive config is never written half-applie
 ### Memory Usage
 
 **Current**: Stream-based extraction (low memory)
-```
+```text
 Memory: ~10-50 MB (TAR buffers + decompression)
 ```
 

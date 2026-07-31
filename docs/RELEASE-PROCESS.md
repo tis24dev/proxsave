@@ -6,7 +6,7 @@ This document describes the safe, repeatable procedure to publish a new **Proxsa
 
 You do not tag `main` by hand. A release is started by pushing a lightweight trigger tag on `dev`, and the automation opens the release PR, creates the authoritative version tag after the merge, and publishes the release:
 
-```
+```text
 push pr-vX.Y.Z on dev
   -> release-intake.yml opens a dev -> main PR (marker: <!-- release-tag: vX.Y.Z -->)
   -> release-guard.yml validates the PR
@@ -79,7 +79,7 @@ Pushing the `v1.6.0` tag re-triggers `release.yml`, which:
 
 Only `linux/amd64` is built and published. For tag `v1.6.0` (GoReleaser drops the leading `v` in filenames) the assets are:
 
-```
+```text
 proxsave_1.6.0_linux_amd64
 proxsave_1.6.0_linux_amd64.tar.gz
 proxsave_1.6.0_linux_amd64.tar.gz.sbom.cdx.json

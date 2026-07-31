@@ -38,7 +38,7 @@ Proxsave integrates with [rclone](https://rclone.org/) to provide seamless cloud
 
 Proxsave uses a **3-tier storage system**:
 
-```
+```text
 ┌─────────────────────────────────────────────────────────────┐
 │                    BACKUP ORCHESTRATOR                      │
 └─────────────────────────────────────────────────────────────┘
@@ -63,7 +63,7 @@ Proxsave uses a **3-tier storage system**:
 
 ### Execution Flow
 
-```
+```text
 1. Create backup locally           ✓ Critical (must succeed)
    └─> BACKUP_PATH/
 

@@ -44,7 +44,7 @@ This guide covers **advanced cluster database recovery** using proxsave's restor
 
 ### Cluster Filesystem Components
 
-```
+```text
 ┌─────────────────────────────────────────────────────────────┐
 │                  Proxmox VE Cluster Stack                    │
 └─────────────────────────────────────────────────────────────┘
@@ -134,7 +134,7 @@ This is the single most important decision in a cluster restore, and ProxSave fo
 
 Whenever a PVE restore includes the `pve_cluster` category and the backup actually contains cluster data, ProxSave shows a second, mandatory prompt right after you pick the restore scope. FULL and STORAGE both include `pve_cluster`, so they always reach it; CUSTOM reaches it only if you select `PVE Cluster Configuration`. SYSTEM BASE does not include `pve_cluster`, so it never shows this prompt. In the CLI it reads:
 
-```
+```text
 Cluster backup detected. Choose how to restore the cluster database:
   [1] SAFE: Do NOT write /var/lib/pve-cluster/config.db. Export cluster files only (manual/apply via API).
   [2] RECOVERY: Restore full cluster database (/var/lib/pve-cluster). Use only when cluster is offline/isolated.
@@ -196,7 +196,7 @@ If your restore scope includes the network category (FULL, SYSTEM BASE, or a CUS
 
 Before overwriting anything, ProxSave writes a safety backup of the current configuration to `/tmp/proxsave/restore_backup_<YYYYMMDD_HHMMSS>.tar.gz` and keeps it. At the end it prints where it is and how to remove it:
 
-```
+```text
 Safety backup preserved at: /tmp/proxsave/restore_backup_20251120_143052.tar.gz
 Remove it manually if restore was successful: rm /tmp/proxsave/restore_backup_20251120_143052.tar.gz
 ```
@@ -209,7 +209,7 @@ If any staged step fails, the run ends with `Restore completed with warnings.` r
 
 ### Decision Tree
 
-```
+```text
 ┌─────────────────────────────────────────────────┐
 │ What is your situation?                         │
 └─────────────────────────────────────────────────┘
@@ -369,7 +369,7 @@ proxsave --restore
 
 #### Step 3: Interactive Selection
 
-```
+```text
 Select backup source:
   [1] Primary backup path
 Select: 1
@@ -392,7 +392,7 @@ Select: 2 (STORAGE only)
 
 Because the backup contains cluster data, ProxSave now asks how to restore the cluster database (see [Cluster restore modes](#cluster-restore-modes-safe-vs-recovery)):
 
-```
+```text
 Cluster backup detected. Choose how to restore the cluster database:
   [1] SAFE: Do NOT write /var/lib/pve-cluster/config.db. Export cluster files only (manual/apply via API).
   [2] RECOVERY: Restore full cluster database (/var/lib/pve-cluster). Use only when cluster is offline/isolated.
@@ -402,7 +402,7 @@ Choice: 2 (RECOVERY)
 
 For a standalone node you are rebuilding from backup, RECOVERY is the right choice: the node is offline and you want its exact database back. On a node that is already up and running, choose SAFE instead. The STORAGE-mode restore plan on a PVE host is:
 
-```
+```text
 RESTORE PLAN:
   - PVE Cluster Configuration
   - PVE Storage Configuration
@@ -418,7 +418,7 @@ Type RESTORE to proceed or 0 to cancel: RESTORE
 
 Because you chose RECOVERY, ProxSave restores config.db with the cluster services stopped. The real log is terse; the sequence is:
 
-```
+```text
 Selected RECOVERY cluster restore: full cluster database will be restored; ensure other nodes are isolated
 
 Creating Safety backup of current configuration...

@@ -44,7 +44,7 @@ proxsave --daemon-remove                       # revert to cron
 
 `proxsave --daemon-status` prints a combined verdict and is meant for scripts:
 
-```
+```text
 Daemon status: <keyword>
 Scheduler mode: <cron|daemon>
 Daemon service (proxsave-daemon.service): installed | not installed
@@ -115,7 +115,7 @@ The daemon coordinates through five small files under `<BASE_DIR>/identity/`, al
 
 ## Configuration keys (`backup.env`)
 
-```
+```ini
 # Scheduler engine
 SCHEDULER_MODE=cron            # cron | daemon
 SCHEDULER_TIME=02:00           # daily HH:MM ("Run at")

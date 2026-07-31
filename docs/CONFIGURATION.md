@@ -867,7 +867,7 @@ Set the tiers in the same edit as the policy.
 
 ### Example Output
 
-```
+```text
 GFS classification → daily: 7/7, weekly: 4/4, monthly: 12/12, yearly: 2/3, to_delete: 15
 Deleting old backup: pbs-backup-20220115-120000.tar.xz (created: 2022-01-15 12:00:00)
 Cloud storage retention applied: deleted 15 backups (logs deleted: 15), 26 backups remaining

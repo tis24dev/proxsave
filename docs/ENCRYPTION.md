@@ -186,7 +186,7 @@ proxsave
 
 **Encryption flow**:
 
-```
+```text
 ┌─────────────────────────────────────────────┐
 │  Phase 1: Backup Collection                 │
 │  - Gather PVE/PBS/System files              │
@@ -213,14 +213,14 @@ proxsave
 
 **Output file format**:
 
-```
+```text
 backup/
 └── pve-node1-backup-20240115-023000.tar.xz.age.bundle.tar   # Typical (bundling enabled)
 ```
 
 **If bundling is disabled** (`BUNDLE_ASSOCIATED_FILES=false`), proxsave keeps the raw artifacts:
 
-```
+```text
 backup/
 ├── pve-node1-backup-20240115-023000.tar.xz.age
 ├── pve-node1-backup-20240115-023000.tar.xz.age.sha256
@@ -537,7 +537,7 @@ age --decrypt -i /path/to/age-keys.txt host-backup-YYYYMMDD-HHMMSS.tar.xz.age > 
 
 ### File Locations
 
-```
+```text
 configs/
 └── backup.env                      # Environment variables
 
@@ -553,12 +553,12 @@ backup/
 ### Key Formats
 
 **Public key (X25519)**:
-```
+```text
 age1abc123def456ghi789jkl012mno345pqr678stu901vwx234yz567abc
 ```
 
 **Private key (X25519)**:
-```
+```text
 AGE-SECRET-KEY-1ABC123DEF456GHI789JKL012MNO345PQR678STU901VWX234YZ567ABC
 ```
 

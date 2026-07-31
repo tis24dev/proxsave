@@ -21,7 +21,7 @@ To run a backup without the menu (from a script, or just deliberately), use `pro
 
 The menu waits up to 10 minutes for a choice. If nothing is selected in that window, ProxSave exits without action and prints:
 
-```
+```text
 Dashboard idle timeout: exiting without action. Use proxsave --backup for non-interactive runs.
 ```
 
@@ -53,14 +53,14 @@ Two keywords are worth calling out because they look similar but are not the sam
 
 The menu is titled `Dashboard` and is grouped. The prompt reads:
 
-```
+```text
 What do you want to do?
 (Non-interactive invocations, e.g. cron, run the backup directly.)
 ```
 
 The groups and their items:
 
-```
+```text
 ─── Backup ───
   Backup            start a backup with the current configuration
 ─── Tools ───
@@ -155,7 +155,7 @@ These verify a feature and return you to the menu. In the dashboard each check (
 
 Shown for centralized Telegram mode. It lists the pairing steps and boxes your Server ID to send to the bot:
 
-```
+```text
 Server ID (send this to the bot):
 ╭───────────────╮
 │  <your id>    │
@@ -170,7 +170,7 @@ If Telegram is not in centralized mode on this host, the screen reads `Status: �
 
 Verifies backup monitoring and, in centralized mode, boxes the way into your monitoring portal. Until you set a portal password, the box shows a single-use link:
 
-```
+```text
 ╭──────────────────────────────────────────────╮
 │  Your monitoring portal (single-use link,    │
 │  valid ~1h):                                 │
@@ -181,7 +181,7 @@ Open it to set a password and configure alert channels.
 
 Once you have a password the server stops minting links and the box shows the portal address plus the identity you sign in with, which is an email address:
 
-```
+```text
 ╭──────────────────────────────────────────────╮
 │  Your monitoring portal:                     │
 │  https://...                                 │

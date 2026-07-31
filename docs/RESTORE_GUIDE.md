@@ -273,7 +273,7 @@ Four predefined modes provide common restoration scenarios, plus custom selectio
   filters the FULL selection to compatible categories
 
 **Command Flow**:
-```
+```text
 Select restore mode:
   [1] FULL restore ← Select this
 ```
@@ -311,7 +311,7 @@ Select restore mode:
   categories from both product roles plus the common storage categories
 
 **Command Flow**:
-```
+```text
 Select restore mode:
   [2] STORAGE only ← Select this
 ```
@@ -336,7 +336,7 @@ Select restore mode:
 - `filesystem` - /etc/fstab (Smart merge prompt)
 
 **Command Flow**:
-```
+```text
 Select restore mode:
   [3] SYSTEM BASE only ← Select this
 ```
@@ -354,7 +354,7 @@ Select restore mode:
 - Including export-only categories
 
 **Interactive Menu**:
-```
+```text
 Available categories:
   [1] [ ] PVE Cluster Configuration
       Proxmox VE cluster configuration and database
@@ -373,7 +373,7 @@ Commands:
 ```
 
 **Toggle Selection**:
-```
+```text
 Your selection: 1      # Toggle category 1
 Your selection: 2      # Toggle category 2
 Your selection: c      # Continue to restore plan
@@ -390,7 +390,7 @@ flow lives in [RESTORE_DIAGRAMS.md](RESTORE_DIAGRAMS.md).
 
 ### Workflow Diagram
 
-```
+```text
 ┌─────────────────────────────────────────────────────────────────┐
 │                    RESTORE WORKFLOW                             │
 └─────────────────────────────────────────────────────────────────┘
@@ -486,7 +486,7 @@ Phase 14: Post-Restore Tasks
 #### Phase 1: Backup Selection
 
 **Interactive prompts**:
-```
+```text
 Select backup source:
   [1] Primary backup path: /opt/proxsave/backup
   [2] Secondary backup path: /mnt/secondary/backups
@@ -495,7 +495,7 @@ Select backup source:
 ```
 
 **Backup list display**:
-```
+```text
 Available backups:
   [1] pve01-backup-20251120-143052.tar.xz.bundle.tar
       Created: 2025-11-20 14:30:52
@@ -517,7 +517,7 @@ that accepts either an AGE key or a passphrase (there is no separate "passphrase
 identity file" sub-menu). In the TUI this is a masked input labeled `Decrypt key`; the
 `--cli` prompt is:
 
-```
+```text
 Enter decryption key or passphrase for pve01-backup-20251120-143052.tar.xz (0 = exit): ********
 Decrypting... (this may take several minutes)
 Decryption complete.
@@ -528,7 +528,7 @@ Checksum verified successfully.
 #### Phase 3: Compatibility Check
 
 **System detection**:
-```
+```text
 Current system type: Proxmox Virtual Environment (PVE)
 Backup system type: Proxmox Virtual Environment (PVE)
 ✓ Systems are compatible
@@ -547,7 +547,7 @@ ProxSave will continue with the categories compatible with the current host:
 ```
 
 **Incompatibility warning**:
-```
+```text
 ⚠ WARNING: Potential incompatibility detected!
 
 Current system: Proxmox Backup Server (PBS)
@@ -569,7 +569,7 @@ This phase runs whenever the archive carries a `pve_cluster` payload (`/var/lib/
 
 When the payload is present and the `pve_cluster` category is selected:
 
-```
+```text
 Cluster backup detected. Choose how to restore the cluster database:
   [1] SAFE: Do NOT write /var/lib/pve-cluster/config.db. Export cluster files only (manual/apply via API).
   [2] RECOVERY: Restore full cluster database (/var/lib/pve-cluster). Use only when cluster is offline/isolated.
@@ -583,7 +583,7 @@ See [Cluster Restore Modes](#cluster-restore-modes-safe-vs-recovery) for detaile
 #### Phase 7: Restore Plan
 
 **Example display**:
-```
+```text
 ═══════════════════════════════════════════════════════════════
 RESTORE PLAN
 ═══════════════════════════════════════════════════════════════
@@ -641,7 +641,7 @@ Confirmation is **two stages**. After you type `RESTORE` (or, in the TUI, press 
 `RESTORE` button), ProxSave asks a second, explicit overwrite question before touching
 anything:
 
-```
+```text
 This operation will overwrite existing configuration files on this system.
 
 Proceed with overwrite? (yes/no):
@@ -652,7 +652,7 @@ In the TUI this second gate is a danger-styled confirm with `Overwrite and resto
 
 #### Phase 8: Safety Backup
 
-```
+```text
 Creating safety backup of existing files...
 Safety backup created successfully.
 Safety backup location: /tmp/proxsave/restore_backup_20251120_143052.tar.gz
@@ -664,7 +664,7 @@ You can restore from this backup if needed using:
 #### Phase 9: Service Management (PVE Cluster)
 
 **For cluster database restore (RECOVERY mode)**:
-```
+```text
 Preparing system for cluster database restore: stopping PVE services and unmounting /etc/pve
 
 Stopping pve-cluster...
@@ -680,7 +680,7 @@ Successfully unmounted /etc/pve
 #### Phase 10: Service Management (PBS)
 
 **For PBS configuration restore**:
-```
+```text
 Preparing PBS system for restore: stopping proxmox-backup services
 
 Stopping proxmox-backup-proxy...
@@ -689,14 +689,14 @@ PBS services stopped successfully.
 ```
 
 If service stop fails, you'll be prompted:
-```
+```text
 Unable to stop PBS services automatically: <error>
 Continue restore with PBS services still running? (y/N): _
 ```
 
 #### Phase 11 & 12: Extraction
 
-```
+```text
 Extracting selected categories from archive into /
 Detailed restore log: /tmp/proxsave/restore_20251120_143052.log
 
@@ -713,7 +713,7 @@ Exported 23 files/directories
 #### Phase 13: pvesh SAFE Apply (Cluster SAFE Mode Only)
 
 When using Cluster SAFE mode, after extraction:
-```
+```text
 SAFE cluster restore: applying configs via pvesh (node=pve01)
 
 Found 3 VM/CT configs for node pve01
@@ -732,7 +732,7 @@ See [pvesh SAFE Apply](#pvesh-safe-apply-cluster-safe-mode) for detailed explana
 
 #### Phase 14: Completion
 
-```
+```text
 ═══════════════════════════════════════════════════════════════
 RESTORE COMPLETED
 ═══════════════════════════════════════════════════════════════
@@ -812,7 +812,7 @@ When restoring from a **cluster backup** and selecting **SAFE mode** (option 1):
    - Datacenter config applied if desired
 4. **Non-destructive** - Safe for active clusters
 
-```
+```text
 Cluster backup detected. Choose how to restore:
   [1] SAFE: Export cluster files only (apply via API)  ← SELECTED
   [2] RECOVERY: Full database restore
@@ -835,7 +835,7 @@ When restoring from a **cluster backup** and selecting **RECOVERY mode** (option
 2. **WARNING displayed** - User must confirm node isolation
 3. **Split-brain risk** - CRITICAL to isolate node before proceeding
 
-```
+```text
 Cluster backup detected. Choose how to restore:
   [1] SAFE: Export cluster files only
   [2] RECOVERY: Full database restore  ← SELECTED
@@ -866,7 +866,7 @@ Restoring the PVE cluster database (`/var/lib/pve-cluster/config.db`) requires s
 ### Understanding PVE Cluster Filesystem
 
 **Architecture**:
-```
+```text
 pmxcfs (daemon)
     ↓
 reads/writes config.db (/var/lib/pve-cluster/config.db)
@@ -889,7 +889,7 @@ syncs via corosync (cluster communication)
 
 When the backup was created from a cluster node (detected via manifest `ClusterMode: cluster`) and you select the `pve_cluster` category, the restore workflow presents two options:
 
-```
+```text
 Cluster backup detected. Choose how to restore the cluster database:
   [1] SAFE: Do NOT write /var/lib/pve-cluster/config.db. Export cluster files only (manual/apply via API).
   [2] RECOVERY: Restore full cluster database (/var/lib/pve-cluster). Use only when cluster is offline/isolated.
@@ -976,7 +976,7 @@ Each action prompts for confirmation before execution.
 When restoring the `pve_cluster` category, the workflow automatically:
 
 **Stops services** (in order):
-```
+```text
 1. pve-cluster  → Stops pmxcfs, unmounts /etc/pve
 2. pvedaemon    → Stops API daemon
 3. pveproxy     → Stops web interface
@@ -994,7 +994,7 @@ umount /etc/pve
 - Preserves permissions and ownership
 
 **Restarts services** (in order):
-```
+```text
 1. pve-cluster  → Starts pmxcfs, reads restored config.db, remounts /etc/pve
 2. pvedaemon    → Reads cluster config from /etc/pve
 3. pveproxy     → Connects to pvedaemon
@@ -1003,7 +1003,7 @@ umount /etc/pve
 
 ### Service Stop/Restart Flow
 
-```
+```text
 ┌─────────────────────────────────────────────────┐
 │  CLUSTER DATABASE RESTORE SEQUENCE              │
 └─────────────────────────────────────────────────┘
@@ -1081,7 +1081,7 @@ After Restore:
    pvecm status
    ```
    Expected output:
-   ```
+   ```text
    Cluster information
    -------------------
    Name:             pve-cluster
@@ -1253,7 +1253,7 @@ Certain paths are too sensitive to restore directly and are extracted to a separ
 **Reason**: `/etc/pve` is a FUSE mount managed by pmxcfs
 
 **Why Export-Only?**:
-```
+```text
 /etc/pve (FUSE mount)
     ↑
     Managed by pmxcfs daemon
@@ -1268,7 +1268,7 @@ Writing directly to /etc/pve:
 ```
 
 **Code Protection**:
-```
+```text
 Hard guard in code prevents ANY write to /etc/pve when restoring to /
 (see internal/orchestrator/restore.go:880-884)
 ```
@@ -1282,7 +1282,7 @@ Hard guard in code prevents ANY write to /etc/pve when restoring to /
 ### Export Process
 
 **Extraction Passes**:
-```
+```text
 Pass 1: Normal Categories
   ├─ Destination: / (system root)
   ├─ Categories: All non-export-only
@@ -1302,7 +1302,7 @@ Pass 3: Staged Categories
 ```
 
 **Export Directory Structure**:
-```
+```text
 /opt/proxsave/proxmox-config-export-20251120-143052/
 └── etc/
     └── pve/
@@ -1383,7 +1383,7 @@ Pass 3: Staged Categories
 - In **CUSTOM selection**, you can explicitly select export-only categories
 
 **Selection**:
-```
+```text
 Available categories:
   [1] [ ] PVE Config Export
       Export-only copy of /etc/pve (never written to system paths)
@@ -1391,7 +1391,7 @@ Available categories:
 ```
 
 **Restore Plan Display**:
-```
+```text
 Export-only categories (will be extracted to separate directory):
   • PVE Config Export
     Destination: /opt/proxsave/proxmox-config-export-20251120-143052/
@@ -1403,7 +1403,7 @@ Export-only categories (will be extracted to separate directory):
 
 **Correct Approach**: Use BOTH categories
 
-```
+```text
 Custom selection:
   [X] PVE Cluster Configuration ← Restores /var/lib/pve-cluster/config.db
   [X] PVE Config Export         ← Exports /etc/pve/ for reference
@@ -1439,7 +1439,7 @@ ProxSave can restore pool definitions and membership (merge semantics):
 
 #### 3. VM/CT Configuration Apply
 
-```
+```text
 Found 5 VM/CT configs for node pve01
 Apply all VM/CT configs via pvesh? (y/N): y
 ```
@@ -1453,7 +1453,7 @@ For each VM/CT config found in the export:
 
 #### 4. Storage Configuration Apply
 
-```
+```text
 Storage configuration found: /opt/proxsave/proxmox-config-export-*/etc/pve/storage.cfg
 Apply storage.cfg via pvesh? (y/N): y
 ```
@@ -1468,7 +1468,7 @@ Parses `storage.cfg` and applies each storage definition:
 
 #### 5. Datacenter Configuration Apply
 
-```
+```text
 Datacenter configuration found: /opt/proxsave/proxmox-config-export-*/etc/pve/datacenter.cfg
 Apply datacenter.cfg via pvesh? (y/N): y
 ```
@@ -1478,7 +1478,7 @@ Applies datacenter-wide settings:
 - Affects all cluster nodes
 
 **Interactive Flow**:
-```
+```text
 SAFE cluster restore: applying configs via pvesh (node=pve01)
 
 Apply PVE resource mappings (pvesh)? (y/N): y
@@ -1568,7 +1568,7 @@ These configurations are included in every backup and can be restored using **th
 2. **Select backup and decrypt** (standard workflow)
 
 3. **When prompted for restore mode**, if backup is from cluster node:
-   ```
+   ```text
    Backup marked as cluster node; enabling guarded restore options
 
    Cluster restore mode:
@@ -1582,7 +1582,7 @@ These configurations are included in every backup and can be restored using **th
 4. **Select categories** (Custom mode only needed if you want to exclude components; FULL already includes the `pve_config_export` export)
 
 5. **After extraction completes**, you'll see:
-   ```
+   ```text
    SAFE cluster restore: applying configs via pvesh (node=pve01)
 
    Found 5 VM/CT configs for node pve01
@@ -1590,7 +1590,7 @@ These configurations are included in every backup and can be restored using **th
    ```
 
    **If the node name changed** (example: backup from `pve-old`, restore on `pve-new`), ProxSave prompts for the exported source node:
-   ```
+   ```text
    SAFE cluster restore: applying configs via pvesh (node=pve-new)
 
    WARNING: VM/CT configs in this backup are stored under different node names.
@@ -1605,7 +1605,7 @@ These configurations are included in every backup and can be restored using **th
    ```
 
 6. **Confirm and watch progress**:
-   ```
+   ```text
    Applied VM/CT config 100 (webserver)
    Applied VM/CT config 101 (database)
    Applied VM/CT config 102 (mailserver)
@@ -1759,7 +1759,7 @@ grep "^scsi\|^virtio\|^ide\|^sata" qemu-server/100.conf
 
 ### Decision Tree: Which Method Should I Use?
 
-```
+```text
 Are you restoring to an active multi-node cluster?
 ├─ YES → Use Method 1: pvesh SAFE Apply
 │        (Non-destructive, no downtime)
@@ -1808,7 +1808,7 @@ Are you restoring to an active multi-node cluster?
 - If disk paths changed, edit configs via GUI
 
 **Configuration vs. Data**:
-```
+```text
 What ProxSave Backs Up:
 ✅ VM/CT configuration files (*.conf)
 ✅ Cluster settings
@@ -1854,7 +1854,7 @@ tar -xzf /tmp/proxsave/restore_backup_20251120_143052.tar.gz -C /
 ```
 
 **If Safety Backup Fails**:
-```
+```text
 Failed to create safety backup: <error>
 
 Continue without safety backup? (yes/no): _
@@ -1865,7 +1865,7 @@ Continue without safety backup? (yes/no): _
 
 **Multiple abort points** throughout workflow:
 
-```
+```text
 Abort Points:
   [0] Cancel backup selection
   [0] Cancel restore mode selection
@@ -1875,7 +1875,7 @@ Abort Points:
 ```
 
 **Confirmation Requirement**:
-```
+```text
 Type "RESTORE" (exact case) to proceed, or "cancel"/"0" to abort: _
 ```
 - Must type exact word "RESTORE"
@@ -2095,7 +2095,7 @@ if cleanDestRoot == "/" && strings.HasPrefix(target, "/etc/pve") {
 **Detailed Log**: `/tmp/proxsave/restore_YYYYMMDD_HHMMSS.log`
 
 **Contents**:
-```
+```text
 === RESTORE LOG ===
 Started: 2025-11-20 14:30:52
 
@@ -2136,7 +2136,7 @@ grep "FAILED" /tmp/proxsave/restore_20251120_143052.log
 - A backup with neither a `.sha256` nor a manifest checksum is **dropped during discovery**, so it never appears in the selectable list. If a backup you expect is missing, check that its checksum file is still next to it
 
 **Behavior**:
-```
+```text
 Verifying SHA256 checksum...
 Expected: a1b2c3...
 Actual:   a1b2c3...
@@ -2147,7 +2147,7 @@ Actual:   a1b2c3...
 
 **Go defer pattern** ensures services restart even if restore fails:
 
-```
+```text
 Services stopped → Defer restart scheduled → Restore → (Failure) → Deferred restart executes
 ```
 

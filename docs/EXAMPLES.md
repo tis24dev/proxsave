@@ -98,7 +98,7 @@ crontab -e
 
 ### Expected Results
 
-```
+```text
 Backup directory: /opt/proxsave/backup/
 - <hostname>-backup-20240115-020000.tar.xz.bundle.tar
 ```
@@ -169,7 +169,7 @@ proxsave
 
 ### Expected Results
 
-```
+```text
 Local (SSD):
 /opt/proxsave/backup/
 - 7 backups retained (latest week)
@@ -329,7 +329,7 @@ proxsave --decrypt
 ### Expected Results
 
 **Encrypted backup**:
-```
+```text
 pve01-backup-20240115-020000.tar.xz.age.bundle.tar     # Encrypted bundle (archive + metadata + checksum)
 ```
 

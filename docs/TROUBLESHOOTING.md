@@ -137,7 +137,7 @@ AUTO_FIX_PERMISSIONS=true
 ```
 
 **Recommended permissions**:
-```
+```text
 /opt/proxsave/           755 (drwxr-xr-x)
 ├── backup/                    755 (drwxr-xr-x)
 ├── log/                       755 (drwxr-xr-x)
@@ -1075,7 +1075,7 @@ CLOUD_REMOTE=gdrive
 CLOUD_REMOTE_PATH=/pbs-backups
 COMPRESSION_TYPE=xz
 # ... other relevant settings
-```
+```text
 
 **Issue description**:
 Brief description of the problem...
@@ -1095,7 +1095,7 @@ What actually happens...
 ```
 [ERROR] Cloud upload failed: connection timeout
 ...
-```
+```text
 
 **Additional context**:
 Any other relevant information...

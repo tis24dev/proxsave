@@ -54,7 +54,7 @@ Telegram did not deliver keeps the run green (Tier 1 success), yet drives the
 
 Channels are wired and dispatched in a fixed order:
 
-```
+```text
 Email, Telegram, Gotify, Webhook, Healthchecks
 ```
 
@@ -196,7 +196,7 @@ distinct from `pending`) and no poll runs.
 
 Telegram prints **two lines**. The first is server acceptance, the second is delivery:
 
-```
+```text
 ✓ Telegram: sent to ProxSave server (in 240ms)
 ✓ Telegram: delivered to Telegram
 ```
