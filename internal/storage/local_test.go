@@ -600,7 +600,7 @@ func TestLocalStorage_LoadMetadataFromBundle(t *testing.T) {
 	}
 
 	// Try to load metadata (expected to fail, but shouldn't panic)
-	_, err := storage.loadMetadataFromBundle(bundlePath)
+	_, err := storage.loadMetadataFromBundle(context.Background(), bundlePath)
 
 	// Expected to fail for corrupted bundle, but shouldn't panic
 	if err == nil {

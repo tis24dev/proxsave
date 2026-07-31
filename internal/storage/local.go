@@ -251,7 +251,7 @@ func (l *LocalStorage) loadMetadata(ctx context.Context, backupFile string) (*ty
 	if isBundle {
 		l.logger.Debug("Local storage: reading metadata from inside bundle %s", backupFile)
 		return safefs.Run(ctx, "local-bundle-meta", backupFile, timeout, func() (*types.BackupMetadata, error) {
-			return l.loadMetadataFromBundle(backupFile)
+			return l.loadMetadataFromBundle(ctx, backupFile)
 		})
 	}
 
@@ -295,7 +295,7 @@ func (l *LocalStorage) loadMetadata(ctx context.Context, backupFile string) (*ty
 	return metadata, nil
 }
 
-func (l *LocalStorage) loadMetadataFromBundle(bundlePath string) (*types.BackupMetadata, error) {
+func (l *LocalStorage) loadMetadataFromBundle(ctx context.Context, bundlePath string) (*types.BackupMetadata, error) {
 	l.logger.Debug("Local storage: loadMetadataFromBundle called for %s", bundlePath)
 
 	// One reader for both callers: manifestFromBundle owns the tar scan and the
@@ -319,8 +319,12 @@ func (l *LocalStorage) loadMetadataFromBundle(bundlePath string) (*types.BackupM
 		Version:     manifest.ScriptVersion,
 	}
 
+	// Bounded like every other filesystem access in this file. The caller already
+	// wraps this whole function in safefs.Run, but that bound only frees the CALLER:
+	// safefs abandons the worker rather than joining it, so a bare os.Stat on a stale
+	// mount would leave a goroutine pinned on it for the process lifetime.
 	if metadata.Timestamp.IsZero() || metadata.Size == 0 {
-		if stat, statErr := os.Stat(bundlePath); statErr == nil {
+		if stat, statErr := safefs.Stat(ctx, bundlePath, fsIoTimeout(l.config)); statErr == nil {
 			if metadata.Timestamp.IsZero() {
 				metadata.Timestamp = stat.ModTime()
 			}

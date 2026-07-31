@@ -563,8 +563,8 @@ func TestLocalStorageLoadMetadataFromBundleOpenError(t *testing.T) {
 		t.Fatalf("NewLocalStorage() error = %v", err)
 	}
 
-	if _, err := local.loadMetadataFromBundle(filepath.Join(dir, "missing.bundle.tar")); err == nil {
-		t.Fatal("expected loadMetadataFromBundle() to fail for missing file")
+	if _, err := local.loadMetadataFromBundle(context.Background(), filepath.Join(dir, "missing.bundle.tar")); err == nil {
+		t.Fatal("expected loadMetadataFromBundle(context.Background(), ) to fail for missing file")
 	}
 }
 
@@ -582,8 +582,8 @@ func TestLocalStorageLoadMetadataFromBundleReadError(t *testing.T) {
 	if err := os.WriteFile(bundlePath, []byte("not a tar"), 0o600); err != nil {
 		t.Fatalf("write bundle: %v", err)
 	}
-	if _, err := local.loadMetadataFromBundle(bundlePath); err == nil {
-		t.Fatal("expected loadMetadataFromBundle() to fail for corrupted tar")
+	if _, err := local.loadMetadataFromBundle(context.Background(), bundlePath); err == nil {
+		t.Fatal("expected loadMetadataFromBundle(context.Background(), ) to fail for corrupted tar")
 	}
 }
 
@@ -621,8 +621,8 @@ func TestLocalStorageLoadMetadataFromBundleParseError(t *testing.T) {
 		t.Fatalf("close file: %v", err)
 	}
 
-	if _, err := local.loadMetadataFromBundle(bundlePath); err == nil {
-		t.Fatal("expected loadMetadataFromBundle() to fail for invalid manifest JSON")
+	if _, err := local.loadMetadataFromBundle(context.Background(), bundlePath); err == nil {
+		t.Fatal("expected loadMetadataFromBundle(context.Background(), ) to fail for invalid manifest JSON")
 	}
 }
 
@@ -678,9 +678,9 @@ func TestLocalStorageLoadMetadataFromBundleFallsBackToStat(t *testing.T) {
 		t.Fatalf("chtimes: %v", err)
 	}
 
-	meta, err := local.loadMetadataFromBundle(bundlePath)
+	meta, err := local.loadMetadataFromBundle(context.Background(), bundlePath)
 	if err != nil {
-		t.Fatalf("loadMetadataFromBundle() error = %v", err)
+		t.Fatalf("loadMetadataFromBundle(context.Background(), ) error = %v", err)
 	}
 	if !meta.Timestamp.Equal(modTime) {
 		t.Fatalf("Timestamp = %v, want %v", meta.Timestamp, modTime)
@@ -798,8 +798,8 @@ func TestLocalStorageLoadMetadataFromBundleMissingEntry(t *testing.T) {
 		t.Fatalf("close file: %v", err)
 	}
 
-	if _, err := local.loadMetadataFromBundle(bundlePath); err == nil {
-		t.Fatal("expected loadMetadataFromBundle() to fail when metadata entry missing")
+	if _, err := local.loadMetadataFromBundle(context.Background(), bundlePath); err == nil {
+		t.Fatal("expected loadMetadataFromBundle(context.Background(), ) to fail when metadata entry missing")
 	}
 }
 
