@@ -12,7 +12,6 @@ import (
 	"github.com/tis24dev/proxsave/internal/installer"
 	"github.com/tis24dev/proxsave/internal/logging"
 	"github.com/tis24dev/proxsave/internal/orchestrator"
-	"github.com/tis24dev/proxsave/internal/safefs"
 	"github.com/tis24dev/proxsave/internal/ui/components"
 	"github.com/tis24dev/proxsave/internal/ui/flows/agesetup"
 	flowinstall "github.com/tis24dev/proxsave/internal/ui/flows/install"
@@ -126,36 +125,32 @@ func runInstallTUI(ctx context.Context, configPath string, bootstrap *logging.Bo
 		return mapUIDeath(err)
 	}
 
+	decision, err := installer.ResolveExistingConfigDecision(existingAction, configPath)
+	if err != nil {
+		return err
+	}
+
 	var skipConfigWizard bool
 	var wizardData *installer.InstallWizardData
 	baseTemplate := ""
 
-	// Adopt the run time from the cron line this install is about to rewrite, now that
-	// the operator's answer is known. Nothing is written to backup.env here: on Edit
-	// the value is mirrored into baseTemplate below and ApplyInstallData rewrites the
-	// file at the end, so cancelling later leaves the host byte-identical. Keep
-	// existing has no wizard to carry it, so its write is deferred to the commit point.
-	schedulerSeed := deriveSchedulerTimeForExistingConfig(ctx, existingAction, configPath, bootstrap)
-
-	switch existingAction {
-	case installer.ExistingConfigCancel:
+	switch {
+	case decision.AbortInstall:
 		logging.DebugStepBootstrap(bootstrap, "install workflow (tui)", "user cancelled installation")
 		return wrapInstallError(errInteractiveAborted)
-	case installer.ExistingConfigKeepContinue:
+	case decision.SkipConfigWizard:
 		logging.DebugStepBootstrap(bootstrap, "install workflow (tui)", "using existing configuration and skipping wizard")
 		skipConfigWizard = true
-	case installer.ExistingConfigEdit:
+	case decision.FromExistingFile:
 		logging.DebugStepBootstrap(bootstrap, "install workflow (tui)", "editing existing configuration")
-		content, readErr := safefs.ReadFileUnderRoot(configPath)
-		if readErr != nil {
-			return fmt.Errorf("read existing configuration: %w", readErr)
-		}
-		baseTemplate = string(content)
-		if schedulerSeed.Time != "" {
-			// cronFieldDefault reads this to prefill "Run at"; without it the wizard
-			// would offer the 02:00 default instead of the host's real run time.
-			baseTemplate = setEnvValue(baseTemplate, "SCHEDULER_TIME", schedulerSeed.Time)
-		}
+		// Adopt the run time from the cron line this install is about to rewrite, now
+		// that the operator's answer is known. Nothing is written to backup.env here:
+		// ApplyInstallData rewrites the file at the end from this template, so
+		// cancelling later leaves the host byte-identical. cronFieldDefault reads the
+		// mirrored value to prefill "Run at"; without it the wizard would offer the
+		// 02:00 default instead of the host's real run time. Keep existing has no
+		// wizard to carry it, so its write stays deferred to the commit point.
+		baseTemplate = adoptCronRunTimeIntoBase(ctx, decision, configPath, bootstrap)
 	default:
 		logging.DebugStepBootstrap(bootstrap, "install workflow (tui)", "using embedded template")
 		// Overwrite: use embedded template (handled as empty base)

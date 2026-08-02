@@ -4,50 +4,25 @@ import (
 	"bufio"
 	"context"
 	"fmt"
-	"os"
 	"strings"
 
-	"github.com/tis24dev/proxsave/internal/config"
-	"github.com/tis24dev/proxsave/internal/safefs"
+	"github.com/tis24dev/proxsave/internal/installer"
 )
 
-type existingConfigMode int
-
-const (
-	existingConfigOverwrite existingConfigMode = iota
-	existingConfigEdit
-	existingConfigKeepContinue
-	existingConfigCancel
-)
-
-type existingConfigDecision struct {
-	BaseTemplate     string
-	SkipConfigWizard bool
-	AbortInstall     bool
-	// FromExistingFile is true only when the wizard starts from the user's current
-	// backup.env (Edit). Fresh installs and Overwrite start from the embedded
-	// template, so defaults (e.g. the scheduler engine) may be the recommended new
-	// values rather than the stored ones.
-	FromExistingFile bool
-}
-
-func promptExistingConfigModeCLI(ctx context.Context, reader *bufio.Reader, configPath string) (existingConfigMode, error) {
+func promptExistingConfigModeCLI(ctx context.Context, reader *bufio.Reader, configPath string) (installer.ExistingConfigAction, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
 
-	info, err := os.Stat(configPath)
+	exists, err := installer.ExistingConfigPresent(configPath)
 	if err != nil {
-		if os.IsNotExist(err) {
-			if err := ctx.Err(); err != nil {
-				return existingConfigCancel, err
-			}
-			return existingConfigOverwrite, nil
-		}
-		return existingConfigCancel, fmt.Errorf("failed to access configuration file: %w", err)
+		return installer.ExistingConfigCancel, err
 	}
-	if !info.Mode().IsRegular() {
-		return existingConfigCancel, fmt.Errorf("configuration file path is not a regular file: %s", configPath)
+	if !exists {
+		if err := ctx.Err(); err != nil {
+			return installer.ExistingConfigCancel, err
+		}
+		return installer.ExistingConfigOverwrite, nil
 	}
 
 	fmt.Printf("%s already exists.\n", configPath)
@@ -60,77 +35,41 @@ func promptExistingConfigModeCLI(ctx context.Context, reader *bufio.Reader, conf
 	for {
 		choice, err := promptOptional(ctx, reader, "Choice [3]: ")
 		if err != nil {
-			return existingConfigCancel, err
+			return installer.ExistingConfigCancel, err
 		}
 		switch strings.TrimSpace(choice) {
 		case "":
 			fallthrough
 		case "3":
 			if err := ctx.Err(); err != nil {
-				return existingConfigCancel, err
+				return installer.ExistingConfigCancel, err
 			}
-			return existingConfigKeepContinue, nil
+			return installer.ExistingConfigKeepContinue, nil
 		case "1":
 			if err := ctx.Err(); err != nil {
-				return existingConfigCancel, err
+				return installer.ExistingConfigCancel, err
 			}
-			return existingConfigOverwrite, nil
+			return installer.ExistingConfigOverwrite, nil
 		case "2":
 			if err := ctx.Err(); err != nil {
-				return existingConfigCancel, err
+				return installer.ExistingConfigCancel, err
 			}
-			return existingConfigEdit, nil
+			return installer.ExistingConfigEdit, nil
 		case "0":
 			if err := ctx.Err(); err != nil {
-				return existingConfigCancel, err
+				return installer.ExistingConfigCancel, err
 			}
-			return existingConfigCancel, nil
+			return installer.ExistingConfigCancel, nil
 		default:
 			fmt.Println("Please enter 1, 2, 3 or 0.")
 		}
 	}
 }
 
-func resolveExistingConfigDecision(mode existingConfigMode, configPath string) (existingConfigDecision, error) {
-	switch mode {
-	case existingConfigOverwrite:
-		return existingConfigDecision{
-			BaseTemplate:     config.DefaultEnvTemplate(),
-			SkipConfigWizard: false,
-			AbortInstall:     false,
-		}, nil
-	case existingConfigEdit:
-		content, err := safefs.ReadFileUnderRoot(configPath)
-		if err != nil {
-			return existingConfigDecision{}, fmt.Errorf("read existing configuration: %w", err)
-		}
-		return existingConfigDecision{
-			BaseTemplate:     string(content),
-			SkipConfigWizard: false,
-			AbortInstall:     false,
-			FromExistingFile: true,
-		}, nil
-	case existingConfigKeepContinue:
-		return existingConfigDecision{
-			BaseTemplate:     "",
-			SkipConfigWizard: true,
-			AbortInstall:     false,
-		}, nil
-	case existingConfigCancel:
-		return existingConfigDecision{
-			BaseTemplate:     "",
-			SkipConfigWizard: false,
-			AbortInstall:     true,
-		}, nil
-	default:
-		return existingConfigDecision{}, fmt.Errorf("unsupported existing configuration mode: %d", mode)
-	}
-}
-
-func prepareExistingConfigDecisionCLI(ctx context.Context, reader *bufio.Reader, configPath string) (existingConfigDecision, error) {
-	mode, err := promptExistingConfigModeCLI(ctx, reader, configPath)
+func prepareExistingConfigDecisionCLI(ctx context.Context, reader *bufio.Reader, configPath string) (installer.ExistingConfigDecision, error) {
+	action, err := promptExistingConfigModeCLI(ctx, reader, configPath)
 	if err != nil {
-		return existingConfigDecision{}, err
+		return installer.ExistingConfigDecision{}, err
 	}
-	return resolveExistingConfigDecision(mode, configPath)
+	return installer.ResolveExistingConfigDecision(action, configPath)
 }

@@ -15,17 +15,6 @@ import (
 // ErrInstallCancelled is returned when the user aborts the install wizard.
 var ErrInstallCancelled = errors.New("installation aborted by user")
 
-// ExistingConfigAction represents how to handle an already-present
-// configuration file.
-type ExistingConfigAction int
-
-const (
-	ExistingConfigOverwrite    ExistingConfigAction = iota // Start from embedded template (overwrite)
-	ExistingConfigEdit                                     // Keep existing file as base and edit
-	ExistingConfigKeepContinue                             // Leave file untouched and continue installation
-	ExistingConfigCancel                                   // Abort installation
-)
-
 // PostInstallAuditResult reports the outcome of the optional post-install
 // audit step.
 type PostInstallAuditResult struct {

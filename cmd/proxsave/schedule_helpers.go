@@ -169,29 +169,35 @@ func schedulerTimeFromCronLines(lines []string) (string, bool) {
 	return found, found != ""
 }
 
-// deriveSchedulerTimeForExistingConfig is the read-only twin used by the TUI before
-// the wizard runs: same gate, no write to backup.env.
-func deriveSchedulerTimeForExistingConfig(ctx context.Context, action installer.ExistingConfigAction, configPath string, bootstrap *logging.BootstrapLogger) schedulerTimeSeed {
-	if !existingConfigAdoptsCronTime(action) {
-		return schedulerTimeSeed{}
+// adoptCronRunTimeIntoBase is the ONE place both front-ends adopt the host's cron
+// run time into the wizard's in-memory base. It returns the (possibly seeded) base
+// and writes nothing to disk: on Edit the wizard rewrites the whole file at the end
+// from this template, so an install cancelled halfway leaves the host byte-identical.
+//
+// The gate is decision.FromExistingFile, i.e. Edit ONLY. Cancel must leave the host
+// untouched and Overwrite is about to replace the file, so an adoption note there
+// would describe a value nobody will use. Keep existing has no wizard to carry the
+// value, so its write stays deferred to the commit point in runInstall/runInstallTUI,
+// which is also the single place its note is logged.
+func adoptCronRunTimeIntoBase(ctx context.Context, decision installer.ExistingConfigDecision, configPath string, bootstrap *logging.BootstrapLogger) string {
+	if !decision.FromExistingFile {
+		return decision.BaseTemplate
 	}
 	seed := deriveSchedulerTimeFromCrontabFn(ctx, configPath)
-	if seed.Note != "" {
+	if seed.Note == "" {
+		return decision.BaseTemplate
+	}
+	seeded := installer.ApplySchedulerTimeSeed(decision.BaseTemplate, seed.Time)
+	// The adoption note promises "the daily run time does not change", so it may
+	// only be logged when the value actually reached the base:
+	// ApplySchedulerTimeSeed discards it on a blank base (see its guard), and a
+	// note the code then contradicts is worse than silence. The other variant
+	// carries no Time -- it warns that the cron entry could not be interpreted --
+	// and is truthful whatever the base looks like.
+	if seed.Time == "" || seeded != decision.BaseTemplate {
 		logBootstrapInfo(bootstrap, "%s", seed.Note)
 	}
-	return seed
-}
-
-// existingConfigAdoptsCronTime reports whether this answer commits to the existing
-// backup.env. Cancel must leave the host untouched, and Overwrite is about to replace
-// the file, so an adoption note there would describe a value nobody will use.
-func existingConfigAdoptsCronTime(action installer.ExistingConfigAction) bool {
-	switch action {
-	case installer.ExistingConfigKeepContinue, installer.ExistingConfigEdit:
-		return true
-	default:
-		return false
-	}
+	return seeded
 }
 
 // hasProxsaveCronLine reports whether the crontab schedules proxsave at all (used

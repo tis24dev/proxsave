@@ -748,19 +748,22 @@ func prepareBaseTemplate(ctx context.Context, reader *bufio.Reader, configPath s
 	// "Run at" prompt. Cancelling anywhere later then leaves the host byte-identical,
 	// which a write at this point would not. Keep existing has no wizard to carry the
 	// value, so its write is deferred to the commit point in runInstall.
-	if decision.FromExistingFile {
-		if seed := deriveSchedulerTimeFromCrontabFn(ctx, configPath); seed.Note != "" {
-			logBootstrapInfo(bootstrap, "%s", seed.Note)
-			if seed.Time != "" && decision.BaseTemplate != "" {
-				decision.BaseTemplate = setEnvValue(decision.BaseTemplate, "SCHEDULER_TIME", seed.Time)
-			}
-		}
-	}
+	decision.BaseTemplate = adoptCronRunTimeIntoBase(ctx, decision, configPath, bootstrap)
 	if decision.SkipConfigWizard {
 		fmt.Println("Existing configuration detected, keeping current backup.env and skipping configuration wizard.")
 		return "", true, false, nil
 	}
-	return decision.BaseTemplate, false, decision.FromExistingFile, nil
+	// The shared decision carries the RAW base ("" = embedded default) because
+	// ApplyInstallData derives editingExisting from it. The CLI wizard, unlike the
+	// Charm one, computes its own prompt defaults from this template, so it expands
+	// here - but ONLY off the Edit path: expanding a blank existing backup.env would
+	// rewrite it as the full embedded template instead of the minimal key set it
+	// produces today. Pinned by TestPrepareBaseTemplateEditBlankBaseStaysRaw.
+	base := decision.BaseTemplate
+	if !decision.FromExistingFile {
+		base = installer.BaseTemplateOrDefault(base)
+	}
+	return base, false, decision.FromExistingFile, nil
 }
 
 func configureSecondaryStorage(ctx context.Context, reader *bufio.Reader, template string) (string, error) {

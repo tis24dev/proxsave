@@ -9,7 +9,6 @@ package install
 import (
 	"context"
 	"fmt"
-	"os"
 	"strings"
 
 	"github.com/tis24dev/proxsave/internal/config"
@@ -32,15 +31,12 @@ func mapCancel(err error) error {
 // file. When no file exists it returns Overwrite without any screen (same
 // contract as the tview CheckExistingConfig and the CLI prompt).
 func ResolveExistingConfig(ctx context.Context, session *shell.Session, configPath string) (installer.ExistingConfigAction, error) {
-	info, err := os.Stat(configPath)
+	exists, err := installer.ExistingConfigPresent(configPath)
 	if err != nil {
-		if os.IsNotExist(err) {
-			return installer.ExistingConfigOverwrite, nil
-		}
-		return installer.ExistingConfigCancel, fmt.Errorf("failed to access configuration file: %w", err)
+		return installer.ExistingConfigCancel, err
 	}
-	if !info.Mode().IsRegular() {
-		return installer.ExistingConfigCancel, fmt.Errorf("configuration file path is not a regular file: %s", configPath)
+	if !exists {
+		return installer.ExistingConfigOverwrite, nil
 	}
 
 	items := []components.SelectorItem[installer.ExistingConfigAction]{

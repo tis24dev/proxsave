@@ -869,3 +869,41 @@ func parseWrittenEnvForTest(content string) map[string]string {
 	}
 	return values
 }
+
+// TestPrepareBaseTemplateEditBlankBaseStaysRaw pins the conditionality of the
+// BaseTemplateOrDefault expansion, not merely its presence. Editing a blank
+// backup.env must keep the base RAW: expanding it here would rewrite that file as
+// the full embedded template instead of the minimal key set the wizard produces
+// today, and would flip ApplyInstallData's editingExisting for that base.
+//
+// Without this test the gate is unpinned -- making the expansion unconditional
+// leaves the whole suite, characterization goldens included, green.
+func TestPrepareBaseTemplateEditBlankBaseStaysRaw(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		content string
+	}{
+		{"zero byte", ""},
+		{"whitespace only", "  \n\t\n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfgFile := createTempFile(t, tc.content)
+			reader := bufio.NewReader(strings.NewReader("2\n"))
+			var tmpl string
+			var fromExisting bool
+			var err error
+			captureStdout(t, func() {
+				tmpl, _, fromExisting, err = prepareBaseTemplate(context.Background(), reader, cfgFile, nil)
+			})
+			if err != nil {
+				t.Fatalf("prepareBaseTemplate error: %v", err)
+			}
+			if !fromExisting {
+				t.Fatal("edit must report fromExisting=true")
+			}
+			if tmpl != tc.content {
+				t.Fatalf("blank base must stay raw; got %d bytes (%q), want the file content back", len(tmpl), tmpl)
+			}
+		})
+	}
+}
