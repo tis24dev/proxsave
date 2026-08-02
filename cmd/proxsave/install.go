@@ -5,7 +5,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	neturl "net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -306,27 +305,14 @@ func runPostInstallAuditCLI(ctx context.Context, reader *bufio.Reader, execPath,
 		return nil
 	}
 
-	contentBytes, err := safefs.ReadFileUnderRoot(configPath)
-	if err != nil {
-		fmt.Printf("ERROR: Unable to update configuration (read failed): %v\n", err)
-		if bootstrap != nil {
-			bootstrap.Warning("Post-install audit: unable to update configuration (read failed): %v", err)
-		}
-		return nil
-	}
-	content := string(contentBytes)
-
 	sort.Strings(keys)
-	for _, key := range keys {
-		content = setEnvValue(content, key, "false")
-	}
-
-	tmpAuditPath := configPath + ".tmp.audit"
-	defer cleanupTempConfig(tmpAuditPath)
-	if err := writeConfigFile(configPath, tmpAuditPath, content); err != nil {
-		fmt.Printf("ERROR: Unable to update configuration (write failed): %v\n", err)
+	// The summary printed just below renders the un-normalized `keys` slice while the
+	// file receives the ToUpper-normalized keys ApplyAuditDisables writes; the two agree
+	// only because internal/installer/audit.go already uppercases each Key at the source.
+	if err := installer.ApplyAuditDisables(configPath, keys); err != nil {
+		fmt.Printf("ERROR: Unable to update configuration: %v\n", err)
 		if bootstrap != nil {
-			bootstrap.Warning("Post-install audit: unable to update configuration (write failed): %v", err)
+			bootstrap.Warning("Post-install audit: unable to update configuration: %v", err)
 		}
 		return nil
 	}
@@ -901,7 +887,7 @@ func configureNotifications(ctx context.Context, reader *bufio.Reader, template 
 		}
 		template = setEnvValue(template, "EMAIL_ENABLED", "true")
 		template = setEnvValue(template, "EMAIL_DELIVERY_METHOD", method)
-		template = unsetEnvValue(template, "EMAIL_FALLBACK_PMF")
+		template = installer.UnsetEnvValueInTemplate(template, "EMAIL_FALLBACK_PMF")
 		template = setEnvValue(template, "EMAIL_FALLBACK_SENDMAIL", "true")
 	} else {
 		template = setEnvValue(template, "EMAIL_ENABLED", "false")
@@ -1050,31 +1036,6 @@ func configureHealthcheckMode(ctx context.Context, reader *bufio.Reader, def str
 	}
 }
 
-// validateHealthcheckPingURLCLI is the CLI-side ping-URL validator, identical in
-// intent to the TUI's validateHealthcheckPingURL: an absolute http(s) URL with a
-// host. It is used for the required alive/backup URLs (empty rejected) via
-// promptNonEmpty's retry loop and, wrapped, for the optional URLs.
-func validateHealthcheckPingURLCLI(v string) error {
-	v = strings.TrimSpace(v)
-	if v == "" {
-		return fmt.Errorf("cannot be empty")
-	}
-	if !strings.HasPrefix(v, "http://") && !strings.HasPrefix(v, "https://") {
-		return fmt.Errorf("URL must start with http:// or https://")
-	}
-	u, err := neturl.ParseRequestURI(v)
-	if err != nil {
-		return fmt.Errorf("invalid URL: %v", err)
-	}
-	if u.Scheme != "http" && u.Scheme != "https" {
-		return fmt.Errorf("URL must start with http:// or https://")
-	}
-	if u.Host == "" {
-		return fmt.Errorf("URL must include a host")
-	}
-	return nil
-}
-
 // promptHealthcheckRequiredURL prompts for a required ping URL, re-asking until the
 // value is a valid http(s) URL (parity with the TUI required-field validator).
 func promptHealthcheckRequiredURL(ctx context.Context, reader *bufio.Reader, question, def string) (string, error) {
@@ -1084,7 +1045,7 @@ func promptHealthcheckRequiredURL(ctx context.Context, reader *bufio.Reader, que
 			return "", err
 		}
 		val = sanitizeEnvValue(val)
-		if verr := validateHealthcheckPingURLCLI(val); verr != nil {
+		if verr := installer.ValidateHealthcheckPingURL(val); verr != nil {
 			fmt.Printf("%v\n", verr)
 			continue
 		}
@@ -1104,7 +1065,7 @@ func promptHealthcheckOptionalURL(ctx context.Context, reader *bufio.Reader, que
 		if strings.TrimSpace(val) == "" {
 			return "", nil
 		}
-		if verr := validateHealthcheckPingURLCLI(val); verr != nil {
+		if verr := installer.ValidateHealthcheckPingURL(val); verr != nil {
 			fmt.Printf("%v\n", verr)
 			continue
 		}

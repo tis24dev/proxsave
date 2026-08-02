@@ -10,6 +10,7 @@ import (
 	"bufio"
 	"errors"
 	"fmt"
+	"net/url"
 	"strings"
 
 	"github.com/tis24dev/proxsave/internal/config"
@@ -135,6 +136,43 @@ func DeriveHealthcheckSelfParams(template string) HealthcheckSelfParams {
 		NotifyGotifyURL:   readTemplateString(values, "HEALTHCHECK_NOTIFY_GOTIFY_URL"),
 		NotifyWebhookURL:  readTemplateString(values, "HEALTHCHECK_NOTIFY_WEBHOOK_URL"),
 	}
+}
+
+// ValidateHealthcheckPingURL accepts only a well-formed absolute http(s) ping URL
+// with a host. It mirrors the http(s) gate style of serverbot.SanitizeLoginURL but
+// is a full-URL validator: an empty value is rejected (use it on required fields;
+// wrap it for optional ones). Callers paste the ENTIRE ping URL of each check
+// (e.g. https://hc-ping.com/<uuid>), so the daemon's selfURLs() full-URL branch
+// resolves it verbatim. Shared by the CLI wizard and the Charm install flow.
+func ValidateHealthcheckPingURL(v string) error {
+	v = strings.TrimSpace(v)
+	if v == "" {
+		return fmt.Errorf("cannot be empty")
+	}
+	if !strings.HasPrefix(v, "http://") && !strings.HasPrefix(v, "https://") {
+		return fmt.Errorf("URL must start with http:// or https://")
+	}
+	u, err := url.ParseRequestURI(v)
+	if err != nil {
+		return fmt.Errorf("invalid URL: %v", err)
+	}
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return fmt.Errorf("URL must start with http:// or https://")
+	}
+	if u.Host == "" {
+		return fmt.Errorf("URL must include a host")
+	}
+	return nil
+}
+
+// ValidateOptionalHealthcheckPingURL is ValidateHealthcheckPingURL for optional
+// fields: an empty value is accepted (the sensor is simply not configured), a
+// non-empty value must still be a valid http(s) URL.
+func ValidateOptionalHealthcheckPingURL(v string) error {
+	if strings.TrimSpace(v) == "" {
+		return nil
+	}
+	return ValidateHealthcheckPingURL(v)
 }
 
 // ExistingConfigAction represents how to handle an already-present configuration file.

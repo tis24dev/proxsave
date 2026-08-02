@@ -55,3 +55,30 @@ func TestWriteConfigFileAtomicWritesAbsolutePath(t *testing.T) {
 		t.Fatalf("temp file should be gone after rename, stat err=%v", err)
 	}
 }
+
+// A FAILED write must not leave the temp entry behind either. The cleanup defer
+// is registered BEFORE root.WriteFile precisely so this path is covered: with the
+// defer registered after the write (as it was before the callers in cmd/ dropped
+// their own outer cleanup defers), an ENOSPC/EIO/EDQUOT write returned with the
+// defer never registered and orphaned the temp file. tmpPath is pre-created as an
+// empty directory here, which is the portable way to make root.WriteFile fail.
+func TestWriteConfigFileAtomicCleansUpAfterFailedWrite(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "backup.env")
+	tmpPath := configPath + ".tmp"
+
+	if err := os.Mkdir(tmpPath, 0o700); err != nil {
+		t.Fatalf("seed temp path as a directory: %v", err)
+	}
+
+	if err := WriteConfigFileAtomic(configPath, tmpPath, "KEY=value\n"); err == nil {
+		t.Fatal("writing over a directory must fail")
+	}
+
+	if _, err := os.Stat(tmpPath); !os.IsNotExist(err) {
+		t.Fatalf("temp entry must be removed after a failed write, stat err=%v", err)
+	}
+	if _, err := os.Stat(configPath); !os.IsNotExist(err) {
+		t.Fatalf("config must not exist after a failed write, stat err=%v", err)
+	}
+}

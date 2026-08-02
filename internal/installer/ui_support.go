@@ -124,14 +124,14 @@ func WriteConfigFileAtomic(configPath, tmpPath, content string) error {
 		return fmt.Errorf("failed to open configuration directory: %w", err)
 	}
 	defer func() { _ = root.Close() }()
-	if err := root.WriteFile(filepath.Base(tmpPath), []byte(content), 0o600); err != nil {
-		return fmt.Errorf("failed to write configuration file: %w", err)
-	}
 	defer func() {
 		if _, statErr := os.Stat(tmpPath); statErr == nil {
 			_ = os.Remove(tmpPath)
 		}
 	}()
+	if err := root.WriteFile(filepath.Base(tmpPath), []byte(content), 0o600); err != nil {
+		return fmt.Errorf("failed to write configuration file: %w", err)
+	}
 	if err := os.Rename(tmpPath, configPath); err != nil {
 		return fmt.Errorf("failed to finalize configuration file: %w", err)
 	}

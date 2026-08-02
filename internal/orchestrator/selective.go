@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"os"
 	"path"
-	"sort"
 	"strconv"
 	"strings"
 
@@ -179,28 +178,8 @@ func ShowCategorySelectionMenuWithReader(ctx context.Context, reader *bufio.Read
 		reader = bufio.NewReader(os.Stdin)
 	}
 
-	// Filter categories by system type
-	relevantCategories := make([]Category, 0)
-	for _, cat := range availableCategories {
-		if cat.Type == CategoryTypeCommon ||
-			(systemType.SupportsPVE() && cat.Type == CategoryTypePVE) ||
-			(systemType.SupportsPBS() && cat.Type == CategoryTypePBS) {
-			relevantCategories = append(relevantCategories, cat)
-		}
-	}
-
-	// Sort categories: PVE/PBS first, then common
-	sort.Slice(relevantCategories, func(i, j int) bool {
-		if relevantCategories[i].Type != relevantCategories[j].Type {
-			if relevantCategories[i].Type == CategoryTypeCommon {
-				return false
-			}
-			if relevantCategories[j].Type == CategoryTypeCommon {
-				return true
-			}
-		}
-		return relevantCategories[i].Name < relevantCategories[j].Name
-	})
+	// Filter by system type and sort (PVE/PBS first, then common).
+	relevantCategories := filterAndSortCategoriesForSystem(availableCategories, systemType)
 
 	// Track selection state
 	selected := make(map[int]bool)
