@@ -584,7 +584,7 @@ func runConfigWizardCLI(ctx context.Context, reader *bufio.Reader, configPath, t
 		template = setEnvValue(template, "HEALTHCHECK_MODE", "off")
 		clearHCURLs()
 	}
-	if err := writeConfigFile(configPath, tmpConfigPath, template); err != nil {
+	if err := installer.WriteConfigFileAtomic(configPath, tmpConfigPath, template); err != nil {
 		return installConfigResult{}, err
 	}
 
@@ -1160,29 +1160,6 @@ func configureCronTime(ctx context.Context, reader *bufio.Reader, defaultCron st
 		}
 		return normalized, nil
 	}
-}
-
-func writeConfigFile(configPath, tmpConfigPath, content string) error {
-	dir := filepath.Dir(configPath)
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return fmt.Errorf("failed to create configuration directory: %w", err)
-	}
-	// Confine the temp write to the configuration directory via os.Root so the
-	// admin-supplied --config path cannot place the file outside that directory
-	// (gosec G703 path-traversal containment). tmpConfigPath is configPath with a
-	// suffix, so it always resolves to a single component within dir.
-	root, err := os.OpenRoot(dir)
-	if err != nil {
-		return fmt.Errorf("failed to open configuration directory: %w", err)
-	}
-	defer func() { _ = root.Close() }()
-	if err := root.WriteFile(filepath.Base(tmpConfigPath), []byte(content), 0o600); err != nil {
-		return fmt.Errorf("failed to write configuration file: %w", err)
-	}
-	if err := os.Rename(tmpConfigPath, configPath); err != nil {
-		return fmt.Errorf("failed to finalize configuration file: %w", err)
-	}
-	return nil
 }
 
 func wrapInstallError(err error) error {

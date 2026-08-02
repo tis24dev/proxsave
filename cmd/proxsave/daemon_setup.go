@@ -339,7 +339,7 @@ func setBackupEnvKeys(configPath string, kv map[string]string) error {
 	for _, k := range keys {
 		content = utils.SetEnvValue(content, k, kv[k])
 	}
-	return writeConfigFile(configPath, configPath+".daemon.tmp", content)
+	return installer.WriteConfigFileAtomic(configPath, configPath+".daemon.tmp", content)
 }
 
 // reconcileSchedulerAfterInstall makes the scheduler engine a MUTUALLY EXCLUSIVE

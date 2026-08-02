@@ -185,13 +185,7 @@ func runInstallTUI(ctx context.Context, configPath string, bootstrap *logging.Bo
 		// Write configuration file
 		logging.DebugStepBootstrap(bootstrap, "install workflow (tui)", "writing configuration")
 		tmpConfigPath := configPath + ".tmp"
-		defer func() {
-			if _, err := os.Stat(tmpConfigPath); err == nil {
-				_ = os.Remove(tmpConfigPath)
-			}
-		}()
-
-		if err := writeConfigFile(configPath, tmpConfigPath, template); err != nil {
+		if err := installer.WriteConfigFileAtomic(configPath, tmpConfigPath, template); err != nil {
 			return err
 		}
 
