@@ -57,36 +57,58 @@ streamed through the compressor into the age writer, so the archive is never wri
 plaintext, but its input is. There is no tar file anywhere: the tar is streamed through a
 pipe, not held in memory and not landed on disk.
 
-The staging root and the per-run directory are both created `0700` and owned by `root`, and
-ProxSave refuses to run if `/tmp/proxsave` is a symlink, is not a directory, is group or
-world writable, or is owned by another user. Staged files keep the owner and mode of their
-originals, so the `0700` parent is what keeps other local users out. The location is not
-configurable: it is compiled in, and `TMPDIR` does not move it.
+The **per-run** directory is created `0700` and owned by `root`, and that is what keeps other
+local users out of the staged files, since staged files keep the owner and mode of their
+originals. The shared root `/tmp/proxsave` is a different matter: several paths create it
+`0755`, and the guard only refuses a symlink, a non-directory, a **group or world writable**
+root, or one owned by another user. A world-readable `0755` root is accepted and never
+tightened, so anything ProxSave writes directly into the root, rather than inside a `0700`
+per-run directory, is readable by every local user. Run `chmod 700 /tmp/proxsave` if that
+matters on your host. The location is not configurable: it is compiled in, and `TMPDIR` does
+not move it.
 
 The directory exists from the start of collection until the run finishes, which includes
 archiving, verification, bundling and any upload to secondary or cloud storage. It is
-deleted when the run returns, whether it succeeded or failed, and also on Ctrl-C or
-`SIGTERM`. It is **not** deleted if the process is killed with `SIGKILL` or the machine
-loses power. The next *backup* run sweeps it (a restore or a status check does not), and
-that sweep is driven by a registry, normally `/var/run/proxsave/temp-dirs.json` (it falls
-back under `TMPDIR` when that directory cannot be created). On a stock host that path is
-tmpfs, so a crash followed by a reboot loses the record and the leftover is never swept.
-After an unclean shutdown, check by hand:
+deleted when the run returns, whether it succeeded or failed, and also on the **first**
+Ctrl-C or `SIGTERM`. It is **not** deleted if the process is killed with `SIGKILL`, if the
+machine loses power, or if you press **Ctrl-C a second time**: ProxSave un-registers its
+signal handler after the first signal, so a second one terminates the process outright and
+no cleanup runs. Give the first Ctrl-C time to unwind.
+
+The next *backup* run sweeps leftovers (a restore or a status check does not), driven by a
+registry at `/var/run/proxsave/temp-dirs.json`, overridden by `PROXMOX_TEMP_REGISTRY_PATH`
+when set and falling back under `TMPDIR` when that directory cannot be created. An entry is
+swept when its PID is gone, or unconditionally once the record is 24 hours old. On a stock
+host `/var/run` is tmpfs, so a crash followed by a reboot loses the record and the leftover
+is never swept. Check by hand after an unclean shutdown, and note that the sweep only ever
+covers backup staging:
 
 ```bash
 ls -la /tmp/proxsave/
-rm -rf /tmp/proxsave/proxsave-*
+rm -rf /tmp/proxsave/proxsave-*          # backup staging, from a killed backup
+rm -rf /tmp/proxsave/proxmox-decrypt-*   # decrypt staging: a FULLY DECRYPTED archive
+rm -rf /tmp/proxsave/restore-stage-*     # restore staging: plaintext shadow and pve priv
+rm -f  /tmp/proxsave/*_backup_*.tar.gz   # restore safety tarballs, once the restore is settled
 ```
 
 Two practical consequences. `/tmp` needs room for a full uncompressed copy of everything
 being backed up, on top of the archive itself. And if `/tmp` is a tmpfs the staged plaintext
 is in RAM and can reach swap; if it is on disk, it is written to persistent storage.
 
-The same applies in reverse when you decrypt: `proxsave --decrypt` stages under
-`/tmp/proxsave/proxmox-decrypt-*` and cleans up at the end, while a restore's safety backup
-at `/tmp/proxsave/restore_backup_<timestamp>.tar.gz` is a plain unencrypted tar.gz that is
-left in place deliberately. If you decrypt by hand with the `age` CLI, your own output is
-plaintext too: pipe it rather than land it on a shared filesystem.
+The same applies in reverse, and the restore side is worse. `proxsave --decrypt` stages under
+`/tmp/proxsave/proxmox-decrypt-*` and removes it at the end of a normal run. `proxsave
+--restore` extracts the sensitive categories in the clear into
+`/tmp/proxsave/restore-stage-<timestamp>_<seq>/`, which holds material such as `/etc/shadow`,
+`/etc/gshadow` and `/etc/pve/priv/*.cfg`, and **never deletes it**, on success or failure.
+Nothing sweeps it either, since it is not registered. A restore also leaves its rollback and
+safety tarballs (`restore_backup_`, `network_rollback_backup_`, `firewall_rollback_backup_`,
+`ha_rollback_backup_`, `pve_access_control_rollback_backup_`, each `_<timestamp>.tar.gz`)
+deliberately in place, and those are written **mode 0644 directly in the root**, not inside a
+`0700` directory, so on a stock host any local user can read them. Clean them up yourself
+once a restore has settled.
+
+If you decrypt by hand with the `age` CLI, your own output is plaintext too: pipe it rather
+than land it on a shared filesystem.
 
 ---
 
@@ -179,13 +201,20 @@ ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIExampleSSHpublicKeyForAgeRecipient
 > age1abc123def456ghi789jkl012mno345pqr678stu901vwx234yz567abc
 > ```
 >
-> The recipient parser ignores it, but ProxSave reads it back: it holds the
-> per-installation salt that turns a passphrase into a recipient, and it takes priority
-> over the `passphrase.salt` file beside it. Edit this file **in place** and leave the
-> salt line alone. Do not retype the file from scratch and do not filter out comments.
-> Losing both copies does not lock you out of existing backups (the salt travels in each
-> archive's manifest) but every backup taken afterwards is written without a salt and can
-> never be opened with the passphrase.
+> The recipient parser ignores it, but ProxSave reads it back. It is a **copy** of the
+> per-installation salt that gets stamped into every archive manifest.
+> `identity/age/passphrase.salt` is the authoritative one: it is the only copy the setup
+> wizard reads when it derives a recipient from a passphrase, and every backup rewrites
+> this comment from it. The comment exists so that losing the sibling does not lose the
+> salt for future manifests.
+>
+> Edit this file **in place** and leave the salt line alone. Do not retype the file from
+> scratch and do not filter out comments. Losing both copies does not lock you out of
+> existing backups, since the salt travels in each archive's manifest, but every backup
+> taken afterwards is written without a salt and can never be opened with the passphrase.
+> And if `passphrase.salt` is gone, re-running the wizard with the same passphrase mints a
+> **new random salt** and derives a **different** recipient, without a warning: the comment
+> is not consulted there.
 
 > **SSH keys encrypt, but ProxSave cannot decrypt with them.** `proxsave --decrypt` and `proxsave --restore` accept only an `AGE-SECRET-KEY-...` identity or a passphrase. Paste an SSH private key at the prompt and it is hashed as a passphrase, which derives the wrong identity and loops on "Provided key or passphrase does not match this archive."
 >
@@ -195,6 +224,7 @@ ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIExampleSSHpublicKeyForAgeRecipient
 >
 > ```bash
 > # With bundling left at its default the raw .age is not on disk: untar the bundle first.
+> mkdir -p /tmp/emergency
 > tar -xf <HOST>-backup-YYYYMMDD-HHMMSS.tar.xz.age.bundle.tar -C /tmp/emergency
 > age -d -i ~/.ssh/id_ed25519 -o backup.tar.xz /tmp/emergency/<HOST>-backup-YYYYMMDD-HHMMSS.tar.xz.age
 > ```
@@ -301,9 +331,13 @@ backup/
   "created_at": "2024-01-15T02:30:00Z",
   "compression_type": "xz",
   "hostname": "pve-node1",
-  "encryption_mode": "age"
+  "encryption_mode": "age",
+  "passphrase_salt": "proxsave/age-passphrase/v2:1a2b3c..."
 }
 ```
+
+`passphrase_salt` is omitted entirely for X25519 or SSH-only setups, and for legacy
+fixed-salt archives.
 
 ---
 
@@ -334,6 +368,7 @@ unwrap the bundle first (see [Emergency Decryption Without
 Configuration](#emergency-decryption-without-configuration)):
 
 ```bash
+mkdir -p /tmp/emergency
 tar -xf <HOST>-backup-YYYYMMDD-HHMMSS.tar.xz.age.bundle.tar -C /tmp/emergency
 age --decrypt -i /path/to/age-keys.txt \
   /tmp/emergency/<HOST>-backup-YYYYMMDD-HHMMSS.tar.xz.age > <HOST>-backup-YYYYMMDD-HHMMSS.tar.xz
@@ -410,20 +445,23 @@ Rotating encryption keys periodically improves security (recommended annually or
    age-keygen -o age-keys-2025.txt
    ```
 
-2. Extract the new public recipient and append it to the recipient file:
+2. Extract the new public recipient and append it to the file named by `AGE_RECIPIENT_FILE`
+   (that is `${BASE_DIR}/identity/age/recipient.txt` only when the key is empty). ProxSave
+   reads exactly one recipient file, so appending to the default path while the key points
+   elsewhere is a silent no-op and the new key never enters the rotation:
    ```bash
-   grep "# public key:" age-keys-2025.txt | cut -d: -f2 | tr -d ' ' >> ${BASE_DIR}/identity/age/recipient.txt
+   grep "# public key:" age-keys-2025.txt | cut -d: -f2 | tr -d ' ' >> /opt/proxsave/identity/age/recipient.txt
    ```
 
 3. Run backups for a while: new backups can be decrypted with **either** the old or the new private key.
 
-4. After retention deletes older backups, remove the old recipient line from `${BASE_DIR}/identity/age/recipient.txt`.
+4. After retention deletes older backups, remove the old recipient line from that same file.
 
 5. If the old recipient was **also** set inline, remove it from `AGE_RECIPIENT` (or `AGE_RECIPIENTS`) and from the environment. Otherwise deleting the file line changes nothing: the inline value is merged back on the next backup.
 
 **Important**:
 - Keep old private keys until you are sure all old backups are expired (or safely archived).
-- Proxsave stores only recipients; private keys/passphrases remain your responsibility.
+- Proxsave stores no private key and no passphrase. Besides the recipients it stores the passphrase salt (`identity/age/passphrase.salt` and the `# passphrase-salt:` line in the recipient file). Private keys and passphrases remain your responsibility.
 - Before every backup ProxSave rebuilds the recipient list from scratch: inline values first, then the file's lines, then exact duplicates are dropped keeping the first occurrence. Nothing is remembered between runs, so any recipient still present in configuration comes back.
 
 ### Full Replacement (Reset Recipients)
@@ -467,11 +505,11 @@ variable, `--newkey` does replace the effective recipient set.
 | Scenario | Solution |
 |----------|----------|
 | **Lost passphrase/private key** | **No recovery possible**. Keep 2+ offline copies (password manager, printed paper). |
-| **Migrating to new server** | Copy the whole `${BASE_DIR}/identity/age/` directory byte for byte (`recipient.txt` **and** `passphrase.salt`) plus your `configs/backup.env`. Do not retype the recipient file: the `# passphrase-salt:` line inside it is what lets a passphrase re-derive the key. If the salt does not reach the new host, backups taken there are written without a salt and can never be opened with the passphrase. Alternatively run `proxsave --newkey` on the new host and accept a new recipient. Keep private keys offline. |
+| **Migrating to new server** | Copy the whole `identity/age/` directory byte for byte, **`passphrase.salt` included**, plus your `configs/backup.env`. `passphrase.salt` is the file that matters: the setup wizard reads only that one, and if it is missing it mints a new random salt and derives a **different** recipient without warning. The `# passphrase-salt:` copy inside `recipient.txt` only feeds the manifest, so do not rely on it alone and do not retype the recipient file. Alternatively run `proxsave --newkey` on the new host and accept a new recipient. Keep private keys offline. |
 | **Verifying integrity** | Periodically decrypt a backup (or run a restore in a test VM) to ensure keys and archives are valid. |
 | **Automation** | Headless runs require recipients pre-configured (`AGE_RECIPIENT` and/or `AGE_RECIPIENT_FILE`). |
 | **Recipient file overwritten** | Restore from `recipient.txt.bak-*`. ProxSave writes that copy itself whenever `--newkey` overwrites an existing recipient file. |
-| **Passphrase salt lost** | Recover it from any archive's manifest: see [Rebuilding a lost salt](#rebuilding-a-lost-salt). Existing backups are unaffected. |
+| **Passphrase salt lost** | Recover it from the manifest of an archive your current recipient still opens: see [Rebuilding a lost salt](#rebuilding-a-lost-salt). Existing backups are unaffected. Write back only a value that matches the recipient you are still using. |
 
 ### Emergency Decryption Without Configuration
 
@@ -540,10 +578,16 @@ grep passphrase_salt <HOST>-backup-YYYYMMDD-HHMMSS.tar.xz.age.manifest.json
 tar -xOf <HOST>-backup-YYYYMMDD-HHMMSS.tar.xz.age.bundle.tar \
     <HOST>-backup-YYYYMMDD-HHMMSS.tar.xz.age.metadata | grep passphrase_salt
 
-# Write the value back, prefix included, and future backups record it again
-printf '%s\n' 'proxsave/age-passphrase/v2:1a2b3c...' > ${BASE_DIR}/identity/age/passphrase.salt
-chmod 600 ${BASE_DIR}/identity/age/passphrase.salt
+# Write the value back, prefix included, and future backups record it again.
+# BASE_DIR is not a shell variable: substitute your install root.
+printf '%s\n' 'proxsave/age-passphrase/v2:1a2b3c...' > /opt/proxsave/identity/age/passphrase.salt
+chmod 600 /opt/proxsave/identity/age/passphrase.salt
 ```
+
+Write back only a salt that matches the recipient you are still using. The next backup copies
+this file over the `# passphrase-salt:` line in `recipient.txt` and stamps it into every new
+manifest, so a value from an older salt generation would make future archives unopenable with
+the passphrase you have.
 
 An archive whose manifest has no `passphrase_salt` at all was written either by a version
 that used a fixed salt, which ProxSave still tries, or by an install that had already lost
@@ -551,13 +595,18 @@ the salt. For the second case there is no recovery.
 
 ### Testing Backup Recoverability
 
-Periodically verify backups are decryptable. Reading the `.age` straight out of the bundle
-avoids unpacking it:
+Periodically verify backups are decryptable. Land the plaintext first: `tar` auto-detects
+compression only when it is given a **file name**, so piping a compressed stream into
+`tar -t` fails with `Archive is compressed. Use -J option` no matter which compressor was
+used.
 
 ```bash
+mkdir -p /tmp/emergency
 tar -xOf <HOST>-backup-YYYYMMDD-HHMMSS.tar.xz.age.bundle.tar \
     <HOST>-backup-YYYYMMDD-HHMMSS.tar.xz.age \
-  | age --decrypt -i /path/to/age-keys.txt | tar -t >/dev/null && echo "Archive valid"
+  | age --decrypt -i /path/to/age-keys.txt > /tmp/emergency/archive.inner
+tar -tf /tmp/emergency/archive.inner >/dev/null && echo "Archive valid"
+rm -f /tmp/emergency/archive.inner
 ```
 
 **Recommended schedule**: Monthly automated test + manual review.
@@ -569,7 +618,7 @@ tar -xOf <HOST>-backup-YYYYMMDD-HHMMSS.tar.xz.age.bundle.tar \
 ### Encryption Implementation
 
 - **Algorithm**: ChaCha20-Poly1305 (AEAD) with X25519 ECDH
-- **Key derivation**: scrypt (N=2^15, r=8, p=1) for passphrases. The current scheme uses a **per-installation random salt** (v2), generated once, stored `0600` at `identity/age/passphrase.salt`, mirrored as the `# passphrase-salt:` line inside the recipient file (that copy wins when both exist), and embedded in each manifest as `passphrase_salt` so the passphrase alone can re-derive the recipient on any host. At decrypt ProxSave tries salts in order: the manifest's per-install salt first, then two fixed legacy namespaces (`proxsave/age-passphrase/v1`, then the pre-rebrand `proxmox-backup-go/age-passphrase/v1`), so archives from older versions and from before the rename stay decryptable.
+- **Key derivation**: scrypt (N=2^15, r=8, p=1) for passphrases. The current scheme uses a **per-installation random salt** (v2), generated once, stored `0600` at `identity/age/passphrase.salt`, mirrored as the `# passphrase-salt:` line inside the recipient file (every backup rewrites that comment from the sibling, so the sibling wins whenever the two differ; the comment is only consulted once the sibling is gone), and embedded in each manifest as `passphrase_salt` so the passphrase alone can re-derive the recipient on any host. At decrypt ProxSave tries salts in order: the manifest's per-install salt first, then two fixed legacy namespaces (`proxsave/age-passphrase/v1`, then the pre-rebrand `proxmox-backup-go/age-passphrase/v1`), so archives from older versions and from before the rename stay decryptable.
 - **Random nonces**: Unique per encryption operation
 - **Authentication**: Poly1305 MAC prevents tampering
 
@@ -579,7 +628,7 @@ tar -xOf <HOST>-backup-YYYYMMDD-HHMMSS.tar.xz.age.bundle.tar \
 |----------|----------------|
 | **Passphrase handling** | Read with `term.ReadPassword` (no echo) |
 | **Memory security** | Buffers zeroed immediately after use |
-| **Streaming encryption** | No plaintext **archive** on disk. The staging tree is removed when the run ends |
+| **Streaming encryption** | No plaintext **archive** on disk. The backup staging tree is removed when the run ends, but not on `SIGKILL`, power loss or a double Ctrl-C, and a restore leaves its own staging tree and safety tarballs behind: see [Plaintext staging](#plaintext-staging) |
 | **File permissions & ownership** | Enforced 0700/0600 and root:root on recipient/identity files (auto-fixed with `AUTO_FIX_PERMISSIONS`, otherwise warned) |
 | **Private key storage** | **Keep offline** (password manager, hardware token, printed backup) |
 | **Backup separation** | Store keys separately from backup media |
@@ -709,6 +758,11 @@ tar -xOf <HOST>-backup-YYYYMMDD-HHMMSS.tar.xz.age.bundle.tar \
     <HOST>-backup-YYYYMMDD-HHMMSS.tar.xz.age \
   | age --decrypt -i /path/to/age-keys.txt > <HOST>-backup-YYYYMMDD-HHMMSS.tar.xz
 ```
+
+### File paths in these examples
+
+`BASE_DIR` is auto-detected from the installed executable and is **not** a shell variable:
+substitute your install root (typically `/opt/proxsave`) when pasting any path that uses it.
 
 ### File Locations
 
