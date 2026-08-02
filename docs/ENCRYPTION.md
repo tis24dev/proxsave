@@ -6,6 +6,7 @@ Complete guide to AGE encryption for Proxsave.
 
 - [Overview](#overview)
 - [Features](#features)
+- [Plaintext staging](#plaintext-staging)
 - [Quick Start](#quick-start)
 - [Configure Recipients](#configure-recipients)
   - [Static Configuration](#static-configuration)
@@ -25,7 +26,7 @@ Complete guide to AGE encryption for Proxsave.
 Proxsave uses the **[age](https://age-encryption.org/)** format (via `filippo.io/age`) for encryption. AGE is a modern, simple, and secure file encryption format designed to replace GPG for basic use cases.
 
 **Key characteristics**:
-- **Streaming encryption**: Backups encrypted as they're created (no plaintext on disk)
+- **Streaming encryption**: the archive is encrypted as it is written, so no plaintext archive is ever created on disk. The files gathered for the backup are staged in the clear under `/tmp/proxsave` first: see [Plaintext staging](#plaintext-staging)
 - **Multiple recipients**: Support for both passphrase and key-based encryption
 - **Memory safety**: Sensitive data zeroed immediately after use
 - **Standard format**: Compatible with standard AGE tools
@@ -40,9 +41,52 @@ Proxsave uses the **[age](https://age-encryption.org/)** format (via `filippo.io
 | **Key types** | Passphrase or X25519 key pair. SSH public keys (`ssh-ed25519` / `ssh-rsa`) are accepted as recipients but ProxSave cannot decrypt with the matching SSH private key: see the warning below |
 | **Multiple recipients** | Single backup can be decrypted with any configured recipient |
 | **Interactive setup** | `--newkey` (or the first encrypted run) helps you configure recipients |
-| **Streaming mode** | Encrypts during backup creation (no temporary plaintext) |
+| **Streaming mode** | Encrypts during backup creation, so there is no temporary plaintext **archive**. The staging tree under `/tmp/proxsave` is plaintext |
 | **Security** | Passphrases read with `term.ReadPassword`, buffers zeroed after use |
 | **File permissions** | Recipient files are created 0700/0600; the security check verifies them and auto-fixes only when `AUTO_FIX_PERMISSIONS` is enabled (otherwise it warns) |
+
+---
+
+## Plaintext staging
+
+Encryption applies to the **archive**, not to the collection step. Each run creates a
+staging directory `/tmp/proxsave/proxsave-<hostname>-<timestamp>-<random>` and copies every
+collected file into it in the clear, including `/etc/shadow`, `/etc/gshadow`,
+`/etc/ssl/private` and `/etc/pve/priv`. The tar is then read back from that directory and
+streamed through the compressor into the age writer, so the archive is never written in
+plaintext, but its input is. There is no tar file anywhere: the tar is streamed through a
+pipe, not held in memory and not landed on disk.
+
+The staging root and the per-run directory are both created `0700` and owned by `root`, and
+ProxSave refuses to run if `/tmp/proxsave` is a symlink, is not a directory, is group or
+world writable, or is owned by another user. Staged files keep the owner and mode of their
+originals, so the `0700` parent is what keeps other local users out. The location is not
+configurable: it is compiled in, and `TMPDIR` does not move it.
+
+The directory exists from the start of collection until the run finishes, which includes
+archiving, verification, bundling and any upload to secondary or cloud storage. It is
+deleted when the run returns, whether it succeeded or failed, and also on Ctrl-C or
+`SIGTERM`. It is **not** deleted if the process is killed with `SIGKILL` or the machine
+loses power. The next *backup* run sweeps it (a restore or a status check does not), and
+that sweep is driven by a registry, normally `/var/run/proxsave/temp-dirs.json` (it falls
+back under `TMPDIR` when that directory cannot be created). On a stock host that path is
+tmpfs, so a crash followed by a reboot loses the record and the leftover is never swept.
+After an unclean shutdown, check by hand:
+
+```bash
+ls -la /tmp/proxsave/
+rm -rf /tmp/proxsave/proxsave-*
+```
+
+Two practical consequences. `/tmp` needs room for a full uncompressed copy of everything
+being backed up, on top of the archive itself. And if `/tmp` is a tmpfs the staged plaintext
+is in RAM and can reach swap; if it is on disk, it is written to persistent storage.
+
+The same applies in reverse when you decrypt: `proxsave --decrypt` stages under
+`/tmp/proxsave/proxmox-decrypt-*` and cleans up at the end, while a restore's safety backup
+at `/tmp/proxsave/restore_backup_<timestamp>.tar.gz` is a plain unencrypted tar.gz that is
+left in place deliberately. If you decrypt by hand with the `age` CLI, your own output is
+plaintext too: pipe it rather than land it on a shared filesystem.
 
 ---
 
@@ -108,7 +152,7 @@ Recipients are public keys or passphrases that can decrypt backups. A backup enc
 
 ### Static Configuration
 
-**File**: set by `AGE_RECIPIENT_FILE`, which is **empty by default**; when unset ProxSave resolves it to `${BASE_DIR}/identity/age/recipient.txt`.
+**File**: set by `AGE_RECIPIENT_FILE`. The shipped template sets it to `${BASE_DIR}/identity/age/recipient.txt`; the compiled-in default is empty, and ProxSave then resolves it to that same path. Check the key before assuming the default path: `--newkey` rewrites whatever `AGE_RECIPIENT_FILE` points at, not necessarily the default.
 
 ```plaintext
 # AGE recipients (one per line)
@@ -128,6 +172,21 @@ ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIExampleSSHpublicKeyForAgeRecipient
 - Blank lines and `#` comments ignored
 - Supported types: X25519 (`age1...`) and SSH public keys (`ssh-ed25519` / `ssh-rsa`); mix freely
 
+> **One comment in this file is not decoration.** ProxSave writes its own line at the top:
+>
+> ```plaintext
+> # passphrase-salt: proxsave/age-passphrase/v2:1a2b3c...
+> age1abc123def456ghi789jkl012mno345pqr678stu901vwx234yz567abc
+> ```
+>
+> The recipient parser ignores it, but ProxSave reads it back: it holds the
+> per-installation salt that turns a passphrase into a recipient, and it takes priority
+> over the `passphrase.salt` file beside it. Edit this file **in place** and leave the
+> salt line alone. Do not retype the file from scratch and do not filter out comments.
+> Losing both copies does not lock you out of existing backups (the salt travels in each
+> archive's manifest) but every backup taken afterwards is written without a salt and can
+> never be opened with the passphrase.
+
 > **SSH keys encrypt, but ProxSave cannot decrypt with them.** `proxsave --decrypt` and `proxsave --restore` accept only an `AGE-SECRET-KEY-...` identity or a passphrase. Paste an SSH private key at the prompt and it is hashed as a passphrase, which derives the wrong identity and loops on "Provided key or passphrase does not match this archive."
 >
 > If you configure **only** SSH recipients, ProxSave cannot open its own archives. Always keep at least one `age1...` recipient or a passphrase alongside them.
@@ -135,7 +194,9 @@ ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIExampleSSHpublicKeyForAgeRecipient
 > An archive encrypted to an SSH key can still be opened with the upstream `age` CLI, pointing `-i` at the SSH private key:
 >
 > ```bash
-> age -d -i ~/.ssh/id_ed25519 -o backup.tar.xz backup.tar.xz.age
+> # With bundling left at its default the raw .age is not on disk: untar the bundle first.
+> tar -xf <HOST>-backup-YYYYMMDD-HHMMSS.tar.xz.age.bundle.tar -C /tmp/emergency
+> age -d -i ~/.ssh/id_ed25519 -o backup.tar.xz /tmp/emergency/<HOST>-backup-YYYYMMDD-HHMMSS.tar.xz.age
 > ```
 
 ### Interactive Wizard
@@ -164,7 +225,7 @@ short list of well-known weak passphrases (for example `password`, `123456`, `qw
 is also rejected outright.
 
 **Notes**:
-- Proxsave stores **only recipients** (public keys) in `${BASE_DIR}/identity/age/recipient.txt`. Keep private keys and passphrases offline.
+- Proxsave stores **no private key and no passphrase**. Besides the recipients it does store the passphrase salt, a deliberately public value, in `identity/age/passphrase.salt` and as the `# passphrase-salt:` line inside the recipient file. Keep private keys and passphrases offline.
 - `AGE_RECIPIENT` (inline) and `AGE_RECIPIENT_FILE` are **merged and de-duplicated**. `AGE_RECIPIENTS` (plural) is accepted as a fallback alias for `AGE_RECIPIENT`, used only when `AGE_RECIPIENT` is empty.
 - Both TUI and CLI setup flows support multiple recipients and de-duplicate repeated entries before saving.
 
@@ -189,17 +250,19 @@ proxsave
 ```text
 ┌─────────────────────────────────────────────┐
 │  Phase 1: Backup Collection                 │
-│  - Gather PVE/PBS/System files              │
-│  - Create TAR archive in memory             │
+│  - Gather PVE/PBS/System files               │
+│  - Stage them IN THE CLEAR under             │
+│    /tmp/proxsave/proxsave-<host>-<ts>-<rnd>  │
+│    (mode 0700, root only)                    │
 └─────────────┬───────────────────────────────┘
               │
               ▼
 ┌─────────────────────────────────────────────┐
 │  Phase 2: Streaming Encryption              │
-│  - Read TAR stream                          │
-│  - Encrypt with AGE (ChaCha20-Poly1305)     │
+│  - Stream the staging tree as a tar through  │
+│    the compressor into AGE (ChaCha20-Poly1305)│
 │  - Write to <HOST>-backup-YYYYMMDD-HHMMSS.tar.<ext>.age │
-│  - NO plaintext on disk                     │
+│  - NO plaintext ARCHIVE on disk              │
 └─────────────┬───────────────────────────────┘
               │
               ▼
@@ -261,12 +324,19 @@ proxsave --decrypt
    - the passphrase you used (proxsave derives the matching identity; the passphrase is not stored)
 
 **Output**:
-- A decrypted bundle saved as: `*.decrypted.bundle.tar`
+- A decrypted bundle saved as `*.decrypted.bundle.tar`. That is itself a plain tar holding
+  the decrypted archive plus its `.metadata` and `.sha256`, so `tar -xf` it to get the
+  archive out.
 
-If you need fully scripted/non-interactive decryption with a **private key**, use the official `age` CLI tool:
+If you need fully scripted/non-interactive decryption with a **private key**, use the
+official `age` CLI. With bundling left at its default the raw `.age` is not on disk, so
+unwrap the bundle first (see [Emergency Decryption Without
+Configuration](#emergency-decryption-without-configuration)):
 
 ```bash
-age --decrypt -i /path/to/age-keys.txt host-backup-YYYYMMDD-HHMMSS.tar.xz.age > host-backup-YYYYMMDD-HHMMSS.tar.xz
+tar -xf <HOST>-backup-YYYYMMDD-HHMMSS.tar.xz.age.bundle.tar -C /tmp/emergency
+age --decrypt -i /path/to/age-keys.txt \
+  /tmp/emergency/<HOST>-backup-YYYYMMDD-HHMMSS.tar.xz.age > <HOST>-backup-YYYYMMDD-HHMMSS.tar.xz
 ```
 
 > **Passphrase recipients are not native age passphrases.** A passphrase recipient
@@ -274,8 +344,16 @@ age --decrypt -i /path/to/age-keys.txt host-backup-YYYYMMDD-HHMMSS.tar.xz.age > 
 > only understands age's own scrypt passphrase stanza) cannot decrypt it from the
 > passphrase alone, use `proxsave --decrypt`. proxsave re-derives the identity from
 > the passphrase plus the **per-installation random salt** generated at setup, which
-> is stored next to the recipient (`identity/age/passphrase.salt`) and embedded in
-> every backup manifest (`passphrase_salt`) so recovery works on any host.
+> is stored next to the recipient (`identity/age/passphrase.salt`, mirrored as the
+> `# passphrase-salt:` line in the recipient file) and embedded in every backup manifest
+> (`passphrase_salt`) so recovery works on any host. The emergency `age` CLI path above
+> therefore needs an `AGE-SECRET-KEY-...` identity file; a passphrase-only holder must use
+> `proxsave --decrypt`, which reads the bundle directly.
+>
+> **Decryption never reads `recipient.txt` or `passphrase.salt`.** The salt travels inside
+> each archive's manifest, so an existing backup stays openable with its passphrase even if
+> both local copies are gone. See [Emergency
+> Scenarios](#emergency-scenarios) for how to rebuild them from an archive.
 
 ---
 
@@ -341,19 +419,46 @@ Rotating encryption keys periodically improves security (recommended annually or
 
 4. After retention deletes older backups, remove the old recipient line from `${BASE_DIR}/identity/age/recipient.txt`.
 
+5. If the old recipient was **also** set inline, remove it from `AGE_RECIPIENT` (or `AGE_RECIPIENTS`) and from the environment. Otherwise deleting the file line changes nothing: the inline value is merged back on the next backup.
+
 **Important**:
 - Keep old private keys until you are sure all old backups are expired (or safely archived).
 - Proxsave stores only recipients; private keys/passphrases remain your responsibility.
+- Before every backup ProxSave rebuilds the recipient list from scratch: inline values first, then the file's lines, then exact duplicates are dropped keeping the first occurrence. Nothing is remembered between runs, so any recipient still present in configuration comes back.
 
 ### Full Replacement (Reset Recipients)
 
-To replace recipients completely (for example after a key compromise), run:
+`proxsave --newkey` rewrites the **recipient file only**. It never edits
+`configs/backup.env`. A recipient configured anywhere else stays active and is merged back
+into the next backup, so on its own this is not a way to drop a compromised key.
+
+To really drop a compromised recipient, clear all of these:
+
+1. **`AGE_RECIPIENT` in `configs/backup.env`.** This key accumulates: every `AGE_RECIPIENT=`
+   line in the file is kept, and each line may hold several recipients separated by comma,
+   semicolon, pipe or newline. Remove or empty all of them.
+2. **`AGE_RECIPIENTS`** (plural) in the same file. It is read only when `AGE_RECIPIENT`
+   yields nothing, so emptying `AGE_RECIPIENT` silently hands control to it.
+3. **The `AGE_RECIPIENT` and `AGE_RECIPIENT_FILE` environment variables**, if a systemd
+   unit, cron wrapper or shell profile sets them. Environment values override the file.
+4. **The recipient file itself**, which `--newkey` rewrites. That is the path in
+   `AGE_RECIPIENT_FILE`, which is only `${BASE_DIR}/identity/age/recipient.txt` when the key
+   is empty.
+
+Then run:
 
 ```bash
 proxsave --newkey
 ```
 
-This overwrites the recipient file after confirmation. Back up `${BASE_DIR}/identity/age/recipient.txt` first if you need rollback.
+If the target recipient file already exists, `--newkey` asks for confirmation and copies the
+old file to `<path>.bak-<timestamp>` itself before overwriting. If it does not exist, for
+example when your only recipient was inline, it writes the new file with no prompt and no
+warning.
+
+The shipped template leaves `AGE_RECIPIENT` empty and nothing in the installer or the wizard
+ever writes a value into it, so if you never hand-edited `backup.env` and set no environment
+variable, `--newkey` does replace the effective recipient set.
 
 ---
 
@@ -362,30 +467,97 @@ This overwrites the recipient file after confirmation. Back up `${BASE_DIR}/iden
 | Scenario | Solution |
 |----------|----------|
 | **Lost passphrase/private key** | **No recovery possible**. Keep 2+ offline copies (password manager, printed paper). |
-| **Migrating to new server** | Copy the recipient file (`${BASE_DIR}/identity/age/recipient.txt`) and your `configs/backup.env`. Keep private keys offline. |
+| **Migrating to new server** | Copy the whole `${BASE_DIR}/identity/age/` directory byte for byte (`recipient.txt` **and** `passphrase.salt`) plus your `configs/backup.env`. Do not retype the recipient file: the `# passphrase-salt:` line inside it is what lets a passphrase re-derive the key. If the salt does not reach the new host, backups taken there are written without a salt and can never be opened with the passphrase. Alternatively run `proxsave --newkey` on the new host and accept a new recipient. Keep private keys offline. |
 | **Verifying integrity** | Periodically decrypt a backup (or run a restore in a test VM) to ensure keys and archives are valid. |
 | **Automation** | Headless runs require recipients pre-configured (`AGE_RECIPIENT` and/or `AGE_RECIPIENT_FILE`). |
-| **Recipient file overwritten** | Restore from your own backup copy (or from `recipient.txt.bak-*` if you created one). |
+| **Recipient file overwritten** | Restore from `recipient.txt.bak-*`. ProxSave writes that copy itself whenever `--newkey` overwrites an existing recipient file. |
+| **Passphrase salt lost** | Recover it from any archive's manifest: see [Rebuilding a lost salt](#rebuilding-a-lost-salt). Existing backups are unaffected. |
 
 ### Emergency Decryption Without Configuration
 
-If you have the private key but lost all configuration:
+If you have the private key but lost all configuration, start from what is actually on disk.
+With bundling left at its default the **only** file on the backup path is
+`<HOST>-backup-YYYYMMDD-HHMMSS.tar.<ext>.age.bundle.tar`. The raw `.age` archive, its
+`.sha256`, its `.metadata` and its `.manifest.json` are deleted once the bundle is written,
+and the bundle is also the only file copied to secondary and cloud destinations. Unwrap it
+before anything else.
 
 ```bash
-# Manual decryption with age tools
-age --decrypt -i /path/to/age-keys.txt host-backup-YYYYMMDD-HHMMSS.tar.xz.age > decrypted.tar.xz
+# 1. Read the member names from the bundle rather than typing them
+tar -tf <HOST>-backup-YYYYMMDD-HHMMSS.tar.xz.age.bundle.tar
+# <HOST>-backup-YYYYMMDD-HHMMSS.tar.xz.age.metadata
+# <HOST>-backup-YYYYMMDD-HHMMSS.tar.xz.age.sha256
+# <HOST>-backup-YYYYMMDD-HHMMSS.tar.xz.age
 
-# Extract archive
-tar -xf decrypted.tar.xz -C /tmp/emergency-restore
+# 2. Unwrap. The bundle is an uncompressed tar with basename-only entries,
+#    so extract it into a directory of your own.
+mkdir -p /tmp/emergency
+tar -xf <HOST>-backup-YYYYMMDD-HHMMSS.tar.xz.age.bundle.tar -C /tmp/emergency
+cd /tmp/emergency
+
+# 3. Optional: verify before spending time on it. The .sha256 names the .age file,
+#    so run this from the extraction directory.
+sha256sum -c <HOST>-backup-YYYYMMDD-HHMMSS.tar.xz.age.sha256
+
+# 4. Decrypt with the stock age CLI
+age --decrypt -i /path/to/age-keys.txt \
+  <HOST>-backup-YYYYMMDD-HHMMSS.tar.xz.age > <HOST>-backup-YYYYMMDD-HHMMSS.tar.xz
+
+# 5. Extract the inner archive
+mkdir -p /tmp/emergency-restore
+tar -xf <HOST>-backup-YYYYMMDD-HHMMSS.tar.xz -C /tmp/emergency-restore
 ```
+
+Notes on this recipe:
+
+- The `.age` file inside the bundle keeps exactly the name it had on disk, so step 4 is the
+  ordinary `age` command, just after the untar.
+- **Do not assume the extension is `.tar.xz`.** It follows the compression actually used, and
+  ProxSave falls back to gzip when the configured compressor is not installed. Take the name
+  from `tar -tf`.
+- If `BUNDLE_ASSOCIATED_FILES=false` was set there is no bundle: the `.age` file is already
+  on disk next to its sidecars, so skip steps 1 to 3.
+- The `.metadata` member is a byte copy of the manifest JSON. Only `.metadata` is bundled, so
+  do not look for a `.manifest.json` inside the bundle. Read it with
+  `cat <name>.age.metadata` to recover `compression_type`, `sha256`, `encryption_mode` and
+  `passphrase_salt` without touching the archive.
+- This path needs an `AGE-SECRET-KEY-...` identity. A passphrase cannot be fed to the `age`
+  CLI (see the note under [Decrypting Backups](#decrypting-backups)); use
+  `proxsave --decrypt`, which reads the bundle directly. It only lists backups found under
+  the configured primary, secondary or cloud path, so a bundle carried in on removable media
+  has to be placed on one of those paths first.
+
+### Rebuilding a lost salt
+
+Decryption never reads `recipient.txt` or `passphrase.salt`, so an existing archive stays
+openable even when both are gone. Use one to rebuild them.
+
+```bash
+# Raw layout
+grep passphrase_salt <HOST>-backup-YYYYMMDD-HHMMSS.tar.xz.age.manifest.json
+
+# Bundled layout, where the manifest travels as the .metadata member
+tar -xOf <HOST>-backup-YYYYMMDD-HHMMSS.tar.xz.age.bundle.tar \
+    <HOST>-backup-YYYYMMDD-HHMMSS.tar.xz.age.metadata | grep passphrase_salt
+
+# Write the value back, prefix included, and future backups record it again
+printf '%s\n' 'proxsave/age-passphrase/v2:1a2b3c...' > ${BASE_DIR}/identity/age/passphrase.salt
+chmod 600 ${BASE_DIR}/identity/age/passphrase.salt
+```
+
+An archive whose manifest has no `passphrase_salt` at all was written either by a version
+that used a fixed salt, which ProxSave still tries, or by an install that had already lost
+the salt. For the second case there is no recovery.
 
 ### Testing Backup Recoverability
 
-Periodically verify backups are decryptable:
+Periodically verify backups are decryptable. Reading the `.age` straight out of the bundle
+avoids unpacking it:
 
 ```bash
-# Example: decrypt with age CLI on a safe machine and list archive content
-age --decrypt -i /path/to/age-keys.txt host-backup-YYYYMMDD-HHMMSS.tar.xz.age | tar -t >/dev/null && echo "✓ Archive valid"
+tar -xOf <HOST>-backup-YYYYMMDD-HHMMSS.tar.xz.age.bundle.tar \
+    <HOST>-backup-YYYYMMDD-HHMMSS.tar.xz.age \
+  | age --decrypt -i /path/to/age-keys.txt | tar -t >/dev/null && echo "Archive valid"
 ```
 
 **Recommended schedule**: Monthly automated test + manual review.
@@ -397,7 +569,7 @@ age --decrypt -i /path/to/age-keys.txt host-backup-YYYYMMDD-HHMMSS.tar.xz.age | 
 ### Encryption Implementation
 
 - **Algorithm**: ChaCha20-Poly1305 (AEAD) with X25519 ECDH
-- **Key derivation**: scrypt (N=2^15, r=8, p=1) for passphrases. The current scheme uses a **per-installation random salt** (v2), generated once, stored `0600` at `identity/age/passphrase.salt`, and embedded in each manifest as `passphrase_salt` so the passphrase alone can re-derive the recipient on any host. At decrypt ProxSave tries salts in order: the manifest's per-install salt first, then two fixed legacy namespaces (`proxsave/age-passphrase/v1`, then the pre-rebrand `proxmox-backup-go/age-passphrase/v1`), so archives from older versions and from before the rename stay decryptable.
+- **Key derivation**: scrypt (N=2^15, r=8, p=1) for passphrases. The current scheme uses a **per-installation random salt** (v2), generated once, stored `0600` at `identity/age/passphrase.salt`, mirrored as the `# passphrase-salt:` line inside the recipient file (that copy wins when both exist), and embedded in each manifest as `passphrase_salt` so the passphrase alone can re-derive the recipient on any host. At decrypt ProxSave tries salts in order: the manifest's per-install salt first, then two fixed legacy namespaces (`proxsave/age-passphrase/v1`, then the pre-rebrand `proxmox-backup-go/age-passphrase/v1`), so archives from older versions and from before the rename stay decryptable.
 - **Random nonces**: Unique per encryption operation
 - **Authentication**: Poly1305 MAC prevents tampering
 
@@ -407,7 +579,7 @@ age --decrypt -i /path/to/age-keys.txt host-backup-YYYYMMDD-HHMMSS.tar.xz.age | 
 |----------|----------------|
 | **Passphrase handling** | Read with `term.ReadPassword` (no echo) |
 | **Memory security** | Buffers zeroed immediately after use |
-| **Streaming encryption** | No plaintext on disk during backup |
+| **Streaming encryption** | No plaintext **archive** on disk. The staging tree is removed when the run ends |
 | **File permissions & ownership** | Enforced 0700/0600 and root:root on recipient/identity files (auto-fixed with `AUTO_FIX_PERMISSIONS`, otherwise warned) |
 | **Private key storage** | **Keep offline** (password manager, hardware token, printed backup) |
 | **Backup separation** | Store keys separately from backup media |
@@ -454,7 +626,7 @@ age --decrypt -i /path/to/age-keys.txt host-backup-YYYYMMDD-HHMMSS.tar.xz.age | 
 - ✅ Network interception (if using rclone with encryption)
 
 **Not protected against**:
-- ❌ Compromise of the server during backup (plaintext in memory)
+- ❌ Compromise of the server during a backup. While a backup runs, the collected files sit unencrypted under `/tmp/proxsave` (see [Plaintext staging](#plaintext-staging)); a root-level compromise in that window sees everything in the clear
 - ❌ Private key theft from offline storage
 - ❌ Weak passphrase brute-force
 - ❌ Advanced persistent threats on backup server
@@ -508,7 +680,8 @@ AGE encryption meets requirements for:
 ENCRYPT_ARCHIVE=true                       # Master switch
 
 # Recipient configuration
-# AGE_RECIPIENT_FILE is empty by default; when unset it resolves to ${BASE_DIR}/identity/age/recipient.txt
+# The shipped template sets this; the compiled-in default is empty and resolves to the same path.
+# --newkey rewrites whatever this points at, so check it before assuming the default.
 AGE_RECIPIENT_FILE=${BASE_DIR}/identity/age/recipient.txt   # Public recipients (recommended)
 
 # Optional: inline recipients (merged with file; supports comma/semicolon/pipe/newline)
@@ -531,8 +704,10 @@ proxsave --decrypt
 # Restore from encrypted backup
 proxsave --restore
 
-# Manual decryption (scriptable) with age CLI
-age --decrypt -i /path/to/age-keys.txt host-backup-YYYYMMDD-HHMMSS.tar.xz.age > host-backup-YYYYMMDD-HHMMSS.tar.xz
+# Manual decryption (scriptable) with age CLI, straight out of the bundle
+tar -xOf <HOST>-backup-YYYYMMDD-HHMMSS.tar.xz.age.bundle.tar \
+    <HOST>-backup-YYYYMMDD-HHMMSS.tar.xz.age \
+  | age --decrypt -i /path/to/age-keys.txt > <HOST>-backup-YYYYMMDD-HHMMSS.tar.xz
 ```
 
 ### File Locations
@@ -543,8 +718,9 @@ configs/
 
 identity/
 └── age/
-    ├── recipient.txt               # Public recipients (0600)
-    └── recipient.txt.bak-*         # Optional backups (if you made one)
+    ├── recipient.txt               # Public recipients, plus the "# passphrase-salt:" line (0600)
+    ├── passphrase.salt             # Per-installation passphrase salt (0600, passphrase setups only)
+    └── recipient.txt.bak-*         # Written by --newkey when it overwrites an existing file
 
 backup/
 └── <HOST>-backup-*.tar.<ext>[.age][.bundle.tar]
