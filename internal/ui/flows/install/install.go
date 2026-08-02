@@ -10,7 +10,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
 
 	"github.com/tis24dev/proxsave/internal/config"
@@ -294,7 +293,7 @@ func ConfirmNewInstall(ctx context.Context, session *shell.Session, baseDir stri
 	res, err := shell.Ask(ctx, session, components.NewConfirm(
 		"Confirm new install",
 		fmt.Sprintf("Base directory to reset:\n%s\n\nThis keeps %s\nbut deletes everything else.\n\nContinue?",
-			baseDir, formatPreservedEntries(baseDir, preservedEntries)),
+			baseDir, installer.FormatPreservedEntries(preservedEntries)),
 		components.WithLabels("Continue", "Cancel"),
 		components.WithDefaultYes(false),
 		components.WithDanger(),
@@ -306,25 +305,4 @@ func ConfirmNewInstall(ctx context.Context, session *shell.Session, baseDir stri
 		return false, err
 	}
 	return res.Answer, nil
-}
-
-func formatPreservedEntries(baseDir string, entries []string) string {
-	formatted := make([]string, 0, len(entries))
-	for _, entry := range entries {
-		trimmed := strings.TrimSpace(entry)
-		if trimmed == "" {
-			continue
-		}
-		if !strings.HasSuffix(trimmed, "/") {
-			resolved := filepath.Join(baseDir, trimmed)
-			if fi, err := os.Stat(resolved); err == nil && fi.IsDir() {
-				trimmed += "/"
-			}
-		}
-		formatted = append(formatted, trimmed)
-	}
-	if len(formatted) == 0 {
-		return "(none)"
-	}
-	return strings.Join(formatted, " ")
 }

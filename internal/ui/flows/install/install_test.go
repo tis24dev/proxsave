@@ -577,23 +577,6 @@ func TestRunPostInstallAuditSkipAndEsc(t *testing.T) {
 	}
 }
 
-// TestFormatPreservedEntriesResolvesAgainstBaseDir guards the directory
-// detection against the CWD (regression salvaged from the deleted wizard
-// suite: entries must resolve against baseDir, not the working directory).
-func TestFormatPreservedEntriesResolvesAgainstBaseDir(t *testing.T) {
-	baseDir := t.TempDir()
-	if err := os.Mkdir(filepath.Join(baseDir, "env"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	got := formatPreservedEntries(baseDir, []string{"env", "build", " ", ""})
-	if got != "env/ build" {
-		t.Fatalf("formatPreservedEntries = %q, want %q", got, "env/ build")
-	}
-	if formatPreservedEntries(baseDir, nil) != "(none)" {
-		t.Fatal("empty entries must render (none)")
-	}
-}
-
 func TestBuildTelegramPrompt(t *testing.T) {
 	// Linked -> green "✓ LINKED"; Server ID boxed.
 	v := buildTelegramPrompt("123456789", "/id/.server_identity", true, "Linked.", "Linked", orchestrator.TelegramSeveritySuccess, 200)

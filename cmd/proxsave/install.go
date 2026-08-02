@@ -355,7 +355,7 @@ func runNewInstall(ctx context.Context, configPath string, bootstrap *logging.Bo
 	}
 
 	if bootstrap != nil {
-		bootstrap.Info("Resetting %s (preserving %s)", plan.BaseDir, formatNewInstallPreservedEntries(plan.PreservedEntries))
+		bootstrap.Info("Resetting %s (preserving %s)", plan.BaseDir, installer.FormatPreservedEntries(plan.PreservedEntries))
 	}
 	logging.DebugStepBootstrap(bootstrap, "new-install workflow", "resetting base dir")
 	if err := resetInstallBaseDirWithContext(ctx, plan.BaseDir, bootstrap); err != nil {

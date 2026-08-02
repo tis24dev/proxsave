@@ -7,6 +7,8 @@ import (
 	"os"
 	"sort"
 	"strings"
+
+	"github.com/tis24dev/proxsave/internal/installer"
 )
 
 type newInstallPlan struct {
@@ -53,22 +55,6 @@ func newInstallPreserveSet() map[string]struct{} {
 	return result
 }
 
-func formatNewInstallPreservedEntries(entries []string) string {
-	formatted := make([]string, 0, len(entries))
-	for _, entry := range entries {
-		trimmed := strings.TrimSpace(entry)
-		trimmed = strings.TrimRight(trimmed, "/")
-		if trimmed == "" {
-			continue
-		}
-		formatted = append(formatted, trimmed+"/")
-	}
-	if len(formatted) == 0 {
-		return "(none)"
-	}
-	return strings.Join(formatted, " ")
-}
-
 func confirmNewInstallCLI(ctx context.Context, reader *bufio.Reader, plan newInstallPlan) (bool, error) {
 	if reader == nil {
 		reader = bufio.NewReader(os.Stdin)
@@ -78,7 +64,7 @@ func confirmNewInstallCLI(ctx context.Context, reader *bufio.Reader, plan newIns
 	fmt.Println("--- New installation reset ---")
 	fmt.Printf("Base directory: %s\n", plan.BaseDir)
 	fmt.Printf("Build signature: %s\n", plan.BuildSignature)
-	fmt.Printf("Preserved entries: %s\n", formatNewInstallPreservedEntries(plan.PreservedEntries))
+	fmt.Printf("Preserved entries: %s\n", installer.FormatPreservedEntries(plan.PreservedEntries))
 	fmt.Println("Everything else under the base directory will be removed.")
 
 	return promptYesNo(ctx, reader, "Continue? [y/N]: ", false)

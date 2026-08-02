@@ -82,3 +82,43 @@ func TestWriteConfigFileAtomicCleansUpAfterFailedWrite(t *testing.T) {
 		t.Fatalf("config must not exist after a failed write, stat err=%v", err)
 	}
 }
+
+// The preserved set is the compile-time [build env identity], so the renderer
+// is pure: one trailing slash per entry, no filesystem lookup. Table moved
+// verbatim from the CLI-only copy this function replaced.
+func TestFormatPreservedEntries(t *testing.T) {
+	tests := []struct {
+		name    string
+		entries []string
+		want    string
+	}{
+		{
+			name:    "formats trimmed entries",
+			entries: []string{" build ", "env", " identity"},
+			want:    "build/ env/ identity/",
+		},
+		{
+			name:    "returns none for nil input",
+			entries: nil,
+			want:    "(none)",
+		},
+		{
+			name:    "returns none for blank input",
+			entries: []string{"", " ", "\t"},
+			want:    "(none)",
+		},
+		{
+			name:    "normalizes trailing slashes",
+			entries: []string{"env/", "build//", " identity/// ", "/"},
+			want:    "env/ build/ identity/",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := FormatPreservedEntries(tt.entries); got != tt.want {
+				t.Fatalf("FormatPreservedEntries(%v) = %q, want %q", tt.entries, got, tt.want)
+			}
+		})
+	}
+}

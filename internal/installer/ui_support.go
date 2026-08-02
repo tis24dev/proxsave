@@ -137,3 +137,28 @@ func WriteConfigFileAtomic(configPath, tmpPath, content string) error {
 	}
 	return nil
 }
+
+// FormatPreservedEntries renders the entries a --new-install reset keeps, for
+// the confirmation both front-ends show before wiping the base directory.
+//
+// Every entry gets exactly one trailing slash. The list is the compile-time set
+// returned by the caller (build, env, identity), all of them BASE_DIR
+// subdirectories, so there is nothing to detect: the Charm copy this replaces
+// stat'ed each path and omitted the slash for a directory that did not exist
+// yet, which made a destructive confirmation prompt render differently
+// depending on host state. If the set ever gains a non-directory entry, the
+// unconditional slash becomes wrong for it and this must be revisited.
+func FormatPreservedEntries(entries []string) string {
+	formatted := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		trimmed := strings.TrimRight(strings.TrimSpace(entry), "/")
+		if trimmed == "" {
+			continue
+		}
+		formatted = append(formatted, trimmed+"/")
+	}
+	if len(formatted) == 0 {
+		return "(none)"
+	}
+	return strings.Join(formatted, " ")
+}
