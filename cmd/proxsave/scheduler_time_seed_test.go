@@ -283,10 +283,10 @@ func TestPrepareBaseTemplateNeverWritesDuringTheInteractivePhase(t *testing.T) {
 			cfg := createTempFile(t, preThirty)
 			stubCrontabLines(t, []string{"0 21 * * * /usr/local/bin/proxsave --backup"}, nil)
 
-			var tmpl string
+			var base installWizardBase
 			var err error
 			captureStdout(t, func() {
-				tmpl, _, _, err = prepareBaseTemplate(context.Background(), bufio.NewReader(strings.NewReader(tt.answer)), cfg, nil)
+				base, _, _, err = prepareBaseTemplate(context.Background(), bufio.NewReader(strings.NewReader(tt.answer)), cfg, nil)
 			})
 			if tt.wantAbort {
 				if !errors.Is(err, errInteractiveAborted) {
@@ -304,8 +304,8 @@ func TestPrepareBaseTemplateNeverWritesDuringTheInteractivePhase(t *testing.T) {
 				t.Fatalf("the interactive phase must not write backup.env:\n%s", data)
 			}
 
-			if got := cronTimeDefault(true, tmpl) == "21:00"; got != tt.wantPrefill {
-				t.Fatalf("template prefill = %v, want %v (tmpl=%q)", got, tt.wantPrefill, tmpl)
+			if got := cronTimeDefault(true, base.Prompt) == "21:00"; got != tt.wantPrefill {
+				t.Fatalf("template prefill = %v, want %v (tmpl=%q)", got, tt.wantPrefill, base.Prompt)
 			}
 		})
 	}

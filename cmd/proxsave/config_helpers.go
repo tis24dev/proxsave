@@ -45,6 +45,10 @@ func ensureConfigExists(path string, logger configStatusLogger) error {
 	return fmt.Errorf("configuration file is required to continue")
 }
 
+// setEnvValue is TEST-ONLY since the install wizard started routing its writes
+// through installer.ApplyInstallData: cmd/proxsave/install_characterization_test.go
+// and cmd/proxsave/helpers_test.go build fixture templates with it. Production code
+// must use installer.SetEnvValueInTemplate / the install engine instead.
 func setEnvValue(template, key, value string) string {
 	return utils.SetEnvValue(template, key, value)
 }
