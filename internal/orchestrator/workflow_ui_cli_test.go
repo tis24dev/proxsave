@@ -258,3 +258,14 @@ func TestPromptOptionAgeAbortsWhenIdle(t *testing.T) {
 		t.Fatalf("idle age prompt must map to a graceful abort (ErrAgeRecipientSetupAborted); got %v", err)
 	}
 }
+
+// A nil plan config must be reported as an error, not dereferenced. The free
+// ShowRestorePlan this method replaced had no guard and panicked; the Charm
+// sibling's guard is pinned by workflow_ui_charm_restore_test.go, so pin the CLI
+// one too rather than leaving the two front-ends asymmetrically covered.
+func TestCLIWorkflowUIShowRestorePlanRejectsNilConfig(t *testing.T) {
+	ui := newCLIWorkflowUI(nil, logging.New(types.LogLevelNone, false))
+	if err := ui.ShowRestorePlan(context.Background(), nil); err == nil {
+		t.Fatal("nil config must error")
+	}
+}

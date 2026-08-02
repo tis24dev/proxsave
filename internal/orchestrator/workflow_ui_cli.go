@@ -249,8 +249,30 @@ func (u *cliWorkflowUI) SelectPBSRestoreBehavior(ctx context.Context) (PBSRestor
 	}
 }
 
+// ShowRestorePlan prints the CLI chrome (ASCII banner) around the plan body
+// shared with the Charm front-end (buildRestorePlanText).
+//
+// Output deliberately stays on os.Stdout rather than u.w(). The CLI restore
+// prompts are already split across both sinks -- ConfirmRestoreOperationWithReader
+// (selective.go) writes to stdout, while ConfirmRestore's own overwrite prompt
+// below writes to u.w() -- so moving only the plan would not unify anything.
+// Routing the whole restore prompt set onto u.w() is deferred to its own change;
+// note that TestShowRestorePlanOutputsPaths captures os.Stdout and would have to
+// move with it.
 func (u *cliWorkflowUI) ShowRestorePlan(ctx context.Context, config *SelectiveRestoreConfig) error {
-	ShowRestorePlan(u.logger, config)
+	if config == nil {
+		return fmt.Errorf("restore configuration not available")
+	}
+
+	fmt.Println()
+	fmt.Println("═══════════════════════════════════════════════════════════════")
+	fmt.Println("RESTORE PLAN")
+	fmt.Println("═══════════════════════════════════════════════════════════════")
+	fmt.Println()
+
+	// Print, not Printf: category paths reach the body verbatim and a '%' in a
+	// path would otherwise be consumed as a format verb.
+	fmt.Print(buildRestorePlanText(config))
 	return nil
 }
 

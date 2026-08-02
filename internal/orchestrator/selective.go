@@ -352,69 +352,6 @@ func filterOutExportOnly(categories []Category) []Category {
 	return out
 }
 
-// ShowRestorePlan displays a detailed plan of what will be restored
-func ShowRestorePlan(logger *logging.Logger, config *SelectiveRestoreConfig) {
-	fmt.Println()
-	fmt.Println("═══════════════════════════════════════════════════════════════")
-	fmt.Println("RESTORE PLAN")
-	fmt.Println("═══════════════════════════════════════════════════════════════")
-	fmt.Println()
-
-	// Show mode
-	modeName := ""
-	switch config.Mode {
-	case RestoreModeFull:
-		modeName = "FULL restore (all categories)"
-	case RestoreModeStorage:
-		if config.SystemType.SupportsPVE() && !config.SystemType.SupportsPBS() {
-			modeName = "STORAGE only (cluster + storage + jobs + mounts)"
-		} else if config.SystemType.SupportsPBS() && !config.SystemType.SupportsPVE() {
-			modeName = "DATASTORE only (datastores + jobs + mounts)"
-		} else {
-			modeName = "STORAGE/DATASTORE only (PVE + PBS storage/jobs + mounts)"
-		}
-	case RestoreModeBase:
-		modeName = "SYSTEM BASE only (network + SSL + SSH + services + filesystem)"
-	case RestoreModeCustom:
-		modeName = fmt.Sprintf("CUSTOM selection (%d categories)", len(config.SelectedCategories))
-	}
-
-	fmt.Printf("Restore mode: %s\n", modeName)
-	fmt.Printf("System type:  %s\n", GetSystemTypeString(config.SystemType))
-	fmt.Println()
-
-	// Show selected categories
-	fmt.Println("Categories to restore:")
-	for i, cat := range config.SelectedCategories {
-		fmt.Printf("  %d. %s\n", i+1, cat.Name)
-		fmt.Printf("     %s\n", cat.Description)
-	}
-
-	fmt.Println()
-	fmt.Println("Files/directories that will be restored:")
-
-	// Collect and display all paths
-	allPaths := GetSelectedPaths(config.SelectedCategories)
-	sort.Strings(allPaths)
-
-	for _, path := range allPaths {
-		// Convert to filesystem path for display
-		fsPath := strings.TrimPrefix(path, "./")
-		fmt.Printf("  • /%s\n", fsPath)
-	}
-
-	fmt.Println()
-	fmt.Println("⚠ WARNING:")
-	fmt.Println("  • Existing files at these locations will be OVERWRITTEN")
-	fmt.Println("  • A safety backup will be created before restoration")
-	fmt.Println("  • Services may need to be restarted after restoration")
-	if (hasCategoryID(config.SelectedCategories, "pve_access_control") || hasCategoryID(config.SelectedCategories, "pbs_access_control")) &&
-		(!hasCategoryID(config.SelectedCategories, "network") || !hasCategoryID(config.SelectedCategories, "ssl")) {
-		fmt.Println("  • TFA/WebAuthn: for best 1:1 compatibility keep the same UI origin (FQDN/hostname and port) and restore 'network' + 'ssl'")
-	}
-	fmt.Println()
-}
-
 // ConfirmRestoreOperation asks for user confirmation before proceeding
 func ConfirmRestoreOperation(ctx context.Context, logger *logging.Logger) (bool, error) {
 	return ConfirmRestoreOperationWithReader(ctx, bufio.NewReader(os.Stdin), logger)
