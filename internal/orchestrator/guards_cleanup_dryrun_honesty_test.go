@@ -37,8 +37,8 @@ func TestCleanupMountGuards_MissingLeafNotCountedWouldClear(t *testing.T) {
 	logger := logging.New(types.LogLevelInfo, false)
 	var buf bytes.Buffer
 	logger.SetOutput(&buf)
-	if err := CleanupMountGuards(context.Background(), logger, true); err != nil {
-		t.Fatalf("CleanupMountGuards dry-run: %v", err)
+	if _, err := cleanupMountGuards(context.Background(), logger, true); err != nil {
+		t.Fatalf("cleanupMountGuards dry-run: %v", err)
 	}
 	if len(*ran) != 0 {
 		t.Fatalf("dry-run must run no chattr, calls=%#v", *ran)
@@ -71,8 +71,8 @@ func TestCleanupMountGuards_DryRunOutOfAllowlistPending(t *testing.T) {
 	logger := logging.New(types.LogLevelInfo, false)
 	var buf bytes.Buffer
 	logger.SetOutput(&buf)
-	if err := CleanupMountGuards(context.Background(), logger, true); err != nil {
-		t.Fatalf("CleanupMountGuards dry-run: %v", err)
+	if _, err := cleanupMountGuards(context.Background(), logger, true); err != nil {
+		t.Fatalf("cleanupMountGuards dry-run: %v", err)
 	}
 	if len(*ran) != 0 {
 		t.Fatalf("dry-run must run no chattr, calls=%#v", *ran)

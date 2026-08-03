@@ -95,19 +95,20 @@ func (r GuardCleanupReport) HasGuards() bool {
 	return r.BindGuards > 0 || r.ImmutableGuards > 0
 }
 
-// CleanupMountGuards removes ProxSave mount guards created under mountGuardBaseDir.
+// CleanupMountGuardsReport removes ProxSave mount guards created under mountGuardBaseDir
+// and reports what it found and did. In dry-run it is a read-only CHECK (it reports what
+// is present without changing anything); a real run reports what it removed and what is
+// left pending.
 //
 // Safety: this will only unmount guard bind mounts when they are the currently-visible
 // mount on the mountpoint (i.e. the guard is the top-most mount at that mountpoint).
 // If a real mount is stacked on top, the guard will be left in place.
-func CleanupMountGuards(ctx context.Context, logger *logging.Logger, dryRun bool) error {
-	_, err := cleanupMountGuards(ctx, logger, dryRun)
-	return err
-}
-
-// CleanupMountGuardsReport is CleanupMountGuards with a structured report of what was
-// found/done. In dry-run it is a read-only CHECK (reports what is present without
-// changing anything); a real run reports what it removed and what is left pending.
+//
+// It is the ONLY exported entry point, deliberately. An error-only twin used to sit
+// beside it, and --cleanup-guards took that one: a run that removed nothing because the
+// datastore was still mounted returned a nil error and the mode exited 0, telling a
+// gating script the storage was unlocked when it was not. Handing every caller the
+// report is what makes throwing that state away a visible choice rather than the default.
 func CleanupMountGuardsReport(ctx context.Context, logger *logging.Logger, dryRun bool) (GuardCleanupReport, error) {
 	return cleanupMountGuards(ctx, logger, dryRun)
 }

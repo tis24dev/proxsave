@@ -262,7 +262,7 @@ func (a *pbsMountGuardApply) protectOfflineTarget(guardTarget string) {
 // recreation on this mountpoint is still skipped by the storage-mount preflight
 // (shouldSkipUnmountedStorageMount), and the config-only restore never extracts
 // into datastore mountpoints, so this only means EXTERNAL writers are not blocked
-// while the storage is offline. CleanupMountGuards still clears any legacy
+// while the storage is offline. CleanupMountGuardsReport still clears any legacy
 // chattr +i flags recorded by older ProxSave versions.
 func (a *pbsMountGuardApply) warnOfflineTargetUnguarded(guardTarget string, bindErr error) {
 	a.warning("PBS mount guard: could NOT guard offline mountpoint %s (read-only bind mount failed: %v). "+

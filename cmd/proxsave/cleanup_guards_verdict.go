@@ -13,9 +13,10 @@ import (
 //
 // Both drive orchestrator.CleanupMountGuardsReport, but they used to read it
 // differently: the dashboard classified the report (CLEAN/FOUND, DONE/PENDING) while
-// --cleanup-guards took the error-only CleanupMountGuards wrapper and exited 0 for
-// anything short of an engine failure. A script gating on the exit code was told the
-// storage was unlocked while guards were still holding it.
+// --cleanup-guards took an error-only wrapper beside it and exited 0 for anything short
+// of an engine failure. A script gating on the exit code was told the storage was
+// unlocked while guards were still holding it. That wrapper has since been removed, so
+// the report is the engine's only exported entry point.
 //
 // What is shared here is the CLASSIFICATION and the FACTS. The call to action is not:
 // the dashboard names a button ("Apply"), the CLI names a flag, and neither wording

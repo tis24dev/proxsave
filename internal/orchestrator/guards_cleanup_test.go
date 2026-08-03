@@ -89,8 +89,8 @@ func TestCleanupMountGuards_UnmountsVisibleAndRemovesDirWhenNoRemaining(t *testi
 	}
 
 	logger := logging.New(types.LogLevelError, false)
-	if err := CleanupMountGuards(context.Background(), logger, false); err != nil {
-		t.Fatalf("CleanupMountGuards error: %v", err)
+	if _, err := cleanupMountGuards(context.Background(), logger, false); err != nil {
+		t.Fatalf("cleanupMountGuards error: %v", err)
 	}
 	if len(unmounted) != 1 || unmounted[0] != "/mnt/visible" {
 		t.Fatalf("unmounted=%#v want [\"/mnt/visible\"]", unmounted)
@@ -134,8 +134,8 @@ func TestCleanupMountGuards_DoesNotUnmountHiddenGuards(t *testing.T) {
 	}
 
 	logger := logging.New(types.LogLevelError, false)
-	if err := CleanupMountGuards(context.Background(), logger, false); err != nil {
-		t.Fatalf("CleanupMountGuards error: %v", err)
+	if _, err := cleanupMountGuards(context.Background(), logger, false); err != nil {
+		t.Fatalf("cleanupMountGuards error: %v", err)
 	}
 }
 
@@ -185,8 +185,8 @@ func TestCleanupMountGuards_RereadFailureKeepsDir(t *testing.T) {
 	}
 
 	logger := logging.New(types.LogLevelError, false)
-	if err := CleanupMountGuards(context.Background(), logger, false); err != nil {
-		t.Fatalf("CleanupMountGuards must be non-fatal on reread failure, got %v", err)
+	if _, err := cleanupMountGuards(context.Background(), logger, false); err != nil {
+		t.Fatalf("cleanupMountGuards must be non-fatal on reread failure, got %v", err)
 	}
 	if removed {
 		t.Fatalf("guard directory must be kept when the verification reread fails (fail-closed)")
@@ -230,8 +230,8 @@ func TestCleanupMountGuards_RereadFailureSummaryUnknown(t *testing.T) {
 	logger := logging.New(types.LogLevelInfo, false)
 	var buf bytes.Buffer
 	logger.SetOutput(&buf)
-	if err := CleanupMountGuards(context.Background(), logger, false); err != nil {
-		t.Fatalf("CleanupMountGuards: %v", err)
+	if _, err := cleanupMountGuards(context.Background(), logger, false); err != nil {
+		t.Fatalf("cleanupMountGuards: %v", err)
 	}
 	out := buf.String()
 	if !strings.Contains(out, "guards-remaining=unknown") {

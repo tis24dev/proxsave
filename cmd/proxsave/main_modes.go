@@ -204,9 +204,10 @@ func runCleanupGuardsMode(ctx context.Context, args *cli.Args, bootstrap *loggin
 	}
 	logger := logging.New(level, false)
 
-	// The REPORT, not the error-only CleanupMountGuards wrapper: exiting 0 with guards
-	// still holding the storage actively misleads a script gating on the exit code, and
-	// the read that would have told us was being thrown away. Same seam the dashboard
+	// The REPORT: exiting 0 with guards still holding the storage actively misleads a
+	// script gating on the exit code, and the read that would have told us was being
+	// thrown away. This mode used to take an error-only wrapper that did exactly that;
+	// the wrapper is gone, so the report is now the only way in. Same seam the dashboard
 	// uses, so one stub covers both front-ends in tests.
 	report, err := cleanupGuardsReport(ctx, logger, args.DryRun)
 	if err != nil {
