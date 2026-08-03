@@ -20,8 +20,8 @@ import (
 )
 
 // TestBuildInstallOutcomePromptVerified asserts the daemon-verified branch reuses the shared
-// installVerifyVerdict/renderDaemonStatusLevel verdict (aligned / behind / not-running - the SAME
-// as --daemon-status, NOT the restart-verify "not confirmed") and colors the permissions line by
+// installVerifyVerdict/renderDaemonStatusLevel verdict (aligned / behind / unverifiable /
+// not-running, NOT the restart-verify "not confirmed") and colors the permissions line by
 // status. ANSI is stripped so the assertions do not depend on the color profile.
 func TestBuildInstallOutcomePromptVerified(t *testing.T) {
 	rv := RestartVerifyResult{

@@ -186,9 +186,11 @@ func restartAndVerifyDaemon(ctx context.Context, baseDir, lockFilePath string, l
 // verifyDaemonAligned is the poll-only variant (no restart, no backup-wait): it waits for an
 // ALREADY-(re)started daemon to become process-alive with an ASSESSABLE alignment, then returns
 // the state (res.Aligned tells aligned vs behind). It polls until ProcessAlive && AlignChecked --
-// NOT until Aligned -- so a daemon that is up but BEHIND is reported immediately (the SAME verdict
-// --daemon-status gives), never as a timeout. TimedOut means the daemon never came up. There is no
-// pre-restart snapshot, so FreshInfo simply reflects that an identity record exists.
+// NOT until Aligned -- so a daemon that is up but BEHIND is reported immediately as behind, never
+// as a timeout. TimedOut means the daemon never came up, or came up with an alignment that stayed
+// unassessable. There is no pre-restart snapshot, so FreshInfo simply reflects that an identity
+// record exists -- a DIFFERENT meaning from the restart path, where it means the process is new.
+// installVerifyVerdict, not classifyRestartVerify, is what reads this result.
 func verifyDaemonAligned(ctx context.Context, baseDir string, interval time.Duration) RestartVerifyResult {
 	if ctx == nil {
 		ctx = context.Background()
@@ -257,31 +259,36 @@ func daemonIsActive(ctx context.Context) bool {
 
 // summarizeRestartVerify renders a one-line, plain-text summary of a restart+verify
 // outcome for the upgrade footer (the CLI --upgrade path). version is the just-installed
-// version, shown on the aligned line. Returns ("", false) when rv is nil (restart not
-// attempted, e.g. the daemon was inactive). warn is true for any non-success outcome so
-// the caller can style it as a warning WITHOUT ever changing the upgrade exit code.
+// version, shown on the aligned line -- NOT rv.State.Version, which is what the running
+// daemon reports and is what the dashboard shows instead. Returns ("", false) when rv is
+// nil (restart not attempted, e.g. the daemon was inactive). warn is true for any
+// non-success outcome so the caller can style it as a warning WITHOUT ever changing the
+// upgrade exit code. The verdict itself comes from classifyRestartVerify, shared with the
+// bootstrap log and the dashboard; only the wording below is this surface's own.
 func summarizeRestartVerify(rv *RestartVerifyResult, version string) (line string, warn bool) {
 	if rv == nil {
 		return "", false
 	}
-	switch {
-	case rv.Err != nil:
-		return "Daemon: WARNING - restart failed: " + rv.Err.Error() +
-			" (the daemon may still run the old binary; restart it manually)", true
-	case rv.LockPathUnknown:
-		return "Daemon: WARNING - config unreadable; daemon restart deferred - " +
-			"restart when the config is readable or it stays on the old binary", true
-	case rv.BackupWaitTimedOut:
-		return "Daemon: WARNING - a backup is running; daemon restart deferred - " +
-			"restart when idle or it stays on the old binary", true
-	case rv.TimedOut:
-		return "Daemon: WARNING - restarted but alignment check timeout", true
-	case rv.Restarted && rv.ProcessAlive && rv.Aligned && rv.FreshInfo:
+	outcome := classifyRestartVerify(*rv)
+	switch outcome {
+	case restartVerifyError:
+		line = "Daemon: WARNING - restart failed: " + rv.Err.Error() +
+			" (the daemon may still run the old binary; restart it manually)"
+	case restartVerifyDeferredConfig:
+		line = "Daemon: WARNING - config unreadable; daemon restart deferred - " +
+			"restart when the config is readable or it stays on the old binary"
+	case restartVerifyDeferredBackup:
+		line = "Daemon: WARNING - a backup is running; daemon restart deferred - " +
+			"restart when idle or it stays on the old binary"
+	case restartVerifyTimedOut:
+		line = "Daemon: WARNING - restarted but alignment check timeout"
+	case restartVerifyAligned:
+		line = "Daemon: restarted, now aligned"
 		if v := strings.TrimSpace(version); v != "" {
-			return "Daemon: restarted, now aligned (v" + v + ")", false
+			line = "Daemon: restarted, now aligned (v" + v + ")"
 		}
-		return "Daemon: restarted, now aligned", false
 	default:
-		return "Daemon: WARNING - restarted but alignment could not be confirmed", true
+		line = "Daemon: WARNING - restarted but alignment could not be confirmed"
 	}
+	return line, outcome.warn()
 }

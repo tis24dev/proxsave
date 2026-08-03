@@ -92,20 +92,26 @@ func upgradeBackupLockPath(configPath, baseDir string) (string, bool) {
 }
 
 // logUpgradeDaemonRestart mirrors the restart outcome to the bootstrap log (the CLI
-// path). It never fails the upgrade -- every outcome is informational.
+// path). It never fails the upgrade -- every outcome is informational. It classifies the
+// SAME value the upgrade footer summarizes, on the same run, through the same shared
+// classifyRestartVerify, so the log and the footer cannot report different verdicts.
+//
+// Only the success line goes through Println (stdout, INFO); every gap goes through
+// Warning (stderr). That split is this surface's own and is not part of the verdict.
 func logUpgradeDaemonRestart(bootstrap *logging.BootstrapLogger, rv *RestartVerifyResult) {
-	switch {
-	case rv == nil:
+	if rv == nil {
 		return
-	case rv.Err != nil:
+	}
+	switch classifyRestartVerify(*rv) {
+	case restartVerifyError:
 		bootstrap.Warning("Daemon restart failed: %v (it may still run the old binary; restart it manually).", rv.Err)
-	case rv.LockPathUnknown:
+	case restartVerifyDeferredConfig:
 		bootstrap.Warning("Config unreadable; daemon restart deferred. Restart when the config is readable or the daemon stays on the old binary.")
-	case rv.BackupWaitTimedOut:
+	case restartVerifyDeferredBackup:
 		bootstrap.Warning("A backup is running; daemon restart deferred. Restart when idle or the daemon stays on the old binary.")
-	case rv.TimedOut:
+	case restartVerifyTimedOut:
 		bootstrap.Warning("Daemon restarted but alignment check timeout")
-	case rv.Restarted && rv.ProcessAlive && rv.Aligned && rv.FreshInfo:
+	case restartVerifyAligned:
 		bootstrap.Println("Daemon restarted and now aligned with the new binary.")
 	default:
 		bootstrap.Warning("Daemon restarted but alignment could not be confirmed")

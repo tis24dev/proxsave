@@ -13,7 +13,7 @@ import (
 //   - installBanner (the same completed/aborted/failed title + severity the footer's
 //     ANSI box uses), rendered here in the theme via renderInstallBanner;
 //   - installVerifyVerdict + renderDaemonStatusLevel for the "Daemon:" line (the SAME
-//     aligned / behind / not-running verdict as --daemon-status);
+//     verdict the install's own log line reports, so the screen and the log agree);
 //   - the same permStatus strings printInstallFooter switches on for "Permissions:".
 //
 // The graphical finalization is reached only on the success path (failures/aborts
@@ -32,8 +32,8 @@ func buildInstallOutcomePrompt(rv RestartVerifyResult, verified bool, permStatus
 
 	b.WriteString(theme.Text.Render("Daemon: "))
 	if verified {
-		// Same verdict the log line and --daemon-status show (NOT restartVerifyStatus,
-		// whose success arm needs Restarted/FreshInfo the poll-only verify never sets).
+		// Same verdict the install's log line shows (NOT classifyRestartVerify, whose
+		// success arm needs the Restarted flag the poll-only verify never sets).
 		level, keyword := installVerifyVerdict(rv)
 		b.WriteString(renderDaemonStatusLevel(level, keyword))
 	} else {
