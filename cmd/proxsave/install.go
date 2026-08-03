@@ -204,11 +204,12 @@ func runInstall(ctx context.Context, configPath string, bootstrap *logging.Boots
 //     (false green). So propagate an aborted-install error instead, which renders
 //     the "Installation aborted" banner exactly like the TUI (mapUIDeath).
 //
-// ctx.Err() is the authoritative discriminator: the run context is WithCancel and
-// is cancelled only by the signal handler (setupRunContext), so it is non-nil
-// after Ctrl+C but nil for a plain EOF at an optional prompt.
+// The discrimination itself lives in optionalInstallStepAborts, shared with the TUI
+// driver so the two front-ends cannot answer the same question differently. On this
+// path the deciding signal is always ctx.Err(): Ctrl+C at a cooked-mode stdin prompt
+// raises a real signal, and no Charm session exists to produce a shell.ErrClosed.
 func skipOptionalInstallStepOnAbort(ctx context.Context, bootstrap *logging.BootstrapLogger, step string, err error) error {
-	if ctx.Err() != nil {
+	if optionalInstallStepAborts(ctx, err) {
 		if bootstrap != nil {
 			bootstrap.Warning("%s aborted (interrupted by signal); stopping the install before finalization", step)
 		}

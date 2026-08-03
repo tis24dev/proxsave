@@ -21,14 +21,17 @@ import (
 var runHealthcheckSelfParamsFn = flowinstall.RunHealthcheckSelfParams
 
 // applySelfHealthcheckParams runs the optional self-mode healthcheck-params step.
-// It returns a non-nil error ONLY when the step must abort the whole install
-// (session death, via fatal = mapUIDeath); a user cancel or any other step error
-// is non-blocking - the step is skipped with a warning, matching the sibling
-// optional install steps.
-func applySelfHealthcheckParams(ctx context.Context, session *shell.Session, baseDir, configPath string, bootstrap *logging.BootstrapLogger, fatal func(error) error) error {
+// It returns a non-nil error ONLY when the step must abort the whole install; a user
+// cancel or any other step error is non-blocking - the step is skipped with a warning,
+// matching the sibling optional install steps.
+//
+// The abort decision is optionalInstallStepAborts, shared with the CLI driver. It used
+// to be a locally passed fatal = mapUIDeath, which knew only about session death and so
+// missed a cancelled run context.
+func applySelfHealthcheckParams(ctx context.Context, session *shell.Session, baseDir, configPath string, bootstrap *logging.BootstrapLogger) error {
 	if err := runHealthcheckSelfParamsFn(ctx, session, baseDir, configPath); err != nil {
-		if mapped := fatal(err); errors.Is(mapped, errInteractiveAborted) {
-			return mapped
+		if abortErr := abortInstallOnOptionalStep(ctx, bootstrap, "Healthcheck self params", err); abortErr != nil {
+			return abortErr
 		}
 		if bootstrap != nil {
 			bootstrap.Warning("Healthcheck self params failed (non-blocking): %v", err)
@@ -233,6 +236,9 @@ func runInstallTUI(ctx context.Context, configPath string, bootstrap *logging.Bo
 	// based on actionable warning hints like "set BACKUP_*=false to disable".
 	if !skipConfigWizard {
 		auditRes, auditErr := flowinstall.RunPostInstallAudit(ctx, session, execInfo.ExecPath, configPath, false)
+		if abortErr := abortInstallOnOptionalStep(ctx, bootstrap, "Post-install audit", auditErr); abortErr != nil {
+			return abortErr
+		}
 		if bootstrap != nil {
 			if auditErr != nil {
 				bootstrap.Warning("Post-install check failed (non-blocking): %v", auditErr)
@@ -270,6 +276,9 @@ func runInstallTUI(ctx context.Context, configPath string, bootstrap *logging.Bo
 	// returns Shown=false without any UI when Telegram is not centrally enabled.
 	if !skipConfigWizard {
 		telegramRes, telegramErr := flowinstall.RunTelegramSetup(ctx, session, baseDir, configPath, false)
+		if abortErr := abortInstallOnOptionalStep(ctx, bootstrap, "Telegram setup", telegramErr); abortErr != nil {
+			return abortErr
+		}
 		logTelegramSetupOutcome(bootstrap, telegramRes, telegramErr)
 
 		// Self-mode healthchecks: collect the ping URLs BEFORE the healthcheck
@@ -277,7 +286,7 @@ func runInstallTUI(ctx context.Context, configPath string, bootstrap *logging.Bo
 		// written HEALTHCHECK_ALIVE_URL). Only when self was chosen in the wizard.
 		if wizardData != nil && wizardData.HealthcheckMode == "self" {
 			logging.DebugStepBootstrap(bootstrap, "install workflow (tui)", "healthcheck self params")
-			if err := applySelfHealthcheckParams(ctx, session, baseDir, configPath, bootstrap, mapUIDeath); err != nil {
+			if err := applySelfHealthcheckParams(ctx, session, baseDir, configPath, bootstrap); err != nil {
 				return err
 			}
 		}
@@ -287,6 +296,9 @@ func runInstallTUI(ctx context.Context, configPath string, bootstrap *logging.Bo
 		// (self) verify the pasted alive URL is reachable. Eligibility is decided solely
 		// by RunHealthcheckSetup (re-reads the written config); Shown=false with no UI otherwise.
 		hcRes, hcErr := flowinstall.RunHealthcheckSetup(ctx, session, baseDir, configPath, false)
+		if abortErr := abortInstallOnOptionalStep(ctx, bootstrap, "Healthcheck setup", hcErr); abortErr != nil {
+			return abortErr
+		}
 		logHealthcheckSetupOutcome(bootstrap, hcRes, hcErr)
 	}
 
