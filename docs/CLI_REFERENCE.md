@@ -179,9 +179,18 @@ proxsave --upgrade-config-dry-run
 1. Reads current `configs/backup.env`
 2. Extracts embedded template from binary
 3. Merges your values with new template
-4. Backs up old config (`backup.env.bak-YYYYMMDD-HHMMSS`)
+4. Backs up old config (`backup.env.backup.YYYYMMDD_HHMMSS`, next to the config file)
 5. Writes updated configuration
-6. Reports added/removed variables
+6. Reports added keys, preserved values, and any merge warnings
+
+**Nothing is ever removed from your configuration.** Keys you set that are not in the
+template (including keys that differ from a template key only by upper/lower case) are
+preserved in place with their original value and casing, and are reported as such. The
+upgrade only adds keys the template has and your config lacks.
+
+If the merged configuration fails validation, the backup from step 4 is restored
+automatically and the command reports the error, so a failed upgrade leaves your
+configuration as it was.
 
 > **Keep `backup.env` a regular file.** The config upgrade (`--upgrade`, `--upgrade-config`) writes the new configuration atomically (temp file + rename), so if `configs/backup.env` is a **symlink** it is replaced by a regular file and the symlink target is left unchanged. For a centrally managed configuration, deploy a regular `backup.env` (for example copied or templated by your config-management tool) instead of symlinking it.
 
