@@ -476,3 +476,55 @@ func TestApplyInstallDataEmailFallbackSendmail(t *testing.T) {
 		}
 	})
 }
+
+// TestApplyInstallDataFirewallAnswerBeatsTheStoredValue pins the direction no golden
+// covers: an operator CHANGING the firewall answer on an edit.
+//
+// The three characterization goldens all agree with whatever was already stored --
+// the two fresh ones have nothing stored, and edit_noop answers true over a stored
+// true -- so nothing in the repo notices if the engine starts preferring the stored
+// value over the answered one. That is a one-line change away (guarding the write on
+// the key being absent) and it lands on the arm production actually takes: both
+// wizards ASK this question, so the explicit arm is the live one.
+//
+// The failure it prevents is silent and total: the wizard asks, the operator answers,
+// and the answer is discarded.
+func TestApplyInstallDataFirewallAnswerBeatsTheStoredValue(t *testing.T) {
+	boolPtr := func(v bool) *bool { return &v }
+	answered := func(v bool) *InstallWizardData {
+		return &InstallWizardData{BaseDir: "/data", NotificationMode: "none", BackupFirewallRules: boolPtr(v)}
+	}
+	stored := func(v string) string {
+		return "TELEGRAM_ENABLED=false\nBACKUP_FIREWALL_RULES=" + v + "\n"
+	}
+	assertKey := func(t *testing.T, result, want string) {
+		t.Helper()
+		got, ok := parseEnvTemplate(result)["BACKUP_FIREWALL_RULES"]
+		if !ok || got != want {
+			t.Fatalf("BACKUP_FIREWALL_RULES = %q (present=%v), want %q:\n%s", got, ok, want, result)
+		}
+		// A second line would let the loader read the intended value while the file
+		// carries two sources of truth, so the value assertion alone is not enough.
+		if n := strings.Count(result, "BACKUP_FIREWALL_RULES"); n != 1 {
+			t.Fatalf("the key must appear exactly once, found %d:\n%s", n, result)
+		}
+	}
+
+	t.Run("an explicit no turns off a stored yes", func(t *testing.T) {
+		assertKey(t, mustApply(t, stored("true"), answered(false)), "false")
+	})
+
+	t.Run("an explicit yes turns on a stored no", func(t *testing.T) {
+		assertKey(t, mustApply(t, stored("false"), answered(true)), "true")
+	})
+}
+
+// mustApply runs ApplyInstallData and fails the test on error.
+func mustApply(t *testing.T, base string, data *InstallWizardData) string {
+	t.Helper()
+	result, err := ApplyInstallData(base, data)
+	if err != nil {
+		t.Fatalf("ApplyInstallData: %v", err)
+	}
+	return result
+}

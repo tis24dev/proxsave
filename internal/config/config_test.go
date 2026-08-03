@@ -1626,3 +1626,71 @@ func TestParseEnvFileHandlesExportLines(t *testing.T) {
 		t.Fatalf("LOG_PATH = %q; want %q", got, "/logs")
 	}
 }
+
+// loadEnvForTest writes content to a temp backup.env and loads it through the REAL
+// loader, so both sides of a comparison are read by the code that ships.
+func loadEnvForTest(t *testing.T, name, content string) *Config {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), name)
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatalf("write %s: %v", name, err)
+	}
+	cfg, err := LoadConfigWithBaseDir(path, "/custom/base")
+	if err != nil {
+		t.Fatalf("LoadConfigWithBaseDir(%s): %v", name, err)
+	}
+	return cfg
+}
+
+// TestBackupFirewallRulesDefaultMatchesShippedTemplate ties the loader's default to the
+// value the shipped template carries, in BOTH directions.
+//
+// They agree today, and that agreement is load-bearing: the install engine writes no
+// BACKUP_FIREWALL_RULES at all when no front-end answered, so what an operator ends up
+// with is decided by the template on a fresh install and by this default on a config
+// that predates the key. If the two ever disagree, the same release means two things
+// depending on how the operator got their config -- and nothing else in the repo would
+// say so. Flipping the loader default passes the entire suite; flipping the template
+// only moves golden transcripts, which a regeneration absorbs silently.
+//
+// Both sides go through the real loader rather than a parser written for the test.
+// A test-local parser would be a second, weaker implementation of the thing under test:
+// it could drift from the loader's own handling of quotes, inline comments, `export`
+// prefixes and key aliases, and then agree with itself while disagreeing with production.
+//
+// Unlike TestOptimizationAndSecurityDefaultsMatchTemplate above, this reads the shipped
+// template instead of restating its values, so it keeps holding across a deliberate
+// template change instead of having to be edited alongside one. (Verified: flipping a
+// value in the shipped template leaves that neighbouring test passing.)
+func TestBackupFirewallRulesDefaultMatchesShippedTemplate(t *testing.T) {
+	shipped := loadEnvForTest(t, "shipped.env", DefaultEnvTemplate())
+	absent := loadEnvForTest(t, "absent.env", "# a config that predates the firewall toggle\n")
+
+	if shipped.BackupFirewallRules != absent.BackupFirewallRules {
+		t.Fatalf("the shipped template yields BackupFirewallRules=%v but a config without the key yields %v; "+
+			"the two must agree or a fresh install and an upgraded config disagree about firewall collection",
+			shipped.BackupFirewallRules, absent.BackupFirewallRules)
+	}
+}
+
+// TestBackupFirewallRulesHonoursAnExplicitValue covers the other half, which the default
+// test cannot see because it only ever exercises the absent-key path: that a value the
+// operator actually wrote is READ. Without it, the loader could be looking up a
+// misspelled key and every assertion about the default would still pass -- verified: a
+// typo in the key name at config.go's read site passes the entire repo suite today.
+func TestBackupFirewallRulesHonoursAnExplicitValue(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		content string
+		want    bool
+	}{
+		{name: "explicit true", content: "BACKUP_FIREWALL_RULES=true\n", want: true},
+		{name: "explicit false", content: "BACKUP_FIREWALL_RULES=false\n", want: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := loadEnvForTest(t, "firewall.env", tc.content).BackupFirewallRules; got != tc.want {
+				t.Fatalf("BackupFirewallRules = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
