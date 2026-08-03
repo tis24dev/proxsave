@@ -270,23 +270,7 @@ func runInstallTUI(ctx context.Context, configPath string, bootstrap *logging.Bo
 	// returns Shown=false without any UI when Telegram is not centrally enabled.
 	if !skipConfigWizard {
 		telegramRes, telegramErr := flowinstall.RunTelegramSetup(ctx, session, baseDir, configPath, false)
-		if telegramErr != nil && bootstrap != nil {
-			bootstrap.Warning("Telegram setup failed (non-blocking): %v", telegramErr)
-		}
-		if bootstrap != nil && telegramErr == nil {
-			logTelegramSetupBootstrapOutcome(bootstrap, telegramRes.TelegramSetupBootstrap)
-		}
-		if bootstrap != nil && telegramRes.Shown {
-			if telegramRes.Verified {
-				bootstrap.Info("Telegram setup: verified (code=%d)", telegramRes.LastStatusCode)
-			} else if telegramRes.SkippedVerification {
-				bootstrap.Info("Telegram setup: verification skipped by user")
-			} else if telegramRes.CheckAttempts > 0 {
-				bootstrap.Info("Telegram setup: not verified (attempts=%d last=%d %s)", telegramRes.CheckAttempts, telegramRes.LastStatusCode, telegramRes.LastStatusMessage)
-			} else {
-				bootstrap.Info("Telegram setup: not verified (no check performed)")
-			}
-		}
+		logTelegramSetupOutcome(bootstrap, telegramRes, telegramErr)
 
 		// Self-mode healthchecks: collect the ping URLs BEFORE the healthcheck
 		// bootstrap re-reads the config (ordering invariant - eligibility keys off the
@@ -303,20 +287,7 @@ func runInstallTUI(ctx context.Context, configPath string, bootstrap *logging.Bo
 		// (self) verify the pasted alive URL is reachable. Eligibility is decided solely
 		// by RunHealthcheckSetup (re-reads the written config); Shown=false with no UI otherwise.
 		hcRes, hcErr := flowinstall.RunHealthcheckSetup(ctx, session, baseDir, configPath, false)
-		if hcErr != nil && bootstrap != nil {
-			bootstrap.Warning("Healthcheck setup failed (non-blocking): %v", hcErr)
-		}
-		if bootstrap != nil && hcErr == nil && hcRes.Shown {
-			if hcRes.Verified {
-				bootstrap.Info("Healthcheck setup: verified")
-			} else if hcRes.SkippedVerification {
-				bootstrap.Info("Healthcheck setup: check skipped by user")
-			} else if hcRes.CheckAttempts > 0 {
-				bootstrap.Info("Healthcheck setup: not verified (attempts=%d)", hcRes.CheckAttempts)
-			} else {
-				bootstrap.Info("Healthcheck setup: not verified (no check performed)")
-			}
-		}
+		logHealthcheckSetupOutcome(bootstrap, hcRes, hcErr)
 	}
 
 	// All interactive steps are done. Unlike the CLI, the TUI keeps the ALTSCREEN
