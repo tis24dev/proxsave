@@ -10,11 +10,12 @@ import (
 	"github.com/tis24dev/proxsave/internal/types"
 )
 
-// TestLogBackupStatisticsDebugGating asserts the "=== Backup Statistics ==="
-// block is debug-only: at LogLevelInfo logBackupStatistics emits nothing, and at
-// LogLevelDebug it emits the full block. The block moved to the graphical outcome
-// recap (buildBackupOutcomePrompt) for standard runs.
-func TestLogBackupStatisticsDebugGating(t *testing.T) {
+// TestLogBackupStatisticsLevelSplit asserts what each log level gets. This test used
+// to be TestLogBackupStatisticsDebugGating and asserted that Info emits NOTHING — the
+// behaviour a cron run inherited, which left an unattended backup with no statistics
+// anywhere. Info now gets the compact rows; only the "=== Backup Statistics ===" header
+// and the full detail stay behind Debug.
+func TestLogBackupStatisticsLevelSplit(t *testing.T) {
 	prevLogger := logging.GetDefaultLogger()
 	t.Cleanup(func() { logging.SetDefaultLogger(prevLogger) })
 
@@ -24,26 +25,34 @@ func TestLogBackupStatisticsDebugGating(t *testing.T) {
 		ArchivePath:    "/var/backup/proxsave.tar.zst",
 	}
 
-	// At Info level the block (and its blank spacers) is skipped entirely.
-	infoBuf := &bytes.Buffer{}
-	infoLogger := logging.New(types.LogLevelInfo, false)
-	infoLogger.SetOutput(infoBuf)
-	logging.SetDefaultLogger(infoLogger)
-	logBackupStatistics(stats)
-	if strings.Contains(infoBuf.String(), "=== Backup Statistics ===") {
-		t.Fatalf("stats block must be absent at Info level:\n%s", infoBuf.String())
+	capture := func(level types.LogLevel) string {
+		buf := &bytes.Buffer{}
+		logger := logging.New(level, false)
+		logger.SetOutput(buf)
+		logging.SetDefaultLogger(logger)
+		logBackupStatistics(stats)
+		return buf.String()
 	}
 
-	// At Debug level the full block is emitted.
-	debugBuf := &bytes.Buffer{}
-	debugLogger := logging.New(types.LogLevelDebug, false)
-	debugLogger.SetOutput(debugBuf)
-	logging.SetDefaultLogger(debugLogger)
-	logBackupStatistics(stats)
-	if !strings.Contains(debugBuf.String(), "=== Backup Statistics ===") {
-		t.Fatalf("stats block must be present at Debug level:\n%s", debugBuf.String())
+	// Info: the compact rows, no section header. This is what a cron log gets.
+	info := capture(types.LogLevelInfo)
+	if strings.Contains(info, "=== Backup Statistics ===") {
+		t.Fatalf("the section header belongs to the full block:\n%s", info)
 	}
-	if !strings.Contains(debugBuf.String(), "Files collected: 42") {
-		t.Fatalf("stats block content missing at Debug level:\n%s", debugBuf.String())
+	for _, want := range []string{"Files: 42 collected", "/var/backup/proxsave.tar.zst"} {
+		if !strings.Contains(info, want) {
+			t.Fatalf("an unattended run must still log %q:\n%s", want, info)
+		}
+	}
+	if strings.Contains(info, "Directories created") {
+		t.Fatalf("the compact rows must stay compact:\n%s", info)
+	}
+
+	// Debug: the full block, header included.
+	debug := capture(types.LogLevelDebug)
+	for _, want := range []string{"=== Backup Statistics ===", "Files: 42 collected", "Directories created: 7"} {
+		if !strings.Contains(debug, want) {
+			t.Fatalf("the full block must contain %q:\n%s", want, debug)
+		}
 	}
 }

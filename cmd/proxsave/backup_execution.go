@@ -108,40 +108,40 @@ func persistBackupStats(orch *orchestrator.Orchestrator, stats *orchestrator.Bac
 	}
 }
 
+// logBackupStatistics writes the recap to the run log: the COMPACT rows at Info, the
+// full block at Debug.
+//
+// The block used to be debug-only, on the reasoning that "a standard run shows it in
+// the graphical outcome recap instead". That holds only where there IS a graphical
+// recap. This function runs from executeBackupRun, which every backup goes through
+// including the scheduled ones, so an unattended `proxsave --backup` at Info wrote no
+// statistics anywhere — and a cron log with no archive path or file counts is the one
+// place they are needed most, since nobody watched the run.
 func logBackupStatistics(stats *orchestrator.BackupStats) {
-	// The block is now debug-only; a standard run shows it in the graphical
-	// outcome recap (buildBackupOutcomePrompt) instead. Guard before the blank
-	// spacers too, so a standard run shows no orphan blank lines.
-	if logging.GetDefaultLogger().GetLevel() < types.LogLevelDebug {
+	if stats == nil {
 		return
 	}
+	debug := logging.GetDefaultLogger().GetLevel() >= types.LogLevelDebug
+
+	// The header and the blank spacers belong to the full block: at Info the rows join
+	// the run's other lines instead of opening a section of their own.
+	if !debug {
+		for _, line := range backupStatsRecap(stats, true) {
+			logging.Info("%s", line.Text)
+		}
+		return
+	}
+
 	fmt.Println()
 	logging.Debug("=== Backup Statistics ===")
-	logging.Debug("Files collected: %d", stats.FilesCollected)
-	if stats.FilesFailed > 0 {
-		// The PVE/PBS collection summary carries the Files-failed warning now.
-		logging.Debug("Files failed: %d", stats.FilesFailed)
+	for _, line := range backupStatsRecap(stats, false) {
+		logging.Debug("%s", line.Text)
 	}
-	logging.Debug("Directories created: %d", stats.DirsCreated)
-	logging.Debug("Data collected: %s", formatBytes(stats.BytesCollected))
-	logging.Debug("Archive size: %s", formatBytes(stats.ArchiveSize))
-	logCompressionRatio(stats)
-	logging.Debug("Compression used: %s (level %d, mode %s)", stats.Compression, stats.CompressionLevel, stats.CompressionMode)
-	if stats.RequestedCompression != stats.Compression {
-		logging.Debug("Requested compression: %s", stats.RequestedCompression)
-	}
-	logging.Debug("Duration: %s", formatDuration(stats.Duration))
-	logBackupArtifactPaths(stats)
 	fmt.Println()
 }
 
-func logCompressionRatio(stats *orchestrator.BackupStats) {
-	logging.Debug("Compression ratio: %s", compressionRatioText(stats))
-}
-
-// compressionRatioText renders the compression-ratio value shared by the
-// debug-only log block (logCompressionRatio) and the graphical outcome recap
-// (appendBackupStatsBlock), so the two never drift.
+// compressionRatioText renders the compression-ratio value for the shared recap
+// builder (backupStatsRecap), and therefore for both front-ends.
 func compressionRatioText(stats *orchestrator.BackupStats) string {
 	switch {
 	case stats.CompressionSavingsPercent > 0:
@@ -153,22 +153,6 @@ func compressionRatioText(stats *orchestrator.BackupStats) string {
 		return fmt.Sprintf("%.1f%%", ratio)
 	default:
 		return "N/A"
-	}
-}
-
-func logBackupArtifactPaths(stats *orchestrator.BackupStats) {
-	if stats.BundleCreated {
-		logging.Debug("Bundle path: %s", stats.ArchivePath)
-		logging.Debug("Bundle contents: archive + checksum + metadata")
-		return
-	}
-
-	logging.Debug("Archive path: %s", stats.ArchivePath)
-	if stats.ManifestPath != "" {
-		logging.Debug("Manifest path: %s", stats.ManifestPath)
-	}
-	if stats.Checksum != "" {
-		logging.Debug("Archive checksum (SHA256): %s", stats.Checksum)
 	}
 }
 
