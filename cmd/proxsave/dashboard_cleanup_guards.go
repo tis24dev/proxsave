@@ -2,9 +2,7 @@ package main
 
 import (
 	"context"
-	"fmt"
 	"io"
-	"strings"
 
 	"github.com/tis24dev/proxsave/internal/logging"
 	"github.com/tis24dev/proxsave/internal/orchestrator"
@@ -60,40 +58,20 @@ func classifyGuardApply(r orchestrator.GuardCleanupReport) (orchestrator.Healthc
 	return orchestrator.HealthcheckSetupLevelWarn, "PENDING"
 }
 
-// guardApplyClean reports whether a real run left nothing behind. GuardsRemaining == -1
-// is the fail-closed "unknown" sentinel, which counts as not-clean.
-func guardApplyClean(r orchestrator.GuardCleanupReport) bool {
-	return r.GuardsRemaining == 0 && r.ImmutablePending == 0
-}
-
-// describeGuardCheck renders the CHECK explanation (no "dry run" wording): either that
-// there is nothing to unlock, or what was found locking the storage.
+// describeGuardCheck renders the CHECK explanation (no "dry run" wording): the shared
+// facts, plus this front-end's call to action, which names the on-screen button.
 func describeGuardCheck(r orchestrator.GuardCleanupReport) string {
 	if !r.HasGuards() {
-		return "No restore mount guards are present. Nothing to unlock."
+		return guardCheckFacts(r)
 	}
-	var parts []string
-	if r.BindGuards > 0 {
-		parts = append(parts, countLabel(r.BindGuards, "bind mount guard"))
-	}
-	if r.ImmutableGuards > 0 {
-		parts = append(parts, countLabel(r.ImmutableGuards, "immutable flag"))
-	}
-	return fmt.Sprintf("Found %s locking the storage. Apply removes them to unlock it.", strings.Join(parts, " and "))
+	return guardCheckFacts(r) + " Apply removes them to unlock it."
 }
 
-// describeGuardApply renders the real-run outcome explanation.
+// describeGuardApply renders the real-run outcome: shared facts plus the retry
+// instruction phrased as the menu entry the operator would pick again.
 func describeGuardApply(r orchestrator.GuardCleanupReport) string {
 	if guardApplyClean(r) {
-		return "Removed the restore mount guards. The storage is unlocked."
+		return guardApplyFacts(r)
 	}
-	return "Some guards are still in place (hidden under a live mount). Unmount the datastore and run Cleanup guards again once it is offline."
-}
-
-// countLabel pluralizes "N thing" / "N things".
-func countLabel(n int, singular string) string {
-	if n == 1 {
-		return fmt.Sprintf("%d %s", n, singular)
-	}
-	return fmt.Sprintf("%d %ss", n, singular)
+	return guardApplyFacts(r) + " Unmount the datastore and run Cleanup guards again once it is offline."
 }
