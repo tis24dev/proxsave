@@ -65,6 +65,13 @@ func ValidateIssueID(v string) error {
 
 // RunIntro prompts for consent and GitHub metadata.
 // ok=false means the user declined or aborted; interrupted=true means context cancel / Ctrl+C.
+//
+// The disclosure and the gates are NOT written here: they come from ConsentDisclosure
+// and ConsentGates() so this flow and the dashboard form ask for exactly the same
+// consent (see consent.go). This function only renders them for a terminal and owns
+// the stdin protocol: ONE bufio.Reader for the whole flow (a second one would drop the
+// bytes the first already buffered and orphan input.ReadLineWithIdle's per-reader
+// state), then one yes/no read per gate, then the nickname and issue loops.
 func RunIntro(ctx context.Context, bootstrap *logging.BootstrapLogger) (meta Meta, ok bool, interrupted bool) {
 	reader := bufio.NewReader(os.Stdin)
 
@@ -73,41 +80,36 @@ func RunIntro(ctx context.Context, bootstrap *logging.BootstrapLogger) (meta Met
 	fmt.Println("\033[32m  SUPPORT & ASSISTANCE MODE\033[0m")
 	fmt.Println("\033[32m================================================\033[0m")
 	fmt.Println()
-	fmt.Println("This mode will send the ProxSave log to the developer for debugging.")
-	fmt.Println("\033[33mIf your log contains personal or sensitive information, it will be shared.\033[0m")
+	fmt.Println(ConsentDisclosure.Summary)
+	for _, warning := range ConsentDisclosure.Warnings {
+		// Yellow is this renderer's emphasis, not part of the shared copy.
+		fmt.Printf("\033[33m%s\033[0m\n", warning)
+	}
 	fmt.Println()
 
-	accepted, err := promptYesNoSupport(ctx, reader, "Do you accept and continue? [y/N]: ")
-	if err != nil {
-		if errors.Is(err, input.ErrInputAborted) || ctx.Err() == context.Canceled {
-			bootstrap.Warning("Support mode interrupted by signal")
-			return Meta{}, false, true
+	for _, gate := range ConsentGates() {
+		if len(gate.Detail) > 0 {
+			// Blank above and below so the supporting lines read as their own block
+			// instead of trailing off the previous prompt line.
+			fmt.Println()
+			for _, line := range gate.Detail {
+				fmt.Println(line)
+			}
+			fmt.Println()
 		}
-		bootstrap.Error("ERROR: %v", err)
-		return Meta{}, false, false
-	}
-	if !accepted {
-		bootstrap.Warning("Support mode aborted by user (consent not granted)")
-		return Meta{}, false, false
-	}
-
-	fmt.Println()
-	fmt.Println("Before proceeding, you must have an open GitHub issue for this problem.")
-	fmt.Println("Emails without a corresponding GitHub issue will not be analyzed.")
-	fmt.Println()
-
-	hasIssue, err := promptYesNoSupport(ctx, reader, "Do you confirm that you have already opened a GitHub issue? [y/N]: ")
-	if err != nil {
-		if errors.Is(err, input.ErrInputAborted) || ctx.Err() == context.Canceled {
-			bootstrap.Warning("Support mode interrupted by signal")
-			return Meta{}, false, true
+		granted, err := promptYesNoSupport(ctx, reader, gate.Prompt())
+		if err != nil {
+			if errors.Is(err, input.ErrInputAborted) || ctx.Err() == context.Canceled {
+				bootstrap.Warning("Support mode interrupted by signal")
+				return Meta{}, false, true
+			}
+			bootstrap.Error("ERROR: %v", err)
+			return Meta{}, false, false
 		}
-		bootstrap.Error("ERROR: %v", err)
-		return Meta{}, false, false
-	}
-	if !hasIssue {
-		bootstrap.Warning("Support mode aborted: please open a GitHub issue first")
-		return Meta{}, false, false
+		if !granted {
+			bootstrap.Warning("%s", gate.DeclineWarning)
+			return Meta{}, false, false
+		}
 	}
 
 	// GitHub nickname

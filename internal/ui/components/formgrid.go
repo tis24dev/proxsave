@@ -40,6 +40,12 @@ type FormField struct {
 	// Validate rejects a text value on submit (and inline when leaving the
 	// field); only called while the field is Active.
 	Validate func(value string) error
+	// ValidateBool rejects a toggle value on submit; only called while the field
+	// is Active and Kind is FieldToggle. It is what lets a toggle be a GATE (an
+	// acknowledgement the operator must give before the form may resolve) rather
+	// than a setting. nil — the zero value, so every field that does not opt in —
+	// means the toggle never blocks submit.
+	ValidateBool func(value bool) error
 	// Active gates the field: inactive rows render dimmed, are skipped by
 	// navigation, and are not validated. nil = always active.
 	Active func() bool
@@ -196,14 +202,37 @@ func (g *FormGrid) Help() string {
 	return "↑/↓ move · ←/→/space toggle · enter next/confirm · esc cancel"
 }
 
+// submit is the ONLY place the grid resolves successfully; every other Resolve call
+// carries backErr. Both ways to press Continue — Enter on the buttons row and a left
+// click on the Continue band — return through here, so a field that rejects submit
+// blocks the mouse exactly as it blocks the keyboard. Validating in the Enter handler
+// instead would leave the click path (which force-sets the cursor and calls submit
+// directly) ungated.
 func (g *FormGrid) submit() (shell.Screen, tea.Cmd) {
-	// Sync the editor, then validate every active text field in order.
+	// Sync the editor, then validate every active field in order.
 	g.bindEditor()
 	for i, f := range g.fields {
-		if !f.active() || f.Kind != FieldText || f.Validate == nil {
+		if !f.active() {
 			continue
 		}
-		if err := f.Validate(f.Text); err != nil {
+		var err error
+		switch f.Kind {
+		case FieldText:
+			if f.Validate == nil {
+				continue
+			}
+			err = f.Validate(f.Text)
+		case FieldToggle:
+			if f.ValidateBool == nil {
+				continue
+			}
+			err = f.ValidateBool(f.Bool)
+		default:
+			continue
+		}
+		if err != nil {
+			// Same rejection shape for both kinds: label-prefixed inline message and
+			// the cursor parked on the control the operator has to change.
 			g.errMsg = fmt.Sprintf("%s: %v", f.Label, err)
 			g.cursor = i
 			return g, g.bindEditor()
@@ -492,7 +521,18 @@ func (g *FormGrid) View(width, height int) string {
 	// last kept line with a subtle truncation indicator so the crop is visible.
 	// Recompute introHeight from the clipped intro so head, the builder and
 	// g.lastRowsTop all derive from the same lines (hit-testing stays consistent).
-	if maxIntro := max(height-5, 0); len(intro) > 0 && introHeight > maxIntro {
+	// Reserve one field row when the grid has any. The note is FIXED -- it never
+	// scrolls -- so on a short terminal it can absorb the whole budget and leave nothing
+	// but Continue/Cancel on screen. That is a dead end as soon as a row gates submit
+	// (the support consent toggles): Continue is refused by a row the operator has no way
+	// to reach, and at those heights the refusal message is dropped too, so pressing it
+	// does nothing visible. Reserving the row makes the note truncate first, which it
+	// already announces.
+	minRows := 0
+	if len(g.fields) > 0 {
+		minRows = 1
+	}
+	if maxIntro := max(height-5-minRows, 0); len(intro) > 0 && introHeight > maxIntro {
 		kept := make([]string, 0, len(intro))
 		used := 0
 		dropped := false
@@ -509,7 +549,11 @@ func (g *FormGrid) View(width, height int) string {
 			indicator := theme.Subtle.Width(introWidth).Render("note truncated, enlarge the terminal")
 			if len(kept) > 0 {
 				kept[len(kept)-1] = indicator
-			} else if maxIntro >= 1 {
+			} else {
+				// Emitted even when no room was reserved for it, at the cost of the
+				// field row above: a note that vanishes silently would leave the
+				// consent toggles on screen with nothing left stating what is being
+				// acknowledged. Refusing to show either is the safe way to fail.
 				kept = append(kept, indicator)
 			}
 		}
@@ -528,14 +572,16 @@ func (g *FormGrid) View(width, height int) string {
 	// Reserve the buttons block (blank + buttons = 2 rows) as the TOP priority so
 	// the actionable rows are never cropped from below (the router crops overflow
 	// from the bottom, like Confirm's budget). The footer (hint/error) is lower
-	// priority: drop it when there is no room, and let the field window shrink
-	// into the remainder (down to zero at extreme sizes, recoverable by enlarging).
+	// priority: drop it when keeping it would starve the field window below the row
+	// reserved above, so an actionable row always outranks the hint. The window can
+	// still reach zero at the extreme size where the note is reduced to its truncation
+	// indicator alone -- recoverable by enlarging, which is what the indicator says.
 	buttonsLines := 2 // blank + buttons
 	footerBlock := footerHeight
 	if len(footer) > 0 {
 		footerBlock++ // blank line between the buttons and the footer
 	}
-	if height-head-buttonsLines-footerBlock < 0 {
+	if height-head-buttonsLines-footerBlock < minRows {
 		footer = nil
 		footerBlock = 0
 	}
