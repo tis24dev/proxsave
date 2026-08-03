@@ -164,8 +164,17 @@ func runBackupStreamed(opts backupModeOptions) backupModeResult {
 			defer captureRunOutput(opts.bootstrap, emit)()
 
 			// Thread taskCtx so an Esc cancel propagates into the running backup.
+			//
+			// outcomeRendersRecap is set HERE and nowhere else: this is the only path
+			// that ends on buildBackupOutcomePrompt, so it is the only one where the
+			// engine logging the recap would put it on screen twice. The no-session
+			// fallback above runs the SAME steps with the un-cloned opts and shows no
+			// outcome at all, so it keeps the logged recap - setting the flag on opts
+			// instead of on this clone would silently strip the statistics from exactly
+			// the run that has no other recap.
 			stepOpts := opts
 			stepOpts.ctx = taskCtx
+			stepOpts.outcomeRendersRecap = true
 			res = backupStreamSteps(stepOpts)
 			runStreamedEndOfRunActions(taskCtx, opts, &res)
 			return buildBackupOutcomePrompt(res), nil
@@ -221,7 +230,9 @@ func buildBackupOutcomePrompt(res backupModeResult) string {
 	b.WriteString(renderBackupBanner(sev))
 
 	if st := res.supportStats; st != nil {
-		// The backup-statistics block (headerless); the log block is now debug-only.
+		// The backup-statistics block (headerless). This screen is the ONLY recap of
+		// the run: the engine skips its own logged recap for this path, so the rows
+		// below appear exactly once (backupModeOptions.outcomeRendersRecap).
 		b.WriteString("\n")
 		appendBackupStatsBlock(&b, st)
 
@@ -279,8 +290,9 @@ func buildBackupOutcomePrompt(res backupModeResult) string {
 
 // appendBackupStatsBlock renders the backup-statistics block into the graphical
 // outcome recap: the shared rows from backupStatsRecap, THEME-styled. The graphical
-// front-end always shows the full block — it is the only recap a dashboard run gets,
-// and it has the room.
+// front-end always shows the full block, and it really is the only recap a dashboard
+// run gets: the engine's own logged recap is suppressed for this path, at every log
+// level (see logBackupStatistics).
 //
 // A row the builder marks Warn is rendered warning-coloured whole. It used to colour
 // just the "N missing" and "(M failed)" segments inside the Files line; whole-row is

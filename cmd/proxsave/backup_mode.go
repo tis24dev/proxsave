@@ -39,6 +39,17 @@ type backupModeOptions struct {
 	// deferred sender.
 	support     bool
 	supportMeta support.Meta
+	// outcomeRendersRecap says that THIS run ends on a screen that renders the
+	// backup-statistics recap itself, so the engine must not also log it. Only the
+	// streamed path with a live viewport sets it (runBackupStreamed), and only on its
+	// own clone of these options: the plain path, the daemon, cron, and the streamed
+	// path's no-session fallback all leave it zero and keep the logged recap, which is
+	// the only one they get.
+	//
+	// It states a fact about the RUN, not about which front-end is driving. The engine
+	// stays ignorant of its renderer, the same way backupStatsRecap builds rows without
+	// knowing who will present them.
+	outcomeRendersRecap bool
 }
 
 type backupModeResult struct {

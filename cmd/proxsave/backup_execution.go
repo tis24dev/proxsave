@@ -43,7 +43,7 @@ func runConfiguredBackup(opts backupModeOptions, orch *orchestrator.Orchestrator
 	backupDone(nil)
 
 	persistBackupStats(orch, stats)
-	logBackupStatistics(stats)
+	logBackupStatistics(stats, opts.outcomeRendersRecap)
 	logging.Info("✓ Backup completed")
 	logServerIdentityValues(opts.serverIDValue, opts.serverMACValue)
 	logMonitoringPortalLink(stats)
@@ -108,17 +108,27 @@ func persistBackupStats(orch *orchestrator.Orchestrator, stats *orchestrator.Bac
 	}
 }
 
-// logBackupStatistics writes the recap to the run log: the COMPACT rows at Info, the
-// full block at Debug.
+// logBackupStatistics writes the recap to the console: the COMPACT rows at Info, the
+// full block at Debug. skip suppresses BOTH, for a run whose screen renders the recap
+// itself (backupModeOptions.outcomeRendersRecap).
 //
-// The block used to be debug-only, on the reasoning that "a standard run shows it in
-// the graphical outcome recap instead". That holds only where there IS a graphical
-// recap. This function runs from executeBackupRun, which every backup goes through
-// including the scheduled ones, so an unattended `proxsave --backup` at Info wrote no
-// statistics anywhere — and a cron log with no archive path or file counts is the one
-// place they are needed most, since nobody watched the run.
-func logBackupStatistics(stats *orchestrator.BackupStats) {
-	if stats == nil {
+// The block was debug-only before c0cc02a, and that gate WAS the de-duplication: the
+// graphical stats block and the Debug gate arrived together in 3ed0716, two halves of
+// one design where exactly one side renders the recap. Reading the gate as a verbosity
+// choice and lifting it for Info put the compact rows into the dashboard viewport
+// underneath the outcome block that already showed them. Suppressing here on the
+// caller's say-so restores that invariant, and closes the case the original gate never
+// covered: at Debug the full block reached the viewport too, because capturing the
+// console swaps the writer and not the level (internal/logging/capture.go, SwapOutput).
+//
+// Where the rows go on an unattended run, corrected: NOT into the run log file. This
+// runs from runConfiguredBackup, after the orchestrator has closed that file
+// (FinalizeAndCloseLog), so the recap reaches stdout only. It still matters there: the
+// daemon runs the backup as a child whose stdout goes to journald AND into the bounded
+// tail it POSTs to Healthchecks as the failure diagnostic (daemon.go, buildBackupCmd).
+// Deleting the Info arm would take that payload away.
+func logBackupStatistics(stats *orchestrator.BackupStats, skip bool) {
+	if stats == nil || skip {
 		return
 	}
 	debug := logging.GetDefaultLogger().GetLevel() >= types.LogLevelDebug
