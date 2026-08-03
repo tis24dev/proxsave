@@ -645,8 +645,16 @@ func collectInstallWizardDataCLI(ctx context.Context, reader *bufio.Reader, prom
 	if err != nil {
 		return nil, err
 	}
-	// ALWAYS non-nil: the CLI has always written BACKUP_FIREWALL_RULES on every run,
-	// so the engine's nil "keep the stored value" branch must stay unreachable here.
+	// Unconditional, and it must stay that way: this wizard ASKS the question, so it
+	// always has an answer to forward and the engine's nil arm is unreachable from
+	// here. Contrast EmailFallbackSendmail below, which is left nil precisely because
+	// nothing asks.
+	//
+	// Do not read "unreachable" as "guaranteed". The engine's nil arm being dead is a
+	// property of today's two front-ends, not an invariant: this assignment only
+	// entered the tree when the CLI wizard started going through the engine at all,
+	// and the sibling field moved the other way (non-nil to nil, both front-ends) in
+	// the very next campaign item. The guard on the engine side stays.
 	data.BackupFirewallRules = &firewallEnabled
 
 	logging.DebugStepBootstrap(bootstrap, "install config wizard (cli)", "configuring notifications")

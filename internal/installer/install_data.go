@@ -231,7 +231,19 @@ func ApplyInstallData(baseTemplate string, data *InstallWizardData) (string, err
 		template = setEnvValue(template, "CLOUD_LOG_PATH", "")
 	}
 
-	// Apply firewall rules backup (optional; keep template default when unset)
+	// Apply firewall rules backup. A nil field means no front-end asked, and the key is
+	// then not written AT ALL -- which is not the same thing on both paths: on a fresh
+	// install or an Overwrite it leaves the SHIPPED template's value, on an Edit it
+	// leaves the OPERATOR's stored value. Calling that "the template default" names
+	// only the first.
+	//
+	// Both wizards ask the firewall question today, so the nil arm is currently
+	// unreachable from production (verified by instrumenting this function over the
+	// whole test suite: every nil arrival comes from a unit-test body, never from a
+	// production frame). It is kept because that is a property of today's front-ends
+	// rather than an invariant -- the sibling EmailFallbackSendmail went from
+	// always-non-nil to always-nil on both surfaces -- and because the nil check is
+	// what stops this exported function dereferencing a nil pointer.
 	if data.BackupFirewallRules != nil {
 		if *data.BackupFirewallRules {
 			template = setEnvValue(template, "BACKUP_FIREWALL_RULES", "true")
