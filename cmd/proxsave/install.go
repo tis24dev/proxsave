@@ -598,6 +598,27 @@ func collectInstallWizardDataCLI(ctx context.Context, reader *bufio.Reader, prom
 		prefillBase = wizardBlankBaseStandIn
 	}
 	prefill := installer.DeriveInstallWizardPrefill(prefillBase)
+	if !fromExisting {
+		// Off the Edit path prefillBase is the SHIPPED template (prepareBaseTemplate
+		// expands it there), so every "stored value" read out of it is really a
+		// template line. That is harmless for the keys the template leaves blank or
+		// seeds with a usable default - but CLOUD_REMOTE ships as an EXAMPLE remote
+		// NAME, "GoogleDrive", which only works on a host that happens to have named
+		// its rclone remote exactly that. Offering it as the prompt default meant
+		// pressing Enter wrote CLOUD_ENABLED=true against a remote that does not
+		// exist, and the operator then got a warning on every run instead of a
+		// failure at install time, because a cloud upload failure is non-critical.
+		//
+		// Dropping the default degrades the prompt to "no default", which
+		// promptNonEmptyWithDefault turns into a required answer. That is the same
+		// defence schedulerEngineDefault / healthcheckModeDefault / cronTimeDefault
+		// already apply to their keys; this one was missed.
+		//
+		// CLOUD_LOG_PATH is deliberately NOT cleared: "/proxsave/log" is a real path
+		// inside whatever remote is chosen, listed by the template's own comment as an
+		// accepted form, so it is a usable default rather than a stand-in.
+		prefill.CloudRemote = ""
+	}
 
 	data := &installer.InstallWizardData{}
 
