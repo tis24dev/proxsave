@@ -550,8 +550,10 @@ func runConfigWizardCLI(ctx context.Context, reader *bufio.Reader, configPath, t
 // Prefixing is safe because the marker only flips editingExisting, which is
 // UNOBSERVABLE for a CLI payload: the blank base carries no BOT_TELEGRAM_TYPE (so the
 // key is seeded either way), the collector always supplies a non-empty
-// EmailDeliveryMethod, and EmailFallbackSendmail is always non-nil. Pinned by
-// TestRunConfigWizardCLIBlankEditKeepsMinimalKeySet.
+// EmailDeliveryMethod, and the blank base carries neither EMAIL_FALLBACK_SENDMAIL nor
+// the transitional EMAIL_FALLBACK_PMF - parseEnvTemplate skips the marker as a
+// comment, so existingValues is empty with or without it and the engine seeds the same
+// default either way. Pinned by TestRunConfigWizardCLIBlankEditKeepsMinimalKeySet.
 const wizardBlankEditBaseMarker = "# proxsave install wizard: blank existing configuration\n"
 
 func applyInstallDataCLI(base installWizardBase, fromExisting bool, data *installer.InstallWizardData) (string, error) {
@@ -643,11 +645,18 @@ func collectInstallWizardDataCLI(ctx context.Context, reader *bufio.Reader, prom
 	}
 	if emailEnabled {
 		data.EmailDeliveryMethod = emailMethod
-		// ALWAYS non-nil true, matching what the CLI has always written and what the
-		// Charm front-end sends. The engine's 3-branch preserve logic stays dead for
-		// both; switching to preserve semantics is a separate behavior change.
-		fallbackSendmail := true
-		data.EmailFallbackSendmail = &fallbackSendmail
+		// EmailFallbackSendmail stays NIL, and the Charm front-end leaves it nil too:
+		// no wizard step on either surface asks about the local-sendmail failover, so
+		// there is no operator answer to forward and installer.ApplyInstallData owns
+		// EMAIL_FALLBACK_SENDMAIL (seed true when nothing is stored, preserve the
+		// stored value on an Edit). Sending a fabricated true from here rewrote a
+		// deliberate EMAIL_FALLBACK_SENDMAIL=false back to true on EVERY wizard pass,
+		// including a no-op edit, silently re-opening the /usr/sbin/sendmail delivery
+		// route the operator had closed. Contrast BackupFirewallRules above, which
+		// stays non-nil precisely BECAUSE the wizard asks that question and prefills it
+		// from the stored value. Pinned by
+		// TestCollectInstallWizardDataCLIOnlyAnsweredTogglesAreNonNil and
+		// TestRunConfigWizardCLIEditPreservesStoredEmailFallbackSendmail.
 	}
 
 	logging.DebugStepBootstrap(bootstrap, "install config wizard (cli)", "configuring encryption")

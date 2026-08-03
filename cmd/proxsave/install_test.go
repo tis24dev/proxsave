@@ -621,9 +621,10 @@ func TestPromptNotificationsEmailDefaultsToRelay(t *testing.T) {
 	if method != "relay" {
 		t.Fatalf("delivery method = %q, want relay", method)
 	}
-	// EMAIL_FALLBACK_SENDMAIL=true is written by installer.ApplyInstallData from the
-	// non-nil EmailFallbackSendmail the collector always sends (pinned by
-	// TestCollectInstallWizardDataCLIAlwaysSendsNonNilFlags and
+	// EMAIL_FALLBACK_SENDMAIL=true is seeded by installer.ApplyInstallData when the
+	// config stores neither fallback key; the collector deliberately sends a NIL
+	// EmailFallbackSendmail so an Edit preserves a stored false instead (pinned by
+	// TestCollectInstallWizardDataCLIOnlyAnsweredTogglesAreNonNil and
 	// internal/installer/install_data_test.go).
 }
 
@@ -1087,9 +1088,10 @@ func TestRunConfigWizardCLIBlankEditKeepsMinimalKeySet(t *testing.T) {
 // installWizardBase exists for. It is NOT covered by the characterization goldens:
 // handing installer.ApplyInstallData the EXPANDED base instead of the raw one is
 // byte-identical on every golden scenario (measured), because the embedded template
-// already carries BOT_TELEGRAM_TYPE=centralized and the collector always supplies a
-// non-empty EmailDeliveryMethod and a non-nil EmailFallbackSendmail. So this is the
-// only thing that keeps the split honest.
+// already carries BOT_TELEGRAM_TYPE=centralized and EMAIL_FALLBACK_SENDMAIL=true (so
+// the engine's seed arm on the raw base and its preserve arm on the expanded one agree
+// to the byte) and the collector always supplies a non-empty EmailDeliveryMethod. So
+// this is the only thing that keeps the split honest.
 func TestPrepareBaseTemplateRawIsEmptyOffTheEditPath(t *testing.T) {
 	expanded := config.DefaultEnvTemplate()
 
@@ -1169,12 +1171,24 @@ func TestPrepareBaseTemplateRawIsEmptyOffTheEditPath(t *testing.T) {
 	})
 }
 
-// TestCollectInstallWizardDataCLIAlwaysSendsNonNilFlags pins two deliberate
-// bug-compatibilities, so the follow-up commits that change them fail loudly instead
-// of silently: BACKUP_FIREWALL_RULES is always written (never "keep the stored
-// value"), and EMAIL_FALLBACK_SENDMAIL is always forced true when email is on
-// (never installer.ApplyInstallData's 3-branch preserve logic).
-func TestCollectInstallWizardDataCLIAlwaysSendsNonNilFlags(t *testing.T) {
+// TestCollectInstallWizardDataCLIOnlyAnsweredTogglesAreNonNil pins the payload rule
+// the CLI and the Charm front-end now share: a pointer flag is sent non-nil ONLY when
+// the wizard actually asks the operator that question.
+//
+// BACKUP_FIREWALL_RULES is asked (and prefilled from the stored value), so it is
+// always non-nil and the engine's "keep the stored value" branch stays unreachable for
+// it on purpose.
+//
+// EMAIL_FALLBACK_SENDMAIL is asked by NEITHER front-end, so it is always nil and
+// installer.ApplyInstallData owns the key. This half of the test used to pin the
+// opposite - a fabricated non-nil true - as a deliberate bug-compatibility whose whole
+// job was to make this commit fail loudly rather than change behaviour in silence. It
+// did, and this is that deliberate update: forcing true here rewrote a stored
+// EMAIL_FALLBACK_SENDMAIL=false back to true on every wizard pass, re-opening the
+// local /usr/sbin/sendmail delivery route an operator had closed. The Charm mirror is
+// TestCollectWizardDataLeavesEmailFallbackToTheEngine; the operator-visible half is
+// TestRunConfigWizardCLIEditPreservesStoredEmailFallbackSendmail.
+func TestCollectInstallWizardDataCLIOnlyAnsweredTogglesAreNonNil(t *testing.T) {
 	promptBase := config.DefaultEnvTemplate()
 
 	t.Run("email enabled", func(t *testing.T) {
@@ -1188,10 +1202,10 @@ func TestCollectInstallWizardDataCLIAlwaysSendsNonNilFlags(t *testing.T) {
 			t.Fatalf("collectInstallWizardDataCLI error: %v", err)
 		}
 		if data.BackupFirewallRules == nil {
-			t.Fatal("BackupFirewallRules must never be nil")
+			t.Fatal("BackupFirewallRules must never be nil (the wizard asks that question)")
 		}
-		if data.EmailFallbackSendmail == nil || !*data.EmailFallbackSendmail {
-			t.Fatalf("EmailFallbackSendmail must be non-nil true when email is on, got %v", data.EmailFallbackSendmail)
+		if data.EmailFallbackSendmail != nil {
+			t.Fatalf("EmailFallbackSendmail must stay nil so the engine can preserve a stored value, got %v", *data.EmailFallbackSendmail)
 		}
 		if data.NotificationMode != "email" {
 			t.Fatalf("NotificationMode = %q, want email", data.NotificationMode)
@@ -1218,7 +1232,7 @@ func TestCollectInstallWizardDataCLIAlwaysSendsNonNilFlags(t *testing.T) {
 			t.Fatalf("BackupFirewallRules must be non-nil true, got %v", data.BackupFirewallRules)
 		}
 		if data.EmailFallbackSendmail != nil {
-			t.Fatal("EmailFallbackSendmail must stay nil when email is off (the engine touches neither fallback key)")
+			t.Fatal("EmailFallbackSendmail must stay nil with email off too (the engine then touches neither fallback key)")
 		}
 		if data.NotificationMode != "telegram" {
 			t.Fatalf("NotificationMode = %q, want telegram", data.NotificationMode)
@@ -1226,15 +1240,60 @@ func TestCollectInstallWizardDataCLIAlwaysSendsNonNilFlags(t *testing.T) {
 	})
 }
 
+// TestRunConfigWizardCLIEditPreservesStoredEmailFallbackSendmail is the
+// operator-visible half of the contract, through the REAL wizard and a real file
+// write: an operator who closed the local /usr/sbin/sendmail delivery leg with
+// EMAIL_FALLBACK_SENDMAIL=false must still have it closed after a no-op edit that
+// accepted every default. It fails the moment either the collector fabricates an
+// answer again or the engine stops preserving.
+//
+// It asserts on the written bytes for that one key rather than adding a fourth
+// characterization golden: the three frozen goldens all store true, so none of them
+// can see this regression, and locking a new full-file golden would freeze the prompt
+// transcript again for a one-key claim.
+func TestRunConfigWizardCLIEditPreservesStoredEmailFallbackSendmail(t *testing.T) {
+	existing := setEnvValue(editedExistingConfig(), "EMAIL_FALLBACK_SENDMAIL", "false")
+	// A stale transitional key alongside the stored one. It is the PROOF-OF-WRITE for
+	// this test: the engine retires it on every arm, so its absence from the result can
+	// only mean the wizard actually rewrote the file. Asserting on the preserved value
+	// alone would pass just as well on a run that wrote NOTHING, because the seeded
+	// input already carries EMAIL_FALLBACK_SENDMAIL=false and an enabled email block --
+	// the test would then be green while measuring nothing at all.
+	existing = setEnvValue(existing, "EMAIL_FALLBACK_PMF", "true")
+	// Same script as the EditExistingNoOp golden: choose Edit, then Enter through
+	// every prompt. No prompt is added or removed by this change, so the count holds.
+	run := runWizardCharacterization(t, existing, "2\n"+strings.Repeat("\n", 15))
+	if run.err != nil {
+		t.Fatalf("wizard error: %v", run.err)
+	}
+	written := string(run.configData)
+	if strings.Contains(written, "EMAIL_FALLBACK_PMF") {
+		t.Fatalf("the wizard did not rewrite the file (the stale alias survived), so nothing below is measuring the fix:\n%s", written)
+	}
+	if !strings.Contains(written, "EMAIL_FALLBACK_SENDMAIL=false") {
+		t.Fatalf("a no-op CLI edit re-opened the local sendmail delivery route:\n%s", written)
+	}
+	if strings.Contains(written, "EMAIL_FALLBACK_SENDMAIL=true") {
+		t.Fatalf("EMAIL_FALLBACK_SENDMAIL was flipped back to true:\n%s", written)
+	}
+	// The stored key must also have won over the alias, which claimed the opposite.
+	prefill := installer.DeriveInstallWizardPrefill(written)
+	if !prefill.EmailEnabled || prefill.EmailDeliveryMethod != "pmf" {
+		t.Fatalf("expected a real email-enabled edit, got enabled=%v method=%q", prefill.EmailEnabled, prefill.EmailDeliveryMethod)
+	}
+}
+
 // TestApplyInstallDataCLIFeedsTheEngineTheRawBase pins the OTHER half of the
 // raw/expanded split: prepareBaseTemplate producing the two views is useless if the
 // wizard forwards the wrong one. This cannot be covered by the characterization
 // goldens - handing installer.ApplyInstallData the expanded base instead of the raw
 // one is byte-identical on every golden scenario (measured), because the embedded
-// template already carries BOT_TELEGRAM_TYPE=centralized and the collector always
-// supplies a non-empty EmailDeliveryMethod and a non-nil EmailFallbackSendmail. So
-// the Prompt view here is deliberately a base the engine would treat very
-// differently, making the mistake visible.
+// template already carries BOT_TELEGRAM_TYPE=centralized and
+// EMAIL_FALLBACK_SENDMAIL=true (so the engine's seed and preserve arms agree to the
+// byte) and the collector always supplies a non-empty EmailDeliveryMethod. So the
+// Prompt view here is deliberately a base the engine would treat very differently,
+// making the mistake visible. Its payload keeps an EXPLICIT EmailFallbackSendmail,
+// unlike the collector's, so the engine's explicit-answer arm stays exercised.
 func TestApplyInstallDataCLIFeedsTheEngineTheRawBase(t *testing.T) {
 	fallbackSendmail := true
 	firewall := false

@@ -265,8 +265,14 @@ func CollectWizardData(ctx context.Context, session *shell.Session, baseTemplate
 	}
 	if email.Bool {
 		data.EmailDeliveryMethod = methodValues[method.OptionIndex]
-		fallbackSendmail := true
-		data.EmailFallbackSendmail = &fallbackSendmail
+		// EmailFallbackSendmail stays NIL, the same contract the CLI wizard follows
+		// (cmd/proxsave/install.go): this form has no sendmail-failover row, so there
+		// is no operator answer to send and installer.ApplyInstallData owns
+		// EMAIL_FALLBACK_SENDMAIL (seed true when nothing is stored, preserve the
+		// stored value on an Edit). A fabricated true here re-opened the local
+		// /usr/sbin/sendmail delivery route on every no-op edit of a config that had
+		// deliberately closed it. Pinned by
+		// TestCollectWizardDataLeavesEmailFallbackToTheEngine.
 	}
 	normalized, err := cronutil.NormalizeTime(cronField.Text, cronutil.DefaultTime)
 	if err != nil {
