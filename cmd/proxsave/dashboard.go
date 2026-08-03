@@ -477,7 +477,7 @@ func runDashboardDaemonRestart(ctx context.Context, session *shell.Session, conf
 		lockPath, lockKnown = backupLockFilePath(cfg, baseDir)
 	}
 	var rv RestartVerifyResult
-	_ = components.RunTask(ctx, session, "Restarting daemon", "Restarting proxsave-daemon.service...", func(taskCtx context.Context, report func(string)) error {
+	_ = components.RunTask(ctx, session, "Restarting daemon", "Restarting "+daemonUnitName+"...", func(taskCtx context.Context, report func(string)) error {
 		rv = restartAndVerifyDaemon(taskCtx, baseDir, lockPath, lockKnown, interval)
 		return nil
 	})
@@ -592,10 +592,10 @@ func runDashboardDaemonAdmin(ctx context.Context, session *shell.Session, instal
 	doneMsg := "Reverted to the cron scheduler and removed the daemon service. Future upgrades will not reinstall it."
 	if install {
 		title = "Installing daemon"
-		work = "Installing and enabling proxsave-daemon.service..."
+		work = "Installing and enabling " + daemonUnitName + "..."
 		doneTitle = "Daemon installed"
 		doneKeyword = "INSTALLED"
-		doneMsg = "The resident daemon (proxsave-daemon.service) is active. The cron entry was removed."
+		doneMsg = "The resident daemon (" + daemonUnitName + ") is active. The cron entry was removed."
 	}
 	execToken := daemonSelfExecPath()
 	var opErr error
@@ -761,7 +761,7 @@ func buildDaemonStatusPrompt(level orchestrator.HealthcheckSetupLevel, keyword, 
 	b.WriteString("\n")
 	b.WriteString(theme.Text.Render("Scheduler mode: " + components.SanitizeText(mode)))
 	b.WriteString("\n")
-	b.WriteString(theme.Text.Render("Daemon service (proxsave-daemon.service): " + unit))
+	b.WriteString(theme.Text.Render("Daemon service (" + daemonUnitName + "): " + unit))
 	b.WriteString("\n")
 	b.WriteString(theme.Text.Render("Service state (systemctl is-active): " + components.SanitizeText(active)))
 	b.WriteString("\n")

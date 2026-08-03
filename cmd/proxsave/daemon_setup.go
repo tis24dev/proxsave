@@ -333,12 +333,12 @@ func maybeAutoMigrateDaemon(ctx context.Context, configPath, baseDir, execToken 
 		bootstrap.Println("Daemon mode was previously removed (--daemon-remove); leaving the cron scheduler in place.")
 		return
 	}
-	bootstrap.Println("Migrating to the resident daemon scheduler (proxsave-daemon.service)...")
+	bootstrap.Println("Migrating to the resident daemon scheduler (" + daemonUnitName + ")...")
 	if err := applyDaemonMode(ctx, cfg, configPath, execToken, bootstrap); err != nil {
 		bootstrap.Warning("Daemon migration failed; staying on cron: %v", err)
 		return
 	}
-	bootstrap.Println("Daemon mode enabled: proxsave-daemon.service is active and the cron entry was removed.")
+	bootstrap.Println("Daemon mode enabled: " + daemonUnitName + " is active and the cron entry was removed.")
 }
 
 // setBackupEnvKeys reads backup.env, applies the given key=value edits (replacing

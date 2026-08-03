@@ -16,7 +16,14 @@ import (
 )
 
 const (
+	// daemonUnitName is the SINGLE spelling of the systemd unit. Every systemctl call,
+	// every on-screen line naming the service, and the unit path below derive from it,
+	// on both front-ends -- the dashboard used to hardcode the string in four places
+	// while the CLI took it from here, so renaming the unit would have left the two
+	// disagreeing about what to tell the operator. The only literal is this line.
 	daemonUnitName = "proxsave-daemon.service"
+	// daemonUnitDir is where systemd reads host-local unit files from.
+	daemonUnitDir = "/etc/systemd/system"
 	// daemonExecPath is the canonical entrypoint symlink the unit invokes (same
 	// path used for the crontab line); resolved by ensureGoSymlink at install.
 	daemonExecPath = "/usr/local/bin/proxsave"
@@ -24,7 +31,7 @@ const (
 
 // daemonUnitPath is the systemd unit path. A var (not const) so tests can point it
 // at a temp dir.
-var daemonUnitPath = "/etc/systemd/system/proxsave-daemon.service"
+var daemonUnitPath = filepath.Join(daemonUnitDir, daemonUnitName)
 
 // buildDaemonUnit renders the systemd unit. systemd is only the keep-alive
 // supervisor (Restart=always); the daemon schedules internally. A non-empty
