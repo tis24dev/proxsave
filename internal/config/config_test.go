@@ -11,6 +11,7 @@ import (
 	"math/big"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -1642,34 +1643,53 @@ func loadEnvForTest(t *testing.T, name, content string) *Config {
 	return cfg
 }
 
-// TestBackupFirewallRulesDefaultMatchesShippedTemplate ties the loader's default to the
-// value the shipped template carries, in BOTH directions.
+// TestBoolDefaultsMatchTheShippedTemplate asserts, for EVERY boolean setting, that the
+// compiled default agrees with the value the shipped template carries.
 //
-// They agree today, and that agreement is load-bearing: the install engine writes no
-// BACKUP_FIREWALL_RULES at all when no front-end answered, so what an operator ends up
-// with is decided by the template on a fresh install and by this default on a config
-// that predates the key. If the two ever disagree, the same release means two things
-// depending on how the operator got their config -- and nothing else in the repo would
-// say so. Flipping the loader default passes the entire suite; flipping the template
-// only moves golden transcripts, which a regeneration absorbs silently.
+// The two are different code paths that reach the same operator. The install engine does
+// not write every key, and a config can predate any key, so the effective value comes
+// from the template on a fresh install and from the compiled default on a config that
+// lacks the line. When those disagree, one release behaves two ways depending on how the
+// operator got their config -- and nothing else in the repo says so: flipping a compiled
+// default passes the entire suite, and flipping a template value only moves golden
+// transcripts, which a regeneration absorbs silently.
 //
-// Both sides go through the real loader rather than a parser written for the test.
-// A test-local parser would be a second, weaker implementation of the thing under test:
-// it could drift from the loader's own handling of quotes, inline comments, `export`
-// prefixes and key aliases, and then agree with itself while disagreeing with production.
+// This is the generalised form on purpose. The same defect was found once by hand
+// (PXAR_SCAN_ENABLE shipped false while the code compiled true, so a config old enough
+// to predate the key walked every PBS datastore) and a single-key test would have pinned
+// the one pair somebody happened to look at while the rest stayed unwatched.
 //
-// Unlike TestOptimizationAndSecurityDefaultsMatchTemplate above, this reads the shipped
-// template instead of restating its values, so it keeps holding across a deliberate
-// template change instead of having to be edited alongside one. (Verified: flipping a
-// value in the shipped template leaves that neighbouring test passing.)
-func TestBackupFirewallRulesDefaultMatchesShippedTemplate(t *testing.T) {
-	shipped := loadEnvForTest(t, "shipped.env", DefaultEnvTemplate())
-	absent := loadEnvForTest(t, "absent.env", "# a config that predates the firewall toggle\n")
+// Both sides go through the real loader rather than a parser written for the test: a
+// test-local parser is a second, weaker implementation of the thing under test, free to
+// drift from the loader's own handling of quotes, comments, export prefixes and key
+// aliases and then agree with itself while disagreeing with production.
+//
+// A field that must legitimately diverge belongs in an explicit exception list here, with
+// the reason next to it. There are none today.
+func TestBoolDefaultsMatchTheShippedTemplate(t *testing.T) {
+	shipped := reflect.ValueOf(*loadEnvForTest(t, "shipped.env", DefaultEnvTemplate()))
+	absent := reflect.ValueOf(*loadEnvForTest(t, "absent.env", "# a config that carries no keys at all\n"))
 
-	if shipped.BackupFirewallRules != absent.BackupFirewallRules {
-		t.Fatalf("the shipped template yields BackupFirewallRules=%v but a config without the key yields %v; "+
-			"the two must agree or a fresh install and an upgraded config disagree about firewall collection",
-			shipped.BackupFirewallRules, absent.BackupFirewallRules)
+	var diverging []string
+	typ := shipped.Type()
+	checked := 0
+	for i := 0; i < typ.NumField(); i++ {
+		field := typ.Field(i)
+		if !field.IsExported() || field.Type.Kind() != reflect.Bool {
+			continue
+		}
+		checked++
+		if got, want := absent.Field(i).Bool(), shipped.Field(i).Bool(); got != want {
+			diverging = append(diverging, fmt.Sprintf("%s: shipped template says %v, compiled default says %v", field.Name, want, got))
+		}
+	}
+	if checked == 0 {
+		t.Fatal("no exported bool settings found; this test has stopped measuring anything")
+	}
+	if len(diverging) > 0 {
+		t.Fatalf("%d of %d boolean settings disagree between the shipped template and the compiled default.\n"+
+			"Each means a fresh install and a config that predates the key behave differently:\n  %s",
+			len(diverging), checked, strings.Join(diverging, "\n  "))
 	}
 }
 

@@ -961,7 +961,13 @@ func (c *Config) parsePBSSettings() {
 	networkFallback := c.getBoolWithFallback([]string{"BACKUP_NETWORK_CONFIGS", "BACKUP_NETWORK_CONFIG"}, true)
 	c.BackupPBSNetworkConfig = c.getBool("BACKUP_PBS_NETWORK_CONFIG", networkFallback)
 	c.BackupPruneSchedules = c.getBool("BACKUP_PRUNE_SCHEDULES", true)
-	c.BackupPxarFiles = c.getBoolWithFallback([]string{"PXAR_SCAN_ENABLE", "BACKUP_PXAR_FILES"}, true)
+	// Default false to match the shipped template. It used to compile to true while the
+	// template shipped PXAR_SCAN_ENABLE=false, which meant one release behaved two ways:
+	// a fresh install had datastore scanning OFF, while a config old enough to predate
+	// the key had it ON and walked every PBS datastore. Nobody chose the second
+	// behaviour -- it fell out of the mismatch -- and the expensive side is the wrong
+	// side for a value nobody set.
+	c.BackupPxarFiles = c.getBoolWithFallback([]string{"PXAR_SCAN_ENABLE", "BACKUP_PXAR_FILES"}, false)
 	c.PxarDatastoreConcurrency = c.getInt("PXAR_SCAN_DS_CONCURRENCY", 3)
 	c.PxarFileIncludePatterns = normalizeList(c.getStringSliceWithFallback([]string{"PXAR_FILE_INCLUDE_PATTERN", "PXAR_INCLUDE_PATTERN"}, nil))
 	c.PxarFileExcludePatterns = normalizeList(c.getStringSlice("PXAR_FILE_EXCLUDE_PATTERN", nil))
