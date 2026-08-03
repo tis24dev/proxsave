@@ -1125,11 +1125,13 @@ proxsave --support
 ## Exit Codes
 
 `proxsave` returns a specific exit code so scripts and the daemon can react to the
-failure class. Three of them are not failures: `1` is also what a backup that succeeded
-with warnings returns, `16` means no backup was performed for a benign reason, and
-`130` means the run was cancelled by hand. Only `2` through `15` are unambiguous
-failures. A wrapper that treats "non-zero" as "page someone" raises false alarms on
-warning-only runs, on overlapping runs, on paused hosts, and on anything you Ctrl+C.
+failure class. Four of them are not failures: `1` is also what a backup that succeeded
+with warnings returns, `16` means no backup was performed for a benign reason, `17`
+means a guard cleanup ran fine but the storage is still locked, and `130` means the run
+was cancelled by hand. Only `2` through `15` are unambiguous failures. A wrapper that
+treats "non-zero" as "page someone" raises false alarms on warning-only runs, on
+overlapping runs, on paused hosts, on a datastore that is simply still mounted, and on
+anything you Ctrl+C.
 
 | Code | Name | Meaning |
 |------|------|---------|
@@ -1150,6 +1152,7 @@ warning-only runs, on overlapping runs, on paused hosts, and on anything you Ctr
 | `14` | security error | The security check reported errors |
 | `15` | encryption error | Error during encryption setup or processing |
 | `16` | backup skipped | No backup was performed, for a benign reason: another backup already held the lock, or `BACKUP_ENABLED=false`. Not a failure |
+| `17` | guards still in place | `--cleanup-guards` only. The cleanup ran without error but guard mounts or immutable flags are left behind, or the remaining count could not be confirmed. Also returned by `--cleanup-guards --dry-run` when it finds guards. Not a failure: unmount the datastore and retry. A `1` from that mode means the cleanup itself failed |
 | `130` | interrupted | The run was cancelled with Ctrl+C (128 plus SIGINT) |
 
 A backup that finishes with warnings (no errors) is promoted from `0` to exit `1`

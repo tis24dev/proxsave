@@ -804,11 +804,14 @@ USE_COLOR=false proxsave
 | `14` | security error | Errors detected by the security check |
 | `15` | encryption error | Error during encryption setup or processing |
 | `16` | backup skipped | No backup was performed, for a benign reason: another backup already held the lock, or `BACKUP_ENABLED=false`. Not a failure |
+| `17` | guards still in place | `--cleanup-guards` only. The cleanup itself ran fine, but the storage is still locked: guard mounts or immutable flags are left behind (typically hidden under a live mount), or the remaining count could not be confirmed. Also returned by `--cleanup-guards --dry-run` when it finds guards. Not a failure — unmount the datastore and retry |
 | `130` | interrupted | The run was cancelled with Ctrl+C (128 plus SIGINT) |
 
-**Note**: `16` is the one non-zero code that does not mean something went wrong. A
+**Note**: `16` and `17` are the non-zero codes that do not mean something went wrong. A
 wrapper of the form `proxsave --backup || alert` will page you every time two runs
-overlap unless it excludes it.
+overlap unless it excludes `16`. For `--cleanup-guards`, `17` is the one to act on but
+not to report as a bug: `1` there means the cleanup itself failed, which is a different
+remedy.
 
 **Note**: Cloud storage is non-critical. A cloud upload failure does **not** abort the
 run with a storage error (`5`): the local backup is kept, but the failure is recorded as a

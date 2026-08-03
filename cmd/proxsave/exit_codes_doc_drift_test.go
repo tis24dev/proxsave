@@ -1,0 +1,130 @@
+package main
+
+import (
+	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
+	"os"
+	"regexp"
+	"strconv"
+	"strings"
+	"testing"
+)
+
+// exitCodeDocs are the two references that publish the exit-code contract. Both carry a
+// table AND a prose sentence counting how many non-zero codes are not failures, so both
+// go stale together when a code is added.
+var exitCodeDocs = []struct {
+	name string
+	path string
+}{
+	{"CLI_REFERENCE.md", "../../docs/CLI_REFERENCE.md"},
+	{"TROUBLESHOOTING.md", "../../docs/TROUBLESHOOTING.md"},
+}
+
+// TestExitCodesAreDocumented pins the exit-code contract against doc drift. Exit codes
+// are a SCRIPTING interface: an operator gates a cron wrapper or a monitoring probe on
+// them, and the only place they can learn what a code means is these two files. A code
+// that exists in the binary but not in the docs is indistinguishable, from outside, from
+// a code that means "something broke".
+//
+// This is not hypothetical. ExitGuardsPending (17) shipped with --cleanup-guards and was
+// absent from both documents, which went on asserting that 16 was the only non-zero code
+// that does not mean a failure -- so a wrapper written from the docs would have paged
+// someone for a datastore that was merely still mounted.
+//
+// The constants are read from the source rather than listed here on purpose: a test that
+// repeats the list drifts in exactly the same way the docs did.
+func TestExitCodesAreDocumented(t *testing.T) {
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, "../../internal/types/exit_codes.go", nil, 0)
+	if err != nil {
+		t.Fatalf("parse exit_codes.go: %v", err)
+	}
+
+	codes := map[string]int{}
+	for _, decl := range file.Decls {
+		gen, ok := decl.(*ast.GenDecl)
+		if !ok || gen.Tok != token.CONST {
+			continue
+		}
+		for _, spec := range gen.Specs {
+			value, ok := spec.(*ast.ValueSpec)
+			if !ok || len(value.Names) != 1 || len(value.Values) != 1 {
+				continue
+			}
+			lit, ok := value.Values[0].(*ast.BasicLit)
+			if !ok || lit.Kind != token.INT {
+				continue
+			}
+			n, convErr := strconv.Atoi(lit.Value)
+			if convErr != nil {
+				continue
+			}
+			codes[value.Names[0].Name] = n
+		}
+	}
+	if len(codes) < 10 {
+		t.Fatalf("found only %d exit-code constants; the matcher has gone stale", len(codes))
+	}
+	// The interrupted code lives in main (128 + SIGINT), not in the types package, but it
+	// is part of the same published contract.
+	codes["exitCodeInterrupted"] = exitCodeInterrupted
+
+	for _, doc := range exitCodeDocs {
+		body, readErr := os.ReadFile(doc.path)
+		if readErr != nil {
+			t.Fatalf("read %s: %v", doc.name, readErr)
+		}
+		text := string(body)
+		var missing []string
+		for name, code := range codes {
+			// A table row for the code: "| `17` | ... |". Matching the row rather than the
+			// bare number avoids passing on an unrelated "17" elsewhere in the prose.
+			row := regexp.MustCompile(`(?m)^\|\s*` + "`" + strconv.Itoa(code) + "`" + `\s*\|`)
+			if !row.MatchString(text) {
+				missing = append(missing, fmt.Sprintf("%s (%d)", name, code))
+			}
+		}
+		if len(missing) > 0 {
+			t.Errorf("%s has no table row for %d exit code(s): %s",
+				doc.name, len(missing), strings.Join(missing, ", "))
+		}
+	}
+}
+
+// TestExitCodeProseCountsTheBenignCodes pins the sentence a reader actually acts on.
+// Both documents state, in prose, how many non-zero codes are NOT failures. That count
+// is what tells someone whether their "|| alert" wrapper is safe, and it is what went
+// wrong last time: the table could have been fixed while the sentence still said the
+// wrong number, and the sentence is the part people read.
+//
+// The benign non-zero codes today are 1 (a run that succeeded with warnings), 16
+// (nothing to back up), 17 (guards still holding the storage) and 130 (cancelled).
+func TestExitCodeProseCountsTheBenignCodes(t *testing.T) {
+	benign := []string{"`1`", "`16`", "`17`", "`130`"}
+
+	for _, doc := range exitCodeDocs {
+		body, err := os.ReadFile(doc.path)
+		if err != nil {
+			t.Fatalf("read %s: %v", doc.name, err)
+		}
+		text := string(body)
+
+		// The claim that one specific code is the only benign one must not survive.
+		for _, stale := range []string{
+			"`16` is the one non-zero code",
+			"Three of them are not failures",
+		} {
+			if strings.Contains(text, stale) {
+				t.Errorf("%s still carries the pre-17 claim %q", doc.name, stale)
+			}
+		}
+		for _, code := range benign {
+			if !strings.Contains(text, code) {
+				t.Errorf("%s never mentions benign exit code %s", doc.name, code)
+			}
+		}
+	}
+}
