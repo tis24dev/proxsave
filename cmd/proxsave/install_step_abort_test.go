@@ -107,9 +107,26 @@ func TestEveryTUIInstallStepIsGuarded(t *testing.T) {
 		t.Fatal("runInstallTUI not found; this test can no longer see the driver it pins")
 	}
 
-	// Error identifiers produced by a flow call, and identifiers that reach a decision.
-	stepErrors := map[string]token.Pos{}
-	guarded := map[string]bool{}
+	// Every flowinstall step error, and every identifier reaching a decision, kept as
+	// (name, position) OCCURRENCES rather than as a set of names.
+	//
+	// Names alone are not identifiers here. runInstallTUI reuses `err` for several
+	// flowinstall calls, so a single map keyed by name collapsed them into one entry --
+	// the count was wrong, only the last position survived, and one guarded `err`
+	// anywhere in the function marked every other `err` guarded too. A step whose error
+	// never reached a decision passed unnoticed, which is the whole thing this test
+	// exists to catch.
+	//
+	// An occurrence is guarded when a decision mentions that name after the assignment
+	// and before the NEXT assignment to the same name: the window in which the value
+	// still belongs to this step. That is positional, so a guard sitting in a different
+	// branch of the same window still counts -- an approximation, but a strictly tighter
+	// one than treating the whole function as a single scope.
+	type occurrence struct {
+		name string
+		pos  token.Pos
+	}
+	var stepErrors, guards []occurrence
 
 	ast.Inspect(driver, func(node ast.Node) bool {
 		switch n := node.(type) {
@@ -131,7 +148,7 @@ func TestEveryTUIInstallStepIsGuarded(t *testing.T) {
 				return true
 			}
 			if ident, ok := n.Lhs[1].(*ast.Ident); ok && ident.Name != "_" {
-				stepErrors[ident.Name] = n.Pos()
+				stepErrors = append(stepErrors, occurrence{name: ident.Name, pos: n.Pos()})
 			}
 		case *ast.CallExpr:
 			// abortInstallOnOptionalStep(ctx, bootstrap, "step", <errIdent>) or mapUIDeath(<errIdent>)
@@ -147,7 +164,7 @@ func TestEveryTUIInstallStepIsGuarded(t *testing.T) {
 			}
 			for _, arg := range n.Args {
 				if ident, ok := arg.(*ast.Ident); ok {
-					guarded[ident.Name] = true
+					guards = append(guards, occurrence{name: ident.Name, pos: n.Pos()})
 				}
 			}
 		}
@@ -158,9 +175,31 @@ func TestEveryTUIInstallStepIsGuarded(t *testing.T) {
 		t.Fatal("no flowinstall step calls found in runInstallTUI; the matcher has gone stale")
 	}
 	var unguarded []string
-	for name, pos := range stepErrors {
-		if !guarded[name] {
-			unguarded = append(unguarded, fmt.Sprintf("%s (%s)", name, fset.Position(pos)))
+	for _, step := range stepErrors {
+		// The window this value owns: from its assignment to the next assignment that
+		// rebinds the same name, or to the end of the driver.
+		windowEnd, bounded := token.Pos(0), false
+		for _, other := range stepErrors {
+			if other.name != step.name || other.pos <= step.pos {
+				continue
+			}
+			if !bounded || other.pos < windowEnd {
+				windowEnd, bounded = other.pos, true
+			}
+		}
+		decided := false
+		for _, g := range guards {
+			if g.name != step.name || g.pos <= step.pos {
+				continue
+			}
+			if bounded && g.pos >= windowEnd {
+				continue
+			}
+			decided = true
+			break
+		}
+		if !decided {
+			unguarded = append(unguarded, fmt.Sprintf("%s (%s)", step.name, fset.Position(step.pos)))
 		}
 	}
 	if len(unguarded) > 0 {
