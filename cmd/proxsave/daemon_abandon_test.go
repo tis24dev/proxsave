@@ -1707,3 +1707,36 @@ func TestDaemonFileCleanupCannotHoldTheExit(t *testing.T) {
 		t.Fatal("the exit is hostage to the identity dir: on a wedged BaseDir the daemon never returns from run() and systemd never restarts it")
 	}
 }
+
+// TestExitProvesLockWasTakenClassifiesEveryDocumentedCode pins the fallback evidence rule used
+// when a marker is too corrupt to name a probe-able pid. The set is only sound while no
+// PRE-lock path reports one of the accepted codes, which is a constraint on the whole tree
+// rather than a local property: the encryption-setup abort in backup_mode.go reported
+// ExitGenericError until it was found to be exactly such a path. Anything added to the accepted
+// column has to be traced back to a producer that runs after RunPreBackupChecks.
+func TestExitProvesLockWasTakenClassifiesEveryDocumentedCode(t *testing.T) {
+	// Accepted: reached the end of a backup, or failed in a phase that only RunGoBackup can
+	// reach -- both strictly after the lock gate passed.
+	for _, c := range []types.ExitCode{
+		types.ExitSuccess, types.ExitGenericError,
+		types.ExitStorageError, types.ExitVerificationError, types.ExitCollectionError,
+		types.ExitArchiveError, types.ExitCompressionError, types.ExitEncryptionError,
+	} {
+		if !exitProvesLockWasTaken(c.Int()) {
+			t.Errorf("exit %d is only produced after the lock gate; it must count as proof", c.Int())
+		}
+	}
+	// Rejected: every code a run can report WITHOUT having reached the lock. ExitConfigError is
+	// the one this list exists for -- it is what an aborted or timed-out encryption prompt now
+	// returns, and accepting it would clear a marker over a live orphan.
+	for _, c := range []types.ExitCode{
+		types.ExitConfigError, types.ExitEnvironmentError, types.ExitBackupError,
+		types.ExitNetworkError, types.ExitPermissionError, types.ExitDiskSpaceError,
+		types.ExitPanicError, types.ExitSecurityError, types.ExitBackupSkipped,
+		types.ExitGuardsPending,
+	} {
+		if exitProvesLockWasTaken(c.Int()) {
+			t.Errorf("exit %d can be reported before the lock gate; it must not count as proof", c.Int())
+		}
+	}
+}

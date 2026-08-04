@@ -1315,6 +1315,12 @@ func (d *daemon) clearAbandonMarkerOnCompletedRun(reason string, exitCode int) {
 	}
 	if !exitProvesLockWasTaken(exitCode) {
 		logging.Info("daemon: %s, but the marker names no pid this daemon can check and the run did not reach the backup lock, so nothing proves it was taken; keeping the service-alive check DOWN", reason)
+		// Same correction the pid branch above makes, for the same reason: the startup note
+		// says "no backup has completed since", a run just did, and every beat from here on
+		// would transmit that as fact. This branch can say less -- with no checkable pid there
+		// is nothing to point the operator at -- but it must not keep asserting something it
+		// now knows to be false.
+		d.setAbandonNote("a previous run abandoned a backup child and the marker names no pid this daemon can check; backups have run since, but none of them proved it reached the backup lock")
 		return
 	}
 	d.clearAbandonMarker(reason)
@@ -1349,12 +1355,32 @@ func (d *daemon) abandonNoteNow() string {
 // caution: on such a host it is a service-alive DOWN that no run, no restart and no reboot can
 // lift, which is the same unliftable false RED the pid identity check exists to prevent.
 //
-// Everything else is a failure code and proves nothing -- a pre-flight gate failure returns
-// ExitBackupError (cmd/proxsave/backup_execution.go, runPreBackupChecks), and a dead mount
-// under the backup path is exactly what fails those gates before the lock is ever reached.
-// ExitBackupSkipped never arrives here: both callers filter it first.
+// The per-phase failure codes qualify for the opposite reason: they can ONLY be minted by
+// RunGoBackup's phases (internal/orchestrator/backup_run_phases.go builds a BackupError with
+// them, and cmd/proxsave/backup_execution.go returns backupErr.Code), and that runs strictly
+// after RunPreBackupChecks succeeded -- which means the lock gate passed. A run that died in
+// collection or encryption is a failed backup, but it is proof the orphan was not holding the
+// lock. Refusing them would strand the degrade on a host whose backups fail for an unrelated
+// reason: an unliftable false RED, the same failure the pid identity check exists to prevent.
+//
+// Everything else proves nothing. A pre-flight gate failure returns ExitBackupError, and a
+// dead mount under the backup path is exactly what fails those gates before the lock is ever
+// reached. ExitBackupSkipped never arrives here: both callers filter it first.
+//
+// The set is only sound because no PRE-lock path reports one of these codes. That is a real
+// constraint on the rest of the tree, not an observation: the encryption-setup abort in
+// cmd/proxsave/backup_mode.go returned ExitGenericError until it was found to be exactly such
+// a path, and now returns ExitConfigError. Anything added here must be checked the same way.
 func exitProvesLockWasTaken(exitCode int) bool {
-	return exitCode == types.ExitSuccess.Int() || exitCode == types.ExitGenericError.Int()
+	switch exitCode {
+	case types.ExitSuccess.Int(), types.ExitGenericError.Int(),
+		types.ExitStorageError.Int(), types.ExitVerificationError.Int(),
+		types.ExitCollectionError.Int(), types.ExitArchiveError.Int(),
+		types.ExitCompressionError.Int(), types.ExitEncryptionError.Int():
+		return true
+	default:
+		return false
+	}
 }
 
 // hostBootUnix reads the host's boot time from /proc/stat "btime", in Unix seconds. It

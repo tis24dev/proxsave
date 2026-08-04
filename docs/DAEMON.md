@@ -101,7 +101,7 @@ WantedBy=multi-user.target
 
 ## On-disk state files
 
-The daemon coordinates through five small files under `<BASE_DIR>/identity/`, all written atomically (temp file then rename, mode `0600`) and deliberately not made immutable so they can be rewritten:
+The daemon coordinates through six small files under `<BASE_DIR>/identity/`, all written atomically (temp file then rename, mode `0600`) and deliberately not made immutable so they can be rewritten:
 
 | File | Purpose |
 |------|---------|
@@ -110,8 +110,10 @@ The daemon coordinates through five small files under `<BASE_DIR>/identity/`, al
 | `.healthcheck_status.json` | the last ping outcome per check, read back by the run phase to report real transmission; a corrupt file is quarantined to `.corrupt` and reset |
 | `.notify_results.json` | the backup child's per-channel notification severities, handed to the daemon to drive the `proxsave-notify-*` pings |
 | `.manual_backup_outcome.json` | a standalone run's outcome, handed off for the daemon to ping |
+| `.daemon_abandoned.json` | a backup child the kernel would not let the daemon reap: the orphan's pid and start time, the run id, and when it happened. See [the D-state caveat](#caveat-uninterruptible-sleep-d-state) |
 
 `.daemon.pid` and `.daemon_info.json` are written at startup and removed on shutdown.
+`.daemon_abandoned.json` is the exception that deliberately **survives** shutdown — that is its whole purpose — and is removed only once something shows backups can run again.
 
 ## Configuration keys (`backup.env`)
 
@@ -140,7 +142,9 @@ A backup child wedged in uninterruptible sleep on a dead mount cannot be killed 
 3. The daemon exits `4` (backup error) and **systemd restarts it** (`Restart=always`, `RestartSec=10`). The restart is what clears out the goroutines and file descriptors stranded behind a child that can never be reaped. Expect the gap to be minutes rather than the nominal ten seconds: the orphan is still in the unit's cgroup, so the stop job sits through its timeout waiting for a cgroup that cannot drain.
 4. The restarted daemon reads the marker and keeps `proxsave-alive` DOWN instead of sending its usual heartbeat, so the outage does not look like it recovered ten seconds later. The orphan itself stays in D state; nothing in userspace can clear that.
 
-The degrade is lifted -- and the marker deleted -- as soon as anything shows backups are working again: a backup that completes while the orphan is gone (scheduled or your own `proxsave --backup`, which the daemon picks up through the usual handoff), the orphan disappearing on its own (re-checked on every heartbeat, so a mount that comes back recovers within one interval), or a reboot. It is deliberately not lifted by a failed run alone: the backup lock the orphan holds is checked *last*, after the directory and disk-space checks that the same dead mount fails first, so a run can fail without ever having got near the orphan. A run that finished with warnings (exit `1`) does count as completing -- it reached the end of the backup, and so passed the lock.
+What lifts the degrade -- and deletes the marker -- is **the orphan being gone**, not a backup succeeding. The daemon re-checks it on every heartbeat and after every completed run, identifying the process by its pid *and* its start time, since the kernel recycles pid numbers. So a mount that comes back recovers within one heartbeat interval; a reboot clears it; and a run that completes while the orphan is still there does **not** clear it, whatever its exit code. Backups demonstrably working and `proxsave-alive` DOWN can therefore coexist, by design: the orphan is still holding a lock nobody can take from it.
+
+The exit code only matters in one fallback, when the marker is too corrupt to name a pid the daemon can check. There is nothing to probe, so the run's own outcome is the only evidence, and only a code that proves the run got *past* the lock counts: `0`, `1` (a clean run with warnings), or a per-phase failure such as a storage or encryption error, all of which are reached after the lock gate. A pre-flight failure -- the directory or disk-space check that the same dead mount fails first -- proves nothing and lifts nothing.
 
 If backups are administratively off (`BACKUP_ENABLED=false`) the marker is kept but the alive check is left alone -- with backups off nothing could ever lift the degrade, and `proxsave-backup` is already down on its own merits.
 
