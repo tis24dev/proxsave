@@ -1632,6 +1632,20 @@ func TestParseEnvFileHandlesExportLines(t *testing.T) {
 // loader, so both sides of a comparison are read by the code that ships.
 func loadEnvForTest(t *testing.T, name, content string) *Config {
 	t.Helper()
+	// Neutralise every environment override first. LoadConfigWithBaseDir ends in
+	// loadEnvOverrides, so an allowlisted variable set in the developer's shell or in a CI
+	// job lands on EVERY config this helper builds. A test that compares two of them then
+	// sees them agree because of the override rather than because the code agrees, and a
+	// real divergence for that key passes unnoticed -- the exact class of defect
+	// TestBoolDefaultsMatchTheShippedTemplate exists to catch.
+	//
+	// Setting them empty rather than unsetting them is deliberate: loadEnvOverrides skips
+	// an empty value, t.Setenv restores the original, and unlike os.Unsetenv it refuses to
+	// run inside a parallel test instead of corrupting a sibling's environment.
+	for _, key := range envOverrideKeys {
+		t.Setenv(key, "")
+	}
+
 	path := filepath.Join(t.TempDir(), name)
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		t.Fatalf("write %s: %v", name, err)
