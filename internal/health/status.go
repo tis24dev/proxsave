@@ -67,7 +67,14 @@ type PingRecord struct {
 	// sensor panel is red for a failed backup instead of green (F09-02). It is orthogonal to
 	// OK (which is only whether the ping transmitted): a perfectly transmitted /fail is
 	// OK==true AND Down==true. Unused (false) for the alive heartbeat, whose liveness has no
-	// outcome. Omitted when false so old readers see byte-identical records on a downgrade.
+	// outcome -- and that stays true of the daemon's alive-degrade /fail on both of its paths.
+	// The exit-time degrade is transmitted but deliberately NOT recorded at all: a record
+	// would only refresh the liveness timestamp of a daemon that is at that moment dying. The
+	// periodic degrade a RESTARTED daemon sends while an abandoned child is still outstanding
+	// IS recorded, but as a plain liveness trace with Down false -- that daemon really is
+	// alive, no reader of this kind consults Down anyway (see sensors.go's alive row and
+	// Diagnose), and the DOWN signal rides the remote /fail where the alerting lives. Omitted
+	// when false so old readers see byte-identical records on a downgrade.
 	Down bool `json:"down,omitempty"`
 }
 

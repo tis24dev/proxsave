@@ -22,6 +22,8 @@ type fakeReporter struct {
 	finished         int
 	hung             int
 	beats            int
+	aliveDown        int    // AliveDegraded calls: the /fail that drives the service-alive check DOWN
+	lastAliveReason  string // the BODY of that /fail: what the operator actually reads in the alert
 	lastCode         int
 	lastRid          string
 	lastTail         string
@@ -42,6 +44,16 @@ func (f *fakeReporter) Heartbeat(ctx context.Context) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.beats++
+	return nil
+}
+func (f *fakeReporter) AliveDegraded(ctx context.Context, reason string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if !f.alive { // no alive URL resolved: mirror health.Reporter's ErrNoAliveURL
+		return health.ErrNoAliveURL
+	}
+	f.aliveDown++
+	f.lastAliveReason = reason
 	return nil
 }
 func (f *fakeReporter) RunStarted(ctx context.Context, rid string) error {
@@ -106,7 +118,7 @@ func (f *fakeReporter) Ping(ctx context.Context, name, suffix, rid, body, label 
 func (f *fakeReporter) snapshot() fakeReporter {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	return fakeReporter{started: f.started, finished: f.finished, hung: f.hung, beats: f.beats, lastCode: f.lastCode, lastRid: f.lastRid, lastTail: f.lastTail, updates: f.updates, updatesReported: f.updatesReported, lastAvailable: f.lastAvailable, pings: append([]fakePing(nil), f.pings...)}
+	return fakeReporter{started: f.started, finished: f.finished, hung: f.hung, beats: f.beats, aliveDown: f.aliveDown, lastAliveReason: f.lastAliveReason, lastCode: f.lastCode, lastRid: f.lastRid, lastTail: f.lastTail, updates: f.updates, updatesReported: f.updatesReported, lastAvailable: f.lastAvailable, pings: append([]fakePing(nil), f.pings...)}
 }
 
 func newTestDaemon(t *testing.T, rep backupReporter, cmdFn func(ctx context.Context) *exec.Cmd, maxRun time.Duration) *daemon {

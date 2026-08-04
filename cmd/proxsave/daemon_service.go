@@ -37,6 +37,23 @@ var daemonUnitPath = filepath.Join(daemonUnitDir, daemonUnitName)
 // supervisor (Restart=always); the daemon schedules internally. A non-empty
 // configPath is pinned with --config so the unit uses the same backup.env the
 // install/upgrade wrote.
+//
+// The kill directives are deliberately LEFT AT THEIR DEFAULTS (KillMode=control-group,
+// TimeoutStopSec=DefaultTimeoutStopSec). It is tempting to set KillMode=process so that a
+// backup child the daemon had to abandon (abandonChild in daemon.go) -- parked in
+// TASK_UNINTERRUPTIBLE, still inside this unit's cgroup, never going to leave it -- cannot
+// hold the stop job through its timeout phases and delay Restart=always. That trade is a bad
+// one. The cgroup-wide kill is the ONLY thing that collects the abandoned child's own
+// descendants: the daemon signals a single pid (cmd.Cancel -> cmd.Process.Signal, and
+// os/exec's WaitDelay escalation is likewise Process.Kill), nothing here ever creates or
+// signals a process group, and a child stuck in D state cannot run its own context-cancel
+// unwind to tear down the tar/pigz/rclone/proxmox-backup-client processes it started against
+// the same wedged mount. Under KillMode=process those survive the daemon's exit, its restart,
+// and every ordinary `systemctl stop`, with nothing left to sweep them; systemd.kill(5) says
+// as much ("not recommended ... allows processes to escape the service manager's lifecycle").
+// Leaving the default costs a delayed restart -- minutes, for a scheduler that runs once a
+// day -- and buys back descendant cleanup on every stop. Nothing in the unit changed for the
+// abandon path, so nothing has to be redelivered to hosts already running an installed unit.
 func buildDaemonUnit(execToken, configPath string) string {
 	exec := strings.TrimSpace(execToken)
 	if exec == "" {
