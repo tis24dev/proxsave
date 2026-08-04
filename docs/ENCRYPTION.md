@@ -225,9 +225,13 @@ ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIExampleSSHpublicKeyForAgeRecipient
 >
 > ```bash
 > # With bundling left at its default the raw .age is not on disk: untar the bundle first.
-> mkdir -p /tmp/emergency
+> # install -d -m 700, not mkdir -p: the decrypted archive lands in this directory, and
+> # /tmp is shared, so a 0755 workspace hands the node's configuration to every local
+> # account. Keep the plaintext inside it and delete it when you are done.
+> install -d -m 700 /tmp/emergency
 > tar -xf <HOST>-backup-YYYYMMDD-HHMMSS.tar.xz.age.bundle.tar -C /tmp/emergency
-> age -d -i ~/.ssh/id_ed25519 -o backup.tar.xz /tmp/emergency/<HOST>-backup-YYYYMMDD-HHMMSS.tar.xz.age
+> age -d -i ~/.ssh/id_ed25519 -o /tmp/emergency/backup.tar.xz /tmp/emergency/<HOST>-backup-YYYYMMDD-HHMMSS.tar.xz.age
+> rm -rf /tmp/emergency   # once you have what you needed
 > ```
 
 ### Interactive Wizard
@@ -369,10 +373,13 @@ unwrap the bundle first (see [Emergency Decryption Without
 Configuration](#emergency-decryption-without-configuration)):
 
 ```bash
-mkdir -p /tmp/emergency
+# 0700 workspace: the decrypted archive below is plaintext and /tmp is shared.
+install -d -m 700 /tmp/emergency
 tar -xf <HOST>-backup-YYYYMMDD-HHMMSS.tar.xz.age.bundle.tar -C /tmp/emergency
 age --decrypt -i /path/to/age-keys.txt \
-  /tmp/emergency/<HOST>-backup-YYYYMMDD-HHMMSS.tar.xz.age > <HOST>-backup-YYYYMMDD-HHMMSS.tar.xz
+  /tmp/emergency/<HOST>-backup-YYYYMMDD-HHMMSS.tar.xz.age \
+  > /tmp/emergency/<HOST>-backup-YYYYMMDD-HHMMSS.tar.xz
+rm -rf /tmp/emergency   # once you have what you needed
 ```
 
 > **Passphrase recipients are not native age passphrases.** A passphrase recipient
@@ -529,8 +536,9 @@ tar -tf <HOST>-backup-YYYYMMDD-HHMMSS.tar.xz.age.bundle.tar
 # <HOST>-backup-YYYYMMDD-HHMMSS.tar.xz.age
 
 # 2. Unwrap. The bundle is an uncompressed tar with basename-only entries,
-#    so extract it into a directory of your own.
-mkdir -p /tmp/emergency
+#    so extract it into a directory of your own. 0700, not the 0755 mkdir -p would
+#    give it: everything from step 4 on is plaintext and /tmp is shared.
+install -d -m 700 /tmp/emergency
 tar -xf <HOST>-backup-YYYYMMDD-HHMMSS.tar.xz.age.bundle.tar -C /tmp/emergency
 cd /tmp/emergency
 
@@ -542,9 +550,13 @@ sha256sum -c <HOST>-backup-YYYYMMDD-HHMMSS.tar.xz.age.sha256
 age --decrypt -i /path/to/age-keys.txt \
   <HOST>-backup-YYYYMMDD-HHMMSS.tar.xz.age > <HOST>-backup-YYYYMMDD-HHMMSS.tar.xz
 
-# 5. Extract the inner archive
-mkdir -p /tmp/emergency-restore
+# 5. Extract the inner archive. This is the node's configuration in the clear --
+#    /etc/shadow, /etc/pve/priv and the rest -- so the destination is 0700 too.
+install -d -m 700 /tmp/emergency-restore
 tar -xf <HOST>-backup-YYYYMMDD-HHMMSS.tar.xz -C /tmp/emergency-restore
+
+# 6. When you are done, remove both workspaces: nothing else will.
+rm -rf /tmp/emergency /tmp/emergency-restore
 ```
 
 Notes on this recipe:
@@ -602,7 +614,9 @@ compression only when it is given a **file name**, so piping a compressed stream
 used.
 
 ```bash
-mkdir -p /tmp/emergency
+# 0700: archive.inner below is the whole configuration in the clear, and although
+# this recipe deletes it, /tmp is shared for as long as the check runs.
+install -d -m 700 /tmp/emergency
 tar -xOf <HOST>-backup-YYYYMMDD-HHMMSS.tar.xz.age.bundle.tar \
     <HOST>-backup-YYYYMMDD-HHMMSS.tar.xz.age \
   | age --decrypt -i /path/to/age-keys.txt > /tmp/emergency/archive.inner
