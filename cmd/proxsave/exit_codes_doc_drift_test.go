@@ -37,6 +37,39 @@ var exitCodeDocs = []struct {
 // The constants are read from the source rather than listed here on purpose: a test that
 // repeats the list drifts in exactly the same way the docs did.
 func TestExitCodesAreDocumented(t *testing.T) {
+	codes := declaredExitCodes(t)
+	// The interrupted code lives in main (128 + SIGINT), not in the types package, but it
+	// is part of the same published contract.
+	codes["exitCodeInterrupted"] = exitCodeInterrupted
+
+	for _, doc := range exitCodeDocs {
+		body, readErr := os.ReadFile(doc.path)
+		if readErr != nil {
+			t.Fatalf("read %s: %v", doc.name, readErr)
+		}
+		text := string(body)
+		var missing []string
+		for name, code := range codes {
+			// A table row for the code: "| `17` | ... |". Matching the row rather than the
+			// bare number avoids passing on an unrelated "17" elsewhere in the prose.
+			row := regexp.MustCompile(`(?m)^\|\s*` + "`" + strconv.Itoa(code) + "`" + `\s*\|`)
+			if !row.MatchString(text) {
+				missing = append(missing, fmt.Sprintf("%s (%d)", name, code))
+			}
+		}
+		if len(missing) > 0 {
+			t.Errorf("%s has no table row for %d exit code(s): %s",
+				doc.name, len(missing), strings.Join(missing, ", "))
+		}
+	}
+}
+
+// declaredExitCodes reads the exit-code constants straight out of
+// internal/types/exit_codes.go. Reading them from the source rather than restating them
+// here is what keeps a list from drifting the way the documents did, so every caller
+// inherits that property instead of growing its own copy.
+func declaredExitCodes(t *testing.T) map[string]int {
+	t.Helper()
 	fset := token.NewFileSet()
 	file, err := parser.ParseFile(fset, "../../internal/types/exit_codes.go", nil, 0)
 	if err != nil {
@@ -91,30 +124,7 @@ func TestExitCodesAreDocumented(t *testing.T) {
 	if len(codes) == 0 {
 		t.Fatalf("no exit-code constants found; the matcher has gone stale")
 	}
-	// The interrupted code lives in main (128 + SIGINT), not in the types package, but it
-	// is part of the same published contract.
-	codes["exitCodeInterrupted"] = exitCodeInterrupted
-
-	for _, doc := range exitCodeDocs {
-		body, readErr := os.ReadFile(doc.path)
-		if readErr != nil {
-			t.Fatalf("read %s: %v", doc.name, readErr)
-		}
-		text := string(body)
-		var missing []string
-		for name, code := range codes {
-			// A table row for the code: "| `17` | ... |". Matching the row rather than the
-			// bare number avoids passing on an unrelated "17" elsewhere in the prose.
-			row := regexp.MustCompile(`(?m)^\|\s*` + "`" + strconv.Itoa(code) + "`" + `\s*\|`)
-			if !row.MatchString(text) {
-				missing = append(missing, fmt.Sprintf("%s (%d)", name, code))
-			}
-		}
-		if len(missing) > 0 {
-			t.Errorf("%s has no table row for %d exit code(s): %s",
-				doc.name, len(missing), strings.Join(missing, ", "))
-		}
-	}
+	return codes
 }
 
 // TestExitCodeProseCountsTheBenignCodes pins the sentence a reader actually acts on.

@@ -1717,26 +1717,55 @@ func TestDaemonFileCleanupCannotHoldTheExit(t *testing.T) {
 func TestExitProvesLockWasTakenClassifiesEveryDocumentedCode(t *testing.T) {
 	// Accepted: reached the end of a backup, or failed in a phase that only RunGoBackup can
 	// reach -- both strictly after the lock gate passed.
-	for _, c := range []types.ExitCode{
-		types.ExitSuccess, types.ExitGenericError,
-		types.ExitStorageError, types.ExitVerificationError, types.ExitCollectionError,
-		types.ExitArchiveError, types.ExitCompressionError, types.ExitEncryptionError,
-	} {
-		if !exitProvesLockWasTaken(c.Int()) {
-			t.Errorf("exit %d is only produced after the lock gate; it must count as proof", c.Int())
-		}
+	accepted := []int{
+		types.ExitSuccess.Int(), types.ExitGenericError.Int(),
+		types.ExitStorageError.Int(), types.ExitVerificationError.Int(),
+		types.ExitCollectionError.Int(), types.ExitArchiveError.Int(),
+		types.ExitCompressionError.Int(), types.ExitEncryptionError.Int(),
 	}
 	// Rejected: every code a run can report WITHOUT having reached the lock. ExitConfigError is
 	// the one this list exists for -- it is what an aborted or timed-out encryption prompt now
 	// returns, and accepting it would clear a marker over a live orphan.
-	for _, c := range []types.ExitCode{
-		types.ExitConfigError, types.ExitEnvironmentError, types.ExitBackupError,
-		types.ExitNetworkError, types.ExitPermissionError, types.ExitDiskSpaceError,
-		types.ExitPanicError, types.ExitSecurityError, types.ExitBackupSkipped,
-		types.ExitGuardsPending,
-	} {
-		if exitProvesLockWasTaken(c.Int()) {
-			t.Errorf("exit %d can be reported before the lock gate; it must not count as proof", c.Int())
+	rejected := []int{
+		types.ExitConfigError.Int(), types.ExitEnvironmentError.Int(), types.ExitBackupError.Int(),
+		types.ExitNetworkError.Int(), types.ExitPermissionError.Int(), types.ExitDiskSpaceError.Int(),
+		types.ExitPanicError.Int(), types.ExitSecurityError.Int(), types.ExitBackupSkipped.Int(),
+		types.ExitGuardsPending.Int(), exitCodeInterrupted,
+	}
+
+	for _, c := range accepted {
+		if !exitProvesLockWasTaken(c) {
+			t.Errorf("exit %d is only produced after the lock gate; it must count as proof", c)
+		}
+	}
+	for _, c := range rejected {
+		if exitProvesLockWasTaken(c) {
+			t.Errorf("exit %d can be reported before the lock gate; it must not count as proof", c)
+		}
+	}
+
+	// Exhaustiveness. Without this the doc comment on exitProvesLockWasTaken is a promise
+	// nothing keeps: a code added to internal/types/exit_codes.go lands in neither list
+	// above, stays unclassified, and this test goes on passing while the function silently
+	// rejects it -- which on the no-usable-pid branch means a degrade nothing can lift.
+	// Whoever adds a code has to trace it to its producer and put it in a column.
+	//
+	// The declared set is read from the source by declaredExitCodes (see
+	// exit_codes_doc_drift_test.go), for the same reason that test reads it: a list
+	// restated here would drift exactly like the one it is checking.
+	classified := map[int]int{}
+	for _, c := range accepted {
+		classified[c]++
+	}
+	for _, c := range rejected {
+		classified[c]++
+	}
+	declared := declaredExitCodes(t)
+	declared["exitCodeInterrupted"] = exitCodeInterrupted
+	for name, code := range declared {
+		if n := classified[code]; n != 1 {
+			t.Errorf("%s (%d) appears in %d of the two columns, want exactly 1: trace it to its producer and classify it",
+				name, code, n)
 		}
 	}
 }
