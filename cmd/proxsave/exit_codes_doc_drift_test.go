@@ -43,7 +43,14 @@ func TestExitCodesAreDocumented(t *testing.T) {
 		t.Fatalf("parse exit_codes.go: %v", err)
 	}
 
+	// Anything this matcher cannot read is recorded, never skipped quietly. The matcher only
+	// understands "Name Type = <int literal>", which is how exit_codes.go declares every code
+	// today. Rewrite one as an iota, an expression, or a grouped spec and it would vanish from
+	// codes -- and a code absent from codes is a code this test stops requiring in the docs,
+	// which is the exact drift the file exists to prevent, reintroduced through its own blind
+	// spot. Failing here forces whoever changes the declaration style to teach the matcher.
 	codes := map[string]int{}
+	var unreadable []string
 	for _, decl := range file.Decls {
 		gen, ok := decl.(*ast.GenDecl)
 		if !ok || gen.Tok != token.CONST {
@@ -51,22 +58,38 @@ func TestExitCodesAreDocumented(t *testing.T) {
 		}
 		for _, spec := range gen.Specs {
 			value, ok := spec.(*ast.ValueSpec)
-			if !ok || len(value.Names) != 1 || len(value.Values) != 1 {
+			if !ok {
+				unreadable = append(unreadable, fmt.Sprintf("%s: not a value spec", fset.Position(spec.Pos())))
+				continue
+			}
+			names := make([]string, 0, len(value.Names))
+			for _, n := range value.Names {
+				names = append(names, n.Name)
+			}
+			label := strings.Join(names, ",")
+			if len(value.Names) != 1 || len(value.Values) != 1 {
+				unreadable = append(unreadable, fmt.Sprintf("%s (%d name(s), %d value(s))", label, len(value.Names), len(value.Values)))
 				continue
 			}
 			lit, ok := value.Values[0].(*ast.BasicLit)
 			if !ok || lit.Kind != token.INT {
+				unreadable = append(unreadable, label+" (value is not an integer literal)")
 				continue
 			}
 			n, convErr := strconv.Atoi(lit.Value)
 			if convErr != nil {
+				unreadable = append(unreadable, fmt.Sprintf("%s (%q: %v)", label, lit.Value, convErr))
 				continue
 			}
-			codes[value.Names[0].Name] = n
+			codes[names[0]] = n
 		}
 	}
-	if len(codes) < 10 {
-		t.Fatalf("found only %d exit-code constants; the matcher has gone stale", len(codes))
+	if len(unreadable) > 0 {
+		t.Fatalf("%d exit-code constant(s) the matcher cannot read, so they are silently exempt from the documentation check: %s",
+			len(unreadable), strings.Join(unreadable, "; "))
+	}
+	if len(codes) == 0 {
+		t.Fatalf("no exit-code constants found; the matcher has gone stale")
 	}
 	// The interrupted code lives in main (128 + SIGINT), not in the types package, but it
 	// is part of the same published contract.
