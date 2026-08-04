@@ -133,4 +133,15 @@ See [CONFIGURATION.md](CONFIGURATION.md) for the full variable reference and [CL
 
 ## Caveat: uninterruptible sleep (D state)
 
-A backup child wedged in uninterruptible sleep on a dead mount cannot be killed even with `SIGKILL` (a kernel limit). The daemon still **reports the hang and moves on**, and the monitor's server-side `/start` plus grace catches it too; the `FS_IO_TIMEOUT` / `safefs` defenses are the layer below this watchdog.
+A backup child wedged in uninterruptible sleep on a dead mount cannot be killed even with `SIGKILL`, and cannot be waited on either (both are kernel limits). The daemon gives the child its normal timeout, then `SIGTERM`, then `SIGKILL`, then 15 more seconds to actually be collected. If it still has not been, the child is **abandoned** and the daemon takes itself out of the way:
+
+1. Both checks go DOWN, in that order: `proxsave-backup` gets the hang report, then `proxsave-alive` is explicitly failed with the orphan's pid and run id in the body. The service-alive check must never stay green while backups are dead, so this is the one situation in which it reports DOWN for a daemon that is provably running.
+2. A marker file, `<BASE_DIR>/identity/.daemon_abandoned.json`, records the abandon so the fact outlives the process.
+3. The daemon exits `4` (backup error) and **systemd restarts it** (`Restart=always`, `RestartSec=10`). The restart is what clears out the goroutines and file descriptors stranded behind a child that can never be reaped. Expect the gap to be minutes rather than the nominal ten seconds: the orphan is still in the unit's cgroup, so the stop job sits through its timeout waiting for a cgroup that cannot drain.
+4. The restarted daemon reads the marker and keeps `proxsave-alive` DOWN instead of sending its usual heartbeat, so the outage does not look like it recovered ten seconds later. The orphan itself stays in D state; nothing in userspace can clear that.
+
+The degrade is lifted -- and the marker deleted -- as soon as anything shows backups are working again: a backup that completes while the orphan is gone (scheduled or your own `proxsave --backup`, which the daemon picks up through the usual handoff), the orphan disappearing on its own (re-checked on every heartbeat, so a mount that comes back recovers within one interval), or a reboot. It is deliberately not lifted by a failed run alone: the backup lock the orphan holds is checked *last*, after the directory and disk-space checks that the same dead mount fails first, so a run can fail without ever having got near the orphan. A run that finished with warnings (exit `1`) does count as completing -- it reached the end of the backup, and so passed the lock.
+
+If backups are administratively off (`BACKUP_ENABLED=false`) the marker is kept but the alive check is left alone -- with backups off nothing could ever lift the degrade, and `proxsave-backup` is already down on its own merits.
+
+Your fastest confirmation is `ps -eo pid,stat,wchan,cmd | grep ' D'`; the monitor's server-side `/start` plus grace catches the same run from the other side, and the `FS_IO_TIMEOUT` / `safefs` defenses are the layer below this watchdog.
