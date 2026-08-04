@@ -12,7 +12,21 @@ import (
 
 	"github.com/tis24dev/proxsave/internal/config"
 	"github.com/tis24dev/proxsave/internal/input"
+	"github.com/tis24dev/proxsave/pkg/utils"
 )
+
+// setEnvValue builds fixture templates for the tests in this package
+// (install_characterization_test.go and the cases below).
+//
+// It lives in a _test.go file so the COMPILER enforces what used to be a comment in
+// config_helpers.go asking production code not to call it. The install wizard routes
+// its writes through installer.ApplyInstallData, and a second path that edits a
+// template key by key is how the two drift apart; production must use
+// installer.SetEnvValueInTemplate or the install engine instead. A note saying so does
+// not stop the next call site from appearing -- an undefined symbol does.
+func setEnvValue(template, key, value string) string {
+	return utils.SetEnvValue(template, key, value)
+}
 
 // ============================================================
 // config_helpers.go tests
