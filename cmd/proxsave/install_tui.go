@@ -12,7 +12,6 @@ import (
 	"github.com/tis24dev/proxsave/internal/installer"
 	"github.com/tis24dev/proxsave/internal/logging"
 	"github.com/tis24dev/proxsave/internal/orchestrator"
-	"github.com/tis24dev/proxsave/internal/safefs"
 	"github.com/tis24dev/proxsave/internal/ui/components"
 	"github.com/tis24dev/proxsave/internal/ui/flows/agesetup"
 	flowinstall "github.com/tis24dev/proxsave/internal/ui/flows/install"
@@ -22,14 +21,17 @@ import (
 var runHealthcheckSelfParamsFn = flowinstall.RunHealthcheckSelfParams
 
 // applySelfHealthcheckParams runs the optional self-mode healthcheck-params step.
-// It returns a non-nil error ONLY when the step must abort the whole install
-// (session death, via fatal = mapUIDeath); a user cancel or any other step error
-// is non-blocking - the step is skipped with a warning, matching the sibling
-// optional install steps.
-func applySelfHealthcheckParams(ctx context.Context, session *shell.Session, baseDir, configPath string, bootstrap *logging.BootstrapLogger, fatal func(error) error) error {
+// It returns a non-nil error ONLY when the step must abort the whole install; a user
+// cancel or any other step error is non-blocking - the step is skipped with a warning,
+// matching the sibling optional install steps.
+//
+// The abort decision is optionalInstallStepAborts, shared with the CLI driver. It used
+// to be a locally passed fatal = mapUIDeath, which knew only about session death and so
+// missed a cancelled run context.
+func applySelfHealthcheckParams(ctx context.Context, session *shell.Session, baseDir, configPath string, bootstrap *logging.BootstrapLogger) error {
 	if err := runHealthcheckSelfParamsFn(ctx, session, baseDir, configPath); err != nil {
-		if mapped := fatal(err); errors.Is(mapped, errInteractiveAborted) {
-			return mapped
+		if abortErr := abortInstallOnOptionalStep(ctx, bootstrap, "Healthcheck self params", err); abortErr != nil {
+			return abortErr
 		}
 		if bootstrap != nil {
 			bootstrap.Warning("Healthcheck self params failed (non-blocking): %v", err)
@@ -126,36 +128,32 @@ func runInstallTUI(ctx context.Context, configPath string, bootstrap *logging.Bo
 		return mapUIDeath(err)
 	}
 
+	decision, err := installer.ResolveExistingConfigDecision(existingAction, configPath)
+	if err != nil {
+		return err
+	}
+
 	var skipConfigWizard bool
 	var wizardData *installer.InstallWizardData
 	baseTemplate := ""
 
-	// Adopt the run time from the cron line this install is about to rewrite, now that
-	// the operator's answer is known. Nothing is written to backup.env here: on Edit
-	// the value is mirrored into baseTemplate below and ApplyInstallData rewrites the
-	// file at the end, so cancelling later leaves the host byte-identical. Keep
-	// existing has no wizard to carry it, so its write is deferred to the commit point.
-	schedulerSeed := deriveSchedulerTimeForExistingConfig(ctx, existingAction, configPath, bootstrap)
-
-	switch existingAction {
-	case installer.ExistingConfigCancel:
+	switch {
+	case decision.AbortInstall:
 		logging.DebugStepBootstrap(bootstrap, "install workflow (tui)", "user cancelled installation")
 		return wrapInstallError(errInteractiveAborted)
-	case installer.ExistingConfigKeepContinue:
+	case decision.SkipConfigWizard:
 		logging.DebugStepBootstrap(bootstrap, "install workflow (tui)", "using existing configuration and skipping wizard")
 		skipConfigWizard = true
-	case installer.ExistingConfigEdit:
+	case decision.FromExistingFile:
 		logging.DebugStepBootstrap(bootstrap, "install workflow (tui)", "editing existing configuration")
-		content, readErr := safefs.ReadFileUnderRoot(configPath)
-		if readErr != nil {
-			return fmt.Errorf("read existing configuration: %w", readErr)
-		}
-		baseTemplate = string(content)
-		if schedulerSeed.Time != "" {
-			// cronFieldDefault reads this to prefill "Run at"; without it the wizard
-			// would offer the 02:00 default instead of the host's real run time.
-			baseTemplate = setEnvValue(baseTemplate, "SCHEDULER_TIME", schedulerSeed.Time)
-		}
+		// Adopt the run time from the cron line this install is about to rewrite, now
+		// that the operator's answer is known. Nothing is written to backup.env here:
+		// ApplyInstallData rewrites the file at the end from this template, so
+		// cancelling later leaves the host byte-identical. cronFieldDefault reads the
+		// mirrored value to prefill "Run at"; without it the wizard would offer the
+		// 02:00 default instead of the host's real run time. Keep existing has no
+		// wizard to carry it, so its write stays deferred to the commit point.
+		baseTemplate = adoptCronRunTimeIntoBase(ctx, decision, configPath, bootstrap)
 	default:
 		logging.DebugStepBootstrap(bootstrap, "install workflow (tui)", "using embedded template")
 		// Overwrite: use embedded template (handled as empty base)
@@ -185,13 +183,7 @@ func runInstallTUI(ctx context.Context, configPath string, bootstrap *logging.Bo
 		// Write configuration file
 		logging.DebugStepBootstrap(bootstrap, "install workflow (tui)", "writing configuration")
 		tmpConfigPath := configPath + ".tmp"
-		defer func() {
-			if _, err := os.Stat(tmpConfigPath); err == nil {
-				_ = os.Remove(tmpConfigPath)
-			}
-		}()
-
-		if err := writeConfigFile(configPath, tmpConfigPath, template); err != nil {
+		if err := installer.WriteConfigFileAtomic(configPath, tmpConfigPath, template); err != nil {
 			return err
 		}
 
@@ -244,6 +236,9 @@ func runInstallTUI(ctx context.Context, configPath string, bootstrap *logging.Bo
 	// based on actionable warning hints like "set BACKUP_*=false to disable".
 	if !skipConfigWizard {
 		auditRes, auditErr := flowinstall.RunPostInstallAudit(ctx, session, execInfo.ExecPath, configPath, false)
+		if abortErr := abortInstallOnOptionalStep(ctx, bootstrap, "Post-install audit", auditErr); abortErr != nil {
+			return abortErr
+		}
 		if bootstrap != nil {
 			if auditErr != nil {
 				bootstrap.Warning("Post-install check failed (non-blocking): %v", auditErr)
@@ -281,30 +276,17 @@ func runInstallTUI(ctx context.Context, configPath string, bootstrap *logging.Bo
 	// returns Shown=false without any UI when Telegram is not centrally enabled.
 	if !skipConfigWizard {
 		telegramRes, telegramErr := flowinstall.RunTelegramSetup(ctx, session, baseDir, configPath, false)
-		if telegramErr != nil && bootstrap != nil {
-			bootstrap.Warning("Telegram setup failed (non-blocking): %v", telegramErr)
+		if abortErr := abortInstallOnOptionalStep(ctx, bootstrap, "Telegram setup", telegramErr); abortErr != nil {
+			return abortErr
 		}
-		if bootstrap != nil && telegramErr == nil {
-			logTelegramSetupBootstrapOutcome(bootstrap, telegramRes.TelegramSetupBootstrap)
-		}
-		if bootstrap != nil && telegramRes.Shown {
-			if telegramRes.Verified {
-				bootstrap.Info("Telegram setup: verified (code=%d)", telegramRes.LastStatusCode)
-			} else if telegramRes.SkippedVerification {
-				bootstrap.Info("Telegram setup: verification skipped by user")
-			} else if telegramRes.CheckAttempts > 0 {
-				bootstrap.Info("Telegram setup: not verified (attempts=%d last=%d %s)", telegramRes.CheckAttempts, telegramRes.LastStatusCode, telegramRes.LastStatusMessage)
-			} else {
-				bootstrap.Info("Telegram setup: not verified (no check performed)")
-			}
-		}
+		logTelegramSetupOutcome(bootstrap, telegramRes, telegramErr)
 
 		// Self-mode healthchecks: collect the ping URLs BEFORE the healthcheck
 		// bootstrap re-reads the config (ordering invariant - eligibility keys off the
 		// written HEALTHCHECK_ALIVE_URL). Only when self was chosen in the wizard.
 		if wizardData != nil && wizardData.HealthcheckMode == "self" {
 			logging.DebugStepBootstrap(bootstrap, "install workflow (tui)", "healthcheck self params")
-			if err := applySelfHealthcheckParams(ctx, session, baseDir, configPath, bootstrap, mapUIDeath); err != nil {
+			if err := applySelfHealthcheckParams(ctx, session, baseDir, configPath, bootstrap); err != nil {
 				return err
 			}
 		}
@@ -314,20 +296,10 @@ func runInstallTUI(ctx context.Context, configPath string, bootstrap *logging.Bo
 		// (self) verify the pasted alive URL is reachable. Eligibility is decided solely
 		// by RunHealthcheckSetup (re-reads the written config); Shown=false with no UI otherwise.
 		hcRes, hcErr := flowinstall.RunHealthcheckSetup(ctx, session, baseDir, configPath, false)
-		if hcErr != nil && bootstrap != nil {
-			bootstrap.Warning("Healthcheck setup failed (non-blocking): %v", hcErr)
+		if abortErr := abortInstallOnOptionalStep(ctx, bootstrap, "Healthcheck setup", hcErr); abortErr != nil {
+			return abortErr
 		}
-		if bootstrap != nil && hcErr == nil && hcRes.Shown {
-			if hcRes.Verified {
-				bootstrap.Info("Healthcheck setup: verified")
-			} else if hcRes.SkippedVerification {
-				bootstrap.Info("Healthcheck setup: check skipped by user")
-			} else if hcRes.CheckAttempts > 0 {
-				bootstrap.Info("Healthcheck setup: not verified (attempts=%d)", hcRes.CheckAttempts)
-			} else {
-				bootstrap.Info("Healthcheck setup: not verified (no check performed)")
-			}
-		}
+		logHealthcheckSetupOutcome(bootstrap, hcRes, hcErr)
 	}
 
 	// All interactive steps are done. Unlike the CLI, the TUI keeps the ALTSCREEN

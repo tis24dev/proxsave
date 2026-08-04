@@ -44,6 +44,11 @@ func TestExitCodeSeverity(t *testing.T) {
 		{"generic-error-with-warnings", types.ExitGenericError.Int(), warned, severityWarning},
 		{"config-error", types.ExitConfigError.Int(), clean, severityError},
 		{"config-error-with-warnings", types.ExitConfigError.Int(), warned, severityError},
+		// 17 is a state, not a failure: cleanup_guards_verdict.go logs it at Warning and both
+		// exit-code tables say "not a failure". A red footer over it tells the operator to file
+		// a bug for an outcome whose remedy is to unmount and retry.
+		{"guards-pending", types.ExitGuardsPending.Int(), clean, severityWarning},
+		{"guards-pending-with-warnings", types.ExitGuardsPending.Int(), warned, severityWarning},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

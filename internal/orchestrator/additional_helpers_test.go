@@ -1079,6 +1079,8 @@ func TestShowRestorePlanOutputsPaths(t *testing.T) {
 		SystemType:         SystemTypePVE,
 	}
 
+	ui := newCLIWorkflowUI(nil, logger)
+
 	var out bytes.Buffer
 	old := os.Stdout
 	r, w, _ := os.Pipe()
@@ -1089,11 +1091,15 @@ func TestShowRestorePlanOutputsPaths(t *testing.T) {
 		close(done)
 	}()
 
-	ShowRestorePlan(logger, cfg)
+	planErr := ui.ShowRestorePlan(context.Background(), cfg)
 
 	_ = w.Close()
 	os.Stdout = old
 	<-done
+
+	if planErr != nil {
+		t.Fatalf("ShowRestorePlan error: %v", planErr)
+	}
 
 	output := out.String()
 	if !strings.Contains(output, "RESTORE PLAN") || !strings.Contains(output, "/etc/network") {

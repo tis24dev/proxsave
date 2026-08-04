@@ -29,10 +29,10 @@ func TestValidateHealthcheckPingURL(t *testing.T) {
 		"https://hc.example.org/a-slug",
 	}
 	for _, v := range valid {
-		if err := validateHealthcheckPingURL(v); err != nil {
+		if err := installer.ValidateHealthcheckPingURL(v); err != nil {
 			t.Errorf("required: %q must be valid, got %v", v, err)
 		}
-		if err := validateOptionalHealthcheckPingURL(v); err != nil {
+		if err := installer.ValidateOptionalHealthcheckPingURL(v); err != nil {
 			t.Errorf("optional: %q must be valid, got %v", v, err)
 		}
 	}
@@ -45,19 +45,19 @@ func TestValidateHealthcheckPingURL(t *testing.T) {
 		"not a url",           // junk
 	}
 	for _, v := range bad {
-		if err := validateHealthcheckPingURL(v); err == nil {
+		if err := installer.ValidateHealthcheckPingURL(v); err == nil {
 			t.Errorf("required: %q must be rejected", v)
 		}
 	}
 
 	// Optional accepts empty but still rejects a malformed non-empty value.
-	if err := validateOptionalHealthcheckPingURL(""); err != nil {
+	if err := installer.ValidateOptionalHealthcheckPingURL(""); err != nil {
 		t.Errorf("optional empty must be accepted, got %v", err)
 	}
-	if err := validateOptionalHealthcheckPingURL("   "); err != nil {
+	if err := installer.ValidateOptionalHealthcheckPingURL("   "); err != nil {
 		t.Errorf("optional blank must be accepted, got %v", err)
 	}
-	if err := validateOptionalHealthcheckPingURL("ftp://x/y"); err == nil {
+	if err := installer.ValidateOptionalHealthcheckPingURL("ftp://x/y"); err == nil {
 		t.Error("optional must still reject a malformed non-empty URL")
 	}
 }

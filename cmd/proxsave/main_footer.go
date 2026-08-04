@@ -219,6 +219,14 @@ func exitCodeSeverity(exitCode int, logger *logging.Logger) exitSeverity {
 		// A benign skip (another backup running / disabled): non-blocking, colored yellow like a
 		// warning, never green success nor red error (F09-03).
 		return severityWarning
+	case exitCode == types.ExitGuardsPending.Int():
+		// --cleanup-guards found guards it could not remove yet, typically hidden under a live
+		// mount. The cleanup itself succeeded, which is why cleanup_guards_verdict.go logs that
+		// outcome at Warning and both docs/CLI_REFERENCE.md and docs/TROUBLESHOOTING.md call 17
+		// "not a failure". Without this case it fell through to severityError and the footer
+		// contradicted all three: red for an outcome the operator is told to act on, not to
+		// report as a bug. A genuine cleanup failure is ExitGenericError, which is separate.
+		return severityWarning
 	default:
 		return severityError
 	}

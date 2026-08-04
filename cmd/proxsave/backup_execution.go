@@ -43,7 +43,7 @@ func runConfiguredBackup(opts backupModeOptions, orch *orchestrator.Orchestrator
 	backupDone(nil)
 
 	persistBackupStats(orch, stats)
-	logBackupStatistics(stats)
+	logBackupStatistics(stats, opts.outcomeRendersRecap)
 	logging.Info("✓ Backup completed")
 	logServerIdentityValues(opts.serverIDValue, opts.serverMACValue)
 	logMonitoringPortalLink(stats)
@@ -108,40 +108,50 @@ func persistBackupStats(orch *orchestrator.Orchestrator, stats *orchestrator.Bac
 	}
 }
 
-func logBackupStatistics(stats *orchestrator.BackupStats) {
-	// The block is now debug-only; a standard run shows it in the graphical
-	// outcome recap (buildBackupOutcomePrompt) instead. Guard before the blank
-	// spacers too, so a standard run shows no orphan blank lines.
-	if logging.GetDefaultLogger().GetLevel() < types.LogLevelDebug {
+// logBackupStatistics writes the recap to the console: the COMPACT rows at Info, the
+// full block at Debug. skip suppresses BOTH, for a run whose screen renders the recap
+// itself (backupModeOptions.outcomeRendersRecap).
+//
+// The block was debug-only before c0cc02a, and that gate WAS the de-duplication: the
+// graphical stats block and the Debug gate arrived together in 3ed0716, two halves of
+// one design where exactly one side renders the recap. Reading the gate as a verbosity
+// choice and lifting it for Info put the compact rows into the dashboard viewport
+// underneath the outcome block that already showed them. Suppressing here on the
+// caller's say-so restores that invariant, and closes the case the original gate never
+// covered: at Debug the full block reached the viewport too, because capturing the
+// console swaps the writer and not the level (internal/logging/capture.go, SwapOutput).
+//
+// Where the rows go on an unattended run, corrected: NOT into the run log file. This
+// runs from runConfiguredBackup, after the orchestrator has closed that file
+// (FinalizeAndCloseLog), so the recap reaches stdout only. It still matters there: the
+// daemon runs the backup as a child whose stdout goes to journald AND into the bounded
+// tail it POSTs to Healthchecks as the failure diagnostic (daemon.go, buildBackupCmd).
+// Deleting the Info arm would take that payload away.
+func logBackupStatistics(stats *orchestrator.BackupStats, skip bool) {
+	if stats == nil || skip {
 		return
 	}
+	debug := logging.GetDefaultLogger().GetLevel() >= types.LogLevelDebug
+
+	// The header and the blank spacers belong to the full block: at Info the rows join
+	// the run's other lines instead of opening a section of their own.
+	if !debug {
+		for _, line := range backupStatsRecap(stats, true) {
+			logging.Info("%s", line.Text)
+		}
+		return
+	}
+
 	fmt.Println()
 	logging.Debug("=== Backup Statistics ===")
-	logging.Debug("Files collected: %d", stats.FilesCollected)
-	if stats.FilesFailed > 0 {
-		// The PVE/PBS collection summary carries the Files-failed warning now.
-		logging.Debug("Files failed: %d", stats.FilesFailed)
+	for _, line := range backupStatsRecap(stats, false) {
+		logging.Debug("%s", line.Text)
 	}
-	logging.Debug("Directories created: %d", stats.DirsCreated)
-	logging.Debug("Data collected: %s", formatBytes(stats.BytesCollected))
-	logging.Debug("Archive size: %s", formatBytes(stats.ArchiveSize))
-	logCompressionRatio(stats)
-	logging.Debug("Compression used: %s (level %d, mode %s)", stats.Compression, stats.CompressionLevel, stats.CompressionMode)
-	if stats.RequestedCompression != stats.Compression {
-		logging.Debug("Requested compression: %s", stats.RequestedCompression)
-	}
-	logging.Debug("Duration: %s", formatDuration(stats.Duration))
-	logBackupArtifactPaths(stats)
 	fmt.Println()
 }
 
-func logCompressionRatio(stats *orchestrator.BackupStats) {
-	logging.Debug("Compression ratio: %s", compressionRatioText(stats))
-}
-
-// compressionRatioText renders the compression-ratio value shared by the
-// debug-only log block (logCompressionRatio) and the graphical outcome recap
-// (appendBackupStatsBlock), so the two never drift.
+// compressionRatioText renders the compression-ratio value for the shared recap
+// builder (backupStatsRecap), and therefore for both front-ends.
 func compressionRatioText(stats *orchestrator.BackupStats) string {
 	switch {
 	case stats.CompressionSavingsPercent > 0:
@@ -153,22 +163,6 @@ func compressionRatioText(stats *orchestrator.BackupStats) string {
 		return fmt.Sprintf("%.1f%%", ratio)
 	default:
 		return "N/A"
-	}
-}
-
-func logBackupArtifactPaths(stats *orchestrator.BackupStats) {
-	if stats.BundleCreated {
-		logging.Debug("Bundle path: %s", stats.ArchivePath)
-		logging.Debug("Bundle contents: archive + checksum + metadata")
-		return
-	}
-
-	logging.Debug("Archive path: %s", stats.ArchivePath)
-	if stats.ManifestPath != "" {
-		logging.Debug("Manifest path: %s", stats.ManifestPath)
-	}
-	if stats.Checksum != "" {
-		logging.Debug("Archive checksum (SHA256): %s", stats.Checksum)
 	}
 }
 

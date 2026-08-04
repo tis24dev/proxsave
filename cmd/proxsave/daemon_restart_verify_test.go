@@ -343,10 +343,107 @@ func TestRestartVerifyStatus(t *testing.T) {
 		keyword != "RESTARTED, NOT CONFIRMED" {
 		t.Fatalf("ambiguous status wrong: level=%v keyword=%q", level, keyword)
 	}
+	// A failed restart is a WARNING, not an error: the new binary is already installed and the
+	// daemon merely still runs the old one, so it must not read as a hard failure. Yellow here
+	// matches the CLI upgrade footer, which has always painted this outcome yellow, and matches
+	// daemonStatusStyle, which has no red daemon state at all.
 	failed := RestartVerifyResult{Err: errors.New("x")}
-	if level, keyword, msg := restartVerifyStatus(failed); level != orchestrator.HealthcheckSetupLevelError ||
+	if level, keyword, msg := restartVerifyStatus(failed); level != orchestrator.HealthcheckSetupLevelWarn ||
 		keyword != "RESTART FAILED" || msg != "x" {
 		t.Fatalf("failed status wrong: level=%v keyword=%q msg=%q", level, keyword, msg)
+	}
+	// The config-unreadable deferral has its OWN keyword, distinct from the backup deferral --
+	// they are different remedies (make the config readable vs wait for the backup). Both lines
+	// merely contain "deferred", so a substring assertion cannot tell them apart.
+	unknownLock := RestartVerifyResult{LockPathUnknown: true}
+	if level, keyword, _ := restartVerifyStatus(unknownLock); level != orchestrator.HealthcheckSetupLevelWarn ||
+		keyword != "DEFERRED - CONFIG UNREADABLE" {
+		t.Fatalf("config-unreadable status wrong: level=%v keyword=%q", level, keyword)
+	}
+}
+
+// TestRestartVerifySeverityMatchesFooter pins the rule that made the two front-ends agree: for
+// EVERY outcome, the dashboard's level and the CLI footer's warn bool are the same statement.
+// They used to disagree on exactly one outcome -- a failed restart was yellow on the CLI and red
+// on the dashboard -- because each surface derived severity from its own switch.
+func TestRestartVerifySeverityMatchesFooter(t *testing.T) {
+	results := []RestartVerifyResult{
+		{Err: errors.New("boom")},
+		{LockPathUnknown: true},
+		{BackupWaitTimedOut: true},
+		{Restarted: true, TimedOut: true},
+		{Restarted: true, ProcessAlive: true, Aligned: true, FreshInfo: true},
+		{Restarted: true},
+	}
+	seen := map[restartVerifyOutcome]bool{}
+	for _, rv := range results {
+		outcome := classifyRestartVerify(rv)
+		seen[outcome] = true
+		_, warn := summarizeRestartVerify(&rv, "1.2.3")
+		level, _, _ := restartVerifyStatus(rv)
+		wantLevel := orchestrator.HealthcheckSetupLevelOk
+		if warn {
+			wantLevel = orchestrator.HealthcheckSetupLevelWarn
+		}
+		if level != wantLevel {
+			t.Fatalf("outcome %d: footer warn=%v but dashboard level=%v", outcome, warn, level)
+		}
+		// No daemon outcome is ever a hard error on either front-end.
+		if level == orchestrator.HealthcheckSetupLevelError {
+			t.Fatalf("outcome %d must not be Error", outcome)
+		}
+	}
+	if len(seen) != int(restartVerifyOutcomeCount) {
+		t.Fatalf("covered %d outcomes, want all %d", len(seen), restartVerifyOutcomeCount)
+	}
+}
+
+// TestClassifyRestartVerifyPrecedence pins the branch ORDER, which is the contract the three
+// surfaces now share and the one thing a merged classifier can silently get wrong. The flags are
+// not mutually exclusive, so every fixture below sets several at once and asserts which one wins.
+// Without this, reordering the shared switch moves all three surfaces consistently and quietly.
+func TestClassifyRestartVerifyPrecedence(t *testing.T) {
+	full := RestartVerifyResult{
+		Restarted: true, ProcessAlive: true, Aligned: true, FreshInfo: true,
+		TimedOut: true, BackupWaitTimedOut: true, LockPathUnknown: true,
+	}
+	withErr := full
+	withErr.Err = errors.New("boom")
+	if got := classifyRestartVerify(withErr); got != restartVerifyError {
+		t.Fatalf("Err must outrank every other flag, got %d", got)
+	}
+	if got := classifyRestartVerify(full); got != restartVerifyDeferredConfig {
+		t.Fatalf("LockPathUnknown must outrank the deferral and the success gate, got %d", got)
+	}
+	noLock := full
+	noLock.LockPathUnknown = false
+	if got := classifyRestartVerify(noLock); got != restartVerifyDeferredBackup {
+		t.Fatalf("BackupWaitTimedOut must outrank the success gate, got %d", got)
+	}
+	// The invariant the ordering exists to protect: a restart that ran out of budget is never
+	// reported as "now aligned", however complete the flags it collected look.
+	timedOutButLooksAligned := RestartVerifyResult{
+		Restarted: true, ProcessAlive: true, Aligned: true, FreshInfo: true, TimedOut: true,
+	}
+	if got := classifyRestartVerify(timedOutButLooksAligned); got != restartVerifyTimedOut {
+		t.Fatalf("TimedOut must outrank the success gate, got %d", got)
+	}
+	// Each conjunct of the success gate is load-bearing: drop any one and it is not a success.
+	for _, drop := range []string{"Restarted", "ProcessAlive", "Aligned", "FreshInfo"} {
+		rv := RestartVerifyResult{Restarted: true, ProcessAlive: true, Aligned: true, FreshInfo: true}
+		switch drop {
+		case "Restarted":
+			rv.Restarted = false
+		case "ProcessAlive":
+			rv.ProcessAlive = false
+		case "Aligned":
+			rv.Aligned = false
+		case "FreshInfo":
+			rv.FreshInfo = false
+		}
+		if got := classifyRestartVerify(rv); got != restartVerifyUnconfirmed {
+			t.Fatalf("without %s the result must be unconfirmed, got %d", drop, got)
+		}
 	}
 }
 

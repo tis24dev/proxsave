@@ -130,7 +130,8 @@ Completion Summary
 | `cmd/proxsave/main.go` | Entry point, CLI parsing | `main()`, flag handling |
 | `internal/orchestrator/restore.go` | Entry stub (body in `restore_workflow_ui_run.go`) | `RunRestoreWorkflow()` |
 | `internal/orchestrator/categories.go` | Category definitions | `GetAllCategories()`, `PathMatchesCategory()` |
-| `internal/orchestrator/selective.go` | Category selection/plan UI | `ShowRestoreModeMenuWithReader()`, `ShowRestorePlan()` |
+| `internal/orchestrator/selective.go` | Category selection UI | `ShowRestoreModeMenuWithReader()`, `ShowCategorySelectionMenuWithReader()` |
+| `internal/orchestrator/restore_plan_render.go` | Shared restore-plan body (no chrome) | `buildRestorePlanText()` |
 | `internal/orchestrator/decrypt.go` | Decryption workflow | `prepareDecryptedBackup()` |
 | `internal/orchestrator/compatibility.go` | System validation | `ValidateCompatibility()` |
 | `internal/orchestrator/backup_safety.go` | Safety backups | `CreateSafetyBackup()` |
@@ -326,10 +327,13 @@ type Category struct {
    - Commands: number, 'a', 'n', 'c', 'b', '0'
    - Reached via the `RestoreWorkflowUI.SelectCategories()` interface
 
-3. **`ShowRestorePlan()`** (`selective.go`):
-   - Display selected categories
-   - Show file paths to be restored
-   - Display warnings
+3. **`buildRestorePlanText()`** (`restore_plan_render.go`):
+   - Renders the plan *body* only: selected categories, file paths to be restored, warnings
+   - Chrome is owned by the front-ends: `cliWorkflowUI.ShowRestorePlan()`
+     (`workflow_ui_cli.go`) prints the ASCII "RESTORE PLAN" banner around it, while
+     `charmWorkflowUI.ShowRestorePlan()` (`workflow_ui_charm_restore.go`) feeds it to a Pager
+   - Every body line must fit 80 columns (the Pager does not wrap);
+     `TestBuildRestorePlanTextLinesFit80Columns` pins this
    - Reached via the `RestoreWorkflowUI.ShowRestorePlan()` interface
 
 4. **`ConfirmRestoreOperationWithReader()`** (`selective.go`):

@@ -316,8 +316,8 @@ func TestCleanupMountGuards_ClearsImmutableWhenNotMounted(t *testing.T) {
 	withTempGuardBaseDir(t)
 	ran := installChattrCleanupSeams(t, []byte("/mnt/pve/offline\n/media/usb\n"), "", nil)
 
-	if err := CleanupMountGuards(context.Background(), newTestLogger(), false); err != nil {
-		t.Fatalf("CleanupMountGuards: %v", err)
+	if _, err := cleanupMountGuards(context.Background(), newTestLogger(), false); err != nil {
+		t.Fatalf("cleanupMountGuards: %v", err)
 	}
 	want := map[string]bool{"chattr -i /mnt/pve/offline": true, "chattr -i /media/usb": true}
 	if len(*ran) != 2 || !want[(*ran)[0]] || !want[(*ran)[1]] {
@@ -332,8 +332,8 @@ func TestCleanupMountGuards_SkipsImmutableWhenMounted(t *testing.T) {
 	mountinfo := "36 35 0:30 / /mnt/pve/offline rw - nfs server:/export rw\n"
 	ran := installChattrCleanupSeams(t, []byte("/mnt/pve/offline\n"), mountinfo, nil)
 
-	if err := CleanupMountGuards(context.Background(), newTestLogger(), false); err != nil {
-		t.Fatalf("CleanupMountGuards: %v", err)
+	if _, err := cleanupMountGuards(context.Background(), newTestLogger(), false); err != nil {
+		t.Fatalf("cleanupMountGuards: %v", err)
 	}
 	if len(*ran) != 0 {
 		t.Fatalf("chattr -i must not run for a mounted (shadowed) target, calls=%#v", *ran)
@@ -345,8 +345,8 @@ func TestCleanupMountGuards_DryRunNoChattr(t *testing.T) {
 	withTempGuardBaseDir(t)
 	ran := installChattrCleanupSeams(t, []byte("/mnt/pve/offline\n"), "", nil)
 
-	if err := CleanupMountGuards(context.Background(), newTestLogger(), true); err != nil {
-		t.Fatalf("CleanupMountGuards dry-run: %v", err)
+	if _, err := cleanupMountGuards(context.Background(), newTestLogger(), true); err != nil {
+		t.Fatalf("cleanupMountGuards dry-run: %v", err)
 	}
 	if len(*ran) != 0 {
 		t.Fatalf("dry-run must not run chattr -i, calls=%#v", *ran)
@@ -359,8 +359,8 @@ func TestCleanupMountGuards_RejectsNonDatastoreIndexEntry(t *testing.T) {
 	withTempGuardBaseDir(t)
 	ran := installChattrCleanupSeams(t, []byte("/etc/passwd-dir\n/var/lib/x\n/mnt/pve/legit\n"), "", nil)
 
-	if err := CleanupMountGuards(context.Background(), newTestLogger(), false); err != nil {
-		t.Fatalf("CleanupMountGuards: %v", err)
+	if _, err := cleanupMountGuards(context.Background(), newTestLogger(), false); err != nil {
+		t.Fatalf("cleanupMountGuards: %v", err)
 	}
 	if len(*ran) != 1 || (*ran)[0] != "chattr -i /mnt/pve/legit" {
 		t.Fatalf("only the datastore-root entry may be cleared, calls=%#v", *ran)
@@ -374,7 +374,7 @@ func TestCleanupMountGuards_ChattrFailureNonFatalContinues(t *testing.T) {
 	ran := installChattrCleanupSeams(t, []byte("/mnt/pve/first\n/mnt/pve/second\n"), "",
 		map[string]error{"chattr -i /mnt/pve/first": errors.New("operation not permitted")})
 
-	if err := CleanupMountGuards(context.Background(), newTestLogger(), false); err != nil {
+	if _, err := cleanupMountGuards(context.Background(), newTestLogger(), false); err != nil {
 		t.Fatalf("per-target chattr failure must be non-fatal, got %v", err)
 	}
 	if len(*ran) != 2 || (*ran)[0] != "chattr -i /mnt/pve/first" || (*ran)[1] != "chattr -i /mnt/pve/second" {
@@ -387,8 +387,8 @@ func TestCleanupMountGuards_MissingIndexNoOp(t *testing.T) {
 	withTempGuardBaseDir(t)
 	ran := installChattrCleanupSeams(t, nil, "", nil)
 
-	if err := CleanupMountGuards(context.Background(), newTestLogger(), false); err != nil {
-		t.Fatalf("CleanupMountGuards: %v", err)
+	if _, err := cleanupMountGuards(context.Background(), newTestLogger(), false); err != nil {
+		t.Fatalf("cleanupMountGuards: %v", err)
 	}
 	if len(*ran) != 0 {
 		t.Fatalf("missing index must be a no-op, calls=%#v", *ran)
@@ -403,8 +403,8 @@ func TestCleanupMountGuards_IsMountedErrorSkips(t *testing.T) {
 	// Force isMounted to error: both /proc reads fail.
 	mountGuardReadFile = func(string) ([]byte, error) { return nil, errors.New("procfs unavailable") }
 
-	if err := CleanupMountGuards(context.Background(), newTestLogger(), false); err != nil {
-		t.Fatalf("CleanupMountGuards: %v", err)
+	if _, err := cleanupMountGuards(context.Background(), newTestLogger(), false); err != nil {
+		t.Fatalf("cleanupMountGuards: %v", err)
 	}
 	if len(*ran) != 0 {
 		t.Fatalf("chattr -i must not run when mount status is inconclusive, calls=%#v", *ran)
@@ -420,8 +420,8 @@ func TestCleanupMountGuards_SymlinkEscapeRefused(t *testing.T) {
 	// /mnt/pve/evil passes the string allowlist but resolves outside it.
 	resolveGuardTarget = func(string) (string, error) { return "/etc/evil", nil }
 
-	if err := CleanupMountGuards(context.Background(), newTestLogger(), false); err != nil {
-		t.Fatalf("CleanupMountGuards: %v", err)
+	if _, err := cleanupMountGuards(context.Background(), newTestLogger(), false); err != nil {
+		t.Fatalf("cleanupMountGuards: %v", err)
 	}
 	if len(*ran) != 0 {
 		t.Fatalf("a symlink-escaping target must not be cleared, calls=%#v", *ran)
@@ -442,8 +442,8 @@ func TestCleanupMountGuards_ResolveErrorLeftPending(t *testing.T) {
 	removed := false
 	cleanupRemoveAll = func(string) error { removed = true; return nil }
 
-	if err := CleanupMountGuards(context.Background(), newTestLogger(), false); err != nil {
-		t.Fatalf("CleanupMountGuards: %v", err)
+	if _, err := cleanupMountGuards(context.Background(), newTestLogger(), false); err != nil {
+		t.Fatalf("cleanupMountGuards: %v", err)
 	}
 	if len(*ran) != 0 {
 		t.Fatalf("a target whose resolution errors must not be chattr'd, calls=%#v", *ran)
@@ -477,8 +477,8 @@ func TestCleanupMountGuards_SymlinkedMountpointDetectedMountedAndLeftPending(t *
 	removed := false
 	cleanupRemoveAll = func(string) error { removed = true; return nil }
 
-	if err := CleanupMountGuards(context.Background(), newTestLogger(), false); err != nil {
-		t.Fatalf("CleanupMountGuards: %v", err)
+	if _, err := cleanupMountGuards(context.Background(), newTestLogger(), false); err != nil {
+		t.Fatalf("cleanupMountGuards: %v", err)
 	}
 	if len(*ran) != 0 {
 		t.Fatalf("a symlinked mountpoint resolving onto a live mount must not be chattr'd, calls=%#v", *ran)
@@ -498,8 +498,8 @@ func TestCleanupMountGuards_PendingKeepsIndexDir(t *testing.T) {
 	removed := false
 	cleanupRemoveAll = func(string) error { removed = true; return nil }
 
-	if err := CleanupMountGuards(context.Background(), newTestLogger(), false); err != nil {
-		t.Fatalf("CleanupMountGuards: %v", err)
+	if _, err := cleanupMountGuards(context.Background(), newTestLogger(), false); err != nil {
+		t.Fatalf("cleanupMountGuards: %v", err)
 	}
 	if len(*ran) != 0 {
 		t.Fatalf("mounted target must be skipped, calls=%#v", *ran)
@@ -509,7 +509,7 @@ func TestCleanupMountGuards_PendingKeepsIndexDir(t *testing.T) {
 	}
 }
 
-// End-to-end: a real recorded index is read back and cleared by CleanupMountGuards
+// End-to-end: a real recorded index is read back and cleared by cleanupMountGuards
 // (proves record and clear agree on the on-disk format and path).
 func TestCleanupMountGuards_RoundTripFromRecord(t *testing.T) {
 	withTempGuardBaseDir(t)
@@ -545,8 +545,8 @@ func TestCleanupMountGuards_RoundTripFromRecord(t *testing.T) {
 		return nil, nil
 	}
 
-	if err := CleanupMountGuards(context.Background(), newTestLogger(), false); err != nil {
-		t.Fatalf("CleanupMountGuards: %v", err)
+	if _, err := cleanupMountGuards(context.Background(), newTestLogger(), false); err != nil {
+		t.Fatalf("cleanupMountGuards: %v", err)
 	}
 	if len(ran) != 1 || ran[0] != "chattr -i /mnt/pve/roundtrip" {
 		t.Fatalf("round-trip: runner calls=%#v want [chattr -i /mnt/pve/roundtrip]", ran)
@@ -597,8 +597,8 @@ func TestCleanupMountGuards_SummaryReported(t *testing.T) {
 	logger := logging.New(types.LogLevelInfo, false)
 	var buf bytes.Buffer
 	logger.SetOutput(&buf)
-	if err := CleanupMountGuards(context.Background(), logger, false); err != nil {
-		t.Fatalf("CleanupMountGuards: %v", err)
+	if _, err := cleanupMountGuards(context.Background(), logger, false); err != nil {
+		t.Fatalf("cleanupMountGuards: %v", err)
 	}
 	out := buf.String()
 	if !strings.Contains(out, "Guard cleanup summary:") {
@@ -622,8 +622,8 @@ func TestCleanupMountGuards_SummaryPending(t *testing.T) {
 	logger := logging.New(types.LogLevelInfo, false)
 	var buf bytes.Buffer
 	logger.SetOutput(&buf)
-	if err := CleanupMountGuards(context.Background(), logger, false); err != nil {
-		t.Fatalf("CleanupMountGuards: %v", err)
+	if _, err := cleanupMountGuards(context.Background(), logger, false); err != nil {
+		t.Fatalf("cleanupMountGuards: %v", err)
 	}
 	out := buf.String()
 	if !strings.Contains(out, "immutable-cleared=0") || !strings.Contains(out, "immutable-pending=1") {

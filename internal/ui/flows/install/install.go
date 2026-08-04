@@ -9,8 +9,6 @@ package install
 import (
 	"context"
 	"fmt"
-	"os"
-	"path/filepath"
 	"strings"
 
 	"github.com/tis24dev/proxsave/internal/config"
@@ -33,15 +31,12 @@ func mapCancel(err error) error {
 // file. When no file exists it returns Overwrite without any screen (same
 // contract as the tview CheckExistingConfig and the CLI prompt).
 func ResolveExistingConfig(ctx context.Context, session *shell.Session, configPath string) (installer.ExistingConfigAction, error) {
-	info, err := os.Stat(configPath)
+	exists, err := installer.ExistingConfigPresent(configPath)
 	if err != nil {
-		if os.IsNotExist(err) {
-			return installer.ExistingConfigOverwrite, nil
-		}
-		return installer.ExistingConfigCancel, fmt.Errorf("failed to access configuration file: %w", err)
+		return installer.ExistingConfigCancel, err
 	}
-	if !info.Mode().IsRegular() {
-		return installer.ExistingConfigCancel, fmt.Errorf("configuration file path is not a regular file: %s", configPath)
+	if !exists {
+		return installer.ExistingConfigOverwrite, nil
 	}
 
 	items := []components.SelectorItem[installer.ExistingConfigAction]{
@@ -270,8 +265,14 @@ func CollectWizardData(ctx context.Context, session *shell.Session, baseTemplate
 	}
 	if email.Bool {
 		data.EmailDeliveryMethod = methodValues[method.OptionIndex]
-		fallbackSendmail := true
-		data.EmailFallbackSendmail = &fallbackSendmail
+		// EmailFallbackSendmail stays NIL, the same contract the CLI wizard follows
+		// (cmd/proxsave/install.go): this form has no sendmail-failover row, so there
+		// is no operator answer to send and installer.ApplyInstallData owns
+		// EMAIL_FALLBACK_SENDMAIL (seed true when nothing is stored, preserve the
+		// stored value on an Edit). A fabricated true here re-opened the local
+		// /usr/sbin/sendmail delivery route on every no-op edit of a config that had
+		// deliberately closed it. Pinned by
+		// TestCollectWizardDataLeavesEmailFallbackToTheEngine.
 	}
 	normalized, err := cronutil.NormalizeTime(cronField.Text, cronutil.DefaultTime)
 	if err != nil {
@@ -294,7 +295,7 @@ func ConfirmNewInstall(ctx context.Context, session *shell.Session, baseDir stri
 	res, err := shell.Ask(ctx, session, components.NewConfirm(
 		"Confirm new install",
 		fmt.Sprintf("Base directory to reset:\n%s\n\nThis keeps %s\nbut deletes everything else.\n\nContinue?",
-			baseDir, formatPreservedEntries(baseDir, preservedEntries)),
+			baseDir, installer.FormatPreservedEntries(preservedEntries)),
 		components.WithLabels("Continue", "Cancel"),
 		components.WithDefaultYes(false),
 		components.WithDanger(),
@@ -306,25 +307,4 @@ func ConfirmNewInstall(ctx context.Context, session *shell.Session, baseDir stri
 		return false, err
 	}
 	return res.Answer, nil
-}
-
-func formatPreservedEntries(baseDir string, entries []string) string {
-	formatted := make([]string, 0, len(entries))
-	for _, entry := range entries {
-		trimmed := strings.TrimSpace(entry)
-		if trimmed == "" {
-			continue
-		}
-		if !strings.HasSuffix(trimmed, "/") {
-			resolved := filepath.Join(baseDir, trimmed)
-			if fi, err := os.Stat(resolved); err == nil && fi.IsDir() {
-				trimmed += "/"
-			}
-		}
-		formatted = append(formatted, trimmed)
-	}
-	if len(formatted) == 0 {
-		return "(none)"
-	}
-	return strings.Join(formatted, " ")
 }

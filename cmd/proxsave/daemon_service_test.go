@@ -66,6 +66,23 @@ func TestBuildDaemonUnitWithConfig(t *testing.T) {
 	}
 }
 
+// TestBuildDaemonUnitKeepsTheCgroupWideKill pins a deliberate NON-change. Trading
+// KillMode=control-group for KillMode=process would shorten the restart after the daemon
+// abandons an unreapable child, but it is the cgroup-wide kill that collects that child's own
+// descendants (tar / pigz / rclone / proxmox-backup-client): the daemon only ever signals the
+// single child pid, no process group is ever created, and a child in D state cannot run its
+// own cleanup. Weakening it would orphan those on every stop and restart, not just on the
+// abandon path, so the unit stays on systemd's defaults and the restart is simply slower.
+func TestBuildDaemonUnitKeepsTheCgroupWideKill(t *testing.T) {
+	u := buildDaemonUnit("/usr/local/bin/proxsave", "")
+	if strings.Contains(u, "KillMode=") {
+		t.Errorf("the unit must not weaken systemd's cgroup-wide kill; nothing else cleans up the backup child's descendants:\n%s", u)
+	}
+	if !strings.Contains(u, "\nRestart=always\n") || !strings.Contains(u, "\nRestartSec=10\n") {
+		t.Errorf("the abandon path relies on systemd restarting the daemon:\n%s", u)
+	}
+}
+
 func TestBuildDaemonUnitFallbacks(t *testing.T) {
 	// Empty exec token -> canonical path; empty config -> no --config.
 	u := buildDaemonUnit("", "")

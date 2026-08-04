@@ -477,7 +477,7 @@ func runDashboardDaemonRestart(ctx context.Context, session *shell.Session, conf
 		lockPath, lockKnown = backupLockFilePath(cfg, baseDir)
 	}
 	var rv RestartVerifyResult
-	_ = components.RunTask(ctx, session, "Restarting daemon", "Restarting proxsave-daemon.service...", func(taskCtx context.Context, report func(string)) error {
+	_ = components.RunTask(ctx, session, "Restarting daemon", "Restarting "+daemonUnitName+"...", func(taskCtx context.Context, report func(string)) error {
 		rv = restartAndVerifyDaemon(taskCtx, baseDir, lockPath, lockKnown, interval)
 		return nil
 	})
@@ -487,33 +487,42 @@ func runDashboardDaemonRestart(ctx context.Context, session *shell.Session, conf
 
 // restartVerifyStatus maps a restart+verify outcome to the styled daemon-result triple (a
 // shared HealthcheckSetupLevel + a short colored keyword + a one-line explanation), shared by
-// the "Restart daemon" button and the post-upgrade restart. Success is green (Ok); a deferral
-// (backup running), a not-confirmed alignment, and an ambiguous restart are yellow warnings
-// (Warn); a restart error is red (Error). The explanation strings are unchanged from the old
-// notice bodies -- only the outcome keyword is added for the colored "Status:" line.
+// the "Restart daemon" button and the post-upgrade restart. The verdict and its severity come
+// from classifyRestartVerify, shared with the CLI upgrade footer and the upgrade bootstrap
+// log; only the keywords and explanations below are this surface's own.
+//
+// Success is green (Ok) and every gap -- including a failed restart -- is a yellow warning,
+// matching both the CLI footer and daemonStatusStyle, the repo's other daemon verdict, which
+// likewise has no red state. A restart that fails does not fail the upgrade: the new binary is
+// already installed and the daemon simply still runs the old one.
+//
+// The version shown here is rv.State.Version, what the RUNNING daemon reports -- not the
+// version the upgrade just installed, which is what summarizeRestartVerify shows instead.
+//
+// TimedOut and Unconfirmed deliberately render identically here (this screen has no useful
+// distinction to draw between them), while the footer and the log word them differently. That
+// is a rendering choice, which is why the two stay distinct outcomes upstream.
 func restartVerifyStatus(rv RestartVerifyResult) (orchestrator.HealthcheckSetupLevel, string, string) {
-	switch {
-	case rv.Err != nil:
-		return orchestrator.HealthcheckSetupLevelError, "RESTART FAILED", rv.Err.Error()
-	case rv.LockPathUnknown:
-		return orchestrator.HealthcheckSetupLevelWarn, "DEFERRED - CONFIG UNREADABLE",
+	outcome := classifyRestartVerify(rv)
+	switch outcome {
+	case restartVerifyError:
+		return outcome.level(), "RESTART FAILED", rv.Err.Error()
+	case restartVerifyDeferredConfig:
+		return outcome.level(), "DEFERRED - CONFIG UNREADABLE",
 			"The config could not be read, so the real backup lock path is unknown; restart again once it is readable, or the daemon stays on the old binary."
-	case rv.BackupWaitTimedOut:
-		return orchestrator.HealthcheckSetupLevelWarn, "DEFERRED - BACKUP RUNNING",
+	case restartVerifyDeferredBackup:
+		return outcome.level(), "DEFERRED - BACKUP RUNNING",
 			"Restart again once the backup finishes, or the daemon stays on the old binary."
-	case rv.TimedOut:
-		return orchestrator.HealthcheckSetupLevelWarn, "RESTARTED, NOT CONFIRMED",
-			"Open Daemon status to confirm it came back aligned."
-	case rv.Restarted && rv.ProcessAlive && rv.Aligned && rv.FreshInfo:
+	case restartVerifyAligned:
 		// Success: the keyword ("RESTARTED, ALIGNED (vX)") already says everything, so no
 		// explanation line -- a what-to-do suggestion only appears on a problem outcome.
 		keyword := "RESTARTED, ALIGNED"
 		if v := strings.TrimSpace(rv.State.Version); v != "" {
 			keyword += " (v" + v + ")"
 		}
-		return orchestrator.HealthcheckSetupLevelOk, keyword, ""
-	default:
-		return orchestrator.HealthcheckSetupLevelWarn, "RESTARTED, NOT CONFIRMED",
+		return outcome.level(), keyword, ""
+	default: // restartVerifyTimedOut and restartVerifyUnconfirmed
+		return outcome.level(), "RESTARTED, NOT CONFIRMED",
 			"Open Daemon status to confirm it came back aligned."
 	}
 }
@@ -583,10 +592,10 @@ func runDashboardDaemonAdmin(ctx context.Context, session *shell.Session, instal
 	doneMsg := "Reverted to the cron scheduler and removed the daemon service. Future upgrades will not reinstall it."
 	if install {
 		title = "Installing daemon"
-		work = "Installing and enabling proxsave-daemon.service..."
+		work = "Installing and enabling " + daemonUnitName + "..."
 		doneTitle = "Daemon installed"
 		doneKeyword = "INSTALLED"
-		doneMsg = "The resident daemon (proxsave-daemon.service) is active. The cron entry was removed."
+		doneMsg = "The resident daemon (" + daemonUnitName + ") is active. The cron entry was removed."
 	}
 	execToken := daemonSelfExecPath()
 	var opErr error
@@ -752,7 +761,7 @@ func buildDaemonStatusPrompt(level orchestrator.HealthcheckSetupLevel, keyword, 
 	b.WriteString("\n")
 	b.WriteString(theme.Text.Render("Scheduler mode: " + components.SanitizeText(mode)))
 	b.WriteString("\n")
-	b.WriteString(theme.Text.Render("Daemon service (proxsave-daemon.service): " + unit))
+	b.WriteString(theme.Text.Render("Daemon service (" + daemonUnitName + "): " + unit))
 	b.WriteString("\n")
 	b.WriteString(theme.Text.Render("Service state (systemctl is-active): " + components.SanitizeText(active)))
 	b.WriteString("\n")

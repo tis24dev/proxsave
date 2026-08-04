@@ -15,17 +15,6 @@ import (
 // ErrInstallCancelled is returned when the user aborts the install wizard.
 var ErrInstallCancelled = errors.New("installation aborted by user")
 
-// ExistingConfigAction represents how to handle an already-present
-// configuration file.
-type ExistingConfigAction int
-
-const (
-	ExistingConfigOverwrite    ExistingConfigAction = iota // Start from embedded template (overwrite)
-	ExistingConfigEdit                                     // Keep existing file as base and edit
-	ExistingConfigKeepContinue                             // Leave file untouched and continue installation
-	ExistingConfigCancel                                   // Abort installation
-)
-
 // PostInstallAuditResult reports the outcome of the optional post-install
 // audit step.
 type PostInstallAuditResult struct {
@@ -124,16 +113,41 @@ func WriteConfigFileAtomic(configPath, tmpPath, content string) error {
 		return fmt.Errorf("failed to open configuration directory: %w", err)
 	}
 	defer func() { _ = root.Close() }()
-	if err := root.WriteFile(filepath.Base(tmpPath), []byte(content), 0o600); err != nil {
-		return fmt.Errorf("failed to write configuration file: %w", err)
-	}
 	defer func() {
 		if _, statErr := os.Stat(tmpPath); statErr == nil {
 			_ = os.Remove(tmpPath)
 		}
 	}()
+	if err := root.WriteFile(filepath.Base(tmpPath), []byte(content), 0o600); err != nil {
+		return fmt.Errorf("failed to write configuration file: %w", err)
+	}
 	if err := os.Rename(tmpPath, configPath); err != nil {
 		return fmt.Errorf("failed to finalize configuration file: %w", err)
 	}
 	return nil
+}
+
+// FormatPreservedEntries renders the entries a --new-install reset keeps, for
+// the confirmation both front-ends show before wiping the base directory.
+//
+// Every entry gets exactly one trailing slash. The list is the compile-time set
+// returned by the caller (build, env, identity), all of them BASE_DIR
+// subdirectories, so there is nothing to detect: the Charm copy this replaces
+// stat'ed each path and omitted the slash for a directory that did not exist
+// yet, which made a destructive confirmation prompt render differently
+// depending on host state. If the set ever gains a non-directory entry, the
+// unconditional slash becomes wrong for it and this must be revisited.
+func FormatPreservedEntries(entries []string) string {
+	formatted := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		trimmed := strings.TrimRight(strings.TrimSpace(entry), "/")
+		if trimmed == "" {
+			continue
+		}
+		formatted = append(formatted, trimmed+"/")
+	}
+	if len(formatted) == 0 {
+		return "(none)"
+	}
+	return strings.Join(formatted, " ")
 }

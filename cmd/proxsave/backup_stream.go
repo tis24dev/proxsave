@@ -164,8 +164,17 @@ func runBackupStreamed(opts backupModeOptions) backupModeResult {
 			defer captureRunOutput(opts.bootstrap, emit)()
 
 			// Thread taskCtx so an Esc cancel propagates into the running backup.
+			//
+			// outcomeRendersRecap is set HERE and nowhere else: this is the only path
+			// that ends on buildBackupOutcomePrompt, so it is the only one where the
+			// engine logging the recap would put it on screen twice. The no-session
+			// fallback above runs the SAME steps with the un-cloned opts and shows no
+			// outcome at all, so it keeps the logged recap - setting the flag on opts
+			// instead of on this clone would silently strip the statistics from exactly
+			// the run that has no other recap.
 			stepOpts := opts
 			stepOpts.ctx = taskCtx
+			stepOpts.outcomeRendersRecap = true
 			res = backupStreamSteps(stepOpts)
 			runStreamedEndOfRunActions(taskCtx, opts, &res)
 			return buildBackupOutcomePrompt(res), nil
@@ -221,7 +230,9 @@ func buildBackupOutcomePrompt(res backupModeResult) string {
 	b.WriteString(renderBackupBanner(sev))
 
 	if st := res.supportStats; st != nil {
-		// The backup-statistics block (headerless); the log block is now debug-only.
+		// The backup-statistics block (headerless). This screen is the ONLY recap of
+		// the run: the engine skips its own logged recap for this path, so the rows
+		// below appear exactly once (backupModeOptions.outcomeRendersRecap).
 		b.WriteString("\n")
 		appendBackupStatsBlock(&b, st)
 
@@ -278,61 +289,23 @@ func buildBackupOutcomePrompt(res backupModeResult) string {
 }
 
 // appendBackupStatsBlock renders the backup-statistics block into the graphical
-// outcome recap. Its first line is the enriched "Files: N collected - K missing
-// (M failed)" moved down from the upper recap; the remaining lines mirror the
-// debug-only log block in logBackupStatistics (same lines, conditionals and
-// formatters - formatBytes/formatDuration and the shared compressionRatioText),
-// just THEME-styled instead of logged.
+// outcome recap: the shared rows from backupStatsRecap, THEME-styled. The graphical
+// front-end always shows the full block, and it really is the only recap a dashboard
+// run gets: the engine's own logged recap is suppressed for this path, at every log
+// level (see logBackupStatistics).
+//
+// A row the builder marks Warn is rendered warning-coloured whole. It used to colour
+// just the "N missing" and "(M failed)" segments inside the Files line; whole-row is
+// the price of the two front-ends agreeing on what a row IS, and it loses nothing —
+// the row is more visible, not less.
 func appendBackupStatsBlock(b *strings.Builder, st *orchestrator.BackupStats) {
-	// Files: N collected - K missing (M failed) - moved down from the upper recap.
-	// "missing" reuses st.FilesMissing (the field the notifications report), always
-	// shown (yellow when >0); the failed count only when non-zero.
-	b.WriteString("\n")
-	b.WriteString(theme.Text.Render(fmt.Sprintf("Files: %d collected - ", st.FilesCollected)))
-	missingStyle := theme.Text
-	if st.FilesMissing > 0 {
-		missingStyle = theme.WarningText
-	}
-	b.WriteString(missingStyle.Render(fmt.Sprintf("%d missing", st.FilesMissing)))
-	if st.FilesFailed > 0 {
-		b.WriteString(theme.WarningText.Render(fmt.Sprintf(" (%d failed)", st.FilesFailed)))
-	}
-	b.WriteString("\n")
-	b.WriteString(theme.Text.Render(fmt.Sprintf("Directories created: %d", st.DirsCreated)))
-	b.WriteString("\n")
-	b.WriteString(theme.Text.Render("Data collected: " + formatBytes(st.BytesCollected)))
-	b.WriteString("\n")
-	b.WriteString(theme.Text.Render("Archive size: " + formatBytes(st.ArchiveSize)))
-	b.WriteString("\n")
-	b.WriteString(theme.Text.Render("Compression ratio: " + compressionRatioText(st)))
-	b.WriteString("\n")
-	b.WriteString(theme.Text.Render(fmt.Sprintf("Compression used: %s (level %d, mode %s)", st.Compression, st.CompressionLevel, st.CompressionMode)))
-	if st.RequestedCompression != st.Compression {
+	for _, line := range backupStatsRecap(st, false) {
+		style := theme.Text
+		if line.Warn {
+			style = theme.WarningText
+		}
 		b.WriteString("\n")
-		b.WriteString(theme.Text.Render(fmt.Sprintf("Requested compression: %s", st.RequestedCompression)))
-	}
-	b.WriteString("\n")
-	b.WriteString(theme.Text.Render("Duration: " + formatDuration(st.Duration)))
-
-	// Mirror logBackupArtifactPaths (bundle case shown contents-then-path). A base
-	// (non-bundle) run has no "Bundle contents" line: it shows "Archive path" plus
-	// the manifest/checksum, so this line adapts to the configured mode.
-	if st.BundleCreated {
-		b.WriteString("\n")
-		b.WriteString(theme.Text.Render("Bundle contents: archive + checksum + metadata"))
-		b.WriteString("\n")
-		b.WriteString(theme.Text.Render("Bundle path: " + st.ArchivePath))
-		return
-	}
-	b.WriteString("\n")
-	b.WriteString(theme.Text.Render("Archive path: " + st.ArchivePath))
-	if st.ManifestPath != "" {
-		b.WriteString("\n")
-		b.WriteString(theme.Text.Render("Manifest path: " + st.ManifestPath))
-	}
-	if st.Checksum != "" {
-		b.WriteString("\n")
-		b.WriteString(theme.Text.Render("Archive checksum (SHA256): " + st.Checksum))
+		b.WriteString(style.Render(line.Text))
 	}
 }
 

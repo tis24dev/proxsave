@@ -242,3 +242,28 @@ func TestNewRunIDIsUUIDv4(t *testing.T) {
 		seen[id] = true
 	}
 }
+
+// TestAliveDegraded pins the alive-degrade contract: /fail on the ALIVE check (not the backup
+// one), the reason in the body even with SendLog off, no rid (the alive check is not
+// run-scoped and never opens a matching /start), and ErrNoAliveURL -- not a silent success --
+// when no alive URL was ever resolved.
+func TestAliveDegraded(t *testing.T) {
+	cap, rep, done := newServer(t, 200, false) // SendLog off: the reason is a diagnostic, not a log tail
+	defer done()
+	if err := rep.AliveDegraded(context.Background(), "child unreapable"); err != nil {
+		t.Fatalf("AliveDegraded: %v", err)
+	}
+	g := cap.get()
+	if g.path != "/ping/alive/fail" {
+		t.Fatalf("alive-degraded path %q, want /ping/alive/fail", g.path)
+	}
+	if g.body != "child unreapable" {
+		t.Fatalf("alive-degraded body %q, want the reason even with SendLog off", g.body)
+	}
+	if g.query != "" {
+		t.Fatalf("alive-degraded should carry no rid, got query %q", g.query)
+	}
+	if err := NewReporter(Config{}).AliveDegraded(context.Background(), "x"); err != ErrNoAliveURL {
+		t.Fatalf("AliveDegraded with no url = %v, want ErrNoAliveURL", err)
+	}
+}

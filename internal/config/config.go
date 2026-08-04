@@ -406,46 +406,53 @@ func LoadConfigWithBaseDir(configPath, detectedBaseDir string) (*Config, error) 
 	return cfg, nil
 }
 
-// loadEnvOverrides checks for environment variables and overrides config file values
-// This allows environment variables to take precedence over file configuration
-func (c *Config) loadEnvOverrides() {
-	// List of all configuration keys that can be overridden by environment variables
-	envKeys := []string{
-		"BACKUP_ENABLED", "DRY_RUN", "DEBUG_LEVEL", "USE_COLOR", "COLORIZE_STEP_LOGS",
-		"PROFILING_ENABLED",
-		"COMPRESSION_TYPE", "COMPRESSION_LEVEL", "COMPRESSION_THREADS", "COMPRESSION_MODE",
-		"ENABLE_DEDUPLICATION", "ENABLE_PREFILTER", "PREFILTER_MAX_FILE_SIZE_MB",
-		"BACKUP_PATH", "LOG_PATH", "LOCK_PATH", "SECURE_ACCOUNT",
-		"SECONDARY_ENABLED", "SECONDARY_PATH", "SECONDARY_LOG_PATH",
-		"CLOUD_ENABLED", "CLOUD_REMOTE", "CLOUD_REMOTE_PATH", "CLOUD_LOG_PATH",
-		"CLOUD_UPLOAD_MODE", "CLOUD_PARALLEL_MAX_JOBS", "CLOUD_PARALLEL_VERIFICATION",
-		"CLOUD_WRITE_HEALTHCHECK",
-		"RCLONE_TIMEOUT_CONNECTION", "RCLONE_TIMEOUT_OPERATION",
-		"RCLONE_BANDWIDTH_LIMIT", "RCLONE_TRANSFERS", "RCLONE_RETRIES", "RCLONE_VERIFY_METHOD",
-		"RCLONE_FLAGS",
-		"CLOUD_BATCH_SIZE", "CLOUD_BATCH_PAUSE",
-		"MAX_LOCAL_BACKUPS", "MAX_SECONDARY_BACKUPS", "MAX_CLOUD_BACKUPS",
-		"RETENTION_DAILY", "RETENTION_WEEKLY", "RETENTION_MONTHLY", "RETENTION_YEARLY",
-		"BUNDLE_ASSOCIATED_FILES", "ENCRYPT_ARCHIVE", "AGE_RECIPIENT", "AGE_RECIPIENT_FILE",
-		"TELEGRAM_ENABLE", "TELEGRAM_ENABLED", "BOT_TELEGRAM_TYPE", "TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID",
-		"EMAIL_ENABLE", "EMAIL_ENABLED", "EMAIL_DELIVERY_METHOD", "EMAIL_FALLBACK_PMF", "EMAIL_FALLBACK_SENDMAIL",
-		"EMAIL_RECIPIENT", "EMAIL_FROM",
-		"GOTIFY_ENABLE", "GOTIFY_ENABLED", "GOTIFY_SERVER_URL", "GOTIFY_TOKEN",
-		"GOTIFY_PRIORITY_SUCCESS", "GOTIFY_PRIORITY_WARNING", "GOTIFY_PRIORITY_FAILURE",
-		"WEBHOOK_ENABLE", "WEBHOOK_ENABLED", "WEBHOOK_ENDPOINTS", "WEBHOOK_FORMAT", "WEBHOOK_TIMEOUT",
-		"WEBHOOK_MAX_RETRIES", "WEBHOOK_RETRY_DELAY",
-		"METRICS_ENABLED", "METRICS_PATH",
-		"SECURITY_CHECK_ENABLED", "AUTO_UPDATE_HASHES", "AUTO_FIX_PERMISSIONS",
-		"CONTINUE_ON_SECURITY_ISSUES", "CHECK_NETWORK_SECURITY", "CHECK_FIREWALL",
-		"CHECK_OPEN_PORTS", "SUSPICIOUS_PORTS", "PORT_WHITELIST",
-		"SUSPICIOUS_PROCESSES", "SAFE_BRACKET_PROCESSES", "SAFE_KERNEL_PROCESSES", "SAFE_PROCESSES",
-		"MIN_DISK_SPACE_PRIMARY_GB", "MIN_DISK_SPACE_SECONDARY_GB", "MIN_DISK_SPACE_CLOUD_GB",
-		"DISABLE_NETWORK_PREFLIGHT", "BACKUP_EXCLUDE_PATTERNS",
-		"SKIP_PERMISSION_CHECK", "BACKUP_CONFIG_FILE",
-		"BACKUP_USER", "BACKUP_GROUP", "SET_BACKUP_PERMISSIONS",
-	}
+// envOverrideKeys lists every configuration key an environment variable may override.
+//
+// Package-level rather than local to loadEnvOverrides because the tests need the same
+// list: one that compares two configs loaded from different files has to neutralise these
+// first, or an override present in the shell applies to BOTH sides, they agree because of
+// it, and a genuine divergence for that key is hidden. A second copy in the test would
+// drift away from this one silently, which is the failure mode the comparison exists to
+// catch in the first place.
+var envOverrideKeys = []string{
+	"BACKUP_ENABLED", "DRY_RUN", "DEBUG_LEVEL", "USE_COLOR", "COLORIZE_STEP_LOGS",
+	"PROFILING_ENABLED",
+	"COMPRESSION_TYPE", "COMPRESSION_LEVEL", "COMPRESSION_THREADS", "COMPRESSION_MODE",
+	"ENABLE_DEDUPLICATION", "ENABLE_PREFILTER", "PREFILTER_MAX_FILE_SIZE_MB",
+	"BACKUP_PATH", "LOG_PATH", "LOCK_PATH", "SECURE_ACCOUNT",
+	"SECONDARY_ENABLED", "SECONDARY_PATH", "SECONDARY_LOG_PATH",
+	"CLOUD_ENABLED", "CLOUD_REMOTE", "CLOUD_REMOTE_PATH", "CLOUD_LOG_PATH",
+	"CLOUD_UPLOAD_MODE", "CLOUD_PARALLEL_MAX_JOBS", "CLOUD_PARALLEL_VERIFICATION",
+	"CLOUD_WRITE_HEALTHCHECK",
+	"RCLONE_TIMEOUT_CONNECTION", "RCLONE_TIMEOUT_OPERATION",
+	"RCLONE_BANDWIDTH_LIMIT", "RCLONE_TRANSFERS", "RCLONE_RETRIES", "RCLONE_VERIFY_METHOD",
+	"RCLONE_FLAGS",
+	"CLOUD_BATCH_SIZE", "CLOUD_BATCH_PAUSE",
+	"MAX_LOCAL_BACKUPS", "MAX_SECONDARY_BACKUPS", "MAX_CLOUD_BACKUPS",
+	"RETENTION_DAILY", "RETENTION_WEEKLY", "RETENTION_MONTHLY", "RETENTION_YEARLY",
+	"BUNDLE_ASSOCIATED_FILES", "ENCRYPT_ARCHIVE", "AGE_RECIPIENT", "AGE_RECIPIENT_FILE",
+	"TELEGRAM_ENABLE", "TELEGRAM_ENABLED", "BOT_TELEGRAM_TYPE", "TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID",
+	"EMAIL_ENABLE", "EMAIL_ENABLED", "EMAIL_DELIVERY_METHOD", "EMAIL_FALLBACK_PMF", "EMAIL_FALLBACK_SENDMAIL",
+	"EMAIL_RECIPIENT", "EMAIL_FROM",
+	"GOTIFY_ENABLE", "GOTIFY_ENABLED", "GOTIFY_SERVER_URL", "GOTIFY_TOKEN",
+	"GOTIFY_PRIORITY_SUCCESS", "GOTIFY_PRIORITY_WARNING", "GOTIFY_PRIORITY_FAILURE",
+	"WEBHOOK_ENABLE", "WEBHOOK_ENABLED", "WEBHOOK_ENDPOINTS", "WEBHOOK_FORMAT", "WEBHOOK_TIMEOUT",
+	"WEBHOOK_MAX_RETRIES", "WEBHOOK_RETRY_DELAY",
+	"METRICS_ENABLED", "METRICS_PATH",
+	"SECURITY_CHECK_ENABLED", "AUTO_UPDATE_HASHES", "AUTO_FIX_PERMISSIONS",
+	"CONTINUE_ON_SECURITY_ISSUES", "CHECK_NETWORK_SECURITY", "CHECK_FIREWALL",
+	"CHECK_OPEN_PORTS", "SUSPICIOUS_PORTS", "PORT_WHITELIST",
+	"SUSPICIOUS_PROCESSES", "SAFE_BRACKET_PROCESSES", "SAFE_KERNEL_PROCESSES", "SAFE_PROCESSES",
+	"MIN_DISK_SPACE_PRIMARY_GB", "MIN_DISK_SPACE_SECONDARY_GB", "MIN_DISK_SPACE_CLOUD_GB",
+	"DISABLE_NETWORK_PREFLIGHT", "BACKUP_EXCLUDE_PATTERNS",
+	"SKIP_PERMISSION_CHECK", "BACKUP_CONFIG_FILE",
+	"BACKUP_USER", "BACKUP_GROUP", "SET_BACKUP_PERMISSIONS",
+}
 
-	for _, key := range envKeys {
+// loadEnvOverrides checks for environment variables and overrides config file values.
+// This allows environment variables to take precedence over file configuration.
+func (c *Config) loadEnvOverrides() {
+	for _, key := range envOverrideKeys {
 		if envValue := os.Getenv(key); envValue != "" {
 			upperKey := strings.ToUpper(key)
 			if canonicalKey, ok := legacyNotificationEnableAliases[upperKey]; ok {
@@ -961,7 +968,13 @@ func (c *Config) parsePBSSettings() {
 	networkFallback := c.getBoolWithFallback([]string{"BACKUP_NETWORK_CONFIGS", "BACKUP_NETWORK_CONFIG"}, true)
 	c.BackupPBSNetworkConfig = c.getBool("BACKUP_PBS_NETWORK_CONFIG", networkFallback)
 	c.BackupPruneSchedules = c.getBool("BACKUP_PRUNE_SCHEDULES", true)
-	c.BackupPxarFiles = c.getBoolWithFallback([]string{"PXAR_SCAN_ENABLE", "BACKUP_PXAR_FILES"}, true)
+	// Default false to match the shipped template. It used to compile to true while the
+	// template shipped PXAR_SCAN_ENABLE=false, which meant one release behaved two ways:
+	// a fresh install had datastore scanning OFF, while a config old enough to predate
+	// the key had it ON and walked every PBS datastore. Nobody chose the second
+	// behaviour -- it fell out of the mismatch -- and the expensive side is the wrong
+	// side for a value nobody set.
+	c.BackupPxarFiles = c.getBoolWithFallback([]string{"PXAR_SCAN_ENABLE", "BACKUP_PXAR_FILES"}, false)
 	c.PxarDatastoreConcurrency = c.getInt("PXAR_SCAN_DS_CONCURRENCY", 3)
 	c.PxarFileIncludePatterns = normalizeList(c.getStringSliceWithFallback([]string{"PXAR_FILE_INCLUDE_PATTERN", "PXAR_INCLUDE_PATTERN"}, nil))
 	c.PxarFileExcludePatterns = normalizeList(c.getStringSlice("PXAR_FILE_EXCLUDE_PATTERN", nil))

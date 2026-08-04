@@ -32,6 +32,29 @@ func SanitizeTelegramSetupStatusMessage(raw string) string {
 	return TruncateTelegramSetupStatusMessage(quoted)
 }
 
+// TelegramSetupStatusUnknownMessage stands in for the relay's status message in the
+// "not verified" log line when the server said nothing usable — either it sent no
+// message at all, or everything it sent was stripped as a control sequence. Without
+// it the line ends on a bare status code with nothing after it, which reads like a
+// log that was cut short rather than a server that stayed silent.
+const TelegramSetupStatusUnknownMessage = "Registration not active yet"
+
+// TelegramSetupStatusMessageForLog is the untrusted relay status message as EVERY
+// front-end must write it into the persisted install log: scrubbed, truncated, and
+// replaced by the stand-in when nothing survives. That log is written to disk and
+// read back later, so an escape sequence surviving into it would move the cursor of
+// whoever cats the file — the CLI scrubbed here from the start, the TUI did not.
+//
+// Sanitizing is idempotent (a scrubbed string has no control bytes left to strip and
+// is already within the cap), so a caller that already scrubbed at the write site can
+// still route through here to pick up the stand-in.
+func TelegramSetupStatusMessageForLog(raw string) string {
+	if msg := SanitizeTelegramSetupStatusMessage(raw); msg != "" {
+		return msg
+	}
+	return TelegramSetupStatusUnknownMessage
+}
+
 func stripTelegramTerminalSequences(msg string) string {
 	var b strings.Builder
 	b.Grow(len(msg))

@@ -29,7 +29,7 @@ import (
 // Ping suffixes on a healthchecks check URL (same identifier, different suffix).
 const (
 	suffixStart = "/start" // run started (pair with ?rid for duration)
-	suffixFail  = "/fail"  // definitive failure (used for the hang case)
+	suffixFail  = "/fail"  // definitive failure (a backup hang, or the alive degrade)
 	suffixLog   = "/log"   // records a ping WITHOUT changing check state (test only)
 )
 
@@ -188,6 +188,26 @@ func (r *Reporter) RunHang(ctx context.Context, rid string, timeout time.Duratio
 		body = body + "\n\n" + logTail
 	}
 	return r.pingCheck(ctx, CheckKeyBackup, suffixFail, rid, body, "hang")
+}
+
+// AliveDegraded pings /fail on the SERVICE-ALIVE check, driving it DOWN. It is the
+// deliberate counterpart of Heartbeat: the daemon sends it when it has had to abandon a
+// backup child the kernel will never let it reap -- once on its way out, and then in place
+// of every heartbeat once systemd has restarted it, for as long as the abandoned child is
+// still outstanding. Backups are dead throughout, and a host whose alive check stays green
+// through that (or, worse, re-greens ten seconds later and fires a "recovered" alert) is a
+// host nobody looks at.
+//
+// reason rides as the POST body so the monitor UI shows WHY the service degraded instead of
+// an unexplained missed ping. It is a one-line diagnostic, NOT a log tail, so -- exactly
+// like RunHang's timeout line -- it is not gated on SendLog. No rid: the alive check is not
+// run-scoped and never opens a matching /start, so a ?rid on it would only corrupt the
+// monitor's run-duration correlation.
+func (r *Reporter) AliveDegraded(ctx context.Context, reason string) error {
+	if !r.HasAliveURL() {
+		return ErrNoAliveURL
+	}
+	return r.pingCheck(ctx, CheckKeyAlive, suffixFail, "", reason, "alive-degraded")
 }
 
 // ReportUpdate pings the "updates" check with the update-availability signal:

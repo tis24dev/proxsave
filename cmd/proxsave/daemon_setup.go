@@ -186,9 +186,9 @@ func applyDaemonMode(ctx context.Context, cfg *config.Config, configPath, execTo
 }
 
 // verifyDaemonAlignedBestEffort waits (poll-only, no restart) for the just-(re)started daemon to
-// become process-alive with an assessable alignment, then REPORTS its real state - the SAME verdict
-// --daemon-status gives (aligned / behind / not running) - never a bare "timeout". It NEVER fails
-// the caller (install / --daemon-setup): a behind or unconfirmed daemon is a warning, not an error.
+// become process-alive with an assessable alignment, then REPORTS its real state - aligned,
+// behind, alignment-unverifiable, or not running - never a bare "timeout". It NEVER fails the
+// caller (install / --daemon-setup): a behind or unconfirmed daemon is a warning, not an error.
 func verifyDaemonAlignedBestEffort(ctx context.Context, baseDir string, interval time.Duration) RestartVerifyResult {
 	logging.Info("Verifying daemon alignment...")
 	rv := verifyDaemonAligned(ctx, baseDir, interval)
@@ -200,12 +200,26 @@ func verifyDaemonAlignedBestEffort(ctx context.Context, baseDir string, interval
 	return rv
 }
 
-// installVerifyVerdict maps a poll-only verify result (verifyDaemonAligned) to the
-// aligned / behind / not-running verdict as a (level, keyword) pair - the SAME verdict
-// --daemon-status reports. Shared by the log line (verifyDaemonAlignedBestEffort) and the
-// graphical install outcome (buildInstallOutcomePrompt) so they never diverge. It must NOT
-// go through restartVerifyStatus, whose success arm needs Restarted/FreshInfo that the
-// poll-only verify never sets - that mis-mapping made the install always say "not confirmed".
+// installVerifyVerdict maps a poll-only verify result (verifyDaemonAligned) to a
+// (level, keyword) pair, shared by the log line (verifyDaemonAlignedBestEffort) and the
+// graphical install outcome (buildInstallOutcomePrompt) so the two never diverge.
+//
+// It must NOT go through classifyRestartVerify. That classifier's success arm requires
+// Restarted, which the poll-only verify never sets (verifyDaemonAligned builds its result
+// from a zero value and only ever assigns State/ProcessAlive/Aligned/FreshInfo/TimedOut),
+// so every poll-only result would land on a "restarted but..." arm - the mis-mapping that
+// once made the install always say "not confirmed". Four of that classifier's six arms are
+// structurally unreachable here (no Err, no LockPathUnknown, no BackupWaitTimedOut, no
+// Restarted), and its shape has no BEHIND verdict at all, which is the one verdict an
+// install most needs to report.
+//
+// This is NOT the same verdict --daemon-status gives: daemonStatusStyle turns green only on
+// a FRESH HEARTBEAT and ignores alignment, whereas a just-restarted daemon is aligned long
+// before it writes its first heartbeat. The two answer different questions and word their
+// "behind" differently on purpose.
+//
+// The keyword is interpolated mid-sentence by the log line ("Daemon %s."), which is why it
+// is lower case unlike the dashboard's ALL-CAPS keywords.
 func installVerifyVerdict(rv RestartVerifyResult) (orchestrator.HealthcheckSetupLevel, string) {
 	switch {
 	case rv.ProcessAlive && rv.Aligned:
@@ -216,6 +230,12 @@ func installVerifyVerdict(rv RestartVerifyResult) (orchestrator.HealthcheckSetup
 		return orchestrator.HealthcheckSetupLevelOk, keyword
 	case rv.ProcessAlive && rv.State.AlignChecked:
 		return orchestrator.HealthcheckSetupLevelWarn, "running but not aligned (behind)"
+	case rv.ProcessAlive:
+		// Alive, but the /proc alignment probe never returned a verdict for it, so alignment
+		// is UNKNOWN (health.DaemonState gates every "behind" verdict on AlignChecked).
+		// Reporting "not running" here was wrong twice over: the process IS running, and the
+		// thing that could not be established was its ALIGNMENT, not its existence.
+		return orchestrator.HealthcheckSetupLevelWarn, "running, but alignment could not be verified"
 	default:
 		return orchestrator.HealthcheckSetupLevelWarn, "not running"
 	}
@@ -313,12 +333,12 @@ func maybeAutoMigrateDaemon(ctx context.Context, configPath, baseDir, execToken 
 		bootstrap.Println("Daemon mode was previously removed (--daemon-remove); leaving the cron scheduler in place.")
 		return
 	}
-	bootstrap.Println("Migrating to the resident daemon scheduler (proxsave-daemon.service)...")
+	bootstrap.Println("Migrating to the resident daemon scheduler (" + daemonUnitName + ")...")
 	if err := applyDaemonMode(ctx, cfg, configPath, execToken, bootstrap); err != nil {
 		bootstrap.Warning("Daemon migration failed; staying on cron: %v", err)
 		return
 	}
-	bootstrap.Println("Daemon mode enabled: proxsave-daemon.service is active and the cron entry was removed.")
+	bootstrap.Println("Daemon mode enabled: " + daemonUnitName + " is active and the cron entry was removed.")
 }
 
 // setBackupEnvKeys reads backup.env, applies the given key=value edits (replacing
@@ -339,7 +359,7 @@ func setBackupEnvKeys(configPath string, kv map[string]string) error {
 	for _, k := range keys {
 		content = utils.SetEnvValue(content, k, kv[k])
 	}
-	return writeConfigFile(configPath, configPath+".daemon.tmp", content)
+	return installer.WriteConfigFileAtomic(configPath, configPath+".daemon.tmp", content)
 }
 
 // reconcileSchedulerAfterInstall makes the scheduler engine a MUTUALLY EXCLUSIVE

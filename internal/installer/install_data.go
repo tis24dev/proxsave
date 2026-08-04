@@ -10,6 +10,7 @@ import (
 	"bufio"
 	"errors"
 	"fmt"
+	"net/url"
 	"strings"
 
 	"github.com/tis24dev/proxsave/internal/config"
@@ -52,7 +53,16 @@ type InstallWizardPrefill struct {
 	HealthcheckMode     string // "off" | "centralized" | "self" (empty on a fresh/pre-daemon config)
 }
 
-// InstallWizardData holds the collected installation data
+// InstallWizardData holds the collected installation data.
+//
+// A pointer field here means "an operator answered this question", so it is only ever
+// non-nil when a front-end actually asked. EmailFallbackSendmail is the exception that
+// proves the rule: NEITHER wizard has a sendmail-failover prompt, so both leave it nil
+// and ApplyInstallData owns EMAIL_FALLBACK_SENDMAIL end to end (seed / migrate /
+// preserve). The field is kept as the engine's UI-agnostic seam for the day such a
+// prompt is signed off - it is not an invitation to fabricate a value, which is what
+// used to flip a stored false back to true on every wizard pass and re-open the local
+// /usr/sbin/sendmail delivery route.
 type InstallWizardData struct {
 	BaseDir                string
 	ConfigPath             string
@@ -65,7 +75,7 @@ type InstallWizardData struct {
 	BackupFirewallRules    *bool
 	NotificationMode       string // "none", "telegram", "email", "both"
 	EmailDeliveryMethod    string // "relay", "sendmail", or "pmf"
-	EmailFallbackSendmail  *bool
+	EmailFallbackSendmail  *bool  // nil from BOTH front-ends on purpose - see the type doc
 	CronTime               string // HH:MM (the "Run at" time)
 	EnableEncryption       bool
 	SchedulerMode          string // "cron" | "daemon"
@@ -137,6 +147,43 @@ func DeriveHealthcheckSelfParams(template string) HealthcheckSelfParams {
 	}
 }
 
+// ValidateHealthcheckPingURL accepts only a well-formed absolute http(s) ping URL
+// with a host. It mirrors the http(s) gate style of serverbot.SanitizeLoginURL but
+// is a full-URL validator: an empty value is rejected (use it on required fields;
+// wrap it for optional ones). Callers paste the ENTIRE ping URL of each check
+// (e.g. https://hc-ping.com/<uuid>), so the daemon's selfURLs() full-URL branch
+// resolves it verbatim. Shared by the CLI wizard and the Charm install flow.
+func ValidateHealthcheckPingURL(v string) error {
+	v = strings.TrimSpace(v)
+	if v == "" {
+		return fmt.Errorf("cannot be empty")
+	}
+	if !strings.HasPrefix(v, "http://") && !strings.HasPrefix(v, "https://") {
+		return fmt.Errorf("URL must start with http:// or https://")
+	}
+	u, err := url.ParseRequestURI(v)
+	if err != nil {
+		return fmt.Errorf("invalid URL: %v", err)
+	}
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return fmt.Errorf("URL must start with http:// or https://")
+	}
+	if u.Host == "" {
+		return fmt.Errorf("URL must include a host")
+	}
+	return nil
+}
+
+// ValidateOptionalHealthcheckPingURL is ValidateHealthcheckPingURL for optional
+// fields: an empty value is accepted (the sensor is simply not configured), a
+// non-empty value must still be a valid http(s) URL.
+func ValidateOptionalHealthcheckPingURL(v string) error {
+	if strings.TrimSpace(v) == "" {
+		return nil
+	}
+	return ValidateHealthcheckPingURL(v)
+}
+
 // ExistingConfigAction represents how to handle an already-present configuration file.
 
 // If baseTemplate is empty, the embedded default template is used.
@@ -184,7 +231,19 @@ func ApplyInstallData(baseTemplate string, data *InstallWizardData) (string, err
 		template = setEnvValue(template, "CLOUD_LOG_PATH", "")
 	}
 
-	// Apply firewall rules backup (optional; keep template default when unset)
+	// Apply firewall rules backup. A nil field means no front-end asked, and the key is
+	// then not written AT ALL -- which is not the same thing on both paths: on a fresh
+	// install or an Overwrite it leaves the SHIPPED template's value, on an Edit it
+	// leaves the OPERATOR's stored value. Calling that "the template default" names
+	// only the first.
+	//
+	// Both wizards ask the firewall question today, so the nil arm is currently
+	// unreachable from production (verified by instrumenting this function over the
+	// whole test suite: every nil arrival comes from a unit-test body, never from a
+	// production frame). It is kept because that is a property of today's front-ends
+	// rather than an invariant -- the sibling EmailFallbackSendmail went from
+	// always-non-nil to always-nil on both surfaces -- and because the nil check is
+	// what stops this exported function dereferencing a nil pointer.
 	if data.BackupFirewallRules != nil {
 		if *data.BackupFirewallRules {
 			template = setEnvValue(template, "BACKUP_FIREWALL_RULES", "true")
@@ -213,17 +272,58 @@ func ApplyInstallData(baseTemplate string, data *InstallWizardData) (string, err
 		method = installEmailDeliveryMethodOrDefault(method)
 		template = setEnvValue(template, "EMAIL_DELIVERY_METHOD", method)
 
-		fallbackRaw := readTemplateString(existingValues, "EMAIL_FALLBACK_SENDMAIL", "EMAIL_FALLBACK_PMF")
+		// EMAIL_FALLBACK_SENDMAIL gates the local /usr/sbin/sendmail delivery leg:
+		// with it off, notify.sendPMFFallbackChain returns the delivery error instead
+		// of shelling out, and a network-less run disables email instead of rerouting
+		// it through sendmail (cmd/proxsave/main_network.go). NEITHER front-end asks
+		// the operator about that key, so a nil payload field is the NORMAL case and
+		// this block owns the value end to end:
+		//
+		//	explicit answer        -> write it (the seam a future prompt plugs into)
+		//	EMAIL_FALLBACK_SENDMAIL
+		//	  present at all       -> PRESERVE it, byte for byte
+		//	only the legacy
+		//	  EMAIL_FALLBACK_PMF   -> migrate its value onto the current spelling
+		//	neither key present    -> seed true (a blank Edit; the shipped template
+		//	                          already carries the key, so a fresh install and
+		//	                          an Overwrite both take the preserve arm)
+		//
+		// The preserve arm is the point of the whole switch. Without it, a wizard pass
+		// that asked no question - a no-op edit included - rewrote a deliberate
+		// EMAIL_FALLBACK_SENDMAIL=false back to true and silently re-opened a delivery
+		// route the operator had closed.
+		//
+		// Every arm of this switch drops the transitional key, so a config that carried
+		// both spellings leaves with one. That is safe because the arms read
+		// existingValues, parsed from the UNTOUCHED baseTemplate, so the migrate arm
+		// still has the value after the line is gone from template. It is not lossless
+		// in general -- on the migrate arm the alias IS the key the loader was reading
+		// -- which is exactly why that arm copies the value across before it is lost.
+		// The drop stays INSIDE the email-enabled branch on purpose: the email-off
+		// branch writes no EMAIL_FALLBACK_SENDMAIL, so removing the alias there would
+		// flip a PMF-only config to the loader's true default.
+		//
+		// PRESENCE in existingValues, not emptiness of the value, is what selects the
+		// arm. The two are different: parseEnvTemplate records a bare "KEY=" line as a
+		// present, empty value, and the loader reads that as FALSE
+		// (getBoolWithFallback stops at the first key it finds; utils.ParseBool("") is
+		// false). Keying off the value instead treated "KEY=" as "nothing stored" and
+		// seeded true over it -- the same silent re-open this switch exists to prevent,
+		// just spelled with an empty value instead of "false".
+		_, sendmailStored := existingValues["EMAIL_FALLBACK_SENDMAIL"]
+		legacyRaw, legacyStored := existingValues["EMAIL_FALLBACK_PMF"]
+		template = unsetEnvValue(template, "EMAIL_FALLBACK_PMF")
 		switch {
 		case data.EmailFallbackSendmail != nil:
-			template = unsetEnvValue(template, "EMAIL_FALLBACK_PMF")
 			template = setEnvValue(template, "EMAIL_FALLBACK_SENDMAIL", fmt.Sprintf("%t", *data.EmailFallbackSendmail))
-		case fallbackRaw == "":
-			template = unsetEnvValue(template, "EMAIL_FALLBACK_PMF")
+		case sendmailStored:
+			// PRESERVE: write nothing at all. Not even a canonicalising rewrite -- the
+			// operator's own spelling (quotes, an export prefix, yes/on/0) survives an
+			// edit verbatim, and utils.ParseBool and the loader accept all of them.
+		case legacyStored:
+			template = setEnvValue(template, "EMAIL_FALLBACK_SENDMAIL", fmt.Sprintf("%t", utils.ParseBool(legacyRaw)))
+		default:
 			template = setEnvValue(template, "EMAIL_FALLBACK_SENDMAIL", "true")
-		case strings.TrimSpace(existingValues["EMAIL_FALLBACK_SENDMAIL"]) == "":
-			template = unsetEnvValue(template, "EMAIL_FALLBACK_PMF")
-			template = setEnvValue(template, "EMAIL_FALLBACK_SENDMAIL", fmt.Sprintf("%t", utils.ParseBool(fallbackRaw)))
 		}
 	} else {
 		template = setEnvValue(template, "EMAIL_ENABLED", "false")

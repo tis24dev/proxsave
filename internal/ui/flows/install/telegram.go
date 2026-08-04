@@ -89,7 +89,15 @@ func RunTelegramSetup(ctx context.Context, session *shell.Session, baseDir, conf
 				if !cancelled {
 					result.CheckAttempts++
 					result.LastStatusCode = res.Status.Code
-					result.LastStatusMessage = res.Status.Message // RAW preserved (parity with tview)
+					// Scrubbed at the WRITE site. This field exists to be logged —
+					// the install driver puts it in the persisted bootstrap log — and
+					// it carries whatever the relay chose to send, so scrubbing here
+					// is what keeps terminal escapes out of every consumer instead of
+					// trusting each one to remember. It previously held the raw bytes
+					// ("parity with tview") and the install log inherited them. The
+					// status line the user reads is st.Message below, which the
+					// classifier scrubs separately.
+					result.LastStatusMessage = orchestrator.SanitizeTelegramSetupStatusMessage(res.Status.Message)
 					if res.Status.Error != nil {
 						result.LastStatusError = res.Status.Error.Error()
 					} else {

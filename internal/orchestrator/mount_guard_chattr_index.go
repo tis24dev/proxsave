@@ -11,7 +11,7 @@ import (
 
 // mountGuardChattrTargetsName is the index file (under mountGuardBaseDir) that
 // records mountpoint directories ProxSave marked immutable via the `chattr +i`
-// fallback guard during restore. CleanupMountGuards reads it back to clear
+// fallback guard during restore. CleanupMountGuardsReport reads it back to clear
 // exactly those directories (and only those) with `chattr -i`.
 //
 // Unlike the read-only bind-mount guard — which a later real mount simply shadows
@@ -82,7 +82,7 @@ func parseImmutableGuardTargets(data []byte) []string {
 }
 
 // recordImmutableGuardTarget appends target to the immutable-guard index after a
-// successful `chattr +i`, so CleanupMountGuards can later clear exactly the
+// successful `chattr +i`, so CleanupMountGuardsReport can later clear exactly the
 // directories ProxSave itself made immutable. Best-effort: any failure is logged
 // and swallowed so a recording problem never aborts the restore. The write is
 // atomic and de-duplicated.
@@ -90,7 +90,7 @@ func parseImmutableGuardTargets(data []byte) []string {
 // Retained on purpose, not currently wired into a production code path. The
 // offline mount-guard fallback is warn-only now (it no longer applies `chattr +i`),
 // so nothing in restore writes the index anymore. The reader side stays fully live:
-// CleanupMountGuards / warnLegacyImmutableGuards still parse and clear entries left
+// CleanupMountGuardsReport / warnLegacyImmutableGuards still parse and clear entries left
 // by older ProxSave versions. This writer is kept (and exercised by tests) as the
 // canonical definition of the index format the reader consumes, so the `chattr +i`
 // fallback can be re-enabled without re-deriving it.

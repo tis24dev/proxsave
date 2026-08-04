@@ -204,11 +204,21 @@ func runCleanupGuardsMode(ctx context.Context, args *cli.Args, bootstrap *loggin
 	}
 	logger := logging.New(level, false)
 
-	if err := orchestrator.CleanupMountGuards(ctx, logger, args.DryRun); err != nil {
+	// The REPORT: exiting 0 with guards still holding the storage actively misleads a
+	// script gating on the exit code, and the read that would have told us was being
+	// thrown away. This mode used to take an error-only wrapper that did exactly that;
+	// the wrapper is gone, so the report is now the only way in. Same seam the dashboard
+	// uses, so one stub covers both front-ends in tests.
+	report, err := cleanupGuardsReport(ctx, logger, args.DryRun)
+	if err != nil {
 		bootstrap.Error("ERROR: %v", err)
 		return types.ExitGenericError.Int(), true
 	}
-	return types.ExitSuccess.Int(), true
+
+	// The verdict the dashboard shows as CLEAN/FOUND and DONE/PENDING, stated in the
+	// CLI's voice and then reflected in the exit code.
+	logCLIGuardVerdict(logger, report, args.DryRun)
+	return guardCleanupExitCode(report, args.DryRun).Int(), true
 }
 
 func runUpgradeMode(ctx context.Context, args *cli.Args, bootstrap *logging.BootstrapLogger, _ string) (int, bool) {

@@ -46,6 +46,13 @@ func (f *fullRestoreUIFlow) extract() error {
 	if f.safeFstabMerge() {
 		f.logger.Warning("Full restore safety: /etc/fstab will not be overwritten; Smart Merge will be applied after extraction.")
 	}
+	// Announced only on a PVE host: skipPath drops these entries whatever the detected
+	// system type, but telling a PBS operator about a cluster database is noise.
+	if f.plan != nil && f.plan.SystemType.SupportsPVE() {
+		if paths := clusterDBArchivePaths(); len(paths) > 0 {
+			f.logger.Warning("Full restore safety: %s will NOT be restored. This fallback never stops pve-cluster, so writing the cluster database under a live pmxcfs would corrupt it. Restore that category with a selective restore once the archive can be analyzed.", strings.Join(paths, ", "))
+		}
+	}
 	if err := extractPlainArchive(f.ctx, f.prepared.ArchivePath, f.destRoot, f.logger, f.skipPath); err != nil {
 		return err
 	}
@@ -56,35 +63,69 @@ func (f *fullRestoreUIFlow) extract() error {
 	return nil
 }
 
-// skipPath keeps two classes of entry out of a plain extraction: /etc/fstab, which
-// is merged afterwards instead of overwritten, and everything belonging to an
-// ExportOnly category. The selective path never writes export-only content to system
-// paths (splitRestoreCategories routes it to an export directory); before this, the
+// skipPath keeps three classes of entry out of a plain extraction: /etc/fstab, which
+// is merged afterwards instead of overwritten; the PVE cluster database, which this
+// fallback has no safe way to write; and everything belonging to an ExportOnly
+// category. The selective path never writes export-only content to system paths
+// (splitRestoreCategories routes it to an export directory); before this, the
 // fallback wrote /etc/proxmox-backup/ and /var/lib/proxsave-info/ straight to /.
 //
-// The prefixes come from the plan's own ExportCategories, so there is no second list
-// to keep in step with categories.go.
+// The prefixes come from the plan's own ExportCategories and from categories.go, so
+// there is no second list to keep in step with them.
 func (f *fullRestoreUIFlow) skipPath(name string) bool {
 	clean := normalizeArchiveEntryPath(name)
 	if f.safeFstabMerge() && clean == "etc/fstab" {
 		return true
 	}
+	if matchesAnyArchivePrefix(clean, clusterDBArchivePaths()) {
+		return true
+	}
 	return f.isExportOnlyPath(clean)
 }
 
+// clusterDBArchivePaths returns the archive prefixes holding the PVE cluster
+// database, read from categories.go rather than restated here.
+//
+// The fallback must never write them. runFullRestore leaves NeedsClusterRestore off,
+// so pve-cluster keeps running and /etc/pve stays mounted; extracting config.db under
+// a live pmxcfs that holds it open as SQLite corrupts it, and on a clustered node
+// corosync would carry the damage to every other member. The /etc/pve block in
+// restore_archive_entries.go does not cover this: the database lives under
+// /var/lib/pve-cluster/, which no other guard touches.
+func clusterDBArchivePaths() []string {
+	cat := GetCategoryByID("pve_cluster", GetAllCategories())
+	if cat == nil {
+		return nil
+	}
+	return cat.Paths
+}
+
 func (f *fullRestoreUIFlow) isExportOnlyPath(clean string) bool {
-	if f.plan == nil || clean == "" {
+	if f.plan == nil {
 		return false
 	}
 	for _, cat := range f.plan.ExportCategories {
-		for _, p := range cat.Paths {
-			prefix := normalizeArchiveEntryPath(p)
-			if prefix == "" {
-				continue
-			}
-			if clean == prefix || strings.HasPrefix(clean, strings.TrimSuffix(prefix, "/")+"/") {
-				return true
-			}
+		if matchesAnyArchivePrefix(clean, cat.Paths) {
+			return true
+		}
+	}
+	return false
+}
+
+// matchesAnyArchivePrefix reports whether clean sits at or under any of the given
+// category paths, normalizing both sides so a "./var/lib/x/" category path and a
+// "var/lib/x/y" archive entry compare correctly.
+func matchesAnyArchivePrefix(clean string, paths []string) bool {
+	if clean == "" {
+		return false
+	}
+	for _, p := range paths {
+		prefix := normalizeArchiveEntryPath(p)
+		if prefix == "" {
+			continue
+		}
+		if clean == prefix || strings.HasPrefix(clean, strings.TrimSuffix(prefix, "/")+"/") {
+			return true
 		}
 	}
 	return false

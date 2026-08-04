@@ -156,9 +156,9 @@ func repoRoot(t *testing.T) string {
 
 // trackedFiles returns repo-relative paths of git-tracked files. git ls-files
 // yields only tracked files and already excludes gitignored and vendored trees
-// (vendor/, diagnostics/, .claude/, .superpowers/). If git cannot run in this
-// sandbox it falls back to a filepath.Walk that skips those trees, so the guard
-// never silently degrades to scanning nothing.
+// (vendor/, diagnostics/, and the local agent-tooling directories). If git
+// cannot run in this sandbox it falls back to a filepath.Walk that skips those
+// trees, so the guard never silently degrades to scanning nothing.
 func trackedFiles(t *testing.T, root string) []string {
 	t.Helper()
 	if out, err := exec.Command("git", "-C", root, "ls-files", "-z").Output(); err == nil {

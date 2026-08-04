@@ -39,6 +39,17 @@ type backupModeOptions struct {
 	// deferred sender.
 	support     bool
 	supportMeta support.Meta
+	// outcomeRendersRecap says that THIS run ends on a screen that renders the
+	// backup-statistics recap itself, so the engine must not also log it. Only the
+	// streamed path with a live viewport sets it (runBackupStreamed), and only on its
+	// own clone of these options: the plain path, the daemon, cron, and the streamed
+	// path's no-session fallback all leave it zero and keep the logged recap, which is
+	// the only one they get.
+	//
+	// It states a fact about the RUN, not about which front-end is driving. The engine
+	// stays ignorant of its renderer, the same way backupStatsRecap builds rows without
+	// knowing who will present them.
+	outcomeRendersRecap bool
 }
 
 type backupModeResult struct {
@@ -177,8 +188,19 @@ func ensureBackupAgeRecipientsReady(opts backupModeOptions, orch *orchestrator.O
 
 	orchInitDone(err)
 	if errors.Is(err, orchestrator.ErrAgeRecipientSetupAborted) {
+		// ExitConfigError, matching the other failure of this same call below, NOT
+		// ExitGenericError. This return is structurally pre-lock: runBackupModeSteps calls
+		// initializeBackupOrchestrator first and returns on its early error, so
+		// configurePreBackupChecker -- and with it RunPreBackupChecks, whose LAST gate is the
+		// backup lock -- is never reached. Reporting 1 made this indistinguishable from
+		// applyIssueExitCode's post-lock "clean run with warnings", and the daemon reads that
+		// code as proof a run reached the lock (exitProvesLockWasTaken): an operator who simply
+		// walked away from the encryption prompt -- ErrIdleTimeout wraps ErrInputAborted, which
+		// mapInputAbortToAgeAbort turns into this error -- would have cleared an abandoned-child
+		// marker and re-greened the service-alive check over a live orphan. A setup the user
+		// never completed is a configuration failure, which is what 2 means.
 		logging.Warning("Encryption setup aborted by user. Exiting...")
-		return backupAgeRecipientEarlyError(err, types.ExitGenericError), types.ExitGenericError.Int()
+		return backupAgeRecipientEarlyError(err, types.ExitConfigError), types.ExitConfigError.Int()
 	}
 
 	logging.Error("ERROR: %v", err)

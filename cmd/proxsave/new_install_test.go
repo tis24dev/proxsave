@@ -101,43 +101,6 @@ func TestBuildNewInstallPlanRejectsEmptyConfigPath(t *testing.T) {
 	}
 }
 
-func TestFormatNewInstallPreservedEntries(t *testing.T) {
-	tests := []struct {
-		name    string
-		entries []string
-		want    string
-	}{
-		{
-			name:    "formats trimmed entries",
-			entries: []string{" build ", "env", " identity"},
-			want:    "build/ env/ identity/",
-		},
-		{
-			name:    "returns none for nil input",
-			entries: nil,
-			want:    "(none)",
-		},
-		{
-			name:    "returns none for blank input",
-			entries: []string{"", " ", "\t"},
-			want:    "(none)",
-		},
-		{
-			name:    "normalizes trailing slashes",
-			entries: []string{"env/", "build//", " identity/// ", "/"},
-			want:    "env/ build/ identity/",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := formatNewInstallPreservedEntries(tt.entries); got != tt.want {
-				t.Fatalf("formatNewInstallPreservedEntries(%v) = %q, want %q", tt.entries, got, tt.want)
-			}
-		})
-	}
-}
-
 func TestConfirmNewInstallCLIContinue(t *testing.T) {
 	plan := newInstallPlan{
 		BaseDir:          "/opt/proxsave",

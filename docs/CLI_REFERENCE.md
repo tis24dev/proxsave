@@ -179,9 +179,18 @@ proxsave --upgrade-config-dry-run
 1. Reads current `configs/backup.env`
 2. Extracts embedded template from binary
 3. Merges your values with new template
-4. Backs up old config (`backup.env.bak-YYYYMMDD-HHMMSS`)
+4. Backs up old config (`backup.env.backup.YYYYMMDD_HHMMSS`, next to the config file)
 5. Writes updated configuration
-6. Reports added/removed variables
+6. Reports added keys, preserved values, and any merge warnings
+
+**Nothing is ever removed from your configuration.** Keys you set that are not in the
+template (including keys that differ from a template key only by upper/lower case) are
+preserved in place with their original value and casing, and are reported as such. The
+upgrade only adds keys the template has and your config lacks.
+
+If the merged configuration fails validation, the backup from step 4 is restored
+automatically and the command reports the error, so a failed upgrade leaves your
+configuration as it was.
 
 > **Keep `backup.env` a regular file.** The config upgrade (`--upgrade`, `--upgrade-config`) writes the new configuration atomically (temp file + rename), so if `configs/backup.env` is a **symlink** it is replaced by a regular file and the symlink target is left unchanged. For a centrally managed configuration, deploy a regular `backup.env` (for example copied or templated by your config-management tool) instead of symlinking it.
 
@@ -577,7 +586,7 @@ proxsave --support
 ## Scheduling with Cron
 
 > On fresh installs ProxSave schedules backups through the **resident daemon** (`proxsave-daemon.service`) by default; see [DAEMON.md](DAEMON.md). The daemon runs once daily, so every schedule below (hourly, every 6 hours, weekly, several times a day) requires the daemon-less **cron** engine. Do not add a cron entry while the daemon is active, or the backup runs twice.
-
+>
 > **ProxSave owns your crontab, so a hand-written schedule does not survive.** `--install`, `--new-install` and `--daemon-remove` each rewrite it: they delete **every** cron line whose command is named `proxsave` or `proxmox-backup`, not only the one they wrote themselves, and append a single daily entry at `SCHEDULER_TIME`. The deletion happens in both scheduler modes; whether the appended line stays depends on where the run ends. `--daemon-remove` ends on cron, so it keeps it. `--install` and `--new-install` write that line first and then, when the selected (or already configured) mode is `daemon`, drop it again while enabling the unit — so a daemon installation ends with no proxsave cron entry, unless the unit install itself fails and the host stays on cron with the line it just wrote. A custom cadence from this section is therefore silently downgraded to daily by a cron reinstall, and removed outright by a daemon one. `--upgrade` is the exception: it only repoints legacy paths and leaves the schedule alone.
 >
 > The practical order is: run `proxsave --daemon-remove` first, which switches to cron, writes the daily line for you, and records the opt-out, **then** edit that line to the cadence you want. Adding a second entry afterwards leaves two, and both will fire.
@@ -795,11 +804,18 @@ USE_COLOR=false proxsave
 | `14` | security error | Errors detected by the security check |
 | `15` | encryption error | Error during encryption setup or processing |
 | `16` | backup skipped | No backup was performed, for a benign reason: another backup already held the lock, or `BACKUP_ENABLED=false`. Not a failure |
+| `17` | guards still in place | `--cleanup-guards` only. The cleanup itself ran fine, but the storage is still locked: guard mounts or immutable flags are left behind (typically hidden under a live mount), or the remaining count could not be confirmed. Also returned by `--cleanup-guards --dry-run` when it finds guards. Not a failure — unmount the datastore and retry |
 | `130` | interrupted | The run was cancelled with Ctrl+C (128 plus SIGINT) |
 
-**Note**: `16` is the one non-zero code that does not mean something went wrong. A
-wrapper of the form `proxsave --backup || alert` will page you every time two runs
-overlap unless it excludes it.
+**Note**: `1`, `16`, `17` and `130` are the non-zero codes that do not mean something
+went wrong: `1` is also what a run that succeeded with warnings returns, `16` means no
+backup was performed for a benign reason, `17` means a guard cleanup ran fine but the
+storage is still locked, and `130` means the run was cancelled by hand. Only `2` through
+`15` are unambiguous failures. A wrapper of the form `proxsave --backup || alert` will
+page you on warning-only runs, every time two runs overlap, and on anything you Ctrl+C,
+unless it excludes them. For `--cleanup-guards`, `17` is the one to act on but not to
+report as a bug — and `1` means the opposite of what it means elsewhere: there it is the
+cleanup itself failing, which is a different remedy.
 
 **Note**: Cloud storage is non-critical. A cloud upload failure does **not** abort the
 run with a storage error (`5`): the local backup is kept, but the failure is recorded as a

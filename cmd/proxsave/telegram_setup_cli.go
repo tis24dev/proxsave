@@ -99,12 +99,11 @@ func runTelegramSetupCLI(ctx context.Context, reader *bufio.Reader, baseDir, con
 			return nil
 		}
 
-		// rawMsg drives ONLY the byte-identical failure log line (sanitized RAW
-		// server message). The user-facing line is always the classifier message.
-		rawMsg := sanitizeTelegramSetupStatusMessage(res.Status.Message)
-		if rawMsg == "" {
-			rawMsg = "Registration not active yet"
-		}
+		// rawMsg drives ONLY the failure log line (the scrubbed RAW server message,
+		// with the shared stand-in when scrubbing leaves nothing). The user-facing
+		// line is always the classifier message. Routed through the shared helper so
+		// the TUI install log, which now calls the same one, cannot drift from this.
+		rawMsg := orchestrator.TelegramSetupStatusMessageForLog(res.Status.Message)
 		fmt.Printf("Telegram: %s\n", sanitizeTelegramSetupStatusMessage(st.Message))
 
 		if st.Fatal { // 422 / 426: re-checking cannot help, do NOT offer "Check again?"

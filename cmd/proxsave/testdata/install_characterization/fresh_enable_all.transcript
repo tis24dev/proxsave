@@ -8,7 +8,7 @@ For direct network access without mounting, use cloud storage (rclone) instead.
 Enable secondary backup path? [y/N]: Secondary backup path (SECONDARY_PATH): Secondary log path (SECONDARY_LOG_PATH, optional - press Enter to skip): 
 --- Cloud storage (rclone) ---
 Remember to configure rclone manually before enabling cloud backups.
-Enable cloud backups? [y/N]: Rclone remote for backups (e.g. myremote:pbs-backups): [GoogleDrive] Rclone remote for logs (e.g. myremote:/logs): [/proxsave/log] 
+Enable cloud backups? [y/N]: Rclone remote for backups (e.g. myremote:pbs-backups): Rclone remote for logs (e.g. myremote:/logs): [/proxsave/log] 
 --- Firewall rules ---
 Enable collection of firewall rules (e.g., iptables/nftables).
 (You can change this later in backup.env via BACKUP_FIREWALL_RULES)

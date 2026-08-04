@@ -81,11 +81,23 @@ func (w *restoreUIWorkflowRun) synthesizeFullRestorePlan() *RestorePlan {
 	categories := categoriesPresentUnderRoot(GetAllCategories(), w.destRoot)
 	plan := PlanRestore(false, categories, w.systemType, RestoreModeFull)
 
-	// A plain extraction can never write /etc/pve: restore_archive_entries.go blocks
-	// those entries unconditionally. Stopping the cluster and unmounting /etc/pve
-	// would therefore be pure disruption, so the cluster path stays off even though a
-	// full category set nominally selects it. PBS services are left to PlanRestore:
-	// /etc/proxmox-backup IS written by this extraction.
+	// The cluster stays up: this fallback runs because the archive could not be
+	// analyzed, so it cannot know whether the archive even holds usable cluster data,
+	// and stopping pve-cluster plus unmounting /etc/pve on that guess is disruption
+	// bought with nothing.
+	//
+	// That decision is only safe because the extraction skips the cluster database
+	// too - see clusterDBArchivePaths in restore_workflow_ui_full.go. The two must
+	// stay together: leaving this false while letting /var/lib/pve-cluster/ through
+	// would write config.db under a live pmxcfs. The /etc/pve block in
+	// restore_archive_entries.go is NOT that guarantee; it covers a different path.
+	//
+	// NeedsPBSServices is left as PlanRestore computed it, but note what that buys:
+	// pbs_config is ExportOnly over the whole ./etc/proxmox-backup/ prefix, and
+	// skipPath filters by path rather than by category, so every entry under it is
+	// dropped no matter which category owns it. This extraction therefore writes no
+	// PBS configuration at all, yet still stops the PBS services. Left alone on
+	// purpose - stopping them is harmless, and narrowing it is a separate decision.
 	plan.NeedsClusterRestore = false
 	return plan
 }

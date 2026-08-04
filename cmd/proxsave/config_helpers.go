@@ -5,8 +5,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-
-	"github.com/tis24dev/proxsave/pkg/utils"
 )
 
 type configStatusLogger interface {
@@ -43,41 +41,6 @@ func ensureConfigExists(path string, logger configStatusLogger) error {
 	logger.Warning("Configuration file not found: %s", path)
 	logger.Warning("Run 'proxsave --install' (alias: proxmox-backup --install) to create a new configuration")
 	return fmt.Errorf("configuration file is required to continue")
-}
-
-func setEnvValue(template, key, value string) string {
-	return utils.SetEnvValue(template, key, value)
-}
-
-func unsetEnvValue(template, key string) string {
-	key = strings.TrimSpace(key)
-	if key == "" {
-		return template
-	}
-
-	lines := strings.Split(template, "\n")
-	out := make([]string, 0, len(lines))
-	for _, line := range lines {
-		trimmed := strings.TrimSpace(line)
-		if utils.IsComment(trimmed) {
-			out = append(out, line)
-			continue
-		}
-		parts := strings.SplitN(trimmed, "=", 2)
-		if len(parts) != 2 {
-			out = append(out, line)
-			continue
-		}
-		parsedKey := strings.TrimSpace(parts[0])
-		if fields := strings.Fields(parsedKey); len(fields) >= 2 && fields[0] == "export" {
-			parsedKey = fields[1]
-		}
-		if strings.EqualFold(parsedKey, key) {
-			continue
-		}
-		out = append(out, line)
-	}
-	return strings.Join(out, "\n")
 }
 
 func sanitizeEnvValue(value string) string {

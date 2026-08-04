@@ -58,6 +58,16 @@ const (
 	// does not ping a false-green finish for a child that never backed up, and the CLI footer
 	// colors it as a benign skip rather than success or error (F09-03).
 	ExitBackupSkipped ExitCode = 16
+
+	// ExitGuardsPending - A guard cleanup ran without error but the storage is still
+	// locked: guard mounts or immutable flags are left behind (typically hidden under a
+	// live mount), or the remaining count could not be confirmed. Like ExitBackupSkipped
+	// this is a STATE, not a failure — nothing went wrong, the work simply cannot finish
+	// until the datastore is offline — so it is kept distinct from ExitGenericError,
+	// which for this mode means the cleanup itself failed. A script gating on the exit
+	// code needs the two apart: one is a bug to report, the other is "unmount and retry".
+	// Also returned by the read-only --dry-run check when guards are found.
+	ExitGuardsPending ExitCode = 17
 )
 
 // String returns a human-readable description of the exit code.
@@ -97,6 +107,8 @@ func (e ExitCode) String() string {
 		return "encryption error"
 	case ExitBackupSkipped:
 		return "backup skipped"
+	case ExitGuardsPending:
+		return "guards still in place"
 	default:
 		return "unknown error"
 	}

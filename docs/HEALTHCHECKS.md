@@ -27,7 +27,7 @@ The daemon reports four families of checks, each shown on the monitor as a
 
 | Check | When it pings | What it covers |
 |-------|---------------|----------------|
-| `proxsave-alive` | immediately at daemon start, then every `HEALTHCHECK_HEARTBEAT_INTERVAL` | the daemon and the host are up. Stops when either dies, and the monitor alarms on the silence |
+| `proxsave-alive` | immediately at daemon start, then every `HEALTHCHECK_HEARTBEAT_INTERVAL` | the daemon and the host are up. Stops when either dies, and the monitor alarms on the silence. It is also pinged `/fail` on purpose, with the reason in the body, while a backup child abandoned in uninterruptible sleep is outstanding -- see [DAEMON.md](DAEMON.md#caveat-uninterruptible-sleep-d-state) |
 | `proxsave-backup` | per run: `/start` at launch, then the run's exit code, or `/fail` on a hang | whether the backup ran and how it ended |
 | `proxsave-updates` | immediately at daemon start, then every `HEALTHCHECK_UPDATE_INTERVAL` | `/0` when up to date, `/1` when a newer release exists, so the check goes down and tells you to upgrade |
 | `proxsave-notify-<channel>` | after each daemon-supervised run, one per channel the backup attempted | whether that notification channel actually delivered |

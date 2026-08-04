@@ -101,7 +101,7 @@ WantedBy=multi-user.target
 
 ## On-disk state files
 
-The daemon coordinates through five small files under `<BASE_DIR>/identity/`, all written atomically (temp file then rename, mode `0600`) and deliberately not made immutable so they can be rewritten:
+The daemon coordinates through six small files under `<BASE_DIR>/identity/`, all written atomically (temp file then rename, mode `0600`) and deliberately not made immutable so they can be rewritten:
 
 | File | Purpose |
 |------|---------|
@@ -110,8 +110,10 @@ The daemon coordinates through five small files under `<BASE_DIR>/identity/`, al
 | `.healthcheck_status.json` | the last ping outcome per check, read back by the run phase to report real transmission; a corrupt file is quarantined to `.corrupt` and reset |
 | `.notify_results.json` | the backup child's per-channel notification severities, handed to the daemon to drive the `proxsave-notify-*` pings |
 | `.manual_backup_outcome.json` | a standalone run's outcome, handed off for the daemon to ping |
+| `.daemon_abandoned.json` | a backup child the kernel would not let the daemon reap: the orphan's pid and start time, the run id, and when it happened. See [the D-state caveat](#caveat-uninterruptible-sleep-d-state) |
 
 `.daemon.pid` and `.daemon_info.json` are written at startup and removed on shutdown.
+`.daemon_abandoned.json` is the exception that deliberately **survives** shutdown — that is its whole purpose — and is removed only once something shows backups can run again.
 
 ## Configuration keys (`backup.env`)
 
@@ -133,4 +135,17 @@ See [CONFIGURATION.md](CONFIGURATION.md) for the full variable reference and [CL
 
 ## Caveat: uninterruptible sleep (D state)
 
-A backup child wedged in uninterruptible sleep on a dead mount cannot be killed even with `SIGKILL` (a kernel limit). The daemon still **reports the hang and moves on**, and the monitor's server-side `/start` plus grace catches it too; the `FS_IO_TIMEOUT` / `safefs` defenses are the layer below this watchdog.
+A backup child wedged in uninterruptible sleep on a dead mount cannot be killed even with `SIGKILL`, and cannot be waited on either (both are kernel limits). The daemon gives the child its normal timeout, then `SIGTERM`, then `SIGKILL`, then 15 more seconds to actually be collected. If it still has not been, the child is **abandoned** and the daemon takes itself out of the way:
+
+1. Both checks go DOWN, in that order: `proxsave-backup` gets the hang report, then `proxsave-alive` is explicitly failed with the orphan's pid and run id in the body. The service-alive check must never stay green while backups are dead, so this is the one situation in which it reports DOWN for a daemon that is provably running.
+2. A marker file, `<BASE_DIR>/identity/.daemon_abandoned.json`, records the abandon so the fact outlives the process.
+3. The daemon exits `4` (backup error) and **systemd restarts it** (`Restart=always`, `RestartSec=10`). The restart is what clears out the goroutines and file descriptors stranded behind a child that can never be reaped. Expect the gap to be minutes rather than the nominal ten seconds: the orphan is still in the unit's cgroup, so the stop job sits through its timeout waiting for a cgroup that cannot drain.
+4. The restarted daemon reads the marker and keeps `proxsave-alive` DOWN instead of sending its usual heartbeat, so the outage does not look like it recovered ten seconds later. The orphan itself stays in D state; nothing in userspace can clear that.
+
+What lifts the degrade -- and deletes the marker -- is **the orphan being gone**, not a backup succeeding. The daemon re-checks it on every heartbeat and after every completed run, identifying the process by its pid *and* its start time, since the kernel recycles pid numbers. So a mount that comes back recovers within one heartbeat interval; a reboot clears it; and a run that completes while the orphan is still there does **not** clear it, whatever its exit code. Backups demonstrably working and `proxsave-alive` DOWN can therefore coexist, by design: the orphan is still holding a lock nobody can take from it.
+
+The exit code only matters in one fallback, when the marker is too corrupt to name a pid the daemon can check. There is nothing to probe, so the run's own outcome is the only evidence, and only a code that proves the run got *past* the lock counts: `0`, `1` (a clean run with warnings), or a per-phase failure such as a storage or encryption error, all of which are reached after the lock gate. A pre-flight failure -- the directory or disk-space check that the same dead mount fails first -- proves nothing and lifts nothing.
+
+If backups are administratively off (`BACKUP_ENABLED=false`) the marker is kept but the alive check is left alone -- with backups off nothing could ever lift the degrade, and `proxsave-backup` is already down on its own merits.
+
+Your fastest confirmation is `ps -eo pid,stat,wchan,cmd | grep ' D'`; the monitor's server-side `/start` plus grace catches the same run from the other side, and the `FS_IO_TIMEOUT` / `safefs` defenses are the layer below this watchdog.

@@ -5,7 +5,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	neturl "net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -205,11 +204,12 @@ func runInstall(ctx context.Context, configPath string, bootstrap *logging.Boots
 //     (false green). So propagate an aborted-install error instead, which renders
 //     the "Installation aborted" banner exactly like the TUI (mapUIDeath).
 //
-// ctx.Err() is the authoritative discriminator: the run context is WithCancel and
-// is cancelled only by the signal handler (setupRunContext), so it is non-nil
-// after Ctrl+C but nil for a plain EOF at an optional prompt.
+// The discrimination itself lives in optionalInstallStepAborts, shared with the TUI
+// driver so the two front-ends cannot answer the same question differently. On this
+// path the deciding signal is always ctx.Err(): Ctrl+C at a cooked-mode stdin prompt
+// raises a real signal, and no Charm session exists to produce a shell.ErrClosed.
 func skipOptionalInstallStepOnAbort(ctx context.Context, bootstrap *logging.BootstrapLogger, step string, err error) error {
-	if ctx.Err() != nil {
+	if optionalInstallStepAborts(ctx, err) {
 		if bootstrap != nil {
 			bootstrap.Warning("%s aborted (interrupted by signal); stopping the install before finalization", step)
 		}
@@ -306,27 +306,14 @@ func runPostInstallAuditCLI(ctx context.Context, reader *bufio.Reader, execPath,
 		return nil
 	}
 
-	contentBytes, err := safefs.ReadFileUnderRoot(configPath)
-	if err != nil {
-		fmt.Printf("ERROR: Unable to update configuration (read failed): %v\n", err)
-		if bootstrap != nil {
-			bootstrap.Warning("Post-install audit: unable to update configuration (read failed): %v", err)
-		}
-		return nil
-	}
-	content := string(contentBytes)
-
 	sort.Strings(keys)
-	for _, key := range keys {
-		content = setEnvValue(content, key, "false")
-	}
-
-	tmpAuditPath := configPath + ".tmp.audit"
-	defer cleanupTempConfig(tmpAuditPath)
-	if err := writeConfigFile(configPath, tmpAuditPath, content); err != nil {
-		fmt.Printf("ERROR: Unable to update configuration (write failed): %v\n", err)
+	// The summary printed just below renders the un-normalized `keys` slice while the
+	// file receives the ToUpper-normalized keys ApplyAuditDisables writes; the two agree
+	// only because internal/installer/audit.go already uppercases each Key at the source.
+	if err := installer.ApplyAuditDisables(configPath, keys); err != nil {
+		fmt.Printf("ERROR: Unable to update configuration: %v\n", err)
 		if bootstrap != nil {
-			bootstrap.Warning("Post-install audit: unable to update configuration (write failed): %v", err)
+			bootstrap.Warning("Post-install audit: unable to update configuration: %v", err)
 		}
 		return nil
 	}
@@ -369,7 +356,7 @@ func runNewInstall(ctx context.Context, configPath string, bootstrap *logging.Bo
 	}
 
 	if bootstrap != nil {
-		bootstrap.Info("Resetting %s (preserving %s)", plan.BaseDir, formatNewInstallPreservedEntries(plan.PreservedEntries))
+		bootstrap.Info("Resetting %s (preserving %s)", plan.BaseDir, installer.FormatPreservedEntries(plan.PreservedEntries))
 	}
 	logging.DebugStepBootstrap(bootstrap, "new-install workflow", "resetting base dir")
 	if err := resetInstallBaseDirWithContext(ctx, plan.BaseDir, bootstrap); err != nil {
@@ -503,7 +490,7 @@ func runConfigWizardCLI(ctx context.Context, reader *bufio.Reader, configPath, t
 	defer func() { done(err) }()
 
 	logging.DebugStepBootstrap(bootstrap, "install config wizard (cli)", "preparing base template")
-	template, skipConfigWizard, fromExisting, err := prepareBaseTemplate(ctx, reader, configPath, bootstrap)
+	base, skipConfigWizard, fromExisting, err := prepareBaseTemplate(ctx, reader, configPath, bootstrap)
 	if err != nil {
 		return installConfigResult{}, wrapInstallError(err)
 	}
@@ -512,93 +499,36 @@ func runConfigWizardCLI(ctx context.Context, reader *bufio.Reader, configPath, t
 		return installConfigResult{SkipConfigWizard: true}, nil
 	}
 
-	logging.DebugStepBootstrap(bootstrap, "install config wizard (cli)", "configuring secondary storage")
-	if template, err = configureSecondaryStorage(ctx, reader, template); err != nil {
-		return installConfigResult{}, wrapInstallError(err)
-	}
-	logging.DebugStepBootstrap(bootstrap, "install config wizard (cli)", "configuring cloud storage")
-	if template, err = configureCloudStorage(ctx, reader, template); err != nil {
-		return installConfigResult{}, wrapInstallError(err)
-	}
-	logging.DebugStepBootstrap(bootstrap, "install config wizard (cli)", "configuring firewall rules")
-	if template, err = configureFirewallRules(ctx, reader, template); err != nil {
-		return installConfigResult{}, wrapInstallError(err)
-	}
-	logging.DebugStepBootstrap(bootstrap, "install config wizard (cli)", "configuring notifications")
-	if template, err = configureNotifications(ctx, reader, template); err != nil {
-		return installConfigResult{}, wrapInstallError(err)
-	}
-
-	logging.DebugStepBootstrap(bootstrap, "install config wizard (cli)", "configuring encryption")
-	result.EnableEncryption, err = configureEncryption(ctx, reader, &template)
+	data, err := collectInstallWizardDataCLI(ctx, reader, base.Prompt, fromExisting, bootstrap)
 	if err != nil {
 		return installConfigResult{}, wrapInstallError(err)
 	}
 
-	logging.DebugStepBootstrap(bootstrap, "install config wizard (cli)", "configuring scheduler engine")
-	engine, err := configureSchedulerEngine(ctx, reader, schedulerEngineDefault(fromExisting, template))
-	if err != nil {
-		return installConfigResult{}, wrapInstallError(err)
+	// installConfigResult is a pure projection of the payload: the two can no
+	// longer disagree. HealthcheckMode in particular gates runHealthcheckSelfParamsCLI
+	// in runInstall.
+	result = installConfigResult{
+		EnableEncryption: data.EnableEncryption,
+		CronSchedule:     cronutil.TimeToSchedule(data.CronTime),
+		SchedulerMode:    data.SchedulerMode,
+		HealthcheckMode:  data.HealthcheckMode,
 	}
-	result.SchedulerMode = engine
-
-	// Healthchecks require the daemon (the sole pinger); with cron the mode is
-	// forced off and no prompt is shown, mirroring the TUI's Active gate.
-	hcMode := "off"
-	if engine == "daemon" {
-		logging.DebugStepBootstrap(bootstrap, "install config wizard (cli)", "configuring healthcheck mode")
-		hcMode, err = configureHealthcheckMode(ctx, reader, healthcheckModeDefault(fromExisting, template))
-		if err != nil {
-			return installConfigResult{}, wrapInstallError(err)
-		}
-	}
-	result.HealthcheckMode = hcMode
-
-	logging.DebugStepBootstrap(bootstrap, "install config wizard (cli)", "configuring run-at time")
-	cronTime, err := configureCronTimeFunc(ctx, reader, cronTimeDefault(fromExisting, template))
-	if err != nil {
-		return installConfigResult{}, wrapInstallError(err)
-	}
-	result.CronSchedule = cronutil.TimeToSchedule(cronTime)
 
 	if bootstrap != nil {
-		bootstrap.Info("Scheduler: %s, run at %s", engine, cronTime)
+		bootstrap.Info("Scheduler: %s, run at %s", data.SchedulerMode, data.CronTime)
 	}
 
 	logging.DebugStepBootstrap(bootstrap, "install config wizard (cli)", "writing configuration")
-	template = config.RemoveRuntimeDerivedEnvKeys(template)
-	template = setEnvValue(template, "SCHEDULER_MODE", engine)
-	template = setEnvValue(template, "SCHEDULER_TIME", cronTime)
-	// Write HEALTHCHECK_ENABLED + HEALTHCHECK_MODE from the explicit choice (cron
-	// and "off" disable it), replacing the old implicit daemon->enabled rule. The
-	// self-mode ping URLs are collected by runHealthcheckSelfParamsCLI after this
-	// write, before the healthcheck bootstrap re-reads the config. Clear
-	// HEALTHCHECK_ALIVE_URL/BACKUP_URL ONLY on a genuine mode change (parity with the
-	// TUI's ApplyInstallData) so a same-mode re-run keeps the user's own self URLs and
-	// an abort never leaves the monitor without a ping target; the off branch also
-	// writes HEALTHCHECK_MODE=off so no stale MODE lingers (F10-08).
-	prevMode := installer.DeriveInstallWizardPrefill(template).HealthcheckMode
-	clearHCURLs := func() {
-		if hcMode != prevMode {
-			template = setEnvValue(template, "HEALTHCHECK_ALIVE_URL", "")
-			template = setEnvValue(template, "HEALTHCHECK_BACKUP_URL", "")
-		}
+	// The RAW base goes to the engine: it derives editingExisting from it and
+	// substitutes the embedded default when it is blank. NOT wrapped in
+	// wrapInstallError - a rejected payload is a failure, not a user abort - but the
+	// prompt loops (promptSecondaryStorage, promptCloudStorage) already enforce
+	// everything ApplyInstallData validates, so this edge is unreachable.
+	template, err := applyInstallDataCLI(base, fromExisting, data)
+	if err != nil {
+		return installConfigResult{}, err
 	}
-	switch hcMode {
-	case "self":
-		template = setEnvValue(template, "HEALTHCHECK_ENABLED", "true")
-		template = setEnvValue(template, "HEALTHCHECK_MODE", "self")
-		clearHCURLs()
-	case "centralized":
-		template = setEnvValue(template, "HEALTHCHECK_ENABLED", "true")
-		template = setEnvValue(template, "HEALTHCHECK_MODE", "centralized")
-		clearHCURLs()
-	default: // "off"
-		template = setEnvValue(template, "HEALTHCHECK_ENABLED", "false")
-		template = setEnvValue(template, "HEALTHCHECK_MODE", "off")
-		clearHCURLs()
-	}
-	if err := writeConfigFile(configPath, tmpConfigPath, template); err != nil {
+	if err := installer.WriteConfigFileAtomic(configPath, tmpConfigPath, template); err != nil {
 		return installConfigResult{}, err
 	}
 
@@ -607,6 +537,193 @@ func runConfigWizardCLI(ctx context.Context, reader *bufio.Reader, configPath, t
 	}
 
 	return result, nil
+}
+
+// wizardBlankEditBaseMarker keeps an Edit of a blank (empty or whitespace-only)
+// backup.env writing the minimal key set it has always written.
+// installer.ApplyInstallData substitutes the whole embedded template whenever
+// strings.TrimSpace(base) == "", so handing it the raw blank base would rewrite the
+// operator's file as ~25 KB of defaults. Aligning that with the Charm front-end is a
+// separate, signed-off behavior change, so F1 stays bug-compatible by prefixing a
+// comment line the engine cannot touch and stripping it back off.
+//
+// Prefixing is safe because the marker only flips editingExisting, which is
+// UNOBSERVABLE for a CLI payload: the blank base carries no BOT_TELEGRAM_TYPE (so the
+// key is seeded either way), the collector always supplies a non-empty
+// EmailDeliveryMethod, and the blank base carries neither EMAIL_FALLBACK_SENDMAIL nor
+// the transitional EMAIL_FALLBACK_PMF - parseEnvTemplate skips the marker as a
+// comment, so existingValues is empty with or without it and the engine seeds the same
+// default either way. Pinned by TestRunConfigWizardCLIBlankEditKeepsMinimalKeySet.
+const wizardBlankEditBaseMarker = "# proxsave install wizard: blank existing configuration\n"
+
+func applyInstallDataCLI(base installWizardBase, fromExisting bool, data *installer.InstallWizardData) (string, error) {
+	// The base counts as blank not only when it is empty to begin with, but also when
+	// RemoveRuntimeDerivedEnvKeys empties it -- a backup.env consisting solely of
+	// BASE_DIR/CRON_* is stripped to nothing inside ApplyInstallData, and the appended
+	// keys then land after a leftover newline. Testing only TrimSpace(base.Raw) left
+	// that case writing one extra leading blank line.
+	if !fromExisting || strings.TrimSpace(config.RemoveRuntimeDerivedEnvKeys(base.Raw)) != "" {
+		return installer.ApplyInstallData(base.Raw, data)
+	}
+	template, err := installer.ApplyInstallData(wizardBlankEditBaseMarker+base.Raw, data)
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimPrefix(template, wizardBlankEditBaseMarker), nil
+}
+
+// wizardBlankBaseStandIn stands in for a blank Edit base when the CLI derives its
+// PROMPT defaults (it never reaches backup.env). It is load-bearing, not cosmetic:
+// the defaults used to be read off the RUNNING template, which the secondary-storage
+// step had already made non-blank, so the empty-base branch of schedulerEngineDefault
+// / healthcheckModeDefault / cronTimeDefault was dead at runtime. Feeding those
+// helpers a genuinely blank base instead would flip the prompts to [daemon] and
+// [centralized] and consume an extra scripted answer. Pinned by
+// TestCollectInstallWizardDataCLIBlankEditKeepsStoredDefaults.
+const wizardBlankBaseStandIn = "# (blank existing configuration)"
+
+// collectInstallWizardDataCLI asks every wizard question and returns the payload for
+// installer.ApplyInstallData. It NEVER sees the raw base: promptBase is the expanded
+// template the prompt defaults are read from, and only runConfigWizardCLI holds both.
+//
+// The prefill is derived ONCE instead of once per step. That is equivalent because
+// every step's write-set is disjoint from every later step's read-set (secondary
+// writes SECONDARY_*, cloud CLOUD_*, firewall BACKUP_FIREWALL_RULES, notifications
+// TELEGRAM_*/BOT_TELEGRAM_TYPE/EMAIL_*, encryption ENCRYPT_ARCHIVE; the
+// SCHEDULER_*/HEALTHCHECK_* keys the last three defaults read are never written
+// before them).
+func collectInstallWizardDataCLI(ctx context.Context, reader *bufio.Reader, promptBase string, fromExisting bool, bootstrap *logging.BootstrapLogger) (*installer.InstallWizardData, error) {
+	prefillBase := promptBase
+	if strings.TrimSpace(prefillBase) == "" {
+		prefillBase = wizardBlankBaseStandIn
+	}
+	prefill := installer.DeriveInstallWizardPrefill(prefillBase)
+	if !fromExisting {
+		// Off the Edit path prefillBase is the SHIPPED template (prepareBaseTemplate
+		// expands it there), so every "stored value" read out of it is really a
+		// template line. That is harmless for the keys the template leaves blank or
+		// seeds with a usable default - but CLOUD_REMOTE ships as an EXAMPLE remote
+		// NAME, "GoogleDrive", which only works on a host that happens to have named
+		// its rclone remote exactly that. Offering it as the prompt default meant
+		// pressing Enter wrote CLOUD_ENABLED=true against a remote that does not
+		// exist, and the operator then got a warning on every run instead of a
+		// failure at install time, because a cloud upload failure is non-critical.
+		//
+		// Dropping the default degrades the prompt to "no default", which
+		// promptNonEmptyWithDefault turns into a required answer. That is the same
+		// defence schedulerEngineDefault / healthcheckModeDefault / cronTimeDefault
+		// already apply to their keys; this one was missed.
+		//
+		// CLOUD_LOG_PATH is deliberately NOT cleared: "/proxsave/log" is a real path
+		// inside whatever remote is chosen, listed by the template's own comment as an
+		// accepted form, so it is a usable default rather than a stand-in.
+		prefill.CloudRemote = ""
+	}
+
+	data := &installer.InstallWizardData{}
+
+	logging.DebugStepBootstrap(bootstrap, "install config wizard (cli)", "configuring secondary storage")
+	secondaryEnabled, secondaryPath, secondaryLogPath, err := promptSecondaryStorage(ctx, reader, prefill)
+	if err != nil {
+		return nil, err
+	}
+	data.EnableSecondaryStorage = secondaryEnabled
+	data.SecondaryPath = secondaryPath
+	data.SecondaryLogPath = secondaryLogPath
+
+	logging.DebugStepBootstrap(bootstrap, "install config wizard (cli)", "configuring cloud storage")
+	cloudEnabled, cloudRemote, cloudLogRemote, err := promptCloudStorage(ctx, reader, prefill)
+	if err != nil {
+		return nil, err
+	}
+	data.EnableCloudStorage = cloudEnabled
+	data.RcloneBackupRemote = cloudRemote
+	data.RcloneLogRemote = cloudLogRemote
+
+	logging.DebugStepBootstrap(bootstrap, "install config wizard (cli)", "configuring firewall rules")
+	firewallEnabled, err := promptFirewallRules(ctx, reader, prefill)
+	if err != nil {
+		return nil, err
+	}
+	// Unconditional, and it must stay that way: this wizard ASKS the question, so it
+	// always has an answer to forward and the engine's nil arm is unreachable from
+	// here. Contrast EmailFallbackSendmail below, which is left nil precisely because
+	// nothing asks.
+	//
+	// Do not read "unreachable" as "guaranteed". The engine's nil arm being dead is a
+	// property of today's two front-ends, not an invariant: this assignment only
+	// entered the tree when the CLI wizard started going through the engine at all,
+	// and the sibling field moved the other way (non-nil to nil, both front-ends) in
+	// the very next campaign item. The guard on the engine side stays.
+	data.BackupFirewallRules = &firewallEnabled
+
+	logging.DebugStepBootstrap(bootstrap, "install config wizard (cli)", "configuring notifications")
+	telegramEnabled, emailEnabled, emailMethod, err := promptNotifications(ctx, reader, prefill)
+	if err != nil {
+		return nil, err
+	}
+	switch {
+	case telegramEnabled && emailEnabled:
+		data.NotificationMode = "both"
+	case telegramEnabled:
+		data.NotificationMode = "telegram"
+	case emailEnabled:
+		data.NotificationMode = "email"
+	default:
+		data.NotificationMode = "none"
+	}
+	if emailEnabled {
+		data.EmailDeliveryMethod = emailMethod
+		// EmailFallbackSendmail stays NIL, and the Charm front-end leaves it nil too:
+		// no wizard step on either surface asks about the local-sendmail failover, so
+		// there is no operator answer to forward and installer.ApplyInstallData owns
+		// EMAIL_FALLBACK_SENDMAIL (seed true when nothing is stored, preserve the
+		// stored value on an Edit). Sending a fabricated true from here rewrote a
+		// deliberate EMAIL_FALLBACK_SENDMAIL=false back to true on EVERY wizard pass,
+		// including a no-op edit, silently re-opening the /usr/sbin/sendmail delivery
+		// route the operator had closed. Contrast BackupFirewallRules above, which
+		// stays non-nil precisely BECAUSE the wizard asks that question and prefills it
+		// from the stored value. Pinned by
+		// TestCollectInstallWizardDataCLIOnlyAnsweredTogglesAreNonNil and
+		// TestRunConfigWizardCLIEditPreservesStoredEmailFallbackSendmail.
+	}
+
+	logging.DebugStepBootstrap(bootstrap, "install config wizard (cli)", "configuring encryption")
+	data.EnableEncryption, err = promptEncryption(ctx, reader, prefill)
+	if err != nil {
+		return nil, err
+	}
+
+	logging.DebugStepBootstrap(bootstrap, "install config wizard (cli)", "configuring scheduler engine")
+	engine, err := configureSchedulerEngine(ctx, reader, schedulerEngineDefault(fromExisting, prefillBase))
+	if err != nil {
+		return nil, err
+	}
+	data.SchedulerMode = engine
+
+	// Healthchecks require the daemon (the sole pinger); with cron the mode is
+	// forced off and no prompt is shown, mirroring the TUI's Active gate.
+	data.HealthcheckMode = "off"
+	if engine == "daemon" {
+		logging.DebugStepBootstrap(bootstrap, "install config wizard (cli)", "configuring healthcheck mode")
+		hcMode, err := configureHealthcheckMode(ctx, reader, healthcheckModeDefault(fromExisting, prefillBase))
+		if err != nil {
+			return nil, err
+		}
+		data.HealthcheckMode = hcMode
+	}
+
+	logging.DebugStepBootstrap(bootstrap, "install config wizard (cli)", "configuring run-at time")
+	// configureCronTimeFunc, not configureCronTime: the package-level seam is stubbed
+	// by cmd/proxsave/install_test.go. It always returns a normalized HH:MM, which is
+	// what keeps ApplyInstallData's "skip SCHEDULER_TIME when blank" branch unreachable.
+	cronTime, err := configureCronTimeFunc(ctx, reader, cronTimeDefault(fromExisting, prefillBase))
+	if err != nil {
+		return nil, err
+	}
+	data.CronTime = cronTime
+
+	return data, nil
 }
 
 func runEncryptionSetupIfNeeded(ctx context.Context, configPath string, enableEncryption, skipConfigWizard bool, bootstrap *logging.BootstrapLogger) (err error) {
@@ -742,13 +859,31 @@ func printInstallBanner(configPath string) {
 	fmt.Printf("Configuration file: %s\n\n", configPath)
 }
 
-func prepareBaseTemplate(ctx context.Context, reader *bufio.Reader, configPath string, bootstrap *logging.BootstrapLogger) (string, bool, bool, error) {
+// installWizardBase carries the two views of the wizard's starting template that
+// must not be confused. Raw is the base exactly as installer.ResolveExistingConfigDecision
+// produced it ("" = no existing file): installer.ApplyInstallData derives
+// editingExisting from it and substitutes the embedded default when it is blank,
+// so the engine must receive THIS value. Prompt is Raw expanded through
+// installer.BaseTemplateOrDefault off the Edit path, and is what the CLI reads its
+// own prompt defaults from.
+//
+// Off the Edit path Raw is provably always "" (installer.ResolveExistingConfigDecision
+// returns an empty BaseTemplate for Overwrite/KeepContinue/Cancel and
+// adoptCronRunTimeIntoBase returns it unchanged when !FromExistingFile), which is
+// what makes the expansion below lossless. Pinned by
+// TestPrepareBaseTemplateRawIsEmptyOffTheEditPath.
+type installWizardBase struct {
+	Raw    string
+	Prompt string
+}
+
+func prepareBaseTemplate(ctx context.Context, reader *bufio.Reader, configPath string, bootstrap *logging.BootstrapLogger) (installWizardBase, bool, bool, error) {
 	decision, err := prepareExistingConfigDecisionCLI(ctx, reader, configPath)
 	if err != nil {
-		return "", false, false, err
+		return installWizardBase{}, false, false, err
 	}
 	if decision.AbortInstall {
-		return "", false, false, errInteractiveAborted
+		return installWizardBase{}, false, false, errInteractiveAborted
 	}
 	// This install is about to rewrite the proxsave cron line FROM the config
 	// (buildInstallCronSchedule) and may hand the schedule to the daemon
@@ -762,129 +897,157 @@ func prepareBaseTemplate(ctx context.Context, reader *bufio.Reader, configPath s
 	// "Run at" prompt. Cancelling anywhere later then leaves the host byte-identical,
 	// which a write at this point would not. Keep existing has no wizard to carry the
 	// value, so its write is deferred to the commit point in runInstall.
-	if decision.FromExistingFile {
-		if seed := deriveSchedulerTimeFromCrontabFn(ctx, configPath); seed.Note != "" {
-			logBootstrapInfo(bootstrap, "%s", seed.Note)
-			if seed.Time != "" && decision.BaseTemplate != "" {
-				decision.BaseTemplate = setEnvValue(decision.BaseTemplate, "SCHEDULER_TIME", seed.Time)
-			}
-		}
-	}
+	decision.BaseTemplate = adoptCronRunTimeIntoBase(ctx, decision, configPath, bootstrap)
 	if decision.SkipConfigWizard {
 		fmt.Println("Existing configuration detected, keeping current backup.env and skipping configuration wizard.")
-		return "", true, false, nil
+		return installWizardBase{}, true, false, nil
 	}
-	return decision.BaseTemplate, false, decision.FromExistingFile, nil
+	// The shared decision carries the RAW base ("" = embedded default) because
+	// ApplyInstallData derives editingExisting from it. The CLI wizard, unlike the
+	// Charm one, computes its own prompt defaults from this template, so it expands
+	// here - but ONLY off the Edit path: expanding a blank existing backup.env would
+	// rewrite it as the full embedded template instead of the minimal key set it
+	// produces today. Pinned by TestPrepareBaseTemplateEditBlankBaseStaysRaw.
+	base := installWizardBase{Raw: decision.BaseTemplate, Prompt: decision.BaseTemplate}
+	if !decision.FromExistingFile {
+		base.Prompt = installer.BaseTemplateOrDefault(base.Raw)
+	}
+	return base, false, decision.FromExistingFile, nil
 }
 
-func configureSecondaryStorage(ctx context.Context, reader *bufio.Reader, template string) (string, error) {
+// promptSecondaryStorage asks the secondary-storage questions and RETURNS the
+// answers; writing them into the template is the engine's job
+// (installer.ApplyInstallData -> config.ApplySecondaryStorageSettings). Prompt
+// text, ordering, the sanitizeEnvValue placement and both re-prompt loops are
+// unchanged from the template-threading version this replaced.
+func promptSecondaryStorage(ctx context.Context, reader *bufio.Reader, prefill installer.InstallWizardPrefill) (bool, string, string, error) {
 	fmt.Println("\n--- Secondary storage ---")
 	fmt.Println("Configure an additional local path for redundant copies.")
 	fmt.Println("IMPORTANT: Secondary path must be a filesystem-mounted directory (e.g., /mnt/nas-backup)")
 	fmt.Println("Network shares must be mounted BEFORE running this backup tool.")
 	fmt.Println("For direct network access without mounting, use cloud storage (rclone) instead.")
 	fmt.Println("(You can change these settings later in backup.env)")
-	prefill := installer.DeriveInstallWizardPrefill(template)
 	enableSecondary, err := confirmDefault(ctx, reader, "Enable secondary backup path?", prefill.SecondaryEnabled)
 	if err != nil {
-		return "", err
+		return false, "", "", err
 	}
-	if enableSecondary {
-		var secondaryPath string
-		for {
-			secondaryPath, err = promptNonEmptyWithDefault(ctx, reader, "Secondary backup path (SECONDARY_PATH): ", prefill.SecondaryPath)
-			if err != nil {
-				return "", err
-			}
-			secondaryPath = sanitizeEnvValue(secondaryPath)
-			if err := config.ValidateRequiredSecondaryPath(secondaryPath); err != nil {
-				fmt.Printf("%v\n", err)
-				continue
-			}
-			break
-		}
-		var secondaryLog string
-		for {
-			secondaryLog, err = promptOptionalWithDefault(ctx, reader, "Secondary log path (SECONDARY_LOG_PATH, optional - press Enter to skip): ", prefill.SecondaryLogPath)
-			if err != nil {
-				return "", err
-			}
-			secondaryLog = sanitizeEnvValue(secondaryLog)
-			if err := config.ValidateOptionalSecondaryLogPath(secondaryLog); err != nil {
-				fmt.Printf("%v\n", err)
-				continue
-			}
-			break
-		}
-		template = config.ApplySecondaryStorageSettings(template, true, secondaryPath, secondaryLog)
-	} else {
-		template = config.ApplySecondaryStorageSettings(template, false, "", "")
+	if !enableSecondary {
+		return false, "", "", nil
 	}
-	return template, nil
+	var secondaryPath string
+	for {
+		secondaryPath, err = promptNonEmptyWithDefault(ctx, reader, "Secondary backup path (SECONDARY_PATH): ", prefill.SecondaryPath)
+		if err != nil {
+			return false, "", "", err
+		}
+		secondaryPath = sanitizeEnvValue(secondaryPath)
+		if err := config.ValidateRequiredSecondaryPath(secondaryPath); err != nil {
+			fmt.Printf("%v\n", err)
+			continue
+		}
+		break
+	}
+	var secondaryLog string
+	for {
+		secondaryLog, err = promptOptionalWithDefault(ctx, reader, "Secondary log path (SECONDARY_LOG_PATH, optional - press Enter to skip): ", prefill.SecondaryLogPath)
+		if err != nil {
+			return false, "", "", err
+		}
+		secondaryLog = sanitizeEnvValue(secondaryLog)
+		if err := config.ValidateOptionalSecondaryLogPath(secondaryLog); err != nil {
+			fmt.Printf("%v\n", err)
+			continue
+		}
+		break
+	}
+	return true, secondaryPath, secondaryLog, nil
 }
 
-func configureCloudStorage(ctx context.Context, reader *bufio.Reader, template string) (string, error) {
+// promptCloudStorage asks the cloud-storage questions and RETURNS the answers.
+//
+// The only behavioral addition over the template-threading version it replaces is
+// the post-sanitize re-prompt: promptNonEmptyWithDefault only guarantees the RAW
+// answer is non-empty, but sanitizeEnvValue strips NUL/CR/LF, so a control-character
+// answer used to write CLOUD_ENABLED=true with an empty CLOUD_REMOTE. That payload
+// is exactly what installer.ApplyInstallData's validateCloudInstallData rejects, so
+// without this guard an install that used to (wrongly) succeed would now fail at the
+// very end of the wizard. Re-prompting reuses promptNonEmpty's own message verbatim.
+//
+// It does NOT make every previously-succeeding path still succeed, and the earlier
+// claim that it did was wrong: the re-prompt consumes an extra input line, so a
+// finite piped answer stream that used to complete can now hit EOF and abort with
+// nothing written. That is accepted because the alternative is worse -- the old
+// behavior wrote CLOUD_ENABLED=true with an empty CLOUD_REMOTE and shifted the next
+// scripted answer into the following slot. Reachable only with control characters in
+// the answer, i.e. a paste accident or a CRLF-mangled answer file.
+func promptCloudStorage(ctx context.Context, reader *bufio.Reader, prefill installer.InstallWizardPrefill) (bool, string, string, error) {
 	fmt.Println("\n--- Cloud storage (rclone) ---")
 	fmt.Println("Remember to configure rclone manually before enabling cloud backups.")
-	prefill := installer.DeriveInstallWizardPrefill(template)
 	enableCloud, err := confirmDefault(ctx, reader, "Enable cloud backups?", prefill.CloudEnabled)
 	if err != nil {
-		return "", err
+		return false, "", "", err
 	}
-	if enableCloud {
-		remote, err := promptNonEmptyWithDefault(ctx, reader, "Rclone remote for backups (e.g. myremote:pbs-backups): ", prefill.CloudRemote)
-		if err != nil {
-			return "", err
-		}
-		remote = sanitizeEnvValue(remote)
-		logRemote, err := promptNonEmptyWithDefault(ctx, reader, "Rclone remote for logs (e.g. myremote:/logs): ", prefill.CloudLogPath)
-		if err != nil {
-			return "", err
-		}
-		logRemote = sanitizeEnvValue(logRemote)
-		template = setEnvValue(template, "CLOUD_ENABLED", "true")
-		template = setEnvValue(template, "CLOUD_REMOTE", remote)
-		template = setEnvValue(template, "CLOUD_LOG_PATH", logRemote)
-	} else {
-		template = setEnvValue(template, "CLOUD_ENABLED", "false")
-		template = setEnvValue(template, "CLOUD_REMOTE", "")
-		template = setEnvValue(template, "CLOUD_LOG_PATH", "")
+	if !enableCloud {
+		return false, "", "", nil
 	}
-	return template, nil
+	remote, err := promptSanitizedNonEmptyWithDefault(ctx, reader, "Rclone remote for backups (e.g. myremote:pbs-backups): ", prefill.CloudRemote)
+	if err != nil {
+		return false, "", "", err
+	}
+	logRemote, err := promptSanitizedNonEmptyWithDefault(ctx, reader, "Rclone remote for logs (e.g. myremote:/logs): ", prefill.CloudLogPath)
+	if err != nil {
+		return false, "", "", err
+	}
+	return true, remote, logRemote, nil
 }
 
-func configureFirewallRules(ctx context.Context, reader *bufio.Reader, template string) (string, error) {
+// promptSanitizedNonEmptyWithDefault is promptNonEmptyWithDefault whose
+// non-emptiness guarantee survives sanitizeEnvValue (see promptCloudStorage).
+//
+// The DEFAULT is sanitized too, and that is not cosmetic: a stored CLOUD_REMOTE
+// made of control characters comes back from DeriveInstallWizardPrefill unchanged,
+// and offering it as an acceptable default would make pressing Enter fail the
+// sanitize check forever -- an inescapable loop that ends in an aborted install.
+// Sanitizing it degrades the prompt to "no default", which the operator can always
+// satisfy by typing a value.
+//
+// This re-prompt is the one intentional behavior delta of the wizard refactor. It
+// does NOT preserve the old behavior on every path: it consumes an extra input
+// line, so a finite piped answer stream that used to complete can now hit EOF and
+// abort without writing anything. It is preferred anyway because the alternative
+// is worse -- the old code wrote CLOUD_ENABLED=true with an empty CLOUD_REMOTE and
+// shifted the next answer into the wrong slot.
+func promptSanitizedNonEmptyWithDefault(ctx context.Context, reader *bufio.Reader, question, def string) (string, error) {
+	def = sanitizeEnvValue(def)
+	for {
+		raw, err := promptNonEmptyWithDefault(ctx, reader, question, def)
+		if err != nil {
+			return "", err
+		}
+		if value := sanitizeEnvValue(raw); value != "" {
+			return value, nil
+		}
+		fmt.Println("Value cannot be empty.")
+	}
+}
+
+// promptFirewallRules asks the firewall question and RETURNS the answer.
+func promptFirewallRules(ctx context.Context, reader *bufio.Reader, prefill installer.InstallWizardPrefill) (bool, error) {
 	fmt.Println("\n--- Firewall rules ---")
 	fmt.Println("Enable collection of firewall rules (e.g., iptables/nftables).")
 	fmt.Println("(You can change this later in backup.env via BACKUP_FIREWALL_RULES)")
-	enable, err := confirmDefault(ctx, reader, "Backup firewall rules?", installer.DeriveInstallWizardPrefill(template).FirewallEnabled)
-	if err != nil {
-		return "", err
-	}
-	if enable {
-		template = setEnvValue(template, "BACKUP_FIREWALL_RULES", "true")
-	} else {
-		template = setEnvValue(template, "BACKUP_FIREWALL_RULES", "false")
-	}
-	return template, nil
+	return confirmDefault(ctx, reader, "Backup firewall rules?", prefill.FirewallEnabled)
 }
 
-func configureNotifications(ctx context.Context, reader *bufio.Reader, template string) (string, error) {
-	prefill := installer.DeriveInstallWizardPrefill(template)
+// promptNotifications asks the Telegram + email questions (including the delivery
+// method when email is enabled) and RETURNS the answers. The BOT_TELEGRAM_TYPE
+// seeding, the EMAIL_FALLBACK_PMF removal and the EMAIL_FALLBACK_SENDMAIL write
+// this used to perform inline are installer.ApplyInstallData's job.
+func promptNotifications(ctx context.Context, reader *bufio.Reader, prefill installer.InstallWizardPrefill) (bool, bool, string, error) {
 	fmt.Println("\n--- Telegram ---")
 	enableTelegram, err := confirmDefault(ctx, reader, "Enable Telegram notifications (centralized)?", prefill.TelegramEnabled)
 	if err != nil {
-		return "", err
-	}
-	if enableTelegram {
-		template = setEnvValue(template, "TELEGRAM_ENABLED", "true")
-		// Preserve a stored bot mode (e.g. personal); only seed the centralized
-		// default when none is set yet, mirroring the TUI's ApplyInstallData.
-		if strings.TrimSpace(prefill.TelegramType) == "" {
-			template = setEnvValue(template, "BOT_TELEGRAM_TYPE", "centralized")
-		}
-	} else {
-		template = setEnvValue(template, "TELEGRAM_ENABLED", "false")
+		return false, false, "", err
 	}
 
 	fmt.Println("\n--- Email ---")
@@ -892,21 +1055,16 @@ func configureNotifications(ctx context.Context, reader *bufio.Reader, template 
 	fmt.Println("ProxSave does not collect raw SMTP settings; choose pmf only when Proxmox Notifications is configured.")
 	enableEmail, err := confirmDefault(ctx, reader, "Enable email notifications?", prefill.EmailEnabled)
 	if err != nil {
-		return "", err
+		return false, false, "", err
 	}
-	if enableEmail {
-		method, err := promptEmailDeliveryMethod(ctx, reader, prefill.EmailDeliveryMethod)
-		if err != nil {
-			return "", err
-		}
-		template = setEnvValue(template, "EMAIL_ENABLED", "true")
-		template = setEnvValue(template, "EMAIL_DELIVERY_METHOD", method)
-		template = unsetEnvValue(template, "EMAIL_FALLBACK_PMF")
-		template = setEnvValue(template, "EMAIL_FALLBACK_SENDMAIL", "true")
-	} else {
-		template = setEnvValue(template, "EMAIL_ENABLED", "false")
+	if !enableEmail {
+		return enableTelegram, false, "", nil
 	}
-	return template, nil
+	method, err := promptEmailDeliveryMethod(ctx, reader, prefill.EmailDeliveryMethod)
+	if err != nil {
+		return false, false, "", err
+	}
+	return enableTelegram, true, method, nil
 }
 
 func promptEmailDeliveryMethod(ctx context.Context, reader *bufio.Reader, defaultMethod string) (string, error) {
@@ -937,18 +1095,12 @@ func promptEmailDeliveryMethod(ctx context.Context, reader *bufio.Reader, defaul
 	}
 }
 
-func configureEncryption(ctx context.Context, reader *bufio.Reader, template *string) (bool, error) {
+// promptEncryption asks the encryption question and RETURNS the answer. The
+// *string out-param it used to take existed only to write ENCRYPT_ARCHIVE, which
+// installer.ApplyInstallData now owns.
+func promptEncryption(ctx context.Context, reader *bufio.Reader, prefill installer.InstallWizardPrefill) (bool, error) {
 	fmt.Println("\n--- Encryption ---")
-	enableEncryption, err := confirmDefault(ctx, reader, "Enable backup encryption?", installer.DeriveInstallWizardPrefill(*template).EncryptionEnabled)
-	if err != nil {
-		return false, err
-	}
-	if enableEncryption {
-		*template = setEnvValue(*template, "ENCRYPT_ARCHIVE", "true")
-	} else {
-		*template = setEnvValue(*template, "ENCRYPT_ARCHIVE", "false")
-	}
-	return enableEncryption, nil
+	return confirmDefault(ctx, reader, "Enable backup encryption?", prefill.EncryptionEnabled)
 }
 
 // schedulerEngineDefault picks the engine prompt default. Fresh installs and
@@ -1050,31 +1202,6 @@ func configureHealthcheckMode(ctx context.Context, reader *bufio.Reader, def str
 	}
 }
 
-// validateHealthcheckPingURLCLI is the CLI-side ping-URL validator, identical in
-// intent to the TUI's validateHealthcheckPingURL: an absolute http(s) URL with a
-// host. It is used for the required alive/backup URLs (empty rejected) via
-// promptNonEmpty's retry loop and, wrapped, for the optional URLs.
-func validateHealthcheckPingURLCLI(v string) error {
-	v = strings.TrimSpace(v)
-	if v == "" {
-		return fmt.Errorf("cannot be empty")
-	}
-	if !strings.HasPrefix(v, "http://") && !strings.HasPrefix(v, "https://") {
-		return fmt.Errorf("URL must start with http:// or https://")
-	}
-	u, err := neturl.ParseRequestURI(v)
-	if err != nil {
-		return fmt.Errorf("invalid URL: %v", err)
-	}
-	if u.Scheme != "http" && u.Scheme != "https" {
-		return fmt.Errorf("URL must start with http:// or https://")
-	}
-	if u.Host == "" {
-		return fmt.Errorf("URL must include a host")
-	}
-	return nil
-}
-
 // promptHealthcheckRequiredURL prompts for a required ping URL, re-asking until the
 // value is a valid http(s) URL (parity with the TUI required-field validator).
 func promptHealthcheckRequiredURL(ctx context.Context, reader *bufio.Reader, question, def string) (string, error) {
@@ -1084,7 +1211,7 @@ func promptHealthcheckRequiredURL(ctx context.Context, reader *bufio.Reader, que
 			return "", err
 		}
 		val = sanitizeEnvValue(val)
-		if verr := validateHealthcheckPingURLCLI(val); verr != nil {
+		if verr := installer.ValidateHealthcheckPingURL(val); verr != nil {
 			fmt.Printf("%v\n", verr)
 			continue
 		}
@@ -1104,7 +1231,7 @@ func promptHealthcheckOptionalURL(ctx context.Context, reader *bufio.Reader, que
 		if strings.TrimSpace(val) == "" {
 			return "", nil
 		}
-		if verr := validateHealthcheckPingURLCLI(val); verr != nil {
+		if verr := installer.ValidateHealthcheckPingURL(val); verr != nil {
 			fmt.Printf("%v\n", verr)
 			continue
 		}
@@ -1199,29 +1326,6 @@ func configureCronTime(ctx context.Context, reader *bufio.Reader, defaultCron st
 		}
 		return normalized, nil
 	}
-}
-
-func writeConfigFile(configPath, tmpConfigPath, content string) error {
-	dir := filepath.Dir(configPath)
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return fmt.Errorf("failed to create configuration directory: %w", err)
-	}
-	// Confine the temp write to the configuration directory via os.Root so the
-	// admin-supplied --config path cannot place the file outside that directory
-	// (gosec G703 path-traversal containment). tmpConfigPath is configPath with a
-	// suffix, so it always resolves to a single component within dir.
-	root, err := os.OpenRoot(dir)
-	if err != nil {
-		return fmt.Errorf("failed to open configuration directory: %w", err)
-	}
-	defer func() { _ = root.Close() }()
-	if err := root.WriteFile(filepath.Base(tmpConfigPath), []byte(content), 0o600); err != nil {
-		return fmt.Errorf("failed to write configuration file: %w", err)
-	}
-	if err := os.Rename(tmpConfigPath, configPath); err != nil {
-		return fmt.Errorf("failed to finalize configuration file: %w", err)
-	}
-	return nil
 }
 
 func wrapInstallError(err error) error {

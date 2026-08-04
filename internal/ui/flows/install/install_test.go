@@ -187,11 +187,12 @@ func TestCollectWizardDataDeclineAll(t *testing.T) {
 	}
 }
 
-// TestCollectWizardDataPrefillNoOp locks the anti-drift core: with a fully
-// populated existing template, an Enter-only run returns exactly the stored
-// settings (the historical no-op-edit reset bug).
-func TestCollectWizardDataPrefillNoOp(t *testing.T) {
-	d := newDriver(t)
+// prefilledEditTemplate is the fully-populated existing config the no-op-edit tests
+// share: every toggle on, so all 13 form rows are active (healthchecks stay dimmed
+// because the template ships SCHEDULER_MODE=cron) and an Enter-only run is exactly 14
+// key presses. Mirrors editedExistingConfig() on the CLI side, so both front-ends are
+// driven through the same no-op-edit gesture.
+func prefilledEditTemplate() string {
 	template := config.DefaultEnvTemplate()
 	for _, kv := range [][2]string{
 		{"SECONDARY_ENABLED", "true"},
@@ -209,6 +210,15 @@ func TestCollectWizardDataPrefillNoOp(t *testing.T) {
 	} {
 		template = installer.SetEnvValueInTemplate(template, kv[0], kv[1])
 	}
+	return template
+}
+
+// TestCollectWizardDataPrefillNoOp locks the anti-drift core: with a fully
+// populated existing template, an Enter-only run returns exactly the stored
+// settings (the historical no-op-edit reset bug).
+func TestCollectWizardDataPrefillNoOp(t *testing.T) {
+	d := newDriver(t)
+	template := prefilledEditTemplate()
 
 	type result struct {
 		data *installer.InstallWizardData
@@ -260,6 +270,56 @@ func TestCollectWizardDataPrefillNoOp(t *testing.T) {
 	prefill := installer.DeriveInstallWizardPrefill(out)
 	if prefill.TelegramType != "personal" || prefill.EmailDeliveryMethod != "pmf" {
 		t.Fatalf("no-op edit reset stored settings: %+v", prefill)
+	}
+}
+
+// TestCollectWizardDataLeavesEmailFallbackToTheEngine is the dashboard half of a
+// contract the CLI wizard also has to keep: neither front-end asks the operator about
+// the local /usr/sbin/sendmail failover, so neither may fabricate an answer for it.
+// The form sends a nil EmailFallbackSendmail and installer.ApplyInstallData owns
+// EMAIL_FALLBACK_SENDMAIL, which is what lets a stored false survive a no-op edit
+// instead of being flipped back to true and silently re-opening that delivery route.
+//
+// This is the only test standing between the dashboard and a re-introduced hardcoded
+// true: this package has no byte-level characterization golden, so the CLI's goldens
+// and end-to-end tests cannot see a Charm-side regression at all. Repairing one
+// front-end is not a repair.
+func TestCollectWizardDataLeavesEmailFallbackToTheEngine(t *testing.T) {
+	d := newDriver(t)
+	template := installer.SetEnvValueInTemplate(prefilledEditTemplate(), "EMAIL_FALLBACK_SENDMAIL", "false")
+
+	resCh := collectWizardAsync(t, d, template)
+
+	// Same no-op-edit gesture as TestCollectWizardDataPrefillNoOp: 13 active rows
+	// plus Continue. No form row is added or removed by leaving the field nil.
+	d.waitScreen("Configuration")
+	for i := 0; i < 14; i++ {
+		d.keys("enter")
+	}
+
+	res := <-resCh
+	if res.err != nil {
+		t.Fatalf("unexpected error: %v", res.err)
+	}
+	if res.data.EmailFallbackSendmail != nil {
+		t.Fatalf("EmailFallbackSendmail must stay nil so the engine can preserve the stored value, got %v", *res.data.EmailFallbackSendmail)
+	}
+	// Guard against a vacuous pass: the email branch must actually have run.
+	if res.data.NotificationMode != "both" || res.data.EmailDeliveryMethod != "pmf" {
+		t.Fatalf("expected a real email-enabled edit, got mode=%q method=%q", res.data.NotificationMode, res.data.EmailDeliveryMethod)
+	}
+
+	// End to end through the shared engine: nil collector + preserve branch must
+	// compose into a config that still has the sendmail route closed.
+	out, err := installer.ApplyInstallData(template, res.data)
+	if err != nil {
+		t.Fatalf("ApplyInstallData: %v", err)
+	}
+	if !strings.Contains(out, "EMAIL_FALLBACK_SENDMAIL=false") {
+		t.Fatalf("a no-op dashboard edit re-opened the local sendmail delivery route:\n%s", out)
+	}
+	if strings.Contains(out, "EMAIL_FALLBACK_SENDMAIL=true") {
+		t.Fatalf("EMAIL_FALLBACK_SENDMAIL was flipped back to true:\n%s", out)
 	}
 }
 
@@ -574,23 +634,6 @@ func TestRunPostInstallAuditSkipAndEsc(t *testing.T) {
 	res = <-resCh
 	if res.err != nil || res.res.Ran {
 		t.Fatalf("ctrl+c must skip non-blockingly: %+v", res)
-	}
-}
-
-// TestFormatPreservedEntriesResolvesAgainstBaseDir guards the directory
-// detection against the CWD (regression salvaged from the deleted wizard
-// suite: entries must resolve against baseDir, not the working directory).
-func TestFormatPreservedEntriesResolvesAgainstBaseDir(t *testing.T) {
-	baseDir := t.TempDir()
-	if err := os.Mkdir(filepath.Join(baseDir, "env"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	got := formatPreservedEntries(baseDir, []string{"env", "build", " ", ""})
-	if got != "env/ build" {
-		t.Fatalf("formatPreservedEntries = %q, want %q", got, "env/ build")
-	}
-	if formatPreservedEntries(baseDir, nil) != "(none)" {
-		t.Fatal("empty entries must render (none)")
 	}
 }
 

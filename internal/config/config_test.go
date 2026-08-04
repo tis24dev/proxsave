@@ -11,6 +11,7 @@ import (
 	"math/big"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -1624,5 +1625,106 @@ func TestParseEnvFileHandlesExportLines(t *testing.T) {
 	}
 	if got := values["LOG_PATH"]; got != "/logs" {
 		t.Fatalf("LOG_PATH = %q; want %q", got, "/logs")
+	}
+}
+
+// loadEnvForTest writes content to a temp backup.env and loads it through the REAL
+// loader, so both sides of a comparison are read by the code that ships.
+func loadEnvForTest(t *testing.T, name, content string) *Config {
+	t.Helper()
+	// Neutralise every environment override first. LoadConfigWithBaseDir ends in
+	// loadEnvOverrides, so an allowlisted variable set in the developer's shell or in a CI
+	// job lands on EVERY config this helper builds. A test that compares two of them then
+	// sees them agree because of the override rather than because the code agrees, and a
+	// real divergence for that key passes unnoticed -- the exact class of defect
+	// TestBoolDefaultsMatchTheShippedTemplate exists to catch.
+	//
+	// Setting them empty rather than unsetting them is deliberate: loadEnvOverrides skips
+	// an empty value, t.Setenv restores the original, and unlike os.Unsetenv it refuses to
+	// run inside a parallel test instead of corrupting a sibling's environment.
+	for _, key := range envOverrideKeys {
+		t.Setenv(key, "")
+	}
+
+	path := filepath.Join(t.TempDir(), name)
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatalf("write %s: %v", name, err)
+	}
+	cfg, err := LoadConfigWithBaseDir(path, "/custom/base")
+	if err != nil {
+		t.Fatalf("LoadConfigWithBaseDir(%s): %v", name, err)
+	}
+	return cfg
+}
+
+// TestBoolDefaultsMatchTheShippedTemplate asserts, for EVERY boolean setting, that the
+// compiled default agrees with the value the shipped template carries.
+//
+// The two are different code paths that reach the same operator. The install engine does
+// not write every key, and a config can predate any key, so the effective value comes
+// from the template on a fresh install and from the compiled default on a config that
+// lacks the line. When those disagree, one release behaves two ways depending on how the
+// operator got their config -- and nothing else in the repo says so: flipping a compiled
+// default passes the entire suite, and flipping a template value only moves golden
+// transcripts, which a regeneration absorbs silently.
+//
+// This is the generalised form on purpose. The same defect was found once by hand
+// (PXAR_SCAN_ENABLE shipped false while the code compiled true, so a config old enough
+// to predate the key walked every PBS datastore) and a single-key test would have pinned
+// the one pair somebody happened to look at while the rest stayed unwatched.
+//
+// Both sides go through the real loader rather than a parser written for the test: a
+// test-local parser is a second, weaker implementation of the thing under test, free to
+// drift from the loader's own handling of quotes, comments, export prefixes and key
+// aliases and then agree with itself while disagreeing with production.
+//
+// A field that must legitimately diverge belongs in an explicit exception list here, with
+// the reason next to it. There are none today.
+func TestBoolDefaultsMatchTheShippedTemplate(t *testing.T) {
+	shipped := reflect.ValueOf(*loadEnvForTest(t, "shipped.env", DefaultEnvTemplate()))
+	absent := reflect.ValueOf(*loadEnvForTest(t, "absent.env", "# a config that carries no keys at all\n"))
+
+	var diverging []string
+	typ := shipped.Type()
+	checked := 0
+	for i := 0; i < typ.NumField(); i++ {
+		field := typ.Field(i)
+		if !field.IsExported() || field.Type.Kind() != reflect.Bool {
+			continue
+		}
+		checked++
+		if got, want := absent.Field(i).Bool(), shipped.Field(i).Bool(); got != want {
+			diverging = append(diverging, fmt.Sprintf("%s: shipped template says %v, compiled default says %v", field.Name, want, got))
+		}
+	}
+	if checked == 0 {
+		t.Fatal("no exported bool settings found; this test has stopped measuring anything")
+	}
+	if len(diverging) > 0 {
+		t.Fatalf("%d of %d boolean settings disagree between the shipped template and the compiled default.\n"+
+			"Each means a fresh install and a config that predates the key behave differently:\n  %s",
+			len(diverging), checked, strings.Join(diverging, "\n  "))
+	}
+}
+
+// TestBackupFirewallRulesHonoursAnExplicitValue covers the other half, which the default
+// test cannot see because it only ever exercises the absent-key path: that a value the
+// operator actually wrote is READ. Without it, the loader could be looking up a
+// misspelled key and every assertion about the default would still pass -- verified: a
+// typo in the key name at config.go's read site passes the entire repo suite today.
+func TestBackupFirewallRulesHonoursAnExplicitValue(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		content string
+		want    bool
+	}{
+		{name: "explicit true", content: "BACKUP_FIREWALL_RULES=true\n", want: true},
+		{name: "explicit false", content: "BACKUP_FIREWALL_RULES=false\n", want: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := loadEnvForTest(t, "firewall.env", tc.content).BackupFirewallRules; got != tc.want {
+				t.Fatalf("BackupFirewallRules = %v, want %v", got, tc.want)
+			}
+		})
 	}
 }

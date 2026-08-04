@@ -12,6 +12,7 @@ import (
 
 	cronutil "github.com/tis24dev/proxsave/internal/cron"
 	"github.com/tis24dev/proxsave/internal/installer"
+	"github.com/tis24dev/proxsave/internal/logging"
 )
 
 // stubCrontabLines swaps the crontab read seam so the SCHEDULER_TIME seeding can be
@@ -282,10 +283,10 @@ func TestPrepareBaseTemplateNeverWritesDuringTheInteractivePhase(t *testing.T) {
 			cfg := createTempFile(t, preThirty)
 			stubCrontabLines(t, []string{"0 21 * * * /usr/local/bin/proxsave --backup"}, nil)
 
-			var tmpl string
+			var base installWizardBase
 			var err error
 			captureStdout(t, func() {
-				tmpl, _, _, err = prepareBaseTemplate(context.Background(), bufio.NewReader(strings.NewReader(tt.answer)), cfg, nil)
+				base, _, _, err = prepareBaseTemplate(context.Background(), bufio.NewReader(strings.NewReader(tt.answer)), cfg, nil)
 			})
 			if tt.wantAbort {
 				if !errors.Is(err, errInteractiveAborted) {
@@ -303,29 +304,37 @@ func TestPrepareBaseTemplateNeverWritesDuringTheInteractivePhase(t *testing.T) {
 				t.Fatalf("the interactive phase must not write backup.env:\n%s", data)
 			}
 
-			if got := cronTimeDefault(true, tmpl) == "21:00"; got != tt.wantPrefill {
-				t.Fatalf("template prefill = %v, want %v (tmpl=%q)", got, tt.wantPrefill, tmpl)
+			if got := cronTimeDefault(true, base.Prompt) == "21:00"; got != tt.wantPrefill {
+				t.Fatalf("template prefill = %v, want %v (tmpl=%q)", got, tt.wantPrefill, base.Prompt)
 			}
 		})
 	}
 }
 
-// TestDeriveSchedulerTimeForExistingConfig is the TUI twin of the CLI test above:
-// same gate on which answers adopt the crontab time, and the same rule that the
-// interactive phase must not write backup.env. The TUI carries the value into
-// baseTemplate instead, and ApplyInstallData persists it only if the wizard finishes.
-func TestDeriveSchedulerTimeForExistingConfig(t *testing.T) {
+// TestAdoptCronRunTimeIntoBase pins the ONE adoption helper both front-ends now
+// share: which answers adopt the crontab time into the wizard's in-memory base,
+// and the rule that the interactive phase must not write backup.env. The adopted
+// value is carried in the returned base, and ApplyInstallData persists it only if
+// the wizard finishes.
+//
+// S2: the gate is decision.FromExistingFile, i.e. EDIT ONLY - the CLI's behavior,
+// which wins over the TUI's former Keep-OR-Edit gate. "keep existing" therefore
+// adopts NOTHING here; that is the signed-off unification, not a weakened test.
+// Keep still gets its SCHEDULER_TIME, but at the commit point via
+// seedSchedulerTimeFromCrontabFn (install.go / install_tui.go), which is unchanged
+// and is now the single place the Keep-path note is logged instead of twice.
+func TestAdoptCronRunTimeIntoBase(t *testing.T) {
 	const preThirty = "SCHEDULER_MODE=cron\n"
 
 	tests := []struct {
-		name     string
-		action   installer.ExistingConfigAction
-		wantTime string
+		name       string
+		action     installer.ExistingConfigAction
+		wantAdopts bool
 	}{
 		{name: "cancel adopts nothing", action: installer.ExistingConfigCancel},
 		{name: "overwrite adopts nothing", action: installer.ExistingConfigOverwrite},
-		{name: "edit adopts", action: installer.ExistingConfigEdit, wantTime: "21:00"},
-		{name: "keep existing adopts", action: installer.ExistingConfigKeepContinue, wantTime: "21:00"},
+		{name: "edit adopts", action: installer.ExistingConfigEdit, wantAdopts: true},
+		{name: "keep existing adopts nothing (S2)", action: installer.ExistingConfigKeepContinue},
 	}
 
 	for _, tt := range tests {
@@ -336,12 +345,35 @@ func TestDeriveSchedulerTimeForExistingConfig(t *testing.T) {
 			}
 			stubCrontabLines(t, []string{"0 21 * * * /usr/local/bin/proxsave --backup"}, nil)
 
-			seed := deriveSchedulerTimeForExistingConfig(context.Background(), tt.action, cfg, nil)
-			if seed.Time != tt.wantTime {
-				t.Fatalf("seed.Time = %q, want %q", seed.Time, tt.wantTime)
+			decision, err := installer.ResolveExistingConfigDecision(tt.action, cfg)
+			if err != nil {
+				t.Fatalf("ResolveExistingConfigDecision error: %v", err)
 			}
-			if tt.wantTime == "" && seed.Note != "" {
-				t.Errorf("no adoption note expected for this answer, got %q", seed.Note)
+
+			// The resolver hands a RAW "" base to every answer except Edit, and
+			// ApplySchedulerTimeSeed is a no-op on "" -- so asserting on the returned
+			// base alone would be VACUOUS for three of the four rows: it reads false
+			// whether the gate is Edit-only or the TUI's former Keep-OR-Edit. Count
+			// the derive instead: it is the observable the gate actually controls, and
+			// it fails if the gate is removed.
+			derives := 0
+			origDerive := deriveSchedulerTimeFromCrontabFn
+			deriveSchedulerTimeFromCrontabFn = func(ctx context.Context, path string) schedulerTimeSeed {
+				derives++
+				return origDerive(ctx, path)
+			}
+			t.Cleanup(func() { deriveSchedulerTimeFromCrontabFn = origDerive })
+
+			base := adoptCronRunTimeIntoBase(context.Background(), decision, cfg, nil)
+			if got := strings.Contains(base, "SCHEDULER_TIME=21:00"); got != tt.wantAdopts {
+				t.Fatalf("adopted = %v, want %v (base=%q)", got, tt.wantAdopts, base)
+			}
+			wantDerives := 0
+			if tt.wantAdopts {
+				wantDerives = 1
+			}
+			if derives != wantDerives {
+				t.Fatalf("crontab derive calls = %d, want %d: only Edit may consult the crontab (S2)", derives, wantDerives)
 			}
 
 			data, err := os.ReadFile(cfg)
@@ -416,5 +448,48 @@ func TestApplyConfigUpgradeKeepsExplicitSchedulerTime(t *testing.T) {
 	}
 	if strings.Contains(strings.Join(result.Warnings, "\n"), "21:00") {
 		t.Errorf("no adoption note expected when the operator set the time: %v", result.Warnings)
+	}
+}
+
+// TestAdoptCronRunTimeIntoBaseNoteMatchesReality pins that the adoption note is
+// only emitted when the value actually reached the base. The note promises "the
+// daily run time does not change", but ApplySchedulerTimeSeed discards the seed on
+// a blank base -- so logging unconditionally told the operator their 21:00 was kept
+// while the wizard went on to offer the 02:00 default. A note the code contradicts
+// is worse than silence.
+func TestAdoptCronRunTimeIntoBaseNoteMatchesReality(t *testing.T) {
+	for _, tt := range []struct {
+		name       string
+		content    string
+		wantSeeded bool
+	}{
+		{name: "blank base discards the seed, so no note", content: "", wantSeeded: false},
+		{name: "real base keeps the seed and the note", content: "SCHEDULER_MODE=cron\n", wantSeeded: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := filepath.Join(t.TempDir(), "backup.env")
+			if err := os.WriteFile(cfg, []byte(tt.content), 0o600); err != nil {
+				t.Fatalf("seed config: %v", err)
+			}
+			stubCrontabLines(t, []string{"0 21 * * * /usr/local/bin/proxsave --backup"}, nil)
+
+			decision, err := installer.ResolveExistingConfigDecision(installer.ExistingConfigEdit, cfg)
+			if err != nil {
+				t.Fatalf("ResolveExistingConfigDecision error: %v", err)
+			}
+			bootstrap := logging.NewBootstrapLogger()
+			base := adoptCronRunTimeIntoBase(context.Background(), decision, cfg, bootstrap)
+
+			if got := strings.Contains(base, "SCHEDULER_TIME=21:00"); got != tt.wantSeeded {
+				t.Fatalf("seeded = %v, want %v (base=%q)", got, tt.wantSeeded, base)
+			}
+			wantEntries := 0
+			if tt.wantSeeded {
+				wantEntries = 1
+			}
+			if got := bootstrap.EntryCount(); got != wantEntries {
+				t.Fatalf("bootstrap entries = %d, want %d: the adoption note must not outlive the value it describes", got, wantEntries)
+			}
+		})
 	}
 }

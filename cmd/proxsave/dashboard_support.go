@@ -16,15 +16,28 @@ import (
 var dashboardRunSupportForm = runDashboardSupportForm
 
 // runDashboardSupportForm shows the SAME single-screen grid form as the installer's
-// configuration screen (components.FormGrid). A consent note sits ABOVE the two fields
-// (always visible, one line each): the backup runs in debug mode and its log is emailed to
-// the maintainer, and the log may contain personal data such as this server's MAC.
-// Below it are the GitHub nickname and the GitHub issue (#1234), each with a concise
-// focused hint, plus the shared Continue / Cancel buttons. It returns (meta, true) only on
-// Continue; esc / Cancel returns (_, false) so the caller loops back to the menu. The
-// maintainer email address is never shown.
+// configuration screen (components.FormGrid), carrying the SAME consent as the stdin
+// flow (support.RunIntro): the shared disclosure and gate detail sit above the fields
+// as an always-visible note, and each shared gate gets its own toggle row that must be
+// set to Yes before Continue is accepted. The GitHub nickname and the GitHub issue
+// (#1234) come first, each with a concise focused hint, then the gate rows, then the
+// shared Continue / Cancel buttons.
+//
+// The gate rows sit AFTER the text fields even though the stdin flow asks them first,
+// because the grid focuses its first row on entry and a focused toggle absorbs a bare
+// "y" (formgrid.go, FieldToggle key handling). With the gates first, an operator whose
+// GitHub nickname begins with y -- typing being the natural first act on a form that
+// asks for a nickname -- silently granted consent, while the stdin gate rejects that
+// same input and re-prompts. Order here is presentation only: submit() validates every
+// row whatever the order, so neither acknowledgement can be skipped.
+//
+// It returns (meta, true) only on Continue with both acknowledgements given; esc /
+// Cancel returns (_, false) so the caller loops back to the menu. The maintainer email
+// address is never shown.
 func runDashboardSupportForm(ctx context.Context, session *shell.Session) (support.Meta, bool) {
 	errBack := errors.New("support: back")
+
+	gates := support.ConsentGates()
 
 	nickname := &components.FormField{
 		Label:       "GitHub nickname",
@@ -43,14 +56,19 @@ func runDashboardSupportForm(ctx context.Context, session *shell.Session) (suppo
 		Kind:        components.FieldText,
 		Validate:    validateSupportIssue,
 	}
+	fields := append([]*components.FormField{nickname, issue}, supportConsentFields(gates)...)
 
-	fields := []*components.FormField{nickname, issue}
+	// The note is the shared disclosure plus every gate's supporting lines, so the
+	// operator reads the same words the stdin flow prints before its first prompt —
+	// here they stay on screen while the acknowledgements are given.
+	note := support.ConsentDisclosure.Lines()
+	for _, gate := range gates {
+		note = append(note, gate.Detail...)
+	}
+
 	if _, err := shell.Ask(ctx, session, components.NewFormGrid(
 		"Support", fields,
-		components.WithFormGridNote(
-			"Backup run in debug mode, log will be emailed to the maintainer.",
-			"The log may contain personal data such as this server's MAC address.",
-		),
+		components.WithFormGridNote(note...),
 		components.WithFormGridBack(errBack),
 	)); err != nil {
 		return support.Meta{}, false // esc / Cancel / abort
@@ -59,6 +77,28 @@ func runDashboardSupportForm(ctx context.Context, session *shell.Session) (suppo
 		GitHubUser: strings.TrimSpace(nickname.Text),
 		IssueID:    strings.TrimSpace(issue.Text),
 	}, true
+}
+
+// supportConsentFields turns the shared consent gates into toggle rows. Bool is left at
+// its zero value: an untouched row reads "No", mirroring the stdin prompt's [y/N]
+// default. Require blocks submit while the row is still No, which is what stops the
+// dashboard from arming support mode on a form whose visible purpose is entering
+// metadata.
+//
+// The default alone does not make consent deliberate -- a focused toggle also answers to
+// a bare "y", so where these rows sit in the field order decides whether stray typing can
+// reach them. See the ordering note on runDashboardSupportForm.
+func supportConsentFields(gates []support.ConsentGate) []*components.FormField {
+	fields := make([]*components.FormField, 0, len(gates))
+	for _, gate := range gates {
+		fields = append(fields, &components.FormField{
+			Label:        gate.Ack,
+			Description:  gate.Question,
+			Kind:         components.FieldToggle,
+			ValidateBool: gate.Require,
+		})
+	}
+	return fields
 }
 
 // validateSupportIssue enforces the #<number> issue format via the shared helper
