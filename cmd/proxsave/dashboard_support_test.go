@@ -42,11 +42,11 @@ func TestHandleSupportIntroSkipsWhenMetaProvided(t *testing.T) {
 // TestSupportFormIsOneScreen: the support form is a SINGLE screen ("Support") that shows the
 // consent note, BOTH input fields and the Start confirm together (not a sequence of screens).
 func TestSupportFormIsOneScreen(t *testing.T) {
-	driver := &newkeyUIDriver{t: t, buf: &shell.SyncBuffer{}, pushes: make(chan string, 8)}
+	driver := &newkeyUIDriver{t: t, buf: &shell.SyncBuffer{}, pushes: make(chan screenPush, 8)}
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 	driver.session = shell.StartObservedForTest(ctx, shell.Config{AppName: "ProxSave", Subtitle: "Dashboard"},
-		driver.buf, func(title string) { driver.pushes <- title })
+		driver.buf, func(title string) { driver.pushes <- screenPush{title: title, at: driver.buf.Len()} })
 
 	done := make(chan struct{})
 	go func() { _, _ = runDashboardSupportForm(ctx, driver.session); close(done) }()

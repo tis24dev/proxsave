@@ -25,11 +25,11 @@ type supportFormRun struct {
 
 func startSupportForm(t *testing.T) *supportFormRun {
 	t.Helper()
-	driver := &newkeyUIDriver{t: t, buf: &shell.SyncBuffer{}, pushes: make(chan string, 8)}
+	driver := &newkeyUIDriver{t: t, buf: &shell.SyncBuffer{}, pushes: make(chan screenPush, 8)}
 	ctx, cancel := context.WithCancel(context.Background())
 	run := &supportFormRun{driver: driver, meta: make(chan support.Meta, 1), done: make(chan struct{})}
 	driver.session = shell.StartObservedForTest(ctx, shell.Config{AppName: "ProxSave", Subtitle: "Dashboard"},
-		driver.buf, func(title string) { driver.pushes <- title })
+		driver.buf, func(title string) { driver.pushes <- screenPush{title: title, at: driver.buf.Len()} })
 	go func() {
 		defer close(run.done)
 		if meta, ok := runDashboardSupportForm(ctx, driver.session); ok {

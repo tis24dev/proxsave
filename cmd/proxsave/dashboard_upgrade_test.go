@@ -115,11 +115,11 @@ func TestDashboardUpgradeScreen(t *testing.T) {
 	}
 
 	// Build an observed session eagerly (the shared seam creates it lazily via a flow).
-	driver := &newkeyUIDriver{t: t, buf: &shell.SyncBuffer{}, pushes: make(chan string, 64)}
+	driver := &newkeyUIDriver{t: t, buf: &shell.SyncBuffer{}, pushes: make(chan screenPush, 64)}
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 	driver.session = shell.StartObservedForTest(ctx, shell.Config{AppName: "ProxSave", Subtitle: "Dashboard"},
-		driver.buf, func(title string) { driver.pushes <- title })
+		driver.buf, func(title string) { driver.pushes <- screenPush{title: title, at: driver.buf.Len()} })
 
 	done := make(chan struct{})
 	go func() {
@@ -206,11 +206,11 @@ func TestDashboardUpgradeExternalCheckFailureIsWarning(t *testing.T) {
 	dashboardUpgradeVersion = func() string { return "1.0.0" }
 	dashboardUpgradeCheck = func(context.Context, *logging.Logger, string) *UpdateInfo { return nil }
 
-	driver := &newkeyUIDriver{t: t, buf: &shell.SyncBuffer{}, pushes: make(chan string, 64)}
+	driver := &newkeyUIDriver{t: t, buf: &shell.SyncBuffer{}, pushes: make(chan screenPush, 64)}
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 	driver.session = shell.StartObservedForTest(ctx, shell.Config{AppName: "ProxSave", Subtitle: "Dashboard"},
-		driver.buf, func(title string) { driver.pushes <- title })
+		driver.buf, func(title string) { driver.pushes <- screenPush{title: title, at: driver.buf.Len()} })
 
 	done := make(chan struct{})
 	go func() {
@@ -256,11 +256,11 @@ func TestDashboardUpgradeMenu(t *testing.T) {
 		return &UpdateInfo{NewVersion: false, Latest: "1.0.0", Current: "1.0.0"}
 	}
 
-	driver := &newkeyUIDriver{t: t, buf: &shell.SyncBuffer{}, pushes: make(chan string, 64)}
+	driver := &newkeyUIDriver{t: t, buf: &shell.SyncBuffer{}, pushes: make(chan screenPush, 64)}
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 	driver.session = shell.StartObservedForTest(ctx, shell.Config{AppName: "ProxSave", Subtitle: "Dashboard"},
-		driver.buf, func(title string) { driver.pushes <- title })
+		driver.buf, func(title string) { driver.pushes <- screenPush{title: title, at: driver.buf.Len()} })
 
 	done := make(chan struct{})
 	go func() {
@@ -330,11 +330,11 @@ func TestDashboardUpgradeRestartDaemonRelaunchNote(t *testing.T) {
 			return health.DaemonState{ProcessAlive: true, Aligned: true, AlignChecked: true, StartTS: 1 << 60, Version: "9.9.9"}
 		})
 
-	driver := &newkeyUIDriver{t: t, buf: &shell.SyncBuffer{}, pushes: make(chan string, 64)}
+	driver := &newkeyUIDriver{t: t, buf: &shell.SyncBuffer{}, pushes: make(chan screenPush, 64)}
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 	driver.session = shell.StartObservedForTest(ctx, shell.Config{AppName: "ProxSave", Subtitle: "Dashboard"},
-		driver.buf, func(title string) { driver.pushes <- title })
+		driver.buf, func(title string) { driver.pushes <- screenPush{title: title, at: driver.buf.Len()} })
 
 	done := make(chan struct{})
 	go func() {

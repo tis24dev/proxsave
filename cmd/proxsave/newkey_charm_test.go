@@ -21,30 +21,50 @@ import (
 // writes the recipient file; a dying UI program maps to the interactive
 // abort, not a hard failure.
 
+// screenPush is one screen transition as the EVENT LOOP saw it: the title, and the
+// buffer offset at that instant.
+//
+// The offset has to be sampled here, by the producer, and not by whoever reads this
+// channel. shell.observeScreenPush is called from rootModel.Update on pushScreenMsg
+// (internal/ui/shell/router.go), which is strictly BEFORE bubbletea calls View and
+// writes the new screen's bytes -- so buf.Len() taken here is always just short of
+// that render. A reader that sampled buf.Len() itself would sample it whenever it
+// happened to be scheduled, which on a busy machine is after the render has already
+// landed: matchStart would then start PAST the very text the test is waiting for, and
+// the poll could never match. Not slowness -- a lost update. It is why
+// TestDashboardUpgradeScreen burned its whole deadline instead of failing fast, and
+// why GOMAXPROCS=1 reproduced it on demand while a loaded 12-core box only sometimes
+// did.
+type screenPush struct {
+	title string
+	at    int
+}
+
 type newkeyUIDriver struct {
 	t       *testing.T
 	buf     *shell.SyncBuffer
-	pushes  chan string
+	pushes  chan screenPush
 	session *shell.Session
 	cancel  context.CancelFunc
 	// matchStart is the buffer offset of the current screen's render, updated by
-	// waitScreen on each screen transition. Output pollers (waitOutput / the
-	// per-test waitFor closures) match from here so they see the CURRENT screen's
-	// text and never a stale match from an earlier screen (e.g. a repeated
-	// "enter continue" from a prior run in a loop). It never rewinds (the buffer
-	// is append-only), so matching from it is always in range.
+	// waitScreen on each screen transition from the offset the PRODUCER recorded
+	// (see screenPush). Output pollers (waitOutput / the per-test waitFor closures)
+	// match from here so they see the CURRENT screen's text and never a stale match
+	// from an earlier screen (e.g. a repeated "enter continue" from a prior run in a
+	// loop). It never rewinds (the buffer is append-only), so matching from it is
+	// always in range.
 	matchStart int
 }
 
 func installNewkeySessionSeam(t *testing.T) *newkeyUIDriver {
 	t.Helper()
-	d := &newkeyUIDriver{t: t, buf: &shell.SyncBuffer{}, pushes: make(chan string, 64)}
+	d := &newkeyUIDriver{t: t, buf: &shell.SyncBuffer{}, pushes: make(chan screenPush, 64)}
 	orig := newAgeSetupSession
 	newAgeSetupSession = func(ctx context.Context, cfg shell.Config) *shell.Session {
 		progCtx, cancel := context.WithCancel(ctx)
 		d.cancel = cancel
 		d.session = shell.StartObservedForTest(progCtx, cfg, d.buf, func(title string) {
-			d.pushes <- title
+			d.pushes <- screenPush{title: title, at: d.buf.Len()}
 		})
 		return d.session
 	}
@@ -71,11 +91,14 @@ func (d *newkeyUIDriver) waitScreen(title string) {
 	for {
 		select {
 		case got := <-d.pushes:
-			if got == title {
+			if got.title == title {
 				// Anchor subsequent output pollers to this screen's render, so a
 				// waitOutput/waitFor after a transition cannot match stale text left
-				// in the cumulative buffer by an earlier screen.
-				d.matchStart = d.buf.Len()
+				// in the cumulative buffer by an earlier screen. The offset comes from
+				// the push itself, sampled in the event loop before this screen
+				// rendered -- see screenPush. Re-reading buf.Len() here instead would
+				// skip past the render whenever this goroutine was scheduled late.
+				d.matchStart = got.at
 				return
 			}
 		case <-deadline:
