@@ -61,9 +61,11 @@ var notes = []Note{
 			"Scheduled backups now run from a resident daemon (replaces cron, reversible), on by default",
 			"Backup monitoring (healthchecks) is on by default and alerts you if a backup stops running",
 			"Host backup mode: back up a Proxmox host from an LXC or HA-LXC appliance",
+			"PBS datastore file scanning is off by default, including on configs written before the setting existed",
 		},
 		Actions: []string{
 			"In the dashboard, open Healthchecks for your monitoring portal address and sign-in details",
+			"If your backups included PBS datastore file scans, set PXAR_SCAN_ENABLE=true in backup.env to keep them",
 		},
 	},
 }
