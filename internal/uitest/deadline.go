@@ -2,48 +2,25 @@
 // imported only from _test.go files and never linked into the production binary.
 package uitest
 
-import (
-	"runtime"
-	"time"
-)
+import "time"
 
-// Deadline scales a base driver-test timeout by a slowness-aware factor.
+// Deadline scales a base driver-test timeout by a race-aware factor. The Charm
+// driver tests poll a render buffer until a screen/line appears; under the race
+// detector the bubbletea event loop runs roughly an order of magnitude slower, so a
+// fixed wall-clock deadline (e.g. 5s) can fire spuriously even though the logic is
+// correct. Because those polls return as soon as the condition is met, a wider
+// deadline is FREE on the success path - it only adds headroom before a genuine
+// hang is finally reported. Use it ONLY for UI-render polling deadlines, never for
+// tests that assert an operation's own timeout behavior.
 //
-// The Charm driver tests start a REAL bubbletea event loop and then poll its render
-// buffer every 10ms until a screen or a line appears. That loop has to be SCHEDULED to
-// render at all, so these deadlines measure how promptly the runtime gets round to it,
-// not how long the logic takes. Run on its own, such a test finishes in a second or two
-// against a 15s or 60s budget. Run inside the whole package it competes with everything
-// else for the CPU, and the render can arrive after the budget has expired -- with no
-// bug anywhere.
-//
-// That is not hypothetical. TestDashboardUpgradeScreen and
-// TestDashboardDiagnosticNotConfiguredShowsNotice both timed out this way: green in
-// isolation, green in most full runs, red in the ones where the package took ~100s
-// instead of ~38s because the machine was busy with something else. It was measured
-// down to the cause -- not leaked goroutines (2 alone, 4 after every dashboard test),
-// not a global left behind, not one polluting neighbour (both halves of the family
-// reproduce it), and adding -v to the same command was enough to flip the outcome.
-//
-// Widening is FREE on the success path: every poll returns the moment its condition is
-// met, so a larger budget costs nothing on a green run and only delays the report of a
-// genuine hang, which `go test` still bounds with its own panic timeout. So the factor
-// is deliberately generous rather than tuned to the slowdown we happened to measure.
-//
-// The race detector gets its own multiplier for the same reason under a different
-// cause: its instrumentation slows the event loop by roughly an order of magnitude.
-// Use this ONLY for UI-render polling deadlines, never for tests that assert an
-// operation's own timeout behavior.
+// Do NOT widen these to chase a driver test that times out on a busy machine. That
+// symptom was chased here once and the factor briefly raised; the cause was in the
+// driver harness, not in the budget. waitScreen sampled its match offset when the
+// TEST goroutine read a screen-push, not when the event loop emitted it, so a reader
+// scheduled after the render started matching PAST the text it was waiting for and
+// could never match at all. See screenPush in cmd/proxsave/newkey_charm_test.go. A
+// poll that burns its ENTIRE deadline is that shape of bug; a genuinely slow machine
+// fails late and irregularly instead.
 func Deadline(base time.Duration) time.Duration {
-	return base * time.Duration(raceScale*cpuScale())
-}
-
-// cpuScale doubles the budget again when the event loop has few processors to be
-// scheduled on -- a small CI runner, a pinned GOMAXPROCS, or a container quota. Below
-// four, a driver test and the rest of the suite are effectively taking turns.
-func cpuScale() int {
-	if runtime.GOMAXPROCS(0) < 4 {
-		return 2
-	}
-	return 1
+	return base * time.Duration(raceScale)
 }
