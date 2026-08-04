@@ -83,12 +83,26 @@ host `/var/run` is tmpfs, so a crash followed by a reboot loses the record and t
 is never swept. Check by hand after an unclean shutdown, and note that the sweep only ever
 covers backup staging:
 
+Every path below belongs to a **live** run until that run ends, so check first and delete by
+name. A glob run against a working host takes the staging directory out from under a backup,
+a decrypt or a restore in progress — and the safety tarballs are not leftovers at all, they
+are the restore's rollback.
+
 ```bash
+# 1. Is anything running? If this prints a PID, stop here.
+pgrep -a -x proxsave
+
+# 2. Look at what is actually there, with dates.
 ls -la /tmp/proxsave/
-rm -rf /tmp/proxsave/proxsave-*          # backup staging, from a killed backup
-rm -rf /tmp/proxsave/proxmox-decrypt-*   # decrypt staging: a FULLY DECRYPTED archive
-rm -rf /tmp/proxsave/restore-stage-*     # restore staging: plaintext shadow and pve priv
-rm -f  /tmp/proxsave/*_backup_*.tar.gz   # restore safety tarballs, once the restore is settled
+
+# 3. Delete the specific entries you judged stale, substituting the real names from
+#    step 2. The patterns identify what each one is; they are not meant to be run as
+#    globs on a host that is still working.
+#      proxsave-*           backup staging, from a killed backup
+#      proxmox-decrypt-*    decrypt staging: a FULLY DECRYPTED archive
+#      restore-stage-*      restore staging: plaintext shadow and pve priv
+#      *_backup_*.tar.gz    the restore's rollback -- only once that restore has settled
+rm -rf /tmp/proxsave/restore-stage-20260803-120000_1
 ```
 
 Two practical consequences. `/tmp` needs room for a full uncompressed copy of everything
@@ -216,6 +230,8 @@ ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIExampleSSHpublicKeyForAgeRecipient
 > And if `passphrase.salt` is gone, re-running the wizard with the same passphrase mints a
 > **new random salt** and derives a **different** recipient, without a warning: the comment
 > is not consulted there.
+
+SSH recipients carry their own asymmetry, in the opposite direction:
 
 > **SSH keys encrypt, but ProxSave cannot decrypt with them.** `proxsave --decrypt` and `proxsave --restore` accept only an `AGE-SECRET-KEY-...` identity or a passphrase. Paste an SSH private key at the prompt and it is hashed as a passphrase, which derives the wrong identity and loops on "Provided key or passphrase does not match this archive."
 >
