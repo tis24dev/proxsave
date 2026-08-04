@@ -56,7 +56,13 @@ func createSafetyBackup(logger *logging.Logger, selectedCategories []Category, d
 	logger.Info("Creating %s of current configuration...", strings.ToLower(desc))
 	logger.Debug("%s will be saved to: %s", desc, backupArchive)
 
-	file, err := safetyFS.Create(backupArchive)
+	// 0600, not safetyFS.Create's 0666&^umask (0644 on a stock host). This archive is
+	// the pre-restore copy of whatever is about to be overwritten, so on a PVE or PBS
+	// node it holds /etc/shadow, /etc/pve/priv material and access-control config in
+	// the clear. It is written into /tmp/proxsave, which is 0755 and shared, and it is
+	// deliberately NOT deleted afterwards -- it is the rollback. World-readable was
+	// therefore not a brief window but the steady state.
+	file, err := safetyFS.OpenFile(backupArchive, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
 	if err != nil {
 		return nil, fmt.Errorf("create backup archive: %w", err)
 	}

@@ -103,9 +103,10 @@ The same applies in reverse, and the restore side is worse. `proxsave --decrypt`
 Nothing sweeps it either, since it is not registered. A restore also leaves its rollback and
 safety tarballs (`restore_backup_`, `network_rollback_backup_`, `firewall_rollback_backup_`,
 `ha_rollback_backup_`, `pve_access_control_rollback_backup_`, each `_<timestamp>.tar.gz`)
-deliberately in place, and those are written **mode 0644 directly in the root**, not inside a
-`0700` directory, so on a stock host any local user can read them. Clean them up yourself
-once a restore has settled.
+deliberately in place — they are the rollback. Those are written **mode 0600**, so their
+contents are not readable by other local users even though `/tmp/proxsave` itself is `0755`
+and shared; their names and sizes still are. Clean them up yourself once a restore has
+settled.
 
 If you decrypt by hand with the `age` CLI, your own output is plaintext too: pipe it rather
 than land it on a shared filesystem.

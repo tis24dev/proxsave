@@ -2419,3 +2419,42 @@ func TestBackupDirectory_WithMixedContent(t *testing.T) {
 		}
 	}
 }
+
+// TestCreateSafetyBackupArchiveIsOwnerOnly pins the permission on the pre-restore
+// archive. It is the copy of everything the restore is about to overwrite, so on a PVE
+// or PBS node it carries /etc/shadow, /etc/pve/priv material and access-control config
+// in the clear. It lands in /tmp/proxsave, which is 0755 and shared with every local
+// user, and it is deliberately never deleted -- it IS the rollback. safetyFS.Create
+// would open it 0666&^umask, i.e. 0644 on a stock host, so any local account could
+// read the node's secrets at leisure.
+func TestCreateSafetyBackupArchiveIsOwnerOnly(t *testing.T) {
+	fake := NewFakeFS()
+	t.Cleanup(func() { _ = os.RemoveAll(fake.Root) })
+	origFS := safetyFS
+	safetyFS = fake
+	t.Cleanup(func() { safetyFS = origFS })
+
+	fixed := time.Date(2024, time.March, 1, 15, 4, 5, 0, time.UTC)
+	origNow := safetyNow
+	safetyNow = func() time.Time { return fixed }
+	t.Cleanup(func() { safetyNow = origNow })
+
+	destRoot := "/restore-target"
+	if err := fake.AddFile(filepath.Join(destRoot, "etc/shadow"), []byte("root:$6$secret")); err != nil {
+		t.Fatalf("add shadow: %v", err)
+	}
+
+	result, err := CreateSafetyBackup(logging.New(types.LogLevelError, false),
+		[]Category{{ID: "accounts", Paths: []string{"./etc/shadow"}}}, destRoot)
+	if err != nil {
+		t.Fatalf("CreateSafetyBackup error: %v", err)
+	}
+
+	info, err := fake.Stat(result.BackupPath)
+	if err != nil {
+		t.Fatalf("stat archive: %v", err)
+	}
+	if perm := info.Mode().Perm(); perm != 0o600 {
+		t.Fatalf("safety archive is %04o, want 0600: it holds /etc/shadow under a world-readable /tmp/proxsave and is never deleted", perm)
+	}
+}
