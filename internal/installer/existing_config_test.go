@@ -123,9 +123,9 @@ func TestExistingConfigPresent(t *testing.T) {
 	}
 }
 
-// TestApplySchedulerTimeSeedEmptyBase pins S3: the mirror keeps the CLI's
-// exact-empty guard. Without it a "" base becomes "\nSCHEDULER_TIME=HH:MM",
-// which flips ApplyInstallData's editingExisting to true, defeats its
+// TestApplySchedulerTimeSeedEmptyBase pins S3: the mirror keeps its blank-base
+// guard. Without it a blank base becomes "\nSCHEDULER_TIME=HH:MM", which flips
+// ApplyInstallData's editingExisting to true, defeats its
 // blank->embedded-default substitution and writes a gutted config.
 func TestApplySchedulerTimeSeedEmptyBase(t *testing.T) {
 	if got := ApplySchedulerTimeSeed("", "21:00"); got != "" {
@@ -133,6 +133,27 @@ func TestApplySchedulerTimeSeedEmptyBase(t *testing.T) {
 	}
 	if got := ApplySchedulerTimeSeed("SCHEDULER_MODE=cron\n", ""); got != "SCHEDULER_MODE=cron\n" {
 		t.Fatalf("empty time must leave the base untouched, got %q", got)
+	}
+}
+
+// TestApplySchedulerTimeSeedWhitespaceBase pins the half that used to escape.
+// The guard was an exact-empty comparison, so a backup.env holding nothing but a
+// newline was seeded, turned editingExisting on, and got the gutted config -- while
+// a 0-byte file one keystroke away got the full template. There is nothing in a
+// whitespace-only file to preserve, and no operator can predict a difference made
+// of invisible characters.
+//
+// A comments-only base is the deliberate other side of that line: it is content the
+// operator wrote, so it stays an existing configuration and is still seeded.
+func TestApplySchedulerTimeSeedWhitespaceBase(t *testing.T) {
+	for _, base := range []string{" ", "\n", "\n\n", "  \t\n  "} {
+		if got := ApplySchedulerTimeSeed(base, "21:00"); got != base {
+			t.Errorf("whitespace-only base %q must be left alone like an empty one, got %q", base, got)
+		}
+	}
+	const commented = "# SCHEDULER_MODE=cron\n"
+	if got := ApplySchedulerTimeSeed(commented, "21:00"); got == commented {
+		t.Errorf("a comments-only base is real content and must still be seeded, got %q", got)
 	}
 }
 

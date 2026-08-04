@@ -132,16 +132,29 @@ func BaseTemplateOrDefault(base string) string {
 // offers the host's real time instead of the 02:00 template default. It writes
 // nothing to disk.
 //
-// The base=="" guard is the CLI's existing guard and is deliberately an
-// EXACT-empty test, not strings.TrimSpace. Without it, seeding a "" base
-// produces "\nSCHEDULER_TIME=HH:MM", which flips ApplyInstallData's
-// editingExisting to true, defeats its blank->embedded-default substitution and
-// writes a gutted config. KNOWN RESIDUE: a whitespace-only base is != "", so it
-// is still mirrored into and still gutted; fixing that requires a TrimSpace test
-// that would also change the CLI (a whitespace-only backup.env + Edit would stop
-// adopting the crontab time), so it is out of scope here.
+// The blank-base guard is load-bearing. Seeding a blank base produces
+// "\nSCHEDULER_TIME=HH:MM", which flips ApplyInstallData's editingExisting to
+// true, defeats its blank->embedded-default substitution, and writes a gutted
+// config: the operator gets a handful of mutated keys where they should have got
+// the whole template.
+//
+// The test is strings.TrimSpace, not an exact-empty comparison, so a
+// whitespace-only backup.env is blank for this purpose exactly like an empty one.
+// It used to be exact-empty, and the two then diverged on a single invisible
+// character: an empty file produced the full template on Edit, a file holding one
+// newline produced the gutted one. Nobody can predict that from the outside, and
+// there is nothing in a whitespace-only file worth preserving.
+//
+// The cost is deliberate and small: with such a file, Edit no longer offers the
+// host's crontab run time as the "Run at" default, falling back to the template's.
+// Nothing then claims otherwise -- adoptCronRunTimeIntoBase logs its adoption note
+// only when the seed actually changed the base (it compares the two values), so a
+// discarded seed stays silent instead of promising a time it did not apply.
+//
+// A file that holds comments is NOT blank here, and must not be: that is content
+// the operator wrote, and Edit keeps treating it as the existing configuration.
 func ApplySchedulerTimeSeed(base, hhmm string) string {
-	if hhmm == "" || base == "" {
+	if hhmm == "" || strings.TrimSpace(base) == "" {
 		return base
 	}
 	return setEnvValue(base, "SCHEDULER_TIME", hhmm)
