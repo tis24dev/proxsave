@@ -121,10 +121,69 @@ func TestExitCodeProseCountsTheBenignCodes(t *testing.T) {
 				t.Errorf("%s still carries the pre-17 claim %q", doc.name, stale)
 			}
 		}
-		for _, code := range benign {
-			if !strings.Contains(text, code) {
-				t.Errorf("%s never mentions benign exit code %s", doc.name, code)
+
+		// Search the PROSE, not the whole file. Every benign code also appears in the
+		// exit-code table, so a whole-document search is satisfied by the table alone: the
+		// sentence could be deleted outright, or state the wrong set, and this test still
+		// passed. Verified by deleting it.
+		//
+		// The anchor is structural rather than textual because the two documents word the
+		// claim differently -- "do not mean something went wrong" here, "are not failures"
+		// there -- and a phrase match would silently stop covering one of them.
+		var carriers []string
+		for _, para := range exitCodeProsePara(text) {
+			if containsAll(para, benign) {
+				carriers = append(carriers, para)
+			}
+		}
+		if len(carriers) == 0 {
+			t.Errorf("%s has no prose paragraph naming every benign code %v; the table alone does not tell a reader which non-zero codes are safe to ignore", doc.name, benign)
+			continue
+		}
+		// If the sentence counts them, the count has to be right. This is the half that
+		// actually went stale last time: the table was corrected while the sentence still
+		// said the old number.
+		for _, para := range carriers {
+			if m := benignCountWord.FindStringSubmatch(para); m != nil && m[1] != "Four" {
+				t.Errorf("%s prose says %q of the non-zero codes are benign, but names %d of them", doc.name, m[1], len(benign))
 			}
 		}
 	}
+}
+
+// benignCountWord matches a spelled-out count in the benign-codes sentence, so a
+// corrected table beside a stale "Three of them" is caught.
+var benignCountWord = regexp.MustCompile(`\b(One|Two|Three|Four|Five|Six)\b of them`)
+
+// exitCodeProsePara splits a document into blank-line separated paragraphs and drops
+// every block that is a table or a heading, leaving the prose a reader acts on.
+func exitCodeProsePara(text string) []string {
+	var out []string
+	for _, para := range strings.Split(text, "\n\n") {
+		para = strings.TrimSpace(para)
+		if para == "" {
+			continue
+		}
+		structural := false
+		for _, line := range strings.Split(para, "\n") {
+			line = strings.TrimSpace(line)
+			if strings.HasPrefix(line, "|") || strings.HasPrefix(line, "#") {
+				structural = true
+				break
+			}
+		}
+		if !structural {
+			out = append(out, para)
+		}
+	}
+	return out
+}
+
+func containsAll(s string, needles []string) bool {
+	for _, n := range needles {
+		if !strings.Contains(s, n) {
+			return false
+		}
+	}
+	return true
 }
