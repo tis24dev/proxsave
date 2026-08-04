@@ -1025,10 +1025,15 @@ func TestCollectInstallWizardDataCLIBlankEditKeepsStoredDefaults(t *testing.T) {
 		t.Fatalf("HealthcheckMode = %q, want off", result.HealthcheckMode)
 	}
 
-	// Same base, but answering daemon: the healthcheck default must stay [off].
+	// Same KIND of base -- blank -- but answering daemon: the healthcheck default must
+	// stay [off]. A FRESH file, not cfgFile: the run above ended in
+	// installer.WriteConfigFileAtomic, so cfgFile now holds the minimal key set including
+	// HEALTHCHECK_MODE=off. Reusing it would leave this half asserting the stored value
+	// instead of the stand-in, and deleting wizardBlankBaseStandIn would not fail it.
+	daemonCfgFile := createTempFile(t, "")
 	daemonOutput := captureStdout(t, func() {
 		reader := bufio.NewReader(strings.NewReader("2\nn\nn\nn\nn\nn\nn\ndaemon\n\n03:15\n"))
-		_, err = runConfigWizardCLI(context.Background(), reader, cfgFile, cfgFile+".tmp", "/opt/proxsave", nil)
+		_, err = runConfigWizardCLI(context.Background(), reader, daemonCfgFile, daemonCfgFile+".tmp", "/opt/proxsave", nil)
 	})
 	if err != nil {
 		t.Fatalf("runConfigWizardCLI (daemon) error: %v", err)
