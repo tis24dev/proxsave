@@ -807,11 +807,15 @@ USE_COLOR=false proxsave
 | `17` | guards still in place | `--cleanup-guards` only. The cleanup itself ran fine, but the storage is still locked: guard mounts or immutable flags are left behind (typically hidden under a live mount), or the remaining count could not be confirmed. Also returned by `--cleanup-guards --dry-run` when it finds guards. Not a failure — unmount the datastore and retry |
 | `130` | interrupted | The run was cancelled with Ctrl+C (128 plus SIGINT) |
 
-**Note**: `16` and `17` are the non-zero codes that do not mean something went wrong. A
-wrapper of the form `proxsave --backup || alert` will page you every time two runs
-overlap unless it excludes `16`. For `--cleanup-guards`, `17` is the one to act on but
-not to report as a bug: `1` there means the cleanup itself failed, which is a different
-remedy.
+**Note**: `1`, `16`, `17` and `130` are the non-zero codes that do not mean something
+went wrong: `1` is also what a run that succeeded with warnings returns, `16` means no
+backup was performed for a benign reason, `17` means a guard cleanup ran fine but the
+storage is still locked, and `130` means the run was cancelled by hand. Only `2` through
+`15` are unambiguous failures. A wrapper of the form `proxsave --backup || alert` will
+page you on warning-only runs, every time two runs overlap, and on anything you Ctrl+C,
+unless it excludes them. For `--cleanup-guards`, `17` is the one to act on but not to
+report as a bug — and `1` means the opposite of what it means elsewhere: there it is the
+cleanup itself failing, which is a different remedy.
 
 **Note**: Cloud storage is non-critical. A cloud upload failure does **not** abort the
 run with a storage error (`5`): the local backup is kept, but the failure is recorded as a
