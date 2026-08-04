@@ -192,13 +192,43 @@ func TestCLIGuardVerdictSaysWhatWasFoundAndWhatToDo(t *testing.T) {
 		},
 		{
 			name:   "real run leaves guards behind",
-			report: orchestrator.GuardCleanupReport{BindGuards: 1, GuardsRemaining: 1},
+			report: orchestrator.GuardCleanupReport{GuardDirPresent: true, BindGuards: 1, GuardsRemaining: 1},
 			want:   []string{"still in place", "hidden under a live mount", "Unmount the datastore", "--cleanup-guards"},
 		},
 		{
 			name:   "real run unlocks the storage",
-			report: orchestrator.GuardCleanupReport{BindGuards: 1, Unmounted: 1},
+			report: orchestrator.GuardCleanupReport{GuardDirPresent: true, BindGuards: 1, Unmounted: 1},
 			want:   []string{"storage is unlocked"},
+		},
+		{
+			// The engine returns an all-zero report and logs "nothing to clean up" when
+			// the guard directory does not exist. Reporting a removal there contradicts
+			// the line above it and tells an operator their storage was just unlocked by
+			// a run that touched nothing.
+			name:    "real run with no guard directory removed nothing",
+			report:  orchestrator.GuardCleanupReport{},
+			want:    []string{"No restore mount guards were present", "Nothing to unlock"},
+			notWant: []string{"Removed", "Unmount the datastore"},
+		},
+		{
+			// pending counts targets left immutable for THREE reasons (the engine
+			// comments them as mounted, unresolvable, or the clear failed). Naming only
+			// the live mount sends the operator to unmount a datastore that may never
+			// have been involved.
+			name:    "real run leaves an immutable flag pending",
+			report:  orchestrator.GuardCleanupReport{GuardDirPresent: true, ImmutableGuards: 1, ImmutablePending: 1},
+			want:    []string{"still locked", "1 immutable flag", "unresolvable", "clear failed"},
+			notWant: []string{"bind mount guard"},
+		},
+		{
+			// GuardsRemaining == -1 is the fail-closed sentinel for a verification reread
+			// that failed: the count is unknown. Claiming guards are in place AND naming
+			// their cause is two assertions the run cannot support, and unmount advice is
+			// guidance for a diagnosis it never reached.
+			name:    "real run cannot confirm what is left",
+			report:  orchestrator.GuardCleanupReport{GuardDirPresent: true, BindGuards: 1, GuardsRemaining: -1},
+			want:    []string{"could not be confirmed", "again to get a confirmed count"},
+			notWant: []string{"hidden under a live mount", "Unmount the datastore"},
 		},
 	}
 
@@ -234,7 +264,9 @@ func TestCLIGuardVerdictWarnsWhenTheStorageStaysLocked(t *testing.T) {
 		dryRun bool
 	}{
 		{"guards found by the check", orchestrator.GuardCleanupReport{BindGuards: 1}, true},
-		{"guards left by a real run", orchestrator.GuardCleanupReport{BindGuards: 1, GuardsRemaining: 1}, false},
+		{"guards left by a real run", orchestrator.GuardCleanupReport{GuardDirPresent: true, BindGuards: 1, GuardsRemaining: 1}, false},
+		{"a real run that cannot confirm what is left", orchestrator.GuardCleanupReport{GuardDirPresent: true, BindGuards: 1, GuardsRemaining: -1}, false},
+		{"immutable flags left pending by a real run", orchestrator.GuardCleanupReport{GuardDirPresent: true, ImmutableGuards: 1, ImmutablePending: 1}, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			buf := &bytes.Buffer{}

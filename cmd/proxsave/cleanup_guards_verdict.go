@@ -65,15 +65,36 @@ func guardCheckFacts(r orchestrator.GuardCleanupReport) string {
 	return fmt.Sprintf("Found %s locking the storage.", strings.Join(parts, " and "))
 }
 
-// guardApplyFacts states the outcome of a real run. The not-clean wording deliberately
-// names the usual cause — a guard hidden under a live mount, which the engine refuses
-// to unmount — because that is what tells the operator the retry needs the datastore
-// offline rather than more privileges.
+// guardApplyFacts states the outcome of a real run, keeping the distinctions the engine
+// already makes instead of flattening them into clean-or-not.
+//
+// Three of them matter. A run that found no guard directory removed NOTHING, and saying
+// otherwise contradicts the engine's own "nothing to clean up" line one screen earlier.
+// GuardsRemaining == -1 is the fail-closed sentinel for a verification reread that
+// failed, so the count is unknown and asserting a cause on top of it is two claims the
+// run cannot support. And ImmutablePending covers three causes, not one -- the engine
+// comments them as mounted, unresolvable, or the clear failed -- so naming only the live
+// mount sends an operator to unmount a datastore that was never the problem.
 func guardApplyFacts(r orchestrator.GuardCleanupReport) string {
+	if !r.GuardDirPresent {
+		return "No restore mount guards were present. Nothing to unlock."
+	}
 	if guardApplyClean(r) {
 		return "Removed the restore mount guards. The storage is unlocked."
 	}
-	return "Some guards are still in place (hidden under a live mount)."
+	var parts []string
+	switch {
+	case r.GuardsRemaining < 0:
+		parts = append(parts, "the number of bind mount guards still in place could not be confirmed")
+	case r.GuardsRemaining > 0:
+		parts = append(parts, countLabel(r.GuardsRemaining, "bind mount guard")+
+			" still in place (hidden under a live mount, or the unmount failed)")
+	}
+	if r.ImmutablePending > 0 {
+		parts = append(parts, countLabel(r.ImmutablePending, "immutable flag")+
+			" still set (the target is mounted, unresolvable, or the clear failed)")
+	}
+	return "The storage is still locked: " + strings.Join(parts, ", and ") + "."
 }
 
 // logCLIGuardVerdict states the verdict in the CLI's voice: the shared facts plus a
@@ -87,6 +108,10 @@ func logCLIGuardVerdict(logger *logging.Logger, r orchestrator.GuardCleanupRepor
 		logger.Info("%s", guardCheckFacts(r))
 	case guardApplyClean(r):
 		logger.Info("%s", guardApplyFacts(r))
+	case r.GuardsRemaining < 0:
+		// Unknown, not stuck: telling the operator to unmount a datastore would be
+		// advice for a diagnosis this run never reached.
+		logger.Warning("%s Run --cleanup-guards again to get a confirmed count.", guardApplyFacts(r))
 	default:
 		logger.Warning("%s Unmount the datastore and run --cleanup-guards again once it is offline.", guardApplyFacts(r))
 	}
