@@ -70,7 +70,7 @@ func (c *Collector) writePBSNotificationSummary(commandsDir string) {
 		priv := summary.ConfigFiles.NotificationsPrivCfg
 
 		if cfg.Status != StatusCollected && cfg.Status != StatusDisabled {
-			if summary.Targets.Total > 0 || sumEndpointTotals(summary.Endpoints) > 0 {
+			if hasCustomNotificationObjects(summary) {
 				summary.Warnings = append(summary.Warnings, "Notification objects detected in snapshots, but notifications.cfg was not collected (check BACKUP_PBS_NOTIFICATIONS and exclusions).")
 			}
 		}
@@ -108,6 +108,12 @@ func (c *Collector) writePBSNotificationSummary(commandsDir string) {
 	if err := c.writeReportFile(filepath.Join(commandsDir, "notifications_summary.json"), out); err != nil {
 		c.logger.Debug("PBS notifications summary write failed: %v", err)
 	}
+}
+
+func hasCustomNotificationObjects(summary pbsNotificationsSummary) bool {
+	return summary.Targets.Custom > 0 ||
+		summary.Matchers.Custom > 0 ||
+		sumEndpointCustom(summary.Endpoints) > 0
 }
 
 func sumEndpointTotals(endpoints map[string]pbsNotificationSnapshotSummary) int {
