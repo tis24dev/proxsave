@@ -48,8 +48,12 @@ func TestApplyPBSNotificationsViaAPI_CreatesEndpointAndMatcher(t *testing.T) {
 	restoreCmd = runner
 
 	logger := logging.New(types.LogLevelDebug, false)
-	if err := applyPBSNotificationsViaAPI(context.Background(), logger, stageRoot, false); err != nil {
+	applied, err := applyPBSNotificationsViaAPI(context.Background(), logger, stageRoot, false)
+	if err != nil {
 		t.Fatalf("applyPBSNotificationsViaAPI error: %v", err)
+	}
+	if !applied {
+		t.Fatal("staged notifications.cfg was present, so the apply must report that it ran")
 	}
 
 	want := []string{
@@ -81,5 +85,40 @@ func TestBuildPBSNotificationDesiredState_NilLoggerSkipsMalformedSections(t *tes
 	}
 	if len(desired.matchers) != 0 {
 		t.Fatalf("expected no matchers, got=%v", desired.matchers)
+	}
+}
+
+// A backup that carries no notifications.cfg is not a failure, but it is not an apply
+// either. Before this was distinguished, the caller logged "PBS notifications applied via
+// API" for a run that had touched nothing.
+func TestApplyPBSNotificationsViaAPI_NothingStagedIsNotAnApply(t *testing.T) {
+	origCmd := restoreCmd
+	origFS := restoreFS
+	t.Cleanup(func() {
+		restoreCmd = origCmd
+		restoreFS = origFS
+	})
+
+	fakeFS := NewFakeFS()
+	t.Cleanup(func() { _ = os.RemoveAll(fakeFS.Root) })
+	restoreFS = fakeFS
+
+	runner := &fakeCommandRunner{}
+	restoreCmd = runner
+
+	logger := logging.New(types.LogLevelDebug, false)
+
+	for _, strict := range []bool{false, true} {
+		applied, err := applyPBSNotificationsViaAPI(context.Background(), logger, "/empty-stage", strict)
+		if err != nil {
+			t.Fatalf("strict=%v: an absent notifications.cfg is not an error: %v", strict, err)
+		}
+		if applied {
+			t.Fatalf("strict=%v: nothing was staged, so nothing can have been applied", strict)
+		}
+	}
+
+	if len(runner.calls) != 0 {
+		t.Fatalf("no proxmox-backup-manager command should run with an empty stage, got: %v", runner.calls)
 	}
 }
