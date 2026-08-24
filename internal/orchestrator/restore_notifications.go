@@ -26,6 +26,10 @@ type proxmoxNotificationSection struct {
 
 var sectionHeaderTypePattern = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
 
+// notificationsApplyGeteuid is a seam so the apply path can be exercised without root,
+// matching haApplyGeteuid (restore_ha.go:21) and pbsAPIApplyGeteuid.
+var notificationsApplyGeteuid = os.Geteuid
+
 func maybeApplyNotificationsFromStage(ctx context.Context, logger *logging.Logger, plan *RestorePlan, stageRoot string, dryRun bool) (err error) {
 	if plan == nil {
 		return nil
@@ -49,7 +53,7 @@ func maybeApplyNotificationsFromStage(ctx context.Context, logger *logging.Logge
 		logger.Debug("Skipping staged notifications apply: non-system filesystem in use")
 		return nil
 	}
-	if os.Geteuid() != 0 {
+	if notificationsApplyGeteuid() != 0 {
 		logger.Warning("Skipping staged notifications apply: requires root privileges")
 		return nil
 	}
