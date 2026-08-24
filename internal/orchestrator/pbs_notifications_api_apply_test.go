@@ -234,3 +234,62 @@ func TestApplyPBSNotificationsViaAPI_FailureReportsNotApplied(t *testing.T) {
 		t.Fatal("a failed apply must not report applied=true")
 	}
 }
+
+// The two error propagations out of applyPBSNotificationsViaAPI. Neither needs root, a real
+// filesystem or a live PBS: FakeCommandRunner turns the underlying command into a failure.
+func TestApplyPBSNotificationsViaAPI_PropagatesSyncFailures(t *testing.T) {
+	boom := errors.New("proxmox-backup-manager exploded")
+
+	tests := []struct {
+		name   string
+		strict bool
+		errs   map[string]error
+	}{
+		{
+			// strict-only path: removeExtraPBSNotificationMatchers cannot list what is live.
+			name:   "matcher list failure aborts a Clean apply",
+			strict: true,
+			errs: map[string]error{
+				"proxmox-backup-manager notification matcher list": boom,
+			},
+		},
+		{
+			// syncPBSNotificationEndpoints: create fails, and so does the update fallback.
+			name:   "endpoint sync failure aborts the apply",
+			strict: false,
+			errs: map[string]error{
+				"proxmox-backup-manager notification endpoint smtp create Gmail-relay user@example.com --from-address pbs@example.com --server smtp.gmail.com --port 587 --username user --password secret123": boom,
+				"proxmox-backup-manager notification endpoint smtp update Gmail-relay user@example.com --from-address pbs@example.com --server smtp.gmail.com --port 587 --username user --password secret123": boom,
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			origCmd := restoreCmd
+			origFS := restoreFS
+			t.Cleanup(func() {
+				restoreCmd = origCmd
+				restoreFS = origFS
+			})
+
+			fakeFS := NewFakeFS()
+			t.Cleanup(func() { _ = os.RemoveAll(fakeFS.Root) })
+			restoreFS = fakeFS
+
+			stageRoot := "/stage"
+			stagePBSNotificationFixture(t, fakeFS, stageRoot)
+
+			restoreCmd = &fakeCommandRunner{errs: tt.errs}
+			logger := logging.New(types.LogLevelDebug, false)
+
+			applied, err := applyPBSNotificationsViaAPI(context.Background(), logger, stageRoot, tt.strict)
+			if err == nil {
+				t.Fatal("the failure must be propagated, not swallowed")
+			}
+			if applied {
+				t.Fatal("an aborted apply must not report applied=true")
+			}
+		})
+	}
+}
