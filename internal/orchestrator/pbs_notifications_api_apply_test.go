@@ -2,8 +2,10 @@ package orchestrator
 
 import (
 	"context"
+	"errors"
 	"os"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/tis24dev/proxsave/internal/logging"
@@ -120,5 +122,115 @@ func TestApplyPBSNotificationsViaAPI_NothingStagedIsNotAnApply(t *testing.T) {
 
 	if len(runner.calls) != 0 {
 		t.Fatalf("no proxmox-backup-manager command should run with an empty stage, got: %v", runner.calls)
+	}
+}
+
+// stagePBSNotificationFixture writes a minimal but realistic staged notification config:
+// one smtp endpoint whose password lives in the priv file, and one matcher pointing at it.
+func stagePBSNotificationFixture(t *testing.T, fakeFS *FakeFS, stageRoot string) {
+	t.Helper()
+
+	if err := fakeFS.WriteFile(stageRoot+"/etc/proxmox-backup/notifications.cfg", []byte(
+		"smtp: Gmail-relay\n"+
+			"    recipients user@example.com\n"+
+			"    from-address pbs@example.com\n"+
+			"    server smtp.gmail.com\n"+
+			"    port 587\n"+
+			"    username user\n"+
+			"\n"+
+			"matcher: default-matcher\n"+
+			"    target Gmail-relay\n",
+	), 0o640); err != nil {
+		t.Fatalf("write staged notifications.cfg: %v", err)
+	}
+	if err := fakeFS.WriteFile(stageRoot+"/etc/proxmox-backup/notifications-priv.cfg", []byte(
+		"smtp: Gmail-relay\n"+
+			"    password secret123\n",
+	), 0o600); err != nil {
+		t.Fatalf("write staged notifications-priv.cfg: %v", err)
+	}
+}
+
+// Clean mode is the destructive one: it removes live objects the backup does not contain.
+// It had no coverage at all, so nothing proved the strict branch ran, let alone that a
+// completed run reports applied=true.
+func TestApplyPBSNotificationsViaAPI_StrictRemovesExtrasAndReportsApplied(t *testing.T) {
+	origCmd := restoreCmd
+	origFS := restoreFS
+	t.Cleanup(func() {
+		restoreCmd = origCmd
+		restoreFS = origFS
+	})
+
+	fakeFS := NewFakeFS()
+	t.Cleanup(func() { _ = os.RemoveAll(fakeFS.Root) })
+	restoreFS = fakeFS
+
+	stageRoot := "/stage"
+	stagePBSNotificationFixture(t, fakeFS, stageRoot)
+
+	// A live matcher the backup does not contain: strict mode must remove it.
+	runner := &fakeCommandRunner{
+		outputs: map[string][]byte{
+			"proxmox-backup-manager notification matcher list": []byte(`[{"name":"default-matcher"},{"name":"stale-matcher"}]`),
+		},
+	}
+	restoreCmd = runner
+
+	logger := logging.New(types.LogLevelDebug, false)
+
+	applied, err := applyPBSNotificationsViaAPI(context.Background(), logger, stageRoot, true)
+	if err != nil {
+		t.Fatalf("applyPBSNotificationsViaAPI error: %v", err)
+	}
+	if !applied {
+		t.Fatal("a completed strict apply must report applied=true")
+	}
+
+	joined := strings.Join(runner.calls, "\n")
+	if !strings.Contains(joined, "notification matcher remove stale-matcher") {
+		t.Fatalf("strict mode must remove the matcher missing from the backup, calls:\n%s", joined)
+	}
+	if strings.Contains(joined, "notification matcher remove default-matcher") {
+		t.Fatalf("a matcher present in the backup must be kept, calls:\n%s", joined)
+	}
+}
+
+// applied is only useful if it is trustworthy when things go wrong. Without this, a later
+// refactor could return true alongside an error and no test would notice.
+func TestApplyPBSNotificationsViaAPI_FailureReportsNotApplied(t *testing.T) {
+	origCmd := restoreCmd
+	origFS := restoreFS
+	t.Cleanup(func() {
+		restoreCmd = origCmd
+		restoreFS = origFS
+	})
+
+	fakeFS := NewFakeFS()
+	t.Cleanup(func() { _ = os.RemoveAll(fakeFS.Root) })
+	restoreFS = fakeFS
+
+	stageRoot := "/stage"
+	stagePBSNotificationFixture(t, fakeFS, stageRoot)
+
+	// upsertPBSNotificationMatcher falls back to update when create fails, so both have to
+	// fail for the matcher sync to report an error.
+	boom := errors.New("proxmox-backup-manager exploded")
+	runner := &fakeCommandRunner{
+		errs: map[string]error{
+			"proxmox-backup-manager notification matcher create default-matcher --target Gmail-relay": boom,
+			"proxmox-backup-manager notification matcher update default-matcher --target Gmail-relay": boom,
+		},
+	}
+	restoreCmd = runner
+
+	logger := logging.New(types.LogLevelDebug, false)
+
+	applied, err := applyPBSNotificationsViaAPI(context.Background(), logger, stageRoot, false)
+	if err == nil {
+		t.Fatal("a failing matcher sync must surface an error")
+	}
+	if applied {
+		t.Fatal("a failed apply must not report applied=true")
 	}
 }
