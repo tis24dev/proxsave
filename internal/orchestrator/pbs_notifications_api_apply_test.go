@@ -50,11 +50,11 @@ func TestApplyPBSNotificationsViaAPI_CreatesEndpointAndMatcher(t *testing.T) {
 	restoreCmd = runner
 
 	logger := logging.New(types.LogLevelDebug, false)
-	applied, err := applyPBSNotificationsViaAPI(context.Background(), logger, stageRoot, false)
+	rep, err := applyPBSNotificationsViaAPI(context.Background(), logger, stageRoot, false)
 	if err != nil {
 		t.Fatalf("applyPBSNotificationsViaAPI error: %v", err)
 	}
-	if !applied {
+	if !rep.mutated() {
 		t.Fatal("staged notifications.cfg was present, so the apply must report that it ran")
 	}
 
@@ -81,7 +81,7 @@ func TestBuildPBSNotificationDesiredState_NilLoggerSkipsMalformedSections(t *tes
 		},
 	}
 
-	desired := buildPBSNotificationDesiredState(cfgSections, nil, nil)
+	desired := buildPBSNotificationDesiredState(cfgSections, nil, nil, &pbsNotificationApplyReport{})
 	if len(desired.endpoints) != 0 {
 		t.Fatalf("expected malformed endpoints to be skipped, got=%v", desired.endpoints)
 	}
@@ -111,11 +111,11 @@ func TestApplyPBSNotificationsViaAPI_NothingStagedIsNotAnApply(t *testing.T) {
 	logger := logging.New(types.LogLevelDebug, false)
 
 	for _, strict := range []bool{false, true} {
-		applied, err := applyPBSNotificationsViaAPI(context.Background(), logger, "/empty-stage", strict)
+		rep, err := applyPBSNotificationsViaAPI(context.Background(), logger, "/empty-stage", strict)
 		if err != nil {
 			t.Fatalf("strict=%v: an absent notifications.cfg is not an error: %v", strict, err)
 		}
-		if applied {
+		if rep.mutated() {
 			t.Fatalf("strict=%v: nothing was staged, so nothing can have been applied", strict)
 		}
 	}
@@ -179,11 +179,11 @@ func TestApplyPBSNotificationsViaAPI_StrictRemovesExtrasAndReportsApplied(t *tes
 
 	logger := logging.New(types.LogLevelDebug, false)
 
-	applied, err := applyPBSNotificationsViaAPI(context.Background(), logger, stageRoot, true)
+	rep, err := applyPBSNotificationsViaAPI(context.Background(), logger, stageRoot, true)
 	if err != nil {
 		t.Fatalf("applyPBSNotificationsViaAPI error: %v", err)
 	}
-	if !applied {
+	if !rep.mutated() {
 		t.Fatal("a completed strict apply must report applied=true")
 	}
 
@@ -226,12 +226,21 @@ func TestApplyPBSNotificationsViaAPI_FailureReportsNotApplied(t *testing.T) {
 
 	logger := logging.New(types.LogLevelDebug, false)
 
-	applied, err := applyPBSNotificationsViaAPI(context.Background(), logger, stageRoot, false)
+	rep, err := applyPBSNotificationsViaAPI(context.Background(), logger, stageRoot, false)
 	if err == nil {
 		t.Fatal("a failing matcher sync must surface an error")
 	}
-	if applied {
-		t.Fatal("a failed apply must not report applied=true")
+	// The report is an account, not a verdict: the smtp endpoint WAS written before the
+	// matcher failed, and hiding that would leave the operator believing the live config is
+	// untouched when it is half-updated.
+	if rep.endpointsUpserted != 1 {
+		t.Fatalf("the endpoint written before the failure must be counted, got %d", rep.endpointsUpserted)
+	}
+	if rep.matchersUpserted != 0 {
+		t.Fatalf("the matcher failed, so it must not be counted, got %d", rep.matchersUpserted)
+	}
+	if !rep.mutated() {
+		t.Fatal("a partially applied run must report that something was written")
 	}
 }
 
@@ -283,11 +292,11 @@ func TestApplyPBSNotificationsViaAPI_PropagatesSyncFailures(t *testing.T) {
 			restoreCmd = &fakeCommandRunner{errs: tt.errs}
 			logger := logging.New(types.LogLevelDebug, false)
 
-			applied, err := applyPBSNotificationsViaAPI(context.Background(), logger, stageRoot, tt.strict)
+			rep, err := applyPBSNotificationsViaAPI(context.Background(), logger, stageRoot, tt.strict)
 			if err == nil {
 				t.Fatal("the failure must be propagated, not swallowed")
 			}
-			if applied {
+			if rep.mutated() {
 				t.Fatal("an aborted apply must not report applied=true")
 			}
 		})
