@@ -27,7 +27,7 @@ jobs:
       on_main: ${{ steps.check.outputs.on_main }}
     steps:
       - name: Checkout repository
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           fetch-depth: 0
           persist-credentials: false
@@ -62,9 +62,13 @@ jobs:
       # CHECKOUT (fetch-depth 0 for changelog and GoReleaser)
       ########################################
       - name: Checkout repository
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           fetch-depth: 0
+          # No git write happens in this job: GoReleaser publishes over the API with an
+          # explicit token, so there is nothing here that needs the credential left behind
+          # in .git/config. Matches the checkout in the gate job above.
+          persist-credentials: false
 
       ########################################
       # VALIDATE TAG
@@ -202,6 +206,6 @@ jobs:
       # BUILD PROVENANCE ATTESTATION
       ########################################
       - name: Attest Build Provenance
-        uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8
         with:
           subject-path: build/proxsave_*

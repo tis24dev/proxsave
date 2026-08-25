@@ -983,7 +983,8 @@ BACKUP_VERIFICATION_JOBS=true
 BACKUP_PBS_NOTIFICATIONS=true
 BACKUP_PBS_NODE_CONFIG=true
 
-# Recommended for dual labs: keep diagnostics
+# Recommended for dual labs: opt in to the PBS datastore inventories (off by default;
+# metadata only, never datastore contents, and it walks every configured or discovered PBS datastore)
 PXAR_SCAN_ENABLE=true
 ```
 

@@ -1202,13 +1202,28 @@ BACKUP_PRUNE_SCHEDULES=true        # Retention prune schedules
 # PXAR metadata scanning
 PXAR_SCAN_ENABLE=false             # Enable PXAR file metadata collection
 PXAR_SCAN_DS_CONCURRENCY=3         # Datastores scanned in parallel
-PXAR_FILE_INCLUDE_PATTERN=         # Include patterns (default: *.pxar, *.pxar.*, catalog.pxar*)
+PXAR_FILE_INCLUDE_PATTERN=         # Include patterns (default: *.pxar, *.pxar.*, catalog.pxar, catalog.pxar.*)
 PXAR_FILE_EXCLUDE_PATTERN=         # Exclude patterns (e.g., *.tmp, *.lock)
 ```
 
 **Note (PBS snapshot behavior)**: ProxSave snapshots `PBS_CONFIG_PATH` (`/etc/proxmox-backup`) for completeness. When a PBS feature is disabled, proxsave excludes the corresponding well-known config files from that snapshot (for example, `remote.cfg` is excluded when `BACKUP_REMOTE_CONFIGS=false`) and also skips the related command outputs.
 
-**PXAR scanning**: Collects metadata from Proxmox Backup Server .pxar archives.
+**PXAR scanning**: collects *metadata about* the `.pxar` archives inside your PBS datastores —
+never their contents. ProxSave backs up configuration, so no datastore data is copied with or
+without this setting: with it on you additionally get, per datastore, a subdirectory report
+(`<datastore>_subdirs.txt`) and the VM and container PXAR listings
+(`<datastore>_vm_pxar_list.txt`, `<datastore>_ct_pxar_list.txt`). Think of it as an inventory
+of what the datastore held at backup time, useful when reconstructing what existed; losing it
+costs you that picture, not any backup.
+
+It is **off by default**, and turning it on has a real cost: the scan walks every configured or
+discovered PBS datastore, `PXAR_SCAN_DS_CONCURRENCY` at a time. On a large or slow datastore that is the most
+expensive thing in the run.
+
+> **Changed in 0.30.0.** This used to compile to `true` while the shipped template said
+> `false`, so one release behaved two ways: a fresh install had scanning off, while a config
+> old enough to predate the key had it on. Both now default to off, which means a config that
+> was getting these inventories stops getting them. Set `PXAR_SCAN_ENABLE=true` to keep them.
 
 **Note**: `PXAR_FILE_INCLUDE_PATTERN` and `PXAR_FILE_EXCLUDE_PATTERN` are also reused for file sampling in PVE datastore metadata. Leave them empty to use the built-in defaults per platform.
 

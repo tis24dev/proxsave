@@ -21,7 +21,12 @@ jobs:
       # CHECKOUT
       ########################################
       - name: Checkout repository
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          # This job only reads the tree and uploads SARIF over the API. All modules are
+          # public, so no git operation here needs a credential, and leaving one in
+          # .git/config exposes it to every tool the scan runs.
+          persist-credentials: false
 
       ########################################
       # GO 1.25 - MAIN TOOLCHAIN
@@ -89,7 +94,7 @@ jobs:
       # UPLOAD SARIF
       ########################################
       - name: Upload GoSec SARIF
-        uses: github/codeql-action/upload-sarif@7188fc363630916deb702c7fdcf4e481b751f97a
+        uses: github/codeql-action/upload-sarif@ff2f1c621b7f889edc0d3c761ac2e6a3f8cdb0dd
         with:
           sarif_file: gosec.sarif
 

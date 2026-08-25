@@ -26,6 +26,10 @@ type proxmoxNotificationSection struct {
 
 var sectionHeaderTypePattern = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
 
+// notificationsApplyGeteuid is a seam so the apply path can be exercised without root,
+// matching haApplyGeteuid (restore_ha.go:21) and pbsAPIApplyGeteuid.
+var notificationsApplyGeteuid = os.Geteuid
+
 func maybeApplyNotificationsFromStage(ctx context.Context, logger *logging.Logger, plan *RestorePlan, stageRoot string, dryRun bool) (err error) {
 	if plan == nil {
 		return nil
@@ -49,7 +53,7 @@ func maybeApplyNotificationsFromStage(ctx context.Context, logger *logging.Logge
 		logger.Debug("Skipping staged notifications apply: non-system filesystem in use")
 		return nil
 	}
-	if os.Geteuid() != 0 {
+	if notificationsApplyGeteuid() != 0 {
 		logger.Warning("Skipping staged notifications apply: requires root privileges")
 		return nil
 	}
@@ -68,18 +72,32 @@ func maybeApplyNotificationsFromStage(ctx context.Context, logger *logging.Logge
 			} else {
 				logger.Warning("PBS notifications API apply unavailable; skipping apply (merge mode): %v", err)
 			}
-		} else if err := applyPBSNotificationsViaAPI(ctx, logger, stageRoot, strict); err != nil {
+		} else if rep, apiErr := applyPBSNotificationsViaAPI(ctx, logger, stageRoot, strict); apiErr != nil {
+			// Say what was already written BEFORE the failure. The old code returned
+			// applied=false here, and in merge mode the caller then logged "skipping apply
+			// (merge mode)" -- false for a run that had already created half the endpoints.
+			//
+			// This is the ONLY sentence printed on the error path. err != nil here is
+			// always a mid-flight abort, because remove failures are recorded in the report
+			// rather than returned as an error; if that ever changes, this sentence becomes
+			// false on a fully successful Clean and must be split.
+			if rep.mutated() {
+				logger.Warning("PBS notifications: the apply failed after %d object(s) had already been written (endpoints=%d matchers=%d removed=%d); the live configuration is partially updated",
+					rep.endpointsUpserted+rep.matchersUpserted+len(rep.removed),
+					rep.endpointsUpserted, rep.matchersUpserted, len(rep.removed))
+			}
 			if allowFileFallback {
-				logger.Warning("PBS notifications API apply failed; falling back to file-based apply: %v", err)
+				logger.Warning("PBS notifications API apply failed; falling back to file-based apply: %v", apiErr)
 				if err := applyPBSNotificationsFromStage(ctx, logger, stageRoot); err != nil {
 					return err
 				}
 			} else {
-				logger.Warning("PBS notifications API apply failed; skipping apply (merge mode): %v", err)
+				logger.Warning("PBS notifications API apply failed; skipping apply (merge mode): %v", apiErr)
 			}
 		} else {
-			logger.Info("PBS notifications applied via API (%s)", behavior.DisplayName())
+			logPBSNotificationApplyReport(logger, behavior, rep)
 		}
+
 	}
 
 	if plan.SystemType.SupportsPVE() && plan.HasCategoryID("pve_notifications") {
@@ -95,6 +113,64 @@ func maybeApplyNotificationsFromStage(ctx context.Context, logger *logging.Logge
 	}
 
 	return nil
+}
+
+// logPBSNotificationApplyReport phrases the operator sentence from what was COUNTED. There
+// is exactly one place in this package that can print "applied via API", and it is gated on
+// mutated(). Called only on the nil-error path: on an error the counters describe a partial
+// apply, not an outcome, and the caller says so separately.
+func logPBSNotificationApplyReport(logger *logging.Logger, behavior PBSRestoreBehavior, rep pbsNotificationApplyReport) {
+	// A deletion is the one thing that must never be implied by a summary line. Successful
+	// removals were previously logged NOWHERE at any level: a Clean restore could delete
+	// every live notification object and produce an entirely empty log. No cause is
+	// asserted -- "not present in the applied configuration" is what we observed;
+	// "absent from the backup" would be false for anything dropped in translation.
+	if len(rep.removed) > 0 {
+		logger.Info("PBS notifications: removed %d live object(s) not present in the applied configuration: %s",
+			len(rep.removed), strings.Join(rep.removed, ", "))
+	}
+	if len(rep.removeFailed) > 0 {
+		logger.Warning("PBS notifications: %d live object(s) could not be removed and were left in place: %s",
+			len(rep.removeFailed), strings.Join(rep.removeFailed, ", "))
+	}
+	if len(rep.removalsSkipped) > 0 {
+		logger.Warning("PBS notifications: Clean 1:1 did not remove stale %s endpoint(s): at least one staged section of that kind could not be rebuilt, so a live endpoint missing from the desired set is not evidence that the backup lacked it",
+			strings.Join(rep.removalsSkipped, ", "))
+	}
+	if rep.dropped() > 0 {
+		logger.Warning("PBS notifications: %d staged section(s) were not applied (%d unknown type, %d missing a required field)",
+			rep.dropped(), rep.droppedUnknownType, rep.droppedIncomplete)
+	}
+
+	if !rep.mutated() {
+		switch {
+		case !rep.staged:
+			logger.Info("PBS notifications: this backup contains no notifications.cfg, so nothing was applied and the live configuration is unchanged")
+		case rep.stagedEmpty:
+			logger.Warning("PBS notifications: the staged notifications.cfg is empty, so nothing was applied and the live configuration is unchanged")
+		case rep.sections == 0:
+			logger.Warning("PBS notifications: no section header was recognised in the staged notifications.cfg, so nothing was applied and the live configuration is unchanged")
+		case rep.planned == 0:
+			logger.Warning("PBS notifications: all %d staged section(s) were skipped, so nothing was applied and the live configuration is unchanged", rep.sections)
+		default:
+			// Defensive: on the nil-error path every planned object issues at least one
+			// command, so this is unreachable. It states what is known rather than assuming
+			// the work happened.
+			logger.Warning("PBS notifications: the staged notifications.cfg named %d object(s) but no command was acknowledged; the live configuration is unchanged", rep.planned)
+		}
+		return
+	}
+
+	logger.Info("PBS notifications applied via API (%s): endpoints=%d matchers=%d removed=%d",
+		behavior.DisplayName(), rep.endpointsUpserted, rep.matchersUpserted, len(rep.removed))
+
+	// A wipe whose only authority was a staged file naming nothing. This covers the EMPTY
+	// file and the non-empty file whose every section was dropped: from the stage those are
+	// the same evidence, and gating on stagedEmpty alone leaves the second one silent.
+	if rep.planned == 0 && len(rep.removed) > 0 {
+		logger.Warning("PBS notifications: the staged notifications.cfg named no endpoint and no matcher, so Clean 1:1 removed all %d live notification object(s) on that evidence alone; if that file should not have been empty, re-run from a verified backup",
+			len(rep.removed))
+	}
 }
 
 func applyPBSNotificationsFromStage(ctx context.Context, logger *logging.Logger, stageRoot string) error {
