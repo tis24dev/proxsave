@@ -26,6 +26,10 @@ type proxmoxNotificationSection struct {
 
 var sectionHeaderTypePattern = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
 
+// notificationsApplyGeteuid is a seam so the apply path can be exercised without root,
+// matching haApplyGeteuid (restore_ha.go:21) and pbsAPIApplyGeteuid.
+var notificationsApplyGeteuid = os.Geteuid
+
 func maybeApplyNotificationsFromStage(ctx context.Context, logger *logging.Logger, plan *RestorePlan, stageRoot string, dryRun bool) (err error) {
 	if plan == nil {
 		return nil
@@ -49,7 +53,7 @@ func maybeApplyNotificationsFromStage(ctx context.Context, logger *logging.Logge
 		logger.Debug("Skipping staged notifications apply: non-system filesystem in use")
 		return nil
 	}
-	if os.Geteuid() != 0 {
+	if notificationsApplyGeteuid() != 0 {
 		logger.Warning("Skipping staged notifications apply: requires root privileges")
 		return nil
 	}
@@ -68,15 +72,21 @@ func maybeApplyNotificationsFromStage(ctx context.Context, logger *logging.Logge
 			} else {
 				logger.Warning("PBS notifications API apply unavailable; skipping apply (merge mode): %v", err)
 			}
-		} else if err := applyPBSNotificationsViaAPI(ctx, logger, stageRoot, strict); err != nil {
+		} else if applied, apiErr := applyPBSNotificationsViaAPI(ctx, logger, stageRoot, strict); apiErr != nil {
 			if allowFileFallback {
-				logger.Warning("PBS notifications API apply failed; falling back to file-based apply: %v", err)
+				logger.Warning("PBS notifications API apply failed; falling back to file-based apply: %v", apiErr)
 				if err := applyPBSNotificationsFromStage(ctx, logger, stageRoot); err != nil {
 					return err
 				}
 			} else {
-				logger.Warning("PBS notifications API apply failed; skipping apply (merge mode): %v", err)
+				logger.Warning("PBS notifications API apply failed; skipping apply (merge mode): %v", apiErr)
 			}
+		} else if !applied {
+			// Not an error, and not necessarily a problem: the source host may genuinely
+			// have had no notification config. We cannot tell from here, so state what
+			// happened rather than claim a success. Whether the backup lost the file is
+			// answered at backup time, by the collector warnings on notifications.cfg.
+			logger.Info("PBS notifications: this backup contains no notifications.cfg, so nothing was applied and the live configuration is unchanged")
 		} else {
 			logger.Info("PBS notifications applied via API (%s)", behavior.DisplayName())
 		}

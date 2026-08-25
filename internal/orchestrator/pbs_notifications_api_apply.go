@@ -30,21 +30,29 @@ type pbsNotificationDesiredState struct {
 // `notification endpoint gotify create <name> <server> <token> ...`.
 const gotifyTokenRedactIndex = 6
 
-func applyPBSNotificationsViaAPI(ctx context.Context, logger *logging.Logger, stageRoot string, strict bool) error {
+// applyPBSNotificationsViaAPI reports whether it had anything to apply. A backup that
+// carries no notifications.cfg produces applied=false with a nil error: that is not a
+// failure, but the caller must not report it as a successful apply either. The manifest
+// entry that would say whether the file was lost or never existed lives in the ExportOnly
+// proxsave_info category and is not staged, so this distinction cannot be made here.
+func applyPBSNotificationsViaAPI(ctx context.Context, logger *logging.Logger, stageRoot string, strict bool) (applied bool, err error) {
 	desired, present, err := loadPBSNotificationDesiredState(stageRoot, logger)
 	if err != nil || !present {
-		return err
+		return false, err
 	}
 
 	if strict {
 		if err := removeExtraPBSNotificationMatchers(ctx, logger, desired.matchers); err != nil {
-			return err
+			return false, err
 		}
 	}
 	if err := syncPBSNotificationEndpoints(ctx, logger, desired.endpoints, strict); err != nil {
-		return err
+		return false, err
 	}
-	return syncPBSNotificationMatchers(ctx, desired)
+	if err := syncPBSNotificationMatchers(ctx, desired); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 func loadPBSNotificationDesiredState(stageRoot string, logger *logging.Logger) (pbsNotificationDesiredState, bool, error) {
