@@ -575,6 +575,13 @@ func extractBundleToWorkdirWithLogger(bundlePath, workDir string, logger *loggin
 		if rel == ".." || strings.HasPrefix(rel, ".."+string(os.PathSeparator)) {
 			return stagedFiles{}, fmt.Errorf("archive entry escapes workdir: %q", hdr.Name)
 		}
+		// Redundant prefix containment check: sanitizeBundleEntryName already
+		// reduces the entry to a base name and the filepath.Rel test above
+		// rejects escapes, but a prefix test is the form static analysers
+		// (CodeQL go/zipslip) recognise as a traversal barrier.
+		if !strings.HasPrefix(target, restoreRootPrefix(filepath.Clean(workDir))) {
+			return stagedFiles{}, fmt.Errorf("archive entry escapes workdir: %q", hdr.Name)
+		}
 		out, err := restoreFS.OpenFile(target, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o640)
 		if err != nil {
 			return stagedFiles{}, fmt.Errorf("extract %s: %w", hdr.Name, err)
