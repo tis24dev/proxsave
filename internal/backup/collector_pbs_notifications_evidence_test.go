@@ -239,3 +239,27 @@ func TestSummarizePBSNotificationSnapshot_TypeBucketsSumToTotal(t *testing.T) {
 		t.Fatalf("type buckets sum to %d but Total is %d (%+v)", sum, got.Total, got)
 	}
 }
+
+// PBS writes a private section whenever a secret-capable endpoint is created, so endpoints
+// without the file cannot happen on a healthy host: it means a wrong lookup path or real
+// secret loss. The notifications.cfg branch already treats its equivalent as a Warning, and
+// a Note only reaches Info level and never enters the run issue summary.
+func TestPBSNotificationPrivFindings_NotFoundWithEndpointsWarns(t *testing.T) {
+	c := evidenceCollector(t)
+	s := summaryWith(StatusCollected, StatusNotFound)
+	s.Enabled = true
+	s.Endpoints = map[string]pbsNotificationSnapshotSummary{
+		"smtp":    {Present: true, Total: 1},
+		"gotify":  {Present: true, Total: 0},
+		"webhook": {Present: true, Total: 0},
+	}
+
+	c.appendPBSNotificationPrivFindings(&s)
+
+	if len(s.Warnings) != 1 {
+		t.Fatalf("a missing priv file with live endpoints must warn, got warnings=%v notes=%v", s.Warnings, s.Notes)
+	}
+	if len(s.Notes) != 0 {
+		t.Fatalf("the finding must not also be filed as a note, got: %v", s.Notes)
+	}
+}

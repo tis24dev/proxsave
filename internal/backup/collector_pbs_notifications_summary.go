@@ -246,8 +246,13 @@ func (c *Collector) appendPBSNotificationPrivFindings(summary *pbsNotificationsS
 		// PBS writes a private section whenever a secret-capable endpoint is created, even
 		// when it carries no secret, so endpoints without the file means we looked in the
 		// wrong place rather than that there was nothing to collect.
+		// A Warning, not a Note, and for the same reason the notifications.cfg branch
+		// above uses one: PBS writes a private section whenever a secret-capable endpoint
+		// is created, so on a healthy host this state cannot happen. It means either a
+		// wrong lookup path or real secret loss. A Note only reaches Info level and never
+		// enters the run issue summary, so the operator can miss it entirely.
 		if ev.Observed > 0 {
-			summary.Notes = append(summary.Notes, fmt.Sprintf(
+			summary.Warnings = append(summary.Warnings, fmt.Sprintf(
 				"%s secret-capable notification endpoint(s) are configured, but %s was not found. %s",
 				ev.countPhrase(), path, consequence))
 		}

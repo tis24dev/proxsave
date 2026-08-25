@@ -22,6 +22,11 @@ jobs:
       ########################################
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          # This job only reads the tree and uploads SARIF over the API. All modules are
+          # public, so no git operation here needs a credential, and leaving one in
+          # .git/config exposes it to every tool the scan runs.
+          persist-credentials: false
 
       ########################################
       # GO 1.25 - MAIN TOOLCHAIN

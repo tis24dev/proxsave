@@ -65,6 +65,10 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           fetch-depth: 0
+          # No git write happens in this job: GoReleaser publishes over the API with an
+          # explicit token, so there is nothing here that needs the credential left behind
+          # in .git/config. Matches the checkout in the gate job above.
+          persist-credentials: false
 
       ########################################
       # VALIDATE TAG

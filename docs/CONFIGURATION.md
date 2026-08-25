@@ -1216,8 +1216,8 @@ without this setting: with it on you additionally get, per datastore, a subdirec
 of what the datastore held at backup time, useful when reconstructing what existed; losing it
 costs you that picture, not any backup.
 
-It is **off by default**, and turning it on has a real cost: the scan walks every datastore on
-the host, `PXAR_SCAN_DS_CONCURRENCY` at a time. On a large or slow datastore that is the most
+It is **off by default**, and turning it on has a real cost: the scan walks every configured or
+discovered PBS datastore, `PXAR_SCAN_DS_CONCURRENCY` at a time. On a large or slow datastore that is the most
 expensive thing in the run.
 
 > **Changed in 0.30.0.** This used to compile to `true` while the shipped template said
