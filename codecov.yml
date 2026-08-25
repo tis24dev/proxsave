@@ -1,0 +1,336 @@
+# codecov.yml — coverage policy for tis24dev/proxsave
+#
+# TWO GATES, DIFFERENT JOBS.
+#   codecov/patch    a fixed 65% floor on new code. Catches undertested diffs.
+#   codecov/project  auto (= this PR's base) with a 0.5pp tolerance. Catches
+#                    coverage loss that has NO diff lines: deleted tests, mass
+#                    refactors, a narrowed measurement scope.
+# Neither can see what the other sees. Patch is blind to test deletion (Go never
+# instruments _test.go, so those diff lines are "untracked" and drop out of the
+# denominator — on PR #288, 223 of 250 added lines were invisible to it).
+# Project is blind to size: at auto+0.5pp on a 46,142-line report a PR may add
+# ~291 fully-uncovered lines and still pass, and that allowance grows with the
+# diff. Running both closes both holes; running either alone does not.
+#
+# WHAT THIS REPLACES. With no config, Codecov's default patch target is `auto` =
+# the base commit's WHOLE-PROJECT coverage (79.64% today). Measured outcome: 20
+# of the 66 merged PRs with coverable diff lines failed codecov/patch (30%), and
+# all 20 were merged anyway — most recently release PR #280 into main.
+#
+# VALIDATE ANY EDIT BEFORE MERGING. An invalid codecov.yml fails OPEN: Codecov
+# catches the parse error, records a commit error nobody reads, and silently
+# falls back to the old behaviour under the same check names.
+#   curl -s -w '\n%{http_code}\n' --data-binary @codecov.yml https://codecov.io/validate
+#
+# THIS FILE GATES NOTHING BY ITSELF. Neither main nor dev has branch protection
+# and the repo has no rulesets. Requiring these checks is a separate, deliberate
+# change — see the adoption order at the bottom.
+
+codecov:
+  # Default is true, which makes Codecov withhold ALL coverage notifications when
+  # any non-Codecov check on the commit is red, and rewrite existing coverage
+  # contexts to `if_ci_failed`. Eleven unrelated checks run on every PR here
+  # (CodeQL, gosec, golangci-lint, race, license, ...). A lint failure must not
+  # delete the coverage verdict, and once these are required checks a suppressed
+  # status is an invisible permanent block.
+  # Safe here because .github/workflows/codecov.yml has no `if: always()` on the
+  # upload step: if `go test` fails, the job aborts and no report is uploaded at
+  # all. Codecov therefore cannot report a number derived from a broken run.
+  require_ci_to_pass: false
+  notify:
+    # Exactly one upload exists (one workflow, one coverage.out; the PR
+    # comparison reports sessions:1). Raising this above the number of real
+    # uploads makes Codecov never notify — explanation "need_more_builds" —
+    # which under branch protection is a permanently pending required check.
+    after_n_builds: 1
+
+coverage:
+  precision: 2
+  round: down
+  # Display only — the pass/fail comparison runs on the unrounded Decimal, so
+  # `round` cannot move a result across the line. Pinned so the published number
+  # never reads higher than the arithmetic (36784/46142 = 79.7191 -> 79.71).
+  range: "70...90"
+
+  status:
+    # ------------------------------------------------------------------ PATCH
+    patch:
+      default:
+        # FIXED, not `auto`. Calibrated against merged PRs with coverable lines:
+        #   since 2026-06-01 (n=23): median 80.63%, MINIMUM 70.00%
+        #   since 2026-03-01 (n=33): median 80.24%, p25 76.40%
+        # Failures at candidate fixed targets, since 2026-03 / since 2026-06:
+        #   60% -> 1 / 0     65% -> 2 / 0     70% -> 2 / 0
+        #   75% -> 7 / 3     80% -> 16 / 10
+        # 65% sits five points below the six-month observed floor, so it is an
+        # outlier detector rather than a bar: it fires on nothing merged since
+        # June, and on exactly the two careless merges before that — #210
+        # (3,751 diff lines at 55.59%) and #212 (621 lines at 61.03%, 242 of
+        # them uncovered). 70% would sit exactly ON the observed minimum (#263
+        # at 70.00%), i.e. fitted to one 10-line PR; 60% would let #212 through.
+        #
+        # Over the wider population of all 98 PRs that ever had a measurable
+        # patch — which includes closed duplicates and PRs from when the repo
+        # itself was at 55-65% — 65% fires on ~26%. That number describes the
+        # repo's past, not its present. The operative figure is 2 of 33.
+        target: 65%
+
+        # No tolerance. A threshold on a fixed target is a second, hidden target,
+        # and the value of a fixed number is that the number you read is the
+        # number enforced. The five points of clearance below recent practice
+        # ARE the tolerance.
+        threshold: 0%
+
+        # No base report (first upload on a new branch, or a base whose CI never
+        # ran) is not a regression, and once this is required a non-success on an
+        # unmeasurable base is unresolvable by any action the author can take.
+        if_not_found: success
+
+        # Suppress on direct pushes to dev/main. Everything lands via PR, so a
+        # push status duplicates the PR status, and a red mark on a commit that
+        # has already landed is unactionable — precisely the habit this policy is
+        # trying to unlearn. The badge and stored report come from the report,
+        # not the status, so both are unaffected.
+        only_pulls: true
+
+        # DO NOT add `paths:` or `flags:` here. The worker builds the check with
+        # annotations=[] whenever either is set, which would silently delete the
+        # inline missed-line warnings that make this gate actionable.
+
+    # ---------------------------------------------------------------- PROJECT
+    # !! THIS CHECK HAS NEVER POSTED ON THIS REPOSITORY !!
+    # Zero occurrences of `codecov/project` across 138 merged PRs and the current
+    # dev and main heads, and no codecov.yml has ever existed in git history to
+    # turn it off. Two candidate causes:
+    #   (a) Codecov's PATCH_CENTRIC site default (owners onboarded after
+    #       2024-04-30) sets coverage.status.project: false. A repo YAML merges
+    #       OVER that, so this block turns it on and the gate works.
+    #   (b) Plan tier: the worker drops every non-patch status when the owner's
+    #       plan tier is `team`. If that is the cause, this block is INERT.
+    # (a) is better evidenced — the blocked tier is strictly `team`, and a free
+    # public-repo owner is on `users-developer`, whose tier is not team — but it
+    # was NOT verified against the account. VERIFY IT: land this file on a branch
+    # and confirm a `codecov/project` check run appears on that PR before wiring
+    # anything to branch protection. A commit-level codecov.yml overrides the
+    # repo-level one, so this is observable pre-merge.
+    # If it never appears, this repo keeps exactly ONE gate — patch at 65% — and
+    # every regression class listed below is unguarded. Say so out loud rather
+    # than leaving a decorative block in place.
+    project:
+      default:
+        # A ratchet, not a floor. `auto` = this PR's own base coverage, so the
+        # question is "did this make it worse", which never needs re-tuning as
+        # coverage rises and survives the measurement-scope fix described below.
+        # A fixed floor written today would be wrong the moment the scope changes
+        # and would permit a collapse once the repo climbs past it.
+        target: auto
+
+        # 0.5pp, and every point of it is bought:
+        #   * FLAKE. Dependabot PRs #282/#283/#284 changed only go.mod/go.sum and
+        #     workflow YAML, report identical file (256) and line (46,040) counts
+        #     for base and head, and each lost exactly 6 hits = -0.02pp on
+        #     IDENTICAL SOURCE. Worst pure-flake excursion on record: -0.04pp.
+        #   * BASE DRIFT. #206/#207/#208 each have ZERO coverable diff lines and
+        #     a -0.35pp delta, because head carried 995 more report lines than a
+        #     stale base. No test the author can write fixes that; only a rebase.
+        #     Any threshold under 0.35pp reds those PRs for someone else's work.
+        # Failure counts across the PR history: 0.0pp -> 21 (19 of them zero-diff
+        # PRs failing on rounding), 0.1pp -> 13, 0.25pp -> 10, 0.5pp -> 7,
+        # 1.0pp -> 6. The 7 surviving at 0.5pp are the genuine regressions:
+        # -0.68, -1.02, -1.11, -1.53, -3.28, -3.30 and -3.53pp, every one a
+        # 1,200-6,100 line diff with patch coverage under 56%. Loosening to
+        # 1.0pp buys exactly one more PR and is not worth it.
+        # This tolerance is only defensible BECAUSE patch@65 is blocking: a PR
+        # that spends the whole 0.5pp on new uncovered code fails there first.
+        threshold: 0.5%
+
+        # Codecov's hardcoded default, pinned because it is load-bearing for a
+        # delta gate: deleting well-covered code lowers the aggregate through no
+        # fault of the author. Recomputes the base excluding removed lines, only
+        # after the status has already failed, and only for project — never patch.
+        # It does NOT mask test deletion: removing a _test.go file removes no
+        # report lines, it turns existing hits into misses.
+        removed_code_behavior: adjust_base
+
+        if_not_found: success
+        only_pulls: true
+
+    # Flags coverage moving in files the PR did not touch. On a repo with 3,879
+    # test functions and heavy shared fixtures that fires on scheduling noise and
+    # gates nothing anyone acts on. Off by default; pinned so the complete set of
+    # check names is legible here for whoever writes the branch-protection rule:
+    # exactly `codecov/project` and `codecov/patch`, and nothing else.
+    changes: false
+
+    # NO NAMED STATUSES. Check names are mechanical: `codecov/{context}` when the
+    # sub-key is literally `default`, `codecov/{context}/{sub-key}` otherwise.
+    # Both sub-keys above are `default` on purpose — a required check whose YAML
+    # key is later renamed never reports, and the PR is unmergeable forever.
+
+parsers:
+  go:
+    # DELIBERATELY FALSE, and the single most important line in this file.
+    # Go's cover profile makes Codecov mark a line "partial" when one source line
+    # is spanned by both a hit block and a miss block (`if a && b {`,
+    # `} else if x {`), and partials count fully against coverage:
+    # cov = hits / (hits + misses + partials). There are 2,792 partial lines here
+    # = 6.05% of the report, and 7.43% of historical DIFF lines. Setting this to
+    # true moves the headline from 79.72% to 85.77% and lifts nearly every patch
+    # percentage by ~7 points, without a single new test. That is how a coverage
+    # policy becomes a rubber stamp. Written out so flipping it is a reviewable
+    # one-line diff rather than a silent default.
+    # Partials are real branch information, not an artifact: in PR #288, the line
+    # `if notificationsApplyGeteuid() != 0 {` is partial precisely because only
+    # the non-root arm is ever taken under test.
+    partials_as_hits: false
+
+github_checks:
+  # NOT the default — the worker reads github_checks.annotations with a default
+  # of False (changed 2025-01-30). This is what turns a red 65% into a work item:
+  # every added line with coverage 0 gets an inline "Added line #LNN was not
+  # covered by tests" warning in the Files-changed tab. A blocking gate that does
+  # not say which lines are the problem is pure friction.
+  # Caveat: the selector is coverage == 0, so PARTIAL lines are not annotated.
+  # On PR #288 that means 4 of the 6 non-hit lines are flagged and 2 are not.
+  annotations: true
+
+comment:
+  layout: "condensed_header, diff, files, components, condensed_footer"
+  behavior: default
+  # Always post, even when coverage did not move. Under a two-gate policy the
+  # absence of a comment must never be ambiguous with the absence of a problem.
+  require_changes: false
+  # This owner is on Codecov's patch-centric site defaults, which set
+  # hide_project_coverage: true — evidenced by the condensed 1,686-byte comment
+  # on PR #288 with no "@@ Coverage Diff @@" block. Since project is now a gate,
+  # its number has to be in the comment.
+  hide_project_coverage: false
+
+# ---------------------------------------------------------------------------
+# ignore — two entries, one criterion, ~21 counted lines, +0.036pp.
+#
+# The criterion is NOT "hard to test" and NOT "currently 0%". It is: the package
+# is never linked into the production binary, so counting it as production
+# coverage is a category error with a perverse incentive attached — you could
+# raise the repo number by writing tests for your test helpers.
+#
+# Verified for both, at this commit, with:
+#   grep -rln 'proxsave/internal/<pkg>' --include='*.go' . | grep -v '_test.go$'
+# which returns NOTHING for either. Re-run it before adding a third entry; if it
+# prints a file, the entry is no longer justified.
+#
+# Note these are NOT already absent from the profile: Go 1.20+ emits
+# zero-coverage entries for packages with no test files of their own, so both
+# appear in Codecov's 256-file report today at 0%. This is an active exclusion.
+#
+# The recursive `/**` form is deliberate. Codecov compiles a bare
+# `internal/testutil` to the PREFIX regex ^internal/testutil.*, which would also
+# swallow a future internal/testutilities/. `internal/testutil/**` compiles to
+# (?s:internal/testutil/.*)\Z.
+# ---------------------------------------------------------------------------
+ignore:
+  # internal/testutil/age_setup_ui_stub.go — a scripted UI stub (AgeSetupUIStub)
+  # whose only importers are cmd/proxsave/encryption_setup_test.go and
+  # internal/orchestrator/age_setup_workflow_test.go. Zero non-test importers.
+  - "internal/testutil/**"
+
+  # internal/uitest — deadline.go, deadline_race.go, deadline_norace.go. Its own
+  # package doc states it: "holds shared helpers for the Charm/bubbletea driver
+  # TESTS. It is imported only from _test.go files and never linked into the
+  # production binary." Twenty importers, all _test.go. Zero non-test importers.
+  - "internal/uitest/**"
+
+# ---------------------------------------------------------------------------
+# AUDITED AND DELIBERATELY *NOT* IGNORED. Recorded so the next person under
+# deadline pressure does not re-derive it and reach the opposite conclusion.
+# (No line numbers on purpose — they rot; the reasoning does not.)
+#
+# internal/ui/theme            0%, but StatusColor and StatusSymbol are pure
+#   switch statements over a string. A ~20-line table test takes the package to
+#   100%. 0% here means "nobody wrote the test", not "untestable".
+#
+# internal/closeerr            0%, but CloseIntoErr is real production code
+#   called from internal/orchestrator and internal/backup. It reads 0% only
+#   because CI runs without -coverpkg and the package has no _test.go of its own.
+#   That 0% is a signal about the CI command. NEVER ignore a package for reading
+#   0% — check for a missing -coverpkg first.
+#
+# internal/orchestrator/*      the root/real-FS guards are real but small:
+#   isRealRestoreFS plus the Geteuid checks touch 25 of 256 files and 15.9% of
+#   all missed statements, and guard-bearing files are 83.5% covered against
+#   83.8% for guard-free ones. Fixing every structurally blocked line would move
+#   total coverage +1.28pp. Twelve Geteuid seams already exist in this codebase;
+#   eleven raw os.Geteuid() sites in orchestrator do not yet, and each is a
+#   one-line package var away from being testable. When patch@65 fires on a line
+#   below one of those, the fix is the seam, not an entry in this file.
+#
+# internal/ui/**, internal/installer   "TUI is untestable" is empirically false
+#   here: ui/components 86.4%, ui/flows/install 89.3%, ui/shell 84.5%,
+#   installer 80.7%, input 91.2%, cli 92.7%.
+#
+# **/*_test.go                 `go test -coverprofile` never instruments test
+#   files; 0 of the 256 files in the report are _test.go. The entry would be a
+#   no-op that implies otherwise.
+#
+# cmd/**, internal/pbs, pkg/bech32   NOT listed. See the scope note below.
+# ---------------------------------------------------------------------------
+
+component_management:
+  # Visibility only. No `statuses:` blocks, so these mint NO new check names and
+  # carry no gating risk. They exist because one package decides this policy's
+  # future: internal/orchestrator holds 46.5% of all statements and 54.4% of all
+  # missed statements; with internal/backup it accounts for 69.4% of every
+  # uncovered statement in the measured set. The comment now shows, per PR,
+  # whether the movement was there.
+  individual_components:
+    - component_id: orchestrator
+      name: orchestrator
+      paths:
+        - "internal/orchestrator/**"
+    - component_id: backup
+      name: backup
+      paths:
+        - "internal/backup/**"
+
+# ---------------------------------------------------------------------------
+# MEASUREMENT SCOPE — the largest open hole, and why it is NOT patched here.
+#
+# .github/workflows/codecov.yml runs:
+#   go test $(go list ./... | grep -v -E '/cmd/|/pbs$|/bech32$|^github.com/tis24dev/proxsave$')
+# so Codecov's report is 256 files, all under internal/ (254) and pkg/ (2).
+# Dropped: cmd/proxsave (15,585 LOC, 6,227 statements, 57.8% covered, ALREADY
+# carrying 94 test files), internal/pbs (88.1%), pkg/bech32 (93.4%),
+# internal/sourceguard/cmd/sourceguard, and the module root.
+#
+# Consequences:
+#   * The headline is inflated ~3.6pp. Include cmd/ and the repo reads ~76.1%.
+#   * A PR touching ONLY cmd/ has zero coverable lines, so Codecov returns an
+#     unconditional "Coverage not affected" success and BOTH gates pass
+#     vacuously. That silent false negative is far larger than any false
+#     positive this file can produce.
+#   * The pattern is a path match, not a package list, so it EXPANDS on its own.
+#     Verified by running the grep against synthetic paths:
+#       internal/orchestrator/pbs        -> DROPPED by /pbs$
+#       internal/orchestrator/cmd/apply  -> DROPPED by /cmd/
+#     A plain `git mv` of the repo's worst-covered file into an
+#     internal/orchestrator/pbs/ package would delete it from the report, RAISE
+#     project coverage, and exempt it from both gates forever.
+#
+# `ignore:` deliberately does NOT mirror the grep. Mirroring would move no number
+# (those files never enter the profile) while making an accidental hole look
+# intentional and creating a second place exclusions can silently disagree.
+#
+# The fix is in the workflow, not here: replace the regex with anchored package
+# paths, and bring cmd/proxsave back in. That PR will drop the baseline ~3.6pp in
+# one commit and will fail codecov/project — correctly, since it is a scope
+# change and not a regression. `target: auto` re-baselines on the next commit, so
+# nothing needs editing here afterwards.
+#
+# ADOPTION ORDER — this matters, because step 3 is unmergeable after step 4:
+#   1. Merge this file. Confirm `codecov/project` actually posts.
+#   2. Watch both checks on real PRs for a couple of weeks. Nothing is required
+#      yet, so a wrong call costs a conversation, not a block.
+#   3. Fix the workflow grep and absorb the one-time ~3.6pp baseline drop.
+#   4. Only then add `codecov/project` and `codecov/patch` as required checks in
+#      a ruleset on dev and main.
+# ---------------------------------------------------------------------------
