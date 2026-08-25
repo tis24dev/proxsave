@@ -249,6 +249,12 @@ func extractHardlink(target string, header *tar.Header, destRoot string) error {
 	if err != nil {
 		return fmt.Errorf("hardlink target escapes root: %s -> %s: %w", header.Name, linkName, err)
 	}
+	// Redundant prefix containment on the resolved target: resolvePathWithinRootFS
+	// already guarantees it, but the check has to be in this frame for static
+	// analysers (CodeQL go/zipslip) to treat the Link call below as safe.
+	if !strings.HasPrefix(linkTarget, restoreRootPrefix(destRoot)) {
+		return fmt.Errorf("hardlink target escapes root: %s -> %s", header.Name, linkName)
+	}
 
 	// Remove existing file/link if it exists
 	_ = restoreFS.Remove(target)
