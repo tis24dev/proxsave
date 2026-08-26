@@ -551,6 +551,72 @@ COMPRESSION_LEVEL=3
 
 ---
 
+#### Warning: `retention ignored N backup(s) that do not belong to <host>`
+
+**Symptoms**: the run logs the line above, prefixed by the location it applies to (`Local storage:`, `Secondary storage:` or `Cloud storage:`), often followed by `N of those carry this host's short name under a different spelling`. The location keeps growing past `MAX_LOCAL_BACKUPS` / `MAX_SECONDARY_BACKUPS` / `MAX_CLOUD_BACKUPS`, and the run prunes nothing.
+
+**Cause**: retention only prunes what this host owns. The owner of an archive is the `hostname` recorded in its manifest, or the host token its filename carries (`<host>-backup-<timestamp>`) when no manifest can be read. A host answers to the name the kernel reports (`hostname`) and to the name it stamps into what it writes (usually the FQDN from `hostname -f`), and to nothing else. There are two reasons an archive lands outside that set:
+
+1. **It belongs to another machine** sharing the directory or the remote prefix. The filter is doing its job and nothing needs doing.
+2. **It is this machine's own work, written under a name it no longer resolves.** The location then holds both spellings: the short-named archives rotate, the FQDN-named ones do not. Retention refuses to claim them because from here they are indistinguishable from a second machine with the same short name, and claiming them would delete that machine's backups.
+
+**Tell the two apart**:
+```bash
+# What this host calls itself, both ways
+hostname
+hostname -f
+
+# What the archives are named (adjust the path to the location that warned)
+ls -1 /opt/proxsave/backup/*-backup-*.tar* | sed 's#.*/##'
+
+# What the newest run decided
+grep -E "retention ignored|different spelling|Simple retention" \
+  "$(ls -t /opt/proxsave/log/backup-*.log | head -1)"
+```
+If the names before `-backup-` are spellings of THIS host, you are in case 2.
+
+**Solution 1 (case 2, preferred): make the host resolve its own name again**:
+```bash
+# hostname -f reads /etc/hosts and then DNS. The usual regression is a rewritten
+# hosts line with the short name first, which makes hostname -f print the short name.
+grep -n "$(hostname)" /etc/hosts
+
+# Wrong: the short name comes first, so hostname -f returns "pve"
+# 192.168.1.10 pve pve.home.arpa
+# Right: the FQDN comes first
+# 192.168.1.10 pve.home.arpa pve
+
+# It must now print the spelling the archives carry, so compare it with the
+# prefix the filenames above carry. A dry run cannot confirm this: it stops
+# before storage dispatch, so retention never executes.
+hostname -f
+```
+The next real run recognises the stranded archives and brings the location down to its configured limit in a single pass, deleting nothing that belongs to another host.
+
+**Solution 2 (case 2, when the old name is gone for good): remove the stranded archives by hand**:
+```bash
+# List first, and read the list
+ls -1 /opt/proxsave/backup/pve.home.arpa-backup-*.tar*
+
+# Then delete the ones you chose, by name, with a trailing glob so the .sha256,
+# .metadata and .manifest.json sidecars go with the archive
+rm -f /opt/proxsave/backup/pve.home.arpa-backup-20260101-000000.tar.xz*
+```
+Never pipe the listing straight into `rm`: the same directory may hold another machine's archives.
+
+> **Renaming the archives does not get them rotating again**, whichever way it is done. Rename the archive alone and its `.sha256` is left behind, so the run stops treating the archive as complete and reports it as `ignored by retention (no manifest/checksum)`. Rename the sidecars with it and the `.metadata` travels too, and the `hostname` recorded inside it is what attribution reads, so the archive is still attributed to the old spelling. A `.bundle.tar` carries that manifest inside the archive, where a rename cannot reach it at all. Restore the name resolution, or delete the archives.
+
+**Case 1: give every host its own location**. Point each host at its own directory (`BACKUP_PATH`, `SECONDARY_PATH`) or its own `CLOUD_REMOTE_PATH` prefix. See the "Give every host its own prefix" note in [CLOUD_STORAGE.md](CLOUD_STORAGE.md) for the cloud side.
+
+**Verification**:
+```bash
+grep -E "retention ignored|Simple retention" \
+  "$(ls -t /opt/proxsave/log/backup-*.log | head -1)"
+```
+The warning is gone and the run reports `Simple retention -> current: N, limit: M, to_delete: K` with a `to_delete` that matches what you expect.
+
+---
+
 ### 6. Email Notification Issues
 
 #### Symptom: No email notifications received

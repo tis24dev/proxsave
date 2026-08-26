@@ -127,9 +127,15 @@ func TestApplyRetentionPrunesArchivesWrittenUnderTheRunFQDN(t *testing.T) {
 		t.Fatalf("NewCloudStorage: %v", err)
 	}
 
+	// The second archive was RENAMED on the remote: its filename token names another
+	// machine while its manifest names this one. Only a real resolveRetentionOwners
+	// call can put it in scope, so it is what makes that call load bearing here.
+	const renamed = "pbs.siteb.example-backup-20250102-120000"
 	listing := "" +
 		"      100 2025-01-03 10:00:00.000000000 pve.home.arpa-backup-20250103-100000.tar.zst\n" +
 		"       10 2025-01-03 10:00:00.000000000 pve.home.arpa-backup-20250103-100000.tar.zst.sha256\n" +
+		"      100 2025-01-02 12:00:00.000000000 " + renamed + ".tar.zst\n" +
+		"       10 2025-01-02 12:00:00.000000000 " + renamed + ".tar.zst.sha256\n" +
 		"      100 2025-01-02 10:00:00.000000000 pve.home.arpa-backup-20250102-100000.tar.zst\n" +
 		"       10 2025-01-02 10:00:00.000000000 pve.home.arpa-backup-20250102-100000.tar.zst.sha256\n" +
 		"      100 2025-01-01 10:00:00.000000000 pbs.home.arpa-backup-20250101-100000.tar.zst\n" +
@@ -143,16 +149,23 @@ func TestApplyRetentionPrunesArchivesWrittenUnderTheRunFQDN(t *testing.T) {
 				return []byte(listing), nil
 			}
 		}
-		// Every `cat` returns nothing usable, so attribution degrades to the
-		// filename token, which carries the same FQDN the manifest would.
+		// Only the renamed archive's manifest reads back. Every other `cat` returns
+		// nothing usable, so those three degrade to their filename token, which
+		// carries the same FQDN the manifest would; the renamed one can be
+		// attributed by its manifest and by nothing else.
+		if args[0] == "cat" && strings.Contains(args[len(args)-1], renamed) {
+			return []byte(`{"hostname":"pve.home.arpa"}`), nil
+		}
 		return nil, nil
 	}
 
-	if _, err := cs.ApplyRetention(context.Background(), RetentionConfig{Policy: "simple", MaxBackups: 1}); err != nil {
+	deleted, err := cs.ApplyRetention(context.Background(), RetentionConfig{Policy: "simple", MaxBackups: 1})
+	if err != nil {
 		t.Fatalf("ApplyRetention: %v", err)
 	}
 
 	deletedOwn := false
+	deletedRenamed := false
 	for _, call := range calls {
 		joined := strings.Join(call.args, " ")
 		if !strings.Contains(joined, "delete") {
@@ -164,9 +177,20 @@ func TestApplyRetentionPrunesArchivesWrittenUnderTheRunFQDN(t *testing.T) {
 		if strings.Contains(joined, "pve.home.arpa-backup-20250102") {
 			deletedOwn = true
 		}
+		if strings.Contains(joined, renamed) {
+			deletedRenamed = true
+		}
 	}
 	if !deletedOwn {
 		t.Errorf("retention pruned nothing written under this run's own name: %+v", calls)
+	}
+	if !deletedRenamed {
+		t.Errorf("retention spared %s: its manifest names this machine, so it is this machine's own work whatever its filename says. Only a real resolveRetentionOwners call can see that, so this is what fails when the call is dropped: %+v", renamed, calls)
+	}
+	// Asserted last, so a real regression reports WHICH archive survived before it
+	// reports a number.
+	if deleted != 2 {
+		t.Errorf("deleted = %d, want 2 (the renamed archive attributed by its manifest and the older archive attributed by its filename token); the count feeds the run summary and the retention report", deleted)
 	}
 }
 

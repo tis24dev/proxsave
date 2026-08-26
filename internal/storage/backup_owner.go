@@ -79,8 +79,13 @@ func backupBelongsToHost(meta *types.BackupMetadata, hostname string, aliases ..
 
 // unresolvedHostname is what the writer stamps into an archive when the machine
 // could not name itself (resolveHostname falls back to it). It names no host, so it
-// never joins the set of names retention answers to: two machines that both failed
-// to resolve would otherwise each claim the other's archives.
+// never joins the identity set as an ALIAS: two machines that both failed to resolve
+// would otherwise each claim the other's archives. It is refused as an alias only.
+// The name the kernel reports is taken as given, so a machine the kernel really does
+// call "unknown" keeps rotating its own archives exactly as it does today, and on a
+// shared location it would also claim a second failed-to-resolve machine's
+// "unknown-backup-*" archives. Reaching that needs os.Hostname to return the literal
+// string, so it is left as it is rather than special-cased.
 const unresolvedHostname = "unknown"
 
 // retentionHostAliases reduces the names this run's writer used into the extra names
@@ -110,11 +115,15 @@ func retentionHostAliases(local string, written []string) []string {
 }
 
 // hostOwnsName reports whether owner is one of the names this machine answers to:
-// the name the kernel reports plus the names this run's writer stamped into the
-// archives it produced. The match is exact once spelling is normalised. It is
-// deliberately not a fold to the first label: "pve" and "pve.siteB.example" are two
-// machines unless this machine itself answers to both, and folding them would let
-// one host's retention prune the other's archives.
+// the name the kernel reports, plus the name(s) this run's writer stamped into the
+// archives it produced, which today is exactly one (writtenHostname, plumbed through
+// the three storage constructors). The set does not grow with the archives on disk:
+// an archive this machine wrote under a spelling an earlier run resolved and this one
+// cannot is not owned, and retentionSpellingMismatches reports it instead of claiming
+// it. The match is exact once spelling is normalised. It is deliberately not a fold
+// to the first label: "pve" and "pve.siteB.example" are two machines unless this
+// machine itself answers to both, and folding them would let one host's retention
+// prune the other's archives.
 func hostOwnsName(owner, hostname string, aliases ...string) bool {
 	key := types.NormalizeHostname(owner)
 	if key == "" {
@@ -245,7 +254,7 @@ func applyRetentionHostScope(location, hostname string, aliases []string, backup
 	if len(foreign) > 0 && logger != nil {
 		logger.Warning("%s: retention ignored %d backup(s) that do not belong to %s (other hosts, or a name that carries no host)", location, len(foreign), hostname)
 		if n := retentionSpellingMismatches(foreign, hostname); n > 0 {
-			logger.Warning("%s: %d of those carry this host's short name spelled differently (an FQDN, or another machine with the same short name); retention leaves them alone rather than guess, so they are no longer rotating. Check that \"hostname -f\" resolves the way it did when they were written.", location, n)
+			logger.Warning("%s: %d of those carry this host's short name under a different spelling. If they are this machine's own work, this host no longer resolves the name they were written under (usually what \"hostname -f\" returns, which is what the writer stamps) and they have stopped rotating; if they belong to a second machine with the same short name, this is expected and nothing needs doing. Retention leaves them alone either way rather than guess.", location, n)
 		}
 		logger.Debug("%s: retention answers to %s", location, strings.Join(append([]string{hostname}, aliases...), ", "))
 		for _, b := range foreign {

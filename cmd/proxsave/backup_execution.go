@@ -33,8 +33,10 @@ func runConfiguredBackup(opts backupModeOptions, orch *orchestrator.Orchestrator
 	}
 
 	logging.Step("Start Go backup orchestration")
-	// The run resolves its name once, so the archives it writes and the retention
-	// pass that later prunes them provably carry the same string.
+	// The run resolves its name once and hands it down, so the archives it writes and
+	// the retention pass that later prunes them carry the same string. The fallback
+	// below is defensive only: dispatchBackupMode always copies rt.hostname into
+	// opts.hostname, which TestBackupModeOptionsCarryTheRunHostname pins.
 	hostname := opts.hostname
 	if hostname == "" {
 		hostname = resolveHostname()

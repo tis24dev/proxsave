@@ -1,11 +1,13 @@
 package storage
 
 import (
+	"bytes"
 	"context"
 	"strings"
 	"testing"
 
 	"github.com/tis24dev/proxsave/internal/config"
+	"github.com/tis24dev/proxsave/internal/logging"
 	"github.com/tis24dev/proxsave/internal/types"
 )
 
@@ -200,6 +202,45 @@ func TestRetentionSpellingMismatchesCountsLikelySelf(t *testing.T) {
 	}
 	if got := retentionSpellingMismatches(foreign, ""); got != 0 {
 		t.Fatalf("mismatches = %d, want 0 when this machine cannot name itself", got)
+	}
+}
+
+// TestApplyRetentionHostScopeDeletesNothingWhenThisMachineCannotNameItself pins the
+// fail-closed branch, the only branch in the retention path whose failure mode is
+// deleting other machines' archives rather than deleting nothing. os.Hostname
+// failing is rare on Linux, which is why this is a guard rather than a hot path,
+// but the shipped CLOUD_REMOTE_PATH default is a shared root
+// (internal/config/templates/backup.env) and the documented secondary layout is a
+// NAS several hosts write into, so "scope by nothing" means "prune everything in
+// the listing, including theirs".
+//
+// It asserts the warning as well as the empty result, and both halves are load
+// bearing. Returning the listing instead of nil is caught by the length; deleting
+// the guard outright is NOT, because backupBelongsToHost already refuses a blank
+// hostname, so scoping still yields nothing. What that mutation really removes is
+// this warning, which is the operator's only signal that retention is off for the
+// run. Rewording the message therefore turns this test red on purpose: read it as
+// a prompt to check who else quotes the wording, not as a retention bug.
+//
+// Both entries carry a non-empty Hostname on purpose: they are attributable, so the
+// only reason they are out of scope is the blank local name.
+func TestApplyRetentionHostScopeDeletesNothingWhenThisMachineCannotNameItself(t *testing.T) {
+	backups := []*types.BackupMetadata{
+		{BackupFile: "pve-backup-20250101-100000.tar.zst", Hostname: "pve"},
+		{BackupFile: "other-backup-20250101-100000.tar.zst", Hostname: "other"},
+	}
+
+	logger := logging.New(types.LogLevelDebug, false)
+	var buf bytes.Buffer
+	logger.SetOutput(&buf)
+
+	scoped := applyRetentionHostScope("Local storage", "", nil, backups, logger)
+
+	if len(scoped) != 0 {
+		t.Errorf("scoped %d of %d entries; a machine that cannot name itself must delete nothing, not everything: on a shared location these are another machine's backups", len(scoped), len(backups))
+	}
+	if !strings.Contains(buf.String(), "the local hostname is unknown") {
+		t.Errorf("the blank-hostname guard printed no warning; retention silently doing nothing is indistinguishable from retention working. Got: %s", buf.String())
 	}
 }
 

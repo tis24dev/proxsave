@@ -1,11 +1,17 @@
 package main
 
 import (
+	"context"
 	"go/ast"
 	"go/parser"
 	"go/token"
 	gotypes "go/types"
 	"testing"
+
+	"github.com/tis24dev/proxsave/internal/cli"
+	"github.com/tis24dev/proxsave/internal/config"
+	"github.com/tis24dev/proxsave/internal/logging"
+	"github.com/tis24dev/proxsave/internal/types"
 )
 
 // runHostnameCallSite names one call the run's own hostname has to reach.
@@ -151,4 +157,109 @@ func findFuncDecl(t *testing.T, file, name string) *ast.FuncDecl {
 	}
 	t.Fatalf("%s: %s not found; this guard has gone stale", file, name)
 	return nil
+}
+
+// TestInitializeRunLogFileAssignsTheRunHostnameInBothModes is the head of the
+// hostname chain, the one link the structural guards above cannot reach: they pin
+// that rt.hostname is PASSED to the consumers, never that it was ever given a
+// value. Two compile-clean drops leave the whole module suite green without it.
+// Emptying the assignment reinstates discussion #292 on local, secondary and cloud
+// at once, because every backend then falls back to os.Hostname() for retention
+// while the writer keeps stamping the FQDN into the archives. Moving the same
+// assignment below the "if rt.args.Restore { return }" guard is a plausible
+// refactor that leaves backup runs untouched and every restore run nameless, so
+// the access control host check collapses to os.Hostname() and warns about a
+// hostname change that did not happen.
+//
+// It does NOT pin which function resolves the name: swapping resolveHostname for
+// os.Hostname keeps this green on any host where the two agree. That is what
+// TestRunHostnameComesFromResolveHostname below is for.
+func TestInitializeRunLogFileAssignsTheRunHostnameInBothModes(t *testing.T) {
+	// initializeRunLogFile's last step logs "Log file opened" through the package
+	// DEFAULT logger, not rt.logger, so swap in a quiet one for the duration. Same
+	// save-and-restore idiom as backup_stream_test.go.
+	prevDefault := logging.GetDefaultLogger()
+	logging.SetDefaultLogger(logging.New(types.LogLevelNone, false))
+	t.Cleanup(func() { logging.SetDefaultLogger(prevDefault) })
+
+	modes := []struct {
+		name    string
+		restore bool
+	}{
+		{name: "backup mode", restore: false},
+		{name: "restore mode", restore: true},
+	}
+
+	for _, mode := range modes {
+		t.Run(mode.name, func(t *testing.T) {
+			// initializeRunLogFile publishes the run's log path through the
+			// environment in backup mode; t.Setenv restores what this process had.
+			// It also forbids t.Parallel, which is correct here.
+			t.Setenv("LOG_FILE", "")
+
+			logger := logging.New(types.LogLevelNone, false)
+			t.Cleanup(func() { _ = logger.CloseLogFile() })
+
+			rt := &appRuntime{
+				ctx:    context.Background(),
+				args:   &cli.Args{Restore: mode.restore},
+				deps:   defaultAppDeps(),
+				cfg:    &config.Config{LogPath: t.TempDir()},
+				logger: logger,
+			}
+
+			// Bracket the call: equality is asserted only when the two resolutions
+			// around it agree, so a resolver that flaps mid-test cannot fail this
+			// pin for an environment reason. The non-empty assertion, which is what
+			// catches both drops, is unconditional.
+			before := resolveHostname()
+			initializeRunLogFile(rt)
+			after := resolveHostname()
+
+			if rt.hostname == "" {
+				t.Fatalf("initializeRunLogFile left rt.hostname empty in %s. Every storage backend then falls back to os.Hostname() for retention while the writer keeps stamping the FQDN, which is discussion #292 on local, secondary and cloud at once, and the access control host check collapses to os.Hostname() so every same-host restore of an access control bundle warns about a hostname change that did not happen", mode.name)
+			}
+			if before == after && rt.hostname != before {
+				t.Fatalf("rt.hostname = %q in %s, want %q: the run's name must come from resolveHostname, the same function that spells the archives (discussion #292)", rt.hostname, mode.name, before)
+			}
+			if before != after {
+				t.Logf("resolveHostname returned %q then %q, so the equality half is skipped for this run; TestRunHostnameComesFromResolveHostname covers the same ground without depending on the resolver", before, after)
+			}
+		})
+	}
+}
+
+// TestRunHostnameComesFromResolveHostname is the machine-independent half. A third
+// compile-clean drop replaces resolveHostname() with a bare os.Hostname(), which
+// the behavioural pin above can only see on a host where "hostname -f" differs
+// from "hostname" - false in most CI containers.
+//
+// It pins WHICH function resolves the run's name and deliberately NOT where the
+// assignment sits: moving the assignment below the restore guard leaves this green
+// by design, which is why the two pins are complementary rather than duplicates.
+func TestRunHostnameComesFromResolveHostname(t *testing.T) {
+	fn := findFuncDecl(t, "main_runtime.go", "initializeRunLogFile")
+
+	// Collect inside the walk, assert after it: t.Fatalf from an ast.Inspect
+	// closure would abandon the walk mid-tree.
+	var assigned []string
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		assign, ok := n.(*ast.AssignStmt)
+		if !ok || len(assign.Lhs) != 1 || gotypes.ExprString(assign.Lhs[0]) != "rt.hostname" {
+			return true
+		}
+		if len(assign.Rhs) != 1 {
+			assigned = append(assigned, "<multi-value assignment>")
+			return true
+		}
+		assigned = append(assigned, gotypes.ExprString(assign.Rhs[0]))
+		return true
+	})
+
+	if len(assigned) != 1 {
+		t.Fatalf("main_runtime.go: initializeRunLogFile assigns rt.hostname %d time(s) (%q), want exactly one. The run's name is resolved once and handed down; a second assignment means two sources of truth for the string the archives are stamped with (discussion #292)", len(assigned), assigned)
+	}
+	if assigned[0] != "resolveHostname()" {
+		t.Fatalf("main_runtime.go: initializeRunLogFile assigns rt.hostname = %s, want resolveHostname(). os.Hostname() reports the kernel short name while the writer stamps what \"hostname -f\" returns, so retention would scope every archive out as foreign and prune nothing (discussion #292)", assigned[0])
+	}
 }

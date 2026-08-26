@@ -19,9 +19,13 @@ import (
 // Retention is the only caller that must know WHO owns a backup before deleting it,
 // so the cost is paid here and only here.
 //
-// Every failure leaves Hostname empty, which backupBelongsToHost reads as "not
-// ours" - a backup whose manifest cannot be read is left alone rather than deleted
-// on a guess.
+// Every failure leaves Hostname empty. backupOwnerHost then falls back to the host
+// token the filename carries ("<host>-backup-<timestamp>"), so an archive whose
+// manifest cannot be read keeps rotating instead of accumulating. An archive whose
+// name carries no parseable token is left alone rather than deleted on a guess, with
+// one deliberate exception: the pre-Go "proxmox-backup-*" names, which
+// backupBelongsToHost claims for whoever lists them, because otherwise nothing ever
+// would.
 func (c *CloudStorage) resolveRetentionOwners(ctx context.Context, backups []*types.BackupMetadata) {
 	pending := make([]*types.BackupMetadata, 0, len(backups))
 	for _, b := range backups {
