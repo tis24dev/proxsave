@@ -82,6 +82,11 @@ type CloudStorage struct {
 	// hostname is this machine's name, resolved once at construction: retention
 	// only prunes backups this host owns.
 	hostname string
+	// hostAliases are the other names this machine answers to, built from the one
+	// name this run's writer stamped into the archives it produced ("hostname -f",
+	// so usually the FQDN). Empty on a machine with no domain, which leaves
+	// retention as strict as it has always been.
+	hostAliases []string
 }
 
 func (c *CloudStorage) remoteLabel() string {
@@ -211,8 +216,15 @@ func waitForRetryContext(ctx context.Context, d time.Duration) error {
 	}
 }
 
-// NewCloudStorage creates a new cloud storage instance
-func NewCloudStorage(cfg *config.Config, logger *logging.Logger) (*CloudStorage, error) {
+// NewCloudStorage creates a new cloud storage instance.
+//
+// writtenHostname is the name this run's writer stamps into the archives it
+// produces (resolveHostname in package main, which prefers "hostname -f"). It is
+// what lets retention recognise its own FQDN-named archives while os.Hostname only
+// reports the kernel short name. Pass "" when the caller never runs retention: that
+// is safe but strict, and archives written under any other spelling of this
+// machine's name stop being rotated.
+func NewCloudStorage(cfg *config.Config, logger *logging.Logger, writtenHostname string) (*CloudStorage, error) {
 	// Normalize CloudRemote and CloudRemotePath into:
 	//   - remote: rclone remote name (e.g. "gdrive")
 	//   - remotePrefix: full path inside the remote where backups live
@@ -243,10 +255,12 @@ func NewCloudStorage(cfg *config.Config, logger *logging.Logger) (*CloudStorage,
 	if parallelJobs <= 0 {
 		parallelJobs = 1
 	}
+	host := resolveRetentionHostname()
 	return &CloudStorage{
 		config:         cfg,
 		logger:         logger,
-		hostname:       resolveRetentionHostname(),
+		hostname:       host,
+		hostAliases:    retentionHostAliases(host, []string{writtenHostname}),
 		remote:         remoteName,
 		remotePrefix:   combinedPrefix,
 		uploadMode:     mode,
@@ -1871,7 +1885,7 @@ func (c *CloudStorage) ApplyRetention(ctx context.Context, config RetentionConfi
 	// and drop everything this host does not own, BEFORE anything is counted toward
 	// the keep limit or selected for deletion.
 	c.resolveRetentionOwners(ctx, backups)
-	backups = applyRetentionHostScope("Cloud storage", c.hostname, backups, c.logger)
+	backups = applyRetentionHostScope("Cloud storage", c.hostname, c.hostAliases, backups, c.logger)
 
 	if len(backups) == 0 {
 		c.logger.Debug("Cloud storage: no backups to apply retention")

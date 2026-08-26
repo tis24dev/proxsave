@@ -37,7 +37,7 @@ func TestListSkipsTempAndPartial(t *testing.T) {
 	}
 
 	cfg := &config.Config{BackupPath: dir, BundleAssociatedFiles: false}
-	local, err := NewLocalStorage(cfg, newTestLogger())
+	local, err := NewLocalStorage(cfg, newTestLogger(), "")
 	if err != nil {
 		t.Fatalf("NewLocalStorage: %v", err)
 	}

@@ -23,21 +23,35 @@ type LocalStorage struct {
 	logger *logging.Logger
 	// hostname is this machine's name, resolved once at construction: retention
 	// only prunes backups this host owns.
-	hostname   string
-	basePath   string
-	fsDetector *FilesystemDetector
-	fsInfo     *FilesystemInfo
-	lastRet    RetentionSummary
+	hostname string
+	// hostAliases are the other names this machine answers to, built from the one
+	// name this run's writer stamped into the archives it produced ("hostname -f",
+	// so usually the FQDN). Empty on a machine with no domain, which leaves
+	// retention as strict as it has always been.
+	hostAliases []string
+	basePath    string
+	fsDetector  *FilesystemDetector
+	fsInfo      *FilesystemInfo
+	lastRet     RetentionSummary
 }
 
-// NewLocalStorage creates a new local storage instance
-func NewLocalStorage(cfg *config.Config, logger *logging.Logger) (*LocalStorage, error) {
+// NewLocalStorage creates a new local storage instance.
+//
+// writtenHostname is the name this run's writer stamps into the archives it
+// produces (resolveHostname in package main, which prefers "hostname -f"). It is
+// what lets retention recognise its own FQDN-named archives while os.Hostname only
+// reports the kernel short name. Pass "" when the caller never runs retention: that
+// is safe but strict, and archives written under any other spelling of this
+// machine's name stop being rotated.
+func NewLocalStorage(cfg *config.Config, logger *logging.Logger, writtenHostname string) (*LocalStorage, error) {
+	host := resolveRetentionHostname()
 	return &LocalStorage{
-		config:     cfg,
-		logger:     logger,
-		hostname:   resolveRetentionHostname(),
-		basePath:   cfg.BackupPath,
-		fsDetector: NewFilesystemDetector(logger, WithIOTimeout(fsIoTimeout(cfg))),
+		config:      cfg,
+		logger:      logger,
+		hostname:    host,
+		hostAliases: retentionHostAliases(host, []string{writtenHostname}),
+		basePath:    cfg.BackupPath,
+		fsDetector:  NewFilesystemDetector(logger, WithIOTimeout(fsIoTimeout(cfg))),
 	}, nil
 }
 
@@ -472,8 +486,9 @@ func (l *LocalStorage) ApplyRetention(ctx context.Context, config RetentionConfi
 	}
 
 	// Drop anything this host does not own before counting or deleting: the
-	// "*-backup-*" glob that produced this list matches every hostname.
-	backups = applyRetentionHostScope("Local storage", l.hostname, backups, l.logger)
+	// "*-backup-*" glob that produced this list matches every hostname, and the list
+	// also carries other spellings of this host's own name.
+	backups = applyRetentionHostScope("Local storage", l.hostname, l.hostAliases, backups, l.logger)
 
 	if len(backups) == 0 {
 		l.logger.Debug("Local storage: no backups to apply retention")

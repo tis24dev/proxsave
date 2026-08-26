@@ -58,7 +58,7 @@ func (q *commandQueue) exec(ctx context.Context, name string, args ...string) ([
 }
 
 func newCloudStorageForTest(cfg *config.Config) *CloudStorage {
-	cs, _ := NewCloudStorage(cfg, newTestLogger())
+	cs, _ := NewCloudStorage(cfg, newTestLogger(), "")
 	return cs
 }
 

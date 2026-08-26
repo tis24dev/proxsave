@@ -23,7 +23,12 @@ var errRestoreBackToMode = errors.New("restore mode back")
 // RunRestoreWorkflowTUI runs the restore workflow using the Charm UI: one
 // long-lived shell.Session whose screens are driven by the same
 // runRestoreWorkflowWithUI engine path the CLI uses.
-func RunRestoreWorkflowTUI(ctx context.Context, cfg *config.Config, logger *logging.Logger, version, configPath, buildSig string) (err error) {
+//
+// runHostname is the name this run resolves as its own; it is what the access
+// control host check compares a restored bundle's hostname against, next to
+// os.Hostname(). Pass "" if it is not known: the check is then strict, which warns
+// more, never less.
+func RunRestoreWorkflowTUI(ctx context.Context, cfg *config.Config, logger *logging.Logger, version, configPath, buildSig, runHostname string) (err error) {
 	if cfg == nil {
 		return fmt.Errorf("configuration not available")
 	}
@@ -58,7 +63,7 @@ func RunRestoreWorkflowTUI(ctx context.Context, cfg *config.Config, logger *logg
 	defer func() { _ = session.Close() }()
 
 	ui := newCharmWorkflowUI(session, logger, ErrRestoreAborted)
-	err = runRestoreWorkflowWithUI(ctx, cfg, logger, version, ui)
+	err = runRestoreWorkflowWithUI(ctx, cfg, logger, version, ui, runHostname)
 	closeErr := session.Close()
 	switch {
 	case err != nil:

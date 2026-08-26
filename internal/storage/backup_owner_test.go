@@ -58,7 +58,10 @@ func TestBackupBelongsToHost(t *testing.T) {
 		name     string
 		meta     *types.BackupMetadata
 		hostname string
-		want     bool
+		// written are the names this run's writer stamped into the archives it
+		// produced. A nil slice reproduces the strict pre-alias rule exactly.
+		written []string
+		want    bool
 	}{
 		{name: "own backup", meta: &types.BackupMetadata{Hostname: "server1"}, hostname: "server1", want: true},
 		{name: "case insensitive", meta: &types.BackupMetadata{Hostname: "SERVER1"}, hostname: "server1", want: true},
@@ -72,11 +75,29 @@ func TestBackupBelongsToHost(t *testing.T) {
 		// whoever lists it - otherwise it would never be rotated again anywhere.
 		{name: "legacy name stays ours", meta: &types.BackupMetadata{BackupFile: "proxmox-backup-20250102-100000.tar.gz"}, hostname: "server1", want: true},
 		{name: "legacy name with a foreign manifest is not ours", meta: &types.BackupMetadata{BackupFile: "proxmox-backup-20250102-100000.tar.gz", Hostname: "server2"}, hostname: "server1", want: false},
+
+		// A machine does not always spell its own name the same way: the writer
+		// records what "hostname -f" returns while os.Hostname reports the kernel
+		// short name. Retention answers to both, and to nothing else.
+		{name: "an FQDN this run wrote under is ours", meta: &types.BackupMetadata{Hostname: "pve.home.arpa"}, hostname: "pve", written: []string{"pve.home.arpa"}, want: true},
+		{name: "an FQDN filename token this run wrote under is ours", meta: &types.BackupMetadata{BackupFile: "pve.home.arpa-backup-20250102-100000.tar.zst"}, hostname: "pve", written: []string{"pve.home.arpa"}, want: true},
+		{name: "case and a trailing root dot are the same name", meta: &types.BackupMetadata{Hostname: "PVE.Home.Arpa."}, hostname: "pve", written: []string{"pve.home.arpa"}, want: true},
+		{name: "a legacy name carrying this host's FQDN manifest is ours", meta: &types.BackupMetadata{BackupFile: "proxmox-backup-20250102-100000.tar.gz", Hostname: "pve.home.arpa"}, hostname: "pve", written: []string{"pve.home.arpa"}, want: true},
+
+		// THE DATA-LOSS BOUNDARY. These rows are green before and after the alias
+		// change, and they turn RED the moment ownership folds to the first label:
+		// folding "pve" onto "pve.siteb.example" would let this host count and prune
+		// another machine's archives out of a shared location.
+		{name: "an FQDN this host never wrote under is another machine", meta: &types.BackupMetadata{Hostname: "pve.siteb.example"}, hostname: "pve", written: nil, want: false},
+		{name: "a bare name this host never wrote under is another machine", meta: &types.BackupMetadata{Hostname: "pve"}, hostname: "pve.siteA.example", written: nil, want: false},
+		{name: "a different domain is another machine even when this host is qualified", meta: &types.BackupMetadata{Hostname: "pve.siteb.example"}, hostname: "pve", written: []string{"pve.sitea.example"}, want: false},
+		// A machine that could not name itself must not become everyone's owner.
+		{name: "the unknown sentinel is not a name this host answers to", meta: &types.BackupMetadata{Hostname: "unknown"}, hostname: "pve", written: []string{"unknown"}, want: false},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := backupBelongsToHost(tt.meta, tt.hostname); got != tt.want {
+			if got := backupBelongsToHost(tt.meta, tt.hostname, tt.written...); got != tt.want {
 				t.Fatalf("backupBelongsToHost = %v, want %v", got, tt.want)
 			}
 		})
@@ -98,6 +119,174 @@ func TestScopeRetentionToHostKeepsSingleHostLocations(t *testing.T) {
 
 	if len(owned) != len(backups) {
 		t.Fatalf("kept %d of %d; a single-host location must not shrink: foreign=%+v", len(owned), len(backups), foreign)
+	}
+}
+
+// TestScopeRetentionToHostKeepsFQDNSingleHostLocations is the FQDN twin of the pin
+// above, and it is the reporter's symptom at unit level. The writer stamps what
+// "hostname -f" returns (pve.home.arpa) while retention reads os.Hostname (pve), so
+// a perfectly ordinary single-host location scoped to nothing: owned was 0, foreign
+// was 3, and retention stopped pruning entirely.
+func TestScopeRetentionToHostKeepsFQDNSingleHostLocations(t *testing.T) {
+	backups := []*types.BackupMetadata{
+		{BackupFile: "pve.home.arpa-backup-20250103-100000.tar.zst", Hostname: "pve.home.arpa"},
+		{BackupFile: "pve.home.arpa-backup-20250102-100000.tar.zst", Hostname: "pve.home.arpa"},
+		{BackupFile: "pve.home.arpa-backup-20250101-100000.tar.zst"}, // manifest unreadable
+	}
+
+	owned, foreign := scopeRetentionToHost(backups, "pve", "pve.home.arpa")
+
+	if len(owned) != len(backups) || len(foreign) != 0 {
+		t.Fatalf("kept %d of %d (foreign=%d); every archive here was written by this machine", len(owned), len(backups), len(foreign))
+	}
+}
+
+// TestScopeRetentionToHostLeavesSameShortNameForeignHostAlone is the data-loss
+// boundary at scope level. This host is a stock node called "pve" whose "hostname -f"
+// fails, so it has no aliases at all, and it shares a location with a second machine
+// that resolves to "pve.siteb.example". The two share a short label and are NOT the
+// same machine. Ownership must stay an exact match against the names this machine
+// itself answers to: a fold to the first label turns this test red and lets retention
+// count and delete the other machine's archives.
+func TestScopeRetentionToHostLeavesSameShortNameForeignHostAlone(t *testing.T) {
+	backups := []*types.BackupMetadata{
+		{BackupFile: "pve-backup-20250103-100000.tar.zst", Hostname: "pve"},
+		{BackupFile: "pve.siteb.example-backup-20250102-100000.tar.zst", Hostname: "pve.siteb.example"},
+	}
+
+	owned, foreign := scopeRetentionToHost(backups, "pve")
+
+	if len(owned) != 1 || owned[0].Hostname != "pve" {
+		t.Fatalf("owned = %+v, want only this host's own archive", owned)
+	}
+	if len(foreign) != 1 || foreign[0].Hostname != "pve.siteb.example" {
+		t.Fatalf("foreign = %+v, want the other machine's archive left out of scope", foreign)
+	}
+}
+
+// TestRetentionHostAliases pins what does and does not join the identity set. The
+// empty case is the important one: a machine with no domain must end up with no
+// aliases, so its behaviour is byte-identical to the strict rule it had before.
+func TestRetentionHostAliases(t *testing.T) {
+	got := retentionHostAliases("pve", []string{"pve.home.arpa", "PVE", "", " ", "unknown", "PVE.Home.Arpa."})
+	want := []string{"pve.home.arpa"}
+
+	if len(got) != len(want) {
+		t.Fatalf("aliases = %q, want %q", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("aliases = %q, want %q", got, want)
+		}
+	}
+	if aliases := retentionHostAliases("pve", nil); len(aliases) != 0 {
+		t.Fatalf("aliases = %q, want none: a machine with no domain must stay exactly as strict as before", aliases)
+	}
+}
+
+// TestRetentionSpellingMismatchesCountsLikelySelf pins the reporting helper behind
+// the second warning line. It never decides ownership: it only tells the operator
+// that some out-of-scope archives carry this host's short name under a spelling this
+// run cannot confirm, which is the one case the fix deliberately declines to solve.
+func TestRetentionSpellingMismatchesCountsLikelySelf(t *testing.T) {
+	foreign := []*types.BackupMetadata{
+		{Hostname: "pve.siteb.example", BackupFile: "pve.siteb.example-backup-20250102-100000.tar.zst"},
+		{Hostname: "pbs.home.arpa", BackupFile: "pbs.home.arpa-backup-20250102-100000.tar.zst"},
+		nil,
+	}
+
+	if got := retentionSpellingMismatches(foreign, "pve"); got != 1 {
+		t.Fatalf("mismatches = %d, want 1", got)
+	}
+	if got := retentionSpellingMismatches(foreign, ""); got != 0 {
+		t.Fatalf("mismatches = %d, want 0 when this machine cannot name itself", got)
+	}
+}
+
+// TestNewLocalStorageRecordsWrittenHostnames is the wiring pin at the receiving end:
+// the name package main resolved for this run has to land where retention reads it.
+func TestNewLocalStorageRecordsWrittenHostnames(t *testing.T) {
+	original := retentionHostname
+	retentionHostname = func() (string, error) { return "pve", nil }
+	defer func() { retentionHostname = original }()
+
+	l, err := NewLocalStorage(&config.Config{BackupPath: t.TempDir()}, newTestLogger(), "pve.home.arpa")
+	if err != nil {
+		t.Fatalf("NewLocalStorage: %v", err)
+	}
+	if l.hostname != "pve" {
+		t.Fatalf("hostname = %q, want pve", l.hostname)
+	}
+	if len(l.hostAliases) != 1 || l.hostAliases[0] != "pve.home.arpa" {
+		t.Fatalf("hostAliases = %q, want [pve.home.arpa]", l.hostAliases)
+	}
+
+	strict, err := NewLocalStorage(&config.Config{BackupPath: t.TempDir()}, newTestLogger(), "")
+	if err != nil {
+		t.Fatalf("NewLocalStorage: %v", err)
+	}
+	if len(strict.hostAliases) != 0 {
+		t.Fatalf("hostAliases = %q, want none when no written name is supplied", strict.hostAliases)
+	}
+}
+
+// TestNewSecondaryStorageRecordsWrittenHostnames is the wiring pin for the
+// secondary backend. A shared NAS is one of the two places the reported bug was
+// seen, and the run's own FQDN only reaches retention if the constructor stores
+// it: nothing else in the tree observes this, because initializeSecondaryStorage
+// returns only a *FilesystemInfo and the field retention reads is unexported.
+func TestNewSecondaryStorageRecordsWrittenHostnames(t *testing.T) {
+	original := retentionHostname
+	retentionHostname = func() (string, error) { return "pve", nil }
+	defer func() { retentionHostname = original }()
+
+	s, err := NewSecondaryStorage(&config.Config{SecondaryEnabled: true, SecondaryPath: t.TempDir()}, newTestLogger(), "pve.home.arpa")
+	if err != nil {
+		t.Fatalf("NewSecondaryStorage: %v", err)
+	}
+	if s.hostname != "pve" {
+		t.Fatalf("hostname = %q, want pve", s.hostname)
+	}
+	if len(s.hostAliases) != 1 || s.hostAliases[0] != "pve.home.arpa" {
+		t.Fatalf("hostAliases = %q, want [pve.home.arpa]", s.hostAliases)
+	}
+
+	strict, err := NewSecondaryStorage(&config.Config{SecondaryEnabled: true, SecondaryPath: t.TempDir()}, newTestLogger(), "")
+	if err != nil {
+		t.Fatalf("NewSecondaryStorage: %v", err)
+	}
+	if len(strict.hostAliases) != 0 {
+		t.Fatalf("hostAliases = %q, want none when no written name is supplied", strict.hostAliases)
+	}
+}
+
+// TestNewCloudStorageRecordsWrittenHostnames is the wiring pin for the cloud
+// backend. The shipped CLOUD_REMOTE_PATH is a shared root (backup.env:171) and
+// cloud is where the reporter saw the warning, so this is the backend that most
+// needs the alias to arrive.
+func TestNewCloudStorageRecordsWrittenHostnames(t *testing.T) {
+	original := retentionHostname
+	retentionHostname = func() (string, error) { return "pve", nil }
+	defer func() { retentionHostname = original }()
+
+	cfg := &config.Config{CloudEnabled: true, CloudRemote: "gdrive"}
+	c, err := NewCloudStorage(cfg, newTestLogger(), "pve.home.arpa")
+	if err != nil {
+		t.Fatalf("NewCloudStorage: %v", err)
+	}
+	if c.hostname != "pve" {
+		t.Fatalf("hostname = %q, want pve", c.hostname)
+	}
+	if len(c.hostAliases) != 1 || c.hostAliases[0] != "pve.home.arpa" {
+		t.Fatalf("hostAliases = %q, want [pve.home.arpa]", c.hostAliases)
+	}
+
+	strict, err := NewCloudStorage(cfg, newTestLogger(), "")
+	if err != nil {
+		t.Fatalf("NewCloudStorage: %v", err)
+	}
+	if len(strict.hostAliases) != 0 {
+		t.Fatalf("hostAliases = %q, want none when no written name is supplied", strict.hostAliases)
 	}
 }
 

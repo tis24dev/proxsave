@@ -25,21 +25,35 @@ type SecondaryStorage struct {
 	logger *logging.Logger
 	// hostname is this machine's name, resolved once at construction: retention
 	// only prunes backups this host owns.
-	hostname   string
-	basePath   string
-	fsDetector *FilesystemDetector
-	fsInfo     *FilesystemInfo
-	lastRet    RetentionSummary
+	hostname string
+	// hostAliases are the other names this machine answers to, built from the one
+	// name this run's writer stamped into the archives it produced ("hostname -f",
+	// so usually the FQDN). Empty on a machine with no domain, which leaves
+	// retention as strict as it has always been.
+	hostAliases []string
+	basePath    string
+	fsDetector  *FilesystemDetector
+	fsInfo      *FilesystemInfo
+	lastRet     RetentionSummary
 }
 
-// NewSecondaryStorage creates a new secondary storage instance
-func NewSecondaryStorage(cfg *config.Config, logger *logging.Logger) (*SecondaryStorage, error) {
+// NewSecondaryStorage creates a new secondary storage instance.
+//
+// writtenHostname is the name this run's writer stamps into the archives it
+// produces (resolveHostname in package main, which prefers "hostname -f"). It is
+// what lets retention recognise its own FQDN-named archives while os.Hostname only
+// reports the kernel short name. Pass "" when the caller never runs retention: that
+// is safe but strict, and archives written under any other spelling of this
+// machine's name stop being rotated.
+func NewSecondaryStorage(cfg *config.Config, logger *logging.Logger, writtenHostname string) (*SecondaryStorage, error) {
+	host := resolveRetentionHostname()
 	return &SecondaryStorage{
-		config:     cfg,
-		logger:     logger,
-		hostname:   resolveRetentionHostname(),
-		basePath:   cfg.SecondaryPath,
-		fsDetector: NewFilesystemDetector(logger, WithIOTimeout(fsIoTimeout(cfg))),
+		config:      cfg,
+		logger:      logger,
+		hostname:    host,
+		hostAliases: retentionHostAliases(host, []string{writtenHostname}),
+		basePath:    cfg.SecondaryPath,
+		fsDetector:  NewFilesystemDetector(logger, WithIOTimeout(fsIoTimeout(cfg))),
 	}, nil
 }
 
@@ -588,7 +602,7 @@ func (s *SecondaryStorage) ApplyRetention(ctx context.Context, config RetentionC
 	// same directory, and the "*-backup-*" glob that produced this list matches every
 	// hostname.
 	s.resolveRetentionOwners(ctx, backups)
-	backups = applyRetentionHostScope("Secondary storage", s.hostname, backups, s.logger)
+	backups = applyRetentionHostScope("Secondary storage", s.hostname, s.hostAliases, backups, s.logger)
 
 	if len(backups) == 0 {
 		s.logger.Debug("Secondary storage: no backups to apply retention")

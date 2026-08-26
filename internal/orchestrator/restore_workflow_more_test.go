@@ -114,7 +114,7 @@ func TestRunRestoreWorkflow_ClusterBackupSafeMode_ExportsClusterAndRestoresNetwo
 		clusterMode:    ClusterRestoreSafe,
 	}
 
-	if err := runRestoreWorkflowWithUI(context.Background(), cfg, logger, "vtest", ui); err != nil {
+	if err := runRestoreWorkflowWithUI(context.Background(), cfg, logger, "vtest", ui, ""); err != nil {
 		t.Fatalf("runRestoreWorkflowWithUI error: %v", err)
 	}
 
@@ -235,7 +235,7 @@ func TestRunRestoreWorkflow_PBSStopsServicesAndChecksZFSWhenSelected(t *testing.
 		confirmRestore: true,
 	}
 
-	if err := runRestoreWorkflowWithUI(context.Background(), cfg, logger, "vtest", ui); err != nil {
+	if err := runRestoreWorkflowWithUI(context.Background(), cfg, logger, "vtest", ui, ""); err != nil {
 		t.Fatalf("runRestoreWorkflowWithUI error: %v", err)
 	}
 
@@ -362,7 +362,7 @@ func TestRunRestoreWorkflow_IncompatibilityAndSafetyBackupFailureCanContinue(t *
 		continueNoSafety:  true,
 	}
 
-	if err := runRestoreWorkflowWithUI(context.Background(), cfg, logger, "vtest", ui); err != nil {
+	if err := runRestoreWorkflowWithUI(context.Background(), cfg, logger, "vtest", ui, ""); err != nil {
 		t.Fatalf("runRestoreWorkflowWithUI error: %v", err)
 	}
 
@@ -468,7 +468,7 @@ func TestRunRestoreWorkflow_ClusterRecoveryModeStopsAndRestartsServices(t *testi
 		clusterMode:    ClusterRestoreRecovery,
 	}
 
-	if err := runRestoreWorkflowWithUI(context.Background(), cfg, logger, "vtest", ui); err != nil {
+	if err := runRestoreWorkflowWithUI(context.Background(), cfg, logger, "vtest", ui, ""); err != nil {
 		t.Fatalf("runRestoreWorkflowWithUI error: %v", err)
 	}
 

@@ -15,7 +15,7 @@ import (
 func newLocalStorageForDeleteTest(t *testing.T, dir string) *LocalStorage {
 	t.Helper()
 	cfg := &config.Config{BackupPath: dir, BundleAssociatedFiles: false}
-	local, err := NewLocalStorage(cfg, newTestLogger())
+	local, err := NewLocalStorage(cfg, newTestLogger(), "")
 	if err != nil {
 		t.Fatalf("NewLocalStorage: %v", err)
 	}

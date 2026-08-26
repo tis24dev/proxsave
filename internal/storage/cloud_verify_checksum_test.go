@@ -364,7 +364,7 @@ func TestCloudVerifyNoNativeHashEmitsNoWarning(t *testing.T) {
 	logger := logging.New(types.LogLevelDebug, false)
 	var buf bytes.Buffer
 	logger.SetOutput(&buf)
-	cs, err := NewCloudStorage(cfg, logger)
+	cs, err := NewCloudStorage(cfg, logger, "")
 	if err != nil {
 		t.Fatalf("NewCloudStorage: %v", err)
 	}

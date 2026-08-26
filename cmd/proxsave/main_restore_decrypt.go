@@ -34,7 +34,7 @@ func dispatchRestoreMode(rt *appRuntime) modeResult {
 
 func runRestoreCLI(rt *appRuntime) modeResult {
 	logging.Info("Restore mode enabled - starting CLI workflow...")
-	err := orchestrator.RunRestoreWorkflow(rt.ctx, rt.cfg, rt.logger, rt.toolVersion)
+	err := orchestrator.RunRestoreWorkflow(rt.ctx, rt.cfg, rt.logger, rt.toolVersion, rt.hostname)
 	if err != nil {
 		return finishFailedRestore(rt, err, false)
 	}
@@ -47,7 +47,7 @@ func runRestoreTUI(rt *appRuntime) modeResult {
 	if strings.TrimSpace(sig) == "" {
 		sig = "n/a"
 	}
-	err := orchestrator.RunRestoreWorkflowTUI(rt.ctx, rt.cfg, rt.logger, rt.toolVersion, rt.args.ConfigPath, sig)
+	err := orchestrator.RunRestoreWorkflowTUI(rt.ctx, rt.cfg, rt.logger, rt.toolVersion, rt.args.ConfigPath, sig, rt.hostname)
 	if err != nil {
 		return finishFailedRestore(rt, err, true)
 	}
@@ -116,6 +116,7 @@ func dispatchBackupMode(rt *appRuntime) modeResult {
 		heapProfilePath:  rt.heapProfilePath,
 		serverIDValue:    rt.serverIDValue,
 		serverMACValue:   rt.serverMACValue,
+		hostname:         rt.hostname,
 		support:          rt.args.Support,
 		supportMeta: support.Meta{
 			GitHubUser: rt.args.SupportGitHubUser,

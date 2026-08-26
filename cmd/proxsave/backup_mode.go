@@ -32,6 +32,10 @@ type backupModeOptions struct {
 	heapProfilePath  string
 	serverIDValue    string
 	serverMACValue   string
+	// hostname is the name this run writes under, resolved once at
+	// initializeRunLogFile (main_runtime.go) so the archives, the session log name
+	// and retention all carry one value instead of resolving it again per consumer.
+	hostname string
 	// support arms support mode for this run: when set, the STREAMED path sends the
 	// maintainer email inside the viewport (see runBackupStreamed) instead of after
 	// the screen closes. supportMeta carries the GitHub nickname + issue the

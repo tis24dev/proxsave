@@ -537,7 +537,10 @@ func (o *Orchestrator) copyLogToCloud(ctx context.Context, sourcePath, destPath 
 		return fmt.Errorf("CLOUD_LOG_PATH requires CLOUD_REMOTE to be set: %s", destPath)
 	}
 
-	client, err := storage.NewCloudStorage(o.cfg, o.logger)
+	// No write-side hostname: this client only uploads a log file to an explicit
+	// remote path and never runs retention, so it has no archives of its own to
+	// recognise.
+	client, err := storage.NewCloudStorage(o.cfg, o.logger, "")
 	if err != nil {
 		return fmt.Errorf("failed to initialize cloud storage: %w", err)
 	}

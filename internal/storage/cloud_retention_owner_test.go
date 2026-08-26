@@ -107,3 +107,112 @@ func TestResolveRetentionOwnersPrefersManifestOverFilename(t *testing.T) {
 		t.Fatal("an archive the manifest attributes to this host must be in retention scope")
 	}
 }
+
+// TestApplyRetentionPrunesArchivesWrittenUnderTheRunFQDN is the reported bug end to
+// end. Every archive here was written by this machine under the name "hostname -f"
+// returns, while retention reads the kernel short name, so before the fix scoping
+// left nothing owned and ApplyRetention returned 0 without issuing a single delete.
+// The foreign archive in the listing is there to prove the fix widens ownership to
+// this machine's own names only. It is built through NewCloudStorage rather than by
+// setting the fields, so it also proves the run's own name reaches the field
+// retention reads.
+func TestApplyRetentionPrunesArchivesWrittenUnderTheRunFQDN(t *testing.T) {
+	original := retentionHostname
+	retentionHostname = func() (string, error) { return "pve", nil }
+	defer func() { retentionHostname = original }()
+
+	cfg := &config.Config{CloudEnabled: true, CloudRemote: "gdrive"}
+	cs, err := NewCloudStorage(cfg, newTestLogger(), "pve.home.arpa")
+	if err != nil {
+		t.Fatalf("NewCloudStorage: %v", err)
+	}
+
+	listing := "" +
+		"      100 2025-01-03 10:00:00.000000000 pve.home.arpa-backup-20250103-100000.tar.zst\n" +
+		"       10 2025-01-03 10:00:00.000000000 pve.home.arpa-backup-20250103-100000.tar.zst.sha256\n" +
+		"      100 2025-01-02 10:00:00.000000000 pve.home.arpa-backup-20250102-100000.tar.zst\n" +
+		"       10 2025-01-02 10:00:00.000000000 pve.home.arpa-backup-20250102-100000.tar.zst.sha256\n" +
+		"      100 2025-01-01 10:00:00.000000000 pbs.home.arpa-backup-20250101-100000.tar.zst\n" +
+		"       10 2025-01-01 10:00:00.000000000 pbs.home.arpa-backup-20250101-100000.tar.zst.sha256\n"
+
+	var calls []commandCall
+	cs.execCommand = func(ctx context.Context, name string, args ...string) ([]byte, error) {
+		calls = append(calls, commandCall{name: name, args: append([]string(nil), args...)})
+		for _, a := range args {
+			if a == "lsl" {
+				return []byte(listing), nil
+			}
+		}
+		// Every `cat` returns nothing usable, so attribution degrades to the
+		// filename token, which carries the same FQDN the manifest would.
+		return nil, nil
+	}
+
+	if _, err := cs.ApplyRetention(context.Background(), RetentionConfig{Policy: "simple", MaxBackups: 1}); err != nil {
+		t.Fatalf("ApplyRetention: %v", err)
+	}
+
+	deletedOwn := false
+	for _, call := range calls {
+		joined := strings.Join(call.args, " ")
+		if !strings.Contains(joined, "delete") {
+			continue
+		}
+		if strings.Contains(joined, "pbs.home.arpa") {
+			t.Errorf("retention deleted another host's backup: %+v", calls)
+		}
+		if strings.Contains(joined, "pve.home.arpa-backup-20250102") {
+			deletedOwn = true
+		}
+	}
+	if !deletedOwn {
+		t.Errorf("retention pruned nothing written under this run's own name: %+v", calls)
+	}
+}
+
+// TestApplyRetentionLeavesSameShortNameForeignFQDNAlone is the data-loss boundary end
+// to end, and the single most important test in this change. This host is a stock
+// node called "pve" whose "hostname -f" fails, so it has no aliases, and the shared
+// remote root holds only a second machine's archives, spelled "pve.siteb.example".
+// The two share a short label and are different machines. Retention must delete
+// nothing at all. A fold to the first label turns this test red by destroying the
+// other machine's older archive.
+func TestApplyRetentionLeavesSameShortNameForeignFQDNAlone(t *testing.T) {
+	cfg := &config.Config{CloudEnabled: true, CloudRemote: "gdrive"}
+	cs := newCloudStorageForTest(cfg)
+	// Set by hand on purpose: this test pins the deletion boundary, not the
+	// constructor wiring (that is TestNewCloudStorageRecordsWrittenHostnames), and it
+	// must stay true whatever the constructor does.
+	cs.hostname = "pve"
+	cs.hostAliases = nil
+
+	listing := "" +
+		"      100 2025-01-03 10:00:00.000000000 pve.siteb.example-backup-20250103-100000.tar.zst\n" +
+		"       10 2025-01-03 10:00:00.000000000 pve.siteb.example-backup-20250103-100000.tar.zst.sha256\n" +
+		"      100 2025-01-02 10:00:00.000000000 pve.siteb.example-backup-20250102-100000.tar.zst\n" +
+		"       10 2025-01-02 10:00:00.000000000 pve.siteb.example-backup-20250102-100000.tar.zst.sha256\n"
+
+	var calls []commandCall
+	cs.execCommand = func(ctx context.Context, name string, args ...string) ([]byte, error) {
+		calls = append(calls, commandCall{name: name, args: append([]string(nil), args...)})
+		for _, a := range args {
+			if a == "lsl" {
+				return []byte(listing), nil
+			}
+		}
+		return nil, nil
+	}
+
+	deleted, err := cs.ApplyRetention(context.Background(), RetentionConfig{Policy: "simple", MaxBackups: 1})
+	if err != nil {
+		t.Fatalf("ApplyRetention: %v", err)
+	}
+	if deleted != 0 {
+		t.Errorf("deleted = %d, want 0: none of these archives belong to this machine", deleted)
+	}
+	for _, call := range calls {
+		if strings.Contains(strings.Join(call.args, " "), "delete") {
+			t.Fatalf("retention deleted another machine's backup: %+v", calls)
+		}
+	}
+}

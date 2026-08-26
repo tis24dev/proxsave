@@ -47,7 +47,12 @@ func ClearRestoreAbortInfo() {
 }
 
 // RunRestoreWorkflow runs the CLI restore workflow using stdin prompts and the provided configuration.
-func RunRestoreWorkflow(ctx context.Context, cfg *config.Config, logger *logging.Logger, version string) (err error) {
+//
+// runHostname is the name this run resolves as its own; it is what the access
+// control host check compares a restored bundle's hostname against, next to
+// os.Hostname(). Pass "" if it is not known: the check is then strict, which warns
+// more, never less.
+func RunRestoreWorkflow(ctx context.Context, cfg *config.Config, logger *logging.Logger, version, runHostname string) (err error) {
 	if cfg == nil {
 		return fmt.Errorf("configuration not available")
 	}
@@ -59,5 +64,5 @@ func RunRestoreWorkflow(ctx context.Context, cfg *config.Config, logger *logging
 	defer func() { done(err) }()
 
 	ui := newCLIWorkflowUI(bufio.NewReader(os.Stdin), logger)
-	return runRestoreWorkflowWithUI(ctx, cfg, logger, version, ui)
+	return runRestoreWorkflowWithUI(ctx, cfg, logger, version, ui, runHostname)
 }

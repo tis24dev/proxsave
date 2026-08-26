@@ -33,7 +33,12 @@ func runConfiguredBackup(opts backupModeOptions, orch *orchestrator.Orchestrator
 	}
 
 	logging.Step("Start Go backup orchestration")
-	hostname := resolveHostname()
+	// The run resolves its name once, so the archives it writes and the retention
+	// pass that later prunes them provably carry the same string.
+	hostname := opts.hostname
+	if hostname == "" {
+		hostname = resolveHostname()
+	}
 	backupDone := logging.DebugStart(opts.logger, "backup run", "proxmox=%s host=%s", opts.envInfo.Type, hostname)
 	stats, err := orch.RunGoBackup(opts.ctx, opts.envInfo, hostname)
 	if err != nil {

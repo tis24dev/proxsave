@@ -42,7 +42,7 @@ func TestSecondaryCopyFileMidStreamWedge(t *testing.T) {
 	})
 
 	cfg := &config.Config{SecondaryEnabled: true, SecondaryPath: dir, FsIoTimeoutSeconds: 1}
-	s, err := NewSecondaryStorage(cfg, newTestLogger())
+	s, err := NewSecondaryStorage(cfg, newTestLogger(), "")
 	if err != nil {
 		t.Fatalf("NewSecondaryStorage: %v", err)
 	}
@@ -77,7 +77,7 @@ func TestSecondaryCopyFileHealthyLarge(t *testing.T) {
 	}
 
 	cfg := &config.Config{SecondaryEnabled: true, SecondaryPath: dir, FsIoTimeoutSeconds: 30}
-	s, err := NewSecondaryStorage(cfg, newTestLogger())
+	s, err := NewSecondaryStorage(cfg, newTestLogger(), "")
 	if err != nil {
 		t.Fatalf("NewSecondaryStorage: %v", err)
 	}

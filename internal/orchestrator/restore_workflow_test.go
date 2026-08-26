@@ -102,7 +102,7 @@ func TestRunRestoreWorkflow_CustomModeNoCategories_Succeeds(t *testing.T) {
 		confirmRestore: true,
 	}
 
-	if err := runRestoreWorkflowWithUI(context.Background(), cfg, logger, "vtest", ui); err != nil {
+	if err := runRestoreWorkflowWithUI(context.Background(), cfg, logger, "vtest", ui, ""); err != nil {
 		t.Fatalf("runRestoreWorkflowWithUI error: %v", err)
 	}
 }
@@ -153,7 +153,7 @@ func TestRunRestoreWorkflow_ConfirmFalseAborts(t *testing.T) {
 		confirmRestore: false,
 	}
 
-	err := runRestoreWorkflowWithUI(context.Background(), cfg, logger, "vtest", ui)
+	err := runRestoreWorkflowWithUI(context.Background(), cfg, logger, "vtest", ui, "")
 	if err != ErrRestoreAborted {
 		t.Fatalf("err=%v; want %v", err, ErrRestoreAborted)
 	}

@@ -123,7 +123,7 @@ func TestRunRestoreWorkflow_FstabMergeFails_ContinuesWithWarnings(t *testing.T) 
 		confirmFstabMerge: true,
 	}
 
-	if err := runRestoreWorkflowWithUI(context.Background(), cfg, logger, "vtest", ui); err != nil {
+	if err := runRestoreWorkflowWithUI(context.Background(), cfg, logger, "vtest", ui, ""); err != nil {
 		t.Fatalf("runRestoreWorkflowWithUI error: %v", err)
 	}
 	if !logger.HasWarnings() {

@@ -84,7 +84,7 @@ func TestFullRestoreFallbackKeepsSafetyInvariants(t *testing.T) {
 	// systemctl is unavailable in the test environment.
 	ui := &fakeRestoreWorkflowUI{confirmRestore: true, confirmCompatible: true, continuePBSServices: true}
 
-	if err := runRestoreWorkflowWithUI(context.Background(), cfg, logger, "vtest", ui); err != nil {
+	if err := runRestoreWorkflowWithUI(context.Background(), cfg, logger, "vtest", ui, ""); err != nil {
 		t.Fatalf("runRestoreWorkflowWithUI error: %v", err)
 	}
 
@@ -190,7 +190,7 @@ func TestFullRestoreFallbackNeverWritesClusterDB(t *testing.T) {
 	cfg := &config.Config{BaseDir: "/base"}
 	ui := &fakeRestoreWorkflowUI{confirmRestore: true, confirmCompatible: true, continuePBSServices: true}
 
-	if err := runRestoreWorkflowWithUI(context.Background(), cfg, logger, "vtest", ui); err != nil {
+	if err := runRestoreWorkflowWithUI(context.Background(), cfg, logger, "vtest", ui, ""); err != nil {
 		t.Fatalf("runRestoreWorkflowWithUI error: %v", err)
 	}
 

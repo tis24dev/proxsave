@@ -22,7 +22,7 @@ func TestSecondaryStorage_Name(t *testing.T) {
 	logger := logging.New(types.LogLevelInfo, false)
 	cfg := &config.Config{SecondaryPath: t.TempDir()}
 
-	storage, _ := NewSecondaryStorage(cfg, logger)
+	storage, _ := NewSecondaryStorage(cfg, logger, "")
 	name := storage.Name()
 
 	if name != "Secondary Storage" {
@@ -35,7 +35,7 @@ func TestSecondaryStorage_Location(t *testing.T) {
 	logger := logging.New(types.LogLevelInfo, false)
 	cfg := &config.Config{SecondaryPath: t.TempDir()}
 
-	storage, _ := NewSecondaryStorage(cfg, logger)
+	storage, _ := NewSecondaryStorage(cfg, logger, "")
 	location := storage.Location()
 
 	if location != LocationSecondary {
@@ -49,7 +49,7 @@ func TestSecondaryStorage_IsEnabled(t *testing.T) {
 
 	// Test with empty path - should be disabled
 	cfg := &config.Config{SecondaryPath: ""}
-	storage, _ := NewSecondaryStorage(cfg, logger)
+	storage, _ := NewSecondaryStorage(cfg, logger, "")
 
 	if storage.IsEnabled() {
 		t.Error("Expected IsEnabled() to return false when path is empty")
@@ -57,7 +57,7 @@ func TestSecondaryStorage_IsEnabled(t *testing.T) {
 
 	// Enabled when flag and path are set.
 	cfg = &config.Config{SecondaryEnabled: true, SecondaryPath: t.TempDir()}
-	storage, _ = NewSecondaryStorage(cfg, logger)
+	storage, _ = NewSecondaryStorage(cfg, logger, "")
 	if !storage.IsEnabled() {
 		t.Error("Expected IsEnabled() to return true when enabled and path is set")
 	}
@@ -68,7 +68,7 @@ func TestSecondaryStorage_IsCritical(t *testing.T) {
 	logger := logging.New(types.LogLevelInfo, false)
 	cfg := &config.Config{SecondaryPath: t.TempDir()}
 
-	storage, _ := NewSecondaryStorage(cfg, logger)
+	storage, _ := NewSecondaryStorage(cfg, logger, "")
 
 	if storage.IsCritical() {
 		t.Error("Expected IsCritical() to return false for secondary storage")
@@ -81,7 +81,7 @@ func TestSecondaryStorage_DetectFilesystem(t *testing.T) {
 	tempDir := t.TempDir()
 
 	cfg := &config.Config{SecondaryEnabled: true, SecondaryPath: tempDir}
-	storage, _ := NewSecondaryStorage(cfg, logger)
+	storage, _ := NewSecondaryStorage(cfg, logger, "")
 
 	ctx := context.Background()
 	fsInfo, err := storage.DetectFilesystem(ctx)
@@ -109,7 +109,7 @@ func TestSecondaryStorage_DetectFilesystem_MkdirFailsWhenPathIsFile(t *testing.T
 	}
 
 	cfg := &config.Config{SecondaryEnabled: true, SecondaryPath: path}
-	storage, _ := NewSecondaryStorage(cfg, logger)
+	storage, _ := NewSecondaryStorage(cfg, logger, "")
 
 	_, err := storage.DetectFilesystem(context.Background())
 	if err == nil {
@@ -128,7 +128,7 @@ func TestSecondaryStorage_DetectFilesystem_FallsBackToUnknownWhenDetectorErrors(
 	logger := logging.New(types.LogLevelInfo, false)
 	tempDir := t.TempDir()
 	cfg := &config.Config{SecondaryEnabled: true, SecondaryPath: tempDir}
-	storage, _ := NewSecondaryStorage(cfg, logger)
+	storage, _ := NewSecondaryStorage(cfg, logger, "")
 
 	// Force filesystem detector failure via test hook.
 	storage.fsDetector.mountPointLookup = func(path string) (string, error) {
@@ -156,7 +156,7 @@ func TestSecondaryStorage_Delete(t *testing.T) {
 	}
 
 	cfg := &config.Config{SecondaryPath: tempDir}
-	storage, _ := NewSecondaryStorage(cfg, logger)
+	storage, _ := NewSecondaryStorage(cfg, logger, "")
 
 	ctx := context.Background()
 	err := storage.Delete(ctx, backupFile)
@@ -177,7 +177,7 @@ func TestSecondaryStorage_Delete_NonExistent(t *testing.T) {
 	tempDir := t.TempDir()
 
 	cfg := &config.Config{SecondaryPath: tempDir}
-	storage, _ := NewSecondaryStorage(cfg, logger)
+	storage, _ := NewSecondaryStorage(cfg, logger, "")
 
 	ctx := context.Background()
 	err := storage.Delete(ctx, filepath.Join(tempDir, "nonexistent.tar.xz"))
@@ -197,7 +197,7 @@ func TestSecondaryStorage_ApplyRetention(t *testing.T) {
 		SecondaryPath:          tempDir,
 		SecondaryRetentionDays: 7,
 	}
-	storage, _ := NewSecondaryStorage(cfg, logger)
+	storage, _ := NewSecondaryStorage(cfg, logger, "")
 
 	ctx := context.Background()
 	retentionConfig := RetentionConfig{
@@ -225,7 +225,7 @@ func TestSecondaryStorage_List_ReturnsErrorForInvalidGlobPattern(t *testing.T) {
 		t.Fatalf("MkdirAll: %v", err)
 	}
 	cfg := &config.Config{SecondaryEnabled: true, SecondaryPath: badDir}
-	storage, _ := NewSecondaryStorage(cfg, logger)
+	storage, _ := NewSecondaryStorage(cfg, logger, "")
 
 	_, err := storage.List(context.Background())
 	if err == nil {
@@ -248,7 +248,7 @@ func TestSecondaryStorage_CountBackups_ReturnsMinusOneWhenListFails(t *testing.T
 		t.Fatalf("MkdirAll: %v", err)
 	}
 	cfg := &config.Config{SecondaryEnabled: true, SecondaryPath: badDir}
-	storage, _ := NewSecondaryStorage(cfg, logger)
+	storage, _ := NewSecondaryStorage(cfg, logger, "")
 
 	if got := storage.countBackups(context.Background()); got != -1 {
 		t.Fatalf("countBackups()=%d want -1", got)
@@ -258,7 +258,7 @@ func TestSecondaryStorage_CountBackups_ReturnsMinusOneWhenListFails(t *testing.T
 func TestSecondaryStorage_Store_ReturnsErrorForMissingSourceFile(t *testing.T) {
 	logger := logging.New(types.LogLevelInfo, false)
 	cfg := &config.Config{SecondaryEnabled: true, SecondaryPath: t.TempDir()}
-	storage, _ := NewSecondaryStorage(cfg, logger)
+	storage, _ := NewSecondaryStorage(cfg, logger, "")
 
 	_, err := os.Stat(filepath.Join(cfg.SecondaryPath, "dummy"))
 	_ = err
@@ -284,7 +284,7 @@ func TestSecondaryStorage_Store_ReturnsRecoverableErrorWhenDestIsFile(t *testing
 		t.Fatalf("WriteFile: %v", err)
 	}
 	cfg := &config.Config{SecondaryEnabled: true, SecondaryPath: destAsFile}
-	storage, _ := NewSecondaryStorage(cfg, logger)
+	storage, _ := NewSecondaryStorage(cfg, logger, "")
 
 	srcDir := t.TempDir()
 	backupFile := filepath.Join(srcDir, "node-backup-20240102-030405.tar.zst")
@@ -314,7 +314,7 @@ func TestSecondaryStorage_Store_AssociatedCopyFailuresAreNonFatal(t *testing.T) 
 		SecondaryPath:         destDir,
 		BundleAssociatedFiles: false,
 	}
-	storage, _ := NewSecondaryStorage(cfg, logger)
+	storage, _ := NewSecondaryStorage(cfg, logger, "")
 
 	backupFile := filepath.Join(srcDir, "node-backup-20240102-030405.tar.zst")
 	if err := os.WriteFile(backupFile, []byte("data"), 0o600); err != nil {
@@ -351,7 +351,7 @@ func TestSecondaryStorage_Store_BundleSourceCopyFailureReturnsRecoverableError(t
 		SecondaryPath:         destDir,
 		BundleAssociatedFiles: true,
 	}
-	storage, _ := NewSecondaryStorage(cfg, logger)
+	storage, _ := NewSecondaryStorage(cfg, logger, "")
 
 	backupFile := filepath.Join(srcDir, "node-backup-20240102-030405.tar.zst")
 	if err := os.WriteFile(backupFile, []byte("data"), 0o600); err != nil {
@@ -452,7 +452,7 @@ func TestSecondaryStorage_CopyFile_SourceCloseErrorAfterCommitStillSucceeds(t *t
 func TestSecondaryStorage_CopyFile_CoversErrorBranches(t *testing.T) {
 	logger := logging.New(types.LogLevelInfo, false)
 	cfg := &config.Config{SecondaryEnabled: true, SecondaryPath: t.TempDir()}
-	storage, _ := NewSecondaryStorage(cfg, logger)
+	storage, _ := NewSecondaryStorage(cfg, logger, "")
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
@@ -519,7 +519,7 @@ func TestSecondaryStorage_CopyFile_CoversErrorBranches(t *testing.T) {
 func TestSecondaryStorage_DeleteBackupInternal_ContextCanceled(t *testing.T) {
 	logger := logging.New(types.LogLevelInfo, false)
 	cfg := &config.Config{SecondaryEnabled: true, SecondaryPath: t.TempDir()}
-	storage, _ := NewSecondaryStorage(cfg, logger)
+	storage, _ := NewSecondaryStorage(cfg, logger, "")
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
@@ -538,7 +538,7 @@ func TestSecondaryStorage_DeleteBackupInternal_ContinuesOnRemoveErrors(t *testin
 		SecondaryLogPath:      "", // avoid log deletion
 		BundleAssociatedFiles: false,
 	}
-	storage, _ := NewSecondaryStorage(cfg, logger)
+	storage, _ := NewSecondaryStorage(cfg, logger, "")
 
 	backupFile := filepath.Join(backupDir, "node-backup-20240102-030405.tar.zst")
 	if err := os.WriteFile(backupFile, []byte("data"), 0o600); err != nil {
@@ -569,7 +569,7 @@ func TestSecondaryStorage_DeleteAssociatedLog_ReturnsFalseOnRemoveError(t *testi
 	logger := logging.New(types.LogLevelInfo, false)
 	logDir := t.TempDir()
 	cfg := &config.Config{SecondaryLogPath: logDir}
-	storage, _ := NewSecondaryStorage(&config.Config{SecondaryEnabled: true, SecondaryPath: t.TempDir(), SecondaryLogPath: logDir}, logger)
+	storage, _ := NewSecondaryStorage(&config.Config{SecondaryEnabled: true, SecondaryPath: t.TempDir(), SecondaryLogPath: logDir}, logger, "")
 	storage.config = cfg
 
 	host := "node1"
@@ -598,7 +598,7 @@ func TestSecondaryStorage_ApplyRetention_HandlesListFailure(t *testing.T) {
 		t.Fatalf("MkdirAll: %v", err)
 	}
 	cfg := &config.Config{SecondaryEnabled: true, SecondaryPath: badDir}
-	storage, _ := NewSecondaryStorage(cfg, logger)
+	storage, _ := NewSecondaryStorage(cfg, logger, "")
 
 	_, err := storage.ApplyRetention(context.Background(), RetentionConfig{Policy: "simple", MaxBackups: 1})
 	if err == nil {
@@ -617,7 +617,7 @@ func TestSecondaryStorage_ApplyRetention_SimpleCoversDisabledAndWithinLimitBranc
 	logger := logging.New(types.LogLevelInfo, false)
 	backupDir := t.TempDir()
 	cfg := &config.Config{SecondaryEnabled: true, SecondaryPath: backupDir}
-	storage, _ := NewSecondaryStorage(cfg, logger)
+	storage, _ := NewSecondaryStorage(cfg, logger, "")
 
 	// Create one backup file.
 	ts := time.Date(2024, 1, 2, 3, 4, 5, 0, time.UTC)
@@ -654,7 +654,7 @@ func TestSecondaryStorage_ApplyRetention_SetsNoLogInfoWhenLogCountFails(t *testi
 		SecondaryLogPath:      badLogDir,
 		BundleAssociatedFiles: false,
 	}
-	storage, _ := NewSecondaryStorage(cfg, logger)
+	storage, _ := NewSecondaryStorage(cfg, logger, "")
 	storage.hostname = "node-nolog"
 
 	baseTime := time.Date(2024, time.January, 10, 12, 0, 0, 0, time.UTC)
@@ -699,7 +699,7 @@ func TestSecondaryStorage_ApplyRetention_GFS_SetsNoLogInfoWhenLogCountFails(t *t
 		SecondaryLogPath:      badLogDir,
 		BundleAssociatedFiles: false,
 	}
-	storage, _ := NewSecondaryStorage(cfg, logger)
+	storage, _ := NewSecondaryStorage(cfg, logger, "")
 	storage.hostname = "node-nolog-gfs"
 
 	now := time.Date(2024, time.January, 10, 12, 0, 0, 0, time.UTC)
@@ -743,7 +743,7 @@ func TestSecondaryStorage_GetStats_UsesListAndComputesSizes(t *testing.T) {
 	logger := logging.New(types.LogLevelInfo, false)
 	backupDir := t.TempDir()
 	cfg := &config.Config{SecondaryEnabled: true, SecondaryPath: backupDir}
-	storage, _ := NewSecondaryStorage(cfg, logger)
+	storage, _ := NewSecondaryStorage(cfg, logger, "")
 
 	ts1 := time.Date(2024, 1, 2, 3, 4, 5, 0, time.UTC)
 	ts2 := time.Date(2024, 1, 2, 4, 4, 5, 0, time.UTC)
@@ -792,7 +792,7 @@ func TestSecondaryStorage_DeleteBackupInternal_DeletesAssociatedBundleWhenEnable
 		SecondaryPath:         backupDir,
 		BundleAssociatedFiles: true,
 	}
-	storage, _ := NewSecondaryStorage(cfg, logger)
+	storage, _ := NewSecondaryStorage(cfg, logger, "")
 
 	backupFile := filepath.Join(backupDir, "node-backup-20240102-030405.tar.zst")
 	if err := os.WriteFile(backupFile, []byte("data"), 0o600); err != nil {
@@ -818,7 +818,7 @@ func TestSecondaryStorage_List_SkipsMetadataShaFiles(t *testing.T) {
 	logger := logging.New(types.LogLevelInfo, false)
 	baseDir := t.TempDir()
 	cfg := &config.Config{SecondaryEnabled: true, SecondaryPath: baseDir, BundleAssociatedFiles: false}
-	storage, _ := NewSecondaryStorage(cfg, logger)
+	storage, _ := NewSecondaryStorage(cfg, logger, "")
 
 	backup := filepath.Join(baseDir, "node-backup-20240102-030405.tar.zst")
 	if err := os.WriteFile(backup, []byte("data"), 0o600); err != nil {
@@ -858,7 +858,7 @@ func TestSecondaryStorage_Store_MirrorsTimestampsBestEffort(t *testing.T) {
 	srcDir := t.TempDir()
 	destDir := t.TempDir()
 	cfg := &config.Config{SecondaryEnabled: true, SecondaryPath: destDir}
-	storage, _ := NewSecondaryStorage(cfg, logger)
+	storage, _ := NewSecondaryStorage(cfg, logger, "")
 
 	backupFile := filepath.Join(srcDir, "node-backup-20240102-030405.tar.zst")
 	if err := os.WriteFile(backupFile, []byte("data"), 0o600); err != nil {
@@ -889,7 +889,7 @@ func TestSecondaryStorage_Store_BestEffortPermissionsSkipWhenUnsupported(t *test
 	srcDir := t.TempDir()
 	destDir := t.TempDir()
 	cfg := &config.Config{SecondaryEnabled: true, SecondaryPath: destDir}
-	storage, _ := NewSecondaryStorage(cfg, logger)
+	storage, _ := NewSecondaryStorage(cfg, logger, "")
 
 	backupFile := filepath.Join(srcDir, "node-backup-20240102-030405.tar.zst")
 	if err := os.WriteFile(backupFile, []byte("data"), 0o600); err != nil {
@@ -911,7 +911,7 @@ func TestSecondaryStorage_Store_BestEffortPermissionsRunsWhenSupported(t *testin
 	srcDir := t.TempDir()
 	destDir := t.TempDir()
 	cfg := &config.Config{SecondaryEnabled: true, SecondaryPath: destDir}
-	storage, _ := NewSecondaryStorage(cfg, logger)
+	storage, _ := NewSecondaryStorage(cfg, logger, "")
 
 	backupFile := filepath.Join(srcDir, "node-backup-20240102-030405.tar.zst")
 	if err := os.WriteFile(backupFile, []byte("data"), 0o600); err != nil {
@@ -934,7 +934,7 @@ func TestSecondaryStorage_Store_BestEffortPermissionsRunsWhenSupported(t *testin
 func TestSecondaryStorage_DeleteAssociatedLog_EmptyConfigPaths(t *testing.T) {
 	logger := logging.New(types.LogLevelInfo, false)
 	cfg := &config.Config{SecondaryLogPath: "   "}
-	storage, _ := NewSecondaryStorage(&config.Config{SecondaryEnabled: true, SecondaryPath: t.TempDir()}, logger)
+	storage, _ := NewSecondaryStorage(&config.Config{SecondaryEnabled: true, SecondaryPath: t.TempDir()}, logger, "")
 	storage.config = cfg
 
 	if storage.deleteAssociatedLog(context.Background(), "node-backup-20240102-030405.tar.zst") {
@@ -950,7 +950,7 @@ func TestSecondaryStorage_DeleteBackupInternal_HandlesBundleSuffixTrimming(t *te
 		SecondaryPath:         backupDir,
 		BundleAssociatedFiles: true,
 	}
-	storage, _ := NewSecondaryStorage(cfg, logger)
+	storage, _ := NewSecondaryStorage(cfg, logger, "")
 
 	base := filepath.Join(backupDir, "node-backup-20240102-030405.tar.zst")
 	bundle := base + ".bundle.tar"
@@ -977,7 +977,7 @@ func TestSecondaryStorage_List_DedupesMatchesAcrossPatterns(t *testing.T) {
 	logger := logging.New(types.LogLevelInfo, false)
 	baseDir := t.TempDir()
 	cfg := &config.Config{SecondaryEnabled: true, SecondaryPath: baseDir}
-	storage, _ := NewSecondaryStorage(cfg, logger)
+	storage, _ := NewSecondaryStorage(cfg, logger, "")
 
 	// A file that matches both patterns: "-backup-" plus ".tar.gz" also matches legacy glob when named proxmox-backup.
 	path := filepath.Join(baseDir, "proxmox-backup-20240102-030405.tar.gz")
@@ -1009,7 +1009,7 @@ func TestSecondaryStorage_Store_CopyFileUsesTempAndRename(t *testing.T) {
 	srcDir := t.TempDir()
 	destDir := t.TempDir()
 	cfg := &config.Config{SecondaryEnabled: true, SecondaryPath: destDir}
-	storage, _ := NewSecondaryStorage(cfg, logger)
+	storage, _ := NewSecondaryStorage(cfg, logger, "")
 
 	backupFile := filepath.Join(srcDir, "node-backup-20240102-030405.tar.zst")
 	data := []byte("data")
@@ -1047,7 +1047,7 @@ func TestSecondaryStorage_Store_FailsWhenSourceIsDirectory(t *testing.T) {
 	srcDir := t.TempDir()
 	destDir := t.TempDir()
 	cfg := &config.Config{SecondaryEnabled: true, SecondaryPath: destDir}
-	storage, _ := NewSecondaryStorage(cfg, logger)
+	storage, _ := NewSecondaryStorage(cfg, logger, "")
 
 	backupDir := filepath.Join(srcDir, "node-backup-20240102-030405.tar.zst")
 	if err := os.MkdirAll(backupDir, 0o700); err != nil {
@@ -1073,7 +1073,7 @@ func TestSecondaryStorage_CopyFile_RespectsSourcePermissionsAndChtimesBestEffort
 	}
 	logger := logging.New(types.LogLevelInfo, false)
 	cfg := &config.Config{SecondaryEnabled: true, SecondaryPath: t.TempDir()}
-	storage, _ := NewSecondaryStorage(cfg, logger)
+	storage, _ := NewSecondaryStorage(cfg, logger, "")
 
 	src := filepath.Join(t.TempDir(), "src")
 	if err := os.WriteFile(src, []byte("data"), 0o640); err != nil {

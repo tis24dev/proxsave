@@ -47,10 +47,19 @@ func resolveRetentionHostname() string {
 // grow without bound. The token is still host-specific, so the cross-host guarantee
 // survives the degradation.
 //
+// A machine does not always spell its own name the same way. The writer records
+// what "hostname -f" returns (pve.home.arpa) while os.Hostname() reports the
+// kernel short name (pve), so retention is told both: hostname is what the kernel
+// reports and aliases are the names this run's writer actually stamped into
+// archives. Ownership is still an exact match against one of those names. It is
+// never a fold to the first label: a host that cannot resolve its own domain must
+// not claim "pve.siteB.example" just because it is called "pve", or one machine's
+// retention would prune another machine's archives.
+//
 // Fail-closed only when neither source yields a host, and whenever this machine
 // cannot name itself: retention then leaves the entry alone rather than delete on a
 // guess. Legacy "proxmox-backup-*" names have no token and land here.
-func backupBelongsToHost(meta *types.BackupMetadata, hostname string) bool {
+func backupBelongsToHost(meta *types.BackupMetadata, hostname string, aliases ...string) bool {
 	if meta == nil {
 		return false
 	}
@@ -65,7 +74,103 @@ func backupBelongsToHost(meta *types.BackupMetadata, hostname string) bool {
 	if owner == "" {
 		return false
 	}
-	return strings.EqualFold(owner, hostname)
+	return hostOwnsName(owner, hostname, aliases...)
+}
+
+// unresolvedHostname is what the writer stamps into an archive when the machine
+// could not name itself (resolveHostname falls back to it). It names no host, so it
+// never joins the set of names retention answers to: two machines that both failed
+// to resolve would otherwise each claim the other's archives.
+const unresolvedHostname = "unknown"
+
+// retentionHostAliases reduces the names this run's writer used into the extra names
+// retention accepts as this machine's own. Blanks, the "unknown" sentinel and
+// repeats of the local hostname are dropped, so a machine with no domain ends up
+// with no aliases and keeps exactly the strict behaviour it has today.
+func retentionHostAliases(local string, written []string) []string {
+	localKey := types.NormalizeHostname(local)
+	var aliases []string
+	for _, name := range written {
+		key := types.NormalizeHostname(name)
+		if key == "" || key == unresolvedHostname || key == localKey {
+			continue
+		}
+		duplicate := false
+		for _, seen := range aliases {
+			if seen == key {
+				duplicate = true
+				break
+			}
+		}
+		if !duplicate {
+			aliases = append(aliases, key)
+		}
+	}
+	return aliases
+}
+
+// hostOwnsName reports whether owner is one of the names this machine answers to:
+// the name the kernel reports plus the names this run's writer stamped into the
+// archives it produced. The match is exact once spelling is normalised. It is
+// deliberately not a fold to the first label: "pve" and "pve.siteB.example" are two
+// machines unless this machine itself answers to both, and folding them would let
+// one host's retention prune the other's archives.
+func hostOwnsName(owner, hostname string, aliases ...string) bool {
+	key := types.NormalizeHostname(owner)
+	if key == "" {
+		return false
+	}
+	if key == types.NormalizeHostname(hostname) {
+		return true
+	}
+	for _, alias := range aliases {
+		// The sentinel is refused again here, not only in retentionHostAliases: an
+		// alias is a name the writer produced, and "unknown" is what it produces
+		// when it could not name the machine at all. Two machines that both failed
+		// to resolve must not become owners of each other's archives, whichever
+		// path assembled the list. The local hostname is left alone, so a machine
+		// the kernel really does call "unknown" keeps rotating its own archives
+		// exactly as it does today.
+		if alias := types.NormalizeHostname(alias); alias != "" && alias != unresolvedHostname && key == alias {
+			return true
+		}
+	}
+	return false
+}
+
+// hostShortLabel returns the first label of a hostname, or the whole string when it
+// carries no domain. Reporting only: ownership never consults it. A leading dot is
+// degenerate input and keeps the whole string, so malformed names do not all
+// collapse onto one empty label.
+func hostShortLabel(host string) string {
+	if idx := strings.IndexByte(host, '.'); idx > 0 {
+		return host[:idx]
+	}
+	return host
+}
+
+// retentionSpellingMismatches counts entries that look like this host's own work
+// under a different spelling of its name: the owner shares the local short label
+// without being one of the names this machine answers to. They are usually archives
+// written while "hostname -f" resolved and it no longer does, so they have stopped
+// rotating. They are reported, never claimed: from here they are indistinguishable
+// from a second machine with the same short name, and claiming them would delete
+// that machine's backups.
+func retentionSpellingMismatches(foreign []*types.BackupMetadata, hostname string) int {
+	local := hostShortLabel(types.NormalizeHostname(hostname))
+	if local == "" {
+		return 0
+	}
+	count := 0
+	for _, b := range foreign {
+		if b == nil {
+			continue
+		}
+		if hostShortLabel(types.NormalizeHostname(backupOwnerHost(b))) == local {
+			count++
+		}
+	}
+	return count
 }
 
 // backupOwnerHost resolves the owning host of a listed backup: the manifest's
@@ -100,12 +205,12 @@ const legacyBackupPrefix = "proxmox-backup-"
 // ones it must not touch. Every backend runs its retention through this so the
 // three storage locations behave identically on a directory - or a remote prefix -
 // that several ProxSave hosts share.
-func scopeRetentionToHost(backups []*types.BackupMetadata, hostname string) (owned, foreign []*types.BackupMetadata) {
+func scopeRetentionToHost(backups []*types.BackupMetadata, hostname string, aliases ...string) (owned, foreign []*types.BackupMetadata) {
 	for _, b := range backups {
 		if b == nil {
 			continue
 		}
-		if backupBelongsToHost(b, hostname) {
+		if backupBelongsToHost(b, hostname, aliases...) {
 			owned = append(owned, b)
 			continue
 		}
@@ -123,9 +228,12 @@ type retentionScopeLogger interface {
 // applyRetentionHostScope narrows a listing to this host's own backups and reports
 // what it declined to consider. The exclusions are logged at WARNING because they
 // change what retention will prune: on a shared location they are other machines'
-// backups (correct, and the point of this filter), but a manifest that cannot be
-// read lands here too, and that must not look like silence.
-func applyRetentionHostScope(location, hostname string, backups []*types.BackupMetadata, logger retentionScopeLogger) []*types.BackupMetadata {
+// backups (correct, and the point of this filter), but two other kinds land here
+// too, and neither must look like silence. An archive whose name and manifest name
+// no host cannot be attributed at all, and an archive written under a spelling of
+// this host's own name that this run cannot confirm ("hostname -f" resolved then and
+// does not now) is left alone rather than claimed on a guess.
+func applyRetentionHostScope(location, hostname string, aliases []string, backups []*types.BackupMetadata, logger retentionScopeLogger) []*types.BackupMetadata {
 	if strings.TrimSpace(hostname) == "" {
 		if logger != nil {
 			logger.Warning("%s: the local hostname is unknown; retention will not delete anything this run", location)
@@ -133,11 +241,15 @@ func applyRetentionHostScope(location, hostname string, backups []*types.BackupM
 		return nil
 	}
 
-	owned, foreign := scopeRetentionToHost(backups, hostname)
+	owned, foreign := scopeRetentionToHost(backups, hostname, aliases...)
 	if len(foreign) > 0 && logger != nil {
-		logger.Warning("%s: retention ignored %d backup(s) that do not belong to %s (other hosts, or no readable manifest)", location, len(foreign), hostname)
+		logger.Warning("%s: retention ignored %d backup(s) that do not belong to %s (other hosts, or a name that carries no host)", location, len(foreign), hostname)
+		if n := retentionSpellingMismatches(foreign, hostname); n > 0 {
+			logger.Warning("%s: %d of those carry this host's short name spelled differently (an FQDN, or another machine with the same short name); retention leaves them alone rather than guess, so they are no longer rotating. Check that \"hostname -f\" resolves the way it did when they were written.", location, n)
+		}
+		logger.Debug("%s: retention answers to %s", location, strings.Join(append([]string{hostname}, aliases...), ", "))
 		for _, b := range foreign {
-			logger.Debug("%s: retention out of scope: %s (manifest hostname=%q)", location, b.BackupFile, b.Hostname)
+			logger.Debug("%s: retention out of scope: %s (owner=%q, manifest hostname=%q)", location, b.BackupFile, backupOwnerHost(b), b.Hostname)
 		}
 	}
 	return owned
