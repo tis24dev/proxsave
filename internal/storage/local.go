@@ -33,6 +33,12 @@ type LocalStorage struct {
 	fsDetector  *FilesystemDetector
 	fsInfo      *FilesystemInfo
 	lastRet     RetentionSummary
+	// scopeOwned and scopeValid sit beside lastRet rather than inside it because
+	// lastRet is assigned as a whole struct literal on four separate delete paths.
+	// A field added to that struct would be silently zeroed by any of them, which is
+	// the exact class of failure this count exists to stop (discussion #292).
+	scopeOwned int
+	scopeValid bool
 }
 
 // NewLocalStorage creates a new local storage instance.
@@ -468,6 +474,15 @@ func (l *LocalStorage) countLogFiles(ctx context.Context) int {
 func (l *LocalStorage) ApplyRetention(ctx context.Context, config RetentionConfig) (deleted int, err error) {
 	done := logging.DebugStart(l.logger, "local retention", "policy=%s max=%d", config.Policy, config.MaxBackups)
 	defer func() { done(err) }()
+
+	// Publish what this host owns here, net of what this pass then deletes. Declared
+	// before the first return so EVERY exit records something, including the two
+	// error bails above the scope call, which leave it invalid and let the reporter
+	// fall back to the unscoped total. The values are filled in once the listing has
+	// been scoped, a few lines down.
+	owned, scoped := 0, false
+	defer func() { l.scopeOwned, l.scopeValid = owned-deleted, scoped }()
+
 	if err := ctx.Err(); err != nil {
 		return 0, err
 	}
@@ -489,6 +504,16 @@ func (l *LocalStorage) ApplyRetention(ctx context.Context, config RetentionConfi
 	// "*-backup-*" glob that produced this list matches every hostname, and the list
 	// also carries other spellings of this host's own name.
 	backups = applyRetentionHostScope("Local storage", l.hostname, l.hostAliases, backups, l.logger)
+
+	// This is the only frame that knows the number: the listing above matches every
+	// hostname, and GetStats reruns that same unscoped listing for its own count. The
+	// steady state, "already within the limit", returns early a few lines down and
+	// used to record nothing at all, so the healthy run was exactly the one where the
+	// notification fell back to counting every host's archives (discussion #292).
+	// Left invalid when the host cannot name itself: applyRetentionHostScope returns
+	// nil there and warns, so publishing 0 would print "0/7" beside a directory
+	// holding forty archives, which is a worse lie than the one being fixed.
+	owned, scoped = len(backups), strings.TrimSpace(l.hostname) != ""
 
 	if len(backups) == 0 {
 		l.logger.Debug("Local storage: no backups to apply retention")
@@ -678,7 +703,9 @@ func (l *LocalStorage) applySimpleRetention(ctx context.Context, backups []*type
 
 // LastRetentionSummary returns information about the latest retention run.
 func (l *LocalStorage) LastRetentionSummary() RetentionSummary {
-	return l.lastRet
+	s := l.lastRet
+	s.ScopeValid, s.Owned = l.scopeValid, l.scopeOwned
+	return s
 }
 
 // VerifyUpload is not applicable for local storage

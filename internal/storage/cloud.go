@@ -75,6 +75,10 @@ type CloudStorage struct {
 	waitForRetry   func(context.Context, time.Duration) error
 	sleep          func(time.Duration)
 	lastRet        RetentionSummary
+	// See the note on LocalStorage.scopeOwned: kept outside lastRet because that
+	// struct is replaced wholesale on the delete paths.
+	scopeOwned     int
+	scopeValid     bool
 	remoteFilesMu  sync.RWMutex
 	remoteFiles    map[string]struct{}
 	logPathMu      sync.Mutex
@@ -1859,6 +1863,12 @@ func (c *CloudStorage) cloudLogPath(basePath, fileName string) string {
 func (c *CloudStorage) ApplyRetention(ctx context.Context, config RetentionConfig) (deleted int, err error) {
 	done := logging.DebugStart(c.logger, "cloud retention", "policy=%s max=%d", config.Policy, config.MaxBackups)
 	defer func() { done(err) }()
+
+	// See LocalStorage.ApplyRetention for why this is declared before the first
+	// return and why an unnamed host leaves it invalid.
+	owned, scoped := 0, false
+	defer func() { c.scopeOwned, c.scopeValid = owned-deleted, scoped }()
+
 	if err := ctx.Err(); err != nil {
 		return 0, err
 	}
@@ -1886,6 +1896,12 @@ func (c *CloudStorage) ApplyRetention(ctx context.Context, config RetentionConfi
 	// the keep limit or selected for deletion.
 	c.resolveRetentionOwners(ctx, backups)
 	backups = applyRetentionHostScope("Cloud storage", c.hostname, c.hostAliases, backups, c.logger)
+
+	// Taken here rather than from a second listing: the attribution above costs one
+	// rclone cat per archive, and cloud_retention_owner.go records that List stays
+	// deliberately cheap for exactly that reason. Recomputing this count elsewhere
+	// would mean paying it again.
+	owned, scoped = len(backups), strings.TrimSpace(c.hostname) != ""
 
 	if len(backups) == 0 {
 		c.logger.Debug("Cloud storage: no backups to apply retention")
@@ -2048,7 +2064,9 @@ func (c *CloudStorage) deleteBatched(ctx context.Context, backups []*types.Backu
 
 // LastRetentionSummary returns the latest retention summary.
 func (c *CloudStorage) LastRetentionSummary() RetentionSummary {
-	return c.lastRet
+	s := c.lastRet
+	s.ScopeValid, s.Owned = c.scopeValid, c.scopeOwned
+	return s
 }
 
 // GetStats returns storage statistics

@@ -1082,14 +1082,12 @@ func commandTokenMatchesTarget(token string) bool {
 }
 
 func fetchBackupList(ctx context.Context, backend storage.Storage) []*types.BackupMetadata {
-	listable, ok := backend.(interface {
-		List(context.Context) ([]*types.BackupMetadata, error)
-	})
-	if !ok {
-		return nil
-	}
-
-	backups, err := listable.List(ctx)
+	// Called through the interface, not through a runtime type assertion.
+	// storage.Storage declares List and this parameter is already that type, so the
+	// assertion that used to sit here could never fail, while its !ok branch returned
+	// nil: any future rename or signature change on List would have degraded the
+	// startup summary to "no backups found" with a clean build and no log line.
+	backups, err := backend.List(ctx)
 	if err != nil {
 		return nil
 	}

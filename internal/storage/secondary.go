@@ -35,6 +35,10 @@ type SecondaryStorage struct {
 	fsDetector  *FilesystemDetector
 	fsInfo      *FilesystemInfo
 	lastRet     RetentionSummary
+	// See the note on LocalStorage.scopeOwned: kept outside lastRet because that
+	// struct is replaced wholesale on the delete paths.
+	scopeOwned int
+	scopeValid bool
 }
 
 // NewSecondaryStorage creates a new secondary storage instance.
@@ -577,6 +581,12 @@ func (s *SecondaryStorage) countLogFiles(ctx context.Context) int {
 func (s *SecondaryStorage) ApplyRetention(ctx context.Context, config RetentionConfig) (deleted int, err error) {
 	done := logging.DebugStart(s.logger, "secondary retention", "policy=%s max=%d", config.Policy, config.MaxBackups)
 	defer func() { done(err) }()
+
+	// See LocalStorage.ApplyRetention for why this is declared before the first
+	// return and why an unnamed host leaves it invalid.
+	owned, scoped := 0, false
+	defer func() { s.scopeOwned, s.scopeValid = owned-deleted, scoped }()
+
 	if err := ctx.Err(); err != nil {
 		return 0, err
 	}
@@ -603,6 +613,11 @@ func (s *SecondaryStorage) ApplyRetention(ctx context.Context, config RetentionC
 	// hostname.
 	s.resolveRetentionOwners(ctx, backups)
 	backups = applyRetentionHostScope("Secondary storage", s.hostname, s.hostAliases, backups, s.logger)
+
+	// The shared NAS mount is the documented secondary layout, so this is the
+	// location where the unscoped count was most often somebody else's
+	// (discussion #292).
+	owned, scoped = len(backups), strings.TrimSpace(s.hostname) != ""
 
 	if len(backups) == 0 {
 		s.logger.Debug("Secondary storage: no backups to apply retention")
@@ -809,7 +824,9 @@ func (s *SecondaryStorage) VerifyUpload(ctx context.Context, localFile, remoteFi
 
 // LastRetentionSummary returns the latest retention summary.
 func (s *SecondaryStorage) LastRetentionSummary() RetentionSummary {
-	return s.lastRet
+	summary := s.lastRet
+	summary.ScopeValid, summary.Owned = s.scopeValid, s.scopeOwned
+	return summary
 }
 
 // GetStats returns storage statistics

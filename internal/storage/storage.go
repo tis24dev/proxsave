@@ -110,6 +110,20 @@ type RetentionSummary struct {
 	LogsDeleted      int
 	LogsRemaining    int
 	HasLogInfo       bool
+
+	// ScopeValid separates "this host owns nothing here" from "retention never ran",
+	// which a count alone cannot express. Retention is skipped entirely when no limit
+	// is configured, and reporting 0 backups on a healthy host would be a worse lie
+	// than the unscoped total it replaces, so a consumer falls back to that total
+	// unless this is set.
+	ScopeValid bool
+	// Owned is how many archives at this location belong to this host, taken after
+	// applyRetentionHostScope and net of whatever the pass then deleted. It is the
+	// only number that may be printed next to a retention limit. GetStats counts
+	// every archive at the location, so on a path shared with another ProxSave host
+	// it counts that host's too, which is how the summary came to read "40/7" on a
+	// machine that owns five (discussion #292).
+	Owned int
 }
 
 // RetentionReporter can be implemented by storage backends that expose details
