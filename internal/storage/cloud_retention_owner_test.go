@@ -40,7 +40,7 @@ func TestRemoteManifestHostnameReadsTheManifest(t *testing.T) {
 		return []byte(`{"hostname":"from-manifest","created_at":"2025-01-02T10:00:00Z"}`), nil
 	}
 
-	got := cs.remoteManifestHostname(context.Background(), "server9-backup-20250102-100000.tar.zst")
+	got, _ := cs.remoteManifestOwner(context.Background(), "server9-backup-20250102-100000.tar.zst")
 	if got != "from-manifest" {
 		t.Fatalf("hostname = %q, want %q (the manifest must win over the filename token)", got, "from-manifest")
 	}
@@ -64,7 +64,7 @@ func TestRemoteManifestHostnameFallsBackToManifestJSON(t *testing.T) {
 		return []byte(`{"hostname":"from-json"}`), nil
 	}
 
-	if got := cs.remoteManifestHostname(context.Background(), "a-backup-20250102-100000.tar.zst"); got != "from-json" {
+	if got, _ := cs.remoteManifestOwner(context.Background(), "a-backup-20250102-100000.tar.zst"); got != "from-json" {
 		t.Fatalf("hostname = %q, want from-json", got)
 	}
 	if len(tried) != 2 {
@@ -81,7 +81,7 @@ func TestRemoteManifestHostnameUnreadableYieldsEmpty(t *testing.T) {
 		return []byte("not json at all"), nil
 	}
 
-	if got := cs.remoteManifestHostname(context.Background(), "a-backup-20250102-100000.tar.zst"); got != "" {
+	if got, _ := cs.remoteManifestOwner(context.Background(), "a-backup-20250102-100000.tar.zst"); got != "" {
 		t.Fatalf("hostname = %q, want empty", got)
 	}
 }
@@ -103,7 +103,7 @@ func TestResolveRetentionOwnersPrefersManifestOverFilename(t *testing.T) {
 	if list[0].Hostname != "server1" {
 		t.Fatalf("Hostname = %q, want server1 from the manifest", list[0].Hostname)
 	}
-	if !backupBelongsToHost(list[0], cs.hostname) {
+	if !backupBelongsToHost(list[0], hostOnly(cs.hostname)) {
 		t.Fatal("an archive the manifest attributes to this host must be in retention scope")
 	}
 }

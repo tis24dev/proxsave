@@ -122,10 +122,10 @@ func TestUnattributableLegacyArchiveIsClaimedByNoHost(t *testing.T) {
 	// drive, which is a "local" location that several machines can share.
 	entry := &types.BackupMetadata{BackupFile: "/mnt/synopbs/backup/proxmox-backup-20250102-100000.tar.gz"}
 
-	if backupBelongsToHost(entry, "hostA") {
+	if backupBelongsToHost(entry, hostOnly("hostA")) {
 		t.Error("hostA claimed a pre-Go archive that names no host. Nothing in the archive says hostA wrote it, and on a shared location claiming it means deleting another machine's backup (discussion #292)")
 	}
-	if backupBelongsToHost(entry, "pve", "pve.home.arpa") {
+	if backupBelongsToHost(entry, hostOnly("pve", "pve.home.arpa")) {
 		t.Error("a second, differently named host claimed the same pre-Go archive. Both hosts saying yes to the same archive is the cross-host deletion channel this rule exists to close")
 	}
 }
@@ -163,17 +163,17 @@ func TestLegacyArchiveNamingItsHostStillRotatesOnThatHost(t *testing.T) {
 	if owner := backupOwnerHost(listed[0]); owner != "hostB" {
 		t.Fatalf("backupOwnerHost = %q, want hostB. A pre-Go archive whose sidecar names its host must be attributed by that name, or dropping the legacy claim rule would stop it rotating anywhere", owner)
 	}
-	if backupBelongsToHost(listed[0], "hostA") {
+	if backupBelongsToHost(listed[0], hostOnly("hostA")) {
 		t.Error("hostA claimed an archive whose sidecar names hostB. That is one machine deleting another machine's backup (discussion #292)")
 	}
-	if !backupBelongsToHost(listed[0], "hostB") {
+	if !backupBelongsToHost(listed[0], hostOnly("hostB")) {
 		t.Error("hostB did not claim an archive its own sidecar names it in. It would then never rotate on any host and the location would grow without bound")
 	}
 
 	// The secondary backend never opens a manifest during List, so it attributes
 	// through this helper instead. Pinned here so the two paths cannot drift.
-	if host := manifestHostnameFromLocalArchive(context.Background(), path, 5*time.Second); host != "hostB" {
-		t.Fatalf("manifestHostnameFromLocalArchive = %q, want hostB: the secondary location must attribute the same archive the same way", host)
+	if host, _ := manifestOwnerFromLocalArchive(context.Background(), path, 5*time.Second); host != "hostB" {
+		t.Fatalf("manifestOwnerFromLocalArchive = %q, want hostB: the secondary location must attribute the same archive the same way", host)
 	}
 }
 
@@ -200,7 +200,7 @@ func TestUnclaimedLegacyArchivesAreReportedWithoutRaisingTheRunSeverity(t *testi
 	}
 
 	logger := &levelRecordingLogger{}
-	scoped, _ := applyRetentionHostScope("Local storage", "hostA", nil, backups, logger)
+	scoped, _ := applyRetentionHostScope("Local storage", hostOnly("hostA"), backups, logger)
 
 	if len(scoped) != 1 || scoped[0] != backups[0] {
 		t.Fatalf("scoped %d entries (%+v), want exactly the archive this host can name", len(scoped), scoped)
@@ -227,7 +227,7 @@ func TestForeignHostArchivesStillRaiseTheRunSeverity(t *testing.T) {
 	}
 
 	logger := &levelRecordingLogger{}
-	scoped, _ := applyRetentionHostScope("Local storage", "hostA", nil, backups, logger)
+	scoped, _ := applyRetentionHostScope("Local storage", hostOnly("hostA"), backups, logger)
 
 	if len(scoped) != 1 || scoped[0] != backups[0] {
 		t.Fatalf("scoped %d entries (%+v), want exactly this host's own archive", len(scoped), scoped)

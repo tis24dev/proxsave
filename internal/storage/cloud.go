@@ -91,6 +91,11 @@ type CloudStorage struct {
 	// so usually the FQDN). Empty on a machine with no domain, which leaves
 	// retention as strict as it has always been.
 	hostAliases []string
+	// serverID is this host's own server identity. See LocalStorage.serverID: it can
+	// only ever confirm a claim the hostname already makes ambiguously. Cloud is the
+	// location most likely to be shared, because the shipped CLOUD_REMOTE_PATH
+	// default is a root with no host component.
+	serverID string
 }
 
 func (c *CloudStorage) remoteLabel() string {
@@ -133,8 +138,8 @@ func validateRcloneArgs(args []string) error {
 	}
 	switch args[0] {
 	// "cat" is read-only and is here for retention's manifest attribution
-	// (remoteManifestHostname): it reads an archive's sidecar to learn which host
-	// owns the backup before retention may delete it. It cannot create, overwrite or
+	// (remoteManifestOwner): it reads an archive's sidecar to learn which host and
+	// which server identity own the backup before retention may delete it. It cannot create, overwrite or
 	// remove anything, and the path it receives is built by remotePathFor, which
 	// path.Clean's the name and joins it under the configured prefix.
 	case "cat", "copyto", "delete", "deletefile", "hashsum", "ls", "lsf", "lsl", "mkdir", "touch":
@@ -260,11 +265,14 @@ func NewCloudStorage(cfg *config.Config, logger *logging.Logger, writtenHostname
 		parallelJobs = 1
 	}
 	host := resolveRetentionHostname()
+	serverID := types.NormalizeServerID(cfg.ServerID)
+	logRetentionServerIdentity(logger, "Cloud storage", serverID)
 	return &CloudStorage{
 		config:         cfg,
 		logger:         logger,
 		hostname:       host,
 		hostAliases:    retentionHostAliases(host, []string{writtenHostname}),
+		serverID:       serverID,
 		remote:         remoteName,
 		remotePrefix:   combinedPrefix,
 		uploadMode:     mode,
@@ -1901,7 +1909,7 @@ func (c *CloudStorage) ApplyRetention(ctx context.Context, config RetentionConfi
 	// and drop everything this host does not own, BEFORE anything is counted toward
 	// the keep limit or selected for deletion.
 	c.resolveRetentionOwners(ctx, backups)
-	backups, unmanaged := applyRetentionHostScope("Cloud storage", c.hostname, c.hostAliases, backups, c.logger)
+	backups, unmanaged := applyRetentionHostScope("Cloud storage", retentionIdentity{hostname: c.hostname, aliases: c.hostAliases, serverID: c.serverID}, backups, c.logger)
 
 	// Taken here rather than from a second listing: the attribution above costs one
 	// rclone cat per archive, and cloud_retention_owner.go records that List stays

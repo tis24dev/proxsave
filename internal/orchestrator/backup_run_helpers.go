@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"strings"
 
 	"filippo.io/age"
 	"github.com/tis24dev/proxsave/internal/backup"
@@ -341,10 +342,17 @@ func (o *Orchestrator) newArchiveManifest(stats *BackupStats, archivePath, check
 		PVEVersion:       stats.PVEVersion,
 		PBSVersion:       stats.PBSVersion,
 		Hostname:         stats.Hostname,
-		ScriptVersion:    stats.ScriptVersion,
-		EncryptionMode:   o.archiveEncryptionMode(),
-		ClusterMode:      stats.ClusterMode,
-		PassphraseSalt:   passphraseSalt,
+		// The one place the run's server identity reaches the archives. It is what
+		// lets a later run recognise this archive as its own after the machine stops
+		// resolving the name stamped beside it (discussion #292). Empty when this
+		// host could not determine its identity, which is safe: retention then falls
+		// back to the hostname rule alone, exactly as it behaved before the field
+		// existed.
+		ServerID:       strings.TrimSpace(stats.ServerID),
+		ScriptVersion:  stats.ScriptVersion,
+		EncryptionMode: o.archiveEncryptionMode(),
+		ClusterMode:    stats.ClusterMode,
+		PassphraseSalt: passphraseSalt,
 	}, nil
 }
 

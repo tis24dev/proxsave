@@ -31,10 +31,13 @@ type SecondaryStorage struct {
 	// so usually the FQDN). Empty on a machine with no domain, which leaves
 	// retention as strict as it has always been.
 	hostAliases []string
-	basePath    string
-	fsDetector  *FilesystemDetector
-	fsInfo      *FilesystemInfo
-	lastRet     RetentionSummary
+	// serverID is this host's own server identity. See LocalStorage.serverID: it can
+	// only ever confirm a claim the hostname already makes ambiguously.
+	serverID   string
+	basePath   string
+	fsDetector *FilesystemDetector
+	fsInfo     *FilesystemInfo
+	lastRet    RetentionSummary
 	// See the note on LocalStorage.scopeOwned: kept outside lastRet because that
 	// struct is replaced wholesale on the delete paths.
 	scopeOwned int
@@ -51,11 +54,14 @@ type SecondaryStorage struct {
 // machine's name stop being rotated.
 func NewSecondaryStorage(cfg *config.Config, logger *logging.Logger, writtenHostname string) (*SecondaryStorage, error) {
 	host := resolveRetentionHostname()
+	serverID := types.NormalizeServerID(cfg.ServerID)
+	logRetentionServerIdentity(logger, "Secondary storage", serverID)
 	return &SecondaryStorage{
 		config:      cfg,
 		logger:      logger,
 		hostname:    host,
 		hostAliases: retentionHostAliases(host, []string{writtenHostname}),
+		serverID:    serverID,
 		basePath:    cfg.SecondaryPath,
 		fsDetector:  NewFilesystemDetector(logger, WithIOTimeout(fsIoTimeout(cfg))),
 	}, nil
@@ -618,7 +624,7 @@ func (s *SecondaryStorage) ApplyRetention(ctx context.Context, config RetentionC
 	// same directory, and the "*-backup-*" glob that produced this list matches every
 	// hostname.
 	s.resolveRetentionOwners(ctx, backups)
-	backups, unmanaged := applyRetentionHostScope("Secondary storage", s.hostname, s.hostAliases, backups, s.logger)
+	backups, unmanaged := applyRetentionHostScope("Secondary storage", retentionIdentity{hostname: s.hostname, aliases: s.hostAliases, serverID: s.serverID}, backups, s.logger)
 
 	// The shared NAS mount is the documented secondary layout, so this is the
 	// location where the unscoped count was most often somebody else's
@@ -638,17 +644,30 @@ func (s *SecondaryStorage) ApplyRetention(ctx context.Context, config RetentionC
 	return s.applySimpleRetention(ctx, backups, config.MaxBackups)
 }
 
-// resolveRetentionOwners fills in each candidate's Hostname from its manifest. It is
-// the secondary twin of CloudStorage.resolveRetentionOwners and exists for the same
-// reason: only retention needs to know who owns a backup, so only retention pays for
-// finding out.
+// resolveRetentionOwners fills in each candidate's Hostname and ServerID from its
+// manifest. It is the secondary twin of CloudStorage.resolveRetentionOwners and
+// exists for the same reason: only retention needs to know who owns a backup, so
+// only retention pays for finding out.
+//
+// It no longer skips an entry that already carries a Hostname. That guard was
+// defensive while there was one field to resolve, since List() never fills it, but
+// with two it becomes a half-resolution: a pre-filled name would leave the identity
+// empty and silently disable the whole mechanism on this backend, with no other
+// symptom. Both values are taken from ONE manifest read and each is written only
+// where nothing was resolved yet, so the two facts can never come from two files.
 func (s *SecondaryStorage) resolveRetentionOwners(ctx context.Context, backups []*types.BackupMetadata) {
 	timeout := fsIoTimeout(s.config)
 	for _, b := range backups {
-		if b == nil || strings.TrimSpace(b.Hostname) != "" {
+		if b == nil {
 			continue
 		}
-		b.Hostname = manifestHostnameFromLocalArchive(ctx, b.BackupFile, timeout)
+		hostname, serverID := manifestOwnerFromLocalArchive(ctx, b.BackupFile, timeout)
+		if strings.TrimSpace(b.Hostname) == "" {
+			b.Hostname = hostname
+		}
+		if strings.TrimSpace(b.ServerID) == "" {
+			b.ServerID = serverID
+		}
 	}
 }
 

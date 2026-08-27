@@ -34,9 +34,19 @@ type Manifest struct {
 	PVEVersion       string    `json:"pve_version,omitempty"`
 	PBSVersion       string    `json:"pbs_version,omitempty"`
 	Hostname         string    `json:"hostname"`
-	ScriptVersion    string    `json:"script_version,omitempty"`
-	EncryptionMode   string    `json:"encryption_mode,omitempty"`
-	ClusterMode      string    `json:"cluster_mode,omitempty"`
+	// ServerID is the server identity of the machine that wrote the archive, the
+	// same 16-digit value the identity file persists. Retention uses it to confirm
+	// that an archive naming a spelling of this host's name really is this host's
+	// own work, across a hostname change it can no longer resolve.
+	//
+	// omitempty is load bearing: no archive written before this field existed
+	// carries the key, and an empty value must keep producing byte-identical
+	// manifest JSON so nothing downstream sees a manifest change where there is no
+	// server identity to record.
+	ServerID       string `json:"server_id,omitempty"`
+	ScriptVersion  string `json:"script_version,omitempty"`
+	EncryptionMode string `json:"encryption_mode,omitempty"`
+	ClusterMode    string `json:"cluster_mode,omitempty"`
 	// PassphraseSalt is the per-installation random salt used to derive a
 	// passphrase-based AGE recipient. It is a public value embedded so the
 	// archive stays decryptable from the passphrase alone on any host. Empty
@@ -232,17 +242,37 @@ func LoadManifest(manifestPath string) (*Manifest, error) {
 // attribute" and never as a match: on a shared location, claiming an archive whose
 // writer nothing can name means deleting another machine's backup.
 func HostnameFromManifestBytes(data []byte) string {
+	hostname, _ := OwnerFromManifestBytes(data)
+	return hostname
+}
+
+// OwnerFromManifestBytes returns both facts a manifest payload records about the
+// machine that wrote the archive: the host it names and the server identity it
+// carries. Both come from THE SAME payload, which is the point of returning them
+// together rather than reading the manifest twice. On a location several hosts share,
+// a hostname taken from one sidecar and an identity taken from another would describe
+// a writer that never existed, and retention would be deciding a deletion on it.
+//
+// Format precedence is exactly HostnameFromManifestBytes's, which is exactly
+// LoadManifest's: JSON wins whenever it parses. The KEY=VALUE fallback can only ever
+// yield a hostname, because the pre-Go pipeline had no notion of a server identity
+// and never wrote such a key. Teaching parseLegacyMetadata one would invent a format
+// no archive on disk carries and could only ever fire on a hand-edited file.
+//
+// Either result may be "", independently, and "" always means "the payload does not
+// say". It is never a match.
+func OwnerFromManifestBytes(data []byte) (hostname, serverID string) {
 	var manifest Manifest
 	if err := json.Unmarshal(data, &manifest); err == nil {
-		return strings.TrimSpace(manifest.Hostname)
+		return strings.TrimSpace(manifest.Hostname), strings.TrimSpace(manifest.ServerID)
 	}
 
 	var legacy Manifest
 	scanner := bufio.NewScanner(strings.NewReader(string(data)))
 	if err := parseLegacyMetadata(scanner, &legacy); err != nil {
-		return ""
+		return "", ""
 	}
-	return strings.TrimSpace(legacy.Hostname)
+	return strings.TrimSpace(legacy.Hostname), ""
 }
 
 // loadLegacyManifest attempts to parse legacy Bash metadata files (KEY=VALUE format).

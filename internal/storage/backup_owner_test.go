@@ -11,6 +11,21 @@ import (
 	"github.com/tis24dev/proxsave/internal/types"
 )
 
+// hostOnly builds the identity of a host that knows NO server identity of its own,
+// which is the only shape the fixtures in this file and in
+// backup_owner_legacy_test.go describe. Every archive they carry predates the
+// server_id field, so every row must land on the hostname rule and keep exactly the
+// answer it had before that field existed. Routing them through a helper named for
+// the ABSENCE of an identity makes that the file's explicit statement rather than an
+// accident of the fixtures.
+//
+// written is passed through as the alias set unreduced, exactly as the variadic
+// signature used to take it, so the rows that pin what hostOwnsName refuses (the
+// "unknown" sentinel among them) still reach the code that refuses it.
+func hostOnly(hostname string, written ...string) retentionIdentity {
+	return retentionIdentity{hostname: hostname, aliases: written}
+}
+
 func TestBackupOwnerHost(t *testing.T) {
 	tests := []struct {
 		name string
@@ -102,7 +117,7 @@ func TestBackupBelongsToHost(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := backupBelongsToHost(tt.meta, tt.hostname, tt.written...); got != tt.want {
+			if got := backupBelongsToHost(tt.meta, hostOnly(tt.hostname, tt.written...)); got != tt.want {
 				t.Fatalf("backupBelongsToHost = %v, want %v", got, tt.want)
 			}
 		})
@@ -120,7 +135,7 @@ func TestScopeRetentionToHostKeepsSingleHostLocations(t *testing.T) {
 		{BackupFile: "pve1-backup-20250101-100000.tar.zst"}, // manifest unreadable
 	}
 
-	owned, foreign := scopeRetentionToHost(backups, "pve1")
+	owned, foreign := scopeRetentionToHost(backups, hostOnly("pve1"))
 
 	if len(owned) != len(backups) {
 		t.Fatalf("kept %d of %d; a single-host location must not shrink: foreign=%+v", len(owned), len(backups), foreign)
@@ -139,7 +154,7 @@ func TestScopeRetentionToHostKeepsFQDNSingleHostLocations(t *testing.T) {
 		{BackupFile: "pve.home.arpa-backup-20250101-100000.tar.zst"}, // manifest unreadable
 	}
 
-	owned, foreign := scopeRetentionToHost(backups, "pve", "pve.home.arpa")
+	owned, foreign := scopeRetentionToHost(backups, hostOnly("pve", "pve.home.arpa"))
 
 	if len(owned) != len(backups) || len(foreign) != 0 {
 		t.Fatalf("kept %d of %d (foreign=%d); every archive here was written by this machine", len(owned), len(backups), len(foreign))
@@ -159,7 +174,7 @@ func TestScopeRetentionToHostLeavesSameShortNameForeignHostAlone(t *testing.T) {
 		{BackupFile: "pve.siteb.example-backup-20250102-100000.tar.zst", Hostname: "pve.siteb.example"},
 	}
 
-	owned, foreign := scopeRetentionToHost(backups, "pve")
+	owned, foreign := scopeRetentionToHost(backups, hostOnly("pve"))
 
 	if len(owned) != 1 || owned[0].Hostname != "pve" {
 		t.Fatalf("owned = %+v, want only this host's own archive", owned)
@@ -200,10 +215,10 @@ func TestRetentionSpellingMismatchesCountsLikelySelf(t *testing.T) {
 		nil,
 	}
 
-	if got := retentionSpellingMismatches(foreign, "pve"); got != 1 {
+	if got := retentionSpellingMismatches(foreign, hostOnly("pve")); got != 1 {
 		t.Fatalf("mismatches = %d, want 1", got)
 	}
-	if got := retentionSpellingMismatches(foreign, ""); got != 0 {
+	if got := retentionSpellingMismatches(foreign, hostOnly("")); got != 0 {
 		t.Fatalf("mismatches = %d, want 0 when this machine cannot name itself", got)
 	}
 }
@@ -237,7 +252,7 @@ func TestApplyRetentionHostScopeDeletesNothingWhenThisMachineCannotNameItself(t 
 	var buf bytes.Buffer
 	logger.SetOutput(&buf)
 
-	scoped, _ := applyRetentionHostScope("Local storage", "", nil, backups, logger)
+	scoped, _ := applyRetentionHostScope("Local storage", hostOnly(""), backups, logger)
 
 	if len(scoped) != 0 {
 		t.Errorf("scoped %d of %d entries; a machine that cannot name itself must delete nothing, not everything: on a shared location these are another machine's backups", len(scoped), len(backups))
@@ -331,6 +346,66 @@ func TestNewCloudStorageRecordsWrittenHostnames(t *testing.T) {
 	}
 	if len(strict.hostAliases) != 0 {
 		t.Fatalf("hostAliases = %q, want none when no written name is supplied", strict.hostAliases)
+	}
+}
+
+// TestStorageConstructorsRecordTheServerID is the wiring twin of the three
+// written-hostname pins above, for the second ownership signal. It is needed for the
+// same reason and it fails in the same silent way: cfg is already a constructor
+// parameter and cfg.ServerID is already populated by initializeServerIdentity long
+// before these run, so dropping the one assignment compiles, leaves every other test
+// in the tree green, and leaves the whole adoption mechanism inert on that backend.
+// The archives keep being written with their identity the entire time, so nothing on
+// disk looks wrong either.
+//
+// The malformed rows are not decoration. types.NormalizeServerID is the single seam
+// that turns anything that is not sixteen decimal digits into "cannot compare"; if a
+// backend stored the raw config value instead, two hosts that both carry a truncated
+// or placeholder value would compare equal to each other.
+func TestStorageConstructorsRecordTheServerID(t *testing.T) {
+	original := retentionHostname
+	retentionHostname = func() (string, error) { return "pve", nil }
+	defer func() { retentionHostname = original }()
+
+	const valid = "1234567890123456"
+	values := []struct {
+		name       string
+		configured string
+		want       string
+	}{
+		{name: "a well-formed identity is stored", configured: valid, want: valid},
+		{name: "surrounding space is not part of the identity", configured: "  " + valid + "\n", want: valid},
+		{name: "a host with no identity stores none", configured: "", want: ""},
+		{name: "a malformed identity is stored as absent, never compared", configured: "not-an-id", want: ""},
+		{name: "a truncated identity is stored as absent", configured: "123456789012345", want: ""},
+	}
+
+	for _, tt := range values {
+		t.Run(tt.name, func(t *testing.T) {
+			l, err := NewLocalStorage(&config.Config{BackupPath: t.TempDir(), ServerID: tt.configured}, newTestLogger(), "pve.home.arpa")
+			if err != nil {
+				t.Fatalf("NewLocalStorage: %v", err)
+			}
+			if l.serverID != tt.want {
+				t.Errorf("LocalStorage.serverID = %q, want %q", l.serverID, tt.want)
+			}
+
+			s, err := NewSecondaryStorage(&config.Config{SecondaryEnabled: true, SecondaryPath: t.TempDir(), ServerID: tt.configured}, newTestLogger(), "pve.home.arpa")
+			if err != nil {
+				t.Fatalf("NewSecondaryStorage: %v", err)
+			}
+			if s.serverID != tt.want {
+				t.Errorf("SecondaryStorage.serverID = %q, want %q", s.serverID, tt.want)
+			}
+
+			c, err := NewCloudStorage(&config.Config{CloudEnabled: true, CloudRemote: "gdrive", ServerID: tt.configured}, newTestLogger(), "pve.home.arpa")
+			if err != nil {
+				t.Fatalf("NewCloudStorage: %v", err)
+			}
+			if c.serverID != tt.want {
+				t.Errorf("CloudStorage.serverID = %q, want %q", c.serverID, tt.want)
+			}
+		})
 	}
 }
 

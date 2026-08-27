@@ -539,7 +539,9 @@ func (o *Orchestrator) copyLogToCloud(ctx context.Context, sourcePath, destPath 
 
 	// No write-side hostname: this client only uploads a log file to an explicit
 	// remote path and never runs retention, so it has no archives of its own to
-	// recognise.
+	// recognise. It does pick up this host's server identity from cfg, because the
+	// constructor reads it there, and that is inert for the same reason: the identity
+	// is only ever consulted by ApplyRetention, which this client never calls.
 	client, err := storage.NewCloudStorage(o.cfg, o.logger, "")
 	if err != nil {
 		return fmt.Errorf("failed to initialize cloud storage: %w", err)

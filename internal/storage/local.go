@@ -29,10 +29,17 @@ type LocalStorage struct {
 	// so usually the FQDN). Empty on a machine with no domain, which leaves
 	// retention as strict as it has always been.
 	hostAliases []string
-	basePath    string
-	fsDetector  *FilesystemDetector
-	fsInfo      *FilesystemInfo
-	lastRet     RetentionSummary
+	// serverID is this host's own server identity, read once from the config the
+	// constructor is handed. It is the ADDITIONAL ownership signal: it can confirm
+	// that an archive naming a spelling this host no longer resolves is this
+	// machine's own work, and it can do nothing else. Empty when this host does not
+	// know its identity, which leaves retention exactly as strict as it was before
+	// the field existed.
+	serverID   string
+	basePath   string
+	fsDetector *FilesystemDetector
+	fsInfo     *FilesystemInfo
+	lastRet    RetentionSummary
 	// scopeOwned and scopeValid sit beside lastRet rather than inside it because
 	// lastRet is assigned as a whole struct literal on four separate delete paths.
 	// A field added to that struct would be silently zeroed by any of them, which is
@@ -51,11 +58,14 @@ type LocalStorage struct {
 // machine's name stop being rotated.
 func NewLocalStorage(cfg *config.Config, logger *logging.Logger, writtenHostname string) (*LocalStorage, error) {
 	host := resolveRetentionHostname()
+	serverID := types.NormalizeServerID(cfg.ServerID)
+	logRetentionServerIdentity(logger, "Local storage", serverID)
 	return &LocalStorage{
 		config:      cfg,
 		logger:      logger,
 		hostname:    host,
 		hostAliases: retentionHostAliases(host, []string{writtenHostname}),
+		serverID:    serverID,
 		basePath:    cfg.BackupPath,
 		fsDetector:  NewFilesystemDetector(logger, WithIOTimeout(fsIoTimeout(cfg))),
 	}, nil
@@ -296,6 +306,7 @@ func (l *LocalStorage) loadMetadata(ctx context.Context, backupFile string) (*ty
 		Size:        manifest.ArchiveSize,
 		Checksum:    manifest.SHA256,
 		Hostname:    manifest.Hostname,
+		ServerID:    manifest.ServerID,
 		ProxmoxType: types.ProxmoxType(manifest.ProxmoxType),
 		Compression: types.CompressionType(manifest.CompressionType),
 		Version:     manifest.ScriptVersion,
@@ -334,6 +345,7 @@ func (l *LocalStorage) loadMetadataFromBundle(ctx context.Context, bundlePath st
 		Size:        manifest.ArchiveSize,
 		Checksum:    manifest.SHA256,
 		Hostname:    manifest.Hostname,
+		ServerID:    manifest.ServerID,
 		ProxmoxType: types.ProxmoxType(manifest.ProxmoxType),
 		Compression: types.CompressionType(manifest.CompressionType),
 		Version:     manifest.ScriptVersion,
@@ -509,7 +521,7 @@ func (l *LocalStorage) ApplyRetention(ctx context.Context, config RetentionConfi
 	// Drop anything this host does not own before counting or deleting: the
 	// "*-backup-*" glob that produced this list matches every hostname, and the list
 	// also carries other spellings of this host's own name.
-	backups, unmanaged := applyRetentionHostScope("Local storage", l.hostname, l.hostAliases, backups, l.logger)
+	backups, unmanaged := applyRetentionHostScope("Local storage", retentionIdentity{hostname: l.hostname, aliases: l.hostAliases, serverID: l.serverID}, backups, l.logger)
 
 	// This is the only frame that knows the number: the listing above matches every
 	// hostname, and GetStats reruns that same unscoped listing for its own count. The

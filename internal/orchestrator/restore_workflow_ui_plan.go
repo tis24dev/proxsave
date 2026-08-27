@@ -231,6 +231,14 @@ const unresolvedRunHostname = "unknown"
 // An empty runHost leaves the set at os.Hostname() alone, which is the strict rule
 // this check had before it learned about the run identity: a missing plumb warns
 // more, never less.
+//
+// It stays hostname-only, and deliberately does NOT learn the server identity that
+// retention's ownership rule gained. The two rules are not the same question. This one
+// asks whether the WebAuthn credential binding survived the restore, so a clone or a
+// restored container that inherited the source machine's identity is exactly the case
+// that MUST still warn. Retention's rule may widen on an identity because its failure
+// mode is a directory that grows; this one's failure mode is an admin locked out of
+// the web UI with no warning that it was coming.
 func accessControlHostIsOurs(backupHost, currentHost, runHost string) bool {
 	backup := types.NormalizeHostname(backupHost)
 	if backup == "" {
