@@ -6,10 +6,15 @@ import (
 	"go/parser"
 	"go/token"
 	gotypes "go/types"
+	"io"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/tis24dev/proxsave/internal/cli"
 	"github.com/tis24dev/proxsave/internal/config"
+	"github.com/tis24dev/proxsave/internal/environment"
 	"github.com/tis24dev/proxsave/internal/logging"
 	"github.com/tis24dev/proxsave/internal/types"
 )
@@ -124,10 +129,12 @@ func TestRunHostnameWiredIntoPinnedCallSites(t *testing.T) {
 // call-site guard above cannot see: opts.hostname only carries the run's name
 // because dispatchBackupMode copies rt.hostname into the literal.
 //
-// Deleting that one key is compile-clean AND invisible in the archives, because
-// runConfiguredBackup falls back to resolveHostname() when opts.hostname is empty
-// (backup_execution.go). The names on disk would stay correct while retention
-// silently lost its alias, which is discussion #292 all over again.
+// Deleting that one key is compile-clean and still invisible in the archives, because
+// runConfiguredBackup recomputes the name with resolveHostname() when opts.hostname is
+// empty (backup_execution.go). The names on disk stay correct while retention loses
+// its alias, which is discussion #292 all over again. That recompute is no longer
+// silent, runHostnameOrReport warns and the run cannot finish green, but a warning is
+// a report and not a pin: this test is what keeps the origin wired in CI.
 func TestBackupModeOptionsCarryTheRunHostname(t *testing.T) {
 	fn := findFuncDecl(t, "main_restore_decrypt.go", "dispatchBackupMode")
 
@@ -169,6 +176,25 @@ func TestBackupModeOptionsCarryTheRunHostname(t *testing.T) {
 // order is not the seam here, and an assertion over statement indexes would go red on
 // any unrelated insertion into a bootstrap function that keeps growing, which is a
 // false-positive generator rather than a pin.
+//
+// It also says nothing about REACHABILITY, and that gap is real rather than
+// theoretical: an early return inserted ABOVE the call leaves the call a top-level
+// statement, so this predicate stays green while every run taking that branch skips
+// it, and with such a return in place the entire repository suite passes. That is
+// covered behaviourally by TestBootstrapRuntimeNamesEveryRunItHandsBack, which calls
+// bootstrapRuntime and reads the name it hands back.
+//
+// Do NOT grow this into a reachability analyser. It was measured against a battery
+// of thirteen compile-clean mutations: the behavioural test catches eleven, a
+// hand-written reachability pass catches six, and the three it cannot reach at all
+// are an early exit inside a helper, a non-terminating branch, and the name being
+// unset one line AFTER the call. A static pass would also have to know that
+// bootstrapRuntime's two existing config-error bails are legitimate, since they
+// abort the process rather than produce a nameless run, which means hard-coding
+// which return result is the ok flag. Keep this predicate for what it is cheap and
+// certain about: it still catches a call moved into a defer, or wrapped in a branch
+// whose condition happens to hold under test and not in production, which is the one
+// class the behavioural test structurally cannot see.
 //
 // whatsnew_warn_test.go keeps its own local copy of this predicate on purpose rather
 // than calling this one: that guard ALSO pins statement order (maybeWarnWhatsnew has
@@ -314,5 +340,124 @@ func TestRunHostnameComesFromResolveHostname(t *testing.T) {
 	}
 	if assigned[0] != "resolveHostname()" {
 		t.Fatalf("main_runtime.go: initializeRunLogFile assigns rt.hostname = %s, want resolveHostname(). os.Hostname() reports the kernel short name while the writer stamps what \"hostname -f\" returns, so retention would scope every archive out as foreign and prune nothing (discussion #292)", assigned[0])
+	}
+}
+
+// TestBootstrapRuntimeNamesEveryRunItHandsBack is the behavioural half of the FIRST
+// row of TestRunHostnameWiredIntoPinnedCallSites, the only row whose seam is the
+// CALL ITSELF happening on every run rather than an argument's spelling.
+//
+// That row leans on callIsTopLevelStatement, which asks only whether the call is a
+// statement of bootstrapRuntime's body. It never looks at what runs BEFORE it, so an
+// early return placed above initializeRunLogFile(rt) leaves the call a top-level
+// statement and the structural guard green while every run taking that branch
+// finishes nameless. Measured, not assumed: with such a return inserted, the ENTIRE
+// repository suite passes. bootstrapRuntime already returns early twice above that
+// line, so a third guard is a plausible edit rather than a contrived one.
+//
+// This calls the function for real and reads what the call exists to produce, which
+// no AST check can see. toolVersion is deliberately empty: checkForUpdates returns
+// before any HTTP on an empty version, and whatsnew treats it as a dev build and
+// returns before any disk read, so one input choice keeps a live GitHub probe and a
+// real seen-flag read out of a unit test without stubbing either.
+func TestBootstrapRuntimeNamesEveryRunItHandsBack(t *testing.T) {
+	// initializeRunLogger installs the run's logger as the package DEFAULT logger,
+	// so save and restore it: same idiom as the test above.
+	prevDefault := logging.GetDefaultLogger()
+	t.Cleanup(func() { logging.SetDefaultLogger(prevDefault) })
+
+	modes := []struct {
+		name    string
+		restore bool
+	}{
+		{name: "backup mode", restore: false},
+		{name: "restore mode", restore: true},
+	}
+
+	for _, mode := range modes {
+		t.Run(mode.name, func(t *testing.T) {
+			// loadRunConfig republishes BASE_DIR and initializeRunLogFile publishes
+			// LOG_FILE; t.Setenv restores what this process had and forbids
+			// t.Parallel, which is correct here.
+			t.Setenv("BASE_DIR", "")
+			t.Setenv("LOG_FILE", "")
+
+			dir := t.TempDir()
+			configPath := filepath.Join(dir, "backup.env")
+			// Everything network- or filesystem-shaped is off, so bootstrapRuntime
+			// runs its config load and its logger setup and nothing else. DRY_RUN
+			// keeps the whatsnew seen-flag write off the disk as well.
+			configBody := strings.Join([]string{
+				`BACKUP_PATH="` + filepath.Join(dir, "backups") + `"`,
+				`LOG_PATH="` + filepath.Join(dir, "logs") + `"`,
+				`DRY_RUN="true"`,
+				`DEBUG_LEVEL="0"`,
+				`SECONDARY_ENABLED="false"`,
+				`CLOUD_ENABLED="false"`,
+				`SET_BACKUP_PERMISSIONS="false"`,
+				`PROFILING_ENABLED="false"`,
+				"",
+			}, "\n")
+			if err := os.WriteFile(configPath, []byte(configBody), 0o600); err != nil {
+				t.Fatalf("write config: %v", err)
+			}
+
+			rt, exitCode, ok := bootstrapRuntime(
+				context.Background(),
+				&cli.Args{ConfigPath: configPath, Restore: mode.restore, DryRun: true},
+				logging.NewBootstrapLogger(),
+				&environment.EnvironmentInfo{},
+				"",
+			)
+			t.Cleanup(func() {
+				if rt == nil {
+					return
+				}
+				if rt.sessionLogCloser != nil {
+					rt.sessionLogCloser()
+				}
+				if rt.logger != nil {
+					_ = rt.logger.CloseLogFile()
+				}
+			})
+
+			// Reported separately from the hostname assertion on purpose. A config
+			// load that this synthetic file no longer satisfies must not be read as
+			// a dropped hostname, or the next person weakens this pin for the wrong
+			// reason.
+			if !ok {
+				t.Fatalf("bootstrapRuntime refused the run in %s (exit code %d); this pin needs a run that gets past the config load, so fix the fixture rather than the guard", mode.name, exitCode)
+			}
+			if rt.hostname == "" {
+				t.Fatalf("bootstrapRuntime handed back a named-nothing runtime in %s: nothing on the path to initializeRunLogFile may return before it. Every storage backend then falls back to os.Hostname() for retention while the writer keeps stamping the FQDN, which is discussion #292 on local, secondary and cloud at once, and the access control host check collapses to os.Hostname()", mode.name)
+			}
+		})
+	}
+}
+
+// TestRunHostnameOrReportReportsADroppedPlumb pins the one place the run's identity
+// used to go wrong in quiet.
+//
+// Every other consumer already fails loudly. An empty written name reaches the three
+// storage constructors as "no alias", and applyRetentionHostScope then warns twice
+// per backend on any host whose archives carry an FQDN. Only the writer papered over
+// the drop by resolving the name a second time, which is what let the archives keep
+// looking right while retention stopped recognising them (discussion #292).
+func TestRunHostnameOrReportReportsADroppedPlumb(t *testing.T) {
+	logger := logging.New(types.LogLevelWarning, false)
+	logger.SetOutput(io.Discard)
+
+	if got := runHostnameOrReport(logger, "pve.home.arpa"); got != "pve.home.arpa" {
+		t.Fatalf("runHostnameOrReport returned %q, want the wired name passed through unchanged", got)
+	}
+	if n := logger.WarningCount(); n != 0 {
+		t.Fatalf("a correctly wired run logged %d warning(s); only a dropped plumb may say anything, or every ordinary machine finishes on a non-zero exit code", n)
+	}
+
+	if got := runHostnameOrReport(logger, ""); got == "" {
+		t.Fatal(`runHostnameOrReport("") returned an empty name: the archives would be written as "-backup-<ts>", which carries no host token, so no host could attribute them and no host would ever prune them`)
+	}
+	if n := logger.WarningCount(); n != 1 {
+		t.Fatalf("a dropped hostname plumb logged %d warning(s), want 1: without one the run stays green while every storage backend has lost the alias retention needs (discussion #292), which is how the defect reached a release", n)
 	}
 }

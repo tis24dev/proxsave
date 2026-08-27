@@ -195,9 +195,20 @@ func TestMaybeWarnWhatsnewDeliveredToEmailCategories(t *testing.T) {
 	}
 }
 
-// TestWhatsnewWarnWiredInBootstrap is a STRUCTURAL (AST) guard for the single wiring line. The
-// behavioral call lives inside bootstrapRuntime, which cannot be unit-invoked cheaply (it runs
-// a real GitHub update probe and a full config load). Parsing the AST -- not scanning text --
+// TestWhatsnewWarnWiredInBootstrap is a STRUCTURAL (AST) guard for the single wiring line.
+//
+// The claim that follows, that bootstrapRuntime cannot be unit-invoked cheaply, has since been
+// measured and is wrong: TestBootstrapRuntimeNamesEveryRunItHandsBack in
+// run_hostname_wiring_test.go calls it in under a tenth of a second, because an empty
+// toolVersion makes checkForUpdates return before any HTTP and makes whatsnew treat the build
+// as a dev build, which is also why that test cannot be extended to cover this wiring: it
+// deliberately switches the probe off. The paragraph is left standing as written so the next
+// person can see which assumption was retested and which was not.
+//
+// This guard shares the reachability blind spot documented on callIsTopLevelStatement: an early
+// return placed above maybeWarnWhatsnew leaves this green. A return above initializeRunLogFile
+// is caught behaviourally, since that call sits higher, but one placed BETWEEN the two is not
+// caught by anything. Parsing the AST -- not scanning text --
 // pins that maybeWarnWhatsnew is an UNCONDITIONAL top-level statement of bootstrapRuntime,
 // AFTER the checkForUpdates assignment. This catches what a substring scan cannot: a
 // commented-out call (not an AST node), a call wrapped in an if/branch (not a direct body
