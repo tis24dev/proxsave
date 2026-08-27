@@ -46,6 +46,12 @@ type LocalStorage struct {
 	// the exact class of failure this count exists to stop (discussion #292).
 	scopeOwned int
 	scopeValid bool
+	// lastRetCompleted is the answer to "has a pass run and finished", which no
+	// count in lastRet can give: a healthy pass with nothing to delete publishes the
+	// same zeros a backend that has never run reports. It sits out here for the same
+	// reason scopeValid does, and it is published from the same deferred closure, so
+	// it can never describe a different pass from the numbers beside it.
+	lastRetCompleted bool
 }
 
 // NewLocalStorage creates a new local storage instance.
@@ -497,9 +503,22 @@ func (l *LocalStorage) ApplyRetention(ctx context.Context, config RetentionConfi
 	// used to leave the previous pass's BackupsDeleted standing beside a freshly
 	// published scope: one struct, two different ages. Reset it here so every field
 	// LastRetentionSummary returns describes THIS pass.
-	l.lastRet = RetentionSummary{}
+	//
+	// The reset alone still leaves a reader unable to tell those zeros apart from a
+	// healthy pass that had nothing to delete, so the same closure publishes whether
+	// the pass finished, taken from the named err. A panic unwinds through it with
+	// err still nil and would publish "completed"; that is true of the scope
+	// publication beside it as well, and a panicking retention pass ends the run
+	// (capturePanicExit, cmd/proxsave/main_lifecycle.go) with nobody left to read a
+	// summary.
+	// Reset together: the flag describes this struct, so leaving it set here made
+	// the value report a COMPLETED pass beside counts this pass had just zeroed,
+	// which is the one-struct-two-ages state the reset exists to prevent.
+	l.lastRet, l.lastRetCompleted = RetentionSummary{}, false
 	owned, scoped := 0, false
-	defer func() { l.scopeOwned, l.scopeValid = owned-deleted, scoped }()
+	defer func() {
+		l.scopeOwned, l.scopeValid, l.lastRetCompleted = owned-deleted, scoped, err == nil
+	}()
 
 	if err := ctx.Err(); err != nil {
 		return 0, err
@@ -727,9 +746,12 @@ func (l *LocalStorage) applySimpleRetention(ctx context.Context, backups []*type
 }
 
 // LastRetentionSummary returns information about the latest retention run.
+// See RetentionReporter (storage.go) for what the value is worth and when:
+// PassCompleted is false until a pass has run and finished, and the counts beside
+// it are zero while it is.
 func (l *LocalStorage) LastRetentionSummary() RetentionSummary {
 	s := l.lastRet
-	s.ScopeValid, s.Owned = l.scopeValid, l.scopeOwned
+	s.ScopeValid, s.Owned, s.PassCompleted = l.scopeValid, l.scopeOwned, l.lastRetCompleted
 	return s
 }
 

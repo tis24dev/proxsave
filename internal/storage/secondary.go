@@ -42,6 +42,9 @@ type SecondaryStorage struct {
 	// struct is replaced wholesale on the delete paths.
 	scopeOwned int
 	scopeValid bool
+	// See the note on LocalStorage.lastRetCompleted: no count in lastRet can say
+	// whether a pass ran at all, so the answer is published beside them.
+	lastRetCompleted bool
 }
 
 // NewSecondaryStorage creates a new secondary storage instance.
@@ -595,9 +598,17 @@ func (s *SecondaryStorage) ApplyRetention(ctx context.Context, config RetentionC
 	// used to leave the previous pass's BackupsDeleted standing beside a freshly
 	// published scope: one struct, two different ages. Reset it here so every field
 	// LastRetentionSummary returns describes THIS pass.
-	s.lastRet = RetentionSummary{}
+	// The same closure publishes whether the pass finished, taken from the named
+	// err: see LocalStorage.ApplyRetention for why a reset alone cannot tell a
+	// bailed pass from a healthy one with nothing to delete.
+	// Reset together: the flag describes this struct, so leaving it set here made
+	// the value report a COMPLETED pass beside counts this pass had just zeroed,
+	// which is the one-struct-two-ages state the reset exists to prevent.
+	s.lastRet, s.lastRetCompleted = RetentionSummary{}, false
 	owned, scoped := 0, false
-	defer func() { s.scopeOwned, s.scopeValid = owned-deleted, scoped }()
+	defer func() {
+		s.scopeOwned, s.scopeValid, s.lastRetCompleted = owned-deleted, scoped, err == nil
+	}()
 
 	if err := ctx.Err(); err != nil {
 		return 0, err
@@ -849,9 +860,10 @@ func (s *SecondaryStorage) VerifyUpload(ctx context.Context, localFile, remoteFi
 }
 
 // LastRetentionSummary returns the latest retention summary.
+// See RetentionReporter (storage.go) for what the value is worth and when.
 func (s *SecondaryStorage) LastRetentionSummary() RetentionSummary {
 	summary := s.lastRet
-	summary.ScopeValid, summary.Owned = s.scopeValid, s.scopeOwned
+	summary.ScopeValid, summary.Owned, summary.PassCompleted = s.scopeValid, s.scopeOwned, s.lastRetCompleted
 	return summary
 }
 

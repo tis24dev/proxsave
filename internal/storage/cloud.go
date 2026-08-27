@@ -77,12 +77,15 @@ type CloudStorage struct {
 	lastRet        RetentionSummary
 	// See the note on LocalStorage.scopeOwned: kept outside lastRet because that
 	// struct is replaced wholesale on the delete paths.
-	scopeOwned     int
-	scopeValid     bool
-	remoteFilesMu  sync.RWMutex
-	remoteFiles    map[string]struct{}
-	logPathMu      sync.Mutex
-	logPathMissing bool
+	scopeOwned int
+	scopeValid bool
+	// See the note on LocalStorage.lastRetCompleted: no count in lastRet can say
+	// whether a pass ran at all, so the answer is published beside them.
+	lastRetCompleted bool
+	remoteFilesMu    sync.RWMutex
+	remoteFiles      map[string]struct{}
+	logPathMu        sync.Mutex
+	logPathMissing   bool
 	// hostname is this machine's name, resolved once at construction: retention
 	// only prunes backups this host owns.
 	hostname string
@@ -1879,9 +1882,17 @@ func (c *CloudStorage) ApplyRetention(ctx context.Context, config RetentionConfi
 	// used to leave the previous pass's BackupsDeleted standing beside a freshly
 	// published scope: one struct, two different ages. Reset it here so every field
 	// LastRetentionSummary returns describes THIS pass.
-	c.lastRet = RetentionSummary{}
+	// The same closure publishes whether the pass finished, taken from the named
+	// err: see LocalStorage.ApplyRetention for why a reset alone cannot tell a
+	// bailed pass from a healthy one with nothing to delete.
+	// Reset together: the flag describes this struct, so leaving it set here made
+	// the value report a COMPLETED pass beside counts this pass had just zeroed,
+	// which is the one-struct-two-ages state the reset exists to prevent.
+	c.lastRet, c.lastRetCompleted = RetentionSummary{}, false
 	owned, scoped := 0, false
-	defer func() { c.scopeOwned, c.scopeValid = owned-deleted, scoped }()
+	defer func() {
+		c.scopeOwned, c.scopeValid, c.lastRetCompleted = owned-deleted, scoped, err == nil
+	}()
 
 	if err := ctx.Err(); err != nil {
 		return 0, err
@@ -2078,9 +2089,10 @@ func (c *CloudStorage) deleteBatched(ctx context.Context, backups []*types.Backu
 }
 
 // LastRetentionSummary returns the latest retention summary.
+// See RetentionReporter (storage.go) for what the value is worth and when.
 func (c *CloudStorage) LastRetentionSummary() RetentionSummary {
 	s := c.lastRet
-	s.ScopeValid, s.Owned = c.scopeValid, c.scopeOwned
+	s.ScopeValid, s.Owned, s.PassCompleted = c.scopeValid, c.scopeOwned, c.lastRetCompleted
 	return s
 }
 
