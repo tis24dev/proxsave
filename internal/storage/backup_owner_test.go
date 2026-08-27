@@ -237,7 +237,7 @@ func TestApplyRetentionHostScopeDeletesNothingWhenThisMachineCannotNameItself(t 
 	var buf bytes.Buffer
 	logger.SetOutput(&buf)
 
-	scoped := applyRetentionHostScope("Local storage", "", nil, backups, logger)
+	scoped, _ := applyRetentionHostScope("Local storage", "", nil, backups, logger)
 
 	if len(scoped) != 0 {
 		t.Errorf("scoped %d of %d entries; a machine that cannot name itself must delete nothing, not everything: on a shared location these are another machine's backups", len(scoped), len(backups))

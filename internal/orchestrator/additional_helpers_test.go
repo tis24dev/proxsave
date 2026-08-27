@@ -226,8 +226,10 @@ func TestApplyStorageStatsGFSPrimary(t *testing.T) {
 	// described every host's archives while retention only moved this host's between
 	// tiers, and nothing ever rendered them: no template, no Telegram body, no
 	// webhook payload. Deleting them also removed a full extra listing per backend
-	// per run, an extra rclone lsl on cloud. The configured limits below are still
-	// pinned, because those do reach the operator.
+	// per run under GFS, an extra rclone lsl on cloud. The configured limits below
+	// are still pinned, but be clear about why: nothing renders them either, so this
+	// pins the plumbing rather than anything an operator sees. They are kept because
+	// they are cheap and already correct, not because they are displayed.
 	if stats.LocalGFSDaily != 1 || stats.LocalGFSWeekly != 1 || stats.LocalGFSMonthly != 1 || stats.LocalGFSYearly != 1 {
 		t.Fatalf("GFS limits not populated: %+v", stats)
 	}

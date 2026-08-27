@@ -1087,6 +1087,13 @@ func fetchBackupList(ctx context.Context, backend storage.Storage) []*types.Back
 	// assertion that used to sit here could never fail, while its !ok branch returned
 	// nil: any future rename or signature change on List would have degraded the
 	// startup summary to "no backups found" with a clean build and no log line.
+	//
+	// The nil check is what that assertion did as a side effect. No caller passes nil
+	// today, every one of the three bails on its constructor error first, but the
+	// assertion used to absorb a nil interface and this call would panic on one.
+	if backend == nil {
+		return nil
+	}
 	backups, err := backend.List(ctx)
 	if err != nil {
 		return nil

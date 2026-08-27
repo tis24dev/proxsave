@@ -200,7 +200,7 @@ func TestUnclaimedLegacyArchivesAreReportedWithoutRaisingTheRunSeverity(t *testi
 	}
 
 	logger := &levelRecordingLogger{}
-	scoped := applyRetentionHostScope("Local storage", "hostA", nil, backups, logger)
+	scoped, _ := applyRetentionHostScope("Local storage", "hostA", nil, backups, logger)
 
 	if len(scoped) != 1 || scoped[0] != backups[0] {
 		t.Fatalf("scoped %d entries (%+v), want exactly the archive this host can name", len(scoped), scoped)
@@ -227,7 +227,7 @@ func TestForeignHostArchivesStillRaiseTheRunSeverity(t *testing.T) {
 	}
 
 	logger := &levelRecordingLogger{}
-	scoped := applyRetentionHostScope("Local storage", "hostA", nil, backups, logger)
+	scoped, _ := applyRetentionHostScope("Local storage", "hostA", nil, backups, logger)
 
 	if len(scoped) != 1 || scoped[0] != backups[0] {
 		t.Fatalf("scoped %d entries (%+v), want exactly this host's own archive", len(scoped), scoped)

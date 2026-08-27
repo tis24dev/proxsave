@@ -298,17 +298,33 @@ type retentionScopeLogger interface {
 // went wrong on this run, and counting it would hold every affected run at exit 1
 // permanently. The line still names the case, the count and the one action, so the
 // operator is told rather than left with silence.
-func applyRetentionHostScope(location, hostname string, aliases []string, backups []*types.BackupMetadata, logger retentionScopeLogger) []*types.BackupMetadata {
+//
+// The second return is how many out-of-scope entries are PRESENT BUT MANAGED BY
+// NOBODY: the unattributable ones plus the spelling mismatches. It exists because a
+// count of owned archives alone is a false all-clear on the two populations that
+// grow without bound. An upgraded host whose directory holds twenty pre-Go
+// "proxmox-backup-*" archives beside two new ones owns two and stores twenty-two,
+// and no host will ever prune the twenty; a host that stopped resolving its own FQDN
+// owns none of its own work and stores all of it. Both are the growth failure
+// docs/TROUBLESHOOTING.md documents, and reporting only the owned count hides
+// exactly the case the operator needs to see (discussion #292).
+//
+// Genuinely foreign entries, those carrying another machine's name, are NOT counted:
+// they are that machine's to prune and its to report. That is the whole point of
+// scoping, and the split between the two is the short-label test
+// retentionSpellingMismatches already performs for its own warning line.
+func applyRetentionHostScope(location, hostname string, aliases []string, backups []*types.BackupMetadata, logger retentionScopeLogger) ([]*types.BackupMetadata, int) {
 	if strings.TrimSpace(hostname) == "" {
 		if logger != nil {
 			logger.Warning("%s: the local hostname is unknown; retention will not delete anything this run", location)
 		}
-		return nil
+		return nil, 0
 	}
 
 	owned, foreign := scopeRetentionToHost(backups, hostname, aliases...)
+	unattributable := retentionUnattributable(foreign)
+	mismatched := retentionSpellingMismatches(foreign, hostname)
 	if len(foreign) > 0 && logger != nil {
-		unattributable := retentionUnattributable(foreign)
 		if contended := len(foreign) - unattributable; contended > 0 {
 			logger.Warning("%s: retention ignored %d backup(s) that do not belong to %s", location, contended, hostname)
 		}
@@ -318,7 +334,7 @@ func applyRetentionHostScope(location, hostname string, aliases []string, backup
 		// the early return in retentionSpellingMismatches), so this can only ever
 		// count contended entries, and a non-zero count therefore means the line
 		// above it was printed.
-		if n := retentionSpellingMismatches(foreign, hostname); n > 0 {
+		if n := mismatched; n > 0 {
 			logger.Warning("%s: %d of those carry this host's short name under a different spelling. If they are this machine's own work, this host no longer resolves the name they were written under (usually what \"hostname -f\" returns, which is what the writer stamps) and they have stopped rotating; if they belong to a second machine with the same short name, this is expected and nothing needs doing. Retention leaves them alone either way rather than guess.", location, n)
 		}
 		if unattributable > 0 {
@@ -329,7 +345,7 @@ func applyRetentionHostScope(location, hostname string, aliases []string, backup
 			logger.Debug("%s: retention out of scope: %s (owner=%q, manifest hostname=%q)", location, b.BackupFile, backupOwnerHost(b), b.Hostname)
 		}
 	}
-	return owned
+	return owned, unattributable + mismatched
 }
 
 // manifestHostnameFromLocalArchive returns the owning host recorded in the manifest

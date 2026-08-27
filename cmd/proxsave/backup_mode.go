@@ -90,6 +90,14 @@ func runBackupMode(opts backupModeOptions) backupModeResult {
 }
 
 func runBackupModeSteps(opts backupModeOptions) backupModeResult {
+	// Repaired HERE, before initializeBackupStorage below, because that is the frame
+	// where an empty name does the damage: it hands "" to the three storage
+	// constructors, which lose the alias retention needs and scope this machine's own
+	// archives out (discussion #292). Doing it later, inside runConfiguredBackup,
+	// would only have reported a loss that had already happened. opts is a value, so
+	// the repair reaches every step below it.
+	opts.hostname = runHostnameOrReport(opts.logger, opts.hostname)
+
 	orch, earlyErrorState, exitCode := initializeBackupOrchestrator(opts)
 	if earlyErrorState != nil {
 		return finishBackupMode(orch, earlyErrorState, nil, exitCode)

@@ -584,6 +584,12 @@ func (s *SecondaryStorage) ApplyRetention(ctx context.Context, config RetentionC
 
 	// See LocalStorage.ApplyRetention for why this is declared before the first
 	// return and why an unnamed host leaves it invalid.
+
+	// lastRet is only assigned on the delete paths, so a pass that deletes nothing
+	// used to leave the previous pass's BackupsDeleted standing beside a freshly
+	// published scope: one struct, two different ages. Reset it here so every field
+	// LastRetentionSummary returns describes THIS pass.
+	s.lastRet = RetentionSummary{}
 	owned, scoped := 0, false
 	defer func() { s.scopeOwned, s.scopeValid = owned-deleted, scoped }()
 
@@ -612,12 +618,13 @@ func (s *SecondaryStorage) ApplyRetention(ctx context.Context, config RetentionC
 	// same directory, and the "*-backup-*" glob that produced this list matches every
 	// hostname.
 	s.resolveRetentionOwners(ctx, backups)
-	backups = applyRetentionHostScope("Secondary storage", s.hostname, s.hostAliases, backups, s.logger)
+	backups, unmanaged := applyRetentionHostScope("Secondary storage", s.hostname, s.hostAliases, backups, s.logger)
 
 	// The shared NAS mount is the documented secondary layout, so this is the
 	// location where the unscoped count was most often somebody else's
-	// (discussion #292).
-	owned, scoped = len(backups), strings.TrimSpace(s.hostname) != ""
+	// (discussion #292). See LocalStorage.ApplyRetention for why the archives no
+	// host manages are added back rather than dropped.
+	owned, scoped = len(backups)+unmanaged, strings.TrimSpace(s.hostname) != ""
 
 	if len(backups) == 0 {
 		s.logger.Debug("Secondary storage: no backups to apply retention")

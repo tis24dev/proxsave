@@ -275,4 +275,17 @@ func TestWhatsnewWarnWiredInBootstrap(t *testing.T) {
 	if idxWarn <= idxUpd {
 		t.Fatal("maybeWarnWhatsnew must be a direct statement AFTER checkForUpdates in bootstrapRuntime")
 	}
+
+	// Reachability, the half the index checks above are blind to. Being a top-level
+	// statement at a later index says nothing about whether control gets there: a
+	// return inserted anywhere above this call, including in the window between
+	// initializeRunLogFile and here, leaves everything above green while the call is
+	// skipped. Shares callIsSkippedBeforeItRuns with the hostname guard in
+	// run_hostname_wiring_test.go rather than growing a second copy, because the
+	// question is identical and only the callee differs.
+	if reason := callIsSkippedBeforeItRuns(fn, "maybeWarnWhatsnew"); reason != "" {
+		t.Fatalf("bootstrapRuntime can finish a successful run without reaching maybeWarnWhatsnew: %s. "+
+			"NOTF-01 requires the nudge on every non-interactive run, and the same skipped span also drops "+
+			"applyRunPermissions and initializeRunProfiling", reason)
+	}
 }

@@ -480,6 +480,12 @@ func (l *LocalStorage) ApplyRetention(ctx context.Context, config RetentionConfi
 	// error bails above the scope call, which leave it invalid and let the reporter
 	// fall back to the unscoped total. The values are filled in once the listing has
 	// been scoped, a few lines down.
+
+	// lastRet is only assigned on the delete paths, so a pass that deletes nothing
+	// used to leave the previous pass's BackupsDeleted standing beside a freshly
+	// published scope: one struct, two different ages. Reset it here so every field
+	// LastRetentionSummary returns describes THIS pass.
+	l.lastRet = RetentionSummary{}
 	owned, scoped := 0, false
 	defer func() { l.scopeOwned, l.scopeValid = owned-deleted, scoped }()
 
@@ -503,17 +509,24 @@ func (l *LocalStorage) ApplyRetention(ctx context.Context, config RetentionConfi
 	// Drop anything this host does not own before counting or deleting: the
 	// "*-backup-*" glob that produced this list matches every hostname, and the list
 	// also carries other spellings of this host's own name.
-	backups = applyRetentionHostScope("Local storage", l.hostname, l.hostAliases, backups, l.logger)
+	backups, unmanaged := applyRetentionHostScope("Local storage", l.hostname, l.hostAliases, backups, l.logger)
 
 	// This is the only frame that knows the number: the listing above matches every
 	// hostname, and GetStats reruns that same unscoped listing for its own count. The
 	// steady state, "already within the limit", returns early a few lines down and
 	// used to record nothing at all, so the healthy run was exactly the one where the
 	// notification fell back to counting every host's archives (discussion #292).
+	//
+	// unmanaged is added, not discarded. Those archives are on this disk and no host
+	// will ever prune them, so leaving them out reports an all-clear on a directory
+	// that is growing: an upgraded host with twenty pre-Go archives beside two new
+	// ones would read "2/7" while storing twenty-two. Archives belonging to a named
+	// other machine are excluded, which is what scoping is for.
+	//
 	// Left invalid when the host cannot name itself: applyRetentionHostScope returns
 	// nil there and warns, so publishing 0 would print "0/7" beside a directory
 	// holding forty archives, which is a worse lie than the one being fixed.
-	owned, scoped = len(backups), strings.TrimSpace(l.hostname) != ""
+	owned, scoped = len(backups)+unmanaged, strings.TrimSpace(l.hostname) != ""
 
 	if len(backups) == 0 {
 		l.logger.Debug("Local storage: no backups to apply retention")

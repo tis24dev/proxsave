@@ -187,3 +187,146 @@ func TestRetentionPublishesNoScopeWhenTheListingFails(t *testing.T) {
 		t.Fatalf("a pass that bailed before scoping left a scope of %d standing; a stale count reported as current is the failure this publication exists to avoid", summary.Owned)
 	}
 }
+
+// seedNamed lays out one archive with an optional manifest naming its writer.
+func seedNamed(t *testing.T, dir, name string, when time.Time, manifestHost string) {
+	t.Helper()
+	p := filepath.Join(dir, name)
+	if err := os.WriteFile(p, []byte("archive"), 0o600); err != nil {
+		t.Fatalf("seed %s: %v", name, err)
+	}
+	if err := os.WriteFile(p+".sha256", []byte("h  archive\n"), 0o600); err != nil {
+		t.Fatalf("seed sidecar for %s: %v", name, err)
+	}
+	if manifestHost != "" {
+		manifest := fmt.Sprintf(`{"hostname":%q,"created_at":%q}`, manifestHost, when.Format(time.RFC3339))
+		if err := os.WriteFile(p+".metadata", []byte(manifest), 0o600); err != nil {
+			t.Fatalf("seed manifest for %s: %v", name, err)
+		}
+	}
+	if err := os.Chtimes(p, when, when); err != nil {
+		t.Fatalf("chtimes %s: %v", name, err)
+	}
+}
+
+// TestReportedCountCoversArchivesNoHostManages is the regression pin for the whole
+// point of the second return of applyRetentionHostScope.
+//
+// A count of archives retention will actually prune is a FALSE ALL-CLEAR on the two
+// populations that grow without bound, and both are documented failure modes:
+// docs/TROUBLESHOOTING.md cause 2 (this machine's own work written under a name it
+// stopped resolving) and cause 3 (pre-Go archives nothing can attribute). Neither
+// will ever be pruned by anyone, so if this number leaves them out, the one figure
+// an operator watches says "within the limit" while the directory fills.
+//
+// Archives carrying a DIFFERENT machine's name are excluded, and that exclusion is
+// the fix this file exists for. The two rules pull in opposite directions on
+// purpose, and the four rows below are the four ways they interact.
+func TestReportedCountCoversArchivesNoHostManages(t *testing.T) {
+	day := func(n int) time.Time { return time.Date(2025, 1, n, 10, 0, 0, 0, time.UTC) }
+
+	cases := []struct {
+		name     string
+		resolves string
+		written  string
+		seeds    []struct {
+			file     string
+			manifest string
+		}
+		wantReported int
+		wantOnDisk   int
+		why          string
+	}{
+		{
+			name: "pre-Go archives nobody can attribute still count",
+			// The whole directory predates the Go rewrite. Nothing names a writer, so
+			// no host claims these and no host ever deletes them.
+			resolves: "pve", written: "pve",
+			seeds: []struct{ file, manifest string }{
+				{"proxmox-backup-20250101-100000.tar.zst", ""},
+				{"proxmox-backup-20250102-100000.tar.zst", ""},
+				{"proxmox-backup-20250103-100000.tar.zst", ""},
+			},
+			wantReported: 3, wantOnDisk: 3,
+			why: "reporting 0 here tells an operator holding three restorable archives that the location is empty",
+		},
+		{
+			name: "the ordinary upgrade: legacy backlog beside new archives",
+			// The common shape after upgrading from the Bash version, and NOT a shared
+			// location: one machine, its own private directory.
+			resolves: "pve", written: "pve",
+			seeds: []struct{ file, manifest string }{
+				{"proxmox-backup-20250101-100000.tar.zst", ""},
+				{"proxmox-backup-20250102-100000.tar.zst", ""},
+				{"pve-backup-20250103-100000.tar.zst", "pve"},
+			},
+			wantReported: 3, wantOnDisk: 3,
+			why: "reporting 1 of 3 says 'within the limit' while the two legacy archives grow for ever",
+		},
+		{
+			name: "this host's own work under a spelling it no longer resolves",
+			// docs/TROUBLESHOOTING.md cause 2, which is discussion #292 itself. The
+			// writer stamped the FQDN; this run resolves only the short name, so the
+			// archives file as contended and retention leaves them alone.
+			resolves: "pve", written: "pve",
+			seeds: []struct{ file, manifest string }{
+				{"pve.home.arpa-backup-20250101-100000.tar.zst", "pve.home.arpa"},
+				{"pve.home.arpa-backup-20250102-100000.tar.zst", "pve.home.arpa"},
+			},
+			wantReported: 2, wantOnDisk: 2,
+			why: "these are this machine's own archives and they have stopped rotating; hiding them removes the only signal that says so",
+		},
+		{
+			name: "a second machine's archives are not this host's to report",
+			// The case the scoping was introduced for. These belong to a named other
+			// host, which prunes them and reports them itself.
+			resolves: "pve", written: "pve",
+			seeds: []struct{ file, manifest string }{
+				{"pve-backup-20250103-100000.tar.zst", "pve"},
+				{"nas.siteb.example-backup-20250101-100000.tar.zst", "nas.siteb.example"},
+				{"nas.siteb.example-backup-20250102-100000.tar.zst", "nas.siteb.example"},
+			},
+			wantReported: 1, wantOnDisk: 3,
+			why: "counting the other machine's two archives against this host's limit is the 40/7 the fix removed",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			original := retentionHostname
+			retentionHostname = func() (string, error) { return tc.resolves, nil }
+			defer func() { retentionHostname = original }()
+
+			dir := t.TempDir()
+			for i, s := range tc.seeds {
+				seedNamed(t, dir, s.file, day(i+1), s.manifest)
+			}
+
+			l, err := NewLocalStorage(&config.Config{BackupPath: dir}, newTestLogger(), tc.written)
+			if err != nil {
+				t.Fatalf("NewLocalStorage: %v", err)
+			}
+			// A limit above the fixture size, so nothing is deleted and the number
+			// under test is the one the notification renders on a steady run.
+			if _, err := l.ApplyRetention(context.Background(), RetentionConfig{Policy: "simple", MaxBackups: 10}); err != nil {
+				t.Fatalf("ApplyRetention: %v", err)
+			}
+
+			summary := l.LastRetentionSummary()
+			if !summary.ScopeValid {
+				t.Fatal("no ownership scope published, so the reporter falls back to the unscoped listing")
+			}
+			if summary.Owned != tc.wantReported {
+				t.Fatalf("reported %d, want %d: %s", summary.Owned, tc.wantReported, tc.why)
+			}
+
+			stats, err := l.GetStats(context.Background())
+			if err != nil {
+				t.Fatalf("GetStats: %v", err)
+			}
+			if stats.TotalBackups != tc.wantOnDisk {
+				t.Fatalf("GetStats().TotalBackups = %d, want %d: that figure sits beside the free-space numbers and must keep describing the whole location", stats.TotalBackups, tc.wantOnDisk)
+			}
+		})
+	}
+}

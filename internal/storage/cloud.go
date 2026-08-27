@@ -1866,6 +1866,12 @@ func (c *CloudStorage) ApplyRetention(ctx context.Context, config RetentionConfi
 
 	// See LocalStorage.ApplyRetention for why this is declared before the first
 	// return and why an unnamed host leaves it invalid.
+
+	// lastRet is only assigned on the delete paths, so a pass that deletes nothing
+	// used to leave the previous pass's BackupsDeleted standing beside a freshly
+	// published scope: one struct, two different ages. Reset it here so every field
+	// LastRetentionSummary returns describes THIS pass.
+	c.lastRet = RetentionSummary{}
 	owned, scoped := 0, false
 	defer func() { c.scopeOwned, c.scopeValid = owned-deleted, scoped }()
 
@@ -1895,13 +1901,14 @@ func (c *CloudStorage) ApplyRetention(ctx context.Context, config RetentionConfi
 	// and drop everything this host does not own, BEFORE anything is counted toward
 	// the keep limit or selected for deletion.
 	c.resolveRetentionOwners(ctx, backups)
-	backups = applyRetentionHostScope("Cloud storage", c.hostname, c.hostAliases, backups, c.logger)
+	backups, unmanaged := applyRetentionHostScope("Cloud storage", c.hostname, c.hostAliases, backups, c.logger)
 
 	// Taken here rather than from a second listing: the attribution above costs one
 	// rclone cat per archive, and cloud_retention_owner.go records that List stays
 	// deliberately cheap for exactly that reason. Recomputing this count elsewhere
-	// would mean paying it again.
-	owned, scoped = len(backups), strings.TrimSpace(c.hostname) != ""
+	// would mean paying it again. See LocalStorage.ApplyRetention for why the
+	// archives no host manages are added back rather than dropped.
+	owned, scoped = len(backups)+unmanaged, strings.TrimSpace(c.hostname) != ""
 
 	if len(backups) == 0 {
 		c.logger.Debug("Cloud storage: no backups to apply retention")

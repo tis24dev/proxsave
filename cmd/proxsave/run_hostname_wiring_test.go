@@ -117,9 +117,19 @@ func TestRunHostnameWiredIntoPinnedCallSites(t *testing.T) {
 				t.Fatalf("%s: %s calls %s with arg %d = %q, want %q. Dropping it means %s (discussion #292)",
 					site.file, site.enclosing, site.callee, site.argIndex, gotArg, site.wantArg, site.consequence)
 			}
-			if site.unconditional && !callIsTopLevelStatement(fn, site.callee) {
-				t.Fatalf("%s: %s calls %s, but not as an unconditional top-level statement: it is wrapped in a branch, a loop, a defer or a closure, so some runs skip it, and then %s (discussion #292)",
-					site.file, site.enclosing, site.callee, site.consequence)
+			if site.unconditional {
+				if !callIsTopLevelStatement(fn, site.callee) {
+					t.Fatalf("%s: %s calls %s, but not as an unconditional top-level statement: it is wrapped in a branch, a loop, a defer or a closure, so some runs skip it, and then %s (discussion #292)",
+						site.file, site.enclosing, site.callee, site.consequence)
+				}
+				if reason := callIsSkippedBeforeItRuns(fn, site.callee); reason != "" {
+					t.Fatalf("%s: %s can finish a successful run without reaching %s: %s. Then %s (discussion #292)",
+						site.file, site.enclosing, site.callee, reason, site.consequence)
+				}
+				if assignsField(fn, "rt", "hostname") {
+					t.Fatalf("%s: %s assigns rt.hostname itself. %s is where the run's name is set, and a second writer can blank it after the call, which every check above this one is blind to (discussion #292)",
+						site.file, site.enclosing, site.callee)
+				}
 			}
 		})
 	}
@@ -177,24 +187,13 @@ func TestBackupModeOptionsCarryTheRunHostname(t *testing.T) {
 // any unrelated insertion into a bootstrap function that keeps growing, which is a
 // false-positive generator rather than a pin.
 //
-// It also says nothing about REACHABILITY, and that gap is real rather than
-// theoretical: an early return inserted ABOVE the call leaves the call a top-level
-// statement, so this predicate stays green while every run taking that branch skips
-// it, and with such a return in place the entire repository suite passes. That is
-// covered behaviourally by TestBootstrapRuntimeNamesEveryRunItHandsBack, which calls
-// bootstrapRuntime and reads the name it hands back.
+// It says nothing about REACHABILITY either. callIsSkippedBeforeItRuns is the other
+// half, and the two are used together at the one call site that sets unconditional.
 //
-// Do NOT grow this into a reachability analyser. It was measured against a battery
-// of thirteen compile-clean mutations: the behavioural test catches eleven, a
-// hand-written reachability pass catches six, and the three it cannot reach at all
-// are an early exit inside a helper, a non-terminating branch, and the name being
-// unset one line AFTER the call. A static pass would also have to know that
-// bootstrapRuntime's two existing config-error bails are legitimate, since they
-// abort the process rather than produce a nameless run, which means hard-coding
-// which return result is the ok flag. Keep this predicate for what it is cheap and
-// certain about: it still catches a call moved into a defer, or wrapped in a branch
-// whose condition happens to hold under test and not in production, which is the one
-// class the behavioural test structurally cannot see.
+// This predicate still earns its place on its own: it is the only thing that catches
+// a call moved into a defer, or wrapped in a branch whose condition happens to hold
+// in a test fixture and not in production. A behavioural test cannot see either,
+// because it runs one configuration and that configuration decides the branch.
 //
 // whatsnew_warn_test.go keeps its own local copy of this predicate on purpose rather
 // than calling this one: that guard ALSO pins statement order (maybeWarnWhatsnew has
@@ -216,6 +215,133 @@ func callIsTopLevelStatement(fn *ast.FuncDecl, callee string) bool {
 		}
 	}
 	return false
+}
+
+// callIsSkippedBeforeItRuns reports, as a human reason, why fn can finish a
+// SUCCESSFUL run without ever reaching callee. Empty means it cannot.
+//
+// callIsTopLevelStatement above asks only whether the call is a statement of the
+// body. It never looks at what precedes it, and that gap is not theoretical: with
+// "if !rt.dryRun { return rt, types.ExitSuccess.Int(), true }" inserted above
+// initializeRunLogFile(rt), every real non-dry-run backup finishes nameless and the
+// whole repository suite stays green, including the behavioural test, whose fixture
+// happens to run with dryRun set. A fixture can only ever cover the conditions it
+// sets, so the next such guard will key on whatever it does not.
+//
+// A return whose FIRST result is nil is NOT a violation. bootstrapRuntime's two
+// config-error bails are "return nil, exitCode, false": they hand back no runtime at
+// all, the caller stops, and no backup runs, so no archive is ever written unnamed.
+// Keying on the first result being nil needs no knowledge of which result is the ok
+// flag, and it stays true of any constructor-shaped function that returns a pointer
+// first.
+//
+// It does NOT descend into function literals: a return inside a closure returns from
+// the closure. It does NOT treat os.Exit, log.Fatal or panic as violations either,
+// since those end the run rather than produce a nameless one, and a helper that
+// exits is invisible in this file's AST, so pretending to cover it would be a
+// promise this check cannot keep. That last case is the honest residual hole.
+func callIsSkippedBeforeItRuns(fn *ast.FuncDecl, callee string) string {
+	idx := -1
+	for i, stmt := range fn.Body.List {
+		if directCallName(stmt) == callee {
+			idx = i
+			break
+		}
+	}
+	if idx < 0 {
+		return ""
+	}
+	for _, stmt := range fn.Body.List[:idx] {
+		if reason := earlyExitReason(stmt); reason != "" {
+			return reason
+		}
+	}
+	return ""
+}
+
+// directCallName returns the callee text when stmt is a bare call statement or an
+// assignment whose single right-hand side is that call, and "" otherwise. Same shape
+// as callIsTopLevelStatement, kept apart so the reachability half reads on its own.
+func directCallName(stmt ast.Stmt) string {
+	var call *ast.CallExpr
+	switch s := stmt.(type) {
+	case *ast.ExprStmt:
+		call, _ = s.X.(*ast.CallExpr)
+	case *ast.AssignStmt:
+		if len(s.Rhs) == 1 {
+			call, _ = s.Rhs[0].(*ast.CallExpr)
+		}
+	}
+	if call == nil {
+		return ""
+	}
+	return gotypes.ExprString(call.Fun)
+}
+
+// earlyExitReason reports why stmt can leave the enclosing function with a usable
+// result, at any nesting depth. A goto is rejected outright because it can jump past
+// the pinned call and this check does not follow labels.
+func earlyExitReason(stmt ast.Stmt) string {
+	reason := ""
+	ast.Inspect(stmt, func(n ast.Node) bool {
+		if reason != "" {
+			return false
+		}
+		switch x := n.(type) {
+		case *ast.FuncLit:
+			return false
+		case *ast.BranchStmt:
+			if x.Tok == token.GOTO {
+				reason = "a goto above it can jump past the call"
+			}
+		case *ast.ReturnStmt:
+			if !returnHandsBackNothing(x) {
+				reason = "the return above it (" + returnText(x) + ") ends the run successfully without reaching the call"
+			}
+		}
+		return true
+	})
+	return reason
+}
+
+// returnHandsBackNothing reports whether ret gives the caller no runtime at all, in
+// which case the process stops and nothing is ever written under a missing name.
+func returnHandsBackNothing(ret *ast.ReturnStmt) bool {
+	if len(ret.Results) == 0 {
+		return false
+	}
+	ident, ok := ret.Results[0].(*ast.Ident)
+	return ok && ident.Name == "nil"
+}
+
+func returnText(ret *ast.ReturnStmt) string {
+	parts := make([]string, 0, len(ret.Results))
+	for _, r := range ret.Results {
+		parts = append(parts, gotypes.ExprString(r))
+	}
+	return "return " + strings.Join(parts, ", ")
+}
+
+// assignsField reports whether fn assigns recv.field anywhere in its body. Used to
+// forbid a SECOND writer of rt.hostname: unsetting the name one line after the
+// pinned call is the cheapest way to break this wiring, and every check that looks
+// above the call is blind to it by construction.
+func assignsField(fn *ast.FuncDecl, recv, field string) bool {
+	found := false
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		assign, ok := n.(*ast.AssignStmt)
+		if !ok {
+			return true
+		}
+		for _, lhs := range assign.Lhs {
+			if gotypes.ExprString(lhs) == recv+"."+field {
+				found = true
+				return false
+			}
+		}
+		return true
+	})
+	return found
 }
 
 // findFuncDecl parses one production file of this package and returns the named
@@ -347,64 +473,91 @@ func TestRunHostnameComesFromResolveHostname(t *testing.T) {
 // row of TestRunHostnameWiredIntoPinnedCallSites, the only row whose seam is the
 // CALL ITSELF happening on every run rather than an argument's spelling.
 //
-// That row leans on callIsTopLevelStatement, which asks only whether the call is a
-// statement of bootstrapRuntime's body. It never looks at what runs BEFORE it, so an
-// early return placed above initializeRunLogFile(rt) leaves the call a top-level
-// statement and the structural guard green while every run taking that branch
-// finishes nameless. Measured, not assumed: with such a return inserted, the ENTIRE
-// repository suite passes. bootstrapRuntime already returns early twice above that
-// line, so a third guard is a plausible edit rather than a contrived one.
+// It exists because the structural checks reason about the source and this runs the
+// function. What it can and cannot see is worth stating plainly, because the first
+// version of this test got it wrong: a behavioural test only ever exercises the
+// configuration its fixture sets, so a guard inserted above the pinned call is
+// caught only when that guard's condition happens to hold here. An earlier fixture
+// froze DRY_RUN on and every storage backend off, and "if !rt.dryRun { return }"
+// above initializeRunLogFile left the entire repository suite green while every real
+// backup finished nameless. The rows below therefore vary exactly the flags a real
+// early return would key on. callIsSkippedBeforeItRuns is the half that does not
+// depend on any fixture at all, and it is the primary guard; this one is the proof
+// that the wiring works when actually executed.
 //
-// This calls the function for real and reads what the call exists to produce, which
-// no AST check can see. toolVersion is deliberately empty: checkForUpdates returns
-// before any HTTP on an empty version, and whatsnew treats it as a dev build and
-// returns before any disk read, so one input choice keeps a live GitHub probe and a
-// real seen-flag read out of a unit test without stubbing either.
+// toolVersion is deliberately empty: checkForUpdates returns before any HTTP on an
+// empty version, and whatsnew treats it as a dev build and returns before any disk
+// read, so one input choice keeps a live GitHub probe and a real seen-flag read out
+// of a unit test without stubbing either.
 func TestBootstrapRuntimeNamesEveryRunItHandsBack(t *testing.T) {
 	// initializeRunLogger installs the run's logger as the package DEFAULT logger,
 	// so save and restore it: same idiom as the test above.
 	prevDefault := logging.GetDefaultLogger()
 	t.Cleanup(func() { logging.SetDefaultLogger(prevDefault) })
 
-	modes := []struct {
-		name    string
-		restore bool
+	cases := []struct {
+		name      string
+		restore   bool
+		dryRun    bool
+		secondary bool
 	}{
-		{name: "backup mode", restore: false},
-		{name: "restore mode", restore: true},
+		{name: "backup mode", restore: false, dryRun: true},
+		{name: "restore mode", restore: true, dryRun: true},
+		// Not a variation for its own sake. "if !rt.dryRun { return }" is the single
+		// most plausible early return anyone would insert above the pinned call, and
+		// the two rows above are blind to it by construction.
+		{name: "backup mode, not a dry run", restore: false, dryRun: false},
+		// Same argument for the flags that distinguish a real installation from this
+		// fixture: a guard keyed on any storage backend being enabled would otherwise
+		// pass every row.
+		{name: "backup mode with secondary storage enabled", restore: false, dryRun: true, secondary: true},
 	}
 
-	for _, mode := range modes {
-		t.Run(mode.name, func(t *testing.T) {
-			// loadRunConfig republishes BASE_DIR and initializeRunLogFile publishes
-			// LOG_FILE; t.Setenv restores what this process had and forbids
-			// t.Parallel, which is correct here.
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			// loadRunConfig republishes BASE_DIR and both log paths publish LOG_FILE;
+			// t.Setenv restores what this process had and forbids t.Parallel, which is
+			// correct here.
 			t.Setenv("BASE_DIR", "")
 			t.Setenv("LOG_FILE", "")
 
 			dir := t.TempDir()
 			configPath := filepath.Join(dir, "backup.env")
-			// Everything network- or filesystem-shaped is off, so bootstrapRuntime
-			// runs its config load and its logger setup and nothing else. DRY_RUN
-			// keeps the whatsnew seen-flag write off the disk as well.
-			configBody := strings.Join([]string{
+			// The notification flags are pinned OFF explicitly, not left to their
+			// defaults. validateRunConfig runs a network preflight when any of them is
+			// on, so a future change to a default would silently turn this into a test
+			// that dials 1.1.1.1.
+			lines := []string{
 				`BACKUP_PATH="` + filepath.Join(dir, "backups") + `"`,
 				`LOG_PATH="` + filepath.Join(dir, "logs") + `"`,
-				`DRY_RUN="true"`,
 				`DEBUG_LEVEL="0"`,
-				`SECONDARY_ENABLED="false"`,
 				`CLOUD_ENABLED="false"`,
+				`TELEGRAM_ENABLED="false"`,
+				`EMAIL_ENABLED="false"`,
+				`GOTIFY_ENABLED="false"`,
+				`WEBHOOK_ENABLED="false"`,
 				`SET_BACKUP_PERMISSIONS="false"`,
 				`PROFILING_ENABLED="false"`,
-				"",
-			}, "\n")
-			if err := os.WriteFile(configPath, []byte(configBody), 0o600); err != nil {
+			}
+			if tc.dryRun {
+				lines = append(lines, `DRY_RUN="true"`)
+			} else {
+				lines = append(lines, `DRY_RUN="false"`)
+			}
+			if tc.secondary {
+				lines = append(lines,
+					`SECONDARY_ENABLED="true"`,
+					`SECONDARY_PATH="`+filepath.Join(dir, "secondary")+`"`)
+			} else {
+				lines = append(lines, `SECONDARY_ENABLED="false"`)
+			}
+			if err := os.WriteFile(configPath, []byte(strings.Join(append(lines, ""), "\n")), 0o600); err != nil {
 				t.Fatalf("write config: %v", err)
 			}
 
 			rt, exitCode, ok := bootstrapRuntime(
 				context.Background(),
-				&cli.Args{ConfigPath: configPath, Restore: mode.restore, DryRun: true},
+				&cli.Args{ConfigPath: configPath, Restore: tc.restore, DryRun: tc.dryRun},
 				logging.NewBootstrapLogger(),
 				&environment.EnvironmentInfo{},
 				"",
@@ -419,17 +572,25 @@ func TestBootstrapRuntimeNamesEveryRunItHandsBack(t *testing.T) {
 				if rt.logger != nil {
 					_ = rt.logger.CloseLogFile()
 				}
+				// The restore row streams its live log into logging.sessionLogDir,
+				// which is a fixed path outside t.TempDir and is never cleaned up by
+				// anything. Closing the handle is not enough: without this the package
+				// leaves one file per run there for ever. The path is recovered from
+				// LOG_FILE, which initializeRestoreSessionLogger publishes.
+				if p := os.Getenv("LOG_FILE"); p != "" && !strings.HasPrefix(p, dir) {
+					_ = os.Remove(p)
+				}
 			})
 
 			// Reported separately from the hostname assertion on purpose. A config
-			// load that this synthetic file no longer satisfies must not be read as
-			// a dropped hostname, or the next person weakens this pin for the wrong
+			// load that this synthetic file no longer satisfies must not be read as a
+			// dropped hostname, or the next person weakens this pin for the wrong
 			// reason.
 			if !ok {
-				t.Fatalf("bootstrapRuntime refused the run in %s (exit code %d); this pin needs a run that gets past the config load, so fix the fixture rather than the guard", mode.name, exitCode)
+				t.Fatalf("bootstrapRuntime refused the run in %s (exit code %d); this pin needs a run that gets past the config load, so fix the fixture rather than the guard", tc.name, exitCode)
 			}
 			if rt.hostname == "" {
-				t.Fatalf("bootstrapRuntime handed back a named-nothing runtime in %s: nothing on the path to initializeRunLogFile may return before it. Every storage backend then falls back to os.Hostname() for retention while the writer keeps stamping the FQDN, which is discussion #292 on local, secondary and cloud at once, and the access control host check collapses to os.Hostname()", mode.name)
+				t.Fatalf("bootstrapRuntime handed back a named-nothing runtime in %s: nothing on the path to initializeRunLogFile may return before it. Every storage backend then falls back to os.Hostname() for retention while the writer keeps stamping the FQDN, which is discussion #292 on local, secondary and cloud at once, and the access control host check collapses to os.Hostname()", tc.name)
 			}
 		})
 	}
