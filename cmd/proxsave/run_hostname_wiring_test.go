@@ -24,6 +24,11 @@ type runHostnameCallSite struct {
 	// consequence names what a dropped argument actually costs at THIS call site,
 	// so a failure reads as a defect report rather than a style complaint.
 	consequence string
+	// unconditional additionally requires the call to be a top-level statement of
+	// the enclosing function, so wrapping it in a branch, a loop, a defer or a
+	// closure is rejected. Set only on rows where the seam is the CALL ITSELF
+	// happening on every run, not where an argument arrives.
+	unconditional bool
 }
 
 // TestRunHostnameWiredIntoPinnedCallSites is the wiring guard for discussion #292 on
@@ -45,16 +50,27 @@ type runHostnameCallSite struct {
 // within a run) and out of scope here, so do not read a green run as proof that
 // every consumer is wired.
 //
+// The FIRST row differs in kind from the other five and is listed first because it
+// is the head of the chain. They pin that an ARGUMENT arrives at a call; it pins that
+// the CALL HAPPENS AT ALL, because deleting bootstrapRuntime's call to
+// initializeRunLogFile is compile clean and leaves rt.hostname empty for the whole
+// run, which every one of the other five rows would still read as green. It
+// therefore also sets unconditional, the same property TestWhatsnewWarnWiredInBootstrap
+// already applies to a neighbouring call in the same function, for the same reason:
+// a call wrapped in a branch is a call some runs skip.
+//
 // If a legitimate refactor moves one of these calls, update the row to name the new
 // file, function or argument position. Do not delete a row: the argument still has
 // to arrive, and this is the only thing that checks it does.
 const (
 	retentionConsequence     = "retention then reads os.Hostname() only, so every archive written under the FQDN scopes out as foreign and nothing is ever pruned"
 	accessControlConsequence = "the access control host check then reads os.Hostname() only, so every same-host restore of an access control bundle warns about a hostname change that did not happen"
+	bootstrapConsequence     = "rt.hostname is never assigned at all, so every storage backend falls back to os.Hostname() for retention while the writer keeps stamping the FQDN (discussion #292 on local, secondary and cloud at once) and the access control host check collapses to os.Hostname()"
 )
 
 func TestRunHostnameWiredIntoPinnedCallSites(t *testing.T) {
 	sites := []runHostnameCallSite{
+		{file: "main_runtime.go", enclosing: "bootstrapRuntime", callee: "initializeRunLogFile", argIndex: 0, wantArg: "rt", consequence: bootstrapConsequence, unconditional: true},
 		{file: "backup_storage.go", enclosing: "initializePrimaryStorage", callee: "storage.NewLocalStorage", argIndex: 2, wantArg: "opts.hostname", consequence: retentionConsequence},
 		{file: "backup_storage.go", enclosing: "initializeSecondaryStorage", callee: "storage.NewSecondaryStorage", argIndex: 2, wantArg: "opts.hostname", consequence: retentionConsequence},
 		{file: "backup_storage.go", enclosing: "initializeCloudStorage", callee: "storage.NewCloudStorage", argIndex: 2, wantArg: "opts.hostname", consequence: retentionConsequence},
@@ -95,6 +111,10 @@ func TestRunHostnameWiredIntoPinnedCallSites(t *testing.T) {
 			if gotArg != site.wantArg {
 				t.Fatalf("%s: %s calls %s with arg %d = %q, want %q. Dropping it means %s (discussion #292)",
 					site.file, site.enclosing, site.callee, site.argIndex, gotArg, site.wantArg, site.consequence)
+			}
+			if site.unconditional && !callIsTopLevelStatement(fn, site.callee) {
+				t.Fatalf("%s: %s calls %s, but not as an unconditional top-level statement: it is wrapped in a branch, a loop, a defer or a closure, so some runs skip it, and then %s (discussion #292)",
+					site.file, site.enclosing, site.callee, site.consequence)
 			}
 		})
 	}
@@ -137,6 +157,39 @@ func TestBackupModeOptionsCarryTheRunHostname(t *testing.T) {
 	if gotValue != "rt.hostname" {
 		t.Fatalf("main_restore_decrypt.go: dispatchBackupMode sets hostname: %s, want rt.hostname (discussion #292)", gotValue)
 	}
+}
+
+// callIsTopLevelStatement reports whether fn's body contains a direct, unconditional
+// call to callee: a bare call statement, or an assignment whose single right-hand
+// side is that call. A call nested inside an if, a for, a defer or a closure is not a
+// statement of fn.Body.List, so it yields false, which is exactly how a
+// branch-wrapped call gets rejected.
+//
+// It deliberately says nothing about WHERE in the body the statement sits. Statement
+// order is not the seam here, and an assertion over statement indexes would go red on
+// any unrelated insertion into a bootstrap function that keeps growing, which is a
+// false-positive generator rather than a pin.
+//
+// whatsnew_warn_test.go keeps its own local copy of this predicate on purpose rather
+// than calling this one: that guard ALSO pins statement order (maybeWarnWhatsnew has
+// to run after checkForUpdates), which this one must not, and rewiring a green
+// existing pin to share a helper buys nothing while putting it at risk.
+func callIsTopLevelStatement(fn *ast.FuncDecl, callee string) bool {
+	for _, stmt := range fn.Body.List {
+		var call *ast.CallExpr
+		switch s := stmt.(type) {
+		case *ast.ExprStmt:
+			call, _ = s.X.(*ast.CallExpr)
+		case *ast.AssignStmt:
+			if len(s.Rhs) == 1 {
+				call, _ = s.Rhs[0].(*ast.CallExpr)
+			}
+		}
+		if call != nil && gotypes.ExprString(call.Fun) == callee {
+			return true
+		}
+	}
+	return false
 }
 
 // findFuncDecl parses one production file of this package and returns the named

@@ -218,6 +218,33 @@ func LoadManifest(manifestPath string) (*Manifest, error) {
 	)
 }
 
+// HostnameFromManifestBytes returns the host a manifest payload names, reading both
+// forms the two pipelines produced: the JSON manifest the Go pipeline writes, and the
+// KEY=VALUE sidecar the pre-Go pipeline wrote. JSON wins whenever it parses, which is
+// the same key precedence LoadManifest applies.
+//
+// It is deliberately NOT LoadManifest itself. LoadManifest's legacy branch is gated
+// on a path ending in ".metadata" and on a stat-able archive sitting next to it, and
+// a caller holding only the payload bytes (the cloud path reads its manifests off the
+// remote with "rclone cat") has neither.
+//
+// "" means the payload names no host. Every caller must treat that as "cannot
+// attribute" and never as a match: on a shared location, claiming an archive whose
+// writer nothing can name means deleting another machine's backup.
+func HostnameFromManifestBytes(data []byte) string {
+	var manifest Manifest
+	if err := json.Unmarshal(data, &manifest); err == nil {
+		return strings.TrimSpace(manifest.Hostname)
+	}
+
+	var legacy Manifest
+	scanner := bufio.NewScanner(strings.NewReader(string(data)))
+	if err := parseLegacyMetadata(scanner, &legacy); err != nil {
+		return ""
+	}
+	return strings.TrimSpace(legacy.Hostname)
+}
+
 // loadLegacyManifest attempts to parse legacy Bash metadata files (KEY=VALUE format).
 func loadLegacyManifest(manifestPath string, data []byte) (*Manifest, error) {
 	// Legacy metadata exists only as sidecar files (*.tar.*.metadata)

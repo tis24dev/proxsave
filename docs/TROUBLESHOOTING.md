@@ -553,12 +553,13 @@ COMPRESSION_LEVEL=3
 
 #### Warning: `retention ignored N backup(s) that do not belong to <host>`
 
-**Symptoms**: the run logs the line above, prefixed by the location it applies to (`Local storage:`, `Secondary storage:` or `Cloud storage:`), often followed by `N of those carry this host's short name under a different spelling`. The location keeps growing past `MAX_LOCAL_BACKUPS` / `MAX_SECONDARY_BACKUPS` / `MAX_CLOUD_BACKUPS`, and the run prunes nothing.
+**Symptoms**: the run logs the line above, prefixed by the location it applies to (`Local storage:`, `Secondary storage:` or `Cloud storage:`), often followed by `N of those carry this host's short name under a different spelling`. The location keeps growing past `MAX_LOCAL_BACKUPS` / `MAX_SECONDARY_BACKUPS` / `MAX_CLOUD_BACKUPS`, and the run prunes nothing. A separate INFO line, `retention left N backup(s) alone because nothing names the host that wrote them`, is a different case and is covered as cause 3 below.
 
-**Cause**: retention only prunes what this host owns. The owner of an archive is the `hostname` recorded in its manifest, or the host token its filename carries (`<host>-backup-<timestamp>`) when no manifest can be read. A host answers to the name the kernel reports (`hostname`) and to the name it stamps into what it writes (usually the FQDN from `hostname -f`), and to nothing else. There are two reasons an archive lands outside that set:
+**Cause**: retention only prunes what this host owns. The owner of an archive is the `hostname` recorded in its manifest, or the host token its filename carries (`<host>-backup-<timestamp>`) when no manifest can be read. A host answers to the name the kernel reports (`hostname`) and to the name it stamps into what it writes (usually the FQDN from `hostname -f`), and to nothing else. There are three reasons an archive lands outside that set:
 
 1. **It belongs to another machine** sharing the directory or the remote prefix. The filter is doing its job and nothing needs doing.
 2. **It is this machine's own work, written under a name it no longer resolves.** The location then holds both spellings: the short-named archives rotate, the FQDN-named ones do not. Retention refuses to claim them because from here they are indistinguishable from a second machine with the same short name, and claiming them would delete that machine's backups.
+3. **Nothing names the machine that wrote it.** Pre-Go archives are called `proxmox-backup-<timestamp>`, and that leading label is the product name, not a host, so the filename carries no host token. If the `.metadata` beside such an archive is missing, unreadable, or carries no `HOSTNAME=` line, nothing anywhere can say which machine wrote it, so retention leaves it alone on every host: on a shared directory or remote prefix, claiming it means deleting another machine's backup. This case is reported at INFO, not as a warning, so it does not by itself change the run's exit code: it is a fixed backlog you clear by hand, not something that went wrong on the run. One sub-case is already noisy for a separate, older reason: an archive with no `.metadata` beside it at all makes the local listing log `Missing .metadata for X - using filename metadata` at WARNING on every pass, which promotes the run to exit 1. That was already true before retention stopped claiming these archives; what changes is that it now repeats until you remove them. A pre-Go archive whose `.metadata` DOES carry a `HOSTNAME=` line is attributed normally and keeps rotating on the machine it names.
 
 **Tell the two apart**:
 ```bash
@@ -607,6 +608,26 @@ Never pipe the listing straight into `rm`: the same directory may hold another m
 > **Renaming the archives does not get them rotating again**, whichever way it is done. Rename the archive alone and its `.sha256` is left behind, so the run stops treating the archive as complete and reports it as `ignored by retention (no manifest/checksum)`. Rename the sidecars with it and the `.metadata` travels too, and the `hostname` recorded inside it is what attribution reads, so the archive is still attributed to the old spelling. A `.bundle.tar` carries that manifest inside the archive, where a rename cannot reach it at all. Restore the name resolution, or delete the archives.
 
 **Case 1: give every host its own location**. Point each host at its own directory (`BACKUP_PATH`, `SECONDARY_PATH`) or its own `CLOUD_REMOTE_PATH` prefix. See the "Give every host its own prefix" note in [CLOUD_STORAGE.md](CLOUD_STORAGE.md) for the cloud side.
+
+**Case 3: remove the pre-Go archives when you no longer need them**. Nothing will ever rotate them, so the only way the location comes back down is by hand.
+```bash
+# Name the files the run left alone. The per-file lines are DEBUG, so they are only
+# in the log of a run made at that level: set LOG_LEVEL=debug in backup.env, or run
+# one backup with --log-level debug, then read the newest log.
+grep "retention out of scope" "$(ls -t /opt/proxsave/log/backup-*.log | head -1)"
+
+# Check first whether the sidecar names a host. If it prints a name, that archive
+# still rotates on THAT machine and you should leave it where it is.
+grep -H "^HOSTNAME=" /opt/proxsave/backup/proxmox-backup-*.tar.*.metadata
+
+# List, read the list, then delete the ones you chose by name, with a trailing
+# glob so the .sha256 and .metadata sidecars go with the archive
+ls -1 /opt/proxsave/backup/proxmox-backup-*.tar.*
+rm -f /opt/proxsave/backup/proxmox-backup-20240101-000000.tar.gz*
+```
+Never pipe the listing straight into `rm`: the same directory may hold another machine's archives.
+
+> A host whose kernel hostname is literally `proxmox` writes archives with the same name shape (`proxmox-backup-<timestamp>`), so on that one host these are current backups, not a pre-Go backlog. Check the `HOSTNAME=` line before deleting anything there.
 
 **Verification**:
 ```bash

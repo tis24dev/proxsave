@@ -2,7 +2,6 @@ package storage
 
 import (
 	"context"
-	"encoding/json"
 	"strings"
 	"sync"
 
@@ -23,9 +22,8 @@ import (
 // token the filename carries ("<host>-backup-<timestamp>"), so an archive whose
 // manifest cannot be read keeps rotating instead of accumulating. An archive whose
 // name carries no parseable token is left alone rather than deleted on a guess, with
-// one deliberate exception: the pre-Go "proxmox-backup-*" names, which
-// backupBelongsToHost claims for whoever lists them, because otherwise nothing ever
-// would.
+// no exception: a pre-Go "proxmox-backup-*" name attributes through its KEY=VALUE
+// sidecar when one is readable, and is claimed by nobody when none is.
 func (c *CloudStorage) resolveRetentionOwners(ctx context.Context, backups []*types.BackupMetadata) {
 	pending := make([]*types.BackupMetadata, 0, len(backups))
 	for _, b := range backups {
@@ -98,14 +96,15 @@ func (c *CloudStorage) remoteManifestHostname(ctx context.Context, filename stri
 			c.logger.Debug("Cloud storage: cannot read manifest %s%s: %v", rel, suffix, err)
 			continue
 		}
-		var manifest backup.Manifest
-		if err := json.Unmarshal(out, &manifest); err != nil {
-			c.logger.Debug("Cloud storage: manifest %s%s is not readable JSON: %v", rel, suffix, err)
-			continue
-		}
-		if host := strings.TrimSpace(manifest.Hostname); host != "" {
+		// Both manifest forms are accepted here, through the same key precedence the
+		// local and secondary paths reach via backup.LoadManifest. Reading only the
+		// JSON form is how a shared remote root ended up with one host deleting
+		// another host's pre-Go archive together with the KEY=VALUE sidecar that
+		// named its owner.
+		if host := backup.HostnameFromManifestBytes(out); host != "" {
 			return host
 		}
+		c.logger.Debug("Cloud storage: manifest %s%s names no host", rel, suffix)
 	}
 	c.logger.Debug("Cloud storage: no readable manifest for %s; retention will not consider it", rel)
 	return ""

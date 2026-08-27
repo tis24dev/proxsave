@@ -73,9 +73,12 @@ func TestBackupBelongsToHost(t *testing.T) {
 		{name: "unattributable", meta: &types.BackupMetadata{BackupFile: "mystery.tar.gz"}, hostname: "server1", want: false},
 		{name: "unknown local hostname", meta: &types.BackupMetadata{Hostname: "server1"}, hostname: "", want: false},
 		{name: "nil entry", meta: nil, hostname: "server1", want: false},
-		// A legacy archive has no host token at all, so it stays prunable by
-		// whoever lists it - otherwise it would never be rotated again anywhere.
-		{name: "legacy name stays ours", meta: &types.BackupMetadata{BackupFile: "proxmox-backup-20250102-100000.tar.gz"}, hostname: "server1", want: true},
+		// A legacy archive carries no host token, so when its manifest names no host
+		// either it is attributable to nobody. It used to be claimed by whoever
+		// listed it, which on a shared directory or remote prefix is one machine
+		// deleting another machine's backups (discussion #292). Nothing about the
+		// location can change this answer, which is the point.
+		{name: "an unattributable legacy name is nobody's", meta: &types.BackupMetadata{BackupFile: "proxmox-backup-20250102-100000.tar.gz"}, hostname: "server1", want: false},
 		{name: "legacy name with a foreign manifest is not ours", meta: &types.BackupMetadata{BackupFile: "proxmox-backup-20250102-100000.tar.gz", Hostname: "server2"}, hostname: "server1", want: false},
 
 		// A machine does not always spell its own name the same way: the writer
