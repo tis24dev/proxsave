@@ -49,11 +49,17 @@ type runHostnameCallSite struct {
 // Replacing opts.hostname with "" at any of these three sites therefore compiles,
 // passes every test, and silently reinstates the reported bug on that backend.
 //
-// This guard is deliberately NOT exhaustive: main_restore_decrypt.go's
-// restoreSupportStats calls resolveHostname() again instead of reading rt.hostname.
-// That second resolution is pre-existing, harmless (resolveHostname is deterministic
-// within a run) and out of scope here, so do not read a green run as proof that
-// every consumer is wired.
+// This guard is deliberately NOT exhaustive, so do not read a green run as proof
+// that every consumer is wired: main_runtime.go consumes rt.hostname in three more
+// places that no row here covers. One consumer it leaves out on purpose is
+// main_restore_decrypt.go's restoreSupportStats, which is pinned behaviourally
+// instead by TestRestoreSupportBundleNamesTheHostTheRunUsed
+// (restore_support_hostname_test.go): that call site is reachable from a test and
+// its output is observable, so a test that runs it beats one that reads it, and it
+// catches a second resolution however it is spelled. Note that the claim this
+// paragraph used to make, that resolveHostname is deterministic within a run, is
+// false: it shells out to "hostname -f" and falls back to the kernel name, and that
+// probe can change its answer between two calls in one process.
 //
 // The FIRST row differs in kind from the other five and is listed first because it
 // is the head of the chain. They pin that an ARGUMENT arrives at a call; it pins that

@@ -98,7 +98,59 @@ func restoreSupportStats(rt *appRuntime, exitCode int) *orchestrator.BackupStats
 	if !rt.args.Support {
 		return nil
 	}
-	return support.BuildSupportStats(rt.logger, resolveHostname(), rt.envInfo.Type, rt.envInfo.Version, rt.toolVersion, rt.startTime, time.Now(), exitCode, "restore")
+	return support.BuildSupportStats(rt.logger, supportBundleHostname(rt.logger, rt.hostname), rt.envInfo.Type, rt.envInfo.Version, rt.toolVersion, rt.startTime, time.Now(), exitCode, "restore")
+}
+
+// supportBundleHostname returns the name THIS RUN is using, which is the only name
+// a support bundle may carry.
+//
+// The run resolves its name exactly once (initializeRunLogFile assigns
+// rt.hostname = resolveHostname(), main_runtime.go) and hands that one value down:
+// dispatchBackupMode copies it into the storage constructors, and both restore
+// workflows above are passed it for the access control host check. On a BACKUP run
+// the log file is named with it too; a restore is not, because initializeRunLogFile
+// returns at its "if rt.args.Restore" guard before opening one, and the restore
+// session log is named by logging.detectHostname, which reads os.Hostname alone.
+// Resolving it a SECOND time here was not a free repeat of the
+// first. resolveHostname shells out to "hostname -f" and falls back to the kernel
+// name when that fails, and the probe depends on getaddrinfo, on /etc/hosts and on
+// DNS, all of which can change or fail between two calls in one process. Two calls
+// can therefore return different answers, which is the mechanism of discussion
+// #292, and a bundle naming a host the run never used is precisely the artefact an
+// operator sends when they are debugging a hostname problem. The second call also
+// spawned a subprocess on a path that already had the answer.
+//
+// On a restore the divergence is not always drift, and the field is pinned to the
+// run's name knowing that. Restoring the "network" category rewrites /etc/hosts
+// live (internal/orchestrator/network_staged_apply.go), so a probe run afterwards
+// can legitimately answer with the name the machine is about to have. The bundle
+// still reports the name the RUN used, because that is the name its log file, its
+// access control check and its own decisions were made under, and a bundle whose
+// header disagrees with its own contents cannot be read.
+//
+// The empty branch is unreachable on every path that reaches here today, and is
+// checked rather than assumed because a nameless bundle would be worse than a
+// divergent one: nothing in it would identify the machine that produced it.
+// initializeRunLogFile assigns rt.hostname as its FIRST statement, above the
+// "if rt.args.Restore { return }" guard, bootstrapRuntime calls it unconditionally
+// before handing a runtime back, dispatchRestoreMode is reached only from that
+// runtime, and resolveHostname has no return path yielding "" (it falls back to the
+// "unknown" sentinel). Empty can therefore only mean the plumb was cut in source.
+//
+// It warns rather than papering over, for the reason runHostnameOrReport
+// (backup_execution.go) gives: quietly resolving a name a second time is exactly
+// what let a dropped plumb look correct while the run's identity had already been
+// lost. This is deliberately NOT that helper: its message names the archives and
+// retention, which is the wrong consequence here and would misdirect the reader of
+// a restore log.
+func supportBundleHostname(logger *logging.Logger, runHostname string) string {
+	if runHostname != "" {
+		return runHostname
+	}
+	if logger != nil {
+		logger.Warning("The run's hostname did not reach the support bundle: it is being named by a second \"hostname -f\" probe, which can answer differently from the name this run used for its log file and its access control check (discussion #292)")
+	}
+	return resolveHostname()
 }
 
 func dispatchBackupMode(rt *appRuntime) modeResult {
