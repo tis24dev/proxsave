@@ -291,6 +291,21 @@ func logMonitoringPortalLink(stats *orchestrator.BackupStats) {
 	}
 }
 
+// runHostnameWaitDelay bounds how long the "hostname -f" probe below waits, after
+// its own deadline has fired or the process has exited, for stdout to drain before
+// the pipe is force-closed and Wait is released. It is the reaping half of the
+// WithTimeout+WaitDelay pair, and without it the 2 second timeout below bounds
+// nothing: CommandContext kills the direct child, but Output waits on the PIPE, and
+// any grandchild that inherited stdout still holds it open. Measured at 20 seconds
+// on a "hostname" that forks a sleeper and exits at once, where the context never
+// even fires. This probe is the first statement of initializeRunLogFile, before the
+// run log file exists, so a stall here is invisible on every single run.
+//
+// 3s mirrors orchestrator.defaultCommandWaitDelay and storage.cloudExecWaitDelay,
+// so the worst case is 5 seconds rather than unbounded. A var, not a const, so a
+// test can shrink it, matching the idiom in cloud_timeout_test.go.
+var runHostnameWaitDelay = 3 * time.Second
+
 func resolveHostname() string {
 	if path, err := exec.LookPath("hostname"); err == nil {
 		cmdCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
@@ -298,6 +313,7 @@ func resolveHostname() string {
 
 		cmd, cmdErr := safeexec.TrustedCommandContext(cmdCtx, path, "-f")
 		if cmdErr == nil {
+			cmd.WaitDelay = runHostnameWaitDelay
 			if out, err := cmd.Output(); err == nil {
 				if fqdn := strings.TrimSpace(string(out)); fqdn != "" {
 					return fqdn
