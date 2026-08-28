@@ -73,6 +73,13 @@ var notes = []Note{
 			"If your backups included PBS datastore file scans, set PXAR_SCAN_ENABLE=true in backup.env to keep them",
 		},
 	},
+	{
+		Version: "0.31.0",
+		Lines: []string{
+			"Retention recognises this host's own archives after its name changes, so archives it stopped pruning are pruned again",
+			"Backup counts in notifications report the archives this host manages, not every archive in a shared location",
+		},
+	},
 }
 
 // LookupNotes returns the notes for versions in the half-open range (from, to], ascending by
