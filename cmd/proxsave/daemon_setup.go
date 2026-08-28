@@ -484,23 +484,29 @@ func crontabWriteLines(ctx context.Context, lines []string) error {
 	if err != nil {
 		return err
 	}
-	// Bounded like crontabReadLines above it, and for the same reason: CombinedOutput
-	// waits on the copy goroutines, so a descendant that inherited the pipes and outlives
-	// crontab blocks this for that descendant's whole lifetime, on the install and upgrade
-	// paths. The context does not cover it. Measured: a 300ms deadline still returned only
-	// after the descendant's 6 seconds, with a nil error, and setupRunContext is a bare
-	// WithCancel with no deadline at all.
+	// DELIBERATELY NOT safeexec.ApplyWaitDelay, unlike crontabReadLines above it. The
+	// asymmetry is the point, and it is not an omission: a reader has nothing to lose when
+	// its drain is cut, a writer has the operator's crontab.
 	//
-	// The budget starts only once the child has EXITED, so it cannot truncate the payload
-	// and cannot fail a merely slow crontab. ErrWaitDelay is PROPAGATED, never swallowed to
-	// nil the way osCommandRunner.Run does: that swallow is licensed by its sink, where the
-	// captured bytes ARE the answer and are provably complete. Here the answer is the side
-	// effect and the payload travels on stdin, and a descendant holding the stdin read end
-	// leaves crontab installing a TRUNCATED table while still exiting 0. That case is
-	// indistinguishable from the benign one at this frame: same ErrWaitDelay, same empty
-	// capture (a real crontab prints nothing on success), same elapsed time. A nil would
-	// report a destroyed operator crontab as installed.
-	safeexec.ApplyWaitDelay(cmd)
+	// WaitDelay bounds the DRAIN, and cutting the drain calls closeDescriptors, which
+	// SIGPIPEs anything still holding the inherited pipes. If a descendant is merely wedged
+	// that costs nothing, but if it is still WORKING it is killed mid-install. Measured on
+	// this exact frame: with the bound the table was NEVER WRITTEN where the unbounded run
+	// installed it correctly in eight seconds, and with a payload past the 64 KiB pipe
+	// buffer the bound truncated it to exactly 65536 bytes. A working descendant is the
+	// more likely of the two, so the bound would trade a rare hang for a likelier silent
+	// loss of the operator's table.
+	//
+	// The error would not save us either. A descendant holding the stdin READ end leaves
+	// crontab installing a TRUNCATED table and still exiting 0, and that case is
+	// indistinguishable here from a healthy one: same ErrWaitDelay, same empty capture (a
+	// real crontab prints nothing on success), same elapsed time. Bounding this frame
+	// safely needs a READ BACK through crontabReadLines, not a timer.
+	//
+	// What remains unbounded is a wedged descendant holding the pipes for its whole life.
+	// Stock cron ships crontab as a single setuid binary that forks nothing, so neither
+	// that stall nor the damage above can arise on a stock host; both need a crontab that
+	// leaves children behind.
 	cmd.Stdin = strings.NewReader(strings.Join(lines, "\n") + "\n")
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("crontab update failed: %w: %s", err, strings.TrimSpace(string(out)))
