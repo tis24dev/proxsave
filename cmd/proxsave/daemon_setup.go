@@ -484,6 +484,23 @@ func crontabWriteLines(ctx context.Context, lines []string) error {
 	if err != nil {
 		return err
 	}
+	// Bounded like crontabReadLines above it, and for the same reason: CombinedOutput
+	// waits on the copy goroutines, so a descendant that inherited the pipes and outlives
+	// crontab blocks this for that descendant's whole lifetime, on the install and upgrade
+	// paths. The context does not cover it. Measured: a 300ms deadline still returned only
+	// after the descendant's 6 seconds, with a nil error, and setupRunContext is a bare
+	// WithCancel with no deadline at all.
+	//
+	// The budget starts only once the child has EXITED, so it cannot truncate the payload
+	// and cannot fail a merely slow crontab. ErrWaitDelay is PROPAGATED, never swallowed to
+	// nil the way osCommandRunner.Run does: that swallow is licensed by its sink, where the
+	// captured bytes ARE the answer and are provably complete. Here the answer is the side
+	// effect and the payload travels on stdin, and a descendant holding the stdin read end
+	// leaves crontab installing a TRUNCATED table while still exiting 0. That case is
+	// indistinguishable from the benign one at this frame: same ErrWaitDelay, same empty
+	// capture (a real crontab prints nothing on success), same elapsed time. A nil would
+	// report a destroyed operator crontab as installed.
+	safeexec.ApplyWaitDelay(cmd)
 	cmd.Stdin = strings.NewReader(strings.Join(lines, "\n") + "\n")
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("crontab update failed: %w: %s", err, strings.TrimSpace(string(out)))

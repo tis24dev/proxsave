@@ -806,6 +806,17 @@ func migrateLegacyCronEntries(ctx context.Context, baseDir, execPath string, boo
 		if err != nil {
 			return err
 		}
+		// Bounded like readCron above, and for the same reason: a descendant holding the
+		// inherited CombinedOutput pipes blocks Wait after crontab has already installed the
+		// table and exited 0, and the context does not reach it. It matters most here,
+		// because applyCronMode calls this to establish the cron fallback BEFORE removing
+		// the daemon unit, so a stall leaves the daemon in place with no cron line written
+		// and wedges --daemon-remove along with the dashboard task spinner.
+		//
+		// ErrWaitDelay is propagated, not swallowed: see the note on crontabWriteLines in
+		// daemon_setup.go for why the captured bytes cannot tell a written table from a
+		// truncated one here.
+		safeexec.ApplyWaitDelay(cmd)
 		cmd.Stdin = strings.NewReader(content)
 		output, err := cmd.CombinedOutput()
 		if err != nil {
