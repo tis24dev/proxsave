@@ -97,7 +97,10 @@ jobs:
           set -euo pipefail
           go test ./internal/whatsnew/ -run TestRegistryWellFormed -v
 
-      # Version-specific gate: a FINAL release must carry a well-formed what's-new entry.
+      # Version-specific gate: EVERY release must carry a well-formed what's-new entry for its
+      # line, prereleases included. The test finalizes the tag, so v1.6.0-beta1 is held to the
+      # 1.6.0 entry. A beta released without one burns its users' seen-flag: they get the empty
+      # state, the flag finalizes to the same key as the final, and the final never shows.
       - name: Require what's-new notes for the release
         if: steps.gate.outputs.enforce == 'true'
         shell: bash

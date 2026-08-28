@@ -216,6 +216,9 @@ func TestRegistryWellFormed(t *testing.T) {
 		if err != nil {
 			t.Fatalf("notes[%d].Version %q is not valid semver: %v", i, n.Version, err)
 		}
+		if v.Prerelease() != "" || v.Metadata() != "" {
+			t.Fatalf("notes[%d].Version %q is not a final release; key every entry to the FINAL X.Y.Z (LookupNotes finalizes the bounds, not the keys, so a beta-keyed entry would show twice)", i, n.Version)
+		}
 		if seen[v.String()] {
 			t.Fatalf("notes[%d]: duplicate version %q", i, n.Version)
 		}
@@ -237,9 +240,10 @@ func TestRegistryWellFormed(t *testing.T) {
 }
 
 // TestReleaseNotesPresent is the RELEASE GATE, inert unless WHATSNEW_REQUIRE_VERSION is set
-// (the release CI sets it to the release tag). It is final-only: a prerelease is skipped
-// (betas inherit the final's notes). When enforced it FAILS the release unless the released
-// version has a real, well-formed what's-new entry in the registry.
+// (the release CI sets it to the release tag). It covers EVERY release, prereleases included:
+// the tag is finalized before the lookup, so releasing 1.6.0-beta1 requires the 1.6.0 entry
+// (notes are keyed to final releases and betas inherit their line's). When enforced it FAILS
+// the release unless that line has a real, well-formed what's-new entry in the registry.
 func TestReleaseNotesPresent(t *testing.T) {
 	req := strings.TrimSpace(os.Getenv("WHATSNEW_REQUIRE_VERSION"))
 	if req == "" {
@@ -249,9 +253,12 @@ func TestReleaseNotesPresent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("WHATSNEW_REQUIRE_VERSION %q is not a valid release version: %v", req, err)
 	}
-	if want.Prerelease() != "" {
-		t.Skipf("release %q is a prerelease; what's-new notes are required only for final releases", req)
-	}
+	// Hold a prerelease to its own line's entry rather than skipping it. This is not
+	// pedantry about coverage: a beta shipped without the entry renders Screen 0's empty
+	// state and still writes last_seen on continue, and because IsUnseen compares FINALIZED
+	// versions that flag already equals the final's. The final then reads as seen, so every
+	// user who came through a beta misses that release's notes permanently.
+	want = finalize(want)
 	for _, n := range notes {
 		v, err := semver.NewVersion(n.Version)
 		if err != nil {
@@ -268,5 +275,5 @@ func TestReleaseNotesPresent(t *testing.T) {
 		}
 		return // found and well-formed
 	}
-	t.Fatalf("no what's-new entry for release %s in internal/whatsnew/registry.go; add a Note{} before releasing", req)
+	t.Fatalf("no what's-new entry for %s (required by release %s) in internal/whatsnew/registry.go; add a Note{} keyed to the FINAL version before releasing", want, req)
 }

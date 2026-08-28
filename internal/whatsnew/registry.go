@@ -33,10 +33,15 @@ type Note struct {
 //	Lines   -> shown under "What changed in this version:"
 //	Actions -> shown under "What you need to do now:" (the whole section is omitted when empty)
 //
-// Append one Note per FINAL release only (no beta/rc: the release gate is final-only and
-// betas inherit the final's notes). Keep this slice append-only and strictly ascending by
-// semver key; the release CI (release-notes-guard) BLOCKS a final release whose version has
-// no well-formed entry here, so add the entry in the release PR.
+// Append one Note per FINAL release only (no beta/rc: finalize() maps every build of a line
+// onto its final key, so betas inherit the final's notes). Keep this slice append-only and
+// strictly ascending by semver key; the release CI (release-notes-guard) BLOCKS any release
+// whose line has no well-formed entry here, PRERELEASES INCLUDED.
+//
+// Add the entry before the FIRST beta of a line, not in the final's release PR. A beta that
+// ships without it renders the empty state and still writes last_seen on continue, and that
+// flag finalizes to the same key as the final, so IsUnseen is false when the final lands and
+// everyone who came through a beta misses the notes for good.
 //
 // Lines: ONLY genuinely new user features, or concrete changes to how the user uses the
 // tool. State the capability from the user's point of view, not the technical detail (e.g.
