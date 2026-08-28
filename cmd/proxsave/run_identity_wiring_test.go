@@ -160,10 +160,23 @@ func TestOrchestratorIsHandedTheRunsServerIdentity(t *testing.T) {
 
 	// The configure step itself has to run on every backup, or the call above is
 	// unreachable and pinning its arguments proves nothing.
-	caller := findFuncDecl(t, "backup_mode.go", "runBackupModeSteps")
-	if !callIsTopLevelStatement(caller, "configureBackupOrchestrator") {
-		if reason := callIsSkippedBeforeItRuns(caller, "configureBackupOrchestrator"); reason != "" {
-			t.Fatalf("backup_mode.go: runBackupModeSteps can reach the backup without calling configureBackupOrchestrator: %s. The orchestrator then writes archives with no server identity", reason)
+	//
+	// The chain is two frames deep: runBackupModeSteps calls initializeBackupOrchestrator,
+	// which calls configureBackupOrchestrator. Asserting the second link against
+	// runBackupModeSteps, as this guard first did, asked about a call that frame has never
+	// contained, and callIsSkippedBeforeItRuns reports NO reason for a call it cannot find.
+	// The guard was therefore inert from the day it was written, and a deleted call would
+	// have passed it just as quietly. Presence is now asserted directly, per link.
+	for _, link := range []struct{ caller, callee string }{
+		{"runBackupModeSteps", "initializeBackupOrchestrator"},
+		{"initializeBackupOrchestrator", "configureBackupOrchestrator"},
+	} {
+		caller := findFuncDecl(t, "backup_mode.go", link.caller)
+		if !callIsTopLevelStatement(caller, link.callee) {
+			t.Fatalf("backup_mode.go: %s no longer calls %s as an unconditional top-level statement. The orchestrator then writes archives with no server identity", link.caller, link.callee)
+		}
+		if reason := callIsSkippedBeforeItRuns(caller, link.callee); reason != "" {
+			t.Fatalf("backup_mode.go: %s can return before it calls %s: %s. The orchestrator then writes archives with no server identity", link.caller, link.callee, reason)
 		}
 	}
 }

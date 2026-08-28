@@ -41,6 +41,12 @@ func TestDetectedServerIDIsAcceptedByTheOwnershipValidator(t *testing.T) {
 		t.Fatal("Detect() returned nil info")
 	}
 
+	// Without this, the comparison below holds vacuously: NormalizeServerID("") returns
+	// "", so an empty minted identity would report success in the very test that exists
+	// to catch it.
+	if info.ServerID == "" {
+		t.Fatal("Detect() minted an empty ServerID, so there is no format for this guard to compare")
+	}
 	if got := types.NormalizeServerID(info.ServerID); got != info.ServerID {
 		t.Fatalf("types.NormalizeServerID(%q) = %q: the value this package mints is not one retention may compare, so every archive written with it would be classified by hostname alone", info.ServerID, got)
 	}
