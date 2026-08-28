@@ -304,7 +304,7 @@ func logMonitoringPortalLink(stats *orchestrator.BackupStats) {
 // 3s mirrors orchestrator.defaultCommandWaitDelay and storage.cloudExecWaitDelay,
 // so the worst case is 5 seconds rather than unbounded. A var, not a const, so a
 // test can shrink it, matching the idiom in cloud_timeout_test.go.
-var runHostnameWaitDelay = 3 * time.Second
+var runHostnameWaitDelay = safeexec.CommandWaitDelay
 
 func resolveHostname() string {
 	if path, err := exec.LookPath("hostname"); err == nil {

@@ -21,6 +21,13 @@ var (
 		if err != nil {
 			return nil, nil, err
 		}
+		// This runner executes more commands per run than every other call site in the
+		// product combined, and it captures into two in-memory buffers, so the drain
+		// budget cannot cost it output: a buffer never blocks, and what the budget
+		// interrupts is the wait for an EOF a surviving descendant is withholding.
+		// Without it one collected tool that leaves a background child holding stdout
+		// stalls the whole collection phase for that child's lifetime.
+		safeexec.ApplyWaitDelay(cmd)
 		if len(extraEnv) > 0 {
 			cmd.Env = append(os.Environ(), extraEnv...)
 		}

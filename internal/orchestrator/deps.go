@@ -138,7 +138,12 @@ func (realTimeProvider) Now() time.Time { return time.Now() }
 
 type osCommandRunner struct{}
 
-const defaultCommandWaitDelay = 3 * time.Second
+// defaultCommandWaitDelay is INITIALISED FROM safeexec.CommandWaitDelay, which is a
+// copy taken once at package init and not a link: changing safeexec.CommandWaitDelay
+// at runtime does not move this one, and a test that means to shrink both has to set
+// both. What the initialiser buys is that the number lives in one place in the source.
+// internal/storage/cloud.go still carries its own, for rclone, and says why there.
+var defaultCommandWaitDelay = safeexec.CommandWaitDelay
 
 func (osCommandRunner) Run(ctx context.Context, name string, args ...string) ([]byte, error) {
 	cmd, err := safeexec.CommandContext(ctx, name, args...)
@@ -147,6 +152,25 @@ func (osCommandRunner) Run(ctx context.Context, name string, args ...string) ([]
 	}
 	cmd.WaitDelay = defaultCommandWaitDelay
 	out, err := cmd.CombinedOutput()
+	// The translation is correct HERE and only because of the sink. CombinedOutput
+	// drains into a bytes.Buffer, which never blocks, so every byte the child wrote is
+	// already in it before the timer can start; what the budget interrupts is the wait
+	// for an EOF a surviving descendant is withholding. Measured on this path at 16
+	// bytes, 64 KiB and 5 MiB: the output is byte for byte complete alongside the
+	// error. So ErrWaitDelay means "something is still holding a descriptor", not
+	// "your answer is short".
+	//
+	// Returning the error instead was tried and reverted. This []byte reaches nine bare
+	// availability gates ("which pvesh", "which systemctl") and the systemd-run
+	// rollback arming: each reads a non-nil error as "the tool is missing" or "arming
+	// failed". A complete, correct answer turned into a failure made a restore skip
+	// applying datacenter.cfg and report success, and made the network rollback arm a
+	// SECOND timer on top of one it could no longer disarm.
+	//
+	// This is NOT the rule for every sink. internal/storage/cloud.go refuses the same
+	// translation for rclone and is right to: an operation, not a capture, really is
+	// incomplete when it is cut short. Do not generalise either way without checking
+	// what the command's output is being copied INTO.
 	if err != nil && errors.Is(err, exec.ErrWaitDelay) {
 		return out, nil
 	}
