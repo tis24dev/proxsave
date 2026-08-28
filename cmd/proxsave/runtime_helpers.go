@@ -789,6 +789,7 @@ func migrateLegacyCronEntries(ctx context.Context, baseDir, execPath string, boo
 		if err != nil {
 			return "", err
 		}
+		safeexec.ApplyWaitDelay(cmd)
 		output, err := cmd.CombinedOutput()
 		if err != nil {
 			lower := strings.ToLower(string(output))

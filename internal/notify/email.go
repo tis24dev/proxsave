@@ -743,6 +743,7 @@ func runCombinedOutput(ctx context.Context, name string, args ...string) ([]byte
 	if err != nil {
 		return nil, err
 	}
+	safeexec.ApplyWaitDelay(cmd)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return out, err
@@ -1023,6 +1024,7 @@ func (e *EmailNotifier) tailMailLog(ctx context.Context, maxLines int) ([]string
 		if err != nil {
 			continue
 		}
+		safeexec.ApplyWaitDelay(cmd)
 		output, err := cmd.Output()
 		if err != nil {
 			if ctx.Err() != nil {
@@ -1049,6 +1051,7 @@ func (e *EmailNotifier) tailMailLog(ctx context.Context, maxLines int) ([]string
 		if err != nil {
 			return nil, ""
 		}
+		safeexec.ApplyWaitDelay(cmd)
 		output, err := cmd.Output()
 		if err == nil && len(output) > 0 {
 			lines := strings.Split(strings.TrimRight(string(output), "\n"), "\n")

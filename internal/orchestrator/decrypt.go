@@ -285,6 +285,7 @@ func inspectRcloneMetadataManifest(ctx context.Context, remoteMetadataPath, remo
 	if err != nil {
 		return nil, fmt.Errorf("prepare rclone metadata cat: %w", err)
 	}
+	safeexec.ApplyWaitDelay(cmd)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return nil, fmt.Errorf("rclone cat %s failed: %w (output: %s)", remoteMetadataPath, err, strings.TrimSpace(string(output)))

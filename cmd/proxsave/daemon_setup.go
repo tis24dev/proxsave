@@ -463,6 +463,7 @@ func crontabReadLines(ctx context.Context) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
+	safeexec.ApplyWaitDelay(cmd)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		if strings.Contains(strings.ToLower(string(out)), "no crontab for") {
