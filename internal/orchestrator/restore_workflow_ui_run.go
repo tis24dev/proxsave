@@ -9,10 +9,16 @@ import (
 )
 
 type restoreUIWorkflowRun struct {
-	ctx                         context.Context
-	cfg                         *config.Config
-	logger                      *logging.Logger
-	version                     string
+	ctx     context.Context
+	cfg     *config.Config
+	logger  *logging.Logger
+	version string
+	// runHostname is the name this run resolves as its own, plumbed in from package
+	// main (resolveHostname, which prefers "hostname -f"): the same function that
+	// stamps the hostname into an archive when this machine writes one. It is the
+	// second name the access control host check answers to, next to os.Hostname().
+	// Empty when no caller supplied one, which leaves that check strict.
+	runHostname                 string
 	ui                          RestoreWorkflowUI
 	candidate                   *backupCandidate
 	prepared                    *preparedBundle
@@ -41,14 +47,15 @@ type restoreUIWorkflowRun struct {
 	needsFilesystemRestore      bool
 }
 
-func newRestoreUIWorkflowRun(ctx context.Context, cfg *config.Config, logger *logging.Logger, version string, ui RestoreWorkflowUI) *restoreUIWorkflowRun {
+func newRestoreUIWorkflowRun(ctx context.Context, cfg *config.Config, logger *logging.Logger, version string, ui RestoreWorkflowUI, runHostname string) *restoreUIWorkflowRun {
 	return &restoreUIWorkflowRun{
-		ctx:      ctx,
-		cfg:      cfg,
-		logger:   logger,
-		version:  version,
-		ui:       ui,
-		destRoot: "/",
+		ctx:         ctx,
+		cfg:         cfg,
+		logger:      logger,
+		version:     version,
+		runHostname: runHostname,
+		ui:          ui,
+		destRoot:    "/",
 	}
 }
 

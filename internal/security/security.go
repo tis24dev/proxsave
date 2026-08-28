@@ -811,6 +811,15 @@ func (c *Checker) checkFirewall(ctx context.Context) {
 		c.addWarning("Failed to prepare iptables command: %v", err)
 		return
 	}
+	// The preflight runs before every backup, and it shells out to four system tools
+	// it does not control. Any one of them that leaves a background child holding
+	// stdout stalls the whole run here, before the archive is even started: the tool
+	// exits 0, so the context deadline never fires and there is nothing for a timeout
+	// to bound. The budget cannot cost output at these sites, because Output captures
+	// into an in-memory buffer that never blocks, so everything the tool wrote is
+	// already there when the timer starts. See safeexec.CommandWaitDelay for the shapes
+	// where that is NOT true.
+	safeexec.ApplyWaitDelay(cmd)
 	output, err := cmd.Output()
 	if err != nil {
 		c.addWarning("Failed to run iptables -L -n: %v", err)
@@ -845,6 +854,7 @@ func (c *Checker) checkOpenPorts(ctx context.Context) {
 		c.addWarning("Failed to prepare 'ss -tulnap': %v", err)
 		return
 	}
+	safeexec.ApplyWaitDelay(cmd)
 	output, err := cmd.Output()
 	if err != nil {
 		c.addWarning("Failed to execute 'ss -tulnap': %v", err)
@@ -884,6 +894,7 @@ func (c *Checker) checkOpenPortsAgainstSuspiciousList(ctx context.Context) {
 	if err != nil {
 		return
 	}
+	safeexec.ApplyWaitDelay(cmd)
 	output, err := cmd.Output()
 	if err != nil {
 		return
@@ -909,6 +920,7 @@ func (c *Checker) checkSuspiciousProcesses(ctx context.Context) {
 		c.addWarning("Failed to prepare 'ps' for process inspection: %v", err)
 		return
 	}
+	safeexec.ApplyWaitDelay(cmd)
 	output, err := cmd.Output()
 	if err != nil {
 		c.addWarning("Failed to execute 'ps' for process inspection: %v", err)

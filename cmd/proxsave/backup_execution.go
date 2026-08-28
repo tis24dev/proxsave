@@ -33,7 +33,9 @@ func runConfiguredBackup(opts backupModeOptions, orch *orchestrator.Orchestrator
 	}
 
 	logging.Step("Start Go backup orchestration")
-	hostname := resolveHostname()
+	// Already repaired and reported at the top of runBackupModeSteps, ahead of the
+	// storage constructors that a dropped plumb actually breaks.
+	hostname := opts.hostname
 	backupDone := logging.DebugStart(opts.logger, "backup run", "proxmox=%s host=%s", opts.envInfo.Type, hostname)
 	stats, err := orch.RunGoBackup(opts.ctx, opts.envInfo, hostname)
 	if err != nil {
@@ -189,4 +191,50 @@ func logBackupExitStatus(exitCode int) {
 	statusLabel := strings.ToUpper(status.String())
 	glyph := consoleStatusGlyph(status)
 	logging.Info("Exit status: %s %s (code=%d)", glyph, statusLabel, exitCode)
+}
+
+// runHostnameOrReport returns the name this run writes its archives under, and says
+// so out loud when the run's own name never arrived.
+//
+// The run resolves its name exactly once (initializeRunLogFile assigns
+// rt.hostname = resolveHostname(), main_runtime.go) and dispatchBackupMode copies it
+// into opts.hostname, which TestBackupModeOptionsCarryTheRunHostname pins. So an
+// empty value here cannot mean a machine that failed to name itself: resolveHostname
+// has no return path that yields "", it falls back to the "unknown" sentinel. Empty
+// can only mean the plumb was dropped.
+//
+// The recompute stays, and it is called from the top of runBackupModeSteps so the
+// repaired name reaches the storage constructors rather than only the writer.
+// Recomputing for the WRITER alone is exactly what turned a dropped plumb into a
+// working-but-wrong run: the archives kept the correct FQDN while the three
+// constructors got "" and lost the alias, so retention scoped this machine's own
+// work out and pruned nothing (discussion #292), and archives that look right are
+// how the defect reached a release.
+//
+// Be precise about what the report is worth, because two easier claims are false.
+// A dropped plumb does NOT leave retention without a name: NewLocalStorage sets
+// hostname from resolveRetentionHostname() and puts the plumbed value only into
+// hostAliases (internal/storage/local.go), so the empty-hostname warning in
+// applyRetentionHostScope is never the one that fires here. And on a host whose
+// "hostname -f" already equals its kernel name there are no aliases to lose, so a
+// dropped plumb costs that machine nothing at all. This line is therefore not a
+// second opinion on a failure retention would report anyway. It is the only signal
+// on a build where the plumb was cut.
+//
+// WARNING rather than ERROR on purpose: it keeps the run off green through
+// ParseLogCounts and applyIssueExitCode (internal/orchestrator/extensions.go)
+// without inventing a failure class. Nothing is logged on any ordinary machine.
+// resolveHostname has no return path yielding "", it falls back to the "unknown"
+// sentinel, and dispatchBackupMode is the only non-test producer of
+// backupModeOptions, so the branch is unreachable unless the wiring is cut in
+// source. TestBackupModeOptionsCarryTheRunHostname is what blocks that at CI and
+// remains the stronger guard of the two.
+func runHostnameOrReport(logger *logging.Logger, hostname string) string {
+	if hostname != "" {
+		return hostname
+	}
+	if logger != nil {
+		logger.Warning("The run's hostname did not reach the backup: the archives are still written under the resolved name, but retention on every storage backend has lost it and will scope this machine's own work out (discussion #292)")
+	}
+	return resolveHostname()
 }

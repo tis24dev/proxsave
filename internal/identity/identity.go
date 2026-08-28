@@ -2,6 +2,7 @@ package identity
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"crypto/subtle"
@@ -9,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"math/big"
 	"net"
 	"os"
@@ -35,6 +37,30 @@ const (
 	maxMachineIDBytes        = 32
 	systemKeyPrefixLength    = 8
 	serverIDLength           = 16
+	// machineIDPath, dbusMachineIDPath and productUUIDPath are the single source of
+	// truth for the host-fact paths. They used to be repeated literals (machine-id
+	// twice, product_uuid three times), which is the crudest way for the write side
+	// and the read side of the identity key to drift apart.
+	machineIDPath     = "/etc/machine-id"
+	dbusMachineIDPath = "/var/lib/dbus/machine-id"
+	productUUIDPath   = "/sys/class/dmi/id/product_uuid"
+	procVersionPath   = "/proc/version"
+	// machineIDKeyLabel names the key arm derived from /etc/machine-id alone, and
+	// uuidKeyLabel / uuidNoHostKeyLabel name the DMI pair that predates it. They follow
+	// the existing lowercase family scheme (mac=, mac_nohost=, mac_altN=, uuid=).
+	//
+	// The machine-id arm has NO "_nohost" twin on purpose: it is hostname free by
+	// construction, so a hostname bearing twin could only ever match where the hostname
+	// free one already matches.
+	machineIDKeyLabel  = "machineid"
+	uuidKeyLabel       = "uuid"
+	uuidNoHostKeyLabel = "uuid_nohost"
+	// identityRejectedSuffix names a preserved identity payload, and
+	// quarantineNameHexLen is how much of the payload's sha256 goes into that name.
+	// The name is CONTENT ADDRESSED, so preserving the same payload twice reuses one
+	// file instead of accumulating one per run.
+	identityRejectedSuffix = ".rejected-"
+	quarantineNameHexLen   = 16
 	// NotifySecretMinLen mirrors logging.secretMinRegister (6): a secret shorter than this
 	// is NOT masked in logs, so a too-short value must never reach disk (and later a log
 	// line). Enforced at the single sink (PersistNotifySecret) so every caller is covered;
@@ -299,6 +325,7 @@ var (
 	writeIdentityFileWithContextSetImmutable = setImmutableAttributeWithContext
 	identityCreateTempFunc                   = os.CreateTemp
 	writeIdentityFileWithContextRename       = os.Rename
+	collectMACCandidatesFunc                 = collectMACCandidates
 )
 
 // Detect resolves the server identity (ID + MAC address) and ensures persistence.
@@ -315,7 +342,7 @@ func DetectWithContext(ctx context.Context, baseDir string, logger *logging.Logg
 	baseDir = strings.TrimSpace(baseDir)
 	logDebug(logger, "Identity: starting detection (baseDir=%q)", baseDir)
 
-	ifaceCandidates, macs := collectMACCandidates(logger)
+	ifaceCandidates, macs := collectMACCandidatesFunc(logger)
 	info.MACAddresses = macs
 	if preferredMAC, preferredIface := selectPreferredMAC(ifaceCandidates); preferredMAC != "" {
 		info.PrimaryMAC = preferredMAC
@@ -335,17 +362,18 @@ func DetectWithContext(ctx context.Context, baseDir string, logger *logging.Logg
 	info.IdentityFile = identityPath
 	logDebug(logger, "Identity: baseDir=%q identityDir=%q identityFile=%q", baseDir, identityDir, identityPath)
 
+	// ONE fact snapshot per run, threaded into every decision below, so the write side
+	// and the read side cannot see different readings even if the underlying files
+	// change mid run.
+	facts := readHostFacts(logger)
+
 	// Attempt to load an existing ID first.
 	logDebug(logger, "Identity: attempting to load existing identity from %s", identityPath)
-	if id, boundMAC, err := loadServerID(identityPath, macs, logger); err == nil {
-		if id != "" {
-			logDebug(logger, "Identity: loaded existing server ID %s from %s (boundMAC=%s)", id, identityPath, boundMAC)
-			info.ServerID = id
-			// Keep the preferred MAC for display, but fall back to the bound MAC if needed.
-			if strings.TrimSpace(info.PrimaryMAC) == "" && strings.TrimSpace(boundMAC) != "" {
-				info.PrimaryMAC = boundMAC
-			}
-			if err := maybeUpgradeIdentityFileWithContext(ctx, identityPath, id, info.PrimaryMAC, macs, logger); err != nil {
+	if res, err := loadServerID(identityPath, macs, info.PrimaryMAC, facts, logger); err == nil {
+		if res.ServerID != "" {
+			logDebug(logger, "Identity: loaded existing server ID %s from %s (verified=%v)", res.ServerID, identityPath, res.Verified)
+			info.ServerID = res.ServerID
+			if err := maybeRewriteIdentityFile(ctx, identityPath, res, info.PrimaryMAC, macs, facts, logger); err != nil {
 				return info, err
 			}
 			return info, nil
@@ -360,7 +388,7 @@ func DetectWithContext(ctx context.Context, baseDir string, logger *logging.Logg
 	}
 
 	logDebug(logger, "Identity: generating a new server ID (identity file missing/invalid)")
-	serverID, encodedFile, err := generateServerID(macs, info.PrimaryMAC, logger)
+	serverID, encodedFile, err := generateServerID(macs, info.PrimaryMAC, facts, logger)
 	if err != nil {
 		return info, err
 	}
@@ -373,6 +401,36 @@ func DetectWithContext(ctx context.Context, baseDir string, logger *logging.Logg
 		return info, nil
 	}
 	logDebug(logger, "Identity: identity directory ready: %s", identityDir)
+
+	// ONE read decides everything about the payload that is about to be replaced.
+	// Reading it is also the only way to PRESERVE it, because preservation is a copy,
+	// so a payload this run cannot read is a payload it cannot preserve, and replacing
+	// it would destroy it.
+	existing, readErr := readFileUnderRoot(identityDir, identityFileName)
+	switch {
+	case readErr == nil:
+		// A run that cannot read machine-id computes poisoned prefixes on BOTH sides,
+		// so it has no standing to call the stored file foreign. Keep it, keep its ID
+		// on disk, and let the next healthy run decide.
+		if !facts.writesAllowed() {
+			logWarning(logger, "Identity: machine-id could not be read, so this run cannot judge %s; keeping the existing file (the new server ID will NOT be persisted)", identityPath)
+			return info, nil
+		}
+		// NEVER DESTROY: preserve the previous payload byte for byte before the write,
+		// and refuse to write at all when that preservation fails.
+		if _, qErr := quarantineIdentityPayload(identityDir, existing, logger); qErr != nil {
+			logWarning(logger, "Identity: refusing to replace %s because the existing payload could not be preserved: %v (server ID will NOT be persisted)", identityPath, qErr)
+			return info, nil
+		}
+	case errors.Is(readErr, os.ErrNotExist):
+		// First file on this host: there is nothing to preserve.
+	default:
+		// A directory, a symlink pointing outside the identity directory, an EIO on a
+		// failing disk. Nothing downstream of this read runs, which also keeps the
+		// immutable-attribute handling off a path this process cannot vouch for.
+		logWarning(logger, "Identity: refusing to replace %s because the existing payload could not be read: %v; move it aside or delete it (server ID will NOT be persisted)", identityPath, readErr)
+		return info, nil
+	}
 
 	logDebug(logger, "Identity: persisting identity file (0600 + immutable) to %s", identityPath)
 	if err := writeIdentityFileWithContext(ctx, identityPath, encodedFile, logger); err != nil {
@@ -535,7 +593,8 @@ func readAddrAssignType(iface string, logger *logging.Logger) int {
 		return -1
 	}
 	path := filepath.Join("/sys/class/net", iface, "addr_assign_type")
-	raw := strings.TrimSpace(readFirstLineFunc(path, 16))
+	value, _ := readFirstLineFunc(path, 16)
+	raw := strings.TrimSpace(value)
 	if raw == "" {
 		return -1
 	}
@@ -599,7 +658,26 @@ func isLocallyAdministeredMAC(mac string) bool {
 	return (b & 0x02) == 0x02
 }
 
-func loadServerID(path string, macs []string, logger *logging.Logger) (string, string, error) {
+// identityDecodeResult carries the outcome of ONE decode of ONE payload.
+//
+// Verified is false when the payload was accepted WITHOUT a real prefix match, which no
+// rewrite may launder into a binding. KeyField is the stored key field, handed onward so
+// no later step has to re-read or re-parse the file and see a different one. Reason is an
+// already formatted warning, empty when the load was verified.
+type identityDecodeResult struct {
+	ServerID string
+	Verified bool
+	KeyField string
+	Reason   string
+}
+
+// loadServerID reads the identity file and decodes it ONCE.
+//
+// There is no per candidate MAC loop: identityKeyPrefixesFor already computes the union
+// of every candidate MAC's prefixes in one pass, which is exactly the set such a loop
+// would explore one MAC at a time, so one decode replaces N and the payload is parsed,
+// checksummed and format checked once instead of once per NIC.
+func loadServerID(path string, macs []string, primaryMAC string, f hostFacts, logger *logging.Logger) (identityDecodeResult, error) {
 	if stat, err := os.Stat(path); err == nil {
 		logDebug(logger, "Identity: identity file stat: path=%s mode=%s size=%d mtime=%s", path, stat.Mode().String(), stat.Size(), stat.ModTime().Format(time.RFC3339))
 	} else {
@@ -610,49 +688,23 @@ func loadServerID(path string, macs []string, logger *logging.Logger) (string, s
 	// fix, no #nosec); see readFileUnderRoot.
 	data, err := readFileUnderRoot(filepath.Dir(path), filepath.Base(path))
 	if err != nil {
-		return "", "", err
+		return identityDecodeResult{}, err
 	}
 	logDebug(logger, "Identity: read identity file %s (%d bytes)", path, len(data))
 
-	content := string(data)
-	if len(macs) == 0 {
-		id, _, err := decodeProtectedServerID(content, "", logger)
-		if err != nil {
-			return "", "", err
-		}
-		return id, "", nil
+	res, err := decodeProtectedServerID(string(data), macs, primaryMAC, f, logger)
+	if err != nil {
+		return identityDecodeResult{}, err
 	}
-
-	var lastErr error
-	var fallbackID string
-	for idx, mac := range macs {
-		id, matchedByMAC, err := decodeProtectedServerID(content, mac, logger)
-		if err == nil {
-			if matchedByMAC {
-				return id, mac, nil
-			}
-			if fallbackID == "" {
-				fallbackID = id
-			}
-			continue
-		}
-		lastErr = err
-		logDebug(logger, "Identity: decode attempt failed for mac[%d]=%s: %v", idx, mac, err)
+	if res.Reason != "" {
+		logWarning(logger, "%s", res.Reason)
 	}
-
-	if fallbackID != "" {
-		return fallbackID, "", nil
-	}
-
-	if lastErr == nil {
-		lastErr = fmt.Errorf("unable to decode identity payload")
-	}
-	return "", "", lastErr
+	return res, nil
 }
 
-func generateServerID(macs []string, primaryMAC string, logger *logging.Logger) (string, string, error) {
+func generateServerID(macs []string, primaryMAC string, f hostFacts, logger *logging.Logger) (string, string, error) {
 	logDebug(logger, "Identity: generateServerID: starting (primaryMAC=%s macCount=%d)", primaryMAC, len(macs))
-	systemData := buildSystemData(macs, logger)
+	systemData := buildSystemData(macs, f, logger)
 	logDebug(logger, "Identity: generateServerID: systemData length=%d", len(systemData))
 
 	hash := sha256.Sum256([]byte(systemData))
@@ -678,28 +730,24 @@ func generateServerID(macs []string, primaryMAC string, logger *logging.Logger) 
 	}
 	logDebug(logger, "Identity: generateServerID: normalized serverID=%s", serverID)
 
-	encoded, err := encodeProtectedServerIDWithMACs(serverID, macs, primaryMAC, logger)
-	if err != nil {
-		logDebug(logger, "Identity: generateServerID: encodeProtectedServerID failed: %v", err)
-		return "", "", err
-	}
+	encoded := encodeProtectedServerIDWithKeyField(serverID, identityKeyFieldFor(f, macs, primaryMAC), logger)
 	logDebug(logger, "Identity: generateServerID: encoded identity file bytes=%d", len(encoded))
 
 	return serverID, encoded, nil
 }
 
-func buildSystemData(macs []string, logger *logging.Logger) string {
+// buildSystemData is the hash SEED for a brand new server ID. It rejects nothing and
+// binds nothing, so it takes the fact snapshot rather than re-reading machine-id and
+// product_uuid, and an unreadable fact is no worse here than an absent one.
+func buildSystemData(macs []string, f hostFacts, logger *logging.Logger) string {
 	var builder strings.Builder
 	timestamp := time.Now().UTC().Format("20060102150405")
 	builder.WriteString(timestamp)
 	logDebug(logger, "Identity: buildSystemData: timestamp=%s", timestamp)
 
-	if machineID := readFirstLineFunc("/etc/machine-id", maxMachineIDBytes); machineID != "" {
-		builder.WriteString(machineID)
-		logDebug(logger, "Identity: buildSystemData: machine-id source=/etc/machine-id len=%d", len(machineID))
-	} else if machineID := readFirstLineFunc("/var/lib/dbus/machine-id", maxMachineIDBytes); machineID != "" {
-		builder.WriteString(machineID)
-		logDebug(logger, "Identity: buildSystemData: machine-id source=/var/lib/dbus/machine-id len=%d", len(machineID))
+	if f.MachineID != "" {
+		builder.WriteString(f.MachineID)
+		logDebug(logger, "Identity: buildSystemData: machine-id present len=%d", len(f.MachineID))
 	} else {
 		logDebug(logger, "Identity: buildSystemData: machine-id missing")
 	}
@@ -723,14 +771,14 @@ func buildSystemData(macs []string, logger *logging.Logger) string {
 		logDebug(logger, "Identity: buildSystemData: hostname unavailable (err=%v)", err)
 	}
 
-	if uuid := readFirstLineFunc("/sys/class/dmi/id/product_uuid", maxMachineIDBytes); uuid != "" {
-		builder.WriteString(uuid)
-		logDebug(logger, "Identity: buildSystemData: product_uuid present len=%d", len(uuid))
+	if f.UUID != "" {
+		builder.WriteString(f.UUID)
+		logDebug(logger, "Identity: buildSystemData: product_uuid present len=%d", len(f.UUID))
 	} else {
 		logDebug(logger, "Identity: buildSystemData: product_uuid missing")
 	}
 
-	if version := readFirstLineFunc("/proc/version", maxProcVersionBytes); version != "" {
+	if version, _ := readFirstLineFunc(procVersionPath, maxProcVersionBytes); version != "" {
 		builder.WriteString(version)
 		logDebug(logger, "Identity: buildSystemData: /proc/version present len=%d", len(version))
 	} else {
@@ -746,9 +794,10 @@ func buildSystemData(macs []string, logger *logging.Logger) string {
 	return builder.String()
 }
 
-func encodeProtectedServerIDWithMACs(serverID string, macs []string, primaryMAC string, logger *logging.Logger) (string, error) {
-	logDebug(logger, "Identity: encodeProtectedServerID: start (serverID=%s primaryMAC=%s)", serverID, primaryMAC)
-	keyField := buildIdentityKeyField(macs, primaryMAC, logger)
+// encodeProtectedServerIDWithKeyField is the single place that turns a server ID plus an
+// already decided key field into file content, so every caller produces the same format
+// and the same checksum coverage.
+func encodeProtectedServerIDWithKeyField(serverID, keyField string, logger *logging.Logger) string {
 	timestamp := time.Now().Unix()
 	data := fmt.Sprintf("%s:%d:%s", serverID, timestamp, keyField)
 	checksum := sha256.Sum256([]byte(data))
@@ -766,10 +815,16 @@ func encodeProtectedServerIDWithMACs(serverID string, macs []string, primaryMAC 
 
 	content := builder.String()
 	logDebug(logger, "Identity: encodeProtectedServerID: generated identity file content bytes=%d", len(content))
-	return content, nil
+	return content
 }
 
-func decodeProtectedServerID(fileContent, primaryMAC string, logger *logging.Logger) (string, bool, error) {
+// decodeProtectedServerID parses a payload, verifies its checksum and server ID format
+// exactly as before, then compares its stored prefixes against this host's set.
+//
+// On no match, exactly THREE acceptance branches run, in this order, and anything else is
+// a rejection. Each one names a state in which this run cannot judge the payload at all;
+// none of them is a guess about which machine wrote it.
+func decodeProtectedServerID(fileContent string, macs []string, primaryMAC string, f hostFacts, logger *logging.Logger) (identityDecodeResult, error) {
 	logDebug(logger, "Identity: decodeProtectedServerID: start (primaryMAC=%s fileBytes=%d)", primaryMAC, len(fileContent))
 
 	scanner := bufio.NewScanner(strings.NewReader(fileContent))
@@ -789,20 +844,20 @@ func decodeProtectedServerID(fileContent, primaryMAC string, logger *logging.Log
 	}
 	if encoded == "" {
 		logDebug(logger, "Identity: decodeProtectedServerID: SYSTEM_CONFIG_DATA not found")
-		return "", false, fmt.Errorf("identity data not found")
+		return identityDecodeResult{}, fmt.Errorf("identity data not found")
 	}
 
 	decodedBytes, err := base64.StdEncoding.DecodeString(encoded)
 	if err != nil {
 		logDebug(logger, "Identity: decodeProtectedServerID: base64 decode failed: %v", err)
-		return "", false, fmt.Errorf("invalid encoded identity data: %w", err)
+		return identityDecodeResult{}, fmt.Errorf("invalid encoded identity data: %w", err)
 	}
 	logDebug(logger, "Identity: decodeProtectedServerID: decoded payload bytes=%d", len(decodedBytes))
 
 	parts := strings.Split(string(decodedBytes), ":")
 	logDebug(logger, "Identity: decodeProtectedServerID: payload parts=%d", len(parts))
 	if len(parts) != 4 {
-		return "", false, fmt.Errorf("invalid identity payload format")
+		return identityDecodeResult{}, fmt.Errorf("invalid identity payload format")
 	}
 
 	serverID, timestamp, keyField, checksum := parts[0], parts[1], parts[2], parts[3]
@@ -811,48 +866,126 @@ func decodeProtectedServerID(fileContent, primaryMAC string, logger *logging.Log
 	expectedChecksum := fmt.Sprintf("%x", sha256.Sum256([]byte(data)))[:systemKeyPrefixLength]
 	if checksum != expectedChecksum {
 		logDebug(logger, "Identity: decodeProtectedServerID: checksum mismatch (stored=%s expected=%s)", checksum, expectedChecksum)
-		return "", false, fmt.Errorf("identity checksum mismatch")
+		return identityDecodeResult{}, fmt.Errorf("identity checksum mismatch")
 	}
 	logDebug(logger, "Identity: decodeProtectedServerID: checksum ok (%s)", expectedChecksum)
 
-	storedPrefixes := parseKeyFieldPrefixes(keyField)
-	currentPrefixes := computeCurrentIdentityKeyPrefixes(primaryMAC, logger)
-
-	macPrefixes := computeCurrentMACKeyPrefixes(primaryMAC, logger)
-
+	currentPrefixes := identityKeyPrefixesFor(f, macs, primaryMAC)
 	matched := false
-	matchedByMAC := false
-	for _, prefix := range storedPrefixes {
-		if prefix == "" {
-			continue
-		}
-		if currentPrefixes[prefix] {
+	for _, prefix := range parseKeyFieldPrefixes(keyField) {
+		if prefix != "" && currentPrefixes[prefix] {
 			matched = true
-			if macPrefixes[prefix] {
-				matchedByMAC = true
-			}
 			break
 		}
 	}
-	if !matched {
+
+	verified := true
+	reason := ""
+	switch {
+	case matched:
+		// A real prefix match. Nothing to decide.
+	case f.MachineIDState == systemFileUnreadable:
+		// B1. machine-id is a factor of EVERY prefix on both sides, so a run that could
+		// not read it computed nothing comparable and may judge no payload at all.
+		verified = false
+		reason = "Identity: machine-id could not be read, so the existing identity file cannot be checked against this host; keeping the stored server ID"
+	case len(currentPrefixes) == 0:
+		// B2. This run produced no arm of any kind (no machine-id, no product_uuid and
+		// no MAC), so it has nothing to judge with. Refusing here would mint a new
+		// server ID on every single run of an evidence-free host.
+		verified = false
+		reason = "Identity: this host reports no machine-id, no product_uuid and no MAC address, so the existing identity file cannot be checked against it; keeping the stored server ID"
+	case f.UUIDState == systemFileUnreadable && uuidBlindnessExplains(keyField, f):
+		// B3. product_uuid is one arm among several, so it excuses only the payloads
+		// whose binding it could actually be.
+		verified = false
+		reason = "Identity: product_uuid could not be read, so the existing identity file cannot be checked against this host; keeping the stored server ID"
+	default:
 		logDebug(logger, "Identity: decodeProtectedServerID: no matching identity key prefix found")
-		return "", false, fmt.Errorf("identity file does not belong to this host")
+		return identityDecodeResult{}, fmt.Errorf("identity file does not belong to this host")
+	}
+	if !verified {
+		logDebug(logger, "Identity: decodeProtectedServerID: accepted without host verification (machine-id=%s product_uuid=%s currentPrefixes=%d)", f.MachineIDState, f.UUIDState, len(currentPrefixes))
 	}
 
+	// The format checks still run in EVERY accept branch: only the BINDING check is
+	// skipped, so a corrupt payload is still refused.
 	if len(serverID) != serverIDLength || !isAllDigits(serverID) {
 		logDebug(logger, "Identity: decodeProtectedServerID: invalid server ID format (len=%d digits=%v)", len(serverID), isAllDigits(serverID))
-		return "", false, fmt.Errorf("invalid server ID format")
+		return identityDecodeResult{}, fmt.Errorf("invalid server ID format")
 	}
 	logDebug(logger, "Identity: decodeProtectedServerID: server ID format ok (len=%d)", len(serverID))
-	return serverID, matchedByMAC, nil
+	return identityDecodeResult{ServerID: serverID, Verified: verified, KeyField: keyField, Reason: reason}, nil
 }
 
-func buildIdentityKeyField(macs []string, primaryMAC string, logger *logging.Logger) string {
-	machineID := readMachineID(logger)
-	hostnamePart := readHostnamePart(logger)
-	primaryMAC = normalizeMAC(primaryMAC)
+// uuidBlindnessExplains reports whether an unreadable product_uuid can explain why none
+// of a stored key field's prefixes match this host. Two rules, and nothing else.
+//
+// RULE ONE, A FACT EXCUSES ONLY THE PREFIXES IT IS AN INPUT TO. product_uuid is an input
+// to the uuid arms and to nothing else, so only a payload carrying a uuid arm can be
+// excused by not having read it. A payload of MAC arms alone was never keyed on it. A
+// legacy v1 payload, whose single bare prefix is computeSystemKey(machineID,
+// hostnamePart, macPart), was never keyed on it either: it is a mac-arm-only payload with
+// the label stripped, so it gets no excuse here.
+//
+// RULE TWO, POSITIVE PROOF BEATS AN EXCUSE ABOUT A DIFFERENT FACT. If this run KNOWS its
+// own machine-id situation and the payload carries a machineid arm that did not match,
+// then the payload was written under a different machine-id, and blindness on product_uuid
+// excuses nothing. Knowing it covers both "present and it differs" and "absent, so no
+// machineid arm of ours could ever match": absent is a durable fact about this host, not
+// blindness, which is the same distinction change 3 draws everywhere else. Only an
+// UNREADABLE machine-id is blindness, and that case never reaches here because it is
+// caught earlier by branch B1.
+func uuidBlindnessExplains(keyField string, f hostFacts) bool {
+	hasUUID := false
+	hasMachineID := false
+	for _, entry := range splitKeyFieldEntries(keyField) {
+		switch entry.Label {
+		case uuidKeyLabel, uuidNoHostKeyLabel:
+			hasUUID = true
+		case machineIDKeyLabel:
+			hasMachineID = true
+		}
+	}
+	if hasMachineID && f.MachineIDState != systemFileUnreadable {
+		return false
+	}
+	return hasUUID
+}
 
-	uuid := strings.TrimSpace(readFirstLineFunc("/sys/class/dmi/id/product_uuid", maxMachineIDBytes))
+// identityKeyArm is one labelled key prefix.
+type identityKeyArm struct {
+	Label  string
+	Prefix string
+}
+
+// identityKeyArms is the SINGLE place that decides what this host's identity key is.
+// identityKeyFieldFor and identityKeyPrefixesFor are two projections of its result, so
+// the write side and the read side cannot disagree, within a run or across runs.
+//
+// The arms are ADDITIVE: a host emits its MAC arms, plus the uuid pair when it can read
+// product_uuid, plus the machine-id arm when it can read a machine-id. There is no
+// exclusive switch between the last two.
+//
+// THE MACHINE-ID ARM IS GATED ON NOTHING BUT HAVING READ A MACHINE-ID, which is already
+// a precondition of every other prefix. It exists so a host with no usable DMI survives
+// an ordinary MAC change (pct set hwaddr, a restore, a recreate, an SDN reassignment) the
+// way a DMI host survives one through its product_uuid arm. Two hosts CAN share an
+// /etc/machine-id (a distribution image, systemd's "uninitialized" literal, a template),
+// but a wrong adoption also needs one of them to physically hold the other's payload, and
+// <baseDir>/identity/.server_identity lives on THE NODE'S OWN DISK. Every route by which
+// one host comes to hold another's copy of it (a container clone, a pct restore, a
+// template instantiation, an imaged disk) is exactly the class the maintainer has ruled
+// correct and expected, so the shared value cannot be spent.
+//
+// THAT ARGUMENT RESTS ON ONE PREMISE: the identity directory is node local. If baseDir
+// ever sits on shared storage, this arm removes the last discriminator between two nodes
+// installed from the same image, where the uuid arm separates them today.
+//
+// The arm is hostname free, which is why it has no "_nohost" twin and why a hostname
+// change cannot touch it.
+func identityKeyArms(f hostFacts, macs []string, primaryMAC string) []identityKeyArm {
+	primaryMAC = normalizeMAC(primaryMAC)
 
 	uniqueMACs := make(map[string]struct{}, len(macs)+1)
 	orderedMACs := make([]string, 0, len(macs)+1)
@@ -875,166 +1008,244 @@ func buildIdentityKeyField(macs []string, primaryMAC string, logger *logging.Log
 		sort.Strings(orderedMACs[1:])
 	}
 
-	entries := make([]string, 0, len(orderedMACs)*2+4)
+	arms := make([]identityKeyArm, 0, len(orderedMACs)*2+3)
 	altIndex := 1
 	for _, mac := range orderedMACs {
 		macPart := strings.ReplaceAll(mac, ":", "")
-		prefix := computeSystemKey(machineID, hostnamePart, macPart)[:systemKeyPrefixLength]
-		prefixNoHost := computeSystemKey(machineID, "", macPart)[:systemKeyPrefixLength]
+		prefix := computeSystemKey(f.MachineID, f.HostnamePart, macPart)[:systemKeyPrefixLength]
+		prefixNoHost := computeSystemKey(f.MachineID, "", macPart)[:systemKeyPrefixLength]
 
 		if primaryMAC != "" && mac == primaryMAC {
-			entries = append(entries, "mac="+prefix, "mac_nohost="+prefixNoHost)
+			arms = append(arms,
+				identityKeyArm{Label: "mac", Prefix: prefix},
+				identityKeyArm{Label: "mac_nohost", Prefix: prefixNoHost},
+			)
 			continue
 		}
-		entries = append(
-			entries,
-			fmt.Sprintf("mac_alt%d=%s", altIndex, prefix),
-			fmt.Sprintf("mac_alt%d_nohost=%s", altIndex, prefixNoHost),
+		arms = append(arms,
+			identityKeyArm{Label: fmt.Sprintf("mac_alt%d", altIndex), Prefix: prefix},
+			identityKeyArm{Label: fmt.Sprintf("mac_alt%d_nohost", altIndex), Prefix: prefixNoHost},
 		)
 		altIndex++
 	}
 
-	if uuid != "" {
-		uuidPrefix := computeSystemKey(machineID, hostnamePart, uuid)[:systemKeyPrefixLength]
-		uuidNoHostPrefix := computeSystemKey(machineID, "", uuid)[:systemKeyPrefixLength]
-		entries = append(entries, "uuid="+uuidPrefix, "uuid_nohost="+uuidNoHostPrefix)
+	if f.UUIDState == systemFilePresent {
+		arms = append(arms,
+			identityKeyArm{Label: uuidKeyLabel, Prefix: computeSystemKey(f.MachineID, f.HostnamePart, f.UUID)[:systemKeyPrefixLength]},
+			identityKeyArm{Label: uuidNoHostKeyLabel, Prefix: computeSystemKey(f.MachineID, "", f.UUID)[:systemKeyPrefixLength]},
+		)
+	}
+	if f.MachineIDState == systemFilePresent {
+		arms = append(arms,
+			identityKeyArm{Label: machineIDKeyLabel, Prefix: computeSystemKey(f.MachineID, "", f.MachineID)[:systemKeyPrefixLength]},
+		)
 	}
 
-	seen := make(map[string]struct{}, len(entries))
-	out := make([]string, 0, len(entries))
-	for _, entry := range entries {
-		parts := strings.SplitN(entry, "=", 2)
-		if len(parts) != 2 {
+	seen := make(map[string]struct{}, len(arms))
+	out := make([]identityKeyArm, 0, len(arms))
+	for _, arm := range arms {
+		if arm.Label == "" || arm.Prefix == "" {
 			continue
 		}
-		label := strings.TrimSpace(parts[0])
-		prefix := strings.TrimSpace(parts[1])
-		if label == "" || prefix == "" {
+		token := arm.Label + "=" + arm.Prefix
+		if _, ok := seen[token]; ok {
 			continue
 		}
-		key := label + "=" + prefix
-		if _, ok := seen[key]; ok {
-			continue
-		}
-		seen[key] = struct{}{}
-		out = append(out, key)
+		seen[token] = struct{}{}
+		out = append(out, arm)
 	}
-
-	return strings.Join(out, ",")
+	return out
 }
 
-func parseKeyFieldPrefixes(keyField string) []string {
+// identityKeyFieldFor is the WRITE side projection of identityKeyArms.
+func identityKeyFieldFor(f hostFacts, macs []string, primaryMAC string) string {
+	arms := identityKeyArms(f, macs, primaryMAC)
+	entries := make([]string, 0, len(arms))
+	for _, arm := range arms {
+		entries = append(entries, arm.Label+"="+arm.Prefix)
+	}
+	return strings.Join(entries, ",")
+}
+
+// identityKeyPrefixesFor is the READ side projection of identityKeyArms. It covers every
+// candidate MAC in one pass, which is why the decoder needs no per MAC loop.
+func identityKeyPrefixesFor(f hostFacts, macs []string, primaryMAC string) map[string]bool {
+	arms := identityKeyArms(f, macs, primaryMAC)
+	out := make(map[string]bool, len(arms))
+	for _, arm := range arms {
+		out[arm.Prefix] = true
+	}
+	return out
+}
+
+// splitKeyFieldEntries parses a key field into its entries, keeping the LABELS that
+// parseKeyFieldPrefixes throws away. A v1 style bare prefix yields an entry with an empty
+// Label, which every labelled rule then skips.
+func splitKeyFieldEntries(keyField string) []identityKeyArm {
 	keyField = strings.TrimSpace(keyField)
 	if keyField == "" {
 		return nil
 	}
 	tokens := strings.Split(keyField, ",")
-	out := make([]string, 0, len(tokens))
+	out := make([]identityKeyArm, 0, len(tokens))
 	for _, token := range tokens {
 		token = strings.TrimSpace(token)
 		if token == "" {
 			continue
 		}
-		if idx := strings.IndexByte(token, '='); idx >= 0 {
-			token = strings.TrimSpace(token[idx+1:])
+		idx := strings.IndexByte(token, '=')
+		if idx < 0 {
+			out = append(out, identityKeyArm{Prefix: token})
+			continue
 		}
-		out = append(out, token)
+		out = append(out, identityKeyArm{
+			Label:  strings.TrimSpace(token[:idx]),
+			Prefix: strings.TrimSpace(token[idx+1:]),
+		})
 	}
 	return out
 }
 
-func computeCurrentIdentityKeyPrefixes(primaryMAC string, logger *logging.Logger) map[string]bool {
-	machineID := readMachineID(logger)
-	hostnamePart := readHostnamePart(logger)
-	uuid := strings.TrimSpace(readFirstLineFunc("/sys/class/dmi/id/product_uuid", maxMachineIDBytes))
-
-	primaryMAC = normalizeMAC(primaryMAC)
-	macPart := strings.ReplaceAll(primaryMAC, ":", "")
-
-	out := make(map[string]bool, 4)
-	if macPart != "" {
-		out[computeSystemKey(machineID, hostnamePart, macPart)[:systemKeyPrefixLength]] = true
-		out[computeSystemKey(machineID, "", macPart)[:systemKeyPrefixLength]] = true
-	}
-
-	if uuid != "" {
-		out[computeSystemKey(machineID, hostnamePart, uuid)[:systemKeyPrefixLength]] = true
-		out[computeSystemKey(machineID, "", uuid)[:systemKeyPrefixLength]] = true
-	}
-
-	return out
-}
-
-func computeCurrentMACKeyPrefixes(primaryMAC string, logger *logging.Logger) map[string]bool {
-	machineID := readMachineID(logger)
-	hostnamePart := readHostnamePart(logger)
-	primaryMAC = normalizeMAC(primaryMAC)
-	macPart := strings.ReplaceAll(primaryMAC, ":", "")
-
-	out := make(map[string]bool, 2)
-	if macPart != "" {
-		out[computeSystemKey(machineID, hostnamePart, macPart)[:systemKeyPrefixLength]] = true
-		out[computeSystemKey(machineID, "", macPart)[:systemKeyPrefixLength]] = true
+// parseKeyFieldPrefixes yields the bare prefixes of a key field, on top of the ONE parser
+// so the two cannot drift apart.
+func parseKeyFieldPrefixes(keyField string) []string {
+	entries := splitKeyFieldEntries(keyField)
+	out := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		out = append(out, entry.Prefix)
 	}
 	return out
 }
 
-func readMachineID(logger *logging.Logger) string {
-	machineID := readFirstLineFunc("/etc/machine-id", maxMachineIDBytes)
-	machineIDSource := "/etc/machine-id"
-	if machineID == "" {
-		machineID = readFirstLineFunc("/var/lib/dbus/machine-id", maxMachineIDBytes)
-		machineIDSource = "/var/lib/dbus/machine-id"
+// keyFieldHasLabel reports whether a key field carries an entry with the given label.
+func keyFieldHasLabel(keyField, label string) bool {
+	for _, entry := range splitKeyFieldEntries(keyField) {
+		if entry.Label == label {
+			return true
+		}
 	}
-	if machineID != "" {
-		logDebug(logger, "Identity: machine-id source=%s len=%d", machineIDSource, len(machineID))
-	} else {
-		logDebug(logger, "Identity: machine-id missing")
-	}
-	return machineID
+	return false
 }
 
-func readHostnamePart(logger *logging.Logger) string {
-	hostname, err := hostnameFunc()
-	if err != nil || strings.TrimSpace(hostname) == "" {
-		logDebug(logger, "Identity: hostname missing (err=%v)", err)
-		return ""
+// unionKeyFields returns the derived key field plus every LABELLED stored entry it does
+// not already carry, deduped by the whole "label=prefix" token. The rewrite is therefore
+// ADDITIVE UNCONDITIONALLY: a stored uuid arm survives a run that could not read
+// product_uuid, and stored MAC arms of departed NICs survive too, harmlessly, because
+// every prefix is keyed on the machine-id, so matching a stale MAC arm still requires the
+// same machine-id.
+//
+// UNLABELLED v1 ENTRIES ARE DELIBERATELY NOT CARRIED. A rewrite only ever runs on a
+// VERIFIED load, a verified load means some stored prefix is in identityKeyPrefixesFor,
+// and that set and the derived key field are two projections of one arm list. So the bare
+// entry that matched is already in the derived field under its proper mac= or mac_altN=
+// label, and dropping it loses nothing.
+func unionKeyFields(derived, stored string) string {
+	seen := make(map[string]bool, 8)
+	out := make([]string, 0, 8)
+	appendEntries := func(keyField string) {
+		for _, entry := range splitKeyFieldEntries(keyField) {
+			if entry.Label == "" || entry.Prefix == "" {
+				continue
+			}
+			token := entry.Label + "=" + entry.Prefix
+			if seen[token] {
+				continue
+			}
+			seen[token] = true
+			out = append(out, token)
+		}
 	}
-	hostnamePart := hostname
-	if len(hostnamePart) > 8 {
-		hostnamePart = hostnamePart[:8]
-	}
-	logDebug(logger, "Identity: hostnamePart=%q len=%d (origLen=%d)", hostnamePart, len(hostnamePart), len(hostname))
-	return hostnamePart
+	appendEntries(derived)
+	appendEntries(stored)
+	return strings.Join(out, ",")
 }
 
-func computeSystemKey(machineID, hostnamePart, extra string) string {
-	sum := sha256.Sum256([]byte(machineID + hostnamePart + extra))
-	return fmt.Sprintf("%x", sum)[:16]
-}
-
-func maybeUpgradeIdentityFileWithContext(ctx context.Context, path string, serverID string, primaryMAC string, macs []string, logger *logging.Logger) error {
+// maybeRewriteIdentityFile is the ONE in place rewrite of a payload that was just loaded.
+// It carries the stored server ID through unchanged, so it can never change the machine's
+// identity, and it takes the stored key field from the decode result rather than re-reading
+// the file, so the load and the rewrite cannot see two different files.
+//
+// Two triggers share it: the v1 to v2 format upgrade, and adding the machine-id arm to a
+// payload written before that arm existed. Both are falsified by the labels the rewrite
+// itself writes, so a payload is rewritten at most once.
+func maybeRewriteIdentityFile(ctx context.Context, path string, res identityDecodeResult, primaryMAC string, macs []string, f hostFacts, logger *logging.Logger) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	// Read confined to the identity directory via os.Root (structural gosec G304
-	// fix, no #nosec); see readFileUnderRoot.
-	data, err := readFileUnderRoot(filepath.Dir(path), filepath.Base(path))
-	if err != nil {
+	needsLabels := res.KeyField != "" && !strings.Contains(res.KeyField, "=")
+	needsArm := f.MachineIDState == systemFilePresent && !keyFieldHasLabel(res.KeyField, machineIDKeyLabel)
+	if !needsLabels && !needsArm {
 		return nil
 	}
-	if identityPayloadHasKeyLabels(string(data), logger) {
+	// An acceptance this run could not verify must never be laundered into a rewrite
+	// that rebinds a possibly foreign payload to this host, and a blind run must not
+	// write at all. An empty stored key field can only have been accepted by branch B2,
+	// hence unverified, hence it never reaches the rewrite.
+	if !res.Verified || !f.writesAllowed() {
+		logDebug(logger, "Identity: skipping identity file rewrite for %s (verified=%v machineIDState=%s)", path, res.Verified, f.MachineIDState)
 		return nil
 	}
-	updated, err := encodeProtectedServerIDWithMACs(serverID, macs, primaryMAC, logger)
-	if err != nil {
-		return err
-	}
+
+	keyField := unionKeyFields(identityKeyFieldFor(f, macs, primaryMAC), res.KeyField)
+	logDebug(logger, "Identity: rewriting %s (needsLabels=%v needsArm=%v keyFieldLen=%d)", path, needsLabels, needsArm, len(keyField))
+	updated := encodeProtectedServerIDWithKeyField(res.ServerID, keyField, logger)
 	if err := writeIdentityFileWithContext(ctx, path, updated, logger); err != nil {
-		logDebug(logger, "Identity: failed to upgrade identity file format: %v", err)
-		return err
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return err
+		}
+		// No landed/not-landed flag is needed here: the only steps after the rename are
+		// the trailing chmod and a relock deliberately invoked with context.Background(),
+		// so no context error can be returned once the rename has landed. Cancellation
+		// therefore always means nothing changed, and every other failure means the
+		// stored server ID is intact either way, so warning and carrying on is right in
+		// both halves rather than making Detect discard a good Info.
+		logWarning(logger, "Identity: could not rewrite the identity key of %s: %v; the stored server ID is unchanged", path, err)
+		return nil
 	}
 	return nil
+}
+
+// quarantineIdentityPayload preserves payload under a ".rejected-" sibling before a
+// replacement is written over the canonical path. It returns the name it used, and an
+// error means the payload could NOT be preserved, which makes the caller refuse to write.
+//
+// IT IS A COPY, never a rename and never a hard link. A copy never empties the canonical
+// path, so no window exists in which the machine has no identity file, and it never
+// touches the immutable attribute: reading a +i file is always permitted, whereas hard
+// linking one returns EPERM. The copy target is a fresh inode in a directory that is not
+// itself immutable, so no chattr is involved anywhere in the quarantine.
+//
+// THE NAME IS CONTENT ADDRESSED, so preserving the same payload repeatedly is idempotent:
+// a run that fails its write over and over leaves exactly one preserved copy. That is why
+// there is no discard step and no pruner, and why accumulation is bounded by the number
+// of DISTINCT payloads this host has ever rejected. A name that already exists holding
+// DIFFERENT bytes is an error rather than an overwrite: a preserved payload is never
+// destroyed.
+//
+// The preserved file is 0600 and deliberately not immutable, so a human can read it and
+// delete it.
+func quarantineIdentityPayload(dir string, payload []byte, logger *logging.Logger) (string, error) {
+	sum := sha256.Sum256(payload)
+	name := identityFileName + identityRejectedSuffix + fmt.Sprintf("%x", sum)[:quarantineNameHexLen]
+	target := filepath.Join(dir, name)
+
+	existing, err := readFileUnderRoot(dir, name)
+	switch {
+	case err == nil && bytes.Equal(existing, payload):
+		logDebug(logger, "Identity: quarantine: %s already holds this payload", target)
+		logWarning(logger, "Identity: the existing identity file did not match this host; preserved it as %s before writing a new server ID", target)
+		return name, nil
+	case err == nil:
+		return "", fmt.Errorf("%s already holds a different preserved payload", target)
+	case !errors.Is(err, os.ErrNotExist):
+		return "", err
+	}
+
+	if err := atomicWriteIdentityFile(target, payload, 0o600); err != nil {
+		return "", err
+	}
+	logWarning(logger, "Identity: the existing identity file did not match this host; preserved it as %s before writing a new server ID", target)
+	return name, nil
 }
 
 func normalizeMAC(mac string) string {
@@ -1046,30 +1257,6 @@ func normalizeMAC(mac string) string {
 		return strings.ToLower(hw.String())
 	}
 	return mac
-}
-
-func identityPayloadHasKeyLabels(fileContent string, logger *logging.Logger) bool {
-	scanner := bufio.NewScanner(strings.NewReader(fileContent))
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-		if !strings.HasPrefix(line, "SYSTEM_CONFIG_DATA=") {
-			continue
-		}
-		encoded := strings.Trim(line[len("SYSTEM_CONFIG_DATA="):], "\"")
-		raw, err := base64.StdEncoding.DecodeString(encoded)
-		if err != nil {
-			return false
-		}
-		parts := strings.Split(string(raw), ":")
-		if len(parts) != 4 {
-			return false
-		}
-		return strings.Contains(parts[2], "=")
-	}
-	if err := scanner.Err(); err != nil {
-		logDebug(logger, "Identity: identityPayloadHasKeyLabels scanner error: %v", err)
-	}
-	return false
 }
 
 // atomicWriteIdentityFile writes data to path via a temp sibling + rename, so a write
@@ -1109,16 +1296,20 @@ func atomicWriteIdentityFile(path string, data []byte, perm os.FileMode) error {
 	return nil
 }
 
+// writeIdentityFileWithContext writes content over path, clearing and restoring the
+// immutable attribute around the write.
+//
+// THE RELOCK DEFER IS ARMED BEFORE THE INITIAL CLEAR. It used to be armed after it, so a
+// clear that failed or was cancelled mid chattr returned before arming anything and left
+// the canonical identity file permanently mutable: the next healthy run loads the file,
+// rewrites nothing and never relocks it. The immutable bit is what stops a stray rm or a
+// packaging script from deleting a server ID that cannot be recomputed.
 func writeIdentityFileWithContext(ctx context.Context, path, content string, logger *logging.Logger) (err error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	logDebug(logger, "Identity: writeIdentityFile: start path=%s contentBytes=%d", path, len(content))
 
-	// Ensure file is writable even if immutable was previously set
-	if err := writeIdentityFileWithContextSetImmutable(ctx, path, false, logger); err != nil {
-		return err
-	}
 	defer func() {
 		lockErr := writeIdentityFileWithContextSetImmutable(context.Background(), path, true, logger)
 		if lockErr == nil {
@@ -1129,6 +1320,11 @@ func writeIdentityFileWithContext(ctx context.Context, path, content string, log
 			err = lockErr
 		}
 	}()
+
+	// Ensure file is writable even if immutable was previously set
+	if err := writeIdentityFileWithContextSetImmutable(ctx, path, false, logger); err != nil {
+		return err
+	}
 
 	if err := ctx.Err(); err != nil {
 		logDebug(logger, "Identity: writeIdentityFile: context canceled before write for %s: %v", path, err)
@@ -1149,16 +1345,178 @@ func writeIdentityFileWithContext(ctx context.Context, path, content string, log
 	return nil
 }
 
-func readFirstLine(path string, limit int) string {
+// systemFileState classifies WHY a host fact file produced no value. An absent file is a
+// fact about the host; a file that exists but cannot be read is blindness on this run.
+// Collapsing the two (the old behaviour, a bare "") made one transient read failure
+// reject a perfectly good identity file and mint a replacement, which the next healthy
+// run rejected in turn: one blip cost two identity changes.
+type systemFileState int
+
+const (
+	// systemFilePresent means a non-empty value was read. It always implies a
+	// non-empty value, which every arm gate relies on.
+	systemFilePresent systemFileState = iota
+	// systemFileAbsent means the file does not exist, or exists and is empty. An empty
+	// /etc/machine-id is the documented "not yet provisioned" state, a fact about the
+	// host rather than a failure.
+	systemFileAbsent
+	// systemFileDenied means the read failed with a permission error. It is a DURABLE
+	// fact about what this process can see, not a blip, and each reader prices it for
+	// what its own fact is worth. It never escapes readMachineID or readProductUUID.
+	systemFileDenied
+	// systemFileUnreadable means the file exists but could not be read for any other
+	// reason (EIO, EISDIR, ELOOP, descriptor exhaustion). This is the conservative side.
+	systemFileUnreadable
+)
+
+func (s systemFileState) String() string {
+	switch s {
+	case systemFilePresent:
+		return "present"
+	case systemFileAbsent:
+		return "absent"
+	case systemFileDenied:
+		return "denied"
+	case systemFileUnreadable:
+		return "unreadable"
+	default:
+		return "invalid"
+	}
+}
+
+// classifyReadError is the whole of the classification, in one place so no caller can
+// invent a fourth rule.
+func classifyReadError(err error) systemFileState {
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		return systemFileAbsent
+	case errors.Is(err, fs.ErrPermission):
+		return systemFileDenied
+	default:
+		return systemFileUnreadable
+	}
+}
+
+func readFirstLine(path string, limit int) (string, systemFileState) {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return ""
+		return "", classifyReadError(err)
 	}
 	line := strings.TrimSpace(string(data))
 	if limit > 0 && len(line) > limit {
 		line = line[:limit]
 	}
-	return line
+	if line == "" {
+		return "", systemFileAbsent
+	}
+	return line, systemFilePresent
+}
+
+// readMachineID returns the host machine-id and how it was classified.
+//
+// A PRIMARY WE COULD NOT READ IS NEVER SILENTLY REPLACED BY A DIFFERENT IDENTIFIER. The
+// dbus copy is consulted ONLY when /etc/machine-id is genuinely ABSENT. The machine-id is
+// a factor of every key prefix on both sides, so substituting a different value for one
+// we could not read rekeys the entire payload and costs two on-disk identity changes for
+// one transient failure. The two files really can hold different values: an /etc/machine-id
+// regenerated after a clone while the dbus copy is not, or an old container template that
+// ships a real file rather than the symlink.
+//
+// A PERMISSION DENIAL ON THE MACHINE-ID IS STILL BLINDNESS, NOT A HOST FACT. Classifying
+// it absent would make the run compute prefixes keyed on the empty string, reject a good
+// payload and mint a replacement, which is the exact defect this classification exists to
+// remove.
+func readMachineID(logger *logging.Logger) (string, systemFileState) {
+	value, state := readFirstLineFunc(machineIDPath, maxMachineIDBytes)
+	source := machineIDPath
+	if state == systemFileAbsent {
+		value, state = readFirstLineFunc(dbusMachineIDPath, maxMachineIDBytes)
+		source = dbusMachineIDPath
+	}
+	if state == systemFileDenied {
+		value, state = "", systemFileUnreadable
+	}
+	if state == systemFilePresent {
+		logDebug(logger, "Identity: machine-id source=%s len=%d", source, len(value))
+	} else {
+		logDebug(logger, "Identity: machine-id unavailable (state=%s)", state)
+	}
+	return value, state
+}
+
+// readProductUUID returns the DMI product_uuid and how it was classified.
+//
+// A PERMISSION DENIAL IS MAPPED TO ABSENT, which is what replaces the /proc/self/uid_map
+// discriminator the earlier rounds carried. A denial means the DMI table is not visible
+// to this process and will not be next run either: measured on an unprivileged Proxmox
+// container the file exists, is mode 0400 and is owned by an unmapped host uid, so every
+// uid inside gets EACCES; a masked /sys giving ENOENT lands in the same state. Treating
+// that as blindness would keep the acceptance excuse open forever inside a container,
+// which is exactly how a foreign payload carrying a uuid arm was adopted there.
+//
+// A non-root run on bare metal lands here too, correctly: it then has no uuid arm and its
+// machine-id arm carries it, and in any case it cannot open the 0600 identity file at all.
+func readProductUUID(logger *logging.Logger) (string, systemFileState) {
+	uuid, state := readFirstLineFunc(productUUIDPath, maxMachineIDBytes)
+	if state == systemFileDenied {
+		uuid, state = "", systemFileAbsent
+	}
+	logDebug(logger, "Identity: product_uuid state=%s len=%d", state, len(uuid))
+	return uuid, state
+}
+
+func readHostnamePart(logger *logging.Logger) string {
+	hostname, err := hostnameFunc()
+	if err != nil || strings.TrimSpace(hostname) == "" {
+		logDebug(logger, "Identity: hostname missing (err=%v)", err)
+		return ""
+	}
+	hostnamePart := hostname
+	if len(hostnamePart) > 8 {
+		hostnamePart = hostnamePart[:8]
+	}
+	logDebug(logger, "Identity: hostnamePart=%q len=%d (origLen=%d)", hostnamePart, len(hostnamePart), len(hostname))
+	return hostnamePart
+}
+
+func computeSystemKey(machineID, hostnamePart, extra string) string {
+	sum := sha256.Sum256([]byte(machineID + hostnamePart + extra))
+	return fmt.Sprintf("%x", sum)[:16]
+}
+
+// hostFacts is ONE snapshot of everything the identity key depends on, read once per run
+// and threaded into every decision, so the write side and the read side provably see
+// identical readings even if the underlying files change mid run.
+type hostFacts struct {
+	MachineID      string
+	MachineIDState systemFileState
+	UUID           string
+	UUIDState      systemFileState
+	HostnamePart   string
+}
+
+func readHostFacts(logger *logging.Logger) hostFacts {
+	machineID, machineIDState := readMachineID(logger)
+	uuid, uuidState := readProductUUID(logger)
+	f := hostFacts{
+		MachineID:      machineID,
+		MachineIDState: machineIDState,
+		UUID:           uuid,
+		UUIDState:      uuidState,
+		HostnamePart:   readHostnamePart(logger),
+	}
+	logDebug(logger, "Identity: host facts: machine-id=%s product_uuid=%s", f.MachineIDState, f.UUIDState)
+	return f
+}
+
+// writesAllowed reports whether this run may MUTATE an existing identity payload.
+// machine-id is a factor of every key prefix on both sides, so a run that cannot read it
+// computes poisoned prefixes and can judge nothing: it must not replace and must not
+// rewrite. It MAY still create a first file where none exists, because creating destroys
+// nothing and the created file is accepted back by the next equally blind run through
+// branch B1, which turns a per-run churning ID into a stable one.
+func (f hostFacts) writesAllowed() bool {
+	return f.MachineIDState != systemFileUnreadable
 }
 
 func hexToDecimal(hexStr string) string {

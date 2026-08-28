@@ -743,6 +743,7 @@ func runCombinedOutput(ctx context.Context, name string, args ...string) ([]byte
 	if err != nil {
 		return nil, err
 	}
+	safeexec.ApplyWaitDelay(cmd)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return out, err
@@ -757,11 +758,58 @@ func truncateForLog(s string, maxBytes int) string {
 	return s[:maxBytes] + "...(truncated)"
 }
 
+// mailToolWaitDelay is the drain budget for the mail tools, and it is deliberately far
+// larger than safeexec.CommandWaitDelay.
+//
+// Three seconds is right for a probe, where anything slower is a wedged helper. It is
+// wrong here: a delivery binary can hand the message to a local consumer that is still
+// draining after the binary itself has exited, and cutting that produces a FALSE
+// failure on a report the MTA already accepted. On the proxmox-mail-forward path a
+// false failure is not merely noise, it sends the report into sendPMFFallbackChain and
+// the operator receives the same backup report twice.
+//
+// Thirty seconds still bounds the hang this exists to stop, and it does so at the very
+// end of a run whose archive is already written, so the cost of waiting is small and
+// the cost of guessing wrong is a duplicate delivery.
+var mailToolWaitDelay = 30 * time.Second
+
+// commandForMailTool builds the command for sendmail, proxmox-mail-forward and mailq.
+// systemctl is bounded separately, by the constructor, at its own call site.
+//
+// Both branches are stamped, and both are stamped with mailToolWaitDelay rather than
+// the constructor's value. The absolute branch would otherwise inherit the 3 second
+// probe budget from TrustedCommandContext, which is the wrong number for a delivery.
+// The bare-name branch is unreachable today, because every resolver here goes through
+// lookupAbsolutePath and refuses a non-absolute answer; it is stamped so that a future
+// resolver which does not is bounded rather than silently exempt.
+//
+// The mail path is where a bound matters most and where it is most often
+// misunderstood. The message travels on stdin as a strings.Reader, so os/exec builds
+// a parent pipe for it, and a delivery binary that reads part of the message and
+// exits 0 leaves the rest undelivered. That happens TODAY, without any bound: os/exec
+// drops the resulting EPIPE on stdin by design (go.dev/issue/9173), so the call
+// returns nil and the report is logged as handed off. The bound does not cause that
+// and cannot cure it. What it does is stop the OTHER shape, where a grandchild holds
+// the descriptor and the run stalls for that grandchild's lifetime with no output.
+//
+// Whatever this returns, exec.ErrWaitDelay must reach the caller. Translating it to
+// nil would report a hand-off that was cut as a delivery that succeeded, which is
+// strictly worse than the stall it replaced.
 func commandForMailTool(ctx context.Context, pathOrName string, args ...string) (*exec.Cmd, error) {
+	var (
+		cmd *exec.Cmd
+		err error
+	)
 	if filepath.IsAbs(pathOrName) {
-		return safeexec.TrustedCommandContext(ctx, pathOrName, args...)
+		cmd, err = safeexec.TrustedCommandContext(ctx, pathOrName, args...)
+	} else {
+		cmd, err = safeexec.CommandContext(ctx, pathOrName, args...)
 	}
-	return safeexec.CommandContext(ctx, pathOrName, args...)
+	if err != nil {
+		return nil, err
+	}
+	cmd.WaitDelay = mailToolWaitDelay
+	return cmd, nil
 }
 
 func lookupAbsolutePath(name string) (string, error) {
@@ -976,6 +1024,7 @@ func (e *EmailNotifier) tailMailLog(ctx context.Context, maxLines int) ([]string
 		if err != nil {
 			continue
 		}
+		safeexec.ApplyWaitDelay(cmd)
 		output, err := cmd.Output()
 		if err != nil {
 			if ctx.Err() != nil {
@@ -1002,6 +1051,7 @@ func (e *EmailNotifier) tailMailLog(ctx context.Context, maxLines int) ([]string
 		if err != nil {
 			return nil, ""
 		}
+		safeexec.ApplyWaitDelay(cmd)
 		output, err := cmd.Output()
 		if err == nil && len(output) > 0 {
 			lines := strings.Split(strings.TrimRight(string(output), "\n"), "\n")

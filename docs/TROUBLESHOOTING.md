@@ -551,6 +551,104 @@ COMPRESSION_LEVEL=3
 
 ---
 
+#### Warning: `retention ignored N backup(s) that do not belong to <host>`
+
+**Symptoms**: the run logs the line above, prefixed by the location it applies to (`Local storage:`, `Secondary storage:` or `Cloud storage:`), often followed by `N of those carry this host's short name under a different spelling`. The location keeps growing past `MAX_LOCAL_BACKUPS` / `MAX_SECONDARY_BACKUPS` / `MAX_CLOUD_BACKUPS`, and the run prunes nothing. A separate INFO line, `retention left N backup(s) alone because nothing names the host that wrote them`, is a different case and is covered as cause 3 below.
+
+**Cause**: retention only prunes what this host owns. The owner of an archive is the `hostname` recorded in its manifest, or the host token its filename carries (`<host>-backup-<timestamp>`) when no manifest can be read. A host answers to the name the kernel reports (`hostname`) and to the name it stamps into what it writes (usually the FQDN from `hostname -f`), and to nothing else. There are three reasons an archive lands outside that set:
+
+1. **It belongs to another machine** sharing the directory or the remote prefix. The filter is doing its job and nothing needs doing.
+2. **It is this machine's own work, written under a name it no longer resolves.** The location then holds both spellings: the short-named archives rotate, the FQDN-named ones do not.
+
+   Archives written from this version on also record the **server identity** of the machine that produced them, and that identity survives a hostname change. A host that has LOST the ability to resolve its own qualified name recognises those archives as its own again and keeps rotating them automatically: no action is needed and the warning stops. The run says so on an INFO line, `retention brought N backup(s) back into rotation`.
+
+   Four limits on that, all deliberate:
+
+   - **It is not retroactive.** Archives written before this version carry no server identity and can never be adopted. A host that is stranded today still needs solution 1 or solution 2 below for its existing backlog.
+   - **A host that still resolves a qualified form of its own name is not auto-claimed.** If `hostname -f` still returns `pve.home.arpa` and the archives say `pve.siteB.example`, this host answers to two spellings of `pve` already, so a third one is indistinguishable from a second machine, or from a clone of this one that inherited the same server identity. Retention leaves those alone and says why: `N of them also carry this host's own server identity`.
+   - **Adoption only ever looks under the first label of the name the KERNEL reports.** If this host is called `pve` but `hostname -f` answers `nas` (a rewritten `/etc/hosts` line such as `127.0.1.1 nas pve` does exactly that), archives named `nas.lan` are NOT auto-claimed even when they carry this host's identity, because retention reports its spelling mismatches under `pve` and may only ever claim from inside what it reports. Use solution 1 or solution 2 for those.
+   - **A mismatching server identity never stops a host rotating its own archives.** If an archive names a host this machine answers to, it is this machine's, whatever identity it records. Reinstalling ProxSave or restoring `BASE_DIR` from elsewhere mints a NEW server identity, and the run reports the divergence on an INFO line, `N backup(s) this host owns by name record a different server identity`, without changing what it prunes.
+3. **Nothing names the machine that wrote it.** Pre-Go archives are called `proxmox-backup-<timestamp>`, and that leading label is the product name, not a host, so the filename carries no host token. If the `.metadata` beside such an archive is missing, unreadable, or carries no `HOSTNAME=` line, nothing anywhere can say which machine wrote it, so retention leaves it alone on every host: on a shared directory or remote prefix, claiming it means deleting another machine's backup. This case is reported at INFO, not as a warning, so it does not by itself change the run's exit code: it is a fixed backlog you clear by hand, not something that went wrong on the run. One sub-case is already noisy for a separate, older reason: an archive with no `.metadata` beside it at all makes the local listing log `Missing .metadata for X - using filename metadata` at WARNING on every pass, which promotes the run to exit 1. That was already true before retention stopped claiming these archives; what changes is that it now repeats until you remove them. A pre-Go archive whose `.metadata` DOES carry a `HOSTNAME=` line is attributed normally and keeps rotating on the machine it names.
+
+**Tell the two apart**:
+```bash
+# What this host calls itself, both ways
+hostname
+hostname -f
+
+# What the archives are named (adjust the path to the location that warned)
+ls -1 /opt/proxsave/backup/*-backup-*.tar* | sed 's#.*/##'
+
+# What the newest run decided
+grep -E "retention ignored|different spelling|Simple retention" \
+  "$(ls -t /opt/proxsave/log/backup-*.log | head -1)"
+```
+If the names before `-backup-` are spellings of THIS host, you are in case 2. Compare their first label against plain `hostname`, not against `hostname -f`: automatic adoption keys on the kernel name, so archives whose first label matches only what `hostname -f` prints need solution 1 or solution 2 like any other case-2 backlog.
+
+The two INFO lines above are only in the log of a run made at INFO level or below, which is the default. To see which archives each decision covers, run one backup with `--log-level debug`: the per-file `retention out of scope` lines then name the archive's server identity and which check refused it.
+
+**Solution 1 (case 2, preferred): make the host resolve its own name again**:
+```bash
+# hostname -f reads /etc/hosts and then DNS. The usual regression is a rewritten
+# hosts line with the short name first, which makes hostname -f print the short name.
+grep -n "$(hostname)" /etc/hosts
+
+# Wrong: the short name comes first, so hostname -f returns "pve"
+# 192.168.1.10 pve pve.home.arpa
+# Right: the FQDN comes first
+# 192.168.1.10 pve.home.arpa pve
+
+# It must now print the spelling the archives carry, so compare it with the
+# prefix the filenames above carry. A dry run cannot confirm this: it stops
+# before storage dispatch, so retention never executes.
+hostname -f
+```
+The next real run recognises the stranded archives and brings the location down to its configured limit in a single pass, deleting nothing that belongs to another host.
+
+**Solution 2 (case 2, when the old name is gone for good): remove the stranded archives by hand**:
+```bash
+# List first, and read the list
+ls -1 /opt/proxsave/backup/pve.home.arpa-backup-*.tar*
+
+# Then delete the ones you chose, by name, with a trailing glob so the .sha256,
+# .metadata and .manifest.json sidecars go with the archive
+rm -f /opt/proxsave/backup/pve.home.arpa-backup-20260101-000000.tar.xz*
+```
+Never pipe the listing straight into `rm`: the same directory may hold another machine's archives.
+
+> **Renaming the archives does not get them rotating again**, whichever way it is done. Rename the archive alone and its `.sha256` is left behind, so the run stops treating the archive as complete and reports it as `ignored by retention (no manifest/checksum)`. Rename the sidecars with it and the `.metadata` travels too, and the `hostname` recorded inside it is what attribution reads, so the archive is still attributed to the old spelling. A `.bundle.tar` carries that manifest inside the archive, where a rename cannot reach it at all. Restore the name resolution, or delete the archives.
+
+**Case 1: give every host its own location**. Point each host at its own directory (`BACKUP_PATH`, `SECONDARY_PATH`) or its own `CLOUD_REMOTE_PATH` prefix. See the "Give every host its own prefix" note in [CLOUD_STORAGE.md](CLOUD_STORAGE.md) for the cloud side.
+
+**Case 3: remove the pre-Go archives when you no longer need them**. Nothing will ever rotate them, so the only way the location comes back down is by hand.
+```bash
+# Name the files the run left alone. The per-file lines are DEBUG, so they are only
+# in the log of a run made at that level: set LOG_LEVEL=debug in backup.env, or run
+# one backup with --log-level debug, then read the newest log.
+grep "retention out of scope" "$(ls -t /opt/proxsave/log/backup-*.log | head -1)"
+
+# Check first whether the sidecar names a host. If it prints a name, that archive
+# still rotates on THAT machine and you should leave it where it is.
+grep -H "^HOSTNAME=" /opt/proxsave/backup/proxmox-backup-*.tar.*.metadata
+
+# List, read the list, then delete the ones you chose by name, with a trailing
+# glob so the .sha256 and .metadata sidecars go with the archive
+ls -1 /opt/proxsave/backup/proxmox-backup-*.tar.*
+rm -f /opt/proxsave/backup/proxmox-backup-20240101-000000.tar.gz*
+```
+Never pipe the listing straight into `rm`: the same directory may hold another machine's archives.
+
+> A host whose kernel hostname is literally `proxmox` writes archives with the same name shape (`proxmox-backup-<timestamp>`), so on that one host these are current backups, not a pre-Go backlog. Check the `HOSTNAME=` line before deleting anything there.
+
+**Verification**:
+```bash
+grep -E "retention ignored|Simple retention" \
+  "$(ls -t /opt/proxsave/log/backup-*.log | head -1)"
+```
+The warning is gone and the run reports `Simple retention -> current: N, limit: M, to_delete: K` with a `to_delete` that matches what you expect.
+
+---
+
 ### 6. Email Notification Issues
 
 #### Symptom: No email notifications received

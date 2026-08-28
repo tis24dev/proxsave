@@ -188,7 +188,7 @@ func TestApplyStorageStatsSimplePrimary(t *testing.T) {
 	storageStats := &storage.StorageStats{TotalBackups: 3, AvailableSpace: 100, UsedSpace: 80, TotalSpace: 200}
 	retentionCfg := storage.RetentionConfig{Policy: "simple", MaxBackups: 5}
 
-	adapter.applyStorageStats(storageStats, retentionCfg, stats)
+	adapter.applyStorageStats(storageStats, retentionCfg, -1, stats)
 
 	if stats.LocalBackups != 3 || stats.LocalFreeSpace != 100 || stats.LocalUsedSpace != 80 || stats.LocalTotalSpace != 200 {
 		t.Fatalf("local stats not set correctly: %+v", stats)
@@ -216,13 +216,22 @@ func TestApplyStorageStatsGFSPrimary(t *testing.T) {
 	storageStats := &storage.StorageStats{TotalBackups: len(backups), AvailableSpace: 500, UsedSpace: 400, TotalSpace: 1000}
 	retentionCfg := storage.RetentionConfig{Policy: "gfs", Daily: 1, Weekly: 1, Monthly: 1, Yearly: 1}
 
-	adapter.applyStorageStats(storageStats, retentionCfg, stats)
+	adapter.applyStorageStats(storageStats, retentionCfg, -1, stats)
 
 	if stats.LocalBackups != len(backups) {
 		t.Fatalf("LocalBackups = %d, want %d", stats.LocalBackups, len(backups))
 	}
-	if stats.LocalGFSCurrentDaily == 0 || stats.LocalGFSCurrentWeekly == 0 || stats.LocalGFSCurrentMonthly == 0 || stats.LocalGFSCurrentYearly == 0 {
-		t.Fatalf("GFS counters not populated: %+v", stats)
+	// The "current" GFS tier counters this used to assert on are gone. They were
+	// classified from a second unscoped listing, so on a shared location they
+	// described every host's archives while retention only moved this host's between
+	// tiers, and nothing ever rendered them: no template, no Telegram body, no
+	// webhook payload. Deleting them also removed a full extra listing per backend
+	// per run under GFS, an extra rclone lsl on cloud. The configured limits below
+	// are still pinned, but be clear about why: nothing renders them either, so this
+	// pins the plumbing rather than anything an operator sees. They are kept because
+	// they are cheap and already correct, not because they are displayed.
+	if stats.LocalGFSDaily != 1 || stats.LocalGFSWeekly != 1 || stats.LocalGFSMonthly != 1 || stats.LocalGFSYearly != 1 {
+		t.Fatalf("GFS limits not populated: %+v", stats)
 	}
 	if stats.LocalRetentionPolicy != "gfs" {
 		t.Fatalf("LocalRetentionPolicy = %q, want gfs", stats.LocalRetentionPolicy)
@@ -238,7 +247,7 @@ func TestApplyStorageStatsSimpleSecondaryUsesUsedSpace(t *testing.T) {
 	storageStats := &storage.StorageStats{TotalBackups: 4, AvailableSpace: 300, UsedSpace: 700, TotalSpace: 1000}
 	retentionCfg := storage.RetentionConfig{Policy: "simple", MaxBackups: 7}
 
-	adapter.applyStorageStats(storageStats, retentionCfg, stats)
+	adapter.applyStorageStats(storageStats, retentionCfg, -1, stats)
 
 	if !stats.SecondaryEnabled {
 		t.Fatalf("SecondaryEnabled = false, want true")
@@ -1575,7 +1584,7 @@ func TestApplyStorageStatsCloud(t *testing.T) {
 	stats := &BackupStats{}
 	storageStats := &storage.StorageStats{TotalBackups: 2}
 	retentionCfg := storage.RetentionConfig{Policy: "gfs", Daily: 1}
-	adapter.applyStorageStats(storageStats, retentionCfg, stats)
+	adapter.applyStorageStats(storageStats, retentionCfg, -1, stats)
 	if stats.CloudBackups != 2 || stats.CloudRetentionPolicy != "gfs" {
 		t.Fatalf("cloud stats not populated correctly: %+v", stats)
 	}

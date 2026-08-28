@@ -121,6 +121,7 @@ func discoverRcloneBackups(ctx context.Context, cfg *config.Config, remotePath s
 	if err != nil {
 		return nil, err
 	}
+	safeexec.ApplyWaitDelay(cmd)
 	lsfStart := time.Now()
 	output, err := cmd.CombinedOutput()
 	if err != nil {

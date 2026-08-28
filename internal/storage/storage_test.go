@@ -116,7 +116,7 @@ func TestLocalStorageListSkipsAssociatedFilesAndSortsByTimestamp(t *testing.T) {
 		BackupPath:            dir,
 		BundleAssociatedFiles: true,
 	}
-	local, err := NewLocalStorage(cfg, newTestLogger())
+	local, err := NewLocalStorage(cfg, newTestLogger(), "")
 	if err != nil {
 		t.Fatalf("NewLocalStorage() error = %v", err)
 	}
@@ -194,7 +194,7 @@ func TestLocalStorageListSkipsStandaloneWhenBundleExists(t *testing.T) {
 		BackupPath:            dir,
 		BundleAssociatedFiles: true,
 	}
-	local, err := NewLocalStorage(cfg, newTestLogger())
+	local, err := NewLocalStorage(cfg, newTestLogger(), "")
 	if err != nil {
 		t.Fatalf("NewLocalStorage() error = %v", err)
 	}
@@ -228,7 +228,7 @@ func TestLocalStorageApplyRetentionDeletesOldBackups(t *testing.T) {
 		BackupPath:            dir,
 		BundleAssociatedFiles: false,
 	}
-	local, err := NewLocalStorage(cfg, newTestLogger())
+	local, err := NewLocalStorage(cfg, newTestLogger(), "")
 	if err != nil {
 		t.Fatalf("NewLocalStorage() error = %v", err)
 	}
@@ -298,7 +298,7 @@ func TestLocalStorageApplyRetentionNoBackups(t *testing.T) {
 
 	dir := t.TempDir()
 	cfg := &config.Config{BackupPath: dir}
-	local, err := NewLocalStorage(cfg, newTestLogger())
+	local, err := NewLocalStorage(cfg, newTestLogger(), "")
 	if err != nil {
 		t.Fatalf("NewLocalStorage() error = %v", err)
 	}
@@ -322,7 +322,7 @@ func TestLocalStorageApplyRetentionWrapsListError(t *testing.T) {
 	}
 
 	cfg := &config.Config{BackupPath: badPath}
-	local, err := NewLocalStorage(cfg, newTestLogger())
+	local, err := NewLocalStorage(cfg, newTestLogger(), "")
 	if err != nil {
 		t.Fatalf("NewLocalStorage() error = %v", err)
 	}
@@ -345,7 +345,7 @@ func TestLocalStorageApplyRetentionDisabledMaxBackupsDoesNothing(t *testing.T) {
 
 	dir := t.TempDir()
 	cfg := &config.Config{BackupPath: dir}
-	local, err := NewLocalStorage(cfg, newTestLogger())
+	local, err := NewLocalStorage(cfg, newTestLogger(), "")
 	if err != nil {
 		t.Fatalf("NewLocalStorage() error = %v", err)
 	}
@@ -381,7 +381,7 @@ func TestLocalStorageApplyRetentionHasLogInfoFalseWhenLogGlobFails(t *testing.T)
 		BackupPath: dir,
 		LogPath:    badLogDir,
 	}
-	local, err := NewLocalStorage(cfg, newTestLogger())
+	local, err := NewLocalStorage(cfg, newTestLogger(), "")
 	if err != nil {
 		t.Fatalf("NewLocalStorage() error = %v", err)
 	}
@@ -431,7 +431,7 @@ func TestLocalStorageApplyRetentionGFSInvokesGFSRetention(t *testing.T) {
 
 	dir := t.TempDir()
 	cfg := &config.Config{BackupPath: dir}
-	local, err := NewLocalStorage(cfg, newTestLogger())
+	local, err := NewLocalStorage(cfg, newTestLogger(), "")
 	if err != nil {
 		t.Fatalf("NewLocalStorage() error = %v", err)
 	}
@@ -488,7 +488,7 @@ func TestLocalStorageLoadMetadataFromBundle(t *testing.T) {
 
 	dir := t.TempDir()
 	cfg := &config.Config{BackupPath: dir}
-	local, err := NewLocalStorage(cfg, newTestLogger())
+	local, err := NewLocalStorage(cfg, newTestLogger(), "")
 	if err != nil {
 		t.Fatalf("NewLocalStorage() error = %v", err)
 	}
@@ -558,7 +558,7 @@ func TestLocalStorageLoadMetadataFromBundleOpenError(t *testing.T) {
 
 	dir := t.TempDir()
 	cfg := &config.Config{BackupPath: dir}
-	local, err := NewLocalStorage(cfg, newTestLogger())
+	local, err := NewLocalStorage(cfg, newTestLogger(), "")
 	if err != nil {
 		t.Fatalf("NewLocalStorage() error = %v", err)
 	}
@@ -573,7 +573,7 @@ func TestLocalStorageLoadMetadataFromBundleReadError(t *testing.T) {
 
 	dir := t.TempDir()
 	cfg := &config.Config{BackupPath: dir}
-	local, err := NewLocalStorage(cfg, newTestLogger())
+	local, err := NewLocalStorage(cfg, newTestLogger(), "")
 	if err != nil {
 		t.Fatalf("NewLocalStorage() error = %v", err)
 	}
@@ -592,7 +592,7 @@ func TestLocalStorageLoadMetadataFromBundleParseError(t *testing.T) {
 
 	dir := t.TempDir()
 	cfg := &config.Config{BackupPath: dir}
-	local, err := NewLocalStorage(cfg, newTestLogger())
+	local, err := NewLocalStorage(cfg, newTestLogger(), "")
 	if err != nil {
 		t.Fatalf("NewLocalStorage() error = %v", err)
 	}
@@ -631,7 +631,7 @@ func TestLocalStorageLoadMetadataFromBundleFallsBackToStat(t *testing.T) {
 
 	dir := t.TempDir()
 	cfg := &config.Config{BackupPath: dir}
-	local, err := NewLocalStorage(cfg, newTestLogger())
+	local, err := NewLocalStorage(cfg, newTestLogger(), "")
 	if err != nil {
 		t.Fatalf("NewLocalStorage() error = %v", err)
 	}
@@ -695,7 +695,7 @@ func TestLocalStorageLoadMetadataFallsBackToSidecar(t *testing.T) {
 
 	dir := t.TempDir()
 	cfg := &config.Config{BackupPath: dir}
-	local, err := NewLocalStorage(cfg, newTestLogger())
+	local, err := NewLocalStorage(cfg, newTestLogger(), "")
 	if err != nil {
 		t.Fatalf("NewLocalStorage() error = %v", err)
 	}
@@ -749,7 +749,7 @@ func TestLocalStorageLoadMetadataMissingFile(t *testing.T) {
 
 	dir := t.TempDir()
 	cfg := &config.Config{BackupPath: dir}
-	local, err := NewLocalStorage(cfg, newTestLogger())
+	local, err := NewLocalStorage(cfg, newTestLogger(), "")
 	if err != nil {
 		t.Fatalf("NewLocalStorage() error = %v", err)
 	}
@@ -769,7 +769,7 @@ func TestLocalStorageLoadMetadataFromBundleMissingEntry(t *testing.T) {
 
 	dir := t.TempDir()
 	cfg := &config.Config{BackupPath: dir}
-	local, err := NewLocalStorage(cfg, newTestLogger())
+	local, err := NewLocalStorage(cfg, newTestLogger(), "")
 	if err != nil {
 		t.Fatalf("NewLocalStorage() error = %v", err)
 	}
@@ -812,7 +812,7 @@ func TestLocalStorageDeleteAssociatedLogRemovesFile(t *testing.T) {
 		BackupPath: baseDir,
 		LogPath:    logDir,
 	}
-	local, err := NewLocalStorage(cfg, newTestLogger())
+	local, err := NewLocalStorage(cfg, newTestLogger(), "")
 	if err != nil {
 		t.Fatalf("NewLocalStorage() error = %v", err)
 	}
@@ -1008,7 +1008,7 @@ func TestSecondaryStorageStoreCopiesBackupAndAssociatedFiles(t *testing.T) {
 		BundleAssociatedFiles: false,
 	}
 
-	secondary, err := NewSecondaryStorage(cfg, newTestLogger())
+	secondary, err := NewSecondaryStorage(cfg, newTestLogger(), "")
 	if err != nil {
 		t.Fatalf("NewSecondaryStorage() error = %v", err)
 	}
@@ -1593,7 +1593,7 @@ func TestSecondaryStorageStoreHonorsContextCancellation(t *testing.T) {
 
 func newSecondaryStorageForTest(t *testing.T, cfg *config.Config) *SecondaryStorage {
 	t.Helper()
-	storage, err := NewSecondaryStorage(cfg, newTestLogger())
+	storage, err := NewSecondaryStorage(cfg, newTestLogger(), "")
 	if err != nil {
 		t.Fatalf("NewSecondaryStorage() error = %v", err)
 	}
@@ -1709,7 +1709,7 @@ func TestSecondaryStorageBasicAccessors(t *testing.T) {
 	t.Parallel()
 
 	cfg := &config.Config{SecondaryEnabled: true, SecondaryPath: t.TempDir()}
-	storage, err := NewSecondaryStorage(cfg, newTestLogger())
+	storage, err := NewSecondaryStorage(cfg, newTestLogger(), "")
 	if err != nil {
 		t.Fatalf("NewSecondaryStorage() error = %v", err)
 	}
@@ -1741,7 +1741,7 @@ func TestSecondaryStorageDetectFilesystemCreatesDirectory(t *testing.T) {
 		SecondaryEnabled: true,
 		SecondaryPath:    tmpDir,
 	}
-	storage, err := NewSecondaryStorage(cfg, newTestLogger())
+	storage, err := NewSecondaryStorage(cfg, newTestLogger(), "")
 	if err != nil {
 		t.Fatalf("NewSecondaryStorage() error = %v", err)
 	}

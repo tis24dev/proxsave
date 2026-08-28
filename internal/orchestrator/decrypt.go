@@ -285,6 +285,7 @@ func inspectRcloneMetadataManifest(ctx context.Context, remoteMetadataPath, remo
 	if err != nil {
 		return nil, fmt.Errorf("prepare rclone metadata cat: %w", err)
 	}
+	safeexec.ApplyWaitDelay(cmd)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return nil, fmt.Errorf("rclone cat %s failed: %w (output: %s)", remoteMetadataPath, err, strings.TrimSpace(string(output)))
@@ -573,6 +574,13 @@ func extractBundleToWorkdirWithLogger(bundlePath, workDir string, logger *loggin
 			return stagedFiles{}, fmt.Errorf("resolve %s: %w", hdr.Name, err)
 		}
 		if rel == ".." || strings.HasPrefix(rel, ".."+string(os.PathSeparator)) {
+			return stagedFiles{}, fmt.Errorf("archive entry escapes workdir: %q", hdr.Name)
+		}
+		// Redundant prefix containment check: sanitizeBundleEntryName already
+		// reduces the entry to a base name and the filepath.Rel test above
+		// rejects escapes, but a prefix test is the form static analysers
+		// (CodeQL go/zipslip) recognise as a traversal barrier.
+		if !strings.HasPrefix(target, restoreRootPrefix(filepath.Clean(workDir))) {
 			return stagedFiles{}, fmt.Errorf("archive entry escapes workdir: %q", hdr.Name)
 		}
 		out, err := restoreFS.OpenFile(target, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o640)

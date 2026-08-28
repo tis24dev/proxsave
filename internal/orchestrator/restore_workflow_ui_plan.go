@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/tis24dev/proxsave/internal/logging"
+	"github.com/tis24dev/proxsave/internal/types"
 )
 
 func (w *restoreUIWorkflowRun) prepareBundleAndPlan() (fallbackToFullRestore bool, err error) {
@@ -199,9 +200,58 @@ func (w *restoreUIWorkflowRun) warnAccessControlHostnameMismatch() {
 	if err != nil || backupHost == "" || strings.TrimSpace(currentHost) == "" {
 		return
 	}
-	if !strings.EqualFold(strings.TrimSpace(currentHost), backupHost) {
+	if !accessControlHostIsOurs(backupHost, currentHost, w.runHostname) {
 		w.logger.Warning("Access control/TFA: backup hostname=%s current hostname=%s; WebAuthn users may require re-enrollment if the UI origin (FQDN/port) changes", backupHost, currentHost)
 	}
+}
+
+// unresolvedRunHostname is what resolveHostname in package main stamps when the
+// machine cannot name itself at all. It names no host, so it never counts as this
+// machine's identity: two machines that both failed to resolve must not look like
+// one. internal/storage refuses the same sentinel, for the same reason; the two
+// constants are kept separate so this package does not depend on a storage detail.
+const unresolvedRunHostname = "unknown"
+
+// accessControlHostIsOurs reports whether the restored bundle was written by THIS
+// machine. It applies the rule retention uses (hostOwnsName in internal/storage):
+// the backup's host is ours when it equals, once spelling is normalised, one of the
+// names this machine answers to. Those names are what os.Hostname() reports (the
+// kernel short name, usually "pve") and what this run resolved as its own write-side
+// identity (resolveHostname in package main, which prefers "hostname -f", usually
+// "pve.home.arpa"). The second one is the very function that stamped the hostname
+// into the archive, so both sides of the comparison are spelled by the same
+// resolver.
+//
+// There is deliberately no fold to the first label. "pve" and "pve.siteB.example"
+// are two machines unless this machine answers to both, and folding them would
+// silence this warning on exactly the cross-host restore it exists for: that is when
+// the UI origin, and so the WebAuthn credential binding, has really changed and an
+// admin can be locked out of the web UI.
+//
+// An empty runHost leaves the set at os.Hostname() alone, which is the strict rule
+// this check had before it learned about the run identity: a missing plumb warns
+// more, never less.
+//
+// It stays hostname-only, and deliberately does NOT learn the server identity that
+// retention's ownership rule gained. The two rules are not the same question. This one
+// asks whether the WebAuthn credential binding survived the restore, so a clone or a
+// restored container that inherited the source machine's identity is exactly the case
+// that MUST still warn. Retention's rule may widen on an identity because its failure
+// mode is a directory that grows; this one's failure mode is an admin locked out of
+// the web UI with no warning that it was coming.
+func accessControlHostIsOurs(backupHost, currentHost, runHost string) bool {
+	backup := types.NormalizeHostname(backupHost)
+	if backup == "" {
+		return false
+	}
+	if own := types.NormalizeHostname(currentHost); own != "" && own == backup {
+		return true
+	}
+	// The sentinel is refused only for the resolved run identity. A machine the
+	// kernel really does call "unknown" still recognises its own archives, just as
+	// it did before, which is the same position internal/storage takes.
+	own := types.NormalizeHostname(runHost)
+	return own != "" && own != unresolvedRunHostname && own == backup
 }
 
 func (w *restoreUIWorkflowRun) collapseStagingWhenUnavailable() {

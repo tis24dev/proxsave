@@ -36,14 +36,30 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           fetch-depth: 0
-          # Persist the token (default): this job runs `git push` to delete the
-          # unprotected pr-v* trigger tag, which needs the credential in git config.
           token: ${{ secrets.RELEASE_BOT_TOKEN || github.token }}
+          # This job deletes the unprotected pr-v* trigger tag with `git push`, but it
+          # authenticates from GIT_CONFIG_* below instead of from a credential left in
+          # .git/config, where the checked-out tag tree's own tooling could read it. That
+          # tree is the to-be-released, not-yet-reviewed code.
+          persist-credentials: false
 
       - name: Validate trigger tag and open release PR
         shell: bash
         run: |
           set -euo pipefail
+
+          # Ephemeral git credential. actions/checkout is run with
+          # persist-credentials: false, so nothing is written into .git/config where every
+          # later step and every tool the job runs could read it. GIT_CONFIG_* applies to
+          # each git invocation in this step only, including the ones inside the sourced
+          # release policy, and lives no longer than the shell.
+          #
+          # Deliberately NOT `git -c ...` per call: delete_remote_tag pushes from inside
+          # release-policy.sh, which is sourced from origin/main and therefore cannot be
+          # changed in lockstep with this file.
+          export GIT_CONFIG_COUNT=1
+          export GIT_CONFIG_KEY_0="http.https://github.com/.extraheader"
+          export GIT_CONFIG_VALUE_0="AUTHORIZATION: basic $(printf 'x-access-token:%s' "${GH_TOKEN}" | base64 -w0)"
 
           # SECURITY: source the release policy from the TRUSTED base (origin/main),
           # NEVER from the checked-out tag tree. On a `push: tags` event the default

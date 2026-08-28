@@ -23,21 +23,57 @@ type LocalStorage struct {
 	logger *logging.Logger
 	// hostname is this machine's name, resolved once at construction: retention
 	// only prunes backups this host owns.
-	hostname   string
+	hostname string
+	// hostAliases are the other names this machine answers to, built from the one
+	// name this run's writer stamped into the archives it produced ("hostname -f",
+	// so usually the FQDN). Empty on a machine with no domain, which leaves
+	// retention as strict as it has always been.
+	hostAliases []string
+	// serverID is this host's own server identity, read once from the config the
+	// constructor is handed. It is the ADDITIONAL ownership signal: it can confirm
+	// that an archive naming a spelling this host no longer resolves is this
+	// machine's own work, and it can do nothing else. Empty when this host does not
+	// know its identity, which leaves retention exactly as strict as it was before
+	// the field existed.
+	serverID   string
 	basePath   string
 	fsDetector *FilesystemDetector
 	fsInfo     *FilesystemInfo
 	lastRet    RetentionSummary
+	// scopeOwned and scopeValid sit beside lastRet rather than inside it because
+	// lastRet is assigned as a whole struct literal on four separate delete paths.
+	// A field added to that struct would be silently zeroed by any of them, which is
+	// the exact class of failure this count exists to stop (discussion #292).
+	scopeOwned int
+	scopeValid bool
+	// lastRetCompleted is the answer to "has a pass run and finished", which no
+	// count in lastRet can give: a healthy pass with nothing to delete publishes the
+	// same zeros a backend that has never run reports. It sits out here for the same
+	// reason scopeValid does, and it is published from the same deferred closure, so
+	// it can never describe a different pass from the numbers beside it.
+	lastRetCompleted bool
 }
 
-// NewLocalStorage creates a new local storage instance
-func NewLocalStorage(cfg *config.Config, logger *logging.Logger) (*LocalStorage, error) {
+// NewLocalStorage creates a new local storage instance.
+//
+// writtenHostname is the name this run's writer stamps into the archives it
+// produces (resolveHostname in package main, which prefers "hostname -f"). It is
+// what lets retention recognise its own FQDN-named archives while os.Hostname only
+// reports the kernel short name. Pass "" when the caller never runs retention: that
+// is safe but strict, and archives written under any other spelling of this
+// machine's name stop being rotated.
+func NewLocalStorage(cfg *config.Config, logger *logging.Logger, writtenHostname string) (*LocalStorage, error) {
+	host := resolveRetentionHostname()
+	serverID := types.NormalizeServerID(cfg.ServerID)
+	logRetentionServerIdentity(logger, "Local storage", serverID)
 	return &LocalStorage{
-		config:     cfg,
-		logger:     logger,
-		hostname:   resolveRetentionHostname(),
-		basePath:   cfg.BackupPath,
-		fsDetector: NewFilesystemDetector(logger, WithIOTimeout(fsIoTimeout(cfg))),
+		config:      cfg,
+		logger:      logger,
+		hostname:    host,
+		hostAliases: retentionHostAliases(host, []string{writtenHostname}),
+		serverID:    serverID,
+		basePath:    cfg.BackupPath,
+		fsDetector:  NewFilesystemDetector(logger, WithIOTimeout(fsIoTimeout(cfg))),
 	}, nil
 }
 
@@ -276,6 +312,7 @@ func (l *LocalStorage) loadMetadata(ctx context.Context, backupFile string) (*ty
 		Size:        manifest.ArchiveSize,
 		Checksum:    manifest.SHA256,
 		Hostname:    manifest.Hostname,
+		ServerID:    manifest.ServerID,
 		ProxmoxType: types.ProxmoxType(manifest.ProxmoxType),
 		Compression: types.CompressionType(manifest.CompressionType),
 		Version:     manifest.ScriptVersion,
@@ -314,6 +351,7 @@ func (l *LocalStorage) loadMetadataFromBundle(ctx context.Context, bundlePath st
 		Size:        manifest.ArchiveSize,
 		Checksum:    manifest.SHA256,
 		Hostname:    manifest.Hostname,
+		ServerID:    manifest.ServerID,
 		ProxmoxType: types.ProxmoxType(manifest.ProxmoxType),
 		Compression: types.CompressionType(manifest.CompressionType),
 		Version:     manifest.ScriptVersion,
@@ -454,6 +492,34 @@ func (l *LocalStorage) countLogFiles(ctx context.Context) int {
 func (l *LocalStorage) ApplyRetention(ctx context.Context, config RetentionConfig) (deleted int, err error) {
 	done := logging.DebugStart(l.logger, "local retention", "policy=%s max=%d", config.Policy, config.MaxBackups)
 	defer func() { done(err) }()
+
+	// Publish what this host owns here, net of what this pass then deletes. Declared
+	// before the first return so EVERY exit records something, including the two
+	// error bails above the scope call, which leave it invalid and let the reporter
+	// fall back to the unscoped total. The values are filled in once the listing has
+	// been scoped, a few lines down.
+
+	// lastRet is only assigned on the delete paths, so a pass that deletes nothing
+	// used to leave the previous pass's BackupsDeleted standing beside a freshly
+	// published scope: one struct, two different ages. Reset it here so every field
+	// LastRetentionSummary returns describes THIS pass.
+	//
+	// The reset alone still leaves a reader unable to tell those zeros apart from a
+	// healthy pass that had nothing to delete, so the same closure publishes whether
+	// the pass finished, taken from the named err. A panic unwinds through it with
+	// err still nil and would publish "completed"; that is true of the scope
+	// publication beside it as well, and a panicking retention pass ends the run
+	// (capturePanicExit, cmd/proxsave/main_lifecycle.go) with nobody left to read a
+	// summary.
+	// Reset together: the flag describes this struct, so leaving it set here made
+	// the value report a COMPLETED pass beside counts this pass had just zeroed,
+	// which is the one-struct-two-ages state the reset exists to prevent.
+	l.lastRet, l.lastRetCompleted = RetentionSummary{}, false
+	owned, scoped := 0, false
+	defer func() {
+		l.scopeOwned, l.scopeValid, l.lastRetCompleted = owned-deleted, scoped, err == nil
+	}()
+
 	if err := ctx.Err(); err != nil {
 		return 0, err
 	}
@@ -472,8 +538,26 @@ func (l *LocalStorage) ApplyRetention(ctx context.Context, config RetentionConfi
 	}
 
 	// Drop anything this host does not own before counting or deleting: the
-	// "*-backup-*" glob that produced this list matches every hostname.
-	backups = applyRetentionHostScope("Local storage", l.hostname, backups, l.logger)
+	// "*-backup-*" glob that produced this list matches every hostname, and the list
+	// also carries other spellings of this host's own name.
+	backups, unmanaged := applyRetentionHostScope("Local storage", retentionIdentity{hostname: l.hostname, aliases: l.hostAliases, serverID: l.serverID}, backups, l.logger)
+
+	// This is the only frame that knows the number: the listing above matches every
+	// hostname, and GetStats reruns that same unscoped listing for its own count. The
+	// steady state, "already within the limit", returns early a few lines down and
+	// used to record nothing at all, so the healthy run was exactly the one where the
+	// notification fell back to counting every host's archives (discussion #292).
+	//
+	// unmanaged is added, not discarded. Those archives are on this disk and no host
+	// will ever prune them, so leaving them out reports an all-clear on a directory
+	// that is growing: an upgraded host with twenty pre-Go archives beside two new
+	// ones would read "2/7" while storing twenty-two. Archives belonging to a named
+	// other machine are excluded, which is what scoping is for.
+	//
+	// Left invalid when the host cannot name itself: applyRetentionHostScope returns
+	// nil there and warns, so publishing 0 would print "0/7" beside a directory
+	// holding forty archives, which is a worse lie than the one being fixed.
+	owned, scoped = len(backups)+unmanaged, strings.TrimSpace(l.hostname) != ""
 
 	if len(backups) == 0 {
 		l.logger.Debug("Local storage: no backups to apply retention")
@@ -662,8 +746,13 @@ func (l *LocalStorage) applySimpleRetention(ctx context.Context, backups []*type
 }
 
 // LastRetentionSummary returns information about the latest retention run.
+// See RetentionReporter (storage.go) for what the value is worth and when:
+// PassCompleted is false until a pass has run and finished, and the counts beside
+// it are zero while it is.
 func (l *LocalStorage) LastRetentionSummary() RetentionSummary {
-	return l.lastRet
+	s := l.lastRet
+	s.ScopeValid, s.Owned, s.PassCompleted = l.scopeValid, l.scopeOwned, l.lastRetCompleted
+	return s
 }
 
 // VerifyUpload is not applicable for local storage

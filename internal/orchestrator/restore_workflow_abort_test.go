@@ -18,7 +18,7 @@ func TestRunRestoreWorkflowWithUIClearsStaleAbortInfoBeforeValidation(t *testing
 	lastRestoreAbortInfo = &RestoreAbortInfo{NetworkRollbackArmed: true}
 	t.Cleanup(ClearRestoreAbortInfo)
 
-	if err := runRestoreWorkflowWithUI(context.Background(), nil, nil, "vtest", nil); err == nil {
+	if err := runRestoreWorkflowWithUI(context.Background(), nil, nil, "vtest", nil, ""); err == nil {
 		t.Fatalf("expected configuration error")
 	}
 	if got := GetLastRestoreAbortInfo(); got != nil {
@@ -112,7 +112,7 @@ func TestRunRestoreWorkflow_FstabPromptInputAborted_AbortsWorkflow(t *testing.T)
 		confirmFstabMergeErr: input.ErrInputAborted,
 	}
 
-	if err := runRestoreWorkflowWithUI(context.Background(), cfg, logger, "vtest", ui); err != ErrRestoreAborted {
+	if err := runRestoreWorkflowWithUI(context.Background(), cfg, logger, "vtest", ui, ""); err != ErrRestoreAborted {
 		t.Fatalf("err=%v; want %v", err, ErrRestoreAborted)
 	}
 }

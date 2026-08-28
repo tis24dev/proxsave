@@ -42,7 +42,7 @@ func prepareRestoreBundleWithUI(ctx context.Context, cfg *config.Config, logger 
 	return candidate, prepared, nil
 }
 
-func runRestoreWorkflowWithUI(ctx context.Context, cfg *config.Config, logger *logging.Logger, version string, ui RestoreWorkflowUI) (err error) {
+func runRestoreWorkflowWithUI(ctx context.Context, cfg *config.Config, logger *logging.Logger, version string, ui RestoreWorkflowUI, runHostname string) (err error) {
 	ClearRestoreAbortInfo()
 	if cfg == nil {
 		return fmt.Errorf("configuration not available")
@@ -58,7 +58,7 @@ func runRestoreWorkflowWithUI(ctx context.Context, cfg *config.Config, logger *l
 	defer func() { done(err) }()
 	defer func() { err = normalizeRestoreWorkflowUIError(ctx, logger, err) }()
 
-	workflow := newRestoreUIWorkflowRun(ctx, cfg, logger, version, ui)
+	workflow := newRestoreUIWorkflowRun(ctx, cfg, logger, version, ui, runHostname)
 	return workflow.run()
 }
 

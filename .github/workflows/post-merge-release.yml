@@ -35,6 +35,9 @@ jobs:
         with:
           fetch-depth: 0
           token: ${{ secrets.RELEASE_BOT_TOKEN || github.token }}
+          # The pushes below authenticate themselves from GIT_CONFIG_* instead, so the
+          # credential never reaches .git/config.
+          persist-credentials: false
 
       - name: Finalize release
         shell: bash
@@ -44,6 +47,20 @@ jobs:
           PR_BODY: ${{ github.event.pull_request.body }}
         run: |
           set -euo pipefail
+
+          # Ephemeral git credential. actions/checkout is run with
+          # persist-credentials: false, so nothing is written into .git/config where every
+          # later step and every tool the job runs could read it. GIT_CONFIG_* applies to
+          # each git invocation in this step only, including the ones inside the sourced
+          # release policy, and lives no longer than the shell.
+          #
+          # Deliberately NOT `git -c ...` per call: delete_remote_tag pushes from inside
+          # release-policy.sh, which is sourced from origin/main and therefore cannot be
+          # changed in lockstep with this file.
+          export GIT_CONFIG_COUNT=1
+          export GIT_CONFIG_KEY_0="http.https://github.com/.extraheader"
+          export GIT_CONFIG_VALUE_0="AUTHORIZATION: basic $(printf 'x-access-token:%s' "${GH_TOKEN}" | base64 -w0)"
+
           source .github/scripts/release-policy.sh
 
           HAS_RELEASE_MARKER="false"

@@ -61,6 +61,13 @@ func (s *StorageAdapter) Sync(ctx context.Context, stats *BackupStats) error {
 	fsInfo := s.fsInfo
 	hasWarnings := false
 	hasErrors := false
+	// scopedBackups is how many archives this host owns at this location after the
+	// retention pass, or -1 when retention did not run or could not finish. It is
+	// read back from the backend rather than recomputed here: the host identity set
+	// (the kernel name plus the aliases the writer stamped) lives on the backend and
+	// is deliberately unreachable from this package, so a copy here would be a second
+	// answer to "whose archive is this" (discussion #292).
+	scopedBackups := -1
 	if fsInfo == nil {
 		fsInfo, err = s.backend.DetectFilesystem(ctx)
 		if err != nil {
@@ -138,19 +145,28 @@ func (s *StorageAdapter) Sync(ctx context.Context, stats *BackupStats) error {
 			// Non-critical error - log warning and continue
 			s.logger.Warning("WARNING: %s retention failed: %v", s.backend.Name(), err)
 			hasWarnings = true
-		} else if deleted > 0 {
+		} else {
+			// Read on every successful pass, not only when something was deleted. The
+			// steady state, nothing to delete, is the common healthy run, and it was
+			// exactly the one where the owned count used to be thrown away and the
+			// summary fell back to counting every host's archives (discussion #292).
 			if reporter, ok := s.backend.(storage.RetentionReporter); ok {
 				summary := reporter.LastRetentionSummary()
-				backupsDeleted := summary.BackupsDeleted
-				if backupsDeleted == 0 {
-					backupsDeleted = deleted
+				if summary.ScopeValid {
+					scopedBackups = summary.Owned
 				}
-				logSuffix := ""
-				if summary.LogsDeleted > 0 {
-					logSuffix = fmt.Sprintf(" (logs deleted: %d)", summary.LogsDeleted)
+				if deleted > 0 {
+					backupsDeleted := summary.BackupsDeleted
+					if backupsDeleted == 0 {
+						backupsDeleted = deleted
+					}
+					logSuffix := ""
+					if summary.LogsDeleted > 0 {
+						logSuffix = fmt.Sprintf(" (logs deleted: %d)", summary.LogsDeleted)
+					}
+					s.logger.Info("✓ %s: Deleted %d old backups%s", s.backend.Name(), backupsDeleted, logSuffix)
 				}
-				s.logger.Info("✓ %s: Deleted %d old backups%s", s.backend.Name(), backupsDeleted, logSuffix)
-			} else {
+			} else if deleted > 0 {
 				s.logger.Info("✓ %s: Deleted %d old backups", s.backend.Name(), deleted)
 			}
 		}
@@ -171,7 +187,7 @@ func (s *StorageAdapter) Sync(ctx context.Context, stats *BackupStats) error {
 		}
 
 		if stats != nil {
-			s.applyStorageStats(storageStats, retentionConfig, stats)
+			s.applyStorageStats(storageStats, retentionConfig, scopedBackups, stats)
 		}
 	}
 
@@ -185,12 +201,11 @@ func (s *StorageAdapter) Sync(ctx context.Context, stats *BackupStats) error {
 }
 
 func (s *StorageAdapter) logCurrentBackupCount() {
-	listable, ok := s.backend.(interface {
-		List(context.Context) ([]*types.BackupMetadata, error)
-	})
-	if !ok {
-		return
-	}
+	// Called through the interface, not through a runtime type assertion.
+	// storage.Storage declares List and s.backend is already that type, so the
+	// assertion that used to sit here could never fail, while its !ok branch would
+	// have turned any future rename or signature change on List into a silent
+	// "no backups" with a clean build and no log line.
 
 	// The cloud backend already logs the current count during ApplyRetention
 	// by reusing the same list; avoid a second rclone lsl call.
@@ -198,7 +213,7 @@ func (s *StorageAdapter) logCurrentBackupCount() {
 		return
 	}
 
-	backups, err := listable.List(context.Background())
+	backups, err := s.backend.List(context.Background())
 	if err != nil {
 		s.logger.Debug("%s: Unable to count backups prior to retention: %v", s.backend.Name(), err)
 		return
@@ -236,29 +251,26 @@ func formatBytes(bytes int64) string {
 	return fmt.Sprintf("%.1f %ciB", float64(bytes)/float64(div), "KMGTPE"[exp])
 }
 
-func (s *StorageAdapter) applyStorageStats(storageStats *storage.StorageStats, retentionConfig storage.RetentionConfig, stats *BackupStats) {
+func (s *StorageAdapter) applyStorageStats(storageStats *storage.StorageStats, retentionConfig storage.RetentionConfig, scopedBackups int, stats *BackupStats) {
 	if storageStats == nil || stats == nil {
 		return
 	}
 
-	// Get current GFS stats if in GFS mode
-	var gfsStats map[storage.RetentionCategory]int
-	if retentionConfig.Policy == "gfs" {
-		// Get backups list for classification
-		if listable, ok := s.backend.(interface {
-			List(context.Context) ([]*types.BackupMetadata, error)
-		}); ok {
-			backups, err := listable.List(context.Background())
-			if err == nil && len(backups) > 0 {
-				classification := storage.ClassifyBackupsGFS(backups, retentionConfig)
-				gfsStats = storage.GetRetentionStats(classification)
-			}
-		}
+	// storageStats.TotalBackups comes from a listing that matches every hostname, so
+	// on a location shared with another ProxSave host it counts that host's archives
+	// too, while retention only ever manages the ones this host owns. Rendered
+	// against this host's own limit it reads as a breach that is not happening
+	// (discussion #292). Prefer the count retention itself arrived at. -1 means
+	// retention did not run or failed, and the unscoped listing is then the only
+	// number there is: saying 0 on a location holding forty archives would be worse.
+	backupCount := storageStats.TotalBackups
+	if scopedBackups >= 0 {
+		backupCount = scopedBackups
 	}
 
 	switch s.backend.Location() {
 	case storage.LocationPrimary:
-		stats.LocalBackups = storageStats.TotalBackups
+		stats.LocalBackups = backupCount
 		stats.LocalFreeSpace = clampInt64ToUint64(storageStats.AvailableSpace)
 		stats.LocalUsedSpace = clampInt64ToUint64(storageStats.UsedSpace)
 		stats.LocalTotalSpace = clampInt64ToUint64(storageStats.TotalSpace)
@@ -269,18 +281,12 @@ func (s *StorageAdapter) applyStorageStats(storageStats *storage.StorageStats, r
 			stats.LocalGFSWeekly = retentionConfig.Weekly
 			stats.LocalGFSMonthly = retentionConfig.Monthly
 			stats.LocalGFSYearly = retentionConfig.Yearly
-			if gfsStats != nil {
-				stats.LocalGFSCurrentDaily = gfsStats[storage.CategoryDaily]
-				stats.LocalGFSCurrentWeekly = gfsStats[storage.CategoryWeekly]
-				stats.LocalGFSCurrentMonthly = gfsStats[storage.CategoryMonthly]
-				stats.LocalGFSCurrentYearly = gfsStats[storage.CategoryYearly]
-			}
 		}
 	case storage.LocationSecondary:
 		if !stats.SecondaryEnabled {
 			stats.SecondaryEnabled = true
 		}
-		stats.SecondaryBackups = storageStats.TotalBackups
+		stats.SecondaryBackups = backupCount
 		stats.SecondaryFreeSpace = clampInt64ToUint64(storageStats.AvailableSpace)
 		stats.SecondaryUsedSpace = clampInt64ToUint64(storageStats.UsedSpace)
 		stats.SecondaryTotalSpace = clampInt64ToUint64(storageStats.TotalSpace)
@@ -291,18 +297,12 @@ func (s *StorageAdapter) applyStorageStats(storageStats *storage.StorageStats, r
 			stats.SecondaryGFSWeekly = retentionConfig.Weekly
 			stats.SecondaryGFSMonthly = retentionConfig.Monthly
 			stats.SecondaryGFSYearly = retentionConfig.Yearly
-			if gfsStats != nil {
-				stats.SecondaryGFSCurrentDaily = gfsStats[storage.CategoryDaily]
-				stats.SecondaryGFSCurrentWeekly = gfsStats[storage.CategoryWeekly]
-				stats.SecondaryGFSCurrentMonthly = gfsStats[storage.CategoryMonthly]
-				stats.SecondaryGFSCurrentYearly = gfsStats[storage.CategoryYearly]
-			}
 		}
 	case storage.LocationCloud:
 		if !stats.CloudEnabled {
 			stats.CloudEnabled = true
 		}
-		stats.CloudBackups = storageStats.TotalBackups
+		stats.CloudBackups = backupCount
 		// Populate retention info
 		stats.CloudRetentionPolicy = retentionConfig.Policy
 		if retentionConfig.Policy == "gfs" {
@@ -310,12 +310,6 @@ func (s *StorageAdapter) applyStorageStats(storageStats *storage.StorageStats, r
 			stats.CloudGFSWeekly = retentionConfig.Weekly
 			stats.CloudGFSMonthly = retentionConfig.Monthly
 			stats.CloudGFSYearly = retentionConfig.Yearly
-			if gfsStats != nil {
-				stats.CloudGFSCurrentDaily = gfsStats[storage.CategoryDaily]
-				stats.CloudGFSCurrentWeekly = gfsStats[storage.CategoryWeekly]
-				stats.CloudGFSCurrentMonthly = gfsStats[storage.CategoryMonthly]
-				stats.CloudGFSCurrentYearly = gfsStats[storage.CategoryYearly]
-			}
 		}
 	}
 }

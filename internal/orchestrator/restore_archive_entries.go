@@ -249,6 +249,23 @@ func extractHardlink(target string, header *tar.Header, destRoot string) error {
 	if err != nil {
 		return fmt.Errorf("hardlink target escapes root: %s -> %s: %w", header.Name, linkName, err)
 	}
+	// Redundant prefix containment on the resolved target: resolvePathWithinRootFS
+	// already guarantees it, but the check has to be in this frame for static
+	// analysers (CodeQL go/zipslip) to treat the Link call below as safe.
+	//
+	// It compares against the CANONICAL root, not destRoot as written, because that
+	// is what resolvePathWithinRootFS builds its result out of: it walks outwards
+	// from canonicalRoot and never from the lexical path. The two agree only while
+	// the destination root carries no symlink of its own, and restoring into one
+	// (a /var/lib/vz that is a link, say) would otherwise reject every hard link in
+	// the archive as an escape although none of them escapes.
+	_, canonicalRoot, err := prepareRootPathsFS(restoreFS, destRoot)
+	if err != nil {
+		return fmt.Errorf("resolve destination root for %s: %w", header.Name, err)
+	}
+	if !strings.HasPrefix(linkTarget, restoreRootPrefix(canonicalRoot)) {
+		return fmt.Errorf("hardlink target escapes root: %s -> %s", header.Name, linkName)
+	}
 
 	// Remove existing file/link if it exists
 	_ = restoreFS.Remove(target)

@@ -641,7 +641,7 @@ func TestRunRestoreCommandStream_FallsBackToExecCommand(t *testing.T) {
 }
 
 func TestRunRestoreWorkflow_ReturnsErrorWhenConfigMissing(t *testing.T) {
-	err := RunRestoreWorkflow(context.Background(), nil, newTestLogger(), "")
+	err := RunRestoreWorkflow(context.Background(), nil, newTestLogger(), "", "")
 	if err == nil || !strings.Contains(err.Error(), "configuration not available") {
 		t.Fatalf("expected config missing error, got %v", err)
 	}

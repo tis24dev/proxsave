@@ -33,8 +33,24 @@ func sanitizeRestoreEntryTargetWithFS(fsys FS, destRoot, entryName string) (stri
 	if err := ensureRestoreTargetResolverAllows(fsys, absDestRoot, absTarget, entryName); err != nil {
 		return "", "", err
 	}
+	// Redundant containment check, kept inline so it dominates the return of the
+	// sanitized path. ensureRestoreTargetWithinRoot already rejects escapes via
+	// filepath.Rel, but a prefix test in this frame is the form static analysers
+	// (CodeQL go/zipslip) recognise as a traversal barrier.
+	if !strings.HasPrefix(absTarget, restoreRootPrefix(absDestRoot)) {
+		return "", "", fmt.Errorf("illegal path: %s", entryName)
+	}
 
 	return absTarget, absDestRoot, nil
+}
+
+// restoreRootPrefix returns root with a trailing separator so it can be used as
+// a containment prefix. Filesystem root already ends with the separator.
+func restoreRootPrefix(root string) string {
+	if strings.HasSuffix(root, string(os.PathSeparator)) {
+		return root
+	}
+	return root + string(os.PathSeparator)
 }
 
 func resolveRestoreDestRoot(destRoot string) (string, error) {

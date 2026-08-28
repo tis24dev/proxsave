@@ -53,7 +53,10 @@ func initializePrimaryStorage(opts backupModeOptions) (storage.Storage, *storage
 	logger := opts.logger
 
 	logging.DebugStep(logger, "storage init", "primary backend")
-	localBackend, err := storage.NewLocalStorage(cfg, logger)
+	// Retention needs the name this run writes under, not just os.Hostname: archives
+	// carry what "hostname -f" returned, while os.Hostname reports the kernel short
+	// name, and an archive is only this host's own if it matches one of the two.
+	localBackend, err := storage.NewLocalStorage(cfg, logger, opts.hostname)
 	if err != nil {
 		return nil, nil, "Failed to initialize local storage", err
 	}
@@ -91,7 +94,7 @@ func initializeSecondaryStorage(opts backupModeOptions, orch *orchestrator.Orche
 	}
 
 	logging.DebugStep(logger, "storage init", "secondary backend")
-	secondaryBackend, err := storage.NewSecondaryStorage(cfg, logger)
+	secondaryBackend, err := storage.NewSecondaryStorage(cfg, logger, opts.hostname)
 	if err != nil {
 		logging.Warning("Failed to initialize secondary storage: %v", err)
 		logging.Info("Path Secondary: %s", formatDetailedFilesystemLabel(cfg.SecondaryPath, nil))
@@ -121,7 +124,7 @@ func initializeCloudStorage(opts backupModeOptions, orch *orchestrator.Orchestra
 	}
 
 	logging.DebugStep(logger, "storage init", "cloud backend")
-	cloudBackend, err := storage.NewCloudStorage(cfg, logger)
+	cloudBackend, err := storage.NewCloudStorage(cfg, logger, opts.hostname)
 	if err != nil {
 		logging.Warning("Failed to initialize cloud storage: %v", err)
 		logging.Info("Path Cloud: %s", formatDetailedFilesystemLabel(cfg.CloudRemote, nil))

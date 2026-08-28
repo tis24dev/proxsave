@@ -291,6 +291,21 @@ func logMonitoringPortalLink(stats *orchestrator.BackupStats) {
 	}
 }
 
+// runHostnameWaitDelay bounds how long the "hostname -f" probe below waits, after
+// its own deadline has fired or the process has exited, for stdout to drain before
+// the pipe is force-closed and Wait is released. It is the reaping half of the
+// WithTimeout+WaitDelay pair, and without it the 2 second timeout below bounds
+// nothing: CommandContext kills the direct child, but Output waits on the PIPE, and
+// any grandchild that inherited stdout still holds it open. Measured at 20 seconds
+// on a "hostname" that forks a sleeper and exits at once, where the context never
+// even fires. This probe is the first statement of initializeRunLogFile, before the
+// run log file exists, so a stall here is invisible on every single run.
+//
+// 3s mirrors orchestrator.defaultCommandWaitDelay and storage.cloudExecWaitDelay,
+// so the worst case is 5 seconds rather than unbounded. A var, not a const, so a
+// test can shrink it, matching the idiom in cloud_timeout_test.go.
+var runHostnameWaitDelay = safeexec.CommandWaitDelay
+
 func resolveHostname() string {
 	if path, err := exec.LookPath("hostname"); err == nil {
 		cmdCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
@@ -298,6 +313,7 @@ func resolveHostname() string {
 
 		cmd, cmdErr := safeexec.TrustedCommandContext(cmdCtx, path, "-f")
 		if cmdErr == nil {
+			cmd.WaitDelay = runHostnameWaitDelay
 			if out, err := cmd.Output(); err == nil {
 				if fqdn := strings.TrimSpace(string(out)); fqdn != "" {
 					return fqdn
@@ -773,6 +789,7 @@ func migrateLegacyCronEntries(ctx context.Context, baseDir, execPath string, boo
 		if err != nil {
 			return "", err
 		}
+		safeexec.ApplyWaitDelay(cmd)
 		output, err := cmd.CombinedOutput()
 		if err != nil {
 			lower := strings.ToLower(string(output))
@@ -789,6 +806,12 @@ func migrateLegacyCronEntries(ctx context.Context, baseDir, execPath string, boo
 		if err != nil {
 			return err
 		}
+		// DELIBERATELY NOT safeexec.ApplyWaitDelay, unlike readCron above. See the note on
+		// crontabWriteLines in daemon_setup.go for the measurements; the stakes are highest
+		// here. This writer's error is DISCARDED (migrateLegacyCronEntries is void), and
+		// applyCronMode calls it to establish the cron fallback and then removes the daemon
+		// unit unconditionally. A bound that killed a working descendant here would leave
+		// the host with no cron line AND no daemon, silently.
 		cmd.Stdin = strings.NewReader(content)
 		output, err := cmd.CombinedOutput()
 		if err != nil {
@@ -1082,14 +1105,19 @@ func commandTokenMatchesTarget(token string) bool {
 }
 
 func fetchBackupList(ctx context.Context, backend storage.Storage) []*types.BackupMetadata {
-	listable, ok := backend.(interface {
-		List(context.Context) ([]*types.BackupMetadata, error)
-	})
-	if !ok {
+	// Called through the interface, not through a runtime type assertion.
+	// storage.Storage declares List and this parameter is already that type, so the
+	// assertion that used to sit here could never fail, while its !ok branch returned
+	// nil: any future rename or signature change on List would have degraded the
+	// startup summary to "no backups found" with a clean build and no log line.
+	//
+	// The nil check is what that assertion did as a side effect. No caller passes nil
+	// today, every one of the three bails on its constructor error first, but the
+	// assertion used to absorb a nil interface and this call would panic on one.
+	if backend == nil {
 		return nil
 	}
-
-	backups, err := listable.List(ctx)
+	backups, err := backend.List(ctx)
 	if err != nil {
 		return nil
 	}

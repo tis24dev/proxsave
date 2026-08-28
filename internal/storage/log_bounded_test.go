@@ -23,7 +23,7 @@ func TestDeleteAssociatedLogBoundedByContext(t *testing.T) {
 		LogPath:            logDir,
 		FsIoTimeoutSeconds: 30,
 	}
-	l, err := NewLocalStorage(cfg, newTestLogger())
+	l, err := NewLocalStorage(cfg, newTestLogger(), "")
 	if err != nil {
 		t.Fatalf("NewLocalStorage() error = %v", err)
 	}

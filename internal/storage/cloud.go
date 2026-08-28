@@ -75,13 +75,30 @@ type CloudStorage struct {
 	waitForRetry   func(context.Context, time.Duration) error
 	sleep          func(time.Duration)
 	lastRet        RetentionSummary
-	remoteFilesMu  sync.RWMutex
-	remoteFiles    map[string]struct{}
-	logPathMu      sync.Mutex
-	logPathMissing bool
+	// See the note on LocalStorage.scopeOwned: kept outside lastRet because that
+	// struct is replaced wholesale on the delete paths.
+	scopeOwned int
+	scopeValid bool
+	// See the note on LocalStorage.lastRetCompleted: no count in lastRet can say
+	// whether a pass ran at all, so the answer is published beside them.
+	lastRetCompleted bool
+	remoteFilesMu    sync.RWMutex
+	remoteFiles      map[string]struct{}
+	logPathMu        sync.Mutex
+	logPathMissing   bool
 	// hostname is this machine's name, resolved once at construction: retention
 	// only prunes backups this host owns.
 	hostname string
+	// hostAliases are the other names this machine answers to, built from the one
+	// name this run's writer stamped into the archives it produced ("hostname -f",
+	// so usually the FQDN). Empty on a machine with no domain, which leaves
+	// retention as strict as it has always been.
+	hostAliases []string
+	// serverID is this host's own server identity. See LocalStorage.serverID: it can
+	// only ever confirm a claim the hostname already makes ambiguously. Cloud is the
+	// location most likely to be shared, because the shipped CLOUD_REMOTE_PATH
+	// default is a root with no host component.
+	serverID string
 }
 
 func (c *CloudStorage) remoteLabel() string {
@@ -124,8 +141,8 @@ func validateRcloneArgs(args []string) error {
 	}
 	switch args[0] {
 	// "cat" is read-only and is here for retention's manifest attribution
-	// (remoteManifestHostname): it reads an archive's sidecar to learn which host
-	// owns the backup before retention may delete it. It cannot create, overwrite or
+	// (remoteManifestOwner): it reads an archive's sidecar to learn which host and
+	// which server identity own the backup before retention may delete it. It cannot create, overwrite or
 	// remove anything, and the path it receives is built by remotePathFor, which
 	// path.Clean's the name and joins it under the configured prefix.
 	case "cat", "copyto", "delete", "deletefile", "hashsum", "ls", "lsf", "lsl", "mkdir", "touch":
@@ -211,8 +228,15 @@ func waitForRetryContext(ctx context.Context, d time.Duration) error {
 	}
 }
 
-// NewCloudStorage creates a new cloud storage instance
-func NewCloudStorage(cfg *config.Config, logger *logging.Logger) (*CloudStorage, error) {
+// NewCloudStorage creates a new cloud storage instance.
+//
+// writtenHostname is the name this run's writer stamps into the archives it
+// produces (resolveHostname in package main, which prefers "hostname -f"). It is
+// what lets retention recognise its own FQDN-named archives while os.Hostname only
+// reports the kernel short name. Pass "" when the caller never runs retention: that
+// is safe but strict, and archives written under any other spelling of this
+// machine's name stop being rotated.
+func NewCloudStorage(cfg *config.Config, logger *logging.Logger, writtenHostname string) (*CloudStorage, error) {
 	// Normalize CloudRemote and CloudRemotePath into:
 	//   - remote: rclone remote name (e.g. "gdrive")
 	//   - remotePrefix: full path inside the remote where backups live
@@ -243,10 +267,15 @@ func NewCloudStorage(cfg *config.Config, logger *logging.Logger) (*CloudStorage,
 	if parallelJobs <= 0 {
 		parallelJobs = 1
 	}
+	host := resolveRetentionHostname()
+	serverID := types.NormalizeServerID(cfg.ServerID)
+	logRetentionServerIdentity(logger, "Cloud storage", serverID)
 	return &CloudStorage{
 		config:         cfg,
 		logger:         logger,
-		hostname:       resolveRetentionHostname(),
+		hostname:       host,
+		hostAliases:    retentionHostAliases(host, []string{writtenHostname}),
+		serverID:       serverID,
 		remote:         remoteName,
 		remotePrefix:   combinedPrefix,
 		uploadMode:     mode,
@@ -1845,6 +1874,26 @@ func (c *CloudStorage) cloudLogPath(basePath, fileName string) string {
 func (c *CloudStorage) ApplyRetention(ctx context.Context, config RetentionConfig) (deleted int, err error) {
 	done := logging.DebugStart(c.logger, "cloud retention", "policy=%s max=%d", config.Policy, config.MaxBackups)
 	defer func() { done(err) }()
+
+	// See LocalStorage.ApplyRetention for why this is declared before the first
+	// return and why an unnamed host leaves it invalid.
+
+	// lastRet is only assigned on the delete paths, so a pass that deletes nothing
+	// used to leave the previous pass's BackupsDeleted standing beside a freshly
+	// published scope: one struct, two different ages. Reset it here so every field
+	// LastRetentionSummary returns describes THIS pass.
+	// The same closure publishes whether the pass finished, taken from the named
+	// err: see LocalStorage.ApplyRetention for why a reset alone cannot tell a
+	// bailed pass from a healthy one with nothing to delete.
+	// Reset together: the flag describes this struct, so leaving it set here made
+	// the value report a COMPLETED pass beside counts this pass had just zeroed,
+	// which is the one-struct-two-ages state the reset exists to prevent.
+	c.lastRet, c.lastRetCompleted = RetentionSummary{}, false
+	owned, scoped := 0, false
+	defer func() {
+		c.scopeOwned, c.scopeValid, c.lastRetCompleted = owned-deleted, scoped, err == nil
+	}()
+
 	if err := ctx.Err(); err != nil {
 		return 0, err
 	}
@@ -1871,7 +1920,14 @@ func (c *CloudStorage) ApplyRetention(ctx context.Context, config RetentionConfi
 	// and drop everything this host does not own, BEFORE anything is counted toward
 	// the keep limit or selected for deletion.
 	c.resolveRetentionOwners(ctx, backups)
-	backups = applyRetentionHostScope("Cloud storage", c.hostname, backups, c.logger)
+	backups, unmanaged := applyRetentionHostScope("Cloud storage", retentionIdentity{hostname: c.hostname, aliases: c.hostAliases, serverID: c.serverID}, backups, c.logger)
+
+	// Taken here rather than from a second listing: the attribution above costs one
+	// rclone cat per archive, and cloud_retention_owner.go records that List stays
+	// deliberately cheap for exactly that reason. Recomputing this count elsewhere
+	// would mean paying it again. See LocalStorage.ApplyRetention for why the
+	// archives no host manages are added back rather than dropped.
+	owned, scoped = len(backups)+unmanaged, strings.TrimSpace(c.hostname) != ""
 
 	if len(backups) == 0 {
 		c.logger.Debug("Cloud storage: no backups to apply retention")
@@ -2033,8 +2089,11 @@ func (c *CloudStorage) deleteBatched(ctx context.Context, backups []*types.Backu
 }
 
 // LastRetentionSummary returns the latest retention summary.
+// See RetentionReporter (storage.go) for what the value is worth and when.
 func (c *CloudStorage) LastRetentionSummary() RetentionSummary {
-	return c.lastRet
+	s := c.lastRet
+	s.ScopeValid, s.Owned, s.PassCompleted = c.scopeValid, c.scopeOwned, c.lastRetCompleted
+	return s
 }
 
 // GetStats returns storage statistics

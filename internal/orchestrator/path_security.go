@@ -190,6 +190,18 @@ func resolvePathWithinPreparedRootFS(fsys FS, lexicalRoot, canonicalRoot, candid
 		return "", fmt.Errorf("candidate path must be absolute: %s", candidateAbs)
 	}
 
+	if candidateAbs == canonicalRoot {
+		return canonicalRoot, nil
+	}
+	// Containment is enforced here, before candidateAbs is split into components
+	// and walked with Lstat/Readlink below, so the check dominates every use of
+	// the untrusted path in this frame. relativePathWithinRoot performs the
+	// equivalent filepath.Rel test, but it reports through a bool the caller
+	// inspects, which static analysers (CodeQL go/zipslip) cannot follow.
+	if !strings.HasPrefix(candidateAbs, restoreRootPrefix(canonicalRoot)) {
+		return "", newPathSecurityError("resolved path escapes destination: %s", candidateAbs)
+	}
+
 	rel, ok, err := relativePathWithinRoot(canonicalRoot, candidateAbs)
 	if err != nil {
 		return "", fmt.Errorf("cannot compute relative path: %w", err)

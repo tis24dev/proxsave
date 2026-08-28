@@ -110,10 +110,91 @@ type RetentionSummary struct {
 	LogsDeleted      int
 	LogsRemaining    int
 	HasLogInfo       bool
+
+	// ScopeValid separates "this host owns nothing here" from "retention never ran",
+	// which a count alone cannot express. Retention is skipped entirely when no limit
+	// is configured, and reporting 0 backups on a healthy host would be a worse lie
+	// than the unscoped total it replaces, so a consumer falls back to that total
+	// unless this is set.
+	ScopeValid bool
+	// Owned is how many archives at this location this host is answerable for, taken
+	// after applyRetentionHostScope and net of whatever the pass then deleted. It is
+	// the only number that may be printed next to a retention limit. GetStats counts
+	// every archive at the location, so on a path shared with another ProxSave host
+	// it counts that host's too, which is how the summary came to read "40/7" on a
+	// machine that owns five (discussion #292).
+	//
+	// "Answerable for" is wider than "will prune", and deliberately so. It adds the
+	// archives no host manages at all: pre-Go "proxmox-backup-*" files that name
+	// nobody, and this machine's own work written under a spelling of its name it can
+	// no longer resolve. Those grow without bound and nothing else counts them, so
+	// leaving them out turns the one number an operator watches into a false
+	// all-clear. Archives carrying another machine's name are excluded, because that
+	// machine prunes them and reports them.
+	Owned int
+
+	// PassCompleted reports whether a retention pass RAN AND RETURNED WITHOUT ERROR.
+	// It does NOT certify the counts, and reading it that way would produce exactly
+	// the false report discussion #292 opened with.
+	//
+	// BackupsDeleted, BackupsRemaining, LogsDeleted, LogsRemaining and HasLogInfo are
+	// assigned only on the paths that actually DELETE something. The most common
+	// healthy pass, the steady state where everything is already within the limit,
+	// deletes nothing and therefore publishes zeros, while the location still holds
+	// however many archives this host owns. A caller printing BackupsRemaining on the
+	// strength of this flag would tell the operator the location is empty when it is
+	// full. Owned is the field that answers "how many are there", and ScopeValid is
+	// the field that says whether Owned is worth anything.
+	//
+	// What false means: no pass has run, or the last one bailed. The counts are then
+	// the zero value even if the pass deleted archives before it failed, because
+	// ApplyRetention clears them on entry and only fills them once the delete loop
+	// finishes.
+	//
+	// What true does NOT mean: that anything was examined. A pass with no limit
+	// configured, and a pass over a location whose directory has vanished, both
+	// return without error and both stamp this true. It answers one question only,
+	// and it is the question a reader of this struct can act on.
+	//
+	// It exists because nothing else here can answer "has a pass run". The counts
+	// cannot: a healthy pass that finds everything within the limit publishes zeros,
+	// which is byte for byte what a backend that has never run reports. ScopeValid
+	// cannot either, and reusing it would be wrong rather than merely imprecise. It
+	// answers "did the scope account for the listing", so it is deliberately false
+	// after a real pass on a host that cannot name itself (applyRetentionHostScope
+	// returns nothing owned there and warns), and a caller reading it as "a pass
+	// ran" would mis-report exactly that machine.
+	//
+	// False deliberately does NOT separate "no pass has run" from "the last pass
+	// failed". The only question a reader of this struct can act on is whether the
+	// numbers describe a finished pass, and whoever ran the pass already knows which
+	// of the two it is, because it is holding the error.
+	PassCompleted bool
 }
 
 // RetentionReporter can be implemented by storage backends that expose details
 // about the most recent retention run (e.g., log counts).
+//
+// The contract, which this interface used to leave unsaid:
+//
+// LastRetentionSummary describes the most recent ApplyRetention call on THIS
+// backend and nothing else. It never fails and may be called at any time, which is
+// precisely why the value has to say how much it is worth: read PassCompleted
+// first and treat the counts as absent while it is false. Read it as a statement
+// about the PASS, never about the location: see PassCompleted for why a completed
+// pass routinely reports zero remaining on a location that is full. Counts do not
+// accumulate and do not survive into the next pass either, because ApplyRetention
+// clears them before its first return, so a pass that bails reports zeros rather
+// than the previous pass's counts standing as if they were current.
+//
+// It carries no locking, and adding some would be pretending. Every implementation
+// in this package writes these fields from ApplyRetention and reads them here, so
+// calling the two concurrently on ONE backend is a data race. Nothing does today:
+// StorageAdapter.Sync (internal/orchestrator/storage_adapter.go) is the only
+// caller, it reads the summary a few lines below its own ApplyRetention call on the
+// same goroutine, and dispatchPostBackup runs the adapters one after another, each
+// over a backend of its own. An implementation that means to be read from another
+// goroutine has to provide its own synchronisation.
 type RetentionReporter interface {
 	LastRetentionSummary() RetentionSummary
 }

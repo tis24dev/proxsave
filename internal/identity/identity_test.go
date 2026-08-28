@@ -18,8 +18,21 @@ import (
 	"github.com/tis24dev/proxsave/internal/types"
 )
 
+// encodeProtectedServerIDForTest builds a payload the way production does: one arm list
+// derived from a fact snapshot, projected into a key field.
 func encodeProtectedServerIDForTest(serverID, primaryMAC string, logger *logging.Logger) (string, error) {
-	return encodeProtectedServerIDWithMACs(serverID, []string{primaryMAC}, primaryMAC, logger)
+	f := readHostFacts(logger)
+	return encodeProtectedServerIDWithKeyField(serverID, identityKeyFieldFor(f, []string{primaryMAC}, primaryMAC), logger), nil
+}
+
+// decodeForTest decodes a payload against the CURRENT host facts and the given MAC, which
+// is what almost every legacy pin in this file wants.
+func decodeForTest(content, mac string) (identityDecodeResult, error) {
+	macs := []string(nil)
+	if mac != "" {
+		macs = []string{mac}
+	}
+	return decodeProtectedServerID(content, macs, mac, readHostFacts(nil), nil)
 }
 
 func TestEncodeDecodeProtectedServerIDRoundTrip(t *testing.T) {
@@ -31,15 +44,15 @@ func TestEncodeDecodeProtectedServerIDRoundTrip(t *testing.T) {
 		t.Fatalf("encodeProtectedServerID() error = %v", err)
 	}
 
-	decoded, matchedByMAC, err := decodeProtectedServerID(content, mac, nil)
+	res, err := decodeForTest(content, mac)
 	if err != nil {
 		t.Fatalf("decodeProtectedServerID() error = %v\ncontent:\n%s", err, content)
 	}
-	if decoded != serverID {
-		t.Fatalf("decoded server ID = %s, want %s", decoded, serverID)
+	if res.ServerID != serverID {
+		t.Fatalf("decoded server ID = %s, want %s", res.ServerID, serverID)
 	}
-	if !matchedByMAC {
-		t.Fatalf("expected decode to match by MAC for round trip")
+	if !res.Verified {
+		t.Fatalf("expected round trip decode to be verified")
 	}
 }
 
@@ -52,7 +65,7 @@ func TestDecodeProtectedServerIDAcceptsDifferentMACOnSameHost(t *testing.T) {
 	})
 
 	hostnameFunc = func() (string, error) { return "host-one", nil }
-	readFirstLineFunc = func(path string, limit int) string {
+	readFirstLineFunc = stringReader(func(path string, limit int) string {
 		switch path {
 		case "/etc/machine-id":
 			return "machine-one"
@@ -61,7 +74,7 @@ func TestDecodeProtectedServerIDAcceptsDifferentMACOnSameHost(t *testing.T) {
 		default:
 			return ""
 		}
-	}
+	})
 
 	const serverID = "1111222233334444"
 	content, err := encodeProtectedServerIDForTest(serverID, "aa:bb:cc:dd:ee:ff", nil)
@@ -69,15 +82,15 @@ func TestDecodeProtectedServerIDAcceptsDifferentMACOnSameHost(t *testing.T) {
 		t.Fatalf("encodeProtectedServerID() error = %v", err)
 	}
 
-	decoded, matchedByMAC, err := decodeProtectedServerID(content, "00:11:22:33:44:55", nil)
+	res, err := decodeForTest(content, "00:11:22:33:44:55")
 	if err != nil {
 		t.Fatalf("expected decode to succeed with different MAC on same host, got %v", err)
 	}
-	if decoded != serverID {
-		t.Fatalf("decoded server ID = %s, want %s", decoded, serverID)
+	if res.ServerID != serverID {
+		t.Fatalf("decoded server ID = %s, want %s", res.ServerID, serverID)
 	}
-	if matchedByMAC {
-		t.Fatalf("expected decode not to match by MAC when using different MAC")
+	if !res.Verified {
+		t.Fatalf("expected the uuid arm to verify the payload on a different MAC")
 	}
 }
 
@@ -90,7 +103,7 @@ func TestDecodeProtectedServerIDRejectsDifferentHost(t *testing.T) {
 	})
 
 	hostnameFunc = func() (string, error) { return "host-one", nil }
-	readFirstLineFunc = func(path string, limit int) string {
+	readFirstLineFunc = stringReader(func(path string, limit int) string {
 		switch path {
 		case "/etc/machine-id":
 			return "machine-one"
@@ -99,7 +112,7 @@ func TestDecodeProtectedServerIDRejectsDifferentHost(t *testing.T) {
 		default:
 			return ""
 		}
-	}
+	})
 
 	const serverID = "1111222233334444"
 	content, err := encodeProtectedServerIDForTest(serverID, "aa:bb:cc:dd:ee:ff", nil)
@@ -108,7 +121,7 @@ func TestDecodeProtectedServerIDRejectsDifferentHost(t *testing.T) {
 	}
 
 	hostnameFunc = func() (string, error) { return "host-two", nil }
-	readFirstLineFunc = func(path string, limit int) string {
+	readFirstLineFunc = stringReader(func(path string, limit int) string {
 		switch path {
 		case "/etc/machine-id":
 			return "machine-two"
@@ -117,9 +130,9 @@ func TestDecodeProtectedServerIDRejectsDifferentHost(t *testing.T) {
 		default:
 			return ""
 		}
-	}
+	})
 
-	if _, _, err := decodeProtectedServerID(content, "aa:bb:cc:dd:ee:ff", nil); err == nil {
+	if _, err := decodeForTest(content, "aa:bb:cc:dd:ee:ff"); err == nil {
 		t.Fatalf("expected mismatch error when decoding as different host")
 	}
 }
@@ -161,7 +174,7 @@ func TestDecodeProtectedServerIDDetectsCorruptedData(t *testing.T) {
 
 	// Corrupt the checksum line.
 	corrupted := strings.Replace(content, "SYSTEM_CONFIG_DATA=\"", "SYSTEM_CONFIG_DATA=\"corrupt", 1)
-	if _, _, err := decodeProtectedServerID(corrupted, mac, nil); err == nil {
+	if _, err := decodeForTest(corrupted, mac); err == nil {
 		t.Fatalf("expected checksum mismatch error after corrupting content")
 	}
 }
@@ -273,7 +286,7 @@ func TestDetectWithContext_PropagatesCancellationDuringLegacyUpgrade(t *testing.
 	})
 
 	hostnameFunc = func() (string, error) { return "host-one", nil }
-	readFirstLineFunc = func(path string, limit int) string {
+	readFirstLineFunc = stringReader(func(path string, limit int) string {
 		switch path {
 		case "/etc/machine-id":
 			return "machine-one"
@@ -282,7 +295,7 @@ func TestDetectWithContext_PropagatesCancellationDuringLegacyUpgrade(t *testing.
 		default:
 			return ""
 		}
-	}
+	})
 
 	baseDir := t.TempDir()
 	identityDir := filepath.Join(baseDir, identityDirName)
@@ -347,15 +360,15 @@ func TestLoadServerIDTriesAllMACAddresses(t *testing.T) {
 		t.Fatalf("failed to write identity file: %v", err)
 	}
 
-	loadedID, loadedMAC, err := loadServerID(identityPath, []string{nonMatchingMAC, boundMAC}, nil)
+	res, err := loadServerID(identityPath, []string{nonMatchingMAC, boundMAC}, nonMatchingMAC, readHostFacts(nil), nil)
 	if err != nil {
 		t.Fatalf("loadServerID() error = %v", err)
 	}
-	if loadedID != serverID {
-		t.Fatalf("ServerID = %q, want %q", loadedID, serverID)
+	if res.ServerID != serverID {
+		t.Fatalf("ServerID = %q, want %q", res.ServerID, serverID)
 	}
-	if loadedMAC != boundMAC {
-		t.Fatalf("bound MAC = %q, want %q", loadedMAC, boundMAC)
+	if !res.Verified {
+		t.Fatalf("expected the alternate MAC arm to verify the payload")
 	}
 }
 
@@ -383,14 +396,14 @@ func TestReadFirstLineTruncatesAndTrims(t *testing.T) {
 		t.Fatalf("failed to write test file: %v", err)
 	}
 
-	got := readFirstLine(path, 5)
-	if got != "FIRST" {
-		t.Fatalf("readFirstLine() = %q, want %q", got, "FIRST")
+	got, state := readFirstLine(path, 5)
+	if got != "FIRST" || state != systemFilePresent {
+		t.Fatalf("readFirstLine() = (%q, %s), want (%q, present)", got, state, "FIRST")
 	}
 
-	gotMissing := readFirstLine(filepath.Join(dir, "missing.txt"), 10)
-	if gotMissing != "" {
-		t.Fatalf("expected empty string for missing file, got %q", gotMissing)
+	gotMissing, missingState := readFirstLine(filepath.Join(dir, "missing.txt"), 10)
+	if gotMissing != "" || missingState != systemFileAbsent {
+		t.Fatalf("readFirstLine(missing) = (%q, %s), want (\"\", absent)", gotMissing, missingState)
 	}
 }
 
@@ -594,14 +607,14 @@ func TestCollectMACAddressesSortedAndUnique(t *testing.T) {
 
 func TestDecodeProtectedServerIDMissingConfigLine(t *testing.T) {
 	content := "# no SYSTEM_CONFIG_DATA here\n"
-	if _, _, err := decodeProtectedServerID(content, "aa:bb:cc:dd:ee:ff", nil); err == nil {
+	if _, err := decodeForTest(content, "aa:bb:cc:dd:ee:ff"); err == nil {
 		t.Fatalf("expected error for missing SYSTEM_CONFIG_DATA line")
 	}
 }
 
 func TestDecodeProtectedServerIDInvalidBase64(t *testing.T) {
 	content := "SYSTEM_CONFIG_DATA=\"!!!not-base64!!!\"\n"
-	if _, _, err := decodeProtectedServerID(content, "aa:bb:cc:dd:ee:ff", nil); err == nil {
+	if _, err := decodeForTest(content, "aa:bb:cc:dd:ee:ff"); err == nil {
 		t.Fatalf("expected error for invalid base64 payload")
 	}
 }
@@ -611,7 +624,7 @@ func TestDecodeProtectedServerIDInvalidPayloadFormat(t *testing.T) {
 	encoded := base64.StdEncoding.EncodeToString([]byte(payload))
 	content := fmt.Sprintf("SYSTEM_CONFIG_DATA=\"%s\"\n", encoded)
 
-	if _, _, err := decodeProtectedServerID(content, "aa:bb:cc:dd:ee:ff", nil); err == nil {
+	if _, err := decodeForTest(content, "aa:bb:cc:dd:ee:ff"); err == nil {
 		t.Fatalf("expected error for invalid payload format")
 	}
 }
@@ -622,7 +635,7 @@ func TestDecodeProtectedServerIDInvalidServerIDFormat(t *testing.T) {
 	if err != nil {
 		t.Fatalf("encodeProtectedServerID() error = %v", err)
 	}
-	if _, _, err := decodeProtectedServerID(content, mac, nil); err == nil {
+	if _, err := decodeForTest(content, mac); err == nil {
 		t.Fatalf("expected error for non-digit serverID")
 	}
 }
@@ -636,7 +649,7 @@ func TestLoadServerIDWithEmptyMACSlice(t *testing.T) {
 	})
 
 	hostnameFunc = func() (string, error) { return "host-one", nil }
-	readFirstLineFunc = func(path string, limit int) string {
+	readFirstLineFunc = stringReader(func(path string, limit int) string {
 		switch path {
 		case "/etc/machine-id":
 			return "machine-one"
@@ -645,7 +658,7 @@ func TestLoadServerIDWithEmptyMACSlice(t *testing.T) {
 		default:
 			return ""
 		}
-	}
+	})
 
 	dir := t.TempDir()
 	path := filepath.Join(dir, "identity.conf")
@@ -659,15 +672,15 @@ func TestLoadServerIDWithEmptyMACSlice(t *testing.T) {
 		t.Fatalf("failed to write file: %v", err)
 	}
 
-	loadedID, loadedMAC, err := loadServerID(path, []string{}, nil)
+	res, err := loadServerID(path, []string{}, "", readHostFacts(nil), nil)
 	if err != nil {
 		t.Fatalf("loadServerID() error = %v", err)
 	}
-	if loadedID != serverID {
-		t.Fatalf("loadedID = %q, want %q", loadedID, serverID)
+	if res.ServerID != serverID {
+		t.Fatalf("loadedID = %q, want %q", res.ServerID, serverID)
 	}
-	if loadedMAC != "" {
-		t.Fatalf("loadedMAC = %q, want empty", loadedMAC)
+	if !res.Verified {
+		t.Fatalf("expected the uuid arm to verify the payload with no MACs")
 	}
 }
 
@@ -685,14 +698,14 @@ func TestLoadServerIDFailsAllMACs(t *testing.T) {
 	}
 
 	wrongMACs := []string{"00:00:00:00:00:01", "00:00:00:00:00:02"}
-	_, _, err = loadServerID(path, wrongMACs, nil)
+	_, err = loadServerID(path, wrongMACs, wrongMACs[0], readHostFacts(nil), nil)
 	if err == nil {
 		t.Fatalf("expected error when all MACs fail")
 	}
 }
 
 func encodeProtectedServerIDLegacy(serverID, primaryMAC string) (string, error) {
-	machineID := readMachineID(nil)
+	machineID, _ := readMachineID(nil)
 	hostnamePart := readHostnamePart(nil)
 	macPart := strings.ReplaceAll(primaryMAC, ":", "")
 	systemKey := computeSystemKey(machineID, hostnamePart, macPart)
@@ -771,7 +784,7 @@ func TestDecodeProtectedServerIDMatchesAlternateMACWhenUUIDMissing(t *testing.T)
 	})
 
 	hostnameFunc = func() (string, error) { return "host-one", nil }
-	readFirstLineFunc = func(path string, limit int) string {
+	readFirstLineFunc = stringReader(func(path string, limit int) string {
 		switch path {
 		case "/etc/machine-id":
 			return "machine-one"
@@ -780,30 +793,39 @@ func TestDecodeProtectedServerIDMatchesAlternateMACWhenUUIDMissing(t *testing.T)
 		default:
 			return ""
 		}
-	}
+	})
 
 	const serverID = "1111222233334444"
 	const macPrimary = "aa:bb:cc:dd:ee:ff"
 	const macAlt = "00:11:22:33:44:55"
 
-	content, err := encodeProtectedServerIDWithMACs(serverID, []string{macPrimary, macAlt}, macPrimary, nil)
-	if err != nil {
-		t.Fatalf("encodeProtectedServerIDWithMACs() error = %v", err)
-	}
+	f := readHostFacts(nil)
+	content := encodeProtectedServerIDWithKeyField(serverID, identityKeyFieldFor(f, []string{macPrimary, macAlt}, macPrimary), nil)
 
-	decoded, matchedByMAC, err := decodeProtectedServerID(content, macAlt, nil)
+	res, err := decodeForTest(content, macAlt)
 	if err != nil {
 		t.Fatalf("decodeProtectedServerID() error = %v", err)
 	}
-	if decoded != serverID {
-		t.Fatalf("decoded server ID = %s, want %s", decoded, serverID)
+	if res.ServerID != serverID {
+		t.Fatalf("decoded server ID = %s, want %s", res.ServerID, serverID)
 	}
-	if !matchedByMAC {
-		t.Fatalf("expected decode to match by MAC for alternate MAC")
+	if !res.Verified {
+		t.Fatalf("expected decode to be verified for the alternate MAC")
 	}
 
-	if _, _, err := decodeProtectedServerID(content, "de:ad:be:ef:00:01", nil); err == nil {
-		t.Fatalf("expected decode to fail for unknown MAC when uuid is missing")
+	// An UNKNOWN MAC on the same machine-id now keeps the identity, through the
+	// machine-id arm. That is the whole point of change 2: a DMI-less host must survive
+	// an ordinary MAC change instead of being renamed permanently and silently. HEAD
+	// asserted the opposite here, because HEAD had no machine-id arm to fall back on.
+	changed, err := decodeForTest(content, "de:ad:be:ef:00:01")
+	if err != nil {
+		t.Fatalf("expected the machine-id arm to keep the identity across a MAC change, got %v", err)
+	}
+	if changed.ServerID != serverID {
+		t.Fatalf("decoded server ID after MAC change = %s, want %s", changed.ServerID, serverID)
+	}
+	if !changed.Verified {
+		t.Fatalf("expected the machine-id arm match to be verified")
 	}
 }
 
@@ -816,7 +838,7 @@ func TestMaybeUpgradeIdentityFileRewritesLegacyToV2WithAltMACs(t *testing.T) {
 	})
 
 	hostnameFunc = func() (string, error) { return "host-one", nil }
-	readFirstLineFunc = func(path string, limit int) string {
+	readFirstLineFunc = stringReader(func(path string, limit int) string {
 		switch path {
 		case "/etc/machine-id":
 			return "machine-one"
@@ -825,7 +847,7 @@ func TestMaybeUpgradeIdentityFileRewritesLegacyToV2WithAltMACs(t *testing.T) {
 		default:
 			return ""
 		}
-	}
+	})
 
 	dir := t.TempDir()
 	path := filepath.Join(dir, "identity.conf")
@@ -846,8 +868,14 @@ func TestMaybeUpgradeIdentityFileRewritesLegacyToV2WithAltMACs(t *testing.T) {
 		t.Fatalf("failed to write legacy identity file: %v", err)
 	}
 
-	if err := maybeUpgradeIdentityFileWithContext(context.Background(), path, serverID, macPrimary, []string{macPrimary, macAlt}, nil); err != nil {
-		t.Fatalf("maybeUpgradeIdentityFileWithContext() error = %v", err)
+	f := readHostFacts(nil)
+	macs := []string{macPrimary, macAlt}
+	res, err := loadServerID(path, macs, macPrimary, f, nil)
+	if err != nil {
+		t.Fatalf("loadServerID() error = %v", err)
+	}
+	if err := maybeRewriteIdentityFile(context.Background(), path, res, macPrimary, macs, f, nil); err != nil {
+		t.Fatalf("maybeRewriteIdentityFile() error = %v", err)
 	}
 
 	upgraded, err := os.ReadFile(path)
@@ -858,11 +886,11 @@ func TestMaybeUpgradeIdentityFileRewritesLegacyToV2WithAltMACs(t *testing.T) {
 	if !strings.Contains(upgradedContent, "# Format: proxsave-identity-v2") {
 		t.Fatalf("expected upgraded identity file to contain v2 header")
 	}
-	if !identityPayloadHasKeyLabels(upgradedContent, nil) {
-		t.Fatalf("expected upgraded identity payload to contain key labels")
-	}
 
 	keyField := extractIdentityKeyField(t, upgradedContent)
+	if !strings.Contains(keyField, "=") {
+		t.Fatalf("expected upgraded identity payload to contain key labels, got %q", keyField)
+	}
 	if !strings.Contains(keyField, "mac=") {
 		t.Fatalf("expected key field to contain mac= entry, got %q", keyField)
 	}
@@ -870,8 +898,8 @@ func TestMaybeUpgradeIdentityFileRewritesLegacyToV2WithAltMACs(t *testing.T) {
 		t.Fatalf("expected key field to contain mac_alt1= entry, got %q", keyField)
 	}
 
-	if _, matchedByMAC, err := decodeProtectedServerID(upgradedContent, macAlt, nil); err != nil || !matchedByMAC {
-		t.Fatalf("expected upgraded identity to decode via alternate MAC (err=%v matchedByMAC=%v)", err, matchedByMAC)
+	if decoded, err := decodeForTest(upgradedContent, macAlt); err != nil || !decoded.Verified {
+		t.Fatalf("expected upgraded identity to decode via alternate MAC (err=%v verified=%v)", err, decoded.Verified)
 	}
 }
 
@@ -1102,36 +1130,36 @@ func TestReadAddrAssignType(t *testing.T) {
 	})
 
 	// Test parsing valid values
-	readFirstLineFunc = func(path string, limit int) string {
+	readFirstLineFunc = stringReader(func(path string, limit int) string {
 		if strings.Contains(path, "addr_assign_type") {
 			return "0"
 		}
 		return ""
-	}
+	})
 	if got := readAddrAssignType("eth0", nil); got != 0 {
 		t.Errorf("readAddrAssignType() = %d, want 0", got)
 	}
 
 	// Test empty file
-	readFirstLineFunc = func(path string, limit int) string {
+	readFirstLineFunc = stringReader(func(path string, limit int) string {
 		return ""
-	}
+	})
 	if got := readAddrAssignType("eth0", nil); got != -1 {
 		t.Errorf("readAddrAssignType() = %d, want -1 for empty", got)
 	}
 
 	// Test invalid value
-	readFirstLineFunc = func(path string, limit int) string {
+	readFirstLineFunc = stringReader(func(path string, limit int) string {
 		return "invalid"
-	}
+	})
 	if got := readAddrAssignType("eth0", nil); got != -1 {
 		t.Errorf("readAddrAssignType() = %d, want -1 for invalid", got)
 	}
 
 	// Test with spaces
-	readFirstLineFunc = func(path string, limit int) string {
+	readFirstLineFunc = stringReader(func(path string, limit int) string {
 		return "  3  "
-	}
+	})
 	if got := readAddrAssignType("eth0", nil); got != 3 {
 		t.Errorf("readAddrAssignType() = %d, want 3", got)
 	}
@@ -1195,7 +1223,7 @@ func TestBuildSystemData(t *testing.T) {
 	})
 
 	hostnameFunc = func() (string, error) { return "testhost", nil }
-	readFirstLineFunc = func(path string, limit int) string {
+	readFirstLineFunc = stringReader(func(path string, limit int) string {
 		switch path {
 		case "/etc/machine-id":
 			return "test-machine-id"
@@ -1206,10 +1234,10 @@ func TestBuildSystemData(t *testing.T) {
 		default:
 			return ""
 		}
-	}
+	})
 
 	macs := []string{"aa:bb:cc:dd:ee:ff", "00:11:22:33:44:55"}
-	data := buildSystemData(macs, nil)
+	data := buildSystemData(macs, readHostFacts(nil), nil)
 
 	// Verify data contains expected components
 	if !strings.Contains(data, "test-machine-id") {
@@ -1236,9 +1264,9 @@ func TestBuildSystemDataWithMinimalInput(t *testing.T) {
 
 	// All sources fail except timestamp (always added)
 	hostnameFunc = func() (string, error) { return "", fmt.Errorf("no hostname") }
-	readFirstLineFunc = func(path string, limit int) string { return "" }
+	readFirstLineFunc = stringReader(func(path string, limit int) string { return "" })
 
-	data := buildSystemData(nil, nil)
+	data := buildSystemData(nil, readHostFacts(nil), nil)
 
 	// Should still return data (at minimum the timestamp)
 	if data == "" {
@@ -1259,17 +1287,17 @@ func TestGenerateServerIDDirect(t *testing.T) {
 	})
 
 	hostnameFunc = func() (string, error) { return "testhost", nil }
-	readFirstLineFunc = func(path string, limit int) string {
+	readFirstLineFunc = stringReader(func(path string, limit int) string {
 		switch path {
 		case "/etc/machine-id":
 			return "test-machine-id"
 		default:
 			return ""
 		}
-	}
+	})
 
 	macs := []string{"aa:bb:cc:dd:ee:ff"}
-	serverID, encoded, err := generateServerID(macs, macs[0], nil)
+	serverID, encoded, err := generateServerID(macs, macs[0], readHostFacts(nil), nil)
 	if err != nil {
 		t.Fatalf("generateServerID() error = %v", err)
 	}
@@ -1294,7 +1322,7 @@ func TestBuildIdentityKeyField(t *testing.T) {
 	})
 
 	hostnameFunc = func() (string, error) { return "testhost", nil }
-	readFirstLineFunc = func(path string, limit int) string {
+	readFirstLineFunc = stringReader(func(path string, limit int) string {
 		switch path {
 		case "/etc/machine-id":
 			return "machine-id-123"
@@ -1303,10 +1331,10 @@ func TestBuildIdentityKeyField(t *testing.T) {
 		default:
 			return ""
 		}
-	}
+	})
 
 	macs := []string{"aa:bb:cc:dd:ee:ff", "00:11:22:33:44:55"}
-	keyField := buildIdentityKeyField(macs, "aa:bb:cc:dd:ee:ff", nil)
+	keyField := identityKeyFieldFor(readHostFacts(nil), macs, "aa:bb:cc:dd:ee:ff")
 
 	// Should contain labeled entries
 	if !strings.Contains(keyField, "mac=") {
@@ -1362,31 +1390,31 @@ func TestReadMachineID(t *testing.T) {
 	})
 
 	// Test primary path
-	readFirstLineFunc = func(path string, limit int) string {
-		if path == "/etc/machine-id" {
+	readFirstLineFunc = stringReader(func(path string, limit int) string {
+		if path == machineIDPath {
 			return "primary-machine-id"
 		}
 		return ""
-	}
-	if got := readMachineID(nil); got != "primary-machine-id" {
-		t.Errorf("readMachineID() = %q, want %q", got, "primary-machine-id")
+	})
+	if got, state := readMachineID(nil); got != "primary-machine-id" || state != systemFilePresent {
+		t.Errorf("readMachineID() = (%q, %s), want (%q, present)", got, state, "primary-machine-id")
 	}
 
 	// Test fallback path
-	readFirstLineFunc = func(path string, limit int) string {
-		if path == "/var/lib/dbus/machine-id" {
+	readFirstLineFunc = stringReader(func(path string, limit int) string {
+		if path == dbusMachineIDPath {
 			return "fallback-machine-id"
 		}
 		return ""
-	}
-	if got := readMachineID(nil); got != "fallback-machine-id" {
-		t.Errorf("readMachineID() fallback = %q, want %q", got, "fallback-machine-id")
+	})
+	if got, state := readMachineID(nil); got != "fallback-machine-id" || state != systemFilePresent {
+		t.Errorf("readMachineID() fallback = (%q, %s), want (%q, present)", got, state, "fallback-machine-id")
 	}
 
 	// Test missing
-	readFirstLineFunc = func(path string, limit int) string { return "" }
-	if got := readMachineID(nil); got != "" {
-		t.Errorf("readMachineID() missing = %q, want empty", got)
+	readFirstLineFunc = stringReader(func(path string, limit int) string { return "" })
+	if got, state := readMachineID(nil); got != "" || state != systemFileAbsent {
+		t.Errorf("readMachineID() missing = (%q, %s), want (empty, absent)", got, state)
 	}
 }
 
@@ -1456,7 +1484,7 @@ func TestComputeCurrentIdentityKeyPrefixes(t *testing.T) {
 	})
 
 	hostnameFunc = func() (string, error) { return "testhost", nil }
-	readFirstLineFunc = func(path string, limit int) string {
+	readFirstLineFunc = stringReader(func(path string, limit int) string {
 		switch path {
 		case "/etc/machine-id":
 			return "machine-id-123"
@@ -1465,9 +1493,9 @@ func TestComputeCurrentIdentityKeyPrefixes(t *testing.T) {
 		default:
 			return ""
 		}
-	}
+	})
 
-	prefixes := computeCurrentIdentityKeyPrefixes("aa:bb:cc:dd:ee:ff", nil)
+	prefixes := identityKeyPrefixesFor(readHostFacts(nil), []string{"aa:bb:cc:dd:ee:ff"}, "aa:bb:cc:dd:ee:ff")
 
 	// Should have prefixes for MAC and UUID (with and without host)
 	if len(prefixes) < 2 {
@@ -1485,7 +1513,7 @@ func TestComputeCurrentIdentityKeyPrefixes(t *testing.T) {
 	}
 }
 
-func TestComputeCurrentMACKeyPrefixes(t *testing.T) {
+func TestIdentityKeyPrefixesForCoversMACAndMachineIDArms(t *testing.T) {
 	origRead := readFirstLineFunc
 	origHost := hostnameFunc
 	t.Cleanup(func() {
@@ -1494,24 +1522,25 @@ func TestComputeCurrentMACKeyPrefixes(t *testing.T) {
 	})
 
 	hostnameFunc = func() (string, error) { return "testhost", nil }
-	readFirstLineFunc = func(path string, limit int) string {
-		if path == "/etc/machine-id" {
+	readFirstLineFunc = stringReader(func(path string, limit int) string {
+		if path == machineIDPath {
 			return "machine-id-123"
 		}
 		return ""
+	})
+
+	f := readHostFacts(nil)
+	// One MAC gives the mac= / mac_nohost= pair, and the machine-id gives one more arm.
+	prefixes := identityKeyPrefixesFor(f, []string{"aa:bb:cc:dd:ee:ff"}, "aa:bb:cc:dd:ee:ff")
+	if len(prefixes) != 3 {
+		t.Errorf("expected 3 prefixes, got %d", len(prefixes))
 	}
 
-	prefixes := computeCurrentMACKeyPrefixes("aa:bb:cc:dd:ee:ff", nil)
-
-	// Should have 2 prefixes (with and without host)
-	if len(prefixes) != 2 {
-		t.Errorf("expected 2 prefixes, got %d", len(prefixes))
-	}
-
-	// Test empty MAC
-	emptyPrefixes := computeCurrentMACKeyPrefixes("", nil)
-	if len(emptyPrefixes) != 0 {
-		t.Errorf("expected 0 prefixes for empty MAC, got %d", len(emptyPrefixes))
+	// With no MAC at all the machine-id arm is the only one left, which is exactly what
+	// keeps a DMI-less host from being renamed by a MAC change.
+	noMAC := identityKeyPrefixesFor(f, nil, "")
+	if len(noMAC) != 1 {
+		t.Errorf("expected 1 prefix with no MAC, got %d", len(noMAC))
 	}
 }
 
@@ -1544,38 +1573,29 @@ func TestSelectPreferredMACWithEmptyFields(t *testing.T) {
 }
 
 func TestLoadServerIDFileNotFound(t *testing.T) {
-	_, _, err := loadServerID("/nonexistent/path/identity.conf", []string{"aa:bb:cc:dd:ee:ff"}, nil)
+	_, err := loadServerID("/nonexistent/path/identity.conf", []string{"aa:bb:cc:dd:ee:ff"}, "aa:bb:cc:dd:ee:ff", readHostFacts(nil), nil)
 	if err == nil {
 		t.Errorf("loadServerID should error for missing file")
 	}
 }
 
-func TestIdentityPayloadHasKeyLabelsEdgeCases(t *testing.T) {
-	// Empty content
-	if identityPayloadHasKeyLabels("", nil) {
-		t.Errorf("empty content should not have key labels")
+func TestKeyFieldHasLabelEdgeCases(t *testing.T) {
+	if keyFieldHasLabel("", uuidKeyLabel) {
+		t.Errorf("an empty key field carries no label")
 	}
-
-	// No SYSTEM_CONFIG_DATA line
-	if identityPayloadHasKeyLabels("# just a comment\n", nil) {
-		t.Errorf("no config line should not have key labels")
+	// A v1 bare prefix carries no label at all, which is what makes the format upgrade
+	// trigger fire on it and what stops it being excused by an unreadable product_uuid.
+	if keyFieldHasLabel("abcdef12", uuidKeyLabel) || keyFieldHasLabel("abcdef12", machineIDKeyLabel) {
+		t.Errorf("a v1 bare prefix must not report any label")
 	}
-
-	// Invalid base64
-	if identityPayloadHasKeyLabels("SYSTEM_CONFIG_DATA=\"!!!invalid!!!\"\n", nil) {
-		t.Errorf("invalid base64 should not have key labels")
+	if !keyFieldHasLabel("mac=abc,uuid=def", uuidKeyLabel) {
+		t.Errorf("expected uuid label to be found")
 	}
-
-	// Valid payload without labels (legacy format)
-	legacyPayload := base64.StdEncoding.EncodeToString([]byte("serverid:12345:keyprefix:checksum"))
-	if identityPayloadHasKeyLabels(fmt.Sprintf("SYSTEM_CONFIG_DATA=\"%s\"\n", legacyPayload), nil) {
-		t.Errorf("legacy format without = should not have key labels")
+	if keyFieldHasLabel("mac=abc,uuid=def", machineIDKeyLabel) {
+		t.Errorf("expected machineid label to be absent")
 	}
-
-	// Valid payload with labels
-	labeledPayload := base64.StdEncoding.EncodeToString([]byte("serverid:12345:mac=abc,uuid=def:checksum"))
-	if !identityPayloadHasKeyLabels(fmt.Sprintf("SYSTEM_CONFIG_DATA=\"%s\"\n", labeledPayload), nil) {
-		t.Errorf("labeled format should have key labels")
+	if !keyFieldHasLabel("mac=abc, machineid=def ", machineIDKeyLabel) {
+		t.Errorf("expected surrounding spaces to be trimmed")
 	}
 }
 
@@ -1614,8 +1634,8 @@ func TestReadFirstLineEdgeCases(t *testing.T) {
 	if err := os.WriteFile(emptyPath, []byte(""), 0o600); err != nil {
 		t.Fatalf("failed to write empty file: %v", err)
 	}
-	if got := readFirstLine(emptyPath, 100); got != "" {
-		t.Errorf("readFirstLine(empty) = %q, want empty", got)
+	if got, state := readFirstLine(emptyPath, 100); got != "" || state != systemFileAbsent {
+		t.Errorf("readFirstLine(empty) = (%q, %s), want (empty, absent)", got, state)
 	}
 
 	// Test file with only whitespace
@@ -1623,8 +1643,8 @@ func TestReadFirstLineEdgeCases(t *testing.T) {
 	if err := os.WriteFile(spacePath, []byte("   \n  \n"), 0o600); err != nil {
 		t.Fatalf("failed to write space file: %v", err)
 	}
-	if got := readFirstLine(spacePath, 100); got != "" {
-		t.Errorf("readFirstLine(spaces) = %q, want empty", got)
+	if got, state := readFirstLine(spacePath, 100); got != "" || state != systemFileAbsent {
+		t.Errorf("readFirstLine(spaces) = (%q, %s), want (empty, absent)", got, state)
 	}
 
 	// Test limit of 0 (should return full line)
@@ -1632,8 +1652,8 @@ func TestReadFirstLineEdgeCases(t *testing.T) {
 	if err := os.WriteFile(fullPath, []byte("fullcontent"), 0o600); err != nil {
 		t.Fatalf("failed to write full file: %v", err)
 	}
-	if got := readFirstLine(fullPath, 0); got != "fullcontent" {
-		t.Errorf("readFirstLine(limit=0) = %q, want %q", got, "fullcontent")
+	if got, state := readFirstLine(fullPath, 0); got != "fullcontent" || state != systemFilePresent {
+		t.Errorf("readFirstLine(limit=0) = (%q, %s), want (%q, present)", got, state, "fullcontent")
 	}
 }
 
@@ -1646,16 +1666,16 @@ func TestBuildIdentityKeyFieldNoPrimaryMAC(t *testing.T) {
 	})
 
 	hostnameFunc = func() (string, error) { return "testhost", nil }
-	readFirstLineFunc = func(path string, limit int) string {
+	readFirstLineFunc = stringReader(func(path string, limit int) string {
 		if path == "/etc/machine-id" {
 			return "machine-id-123"
 		}
 		return ""
-	}
+	})
 
 	// Empty primary MAC but with alternate MACs
 	macs := []string{"aa:bb:cc:dd:ee:ff", "00:11:22:33:44:55"}
-	keyField := buildIdentityKeyField(macs, "", nil)
+	keyField := identityKeyFieldFor(readHostFacts(nil), macs, "")
 
 	// Should still have entries for alternate MACs
 	if !strings.Contains(keyField, "mac_alt") || keyField == "" {
@@ -1672,16 +1692,16 @@ func TestBuildIdentityKeyFieldDeduplication(t *testing.T) {
 	})
 
 	hostnameFunc = func() (string, error) { return "testhost", nil }
-	readFirstLineFunc = func(path string, limit int) string {
+	readFirstLineFunc = stringReader(func(path string, limit int) string {
 		if path == "/etc/machine-id" {
 			return "machine-id-123"
 		}
 		return ""
-	}
+	})
 
 	// Same MAC twice in list
 	macs := []string{"aa:bb:cc:dd:ee:ff", "aa:bb:cc:dd:ee:ff"}
-	keyField := buildIdentityKeyField(macs, "aa:bb:cc:dd:ee:ff", nil)
+	keyField := identityKeyFieldFor(readHostFacts(nil), macs, "aa:bb:cc:dd:ee:ff")
 
 	// Should not have duplicates
 	parts := strings.Split(keyField, ",")
@@ -1753,15 +1773,15 @@ func TestGenerateServerIDWithEmptyMACs(t *testing.T) {
 	})
 
 	hostnameFunc = func() (string, error) { return "testhost", nil }
-	readFirstLineFunc = func(path string, limit int) string {
+	readFirstLineFunc = stringReader(func(path string, limit int) string {
 		if path == "/etc/machine-id" {
 			return "test-machine-id"
 		}
 		return ""
-	}
+	})
 
 	// Empty MACs should still work
-	serverID, encoded, err := generateServerID([]string{}, "", nil)
+	serverID, encoded, err := generateServerID([]string{}, "", readHostFacts(nil), nil)
 	if err != nil {
 		t.Fatalf("generateServerID() error = %v", err)
 	}
@@ -1783,7 +1803,7 @@ func TestDecodeProtectedServerIDWithEmptyMAC(t *testing.T) {
 	})
 
 	hostnameFunc = func() (string, error) { return "host-one", nil }
-	readFirstLineFunc = func(path string, limit int) string {
+	readFirstLineFunc = stringReader(func(path string, limit int) string {
 		switch path {
 		case "/etc/machine-id":
 			return "machine-one"
@@ -1792,7 +1812,7 @@ func TestDecodeProtectedServerIDWithEmptyMAC(t *testing.T) {
 		default:
 			return ""
 		}
-	}
+	})
 
 	const serverID = "1234567890123456"
 	content, err := encodeProtectedServerIDForTest(serverID, "aa:bb:cc:dd:ee:ff", nil)
@@ -1800,16 +1820,16 @@ func TestDecodeProtectedServerIDWithEmptyMAC(t *testing.T) {
 		t.Fatalf("encodeProtectedServerID() error = %v", err)
 	}
 
-	// Decode with empty MAC - should still work via UUID
-	decoded, matchedByMAC, err := decodeProtectedServerID(content, "", nil)
+	// Decode with empty MAC - should still work via the uuid arm
+	res, err := decodeForTest(content, "")
 	if err != nil {
 		t.Fatalf("decodeProtectedServerID() error = %v", err)
 	}
-	if decoded != serverID {
-		t.Fatalf("decoded = %q, want %q", decoded, serverID)
+	if res.ServerID != serverID {
+		t.Fatalf("decoded = %q, want %q", res.ServerID, serverID)
 	}
-	if matchedByMAC {
-		t.Fatalf("should not match by MAC when MAC is empty")
+	if !res.Verified {
+		t.Fatalf("expected the uuid arm to verify the payload with no MAC")
 	}
 }
 
@@ -1824,10 +1844,12 @@ func TestCollectMACCandidatesWithLogger(t *testing.T) {
 	_ = macs
 }
 
-func TestMaybeUpgradeIdentityFileNonExistent(t *testing.T) {
-	// Should not panic on non-existent file
-	if err := maybeUpgradeIdentityFileWithContext(context.Background(), "/nonexistent/path/identity.conf", "1234567890123456", "aa:bb:cc:dd:ee:ff", nil, nil); err != nil {
-		t.Fatalf("maybeUpgradeIdentityFileWithContext() error = %v", err)
+func TestMaybeRewriteIdentityFileSkipsUnverifiedResult(t *testing.T) {
+	// An unverified acceptance must never be laundered into a rewrite, so the path is
+	// never even opened.
+	res := identityDecodeResult{ServerID: "1234567890123456", KeyField: "abcdef12", Verified: false}
+	if err := maybeRewriteIdentityFile(context.Background(), "/nonexistent/path/identity.conf", res, "aa:bb:cc:dd:ee:ff", nil, readHostFacts(nil), nil); err != nil {
+		t.Fatalf("maybeRewriteIdentityFile() error = %v", err)
 	}
 }
 
@@ -1840,12 +1862,12 @@ func TestMaybeUpgradeIdentityFileAlreadyUpgraded(t *testing.T) {
 	})
 
 	hostnameFunc = func() (string, error) { return "testhost", nil }
-	readFirstLineFunc = func(path string, limit int) string {
+	readFirstLineFunc = stringReader(func(path string, limit int) string {
 		if path == "/etc/machine-id" {
 			return "machine-id-123"
 		}
 		return ""
-	}
+	})
 
 	dir := t.TempDir()
 	path := filepath.Join(dir, "identity.conf")
@@ -1857,30 +1879,29 @@ func TestMaybeUpgradeIdentityFileAlreadyUpgraded(t *testing.T) {
 	const serverID = "1234567890123456"
 	macs := []string{"aa:bb:cc:dd:ee:ff"}
 
-	// Create a v2 file (already has key labels)
-	v2Content, err := encodeProtectedServerIDWithMACs(serverID, macs, macs[0], nil)
-	if err != nil {
-		t.Fatalf("encodeProtectedServerIDWithMACs() error = %v", err)
-	}
+	// Create a v2 file (already has key labels AND the machine-id arm)
+	f := readHostFacts(nil)
+	v2Content := encodeProtectedServerIDWithKeyField(serverID, identityKeyFieldFor(f, macs, macs[0]), nil)
 	if err := os.WriteFile(path, []byte(v2Content), 0o600); err != nil {
 		t.Fatalf("failed to write file: %v", err)
 	}
 
-	// Get original content
 	original, _ := os.ReadFile(path)
 
-	// Try to upgrade - should be no-op since already v2
-	if err := maybeUpgradeIdentityFileWithContext(context.Background(), path, serverID, macs[0], macs, nil); err != nil {
-		t.Fatalf("maybeUpgradeIdentityFileWithContext() error = %v", err)
+	res, err := loadServerID(path, macs, macs[0], f, nil)
+	if err != nil {
+		t.Fatalf("loadServerID() error = %v", err)
+	}
+	// Both triggers are latched by the labels the rewrite itself writes, so this is a
+	// no-op and the file must come out BYTE IDENTICAL.
+	if err := maybeRewriteIdentityFile(context.Background(), path, res, macs[0], macs, f, nil); err != nil {
+		t.Fatalf("maybeRewriteIdentityFile() error = %v", err)
 	}
 
-	// Content should not have changed (same format)
 	after, _ := os.ReadFile(path)
-	// We can't compare exact bytes because timestamps differ, but format should be same
-	if !identityPayloadHasKeyLabels(string(after), nil) {
-		t.Errorf("file should still have key labels after no-op upgrade")
+	if !bytes.Equal(original, after) {
+		t.Errorf("no-op rewrite changed the file")
 	}
-	_ = original
 }
 
 func TestBuildIdentityKeyFieldEmptyMACs(t *testing.T) {
@@ -1892,15 +1913,15 @@ func TestBuildIdentityKeyFieldEmptyMACs(t *testing.T) {
 	})
 
 	hostnameFunc = func() (string, error) { return "testhost", nil }
-	readFirstLineFunc = func(path string, limit int) string {
+	readFirstLineFunc = stringReader(func(path string, limit int) string {
 		if path == "/etc/machine-id" {
 			return "machine-id-123"
 		}
 		return ""
-	}
+	})
 
 	// Empty everything
-	keyField := buildIdentityKeyField(nil, "", nil)
+	keyField := identityKeyFieldFor(readHostFacts(nil), nil, "")
 	// Should not be empty (at minimum uuid entries if uuid available)
 	// Even with empty input, the function should not panic
 	_ = keyField
@@ -1965,5 +1986,20 @@ func TestPersistNotifySecret_AtomicRenameFailureKeepsOriginal(t *testing.T) {
 	got, _ := os.ReadFile(secretPath)
 	if string(got) != original {
 		t.Fatalf("original secret modified: got %q want %q", string(got), original)
+	}
+}
+
+// stringReader adapts a plain string stub to the classified readFirstLineFunc seam, so a
+// test that only cares about VALUES does not have to spell out a state. An empty value
+// becomes systemFileAbsent, which is what the real reader reports for a missing or empty
+// file. Tests that care about the difference between absent and unreadable install their
+// own stub instead.
+func stringReader(fn func(path string, limit int) string) func(string, int) (string, systemFileState) {
+	return func(path string, limit int) (string, systemFileState) {
+		value := strings.TrimSpace(fn(path, limit))
+		if value == "" {
+			return "", systemFileAbsent
+		}
+		return value, systemFilePresent
 	}
 }

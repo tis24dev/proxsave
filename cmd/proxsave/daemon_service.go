@@ -246,6 +246,7 @@ func daemonUnitActiveState(ctx context.Context) string {
 	if err != nil {
 		return ""
 	}
+	safeexec.ApplyWaitDelay(cmd)
 	out, _ := cmd.CombinedOutput()
 	return strings.TrimSpace(string(out))
 }
@@ -266,6 +267,7 @@ func runSystemctl(ctx context.Context, args ...string) error {
 	if err != nil {
 		return fmt.Errorf("systemctl %s: %w", strings.Join(args, " "), err)
 	}
+	safeexec.ApplyWaitDelay(cmd)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("systemctl %s: %w: %s", strings.Join(args, " "), err, strings.TrimSpace(string(out)))

@@ -2,7 +2,6 @@ package storage
 
 import (
 	"context"
-	"encoding/json"
 	"strings"
 	"sync"
 
@@ -10,22 +9,28 @@ import (
 	"github.com/tis24dev/proxsave/internal/types"
 )
 
-// resolveRetentionOwners fills in each candidate's Hostname from its remote manifest
-// so cloud retention can attribute a backup the same way the local and secondary
-// locations do.
+// resolveRetentionOwners fills in each candidate's Hostname and ServerID from its
+// remote manifest so cloud retention can attribute a backup the same way the local
+// and secondary locations do.
 //
 // List() deliberately does NOT do this: it is also the cheap path behind the run
 // counter and the stats screen, and attributing costs one `rclone cat` per archive.
 // Retention is the only caller that must know WHO owns a backup before deleting it,
 // so the cost is paid here and only here.
 //
-// Every failure leaves Hostname empty, which backupBelongsToHost reads as "not
-// ours" - a backup whose manifest cannot be read is left alone rather than deleted
-// on a guess.
+// Every failure leaves Hostname empty. backupOwnerHost then falls back to the host
+// token the filename carries ("<host>-backup-<timestamp>"), so an archive whose
+// manifest cannot be read keeps rotating instead of accumulating. An archive whose
+// name carries no parseable token is left alone rather than deleted on a guess, with
+// no exception: a pre-Go "proxmox-backup-*" name attributes through its KEY=VALUE
+// sidecar when one is readable, and is claimed by nobody when none is.
 func (c *CloudStorage) resolveRetentionOwners(ctx context.Context, backups []*types.BackupMetadata) {
 	pending := make([]*types.BackupMetadata, 0, len(backups))
 	for _, b := range backups {
-		if b == nil || strings.TrimSpace(b.Hostname) != "" {
+		// A pre-filled Hostname is no longer a reason to skip: with two fields to
+		// resolve, skipping on one of them would leave the identity empty and
+		// silently disable the mechanism on this backend. See the secondary twin.
+		if b == nil {
 			continue
 		}
 		pending = append(pending, b)
@@ -63,7 +68,13 @@ func (c *CloudStorage) resolveRetentionOwners(ctx context.Context, backups []*ty
 			case <-ctx.Done():
 				return
 			}
-			b.Hostname = c.remoteManifestHostname(ctx, b.BackupFile)
+			hostname, serverID := c.remoteManifestOwner(ctx, b.BackupFile)
+			if strings.TrimSpace(b.Hostname) == "" {
+				b.Hostname = hostname
+			}
+			if strings.TrimSpace(b.ServerID) == "" {
+				b.ServerID = serverID
+			}
 		}()
 	}
 	wg.Wait()
@@ -74,14 +85,21 @@ func (c *CloudStorage) resolveRetentionOwners(ctx context.Context, backups []*ty
 // ".manifest.json" is the completion sidecar the verify step also accepts.
 var remoteManifestSuffixes = []string{".metadata", ".manifest.json"}
 
-// remoteManifestHostname reads the archive's manifest off the remote and returns its
-// "hostname" field, or "" when it cannot be read. Bundles carry the manifest inside
+// remoteManifestOwner reads the archive's manifest off the remote and returns both
+// facts it records about its writer: the host it names and the server identity it
+// carries. Both are empty when nothing can be read. Bundles carry the manifest inside
 // the tar, which would mean downloading the whole archive, so they are attributed
 // only if a sidecar happens to sit beside them.
-func (c *CloudStorage) remoteManifestHostname(ctx context.Context, filename string) string {
+//
+// The two values always come from THE SAME payload, and the suffix loop still stops
+// at the first payload that names a host. It never merges a hostname read from
+// .metadata with an identity read from .manifest.json: that would fabricate a writer
+// no single run ever was, and retention would delete on it. Falling through only when
+// a payload names no host preserves exactly the degradation this loop had before.
+func (c *CloudStorage) remoteManifestOwner(ctx context.Context, filename string) (hostname, serverID string) {
 	rel := strings.TrimSpace(filename)
 	if rel == "" {
-		return ""
+		return "", ""
 	}
 	for _, suffix := range remoteManifestSuffixes {
 		// Take the binary from buildRcloneArgs like every other call site, rather than
@@ -94,15 +112,16 @@ func (c *CloudStorage) remoteManifestHostname(ctx context.Context, filename stri
 			c.logger.Debug("Cloud storage: cannot read manifest %s%s: %v", rel, suffix, err)
 			continue
 		}
-		var manifest backup.Manifest
-		if err := json.Unmarshal(out, &manifest); err != nil {
-			c.logger.Debug("Cloud storage: manifest %s%s is not readable JSON: %v", rel, suffix, err)
-			continue
+		// Both manifest forms are accepted here, through the same key precedence the
+		// local and secondary paths reach via backup.LoadManifest. Reading only the
+		// JSON form is how a shared remote root ended up with one host deleting
+		// another host's pre-Go archive together with the KEY=VALUE sidecar that
+		// named its owner.
+		if host, id := backup.OwnerFromManifestBytes(out); host != "" {
+			return host, id
 		}
-		if host := strings.TrimSpace(manifest.Hostname); host != "" {
-			return host
-		}
+		c.logger.Debug("Cloud storage: manifest %s%s names no host", rel, suffix)
 	}
 	c.logger.Debug("Cloud storage: no readable manifest for %s; retention will not consider it", rel)
-	return ""
+	return "", ""
 }

@@ -64,7 +64,7 @@ func TestRunRestoreWorkflow_CleansPreparedBundleWhenPlanningFails(t *testing.T) 
 	cfg := &config.Config{BaseDir: "/base"}
 	ui := &fakeRestoreWorkflowUI{modeErr: wantErr}
 
-	err := runRestoreWorkflowWithUI(context.Background(), cfg, logger, "vtest", ui)
+	err := runRestoreWorkflowWithUI(context.Background(), cfg, logger, "vtest", ui, "")
 	if !errors.Is(err, wantErr) {
 		t.Fatalf("err=%v; want %v", err, wantErr)
 	}
@@ -134,7 +134,7 @@ func TestRunRestoreWorkflow_ClusterPromptUsesArchivePayloadNotManifest(t *testin
 		clusterMode:    ClusterRestoreSafe,
 	}
 
-	if err := runRestoreWorkflowWithUI(context.Background(), cfg, logger, "vtest", ui); err != nil {
+	if err := runRestoreWorkflowWithUI(context.Background(), cfg, logger, "vtest", ui, ""); err != nil {
 		t.Fatalf("runRestoreWorkflowWithUI error: %v", err)
 	}
 	if ui.clusterRestoreModeCalls != 1 {
@@ -203,7 +203,7 @@ func TestRunRestoreWorkflow_CompatibilityUsesArchivePayloadNotManifest(t *testin
 		confirmCompatible: false,
 	}
 
-	if err := runRestoreWorkflowWithUI(context.Background(), cfg, logger, "vtest", ui); err != nil {
+	if err := runRestoreWorkflowWithUI(context.Background(), cfg, logger, "vtest", ui, ""); err != nil {
 		t.Fatalf("runRestoreWorkflowWithUI error: %v", err)
 	}
 	if ui.confirmCompatibilityCalls != 0 {
@@ -274,7 +274,7 @@ func TestRunRestoreWorkflow_CompatibilityWarnsOnArchiveMismatchDespiteManifest(t
 		confirmCompatible: true,
 	}
 
-	if err := runRestoreWorkflowWithUI(context.Background(), cfg, logger, "vtest", ui); err != nil {
+	if err := runRestoreWorkflowWithUI(context.Background(), cfg, logger, "vtest", ui, ""); err != nil {
 		t.Fatalf("runRestoreWorkflowWithUI error: %v", err)
 	}
 	if ui.confirmCompatibilityCalls != 1 {
@@ -346,7 +346,7 @@ func TestRunRestoreWorkflow_CompatibilityWarningStillRunsBeforeFullFallbackOnAna
 		confirmCompatible: true,
 	}
 
-	if err := runRestoreWorkflowWithUI(context.Background(), cfg, logger, "vtest", ui); err != nil {
+	if err := runRestoreWorkflowWithUI(context.Background(), cfg, logger, "vtest", ui, ""); err != nil {
 		t.Fatalf("runRestoreWorkflowWithUI error: %v", err)
 	}
 	if ui.confirmCompatibilityCalls != 1 {

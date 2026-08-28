@@ -24,7 +24,7 @@ func expiredStorageCtx(t *testing.T) context.Context {
 // CRITICAL StorageError wrapping safefs.ErrTimeout (primary is critical).
 func TestLocalDetectFilesystemTimeoutIsCritical(t *testing.T) {
 	cfg := &config.Config{BackupPath: t.TempDir(), FsIoTimeoutSeconds: 30}
-	l, err := NewLocalStorage(cfg, newTestLogger())
+	l, err := NewLocalStorage(cfg, newTestLogger(), "")
 	if err != nil {
 		t.Fatalf("NewLocalStorage: %v", err)
 	}
@@ -42,7 +42,7 @@ func TestLocalDetectFilesystemTimeoutIsCritical(t *testing.T) {
 // NON-critical StorageError (secondary is best-effort).
 func TestSecondaryDetectFilesystemTimeoutNonCritical(t *testing.T) {
 	cfg := &config.Config{SecondaryEnabled: true, SecondaryPath: t.TempDir(), FsIoTimeoutSeconds: 30}
-	s, err := NewSecondaryStorage(cfg, newTestLogger())
+	s, err := NewSecondaryStorage(cfg, newTestLogger(), "")
 	if err != nil {
 		t.Fatalf("NewSecondaryStorage: %v", err)
 	}
@@ -71,7 +71,7 @@ func TestSecondaryCopyFileLeafOpenTimeout(t *testing.T) {
 	})
 
 	cfg := &config.Config{SecondaryEnabled: true, SecondaryPath: dir, FsIoTimeoutSeconds: 1}
-	s, err := NewSecondaryStorage(cfg, newTestLogger())
+	s, err := NewSecondaryStorage(cfg, newTestLogger(), "")
 	if err != nil {
 		t.Fatalf("NewSecondaryStorage: %v", err)
 	}
@@ -99,7 +99,7 @@ func TestSecondaryCopyFileHealthy(t *testing.T) {
 		t.Fatalf("write src: %v", err)
 	}
 	cfg := &config.Config{SecondaryEnabled: true, SecondaryPath: dir, FsIoTimeoutSeconds: 30}
-	s, err := NewSecondaryStorage(cfg, newTestLogger())
+	s, err := NewSecondaryStorage(cfg, newTestLogger(), "")
 	if err != nil {
 		t.Fatalf("NewSecondaryStorage: %v", err)
 	}

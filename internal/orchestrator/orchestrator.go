@@ -125,33 +125,21 @@ type BackupStats struct {
 	MaxCloudBackups     int
 
 	// Retention policy info (for notifications)
-	LocalRetentionPolicy       string
-	LocalGFSDaily              int
-	LocalGFSWeekly             int
-	LocalGFSMonthly            int
-	LocalGFSYearly             int
-	LocalGFSCurrentDaily       int
-	LocalGFSCurrentWeekly      int
-	LocalGFSCurrentMonthly     int
-	LocalGFSCurrentYearly      int
-	SecondaryRetentionPolicy   string
-	SecondaryGFSDaily          int
-	SecondaryGFSWeekly         int
-	SecondaryGFSMonthly        int
-	SecondaryGFSYearly         int
-	SecondaryGFSCurrentDaily   int
-	SecondaryGFSCurrentWeekly  int
-	SecondaryGFSCurrentMonthly int
-	SecondaryGFSCurrentYearly  int
-	CloudRetentionPolicy       string
-	CloudGFSDaily              int
-	CloudGFSWeekly             int
-	CloudGFSMonthly            int
-	CloudGFSYearly             int
-	CloudGFSCurrentDaily       int
-	CloudGFSCurrentWeekly      int
-	CloudGFSCurrentMonthly     int
-	CloudGFSCurrentYearly      int
+	LocalRetentionPolicy     string
+	LocalGFSDaily            int
+	LocalGFSWeekly           int
+	LocalGFSMonthly          int
+	LocalGFSYearly           int
+	SecondaryRetentionPolicy string
+	SecondaryGFSDaily        int
+	SecondaryGFSWeekly       int
+	SecondaryGFSMonthly      int
+	SecondaryGFSYearly       int
+	CloudRetentionPolicy     string
+	CloudGFSDaily            int
+	CloudGFSWeekly           int
+	CloudGFSMonthly          int
+	CloudGFSYearly           int
 
 	// Error/warning counts
 	ErrorCount   int
