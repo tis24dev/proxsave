@@ -809,9 +809,18 @@ func warnIndirectProxsaveCronOnDaemonInstall(ctx context.Context, bootstrap *log
 	if err != nil || len(refs) == 0 {
 		return
 	}
-	logBootstrapWarning(bootstrap, "%d unmanaged cron line(s) still schedule ProxSave:", len(refs))
+	// One problem, one WARNING. The header and the findings are INFO: three warning lines for
+	// a single fact read as three problems in the run's "WARNINGS/ERRORS DURING RUN
+	// (warnings=N)" recap, and the count is what an operator scans. Telegram sets the same
+	// shape - one line at the level that matters, the rest below it.
+	//
+	// The WARNING therefore repeats the count and stands on its own, because DEBUG_LEVEL can
+	// be set to "warning" (internal/cli/args.go), which hides the two INFO lines. What is lost
+	// at that level is which cron line it was; what survives is that the host now runs the
+	// backup twice. Naming the file here instead would not survive a second finding.
+	logBootstrapInfo(bootstrap, "%d unmanaged cron line(s) still schedule ProxSave:", len(refs))
 	for _, line := range describeIndirectCronRefs(refs) {
-		logBootstrapWarning(bootstrap, "  - %s", line)
+		logBootstrapInfo(bootstrap, "  - %s", line)
 	}
-	logBootstrapWarning(bootstrap, "They are NOT removed, so they keep firing alongside the daemon: this can cause problems, exit %d.", types.ExitBackupSkipped.Int())
+	logBootstrapWarning(bootstrap, "%d unmanaged cron line(s) NOT removed, so they keep firing alongside the daemon: this can cause problems, exit %d.", len(refs), types.ExitBackupSkipped.Int())
 }

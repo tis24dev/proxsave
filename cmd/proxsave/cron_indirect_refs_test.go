@@ -702,11 +702,27 @@ func TestWarnIndirectProxsaveCronOnDaemonInstallStatesFactsOnly(t *testing.T) {
 		"unmanaged cron line(s) still schedule ProxSave", // WHAT was found
 		"30 02 * * * /usr/local/sbin/proxsave-nas-guard", // the line verbatim
 		"named after proxsave",                           // WHY it matched
-		"They are NOT removed",                           // what ProxSave did not do
+		"NOT removed",                                    // what ProxSave did not do
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("the warning must state %q, out=%q", want, out)
 		}
+	}
+
+	// ONE problem, ONE warning. Three WARNING lines for a single fact read as three problems
+	// in the run's "WARNINGS/ERRORS DURING RUN (warnings=N)" recap, and that count is what an
+	// operator scans. The header and the findings belong below it.
+	if got := strings.Count(out, "WARNING"); got != 1 {
+		t.Errorf("want exactly one WARNING line, got %d, out=%q", got, out)
+	}
+	if got := strings.Count(out, "INFO"); got != 2 {
+		t.Errorf("the header and the finding must be INFO, got %d such lines, out=%q", got, out)
+	}
+	// The WARNING has to stand alone: DEBUG_LEVEL=warning hides the two INFO lines, so it
+	// carries the count itself rather than leaning on a header the operator may not see.
+	warnLine := out[strings.Index(out, "WARNING"):]
+	if !strings.Contains(warnLine, "1 unmanaged cron line(s)") {
+		t.Errorf("the WARNING must repeat the count so it survives DEBUG_LEVEL=warning, got %q", warnLine)
 	}
 	for _, forbidden := range []string{
 		"Remove/disable",
@@ -781,4 +797,61 @@ func TestNameRuleOnlyFiresWhenTheScriptCannotBeRead(t *testing.T) {
 			t.Fatal("with no probe available the name is all there is, so it must still fire")
 		}
 	})
+}
+
+// One refusal, one WARNING. Five warning lines for a single decision read as five problems
+// in the run's "WARNINGS/ERRORS DURING RUN (warnings=N)" recap, and that count is what an
+// operator scans. The findings and the way forward sit below at INFO.
+//
+// The verdict line has to stand alone, because DEBUG_LEVEL=warning (internal/cli/args.go)
+// hides the INFO lines: it carries REFUSED, the consequence, and the fact that nothing
+// changed, so an operator reading only warnings still learns the migration did not happen.
+func TestMaybeAutoMigrateDaemonRefusalUsesOneWarning(t *testing.T) {
+	origRead, origApply, origPaths := crontabReadLinesFn, applyDaemonModeFn, systemCronPaths
+	t.Cleanup(func() {
+		crontabReadLinesFn, applyDaemonModeFn, systemCronPaths = origRead, origApply, origPaths
+	})
+	crontabReadLinesFn = func(context.Context) ([]string, error) {
+		return []string{"30 02 * * * /usr/local/sbin/proxsave-nas-guard"}, nil
+	}
+	systemCronPaths = []string{filepath.Join(t.TempDir(), "absent")}
+	applyDaemonModeFn = func(context.Context, *config.Config, string, string, *logging.BootstrapLogger) (cronRemovalOutcome, error) {
+		t.Fatal("the migration must not run")
+		return cronRemovalOutcome{}, nil
+	}
+
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "backup.env")
+	if err := os.WriteFile(configPath, []byte("SCHEDULER_MODE=cron\nDAEMON_OPT_OUT=false\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	orig := logging.GetDefaultLogger()
+	t.Cleanup(func() { logging.SetDefaultLogger(orig) })
+	var buf bytes.Buffer
+	def := logging.New(types.LogLevelDebug, false)
+	def.SetOutput(&buf)
+	logging.SetDefaultLogger(def)
+
+	maybeAutoMigrateDaemon(context.Background(), configPath, dir, "/usr/local/bin/proxsave", nil)
+	out := buf.String()
+
+	if got := strings.Count(out, "WARNING"); got != 1 {
+		t.Errorf("want exactly one WARNING, got %d, out=%q", got, out)
+	}
+	warnLine := out[strings.Index(out, "WARNING"):]
+	for _, want := range []string{"REFUSED", "duplicate backups", "No changes"} {
+		if !strings.Contains(warnLine, want) {
+			t.Errorf("the WARNING must carry %q so it survives DEBUG_LEVEL=warning, got %q", want, warnLine)
+		}
+	}
+	for _, want := range []string{
+		"unmanaged cron line(s) schedule ProxSave",       // the header, below the verdict
+		"30 02 * * * /usr/local/sbin/proxsave-nas-guard", // the finding verbatim
+		"proxsave --daemon-setup",                        // the way forward
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("the block must still state %q, out=%q", want, out)
+		}
+	}
 }

@@ -634,13 +634,18 @@ func maybeAutoMigrateDaemon(ctx context.Context, configPath, baseDir, execToken 
 	if refs, err := detectIndirectProxsaveCron(ctx); err != nil {
 		logging.DebugStepBootstrap(bootstrap, "upgrade workflow", "daemon auto-migrate: the crontab could not be read, so the wrapper check was skipped: %v", err)
 	} else if len(refs) > 0 {
-		logBootstrapWarning(bootstrap, "Daemon auto-migration REFUSED: %d unmanaged cron line(s) schedule ProxSave:", len(refs))
+		// One problem, one WARNING, same shape as warnIndirectProxsaveCronOnDaemonInstall. Five
+		// warning lines for a single refusal read as five problems in the run's
+		// "WARNINGS/ERRORS DURING RUN (warnings=N)" recap, and that count is what an operator
+		// scans. The findings and the way forward sit below it at INFO; the verdict and its
+		// consequence are the one line that has to survive DEBUG_LEVEL=warning, so REFUSED and
+		// "No changes" both live there rather than in the header they used to share.
+		logBootstrapInfo(bootstrap, "%d unmanaged cron line(s) schedule ProxSave:", len(refs))
 		for _, line := range describeIndirectCronRefs(refs) {
-			logBootstrapWarning(bootstrap, "  - %s", line)
+			logBootstrapInfo(bootstrap, "  - %s", line)
 		}
-		logBootstrapWarning(bootstrap, "Daemon installation would duplicate backups; the losing run exits %d (backup skipped).", types.ExitBackupSkipped.Int())
-		logBootstrapWarning(bootstrap, "No changes; cron backups continue.")
-		logBootstrapWarning(bootstrap, "Remove/disable unwanted entries (%s), then run 'proxsave --daemon-setup'. Skip upgrade checks: DAEMON_OPT_OUT=true in %s.", cronRefEditHint(refs), configPath)
+		logBootstrapWarning(bootstrap, "Daemon would duplicate backups, REFUSED; the losing run exits %d (backup skipped). No changes; cron backups continue.", types.ExitBackupSkipped.Int())
+		logBootstrapInfo(bootstrap, "Remove/disable unwanted entries (%s), then run 'proxsave --daemon-setup'. Skip this check: DAEMON_OPT_OUT=true in %s.", cronRefEditHint(refs), configPath)
 		return
 	}
 	logBootstrapInfo(bootstrap, "Migrating to the resident daemon scheduler (%s)...", daemonUnitName)
