@@ -225,7 +225,7 @@ func (c *Checker) checkDependencies() {
 
 	c.logger.Warning("Dependencies check: missing required dependencies")
 	for _, dep := range missing {
-		c.logger.Warning(" - %s (%s)", dep.Name, dep.Reason)
+		c.logger.Warning("  - %s (%s)", dep.Name, dep.Reason)
 		c.addError("Required dependency %s missing: %s", dep.Name, dep.Reason)
 	}
 }
