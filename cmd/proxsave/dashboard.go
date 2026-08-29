@@ -595,13 +595,15 @@ func runDashboardDaemonAdmin(ctx context.Context, session *shell.Session, instal
 		work = "Installing and enabling " + daemonUnitName + "..."
 		doneTitle = "Daemon installed"
 		doneKeyword = "INSTALLED"
-		doneMsg = "The resident daemon (" + daemonUnitName + ") is active. The cron entry was removed."
+		// doneMsg for the install path is deliberately NOT set here. It has to state what
+		// the cron removal actually did, and that is only known after the op below runs.
 	}
 	execToken := daemonSelfExecPath()
 	var opErr error
+	var cronOutcome cronRemovalOutcome
 	_ = components.RunTask(ctx, session, title, work, func(taskCtx context.Context, report func(string)) error {
 		if install {
-			opErr = daemonApplyDaemonMode(taskCtx, cfg, configPath, execToken, bl)
+			cronOutcome, opErr = daemonApplyDaemonMode(taskCtx, cfg, configPath, execToken, bl)
 		} else {
 			opErr = daemonApplyCronMode(taskCtx, cfg, configPath, execToken, bl, true)
 		}
@@ -616,6 +618,14 @@ func runDashboardDaemonAdmin(ctx context.Context, session *shell.Session, instal
 		}
 		showDaemonResultScreen(ctx, session, title+" failed", orchestrator.HealthcheckSetupLevelError, "FAILED", opErr.Error())
 		return
+	}
+	// The result screen is the only channel that reaches the operator here (console logging
+	// and the bootstrap console are muted for the whole op above), so it must carry the same
+	// verified crontab fact the CLI log line carries. On a host whose backup is scheduled
+	// through a wrapper there was no proxsave cron entry to remove, and claiming one was
+	// removed is how issue #298 stayed invisible on both front-ends at once.
+	if install {
+		doneMsg = "The resident daemon (" + daemonUnitName + ") is active. " + cronRemovalClause(cronOutcome)
 	}
 	showDaemonResultScreen(ctx, session, doneTitle, orchestrator.HealthcheckSetupLevelOk, doneKeyword, doneMsg)
 }

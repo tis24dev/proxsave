@@ -84,7 +84,11 @@ func TestInitializeHealthcheckSectionLines(t *testing.T) {
 				t.Fatalf("seed heartbeat: %v", err)
 			}
 		}
-		return &config.Config{HealthcheckEnabled: true, HealthcheckMode: "centralized", ServerID: "srv1", BaseDir: base}
+		// SchedulerMode is stated explicitly: every case in this test is about the DAEMON
+		// engine's warning arm, and reportHealthchecksUnusable re-ranks that same reason to a
+		// SKIP on the cron engine. Leaving the mode blank would let a future default flip
+		// silently repurpose the whole test.
+		return &config.Config{SchedulerMode: "daemon", HealthcheckEnabled: true, HealthcheckMode: "centralized", ServerID: "srv1", BaseDir: base}
 	}
 
 	// disabled -> a SKIP line, exactly like Email/Gotify/Webhook.
@@ -106,13 +110,19 @@ func TestInitializeHealthcheckSectionLines(t *testing.T) {
 		if strings.Contains(out, "Healthchecks initialized") {
 			t.Fatalf("%s: must NOT print initialized, out=%q", name, out)
 		}
+		// Every case here is on the DAEMON engine, where the problem is a real regression and
+		// must keep its warning weight. If the cron re-rank ever leaked onto this engine the
+		// substring assertions above would still pass while the run silently stopped exiting 1.
+		if strings.Contains(out, "cron mode") {
+			t.Fatalf("%s: the daemon engine must WARN, not emit the cron-mode SKIP, out=%q", name, out)
+		}
 		if c.HealthcheckEnabled {
 			t.Fatalf("%s: must flip HealthcheckEnabled=false so the flow treats it as disabled", name)
 		}
 	}
 
 	// enabled + centralized without SERVER_ID -> config problem.
-	assertDisabled(t, "no-server-id", &config.Config{HealthcheckEnabled: true, HealthcheckMode: "centralized"}, unprobed, "SERVER_ID")
+	assertDisabled(t, "no-server-id", &config.Config{SchedulerMode: "daemon", HealthcheckEnabled: true, HealthcheckMode: "centralized"}, unprobed, "SERVER_ID")
 	// Heartbeat-only fallback (systemctl unavailable): no beat -> "daemon not running".
 	assertDisabled(t, "no-daemon", usableCfg(t, 0, false), unprobed, "daemon not running")
 	// Heartbeat-only fallback: STALE heartbeat -> "daemon stale".
@@ -132,5 +142,155 @@ func TestInitializeHealthcheckSectionLines(t *testing.T) {
 	out := run(usableCfg(t, 30*time.Second, true), activeDaemon)
 	if !strings.Contains(out, "✓ Healthchecks initialized (mode: centralized)") {
 		t.Fatalf("usable config + live daemon must print the initialized line, out=%q", out)
+	}
+}
+
+// TestInitializeHealthcheckSectionCronModeSkipsInsteadOfWarning is the issue #298
+// regression. --daemon-remove left HEALTHCHECK_ENABLED=true behind, so every later cron run
+// warned "Healthchecks: daemon not installed" and applyIssueExitCode promoted an otherwise
+// clean backup to exit 1. On the cron engine the daemon is absent by construction and is the
+// only thing that pings, so the honest report is a SKIP - emitted at info level, therefore
+// invisible to the warning counter that drives the exit code - that still NAMES what was
+// observed, because re-ranking a report is not the same as swallowing it.
+func TestInitializeHealthcheckSectionCronModeSkipsInsteadOfWarning(t *testing.T) {
+	orig := logging.GetDefaultLogger()
+	t.Cleanup(func() { logging.SetDefaultLogger(orig) })
+	origProbe := daemonPresenceProbe
+	t.Cleanup(func() { daemonPresenceProbe = origProbe })
+	daemonPresenceProbe = func(context.Context) health.DaemonPresence {
+		return health.DaemonPresence{Probed: true, Installed: false}
+	}
+
+	discard := logging.New(types.LogLevelInfo, false)
+	discard.SetOutput(io.Discard)
+
+	var buf bytes.Buffer
+	def := logging.New(types.LogLevelDebug, false)
+	def.SetOutput(&buf)
+	logging.SetDefaultLogger(def)
+
+	cfg := &config.Config{
+		SchedulerMode:      "cron",
+		HealthcheckEnabled: true,
+		HealthcheckMode:    "centralized",
+		ServerID:           "srv1",
+		BaseDir:            t.TempDir(),
+	}
+	orch := orchestrator.New(discard, false)
+	initializeHealthcheckSection(backupModeOptions{ctx: context.Background(), cfg: cfg, logger: discard}, orch)
+
+	out := buf.String()
+	if def.WarningCount() != 0 {
+		t.Fatalf("cron mode must emit no WARNING (one warning is enough to promote a clean backup to exit 1), out=%q", out)
+	}
+	if strings.Contains(out, "WARNING") {
+		t.Fatalf("cron mode must not log a WARNING line, out=%q", out)
+	}
+	if !strings.Contains(out, "Healthchecks: disabled") {
+		t.Fatalf("cron mode must still print the SKIP line, out=%q", out)
+	}
+	if !strings.Contains(out, "cron mode") {
+		t.Fatalf("the SKIP must say WHY the section is inert on this engine, out=%q", out)
+	}
+	if !strings.Contains(out, "daemon not installed") {
+		t.Fatalf("the SKIP must still name the observed reason (re-rank, not swallow), out=%q", out)
+	}
+	if cfg.HealthcheckEnabled {
+		t.Fatal("cron mode must still flip HealthcheckEnabled=false so the Phase-7 entries loop renders it disabled")
+	}
+}
+
+// TestInitializeHealthcheckSectionCronModeKeepsLiveDaemon pins that the cron gate is a
+// SEVERITY decision on a problem, not a short-circuit on the engine. applyCronMode persists
+// SCHEDULER_MODE=cron BEFORE it tears the unit down (F09-06), so a teardown that fails leaves
+// a live, transmitting daemon on a host whose config already reads cron. In that window the
+// section is reporting something real and must still render.
+func TestInitializeHealthcheckSectionCronModeKeepsLiveDaemon(t *testing.T) {
+	orig := logging.GetDefaultLogger()
+	t.Cleanup(func() { logging.SetDefaultLogger(orig) })
+	origProbe := daemonPresenceProbe
+	t.Cleanup(func() { daemonPresenceProbe = origProbe })
+	daemonPresenceProbe = func(context.Context) health.DaemonPresence {
+		return health.DaemonPresence{Probed: true, Installed: true, Active: true}
+	}
+
+	discard := logging.New(types.LogLevelInfo, false)
+	discard.SetOutput(io.Discard)
+
+	var buf bytes.Buffer
+	def := logging.New(types.LogLevelDebug, false)
+	def.SetOutput(&buf)
+	logging.SetDefaultLogger(def)
+
+	base := t.TempDir()
+	if err := health.RecordPing(base, "centralized", health.KindHeartbeat, time.Now().Add(-30*time.Second).Unix(), true, nil); err != nil {
+		t.Fatalf("seed heartbeat: %v", err)
+	}
+	cfg := &config.Config{
+		SchedulerMode:      "cron",
+		HealthcheckEnabled: true,
+		HealthcheckMode:    "centralized",
+		ServerID:           "srv1",
+		BaseDir:            base,
+	}
+	orch := orchestrator.New(discard, false)
+	initializeHealthcheckSection(backupModeOptions{ctx: context.Background(), cfg: cfg, logger: discard}, orch)
+
+	out := buf.String()
+	if !strings.Contains(out, "Healthchecks initialized (mode: centralized)") {
+		t.Fatalf("a live daemon must still initialize the section even when the config reads cron, out=%q", out)
+	}
+	if strings.Contains(out, "cron mode") {
+		t.Fatalf("the cron re-rank must not fire when the probe reports no problem, out=%q", out)
+	}
+	if !cfg.HealthcheckEnabled {
+		t.Fatal("a working section must keep HealthcheckEnabled=true so the Phase-7 dispatch renders it")
+	}
+}
+
+// TestInitializeHealthcheckSectionDaemonModeStillWarns is the counterweight to the cron gate.
+// On the daemon engine the daemon IS the scheduler, so a missing unit means the host believes
+// it is monitored and is not - exactly the failure the WARNING (and the exit code it earns)
+// exists to surface. A suppression rule with no test on this side is one refactor away from
+// hiding a real outage.
+func TestInitializeHealthcheckSectionDaemonModeStillWarns(t *testing.T) {
+	orig := logging.GetDefaultLogger()
+	t.Cleanup(func() { logging.SetDefaultLogger(orig) })
+	origProbe := daemonPresenceProbe
+	t.Cleanup(func() { daemonPresenceProbe = origProbe })
+	daemonPresenceProbe = func(context.Context) health.DaemonPresence {
+		return health.DaemonPresence{Probed: true, Installed: false}
+	}
+
+	discard := logging.New(types.LogLevelInfo, false)
+	discard.SetOutput(io.Discard)
+
+	var buf bytes.Buffer
+	def := logging.New(types.LogLevelDebug, false)
+	def.SetOutput(&buf)
+	logging.SetDefaultLogger(def)
+
+	cfg := &config.Config{
+		SchedulerMode:      "daemon",
+		HealthcheckEnabled: true,
+		HealthcheckMode:    "centralized",
+		ServerID:           "srv1",
+		BaseDir:            t.TempDir(),
+	}
+	orch := orchestrator.New(discard, false)
+	initializeHealthcheckSection(backupModeOptions{ctx: context.Background(), cfg: cfg, logger: discard}, orch)
+
+	out := buf.String()
+	if def.WarningCount() != 1 {
+		t.Fatalf("daemon mode must WARN exactly once on a missing daemon (got %d), out=%q", def.WarningCount(), out)
+	}
+	if !strings.Contains(out, "daemon not installed") {
+		t.Fatalf("daemon mode must name the problem, out=%q", out)
+	}
+	if strings.Contains(out, "cron mode") {
+		t.Fatalf("the cron re-rank must never reach the daemon engine, out=%q", out)
+	}
+	if cfg.HealthcheckEnabled {
+		t.Fatal("daemon mode must still flip HealthcheckEnabled=false")
 	}
 }

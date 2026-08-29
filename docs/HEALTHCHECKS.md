@@ -336,7 +336,7 @@ systemctl restart proxsave-daemon.service
 ## Configuration keys
 
 ```bash
-HEALTHCHECK_ENABLED=false      # forced true by --daemon-setup and by upgrade auto-migration
+HEALTHCHECK_ENABLED=false      # true with the daemon (--daemon-setup, upgrade auto-migration); --daemon-remove sets it back, and --upgrade repairs a host an older build left at true
 HEALTHCHECK_MODE=centralized   # centralized | self
 HEALTHCHECK_HEARTBEAT_INTERVAL=5m
 HEALTHCHECK_UPDATE_INTERVAL=5m

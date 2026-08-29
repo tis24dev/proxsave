@@ -149,6 +149,13 @@ func TestApplyCronMode_PersistsCronModeBeforeTeardown(t *testing.T) {
 	removeDaemonServiceFn = func(context.Context, *logging.BootstrapLogger) error {
 		return errors.New("teardown boom")
 	}
+	// applyCronMode now consults the crontab before deciding whether to append a cron line
+	// (#298). Without this stub the test would shell out to the host's real `crontab -l`,
+	// making its verdict depend on whatever the machine running the suite has scheduled.
+	// An empty crontab is the "no wrapper" case, i.e. the append path this test asserts.
+	origRead := crontabReadLinesFn
+	t.Cleanup(func() { crontabReadLinesFn = origRead })
+	crontabReadLinesFn = func(context.Context) ([]string, error) { return nil, nil }
 
 	dir := t.TempDir()
 	configPath := filepath.Join(dir, "backup.env")
@@ -231,6 +238,11 @@ func TestApplyCronModeProceedsWhenIdle(t *testing.T) {
 		return nil
 	}
 	migrateLegacyCronEntriesFn = func(context.Context, string, string, *logging.BootstrapLogger, string) {}
+	// See TestApplyCronMode_PersistsCronModeBeforeTeardown: applyCronMode now reads the
+	// crontab (#298), and an unstubbed read would make this test depend on the host.
+	origRead := crontabReadLinesFn
+	t.Cleanup(func() { crontabReadLinesFn = origRead })
+	crontabReadLinesFn = func(context.Context) ([]string, error) { return nil, nil }
 
 	dir := t.TempDir()
 	configPath := filepath.Join(dir, "backup.env")
@@ -302,5 +314,135 @@ func TestRunDaemonRemoveDefersWhenBackupRunning(t *testing.T) {
 	}
 	if removeCalled {
 		t.Fatal("SAFETY VIOLATION: teardown ran while a backup was running")
+	}
+}
+
+// TestApplyCronModeRollsBackHealthcheckEnabled pins the config half of issue #298.
+// applyDaemonMode force-writes HEALTHCHECK_ENABLED=true, and applyCronMode used to record
+// only SCHEDULER_MODE=cron, so --daemon-remove left the key true on a host that can no longer
+// transmit anything - which the run-start init then read as "monitoring is on" and warned
+// about on every cron run. The rollback must ride the SAME setBackupEnvKeys call as the mode,
+// so a partial write can never leave the host recorded as cron while still claiming
+// monitoring, and it must not disturb the operator's inline comment.
+func TestApplyCronModeRollsBackHealthcheckEnabled(t *testing.T) {
+	origRun := restartVerifyBackupRunning
+	origRemove := removeDaemonServiceFn
+	origMigrate := migrateLegacyCronEntriesFn
+	origRead := crontabReadLinesFn
+	origWrapper := wrapperCronLinesFn
+	t.Cleanup(func() {
+		restartVerifyBackupRunning = origRun
+		removeDaemonServiceFn = origRemove
+		migrateLegacyCronEntriesFn = origMigrate
+		crontabReadLinesFn = origRead
+		wrapperCronLinesFn = origWrapper
+	})
+	restartVerifyBackupRunning = func(string) bool { return false } // idle
+	removeDaemonServiceFn = func(context.Context, *logging.BootstrapLogger) error { return nil }
+	migrateLegacyCronEntriesFn = func(context.Context, string, string, *logging.BootstrapLogger, string) {}
+	// This test is about the env write, not the crontab: pin the "ordinary host, no
+	// wrapper" shape so applyCronMode takes its normal append path and never touches the
+	// real `crontab -l` of the machine running the suite.
+	crontabReadLinesFn = func(context.Context) ([]string, error) { return nil, nil }
+	wrapperCronLinesFn = func([]string) []string { return nil }
+
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "backup.env")
+	seed := "SCHEDULER_MODE=daemon\n" +
+		"SCHEDULER_TIME=02:00\n" +
+		"HEALTHCHECK_ENABLED=true           # report service-alive heartbeat + per-run outcome\n"
+	if err := os.WriteFile(configPath, []byte(seed), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg := &config.Config{BaseDir: dir, SchedulerTime: "02:00"}
+
+	if err := applyCronMode(context.Background(), cfg, configPath, "/usr/local/bin/proxsave", nil, true); err != nil {
+		t.Fatalf("applyCronMode: %v", err)
+	}
+
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("read back: %v", err)
+	}
+	content := string(data)
+	if !strings.Contains(content, "HEALTHCHECK_ENABLED=false") {
+		t.Errorf("HEALTHCHECK_ENABLED must be rolled back together with the mode:\n%s", content)
+	}
+	if strings.Contains(content, "HEALTHCHECK_ENABLED=true") {
+		t.Errorf("the forced HEALTHCHECK_ENABLED=true survived the revert:\n%s", content)
+	}
+	if !strings.Contains(content, "SCHEDULER_MODE=cron") {
+		t.Errorf("the revert must still record the cron mode:\n%s", content)
+	}
+	if !strings.Contains(content, "DAEMON_OPT_OUT=true") {
+		t.Errorf("the revert must still write the opt-out tombstone:\n%s", content)
+	}
+	// utils.SetEnvValue preserves inline comments; a rollback that ate the operator's
+	// annotation would be a silent edit of their file.
+	if !strings.Contains(content, "# report service-alive heartbeat") {
+		t.Errorf("inline comment lost by the rollback:\n%s", content)
+	}
+}
+
+// TestBackfillHealthcheckOptOut pins the repair for the hosts issue #298 already broke.
+// applyCronMode rolls HEALTHCHECK_ENABLED back from now on, but a host that reverted with
+// an older build still carries the stale true and nothing it runs would ever rewrite that
+// key. --upgrade backfills it, and ONLY on the exact three-key shape the broken transition
+// produces, so a plain cron install that deliberately enabled monitoring is never touched.
+func TestBackfillHealthcheckOptOut(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		cfg   *config.Config
+		want  string
+		wrote bool
+	}{
+		{
+			name:  "reverted daemon host with the stale key is repaired",
+			cfg:   &config.Config{SchedulerMode: "cron", DaemonOptOut: true, HealthcheckEnabled: true},
+			want:  "HEALTHCHECK_ENABLED=false",
+			wrote: true,
+		},
+		{
+			name: "plain cron host that never opted out is left alone",
+			cfg:  &config.Config{SchedulerMode: "cron", DaemonOptOut: false, HealthcheckEnabled: true},
+			want: "HEALTHCHECK_ENABLED=true",
+		},
+		{
+			name: "already false is not rewritten",
+			cfg:  &config.Config{SchedulerMode: "cron", DaemonOptOut: true, HealthcheckEnabled: false},
+			want: "HEALTHCHECK_ENABLED=true", // the file value is irrelevant: nothing is written
+		},
+		{
+			name: "daemon host is out of scope",
+			cfg:  &config.Config{SchedulerMode: "daemon", DaemonOptOut: true, HealthcheckEnabled: true},
+			want: "HEALTHCHECK_ENABLED=true",
+		},
+		{
+			name: "nil config is a no-op, never a panic",
+			cfg:  nil,
+			want: "HEALTHCHECK_ENABLED=true",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			configPath := filepath.Join(t.TempDir(), "backup.env")
+			if err := os.WriteFile(configPath, []byte("SCHEDULER_MODE=cron\nHEALTHCHECK_ENABLED=true   # report outcome\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			backfillHealthcheckOptOut(tc.cfg, configPath, nil)
+
+			data, err := os.ReadFile(configPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := string(data); !strings.Contains(got, tc.want) {
+				t.Fatalf("want %q in the config, got:\n%s", tc.want, got)
+			}
+			if !strings.Contains(string(data), "# report outcome") {
+				t.Error("the operator's inline comment must survive the rewrite")
+			}
+			if tc.wrote && tc.cfg.HealthcheckEnabled {
+				t.Error("the live config must be updated too, so the same process does not keep acting on the stale value")
+			}
+		})
 	}
 }

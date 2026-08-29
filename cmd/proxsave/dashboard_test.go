@@ -38,8 +38,8 @@ func installDashboardGates(t *testing.T, bare, interactive bool) {
 		return &config.Config{SchedulerMode: "cron"}, nil
 	}
 	// Stub the privileged apply ops (no real systemctl / /etc/systemd writes).
-	daemonApplyDaemonMode = func(ctx context.Context, cfg *config.Config, configPath, execToken string, bl *logging.BootstrapLogger) error {
-		return nil
+	daemonApplyDaemonMode = func(ctx context.Context, cfg *config.Config, configPath, execToken string, bl *logging.BootstrapLogger) (cronRemovalOutcome, error) {
+		return cronRemovalOutcome{Removed: 1, Verified: true}, nil
 	}
 	daemonApplyCronMode = func(ctx context.Context, cfg *config.Config, configPath, execToken string, bl *logging.BootstrapLogger, optOut bool) error {
 		return nil
@@ -467,9 +467,9 @@ func TestDashboardDaemonStatusLoopsBack(t *testing.T) {
 func TestDashboardDaemonInstallInSession(t *testing.T) {
 	installDashboardGates(t, true, true) // cron -> Install daemon; apply stubbed -> nil
 	applied := 0
-	daemonApplyDaemonMode = func(ctx context.Context, cfg *config.Config, configPath, execToken string, bl *logging.BootstrapLogger) error {
+	daemonApplyDaemonMode = func(ctx context.Context, cfg *config.Config, configPath, execToken string, bl *logging.BootstrapLogger) (cronRemovalOutcome, error) {
 		applied++
-		return nil
+		return cronRemovalOutcome{Removed: 1, Verified: true}, nil
 	}
 	driver := installDashboardSessionSeam(t)
 	args := &cli.Args{}

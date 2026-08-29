@@ -96,7 +96,7 @@ The compiled default for `SCHEDULER_MODE` is `cron`, but a fresh install default
 The daemon can push to an external [healthchecks](https://healthchecks.io/) monitor. The four checks, the monitoring portal, and the centralized-vs-self behavior are documented in [HEALTHCHECKS.md](HEALTHCHECKS.md); the keys are:
 
 ```bash
-HEALTHCHECK_ENABLED=false      # forced true by --daemon-setup / --upgrade auto-migration
+HEALTHCHECK_ENABLED=false      # true with the daemon (--daemon-setup / --upgrade); back to false by --daemon-remove
 HEALTHCHECK_MODE=centralized   # centralized (fetch URLs from the server) | self
 HEALTHCHECK_HEARTBEAT_INTERVAL=5m
 HEALTHCHECK_UPDATE_INTERVAL=5m
@@ -126,7 +126,9 @@ HEALTHCHECK_NOTIFY_WEBHOOK_URL=
 HEALTHCHECK_NOTIFY_WEBHOOK_ID=
 ```
 
-`HEALTHCHECK_ENABLED` parses as `false` by default, but `--daemon-setup` and the `--upgrade` auto-migration force it to `true` when enabling the daemon.
+`HEALTHCHECK_ENABLED` parses as `false` by default. `--daemon-setup` and the `--upgrade` auto-migration set it to `true` when enabling the daemon, and `--daemon-remove` sets it back to `false` when reverting to cron. The two directions belong together: the checks this key turns on are daemon-only, so a cron host left with `HEALTHCHECK_ENABLED=true` reports the missing daemon on every run. That report is a SKIP naming the reason on the cron engine (it does not change the exit code) and a warning on the daemon engine, where a missing daemon is a real fault.
+
+A host reverted by an older build kept the key at `true`. `--upgrade` corrects it once, writing `false` only when `SCHEDULER_MODE=cron`, `DAEMON_OPT_OUT=true` and `HEALTHCHECK_ENABLED=true` all hold, which is the signature of that revert and of nothing else. A cron install that never enabled the daemon has `DAEMON_OPT_OUT=false` and keeps whatever you set.
 
 ---
 

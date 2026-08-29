@@ -58,15 +58,50 @@ The last two lines (`Running version:` and `Binary alignment:`) appear only when
 
 ## Install
 
-New installs default to the daemon. The install wizard (TUI and `--cli`) asks for the **Scheduler engine** (daemon or cron) just before the **Run at** time. Choosing the daemon installs `proxsave-daemon.service`, removes the cron entry, and turns on centralized monitoring. The wizard then asks for the monitoring mode; see [HEALTHCHECKS.md](HEALTHCHECKS.md).
+New installs default to the daemon. The install wizard (TUI and `--cli`) asks for the **Scheduler engine** (daemon or cron) just before the **Run at** time. Choosing the daemon installs `proxsave-daemon.service`, removes the proxsave cron entry ([what that means exactly](#what-removes-the-cron-entry-means)), and turns on centralized monitoring. The wizard then asks for the monitoring mode; see [HEALTHCHECKS.md](HEALTHCHECKS.md).
 
 ## Retrofit existing installs
 
-- `--upgrade` **auto-migrates** a cron install to the daemon after updating the binary and config, unless you opted out (see `--daemon-remove`). It is idempotent; a migration failure leaves you on cron.
-- `--daemon-setup` switches to the daemon at any time. It installs the service, removes the cron entry, writes `SCHEDULER_MODE=daemon`, `DAEMON_OPT_OUT=false`, and `HEALTHCHECK_ENABLED=true`, then restarts and verifies the daemon.
-- `--daemon-remove` reverts to cron, disables the service, and sets `DAEMON_OPT_OUT=true` so later upgrades will **not** reinstall the daemon.
+- `--upgrade` **auto-migrates** a cron install to the daemon after updating the binary and config, unless you opted out (see `--daemon-remove`). It is idempotent; a migration failure leaves you on cron. It **refuses** to migrate, and changes nothing at all, if the crontab still schedules ProxSave through an entry ProxSave does not own ([below](#what-removes-the-cron-entry-means)): installing the daemon on top of one would run every backup twice. Remove that entry and run `--daemon-setup`, or set `DAEMON_OPT_OUT=true` to stop the check running on every upgrade.
+- `--daemon-setup` switches to the daemon at any time. It installs the service, removes the proxsave cron entry ([what that means exactly](#what-removes-the-cron-entry-means)), writes `SCHEDULER_MODE=daemon`, `DAEMON_OPT_OUT=false`, and `HEALTHCHECK_ENABLED=true`, then restarts and verifies the daemon. It reports how many cron lines it actually removed, or that it found none, and it **warns and proceeds** (rather than refusing) if an entry it does not own survives, because you asked for the daemon explicitly.
+- `--daemon-remove` reverts to cron, disables the service, and sets `DAEMON_OPT_OUT=true` so later upgrades will **not** reinstall the daemon. It writes a canonical cron line at `SCHEDULER_TIME`, *unless* the host already schedules ProxSave through an entry ProxSave does not own: that entry is then left in place as the schedule and no second line is added, so the revert cannot produce two nightly backups.
 
-Enabling the daemon forces `HEALTHCHECK_ENABLED=true` even though its raw config default is `false`, so a retrofitted host gets the dead-man switch.
+Enabling the daemon sets `HEALTHCHECK_ENABLED=true` even though its raw config default is `false`, so a retrofitted host gets the dead-man switch. `--daemon-remove` sets it back to `false`. That symmetry matters: the checks it turns on are daemon-only, so a host left on cron with `HEALTHCHECK_ENABLED=true` used to warn `Healthchecks: daemon not installed` on every otherwise successful run and exit `1`. A cron host now reports that as a SKIP naming the reason, not a warning, so it no longer changes the exit code.
+
+A host that reverted with an **older** build still carries that stale `true`, and nothing it runs would ever rewrite the key. `--upgrade` repairs it once, writing `HEALTHCHECK_ENABLED=false` when it finds all three of `SCHEDULER_MODE=cron`, `DAEMON_OPT_OUT=true` and `HEALTHCHECK_ENABLED=true` together. That combination is only produced by the daemon-then-revert transition, so a plain cron install that never ran `--daemon-setup` has `DAEMON_OPT_OUT=false` and is never touched.
+
+### What "removes the cron entry" means
+
+Precisely: **every cron line whose command is named `proxsave` or `proxmox-backup`** is deleted, matched on the command's basename, not only the line ProxSave wrote itself and not only the canonical `/usr/local/bin/proxsave` path. The rest of the line is never looked at, so a job that merely *mentions* the binary (`cp /usr/local/bin/proxsave /backup/`) is left alone, and so is `proxmox-backup-client`.
+
+The consequence is the case that matters: **a wrapper is not a proxsave cron entry.** If your crontab runs the backup through a script of your own,
+
+```cron
+30 02 * * * /usr/local/sbin/proxsave-nas-guard
+```
+
+then its command is named `proxsave-nas-guard`, the rule above does not recognise it, and the daemon migration can neither remove it, nor adopt its run time into `SCHEDULER_TIME` (see below), nor count it as a proxsave schedule.
+
+ProxSave detects such an entry separately and never touches it. A wrapper is yours, it may carry a mount guard or an `flock`, and deleting it on a name heuristic would destroy a safety net ProxSave did not write. What it does instead depends on who started the change: the unattended `--upgrade` retrofit **refuses** and changes nothing, while `--daemon-setup` and the install wizard **warn and proceed**, because you asked for the daemon explicitly.
+
+That detection reads three places: the root crontab, `/etc/crontab`, and the active entries in `/etc/cron.d`. The last two use the system crontab format, where a user field sits between the schedule and the command, so a wrapper installed there is found and reported by its file name:
+
+```text
+17 02 * * * root /usr/local/sbin/proxsave-nas-guard [/etc/cron.d/proxsave-guard]   -> its command "proxsave-nas-guard" is named after proxsave
+```
+
+Files under `/etc` are **read only**. Everything that deletes a cron line, and the `SCHEDULER_TIME` adoption below, still work on the root crontab alone: ProxSave writes the crontab it owns and never edits a file it did not place. Entries whose name `cron` itself ignores (anything outside `A-Z a-z 0-9 _ -`, such as `proxsave.bak`) are skipped, because a schedule that never fires cannot collide with anything.
+
+Because of that, the messages state what actually happened instead of asserting a removal:
+
+```text
+Daemon mode enabled: proxsave-daemon.service is active. The cron entry was removed.
+Daemon mode enabled: proxsave-daemon.service is active. 2 proxsave cron entries were removed.
+Daemon mode enabled: proxsave-daemon.service is active. No proxsave cron entry was present to remove.
+Daemon mode enabled: proxsave-daemon.service is active. The crontab could not be checked, so a proxsave cron entry may still be scheduled alongside it.
+```
+
+The third line is normal on a fresh daemon install, which never had a cron entry. On a host that **was** on cron it is the signal to look: something whose command is not named `proxsave` was scheduling the backup, and it is still scheduled. Either delete that entry and let the daemon schedule the run (moving whatever the wrapper checked elsewhere), or run `proxsave --daemon-remove`, which records `DAEMON_OPT_OUT=true` so upgrades stop re-migrating, and keep the wrapper as the only schedule.
 
 ### The run time is inherited, not reset
 
@@ -75,6 +110,7 @@ Enabling the daemon forces `HEALTHCHECK_ENABLED=true` even though its raw config
 - A `SCHEDULER_TIME` you set yourself always wins; the crontab is only consulted when the key is absent or empty.
 - Only an unambiguous single daily entry is adopted (`MM HH * * *`, or `@daily`/`@midnight`). A sub-daily or multi-time cron entry (`*/15`, lists, ranges) is something the daemon cannot express: it is **not** guessed at, `SCHEDULER_TIME` stays at `02:00`, and the upgrade warns so you can set it yourself.
 - Two proxsave cron lines at different times are equally ambiguous and warn the same way.
+- Only a **proxsave-named** entry is read at all, by the same rule that decides what gets removed ([above](#what-removes-the-cron-entry-means)). A wrapper entry is not read either, so `SCHEDULER_TIME` stays at `02:00`, the very minute the wrapper is likely already using. ProxSave now says so ("No proxsave cron entry was found, but … appears to run ProxSave") instead of staying silent, but it will not adopt a run time out of a script it did not write: set `SCHEDULER_TIME` yourself.
 
 ## systemd unit
 

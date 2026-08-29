@@ -141,6 +141,23 @@ func deriveSchedulerTimeFromCrontab(ctx context.Context, configPath string) sche
 				"The existing proxsave cron entry is not a single daily time; SCHEDULER_TIME stays at the %s default - set it in backup.env if the backup must run at another time.",
 				cronutil.DefaultTime)}
 		}
+		// No cron line NAMES the proxsave binary, but one may still run it indirectly
+		// (#298). That wrapper's schedule is then the ONLY record of the host's real run
+		// time, which is exactly why the silence hurt: SCHEDULER_TIME kept the 02:00
+		// default, i.e. the very minute the wrapper already occupied. The time is still
+		// not adopted - it belongs to a script we did not write and cannot interpret - so
+		// say so and let the operator set it. Lexical rules only (cronProbeNamesOnly):
+		// this also runs in the install wizard and in --upgrade-config-json, neither of
+		// which should be reading scripts off disk.
+		if refs := indirectProxsaveCronRefs(lines, cronProbeNamesOnly); len(refs) > 0 {
+			at := ""
+			if t := cronutil.ScheduleToTime(refs[0].Line); t != "" {
+				at = fmt.Sprintf(" at %s", t)
+			}
+			return schedulerTimeSeed{Note: fmt.Sprintf(
+				"No proxsave cron entry was found, but %s appears to run ProxSave%s; SCHEDULER_TIME stays at the %s default - set it in backup.env so the scheduler does not collide with that entry.",
+				refs[0].Command, at, cronutil.DefaultTime)}
+		}
 		return schedulerTimeSeed{}
 	}
 	return schedulerTimeSeed{Time: hhmm, Note: fmt.Sprintf(
