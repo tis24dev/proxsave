@@ -2,6 +2,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"os"
@@ -12,6 +13,7 @@ import (
 	"github.com/tis24dev/proxsave/internal/config"
 	"github.com/tis24dev/proxsave/internal/cron"
 	"github.com/tis24dev/proxsave/internal/logging"
+	"github.com/tis24dev/proxsave/internal/types"
 )
 
 // #298: a cron line that invokes ProxSave INDIRECTLY (an operator wrapper script,
@@ -672,4 +674,47 @@ func TestDeriveSchedulerTimeReadsSystemCron(t *testing.T) {
 			t.Fatalf("an operator value must win over every habitat, got %q", seed.Time)
 		}
 	})
+}
+
+// The --daemon-setup warning states what was found and what ProxSave did not do, and stops
+// there. It used to close with "Remove/disable entries for daemon-only scheduling: ...",
+// which tells the operator what to do with their own host: if they want the wrapper and the
+// daemon both, that is their call and ProxSave's job ended at saying the two coexist.
+func TestWarnIndirectProxsaveCronOnDaemonInstallStatesFactsOnly(t *testing.T) {
+	origRead, origPaths := crontabReadLinesFn, systemCronPaths
+	t.Cleanup(func() { crontabReadLinesFn, systemCronPaths = origRead, origPaths })
+	crontabReadLinesFn = func(context.Context) ([]string, error) {
+		return []string{"30 02 * * * /usr/local/sbin/proxsave-nas-guard"}, nil
+	}
+	systemCronPaths = []string{filepath.Join(t.TempDir(), "absent")}
+
+	orig := logging.GetDefaultLogger()
+	t.Cleanup(func() { logging.SetDefaultLogger(orig) })
+	var buf bytes.Buffer
+	def := logging.New(types.LogLevelDebug, false)
+	def.SetOutput(&buf)
+	logging.SetDefaultLogger(def)
+
+	warnIndirectProxsaveCronOnDaemonInstall(context.Background(), nil)
+	out := buf.String()
+
+	for _, want := range []string{
+		"unmanaged cron line(s) still schedule ProxSave", // WHAT was found
+		"30 02 * * * /usr/local/sbin/proxsave-nas-guard", // the line verbatim
+		"named after proxsave",                           // WHY it matched
+		"They are NOT removed",                           // what ProxSave did not do
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("the warning must state %q, out=%q", want, out)
+		}
+	}
+	for _, forbidden := range []string{
+		"Remove/disable",
+		"crontab -e",
+		"an editor for the files",
+	} {
+		if strings.Contains(out, forbidden) {
+			t.Errorf("the warning must not instruct the operator (%q), out=%q", forbidden, out)
+		}
+	}
 }

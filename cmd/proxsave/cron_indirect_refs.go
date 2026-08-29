@@ -774,5 +774,4 @@ func warnIndirectProxsaveCronOnDaemonInstall(ctx context.Context, bootstrap *log
 		logBootstrapWarning(bootstrap, "  - %s", line)
 	}
 	logBootstrapWarning(bootstrap, "They are NOT removed, so they keep firing alongside the daemon: this can cause problems, exit %d.", types.ExitBackupSkipped.Int())
-	logBootstrapWarning(bootstrap, "Remove/disable entries for daemon-only scheduling: %s.", cronRefEditHint(refs))
 }
