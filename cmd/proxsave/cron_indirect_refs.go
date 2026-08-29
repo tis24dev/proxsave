@@ -107,31 +107,43 @@ var cronCommandRunners = map[string]struct{}{
 // returned: that one is canonical, dropCanonicalCronLines already owns it, and
 // reporting it here would turn every normal host into a refusal.
 //
-// Three rules fire, in descending confidence, and the first match wins so the
-// reported reason is the strongest one:
+// Rules fire BEHAVIOUR FIRST, and the first match wins so the reported reason is
+// the strongest one:
 //
-//  1. NAME. The command's basename carries "proxsave" as a whole component
-//     ("proxsave-nas-guard", "proxsave_wrapper.sh", "wrap-proxsave.sh"), or the
-//     command lives inside a ProxSave install tree (/opt/proxsave/script/...).
-//     Nothing else on a Proxmox host is named that way, which is also why the rule
-//     does NOT look for "proxmox-backup" as a component: proxmox-backup-client,
-//     -proxy, -manager and -file-restore are stock PBS binaries present on nearly
-//     every target host, and flagging them would refuse the migration almost
-//     everywhere. A proxmox-backup-named wrapper is left to rules 2 and 3, which
-//     need the actual binary path and therefore cannot be confused by PBS.
-//  2. RUNNER. The command is a known command runner (see cronCommandRunners) and
-//     some later word on the line names the proxsave binary. This is the only place
-//     the rest of the line is read at all.
-//  3. CONTENT (probeScriptContent only). The command is an absolute path to a small
-//     readable text file that references the proxsave binary by path. This is what
+//  1. CONTENT (probeScriptContent only). The command is an absolute path to a small
+//     readable text file that references the proxsave binary by path. This is the
+//     strongest evidence available without executing anything, and it is what
 //     catches a wrapper with a completely neutral name, e.g. /usr/local/sbin/nas-guard.
 //
-// False positives are BY DESIGN cheaper than false negatives here, because the
-// caller's answer to a positive is "refuse and tell the operator", never "delete".
-// A script that merely copies or mentions the binary can therefore block an
-// automatic migration; that costs the operator one --daemon-setup and they keep a
-// working cron schedule meanwhile. A false negative costs them two backups a night
-// with no message at all, which is what #298 was.
+//  2. INSTALL TREE. A directory component of the command's path is exactly
+//     "proxsave", i.e. the command is a script stored inside a ProxSave install root.
+//
+//  3. RUNNER. The command is a known command runner (see cronCommandRunners) and
+//     some later word on the line names the proxsave binary. This is the only place
+//     the rest of the line is read at all.
+//
+//  4. NAME, and only as a FALLBACK. The command's basename carries "proxsave" as a
+//     whole component ("proxsave-nas-guard", "proxsave_wrapper.sh") AND rule 1 could
+//     not read it. ProxSave installs a binary called exactly "proxsave", so
+//     "proxsave-anything" is by definition the operator's own file: the name records
+//     who wrote it, never what it does. When the script CAN be read the reading
+//     decides, so an ordinary proxsave-metrics-exporter that never invokes the binary
+//     is left alone however it is named. Rules 2 and 3 are not gated that way: a path
+//     inside the install tree and a runner naming the binary are facts about the cron
+//     line itself, not guesses about a file's contents.
+//
+//     The rule deliberately does not look for "proxmox-backup" as a component either:
+//     proxmox-backup-client, -proxy, -manager and -file-restore are stock PBS binaries
+//     present on nearly every target host, and flagging them would refuse the migration
+//     almost everywhere. A proxmox-backup-named wrapper is left to rules 1 to 3, which
+//     need the actual binary path and therefore cannot be confused by PBS.
+//
+// False positives are cheaper than false negatives here, because the caller's answer
+// to a positive is "refuse and tell the operator", never "delete". That tolerance is
+// what pays for rule 4 surviving at all: an unreadable proxsave-named command costs
+// the operator one --daemon-setup and they keep a working cron schedule meanwhile,
+// while missing it costs them two backups a night with no message, which is what #298
+// was.
 //
 // The residual false negative is a neutrally-named wrapper this cannot read (an
 // unreadable file, a compiled binary, a command over a stalled mount). It is not
@@ -163,16 +175,33 @@ func indirectProxsaveCronRefsWithToken(lines []string, probeScriptContent bool, 
 		if commandTokenMatchesTarget(token) {
 			continue // canonical proxsave entry: not indirect, and not ours to report
 		}
+		// Behavioural rules first, the name LAST and only as a fallback. ProxSave installs a
+		// binary called exactly "proxsave", so "proxsave-anything" is by definition the
+		// operator's own file and its name reports who wrote it, never what it does. When the
+		// script can be read, the reading decides: a wrapper that calls the binary is caught by
+		// content, and one that does not is left alone however it is named - which is what stops
+		// an ordinary proxsave-metrics-exporter from refusing an upgrade. The name votes only
+		// when nothing could be read (a compiled wrapper, an unreadable file, a command on a
+		// stalled mount), where it is the last thing standing between the operator and #298.
 		reason := ""
-		switch {
-		case basenameHasProxsaveComponent(token):
-			reason = fmt.Sprintf("command %q is named after proxsave", filepath.Base(token))
-		case pathLivesInProxsaveTree(token):
-			reason = fmt.Sprintf("command under ProxSave install tree (%s)", filepath.Dir(token))
-		case cronRunnerNamesProxsave(line, token):
-			reason = fmt.Sprintf("runner %q; cron line references the proxsave binary", filepath.Base(token))
-		case probeScriptContent && scriptReferencesProxsave(token):
-			reason = fmt.Sprintf("script %s calls the proxsave binary", token)
+		probed, readable := false, false
+		if probeScriptContent {
+			probed = true
+			var references bool
+			references, readable = scriptProxsaveProbe(token)
+			if references {
+				reason = fmt.Sprintf("script %s calls the proxsave binary", token)
+			}
+		}
+		if reason == "" {
+			switch {
+			case pathLivesInProxsaveTree(token):
+				reason = fmt.Sprintf("command under ProxSave install tree (%s)", filepath.Dir(token))
+			case cronRunnerNamesProxsave(line, token):
+				reason = fmt.Sprintf("runner %q; cron line references the proxsave binary", filepath.Base(token))
+			case (!probed || !readable) && basenameHasProxsaveComponent(token):
+				reason = fmt.Sprintf("command %q is named after proxsave and could not be read", filepath.Base(token))
+			}
 		}
 		if reason == "" {
 			continue
@@ -314,32 +343,43 @@ func shellWords(s string) []string {
 // Any failure (unreadable, too large, binary) returns false: see the false-negative
 // note on indirectProxsaveCronRefs for why "cannot tell" must not mean "suspicious".
 func scriptReferencesProxsave(token string) bool {
+	references, _ := scriptProxsaveProbe(token)
+	return references
+}
+
+// scriptProxsaveProbe is scriptReferencesProxsave with the third answer kept. It returns
+// whether the script names the binary AND whether it could be read at all, because those
+// are different facts and the name rule depends on telling them apart: a script we READ and
+// found nothing in is evidence of absence, while one we could not open says nothing either
+// way. Collapsing both into false is what made "proxsave-metrics-exporter" indistinguishable
+// from a compiled wrapper.
+func scriptProxsaveProbe(token string) (references bool, readable bool) {
 	path := strings.Trim(token, "\"'")
 	if !filepath.IsAbs(path) {
-		return false
+		return false, false
 	}
-	f, err := safefs.OpenFileUnderRoot(path, os.O_RDONLY, 0)
+	f, err := safefs.OpenFileUnderRoot(resolveSystemCronPath(path), os.O_RDONLY, 0)
 	if err != nil {
-		return false
+		return false, false
 	}
 	defer func() { _ = f.Close() }()
 	info, err := f.Stat()
 	if err != nil || !info.Mode().IsRegular() || info.Size() > maxCronWrapperProbeBytes {
-		return false
+		return false, false
 	}
 	data, err := io.ReadAll(io.LimitReader(f, maxCronWrapperProbeBytes))
 	if err != nil || bytes.IndexByte(data, 0) >= 0 {
-		return false
+		return false, false
 	}
 	for _, word := range shellWords(string(data)) {
 		if !strings.Contains(word, "/") {
 			continue
 		}
 		if commandTokenMatchesTarget(word) || basenameHasProxsaveComponent(word) {
-			return true
+			return true, true
 		}
 	}
-	return false
+	return false, true
 }
 
 // describeIndirectCronRefs renders one operator-facing item per finding: the cron line

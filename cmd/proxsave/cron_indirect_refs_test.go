@@ -718,3 +718,67 @@ func TestWarnIndirectProxsaveCronOnDaemonInstallStatesFactsOnly(t *testing.T) {
 		}
 	}
 }
+
+// The name rule is a FALLBACK, not evidence. ProxSave only ever installs a binary called
+// exactly "proxsave", so "proxsave-anything" is by definition the operator's own file and
+// its name says nothing about what it does. The three behavioural rules - install tree,
+// runner, script content - are what actually observe a ProxSave invocation.
+//
+// So when the script can be read, the reading decides: a wrapper that calls the binary is
+// flagged by content, and one that does not is left alone however it is named. The name only
+// gets a vote when nothing could be read - an unreadable file, a compiled binary, a command
+// on a stalled mount - where it is the last thing standing between us and issue #298.
+func TestNameRuleOnlyFiresWhenTheScriptCannotBeRead(t *testing.T) {
+	d := t.TempDir()
+	write := func(name, body string) string {
+		t.Helper()
+		p := filepath.Join(d, name)
+		if err := os.WriteFile(p, []byte(body), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	wrapper := write("proxsave-nas-guard", "#!/bin/sh\nmountpoint -q /mnt/nas || exit 1\n/usr/local/bin/proxsave --backup\n")
+	exporter := write("proxsave-metrics-exporter", "#!/bin/sh\ncurl -s localhost:9100/metrics > /var/lib/x.prom\n")
+	missing := filepath.Join(d, "proxsave-compiled-thing")
+
+	flagged := func(path string, probe bool) (bool, string) {
+		refs := indirectProxsaveCronRefs([]string{"30 02 * * * " + path}, probe)
+		if len(refs) == 0 {
+			return false, ""
+		}
+		return true, refs[0].Reason
+	}
+
+	t.Run("readable and calls proxsave: flagged, by content", func(t *testing.T) {
+		ok, reason := flagged(wrapper, cronProbeReadScripts)
+		if !ok {
+			t.Fatal("the #298 wrapper must still be flagged")
+		}
+		if !strings.Contains(reason, "calls the proxsave binary") {
+			t.Fatalf("the reason must be the content probe, not the name: %q", reason)
+		}
+	})
+
+	t.Run("readable and does NOT call proxsave: not flagged", func(t *testing.T) {
+		if ok, reason := flagged(exporter, cronProbeReadScripts); ok {
+			t.Fatalf("a readable script that never calls proxsave must not be flagged on its name alone: %q", reason)
+		}
+	})
+
+	t.Run("cannot be read: the name is the fallback", func(t *testing.T) {
+		ok, reason := flagged(missing, cronProbeReadScripts)
+		if !ok {
+			t.Fatal("an unreadable proxsave-named command must still be flagged")
+		}
+		if !strings.Contains(reason, "named after proxsave") {
+			t.Fatalf("the reason must be the name fallback: %q", reason)
+		}
+	})
+
+	t.Run("lexical-only mode keeps the name rule", func(t *testing.T) {
+		if ok, _ := flagged(exporter, cronProbeNamesOnly); !ok {
+			t.Fatal("with no probe available the name is all there is, so it must still fire")
+		}
+	})
+}
