@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/tis24dev/proxsave/internal/config"
+	"github.com/tis24dev/proxsave/internal/cron"
 	"github.com/tis24dev/proxsave/internal/logging"
 )
 
@@ -526,4 +527,149 @@ func TestDetectIndirectProxsaveCronSeesADirectSystemCronLine(t *testing.T) {
 	if len(refs) != 1 || refs[0].Command != "/usr/local/bin/proxsave" {
 		t.Fatalf("the refusal predicate must see a direct proxsave line under /etc, got %+v", refs)
 	}
+}
+
+// A host scheduled from /etc/cron.d used to lose its run time: SCHEDULER_TIME stayed at the
+// 02:00 default, so a backup that ran at 05:00 for years silently moved to 02:00 the moment
+// the daemon took over. The adoption reads that habitat now.
+//
+// Direct lines ONLY. A run time is written into backup.env as the host's schedule, so it may
+// only be inherited from a line whose command IS the proxsave binary and whose schedule is an
+// unambiguous single daily time. A wrapper's schedule belongs to a script this code did not
+// write and cannot interpret, so it is reported and never adopted.
+func TestSchedulerTimeAdoptedFromSystemCron(t *testing.T) {
+	write := func(t *testing.T, dir, name, content string) {
+		t.Helper()
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	pin := func(t *testing.T, cronD string) {
+		t.Helper()
+		orig := systemCronPaths
+		t.Cleanup(func() { systemCronPaths = orig })
+		systemCronPaths = []string{filepath.Join(cronD, "..", "absent-crontab"), cronD}
+	}
+
+	t.Run("direct proxsave line: adopted", func(t *testing.T) {
+		d := t.TempDir()
+		write(t, d, "proxsave", "0 5 * * * root /usr/local/bin/proxsave --backup\n")
+		pin(t, d)
+		refs := systemCronDirectProxsaveLines()
+		if len(refs) != 1 {
+			t.Fatalf("want the direct line, got %+v", refs)
+		}
+		if got := cron.ScheduleToTime(refs[0].Line); got != "05:00" {
+			t.Fatalf("the adopted time must be 05:00, got %q", got)
+		}
+	})
+
+	t.Run("wrapper line: reported elsewhere, never adopted here", func(t *testing.T) {
+		d := t.TempDir()
+		write(t, d, "guard", "17 02 * * * root /usr/local/sbin/proxsave-nas-guard\n")
+		pin(t, d)
+		if refs := systemCronDirectProxsaveLines(); len(refs) != 0 {
+			t.Fatalf("a wrapper schedule must never be adopted, got %+v", refs)
+		}
+	})
+
+	t.Run("no script probe: a neutrally named script is not read", func(t *testing.T) {
+		d := t.TempDir()
+		script := filepath.Join(d, "nas-guard")
+		if err := os.WriteFile(script, []byte("#!/bin/sh\n/usr/local/bin/proxsave --backup\n"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		write(t, d, "maint", "0 3 * * * root "+script+"\n")
+		pin(t, d)
+		if refs := systemCronDirectProxsaveLines(); len(refs) != 0 {
+			t.Fatalf("the adoption must not probe script contents, got %+v", refs)
+		}
+	})
+}
+
+// The adoption itself, through the function the install and upgrade paths call. The user
+// crontab keeps priority: it is the table ProxSave owns and rewrites, so a time found there
+// is the one it is about to reinstate. /etc is consulted only when that yields nothing.
+func TestDeriveSchedulerTimeReadsSystemCron(t *testing.T) {
+	setup := func(t *testing.T, sysLine string, userLines []string) (string, string) {
+		t.Helper()
+		d := t.TempDir()
+		cronD := filepath.Join(d, "cron.d")
+		if err := os.MkdirAll(cronD, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if sysLine != "" {
+			if err := os.WriteFile(filepath.Join(cronD, "proxsave"), []byte(sysLine+"\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}
+		cp := filepath.Join(d, "backup.env")
+		if err := os.WriteFile(cp, []byte("BACKUP_PATH=/x\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		origPaths, origRead := systemCronPaths, crontabReadLinesFn
+		t.Cleanup(func() { systemCronPaths, crontabReadLinesFn = origPaths, origRead })
+		systemCronPaths = []string{filepath.Join(d, "absent-crontab"), cronD}
+		crontabReadLinesFn = func(context.Context) ([]string, error) { return userLines, nil }
+		return cp, cronD
+	}
+
+	t.Run("empty user crontab: time comes from /etc", func(t *testing.T) {
+		cp, cronD := setup(t, "0 5 * * * root /usr/local/bin/proxsave --backup", nil)
+		seed := deriveSchedulerTimeFromCrontab(context.Background(), cp)
+		if seed.Time != "05:00" {
+			t.Fatalf("want 05:00 adopted from /etc, got %q (note %q)", seed.Time, seed.Note)
+		}
+		if !strings.Contains(seed.Note, cronD) {
+			t.Errorf("the note must name the file the time came from, got %q", seed.Note)
+		}
+	})
+
+	t.Run("user crontab wins over /etc", func(t *testing.T) {
+		cp, _ := setup(t, "0 5 * * * root /usr/local/bin/proxsave --backup",
+			[]string{"30 21 * * * /usr/local/bin/proxsave --backup"})
+		seed := deriveSchedulerTimeFromCrontab(context.Background(), cp)
+		if seed.Time != "21:30" {
+			t.Fatalf("the table ProxSave owns must win, got %q", seed.Time)
+		}
+	})
+
+	t.Run("two /etc lines at different times: adopt nothing", func(t *testing.T) {
+		d := t.TempDir()
+		cronD := filepath.Join(d, "cron.d")
+		if err := os.MkdirAll(cronD, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		for name, line := range map[string]string{
+			"proxsave-a": "0 5 * * * root /usr/local/bin/proxsave --backup",
+			"proxsave-b": "0 6 * * * root /usr/local/bin/proxsave --backup",
+		} {
+			if err := os.WriteFile(filepath.Join(cronD, name), []byte(line+"\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}
+		cp := filepath.Join(d, "backup.env")
+		if err := os.WriteFile(cp, []byte("BACKUP_PATH=/x\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		origPaths, origRead := systemCronPaths, crontabReadLinesFn
+		t.Cleanup(func() { systemCronPaths, crontabReadLinesFn = origPaths, origRead })
+		systemCronPaths = []string{filepath.Join(d, "absent-crontab"), cronD}
+		crontabReadLinesFn = func(context.Context) ([]string, error) { return nil, nil }
+
+		seed := deriveSchedulerTimeFromCrontab(context.Background(), cp)
+		if seed.Time != "" {
+			t.Fatalf("two different times are ambiguous; nothing may be adopted, got %q", seed.Time)
+		}
+	})
+
+	t.Run("explicit SCHEDULER_TIME is never overridden", func(t *testing.T) {
+		cp, _ := setup(t, "0 5 * * * root /usr/local/bin/proxsave --backup", nil)
+		if err := os.WriteFile(cp, []byte("SCHEDULER_TIME=23:15\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if seed := deriveSchedulerTimeFromCrontab(context.Background(), cp); seed.Time != "" {
+			t.Fatalf("an operator value must win over every habitat, got %q", seed.Time)
+		}
+	})
 }

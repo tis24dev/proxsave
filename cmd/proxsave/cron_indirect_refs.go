@@ -501,7 +501,7 @@ var systemCronPaths = []string{"/etc/crontab", "/etc/cron.d"}
 // widens the heuristics, the difference between the two views is what makes the blast
 // radius visible.
 func indirectProxsaveSystemCronRefs() []indirectCronRef {
-	return systemCronRefs(false)
+	return systemCronRefs(scanIndirectOnly)
 }
 
 // systemCronProxsaveRefs is indirectProxsaveSystemCronRefs plus the ONE shape that
@@ -531,14 +531,27 @@ func indirectProxsaveSystemCronRefs() []indirectCronRef {
 // script or an rsync mirror, while this shape matches a literal proxsave command token and
 // nothing else, so it adds no false refusals at all.
 func systemCronProxsaveRefs() []indirectCronRef {
-	return systemCronRefs(true)
+	return systemCronRefs(scanAll)
 }
 
 // systemCronRefs is the shared walk over systemCronPaths: /etc/crontab as a file,
 // /etc/cron.d as a directory whose entries cron itself would load. It is factored out so
 // the indirect-only and the indirect-plus-direct views can never walk different trees or
 // apply different skip rules to the same host.
-func systemCronRefs(includeDirect bool) []indirectCronRef {
+type systemCronScan int
+
+const (
+	// scanIndirectOnly is the --upgrade refusal / daemon-install warning view: heuristics
+	// only, a canonical proxsave token excluded as "not indirect".
+	scanIndirectOnly systemCronScan = iota
+	// scanAll adds the canonical token back, because under /etc nothing owns or removes it.
+	scanAll
+	// scanDirectOnly drops the heuristics AND the script probe, for the SCHEDULER_TIME
+	// adoption. See systemCronDirectProxsaveLines for why that view has to be the narrow one.
+	scanDirectOnly
+)
+
+func systemCronRefs(mode systemCronScan) []indirectCronRef {
 	var refs []indirectCronRef
 	for _, path := range systemCronPaths {
 		info, err := os.Stat(path)
@@ -546,7 +559,7 @@ func systemCronRefs(includeDirect bool) []indirectCronRef {
 			continue
 		}
 		if !info.IsDir() {
-			refs = append(refs, systemCronFileRefs(path, includeDirect)...)
+			refs = append(refs, systemCronFileRefs(path, mode)...)
 			continue
 		}
 		entries, err := os.ReadDir(path)
@@ -557,7 +570,7 @@ func systemCronRefs(includeDirect bool) []indirectCronRef {
 			if entry.IsDir() || !cronDNameIsActive(entry.Name()) {
 				continue
 			}
-			refs = append(refs, systemCronFileRefs(filepath.Join(path, entry.Name()), includeDirect)...)
+			refs = append(refs, systemCronFileRefs(filepath.Join(path, entry.Name()), mode)...)
 		}
 	}
 	return refs
@@ -587,6 +600,24 @@ func directProxsaveCronRefs(lines []string, commandToken func(string) string) []
 		})
 	}
 	return refs
+}
+
+// systemCronDirectProxsaveLines returns the /etc cron lines whose command IS the proxsave
+// binary. It is the SCHEDULER_TIME adoption's view of the system habitat, and nothing else
+// reads it.
+//
+// Direct-only is the whole point, and it is a narrower rule than anything else in this file
+// uses. Adopting a run time writes it into backup.env as the host's daily schedule, so it
+// may only come from a line this code can read without guessing: "0 5 * * * root
+// /usr/local/bin/proxsave --backup" says 05:00 and nothing else. A wrapper's schedule
+// belongs to a script we did not write and cannot interpret - it may run the backup, or
+// check a mount and give up - so it is reported by the advisories and never adopted here.
+//
+// Skipping the script probe is the second half of that: this view is reached from the
+// install wizard and from --upgrade-config-json, neither of which should be opening
+// operator scripts off disk to decide a default.
+func systemCronDirectProxsaveLines() []indirectCronRef {
+	return systemCronRefs(scanDirectOnly)
 }
 
 // cronDNameIsActive mirrors cron's own rule for which /etc/cron.d entries it will
@@ -620,7 +651,7 @@ func cronDNameIsActive(name string) bool {
 // The file is read ONCE for both rule sets. Two reads would be two chances to disagree
 // about a file another process may be editing, and a revert that reported a line from one
 // snapshot and a reason from another would be worse than either.
-func systemCronFileRefs(path string, includeDirect bool) []indirectCronRef {
+func systemCronFileRefs(path string, mode systemCronScan) []indirectCronRef {
 	info, err := os.Stat(path)
 	if err != nil || !info.Mode().IsRegular() || info.Size() > maxCronWrapperProbeBytes {
 		return nil
@@ -635,14 +666,16 @@ func systemCronFileRefs(path string, includeDirect bool) []indirectCronRef {
 	}
 	lines := strings.Split(strings.TrimRight(normalized, "\n"), "\n")
 	var refs []indirectCronRef
-	if includeDirect {
+	if mode != scanIndirectOnly {
 		refs = append(refs, directProxsaveCronRefs(lines, systemCronCommandToken)...)
 	}
-	refs = append(refs, indirectProxsaveCronRefsWithToken(
-		lines,
-		cronProbeReadScripts,
-		systemCronCommandToken,
-	)...)
+	if mode != scanDirectOnly {
+		refs = append(refs, indirectProxsaveCronRefsWithToken(
+			lines,
+			cronProbeReadScripts,
+			systemCronCommandToken,
+		)...)
+	}
 	for i := range refs {
 		refs[i].Source = path
 	}

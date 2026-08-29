@@ -110,7 +110,9 @@ The third line is normal on a fresh daemon install, which never had a cron entry
 - A `SCHEDULER_TIME` you set yourself always wins; the crontab is only consulted when the key is absent or empty.
 - Only an unambiguous single daily entry is adopted (`MM HH * * *`, or `@daily`/`@midnight`). A sub-daily or multi-time cron entry (`*/15`, lists, ranges) is something the daemon cannot express: it is **not** guessed at, `SCHEDULER_TIME` stays at `02:00`, and the upgrade warns so you can set it yourself.
 - Two proxsave cron lines at different times are equally ambiguous and warn the same way.
-- Only a **proxsave-named** entry is read at all, by the same rule that decides what gets removed ([above](#what-removes-the-cron-entry-means)). A wrapper entry is not read either, so `SCHEDULER_TIME` stays at `02:00`, the very minute the wrapper is likely already using. ProxSave now says so ("No proxsave cron entry was found, but … appears to run ProxSave") instead of staying silent, but it will not adopt a run time out of a script it did not write: set `SCHEDULER_TIME` yourself.
+- The root crontab is read first, and a time found there wins: it is the table ProxSave owns and is about to rewrite. Only when it says nothing are `/etc/crontab` and the active entries of `/etc/cron.d` consulted, and the note names the file the time came from. A host scheduled at 05:00 from `/etc/cron.d` used to migrate to the daemon and start running at `02:00` with nothing said.
+- Under `/etc` only a **direct** `proxsave` command is adopted, not the heuristics the advisories use: a run time is written into `backup.env` as the host's schedule, so it may only be inherited from a line that reads unambiguously. Adoption never opens a script to look inside.
+- A wrapper entry is not adopted anywhere, so `SCHEDULER_TIME` stays at `02:00`, the very minute the wrapper is likely already using. ProxSave says so ("No proxsave cron entry was found, but … appears to run ProxSave") instead of staying silent, but it will not adopt a run time out of a script it did not write: set `SCHEDULER_TIME` yourself.
 
 ## systemd unit
 

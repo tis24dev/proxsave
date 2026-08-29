@@ -17,11 +17,23 @@ import (
 
 // stubCrontabLines swaps the crontab read seam so the SCHEDULER_TIME seeding can be
 // driven without touching the host's real crontab.
+//
+// It also pins systemCronPaths at an empty tree, because the seeding reads BOTH habitats
+// now: the root crontab first, then /etc/crontab and /etc/cron.d for a host scheduled from
+// there. Left unpinned, every test in this file would consult the /etc of the machine
+// running the suite - and would pass there anyway, so the day one of those machines had a
+// proxsave entry in cron.d the failure would look like a code regression. "No system cron
+// entry" is the shape every existing case in this file assumes.
 func stubCrontabLines(t *testing.T, lines []string, err error) {
 	t.Helper()
 	orig := crontabReadLinesFn
-	t.Cleanup(func() { crontabReadLinesFn = orig })
+	origPaths := systemCronPaths
+	t.Cleanup(func() {
+		crontabReadLinesFn = orig
+		systemCronPaths = origPaths
+	})
 	crontabReadLinesFn = func(context.Context) ([]string, error) { return lines, err }
+	systemCronPaths = []string{filepath.Join(t.TempDir(), "absent")}
 }
 
 func TestSchedulerTimeFromCronLines(t *testing.T) {

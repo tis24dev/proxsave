@@ -149,6 +149,10 @@ func deriveSchedulerTimeFromCrontab(ctx context.Context, configPath string) sche
 		// say so and let the operator set it. Lexical rules only (cronProbeNamesOnly):
 		// this also runs in the install wizard and in --upgrade-config-json, neither of
 		// which should be reading scripts off disk.
+		if hhmm, source := schedulerTimeFromSystemCron(); hhmm != "" {
+			return schedulerTimeSeed{Time: hhmm, Note: fmt.Sprintf(
+				"SCHEDULER_TIME was not set: adopted %s from the proxsave cron entry in %s so the daily run time does not change.", hhmm, source)}
+		}
 		if refs := indirectProxsaveCronRefs(lines, cronProbeNamesOnly); len(refs) > 0 {
 			at := ""
 			if t := cronutil.ScheduleToTime(refs[0].Line); t != "" {
@@ -162,6 +166,32 @@ func deriveSchedulerTimeFromCrontab(ctx context.Context, configPath string) sche
 	}
 	return schedulerTimeSeed{Time: hhmm, Note: fmt.Sprintf(
 		"SCHEDULER_TIME was not set: adopted %s from the existing proxsave cron entry so the daily run time does not change.", hhmm)}
+}
+
+// schedulerTimeFromSystemCron derives the run time from a proxsave cron line under
+// /etc/crontab or /etc/cron.d, returning the time and the file it came from, or "" when the
+// habitat says nothing unambiguous.
+//
+// It runs only after the root crontab has yielded nothing, and that order is the priority
+// rule, not an implementation detail: the root crontab is the table ProxSave owns and is
+// about to rewrite, so a time found there is the one it is going to reinstate. /etc is a
+// habitat it reads and never touches, consulted to avoid the silent move a host paid before
+// - scheduled at 05:00 from /etc/cron.d for years, migrated to the daemon, and started
+// running at the 02:00 template default with nothing said.
+//
+// Same unanimity rule as schedulerTimeFromCronLines: two proxsave lines at different times,
+// or a schedule the daemon cannot express, adopt nothing. Guessing here would write a wrong
+// daily time into backup.env and look deliberate.
+func schedulerTimeFromSystemCron() (string, string) {
+	found, source := "", ""
+	for _, ref := range systemCronDirectProxsaveLines() {
+		hhmm := cronutil.ScheduleToTime(ref.Line)
+		if hhmm == "" || (found != "" && found != hhmm) {
+			return "", ""
+		}
+		found, source = hhmm, ref.Source
+	}
+	return found, source
 }
 
 // schedulerTimeFromCronLines derives the single daily HH:MM the proxsave cron
