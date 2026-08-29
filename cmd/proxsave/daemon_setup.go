@@ -36,9 +36,24 @@ func dispatchDaemonAdminMode(rt *appRuntime) modeResult {
 	return modeResult{exitCode: types.ExitSuccess.Int()}
 }
 
+// runDaemonSetup and runDaemonRemove pass a NIL bootstrap on purpose, and it is the one
+// thing to preserve if either signature is ever touched.
+//
+// Both run inside runRuntime, i.e. AFTER bootstrapRuntime called bootstrap.Flush. A flushed
+// BootstrapLogger is a dead end: it still prints to the console, but it has set flushed=true
+// and nothing will ever replay what it records afterwards, so every line the apply* helpers
+// emitted through it stayed out of the run log, out of the warning count and out of the
+// final WARNINGS/ERRORS recap - while the two logging.Info lines framing them, three lines
+// apart on screen, went to all three. That is how the #298 advisory came to be the only
+// message of the operation with no trace on disk.
+//
+// logBootstrapInfo / logBootstrapWarning fall through to logging.Info / logging.Warning on a
+// nil bootstrap, which is exactly the sink everything else after the pre-run checks uses.
+// The --upgrade paths keep passing a real bootstrap: they run in dispatchPreRuntimeModes,
+// before the run logger exists at all, where the bootstrap IS the only sink.
 func runDaemonSetup(rt *appRuntime) int {
 	logging.Info("Enabling ProxSave daemon mode...")
-	cronOutcome, err := applyDaemonMode(rt.ctx, rt.cfg, rt.args.ConfigPath, daemonSelfExecPath(), rt.bootstrap)
+	cronOutcome, err := applyDaemonMode(rt.ctx, rt.cfg, rt.args.ConfigPath, daemonSelfExecPath(), nil)
 	if err != nil {
 		logging.Error("daemon-setup failed: %v", err)
 		return types.ExitGenericError.Int()
@@ -49,7 +64,7 @@ func runDaemonSetup(rt *appRuntime) int {
 
 func runDaemonRemove(rt *appRuntime) int {
 	logging.Info("Removing ProxSave daemon mode and reverting to cron...")
-	if err := applyCronMode(rt.ctx, rt.cfg, rt.args.ConfigPath, daemonSelfExecPath(), rt.bootstrap, true); err != nil {
+	if _, err := applyCronMode(rt.ctx, rt.cfg, rt.args.ConfigPath, daemonSelfExecPath(), nil, true); err != nil {
 		if errors.Is(err, errDaemonTeardownBackupRunning) {
 			logging.Warning("daemon-remove deferred: a backup is in progress; the daemon was NOT removed. Retry when the backup finishes.")
 			return types.ExitGenericError.Int()
@@ -329,6 +344,24 @@ var (
 	// detector needs no error return and why applyCronMode's fallback for empty is to keep
 	// behaving exactly as it does today.
 	wrapperCronLinesFn = wrapperCronLines
+	// systemCronProxsaveRefsFn is the seam over the SYSTEM-cron habitat (/etc/crontab and
+	// the active entries of /etc/cron.d). It exists for two reasons, and the second is the
+	// one that made it non-optional.
+	//
+	// First, applyCronMode has to reach that habitat to tell the truth on a revert: the
+	// detector could already see a wrapper there, but the path that writes the cron line
+	// could not, so --daemon-remove appended a second nightly backup and said nothing.
+	//
+	// Second: systemCronPaths points at the REAL /etc. Without this seam every test that
+	// calls applyCronMode would start reading the /etc of the machine running `go test` -
+	// seven of them today - and would still pass on a developer box, so the day it began
+	// reporting a stranger's cron.d, or hanging on their command path, the suite would be
+	// the last thing to notice. Closing that deliberately is cheaper than discovering it.
+	//
+	// It is a DATA seam, not a logging one, so a test can feed a synthetic finding and
+	// assert the exact sentence the operator gets. Unlike wrapperCronLinesFn its result
+	// decides NOTHING: applyCronMode writes the same cron line whether it is empty or not.
+	systemCronProxsaveRefsFn = systemCronProxsaveRefs
 	// applyDaemonModeFn exists so a test can observe that the --upgrade retrofit
 	// REFUSED (#298). Without it the only evidence of "did not migrate" is the systemd
 	// unit install itself, which a unit test must not run, and a refusal that quietly
@@ -373,6 +406,24 @@ func existingWrapperCronFallback(ctx context.Context) []string {
 	return wrapperCronLinesFn(lines)
 }
 
+// cronRevertReport is what a revert learned that a CALLER may still need to say. Today it
+// carries one thing: the /etc schedule advisory, already emitted here through the bootstrap
+// logger for the CLI.
+//
+// It exists because that channel does not reach everyone. runDashboardDaemonAdmin mutes the
+// global logger and sets the bootstrap console quiet for the whole operation and never
+// flushes it, so on the TUI the advisory was recorded and dropped and the operator saw a
+// green "REVERTED TO CRON" over a host that may now be scheduled twice. That is the same
+// shape of defect as issue #298 itself: the front-end asserting an outcome the code had not
+// established. Returning the lines rather than logging louder keeps the decision about how
+// to present them with whoever owns the screen.
+type cronRevertReport struct {
+	// SystemCronAdvisory is the operator-facing notice about a ProxSave schedule found
+	// under /etc, or nil when none was found. Lines are pre-rendered and must be printed
+	// with "%s": a crontab line may contain a literal "%".
+	SystemCronAdvisory []string
+}
+
 // applyCronMode reverts an install to cron: make sure a cron schedule exists, record
 // SCHEDULER_MODE=cron and HEALTHCHECK_ENABLED=false (plus DAEMON_OPT_OUT=true when optOut,
 // the --daemon-remove tombstone that stops future upgrades from re-migrating), and only
@@ -385,7 +436,7 @@ func existingWrapperCronFallback(ctx context.Context) []string {
 //
 // The HEALTHCHECK_ENABLED rollback is the exact mirror of the key applyDaemonMode forces
 // on; see the write below for why it is not optional.
-func applyCronMode(ctx context.Context, cfg *config.Config, configPath, execToken string, bootstrap *logging.BootstrapLogger, optOut bool) error {
+func applyCronMode(ctx context.Context, cfg *config.Config, configPath, execToken string, bootstrap *logging.BootstrapLogger, optOut bool) (cronRevertReport, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -394,14 +445,14 @@ func applyCronMode(ctx context.Context, cfg *config.Config, configPath, execToke
 	// resolve the REAL backup lock path and wait bounded for idle. If the config is unreadable
 	// or a backup will not free, abort the revert (nothing changed) so the caller can retry.
 	if cfg == nil {
-		return errDaemonTeardownConfigUnreadable
+		return cronRevertReport{}, errDaemonTeardownConfigUnreadable
 	}
 	lockPath, lockKnown := backupLockFilePath(cfg, cfg.BaseDir)
 	if !lockKnown {
-		return errDaemonTeardownConfigUnreadable
+		return cronRevertReport{}, errDaemonTeardownConfigUnreadable
 	}
 	if waitForBackupIdle(ctx, lockPath) {
-		return errDaemonTeardownBackupRunning
+		return cronRevertReport{}, errDaemonTeardownBackupRunning
 	}
 
 	// Establish the cron fallback FIRST: make sure a cron schedule exists and persist
@@ -421,28 +472,38 @@ func applyCronMode(ctx context.Context, cfg *config.Config, configPath, execToke
 	// a failed backup every night. This was the third duplicate source in #298, the one the
 	// reporter hit AFTER reverting.
 	//
-	// So when a wrapper is positively identified we do not append. We run the REMOVAL instead,
-	// which is not the same as doing nothing: it drops any canonical proxsave line the crontab
-	// still carries, so a host with both a wrapper and a leftover proxsave entry also ends with
-	// exactly ONE schedule - the operator's own, which is what it had before the migration and
-	// what the operator wrote the wrapper for.
+	// So when a wrapper is positively identified we do not append. We ALSO do not remove
+	// anything, and that restraint is the correction of a real defect rather than a missing
+	// step. This branch used to run removeCanonicalCronEntry as well, on the reasoning that a
+	// host carrying both a wrapper and a leftover proxsave line should end with exactly one
+	// schedule, the operator's own. That reasoning holds only while the identification is
+	// right. The detector's rules answer "is this named after proxsave", not "does this run a
+	// proxsave backup", so an ordinary "*/5 * * * * /usr/local/bin/proxsave-metrics-exporter"
+	// takes this branch: the append was skipped AND the host's only real backup line was
+	// deleted, leaving it unscheduled at INFO level with exit 0, and nothing repairs that.
+	// DAEMON_OPT_OUT=true stops the upgrade re-check, --daemon-setup never writes a cron line,
+	// and migrateLegacyCronEntries is only reachable from a full reinstall.
 	//
-	// Uncertainty falls back to the append on purpose: an unreadable crontab, or a detector
-	// that identifies nothing, is treated as "no wrapper", because a double schedule is a
-	// recoverable annoyance while an unscheduled host is silent data loss.
+	// Skipping the append alone cannot do that. Its worst case on a misidentification is the
+	// host keeping the proxsave line it already had, i.e. nothing changes; its worst case on a
+	// correct identification is two schedules where the operator wanted one, which the closing
+	// message tells them how to settle. Both are recoverable, which is the ordering F09-06
+	// states: a double schedule is an annoyance, an unscheduled host is silent data loss.
+	//
+	// Uncertainty falls back to the append for the same reason: an unreadable crontab, or a
+	// detector that identifies nothing, is treated as "no wrapper".
+	//
+	// The gate is the ROOT CRONTAB only, and that is a boundary, not an oversight. A ProxSave
+	// schedule found under /etc is reported (see the advisory at the end of this function) and
+	// never acted on, because there ProxSave cannot edit anything to correct a mistake and
+	// nothing ever re-checks the decision - the run that would notice is the backup that was
+	// never scheduled.
 	if wrappers := existingWrapperCronFallback(ctx); len(wrappers) > 0 {
-		logBootstrapInfo(bootstrap, "Reverting to cron: this host already schedules ProxSave through an entry ProxSave does not own, so no second cron line was added (that would have run the backup twice):")
+		logBootstrapInfo(bootstrap, "Reverting to cron: %d unmanaged crontab line(s) schedule ProxSave; no line added:", len(wrappers))
 		for _, line := range wrappers {
-			logBootstrapInfo(bootstrap, "  %s", line)
+			logBootstrapInfo(bootstrap, "  - %s", line)
 		}
-		logBootstrapInfo(bootstrap, "ProxSave does not manage that entry: it keeps its own run time and SCHEDULER_TIME does not apply to it.")
-		outcome, err := removeCanonicalCronEntry(ctx, cronCorrectPaths(execToken), bootstrap)
-		switch {
-		case err != nil:
-			logging.Warning("daemon: failed to drop the canonical proxsave cron line standing next to that entry (possible double execution; the per-run lock mitigates): %v", err)
-		case outcome.Removed > 0:
-			logBootstrapInfo(bootstrap, "Removed %d redundant proxsave cron line(s) that would have duplicated it.", outcome.Removed)
-		}
+		logBootstrapInfo(bootstrap, "Unmanaged entries keep their schedule; SCHEDULER_TIME does not apply. Existing proxsave cron lines unchanged.")
 	} else {
 		migrateLegacyCronEntriesFn(ctx, cfg.BaseDir, execToken, bootstrap, cron.TimeToSchedule(cfg.SchedulerTime))
 	}
@@ -480,7 +541,29 @@ func applyCronMode(ctx context.Context, cfg *config.Config, configPath, execToke
 	}
 	// Teardown last: a failure here leaves the host cron-scheduled with mode=cron, never
 	// unscheduled+stale. The per-run lock mitigates the transient double-schedule window.
-	return removeDaemonServiceFn(ctx, bootstrap)
+	err := removeDaemonServiceFn(ctx, bootstrap)
+
+	// The /etc advisory closes the half of #298 the wrapper branch above cannot reach: the
+	// detector could already see a ProxSave schedule in /etc/crontab or /etc/cron.d, but
+	// nothing on the WRITE path ever looked, so a host scheduled from there was told the
+	// revert had restored its cron schedule and quietly got a second nightly backup.
+	// Saying so is the whole fix; the line above was written regardless, on purpose.
+	//
+	// It runs AFTER the teardown, and the position is chosen rather than inherited.
+	// systemCronProxsaveRefsFn does file I/O, including open(2) on operator-controlled cron
+	// commands that can sit on a stalled NAS mount - the very mounts these wrappers exist
+	// to guard - and there is no context to cancel that with. Here, a stall costs only the
+	// message: the daemon is gone, the cron line is in place, SCHEDULER_MODE=cron is on
+	// disk, and the host is consistent. Between the cron write and the env write it would
+	// have stranded the host with a fresh cron line, mode=daemon and the daemon still
+	// running, which is precisely the double schedule this whole path exists to prevent.
+	// A teardown that FAILED does not make the advisory untrue either, so it is printed
+	// either way and the teardown's error is still what this function returns.
+	advisory := systemCronScheduleAdvisory(systemCronProxsaveRefsFn())
+	for _, line := range advisory {
+		logBootstrapWarning(bootstrap, "%s", line)
+	}
+	return cronRevertReport{SystemCronAdvisory: advisory}, err
 }
 
 // backfillHealthcheckOptOut repairs, once, the on-disk state issue #298 left behind on
@@ -533,7 +616,7 @@ func maybeAutoMigrateDaemon(ctx context.Context, configPath, baseDir, execToken 
 		return
 	}
 	if cfg.DaemonOptOut {
-		bootstrap.Println("Daemon mode was previously removed (--daemon-remove); leaving the cron scheduler in place.")
+		logBootstrapInfo(bootstrap, "Daemon mode was previously removed (--daemon-remove); leaving the cron scheduler in place.")
 		backfillHealthcheckOptOut(cfg, configPath, bootstrap)
 		return
 	}
@@ -551,15 +634,16 @@ func maybeAutoMigrateDaemon(ctx context.Context, configPath, baseDir, execToken 
 	if refs, err := detectIndirectProxsaveCron(ctx); err != nil {
 		logging.DebugStepBootstrap(bootstrap, "upgrade workflow", "daemon auto-migrate: the crontab could not be read, so the wrapper check was skipped: %v", err)
 	} else if len(refs) > 0 {
-		logBootstrapWarning(bootstrap, "Daemon auto-migration REFUSED: this host still schedules ProxSave through a command this upgrade does not own, and installing the daemon on top of it would run every backup twice (the loser of the race exits %d, backup skipped).", types.ExitBackupSkipped.Int())
+		logBootstrapWarning(bootstrap, "Daemon auto-migration REFUSED: %d unmanaged cron line(s) schedule ProxSave:", len(refs))
 		for _, line := range describeIndirectCronRefs(refs) {
-			logBootstrapWarning(bootstrap, "  %s", line)
+			logBootstrapWarning(bootstrap, "  - %s", line)
 		}
-		logBootstrapWarning(bootstrap, "Nothing was changed: this host stays on the cron scheduler and keeps backing up exactly as before.")
-		logBootstrapWarning(bootstrap, "To migrate, remove or disable that entry (%s) and run 'proxsave --daemon-setup', which proceeds with a warning if the entry is intentional. To stop this check from running on every upgrade, set DAEMON_OPT_OUT=true in %s.", cronRefEditHint(refs), configPath)
+		logBootstrapWarning(bootstrap, "Daemon installation would duplicate backups; the losing run exits %d (backup skipped).", types.ExitBackupSkipped.Int())
+		logBootstrapWarning(bootstrap, "No changes; cron backups continue.")
+		logBootstrapWarning(bootstrap, "Remove/disable unwanted entries (%s), then run 'proxsave --daemon-setup'. Skip upgrade checks: DAEMON_OPT_OUT=true in %s.", cronRefEditHint(refs), configPath)
 		return
 	}
-	bootstrap.Println("Migrating to the resident daemon scheduler (" + daemonUnitName + ")...")
+	logBootstrapInfo(bootstrap, "Migrating to the resident daemon scheduler (%s)...", daemonUnitName)
 	cronOutcome, err := applyDaemonModeFn(ctx, cfg, configPath, execToken, bootstrap)
 	if err != nil {
 		bootstrap.Warning("Daemon migration failed; staying on cron: %v", err)
@@ -571,7 +655,7 @@ func maybeAutoMigrateDaemon(ctx context.Context, configPath, baseDir, execToken 
 	// The upgrade used to print a removal here unconditionally, which is what made the
 	// #298 migration completely silent. Reaching this line at all means the refusal above
 	// found nothing, so the clause is the only wrapper-shaped signal left on this path.
-	bootstrap.Println("Daemon mode enabled: " + daemonUnitName + " is active. " + cronRemovalClause(cronOutcome))
+	logBootstrapInfo(bootstrap, "Daemon mode enabled: %s is active. %s", daemonUnitName, cronRemovalClause(cronOutcome))
 }
 
 // setBackupEnvKeys reads backup.env, applies the given key=value edits (replacing

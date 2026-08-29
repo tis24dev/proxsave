@@ -538,6 +538,15 @@ const daemonResultActionBack daemonResultAction = iota
 // a Subtle explanation) above a single Back item. It loops to Back/esc and is non-blocking on
 // any UI failure, mirroring runDashboardDaemonStatus. This is the single styled result renderer
 // shared by every daemon action result, so they can never disagree visually with the status screen.
+// showDaemonResultScreenFn is the seam over the daemon result screen. It exists because
+// this screen is the ONLY channel that reaches a TUI operator on these paths - the global
+// logger is swapped for a discarding one and the bootstrap console is muted for the whole
+// op - so what it carries is behaviour, not presentation, and behaviour has to be
+// assertable. Driving the real screen instead means matching a string that
+// orchestrator.BuildStatusPrompt has already reflowed to the terminal width, which passes
+// or fails on where a line happened to wrap.
+var showDaemonResultScreenFn = showDaemonResultScreen
+
 func showDaemonResultScreen(ctx context.Context, session *shell.Session, title string, level orchestrator.HealthcheckSetupLevel, keyword, explanation string) {
 	errDaemonResultEsc := errors.New("daemon result: esc")
 	prompt := orchestrator.BuildStatusPrompt(level, keyword, explanation)
@@ -570,7 +579,7 @@ func showDaemonResultScreen(ctx context.Context, session *shell.Session, title s
 func runDashboardDaemonAdmin(ctx context.Context, session *shell.Session, install bool, configPath, baseDir string) {
 	cfg, err := daemonStatusLoadConfig(configPath, baseDir)
 	if err != nil || cfg == nil {
-		showDaemonResultScreen(ctx, session, "Daemon change failed", orchestrator.HealthcheckSetupLevelError,
+		showDaemonResultScreenFn(ctx, session, "Daemon change failed", orchestrator.HealthcheckSetupLevelError,
 			"CONFIG UNREADABLE", "Could not read the configuration to apply the scheduler change.")
 		return
 	}
@@ -601,22 +610,23 @@ func runDashboardDaemonAdmin(ctx context.Context, session *shell.Session, instal
 	execToken := daemonSelfExecPath()
 	var opErr error
 	var cronOutcome cronRemovalOutcome
+	var revert cronRevertReport
 	_ = components.RunTask(ctx, session, title, work, func(taskCtx context.Context, report func(string)) error {
 		if install {
 			cronOutcome, opErr = daemonApplyDaemonMode(taskCtx, cfg, configPath, execToken, bl)
 		} else {
-			opErr = daemonApplyCronMode(taskCtx, cfg, configPath, execToken, bl, true)
+			revert, opErr = daemonApplyCronMode(taskCtx, cfg, configPath, execToken, bl, true)
 		}
 		return nil
 	})
 
 	if opErr != nil {
 		if errors.Is(opErr, errDaemonTeardownBackupRunning) {
-			showDaemonResultScreen(ctx, session, "Daemon disable deferred", orchestrator.HealthcheckSetupLevelWarn,
+			showDaemonResultScreenFn(ctx, session, "Daemon disable deferred", orchestrator.HealthcheckSetupLevelWarn,
 				"DEFERRED - BACKUP RUNNING", "A backup is in progress; the daemon was NOT removed. Try again once the backup finishes.")
 			return
 		}
-		showDaemonResultScreen(ctx, session, title+" failed", orchestrator.HealthcheckSetupLevelError, "FAILED", opErr.Error())
+		showDaemonResultScreenFn(ctx, session, title+" failed", orchestrator.HealthcheckSetupLevelError, "FAILED", opErr.Error())
 		return
 	}
 	// The result screen is the only channel that reaches the operator here (console logging
@@ -627,7 +637,15 @@ func runDashboardDaemonAdmin(ctx context.Context, session *shell.Session, instal
 	if install {
 		doneMsg = "The resident daemon (" + daemonUnitName + ") is active. " + cronRemovalClause(cronOutcome)
 	}
-	showDaemonResultScreen(ctx, session, doneTitle, orchestrator.HealthcheckSetupLevelOk, doneKeyword, doneMsg)
+	// The revert has the same problem in its own direction. applyCronMode emits its /etc
+	// schedule advisory through the bootstrap logger, which is console-quiet here and is
+	// never flushed, so the operator used to get a green "REVERTED TO CRON" over a host that
+	// may now be scheduled twice - the CLI said it, the TUI did not. Appending the lines to
+	// the result screen is the only channel left open on this path.
+	if !install && len(revert.SystemCronAdvisory) > 0 {
+		doneMsg = strings.TrimSpace(doneMsg + "\n\n" + strings.Join(revert.SystemCronAdvisory, "\n"))
+	}
+	showDaemonResultScreenFn(ctx, session, doneTitle, orchestrator.HealthcheckSetupLevelOk, doneKeyword, doneMsg)
 }
 
 // dashboardDaemonState decides which daemon command the menu offers, from the

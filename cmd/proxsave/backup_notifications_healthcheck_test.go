@@ -145,14 +145,19 @@ func TestInitializeHealthcheckSectionLines(t *testing.T) {
 	}
 }
 
-// TestInitializeHealthcheckSectionCronModeSkipsInsteadOfWarning is the issue #298
-// regression. --daemon-remove left HEALTHCHECK_ENABLED=true behind, so every later cron run
-// warned "Healthchecks: daemon not installed" and applyIssueExitCode promoted an otherwise
-// clean backup to exit 1. On the cron engine the daemon is absent by construction and is the
-// only thing that pings, so the honest report is a SKIP - emitted at info level, therefore
-// invisible to the warning counter that drives the exit code - that still NAMES what was
-// observed, because re-ranking a report is not the same as swallowing it.
-func TestInitializeHealthcheckSectionCronModeSkipsInsteadOfWarning(t *testing.T) {
+// TestInitializeHealthcheckSectionCronModeWarnsAndSkips pins the shape of the healthchecks
+// report on the cron engine: the reason on its own line, then a bare "disabled", exactly as
+// Telegram does ("Telegram: 409 - ..." followed by "Telegram: disabled") and as Email,
+// Gotify and Webhook read. The reason used to be inlined into the SKIP, which made
+// Healthchecks the one entry in the notification block not reading "<channel>: disabled".
+//
+// It WARNS. HEALTHCHECK_ENABLED=true says the operator wants monitoring, and healthchecks
+// cannot work without the resident daemon, so a cron host carrying that key is not in an
+// expected state: the thing it asked for is silently doing nothing. The exit code that
+// warning costs is the point, not a regression of issue #298 - the hosts that never chose
+// the key have it cleared for them by applyCronMode on --daemon-remove and by
+// backfillHealthcheckOptOut on --upgrade, so what reaches this line said true on purpose.
+func TestInitializeHealthcheckSectionCronModeWarnsAndSkips(t *testing.T) {
 	orig := logging.GetDefaultLogger()
 	t.Cleanup(func() { logging.SetDefaultLogger(orig) })
 	origProbe := daemonPresenceProbe
@@ -180,20 +185,28 @@ func TestInitializeHealthcheckSectionCronModeSkipsInsteadOfWarning(t *testing.T)
 	initializeHealthcheckSection(backupModeOptions{ctx: context.Background(), cfg: cfg, logger: discard}, orch)
 
 	out := buf.String()
-	if def.WarningCount() != 0 {
-		t.Fatalf("cron mode must emit no WARNING (one warning is enough to promote a clean backup to exit 1), out=%q", out)
+	if def.WarningCount() != 1 {
+		t.Fatalf("the reason must be a single WARNING, got %d, out=%q", def.WarningCount(), out)
 	}
-	if strings.Contains(out, "WARNING") {
-		t.Fatalf("cron mode must not log a WARNING line, out=%q", out)
-	}
-	if !strings.Contains(out, "Healthchecks: disabled") {
+	if !strings.Contains(out, "SKIP") || !strings.Contains(out, "Healthchecks: disabled") {
 		t.Fatalf("cron mode must still print the SKIP line, out=%q", out)
 	}
+	for _, inlined := range []string{
+		"Healthchecks: disabled (",
+		"disabled (cron mode",
+	} {
+		if strings.Contains(out, inlined) {
+			t.Fatalf("the SKIP must stay bare; the reason belongs on its own line above, out=%q", out)
+		}
+	}
 	if !strings.Contains(out, "cron mode") {
-		t.Fatalf("the SKIP must say WHY the section is inert on this engine, out=%q", out)
+		t.Fatalf("the reason line must say WHY the section is inert on this engine, out=%q", out)
 	}
 	if !strings.Contains(out, "daemon not installed") {
-		t.Fatalf("the SKIP must still name the observed reason (re-rank, not swallow), out=%q", out)
+		t.Fatalf("the reason line must name what was observed, out=%q", out)
+	}
+	if reason, skip := strings.Index(out, "WARNING"), strings.Index(out, "SKIP"); reason > skip {
+		t.Fatalf("the WARNING must come BEFORE the SKIP, as Telegram does, out=%q", out)
 	}
 	if cfg.HealthcheckEnabled {
 		t.Fatal("cron mode must still flip HealthcheckEnabled=false so the Phase-7 entries loop renders it disabled")

@@ -126,7 +126,7 @@ HEALTHCHECK_NOTIFY_WEBHOOK_URL=
 HEALTHCHECK_NOTIFY_WEBHOOK_ID=
 ```
 
-`HEALTHCHECK_ENABLED` parses as `false` by default. `--daemon-setup` and the `--upgrade` auto-migration set it to `true` when enabling the daemon, and `--daemon-remove` sets it back to `false` when reverting to cron. The two directions belong together: the checks this key turns on are daemon-only, so a cron host left with `HEALTHCHECK_ENABLED=true` reports the missing daemon on every run. That report is a SKIP naming the reason on the cron engine (it does not change the exit code) and a warning on the daemon engine, where a missing daemon is a real fault.
+`HEALTHCHECK_ENABLED` parses as `false` by default. `--daemon-setup` and the `--upgrade` auto-migration set it to `true` when enabling the daemon, and `--daemon-remove` sets it back to `false` when reverting to cron. The two directions belong together: the checks this key turns on are daemon-only, so a cron host left with `HEALTHCHECK_ENABLED=true` reports the missing daemon on every run, as a warning on either engine. On cron the warning names the engine as well, because the key is asking for monitoring that cannot run there. Clearing the key is what stops the report, which is why both `--daemon-remove` and the `--upgrade` backfill do it for you.
 
 A host reverted by an older build kept the key at `true`. `--upgrade` corrects it once, writing `false` only when `SCHEDULER_MODE=cron`, `DAEMON_OPT_OUT=true` and `HEALTHCHECK_ENABLED=true` all hold, which is the signature of that revert and of nothing else. A cron install that never enabled the daemon has `DAEMON_OPT_OUT=false` and keeps whatever you set.
 

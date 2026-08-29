@@ -112,7 +112,7 @@ func logUpgradeDaemonRestart(bootstrap *logging.BootstrapLogger, rv *RestartVeri
 	case restartVerifyTimedOut:
 		bootstrap.Warning("Daemon restarted but alignment check timeout")
 	case restartVerifyAligned:
-		bootstrap.Println("Daemon restarted and now aligned with the new binary.")
+		logBootstrapInfo(bootstrap, "Daemon restarted and now aligned with the new binary.")
 	default:
 		bootstrap.Warning("Daemon restarted but alignment could not be confirmed")
 	}
@@ -312,7 +312,7 @@ func upgradeFinalizePhase(ctx context.Context, args *cli.Args, bootstrap *loggin
 		// succeeded. It first waits out any in-progress backup rather than killing it,
 		// and only runs when the daemon is actually active (a cron install has none).
 		if upgradeRestartsDaemon && daemonIsActive(ctx) {
-			bootstrap.Println("Restarting the resident daemon to load the new binary...")
+			logBootstrapInfo(bootstrap, "Restarting the resident daemon to load the new binary...")
 			lockPath, lockKnown := upgradeBackupLockPath(args.ConfigPath, baseDir)
 			rv := restartAndVerifyDaemon(ctx, baseDir, lockPath, lockKnown, upgradeHeartbeatInterval(args.ConfigPath, baseDir))
 			daemonRestart = &rv

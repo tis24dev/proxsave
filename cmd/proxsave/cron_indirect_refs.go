@@ -166,13 +166,13 @@ func indirectProxsaveCronRefsWithToken(lines []string, probeScriptContent bool, 
 		reason := ""
 		switch {
 		case basenameHasProxsaveComponent(token):
-			reason = fmt.Sprintf("its command %q is named after proxsave", filepath.Base(token))
+			reason = fmt.Sprintf("command %q is named after proxsave", filepath.Base(token))
 		case pathLivesInProxsaveTree(token):
-			reason = fmt.Sprintf("its command lives inside a ProxSave install tree (%s)", filepath.Dir(token))
+			reason = fmt.Sprintf("command under ProxSave install tree (%s)", filepath.Dir(token))
 		case cronRunnerNamesProxsave(line, token):
-			reason = fmt.Sprintf("%q runs another command and the line names the proxsave binary", filepath.Base(token))
+			reason = fmt.Sprintf("runner %q; cron line references the proxsave binary", filepath.Base(token))
 		case probeScriptContent && scriptReferencesProxsave(token):
-			reason = fmt.Sprintf("the script %s calls the proxsave binary", token)
+			reason = fmt.Sprintf("script %s calls the proxsave binary", token)
 		}
 		if reason == "" {
 			continue
@@ -342,10 +342,18 @@ func scriptReferencesProxsave(token string) bool {
 	return false
 }
 
-// describeIndirectCronRefs renders one operator-facing line per finding: the crontab
-// line verbatim, then the rule that fired. The caller must print these with a "%s"
-// format, never as the format itself - a crontab line may legitimately contain "%",
-// which cron reads as its stdin separator.
+// describeIndirectCronRefs renders one operator-facing item per finding: the cron line
+// verbatim, where it lives, and the rule that fired.
+//
+// It returns the item WITHOUT the list prefix, because the caller owns that: this package
+// prints an enumerated finding the way the rest of the CLI already does, a header ending in
+// a colon and carrying a count, then one `  - ` item per entry (logConfigUpgradeWarnings in
+// main_config_modes.go and logConfiguredZFSPools in restore_zfs.go are the two established
+// examples). The bracketed location and the parenthesised reason follow the annotation style
+// already used for a resolved path elsewhere in this package.
+//
+// The caller must print these with a "%s" format, never as the format itself - a crontab
+// line may legitimately contain "%", which cron reads as its stdin separator.
 func describeIndirectCronRefs(refs []indirectCronRef) []string {
 	out := make([]string, 0, len(refs))
 	for _, ref := range refs {
@@ -353,7 +361,7 @@ func describeIndirectCronRefs(refs []indirectCronRef) []string {
 		if ref.Source != "" {
 			where = ref.Source
 		}
-		out = append(out, fmt.Sprintf("%s [%s]   -> %s", ref.Line, where, ref.Reason))
+		out = append(out, fmt.Sprintf("%s  [%s]  (%s)", ref.Line, where, ref.Reason))
 	}
 	return out
 }
@@ -382,19 +390,83 @@ func cronRefEditHint(refs []indirectCronRef) string {
 	}
 }
 
-// detectIndirectProxsaveCron reads the live crontab and returns its indirect
-// ProxSave references. It goes through the crontabReadLinesFn seam so a test can
-// feed a synthetic crontab, and it returns the read error instead of swallowing it:
-// a host with no crontab BINARY at all (nothing scheduled, nothing to collide with)
-// must still be allowed to migrate, so "could not read" is a caller decision, not a
-// refusal made here.
+// systemCronScheduleAdvisory renders the --daemon-remove notice for a ProxSave schedule
+// found under /etc: the findings verbatim, then who owns what. It is a pure renderer
+// returning lines the caller prints with "%s", for the two reasons cronRemovalClause is
+// one too - the wording is operator-facing and must be testable without a logging
+// harness, and a crontab line may legitimately contain "%", which cron reads as its stdin
+// separator and fmt would read as a verb.
+//
+// WHY THIS IS A NOTICE AND NOT A DECISION. applyCronMode does NOT suppress its canonical
+// cron line on these findings, and that is the whole design, not an unfinished half of it.
+// The three heuristic rules answer "is this named after proxsave", not "does this run a
+// proxsave backup": /opt/proxsave/script/prune.sh, a nightly "nice rsync -a /opt/proxsave/
+// ..." mirror, and a maintenance script carrying a COMMENTED-OUT proxsave call all match
+// while scheduling no backup at all. Withholding the cron line on one of those would leave
+// the host with nothing scheduled, silently, and ProxSave cannot edit /etc to repair it.
+// F09-06 already ranks the two outcomes: a double schedule is a recoverable annoyance, an
+// unscheduled host is silent data loss.
+//
+// WHAT IT MAY AND MAY NOT CLAIM. It states ONLY what is certain at this point, and the
+// restraint is the fix for a defect this text used to carry. It used to say the /etc entry
+// stood "alongside the cron line just written at SCHEDULER_TIME" and to instruct the
+// operator to remove one of the two. Neither was knowable here. migrateLegacyCronEntries
+// is void and has four early returns that write nothing, and one of them is reached
+// DETERMINISTICALLY in the case that matters: it re-runs the same `crontab -l` that
+// existingWrapperCronFallback just ran, so whenever that read fails no line is written at
+// all. The notice then described a duplicate that did not exist and told the operator to
+// delete the only schedule the host had left. So: no claim about ProxSave's own line, and
+// no instruction to remove anything. The operator is told what was found, that ProxSave
+// did not touch it and does not manage it, and where to look to decide - which is the most
+// this function can say without asserting something it cannot check.
+func systemCronScheduleAdvisory(refs []indirectCronRef) []string {
+	if len(refs) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(refs)+2)
+	out = append(out, fmt.Sprintf("Reverting to cron: %d possible ProxSave cron line(s) under /etc:", len(refs)))
+	for _, line := range describeIndirectCronRefs(refs) {
+		out = append(out, "  - "+line)
+	}
+	out = append(out, "ProxSave owns the root crontab only and never edits files it did not place. /etc unchanged")
+	return out
+}
+
+// detectIndirectProxsaveCron reads every habitat that can schedule ProxSave without
+// this package owning the line, and returns what it found. It goes through the
+// crontabReadLinesFn seam so a test can feed a synthetic crontab, and it returns the
+// read error instead of swallowing it: a host with no crontab BINARY at all (nothing
+// scheduled, nothing to collide with) must still be allowed to migrate, so "could not
+// read" is a caller decision, not a refusal made here.
+//
+// The two halves are asymmetric, and the asymmetry is the point. From the ROOT CRONTAB
+// it takes the indirect shapes only: a line whose command token IS the proxsave binary
+// is canonical there, dropCanonicalCronLines owns it and removes it, so reporting it
+// would refuse a migration over a line the migration is about to delete. From /etc it
+// takes systemCronProxsaveRefs, which adds exactly that one shape, because under /etc
+// nothing owns it. dropCanonicalCronLines never reads those files and by the read-only
+// rule on systemCronPaths never will, so
+//
+//	0 2 * * * root /usr/local/bin/proxsave --backup     [/etc/cron.d/proxsave]
+//
+// is a live backup schedule that survives the migration untouched. Installing the daemon
+// on top of it is issue #298 exactly, on the same unattended path, with the same outcome:
+// two backups a night and the loser exiting ExitBackupSkipped.
+//
+// That shape was deliberately withheld from this predicate when it was introduced, on the
+// grounds that widening what an unattended upgrade REFUSES on is a decision separate from
+// widening what a revert prints. It is included now as a considered choice rather than by
+// drift, and it is the safest possible widening: unlike the three heuristic rules, which
+// answer "is this named after proxsave" and do fire on a prune script or an rsync mirror,
+// this one matches a literal proxsave command token and nothing else. It cannot produce
+// the false refusals the heuristics can.
 func detectIndirectProxsaveCron(ctx context.Context) ([]indirectCronRef, error) {
 	lines, err := crontabReadLinesFn(ctx)
 	if err != nil {
 		return nil, err
 	}
 	refs := indirectProxsaveCronRefs(lines, cronProbeReadScripts)
-	return append(refs, indirectProxsaveSystemCronRefs()...), nil
+	return append(refs, systemCronProxsaveRefs()...), nil
 }
 
 // systemCronPaths are the SYSTEM crontab locations this detector reads. They are vars
@@ -420,7 +492,53 @@ var systemCronPaths = []string{"/etc/crontab", "/etc/cron.d"}
 // Every failure is silent and yields nothing: a missing /etc/cron.d, an unreadable
 // file, a directory entry cron itself would ignore. See the false-negative note on
 // indirectProxsaveCronRefs for why "cannot tell" must not become "suspicious".
+//
+// This is the INDIRECT-only view. Nothing in the daemon paths reads it any more -
+// detectIndirectProxsaveCron and the revert advisory both go through
+// systemCronProxsaveRefs, which adds the direct shape - and it is kept as the named
+// boundary between "matched a heuristic" and "is literally the proxsave binary". Its one
+// consumer is the test that pins that distinction, which is deliberate: the day someone
+// widens the heuristics, the difference between the two views is what makes the blast
+// radius visible.
 func indirectProxsaveSystemCronRefs() []indirectCronRef {
+	return systemCronRefs(false)
+}
+
+// systemCronProxsaveRefs is indirectProxsaveSystemCronRefs plus the ONE shape that
+// detector deliberately drops: a system-cron line whose command token IS the proxsave
+// binary.
+//
+// indirectProxsaveCronRefsWithToken skips those with the comment "canonical
+// proxsave entry: not indirect, and not ours to report", and in the USER crontab that
+// is exactly right, because dropCanonicalCronLines really does own them and really
+// does remove them. Under /etc nothing owns them. dropCanonicalCronLines never reads
+// those files and, by the read-only rule stated on systemCronPaths, never will. So
+//
+//	0 2 * * * root /usr/local/bin/proxsave --backup     [/etc/cron.d/proxsave]
+//
+// is a live ProxSave backup schedule that no code path in this package can see, remove
+// or report - and it is the likeliest way a host ends up scheduled from /etc at all: an
+// operator, or a configuration-management tool, moving the line the installer wrote into
+// a file they manage. A revert advisory that named a neutrally-written wrapper while
+// staying blind to a literal proxsave --backup line two directories away would be worse
+// than silence, because the operator would trust it.
+//
+// This view now feeds the unattended --upgrade refusal too, through
+// detectIndirectProxsaveCron. That was withheld at first, on the grounds that widening a
+// refusal predicate is a decision separate from widening what a revert prints, and it was
+// taken deliberately afterwards rather than by drift. It is the safest widening available:
+// the three heuristic rules answer "is this named after proxsave" and can fire on a prune
+// script or an rsync mirror, while this shape matches a literal proxsave command token and
+// nothing else, so it adds no false refusals at all.
+func systemCronProxsaveRefs() []indirectCronRef {
+	return systemCronRefs(true)
+}
+
+// systemCronRefs is the shared walk over systemCronPaths: /etc/crontab as a file,
+// /etc/cron.d as a directory whose entries cron itself would load. It is factored out so
+// the indirect-only and the indirect-plus-direct views can never walk different trees or
+// apply different skip rules to the same host.
+func systemCronRefs(includeDirect bool) []indirectCronRef {
 	var refs []indirectCronRef
 	for _, path := range systemCronPaths {
 		info, err := os.Stat(path)
@@ -428,7 +546,7 @@ func indirectProxsaveSystemCronRefs() []indirectCronRef {
 			continue
 		}
 		if !info.IsDir() {
-			refs = append(refs, systemCronFileRefs(path)...)
+			refs = append(refs, systemCronFileRefs(path, includeDirect)...)
 			continue
 		}
 		entries, err := os.ReadDir(path)
@@ -439,8 +557,34 @@ func indirectProxsaveSystemCronRefs() []indirectCronRef {
 			if entry.IsDir() || !cronDNameIsActive(entry.Name()) {
 				continue
 			}
-			refs = append(refs, systemCronFileRefs(filepath.Join(path, entry.Name()))...)
+			refs = append(refs, systemCronFileRefs(filepath.Join(path, entry.Name()), includeDirect)...)
 		}
+	}
+	return refs
+}
+
+// directProxsaveCronRefs reports the lines whose COMMAND TOKEN is the proxsave binary,
+// by the same commandTokenMatchesTarget rule the removal uses, so it can never disagree
+// with it about what a proxsave cron line is. It is the exact complement of
+// indirectProxsaveCronRefsWithToken: that one skips these, this one reports only these,
+// and nothing widens the shared matcher.
+//
+// It has no content probe and no heuristic, so it cannot produce the class of false
+// positive the three indirect rules can: the command IS our binary or it is not. That is
+// why it is the one rule strong enough to be worth reporting from a habitat nobody can
+// clean up afterwards.
+func directProxsaveCronRefs(lines []string, commandToken func(string) string) []indirectCronRef {
+	var refs []indirectCronRef
+	for _, line := range lines {
+		token := strings.Trim(commandToken(line), "\"'")
+		if token == "" || !commandTokenMatchesTarget(token) {
+			continue
+		}
+		refs = append(refs, indirectCronRef{
+			Line:    strings.TrimSpace(line),
+			Command: token,
+			Reason:  fmt.Sprintf("%q is the proxsave binary; /etc cron lines stay untouched", filepath.Base(token)),
+		})
 	}
 	return refs
 }
@@ -463,16 +607,25 @@ func cronDNameIsActive(name string) bool {
 	return true
 }
 
-// systemCronFileRefs reads one system-crontab file and returns its indirect ProxSave
-// references, tagged with the file they came from. The size cap is the same one the
-// script probe uses: a crontab file is a few KiB, and a caller that pointed this at
-// something enormous has misconfigured the host rather than scheduled a backup.
-func systemCronFileRefs(path string) []indirectCronRef {
+// systemCronFileRefs reads one system-crontab file and returns its ProxSave references,
+// tagged with the file they came from. The size cap is the same one the script probe
+// uses: a crontab file is a few KiB, and a caller that pointed this at something enormous
+// has misconfigured the host rather than scheduled a backup.
+//
+// includeDirect adds the lines whose command token IS the binary (see
+// directProxsaveCronRefs). They are emitted FIRST, ahead of the heuristic findings,
+// because that is the order an operator should read them in: the certain fact before the
+// inferred ones. Within each group the crontab order of the file is preserved.
+//
+// The file is read ONCE for both rule sets. Two reads would be two chances to disagree
+// about a file another process may be editing, and a revert that reported a line from one
+// snapshot and a reason from another would be worse than either.
+func systemCronFileRefs(path string, includeDirect bool) []indirectCronRef {
 	info, err := os.Stat(path)
 	if err != nil || !info.Mode().IsRegular() || info.Size() > maxCronWrapperProbeBytes {
 		return nil
 	}
-	data, err := safefs.ReadFileUnderRoot(path)
+	data, err := safefs.ReadFileUnderRoot(resolveSystemCronPath(path))
 	if err != nil || bytes.IndexByte(data, 0) >= 0 {
 		return nil
 	}
@@ -480,15 +633,56 @@ func systemCronFileRefs(path string) []indirectCronRef {
 	if strings.TrimSpace(normalized) == "" {
 		return nil
 	}
-	refs := indirectProxsaveCronRefsWithToken(
-		strings.Split(strings.TrimRight(normalized, "\n"), "\n"),
+	lines := strings.Split(strings.TrimRight(normalized, "\n"), "\n")
+	var refs []indirectCronRef
+	if includeDirect {
+		refs = append(refs, directProxsaveCronRefs(lines, systemCronCommandToken)...)
+	}
+	refs = append(refs, indirectProxsaveCronRefsWithToken(
+		lines,
 		cronProbeReadScripts,
 		systemCronCommandToken,
-	)
+	)...)
 	for i := range refs {
 		refs[i].Source = path
 	}
 	return refs
+}
+
+// resolveSystemCronPath returns the path systemCronFileRefs should actually open, which
+// is not always the one it was handed: a symlinked /etc/cron.d entry has to be resolved
+// first or it is silently invisible.
+//
+// safefs.OpenFileUnderRoot roots at the parent directory and REFUSES a final component
+// that is an absolute symlink - a deliberate guarantee everywhere else in this codebase,
+// and the right default. Here it produced a blind spot instead. os.Stat above follows the
+// link, so the entry passes the regular-file and size gates; the read then fails, the
+// error is swallowed by the same fail-quiet rule that covers a missing /etc/cron.d, and
+// the file is never scanned. Cron loads that entry regardless, so the schedule is live and
+// the detector is the only one that cannot see it - and a config-management tool is both
+// the named cause of ProxSave ending up scheduled from /etc and the thing most likely to
+// place its files there as symlinks into a package tree.
+//
+// Resolving the link and rooting at the TARGET's parent keeps the confinement rather than
+// dropping it: the read still goes through os.Root, just anchored where the bytes really
+// live. A path that is not a symlink, or whose chain cannot be resolved, is returned
+// unchanged so the caller's existing guards decide - never silently widened.
+func resolveSystemCronPath(path string) string {
+	info, err := os.Lstat(path)
+	if err != nil || info.Mode()&os.ModeSymlink == 0 {
+		return path
+	}
+	resolved, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		return path
+	}
+	// The target must still be an ordinary, small text file: following a link is not a
+	// reason to relax any gate the direct path had to pass.
+	target, err := os.Stat(resolved)
+	if err != nil || !target.Mode().IsRegular() || target.Size() > maxCronWrapperProbeBytes {
+		return path
+	}
+	return resolved
 }
 
 // systemCronCommandToken is cronCommandToken for the SYSTEM crontab format, where a
@@ -542,9 +736,10 @@ func warnIndirectProxsaveCronOnDaemonInstall(ctx context.Context, bootstrap *log
 	if err != nil || len(refs) == 0 {
 		return
 	}
-	logBootstrapWarning(bootstrap, "The crontab also schedules ProxSave through a command this migration does not own. It is NOT removed (it is not ours to delete), so it will keep firing alongside the daemon: every backup runs twice and the loser of the race exits %d (backup skipped).", types.ExitBackupSkipped.Int())
+	logBootstrapWarning(bootstrap, "%d unmanaged cron line(s) still schedule ProxSave:", len(refs))
 	for _, line := range describeIndirectCronRefs(refs) {
-		logBootstrapWarning(bootstrap, "  %s", line)
+		logBootstrapWarning(bootstrap, "  - %s", line)
 	}
-	logBootstrapWarning(bootstrap, "Remove or disable that entry to leave the daemon as the only scheduler: %s.", cronRefEditHint(refs))
+	logBootstrapWarning(bootstrap, "They are NOT removed, so they keep firing alongside the daemon: this can cause problems, exit %d.", types.ExitBackupSkipped.Int())
+	logBootstrapWarning(bootstrap, "Remove/disable entries for daemon-only scheduling: %s.", cronRefEditHint(refs))
 }

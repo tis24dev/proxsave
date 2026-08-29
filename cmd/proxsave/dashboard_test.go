@@ -41,8 +41,8 @@ func installDashboardGates(t *testing.T, bare, interactive bool) {
 	daemonApplyDaemonMode = func(ctx context.Context, cfg *config.Config, configPath, execToken string, bl *logging.BootstrapLogger) (cronRemovalOutcome, error) {
 		return cronRemovalOutcome{Removed: 1, Verified: true}, nil
 	}
-	daemonApplyCronMode = func(ctx context.Context, cfg *config.Config, configPath, execToken string, bl *logging.BootstrapLogger, optOut bool) error {
-		return nil
+	daemonApplyCronMode = func(ctx context.Context, cfg *config.Config, configPath, execToken string, bl *logging.BootstrapLogger, optOut bool) (cronRevertReport, error) {
+		return cronRevertReport{}, nil
 	}
 	t.Cleanup(func() {
 		dashboardIsBareInvocation = origBare
@@ -507,12 +507,12 @@ func TestDashboardDaemonRemoveWhenActive(t *testing.T) {
 	}
 	t.Cleanup(func() { daemonStatusLoadConfig = orig })
 	reverted := 0
-	daemonApplyCronMode = func(ctx context.Context, cfg *config.Config, configPath, execToken string, bl *logging.BootstrapLogger, optOut bool) error {
+	daemonApplyCronMode = func(ctx context.Context, cfg *config.Config, configPath, execToken string, bl *logging.BootstrapLogger, optOut bool) (cronRevertReport, error) {
 		reverted++
 		if !optOut {
 			t.Errorf("disable must opt out (optOut=true)")
 		}
-		return nil
+		return cronRevertReport{}, nil
 	}
 	driver := installDashboardSessionSeam(t)
 	args := &cli.Args{}
@@ -780,5 +780,71 @@ func TestDashboardSubScreenIdleTimeoutExits(t *testing.T) {
 		// The sub-screen (then the menu) hit the idle timeout and the dashboard exited.
 	case <-time.After(uitest.Deadline(5 * time.Second)):
 		t.Fatal("dashboard sub-screen hung: the idle timeout did not bound it")
+	}
+}
+
+// The /etc advisory used to be recorded and dropped on the TUI: runDashboardDaemonAdmin
+// mutes the global logger and sets the bootstrap console quiet for the whole operation and
+// never flushes it, so a revert on a host that may now be scheduled twice showed a green
+// "REVERTED TO CRON" and nothing else. The CLI said it, the TUI did not. applyCronMode now
+// returns the lines and the result screen carries them.
+//
+// The assertion goes through showDaemonResultScreenFn rather than the rendered screen: what
+// matters is that the advisory reaches the only channel open on this path, and matching the
+// painted text would instead be matching wherever BuildStatusPrompt happened to wrap it.
+func TestDashboardDaemonRevertShowsTheSystemCronAdvisory(t *testing.T) {
+	installDashboardGates(t, true, true)
+	origCfg := daemonStatusLoadConfig
+	origShow := showDaemonResultScreenFn
+	t.Cleanup(func() {
+		daemonStatusLoadConfig = origCfg
+		showDaemonResultScreenFn = origShow
+	})
+	daemonStatusLoadConfig = func(string, string) (*config.Config, error) {
+		return &config.Config{SchedulerMode: "daemon"}, nil
+	}
+	daemonApplyCronMode = func(context.Context, *config.Config, string, string, *logging.BootstrapLogger, bool) (cronRevertReport, error) {
+		return cronRevertReport{SystemCronAdvisory: []string{
+			"Reverting to cron: 1 cron line(s) under /etc also appear to schedule ProxSave:",
+			"  - 17 02 * * * root /usr/local/sbin/proxsave-nas-guard  [/etc/cron.d/proxsave-guard]  (named after proxsave)",
+		}}, nil
+	}
+	shown := make(chan string, 1)
+	showDaemonResultScreenFn = func(_ context.Context, _ *shell.Session, _ string, _ orchestrator.HealthcheckSetupLevel, kw, explanation string) {
+		shown <- kw + "\n" + explanation
+	}
+
+	driver := installDashboardSessionSeam(t)
+	res := driver.spawn(&cli.Args{})
+	driver.waitScreen("Dashboard")
+	driver.keys("down down down down down down down down down enter") // Disable daemon
+
+	var msg string
+	select {
+	case msg = <-shown:
+	case <-time.After(uitest.Deadline(60 * time.Second)):
+		t.Fatal("the revert never reached the result screen")
+	}
+	// Wait for the menu to be repainted before sending esc: the stub returns immediately,
+	// so without this the key can land while the loop is still between screens.
+	driver.waitScreen("Dashboard")
+	driver.keys("esc")
+	select {
+	case <-res:
+	case <-time.After(uitest.Deadline(60 * time.Second)):
+		t.Fatal("dashboard did not resolve")
+	}
+
+	if !strings.Contains(msg, "REVERTED TO CRON") {
+		t.Fatalf("the revert must still report success, got:\n%s", msg)
+	}
+	for _, want := range []string{
+		"Reverted to the cron scheduler", // the existing message is not replaced
+		"/etc/cron.d/proxsave-guard",     // and the advisory is carried with it
+		"under /etc also appear to schedule ProxSave",
+	} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("the revert result screen must carry %q, got:\n%s", want, msg)
+		}
 	}
 }

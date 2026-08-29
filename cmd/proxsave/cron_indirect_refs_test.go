@@ -146,10 +146,18 @@ func TestIndirectProxsaveCronRefsContentProbe(t *testing.T) {
 func TestMaybeAutoMigrateDaemonRefusesIndirectCronEntry(t *testing.T) {
 	origRead := crontabReadLinesFn
 	origApply := applyDaemonModeFn
+	origPaths := systemCronPaths
 	t.Cleanup(func() {
 		crontabReadLinesFn = origRead
 		applyDaemonModeFn = origApply
+		systemCronPaths = origPaths
 	})
+	// detectIndirectProxsaveCron unions the root crontab with the SYSTEM habitat, and
+	// systemCronPaths points at the real /etc. Without this the verdict of the test that
+	// decides whether an UPGRADE IS BLOCKED depends on the cron.d of whatever machine runs
+	// the suite: plant a proxsave-named entry there and this test fails for a reason that
+	// has nothing to do with the code. An empty tree is the ordinary host.
+	systemCronPaths = []string{filepath.Join(t.TempDir(), "absent")}
 
 	configPath := filepath.Join(t.TempDir(), "backup.env")
 	if err := os.WriteFile(configPath, []byte("SCHEDULER_MODE=cron\nDAEMON_OPT_OUT=false\n"), 0o600); err != nil {
@@ -302,5 +310,220 @@ func TestSystemCronIsReadOnlyAndOutsideRemovalAndSeeding(t *testing.T) {
 	}
 	if got := wrapperCronLines([]string{line}); len(got) != 0 {
 		t.Fatalf("wrapperCronLines reads the USER crontab format only, got %v", got)
+	}
+}
+
+// The advisory is the entire remedy on this path, so its text is the deliverable. Its
+// hardest constraint is NEGATIVE: it may not assert anything it cannot check from here.
+// It used to claim the /etc entry stood "alongside the cron line just written at
+// SCHEDULER_TIME" and to tell the operator to remove one of the two, and neither was
+// knowable - migrateLegacyCronEntries writes nothing on any of four early returns, one of
+// which is reached deterministically when `crontab -l` fails, because it re-runs the very
+// read that already failed. The notice then described a duplicate that did not exist and
+// pointed the operator at the only schedule the host had left.
+func TestSystemCronScheduleAdvisory(t *testing.T) {
+	if got := systemCronScheduleAdvisory(nil); got != nil {
+		t.Fatalf("no finding must produce no output at all, got %v", got)
+	}
+
+	refs := []indirectCronRef{{
+		Line:    "17 02 * * * root /usr/local/sbin/proxsave-nas-guard",
+		Command: "/usr/local/sbin/proxsave-nas-guard",
+		Reason:  "its command \"proxsave-nas-guard\" is named after proxsave",
+		Source:  "/etc/cron.d/proxsave-guard",
+	}}
+	joined := strings.Join(systemCronScheduleAdvisory(refs), "\n")
+	for _, want := range []string{
+		"/etc/cron.d/proxsave-guard",                          // WHERE: a file, findable
+		"17 02 * * * root /usr/local/sbin/proxsave-nas-guard", // WHAT: the line verbatim
+		"named after proxsave",                                // WHY: the rule that fired
+		"never edits files it did not place",                  // WHAT ProxSave did not do
+		"/etc unchanged",
+	} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("the advisory must contain %q:\n%s", want, joined)
+		}
+	}
+
+	// Everything below is a claim this function cannot support. Each of these strings
+	// appeared in the version that shipped a lie; none may come back.
+	for _, forbidden := range []string{
+		"just written",   // no way to know migrateLegacyCronEntries wrote anything
+		"runs twice",     // no way to know the /etc entry runs a backup at all
+		"one of the two", // the instruction that could unschedule the host
+		"was removed",    // ProxSave never edits /etc
+		"were removed",
+		"disabled it",
+	} {
+		if strings.Contains(joined, forbidden) {
+			t.Errorf("the advisory may not claim %q, which it cannot check from here:\n%s", forbidden, joined)
+		}
+	}
+}
+
+// The shape the detector deliberately drops, in the one habitat where dropping it is
+// wrong. indirectProxsaveCronRefsWithToken skips a line whose command token IS the binary
+// as "canonical, dropCanonicalCronLines owns it" - true of the root crontab, false of
+// /etc, which dropCanonicalCronLines never reads and by design never will. So
+//
+//	0 2 * * * root /usr/local/bin/proxsave --backup   [/etc/cron.d/proxsave]
+//
+// was a live ProxSave backup schedule no code path in this package could see, remove or
+// report, and it is the likeliest way a host is scheduled from /etc at all: the installed
+// line moved into a file the operator or a config-management tool manages.
+//
+// systemCronProxsaveRefs reports it, and detectIndirectProxsaveCron carries it into the
+// unattended --upgrade refusal. indirectProxsaveSystemCronRefs must NOT: keeping the two
+// views distinct is what makes it visible, the day the heuristics are widened, which of
+// the two blast radiuses grew.
+func TestSystemCronProxsaveRefsSeesADirectProxsaveLine(t *testing.T) {
+	dir := t.TempDir()
+	cronD := filepath.Join(dir, "cron.d")
+	if err := os.MkdirAll(cronD, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	systemCrontab := filepath.Join(dir, "crontab")
+	if err := os.WriteFile(systemCrontab, []byte("0 6 * * * root /usr/bin/rsync /a /b\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(cronD, "proxsave"), []byte("0 2 * * * root /usr/local/bin/proxsave --backup\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	orig := systemCronPaths
+	t.Cleanup(func() { systemCronPaths = orig })
+	systemCronPaths = []string{systemCrontab, cronD}
+
+	refs := systemCronProxsaveRefs()
+	if len(refs) != 1 {
+		t.Fatalf("the revert advisory must see the direct proxsave line, got %d: %+v", len(refs), refs)
+	}
+	if refs[0].Command != "/usr/local/bin/proxsave" {
+		t.Errorf("Command = %q, want the binary itself", refs[0].Command)
+	}
+	if refs[0].Source != filepath.Join(cronD, "proxsave") {
+		t.Errorf("Source = %q, want the file the line came from", refs[0].Source)
+	}
+	if refs[0].Reason == "" {
+		t.Error("every finding must carry an operator-facing reason")
+	}
+
+	if indirect := indirectProxsaveSystemCronRefs(); len(indirect) != 0 {
+		t.Fatalf("the --upgrade refusal predicate must be unchanged by this: a direct line is not an INDIRECT reference, got %+v", indirect)
+	}
+
+	// And the unrelated operator line in the system crontab stays unflagged under both
+	// views: the direct rule is commandTokenMatchesTarget, not a substring scan.
+	systemCronPaths = []string{systemCrontab}
+	if refs := systemCronProxsaveRefs(); len(refs) != 0 {
+		t.Fatalf("an unrelated system-cron job must not be reported, got %+v", refs)
+	}
+}
+
+// A symlinked /etc/cron.d entry was silently invisible: os.Stat follows the link so the
+// entry passed the regular-file and size gates, then safefs.OpenFileUnderRoot refused the
+// absolute-symlink final component and the error was swallowed by the same fail-quiet rule
+// that covers a missing /etc/cron.d. Cron loads that entry regardless, and a
+// config-management tool is both the named cause of a ProxSave schedule under /etc and the
+// thing most likely to place its files there as links into a package tree.
+func TestSystemCronFollowsSymlinkedEntries(t *testing.T) {
+	dir := t.TempDir()
+	cronD := filepath.Join(dir, "cron.d")
+	pkg := filepath.Join(dir, "pkg")
+	for _, d := range []string{cronD, pkg} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	target := filepath.Join(pkg, "proxsave.cron")
+	if err := os.WriteFile(target, []byte("17 02 * * * root /usr/local/sbin/proxsave-nas-guard\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// An ABSOLUTE symlink, which is precisely the shape OpenFileUnderRoot refuses.
+	if err := os.Symlink(target, filepath.Join(cronD, "proxsave-guard")); err != nil {
+		t.Skipf("symlinks unavailable on this filesystem: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "crontab"), []byte("0 6 * * * root /usr/bin/rsync /a /b\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	orig := systemCronPaths
+	t.Cleanup(func() { systemCronPaths = orig })
+	systemCronPaths = []string{filepath.Join(dir, "crontab"), cronD}
+
+	refs := indirectProxsaveSystemCronRefs()
+	if len(refs) != 1 {
+		t.Fatalf("a symlinked cron.d entry must be scanned like any other, got %d: %+v", len(refs), refs)
+	}
+	if refs[0].Command != "/usr/local/sbin/proxsave-nas-guard" {
+		t.Errorf("Command = %q", refs[0].Command)
+	}
+	// The finding is reported at the path CRON knows it by, not at the link target: that is
+	// the name the operator has to edit, and the one that appears in /etc/cron.d.
+	if want := filepath.Join(cronD, "proxsave-guard"); refs[0].Source != want {
+		t.Errorf("Source = %q, want the cron.d path %q", refs[0].Source, want)
+	}
+}
+
+// resolveSystemCronPath must widen nothing on its own: a plain file, a broken link and a
+// link to something that is not an ordinary small file all fall back to the original path
+// so the caller's existing guards decide.
+func TestResolveSystemCronPathOnlyFollowsRealFiles(t *testing.T) {
+	dir := t.TempDir()
+	plain := filepath.Join(dir, "plain")
+	if err := os.WriteFile(plain, []byte("x\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got := resolveSystemCronPath(plain); got != plain {
+		t.Errorf("a regular file must be returned unchanged, got %q", got)
+	}
+	if got := resolveSystemCronPath(filepath.Join(dir, "absent")); got != filepath.Join(dir, "absent") {
+		t.Errorf("a missing path must be returned unchanged, got %q", got)
+	}
+	broken := filepath.Join(dir, "broken")
+	if err := os.Symlink(filepath.Join(dir, "nowhere"), broken); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	if got := resolveSystemCronPath(broken); got != broken {
+		t.Errorf("a broken link must be returned unchanged, got %q", got)
+	}
+	toDir := filepath.Join(dir, "todir")
+	if err := os.Symlink(dir, toDir); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	if got := resolveSystemCronPath(toDir); got != toDir {
+		t.Errorf("a link to a directory must be returned unchanged, got %q", got)
+	}
+}
+
+// The unattended --upgrade refusal must see a DIRECT proxsave line under /etc. That shape
+// is the likeliest way a host ends up scheduled from there, dropCanonicalCronLines never
+// reads those files, and installing the daemon on top of it is issue #298 again on the same
+// path. It was deliberately withheld from this predicate at first; this pins that it is in.
+func TestDetectIndirectProxsaveCronSeesADirectSystemCronLine(t *testing.T) {
+	origRead := crontabReadLinesFn
+	origPaths := systemCronPaths
+	t.Cleanup(func() {
+		crontabReadLinesFn = origRead
+		systemCronPaths = origPaths
+	})
+	crontabReadLinesFn = func(context.Context) ([]string, error) { return nil, nil }
+
+	dir := t.TempDir()
+	cronD := filepath.Join(dir, "cron.d")
+	if err := os.MkdirAll(cronD, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(cronD, "proxsave"), []byte("0 2 * * * root /usr/local/bin/proxsave --backup\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	systemCronPaths = []string{filepath.Join(dir, "absent-crontab"), cronD}
+
+	refs, err := detectIndirectProxsaveCron(context.Background())
+	if err != nil {
+		t.Fatalf("detectIndirectProxsaveCron: %v", err)
+	}
+	if len(refs) != 1 || refs[0].Command != "/usr/local/bin/proxsave" {
+		t.Fatalf("the refusal predicate must see a direct proxsave line under /etc, got %+v", refs)
 	}
 }

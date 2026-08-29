@@ -4,6 +4,7 @@ package main
 import (
 	"context"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -153,6 +154,7 @@ func cronModeFixture(t *testing.T) (*config.Config, string) {
 	origWrapper := wrapperCronLinesFn
 	origRead := crontabReadLinesFn
 	origWrite := crontabWriteLinesFn
+	origSystem := systemCronProxsaveRefsFn
 	t.Cleanup(func() {
 		restartVerifyBackupRunning = origRun
 		removeDaemonServiceFn = origRemove
@@ -160,9 +162,16 @@ func cronModeFixture(t *testing.T) (*config.Config, string) {
 		wrapperCronLinesFn = origWrapper
 		crontabReadLinesFn = origRead
 		crontabWriteLinesFn = origWrite
+		systemCronProxsaveRefsFn = origSystem
 	})
 	restartVerifyBackupRunning = func(string) bool { return false } // idle: no teardown defer
 	removeDaemonServiceFn = func(context.Context, *logging.BootstrapLogger) error { return nil }
+	// applyCronMode reads the SYSTEM cron habitat to report a schedule it cannot own
+	// (#298), and systemCronPaths points at the REAL /etc. Unstubbed, every test built on
+	// this fixture would read the /etc/crontab and /etc/cron.d of the machine running the
+	// suite - and would still pass there, which is exactly why it has to be pinned here
+	// rather than left to be noticed later. "No system cron entry" is the ordinary host.
+	systemCronProxsaveRefsFn = func() []indirectCronRef { return nil }
 
 	dir := t.TempDir()
 	configPath := filepath.Join(dir, "backup.env")
@@ -193,14 +202,19 @@ func TestApplyCronModeDoesNotAddASecondScheduleNextToAWrapper(t *testing.T) {
 		return nil
 	}
 
-	if err := applyCronMode(context.Background(), cfg, configPath, "/usr/local/bin/proxsave", nil, true); err != nil {
+	if _, err := applyCronMode(context.Background(), cfg, configPath, "/usr/local/bin/proxsave", nil, true); err != nil {
 		t.Fatalf("applyCronMode: %v", err)
 	}
 
-	// The redundant canonical line is dropped and the wrapper is left as the only schedule:
-	// exactly one backup a night, the operator's own.
-	if len(written) != 1 || written[0] != wrapper {
-		t.Fatalf("the wrapper must be left as the sole schedule, got %v", written)
+	// Nothing is written to the crontab at all: the append is skipped, and the branch no
+	// longer DELETES either. Deleting was the old behaviour and it was a defect: the
+	// detector's rules answer "named after proxsave", not "runs a proxsave backup", so an
+	// ordinary "*/5 * * * * /usr/local/bin/proxsave-metrics-exporter" reached this branch
+	// and took the host's only real backup line with it, at INFO level and exit 0, with
+	// nothing on the host able to repair it. Skipping the append alone cannot unschedule
+	// anyone: its worst case on a misidentification is that nothing changes.
+	if written != nil {
+		t.Fatalf("the wrapper branch must not rewrite the crontab at all, got %v", written)
 	}
 	data, _ := os.ReadFile(configPath)
 	if !strings.Contains(string(data), "SCHEDULER_MODE=cron") || !strings.Contains(string(data), "DAEMON_OPT_OUT=true") {
@@ -227,7 +241,7 @@ func TestApplyCronModeStillWritesTheCronLineWithoutAWrapper(t *testing.T) {
 		return nil
 	}
 
-	if err := applyCronMode(context.Background(), cfg, configPath, "/usr/local/bin/proxsave", nil, true); err != nil {
+	if _, err := applyCronMode(context.Background(), cfg, configPath, "/usr/local/bin/proxsave", nil, true); err != nil {
 		t.Fatalf("applyCronMode: %v", err)
 	}
 	// cron.TimeToSchedule zero-pads both fields ("%02d %02d * * *"), so SCHEDULER_TIME=02:00
@@ -242,6 +256,12 @@ func TestApplyCronModeStillWritesTheCronLineWithoutAWrapper(t *testing.T) {
 
 // Fail-open: an unreadable crontab must be treated as "no wrapper" and keep today's append.
 // Being scheduled twice is recoverable; being unscheduled is silent data loss.
+//
+// The second half is the #298 follow-up. A ProxSave schedule under /etc is an INDEPENDENT
+// fact: it is read from files, not from `crontab -l`, so a failed crontab read is no
+// reason to stay quiet about it. It still does not gate the append - nothing does - which
+// is why this fail-open rule needed no splitting: the two facts are reported separately
+// because they are separately true, not weighed against each other.
 func TestApplyCronModeFallsBackToTheAppendWhenTheCrontabIsUnreadable(t *testing.T) {
 	cfg, configPath := cronModeFixture(t)
 
@@ -250,15 +270,155 @@ func TestApplyCronModeFallsBackToTheAppendWhenTheCrontabIsUnreadable(t *testing.
 		t.Error("the detector must not be consulted when the crontab could not be read")
 		return nil
 	}
+	systemCronConsulted := false
+	systemCronProxsaveRefsFn = func() []indirectCronRef {
+		systemCronConsulted = true
+		return nil
+	}
 	migrated := false
 	migrateLegacyCronEntriesFn = func(context.Context, string, string, *logging.BootstrapLogger, string) {
 		migrated = true
 	}
 
-	if err := applyCronMode(context.Background(), cfg, configPath, "/usr/local/bin/proxsave", nil, true); err != nil {
+	if _, err := applyCronMode(context.Background(), cfg, configPath, "/usr/local/bin/proxsave", nil, true); err != nil {
 		t.Fatalf("applyCronMode: %v", err)
 	}
 	if !migrated {
 		t.Fatal("an unreadable crontab must fall back to writing the cron line, never to leaving the host unscheduled")
 	}
+	if !systemCronConsulted {
+		t.Fatal("a failed `crontab -l` says nothing about /etc: the system-cron advisory must still run, or the host is told its revert restored the only schedule when a second one is sitting in /etc/cron.d")
+	}
+}
+
+// The decision this whole change turns on, stated as a test so it cannot be quietly
+// reversed: a ProxSave schedule found under /etc is REPORTED, never acted on. The revert
+// still writes its canonical cron line.
+//
+// Suppressing it instead - the symmetrical-looking move, since the root-crontab wrapper
+// branch does exactly that - was considered and rejected. The evidence is weaker there
+// (rules 1 to 3 answer "named after proxsave", not "runs a proxsave backup":
+// /opt/proxsave/script/prune.sh, a nightly "nice rsync -a /opt/proxsave/ ..." mirror and a
+// maintenance script with a COMMENTED-OUT proxsave call all match), and the cost of being
+// wrong is inverted. A false positive on the warn path costs a paragraph the operator can
+// ignore; on a write gate it costs the host every future backup, silently, because
+// ProxSave cannot edit /etc to repair it and no later run exists to re-check. F09-06
+// already ranks those: a double schedule is a recoverable annoyance, an unscheduled host
+// is silent data loss.
+func TestApplyCronModeStillWritesTheCronLineWhenSystemCronAlsoSchedulesIt(t *testing.T) {
+	cfg, configPath := cronModeFixture(t)
+
+	crontabReadLinesFn = func(context.Context) ([]string, error) { return nil, nil }
+	wrapperCronLinesFn = func([]string) []string { return nil }
+	systemCronProxsaveRefsFn = func() []indirectCronRef {
+		return []indirectCronRef{{
+			Line:    "17 02 * * * root /usr/local/sbin/proxsave-nas-guard",
+			Command: "/usr/local/sbin/proxsave-nas-guard",
+			Reason:  "its command \"proxsave-nas-guard\" is named after proxsave",
+			Source:  "/etc/cron.d/proxsave-guard",
+		}}
+	}
+	migrated := ""
+	migrateLegacyCronEntriesFn = func(_ context.Context, _, _ string, _ *logging.BootstrapLogger, schedule string) {
+		migrated = schedule
+	}
+	crontabWriteLinesFn = func(context.Context, []string) error {
+		t.Error("a /etc finding must not send the revert down the removal path: it is not a wrapper this host's crontab owns")
+		return nil
+	}
+
+	if _, err := applyCronMode(context.Background(), cfg, configPath, "/usr/local/bin/proxsave", nil, true); err != nil {
+		t.Fatalf("applyCronMode: %v", err)
+	}
+	if migrated != "00 02 * * *" {
+		t.Fatalf("a ProxSave schedule under /etc must NOT cancel the revert's own cron line (that would leave the host unscheduled if the finding was wrong or the entry is later deleted), got %q", migrated)
+	}
+}
+
+// The advisory is the only thing this whole path delivers, and until this test existed
+// nothing asserted it was ever PRINTED: replacing the emit loop in applyCronMode with
+// `_ = systemCronScheduleAdvisory(...)` left the suite green. A renderer that is unit
+// tested but never wired is indistinguishable from no feature at all.
+//
+// It asserts on the real console bytes rather than on a second call to the renderer,
+// because "the operator saw it" is the property that was missing, not "the string can be
+// produced". A BootstrapLogger writes its warnings to stderr, so stderr is the channel.
+func TestApplyCronModeEmitsTheSystemCronAdvisory(t *testing.T) {
+	cfg, configPath := cronModeFixture(t)
+
+	crontabReadLinesFn = func(context.Context) ([]string, error) { return nil, nil }
+	wrapperCronLinesFn = func([]string) []string { return nil }
+	migrateLegacyCronEntriesFn = func(context.Context, string, string, *logging.BootstrapLogger, string) {}
+	systemCronProxsaveRefsFn = func() []indirectCronRef {
+		return []indirectCronRef{{
+			Line:    "17 02 * * * root /usr/local/sbin/proxsave-nas-guard",
+			Command: "/usr/local/sbin/proxsave-nas-guard",
+			Reason:  "its command \"proxsave-nas-guard\" is named after proxsave",
+			Source:  "/etc/cron.d/proxsave-guard",
+		}}
+	}
+
+	seen := captureConsole(t, func() {
+		if _, err := applyCronMode(context.Background(), cfg, configPath, "/usr/local/bin/proxsave", logging.NewBootstrapLogger(), true); err != nil {
+			t.Fatalf("applyCronMode: %v", err)
+		}
+	})
+	for _, want := range []string{
+		"possible ProxSave cron line(s) under /etc",
+		"/etc/cron.d/proxsave-guard",
+		"/etc unchanged",
+	} {
+		if !strings.Contains(seen, want) {
+			t.Errorf("applyCronMode must emit the advisory line %q, got:\n%s", want, seen)
+		}
+	}
+}
+
+// The counterweight: an ordinary host must not be told anything about /etc.
+func TestApplyCronModeStaysSilentWithoutASystemCronFinding(t *testing.T) {
+	cfg, configPath := cronModeFixture(t)
+
+	crontabReadLinesFn = func(context.Context) ([]string, error) { return nil, nil }
+	wrapperCronLinesFn = func([]string) []string { return nil }
+	migrateLegacyCronEntriesFn = func(context.Context, string, string, *logging.BootstrapLogger, string) {}
+	systemCronProxsaveRefsFn = func() []indirectCronRef { return nil }
+
+	seen := captureConsole(t, func() {
+		if _, err := applyCronMode(context.Background(), cfg, configPath, "/usr/local/bin/proxsave", logging.NewBootstrapLogger(), true); err != nil {
+			t.Fatalf("applyCronMode: %v", err)
+		}
+	})
+	if strings.Contains(seen, "/etc") {
+		t.Errorf("a host with no system-cron finding must hear nothing about /etc, got:\n%s", seen)
+	}
+}
+
+// captureConsole runs fn with BOTH os.Stdout and os.Stderr replaced by one pipe and returns
+// everything written, in order. Both streams are captured because that is what an operator
+// sees: the daemon paths narrate status as bare text on stdout (bootstrap.Println) and put
+// only real faults on stderr (bootstrap.Warning), so a test that watched one stream would
+// silently stop seeing a message the day its level changed.
+//
+// The pipe is drained in a goroutine so a message larger than the pipe buffer cannot
+// deadlock the test, and the streams are restored before the read completes.
+func captureConsole(t *testing.T, fn func()) string {
+	t.Helper()
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	origOut, origErr := os.Stdout, os.Stderr
+	os.Stdout, os.Stderr = w, w
+	done := make(chan string, 1)
+	go func() {
+		var b strings.Builder
+		_, _ = io.Copy(&b, r)
+		done <- b.String()
+	}()
+	fn()
+	os.Stdout, os.Stderr = origOut, origErr
+	_ = w.Close()
+	out := <-done
+	_ = r.Close()
+	return out
 }

@@ -154,8 +154,16 @@ func TestApplyCronMode_PersistsCronModeBeforeTeardown(t *testing.T) {
 	// making its verdict depend on whatever the machine running the suite has scheduled.
 	// An empty crontab is the "no wrapper" case, i.e. the append path this test asserts.
 	origRead := crontabReadLinesFn
-	t.Cleanup(func() { crontabReadLinesFn = origRead })
+	origSystem := systemCronProxsaveRefsFn
+	t.Cleanup(func() {
+		crontabReadLinesFn = origRead
+		systemCronProxsaveRefsFn = origSystem
+	})
 	crontabReadLinesFn = func(context.Context) ([]string, error) { return nil, nil }
+	// Same reason, second habitat: applyCronMode also reports a ProxSave schedule found in
+	// /etc/crontab or /etc/cron.d, and systemCronPaths points at the REAL /etc. Unstubbed
+	// this test would read the developer's own system cron - and pass there anyway.
+	systemCronProxsaveRefsFn = func() []indirectCronRef { return nil }
 
 	dir := t.TempDir()
 	configPath := filepath.Join(dir, "backup.env")
@@ -164,7 +172,7 @@ func TestApplyCronMode_PersistsCronModeBeforeTeardown(t *testing.T) {
 	}
 	cfg := &config.Config{BaseDir: dir, SchedulerTime: "02:00"}
 
-	err := applyCronMode(context.Background(), cfg, configPath, "/usr/local/bin/proxsave", nil, false)
+	_, err := applyCronMode(context.Background(), cfg, configPath, "/usr/local/bin/proxsave", nil, false)
 	if err == nil {
 		t.Fatal("teardown failure must still be returned")
 	}
@@ -210,7 +218,7 @@ func TestApplyCronModeDefersWhileBackupRunning(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
 	defer cancel()
 
-	err := applyCronMode(ctx, cfg, configPath, "/usr/local/bin/proxsave", nil, true)
+	_, err := applyCronMode(ctx, cfg, configPath, "/usr/local/bin/proxsave", nil, true)
 	if !errors.Is(err, errDaemonTeardownBackupRunning) {
 		t.Fatalf("want errDaemonTeardownBackupRunning, got %v", err)
 	}
@@ -239,10 +247,16 @@ func TestApplyCronModeProceedsWhenIdle(t *testing.T) {
 	}
 	migrateLegacyCronEntriesFn = func(context.Context, string, string, *logging.BootstrapLogger, string) {}
 	// See TestApplyCronMode_PersistsCronModeBeforeTeardown: applyCronMode now reads the
-	// crontab (#298), and an unstubbed read would make this test depend on the host.
+	// crontab AND the system cron habitat (#298), and either left unstubbed would make this
+	// test depend on the host it runs on.
 	origRead := crontabReadLinesFn
-	t.Cleanup(func() { crontabReadLinesFn = origRead })
+	origSystem := systemCronProxsaveRefsFn
+	t.Cleanup(func() {
+		crontabReadLinesFn = origRead
+		systemCronProxsaveRefsFn = origSystem
+	})
 	crontabReadLinesFn = func(context.Context) ([]string, error) { return nil, nil }
+	systemCronProxsaveRefsFn = func() []indirectCronRef { return nil }
 
 	dir := t.TempDir()
 	configPath := filepath.Join(dir, "backup.env")
@@ -251,7 +265,7 @@ func TestApplyCronModeProceedsWhenIdle(t *testing.T) {
 	}
 	cfg := &config.Config{BaseDir: dir, SchedulerTime: "02:00"}
 
-	err := applyCronMode(context.Background(), cfg, configPath, "/usr/local/bin/proxsave", nil, true)
+	_, err := applyCronMode(context.Background(), cfg, configPath, "/usr/local/bin/proxsave", nil, true)
 	if err != nil {
 		t.Fatalf("idle host must proceed, got %v", err)
 	}
@@ -269,7 +283,7 @@ func TestApplyCronModeFailsClosedOnNilConfig(t *testing.T) {
 		return nil
 	}
 
-	err := applyCronMode(context.Background(), nil, "/nonexistent/backup.env", "/usr/local/bin/proxsave", nil, true)
+	_, err := applyCronMode(context.Background(), nil, "/nonexistent/backup.env", "/usr/local/bin/proxsave", nil, true)
 	if !errors.Is(err, errDaemonTeardownConfigUnreadable) {
 		t.Fatalf("nil config must fail closed, got %v", err)
 	}
@@ -330,12 +344,14 @@ func TestApplyCronModeRollsBackHealthcheckEnabled(t *testing.T) {
 	origMigrate := migrateLegacyCronEntriesFn
 	origRead := crontabReadLinesFn
 	origWrapper := wrapperCronLinesFn
+	origSystem := systemCronProxsaveRefsFn
 	t.Cleanup(func() {
 		restartVerifyBackupRunning = origRun
 		removeDaemonServiceFn = origRemove
 		migrateLegacyCronEntriesFn = origMigrate
 		crontabReadLinesFn = origRead
 		wrapperCronLinesFn = origWrapper
+		systemCronProxsaveRefsFn = origSystem
 	})
 	restartVerifyBackupRunning = func(string) bool { return false } // idle
 	removeDaemonServiceFn = func(context.Context, *logging.BootstrapLogger) error { return nil }
@@ -345,6 +361,7 @@ func TestApplyCronModeRollsBackHealthcheckEnabled(t *testing.T) {
 	// real `crontab -l` of the machine running the suite.
 	crontabReadLinesFn = func(context.Context) ([]string, error) { return nil, nil }
 	wrapperCronLinesFn = func([]string) []string { return nil }
+	systemCronProxsaveRefsFn = func() []indirectCronRef { return nil }
 
 	dir := t.TempDir()
 	configPath := filepath.Join(dir, "backup.env")
@@ -356,7 +373,7 @@ func TestApplyCronModeRollsBackHealthcheckEnabled(t *testing.T) {
 	}
 	cfg := &config.Config{BaseDir: dir, SchedulerTime: "02:00"}
 
-	if err := applyCronMode(context.Background(), cfg, configPath, "/usr/local/bin/proxsave", nil, true); err != nil {
+	if _, err := applyCronMode(context.Background(), cfg, configPath, "/usr/local/bin/proxsave", nil, true); err != nil {
 		t.Fatalf("applyCronMode: %v", err)
 	}
 

@@ -186,7 +186,25 @@ func disableHealthchecks(cfg *config.Config, logger *logging.Logger, reason stri
 func reportHealthchecksUnusable(cfg *config.Config, logger *logging.Logger, reason string) {
 	if cfg != nil && strings.EqualFold(strings.TrimSpace(cfg.SchedulerMode), "cron") {
 		logging.DebugStep(logger, "notifications init", "healthchecks inert on the cron engine: %s", reason)
-		logging.Skip("Healthchecks: disabled (cron mode: only the resident daemon transmits; %s)", reason)
+		// Two lines, like every other channel: the reason, then a bare "disabled". The reason
+		// used to be stuffed into the SKIP itself, which left this the one entry in the
+		// notification block reading "Healthchecks: disabled (cron mode: ...; daemon not
+		// installed)" while Email, Telegram, Gotify and Webhook all read "<channel>: disabled".
+		// Telegram sets the shape: "Telegram: 409 - Registration missing on the bot" followed by
+		// "Telegram: disabled".
+		//
+		// It WARNS, exactly like the daemon arm, and this arm exists only to add the engine to
+		// the reason. HEALTHCHECK_ENABLED=true is a statement that the operator wants
+		// monitoring; healthchecks cannot work without the resident daemon, so a cron host
+		// carrying that key is not in an expected state, it is in a state where the thing it
+		// asked for silently does nothing. That is worth the warning and the exit code it costs.
+		//
+		// It does not resurrect issue #298's exit-1 loop, because the two writers below it now
+		// clear the key on the hosts that never chose it: applyCronMode rolls it back on
+		// --daemon-remove and backfillHealthcheckOptOut repairs a host an older build left
+		// behind. What reaches this line is a host whose config still says true on purpose.
+		logging.Warning("Healthchecks: %s (cron mode: only the resident daemon transmits)", reason)
+		logging.Skip("Healthchecks: disabled")
 		cfg.HealthcheckEnabled = false
 		return
 	}
