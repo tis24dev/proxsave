@@ -505,7 +505,7 @@ func TestMaybeAutoMigrateDaemonReportsWhatTheRemovalDid(t *testing.T) {
 			def.SetOutput(&buf)
 			logging.SetDefaultLogger(def)
 
-			maybeAutoMigrateDaemon(context.Background(), configPath, dir, "/usr/local/bin/proxsave", schedulerModeOriginInjected, nil)
+			maybeAutoMigrateDaemon(context.Background(), configPath, dir, "/usr/local/bin/proxsave", &config.UpgradeResult{MissingKeys: []string{"SCHEDULER_MODE"}}, nil)
 			out := buf.String()
 
 			// The sentence on screen is the renderer's, not a literal of its own.

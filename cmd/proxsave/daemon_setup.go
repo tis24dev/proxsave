@@ -140,6 +140,36 @@ func runDaemonStatus(rt *appRuntime) int {
 	return types.ExitGenericError.Int()
 }
 
+// prepareCronHandoverForDaemon is the cron side of the switch to the daemon: adopt the run time
+// the host is actually using, delete the proxsave cron lines, and count what still schedules
+// ProxSave afterwards.
+//
+// It is a separate function because everything ELSE in applyDaemonMode shells out - systemctl,
+// the relay-secret provisioning, the alignment probe - so applyDaemonMode cannot be driven by a
+// test. These three steps only touch the crontab and backup.env, both of which have seams, and
+// each of them carries a guarantee that was pinned by nothing while it lived inline: the
+// ADOPTION could be deleted, the ORDER could be inverted, and the COUNT could be dropped, and
+// the suite stayed green through all three.
+//
+// The order is the guarantee that matters most. The proxsave cron line is the only record of
+// when a cron host actually runs its backup - SCHEDULER_TIME is a leftover nothing keeps in step
+// - so the adoption has to read it BEFORE the removal deletes it. Inverted, a host whose cron
+// line said 21:00 comes out of here running at whatever the key still held.
+func prepareCronHandoverForDaemon(ctx context.Context, configPath, execToken string, bootstrap *logging.BootstrapLogger) cronRemovalOutcome {
+	adoptSchedulerTimeForDaemon(ctx, configPath, bootstrap)
+	outcome, err := removeCanonicalCronEntry(ctx, cronCorrectPaths(execToken), bootstrap)
+	if err != nil {
+		logging.Warning("daemon: failed to remove the cron entry (possible double execution; the per-run lock mitigates): %v", err)
+	}
+	// #298: the removal above can only see cron lines whose COMMAND is named proxsave or
+	// proxmox-backup. A wrapper entry survives it silently, and the daemon being installed now
+	// shares the night with it. Say so - and only say so; the wrapper is hand-written, it can
+	// carry a mount guard, an flock and its own exit handling, and deleting it on a name
+	// heuristic destroys a safety net we did not write.
+	outcome.UnmanagedSchedules = warnIndirectProxsaveCronOnDaemonInstall(ctx, bootstrap)
+	return outcome
+}
+
 // applyDaemonMode switches an install to the resident daemon: install the systemd
 // unit, remove the canonical cron entry (no double execution), and record
 // SCHEDULER_MODE=daemon. The unit install is the critical
@@ -165,21 +195,7 @@ func applyDaemonMode(ctx context.Context, cfg *config.Config, configPath, execTo
 	if err := installDaemonService(ctx, execToken, configPath, bootstrap); err != nil {
 		return cronRemovalOutcome{}, err
 	}
-	// BEFORE the removal, because that cron line is the only record of when this host actually
-	// runs its backup. In cron mode the crontab IS the schedule and SCHEDULER_TIME is a
-	// leftover nothing keeps in step, so a host whose cron line was edited to 21:00 would come
-	// out of this function running at whatever the key still said.
-	adoptSchedulerTimeForDaemon(ctx, configPath, bootstrap)
-	cronOutcome, err := removeCanonicalCronEntry(ctx, cronCorrectPaths(execToken), bootstrap)
-	if err != nil {
-		logging.Warning("daemon: failed to remove the cron entry (possible double execution; the per-run lock mitigates): %v", err)
-	}
-	// #298: the removal above can only see cron lines whose COMMAND is named proxsave or
-	// proxmox-backup. A wrapper entry survives it silently, and the daemon we just installed
-	// now shares the night with it. Say so - and only say so; the wrapper is hand-written,
-	// it can carry a mount guard, an flock and its own exit handling, and deleting it on a
-	// name heuristic destroys a safety net we did not write.
-	cronOutcome.UnmanagedSchedules = warnIndirectProxsaveCronOnDaemonInstall(ctx, bootstrap)
+	cronOutcome := prepareCronHandoverForDaemon(ctx, configPath, execToken, bootstrap)
 	// HEALTHCHECK_ENABLED=true matches the fresh-install default so a retrofitted
 	// host also gets the dead-man switch out of the box (centralized resolves ping
 	// URLs at runtime and degrades gracefully when unpaired).
@@ -562,8 +578,14 @@ func applyCronMode(ctx context.Context, cfg *config.Config, configPath, execToke
 // has never recorded a scheduler engine. Best-effort so a migration failure never fails the
 // upgrade.
 //
-// The decision is the PRESENCE of SCHEDULER_MODE in backup.env, carried in by origin, and not
-// its value. A host that already had the key has chosen an engine and is left exactly as it
+// The decision is the PRESENCE of SCHEDULER_MODE in backup.env, read off the config merge's own
+// report, and not its value.
+//
+// The mapping is done HERE rather than at the call site on purpose. upgradeFinalizePhase is not
+// drivable by a test - it execs a binary and writes outside a temp dir - so anything decided
+// there is unpinned: a call site that passed a hardcoded origin would migrate every host and no
+// test would go red. What it passes now is the merge result itself, a value it already holds, so
+// the only mistake left there is a type error. A host that already had the key has chosen an engine and is left exactly as it
 // is: cron means cron, and no later upgrade revisits it. A host where this upgrade's merge had
 // to add the key has chosen nothing, and it is the only host retrofitted.
 //
@@ -573,7 +595,8 @@ func applyCronMode(ctx context.Context, cfg *config.Config, configPath, execToke
 // DAEMON_OPT_OUT, written by --daemon-remove purely so the next upgrade would not undo it.
 // Presence answers the same question without a key whose only job is to contradict another
 // one.
-func maybeAutoMigrateDaemon(ctx context.Context, configPath, baseDir, execToken string, origin schedulerModeOrigin, bootstrap *logging.BootstrapLogger) {
+func maybeAutoMigrateDaemon(ctx context.Context, configPath, baseDir, execToken string, upgradeResult *config.UpgradeResult, bootstrap *logging.BootstrapLogger) {
+	origin := schedulerModeOriginFromUpgrade(upgradeResult)
 	cfg, err := config.LoadConfigWithBaseDir(configPath, baseDir)
 	if err != nil {
 		logging.DebugStepBootstrap(bootstrap, "upgrade workflow", "daemon auto-migrate skipped: config load failed: %v", err)

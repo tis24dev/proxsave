@@ -309,7 +309,7 @@ func upgradeFinalizePhase(ctx context.Context, args *cli.Args, bootstrap *loggin
 	// binary being replaced, and any change to this rule takes effect one release later.
 	var daemonRestart *RestartVerifyResult
 	if upgradeErr == nil {
-		maybeAutoMigrateDaemon(ctx, args.ConfigPath, baseDir, execPath, schedulerModeOriginFromUpgrade(cfgUpgradeResult), bootstrap)
+		maybeAutoMigrateDaemon(ctx, args.ConfigPath, baseDir, execPath, cfgUpgradeResult, bootstrap)
 		// The new binary is on disk, but the resident daemon still runs the OLD one
 		// (systemd keeps the process alive across an in-place replace). Restart+verify
 		// it so the upgrade ends with the daemon aligned. This is automatic (no extra
