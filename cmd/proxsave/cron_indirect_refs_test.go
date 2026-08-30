@@ -261,6 +261,11 @@ func TestScriptProbeCommandPositionCategories(t *testing.T) {
 		{"sudo runs it", "#!/bin/sh\nsudo /usr/local/bin/proxsave --backup\n", true},
 		{"sudo only copies it", "#!/bin/sh\nsudo cp /usr/local/bin/proxsave /backup/proxsave.bak\n", false},
 		{"flock runs it", "#!/bin/sh\nflock -n /var/lock/ps.lock /usr/local/bin/proxsave --backup\n", true},
+		// flock's own documented form: options may follow the lock file too, and the command
+		// after them is still the command. Landing on "-c" answered false, so the wrapper went
+		// unseen.
+		{"flock with -c after the lock file", "#!/bin/sh\nflock -n /var/lock/ps.lock -c '/usr/local/bin/proxsave --backup'\n", true},
+		{"flock -c running something else", "#!/bin/sh\nflock -n /var/lock/x -c 'cp /usr/local/bin/proxsave /backup/'\n", false},
 		{"flock only prunes its log", "#!/bin/sh\nflock -n /var/lock/x find /var/log/proxsave.log -delete\n", false},
 		{"timeout runs it", "#!/bin/sh\ntimeout 3600 /usr/local/bin/proxsave --backup\n", true},
 		{"timeout only stats it", "#!/bin/sh\ntimeout 5 stat /usr/local/bin/proxsave\n", false},

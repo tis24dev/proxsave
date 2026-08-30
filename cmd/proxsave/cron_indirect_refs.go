@@ -678,6 +678,10 @@ func segmentRunsProxsave(words []string, vars map[string]string) bool {
 			if len(words) > 0 {
 				words = words[1:] // the lock file, the duration
 			}
+			// Options may follow the operand too: "flock [options] <file> -c <command>" is
+			// flock's own documented form. Without this second pass the command position lands
+			// on "-c", nothing matches, and the wrapper behind it goes unseen.
+			words = skipLauncherOptions(base, words)
 		case isIn(base, scriptShellLaunchers):
 			return shellLauncherRunsProxsave(base, words[1:], vars)
 		case isIn(base, scriptOpaqueLaunchers):
