@@ -1048,10 +1048,12 @@ journalctl -u proxsave-daemon.service -f      # follow its log
 proxsave --daemon-remove                       # revert to a cron entry
 ```
 
-`--daemon-remove` writes a cron line at `SCHEDULER_TIME` and records `SCHEDULER_MODE=cron`,
-which is what stops upgrades reinstalling the daemon: the key is present, so it is honoured. If the host already schedules ProxSave through an entry ProxSave
-does not own, that entry is left as the schedule and no second line is written, so the revert
-cannot leave you with two nightly backups. The daemon-only healthchecks are switched back off
+`--daemon-remove` always writes a cron line at `SCHEDULER_TIME` and records `SCHEDULER_MODE=cron`,
+which is what stops upgrades reinstalling the daemon: the key is present, so it is honoured. If the
+host also schedules ProxSave through an entry ProxSave does not own, that entry is reported and left
+alone, so such a host ends with two nightly backups and the run that loses the per-run lock exits
+`16`. Withholding the line instead would leave a misidentified host with nothing scheduled at all,
+silently, which is the worse of the two. The daemon-only healthchecks are switched back off
 with the daemon, so a reverted host does not warn about a service that is no longer installed.
 
 See [DAEMON.md](DAEMON.md) for the daemon itself and [HEALTHCHECKS.md](HEALTHCHECKS.md)
