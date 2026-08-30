@@ -190,7 +190,7 @@ func TestMaybeAutoMigrateDaemonRefusesIndirectCronEntry(t *testing.T) {
 	systemCronPaths = []string{filepath.Join(t.TempDir(), "absent")}
 
 	configPath := filepath.Join(t.TempDir(), "backup.env")
-	if err := os.WriteFile(configPath, []byte("SCHEDULER_MODE=cron\nDAEMON_OPT_OUT=false\n"), 0o600); err != nil {
+	if err := os.WriteFile(configPath, []byte("SCHEDULER_MODE=cron\n"), 0o600); err != nil {
 		t.Fatalf("seed config: %v", err)
 	}
 
@@ -216,8 +216,8 @@ func TestMaybeAutoMigrateDaemonRefusesIndirectCronEntry(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read back: %v", err)
 	}
-	if !strings.Contains(string(data), "SCHEDULER_MODE=cron") || strings.Contains(string(data), "DAEMON_OPT_OUT=true") {
-		t.Fatalf("a refusal must leave backup.env alone: no half migration, and no opt-out decided on the operator's behalf:\n%s", data)
+	if strings.TrimSpace(string(data)) != "SCHEDULER_MODE=cron" {
+		t.Fatalf("a refusal must leave backup.env byte-identical: no half migration:\n%s", data)
 	}
 
 	// Control 1: the same host WITHOUT the wrapper still migrates exactly as before.
@@ -872,7 +872,7 @@ func TestMaybeAutoMigrateDaemonRefusalUsesOneWarning(t *testing.T) {
 
 	dir := t.TempDir()
 	configPath := filepath.Join(dir, "backup.env")
-	if err := os.WriteFile(configPath, []byte("SCHEDULER_MODE=cron\nDAEMON_OPT_OUT=false\n"), 0o600); err != nil {
+	if err := os.WriteFile(configPath, []byte("SCHEDULER_MODE=cron\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 

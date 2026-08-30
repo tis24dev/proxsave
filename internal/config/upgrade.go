@@ -200,6 +200,12 @@ func computeConfigUpgrade(configPath string) (*UpgradeResult, string, []byte, er
 		"CHUNK_SIZE_MB":         {},
 		"CHUNK_THRESHOLD_MB":    {},
 		"BACKUP_USER_HOMES":     {},
+		// Retired with the SCHEDULER_MODE presence rule: --daemon-remove wrote it purely to
+		// contradict the SCHEDULER_MODE=cron it had just written, because the --upgrade
+		// retrofit read cron as "migrate me". The retrofit now decides on whether
+		// SCHEDULER_MODE was already in the file, so the mode alone carries the choice and
+		// nothing reads this key.
+		"DAEMON_OPT_OUT": {},
 	}
 	skipOriginalLines := make([]bool, len(originalLines))
 	prunedLineCount := 0

@@ -27,8 +27,8 @@ func TestSetBackupEnvKeysReplacesAndAppends(t *testing.T) {
 	}
 
 	if err := setBackupEnvKeys(cfgPath, map[string]string{
-		"SCHEDULER_MODE": "daemon", // existing -> replaced
-		"DAEMON_OPT_OUT": "true",   // missing  -> appended
+		"SCHEDULER_MODE":   "daemon", // existing -> replaced
+		"MAX_RUN_DURATION": "2h",     // missing  -> appended
 	}); err != nil {
 		t.Fatalf("setBackupEnvKeys: %v", err)
 	}
@@ -49,7 +49,7 @@ func TestSetBackupEnvKeysReplacesAndAppends(t *testing.T) {
 	if !strings.Contains(content, "# cron | daemon") {
 		t.Errorf("inline comment lost:\n%s", content)
 	}
-	if !strings.Contains(content, "DAEMON_OPT_OUT=true") {
+	if !strings.Contains(content, "MAX_RUN_DURATION=2h") {
 		t.Errorf("missing key not appended:\n%s", content)
 	}
 	// Untouched keys stay put.

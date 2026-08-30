@@ -477,7 +477,7 @@ func TestMaybeAutoMigrateDaemonReportsWhatTheRemovalDid(t *testing.T) {
 			}
 			dir := t.TempDir()
 			configPath := filepath.Join(dir, "backup.env")
-			if err := os.WriteFile(configPath, []byte("SCHEDULER_MODE=cron\nDAEMON_OPT_OUT=false\n"), 0o600); err != nil {
+			if err := os.WriteFile(configPath, []byte("SCHEDULER_MODE=cron\n"), 0o600); err != nil {
 				t.Fatal(err)
 			}
 

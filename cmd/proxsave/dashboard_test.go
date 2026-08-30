@@ -846,8 +846,8 @@ func TestDashboardSubScreenIdleTimeoutExits(t *testing.T) {
 // The menu row is decided by the scheduler mode alone. It used to consult a second key,
 // DAEMON_OPT_OUT, purely to tell "reverted from the daemon" apart from "never had it" and
 // label the same command "Re-enable" instead of "Install". Both rows ran ActionDaemonSetup and
-// the distinction was never one the operator could act on differently, so with the tombstone
-// gone the two states collapse into one rather than needing a replacement signal.
+// the distinction was never one the operator could act on differently, so with that key
+// retired the two states collapse into one rather than needing a replacement signal.
 func TestDashboardDaemonStateIsSchedulerModeOnly(t *testing.T) {
 	orig := daemonStatusLoadConfig
 	t.Cleanup(func() { daemonStatusLoadConfig = orig })
@@ -860,8 +860,7 @@ func TestDashboardDaemonStateIsSchedulerModeOnly(t *testing.T) {
 	}{
 		{"daemon", &config.Config{SchedulerMode: "daemon"}, nil, menu.DaemonStateActive},
 		{"cron", &config.Config{SchedulerMode: "cron"}, nil, menu.DaemonStateOnCron},
-		{"cron, and the retired tombstone is not consulted", &config.Config{SchedulerMode: "cron", DaemonOptOut: true}, nil, menu.DaemonStateOnCron},
-		{"daemon, and the retired tombstone is not consulted", &config.Config{SchedulerMode: "daemon", DaemonOptOut: true}, nil, menu.DaemonStateActive},
+		{"unrecognised mode falls back to cron, like the parser", &config.Config{SchedulerMode: ""}, nil, menu.DaemonStateOnCron},
 		{"config unreadable: only Status", nil, errors.New("nope"), menu.DaemonStateUnknown},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

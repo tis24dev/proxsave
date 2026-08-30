@@ -22,9 +22,6 @@ func TestParseSchedulerHealthcheckDefaults(t *testing.T) {
 	if c.MaxRunDuration != 1*time.Hour {
 		t.Errorf("MaxRunDuration = %s, want 1h", c.MaxRunDuration)
 	}
-	if c.DaemonOptOut {
-		t.Errorf("DaemonOptOut = true, want false")
-	}
 	if c.HealthcheckEnabled {
 		t.Errorf("HealthcheckEnabled = true, want false")
 	}
@@ -47,7 +44,6 @@ func TestParseSchedulerHealthcheckValues(t *testing.T) {
 		"SCHEDULER_MODE":                 "daemon",
 		"SCHEDULER_TIME":                 "03:30",
 		"MAX_RUN_DURATION":               "2h",
-		"DAEMON_OPT_OUT":                 "true",
 		"HEALTHCHECK_ENABLED":            "true",
 		"HEALTHCHECK_MODE":               "self",
 		"HEALTHCHECK_HEARTBEAT_INTERVAL": "30s",
@@ -70,9 +66,6 @@ func TestParseSchedulerHealthcheckValues(t *testing.T) {
 	}
 	if c.MaxRunDuration != 2*time.Hour {
 		t.Errorf("MaxRunDuration = %s, want 2h", c.MaxRunDuration)
-	}
-	if !c.DaemonOptOut {
-		t.Errorf("DaemonOptOut = false, want true")
 	}
 	if !c.HealthcheckEnabled {
 		t.Errorf("HealthcheckEnabled = false, want true")
@@ -156,7 +149,7 @@ func TestSchedulerHealthcheckNormalizeFallback(t *testing.T) {
 func TestRealTemplateContainsNewKeys(t *testing.T) {
 	tmpl := DefaultEnvTemplate()
 	for _, key := range []string{
-		"SCHEDULER_MODE=", "SCHEDULER_TIME=", "MAX_RUN_DURATION=", "DAEMON_OPT_OUT=",
+		"SCHEDULER_MODE=", "SCHEDULER_TIME=", "MAX_RUN_DURATION=",
 		"HEALTHCHECK_ENABLED=", "HEALTHCHECK_MODE=", "HEALTHCHECK_HEARTBEAT_INTERVAL=",
 		"HEALTHCHECK_SEND_LOG=", "HEALTHCHECK_ALIVE_URL=", "HEALTHCHECK_BACKUP_URL=",
 		"HEALTHCHECK_PING_ENDPOINT=", "HEALTHCHECK_PING_KEY=", "HEALTHCHECK_ALIVE_ID=",
@@ -178,16 +171,17 @@ LOG_PATH=/default/log
 SCHEDULER_MODE=cron
 SCHEDULER_TIME=02:00
 MAX_RUN_DURATION=6h
-DAEMON_OPT_OUT=false
 HEALTHCHECK_ENABLED=false
 HEALTHCHECK_MODE=centralized
 HEALTHCHECK_ALIVE_URL=
 `
 
-// TestUpgradePreservesDaemonOptOut is the retrofit-safety guarantee: a user who
-// ran --daemon-remove (DAEMON_OPT_OUT=true) must keep that value across every
-// future --upgrade, so the daemon is never silently reinstalled.
-func TestUpgradePreservesDaemonOptOut(t *testing.T) {
+// DAEMON_OPT_OUT is retired. It existed so --daemon-remove could contradict the SCHEDULER_MODE
+// it had just written, because the retrofit read cron as "migrate me"; the retrofit now decides
+// on whether SCHEDULER_MODE was already in the file, so the mode alone carries the choice.
+// The merge prunes the key like every other deprecated one rather than preserving it, so an
+// upgraded backup.env does not keep a setting nothing reads.
+func TestUpgradeRetiresDaemonOptOut(t *testing.T) {
 	withTemplate(t, schedMergeTemplate, func() {
 		tmpDir := t.TempDir()
 		configPath := filepath.Join(tmpDir, "backup.env")
@@ -203,19 +197,21 @@ func TestUpgradePreservesDaemonOptOut(t *testing.T) {
 		if !result.Changed {
 			t.Fatalf("expected Changed=true (new keys missing)")
 		}
-		// DAEMON_OPT_OUT was already present -> must NOT be counted as missing.
-		for _, k := range result.MissingKeys {
-			if k == "DAEMON_OPT_OUT" {
-				t.Fatalf("DAEMON_OPT_OUT wrongly treated as missing (would reset to false)")
-			}
-		}
 		data, err := os.ReadFile(configPath)
 		if err != nil {
 			t.Fatalf("read merged config: %v", err)
 		}
 		content := string(data)
-		if !strings.Contains(content, "DAEMON_OPT_OUT=true") {
-			t.Fatalf("merge clobbered the user's DAEMON_OPT_OUT=true:\n%s", content)
+		if strings.Contains(content, "DAEMON_OPT_OUT") {
+			t.Fatalf("the retired key must be pruned from the file:\n%s", content)
+		}
+		// Pruning is reported, like every other deprecated key, so the removal is not silent.
+		if !strings.Contains(strings.Join(result.Warnings, " "), "DAEMON_OPT_OUT") {
+			t.Fatalf("the removal must be reported in the warnings, got %v", result.Warnings)
+		}
+		// The operator's own settings are untouched by the prune.
+		if !strings.Contains(content, "BACKUP_PATH=/legacy") {
+			t.Fatalf("the prune ate an unrelated key:\n%s", content)
 		}
 		for _, k := range []string{"SCHEDULER_MODE=", "SCHEDULER_TIME=", "HEALTHCHECK_ENABLED="} {
 			if !strings.Contains(content, k) {
@@ -237,7 +233,6 @@ func assertSafeDaemonDefaults(t *testing.T, raw map[string]string) {
 	want := []struct{ key, val string }{
 		{"SCHEDULER_MODE", "cron"},       // upgraded host stays on cron
 		{"HEALTHCHECK_ENABLED", "false"}, // no pinging until explicitly enabled
-		{"DAEMON_OPT_OUT", "false"},      // a fresh upgrade is not a --daemon-remove tombstone
 		{"HEALTHCHECK_MODE", "centralized"},
 		{"HEALTHCHECK_PING_ENDPOINT", "https://hc-ping.com"},
 		// Empty by default: a non-empty default would make a host ping a stale or
@@ -281,8 +276,8 @@ func assertSafeDaemonDefaults(t *testing.T, raw map[string]string) {
 // PRESENCE, so a value typo (HEALTHCHECK_ENABLED=true, SCHEDULER_MODE=daemon, or a
 // non-empty ping URL) would land verbatim in every merged config undetected. This
 // asserts the raw INJECTED values and that they parse to safe semantics. (Scope is
-// the merge; the separate, DAEMON_OPT_OUT-gated retrofit auto-migration that a full
-// --upgrade may then run is not exercised here.)
+// the merge; the separate retrofit auto-migration that a full --upgrade may then run, gated on
+// whether this merge had to ADD SCHEDULER_MODE, is not exercised here.)
 func TestUpgradeRealTemplateKeepsExistingInstallSafe(t *testing.T) {
 	tmpDir := t.TempDir()
 	configPath := filepath.Join(tmpDir, "backup.env")
@@ -309,9 +304,9 @@ func TestUpgradeRealTemplateKeepsExistingInstallSafe(t *testing.T) {
 	c := &Config{raw: raw}
 	c.parseSchedulerSettings()
 	c.parseHealthcheckSettings()
-	if c.SchedulerMode != "cron" || c.HealthcheckEnabled || c.DaemonOptOut {
-		t.Errorf("merged config parses to an unsafe daemon state: mode=%q enabled=%v optout=%v",
-			c.SchedulerMode, c.HealthcheckEnabled, c.DaemonOptOut)
+	if c.SchedulerMode != "cron" || c.HealthcheckEnabled {
+		t.Errorf("merged config parses to an unsafe daemon state: mode=%q enabled=%v",
+			c.SchedulerMode, c.HealthcheckEnabled)
 	}
 	// The user's own value survives the real-template merge (not clobbered).
 	if raw["BACKUP_PATH"] != "/data/backup" {

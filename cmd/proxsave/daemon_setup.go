@@ -142,7 +142,7 @@ func runDaemonStatus(rt *appRuntime) int {
 
 // applyDaemonMode switches an install to the resident daemon: install the systemd
 // unit, remove the canonical cron entry (no double execution), and record
-// SCHEDULER_MODE=daemon / DAEMON_OPT_OUT=false. The unit install is the critical
+// SCHEDULER_MODE=daemon. The unit install is the critical
 // step; if it fails the install stays on cron and can be retried. Cron removal and
 // the config write are best-effort (warned, not fatal).
 //
@@ -477,8 +477,9 @@ func applyCronMode(ctx context.Context, cfg *config.Config, configPath, execToke
 	// proxsave backup", so an ordinary "*/5 * * * * /usr/local/bin/proxsave-metrics-exporter"
 	// takes this branch: the append was skipped AND the host's only real backup line was
 	// deleted, leaving it unscheduled at INFO level with exit 0, and nothing repairs that.
-	// DAEMON_OPT_OUT=true stops the upgrade re-check, --daemon-setup never writes a cron line,
-	// and migrateLegacyCronEntries is only reachable from a full reinstall.
+	// SCHEDULER_MODE=cron is on disk by then, so no later upgrade revisits the host,
+	// --daemon-setup never writes a cron line, and migrateLegacyCronEntries is only reachable
+	// from a full reinstall.
 	//
 	// Skipping the append alone cannot do that. Its worst case on a misidentification is the
 	// host keeping the proxsave line it already had, i.e. nothing changes; its worst case on a
@@ -624,7 +625,7 @@ func maybeAutoMigrateDaemon(ctx context.Context, configPath, baseDir, execToken 
 			logBootstrapInfo(bootstrap, "  - %s", line)
 		}
 		logBootstrapWarning(bootstrap, "Daemon would duplicate backups, REFUSED; the losing run exits %d (backup skipped). No changes; cron backups continue.", types.ExitBackupSkipped.Int())
-		logBootstrapInfo(bootstrap, "Remove/disable unwanted entries (%s), then run 'proxsave --daemon-setup'. Skip this check: DAEMON_OPT_OUT=true in %s.", cronRefEditHint(refs), configPath)
+		logBootstrapInfo(bootstrap, "Remove/disable unwanted entries (%s), then run 'proxsave --daemon-setup', which installs the daemon and reports what it found rather than refusing.", cronRefEditHint(refs))
 		return
 	}
 	logBootstrapInfo(bootstrap, "Migrating to the resident daemon scheduler (%s)...", daemonUnitName)
