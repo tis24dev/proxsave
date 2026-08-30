@@ -720,7 +720,7 @@ func TestWarnIndirectProxsaveCronOnDaemonInstallStatesFactsOnly(t *testing.T) {
 	}
 	// The WARNING has to stand alone: DEBUG_LEVEL=warning hides the two INFO lines, so it
 	// carries the count itself rather than leaning on a header the operator may not see.
-	warnLine := out[strings.Index(out, "WARNING"):]
+	warnLine := warningLine(t, out)
 	if !strings.Contains(warnLine, "1 unmanaged cron line(s)") {
 		t.Errorf("the WARNING must repeat the count so it survives DEBUG_LEVEL=warning, got %q", warnLine)
 	}
@@ -803,6 +803,24 @@ func TestNameRuleOnlyFiresWhenTheScriptCannotBeRead(t *testing.T) {
 // in the run's "WARNINGS/ERRORS DURING RUN (warnings=N)" recap, and that count is what an
 // operator scans. The findings and the way forward sit below at INFO.
 //
+// warningLine returns the ONE WARNING line from captured log output, without the lines that
+// follow it.
+//
+// Slicing from strings.Index(out, "WARNING") to the end of the buffer is not the same thing
+// and was the defect: it hands back the WARNING plus every INFO line printed after it, so an
+// assertion meant to prove the verdict stands alone under DEBUG_LEVEL=warning passes just as
+// happily when the words it looks for have moved down into a line that level hides.
+func warningLine(t *testing.T, out string) string {
+	t.Helper()
+	for _, line := range strings.Split(out, "\n") {
+		if strings.Contains(line, "WARNING") {
+			return line
+		}
+	}
+	t.Fatalf("no WARNING line in output: %q", out)
+	return ""
+}
+
 // The verdict line has to stand alone, because DEBUG_LEVEL=warning (internal/cli/args.go)
 // hides the INFO lines: it carries REFUSED, the consequence, and the fact that nothing
 // changed, so an operator reading only warnings still learns the migration did not happen.
@@ -839,7 +857,7 @@ func TestMaybeAutoMigrateDaemonRefusalUsesOneWarning(t *testing.T) {
 	if got := strings.Count(out, "WARNING"); got != 1 {
 		t.Errorf("want exactly one WARNING, got %d, out=%q", got, out)
 	}
-	warnLine := out[strings.Index(out, "WARNING"):]
+	warnLine := warningLine(t, out)
 	for _, want := range []string{"REFUSED", "duplicate backups", "No changes"} {
 		if !strings.Contains(warnLine, want) {
 			t.Errorf("the WARNING must carry %q so it survives DEBUG_LEVEL=warning, got %q", want, warnLine)
