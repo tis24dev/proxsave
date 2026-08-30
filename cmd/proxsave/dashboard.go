@@ -646,6 +646,14 @@ func runDashboardDaemonAdmin(ctx context.Context, session *shell.Session, instal
 		// it either - "no proxsave cron entry was present to remove" is exactly what a clean
 		// install says - so on a finding the screen states the duplication instead and the
 		// level goes yellow.
+		// An unverified removal already SAYS a proxsave entry may still be scheduled next to the
+		// daemon just installed. Under a green tick that reads as reassurance, so the level has
+		// to carry the same doubt the sentence does. The duplicate finding is stronger evidence
+		// and wins the keyword when both hold.
+		if !cronOutcome.Verified {
+			doneLevel = orchestrator.HealthcheckSetupLevelWarn
+			doneKeyword = "INSTALLED - CRON ENTRY NOT REMOVED"
+		}
 		if cronOutcome.UnmanagedSchedules > 0 {
 			doneLevel = orchestrator.HealthcheckSetupLevelWarn
 			doneKeyword = "INSTALLED - DUPLICATE SCHEDULE"

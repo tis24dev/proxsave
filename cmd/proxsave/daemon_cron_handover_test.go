@@ -112,8 +112,14 @@ func TestPrepareCronHandoverForDaemon(t *testing.T) {
 // created itself, on a host that had exactly one schedule before.
 //
 // Two guards, in the order the operator meets them: read the crontab ONCE up front so an
-// unreadable one is known before anything is written, and put the hour back when the removal did
-// not actually take the line away.
+// unreadable one is known before anything is written, and REPORT the surviving entry when the
+// removal did not take it away.
+//
+// The second used to put the hour back instead, and that was worse than doing nothing.
+// SCHEDULER_TIME is a template variable ProxSave owns, so a failed crontab write is no reason to
+// rewrite it, and where the variable had been absent the restore wrote the compiled default -
+// turning "never recorded" into "recorded as 02:00", which is the gate that stops any later
+// install or upgrade adopting the host's real run time from the line that is still there.
 func TestPrepareCronHandoverProtectsTheAdoptedTime(t *testing.T) {
 	seed := func(t *testing.T) string {
 		t.Helper()
@@ -172,6 +178,95 @@ func TestPrepareCronHandoverProtectsTheAdoptedTime(t *testing.T) {
 	//
 	// The adopted hour stays, and the operator is told the line is still there. That is the only
 	// thing that can actually fix it: ProxSave has just proved it cannot remove that line.
+	// The warning was gated on the ADOPTION, and an adoption only happens when the hour actually
+	// changes. On the host ProxSave installed itself - SCHEDULER_TIME already equal to the cron
+	// line's hour - nothing is adopted, so nothing was said, on exactly the host where the
+	// surviving line and the daemon are guaranteed to share the minute.
+	t.Run("nothing adopted because the hour already matched: still reported", func(t *testing.T) {
+		pinPaths(t)
+		configPath := seed(t) // SCHEDULER_TIME=02:00
+		origRead, origWrite := crontabReadLinesFn, crontabWriteLinesFn
+		t.Cleanup(func() { crontabReadLinesFn, crontabWriteLinesFn = origRead, origWrite })
+		crontabReadLinesFn = func(context.Context) ([]string, error) {
+			return []string{"0 2 * * * /usr/local/bin/proxsave --backup"}, nil
+		}
+		crontabWriteLinesFn = func(context.Context, []string) error {
+			return errors.New("crontab update failed: read-only file system")
+		}
+
+		origLog := logging.GetDefaultLogger()
+		t.Cleanup(func() { logging.SetDefaultLogger(origLog) })
+		var buf bytes.Buffer
+		def := logging.New(types.LogLevelDebug, false)
+		def.SetOutput(&buf)
+		logging.SetDefaultLogger(def)
+
+		prepareCronHandoverForDaemon(context.Background(), configPath, "/usr/local/bin/proxsave", nil)
+
+		if !strings.Contains(buf.String(), "Could not remove the legacy proxsave cron entry, it still runs at 02:00.") {
+			t.Errorf("the surviving entry must be reported whether or not an hour was adopted, out=%q", buf.String())
+		}
+	})
+
+	// And nothing to remove is nothing to report.
+	t.Run("no proxsave line at all: nothing is reported", func(t *testing.T) {
+		pinPaths(t)
+		configPath := seed(t)
+		origRead, origWrite := crontabReadLinesFn, crontabWriteLinesFn
+		t.Cleanup(func() { crontabReadLinesFn, crontabWriteLinesFn = origRead, origWrite })
+		crontabReadLinesFn = func(context.Context) ([]string, error) {
+			return []string{"0 6 * * * /usr/bin/rsync /a /b"}, nil
+		}
+		crontabWriteLinesFn = func(context.Context, []string) error {
+			return errors.New("crontab update failed: read-only file system")
+		}
+
+		origLog := logging.GetDefaultLogger()
+		t.Cleanup(func() { logging.SetDefaultLogger(origLog) })
+		var buf bytes.Buffer
+		def := logging.New(types.LogLevelDebug, false)
+		def.SetOutput(&buf)
+		logging.SetDefaultLogger(def)
+
+		prepareCronHandoverForDaemon(context.Background(), configPath, "/usr/local/bin/proxsave", nil)
+
+		if strings.Contains(buf.String(), "Could not remove") {
+			t.Errorf("there was no proxsave entry to remove, out=%q", buf.String())
+		}
+	})
+
+	// The variable was PRESENT and said something else. The adoption overwrote it, the removal
+	// failed, and the adopted hour still stays: only removing the line fixes anything, and
+	// rewriting ProxSave's own variable on a failed crontab write fixes nothing.
+	t.Run("removal fails with a recorded hour: the adopted one stays", func(t *testing.T) {
+		pinPaths(t)
+		configPath := seed(t) // SCHEDULER_TIME=02:00
+		origRead, origWrite := crontabReadLinesFn, crontabWriteLinesFn
+		t.Cleanup(func() { crontabReadLinesFn, crontabWriteLinesFn = origRead, origWrite })
+		crontabReadLinesFn = func(context.Context) ([]string, error) {
+			return []string{"0 21 * * * /usr/local/bin/proxsave --backup"}, nil
+		}
+		crontabWriteLinesFn = func(context.Context, []string) error {
+			return errors.New("crontab update failed: read-only file system")
+		}
+
+		origLog := logging.GetDefaultLogger()
+		t.Cleanup(func() { logging.SetDefaultLogger(origLog) })
+		var buf bytes.Buffer
+		def := logging.New(types.LogLevelDebug, false)
+		def.SetOutput(&buf)
+		logging.SetDefaultLogger(def)
+
+		prepareCronHandoverForDaemon(context.Background(), configPath, "/usr/local/bin/proxsave", nil)
+
+		if got := storedTime(t, configPath); got != "21:00" {
+			t.Errorf("SCHEDULER_TIME = %q, want the adopted 21:00 left alone", got)
+		}
+		if !strings.Contains(buf.String(), "Could not remove the legacy proxsave cron entry, it still runs at 21:00.") {
+			t.Errorf("the surviving entry must be reported, out=%q", buf.String())
+		}
+	})
+
 	t.Run("removal fails: the adopted hour stays and the line is reported", func(t *testing.T) {
 		pinPaths(t)
 		configPath := filepath.Join(t.TempDir(), "backup.env")

@@ -461,6 +461,9 @@ func TestScriptProbeRecognisesWhichMarkersAreReal(t *testing.T) {
 		// "<<" that opens nothing: the call below it must survive.
 		{"inside a comment", "#!/bin/sh\n# see docs/cron.md << section 3\n" + call, true},
 		{"inside an arithmetic expansion", "#!/bin/sh\nMAX=$(( 1 << 20 ))\n" + call, true},
+		// ...but an arithmetic expansion that CLOSED earlier on the line does not make the
+		// redirection after it any less real, and its body is still data.
+		{"after a closed arithmetic expansion", "#!/bin/sh\nN=$(( 1 + 2 )); cat <<EOF\n" + call + "EOF\n", false},
 		{"inside a double-quoted string", "#!/bin/sh\nlogger \"budget << 3 files\"\n" + call, true},
 		{"inside a single-quoted string", "#!/bin/sh\nlogger 'budget << 3 files'\n" + call, true},
 		{"a here-string is not a here-doc", "#!/bin/sh\ngrep proxsave <<< \"$LIST\"\n" + call, true},
@@ -542,7 +545,13 @@ func TestScriptProbeHandlesBundledShortOptions(t *testing.T) {
 		{"flock -nw", "#!/bin/sh\nflock -nw 30 /var/lock/x " + call, true},
 		{"xargs -rn", "#!/bin/sh\nls /etc | xargs -rn 1 " + call, true},
 
-		// The bundle carries its value inline: the next word is the command already.
+		// The bundle carries its value inline: the next word is the command already. getopt stops
+		// at the FIRST value-taking letter, and it consumes the next word only when that letter
+		// is the last of the bundle - so "-ubackup" is "-u backup" written as one word, and the
+		// command is right after it.
+		{"sudo -ubackup", "#!/bin/sh\nsudo -ubackup " + call, true},
+		{"sudo -gbackup", "#!/bin/sh\nsudo -gbackup " + call, true},
+		{"timeout -k30s", "#!/bin/sh\ntimeout -k30s 4h " + call, true},
 		{"ionice -c3", "#!/bin/sh\nionice -c3 " + call, true},
 		{"nice -19", "#!/bin/sh\nnice -19 " + call, true},
 		{"stdbuf -oL", "#!/bin/sh\nstdbuf -oL " + call, true},

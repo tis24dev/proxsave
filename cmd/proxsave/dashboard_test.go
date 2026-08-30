@@ -529,6 +529,16 @@ func TestDashboardDaemonInstallWarnsOnADuplicateSchedule(t *testing.T) {
 			wantText:    "The cron entry was removed.",
 		},
 		{
+			// An unverified removal already SAYS a proxsave entry may still be scheduled next to
+			// the daemon just installed. Saying that under a green tick is the contradiction: the
+			// level has to carry the same doubt the sentence does.
+			name:        "the crontab could not be checked: not a green tick",
+			outcome:     cronRemovalOutcome{},
+			wantLevel:   orchestrator.HealthcheckSetupLevelWarn,
+			wantKeyword: "INSTALLED - CRON ENTRY NOT REMOVED",
+			wantText:    "may still be scheduled alongside it",
+		},
+		{
 			name:        "an unmanaged schedule survives: warning",
 			outcome:     cronRemovalOutcome{Verified: true, UnmanagedSchedules: 1},
 			wantLevel:   orchestrator.HealthcheckSetupLevelWarn,

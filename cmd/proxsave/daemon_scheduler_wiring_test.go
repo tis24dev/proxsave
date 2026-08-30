@@ -106,23 +106,29 @@ func TestApplyDaemonModeStillHandsTheCronScheduleOver(t *testing.T) {
 
 	// The handover's RESULT is what carries the removal count and the duplicate count out of
 	// here. Calling it and dropping what it returns leaves every screen reporting zero.
-	handoverCall := (*ast.CallExpr)(nil)
+	//
+	// EVERY call is checked, not the last one the walk happens to reach. A second call site added
+	// beside the first would otherwise pass on the strength of whichever came last, which is the
+	// same defect this file already fixed for the provenance guard.
+	handoverCalls := []*ast.CallExpr{}
 	ast.Inspect(fn.Body, func(n ast.Node) bool {
 		if call, ok := n.(*ast.CallExpr); ok && gotypes.ExprString(call.Fun) == handover {
-			handoverCall = call
+			handoverCalls = append(handoverCalls, call)
 		}
 		return true
 	})
-	if handoverCall == nil {
+	if len(handoverCalls) == 0 {
 		t.Fatalf("daemon_setup.go: applyDaemonMode no longer calls %s at all", handover)
 	}
 	wantArgs := []string{"ctx", "configPath", "execToken", "bootstrap"}
-	if len(handoverCall.Args) != len(wantArgs) {
-		t.Fatalf("daemon_setup.go: %s is called with %d argument(s), want %d (%v)", handover, len(handoverCall.Args), len(wantArgs), wantArgs)
-	}
-	for i, want := range wantArgs {
-		if got := gotypes.ExprString(handoverCall.Args[i]); got != want {
-			t.Errorf("daemon_setup.go: %s arg %d = %q, want %q. A different config path or exec token here hands the schedule over for the wrong host", handover, i, got, want)
+	for c, handoverCall := range handoverCalls {
+		if len(handoverCall.Args) != len(wantArgs) {
+			t.Fatalf("daemon_setup.go: %s is called with %d argument(s) at call %d of %d, want %d (%v)", handover, len(handoverCall.Args), c+1, len(handoverCalls), len(wantArgs), wantArgs)
+		}
+		for i, want := range wantArgs {
+			if got := gotypes.ExprString(handoverCall.Args[i]); got != want {
+				t.Errorf("daemon_setup.go: %s arg %d = %q at call %d of %d, want %q. A different config path or exec token here hands the schedule over for the wrong host", handover, i, got, c+1, len(handoverCalls), want)
+			}
 		}
 	}
 	if !callResultIsAssigned(fn, handover) {
@@ -171,7 +177,12 @@ func statementIndexContainingCall(fn *ast.FuncDecl, callee string) int {
 }
 
 // callResultIsAssigned reports whether some statement of fn assigns the result of calling callee
-// to something, rather than calling it for its side effects alone.
+// to something USABLE, rather than calling it for its side effects alone.
+//
+// "_ = f()" is not that. It compiles, it is an *ast.AssignStmt, and it discards the result just
+// as completely as a bare call - which is exactly the change this assertion exists to catch, so
+// accepting it made the assertion prove nothing. At least one left-hand side has to be a name the
+// function can go on to use.
 func callResultIsAssigned(fn *ast.FuncDecl, callee string) bool {
 	assigned := false
 	ast.Inspect(fn.Body, func(n ast.Node) bool {
@@ -179,8 +190,14 @@ func callResultIsAssigned(fn *ast.FuncDecl, callee string) bool {
 		if !ok || len(assign.Rhs) != 1 {
 			return true
 		}
-		if call, ok := assign.Rhs[0].(*ast.CallExpr); ok && gotypes.ExprString(call.Fun) == callee {
-			assigned = true
+		call, ok := assign.Rhs[0].(*ast.CallExpr)
+		if !ok || gotypes.ExprString(call.Fun) != callee {
+			return true
+		}
+		for _, lhs := range assign.Lhs {
+			if ident, ok := lhs.(*ast.Ident); ok && ident.Name != "_" {
+				assigned = true
+			}
 		}
 		return true
 	})

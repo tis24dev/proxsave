@@ -487,6 +487,16 @@ func scriptCodeLines(lines []string) []string {
 	return out
 }
 
+// arithmeticOpenAt reports whether an arithmetic expansion is still OPEN at the end of the given
+// prefix, i.e. whether what follows it is a left shift rather than a redirection.
+//
+// Openness is what matters, not presence: an expansion that closed earlier on the line leaves the
+// "<<" after it a perfectly ordinary here-document, and treating it as a shift discarded that
+// document's body back into the code.
+func arithmeticOpenAt(prefix string) bool {
+	return strings.Count(prefix, "$((") > strings.Count(prefix, "))")
+}
+
 // quotesOpenAt reports whether an unclosed quote is still open at the end of the given prefix,
 // i.e. whether whatever follows it is inside a string. Escaped quotes do not count, and a quote
 // of one kind inside the other is ordinary text.
@@ -547,7 +557,7 @@ func hereDocDelimiter(line string) string {
 	// arithmetic expansion and nothing at all inside a string, and treating either as an opener
 	// discards every following line of the script.
 	before := line[:idx]
-	if strings.Contains(before, "$((") {
+	if arithmeticOpenAt(before) {
 		return ""
 	}
 	if quotesOpenAt(before) {
@@ -763,9 +773,18 @@ func launcherFlagTakesNextWord(word string, valueFlags map[string]struct{}) bool
 	if len(word) <= 2 || !strings.HasPrefix(word, "-") || strings.HasPrefix(word, "--") {
 		return false
 	}
+	// getopt walks the bundle left to right and stops at the FIRST letter that takes a value.
+	// That letter consumes the next word only when it is the LAST character: otherwise the rest
+	// of the bundle IS its value. "-Hu backup" and "-ubackup" are the same invocation written two
+	// ways, and looking only at the last letter got the second one backwards - "-ubackup" ends on
+	// "p", sudo's prompt flag, so the command that followed was eaten as a prompt.
 	runes := []rune(word)
-	_, ok := valueFlags["-"+string(runes[len(runes)-1])]
-	return ok
+	for i := 1; i < len(runes); i++ {
+		if _, ok := valueFlags["-"+string(runes[i])]; ok {
+			return i == len(runes)-1
+		}
+	}
+	return false
 }
 
 func isIn(word string, set map[string]struct{}) bool {
