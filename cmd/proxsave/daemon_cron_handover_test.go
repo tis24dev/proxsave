@@ -2,11 +2,16 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/tis24dev/proxsave/internal/logging"
+	"github.com/tis24dev/proxsave/internal/types"
 )
 
 // handoverFixture gives the helper a STATEFUL fake crontab: what the reader returns reflects
@@ -96,6 +101,129 @@ func TestPrepareCronHandoverForDaemon(t *testing.T) {
 		}
 		if !outcome.Verified {
 			t.Error("the crontab was read, so the outcome must be verified")
+		}
+	})
+}
+
+// The adoption writes SCHEDULER_TIME before the removal deletes the line that carries it, and
+// that order is right: the line is the only record of the hour. What was missing is what happens
+// when the removal then FAILS. The line survives at 21:00 and the daemon has just been pointed at
+// 21:00, so the two meet in the same minute every night and one exits 16 - a collision ProxSave
+// created itself, on a host that had exactly one schedule before.
+//
+// Two guards, in the order the operator meets them: read the crontab ONCE up front so an
+// unreadable one is known before anything is written, and put the hour back when the removal did
+// not actually take the line away.
+func TestPrepareCronHandoverProtectsTheAdoptedTime(t *testing.T) {
+	seed := func(t *testing.T) string {
+		t.Helper()
+		configPath := filepath.Join(t.TempDir(), "backup.env")
+		if err := os.WriteFile(configPath, []byte("BACKUP_PATH=/data\nSCHEDULER_TIME=02:00\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return configPath
+	}
+	pinPaths := func(t *testing.T) {
+		t.Helper()
+		orig := systemCronPaths
+		t.Cleanup(func() { systemCronPaths = orig })
+		systemCronPaths = []string{filepath.Join(t.TempDir(), "absent")}
+	}
+	storedTime := func(t *testing.T, configPath string) string {
+		t.Helper()
+		data, err := os.ReadFile(configPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, line := range strings.Split(string(data), "\n") {
+			if strings.HasPrefix(strings.TrimSpace(line), "SCHEDULER_TIME=") {
+				return strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(line), "SCHEDULER_TIME="))
+			}
+		}
+		return ""
+	}
+
+	t.Run("removal succeeds: the adopted hour stands", func(t *testing.T) {
+		pinPaths(t)
+		configPath := seed(t)
+		origRead, origWrite := crontabReadLinesFn, crontabWriteLinesFn
+		t.Cleanup(func() { crontabReadLinesFn, crontabWriteLinesFn = origRead, origWrite })
+		crontabReadLinesFn = func(context.Context) ([]string, error) {
+			return []string{"0 21 * * * /usr/local/bin/proxsave --backup"}, nil
+		}
+		crontabWriteLinesFn = func(context.Context, []string) error { return nil }
+
+		outcome := prepareCronHandoverForDaemon(context.Background(), configPath, "/usr/local/bin/proxsave", nil)
+
+		if got := storedTime(t, configPath); got != "21:00" {
+			t.Errorf("SCHEDULER_TIME = %q, want the adopted 21:00", got)
+		}
+		if outcome.Removed != 1 {
+			t.Errorf("the line must be removed, got %+v", outcome)
+		}
+	})
+
+	t.Run("removal fails: the hour is put back", func(t *testing.T) {
+		pinPaths(t)
+		configPath := seed(t)
+		origRead, origWrite := crontabReadLinesFn, crontabWriteLinesFn
+		t.Cleanup(func() { crontabReadLinesFn, crontabWriteLinesFn = origRead, origWrite })
+		crontabReadLinesFn = func(context.Context) ([]string, error) {
+			return []string{"0 21 * * * /usr/local/bin/proxsave --backup"}, nil
+		}
+		crontabWriteLinesFn = func(context.Context, []string) error {
+			return errors.New("crontab update failed: read-only file system")
+		}
+
+		outcome := prepareCronHandoverForDaemon(context.Background(), configPath, "/usr/local/bin/proxsave", nil)
+
+		// The 21:00 line is still live. Pointing the daemon at 21:00 as well is a collision
+		// ProxSave would have created on a host that had one schedule.
+		if got := storedTime(t, configPath); got != "02:00" {
+			t.Errorf("SCHEDULER_TIME = %q, want the previous 02:00 restored", got)
+		}
+		if outcome.Verified {
+			t.Errorf("a failed write may not be reported as verified, got %+v", outcome)
+		}
+	})
+
+	t.Run("the crontab cannot be read: one read, nothing written, and it is said", func(t *testing.T) {
+		pinPaths(t)
+		configPath := seed(t)
+		origRead, origWrite := crontabReadLinesFn, crontabWriteLinesFn
+		t.Cleanup(func() { crontabReadLinesFn, crontabWriteLinesFn = origRead, origWrite })
+		reads := 0
+		crontabReadLinesFn = func(context.Context) ([]string, error) {
+			reads++
+			return nil, errors.New(`exec: "crontab": executable file not found in $PATH`)
+		}
+		crontabWriteLinesFn = func(context.Context, []string) error {
+			t.Error("an unreadable crontab must not be written to")
+			return nil
+		}
+
+		orig := logging.GetDefaultLogger()
+		t.Cleanup(func() { logging.SetDefaultLogger(orig) })
+		var buf bytes.Buffer
+		def := logging.New(types.LogLevelDebug, false)
+		def.SetOutput(&buf)
+		logging.SetDefaultLogger(def)
+
+		outcome := prepareCronHandoverForDaemon(context.Background(), configPath, "/usr/local/bin/proxsave", nil)
+
+		if got := storedTime(t, configPath); got != "02:00" {
+			t.Errorf("SCHEDULER_TIME = %q, want it untouched", got)
+		}
+		if outcome.Verified {
+			t.Errorf("nothing could be read, so nothing is verified, got %+v", outcome)
+		}
+		// The point of reading up front is that the failure is known ONCE, before anything is
+		// written, instead of being met again by each step in turn.
+		if reads != 1 {
+			t.Errorf("the crontab must be read exactly once on this path, got %d reads", reads)
+		}
+		if !strings.Contains(buf.String(), "could not be read") {
+			t.Errorf("the operator must be told the crontab could not be read, out=%q", buf.String())
 		}
 	})
 }

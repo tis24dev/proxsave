@@ -3,7 +3,6 @@ package main
 
 import (
 	"bytes"
-	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -24,9 +23,6 @@ import (
 // install time, where the key and the crontab are two independent statements of intent. Here
 // they are not: the host is on cron, so the crontab is the one that has been in force.
 func TestAdoptSchedulerTimeForDaemon(t *testing.T) {
-	orig := crontabReadLinesFn
-	t.Cleanup(func() { crontabReadLinesFn = orig })
-
 	for _, tc := range []struct {
 		name     string
 		stored   string
@@ -85,7 +81,6 @@ func TestAdoptSchedulerTimeForDaemon(t *testing.T) {
 			if err := os.WriteFile(configPath, []byte("BACKUP_PATH=/data\n"+tc.stored), 0o600); err != nil {
 				t.Fatal(err)
 			}
-			crontabReadLinesFn = func(context.Context) ([]string, error) { return tc.lines, nil }
 
 			origLog := logging.GetDefaultLogger()
 			t.Cleanup(func() { logging.SetDefaultLogger(origLog) })
@@ -94,7 +89,7 @@ func TestAdoptSchedulerTimeForDaemon(t *testing.T) {
 			def.SetOutput(&buf)
 			logging.SetDefaultLogger(def)
 
-			adoptSchedulerTimeForDaemon(context.Background(), configPath, nil)
+			adoptSchedulerTimeForDaemon(configPath, tc.lines, nil)
 
 			data, err := os.ReadFile(configPath)
 			if err != nil {

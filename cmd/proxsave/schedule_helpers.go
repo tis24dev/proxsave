@@ -230,7 +230,9 @@ func schedulerTimeFromCronLines(lines []string) (string, bool) {
 // host: in cron mode the crontab IS the schedule and SCHEDULER_TIME is a leftover nothing keeps
 // in step, so an operator who edited the cron line moved the backup while the key stayed where
 // the installer left it. The daemon then reads the key, and the host would silently start
-// running at a different hour the moment it is retrofitted.
+// running at a different hour the moment it is retrofitted. It takes the crontab lines rather
+// than reading them itself, so the hour it adopts and the lines the removal acts on are the same
+// snapshot.
 //
 // It OVERWRITES, unlike the install-time seeding, which fills the key only when it is ABSENT
 // because "an explicit operator value is never overridden" (deriveSchedulerTimeFromCrontab).
@@ -246,31 +248,47 @@ func schedulerTimeFromCronLines(lines []string) (string, bool) {
 // The ROOT crontab only. A proxsave line under /etc is deliberately not read here: ProxSave
 // never edits /etc, so that line SURVIVES the switch, and adopting its time would schedule the
 // daemon in the exact minute it already occupies.
-func adoptSchedulerTimeForDaemon(ctx context.Context, configPath string, bootstrap *logging.BootstrapLogger) {
+// It returns the value it OVERWROTE, or "" when it wrote nothing. The caller needs that to put
+// the hour back when the removal it was written for does not go through: the line then survives
+// at its own hour with the daemon pointed at the same minute, a collision ProxSave would have
+// created on a host that had exactly one schedule.
+func adoptSchedulerTimeForDaemon(configPath string, lines []string, bootstrap *logging.BootstrapLogger) string {
 	configPath = strings.TrimSpace(configPath)
 	if configPath == "" {
-		return
-	}
-	lines, err := crontabReadLinesFn(ctx)
-	if err != nil {
-		return
+		return ""
 	}
 	hhmm, ok := schedulerTimeFromCronLines(lines)
 	if !ok {
-		return
+		return ""
 	}
 	data, err := safefs.ReadFileUnderRoot(configPath)
 	if err != nil {
-		return
+		return ""
 	}
-	if strings.TrimSpace(installer.DeriveInstallWizardPrefill(string(data)).SchedulerTime) == hhmm {
-		return
+	previous := strings.TrimSpace(installer.DeriveInstallWizardPrefill(string(data)).SchedulerTime)
+	if previous == hhmm {
+		return ""
 	}
 	if err := setBackupEnvKeys(configPath, map[string]string{"SCHEDULER_TIME": hhmm}); err != nil {
 		logging.DebugStepBootstrap(bootstrap, "daemon setup", "could not record the adopted run time: %v", err)
-		return
+		return ""
 	}
 	logBootstrapInfo(bootstrap, "SCHEDULER_TIME set to %s, the time of the proxsave cron entry this switch removes, so the daily run time does not change.", hhmm)
+	return previous
+}
+
+// restoreSchedulerTime undoes an adoption whose removal did not go through. An empty previous
+// value is left alone: the key was absent before, and writing an empty hour would be worse than
+// the adopted one.
+func restoreSchedulerTime(configPath, previous string, bootstrap *logging.BootstrapLogger) {
+	if strings.TrimSpace(previous) == "" {
+		return
+	}
+	if err := setBackupEnvKeys(configPath, map[string]string{"SCHEDULER_TIME": previous}); err != nil {
+		logging.DebugStepBootstrap(bootstrap, "daemon setup", "could not restore the previous run time: %v", err)
+		return
+	}
+	logBootstrapWarning(bootstrap, "The proxsave cron entry could not be removed, so SCHEDULER_TIME was put back to %s: leaving the adopted hour would schedule the daemon in the same minute as that entry.", previous)
 }
 
 // adoptCronRunTimeIntoBase is the ONE place both front-ends adopt the host's cron
