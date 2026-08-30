@@ -426,6 +426,12 @@ func TestApplyCronModeAdvisoryUsesOneWarning(t *testing.T) {
 	if !strings.Contains(warn, "/etc unchanged") {
 		t.Errorf("the WARNING must be the ownership line, got %q", warn)
 	}
+	// It has to stand alone: DEBUG_LEVEL=warning (internal/cli/args.go) hides the INFO lines
+	// above it, so the count has to be in this line or an operator reading only warnings never
+	// learns that anything was found at all.
+	if !strings.Contains(warn, "2 line(s) in /etc unchanged") {
+		t.Errorf("the WARNING must carry the count so it survives DEBUG_LEVEL=warning, got %q", warn)
+	}
 	// The findings are still printed, just below the verdict.
 	for _, want := range []string{
 		"2 possible ProxSave cron line(s) under /etc",

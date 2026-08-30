@@ -466,10 +466,16 @@ func cronRefEditHint(refs []indirectCronRef) string {
 // four times, and that count is what an operator scans. Same shape as the other two #298
 // blocks (warnIndirectProxsaveCronOnDaemonInstall, maybeAutoMigrateDaemon).
 //
-// It is a constant rather than the last element of a slice because the caller has to pick it
-// out by NAME to give it a different level; indexing the tail would put the whole block one
+// It repeats the COUNT for the same reason those two do: DEBUG_LEVEL can be set to "warning"
+// (internal/cli/args.go), which hides the findings above it. What is lost at that level is
+// which lines they were; what survives is that some exist and that ProxSave left them alone.
+//
+// It is a named function rather than the last element of a slice because the caller has to
+// pick it out to give it a different level; indexing the tail would put the whole block one
 // off-by-one away from warning about the wrong sentence.
-const systemCronOwnershipNote = "ProxSave owns the root crontab only and never edits files it did not place. /etc unchanged"
+func systemCronOwnershipNote(count int) string {
+	return fmt.Sprintf("ProxSave owns the root crontab only and never edits files it did not place, %d line(s) in /etc unchanged", count)
+}
 
 // systemCronScheduleFindings renders the findings alone: the header carrying the count, then
 // one item per entry. These are the INFO half of the block; systemCronOwnershipNote is the
@@ -491,7 +497,7 @@ func systemCronScheduleAdvisory(refs []indirectCronRef) []string {
 	if len(findings) == 0 {
 		return nil
 	}
-	return append(findings, systemCronOwnershipNote)
+	return append(findings, systemCronOwnershipNote(len(refs)))
 }
 
 // detectIndirectProxsaveCron reads every habitat that can schedule ProxSave without

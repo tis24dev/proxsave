@@ -565,7 +565,7 @@ func applyCronMode(ctx context.Context, cfg *config.Config, configPath, execToke
 		logBootstrapInfo(bootstrap, "%s", line)
 	}
 	if len(findings) > 0 {
-		logBootstrapWarning(bootstrap, "%s", systemCronOwnershipNote)
+		logBootstrapWarning(bootstrap, "%s", systemCronOwnershipNote(len(refs)))
 	}
 	return cronRevertReport{SystemCronAdvisory: systemCronScheduleAdvisory(refs)}, err
 }
