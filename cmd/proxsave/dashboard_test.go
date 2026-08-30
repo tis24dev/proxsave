@@ -803,11 +803,23 @@ func TestDashboardDaemonRevertShowsTheSystemCronAdvisory(t *testing.T) {
 	daemonStatusLoadConfig = func(string, string) (*config.Config, error) {
 		return &config.Config{SchedulerMode: "daemon"}, nil
 	}
+	// The stub hands back the advisory the PRODUCT builds, not a hand-written approximation of
+	// it. A fabricated sentence would pin the plumbing and nothing else: it would keep passing
+	// while the real wording drifted, and it would read to the next person as if the text on
+	// the screen were pinned here when no line of it ever came from the product. The wording
+	// itself is pinned where it is produced (cron_indirect_refs_test.go, daemon_cron_reporting_test.go);
+	// what this test owns is that every line of it reaches the only channel open on this path.
+	advisory := systemCronScheduleAdvisory([]indirectCronRef{{
+		Line:    "17 02 * * * root /usr/local/sbin/proxsave-nas-guard",
+		Command: "/usr/local/sbin/proxsave-nas-guard",
+		Source:  "/etc/cron.d/proxsave-guard",
+		Reason:  `command "proxsave-nas-guard" is named after proxsave and could not be read`,
+	}})
+	if len(advisory) == 0 {
+		t.Fatal("the advisory builder returned nothing: this test would then assert on an empty set")
+	}
 	daemonApplyCronMode = func(context.Context, *config.Config, string, string, *logging.BootstrapLogger, bool) (cronRevertReport, error) {
-		return cronRevertReport{SystemCronAdvisory: []string{
-			"Reverting to cron: 1 cron line(s) under /etc also appear to schedule ProxSave:",
-			"  - 17 02 * * * root /usr/local/sbin/proxsave-nas-guard  [/etc/cron.d/proxsave-guard]  (named after proxsave)",
-		}}, nil
+		return cronRevertReport{SystemCronAdvisory: advisory}, nil
 	}
 	shown := make(chan string, 1)
 	showDaemonResultScreenFn = func(_ context.Context, _ *shell.Session, _ string, _ orchestrator.HealthcheckSetupLevel, kw, explanation string) {
@@ -838,11 +850,13 @@ func TestDashboardDaemonRevertShowsTheSystemCronAdvisory(t *testing.T) {
 	if !strings.Contains(msg, "REVERTED TO CRON") {
 		t.Fatalf("the revert must still report success, got:\n%s", msg)
 	}
-	for _, want := range []string{
-		"Reverted to the cron scheduler", // the existing message is not replaced
-		"/etc/cron.d/proxsave-guard",     // and the advisory is carried with it
-		"under /etc also appear to schedule ProxSave",
-	} {
+	if !strings.Contains(msg, "Reverted to the cron scheduler") {
+		t.Errorf("the existing message must not be replaced, got:\n%s", msg)
+	}
+	// EVERY line, not just the first: the header carries the count, the item carries the cron
+	// line and the file it lives in, and the closing line says what ProxSave did not touch.
+	// Dropping any one of them leaves the operator a different fact.
+	for _, want := range advisory {
 		if !strings.Contains(msg, want) {
 			t.Errorf("the revert result screen must carry %q, got:\n%s", want, msg)
 		}
