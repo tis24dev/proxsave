@@ -388,23 +388,45 @@ func scriptProxsaveProbe(token string) (references bool, readable bool) {
 // a word that was not a runner ended the segment, which hid the command behind "if", "while"
 // and "!" - words that consume nothing at all.
 var (
-	// scriptCommandPrefixes consume exactly one word. The command position resumes immediately
-	// after them, so nothing between them and the command has to be skipped.
+	// scriptCommandPrefixes take NO options at all, so the command position resumes on the very
+	// next word. Membership means exactly that; anything that accepts a flag belongs below, or
+	// the command position lands on the flag. "command" is here on purpose: as a prefix,
+	// "command proxsave --backup" is a run and "command -v proxsave" is a query, which is the
+	// right answer to both.
 	scriptCommandPrefixes = map[string]struct{}{
 		"if": {}, "while": {}, "until": {}, "elif": {}, "then": {}, "else": {}, "do": {}, "!": {},
 		"{": {}, "}": {},
-		"exec": {}, "command": {}, "builtin": {}, "time": {},
-		"nohup": {}, "nice": {}, "ionice": {}, "setsid": {}, "stdbuf": {}, "eatmydata": {}, "chronic": {},
+		"exec": {}, "command": {}, "builtin": {},
 	}
 	// scriptCommandLaunchers take options of their own and then the command. Skipping the
-	// options (and any leading assignments, for env) puts us back in command position.
+	// options, their values, and any leading assignments puts us back in command position.
 	scriptCommandLaunchers = map[string]struct{}{
 		"sudo": {}, "doas": {}, "env": {}, "xargs": {},
+		"nice": {}, "ionice": {}, "setsid": {}, "stdbuf": {}, "nohup": {}, "eatmydata": {},
+		"chronic": {}, "time": {},
 	}
 	// scriptOperandLaunchers take options AND one operand of their own before the command:
 	// flock's lock file, timeout's duration.
 	scriptOperandLaunchers = map[string]struct{}{
 		"flock": {}, "timeout": {},
+	}
+	// launcherValueFlags names, per launcher, the SHORT and long options that consume the next
+	// word as their value. Without this the value is mistaken for the command - "flock -w 600
+	// /lock cmd" stopped on 600, took it for the lock file, and landed past the command - and the
+	// wrapper behind it goes unseen, which is issue #298 with no warning at all.
+	//
+	// Bundled forms ("-c3", "-n19", "-oL") and "--flag=value" are single words and need no entry:
+	// the option skip already drops them whole.
+	launcherValueFlags = map[string]map[string]struct{}{
+		"sudo":    {"-u": {}, "-g": {}, "-p": {}, "-C": {}, "-T": {}, "-h": {}, "-r": {}, "-U": {}, "--user": {}, "--group": {}, "--prompt": {}, "--host": {}},
+		"doas":    {"-u": {}, "-C": {}},
+		"env":     {"-u": {}, "-C": {}, "-S": {}, "--unset": {}, "--chdir": {}, "--split-string": {}},
+		"xargs":   {"-n": {}, "-L": {}, "-P": {}, "-I": {}, "-d": {}, "-s": {}, "-E": {}, "-a": {}},
+		"nice":    {"-n": {}, "--adjustment": {}},
+		"ionice":  {"-c": {}, "-n": {}, "-p": {}, "-P": {}, "-u": {}, "--class": {}, "--classdata": {}, "--pid": {}},
+		"stdbuf":  {"-i": {}, "-o": {}, "-e": {}, "--input": {}, "--output": {}, "--error": {}},
+		"flock":   {"-w": {}, "-E": {}, "--timeout": {}, "--conflict-exit-code": {}},
+		"timeout": {"-k": {}, "-s": {}, "--kill-after": {}, "--signal": {}},
 	}
 	// scriptShellLaunchers run a script passed as the argument to -c, which is a LINE and is
 	// evaluated as one.
@@ -435,7 +457,7 @@ var (
 func scriptCodeLines(lines []string) []string {
 	out := make([]string, 0, len(lines))
 	delimiter := ""
-	for _, line := range lines {
+	for _, line := range joinLineContinuations(lines) {
 		if delimiter != "" {
 			if strings.TrimSpace(line) == delimiter {
 				delimiter = ""
@@ -446,6 +468,32 @@ func scriptCodeLines(lines []string) []string {
 		if d := hereDocDelimiter(line); d != "" {
 			delimiter = d
 		}
+	}
+	return out
+}
+
+// joinLineContinuations glues a line ending in a backslash to the one after it, because that is
+// one command to the shell and has to be one command here.
+//
+// Read as two lines, the continuation starts at a command position it does not have, so a path
+// named as an ARGUMENT reads as a command: "rsync -a --delete \\" followed by "/opt/proxsave/
+// /mnt/nas/" was flagged as running the binary, which is the exact false positive the
+// command-position rule exists to prevent. It runs before the here-doc pass so a continued line
+// cannot hide the "<<" that opens a body.
+func joinLineContinuations(lines []string) []string {
+	out := make([]string, 0, len(lines))
+	pending := ""
+	for _, line := range lines {
+		joined := pending + line
+		if strings.HasSuffix(joined, "\\") && !strings.HasSuffix(joined, "\\\\") {
+			pending = strings.TrimSuffix(joined, "\\") + " "
+			continue
+		}
+		out = append(out, joined)
+		pending = ""
+	}
+	if pending != "" {
+		out = append(out, pending)
 	}
 	return out
 }
@@ -573,14 +621,14 @@ func segmentRunsProxsave(words []string, vars map[string]string) bool {
 		case isIn(base, scriptCommandPrefixes):
 			words = words[1:]
 		case isIn(base, scriptCommandLaunchers):
-			words = skipLauncherOptions(words[1:])
+			words = skipLauncherOptions(base, words[1:])
 		case isIn(base, scriptOperandLaunchers):
-			words = skipLauncherOptions(words[1:])
+			words = skipLauncherOptions(base, words[1:])
 			if len(words) > 0 {
 				words = words[1:] // the lock file, the duration
 			}
 		case isIn(base, scriptShellLaunchers):
-			return shellLauncherRunsProxsave(words[1:], vars)
+			return shellLauncherRunsProxsave(base, words[1:], vars)
 		case isIn(base, scriptOpaqueLaunchers):
 			for _, w := range words[1:] {
 				if scriptWordRunsProxsave(resolveScriptWord(w, vars)) {
@@ -600,7 +648,7 @@ func segmentRunsProxsave(words []string, vars map[string]string) bool {
 // shellLauncherRunsProxsave handles "sh -c '<script>'": the argument after -c is a line of its
 // own. Without a -c the shell is running a FILE, whose contents this probe cannot follow, so the
 // remaining words are treated as a command position rather than scanned.
-func shellLauncherRunsProxsave(words []string, vars map[string]string) bool {
+func shellLauncherRunsProxsave(launcher string, words []string, vars map[string]string) bool {
 	for i, w := range words {
 		if strings.Trim(w, "\"'") == "-c" {
 			if i+1 >= len(words) {
@@ -609,13 +657,31 @@ func shellLauncherRunsProxsave(words []string, vars map[string]string) bool {
 			return scriptLineRunsProxsave(strings.Trim(strings.Join(words[i+1:], " "), "\"'"), vars)
 		}
 	}
-	return segmentRunsProxsave(skipLauncherOptions(words), vars)
+	return segmentRunsProxsave(skipLauncherOptions(launcher, words), vars)
 }
 
-// skipLauncherOptions drops the option-shaped words a launcher consumes before its command.
-func skipLauncherOptions(words []string) []string {
-	for len(words) > 0 && strings.HasPrefix(strings.Trim(words[0], "\"'"), "-") {
+// skipLauncherOptions drops the option-shaped words a launcher consumes before its command,
+// INCLUDING the value word an option like "-u root" or "-w 600" takes with it.
+//
+// A bare "--" needs no case of its own: consumed as a value-less option, it leaves the command
+// position exactly where an explicit end-of-options branch would have, and no realistic line
+// distinguishes the two. An unknown flag is treated as boolean, which errs toward finding the
+// command one word early rather than one word late: a false positive costs a report, a false
+// negative costs #298.
+func skipLauncherOptions(launcher string, words []string) []string {
+	valueFlags := launcherValueFlags[launcher]
+	for len(words) > 0 {
+		word := strings.Trim(words[0], "\"'")
+		if !strings.HasPrefix(word, "-") || word == "-" {
+			return words
+		}
 		words = words[1:]
+		if strings.Contains(word, "=") {
+			continue // --flag=value carries its value in the same word
+		}
+		if _, takesValue := valueFlags[word]; takesValue && len(words) > 0 {
+			words = words[1:]
+		}
 	}
 	return words
 }

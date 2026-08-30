@@ -329,6 +329,104 @@ func TestScriptProbeSkipsHereDocumentBodies(t *testing.T) {
 	}
 }
 
+// An option that takes a VALUE hid the command behind it. skipLauncherOptions dropped words
+// starting with "-" and stopped at the first that did not, which for "flock -w 600 /lock cmd" is
+// the option's value 600: that got mistaken for the lock file, and the command position landed
+// past the command. The same shape hides a wrapper behind sudo -u, timeout -k, env -u, nice -n
+// and ionice -c.
+//
+// A miss here is not one lost advisory. scriptProxsaveProbe feeds the --upgrade refusal, the
+// duplicate count on a revert, the /etc scan and the run-time note, so an unseen wrapper means
+// an unattended upgrade installs the daemon next to a live backup: issue #298 exactly.
+func TestScriptProbeHandlesOptionsThatTakeAValue(t *testing.T) {
+	dir := t.TempDir()
+	flagged := func(t *testing.T, body string) bool {
+		t.Helper()
+		p := filepath.Join(dir, strings.ReplaceAll(t.Name(), "/", "_")+".sh")
+		if err := os.WriteFile(p, []byte(body), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		return len(indirectProxsaveCronRefs([]string{"0 2 * * * " + p}, cronProbeReadScripts)) > 0
+	}
+	const bin = "/usr/local/bin/proxsave --backup"
+
+	for _, tc := range []struct {
+		name string
+		body string
+		want bool
+	}{
+		// Launchers whose option takes a separate value word.
+		{"flock with a timeout", "#!/bin/sh\nflock -w 600 /var/lock/g.lock " + bin + "\n", true},
+		{"flock with a long timeout", "#!/bin/sh\nflock --timeout 600 /var/lock/g.lock " + bin + "\n", true},
+		{"sudo as a user", "#!/bin/sh\nsudo -u root " + bin + "\n", true},
+		{"sudo with an end-of-options marker", "#!/bin/sh\nsudo -u root -- " + bin + "\n", true},
+		{"timeout with a kill delay", "#!/bin/sh\ntimeout -k 5 3600 " + bin + "\n", true},
+		{"env unsetting a variable", "#!/bin/sh\nenv -u LANG " + bin + "\n", true},
+
+		// The eight that were classified as consuming nothing while they take options.
+		{"nice with a level", "#!/bin/sh\nnice -n 19 " + bin + "\n", true},
+		{"nice with a bundled level", "#!/bin/sh\nnice -19 " + bin + "\n", true},
+		{"ionice bundled", "#!/bin/sh\nionice -c3 " + bin + "\n", true},
+		{"ionice with separate values", "#!/bin/sh\nionice -c 3 -n 7 " + bin + "\n", true},
+		{"stdbuf line buffering", "#!/bin/sh\nstdbuf -oL " + bin + "\n", true},
+		{"setsid detached", "#!/bin/sh\nsetsid -f " + bin + "\n", true},
+		{"nohup", "#!/bin/sh\nnohup " + bin + "\n", true},
+		{"chronic", "#!/bin/sh\nchronic " + bin + "\n", true},
+		{"eatmydata", "#!/bin/sh\neatmydata " + bin + "\n", true},
+		{"time -p", "#!/bin/sh\ntime -p " + bin + "\n", true},
+
+		// The false positives these launchers must still not produce: the command position is
+		// past the options, not the whole rest of the line.
+		{"nice running something else", "#!/bin/sh\nnice -n 19 cp /usr/local/bin/proxsave /backup/\n", false},
+		{"flock running something else", "#!/bin/sh\nflock -w 60 /var/lock/x find /var/log/proxsave.log -delete\n", false},
+		{"sudo running something else", "#!/bin/sh\nsudo -u root cp /usr/local/bin/proxsave /backup/\n", false},
+
+		// command -v is a query, not a run, and must stay a query.
+		{"command runs it", "#!/bin/sh\ncommand " + bin + "\n", true},
+		{"command -v only asks where it is", "#!/bin/sh\ncommand -v proxsave >/dev/null\n", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := flagged(t, tc.body); got != tc.want {
+				t.Errorf("flagged = %v, want %v for:\n%s", got, tc.want, tc.body)
+			}
+		})
+	}
+}
+
+// A backslash at the end of a line joins it to the next one. Read as two lines, the second one
+// starts at a command position it does not have, so a path named as an ARGUMENT on the
+// continuation reads as a command: the rsync mirror the command-position rule exists to stop
+// flagging came straight back the moment it was written across two lines.
+func TestScriptProbeJoinsLineContinuations(t *testing.T) {
+	dir := t.TempDir()
+	flagged := func(t *testing.T, body string) bool {
+		t.Helper()
+		p := filepath.Join(dir, strings.ReplaceAll(t.Name(), "/", "_")+".sh")
+		if err := os.WriteFile(p, []byte(body), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		return len(indirectProxsaveCronRefs([]string{"0 2 * * * " + p}, cronProbeReadScripts)) > 0
+	}
+
+	for _, tc := range []struct {
+		name string
+		body string
+		want bool
+	}{
+		{"a mirror written across two lines", "#!/bin/sh\nrsync -a --delete \\\n  /opt/proxsave/ /mnt/nas/\n", false},
+		{"an argument list broken up", "#!/bin/sh\ncp \\\n  /usr/local/bin/proxsave \\\n  /backup/proxsave.bak\n", false},
+		// Joining must not lose a real call that happens to be continued.
+		{"a call written across two lines", "#!/bin/sh\n/usr/local/bin/proxsave \\\n  --backup\n", true},
+		{"a launcher and its command split", "#!/bin/sh\nflock -n /var/lock/x \\\n  /usr/local/bin/proxsave --backup\n", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := flagged(t, tc.body); got != tc.want {
+				t.Errorf("flagged = %v, want %v for:\n%s", got, tc.want, tc.body)
+			}
+		})
+	}
+}
+
 // #298 on the exact path that caused it: the unattended --upgrade retrofit must
 // REFUSE to install the daemon while a wrapper cron entry is live, and the refusal
 // must be a true no-op (host still on cron, backup.env untouched), never a half
