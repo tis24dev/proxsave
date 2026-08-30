@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	cron "github.com/tis24dev/proxsave/internal/cron"
 	"github.com/tis24dev/proxsave/internal/logging"
 	"github.com/tis24dev/proxsave/internal/types"
 )
@@ -163,6 +164,32 @@ func TestPrepareCronHandoverProtectsTheAdoptedTime(t *testing.T) {
 		}
 	})
 
+	// The key was ABSENT before the adoption, which is the host where the adoption changed the
+	// most: an absent key resolves to the compiled default, so putting the default back IS the
+	// faithful undo. Leaving the adopted hour there instead points the daemon at the minute the
+	// surviving cron line already occupies.
+	t.Run("removal fails and the key was absent: the default goes back", func(t *testing.T) {
+		pinPaths(t)
+		configPath := filepath.Join(t.TempDir(), "backup.env")
+		if err := os.WriteFile(configPath, []byte("BACKUP_PATH=/data\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		origRead, origWrite := crontabReadLinesFn, crontabWriteLinesFn
+		t.Cleanup(func() { crontabReadLinesFn, crontabWriteLinesFn = origRead, origWrite })
+		crontabReadLinesFn = func(context.Context) ([]string, error) {
+			return []string{"0 21 * * * /usr/local/bin/proxsave --backup"}, nil
+		}
+		crontabWriteLinesFn = func(context.Context, []string) error {
+			return errors.New("crontab update failed: read-only file system")
+		}
+
+		prepareCronHandoverForDaemon(context.Background(), configPath, "/usr/local/bin/proxsave", nil)
+
+		if got := storedTime(t, configPath); got != cron.DefaultTime {
+			t.Errorf("SCHEDULER_TIME = %q, want the %s default an absent key resolves to", got, cron.DefaultTime)
+		}
+	})
+
 	t.Run("removal fails: the hour is put back", func(t *testing.T) {
 		pinPaths(t)
 		configPath := seed(t)
@@ -217,10 +244,11 @@ func TestPrepareCronHandoverProtectsTheAdoptedTime(t *testing.T) {
 		if outcome.Verified {
 			t.Errorf("nothing could be read, so nothing is verified, got %+v", outcome)
 		}
-		// The point of reading up front is that the failure is known ONCE, before anything is
-		// written, instead of being met again by each step in turn.
+		// The point of the up-front read is the ORDER: the failure is known while the config is
+		// still untouched. On this path it is also the only read, because the guard returns
+		// before the steps that would read again.
 		if reads != 1 {
-			t.Errorf("the crontab must be read exactly once on this path, got %d reads", reads)
+			t.Errorf("an unreadable crontab must stop the handover at the first read, got %d reads", reads)
 		}
 		if !strings.Contains(buf.String(), "could not be read") {
 			t.Errorf("the operator must be told the crontab could not be read, out=%q", buf.String())

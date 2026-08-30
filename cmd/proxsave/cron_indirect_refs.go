@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"unicode"
 
 	"github.com/tis24dev/proxsave/internal/logging"
 	"github.com/tis24dev/proxsave/internal/safefs"
@@ -371,7 +372,7 @@ func scriptProxsaveProbe(token string) (references bool, readable bool) {
 	if err != nil || bytes.IndexByte(data, 0) >= 0 {
 		return false, false
 	}
-	lines := strings.Split(string(data), "\n")
+	lines := scriptCodeLines(strings.Split(string(data), "\n"))
 	vars := scriptProxsavePathVars(lines)
 	for _, line := range lines {
 		if scriptLineRunsProxsave(line, vars) {
@@ -419,6 +420,60 @@ var (
 		"su": {}, "runuser": {}, "systemd-run": {}, "systemd-cat": {},
 	}
 )
+
+// scriptCodeLines drops the here-document BODIES from a script, so what is left is the lines the
+// shell would execute.
+//
+// A here-doc body is data. A wrapper that prints usage text, writes a README or pipes a message
+// to mail can name the backup command inside one, and reading those lines as code turns a script
+// that DOCUMENTS ProxSave into a script that runs it - which makes an unattended --upgrade refuse
+// to migrate a host that has nothing scheduled at all.
+//
+// The delimiter is taken from "<<WORD", "<<-WORD" or a quoted form, and the body ends at the
+// first line that is exactly that word (trimmed, since "<<-" strips leading tabs). An
+// unterminated body runs to the end of the file, which is what the shell does with it too.
+func scriptCodeLines(lines []string) []string {
+	out := make([]string, 0, len(lines))
+	delimiter := ""
+	for _, line := range lines {
+		if delimiter != "" {
+			if strings.TrimSpace(line) == delimiter {
+				delimiter = ""
+			}
+			continue
+		}
+		out = append(out, line)
+		if d := hereDocDelimiter(line); d != "" {
+			delimiter = d
+		}
+	}
+	return out
+}
+
+// hereDocDelimiter returns the word that ends a here-document started on this line, or "".
+func hereDocDelimiter(line string) string {
+	idx := strings.Index(line, "<<")
+	if idx < 0 {
+		return ""
+	}
+	// "<<<" is a here-STRING: it carries its data inline and starts no body.
+	rest := line[idx+2:]
+	if strings.HasPrefix(rest, "<") {
+		return ""
+	}
+	rest = strings.TrimPrefix(rest, "-")
+	rest = strings.TrimLeft(rest, " \t")
+	word := strings.Trim(strings.Fields(rest + " ")[0], "\"'")
+	if word == "" {
+		return ""
+	}
+	for _, r := range word {
+		if !unicode.IsLetter(r) && !unicode.IsDigit(r) && r != '_' {
+			return ""
+		}
+	}
+	return word
+}
 
 // scriptProxsavePathVars collects NAME -> value for the assignments in a script whose value is a
 // proxsave path, so a later "$NAME" in command position can be resolved.

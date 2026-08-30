@@ -11,6 +11,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/tis24dev/proxsave/internal/cli"
 	"github.com/tis24dev/proxsave/internal/config"
 	"github.com/tis24dev/proxsave/internal/logging"
 	"github.com/tis24dev/proxsave/internal/types"
@@ -634,6 +635,84 @@ func TestApplyCronModeReportsWhetherTheCronLineExists(t *testing.T) {
 			t.Error("an unreadable crontab is not evidence of a schedule")
 		}
 	})
+}
+
+// The exit code of --daemon-remove is the only thing a script or a cron job sees. A revert that
+// could not write the cron entry leaves the host with no daemon and no schedule, so reporting
+// success there is the same defect as issue #298 in its most expensive form: the operator's
+// automation records a clean revert over a host that stopped backing up.
+//
+// runDaemonRemove is drivable: applyCronMode reaches the crontab and the unit only through seams.
+func TestRunDaemonRemoveExitCodeFollowsTheCronEntry(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		crontab   []string
+		wantCode  int
+		wantInLog string
+	}{
+		{
+			name:      "the cron entry is there afterwards: success",
+			crontab:   []string{"00 02 * * * /usr/local/bin/proxsave --backup"},
+			wantCode:  types.ExitSuccess.Int(),
+			wantInLog: "Daemon removed",
+		},
+		{
+			name:      "no cron entry afterwards: failure",
+			crontab:   []string{"0 6 * * * /usr/bin/rsync /a /b"},
+			wantCode:  types.ExitGenericError.Int(),
+			wantInLog: "Cron write failed.",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			origRun := restartVerifyBackupRunning
+			origRemove := removeDaemonServiceFn
+			origMigrate := migrateLegacyCronEntriesFn
+			origWrapper := wrapperCronLinesFn
+			origRead, origWrite := crontabReadLinesFn, crontabWriteLinesFn
+			origSystem := systemCronProxsaveRefsFn
+			t.Cleanup(func() {
+				restartVerifyBackupRunning = origRun
+				removeDaemonServiceFn = origRemove
+				migrateLegacyCronEntriesFn = origMigrate
+				wrapperCronLinesFn = origWrapper
+				crontabReadLinesFn, crontabWriteLinesFn = origRead, origWrite
+				systemCronProxsaveRefsFn = origSystem
+			})
+			restartVerifyBackupRunning = func(string) bool { return false }
+			removeDaemonServiceFn = func(context.Context, *logging.BootstrapLogger) error { return nil }
+			migrateLegacyCronEntriesFn = func(context.Context, string, string, *logging.BootstrapLogger, string) {}
+			wrapperCronLinesFn = func([]string) []string { return nil }
+			systemCronProxsaveRefsFn = func() []indirectCronRef { return nil }
+			crontabReadLinesFn = func(context.Context) ([]string, error) { return tc.crontab, nil }
+			crontabWriteLinesFn = func(context.Context, []string) error { return nil }
+
+			dir := t.TempDir()
+			configPath := filepath.Join(dir, "backup.env")
+			if err := os.WriteFile(configPath, []byte("SCHEDULER_MODE=daemon\nSCHEDULER_TIME=02:00\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+
+			origLog := logging.GetDefaultLogger()
+			t.Cleanup(func() { logging.SetDefaultLogger(origLog) })
+			var buf bytes.Buffer
+			def := logging.New(types.LogLevelDebug, false)
+			def.SetOutput(&buf)
+			logging.SetDefaultLogger(def)
+
+			code := runDaemonRemove(&appRuntime{
+				ctx:  context.Background(),
+				args: &cli.Args{ConfigPath: configPath},
+				cfg:  &config.Config{BaseDir: dir, SchedulerTime: "02:00"},
+			})
+
+			if code != tc.wantCode {
+				t.Errorf("exit code = %d, want %d, out=%q", code, tc.wantCode, buf.String())
+			}
+			if !strings.Contains(buf.String(), tc.wantInLog) {
+				t.Errorf("the operator must read %q, out=%q", tc.wantInLog, buf.String())
+			}
+		})
+	}
 }
 
 // The counterweight: an ordinary host must not be told anything about /etc.

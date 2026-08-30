@@ -193,18 +193,24 @@ func runDaemonStatus(rt *appRuntime) int {
 // - so the adoption has to read it BEFORE the removal deletes it. Inverted, a host whose cron
 // line said 21:00 comes out of here running at whatever the key still held.
 func prepareCronHandoverForDaemon(ctx context.Context, configPath, execToken string, bootstrap *logging.BootstrapLogger) cronRemovalOutcome {
-	// One read, up front. An unreadable crontab is then known BEFORE anything is written, rather
-	// than discovered by each step separately, and the hour the adoption takes comes from the
-	// same snapshot the removal is about to act on.
+	// One read BEFORE anything is written. An unreadable crontab is then known while the config
+	// is still untouched, instead of being met for the first time by a step that has already
+	// changed something.
 	//
-	// It is not a refusal. A host with no cron installed at all has nothing to hand over and must
-	// still get its daemon, so this returns an unverified outcome and the caller carries on.
+	// It is not the only read of the handover: removeCanonicalCronEntry reads again to compute
+	// what to keep, and the detector reads again to count what survives. What this one buys is
+	// the ORDER - the guard runs before the adoption writes - and the fact that the hour adopted
+	// comes from a snapshot taken before any of it.
+	//
+	// It is not a refusal either. A host with no cron installed at all has nothing to hand over
+	// and must still get its daemon, so this returns an unverified outcome and the caller
+	// carries on.
 	lines, err := crontabReadLinesFn(ctx)
 	if err != nil {
 		logging.Warning("daemon: the crontab could not be read, so no cron entry was inspected or removed: %v", err)
 		return cronRemovalOutcome{}
 	}
-	previousTime := adoptSchedulerTimeForDaemon(configPath, lines, bootstrap)
+	previousTime, adopted := adoptSchedulerTimeForDaemon(configPath, lines, bootstrap)
 	outcome, err := removeCanonicalCronEntry(ctx, cronCorrectPaths(execToken), bootstrap)
 	if err != nil {
 		logging.Warning("daemon: failed to remove the cron entry (possible double execution; the per-run lock mitigates): %v", err)
@@ -212,7 +218,7 @@ func prepareCronHandoverForDaemon(ctx context.Context, configPath, execToken str
 	// The adoption was written for a line that is about to go away. If it did not, the line is
 	// still live at that hour and the daemon has just been pointed at the same minute, so put the
 	// hour back.
-	if previousTime != "" && (err != nil || !outcome.Verified || outcome.Removed == 0) {
+	if adopted && (err != nil || !outcome.Verified || outcome.Removed == 0) {
 		restoreSchedulerTime(configPath, previousTime, bootstrap)
 	}
 	// #298: the removal above can only see cron lines whose COMMAND is named proxsave or

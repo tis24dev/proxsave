@@ -293,6 +293,42 @@ func TestScriptProbeCommandPositionCategories(t *testing.T) {
 	}
 }
 
+// A here-document body is DATA, not code. A wrapper that prints usage text, writes a README or
+// pipes a message to mail can name the backup command inside one, and reading those lines as
+// commands turns a script that documents ProxSave into a script that runs it: an unattended
+// --upgrade then refuses to migrate a host that has nothing scheduled at all.
+func TestScriptProbeSkipsHereDocumentBodies(t *testing.T) {
+	dir := t.TempDir()
+	flagged := func(t *testing.T, body string) bool {
+		t.Helper()
+		p := filepath.Join(dir, strings.ReplaceAll(t.Name(), "/", "_")+".sh")
+		if err := os.WriteFile(p, []byte(body), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		return len(indirectProxsaveCronRefs([]string{"0 2 * * * " + p}, cronProbeReadScripts)) > 0
+	}
+
+	for _, tc := range []struct {
+		name string
+		body string
+		want bool
+	}{
+		{"usage text naming the command", "#!/bin/sh\ncat <<EOF\nRun /usr/local/bin/proxsave --backup by hand if this fails.\nEOF\nexit 0\n", false},
+		{"quoted delimiter", "#!/bin/sh\ncat <<'EOF'\n/usr/local/bin/proxsave --backup\nEOF\n", false},
+		{"tab-stripping form", "#!/bin/sh\ncat <<-EOF\n\t/usr/local/bin/proxsave --backup\n\tEOF\n", false},
+		// The body ends at its delimiter: what comes after is code again.
+		{"a real call after the body", "#!/bin/sh\ncat <<EOF\ndocs mention /usr/local/bin/proxsave\nEOF\n/usr/local/bin/proxsave --backup\n", true},
+		// An unterminated here-doc runs to the end of file, which is what the shell does too.
+		{"unterminated body", "#!/bin/sh\ncat <<EOF\n/usr/local/bin/proxsave --backup\n", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := flagged(t, tc.body); got != tc.want {
+				t.Errorf("flagged = %v, want %v for:\n%s", got, tc.want, tc.body)
+			}
+		})
+	}
+}
+
 // #298 on the exact path that caused it: the unattended --upgrade retrofit must
 // REFUSE to install the daemon while a wrapper cron entry is live, and the refusal
 // must be a true no-op (host still on cron, backup.env untouched), never a half
