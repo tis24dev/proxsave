@@ -167,6 +167,61 @@ func TestIndirectProxsaveCronRefsContentProbe(t *testing.T) {
 	}
 }
 
+// The probe reads a script to answer "does this RUN the binary". It used to answer "does the
+// word appear anywhere", so any script that named a proxsave PATH matched: an rsync of the
+// install directory, a find over the log file, a test that the binary exists. That verdict
+// decides whether an --upgrade refuses to migrate and what a revert reports, so a script that
+// touches a proxsave path without ever executing it must not count.
+//
+// The rule is command POSITION: the reference has to be the command of some segment of the
+// line, allowing for a leading runner (sudo, flock, the shell list) and for leading
+// environment assignments, exactly as the crontab-line rule already allows.
+func TestContentProbeRequiresCommandPosition(t *testing.T) {
+	dir := t.TempDir()
+	write := func(name, body string) string {
+		t.Helper()
+		p := filepath.Join(dir, name)
+		if err := os.WriteFile(p, []byte(body), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	flagged := func(path string) bool {
+		return len(indirectProxsaveCronRefs([]string{"0 2 * * * " + path}, cronProbeReadScripts)) > 0
+	}
+
+	for _, tc := range []struct {
+		name string
+		body string
+		want bool
+	}{
+		// It really does run it.
+		{"direct call", "#!/bin/sh\n/usr/local/bin/proxsave --backup\n", true},
+		{"after a mount guard", "#!/bin/sh\nmountpoint -q /mnt/nas || exit 0\nexec /usr/local/bin/proxsave --backup\n", true},
+		{"behind a runner", "#!/bin/sh\nflock -n /var/lock/ps.lock /usr/local/bin/proxsave --backup\n", true},
+		{"after a separator", "#!/bin/sh\nsync && /usr/local/bin/proxsave --backup\n", true},
+		{"through a pipe segment", "#!/bin/sh\ncat /dev/null | /usr/local/bin/proxsave --backup\n", true},
+		{"with a leading env assignment", "#!/bin/sh\nTZ=UTC /usr/local/bin/proxsave --backup\n", true},
+		{"indented inside a block", "#!/bin/sh\nif true; then\n\t/usr/local/bin/proxsave --backup\nfi\n", true},
+
+		// It only names a path.
+		{"mirrors the install directory", "#!/bin/sh\nrsync -a /opt/proxsave/ /mnt/nas/proxsave-copy/\n", false},
+		{"prunes the log file", "#!/bin/sh\nfind /var/log/proxsave.log -mtime +7 -delete\n", false},
+		{"checks the binary exists", "#!/bin/sh\ntest -x /usr/local/bin/proxsave || echo missing\n", false},
+		{"copies the binary", "#!/bin/sh\ncp /usr/local/bin/proxsave /backup/proxsave.bak\n", false},
+		{"names it in a comment", "#!/bin/sh\n# /usr/local/bin/proxsave used to run here\ntrue\n", false},
+		// A commented-out command still contains shell operators, so the segment split alone
+		// would hand its tail back as a command position.
+		{"commented-out call with an operator", "#!/bin/sh\n# sync && /usr/local/bin/proxsave --backup\ntrue\n", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := flagged(write(strings.ReplaceAll(tc.name, " ", "-")+".sh", tc.body)); got != tc.want {
+				t.Errorf("flagged = %v, want %v for:\n%s", got, tc.want, tc.body)
+			}
+		})
+	}
+}
+
 // #298 on the exact path that caused it: the unattended --upgrade retrofit must
 // REFUSE to install the daemon while a wrapper cron entry is live, and the refusal
 // must be a true no-op (host still on cron, backup.env untouched), never a half

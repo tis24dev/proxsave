@@ -371,15 +371,102 @@ func scriptProxsaveProbe(token string) (references bool, readable bool) {
 	if err != nil || bytes.IndexByte(data, 0) >= 0 {
 		return false, false
 	}
-	for _, word := range shellWords(string(data)) {
-		if !strings.Contains(word, "/") {
-			continue
-		}
-		if commandTokenMatchesTarget(word) || basenameHasProxsaveComponent(word) {
+	for _, line := range strings.Split(string(data), "\n") {
+		if scriptLineRunsProxsave(line) {
 			return true, true
 		}
 	}
 	return false, true
+}
+
+// scriptLineRunsProxsave reports whether one line of a script puts the proxsave binary in
+// COMMAND position, i.e. actually runs it.
+//
+// The probe used to ask "does a proxsave path appear anywhere in this file", which made a
+// nightly "rsync -a /opt/proxsave/ /mnt/nas/" and a "find /var/log/proxsave.log -delete" read
+// as wrappers that call the binary. That verdict decides whether an unattended --upgrade
+// refuses to migrate and what a revert reports about the host, so naming a path had to stop
+// counting as running it.
+//
+// The parsing is deliberately shallow, because this is RECOGNITION and nothing here is ever
+// executed. A line is cut into segments at the shell operators that start a new command, each
+// segment's leading environment assignments are skipped, and the first remaining word is the
+// command. A known runner in that position (sudo, flock, sh -c, and the rest of
+// cronCommandRunners) hands the decision to the rest of the segment, which is the same
+// allowance cronRunnerNamesProxsave already makes for a crontab line.
+//
+// What it does not model: expansion. "$BIN --backup" with BIN set earlier is not recognised,
+// and neither is a path assembled at runtime. That is the same blind spot the whole detector
+// has, and the reason a missed wrapper is reported rather than acted on.
+func scriptLineRunsProxsave(line string) bool {
+	trimmed := strings.TrimSpace(line)
+	if trimmed == "" || strings.HasPrefix(trimmed, "#") {
+		return false
+	}
+	for _, segment := range splitShellSegments(trimmed) {
+		words := strings.Fields(segment)
+		for len(words) > 0 && looksLikeEnvAssignment(words[0]) {
+			words = words[1:]
+		}
+		if len(words) == 0 {
+			continue
+		}
+		head := strings.Trim(words[0], "\"'")
+		if scriptWordRunsProxsave(head) {
+			return true
+		}
+		// A runner hands the command position to whatever it is about to execute, but its own
+		// options and operands sit in between (flock's lock path, sh's -c). So once one is in
+		// command position, the rest of the segment counts - the same allowance
+		// cronRunnerNamesProxsave already makes for a crontab line.
+		if !isScriptCommandRunner(head) {
+			continue
+		}
+		for _, w := range words[1:] {
+			if scriptWordRunsProxsave(strings.Trim(w, "\"'")) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// scriptWordRunsProxsave reports whether one word names our binary. basenameHasProxsaveComponent
+// alone is not enough: it answers true for the bare word "proxsave", and a script is full of
+// bare words. Requiring a slash keeps it to something that is a PATH.
+func scriptWordRunsProxsave(word string) bool {
+	if commandTokenMatchesTarget(word) {
+		return true
+	}
+	return strings.Contains(word, "/") && basenameHasProxsaveComponent(word)
+}
+
+// isScriptCommandRunner extends cronCommandRunners with the shell builtins a script uses to
+// hand off execution. They cannot appear as a cron command - cron has no shell builtins - which
+// is why they live here and not in the shared set.
+func isScriptCommandRunner(word string) bool {
+	base := strings.ToLower(filepath.Base(word))
+	if _, ok := cronCommandRunners[base]; ok {
+		return true
+	}
+	switch base {
+	case "exec", "command", "builtin", "time", "then", "else", "do":
+		return true
+	}
+	return false
+}
+
+// splitShellSegments cuts a line at the operators that begin a new command, so each piece
+// starts at a command position. Redirections and arguments are left inside their segment: they
+// are exactly the places a path is NAMED rather than run.
+func splitShellSegments(line string) []string {
+	return strings.FieldsFunc(line, func(r rune) bool {
+		switch r {
+		case ';', '|', '&', '(', ')', '{', '}', '`':
+			return true
+		}
+		return false
+	})
 }
 
 // describeIndirectCronRefs renders one operator-facing item per finding: the cron line
