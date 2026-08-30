@@ -1178,6 +1178,62 @@ func TestDashboardDaemonRevertKeepsEveryFactOnTheUnscheduledScreen(t *testing.T)
 	}
 }
 
+// CronScheduled is an assertion about the ROOT crontab alone: canonicalCronLinePresent reads
+// crontabReadLinesFn and nothing else. So "nothing is scheduling the backup" is false on a host
+// whose proxsave entry lives under /etc, and that is exactly the host where ProxSave could not
+// write its own line and cannot remove the other one either - the screen said nothing was
+// scheduled and then listed, three lines below, the entry that schedules it.
+func TestDashboardDaemonRevertDoesNotDenyAScheduleItJustListed(t *testing.T) {
+	advisory := []string{
+		"Reverting to cron: 1 possible ProxSave cron line(s) under /etc:",
+		"  - 0 5 * * * root /usr/local/bin/proxsave --backup  [/etc/cron.d/proxsave]",
+		"ProxSave owns the root crontab only and never edits files it did not place, 1 line(s) in /etc unchanged",
+	}
+	installDashboardGates(t, true, true)
+	origCfg, origShow := daemonStatusLoadConfig, showDaemonResultScreenFn
+	t.Cleanup(func() { daemonStatusLoadConfig, showDaemonResultScreenFn = origCfg, origShow })
+	daemonStatusLoadConfig = func(string, string) (*config.Config, error) {
+		return &config.Config{SchedulerMode: "daemon"}, nil
+	}
+	daemonApplyCronMode = func(context.Context, *config.Config, string, string, *logging.BootstrapLogger) (cronRevertReport, error) {
+		return cronRevertReport{CronScheduled: false, ModeRecorded: true, SystemCronAdvisory: advisory}, nil
+	}
+	shown := make(chan string, 1)
+	showDaemonResultScreenFn = func(_ context.Context, _ *shell.Session, _ string, _ orchestrator.HealthcheckSetupLevel, kw, explanation string) {
+		shown <- kw + "\n" + explanation
+	}
+
+	driver := installDashboardSessionSeam(t)
+	res := driver.spawn(&cli.Args{})
+	driver.waitScreen("Dashboard")
+	driver.keys("down down down down down down down down down enter") // Disable daemon
+
+	var msg string
+	select {
+	case msg = <-shown:
+	case <-time.After(uitest.Deadline(60 * time.Second)):
+		t.Fatal("the revert never reached the result screen")
+	}
+	driver.waitScreen("Dashboard")
+	driver.keys("esc")
+	select {
+	case <-res:
+	case <-time.After(uitest.Deadline(60 * time.Second)):
+		t.Fatal("dashboard did not resolve")
+	}
+
+	if strings.Contains(msg, "nothing is scheduling the backup") {
+		t.Errorf("the screen may not deny a schedule it lists below, got:\n%s", msg)
+	}
+	// What IS certain, and what the operator has to act on.
+	if !strings.Contains(msg, "could NOT be written") {
+		t.Errorf("the screen must still state that the cron entry was not written, got:\n%s", msg)
+	}
+	if !strings.Contains(msg, advisory[1]) {
+		t.Errorf("the /etc finding must still be listed, got:\n%s", msg)
+	}
+}
+
 // The menu row is decided by the scheduler mode alone. It used to consult a second key,
 // DAEMON_OPT_OUT, purely to tell "reverted from the daemon" apart from "never had it" and
 // label the same command "Re-enable" instead of "Install". Both rows ran ActionDaemonSetup and

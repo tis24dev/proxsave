@@ -687,6 +687,14 @@ func runDashboardDaemonAdmin(ctx context.Context, session *shell.Session, instal
 			doneLevel = orchestrator.HealthcheckSetupLevelError
 			doneKeyword = "NO SCHEDULE"
 			doneMsg = "The daemon service was removed and the cron entry could NOT be written, so nothing is scheduling the backup."
+			// CronScheduled is an assertion about the ROOT crontab alone: canonicalCronLinePresent
+			// reads crontabReadLinesFn and nothing else. A host whose proxsave entry lives under
+			// /etc IS still scheduled, and it is the same host where ProxSave could neither write
+			// its own line nor touch the other one, so the screen would have denied a schedule it
+			// lists three lines below. State what is certain instead.
+			if len(revert.SystemCronAdvisory) > 0 {
+				doneMsg = "The daemon service was removed and the cron entry could NOT be written. What still schedules this host, if anything, is below."
+			}
 			if !revert.ModeRecorded {
 				doneMsg += " " + cronModeRecordClause(revert)
 			}
