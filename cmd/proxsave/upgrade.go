@@ -297,14 +297,19 @@ func upgradeFinalizePhase(ctx context.Context, args *cli.Args, bootstrap *loggin
 	repointLegacyCronEntries(ctx, bootstrap)
 	ensureGoSymlink(execPath, bootstrap)
 
-	// Auto-migrate cron installs to the resident daemon now that the new binary +
-	// config keys are in place. Honours the DAEMON_OPT_OUT tombstone so a manual
-	// --daemon-remove is never undone. Best-effort: a failure stays on cron and is
-	// only warned. (When staying on cron, the canonical /usr/local/bin/proxsave
-	// entry created at install keeps working across binary upgrades.)
+	// Install the resident daemon on a host that has never recorded a scheduler engine, now
+	// that the new binary + config keys are in place. The discriminator is whether the merge
+	// above had to ADD SCHEDULER_MODE, so a host that already recorded one - including one
+	// that recorded cron by running --daemon-remove - is never revisited. Best-effort: a
+	// failure stays on cron and is only warned. (When staying on cron, the canonical
+	// /usr/local/bin/proxsave entry created at install keeps working across binary upgrades.)
+	//
+	// cfgUpgradeResult comes from the NEW binary, run as a child (:280). This decision does
+	// not: runUpgrade never re-execs, so on the download path the code deciding here is the
+	// binary being replaced, and any change to this rule takes effect one release later.
 	var daemonRestart *RestartVerifyResult
 	if upgradeErr == nil {
-		maybeAutoMigrateDaemon(ctx, args.ConfigPath, baseDir, execPath, bootstrap)
+		maybeAutoMigrateDaemon(ctx, args.ConfigPath, baseDir, execPath, schedulerModeOriginFromUpgrade(cfgUpgradeResult), bootstrap)
 		// The new binary is on disk, but the resident daemon still runs the OLD one
 		// (systemd keeps the process alive across an in-place replace). Restart+verify
 		// it so the upgrade ends with the daemon aligned. This is automatic (no extra

@@ -611,10 +611,22 @@ func backfillHealthcheckOptOut(cfg *config.Config, configPath string, bootstrap 
 	logBootstrapInfo(bootstrap, "Monitoring is reported by the resident daemon only, and this host is on cron with the daemon opted out: HEALTHCHECK_ENABLED was true and is now set to false in %s.", configPath)
 }
 
-// maybeAutoMigrateDaemon is the --upgrade retrofit: if the install is still on
-// cron and the user has NOT opted out, migrate it to the daemon. Best-effort so a
-// migration failure never fails the upgrade.
-func maybeAutoMigrateDaemon(ctx context.Context, configPath, baseDir, execToken string, bootstrap *logging.BootstrapLogger) {
+// maybeAutoMigrateDaemon is the --upgrade retrofit: install the resident daemon on a host that
+// has never recorded a scheduler engine. Best-effort so a migration failure never fails the
+// upgrade.
+//
+// The decision is the PRESENCE of SCHEDULER_MODE in backup.env, carried in by origin, and not
+// its value. A host that already had the key has chosen an engine and is left exactly as it
+// is: cron means cron, and no later upgrade revisits it. A host where this upgrade's merge had
+// to add the key has chosen nothing, and it is the only host retrofitted.
+//
+// The value cannot carry that distinction. An absent key resolves to the template default
+// "cron" (internal/config/config.go:841), so once the merge has run "chose cron" and "never
+// chose" are the same bytes on disk. That is why this used to need a second key,
+// DAEMON_OPT_OUT, written by --daemon-remove purely so the next upgrade would not undo it.
+// Presence answers the same question without a key whose only job is to contradict another
+// one.
+func maybeAutoMigrateDaemon(ctx context.Context, configPath, baseDir, execToken string, origin schedulerModeOrigin, bootstrap *logging.BootstrapLogger) {
 	cfg, err := config.LoadConfigWithBaseDir(configPath, baseDir)
 	if err != nil {
 		logging.DebugStepBootstrap(bootstrap, "upgrade workflow", "daemon auto-migrate skipped: config load failed: %v", err)
@@ -624,11 +636,18 @@ func maybeAutoMigrateDaemon(ctx context.Context, configPath, baseDir, execToken 
 		logging.DebugStepBootstrap(bootstrap, "upgrade workflow", "daemon already active; no migration")
 		return
 	}
-	if cfg.DaemonOptOut {
-		logBootstrapInfo(bootstrap, "Daemon mode was previously removed (--daemon-remove); leaving the cron scheduler in place.")
-		backfillHealthcheckOptOut(cfg, configPath, bootstrap)
+	// Neither branch below is a WARNING. Honouring a recorded engine is the normal outcome,
+	// and an unavailable merge result has already produced its own warning at the point the
+	// merge failed (cmd/proxsave/upgrade.go:282).
+	switch origin {
+	case schedulerModeOriginConfigured:
+		logBootstrapInfo(bootstrap, "SCHEDULER_MODE=%s is set in %s: the scheduler engine is left as configured and the daemon is not installed.", cfg.SchedulerMode, configPath)
+		return
+	case schedulerModeOriginUnknown:
+		logBootstrapInfo(bootstrap, "The configuration merge reported no result, so whether %s already set SCHEDULER_MODE is not established: the scheduler engine is left unchanged and the daemon is not installed.", configPath)
 		return
 	}
+	logBootstrapInfo(bootstrap, "SCHEDULER_MODE was absent from %s until this upgrade added it: this host has never recorded a scheduler engine.", configPath)
 	// #298: the crontab may still run ProxSave through a command the canonical matcher
 	// cannot see (an operator wrapper, a shell -c, a runner like flock). Installing the
 	// daemon on top of one gives two backups a night with no message at all, which is

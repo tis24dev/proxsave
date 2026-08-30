@@ -200,7 +200,7 @@ func TestMaybeAutoMigrateDaemonRefusesIndirectCronEntry(t *testing.T) {
 		return cronRemovalOutcome{Verified: true}, nil
 	}
 	migrate := func() {
-		maybeAutoMigrateDaemon(context.Background(), configPath, "/opt/proxsave", "/usr/local/bin/proxsave", nil)
+		maybeAutoMigrateDaemon(context.Background(), configPath, "/opt/proxsave", "/usr/local/bin/proxsave", schedulerModeOriginInjected, nil)
 	}
 
 	// The reported crontab: a wrapper the canonical matcher cannot see.
@@ -883,7 +883,7 @@ func TestMaybeAutoMigrateDaemonRefusalUsesOneWarning(t *testing.T) {
 	def.SetOutput(&buf)
 	logging.SetDefaultLogger(def)
 
-	maybeAutoMigrateDaemon(context.Background(), configPath, dir, "/usr/local/bin/proxsave", nil)
+	maybeAutoMigrateDaemon(context.Background(), configPath, dir, "/usr/local/bin/proxsave", schedulerModeOriginInjected, nil)
 	out := buf.String()
 
 	if got := strings.Count(out, "WARNING"); got != 1 {
