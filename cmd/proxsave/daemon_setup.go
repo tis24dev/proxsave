@@ -582,15 +582,19 @@ func applyCronMode(ctx context.Context, cfg *config.Config, configPath, execToke
 // on: the four hosts in the report already carry the stale value and would keep carrying it
 // forever, because nothing they run ever writes that key again.
 //
-// The gate is deliberately the exact three-key shape that ONLY the broken transition can
-// produce, never a two-key guess: cron engine, plus the --daemon-remove tombstone proving
-// this host really did go daemon and come back, plus the key still true. A cron host that
-// never touched the daemon has DAEMON_OPT_OUT=false and is not eligible, so an operator who
-// deliberately enabled the key on a plain cron install is never touched. The residual case
-// this does clobber is an operator who ran --daemon-remove and then re-enabled the key on
-// purpose. That key is NOT inert on cron: initializeHealthcheckSection warns on it and the
-// warning costs the run exit 1, so for that operator this write removes something they chose
-// rather than tidying a leftover.
+// The gate is three keys, never a two-key guess: cron engine, plus the DAEMON_OPT_OUT
+// tombstone, plus the key still true. A cron host that never touched the daemon has
+// DAEMON_OPT_OUT=false and is not eligible, so an operator who deliberately enabled the key
+// on a plain cron install is never touched.
+//
+// What those three keys do NOT establish is that --daemon-remove is what wrote them, which is
+// why the message says what was read and not what it thinks happened. The refusal block on
+// this very path tells the operator to set DAEMON_OPT_OUT=true by hand to skip the wrapper
+// check (maybeAutoMigrateDaemon), so a host can carry the whole shape without ever having run
+// a revert. That operator, and the one who ran --daemon-remove and then re-enabled the key on
+// purpose, both get clobbered here. The key is NOT inert on cron either:
+// initializeHealthcheckSection warns on it and the warning costs the run exit 1, so for them
+// this write removes something they chose rather than tidying a leftover.
 //
 // Best-effort and silent-on-failure like every other write on this path: a --upgrade must
 // never fail because a repair could not be applied. A host where it does not land simply
@@ -604,7 +608,7 @@ func backfillHealthcheckOptOut(cfg *config.Config, configPath string, bootstrap 
 		return
 	}
 	cfg.HealthcheckEnabled = false
-	logBootstrapInfo(bootstrap, "Monitoring is reported by the resident daemon only, and this host reverted to cron: HEALTHCHECK_ENABLED was left at true by that revert and is now set to false in %s.", configPath)
+	logBootstrapInfo(bootstrap, "Monitoring is reported by the resident daemon only, and this host is on cron with the daemon opted out: HEALTHCHECK_ENABLED was true and is now set to false in %s.", configPath)
 }
 
 // maybeAutoMigrateDaemon is the --upgrade retrofit: if the install is still on

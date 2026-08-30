@@ -2,6 +2,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"os"
@@ -398,6 +399,40 @@ func TestApplyCronModeRollsBackHealthcheckEnabled(t *testing.T) {
 	// annotation would be a silent edit of their file.
 	if !strings.Contains(content, "# report service-alive heartbeat") {
 		t.Errorf("inline comment lost by the rollback:\n%s", content)
+	}
+}
+
+// The gate is three keys read off disk, and DAEMON_OPT_OUT=true is NOT proof that
+// --daemon-remove wrote them. The refusal block on this very path tells the operator to set
+// that key by hand to skip the wrapper check (maybeAutoMigrateDaemon), so a host that took
+// that route never reverted anything. The message explaining why their key just changed may
+// therefore not assert a revert: that is the one part of it nothing here can check.
+func TestBackfillHealthcheckOptOutClaimsNoRevert(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "backup.env")
+	if err := os.WriteFile(configPath, []byte("SCHEDULER_MODE=cron\nHEALTHCHECK_ENABLED=true\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	orig := logging.GetDefaultLogger()
+	t.Cleanup(func() { logging.SetDefaultLogger(orig) })
+	var buf bytes.Buffer
+	def := logging.New(types.LogLevelDebug, false)
+	def.SetOutput(&buf)
+	logging.SetDefaultLogger(def)
+
+	backfillHealthcheckOptOut(&config.Config{SchedulerMode: "cron", DaemonOptOut: true, HealthcheckEnabled: true}, configPath, nil)
+	out := buf.String()
+
+	for _, forbidden := range []string{"reverted", "revert", "--daemon-remove"} {
+		if strings.Contains(out, forbidden) {
+			t.Errorf("the message must not claim a revert it cannot check (%q), out=%q", forbidden, out)
+		}
+	}
+	// What it may say, and still has to: the three facts it read and the write it made.
+	for _, want := range []string{"HEALTHCHECK_ENABLED", "false", configPath} {
+		if !strings.Contains(out, want) {
+			t.Errorf("the message must still state %q, out=%q", want, out)
+		}
 	}
 }
 
