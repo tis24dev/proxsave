@@ -1005,6 +1005,16 @@ func TestDashboardDaemonRevertWarnsOnADuplicateSchedule(t *testing.T) {
 			wantText:    "Check your crons to remove duplication.",
 		},
 		{
+			// Same fact, other habitat. The CLI already warns on both through
+			// logBootstrapWarning, so a screen that stays green on this one hands the same host
+			// two different levels depending on which channel the operator read.
+			name:        "the surviving schedule is under /etc: same level, same keyword",
+			report:      cronRevertReport{CronScheduled: true, ModeRecorded: true, SystemCronAdvisory: []string{"Reverting to cron: 1 possible ProxSave cron line(s) under /etc:", "  - 0 5 * * * root /usr/local/bin/proxsave --backup", "ProxSave owns the root crontab only and never edits files it did not place, 1 line(s) in /etc unchanged"}},
+			wantLevel:   orchestrator.HealthcheckSetupLevelWarn,
+			wantKeyword: "REVERTED - DUPLICATE SCHEDULE",
+			wantText:    "1 line(s) in /etc unchanged",
+		},
+		{
 			// Nothing scheduling the backup outranks a duplicate: there is no duplicate.
 			name:        "unscheduled outranks the duplicate",
 			report:      cronRevertReport{CronScheduled: false, ModeRecorded: true, UnmanagedSchedules: 1},
@@ -1210,8 +1220,12 @@ func TestDashboardDaemonRevertShowsTheSystemCronAdvisory(t *testing.T) {
 		t.Fatal("dashboard did not resolve")
 	}
 
-	if !strings.Contains(msg, "REVERTED TO CRON") {
-		t.Fatalf("the revert must still report success, got:\n%s", msg)
+	// The keyword is the duplicate one, not the plain success: an /etc finding raises the level
+	// exactly as a root-crontab wrapper does, which is what the CLI has always done for both.
+	// See TestDashboardDaemonRevertWarnsOnADuplicateSchedule for that rule; what this test owns
+	// is that every line of the advisory reaches the screen.
+	if !strings.Contains(msg, "REVERTED - DUPLICATE SCHEDULE") {
+		t.Fatalf("an /etc finding must carry the duplicate keyword, got:\n%s", msg)
 	}
 	if !strings.Contains(msg, "Reverted to the cron scheduler") {
 		t.Errorf("the existing message must not be replaced, got:\n%s", msg)

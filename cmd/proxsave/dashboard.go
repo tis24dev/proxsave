@@ -662,10 +662,18 @@ func runDashboardDaemonAdmin(ctx context.Context, session *shell.Session, instal
 		// ProxSave, so it creates this duplicate itself and has to say so. The keyword takes
 		// precedence over the config one because this is what changes tonight; the config fact
 		// is a sentence in the text either way.
-		if revert.UnmanagedSchedules > 0 {
+		//
+		// BOTH habitats raise it. The CLI already emits a WARNING for the root crontab wrappers
+		// and for the /etc findings alike, so a screen that reacted to only one handed the same
+		// host two different levels depending on which channel the operator read. The /etc half
+		// carries its own pre-rendered lines, appended below, so only the level and the keyword
+		// are decided here.
+		if revert.UnmanagedSchedules > 0 || len(revert.SystemCronAdvisory) > 0 {
 			doneLevel = orchestrator.HealthcheckSetupLevelWarn
 			doneKeyword = "REVERTED - DUPLICATE SCHEDULE"
-			doneMsg += " Check your crons to remove duplication."
+			if revert.UnmanagedSchedules > 0 {
+				doneMsg += " Check your crons to remove duplication."
+			}
 		}
 		// The daemon is gone and nothing replaced it. That outranks the config write, so it is
 		// tested last and wins the screen.
