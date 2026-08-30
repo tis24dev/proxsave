@@ -71,7 +71,9 @@ New installs default to the daemon. The install wizard (TUI and `--cli`) asks fo
 
 Enabling the daemon sets `HEALTHCHECK_ENABLED=true` even though its raw config default is `false`, so a retrofitted host gets the dead-man switch. `--daemon-remove` sets it back to `false`. That symmetry matters: the checks it turns on are daemon-only, so a host left on cron with `HEALTHCHECK_ENABLED=true` warned `Healthchecks: daemon not installed` on every otherwise successful run and exited `1` for a daemon it was never meant to have. The rollback is what fixes that, by clearing the key the operator never chose. A cron host that still carries `HEALTHCHECK_ENABLED=true` on purpose is warned about it, and that warning still costs the exit code: monitoring cannot work without the daemon, and the key says the operator wants monitoring.
 
-A host that reverted with an **older** build still carries that stale `true`, and nothing it runs rewrites the key for it. It sees the warning on every run until someone changes the value. ProxSave does not repair it: on disk that host is indistinguishable from one whose operator set the key on purpose, and rewriting a monitoring setting on evidence that cannot tell the two apart takes away a choice instead of tidying a leftover.
+A host that reverted with an **older** build still carries that stale `true`, and nothing it runs rewrites the key for it, so it warns and exits `1` on every otherwise successful backup. ProxSave does not repair it: on disk that host is indistinguishable from one whose operator set the key on purpose, and rewriting a monitoring setting on evidence that cannot tell the two apart takes away a choice instead of tidying a leftover.
+
+Two ways out, both yours to choose: set `HEALTHCHECK_ENABLED=false` in `backup.env`, or run `--daemon-setup` followed by `--daemon-remove`, which writes the key back to `false` on the way out. Hosts reverted from this release on are unaffected, and a cron host that never enabled the daemon carries the template default `false`.
 
 ### What "removes the cron entry" means
 

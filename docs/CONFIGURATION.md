@@ -129,7 +129,7 @@ HEALTHCHECK_NOTIFY_WEBHOOK_ID=
 
 `HEALTHCHECK_ENABLED` parses as `false` by default. `--daemon-setup` and the `--upgrade` retrofit set it to `true` when enabling the daemon, and `--daemon-remove` sets it back to `false` when reverting to cron. The two directions belong together: the checks this key turns on are daemon-only, so a cron host left with `HEALTHCHECK_ENABLED=true` reports the missing daemon on every run, as a warning on either engine. On cron the warning names the engine as well, because the key is asking for monitoring that cannot run there. Clearing the key is what stops the report, which is why `--daemon-remove` does it for you.
 
-A host reverted by an older build kept the key at `true`, and nothing rewrites it for that host: it reports the missing daemon on every run until you change the value. ProxSave does not correct it, because on disk that host looks exactly like one whose operator set the key deliberately.
+A host reverted by an older build kept the key at `true`, and nothing rewrites it for that host: it reports the missing daemon on every run and exits `1` until you set `HEALTHCHECK_ENABLED=false` yourself, or run `--daemon-setup` then `--daemon-remove`. ProxSave does not correct it, because on disk that host looks exactly like one whose operator set the key deliberately. Only hosts reverted before this release are affected.
 
 ---
 
