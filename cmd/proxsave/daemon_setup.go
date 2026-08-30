@@ -584,12 +584,13 @@ func applyCronMode(ctx context.Context, cfg *config.Config, configPath, execToke
 // never touched the daemon has DAEMON_OPT_OUT=false and is not eligible, so an operator who
 // deliberately enabled the key on a plain cron install is never touched. The residual case
 // this does clobber is an operator who ran --daemon-remove and then re-enabled the key on
-// purpose; the runtime gate in initializeHealthcheckSection already reports cron mode as a
-// SKIP rather than a WARNING, so that key was doing nothing for them either way.
+// purpose. That key is NOT inert on cron: initializeHealthcheckSection warns on it and the
+// warning costs the run exit 1, so for that operator this write removes something they chose
+// rather than tidying a leftover.
 //
 // Best-effort and silent-on-failure like every other write on this path: a --upgrade must
-// never fail because a repair could not be applied, and the runtime gate keeps the host
-// exiting 0 regardless of whether this lands.
+// never fail because a repair could not be applied. A host where it does not land simply
+// keeps the key, and keeps paying the runtime warning, until something else clears it.
 func backfillHealthcheckOptOut(cfg *config.Config, configPath string, bootstrap *logging.BootstrapLogger) {
 	if cfg == nil || cfg.SchedulerMode != "cron" || !cfg.DaemonOptOut || !cfg.HealthcheckEnabled {
 		return

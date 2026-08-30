@@ -85,9 +85,9 @@ func TestInitializeHealthcheckSectionLines(t *testing.T) {
 			}
 		}
 		// SchedulerMode is stated explicitly: every case in this test is about the DAEMON
-		// engine's warning arm, and reportHealthchecksUnusable re-ranks that same reason to a
-		// SKIP on the cron engine. Leaving the mode blank would let a future default flip
-		// silently repurpose the whole test.
+		// engine, and on the cron engine reportHealthchecksUnusable warns with the SAME weight
+		// but names the engine in the reason. Leaving the mode blank would let a future default
+		// flip silently repurpose the whole test.
 		return &config.Config{SchedulerMode: "daemon", HealthcheckEnabled: true, HealthcheckMode: "centralized", ServerID: "srv1", BaseDir: base}
 	}
 
@@ -110,9 +110,10 @@ func TestInitializeHealthcheckSectionLines(t *testing.T) {
 		if strings.Contains(out, "Healthchecks initialized") {
 			t.Fatalf("%s: must NOT print initialized, out=%q", name, out)
 		}
-		// Every case here is on the DAEMON engine, where the problem is a real regression and
-		// must keep its warning weight. If the cron re-rank ever leaked onto this engine the
-		// substring assertions above would still pass while the run silently stopped exiting 1.
+		// Every case here is on the DAEMON engine, where the problem is a real regression. The
+		// cron arm warns too, so what separates the two is the wording: if the cron-mode clause
+		// ever leaked onto this engine the substring assertions above would still pass while the
+		// message told the operator the wrong thing about how their host is scheduled.
 		if strings.Contains(out, "cron mode") {
 			t.Fatalf("%s: the daemon engine must WARN, not emit the cron-mode SKIP, out=%q", name, out)
 		}
@@ -254,7 +255,7 @@ func TestInitializeHealthcheckSectionCronModeKeepsLiveDaemon(t *testing.T) {
 		t.Fatalf("a live daemon must still initialize the section even when the config reads cron, out=%q", out)
 	}
 	if strings.Contains(out, "cron mode") {
-		t.Fatalf("the cron re-rank must not fire when the probe reports no problem, out=%q", out)
+		t.Fatalf("the cron-mode clause must not fire when the probe reports no problem, out=%q", out)
 	}
 	if !cfg.HealthcheckEnabled {
 		t.Fatal("a working section must keep HealthcheckEnabled=true so the Phase-7 dispatch renders it")
@@ -301,7 +302,7 @@ func TestInitializeHealthcheckSectionDaemonModeStillWarns(t *testing.T) {
 		t.Fatalf("daemon mode must name the problem, out=%q", out)
 	}
 	if strings.Contains(out, "cron mode") {
-		t.Fatalf("the cron re-rank must never reach the daemon engine, out=%q", out)
+		t.Fatalf("the cron-mode clause must never reach the daemon engine, out=%q", out)
 	}
 	if cfg.HealthcheckEnabled {
 		t.Fatal("daemon mode must still flip HealthcheckEnabled=false")
