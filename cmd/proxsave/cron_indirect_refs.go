@@ -50,8 +50,9 @@ const (
 	// cronProbeReadScripts / cronProbeNamesOnly name indirectProxsaveCronRefs' second
 	// argument at the call site, because a bare true/false there says nothing about
 	// what it costs. cronProbeReadScripts also OPENS AND READS the command of every
-	// unmatched cron line (bounded, see maxCronWrapperProbeBytes); cronProbeNamesOnly
-	// stays purely lexical and touches no disk. The scheduler-time advisory in
+	// unmatched cron line, plus - when that command is a runner - the commands the runner runs,
+	// at most maxCronWrapperProbesPerLine per line and maxCronWrapperProbeBytes each;
+	// cronProbeNamesOnly stays purely lexical and touches no disk. The scheduler-time advisory in
 	// deriveSchedulerTimeFromCrontab runs inside the install wizard and inside
 	// --upgrade-config-json, so it takes the lexical form; the daemon paths run once
 	// and must not miss a wrapper, so they pay for the read.
@@ -64,6 +65,17 @@ const (
 	// upgrade. It bounds the READ, not the open: a command on a stalled network mount
 	// can still block in open(2), exactly as every other cron-touching helper here can.
 	maxCronWrapperProbeBytes = 64 * 1024
+
+	// maxCronWrapperProbesPerLine bounds how many words of ONE cron line the content probe may
+	// open, which is the cost cronRunnerWrappedScript adds on top of the single open the token
+	// already pays. The arithmetic: the shapes an operator actually writes (flock/sh/nice/
+	// timeout/sudo in front of a wrapper) cost exactly one extra open, the deepest plausible
+	// nesting (ionice, then nice, then flock, then timeout, then the wrapper) costs four, so
+	// eight only bites on a line with more than eight command positions - a line nobody writes
+	// by hand. It bounds the OPENS, not the walk: past the cap the line is still parsed, just
+	// never read. The budget is per LINE, matching maxCronWrapperProbeBytes being per file, so
+	// a crontab with N runner lines can pay up to 8N.
+	maxCronWrapperProbesPerLine = 8
 )
 
 // indirectCronRef is one crontab line that appears to run ProxSave WITHOUT its
@@ -115,6 +127,11 @@ var cronCommandRunners = map[string]struct{}{
 //     readable text file that references the proxsave binary by path. This is the
 //     strongest evidence available without executing anything, and it is what
 //     catches a wrapper with a completely neutral name, e.g. /usr/local/sbin/nas-guard.
+//     When the command token is a RUNNER (cronCommandRunners) the same rule is applied to the
+//     command that runner RUNS, because on "flock -n /var/lock/x /usr/local/sbin/nas-guard"
+//     the token is flock and the wrapper is the file worth reading. Only words in COMMAND
+//     position are opened, so a file the line merely reads or redirects into is never touched;
+//     see cronRunnerWrappedScript for the cap and for what it does not cover.
 //
 //  2. INSTALL TREE. A directory component of the command's path is exactly
 //     "proxsave", i.e. the command is a script stored inside a ProxSave install root.
@@ -151,6 +168,12 @@ var cronCommandRunners = map[string]struct{}{
 // treated as suspicious: every ordinary cron job on the host is unreadable-as-text
 // too, so refusing on "cannot tell" would refuse on essentially every host and the
 // warning would stop meaning anything.
+//
+// The other residual is a wrapper reached through something that is not a runner:
+// "mountpoint -q /mnt/nas && /usr/local/sbin/nas-guard" has "mountpoint" as its command token,
+// so rule 1 reads mountpoint and stops there. Widening the gate past cronCommandRunners widens
+// what an unattended --upgrade REFUSES on, which is a decision separate from widening what a
+// revert prints, so it is not taken here.
 //
 // It logs NOTHING and writes NOTHING: --upgrade-config-json reaches this through
 // deriveSchedulerTimeFromCrontab and its stdout must stay pure JSON.
@@ -192,6 +215,17 @@ func indirectProxsaveCronRefsWithToken(lines []string, probeScriptContent bool, 
 			references, readable = scriptProxsaveProbe(token)
 			if references {
 				reason = fmt.Sprintf("script %s calls the proxsave binary", token)
+			}
+			// The token of a runner line is the RUNNER, so reading it answers about the wrong
+			// file. Reading what the runner runs is the same rule one indirection out, and it
+			// gets the same sentence: the file the probe actually read is the file the operator
+			// is told about. `readable` is deliberately left alone - it records the TOKEN's
+			// readability, and its only consumer is rule 4, which asks about the token's NAME;
+			// no runner basename carries "proxsave", so the two cannot interact.
+			if reason == "" {
+				if wrapped, ok := cronRunnerWrappedScript(line, token); ok {
+					reason = fmt.Sprintf("script %s calls the proxsave binary", wrapped)
+				}
 			}
 		}
 		if reason == "" {
@@ -307,6 +341,88 @@ func cronRunnerNamesProxsave(line, token string) bool {
 		}
 	}
 	return false
+}
+
+// cronCommandTail returns the cron line from its COMMAND token onwards, i.e. the shell command
+// line that the schedule fields stand in front of.
+//
+// It finds the token by IDENTITY rather than by field index, which is what lets it serve both
+// crontab habitats through the same commandToken seam that already separates them: the command
+// is field 6 in a user crontab, field 7 in /etc/crontab and /etc/cron.d, and field 2 after an
+// @form, and none of that has to be known a second time here. The one line it can misread is a
+// system-cron line whose USER field is literally the same string as the command path, which is
+// not a username; the cost there is a false negative on that line, never a different file
+// being opened.
+func cronCommandTail(line, token string) []string {
+	fields := strings.Fields(strings.TrimSpace(line))
+	for i, field := range fields {
+		if strings.Trim(field, "\"'") == token {
+			return fields[i:]
+		}
+	}
+	return nil
+}
+
+// cronRunnerWrappedScript reads the script a RUNNER runs and returns its path, or "" when the
+// line is not a runner line or nothing in command position on it reads as a wrapper that calls
+// the binary.
+//
+// This is issue #298 arriving one indirection further out:
+//
+//	0 2 * * * /usr/bin/flock -n /var/lock/nightly.lock /usr/local/sbin/nas-guard
+//
+// The content probe used to be handed the TOKEN only, so it opened flock - a binary, NUL byte,
+// unreadable - and the wrapper the operator actually scheduled was never read at all. Rule 3
+// could not save it either: it needs a word whose basename carries "proxsave", which a
+// neutrally named wrapper has not got. Nothing matched, the unattended retrofit installed the
+// daemon on top of a live cron backup, and the host ran two backups a night with no message.
+//
+// The cron line after the schedule fields IS a shell command line, and this file already owns a
+// parser for exactly that, so the fix reuses the walk rather than writing a second one:
+// scriptLineWalkCommands already models flock's operand, nice -n's value, sudo's -Hu bundling,
+// sh -c's nested line and the four opaque launchers.
+//
+// COMMAND POSITION is the rule, and it is what keeps this honest. Probing every absolute word
+// on the line instead would open flock's lock file, redirect targets and config paths, and on
+// "flock -n LOCK /usr/bin/tail -n 1 /var/log/nas.log" it would read the LOG and then report a
+// log file as a script that calls the binary - a refusal naming a file the line only reads.
+// Command position never visits an argument, which is also why the documented protection on a
+// direct "cp /usr/local/bin/proxsave /backup/" is exactly where it was.
+//
+// WHAT IT DOES NOT COVER. It fires only behind cronCommandRunners, so a wrapper reached through
+// anything else is still invisible. Under the four opaque launchers the walk scans arguments
+// rather than command positions, so an argument path IS opened there and a data file named
+// after their -c can be reported as a script; that is confined to su/runuser/systemd-run/
+// systemd-cat, costs one advisory and never an action, and the alternative loses
+// "su - backup -c /path/wrapper", which operators do write. It follows exactly one level of
+// runner nesting per command position and never executes anything.
+func cronRunnerWrappedScript(line, token string) (string, bool) {
+	if _, isRunner := cronCommandRunners[strings.ToLower(filepath.Base(strings.Trim(token, "\"'")))]; !isRunner {
+		return "", false
+	}
+	tail := cronCommandTail(line, token)
+	if len(tail) == 0 {
+		return "", false
+	}
+	budget := maxCronWrapperProbesPerLine
+	wrapped := ""
+	// No vars: a cron line carries no assignments this code can resolve, and a "$BIN" written on
+	// one is expanded by cron's own shell against an environment not visible from here.
+	scriptLineWalkCommands(strings.Join(tail, " "), nil, func(word string) bool {
+		word = strings.Trim(word, "\"'")
+		// The token itself was probed a moment ago by the caller, and a relative command resolves
+		// against the crontab owner's home, which scriptProxsaveProbe refuses to guess.
+		if word == token || !filepath.IsAbs(word) || budget <= 0 {
+			return false
+		}
+		budget--
+		references, _ := scriptProxsaveProbe(word)
+		if references {
+			wrapped = word
+		}
+		return references
+	})
+	return wrapped, wrapped != ""
 }
 
 // shellWords splits on whitespace AND the shell metacharacters that glue a path to
@@ -605,9 +721,19 @@ func scriptProxsavePathVars(lines []string) map[string]string {
 				if !looksLikeEnvAssignment(word) {
 					continue
 				}
-				value := strings.Trim(word[idx+1:], "\"'")
-				if scriptWordRunsProxsave(value) {
-					vars[word[:idx]] = value
+				// The RIGHT-HAND SIDE gets the SAME expansion rule as command position, because a
+				// wrapper writes the binary path as an assignment as often as it writes it as a
+				// command, and two different rules for the two sides is exactly what produced this
+				// gap. vars is built in one forward pass, so an earlier assignment is visible to a
+				// later one just as the shell sees it, and the self-referencing
+				// PROXSAVE_BIN="${PROXSAVE_BIN:-...}" resolves through its fallback because the
+				// name is not in the map yet. The RESOLVED path is what is recorded, never the raw
+				// word, so the map keeps its invariant that every value in it names the binary.
+				for _, candidate := range scriptWordExpansions(word[idx+1:], vars) {
+					if scriptWordRunsProxsave(candidate) {
+						vars[word[:idx]] = candidate
+						break
+					}
 				}
 			}
 		}
@@ -615,19 +741,109 @@ func scriptProxsavePathVars(lines []string) map[string]string {
 	return vars
 }
 
-// resolveScriptWord expands "$NAME", "${NAME}" and their quoted forms against the assignments
-// collected above. Anything else is returned unchanged.
-func resolveScriptWord(word string, vars map[string]string) string {
-	word = strings.Trim(word, "\"'")
+// scriptDefaultOperators are the expansion operators whose operand is a PATH the shell may end up
+// running: "${NAME:-/usr/local/bin/proxsave}" and its colon-less twin. Order matters - ":-" is
+// tried first, or the bare "-" claims the colon form's operand and the name reads as "NAME:".
+//
+// Deliberately absent, each for its own reason: ":=" means the same as ":-" plus an assignment and
+// is a real remaining false negative, left out because every added operator needs its own proof;
+// ":?" and ":+" carry a MESSAGE or an alternative, not the command; "#", "##", "%" and "%%" carry
+// a PATTERN. Treating any of those as a default turns a message into a command.
+var scriptDefaultOperators = []string{":-", "-"}
+
+// parseScriptExpansion splits "$NAME", "${NAME}" and "${NAME:-FALLBACK}" into the name and the
+// fallback. ok is false for every other form, and the word is then left exactly as written and
+// judged by its own basename, which is what it was before this existed.
+//
+// An operator is recognised only INSIDE braces, because that is the only place the shell has one.
+//
+// The operator is ANCHORED to the end of the NAME, and that is the whole reason "${BIN%%-*}",
+// "${BIN#/usr-local}" and "${BIN:?/usr/local/bin/proxsave-missing}" do not parse: each contains a
+// "-" somewhere, and a search that is not anchored hands back a pattern or an error message as if
+// it were the command.
+//
+// The trailing "}" is stripped ONCE and only when it really is trailing. That is what keeps a
+// CONCATENATION out - "${DIR}/proxsave" and "${DIR:-/opt/proxsave}/bin/wrapper.sh" are recipes for
+// a path rather than a path - and what keeps "${BIN" resolving the way it always has. A NESTED
+// expansion is likewise not resolved: evaluating an expansion inside an expansion is one step past
+// recognition, so its fallback keeps the inner braces and matches nothing.
+func parseScriptExpansion(word string) (name, fallback string, ok bool) {
 	if !strings.HasPrefix(word, "$") {
-		return word
+		return "", "", false
 	}
-	name := strings.TrimPrefix(word, "$")
-	name = strings.TrimSuffix(strings.TrimPrefix(name, "{"), "}")
-	if value, ok := vars[name]; ok {
-		return value
+	body := word[1:]
+	braced := strings.HasPrefix(body, "{")
+	if braced {
+		body = strings.TrimSuffix(body[1:], "}")
 	}
-	return word
+	end := 0
+	for end < len(body) {
+		c := body[end]
+		if c == '_' || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') {
+			end++
+			continue
+		}
+		break
+	}
+	// No name at all ("${:-/usr/local/bin/proxsave}", "${#BIN}"): there is nothing to look up and
+	// nothing that names a command.
+	if end == 0 {
+		return "", "", false
+	}
+	name, rest := body[:end], body[end:]
+	if rest == "" {
+		return name, "", true
+	}
+	// An operator only exists INSIDE braces. Unbraced, the shell expands the name and appends
+	// whatever follows as literal text, so "$BIN-/usr/local/bin/proxsave" is a name with a suffix
+	// and reading it as a default invented a command out of a word the shell would never run.
+	// What is left is a concatenation, which is refused for the same reason "${BIN}/proxsave" is.
+	if !braced {
+		return "", "", false
+	}
+	for _, op := range scriptDefaultOperators {
+		if strings.HasPrefix(rest, op) {
+			return name, rest[len(op):], true
+		}
+	}
+	return "", "", false
+}
+
+// scriptWordExpansions returns the paths one word could stand for, in the order the script is most
+// likely to run: the value of an assignment this probe has already seen, then the literal default
+// written on the word itself. A word that is not an expansion is its own only candidate, so the
+// slice is never empty and callers keep working unchanged on ordinary words.
+//
+// BOTH branches count, and a match on either is a match. vars is a WHITELIST of assignments whose
+// value already names the binary, so a name missing from it means "no proxsave-valued assignment
+// was seen", never "known to be something else" - which is why "BIN=/usr/bin/rsync" followed by
+// "${BIN:-/usr/local/bin/proxsave}" still reports. Even a complete map could not decide it: the
+// shell takes the default when the variable is unset OR EMPTY at run time, and that depends on
+// /etc/default/proxsave, on cron's environment and on the script's own arguments, none of which a
+// text probe can see. The costs are asymmetric the usual way - the union at worst adds one
+// advisory, while "the known value wins" loses the wrapper whose override sources empty, which is
+// issue #298 with no message at all.
+//
+// Today the union is INERT, because every value in vars is already a proxsave path and so the known
+// branch answers on its own. It is written as a union anyway, because that is what keeps a future
+// widening of vars from turning silently into a false negative.
+func scriptWordExpansions(word string, vars map[string]string) []string {
+	word = strings.Trim(word, "\"'")
+	name, fallback, ok := parseScriptExpansion(word)
+	if !ok {
+		return []string{word}
+	}
+	var out []string
+	if value, seen := vars[name]; seen {
+		out = append(out, value)
+	}
+	if fallback != "" {
+		out = append(out, fallback)
+	}
+	if len(out) == 0 {
+		return []string{word}
+	}
+	return out
 }
 
 // scriptLineRunsProxsave reports whether one line of a script puts the proxsave binary in
@@ -649,12 +865,30 @@ func resolveScriptWord(word string, vars map[string]string) string {
 // is REPORTED as missing, never acted on, so the cost of a blind spot is one advisory the
 // operator does not get, not a decision taken on bad evidence.
 func scriptLineRunsProxsave(line string, vars map[string]string) bool {
+	return scriptLineWalkCommands(line, vars, scriptWordRunsProxsave)
+}
+
+// scriptLineWalkCommands is scriptLineRunsProxsave with the VERDICT made a parameter: it walks
+// the same tree and hands every word it reaches in command position to visit, stopping at the
+// first one visit accepts.
+//
+// It is factored out for the reason the rest of this file already states about its two views of
+// a crontab - they must never walk different trees or apply different skip rules - and the
+// second caller is cronRunnerWrappedScript, which asks the same "what does this line actually
+// RUN" question about a cron line instead of a script line. Everything the walk already knows
+// (flock takes an operand and may take options again after it, "nice -n 19" and "sudo -u backup"
+// eat a value, "-Hu backup" bundles, "sh -c" is a nested line, su/runuser/systemd-run are
+// opaque) is exactly what that caller needs, and duplicating it is how the two would drift.
+//
+// visit MUST stay short-circuiting: the second caller OPENS the word it is handed, and an eager
+// collector would open every candidate on the line rather than stopping at the first answer.
+func scriptLineWalkCommands(line string, vars map[string]string, visit func(string) bool) bool {
 	trimmed := strings.TrimSpace(line)
 	if trimmed == "" || strings.HasPrefix(trimmed, "#") {
 		return false
 	}
 	for _, segment := range splitShellSegments(trimmed) {
-		if segmentRunsProxsave(strings.Fields(segment), vars) {
+		if segmentWalkCommands(strings.Fields(segment), vars, visit) {
 			return true
 		}
 	}
@@ -665,6 +899,12 @@ func scriptLineRunsProxsave(line string, vars map[string]string) bool {
 // recursive on the launcher categories so a pathological line cannot nest; the ONE recursion is
 // a shell's -c argument, which is a genuinely separate line.
 func segmentRunsProxsave(words []string, vars map[string]string) bool {
+	return segmentWalkCommands(words, vars, scriptWordRunsProxsave)
+}
+
+// segmentWalkCommands is segmentRunsProxsave with the verdict parameterised; see
+// scriptLineWalkCommands.
+func segmentWalkCommands(words []string, vars map[string]string, visit func(string) bool) bool {
 	for len(words) > 0 {
 		// Leading assignments belong to the command that follows, not to the command position.
 		for len(words) > 0 && looksLikeEnvAssignment(strings.Trim(words[0], "\"'")) {
@@ -673,11 +913,18 @@ func segmentRunsProxsave(words []string, vars map[string]string) bool {
 		if len(words) == 0 {
 			return false
 		}
-		head := resolveScriptWord(words[0], vars)
-		if scriptWordRunsProxsave(head) {
-			return true
+		heads := scriptWordExpansions(words[0], vars)
+		for _, head := range heads {
+			if visit(head) {
+				return true
+			}
 		}
-		base := strings.ToLower(filepath.Base(head))
+		// A launcher reached through a variable is still a launcher: classifying on the
+		// unexpanded word ends the segment on a brace and hides whatever it was about to run,
+		// which is the same false negative shape launcherValueFlags was written for. The FIRST
+		// candidate decides, i.e. the assignment's value when there is one and the literal
+		// default otherwise, because that is the one the script most likely runs.
+		base := strings.ToLower(filepath.Base(heads[0]))
 		switch {
 		case isIn(base, scriptCommandPrefixes):
 			words = words[1:]
@@ -693,11 +940,13 @@ func segmentRunsProxsave(words []string, vars map[string]string) bool {
 			// on "-c", nothing matches, and the wrapper behind it goes unseen.
 			words = skipLauncherOptions(base, words)
 		case isIn(base, scriptShellLaunchers):
-			return shellLauncherRunsProxsave(base, words[1:], vars)
+			return shellLauncherWalkCommands(base, words[1:], vars, visit)
 		case isIn(base, scriptOpaqueLaunchers):
 			for _, w := range words[1:] {
-				if scriptWordRunsProxsave(resolveScriptWord(w, vars)) {
-					return true
+				for _, candidate := range scriptWordExpansions(w, vars) {
+					if visit(candidate) {
+						return true
+					}
 				}
 			}
 			return false
@@ -710,19 +959,19 @@ func segmentRunsProxsave(words []string, vars map[string]string) bool {
 	return false
 }
 
-// shellLauncherRunsProxsave handles "sh -c '<script>'": the argument after -c is a line of its
+// shellLauncherWalkCommands handles "sh -c '<script>'": the argument after -c is a line of its
 // own. Without a -c the shell is running a FILE, whose contents this probe cannot follow, so the
 // remaining words are treated as a command position rather than scanned.
-func shellLauncherRunsProxsave(launcher string, words []string, vars map[string]string) bool {
+func shellLauncherWalkCommands(launcher string, words []string, vars map[string]string, visit func(string) bool) bool {
 	for i, w := range words {
 		if strings.Trim(w, "\"'") == "-c" {
 			if i+1 >= len(words) {
 				return false
 			}
-			return scriptLineRunsProxsave(strings.Trim(strings.Join(words[i+1:], " "), "\"'"), vars)
+			return scriptLineWalkCommands(strings.Trim(strings.Join(words[i+1:], " "), "\"'"), vars, visit)
 		}
 	}
-	return segmentRunsProxsave(skipLauncherOptions(launcher, words), vars)
+	return segmentWalkCommands(skipLauncherOptions(launcher, words), vars, visit)
 }
 
 // skipLauncherOptions drops the option-shaped words a launcher consumes before its command,

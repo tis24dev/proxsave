@@ -630,6 +630,22 @@ func runDashboardDaemonAdmin(ctx context.Context, session *shell.Session, instal
 				"DEFERRED - BACKUP RUNNING", "A backup is in progress; the daemon was NOT removed. Try again once the backup finishes.")
 			return
 		}
+		// A failed TEARDOWN is the only revert failure that arrives with a populated report, and
+		// the generic screen below discards it: the duplicate-schedule finding, the /etc advisory
+		// and the config-write fact were all lost on the one path whose logger is muted for the
+		// whole operation and never flushed.
+		//
+		// The guard keys on the SENTINEL rather than on the report looking empty, because
+		// applyCronMode's two sentinels abort before anything is written and hand back a ZERO
+		// value whose fields are defaults and not measurements - and a teardown failure on a host
+		// with no cron line, no config write and no findings produces a report byte-identical to
+		// it. The install direction has nothing to lose either way: applyDaemonMode's single error
+		// return is installDaemonService's, which fires before any cron or config work.
+		if !install && !errors.Is(opErr, errDaemonTeardownConfigUnreadable) {
+			level, keyword, text := buildCronRevertScreen(revert, opErr)
+			showDaemonResultScreenFn(ctx, session, "Daemon disable failed", level, keyword, text)
+			return
+		}
 		showDaemonResultScreenFn(ctx, session, title+" failed", orchestrator.HealthcheckSetupLevelError, "FAILED", opErr.Error())
 		return
 	}
@@ -650,9 +666,13 @@ func runDashboardDaemonAdmin(ctx context.Context, session *shell.Session, instal
 		// daemon just installed. Under a green tick that reads as reassurance, so the level has
 		// to carry the same doubt the sentence does. The duplicate finding is stronger evidence
 		// and wins the keyword when both hold.
+		//
+		// The keyword states what HAPPENED, not what survives. Verified=false means the crontab
+		// could not be checked, which is not the same as knowing an entry is still there, and a
+		// keyword asserting one would claim more than the sentence under it.
 		if !cronOutcome.Verified {
 			doneLevel = orchestrator.HealthcheckSetupLevelWarn
-			doneKeyword = "INSTALLED - CRON ENTRY NOT REMOVED"
+			doneKeyword = "INSTALLED - NO CRON ENTRY REMOVED"
 		}
 		if cronOutcome.UnmanagedSchedules > 0 {
 			doneLevel = orchestrator.HealthcheckSetupLevelWarn
@@ -661,70 +681,134 @@ func runDashboardDaemonAdmin(ctx context.Context, session *shell.Session, instal
 		}
 	}
 	if !install {
-		doneMsg = "Reverted to the cron scheduler and removed the daemon service. " + cronModeRecordClause(revert)
-		if !revert.ModeRecorded {
-			doneLevel = orchestrator.HealthcheckSetupLevelWarn
-			doneKeyword = "REVERTED - CONFIG NOT UPDATED"
-		}
-		// The revert writes its cron line even when something unmanaged already schedules
-		// ProxSave, so it creates this duplicate itself and has to say so. The keyword takes
-		// precedence over the config one because this is what changes tonight; the config fact
-		// is a sentence in the text either way.
-		//
-		// BOTH habitats raise it. The CLI already emits a WARNING for the root crontab wrappers
-		// and for the /etc findings alike, so a screen that reacted to only one handed the same
-		// host two different levels depending on which channel the operator read. The /etc half
-		// carries its own pre-rendered lines, appended below, so only the level and the keyword
-		// are decided here.
-		if len(revert.UnmanagedAdvisory) > 0 || len(revert.SystemCronAdvisory) > 0 {
-			doneLevel = orchestrator.HealthcheckSetupLevelWarn
-			doneKeyword = "REVERTED - DUPLICATE SCHEDULE"
-			if len(revert.UnmanagedAdvisory) > 0 {
-				doneMsg += " Check your crons to remove duplication."
-			}
-		}
-		// The daemon is gone and nothing replaced it. That outranks everything else, so it is
-		// tested last and takes the level and the headline.
-		//
-		// It COMPOSES rather than replaces. This screen is the only channel open on this path -
-		// the logger is muted for the whole operation and never flushed - so a clause dropped
-		// here is a fact the operator never gets, and a host can easily be unscheduled AND
-		// carrying a config that was not written. On the CLI the same host reads both anyway,
-		// because applyCronMode's own warning is still on screen there.
-		if !revert.CronScheduled {
-			doneLevel = orchestrator.HealthcheckSetupLevelError
-			doneKeyword = "NO SCHEDULE"
-			doneMsg = "The daemon service was removed and the cron entry could NOT be written, so nothing is scheduling the backup."
-			// CronScheduled is an assertion about the ROOT crontab alone: canonicalCronLinePresent
-			// reads crontabReadLinesFn and nothing else, and the unmanaged entries it does not
-			// match are not proxsave-named. So with anything listed below, the host may well
-			// still be scheduled - and it is the same host where ProxSave could neither write its
-			// own line nor remove the other ones. Denying a schedule the screen goes on to list
-			// is the lie; the headline states the certain fact and leaves the rest to the list.
-			if len(revert.UnmanagedAdvisory) > 0 || len(revert.SystemCronAdvisory) > 0 {
-				doneKeyword = "CRON ENTRY NOT WRITTEN"
-				doneMsg = "The daemon service was removed and the cron entry could NOT be written. What still schedules this host, if anything, is below."
-			}
-			if !revert.ModeRecorded {
-				doneMsg += " " + cronModeRecordClause(revert)
-			}
-		}
-	}
-	// The revert has the same problem in its own direction. applyCronMode emits its /etc
-	// schedule advisory through the bootstrap logger, which is console-quiet here and is
-	// never flushed, so the operator used to get a green "REVERTED TO CRON" over a host that
-	// may now be scheduled twice - the CLI said it, the TUI did not. Appending the lines to
-	// the result screen is the only channel left open on this path.
-	// BOTH habitats are listed, in the order the CLI prints them: the root crontab ProxSave owns
-	// and just rewrote, then the /etc files it may only read.
-	if !install {
-		for _, advisory := range [][]string{revert.UnmanagedAdvisory, revert.SystemCronAdvisory} {
-			if len(advisory) > 0 {
-				doneMsg = strings.TrimSpace(doneMsg + "\n\n" + strings.Join(advisory, "\n"))
-			}
-		}
+		doneLevel, doneKeyword, doneMsg = buildCronRevertScreen(revert, nil)
 	}
 	showDaemonResultScreenFn(ctx, session, doneTitle, doneLevel, doneKeyword, doneMsg)
+}
+
+// buildCronRevertScreen renders the revert's result screen: the level, the keyword and the whole
+// text, including the two habitats' advisories. It is a pure function of the report and of
+// whether the teardown failed, so the wording is assertable without a TUI driver and without a
+// 60-second deadline.
+//
+// It exists because the FAILURE path needs the same facts and the same advisory append as the
+// success path, and the append used to sit below the early return that discarded them. Extracting
+// it first means the failure arm is a wiring change rather than a second copy of thirty lines
+// that can drift from the original.
+//
+// teardownErr is nil on every path that got as far as removing the daemon service. When it is
+// set, everything the report established BEFORE the teardown is still true and is stated;
+// everything the failed teardown killed is dropped. See the arm itself for which is which.
+func buildCronRevertScreen(revert cronRevertReport, teardownErr error) (orchestrator.HealthcheckSetupLevel, string, string) {
+	// A FAILED TEARDOWN. removeDaemonServiceFn is the last thing applyCronMode does, so
+	// everything the report carries was established before it and none of it is invalidated by
+	// it: the cron line was read back from the crontab, the wrapper lines were read from the
+	// crontab ProxSave never edits, the config write already returned, and the /etc scan runs
+	// after the teardown by design. What the failure DOES kill is the claim that the service was
+	// removed, and with it two sentences the success path would print. So this arm repeats every
+	// surviving fact, drops exactly those claims, and adds the one risk that is new.
+	//
+	// The host is left with a unit file still on disk (os.Remove failed) or deleted but not
+	// reloaded (daemon-reload failed); the preceding "systemctl disable --now" is best-effort and
+	// its failure is only Debug-logged, so the process may or may not still be alive. "May still
+	// be running" over-warns on the host where it really did stop, which costs the operator one
+	// check; claiming the daemon is gone when it is not is the expensive direction and is the bug
+	// class this area keeps producing. See backup_notifications.go on a failed teardown leaving a
+	// live, transmitting daemon on a host whose config already reads cron.
+	if teardownErr != nil {
+		doneLevel := orchestrator.HealthcheckSetupLevelError
+		doneKeyword := "DAEMON NOT REMOVED"
+		doneMsg := "The daemon service could NOT be removed and may still be running: " + teardownErr.Error() + "."
+		if revert.CronScheduled {
+			// Two schedulers at the same minute: the daemon runs at SCHEDULER_TIME and that is
+			// the time the cron line carries. The per-run lock makes the loser exit 16, i.e. a
+			// failed backup reported every night - the third duplicate source in issue #298.
+			// The duplicate takes the keyword because it is what changes tonight.
+			doneKeyword = "DAEMON NOT REMOVED - DUPLICATE SCHEDULE"
+			doneMsg += " The cron entry was written before the teardown and is in the crontab, so the backup may run twice."
+		} else {
+			// It deliberately refuses "nothing is scheduling the backup", which is what the
+			// success path says here. The thing that would be denied is the daemon the operator
+			// has just been told could not be removed.
+			doneMsg += " The cron entry could NOT be written either, so the daemon that is still there may be the only thing still scheduling the backup."
+		}
+		if revert.ModeRecorded {
+			doneMsg += " " + cronModeRecordClause(revert)
+		} else {
+			// cronModeRecordClause's failure arm ends "...while no daemon is installed", which is
+			// the one thing this failure disproves, so the shared wording cannot be reused here.
+			doneMsg += " The configuration could NOT be updated either, so it still records the daemon engine."
+		}
+		return doneLevel, doneKeyword, appendCronRevertAdvisories(doneMsg, revert)
+	}
+	doneLevel := orchestrator.HealthcheckSetupLevelOk
+	doneKeyword := "REVERTED TO CRON"
+	doneMsg := "Reverted to the cron scheduler and removed the daemon service. " + cronModeRecordClause(revert)
+	if !revert.ModeRecorded {
+		doneLevel = orchestrator.HealthcheckSetupLevelWarn
+		doneKeyword = "REVERTED - CONFIG NOT UPDATED"
+	}
+	// The revert writes its cron line even when something unmanaged already schedules
+	// ProxSave, so it creates this duplicate itself and has to say so. The keyword takes
+	// precedence over the config one because this is what changes tonight; the config fact
+	// is a sentence in the text either way.
+	//
+	// BOTH habitats raise it. The CLI already emits a WARNING for the root crontab wrappers
+	// and for the /etc findings alike, so a screen that reacted to only one handed the same
+	// host two different levels depending on which channel the operator read. The /etc half
+	// carries its own pre-rendered lines, appended below, so only the level and the keyword
+	// are decided here.
+	if len(revert.UnmanagedAdvisory) > 0 || len(revert.SystemCronAdvisory) > 0 {
+		doneLevel = orchestrator.HealthcheckSetupLevelWarn
+		doneKeyword = "REVERTED - DUPLICATE SCHEDULE"
+		if len(revert.UnmanagedAdvisory) > 0 {
+			doneMsg += " Check your crons to remove duplication."
+		}
+	}
+	// The daemon is gone and nothing replaced it. That outranks everything else, so it is
+	// tested last and takes the level and the headline.
+	//
+	// It COMPOSES rather than replaces. This screen is the only channel open on this path -
+	// the logger is muted for the whole operation and never flushed - so a clause dropped
+	// here is a fact the operator never gets, and a host can easily be unscheduled AND
+	// carrying a config that was not written. On the CLI the same host reads both anyway,
+	// because applyCronMode's own warning is still on screen there.
+	if !revert.CronScheduled {
+		doneLevel = orchestrator.HealthcheckSetupLevelError
+		doneKeyword = "NO SCHEDULE"
+		doneMsg = "The daemon service was removed and the cron entry could NOT be written, so nothing is scheduling the backup."
+		// CronScheduled is an assertion about the ROOT crontab alone: canonicalCronLinePresent
+		// reads crontabReadLinesFn and nothing else, and the unmanaged entries it does not
+		// match are not proxsave-named. So with anything listed below, the host may well
+		// still be scheduled - and it is the same host where ProxSave could neither write its
+		// own line nor remove the other ones. Denying a schedule the screen goes on to list
+		// is the lie; the headline states the certain fact and leaves the rest to the list.
+		if len(revert.UnmanagedAdvisory) > 0 || len(revert.SystemCronAdvisory) > 0 {
+			doneKeyword = "CRON ENTRY NOT WRITTEN"
+			doneMsg = "The daemon service was removed and the cron entry could NOT be written. What still schedules this host, if anything, is below."
+		}
+		if !revert.ModeRecorded {
+			doneMsg += " " + cronModeRecordClause(revert)
+		}
+	}
+	return doneLevel, doneKeyword, appendCronRevertAdvisories(doneMsg, revert)
+}
+
+// appendCronRevertAdvisories appends the two habitats' pre-rendered advisory lines to the
+// revert's message. The revert has the same problem in its own direction: applyCronMode emits its /etc
+// schedule advisory through the bootstrap logger, which is console-quiet here and is
+// never flushed, so the operator used to get a green "REVERTED TO CRON" over a host that
+// may now be scheduled twice - the CLI said it, the TUI did not. Appending the lines to
+// the result screen is the only channel left open on this path.
+// BOTH habitats are listed, in the order the CLI prints them: the root crontab ProxSave owns
+// and just rewrote, then the /etc files it may only read.
+func appendCronRevertAdvisories(msg string, revert cronRevertReport) string {
+	for _, advisory := range [][]string{revert.UnmanagedAdvisory, revert.SystemCronAdvisory} {
+		if len(advisory) > 0 {
+			msg = strings.TrimSpace(msg + "\n\n" + strings.Join(advisory, "\n"))
+		}
+	}
+	return msg
 }
 
 // dashboardDaemonState decides which daemon command the menu offers, from the on-disk

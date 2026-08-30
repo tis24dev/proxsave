@@ -276,6 +276,11 @@ func TestScriptProbeCommandPositionCategories(t *testing.T) {
 		{"sh -c runs it", "#!/bin/sh\nsh -c '/usr/local/bin/proxsave --backup'\n", true},
 		{"sh -c only copies it", "#!/bin/sh\nsh -c 'cp /usr/local/bin/proxsave /backup/'\n", false},
 
+		// The four opaque launchers put the command somewhere this parser does not model, so
+		// they keep the documented broad scan over the rest of the segment. Untested, that
+		// branch could be deleted whole and the suite would still pass.
+		{"an opaque launcher", "#!/bin/sh\nsu - backup -c '/usr/local/bin/proxsave --backup'\n", true},
+
 		// A variable is resolved only where it stands in command position.
 		{"the binary path held in a variable", "#!/bin/sh\nBIN=/usr/local/bin/proxsave\n$BIN --backup\n", true},
 		{"braced form", "#!/bin/sh\nBIN=/usr/local/bin/proxsave\n${BIN} --backup\n", true},
@@ -1358,6 +1363,340 @@ func TestMaybeAutoMigrateDaemonRefusalUsesOneWarning(t *testing.T) {
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("the block must still state %q, out=%q", want, out)
+		}
+	}
+}
+
+// A cron line is a SHELL COMMAND LINE, and on the line every Proxmox operator actually writes
+//
+//	0 2 * * * /usr/bin/flock -n /var/lock/nightly.lock /usr/local/sbin/nas-guard
+//
+// the command token is the RUNNER, not the wrapper. The content probe was handed the token
+// only, so it opened flock (a binary, NUL byte, unreadable), the wrapper was never read, and
+// the one rule left standing (cronRunnerNamesProxsave) needs a word whose basename carries
+// "proxsave" - which a neutrally named wrapper does not have. Nothing matched, the --upgrade
+// retrofit installed the daemon on top of a live cron backup, and the host ran two backups a
+// night: issue #298 again, one indirection further out.
+//
+// The table is the specification, so it carries the PRE-EXISTING verdicts too: the
+// proxsave-named wrapper behind a runner pins the rule ordering (content decides, so the
+// reason must name the file that was read), and the copy of the binary behind a runner pins
+// that rule 3 still owns it. The log-file row is the one that discriminates the design: only
+// words in COMMAND position may be opened, so a data file the line merely READS is never
+// probed and can never be reported as a script.
+func TestCronRunnerWrappedScriptIsRead(t *testing.T) {
+	dir := t.TempDir()
+	write := func(name, body string) string {
+		t.Helper()
+		p := filepath.Join(dir, name)
+		if err := os.WriteFile(p, []byte(body), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	// A runner is a compiled binary on a real host, i.e. exactly what the probe cannot read.
+	// Leaving it absent under the test's own temp dir reproduces that without depending on
+	// what the machine running the suite happens to have installed (see absentWrapper).
+	absent := func(name string) string { return filepath.Join(dir, name) }
+
+	guard := "#!/bin/sh\nmountpoint -q /mnt/nas || exit 0\nexec /usr/local/bin/proxsave --backup\n"
+	wrapper := write("nas-guard", guard)
+	named := write("proxsave-nas-guard", guard)
+	tail := write("tail", "#!/bin/sh\nexec /usr/bin/tail \"$@\"\n")
+	logrotate := write("logrotate", "#!/bin/sh\nexec /usr/sbin/logrotate \"$@\"\n")
+	copier := write("cp", "#!/bin/sh\nexec /bin/cp \"$@\"\n")
+	// Its FIRST line is a proxsave path in command position, so opening it at all is a
+	// finding. Nothing may open it: the line only reads it.
+	logFile := write("nas.log", "/usr/local/bin/proxsave --backup exited 0\n")
+
+	flock := absent("flock")
+	sh := absent("sh")
+	nice := absent("nice")
+	timeout := absent("timeout")
+	sudo := absent("sudo")
+	env := absent("env")
+	su := absent("su")
+	lock := filepath.Join(dir, "nightly.lock")
+
+	for _, tc := range []struct {
+		name  string
+		line  string
+		want  bool
+		says  string // the reason must name this
+		mutes string // and must not contain this
+	}{
+		{"flock", "0 2 * * * " + flock + " -n " + lock + " " + wrapper, true, wrapper, "runner"},
+		{"a shell running the wrapper as a file", "0 2 * * * " + sh + " " + wrapper, true, wrapper, "runner"},
+		{"nice with a value-taking flag", "0 2 * * * " + nice + " -n 19 " + wrapper, true, wrapper, "runner"},
+		{"timeout with its own operand", "0 2 * * * " + timeout + " 4h " + wrapper, true, wrapper, "runner"},
+		{"sudo with a user", "0 2 * * * " + sudo + " -u backup " + wrapper, true, wrapper, "runner"},
+		{"sh -c nesting", "0 2 * * * " + sh + " -c '" + wrapper + " --backup'", true, wrapper, "runner"},
+		{"env with a leading assignment", "0 2 * * * " + env + " TZ=UTC " + wrapper, true, wrapper, "runner"},
+		{"a value-taking flag and a redirect", "0 2 * * * " + flock + " -w 600 " + lock + " " + wrapper + " >> " + logFile + " 2>&1", true, wrapper, "runner"},
+		{"an opaque launcher", "0 2 * * * " + su + " - backup -c '" + wrapper + "'", true, wrapper, "runner"},
+		{"the @form", "@daily " + flock + " -n " + lock + " " + wrapper, true, wrapper, "runner"},
+		// ORDERING PIN. The file could be read, so the reading decides and the reason names
+		// the file that was read - not the runner it stood behind.
+		{"a proxsave-named wrapper that can be read", "0 2 * * * " + flock + " -n " + lock + " " + named, true, named, "runner"},
+
+		// Command position only. A data file the line READS is not a script.
+		{"a log file the line only reads", "0 2 * * * " + flock + " -n " + lock + " " + tail + " -n 1 " + logFile, false, "", ""},
+		{"an ordinary maintenance job behind a runner", "0 2 * * * " + flock + " -n " + lock + " " + logrotate + " -f /etc/logrotate.conf", false, "", ""},
+		{"the canonical entry", "0 2 * * * /usr/local/bin/proxsave --backup", false, "", ""},
+		{"a plain copy of the binary", "0 2 * * * " + copier + " /usr/local/bin/proxsave /backup/proxsave.bak", false, "", ""},
+		// THE GATE, stated as a case rather than left to the negatives above. The tail here does
+		// hold the wrapper in command position - the ";" starts a new command - so the only thing
+		// keeping this false is that the token is not in cronCommandRunners. Remove that gate, or
+		// widen the set to include this command, and the line flips.
+		//
+		// It is a residual FALSE NEGATIVE and a deliberate one: reading the tail behind an
+		// arbitrary command means opening files named by lines ProxSave knows nothing about,
+		// while the runner set is the same gate cronRunnerNamesProxsave already trusts. The cost
+		// is one missed advisory on a shape operators write far less often than "flock WRAPPER".
+		{"a non-runner followed by the wrapper", "0 2 * * * " + write("pre-check", "#!/bin/sh\nexit 0\n") + " ; " + wrapper, false, "", ""},
+
+		// PRE-EXISTING VERDICT, restated so the new rule cannot quietly take it over: inside a
+		// runner there is no parser, so rule 3 flags a copy of the binary and says why.
+		{"a copy of the binary behind a runner", "0 2 * * * " + flock + " -n " + lock + " " + copier + " /usr/local/bin/proxsave /backup/", true, "runner", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			refs := indirectProxsaveCronRefs([]string{tc.line}, cronProbeReadScripts)
+			if got := len(refs) > 0; got != tc.want {
+				t.Fatalf("flagged = %v, want %v for:\n%s", got, tc.want, tc.line)
+			}
+			if !tc.want {
+				return
+			}
+			if !strings.Contains(refs[0].Reason, tc.says) {
+				t.Errorf("reason %q must name %q", refs[0].Reason, tc.says)
+			}
+			if tc.mutes != "" && strings.Contains(refs[0].Reason, tc.mutes) {
+				t.Errorf("reason %q must not fall back to %q", refs[0].Reason, tc.mutes)
+			}
+		})
+	}
+}
+
+// The two costs the runner rule adds to an operator's host are OPENS PER LINE and reads on the
+// lexical path. Neither is visible in the finding, so only a test keeps them from drifting -
+// the same argument maxCronWrapperProbeBytes already carries one level down.
+//
+// The cap is pinned BEHAVIOURALLY, with no seam and no open counter: a line with more command
+// positions than the budget allows must stop reading, and stopping means the wrapper at the end
+// of it goes unflagged. That is the false negative the cap buys, stated out loud.
+func TestCronRunnerProbeIsBounded(t *testing.T) {
+	dir := t.TempDir()
+	wrapper := filepath.Join(dir, "nas-guard")
+	if err := os.WriteFile(wrapper, []byte("#!/bin/sh\nexec /usr/local/bin/proxsave --backup\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// Absent, like the compiled runners they stand for: each one is one open the probe spends.
+	chain := func(names ...string) string {
+		out := make([]string, 0, len(names)+1)
+		for _, n := range names {
+			out = append(out, filepath.Join(dir, n))
+		}
+		return "0 2 * * * " + strings.Join(append(out, wrapper), " ")
+	}
+	flagged := func(line string) bool {
+		return len(indirectProxsaveCronRefs([]string{line}, cronProbeReadScripts)) > 0
+	}
+
+	// maxCronWrapperProbesPerLine opens: the seven launchers behind the token, then the wrapper.
+	within := chain("ionice", "nice", "setsid", "nohup", "stdbuf", "eatmydata", "chronic", "env")
+	if !flagged(within) {
+		t.Errorf("a wrapper reached within the probe budget must still be found:\n%s", within)
+	}
+	// One command position more than the budget: the wrapper is never opened.
+	past := chain("ionice", "nice", "setsid", "nohup", "stdbuf", "eatmydata", "chronic", "env", "sudo")
+	if flagged(past) {
+		t.Errorf("past maxCronWrapperProbesPerLine the line must stop being read:\n%s", past)
+	}
+}
+
+// The lexical path must stay lexical. deriveSchedulerTimeFromCrontab runs inside the install
+// wizard and inside --upgrade-config-json, whose stdout must stay pure JSON, so cronProbeNamesOnly
+// may not open anything - the runner rule included. Not flagging a wrapper that exists and does
+// call the binary is the only available proof that no read happened, which is the trick
+// TestIndirectProxsaveCronRefsContentProbe already uses for the token probe.
+func TestCronRunnerProbeStaysOffWithoutContentProbing(t *testing.T) {
+	dir := t.TempDir()
+	wrapper := filepath.Join(dir, "nas-guard")
+	if err := os.WriteFile(wrapper, []byte("#!/bin/sh\nexec /usr/local/bin/proxsave --backup\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	line := "0 2 * * * " + filepath.Join(dir, "flock") + " -n " + filepath.Join(dir, "x.lock") + " " + wrapper
+	if refs := indirectProxsaveCronRefs([]string{line}, cronProbeNamesOnly); len(refs) > 0 {
+		t.Errorf("cronProbeNamesOnly must not read the wrapped script: %q", refs[0].Reason)
+	}
+	if refs := indirectProxsaveCronRefs([]string{line}, cronProbeReadScripts); len(refs) == 0 {
+		t.Error("the same line must be found once reading is allowed, or the test proves nothing")
+	}
+}
+
+// A wrapper writes the binary path once, and the shape it writes it in most often is the
+// DEFAULT-VALUE expansion: source /etc/default/proxsave, then
+//
+//	PROXSAVE_BIN="${PROXSAVE_BIN:-/usr/local/bin/proxsave}"
+//	exec "$PROXSAVE_BIN" --backup
+//
+// resolveScriptWord expanded "$NAME" and "${NAME}" and nothing else, so the word fell through
+// unchanged and its basename read as "proxsave}", which matches nothing. And scriptProxsavePathVars
+// recorded an assignment only when the right-hand side was ALREADY a literal proxsave path, so the
+// self-referencing form above was never recorded either and the later "$PROXSAVE_BIN" resolved to
+// nothing. Two holes, one rule: the same expansion has to apply in command position and on an
+// assignment's right-hand side, or the two sides drift apart again.
+//
+// The counterweights are the other half of the specification. Expanding a default may not turn a
+// MENTION into a run: the same word copied, mirrored, commented out or sitting in a here-document
+// body must stay unflagged, and so must the forms whose operand is a message or a pattern rather
+// than a path.
+func TestScriptProbeExpandsDefaultValues(t *testing.T) {
+	dir := t.TempDir()
+	flagged := func(t *testing.T, body string) bool {
+		t.Helper()
+		p := filepath.Join(dir, strings.ReplaceAll(t.Name(), "/", "_")+".sh")
+		if err := os.WriteFile(p, []byte(body), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		return len(indirectProxsaveCronRefs([]string{"0 2 * * * " + p}, cronProbeReadScripts)) > 0
+	}
+
+	for _, tc := range []struct {
+		name string
+		body string
+		want bool
+	}{
+		// The default is taken because the variable is unset, which is what the shape is FOR.
+		{"colon-dash default never assigned", "#!/bin/sh\n${PROXSAVE_BIN:-/usr/local/bin/proxsave} --backup\n", true},
+		{"dash default without the colon", "#!/bin/sh\n${PROXSAVE_BIN-/usr/local/bin/proxsave} --backup\n", true},
+		{"quoted behind exec", "#!/bin/sh\nexec \"${PROXSAVE_BIN:-/usr/local/bin/proxsave}\" --backup\n", true},
+		{"behind flock", "#!/bin/sh\nflock -n /var/lock/ps.lock \"${PROXSAVE_BIN:-/usr/local/bin/proxsave}\" --backup\n", true},
+		{"inside sh -c", "#!/bin/sh\nsh -c '${PROXSAVE_BIN:-/usr/local/bin/proxsave} --backup'\n", true},
+		// BOTH branches count. The map is a whitelist of assignments that already name the binary,
+		// so a name missing from it means "no proxsave-valued assignment was seen", never "known to
+		// be something else"; and even a complete map could not decide, because the shell takes the
+		// default when the variable is unset OR EMPTY at run time, which depends on /etc/default,
+		// on cron's environment and on the script's own arguments.
+		{"known value is the binary, the default is not", "#!/bin/sh\nBIN=/usr/local/bin/proxsave\n\"${BIN:-/usr/bin/true}\" --backup\n", true},
+		{"known value is not the binary, the default is", "#!/bin/sh\nBIN=/usr/bin/rsync\n\"${BIN:-/usr/local/bin/proxsave}\" --backup\n", true},
+		{"a default built from another variable", "#!/bin/sh\n${PROXSAVE_BIN:-$PREFIX/bin/proxsave} --backup\n", true},
+
+		// The same expansion on an assignment's RIGHT-HAND SIDE.
+		{"sourced default file, self-referencing assignment", "#!/bin/sh\n[ -r /etc/default/proxsave ] && . /etc/default/proxsave\nPROXSAVE_BIN=\"${PROXSAVE_BIN:-/usr/local/bin/proxsave}\"\nexec \"$PROXSAVE_BIN\" --backup\n", true},
+		{"default carried through a second variable", "#!/bin/sh\nBIN=\"${PROXSAVE_BIN:-/usr/local/bin/proxsave}\"\n\"$BIN\" --backup\n", true},
+		{"positional parameter with a default", "#!/bin/sh\nBIN=\"${1:-/usr/local/bin/proxsave}\"\n\"$BIN\" --backup\n", true},
+		{"alias assignment", "#!/bin/sh\nPROXSAVE_BIN=/opt/site/proxsave\nBIN=\"$PROXSAVE_BIN\"\n\"$BIN\" --backup\n", true},
+		{"an empty default with the name known", "#!/bin/sh\nBIN=/usr/local/bin/proxsave\n\"${BIN:-}\" --backup\n", true},
+
+		// A launcher reached through a default is still a launcher: reading the unexpanded word
+		// ends the segment on a brace and hides whatever it was about to run.
+		{"a launcher reached through a default", "#!/bin/sh\n${FLOCK:-/usr/bin/flock} -n /var/lock/x /usr/local/bin/proxsave --backup\n", true},
+		// The four opaque launchers keep their documented broad scan over the rest of the
+		// segment, and it expands defaults too. Gating the expansion to command position there
+		// and nowhere else would make the same word mean two different things in one file.
+		{"a default under an opaque launcher", "#!/bin/sh\nsu - backup -c '${PROXSAVE_BIN:-/usr/local/bin/proxsave} --backup'\n", true},
+
+		// COUNTERWEIGHTS. Command position still gates everything: a mention stays a mention.
+		{"the default only copied", "#!/bin/sh\ncp \"${PROXSAVE_BIN:-/usr/local/bin/proxsave}\" /backup/\n", false},
+		{"the default copied behind sudo", "#!/bin/sh\nsudo cp \"${PROXSAVE_BIN:-/usr/local/bin/proxsave}\" /backup/\n", false},
+		{"a directory default only mirrored", "#!/bin/sh\nrsync -a \"${SRC:-/opt/proxsave/}\" /mnt/nas/\n", false},
+		{"the alias only copied", "#!/bin/sh\nPROXSAVE_BIN=/opt/site/proxsave\nBIN=$PROXSAVE_BIN\ncp $BIN /backup/\n", false},
+		{"commented out", "#!/bin/sh\n# ${PROXSAVE_BIN:-/usr/local/bin/proxsave} --backup\ntrue\n", false},
+		{"inside a here-document body", "#!/bin/sh\ncat <<EOF\n${PROXSAVE_BIN:-/usr/local/bin/proxsave} --backup\nEOF\ntrue\n", false},
+		{"a default that is not a proxsave path", "#!/bin/sh\n\"${BACKUP_BIN:-/usr/bin/borg}\" create /mnt/repo::x /data\n", false},
+		// NOT expanded on purpose: the word is a recipe for a path, not a path.
+		{"a concatenation", "#!/bin/sh\n\"${PROXSAVE_DIR:-/opt/proxsave}/bin/wrapper.sh\" --backup\n", false},
+		// NOT expanded on purpose: resolving it means evaluating an expansion inside an expansion.
+		{"nested defaults", "#!/bin/sh\n\"${A:-${B:-/usr/local/bin/proxsave}}\" --backup\n", false},
+		// The binary is named as the ARGUMENT of a lookup, not run.
+		{"command substitution", "#!/bin/sh\n\"$(command -v proxsave)\" --backup\n", false},
+		// Operands that are a length, a pattern or a message, not a path.
+		{"string length", "#!/bin/sh\nBIN=/usr/local/bin/proxsave\n\"${#BIN}\" --backup\n", false},
+		{"suffix removal", "#!/bin/sh\nBIN=/usr/local/bin/proxsave\n\"${BIN%%-*}\" --backup\n", false},
+		{"an empty default with the name unknown", "#!/bin/sh\n\"${PROXSAVE_BIN:-}\" --backup\n", false},
+		{"no name at all", "#!/bin/sh\n\"${:-/usr/local/bin/proxsave}\" --backup\n", false},
+		// ":=" means ":-" plus an assignment, and it is left out deliberately: every added
+		// operator needs its own proof, and this one was not in scope.
+		{"assign-and-use form", "#!/bin/sh\n\"${PROXSAVE_BIN:=/usr/local/bin/proxsave}\" --backup\n", false},
+
+		// PRESERVE. These two are true today by the basename rule alone, not by any expansion.
+		// Anyone tightening that rule later must expect THESE rows to move, not the ones above.
+		{"a braced directory joined to the binary", "#!/bin/sh\nPROXSAVE_DIR=/opt/proxsave\n\"${PROXSAVE_DIR}/proxsave\" --backup\n", true},
+		{"a defaulted directory joined to the binary", "#!/bin/sh\n\"${PROXSAVE_DIR:-/opt/proxsave}/proxsave\" --backup\n", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := flagged(t, tc.body); got != tc.want {
+				t.Errorf("flagged = %v, want %v for:\n%s", got, tc.want, tc.body)
+			}
+		})
+	}
+}
+
+// Two properties of the expansion parser that no end-to-end row can observe, and which are
+// therefore pinned here or not at all.
+//
+// FIRST, the operator is ANCHORED to the end of the name. An unanchored search finds the "-" in
+// "%%-*" and in ":?...-missing" and hands back a pattern or an error message as a command; every
+// behaviour row is blind to that, because the string it then produces happens not to name the
+// binary. SECOND, an expansion carrying BOTH a known value and a default yields both, in that
+// order. Today the union is inert - every value in vars already names the binary, so the known
+// branch answers on its own - which is exactly why only a unit test can hold it in place for the
+// day vars is allowed to hold anything else.
+func TestParseScriptExpansion(t *testing.T) {
+	for _, tc := range []struct {
+		word     string
+		name     string
+		fallback string
+		ok       bool
+	}{
+		{"$BIN", "BIN", "", true},
+		{"${BIN}", "BIN", "", true},
+		{"${BIN:-/usr/local/bin/proxsave}", "BIN", "/usr/local/bin/proxsave", true},
+		{"${BIN-/usr/local/bin/proxsave}", "BIN", "/usr/local/bin/proxsave", true},
+		{"${1:-/usr/local/bin/proxsave}", "1", "/usr/local/bin/proxsave", true},
+		{"${BIN:-}", "BIN", "", true},
+		// An unbalanced brace still resolves, exactly as it did before this parser existed.
+		{"${BIN", "BIN", "", true},
+
+		// The operand is a message, an alternative, a pattern or a length - never the command.
+		{"${BIN:?/usr/local/bin/proxsave-missing}", "", "", false},
+		{"${BIN:+/usr/local/bin/proxsave}", "", "", false},
+		{"${BIN%%-*}", "", "", false},
+		{"${BIN#/usr-local}", "", "", false},
+		{"${#BIN}", "", "", false},
+		{"${:-/usr/local/bin/proxsave}", "", "", false},
+		// A concatenation is a recipe for a path, not a path.
+		{"${BIN}/proxsave", "", "", false},
+		// An operator only exists INSIDE braces. Unbraced, the shell expands $BIN and appends the
+		// rest as literal text, so "$BIN-/usr/local/bin/proxsave" is a name with a suffix, not a
+		// default - and reading it as one invented a command out of a word the shell would never
+		// run. Same reason "${BIN}/proxsave" is refused: what is left is a recipe.
+		{"$BIN-/usr/local/bin/proxsave", "", "", false},
+		{"$BIN:-/usr/local/bin/proxsave", "", "", false},
+		{"$BIN/proxsave", "", "", false},
+		// Not an expansion at all.
+		{"/usr/local/bin/proxsave", "", "", false},
+	} {
+		t.Run(tc.word, func(t *testing.T) {
+			name, fallback, ok := parseScriptExpansion(tc.word)
+			if ok != tc.ok || name != tc.name || fallback != tc.fallback {
+				t.Errorf("parseScriptExpansion(%q) = (%q, %q, %v), want (%q, %q, %v)",
+					tc.word, name, fallback, ok, tc.name, tc.fallback, tc.ok)
+			}
+		})
+	}
+}
+
+func TestScriptWordExpansionsKeepsBothBranches(t *testing.T) {
+	got := scriptWordExpansions("\"${BIN:-/usr/local/bin/proxsave}\"", map[string]string{"BIN": "/opt/site/proxsave"})
+	want := []string{"/opt/site/proxsave", "/usr/local/bin/proxsave"}
+	if len(got) != len(want) {
+		t.Fatalf("got %q, want %q", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("got %q, want %q (the known value first, then the default)", got, want)
 		}
 	}
 }
