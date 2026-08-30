@@ -506,6 +506,85 @@ func TestDashboardDaemonInstallInSession(t *testing.T) {
 	}
 }
 
+// The dashboard mutes the global logger and the bootstrap console for the whole operation and
+// never flushes them (dashboard.go:589-595), because raw log lines would corrupt the alternate
+// screen. The result screen is therefore the ONLY channel open on this path, and the install
+// direction had none for the #298 finding: warnIndirectProxsaveCronOnDaemonInstall wrote its
+// three lines into the muted logger and cronRemovalOutcome had no field to carry them, so an
+// operator installing the daemon on a host whose backup runs through their own script saw a
+// green INSTALLED and got two backups a night. The revert direction already had this channel.
+func TestDashboardDaemonInstallWarnsOnADuplicateSchedule(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		outcome     cronRemovalOutcome
+		wantLevel   orchestrator.HealthcheckSetupLevel
+		wantKeyword string
+		wantText    string
+	}{
+		{
+			name:        "nothing else schedules ProxSave: unchanged",
+			outcome:     cronRemovalOutcome{Removed: 1, Verified: true},
+			wantLevel:   orchestrator.HealthcheckSetupLevelOk,
+			wantKeyword: "INSTALLED",
+			wantText:    "The cron entry was removed.",
+		},
+		{
+			name:        "an unmanaged schedule survives: warning",
+			outcome:     cronRemovalOutcome{Verified: true, UnmanagedSchedules: 1},
+			wantLevel:   orchestrator.HealthcheckSetupLevelWarn,
+			wantKeyword: "INSTALLED - DUPLICATE SCHEDULE",
+			wantText:    "Check your crons to remove duplication.",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			installDashboardGates(t, true, true)
+			origShow := showDaemonResultScreenFn
+			t.Cleanup(func() { showDaemonResultScreenFn = origShow })
+			daemonApplyDaemonMode = func(context.Context, *config.Config, string, string, *logging.BootstrapLogger) (cronRemovalOutcome, error) {
+				return tc.outcome, nil
+			}
+			type shown struct {
+				level   orchestrator.HealthcheckSetupLevel
+				keyword string
+				text    string
+			}
+			ch := make(chan shown, 1)
+			showDaemonResultScreenFn = func(_ context.Context, _ *shell.Session, _ string, level orchestrator.HealthcheckSetupLevel, kw, explanation string) {
+				ch <- shown{level, kw, explanation}
+			}
+
+			driver := installDashboardSessionSeam(t)
+			res := driver.spawn(&cli.Args{})
+			driver.waitScreen("Dashboard")
+			driver.keys("down down down down down down down down down enter") // Install daemon
+
+			var got shown
+			select {
+			case got = <-ch:
+			case <-time.After(uitest.Deadline(60 * time.Second)):
+				t.Fatal("the install never reached the result screen")
+			}
+			driver.waitScreen("Dashboard")
+			driver.keys("esc")
+			select {
+			case <-res:
+			case <-time.After(uitest.Deadline(60 * time.Second)):
+				t.Fatal("dashboard did not resolve")
+			}
+
+			if got.level != tc.wantLevel {
+				t.Errorf("level = %v, want %v", got.level, tc.wantLevel)
+			}
+			if got.keyword != tc.wantKeyword {
+				t.Errorf("keyword = %q, want %q", got.keyword, tc.wantKeyword)
+			}
+			if !strings.Contains(got.text, tc.wantText) {
+				t.Errorf("the screen must state %q, got:\n%s", tc.wantText, got.text)
+			}
+		})
+	}
+}
+
 // The other drivable #298 call site (see TestMaybeAutoMigrateDaemonReportsWhatTheRemovalDid).
 // The result screen is the only channel open on this path, so if the removal claim regressed
 // here the TUI would state a fact the code had not established while the CLI stated the truth.

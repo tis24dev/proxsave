@@ -919,10 +919,12 @@ func systemCronCommandToken(line string) string {
 // is being installed and this text ("it will keep firing alongside the daemon") would
 // be flatly untrue. A warning that is right on three paths and wrong on the fourth is
 // worse than one extra `crontab -l`.
-func warnIndirectProxsaveCronOnDaemonInstall(ctx context.Context, bootstrap *logging.BootstrapLogger) {
+// It returns how many entries it found, so a caller whose only channel is a rendered screen
+// can say the same thing the log line says (cronRemovalOutcome.UnmanagedSchedules).
+func warnIndirectProxsaveCronOnDaemonInstall(ctx context.Context, bootstrap *logging.BootstrapLogger) int {
 	refs, err := detectIndirectProxsaveCron(ctx)
 	if err != nil || len(refs) == 0 {
-		return
+		return 0
 	}
 	// One problem, one WARNING. The header and the findings are INFO: three warning lines for
 	// a single fact read as three problems in the run's "WARNINGS/ERRORS DURING RUN
@@ -938,4 +940,5 @@ func warnIndirectProxsaveCronOnDaemonInstall(ctx context.Context, bootstrap *log
 		logBootstrapInfo(bootstrap, "  - %s", line)
 	}
 	logBootstrapWarning(bootstrap, "%d unmanaged cron line(s) NOT removed, so they keep firing alongside the daemon: this can cause problems, exit %d.", len(refs), types.ExitBackupSkipped.Int())
+	return len(refs)
 }

@@ -781,8 +781,15 @@ func TestWarnIndirectProxsaveCronOnDaemonInstallStatesFactsOnly(t *testing.T) {
 	def.SetOutput(&buf)
 	logging.SetDefaultLogger(def)
 
-	warnIndirectProxsaveCronOnDaemonInstall(context.Background(), nil)
+	found := warnIndirectProxsaveCronOnDaemonInstall(context.Background(), nil)
 	out := buf.String()
+
+	// The count is returned as well as logged. On the dashboard the log goes nowhere - the
+	// console and the bootstrap are muted for the whole operation - so the returned value is
+	// the only thing that reaches the result screen (cronRemovalOutcome.UnmanagedSchedules).
+	if found != 1 {
+		t.Errorf("warnIndirectProxsaveCronOnDaemonInstall returned %d, want the number it found", found)
+	}
 
 	for _, want := range []string{
 		"unmanaged cron line(s) still schedule ProxSave", // WHAT was found

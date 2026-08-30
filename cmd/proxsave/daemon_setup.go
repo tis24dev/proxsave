@@ -174,7 +174,7 @@ func applyDaemonMode(ctx context.Context, cfg *config.Config, configPath, execTo
 	// now shares the night with it. Say so - and only say so; the wrapper is hand-written,
 	// it can carry a mount guard, an flock and its own exit handling, and deleting it on a
 	// name heuristic destroys a safety net we did not write.
-	warnIndirectProxsaveCronOnDaemonInstall(ctx, bootstrap)
+	cronOutcome.UnmanagedSchedules = warnIndirectProxsaveCronOnDaemonInstall(ctx, bootstrap)
 	// HEALTHCHECK_ENABLED=true matches the fresh-install default so a retrofitted
 	// host also gets the dead-man switch out of the box (centralized resolves ping
 	// URLs at runtime and degrades gracefully when unpaired).
@@ -685,7 +685,7 @@ func reconcileSchedulerAfterInstall(ctx context.Context, wizardMode, configPath 
 		// removal DIRECTLY rather than through applyDaemonMode, so it needs the #298 wrapper
 		// warning of its own: an install/reinstall that picked daemon mode on a wrapper host
 		// would otherwise end double-scheduled and silent.
-		warnIndirectProxsaveCronOnDaemonInstall(ctx, bootstrap)
+		_ = warnIndirectProxsaveCronOnDaemonInstall(ctx, bootstrap)
 		// `enable --now` does NOT restart an ALREADY-running daemon, so a reinstall/reconfigure
 		// (or a rebuilt binary) would leave it on the OLD inode. Restart so the running process is
 		// the freshly installed binary before we report alignment.
@@ -760,6 +760,16 @@ type cronRemovalOutcome struct {
 	// host's crontab, which is NOT the same as "there was nothing to remove" and must
 	// never be reported as if it were.
 	Verified bool
+	// UnmanagedSchedules counts the entries that still schedule ProxSave after the removal
+	// above: an operator command the canonical matcher cannot see, or a line under /etc that
+	// ProxSave may not edit. Zero on the ordinary host.
+	//
+	// It is carried out rather than only logged because the dashboard mutes the global logger
+	// and the bootstrap console for the whole operation and never flushes them, so on that
+	// front-end the result screen is the only channel left. Without this field it showed a
+	// green INSTALLED over a host that now runs the backup twice - the same shape of defect as
+	// issue #298 itself, the front-end asserting an outcome the code had not established.
+	UnmanagedSchedules int
 }
 
 // cronRemovalClause renders an outcome as one standalone sentence, so the three CLI

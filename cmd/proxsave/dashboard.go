@@ -598,6 +598,7 @@ func runDashboardDaemonAdmin(ctx context.Context, session *shell.Session, instal
 	work := "Reverting to the cron scheduler..."
 	doneTitle := "Daemon disabled"
 	doneKeyword := "REVERTED TO CRON"
+	doneLevel := orchestrator.HealthcheckSetupLevelOk
 	doneMsg := "Reverted to the cron scheduler and removed the daemon service. Future upgrades will not reinstall it."
 	if install {
 		title = "Installing daemon"
@@ -636,6 +637,17 @@ func runDashboardDaemonAdmin(ctx context.Context, session *shell.Session, instal
 	// removed is how issue #298 stayed invisible on both front-ends at once.
 	if install {
 		doneMsg = "The resident daemon (" + daemonUnitName + ") is active. " + cronRemovalClause(cronOutcome)
+		// The install direction had no channel for the #298 finding at all: the warning it
+		// produces goes through the bootstrap logger muted above, and the screen said INSTALLED
+		// in green over a host that now runs the backup twice. The removal clause cannot carry
+		// it either - "no proxsave cron entry was present to remove" is exactly what a clean
+		// install says - so on a finding the screen states the duplication instead and the
+		// level goes yellow.
+		if cronOutcome.UnmanagedSchedules > 0 {
+			doneLevel = orchestrator.HealthcheckSetupLevelWarn
+			doneKeyword = "INSTALLED - DUPLICATE SCHEDULE"
+			doneMsg = "The resident daemon (" + daemonUnitName + ") is active. Check your crons to remove duplication."
+		}
 	}
 	// The revert has the same problem in its own direction. applyCronMode emits its /etc
 	// schedule advisory through the bootstrap logger, which is console-quiet here and is
@@ -645,7 +657,7 @@ func runDashboardDaemonAdmin(ctx context.Context, session *shell.Session, instal
 	if !install && len(revert.SystemCronAdvisory) > 0 {
 		doneMsg = strings.TrimSpace(doneMsg + "\n\n" + strings.Join(revert.SystemCronAdvisory, "\n"))
 	}
-	showDaemonResultScreenFn(ctx, session, doneTitle, orchestrator.HealthcheckSetupLevelOk, doneKeyword, doneMsg)
+	showDaemonResultScreenFn(ctx, session, doneTitle, doneLevel, doneKeyword, doneMsg)
 }
 
 // dashboardDaemonState decides which daemon command the menu offers, from the on-disk
