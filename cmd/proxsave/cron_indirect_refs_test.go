@@ -509,6 +509,90 @@ func TestScriptProbeSeesTheCommandEnvSplitStringCarries(t *testing.T) {
 	}
 }
 
+// Short options bundle: "sudo -Hu backup cmd" is "sudo -H -u backup cmd", and getopt takes -u's
+// value from the NEXT word. The option table is looked up on the whole word, so "-Hu" matched
+// nothing, was treated as boolean, and the command position landed on "backup" - the wrapper
+// behind it invisible to the --upgrade refusal, the revert count, the /etc scan and the run-time
+// note. The claim that bundles need no table entry holds only when the value is INSIDE the word.
+func TestScriptProbeHandlesBundledShortOptions(t *testing.T) {
+	dir := t.TempDir()
+	flagged := func(t *testing.T, body string) bool {
+		t.Helper()
+		p := filepath.Join(dir, strings.ReplaceAll(t.Name(), "/", "_")+".sh")
+		if err := os.WriteFile(p, []byte(body), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		return len(indirectProxsaveCronRefs([]string{"0 2 * * * " + p}, cronProbeReadScripts)) > 0
+	}
+	const call = "/usr/local/bin/proxsave --backup\n"
+
+	for _, tc := range []struct {
+		name string
+		body string
+		want bool
+	}{
+		// The bundle's last letter takes the next word.
+		{"sudo -Hu", "#!/bin/sh\nsudo -Hu backup " + call, true},
+		{"sudo -EHu", "#!/bin/sh\nsudo -EHu backup " + call, true},
+		{"flock -nw", "#!/bin/sh\nflock -nw 30 /var/lock/x " + call, true},
+		{"xargs -rn", "#!/bin/sh\nls /etc | xargs -rn 1 " + call, true},
+
+		// The bundle carries its value inline: the next word is the command already.
+		{"ionice -c3", "#!/bin/sh\nionice -c3 " + call, true},
+		{"nice -19", "#!/bin/sh\nnice -19 " + call, true},
+		{"stdbuf -oL", "#!/bin/sh\nstdbuf -oL " + call, true},
+
+		// And none of it may invent a command out of an argument.
+		{"sudo -Hu running something else", "#!/bin/sh\nsudo -Hu backup cp /usr/local/bin/proxsave /backup/\n", false},
+		{"flock -nw running something else", "#!/bin/sh\nflock -nw 30 /var/lock/x find /var/log/proxsave.log -delete\n", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := flagged(t, tc.body); got != tc.want {
+				t.Errorf("flagged = %v, want %v for:\n%s", got, tc.want, tc.body)
+			}
+		})
+	}
+}
+
+// A here-document delimiter can be quoted three ways, and all three mean the same thing: the body
+// is literal. Only two were recognised, so a body opened with <<\EOF was read as code.
+//
+// The CRLF case is included for completeness rather than because a host behaves differently: a
+// script with Windows line endings does not execute on Linux at all (the interpreter becomes
+// "/bin/sh\r" and exec fails), so it schedules nothing. Reading it correctly still costs one
+// line, and the alternative is an advisory about a script that cannot run.
+func TestScriptProbeReadsEveryDelimiterFormAndCRLF(t *testing.T) {
+	dir := t.TempDir()
+	flagged := func(t *testing.T, body string) bool {
+		t.Helper()
+		p := filepath.Join(dir, strings.ReplaceAll(t.Name(), "/", "_")+".sh")
+		if err := os.WriteFile(p, []byte(body), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		return len(indirectProxsaveCronRefs([]string{"0 2 * * * " + p}, cronProbeReadScripts)) > 0
+	}
+	const call = "/usr/local/bin/proxsave --backup\n"
+
+	for _, tc := range []struct {
+		name string
+		body string
+		want bool
+	}{
+		{"unquoted delimiter", "#!/bin/sh\ncat <<EOF\n" + call + "EOF\n", false},
+		{"single-quoted delimiter", "#!/bin/sh\ncat <<'EOF'\n" + call + "EOF\n", false},
+		{"double-quoted delimiter", "#!/bin/sh\ncat <<\"EOF\"\n" + call + "EOF\n", false},
+		{"backslash-quoted delimiter", "#!/bin/sh\ncat <<\\EOF\n" + call + "EOF\n", false},
+		{"CRLF continuation is still joined", "#!/bin/sh\r\nrsync -a --delete \\\r\n  /opt/proxsave/ /mnt/nas/\r\n", false},
+		{"CRLF call is still a call", "#!/bin/sh\r\n/usr/local/bin/proxsave --backup\r\n", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := flagged(t, tc.body); got != tc.want {
+				t.Errorf("flagged = %v, want %v for:\n%s", got, tc.want, tc.body)
+			}
+		})
+	}
+}
+
 // #298 on the exact path that caused it: the unattended --upgrade retrofit must
 // REFUSE to install the daemon while a wrapper cron entry is live, and the refusal
 // must be a true no-op (host still on cron, backup.env untouched), never a half

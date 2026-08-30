@@ -372,6 +372,11 @@ func scriptProxsaveProbe(token string) (references bool, readable bool) {
 	if err != nil || bytes.IndexByte(data, 0) >= 0 {
 		return false, false
 	}
+	// Carriage returns are stripped so the line passes read the same either way. Not because such
+	// a host behaves differently: a script with CRLF endings does not execute on Linux at all,
+	// the interpreter becoming "/bin/sh\r", so it schedules nothing. It costs one line to read it
+	// correctly rather than emit an advisory about a script that cannot run.
+	data = bytes.ReplaceAll(data, []byte("\r\n"), []byte("\n"))
 	lines := scriptCodeLines(strings.Split(string(data), "\n"))
 	vars := scriptProxsavePathVars(lines)
 	for _, line := range lines {
@@ -555,7 +560,9 @@ func hereDocDelimiter(line string) string {
 	}
 	rest = strings.TrimPrefix(rest, "-")
 	rest = strings.TrimLeft(rest, " \t")
-	word := strings.Trim(strings.Fields(rest + " ")[0], "\"'")
+	// All three quoting forms mean the same thing - the body is literal - so all three have to be
+	// recognised, or the body is read as code.
+	word := strings.TrimPrefix(strings.Trim(strings.Fields(rest + " ")[0], "\"'"), "\\")
 	if word == "" {
 		return ""
 	}
@@ -727,11 +734,34 @@ func skipLauncherOptions(launcher string, words []string) []string {
 		if strings.Contains(word, "=") {
 			continue // --flag=value carries its value in the same word
 		}
-		if _, takesValue := valueFlags[word]; takesValue && len(words) > 0 {
+		if launcherFlagTakesNextWord(word, valueFlags) && len(words) > 0 {
 			words = words[1:]
 		}
 	}
 	return words
+}
+
+// launcherFlagTakesNextWord reports whether this option word consumes the following word as its
+// value.
+//
+// Short options BUNDLE: "sudo -Hu backup" is "sudo -H -u backup", and getopt takes -u's value
+// from the next word. A whole-word lookup misses that, treats the bundle as boolean, and lands
+// the command position on the value - the wrapper behind it unseen, which is the direction that
+// costs a duplicate schedule.
+//
+// The value is inline whenever the bundle does not END on a value-taking letter: "-c3", "-19" and
+// "-oL" all carry it in the same word, and there the next word is already the command. Looking at
+// the last letter alone is what tells the two apart.
+func launcherFlagTakesNextWord(word string, valueFlags map[string]struct{}) bool {
+	if _, ok := valueFlags[word]; ok {
+		return true
+	}
+	if len(word) <= 2 || !strings.HasPrefix(word, "-") || strings.HasPrefix(word, "--") {
+		return false
+	}
+	runes := []rune(word)
+	_, ok := valueFlags["-"+string(runes[len(runes)-1])]
+	return ok
 }
 
 func isIn(word string, set map[string]struct{}) bool {
