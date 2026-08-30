@@ -2,6 +2,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"io"
@@ -12,6 +13,7 @@ import (
 
 	"github.com/tis24dev/proxsave/internal/config"
 	"github.com/tis24dev/proxsave/internal/logging"
+	"github.com/tis24dev/proxsave/internal/types"
 )
 
 // Issue #298: "Daemon mode enabled: <unit> is active and the cron entry was removed." was
@@ -441,6 +443,62 @@ func TestApplyCronModeAdvisoryUsesOneWarning(t *testing.T) {
 		if !strings.Contains(seen, want) {
 			t.Errorf("the block must still state %q, out=%q", want, seen)
 		}
+	}
+}
+
+// Issue #298's headline defect was at the CALL SITES, not in the renderer: every one of them
+// printed "the cron entry was removed" unconditionally, including on the hosts where
+// removeCanonicalCronEntry had matched nothing. cronRemovalClause is unit tested, but a
+// renderer nobody is proved to call is indistinguishable from no fix at all - the old literal
+// can be pasted back over any of these lines and the suite stays green.
+//
+// Two of the four call sites are drivable with the seams that exist: the --upgrade retrofit
+// here, and the dashboard's install action (dashboard_test.go). runDaemonSetup and
+// reconcileSchedulerAfterInstall call the privileged installer directly and are not.
+func TestMaybeAutoMigrateDaemonReportsWhatTheRemovalDid(t *testing.T) {
+	origRead, origApply, origPaths := crontabReadLinesFn, applyDaemonModeFn, systemCronPaths
+	t.Cleanup(func() {
+		crontabReadLinesFn, applyDaemonModeFn, systemCronPaths = origRead, origApply, origPaths
+	})
+	crontabReadLinesFn = func(context.Context) ([]string, error) { return nil, nil }
+	systemCronPaths = []string{filepath.Join(t.TempDir(), "absent")}
+
+	for _, tc := range []struct {
+		name    string
+		outcome cronRemovalOutcome
+	}{
+		{"nothing matched", cronRemovalOutcome{Verified: true}},
+		{"crontab unreadable", cronRemovalOutcome{}},
+		{"one line removed", cronRemovalOutcome{Removed: 1, Verified: true}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			applyDaemonModeFn = func(context.Context, *config.Config, string, string, *logging.BootstrapLogger) (cronRemovalOutcome, error) {
+				return tc.outcome, nil
+			}
+			dir := t.TempDir()
+			configPath := filepath.Join(dir, "backup.env")
+			if err := os.WriteFile(configPath, []byte("SCHEDULER_MODE=cron\nDAEMON_OPT_OUT=false\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+
+			orig := logging.GetDefaultLogger()
+			t.Cleanup(func() { logging.SetDefaultLogger(orig) })
+			var buf bytes.Buffer
+			def := logging.New(types.LogLevelDebug, false)
+			def.SetOutput(&buf)
+			logging.SetDefaultLogger(def)
+
+			maybeAutoMigrateDaemon(context.Background(), configPath, dir, "/usr/local/bin/proxsave", nil)
+			out := buf.String()
+
+			// The sentence on screen is the renderer's, not a literal of its own.
+			if want := cronRemovalClause(tc.outcome); !strings.Contains(out, want) {
+				t.Errorf("the migration report must carry %q, out=%q", want, out)
+			}
+			if tc.outcome.Removed == 0 && strings.Contains(out, "cron entry was removed") {
+				t.Errorf("nothing was removed but the report claims a removal, out=%q", out)
+			}
+		})
 	}
 }
 

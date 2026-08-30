@@ -496,6 +496,59 @@ func TestDashboardDaemonInstallInSession(t *testing.T) {
 	}
 }
 
+// The other drivable #298 call site (see TestMaybeAutoMigrateDaemonReportsWhatTheRemovalDid).
+// The result screen is the only channel open on this path, so if the removal claim regressed
+// here the TUI would state a fact the code had not established while the CLI stated the truth.
+func TestDashboardDaemonInstallReportsWhatTheRemovalDid(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		outcome cronRemovalOutcome
+	}{
+		{"nothing matched", cronRemovalOutcome{Verified: true}},
+		{"crontab unreadable", cronRemovalOutcome{}},
+		{"one line removed", cronRemovalOutcome{Removed: 1, Verified: true}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			installDashboardGates(t, true, true) // cron -> the menu offers "Install daemon"
+			origShow := showDaemonResultScreenFn
+			t.Cleanup(func() { showDaemonResultScreenFn = origShow })
+			daemonApplyDaemonMode = func(context.Context, *config.Config, string, string, *logging.BootstrapLogger) (cronRemovalOutcome, error) {
+				return tc.outcome, nil
+			}
+			shown := make(chan string, 1)
+			showDaemonResultScreenFn = func(_ context.Context, _ *shell.Session, _ string, _ orchestrator.HealthcheckSetupLevel, kw, explanation string) {
+				shown <- kw + "\n" + explanation
+			}
+
+			driver := installDashboardSessionSeam(t)
+			res := driver.spawn(&cli.Args{})
+			driver.waitScreen("Dashboard")
+			driver.keys("down down down down down down down down down enter") // Install daemon
+
+			var msg string
+			select {
+			case msg = <-shown:
+			case <-time.After(uitest.Deadline(60 * time.Second)):
+				t.Fatal("the install never reached the result screen")
+			}
+			driver.waitScreen("Dashboard")
+			driver.keys("esc")
+			select {
+			case <-res:
+			case <-time.After(uitest.Deadline(60 * time.Second)):
+				t.Fatal("dashboard did not resolve")
+			}
+
+			if want := cronRemovalClause(tc.outcome); !strings.Contains(msg, want) {
+				t.Errorf("the result screen must carry %q, got:\n%s", want, msg)
+			}
+			if tc.outcome.Removed == 0 && strings.Contains(msg, "cron entry was removed") {
+				t.Errorf("nothing was removed but the screen claims a removal, got:\n%s", msg)
+			}
+		})
+	}
+}
+
 // TestDashboardDaemonRemoveWhenActive: with the daemon active the menu offers
 // "Disable daemon", which runs the revert op in-session (RunTask + notice) and
 // loops back. An op failure surfaces as an error notice, still non-blocking.
