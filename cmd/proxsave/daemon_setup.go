@@ -87,15 +87,10 @@ func runDaemonRemove(rt *appRuntime) int {
 func runDaemonStatus(rt *appRuntime) int {
 	ctx := rt.ctx
 	mode := "unknown"
-	optOut := "unknown"
 	baseDir := ""
 	var interval time.Duration
 	if rt.cfg != nil {
 		mode = rt.cfg.SchedulerMode
-		optOut = "no"
-		if rt.cfg.DaemonOptOut {
-			optOut = "yes"
-		}
 		interval = rt.cfg.HealthcheckHeartbeatInterval
 		baseDir = strings.TrimSpace(rt.cfg.BaseDir)
 	}
@@ -125,7 +120,6 @@ func runDaemonStatus(rt *appRuntime) int {
 	logging.Info("Scheduler mode: %s", mode)
 	logging.Info("Daemon service (%s): %s", daemonUnitName, unit)
 	logging.Info("Service state (systemctl is-active): %s", active)
-	logging.Info("Opted out of auto-migration (--daemon-remove): %s", optOut)
 	if ds.HaveInfo {
 		logging.Info("Running version: %s (%s)", ds.Version, ds.Commit)
 	}

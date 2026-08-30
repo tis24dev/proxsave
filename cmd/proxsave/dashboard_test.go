@@ -333,7 +333,7 @@ func TestBuildDaemonStatusPrompt(t *testing.T) {
 		Diagnosis:    health.Diagnosis{State: health.TxRunningNoReport},
 	}
 	level, keyword, expl := daemonStatusStyle(behind)
-	prompt := ansi.Strip(buildDaemonStatusPrompt(level, keyword, expl, "daemon", "installed", "active", "no", behind))
+	prompt := ansi.Strip(buildDaemonStatusPrompt(level, keyword, expl, "daemon", "installed", "active", behind))
 	for _, want := range []string{
 		"Status: ",
 		keyword,
@@ -342,12 +342,21 @@ func TestBuildDaemonStatusPrompt(t *testing.T) {
 		"Scheduler mode: daemon",
 		"Daemon service (proxsave-daemon.service): installed",
 		"Service state (systemctl is-active): active",
-		"Opted out of auto-migration (--daemon-remove): no",
 		"Running version: 1.2.3 (abc1234)",
 		"Binary alignment: BEHIND (restart needed)",
 	} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("prompt missing %q\n---\n%s", want, prompt)
+		}
+	}
+
+	// The screen used to carry "Opted out of auto-migration (--daemon-remove): yes|no". There is
+	// no opt-out any longer: the retrofit reads whether SCHEDULER_MODE was already in the file,
+	// and the "Scheduler mode:" line directly above already states the answer that matters. A
+	// line naming a key nobody writes is a claim about the host that is no longer true.
+	for _, gone := range []string{"Opted out", "auto-migration", "DAEMON_OPT_OUT"} {
+		if strings.Contains(prompt, gone) {
+			t.Errorf("the status screen must not mention %q\n---\n%s", gone, prompt)
 		}
 	}
 }
@@ -375,7 +384,6 @@ func TestBuildDaemonStatusPromptSanitizesInjection(t *testing.T) {
 		"cron\x1b]0;evilmode\x07", // mode: from the config file
 		"installed",
 		"active\x9b\x1b]0;x\x07running", // active: from systemctl (0x9b is the bare C1 CSI byte)
-		"no",
 		behind,
 	)
 	assertNoRawInjection(t, prompt)

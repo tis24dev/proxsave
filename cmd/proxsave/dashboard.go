@@ -691,14 +691,9 @@ func runDashboardDaemonStatus(ctx context.Context, session *shell.Session, confi
 	errDaemonStatusEsc := errors.New("daemon status: esc")
 	for {
 		mode := "unknown"
-		optOut := "unknown"
 		var interval time.Duration
 		if cfg, err := daemonStatusLoadConfig(configPath, baseDir); err == nil && cfg != nil {
 			mode = cfg.SchedulerMode
-			optOut = "no"
-			if cfg.DaemonOptOut {
-				optOut = "yes"
-			}
 			interval = cfg.HealthcheckHeartbeatInterval
 			if strings.TrimSpace(cfg.BaseDir) != "" {
 				baseDir = cfg.BaseDir
@@ -731,7 +726,7 @@ func runDashboardDaemonStatus(ctx context.Context, session *shell.Session, confi
 		// dashboard Status screen). daemonStatusStyle is shared with the plain-text
 		// --daemon-status CLI line, so uppercase HERE (the graphical consumer) rather than at
 		// the source, keeping the CLI/log readout in its natural case.
-		prompt := buildDaemonStatusPrompt(level, strings.ToUpper(keyword), explanation, mode, unit, active, optOut, ds)
+		prompt := buildDaemonStatusPrompt(level, strings.ToUpper(keyword), explanation, mode, unit, active, ds)
 
 		items := []components.SelectorItem[daemonStatusAction]{
 			{Label: "Re-check", Description: "re-run the daemon state check", Value: daemonStatusActionCheck},
@@ -767,12 +762,12 @@ func renderDaemonStatusLevel(level orchestrator.HealthcheckSetupLevel, text stri
 // buildHealthcheckPrompt): a short intro, a two-line Status block (a colored keyword + a Subtle
 // explanation), then a Details block with the scheduler/service facts. The wording/logic of the
 // detail lines is unchanged from the old Notice body; only the presentation moved into the prompt.
-func buildDaemonStatusPrompt(level orchestrator.HealthcheckSetupLevel, keyword, explanation, mode, unit, active, optOut string, ds health.DaemonState) string {
+func buildDaemonStatusPrompt(level orchestrator.HealthcheckSetupLevel, keyword, explanation, mode, unit, active string, ds health.DaemonState) string {
 	// Every dynamic segment below carries text from outside this file (keyword/explanation from
 	// daemonStatusStyle, mode from the config file, active from systemctl, Version/Commit RAW from
 	// .daemon_info.json), so each is SanitizeText-scrubbed before theme rendering to keep raw
 	// ANSI/OSC/C0/C1 escapes out of the verbatim WithSelectorPromptStyled path. Compile-time
-	// literals (unit/optOut, the "Binary alignment" verdict) are left as-is: sanitizing them is a
+	// literals (unit, the "Binary alignment" verdict) are left as-is: sanitizing them is a
 	// no-op.
 	var b strings.Builder
 	b.WriteString(theme.Text.Render("Resident backup daemon (runs scheduled backups + healthchecks reporting)."))
@@ -793,8 +788,6 @@ func buildDaemonStatusPrompt(level orchestrator.HealthcheckSetupLevel, keyword, 
 	b.WriteString(theme.Text.Render("Daemon service (" + daemonUnitName + "): " + unit))
 	b.WriteString("\n")
 	b.WriteString(theme.Text.Render("Service state (systemctl is-active): " + components.SanitizeText(active)))
-	b.WriteString("\n")
-	b.WriteString(theme.Text.Render("Opted out of auto-migration (--daemon-remove): " + optOut))
 	// The running version comes from the identity record (HaveInfo). The alignment verdict comes from
 	// the record-independent /proc probe, so show it whenever AlignChecked -- a live daemon on a
 	// replaced binary reads "Binary alignment: BEHIND". Binary alignment is known only when
