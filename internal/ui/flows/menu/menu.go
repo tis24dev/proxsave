@@ -52,10 +52,9 @@ const (
 type DaemonState int
 
 const (
-	DaemonStateUnknown  DaemonState = iota // config unreadable: offer only Status
-	DaemonStateOnCron                      // on cron, not opted out: offer Install
-	DaemonStateActive                      // daemon is the active scheduler: offer Disable
-	DaemonStateDisabled                    // reverted via --daemon-remove: offer Re-enable
+	DaemonStateUnknown DaemonState = iota // config unreadable: offer only Status
+	DaemonStateOnCron                     // cron is the scheduler: offer Install
+	DaemonStateActive                     // daemon is the active scheduler: offer Disable
 )
 
 // errMenuExit is the esc sentinel (leave without doing anything).
@@ -93,8 +92,6 @@ func Run(ctx context.Context, session *shell.Session, daemon DaemonState) (Actio
 	case DaemonStateActive:
 		items = append(items, components.SelectorItem[Action]{Label: "Disable", Description: "stop the daemon and revert to the cron scheduler", Value: ActionDaemonRemove})
 		items = append(items, components.SelectorItem[Action]{Label: "Restart", Description: "restart the resident daemon (e.g. to load a rebuilt binary)", Value: ActionDaemonRestart})
-	case DaemonStateDisabled:
-		items = append(items, components.SelectorItem[Action]{Label: "Re-enable", Description: "switch back to the resident daemon scheduler", Value: ActionDaemonSetup})
 	case DaemonStateOnCron:
 		items = append(items, components.SelectorItem[Action]{Label: "Install", Description: "switch to the resident daemon scheduler (from cron)", Value: ActionDaemonSetup})
 	}

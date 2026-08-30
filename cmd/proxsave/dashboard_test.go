@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"os"
 	"strings"
 	"testing"
@@ -17,6 +18,7 @@ import (
 	"github.com/tis24dev/proxsave/internal/orchestrator"
 	"github.com/tis24dev/proxsave/internal/types"
 	"github.com/tis24dev/proxsave/internal/ui/components"
+	"github.com/tis24dev/proxsave/internal/ui/flows/menu"
 	"github.com/tis24dev/proxsave/internal/ui/shell"
 	"github.com/tis24dev/proxsave/internal/ui/theme"
 	"github.com/tis24dev/proxsave/internal/uitest"
@@ -833,6 +835,36 @@ func TestDashboardSubScreenIdleTimeoutExits(t *testing.T) {
 		// The sub-screen (then the menu) hit the idle timeout and the dashboard exited.
 	case <-time.After(uitest.Deadline(5 * time.Second)):
 		t.Fatal("dashboard sub-screen hung: the idle timeout did not bound it")
+	}
+}
+
+// The menu row is decided by the scheduler mode alone. It used to consult a second key,
+// DAEMON_OPT_OUT, purely to tell "reverted from the daemon" apart from "never had it" and
+// label the same command "Re-enable" instead of "Install". Both rows ran ActionDaemonSetup and
+// the distinction was never one the operator could act on differently, so with the tombstone
+// gone the two states collapse into one rather than needing a replacement signal.
+func TestDashboardDaemonStateIsSchedulerModeOnly(t *testing.T) {
+	orig := daemonStatusLoadConfig
+	t.Cleanup(func() { daemonStatusLoadConfig = orig })
+
+	for _, tc := range []struct {
+		name string
+		cfg  *config.Config
+		err  error
+		want menu.DaemonState
+	}{
+		{"daemon", &config.Config{SchedulerMode: "daemon"}, nil, menu.DaemonStateActive},
+		{"cron", &config.Config{SchedulerMode: "cron"}, nil, menu.DaemonStateOnCron},
+		{"cron, and the retired tombstone is not consulted", &config.Config{SchedulerMode: "cron", DaemonOptOut: true}, nil, menu.DaemonStateOnCron},
+		{"daemon, and the retired tombstone is not consulted", &config.Config{SchedulerMode: "daemon", DaemonOptOut: true}, nil, menu.DaemonStateActive},
+		{"config unreadable: only Status", nil, errors.New("nope"), menu.DaemonStateUnknown},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			daemonStatusLoadConfig = func(string, string) (*config.Config, error) { return tc.cfg, tc.err }
+			if got := dashboardDaemonState(&cli.Args{}); got != tc.want {
+				t.Errorf("dashboardDaemonState() = %v, want %v", got, tc.want)
+			}
+		})
 	}
 }
 

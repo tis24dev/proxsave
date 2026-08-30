@@ -648,8 +648,13 @@ func runDashboardDaemonAdmin(ctx context.Context, session *shell.Session, instal
 	showDaemonResultScreenFn(ctx, session, doneTitle, orchestrator.HealthcheckSetupLevelOk, doneKeyword, doneMsg)
 }
 
-// dashboardDaemonState decides which daemon command the menu offers, from the
-// on-disk scheduler mode + opt-out tombstone. Unreadable config -> only Status.
+// dashboardDaemonState decides which daemon command the menu offers, from the on-disk
+// scheduler mode alone. Unreadable config -> only Status.
+//
+// It used to consult DAEMON_OPT_OUT as well, purely to label the same command "Re-enable"
+// rather than "Install" on a host that had reverted. Both rows ran ActionDaemonSetup and the
+// difference was never one the operator could act on, so the retired tombstone leaves nothing
+// behind here: cron is cron however the host got there.
 func dashboardDaemonState(args *cli.Args) menu.DaemonState {
 	configPath := ""
 	if args != nil {
@@ -660,14 +665,10 @@ func dashboardDaemonState(args *cli.Args) menu.DaemonState {
 	if err != nil || cfg == nil {
 		return menu.DaemonStateUnknown
 	}
-	switch {
-	case cfg.SchedulerMode == "daemon":
+	if cfg.SchedulerMode == "daemon" {
 		return menu.DaemonStateActive
-	case cfg.DaemonOptOut:
-		return menu.DaemonStateDisabled
-	default:
-		return menu.DaemonStateOnCron
 	}
+	return menu.DaemonStateOnCron
 }
 
 // daemonStatusAction is the choice on the daemon-status screen: re-run the state check,
