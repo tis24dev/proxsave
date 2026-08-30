@@ -427,6 +427,88 @@ func TestScriptProbeJoinsLineContinuations(t *testing.T) {
 	}
 }
 
+// The here-doc pass drops the BODY of a here-document, and it decided a body had started from the
+// first "<<" on the line. Shell only opens one when that "<<" is a redirection: inside a comment,
+// inside a string, or inside an arithmetic expansion it is not. Getting that wrong is not a
+// missed line, it is the rest of the FILE: everything up to a delimiter that never arrives is
+// discarded, the probe answers "read it, found nothing", and that answer also suppresses the
+// name fallback, so a wrapper called proxsave-nas-guard goes invisible too.
+//
+// Line joining has the same shape of error in the other direction: shell does not continue a
+// COMMENT, so a comment ending in a backslash that swallows the next line hides a real call.
+func TestScriptProbeRecognisesWhichMarkersAreReal(t *testing.T) {
+	dir := t.TempDir()
+	flagged := func(t *testing.T, body string) bool {
+		t.Helper()
+		p := filepath.Join(dir, strings.ReplaceAll(t.Name(), "/", "_")+".sh")
+		if err := os.WriteFile(p, []byte(body), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		return len(indirectProxsaveCronRefs([]string{"0 2 * * * " + p}, cronProbeReadScripts)) > 0
+	}
+	const call = "/usr/local/bin/proxsave --backup\n"
+
+	for _, tc := range []struct {
+		name string
+		body string
+		want bool
+	}{
+		// "<<" that opens nothing: the call below it must survive.
+		{"inside a comment", "#!/bin/sh\n# see docs/cron.md << section 3\n" + call, true},
+		{"inside an arithmetic expansion", "#!/bin/sh\nMAX=$(( 1 << 20 ))\n" + call, true},
+		{"inside a double-quoted string", "#!/bin/sh\nlogger \"budget << 3 files\"\n" + call, true},
+		{"inside a single-quoted string", "#!/bin/sh\nlogger 'budget << 3 files'\n" + call, true},
+		{"a here-string is not a here-doc", "#!/bin/sh\ngrep proxsave <<< \"$LIST\"\n" + call, true},
+
+		// A real here-doc still hides its body, and still ends at its delimiter.
+		{"a real body is still data", "#!/bin/sh\ncat <<EOF\n" + call + "EOF\nexit 0\n", false},
+		{"code after the body still counts", "#!/bin/sh\ncat <<EOF\nsee the manual\nEOF\n" + call, true},
+
+		// A comment does not continue onto the next line.
+		{"a comment ending in a backslash", "#!/bin/sh\n# old command \\\n" + call, true},
+		// A real continuation still joins.
+		{"a real continuation still joins", "#!/bin/sh\nrsync -a --delete \\\n  /opt/proxsave/ /mnt/nas/\n", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := flagged(t, tc.body); got != tc.want {
+				t.Errorf("flagged = %v, want %v for:\n%s", got, tc.want, tc.body)
+			}
+		})
+	}
+}
+
+// env -S takes a whole command STRING as its value, the way sh -c does. Listing it among the
+// options whose value is to be skipped threw away the very command it was pointing at.
+func TestScriptProbeSeesTheCommandEnvSplitStringCarries(t *testing.T) {
+	dir := t.TempDir()
+	flagged := func(t *testing.T, body string) bool {
+		t.Helper()
+		p := filepath.Join(dir, strings.ReplaceAll(t.Name(), "/", "_")+".sh")
+		if err := os.WriteFile(p, []byte(body), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		return len(indirectProxsaveCronRefs([]string{"0 2 * * * " + p}, cronProbeReadScripts)) > 0
+	}
+
+	for _, tc := range []struct {
+		name string
+		body string
+		want bool
+	}{
+		{"short form", "#!/bin/sh\nenv -S '/usr/local/bin/proxsave --backup'\n", true},
+		{"long form", "#!/bin/sh\nenv --split-string '/usr/local/bin/proxsave --backup'\n", true},
+		// -u still takes a value that is NOT a command, and must still be skipped.
+		{"unset still skips its value", "#!/bin/sh\nenv -u LANG /usr/local/bin/proxsave --backup\n", true},
+		{"and does not invent a command", "#!/bin/sh\nenv -u LANG cp /usr/local/bin/proxsave /backup/\n", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := flagged(t, tc.body); got != tc.want {
+				t.Errorf("flagged = %v, want %v for:\n%s", got, tc.want, tc.body)
+			}
+		})
+	}
+}
+
 // #298 on the exact path that caused it: the unattended --upgrade retrofit must
 // REFUSE to install the daemon while a wrapper cron entry is live, and the refusal
 // must be a true no-op (host still on cron, backup.env untouched), never a half

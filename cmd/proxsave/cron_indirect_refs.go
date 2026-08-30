@@ -418,9 +418,12 @@ var (
 	// Bundled forms ("-c3", "-n19", "-oL") and "--flag=value" are single words and need no entry:
 	// the option skip already drops them whole.
 	launcherValueFlags = map[string]map[string]struct{}{
-		"sudo":    {"-u": {}, "-g": {}, "-p": {}, "-C": {}, "-T": {}, "-h": {}, "-r": {}, "-U": {}, "--user": {}, "--group": {}, "--prompt": {}, "--host": {}},
-		"doas":    {"-u": {}, "-C": {}},
-		"env":     {"-u": {}, "-C": {}, "-S": {}, "--unset": {}, "--chdir": {}, "--split-string": {}},
+		"sudo": {"-u": {}, "-g": {}, "-p": {}, "-C": {}, "-T": {}, "-h": {}, "-r": {}, "-U": {}, "--user": {}, "--group": {}, "--prompt": {}, "--host": {}},
+		"doas": {"-u": {}, "-C": {}},
+		// No -S / --split-string here on purpose: their value IS the command, the way sh -c's is,
+		// so skipping it threw away the very thing being looked for. Left out, the option reads
+		// as boolean and the command string lands in command position, which is where it belongs.
+		"env":     {"-u": {}, "-C": {}, "--unset": {}, "--chdir": {}},
 		"xargs":   {"-n": {}, "-L": {}, "-P": {}, "-I": {}, "-d": {}, "-s": {}, "-E": {}, "-a": {}},
 		"nice":    {"-n": {}, "--adjustment": {}},
 		"ionice":  {"-c": {}, "-n": {}, "-p": {}, "-P": {}, "-u": {}, "--class": {}, "--classdata": {}, "--pid": {}},
@@ -465,11 +468,38 @@ func scriptCodeLines(lines []string) []string {
 			continue
 		}
 		out = append(out, line)
+		// A comment cannot open a here-document, and getting this wrong is not a lost line but
+		// the rest of the FILE: everything up to a delimiter that never arrives is dropped, the
+		// probe answers "read it, found nothing", and that answer suppresses the name fallback
+		// too.
+		if strings.HasPrefix(strings.TrimSpace(line), "#") {
+			continue
+		}
 		if d := hereDocDelimiter(line); d != "" {
 			delimiter = d
 		}
 	}
 	return out
+}
+
+// quotesOpenAt reports whether an unclosed quote is still open at the end of the given prefix,
+// i.e. whether whatever follows it is inside a string. Escaped quotes do not count, and a quote
+// of one kind inside the other is ordinary text.
+func quotesOpenAt(prefix string) bool {
+	inSingle, inDouble, escaped := false, false, false
+	for _, r := range prefix {
+		switch {
+		case escaped:
+			escaped = false
+		case r == '\\' && !inSingle:
+			escaped = true
+		case r == '\'' && !inDouble:
+			inSingle = !inSingle
+		case r == '"' && !inSingle:
+			inDouble = !inDouble
+		}
+	}
+	return inSingle || inDouble
 }
 
 // joinLineContinuations glues a line ending in a backslash to the one after it, because that is
@@ -485,7 +515,11 @@ func joinLineContinuations(lines []string) []string {
 	pending := ""
 	for _, line := range lines {
 		joined := pending + line
-		if strings.HasSuffix(joined, "\\") && !strings.HasSuffix(joined, "\\\\") {
+		// A COMMENT does not continue: the shell ends it at the newline whatever the last
+		// character is. Joining one swallowed the command on the next line, which is the same
+		// blindness in the other direction.
+		comment := pending == "" && strings.HasPrefix(strings.TrimSpace(line), "#")
+		if !comment && strings.HasSuffix(joined, "\\") && !strings.HasSuffix(joined, "\\\\") {
 			pending = strings.TrimSuffix(joined, "\\") + " "
 			continue
 		}
@@ -502,6 +536,16 @@ func joinLineContinuations(lines []string) []string {
 func hereDocDelimiter(line string) string {
 	idx := strings.Index(line, "<<")
 	if idx < 0 {
+		return ""
+	}
+	// Only a REDIRECTION opens a body. The same two characters mean a left shift inside an
+	// arithmetic expansion and nothing at all inside a string, and treating either as an opener
+	// discards every following line of the script.
+	before := line[:idx]
+	if strings.Contains(before, "$((") {
+		return ""
+	}
+	if quotesOpenAt(before) {
 		return ""
 	}
 	// "<<<" is a here-STRING: it carries its data inline and starts no body.
@@ -665,9 +709,13 @@ func shellLauncherRunsProxsave(launcher string, words []string, vars map[string]
 //
 // A bare "--" needs no case of its own: consumed as a value-less option, it leaves the command
 // position exactly where an explicit end-of-options branch would have, and no realistic line
-// distinguishes the two. An unknown flag is treated as boolean, which errs toward finding the
-// command one word early rather than one word late: a false positive costs a report, a false
-// negative costs #298.
+// distinguishes the two.
+//
+// An unknown flag is treated as boolean, and that is the UNSAFE direction, not the safe one: if
+// it really takes a value, the command position lands on that value, nothing matches, and the
+// wrapper goes unseen - a false NEGATIVE, which is what issue #298 is made of. The table is
+// therefore not an optimisation. A launcher added to either launcher set without its
+// value-taking flags is a hole, not a rough edge.
 func skipLauncherOptions(launcher string, words []string) []string {
 	valueFlags := launcherValueFlags[launcher]
 	for len(words) > 0 {
