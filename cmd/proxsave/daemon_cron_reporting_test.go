@@ -183,44 +183,61 @@ func cronModeFixture(t *testing.T) (*config.Config, string) {
 	return &config.Config{BaseDir: dir, SchedulerTime: "02:00"}, configPath
 }
 
-// The third duplicate source in #298. After reverting, applyCronMode appended a fresh
-// canonical proxsave line at SCHEDULER_TIME while the operator's wrapper line was still
-// there, so the host ended up with TWO backups at 02:00 and the second died on the per-run
-// lock with exit 16. With a wrapper positively identified, no second line may be written.
-func TestApplyCronModeDoesNotAddASecondScheduleNextToAWrapper(t *testing.T) {
+// A revert must ALWAYS leave the host scheduled. This branch used to withhold the canonical
+// cron line whenever the detector saw an operator command that might run ProxSave, on the
+// reasoning that its worst case was "the host keeps the proxsave line it already had". That
+// reasoning was wrong for every caller: applyDaemonMode deletes every proxsave-named cron line
+// on the way INTO daemon mode, so a host arriving here has none, and one false positive on any
+// ordinary cron job left it with no daemon, no cron line, exit 0 and nothing on the host able
+// to notice.
+//
+// The detector's rules answer "is this named after proxsave", not "does this run a proxsave
+// backup": a script that merely mentions /opt/proxsave, anything stored under a directory
+// called proxsave, and any unreadable file called proxsave-something all match. So the line is
+// written and the finding is reported. The ranking is the project's own and is stated at
+// cron_indirect_refs.go: a double schedule is a recoverable annoyance, an unscheduled host is
+// silent data loss.
+func TestApplyCronModeAlwaysWritesTheCronLineAndReportsTheFinding(t *testing.T) {
 	cfg, configPath := cronModeFixture(t)
 
 	const wrapper = "30 02 * * * /usr/local/sbin/proxsave-nas-guard"
-	crontabReadLinesFn = func(context.Context) ([]string, error) {
-		return []string{wrapper, "0 2 * * * /usr/local/bin/proxsave --backup"}, nil
-	}
+	crontabReadLinesFn = func(context.Context) ([]string, error) { return []string{wrapper}, nil }
 	wrapperCronLinesFn = func([]string) []string { return []string{wrapper} }
-	migrateLegacyCronEntriesFn = func(context.Context, string, string, *logging.BootstrapLogger, string) {
-		t.Error("a wrapper host must NOT get a second canonical cron line appended")
-	}
-	var written []string
-	crontabWriteLinesFn = func(_ context.Context, lines []string) error {
-		written = lines
-		return nil
+	migrated := ""
+	migrateLegacyCronEntriesFn = func(_ context.Context, _, _ string, _ *logging.BootstrapLogger, schedule string) {
+		migrated = schedule
 	}
 
-	if _, err := applyCronMode(context.Background(), cfg, configPath, "/usr/local/bin/proxsave", nil); err != nil {
-		t.Fatalf("applyCronMode: %v", err)
-	}
+	seen := captureConsole(t, func() {
+		if _, err := applyCronMode(context.Background(), cfg, configPath, "/usr/local/bin/proxsave", logging.NewBootstrapLogger()); err != nil {
+			t.Fatalf("applyCronMode: %v", err)
+		}
+	})
 
-	// Nothing is written to the crontab at all: the append is skipped, and the branch no
-	// longer DELETES either. Deleting was the old behaviour and it was a defect: the
-	// detector's rules answer "named after proxsave", not "runs a proxsave backup", so an
-	// ordinary "*/5 * * * * /usr/local/bin/proxsave-metrics-exporter" reached this branch
-	// and took the host's only real backup line with it, at INFO level and exit 0, with
-	// nothing on the host able to repair it. Skipping the append alone cannot unschedule
-	// anyone: its worst case on a misidentification is that nothing changes.
-	if written != nil {
-		t.Fatalf("the wrapper branch must not rewrite the crontab at all, got %v", written)
+	if migrated != "00 02 * * *" {
+		t.Fatalf("the canonical cron line must be written whatever the detector found, got %q", migrated)
+	}
+	// One problem, one WARNING, and it carries the count so it stands alone under
+	// DEBUG_LEVEL=warning. The finding itself is INFO below it.
+	if got := strings.Count(seen, "WARNING"); got != 1 {
+		t.Errorf("want exactly one WARNING, got %d, out=%q", got, seen)
+	}
+	warn := ""
+	for _, line := range strings.Split(seen, "\n") {
+		if strings.Contains(line, "WARNING") {
+			warn = line
+			break
+		}
+	}
+	if !strings.Contains(warn, "1 unmanaged cron line(s)") {
+		t.Errorf("the WARNING must repeat the count, got %q", warn)
+	}
+	if !strings.Contains(seen, wrapper) {
+		t.Errorf("the finding must be printed verbatim, out=%q", seen)
 	}
 	data, _ := os.ReadFile(configPath)
-	if !strings.Contains(string(data), "SCHEDULER_MODE=cron") || strings.Contains(string(data), "DAEMON_OPT_OUT") {
-		t.Fatalf("the revert must persist cron mode and write no tombstone:\n%s", data)
+	if !strings.Contains(string(data), "SCHEDULER_MODE=cron") {
+		t.Fatalf("the revert must persist cron mode:\n%s", data)
 	}
 }
 

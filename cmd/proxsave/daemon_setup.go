@@ -459,50 +459,40 @@ func applyCronMode(ctx context.Context, cfg *config.Config, configPath, execToke
 	// every proxsave-owned entry it can see and appends a fresh one. On a host where ProxSave
 	// is the only thing scheduling ProxSave, that append IS the revert and must keep happening.
 	//
-	// It is wrong on exactly one shape of host: one whose backup is already scheduled through
-	// an operator WRAPPER (issue #298). buildReinstallCronLines cannot see that line, because
-	// its command basename is not "proxsave" or "proxmox-backup", so the append does not
-	// REPLACE the wrapper, it JOINS it. The host ends the revert with two scheduled backups,
-	// both at SCHEDULER_TIME (02:00 by default), which is the very window the wrapper already
-	// occupies: the second run then dies on the per-run lock with exit 16 and the host reports
-	// a failed backup every night. This was the third duplicate source in #298, the one the
-	// reporter hit AFTER reverting.
+	// It JOINS rather than replaces on exactly one shape of host: one whose backup is already
+	// scheduled through an operator WRAPPER (issue #298). buildReinstallCronLines cannot see
+	// that line, because its command basename is not "proxsave" or "proxmox-backup", so such a
+	// host ends the revert with two scheduled backups, both at SCHEDULER_TIME (02:00 by
+	// default), which is the very window the wrapper already occupies: the second run dies on
+	// the per-run lock with exit 16 and the host reports a failed backup every night. That was
+	// the third duplicate source in #298, the one the reporter hit AFTER reverting.
 	//
-	// So when a wrapper is positively identified we do not append. We ALSO do not remove
-	// anything, and that restraint is the correction of a real defect rather than a missing
-	// step. This branch used to run removeCanonicalCronEntry as well, on the reasoning that a
-	// host carrying both a wrapper and a leftover proxsave line should end with exactly one
-	// schedule, the operator's own. That reasoning holds only while the identification is
-	// right. The detector's rules answer "is this named after proxsave", not "does this run a
-	// proxsave backup", so an ordinary "*/5 * * * * /usr/local/bin/proxsave-metrics-exporter"
-	// takes this branch: the append was skipped AND the host's only real backup line was
-	// deleted, leaving it unscheduled at INFO level with exit 0, and nothing repairs that.
-	// SCHEDULER_MODE=cron is on disk by then, so no later upgrade revisits the host,
-	// --daemon-setup never writes a cron line, and migrateLegacyCronEntries is only reachable
-	// from a full reinstall.
+	// The canonical line is written UNCONDITIONALLY, and anything the detector found is
+	// reported next to it rather than acted on.
 	//
-	// Skipping the append alone cannot do that. Its worst case on a misidentification is the
-	// host keeping the proxsave line it already had, i.e. nothing changes; its worst case on a
-	// correct identification is two schedules where the operator wanted one, which the closing
-	// message tells them how to settle. Both are recoverable, which is the ordering F09-06
-	// states: a double schedule is an annoyance, an unscheduled host is silent data loss.
+	// This branch used to withhold the line whenever the detector saw an operator command that
+	// might run ProxSave, so as not to create a second nightly backup. Its stated worst case
+	// was "the host keeps the proxsave line it already had", and that was wrong for every
+	// caller: applyDaemonMode deletes every proxsave-named cron line on the way INTO daemon
+	// mode, so a host arriving here has none. One false positive then left it with no daemon,
+	// no cron line, exit 0, and nothing on the host able to notice - the backup that would have
+	// noticed is the one that was never scheduled.
 	//
-	// Uncertainty falls back to the append for the same reason: an unreadable crontab, or a
-	// detector that identifies nothing, is treated as "no wrapper".
-	//
-	// The gate is the ROOT CRONTAB only, and that is a boundary, not an oversight. A ProxSave
-	// schedule found under /etc is reported (see the advisory at the end of this function) and
-	// never acted on, because there ProxSave cannot edit anything to correct a mistake and
-	// nothing ever re-checks the decision - the run that would notice is the backup that was
-	// never scheduled.
+	// The detector's rules answer "is this named after proxsave", not "does this run a proxsave
+	// backup". A script that merely mentions /opt/proxsave, anything stored under a directory
+	// called proxsave and any unreadable file called proxsave-something all match. Deciding a
+	// host's only schedule on that is the wrong side of the project's own ranking, stated at
+	// cron_indirect_refs.go and again for the /etc habitat below: a double schedule is a
+	// recoverable annoyance the operator can see, an unscheduled host is silent data loss.
+	migrateLegacyCronEntriesFn(ctx, cfg.BaseDir, execToken, bootstrap, cron.TimeToSchedule(cfg.SchedulerTime))
 	if wrappers := existingWrapperCronFallback(ctx); len(wrappers) > 0 {
-		logBootstrapInfo(bootstrap, "Reverting to cron: %d unmanaged crontab line(s) schedule ProxSave; no line added:", len(wrappers))
+		logBootstrapInfo(bootstrap, "Reverting to cron: %d unmanaged crontab line(s) also appear to schedule ProxSave:", len(wrappers))
 		for _, line := range wrappers {
 			logBootstrapInfo(bootstrap, "  - %s", line)
 		}
-		logBootstrapInfo(bootstrap, "Unmanaged entries keep their schedule; SCHEDULER_TIME does not apply. Existing proxsave cron lines unchanged.")
-	} else {
-		migrateLegacyCronEntriesFn(ctx, cfg.BaseDir, execToken, bootstrap, cron.TimeToSchedule(cfg.SchedulerTime))
+		// The count lives in the WARNING itself: DEBUG_LEVEL=warning hides the lines above it,
+		// and what has to survive is that this host may now run the backup more than once.
+		logBootstrapWarning(bootstrap, "The cron entry was written at SCHEDULER_TIME and %d unmanaged cron line(s) were left untouched, so this host may run the backup more than once.", len(wrappers))
 	}
 
 	// HEALTHCHECK_ENABLED=false is the exact MIRROR of the write applyDaemonMode makes on
