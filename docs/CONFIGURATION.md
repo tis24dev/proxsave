@@ -84,10 +84,11 @@ ProxSave runs the backup either from a cron entry or from a resident systemd dae
 SCHEDULER_MODE=cron            # cron | daemon (any unrecognized value normalizes to cron)
 SCHEDULER_TIME=02:00           # daily HH:MM "Run at" time
 MAX_RUN_DURATION=1h            # daemon watchdog: hard timeout for one backup
-DAEMON_OPT_OUT=false           # set true by --daemon-remove; --upgrade won't re-migrate to the daemon
 ```
 
 The compiled default for `SCHEDULER_MODE` is `cron`, but a fresh install defaults to the daemon and writes `SCHEDULER_MODE=daemon`.
+
+The key's **presence** matters as much as its value. `--upgrade` installs the daemon only on a host where that same upgrade's config merge had to add `SCHEDULER_MODE`, i.e. one that has never recorded an engine. Once the line is in the file the value is honoured and no upgrade revisits the host.
 
 ---
 
@@ -126,9 +127,9 @@ HEALTHCHECK_NOTIFY_WEBHOOK_URL=
 HEALTHCHECK_NOTIFY_WEBHOOK_ID=
 ```
 
-`HEALTHCHECK_ENABLED` parses as `false` by default. `--daemon-setup` and the `--upgrade` auto-migration set it to `true` when enabling the daemon, and `--daemon-remove` sets it back to `false` when reverting to cron. The two directions belong together: the checks this key turns on are daemon-only, so a cron host left with `HEALTHCHECK_ENABLED=true` reports the missing daemon on every run, as a warning on either engine. On cron the warning names the engine as well, because the key is asking for monitoring that cannot run there. Clearing the key is what stops the report, which is why both `--daemon-remove` and the `--upgrade` backfill do it for you.
+`HEALTHCHECK_ENABLED` parses as `false` by default. `--daemon-setup` and the `--upgrade` retrofit set it to `true` when enabling the daemon, and `--daemon-remove` sets it back to `false` when reverting to cron. The two directions belong together: the checks this key turns on are daemon-only, so a cron host left with `HEALTHCHECK_ENABLED=true` reports the missing daemon on every run, as a warning on either engine. On cron the warning names the engine as well, because the key is asking for monitoring that cannot run there. Clearing the key is what stops the report, which is why `--daemon-remove` does it for you.
 
-A host reverted by an older build kept the key at `true`. `--upgrade` corrects it once, writing `false` only when `SCHEDULER_MODE=cron`, `DAEMON_OPT_OUT=true` and `HEALTHCHECK_ENABLED=true` all hold, which is the signature of that revert and of nothing else. A cron install that never enabled the daemon has `DAEMON_OPT_OUT=false` and keeps whatever you set.
+A host reverted by an older build kept the key at `true`, and nothing rewrites it for that host: it reports the missing daemon on every run until you change the value. ProxSave does not correct it, because on disk that host looks exactly like one whose operator set the key deliberately.
 
 ---
 

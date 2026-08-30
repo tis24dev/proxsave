@@ -219,21 +219,21 @@ proxsave --upgrade-config
 6. Extracts binary from tar.gz archive
 7. Atomically replaces current binary (write to .tmp, then rename)
 8. Updates the `proxsave` symlink in `/usr/local/bin/` (and removes the legacy `proxmox-backup` symlink if present)
-9. Upgrades the configuration file (adds any new keys from the template to `backup.env`, preserving your existing and custom values, after backing up the current file) and fixes file permissions. After a successful binary install, a cron install is migrated to the resident daemon (`proxsave-daemon.service`) unless you opted out with `--daemon-remove`; a daemon install stays on the daemon. The daemon runs once daily at `SCHEDULER_TIME` (default `02:00`) and does not carry over your crontab schedule, so a hand-edited cron time or any non-daily cadence (hourly, weekly, several times a day) is dropped. Run `--daemon-remove` to stay on cron if you need a non-daily schedule.
+9. Upgrades the configuration file (adds any new keys from the template to `backup.env`, preserving your existing and custom values, after backing up the current file) and fixes file permissions. After a successful binary install, the resident daemon (`proxsave-daemon.service`) is installed only on a host that has never recorded a scheduler engine, i.e. one where this upgrade's config merge had to add `SCHEDULER_MODE`; any host that already carries the key keeps the engine it records. The daemon runs once daily at `SCHEDULER_TIME` (default `02:00`) and does not carry over your crontab schedule, so a hand-edited cron time or any non-daily cadence (hourly, weekly, several times a day) is dropped. Run `--daemon-remove` to stay on cron if you need a non-daily schedule.
 
 **Post-upgrade steps**:
 1. New config template keys are merged into `backup.env` automatically (existing and custom values preserved; previous file backed up)
 2. Run `--upgrade-config` only to re-run that merge without upgrading the binary
 3. Test functionality with dry-run: `proxsave --dry-run`
 4. Verify backups continue to work as expected
-5. Check the scheduler: `proxsave --daemon-status` for daemon installs, or `crontab -l` if you opted out of the daemon
+5. Check the scheduler: `proxsave --daemon-status` for daemon installs, or `crontab -l` on cron installs
 
 **Important notes**:
 - **Internet required**: Must be able to reach GitHub releases
 - **Configuration kept current**: `--upgrade` merges new template keys into `backup.env`, preserving your existing and custom values and backing up the previous file first; it never changes or removes values you set
 - **Platform support**: Linux only (amd64)
 - **Incompatible flags**: Cannot use with `--install` or `--new-install`
-- **Automatic maintenance**: Symlinks and permissions are updated automatically. A cron install is migrated to the resident daemon unless you opted out with `--daemon-remove`; re-run `--install` to change the run time or engine
+- **Automatic maintenance**: Symlinks and permissions are updated automatically. The daemon is installed only on a host that has never recorded a scheduler engine; re-run `--install` to change the run time or engine
 - **Safe replacement**: Old binary is replaced atomically (no backup created)
 - **Standalone config upgrade**: `--upgrade` already merges new template keys; use `--upgrade-config` to run that merge without upgrading the binary
 
@@ -589,9 +589,9 @@ proxsave --support
 >
 > **ProxSave owns your crontab, so a hand-written schedule does not survive.** `--install`, `--new-install` and `--daemon-remove` each rewrite it: they delete **every** cron line whose command is named `proxsave` or `proxmox-backup`, not only the one they wrote themselves, and append a single daily entry at `SCHEDULER_TIME`. The deletion happens in both scheduler modes; whether the appended line stays depends on where the run ends. `--daemon-remove` ends on cron, so it keeps it. `--install` and `--new-install` write that line first and then, when the selected (or already configured) mode is `daemon`, drop it again while enabling the unit — so a daemon installation ends with no proxsave cron entry, unless the unit install itself fails and the host stays on cron with the line it just wrote. A custom cadence from this section is therefore silently downgraded to daily by a cron reinstall, and removed outright by a daemon one. `--upgrade` is the exception: it only repoints legacy paths and leaves the schedule alone.
 >
-> The practical order is: run `proxsave --daemon-remove` first, which switches to cron, writes the daily line for you, and records the opt-out, **then** edit that line to the cadence you want. Adding a second entry afterwards leaves two, and both will fire.
+> The practical order is: run `proxsave --daemon-remove` first, which switches to cron, writes the daily line for you, and records `SCHEDULER_MODE=cron`, **then** edit that line to the cadence you want. Adding a second entry afterwards leaves two, and both will fire.
 >
-> That opt-out is also what makes the line survive. `--upgrade` runs the daemon auto-migration, which deletes every proxsave cron entry and moves the host to the once-daily daemon, and it skips that only when the config already says `SCHEDULER_MODE=daemon` or when `--daemon-remove` has written `DAEMON_OPT_OUT=true`. A cron install that has never run `--daemon-remove` loses its hand-edited schedule at the next upgrade. `--daemon-setup` removes it too.
+> That record is also what makes the line survive. `--upgrade` installs the daemon only on a host that has never recorded a scheduler engine, i.e. one where the upgrade's own config merge had to add `SCHEDULER_MODE`. Any host whose `backup.env` already carries the key is left as it is, so a hand-edited cadence on a 0.30 or later install survives every upgrade. `--daemon-setup` still removes it, because there you asked for the daemon.
 
 ### Cron Setup
 

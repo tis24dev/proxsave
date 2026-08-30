@@ -97,7 +97,7 @@ The `--upgrade` command:
 - Atomically replaces the current binary and updates the `/usr/local/bin/proxsave` symlink (removing the legacy `proxmox-backup` symlink if present).
 - Fixes file permissions.
 - Merges any new template keys into your `backup.env` (your existing and custom values are preserved, and the previous file is backed up first).
-- Reconciles the scheduler: a cron install is migrated to the resident daemon unless you opted out with `--daemon-remove`; a daemon install stays on the daemon. Re-run `--install` to change the run time or engine.
+- Reconciles the scheduler: the resident daemon is installed only on a host that has never recorded a scheduler engine; a host whose `backup.env` already carries `SCHEDULER_MODE` keeps the engine it records. Re-run `--install` to change the run time or engine.
 
 ### Full Upgrade Workflow
 
@@ -112,7 +112,7 @@ proxsave --upgrade-config
 proxsave --dry-run
 
 # 4. Check the scheduler
-proxsave --daemon-status   # daemon installs; use crontab -l if you opted out of the daemon
+proxsave --daemon-status   # daemon installs; use crontab -l on cron installs
 
 # 5. Run a real backup to confirm
 proxsave

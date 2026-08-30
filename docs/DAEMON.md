@@ -49,7 +49,6 @@ Daemon status: <keyword>
 Scheduler mode: <cron|daemon>
 Daemon service (proxsave-daemon.service): installed | not installed
 Service state (systemctl is-active): <active|inactive|...>
-Opted out of auto-migration (--daemon-remove): yes | no
 Running version: <version> (<commit>)
 Binary alignment: aligned | BEHIND (restart needed) | unknown
 ```
@@ -62,13 +61,15 @@ New installs default to the daemon. The install wizard (TUI and `--cli`) asks fo
 
 ## Retrofit existing installs
 
-- `--upgrade` **auto-migrates** a cron install to the daemon after updating the binary and config, unless you opted out (see `--daemon-remove`). It is idempotent; a migration failure leaves you on cron. It **refuses** to migrate, and changes nothing at all, if the crontab still schedules ProxSave through an entry ProxSave does not own ([below](#what-removes-the-cron-entry-means)): installing the daemon on top of one would run every backup twice. Remove that entry and run `--daemon-setup`, or set `DAEMON_OPT_OUT=true` to stop the check running on every upgrade.
-- `--daemon-setup` switches to the daemon at any time. It installs the service, removes the proxsave cron entry ([what that means exactly](#what-removes-the-cron-entry-means)), writes `SCHEDULER_MODE=daemon`, `DAEMON_OPT_OUT=false`, and `HEALTHCHECK_ENABLED=true`, then restarts and verifies the daemon. It reports how many cron lines it actually removed, or that it found none, and it **warns and proceeds** (rather than refusing) if an entry it does not own survives, because you asked for the daemon explicitly.
-- `--daemon-remove` reverts to cron, disables the service, and sets `DAEMON_OPT_OUT=true` so later upgrades will **not** reinstall the daemon. It writes a canonical cron line at `SCHEDULER_TIME`, *unless* the host already schedules ProxSave through an entry ProxSave does not own: that entry is then left in place as the schedule and no second line is added, so the revert cannot produce two nightly backups.
+- `--upgrade` **auto-migrates** to the daemon only on a host that has never recorded a scheduler engine, i.e. one where that same upgrade's config merge had to add `SCHEDULER_MODE`. Once the key is in the file the value is honoured and no upgrade revisits the host: `cron` means cron, whether you chose it in the wizard, edited it by hand or reached it with `--daemon-remove`. On the host it does migrate it **refuses**, and changes nothing at all, if the crontab still schedules ProxSave through an entry ProxSave does not own ([below](#what-removes-the-cron-entry-means)): installing the daemon on top of one would run every backup twice. `--daemon-setup` installs it anyway and reports what it found.
+
+  Note that on the ordinary download path this decision is made by the binary being *replaced*, because `--upgrade` never re-execs; only the `backup.env` merge runs under the new binary. A change to this rule therefore takes effect one release later.
+- `--daemon-setup` switches to the daemon at any time. It installs the service, removes the proxsave cron entry ([what that means exactly](#what-removes-the-cron-entry-means)), writes `SCHEDULER_MODE=daemon` and `HEALTHCHECK_ENABLED=true`, then restarts and verifies the daemon. It reports how many cron lines it actually removed, or that it found none, and it **warns and proceeds** (rather than refusing) if an entry it does not own survives, because you asked for the daemon explicitly.
+- `--daemon-remove` reverts to cron and disables the service. It records `SCHEDULER_MODE=cron`, and that record is what stops later upgrades reinstalling the daemon: the key is present, so it is honoured. It writes a canonical cron line at `SCHEDULER_TIME`, *unless* the host already schedules ProxSave through an entry ProxSave does not own: that entry is then left in place as the schedule and no second line is added, so the revert cannot produce two nightly backups.
 
 Enabling the daemon sets `HEALTHCHECK_ENABLED=true` even though its raw config default is `false`, so a retrofitted host gets the dead-man switch. `--daemon-remove` sets it back to `false`. That symmetry matters: the checks it turns on are daemon-only, so a host left on cron with `HEALTHCHECK_ENABLED=true` warned `Healthchecks: daemon not installed` on every otherwise successful run and exited `1` for a daemon it was never meant to have. The rollback is what fixes that, by clearing the key the operator never chose. A cron host that still carries `HEALTHCHECK_ENABLED=true` on purpose is warned about it, and that warning still costs the exit code: monitoring cannot work without the daemon, and the key says the operator wants monitoring.
 
-A host that reverted with an **older** build still carries that stale `true`, and nothing it runs would ever rewrite the key. `--upgrade` repairs it once, writing `HEALTHCHECK_ENABLED=false` when it finds all three of `SCHEDULER_MODE=cron`, `DAEMON_OPT_OUT=true` and `HEALTHCHECK_ENABLED=true` together. That combination is only produced by the daemon-then-revert transition, so a plain cron install that never ran `--daemon-setup` has `DAEMON_OPT_OUT=false` and is never touched.
+A host that reverted with an **older** build still carries that stale `true`, and nothing it runs rewrites the key for it. It sees the warning on every run until someone changes the value. ProxSave does not repair it: on disk that host is indistinguishable from one whose operator set the key on purpose, and rewriting a monitoring setting on evidence that cannot tell the two apart takes away a choice instead of tidying a leftover.
 
 ### What "removes the cron entry" means
 
@@ -101,7 +102,7 @@ Daemon mode enabled: proxsave-daemon.service is active. No proxsave cron entry w
 Daemon mode enabled: proxsave-daemon.service is active. The crontab could not be checked, so a proxsave cron entry may still be scheduled alongside it.
 ```
 
-The third line is normal on a fresh daemon install, which never had a cron entry. On a host that **was** on cron it is the signal to look: something whose command is not named `proxsave` was scheduling the backup, and it is still scheduled. Either delete that entry and let the daemon schedule the run (moving whatever the wrapper checked elsewhere), or run `proxsave --daemon-remove`, which records `DAEMON_OPT_OUT=true` so upgrades stop re-migrating, and keep the wrapper as the only schedule.
+The third line is normal on a fresh daemon install, which never had a cron entry. On a host that **was** on cron it is the signal to look: something whose command is not named `proxsave` was scheduling the backup, and it is still scheduled. Either delete that entry and let the daemon schedule the run (moving whatever the wrapper checked elsewhere), or run `proxsave --daemon-remove`, which records `SCHEDULER_MODE=cron` so upgrades leave the host alone, and keep the wrapper as the only schedule.
 
 ### The run time is inherited, not reset
 
@@ -160,7 +161,6 @@ The daemon coordinates through six small files under `<BASE_DIR>/identity/`, all
 SCHEDULER_MODE=cron            # cron | daemon
 SCHEDULER_TIME=02:00           # daily HH:MM ("Run at")
 MAX_RUN_DURATION=1h            # watchdog hard timeout for one backup
-DAEMON_OPT_OUT=false           # set true by --daemon-remove; upgrade won't re-migrate
 BACKUP_ENABLED=true            # false: daemon skips the scheduled run (backup check goes down)
 
 # Monitoring: enabled here, configured in HEALTHCHECKS.md
