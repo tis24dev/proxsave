@@ -675,12 +675,21 @@ func runDashboardDaemonAdmin(ctx context.Context, session *shell.Session, instal
 				doneMsg += " Check your crons to remove duplication."
 			}
 		}
-		// The daemon is gone and nothing replaced it. That outranks the config write, so it is
-		// tested last and wins the screen.
+		// The daemon is gone and nothing replaced it. That outranks everything else, so it is
+		// tested last and takes the level and the headline.
+		//
+		// It COMPOSES rather than replaces. This screen is the only channel open on this path -
+		// the logger is muted for the whole operation and never flushed - so a clause dropped
+		// here is a fact the operator never gets, and a host can easily be unscheduled AND
+		// carrying a config that was not written. On the CLI the same host reads both anyway,
+		// because applyCronMode's own warning is still on screen there.
 		if !revert.CronScheduled {
 			doneLevel = orchestrator.HealthcheckSetupLevelError
 			doneKeyword = "NO SCHEDULE"
 			doneMsg = "The daemon service was removed and the cron entry could NOT be written, so nothing is scheduling the backup."
+			if !revert.ModeRecorded {
+				doneMsg += " " + cronModeRecordClause(revert)
+			}
 		}
 	}
 	// The revert has the same problem in its own direction. applyCronMode emits its /etc

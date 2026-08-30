@@ -1127,6 +1127,57 @@ func TestDashboardDaemonRevertReportsAnUnscheduledHost(t *testing.T) {
 	}
 }
 
+// The screen is the ONLY channel on this path: the logger is muted for the whole operation and
+// never flushed, so a fact the screen drops is a fact the operator never gets. The unscheduled
+// branch used to REPLACE the message rather than compose it, which threw away the config-write
+// clause with it. On the CLI the same host reads both, because applyCronMode's own warning is
+// still on screen there.
+func TestDashboardDaemonRevertKeepsEveryFactOnTheUnscheduledScreen(t *testing.T) {
+	installDashboardGates(t, true, true)
+	origCfg, origShow := daemonStatusLoadConfig, showDaemonResultScreenFn
+	t.Cleanup(func() { daemonStatusLoadConfig, showDaemonResultScreenFn = origCfg, origShow })
+	daemonStatusLoadConfig = func(string, string) (*config.Config, error) {
+		return &config.Config{SchedulerMode: "daemon"}, nil
+	}
+	daemonApplyCronMode = func(context.Context, *config.Config, string, string, *logging.BootstrapLogger) (cronRevertReport, error) {
+		return cronRevertReport{CronScheduled: false, ModeRecorded: false}, nil
+	}
+	shown := make(chan string, 1)
+	showDaemonResultScreenFn = func(_ context.Context, _ *shell.Session, _ string, _ orchestrator.HealthcheckSetupLevel, kw, explanation string) {
+		shown <- kw + "\n" + explanation
+	}
+
+	driver := installDashboardSessionSeam(t)
+	res := driver.spawn(&cli.Args{})
+	driver.waitScreen("Dashboard")
+	driver.keys("down down down down down down down down down enter") // Disable daemon
+
+	var msg string
+	select {
+	case msg = <-shown:
+	case <-time.After(uitest.Deadline(60 * time.Second)):
+		t.Fatal("the revert never reached the result screen")
+	}
+	driver.waitScreen("Dashboard")
+	driver.keys("esc")
+	select {
+	case <-res:
+	case <-time.After(uitest.Deadline(60 * time.Second)):
+		t.Fatal("dashboard did not resolve")
+	}
+
+	if !strings.Contains(msg, "NO SCHEDULE") {
+		t.Errorf("nothing scheduling the backup is still the headline, got:\n%s", msg)
+	}
+	if !strings.Contains(msg, "nothing is scheduling the backup") {
+		t.Errorf("the screen must state the unscheduled host, got:\n%s", msg)
+	}
+	// The second fact, which has no other channel here.
+	if !strings.Contains(msg, "could NOT be updated") {
+		t.Errorf("the screen must also state that the configuration was not written, got:\n%s", msg)
+	}
+}
+
 // The menu row is decided by the scheduler mode alone. It used to consult a second key,
 // DAEMON_OPT_OUT, purely to tell "reverted from the daemon" apart from "never had it" and
 // label the same command "Re-enable" instead of "Install". Both rows ran ActionDaemonSetup and
