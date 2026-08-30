@@ -10,7 +10,6 @@ import (
 	"strings"
 	"testing"
 
-	cron "github.com/tis24dev/proxsave/internal/cron"
 	"github.com/tis24dev/proxsave/internal/logging"
 	"github.com/tis24dev/proxsave/internal/types"
 )
@@ -164,11 +163,16 @@ func TestPrepareCronHandoverProtectsTheAdoptedTime(t *testing.T) {
 		}
 	})
 
-	// The key was ABSENT before the adoption, which is the host where the adoption changed the
-	// most: an absent key resolves to the compiled default, so putting the default back IS the
-	// faithful undo. Leaving the adopted hour there instead points the daemon at the minute the
-	// surviving cron line already occupies.
-	t.Run("removal fails and the key was absent: the default goes back", func(t *testing.T) {
+	// SCHEDULER_TIME is a template variable ProxSave owns; a failed removal is no reason to
+	// rewrite it, and rewriting it was worse than leaving it. Writing the compiled default over
+	// an absent variable turned "never recorded" into "recorded as 02:00", which is the gate
+	// that stops any later install or upgrade adopting the host's real run time from the
+	// crontab. And when the surviving line ran at 02:00 already, the restore put the daemon in
+	// exactly that minute while announcing it had avoided one.
+	//
+	// The adopted hour stays, and the operator is told the line is still there. That is the only
+	// thing that can actually fix it: ProxSave has just proved it cannot remove that line.
+	t.Run("removal fails: the adopted hour stays and the line is reported", func(t *testing.T) {
 		pinPaths(t)
 		configPath := filepath.Join(t.TempDir(), "backup.env")
 		if err := os.WriteFile(configPath, []byte("BACKUP_PATH=/data\n"), 0o600); err != nil {
@@ -183,31 +187,23 @@ func TestPrepareCronHandoverProtectsTheAdoptedTime(t *testing.T) {
 			return errors.New("crontab update failed: read-only file system")
 		}
 
-		prepareCronHandoverForDaemon(context.Background(), configPath, "/usr/local/bin/proxsave", nil)
-
-		if got := storedTime(t, configPath); got != cron.DefaultTime {
-			t.Errorf("SCHEDULER_TIME = %q, want the %s default an absent key resolves to", got, cron.DefaultTime)
-		}
-	})
-
-	t.Run("removal fails: the hour is put back", func(t *testing.T) {
-		pinPaths(t)
-		configPath := seed(t)
-		origRead, origWrite := crontabReadLinesFn, crontabWriteLinesFn
-		t.Cleanup(func() { crontabReadLinesFn, crontabWriteLinesFn = origRead, origWrite })
-		crontabReadLinesFn = func(context.Context) ([]string, error) {
-			return []string{"0 21 * * * /usr/local/bin/proxsave --backup"}, nil
-		}
-		crontabWriteLinesFn = func(context.Context, []string) error {
-			return errors.New("crontab update failed: read-only file system")
-		}
+		origLog := logging.GetDefaultLogger()
+		t.Cleanup(func() { logging.SetDefaultLogger(origLog) })
+		var buf bytes.Buffer
+		def := logging.New(types.LogLevelDebug, false)
+		def.SetOutput(&buf)
+		logging.SetDefaultLogger(def)
 
 		outcome := prepareCronHandoverForDaemon(context.Background(), configPath, "/usr/local/bin/proxsave", nil)
 
-		// The 21:00 line is still live. Pointing the daemon at 21:00 as well is a collision
-		// ProxSave would have created on a host that had one schedule.
-		if got := storedTime(t, configPath); got != "02:00" {
-			t.Errorf("SCHEDULER_TIME = %q, want the previous 02:00 restored", got)
+		if got := storedTime(t, configPath); got != "21:00" {
+			t.Errorf("SCHEDULER_TIME = %q, want the adopted 21:00 left alone", got)
+		}
+		if !strings.Contains(buf.String(), "Could not remove the legacy proxsave cron entry, it still runs at 21:00.") {
+			t.Errorf("the operator must be told the line is still there and at what time, out=%q", buf.String())
+		}
+		if strings.Contains(buf.String(), "put back") {
+			t.Errorf("nothing is put back any more, out=%q", buf.String())
 		}
 		if outcome.Verified {
 			t.Errorf("a failed write may not be reported as verified, got %+v", outcome)

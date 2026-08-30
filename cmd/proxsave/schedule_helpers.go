@@ -248,57 +248,49 @@ func schedulerTimeFromCronLines(lines []string) (string, bool) {
 // The ROOT crontab only. A proxsave line under /etc is deliberately not read here: ProxSave
 // never edits /etc, so that line SURVIVES the switch, and adopting its time would schedule the
 // daemon in the exact minute it already occupies.
-// It returns the value it OVERWROTE and whether it wrote at all. Both are needed: the caller has
-// to put the hour back when the removal it was written for does not go through, and an ABSENT
-// previous value is a real case with an empty string for a value, so "did it write" cannot be
-// inferred from the string alone.
-func adoptSchedulerTimeForDaemon(configPath string, lines []string, bootstrap *logging.BootstrapLogger) (previous string, adopted bool) {
+// It returns the hour it ADOPTED, or "" when it wrote nothing. The caller needs it to name the
+// time in its warning when the removal that hour was written for does not go through.
+func adoptSchedulerTimeForDaemon(configPath string, lines []string, bootstrap *logging.BootstrapLogger) string {
 	configPath = strings.TrimSpace(configPath)
 	if configPath == "" {
-		return "", false
+		return ""
 	}
 	hhmm, ok := schedulerTimeFromCronLines(lines)
 	if !ok {
-		return "", false
+		return ""
 	}
 	data, err := safefs.ReadFileUnderRoot(configPath)
 	if err != nil {
-		return "", false
+		return ""
 	}
-	previous = strings.TrimSpace(installer.DeriveInstallWizardPrefill(string(data)).SchedulerTime)
-	if previous == hhmm {
-		return "", false
+	if strings.TrimSpace(installer.DeriveInstallWizardPrefill(string(data)).SchedulerTime) == hhmm {
+		return ""
 	}
 	if err := setBackupEnvKeys(configPath, map[string]string{"SCHEDULER_TIME": hhmm}); err != nil {
 		logging.DebugStepBootstrap(bootstrap, "daemon setup", "could not record the adopted run time: %v", err)
-		return "", false
+		return ""
 	}
 	logBootstrapInfo(bootstrap, "SCHEDULER_TIME set to %s, the time of the proxsave cron entry this switch removes, so the daily run time does not change.", hhmm)
-	return previous, true
+	return hhmm
 }
 
-// restoreSchedulerTime undoes an adoption whose removal did not go through.
+// reportUnremovedCronEntry tells the operator that the proxsave cron entry ProxSave has just
+// tried and failed to delete is still scheduled, and at what time.
 //
-// An ABSENT previous value restores the compiled default rather than doing nothing, and that is
-// the faithful undo: an absent key resolves to that default everywhere else
-// (internal/config/config.go), so the host was running at the default before the adoption and
-// must go back to it. Doing nothing there would leave the adopted hour in place on exactly the
-// host where the adoption changed the most - a pre-0.30 install whose surviving cron line the
-// daemon would now share a minute with.
+// It replaced a RESTORE. That restore put SCHEDULER_TIME back to what the adoption had
+// overwritten, and where the variable had been absent it wrote the compiled default - which was
+// worse than doing nothing twice over. SCHEDULER_TIME is a template variable ProxSave owns, so a
+// failed crontab write is no reason to rewrite it; and writing the default over an absent
+// variable turned "never recorded" into "recorded as 02:00", which is exactly the gate that stops
+// any later install or upgrade adopting the host's real run time from the crontab. On a host
+// whose surviving line already ran at the default, it also put the daemon in that very minute
+// while announcing it had avoided one.
 //
-// A failed restore is a WARNING, not a debug line. What is left behind is a daemon pointed at
-// the same minute as a live cron entry, which is the collision this whole path exists to avoid,
-// and the operator cannot see it anywhere else.
-func restoreSchedulerTime(configPath, previous string, bootstrap *logging.BootstrapLogger) {
-	restored := strings.TrimSpace(previous)
-	if restored == "" {
-		restored = cronutil.DefaultTime
-	}
-	if err := setBackupEnvKeys(configPath, map[string]string{"SCHEDULER_TIME": restored}); err != nil {
-		logBootstrapWarning(bootstrap, "The proxsave cron entry could not be removed and SCHEDULER_TIME could not be put back to %s either (%v), so the daemon is left pointing at the same minute as that entry.", restored, err)
-		return
-	}
-	logBootstrapWarning(bootstrap, "The proxsave cron entry could not be removed, so SCHEDULER_TIME was put back to %s: leaving the adopted hour would schedule the daemon in the same minute as that entry.", restored)
+// So the adopted hour stays and the operator is told. This is one of the cases where ProxSave
+// says what to do rather than only what happened, and it earns it: it has just proved it cannot
+// remove that line itself, and the operator asked for this switch.
+func reportUnremovedCronEntry(hhmm string, bootstrap *logging.BootstrapLogger) {
+	logBootstrapWarning(bootstrap, "Could not remove the legacy proxsave cron entry, it still runs at %s. Remove it by hand or the backup runs twice.", hhmm)
 }
 
 // adoptCronRunTimeIntoBase is the ONE place both front-ends adopt the host's cron

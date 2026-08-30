@@ -210,16 +210,17 @@ func prepareCronHandoverForDaemon(ctx context.Context, configPath, execToken str
 		logging.Warning("daemon: the crontab could not be read, so no cron entry was inspected or removed: %v", err)
 		return cronRemovalOutcome{}
 	}
-	previousTime, adopted := adoptSchedulerTimeForDaemon(configPath, lines, bootstrap)
+	adoptedTime := adoptSchedulerTimeForDaemon(configPath, lines, bootstrap)
 	outcome, err := removeCanonicalCronEntry(ctx, cronCorrectPaths(execToken), bootstrap)
 	if err != nil {
 		logging.Warning("daemon: failed to remove the cron entry (possible double execution; the per-run lock mitigates): %v", err)
 	}
-	// The adoption was written for a line that is about to go away. If it did not, the line is
-	// still live at that hour and the daemon has just been pointed at the same minute, so put the
-	// hour back.
-	if adopted && (err != nil || !outcome.Verified || outcome.Removed == 0) {
-		restoreSchedulerTime(configPath, previousTime, bootstrap)
+	// The adoption was written for a line that is about to go away. If it did not, that line is
+	// still live at the adopted hour and the daemon now uses the same one, so say so. The hour
+	// stays: SCHEDULER_TIME is ProxSave's own variable and a failed crontab write is no reason
+	// to rewrite it, and only removing the line actually fixes anything here.
+	if adoptedTime != "" && (err != nil || !outcome.Verified || outcome.Removed == 0) {
+		reportUnremovedCronEntry(adoptedTime, bootstrap)
 	}
 	// #298: the removal above can only see cron lines whose COMMAND is named proxsave or
 	// proxmox-backup. A wrapper entry survives it silently, and the daemon being installed now
