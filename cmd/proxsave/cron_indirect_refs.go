@@ -371,12 +371,99 @@ func scriptProxsaveProbe(token string) (references bool, readable bool) {
 	if err != nil || bytes.IndexByte(data, 0) >= 0 {
 		return false, false
 	}
-	for _, line := range strings.Split(string(data), "\n") {
-		if scriptLineRunsProxsave(line) {
+	lines := strings.Split(string(data), "\n")
+	vars := scriptProxsavePathVars(lines)
+	for _, line := range lines {
+		if scriptLineRunsProxsave(line, vars) {
 			return true, true
 		}
 	}
 	return false, true
+}
+
+// The three categories a word in command position can be. They exist because one category,
+// "runner", used to do both jobs and did neither well: it opened the WHOLE rest of the segment
+// to matching, which let "sudo cp /usr/local/bin/proxsave /backup/" match on an argument, while
+// a word that was not a runner ended the segment, which hid the command behind "if", "while"
+// and "!" - words that consume nothing at all.
+var (
+	// scriptCommandPrefixes consume exactly one word. The command position resumes immediately
+	// after them, so nothing between them and the command has to be skipped.
+	scriptCommandPrefixes = map[string]struct{}{
+		"if": {}, "while": {}, "until": {}, "elif": {}, "then": {}, "else": {}, "do": {}, "!": {},
+		"{": {}, "}": {},
+		"exec": {}, "command": {}, "builtin": {}, "time": {},
+		"nohup": {}, "nice": {}, "ionice": {}, "setsid": {}, "stdbuf": {}, "eatmydata": {}, "chronic": {},
+	}
+	// scriptCommandLaunchers take options of their own and then the command. Skipping the
+	// options (and any leading assignments, for env) puts us back in command position.
+	scriptCommandLaunchers = map[string]struct{}{
+		"sudo": {}, "doas": {}, "env": {}, "xargs": {},
+	}
+	// scriptOperandLaunchers take options AND one operand of their own before the command:
+	// flock's lock file, timeout's duration.
+	scriptOperandLaunchers = map[string]struct{}{
+		"flock": {}, "timeout": {},
+	}
+	// scriptShellLaunchers run a script passed as the argument to -c, which is a LINE and is
+	// evaluated as one.
+	scriptShellLaunchers = map[string]struct{}{
+		"sh": {}, "bash": {}, "dash": {}, "ash": {}, "ksh": {}, "zsh": {}, "busybox": {},
+	}
+	// scriptOpaqueLaunchers put the command somewhere this parser does not model - a -c string
+	// mixed with a user name, a -- separator, a unit description. They keep the old broad scan
+	// over the rest of the segment, which can match an argument. That is stated rather than
+	// pretended away: these four are rare in a backup wrapper, and the cost of a false positive
+	// is a reported finding, never an action.
+	scriptOpaqueLaunchers = map[string]struct{}{
+		"su": {}, "runuser": {}, "systemd-run": {}, "systemd-cat": {},
+	}
+)
+
+// scriptProxsavePathVars collects NAME -> value for the assignments in a script whose value is a
+// proxsave path, so a later "$NAME" in command position can be resolved.
+//
+// Only assignments matter, and only where the variable is later USED as a command. That is the
+// whole difference between a wrapper holding the binary path and a script holding a directory
+// path it merely copies: "BIN=/usr/local/bin/proxsave" followed by "$BIN --backup" runs it,
+// while "SRC=/opt/proxsave/" followed by "rsync -a $SRC /mnt/nas/" does not, and the earlier
+// any-word probe could not tell them apart.
+func scriptProxsavePathVars(lines []string) map[string]string {
+	vars := map[string]string{}
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
+			continue
+		}
+		for _, segment := range splitShellSegments(trimmed) {
+			for _, word := range strings.Fields(segment) {
+				idx := strings.Index(word, "=")
+				if !looksLikeEnvAssignment(word) {
+					continue
+				}
+				value := strings.Trim(word[idx+1:], "\"'")
+				if scriptWordRunsProxsave(value) {
+					vars[word[:idx]] = value
+				}
+			}
+		}
+	}
+	return vars
+}
+
+// resolveScriptWord expands "$NAME", "${NAME}" and their quoted forms against the assignments
+// collected above. Anything else is returned unchanged.
+func resolveScriptWord(word string, vars map[string]string) string {
+	word = strings.Trim(word, "\"'")
+	if !strings.HasPrefix(word, "$") {
+		return word
+	}
+	name := strings.TrimPrefix(word, "$")
+	name = strings.TrimSuffix(strings.TrimPrefix(name, "{"), "}")
+	if value, ok := vars[name]; ok {
+		return value
+	}
+	return word
 }
 
 // scriptLineRunsProxsave reports whether one line of a script puts the proxsave binary in
@@ -390,45 +477,97 @@ func scriptProxsaveProbe(token string) (references bool, readable bool) {
 //
 // The parsing is deliberately shallow, because this is RECOGNITION and nothing here is ever
 // executed. A line is cut into segments at the shell operators that start a new command, each
-// segment's leading environment assignments are skipped, and the first remaining word is the
-// command. A known runner in that position (sudo, flock, sh -c, and the rest of
-// cronCommandRunners) hands the decision to the rest of the segment, which is the same
-// allowance cronRunnerNamesProxsave already makes for a crontab line.
+// segment's leading environment assignments are skipped, and what stands in command position is
+// then walked through the four categories above until a real command is reached.
 //
-// What it does not model: expansion. "$BIN --backup" with BIN set earlier is not recognised,
-// and neither is a path assembled at runtime. That is the same blind spot the whole detector
-// has, and the reason a missed wrapper is reported rather than acted on.
-func scriptLineRunsProxsave(line string) bool {
+// What it does not model: a path assembled from more than one variable, a command reached
+// through `source` or `eval`, and the four opaque launchers listed above. A wrapper missed here
+// is REPORTED as missing, never acted on, so the cost of a blind spot is one advisory the
+// operator does not get, not a decision taken on bad evidence.
+func scriptLineRunsProxsave(line string, vars map[string]string) bool {
 	trimmed := strings.TrimSpace(line)
 	if trimmed == "" || strings.HasPrefix(trimmed, "#") {
 		return false
 	}
 	for _, segment := range splitShellSegments(trimmed) {
-		words := strings.Fields(segment)
-		for len(words) > 0 && looksLikeEnvAssignment(words[0]) {
-			words = words[1:]
-		}
-		if len(words) == 0 {
-			continue
-		}
-		head := strings.Trim(words[0], "\"'")
-		if scriptWordRunsProxsave(head) {
+		if segmentRunsProxsave(strings.Fields(segment), vars) {
 			return true
-		}
-		// A runner hands the command position to whatever it is about to execute, but its own
-		// options and operands sit in between (flock's lock path, sh's -c). So once one is in
-		// command position, the rest of the segment counts - the same allowance
-		// cronRunnerNamesProxsave already makes for a crontab line.
-		if !isScriptCommandRunner(head) {
-			continue
-		}
-		for _, w := range words[1:] {
-			if scriptWordRunsProxsave(strings.Trim(w, "\"'")) {
-				return true
-			}
 		}
 	}
 	return false
+}
+
+// segmentRunsProxsave walks one segment from its command position. It is iterative rather than
+// recursive on the launcher categories so a pathological line cannot nest; the ONE recursion is
+// a shell's -c argument, which is a genuinely separate line.
+func segmentRunsProxsave(words []string, vars map[string]string) bool {
+	for len(words) > 0 {
+		// Leading assignments belong to the command that follows, not to the command position.
+		for len(words) > 0 && looksLikeEnvAssignment(strings.Trim(words[0], "\"'")) {
+			words = words[1:]
+		}
+		if len(words) == 0 {
+			return false
+		}
+		head := resolveScriptWord(words[0], vars)
+		if scriptWordRunsProxsave(head) {
+			return true
+		}
+		base := strings.ToLower(filepath.Base(head))
+		switch {
+		case isIn(base, scriptCommandPrefixes):
+			words = words[1:]
+		case isIn(base, scriptCommandLaunchers):
+			words = skipLauncherOptions(words[1:])
+		case isIn(base, scriptOperandLaunchers):
+			words = skipLauncherOptions(words[1:])
+			if len(words) > 0 {
+				words = words[1:] // the lock file, the duration
+			}
+		case isIn(base, scriptShellLaunchers):
+			return shellLauncherRunsProxsave(words[1:], vars)
+		case isIn(base, scriptOpaqueLaunchers):
+			for _, w := range words[1:] {
+				if scriptWordRunsProxsave(resolveScriptWord(w, vars)) {
+					return true
+				}
+			}
+			return false
+		default:
+			// An ordinary command. Everything after it is an argument, and naming a path in an
+			// argument is exactly what stopped counting.
+			return false
+		}
+	}
+	return false
+}
+
+// shellLauncherRunsProxsave handles "sh -c '<script>'": the argument after -c is a line of its
+// own. Without a -c the shell is running a FILE, whose contents this probe cannot follow, so the
+// remaining words are treated as a command position rather than scanned.
+func shellLauncherRunsProxsave(words []string, vars map[string]string) bool {
+	for i, w := range words {
+		if strings.Trim(w, "\"'") == "-c" {
+			if i+1 >= len(words) {
+				return false
+			}
+			return scriptLineRunsProxsave(strings.Trim(strings.Join(words[i+1:], " "), "\"'"), vars)
+		}
+	}
+	return segmentRunsProxsave(skipLauncherOptions(words), vars)
+}
+
+// skipLauncherOptions drops the option-shaped words a launcher consumes before its command.
+func skipLauncherOptions(words []string) []string {
+	for len(words) > 0 && strings.HasPrefix(strings.Trim(words[0], "\"'"), "-") {
+		words = words[1:]
+	}
+	return words
+}
+
+func isIn(word string, set map[string]struct{}) bool {
+	_, ok := set[word]
+	return ok
 }
 
 // scriptWordRunsProxsave reports whether one word names our binary. basenameHasProxsaveComponent
@@ -441,28 +580,18 @@ func scriptWordRunsProxsave(word string) bool {
 	return strings.Contains(word, "/") && basenameHasProxsaveComponent(word)
 }
 
-// isScriptCommandRunner extends cronCommandRunners with the shell builtins a script uses to
-// hand off execution. They cannot appear as a cron command - cron has no shell builtins - which
-// is why they live here and not in the shared set.
-func isScriptCommandRunner(word string) bool {
-	base := strings.ToLower(filepath.Base(word))
-	if _, ok := cronCommandRunners[base]; ok {
-		return true
-	}
-	switch base {
-	case "exec", "command", "builtin", "time", "then", "else", "do":
-		return true
-	}
-	return false
-}
-
 // splitShellSegments cuts a line at the operators that begin a new command, so each piece
 // starts at a command position. Redirections and arguments are left inside their segment: they
 // are exactly the places a path is NAMED rather than run.
+//
+// Braces are NOT separators, because "${BIN}" would then be cut into two words and the
+// variable would be unresolvable. A grouping brace is handled where it actually stands, as a
+// prefix that consumes one word (scriptCommandPrefixes); the ";" inside "{ cmd; }" already
+// separates the commands.
 func splitShellSegments(line string) []string {
 	return strings.FieldsFunc(line, func(r rune) bool {
 		switch r {
-		case ';', '|', '&', '(', ')', '{', '}', '`':
+		case ';', '|', '&', '(', ')', '`':
 			return true
 		}
 		return false

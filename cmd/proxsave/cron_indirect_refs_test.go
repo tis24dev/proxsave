@@ -222,6 +222,77 @@ func TestContentProbeRequiresCommandPosition(t *testing.T) {
 	}
 }
 
+// The command-position rule had one category, "runner", doing two different jobs badly. A runner
+// opened the WHOLE rest of the segment to matching, because flock puts its own operands between
+// itself and the command; that let `sudo cp /usr/local/bin/proxsave /backup/` match on an
+// argument. And a word that is not a runner ended the segment, so `if`, `while` and `!` - which
+// consume nothing at all - hid the command right behind them.
+//
+// Three categories now: prefixes that consume one word, launchers whose options and operands are
+// skipped before the command position resumes, and shells whose -c argument is a nested line.
+// Plus a variable resolved only when it is USED as a command, which is what separates a wrapper
+// holding the binary path from a script holding a directory path it merely copies.
+func TestScriptProbeCommandPositionCategories(t *testing.T) {
+	dir := t.TempDir()
+	flagged := func(t *testing.T, body string) bool {
+		t.Helper()
+		p := filepath.Join(dir, strings.ReplaceAll(t.Name(), "/", "_")+".sh")
+		if err := os.WriteFile(p, []byte(body), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		return len(indirectProxsaveCronRefs([]string{"0 2 * * * " + p}, cronProbeReadScripts)) > 0
+	}
+
+	for _, tc := range []struct {
+		name string
+		body string
+		want bool
+	}{
+		// Prefixes consume exactly one word; the command is right behind them.
+		{"if", "#!/bin/sh\nif /usr/local/bin/proxsave --check; then echo ok; fi\n", true},
+		{"while with a negation", "#!/bin/sh\nwhile ! /usr/local/bin/proxsave --backup; do sleep 5; done\n", true},
+		{"until", "#!/bin/sh\nuntil /usr/local/bin/proxsave --backup; do sleep 5; done\n", true},
+		{"bare negation", "#!/bin/sh\n! /usr/local/bin/proxsave --backup\n", true},
+		{"elif", "#!/bin/sh\nif false; then true; elif /usr/local/bin/proxsave --backup; then true; fi\n", true},
+		{"exec", "#!/bin/sh\nexec /usr/local/bin/proxsave --backup\n", true},
+
+		// Launchers: options and their own operands are skipped, then the command position
+		// resumes. It does NOT reopen the whole segment.
+		{"sudo runs it", "#!/bin/sh\nsudo /usr/local/bin/proxsave --backup\n", true},
+		{"sudo only copies it", "#!/bin/sh\nsudo cp /usr/local/bin/proxsave /backup/proxsave.bak\n", false},
+		{"flock runs it", "#!/bin/sh\nflock -n /var/lock/ps.lock /usr/local/bin/proxsave --backup\n", true},
+		{"flock only prunes its log", "#!/bin/sh\nflock -n /var/lock/x find /var/log/proxsave.log -delete\n", false},
+		{"timeout runs it", "#!/bin/sh\ntimeout 3600 /usr/local/bin/proxsave --backup\n", true},
+		{"timeout only stats it", "#!/bin/sh\ntimeout 5 stat /usr/local/bin/proxsave\n", false},
+		{"env runs it", "#!/bin/sh\nenv TZ=UTC /usr/local/bin/proxsave --backup\n", true},
+		{"xargs only removes its logs", "#!/bin/sh\nls | xargs rm /var/log/proxsave.log\n", false},
+
+		// A shell's -c argument is a script of its own.
+		{"sh -c runs it", "#!/bin/sh\nsh -c '/usr/local/bin/proxsave --backup'\n", true},
+		{"sh -c only copies it", "#!/bin/sh\nsh -c 'cp /usr/local/bin/proxsave /backup/'\n", false},
+
+		// A variable is resolved only where it stands in command position.
+		{"the binary path held in a variable", "#!/bin/sh\nBIN=/usr/local/bin/proxsave\n$BIN --backup\n", true},
+		{"braced form", "#!/bin/sh\nBIN=/usr/local/bin/proxsave\n${BIN} --backup\n", true},
+		{"quoted form behind a prefix", "#!/bin/sh\nBIN=/usr/local/bin/proxsave\nif \"$BIN\" --check; then true; fi\n", true},
+		{"a directory held in a variable and only copied", "#!/bin/sh\nSRC=/opt/proxsave/\nrsync -a \"$SRC\" /mnt/nas/\n", false},
+		{"an unrelated variable", "#!/bin/sh\nBIN=/usr/bin/rsync\n$BIN -a /a /b\n", false},
+
+		// The cases the earlier fix already got right must stay right.
+		{"plain call", "#!/bin/sh\n/usr/local/bin/proxsave --backup\n", true},
+		{"after a separator", "#!/bin/sh\nsync && /usr/local/bin/proxsave --backup\n", true},
+		{"mirrors the install directory", "#!/bin/sh\nrsync -a /opt/proxsave/ /mnt/nas/proxsave-copy/\n", false},
+		{"prunes the log file", "#!/bin/sh\nfind /var/log/proxsave.log -mtime +7 -delete\n", false},
+		{"commented-out call with an operator", "#!/bin/sh\n# sync && /usr/local/bin/proxsave --backup\ntrue\n", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := flagged(t, tc.body); got != tc.want {
+				t.Errorf("flagged = %v, want %v for:\n%s", got, tc.want, tc.body)
+			}
+		})
+	}
+}
+
 // #298 on the exact path that caused it: the unattended --upgrade retrofit must
 // REFUSE to install the daemon while a wrapper cron entry is live, and the refusal
 // must be a true no-op (host still on cron, backup.env untouched), never a half
