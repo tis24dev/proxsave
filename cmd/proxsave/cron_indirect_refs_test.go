@@ -16,6 +16,33 @@ import (
 	"github.com/tis24dev/proxsave/internal/types"
 )
 
+// The detector's verdict on a NAMED command depends on whether that command can be READ: the
+// content probe decides whenever it can, and only when it cannot does the name get a vote
+// (TestNameRuleOnlyFiresWhenTheScriptCannotBeRead). A fixture that hardcodes an absolute host
+// path therefore hands the verdict to the machine running the suite. Seven tests did, and they
+// passed only because no /usr/local/sbin/proxsave-nas-guard happens to exist here: the same
+// cron line classifies the other way the moment a host has one, and the suite would then fail
+// on a real operator's machine for a reason that has nothing to do with the code.
+//
+// absentWrapper puts that wrapper under the test's own temp dir, which the framework
+// guarantees is fresh and empty, so "could not be read" is a property of the fixture.
+func absentWrapper(t *testing.T) string {
+	t.Helper()
+	return filepath.Join(t.TempDir(), "proxsave-nas-guard")
+}
+
+// unrelatedCommand is the ordinary operator job no rule may fire on. It lives under the temp
+// dir for the same reason: the probe opens whatever the cron line names, and /usr/bin/rsync is
+// the host's file, not the test's.
+func unrelatedCommand(t *testing.T) string {
+	t.Helper()
+	p := filepath.Join(t.TempDir(), "rsync")
+	if err := os.WriteFile(p, []byte("#!/bin/sh\nexec rsync \"$@\"\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return p
+}
+
 // #298: a cron line that invokes ProxSave INDIRECTLY (an operator wrapper script,
 // a shell -c, a runner like flock/sudo) must be visible to the daemon migration,
 // while every line the narrow command-token matcher deliberately protects must stay
@@ -86,8 +113,8 @@ func TestIndirectProxsaveCronRefs(t *testing.T) {
 	// wrapperCronLines is the plain-lines adapter applyCronMode's fallback consults.
 	// It must agree with the detector and hand back the line verbatim, because that is
 	// what gets echoed to the operator on a revert.
-	const wrapper = "00 02 * * * /usr/local/sbin/proxsave-nas-guard"
-	got := wrapperCronLines([]string{"0 6 * * * /usr/bin/rsync /a /b", wrapper, "0 2 * * * /usr/local/bin/proxsave --backup"})
+	wrapper := "00 02 * * * " + absentWrapper(t)
+	got := wrapperCronLines([]string{"0 6 * * * " + unrelatedCommand(t) + " /a /b", wrapper, "0 2 * * * /usr/local/bin/proxsave --backup"})
 	if len(got) != 1 || got[0] != wrapper {
 		t.Fatalf("wrapperCronLines must return exactly the wrapper line verbatim, got %v", got)
 	}
@@ -177,8 +204,9 @@ func TestMaybeAutoMigrateDaemonRefusesIndirectCronEntry(t *testing.T) {
 	}
 
 	// The reported crontab: a wrapper the canonical matcher cannot see.
+	wrapperLine := "00 02 * * * " + absentWrapper(t)
 	crontabReadLinesFn = func(context.Context) ([]string, error) {
-		return []string{"00 02 * * * /usr/local/sbin/proxsave-nas-guard"}, nil
+		return []string{wrapperLine}, nil
 	}
 	migrate()
 	if applied {
@@ -271,10 +299,11 @@ func TestIndirectProxsaveSystemCronRefs(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	wrapperCmd := absentWrapper(t)
 	systemCrontab := filepath.Join(dir, "crontab")
-	write(systemCrontab, "SHELL=/bin/sh\n# comment\n0 6 * * * root /usr/bin/rsync /a /b\n")
-	write(filepath.Join(cronD, "proxsave-guard"), "17 02 * * * root /usr/local/sbin/proxsave-nas-guard\n")
-	write(filepath.Join(cronD, "ignored.bak"), "17 03 * * * root /usr/local/sbin/proxsave-nas-guard\n")
+	write(systemCrontab, "SHELL=/bin/sh\n# comment\n0 6 * * * root "+unrelatedCommand(t)+" /a /b\n")
+	write(filepath.Join(cronD, "proxsave-guard"), "17 02 * * * root "+wrapperCmd+"\n")
+	write(filepath.Join(cronD, "ignored.bak"), "17 03 * * * root "+wrapperCmd+"\n")
 
 	orig := systemCronPaths
 	t.Cleanup(func() { systemCronPaths = orig })
@@ -284,7 +313,7 @@ func TestIndirectProxsaveSystemCronRefs(t *testing.T) {
 	if len(refs) != 1 {
 		t.Fatalf("want exactly the one active cron.d wrapper, got %d: %+v", len(refs), refs)
 	}
-	if refs[0].Command != "/usr/local/sbin/proxsave-nas-guard" {
+	if refs[0].Command != wrapperCmd {
 		t.Errorf("Command = %q", refs[0].Command)
 	}
 	if refs[0].Source != filepath.Join(cronD, "proxsave-guard") {
@@ -386,7 +415,7 @@ func TestSystemCronProxsaveRefsSeesADirectProxsaveLine(t *testing.T) {
 		t.Fatal(err)
 	}
 	systemCrontab := filepath.Join(dir, "crontab")
-	if err := os.WriteFile(systemCrontab, []byte("0 6 * * * root /usr/bin/rsync /a /b\n"), 0o644); err != nil {
+	if err := os.WriteFile(systemCrontab, []byte("0 6 * * * root "+unrelatedCommand(t)+" /a /b\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(cronD, "proxsave"), []byte("0 2 * * * root /usr/local/bin/proxsave --backup\n"), 0o644); err != nil {
@@ -438,15 +467,16 @@ func TestSystemCronFollowsSymlinkedEntries(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	wrapperCmd := absentWrapper(t)
 	target := filepath.Join(pkg, "proxsave.cron")
-	if err := os.WriteFile(target, []byte("17 02 * * * root /usr/local/sbin/proxsave-nas-guard\n"), 0o644); err != nil {
+	if err := os.WriteFile(target, []byte("17 02 * * * root "+wrapperCmd+"\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	// An ABSOLUTE symlink, which is precisely the shape OpenFileUnderRoot refuses.
 	if err := os.Symlink(target, filepath.Join(cronD, "proxsave-guard")); err != nil {
 		t.Skipf("symlinks unavailable on this filesystem: %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, "crontab"), []byte("0 6 * * * root /usr/bin/rsync /a /b\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "crontab"), []byte("0 6 * * * root "+unrelatedCommand(t)+" /a /b\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -458,7 +488,7 @@ func TestSystemCronFollowsSymlinkedEntries(t *testing.T) {
 	if len(refs) != 1 {
 		t.Fatalf("a symlinked cron.d entry must be scanned like any other, got %d: %+v", len(refs), refs)
 	}
-	if refs[0].Command != "/usr/local/sbin/proxsave-nas-guard" {
+	if refs[0].Command != wrapperCmd {
 		t.Errorf("Command = %q", refs[0].Command)
 	}
 	// The finding is reported at the path CRON knows it by, not at the link target: that is
@@ -683,8 +713,9 @@ func TestDeriveSchedulerTimeReadsSystemCron(t *testing.T) {
 func TestWarnIndirectProxsaveCronOnDaemonInstallStatesFactsOnly(t *testing.T) {
 	origRead, origPaths := crontabReadLinesFn, systemCronPaths
 	t.Cleanup(func() { crontabReadLinesFn, systemCronPaths = origRead, origPaths })
+	wrapperLine := "30 02 * * * " + absentWrapper(t)
 	crontabReadLinesFn = func(context.Context) ([]string, error) {
-		return []string{"30 02 * * * /usr/local/sbin/proxsave-nas-guard"}, nil
+		return []string{wrapperLine}, nil
 	}
 	systemCronPaths = []string{filepath.Join(t.TempDir(), "absent")}
 
@@ -700,9 +731,9 @@ func TestWarnIndirectProxsaveCronOnDaemonInstallStatesFactsOnly(t *testing.T) {
 
 	for _, want := range []string{
 		"unmanaged cron line(s) still schedule ProxSave", // WHAT was found
-		"30 02 * * * /usr/local/sbin/proxsave-nas-guard", // the line verbatim
-		"named after proxsave",                           // WHY it matched
-		"NOT removed",                                    // what ProxSave did not do
+		wrapperLine,            // the line verbatim
+		"named after proxsave", // WHY it matched
+		"NOT removed",          // what ProxSave did not do
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("the warning must state %q, out=%q", want, out)
@@ -829,8 +860,9 @@ func TestMaybeAutoMigrateDaemonRefusalUsesOneWarning(t *testing.T) {
 	t.Cleanup(func() {
 		crontabReadLinesFn, applyDaemonModeFn, systemCronPaths = origRead, origApply, origPaths
 	})
+	wrapperLine := "30 02 * * * " + absentWrapper(t)
 	crontabReadLinesFn = func(context.Context) ([]string, error) {
-		return []string{"30 02 * * * /usr/local/sbin/proxsave-nas-guard"}, nil
+		return []string{wrapperLine}, nil
 	}
 	systemCronPaths = []string{filepath.Join(t.TempDir(), "absent")}
 	applyDaemonModeFn = func(context.Context, *config.Config, string, string, *logging.BootstrapLogger) (cronRemovalOutcome, error) {
@@ -864,9 +896,9 @@ func TestMaybeAutoMigrateDaemonRefusalUsesOneWarning(t *testing.T) {
 		}
 	}
 	for _, want := range []string{
-		"unmanaged cron line(s) schedule ProxSave",       // the header, below the verdict
-		"30 02 * * * /usr/local/sbin/proxsave-nas-guard", // the finding verbatim
-		"proxsave --daemon-setup",                        // the way forward
+		"unmanaged cron line(s) schedule ProxSave", // the header, below the verdict
+		wrapperLine,               // the finding verbatim
+		"proxsave --daemon-setup", // the way forward
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("the block must still state %q, out=%q", want, out)
