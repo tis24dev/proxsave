@@ -172,7 +172,7 @@ func TestApplyCronMode_PersistsCronModeBeforeTeardown(t *testing.T) {
 	}
 	cfg := &config.Config{BaseDir: dir, SchedulerTime: "02:00"}
 
-	_, err := applyCronMode(context.Background(), cfg, configPath, "/usr/local/bin/proxsave", nil, false)
+	_, err := applyCronMode(context.Background(), cfg, configPath, "/usr/local/bin/proxsave", nil)
 	if err == nil {
 		t.Fatal("teardown failure must still be returned")
 	}
@@ -218,7 +218,7 @@ func TestApplyCronModeDefersWhileBackupRunning(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
 	defer cancel()
 
-	_, err := applyCronMode(ctx, cfg, configPath, "/usr/local/bin/proxsave", nil, true)
+	_, err := applyCronMode(ctx, cfg, configPath, "/usr/local/bin/proxsave", nil)
 	if !errors.Is(err, errDaemonTeardownBackupRunning) {
 		t.Fatalf("want errDaemonTeardownBackupRunning, got %v", err)
 	}
@@ -265,7 +265,7 @@ func TestApplyCronModeProceedsWhenIdle(t *testing.T) {
 	}
 	cfg := &config.Config{BaseDir: dir, SchedulerTime: "02:00"}
 
-	_, err := applyCronMode(context.Background(), cfg, configPath, "/usr/local/bin/proxsave", nil, true)
+	_, err := applyCronMode(context.Background(), cfg, configPath, "/usr/local/bin/proxsave", nil)
 	if err != nil {
 		t.Fatalf("idle host must proceed, got %v", err)
 	}
@@ -283,7 +283,7 @@ func TestApplyCronModeFailsClosedOnNilConfig(t *testing.T) {
 		return nil
 	}
 
-	_, err := applyCronMode(context.Background(), nil, "/nonexistent/backup.env", "/usr/local/bin/proxsave", nil, true)
+	_, err := applyCronMode(context.Background(), nil, "/nonexistent/backup.env", "/usr/local/bin/proxsave", nil)
 	if !errors.Is(err, errDaemonTeardownConfigUnreadable) {
 		t.Fatalf("nil config must fail closed, got %v", err)
 	}
@@ -373,7 +373,7 @@ func TestApplyCronModeRollsBackHealthcheckEnabled(t *testing.T) {
 	}
 	cfg := &config.Config{BaseDir: dir, SchedulerTime: "02:00"}
 
-	if _, err := applyCronMode(context.Background(), cfg, configPath, "/usr/local/bin/proxsave", nil, true); err != nil {
+	if _, err := applyCronMode(context.Background(), cfg, configPath, "/usr/local/bin/proxsave", nil); err != nil {
 		t.Fatalf("applyCronMode: %v", err)
 	}
 
@@ -391,8 +391,11 @@ func TestApplyCronModeRollsBackHealthcheckEnabled(t *testing.T) {
 	if !strings.Contains(content, "SCHEDULER_MODE=cron") {
 		t.Errorf("the revert must still record the cron mode:\n%s", content)
 	}
-	if !strings.Contains(content, "DAEMON_OPT_OUT=true") {
-		t.Errorf("the revert must still write the opt-out tombstone:\n%s", content)
+	// The revert no longer writes a tombstone. SCHEDULER_MODE=cron above IS the record, and
+	// the retrofit honours it because the key is present, not because a second key contradicts
+	// it (schedulerModeOriginFromUpgrade).
+	if strings.Contains(content, "DAEMON_OPT_OUT") {
+		t.Errorf("the revert must not write the retired tombstone:\n%s", content)
 	}
 	// utils.SetEnvValue preserves inline comments; a rollback that ate the operator's
 	// annotation would be a silent edit of their file.

@@ -64,7 +64,7 @@ func runDaemonSetup(rt *appRuntime) int {
 
 func runDaemonRemove(rt *appRuntime) int {
 	logging.Info("Removing ProxSave daemon mode and reverting to cron...")
-	if _, err := applyCronMode(rt.ctx, rt.cfg, rt.args.ConfigPath, daemonSelfExecPath(), nil, true); err != nil {
+	if _, err := applyCronMode(rt.ctx, rt.cfg, rt.args.ConfigPath, daemonSelfExecPath(), nil); err != nil {
 		if errors.Is(err, errDaemonTeardownBackupRunning) {
 			logging.Warning("daemon-remove deferred: a backup is in progress; the daemon was NOT removed. Retry when the backup finishes.")
 			return types.ExitGenericError.Int()
@@ -76,7 +76,7 @@ func runDaemonRemove(rt *appRuntime) int {
 		logging.Error("daemon-remove failed: %v", err)
 		return types.ExitGenericError.Int()
 	}
-	logging.Info("Daemon removed: reverted to the cron scheduler. Future upgrades will NOT reinstall it (DAEMON_OPT_OUT=true).")
+	logging.Info("Daemon removed: reverted to the cron scheduler. SCHEDULER_MODE=cron is recorded in the configuration, so upgrades leave the scheduler as it is.")
 	return types.ExitSuccess.Int()
 }
 
@@ -201,7 +201,6 @@ func applyDaemonMode(ctx context.Context, cfg *config.Config, configPath, execTo
 	// later --upgrade, and applyCronMode now rolls the key back on the way out.
 	if err := setBackupEnvKeys(configPath, map[string]string{
 		"SCHEDULER_MODE":      "daemon",
-		"DAEMON_OPT_OUT":      "false",
 		"HEALTHCHECK_ENABLED": "true",
 	}); err != nil {
 		logging.Warning("daemon: failed to record SCHEDULER_MODE=daemon in %s: %v", configPath, err)
@@ -419,9 +418,12 @@ type cronRevertReport struct {
 }
 
 // applyCronMode reverts an install to cron: make sure a cron schedule exists, record
-// SCHEDULER_MODE=cron and HEALTHCHECK_ENABLED=false (plus DAEMON_OPT_OUT=true when optOut,
-// the --daemon-remove tombstone that stops future upgrades from re-migrating), and only
-// THEN remove the systemd unit. The cron fallback is established first so a teardown
+// SCHEDULER_MODE=cron and HEALTHCHECK_ENABLED=false, and only THEN remove the systemd unit.
+//
+// It used to write a third key, DAEMON_OPT_OUT=true, whose only job was to stop the next
+// --upgrade from re-migrating a host that had just chosen cron. That key is gone: the retrofit
+// now honours SCHEDULER_MODE because it is PRESENT, so the mode written here is itself the
+// record, and nothing has to contradict it. The cron fallback is established first so a teardown
 // failure never leaves the host unscheduled with a stale mode=daemon (F09-06).
 //
 // "Make sure a cron schedule exists" is not always "append one": on a host already
@@ -430,7 +432,7 @@ type cronRevertReport struct {
 //
 // The HEALTHCHECK_ENABLED rollback is the exact mirror of the key applyDaemonMode forces
 // on; see the write below for why it is not optional.
-func applyCronMode(ctx context.Context, cfg *config.Config, configPath, execToken string, bootstrap *logging.BootstrapLogger, optOut bool) (cronRevertReport, error) {
+func applyCronMode(ctx context.Context, cfg *config.Config, configPath, execToken string, bootstrap *logging.BootstrapLogger) (cronRevertReport, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -523,14 +525,10 @@ func applyCronMode(ctx context.Context, cfg *config.Config, configPath, execToke
 	// exit code, and runDashboardDaemonAdmin re-reads backup.env on every later screen - and
 	// applyDaemonMode does not mirror its own write either. Mutating the caller's config on
 	// only one of the two paths would be the asymmetry, not the fix.
-	kv := map[string]string{
+	if err := setBackupEnvKeys(configPath, map[string]string{
 		"SCHEDULER_MODE":      "cron",
 		"HEALTHCHECK_ENABLED": "false",
-	}
-	if optOut {
-		kv["DAEMON_OPT_OUT"] = "true"
-	}
-	if err := setBackupEnvKeys(configPath, kv); err != nil {
+	}); err != nil {
 		logging.Warning("daemon: failed to record cron mode in %s: %v", configPath, err)
 	}
 	// Teardown last: a failure here leaves the host cron-scheduled with mode=cron, never

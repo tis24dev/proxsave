@@ -204,7 +204,7 @@ func TestApplyCronModeDoesNotAddASecondScheduleNextToAWrapper(t *testing.T) {
 		return nil
 	}
 
-	if _, err := applyCronMode(context.Background(), cfg, configPath, "/usr/local/bin/proxsave", nil, true); err != nil {
+	if _, err := applyCronMode(context.Background(), cfg, configPath, "/usr/local/bin/proxsave", nil); err != nil {
 		t.Fatalf("applyCronMode: %v", err)
 	}
 
@@ -219,8 +219,8 @@ func TestApplyCronModeDoesNotAddASecondScheduleNextToAWrapper(t *testing.T) {
 		t.Fatalf("the wrapper branch must not rewrite the crontab at all, got %v", written)
 	}
 	data, _ := os.ReadFile(configPath)
-	if !strings.Contains(string(data), "SCHEDULER_MODE=cron") || !strings.Contains(string(data), "DAEMON_OPT_OUT=true") {
-		t.Fatalf("the revert must still persist cron mode and the opt-out tombstone:\n%s", data)
+	if !strings.Contains(string(data), "SCHEDULER_MODE=cron") || strings.Contains(string(data), "DAEMON_OPT_OUT") {
+		t.Fatalf("the revert must persist cron mode and write no tombstone:\n%s", data)
 	}
 }
 
@@ -243,7 +243,7 @@ func TestApplyCronModeStillWritesTheCronLineWithoutAWrapper(t *testing.T) {
 		return nil
 	}
 
-	if _, err := applyCronMode(context.Background(), cfg, configPath, "/usr/local/bin/proxsave", nil, true); err != nil {
+	if _, err := applyCronMode(context.Background(), cfg, configPath, "/usr/local/bin/proxsave", nil); err != nil {
 		t.Fatalf("applyCronMode: %v", err)
 	}
 	// cron.TimeToSchedule zero-pads both fields ("%02d %02d * * *"), so SCHEDULER_TIME=02:00
@@ -282,7 +282,7 @@ func TestApplyCronModeFallsBackToTheAppendWhenTheCrontabIsUnreadable(t *testing.
 		migrated = true
 	}
 
-	if _, err := applyCronMode(context.Background(), cfg, configPath, "/usr/local/bin/proxsave", nil, true); err != nil {
+	if _, err := applyCronMode(context.Background(), cfg, configPath, "/usr/local/bin/proxsave", nil); err != nil {
 		t.Fatalf("applyCronMode: %v", err)
 	}
 	if !migrated {
@@ -329,7 +329,7 @@ func TestApplyCronModeStillWritesTheCronLineWhenSystemCronAlsoSchedulesIt(t *tes
 		return nil
 	}
 
-	if _, err := applyCronMode(context.Background(), cfg, configPath, "/usr/local/bin/proxsave", nil, true); err != nil {
+	if _, err := applyCronMode(context.Background(), cfg, configPath, "/usr/local/bin/proxsave", nil); err != nil {
 		t.Fatalf("applyCronMode: %v", err)
 	}
 	if migrated != "00 02 * * *" {
@@ -361,7 +361,7 @@ func TestApplyCronModeEmitsTheSystemCronAdvisory(t *testing.T) {
 	}
 
 	seen := captureConsole(t, func() {
-		if _, err := applyCronMode(context.Background(), cfg, configPath, "/usr/local/bin/proxsave", logging.NewBootstrapLogger(), true); err != nil {
+		if _, err := applyCronMode(context.Background(), cfg, configPath, "/usr/local/bin/proxsave", logging.NewBootstrapLogger()); err != nil {
 			t.Fatalf("applyCronMode: %v", err)
 		}
 	})
@@ -409,7 +409,7 @@ func TestApplyCronModeAdvisoryUsesOneWarning(t *testing.T) {
 	}
 
 	seen := captureConsole(t, func() {
-		if _, err := applyCronMode(context.Background(), cfg, configPath, "/usr/local/bin/proxsave", logging.NewBootstrapLogger(), true); err != nil {
+		if _, err := applyCronMode(context.Background(), cfg, configPath, "/usr/local/bin/proxsave", logging.NewBootstrapLogger()); err != nil {
 			t.Fatalf("applyCronMode: %v", err)
 		}
 	})
@@ -512,7 +512,7 @@ func TestApplyCronModeStaysSilentWithoutASystemCronFinding(t *testing.T) {
 	systemCronProxsaveRefsFn = func() []indirectCronRef { return nil }
 
 	seen := captureConsole(t, func() {
-		if _, err := applyCronMode(context.Background(), cfg, configPath, "/usr/local/bin/proxsave", logging.NewBootstrapLogger(), true); err != nil {
+		if _, err := applyCronMode(context.Background(), cfg, configPath, "/usr/local/bin/proxsave", logging.NewBootstrapLogger()); err != nil {
 			t.Fatalf("applyCronMode: %v", err)
 		}
 	})

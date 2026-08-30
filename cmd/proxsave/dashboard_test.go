@@ -43,7 +43,7 @@ func installDashboardGates(t *testing.T, bare, interactive bool) {
 	daemonApplyDaemonMode = func(ctx context.Context, cfg *config.Config, configPath, execToken string, bl *logging.BootstrapLogger) (cronRemovalOutcome, error) {
 		return cronRemovalOutcome{Removed: 1, Verified: true}, nil
 	}
-	daemonApplyCronMode = func(ctx context.Context, cfg *config.Config, configPath, execToken string, bl *logging.BootstrapLogger, optOut bool) (cronRevertReport, error) {
+	daemonApplyCronMode = func(ctx context.Context, cfg *config.Config, configPath, execToken string, bl *logging.BootstrapLogger) (cronRevertReport, error) {
 		return cronRevertReport{}, nil
 	}
 	t.Cleanup(func() {
@@ -570,11 +570,8 @@ func TestDashboardDaemonRemoveWhenActive(t *testing.T) {
 	}
 	t.Cleanup(func() { daemonStatusLoadConfig = orig })
 	reverted := 0
-	daemonApplyCronMode = func(ctx context.Context, cfg *config.Config, configPath, execToken string, bl *logging.BootstrapLogger, optOut bool) (cronRevertReport, error) {
+	daemonApplyCronMode = func(ctx context.Context, cfg *config.Config, configPath, execToken string, bl *logging.BootstrapLogger) (cronRevertReport, error) {
 		reverted++
-		if !optOut {
-			t.Errorf("disable must opt out (optOut=true)")
-		}
 		return cronRevertReport{}, nil
 	}
 	driver := installDashboardSessionSeam(t)
@@ -911,7 +908,7 @@ func TestDashboardDaemonRevertShowsTheSystemCronAdvisory(t *testing.T) {
 	if len(advisory) == 0 {
 		t.Fatal("the advisory builder returned nothing: this test would then assert on an empty set")
 	}
-	daemonApplyCronMode = func(context.Context, *config.Config, string, string, *logging.BootstrapLogger, bool) (cronRevertReport, error) {
+	daemonApplyCronMode = func(context.Context, *config.Config, string, string, *logging.BootstrapLogger) (cronRevertReport, error) {
 		return cronRevertReport{SystemCronAdvisory: advisory}, nil
 	}
 	shown := make(chan string, 1)

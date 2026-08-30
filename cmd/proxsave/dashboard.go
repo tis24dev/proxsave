@@ -615,7 +615,7 @@ func runDashboardDaemonAdmin(ctx context.Context, session *shell.Session, instal
 		if install {
 			cronOutcome, opErr = daemonApplyDaemonMode(taskCtx, cfg, configPath, execToken, bl)
 		} else {
-			revert, opErr = daemonApplyCronMode(taskCtx, cfg, configPath, execToken, bl, true)
+			revert, opErr = daemonApplyCronMode(taskCtx, cfg, configPath, execToken, bl)
 		}
 		return nil
 	})
