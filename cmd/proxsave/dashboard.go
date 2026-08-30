@@ -658,6 +658,13 @@ func runDashboardDaemonAdmin(ctx context.Context, session *shell.Session, instal
 			doneLevel = orchestrator.HealthcheckSetupLevelWarn
 			doneKeyword = "REVERTED - CONFIG NOT UPDATED"
 		}
+		// The daemon is gone and nothing replaced it. That outranks the config write, so it is
+		// tested last and wins the screen.
+		if !revert.CronScheduled {
+			doneLevel = orchestrator.HealthcheckSetupLevelError
+			doneKeyword = "NO SCHEDULE"
+			doneMsg = "The daemon service was removed and the cron entry could NOT be written, so nothing is scheduling the backup."
+		}
 	}
 	// The revert has the same problem in its own direction. applyCronMode emits its /etc
 	// schedule advisory through the bootstrap logger, which is console-quiet here and is

@@ -934,7 +934,7 @@ func TestDashboardDaemonRevertReportsAFailedConfigWrite(t *testing.T) {
 		return &config.Config{SchedulerMode: "daemon"}, nil
 	}
 	daemonApplyCronMode = func(context.Context, *config.Config, string, string, *logging.BootstrapLogger) (cronRevertReport, error) {
-		return cronRevertReport{ModeRecorded: false}, nil
+		return cronRevertReport{CronScheduled: true, ModeRecorded: false}, nil
 	}
 	type shown struct {
 		level   orchestrator.HealthcheckSetupLevel
@@ -973,6 +973,58 @@ func TestDashboardDaemonRevertReportsAFailedConfigWrite(t *testing.T) {
 	}
 	if strings.Contains(got.text, "upgrades leave the scheduler as it is") {
 		t.Errorf("the screen must not claim the record that was not written, got:\n%s", got.text)
+	}
+}
+
+// The daemon is gone and nothing replaced it: that is the one revert outcome that is an ERROR,
+// not a warning, and it must outrank every other clause on the screen.
+func TestDashboardDaemonRevertReportsAnUnscheduledHost(t *testing.T) {
+	installDashboardGates(t, true, true)
+	origCfg, origShow := daemonStatusLoadConfig, showDaemonResultScreenFn
+	t.Cleanup(func() { daemonStatusLoadConfig, showDaemonResultScreenFn = origCfg, origShow })
+	daemonStatusLoadConfig = func(string, string) (*config.Config, error) {
+		return &config.Config{SchedulerMode: "daemon"}, nil
+	}
+	daemonApplyCronMode = func(context.Context, *config.Config, string, string, *logging.BootstrapLogger) (cronRevertReport, error) {
+		return cronRevertReport{CronScheduled: false, ModeRecorded: true}, nil
+	}
+	type shown struct {
+		level   orchestrator.HealthcheckSetupLevel
+		keyword string
+		text    string
+	}
+	ch := make(chan shown, 1)
+	showDaemonResultScreenFn = func(_ context.Context, _ *shell.Session, _ string, level orchestrator.HealthcheckSetupLevel, kw, explanation string) {
+		ch <- shown{level, kw, explanation}
+	}
+
+	driver := installDashboardSessionSeam(t)
+	res := driver.spawn(&cli.Args{})
+	driver.waitScreen("Dashboard")
+	driver.keys("down down down down down down down down down enter") // Disable daemon
+
+	var got shown
+	select {
+	case got = <-ch:
+	case <-time.After(uitest.Deadline(60 * time.Second)):
+		t.Fatal("the revert never reached the result screen")
+	}
+	driver.waitScreen("Dashboard")
+	driver.keys("esc")
+	select {
+	case <-res:
+	case <-time.After(uitest.Deadline(60 * time.Second)):
+		t.Fatal("dashboard did not resolve")
+	}
+
+	if got.level != orchestrator.HealthcheckSetupLevelError {
+		t.Errorf("an unscheduled host is an error, level = %v", got.level)
+	}
+	if !strings.Contains(got.text, "nothing is scheduling the backup") {
+		t.Errorf("the screen must say nothing is scheduling the backup, got:\n%s", got.text)
+	}
+	if strings.Contains(got.text, "Reverted to the cron scheduler") {
+		t.Errorf("the success wording must not survive next to it, got:\n%s", got.text)
 	}
 }
 
@@ -1041,7 +1093,7 @@ func TestDashboardDaemonRevertShowsTheSystemCronAdvisory(t *testing.T) {
 		t.Fatal("the advisory builder returned nothing: this test would then assert on an empty set")
 	}
 	daemonApplyCronMode = func(context.Context, *config.Config, string, string, *logging.BootstrapLogger) (cronRevertReport, error) {
-		return cronRevertReport{SystemCronAdvisory: advisory, ModeRecorded: true}, nil
+		return cronRevertReport{SystemCronAdvisory: advisory, CronScheduled: true, ModeRecorded: true}, nil
 	}
 	shown := make(chan string, 1)
 	showDaemonResultScreenFn = func(_ context.Context, _ *shell.Session, _ string, _ orchestrator.HealthcheckSetupLevel, kw, explanation string) {

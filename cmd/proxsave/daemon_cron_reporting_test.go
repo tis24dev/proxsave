@@ -564,6 +564,70 @@ func TestApplyCronModeReportsWhetherTheModeWasRecorded(t *testing.T) {
 	})
 }
 
+// A revert that could not write the crontab must not report success. migrateLegacyCronEntries is
+// void and has four early returns that write nothing - unknown exec path, no binary to point at,
+// `crontab -l` failing, `crontab -` failing - and applyCronMode cannot see any of them, then
+// removes the daemon unit anyway. A host with a broken or absent cron ended with no unit and no
+// cron line, at exit 0.
+//
+// The check READS THE CRONTAB BACK rather than trusting a return value, for the same reason
+// cronRemovalOutcome.Verified exists: what matters is whether the line is there, not whether the
+// writer thought it wrote one.
+func TestApplyCronModeReportsWhetherTheCronLineExists(t *testing.T) {
+	t.Run("the line is there afterwards", func(t *testing.T) {
+		cfg, configPath := cronModeFixture(t)
+		wrapperCronLinesFn = func([]string) []string { return nil }
+		migrateLegacyCronEntriesFn = func(context.Context, string, string, *logging.BootstrapLogger, string) {}
+		crontabReadLinesFn = func(context.Context) ([]string, error) {
+			return []string{"00 02 * * * /usr/local/bin/proxsave --backup"}, nil
+		}
+
+		report, err := applyCronMode(context.Background(), cfg, configPath, "/usr/local/bin/proxsave", nil)
+		if err != nil {
+			t.Fatalf("applyCronMode: %v", err)
+		}
+		if !report.CronScheduled {
+			t.Error("a canonical proxsave line is present, so the revert is scheduled")
+		}
+	})
+
+	t.Run("the write silently did nothing", func(t *testing.T) {
+		cfg, configPath := cronModeFixture(t)
+		wrapperCronLinesFn = func([]string) []string { return nil }
+		migrateLegacyCronEntriesFn = func(context.Context, string, string, *logging.BootstrapLogger, string) {}
+		crontabReadLinesFn = func(context.Context) ([]string, error) {
+			return []string{"0 6 * * * /usr/bin/rsync /a /b"}, nil
+		}
+
+		report, err := applyCronMode(context.Background(), cfg, configPath, "/usr/local/bin/proxsave", nil)
+		if err != nil {
+			t.Fatalf("a failed cron write must not fail the call: the daemon is already gone, got %v", err)
+		}
+		if report.CronScheduled {
+			t.Error("no proxsave line is present, so the revert must not report a schedule")
+		}
+	})
+
+	t.Run("the crontab cannot be read: fail closed", func(t *testing.T) {
+		cfg, configPath := cronModeFixture(t)
+		wrapperCronLinesFn = func([]string) []string { return nil }
+		migrateLegacyCronEntriesFn = func(context.Context, string, string, *logging.BootstrapLogger, string) {}
+		crontabReadLinesFn = func(context.Context) ([]string, error) {
+			return nil, errors.New(`exec: "crontab": executable file not found in $PATH`)
+		}
+
+		report, err := applyCronMode(context.Background(), cfg, configPath, "/usr/local/bin/proxsave", nil)
+		if err != nil {
+			t.Fatalf("applyCronMode: %v", err)
+		}
+		// A host with no crontab binary at all is exactly the host this exists to catch, and it
+		// is also the host where nothing can be verified. Claiming a schedule would be the lie.
+		if report.CronScheduled {
+			t.Error("an unreadable crontab is not evidence of a schedule")
+		}
+	})
+}
+
 // The counterweight: an ordinary host must not be told anything about /etc.
 func TestApplyCronModeStaysSilentWithoutASystemCronFinding(t *testing.T) {
 	cfg, configPath := cronModeFixture(t)
