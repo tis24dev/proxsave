@@ -701,14 +701,23 @@ func TestDeriveSchedulerTimeReadsSystemCron(t *testing.T) {
 		return cp, cronD
 	}
 
-	t.Run("empty user crontab: time comes from /etc", func(t *testing.T) {
+	// The time in /etc is REPORTED and never adopted. Adopting it looked like continuity and
+	// was the opposite: ProxSave never edits /etc, so that line survives the install, and
+	// writing the same hour into SCHEDULER_TIME puts the cron line ProxSave is about to write
+	// in the exact minute the surviving one already occupies. The two runs then collide on the
+	// per-run lock and one exits 16 every night. Left un-adopted the host keeps 05:00 from /etc
+	// and gains 02:00 from ProxSave: still two backups, both of which succeed.
+	t.Run("time in /etc is reported, never adopted", func(t *testing.T) {
 		cp, cronD := setup(t, "0 5 * * * root /usr/local/bin/proxsave --backup", nil)
 		seed := deriveSchedulerTimeFromCrontab(context.Background(), cp)
-		if seed.Time != "05:00" {
-			t.Fatalf("want 05:00 adopted from /etc, got %q (note %q)", seed.Time, seed.Note)
+		if seed.Time != "" {
+			t.Fatalf("a time ProxSave cannot remove must not be adopted, got %q", seed.Time)
 		}
 		if !strings.Contains(seed.Note, cronD) {
-			t.Errorf("the note must name the file the time came from, got %q", seed.Note)
+			t.Errorf("the note must name the file the finding came from, got %q", seed.Note)
+		}
+		if !strings.Contains(seed.Note, "05:00") {
+			t.Errorf("the note must name the time that entry runs at, got %q", seed.Note)
 		}
 	})
 

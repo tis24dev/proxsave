@@ -150,8 +150,8 @@ func deriveSchedulerTimeFromCrontab(ctx context.Context, configPath string) sche
 		// this also runs in the install wizard and in --upgrade-config-json, neither of
 		// which should be reading scripts off disk.
 		if hhmm, source := schedulerTimeFromSystemCron(); hhmm != "" {
-			return schedulerTimeSeed{Time: hhmm, Note: fmt.Sprintf(
-				"SCHEDULER_TIME was not set: adopted %s from the proxsave cron entry in %s so the daily run time does not change.", hhmm, source)}
+			return schedulerTimeSeed{Note: fmt.Sprintf(
+				"A proxsave cron entry in %s runs the backup at %s and ProxSave does not edit files it did not place, so that entry stays; SCHEDULER_TIME keeps the %s default and applies only to the entry ProxSave writes.", source, hhmm, cronutil.DefaultTime)}
 		}
 		if refs := indirectProxsaveCronRefs(lines, cronProbeNamesOnly); len(refs) > 0 {
 			at := ""
@@ -168,20 +168,26 @@ func deriveSchedulerTimeFromCrontab(ctx context.Context, configPath string) sche
 		"SCHEDULER_TIME was not set: adopted %s from the existing proxsave cron entry so the daily run time does not change.", hhmm)}
 }
 
-// schedulerTimeFromSystemCron derives the run time from a proxsave cron line under
-// /etc/crontab or /etc/cron.d, returning the time and the file it came from, or "" when the
-// habitat says nothing unambiguous.
+// schedulerTimeFromSystemCron reads the run time of a proxsave cron line under /etc/crontab or
+// /etc/cron.d, returning the time and the file it came from, or "" when the habitat says
+// nothing unambiguous. Its caller reports it and does not adopt it; see below.
 //
 // It runs only after the root crontab has yielded nothing, and that order is the priority
 // rule, not an implementation detail: the root crontab is the table ProxSave owns and is
-// about to rewrite, so a time found there is the one it is going to reinstate. /etc is a
-// habitat it reads and never touches, consulted to avoid the silent move a host paid before
-// - scheduled at 05:00 from /etc/cron.d for years, migrated to the daemon, and started
-// running at the 02:00 template default with nothing said.
+// about to rewrite, so a time found there is the one it is going to reinstate.
 //
-// Same unanimity rule as schedulerTimeFromCronLines: two proxsave lines at different times,
-// or a schedule the daemon cannot express, adopt nothing. Guessing here would write a wrong
-// daily time into backup.env and look deliberate.
+// The time it returns is REPORTED, never adopted, and that is the whole difference between
+// the two habitats. Adopting a root-crontab time is continuity, because the line it came from
+// is the line ProxSave is about to replace. Adopting an /etc time is a collision: ProxSave
+// never edits /etc, so that entry SURVIVES the install, and writing its hour into
+// SCHEDULER_TIME puts the line ProxSave is about to write in the exact minute the surviving
+// one already occupies. The two runs then meet on the per-run lock and one exits 16 every
+// night. Left alone, the host keeps its /etc entry and gains ProxSave's at the default hour:
+// still two backups, both of which succeed.
+//
+// Same unanimity rule as schedulerTimeFromCronLines: two proxsave lines at different times, or
+// a schedule the daemon cannot express, say nothing. A finding that names one of several hours
+// would read as the host's run time.
 func schedulerTimeFromSystemCron() (string, string) {
 	found, source := "", ""
 	for _, ref := range systemCronDirectProxsaveLines() {

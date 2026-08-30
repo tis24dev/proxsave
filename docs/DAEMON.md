@@ -108,11 +108,14 @@ The third line is normal on a fresh daemon install, which never had a cron entry
 
 `SCHEDULER_TIME` only exists since 0.30; on an older install the crontab line was the sole record of the run time. So before the config merge adds the key — and before the migration deletes that cron line — the existing proxsave cron entry is read and its time is written to `SCHEDULER_TIME`. A host running at 21:00 keeps running at 21:00.
 
+`--daemon-setup` and the dashboard's install action do the same, and there the key is **overwritten** rather than seeded. On a cron host the crontab is the schedule and `SCHEDULER_TIME` is a leftover nothing keeps in step, so a cron line edited to 21:00 would otherwise hand the daemon whatever hour the key still held.
+
 - A `SCHEDULER_TIME` you set yourself always wins; the crontab is only consulted when the key is absent or empty.
 - Only an unambiguous single daily entry is adopted (`MM HH * * *`, or `@daily`/`@midnight`). A sub-daily or multi-time cron entry (`*/15`, lists, ranges) is something the daemon cannot express: it is **not** guessed at, `SCHEDULER_TIME` stays at `02:00`, and the upgrade warns so you can set it yourself.
 - Two proxsave cron lines at different times are equally ambiguous and warn the same way.
-- The root crontab is read first, and a time found there wins: it is the table ProxSave owns and is about to rewrite. Only when it says nothing are `/etc/crontab` and the active entries of `/etc/cron.d` consulted, and the note names the file the time came from. A host scheduled at 05:00 from `/etc/cron.d` used to migrate to the daemon and start running at `02:00` with nothing said.
-- Under `/etc` only a **direct** `proxsave` command is adopted, not the heuristics the advisories use: a run time is written into `backup.env` as the host's schedule, so it may only be inherited from a line that reads unambiguously. Adoption never opens a script to look inside.
+- Only the **root crontab** is inherited from, because that is the table ProxSave owns and is about to rewrite: taking its time is continuity, since the line it came from is the line being replaced.
+- A proxsave entry under `/etc/crontab` or `/etc/cron.d` is **reported and never adopted**. ProxSave does not edit files it did not place, so that entry survives the install; copying its hour into `SCHEDULER_TIME` would put the line ProxSave writes in the exact minute the surviving one already occupies, and the two runs would meet on the per-run lock with one exiting `16` every night. Left alone the host keeps its `/etc` entry and gains ProxSave's at `02:00`: still two backups, both of which succeed. The note names the file and the hour so you can settle it.
+- Under `/etc` only a **direct** `proxsave` command is reported this way, not the heuristics the advisories use. Nothing there opens a script to look inside.
 - A wrapper entry is not adopted anywhere, so `SCHEDULER_TIME` stays at `02:00`, the very minute the wrapper is likely already using. ProxSave says so ("No proxsave cron entry was found, but … appears to run ProxSave") instead of staying silent, but it will not adopt a run time out of a script it did not write: set `SCHEDULER_TIME` yourself.
 
 ## systemd unit
