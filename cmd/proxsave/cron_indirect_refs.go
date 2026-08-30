@@ -895,15 +895,12 @@ func scriptLineWalkCommands(line string, vars map[string]string, visit func(stri
 	return false
 }
 
-// segmentRunsProxsave walks one segment from its command position. It is iterative rather than
-// recursive on the launcher categories so a pathological line cannot nest; the ONE recursion is
-// a shell's -c argument, which is a genuinely separate line.
-func segmentRunsProxsave(words []string, vars map[string]string) bool {
-	return segmentWalkCommands(words, vars, scriptWordRunsProxsave)
-}
-
-// segmentWalkCommands is segmentRunsProxsave with the verdict parameterised; see
-// scriptLineWalkCommands.
+// segmentWalkCommands walks one segment from its command position, handing every command it
+// reaches to visit and stopping at the first one visit accepts. It is scriptLineWalkCommands one
+// level down; see there for why the verdict is a parameter.
+//
+// It is iterative rather than recursive on the launcher categories so a pathological line cannot
+// nest; the ONE recursion is a shell's -c argument, which is a genuinely separate line.
 func segmentWalkCommands(words []string, vars map[string]string, visit func(string) bool) bool {
 	for len(words) > 0 {
 		// Leading assignments belong to the command that follows, not to the command position.
