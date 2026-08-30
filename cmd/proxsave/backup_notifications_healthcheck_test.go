@@ -155,9 +155,9 @@ func TestInitializeHealthcheckSectionLines(t *testing.T) {
 // It WARNS. HEALTHCHECK_ENABLED=true says the operator wants monitoring, and healthchecks
 // cannot work without the resident daemon, so a cron host carrying that key is not in an
 // expected state: the thing it asked for is silently doing nothing. The exit code that
-// warning costs is the point, not a regression of issue #298 - the hosts that never chose
-// the key have it cleared for them by applyCronMode on --daemon-remove and by
-// backfillHealthcheckOptOut on --upgrade, so what reaches this line said true on purpose.
+// warning costs is the point, not a regression of issue #298 - a host that reverts from here
+// on has the key cleared for it by applyCronMode on --daemon-remove, so what reaches this
+// line either said true on purpose or was left that way by a build that no longer ships.
 func TestInitializeHealthcheckSectionCronModeWarnsAndSkips(t *testing.T) {
 	orig := logging.GetDefaultLogger()
 	t.Cleanup(func() { logging.SetDefaultLogger(orig) })

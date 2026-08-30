@@ -2,7 +2,6 @@
 package main
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"os"
@@ -399,102 +398,5 @@ func TestApplyCronModeRollsBackHealthcheckEnabled(t *testing.T) {
 	// annotation would be a silent edit of their file.
 	if !strings.Contains(content, "# report service-alive heartbeat") {
 		t.Errorf("inline comment lost by the rollback:\n%s", content)
-	}
-}
-
-// The gate is three keys read off disk, and DAEMON_OPT_OUT=true is NOT proof that
-// --daemon-remove wrote them. The refusal block on this very path tells the operator to set
-// that key by hand to skip the wrapper check (maybeAutoMigrateDaemon), so a host that took
-// that route never reverted anything. The message explaining why their key just changed may
-// therefore not assert a revert: that is the one part of it nothing here can check.
-func TestBackfillHealthcheckOptOutClaimsNoRevert(t *testing.T) {
-	configPath := filepath.Join(t.TempDir(), "backup.env")
-	if err := os.WriteFile(configPath, []byte("SCHEDULER_MODE=cron\nHEALTHCHECK_ENABLED=true\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-
-	orig := logging.GetDefaultLogger()
-	t.Cleanup(func() { logging.SetDefaultLogger(orig) })
-	var buf bytes.Buffer
-	def := logging.New(types.LogLevelDebug, false)
-	def.SetOutput(&buf)
-	logging.SetDefaultLogger(def)
-
-	backfillHealthcheckOptOut(&config.Config{SchedulerMode: "cron", DaemonOptOut: true, HealthcheckEnabled: true}, configPath, nil)
-	out := buf.String()
-
-	for _, forbidden := range []string{"reverted", "revert", "--daemon-remove"} {
-		if strings.Contains(out, forbidden) {
-			t.Errorf("the message must not claim a revert it cannot check (%q), out=%q", forbidden, out)
-		}
-	}
-	// What it may say, and still has to: the three facts it read and the write it made.
-	for _, want := range []string{"HEALTHCHECK_ENABLED", "false", configPath} {
-		if !strings.Contains(out, want) {
-			t.Errorf("the message must still state %q, out=%q", want, out)
-		}
-	}
-}
-
-// TestBackfillHealthcheckOptOut pins the repair for the hosts issue #298 already broke.
-// applyCronMode rolls HEALTHCHECK_ENABLED back from now on, but a host that reverted with
-// an older build still carries the stale true and nothing it runs would ever rewrite that
-// key. --upgrade backfills it, and ONLY on the exact three-key shape the broken transition
-// produces, so a plain cron install that deliberately enabled monitoring is never touched.
-func TestBackfillHealthcheckOptOut(t *testing.T) {
-	for _, tc := range []struct {
-		name  string
-		cfg   *config.Config
-		want  string
-		wrote bool
-	}{
-		{
-			name:  "reverted daemon host with the stale key is repaired",
-			cfg:   &config.Config{SchedulerMode: "cron", DaemonOptOut: true, HealthcheckEnabled: true},
-			want:  "HEALTHCHECK_ENABLED=false",
-			wrote: true,
-		},
-		{
-			name: "plain cron host that never opted out is left alone",
-			cfg:  &config.Config{SchedulerMode: "cron", DaemonOptOut: false, HealthcheckEnabled: true},
-			want: "HEALTHCHECK_ENABLED=true",
-		},
-		{
-			name: "already false is not rewritten",
-			cfg:  &config.Config{SchedulerMode: "cron", DaemonOptOut: true, HealthcheckEnabled: false},
-			want: "HEALTHCHECK_ENABLED=true", // the file value is irrelevant: nothing is written
-		},
-		{
-			name: "daemon host is out of scope",
-			cfg:  &config.Config{SchedulerMode: "daemon", DaemonOptOut: true, HealthcheckEnabled: true},
-			want: "HEALTHCHECK_ENABLED=true",
-		},
-		{
-			name: "nil config is a no-op, never a panic",
-			cfg:  nil,
-			want: "HEALTHCHECK_ENABLED=true",
-		},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			configPath := filepath.Join(t.TempDir(), "backup.env")
-			if err := os.WriteFile(configPath, []byte("SCHEDULER_MODE=cron\nHEALTHCHECK_ENABLED=true   # report outcome\n"), 0o600); err != nil {
-				t.Fatal(err)
-			}
-			backfillHealthcheckOptOut(tc.cfg, configPath, nil)
-
-			data, err := os.ReadFile(configPath)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if got := string(data); !strings.Contains(got, tc.want) {
-				t.Fatalf("want %q in the config, got:\n%s", tc.want, got)
-			}
-			if !strings.Contains(string(data), "# report outcome") {
-				t.Error("the operator's inline comment must survive the rewrite")
-			}
-			if tc.wrote && tc.cfg.HealthcheckEnabled {
-				t.Error("the live config must be updated too, so the same process does not keep acting on the stale value")
-			}
-		})
 	}
 }

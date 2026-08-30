@@ -163,10 +163,11 @@ func disableHealthchecks(cfg *config.Config, logger *logging.Logger, reason stri
 //
 // This is NOT issue #298 coming back. There the key was left at true by --daemon-remove
 // ITSELF, so hosts that had never asked for monitoring warned and exited 1 on every
-// successful backup. That loop is closed by the two WRITERS, not by muting anything here:
-// applyCronMode now rolls HEALTHCHECK_ENABLED back on the way out, and
-// backfillHealthcheckOptOut repairs a host an older build left behind. What still reaches
-// this line is a host whose config says true on purpose.
+// successful backup. That loop is closed by the WRITER, not by muting anything here:
+// applyCronMode now rolls HEALTHCHECK_ENABLED back on the way out. A host that reverted with
+// an OLDER build still carries the stale true and nothing rewrites it for them, so they reach
+// this line and see the warning; that is the price of not deciding a monitoring setting on
+// evidence that cannot tell "the old revert left it" from "the operator wants it".
 //
 // A cron host whose daemon is genuinely alive never arrives here at all
 // (healthcheckDaemonProblem returns "" and the channel registers as usual), so the one state

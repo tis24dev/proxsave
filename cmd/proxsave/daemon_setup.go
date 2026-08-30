@@ -570,47 +570,6 @@ func applyCronMode(ctx context.Context, cfg *config.Config, configPath, execToke
 	return cronRevertReport{SystemCronAdvisory: systemCronScheduleAdvisory(refs)}, err
 }
 
-// backfillHealthcheckOptOut repairs, once, the on-disk state issue #298 left behind on
-// every host that migrated to the daemon and then reverted with --daemon-remove.
-//
-// applyDaemonMode force-writes HEALTHCHECK_ENABLED=true, and applyCronMode used to record
-// only SCHEDULER_MODE=cron, so the revert left the key asserting that daemon-only
-// monitoring was on for a host that has no daemon and cannot transmit anything. The
-// run-start init then read that as "monitoring is configured", found no unit, warned, and
-// applyIssueExitCode promoted an otherwise clean backup to exit 1 on every single run.
-// applyCronMode now rolls the key back, but that only helps a host that reverts from here
-// on: the four hosts in the report already carry the stale value and would keep carrying it
-// forever, because nothing they run ever writes that key again.
-//
-// The gate is three keys, never a two-key guess: cron engine, plus the DAEMON_OPT_OUT
-// tombstone, plus the key still true. A cron host that never touched the daemon has
-// DAEMON_OPT_OUT=false and is not eligible, so an operator who deliberately enabled the key
-// on a plain cron install is never touched.
-//
-// What those three keys do NOT establish is that --daemon-remove is what wrote them, which is
-// why the message says what was read and not what it thinks happened. The refusal block on
-// this very path tells the operator to set DAEMON_OPT_OUT=true by hand to skip the wrapper
-// check (maybeAutoMigrateDaemon), so a host can carry the whole shape without ever having run
-// a revert. That operator, and the one who ran --daemon-remove and then re-enabled the key on
-// purpose, both get clobbered here. The key is NOT inert on cron either:
-// initializeHealthcheckSection warns on it and the warning costs the run exit 1, so for them
-// this write removes something they chose rather than tidying a leftover.
-//
-// Best-effort and silent-on-failure like every other write on this path: a --upgrade must
-// never fail because a repair could not be applied. A host where it does not land simply
-// keeps the key, and keeps paying the runtime warning, until something else clears it.
-func backfillHealthcheckOptOut(cfg *config.Config, configPath string, bootstrap *logging.BootstrapLogger) {
-	if cfg == nil || cfg.SchedulerMode != "cron" || !cfg.DaemonOptOut || !cfg.HealthcheckEnabled {
-		return
-	}
-	if err := setBackupEnvKeys(configPath, map[string]string{"HEALTHCHECK_ENABLED": "false"}); err != nil {
-		logging.DebugStepBootstrap(bootstrap, "upgrade workflow", "healthcheck backfill skipped: %v", err)
-		return
-	}
-	cfg.HealthcheckEnabled = false
-	logBootstrapInfo(bootstrap, "Monitoring is reported by the resident daemon only, and this host is on cron with the daemon opted out: HEALTHCHECK_ENABLED was true and is now set to false in %s.", configPath)
-}
-
 // maybeAutoMigrateDaemon is the --upgrade retrofit: install the resident daemon on a host that
 // has never recorded a scheduler engine. Best-effort so a migration failure never fails the
 // upgrade.
