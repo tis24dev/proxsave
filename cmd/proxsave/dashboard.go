@@ -668,10 +668,10 @@ func runDashboardDaemonAdmin(ctx context.Context, session *shell.Session, instal
 		// host two different levels depending on which channel the operator read. The /etc half
 		// carries its own pre-rendered lines, appended below, so only the level and the keyword
 		// are decided here.
-		if revert.UnmanagedSchedules > 0 || len(revert.SystemCronAdvisory) > 0 {
+		if len(revert.UnmanagedAdvisory) > 0 || len(revert.SystemCronAdvisory) > 0 {
 			doneLevel = orchestrator.HealthcheckSetupLevelWarn
 			doneKeyword = "REVERTED - DUPLICATE SCHEDULE"
-			if revert.UnmanagedSchedules > 0 {
+			if len(revert.UnmanagedAdvisory) > 0 {
 				doneMsg += " Check your crons to remove duplication."
 			}
 		}
@@ -688,11 +688,13 @@ func runDashboardDaemonAdmin(ctx context.Context, session *shell.Session, instal
 			doneKeyword = "NO SCHEDULE"
 			doneMsg = "The daemon service was removed and the cron entry could NOT be written, so nothing is scheduling the backup."
 			// CronScheduled is an assertion about the ROOT crontab alone: canonicalCronLinePresent
-			// reads crontabReadLinesFn and nothing else. A host whose proxsave entry lives under
-			// /etc IS still scheduled, and it is the same host where ProxSave could neither write
-			// its own line nor touch the other one, so the screen would have denied a schedule it
-			// lists three lines below. State what is certain instead.
-			if len(revert.SystemCronAdvisory) > 0 {
+			// reads crontabReadLinesFn and nothing else, and the unmanaged entries it does not
+			// match are not proxsave-named. So with anything listed below, the host may well
+			// still be scheduled - and it is the same host where ProxSave could neither write its
+			// own line nor remove the other ones. Denying a schedule the screen goes on to list
+			// is the lie; the headline states the certain fact and leaves the rest to the list.
+			if len(revert.UnmanagedAdvisory) > 0 || len(revert.SystemCronAdvisory) > 0 {
+				doneKeyword = "CRON ENTRY NOT WRITTEN"
 				doneMsg = "The daemon service was removed and the cron entry could NOT be written. What still schedules this host, if anything, is below."
 			}
 			if !revert.ModeRecorded {
@@ -705,8 +707,14 @@ func runDashboardDaemonAdmin(ctx context.Context, session *shell.Session, instal
 	// never flushed, so the operator used to get a green "REVERTED TO CRON" over a host that
 	// may now be scheduled twice - the CLI said it, the TUI did not. Appending the lines to
 	// the result screen is the only channel left open on this path.
-	if !install && len(revert.SystemCronAdvisory) > 0 {
-		doneMsg = strings.TrimSpace(doneMsg + "\n\n" + strings.Join(revert.SystemCronAdvisory, "\n"))
+	// BOTH habitats are listed, in the order the CLI prints them: the root crontab ProxSave owns
+	// and just rewrote, then the /etc files it may only read.
+	if !install {
+		for _, advisory := range [][]string{revert.UnmanagedAdvisory, revert.SystemCronAdvisory} {
+			if len(advisory) > 0 {
+				doneMsg = strings.TrimSpace(doneMsg + "\n\n" + strings.Join(advisory, "\n"))
+			}
+		}
 	}
 	showDaemonResultScreenFn(ctx, session, doneTitle, doneLevel, doneKeyword, doneMsg)
 }

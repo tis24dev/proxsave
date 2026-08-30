@@ -999,7 +999,7 @@ func TestDashboardDaemonRevertWarnsOnADuplicateSchedule(t *testing.T) {
 		},
 		{
 			name:        "an unmanaged schedule survives: warning",
-			report:      cronRevertReport{CronScheduled: true, ModeRecorded: true, UnmanagedSchedules: 1},
+			report:      cronRevertReport{CronScheduled: true, ModeRecorded: true, UnmanagedAdvisory: []string{"1 unmanaged crontab line(s) also appear to schedule ProxSave:", "  - 30 02 * * * /usr/local/sbin/nas-guard"}},
 			wantLevel:   orchestrator.HealthcheckSetupLevelWarn,
 			wantKeyword: "REVERTED - DUPLICATE SCHEDULE",
 			wantText:    "Check your crons to remove duplication.",
@@ -1015,9 +1015,20 @@ func TestDashboardDaemonRevertWarnsOnADuplicateSchedule(t *testing.T) {
 			wantText:    "1 line(s) in /etc unchanged",
 		},
 		{
-			// Nothing scheduling the backup outranks a duplicate: there is no duplicate.
-			name:        "unscheduled outranks the duplicate",
-			report:      cronRevertReport{CronScheduled: false, ModeRecorded: true, UnmanagedSchedules: 1},
+			// A cron entry that could not be written takes the level, because it is the worst
+			// thing that happened. It does NOT take the old headline: with an unmanaged line
+			// listed below, "nothing is scheduling the backup" would deny what the screen goes
+			// on to show, so the headline states the certain fact instead.
+			name:        "unwritten entry takes the level, not the denial",
+			report:      cronRevertReport{CronScheduled: false, ModeRecorded: true, UnmanagedAdvisory: []string{"1 unmanaged crontab line(s) also appear to schedule ProxSave:", "  - 30 02 * * * /usr/local/sbin/nas-guard"}},
+			wantLevel:   orchestrator.HealthcheckSetupLevelError,
+			wantKeyword: "CRON ENTRY NOT WRITTEN",
+			wantText:    "could NOT be written",
+		},
+		{
+			// With nothing listed underneath, the denial is true and stays.
+			name:        "nothing left at all: the denial stands",
+			report:      cronRevertReport{CronScheduled: false, ModeRecorded: true},
 			wantLevel:   orchestrator.HealthcheckSetupLevelError,
 			wantKeyword: "NO SCHEDULE",
 			wantText:    "nothing is scheduling the backup",
@@ -1231,6 +1242,93 @@ func TestDashboardDaemonRevertDoesNotDenyAScheduleItJustListed(t *testing.T) {
 	}
 	if !strings.Contains(msg, advisory[1]) {
 		t.Errorf("the /etc finding must still be listed, got:\n%s", msg)
+	}
+}
+
+// The screen is the only channel on this path, and it carried the /etc findings as rendered lines
+// while carrying the root-crontab ones as a bare COUNT. So the unscheduled branch, which composes
+// its own text, had nothing to list for them and the count went with it: the sentence pointed at
+// an entry "below" that was never printed. The two habitats are now carried the same way, which
+// is also how the CLI has always printed them.
+func TestDashboardDaemonRevertListsBothHabitats(t *testing.T) {
+	unmanaged := []string{
+		"1 unmanaged crontab line(s) also appear to schedule ProxSave:",
+		"  - 30 02 * * * /usr/local/sbin/nas-guard",
+	}
+	etc := []string{
+		"Reverting to cron: 1 possible ProxSave cron line(s) under /etc:",
+		"  - 0 5 * * * root /usr/local/bin/proxsave --backup  [/etc/cron.d/proxsave]",
+	}
+	installDashboardGates(t, true, true)
+	origCfg, origShow := daemonStatusLoadConfig, showDaemonResultScreenFn
+	t.Cleanup(func() { daemonStatusLoadConfig, showDaemonResultScreenFn = origCfg, origShow })
+	daemonStatusLoadConfig = func(string, string) (*config.Config, error) {
+		return &config.Config{SchedulerMode: "daemon"}, nil
+	}
+	daemonApplyCronMode = func(context.Context, *config.Config, string, string, *logging.BootstrapLogger) (cronRevertReport, error) {
+		return cronRevertReport{
+			CronScheduled:      false,
+			ModeRecorded:       true,
+			UnmanagedAdvisory:  unmanaged,
+			SystemCronAdvisory: etc,
+		}, nil
+	}
+	type shown struct {
+		keyword string
+		text    string
+	}
+	ch := make(chan shown, 1)
+	showDaemonResultScreenFn = func(_ context.Context, _ *shell.Session, _ string, _ orchestrator.HealthcheckSetupLevel, kw, explanation string) {
+		ch <- shown{kw, explanation}
+	}
+
+	driver := installDashboardSessionSeam(t)
+	res := driver.spawn(&cli.Args{})
+	driver.waitScreen("Dashboard")
+	driver.keys("down down down down down down down down down enter") // Disable daemon
+
+	var got shown
+	select {
+	case got = <-ch:
+	case <-time.After(uitest.Deadline(60 * time.Second)):
+		t.Fatal("the revert never reached the result screen")
+	}
+	driver.waitScreen("Dashboard")
+	driver.keys("esc")
+	select {
+	case <-res:
+	case <-time.After(uitest.Deadline(60 * time.Second)):
+		t.Fatal("dashboard did not resolve")
+	}
+
+	// The headline states the fact that is certain. NO SCHEDULE would deny two schedules the
+	// screen lists underneath it.
+	if got.keyword != "CRON ENTRY NOT WRITTEN" {
+		t.Errorf("keyword = %q, want CRON ENTRY NOT WRITTEN", got.keyword)
+	}
+	for _, want := range append(append([]string{}, unmanaged...), etc...) {
+		if !strings.Contains(got.text, want) {
+			t.Errorf("the screen must list %q, got:\n%s", want, got.text)
+		}
+	}
+	// And with nothing left to schedule the host, the denial is true and stays.
+	daemonApplyCronMode = func(context.Context, *config.Config, string, string, *logging.BootstrapLogger) (cronRevertReport, error) {
+		return cronRevertReport{CronScheduled: false, ModeRecorded: true}, nil
+	}
+	driver2 := installDashboardSessionSeam(t)
+	res2 := driver2.spawn(&cli.Args{})
+	driver2.waitScreen("Dashboard")
+	driver2.keys("down down down down down down down down down enter")
+	select {
+	case got = <-ch:
+	case <-time.After(uitest.Deadline(60 * time.Second)):
+		t.Fatal("the second revert never reached the result screen")
+	}
+	driver2.waitScreen("Dashboard")
+	driver2.keys("esc")
+	<-res2
+	if got.keyword != "NO SCHEDULE" {
+		t.Errorf("with nothing listed the denial is true: keyword = %q, want NO SCHEDULE", got.keyword)
 	}
 }
 

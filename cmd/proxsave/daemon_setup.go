@@ -496,12 +496,19 @@ type cronRevertReport struct {
 	// under /etc, or nil when none was found. Lines are pre-rendered and must be printed
 	// with "%s": a crontab line may contain a literal "%".
 	SystemCronAdvisory []string
-	// UnmanagedSchedules counts the crontab entries that still schedule ProxSave next to the
-	// line this revert just wrote. The revert creates that duplicate deliberately - withholding
-	// its line would leave a misidentified host with nothing scheduled - so it has to be
-	// reported, and on the dashboard the result screen is the only channel: the logger is muted
-	// for the whole operation and never flushed.
-	UnmanagedSchedules int
+	// UnmanagedAdvisory is the operator-facing notice about the ROOT CRONTAB entries that still
+	// schedule ProxSave next to the line this revert just wrote, or nil when none were found.
+	// Same shape and same rule as SystemCronAdvisory: pre-rendered, printed with "%s".
+	//
+	// The revert creates that duplicate deliberately - withholding its line would leave a
+	// misidentified host with nothing scheduled - so it has to be reported, and on the dashboard
+	// the result screen is the only channel: the logger is muted for the whole operation and
+	// never flushed.
+	//
+	// It carries the LINES and not a count, because the two habitats are the same kind of finding
+	// and the screen says "what still schedules this host is below". Carrying a count for one and
+	// lines for the other made that sentence false for the count: there was nothing below.
+	UnmanagedAdvisory []string
 	// CronScheduled is true only when a canonical proxsave cron line is READ BACK from the
 	// crontab after the write. migrateLegacyCronEntries is void and has four early returns that
 	// write nothing - unknown exec path, no binary to point at, `crontab -l` failing, `crontab
@@ -591,16 +598,26 @@ func applyCronMode(ctx context.Context, cfg *config.Config, configPath, execToke
 	// recoverable annoyance the operator can see, an unscheduled host is silent data loss.
 	migrateLegacyCronEntriesFn(ctx, cfg.BaseDir, execToken, bootstrap, cron.TimeToSchedule(cfg.SchedulerTime))
 	cronScheduled := canonicalCronLinePresent(ctx)
-	unmanaged := 0
+	var unmanagedAdvisory []string
 	if wrappers := existingWrapperCronFallback(ctx); len(wrappers) > 0 {
-		unmanaged = len(wrappers)
-		logBootstrapInfo(bootstrap, "Reverting to cron: %d unmanaged crontab line(s) also appear to schedule ProxSave:", len(wrappers))
+		unmanagedAdvisory = append(unmanagedAdvisory, fmt.Sprintf("Reverting to cron: %d unmanaged crontab line(s) also appear to schedule ProxSave:", len(wrappers)))
 		for _, line := range wrappers {
-			logBootstrapInfo(bootstrap, "  - %s", line)
+			unmanagedAdvisory = append(unmanagedAdvisory, "  - "+line)
+		}
+		for _, line := range unmanagedAdvisory {
+			logBootstrapInfo(bootstrap, "%s", line)
 		}
 		// The count lives in the WARNING itself: DEBUG_LEVEL=warning hides the lines above it,
 		// and what has to survive is that this host may now run the backup more than once.
-		logBootstrapWarning(bootstrap, "The cron entry was written at SCHEDULER_TIME and %d unmanaged cron line(s) were left untouched, so this host may run the backup more than once.", len(wrappers))
+		//
+		// It states the crontab as it was READ BACK, not the write it hoped for. cronScheduled
+		// above already established whether the line is there, and claiming a write that did not
+		// land is the defect this whole area keeps producing.
+		if cronScheduled {
+			logBootstrapWarning(bootstrap, "The cron entry is in the crontab and %d unmanaged cron line(s) were left untouched, so this host may run the backup more than once.", len(wrappers))
+		} else {
+			logBootstrapWarning(bootstrap, "%d unmanaged cron line(s) were left untouched and no proxsave cron entry could be written, so tonight the host runs whatever those lines do.", len(wrappers))
+		}
 	}
 
 	// HEALTHCHECK_ENABLED=false is the exact MIRROR of the write applyDaemonMode makes on
@@ -662,7 +679,7 @@ func applyCronMode(ctx context.Context, cfg *config.Config, configPath, execToke
 	}
 	return cronRevertReport{
 		SystemCronAdvisory: systemCronScheduleAdvisory(refs),
-		UnmanagedSchedules: unmanaged,
+		UnmanagedAdvisory:  unmanagedAdvisory,
 		CronScheduled:      cronScheduled,
 		ModeRecorded:       modeRecorded,
 	}, err

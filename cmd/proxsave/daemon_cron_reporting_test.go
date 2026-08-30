@@ -241,8 +241,11 @@ func TestApplyCronModeAlwaysWritesTheCronLineAndReportsTheFinding(t *testing.T) 
 	}
 	// Carried out as well as logged: on the dashboard the log reaches nothing, so the count is
 	// the only thing the result screen can render.
-	if report.UnmanagedSchedules != 1 {
-		t.Errorf("UnmanagedSchedules = %d, want 1", report.UnmanagedSchedules)
+	if len(report.UnmanagedAdvisory) != 2 {
+		t.Errorf("the finding must be carried out as rendered lines, got %v", report.UnmanagedAdvisory)
+	}
+	if !strings.Contains(strings.Join(report.UnmanagedAdvisory, "\n"), wrapper) {
+		t.Errorf("the carried lines must include the finding verbatim, got %v", report.UnmanagedAdvisory)
 	}
 	data, _ := os.ReadFile(configPath)
 	if !strings.Contains(string(data), "SCHEDULER_MODE=cron") {
@@ -710,6 +713,55 @@ func TestRunDaemonRemoveExitCodeFollowsTheCronEntry(t *testing.T) {
 			}
 			if !strings.Contains(buf.String(), tc.wantInLog) {
 				t.Errorf("the operator must read %q, out=%q", tc.wantInLog, buf.String())
+			}
+		})
+	}
+}
+
+// The duplicate warning used to open with "The cron entry was written at SCHEDULER_TIME", which
+// is a claim about a write the line above it had ALREADY checked by reading the crontab back. On
+// a host where that write did not land the sentence was simply false, and it was false in the
+// reassuring direction: it told the operator a schedule existed next to the unmanaged ones when
+// none did.
+func TestApplyCronModeDuplicateWarningStatesTheCrontabItRead(t *testing.T) {
+	const wrapper = "30 02 * * * /usr/local/sbin/nas-guard"
+
+	for _, tc := range []struct {
+		name    string
+		crontab []string
+		want    string
+		absent  string
+	}{
+		{
+			name:    "the entry is there: say so",
+			crontab: []string{wrapper, "00 02 * * * /usr/local/bin/proxsave --backup"},
+			want:    "The cron entry is in the crontab",
+			absent:  "could be written",
+		},
+		{
+			name:    "the entry is not there: do not claim it",
+			crontab: []string{wrapper},
+			want:    "no proxsave cron entry could be written",
+			absent:  "is in the crontab",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg, configPath := cronModeFixture(t)
+			crontabReadLinesFn = func(context.Context) ([]string, error) { return tc.crontab, nil }
+			wrapperCronLinesFn = func([]string) []string { return []string{wrapper} }
+			migrateLegacyCronEntriesFn = func(context.Context, string, string, *logging.BootstrapLogger, string) {}
+
+			seen := captureConsole(t, func() {
+				if _, err := applyCronMode(context.Background(), cfg, configPath, "/usr/local/bin/proxsave", logging.NewBootstrapLogger()); err != nil {
+					t.Fatalf("applyCronMode: %v", err)
+				}
+			})
+
+			if !strings.Contains(seen, tc.want) {
+				t.Errorf("the WARNING must state %q, out=%q", tc.want, seen)
+			}
+			if strings.Contains(seen, tc.absent) {
+				t.Errorf("the WARNING must not state %q, out=%q", tc.absent, seen)
 			}
 		})
 	}
