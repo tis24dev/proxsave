@@ -599,7 +599,10 @@ func runDashboardDaemonAdmin(ctx context.Context, session *shell.Session, instal
 	doneTitle := "Daemon disabled"
 	doneKeyword := "REVERTED TO CRON"
 	doneLevel := orchestrator.HealthcheckSetupLevelOk
-	doneMsg := "Reverted to the cron scheduler and removed the daemon service. Future upgrades will not reinstall it."
+	// doneMsg for the revert is completed after the op: "future upgrades will not reinstall it"
+	// is a claim about a config write that is best-effort, so it may only be made once that
+	// write is known to have landed.
+	doneMsg := ""
 	if install {
 		title = "Installing daemon"
 		work = "Installing and enabling " + daemonUnitName + "..."
@@ -647,6 +650,13 @@ func runDashboardDaemonAdmin(ctx context.Context, session *shell.Session, instal
 			doneLevel = orchestrator.HealthcheckSetupLevelWarn
 			doneKeyword = "INSTALLED - DUPLICATE SCHEDULE"
 			doneMsg = "The resident daemon (" + daemonUnitName + ") is active. Check your crons to remove duplication."
+		}
+	}
+	if !install {
+		doneMsg = "Reverted to the cron scheduler and removed the daemon service. " + cronModeRecordClause(revert)
+		if !revert.ModeRecorded {
+			doneLevel = orchestrator.HealthcheckSetupLevelWarn
+			doneKeyword = "REVERTED - CONFIG NOT UPDATED"
 		}
 	}
 	// The revert has the same problem in its own direction. applyCronMode emits its /etc

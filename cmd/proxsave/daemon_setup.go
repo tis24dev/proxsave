@@ -64,7 +64,8 @@ func runDaemonSetup(rt *appRuntime) int {
 
 func runDaemonRemove(rt *appRuntime) int {
 	logging.Info("Removing ProxSave daemon mode and reverting to cron...")
-	if _, err := applyCronMode(rt.ctx, rt.cfg, rt.args.ConfigPath, daemonSelfExecPath(), nil); err != nil {
+	revert, err := applyCronMode(rt.ctx, rt.cfg, rt.args.ConfigPath, daemonSelfExecPath(), nil)
+	if err != nil {
 		if errors.Is(err, errDaemonTeardownBackupRunning) {
 			logging.Warning("daemon-remove deferred: a backup is in progress; the daemon was NOT removed. Retry when the backup finishes.")
 			return types.ExitGenericError.Int()
@@ -76,8 +77,21 @@ func runDaemonRemove(rt *appRuntime) int {
 		logging.Error("daemon-remove failed: %v", err)
 		return types.ExitGenericError.Int()
 	}
-	logging.Info("Daemon removed: reverted to the cron scheduler. SCHEDULER_MODE=cron is recorded in the configuration, so upgrades leave the scheduler as it is.")
+	logging.Info("Daemon removed: reverted to the cron scheduler. %s", cronModeRecordClause(revert))
 	return types.ExitSuccess.Int()
+}
+
+// cronModeRecordClause renders whether the revert's config write landed, as one standalone
+// sentence both front-ends use.
+//
+// The recorded case is what tells the operator no later upgrade will reinstall the daemon, so
+// the failed case may not borrow its wording: the unit is gone either way, but a host whose
+// backup.env still says daemon is a host the runtime will keep reading as daemon-scheduled.
+func cronModeRecordClause(revert cronRevertReport) string {
+	if revert.ModeRecorded {
+		return "SCHEDULER_MODE=cron is recorded in the configuration, so upgrades leave the scheduler as it is."
+	}
+	return "The configuration could NOT be updated, so it still records the daemon engine while no daemon is installed."
 }
 
 // runDaemonStatus prints the resident daemon's real state - the SAME combined verdict the dashboard
@@ -436,6 +450,14 @@ type cronRevertReport struct {
 	// under /etc, or nil when none was found. Lines are pre-rendered and must be printed
 	// with "%s": a crontab line may contain a literal "%".
 	SystemCronAdvisory []string
+	// ModeRecorded is true only when SCHEDULER_MODE=cron actually reached the config file.
+	// The write is best-effort - the daemon is already being torn down and a failure here must
+	// not fail the revert - so the callers' closing message has to state which of the two
+	// happened rather than assert the good one. That assertion is what tells the operator no
+	// later upgrade will reinstall the daemon, and on a read-only or full filesystem it was
+	// false: the same shape as issue #298, an outcome reported that the code had not
+	// established.
+	ModeRecorded bool
 }
 
 // applyCronMode reverts an install to cron: make sure a cron schedule exists, record
@@ -537,10 +559,12 @@ func applyCronMode(ctx context.Context, cfg *config.Config, configPath, execToke
 	// exit code, and runDashboardDaemonAdmin re-reads backup.env on every later screen - and
 	// applyDaemonMode does not mirror its own write either. Mutating the caller's config on
 	// only one of the two paths would be the asymmetry, not the fix.
+	modeRecorded := true
 	if err := setBackupEnvKeys(configPath, map[string]string{
 		"SCHEDULER_MODE":      "cron",
 		"HEALTHCHECK_ENABLED": "false",
 	}); err != nil {
+		modeRecorded = false
 		logging.Warning("daemon: failed to record cron mode in %s: %v", configPath, err)
 	}
 	// Teardown last: a failure here leaves the host cron-scheduled with mode=cron, never
@@ -571,7 +595,7 @@ func applyCronMode(ctx context.Context, cfg *config.Config, configPath, execToke
 	if len(findings) > 0 {
 		logBootstrapWarning(bootstrap, "%s", systemCronOwnershipNote(len(refs)))
 	}
-	return cronRevertReport{SystemCronAdvisory: systemCronScheduleAdvisory(refs)}, err
+	return cronRevertReport{SystemCronAdvisory: systemCronScheduleAdvisory(refs), ModeRecorded: modeRecorded}, err
 }
 
 // maybeAutoMigrateDaemon is the --upgrade retrofit: install the resident daemon on a host that

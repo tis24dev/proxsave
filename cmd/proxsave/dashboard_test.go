@@ -922,6 +922,60 @@ func TestDashboardSubScreenIdleTimeoutExits(t *testing.T) {
 	}
 }
 
+// The revert screen's "Future upgrades will not reinstall it" was a claim about a config write
+// that is best-effort: applyCronMode only warns when it fails and tears the daemon down anyway,
+// so a read-only or full filesystem produced a green screen asserting something that had not
+// happened. The host is then left with no unit and a config that still records the daemon.
+func TestDashboardDaemonRevertReportsAFailedConfigWrite(t *testing.T) {
+	installDashboardGates(t, true, true)
+	origCfg, origShow := daemonStatusLoadConfig, showDaemonResultScreenFn
+	t.Cleanup(func() { daemonStatusLoadConfig, showDaemonResultScreenFn = origCfg, origShow })
+	daemonStatusLoadConfig = func(string, string) (*config.Config, error) {
+		return &config.Config{SchedulerMode: "daemon"}, nil
+	}
+	daemonApplyCronMode = func(context.Context, *config.Config, string, string, *logging.BootstrapLogger) (cronRevertReport, error) {
+		return cronRevertReport{ModeRecorded: false}, nil
+	}
+	type shown struct {
+		level   orchestrator.HealthcheckSetupLevel
+		keyword string
+		text    string
+	}
+	ch := make(chan shown, 1)
+	showDaemonResultScreenFn = func(_ context.Context, _ *shell.Session, _ string, level orchestrator.HealthcheckSetupLevel, kw, explanation string) {
+		ch <- shown{level, kw, explanation}
+	}
+
+	driver := installDashboardSessionSeam(t)
+	res := driver.spawn(&cli.Args{})
+	driver.waitScreen("Dashboard")
+	driver.keys("down down down down down down down down down enter") // Disable daemon
+
+	var got shown
+	select {
+	case got = <-ch:
+	case <-time.After(uitest.Deadline(60 * time.Second)):
+		t.Fatal("the revert never reached the result screen")
+	}
+	driver.waitScreen("Dashboard")
+	driver.keys("esc")
+	select {
+	case <-res:
+	case <-time.After(uitest.Deadline(60 * time.Second)):
+		t.Fatal("dashboard did not resolve")
+	}
+
+	if got.level != orchestrator.HealthcheckSetupLevelWarn {
+		t.Errorf("a config write that did not land must not be green, level = %v", got.level)
+	}
+	if !strings.Contains(got.text, "could NOT be updated") {
+		t.Errorf("the screen must say the configuration was not updated, got:\n%s", got.text)
+	}
+	if strings.Contains(got.text, "upgrades leave the scheduler as it is") {
+		t.Errorf("the screen must not claim the record that was not written, got:\n%s", got.text)
+	}
+}
+
 // The menu row is decided by the scheduler mode alone. It used to consult a second key,
 // DAEMON_OPT_OUT, purely to tell "reverted from the daemon" apart from "never had it" and
 // label the same command "Re-enable" instead of "Install". Both rows ran ActionDaemonSetup and
@@ -987,7 +1041,7 @@ func TestDashboardDaemonRevertShowsTheSystemCronAdvisory(t *testing.T) {
 		t.Fatal("the advisory builder returned nothing: this test would then assert on an empty set")
 	}
 	daemonApplyCronMode = func(context.Context, *config.Config, string, string, *logging.BootstrapLogger) (cronRevertReport, error) {
-		return cronRevertReport{SystemCronAdvisory: advisory}, nil
+		return cronRevertReport{SystemCronAdvisory: advisory, ModeRecorded: true}, nil
 	}
 	shown := make(chan string, 1)
 	showDaemonResultScreenFn = func(_ context.Context, _ *shell.Session, _ string, _ orchestrator.HealthcheckSetupLevel, kw, explanation string) {

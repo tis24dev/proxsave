@@ -519,6 +519,51 @@ func TestMaybeAutoMigrateDaemonReportsWhatTheRemovalDid(t *testing.T) {
 	}
 }
 
+// The closing line of --daemon-remove asserts that SCHEDULER_MODE=cron is on disk, and that
+// claim is what tells the operator no later upgrade will reinstall the daemon. The write it
+// depends on is best-effort: setBackupEnvKeys is only warned about, the teardown runs anyway
+// and applyCronMode returns nil, so a read-only or full filesystem produced a success line
+// stating something that had not happened. Same shape as issue #298 itself, an outcome asserted
+// that the code had not established.
+func TestApplyCronModeReportsWhetherTheModeWasRecorded(t *testing.T) {
+	t.Run("write lands: the mode is reported as recorded", func(t *testing.T) {
+		cfg, configPath := cronModeFixture(t)
+		crontabReadLinesFn = func(context.Context) ([]string, error) { return nil, nil }
+		wrapperCronLinesFn = func([]string) []string { return nil }
+		migrateLegacyCronEntriesFn = func(context.Context, string, string, *logging.BootstrapLogger, string) {}
+
+		report, err := applyCronMode(context.Background(), cfg, configPath, "/usr/local/bin/proxsave", nil)
+		if err != nil {
+			t.Fatalf("applyCronMode: %v", err)
+		}
+		if !report.ModeRecorded {
+			t.Error("the write succeeded, so the report must say so")
+		}
+	})
+
+	t.Run("write fails: the report says the mode is NOT recorded", func(t *testing.T) {
+		cfg, configPath := cronModeFixture(t)
+		crontabReadLinesFn = func(context.Context) ([]string, error) { return nil, nil }
+		wrapperCronLinesFn = func([]string) []string { return nil }
+		migrateLegacyCronEntriesFn = func(context.Context, string, string, *logging.BootstrapLogger, string) {}
+		// A directory where the file is expected: every write fails, nothing else does.
+		if err := os.Remove(configPath); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Mkdir(configPath, 0o755); err != nil {
+			t.Fatal(err)
+		}
+
+		report, err := applyCronMode(context.Background(), cfg, configPath, "/usr/local/bin/proxsave", nil)
+		if err != nil {
+			t.Fatalf("a failed config write must not fail the revert: the daemon is already gone, got %v", err)
+		}
+		if report.ModeRecorded {
+			t.Error("the write failed, so the report must not claim the mode was recorded")
+		}
+	})
+}
+
 // The counterweight: an ordinary host must not be told anything about /etc.
 func TestApplyCronModeStaysSilentWithoutASystemCronFinding(t *testing.T) {
 	cfg, configPath := cronModeFixture(t)
