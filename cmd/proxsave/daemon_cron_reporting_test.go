@@ -374,6 +374,70 @@ func TestApplyCronModeEmitsTheSystemCronAdvisory(t *testing.T) {
 	}
 }
 
+// ONE problem, ONE warning - the shape the other two #298 blocks already use
+// (warnIndirectProxsaveCronOnDaemonInstall, maybeAutoMigrateDaemon). This block emitted every
+// line it printed at WARNING, so a single finding was counted three times in the run's
+// "WARNINGS/ERRORS DURING RUN (warnings=N)" recap and two findings four times, and that count
+// is what an operator scans.
+//
+// The findings are INFO: the header carrying the count, then one item per line. The line that
+// stays WARNING is the one that says what ProxSave did about them.
+func TestApplyCronModeAdvisoryUsesOneWarning(t *testing.T) {
+	cfg, configPath := cronModeFixture(t)
+
+	crontabReadLinesFn = func(context.Context) ([]string, error) { return nil, nil }
+	wrapperCronLinesFn = func([]string) []string { return nil }
+	migrateLegacyCronEntriesFn = func(context.Context, string, string, *logging.BootstrapLogger, string) {}
+	// TWO findings, so a per-line WARNING cannot be mistaken for the one-warning shape.
+	systemCronProxsaveRefsFn = func() []indirectCronRef {
+		return []indirectCronRef{
+			{
+				Line:    "0 5 * * * root /usr/local/bin/proxsave --backup",
+				Command: "/usr/local/bin/proxsave",
+				Reason:  `"proxsave" is the proxsave binary; /etc cron lines stay untouched`,
+				Source:  "/etc/cron.d/proxsave",
+			},
+			{
+				Line:    "17 02 * * * root /usr/local/sbin/proxsave-nas-guard",
+				Command: "/usr/local/sbin/proxsave-nas-guard",
+				Reason:  "script /usr/local/sbin/proxsave-nas-guard calls the proxsave binary",
+				Source:  "/etc/crontab",
+			},
+		}
+	}
+
+	seen := captureConsole(t, func() {
+		if _, err := applyCronMode(context.Background(), cfg, configPath, "/usr/local/bin/proxsave", logging.NewBootstrapLogger(), true); err != nil {
+			t.Fatalf("applyCronMode: %v", err)
+		}
+	})
+
+	if got := strings.Count(seen, "WARNING"); got != 1 {
+		t.Errorf("two findings are still ONE problem: want 1 WARNING, got %d, out=%q", got, seen)
+	}
+	// The surviving WARNING is the ownership line, and nothing else may be promoted to it.
+	warn := ""
+	for _, line := range strings.Split(seen, "\n") {
+		if strings.Contains(line, "WARNING") {
+			warn = line
+			break
+		}
+	}
+	if !strings.Contains(warn, "/etc unchanged") {
+		t.Errorf("the WARNING must be the ownership line, got %q", warn)
+	}
+	// The findings are still printed, just below the verdict.
+	for _, want := range []string{
+		"2 possible ProxSave cron line(s) under /etc",
+		"0 5 * * * root /usr/local/bin/proxsave --backup",
+		"17 02 * * * root /usr/local/sbin/proxsave-nas-guard",
+	} {
+		if !strings.Contains(seen, want) {
+			t.Errorf("the block must still state %q, out=%q", want, seen)
+		}
+	}
+}
+
 // The counterweight: an ordinary host must not be told anything about /etc.
 func TestApplyCronModeStaysSilentWithoutASystemCronFinding(t *testing.T) {
 	cfg, configPath := cronModeFixture(t)

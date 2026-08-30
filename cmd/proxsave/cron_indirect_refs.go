@@ -459,17 +459,39 @@ func cronRefEditHint(refs []indirectCronRef) string {
 // no instruction to remove anything. The operator is told what was found, that ProxSave
 // did not touch it and does not manage it, and where to look to decide - which is the most
 // this function can say without asserting something it cannot check.
-func systemCronScheduleAdvisory(refs []indirectCronRef) []string {
+// systemCronOwnershipNote is the one line of the advisory that states what ProxSave DID
+// about what it found, so it is the one line that is a WARNING when the block is logged.
+// The findings above it are INFO: one finding printed at WARNING on every line is counted
+// three times in the run's "WARNINGS/ERRORS DURING RUN (warnings=N)" recap and two findings
+// four times, and that count is what an operator scans. Same shape as the other two #298
+// blocks (warnIndirectProxsaveCronOnDaemonInstall, maybeAutoMigrateDaemon).
+//
+// It is a constant rather than the last element of a slice because the caller has to pick it
+// out by NAME to give it a different level; indexing the tail would put the whole block one
+// off-by-one away from warning about the wrong sentence.
+const systemCronOwnershipNote = "ProxSave owns the root crontab only and never edits files it did not place. /etc unchanged"
+
+// systemCronScheduleFindings renders the findings alone: the header carrying the count, then
+// one item per entry. These are the INFO half of the block; systemCronOwnershipNote is the
+// other half.
+func systemCronScheduleFindings(refs []indirectCronRef) []string {
 	if len(refs) == 0 {
 		return nil
 	}
-	out := make([]string, 0, len(refs)+2)
+	out := make([]string, 0, len(refs)+1)
 	out = append(out, fmt.Sprintf("Reverting to cron: %d possible ProxSave cron line(s) under /etc:", len(refs)))
 	for _, line := range describeIndirectCronRefs(refs) {
 		out = append(out, "  - "+line)
 	}
-	out = append(out, "ProxSave owns the root crontab only and never edits files it did not place. /etc unchanged")
 	return out
+}
+
+func systemCronScheduleAdvisory(refs []indirectCronRef) []string {
+	findings := systemCronScheduleFindings(refs)
+	if len(findings) == 0 {
+		return nil
+	}
+	return append(findings, systemCronOwnershipNote)
 }
 
 // detectIndirectProxsaveCron reads every habitat that can schedule ProxSave without

@@ -559,11 +559,15 @@ func applyCronMode(ctx context.Context, cfg *config.Config, configPath, execToke
 	// running, which is precisely the double schedule this whole path exists to prevent.
 	// A teardown that FAILED does not make the advisory untrue either, so it is printed
 	// either way and the teardown's error is still what this function returns.
-	advisory := systemCronScheduleAdvisory(systemCronProxsaveRefsFn())
-	for _, line := range advisory {
-		logBootstrapWarning(bootstrap, "%s", line)
+	refs := systemCronProxsaveRefsFn()
+	findings := systemCronScheduleFindings(refs)
+	for _, line := range findings {
+		logBootstrapInfo(bootstrap, "%s", line)
 	}
-	return cronRevertReport{SystemCronAdvisory: advisory}, err
+	if len(findings) > 0 {
+		logBootstrapWarning(bootstrap, "%s", systemCronOwnershipNote)
+	}
+	return cronRevertReport{SystemCronAdvisory: systemCronScheduleAdvisory(refs)}, err
 }
 
 // backfillHealthcheckOptOut repairs, once, the on-disk state issue #298 left behind on
