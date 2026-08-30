@@ -216,6 +216,57 @@ func schedulerTimeFromCronLines(lines []string) (string, bool) {
 	return found, found != ""
 }
 
+// adoptSchedulerTimeForDaemon carries the host's real run time across a cron -> daemon switch,
+// by overwriting SCHEDULER_TIME with the time of the proxsave cron entry that is about to be
+// deleted.
+//
+// It must run BEFORE removeCanonicalCronEntry, which is the only record of that time on a cron
+// host: in cron mode the crontab IS the schedule and SCHEDULER_TIME is a leftover nothing keeps
+// in step, so an operator who edited the cron line moved the backup while the key stayed where
+// the installer left it. The daemon then reads the key, and the host would silently start
+// running at a different hour the moment it is retrofitted.
+//
+// It OVERWRITES, unlike the install-time seeding, which fills the key only when it is ABSENT
+// because "an explicit operator value is never overridden" (deriveSchedulerTimeFromCrontab).
+// That gate is right at install time, where the key and the crontab are two independent
+// statements of intent and neither has been in force over the other. Here it is not: the host
+// has been running on cron, so the crontab is the statement that has been in force.
+//
+// It says nothing and writes nothing when there is no single daily time to carry: no proxsave
+// cron line at all, two lines at different times, or a cadence that is not one run a day. The
+// daemon runs once daily, so picking one of several would move the backup on purpose. The
+// value already in the key then stands, which is the same answer the install path gives.
+//
+// The ROOT crontab only. A proxsave line under /etc is deliberately not read here: ProxSave
+// never edits /etc, so that line SURVIVES the switch, and adopting its time would schedule the
+// daemon in the exact minute it already occupies.
+func adoptSchedulerTimeForDaemon(ctx context.Context, configPath string, bootstrap *logging.BootstrapLogger) {
+	configPath = strings.TrimSpace(configPath)
+	if configPath == "" {
+		return
+	}
+	lines, err := crontabReadLinesFn(ctx)
+	if err != nil {
+		return
+	}
+	hhmm, ok := schedulerTimeFromCronLines(lines)
+	if !ok {
+		return
+	}
+	data, err := safefs.ReadFileUnderRoot(configPath)
+	if err != nil {
+		return
+	}
+	if strings.TrimSpace(installer.DeriveInstallWizardPrefill(string(data)).SchedulerTime) == hhmm {
+		return
+	}
+	if err := setBackupEnvKeys(configPath, map[string]string{"SCHEDULER_TIME": hhmm}); err != nil {
+		logging.DebugStepBootstrap(bootstrap, "daemon setup", "could not record the adopted run time: %v", err)
+		return
+	}
+	logBootstrapInfo(bootstrap, "SCHEDULER_TIME set to %s, the time of the proxsave cron entry this switch removes, so the daily run time does not change.", hhmm)
+}
+
 // adoptCronRunTimeIntoBase is the ONE place both front-ends adopt the host's cron
 // run time into the wizard's in-memory base. It returns the (possibly seeded) base
 // and writes nothing to disk: on Edit the wizard rewrites the whole file at the end

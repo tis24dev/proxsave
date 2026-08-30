@@ -165,6 +165,11 @@ func applyDaemonMode(ctx context.Context, cfg *config.Config, configPath, execTo
 	if err := installDaemonService(ctx, execToken, configPath, bootstrap); err != nil {
 		return cronRemovalOutcome{}, err
 	}
+	// BEFORE the removal, because that cron line is the only record of when this host actually
+	// runs its backup. In cron mode the crontab IS the schedule and SCHEDULER_TIME is a
+	// leftover nothing keeps in step, so a host whose cron line was edited to 21:00 would come
+	// out of this function running at whatever the key still said.
+	adoptSchedulerTimeForDaemon(ctx, configPath, bootstrap)
 	cronOutcome, err := removeCanonicalCronEntry(ctx, cronCorrectPaths(execToken), bootstrap)
 	if err != nil {
 		logging.Warning("daemon: failed to remove the cron entry (possible double execution; the per-run lock mitigates): %v", err)
