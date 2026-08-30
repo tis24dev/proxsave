@@ -658,6 +658,15 @@ func runDashboardDaemonAdmin(ctx context.Context, session *shell.Session, instal
 			doneLevel = orchestrator.HealthcheckSetupLevelWarn
 			doneKeyword = "REVERTED - CONFIG NOT UPDATED"
 		}
+		// The revert writes its cron line even when something unmanaged already schedules
+		// ProxSave, so it creates this duplicate itself and has to say so. The keyword takes
+		// precedence over the config one because this is what changes tonight; the config fact
+		// is a sentence in the text either way.
+		if revert.UnmanagedSchedules > 0 {
+			doneLevel = orchestrator.HealthcheckSetupLevelWarn
+			doneKeyword = "REVERTED - DUPLICATE SCHEDULE"
+			doneMsg += " Check your crons to remove duplication."
+		}
 		// The daemon is gone and nothing replaced it. That outranks the config write, so it is
 		// tested last and wins the screen.
 		if !revert.CronScheduled {

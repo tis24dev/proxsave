@@ -208,8 +208,11 @@ func TestApplyCronModeAlwaysWritesTheCronLineAndReportsTheFinding(t *testing.T) 
 		migrated = schedule
 	}
 
+	var report cronRevertReport
 	seen := captureConsole(t, func() {
-		if _, err := applyCronMode(context.Background(), cfg, configPath, "/usr/local/bin/proxsave", logging.NewBootstrapLogger()); err != nil {
+		var err error
+		report, err = applyCronMode(context.Background(), cfg, configPath, "/usr/local/bin/proxsave", logging.NewBootstrapLogger())
+		if err != nil {
 			t.Fatalf("applyCronMode: %v", err)
 		}
 	})
@@ -234,6 +237,11 @@ func TestApplyCronModeAlwaysWritesTheCronLineAndReportsTheFinding(t *testing.T) 
 	}
 	if !strings.Contains(seen, wrapper) {
 		t.Errorf("the finding must be printed verbatim, out=%q", seen)
+	}
+	// Carried out as well as logged: on the dashboard the log reaches nothing, so the count is
+	// the only thing the result screen can render.
+	if report.UnmanagedSchedules != 1 {
+		t.Errorf("UnmanagedSchedules = %d, want 1", report.UnmanagedSchedules)
 	}
 	data, _ := os.ReadFile(configPath)
 	if !strings.Contains(string(data), "SCHEDULER_MODE=cron") {

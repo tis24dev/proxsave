@@ -976,6 +976,95 @@ func TestDashboardDaemonRevertReportsAFailedConfigWrite(t *testing.T) {
 	}
 }
 
+// The revert deliberately creates the duplicate it reports: it writes its cron line even when
+// something unmanaged already schedules ProxSave, because withholding it would leave a
+// misidentified host with nothing scheduled. The CLI says so with a WARNING. On the dashboard
+// that warning goes into a logger muted for the whole operation and never flushed, and
+// cronRevertReport carried only the /etc findings, so a host that now runs the backup twice got
+// a green REVERTED TO CRON. The install direction already had this channel.
+func TestDashboardDaemonRevertWarnsOnADuplicateSchedule(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		report      cronRevertReport
+		wantLevel   orchestrator.HealthcheckSetupLevel
+		wantKeyword string
+		wantText    string
+	}{
+		{
+			name:        "nothing else schedules ProxSave: unchanged",
+			report:      cronRevertReport{CronScheduled: true, ModeRecorded: true},
+			wantLevel:   orchestrator.HealthcheckSetupLevelOk,
+			wantKeyword: "REVERTED TO CRON",
+			wantText:    "Reverted to the cron scheduler",
+		},
+		{
+			name:        "an unmanaged schedule survives: warning",
+			report:      cronRevertReport{CronScheduled: true, ModeRecorded: true, UnmanagedSchedules: 1},
+			wantLevel:   orchestrator.HealthcheckSetupLevelWarn,
+			wantKeyword: "REVERTED - DUPLICATE SCHEDULE",
+			wantText:    "Check your crons to remove duplication.",
+		},
+		{
+			// Nothing scheduling the backup outranks a duplicate: there is no duplicate.
+			name:        "unscheduled outranks the duplicate",
+			report:      cronRevertReport{CronScheduled: false, ModeRecorded: true, UnmanagedSchedules: 1},
+			wantLevel:   orchestrator.HealthcheckSetupLevelError,
+			wantKeyword: "NO SCHEDULE",
+			wantText:    "nothing is scheduling the backup",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			installDashboardGates(t, true, true)
+			origCfg, origShow := daemonStatusLoadConfig, showDaemonResultScreenFn
+			t.Cleanup(func() { daemonStatusLoadConfig, showDaemonResultScreenFn = origCfg, origShow })
+			daemonStatusLoadConfig = func(string, string) (*config.Config, error) {
+				return &config.Config{SchedulerMode: "daemon"}, nil
+			}
+			daemonApplyCronMode = func(context.Context, *config.Config, string, string, *logging.BootstrapLogger) (cronRevertReport, error) {
+				return tc.report, nil
+			}
+			type shown struct {
+				level   orchestrator.HealthcheckSetupLevel
+				keyword string
+				text    string
+			}
+			ch := make(chan shown, 1)
+			showDaemonResultScreenFn = func(_ context.Context, _ *shell.Session, _ string, level orchestrator.HealthcheckSetupLevel, kw, explanation string) {
+				ch <- shown{level, kw, explanation}
+			}
+
+			driver := installDashboardSessionSeam(t)
+			res := driver.spawn(&cli.Args{})
+			driver.waitScreen("Dashboard")
+			driver.keys("down down down down down down down down down enter") // Disable daemon
+
+			var got shown
+			select {
+			case got = <-ch:
+			case <-time.After(uitest.Deadline(60 * time.Second)):
+				t.Fatal("the revert never reached the result screen")
+			}
+			driver.waitScreen("Dashboard")
+			driver.keys("esc")
+			select {
+			case <-res:
+			case <-time.After(uitest.Deadline(60 * time.Second)):
+				t.Fatal("dashboard did not resolve")
+			}
+
+			if got.level != tc.wantLevel {
+				t.Errorf("level = %v, want %v", got.level, tc.wantLevel)
+			}
+			if got.keyword != tc.wantKeyword {
+				t.Errorf("keyword = %q, want %q", got.keyword, tc.wantKeyword)
+			}
+			if !strings.Contains(got.text, tc.wantText) {
+				t.Errorf("the screen must state %q, got:\n%s", tc.wantText, got.text)
+			}
+		})
+	}
+}
+
 // The daemon is gone and nothing replaced it: that is the one revert outcome that is an ERROR,
 // not a warning, and it must outrank every other clause on the screen.
 func TestDashboardDaemonRevertReportsAnUnscheduledHost(t *testing.T) {

@@ -490,6 +490,12 @@ type cronRevertReport struct {
 	// under /etc, or nil when none was found. Lines are pre-rendered and must be printed
 	// with "%s": a crontab line may contain a literal "%".
 	SystemCronAdvisory []string
+	// UnmanagedSchedules counts the crontab entries that still schedule ProxSave next to the
+	// line this revert just wrote. The revert creates that duplicate deliberately - withholding
+	// its line would leave a misidentified host with nothing scheduled - so it has to be
+	// reported, and on the dashboard the result screen is the only channel: the logger is muted
+	// for the whole operation and never flushed.
+	UnmanagedSchedules int
 	// CronScheduled is true only when a canonical proxsave cron line is READ BACK from the
 	// crontab after the write. migrateLegacyCronEntries is void and has four early returns that
 	// write nothing - unknown exec path, no binary to point at, `crontab -l` failing, `crontab
@@ -579,7 +585,9 @@ func applyCronMode(ctx context.Context, cfg *config.Config, configPath, execToke
 	// recoverable annoyance the operator can see, an unscheduled host is silent data loss.
 	migrateLegacyCronEntriesFn(ctx, cfg.BaseDir, execToken, bootstrap, cron.TimeToSchedule(cfg.SchedulerTime))
 	cronScheduled := canonicalCronLinePresent(ctx)
+	unmanaged := 0
 	if wrappers := existingWrapperCronFallback(ctx); len(wrappers) > 0 {
+		unmanaged = len(wrappers)
 		logBootstrapInfo(bootstrap, "Reverting to cron: %d unmanaged crontab line(s) also appear to schedule ProxSave:", len(wrappers))
 		for _, line := range wrappers {
 			logBootstrapInfo(bootstrap, "  - %s", line)
@@ -646,7 +654,12 @@ func applyCronMode(ctx context.Context, cfg *config.Config, configPath, execToke
 	if len(findings) > 0 {
 		logBootstrapWarning(bootstrap, "%s", systemCronOwnershipNote(len(refs)))
 	}
-	return cronRevertReport{SystemCronAdvisory: systemCronScheduleAdvisory(refs), CronScheduled: cronScheduled, ModeRecorded: modeRecorded}, err
+	return cronRevertReport{
+		SystemCronAdvisory: systemCronScheduleAdvisory(refs),
+		UnmanagedSchedules: unmanaged,
+		CronScheduled:      cronScheduled,
+		ModeRecorded:       modeRecorded,
+	}, err
 }
 
 // maybeAutoMigrateDaemon is the --upgrade retrofit: install the resident daemon on a host that
