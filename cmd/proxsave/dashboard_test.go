@@ -520,6 +520,7 @@ func TestDashboardDaemonInstallWarnsOnADuplicateSchedule(t *testing.T) {
 		wantLevel   orchestrator.HealthcheckSetupLevel
 		wantKeyword string
 		wantText    string
+		alsoWants   []string
 	}{
 		{
 			name:        "nothing else schedules ProxSave: unchanged",
@@ -536,7 +537,7 @@ func TestDashboardDaemonInstallWarnsOnADuplicateSchedule(t *testing.T) {
 			outcome:     cronRemovalOutcome{},
 			wantLevel:   orchestrator.HealthcheckSetupLevelWarn,
 			wantKeyword: "INSTALLED - NO CRON ENTRY REMOVED",
-			wantText:    "Cron entry: not checked, one may still be scheduled alongside the daemon.",
+			wantText:    "Cron entry: could not be checked, one may still be scheduled alongside the daemon.",
 		},
 		{
 			name:        "an unmanaged schedule survives: warning",
@@ -544,6 +545,10 @@ func TestDashboardDaemonInstallWarnsOnADuplicateSchedule(t *testing.T) {
 			wantLevel:   orchestrator.HealthcheckSetupLevelWarn,
 			wantKeyword: "INSTALLED - DUPLICATE SCHEDULE",
 			wantText:    "Check your crons to remove duplication.",
+			// The duplicate sentence is ADDED, not swapped in. Replacing the message threw away
+			// the line saying what the removal actually did, on the screen that is the only
+			// channel this path has.
+			alsoWants: []string{"Daemon service: active (", "Cron entry: none was present to remove."},
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -590,6 +595,11 @@ func TestDashboardDaemonInstallWarnsOnADuplicateSchedule(t *testing.T) {
 			}
 			if !strings.Contains(got.text, tc.wantText) {
 				t.Errorf("the screen must state %q, got:\n%s", tc.wantText, got.text)
+			}
+			for _, want := range tc.alsoWants {
+				if !strings.Contains(got.text, want) {
+					t.Errorf("the screen must also state %q, got:\n%s", want, got.text)
+				}
 			}
 		})
 	}
@@ -1030,7 +1040,7 @@ func TestDashboardDaemonRevertWarnsOnADuplicateSchedule(t *testing.T) {
 			// listed below, "nothing is scheduling the backup" would deny what the screen goes
 			// on to show, so the headline states the certain fact instead.
 			name:        "unwritten entry takes the level, not the denial",
-			report:      cronRevertReport{CronScheduled: false, ModeRecorded: true, UnmanagedAdvisory: []string{"1 unmanaged crontab line(s) also appear to schedule ProxSave:", "  - 30 02 * * * /usr/local/sbin/nas-guard"}},
+			report:      cronRevertReport{CronScheduled: false, CronVerified: true, ModeRecorded: true, UnmanagedAdvisory: []string{"1 unmanaged crontab line(s) also appear to schedule ProxSave:", "  - 30 02 * * * /usr/local/sbin/nas-guard"}},
 			wantLevel:   orchestrator.HealthcheckSetupLevelError,
 			wantKeyword: "CRON ENTRY NOT WRITTEN",
 			wantText:    "Cron entry: NOT written.",
@@ -1038,10 +1048,21 @@ func TestDashboardDaemonRevertWarnsOnADuplicateSchedule(t *testing.T) {
 		{
 			// With nothing listed underneath, the denial is true and stays.
 			name:        "nothing left at all: the denial stands",
-			report:      cronRevertReport{CronScheduled: false, ModeRecorded: true},
+			report:      cronRevertReport{CronScheduled: false, CronVerified: true, ModeRecorded: true},
 			wantLevel:   orchestrator.HealthcheckSetupLevelError,
 			wantKeyword: "NO SCHEDULE",
 			wantText:    "nothing is scheduling the backup",
+		},
+		{
+			// ...and it stands only there. An unreadable crontab reaches this branch with the
+			// same false, but nobody measured it: the write may well have landed. The level stays
+			// Error because a host that cannot be checked may equally be one with nothing
+			// scheduled, and that is the expensive reading.
+			name:        "the crontab could not be read: no denial, only the fact",
+			report:      cronRevertReport{CronScheduled: false, CronVerified: false, ModeRecorded: true},
+			wantLevel:   orchestrator.HealthcheckSetupLevelError,
+			wantKeyword: "CRON ENTRY NOT CHECKED",
+			wantText:    "Cron entry: could not be checked, the crontab was unreadable.",
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -1106,7 +1127,7 @@ func TestDashboardDaemonRevertReportsAnUnscheduledHost(t *testing.T) {
 		return &config.Config{SchedulerMode: "daemon"}, nil
 	}
 	daemonApplyCronMode = func(context.Context, *config.Config, string, string, *logging.BootstrapLogger) (cronRevertReport, error) {
-		return cronRevertReport{CronScheduled: false, ModeRecorded: true}, nil
+		return cronRevertReport{CronScheduled: false, CronVerified: true, ModeRecorded: true}, nil
 	}
 	type shown struct {
 		level   orchestrator.HealthcheckSetupLevel
@@ -1161,7 +1182,7 @@ func TestDashboardDaemonRevertKeepsEveryFactOnTheUnscheduledScreen(t *testing.T)
 		return &config.Config{SchedulerMode: "daemon"}, nil
 	}
 	daemonApplyCronMode = func(context.Context, *config.Config, string, string, *logging.BootstrapLogger) (cronRevertReport, error) {
-		return cronRevertReport{CronScheduled: false, ModeRecorded: false}, nil
+		return cronRevertReport{CronScheduled: false, CronVerified: true, ModeRecorded: false}, nil
 	}
 	shown := make(chan string, 1)
 	showDaemonResultScreenFn = func(_ context.Context, _ *shell.Session, _ string, _ orchestrator.HealthcheckSetupLevel, kw, explanation string) {
@@ -1217,7 +1238,7 @@ func TestDashboardDaemonRevertDoesNotDenyAScheduleItJustListed(t *testing.T) {
 		return &config.Config{SchedulerMode: "daemon"}, nil
 	}
 	daemonApplyCronMode = func(context.Context, *config.Config, string, string, *logging.BootstrapLogger) (cronRevertReport, error) {
-		return cronRevertReport{CronScheduled: false, ModeRecorded: true, SystemCronAdvisory: advisory}, nil
+		return cronRevertReport{CronScheduled: false, CronVerified: true, ModeRecorded: true, SystemCronAdvisory: advisory}, nil
 	}
 	shown := make(chan string, 1)
 	showDaemonResultScreenFn = func(_ context.Context, _ *shell.Session, _ string, _ orchestrator.HealthcheckSetupLevel, kw, explanation string) {
@@ -1278,6 +1299,7 @@ func TestDashboardDaemonRevertListsBothHabitats(t *testing.T) {
 	daemonApplyCronMode = func(context.Context, *config.Config, string, string, *logging.BootstrapLogger) (cronRevertReport, error) {
 		return cronRevertReport{
 			CronScheduled:      false,
+			CronVerified:       true,
 			ModeRecorded:       true,
 			UnmanagedAdvisory:  unmanaged,
 			SystemCronAdvisory: etc,
@@ -1323,7 +1345,7 @@ func TestDashboardDaemonRevertListsBothHabitats(t *testing.T) {
 	}
 	// And with nothing left to schedule the host, the denial is true and stays.
 	daemonApplyCronMode = func(context.Context, *config.Config, string, string, *logging.BootstrapLogger) (cronRevertReport, error) {
-		return cronRevertReport{CronScheduled: false, ModeRecorded: true}, nil
+		return cronRevertReport{CronScheduled: false, CronVerified: true, ModeRecorded: true}, nil
 	}
 	driver2 := installDashboardSessionSeam(t)
 	res2 := driver2.spawn(&cli.Args{})
@@ -1610,7 +1632,7 @@ func TestCronRevertScreenOnAFailedTeardown(t *testing.T) {
 		},
 		{
 			name:        "success, nothing scheduling",
-			revert:      cronRevertReport{ModeRecorded: true},
+			revert:      cronRevertReport{ModeRecorded: true, CronVerified: true},
 			wantLevel:   orchestrator.HealthcheckSetupLevelError,
 			wantKeyword: "NO SCHEDULE",
 			wantSays:    []string{"nothing is scheduling the backup"},

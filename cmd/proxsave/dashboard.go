@@ -680,7 +680,9 @@ func runDashboardDaemonAdmin(ctx context.Context, session *shell.Session, instal
 		if cronOutcome.UnmanagedSchedules > 0 {
 			doneLevel = orchestrator.HealthcheckSetupLevelWarn
 			doneKeyword = "INSTALLED - DUPLICATE SCHEDULE"
-			doneMsg = "Daemon service: active (" + daemonUnitName + ").\nCheck your crons to remove duplication."
+			// ADDED, not swapped in: replacing the message threw away the line saying what the
+			// removal actually did, on the screen that is the only channel this path has.
+			doneMsg += "\nCheck your crons to remove duplication."
 		}
 	}
 	if !install {
@@ -790,6 +792,14 @@ func buildCronRevertScreen(revert cronRevertReport, teardownErr error) (orchestr
 		if found {
 			keyword = "CRON ENTRY NOT WRITTEN"
 			cron = "Cron entry: NOT written."
+		}
+		// An unreadable crontab reaches here with CronScheduled false, and the denial above is
+		// then a measurement nobody took: the write may well have landed. The level stays Error
+		// because a host that cannot be checked may equally be a host with nothing scheduled,
+		// and that is the expensive one.
+		if !revert.CronVerified {
+			keyword = "CRON ENTRY NOT CHECKED"
+			cron = "Cron entry: could not be checked, the crontab was unreadable."
 		}
 	}
 	lines = append(lines, daemon, cron, config)

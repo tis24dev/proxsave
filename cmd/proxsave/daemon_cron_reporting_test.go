@@ -620,6 +620,50 @@ func TestApplyCronModeReportsWhetherTheCronLineExists(t *testing.T) {
 		}
 	})
 
+	// "Could not read" is not "there is none", and the report has to keep them apart. The screen
+	// built on this field denied a schedule outright, which on an unreadable crontab is a
+	// measurement nobody took - the same shape of claim as the one canonicalCronLinePresent's own
+	// comment refuses to make in the other direction.
+	t.Run("the crontab cannot be read: not scheduled AND not verified", func(t *testing.T) {
+		cfg, configPath := cronModeFixture(t)
+		wrapperCronLinesFn = func([]string) []string { return nil }
+		migrateLegacyCronEntriesFn = func(context.Context, string, string, *logging.BootstrapLogger, string) {}
+		crontabReadLinesFn = func(context.Context) ([]string, error) {
+			return nil, errors.New(`exec: "crontab": executable file not found in $PATH`)
+		}
+
+		report, err := applyCronMode(context.Background(), cfg, configPath, "/usr/local/bin/proxsave", nil)
+		if err != nil {
+			t.Fatalf("applyCronMode: %v", err)
+		}
+		if report.CronScheduled {
+			t.Error("an unreadable crontab is not evidence of a schedule")
+		}
+		if report.CronVerified {
+			t.Error("an unreadable crontab is not evidence of the absence of one either")
+		}
+	})
+
+	t.Run("the crontab was read: verified either way", func(t *testing.T) {
+		for _, lines := range [][]string{
+			{"00 02 * * * /usr/local/bin/proxsave --backup"},
+			{"0 6 * * * /usr/bin/rsync /a /b"},
+		} {
+			cfg, configPath := cronModeFixture(t)
+			wrapperCronLinesFn = func([]string) []string { return nil }
+			migrateLegacyCronEntriesFn = func(context.Context, string, string, *logging.BootstrapLogger, string) {}
+			crontabReadLinesFn = func(context.Context) ([]string, error) { return lines, nil }
+
+			report, err := applyCronMode(context.Background(), cfg, configPath, "/usr/local/bin/proxsave", nil)
+			if err != nil {
+				t.Fatalf("applyCronMode: %v", err)
+			}
+			if !report.CronVerified {
+				t.Errorf("the crontab was read, so the answer is a measurement, got %+v for %v", report, lines)
+			}
+		}
+	})
+
 	t.Run("the crontab cannot be read: fail closed", func(t *testing.T) {
 		cfg, configPath := cronModeFixture(t)
 		wrapperCronLinesFn = func([]string) []string { return nil }

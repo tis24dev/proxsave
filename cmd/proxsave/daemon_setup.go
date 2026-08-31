@@ -88,20 +88,24 @@ func runDaemonRemove(rt *appRuntime) int {
 }
 
 // canonicalCronLinePresent reads the root crontab and reports whether a proxsave cron line is
-// actually in it. An unreadable crontab answers false: a host with no cron binary at all is
-// precisely the host this check exists for, and it is also the one where nothing can be
-// verified, so claiming a schedule there would be the lie.
-func canonicalCronLinePresent(ctx context.Context) bool {
+// actually in it, and SEPARATELY whether it could look at all.
+//
+// The two answers cannot be one. An unreadable crontab is not evidence of a schedule - a host with
+// no cron binary is precisely the host this check exists for - but it is not evidence of the
+// absence of one either, and a caller handed a bare false said exactly that: the revert screen
+// denied any schedule on a host where nobody had measured. Reporting the verification alongside
+// the answer is the same shape cronRemovalOutcome.Verified already uses for the same reason.
+func canonicalCronLinePresent(ctx context.Context) (present, verified bool) {
 	lines, err := crontabReadLinesFn(ctx)
 	if err != nil {
-		return false
+		return false, false
 	}
 	for _, line := range lines {
 		if commandTokenMatchesTarget(strings.Trim(cronCommandToken(line), "\"'")) {
-			return true
+			return true, true
 		}
 	}
-	return false
+	return false, true
 }
 
 // cronModeRecordClause renders whether the revert's config write landed, as one standalone
@@ -514,6 +518,10 @@ type cronRevertReport struct {
 	// and the screen says "what still schedules this host is below". Carrying a count for one and
 	// lines for the other made that sentence false for the count: there was nothing below.
 	UnmanagedAdvisory []string
+	// CronVerified is true only when the crontab was actually READ. False means the answer in
+	// CronScheduled is not a measurement, and a caller must not turn it into one in either
+	// direction.
+	CronVerified bool
 	// CronScheduled is true only when a canonical proxsave cron line is READ BACK from the
 	// crontab after the write. migrateLegacyCronEntries is void and has four early returns that
 	// write nothing - unknown exec path, no binary to point at, `crontab -l` failing, `crontab
@@ -602,7 +610,7 @@ func applyCronMode(ctx context.Context, cfg *config.Config, configPath, execToke
 	// cron_indirect_refs.go and again for the /etc habitat below: a double schedule is a
 	// recoverable annoyance the operator can see, an unscheduled host is silent data loss.
 	migrateLegacyCronEntriesFn(ctx, cfg.BaseDir, execToken, bootstrap, cron.TimeToSchedule(cfg.SchedulerTime))
-	cronScheduled := canonicalCronLinePresent(ctx)
+	cronScheduled, cronVerified := canonicalCronLinePresent(ctx)
 	var unmanagedAdvisory []string
 	if wrappers := existingWrapperCronFallback(ctx); len(wrappers) > 0 {
 		unmanagedAdvisory = append(unmanagedAdvisory, fmt.Sprintf("Reverting to cron: %d unmanaged crontab line(s) also appear to schedule ProxSave:", len(wrappers)))
@@ -686,6 +694,7 @@ func applyCronMode(ctx context.Context, cfg *config.Config, configPath, execToke
 		SystemCronAdvisory: systemCronScheduleAdvisory(refs),
 		UnmanagedAdvisory:  unmanagedAdvisory,
 		CronScheduled:      cronScheduled,
+		CronVerified:       cronVerified,
 		ModeRecorded:       modeRecorded,
 	}, err
 }
@@ -952,7 +961,7 @@ func cronRemovalClause(outcome cronRemovalOutcome) string {
 func cronRemovalScreenClause(outcome cronRemovalOutcome) string {
 	switch {
 	case !outcome.Verified:
-		return "not checked, one may still be scheduled alongside the daemon."
+		return "could not be checked, one may still be scheduled alongside the daemon."
 	case outcome.Removed == 0:
 		return "none was present to remove."
 	case outcome.Removed == 1:
