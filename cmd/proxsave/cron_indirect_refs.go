@@ -9,6 +9,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
+	"time"
 	"unicode"
 
 	"github.com/tis24dev/proxsave/internal/logging"
@@ -62,8 +64,11 @@ const (
 	// maxCronWrapperProbeBytes bounds the content probe. A cron wrapper is a shell
 	// script of a few KiB, so the cap costs no real detection while keeping a cron
 	// line that points at a large binary from being slurped into memory during an
-	// upgrade. It bounds the READ, not the open: a command on a stalled network mount
-	// can still block in open(2), exactly as every other cron-touching helper here can.
+	// upgrade. It bounds the READ, not the open. The open is bounded separately: by
+	// O_NONBLOCK for a fifo or device node, and by cronProbeTimeout for everything else.
+	// The helpers that read /etc still have no such bound (systemCronFileRefs' os.Stat and
+	// safefs.ReadFileUnderRoot, resolveSystemCronPath's EvalSymlinks), so a cron.d entry
+	// symlinked into a dead mount can still stall before any of this runs.
 	maxCronWrapperProbeBytes = 64 * 1024
 
 	// maxCronWrapperProbesPerLine bounds how many words of ONE cron line the content probe may
@@ -77,9 +82,31 @@ const (
 	// carry: TestCronRunnerProbeIsBounded chains eight names behind the token and is found,
 	// nine and is not. It bounds the OPENS, not the walk: past the cap the line is still parsed,
 	// just never read. The budget is per LINE, matching maxCronWrapperProbeBytes being per file,
-	// so a crontab with N runner lines can pay up to 8N.
+	// so a crontab with N runner lines can pay up to 8N. That is a count and nothing else:
+	// cronProbeTimeout's deadline is per CRONTAB and latches on the first timeout, so those
+	// 8N opens are at most 8N and at most ONE of them ever waits.
 	maxCronWrapperProbesPerLine = 8
 )
+
+// cronProbeTimeout bounds the WALL CLOCK one content probe may spend in the filesystem.
+// It is the third bound in this file and the only one that answers "how long":
+// maxCronWrapperProbeBytes bounds a read and maxCronWrapperProbesPerLine bounds a count,
+// and a count is no bound at all when a single open never returns.
+//
+// O_NONBLOCK already covers the fifo and device-node class exactly. It cannot cover the
+// other one: a file on a network mount that stopped answering is a REGULAR file to the
+// VFS, so the flag means nothing to it, and two syscalls run before the flagged open
+// anyway (resolveSystemCronPath's lstat of the whole path, and the open of the parent
+// directory that safefs.OpenFileUnderRoot performs to confine the final component).
+// Neither of those ever sees a flag of ours.
+//
+// What is at stake is not a slow probe. Two of the three probe callers reach
+// detectIndirectProxsaveCron, so runUpgrade, runInstall, upgradeFinalizePhase and
+// runInstallTUI stop with it, in the CLI and in the TUI alike, having printed nothing.
+//
+// A var so a test can shrink it. Two seconds is four orders of magnitude above what a
+// real probe costs, so a merely slow host is never cut off.
+var cronProbeTimeout = 2 * time.Second
 
 // indirectCronRef is one crontab line that appears to run ProxSave WITHOUT its
 // command token being the proxsave binary, i.e. exactly the shape
@@ -192,6 +219,10 @@ func indirectProxsaveCronRefs(lines []string, probeScriptContent bool) []indirec
 // two habitats can never drift into judging the same wrapper differently.
 func indirectProxsaveCronRefsWithToken(lines []string, probeScriptContent bool, commandToken func(string) string) []indirectCronRef {
 	var refs []indirectCronRef
+	// One deadline for the WHOLE crontab, not one per line: see cronProbeDeadline for why
+	// it latches. Built unconditionally, so the names-only path cannot diverge from the
+	// probing one; it costs nothing and no syscall.
+	deadline := newCronProbeDeadline()
 	for _, line := range lines {
 		token := strings.Trim(commandToken(line), "\"'")
 		if token == "" {
@@ -215,7 +246,7 @@ func indirectProxsaveCronRefsWithToken(lines []string, probeScriptContent bool, 
 		if probeScriptContent {
 			probed = true
 			var references bool
-			references, readable = scriptProxsaveProbe(token)
+			references, readable = scriptProxsaveProbe(deadline, token)
 			if references {
 				reason = fmt.Sprintf("script %s calls the proxsave binary", token)
 			}
@@ -226,7 +257,7 @@ func indirectProxsaveCronRefsWithToken(lines []string, probeScriptContent bool, 
 			// readability, and its only consumer is rule 4, which asks about the token's NAME;
 			// no runner basename carries "proxsave", so the two cannot interact.
 			if reason == "" {
-				if wrapped, ok := cronRunnerWrappedScript(line, token); ok {
+				if wrapped, ok := cronRunnerWrappedScript(deadline, line, token); ok {
 					reason = fmt.Sprintf("script %s calls the proxsave binary", wrapped)
 				}
 			}
@@ -399,7 +430,7 @@ func cronCommandTail(line, token string) []string {
 // systemd-cat, costs one advisory and never an action, and the alternative loses
 // "su - backup -c /path/wrapper", which operators do write. It follows exactly one level of
 // runner nesting per command position and never executes anything.
-func cronRunnerWrappedScript(line, token string) (string, bool) {
+func cronRunnerWrappedScript(deadline *cronProbeDeadline, line, token string) (string, bool) {
 	if _, isRunner := cronCommandRunners[strings.ToLower(filepath.Base(strings.Trim(token, "\"'")))]; !isRunner {
 		return "", false
 	}
@@ -419,7 +450,7 @@ func cronRunnerWrappedScript(line, token string) (string, bool) {
 			return false
 		}
 		budget--
-		references, _ := scriptProxsaveProbe(word)
+		references, _ := scriptProxsaveProbe(deadline, word)
 		if references {
 			wrapped = word
 		}
@@ -463,7 +494,7 @@ func shellWords(s string) []string {
 // Any failure (unreadable, too large, binary) returns false: see the false-negative
 // note on indirectProxsaveCronRefs for why "cannot tell" must not mean "suspicious".
 func scriptReferencesProxsave(token string) bool {
-	references, _ := scriptProxsaveProbe(token)
+	references, _ := scriptProxsaveProbe(newCronProbeDeadline(), token)
 	return references
 }
 
@@ -473,12 +504,97 @@ func scriptReferencesProxsave(token string) bool {
 // found nothing in is evidence of absence, while one we could not open says nothing either
 // way. Collapsing both into false is what made "proxsave-metrics-exporter" indistinguishable
 // from a compiled wrapper.
-func scriptProxsaveProbe(token string) (references bool, readable bool) {
+func scriptProxsaveProbe(deadline *cronProbeDeadline, token string) (references bool, readable bool) {
 	path := strings.Trim(token, "\"'")
+	// Lexical, so it stays here rather than in the scan: a relative command must not cost
+	// a goroutine, let alone a timeout.
 	if !filepath.IsAbs(path) {
 		return false, false
 	}
-	f, err := safefs.OpenFileUnderRoot(resolveSystemCronPath(path), os.O_RDONLY, 0)
+	return deadline.probe(path)
+}
+
+// cronProbeDeadline is the time bound for ONE crontab, carried from probe to probe by the
+// caller that reads it. It is passed rather than kept in a package var because it is
+// per-RUN state: the install screen runs one detection after another, and the second must
+// start clean.
+//
+// It LATCHES. maxCronWrapperProbesPerLine allows eight opens on a single line, so a
+// deadline that fired per probe would turn one dead mount into eight timeouts on the
+// first line and eight more on every line after it. Once one probe has run out of time,
+// every later probe of that crontab answers "could not tell" without touching the
+// filesystem at all.
+type cronProbeDeadline struct {
+	stalled bool
+}
+
+func newCronProbeDeadline() *cronProbeDeadline { return &cronProbeDeadline{} }
+
+// cronProbeScanFn is the seam a test swaps to stand in for the filesystem half of the
+// probe. Nothing but a test writes it.
+var cronProbeScanFn = scanScriptForProxsaveRefs
+
+// probe runs the scan under the deadline and reports the scan's two answers, or the pair
+// that means "could not tell" when the scan ran out of time or an earlier one already did.
+func (d *cronProbeDeadline) probe(path string) (references bool, readable bool) {
+	if d == nil {
+		// A nil deadline means a caller that has not got one, never "no limit".
+		d = newCronProbeDeadline()
+	}
+	if d.stalled {
+		return false, false
+	}
+	// Read on the CALLER's goroutine, so a test restoring the seam in t.Cleanup can never
+	// race the scan it started.
+	scan := cronProbeScanFn
+	// Buffered, so a scan abandoned at the deadline can still finish and be collected
+	// instead of parking on a send nobody will ever receive.
+	done := make(chan cronProbeVerdict, 1)
+	go func() {
+		refs, read := scan(path)
+		done <- cronProbeVerdict{references: refs, readable: read}
+	}()
+	// NewTimer and Stop, never time.After: a probe that answers in microseconds must not
+	// leave a two-second timer alive behind it.
+	timer := time.NewTimer(cronProbeTimeout)
+	defer timer.Stop()
+	select {
+	case got := <-done:
+		// A probe that ANSWERS costs the deadline nothing, however long it took. A merely
+		// slow host therefore keeps every detection it has today; only a real timeout
+		// changes what the rest of the crontab is allowed to do.
+		return got.references, got.readable
+	case <-timer.C:
+		d.stalled = true
+		return false, false
+	}
+}
+
+// cronProbeVerdict carries the scan's pair of answers off the goroutine it ran on. The
+// goroutine is ABANDONED on timeout and holds one OS thread until the kernel returns from
+// the syscall, which on a hard mount can be never: a syscall already in flight cannot be
+// cancelled from Go, and any design that waits for it is the hang being removed here. The
+// latch is what bounds that cost to one abandoned goroutine per crontab, so do not "fix"
+// this by waiting for the worker.
+type cronProbeVerdict struct {
+	references, readable bool
+}
+
+// scanScriptForProxsaveRefs is the filesystem half of the probe: everything that can
+// touch a disk lives here, so the deadline above has exactly one thing to bound.
+//
+// O_NONBLOCK is what makes the open answerable at all. Without it, open(2) on a fifo
+// with no writer waits for a writer forever; with it the open returns at once and the
+// fd-Stat below rejects the fifo. The flag reaches openat(2) unchanged, because
+// os.Root.OpenFile passes the caller's flags through; Linux ignores it for a regular
+// file, and the missing-file error comes back exactly as before.
+//
+// The Stat gate is LOAD-BEARING and must stay ahead of the read. A writer-less fifo
+// reads as immediate EOF, so a probe that reached the read would report "read it, found
+// nothing" - evidence of absence from a file nobody read - and rule 4, which fires only
+// when nothing could be read, would be skipped for it. That is issue #298 again.
+func scanScriptForProxsaveRefs(path string) (references bool, readable bool) {
+	f, err := safefs.OpenFileUnderRoot(resolveSystemCronPath(path), os.O_RDONLY|syscall.O_NONBLOCK, 0)
 	if err != nil {
 		return false, false
 	}
