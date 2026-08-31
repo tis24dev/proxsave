@@ -248,30 +248,33 @@ func schedulerTimeFromCronLines(lines []string) (string, bool) {
 // The ROOT crontab only. A proxsave line under /etc is deliberately not read here: ProxSave
 // never edits /etc, so that line SURVIVES the switch, and adopting its time would schedule the
 // daemon in the exact minute it already occupies.
-// It returns the hour it ADOPTED, or "" when it wrote nothing. The caller needs it to name the
-// time in its warning when the removal that hour was written for does not go through.
-func adoptSchedulerTimeForDaemon(configPath string, lines []string, bootstrap *logging.BootstrapLogger) string {
+// It returns NOTHING. It used to hand the adopted hour back so the caller could name the time
+// in its warning, and no caller ever did: prepareCronHandoverForDaemon recomputes the hour with
+// schedulerTimeFromCronLines(lines) and its own comment there explains why gating that warning on
+// the adoption is wrong. An adoption only happens when the hour CHANGES, so on the host ProxSave
+// installed itself nothing is adopted and the returned hour was empty on exactly the host whose
+// surviving cron line shares the daemon's minute.
+func adoptSchedulerTimeForDaemon(configPath string, lines []string, bootstrap *logging.BootstrapLogger) {
 	configPath = strings.TrimSpace(configPath)
 	if configPath == "" {
-		return ""
+		return
 	}
 	hhmm, ok := schedulerTimeFromCronLines(lines)
 	if !ok {
-		return ""
+		return
 	}
 	data, err := safefs.ReadFileUnderRoot(configPath)
 	if err != nil {
-		return ""
+		return
 	}
 	if strings.TrimSpace(installer.DeriveInstallWizardPrefill(string(data)).SchedulerTime) == hhmm {
-		return ""
+		return
 	}
 	if err := setBackupEnvKeys(configPath, map[string]string{"SCHEDULER_TIME": hhmm}); err != nil {
 		logging.DebugStepBootstrap(bootstrap, "daemon setup", "could not record the adopted run time: %v", err)
-		return ""
+		return
 	}
 	logBootstrapInfo(bootstrap, "SCHEDULER_TIME set to %s, the time of the proxsave cron entry this switch removes, so the daily run time does not change.", hhmm)
-	return hhmm
 }
 
 // reportUnremovedCronEntry tells the operator that the proxsave cron entry ProxSave has just
