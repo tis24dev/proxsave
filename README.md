@@ -39,10 +39,19 @@ bash -c "$(curl -fsSL https://raw.githubusercontent.com/tis24dev/proxsave/main/i
 ```
 You can find the installation script source [here](./install.sh).
 
-🔒 The installer and `proxsave --upgrade` verify each release's signature before installing — for releases that publish `SHA256SUMS.sig` — so only authentic, untampered builds ever run ([details](./docs/PROVENANCE_VERIFICATION.md#release-signature-sha256sumssig)).
+🔒 The installer and `proxsave --upgrade` verify each release's signature before installing, for releases that publish `SHA256SUMS.sig`, so only authentic, untampered builds ever run ([details](./docs/PROVENANCE_VERIFICATION.md#release-signature-sha256sumssig)).
 
 > [!NOTE]
 > Please refer to the [docs](./docs/INSTALL.md) for more information about the installation.
+
+### External Upgrade
+The built-in --upgrade command starts the upgrade process based on the code of the currently installed version. Therefore, if the upgrade mechanism itself changes, those changes will only be available after two releases, not during the first upgrade.
+
+To handle this **exceptional and very unlikely situation**, you can directly run the upgrade using the new binary with:
+
+```bash
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/tis24dev/proxsave/main/install.sh)" -- --upgrade
+```
 
 ## Guide
 
