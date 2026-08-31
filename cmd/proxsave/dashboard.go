@@ -547,6 +547,27 @@ const daemonResultActionBack daemonResultAction = iota
 // or fails on where a line happened to wrap.
 var showDaemonResultScreenFn = showDaemonResultScreen
 
+// daemonFailureScreenText is the body of the generic daemon failure screen: the one fact the
+// operator cannot get from the error string, then the error itself indented under it, which is
+// the shape buildCronRevertScreen already uses for a teardown error.
+//
+// The fact is worth a line because installDaemonService fails in four places and they leave
+// two different hosts behind. Validating the exec/config tokens and writing the unit file
+// leave nothing (the write is atomic, so there is no half-file); daemon-reload and
+// enable --now fail with the unit file already on disk. Told only the error, the operator
+// could not tell whether there was something to clean up before retrying.
+//
+// The sentence claims exactly what daemonUnitInstalled measures, which is one os.Stat of the
+// unit path. Not "enabled", not "not started": the probe cannot see either, and this screen is
+// reached from the disable direction too, where a leftover unit means the opposite thing.
+func daemonFailureScreenText(opErr error) string {
+	unit := "Daemon service: no unit file on disk."
+	if daemonInstalledProbe() {
+		unit = "Daemon service: the unit file is on disk."
+	}
+	return unit + "\n  " + opErr.Error()
+}
+
 func showDaemonResultScreen(ctx context.Context, session *shell.Session, title string, level orchestrator.HealthcheckSetupLevel, keyword, explanation string) {
 	errDaemonResultEsc := errors.New("daemon result: esc")
 	prompt := orchestrator.BuildStatusPrompt(level, keyword, explanation)
@@ -646,7 +667,7 @@ func runDashboardDaemonAdmin(ctx context.Context, session *shell.Session, instal
 			showDaemonResultScreenFn(ctx, session, "Daemon disable failed", level, keyword, text)
 			return
 		}
-		showDaemonResultScreenFn(ctx, session, title+" failed", orchestrator.HealthcheckSetupLevelError, "FAILED", opErr.Error())
+		showDaemonResultScreenFn(ctx, session, title+" failed", orchestrator.HealthcheckSetupLevelError, "FAILED", daemonFailureScreenText(opErr))
 		return
 	}
 	// The result screen is the only channel that reaches the operator here (console logging

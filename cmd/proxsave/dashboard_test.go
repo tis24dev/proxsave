@@ -1364,6 +1364,65 @@ func TestDashboardDaemonRevertListsBothHabitats(t *testing.T) {
 	}
 }
 
+// A failed install leaves the host in one of two states and the screen used to name neither.
+// installDaemonService writes the unit file atomically and THEN runs daemon-reload and
+// enable --now, so a failure in either of the last two leaves a unit file on disk while a
+// failure in the first two leaves nothing. The operator saw only the error string and could
+// not tell whether there was something to clean up before retrying.
+//
+// The sentence says exactly what daemonUnitInstalled measures, which is one os.Stat of the
+// unit path, and nothing about enabled or running: the probe cannot see either.
+func TestDashboardDaemonInstallFailureSaysWhetherAUnitWasLeftBehind(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		installed bool
+		want      string
+	}{
+		{"the unit file was written before the failure", true, "Daemon service: the unit file is on disk."},
+		{"the failure came before the unit file was written", false, "Daemon service: no unit file on disk."},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			installDashboardGates(t, true, true)
+			origShow, origProbe := showDaemonResultScreenFn, daemonInstalledProbe
+			t.Cleanup(func() { showDaemonResultScreenFn, daemonInstalledProbe = origShow, origProbe })
+			daemonInstalledProbe = func() bool { return tc.installed }
+			daemonApplyDaemonMode = func(context.Context, *config.Config, string, string, *logging.BootstrapLogger) (cronRemovalOutcome, error) {
+				return cronRemovalOutcome{}, errors.New("systemctl enable --now failed: exit status 1")
+			}
+			ch := make(chan string, 1)
+			showDaemonResultScreenFn = func(_ context.Context, _ *shell.Session, _ string, _ orchestrator.HealthcheckSetupLevel, _ string, explanation string) {
+				ch <- explanation
+			}
+
+			driver := installDashboardSessionSeam(t)
+			res := driver.spawn(&cli.Args{})
+			driver.waitScreen("Dashboard")
+			driver.keys("down down down down down down down down down enter") // Install daemon
+
+			var text string
+			select {
+			case text = <-ch:
+			case <-time.After(uitest.Deadline(60 * time.Second)):
+				t.Fatal("the failed install never reached the result screen")
+			}
+			driver.waitScreen("Dashboard")
+			driver.keys("esc")
+			select {
+			case <-res:
+			case <-time.After(uitest.Deadline(60 * time.Second)):
+				t.Fatal("dashboard did not resolve")
+			}
+
+			// The fact first, then the error indented under it, which is the shape the
+			// revert screen already uses for a teardown error.
+			want := tc.want + "\n  systemctl enable --now failed: exit status 1"
+			if text != want {
+				t.Errorf("the failure screen reads:\n%s\nwant:\n%s", text, want)
+			}
+		})
+	}
+}
+
 // The failure screen the revert renders is the WRONG one for an install. applyDaemonMode's only
 // error return is installDaemonService's, which fires before any cron or config work, so the
 // report it hands back is a zero value: rendering it would tell the operator, on a host where
