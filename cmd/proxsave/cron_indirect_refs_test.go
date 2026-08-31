@@ -1,0 +1,1769 @@
+// Package main contains the proxsave command entrypoint.
+package main
+
+import (
+	"bytes"
+	"context"
+	"errors"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"github.com/tis24dev/proxsave/internal/config"
+	"github.com/tis24dev/proxsave/internal/cron"
+	"github.com/tis24dev/proxsave/internal/logging"
+	"github.com/tis24dev/proxsave/internal/types"
+)
+
+// The detector's verdict on a NAMED command depends on whether that command can be READ: the
+// content probe decides whenever it can, and only when it cannot does the name get a vote
+// (TestNameRuleOnlyFiresWhenTheScriptCannotBeRead). A fixture that hardcodes an absolute host
+// path therefore hands the verdict to the machine running the suite. Seven tests did, and they
+// passed only because no /usr/local/sbin/proxsave-nas-guard happens to exist here: the same
+// cron line classifies the other way the moment a host has one, and the suite would then fail
+// on a real operator's machine for a reason that has nothing to do with the code.
+//
+// absentWrapper puts that wrapper under the test's own temp dir, which the framework
+// guarantees is fresh and empty, so "could not be read" is a property of the fixture.
+func absentWrapper(t *testing.T) string {
+	t.Helper()
+	return filepath.Join(t.TempDir(), "proxsave-nas-guard")
+}
+
+// unrelatedCommand is the ordinary operator job no rule may fire on. It lives under the temp
+// dir for the same reason: the probe opens whatever the cron line names, and /usr/bin/rsync is
+// the host's file, not the test's.
+func unrelatedCommand(t *testing.T) string {
+	t.Helper()
+	p := filepath.Join(t.TempDir(), "rsync")
+	if err := os.WriteFile(p, []byte("#!/bin/sh\nexec rsync \"$@\"\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return p
+}
+
+// #298: a cron line that invokes ProxSave INDIRECTLY (an operator wrapper script,
+// a shell -c, a runner like flock/sudo) must be visible to the daemon migration,
+// while every line the narrow command-token matcher deliberately protects must stay
+// invisible. The negatives here are the contract: commandTokenMatchesTarget keeps
+// its exact semantics and this detector must not become a substring scan by proxy.
+//
+// The table runs in cronProbeNamesOnly mode so the verdicts are purely lexical and
+// cannot depend on what happens to exist on the machine running the test; the
+// content probe has its own test below.
+func TestIndirectProxsaveCronRefs(t *testing.T) {
+	tests := []struct {
+		name string
+		line string
+		want bool
+	}{
+		// The reported host (#298): a wrapper that checks the NAS mount is CIFS
+		// before invoking ProxSave. Basename "proxsave-nas-guard" -> not canonical.
+		{"wrapper named after proxsave", "00 02 * * * /usr/local/sbin/proxsave-nas-guard", true},
+		{"wrapper with underscore", "@daily /usr/local/sbin/proxsave_wrapper.sh", true},
+		{"wrapper with proxsave as a trailing component", "@daily /usr/local/sbin/wrap-proxsave.sh", true},
+		{"script inside the install tree", "0 1 * * * /opt/proxsave/script/proxmox-backup.sh", true},
+		{"shell -c naming the binary", "0 3 * * * /bin/bash -c 'mountpoint -q /mnt/nas && /usr/local/bin/proxsave --backup'", true},
+		{"flock wrapping the binary", "0 3 * * * /usr/bin/flock -n /var/lock/ps.lock /usr/local/bin/proxsave --backup", true},
+		{"sudo running a non-canonical install", "0 3 * * * /usr/bin/sudo /opt/proxsave/proxsave --backup", true},
+
+		// Canonical entries are NOT indirect: dropCanonicalCronLines owns them, and
+		// reporting them would turn every ordinary host into a refusal.
+		{"canonical proxsave entry", "0 2 * * * /usr/local/bin/proxsave --backup", false},
+		{"canonical legacy entry", "0 2 * * * /usr/local/bin/proxmox-backup --backup", false},
+
+		// Stock PBS binaries live on nearly every target host. Flagging them would
+		// refuse the migration almost everywhere.
+		{"PBS client", "0 1 * * * /usr/bin/proxmox-backup-client backup root.pxar:/etc", false},
+		{"PBS proxy", "0 2 * * * /usr/sbin/proxmox-backup-proxy", false},
+		{"PBS config directory", "0 1 * * * /etc/proxmox-backup/hook.sh", false},
+
+		// Existing guarantees that must not regress (TestFilterCronLines pins them
+		// for the removal path; they must not become refusals either).
+		{"prefix-sharing binary", "0 2 * * * /usr/local/bin/proxsavex", false},
+		{"proxmox-backup-new", "0 2 * * * /usr/local/bin/proxmox-backup-new", false},
+		{"proxmox-backup-dog", "0 2 * * * /usr/bin/proxmox-backup-dog", false},
+		{"binary passed only as an argument", "0 4 * * * /usr/bin/cp /usr/local/bin/proxsave /backup/proxsave.bak", false},
+		{"legacy script passed only as an argument", "0 5 * * * /bin/echo /opt/proxsave/script/proxmox-backup.sh", false},
+		{"operator PBS job", "0 12 * * * /mnt/pve/nas/scripts/proxmox/proxmox-backup-client/backup_folders-nightly.sh 1.2.3.4 h1 /mnt/pve/nas", false},
+		{"unrelated job", "0 2 * * * /usr/bin/rsync /a /b", false},
+		{"commented-out wrapper", "# 00 02 * * * /usr/local/sbin/proxsave-nas-guard", false},
+		{"env assignment", "MAILTO=root", false},
+		{"blank line", "", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			refs := indirectProxsaveCronRefs([]string{tt.line}, cronProbeNamesOnly)
+			if got := len(refs) > 0; got != tt.want {
+				t.Fatalf("indirectProxsaveCronRefs(%q) flagged=%v, want %v (refs=%v)", tt.line, got, tt.want, refs)
+			}
+			if len(refs) == 1 {
+				if refs[0].Line != strings.TrimSpace(tt.line) {
+					t.Errorf("Line = %q, want the crontab line verbatim", refs[0].Line)
+				}
+				if refs[0].Reason == "" {
+					t.Error("every finding must carry an operator-facing reason")
+				}
+			}
+		})
+	}
+
+	// wrapperCronLines is the plain-lines adapter applyCronMode's fallback consults.
+	// It must agree with the detector and hand back the line verbatim, because that is
+	// what gets echoed to the operator on a revert.
+	wrapper := "00 02 * * * " + absentWrapper(t)
+	got := wrapperCronLines([]string{"0 6 * * * " + unrelatedCommand(t) + " /a /b", wrapper, "0 2 * * * /usr/local/bin/proxsave --backup"})
+	if len(got) != 1 || got[0] != wrapper {
+		t.Fatalf("wrapperCronLines must return exactly the wrapper line verbatim, got %v", got)
+	}
+}
+
+// The content probe is the last resort for a wrapper whose NAME gives nothing away
+// (the residual silent-duplicate case). It must fire on a small text script that
+// calls the binary by path, and must stay off for everything it cannot read as a
+// script - otherwise every ordinary cron command on the host would be "suspicious".
+func TestIndirectProxsaveCronRefsContentProbe(t *testing.T) {
+	dir := t.TempDir()
+	write := func(name string, content []byte) string {
+		p := filepath.Join(dir, name)
+		if err := os.WriteFile(p, content, 0o700); err != nil {
+			t.Fatalf("write %s: %v", name, err)
+		}
+		return p
+	}
+
+	wrapper := write("nas-guard", []byte("#!/bin/sh\nmountpoint -q /mnt/nas || exit 0\nexec /usr/local/bin/proxsave --backup\n"))
+	neutral := write("rotate-logs", []byte("#!/bin/sh\nlogrotate -f /etc/logrotate.conf\n"))
+	mention := write("notes.sh", []byte("#!/bin/sh\n# we used to run proxsave here, now handled elsewhere\ntrue\n"))
+	binary := write("compiled", append([]byte("\x7fELF\x00\x00/usr/local/bin/proxsave"), 0x00))
+	oversized := write("huge.sh", append([]byte("#!/bin/sh\n/usr/local/bin/proxsave --backup\n"), make([]byte, maxCronWrapperProbeBytes)...))
+
+	flagged := func(path string, probe bool) bool {
+		return len(indirectProxsaveCronRefs([]string{"0 2 * * * " + path}, probe)) > 0
+	}
+
+	if !flagged(wrapper, cronProbeReadScripts) {
+		t.Error("a neutrally named wrapper that calls the binary by path must be detected")
+	}
+	if flagged(wrapper, cronProbeNamesOnly) {
+		t.Error("cronProbeNamesOnly must not read the script (the wizard and --upgrade-config-json rely on it)")
+	}
+	if flagged(neutral, cronProbeReadScripts) {
+		t.Error("an unrelated script must not be flagged")
+	}
+	if flagged(mention, cronProbeReadScripts) {
+		t.Error("a bare prose mention of proxsave must not block a migration; only a path reference counts")
+	}
+	if flagged(binary, cronProbeReadScripts) {
+		t.Error("a compiled binary must be skipped, not scanned")
+	}
+	if flagged(oversized, cronProbeReadScripts) {
+		t.Error("a file past maxCronWrapperProbeBytes must be left unread")
+	}
+	if flagged(filepath.Join(dir, "does-not-exist"), cronProbeReadScripts) {
+		t.Error("an unreadable command must not be treated as suspicious")
+	}
+}
+
+// The probe reads a script to answer "does this RUN the binary". It used to answer "does the
+// word appear anywhere", so any script that named a proxsave PATH matched: an rsync of the
+// install directory, a find over the log file, a test that the binary exists. That verdict
+// decides whether an --upgrade refuses to migrate and what a revert reports, so a script that
+// touches a proxsave path without ever executing it must not count.
+//
+// The rule is command POSITION: the reference has to be the command of some segment of the
+// line, allowing for a leading runner (sudo, flock, the shell list) and for leading
+// environment assignments, exactly as the crontab-line rule already allows.
+func TestContentProbeRequiresCommandPosition(t *testing.T) {
+	dir := t.TempDir()
+	write := func(name, body string) string {
+		t.Helper()
+		p := filepath.Join(dir, name)
+		if err := os.WriteFile(p, []byte(body), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	flagged := func(path string) bool {
+		return len(indirectProxsaveCronRefs([]string{"0 2 * * * " + path}, cronProbeReadScripts)) > 0
+	}
+
+	for _, tc := range []struct {
+		name string
+		body string
+		want bool
+	}{
+		// It really does run it.
+		{"direct call", "#!/bin/sh\n/usr/local/bin/proxsave --backup\n", true},
+		{"after a mount guard", "#!/bin/sh\nmountpoint -q /mnt/nas || exit 0\nexec /usr/local/bin/proxsave --backup\n", true},
+		{"behind a runner", "#!/bin/sh\nflock -n /var/lock/ps.lock /usr/local/bin/proxsave --backup\n", true},
+		{"after a separator", "#!/bin/sh\nsync && /usr/local/bin/proxsave --backup\n", true},
+		{"through a pipe segment", "#!/bin/sh\ncat /dev/null | /usr/local/bin/proxsave --backup\n", true},
+		{"with a leading env assignment", "#!/bin/sh\nTZ=UTC /usr/local/bin/proxsave --backup\n", true},
+		{"indented inside a block", "#!/bin/sh\nif true; then\n\t/usr/local/bin/proxsave --backup\nfi\n", true},
+
+		// It only names a path.
+		{"mirrors the install directory", "#!/bin/sh\nrsync -a /opt/proxsave/ /mnt/nas/proxsave-copy/\n", false},
+		{"prunes the log file", "#!/bin/sh\nfind /var/log/proxsave.log -mtime +7 -delete\n", false},
+		{"checks the binary exists", "#!/bin/sh\ntest -x /usr/local/bin/proxsave || echo missing\n", false},
+		{"copies the binary", "#!/bin/sh\ncp /usr/local/bin/proxsave /backup/proxsave.bak\n", false},
+		{"names it in a comment", "#!/bin/sh\n# /usr/local/bin/proxsave used to run here\ntrue\n", false},
+		// A commented-out command still contains shell operators, so the segment split alone
+		// would hand its tail back as a command position.
+		{"commented-out call with an operator", "#!/bin/sh\n# sync && /usr/local/bin/proxsave --backup\ntrue\n", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := flagged(write(strings.ReplaceAll(tc.name, " ", "-")+".sh", tc.body)); got != tc.want {
+				t.Errorf("flagged = %v, want %v for:\n%s", got, tc.want, tc.body)
+			}
+		})
+	}
+}
+
+// The command-position rule had one category, "runner", doing two different jobs badly. A runner
+// opened the WHOLE rest of the segment to matching, because flock puts its own operands between
+// itself and the command; that let `sudo cp /usr/local/bin/proxsave /backup/` match on an
+// argument. And a word that is not a runner ended the segment, so `if`, `while` and `!` - which
+// consume nothing at all - hid the command right behind them.
+//
+// Three categories now: prefixes that consume one word, launchers whose options and operands are
+// skipped before the command position resumes, and shells whose -c argument is a nested line.
+// Plus a variable resolved only when it is USED as a command, which is what separates a wrapper
+// holding the binary path from a script holding a directory path it merely copies.
+func TestScriptProbeCommandPositionCategories(t *testing.T) {
+	dir := t.TempDir()
+	flagged := func(t *testing.T, body string) bool {
+		t.Helper()
+		p := filepath.Join(dir, strings.ReplaceAll(t.Name(), "/", "_")+".sh")
+		if err := os.WriteFile(p, []byte(body), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		return len(indirectProxsaveCronRefs([]string{"0 2 * * * " + p}, cronProbeReadScripts)) > 0
+	}
+
+	for _, tc := range []struct {
+		name string
+		body string
+		want bool
+	}{
+		// Prefixes consume exactly one word; the command is right behind them.
+		{"if", "#!/bin/sh\nif /usr/local/bin/proxsave --check; then echo ok; fi\n", true},
+		{"while with a negation", "#!/bin/sh\nwhile ! /usr/local/bin/proxsave --backup; do sleep 5; done\n", true},
+		{"until", "#!/bin/sh\nuntil /usr/local/bin/proxsave --backup; do sleep 5; done\n", true},
+		{"bare negation", "#!/bin/sh\n! /usr/local/bin/proxsave --backup\n", true},
+		{"elif", "#!/bin/sh\nif false; then true; elif /usr/local/bin/proxsave --backup; then true; fi\n", true},
+		{"exec", "#!/bin/sh\nexec /usr/local/bin/proxsave --backup\n", true},
+
+		// Launchers: options and their own operands are skipped, then the command position
+		// resumes. It does NOT reopen the whole segment.
+		{"sudo runs it", "#!/bin/sh\nsudo /usr/local/bin/proxsave --backup\n", true},
+		{"sudo only copies it", "#!/bin/sh\nsudo cp /usr/local/bin/proxsave /backup/proxsave.bak\n", false},
+		{"flock runs it", "#!/bin/sh\nflock -n /var/lock/ps.lock /usr/local/bin/proxsave --backup\n", true},
+		// flock's own documented form: options may follow the lock file too, and the command
+		// after them is still the command. Landing on "-c" answered false, so the wrapper went
+		// unseen.
+		{"flock with -c after the lock file", "#!/bin/sh\nflock -n /var/lock/ps.lock -c '/usr/local/bin/proxsave --backup'\n", true},
+		{"flock -c running something else", "#!/bin/sh\nflock -n /var/lock/x -c 'cp /usr/local/bin/proxsave /backup/'\n", false},
+		{"flock only prunes its log", "#!/bin/sh\nflock -n /var/lock/x find /var/log/proxsave.log -delete\n", false},
+		{"timeout runs it", "#!/bin/sh\ntimeout 3600 /usr/local/bin/proxsave --backup\n", true},
+		{"timeout only stats it", "#!/bin/sh\ntimeout 5 stat /usr/local/bin/proxsave\n", false},
+		{"env runs it", "#!/bin/sh\nenv TZ=UTC /usr/local/bin/proxsave --backup\n", true},
+		{"xargs only removes its logs", "#!/bin/sh\nls | xargs rm /var/log/proxsave.log\n", false},
+
+		// A shell's -c argument is a script of its own.
+		{"sh -c runs it", "#!/bin/sh\nsh -c '/usr/local/bin/proxsave --backup'\n", true},
+		{"sh -c only copies it", "#!/bin/sh\nsh -c 'cp /usr/local/bin/proxsave /backup/'\n", false},
+
+		// The four opaque launchers put the command somewhere this parser does not model, so
+		// they keep the documented broad scan over the rest of the segment. Untested, that
+		// branch could be deleted whole and the suite would still pass.
+		{"an opaque launcher", "#!/bin/sh\nsu - backup -c '/usr/local/bin/proxsave --backup'\n", true},
+
+		// A variable is resolved only where it stands in command position.
+		{"the binary path held in a variable", "#!/bin/sh\nBIN=/usr/local/bin/proxsave\n$BIN --backup\n", true},
+		{"braced form", "#!/bin/sh\nBIN=/usr/local/bin/proxsave\n${BIN} --backup\n", true},
+		{"quoted form behind a prefix", "#!/bin/sh\nBIN=/usr/local/bin/proxsave\nif \"$BIN\" --check; then true; fi\n", true},
+		{"a directory held in a variable and only copied", "#!/bin/sh\nSRC=/opt/proxsave/\nrsync -a \"$SRC\" /mnt/nas/\n", false},
+		{"an unrelated variable", "#!/bin/sh\nBIN=/usr/bin/rsync\n$BIN -a /a /b\n", false},
+
+		// The cases the earlier fix already got right must stay right.
+		{"plain call", "#!/bin/sh\n/usr/local/bin/proxsave --backup\n", true},
+		{"after a separator", "#!/bin/sh\nsync && /usr/local/bin/proxsave --backup\n", true},
+		{"mirrors the install directory", "#!/bin/sh\nrsync -a /opt/proxsave/ /mnt/nas/proxsave-copy/\n", false},
+		{"prunes the log file", "#!/bin/sh\nfind /var/log/proxsave.log -mtime +7 -delete\n", false},
+		{"commented-out call with an operator", "#!/bin/sh\n# sync && /usr/local/bin/proxsave --backup\ntrue\n", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := flagged(t, tc.body); got != tc.want {
+				t.Errorf("flagged = %v, want %v for:\n%s", got, tc.want, tc.body)
+			}
+		})
+	}
+}
+
+// A here-document body is DATA, not code. A wrapper that prints usage text, writes a README or
+// pipes a message to mail can name the backup command inside one, and reading those lines as
+// commands turns a script that documents ProxSave into a script that runs it: an unattended
+// --upgrade then refuses to migrate a host that has nothing scheduled at all.
+func TestScriptProbeSkipsHereDocumentBodies(t *testing.T) {
+	dir := t.TempDir()
+	flagged := func(t *testing.T, body string) bool {
+		t.Helper()
+		p := filepath.Join(dir, strings.ReplaceAll(t.Name(), "/", "_")+".sh")
+		if err := os.WriteFile(p, []byte(body), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		return len(indirectProxsaveCronRefs([]string{"0 2 * * * " + p}, cronProbeReadScripts)) > 0
+	}
+
+	for _, tc := range []struct {
+		name string
+		body string
+		want bool
+	}{
+		{"usage text naming the command", "#!/bin/sh\ncat <<EOF\nRun /usr/local/bin/proxsave --backup by hand if this fails.\nEOF\nexit 0\n", false},
+		{"quoted delimiter", "#!/bin/sh\ncat <<'EOF'\n/usr/local/bin/proxsave --backup\nEOF\n", false},
+		{"tab-stripping form", "#!/bin/sh\ncat <<-EOF\n\t/usr/local/bin/proxsave --backup\n\tEOF\n", false},
+		// The body ends at its delimiter: what comes after is code again.
+		{"a real call after the body", "#!/bin/sh\ncat <<EOF\ndocs mention /usr/local/bin/proxsave\nEOF\n/usr/local/bin/proxsave --backup\n", true},
+		// An unterminated here-doc runs to the end of file, which is what the shell does too.
+		{"unterminated body", "#!/bin/sh\ncat <<EOF\n/usr/local/bin/proxsave --backup\n", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := flagged(t, tc.body); got != tc.want {
+				t.Errorf("flagged = %v, want %v for:\n%s", got, tc.want, tc.body)
+			}
+		})
+	}
+}
+
+// An option that takes a VALUE hid the command behind it. skipLauncherOptions dropped words
+// starting with "-" and stopped at the first that did not, which for "flock -w 600 /lock cmd" is
+// the option's value 600: that got mistaken for the lock file, and the command position landed
+// past the command. The same shape hides a wrapper behind sudo -u, timeout -k, env -u, nice -n
+// and ionice -c.
+//
+// A miss here is not one lost advisory. scriptProxsaveProbe feeds the --upgrade refusal, the
+// duplicate count on a revert, the /etc scan and the run-time note, so an unseen wrapper means
+// an unattended upgrade installs the daemon next to a live backup: issue #298 exactly.
+func TestScriptProbeHandlesOptionsThatTakeAValue(t *testing.T) {
+	dir := t.TempDir()
+	flagged := func(t *testing.T, body string) bool {
+		t.Helper()
+		p := filepath.Join(dir, strings.ReplaceAll(t.Name(), "/", "_")+".sh")
+		if err := os.WriteFile(p, []byte(body), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		return len(indirectProxsaveCronRefs([]string{"0 2 * * * " + p}, cronProbeReadScripts)) > 0
+	}
+	const bin = "/usr/local/bin/proxsave --backup"
+
+	for _, tc := range []struct {
+		name string
+		body string
+		want bool
+	}{
+		// Launchers whose option takes a separate value word.
+		{"flock with a timeout", "#!/bin/sh\nflock -w 600 /var/lock/g.lock " + bin + "\n", true},
+		{"flock with a long timeout", "#!/bin/sh\nflock --timeout 600 /var/lock/g.lock " + bin + "\n", true},
+		{"sudo as a user", "#!/bin/sh\nsudo -u root " + bin + "\n", true},
+		{"sudo with an end-of-options marker", "#!/bin/sh\nsudo -u root -- " + bin + "\n", true},
+		{"timeout with a kill delay", "#!/bin/sh\ntimeout -k 5 3600 " + bin + "\n", true},
+		{"env unsetting a variable", "#!/bin/sh\nenv -u LANG " + bin + "\n", true},
+
+		// The eight that were classified as consuming nothing while they take options.
+		{"nice with a level", "#!/bin/sh\nnice -n 19 " + bin + "\n", true},
+		{"nice with a bundled level", "#!/bin/sh\nnice -19 " + bin + "\n", true},
+		{"ionice bundled", "#!/bin/sh\nionice -c3 " + bin + "\n", true},
+		{"ionice with separate values", "#!/bin/sh\nionice -c 3 -n 7 " + bin + "\n", true},
+		{"stdbuf line buffering", "#!/bin/sh\nstdbuf -oL " + bin + "\n", true},
+		{"setsid detached", "#!/bin/sh\nsetsid -f " + bin + "\n", true},
+		{"nohup", "#!/bin/sh\nnohup " + bin + "\n", true},
+		{"chronic", "#!/bin/sh\nchronic " + bin + "\n", true},
+		{"eatmydata", "#!/bin/sh\neatmydata " + bin + "\n", true},
+		{"time -p", "#!/bin/sh\ntime -p " + bin + "\n", true},
+
+		// The false positives these launchers must still not produce: the command position is
+		// past the options, not the whole rest of the line.
+		{"nice running something else", "#!/bin/sh\nnice -n 19 cp /usr/local/bin/proxsave /backup/\n", false},
+		{"flock running something else", "#!/bin/sh\nflock -w 60 /var/lock/x find /var/log/proxsave.log -delete\n", false},
+		{"sudo running something else", "#!/bin/sh\nsudo -u root cp /usr/local/bin/proxsave /backup/\n", false},
+
+		// command -v is a query, not a run, and must stay a query.
+		{"command runs it", "#!/bin/sh\ncommand " + bin + "\n", true},
+		{"command -v only asks where it is", "#!/bin/sh\ncommand -v proxsave >/dev/null\n", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := flagged(t, tc.body); got != tc.want {
+				t.Errorf("flagged = %v, want %v for:\n%s", got, tc.want, tc.body)
+			}
+		})
+	}
+}
+
+// A backslash at the end of a line joins it to the next one. Read as two lines, the second one
+// starts at a command position it does not have, so a path named as an ARGUMENT on the
+// continuation reads as a command: the rsync mirror the command-position rule exists to stop
+// flagging came straight back the moment it was written across two lines.
+func TestScriptProbeJoinsLineContinuations(t *testing.T) {
+	dir := t.TempDir()
+	flagged := func(t *testing.T, body string) bool {
+		t.Helper()
+		p := filepath.Join(dir, strings.ReplaceAll(t.Name(), "/", "_")+".sh")
+		if err := os.WriteFile(p, []byte(body), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		return len(indirectProxsaveCronRefs([]string{"0 2 * * * " + p}, cronProbeReadScripts)) > 0
+	}
+
+	for _, tc := range []struct {
+		name string
+		body string
+		want bool
+	}{
+		{"a mirror written across two lines", "#!/bin/sh\nrsync -a --delete \\\n  /opt/proxsave/ /mnt/nas/\n", false},
+		{"an argument list broken up", "#!/bin/sh\ncp \\\n  /usr/local/bin/proxsave \\\n  /backup/proxsave.bak\n", false},
+		// Joining must not lose a real call that happens to be continued.
+		{"a call written across two lines", "#!/bin/sh\n/usr/local/bin/proxsave \\\n  --backup\n", true},
+		{"a launcher and its command split", "#!/bin/sh\nflock -n /var/lock/x \\\n  /usr/local/bin/proxsave --backup\n", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := flagged(t, tc.body); got != tc.want {
+				t.Errorf("flagged = %v, want %v for:\n%s", got, tc.want, tc.body)
+			}
+		})
+	}
+}
+
+// The here-doc pass drops the BODY of a here-document, and it decided a body had started from the
+// first "<<" on the line. Shell only opens one when that "<<" is a redirection: inside a comment,
+// inside a string, or inside an arithmetic expansion it is not. Getting that wrong is not a
+// missed line, it is the rest of the FILE: everything up to a delimiter that never arrives is
+// discarded, the probe answers "read it, found nothing", and that answer also suppresses the
+// name fallback, so a wrapper called proxsave-nas-guard goes invisible too.
+//
+// Line joining has the same shape of error in the other direction: shell does not continue a
+// COMMENT, so a comment ending in a backslash that swallows the next line hides a real call.
+func TestScriptProbeRecognisesWhichMarkersAreReal(t *testing.T) {
+	dir := t.TempDir()
+	flagged := func(t *testing.T, body string) bool {
+		t.Helper()
+		p := filepath.Join(dir, strings.ReplaceAll(t.Name(), "/", "_")+".sh")
+		if err := os.WriteFile(p, []byte(body), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		return len(indirectProxsaveCronRefs([]string{"0 2 * * * " + p}, cronProbeReadScripts)) > 0
+	}
+	const call = "/usr/local/bin/proxsave --backup\n"
+
+	for _, tc := range []struct {
+		name string
+		body string
+		want bool
+	}{
+		// "<<" that opens nothing: the call below it must survive.
+		{"inside a comment", "#!/bin/sh\n# see docs/cron.md << section 3\n" + call, true},
+		{"inside an arithmetic expansion", "#!/bin/sh\nMAX=$(( 1 << 20 ))\n" + call, true},
+		// ...but an arithmetic expansion that CLOSED earlier on the line does not make the
+		// redirection after it any less real, and its body is still data.
+		{"after a closed arithmetic expansion", "#!/bin/sh\nN=$(( 1 + 2 )); cat <<EOF\n" + call + "EOF\n", false},
+		{"inside a double-quoted string", "#!/bin/sh\nlogger \"budget << 3 files\"\n" + call, true},
+		{"inside a single-quoted string", "#!/bin/sh\nlogger 'budget << 3 files'\n" + call, true},
+		{"a here-string is not a here-doc", "#!/bin/sh\ngrep proxsave <<< \"$LIST\"\n" + call, true},
+
+		// A real here-doc still hides its body, and still ends at its delimiter.
+		{"a real body is still data", "#!/bin/sh\ncat <<EOF\n" + call + "EOF\nexit 0\n", false},
+		{"code after the body still counts", "#!/bin/sh\ncat <<EOF\nsee the manual\nEOF\n" + call, true},
+
+		// A comment does not continue onto the next line.
+		{"a comment ending in a backslash", "#!/bin/sh\n# old command \\\n" + call, true},
+		// A real continuation still joins.
+		{"a real continuation still joins", "#!/bin/sh\nrsync -a --delete \\\n  /opt/proxsave/ /mnt/nas/\n", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := flagged(t, tc.body); got != tc.want {
+				t.Errorf("flagged = %v, want %v for:\n%s", got, tc.want, tc.body)
+			}
+		})
+	}
+}
+
+// env -S takes a whole command STRING as its value, the way sh -c does. Listing it among the
+// options whose value is to be skipped threw away the very command it was pointing at.
+func TestScriptProbeSeesTheCommandEnvSplitStringCarries(t *testing.T) {
+	dir := t.TempDir()
+	flagged := func(t *testing.T, body string) bool {
+		t.Helper()
+		p := filepath.Join(dir, strings.ReplaceAll(t.Name(), "/", "_")+".sh")
+		if err := os.WriteFile(p, []byte(body), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		return len(indirectProxsaveCronRefs([]string{"0 2 * * * " + p}, cronProbeReadScripts)) > 0
+	}
+
+	for _, tc := range []struct {
+		name string
+		body string
+		want bool
+	}{
+		{"short form", "#!/bin/sh\nenv -S '/usr/local/bin/proxsave --backup'\n", true},
+		{"long form", "#!/bin/sh\nenv --split-string '/usr/local/bin/proxsave --backup'\n", true},
+		// -u still takes a value that is NOT a command, and must still be skipped.
+		{"unset still skips its value", "#!/bin/sh\nenv -u LANG /usr/local/bin/proxsave --backup\n", true},
+		{"and does not invent a command", "#!/bin/sh\nenv -u LANG cp /usr/local/bin/proxsave /backup/\n", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := flagged(t, tc.body); got != tc.want {
+				t.Errorf("flagged = %v, want %v for:\n%s", got, tc.want, tc.body)
+			}
+		})
+	}
+}
+
+// Short options bundle: "sudo -Hu backup cmd" is "sudo -H -u backup cmd", and getopt takes -u's
+// value from the NEXT word. The option table is looked up on the whole word, so "-Hu" matched
+// nothing, was treated as boolean, and the command position landed on "backup" - the wrapper
+// behind it invisible to the --upgrade refusal, the revert count, the /etc scan and the run-time
+// note. The claim that bundles need no table entry holds only when the value is INSIDE the word.
+func TestScriptProbeHandlesBundledShortOptions(t *testing.T) {
+	dir := t.TempDir()
+	flagged := func(t *testing.T, body string) bool {
+		t.Helper()
+		p := filepath.Join(dir, strings.ReplaceAll(t.Name(), "/", "_")+".sh")
+		if err := os.WriteFile(p, []byte(body), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		return len(indirectProxsaveCronRefs([]string{"0 2 * * * " + p}, cronProbeReadScripts)) > 0
+	}
+	const call = "/usr/local/bin/proxsave --backup\n"
+
+	for _, tc := range []struct {
+		name string
+		body string
+		want bool
+	}{
+		// The bundle's last letter takes the next word.
+		{"sudo -Hu", "#!/bin/sh\nsudo -Hu backup " + call, true},
+		{"sudo -EHu", "#!/bin/sh\nsudo -EHu backup " + call, true},
+		{"flock -nw", "#!/bin/sh\nflock -nw 30 /var/lock/x " + call, true},
+		{"xargs -rn", "#!/bin/sh\nls /etc | xargs -rn 1 " + call, true},
+
+		// The bundle carries its value inline: the next word is the command already. getopt stops
+		// at the FIRST value-taking letter, and it consumes the next word only when that letter
+		// is the last of the bundle - so "-ubackup" is "-u backup" written as one word, and the
+		// command is right after it.
+		{"sudo -ubackup", "#!/bin/sh\nsudo -ubackup " + call, true},
+		{"sudo -gbackup", "#!/bin/sh\nsudo -gbackup " + call, true},
+		{"timeout -k30s", "#!/bin/sh\ntimeout -k30s 4h " + call, true},
+		{"ionice -c3", "#!/bin/sh\nionice -c3 " + call, true},
+		{"nice -19", "#!/bin/sh\nnice -19 " + call, true},
+		{"stdbuf -oL", "#!/bin/sh\nstdbuf -oL " + call, true},
+
+		// And none of it may invent a command out of an argument.
+		{"sudo -Hu running something else", "#!/bin/sh\nsudo -Hu backup cp /usr/local/bin/proxsave /backup/\n", false},
+		{"flock -nw running something else", "#!/bin/sh\nflock -nw 30 /var/lock/x find /var/log/proxsave.log -delete\n", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := flagged(t, tc.body); got != tc.want {
+				t.Errorf("flagged = %v, want %v for:\n%s", got, tc.want, tc.body)
+			}
+		})
+	}
+}
+
+// A here-document delimiter can be quoted three ways, and all three mean the same thing: the body
+// is literal. Only two were recognised, so a body opened with <<\EOF was read as code.
+//
+// The CRLF case is included for completeness rather than because a host behaves differently: a
+// script with Windows line endings does not execute on Linux at all (the interpreter becomes
+// "/bin/sh\r" and exec fails), so it schedules nothing. Reading it correctly still costs one
+// line, and the alternative is an advisory about a script that cannot run.
+func TestScriptProbeReadsEveryDelimiterFormAndCRLF(t *testing.T) {
+	dir := t.TempDir()
+	flagged := func(t *testing.T, body string) bool {
+		t.Helper()
+		p := filepath.Join(dir, strings.ReplaceAll(t.Name(), "/", "_")+".sh")
+		if err := os.WriteFile(p, []byte(body), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		return len(indirectProxsaveCronRefs([]string{"0 2 * * * " + p}, cronProbeReadScripts)) > 0
+	}
+	const call = "/usr/local/bin/proxsave --backup\n"
+
+	for _, tc := range []struct {
+		name string
+		body string
+		want bool
+	}{
+		{"unquoted delimiter", "#!/bin/sh\ncat <<EOF\n" + call + "EOF\n", false},
+		{"single-quoted delimiter", "#!/bin/sh\ncat <<'EOF'\n" + call + "EOF\n", false},
+		{"double-quoted delimiter", "#!/bin/sh\ncat <<\"EOF\"\n" + call + "EOF\n", false},
+		{"backslash-quoted delimiter", "#!/bin/sh\ncat <<\\EOF\n" + call + "EOF\n", false},
+		{"CRLF continuation is still joined", "#!/bin/sh\r\nrsync -a --delete \\\r\n  /opt/proxsave/ /mnt/nas/\r\n", false},
+		{"CRLF call is still a call", "#!/bin/sh\r\n/usr/local/bin/proxsave --backup\r\n", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := flagged(t, tc.body); got != tc.want {
+				t.Errorf("flagged = %v, want %v for:\n%s", got, tc.want, tc.body)
+			}
+		})
+	}
+}
+
+// #298 on the exact path that caused it: the unattended --upgrade retrofit must
+// REFUSE to install the daemon while a wrapper cron entry is live, and the refusal
+// must be a true no-op (host still on cron, backup.env untouched), never a half
+// migration. The two controls below are as important as the refusal itself: an
+// ordinary host must migrate exactly as it did before, and a host with no readable
+// crontab at all (nothing to collide with) must not be blocked.
+func TestMaybeAutoMigrateDaemonRefusesIndirectCronEntry(t *testing.T) {
+	origRead := crontabReadLinesFn
+	origApply := applyDaemonModeFn
+	origPaths := systemCronPaths
+	t.Cleanup(func() {
+		crontabReadLinesFn = origRead
+		applyDaemonModeFn = origApply
+		systemCronPaths = origPaths
+	})
+	// detectIndirectProxsaveCron unions the root crontab with the SYSTEM habitat, and
+	// systemCronPaths points at the real /etc. Without this the verdict of the test that
+	// decides whether an UPGRADE IS BLOCKED depends on the cron.d of whatever machine runs
+	// the suite: plant a proxsave-named entry there and this test fails for a reason that
+	// has nothing to do with the code. An empty tree is the ordinary host.
+	systemCronPaths = []string{filepath.Join(t.TempDir(), "absent")}
+
+	configPath := filepath.Join(t.TempDir(), "backup.env")
+	if err := os.WriteFile(configPath, []byte("SCHEDULER_MODE=cron\n"), 0o600); err != nil {
+		t.Fatalf("seed config: %v", err)
+	}
+
+	applied := false
+	applyDaemonModeFn = func(context.Context, *config.Config, string, string, *logging.BootstrapLogger) (cronRemovalOutcome, error) {
+		applied = true
+		return cronRemovalOutcome{Verified: true}, nil
+	}
+	migrate := func() {
+		maybeAutoMigrateDaemon(context.Background(), configPath, "/opt/proxsave", "/usr/local/bin/proxsave", &config.UpgradeResult{MissingKeys: []string{"SCHEDULER_MODE"}}, nil)
+	}
+
+	// The reported crontab: a wrapper the canonical matcher cannot see.
+	wrapperLine := "00 02 * * * " + absentWrapper(t)
+	crontabReadLinesFn = func(context.Context) ([]string, error) {
+		return []string{wrapperLine}, nil
+	}
+	migrate()
+	if applied {
+		t.Fatal("REGRESSION (#298): the retrofit migrated on top of a wrapper cron entry; the host would run every backup twice")
+	}
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("read back: %v", err)
+	}
+	if strings.TrimSpace(string(data)) != "SCHEDULER_MODE=cron" {
+		t.Fatalf("a refusal must leave backup.env byte-identical: no half migration:\n%s", data)
+	}
+
+	// Control 1: the same host WITHOUT the wrapper still migrates exactly as before.
+	crontabReadLinesFn = func(context.Context) ([]string, error) {
+		return []string{"00 02 * * * /usr/local/bin/proxsave --backup"}, nil
+	}
+	migrate()
+	if !applied {
+		t.Fatal("a plain canonical cron entry must still migrate: the wrapper check must not change the ordinary host")
+	}
+
+	// Control 2: an unreadable crontab is not evidence of a wrapper. A host with no
+	// cron installed has nothing to collide with and must still be retrofitted.
+	applied = false
+	crontabReadLinesFn = func(context.Context) ([]string, error) {
+		return nil, errors.New("exec: \"crontab\": executable file not found in $PATH")
+	}
+	migrate()
+	if !applied {
+		t.Fatal("an unreadable crontab must not block the migration")
+	}
+}
+
+// #298, second habitat. cronCommandToken reads field 6, which is the COMMAND in a user
+// crontab but the USER in a system one, so a wrapper installed in /etc/cron.d parsed as a
+// username and matched nothing at all. The detector reads those files now; nothing else
+// does, and nothing writes to them.
+func TestSystemCronCommandToken(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		line string
+		want string
+	}{
+		{"five fields plus user plus command", "17 02 * * * root /usr/local/sbin/proxsave-nas-guard", "/usr/local/sbin/proxsave-nas-guard"},
+		{"shortcut carries a user too", "@daily root /usr/local/sbin/proxsave-nas-guard", "/usr/local/sbin/proxsave-nas-guard"},
+		{"comment", "# 17 02 * * * root /usr/local/sbin/proxsave-nas-guard", ""},
+		{"env assignment", "MAILTO=root", ""},
+		{"user format is not a system line: the command lands on the user field", "17 02 * * * /usr/local/sbin/proxsave-nas-guard", ""},
+		{"shortcut with no command", "@daily root", ""},
+		{"blank", "   ", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := systemCronCommandToken(tc.line); got != tc.want {
+				t.Fatalf("systemCronCommandToken(%q) = %q, want %q", tc.line, got, tc.want)
+			}
+		})
+	}
+}
+
+// cron itself ignores /etc/cron.d entries whose name is not [A-Za-z0-9_-]+, so reporting
+// one would refuse a migration over a schedule that never fires.
+func TestCronDNameIsActive(t *testing.T) {
+	active := []string{"proxsave-guard", "backup_job", "job1"}
+	inactive := []string{"", "proxsave.bak", "job.dpkg-dist", ".hidden", "job~"}
+	for _, name := range active {
+		if !cronDNameIsActive(name) {
+			t.Errorf("cronDNameIsActive(%q) = false, want true", name)
+		}
+	}
+	for _, name := range inactive {
+		if cronDNameIsActive(name) {
+			t.Errorf("cronDNameIsActive(%q) = true, want false", name)
+		}
+	}
+}
+
+// The end-to-end shape: a wrapper in /etc/cron.d is found, tagged with the file it came
+// from, and reported with an edit hint that does NOT send the operator to `crontab -e`
+// for a file crontab(1) will not touch.
+func TestIndirectProxsaveSystemCronRefs(t *testing.T) {
+	dir := t.TempDir()
+	cronD := filepath.Join(dir, "cron.d")
+	if err := os.MkdirAll(cronD, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	write := func(path, content string) {
+		t.Helper()
+		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	wrapperCmd := absentWrapper(t)
+	systemCrontab := filepath.Join(dir, "crontab")
+	write(systemCrontab, "SHELL=/bin/sh\n# comment\n0 6 * * * root "+unrelatedCommand(t)+" /a /b\n")
+	write(filepath.Join(cronD, "proxsave-guard"), "17 02 * * * root "+wrapperCmd+"\n")
+	write(filepath.Join(cronD, "ignored.bak"), "17 03 * * * root "+wrapperCmd+"\n")
+
+	orig := systemCronPaths
+	t.Cleanup(func() { systemCronPaths = orig })
+	systemCronPaths = []string{systemCrontab, cronD}
+
+	refs := indirectProxsaveSystemCronRefs()
+	if len(refs) != 1 {
+		t.Fatalf("want exactly the one active cron.d wrapper, got %d: %+v", len(refs), refs)
+	}
+	if refs[0].Command != wrapperCmd {
+		t.Errorf("Command = %q", refs[0].Command)
+	}
+	if refs[0].Source != filepath.Join(cronD, "proxsave-guard") {
+		t.Errorf("Source = %q, want the file the line came from", refs[0].Source)
+	}
+	if desc := describeIndirectCronRefs(refs); len(desc) != 1 || !strings.Contains(desc[0], cronD) {
+		t.Errorf("the description must name the file: %v", desc)
+	}
+	if hint := cronRefEditHint(refs); strings.Contains(hint, "crontab -e") {
+		t.Errorf("a system-cron finding must not be pointed at 'crontab -e': %q", hint)
+	}
+	if hint := cronRefEditHint([]indirectCronRef{{}}); !strings.Contains(hint, "crontab -e") {
+		t.Errorf("a user-crontab finding must still be pointed at 'crontab -e': %q", hint)
+	}
+}
+
+// The system files are READ, never written, and never fed to the removal or the seeding.
+// This pins the boundary that keeps ProxSave from editing files it did not place.
+func TestSystemCronIsReadOnlyAndOutsideRemovalAndSeeding(t *testing.T) {
+	line := "17 02 * * * root /usr/local/sbin/proxsave-nas-guard"
+	if kept := dropCanonicalCronLines([]string{line}, cronCorrectPaths("/usr/local/bin/proxsave")); len(kept) != 1 {
+		t.Fatal("a system-format line must never be dropped by the user-crontab remover")
+	}
+	if _, ok := schedulerTimeFromCronLines([]string{line}); ok {
+		t.Fatal("SCHEDULER_TIME must not be seeded from a system-format line")
+	}
+	if got := wrapperCronLines([]string{line}); len(got) != 0 {
+		t.Fatalf("wrapperCronLines reads the USER crontab format only, got %v", got)
+	}
+}
+
+// The advisory is the entire remedy on this path, so its text is the deliverable. Its
+// hardest constraint is NEGATIVE: it may not assert anything it cannot check from here.
+// It used to claim the /etc entry stood "alongside the cron line just written at
+// SCHEDULER_TIME" and to tell the operator to remove one of the two, and neither was
+// knowable - migrateLegacyCronEntries writes nothing on any of four early returns, one of
+// which is reached deterministically when `crontab -l` fails, because it re-runs the very
+// read that already failed. The notice then described a duplicate that did not exist and
+// pointed the operator at the only schedule the host had left.
+func TestSystemCronScheduleAdvisory(t *testing.T) {
+	if got := systemCronScheduleAdvisory(nil); got != nil {
+		t.Fatalf("no finding must produce no output at all, got %v", got)
+	}
+
+	refs := []indirectCronRef{{
+		Line:    "17 02 * * * root /usr/local/sbin/proxsave-nas-guard",
+		Command: "/usr/local/sbin/proxsave-nas-guard",
+		Reason:  "its command \"proxsave-nas-guard\" is named after proxsave",
+		Source:  "/etc/cron.d/proxsave-guard",
+	}}
+	joined := strings.Join(systemCronScheduleAdvisory(refs), "\n")
+	for _, want := range []string{
+		"/etc/cron.d/proxsave-guard",                          // WHERE: a file, findable
+		"17 02 * * * root /usr/local/sbin/proxsave-nas-guard", // WHAT: the line verbatim
+		"named after proxsave",                                // WHY: the rule that fired
+		"never edits files it did not place",                  // WHAT ProxSave did not do
+		"/etc unchanged",
+	} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("the advisory must contain %q:\n%s", want, joined)
+		}
+	}
+
+	// Everything below is a claim this function cannot support. Each of these strings
+	// appeared in the version that shipped a lie; none may come back.
+	for _, forbidden := range []string{
+		"just written",   // no way to know migrateLegacyCronEntries wrote anything
+		"runs twice",     // no way to know the /etc entry runs a backup at all
+		"one of the two", // the instruction that could unschedule the host
+		"was removed",    // ProxSave never edits /etc
+		"were removed",
+		"disabled it",
+	} {
+		if strings.Contains(joined, forbidden) {
+			t.Errorf("the advisory may not claim %q, which it cannot check from here:\n%s", forbidden, joined)
+		}
+	}
+}
+
+// The shape the detector deliberately drops, in the one habitat where dropping it is
+// wrong. indirectProxsaveCronRefsWithToken skips a line whose command token IS the binary
+// as "canonical, dropCanonicalCronLines owns it" - true of the root crontab, false of
+// /etc, which dropCanonicalCronLines never reads and by design never will. So
+//
+//	0 2 * * * root /usr/local/bin/proxsave --backup   [/etc/cron.d/proxsave]
+//
+// was a live ProxSave backup schedule no code path in this package could see, remove or
+// report, and it is the likeliest way a host is scheduled from /etc at all: the installed
+// line moved into a file the operator or a config-management tool manages.
+//
+// systemCronProxsaveRefs reports it, and detectIndirectProxsaveCron carries it into the
+// unattended --upgrade refusal. indirectProxsaveSystemCronRefs must NOT: keeping the two
+// views distinct is what makes it visible, the day the heuristics are widened, which of
+// the two blast radiuses grew.
+func TestSystemCronProxsaveRefsSeesADirectProxsaveLine(t *testing.T) {
+	dir := t.TempDir()
+	cronD := filepath.Join(dir, "cron.d")
+	if err := os.MkdirAll(cronD, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	systemCrontab := filepath.Join(dir, "crontab")
+	if err := os.WriteFile(systemCrontab, []byte("0 6 * * * root "+unrelatedCommand(t)+" /a /b\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(cronD, "proxsave"), []byte("0 2 * * * root /usr/local/bin/proxsave --backup\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	orig := systemCronPaths
+	t.Cleanup(func() { systemCronPaths = orig })
+	systemCronPaths = []string{systemCrontab, cronD}
+
+	refs := systemCronProxsaveRefs()
+	if len(refs) != 1 {
+		t.Fatalf("the revert advisory must see the direct proxsave line, got %d: %+v", len(refs), refs)
+	}
+	if refs[0].Command != "/usr/local/bin/proxsave" {
+		t.Errorf("Command = %q, want the binary itself", refs[0].Command)
+	}
+	if refs[0].Source != filepath.Join(cronD, "proxsave") {
+		t.Errorf("Source = %q, want the file the line came from", refs[0].Source)
+	}
+	if refs[0].Reason == "" {
+		t.Error("every finding must carry an operator-facing reason")
+	}
+
+	if indirect := indirectProxsaveSystemCronRefs(); len(indirect) != 0 {
+		t.Fatalf("the --upgrade refusal predicate must be unchanged by this: a direct line is not an INDIRECT reference, got %+v", indirect)
+	}
+
+	// And the unrelated operator line in the system crontab stays unflagged under both
+	// views: the direct rule is commandTokenMatchesTarget, not a substring scan.
+	systemCronPaths = []string{systemCrontab}
+	if refs := systemCronProxsaveRefs(); len(refs) != 0 {
+		t.Fatalf("an unrelated system-cron job must not be reported, got %+v", refs)
+	}
+}
+
+// A symlinked /etc/cron.d entry was silently invisible: os.Stat follows the link so the
+// entry passed the regular-file and size gates, then safefs.OpenFileUnderRoot refused the
+// absolute-symlink final component and the error was swallowed by the same fail-quiet rule
+// that covers a missing /etc/cron.d. Cron loads that entry regardless, and a
+// config-management tool is both the named cause of a ProxSave schedule under /etc and the
+// thing most likely to place its files there as links into a package tree.
+func TestSystemCronFollowsSymlinkedEntries(t *testing.T) {
+	dir := t.TempDir()
+	cronD := filepath.Join(dir, "cron.d")
+	pkg := filepath.Join(dir, "pkg")
+	for _, d := range []string{cronD, pkg} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	wrapperCmd := absentWrapper(t)
+	target := filepath.Join(pkg, "proxsave.cron")
+	if err := os.WriteFile(target, []byte("17 02 * * * root "+wrapperCmd+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// An ABSOLUTE symlink, which is precisely the shape OpenFileUnderRoot refuses.
+	if err := os.Symlink(target, filepath.Join(cronD, "proxsave-guard")); err != nil {
+		t.Skipf("symlinks unavailable on this filesystem: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "crontab"), []byte("0 6 * * * root "+unrelatedCommand(t)+" /a /b\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	orig := systemCronPaths
+	t.Cleanup(func() { systemCronPaths = orig })
+	systemCronPaths = []string{filepath.Join(dir, "crontab"), cronD}
+
+	refs := indirectProxsaveSystemCronRefs()
+	if len(refs) != 1 {
+		t.Fatalf("a symlinked cron.d entry must be scanned like any other, got %d: %+v", len(refs), refs)
+	}
+	if refs[0].Command != wrapperCmd {
+		t.Errorf("Command = %q", refs[0].Command)
+	}
+	// The finding is reported at the path CRON knows it by, not at the link target: that is
+	// the name the operator has to edit, and the one that appears in /etc/cron.d.
+	if want := filepath.Join(cronD, "proxsave-guard"); refs[0].Source != want {
+		t.Errorf("Source = %q, want the cron.d path %q", refs[0].Source, want)
+	}
+}
+
+// resolveSystemCronPath must widen nothing on its own: a plain file, a broken link and a
+// link to something that is not an ordinary small file all fall back to the original path
+// so the caller's existing guards decide.
+func TestResolveSystemCronPathOnlyFollowsRealFiles(t *testing.T) {
+	dir := t.TempDir()
+	plain := filepath.Join(dir, "plain")
+	if err := os.WriteFile(plain, []byte("x\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got := resolveSystemCronPath(plain); got != plain {
+		t.Errorf("a regular file must be returned unchanged, got %q", got)
+	}
+	if got := resolveSystemCronPath(filepath.Join(dir, "absent")); got != filepath.Join(dir, "absent") {
+		t.Errorf("a missing path must be returned unchanged, got %q", got)
+	}
+	broken := filepath.Join(dir, "broken")
+	if err := os.Symlink(filepath.Join(dir, "nowhere"), broken); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	if got := resolveSystemCronPath(broken); got != broken {
+		t.Errorf("a broken link must be returned unchanged, got %q", got)
+	}
+	toDir := filepath.Join(dir, "todir")
+	if err := os.Symlink(dir, toDir); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	if got := resolveSystemCronPath(toDir); got != toDir {
+		t.Errorf("a link to a directory must be returned unchanged, got %q", got)
+	}
+}
+
+// The unattended --upgrade refusal must see a DIRECT proxsave line under /etc. That shape
+// is the likeliest way a host ends up scheduled from there, dropCanonicalCronLines never
+// reads those files, and installing the daemon on top of it is issue #298 again on the same
+// path. It was deliberately withheld from this predicate at first; this pins that it is in.
+func TestDetectIndirectProxsaveCronSeesADirectSystemCronLine(t *testing.T) {
+	origRead := crontabReadLinesFn
+	origPaths := systemCronPaths
+	t.Cleanup(func() {
+		crontabReadLinesFn = origRead
+		systemCronPaths = origPaths
+	})
+	crontabReadLinesFn = func(context.Context) ([]string, error) { return nil, nil }
+
+	dir := t.TempDir()
+	cronD := filepath.Join(dir, "cron.d")
+	if err := os.MkdirAll(cronD, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(cronD, "proxsave"), []byte("0 2 * * * root /usr/local/bin/proxsave --backup\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	systemCronPaths = []string{filepath.Join(dir, "absent-crontab"), cronD}
+
+	refs, err := detectIndirectProxsaveCron(context.Background())
+	if err != nil {
+		t.Fatalf("detectIndirectProxsaveCron: %v", err)
+	}
+	if len(refs) != 1 || refs[0].Command != "/usr/local/bin/proxsave" {
+		t.Fatalf("the refusal predicate must see a direct proxsave line under /etc, got %+v", refs)
+	}
+}
+
+// A host scheduled from /etc/cron.d used to lose its run time: SCHEDULER_TIME stayed at the
+// 02:00 default, so a backup that ran at 05:00 for years silently moved to 02:00 the moment
+// the daemon took over. The adoption reads that habitat now.
+//
+// Direct lines ONLY. A run time is written into backup.env as the host's schedule, so it may
+// only be inherited from a line whose command IS the proxsave binary and whose schedule is an
+// unambiguous single daily time. A wrapper's schedule belongs to a script this code did not
+// write and cannot interpret, so it is reported and never adopted.
+func TestSchedulerTimeAdoptedFromSystemCron(t *testing.T) {
+	write := func(t *testing.T, dir, name, content string) {
+		t.Helper()
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	pin := func(t *testing.T, cronD string) {
+		t.Helper()
+		orig := systemCronPaths
+		t.Cleanup(func() { systemCronPaths = orig })
+		systemCronPaths = []string{filepath.Join(cronD, "..", "absent-crontab"), cronD}
+	}
+
+	t.Run("direct proxsave line: adopted", func(t *testing.T) {
+		d := t.TempDir()
+		write(t, d, "proxsave", "0 5 * * * root /usr/local/bin/proxsave --backup\n")
+		pin(t, d)
+		refs := systemCronDirectProxsaveLines()
+		if len(refs) != 1 {
+			t.Fatalf("want the direct line, got %+v", refs)
+		}
+		if got := cron.ScheduleToTime(refs[0].Line); got != "05:00" {
+			t.Fatalf("the adopted time must be 05:00, got %q", got)
+		}
+	})
+
+	t.Run("wrapper line: reported elsewhere, never adopted here", func(t *testing.T) {
+		d := t.TempDir()
+		write(t, d, "guard", "17 02 * * * root /usr/local/sbin/proxsave-nas-guard\n")
+		pin(t, d)
+		if refs := systemCronDirectProxsaveLines(); len(refs) != 0 {
+			t.Fatalf("a wrapper schedule must never be adopted, got %+v", refs)
+		}
+	})
+
+	t.Run("no script probe: a neutrally named script is not read", func(t *testing.T) {
+		d := t.TempDir()
+		script := filepath.Join(d, "nas-guard")
+		if err := os.WriteFile(script, []byte("#!/bin/sh\n/usr/local/bin/proxsave --backup\n"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		write(t, d, "maint", "0 3 * * * root "+script+"\n")
+		pin(t, d)
+		if refs := systemCronDirectProxsaveLines(); len(refs) != 0 {
+			t.Fatalf("the adoption must not probe script contents, got %+v", refs)
+		}
+	})
+}
+
+// The adoption itself, through the function the install and upgrade paths call. The user
+// crontab keeps priority: it is the table ProxSave owns and rewrites, so a time found there
+// is the one it is about to reinstate. /etc is consulted only when that yields nothing.
+func TestDeriveSchedulerTimeReadsSystemCron(t *testing.T) {
+	setup := func(t *testing.T, sysLine string, userLines []string) (string, string) {
+		t.Helper()
+		d := t.TempDir()
+		cronD := filepath.Join(d, "cron.d")
+		if err := os.MkdirAll(cronD, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if sysLine != "" {
+			if err := os.WriteFile(filepath.Join(cronD, "proxsave"), []byte(sysLine+"\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}
+		cp := filepath.Join(d, "backup.env")
+		if err := os.WriteFile(cp, []byte("BACKUP_PATH=/x\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		origPaths, origRead := systemCronPaths, crontabReadLinesFn
+		t.Cleanup(func() { systemCronPaths, crontabReadLinesFn = origPaths, origRead })
+		systemCronPaths = []string{filepath.Join(d, "absent-crontab"), cronD}
+		crontabReadLinesFn = func(context.Context) ([]string, error) { return userLines, nil }
+		return cp, cronD
+	}
+
+	// The time in /etc is REPORTED and never adopted. Adopting it looked like continuity and
+	// was the opposite: ProxSave never edits /etc, so that line survives the install, and
+	// writing the same hour into SCHEDULER_TIME puts the cron line ProxSave is about to write
+	// in the exact minute the surviving one already occupies. The two runs then collide on the
+	// per-run lock and one exits 16 every night. Left un-adopted the host keeps 05:00 from /etc
+	// and gains 02:00 from ProxSave: still two backups, both of which succeed.
+	t.Run("time in /etc is reported, never adopted", func(t *testing.T) {
+		cp, cronD := setup(t, "0 5 * * * root /usr/local/bin/proxsave --backup", nil)
+		seed := deriveSchedulerTimeFromCrontab(context.Background(), cp)
+		if seed.Time != "" {
+			t.Fatalf("a time ProxSave cannot remove must not be adopted, got %q", seed.Time)
+		}
+		if !strings.Contains(seed.Note, cronD) {
+			t.Errorf("the note must name the file the finding came from, got %q", seed.Note)
+		}
+		if !strings.Contains(seed.Note, "05:00") {
+			t.Errorf("the note must name the time that entry runs at, got %q", seed.Note)
+		}
+	})
+
+	t.Run("user crontab wins over /etc", func(t *testing.T) {
+		cp, _ := setup(t, "0 5 * * * root /usr/local/bin/proxsave --backup",
+			[]string{"30 21 * * * /usr/local/bin/proxsave --backup"})
+		seed := deriveSchedulerTimeFromCrontab(context.Background(), cp)
+		if seed.Time != "21:30" {
+			t.Fatalf("the table ProxSave owns must win, got %q", seed.Time)
+		}
+	})
+
+	t.Run("two /etc lines at different times: adopt nothing", func(t *testing.T) {
+		d := t.TempDir()
+		cronD := filepath.Join(d, "cron.d")
+		if err := os.MkdirAll(cronD, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		for name, line := range map[string]string{
+			"proxsave-a": "0 5 * * * root /usr/local/bin/proxsave --backup",
+			"proxsave-b": "0 6 * * * root /usr/local/bin/proxsave --backup",
+		} {
+			if err := os.WriteFile(filepath.Join(cronD, name), []byte(line+"\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}
+		cp := filepath.Join(d, "backup.env")
+		if err := os.WriteFile(cp, []byte("BACKUP_PATH=/x\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		origPaths, origRead := systemCronPaths, crontabReadLinesFn
+		t.Cleanup(func() { systemCronPaths, crontabReadLinesFn = origPaths, origRead })
+		systemCronPaths = []string{filepath.Join(d, "absent-crontab"), cronD}
+		crontabReadLinesFn = func(context.Context) ([]string, error) { return nil, nil }
+
+		seed := deriveSchedulerTimeFromCrontab(context.Background(), cp)
+		if seed.Time != "" {
+			t.Fatalf("two different times are ambiguous; nothing may be adopted, got %q", seed.Time)
+		}
+	})
+
+	t.Run("explicit SCHEDULER_TIME is never overridden", func(t *testing.T) {
+		cp, _ := setup(t, "0 5 * * * root /usr/local/bin/proxsave --backup", nil)
+		if err := os.WriteFile(cp, []byte("SCHEDULER_TIME=23:15\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if seed := deriveSchedulerTimeFromCrontab(context.Background(), cp); seed.Time != "" {
+			t.Fatalf("an operator value must win over every habitat, got %q", seed.Time)
+		}
+	})
+}
+
+// The --daemon-setup warning states what was found and what ProxSave did not do, and stops
+// there. It used to close with "Remove/disable entries for daemon-only scheduling: ...",
+// which tells the operator what to do with their own host: if they want the wrapper and the
+// daemon both, that is their call and ProxSave's job ended at saying the two coexist.
+func TestWarnIndirectProxsaveCronOnDaemonInstallStatesFactsOnly(t *testing.T) {
+	origRead, origPaths := crontabReadLinesFn, systemCronPaths
+	t.Cleanup(func() { crontabReadLinesFn, systemCronPaths = origRead, origPaths })
+	wrapperLine := "30 02 * * * " + absentWrapper(t)
+	crontabReadLinesFn = func(context.Context) ([]string, error) {
+		return []string{wrapperLine}, nil
+	}
+	systemCronPaths = []string{filepath.Join(t.TempDir(), "absent")}
+
+	orig := logging.GetDefaultLogger()
+	t.Cleanup(func() { logging.SetDefaultLogger(orig) })
+	var buf bytes.Buffer
+	def := logging.New(types.LogLevelDebug, false)
+	def.SetOutput(&buf)
+	logging.SetDefaultLogger(def)
+
+	found := warnIndirectProxsaveCronOnDaemonInstall(context.Background(), nil)
+	out := buf.String()
+
+	// The count is returned as well as logged. On the dashboard the log goes nowhere - the
+	// console and the bootstrap are muted for the whole operation - so the returned value is
+	// the only thing that reaches the result screen (cronRemovalOutcome.UnmanagedSchedules).
+	if found != 1 {
+		t.Errorf("warnIndirectProxsaveCronOnDaemonInstall returned %d, want the number it found", found)
+	}
+
+	for _, want := range []string{
+		"unmanaged cron line(s) still schedule ProxSave", // WHAT was found
+		wrapperLine,            // the line verbatim
+		"named after proxsave", // WHY it matched
+		"NOT removed",          // what ProxSave did not do
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("the warning must state %q, out=%q", want, out)
+		}
+	}
+
+	// ONE problem, ONE warning. Three WARNING lines for a single fact read as three problems
+	// in the run's "WARNINGS/ERRORS DURING RUN (warnings=N)" recap, and that count is what an
+	// operator scans. The header and the findings belong below it.
+	if got := strings.Count(out, "WARNING"); got != 1 {
+		t.Errorf("want exactly one WARNING line, got %d, out=%q", got, out)
+	}
+	if got := strings.Count(out, "INFO"); got != 2 {
+		t.Errorf("the header and the finding must be INFO, got %d such lines, out=%q", got, out)
+	}
+	// The WARNING has to stand alone: DEBUG_LEVEL=warning hides the two INFO lines, so it
+	// carries the count itself rather than leaning on a header the operator may not see.
+	warnLine := warningLine(t, out)
+	if !strings.Contains(warnLine, "1 unmanaged cron line(s)") {
+		t.Errorf("the WARNING must repeat the count so it survives DEBUG_LEVEL=warning, got %q", warnLine)
+	}
+	for _, forbidden := range []string{
+		"Remove/disable",
+		"crontab -e",
+		"an editor for the files",
+	} {
+		if strings.Contains(out, forbidden) {
+			t.Errorf("the warning must not instruct the operator (%q), out=%q", forbidden, out)
+		}
+	}
+}
+
+// The name rule is a FALLBACK, not evidence. ProxSave only ever installs a binary called
+// exactly "proxsave", so "proxsave-anything" is by definition the operator's own file and
+// its name says nothing about what it does. The three behavioural rules - install tree,
+// runner, script content - are what actually observe a ProxSave invocation.
+//
+// So when the script can be read, the reading decides: a wrapper that calls the binary is
+// flagged by content, and one that does not is left alone however it is named. The name only
+// gets a vote when nothing could be read - an unreadable file, a compiled binary, a command
+// on a stalled mount - where it is the last thing standing between us and issue #298.
+func TestNameRuleOnlyFiresWhenTheScriptCannotBeRead(t *testing.T) {
+	d := t.TempDir()
+	write := func(name, body string) string {
+		t.Helper()
+		p := filepath.Join(d, name)
+		if err := os.WriteFile(p, []byte(body), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	wrapper := write("proxsave-nas-guard", "#!/bin/sh\nmountpoint -q /mnt/nas || exit 1\n/usr/local/bin/proxsave --backup\n")
+	exporter := write("proxsave-metrics-exporter", "#!/bin/sh\ncurl -s localhost:9100/metrics > /var/lib/x.prom\n")
+	missing := filepath.Join(d, "proxsave-compiled-thing")
+
+	flagged := func(path string, probe bool) (bool, string) {
+		refs := indirectProxsaveCronRefs([]string{"30 02 * * * " + path}, probe)
+		if len(refs) == 0 {
+			return false, ""
+		}
+		return true, refs[0].Reason
+	}
+
+	t.Run("readable and calls proxsave: flagged, by content", func(t *testing.T) {
+		ok, reason := flagged(wrapper, cronProbeReadScripts)
+		if !ok {
+			t.Fatal("the #298 wrapper must still be flagged")
+		}
+		if !strings.Contains(reason, "calls the proxsave binary") {
+			t.Fatalf("the reason must be the content probe, not the name: %q", reason)
+		}
+	})
+
+	t.Run("readable and does NOT call proxsave: not flagged", func(t *testing.T) {
+		if ok, reason := flagged(exporter, cronProbeReadScripts); ok {
+			t.Fatalf("a readable script that never calls proxsave must not be flagged on its name alone: %q", reason)
+		}
+	})
+
+	t.Run("cannot be read: the name is the fallback", func(t *testing.T) {
+		ok, reason := flagged(missing, cronProbeReadScripts)
+		if !ok {
+			t.Fatal("an unreadable proxsave-named command must still be flagged")
+		}
+		if !strings.Contains(reason, "named after proxsave") {
+			t.Fatalf("the reason must be the name fallback: %q", reason)
+		}
+	})
+
+	t.Run("lexical-only mode keeps the name rule", func(t *testing.T) {
+		if ok, _ := flagged(exporter, cronProbeNamesOnly); !ok {
+			t.Fatal("with no probe available the name is all there is, so it must still fire")
+		}
+	})
+}
+
+// One refusal, one WARNING. Five warning lines for a single decision read as five problems
+// in the run's "WARNINGS/ERRORS DURING RUN (warnings=N)" recap, and that count is what an
+// operator scans. The findings and the way forward sit below at INFO.
+//
+// warningLine returns the ONE WARNING line from captured log output, without the lines that
+// follow it.
+//
+// Slicing from strings.Index(out, "WARNING") to the end of the buffer is not the same thing
+// and was the defect: it hands back the WARNING plus every INFO line printed after it, so an
+// assertion meant to prove the verdict stands alone under DEBUG_LEVEL=warning passes just as
+// happily when the words it looks for have moved down into a line that level hides.
+func warningLine(t *testing.T, out string) string {
+	t.Helper()
+	for _, line := range strings.Split(out, "\n") {
+		if strings.Contains(line, "WARNING") {
+			return line
+		}
+	}
+	t.Fatalf("no WARNING line in output: %q", out)
+	return ""
+}
+
+// The verdict line has to stand alone, because DEBUG_LEVEL=warning (internal/cli/args.go)
+// hides the INFO lines: it carries REFUSED, the consequence, and the fact that nothing
+// changed, so an operator reading only warnings still learns the migration did not happen.
+func TestMaybeAutoMigrateDaemonRefusalUsesOneWarning(t *testing.T) {
+	origRead, origApply, origPaths := crontabReadLinesFn, applyDaemonModeFn, systemCronPaths
+	t.Cleanup(func() {
+		crontabReadLinesFn, applyDaemonModeFn, systemCronPaths = origRead, origApply, origPaths
+	})
+	wrapperLine := "30 02 * * * " + absentWrapper(t)
+	crontabReadLinesFn = func(context.Context) ([]string, error) {
+		return []string{wrapperLine}, nil
+	}
+	systemCronPaths = []string{filepath.Join(t.TempDir(), "absent")}
+	applyDaemonModeFn = func(context.Context, *config.Config, string, string, *logging.BootstrapLogger) (cronRemovalOutcome, error) {
+		t.Fatal("the migration must not run")
+		return cronRemovalOutcome{}, nil
+	}
+
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "backup.env")
+	if err := os.WriteFile(configPath, []byte("SCHEDULER_MODE=cron\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	orig := logging.GetDefaultLogger()
+	t.Cleanup(func() { logging.SetDefaultLogger(orig) })
+	var buf bytes.Buffer
+	def := logging.New(types.LogLevelDebug, false)
+	def.SetOutput(&buf)
+	logging.SetDefaultLogger(def)
+
+	maybeAutoMigrateDaemon(context.Background(), configPath, dir, "/usr/local/bin/proxsave", &config.UpgradeResult{MissingKeys: []string{"SCHEDULER_MODE"}}, nil)
+	out := buf.String()
+
+	if got := strings.Count(out, "WARNING"); got != 1 {
+		t.Errorf("want exactly one WARNING, got %d, out=%q", got, out)
+	}
+	warnLine := warningLine(t, out)
+	for _, want := range []string{"REFUSED", "duplicate backups", "No changes"} {
+		if !strings.Contains(warnLine, want) {
+			t.Errorf("the WARNING must carry %q so it survives DEBUG_LEVEL=warning, got %q", want, warnLine)
+		}
+	}
+	for _, want := range []string{
+		"unmanaged cron line(s) schedule ProxSave", // the header, below the verdict
+		wrapperLine,               // the finding verbatim
+		"proxsave --daemon-setup", // the way forward
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("the block must still state %q, out=%q", want, out)
+		}
+	}
+}
+
+// A cron line is a SHELL COMMAND LINE, and on the line every Proxmox operator actually writes
+//
+//	0 2 * * * /usr/bin/flock -n /var/lock/nightly.lock /usr/local/sbin/nas-guard
+//
+// the command token is the RUNNER, not the wrapper. The content probe was handed the token
+// only, so it opened flock (a binary, NUL byte, unreadable), the wrapper was never read, and
+// the one rule left standing (cronRunnerNamesProxsave) needs a word whose basename carries
+// "proxsave" - which a neutrally named wrapper does not have. Nothing matched, the --upgrade
+// retrofit installed the daemon on top of a live cron backup, and the host ran two backups a
+// night: issue #298 again, one indirection further out.
+//
+// The table is the specification, so it carries the PRE-EXISTING verdicts too: the
+// proxsave-named wrapper behind a runner pins the rule ordering (content decides, so the
+// reason must name the file that was read), and the copy of the binary behind a runner pins
+// that rule 3 still owns it. The log-file row is the one that discriminates the design: only
+// words in COMMAND position may be opened, so a data file the line merely READS is never
+// probed and can never be reported as a script.
+func TestCronRunnerWrappedScriptIsRead(t *testing.T) {
+	dir := t.TempDir()
+	write := func(name, body string) string {
+		t.Helper()
+		p := filepath.Join(dir, name)
+		if err := os.WriteFile(p, []byte(body), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	// A runner is a compiled binary on a real host, i.e. exactly what the probe cannot read.
+	// Leaving it absent under the test's own temp dir reproduces that without depending on
+	// what the machine running the suite happens to have installed (see absentWrapper).
+	absent := func(name string) string { return filepath.Join(dir, name) }
+
+	guard := "#!/bin/sh\nmountpoint -q /mnt/nas || exit 0\nexec /usr/local/bin/proxsave --backup\n"
+	wrapper := write("nas-guard", guard)
+	named := write("proxsave-nas-guard", guard)
+	tail := write("tail", "#!/bin/sh\nexec /usr/bin/tail \"$@\"\n")
+	logrotate := write("logrotate", "#!/bin/sh\nexec /usr/sbin/logrotate \"$@\"\n")
+	copier := write("cp", "#!/bin/sh\nexec /bin/cp \"$@\"\n")
+	// Its FIRST line is a proxsave path in command position, so opening it at all is a
+	// finding. Nothing may open it: the line only reads it.
+	logFile := write("nas.log", "/usr/local/bin/proxsave --backup exited 0\n")
+
+	flock := absent("flock")
+	sh := absent("sh")
+	nice := absent("nice")
+	timeout := absent("timeout")
+	sudo := absent("sudo")
+	env := absent("env")
+	su := absent("su")
+	lock := filepath.Join(dir, "nightly.lock")
+
+	for _, tc := range []struct {
+		name  string
+		line  string
+		want  bool
+		says  string // the reason must name this
+		mutes string // and must not contain this
+	}{
+		{"flock", "0 2 * * * " + flock + " -n " + lock + " " + wrapper, true, wrapper, "runner"},
+		{"a shell running the wrapper as a file", "0 2 * * * " + sh + " " + wrapper, true, wrapper, "runner"},
+		{"nice with a value-taking flag", "0 2 * * * " + nice + " -n 19 " + wrapper, true, wrapper, "runner"},
+		{"timeout with its own operand", "0 2 * * * " + timeout + " 4h " + wrapper, true, wrapper, "runner"},
+		{"sudo with a user", "0 2 * * * " + sudo + " -u backup " + wrapper, true, wrapper, "runner"},
+		{"sh -c nesting", "0 2 * * * " + sh + " -c '" + wrapper + " --backup'", true, wrapper, "runner"},
+		{"env with a leading assignment", "0 2 * * * " + env + " TZ=UTC " + wrapper, true, wrapper, "runner"},
+		{"a value-taking flag and a redirect", "0 2 * * * " + flock + " -w 600 " + lock + " " + wrapper + " >> " + logFile + " 2>&1", true, wrapper, "runner"},
+		{"an opaque launcher", "0 2 * * * " + su + " - backup -c '" + wrapper + "'", true, wrapper, "runner"},
+		{"the @form", "@daily " + flock + " -n " + lock + " " + wrapper, true, wrapper, "runner"},
+		// ORDERING PIN. The file could be read, so the reading decides and the reason names
+		// the file that was read - not the runner it stood behind.
+		{"a proxsave-named wrapper that can be read", "0 2 * * * " + flock + " -n " + lock + " " + named, true, named, "runner"},
+
+		// Command position only. A data file the line READS is not a script.
+		{"a log file the line only reads", "0 2 * * * " + flock + " -n " + lock + " " + tail + " -n 1 " + logFile, false, "", ""},
+		{"an ordinary maintenance job behind a runner", "0 2 * * * " + flock + " -n " + lock + " " + logrotate + " -f /etc/logrotate.conf", false, "", ""},
+		{"the canonical entry", "0 2 * * * /usr/local/bin/proxsave --backup", false, "", ""},
+		{"a plain copy of the binary", "0 2 * * * " + copier + " /usr/local/bin/proxsave /backup/proxsave.bak", false, "", ""},
+		// THE GATE, stated as a case rather than left to the negatives above. The tail here does
+		// hold the wrapper in command position - the ";" starts a new command - so the only thing
+		// keeping this false is that the token is not in cronCommandRunners. Remove that gate, or
+		// widen the set to include this command, and the line flips.
+		//
+		// It is a residual FALSE NEGATIVE and a deliberate one: reading the tail behind an
+		// arbitrary command means opening files named by lines ProxSave knows nothing about,
+		// while the runner set is the same gate cronRunnerNamesProxsave already trusts. The cost
+		// is one missed advisory on a shape operators write far less often than "flock WRAPPER".
+		{"a non-runner followed by the wrapper", "0 2 * * * " + write("pre-check", "#!/bin/sh\nexit 0\n") + " ; " + wrapper, false, "", ""},
+
+		// The same line as "a plain copy of the binary" above, with an flock in front of it, and
+		// it now answers the same: false. It used to answer true, and the two rows disagreeing
+		// over nothing but a launcher is what the runner rule's readability gate removed. The
+		// copier is READ here and does not call the binary; the binary's path on this line is an
+		// ARGUMENT, which containsBinaryReference's own note says must never be read as a
+		// proxsave entry. A finding here refuses an unattended --upgrade over a job that backs
+		// the binary up.
+		{"a copy of the binary behind a runner", "0 2 * * * " + flock + " -n " + lock + " " + copier + " /usr/local/bin/proxsave /backup/", false, "", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			refs := indirectProxsaveCronRefs([]string{tc.line}, cronProbeReadScripts)
+			if got := len(refs) > 0; got != tc.want {
+				t.Fatalf("flagged = %v, want %v for:\n%s", got, tc.want, tc.line)
+			}
+			if !tc.want {
+				return
+			}
+			if !strings.Contains(refs[0].Reason, tc.says) {
+				t.Errorf("reason %q must name %q", refs[0].Reason, tc.says)
+			}
+			if tc.mutes != "" && strings.Contains(refs[0].Reason, tc.mutes) {
+				t.Errorf("reason %q must not fall back to %q", refs[0].Reason, tc.mutes)
+			}
+		})
+	}
+}
+
+// The two costs the runner rule adds to an operator's host are OPENS PER LINE and reads on the
+// lexical path. Neither is visible in the finding, so only a test keeps them from drifting -
+// the same argument maxCronWrapperProbeBytes already carries one level down.
+//
+// The cap is pinned BEHAVIOURALLY, with no seam and no open counter: a line with more command
+// positions than the budget allows must stop reading, and stopping means the wrapper at the end
+// of it goes unflagged. That is the false negative the cap buys, stated out loud.
+func TestCronRunnerProbeIsBounded(t *testing.T) {
+	dir := t.TempDir()
+	wrapper := filepath.Join(dir, "nas-guard")
+	if err := os.WriteFile(wrapper, []byte("#!/bin/sh\nexec /usr/local/bin/proxsave --backup\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// Absent, like the compiled runners they stand for: each one is one open the probe spends.
+	chain := func(names ...string) string {
+		out := make([]string, 0, len(names)+1)
+		for _, n := range names {
+			out = append(out, filepath.Join(dir, n))
+		}
+		return "0 2 * * * " + strings.Join(append(out, wrapper), " ")
+	}
+	flagged := func(line string) bool {
+		return len(indirectProxsaveCronRefs([]string{line}, cronProbeReadScripts)) > 0
+	}
+
+	// maxCronWrapperProbesPerLine opens: the seven launchers behind the token, then the wrapper.
+	within := chain("ionice", "nice", "setsid", "nohup", "stdbuf", "eatmydata", "chronic", "env")
+	if !flagged(within) {
+		t.Errorf("a wrapper reached within the probe budget must still be found:\n%s", within)
+	}
+	// One command position more than the budget: the wrapper is never opened.
+	past := chain("ionice", "nice", "setsid", "nohup", "stdbuf", "eatmydata", "chronic", "env", "sudo")
+	if flagged(past) {
+		t.Errorf("past maxCronWrapperProbesPerLine the line must stop being read:\n%s", past)
+	}
+}
+
+// cronCommandRunners is the gate that decides which cron lines get their TAIL read, so widening it
+// widens what an unattended --upgrade opens and refuses on. The set is admissible precisely
+// because a runner's job is to hand execution to the command after it: everything before that
+// command is an option or an operand, never a path the line merely names.
+//
+// A command that takes PATHS as arguments is the opposite, and admitting one turns argument paths
+// into command positions - "cp /usr/local/bin/proxsave /backup/" is the documented case the whole
+// command-position rule exists to keep unflagged. These are the commands an operator most often
+// puts in a crontab, so this pins them out by name rather than trusting that nobody will add one.
+func TestCronCommandRunnersExcludesPathTakingCommands(t *testing.T) {
+	for _, name := range []string{
+		"cp", "mv", "rm", "ln", "dd", "tar", "rsync", "find", "cat", "tail", "head",
+		"logrotate", "curl", "wget", "zfs", "pvesm", "vzdump", "proxmox-backup-client",
+	} {
+		if _, isRunner := cronCommandRunners[name]; isRunner {
+			t.Errorf("%q takes paths as arguments, so admitting it as a runner makes the probe open files the line only names, and reports a data file as a script that calls the binary", name)
+		}
+	}
+	// The counterweight: the set is not empty by accident either. These four are what the runner
+	// rule exists for, and losing one of them loses the wrapper behind it.
+	for _, name := range []string{"flock", "sudo", "sh", "timeout"} {
+		if _, isRunner := cronCommandRunners[name]; !isRunner {
+			t.Errorf("%q hands execution to the command after it and must stay a runner: without it a wrapper behind it is never read", name)
+		}
+	}
+}
+
+// visit has to STOP at the first word it accepts, and that is not a style preference: the caller
+// behind cronRunnerWrappedScript OPENS every word it is handed, so an eager walk reads files the
+// line already answered for. The documented reason is the cost; the observable consequence is the
+// reason string, which names whichever match the walk ended on.
+//
+// A line with two wrappers is the only shape that can tell the two apart: both are found either
+// way, so the verdict proves nothing and only the NAME does.
+func TestCronRunnerProbeStopsAtTheFirstMatch(t *testing.T) {
+	dir := t.TempDir()
+	write := func(name string) string {
+		t.Helper()
+		p := filepath.Join(dir, name)
+		if err := os.WriteFile(p, []byte("#!/bin/sh\nexec /usr/local/bin/proxsave --backup\n"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	first, second := write("nas-guard"), write("pbs-guard")
+	flock := filepath.Join(dir, "flock") // absent, like the compiled runner it stands for
+	lock := filepath.Join(dir, "nightly.lock")
+
+	line := "0 2 * * * " + flock + " -n " + lock + " " + first + " ; " + second
+	refs := indirectProxsaveCronRefs([]string{line}, cronProbeReadScripts)
+	if len(refs) != 1 {
+		t.Fatalf("the line runs the binary, so it must be reported once, got %+v", refs)
+	}
+	if !strings.Contains(refs[0].Reason, first) {
+		t.Errorf("the reason must name the first match, got %q", refs[0].Reason)
+	}
+	if strings.Contains(refs[0].Reason, second) {
+		t.Errorf("the walk read past its own answer and ended on the second match, got %q", refs[0].Reason)
+	}
+}
+
+// The lexical path must stay lexical. deriveSchedulerTimeFromCrontab runs inside the install
+// wizard and inside --upgrade-config-json, whose stdout must stay pure JSON, so cronProbeNamesOnly
+// may not open anything - the runner rule included. Not flagging a wrapper that exists and does
+// call the binary is the only available proof that no read happened, which is the trick
+// TestIndirectProxsaveCronRefsContentProbe already uses for the token probe.
+func TestCronRunnerProbeStaysOffWithoutContentProbing(t *testing.T) {
+	dir := t.TempDir()
+	wrapper := filepath.Join(dir, "nas-guard")
+	if err := os.WriteFile(wrapper, []byte("#!/bin/sh\nexec /usr/local/bin/proxsave --backup\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	line := "0 2 * * * " + filepath.Join(dir, "flock") + " -n " + filepath.Join(dir, "x.lock") + " " + wrapper
+	if refs := indirectProxsaveCronRefs([]string{line}, cronProbeNamesOnly); len(refs) > 0 {
+		t.Errorf("cronProbeNamesOnly must not read the wrapped script: %q", refs[0].Reason)
+	}
+	if refs := indirectProxsaveCronRefs([]string{line}, cronProbeReadScripts); len(refs) == 0 {
+		t.Error("the same line must be found once reading is allowed, or the test proves nothing")
+	}
+}
+
+// A wrapper writes the binary path once, and the shape it writes it in most often is the
+// DEFAULT-VALUE expansion: source /etc/default/proxsave, then
+//
+//	PROXSAVE_BIN="${PROXSAVE_BIN:-/usr/local/bin/proxsave}"
+//	exec "$PROXSAVE_BIN" --backup
+//
+// resolveScriptWord expanded "$NAME" and "${NAME}" and nothing else, so the word fell through
+// unchanged and its basename read as "proxsave}", which matches nothing. And scriptProxsavePathVars
+// recorded an assignment only when the right-hand side was ALREADY a literal proxsave path, so the
+// self-referencing form above was never recorded either and the later "$PROXSAVE_BIN" resolved to
+// nothing. Two holes, one rule: the same expansion has to apply in command position and on an
+// assignment's right-hand side, or the two sides drift apart again.
+//
+// The counterweights are the other half of the specification. Expanding a default may not turn a
+// MENTION into a run: the same word copied, mirrored, commented out or sitting in a here-document
+// body must stay unflagged, and so must the forms whose operand is a message or a pattern rather
+// than a path.
+func TestScriptProbeExpandsDefaultValues(t *testing.T) {
+	dir := t.TempDir()
+	flagged := func(t *testing.T, body string) bool {
+		t.Helper()
+		p := filepath.Join(dir, strings.ReplaceAll(t.Name(), "/", "_")+".sh")
+		if err := os.WriteFile(p, []byte(body), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		return len(indirectProxsaveCronRefs([]string{"0 2 * * * " + p}, cronProbeReadScripts)) > 0
+	}
+
+	for _, tc := range []struct {
+		name string
+		body string
+		want bool
+	}{
+		// The default is taken because the variable is unset, which is what the shape is FOR.
+		{"colon-dash default never assigned", "#!/bin/sh\n${PROXSAVE_BIN:-/usr/local/bin/proxsave} --backup\n", true},
+		{"dash default without the colon", "#!/bin/sh\n${PROXSAVE_BIN-/usr/local/bin/proxsave} --backup\n", true},
+		{"quoted behind exec", "#!/bin/sh\nexec \"${PROXSAVE_BIN:-/usr/local/bin/proxsave}\" --backup\n", true},
+		{"behind flock", "#!/bin/sh\nflock -n /var/lock/ps.lock \"${PROXSAVE_BIN:-/usr/local/bin/proxsave}\" --backup\n", true},
+		{"inside sh -c", "#!/bin/sh\nsh -c '${PROXSAVE_BIN:-/usr/local/bin/proxsave} --backup'\n", true},
+		// BOTH branches count. The map is a whitelist of assignments that already name the binary,
+		// so a name missing from it means "no proxsave-valued assignment was seen", never "known to
+		// be something else"; and even a complete map could not decide, because the shell takes the
+		// default when the variable is unset OR EMPTY at run time, which depends on /etc/default,
+		// on cron's environment and on the script's own arguments.
+		{"known value is the binary, the default is not", "#!/bin/sh\nBIN=/usr/local/bin/proxsave\n\"${BIN:-/usr/bin/true}\" --backup\n", true},
+		{"known value is not the binary, the default is", "#!/bin/sh\nBIN=/usr/bin/rsync\n\"${BIN:-/usr/local/bin/proxsave}\" --backup\n", true},
+		{"a default built from another variable", "#!/bin/sh\n${PROXSAVE_BIN:-$PREFIX/bin/proxsave} --backup\n", true},
+
+		// The same expansion on an assignment's RIGHT-HAND SIDE.
+		{"sourced default file, self-referencing assignment", "#!/bin/sh\n[ -r /etc/default/proxsave ] && . /etc/default/proxsave\nPROXSAVE_BIN=\"${PROXSAVE_BIN:-/usr/local/bin/proxsave}\"\nexec \"$PROXSAVE_BIN\" --backup\n", true},
+		{"default carried through a second variable", "#!/bin/sh\nBIN=\"${PROXSAVE_BIN:-/usr/local/bin/proxsave}\"\n\"$BIN\" --backup\n", true},
+		{"positional parameter with a default", "#!/bin/sh\nBIN=\"${1:-/usr/local/bin/proxsave}\"\n\"$BIN\" --backup\n", true},
+		{"alias assignment", "#!/bin/sh\nPROXSAVE_BIN=/opt/site/proxsave\nBIN=\"$PROXSAVE_BIN\"\n\"$BIN\" --backup\n", true},
+		{"an empty default with the name known", "#!/bin/sh\nBIN=/usr/local/bin/proxsave\n\"${BIN:-}\" --backup\n", true},
+
+		// A launcher reached through a default is still a launcher: reading the unexpanded word
+		// ends the segment on a brace and hides whatever it was about to run.
+		{"a launcher reached through a default", "#!/bin/sh\n${FLOCK:-/usr/bin/flock} -n /var/lock/x /usr/local/bin/proxsave --backup\n", true},
+		// The four opaque launchers keep their documented broad scan over the rest of the
+		// segment, and it expands defaults too. Gating the expansion to command position there
+		// and nowhere else would make the same word mean two different things in one file.
+		{"a default under an opaque launcher", "#!/bin/sh\nsu - backup -c '${PROXSAVE_BIN:-/usr/local/bin/proxsave} --backup'\n", true},
+
+		// COUNTERWEIGHTS. Command position still gates everything: a mention stays a mention.
+		{"the default only copied", "#!/bin/sh\ncp \"${PROXSAVE_BIN:-/usr/local/bin/proxsave}\" /backup/\n", false},
+		{"the default copied behind sudo", "#!/bin/sh\nsudo cp \"${PROXSAVE_BIN:-/usr/local/bin/proxsave}\" /backup/\n", false},
+		{"a directory default only mirrored", "#!/bin/sh\nrsync -a \"${SRC:-/opt/proxsave/}\" /mnt/nas/\n", false},
+		{"the alias only copied", "#!/bin/sh\nPROXSAVE_BIN=/opt/site/proxsave\nBIN=$PROXSAVE_BIN\ncp $BIN /backup/\n", false},
+		{"commented out", "#!/bin/sh\n# ${PROXSAVE_BIN:-/usr/local/bin/proxsave} --backup\ntrue\n", false},
+		{"inside a here-document body", "#!/bin/sh\ncat <<EOF\n${PROXSAVE_BIN:-/usr/local/bin/proxsave} --backup\nEOF\ntrue\n", false},
+		{"a default that is not a proxsave path", "#!/bin/sh\n\"${BACKUP_BIN:-/usr/bin/borg}\" create /mnt/repo::x /data\n", false},
+		// NOT expanded on purpose: the word is a recipe for a path, not a path.
+		{"a concatenation", "#!/bin/sh\n\"${PROXSAVE_DIR:-/opt/proxsave}/bin/wrapper.sh\" --backup\n", false},
+		// NOT expanded on purpose: resolving it means evaluating an expansion inside an expansion.
+		{"nested defaults", "#!/bin/sh\n\"${A:-${B:-/usr/local/bin/proxsave}}\" --backup\n", false},
+		// The binary is named as the ARGUMENT of a lookup, not run.
+		{"command substitution", "#!/bin/sh\n\"$(command -v proxsave)\" --backup\n", false},
+		// Operands that are a length, a pattern or a message, not a path.
+		{"string length", "#!/bin/sh\nBIN=/usr/local/bin/proxsave\n\"${#BIN}\" --backup\n", false},
+		{"suffix removal", "#!/bin/sh\nBIN=/usr/local/bin/proxsave\n\"${BIN%%-*}\" --backup\n", false},
+		{"an empty default with the name unknown", "#!/bin/sh\n\"${PROXSAVE_BIN:-}\" --backup\n", false},
+		{"no name at all", "#!/bin/sh\n\"${:-/usr/local/bin/proxsave}\" --backup\n", false},
+		// ":=" means ":-" plus an assignment. It is here now, and its second half - the value
+		// persisting for every later line - is covered by
+		// TestScriptProbeExpandsAnAssigningDefault, together with the shapes a shell refuses.
+		{"assign-and-use form", "#!/bin/sh\n\"${PROXSAVE_BIN:=/usr/local/bin/proxsave}\" --backup\n", true},
+
+		// PRESERVE. These two are true today by the basename rule alone, not by any expansion.
+		// Anyone tightening that rule later must expect THESE rows to move, not the ones above.
+		{"a braced directory joined to the binary", "#!/bin/sh\nPROXSAVE_DIR=/opt/proxsave\n\"${PROXSAVE_DIR}/proxsave\" --backup\n", true},
+		{"a defaulted directory joined to the binary", "#!/bin/sh\n\"${PROXSAVE_DIR:-/opt/proxsave}/proxsave\" --backup\n", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := flagged(t, tc.body); got != tc.want {
+				t.Errorf("flagged = %v, want %v for:\n%s", got, tc.want, tc.body)
+			}
+		})
+	}
+}
+
+// Two properties of the expansion parser that no end-to-end row can observe, and which are
+// therefore pinned here or not at all.
+//
+// FIRST, the operator is ANCHORED to the end of the name. An unanchored search finds the "-" in
+// "%%-*" and in ":?...-missing" and hands back a pattern or an error message as a command; every
+// behaviour row is blind to that, because the string it then produces happens not to name the
+// binary. SECOND, an expansion carrying BOTH a known value and a default yields both, in that
+// order. Today the union is inert - every value in vars already names the binary, so the known
+// branch answers on its own - which is exactly why only a unit test can hold it in place for the
+// day vars is allowed to hold anything else.
+func TestParseScriptExpansion(t *testing.T) {
+	for _, tc := range []struct {
+		word     string
+		name     string
+		fallback string
+		ok       bool
+	}{
+		{"$BIN", "BIN", "", true},
+		{"${BIN}", "BIN", "", true},
+		{"${BIN:-/usr/local/bin/proxsave}", "BIN", "/usr/local/bin/proxsave", true},
+		{"${BIN-/usr/local/bin/proxsave}", "BIN", "/usr/local/bin/proxsave", true},
+		{"${1:-/usr/local/bin/proxsave}", "1", "/usr/local/bin/proxsave", true},
+		{"${BIN:-}", "BIN", "", true},
+		// An unbalanced brace still resolves, exactly as it did before this parser existed.
+		{"${BIN", "BIN", "", true},
+
+		// The operand is a message, an alternative, a pattern or a length - never the command.
+		{"${BIN:?/usr/local/bin/proxsave-missing}", "", "", false},
+		{"${BIN:+/usr/local/bin/proxsave}", "", "", false},
+		{"${BIN%%-*}", "", "", false},
+		{"${BIN#/usr-local}", "", "", false},
+		{"${#BIN}", "", "", false},
+		{"${:-/usr/local/bin/proxsave}", "", "", false},
+		// A concatenation is a recipe for a path, not a path.
+		{"${BIN}/proxsave", "", "", false},
+		// An operator only exists INSIDE braces. Unbraced, the shell expands $BIN and appends the
+		// rest as literal text, so "$BIN-/usr/local/bin/proxsave" is a name with a suffix, not a
+		// default - and reading it as one invented a command out of a word the shell would never
+		// run. Same reason "${BIN}/proxsave" is refused: what is left is a recipe.
+		{"$BIN-/usr/local/bin/proxsave", "", "", false},
+		{"$BIN:-/usr/local/bin/proxsave", "", "", false},
+		{"$BIN/proxsave", "", "", false},
+		// Not an expansion at all.
+		{"/usr/local/bin/proxsave", "", "", false},
+	} {
+		t.Run(tc.word, func(t *testing.T) {
+			name, fallback, ok := parseScriptExpansion(tc.word)
+			if ok != tc.ok || name != tc.name || fallback != tc.fallback {
+				t.Errorf("parseScriptExpansion(%q) = (%q, %q, %v), want (%q, %q, %v)",
+					tc.word, name, fallback, ok, tc.name, tc.fallback, tc.ok)
+			}
+		})
+	}
+}
+
+func TestScriptWordExpansionsKeepsBothBranches(t *testing.T) {
+	got := scriptWordExpansions("\"${BIN:-/usr/local/bin/proxsave}\"", map[string]string{"BIN": "/opt/site/proxsave"})
+	want := []string{"/opt/site/proxsave", "/usr/local/bin/proxsave"}
+	if len(got) != len(want) {
+		t.Fatalf("got %q, want %q", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("got %q, want %q (the known value first, then the default)", got, want)
+		}
+	}
+}

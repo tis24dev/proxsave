@@ -91,12 +91,16 @@ func initializeEmailNotification(opts backupModeOptions, orch *orchestrator.Orch
 
 // initializeHealthcheckSection verifies the healthchecks config at run start and
 // registers the Phase-7 section, EXACTLY like the other notification channels: it prints
-// a real init line (SKIP when disabled, a WARNING that disables the section on a config
-// problem, or a "✓ initialized" when usable) instead of being silent. This is a
+// a real init line (SKIP when disabled, a report that disables the section on a config or
+// daemon problem, or a "✓ initialized" when usable) instead of being silent. This is a
 // CONFIG-only check (no network); the REAL transmission state is reported later by the
 // Phase-7 section from the daemon status file. Registering only when usable keeps a
 // disabled/broken section out of the dispatch, and the Phase-7 entries loop renders the
 // matching "disabled" / "enabled but not initialized" line just as it does for the others.
+//
+// That problem report is a WARNING on BOTH engines, and it costs the run the same exit code
+// on both. reportHealthchecksUnusable only adds the ENGINE to the reason, because "the daemon
+// is not there" reads differently on a host that was never meant to have one.
 func initializeHealthcheckSection(opts backupModeOptions, orch *orchestrator.Orchestrator) {
 	cfg := opts.cfg
 	logger := opts.logger
@@ -109,12 +113,16 @@ func initializeHealthcheckSection(opts backupModeOptions, orch *orchestrator.Orc
 	// a valid config is worthless if the daemon is down. On ANY problem, switch the
 	// channel to disabled EXACTLY like checkTelegramServerStatus does for a failed
 	// centralized handshake (main_identity.go): so the whole flow treats it as disabled.
+	// reportHealthchecksUnusable warns either way and names the engine in the reason when the
+	// host is on cron. Both probes still RUN in cron mode: their verdict is what fills in that
+	// reason, and a cron host that really does have a live daemon returns no problem here at
+	// all and initializes normally.
 	if problem := healthcheckConfigProblem(cfg); problem != "" {
-		disableHealthchecks(cfg, logger, problem)
+		reportHealthchecksUnusable(cfg, logger, problem)
 		return
 	}
 	if problem := healthcheckDaemonProblem(opts.ctx, cfg, logger); problem != "" {
-		disableHealthchecks(cfg, logger, problem)
+		reportHealthchecksUnusable(cfg, logger, problem)
 		return
 	}
 	logging.DebugStep(logger, "notifications init", "healthchecks enabled (mode=%s, daemon up)", cfg.HealthcheckMode)
@@ -132,6 +140,72 @@ func disableHealthchecks(cfg *config.Config, logger *logging.Logger, reason stri
 	logging.Warning("Healthchecks: %s", reason)
 	logging.Skip("Healthchecks: disabled")
 	cfg.HealthcheckEnabled = false
+}
+
+// reportHealthchecksUnusable switches the section off with a reason, WARNS, and adds the
+// scheduler engine to that reason when the host is on cron.
+//
+// The SEVERITY is the same on both engines, and that is deliberate. A WARNING is counted off
+// the log file and promotes a clean run to exit 1 (applyIssueExitCode,
+// internal/orchestrator/extensions.go), which is the entire point of reporting it:
+// HEALTHCHECK_ENABLED=true is a statement that the operator WANTS monitoring, and monitoring
+// that silently does nothing is worth an exit code whichever scheduler is running.
+//
+// What the cron arm adds is the ENGINE, because the same reason means something else there.
+// On the daemon engine the daemon IS the scheduler, so "daemon not installed" / "daemon not
+// running" is a regression: the host believes it is monitored and is not. On the cron engine
+// there is no daemon BY CONSTRUCTION. The two engines are mutually exclusive and every
+// reconciler enforces it: reconcileSchedulerAfterInstall tears down a leftover unit whenever
+// the mode is cron, and applyCronMode removes the unit on the way back. Only the resident
+// daemon ever pings (docs/HEALTHCHECKS.md: "A host still on the cron scheduler reports
+// nothing, no matter how the keys below are set"). So the reason names the engine: the key is
+// on, and on this engine nothing will ever transmit, whatever the keys say.
+//
+// This is NOT issue #298 coming back. There the key was left at true by --daemon-remove
+// ITSELF, so hosts that had never asked for monitoring warned and exited 1 on every
+// successful backup. That loop is closed by the WRITER, not by muting anything here:
+// applyCronMode now rolls HEALTHCHECK_ENABLED back on the way out. A host that reverted with
+// an OLDER build still carries the stale true and nothing rewrites it for them, so they reach
+// this line and see the warning; that is the price of not deciding a monitoring setting on
+// evidence that cannot tell "the old revert left it" from "the operator wants it".
+//
+// A cron host whose daemon is genuinely alive never arrives here at all
+// (healthcheckDaemonProblem returns "" and the channel registers as usual), so the one state
+// where cron mode really is transmitting keeps its section. That state is not hypothetical:
+// applyCronMode persists SCHEDULER_MODE=cron BEFORE it tears the unit down (F09-06), so a
+// failed teardown leaves a live, transmitting daemon on a host whose config already reads
+// cron.
+//
+// The cron arm requires a POSITIVE "cron" reading and never an unknown or empty
+// SchedulerMode. config.normalizeSchedulerMode already collapses every unrecognised value to
+// "cron" before a parsed config reaches here, so the only way to arrive with an empty mode is
+// a hand-built Config. That host gets the plain reason without the engine clause, which is
+// the right way round: the clause is a claim about how this host is scheduled, and nobody
+// stated it.
+//
+// Both arms flip cfg.HealthcheckEnabled, unchanged from before: the Phase-7 entries loop
+// (dispatchNotifications), the effective-state summary (logBackupNotificationSummary) and the
+// standalone-run handoff (maybeHandoffManualBackup) all read that one flag, and cfg is the
+// same pointer they see.
+func reportHealthchecksUnusable(cfg *config.Config, logger *logging.Logger, reason string) {
+	if cfg != nil && strings.EqualFold(strings.TrimSpace(cfg.SchedulerMode), "cron") {
+		logging.DebugStep(logger, "notifications init", "healthchecks inert on the cron engine: %s", reason)
+		// Two lines, like every other channel: the reason, then a bare "disabled". The reason
+		// used to be stuffed into the SKIP itself, which left this the one entry in the
+		// notification block reading "Healthchecks: disabled (cron mode: ...; daemon not
+		// installed)" while Email, Telegram, Gotify and Webhook all read "<channel>: disabled".
+		// Telegram sets the shape: "Telegram: 409 - Registration missing on the bot" followed by
+		// "Telegram: disabled".
+		//
+		//
+		// The level is WARNING, exactly like the daemon arm; see the doc comment above for why
+		// this arm changes the wording and not the severity.
+		logging.Warning("Healthchecks: %s (cron mode: only the resident daemon transmits)", reason)
+		logging.Skip("Healthchecks: disabled")
+		cfg.HealthcheckEnabled = false
+		return
+	}
+	disableHealthchecks(cfg, logger, reason)
 }
 
 // healthcheckDaemonProblem verifies the monitoring daemon is actually alive by reading

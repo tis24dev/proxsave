@@ -1021,7 +1021,7 @@ inspect it.
 ### Switch to the daemon
 
 ```bash
-# Install the systemd service, remove the cron entry, turn on centralized healthchecks
+# Install the systemd service, remove the proxsave cron entry, turn on centralized healthchecks
 proxsave --daemon-setup
 
 # Check status (exit 0 only when running, beating, and binary-aligned)
@@ -1033,6 +1033,13 @@ proxsave --daemon-status
 `MAX_RUN_DURATION` watchdog, and reports four checks (alive, backup, updates, and one per
 notification channel) to an external healthchecks monitor.
 
+It also deletes every cron line whose command is named `proxsave` or `proxmox-backup`, and
+tells you how many it removed, or that it found none. "None" on a host that was running on
+cron means something else was scheduling the backup, typically a wrapper script whose command
+has a different name: that entry survives and now runs alongside the daemon, and `--daemon-setup`
+warns about it by name. The unattended `--upgrade` migration refuses outright in that case.
+Read [DAEMON.md](DAEMON.md) before switching such a host.
+
 ### Inspect and revert
 
 ```bash
@@ -1040,6 +1047,14 @@ systemctl status proxsave-daemon.service      # is it running?
 journalctl -u proxsave-daemon.service -f      # follow its log
 proxsave --daemon-remove                       # revert to a cron entry
 ```
+
+`--daemon-remove` always writes a cron line at `SCHEDULER_TIME` and records `SCHEDULER_MODE=cron`,
+which is what stops upgrades reinstalling the daemon: the key is present, so it is honoured. If the
+host also schedules ProxSave through an entry ProxSave does not own, that entry is reported and left
+alone, so such a host ends with two nightly backups and the run that loses the per-run lock exits
+`16`. Withholding the line instead would leave a misidentified host with nothing scheduled at all,
+silently, which is the worse of the two. The daemon-only healthchecks are switched back off
+with the daemon, so a reverted host does not warn about a service that is no longer installed.
 
 See [DAEMON.md](DAEMON.md) for the daemon itself and [HEALTHCHECKS.md](HEALTHCHECKS.md)
 for the monitoring modes (centralized vs self), the monitoring portal, and the full

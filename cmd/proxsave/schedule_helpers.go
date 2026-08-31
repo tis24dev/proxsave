@@ -141,10 +141,63 @@ func deriveSchedulerTimeFromCrontab(ctx context.Context, configPath string) sche
 				"The existing proxsave cron entry is not a single daily time; SCHEDULER_TIME stays at the %s default - set it in backup.env if the backup must run at another time.",
 				cronutil.DefaultTime)}
 		}
+		// No cron line NAMES the proxsave binary, but one may still run it indirectly
+		// (#298). That wrapper's schedule is then the ONLY record of the host's real run
+		// time, which is exactly why the silence hurt: SCHEDULER_TIME kept the 02:00
+		// default, i.e. the very minute the wrapper already occupied. The time is still
+		// not adopted - it belongs to a script we did not write and cannot interpret - so
+		// say so and let the operator set it. Lexical rules only (cronProbeNamesOnly):
+		// this also runs in the install wizard and in --upgrade-config-json, neither of
+		// which should be reading scripts off disk.
+		if hhmm, source := schedulerTimeFromSystemCron(); hhmm != "" {
+			return schedulerTimeSeed{Note: fmt.Sprintf(
+				"A proxsave cron entry in %s runs the backup at %s and ProxSave does not edit files it did not place, so that entry stays; SCHEDULER_TIME keeps the %s default and applies only to the entry ProxSave writes.", source, hhmm, cronutil.DefaultTime)}
+		}
+		if refs := indirectProxsaveCronRefs(lines, cronProbeNamesOnly); len(refs) > 0 {
+			at := ""
+			if t := cronutil.ScheduleToTime(refs[0].Line); t != "" {
+				at = fmt.Sprintf(" at %s", t)
+			}
+			return schedulerTimeSeed{Note: fmt.Sprintf(
+				"No proxsave cron entry was found, but %s appears to run ProxSave%s; SCHEDULER_TIME stays at the %s default - set it in backup.env so the scheduler does not collide with that entry.",
+				refs[0].Command, at, cronutil.DefaultTime)}
+		}
 		return schedulerTimeSeed{}
 	}
 	return schedulerTimeSeed{Time: hhmm, Note: fmt.Sprintf(
 		"SCHEDULER_TIME was not set: adopted %s from the existing proxsave cron entry so the daily run time does not change.", hhmm)}
+}
+
+// schedulerTimeFromSystemCron reads the run time of a proxsave cron line under /etc/crontab or
+// /etc/cron.d, returning the time and the file it came from, or "" when the habitat says
+// nothing unambiguous. Its caller reports it and does not adopt it; see below.
+//
+// It runs only after the root crontab has yielded nothing, and that order is the priority
+// rule, not an implementation detail: the root crontab is the table ProxSave owns and is
+// about to rewrite, so a time found there is the one it is going to reinstate.
+//
+// The time it returns is REPORTED, never adopted, and that is the whole difference between
+// the two habitats. Adopting a root-crontab time is continuity, because the line it came from
+// is the line ProxSave is about to replace. Adopting an /etc time is a collision: ProxSave
+// never edits /etc, so that entry SURVIVES the install, and writing its hour into
+// SCHEDULER_TIME puts the line ProxSave is about to write in the exact minute the surviving
+// one already occupies. The two runs then meet on the per-run lock and one exits 16 every
+// night. Left alone, the host keeps its /etc entry and gains ProxSave's at the default hour:
+// still two backups, both of which succeed.
+//
+// Same unanimity rule as schedulerTimeFromCronLines: two proxsave lines at different times, or
+// a schedule the daemon cannot express, say nothing. A finding that names one of several hours
+// would read as the host's run time.
+func schedulerTimeFromSystemCron() (string, string) {
+	found, source := "", ""
+	for _, ref := range systemCronDirectProxsaveLines() {
+		hhmm := cronutil.ScheduleToTime(ref.Line)
+		if hhmm == "" || (found != "" && found != hhmm) {
+			return "", ""
+		}
+		found, source = hhmm, ref.Source
+	}
+	return found, source
 }
 
 // schedulerTimeFromCronLines derives the single daily HH:MM the proxsave cron
@@ -167,6 +220,97 @@ func schedulerTimeFromCronLines(lines []string) (string, bool) {
 		found = hhmm
 	}
 	return found, found != ""
+}
+
+// adoptSchedulerTimeForDaemon carries the host's real run time across a cron -> daemon switch,
+// by overwriting SCHEDULER_TIME with the time of the proxsave cron entry that is about to be
+// deleted.
+//
+// It must run BEFORE removeCanonicalCronEntry, which is the only record of that time on a cron
+// host: in cron mode the crontab IS the schedule and SCHEDULER_TIME is a leftover nothing keeps
+// in step, so an operator who edited the cron line moved the backup while the key stayed where
+// the installer left it. The daemon then reads the key, and the host would silently start
+// running at a different hour the moment it is retrofitted. It takes the crontab lines rather
+// than reading them itself, so the hour it adopts and the lines the removal acts on are the same
+// snapshot.
+//
+// It OVERWRITES, unlike the install-time seeding, which fills the key only when it is ABSENT
+// because "an explicit operator value is never overridden" (deriveSchedulerTimeFromCrontab).
+// That gate is right at install time, where the key and the crontab are two independent
+// statements of intent and neither has been in force over the other. Here it is not: the host
+// has been running on cron, so the crontab is the statement that has been in force.
+//
+// It says nothing and writes nothing when there is no single daily time to carry: no proxsave
+// cron line at all, two lines at different times, or a cadence that is not one run a day. The
+// daemon runs once daily, so picking one of several would move the backup on purpose. The
+// value already in the key then stands, which is the same answer the install path gives.
+//
+// The ROOT crontab only. A proxsave line under /etc is deliberately not read here: ProxSave
+// never edits /etc, so that line SURVIVES the switch, and adopting its time would schedule the
+// daemon in the exact minute it already occupies.
+// It returns NOTHING. It used to hand the adopted hour back so the caller could name the time
+// in its warning, and no caller ever did: prepareCronHandoverForDaemon recomputes the hour with
+// schedulerTimeFromCronLines(lines) and its own comment there explains why gating that warning on
+// the adoption is wrong. An adoption only happens when the hour CHANGES, so on the host ProxSave
+// installed itself nothing is adopted and the returned hour was empty on exactly the host whose
+// surviving cron line shares the daemon's minute.
+func adoptSchedulerTimeForDaemon(configPath string, lines []string, bootstrap *logging.BootstrapLogger) {
+	configPath = strings.TrimSpace(configPath)
+	if configPath == "" {
+		return
+	}
+	hhmm, ok := schedulerTimeFromCronLines(lines)
+	if !ok {
+		return
+	}
+	data, err := safefs.ReadFileUnderRoot(configPath)
+	if err != nil {
+		return
+	}
+	stored := strings.TrimSpace(installer.DeriveInstallWizardPrefill(string(data)).SchedulerTime)
+	if stored == hhmm {
+		return
+	}
+	if err := setBackupEnvKeys(configPath, map[string]string{"SCHEDULER_TIME": hhmm}); err != nil {
+		// A WARNING, not a debug line. The removal that follows goes ahead either way - the
+		// switch before this adoption existed removed the cron entry unconditionally, so
+		// refusing here would be a new refusal rather than a fix - and the host then runs at
+		// whatever SCHEDULER_TIME already said. The operator cannot infer that from anything
+		// else on screen, and the old DebugStepBootstrap said nothing at all on the
+		// --daemon-setup path, where bootstrap is nil and that helper returns immediately.
+		logBootstrapWarning(bootstrap, "Could not record %s as SCHEDULER_TIME in %s: %v. The daemon will run at %s instead, the time already recorded.", hhmm, configPath, err, schedulerTimeOrDefaultLabel(stored))
+		return
+	}
+	logBootstrapInfo(bootstrap, "SCHEDULER_TIME set to %s, the time of the proxsave cron entry this switch removes, so the daily run time does not change.", hhmm)
+}
+
+// schedulerTimeOrDefaultLabel names the time the daemon will actually use when an adoption
+// could not be written. An ABSENT key is not the same as a recorded one: nothing has been
+// stated, so the compiled default is what runs, and saying "" there would name no time at all.
+func schedulerTimeOrDefaultLabel(stored string) string {
+	if stored == "" {
+		return "the compiled default"
+	}
+	return stored
+}
+
+// reportUnremovedCronEntry tells the operator that the proxsave cron entry ProxSave has just
+// tried and failed to delete is still scheduled, and at what time.
+//
+// It replaced a RESTORE. That restore put SCHEDULER_TIME back to what the adoption had
+// overwritten, and where the variable had been absent it wrote the compiled default - which was
+// worse than doing nothing twice over. SCHEDULER_TIME is a template variable ProxSave owns, so a
+// failed crontab write is no reason to rewrite it; and writing the default over an absent
+// variable turned "never recorded" into "recorded as 02:00", which is exactly the gate that stops
+// any later install or upgrade adopting the host's real run time from the crontab. On a host
+// whose surviving line already ran at the default, it also put the daemon in that very minute
+// while announcing it had avoided one.
+//
+// So the adopted hour stays and the operator is told. This is one of the cases where ProxSave
+// says what to do rather than only what happened, and it earns it: it has just proved it cannot
+// remove that line itself, and the operator asked for this switch.
+func reportUnremovedCronEntry(hhmm string, bootstrap *logging.BootstrapLogger) {
+	logBootstrapWarning(bootstrap, "Could not remove the legacy proxsave cron entry, it still runs at %s. Remove it by hand or the backup runs twice.", hhmm)
 }
 
 // adoptCronRunTimeIntoBase is the ONE place both front-ends adopt the host's cron

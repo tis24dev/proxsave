@@ -241,7 +241,6 @@ type Config struct {
 	SchedulerMode  string        // "cron" | "daemon"
 	SchedulerTime  string        // daily HH:MM ("Run at") used by daemon mode
 	MaxRunDuration time.Duration // daemon watchdog: hard timeout for one supervised backup
-	DaemonOptOut   bool          // true after --daemon-remove; --upgrade won't re-install the daemon
 
 	// Healthchecks connector (dead-man switch + backup outcome), used by the daemon.
 	HealthcheckEnabled           bool
@@ -841,7 +840,6 @@ func (c *Config) parseSchedulerSettings() {
 	c.SchedulerMode = normalizeSchedulerMode(c.getString("SCHEDULER_MODE", "cron"))
 	c.SchedulerTime = strings.TrimSpace(c.getString("SCHEDULER_TIME", "02:00"))
 	c.MaxRunDuration = c.getDuration("MAX_RUN_DURATION", 1*time.Hour)
-	c.DaemonOptOut = c.getBool("DAEMON_OPT_OUT", false)
 }
 
 // parseHealthcheckSettings reads the healthchecks-connector keys (daemon only).

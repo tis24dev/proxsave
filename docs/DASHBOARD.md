@@ -202,7 +202,7 @@ Re-runs the post-install audit. Unlike the other checks it waits for you to pres
 
 The daemon operations are the graphical equivalent of the `--daemon-*` flags. The menu only shows the ones that apply to your current scheduler state (see [the menu](#the-menu)).
 
-- `Status` computes a combined verdict and shows it: whether the service is installed and active, the scheduler mode, the opt-out flag, the running version, and whether the on-disk binary matches the running process. It runs automatically when opened; `Re-check` re-computes it so a restart done elsewhere shows up. A fresh heartbeat reads green `running`; a replaced binary while active reads yellow `behind - restart needed`. All problem states today are yellow warnings.
+- `Status` computes a combined verdict and shows it: whether the service is installed and active, the scheduler mode, the running version, and whether the on-disk binary matches the running process. It runs automatically when opened; `Re-check` re-computes it so a restart done elsewhere shows up. A fresh heartbeat reads green `running`; a replaced binary while active reads yellow `behind - restart needed`. All problem states today are yellow warnings.
 - `Install` / `Re-enable` installs and enables the service and removes the cron entry.
 - `Disable` reverts to the cron scheduler and stops future upgrades from reinstalling the daemon.
 - `Restart` restarts the service and verifies it came back aligned. It first waits for any in-progress backup to finish, because a restart would kill a daemon-supervised backup. If the wait times out it reports yellow `deferred - backup running` rather than forcing it.

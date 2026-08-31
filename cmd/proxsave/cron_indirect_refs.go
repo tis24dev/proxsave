@@ -1,0 +1,2145 @@
+// Package main contains the proxsave command entrypoint.
+package main
+
+import (
+	"bytes"
+	"context"
+	"fmt"
+	"io"
+	"os"
+	"path/filepath"
+	"strings"
+	"syscall"
+	"time"
+	"unicode"
+
+	"github.com/tis24dev/proxsave/internal/logging"
+	"github.com/tis24dev/proxsave/internal/safefs"
+	"github.com/tis24dev/proxsave/internal/types"
+)
+
+// This file answers the ONE question the canonical cron matcher deliberately
+// cannot: does this crontab schedule ProxSave through something that is NOT the
+// proxsave binary itself?
+//
+// commandTokenMatchesTarget (runtime_helpers.go) decides whether a cron line IS a
+// proxsave entry, and everything that DELETES a cron line keys off it. Its
+// narrowness is a guarantee rather than an oversight: it reads the command token's
+// basename only, so a line like "cp /usr/local/bin/proxsave /backup/" is never
+// mistaken for a proxsave job and removed. Nothing in this file widens it, and
+// nothing in this file removes a line.
+//
+// The gap that narrowness leaves is what issue #298 hit. Four hosts ran
+//
+//	MM 02 * * * /usr/local/sbin/proxsave-nas-guard
+//
+// an operator wrapper that verifies the final NAS mount really is CIFS/SMB before
+// invoking ProxSave. Its basename is "proxsave-nas-guard", not "proxsave", so the
+// --upgrade retrofit saw NO proxsave cron entry at all: it installed the daemon,
+// announced that "the cron entry was removed", removed nothing, and left every
+// host running two backups a night, the loser of the 02:00 race exiting
+// ExitBackupSkipped (16).
+//
+// The detector below is therefore SEPARATE and ADDITIVE. It only ever looks at
+// lines commandTokenMatchesTarget has already rejected, and its only outcomes are
+// a refusal (on the unattended --upgrade retrofit) and a warning (on the paths an
+// operator asked for explicitly). It never edits the crontab, because an
+// operator's wrapper is not ours to rewrite: it can carry a mount guard, an flock,
+// its own logging and its own exit handling, and deleting it on a guess destroys a
+// hand-written safety net. Detect, say exactly which line and why, change nothing.
+
+const (
+	// cronProbeReadScripts / cronProbeNamesOnly name indirectProxsaveCronRefs' second
+	// argument at the call site, because a bare true/false there says nothing about
+	// what it costs. cronProbeReadScripts also OPENS AND READS the command of every
+	// unmatched cron line, plus - when that command is a runner - the commands the runner runs,
+	// at most maxCronWrapperProbesPerLine per line and maxCronWrapperProbeBytes each;
+	// cronProbeNamesOnly stays purely lexical and touches no disk. The scheduler-time advisory in
+	// deriveSchedulerTimeFromCrontab runs inside the install wizard and inside
+	// --upgrade-config-json, so it takes the lexical form; the daemon paths run once
+	// and must not miss a wrapper, so they pay for the read.
+	cronProbeReadScripts = true
+	cronProbeNamesOnly   = false
+
+	// maxCronWrapperProbeBytes bounds the content probe. A cron wrapper is a shell
+	// script of a few KiB, so the cap costs no real detection while keeping a cron
+	// line that points at a large binary from being slurped into memory during an
+	// upgrade. It bounds the READ, not the open. The open is bounded separately: by
+	// O_NONBLOCK for a fifo or device node, and by cronProbeTimeout for everything else.
+	// The helpers that read /etc answer to cronProbeTimeout too, through cronDeadlineValue:
+	// a system-crontab file's stat, symlink resolution and read are ONE bounded step, and a
+	// run-parts entry's stat-through-the-symlink and resolution are another, so a cron.d
+	// entry symlinked into a dead mount costs the walk one timeout instead of stalling it
+	// before any of this runs. What is still unbounded is the walk's own stat and readdir of
+	// the six habitats themselves: their paths are the compile-time constants of
+	// systemCronPaths, which carries no operator-supplied component.
+	maxCronWrapperProbeBytes = 64 * 1024
+
+	// maxCronWrapperProbesPerLine bounds how many words of ONE cron line the content probe may
+	// open, which is the cost cronRunnerWrappedScript adds on top of the single open the token
+	// already pays. The arithmetic: the shapes an operator actually writes (flock/sh/nice/
+	// timeout/sudo in front of a wrapper) cost exactly one extra open, the deepest plausible
+	// nesting (ionice, then nice, then flock, then timeout, then the wrapper) costs four, so
+	// eight only bites on a line with more than eight command positions BEHIND THE TOKEN, i.e.
+	// more than nine on the line - one nobody writes by hand. The token is not counted here
+	// because the caller already paid for it, which is the off-by-one this sentence used to
+	// carry: TestCronRunnerProbeIsBounded chains eight names behind the token and is found,
+	// nine and is not. It bounds the OPENS, not the walk: past the cap the line is still parsed,
+	// just never read. The budget is per LINE, matching maxCronWrapperProbeBytes being per file,
+	// so a crontab with N runner lines can pay up to 8N. That is a count and nothing else:
+	// cronProbeTimeout's deadline is per CRONTAB and latches on the first timeout, so those
+	// 8N opens are at most 8N and at most ONE of them ever waits.
+	maxCronWrapperProbesPerLine = 8
+)
+
+// cronProbeTimeout bounds the WALL CLOCK one filesystem STEP may spend: a content probe, a
+// system-crontab file's stat-resolve-read, or a run-parts entry's stat through its symlink.
+// It is the third bound in this file and the only one that answers "how long":
+// maxCronWrapperProbeBytes bounds a read and maxCronWrapperProbesPerLine bounds a count,
+// and a count is no bound at all when a single open never returns.
+//
+// O_NONBLOCK already covers the fifo and device-node class exactly. It cannot cover the
+// other one: a file on a network mount that stopped answering is a REGULAR file to the
+// VFS, so the flag means nothing to it, and two syscalls run before the flagged open
+// anyway (resolveSystemCronPath's lstat of the whole path, and the open of the parent
+// directory that safefs.OpenFileUnderRoot performs to confine the final component).
+// Neither of those ever sees a flag of ours.
+//
+// What is at stake is not a slow probe. Two of the three probe callers reach
+// detectIndirectProxsaveCron, so runUpgrade, runInstall, upgradeFinalizePhase and
+// runInstallTUI stop with it, in the CLI and in the TUI alike, having printed nothing.
+//
+// A var so a test can shrink it. Five seconds is five orders of magnitude above what a real
+// probe costs, so a merely slow host is never cut off.
+//
+// What it costs is worth stating exactly rather than roughly, because a deadline that
+// latches invites the reader to assume one timeout in total, and there are three: one for
+// the user crontab's content probes, one for every content probe of the /etc walk, and one
+// for the /etc walk's own filesystem. Measured on a host whose cron commands all name a
+// dead mount, with a user crontab, /etc/crontab, three /etc/cron.d files and the four
+// run-parts directories: two timeouts, so ten seconds at this value, against nine before
+// the /etc content deadline was shared and nine that never ended before any of it existed.
+//
+// It is deliberately not FS_IO_TIMEOUT. That variable is operator-facing and its backup.env
+// description names preflight, log, storage, cloud and restore; threading it down four
+// functions for this detector would widen a documented scope to cover a hang guard the
+// operator has no reason to tune. This is not an I/O budget, it is the line between "slow"
+// and "never", and the measured healthy walk sits four orders of magnitude below it.
+var cronProbeTimeout = 5 * time.Second
+
+// indirectCronRef is one crontab line that appears to run ProxSave WITHOUT its
+// command token being the proxsave binary, i.e. exactly the shape
+// dropCanonicalCronLines is blind to by design.
+//
+// Line is the trimmed crontab line as the operator wrote it, quoted back verbatim
+// so they can find it in `crontab -l` without guessing; Command is the cron command
+// token; Reason is the single rule that fired, in operator-facing words, so that
+// even a false positive explains itself instead of looking like a malfunction.
+type indirectCronRef struct {
+	Line    string
+	Command string
+	Reason  string
+
+	// Source is the file the line came from, empty for the root user's own crontab
+	// (the one `crontab -l` prints). It is set for /etc/crontab and /etc/cron.d/*,
+	// because "remove that entry with crontab -e" is wrong advice for those: they are
+	// plain files, edited with an editor, and on some hosts owned by a package.
+	//
+	// For a RunParts finding Source is the DIRECTORY, not a file: there the whole file is
+	// the finding and Line already carries its path.
+	Source string
+
+	// RunParts marks a finding that is a SCRIPT run by run-parts rather than a line in a
+	// crontab. It carries three facts nothing else in this struct can express: Line is a
+	// path and not a cron line, so there is no schedule to render or to adopt; Source is a
+	// directory and not a file; and the way to stop it is "chmod -x" or removal, not an
+	// edit. Set only by the run-parts walk, never derived by stat or by reading Reason.
+	RunParts bool
+}
+
+// cronCommandRunners are the command names that exist to RUN ANOTHER COMMAND. They
+// are the only commands for which this file looks past the cron command token at
+// the rest of the line, and that gate is the whole reason doing so is safe here
+// while it would be wrong in commandTokenMatchesTarget: "cp /usr/local/bin/proxsave
+// /backup/" keeps its documented protection because cp is not a runner, whereas
+// "flock -n /var/lock/x /usr/local/bin/proxsave --backup" IS a proxsave job whose
+// command token happens to be flock.
+//
+// su/sudo/doas/runuser earn their place the same way: they only ever match when the
+// arguments name proxsave, in which case the line really does run ProxSave.
+var cronCommandRunners = map[string]struct{}{
+	"sh": {}, "bash": {}, "dash": {}, "ash": {}, "ksh": {}, "zsh": {}, "busybox": {},
+	"env": {}, "nice": {}, "ionice": {}, "nohup": {}, "setsid": {}, "stdbuf": {},
+	"flock": {}, "timeout": {}, "chronic": {}, "eatmydata": {},
+	"su": {}, "sudo": {}, "doas": {}, "runuser": {}, "systemd-cat": {}, "systemd-run": {},
+}
+
+// indirectProxsaveCronRefs returns every crontab line that looks like an INDIRECT
+// ProxSave invocation. A line whose command token is the proxsave binary is never
+// returned: that one is canonical, dropCanonicalCronLines already owns it, and
+// reporting it here would turn every normal host into a refusal.
+//
+// Rules fire BEHAVIOUR FIRST, and the first match wins so the reported reason is
+// the strongest one:
+//
+//  1. CONTENT (probeScriptContent only). The command is an absolute path to a small
+//     readable text file that references the proxsave binary by path. This is the
+//     strongest evidence available without executing anything, and it is what
+//     catches a wrapper with a completely neutral name, e.g. /usr/local/sbin/nas-guard.
+//     When the command token is a RUNNER (cronCommandRunners) the same rule is applied to the
+//     command that runner RUNS, because on "flock -n /var/lock/x /usr/local/sbin/nas-guard"
+//     the token is flock and the wrapper is the file worth reading. Only words in COMMAND
+//     position are opened, so a file the line merely reads or redirects into is never touched;
+//     see cronRunnerWrappedScript for the cap and for what it does not cover.
+//
+//  2. INSTALL TREE. A directory component of the command's path is exactly
+//     "proxsave", i.e. the command is a script stored inside a ProxSave install root.
+//
+//  3. RUNNER. The command is a known command runner (see cronCommandRunners) and
+//     some later word on the line names the proxsave binary. This is the only place
+//     the rest of the line is read at all.
+//
+//  4. NAME, and only as a FALLBACK. The command's basename carries "proxsave" as a
+//     whole component ("proxsave-nas-guard", "proxsave_wrapper.sh") AND rule 1 could
+//     not read it. ProxSave installs a binary called exactly "proxsave", so
+//     "proxsave-anything" is by definition the operator's own file: the name records
+//     who wrote it, never what it does. When the script CAN be read the reading
+//     decides, so an ordinary proxsave-metrics-exporter that never invokes the binary
+//     is left alone however it is named. Rules 2 and 3 are not gated that way: a path
+//     inside the install tree and a runner naming the binary are facts about the cron
+//     line itself, not guesses about a file's contents.
+//
+//     The rule deliberately does not look for "proxmox-backup" as a component either:
+//     proxmox-backup-client, -proxy, -manager and -file-restore are stock PBS binaries
+//     present on nearly every target host, and flagging them would refuse the migration
+//     almost everywhere. A proxmox-backup-named wrapper is left to rules 1 to 3, which
+//     need the actual binary path and therefore cannot be confused by PBS.
+//
+// False positives are cheaper than false negatives here, because the caller's answer
+// to a positive is "refuse and tell the operator", never "delete". That tolerance is
+// what pays for rule 4 surviving at all: an unreadable proxsave-named command costs
+// the operator one --daemon-setup and they keep a working cron schedule meanwhile,
+// while missing it costs them two backups a night with no message, which is what #298
+// was.
+//
+// The residual false negative is a neutrally-named wrapper this cannot read (an
+// unreadable file, a compiled binary, a command over a stalled mount). It is not
+// treated as suspicious: every ordinary cron job on the host is unreadable-as-text
+// too, so refusing on "cannot tell" would refuse on essentially every host and the
+// warning would stop meaning anything.
+//
+// The other residual is a wrapper reached through something that is not a runner:
+// "mountpoint -q /mnt/nas && /usr/local/sbin/nas-guard" has "mountpoint" as its command token,
+// so rule 1 reads mountpoint and stops there. Widening the gate past cronCommandRunners widens
+// what an unattended --upgrade REFUSES on, which is a decision separate from widening what a
+// revert prints, so it is not taken here.
+//
+// It logs NOTHING and writes NOTHING: --upgrade-config-json reaches this through
+// deriveSchedulerTimeFromCrontab and its stdout must stay pure JSON.
+func indirectProxsaveCronRefs(lines []string, probeScriptContent bool) []indirectCronRef {
+	// The user crontab is a habitat of its own, so it gets a deadline of its own. The /etc
+	// walk passes its shared one in instead.
+	return indirectProxsaveCronRefsWithToken(newCronProbeDeadline(), lines, probeScriptContent, cronCommandToken)
+}
+
+// indirectProxsaveCronRefsWithToken is indirectProxsaveCronRefs parameterised by the
+// command extractor, which is the ONLY thing that differs between the user crontab
+// format (`crontab -l`, command in field 6) and the system one (/etc/crontab and
+// /etc/cron.d, a USER field first and the command in field 7). The three rules, the
+// canonical-entry exclusion and the fail-quiet behaviour are shared verbatim, so the
+// two habitats can never drift into judging the same wrapper differently.
+func indirectProxsaveCronRefsWithToken(deadline *cronProbeDeadline, lines []string, probeScriptContent bool, commandToken func(string) string) []indirectCronRef {
+	var refs []indirectCronRef
+	for _, line := range lines {
+		token := strings.Trim(commandToken(line), "\"'")
+		if token == "" {
+			// Blank line, comment, env assignment, or a schedule with no command:
+			// the extractor already rejected all four.
+			continue
+		}
+		if commandTokenMatchesTarget(token) {
+			continue // canonical proxsave entry: not indirect, and not ours to report
+		}
+		// Behavioural rules first, the name LAST and only as a fallback. ProxSave installs a
+		// binary called exactly "proxsave", so "proxsave-anything" is by definition the
+		// operator's own file and its name reports who wrote it, never what it does. When the
+		// script can be read, the reading decides: a wrapper that calls the binary is caught by
+		// content, and one that does not is left alone however it is named - which is what stops
+		// an ordinary proxsave-metrics-exporter from refusing an upgrade. The name votes only
+		// when nothing could be read (a compiled wrapper, an unreadable file, a command on a
+		// stalled mount), where it is the last thing standing between the operator and #298.
+		reason := ""
+		probed, readable := false, false
+		// Whether the commands BEHIND a runner were all read and none of them names the
+		// binary. It gates the runner rule below and is false unless a read actually
+		// happened, so the names-only path keeps behaving as it always has.
+		tailCleared := false
+		if probeScriptContent {
+			probed = true
+			var references bool
+			references, readable = scriptProxsaveProbe(deadline, token)
+			if references {
+				reason = fmt.Sprintf("script %s calls the proxsave binary", token)
+			}
+			// The token of a runner line is the RUNNER, so reading it answers about the wrong
+			// file. Reading what the runner runs is the same rule one indirection out, and it
+			// gets the same sentence: the file the probe actually read is the file the operator
+			// is told about. `readable` is deliberately left alone - it records the TOKEN's
+			// readability, and its only consumer is rule 4, which asks about the token's NAME;
+			// no runner basename carries "proxsave", so the two cannot interact.
+			if reason == "" {
+				var wrapped string
+				wrapped, tailCleared = cronRunnerWrappedScript(deadline, line, token)
+				if wrapped != "" {
+					reason = fmt.Sprintf("script %s calls the proxsave binary", wrapped)
+				}
+			}
+		}
+		if reason == "" {
+			switch {
+			case pathLivesInProxsaveTree(token):
+				reason = fmt.Sprintf("command under ProxSave install tree (%s)", filepath.Dir(token))
+			// The runner rule is a NAME rule wearing a runner's coat: it scans the words of
+			// the line, not what any of them does. So it answers only when the reading did
+			// not. Without this gate the same script - read, and found to call nothing -
+			// was cleared when cron ran it directly and reported when an flock sat in front
+			// of it, and a report here REFUSES an unattended --upgrade.
+			case cronRunnerNamesProxsave(line, token) && !tailCleared:
+				reason = fmt.Sprintf("runner %q; cron line references the proxsave binary", filepath.Base(token))
+			case (!probed || !readable) && basenameHasProxsaveComponent(token) && deadline.stalled:
+				// Same finding, with the reason it could not be read. "could not be read"
+				// is true of an unreadable file AND of a command that never answered, and
+				// only one of those is something the operator can go and look at. Once the
+				// deadline has latched, every later line under it is in the second case and
+				// none of them was opened at all. It does not say WHICH command stopped
+				// answering, and deliberately not "in this crontab": under /etc one deadline
+				// covers every file of the walk, so the cause can be in another one.
+				reason = fmt.Sprintf("command %q is named after proxsave and was not read: a command stopped answering", filepath.Base(token))
+			case (!probed || !readable) && basenameHasProxsaveComponent(token):
+				reason = fmt.Sprintf("command %q is named after proxsave and could not be read", filepath.Base(token))
+			}
+		}
+		if reason == "" {
+			continue
+		}
+		refs = append(refs, indirectCronRef{
+			Line:    strings.TrimSpace(line),
+			Command: token,
+			Reason:  reason,
+		})
+	}
+	return refs
+}
+
+// wrapperCronLines is the plain-lines view of indirectProxsaveCronRefs: given the
+// crontab, it returns just the lines that already schedule ProxSave through a command
+// this codebase does not own, verbatim and in crontab order.
+//
+// It exists because applyCronMode does not need the reasons, only the answer to "is
+// this host already scheduled by something that is not us?", and a caller that only
+// needs a yes/no should not have to reach into the finding struct to get it. The
+// contract it publishes is deliberately two-valued and error-free: a NON-EMPTY result
+// means positively identified; an EMPTY result means "none found, OR could not be
+// told", and the caller must treat those two identically. Collapsing "cannot tell"
+// into "none" is safe ONLY because the caller's fallback for "none" is to keep doing
+// exactly what it does today.
+//
+// It pays for the content probe (cronProbeReadScripts): its callers run once, on an
+// explicit operator command, and a wrapper missed here costs a duplicate nightly
+// backup.
+func wrapperCronLines(lines []string) []string {
+	refs := indirectProxsaveCronRefs(lines, cronProbeReadScripts)
+	out := make([]string, 0, len(refs))
+	for _, ref := range refs {
+		out = append(out, ref.Line)
+	}
+	return out
+}
+
+// basenameHasProxsaveComponent reports whether the command's basename carries
+// "proxsave" as a WHOLE component, splitting on the three separators a script name
+// actually uses ("-", "_", "."). Component equality, not substring containment, is
+// what keeps the existing guarantee that "/usr/local/bin/proxsavex" is a different
+// binary and not this one (TestFilterCronLines pins that case).
+//
+// It answers true for a bare "proxsave" too. Every caller has already excluded the
+// canonical case via commandTokenMatchesTarget, and inside the content probe that
+// overlap is wanted: a wrapper naming /opt/site/proxsave is naming our binary.
+func basenameHasProxsaveComponent(token string) bool {
+	base := strings.ToLower(filepath.Base(strings.Trim(token, "\"'")))
+	for _, part := range strings.FieldsFunc(base, func(r rune) bool {
+		return r == '-' || r == '_' || r == '.'
+	}) {
+		if part == "proxsave" {
+			return true
+		}
+	}
+	return false
+}
+
+// pathLivesInProxsaveTree reports whether a DIRECTORY component of the command's
+// path is exactly "proxsave", i.e. the command is a script stored inside a ProxSave
+// install root (/opt/proxsave/script/proxmox-backup.sh, the pre-0.30 Bash entry
+// point, being the case that matters most: the daemon migration never calls
+// dropLegacyBashCronLines, so such a line would otherwise survive the migration and
+// double-schedule the host).
+//
+// Exact component equality again, and only "proxsave": a directory literally named
+// proxmox-backup exists on stock PBS hosts (/etc/proxmox-backup, /var/lib/proxmox-backup)
+// and would produce refusals on hosts that have nothing to do with us.
+func pathLivesInProxsaveTree(token string) bool {
+	path := strings.Trim(token, "\"'")
+	if !strings.Contains(path, "/") {
+		return false
+	}
+	for _, part := range strings.Split(strings.ToLower(filepath.Dir(path)), "/") {
+		if part == "proxsave" {
+			return true
+		}
+	}
+	return false
+}
+
+// cronRunnerNamesProxsave reports whether the line's command is a known runner AND
+// some word on the line names the proxsave binary. Splitting on shell metacharacters
+// as well as whitespace is what makes the quoted form work: in
+// "/bin/bash -c 'mountpoint -q /mnt/nas && /usr/local/bin/proxsave --backup'"
+// strings.Fields would hand back the whole quoted script as a single word.
+//
+// The scan is deliberately dumb about shell semantics. Inside a shell invocation we
+// cannot distinguish "runs proxsave" from "mentions proxsave", so a "bash -c 'cp
+// /usr/local/bin/proxsave /backup'" line is reported here even though the same
+// command would be correctly ignored when written directly. That asymmetry is on
+// purpose: outside a runner the narrow matcher's guarantee applies, inside one we
+// have no parser and the safe side is to say so.
+func cronRunnerNamesProxsave(line, token string) bool {
+	if _, isRunner := cronCommandRunners[strings.ToLower(filepath.Base(strings.Trim(token, "\"'")))]; !isRunner {
+		return false
+	}
+	for _, word := range shellWords(line) {
+		if commandTokenMatchesTarget(word) || basenameHasProxsaveComponent(word) {
+			return true
+		}
+	}
+	return false
+}
+
+// cronCommandTail returns the cron line from its COMMAND token onwards, i.e. the shell command
+// line that the schedule fields stand in front of.
+//
+// It finds the token by IDENTITY rather than by field index, which is what lets it serve both
+// crontab habitats through the same commandToken seam that already separates them: the command
+// is field 6 in a user crontab, field 7 in /etc/crontab and /etc/cron.d, and field 2 after an
+// @form, and none of that has to be known a second time here. The one line it can misread is a
+// system-cron line whose USER field is literally the same string as the command path, which is
+// not a username; the cost there is a false negative on that line, never a different file
+// being opened.
+func cronCommandTail(line, token string) []string {
+	fields := strings.Fields(strings.TrimSpace(line))
+	for i, field := range fields {
+		if strings.Trim(field, "\"'") == token {
+			return fields[i:]
+		}
+	}
+	return nil
+}
+
+// cronRunnerWrappedScript reads the script a RUNNER runs and returns its path, or "" when the
+// line is not a runner line or nothing in command position on it reads as a wrapper that calls
+// the binary.
+//
+// This is issue #298 arriving one indirection further out:
+//
+//	0 2 * * * /usr/bin/flock -n /var/lock/nightly.lock /usr/local/sbin/nas-guard
+//
+// The content probe used to be handed the TOKEN only, so it opened flock - a binary, NUL byte,
+// unreadable - and the wrapper the operator actually scheduled was never read at all. Rule 3
+// could not save it either: it needs a word whose basename carries "proxsave", which a
+// neutrally named wrapper has not got. Nothing matched, the unattended retrofit installed the
+// daemon on top of a live cron backup, and the host ran two backups a night with no message.
+//
+// The cron line after the schedule fields IS a shell command line, and this file already owns a
+// parser for exactly that, so the fix reuses the walk rather than writing a second one:
+// scriptLineWalkCommands already models flock's operand, nice -n's value, sudo's -Hu bundling,
+// sh -c's nested line and the four opaque launchers.
+//
+// COMMAND POSITION is the rule, and it is what keeps this honest. Probing every absolute word
+// on the line instead would open flock's lock file, redirect targets and config paths, and on
+// "flock -n LOCK /usr/bin/tail -n 1 /var/log/nas.log" it would read the LOG and then report a
+// log file as a script that calls the binary - a refusal naming a file the line only reads.
+// Command position never visits an argument, which is also why the documented protection on a
+// direct "cp /usr/local/bin/proxsave /backup/" is exactly where it was.
+//
+// WHAT IT DOES NOT COVER. It fires only behind cronCommandRunners, so a wrapper reached through
+// anything else is still invisible. Under the four opaque launchers the walk scans arguments
+// rather than command positions, so an argument path IS opened there and a data file named
+// after their -c can be reported as a script; that is confined to su/runuser/systemd-run/
+// systemd-cat, costs one advisory and never an action, and the alternative loses
+// "su - backup -c /path/wrapper", which operators do write. It follows exactly one level of
+// runner nesting per command position and never executes anything.
+func cronRunnerWrappedScript(deadline *cronProbeDeadline, line, token string) (wrapped string, cleared bool) {
+	if _, isRunner := cronCommandRunners[strings.ToLower(filepath.Base(strings.Trim(token, "\"'")))]; !isRunner {
+		return "", false
+	}
+	tail := cronCommandTail(line, token)
+	if len(tail) == 0 {
+		return "", false
+	}
+	budget := maxCronWrapperProbesPerLine
+	// The second answer. `cleared` means every command position behind the runner was READ
+	// and none of them names the binary, which is the only state in which the runner rule
+	// may be silenced: that rule asks about a NAME, and by this file's own standard a name
+	// votes only when nothing could be read. Anything less than "all of it, read" leaves it
+	// false and the rule keeps firing exactly as it did.
+	probed, allRead := 0, true
+	// No vars: a cron line carries no assignments this code can resolve, and a "$BIN" written on
+	// one is expanded by cron's own shell against an environment not visible from here.
+	scriptLineWalkCommands(strings.Join(tail, " "), nil, func(word string) bool {
+		word = strings.Trim(word, "\"'")
+		// The token itself was probed a moment ago by the caller, and a relative command resolves
+		// against the crontab owner's home, which scriptProxsaveProbe refuses to guess.
+		if word == token {
+			// Already probed by the caller, and its readability is the caller's to judge.
+			return false
+		}
+		if !filepath.IsAbs(word) || budget <= 0 {
+			// Skipped, not read: a relative command or one past the budget is a command
+			// position this walk knows nothing about, so the tail is not cleared.
+			allRead = false
+			return false
+		}
+		budget--
+		references, readable := scriptProxsaveProbe(deadline, word)
+		if !readable {
+			allRead = false
+		}
+		if references {
+			wrapped = word
+		}
+		probed++
+		return references
+	})
+	return wrapped, wrapped == "" && allRead && probed > 0
+}
+
+// shellWords splits on whitespace AND the shell metacharacters that glue a path to
+// its neighbours, so "&&/usr/local/bin/proxsave", "${BASE_DIR}/proxsave" and
+// "--config=/etc/proxsave.env" all yield the path as a word. It is a tokenizer for
+// RECOGNITION only; nothing here is ever executed.
+func shellWords(s string) []string {
+	return strings.FieldsFunc(s, func(r rune) bool {
+		switch r {
+		case ' ', '\t', '\n', '\r', ';', '|', '&', '(', ')', '{', '}', '<', '>', '=', ',', '\'', '"', '`', '$':
+			return true
+		}
+		return false
+	})
+}
+
+// scriptProxsaveProbe reads the cron command as a text file and reports TWO things:
+// whether the script names the binary, and whether it could be read at all. Those
+// are different facts and the name rule depends on telling them apart: a script we READ and
+// found nothing in is evidence of absence, while one we could not open says nothing either
+// way. Collapsing both into false is what made "proxsave-metrics-exporter" indistinguishable
+// from a compiled wrapper.
+func scriptProxsaveProbe(deadline *cronProbeDeadline, token string) (references bool, readable bool) {
+	path := strings.Trim(token, "\"'")
+	// Lexical, so it stays here rather than in the scan: a relative command must not cost
+	// a goroutine, let alone a timeout.
+	if !filepath.IsAbs(path) {
+		return false, false
+	}
+	return deadline.probe(path)
+}
+
+// cronProbeDeadline is the time bound for ONE SET OF PATHS: the commands named in one
+// crontab, or the /etc tree one walk of systemCronPaths reads. It is carried from step to
+// step by the caller that reads them, and passed rather than kept in a package var because
+// it is per-RUN state: the install screen runs one detection after another, and the second
+// must start clean.
+//
+// It LATCHES. maxCronWrapperProbesPerLine allows eight opens on a single line, so a deadline
+// that fired per probe would turn one dead mount into eight timeouts on the first line and
+// eight more on every line after it; /etc/cron.d holds as many entries as an operator puts
+// there, so per entry there is no bound at all. Once one step has run out of time, every
+// later step under that deadline answers "could not tell" without touching the filesystem.
+//
+// A deadline covers ONE set of paths and never everything a run touches, and that is why the
+// /etc walk holds two rather than one. It spends its whole budget on the first thing that
+// stalls, so anything sharing it goes blind: measured, a walk that shared its deadline with
+// the content probes lost the literal `proxsave --backup` line in /etc/cron.d - one finding
+// before, none after - because a wrapper on a dead mount named by a cron line had already
+// spent it. A mount behind a COMMAND says nothing about whether /etc still answers. See
+// runPartsCronRefs, which holds one of each.
+type cronProbeDeadline struct {
+	stalled bool
+}
+
+func newCronProbeDeadline() *cronProbeDeadline { return &cronProbeDeadline{} }
+
+// cronProbeScanFn is the seam a test swaps to stand in for the filesystem half of the
+// probe. Nothing but a test writes it.
+var cronProbeScanFn = scanScriptForProxsaveRefs
+
+// probe runs the scan under the deadline and reports the scan's two answers, or the pair
+// that means "could not tell" when the scan ran out of time or an earlier one already did.
+func (d *cronProbeDeadline) probe(path string) (references bool, readable bool) {
+	// Read on the CALLER's goroutine, so a test restoring the seam in t.Cleanup can never
+	// race the scan it started. It must stay OUT of the closure below for that reason.
+	scan := cronProbeScanFn
+	// The zero cronProbeVerdict IS the "could not tell" pair, so the step that ran out of
+	// time and the scan that answered false need nothing translated between them, and this
+	// function needs no branch on which of the two happened.
+	got, _ := cronDeadlineValue(d, func() cronProbeVerdict {
+		refs, read := scan(path)
+		return cronProbeVerdict{references: refs, readable: read}
+	})
+	return got.references, got.readable
+}
+
+// cronDeadlineValue runs ONE filesystem step under d and reports whether it answered in
+// time, or refuses without a syscall when an earlier step of the same walk already ran out.
+// It is the single place in this file that decides how long anything may wait.
+//
+// A FREE FUNCTION and not a method on cronProbeDeadline, and not by preference: a method
+// may not have type parameters ("syntax error: method must have no type parameters",
+// measured), and the steps here answer with three different types - the probe's verdict, a
+// system-crontab file's bytes, and what one look at a run-parts entry found. Three typed
+// helpers would be three copies of the latch and three chances for them to disagree.
+//
+// The waiting itself is probeWithin's, which already carries exactly this contract: the
+// value comes back over a BUFFERED channel so a straggler can never park on a send nobody
+// will receive, the timer is a NewTimer that is stopped so a step answering in microseconds
+// leaves no five-second timer alive behind it, and a worker that misses the deadline is
+// ABANDONED, not cancelled. Writing that out a second time here would put two answers to
+// "how does this file wait" in one binary.
+//
+// Two rules bind every caller, and both come from the abandonment:
+//
+//   - work must RETURN everything it computed and assign to nothing the caller captured.
+//     The worker outlives the timeout, so an assignment into a captured variable is a write
+//     racing a caller that already walked away. Returning makes that impossible by
+//     construction instead of by review.
+//   - work must be a LEAF: it may touch the filesystem and must not open a step of its own.
+//     d.stalled is written HERE, on the caller's goroutine, which is why the latch needs no
+//     lock; a step nested inside another step's worker would write it from the worker.
+func cronDeadlineValue[T any](d *cronProbeDeadline, work func() T) (result T, answered bool) {
+	if d == nil {
+		// A nil deadline means a caller that has not got one, never "no limit".
+		d = newCronProbeDeadline()
+	}
+	if d.stalled {
+		var zero T
+		return zero, false
+	}
+	got, ok := probeWithin(cronProbeTimeout, work)
+	if !ok {
+		d.stalled = true
+	}
+	// A step that ANSWERS costs the deadline nothing, however long it took. A merely slow
+	// host therefore keeps every detection it has today; only a real timeout changes what
+	// the rest of the crontab, or of the walk, is allowed to do.
+	return got, ok
+}
+
+// cronProbeVerdict carries the scan's pair of answers off the goroutine it ran on. The
+// goroutine is ABANDONED on timeout and holds one OS thread until the kernel returns from
+// the syscall, which on a hard mount can be never: a syscall already in flight cannot be
+// cancelled from Go, and any design that waits for it is the hang being removed here. The
+// latch is what bounds that cost to one abandoned goroutine per DEADLINE, so do not "fix"
+// this by waiting for the worker. Every bounded step in this file carries its answer off the
+// same way, through the value cronDeadlineValue returns and never through a variable the
+// caller captured.
+type cronProbeVerdict struct {
+	references, readable bool
+}
+
+// scanScriptForProxsaveRefs is the filesystem half of the probe: everything that can touch a
+// disk on the way to reading a wrapper lives here, so the deadline above has exactly one
+// thing to bound.
+//
+// That is also why resolveSystemCronPath is called here directly and not through a bounded
+// step of its own: this function already IS the body of one, and a step opened inside
+// another step's worker writes cronProbeDeadline.stalled from that worker while the caller
+// reads it - measured, "WARNING: DATA RACE" on the latch write against the latch read. The
+// /etc walk bounds the same helper at its own call sites, where it runs on the caller's
+// goroutine and no such nesting exists.
+//
+// It is the last resort for a wrapper whose NAME gives nothing away, and every gate on it
+// is there to keep it from turning into a general file scan:
+//
+//   - opened through safefs.OpenFileUnderRoot, so the operator-controlled path is confined
+//     at the syscall level exactly like every other operator path this command reads;
+//   - regular file, at most maxCronWrapperProbeBytes, and no NUL byte, which drops compiled
+//     binaries (every stock /usr/bin/* cron command) before the scan;
+//   - only PATH-shaped words count, which scriptWordRunsProxsave enforces. A wrapper
+//     invoked by cron must call the binary by absolute path anyway, because cron's default
+//     PATH is /usr/bin:/bin and the entry point lives in /usr/local/bin, so requiring a "/"
+//     costs no real detection while keeping a prose mention of "proxsave" in a comment from
+//     blocking an upgrade.
+//
+// The absolute-path gate is the fourth and sits in scriptProxsaveProbe, because it is
+// lexical and must cost no goroutine.
+//
+// Any failure (unreadable, too large, binary) returns false for BOTH answers: see the
+// false-negative note on indirectProxsaveCronRefs for why "cannot tell" must not mean
+// "suspicious".
+//
+// O_NONBLOCK is what makes the open answerable at all. Without it, open(2) on a fifo
+// with no writer waits for a writer forever; with it the open returns at once and the
+// fd-Stat below rejects the fifo. The flag reaches openat(2) unchanged, because
+// os.Root.OpenFile passes the caller's flags through; Linux ignores it for a regular
+// file, and the missing-file error comes back exactly as before.
+//
+// The Stat gate is LOAD-BEARING and must stay ahead of the read. A writer-less fifo
+// reads as immediate EOF, so a probe that reached the read would report "read it, found
+// nothing" - evidence of absence from a file nobody read - and rule 4, which fires only
+// when nothing could be read, would be skipped for it. That is issue #298 again.
+func scanScriptForProxsaveRefs(path string) (references bool, readable bool) {
+	f, err := safefs.OpenFileUnderRoot(resolveSystemCronPath(path), os.O_RDONLY|syscall.O_NONBLOCK, 0)
+	if err != nil {
+		return false, false
+	}
+	defer func() { _ = f.Close() }()
+	info, err := f.Stat()
+	if err != nil || !info.Mode().IsRegular() || info.Size() > maxCronWrapperProbeBytes {
+		return false, false
+	}
+	data, err := io.ReadAll(io.LimitReader(f, maxCronWrapperProbeBytes))
+	if err != nil || bytes.IndexByte(data, 0) >= 0 {
+		return false, false
+	}
+	// Carriage returns are stripped so the line passes read the same either way. Not because such
+	// a host behaves differently: a script with CRLF endings does not execute on Linux at all,
+	// the interpreter becoming "/bin/sh\r", so it schedules nothing. It costs one line to read it
+	// correctly rather than emit an advisory about a script that cannot run.
+	data = bytes.ReplaceAll(data, []byte("\r\n"), []byte("\n"))
+	lines := scriptCodeLines(strings.Split(string(data), "\n"))
+	vars := scriptProxsavePathVars(lines)
+	for _, line := range lines {
+		if scriptLineRunsProxsave(line, vars) {
+			return true, true
+		}
+	}
+	return false, true
+}
+
+// The three categories a word in command position can be. They exist because one category,
+// "runner", used to do both jobs and did neither well: it opened the WHOLE rest of the segment
+// to matching, which let "sudo cp /usr/local/bin/proxsave /backup/" match on an argument, while
+// a word that was not a runner ended the segment, which hid the command behind "if", "while"
+// and "!" - words that consume nothing at all.
+var (
+	// scriptCommandPrefixes take NO options at all, so the command position resumes on the very
+	// next word. Membership means exactly that; anything that accepts a flag belongs below, or
+	// the command position lands on the flag. "command" is here on purpose: as a prefix,
+	// "command proxsave --backup" is a run and "command -v proxsave" is a query, which is the
+	// right answer to both.
+	scriptCommandPrefixes = map[string]struct{}{
+		"if": {}, "while": {}, "until": {}, "elif": {}, "then": {}, "else": {}, "do": {}, "!": {},
+		"{": {}, "}": {},
+		"exec": {}, "command": {}, "builtin": {},
+	}
+	// scriptCommandLaunchers take options of their own and then the command. Skipping the
+	// options, their values, and any leading assignments puts us back in command position.
+	scriptCommandLaunchers = map[string]struct{}{
+		"sudo": {}, "doas": {}, "env": {}, "xargs": {},
+		"nice": {}, "ionice": {}, "setsid": {}, "stdbuf": {}, "nohup": {}, "eatmydata": {},
+		"chronic": {}, "time": {},
+	}
+	// scriptOperandLaunchers take options AND one operand of their own before the command:
+	// flock's lock file, timeout's duration.
+	scriptOperandLaunchers = map[string]struct{}{
+		"flock": {}, "timeout": {},
+	}
+	// launcherValueFlags names, per launcher, the SHORT and long options that consume the next
+	// word as their value. Without this the value is mistaken for the command - "flock -w 600
+	// /lock cmd" stopped on 600, took it for the lock file, and landed past the command - and the
+	// wrapper behind it goes unseen, which is issue #298 with no warning at all.
+	//
+	// Bundled forms ("-c3", "-n19", "-oL") and "--flag=value" are single words and need no entry:
+	// the option skip already drops them whole.
+	launcherValueFlags = map[string]map[string]struct{}{
+		"sudo": {"-u": {}, "-g": {}, "-p": {}, "-C": {}, "-T": {}, "-h": {}, "-r": {}, "-U": {}, "--user": {}, "--group": {}, "--prompt": {}, "--host": {}},
+		"doas": {"-u": {}, "-C": {}},
+		// No -S / --split-string here on purpose: their value IS the command, the way sh -c's is,
+		// so skipping it threw away the very thing being looked for. Left out, the option reads
+		// as boolean and the command string lands in command position, which is where it belongs.
+		"env":     {"-u": {}, "-C": {}, "--unset": {}, "--chdir": {}},
+		"xargs":   {"-n": {}, "-L": {}, "-P": {}, "-I": {}, "-d": {}, "-s": {}, "-E": {}, "-a": {}},
+		"nice":    {"-n": {}, "--adjustment": {}},
+		"ionice":  {"-c": {}, "-n": {}, "-p": {}, "-P": {}, "-u": {}, "--class": {}, "--classdata": {}, "--pid": {}},
+		"stdbuf":  {"-i": {}, "-o": {}, "-e": {}, "--input": {}, "--output": {}, "--error": {}},
+		"flock":   {"-w": {}, "-E": {}, "--timeout": {}, "--conflict-exit-code": {}},
+		"timeout": {"-k": {}, "-s": {}, "--kill-after": {}, "--signal": {}},
+	}
+	// scriptShellLaunchers run a script passed as the argument to -c, which is a LINE and is
+	// evaluated as one.
+	scriptShellLaunchers = map[string]struct{}{
+		"sh": {}, "bash": {}, "dash": {}, "ash": {}, "ksh": {}, "zsh": {}, "busybox": {},
+	}
+	// scriptOpaqueLaunchers put the command somewhere this parser does not model - a -c string
+	// mixed with a user name, a -- separator, a unit description. They keep the old broad scan
+	// over the rest of the segment, which can match an argument. That is stated rather than
+	// pretended away: these four are rare in a backup wrapper, and the cost of a false positive
+	// is a reported finding, never an action.
+	scriptOpaqueLaunchers = map[string]struct{}{
+		"su": {}, "runuser": {}, "systemd-run": {}, "systemd-cat": {},
+	}
+)
+
+// scriptCodeLines drops the here-document BODIES from a script, so what is left is the lines the
+// shell would execute.
+//
+// A here-doc body is data. A wrapper that prints usage text, writes a README or pipes a message
+// to mail can name the backup command inside one, and reading those lines as code turns a script
+// that DOCUMENTS ProxSave into a script that runs it - which makes an unattended --upgrade refuse
+// to migrate a host that has nothing scheduled at all.
+//
+// The delimiter is taken from "<<WORD", "<<-WORD" or a quoted form, and the body ends at the
+// first line that is exactly that word (trimmed, since "<<-" strips leading tabs). An
+// unterminated body runs to the end of the file, which is what the shell does with it too.
+func scriptCodeLines(lines []string) []string {
+	out := make([]string, 0, len(lines))
+	delimiter := ""
+	for _, line := range joinLineContinuations(lines) {
+		if delimiter != "" {
+			if strings.TrimSpace(line) == delimiter {
+				delimiter = ""
+			}
+			continue
+		}
+		out = append(out, line)
+		// A comment cannot open a here-document, and getting this wrong is not a lost line but
+		// the rest of the FILE: everything up to a delimiter that never arrives is dropped, the
+		// probe answers "read it, found nothing", and that answer suppresses the name fallback
+		// too.
+		if strings.HasPrefix(strings.TrimSpace(line), "#") {
+			continue
+		}
+		if d := hereDocDelimiter(line); d != "" {
+			delimiter = d
+		}
+	}
+	return out
+}
+
+// arithmeticOpenAt reports whether an arithmetic expansion is still OPEN at the end of the given
+// prefix, i.e. whether what follows it is a left shift rather than a redirection.
+//
+// Openness is what matters, not presence: an expansion that closed earlier on the line leaves the
+// "<<" after it a perfectly ordinary here-document, and treating it as a shift discarded that
+// document's body back into the code.
+func arithmeticOpenAt(prefix string) bool {
+	return strings.Count(prefix, "$((") > strings.Count(prefix, "))")
+}
+
+// quotesOpenAt reports whether an unclosed quote is still open at the end of the given prefix,
+// i.e. whether whatever follows it is inside a string. Escaped quotes do not count, and a quote
+// of one kind inside the other is ordinary text.
+func quotesOpenAt(prefix string) bool {
+	inSingle, inDouble, escaped := false, false, false
+	for _, r := range prefix {
+		switch {
+		case escaped:
+			escaped = false
+		case r == '\\' && !inSingle:
+			escaped = true
+		case r == '\'' && !inDouble:
+			inSingle = !inSingle
+		case r == '"' && !inSingle:
+			inDouble = !inDouble
+		}
+	}
+	return inSingle || inDouble
+}
+
+// joinLineContinuations glues a line ending in a backslash to the one after it, because that is
+// one command to the shell and has to be one command here.
+//
+// Read as two lines, the continuation starts at a command position it does not have, so a path
+// named as an ARGUMENT reads as a command: "rsync -a --delete \\" followed by "/opt/proxsave/
+// /mnt/nas/" was flagged as running the binary, which is the exact false positive the
+// command-position rule exists to prevent. It runs before the here-doc pass so a continued line
+// cannot hide the "<<" that opens a body.
+func joinLineContinuations(lines []string) []string {
+	out := make([]string, 0, len(lines))
+	pending := ""
+	for _, line := range lines {
+		joined := pending + line
+		// A COMMENT does not continue: the shell ends it at the newline whatever the last
+		// character is. Joining one swallowed the command on the next line, which is the same
+		// blindness in the other direction.
+		comment := pending == "" && strings.HasPrefix(strings.TrimSpace(line), "#")
+		if !comment && strings.HasSuffix(joined, "\\") && !strings.HasSuffix(joined, "\\\\") {
+			pending = strings.TrimSuffix(joined, "\\") + " "
+			continue
+		}
+		out = append(out, joined)
+		pending = ""
+	}
+	if pending != "" {
+		out = append(out, pending)
+	}
+	return out
+}
+
+// hereDocDelimiter returns the word that ends a here-document started on this line, or "".
+func hereDocDelimiter(line string) string {
+	idx := strings.Index(line, "<<")
+	if idx < 0 {
+		return ""
+	}
+	// Only a REDIRECTION opens a body. The same two characters mean a left shift inside an
+	// arithmetic expansion and nothing at all inside a string, and treating either as an opener
+	// discards every following line of the script.
+	before := line[:idx]
+	if arithmeticOpenAt(before) {
+		return ""
+	}
+	if quotesOpenAt(before) {
+		return ""
+	}
+	// "<<<" is a here-STRING: it carries its data inline and starts no body.
+	rest := line[idx+2:]
+	if strings.HasPrefix(rest, "<") {
+		return ""
+	}
+	rest = strings.TrimPrefix(rest, "-")
+	rest = strings.TrimLeft(rest, " \t")
+	// All three quoting forms mean the same thing - the body is literal - so all three have to be
+	// recognised, or the body is read as code.
+	word := strings.TrimPrefix(strings.Trim(strings.Fields(rest + " ")[0], "\"'"), "\\")
+	if word == "" {
+		return ""
+	}
+	for _, r := range word {
+		if !unicode.IsLetter(r) && !unicode.IsDigit(r) && r != '_' {
+			return ""
+		}
+	}
+	return word
+}
+
+// scriptProxsavePathVars collects NAME -> value for the assignments in a script whose value is a
+// proxsave path, so a later "$NAME" in command position can be resolved.
+//
+// Only assignments matter, and only where the variable is later USED as a command. That is the
+// whole difference between a wrapper holding the binary path and a script holding a directory
+// path it merely copies: "BIN=/usr/local/bin/proxsave" followed by "$BIN --backup" runs it,
+// while "SRC=/opt/proxsave/" followed by "rsync -a $SRC /mnt/nas/" does not, and the earlier
+// any-word probe could not tell them apart.
+// scriptAssignedExpansion reports the name and value an assigning expansion writes into the
+// script's environment, when that value names the binary. It is the recording half of the
+// ":=" support; the operator table is the expanding half, and the reported wrapper needs
+// both, since it assigns on one line and runs on the next.
+//
+// The value RECORDED is the resolved path and never the raw word, so vars keeps its
+// invariant that everything in it names the binary.
+func scriptAssignedExpansion(word string, vars map[string]string) (name, value string, ok bool) {
+	n, fallback, assigns, parsed := parseScriptExpansionOp(strings.Trim(word, "\"'"))
+	if !parsed || !assigns {
+		return "", "", false
+	}
+	for _, candidate := range scriptWordExpansions(fallback, vars) {
+		if scriptWordRunsProxsave(candidate) {
+			return n, candidate, true
+		}
+	}
+	return "", "", false
+}
+
+func scriptProxsavePathVars(lines []string) map[string]string {
+	vars := map[string]string{}
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
+			continue
+		}
+		for _, segment := range splitShellSegments(trimmed) {
+			for _, word := range strings.Fields(segment) {
+				idx := strings.Index(word, "=")
+				if !looksLikeEnvAssignment(word) {
+					// An assigning expansion is an assignment the shell performs inside a
+					// word, so it never looks like one: ": ${BIN:=/usr/local/bin/proxsave}"
+					// sets BIN for every later line and the word begins with "$". Without
+					// this the operator table alone would expand the word where it stands
+					// and the "$BIN" on the next line would still resolve to nothing.
+					if name, value, ok := scriptAssignedExpansion(word, vars); ok {
+						vars[name] = value
+					}
+					continue
+				}
+				// The RIGHT-HAND SIDE gets the SAME expansion rule as command position, because a
+				// wrapper writes the binary path as an assignment as often as it writes it as a
+				// command, and two different rules for the two sides is exactly what produced this
+				// gap. vars is built in one forward pass, so an earlier assignment is visible to a
+				// later one just as the shell sees it, and the self-referencing
+				// PROXSAVE_BIN="${PROXSAVE_BIN:-...}" resolves through its fallback because the
+				// name is not in the map yet. The RESOLVED path is what is recorded, never the raw
+				// word, so the map keeps its invariant that every value in it names the binary.
+				for _, candidate := range scriptWordExpansions(word[idx+1:], vars) {
+					if scriptWordRunsProxsave(candidate) {
+						vars[word[:idx]] = candidate
+						break
+					}
+				}
+			}
+		}
+	}
+	return vars
+}
+
+// scriptDefaultOperators are the expansion operators whose operand is a PATH the shell may end up
+// running: "${NAME:-/usr/local/bin/proxsave}" and its colon-less twin.
+//
+// The order of the two is IMMATERIAL, and saying so is worth a line because the obvious worry is
+// that the bare "-" claims the colon form's operand. It cannot: the name scan stops at the first
+// character that is not a name character, so on "${BIN:-/path}" the colon is already the head of
+// what is left and only ":-" can match it. Reversing the slice changes no verdict, which is why
+// nothing pins the order - there is nothing to pin.
+//
+// Deliberately absent, each for its own reason: ":=" means the same as ":-" plus an assignment and
+// is a real remaining false negative, left out because every added operator needs its own proof;
+// ":?" and ":+" carry a MESSAGE or an alternative, not the command; "#", "##", "%" and "%%" carry
+// a PATTERN. Treating any of those as a default turns a message into a command.
+type scriptExpansionOperator struct {
+	op      string
+	assigns bool
+}
+
+var scriptDefaultOperators = []scriptExpansionOperator{
+	{op: ":-"},
+	{op: "-"},
+	// ":=" substitutes the operand AND assigns it, so its value is not this word's alone:
+	// every later line of the script sees it. That is the measured #298 gap.
+	{op: ":=", assigns: true},
+	// The colon-less twin. It assigns when the name is UNSET, where ":=" also fires when it
+	// is set-but-empty; the operand is the same PATH either way and this detector cannot
+	// see which state the variable is in at run time, which is exactly why "-" already sits
+	// next to ":-".
+	{op: "=", assigns: true},
+	// NOT added, one reason each. ":?" and "?": the operand is an error MESSAGE printed
+	// before the shell gives up. ":+" and "+": the operand is the ALTERNATIVE used when the
+	// name IS set. "#", "##", "%", "%%": the operand is a pattern to strip. "/", "//":
+	// a pattern plus a replacement, and a leading "/" is indistinguishable from the head of
+	// a path. "^", "^^", ",", ",,": case modification. ":offset:length": arithmetic.
+}
+
+// isShellName reports whether a name can be ASSIGNED to. A positional parameter cannot:
+// bash answers "$1: cannot assign in this way" and dash "1: bad variable name", and the
+// script exits without reaching a command. Expanding such a word would invent a run out of
+// a script that fails on its first line.
+func isShellName(name string) bool {
+	if name == "" {
+		return false
+	}
+	c := name[0]
+	return c == '_' || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
+}
+
+// parseScriptExpansion splits "$NAME", "${NAME}" and "${NAME:-FALLBACK}" into the name and the
+// fallback. ok is false for every other form, and the word is then left exactly as written and
+// judged by its own basename, which is what it was before this existed.
+//
+// An operator is recognised only INSIDE braces, because that is the only place the shell has one.
+//
+// The operator is ANCHORED to the end of the NAME, and that is the whole reason "${BIN%%-*}",
+// "${BIN#/usr-local}" and "${BIN:?/usr/local/bin/proxsave-missing}" do not parse: each contains a
+// "-" somewhere, and a search that is not anchored hands back a pattern or an error message as if
+// it were the command.
+//
+// The trailing "}" is stripped ONCE and only when it really is trailing. That is what keeps a
+// CONCATENATION out - "${DIR}/proxsave" and "${DIR:-/opt/proxsave}/bin/wrapper.sh" are recipes for
+// a path rather than a path - and what keeps "${BIN" resolving the way it always has. A NESTED
+// expansion is likewise not resolved: evaluating an expansion inside an expansion is one step past
+// recognition, so its fallback keeps the inner braces and matches nothing.
+func parseScriptExpansion(word string) (name, fallback string, ok bool) {
+	name, fallback, _, ok = parseScriptExpansionOp(word)
+	return name, fallback, ok
+}
+
+// parseScriptExpansionOp is parseScriptExpansion with the fourth answer kept: whether the
+// operator ASSIGNS as well as substituting, which is the difference between a value this
+// word alone uses and one every later line of the script sees.
+func parseScriptExpansionOp(word string) (name, fallback string, assigns, ok bool) {
+	if !strings.HasPrefix(word, "$") {
+		return "", "", false, false
+	}
+	body := word[1:]
+	braced := strings.HasPrefix(body, "{")
+	if braced {
+		body = strings.TrimSuffix(body[1:], "}")
+	}
+	end := 0
+	for end < len(body) {
+		c := body[end]
+		if c == '_' || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') {
+			end++
+			continue
+		}
+		break
+	}
+	// No name at all ("${:-/usr/local/bin/proxsave}", "${#BIN}"): there is nothing to look up and
+	// nothing that names a command.
+	if end == 0 {
+		return "", "", false, false
+	}
+	name, rest := body[:end], body[end:]
+	if rest == "" {
+		return name, "", false, true
+	}
+	// An operator only exists INSIDE braces. Unbraced, the shell expands the name and appends
+	// whatever follows as literal text, so "$BIN-/usr/local/bin/proxsave" is a name with a suffix
+	// and reading it as a default invented a command out of a word the shell would never run.
+	// What is left is a concatenation, which is refused for the same reason "${BIN}/proxsave" is.
+	if !braced {
+		return "", "", false, false
+	}
+	for _, op := range scriptDefaultOperators {
+		if !strings.HasPrefix(rest, op.op) {
+			continue
+		}
+		// The gate belongs HERE and not only where the assignment is recorded: an
+		// assigning form the shell refuses runs nothing at all, in command position as
+		// much as on a right-hand side.
+		if op.assigns && !isShellName(name) {
+			return "", "", false, false
+		}
+		return name, rest[len(op.op):], op.assigns, true
+	}
+	return "", "", false, false
+}
+
+// scriptWordExpansions returns the paths one word could stand for, in the order the script is most
+// likely to run: the value of an assignment this probe has already seen, then the literal default
+// written on the word itself. A word that is not an expansion is its own only candidate, so the
+// slice is never empty and callers keep working unchanged on ordinary words.
+//
+// BOTH branches count, and a match on either is a match. vars is a WHITELIST of assignments whose
+// value already names the binary, so a name missing from it means "no proxsave-valued assignment
+// was seen", never "known to be something else" - which is why "BIN=/usr/bin/rsync" followed by
+// "${BIN:-/usr/local/bin/proxsave}" still reports. Even a complete map could not decide it: the
+// shell takes the default when the variable is unset OR EMPTY at run time, and that depends on
+// /etc/default/proxsave, on cron's environment and on the script's own arguments, none of which a
+// text probe can see. The costs are asymmetric the usual way - the union at worst adds one
+// advisory, while "the known value wins" loses the wrapper whose override sources empty, which is
+// issue #298 with no message at all.
+//
+// Today the union is INERT, because every value in vars is already a proxsave path and so the known
+// branch answers on its own. It is written as a union anyway, because that is what keeps a future
+// widening of vars from turning silently into a false negative.
+func scriptWordExpansions(word string, vars map[string]string) []string {
+	word = strings.Trim(word, "\"'")
+	name, fallback, ok := parseScriptExpansion(word)
+	if !ok {
+		return []string{word}
+	}
+	var out []string
+	if value, seen := vars[name]; seen {
+		out = append(out, value)
+	}
+	if fallback != "" {
+		out = append(out, fallback)
+	}
+	if len(out) == 0 {
+		return []string{word}
+	}
+	return out
+}
+
+// scriptLineRunsProxsave reports whether one line of a script puts the proxsave binary in
+// COMMAND position, i.e. actually runs it.
+//
+// The probe used to ask "does a proxsave path appear anywhere in this file", which made a
+// nightly "rsync -a /opt/proxsave/ /mnt/nas/" and a "find /var/log/proxsave.log -delete" read
+// as wrappers that call the binary. That verdict decides whether an unattended --upgrade
+// refuses to migrate and what a revert reports about the host, so naming a path had to stop
+// counting as running it.
+//
+// The parsing is deliberately shallow, because this is RECOGNITION and nothing here is ever
+// executed. A line is cut into segments at the shell operators that start a new command, each
+// segment's leading environment assignments are skipped, and what stands in command position is
+// then walked through the four categories above until a real command is reached.
+//
+// What it does not model: a path assembled from more than one variable, a command reached
+// through `source` or `eval`, and the four opaque launchers listed above. A wrapper missed here
+// is REPORTED as missing, never acted on, so the cost of a blind spot is one advisory the
+// operator does not get, not a decision taken on bad evidence.
+func scriptLineRunsProxsave(line string, vars map[string]string) bool {
+	return scriptLineWalkCommands(line, vars, scriptWordRunsProxsave)
+}
+
+// scriptLineWalkCommands is scriptLineRunsProxsave with the VERDICT made a parameter: it walks
+// the same tree and hands every word it reaches in command position to visit, stopping at the
+// first one visit accepts.
+//
+// It is factored out for the reason the rest of this file already states about its two views of
+// a crontab - they must never walk different trees or apply different skip rules - and the
+// second caller is cronRunnerWrappedScript, which asks the same "what does this line actually
+// RUN" question about a cron line instead of a script line. Everything the walk already knows
+// (flock takes an operand and may take options again after it, "nice -n 19" and "sudo -u backup"
+// eat a value, "-Hu backup" bundles, "sh -c" is a nested line, su/runuser/systemd-run are
+// opaque) is exactly what that caller needs, and duplicating it is how the two would drift.
+//
+// visit MUST stay short-circuiting: the second caller OPENS the word it is handed, and an eager
+// collector would open every candidate on the line rather than stopping at the first answer.
+func scriptLineWalkCommands(line string, vars map[string]string, visit func(string) bool) bool {
+	trimmed := strings.TrimSpace(line)
+	if trimmed == "" || strings.HasPrefix(trimmed, "#") {
+		return false
+	}
+	for _, segment := range splitShellSegments(trimmed) {
+		if segmentWalkCommands(strings.Fields(segment), vars, visit) {
+			return true
+		}
+	}
+	return false
+}
+
+// segmentWalkCommands walks one segment from its command position, handing every command it
+// reaches to visit and stopping at the first one visit accepts. It is scriptLineWalkCommands one
+// level down; see there for why the verdict is a parameter.
+//
+// It is iterative rather than recursive on the launcher categories so a pathological line cannot
+// nest; the ONE recursion is a shell's -c argument, which is a genuinely separate line.
+func segmentWalkCommands(words []string, vars map[string]string, visit func(string) bool) bool {
+	for len(words) > 0 {
+		// Leading assignments belong to the command that follows, not to the command position.
+		for len(words) > 0 && looksLikeEnvAssignment(strings.Trim(words[0], "\"'")) {
+			words = words[1:]
+		}
+		if len(words) == 0 {
+			return false
+		}
+		heads := scriptWordExpansions(words[0], vars)
+		for _, head := range heads {
+			if visit(head) {
+				return true
+			}
+		}
+		// A launcher reached through a variable is still a launcher: classifying on the
+		// unexpanded word ends the segment on a brace and hides whatever it was about to run,
+		// which is the same false negative shape launcherValueFlags was written for. The FIRST
+		// candidate decides, i.e. the assignment's value when there is one and the literal
+		// default otherwise, because that is the one the script most likely runs.
+		base := strings.ToLower(filepath.Base(heads[0]))
+		switch {
+		case isIn(base, scriptCommandPrefixes):
+			words = words[1:]
+		case isIn(base, scriptCommandLaunchers):
+			words = skipLauncherOptions(base, words[1:])
+		case isIn(base, scriptOperandLaunchers):
+			words = skipLauncherOptions(base, words[1:])
+			if len(words) > 0 {
+				words = words[1:] // the lock file, the duration
+			}
+			// Options may follow the operand too: "flock [options] <file> -c <command>" is
+			// flock's own documented form. Without this second pass the command position lands
+			// on "-c", nothing matches, and the wrapper behind it goes unseen.
+			words = skipLauncherOptions(base, words)
+		case isIn(base, scriptShellLaunchers):
+			return shellLauncherWalkCommands(base, words[1:], vars, visit)
+		case isIn(base, scriptOpaqueLaunchers):
+			for _, w := range words[1:] {
+				for _, candidate := range scriptWordExpansions(w, vars) {
+					if visit(candidate) {
+						return true
+					}
+				}
+			}
+			return false
+		default:
+			// An ordinary command. Everything after it is an argument, and naming a path in an
+			// argument is exactly what stopped counting.
+			return false
+		}
+	}
+	return false
+}
+
+// shellLauncherWalkCommands handles "sh -c '<script>'": the argument after -c is a line of its
+// own. Without a -c the shell is running a FILE, whose contents this probe cannot follow, so the
+// remaining words are treated as a command position rather than scanned.
+func shellLauncherWalkCommands(launcher string, words []string, vars map[string]string, visit func(string) bool) bool {
+	for i, w := range words {
+		if strings.Trim(w, "\"'") == "-c" {
+			if i+1 >= len(words) {
+				return false
+			}
+			return scriptLineWalkCommands(strings.Trim(strings.Join(words[i+1:], " "), "\"'"), vars, visit)
+		}
+	}
+	return segmentWalkCommands(skipLauncherOptions(launcher, words), vars, visit)
+}
+
+// skipLauncherOptions drops the option-shaped words a launcher consumes before its command,
+// INCLUDING the value word an option like "-u root" or "-w 600" takes with it.
+//
+// A bare "--" needs no case of its own: consumed as a value-less option, it leaves the command
+// position exactly where an explicit end-of-options branch would have, and no realistic line
+// distinguishes the two.
+//
+// An unknown flag is treated as boolean, and that is the UNSAFE direction, not the safe one: if
+// it really takes a value, the command position lands on that value, nothing matches, and the
+// wrapper goes unseen - a false NEGATIVE, which is what issue #298 is made of. The table is
+// therefore not an optimisation. A launcher added to either launcher set without its
+// value-taking flags is a hole, not a rough edge.
+func skipLauncherOptions(launcher string, words []string) []string {
+	valueFlags := launcherValueFlags[launcher]
+	for len(words) > 0 {
+		word := strings.Trim(words[0], "\"'")
+		if !strings.HasPrefix(word, "-") || word == "-" {
+			return words
+		}
+		words = words[1:]
+		if strings.Contains(word, "=") {
+			continue // --flag=value carries its value in the same word
+		}
+		if launcherFlagTakesNextWord(word, valueFlags) && len(words) > 0 {
+			words = words[1:]
+		}
+	}
+	return words
+}
+
+// launcherFlagTakesNextWord reports whether this option word consumes the following word as its
+// value.
+//
+// Short options BUNDLE: "sudo -Hu backup" is "sudo -H -u backup", and getopt takes -u's value
+// from the next word. A whole-word lookup misses that, treats the bundle as boolean, and lands
+// the command position on the value - the wrapper behind it unseen, which is the direction that
+// costs a duplicate schedule.
+//
+// The value is inline whenever the bundle does not END on a value-taking letter: "-c3", "-19" and
+// "-oL" all carry it in the same word, and there the next word is already the command. Looking at
+// the last letter alone is what tells the two apart.
+func launcherFlagTakesNextWord(word string, valueFlags map[string]struct{}) bool {
+	if _, ok := valueFlags[word]; ok {
+		return true
+	}
+	if len(word) <= 2 || !strings.HasPrefix(word, "-") || strings.HasPrefix(word, "--") {
+		return false
+	}
+	// getopt walks the bundle left to right and stops at the FIRST letter that takes a value.
+	// That letter consumes the next word only when it is the LAST character: otherwise the rest
+	// of the bundle IS its value. "-Hu backup" and "-ubackup" are the same invocation written two
+	// ways, and looking only at the last letter got the second one backwards - "-ubackup" ends on
+	// "p", sudo's prompt flag, so the command that followed was eaten as a prompt.
+	runes := []rune(word)
+	for i := 1; i < len(runes); i++ {
+		if _, ok := valueFlags["-"+string(runes[i])]; ok {
+			return i == len(runes)-1
+		}
+	}
+	return false
+}
+
+func isIn(word string, set map[string]struct{}) bool {
+	_, ok := set[word]
+	return ok
+}
+
+// scriptWordRunsProxsave reports whether one word names our binary. basenameHasProxsaveComponent
+// alone is not enough: it answers true for the bare word "proxsave", and a script is full of
+// bare words. Requiring a slash keeps it to something that is a PATH.
+func scriptWordRunsProxsave(word string) bool {
+	if commandTokenMatchesTarget(word) {
+		return true
+	}
+	return strings.Contains(word, "/") && basenameHasProxsaveComponent(word)
+}
+
+// splitShellSegments cuts a line at the operators that begin a new command, so each piece
+// starts at a command position. Redirections and arguments are left inside their segment: they
+// are exactly the places a path is NAMED rather than run.
+//
+// Braces are NOT separators, because "${BIN}" would then be cut into two words and the
+// variable would be unresolvable. A grouping brace is handled where it actually stands, as a
+// prefix that consumes one word (scriptCommandPrefixes); the ";" inside "{ cmd; }" already
+// separates the commands.
+func splitShellSegments(line string) []string {
+	return strings.FieldsFunc(line, func(r rune) bool {
+		switch r {
+		case ';', '|', '&', '(', ')', '`':
+			return true
+		}
+		return false
+	})
+}
+
+// describeIndirectCronRefs renders one operator-facing item per finding: the cron line
+// verbatim, where it lives, and the rule that fired.
+//
+// It returns the item WITHOUT the list prefix, because the caller owns that: this package
+// prints an enumerated finding the way the rest of the CLI already does, a header ending in
+// a colon and carrying a count, then one `  - ` item per entry (logConfigUpgradeWarnings in
+// main_config_modes.go and logConfiguredZFSPools in restore_zfs.go are the two established
+// examples). The bracketed location and the parenthesised reason follow the annotation style
+// already used for a resolved path elsewhere in this package.
+//
+// The caller must print these with a "%s" format, never as the format itself - a crontab
+// line may legitimately contain "%", which cron reads as its stdin separator.
+// A RunParts finding has no line: its Line is the script's path, the bracket is the
+// run-parts directory it lives in, and its Reason is where the absence of a cron time is
+// stated.
+func describeIndirectCronRefs(refs []indirectCronRef) []string {
+	out := make([]string, 0, len(refs))
+	for _, ref := range refs {
+		where := "crontab"
+		if ref.Source != "" {
+			where = ref.Source
+		}
+		out = append(out, fmt.Sprintf("%s  [%s]  (%s)", ref.Line, where, ref.Reason))
+	}
+	return out
+}
+
+// cronRefEditHint names the tool that actually edits the findings at hand. "crontab -e"
+// is right for the root crontab and wrong for /etc/crontab and /etc/cron.d, which are
+// plain files an editor opens and which crontab(1) will not touch at all; sending an
+// operator to the wrong tool over a duplicated backup is how a clear warning turns into
+// a support ticket. Both habitats present together get both hints.
+func cronRefEditHint(refs []indirectCronRef) string {
+	user, system, runParts := false, false, false
+	for _, ref := range refs {
+		switch {
+		case ref.RunParts:
+			runParts = true
+		case ref.Source == "":
+			user = true
+		default:
+			system = true
+		}
+	}
+	// One habitat, one sentence, no list: the single-habitat wordings are byte-identical
+	// to what they have always been. Only a mixed finding set becomes a list.
+	var parts []string
+	if user {
+		parts = append(parts, "'crontab -e' for the crontab entries")
+	}
+	if system {
+		parts = append(parts, "an editor for the files named above")
+	}
+	if runParts {
+		parts = append(parts, "'chmod -x' or removal for the run-parts scripts named above")
+	}
+	if len(parts) > 1 {
+		return strings.Join(parts, ", ")
+	}
+	switch {
+	case system:
+		return "edit the file named above"
+	case runParts:
+		return "'chmod -x' or remove the run-parts script named above"
+	default:
+		return "run 'crontab -e'"
+	}
+}
+
+// systemCronScheduleAdvisory renders the --daemon-remove notice for a ProxSave schedule
+// found under /etc: the findings verbatim, then who owns what. It is a pure renderer
+// returning lines the caller prints with "%s", for the two reasons cronRemovalClause is
+// one too - the wording is operator-facing and must be testable without a logging
+// harness, and a crontab line may legitimately contain "%", which cron reads as its stdin
+// separator and fmt would read as a verb.
+//
+// WHY THIS IS A NOTICE AND NOT A DECISION. applyCronMode does NOT suppress its canonical
+// cron line on these findings, and that is the whole design, not an unfinished half of it.
+// The three heuristic rules answer "is this named after proxsave", not "does this run a
+// proxsave backup": /opt/proxsave/script/prune.sh, a nightly "nice rsync -a /opt/proxsave/
+// ..." mirror, and a maintenance script carrying a COMMENTED-OUT proxsave call all match
+// while scheduling no backup at all. Withholding the cron line on one of those would leave
+// the host with nothing scheduled, silently, and ProxSave cannot edit /etc to repair it.
+// F09-06 already ranks the two outcomes: a double schedule is a recoverable annoyance, an
+// unscheduled host is silent data loss.
+//
+// WHAT IT MAY AND MAY NOT CLAIM. It states ONLY what is certain at this point, and the
+// restraint is the fix for a defect this text used to carry. It used to say the /etc entry
+// stood "alongside the cron line just written at SCHEDULER_TIME" and to instruct the
+// operator to remove one of the two. Neither was knowable here. migrateLegacyCronEntries
+// is void and has four early returns that write nothing, and one of them is reached
+// DETERMINISTICALLY in the case that matters: it re-runs the same `crontab -l` that
+// existingWrapperCronFallback just ran, so whenever that read fails no line is written at
+// all. The notice then described a duplicate that did not exist and told the operator to
+// delete the only schedule the host had left. So: no claim about ProxSave's own line, and
+// no instruction to remove anything. The operator is told what was found, that ProxSave
+// did not touch it and does not manage it, and where to look to decide - which is the most
+// this function can say without asserting something it cannot check.
+// systemCronOwnershipNote is the one line of the advisory that states what ProxSave DID
+// about what it found, so it is the one line that is a WARNING when the block is logged.
+// The findings above it are INFO: one finding printed at WARNING on every line is counted
+// three times in the run's "WARNINGS/ERRORS DURING RUN (warnings=N)" recap and two findings
+// four times, and that count is what an operator scans. Same shape as the other two #298
+// blocks (warnIndirectProxsaveCronOnDaemonInstall, maybeAutoMigrateDaemon).
+//
+// It repeats the COUNT for the same reason those two do: DEBUG_LEVEL can be set to "warning"
+// (internal/cli/args.go), which hides the findings above it. What is lost at that level is
+// which lines they were; what survives is that some exist and that ProxSave left them alone.
+//
+// It counts ENTRIES and not lines, because since the run-parts directories joined the walk
+// a finding can be a script rather than a crontab line, and "entry" is the word cron uses
+// for both.
+//
+// It is a named function rather than the last element of a slice because the caller has to
+// pick it out to give it a different level; indexing the tail would put the whole block one
+// off-by-one away from warning about the wrong sentence.
+func systemCronOwnershipNote(count int) string {
+	return fmt.Sprintf("ProxSave owns the root crontab only and never edits files it did not place, %d entry(ies) in /etc unchanged", count)
+}
+
+// systemCronScheduleFindings renders the findings alone: the header carrying the count, then
+// one item per entry. These are the INFO half of the block; systemCronOwnershipNote is the
+// other half.
+func systemCronScheduleFindings(refs []indirectCronRef) []string {
+	if len(refs) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(refs)+1)
+	out = append(out, fmt.Sprintf("Reverting to cron: %d possible ProxSave cron line(s) under /etc:", len(refs)))
+	for _, line := range describeIndirectCronRefs(refs) {
+		out = append(out, "  - "+line)
+	}
+	return out
+}
+
+func systemCronScheduleAdvisory(refs []indirectCronRef) []string {
+	findings := systemCronScheduleFindings(refs)
+	if len(findings) == 0 {
+		return nil
+	}
+	return append(findings, systemCronOwnershipNote(len(refs)))
+}
+
+// detectIndirectProxsaveCron reads every habitat that can schedule ProxSave without
+// this package owning the line, and returns what it found. It goes through the
+// crontabReadLinesFn seam so a test can feed a synthetic crontab, and it returns the
+// read error instead of swallowing it: a host with no crontab BINARY at all (nothing
+// scheduled, nothing to collide with) must still be allowed to migrate, so "could not
+// read" is a caller decision, not a refusal made here.
+//
+// The two halves are asymmetric, and the asymmetry is the point. From the ROOT CRONTAB
+// it takes the indirect shapes only: a line whose command token IS the proxsave binary
+// is canonical there, dropCanonicalCronLines owns it and removes it, so reporting it
+// would refuse a migration over a line the migration is about to delete. From /etc it
+// takes systemCronProxsaveRefs, which adds exactly that one shape, because under /etc
+// nothing owns it. dropCanonicalCronLines never reads those files and by the read-only
+// rule on systemCronPaths never will, so
+//
+//	0 2 * * * root /usr/local/bin/proxsave --backup     [/etc/cron.d/proxsave]
+//
+// is a live backup schedule that survives the migration untouched. Installing the daemon
+// on top of it is issue #298 exactly, on the same unattended path, with the same outcome:
+// two backups a night and the loser exiting ExitBackupSkipped.
+//
+// That shape was deliberately withheld from this predicate when it was introduced, on the
+// grounds that widening what an unattended upgrade REFUSES on is a decision separate from
+// widening what a revert prints. It is included now as a considered choice rather than by
+// drift, and it is the safest possible widening: unlike the three heuristic rules, which
+// answer "is this named after proxsave" and do fire on a prune script or an rsync mirror,
+// this one matches a literal proxsave command token and nothing else. It cannot produce
+// the false refusals the heuristics can.
+func detectIndirectProxsaveCron(ctx context.Context) ([]indirectCronRef, error) {
+	lines, err := crontabReadLinesFn(ctx)
+	if err != nil {
+		return nil, err
+	}
+	refs := indirectProxsaveCronRefs(lines, cronProbeReadScripts)
+	return append(refs, systemCronProxsaveRefs()...), nil
+}
+
+// systemCronPaths are the SYSTEM crontab locations this detector reads. They are vars
+// rather than consts purely so a test can point them at a temp tree; nothing writes
+// through them.
+//
+// They are READ-ONLY here, and that asymmetry is deliberate rather than unfinished.
+// ProxSave owns the root user's crontab: it writes it on install, rewrites it on
+// --daemon-remove and deletes its own lines when enabling the daemon. It does not own
+// anything under /etc: those files are hand-placed by an operator or shipped by a
+// package, so this code may REPORT what it finds there and must never edit it.
+// dropCanonicalCronLines and schedulerTimeFromCronLines are correspondingly untouched
+// and still see the user crontab only.
+//
+// TWO HABITAT KINDS live in this one list, and systemCronRefs tells them apart by base
+// name through isRunPartsCronDir. /etc/crontab and /etc/cron.d hold SYSTEM CRONTAB LINES.
+// The four cron.* directories hold SCRIPTS that run-parts executes, with no schedule
+// fields at all, so handing one to the crontab line parser reads shell code as cron lines:
+// "if mountpoint -q /mnt/nas ; then /usr/local/bin/proxsave --backup ; fi" has the binary
+// as its seventh whitespace field and was measured being reported as a direct proxsave
+// cron line, whose "schedule" then silenced a real /etc/cron.d entry.
+//
+// One list and not two, because every test that neutralises this habitat does it by
+// REPLACING this slice; a second var would be left pointing at the real /etc on all of
+// those sites.
+//
+// Exactly these four and not /etc/cron.yearly: /etc/crontab on a Proxmox host invokes
+// run-parts on cron.hourly, cron.daily, cron.weekly and cron.monthly and on nothing else,
+// with anacron taking over the last three when it is installed.
+var systemCronPaths = []string{
+	"/etc/crontab",
+	"/etc/cron.d",
+	"/etc/cron.hourly",
+	"/etc/cron.daily",
+	"/etc/cron.weekly",
+	"/etc/cron.monthly",
+}
+
+// runPartsCronDirNames names the entries of systemCronPaths that hold SCRIPTS rather than
+// crontab lines. The list above and this set are one decision written twice, and nothing
+// else relates them: a name dropped from either side leaves a habitat unwalked, or walked
+// with the wrong parser, in silence.
+// TestTheDefaultSystemCronHabitatsCoverTheRunPartsDirectories pins them against each other.
+var runPartsCronDirNames = map[string]struct{}{
+	"cron.hourly":  {},
+	"cron.daily":   {},
+	"cron.weekly":  {},
+	"cron.monthly": {},
+}
+
+func isRunPartsCronDir(path string) bool {
+	_, ok := runPartsCronDirNames[filepath.Base(path)]
+	return ok
+}
+
+// indirectProxsaveSystemCronRefs applies the same three rules to every /etc habitat:
+// /etc/crontab and /etc/cron.d, which use the SYSTEM crontab format and were invisible to every cron
+// helper in this package: cronCommandToken reads field 6, which is the COMMAND in a
+// user crontab but the USER in a system one, so a wrapper installed there parsed as a
+// username and matched nothing. That is a second, equally silent habitat for exactly
+// the schedule issue #298 reported.
+//
+// Every failure is silent and yields nothing: a missing /etc/cron.d, an unreadable
+// file, a directory entry cron itself would ignore. See the false-negative note on
+// indirectProxsaveCronRefs for why "cannot tell" must not become "suspicious".
+//
+// The run-parts directories are in this view too, and their whole contribution is
+// heuristic: there is no "the command token IS the binary" shape when the file itself is
+// the command, so the set difference against systemCronProxsaveRefs stays exactly the
+// direct system-crontab lines.
+//
+// This is the INDIRECT-only view. Nothing in the daemon paths reads it any more -
+// detectIndirectProxsaveCron and the revert advisory both go through
+// systemCronProxsaveRefs, which adds the direct shape - and it is kept as the named
+// boundary between "matched a heuristic" and "is literally the proxsave binary". Its one
+// consumer is the test that pins that distinction, which is deliberate: the day someone
+// widens the heuristics, the difference between the two views is what makes the blast
+// radius visible.
+func indirectProxsaveSystemCronRefs() []indirectCronRef {
+	return systemCronRefs(scanIndirectOnly)
+}
+
+// systemCronProxsaveRefs is indirectProxsaveSystemCronRefs plus the ONE shape that
+// detector deliberately drops: a system-cron line whose command token IS the proxsave
+// binary.
+//
+// indirectProxsaveCronRefsWithToken skips those with the comment "canonical
+// proxsave entry: not indirect, and not ours to report", and in the USER crontab that
+// is exactly right, because dropCanonicalCronLines really does own them and really
+// does remove them. Under /etc nothing owns them. dropCanonicalCronLines never reads
+// those files and, by the read-only rule stated on systemCronPaths, never will. So
+//
+//	0 2 * * * root /usr/local/bin/proxsave --backup     [/etc/cron.d/proxsave]
+//
+// is a live ProxSave backup schedule that no code path in this package can see, remove
+// or report - and it is the likeliest way a host ends up scheduled from /etc at all: an
+// operator, or a configuration-management tool, moving the line the installer wrote into
+// a file they manage. A revert advisory that named a neutrally-written wrapper while
+// staying blind to a literal proxsave --backup line two directories away would be worse
+// than silence, because the operator would trust it.
+//
+// This view now feeds the unattended --upgrade refusal too, through
+// detectIndirectProxsaveCron. That was withheld at first, on the grounds that widening a
+// refusal predicate is a decision separate from widening what a revert prints, and it was
+// taken deliberately afterwards rather than by drift. It is the safest widening available:
+// the three heuristic rules answer "is this named after proxsave" and can fire on a prune
+// script or an rsync mirror, while this shape matches a literal proxsave command token and
+// nothing else, so it adds no false refusals at all.
+func systemCronProxsaveRefs() []indirectCronRef {
+	return systemCronRefs(scanAll)
+}
+
+// runPartsVisibleTo reports whether a scan mode may see the run-parts habitat.
+//
+// scanDirectOnly may not, for two independent reasons and either would be enough. A
+// run-parts script has NO cron time: cron.ScheduleToTime on its path returns "", and
+// schedulerTimeFromSystemCron turns one unreadable time into "say nothing at all", so a
+// single such finding would silence a real /etc/cron.d entry and drop the host to the
+// 02:00 default. And that view is reached from the install wizard and from
+// --upgrade-config-json, which must not open operator scripts off disk, while the
+// run-parts walk is nothing but a content probe.
+//
+// scanIndirectOnly DOES see them, because every run-parts finding is heuristic: there is
+// no "the command token IS the binary" shape when the file itself is the command. The set
+// difference against scanAll therefore stays exactly the direct system-crontab lines.
+//
+// A closed switch with a false fallthrough rather than "mode != scanDirectOnly", so a mode
+// added later is excluded until someone decides otherwise.
+func runPartsVisibleTo(mode systemCronScan) bool {
+	switch mode {
+	case scanAll, scanIndirectOnly:
+		return true
+	case scanDirectOnly:
+		return false
+	}
+	return false
+}
+
+// runPartsCronRefs walks one run-parts directory. The unit here is the FILE, not a line:
+// run-parts parses nothing and executes every entry that passes its filter, so the script
+// IS the command and its content is the only thing there is to read.
+//
+// Four gates, all measured against run-parts 5.7 (debianutils, Debian 12) with
+// "run-parts --test": the name filter is [A-Za-z0-9_-]+, any ONE execute bit is enough
+// (root runs an entry that is executable only by its group), symlinks are followed, and
+// broken symlinks and subdirectories are skipped.
+//
+// The execute-bit gate is the same reasoning cronDNameIsActive already carries for a
+// cron.d file cron will not load: a non-executable script in /etc/cron.daily never runs,
+// and reporting it would refuse a migration over a schedule that does not exist.
+//
+// Every failure is silent, like the rest of this file.
+func runPartsCronRefs(walk, probes *cronProbeDeadline, dir string) []indirectCronRef {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil
+	}
+	// TWO deadlines are in scope here and they are deliberately not the same one. `walk` is
+	// the whole /etc walk's and bounds this walk's OWN filesystem, the entry step below;
+	// `probes` bounds the CONTENT probes, whose paths come out of the scripts. Sharing them
+	// would let a wrapper on a dead mount - which says nothing about whether /etc still
+	// answers - latch the walk and take every habitat after this one with it, including a
+	// literal `proxsave --backup` line in /etc/cron.d.
+	// Read on the CALLER's goroutine, for the reason probe reads cronProbeScanFn there: a
+	// test restoring the seam in t.Cleanup must never race a step it walked away from.
+	stat := cronEntryStatFn
+	var refs []indirectCronRef
+	for _, entry := range entries {
+		if !runPartsNameIsActive(entry.Name()) {
+			continue
+		}
+		path := filepath.Join(dir, entry.Name())
+		facts, answered := cronDeadlineValue(walk, func() runPartsEntry { return statRunPartsEntry(stat, path) })
+		// `answered` first, though the zero runPartsEntry would already fail the second
+		// test: the day this step is rewritten to answer through a capture, the order is
+		// what keeps the caller from reading what an abandoned worker is still writing.
+		if !answered || !facts.active {
+			continue
+		}
+		if ref, ok := runPartsScriptRef(probes, path, facts.resolved, dir); ok {
+			refs = append(refs, ref)
+		}
+	}
+	return refs
+}
+
+// runPartsEntry is what one bounded look at a run-parts entry answers: whether run-parts
+// would execute it, and the path its symlink chain ends at. Both come from the same step
+// because both walk the same chain, and the caller needs them together or not at all.
+type runPartsEntry struct {
+	active   bool
+	resolved string
+}
+
+// statRunPartsEntry is the filesystem half of one run-parts entry: the stat that follows
+// the symlink, the two gates on it, and the resolution of the chain, in that order with
+// no branch between them, so a deadline has exactly one thing to bound. The zero value
+// means "not an entry run-parts would execute", which is what a stat error, a directory
+// and a non-executable file already meant to the caller.
+func statRunPartsEntry(stat func(string) (os.FileInfo, error), path string) runPartsEntry {
+	// os.Stat and not entry.Info(): it FOLLOWS the symlink, exactly as run-parts' own
+	// stat does, so a link into an install tree is judged by what it points at.
+	info, err := stat(path)
+	if err != nil || !info.Mode().IsRegular() || info.Mode().Perm()&0o111 == 0 {
+		return runPartsEntry{}
+	}
+	// Resolved HERE and not in runPartsScriptRef, where it used to be. That is not about the
+	// syscall COUNT: the probe resolves the same chain again on its own worker, and strace
+	// shows two complete lstat/readlink/stat walks per entry before this change and two
+	// after. It is about WHERE the second one runs. In runPartsScriptRef it sat on the
+	// caller's goroutine, after the probe had answered and inside no deadline at all, so a
+	// mount that went quiet between the two walks wedged the whole walk there. Here it is
+	// inside the step the entry stat already pays for.
+	return runPartsEntry{active: true, resolved: resolveSystemCronPath(path)}
+}
+
+// runPartsScriptRef applies rules 1, 2 and 4 of indirectProxsaveCronRefs to one script, in
+// the same order and with the same precedence.
+//
+// Rule 3, the RUNNER rule, is absent because it reads the rest of a cron LINE and there is
+// no line here. commandTokenMatchesTarget is absent for a sharper reason: it answers true
+// for the basename "proxmox-backup", and a /etc/cron.daily entry shipped by PBS is not
+// ours to flag.
+//
+// Rule 2 is applied to the RESOLVED path, because nothing under /etc/cron.daily has a path
+// component called "proxsave"; it fires on a symlink into a ProxSave install root, which is
+// what keeps the pre-0.30 Bash entry point visible when it was linked rather than copied,
+// since that script does not name the binary and rule 2 is the only rule that can see it.
+// That path is passed IN rather than resolved here, because it comes out of the same bounded
+// step that decided the entry is one run-parts would execute. Resolving it here walked the
+// symlink chain on the caller's goroutine, after the probe had already answered, and that
+// walk was inside no deadline at all - the last unbounded filesystem call the /etc walk had.
+//
+// Every reason opens by saying what the finding IS. The renderer prints Line, which here is
+// a path and not a schedule, and this is the only place the operator learns why no time is
+// shown.
+func runPartsScriptRef(deadline *cronProbeDeadline, path, resolved, dir string) (indirectCronRef, bool) {
+	references, readable := scriptProxsaveProbe(deadline, path)
+	reason := ""
+	switch {
+	case references:
+		reason = "run-parts script with no cron time of its own; it calls the proxsave binary"
+	case pathLivesInProxsaveTree(resolved):
+		reason = fmt.Sprintf("run-parts script with no cron time of its own; it resolves into the ProxSave install tree (%s)", filepath.Dir(resolved))
+	case !readable && basenameHasProxsaveComponent(path):
+		reason = "run-parts script with no cron time of its own; named after proxsave and could not be read"
+	}
+	if reason == "" {
+		return indirectCronRef{}, false
+	}
+	// Line and Command are both the script path, and that is not redundancy: Line is what
+	// the renderer quotes back, Command is what a caller asks "which command is this". A
+	// cron line has two answers there; a run-parts entry has one fact.
+	return indirectCronRef{Line: path, Command: path, Reason: reason, Source: dir, RunParts: true}, true
+}
+
+// runPartsNameIsActive is character-identical to cronDNameIsActive today, measured with
+// "run-parts --test" on debianutils 5.7: guard, guard_2, guard-b and GUARD are executed,
+// guard.sh, guard.dpkg-dist, .guard and guard~ are not.
+//
+// It delegates rather than being called directly, because the two predicates belong to two
+// different programs: cron owns the cron.d rule, run-parts owns this one. run-parts already
+// ships a second filter behind --lsbsysinit, which accepts guard while rejecting GUARD and
+// guard_2. If /etc/crontab is ever seen invoking that flag, this is the single place that
+// changes, and the cron.d rule does not move with it.
+func runPartsNameIsActive(name string) bool {
+	return cronDNameIsActive(name)
+}
+
+// systemCronRefs is the shared walk over systemCronPaths, which now holds three shapes:
+// /etc/crontab as a file, /etc/cron.d as a directory whose entries cron itself would load,
+// and the four run-parts directories, whose entries are scripts with no schedule of their
+// own and are read rather than parsed. It is factored out so
+// the indirect-only and the indirect-plus-direct views can never walk different trees or
+// apply different skip rules to the same host.
+type systemCronScan int
+
+const (
+	// scanIndirectOnly is the --upgrade refusal / daemon-install warning view: heuristics
+	// only, a canonical proxsave token excluded as "not indirect".
+	scanIndirectOnly systemCronScan = iota
+	// scanAll adds the canonical token back, because under /etc nothing owns or removes it.
+	scanAll
+	// scanDirectOnly drops the heuristics AND the script probe AND the run-parts habitat
+	// entirely, for the SCHEDULER_TIME adoption. See systemCronDirectProxsaveLines for why
+	// that view has to be the narrow one, and runPartsVisibleTo for the habitat.
+	scanDirectOnly
+)
+
+func systemCronRefs(mode systemCronScan) []indirectCronRef {
+	var refs []indirectCronRef
+	// ONE deadline for the WHOLE walk, shared by every habitat in it, so a host with a
+	// mount that stopped answering pays cronProbeTimeout once for all six together. One
+	// per habitat would cost six; one per entry would be no bound at all, since /etc/cron.d
+	// holds as many entries as an operator puts there and a count is not a bound.
+	//
+	// It bounds this walk's own filesystem and nothing else. The content probes below keep
+	// their own per-file and per-directory deadlines: see runPartsCronRefs.
+	//
+	// The os.Stat and os.ReadDir of the habitats themselves are deliberately NOT bounded.
+	// Their paths are the six compile-time constants of systemCronPaths, which carries no
+	// operator-supplied component - nothing outside a test writes that slice - so no cron
+	// line and no entry name can steer them. One shape is left open on purpose and is worth
+	// naming, so the next reader does not take it for an oversight: a host that symlinked
+	// /etc/cron.d ITSELF into a mount that stopped answering would still stall here, since
+	// os.Stat follows that link too (measured). That is /etc and not an entry, it is not the
+	// shape a config-management tool produces, and bounding what operator input cannot reach
+	// is churn - which in this file is how five review rounds each found a new defect.
+	walk := newCronProbeDeadline()
+	// And one for every CONTENT probe of this walk, kept apart from it. Both latch, and the
+	// separation is what stops a wrapper on a dead mount from also stopping /etc being read.
+	content := newCronProbeDeadline()
+	for _, path := range systemCronPaths {
+		info, err := os.Stat(path)
+		if err != nil {
+			continue
+		}
+		// The run-parts habitats are tested FIRST and never fall through. Their entries are
+		// scripts, and the one thing that must not happen to a script is being read as a
+		// schedule: this wrapper's seventh whitespace field is the binary, so the crontab
+		// parser below would report it as a direct proxsave cron LINE and hand its shell
+		// fragment to the time parser, which answers nothing and silences a real /etc/cron.d
+		// entry. A path named cron.daily that is somehow not a directory is skipped for the
+		// same reason rather than parsed.
+		if isRunPartsCronDir(path) {
+			if info.IsDir() && runPartsVisibleTo(mode) {
+				refs = append(refs, runPartsCronRefs(walk, content, path)...)
+			}
+			continue
+		}
+		if !info.IsDir() {
+			refs = append(refs, systemCronFileRefs(walk, content, path, mode)...)
+			continue
+		}
+		entries, err := os.ReadDir(path)
+		if err != nil {
+			continue
+		}
+		for _, entry := range entries {
+			if entry.IsDir() || !cronDNameIsActive(entry.Name()) {
+				continue
+			}
+			refs = append(refs, systemCronFileRefs(walk, content, filepath.Join(path, entry.Name()), mode)...)
+		}
+	}
+	return refs
+}
+
+// directProxsaveCronRefs reports the lines whose COMMAND TOKEN is the proxsave binary,
+// by the same commandTokenMatchesTarget rule the removal uses, so it can never disagree
+// with it about what a proxsave cron line is. It is the exact complement of
+// indirectProxsaveCronRefsWithToken: that one skips these, this one reports only these,
+// and nothing widens the shared matcher.
+//
+// It has no content probe and no heuristic, so it cannot produce the class of false
+// positive the three indirect rules can: the command IS our binary or it is not. That is
+// why it is the one rule strong enough to be worth reporting from a habitat nobody can
+// clean up afterwards.
+func directProxsaveCronRefs(lines []string, commandToken func(string) string) []indirectCronRef {
+	var refs []indirectCronRef
+	for _, line := range lines {
+		token := strings.Trim(commandToken(line), "\"'")
+		if token == "" || !commandTokenMatchesTarget(token) {
+			continue
+		}
+		refs = append(refs, indirectCronRef{
+			Line:    strings.TrimSpace(line),
+			Command: token,
+			Reason:  fmt.Sprintf("%q is the proxsave binary; /etc cron lines stay untouched", filepath.Base(token)),
+		})
+	}
+	return refs
+}
+
+// systemCronDirectProxsaveLines returns the /etc cron lines whose command IS the proxsave
+// binary. It is the SCHEDULER_TIME adoption's view of the system habitat, and nothing else
+// reads it.
+//
+// Direct-only is the whole point, and it is a narrower rule than anything else in this file
+// uses. Adopting a run time writes it into backup.env as the host's daily schedule, so it
+// may only come from a line this code can read without guessing: "0 5 * * * root
+// /usr/local/bin/proxsave --backup" says 05:00 and nothing else. A wrapper's schedule
+// belongs to a script we did not write and cannot interpret - it may run the backup, or
+// check a mount and give up - so it is reported by the advisories and never adopted here.
+//
+// Skipping the script probe is the second half of that: this view is reached from the
+// install wizard and from --upgrade-config-json, neither of which should be opening
+// operator scripts off disk to decide a default.
+//
+// The run-parts habitat is excluded from this view for both of those reasons at once, and
+// for a third that is decisive on its own: a run-parts script has no cron time, and one
+// unreadable time makes schedulerTimeFromSystemCron say nothing at all, so a single such
+// finding here would silence a perfectly good /etc/cron.d line and drop the host to the
+// 02:00 default. See runPartsVisibleTo.
+func systemCronDirectProxsaveLines() []indirectCronRef {
+	return systemCronRefs(scanDirectOnly)
+}
+
+// cronDNameIsActive mirrors cron's own rule for which /etc/cron.d entries it will
+// load: the name must be non-empty and consist only of letters, digits, underscore
+// and hyphen. A file with a dot in it (foo.dpkg-dist, bar.bak, .hidden) is IGNORED by
+// cron, so reporting it here would refuse a migration over a schedule that never runs.
+// A sibling of this predicate covers the run-parts directories: see runPartsNameIsActive
+// for why the two are kept apart rather than merged.
+func cronDNameIsActive(name string) bool {
+	if name == "" {
+		return false
+	}
+	for _, r := range name {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '_', r == '-':
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+// systemCronFileRefs reads one system-crontab file and returns its ProxSave references,
+// tagged with the file they came from. The size cap is the same one the script probe
+// uses: a crontab file is a few KiB, and a caller that pointed this at something enormous
+// has misconfigured the host rather than scheduled a backup.
+//
+// includeDirect adds the lines whose command token IS the binary (see
+// directProxsaveCronRefs). They are emitted FIRST, ahead of the heuristic findings,
+// because that is the order an operator should read them in: the certain fact before the
+// inferred ones. Within each group the crontab order of the file is preserved.
+//
+// The file is read ONCE for both rule sets. Two reads would be two chances to disagree
+// about a file another process may be editing, and a revert that reported a line from one
+// snapshot and a reason from another would be worse than either.
+func systemCronFileRefs(walk, content *cronProbeDeadline, path string, mode systemCronScan) []indirectCronRef {
+	// Read on the CALLER's goroutine: see runPartsCronRefs.
+	stat := cronEntryStatFn
+	// ONE bounded step for the stat, the symlink resolution and the read together, because
+	// all three walk the same operator-controlled path and only the last of them is the one
+	// a network mount really wedges: a stat can be answered from an attribute cache while
+	// the open behind it still has to reach the server. Bounding the stat alone would have
+	// left that open outside the deadline.
+	//
+	// A step that ran out of time answers nil, which is what an unreadable file already
+	// answered, and the guard below already turned that into no findings.
+	data, _ := cronDeadlineValue(walk, func() []byte { return readSystemCronFile(stat, path) })
+	normalized := strings.ReplaceAll(string(data), "\r\n", "\n")
+	if strings.TrimSpace(normalized) == "" {
+		return nil
+	}
+	lines := strings.Split(strings.TrimRight(normalized, "\n"), "\n")
+	var refs []indirectCronRef
+	if mode != scanIndirectOnly {
+		refs = append(refs, directProxsaveCronRefs(lines, systemCronCommandToken)...)
+	}
+	if mode != scanDirectOnly {
+		refs = append(refs, indirectProxsaveCronRefsWithToken(
+			content,
+			lines,
+			cronProbeReadScripts,
+			systemCronCommandToken,
+		)...)
+	}
+	for i := range refs {
+		refs[i].Source = path
+	}
+	return refs
+}
+
+// readSystemCronFile is the filesystem half of systemCronFileRefs: the stat that follows a
+// symlinked entry, the two gates on it, the resolution of the chain and the read, in that
+// order with no branch between them, so a deadline has exactly one thing to bound.
+//
+// nil means "nothing to parse". That is not a new answer: an unreadable file, an entry
+// that is not a small regular file and a file with a NUL byte in it all reached the same
+// `return nil` before, and the caller's TrimSpace guard already turned an empty read into
+// no findings. So the helper needs no second "did it work" result.
+func readSystemCronFile(stat func(string) (os.FileInfo, error), path string) []byte {
+	info, err := stat(path)
+	if err != nil || !info.Mode().IsRegular() || info.Size() > maxCronWrapperProbeBytes {
+		return nil
+	}
+	data, err := safefs.ReadFileUnderRoot(resolveSystemCronPath(path))
+	if err != nil || bytes.IndexByte(data, 0) >= 0 {
+		return nil
+	}
+	return data
+}
+
+// cronEntryStatFn is the seam a test swaps to stand in for the stat of one ENTRY: the
+// first syscall of BOTH bounded steps of the /etc walk, and the only one a test can make
+// block, since every other call either follows it or is gated on what it answered.
+// Nothing but a test writes it.
+var cronEntryStatFn = os.Stat
+
+// resolveSystemCronPath returns the path systemCronFileRefs should actually open, which
+// is not always the one it was handed: a symlinked /etc/cron.d entry has to be resolved
+// first or it is silently invisible.
+//
+// safefs.OpenFileUnderRoot roots at the parent directory and REFUSES a final component
+// that is an absolute symlink - a deliberate guarantee everywhere else in this codebase,
+// and the right default. Here it produced a blind spot instead. os.Stat above follows the
+// link, so the entry passes the regular-file and size gates; the read then fails, the
+// error is swallowed by the same fail-quiet rule that covers a missing /etc/cron.d, and
+// the file is never scanned. Cron loads that entry regardless, so the schedule is live and
+// the detector is the only one that cannot see it - and a config-management tool is both
+// the named cause of ProxSave ending up scheduled from /etc and the thing most likely to
+// place its files there as symlinks into a package tree.
+//
+// Resolving the link and rooting at the TARGET's parent keeps the confinement rather than
+// dropping it: the read still goes through os.Root, just anchored where the bytes really
+// live. A path that is not a symlink, or whose chain cannot be resolved, is returned
+// unchanged so the caller's existing guards decide - never silently widened.
+func resolveSystemCronPath(path string) string {
+	info, err := os.Lstat(path)
+	if err != nil || info.Mode()&os.ModeSymlink == 0 {
+		return path
+	}
+	resolved, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		return path
+	}
+	// The target must still be an ordinary, small text file: following a link is not a
+	// reason to relax any gate the direct path had to pass.
+	target, err := os.Stat(resolved)
+	if err != nil || !target.Mode().IsRegular() || target.Size() > maxCronWrapperProbeBytes {
+		return path
+	}
+	return resolved
+}
+
+// systemCronCommandToken is cronCommandToken for the SYSTEM crontab format, where a
+// USER field sits between the schedule and the command:
+//
+//	MM HH DOM MON DOW USER COMMAND    ->  field 7 is the command
+//	@daily        USER COMMAND        ->  field 3 is the command
+//
+// Comments and environment assignments are rejected exactly as in the user format, so
+// a line like "MAILTO=root" is never mistaken for a command.
+func systemCronCommandToken(line string) string {
+	trimmed := strings.TrimSpace(line)
+	if trimmed == "" || strings.HasPrefix(trimmed, "#") {
+		return ""
+	}
+	fields := strings.Fields(trimmed)
+	if len(fields) == 0 || looksLikeEnvAssignment(fields[0]) {
+		return ""
+	}
+	if strings.HasPrefix(fields[0], "@") {
+		if len(fields) >= 3 {
+			return fields[2]
+		}
+		return ""
+	}
+	if len(fields) <= 6 {
+		return ""
+	}
+	return fields[6]
+}
+
+// warnIndirectProxsaveCronOnDaemonInstall reports, without touching anything, every
+// entry that still schedules ProxSave indirectly after the canonical cron line has
+// been removed and the daemon unit installed.
+//
+// It sits ONLY on the paths that INSTALL the daemon and that the OPERATOR asked for
+// explicitly - applyDaemonMode (--daemon-setup, and the dashboard's install action)
+// and the install/reinstall reconcile that picked daemon mode. On those, refusing
+// would leave an operator who legitimately wants both no way to enable the daemon at
+// all, so the policy is warn-and-proceed. The unattended --upgrade retrofit refuses
+// instead; see maybeAutoMigrateDaemon.
+//
+// It deliberately does NOT live inside removeCanonicalCronEntry, even though that is
+// where the crontab lines are already in hand and it would have cost no extra read.
+// applyCronMode calls that same function on the --daemon-remove path, where no daemon
+// is being installed and this text ("it will keep firing alongside the daemon") would
+// be flatly untrue. A warning that is right on three paths and wrong on the fourth is
+// worse than one extra `crontab -l`.
+// It returns how many entries it found, so a caller whose only channel is a rendered screen
+// can say the same thing the log line says (cronRemovalOutcome.UnmanagedSchedules).
+func warnIndirectProxsaveCronOnDaemonInstall(ctx context.Context, bootstrap *logging.BootstrapLogger) int {
+	refs, err := detectIndirectProxsaveCron(ctx)
+	if err != nil || len(refs) == 0 {
+		return 0
+	}
+	// One problem, one WARNING. The header and the findings are INFO: three warning lines for
+	// a single fact read as three problems in the run's "WARNINGS/ERRORS DURING RUN
+	// (warnings=N)" recap, and the count is what an operator scans. Telegram sets the same
+	// shape - one line at the level that matters, the rest below it.
+	//
+	// The WARNING therefore repeats the count and stands on its own, because DEBUG_LEVEL can
+	// be set to "warning" (internal/cli/args.go), which hides the two INFO lines. What is lost
+	// at that level is which cron line it was; what survives is that the host now runs the
+	// backup twice. Naming the file here instead would not survive a second finding.
+	logBootstrapInfo(bootstrap, "%d unmanaged cron line(s) still schedule ProxSave:", len(refs))
+	for _, line := range describeIndirectCronRefs(refs) {
+		logBootstrapInfo(bootstrap, "  - %s", line)
+	}
+	logBootstrapWarning(bootstrap, "%d unmanaged cron line(s) NOT removed, so they keep firing alongside the daemon: this can cause problems, exit %d.", len(refs), types.ExitBackupSkipped.Int())
+	return len(refs)
+}

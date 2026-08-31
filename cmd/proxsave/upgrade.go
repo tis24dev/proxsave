@@ -112,7 +112,7 @@ func logUpgradeDaemonRestart(bootstrap *logging.BootstrapLogger, rv *RestartVeri
 	case restartVerifyTimedOut:
 		bootstrap.Warning("Daemon restarted but alignment check timeout")
 	case restartVerifyAligned:
-		bootstrap.Println("Daemon restarted and now aligned with the new binary.")
+		logBootstrapInfo(bootstrap, "Daemon restarted and now aligned with the new binary.")
 	default:
 		bootstrap.Warning("Daemon restarted but alignment could not be confirmed")
 	}
@@ -297,14 +297,19 @@ func upgradeFinalizePhase(ctx context.Context, args *cli.Args, bootstrap *loggin
 	repointLegacyCronEntries(ctx, bootstrap)
 	ensureGoSymlink(execPath, bootstrap)
 
-	// Auto-migrate cron installs to the resident daemon now that the new binary +
-	// config keys are in place. Honours the DAEMON_OPT_OUT tombstone so a manual
-	// --daemon-remove is never undone. Best-effort: a failure stays on cron and is
-	// only warned. (When staying on cron, the canonical /usr/local/bin/proxsave
-	// entry created at install keeps working across binary upgrades.)
+	// Install the resident daemon on a host that has never recorded a scheduler engine, now
+	// that the new binary + config keys are in place. The discriminator is whether the merge
+	// above had to ADD SCHEDULER_MODE, so a host that already recorded one - including one
+	// that recorded cron by running --daemon-remove - is never revisited. Best-effort: a
+	// failure stays on cron and is only warned. (When staying on cron, the canonical
+	// /usr/local/bin/proxsave entry created at install keeps working across binary upgrades.)
+	//
+	// cfgUpgradeResult comes from the NEW binary, run as a child (:280). This decision does
+	// not: runUpgrade never re-execs, so on the download path the code deciding here is the
+	// binary being replaced, and any change to this rule takes effect one release later.
 	var daemonRestart *RestartVerifyResult
 	if upgradeErr == nil {
-		maybeAutoMigrateDaemon(ctx, args.ConfigPath, baseDir, execPath, bootstrap)
+		maybeAutoMigrateDaemon(ctx, args.ConfigPath, baseDir, execPath, cfgUpgradeResult, bootstrap)
 		// The new binary is on disk, but the resident daemon still runs the OLD one
 		// (systemd keeps the process alive across an in-place replace). Restart+verify
 		// it so the upgrade ends with the daemon aligned. This is automatic (no extra
@@ -312,7 +317,7 @@ func upgradeFinalizePhase(ctx context.Context, args *cli.Args, bootstrap *loggin
 		// succeeded. It first waits out any in-progress backup rather than killing it,
 		// and only runs when the daemon is actually active (a cron install has none).
 		if upgradeRestartsDaemon && daemonIsActive(ctx) {
-			bootstrap.Println("Restarting the resident daemon to load the new binary...")
+			logBootstrapInfo(bootstrap, "Restarting the resident daemon to load the new binary...")
 			lockPath, lockKnown := upgradeBackupLockPath(args.ConfigPath, baseDir)
 			rv := restartAndVerifyDaemon(ctx, baseDir, lockPath, lockKnown, upgradeHeartbeatInterval(args.ConfigPath, baseDir))
 			daemonRestart = &rv

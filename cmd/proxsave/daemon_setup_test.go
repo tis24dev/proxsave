@@ -27,8 +27,8 @@ func TestSetBackupEnvKeysReplacesAndAppends(t *testing.T) {
 	}
 
 	if err := setBackupEnvKeys(cfgPath, map[string]string{
-		"SCHEDULER_MODE": "daemon", // existing -> replaced
-		"DAEMON_OPT_OUT": "true",   // missing  -> appended
+		"SCHEDULER_MODE":   "daemon", // existing -> replaced
+		"MAX_RUN_DURATION": "2h",     // missing  -> appended
 	}); err != nil {
 		t.Fatalf("setBackupEnvKeys: %v", err)
 	}
@@ -49,7 +49,7 @@ func TestSetBackupEnvKeysReplacesAndAppends(t *testing.T) {
 	if !strings.Contains(content, "# cron | daemon") {
 		t.Errorf("inline comment lost:\n%s", content)
 	}
-	if !strings.Contains(content, "DAEMON_OPT_OUT=true") {
+	if !strings.Contains(content, "MAX_RUN_DURATION=2h") {
 		t.Errorf("missing key not appended:\n%s", content)
 	}
 	// Untouched keys stay put.
@@ -149,6 +149,21 @@ func TestApplyCronMode_PersistsCronModeBeforeTeardown(t *testing.T) {
 	removeDaemonServiceFn = func(context.Context, *logging.BootstrapLogger) error {
 		return errors.New("teardown boom")
 	}
+	// applyCronMode now consults the crontab before deciding whether to append a cron line
+	// (#298). Without this stub the test would shell out to the host's real `crontab -l`,
+	// making its verdict depend on whatever the machine running the suite has scheduled.
+	// An empty crontab is the "no wrapper" case, i.e. the append path this test asserts.
+	origRead := crontabReadLinesFn
+	origSystem := systemCronProxsaveRefsFn
+	t.Cleanup(func() {
+		crontabReadLinesFn = origRead
+		systemCronProxsaveRefsFn = origSystem
+	})
+	crontabReadLinesFn = func(context.Context) ([]string, error) { return nil, nil }
+	// Same reason, second habitat: applyCronMode also reports a ProxSave schedule found in
+	// /etc/crontab or /etc/cron.d, and systemCronPaths points at the REAL /etc. Unstubbed
+	// this test would read the developer's own system cron - and pass there anyway.
+	systemCronProxsaveRefsFn = func() []indirectCronRef { return nil }
 
 	dir := t.TempDir()
 	configPath := filepath.Join(dir, "backup.env")
@@ -157,7 +172,7 @@ func TestApplyCronMode_PersistsCronModeBeforeTeardown(t *testing.T) {
 	}
 	cfg := &config.Config{BaseDir: dir, SchedulerTime: "02:00"}
 
-	err := applyCronMode(context.Background(), cfg, configPath, "/usr/local/bin/proxsave", nil, false)
+	_, err := applyCronMode(context.Background(), cfg, configPath, "/usr/local/bin/proxsave", nil)
 	if err == nil {
 		t.Fatal("teardown failure must still be returned")
 	}
@@ -203,7 +218,7 @@ func TestApplyCronModeDefersWhileBackupRunning(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
 	defer cancel()
 
-	err := applyCronMode(ctx, cfg, configPath, "/usr/local/bin/proxsave", nil, true)
+	_, err := applyCronMode(ctx, cfg, configPath, "/usr/local/bin/proxsave", nil)
 	if !errors.Is(err, errDaemonTeardownBackupRunning) {
 		t.Fatalf("want errDaemonTeardownBackupRunning, got %v", err)
 	}
@@ -231,6 +246,17 @@ func TestApplyCronModeProceedsWhenIdle(t *testing.T) {
 		return nil
 	}
 	migrateLegacyCronEntriesFn = func(context.Context, string, string, *logging.BootstrapLogger, string) {}
+	// See TestApplyCronMode_PersistsCronModeBeforeTeardown: applyCronMode now reads the
+	// crontab AND the system cron habitat (#298), and either left unstubbed would make this
+	// test depend on the host it runs on.
+	origRead := crontabReadLinesFn
+	origSystem := systemCronProxsaveRefsFn
+	t.Cleanup(func() {
+		crontabReadLinesFn = origRead
+		systemCronProxsaveRefsFn = origSystem
+	})
+	crontabReadLinesFn = func(context.Context) ([]string, error) { return nil, nil }
+	systemCronProxsaveRefsFn = func() []indirectCronRef { return nil }
 
 	dir := t.TempDir()
 	configPath := filepath.Join(dir, "backup.env")
@@ -239,7 +265,7 @@ func TestApplyCronModeProceedsWhenIdle(t *testing.T) {
 	}
 	cfg := &config.Config{BaseDir: dir, SchedulerTime: "02:00"}
 
-	err := applyCronMode(context.Background(), cfg, configPath, "/usr/local/bin/proxsave", nil, true)
+	_, err := applyCronMode(context.Background(), cfg, configPath, "/usr/local/bin/proxsave", nil)
 	if err != nil {
 		t.Fatalf("idle host must proceed, got %v", err)
 	}
@@ -257,7 +283,7 @@ func TestApplyCronModeFailsClosedOnNilConfig(t *testing.T) {
 		return nil
 	}
 
-	err := applyCronMode(context.Background(), nil, "/nonexistent/backup.env", "/usr/local/bin/proxsave", nil, true)
+	_, err := applyCronMode(context.Background(), nil, "/nonexistent/backup.env", "/usr/local/bin/proxsave", nil)
 	if !errors.Is(err, errDaemonTeardownConfigUnreadable) {
 		t.Fatalf("nil config must fail closed, got %v", err)
 	}
@@ -302,5 +328,78 @@ func TestRunDaemonRemoveDefersWhenBackupRunning(t *testing.T) {
 	}
 	if removeCalled {
 		t.Fatal("SAFETY VIOLATION: teardown ran while a backup was running")
+	}
+}
+
+// TestApplyCronModeRollsBackHealthcheckEnabled pins the config half of issue #298.
+// applyDaemonMode force-writes HEALTHCHECK_ENABLED=true, and applyCronMode used to record
+// only SCHEDULER_MODE=cron, so --daemon-remove left the key true on a host that can no longer
+// transmit anything - which the run-start init then read as "monitoring is on" and warned
+// about on every cron run. The rollback must ride the SAME setBackupEnvKeys call as the mode,
+// so a partial write can never leave the host recorded as cron while still claiming
+// monitoring, and it must not disturb the operator's inline comment.
+func TestApplyCronModeRollsBackHealthcheckEnabled(t *testing.T) {
+	origRun := restartVerifyBackupRunning
+	origRemove := removeDaemonServiceFn
+	origMigrate := migrateLegacyCronEntriesFn
+	origRead := crontabReadLinesFn
+	origWrapper := wrapperCronLinesFn
+	origSystem := systemCronProxsaveRefsFn
+	t.Cleanup(func() {
+		restartVerifyBackupRunning = origRun
+		removeDaemonServiceFn = origRemove
+		migrateLegacyCronEntriesFn = origMigrate
+		crontabReadLinesFn = origRead
+		wrapperCronLinesFn = origWrapper
+		systemCronProxsaveRefsFn = origSystem
+	})
+	restartVerifyBackupRunning = func(string) bool { return false } // idle
+	removeDaemonServiceFn = func(context.Context, *logging.BootstrapLogger) error { return nil }
+	migrateLegacyCronEntriesFn = func(context.Context, string, string, *logging.BootstrapLogger, string) {}
+	// This test is about the env write, not the crontab: pin the "ordinary host, no
+	// wrapper" shape so applyCronMode takes its normal append path and never touches the
+	// real `crontab -l` of the machine running the suite.
+	crontabReadLinesFn = func(context.Context) ([]string, error) { return nil, nil }
+	wrapperCronLinesFn = func([]string) []string { return nil }
+	systemCronProxsaveRefsFn = func() []indirectCronRef { return nil }
+
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "backup.env")
+	seed := "SCHEDULER_MODE=daemon\n" +
+		"SCHEDULER_TIME=02:00\n" +
+		"HEALTHCHECK_ENABLED=true           # report service-alive heartbeat + per-run outcome\n"
+	if err := os.WriteFile(configPath, []byte(seed), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg := &config.Config{BaseDir: dir, SchedulerTime: "02:00"}
+
+	if _, err := applyCronMode(context.Background(), cfg, configPath, "/usr/local/bin/proxsave", nil); err != nil {
+		t.Fatalf("applyCronMode: %v", err)
+	}
+
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("read back: %v", err)
+	}
+	content := string(data)
+	if !strings.Contains(content, "HEALTHCHECK_ENABLED=false") {
+		t.Errorf("HEALTHCHECK_ENABLED must be rolled back together with the mode:\n%s", content)
+	}
+	if strings.Contains(content, "HEALTHCHECK_ENABLED=true") {
+		t.Errorf("the forced HEALTHCHECK_ENABLED=true survived the revert:\n%s", content)
+	}
+	if !strings.Contains(content, "SCHEDULER_MODE=cron") {
+		t.Errorf("the revert must still record the cron mode:\n%s", content)
+	}
+	// The revert no longer writes a tombstone. SCHEDULER_MODE=cron above IS the record, and
+	// the retrofit honours it because the key is present, not because a second key contradicts
+	// it (schedulerModeOriginFromUpgrade).
+	if strings.Contains(content, "DAEMON_OPT_OUT") {
+		t.Errorf("the revert must not write the retired tombstone:\n%s", content)
+	}
+	// utils.SetEnvValue preserves inline comments; a rollback that ate the operator's
+	// annotation would be a silent edit of their file.
+	if !strings.Contains(content, "# report service-alive heartbeat") {
+		t.Errorf("inline comment lost by the rollback:\n%s", content)
 	}
 }

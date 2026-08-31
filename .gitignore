@@ -10,3 +10,8 @@
 # Build artifacts — compiled binary (root build) and Makefile output dir
 /proxsave
 /build/
+
+# Runtime state written by a local run: BASE_DIR defaults to the repo root here, so the
+# product creates identity/ with this machine's server identity and MAC fingerprints
+# (internal/security/security.go:545). Never version-controlled.
+/identity/

@@ -3,7 +3,7 @@
 set -euo pipefail
 
 ###############################################
-# Optional arguments: --new-install / --cli
+# Optional arguments: --new-install / --upgrade / --cli
 ###############################################
 INSTALL_FLAG="--install"   # default mode
 CLI_FLAG=""
@@ -15,6 +15,13 @@ while [[ $# -gt 0 ]]; do
       ;;
     --install)
       INSTALL_FLAG="--install"
+      ;;
+    --upgrade)
+      # Swap in the freshly downloaded binary, then let THAT binary finalize the
+      # upgrade (--localfile skips the release check and download this script has
+      # already done). The plain `proxsave --upgrade` finalizes with the OLD binary,
+      # so any fix to the upgrade flow lands one release late; this route does not.
+      INSTALL_FLAG="--upgrade"
       ;;
     --cli)
       CLI_FLAG="--cli"
@@ -240,6 +247,9 @@ fi
 cd "${TARGET_DIR}"
 
 BINARY_ARGS=("${INSTALL_FLAG}")
+if [[ "${INSTALL_FLAG}" == "--upgrade" ]]; then
+  BINARY_ARGS+=("--localfile")
+fi
 if [[ -n "${CLI_FLAG}" ]]; then
   BINARY_ARGS+=("${CLI_FLAG}")
 fi
