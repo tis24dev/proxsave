@@ -113,13 +113,12 @@ const (
 // probe costs, so a merely slow host is never cut off.
 //
 // What it costs is worth stating exactly rather than roughly, because a deadline that
-// latches invites the reader to assume one timeout in total, and there is more than one
-// deadline. There is one per CONTENT-probe scope - the user crontab, each /etc file whose
-// lines are probed, and each run-parts directory - plus one for the /etc WALK, shared by
-// every habitat in it. Measured on a host whose cron commands all name a dead mount, with a
-// user crontab, /etc/crontab, three /etc/cron.d files and the four run-parts directories:
-// nine timeouts, so forty-five seconds at this value, and the same nine before this bound
-// existed except that there they never ended. It is bounded and finite, not singular.
+// latches invites the reader to assume one timeout in total, and there are three: one for
+// the user crontab's content probes, one for every content probe of the /etc walk, and one
+// for the /etc walk's own filesystem. Measured on a host whose cron commands all name a
+// dead mount, with a user crontab, /etc/crontab, three /etc/cron.d files and the four
+// run-parts directories: two timeouts, so ten seconds at this value, against nine before
+// the /etc content deadline was shared and nine that never ended before any of it existed.
 //
 // It is deliberately not FS_IO_TIMEOUT. That variable is operator-facing and its backup.env
 // description names preflight, log, storage, cloud and restore; threading it down four
@@ -238,7 +237,9 @@ var cronCommandRunners = map[string]struct{}{
 // It logs NOTHING and writes NOTHING: --upgrade-config-json reaches this through
 // deriveSchedulerTimeFromCrontab and its stdout must stay pure JSON.
 func indirectProxsaveCronRefs(lines []string, probeScriptContent bool) []indirectCronRef {
-	return indirectProxsaveCronRefsWithToken(lines, probeScriptContent, cronCommandToken)
+	// The user crontab is a habitat of its own, so it gets a deadline of its own. The /etc
+	// walk passes its shared one in instead.
+	return indirectProxsaveCronRefsWithToken(newCronProbeDeadline(), lines, probeScriptContent, cronCommandToken)
 }
 
 // indirectProxsaveCronRefsWithToken is indirectProxsaveCronRefs parameterised by the
@@ -247,12 +248,8 @@ func indirectProxsaveCronRefs(lines []string, probeScriptContent bool) []indirec
 // /etc/cron.d, a USER field first and the command in field 7). The three rules, the
 // canonical-entry exclusion and the fail-quiet behaviour are shared verbatim, so the
 // two habitats can never drift into judging the same wrapper differently.
-func indirectProxsaveCronRefsWithToken(lines []string, probeScriptContent bool, commandToken func(string) string) []indirectCronRef {
+func indirectProxsaveCronRefsWithToken(deadline *cronProbeDeadline, lines []string, probeScriptContent bool, commandToken func(string) string) []indirectCronRef {
 	var refs []indirectCronRef
-	// One deadline for the WHOLE crontab, not one per line: see cronProbeDeadline for why
-	// it latches. Built unconditionally, so the names-only path cannot diverge from the
-	// probing one; it costs nothing and no syscall.
-	deadline := newCronProbeDeadline()
 	for _, line := range lines {
 		token := strings.Trim(commandToken(line), "\"'")
 		if token == "" {
@@ -302,9 +299,11 @@ func indirectProxsaveCronRefsWithToken(lines []string, probeScriptContent bool, 
 				// Same finding, with the reason it could not be read. "could not be read"
 				// is true of an unreadable file AND of a command that never answered, and
 				// only one of those is something the operator can go and look at. Once the
-				// deadline has latched, every later line of this crontab is in the second
-				// case and none of them was opened at all.
-				reason = fmt.Sprintf("command %q is named after proxsave and was not read: a command in this crontab stopped answering", filepath.Base(token))
+				// deadline has latched, every later line under it is in the second case and
+				// none of them was opened at all. It does not say WHICH command stopped
+				// answering, and deliberately not "in this crontab": under /etc one deadline
+				// covers every file of the walk, so the cause can be in another one.
+				reason = fmt.Sprintf("command %q is named after proxsave and was not read: a command stopped answering", filepath.Base(token))
 			case (!probed || !readable) && basenameHasProxsaveComponent(token):
 				reason = fmt.Sprintf("command %q is named after proxsave and could not be read", filepath.Base(token))
 			}
@@ -1672,18 +1671,17 @@ func runPartsVisibleTo(mode systemCronScan) bool {
 // and reporting it would refuse a migration over a schedule that does not exist.
 //
 // Every failure is silent, like the rest of this file.
-func runPartsCronRefs(walk *cronProbeDeadline, dir string) []indirectCronRef {
+func runPartsCronRefs(walk, probes *cronProbeDeadline, dir string) []indirectCronRef {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return nil
 	}
 	// TWO deadlines are in scope here and they are deliberately not the same one. `walk` is
 	// the whole /etc walk's and bounds this walk's OWN filesystem, the entry step below;
-	// `probes` is this directory's and bounds the CONTENT probes, whose paths come out of
-	// the scripts. Sharing them would let a wrapper on a dead mount - which says nothing
-	// about whether /etc still answers - latch the walk and take every habitat after this
-	// one with it, including a literal `proxsave --backup` line in /etc/cron.d.
-	probes := newCronProbeDeadline()
+	// `probes` bounds the CONTENT probes, whose paths come out of the scripts. Sharing them
+	// would let a wrapper on a dead mount - which says nothing about whether /etc still
+	// answers - latch the walk and take every habitat after this one with it, including a
+	// literal `proxsave --backup` line in /etc/cron.d.
 	// Read on the CALLER's goroutine, for the reason probe reads cronProbeScanFn there: a
 	// test restoring the seam in t.Cleanup must never race a step it walked away from.
 	stat := cronEntryStatFn
@@ -1830,6 +1828,9 @@ func systemCronRefs(mode systemCronScan) []indirectCronRef {
 	// shape a config-management tool produces, and bounding what operator input cannot reach
 	// is churn - which in this file is how five review rounds each found a new defect.
 	walk := newCronProbeDeadline()
+	// And one for every CONTENT probe of this walk, kept apart from it. Both latch, and the
+	// separation is what stops a wrapper on a dead mount from also stopping /etc being read.
+	content := newCronProbeDeadline()
 	for _, path := range systemCronPaths {
 		info, err := os.Stat(path)
 		if err != nil {
@@ -1844,12 +1845,12 @@ func systemCronRefs(mode systemCronScan) []indirectCronRef {
 		// same reason rather than parsed.
 		if isRunPartsCronDir(path) {
 			if info.IsDir() && runPartsVisibleTo(mode) {
-				refs = append(refs, runPartsCronRefs(walk, path)...)
+				refs = append(refs, runPartsCronRefs(walk, content, path)...)
 			}
 			continue
 		}
 		if !info.IsDir() {
-			refs = append(refs, systemCronFileRefs(walk, path, mode)...)
+			refs = append(refs, systemCronFileRefs(walk, content, path, mode)...)
 			continue
 		}
 		entries, err := os.ReadDir(path)
@@ -1860,7 +1861,7 @@ func systemCronRefs(mode systemCronScan) []indirectCronRef {
 			if entry.IsDir() || !cronDNameIsActive(entry.Name()) {
 				continue
 			}
-			refs = append(refs, systemCronFileRefs(walk, filepath.Join(path, entry.Name()), mode)...)
+			refs = append(refs, systemCronFileRefs(walk, content, filepath.Join(path, entry.Name()), mode)...)
 		}
 	}
 	return refs
@@ -1949,7 +1950,7 @@ func cronDNameIsActive(name string) bool {
 // The file is read ONCE for both rule sets. Two reads would be two chances to disagree
 // about a file another process may be editing, and a revert that reported a line from one
 // snapshot and a reason from another would be worse than either.
-func systemCronFileRefs(walk *cronProbeDeadline, path string, mode systemCronScan) []indirectCronRef {
+func systemCronFileRefs(walk, content *cronProbeDeadline, path string, mode systemCronScan) []indirectCronRef {
 	// Read on the CALLER's goroutine: see runPartsCronRefs.
 	stat := cronEntryStatFn
 	// ONE bounded step for the stat, the symlink resolution and the read together, because
@@ -1972,6 +1973,7 @@ func systemCronFileRefs(walk *cronProbeDeadline, path string, mode systemCronSca
 	}
 	if mode != scanDirectOnly {
 		refs = append(refs, indirectProxsaveCronRefsWithToken(
+			content,
 			lines,
 			cronProbeReadScripts,
 			systemCronCommandToken,

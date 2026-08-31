@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"syscall"
 	"testing"
@@ -282,5 +283,40 @@ func TestTheEtcWalkGivesUpWhenTheREADOfACronFileStalls(t *testing.T) {
 	_, elapsed := walkWithin(t, scanAll, "when the READ of a cron.d entry blocks in the kernel")
 	if elapsed > time.Second {
 		t.Errorf("the /etc walk took %s, want at most 1s: only the stat is bounded, so a mount that answers a stat out of its attribute cache and never answers the open still hangs the upgrade", elapsed)
+	}
+}
+
+// The CONTENT probes under /etc share one deadline across the whole walk, for the same
+// reason the walk's own filesystem steps do. Without it a host whose cron commands all name
+// one dead mount paid a timeout per /etc file and a timeout per run-parts directory, which
+// on a normal habitat is seven of them before the user crontab is even counted.
+//
+// It is a separate deadline from the walk's, and that separation is the point: a wrapper on
+// a dead mount says nothing about whether /etc still answers, so it must not stop /etc being
+// read. TestAStalledScriptProbeStillLetsTheWalkReadTheHabitatsAfterIt pins that half.
+func TestOneStalledContentProbeCostsTheEtcWalkOneTimeoutNotOnePerFile(t *testing.T) {
+	dir := t.TempDir()
+	cronD := filepath.Join(dir, "cron.d")
+	daily := filepath.Join(dir, "cron.daily")
+	for _, d := range []string{cronD, daily} {
+		if err := os.Mkdir(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeFile(t, filepath.Join(cronD, "aaa"), "0 2 * * * root /mnt/dead-nas/wrapper-a.sh\n", 0o644)
+	writeFile(t, filepath.Join(cronD, "bbb"), "0 3 * * * root /mnt/dead-nas/wrapper-b.sh\n", 0o644)
+	writeFile(t, filepath.Join(daily, "ccc"), "#!/bin/sh\ntrue\n", 0o755)
+	etcHabitat(t, cronD, daily)
+	scans := stallingScan(t, func(path string) bool { return strings.HasPrefix(path, "/mnt/dead-nas/") })
+
+	_, elapsed := walkWithin(t, scanAll, "with a dead mount named by two cron.d files and one run-parts script")
+	// The counter records every entry into the scan, stalling or not, so 1 says both that
+	// the second cron.d file cost no second timeout and that the run-parts script after it
+	// was skipped without a syscall.
+	if got := atomic.LoadInt32(scans); got != 1 {
+		t.Errorf("the content probe ran %d time(s), want 1: after one probe has run out of time, every later content probe of the same /etc walk must be skipped without a syscall", got)
+	}
+	if elapsed > time.Second {
+		t.Errorf("the /etc walk took %s, want at most 1s", elapsed)
 	}
 }
