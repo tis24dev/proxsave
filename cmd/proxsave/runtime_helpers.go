@@ -976,10 +976,14 @@ func repointLegacyCronLines(lines []string) ([]string, bool) {
 		if strings.Trim(cronCommandToken(line), "\"'") == legacy {
 			// cronCommandToken already excluded comments and env LINES, and a schedule field
 			// is never a path, so the command is the first occurrence of legacy on the line.
-			// A leading assignment does not change that: either it is stepped over and the
-			// command still holds the first occurrence, or the assignment IS the answer
-			// because its value names the binary, and then the value is what must be
-			// repointed anyway.
+			// A leading assignment does not change that: it is stepped over and the command
+			// still holds the first occurrence.
+			//
+			// The assignment form is deliberately NOT repointed. The guard above is exact
+			// equality, so "BIN=/usr/local/bin/proxmox-backup $BIN --backup" fails it and the
+			// line is left alone: cronCommandWord answers with the whole assignment WORD for
+			// that shape, never with the path inside it. That is a missed cosmetic repoint,
+			// not damage - this whole function is best-effort, and its caller says so.
 			out[i] = strings.Replace(line, legacy, canonical, 1)
 			changed = true
 			continue
