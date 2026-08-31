@@ -104,9 +104,10 @@ const (
 // detectIndirectProxsaveCron, so runUpgrade, runInstall, upgradeFinalizePhase and
 // runInstallTUI stop with it, in the CLI and in the TUI alike, having printed nothing.
 //
-// A var so a test can shrink it. Two seconds is four orders of magnitude above what a
-// real probe costs, so a merely slow host is never cut off.
-var cronProbeTimeout = 2 * time.Second
+// A var so a test can shrink it. Five seconds is five orders of magnitude above what a
+// real probe costs, so a merely slow host is never cut off, and it is what a host with a
+// dead mount named on a cron line pays once per crontab rather than forever.
+var cronProbeTimeout = 5 * time.Second
 
 // indirectCronRef is one crontab line that appears to run ProxSave WITHOUT its
 // command token being the proxsave binary, i.e. exactly the shape
@@ -540,7 +541,7 @@ func (d *cronProbeDeadline) probe(path string) (references bool, readable bool) 
 		done <- cronProbeVerdict{references: refs, readable: read}
 	}()
 	// NewTimer and Stop, never time.After: a probe that answers in microseconds must not
-	// leave a two-second timer alive behind it.
+	// leave a five-second timer alive behind it.
 	timer := time.NewTimer(cronProbeTimeout)
 	defer timer.Stop()
 	select {
