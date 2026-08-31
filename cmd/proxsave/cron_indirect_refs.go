@@ -125,7 +125,17 @@ type indirectCronRef struct {
 	// (the one `crontab -l` prints). It is set for /etc/crontab and /etc/cron.d/*,
 	// because "remove that entry with crontab -e" is wrong advice for those: they are
 	// plain files, edited with an editor, and on some hosts owned by a package.
+	//
+	// For a RunParts finding Source is the DIRECTORY, not a file: there the whole file is
+	// the finding and Line already carries its path.
 	Source string
+
+	// RunParts marks a finding that is a SCRIPT run by run-parts rather than a line in a
+	// crontab. It carries three facts nothing else in this struct can express: Line is a
+	// path and not a cron line, so there is no schedule to render or to adopt; Source is a
+	// directory and not a file; and the way to stop it is "chmod -x" or removal, not an
+	// edit. Set only by the run-parts walk, never derived by stat or by reading Reason.
+	RunParts bool
 }
 
 // cronCommandRunners are the command names that exist to RUN ANOTHER COMMAND. They
@@ -1202,6 +1212,9 @@ func splitShellSegments(line string) []string {
 //
 // The caller must print these with a "%s" format, never as the format itself - a crontab
 // line may legitimately contain "%", which cron reads as its stdin separator.
+// A RunParts finding has no line: its Line is the script's path, the bracket is the
+// run-parts directory it lives in, and its Reason is where the absence of a cron time is
+// stated.
 func describeIndirectCronRefs(refs []indirectCronRef) []string {
 	out := make([]string, 0, len(refs))
 	for _, ref := range refs {
@@ -1220,19 +1233,37 @@ func describeIndirectCronRefs(refs []indirectCronRef) []string {
 // operator to the wrong tool over a duplicated backup is how a clear warning turns into
 // a support ticket. Both habitats present together get both hints.
 func cronRefEditHint(refs []indirectCronRef) string {
-	user, system := false, false
+	user, system, runParts := false, false, false
 	for _, ref := range refs {
-		if ref.Source == "" {
+		switch {
+		case ref.RunParts:
+			runParts = true
+		case ref.Source == "":
 			user = true
-			continue
+		default:
+			system = true
 		}
-		system = true
+	}
+	// One habitat, one sentence, no list: the single-habitat wordings are byte-identical
+	// to what they have always been. Only a mixed finding set becomes a list.
+	var parts []string
+	if user {
+		parts = append(parts, "'crontab -e' for the crontab entries")
+	}
+	if system {
+		parts = append(parts, "an editor for the files named above")
+	}
+	if runParts {
+		parts = append(parts, "'chmod -x' or removal for the run-parts scripts named above")
+	}
+	if len(parts) > 1 {
+		return strings.Join(parts, ", ")
 	}
 	switch {
-	case user && system:
-		return "'crontab -e' for the crontab entries, an editor for the files named above"
 	case system:
 		return "edit the file named above"
+	case runParts:
+		return "'chmod -x' or remove the run-parts script named above"
 	default:
 		return "run 'crontab -e'"
 	}
@@ -1356,10 +1387,50 @@ func detectIndirectProxsaveCron(ctx context.Context) ([]indirectCronRef, error) 
 // package, so this code may REPORT what it finds there and must never edit it.
 // dropCanonicalCronLines and schedulerTimeFromCronLines are correspondingly untouched
 // and still see the user crontab only.
-var systemCronPaths = []string{"/etc/crontab", "/etc/cron.d"}
+//
+// TWO HABITAT KINDS live in this one list, and systemCronRefs tells them apart by base
+// name through isRunPartsCronDir. /etc/crontab and /etc/cron.d hold SYSTEM CRONTAB LINES.
+// The four cron.* directories hold SCRIPTS that run-parts executes, with no schedule
+// fields at all, so handing one to the crontab line parser reads shell code as cron lines:
+// "if mountpoint -q /mnt/nas ; then /usr/local/bin/proxsave --backup ; fi" has the binary
+// as its seventh whitespace field and was measured being reported as a direct proxsave
+// cron line, whose "schedule" then silenced a real /etc/cron.d entry.
+//
+// One list and not two, because every test that neutralises this habitat does it by
+// REPLACING this slice; a second var would be left pointing at the real /etc on all of
+// those sites.
+//
+// Exactly these four and not /etc/cron.yearly: /etc/crontab on a Proxmox host invokes
+// run-parts on cron.hourly, cron.daily, cron.weekly and cron.monthly and on nothing else,
+// with anacron taking over the last three when it is installed.
+var systemCronPaths = []string{
+	"/etc/crontab",
+	"/etc/cron.d",
+	"/etc/cron.hourly",
+	"/etc/cron.daily",
+	"/etc/cron.weekly",
+	"/etc/cron.monthly",
+}
 
-// indirectProxsaveSystemCronRefs applies the same three rules to /etc/crontab and
-// /etc/cron.d, which use the SYSTEM crontab format and were invisible to every cron
+// runPartsCronDirNames names the entries of systemCronPaths that hold SCRIPTS rather than
+// crontab lines. The list above and this set are one decision written twice, and nothing
+// else relates them: a name dropped from either side leaves a habitat unwalked, or walked
+// with the wrong parser, in silence.
+// TestTheDefaultSystemCronHabitatsCoverTheRunPartsDirectories pins them against each other.
+var runPartsCronDirNames = map[string]struct{}{
+	"cron.hourly":  {},
+	"cron.daily":   {},
+	"cron.weekly":  {},
+	"cron.monthly": {},
+}
+
+func isRunPartsCronDir(path string) bool {
+	_, ok := runPartsCronDirNames[filepath.Base(path)]
+	return ok
+}
+
+// indirectProxsaveSystemCronRefs applies the same three rules to every /etc habitat:
+// /etc/crontab and /etc/cron.d, which use the SYSTEM crontab format and were invisible to every cron
 // helper in this package: cronCommandToken reads field 6, which is the COMMAND in a
 // user crontab but the USER in a system one, so a wrapper installed there parsed as a
 // username and matched nothing. That is a second, equally silent habitat for exactly
@@ -1368,6 +1439,11 @@ var systemCronPaths = []string{"/etc/crontab", "/etc/cron.d"}
 // Every failure is silent and yields nothing: a missing /etc/cron.d, an unreadable
 // file, a directory entry cron itself would ignore. See the false-negative note on
 // indirectProxsaveCronRefs for why "cannot tell" must not become "suspicious".
+//
+// The run-parts directories are in this view too, and their whole contribution is
+// heuristic: there is no "the command token IS the binary" shape when the file itself is
+// the command, so the set difference against systemCronProxsaveRefs stays exactly the
+// direct system-crontab lines.
 //
 // This is the INDIRECT-only view. Nothing in the daemon paths reads it any more -
 // detectIndirectProxsaveCron and the revert advisory both go through
@@ -1410,8 +1486,126 @@ func systemCronProxsaveRefs() []indirectCronRef {
 	return systemCronRefs(scanAll)
 }
 
-// systemCronRefs is the shared walk over systemCronPaths: /etc/crontab as a file,
-// /etc/cron.d as a directory whose entries cron itself would load. It is factored out so
+// runPartsVisibleTo reports whether a scan mode may see the run-parts habitat.
+//
+// scanDirectOnly may not, for two independent reasons and either would be enough. A
+// run-parts script has NO cron time: cron.ScheduleToTime on its path returns "", and
+// schedulerTimeFromSystemCron turns one unreadable time into "say nothing at all", so a
+// single such finding would silence a real /etc/cron.d entry and drop the host to the
+// 02:00 default. And that view is reached from the install wizard and from
+// --upgrade-config-json, which must not open operator scripts off disk, while the
+// run-parts walk is nothing but a content probe.
+//
+// scanIndirectOnly DOES see them, because every run-parts finding is heuristic: there is
+// no "the command token IS the binary" shape when the file itself is the command. The set
+// difference against scanAll therefore stays exactly the direct system-crontab lines.
+//
+// A closed switch with a false fallthrough rather than "mode != scanDirectOnly", so a mode
+// added later is excluded until someone decides otherwise.
+func runPartsVisibleTo(mode systemCronScan) bool {
+	switch mode {
+	case scanAll, scanIndirectOnly:
+		return true
+	case scanDirectOnly:
+		return false
+	}
+	return false
+}
+
+// runPartsCronRefs walks one run-parts directory. The unit here is the FILE, not a line:
+// run-parts parses nothing and executes every entry that passes its filter, so the script
+// IS the command and its content is the only thing there is to read.
+//
+// Four gates, all measured against run-parts 5.7 (debianutils, Debian 12) with
+// "run-parts --test": the name filter is [A-Za-z0-9_-]+, any ONE execute bit is enough
+// (root runs an entry that is executable only by its group), symlinks are followed, and
+// broken symlinks and subdirectories are skipped.
+//
+// The execute-bit gate is the same reasoning cronDNameIsActive already carries for a
+// cron.d file cron will not load: a non-executable script in /etc/cron.daily never runs,
+// and reporting it would refuse a migration over a schedule that does not exist.
+//
+// Every failure is silent, like the rest of this file.
+func runPartsCronRefs(dir string) []indirectCronRef {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil
+	}
+	// One deadline for this directory, for the same reason the crontab walk has one.
+	deadline := newCronProbeDeadline()
+	var refs []indirectCronRef
+	for _, entry := range entries {
+		if !runPartsNameIsActive(entry.Name()) {
+			continue
+		}
+		path := filepath.Join(dir, entry.Name())
+		// os.Stat and not entry.Info(): it FOLLOWS the symlink, exactly as run-parts' own
+		// stat does, so a link into an install tree is judged by what it points at.
+		info, err := os.Stat(path)
+		if err != nil || !info.Mode().IsRegular() || info.Mode().Perm()&0o111 == 0 {
+			continue
+		}
+		if ref, ok := runPartsScriptRef(deadline, path, dir); ok {
+			refs = append(refs, ref)
+		}
+	}
+	return refs
+}
+
+// runPartsScriptRef applies rules 1, 2 and 4 of indirectProxsaveCronRefs to one script, in
+// the same order and with the same precedence.
+//
+// Rule 3, the RUNNER rule, is absent because it reads the rest of a cron LINE and there is
+// no line here. commandTokenMatchesTarget is absent for a sharper reason: it answers true
+// for the basename "proxmox-backup", and a /etc/cron.daily entry shipped by PBS is not
+// ours to flag.
+//
+// Rule 2 is applied to the RESOLVED path, because nothing under /etc/cron.daily has a path
+// component called "proxsave"; it fires on a symlink into a ProxSave install root, which is
+// what keeps the pre-0.30 Bash entry point visible when it was linked rather than copied,
+// since that script does not name the binary and rule 2 is the only rule that can see it.
+//
+// Every reason opens by saying what the finding IS. The renderer prints Line, which here is
+// a path and not a schedule, and this is the only place the operator learns why no time is
+// shown.
+func runPartsScriptRef(deadline *cronProbeDeadline, path, dir string) (indirectCronRef, bool) {
+	references, readable := scriptProxsaveProbe(deadline, path)
+	resolved := resolveSystemCronPath(path)
+	reason := ""
+	switch {
+	case references:
+		reason = "run-parts script with no cron time of its own; it calls the proxsave binary"
+	case pathLivesInProxsaveTree(resolved):
+		reason = fmt.Sprintf("run-parts script with no cron time of its own; it resolves into the ProxSave install tree (%s)", filepath.Dir(resolved))
+	case !readable && basenameHasProxsaveComponent(path):
+		reason = "run-parts script with no cron time of its own; named after proxsave and could not be read"
+	}
+	if reason == "" {
+		return indirectCronRef{}, false
+	}
+	// Line and Command are both the script path, and that is not redundancy: Line is what
+	// the renderer quotes back, Command is what a caller asks "which command is this". A
+	// cron line has two answers there; a run-parts entry has one fact.
+	return indirectCronRef{Line: path, Command: path, Reason: reason, Source: dir, RunParts: true}, true
+}
+
+// runPartsNameIsActive is character-identical to cronDNameIsActive today, measured with
+// "run-parts --test" on debianutils 5.7: guard, guard_2, guard-b and GUARD are executed,
+// guard.sh, guard.dpkg-dist, .guard and guard~ are not.
+//
+// It delegates rather than being called directly, because the two predicates belong to two
+// different programs: cron owns the cron.d rule, run-parts owns this one. run-parts already
+// ships a second filter behind --lsbsysinit, which accepts guard while rejecting GUARD and
+// guard_2. If /etc/crontab is ever seen invoking that flag, this is the single place that
+// changes, and the cron.d rule does not move with it.
+func runPartsNameIsActive(name string) bool {
+	return cronDNameIsActive(name)
+}
+
+// systemCronRefs is the shared walk over systemCronPaths, which now holds three shapes:
+// /etc/crontab as a file, /etc/cron.d as a directory whose entries cron itself would load,
+// and the four run-parts directories, whose entries are scripts with no schedule of their
+// own and are read rather than parsed. It is factored out so
 // the indirect-only and the indirect-plus-direct views can never walk different trees or
 // apply different skip rules to the same host.
 type systemCronScan int
@@ -1422,8 +1616,9 @@ const (
 	scanIndirectOnly systemCronScan = iota
 	// scanAll adds the canonical token back, because under /etc nothing owns or removes it.
 	scanAll
-	// scanDirectOnly drops the heuristics AND the script probe, for the SCHEDULER_TIME
-	// adoption. See systemCronDirectProxsaveLines for why that view has to be the narrow one.
+	// scanDirectOnly drops the heuristics AND the script probe AND the run-parts habitat
+	// entirely, for the SCHEDULER_TIME adoption. See systemCronDirectProxsaveLines for why
+	// that view has to be the narrow one, and runPartsVisibleTo for the habitat.
 	scanDirectOnly
 )
 
@@ -1432,6 +1627,19 @@ func systemCronRefs(mode systemCronScan) []indirectCronRef {
 	for _, path := range systemCronPaths {
 		info, err := os.Stat(path)
 		if err != nil {
+			continue
+		}
+		// The run-parts habitats are tested FIRST and never fall through. Their entries are
+		// scripts, and the one thing that must not happen to a script is being read as a
+		// schedule: this wrapper's seventh whitespace field is the binary, so the crontab
+		// parser below would report it as a direct proxsave cron LINE and hand its shell
+		// fragment to the time parser, which answers nothing and silences a real /etc/cron.d
+		// entry. A path named cron.daily that is somehow not a directory is skipped for the
+		// same reason rather than parsed.
+		if isRunPartsCronDir(path) {
+			if info.IsDir() && runPartsVisibleTo(mode) {
+				refs = append(refs, runPartsCronRefs(path)...)
+			}
 			continue
 		}
 		if !info.IsDir() {
@@ -1492,6 +1700,12 @@ func directProxsaveCronRefs(lines []string, commandToken func(string) string) []
 // Skipping the script probe is the second half of that: this view is reached from the
 // install wizard and from --upgrade-config-json, neither of which should be opening
 // operator scripts off disk to decide a default.
+//
+// The run-parts habitat is excluded from this view for both of those reasons at once, and
+// for a third that is decisive on its own: a run-parts script has no cron time, and one
+// unreadable time makes schedulerTimeFromSystemCron say nothing at all, so a single such
+// finding here would silence a perfectly good /etc/cron.d line and drop the host to the
+// 02:00 default. See runPartsVisibleTo.
 func systemCronDirectProxsaveLines() []indirectCronRef {
 	return systemCronRefs(scanDirectOnly)
 }
@@ -1500,6 +1714,8 @@ func systemCronDirectProxsaveLines() []indirectCronRef {
 // load: the name must be non-empty and consist only of letters, digits, underscore
 // and hyphen. A file with a dot in it (foo.dpkg-dist, bar.bak, .hidden) is IGNORED by
 // cron, so reporting it here would refuse a migration over a schedule that never runs.
+// A sibling of this predicate covers the run-parts directories: see runPartsNameIsActive
+// for why the two are kept apart rather than merged.
 func cronDNameIsActive(name string) bool {
 	if name == "" {
 		return false

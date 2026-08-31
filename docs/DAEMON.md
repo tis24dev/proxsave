@@ -89,11 +89,21 @@ then its command is named `proxsave-nas-guard`, the rule above does not recognis
 
 ProxSave detects such an entry separately and never touches it. A wrapper is yours, it may carry a mount guard or an `flock`, and deleting it on a name heuristic would destroy a safety net ProxSave did not write. What it does instead depends on who started the change: the unattended `--upgrade` retrofit **refuses** and changes nothing, while `--daemon-setup` and the install wizard **warn and proceed**, because you asked for the daemon explicitly.
 
-That detection reads three places: the root crontab, `/etc/crontab`, and the active entries in `/etc/cron.d`. The last two use the system crontab format, where a user field sits between the schedule and the command, so a wrapper installed there is found and reported by its file name:
+That detection reads three kinds of place: the root crontab; `/etc/crontab` and the active entries in `/etc/cron.d`; and the executable entries of `/etc/cron.hourly`, `/etc/cron.daily`, `/etc/cron.weekly` and `/etc/cron.monthly`.
+
+`/etc/crontab` and `/etc/cron.d` use the system crontab format, where a user field sits between the schedule and the command, so a wrapper installed there is found and reported by its file name:
 
 ```text
 17 02 * * * root /usr/local/sbin/proxsave-nas-guard [/etc/cron.d/proxsave-guard]   -> its command "proxsave-nas-guard" is named after proxsave
 ```
+
+The four `cron.*` directories hold no schedule at all: `run-parts` executes every entry that passes its filter, at the cadence `/etc/crontab` gives that directory, so there the file itself is the wrapper and its content is what is read. Such a finding names the script and says why no time is shown:
+
+```text
+/etc/cron.daily/nas-guard [/etc/cron.daily]   -> run-parts script with no cron time of its own; it calls the proxsave binary
+```
+
+A script `run-parts` would not run is skipped for the same reason a `cron.d` entry `cron` ignores is skipped: it has no execute bit, or its name falls outside `A-Z a-z 0-9 _ -`. Stopping one is `chmod -x` or removing it, not an edit, and the advisory says so.
 
 Files under `/etc` are **read only**. Everything that deletes a cron line, and the `SCHEDULER_TIME` adoption below, still work on the root crontab alone: ProxSave writes the crontab it owns and never edits a file it did not place. Entries whose name `cron` itself ignores (anything outside `A-Z a-z 0-9 _ -`, such as `proxsave.bak`) are skipped, because a schedule that never fires cannot collide with anything.
 

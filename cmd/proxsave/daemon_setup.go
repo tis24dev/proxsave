@@ -427,9 +427,10 @@ var (
 	// detector needs no error return and why applyCronMode's fallback for empty is to keep
 	// behaving exactly as it does today.
 	wrapperCronLinesFn = wrapperCronLines
-	// systemCronProxsaveRefsFn is the seam over the SYSTEM-cron habitat (/etc/crontab and
-	// the active entries of /etc/cron.d). It exists for two reasons, and the second is the
-	// one that made it non-optional.
+	// systemCronProxsaveRefsFn is the seam over the SYSTEM-cron habitat: /etc/crontab, the
+	// active entries of /etc/cron.d, and the executable entries of the four run-parts
+	// directories. It exists for two reasons, and the second is the one that made it
+	// non-optional.
 	//
 	// First, applyCronMode has to reach that habitat to tell the truth on a revert: the
 	// detector could already see a wrapper there, but the path that writes the cron line
