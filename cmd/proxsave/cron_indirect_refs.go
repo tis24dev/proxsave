@@ -270,6 +270,10 @@ func indirectProxsaveCronRefsWithToken(deadline *cronProbeDeadline, lines []stri
 		// stalled mount), where it is the last thing standing between the operator and #298.
 		reason := ""
 		probed, readable := false, false
+		// Whether the commands BEHIND a runner were all read and none of them names the
+		// binary. It gates the runner rule below and is false unless a read actually
+		// happened, so the names-only path keeps behaving as it always has.
+		tailCleared := false
 		if probeScriptContent {
 			probed = true
 			var references bool
@@ -284,7 +288,9 @@ func indirectProxsaveCronRefsWithToken(deadline *cronProbeDeadline, lines []stri
 			// readability, and its only consumer is rule 4, which asks about the token's NAME;
 			// no runner basename carries "proxsave", so the two cannot interact.
 			if reason == "" {
-				if wrapped, ok := cronRunnerWrappedScript(deadline, line, token); ok {
+				var wrapped string
+				wrapped, tailCleared = cronRunnerWrappedScript(deadline, line, token)
+				if wrapped != "" {
 					reason = fmt.Sprintf("script %s calls the proxsave binary", wrapped)
 				}
 			}
@@ -293,7 +299,12 @@ func indirectProxsaveCronRefsWithToken(deadline *cronProbeDeadline, lines []stri
 			switch {
 			case pathLivesInProxsaveTree(token):
 				reason = fmt.Sprintf("command under ProxSave install tree (%s)", filepath.Dir(token))
-			case cronRunnerNamesProxsave(line, token):
+			// The runner rule is a NAME rule wearing a runner's coat: it scans the words of
+			// the line, not what any of them does. So it answers only when the reading did
+			// not. Without this gate the same script - read, and found to call nothing -
+			// was cleared when cron ran it directly and reported when an flock sat in front
+			// of it, and a report here REFUSES an unattended --upgrade.
+			case cronRunnerNamesProxsave(line, token) && !tailCleared:
 				reason = fmt.Sprintf("runner %q; cron line references the proxsave binary", filepath.Base(token))
 			case (!probed || !readable) && basenameHasProxsaveComponent(token) && deadline.stalled:
 				// Same finding, with the reason it could not be read. "could not be read"
@@ -466,7 +477,7 @@ func cronCommandTail(line, token string) []string {
 // systemd-cat, costs one advisory and never an action, and the alternative loses
 // "su - backup -c /path/wrapper", which operators do write. It follows exactly one level of
 // runner nesting per command position and never executes anything.
-func cronRunnerWrappedScript(deadline *cronProbeDeadline, line, token string) (string, bool) {
+func cronRunnerWrappedScript(deadline *cronProbeDeadline, line, token string) (wrapped string, cleared bool) {
 	if _, isRunner := cronCommandRunners[strings.ToLower(filepath.Base(strings.Trim(token, "\"'")))]; !isRunner {
 		return "", false
 	}
@@ -475,24 +486,40 @@ func cronRunnerWrappedScript(deadline *cronProbeDeadline, line, token string) (s
 		return "", false
 	}
 	budget := maxCronWrapperProbesPerLine
-	wrapped := ""
+	// The second answer. `cleared` means every command position behind the runner was READ
+	// and none of them names the binary, which is the only state in which the runner rule
+	// may be silenced: that rule asks about a NAME, and by this file's own standard a name
+	// votes only when nothing could be read. Anything less than "all of it, read" leaves it
+	// false and the rule keeps firing exactly as it did.
+	probed, allRead := 0, true
 	// No vars: a cron line carries no assignments this code can resolve, and a "$BIN" written on
 	// one is expanded by cron's own shell against an environment not visible from here.
 	scriptLineWalkCommands(strings.Join(tail, " "), nil, func(word string) bool {
 		word = strings.Trim(word, "\"'")
 		// The token itself was probed a moment ago by the caller, and a relative command resolves
 		// against the crontab owner's home, which scriptProxsaveProbe refuses to guess.
-		if word == token || !filepath.IsAbs(word) || budget <= 0 {
+		if word == token {
+			// Already probed by the caller, and its readability is the caller's to judge.
+			return false
+		}
+		if !filepath.IsAbs(word) || budget <= 0 {
+			// Skipped, not read: a relative command or one past the budget is a command
+			// position this walk knows nothing about, so the tail is not cleared.
+			allRead = false
 			return false
 		}
 		budget--
-		references, _ := scriptProxsaveProbe(deadline, word)
+		references, readable := scriptProxsaveProbe(deadline, word)
+		if !readable {
+			allRead = false
+		}
 		if references {
 			wrapped = word
 		}
+		probed++
 		return references
 	})
-	return wrapped, wrapped != ""
+	return wrapped, wrapped == "" && allRead && probed > 0
 }
 
 // shellWords splits on whitespace AND the shell metacharacters that glue a path to

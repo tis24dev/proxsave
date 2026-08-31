@@ -1455,9 +1455,14 @@ func TestCronRunnerWrappedScriptIsRead(t *testing.T) {
 		// is one missed advisory on a shape operators write far less often than "flock WRAPPER".
 		{"a non-runner followed by the wrapper", "0 2 * * * " + write("pre-check", "#!/bin/sh\nexit 0\n") + " ; " + wrapper, false, "", ""},
 
-		// PRE-EXISTING VERDICT, restated so the new rule cannot quietly take it over: inside a
-		// runner there is no parser, so rule 3 flags a copy of the binary and says why.
-		{"a copy of the binary behind a runner", "0 2 * * * " + flock + " -n " + lock + " " + copier + " /usr/local/bin/proxsave /backup/", true, "runner", ""},
+		// The same line as "a plain copy of the binary" above, with an flock in front of it, and
+		// it now answers the same: false. It used to answer true, and the two rows disagreeing
+		// over nothing but a launcher is what the runner rule's readability gate removed. The
+		// copier is READ here and does not call the binary; the binary's path on this line is an
+		// ARGUMENT, which containsBinaryReference's own note says must never be read as a
+		// proxsave entry. A finding here refuses an unattended --upgrade over a job that backs
+		// the binary up.
+		{"a copy of the binary behind a runner", "0 2 * * * " + flock + " -n " + lock + " " + copier + " /usr/local/bin/proxsave /backup/", false, "", ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			refs := indirectProxsaveCronRefs([]string{tc.line}, cronProbeReadScripts)
