@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"syscall"
 	"testing"
@@ -209,15 +210,25 @@ func TestTheAbandonedEtcWalkStepNeverWritesWhatTheCallerRead(t *testing.T) {
 	origStat, origTimeout := cronEntryStatFn, cronProbeTimeout
 	answered := make(chan struct{})
 	t.Cleanup(func() {
-		<-answered // the worker must be collected before the seam is restored
+		// Wait for the worker before restoring the seam, but BOUNDED. A walk that never
+		// reaches the stalling path - an earlier step latching the deadline, say - would
+		// otherwise hang the whole suite here instead of failing this one test.
+		select {
+		case <-answered:
+		case <-time.After(5 * time.Second):
+		}
 		cronEntryStatFn, cronProbeTimeout = origStat, origTimeout
 	})
 	cronProbeTimeout = 50 * time.Millisecond
+	// The walk stats this entry once today. sync.Once keeps that an assumption rather than a
+	// requirement: a second stat would otherwise close a closed channel and panic the test
+	// binary, which reports as a crash somewhere else entirely.
+	var once sync.Once
 	cronEntryStatFn = func(path string) (os.FileInfo, error) {
 		if path != entry {
 			return origStat(path)
 		}
-		defer close(answered)
+		defer once.Do(func() { close(answered) })
 		time.Sleep(400 * time.Millisecond)
 		return origStat(path)
 	}
