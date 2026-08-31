@@ -1381,11 +1381,15 @@ func cronRefEditHint(refs []indirectCronRef) string {
 // (internal/cli/args.go), which hides the findings above it. What is lost at that level is
 // which lines they were; what survives is that some exist and that ProxSave left them alone.
 //
+// It counts ENTRIES and not lines, because since the run-parts directories joined the walk
+// a finding can be a script rather than a crontab line, and "entry" is the word cron uses
+// for both.
+//
 // It is a named function rather than the last element of a slice because the caller has to
 // pick it out to give it a different level; indexing the tail would put the whole block one
 // off-by-one away from warning about the wrong sentence.
 func systemCronOwnershipNote(count int) string {
-	return fmt.Sprintf("ProxSave owns the root crontab only and never edits files it did not place, %d line(s) in /etc unchanged", count)
+	return fmt.Sprintf("ProxSave owns the root crontab only and never edits files it did not place, %d entry(ies) in /etc unchanged", count)
 }
 
 // systemCronScheduleFindings renders the findings alone: the header carrying the count, then

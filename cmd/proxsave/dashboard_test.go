@@ -1029,10 +1029,10 @@ func TestDashboardDaemonRevertWarnsOnADuplicateSchedule(t *testing.T) {
 			// logBootstrapWarning, so a screen that stays green on this one hands the same host
 			// two different levels depending on which channel the operator read.
 			name:        "the surviving schedule is under /etc: same level, same keyword",
-			report:      cronRevertReport{CronScheduled: true, ModeRecorded: true, SystemCronAdvisory: []string{"Reverting to cron: 1 possible ProxSave cron line(s) under /etc:", "  - 0 5 * * * root /usr/local/bin/proxsave --backup", "ProxSave owns the root crontab only and never edits files it did not place, 1 line(s) in /etc unchanged"}},
+			report:      cronRevertReport{CronScheduled: true, ModeRecorded: true, SystemCronAdvisory: []string{"Reverting to cron: 1 possible ProxSave cron line(s) under /etc:", "  - 0 5 * * * root /usr/local/bin/proxsave --backup", "ProxSave owns the root crontab only and never edits files it did not place, 1 entry(ies) in /etc unchanged"}},
 			wantLevel:   orchestrator.HealthcheckSetupLevelWarn,
 			wantKeyword: "REVERTED - DUPLICATE SCHEDULE",
-			wantText:    "1 line(s) in /etc unchanged",
+			wantText:    "1 entry(ies) in /etc unchanged",
 		},
 		{
 			// A cron entry that could not be written takes the level, because it is the worst
@@ -1229,7 +1229,7 @@ func TestDashboardDaemonRevertDoesNotDenyAScheduleItJustListed(t *testing.T) {
 	advisory := []string{
 		"Reverting to cron: 1 possible ProxSave cron line(s) under /etc:",
 		"  - 0 5 * * * root /usr/local/bin/proxsave --backup  [/etc/cron.d/proxsave]",
-		"ProxSave owns the root crontab only and never edits files it did not place, 1 line(s) in /etc unchanged",
+		"ProxSave owns the root crontab only and never edits files it did not place, 1 entry(ies) in /etc unchanged",
 	}
 	installDashboardGates(t, true, true)
 	origCfg, origShow := daemonStatusLoadConfig, showDaemonResultScreenFn
