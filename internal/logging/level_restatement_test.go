@@ -41,21 +41,15 @@ import (
 // promotes an otherwise clean run to exit 1, through ParseLogCounts and applyIssueExitCode). This
 // test does not reach that pair, so the comment there has to carry the warning instead.
 //
-// THE BASELINE. The rule arrived after the violations: 131 call sites already break it. Rather
-// than hold the rule hostage to that cleanup, the known ones are frozen in
-// testdata/level_restatement_baseline.txt and this test fails in BOTH directions - on a violation
-// that is not in the file (a new one), and on a baseline entry that no longer matches anything (a
-// fixed one whose line must now be deleted). That second half is what makes the file a ratchet
-// instead of a dumping ground: it can only shrink. When it reaches zero, delete it and this test
-// becomes a plain rule.
-//
-// Regenerate after a deliberate change with: UPDATE_LEVEL_BASELINE=1 go test ./internal/logging/
-// and read the diff before committing it.
-//
-// ONE ENTRY PER (file, literal), NOT per call site. cmd/proxsave/main_modes.go calls
-// Error("ERROR: %v") five times; they collapse to one baseline line, so the entry disappears only
-// when all five are fixed. That is deliberate: the unit of work is the pattern in a file, not an
-// individual call, and a per-line key would churn on every unrelated edit above it.
+// NO BASELINE, ON PURPOSE. The rule arrived after the violations: 143 call sites already break
+// it. Freezing them in a known-violations file would leave this test GREEN on a tree that has
+// 143 of the defect, which tells a reader looking at the traffic light something false. The
+// maintainer chose a red suite instead, accepted and expected until the list reaches zero, and a
+// cleanup done one FILE per commit with the result of each edit MEASURED rather than reasoned
+// about: see TestRemovingARestatementChangesNothingButTheLine in internal/orchestrator, which
+// renders the line through the real logger and re-counts it through the real ParseLogCounts,
+// before and after. Static reasoning that "the column classifies, so the word is free" is not
+// the evidence this cleanup runs on.
 
 // levelOfLoggerMethod maps a logger method to the level its column will print. Skip, Step and
 // Phase are labelled INFO lines (logWithLabel with types.LogLevelInfo), and NotifyError renders
@@ -94,16 +88,6 @@ type levelViolation struct {
 	kind    string // "word" or "glyph"
 }
 
-// key identifies a violation across edits. The LITERAL is the key, not the line number: a line
-// number moves whenever anything above it changes, which would turn the baseline into churn.
-func (v levelViolation) key() string {
-	lit := v.literal
-	if len(lit) > 60 {
-		lit = lit[:60]
-	}
-	return v.file + "\t" + v.kind + "\t" + lit
-}
-
 func (v levelViolation) String() string {
 	return fmt.Sprintf("%s:%d %s(%q) restates %s as a %s", v.file, v.line, v.method, truncate(v.literal, 60), v.level, v.kind)
 }
@@ -116,48 +100,49 @@ func truncate(s string, n int) string {
 }
 
 func TestLoggerCallersDoNotRestateTheirOwnLevel(t *testing.T) {
-	root := moduleRoot(t)
-	found := scanForLevelRestatement(t, root)
-
-	baselinePath := filepath.Join(root, "internal", "logging", "testdata", "level_restatement_baseline.txt")
-
-	if os.Getenv("UPDATE_LEVEL_BASELINE") != "" {
-		writeBaseline(t, baselinePath, found)
-		t.Logf("baseline rewritten with %d entries; read the diff before committing", len(found))
+	found := scanForLevelRestatement(t, moduleRoot(t))
+	if len(found) == 0 {
 		return
 	}
 
-	baseline := readBaseline(t, baselinePath)
-
-	seen := make(map[string]bool, len(found))
-	var added []string
+	// Grouped by file, because the cleanup is one file per commit: the report IS the worklist.
+	byFile := map[string][]string{}
 	for _, v := range found {
-		k := v.key()
-		seen[k] = true
-		if !baseline[k] {
-			added = append(added, v.String())
+		byFile[v.file] = append(byFile[v.file], v.String())
+	}
+	files := make([]string, 0, len(byFile))
+	for f := range byFile {
+		files = append(files, f)
+	}
+	sort.Slice(files, func(i, j int) bool {
+		if len(byFile[files[i]]) != len(byFile[files[j]]) {
+			return len(byFile[files[i]]) > len(byFile[files[j]])
 		}
-	}
-	sort.Strings(added)
-	if len(added) > 0 {
-		t.Errorf("%d logger call(s) restate the level their own column already prints.\n"+
-			"The console writes \"[ts] LEVEL   message\"; opening the message with the level, or with a\n"+
-			"severity glyph, says it twice. Drop it from the message and let the column carry it.\n\n%s",
-			len(added), strings.Join(added, "\n"))
-	}
+		return files[i] < files[j]
+	})
 
-	var fixed []string
-	for k := range baseline {
-		if !seen[k] {
-			fixed = append(fixed, strings.ReplaceAll(k, "\t", " | "))
+	var b strings.Builder
+	words, glyphs := 0, 0
+	for _, v := range found {
+		if v.kind == "word" {
+			words++
+		} else {
+			glyphs++
 		}
 	}
-	sort.Strings(fixed)
-	if len(fixed) > 0 {
-		t.Errorf("%d baseline entr(ies) no longer match any call site. Good - they were fixed.\n"+
-			"Now delete these lines from internal/logging/testdata/level_restatement_baseline.txt,\n"+
-			"so the file can only ever shrink:\n\n%s", len(fixed), strings.Join(fixed, "\n"))
+	fmt.Fprintf(&b, "%d logger call(s) in %d file(s) restate the level their own column already prints "+
+		"(%d in words, %d as a glyph).\n"+
+		"The console writes \"[ts] LEVEL   message\"; opening the message with the level, or drawing a\n"+
+		"severity glyph, says it twice. Drop it and let the column carry it - but MEASURE each edit\n"+
+		"with TestRemovingARestatementChangesNothingButTheLine before trusting it.\n",
+		len(found), len(files), words, glyphs)
+	for _, f := range files {
+		fmt.Fprintf(&b, "\n%s (%d)\n", f, len(byFile[f]))
+		for _, line := range byFile[f] {
+			fmt.Fprintf(&b, "  %s\n", line)
+		}
 	}
+	t.Error(b.String())
 }
 
 // scanForLevelRestatement parses every non-test .go file under root and reports each logger call
@@ -270,46 +255,5 @@ func moduleRoot(t *testing.T) string {
 			t.Fatal("go.mod not found above the test directory")
 		}
 		dir = parent
-	}
-}
-
-func readBaseline(t *testing.T, path string) map[string]bool {
-	t.Helper()
-	data, err := os.ReadFile(path)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return map[string]bool{}
-		}
-		t.Fatalf("read baseline: %v", err)
-	}
-	out := map[string]bool{}
-	for _, line := range strings.Split(string(data), "\n") {
-		if line == "" || strings.HasPrefix(line, "#") {
-			continue
-		}
-		out[line] = true
-	}
-	return out
-}
-
-func writeBaseline(t *testing.T, path string, violations []levelViolation) {
-	t.Helper()
-	keys := make([]string, 0, len(violations))
-	seen := map[string]bool{}
-	for _, v := range violations {
-		k := v.key()
-		if seen[k] {
-			continue
-		}
-		seen[k] = true
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-	header := "# Logger calls that restate their own level. See level_restatement_test.go.\n" +
-		"# Format: <file>\\t<word|glyph>\\t<first 60 chars of the literal>\n" +
-		"# This file may only SHRINK. Fix a call site, then delete its line here.\n"
-	body := header + strings.Join(keys, "\n") + "\n"
-	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
-		t.Fatalf("write baseline: %v", err)
 	}
 }
