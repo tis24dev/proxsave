@@ -943,6 +943,25 @@ func cronRemovalClause(outcome cronRemovalOutcome) string {
 	}
 }
 
+// cronRemovalScreenClause is cronRemovalClause as the VALUE of a "Cron entry:" label, for the
+// dashboard screens, which state one fact per line rather than a sentence.
+//
+// It is a second rendering rather than a second wording: the four outcomes and the distinctions
+// between them are cronRemovalClause's, and any new one has to be added in both places or the two
+// front-ends drift - which is the whole reason that renderer exists.
+func cronRemovalScreenClause(outcome cronRemovalOutcome) string {
+	switch {
+	case !outcome.Verified:
+		return "not checked, one may still be scheduled alongside the daemon."
+	case outcome.Removed == 0:
+		return "none was present to remove."
+	case outcome.Removed == 1:
+		return "removed."
+	default:
+		return fmt.Sprintf("%d proxsave entries removed.", outcome.Removed)
+	}
+}
+
 // removeCanonicalCronEntry drops every proxsave-owned cron line and writes the crontab
 // back, REPORTING how many lines it removed. A no-op (no matching line) does not touch the
 // crontab.

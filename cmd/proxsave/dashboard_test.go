@@ -526,7 +526,7 @@ func TestDashboardDaemonInstallWarnsOnADuplicateSchedule(t *testing.T) {
 			outcome:     cronRemovalOutcome{Removed: 1, Verified: true},
 			wantLevel:   orchestrator.HealthcheckSetupLevelOk,
 			wantKeyword: "INSTALLED",
-			wantText:    "The cron entry was removed.",
+			wantText:    "Cron entry: removed.",
 		},
 		{
 			// An unverified removal already SAYS a proxsave entry may still be scheduled next to
@@ -536,7 +536,7 @@ func TestDashboardDaemonInstallWarnsOnADuplicateSchedule(t *testing.T) {
 			outcome:     cronRemovalOutcome{},
 			wantLevel:   orchestrator.HealthcheckSetupLevelWarn,
 			wantKeyword: "INSTALLED - NO CRON ENTRY REMOVED",
-			wantText:    "may still be scheduled alongside it",
+			wantText:    "Cron entry: not checked, one may still be scheduled alongside the daemon.",
 		},
 		{
 			name:        "an unmanaged schedule survives: warning",
@@ -638,7 +638,7 @@ func TestDashboardDaemonInstallReportsWhatTheRemovalDid(t *testing.T) {
 				t.Fatal("dashboard did not resolve")
 			}
 
-			if want := cronRemovalClause(tc.outcome); !strings.Contains(msg, want) {
+			if want := cronRemovalScreenClause(tc.outcome); !strings.Contains(msg, want) {
 				t.Errorf("the result screen must carry %q, got:\n%s", want, msg)
 			}
 			if tc.outcome.Removed == 0 && strings.Contains(msg, "cron entry was removed") {
@@ -978,10 +978,10 @@ func TestDashboardDaemonRevertReportsAFailedConfigWrite(t *testing.T) {
 	if got.level != orchestrator.HealthcheckSetupLevelWarn {
 		t.Errorf("a config write that did not land must not be green, level = %v", got.level)
 	}
-	if !strings.Contains(got.text, "could NOT be updated") {
+	if !strings.Contains(got.text, "Configuration: NOT updated") {
 		t.Errorf("the screen must say the configuration was not updated, got:\n%s", got.text)
 	}
-	if strings.Contains(got.text, "upgrades leave the scheduler as it is") {
+	if strings.Contains(got.text, "SCHEDULER_MODE=cron recorded") {
 		t.Errorf("the screen must not claim the record that was not written, got:\n%s", got.text)
 	}
 }
@@ -1005,7 +1005,7 @@ func TestDashboardDaemonRevertWarnsOnADuplicateSchedule(t *testing.T) {
 			report:      cronRevertReport{CronScheduled: true, ModeRecorded: true},
 			wantLevel:   orchestrator.HealthcheckSetupLevelOk,
 			wantKeyword: "REVERTED TO CRON",
-			wantText:    "Reverted to the cron scheduler",
+			wantText:    "Daemon service: removed.",
 		},
 		{
 			name:        "an unmanaged schedule survives: warning",
@@ -1033,7 +1033,7 @@ func TestDashboardDaemonRevertWarnsOnADuplicateSchedule(t *testing.T) {
 			report:      cronRevertReport{CronScheduled: false, ModeRecorded: true, UnmanagedAdvisory: []string{"1 unmanaged crontab line(s) also appear to schedule ProxSave:", "  - 30 02 * * * /usr/local/sbin/nas-guard"}},
 			wantLevel:   orchestrator.HealthcheckSetupLevelError,
 			wantKeyword: "CRON ENTRY NOT WRITTEN",
-			wantText:    "could NOT be written",
+			wantText:    "Cron entry: NOT written.",
 		},
 		{
 			// With nothing listed underneath, the denial is true and stays.
@@ -1143,7 +1143,7 @@ func TestDashboardDaemonRevertReportsAnUnscheduledHost(t *testing.T) {
 	if !strings.Contains(got.text, "nothing is scheduling the backup") {
 		t.Errorf("the screen must say nothing is scheduling the backup, got:\n%s", got.text)
 	}
-	if strings.Contains(got.text, "Reverted to the cron scheduler") {
+	if strings.Contains(got.text, "Cron entry: in the crontab") {
 		t.Errorf("the success wording must not survive next to it, got:\n%s", got.text)
 	}
 }
@@ -1194,7 +1194,7 @@ func TestDashboardDaemonRevertKeepsEveryFactOnTheUnscheduledScreen(t *testing.T)
 		t.Errorf("the screen must state the unscheduled host, got:\n%s", msg)
 	}
 	// The second fact, which has no other channel here.
-	if !strings.Contains(msg, "could NOT be updated") {
+	if !strings.Contains(msg, "Configuration: NOT updated") {
 		t.Errorf("the screen must also state that the configuration was not written, got:\n%s", msg)
 	}
 }
@@ -1247,7 +1247,7 @@ func TestDashboardDaemonRevertDoesNotDenyAScheduleItJustListed(t *testing.T) {
 		t.Errorf("the screen may not deny a schedule it lists below, got:\n%s", msg)
 	}
 	// What IS certain, and what the operator has to act on.
-	if !strings.Contains(msg, "could NOT be written") {
+	if !strings.Contains(msg, "Cron entry: NOT written.") {
 		t.Errorf("the screen must still state that the cron entry was not written, got:\n%s", msg)
 	}
 	if !strings.Contains(msg, advisory[1]) {
@@ -1502,7 +1502,7 @@ func TestDashboardDaemonRevertShowsTheSystemCronAdvisory(t *testing.T) {
 	if !strings.Contains(msg, "REVERTED - DUPLICATE SCHEDULE") {
 		t.Fatalf("an /etc finding must carry the duplicate keyword, got:\n%s", msg)
 	}
-	if !strings.Contains(msg, "Reverted to the cron scheduler") {
+	if !strings.Contains(msg, "Daemon service: removed.") {
 		t.Errorf("the existing message must not be replaced, got:\n%s", msg)
 	}
 	// EVERY line, not just the first: the header carries the count, the item carries the cron
@@ -1561,12 +1561,12 @@ func TestCronRevertScreenOnAFailedTeardown(t *testing.T) {
 			wantLevel:   orchestrator.HealthcheckSetupLevelError,
 			wantKeyword: "DAEMON NOT REMOVED - DUPLICATE SCHEDULE",
 			wantSays: []string{
-				"could NOT be removed and may still be running",
+				"Daemon service: NOT removed, may still be running.",
 				"permission denied",
-				"is in the crontab, so the backup may run twice",
-				"SCHEDULER_MODE=cron is recorded",
+				"Cron entry: in the crontab, so the backup may run twice.",
+				"Configuration: SCHEDULER_MODE=cron recorded.",
 			},
-			wantSilent: []string{"removed the daemon service", "Reverted to the cron scheduler", "nothing is scheduling the backup"},
+			wantSilent: []string{"Daemon service: removed.", "nothing is scheduling the backup"},
 		},
 		{
 			name:        "the config write failed too",
@@ -1574,7 +1574,7 @@ func TestCronRevertScreenOnAFailedTeardown(t *testing.T) {
 			err:         teardown,
 			wantLevel:   orchestrator.HealthcheckSetupLevelError,
 			wantKeyword: "DAEMON NOT REMOVED - DUPLICATE SCHEDULE",
-			wantSays:    []string{"configuration could NOT be updated either", "still records the daemon engine"},
+			wantSays:    []string{"Configuration: NOT updated", "still records the daemon engine"},
 			// cronModeRecordClause's failure arm ends "...while no daemon is installed", which is
 			// exactly what this failure disproves.
 			wantSilent: []string{"while no daemon is installed"},
@@ -1585,8 +1585,10 @@ func TestCronRevertScreenOnAFailedTeardown(t *testing.T) {
 			err:         teardown,
 			wantLevel:   orchestrator.HealthcheckSetupLevelError,
 			wantKeyword: "DAEMON NOT REMOVED",
-			wantSays:    []string{"cron entry could NOT be written either", "may be the only thing still scheduling"},
-			wantSilent:  []string{"nothing is scheduling the backup", "may run twice"},
+			wantSays:    []string{"Daemon service: NOT removed, may still be running.", "Cron entry: NOT written."},
+			// The old wording closed with "the daemon that is still there may be the only thing
+			// still scheduling the backup", which denies whatever the advisories below list.
+			wantSilent: []string{"nothing is scheduling the backup", "may run twice", "only thing still scheduling"},
 		},
 		{
 			name:        "both habitats still have to be listed",
@@ -1603,8 +1605,8 @@ func TestCronRevertScreenOnAFailedTeardown(t *testing.T) {
 			revert:      cronRevertReport{CronScheduled: true, ModeRecorded: true},
 			wantLevel:   orchestrator.HealthcheckSetupLevelOk,
 			wantKeyword: "REVERTED TO CRON",
-			wantSays:    []string{"removed the daemon service"},
-			wantSilent:  []string{"could NOT be removed"},
+			wantSays:    []string{"Daemon service: removed.", "Cron entry: in the crontab."},
+			wantSilent:  []string{"NOT removed"},
 		},
 		{
 			name:        "success, nothing scheduling",
@@ -1612,7 +1614,7 @@ func TestCronRevertScreenOnAFailedTeardown(t *testing.T) {
 			wantLevel:   orchestrator.HealthcheckSetupLevelError,
 			wantKeyword: "NO SCHEDULE",
 			wantSays:    []string{"nothing is scheduling the backup"},
-			wantSilent:  []string{"could NOT be removed"},
+			wantSilent:  []string{"NOT removed"},
 		},
 		{
 			name:        "success with an /etc finding",
@@ -1620,7 +1622,7 @@ func TestCronRevertScreenOnAFailedTeardown(t *testing.T) {
 			wantLevel:   orchestrator.HealthcheckSetupLevelWarn,
 			wantKeyword: "REVERTED - DUPLICATE SCHEDULE",
 			wantSays:    etc,
-			wantSilent:  []string{"could NOT be removed"},
+			wantSilent:  []string{"NOT removed"},
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -1682,10 +1684,10 @@ func TestDashboardDaemonRevertKeepsTheReportWhenTheTeardownFails(t *testing.T) {
 	msg := runDashboardRevertAndCaptureScreen(t)
 
 	for _, want := range append(append(append([]string{
-		"could NOT be removed and may still be running",
+		"Daemon service: NOT removed, may still be running.",
 		"permission denied",
-		"is in the crontab, so the backup may run twice",
-		"could NOT be updated either",
+		"Cron entry: in the crontab, so the backup may run twice.",
+		"Configuration: NOT updated",
 	}, unmanaged...), etc...), "DAEMON NOT REMOVED - DUPLICATE SCHEDULE") {
 		if !strings.Contains(msg, want) {
 			t.Errorf("a failed teardown must still state %q, got:\n%s", want, msg)
@@ -1728,10 +1730,10 @@ func TestDashboardDaemonRevertSentinelsKeepTheirOwnScreens(t *testing.T) {
 
 			// Case-folded: the deferred screen writes "was NOT removed" and the sentinel string
 			// writes "was not removed". Both say the same fact and neither is this test's to pin.
-			if !strings.Contains(strings.ToLower(msg), "daemon was not removed") {
+			if !strings.Contains(strings.ToLower(msg), "not removed") {
 				t.Errorf("the sentinel must still say the daemon was not removed, got:\n%s", msg)
 			}
-			for _, absent := range []string{"could NOT be written either", "still records the daemon engine", "may run twice", "may still be running"} {
+			for _, absent := range []string{"Cron entry: NOT written.", "still records the daemon engine", "may run twice", "may still be running"} {
 				if strings.Contains(msg, absent) {
 					t.Errorf("a zero report must not be reported as a measurement (%q), got:\n%s", absent, msg)
 				}
