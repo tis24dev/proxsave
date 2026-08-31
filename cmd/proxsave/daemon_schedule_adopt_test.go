@@ -108,3 +108,43 @@ func TestAdoptSchedulerTimeForDaemon(t *testing.T) {
 		})
 	}
 }
+
+// A failed adoption used to be a DEBUG line, so on a normal run nobody saw it. The removal that
+// follows goes ahead either way (v0.31.0 removed the cron entry with no adoption at all, so
+// refusing here would be a new refusal, not a fix), which means the host keeps its old
+// SCHEDULER_TIME and the daily backup moves to that hour. That is worth a WARNING: it is the
+// one outcome the operator cannot infer from anything else on screen.
+//
+// The write is made to fail the way it fails in production - the directory is not writable, so
+// WriteConfigFileAtomic cannot create its temp file - rather than by a seam, because the config
+// stays perfectly readable and only the write half breaks.
+func TestAFailedSchedulerTimeAdoptionIsSaidOutLoud(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "backup.env")
+	if err := os.WriteFile(configPath, []byte("BACKUP_PATH=/data\nSCHEDULER_TIME=03:15\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(dir, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o700) })
+
+	origLog := logging.GetDefaultLogger()
+	t.Cleanup(func() { logging.SetDefaultLogger(origLog) })
+	var buf bytes.Buffer
+	def := logging.New(types.LogLevelDebug, false)
+	def.SetOutput(&buf)
+	logging.SetDefaultLogger(def)
+
+	adoptSchedulerTimeForDaemon(configPath, []string{"0 21 * * * /usr/local/bin/proxsave --backup"}, nil)
+
+	if def.WarningCount() == 0 {
+		t.Errorf("a failed adoption must warn, not whisper at debug; out=%q", buf.String())
+	}
+	if !strings.Contains(buf.String(), "21:00") {
+		t.Errorf("the warning must name the hour that did NOT carry over; out=%q", buf.String())
+	}
+	if !strings.Contains(buf.String(), "03:15") {
+		t.Errorf("the warning must name the hour the daemon will actually use; out=%q", buf.String())
+	}
+}

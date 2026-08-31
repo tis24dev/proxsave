@@ -267,14 +267,31 @@ func adoptSchedulerTimeForDaemon(configPath string, lines []string, bootstrap *l
 	if err != nil {
 		return
 	}
-	if strings.TrimSpace(installer.DeriveInstallWizardPrefill(string(data)).SchedulerTime) == hhmm {
+	stored := strings.TrimSpace(installer.DeriveInstallWizardPrefill(string(data)).SchedulerTime)
+	if stored == hhmm {
 		return
 	}
 	if err := setBackupEnvKeys(configPath, map[string]string{"SCHEDULER_TIME": hhmm}); err != nil {
-		logging.DebugStepBootstrap(bootstrap, "daemon setup", "could not record the adopted run time: %v", err)
+		// A WARNING, not a debug line. The removal that follows goes ahead either way - the
+		// switch before this adoption existed removed the cron entry unconditionally, so
+		// refusing here would be a new refusal rather than a fix - and the host then runs at
+		// whatever SCHEDULER_TIME already said. The operator cannot infer that from anything
+		// else on screen, and the old DebugStepBootstrap said nothing at all on the
+		// --daemon-setup path, where bootstrap is nil and that helper returns immediately.
+		logBootstrapWarning(bootstrap, "Could not record %s as SCHEDULER_TIME in %s: %v. The daemon will run at %s instead, the time already recorded.", hhmm, configPath, err, schedulerTimeOrDefaultLabel(stored))
 		return
 	}
 	logBootstrapInfo(bootstrap, "SCHEDULER_TIME set to %s, the time of the proxsave cron entry this switch removes, so the daily run time does not change.", hhmm)
+}
+
+// schedulerTimeOrDefaultLabel names the time the daemon will actually use when an adoption
+// could not be written. An ABSENT key is not the same as a recorded one: nothing has been
+// stated, so the compiled default is what runs, and saying "" there would name no time at all.
+func schedulerTimeOrDefaultLabel(stored string) string {
+	if stored == "" {
+		return "the compiled default"
+	}
+	return stored
 }
 
 // reportUnremovedCronEntry tells the operator that the proxsave cron entry ProxSave has just
