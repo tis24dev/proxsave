@@ -1,0 +1,135 @@
+# Logger calls that restate their own level. See level_restatement_test.go.
+# Format: <file>\t<word|glyph>\t<first 60 chars of the literal>
+# This file may only SHRINK. Fix a call site, then delete its line here.
+cmd/proxsave/backup_execution.go	glyph	✓ Backup completed
+cmd/proxsave/backup_execution.go	glyph	✓ Statistics report saved to %s
+cmd/proxsave/backup_mode.go	glyph	✓ Orchestrator initialized
+cmd/proxsave/backup_mode.go	glyph	✓ Pre-backup checks configured
+cmd/proxsave/backup_mode.go	glyph	✗ Cloud log directory not configured (cloud storage enable
+cmd/proxsave/backup_mode.go	glyph	✗ Secondary log directory not configured (secondary storag
+cmd/proxsave/backup_mode.go	word	ERROR: %v
+cmd/proxsave/backup_notifications.go	glyph	✓ Email initialized (method: %s)
+cmd/proxsave/backup_notifications.go	glyph	✓ Gotify initialized
+cmd/proxsave/backup_notifications.go	glyph	✓ Healthchecks initialized (mode: %s)
+cmd/proxsave/backup_notifications.go	glyph	✓ Telegram initialized (mode: %s)
+cmd/proxsave/backup_notifications.go	glyph	✓ Webhook initialized (%d endpoint(s))
+cmd/proxsave/install.go	glyph	✓ Configuration saved at %s
+cmd/proxsave/main_config_modes.go	word	ERROR: %v
+cmd/proxsave/main_config_modes.go	word	ERROR: Failed to plan configuration upgrade: %v
+cmd/proxsave/main_config_modes.go	word	ERROR: Failed to upgrade configuration: %v
+cmd/proxsave/main_identity.go	word	WARNING: Failed to load server identity: %v
+cmd/proxsave/main_lifecycle.go	word	ERROR: %v
+cmd/proxsave/main_modes.go	word	ERROR: %v
+cmd/proxsave/main_runtime.go	word	ERROR: %v
+cmd/proxsave/main_runtime.go	word	ERROR: Failed to load configuration: %v
+cmd/proxsave/main_runtime.go	word	ERROR: Invalid configuration: %v
+cmd/proxsave/main_runtime.go	word	WARNING: %s detected on the live system but none under SYSTE
+cmd/proxsave/main_runtime.go	word	WARNING: %s is not present; the /etc/pve bind mount may be m
+cmd/proxsave/main_runtime.go	word	WARNING: %v
+cmd/proxsave/main_runtime.go	word	WARNING: Cloud storage enabled but CLOUD_LOG_PATH is empty -
+cmd/proxsave/main_runtime.go	word	WARNING: Disabling network-dependent features for this run
+cmd/proxsave/main_runtime.go	word	WARNING: HOST_BACKUP_MODE is set but SYSTEM_ROOT_PREFIX is e
+cmd/proxsave/main_runtime.go	word	WARNING: LOG_PATH is empty - file logging disabled, using st
+cmd/proxsave/main_runtime.go	word	WARNING: Network connectivity unavailable for: %s. %v
+cmd/proxsave/main_runtime.go	word	WARNING: Network preflight disabled via DISABLE_NETWORK_PREF
+cmd/proxsave/main_runtime.go	word	WARNING: Secondary storage enabled but SECONDARY_LOG_PATH is
+cmd/proxsave/main_runtime.go	word	WARNING: Unable to start restore log: %v
+cmd/proxsave/main_runtime.go	word	WARNING: no Proxmox host detected under SYSTEM_ROOT_PREFIX=%
+cmd/proxsave/newkey.go	glyph	✓ New AGE recipient(s) generated and saved to %s
+cmd/proxsave/runtime_helpers.go	glyph	✓ %s exists: %s
+cmd/proxsave/runtime_helpers.go	glyph	✗ %s not found: %s
+cmd/proxsave/session_log.go	word	WARNING: Unable to start %s log: %v
+cmd/proxsave/upgrade.go	word	ERROR: %v
+cmd/proxsave/upgrade.go	word	ERROR: Failed to check latest release: %v
+cmd/proxsave/upgrade.go	word	ERROR: Failed to load configuration: %v
+cmd/proxsave/upgrade.go	word	ERROR: Upgrade failed: %v
+internal/notify/email.go	glyph	⚠ %d message(s) currently in mail queue (previous emails m
+internal/notify/email.go	glyph	⚠ Mail queue size increased from %d to %d after sending em
+internal/notify/email.go	glyph	⚠ No MTA configuration file found
+internal/notify/email.go	glyph	⚠ No MTA service appears to be running (checked: postfix, 
+internal/notify/email.go	glyph	⚠ Recent mail log entries indicate potential delivery issu
+internal/notify/email.go	glyph	❌ Sendmail command failed: %v
+internal/notify/email.go	glyph	❌ proxmox-mail-forward failed: %v
+internal/notify/email.go	word	WARNING: Auto-detected recipient %s belongs to root and is b
+internal/notify/email.go	word	WARNING: Configured email recipient %s belongs to root and i
+internal/notify/email.go	word	WARNING: Email delivery via cloud relay failed: %v
+internal/notify/email.go	word	WARNING: Email recipient is empty after configuration/detect
+internal/notify/email.go	word	WARNING: Invalid email format: %s
+internal/notify/email.go	word	WARNING: PMF delivery failed: %v
+internal/notify/email.go	word	WARNING: Relay fallback failed after PMF failure: %v
+internal/notify/telegram.go	word	WARNING: failed to persist provisioned relay secret: %v
+internal/notify/webhook.go	glyph	⚠️ Rate limited (HTTP 429): %s
+internal/notify/webhook.go	glyph	⚠️ Request failed after %dms (attempt %d/%d): %s
+internal/notify/webhook.go	glyph	⚠️ Server error (HTTP %d), will retry: %s
+internal/notify/webhook.go	glyph	⚠️ Unexpected status (HTTP %d): %s
+internal/notify/webhook.go	glyph	✅ Endpoint '%s' succeeded
+internal/notify/webhook.go	glyph	✅ Webhook '%s' sent successfully: HTTP %d in %dms
+internal/notify/webhook.go	glyph	✅ WebhookNotifier initialized successfully with %d endpoin
+internal/notify/webhook.go	glyph	❌ Authentication failed (HTTP 401)
+internal/notify/webhook.go	glyph	❌ Bad request (HTTP 400): %s
+internal/notify/webhook.go	glyph	❌ Forbidden (HTTP 403): %s
+internal/notify/webhook.go	glyph	❌ Webhook endpoint not found (HTTP 404)
+internal/orchestrator/backup_run_helpers.go	word	WARNING: Failed to write backup manifest: %v
+internal/orchestrator/backup_run_helpers.go	word	WARNING: Failed to write backup metadata: %v
+internal/orchestrator/backup_run_phases.go	glyph	✓ Archive created and verified
+internal/orchestrator/extensions.go	glyph	✓ Log copied to cloud: %s
+internal/orchestrator/extensions.go	glyph	✓ Log copied to secondary: %s
+internal/orchestrator/notification_adapter.go	glyph	⚠️ %s: accepted; delivery in progress (auto-retry)
+internal/orchestrator/notification_adapter.go	glyph	⚠️ %s: accepted; delivery not confirmed
+internal/orchestrator/notification_adapter.go	glyph	⚠️ %s: sent via fallback in %v
+internal/orchestrator/notification_adapter.go	glyph	✓ %s: delivered to Telegram
+internal/orchestrator/notification_adapter.go	glyph	✓ %s: notification completed successfully (took %v)
+internal/orchestrator/notification_adapter.go	glyph	✓ %s: sent to ProxSave server (in %v)
+internal/orchestrator/notification_adapter.go	glyph	❌ %s: could not send to ProxSave server
+internal/orchestrator/notification_adapter.go	glyph	❌ %s: could not send to ProxSave server: %v
+internal/orchestrator/notification_adapter.go	glyph	❌ %s: failed: %v
+internal/orchestrator/notification_adapter.go	glyph	❌ %s: not delivered (%s)
+internal/orchestrator/notification_adapter.go	glyph	❌ %s: notification failed
+internal/orchestrator/orchestrator.go	glyph	✓ %s: %s
+internal/orchestrator/orchestrator.go	glyph	✗ %s (%s): %s
+internal/orchestrator/orchestrator.go	glyph	✗ %s: %s
+internal/orchestrator/restore_workflow_ui_apply.go	glyph	⚠ SYSTEM REBOOT RECOMMENDED
+internal/orchestrator/restore_zfs.go	glyph	⚠ IMPORTANT: ZFS pools may need manual import after restor
+internal/orchestrator/storage_adapter.go	glyph	✓ %s operations completed
+internal/orchestrator/storage_adapter.go	glyph	✓ %s: Backup stored successfully
+internal/orchestrator/storage_adapter.go	glyph	✓ %s: Deleted %d old backups
+internal/orchestrator/storage_adapter.go	glyph	✓ %s: Deleted %d old backups%s
+internal/orchestrator/storage_adapter.go	glyph	✗ %s operations completed with warnings
+internal/orchestrator/storage_adapter.go	word	WARNING: %s filesystem detection failed: %v
+internal/orchestrator/storage_adapter.go	word	WARNING: %s operations will be skipped
+internal/orchestrator/storage_adapter.go	word	WARNING: %s retention failed: %v
+internal/orchestrator/storage_adapter.go	word	WARNING: %s store operation failed: %v
+internal/orchestrator/storage_adapter.go	word	WARNING: %s: primary backup saved, but a sidecar file was no
+internal/orchestrator/storage_adapter.go	word	WARNING: Backup was not saved to %s
+internal/storage/cloud.go	word	WARNING: Cloud Storage: Backup not saved to %s
+internal/storage/cloud.go	word	WARNING: Cloud Storage: Failed to upload %s: %v
+internal/storage/cloud.go	word	WARNING: Cloud Storage: skipping sidecar %s: filesystem time
+internal/storage/cloud.go	word	WARNING: Cloud logs - failed to delete %s: %v
+internal/storage/cloud.go	word	WARNING: Cloud logs path %s not found (%s) - skipping cloud 
+internal/storage/cloud.go	word	WARNING: Cloud logs path %s not found - skipping cloud log c
+internal/storage/cloud.go	word	WARNING: Cloud storage - %s archive removed but sidecar clea
+internal/storage/cloud.go	word	WARNING: Cloud storage - backup file not found: %s: %v
+internal/storage/cloud.go	word	WARNING: Cloud storage - failed to delete %s: %v
+internal/storage/cloud.go	word	WARNING: Cloud storage - failed to delete %s: %v: %s
+internal/storage/cloud.go	word	WARNING: Cloud storage - unable to inspect bundle %s: %v
+internal/storage/cloud.go	word	WARNING: Install rclone to enable cloud backups
+internal/storage/cloud.go	word	WARNING: rclone not found in PATH - cloud backup will be ski
+internal/storage/secondary.go	word	WARNING: Cannot create secondary backup directory %s: %v
+internal/storage/secondary.go	word	WARNING: Failed to detect filesystem type for secondary stor
+internal/storage/secondary.go	word	WARNING: Secondary Storage: %d associated file(s) failed to 
+internal/storage/secondary.go	word	WARNING: Secondary Storage: Backup not saved to %s
+internal/storage/secondary.go	word	WARNING: Secondary Storage: Failed to copy associated file %
+internal/storage/secondary.go	word	WARNING: Secondary Storage: File copy failed for %s: %v
+internal/storage/secondary.go	word	WARNING: Secondary backup will be skipped
+internal/storage/secondary.go	word	WARNING: Secondary storage - %s archive removed but sidecar 
+internal/storage/secondary.go	word	WARNING: Secondary storage - backup file not found: %s: %v
+internal/storage/secondary.go	word	WARNING: Secondary storage - failed to create destination di
+internal/storage/secondary.go	word	WARNING: Secondary storage - failed to delete %s: %v
+internal/storage/secondary.go	word	WARNING: Secondary storage - failed to get stats: %v
+internal/storage/secondary.go	word	WARNING: Secondary storage - failed to list backups for rete
+internal/storage/secondary.go	word	WARNING: Secondary storage - failed to list backups: %v
+internal/storage/secondary.go	word	WARNING: Secondary storage - failed to remove %s: %v
+internal/storage/secondary.go	word	WARNING: Secondary storage - failed to set permissions on %s
+internal/storage/secondary.go	word	WARNING: Will attempt to copy files anyway, but ownership ma
+internal/support/support.go	word	ERROR: %v
+internal/support/support.go	word	ERROR: Failed to read input: %v
