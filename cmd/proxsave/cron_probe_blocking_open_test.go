@@ -177,7 +177,10 @@ func TestAfterAStallEveryLaterProxsaveNamedCommandIsStillReported(t *testing.T) 
 
 	select {
 	case refs := <-done:
-		want := fmt.Sprintf("command %q is named after proxsave and could not be read", "proxsave-nas-guard")
+		// And it says WHY it was not read. "could not be read" is true of an unreadable
+		// file and of a command that never answered, and only one of those is something
+		// the operator can go and look at.
+		want := fmt.Sprintf("command %q is named after proxsave and was not read: a command in this crontab stopped answering", "proxsave-nas-guard")
 		if len(refs) != 1 || refs[0].Reason != want {
 			t.Errorf("indirectProxsaveCronRefs after a stall = %+v, want exactly one finding with reason %q", refs, want)
 		}

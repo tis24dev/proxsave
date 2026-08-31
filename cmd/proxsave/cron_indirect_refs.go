@@ -279,6 +279,13 @@ func indirectProxsaveCronRefsWithToken(lines []string, probeScriptContent bool, 
 				reason = fmt.Sprintf("command under ProxSave install tree (%s)", filepath.Dir(token))
 			case cronRunnerNamesProxsave(line, token):
 				reason = fmt.Sprintf("runner %q; cron line references the proxsave binary", filepath.Base(token))
+			case (!probed || !readable) && basenameHasProxsaveComponent(token) && deadline.stalled:
+				// Same finding, with the reason it could not be read. "could not be read"
+				// is true of an unreadable file AND of a command that never answered, and
+				// only one of those is something the operator can go and look at. Once the
+				// deadline has latched, every later line of this crontab is in the second
+				// case and none of them was opened at all.
+				reason = fmt.Sprintf("command %q is named after proxsave and was not read: a command in this crontab stopped answering", filepath.Base(token))
 			case (!probed || !readable) && basenameHasProxsaveComponent(token):
 				reason = fmt.Sprintf("command %q is named after proxsave and could not be read", filepath.Base(token))
 			}
