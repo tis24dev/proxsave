@@ -837,6 +837,26 @@ func hereDocDelimiter(line string) string {
 // path it merely copies: "BIN=/usr/local/bin/proxsave" followed by "$BIN --backup" runs it,
 // while "SRC=/opt/proxsave/" followed by "rsync -a $SRC /mnt/nas/" does not, and the earlier
 // any-word probe could not tell them apart.
+// scriptAssignedExpansion reports the name and value an assigning expansion writes into the
+// script's environment, when that value names the binary. It is the recording half of the
+// ":=" support; the operator table is the expanding half, and the reported wrapper needs
+// both, since it assigns on one line and runs on the next.
+//
+// The value RECORDED is the resolved path and never the raw word, so vars keeps its
+// invariant that everything in it names the binary.
+func scriptAssignedExpansion(word string, vars map[string]string) (name, value string, ok bool) {
+	n, fallback, assigns, parsed := parseScriptExpansionOp(strings.Trim(word, "\"'"))
+	if !parsed || !assigns {
+		return "", "", false
+	}
+	for _, candidate := range scriptWordExpansions(fallback, vars) {
+		if scriptWordRunsProxsave(candidate) {
+			return n, candidate, true
+		}
+	}
+	return "", "", false
+}
+
 func scriptProxsavePathVars(lines []string) map[string]string {
 	vars := map[string]string{}
 	for _, line := range lines {
@@ -848,6 +868,14 @@ func scriptProxsavePathVars(lines []string) map[string]string {
 			for _, word := range strings.Fields(segment) {
 				idx := strings.Index(word, "=")
 				if !looksLikeEnvAssignment(word) {
+					// An assigning expansion is an assignment the shell performs inside a
+					// word, so it never looks like one: ": ${BIN:=/usr/local/bin/proxsave}"
+					// sets BIN for every later line and the word begins with "$". Without
+					// this the operator table alone would expand the word where it stands
+					// and the "$BIN" on the next line would still resolve to nothing.
+					if name, value, ok := scriptAssignedExpansion(word, vars); ok {
+						vars[name] = value
+					}
 					continue
 				}
 				// The RIGHT-HAND SIDE gets the SAME expansion rule as command position, because a
@@ -883,7 +911,40 @@ func scriptProxsavePathVars(lines []string) map[string]string {
 // is a real remaining false negative, left out because every added operator needs its own proof;
 // ":?" and ":+" carry a MESSAGE or an alternative, not the command; "#", "##", "%" and "%%" carry
 // a PATTERN. Treating any of those as a default turns a message into a command.
-var scriptDefaultOperators = []string{":-", "-"}
+type scriptExpansionOperator struct {
+	op      string
+	assigns bool
+}
+
+var scriptDefaultOperators = []scriptExpansionOperator{
+	{op: ":-"},
+	{op: "-"},
+	// ":=" substitutes the operand AND assigns it, so its value is not this word's alone:
+	// every later line of the script sees it. That is the measured #298 gap.
+	{op: ":=", assigns: true},
+	// The colon-less twin. It assigns when the name is UNSET, where ":=" also fires when it
+	// is set-but-empty; the operand is the same PATH either way and this detector cannot
+	// see which state the variable is in at run time, which is exactly why "-" already sits
+	// next to ":-".
+	{op: "=", assigns: true},
+	// NOT added, one reason each. ":?" and "?": the operand is an error MESSAGE printed
+	// before the shell gives up. ":+" and "+": the operand is the ALTERNATIVE used when the
+	// name IS set. "#", "##", "%", "%%": the operand is a pattern to strip. "/", "//":
+	// a pattern plus a replacement, and a leading "/" is indistinguishable from the head of
+	// a path. "^", "^^", ",", ",,": case modification. ":offset:length": arithmetic.
+}
+
+// isShellName reports whether a name can be ASSIGNED to. A positional parameter cannot:
+// bash answers "$1: cannot assign in this way" and dash "1: bad variable name", and the
+// script exits without reaching a command. Expanding such a word would invent a run out of
+// a script that fails on its first line.
+func isShellName(name string) bool {
+	if name == "" {
+		return false
+	}
+	c := name[0]
+	return c == '_' || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
+}
 
 // parseScriptExpansion splits "$NAME", "${NAME}" and "${NAME:-FALLBACK}" into the name and the
 // fallback. ok is false for every other form, and the word is then left exactly as written and
@@ -902,8 +963,16 @@ var scriptDefaultOperators = []string{":-", "-"}
 // expansion is likewise not resolved: evaluating an expansion inside an expansion is one step past
 // recognition, so its fallback keeps the inner braces and matches nothing.
 func parseScriptExpansion(word string) (name, fallback string, ok bool) {
+	name, fallback, _, ok = parseScriptExpansionOp(word)
+	return name, fallback, ok
+}
+
+// parseScriptExpansionOp is parseScriptExpansion with the fourth answer kept: whether the
+// operator ASSIGNS as well as substituting, which is the difference between a value this
+// word alone uses and one every later line of the script sees.
+func parseScriptExpansionOp(word string) (name, fallback string, assigns, ok bool) {
 	if !strings.HasPrefix(word, "$") {
-		return "", "", false
+		return "", "", false, false
 	}
 	body := word[1:]
 	braced := strings.HasPrefix(body, "{")
@@ -922,25 +991,32 @@ func parseScriptExpansion(word string) (name, fallback string, ok bool) {
 	// No name at all ("${:-/usr/local/bin/proxsave}", "${#BIN}"): there is nothing to look up and
 	// nothing that names a command.
 	if end == 0 {
-		return "", "", false
+		return "", "", false, false
 	}
 	name, rest := body[:end], body[end:]
 	if rest == "" {
-		return name, "", true
+		return name, "", false, true
 	}
 	// An operator only exists INSIDE braces. Unbraced, the shell expands the name and appends
 	// whatever follows as literal text, so "$BIN-/usr/local/bin/proxsave" is a name with a suffix
 	// and reading it as a default invented a command out of a word the shell would never run.
 	// What is left is a concatenation, which is refused for the same reason "${BIN}/proxsave" is.
 	if !braced {
-		return "", "", false
+		return "", "", false, false
 	}
 	for _, op := range scriptDefaultOperators {
-		if strings.HasPrefix(rest, op) {
-			return name, rest[len(op):], true
+		if !strings.HasPrefix(rest, op.op) {
+			continue
 		}
+		// The gate belongs HERE and not only where the assignment is recorded: an
+		// assigning form the shell refuses runs nothing at all, in command position as
+		// much as on a right-hand side.
+		if op.assigns && !isShellName(name) {
+			return "", "", false, false
+		}
+		return name, rest[len(op.op):], op.assigns, true
 	}
-	return "", "", false
+	return "", "", false, false
 }
 
 // scriptWordExpansions returns the paths one word could stand for, in the order the script is most

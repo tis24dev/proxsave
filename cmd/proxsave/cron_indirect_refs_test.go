@@ -1677,9 +1677,10 @@ func TestScriptProbeExpandsDefaultValues(t *testing.T) {
 		{"suffix removal", "#!/bin/sh\nBIN=/usr/local/bin/proxsave\n\"${BIN%%-*}\" --backup\n", false},
 		{"an empty default with the name unknown", "#!/bin/sh\n\"${PROXSAVE_BIN:-}\" --backup\n", false},
 		{"no name at all", "#!/bin/sh\n\"${:-/usr/local/bin/proxsave}\" --backup\n", false},
-		// ":=" means ":-" plus an assignment, and it is left out deliberately: every added
-		// operator needs its own proof, and this one was not in scope.
-		{"assign-and-use form", "#!/bin/sh\n\"${PROXSAVE_BIN:=/usr/local/bin/proxsave}\" --backup\n", false},
+		// ":=" means ":-" plus an assignment. It is here now, and its second half - the value
+		// persisting for every later line - is covered by
+		// TestScriptProbeExpandsAnAssigningDefault, together with the shapes a shell refuses.
+		{"assign-and-use form", "#!/bin/sh\n\"${PROXSAVE_BIN:=/usr/local/bin/proxsave}\" --backup\n", true},
 
 		// PRESERVE. These two are true today by the basename rule alone, not by any expansion.
 		// Anyone tightening that rule later must expect THESE rows to move, not the ones above.
