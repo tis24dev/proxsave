@@ -113,7 +113,7 @@ func (s *SecondaryStorage) DetectFilesystem(ctx context.Context) (info *Filesyst
 	fsInfo, err := s.fsDetector.DetectFilesystem(ctx, s.basePath)
 	if err != nil {
 		// Non-critical error - log warning
-		s.logger.Warning("WARNING: Failed to detect filesystem type for secondary storage %s: %v", s.basePath, err)
+		s.logger.Warning("Failed to detect filesystem type for secondary storage: %v", err)
 		s.logger.Warning("WARNING: Will attempt to copy files anyway, but ownership may not be preserved")
 		// Create minimal fsInfo with unknown type
 		fsInfo = &FilesystemInfo{
