@@ -483,33 +483,8 @@ func shellWords(s string) []string {
 	})
 }
 
-// scriptReferencesProxsave reads the cron command as a text file and reports whether
-// it names the proxsave binary BY PATH. It is the last resort for a wrapper whose
-// name gives nothing away, and every gate on it is there to keep it from turning
-// into a general file scan:
-//
-//   - absolute path only (a relative cron command resolves against the crontab
-//     owner's home, which we are not going to guess);
-//   - opened through safefs.OpenFileUnderRoot, so the operator-controlled path is
-//     confined at the syscall level exactly like every other operator path this
-//     command reads;
-//   - regular file, at most maxCronWrapperProbeBytes, and no NUL byte, which drops
-//     compiled binaries (every stock /usr/bin/* cron command) before the scan;
-//   - only PATH-shaped words count. A wrapper invoked by cron must call the binary
-//     by absolute path anyway, because cron's default PATH is /usr/bin:/bin and the
-//     entry point lives in /usr/local/bin, so requiring a "/" costs no real
-//     detection while keeping a prose mention of "proxsave" in a comment from
-//     blocking an upgrade.
-//
-// Any failure (unreadable, too large, binary) returns false: see the false-negative
-// note on indirectProxsaveCronRefs for why "cannot tell" must not mean "suspicious".
-func scriptReferencesProxsave(token string) bool {
-	references, _ := scriptProxsaveProbe(newCronProbeDeadline(), token)
-	return references
-}
-
-// scriptProxsaveProbe is scriptReferencesProxsave with the third answer kept. It returns
-// whether the script names the binary AND whether it could be read at all, because those
+// scriptProxsaveProbe reads the cron command as a text file and reports TWO things:
+// whether the script names the binary, and whether it could be read at all. Those
 // are different facts and the name rule depends on telling them apart: a script we READ and
 // found nothing in is evidence of absence, while one we could not open says nothing either
 // way. Collapsing both into false is what made "proxsave-metrics-exporter" indistinguishable
@@ -592,6 +567,26 @@ type cronProbeVerdict struct {
 
 // scanScriptForProxsaveRefs is the filesystem half of the probe: everything that can
 // touch a disk lives here, so the deadline above has exactly one thing to bound.
+//
+// It is the last resort for a wrapper whose NAME gives nothing away, and every gate on it
+// is there to keep it from turning into a general file scan:
+//
+//   - opened through safefs.OpenFileUnderRoot, so the operator-controlled path is confined
+//     at the syscall level exactly like every other operator path this command reads;
+//   - regular file, at most maxCronWrapperProbeBytes, and no NUL byte, which drops compiled
+//     binaries (every stock /usr/bin/* cron command) before the scan;
+//   - only PATH-shaped words count, which scriptWordRunsProxsave enforces. A wrapper
+//     invoked by cron must call the binary by absolute path anyway, because cron's default
+//     PATH is /usr/bin:/bin and the entry point lives in /usr/local/bin, so requiring a "/"
+//     costs no real detection while keeping a prose mention of "proxsave" in a comment from
+//     blocking an upgrade.
+//
+// The absolute-path gate is the fourth and sits in scriptProxsaveProbe, because it is
+// lexical and must cost no goroutine.
+//
+// Any failure (unreadable, too large, binary) returns false for BOTH answers: see the
+// false-negative note on indirectProxsaveCronRefs for why "cannot tell" must not mean
+// "suspicious".
 //
 // O_NONBLOCK is what makes the open answerable at all. Without it, open(2) on a fifo
 // with no writer waits for a writer forever; with it the open returns at once and the
