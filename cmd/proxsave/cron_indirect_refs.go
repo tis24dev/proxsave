@@ -66,9 +66,13 @@ const (
 	// line that points at a large binary from being slurped into memory during an
 	// upgrade. It bounds the READ, not the open. The open is bounded separately: by
 	// O_NONBLOCK for a fifo or device node, and by cronProbeTimeout for everything else.
-	// The helpers that read /etc still have no such bound (systemCronFileRefs' os.Stat and
-	// safefs.ReadFileUnderRoot, resolveSystemCronPath's EvalSymlinks), so a cron.d entry
-	// symlinked into a dead mount can still stall before any of this runs.
+	// The helpers that read /etc answer to cronProbeTimeout too, through cronDeadlineValue:
+	// a system-crontab file's stat, symlink resolution and read are ONE bounded step, and a
+	// run-parts entry's stat-through-the-symlink and resolution are another, so a cron.d
+	// entry symlinked into a dead mount costs the walk one timeout instead of stalling it
+	// before any of this runs. What is still unbounded is the walk's own stat and readdir of
+	// the six habitats themselves: their paths are the compile-time constants of
+	// systemCronPaths, which carries no operator-supplied component.
 	maxCronWrapperProbeBytes = 64 * 1024
 
 	// maxCronWrapperProbesPerLine bounds how many words of ONE cron line the content probe may
@@ -88,7 +92,8 @@ const (
 	maxCronWrapperProbesPerLine = 8
 )
 
-// cronProbeTimeout bounds the WALL CLOCK one content probe may spend in the filesystem.
+// cronProbeTimeout bounds the WALL CLOCK one filesystem STEP may spend: a content probe, a
+// system-crontab file's stat-resolve-read, or a run-parts entry's stat through its symlink.
 // It is the third bound in this file and the only one that answers "how long":
 // maxCronWrapperProbeBytes bounds a read and maxCronWrapperProbesPerLine bounds a count,
 // and a count is no bound at all when a single open never returns.
@@ -104,9 +109,23 @@ const (
 // detectIndirectProxsaveCron, so runUpgrade, runInstall, upgradeFinalizePhase and
 // runInstallTUI stop with it, in the CLI and in the TUI alike, having printed nothing.
 //
-// A var so a test can shrink it. Five seconds is five orders of magnitude above what a
-// real probe costs, so a merely slow host is never cut off, and it is what a host with a
-// dead mount named on a cron line pays once per crontab rather than forever.
+// A var so a test can shrink it. Five seconds is five orders of magnitude above what a real
+// probe costs, so a merely slow host is never cut off.
+//
+// What it costs is worth stating exactly rather than roughly, because a deadline that
+// latches invites the reader to assume one timeout in total, and there is more than one
+// deadline. There is one per CONTENT-probe scope - the user crontab, each /etc file whose
+// lines are probed, and each run-parts directory - plus one for the /etc WALK, shared by
+// every habitat in it. Measured on a host whose cron commands all name a dead mount, with a
+// user crontab, /etc/crontab, three /etc/cron.d files and the four run-parts directories:
+// nine timeouts, so forty-five seconds at this value, and the same nine before this bound
+// existed except that there they never ended. It is bounded and finite, not singular.
+//
+// It is deliberately not FS_IO_TIMEOUT. That variable is operator-facing and its backup.env
+// description names preflight, log, storage, cloud and restore; threading it down four
+// functions for this detector would widen a documented scope to cover a hang guard the
+// operator has no reason to tune. This is not an I/O budget, it is the line between "slow"
+// and "never", and the measured healthy walk sits four orders of magnitude below it.
 var cronProbeTimeout = 5 * time.Second
 
 // indirectCronRef is one crontab line that appears to run ProxSave WITHOUT its
@@ -507,16 +526,25 @@ func scriptProxsaveProbe(deadline *cronProbeDeadline, token string) (references 
 	return deadline.probe(path)
 }
 
-// cronProbeDeadline is the time bound for ONE crontab, carried from probe to probe by the
-// caller that reads it. It is passed rather than kept in a package var because it is
-// per-RUN state: the install screen runs one detection after another, and the second must
-// start clean.
+// cronProbeDeadline is the time bound for ONE SET OF PATHS: the commands named in one
+// crontab, or the /etc tree one walk of systemCronPaths reads. It is carried from step to
+// step by the caller that reads them, and passed rather than kept in a package var because
+// it is per-RUN state: the install screen runs one detection after another, and the second
+// must start clean.
 //
-// It LATCHES. maxCronWrapperProbesPerLine allows eight opens on a single line, so a
-// deadline that fired per probe would turn one dead mount into eight timeouts on the
-// first line and eight more on every line after it. Once one probe has run out of time,
-// every later probe of that crontab answers "could not tell" without touching the
-// filesystem at all.
+// It LATCHES. maxCronWrapperProbesPerLine allows eight opens on a single line, so a deadline
+// that fired per probe would turn one dead mount into eight timeouts on the first line and
+// eight more on every line after it; /etc/cron.d holds as many entries as an operator puts
+// there, so per entry there is no bound at all. Once one step has run out of time, every
+// later step under that deadline answers "could not tell" without touching the filesystem.
+//
+// A deadline covers ONE set of paths and never everything a run touches, and that is why the
+// /etc walk holds two rather than one. It spends its whole budget on the first thing that
+// stalls, so anything sharing it goes blind: measured, a walk that shared its deadline with
+// the content probes lost the literal `proxsave --backup` line in /etc/cron.d - one finding
+// before, none after - because a wrapper on a dead mount named by a cron line had already
+// spent it. A mount behind a COMMAND says nothing about whether /etc still answers. See
+// runPartsCronRefs, which holds one of each.
 type cronProbeDeadline struct {
 	stalled bool
 }
@@ -530,51 +558,86 @@ var cronProbeScanFn = scanScriptForProxsaveRefs
 // probe runs the scan under the deadline and reports the scan's two answers, or the pair
 // that means "could not tell" when the scan ran out of time or an earlier one already did.
 func (d *cronProbeDeadline) probe(path string) (references bool, readable bool) {
+	// Read on the CALLER's goroutine, so a test restoring the seam in t.Cleanup can never
+	// race the scan it started. It must stay OUT of the closure below for that reason.
+	scan := cronProbeScanFn
+	// The zero cronProbeVerdict IS the "could not tell" pair, so the step that ran out of
+	// time and the scan that answered false need nothing translated between them, and this
+	// function needs no branch on which of the two happened.
+	got, _ := cronDeadlineValue(d, func() cronProbeVerdict {
+		refs, read := scan(path)
+		return cronProbeVerdict{references: refs, readable: read}
+	})
+	return got.references, got.readable
+}
+
+// cronDeadlineValue runs ONE filesystem step under d and reports whether it answered in
+// time, or refuses without a syscall when an earlier step of the same walk already ran out.
+// It is the single place in this file that decides how long anything may wait.
+//
+// A FREE FUNCTION and not a method on cronProbeDeadline, and not by preference: a method
+// may not have type parameters ("syntax error: method must have no type parameters",
+// measured), and the steps here answer with three different types - the probe's verdict, a
+// system-crontab file's bytes, and what one look at a run-parts entry found. Three typed
+// helpers would be three copies of the latch and three chances for them to disagree.
+//
+// The waiting itself is probeWithin's, which already carries exactly this contract: the
+// value comes back over a BUFFERED channel so a straggler can never park on a send nobody
+// will receive, the timer is a NewTimer that is stopped so a step answering in microseconds
+// leaves no five-second timer alive behind it, and a worker that misses the deadline is
+// ABANDONED, not cancelled. Writing that out a second time here would put two answers to
+// "how does this file wait" in one binary.
+//
+// Two rules bind every caller, and both come from the abandonment:
+//
+//   - work must RETURN everything it computed and assign to nothing the caller captured.
+//     The worker outlives the timeout, so an assignment into a captured variable is a write
+//     racing a caller that already walked away. Returning makes that impossible by
+//     construction instead of by review.
+//   - work must be a LEAF: it may touch the filesystem and must not open a step of its own.
+//     d.stalled is written HERE, on the caller's goroutine, which is why the latch needs no
+//     lock; a step nested inside another step's worker would write it from the worker.
+func cronDeadlineValue[T any](d *cronProbeDeadline, work func() T) (result T, answered bool) {
 	if d == nil {
 		// A nil deadline means a caller that has not got one, never "no limit".
 		d = newCronProbeDeadline()
 	}
 	if d.stalled {
-		return false, false
+		var zero T
+		return zero, false
 	}
-	// Read on the CALLER's goroutine, so a test restoring the seam in t.Cleanup can never
-	// race the scan it started.
-	scan := cronProbeScanFn
-	// Buffered, so a scan abandoned at the deadline can still finish and be collected
-	// instead of parking on a send nobody will ever receive.
-	done := make(chan cronProbeVerdict, 1)
-	go func() {
-		refs, read := scan(path)
-		done <- cronProbeVerdict{references: refs, readable: read}
-	}()
-	// NewTimer and Stop, never time.After: a probe that answers in microseconds must not
-	// leave a five-second timer alive behind it.
-	timer := time.NewTimer(cronProbeTimeout)
-	defer timer.Stop()
-	select {
-	case got := <-done:
-		// A probe that ANSWERS costs the deadline nothing, however long it took. A merely
-		// slow host therefore keeps every detection it has today; only a real timeout
-		// changes what the rest of the crontab is allowed to do.
-		return got.references, got.readable
-	case <-timer.C:
+	got, ok := probeWithin(cronProbeTimeout, work)
+	if !ok {
 		d.stalled = true
-		return false, false
 	}
+	// A step that ANSWERS costs the deadline nothing, however long it took. A merely slow
+	// host therefore keeps every detection it has today; only a real timeout changes what
+	// the rest of the crontab, or of the walk, is allowed to do.
+	return got, ok
 }
 
 // cronProbeVerdict carries the scan's pair of answers off the goroutine it ran on. The
 // goroutine is ABANDONED on timeout and holds one OS thread until the kernel returns from
 // the syscall, which on a hard mount can be never: a syscall already in flight cannot be
 // cancelled from Go, and any design that waits for it is the hang being removed here. The
-// latch is what bounds that cost to one abandoned goroutine per crontab, so do not "fix"
-// this by waiting for the worker.
+// latch is what bounds that cost to one abandoned goroutine per DEADLINE, so do not "fix"
+// this by waiting for the worker. Every bounded step in this file carries its answer off the
+// same way, through the value cronDeadlineValue returns and never through a variable the
+// caller captured.
 type cronProbeVerdict struct {
 	references, readable bool
 }
 
-// scanScriptForProxsaveRefs is the filesystem half of the probe: everything that can
-// touch a disk lives here, so the deadline above has exactly one thing to bound.
+// scanScriptForProxsaveRefs is the filesystem half of the probe: everything that can touch a
+// disk on the way to reading a wrapper lives here, so the deadline above has exactly one
+// thing to bound.
+//
+// That is also why resolveSystemCronPath is called here directly and not through a bounded
+// step of its own: this function already IS the body of one, and a step opened inside
+// another step's worker writes cronProbeDeadline.stalled from that worker while the caller
+// reads it - measured, "WARNING: DATA RACE" on the latch write against the latch read. The
+// /etc walk bounds the same helper at its own call sites, where it runs on the caller's
+// goroutine and no such nesting exists.
 //
 // It is the last resort for a wrapper whose NAME gives nothing away, and every gate on it
 // is there to keep it from turning into a general file scan:
@@ -1609,30 +1672,69 @@ func runPartsVisibleTo(mode systemCronScan) bool {
 // and reporting it would refuse a migration over a schedule that does not exist.
 //
 // Every failure is silent, like the rest of this file.
-func runPartsCronRefs(dir string) []indirectCronRef {
+func runPartsCronRefs(walk *cronProbeDeadline, dir string) []indirectCronRef {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return nil
 	}
-	// One deadline for this directory, for the same reason the crontab walk has one.
-	deadline := newCronProbeDeadline()
+	// TWO deadlines are in scope here and they are deliberately not the same one. `walk` is
+	// the whole /etc walk's and bounds this walk's OWN filesystem, the entry step below;
+	// `probes` is this directory's and bounds the CONTENT probes, whose paths come out of
+	// the scripts. Sharing them would let a wrapper on a dead mount - which says nothing
+	// about whether /etc still answers - latch the walk and take every habitat after this
+	// one with it, including a literal `proxsave --backup` line in /etc/cron.d.
+	probes := newCronProbeDeadline()
+	// Read on the CALLER's goroutine, for the reason probe reads cronProbeScanFn there: a
+	// test restoring the seam in t.Cleanup must never race a step it walked away from.
+	stat := cronEntryStatFn
 	var refs []indirectCronRef
 	for _, entry := range entries {
 		if !runPartsNameIsActive(entry.Name()) {
 			continue
 		}
 		path := filepath.Join(dir, entry.Name())
-		// os.Stat and not entry.Info(): it FOLLOWS the symlink, exactly as run-parts' own
-		// stat does, so a link into an install tree is judged by what it points at.
-		info, err := os.Stat(path)
-		if err != nil || !info.Mode().IsRegular() || info.Mode().Perm()&0o111 == 0 {
+		facts, answered := cronDeadlineValue(walk, func() runPartsEntry { return statRunPartsEntry(stat, path) })
+		// `answered` first, though the zero runPartsEntry would already fail the second
+		// test: the day this step is rewritten to answer through a capture, the order is
+		// what keeps the caller from reading what an abandoned worker is still writing.
+		if !answered || !facts.active {
 			continue
 		}
-		if ref, ok := runPartsScriptRef(deadline, path, dir); ok {
+		if ref, ok := runPartsScriptRef(probes, path, facts.resolved, dir); ok {
 			refs = append(refs, ref)
 		}
 	}
 	return refs
+}
+
+// runPartsEntry is what one bounded look at a run-parts entry answers: whether run-parts
+// would execute it, and the path its symlink chain ends at. Both come from the same step
+// because both walk the same chain, and the caller needs them together or not at all.
+type runPartsEntry struct {
+	active   bool
+	resolved string
+}
+
+// statRunPartsEntry is the filesystem half of one run-parts entry: the stat that follows
+// the symlink, the two gates on it, and the resolution of the chain, in that order with
+// no branch between them, so a deadline has exactly one thing to bound. The zero value
+// means "not an entry run-parts would execute", which is what a stat error, a directory
+// and a non-executable file already meant to the caller.
+func statRunPartsEntry(stat func(string) (os.FileInfo, error), path string) runPartsEntry {
+	// os.Stat and not entry.Info(): it FOLLOWS the symlink, exactly as run-parts' own
+	// stat does, so a link into an install tree is judged by what it points at.
+	info, err := stat(path)
+	if err != nil || !info.Mode().IsRegular() || info.Mode().Perm()&0o111 == 0 {
+		return runPartsEntry{}
+	}
+	// Resolved HERE and not in runPartsScriptRef, where it used to be. That is not about the
+	// syscall COUNT: the probe resolves the same chain again on its own worker, and strace
+	// shows two complete lstat/readlink/stat walks per entry before this change and two
+	// after. It is about WHERE the second one runs. In runPartsScriptRef it sat on the
+	// caller's goroutine, after the probe had answered and inside no deadline at all, so a
+	// mount that went quiet between the two walks wedged the whole walk there. Here it is
+	// inside the step the entry stat already pays for.
+	return runPartsEntry{active: true, resolved: resolveSystemCronPath(path)}
 }
 
 // runPartsScriptRef applies rules 1, 2 and 4 of indirectProxsaveCronRefs to one script, in
@@ -1647,13 +1749,16 @@ func runPartsCronRefs(dir string) []indirectCronRef {
 // component called "proxsave"; it fires on a symlink into a ProxSave install root, which is
 // what keeps the pre-0.30 Bash entry point visible when it was linked rather than copied,
 // since that script does not name the binary and rule 2 is the only rule that can see it.
+// That path is passed IN rather than resolved here, because it comes out of the same bounded
+// step that decided the entry is one run-parts would execute. Resolving it here walked the
+// symlink chain on the caller's goroutine, after the probe had already answered, and that
+// walk was inside no deadline at all - the last unbounded filesystem call the /etc walk had.
 //
 // Every reason opens by saying what the finding IS. The renderer prints Line, which here is
 // a path and not a schedule, and this is the only place the operator learns why no time is
 // shown.
-func runPartsScriptRef(deadline *cronProbeDeadline, path, dir string) (indirectCronRef, bool) {
+func runPartsScriptRef(deadline *cronProbeDeadline, path, resolved, dir string) (indirectCronRef, bool) {
 	references, readable := scriptProxsaveProbe(deadline, path)
-	resolved := resolveSystemCronPath(path)
 	reason := ""
 	switch {
 	case references:
@@ -1707,6 +1812,24 @@ const (
 
 func systemCronRefs(mode systemCronScan) []indirectCronRef {
 	var refs []indirectCronRef
+	// ONE deadline for the WHOLE walk, shared by every habitat in it, so a host with a
+	// mount that stopped answering pays cronProbeTimeout once for all six together. One
+	// per habitat would cost six; one per entry would be no bound at all, since /etc/cron.d
+	// holds as many entries as an operator puts there and a count is not a bound.
+	//
+	// It bounds this walk's own filesystem and nothing else. The content probes below keep
+	// their own per-file and per-directory deadlines: see runPartsCronRefs.
+	//
+	// The os.Stat and os.ReadDir of the habitats themselves are deliberately NOT bounded.
+	// Their paths are the six compile-time constants of systemCronPaths, which carries no
+	// operator-supplied component - nothing outside a test writes that slice - so no cron
+	// line and no entry name can steer them. One shape is left open on purpose and is worth
+	// naming, so the next reader does not take it for an oversight: a host that symlinked
+	// /etc/cron.d ITSELF into a mount that stopped answering would still stall here, since
+	// os.Stat follows that link too (measured). That is /etc and not an entry, it is not the
+	// shape a config-management tool produces, and bounding what operator input cannot reach
+	// is churn - which in this file is how five review rounds each found a new defect.
+	walk := newCronProbeDeadline()
 	for _, path := range systemCronPaths {
 		info, err := os.Stat(path)
 		if err != nil {
@@ -1721,12 +1844,12 @@ func systemCronRefs(mode systemCronScan) []indirectCronRef {
 		// same reason rather than parsed.
 		if isRunPartsCronDir(path) {
 			if info.IsDir() && runPartsVisibleTo(mode) {
-				refs = append(refs, runPartsCronRefs(path)...)
+				refs = append(refs, runPartsCronRefs(walk, path)...)
 			}
 			continue
 		}
 		if !info.IsDir() {
-			refs = append(refs, systemCronFileRefs(path, mode)...)
+			refs = append(refs, systemCronFileRefs(walk, path, mode)...)
 			continue
 		}
 		entries, err := os.ReadDir(path)
@@ -1737,7 +1860,7 @@ func systemCronRefs(mode systemCronScan) []indirectCronRef {
 			if entry.IsDir() || !cronDNameIsActive(entry.Name()) {
 				continue
 			}
-			refs = append(refs, systemCronFileRefs(filepath.Join(path, entry.Name()), mode)...)
+			refs = append(refs, systemCronFileRefs(walk, filepath.Join(path, entry.Name()), mode)...)
 		}
 	}
 	return refs
@@ -1826,15 +1949,18 @@ func cronDNameIsActive(name string) bool {
 // The file is read ONCE for both rule sets. Two reads would be two chances to disagree
 // about a file another process may be editing, and a revert that reported a line from one
 // snapshot and a reason from another would be worse than either.
-func systemCronFileRefs(path string, mode systemCronScan) []indirectCronRef {
-	info, err := os.Stat(path)
-	if err != nil || !info.Mode().IsRegular() || info.Size() > maxCronWrapperProbeBytes {
-		return nil
-	}
-	data, err := safefs.ReadFileUnderRoot(resolveSystemCronPath(path))
-	if err != nil || bytes.IndexByte(data, 0) >= 0 {
-		return nil
-	}
+func systemCronFileRefs(walk *cronProbeDeadline, path string, mode systemCronScan) []indirectCronRef {
+	// Read on the CALLER's goroutine: see runPartsCronRefs.
+	stat := cronEntryStatFn
+	// ONE bounded step for the stat, the symlink resolution and the read together, because
+	// all three walk the same operator-controlled path and only the last of them is the one
+	// a network mount really wedges: a stat can be answered from an attribute cache while
+	// the open behind it still has to reach the server. Bounding the stat alone would have
+	// left that open outside the deadline.
+	//
+	// A step that ran out of time answers nil, which is what an unreadable file already
+	// answered, and the guard below already turned that into no findings.
+	data, _ := cronDeadlineValue(walk, func() []byte { return readSystemCronFile(stat, path) })
 	normalized := strings.ReplaceAll(string(data), "\r\n", "\n")
 	if strings.TrimSpace(normalized) == "" {
 		return nil
@@ -1856,6 +1982,32 @@ func systemCronFileRefs(path string, mode systemCronScan) []indirectCronRef {
 	}
 	return refs
 }
+
+// readSystemCronFile is the filesystem half of systemCronFileRefs: the stat that follows a
+// symlinked entry, the two gates on it, the resolution of the chain and the read, in that
+// order with no branch between them, so a deadline has exactly one thing to bound.
+//
+// nil means "nothing to parse". That is not a new answer: an unreadable file, an entry
+// that is not a small regular file and a file with a NUL byte in it all reached the same
+// `return nil` before, and the caller's TrimSpace guard already turned an empty read into
+// no findings. So the helper needs no second "did it work" result.
+func readSystemCronFile(stat func(string) (os.FileInfo, error), path string) []byte {
+	info, err := stat(path)
+	if err != nil || !info.Mode().IsRegular() || info.Size() > maxCronWrapperProbeBytes {
+		return nil
+	}
+	data, err := safefs.ReadFileUnderRoot(resolveSystemCronPath(path))
+	if err != nil || bytes.IndexByte(data, 0) >= 0 {
+		return nil
+	}
+	return data
+}
+
+// cronEntryStatFn is the seam a test swaps to stand in for the stat of one ENTRY: the
+// first syscall of BOTH bounded steps of the /etc walk, and the only one a test can make
+// block, since every other call either follows it or is gated on what it answered.
+// Nothing but a test writes it.
+var cronEntryStatFn = os.Stat
 
 // resolveSystemCronPath returns the path systemCronFileRefs should actually open, which
 // is not always the one it was handed: a symlinked /etc/cron.d entry has to be resolved
