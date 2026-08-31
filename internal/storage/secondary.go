@@ -99,7 +99,7 @@ func (s *SecondaryStorage) DetectFilesystem(ctx context.Context) (info *Filesyst
 	if err := safefs.MkdirAll(ctx, s.basePath, 0700, fsIoTimeout(s.config)); err != nil {
 		// Non-critical error - log warning and return
 		s.logger.Warning("Cannot create secondary backup directory %s: %v", s.basePath, err)
-		s.logger.Warning("WARNING: Secondary backup will be skipped")
+		s.logger.Warning("Secondary backup will be skipped")
 		return nil, &StorageError{
 			Location:    LocationSecondary,
 			Operation:   "detect_filesystem",
