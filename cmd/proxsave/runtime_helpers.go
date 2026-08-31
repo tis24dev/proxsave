@@ -974,8 +974,12 @@ func repointLegacyCronLines(lines []string) ([]string, bool) {
 	changed := false
 	for i, line := range lines {
 		if strings.Trim(cronCommandToken(line), "\"'") == legacy {
-			// cronCommandToken already excluded comments/env lines, and a schedule field
+			// cronCommandToken already excluded comments and env LINES, and a schedule field
 			// is never a path, so the command is the first occurrence of legacy on the line.
+			// A leading assignment does not change that: either it is stepped over and the
+			// command still holds the first occurrence, or the assignment IS the answer
+			// because its value names the binary, and then the value is what must be
+			// repointed anyway.
 			out[i] = strings.Replace(line, legacy, canonical, 1)
 			changed = true
 			continue
@@ -1070,7 +1074,7 @@ func cronCommandToken(line string) string {
 
 	if strings.HasPrefix(first, "@") {
 		if len(fields) >= 2 {
-			return fields[1]
+			return cronCommandWord(fields[1:])
 		}
 		return ""
 	}
@@ -1078,7 +1082,76 @@ func cronCommandToken(line string) string {
 	if len(fields) <= 5 {
 		return ""
 	}
-	return fields[5]
+	return cronCommandWord(fields[5:])
+}
+
+// cronCommandWord picks the token to judge out of the words that follow the schedule.
+// cron accepts VAR=value in front of a job's command, and an operator writes one there
+// more often than it looks: cron does not read /etc/timezone, so "TZ=" in front of a
+// backup job is the ordinary way to pin its hour. Without this the whole line was
+// invisible - to the detector, to the removal, and to the schedule adoption alike.
+//
+// It is deliberately ADDITIVE, because four of this function's callers WRITE the root
+// crontab and a token invented here is a line ProxSave deletes. Every line that answers
+// something today keeps answering exactly that; the only new answers are for lines whose
+// real COMMAND is the one we were looking for:
+//
+//   - the first word is not an assignment: unchanged, it is the command;
+//   - the first word is an assignment whose value names the binary
+//     ("BIN=/usr/local/bin/proxsave $BIN --backup"): kept as the answer. That line really
+//     does run ProxSave and is removed as ours today; reporting "$BIN" instead would
+//     leave it in place and add a second entry beside it, which is #298 itself;
+//   - otherwise the assignments are stepped over and the command behind them answers.
+//
+// The step-over stops at the first assignment this parser cannot lex whole, and the line
+// then answers what it answers today. strings.Fields splits on the space inside
+// "MSG=hello\ proxsave /usr/bin/rsync", so the word after the assignment is the second
+// half of a VALUE and not a command at all: promoting it would name that job "proxsave"
+// and delete an operator's rsync entry.
+func cronCommandWord(words []string) string {
+	if !looksLikeEnvAssignment(words[0]) {
+		return words[0]
+	}
+	if commandTokenMatchesTarget(words[0]) {
+		return words[0]
+	}
+	i := 0
+	for i < len(words) && looksLikeEnvAssignment(words[i]) {
+		if !cronAssignmentIsWhole(words[i]) {
+			return words[0]
+		}
+		i++
+	}
+	if i == len(words) {
+		// Assignments and nothing else. cron would run no command, and there is no word
+		// here that is one.
+		return words[0]
+	}
+	return words[i]
+}
+
+// cronAssignmentIsWhole reports whether an assignment word carries its whole value, so
+// the word after it is the next WORD of the line rather than the rest of that value.
+// It answers no for the two ways a value reaches past a space: a trailing backslash
+// escaping it, and a quote left open. Nothing here interprets the value - the question is
+// only whether the line can be split at all.
+func cronAssignmentIsWhole(word string) bool {
+	inSingle, inDouble, escaped := false, false, false
+	for _, r := range word {
+		if escaped {
+			escaped = false
+			continue
+		}
+		switch {
+		case r == '\\' && !inSingle:
+			escaped = true
+		case r == '\'' && !inDouble:
+			inSingle = !inSingle
+		case r == '"' && !inSingle:
+			inDouble = !inDouble
+		}
+	}
+	return !escaped && !inSingle && !inDouble
 }
 
 func looksLikeEnvAssignment(token string) bool {
