@@ -87,6 +87,7 @@ var notes = []Note{
 			"That detection also reads /etc/crontab, /etc/cron.d and the /etc/cron.hourly, .daily, .weekly and .monthly directories",
 			"Turning the daemon off always restores a working cron entry, and reports any entry it could not remove",
 			"SCHEDULER_MODE alone decides the engine; an upgrade leaves a recorded engine as it stands and DAEMON_OPT_OUT is gone",
+			"install.sh accepts --upgrade, so the new binary finalizes the upgrade instead of the one being replaced",
 		},
 		Actions: []string{
 			"If an upgrade reports a cron wrapper of yours, remove the duplicate schedule from your crontab and upgrade again",
