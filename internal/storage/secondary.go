@@ -398,7 +398,7 @@ func (s *SecondaryStorage) List(ctx context.Context) (backups []*types.BackupMet
 			return filepath.Glob(pattern)
 		})
 		if err != nil {
-			s.logger.Warning("WARNING: Secondary storage - failed to list backups: %v", err)
+			s.logger.Warning("Secondary storage - failed to list backups: %v", err)
 			return nil, &StorageError{
 				Location:    LocationSecondary,
 				Operation:   "list",
