@@ -1514,6 +1514,67 @@ func TestCronRunnerProbeIsBounded(t *testing.T) {
 	}
 }
 
+// cronCommandRunners is the gate that decides which cron lines get their TAIL read, so widening it
+// widens what an unattended --upgrade opens and refuses on. The set is admissible precisely
+// because a runner's job is to hand execution to the command after it: everything before that
+// command is an option or an operand, never a path the line merely names.
+//
+// A command that takes PATHS as arguments is the opposite, and admitting one turns argument paths
+// into command positions - "cp /usr/local/bin/proxsave /backup/" is the documented case the whole
+// command-position rule exists to keep unflagged. These are the commands an operator most often
+// puts in a crontab, so this pins them out by name rather than trusting that nobody will add one.
+func TestCronCommandRunnersExcludesPathTakingCommands(t *testing.T) {
+	for _, name := range []string{
+		"cp", "mv", "rm", "ln", "dd", "tar", "rsync", "find", "cat", "tail", "head",
+		"logrotate", "curl", "wget", "zfs", "pvesm", "vzdump", "proxmox-backup-client",
+	} {
+		if _, isRunner := cronCommandRunners[name]; isRunner {
+			t.Errorf("%q takes paths as arguments, so admitting it as a runner makes the probe open files the line only names, and reports a data file as a script that calls the binary", name)
+		}
+	}
+	// The counterweight: the set is not empty by accident either. These four are what the runner
+	// rule exists for, and losing one of them loses the wrapper behind it.
+	for _, name := range []string{"flock", "sudo", "sh", "timeout"} {
+		if _, isRunner := cronCommandRunners[name]; !isRunner {
+			t.Errorf("%q hands execution to the command after it and must stay a runner: without it a wrapper behind it is never read", name)
+		}
+	}
+}
+
+// visit has to STOP at the first word it accepts, and that is not a style preference: the caller
+// behind cronRunnerWrappedScript OPENS every word it is handed, so an eager walk reads files the
+// line already answered for. The documented reason is the cost; the observable consequence is the
+// reason string, which names whichever match the walk ended on.
+//
+// A line with two wrappers is the only shape that can tell the two apart: both are found either
+// way, so the verdict proves nothing and only the NAME does.
+func TestCronRunnerProbeStopsAtTheFirstMatch(t *testing.T) {
+	dir := t.TempDir()
+	write := func(name string) string {
+		t.Helper()
+		p := filepath.Join(dir, name)
+		if err := os.WriteFile(p, []byte("#!/bin/sh\nexec /usr/local/bin/proxsave --backup\n"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	first, second := write("nas-guard"), write("pbs-guard")
+	flock := filepath.Join(dir, "flock") // absent, like the compiled runner it stands for
+	lock := filepath.Join(dir, "nightly.lock")
+
+	line := "0 2 * * * " + flock + " -n " + lock + " " + first + " ; " + second
+	refs := indirectProxsaveCronRefs([]string{line}, cronProbeReadScripts)
+	if len(refs) != 1 {
+		t.Fatalf("the line runs the binary, so it must be reported once, got %+v", refs)
+	}
+	if !strings.Contains(refs[0].Reason, first) {
+		t.Errorf("the reason must name the first match, got %q", refs[0].Reason)
+	}
+	if strings.Contains(refs[0].Reason, second) {
+		t.Errorf("the walk read past its own answer and ended on the second match, got %q", refs[0].Reason)
+	}
+}
+
 // The lexical path must stay lexical. deriveSchedulerTimeFromCrontab runs inside the install
 // wizard and inside --upgrade-config-json, whose stdout must stay pure JSON, so cronProbeNamesOnly
 // may not open anything - the runner rule included. Not flagging a wrapper that exists and does

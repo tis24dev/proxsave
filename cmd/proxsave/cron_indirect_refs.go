@@ -71,10 +71,13 @@ const (
 	// already pays. The arithmetic: the shapes an operator actually writes (flock/sh/nice/
 	// timeout/sudo in front of a wrapper) cost exactly one extra open, the deepest plausible
 	// nesting (ionice, then nice, then flock, then timeout, then the wrapper) costs four, so
-	// eight only bites on a line with more than eight command positions - a line nobody writes
-	// by hand. It bounds the OPENS, not the walk: past the cap the line is still parsed, just
-	// never read. The budget is per LINE, matching maxCronWrapperProbeBytes being per file, so
-	// a crontab with N runner lines can pay up to 8N.
+	// eight only bites on a line with more than eight command positions BEHIND THE TOKEN, i.e.
+	// more than nine on the line - one nobody writes by hand. The token is not counted here
+	// because the caller already paid for it, which is the off-by-one this sentence used to
+	// carry: TestCronRunnerProbeIsBounded chains eight names behind the token and is found,
+	// nine and is not. It bounds the OPENS, not the walk: past the cap the line is still parsed,
+	// just never read. The budget is per LINE, matching maxCronWrapperProbeBytes being per file,
+	// so a crontab with N runner lines can pay up to 8N.
 	maxCronWrapperProbesPerLine = 8
 )
 
@@ -742,8 +745,13 @@ func scriptProxsavePathVars(lines []string) map[string]string {
 }
 
 // scriptDefaultOperators are the expansion operators whose operand is a PATH the shell may end up
-// running: "${NAME:-/usr/local/bin/proxsave}" and its colon-less twin. Order matters - ":-" is
-// tried first, or the bare "-" claims the colon form's operand and the name reads as "NAME:".
+// running: "${NAME:-/usr/local/bin/proxsave}" and its colon-less twin.
+//
+// The order of the two is IMMATERIAL, and saying so is worth a line because the obvious worry is
+// that the bare "-" claims the colon form's operand. It cannot: the name scan stops at the first
+// character that is not a name character, so on "${BIN:-/path}" the colon is already the head of
+// what is left and only ":-" can match it. Reversing the slice changes no verdict, which is why
+// nothing pins the order - there is nothing to pin.
 //
 // Deliberately absent, each for its own reason: ":=" means the same as ":-" plus an assignment and
 // is a real remaining false negative, left out because every added operator needs its own proof;
