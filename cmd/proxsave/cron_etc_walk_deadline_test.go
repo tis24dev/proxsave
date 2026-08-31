@@ -62,6 +62,9 @@ func walkWithin(t *testing.T, mode systemCronScan, what string) ([]indirectCronR
 	select {
 	case got := <-done:
 		return got.refs, got.elapsed
+	// On a RED build this harness races itself: Fatalf runs on the test goroutine while the walk
+	// goroutine above is still alive, and the seam restore in t.Cleanup writes the var it reads.
+	// Same shape in cron_probe_blocking_open_test.go. A DATA RACE here is the harness, not the finding.
 	case <-time.After(5 * time.Second):
 		t.Fatalf("systemCronRefs did not return within 5s %s: nothing bounds the wall clock the /etc walk may spend in the filesystem, so an entry symlinked into a dead mount hangs runUpgrade, runInstall, upgradeFinalizePhase and runInstallTUI before any of them prints anything", what)
 		return nil, 0
