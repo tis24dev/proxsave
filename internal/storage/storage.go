@@ -227,17 +227,20 @@ type StorageError struct {
 }
 
 func (e *StorageError) Error() string {
-	criticality := "WARNING"
-	if e.IsCritical {
-		criticality = "CRITICAL"
-	}
-
+	// No severity word here. Every caller that prints this text prints it through a
+	// logger whose column already carries the level, so the prefix said it twice - and
+	// three times where the caller's own literal opened with it too. It also said
+	// nothing Location did not: IsCritical is set true at five sites, all of them
+	// LocationPrimary (local.go:111, :122, :153, :211, :539), so "CRITICAL" was a
+	// second spelling of "primary". The critical PATHS keep their marker at their own
+	// call sites, which append a literal "(CRITICAL)" and log in the ERROR column
+	// (internal/orchestrator/storage_adapter.go:76, :103, :141).
 	recoverable := ""
 	if e.Recoverable {
 		recoverable = " (recoverable)"
 	}
 
-	return criticality + ": " + string(e.Location) + " storage " + e.Operation +
+	return string(e.Location) + " storage " + e.Operation +
 		" operation failed for " + e.Path + recoverable + ": " + e.Err.Error()
 }
 

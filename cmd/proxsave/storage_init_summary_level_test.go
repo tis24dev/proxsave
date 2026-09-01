@@ -24,9 +24,11 @@ import (
 // logger is told, and the string carries no severity of its own.
 // levelColumnOf returns the level token a rendered line carries in its COLUMN, which
 // is the only place the logger writes it. Matching "WARNING" anywhere in the line is
-// not the same test: a StorageError prints its own "WARNING: " inside the message, so a
-// line demoted to INFO still contains the word. A first version of these assertions did
-// exactly that and passed under the mutation it was written to catch.
+// not the same test: a message body can carry the word on its own - a wrapped error, a
+// quoted command, a path - so a line demoted to INFO still contains it. A first version
+// of these assertions did exactly that and passed under the mutation it was written to
+// catch. It was a StorageError doing it at the time; that one no longer says it, but the
+// reason the assertion reads the column has not changed.
 func levelColumnOf(line string) string {
 	_, rest, found := strings.Cut(line, "] ")
 	if !found {
