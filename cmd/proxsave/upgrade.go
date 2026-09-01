@@ -154,7 +154,7 @@ func runUpgrade(ctx context.Context, args *cli.Args, bootstrap *logging.Bootstra
 	defer func() { done(workflowErr) }()
 
 	if err := ensureConfigExists(args.ConfigPath, bootstrap); err != nil {
-		bootstrap.Error("ERROR: %v", err)
+		bootstrap.Error("%v", err)
 		workflowErr = err
 		return types.ExitConfigError.Int()
 	}
@@ -174,7 +174,7 @@ func runUpgrade(ctx context.Context, args *cli.Args, bootstrap *logging.Bootstra
 	bootstrap.Println("")
 
 	if _, err := config.LoadConfigWithBaseDir(args.ConfigPath, baseDir); err != nil {
-		bootstrap.Error("ERROR: Failed to load configuration: %v", err)
+		bootstrap.Error("Failed to load configuration: %v", err)
 		workflowErr = err
 		return types.ExitConfigError.Int()
 	}
@@ -220,7 +220,9 @@ func upgradeAcquireBinary(ctx context.Context, args *cli.Args, bootstrap *loggin
 	logging.DebugStepBootstrap(bootstrap, "upgrade workflow", "fetching latest release info")
 	tag, latestVersion, _, err := fetchLatestRelease(ctx)
 	if err != nil {
-		bootstrap.Error("ERROR: Failed to check latest release: %v", err)
+		// fetchLatestRelease's errors all open with "failed to ...", so a wrapper
+		// saying the same verb printed it twice. The cause names the operation.
+		bootstrap.Error("%v", err)
 		return "", "", types.ExitConfigError.Int(), true, err
 	}
 
@@ -243,7 +245,7 @@ func upgradeAcquireBinary(ctx context.Context, args *cli.Args, bootstrap *loggin
 		reader := bufio.NewReader(os.Stdin)
 		confirmed, promptErr := promptYesNo(ctx, reader, "Do you want to download and install this version now? (backup.env will be updated with any missing keys; a backup will be created) [y/N]: ", false)
 		if promptErr != nil {
-			bootstrap.Error("ERROR: %v", promptErr)
+			bootstrap.Error("%v", promptErr)
 			return "", "", types.ExitConfigError.Int(), true, promptErr
 		}
 		confirm = confirmed
@@ -258,7 +260,7 @@ func upgradeAcquireBinary(ctx context.Context, args *cli.Args, bootstrap *loggin
 	logging.DebugStepBootstrap(bootstrap, "upgrade workflow", "executing upgrade for %s", execPath)
 	versionInstalled, upgradeErr = downloadAndInstallLatest(ctx, execPath, bootstrap, tag, latestVersion)
 	if upgradeErr != nil {
-		bootstrap.Error("ERROR: Upgrade failed: %v", upgradeErr)
+		bootstrap.Error("Upgrade failed: %v", upgradeErr)
 		// Continue to the footer to show guidance and permission status, but exit
 		// with error (upgradeErr flows through finalize).
 	}
