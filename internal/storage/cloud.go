@@ -836,9 +836,15 @@ func (c *CloudStorage) Store(ctx context.Context, backupFile string, metadata *t
 		if primaryFailed {
 			op = "upload"
 			target = "primary backup"
-			c.logger.Warning("WARNING: Cloud Storage: Backup not saved to %s", c.remoteLabel())
+			// This line ends on the remote label, whose trailing colon belongs to the
+			// rclone name ("remote:"), so it has to come FIRST: last, it reads as a
+			// sentence cut off mid-way.
+			c.logger.Warning("Cloud storage - the backup is not on %s", c.remoteLabel())
 		}
-		c.logger.Warning("WARNING: Cloud Storage: Failed to upload %s: %v", target, err)
+		// Both open "Cloud storage - " so splitCategoryAndExample groups them under
+		// one label instead of turning a single failure into two categories, which
+		// "Cloud Storage: " did by having no " - " to cut at.
+		c.logger.Warning("Cloud storage - failed to upload the %s: %v", target, err)
 		return &StorageError{
 			Location:     LocationCloud,
 			Operation:    op,
