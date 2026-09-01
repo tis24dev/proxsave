@@ -446,6 +446,25 @@ func (s *SecondaryStorage) List(ctx context.Context) (backups []*types.BackupMet
 		// Get file info (bounded against a dead/stale mount).
 		stat, err := safefs.Stat(ctx, match, timeout)
 		if err != nil {
+			// The glob just matched this path, so a stat that fails is one of two very
+			// different things and the bare continue that used to be here treated them
+			// alike: the entry left the list and NOTHING said so at any level.
+			//
+			// Gone since the glob ran is benign. A backup deleted by hand, or by another
+			// run, between two syscalls milliseconds apart is not a fault and there is
+			// nothing to report.
+			//
+			// Anything else means the archive IS there and this run cannot see it, which
+			// is the stale-mount case the bound exists for. The list then comes back SHORT
+			// with a nil error, and every consumer believes it: retention judges a subset,
+			// GetStats reports fewer archives than exist, and a run can print "no backups"
+			// over a full directory. The entry is still skipped, because a size and a
+			// timestamp cannot be invented, but the operator is told which one and why.
+			if os.IsNotExist(err) {
+				s.logger.Debug("Secondary storage: %s vanished between the listing and its stat", filepath.Base(match))
+				continue
+			}
+			s.logger.Warning("Secondary storage - listing is incomplete, %s could not be read: %v", filepath.Base(match), err)
 			continue
 		}
 
