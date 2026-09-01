@@ -222,7 +222,7 @@ func (s *SecondaryStorage) Store(ctx context.Context, backupFile string, metadat
 	// Set permissions on destination (best effort)
 	if s.fsInfo != nil && s.fsInfo.SupportsOwnership {
 		if err := s.fsDetector.SetPermissions(ctx, destFile, 0, 0, 0600, s.fsInfo); err != nil {
-			s.logger.Warning("WARNING: Secondary storage - failed to set permissions on %s: %v",
+			s.logger.Warning("Secondary storage - failed to set permissions on %s: %v",
 				filepath.Base(destFile), err)
 			// Not critical - continue
 		}
