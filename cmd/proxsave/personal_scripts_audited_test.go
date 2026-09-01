@@ -294,9 +294,14 @@ func TestStartedScriptsGetNoShellNoArgumentsAndAnUnchangedEnvironment(t *testing
 		dir := t.TempDir()
 		dump := filepath.Join(dir, "dump")
 		startPersonalScriptDetached(dumpScript(t, dir, "dump.sh", dump))
+		// Wait on .argc, not .env. The script writes ".env" first and ".argc" second,
+		// so waiting on the first one let the assertions run in the gap between the
+		// two redirections and read a .argc that did not exist yet. Waiting on its
+		// CONTENT rather than its existence also covers the gap between the shell
+		// creating the file and printf filling it.
 		deadline := time.Now().Add(10 * time.Second)
 		for time.Now().Before(deadline) {
-			if _, err := os.Stat(dump + ".env"); err == nil {
+			if b, err := os.ReadFile(dump + ".argc"); err == nil && strings.TrimSpace(string(b)) != "" {
 				break
 			}
 			time.Sleep(20 * time.Millisecond)
