@@ -4,6 +4,9 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -70,9 +73,115 @@ func TestPersonalScriptsBracketTheBackupChild(t *testing.T) {
 		t.Fatal("runOnce reported an abandoned child")
 	}
 
+	// Settle before reading. Without the pause a SECOND, detached start of the post script
+	// lands after the read and the byte-exact compare passes anyway, which is how a dropped
+	// return in the defer survives this test.
+	time.Sleep(300 * time.Millisecond)
+
 	if got := readLedger(t, ledger); got != "pre\nchild\npost\n" {
 		t.Fatalf("ledger = %q, want %q", got, "pre\nchild\npost\n")
 	}
+}
+
+// TestASlowPreScriptIsWaitedForBeforeTheChild is the timing half of the bracketing. Every
+// ledger script elsewhere finishes in microseconds, so "pre" lands first even when the pre
+// call is started and abandoned; a script that takes a full second does not.
+func TestASlowPreScriptIsWaitedForBeforeTheChild(t *testing.T) {
+	dir := t.TempDir()
+	ledger := filepath.Join(dir, "ledger")
+	rep := &fakeReporter{}
+	d := newTestDaemon(t, rep, ledgerCmd(ledger, "child", "exit 0"), time.Minute)
+	d.cfg.PersonalScriptPreRun = writePersonalScript(t, dir, "pre.sh", "sleep 1\necho pre >> "+ledger)
+	d.cfg.PersonalScriptPostRun = ledgerScript(t, dir, "post.sh", "post", ledger)
+
+	d.runOnce(context.Background())
+
+	if got := readLedger(t, ledger); got != "pre\nchild\npost\n" {
+		t.Fatalf("ledger = %q: the pre script must be waited for, not merely started", got)
+	}
+}
+
+// TestPreScriptDoesNotSpendTheBackupBudget pins the reason the call site sits ABOVE the
+// MAX_RUN_DURATION context. Moved below it, a slow operator script eats the watchdog budget and
+// a healthy backup is reported as a hang.
+func TestPreScriptDoesNotSpendTheBackupBudget(t *testing.T) {
+	dir := t.TempDir()
+	ledger := filepath.Join(dir, "ledger")
+	rep := &fakeReporter{}
+	d := newTestDaemon(t, rep, ledgerCmd(ledger, "child", "exit 0"), time.Second)
+	d.cfg.PersonalScriptPreRun = writePersonalScript(t, dir, "pre.sh", "sleep 2\necho pre >> "+ledger)
+
+	d.runOnce(context.Background())
+
+	snap := rep.snapshot()
+	if snap.hung != 0 || snap.finished != 1 || snap.lastCode != 0 {
+		t.Fatalf("a 2s pre script spent the 1s watchdog budget: hung=%d finished=%d code=%d", snap.hung, snap.finished, snap.lastCode)
+	}
+}
+
+// TestShutdownDoesNotTruncateTheScriptBudget pins the context.Background() root. Rooted at the
+// daemon's own context instead, a SIGTERM landing mid-script kills it, which is the truncation
+// the helper's doc comment forbids.
+func TestShutdownDoesNotTruncateTheScriptBudget(t *testing.T) {
+	dir := t.TempDir()
+	ledger := filepath.Join(dir, "ledger")
+	d := newTestDaemon(t, &fakeReporter{}, ledgerCmd(ledger, "child", "exit 0"), time.Minute)
+	d.cfg.PersonalScriptPreRun = writePersonalScript(t, dir, "pre.sh", "sleep 2\necho pre >> "+ledger)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		time.Sleep(200 * time.Millisecond)
+		cancel()
+	}()
+	defer cancel()
+
+	d.runOnce(ctx)
+
+	if got := readLedger(t, ledger); !strings.HasPrefix(got, "pre\n") {
+		t.Fatalf("ledger = %q: a shutdown must not cut the script's own budget short", got)
+	}
+}
+
+// TestNoDaemonLogLineNamesThePersonalScripts covers what the golden cannot: the golden pins the
+// output of runOnce, so a line added anywhere else in the daemon, scheduleLoop included, can
+// print both configured paths to journald and to the on-disk run log unopposed.
+func TestNoDaemonLogLineNamesThePersonalScripts(t *testing.T) {
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, "daemon.go", nil, 0)
+	if err != nil {
+		t.Fatalf("parse daemon.go: %v", err)
+	}
+
+	ast.Inspect(file, func(n ast.Node) bool {
+		call, ok := n.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		sel, ok := call.Fun.(*ast.SelectorExpr)
+		if !ok {
+			return true
+		}
+		pkg, ok := sel.X.(*ast.Ident)
+		if !ok || pkg.Name != "logging" {
+			return true
+		}
+		for _, arg := range call.Args {
+			ast.Inspect(arg, func(inner ast.Node) bool {
+				switch v := inner.(type) {
+				case *ast.BasicLit:
+					if strings.Contains(v.Value, "PERSONAL_SCRIPT") || strings.Contains(v.Value, "PersonalScript") {
+						t.Errorf("%s: a log line names the personal scripts: %s", fset.Position(v.Pos()), v.Value)
+					}
+				case *ast.SelectorExpr:
+					if strings.HasPrefix(v.Sel.Name, "PersonalScript") {
+						t.Errorf("%s: a log line prints %s", fset.Position(v.Pos()), v.Sel.Name)
+					}
+				}
+				return true
+			})
+		}
+		return true
+	})
 }
 
 // TestPostRunStartsAfterEveryOutcome walks the returns below the call site. Each one is a run
@@ -167,7 +276,7 @@ func TestPostRunIsStartedButNotWaitedForOnTheAbandonPath(t *testing.T) {
 	ledger := filepath.Join(dir, "ledger")
 	rep := &fakeReporter{}
 	d := newAbandonDaemon(t, rep, 150*time.Millisecond)
-	d.cfg.PersonalScriptPostRun = ledgerScript(t, dir, "post.sh", "post", ledger, "sleep 30")
+	d.cfg.PersonalScriptPostRun = ledgerScript(t, dir, "post.sh", "post", ledger, "sleep 5")
 
 	start := time.Now()
 	if !d.runOnce(context.Background()) {
@@ -266,6 +375,12 @@ func TestPersonalScriptExitCodesAreIgnored(t *testing.T) {
 		t.Fatal("a failing operator script must not unwind the daemon")
 	}
 
+	// Read the ledger first: without it this test passes with both starters stubbed out, and
+	// then it proves the run is unaffected by scripts that never ran.
+	if got := readLedger(t, ledger); got != "pre\nchild\npost\n" {
+		t.Fatalf("ledger = %q: both failing scripts must actually have run", got)
+	}
+
 	snap := rep.snapshot()
 	if snap.lastCode != 0 || snap.finished != 1 {
 		t.Errorf("the run's own outcome changed: code=%d finished=%d", snap.lastCode, snap.finished)
@@ -340,8 +455,14 @@ func TestPersonalScriptsAreInvisibleToEveryReportingSurface(t *testing.T) {
 		// feature's contract, not a golden that has gone stale.
 		const want = "INFO     daemon: launching backup (rid=RID timeout=1m0s)\n" +
 			"INFO     daemon: backup finished (rid=RID exit=0)\n"
-		if got := normalizeRunLog(logged); got != want {
+		got := normalizeRunLog(logged)
+		if got != want {
 			t.Errorf("the run said something new.\ngot:\n%s\nwant:\n%s", got, want)
+		}
+		// Stated twice on purpose: an edit that relaxes the equality above into a Contains
+		// still has to explain a third line.
+		if lines := len(strings.Split(strings.TrimRight(got, "\n"), "\n")); lines != 2 {
+			t.Errorf("the run wrote %d log lines, want exactly 2:\n%s", lines, got)
 		}
 	})
 
