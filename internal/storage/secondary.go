@@ -161,7 +161,7 @@ func (s *SecondaryStorage) Store(ctx context.Context, backupFile string, metadat
 	// Ensure destination directory exists (bounded against a dead/stale mount).
 	if err := safefs.MkdirAll(ctx, s.basePath, 0700, fsIoTimeout(s.config)); err != nil {
 		s.logger.Debug("Secondary storage: failed to create destination folder %s", s.basePath)
-		s.logger.Warning("WARNING: Secondary storage - failed to create destination directory %s: %v", s.basePath, err)
+		s.logger.Warning("Secondary storage - failed to create destination directory %s: %v", s.basePath, err)
 		return &StorageError{
 			Location:    LocationSecondary,
 			Operation:   "store",
