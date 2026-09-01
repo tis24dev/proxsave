@@ -815,7 +815,10 @@ func (c *CloudStorage) Store(ctx context.Context, backupFile string, metadata *t
 				// but a TIMEOUT is not a MISSING file: surface it so a silently-dropped sidecar
 				// is visible instead of looking absent (F08-08).
 				if sidecarStatWarrantsWarning(err) {
-					c.logger.Warning("WARNING: Cloud Storage: skipping sidecar %s: filesystem timeout: %v", filepath.Base(srcFile), err)
+					// The error names the file and says it timed out, so the line says
+					// neither again. "skipping" is the whole point: the sidecar does not
+					// go up.
+					c.logger.Warning("Cloud storage - skipping sidecar: %v", err)
 				}
 				continue // Skip if missing or unreachable
 			}
