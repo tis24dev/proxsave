@@ -8,6 +8,7 @@ Complete reference for all 200+ configuration variables in `configs/backup.env`.
 - [General Settings](#general-settings)
 - [Scheduler engine](#scheduler-engine)
 - [Healthchecks connector (daemon)](#healthchecks-connector-daemon)
+- [Personal scripts (daemon)](#personal-scripts-daemon)
 - [Restore Behavior & Dual-Role Hosts](#restore-behavior--dual-role-hosts)
 - [Security Settings](#security-settings)
 - [Disk Space](#disk-space)
@@ -89,6 +90,28 @@ MAX_RUN_DURATION=1h            # daemon watchdog: hard timeout for one backup
 The compiled default for `SCHEDULER_MODE` is `cron`, but a fresh install defaults to the daemon and writes `SCHEDULER_MODE=daemon`.
 
 The key's **presence** matters as much as its value. `--upgrade` installs the daemon only on a host where that same upgrade's config merge had to add `SCHEDULER_MODE`, i.e. one that has never recorded an engine. Once the line is in the file the value is honoured and no upgrade revisits the host.
+
+---
+
+## Personal scripts (daemon)
+
+Two scripts of your own, started by the resident daemon around each supervised run. Empty by
+default, which means nothing is started. The full contract is in [DAEMON.md](DAEMON.md); the
+keys are:
+
+```bash
+PERSONAL_SCRIPT_PRE_RUN=       # path to a script started before the run
+PERSONAL_SCRIPT_POST_RUN=      # path to a script started after the run, whatever the outcome
+```
+
+Both take a filesystem path and nothing else: the path is executed directly, with no shell, so
+arguments, pipes and redirections in the value are not interpreted. Quote the value if the
+path contains a `#` or a `$`.
+
+These scripts belong to you. ProxSave starts them and reports nothing about them: their output
+is discarded, their exit code is ignored, they never fail a backup or change its exit code, and
+they appear in no log, notification, ping or metric. Each is killed after 10 minutes. They run
+only under the daemon, never under a manual `proxsave --backup` or a cron-mode run.
 
 ---
 

@@ -180,6 +180,10 @@ SCHEDULER_TIME=02:00           # daily HH:MM ("Run at")
 MAX_RUN_DURATION=1h            # watchdog hard timeout for one backup
 BACKUP_ENABLED=true            # false: daemon skips the scheduled run (backup check goes down)
 
+# Personal scripts: your own, started around each run (daemon only)
+PERSONAL_SCRIPT_PRE_RUN=       # path to a script started before the run
+PERSONAL_SCRIPT_POST_RUN=      # path to a script started after the run, whatever the outcome
+
 # Monitoring: enabled here, configured in HEALTHCHECKS.md
 HEALTHCHECK_ENABLED=false      # forced true by --daemon-setup / auto-migration
 ```
@@ -187,6 +191,47 @@ HEALTHCHECK_ENABLED=false      # forced true by --daemon-setup / auto-migration
 The `HEALTHCHECK_*` keys that decide *where* and *what* the daemon reports live in [HEALTHCHECKS.md](HEALTHCHECKS.md).
 
 See [CONFIGURATION.md](CONFIGURATION.md) for the full variable reference and [CLI_REFERENCE.md](CLI_REFERENCE.md) for the `--daemon-*` flags.
+
+## Personal scripts around a run
+
+`PERSONAL_SCRIPT_PRE_RUN` and `PERSONAL_SCRIPT_POST_RUN` name two scripts of your own that
+the daemon starts around each supervised run: the first before the backup child, the second
+after it. Both are empty by default, which is the shipped state and means nothing is started.
+
+They are **yours, not ProxSave's**, and the whole contract follows from that:
+
+- **Daemon runs only.** A manual `proxsave --backup`, a cron-mode run, and a dashboard run
+  start neither script. Only the run the daemon schedules and supervises is bracketed.
+- **Nothing is reported about them.** Their standard output and standard error go to
+  `/dev/null`. Nothing they print or fail at appears in the run log, in the log file, in the
+  run recap, in an email, Telegram, Gotify or webhook notification, in a healthchecks ping, or
+  in the Prometheus metrics. If you want a record of what your script did, your script writes
+  it.
+- **Their exit code is ignored.** A script that fails, or is missing, or is not executable,
+  changes nothing: the backup runs anyway, the run's own exit code is unaffected, and no
+  warning is counted. `PERSONAL_SCRIPT_POST_RUN` is started after **every** outcome, success,
+  failure, skip, hang, and a run interrupted by a shutdown.
+- **Ten minutes each, then killed.** A script still running after 10 minutes is `SIGKILL`ed
+  and the daemon carries on. The pre script is waited for before the backup starts, so a slow
+  one delays the run by its own duration; the post script is waited for before the daemon goes
+  back to waiting for the next scheduled time.
+- **Started as they are.** The path is executed directly: no shell, so no pipes, redirections
+  or arguments in the value; no arguments passed; no extra environment injected, so the script
+  inherits the daemon's own and is told nothing about the run it brackets. The script runs as
+  the daemon does, as `root`, in the daemon's working directory. Make it executable and give
+  it a shebang.
+- **One exception to the wait.** On the abandoned-child path (see the D-state caveat below)
+  the daemon must exit fast so systemd can restart it, so there the post script is started and
+  left behind rather than waited for, and there is no 10-minute kill: systemd collects it with
+  the rest of the unit's cgroup at the restart.
+
+Both values are read once, when the daemon starts. Changing a path in `backup.env` takes
+effect at the next daemon restart; changing the contents of the script file takes effect at
+the next run.
+
+Because ProxSave says nothing about these scripts, a script that never runs looks exactly like
+a script that ran and did nothing. Test it by hand first, as root:
+`/usr/local/bin/my-pre-run.sh; echo $?`.
 
 ## Caveat: uninterruptible sleep (D state)
 

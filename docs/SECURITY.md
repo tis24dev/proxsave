@@ -40,9 +40,17 @@ The interesting boundaries are the few places where **untrusted content** enters
 ## Execution model
 
 Every external process ProxSave runs goes through `internal/safeexec`, which builds argv
-directly and never wraps a caller's command in a shell. The single exception is the resident
-daemon's backup child (see **Self re-execution** below), which re-execs the running binary
-with a raw `exec.CommandContext` under a documented `#nosec G204`, bypassing the allowlist.
+directly and never wraps a caller's command in a shell. There are two exceptions, both in the resident
+daemon and both under a documented `#nosec G204` that bypasses the allowlist. The first is the
+daemon's backup child (see **Self re-execution** below), which re-execs the running binary. The
+second is the operator's own `PERSONAL_SCRIPT_PRE_RUN` and `PERSONAL_SCRIPT_POST_RUN`
+(`cmd/proxsave/personal_scripts.go`), read from the root-owned `backup.env` and executed
+directly: no shell, no arguments, no injected environment, every descriptor on `/dev/null`, a
+hard `SIGKILL` at 10 minutes, and an exit status that is discarded. The allowlist is for the
+external tools ProxSave itself drives, and `safeexec.TrustedCommandContext` is not usable here
+because it refuses a relative or world-writable path, which under that feature's silence rule
+would be an undebuggable non-execution of a script the operator deliberately configured. The
+paths are as trusted as `backup.env` itself: anyone who can set them is already root.
 Several callers do invoke `/bin/sh`
 on purpose, but only one of them puts shell **text** on a command line: the background
 rollback timer runs `sh -c '<compile-time constant>'` and passes the sleep seconds and the
