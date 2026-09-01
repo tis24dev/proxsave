@@ -590,6 +590,40 @@ func (d *daemon) runOnce(parentCtx context.Context) bool {
 		logging.Info("daemon: BACKUP_ENABLED=false; skipping the scheduled run (no outcome ping)")
 		return false
 	}
+	// The two operator scripts bracket the run, and this is the only place in the daemon from
+	// which they are ever started. ABOVE the run id, the start ping and the watchdog context
+	// below on purpose: context.WithTimeout(parentCtx, d.maxRunDuration()) starts the
+	// MAX_RUN_DURATION clock, so a pre script started any lower would spend the backup's own
+	// budget and could turn a healthy backup into a reported hang, and one started after the
+	// start ping would silently add its own time to the run duration the remote monitor
+	// measures from that ping. BELOW the two guards above on purpose: those two returns mean
+	// no run happens at all, a tick that arrived during shutdown and backups administratively
+	// off, and neither script belongs to a run that does not exist.
+	//
+	// The post is a defer for the one reason a defer exists: every return BELOW this line is
+	// a run that happened and each of them must reach it, the abandon, the shutdown, the
+	// hang, the skip, the ordinary exit, a cmd.Start that never forked (superviseChild
+	// reports that as reaped=true), and a panic unwind. It is registered before the
+	// defer cancel() below, so LIFO cancels the run context first and the post is never
+	// handed a live one; it is handed no context of the run's at all.
+	//
+	// postWaits is false on exactly one of those returns, the abandoned-child unwind: there
+	// the daemon exits so systemd can restart it, every other step on that path is bounded to
+	// 2 to 15 seconds, and the script is started and left to the cgroup instead of being
+	// waited for.
+	//
+	// Neither call logs anything, at any level, on any outcome. That is deliberate and is not
+	// an omission to be repaired: these scripts are the operator's, not ours.
+	postWaits := true
+	runPersonalScript(d.cfg.PersonalScriptPreRun)
+	defer func() {
+		if postWaits {
+			runPersonalScript(d.cfg.PersonalScriptPostRun)
+			return
+		}
+		startPersonalScriptDetached(d.cfg.PersonalScriptPostRun)
+	}()
+
 	r := d.getReporter()
 	rid := health.NewRunID()
 	d.reportBestEffort("start", false, func() error { return d.startPing(parentCtx, r, rid) })
@@ -625,6 +659,7 @@ func (d *daemon) runOnce(parentCtx context.Context) bool {
 	// It must come first: every branch below assumes a finished process, and runErr is
 	// meaningless when the wait never completed.
 	if !reaped {
+		postWaits = false // do not delay the restart this unwind exists to trigger
 		return d.abandonChild(parentCtx, r, cmd, rid, logBody)
 	}
 
