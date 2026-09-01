@@ -802,11 +802,12 @@ func (s *SecondaryStorage) applyGFSRetention(ctx context.Context, backups []*typ
 		logDeleted, err := s.deleteBackupInternal(ctx, backup.BackupFile)
 		if err != nil {
 			if !errors.Is(err, errBackupSidecarDeleteOnly) {
-				s.logger.Warning("WARNING: Secondary storage - failed to delete %s: %v", backup.BackupFile, err)
+				s.logger.Warning("Secondary storage - %s: %v", filepath.Base(backup.BackupFile), err)
 				continue
 			}
-			// Archive removed, only sidecar(s) failed: count as deleted but warn.
-			s.logger.Warning("WARNING: Secondary storage - %s archive removed but sidecar cleanup failed: %v", backup.BackupFile, err)
+			// Archive removed, only sidecar(s) failed: count as deleted but warn. The
+			// cause says which of the two happened, so the line only names the backup.
+			s.logger.Warning("Secondary storage - %s: %v", filepath.Base(backup.BackupFile), err)
 		}
 
 		deleted++
@@ -887,11 +888,12 @@ func (s *SecondaryStorage) applySimpleRetention(ctx context.Context, backups []*
 		logDeleted, err := s.deleteBackupInternal(ctx, backup.BackupFile)
 		if err != nil {
 			if !errors.Is(err, errBackupSidecarDeleteOnly) {
-				s.logger.Warning("WARNING: Secondary storage - failed to delete %s: %v", backup.BackupFile, err)
+				s.logger.Warning("Secondary storage - %s: %v", filepath.Base(backup.BackupFile), err)
 				continue
 			}
-			// Archive removed, only sidecar(s) failed: count as deleted but warn.
-			s.logger.Warning("WARNING: Secondary storage - %s archive removed but sidecar cleanup failed: %v", backup.BackupFile, err)
+			// Archive removed, only sidecar(s) failed: count as deleted but warn. The
+			// cause says which of the two happened, so the line only names the backup.
+			s.logger.Warning("Secondary storage - %s: %v", filepath.Base(backup.BackupFile), err)
 		}
 
 		deleted++
