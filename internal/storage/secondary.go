@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
@@ -418,6 +419,31 @@ func (s *SecondaryStorage) List(ctx context.Context) (backups []*types.BackupMet
 
 	backups = nil
 
+	// A stat that fails after the glob already matched the path is one of three very
+	// different things, and the bare continue that used to be here treated them alike:
+	// the entry left the slice, List returned a nil error, and nothing was written at
+	// any level.
+	//
+	// Abandonment - the operator aborted, or the bound expired - is a property of the
+	// run and not of any archive. It is reported once, by returning, because saying it
+	// again for every match still to be stat'ed adds nothing and List runs at least
+	// three times per backend per run.
+	//
+	// Gone since the glob ran is benign for a single archive: a backup deleted by hand
+	// or by another run between two syscalls milliseconds apart. Debug, named. When it
+	// is every archive AND the location itself has stopped answering, it is the dropped
+	// mount, and that is reported after the loop.
+	//
+	// Anything else means the archive IS there and this run cannot see it. The list
+	// then comes back SHORT with a nil error and every consumer believes it: retention
+	// judges a subset, GetStats reports fewer archives than exist. The entry is still
+	// skipped, because a size and a timestamp cannot be invented, but the count is
+	// reported once after the loop.
+	vanished := 0
+	// unreadable holds one already-rendered entry per archive the listing lost, each
+	// carrying its own cause, so no archive ever borrows another's.
+	var unreadable []string
+
 	// Filter and parse backup files
 	for _, match := range matches {
 		// Skip associated sidecars (checksum/metadata/manifest); shared predicate.
@@ -446,25 +472,15 @@ func (s *SecondaryStorage) List(ctx context.Context) (backups []*types.BackupMet
 		// Get file info (bounded against a dead/stale mount).
 		stat, err := safefs.Stat(ctx, match, timeout)
 		if err != nil {
-			// The glob just matched this path, so a stat that fails is one of two very
-			// different things and the bare continue that used to be here treated them
-			// alike: the entry left the list and NOTHING said so at any level.
-			//
-			// Gone since the glob ran is benign. A backup deleted by hand, or by another
-			// run, between two syscalls milliseconds apart is not a fault and there is
-			// nothing to report.
-			//
-			// Anything else means the archive IS there and this run cannot see it, which
-			// is the stale-mount case the bound exists for. The list then comes back SHORT
-			// with a nil error, and every consumer believes it: retention judges a subset,
-			// GetStats reports fewer archives than exist, and a run can print "no backups"
-			// over a full directory. The entry is still skipped, because a size and a
-			// timestamp cannot be invented, but the operator is told which one and why.
+			if safefs.IsAbandoned(err) {
+				return nil, err
+			}
 			if os.IsNotExist(err) {
+				vanished++
 				s.logger.Debug("Secondary storage: %s vanished between the listing and its stat", filepath.Base(match))
 				continue
 			}
-			s.logger.Warning("Secondary storage - listing is incomplete, %s could not be read: %v", filepath.Base(match), err)
+			unreadable = append(unreadable, fmt.Sprintf("%s: %s", filepath.Base(match), listingFailureCause(err)))
 			continue
 		}
 
@@ -482,12 +498,53 @@ func (s *SecondaryStorage) List(ctx context.Context) (backups []*types.BackupMet
 		})
 	}
 
+	// Nothing readable came back out of a directory the glob had entries for. Probe
+	// the location itself: a mount that dropped between the glob and the stats answers
+	// for none of its paths, and that is the one report worth making, in place of the
+	// per-archive noise. An empty directory never reaches here, because the glob found
+	// nothing to skip.
+	if skipped := vanished + len(unreadable); skipped > 0 {
+		located := true
+		if len(backups) == 0 {
+			if _, statErr := safefs.Stat(ctx, s.basePath, timeout); statErr != nil {
+				located = false
+				s.logger.Warning("Secondary storage - the location stopped answering, %d archive(s) could not be listed: %v",
+					skipped, statErr)
+			}
+		}
+		// Named, not counted: the operator has to know WHICH archives the retention
+		// pass and the stats are about to judge without. Header and items at INFO with
+		// one WARNING carrying the verdict, the shape cron_indirect_refs.go:2139-2143
+		// established, so one fault scores one warning instead of N. The WARNING
+		// repeats the count and stands on its own, because DEBUG_LEVEL can be set to
+		// "warning" (internal/cli/args.go), which hides the block above it.
+		if located && len(unreadable) > 0 {
+			s.logger.Info("Secondary storage - %d archive(s) could not be read:", len(unreadable))
+			for _, entry := range unreadable {
+				s.logger.Info("  - %s", entry)
+			}
+			s.logger.Warning("Secondary storage - listing is incomplete, %d archive(s) could not be read: retention and the stats run on the rest.",
+				len(unreadable))
+		}
+	}
+
 	// Sort by timestamp (newest first)
 	sort.Slice(backups, func(i, j int) bool {
 		return backups[i].Timestamp.After(backups[j].Timestamp)
 	})
 
 	return backups, nil
+}
+
+// listingFailureCause reduces a stat error to the part two archives under the same
+// fault have in common. A *fs.PathError prints the path it failed on, which is
+// precisely what would make one broken mount look like N different causes.
+func listingFailureCause(err error) string {
+	var pathErr *fs.PathError
+	if errors.As(err, &pathErr) && pathErr.Err != nil {
+		return pathErr.Err.Error()
+	}
+	return err.Error()
 }
 
 // Delete removes a backup file and its associated files
