@@ -2214,12 +2214,14 @@ func (c *CloudStorage) markCloudLogPathMissing(base, msg string) {
 	if alreadyMissing || c.logger == nil {
 		return
 	}
-	message := strings.TrimSpace(msg)
-	if message != "" {
-		c.logger.Warning("WARNING: Cloud logs path %s not found (%s) - skipping cloud log cleanup", base, message)
-	} else {
-		c.logger.Warning("WARNING: Cloud logs path %s not found - skipping cloud log cleanup", base)
+	// The caller only reaches here when rclone's message both parses as object-not
+	// -found AND names a directory, so quoting it on the warning repeated what the
+	// line already said, in rclone's log format and under rclone's clock. It is kept
+	// at Debug, where the exact wording is worth having.
+	if message := strings.TrimSpace(msg); message != "" {
+		c.logger.Debug("Cloud logs: rclone reported %q for %s", message, base)
 	}
+	c.logger.Warning("Cloud logs - %s does not exist, skipping the log cleanup", base)
 }
 
 func (c *CloudStorage) markCloudLogPathAvailable() {
