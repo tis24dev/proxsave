@@ -164,8 +164,25 @@ func TestOnlyTheDaemonStartsThePersonalScripts(t *testing.T) {
 
 	for _, name := range []string{"runPersonalScript", "startPersonalScriptDetached"} {
 		err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
-			if err != nil || d.IsDir() || !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
+			if err != nil {
 				return err
+			}
+			// Skip dot directories and anything holding its own .git entry. Without this the
+			// walk descends into the agent worktrees this repo keeps under .claude/, finds the
+			// same two files in a nested checkout, and fails on a tree where nothing is wrong.
+			if d.IsDir() {
+				if path != root && strings.HasPrefix(d.Name(), ".") {
+					return fs.SkipDir
+				}
+				if path != root {
+					if _, statErr := os.Stat(filepath.Join(path, ".git")); statErr == nil {
+						return fs.SkipDir
+					}
+				}
+				return nil
+			}
+			if !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
+				return nil
 			}
 			data, readErr := os.ReadFile(path)
 			if readErr != nil {
