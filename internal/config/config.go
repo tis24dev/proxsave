@@ -242,6 +242,11 @@ type Config struct {
 	SchedulerTime  string        // daily HH:MM ("Run at") used by daemon mode
 	MaxRunDuration time.Duration // daemon watchdog: hard timeout for one supervised backup
 
+	// Personal scripts (daemon only): optional operator-owned scripts started around a
+	// supervised run. Empty means disabled, which is the shipped state.
+	PersonalScriptPreRun  string
+	PersonalScriptPostRun string
+
 	// Healthchecks connector (dead-man switch + backup outcome), used by the daemon.
 	HealthcheckEnabled           bool
 	HealthcheckMode              string // "centralized" (fetch ping-urls from the server) | "self"
@@ -475,6 +480,7 @@ func (c *Config) parse() error {
 	c.parseRetentionSettings()
 	c.parseNotificationSettings()
 	c.parseSchedulerSettings()
+	c.parsePersonalScriptSettings()
 	c.parseHealthcheckSettings()
 	if err := c.parseCollectionSettings(); err != nil {
 		return err
@@ -840,6 +846,17 @@ func (c *Config) parseSchedulerSettings() {
 	c.SchedulerMode = normalizeSchedulerMode(c.getString("SCHEDULER_MODE", "cron"))
 	c.SchedulerTime = strings.TrimSpace(c.getString("SCHEDULER_TIME", "02:00"))
 	c.MaxRunDuration = c.getDuration("MAX_RUN_DURATION", 1*time.Hour)
+}
+
+// parsePersonalScriptSettings reads the optional operator scripts started around a daemon
+// run. Both default to empty, so a config that predates the keys, and a fresh install that
+// leaves them blank, behave exactly as before the feature existed. Nothing is validated
+// here: the paths are not stat'ed, not required to be absolute and not checked for an
+// execute bit, which is both what the feature asks for and what the loader already does for
+// every other optional path (AGE_RECIPIENT_FILE, SYSTEM_ROOT_PREFIX).
+func (c *Config) parsePersonalScriptSettings() {
+	c.PersonalScriptPreRun = strings.TrimSpace(c.getString("PERSONAL_SCRIPT_PRE_RUN", ""))
+	c.PersonalScriptPostRun = strings.TrimSpace(c.getString("PERSONAL_SCRIPT_POST_RUN", ""))
 }
 
 // parseHealthcheckSettings reads the healthchecks-connector keys (daemon only).
