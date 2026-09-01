@@ -179,7 +179,7 @@ func (s *SecondaryStorage) Store(ctx context.Context, backupFile string, metadat
 	s.logger.Debug("Copying backup to secondary storage: %s -> %s", filepath.Base(sourceFile), s.basePath)
 
 	if err := s.copyFile(ctx, sourceFile, destFile); err != nil {
-		s.logger.Warning("WARNING: Secondary Storage: File copy failed for %s: %v", filepath.Base(sourceFile), err)
+		s.logger.Warning("Secondary Storage: File copy failed for %s: %v", filepath.Base(sourceFile), err)
 		s.logger.Warning("WARNING: Secondary Storage: Backup not saved to %s", s.basePath)
 		return &StorageError{
 			Location:    LocationSecondary,
