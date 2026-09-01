@@ -2048,13 +2048,13 @@ func (c *CloudStorage) deleteBatched(ctx context.Context, backups []*types.Backu
 		if err != nil {
 			if !errors.Is(err, errBackupSidecarDeleteOnly) {
 				// The backup archive itself is still present; do not count it.
-				c.logger.Warning("Cloud storage - %s: %v", backup.BackupFile, err)
+				c.logger.Warning("Cloud storage - retention left %s in place: %v", backup.BackupFile, err)
 				continue
 			}
 			// The archive is gone, only sidecars remained: count it as deleted but
 			// warn about the leftover associated files. The cause says which of the
 			// two happened, so the line only names the backup.
-			c.logger.Warning("Cloud storage - %s: %v", backup.BackupFile, err)
+			c.logger.Warning("Cloud storage - retention left files behind from %s: %v", backup.BackupFile, err)
 		}
 
 		deleted++
