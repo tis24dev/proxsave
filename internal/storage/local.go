@@ -141,12 +141,15 @@ func (l *LocalStorage) Store(ctx context.Context, backupFile string, metadata *t
 
 	// Verify file exists (bounded against a dead/stale mount).
 	if _, err := safefs.Stat(ctx, backupFile, fsIoTimeout(l.config)); err != nil {
-		l.logger.Debug("Local storage: source file %s not found", backupFile)
+		// Bounded against a dead/stale mount: see the twin in cloud.go. This backend
+		// is critical and logs nothing here, so the wording that travels is the
+		// error's; it must not claim "not found" over a stat that timed out.
+		l.logger.Debug("Local storage: source file %s could not be read", backupFile)
 		return &StorageError{
 			Location:   LocationPrimary,
 			Operation:  "store",
 			Path:       backupFile,
-			Err:        fmt.Errorf("backup file not found: %w", err),
+			Err:        fmt.Errorf("backup file could not be read: %w", err),
 			IsCritical: true,
 		}
 	}

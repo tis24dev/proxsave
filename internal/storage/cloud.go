@@ -737,13 +737,16 @@ func (c *CloudStorage) Store(ctx context.Context, backupFile string, metadata *t
 	// Store in an uninterruptible (D-state) syscall here.
 	stat, err := safefs.Stat(ctx, backupFile, c.fsIoTimeout())
 	if err != nil {
-		c.logger.Debug("Cloud storage: source file %s not found", backupFile)
-		c.logger.Warning("WARNING: Cloud storage - backup file not found: %s: %v", backupFile, err)
+		// This stat is bounded against a dead/stale BACKUP_PATH mount, so a failure
+		// here is as likely to be a timeout as a missing file, and the error names
+		// the path either way. Calling it "not found" told the operator the archive
+		// was gone when the mount was simply not answering.
+		c.logger.Warning("Cloud storage - the backup to upload could not be read: %v", err)
 		return &StorageError{
 			Location:    LocationCloud,
 			Operation:   "store",
 			Path:        backupFile,
-			Err:         fmt.Errorf("source file not found: %w", err),
+			Err:         fmt.Errorf("source file could not be read: %w", err),
 			IsCritical:  false,
 			Recoverable: false,
 		}

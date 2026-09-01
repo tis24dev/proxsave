@@ -147,13 +147,14 @@ func (s *SecondaryStorage) Store(ctx context.Context, backupFile string, metadat
 
 	// Verify source file exists (bounded against a dead/stale mount).
 	if _, err := safefs.Stat(ctx, sourceFile, fsIoTimeout(s.config)); err != nil {
-		s.logger.Debug("Secondary storage: source file %s not found", sourceFile)
-		s.logger.Warning("Secondary storage - backup file not found: %v", err)
+		// Bounded against a dead/stale mount: see the twin in cloud.go. A failure is
+		// as likely to be a timeout as a missing file, and the error names the path.
+		s.logger.Warning("Secondary storage - the backup to copy could not be read: %v", err)
 		return &StorageError{
 			Location:    LocationSecondary,
 			Operation:   "store",
 			Path:        sourceFile,
-			Err:         fmt.Errorf("source file not found: %w", err),
+			Err:         fmt.Errorf("source file could not be read: %w", err),
 			IsCritical:  false,
 			Recoverable: false,
 		}
