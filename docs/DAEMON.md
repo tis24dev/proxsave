@@ -209,8 +209,10 @@ They are **yours, not ProxSave's**, and the whole contract follows from that:
   it.
 - **Their exit code is ignored.** A script that fails, or is missing, or is not executable,
   changes nothing: the backup runs anyway, the run's own exit code is unaffected, and no
-  warning is counted. `PERSONAL_SCRIPT_POST_RUN` is started after **every** outcome, success,
-  failure, skip, hang, and a run interrupted by a shutdown.
+  warning is counted. `PERSONAL_SCRIPT_POST_RUN` is started after **every** outcome: success,
+  failure, a child that skipped because another backup held the lock, hang, and a run
+  interrupted by a shutdown. Neither script starts when there is no run at all, which is
+  `BACKUP_ENABLED=false` or a tick arriving while the daemon is stopping.
 - **Ten minutes each, then killed.** A script still running after 10 minutes is `SIGKILL`ed
   and the daemon carries on. The pre script is waited for before the backup starts, so a slow
   one delays the run by its own duration; the post script is waited for before the daemon goes
@@ -221,12 +223,24 @@ They are **yours, not ProxSave's**, and the whole contract follows from that:
   budget and would add its own time to the run duration your monitor measures. The price is
   that the `proxsave-backup` check hears from the run only once the pre script has finished, so
   a pre script that takes minutes needs a schedule grace on the monitor wide enough to cover
-  it. Nothing on the ProxSave side changes: the run itself is not late, only its announcement.
+  it. Both the run and its announcement move later by the pre script's duration; what does not
+  move is the run duration the monitor measures, which still begins at the backup itself.
 - **Started as they are.** The path is executed directly: no shell, so no pipes, redirections
-  or arguments in the value; no arguments passed; no extra environment injected, so the script
-  inherits the daemon's own and is told nothing about the run it brackets. The script runs as
-  the daemon does, as `root`, in the daemon's working directory. Make it executable and give
-  it a shebang.
+  or arguments in the value; no arguments passed; no extra environment injected. The script
+  inherits the daemon's own environment, which carries `BASE_DIR` and `LOG_FILE`, the path of
+  the run log ProxSave is writing at that moment. Nothing identifies the run itself, there is
+  no run id, and ProxSave neither reads nor expects anything back. A script that writes into
+  `$LOG_FILE` does put its own text in ProxSave's log; that is the script's doing, and the only
+  way it can happen. The script runs as the daemon does, as `root`, in the daemon's working
+  directory. Make it executable and give it a shebang.
+- **A running script delays a stop.** Their budget is not shortened by a shutdown, so a
+  `systemctl stop` or `systemctl restart` that lands while either script is running waits for
+  it. If it outlasts the unit's stop timeout, 90 seconds on a stock host, systemd `SIGKILL`s
+  the daemon and the script together, `.daemon.pid` and `.daemon_info.json` are left behind
+  until the next start rewrites them, and no clean-stop line is logged. `proxsave --upgrade`
+  and the dashboard's restart both give `systemctl` 30 seconds and then report a failed
+  restart, even though systemd is still carrying it out. A script that takes minutes therefore
+  completes normally on a scheduled run and is truncated on every restart.
 - **One exception to the wait.** On the abandoned-child path (see the D-state caveat below)
   the daemon must exit fast so systemd can restart it, so there the post script is started and
   left behind rather than waited for, and there is no 10-minute kill: systemd collects it with

@@ -106,14 +106,18 @@ PERSONAL_SCRIPT_POST_RUN=      # path to a script started after the run, whateve
 
 Both take a filesystem path and nothing else: the path is executed directly, with no shell, so
 arguments, pipes and redirections in the value are not interpreted. Two characters need care,
-as in every other value in this file: an unquoted `#` truncates the value, so quote a path that
-contains one, and a `$` followed by a name is always expanded as a configuration variable,
-which no form of quoting suppresses. A `$` not followed by a name character survives as it is.
-Rename the script rather than fighting the expansion.
+as in every other value in this file. An unquoted `#` truncates the value, so quote a path that
+contains one. A `$` is expanded and no form of quoting suppresses it, not double quotes, not
+single quotes, not a backslash: the name is looked up in this file first, then in the daemon's
+own environment, and a name neither defines is replaced by nothing, silently. `$$`, `$@`, `$*`,
+`$!`, `$?`, `$-`, `$0` to `$9` and a `${` with no closing brace are consumed the same way. Only
+a `$` at the end of the value, or one before a character that is neither a letter, a digit, an
+underscore nor one of those, survives. Rename the script rather than fighting the expansion.
 
 These scripts belong to you. ProxSave starts them and reports nothing about them: their output
 is discarded, their exit code is ignored, they never fail a backup or change its exit code, and
-they appear in no log, notification, ping or metric. Each is killed after 10 minutes. They run
+they appear in no log, notification, ping or metric. Each is killed after 10 minutes, on every
+path but the abandoned-child unwind described in [DAEMON.md](DAEMON.md). They run
 only under the daemon, never under a manual `proxsave --backup` or a cron-mode run.
 
 ---

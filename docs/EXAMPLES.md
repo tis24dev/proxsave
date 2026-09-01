@@ -1082,7 +1082,7 @@ systemctl start my-noisy-service
 
 These are your scripts: ProxSave starts them and says nothing about them. Their output is
 discarded, their exit code is ignored, a failure never blocks or fails the backup, and each is
-killed after 10 minutes. They run only under the daemon, and only around the run it schedules.
+killed after 10 minutes (except on the abandoned-child unwind, see [DAEMON.md](DAEMON.md)). They run only under the daemon, and only around the run it schedules.
 Write your own log line if you need a record. See [DAEMON.md](DAEMON.md) for the full contract.
 
 See [DAEMON.md](DAEMON.md) for the daemon itself and [HEALTHCHECKS.md](HEALTHCHECKS.md)
