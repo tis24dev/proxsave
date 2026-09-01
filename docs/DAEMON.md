@@ -215,6 +215,13 @@ They are **yours, not ProxSave's**, and the whole contract follows from that:
   and the daemon carries on. The pre script is waited for before the backup starts, so a slow
   one delays the run by its own duration; the post script is waited for before the daemon goes
   back to waiting for the next scheduled time.
+- **A slow pre script delays the monitor's start signal.** The pre script runs before the run
+  id is minted, before the `/start` ping is sent and before the `MAX_RUN_DURATION` clock is
+  started, deliberately: a script started any later would spend the backup's own watchdog
+  budget and would add its own time to the run duration your monitor measures. The price is
+  that the `proxsave-backup` check hears from the run only once the pre script has finished, so
+  a pre script that takes minutes needs a schedule grace on the monitor wide enough to cover
+  it. Nothing on the ProxSave side changes: the run itself is not late, only its announcement.
 - **Started as they are.** The path is executed directly: no shell, so no pipes, redirections
   or arguments in the value; no arguments passed; no extra environment injected, so the script
   inherits the daemon's own and is told nothing about the run it brackets. The script runs as
