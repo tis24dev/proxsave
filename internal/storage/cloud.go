@@ -1787,10 +1787,14 @@ func (c *CloudStorage) deleteAssociatedLog(ctx context.Context, backupFile strin
 			}
 			return false
 		}
-		if msg != "" {
-			c.logger.Debug("Cloud logs: delete output for %s: %s", cloudPath, msg)
+		// rclone's stderr names the object and the reason; the exec error beside it
+		// only ever says "exit status N". Carrying the exec error alone left the
+		// reason on a Debug line a default install never prints.
+		detail := msg
+		if detail == "" {
+			detail = err.Error()
 		}
-		c.logger.Warning("WARNING: Cloud logs - failed to delete %s: %v", cloudPath, err)
+		c.logger.Warning("Cloud logs - failed to delete %s: %s", cloudPath, detail)
 		return false
 	}
 
