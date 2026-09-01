@@ -154,6 +154,13 @@ func scanForLevelRestatement(t *testing.T, root string) []levelViolation {
 
 	walkErr := filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
+			// An entry that vanished between readdir and lstat is not this scan's
+			// problem: editors, hooks and other tooling write and remove temporary
+			// files in the tree while the suite runs, and aborting on one turns the
+			// worklist into a single unrelated error. Anything else still stops it.
+			if os.IsNotExist(err) {
+				return nil
+			}
 			return err
 		}
 		if info.IsDir() {

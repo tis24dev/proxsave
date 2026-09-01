@@ -252,7 +252,10 @@ func TestFormatStorageInitSummary(t *testing.T) {
 		LocalRetentionDays: 7,
 		RetentionPolicy:    "simple",
 	}
-	simple := formatStorageInitSummary("Local", cfgSimple, storage.LocationPrimary, &storage.StorageStats{TotalBackups: 2}, nil)
+	simple, simpleWarn := formatStorageInitSummary("Local", cfgSimple, storage.LocationPrimary, &storage.StorageStats{TotalBackups: 2}, nil)
+	if simpleWarn {
+		t.Fatalf("a summary built with stats must not be a warning: %s", simple)
+	}
 	if !bytes.Contains([]byte(simple), []byte("Policy: simple")) {
 		t.Fatalf("expected simple policy label, got: %s", simple)
 	}
@@ -261,7 +264,10 @@ func TestFormatStorageInitSummary(t *testing.T) {
 		LocalRetentionDays: 7,
 		RetentionPolicy:    "simple",
 	}
-	warnSimple := formatStorageInitSummary("Local", cfgWarn, storage.LocationPrimary, nil, nil)
+	warnSimple, warnFlag := formatStorageInitSummary("Local", cfgWarn, storage.LocationPrimary, nil, nil)
+	if !warnFlag {
+		t.Fatalf("a summary built without stats must be a warning: %s", warnSimple)
+	}
 	if !bytes.Contains([]byte(warnSimple), []byte("⚠ Local initialized with warnings")) {
 		t.Fatalf("expected warning summary, got: %s", warnSimple)
 	}
@@ -280,7 +286,7 @@ func TestFormatStorageInitSummary(t *testing.T) {
 	}
 	stats := &storage.StorageStats{TotalBackups: 2}
 
-	summary := formatStorageInitSummary("Local", cfgGFS, storage.LocationPrimary, stats, backups)
+	summary, _ := formatStorageInitSummary("Local", cfgGFS, storage.LocationPrimary, stats, backups)
 	if !bytes.Contains([]byte(summary), []byte("Kept (est.):")) {
 		t.Fatalf("expected GFS summary to include retention estimates, got: %s", summary)
 	}

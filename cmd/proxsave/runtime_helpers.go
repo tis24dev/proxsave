@@ -441,7 +441,15 @@ func fetchStorageStats(ctx context.Context, backend storage.Storage, logger *log
 	return stats
 }
 
-func formatStorageInitSummary(name string, cfg *config.Config, location storage.BackupLocation, stats *storage.StorageStats, backups []*types.BackupMetadata) string {
+// formatStorageInitSummary builds the storage-init headline and its detail lines, and
+// returns whether that headline is a WARNING. The level used to travel inside the
+// string as a leading "⚠" that logStorageInitSummary read back with strings.HasPrefix,
+// which made a glyph that reads as decoration load-bearing: deleting it downgraded the
+// line to INFO in silence, dropping it from warningCount and from the exit-code
+// promotion in applyIssueExitCode. It is a value now, and the string carries no
+// promotion in applyIssueExitCode. It is a value now. The glyph STAYS on the line -
+// it is part of how this screen reads - but nothing downstream depends on it.
+func formatStorageInitSummary(name string, cfg *config.Config, location storage.BackupLocation, stats *storage.StorageStats, backups []*types.BackupMetadata) (string, bool) {
 	retentionConfig := storage.NewRetentionConfigFromConfig(cfg, location)
 	if retentionConfig.Policy == "gfs" {
 		retentionConfig = storage.EffectiveGFSRetentionConfig(retentionConfig)
@@ -452,9 +460,9 @@ func formatStorageInitSummary(name string, cfg *config.Config, location storage.
 		if retentionConfig.Policy == "gfs" {
 			return fmt.Sprintf("⚠ %s initialized with warnings (%s; GFS retention: daily=%d, weekly=%d, monthly=%d, yearly=%d)",
 				name, reason, retentionConfig.Daily, retentionConfig.Weekly,
-				retentionConfig.Monthly, retentionConfig.Yearly)
+				retentionConfig.Monthly, retentionConfig.Yearly), true
 		}
-		return fmt.Sprintf("⚠ %s initialized with warnings (%s; retention %s)", name, reason, formatBackupNoun(retentionConfig.MaxBackups))
+		return fmt.Sprintf("⚠ %s initialized with warnings (%s; retention %s)", name, reason, formatBackupNoun(retentionConfig.MaxBackups)), true
 	}
 
 	if retentionConfig.Policy == "gfs" {
@@ -477,26 +485,35 @@ func formatStorageInitSummary(name string, cfg *config.Config, location storage.
 				retentionConfig.Daily, retentionConfig.Weekly,
 				retentionConfig.Monthly, retentionConfig.Yearly)
 		}
-		return result
+		return result, false
 	}
 
 	result := fmt.Sprintf("✓ %s initialized (present %s)", name, formatBackupNoun(stats.TotalBackups))
 	result += fmt.Sprintf("\n  Policy: simple (keep %d newest)", retentionConfig.MaxBackups)
-	return result
+	return result, false
 }
 
-func logStorageInitSummary(summary string) {
+// logStorageInitSummary prints a storage-init summary. warn selects the level of the
+// HEADLINE - the first non-empty line - and nothing else: the detail lines below it are
+// always Info, except the GFS estimate, which stays at Debug so it never reaches the
+// run footer. See formatStorageInitSummary for why the level is a parameter and not a
+// glyph read back out of the text.
+func logStorageInitSummary(summary string, warn bool) {
 	if summary == "" {
 		return
 	}
+	headline := true
 	for _, line := range strings.Split(summary, "\n") {
 		trimmed := strings.TrimSpace(line)
 		if trimmed == "" {
 			continue
 		}
-		if strings.HasPrefix(trimmed, "⚠") {
-			logging.Warning("%s", line)
-			continue
+		if headline {
+			headline = false
+			if warn {
+				logging.Warning("%s", line)
+				continue
+			}
 		}
 		if strings.Contains(trimmed, "Kept (est.):") {
 			logging.Debug("%s", line)

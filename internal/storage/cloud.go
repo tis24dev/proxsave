@@ -318,8 +318,11 @@ func (c *CloudStorage) DetectFilesystem(ctx context.Context) (info *FilesystemIn
 	// Check if rclone is available
 	logging.DebugStep(c.logger, "cloud detect filesystem", "checking rclone availability")
 	if !c.hasRclone() {
-		c.logger.Warning("WARNING: rclone not found in PATH - cloud backup will be skipped")
-		c.logger.Warning("WARNING: Install rclone to enable cloud backups")
+		// The consequence is not repeated here: initializeCloudStorage
+		// (cmd/proxsave/backup_storage.go) closes this path with the grouped
+		// "Path Cloud: disabled (...)" SKIP, beside the other locations.
+		c.logger.Warning("Cloud storage - rclone not found in PATH")
+		c.logger.Warning("Cloud storage - install rclone to enable cloud backups")
 		return nil, &StorageError{
 			Location:    LocationCloud,
 			Operation:   "detect_filesystem",

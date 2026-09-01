@@ -144,7 +144,10 @@ func initializeCloudStorage(opts backupModeOptions, orch *orchestrator.Orchestra
 		if checker != nil {
 			checker.DisableCloud()
 		}
-		logStorageInitSummary(fmt.Sprintf("%s; %s", formatStorageInitSummary("Cloud storage", cfg, storage.LocationCloud, nil, nil), reason))
+		// Not formatStorageInitSummary: this backend never came up, so its retention
+		// figures are meaningless here and "initialized with warnings" is false. The
+		// grouped Path Cloud line below carries the state; this carries the cause.
+		logStorageInitSummary(fmt.Sprintf("Cloud storage not available: %s", reason), true)
 		logging.Skip("Path Cloud: disabled (%s)", reason)
 		return nil
 	}
