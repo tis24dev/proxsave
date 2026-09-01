@@ -765,8 +765,10 @@ func (c *CloudStorage) Store(ctx context.Context, backupFile string, metadata *t
 				primaryFile = bundleFile
 				primaryStat = bundleStat
 			} else if !errors.Is(err, os.ErrNotExist) {
-				c.logger.Warning("WARNING: Cloud storage - unable to inspect bundle %s: %v",
-					filepath.Base(bundleFile), err)
+				// primaryFile stays on the raw archive, so the upload below carries the
+				// standalone file. Saying only that the stat failed left the operator to
+				// work that out from the next line's filename.
+				c.logger.Warning("Cloud storage - the bundle could not be inspected, uploading the standalone archive instead: %v", err)
 			}
 		}
 	}
