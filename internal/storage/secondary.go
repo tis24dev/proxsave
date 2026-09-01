@@ -509,7 +509,7 @@ func (s *SecondaryStorage) deleteBackupInternal(ctx context.Context, backupFile 
 				s.logger.Debug("Secondary storage: file already removed %s", f)
 				continue
 			}
-			s.logger.Warning("WARNING: Secondary storage - failed to remove %s: %v", f, err)
+			s.logger.Warning("Secondary storage - %v", err)
 			failedFiles = append(failedFiles, f)
 			if !isBackupSidecar(f) {
 				dataFailed = true
