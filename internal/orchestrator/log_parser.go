@@ -123,8 +123,14 @@ func sortLogCategories(list []notify.LogCategory) {
 				}
 				continue
 			}
-			// Same count, compare by label (ascending)
-			if list[j].Label > list[j+1].Label {
+			// Same count, compare by label (ascending), CASE-INSENSITIVELY. A raw byte
+			// compare puts every lowercase-initial label below every uppercase one, and
+			// refreshLogIssuesFromFile (extensions.go) keeps only the first 10: a warning
+			// whose message happens to start lowercase was therefore dropped from the
+			// notification before any warning that started uppercase, whatever it said.
+			// 39 production warnings begin lowercase against 642 uppercase, so this was
+			// never about one line.
+			if strings.ToLower(list[j].Label) > strings.ToLower(list[j+1].Label) {
 				list[j], list[j+1] = list[j+1], list[j]
 			}
 		}

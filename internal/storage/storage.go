@@ -234,7 +234,7 @@ func (e *StorageError) Error() string {
 	// LocationPrimary (local.go:111, :122, :153, :211, :539), so "CRITICAL" was a
 	// second spelling of "primary". The critical PATHS keep their marker at their own
 	// call sites, which append a literal "(CRITICAL)" and log in the ERROR column
-	// (internal/orchestrator/storage_adapter.go:76, :103, :141).
+	// (internal/orchestrator/storage_adapter.go:76, :103, :142).
 	recoverable := ""
 	if e.Recoverable {
 		recoverable = " (recoverable)"
@@ -247,7 +247,9 @@ func (e *StorageError) Error() string {
 // causeText renders the wrapped cause. When that cause is DIRECTLY another StorageError
 // for the same location and the same path, only its operation and its own cause are
 // added: everything else it would print - the location, the path, the recoverable note -
-// is a second copy of what this sentence has already said.
+// is a second copy of what this sentence has already said. Recoverable is part of the
+// test: with the two disagreeing, collapsing would either drop the note or assert it
+// over a cause explicitly flagged the other way.
 //
 // That nesting is not hypothetical. ApplyRetention wraps a failed List in all three
 // backends (internal/storage/secondary.go:700, local.go:536, cloud.go:1940), always with
@@ -258,7 +260,8 @@ func (e *StorageError) Error() string {
 // some other wrapper in between has that wrapper's text to print, and skipping it would
 // lose it.
 func (e *StorageError) causeText() string {
-	if inner, ok := e.Err.(*StorageError); ok && inner.Location == e.Location && inner.Path == e.Path {
+	if inner, ok := e.Err.(*StorageError); ok && inner.Location == e.Location &&
+		inner.Path == e.Path && inner.Recoverable == e.Recoverable {
 		return inner.Operation + ": " + inner.causeText()
 	}
 	return e.Err.Error()

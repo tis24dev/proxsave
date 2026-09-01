@@ -367,7 +367,10 @@ func (s *StorageAdapter) setStorageStatus(stats *BackupStats, status string) {
 func storageFailureText(err error, backendName, operation string) string {
 	var se *storage.StorageError
 	if errors.As(err, &se) {
-		return err.Error()
+		// %v, not err.Error(): a typed-nil *StorageError satisfies errors.As while
+		// panicking on Error(), and these two arms exist to log and carry on. fmt
+		// renders it "<nil>", which is what the literal they replaced already did.
+		return fmt.Sprintf("%v", err)
 	}
 	return fmt.Sprintf("%s %s: %v", backendName, operation, err)
 }
