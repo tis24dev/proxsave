@@ -214,8 +214,8 @@ func (s *SecondaryStorage) Store(ctx context.Context, backupFile string, metadat
 		}
 
 		if len(failedAssoc) > 0 {
-			s.logger.Warning("WARNING: Secondary Storage: %d associated file(s) failed to copy: %v",
-				len(failedAssoc), failedAssoc)
+			s.logger.Warning("Secondary Storage: %d associated file(s) failed to copy: %s",
+				len(failedAssoc), strings.Join(failedAssoc, ", "))
 		}
 	}
 
