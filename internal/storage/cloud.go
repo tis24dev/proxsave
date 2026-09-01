@@ -1699,9 +1699,19 @@ func (c *CloudStorage) deleteBackupInternal(ctx context.Context, backupFile stri
 				c.removeRemoteSnapshotEntry(rel)
 				continue
 			}
-			c.logger.Warning("WARNING: Cloud storage - failed to delete %s: %v: %s",
-				filepath.Base(f), err, msg)
-			failedFiles = append(failedFiles, filepath.Base(f))
+			// rel, not filepath.Base(f): f is an rclone remote path ("remote:name"),
+			// which holds no slash, so Base returns it whole. msg is rclone's own
+			// stderr and names the object and the reason; the exec error beside it
+			// only ever says "exit status N", so it speaks only when msg is silent.
+			detail := msg
+			if detail == "" {
+				detail = err.Error()
+			}
+			c.logger.Warning("Cloud storage - failed to delete %s: %s", rel, detail)
+			// rel for the same reason as the line above: Base is a no-op on a remote
+			// path, and the summary would name the same file differently from the
+			// per-file line it sits under.
+			failedFiles = append(failedFiles, rel)
 			if !isBackupSidecar(rel) {
 				dataFailed = true
 			}
@@ -2038,12 +2048,13 @@ func (c *CloudStorage) deleteBatched(ctx context.Context, backups []*types.Backu
 		if err != nil {
 			if !errors.Is(err, errBackupSidecarDeleteOnly) {
 				// The backup archive itself is still present; do not count it.
-				c.logger.Warning("WARNING: Cloud storage - failed to delete %s: %v", backup.BackupFile, err)
+				c.logger.Warning("Cloud storage - %s: %v", backup.BackupFile, err)
 				continue
 			}
 			// The archive is gone, only sidecars remained: count it as deleted but
-			// warn about the leftover associated files.
-			c.logger.Warning("WARNING: Cloud storage - %s archive removed but sidecar cleanup failed: %v", backup.BackupFile, err)
+			// warn about the leftover associated files. The cause says which of the
+			// two happened, so the line only names the backup.
+			c.logger.Warning("Cloud storage - %s: %v", backup.BackupFile, err)
 		}
 
 		deleted++
