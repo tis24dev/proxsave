@@ -207,8 +207,7 @@ func (s *SecondaryStorage) Store(ctx context.Context, backupFile string, metadat
 
 			destAssocFile := filepath.Join(s.basePath, filepath.Base(srcFile))
 			if err := s.copyFile(ctx, srcFile, destAssocFile); err != nil {
-				s.logger.Warning("WARNING: Secondary Storage: Failed to copy associated file %s: %v",
-					filepath.Base(srcFile), err)
+				s.logger.Warning("Secondary Storage: Failed to copy associated file: %v", err)
 				failedAssoc = append(failedAssoc, filepath.Base(srcFile))
 				// Continue with other files
 			}
