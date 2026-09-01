@@ -17,7 +17,7 @@ func startFlowSessionLog(flowName string, logLevel types.LogLevel, bootstrap *lo
 	logger, logPath, closeFn, err := logging.StartSessionLogger(flowName, logLevel, false)
 	if err != nil {
 		if bootstrap != nil {
-			bootstrap.Warning("WARNING: Unable to start %s log: %v", flowName, err)
+			bootstrap.Warning("Unable to start %s log: %v", flowName, err)
 		}
 		return nil, func() {}
 	}

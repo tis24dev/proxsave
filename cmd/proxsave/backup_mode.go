@@ -215,7 +215,7 @@ func ensureBackupAgeRecipientsReady(opts backupModeOptions, orch *orchestrator.O
 		return backupAgeRecipientEarlyError(err, types.ExitConfigError), types.ExitConfigError.Int()
 	}
 
-	logging.Error("ERROR: %v", err)
+	logging.Error("%v", err)
 	return backupAgeRecipientEarlyError(err, types.ExitConfigError), types.ExitConfigError.Int()
 }
 
