@@ -46,7 +46,10 @@ daemon's backup child (see **Self re-execution** below), which re-execs the runn
 second is the operator's own `PERSONAL_SCRIPT_PRE_RUN` and `PERSONAL_SCRIPT_POST_RUN`
 (`cmd/proxsave/personal_scripts.go`), read from the root-owned `backup.env` and executed
 directly: no shell, no arguments, no injected environment, every descriptor on `/dev/null`, a
-hard `SIGKILL` at 10 minutes, and an exit status that is discarded. The allowlist is for the
+hard `SIGKILL` at 10 minutes, and an exit status that is discarded. The 10-minute kill holds on
+every path but one: on the abandoned-child unwind the daemon exits immediately so systemd can
+restart it, so there the post-run script is started and left to the unit's cgroup instead of
+being waited for and killed (see [DAEMON.md](DAEMON.md)). The allowlist is for the
 external tools ProxSave itself drives, and `safeexec.TrustedCommandContext` is not usable here
 because it refuses a relative or world-writable path, which under that feature's silence rule
 would be an undebuggable non-execution of a script the operator deliberately configured. The

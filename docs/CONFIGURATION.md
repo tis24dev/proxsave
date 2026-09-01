@@ -7,8 +7,8 @@ Complete reference for all 200+ configuration variables in `configs/backup.env`.
 - [Configuration File Location](#configuration-file-location)
 - [General Settings](#general-settings)
 - [Scheduler engine](#scheduler-engine)
-- [Healthchecks connector (daemon)](#healthchecks-connector-daemon)
 - [Personal scripts (daemon)](#personal-scripts-daemon)
+- [Healthchecks connector (daemon)](#healthchecks-connector-daemon)
 - [Restore Behavior & Dual-Role Hosts](#restore-behavior--dual-role-hosts)
 - [Security Settings](#security-settings)
 - [Disk Space](#disk-space)
@@ -105,8 +105,11 @@ PERSONAL_SCRIPT_POST_RUN=      # path to a script started after the run, whateve
 ```
 
 Both take a filesystem path and nothing else: the path is executed directly, with no shell, so
-arguments, pipes and redirections in the value are not interpreted. Quote the value if the
-path contains a `#` or a `$`.
+arguments, pipes and redirections in the value are not interpreted. Two characters need care,
+as in every other value in this file: an unquoted `#` truncates the value, so quote a path that
+contains one, and a `$` followed by a name is always expanded as a configuration variable,
+which no form of quoting suppresses. A `$` not followed by a name character survives as it is.
+Rename the script rather than fighting the expansion.
 
 These scripts belong to you. ProxSave starts them and reports nothing about them: their output
 is discarded, their exit code is ignored, they never fail a backup or change its exit code, and
