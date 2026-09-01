@@ -147,7 +147,7 @@ func (s *SecondaryStorage) Store(ctx context.Context, backupFile string, metadat
 	// Verify source file exists (bounded against a dead/stale mount).
 	if _, err := safefs.Stat(ctx, sourceFile, fsIoTimeout(s.config)); err != nil {
 		s.logger.Debug("Secondary storage: source file %s not found", sourceFile)
-		s.logger.Warning("WARNING: Secondary storage - backup file not found: %s: %v", sourceFile, err)
+		s.logger.Warning("Secondary storage - backup file not found: %v", err)
 		return &StorageError{
 			Location:    LocationSecondary,
 			Operation:   "store",
