@@ -45,7 +45,8 @@ daemon and both under a documented `#nosec G204` that bypasses the allowlist. Th
 daemon's backup child (see **Self re-execution** below), which re-execs the running binary. The
 second is the operator's own `PERSONAL_SCRIPT_PRE_RUN` and `PERSONAL_SCRIPT_POST_RUN`
 (`cmd/proxsave/personal_scripts.go`), read from the root-owned `backup.env` and executed
-directly: no shell, no arguments, no injected environment, every descriptor on `/dev/null`, a
+directly: no shell, no arguments, the daemon's own environment minus `LOG_FILE` and `BASE_DIR`
+and nothing added to it, every descriptor on `/dev/null`, a
 hard `SIGKILL` at 10 minutes for the script process itself, and an exit status that is
 discarded. That kill reaches one pid: anything the script forks and leaves running survives it,
 and is collected only when the unit's cgroup is torn down, since the unit keeps systemd's

@@ -226,25 +226,28 @@ They are **yours, not ProxSave's**, and the whole contract follows from that:
   it. Both the run and its announcement move later by the pre script's duration; what does not
   move is the run duration the monitor measures, which still begins at the backup itself.
 - **Started as they are.** The path is executed directly: no shell, so no pipes, redirections
-  or arguments in the value; no arguments passed; no extra environment injected. The script
-  inherits the daemon's own environment, which carries `BASE_DIR` and `LOG_FILE`, the path of
-  the run log ProxSave is writing at that moment. Nothing identifies the run itself, there is
-  no run id, and ProxSave neither reads nor expects anything back. A script that writes into
-  `$LOG_FILE` does put its own text in ProxSave's log; that is the script's doing, and the only
-  way it can happen. The script runs as the daemon does, as `root`, in the daemon's working
-  directory. Make it executable and give it a shebang.
-- **A running script delays a stop.** Their budget is not shortened by a shutdown, so a
-  `systemctl stop` or `systemctl restart` that lands while either script is running waits for
-  it. If it outlasts the unit's stop timeout, 90 seconds on a stock host, systemd `SIGKILL`s
-  the daemon and the script together, `.daemon.pid` and `.daemon_info.json` are left behind
-  until the next start rewrites them, and no clean-stop line is logged. `proxsave --upgrade`
-  and the dashboard's restart both give `systemctl` 30 seconds and then report a failed
-  restart, even though systemd is still carrying it out. A script that takes minutes therefore
-  completes normally on a scheduled run and is truncated on every restart.
-- **One exception to the wait.** On the abandoned-child path (see the D-state caveat below)
-  the daemon must exit fast so systemd can restart it, so there the post script is started and
-  left behind rather than waited for, and there is no 10-minute kill: systemd collects it with
-  the rest of the unit's cgroup at the restart.
+  or arguments in the value, and no arguments passed. The script inherits the daemon's own
+  environment with two variables removed, `LOG_FILE` and `BASE_DIR`: the first names the run
+  log ProxSave is writing at that moment, the second the installation, and between them they
+  are the only way a script could learn about the run or write into ProxSave's log. Nothing is
+  added, so there is no run id either. The script runs as the daemon does, as `root`, in the
+  daemon's working directory. Make it executable and give it a shebang.
+- **A stop does not queue behind the post script.** A `systemctl stop` or `systemctl restart`
+  landing while the run is in flight still starts `PERSONAL_SCRIPT_POST_RUN`, but does not wait
+  for it: the daemon's whole teardown budget is the unit's stop timeout, 90 seconds on a stock
+  host, so a waited script would be `SIGKILL`ed along with the daemon and would leave
+  `.daemon.pid` and `.daemon_info.json` behind. Started and left behind, the script gets its
+  chance and the daemon exits cleanly; systemd then collects whatever is still running with the
+  rest of the cgroup. A **pre** script IS waited for, so a slow one does hold a stop for its own
+  duration.
+- **The other exception to the wait.** On the abandoned-child path (see the D-state caveat
+  below) the daemon must exit fast so systemd can restart it, so there too the post script is
+  started and left behind rather than waited for. On both this path and a shutdown there is no
+  10-minute kill, because the process that would deliver it is exiting: systemd collects the
+  script with the rest of the unit's cgroup.
+- **One unbounded corner.** The 10-minute budget covers the wait, not the start. A path that
+  lives on a dead NFS or CIFS mount blocks the daemon inside `execve` before any timeout
+  exists, and nothing here can interrupt that. Keep the scripts on local storage.
 
 Both values are read once, when the daemon starts. Changing a path in `backup.env` takes
 effect at the next daemon restart; changing the contents of the script file takes effect at

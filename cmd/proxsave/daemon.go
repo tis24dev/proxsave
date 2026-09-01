@@ -607,17 +607,20 @@ func (d *daemon) runOnce(parentCtx context.Context) bool {
 	// defer cancel() below, so LIFO cancels the run context first and the post is never
 	// handed a live one; it is handed no context of the run's at all.
 	//
-	// postWaits is false on exactly one of those returns, the abandoned-child unwind: there
-	// the daemon exits so systemd can restart it, every other step on that path is bounded to
-	// 2 to 15 seconds, and the script is started and left to the cgroup instead of being
-	// waited for.
+	// The post is waited for on every path but two, where the daemon is on its way out and a
+	// wait would be actively harmful. The first is the abandoned-child unwind (postWaits): the
+	// daemon exits so systemd can restart it, and every other step there is bounded to 2 to 15
+	// seconds. The second is any shutdown (parentCtx cancelled): the whole teardown budget is
+	// a stock TimeoutStopSec of 90 seconds, so a waited script would be SIGKILLed along with
+	// the daemon, leaving the pid and info files behind and no clean-stop line. On both the
+	// script is started and left to the unit's cgroup.
 	//
 	// Neither call logs anything, at any level, on any outcome. That is deliberate and is not
 	// an omission to be repaired: these scripts are the operator's, not ours.
 	postWaits := true
 	runPersonalScript(d.cfg.PersonalScriptPreRun)
 	defer func() {
-		if postWaits {
+		if postWaits && parentCtx.Err() == nil {
 			runPersonalScript(d.cfg.PersonalScriptPostRun)
 			return
 		}

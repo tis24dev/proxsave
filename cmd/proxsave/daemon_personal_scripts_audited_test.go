@@ -245,14 +245,17 @@ func TestPostRunStartsAfterEveryOutcome(t *testing.T) {
 	}
 }
 
-// TestPostRunStartsAfterAShutdownInterruptedRun covers the return that fires when the parent
-// context is cancelled while the child is running: still a run that happened.
-func TestPostRunStartsAfterAShutdownInterruptedRun(t *testing.T) {
+// TestPostRunOnAShutdownIsStartedButNotWaitedFor covers the return that fires when the parent
+// context is cancelled while the child is running. It is still a run that happened, so the post
+// script is started, but it is NOT waited for: the daemon's whole teardown budget is a stock
+// TimeoutStopSec of 90 seconds, and a waited script would be SIGKILLed along with the daemon,
+// leaving the pid and info files behind.
+func TestPostRunOnAShutdownIsStartedButNotWaitedFor(t *testing.T) {
 	dir := t.TempDir()
 	ledger := filepath.Join(dir, "ledger")
 	rep := &fakeReporter{}
 	d := newTestDaemon(t, rep, ledgerCmd(ledger, "child", "sleep 5"), time.Minute)
-	d.cfg.PersonalScriptPostRun = ledgerScript(t, dir, "post.sh", "post", ledger)
+	d.cfg.PersonalScriptPostRun = ledgerScript(t, dir, "post.sh", "post", ledger, "sleep 3")
 
 	ctx, cancel := context.WithCancel(context.Background())
 	go func() {
@@ -261,11 +264,14 @@ func TestPostRunStartsAfterAShutdownInterruptedRun(t *testing.T) {
 	}()
 	defer cancel()
 
+	start := time.Now()
 	d.runOnce(ctx)
+	elapsed := time.Since(start)
 
-	if got := readLedger(t, ledger); !strings.HasSuffix(got, "post\n") {
-		t.Fatalf("ledger = %q, want it to end in post", got)
+	if elapsed > 2*time.Second {
+		t.Fatalf("runOnce waited %s on a shutdown: the stop must not queue behind the post script", elapsed)
 	}
+	waitForLedger(t, ledger, "post", 10*time.Second)
 }
 
 // TestPostRunIsStartedButNotWaitedForOnTheAbandonPath pins the maintainer's call: on the one

@@ -37,8 +37,13 @@ func TestPersonalScriptCmdLeavesEveryDescriptorNil(t *testing.T) {
 	if cmd.Stdout != nil || cmd.Stderr != nil || cmd.Stdin != nil {
 		t.Fatalf("stdin/stdout/stderr must all stay nil (os.DevNull, no copy goroutine); got stdin=%v stdout=%v stderr=%v", cmd.Stdin, cmd.Stdout, cmd.Stderr)
 	}
-	if cmd.Env != nil {
-		t.Errorf("Env must stay nil so the script inherits the daemon's environment and is given no run context; got %v", cmd.Env)
+	if cmd.Env == nil {
+		t.Fatal("Env must be the daemon's environment minus LOG_FILE and BASE_DIR, not nil: nil inherits both")
+	}
+	for _, kv := range cmd.Env {
+		if key, _, _ := strings.Cut(kv, "="); key == "LOG_FILE" || key == "BASE_DIR" {
+			t.Errorf("the script is handed %s: those two are the only way it could learn about the run", key)
+		}
 	}
 	if cmd.Dir != "" {
 		t.Errorf("Dir must stay empty; got %q", cmd.Dir)
@@ -228,6 +233,8 @@ func TestStartedScriptsGetNoShellNoArgumentsAndAnUnchangedEnvironment(t *testing
 	}
 	// os/exec and the shell both touch these; nothing else may differ.
 	tolerated := map[string]bool{"PWD": true, "OLDPWD": true, "SHLVL": true, "_": true}
+	// The two the daemon deliberately withholds.
+	stripped := map[string]bool{"LOG_FILE": true, "BASE_DIR": true}
 
 	assertShape := func(t *testing.T, dump string) {
 		t.Helper()
@@ -246,16 +253,35 @@ func TestStartedScriptsGetNoShellNoArgumentsAndAnUnchangedEnvironment(t *testing
 		for _, kv := range os.Environ() {
 			parent[kv] = true
 		}
+		seen := map[string]bool{}
 		for _, kv := range strings.Split(strings.TrimRight(string(raw), "\n"), "\n") {
-			if kv == "" || parent[kv] {
+			if kv == "" {
 				continue
 			}
-			if key, _, ok := strings.Cut(kv, "="); ok && tolerated[key] {
+			key, _, _ := strings.Cut(kv, "=")
+			seen[key] = true
+			if stripped[key] {
+				t.Errorf("the script was handed %s: the daemon withholds it so a script cannot learn about the run, or write into its log", key)
 				continue
 			}
-			t.Errorf("the script was handed %q, which the daemon's own environment does not carry: these scripts are told nothing about the run", kv)
+			if parent[kv] || tolerated[key] {
+				continue
+			}
+			t.Errorf("the script was handed %q, which the daemon's own environment does not carry: nothing is injected", kv)
+		}
+		// A negative that only means something when the parent really had them.
+		for key := range stripped {
+			if os.Getenv(key) == "" {
+				t.Fatalf("%s was not set in the parent, so this test proves nothing", key)
+			}
+			if seen[key] {
+				t.Errorf("%s survived into the script", key)
+			}
 		}
 	}
+
+	t.Setenv("LOG_FILE", "/var/log/proxsave/backup-probe.log")
+	t.Setenv("BASE_DIR", "/opt/proxsave")
 
 	t.Run("the waited starter", func(t *testing.T) {
 		dir := t.TempDir()

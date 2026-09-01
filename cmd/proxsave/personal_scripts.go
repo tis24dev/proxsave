@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"os"
 	"os/exec"
 	"strings"
 	"time"
@@ -26,6 +27,29 @@ var personalScriptTimeout = 10 * time.Minute
 // on one that is already lost.
 var personalScriptReapSlack = 15 * time.Second
 
+// personalScriptEnv is the daemon's own environment with two variables removed.
+//
+// LOG_FILE names the run log ProxSave is writing at that very moment (exported by
+// initializeRunLogFile), and BASE_DIR names the installation. Both are inherited by everything
+// the daemon forks, and both are the only way a personal script could learn anything about the
+// run it brackets. LOG_FILE is the sharper of the two: a script that appends to it puts its own
+// text inside ProxSave's log, which is the one thing the whole feature promises cannot happen.
+// The maintainer chose to strip both rather than document them.
+//
+// Everything else is passed through untouched. This is a subtraction, never an injection: no
+// variable is added, renamed or rewritten.
+func personalScriptEnv() []string {
+	env := os.Environ()
+	out := make([]string, 0, len(env))
+	for _, kv := range env {
+		if key, _, ok := strings.Cut(kv, "="); ok && (key == "LOG_FILE" || key == "BASE_DIR") {
+			continue
+		}
+		out = append(out, kv)
+	}
+	return out
+}
+
 // personalScriptCmd builds the command for one operator script, and most of what it is is
 // what it does NOT set.
 //
@@ -42,11 +66,11 @@ var personalScriptReapSlack = 15 * time.Second
 // records the same mechanism). A nil Stdin is also why a script that reads standard input
 // gets EOF immediately instead of blocking forever.
 //
-// Env is left nil, so the script inherits the daemon's environment unchanged. In particular
-// it does NOT get health.EnvRunID the way buildBackupCmd's child does: the
-// run id is context about the run, and these scripts are given none. Dir is left empty, so
-// the script runs in the daemon's own working directory. No arguments are passed and no
-// shell is involved: the path goes to execve as it stands.
+// Env is the daemon's own environment minus LOG_FILE and BASE_DIR (see personalScriptEnv).
+// Nothing is added: in particular the script does NOT get health.EnvRunID the way
+// buildBackupCmd's child does, because the run id is context about the run and these scripts
+// are given none. Dir is left empty, so the script runs in the daemon's own working directory.
+// No arguments are passed and no shell is involved: the path goes to execve as it stands.
 //
 // Cancel and WaitDelay are both left at their defaults, and the default is right twice over.
 // exec.CommandContext already sets Cancel to Process.Kill, which is the kill-on-timeout this
@@ -62,7 +86,20 @@ func personalScriptCmd(ctx context.Context, path string) *exec.Cmd {
 	// refuses a relative or world-writable path, which under this feature's silence rule
 	// would be an undebuggable non-execution of a script the operator deliberately
 	// configured.
-	return exec.CommandContext(ctx, path)
+	cmd := exec.CommandContext(ctx, path)
+	cmd.Env = personalScriptEnv()
+	return cmd
+}
+
+// personalScriptCmdDetached is personalScriptCmd's sibling for the abandoned-child unwind: the
+// same bare command, with no context attached, because there the daemon is exiting and killing
+// the script is the cgroup's job. It exists as its own function so the shape assertions can
+// reach it; a second inline exec.Command would be a second thing to keep in step by hand.
+func personalScriptCmdDetached(path string) *exec.Cmd {
+	// #nosec G204 -- same operator-supplied path, same rationale as personalScriptCmd.
+	cmd := exec.Command(path)
+	cmd.Env = personalScriptEnv()
+	return cmd
 }
 
 // runPersonalScript starts one operator script, waits for it, and reports nothing at all:
@@ -119,12 +156,19 @@ func runPersonalScript(path string) {
 	}
 }
 
-// startPersonalScriptDetached starts the post-run script and does NOT wait for it. It is used
-// on the one path where waiting would be harmful: the abandoned-child unwind (the !reaped
-// return in runOnce, which hands off to abandonChild), where runOnce returns true so the
-// daemon exits and systemd restarts it, and where every other step is bounded to 2 to 15
-// seconds precisely so that restart is not delayed. A waited script would put up to 10 minutes
-// in front of it, on the one host whose I/O is already wedged.
+// startPersonalScriptDetached starts the post-run script and does NOT wait for it. It serves
+// the two paths where waiting would be harmful.
+//
+// The first is the abandoned-child unwind (the !reaped return in runOnce, which hands off to
+// abandonChild): runOnce returns true, the daemon exits so systemd restarts it, and every other
+// step there is bounded to 2 to 15 seconds precisely so that restart is not delayed. A waited
+// script would put up to 10 minutes in front of it, on the one host whose I/O is already wedged.
+//
+// The second is any shutdown: a stop or a restart that lands while the run is in flight. The
+// daemon's whole teardown budget is a stock TimeoutStopSec of 90 seconds, so a waited script
+// would not merely be slow, it would be SIGKILLed together with the daemon, leaving .daemon.pid
+// and .daemon_info.json behind and no clean-stop line. Started and left behind, the script gets
+// its chance and the daemon still exits cleanly.
 //
 // Two consequences, both accepted: there is no 10 minute kill here, because the killer would
 // die with the daemon, and the script is instead collected by the unit's default
@@ -138,9 +182,5 @@ func startPersonalScriptDetached(path string) {
 	if path == "" {
 		return
 	}
-	// #nosec G204 -- same operator-supplied path, same rationale as personalScriptCmd. No
-	// context is attached on purpose: a cancel func would be pointless in a process that is
-	// exiting, and killing the script is the cgroup's job here.
-	cmd := exec.Command(path)
-	_ = cmd.Start()
+	_ = personalScriptCmdDetached(path).Start()
 }
