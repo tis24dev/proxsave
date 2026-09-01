@@ -617,7 +617,7 @@ func (s *SecondaryStorage) ApplyRetention(ctx context.Context, config RetentionC
 	s.logger.Debug("Secondary storage: listing backups for retention policy '%s'", config.Policy)
 	backups, err := s.List(ctx)
 	if err != nil {
-		s.logger.Warning("WARNING: Secondary storage - failed to list backups for retention: %v", err)
+		s.logger.Warning("Secondary storage - retention could not list the backups: %v", err)
 		return 0, &StorageError{
 			Location:    LocationSecondary,
 			Operation:   "apply_retention",
