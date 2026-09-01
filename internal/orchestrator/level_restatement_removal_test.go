@@ -228,8 +228,20 @@ func scanRestatementSites(t *testing.T) []restatementSite {
 			return err
 		}
 		if info.IsDir() {
+			// Skip dot directories and anything holding its own .git entry. Without this the
+			// walk descends into the agent worktrees this repo keeps under .claude/, counts
+			// every call site twice, and reports a tree twice the size of the real one. Same
+			// guard as cmd/proxsave/personal_scripts_audited_test.go, for the same reason.
+			if path != root && strings.HasPrefix(info.Name(), ".") {
+				return filepath.SkipDir
+			}
+			if path != root {
+				if _, statErr := os.Stat(filepath.Join(path, ".git")); statErr == nil {
+					return filepath.SkipDir
+				}
+			}
 			switch info.Name() {
-			case ".git", ".gitnexus", "vendor", "testdata", "build", "gsd", "diagnostics", "node_modules":
+			case "vendor", "testdata", "build", "gsd", "diagnostics", "node_modules":
 				return filepath.SkipDir
 			}
 			return nil
