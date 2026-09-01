@@ -950,7 +950,10 @@ func (s *SecondaryStorage) GetStats(ctx context.Context) (stats *StorageStats, e
 	defer func() { done(err) }()
 	backups, err := s.List(ctx)
 	if err != nil {
-		s.logger.Warning("WARNING: Secondary storage - failed to get stats: %v", err)
+		// List has already named the fault on every path that reaches it through the
+		// glob; what this adds is that the location's figures are gone with it. On the
+		// abandoned path (ctx checked at :382, before the glob) this is the only line.
+		s.logger.Warning("Secondary storage - statistics unavailable: %v", err)
 		return nil, err
 	}
 
