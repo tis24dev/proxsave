@@ -241,7 +241,27 @@ func (e *StorageError) Error() string {
 	}
 
 	return string(e.Location) + " storage " + e.Operation +
-		" operation failed for " + e.Path + recoverable + ": " + e.Err.Error()
+		" operation failed for " + e.Path + recoverable + ": " + e.causeText()
+}
+
+// causeText renders the wrapped cause. When that cause is DIRECTLY another StorageError
+// for the same location and the same path, only its operation and its own cause are
+// added: everything else it would print - the location, the path, the recoverable note -
+// is a second copy of what this sentence has already said.
+//
+// That nesting is not hypothetical. ApplyRetention wraps a failed List in all three
+// backends (internal/storage/secondary.go:700, local.go:536, cloud.go:1940), always with
+// its own basePath, so location and path are identical inside and out. What the outer
+// error alone contributes is WHICH operation was running, and that is what survives.
+//
+// The check is a direct type assertion, not errors.As: a StorageError reached through
+// some other wrapper in between has that wrapper's text to print, and skipping it would
+// lose it.
+func (e *StorageError) causeText() string {
+	if inner, ok := e.Err.(*StorageError); ok && inner.Location == e.Location && inner.Path == e.Path {
+		return inner.Operation + ": " + inner.causeText()
+	}
+	return e.Err.Error()
 }
 
 // Unwrap exposes the wrapped cause so callers can classify it with errors.Is/As
