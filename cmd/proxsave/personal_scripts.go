@@ -15,12 +15,12 @@ var personalScriptTimeout = 10 * time.Minute
 // personalScriptReapSlack is how long runPersonalScript keeps waiting AFTER that timeout
 // fired and os/exec SIGKILLed the script, before it stops waiting at all.
 //
-// It exists for the reason superviseChild exists (daemon.go:684): os/exec's Cmd.Wait does a
-// wait4(2) BEFORE it ever reads the cancellation result, so neither the context nor a
-// WaitDelay can unblock it. A script parked in TASK_UNINTERRUPTIBLE, one living on a dead NFS
-// or CIFS mount, which is exactly the kind of place an operator keeps a personal script,
-// never dequeues that SIGKILL and is never reaped, so wait4 never returns. Waiting for it
-// inline would wedge the scheduler goroutine, and a script we were explicitly told not to
+// It exists for the reason superviseChild exists (its doc comment in daemon.go): os/exec's
+// Cmd.Wait does a wait4(2) BEFORE it ever reads the cancellation result, so neither the
+// context nor a WaitDelay can unblock it. A script parked in TASK_UNINTERRUPTIBLE, one living
+// on a dead NFS or CIFS mount, which is exactly the kind of place an operator keeps a personal
+// script, never dequeues that SIGKILL and is never reaped, so wait4 never returns. Waiting for
+// it inline would wedge the scheduler goroutine, and a script we were explicitly told not to
 // care about would take the daemon down with it. 15s mirrors daemonReapSlack: a process
 // SIGKILL can actually kill is reaped within microseconds, so this margin is only ever spent
 // on one that is already lost.
@@ -43,7 +43,7 @@ var personalScriptReapSlack = 15 * time.Second
 // gets EOF immediately instead of blocking forever.
 //
 // Env is left nil, so the script inherits the daemon's environment unchanged. In particular
-// it does NOT get health.EnvRunID the way buildBackupCmd's child does (daemon.go:2216): the
+// it does NOT get health.EnvRunID the way buildBackupCmd's child does: the
 // run id is context about the run, and these scripts are given none. Dir is left empty, so
 // the script runs in the daemon's own working directory. No arguments are passed and no
 // shell is involved: the path goes to execve as it stands.
@@ -85,6 +85,10 @@ func personalScriptCmd(ctx context.Context, path string) *exec.Cmd {
 // shutdown must not silently truncate the budget the feature grants, and the helper has no
 // business observing the run's lifecycle.
 func runPersonalScript(path string) {
+	// Belt and braces: the loader already trims (parsePersonalScriptSettings), so no shipped
+	// path reaches here padded and no test can cover this line through the config. It stays
+	// because the two starters are the boundary, and a caller that builds a value some other
+	// way must not turn a blank into a fork attempt.
 	path = strings.TrimSpace(path)
 	if path == "" {
 		return // disabled: nothing is started and the run is byte-identical to before
@@ -116,11 +120,11 @@ func runPersonalScript(path string) {
 }
 
 // startPersonalScriptDetached starts the post-run script and does NOT wait for it. It is used
-// on the one path where waiting would be harmful: the abandoned-child unwind (daemon.go:628),
-// where runOnce returns true so the daemon exits and systemd restarts it, and where every
-// other step is bounded to 2 to 15 seconds precisely so that restart is not delayed. A waited
-// script would put up to 10 minutes in front of it, on the one host whose I/O is already
-// wedged.
+// on the one path where waiting would be harmful: the abandoned-child unwind (the !reaped
+// return in runOnce, which hands off to abandonChild), where runOnce returns true so the
+// daemon exits and systemd restarts it, and where every other step is bounded to 2 to 15
+// seconds precisely so that restart is not delayed. A waited script would put up to 10 minutes
+// in front of it, on the one host whose I/O is already wedged.
 //
 // Two consequences, both accepted: there is no 10 minute kill here, because the killer would
 // die with the daemon, and the script is instead collected by the unit's default
