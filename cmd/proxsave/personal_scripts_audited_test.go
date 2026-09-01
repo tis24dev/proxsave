@@ -4,6 +4,7 @@ import (
 	"context"
 	"go/parser"
 	"go/token"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -46,6 +47,19 @@ func TestPersonalScriptCmdLeavesEveryDescriptorNil(t *testing.T) {
 	}
 	if cmd.WaitDelay != 0 {
 		t.Errorf("WaitDelay must stay 0: there are no pipes to drain; got %s", cmd.WaitDelay)
+	}
+}
+
+// TestPersonalScriptBudgetsAreTheShippedOnes pins the two frozen numbers themselves. Every
+// other timing test in this file shrinks personalScriptTimeout before it asserts anything, so
+// without this one the shipped budget is unpinned: raising it to 90 minutes passes the whole
+// package.
+func TestPersonalScriptBudgetsAreTheShippedOnes(t *testing.T) {
+	if personalScriptTimeout != 10*time.Minute {
+		t.Errorf("personalScriptTimeout = %s, want the frozen 10m", personalScriptTimeout)
+	}
+	if personalScriptReapSlack != 15*time.Second {
+		t.Errorf("personalScriptReapSlack = %s, want 15s (daemonReapSlack's own margin)", personalScriptReapSlack)
 	}
 }
 
@@ -133,6 +147,45 @@ func TestPersonalScriptDropsEveryUnusablePath(t *testing.T) {
 				t.Fatalf("runPersonalScript(%q) did not return", tc.path)
 			}
 		})
+	}
+}
+
+// TestOnlyTheDaemonStartsThePersonalScripts is the guard for the daemon-only rule. A
+// behavioural test of the negative would have to run the real binary for a manual backup and
+// then prove a negative from its absence; this instead pins the call sites, which is what a
+// future wiring mistake would change. The scan is textual on purpose: a mention in a comment
+// in a third file is also worth stopping at.
+func TestOnlyTheDaemonStartsThePersonalScripts(t *testing.T) {
+	allowed := map[string]bool{
+		filepath.FromSlash("cmd/proxsave/personal_scripts.go"): true,
+		filepath.FromSlash("cmd/proxsave/daemon.go"):           true,
+	}
+	root := filepath.Join("..", "..")
+
+	for _, name := range []string{"runPersonalScript", "startPersonalScriptDetached"} {
+		err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+			if err != nil || d.IsDir() || !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
+				return err
+			}
+			data, readErr := os.ReadFile(path)
+			if readErr != nil {
+				return readErr
+			}
+			if !strings.Contains(string(data), name) {
+				return nil
+			}
+			rel, relErr := filepath.Rel(root, path)
+			if relErr != nil {
+				rel = path
+			}
+			if !allowed[rel] {
+				t.Errorf("%s names %s: these scripts run for the daemon's own scheduled run and nothing else", rel, name)
+			}
+			return nil
+		})
+		if err != nil {
+			t.Fatalf("walk: %v", err)
+		}
 	}
 }
 

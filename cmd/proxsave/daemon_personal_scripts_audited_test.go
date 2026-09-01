@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"testing"
@@ -274,6 +275,44 @@ func TestPersonalScriptExitCodesAreIgnored(t *testing.T) {
 	}
 }
 
+// runCapturingLog performs one daemon run with the given script paths and returns everything
+// the run said, plus the reporter it said it to. The default logger is swapped for a debug
+// logger writing into a buffer: debug, not info, because a debug line is still a line and it
+// still reaches the daemon's on-disk log file (initializeRunLogFile in main_runtime.go).
+func runCapturingLog(t *testing.T, pre, post, childBody string) (string, *fakeReporter, *daemon) {
+	t.Helper()
+
+	dir := t.TempDir()
+	ledger := filepath.Join(dir, "ledger")
+
+	origLog := logging.GetDefaultLogger()
+	t.Cleanup(func() { logging.SetDefaultLogger(origLog) })
+	var buf bytes.Buffer
+	def := logging.New(types.LogLevelDebug, false)
+	def.SetOutput(&buf)
+	logging.SetDefaultLogger(def)
+
+	rep := &fakeReporter{}
+	d := newTestDaemon(t, rep, ledgerCmd(ledger, "child", childBody), time.Minute)
+	d.cfg.HealthcheckSendLog = true
+	d.cfg.PersonalScriptPreRun = pre
+	d.cfg.PersonalScriptPostRun = post
+
+	d.runOnce(context.Background())
+
+	logging.SetDefaultLogger(origLog)
+	return buf.String(), rep, d
+}
+
+// normalizeRunLog strips the two things that legitimately differ between two runs, the
+// timestamp column and the run id, so the rest can be compared line for line.
+func normalizeRunLog(s string) string {
+	s = regexp.MustCompile(`^\[[^\]]+\] `).ReplaceAllString(s, "")
+	s = regexp.MustCompile(`(?m)^\[[^\]]+\] `).ReplaceAllString(s, "")
+	s = regexp.MustCompile(`rid=[A-Za-z0-9_-]+`).ReplaceAllString(s, "rid=RID")
+	return s
+}
+
 // TestPersonalScriptsAreInvisibleToEveryReportingSurface is the silence contract. Both scripts
 // print a unique marker on stdout AND stderr, and the post script exits non-zero.
 func TestPersonalScriptsAreInvisibleToEveryReportingSurface(t *testing.T) {
@@ -283,27 +322,31 @@ func TestPersonalScriptsAreInvisibleToEveryReportingSurface(t *testing.T) {
 
 	dir := t.TempDir()
 	ledger := filepath.Join(dir, "ledger")
+	pre := ledgerScript(t, dir, "pre.sh", "pre", ledger, "echo "+preMarker, "echo "+preMarker+" 1>&2")
+	post := ledgerScript(t, dir, "post.sh", "post", ledger, "echo "+postMarker, "echo "+postMarker+" 1>&2", "exit 9")
+	childBody := "echo " + childMarker + "\nexit 0"
 
-	origLog := logging.GetDefaultLogger()
-	t.Cleanup(func() { logging.SetDefaultLogger(origLog) })
-	var buf bytes.Buffer
-	// Debug, not Info: a Debug line is still a line, and it still reaches the daemon's
-	// on-disk log file (initializeRunLogFile, main_runtime.go:308).
-	def := logging.New(types.LogLevelDebug, false)
-	def.SetOutput(&buf)
-	logging.SetDefaultLogger(def)
+	logged, rep, d := runCapturingLog(t, pre, post, childBody)
 
-	rep := &fakeReporter{}
-	d := newTestDaemon(t, rep, ledgerCmd(ledger, "child", "echo "+childMarker+"\nexit 0"), time.Minute)
-	d.cfg.HealthcheckSendLog = true
-	d.cfg.PersonalScriptPreRun = ledgerScript(t, dir, "pre.sh", "pre", ledger, "echo "+preMarker, "echo "+preMarker+" 1>&2")
-	d.cfg.PersonalScriptPostRun = ledgerScript(t, dir, "post.sh", "post", ledger, "echo "+postMarker, "echo "+postMarker+" 1>&2", "exit 9")
+	t.Run("the run log is exactly what it was without the feature", func(t *testing.T) {
+		// A whitelist, and deliberately a GOLDEN one rather than a comparison against the
+		// same code running with both variables empty. That control was tried and is too
+		// weak: a log line added unconditionally next to the call sites appears in both
+		// runs, so the comparison passes and the breach ships. Pinning the two lines runOnce
+		// is allowed to write catches any added line, whatever it says.
+		//
+		// If a deliberate change to the daemon's own logging fails this, update the golden,
+		// but read what you added first: a line about these scripts is a breach of the
+		// feature's contract, not a golden that has gone stale.
+		const want = "INFO     daemon: launching backup (rid=RID timeout=1m0s)\n" +
+			"INFO     daemon: backup finished (rid=RID exit=0)\n"
+		if got := normalizeRunLog(logged); got != want {
+			t.Errorf("the run said something new.\ngot:\n%s\nwant:\n%s", got, want)
+		}
+	})
 
-	d.runOnce(context.Background())
-
-	t.Run("log", func(t *testing.T) {
-		logged := buf.String()
-		for _, forbidden := range []string{preMarker, postMarker, d.cfg.PersonalScriptPreRun, d.cfg.PersonalScriptPostRun, "PERSONAL_SCRIPT"} {
+	t.Run("log names nothing of theirs", func(t *testing.T) {
+		for _, forbidden := range []string{preMarker, postMarker, pre, post, "PERSONAL_SCRIPT"} {
 			if strings.Contains(logged, forbidden) {
 				t.Errorf("the run log names %q; these scripts are never logged, at any level", forbidden)
 			}

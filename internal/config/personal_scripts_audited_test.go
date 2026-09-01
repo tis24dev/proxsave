@@ -42,6 +42,17 @@ func TestPersonalScriptPathsAreReadFromTheConfig(t *testing.T) {
 			wantPost: "/opt/ops/post.sh",
 		},
 		{
+			// The row the parser's own TrimSpace is the only thing that fixes. An unquoted
+			// padded value is already trimmed upstream, in SplitKeyValue, so the row above
+			// passes even with the parser's trim removed; a QUOTED padded value reaches
+			// getString with its padding intact and would otherwise be handed to execve
+			// padded, which fails silently under the feature's silence rule.
+			name:     "a quoted padded value is trimmed too",
+			content:  "PERSONAL_SCRIPT_PRE_RUN=\"   /opt/ops/pre.sh   \"\nPERSONAL_SCRIPT_POST_RUN='  /opt/ops/post.sh  '\n",
+			wantPre:  "/opt/ops/pre.sh",
+			wantPost: "/opt/ops/post.sh",
+		},
+		{
 			// The shipped template must arm nothing. An example path left in it would start
 			// a script on every fresh install, silently, on the operator's behalf.
 			name:    "the shipped template",
