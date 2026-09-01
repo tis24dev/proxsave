@@ -741,7 +741,7 @@ func (c *CloudStorage) Store(ctx context.Context, backupFile string, metadata *t
 		// here is as likely to be a timeout as a missing file, and the error names
 		// the path either way. Calling it "not found" told the operator the archive
 		// was gone when the mount was simply not answering.
-		c.logger.Warning("Cloud storage - the backup to upload could not be read: %v", err)
+		c.logger.Warning("Cloud storage - failed to read the backup to upload: %v", err)
 		return &StorageError{
 			Location:    LocationCloud,
 			Operation:   "store",
@@ -768,7 +768,7 @@ func (c *CloudStorage) Store(ctx context.Context, backupFile string, metadata *t
 				// primaryFile stays on the raw archive, so the upload below carries the
 				// standalone file. Saying only that the stat failed left the operator to
 				// work that out from the next line's filename.
-				c.logger.Warning("Cloud storage - the bundle could not be inspected, uploading the standalone archive instead: %v", err)
+				c.logger.Warning("Cloud storage - bundle unreadable, uploading the standalone archive: %v", err)
 			}
 		}
 	}
@@ -842,7 +842,7 @@ func (c *CloudStorage) Store(ctx context.Context, backupFile string, metadata *t
 			// This line ends on the remote label, whose trailing colon belongs to the
 			// rclone name ("remote:"), so it has to come FIRST: last, it reads as a
 			// sentence cut off mid-way.
-			c.logger.Warning("Cloud storage - the backup is not on %s", c.remoteLabel())
+			c.logger.Warning("Cloud storage - backup not saved to %s", c.remoteLabel())
 		}
 		// Both open "Cloud storage - " so splitCategoryAndExample groups them under
 		// one label instead of turning a single failure into two categories, which

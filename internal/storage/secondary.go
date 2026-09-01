@@ -149,7 +149,7 @@ func (s *SecondaryStorage) Store(ctx context.Context, backupFile string, metadat
 	if _, err := safefs.Stat(ctx, sourceFile, fsIoTimeout(s.config)); err != nil {
 		// Bounded against a dead/stale mount: see the twin in cloud.go. A failure is
 		// as likely to be a timeout as a missing file, and the error names the path.
-		s.logger.Warning("Secondary storage - the backup to copy could not be read: %v", err)
+		s.logger.Warning("Secondary storage - failed to read the backup to copy: %v", err)
 		return &StorageError{
 			Location:    LocationSecondary,
 			Operation:   "store",
@@ -509,7 +509,7 @@ func (s *SecondaryStorage) List(ctx context.Context) (backups []*types.BackupMet
 		if len(backups) == 0 {
 			if _, statErr := safefs.Stat(ctx, s.basePath, timeout); statErr != nil {
 				located = false
-				s.logger.Warning("Secondary storage - the location stopped answering, %d archive(s) could not be listed: %v",
+				s.logger.Warning("Secondary storage - location stopped answering, %d archive(s) not listed: %v",
 					skipped, statErr)
 			}
 		}
