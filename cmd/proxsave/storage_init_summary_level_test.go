@@ -3,7 +3,6 @@ package main
 import (
 	"bytes"
 	"context"
-	"os/exec"
 	"strings"
 	"testing"
 
@@ -117,13 +116,12 @@ func TestStorageInitSummaryDetailLinesStayBelowTheHeadline(t *testing.T) {
 // else pins it. A mutation flipping it to false left every test green, which means the
 // line could silently become INFO and leave warningCount.
 //
-// It skips where rclone is installed: the path is reached through a real
-// DetectFilesystem, and with rclone present the failure would have to come from the
-// remote instead, which is slow and depends on the host's rclone config.
+// The path is reached through a real DetectFilesystem, which looks rclone up on
+// PATH. Pointing PATH at an empty directory forces the not-found arm on every
+// host, so the test no longer skips exactly where the cloud backend actually
+// runs - a skip the phase-one audit flagged as a hole.
 func TestCloudUnavailableHeadlineIsAWarning(t *testing.T) {
-	if _, err := exec.LookPath("rclone"); err == nil {
-		t.Skip("rclone is installed: this path needs the binary missing to be reached quickly")
-	}
+	t.Setenv("PATH", t.TempDir())
 
 	logger := logging.New(types.LogLevelInfo, false)
 	buf := &bytes.Buffer{}
