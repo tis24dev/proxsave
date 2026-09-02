@@ -7,6 +7,9 @@
 # GSD workspace — local-only planning projects, never version-controlled
 /gsd/
 
+# Superpowers design and planning artifacts — local-only, never version-controlled
+/docs/superpowers/
+
 # Build artifacts — compiled binary (root build) and Makefile output dir
 /proxsave
 /build/
