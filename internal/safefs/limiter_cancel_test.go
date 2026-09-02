@@ -3,6 +3,7 @@ package safefs
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 	"time"
 )
@@ -17,10 +18,16 @@ func TestCancelWhileWaitingForASlotNamesTheOperation(t *testing.T) {
 
 	// The cancel must land while acquire is BLOCKED on the full limiter: a context
 	// cancelled beforehand is answered by runBounded's entry check and never
-	// reaches the acquire arm this test exists to pin.
-	ctx, cancel := context.WithCancel(context.Background())
+	// reaches the acquire arm this test exists to pin. A sleep cannot guarantee
+	// that ordering (a first version slept 30ms, and on a stalled runner the
+	// cancel can beat the entry check), so the context itself reports the moment
+	// its Done() is first read. The entry path reads only Err() and Deadline();
+	// the first Done() read is acquire's select, and select evaluates its channel
+	// expressions before blocking, so the cancel fires exactly while acquire waits.
+	inner, cancel := context.WithCancel(context.Background())
+	ctx := &doneSignalCtx{Context: inner, signal: make(chan struct{})}
 	go func() {
-		time.Sleep(30 * time.Millisecond)
+		<-ctx.signal
 		cancel()
 	}()
 
@@ -35,4 +42,17 @@ func TestCancelWhileWaitingForASlotNamesTheOperation(t *testing.T) {
 	if ce.Op != "stat" || ce.Path != "/mnt/nas" {
 		t.Fatalf("CancelError names %q %q, want stat /mnt/nas", ce.Op, ce.Path)
 	}
+}
+
+// doneSignalCtx closes signal the first time Done() is read, so a test can act
+// at the exact moment a select starts listening for cancellation.
+type doneSignalCtx struct {
+	context.Context
+	once   sync.Once
+	signal chan struct{}
+}
+
+func (c *doneSignalCtx) Done() <-chan struct{} {
+	c.once.Do(func() { close(c.signal) })
+	return c.Context.Done()
 }
