@@ -51,13 +51,14 @@ func countWarningLines(out string) int { return len(warningLines(out)) }
 // buffer would pass on names that only the block below carries.
 func warningText(out string) string { return strings.Join(warningLines(out), "\n") }
 
-// itemLines are the indented entries of a header-plus-list block, the shape
-// cron_indirect_refs.go:2139-2143 established: header and items at INFO, one
-// WARNING carrying the verdict.
+// itemLines are the per-archive lines of the listing-incomplete report. Since
+// 2026-09-02 (maintainer's call) they live at DEBUG with a full standalone
+// subject - the names serve whoever digs, and the digger runs at debug - while
+// the WARNING carries the datum: the count and the consequence.
 func itemLines(out string) []string {
 	var got []string
 	for _, line := range strings.Split(out, "\n") {
-		if strings.Contains(line, "INFO") && strings.Contains(line, "  - ") {
+		if strings.Contains(line, "DEBUG") && strings.Contains(line, "listing incomplete - ") {
 			got = append(got, line)
 		}
 	}
@@ -129,11 +130,18 @@ func TestUnreadableArchivesAreReportedOnceNotOncePerArchive(t *testing.T) {
 		t.Fatalf("5 unreadable archives wrote %d WARNING lines, want exactly 1:\n%s", n, out)
 	}
 	// The single WARNING has to stand on its own, because DEBUG_LEVEL=warning hides
-	// the block below it.
-	if warned := warningText(out); !strings.Contains(warned, "5 archive(s)") {
+	// the DEBUG lines below it: the count and the consequence both live there.
+	warned := warningText(out)
+	if !strings.Contains(warned, "5 archive(s) could not be read") {
 		t.Fatalf("the warning does not carry the count of unreadable archives:\n%s", out)
 	}
-	// One readable line per archive, each with its own cause, not one inline blob.
+	if !strings.Contains(warned, "retention and the stats run on the rest") {
+		t.Fatalf("the warning lost its consequence:\n%s", out)
+	}
+	// The names live at DEBUG, one line per archive, each with its own cause.
+	if n := len(itemLines(warningText(out))); n != 0 {
+		t.Fatalf("%d per-archive lines rendered at WARNING; they belong at DEBUG:\n%s", n, out)
+	}
 	items := itemLines(out)
 	if len(items) != 5 {
 		t.Fatalf("the block lists %d archives, want one line each for 5:\n%s", len(items), out)

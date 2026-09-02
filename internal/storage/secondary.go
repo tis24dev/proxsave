@@ -481,7 +481,7 @@ func (s *SecondaryStorage) List(ctx context.Context) (backups []*types.BackupMet
 				s.logger.Debug("Secondary storage: %s vanished between the listing and its stat", filepath.Base(match))
 				continue
 			}
-			unreadable = append(unreadable, fmt.Sprintf("%s: %s", filepath.Base(match), listingFailureCause(err)))
+			unreadable = append(unreadable, fmt.Sprintf("%s: %s", listingFailureCause(err), filepath.Base(match)))
 			continue
 		}
 
@@ -520,18 +520,18 @@ func (s *SecondaryStorage) List(ctx context.Context) (backups []*types.BackupMet
 					skipped, statErr)
 			}
 		}
-		// Named, not counted: the operator has to know WHICH archives the retention
-		// pass and the stats are about to judge without. Header and items at INFO with
-		// one WARNING carrying the verdict, the shape cron_indirect_refs.go:2139-2143
-		// established, so one fault scores one warning instead of N. The WARNING
-		// repeats the count and stands on its own, because DEBUG_LEVEL can be set to
-		// "warning" (internal/cli/args.go), which hides the block above it.
+		// The WARNING carries the datum - the count and the consequence - and stands
+		// on its own at DEBUG_LEVEL=warning (internal/cli/args.go). The names moved to
+		// DEBUG (2026-09-02, maintainer's call): on the faults this arm realistically
+		// meets - EIO, ESTALE, EACCES on the mount - the cause is one and shared by
+		// every archive, so per-name lines at a counting level would repeat one fault
+		// N times. The names serve whoever digs, and the digger runs at debug; each
+		// line carries the full subject so it stands alone on that screen.
 		if located && len(unreadable) > 0 {
-			s.logger.Info("Secondary Storage: listing - %d archive(s) could not be read:", len(unreadable))
 			for _, entry := range unreadable {
-				s.logger.Info("  - %s", entry)
+				s.logger.Debug("Secondary Storage: listing incomplete - %s", entry)
 			}
-			s.logger.Warning("Secondary Storage: listing - incomplete, %d archive(s) could not be read: retention and the stats run on the rest.",
+			s.logger.Warning("Secondary Storage: listing incomplete, %d archive(s) could not be read - retention and the stats run on the rest.",
 				len(unreadable))
 		}
 	}
