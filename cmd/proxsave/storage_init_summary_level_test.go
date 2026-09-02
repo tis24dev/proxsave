@@ -138,7 +138,7 @@ func TestCloudUnavailableHeadlineIsAWarning(t *testing.T) {
 	out := buf.String()
 	var headline string
 	for _, line := range strings.Split(out, "\n") {
-		if strings.Contains(line, "Cloud storage not available") {
+		if strings.Contains(line, "Cloud storage initialized with warnings") {
 			headline = line
 		}
 	}
@@ -147,6 +147,15 @@ func TestCloudUnavailableHeadlineIsAWarning(t *testing.T) {
 	}
 	if got := levelColumnOf(headline); got != "WARNING" {
 		t.Fatalf("the cloud-unavailable headline rendered at %s, so it never reaches warningCount:\n%s", got, headline)
+	}
+	// The headline this path borrows carries the ⚠ and the retention figure; both
+	// vanished once when this call stopped borrowing it, and the maintainer reverted
+	// that. The glyph is content here, not the level: the level is pinned above.
+	if !strings.Contains(headline, "⚠") || !strings.Contains(headline, "retention") {
+		t.Fatalf("the cloud-unavailable headline lost its ⚠ or its retention figure:\n%s", headline)
+	}
+	if !strings.Contains(headline, "; filesystem detection") {
+		t.Fatalf("the cloud-unavailable headline no longer appends the cause:\n%s", headline)
 	}
 }
 

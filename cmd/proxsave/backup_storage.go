@@ -144,10 +144,13 @@ func initializeCloudStorage(opts backupModeOptions, orch *orchestrator.Orchestra
 		if checker != nil {
 			checker.DisableCloud()
 		}
-		// Not formatStorageInitSummary: this backend never came up, so its retention
-		// figures are meaningless here and "initialized with warnings" is false. The
-		// grouped Path Cloud line below carries the state; this carries the cause.
-		logStorageInitSummary(fmt.Sprintf("Cloud storage not available: %s", reason), true)
+		// The same "⚠ ... initialized with warnings (...; retention N)" headline the
+		// other backends print, with the cause appended - the shape this screen has
+		// always had. A rewrite that replaced it with a bare "not available" line lost
+		// the ⚠ and the retention figure and was reverted; the glyph and the level
+		// travel separately (the level is the literal true below, not the glyph).
+		summary, _ := formatStorageInitSummary("Cloud storage", cfg, storage.LocationCloud, nil, nil)
+		logStorageInitSummary(fmt.Sprintf("%s; %s", summary, reason), true)
 		logging.Skip("Path Cloud: disabled (%s)", reason)
 		return nil
 	}
