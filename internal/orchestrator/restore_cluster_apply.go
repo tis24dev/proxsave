@@ -408,8 +408,24 @@ func applyStorageCfg(ctx context.Context, cfgPath string, logger *logging.Logger
 		args := append([]string{"create", "/storage"}, createArgs...)
 
 		if runErr := runPvesh(ctx, logger, args); runErr != nil {
-			logger.Warning("Failed to apply storage %s: %v", blk.ID, runErr)
-			failed++
+			// Fallback: the definition already exists (`dir: local` does on every
+			// node, probed live 2026-09-02: "storage ID 'local' already defined"),
+			// so update it - the same create-then-set shape the backup-jobs apply
+			// has always had. --storage and --type are create-only and stay out.
+			setArgs := []string{"set", "/storage/" + blk.ID}
+			for _, arg := range createArgs {
+				if strings.HasPrefix(arg, "--storage=") || strings.HasPrefix(arg, "--type=") {
+					continue
+				}
+				setArgs = append(setArgs, arg)
+			}
+			if setErr := runPvesh(ctx, logger, setArgs); setErr != nil {
+				logger.Warning("Failed to apply storage %s: %v (create: %v)", blk.ID, setErr, runErr)
+				failed++
+			} else {
+				logger.Info("Updated existing storage definition %s", blk.ID)
+				applied++
+			}
 		} else {
 			logger.Info("Applied storage definition %s", blk.ID)
 			applied++
