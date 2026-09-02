@@ -23,14 +23,15 @@ A notification is always best-effort. No channel can fail, delay, or block a bac
   an `error` outcome for that channel, and returns `nil` to the caller
   (`internal/orchestrator/notification_adapter.go`). The dispatcher ignores the return
   value too.
-- The run's exit code is **frozen before any channel sends**. `applyIssueExitCode`
-  promotes the exit code from the collected errors and warnings first, then the
-  notification phase runs. A warning raised while sending a notification is still a
-  warning, never an error, and never changes the exit code
-  (`internal/orchestrator/extensions.go`).
+- A notification failure is **warning-weight for the exit code**. The exit code is
+  first computed before the channels send; after dispatch the run log is re-parsed
+  once more, so a `NOTIFY-ERR` raised while sending promotes an otherwise clean run
+  from `0` to `1` - never to an error code
+  (`internal/orchestrator/backup_run_phases.go`, `finalizeSuccessIssueStats`).
 
 So a red channel in the logs tells you a message did not go out. It never means the
-backup failed.
+backup failed - but the run does exit `1`, so monitoring learns notifications are
+broken exactly when email cannot say so.
 
 ## Two tiers
 
