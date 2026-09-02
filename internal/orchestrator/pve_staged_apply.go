@@ -154,12 +154,14 @@ func applyPVEStorageCfgFromStage(ctx context.Context, logger *logging.Logger, st
 	return nil
 }
 
-func applyPVEDatacenterCfgFromStage(ctx context.Context, logger *logging.Logger, stageRoot string) error {
-	if _, err := restoreCmd.Run(ctx, "which", "pvesh"); err != nil {
-		logger.Warning("pvesh not found; skipping PVE datacenter.cfg apply")
-		return nil
-	}
-
+// applyPVEDatacenterCfgFromStage writes the staged datacenter.cfg into pmxcfs.
+// The old arm called `pvesh set /cluster/config -conf <file>`, an endpoint a live
+// PVE 9.1.9 node answers with "No 'set' handler defined for '/cluster/config'"
+// (probed 2026-09-02): datacenter.cfg was therefore NEVER restored on a staged
+// apply. The API has no whole-file endpoint (options live per-key under
+// /cluster/options); the file write replicates cluster-wide because /etc/pve IS
+// pmxcfs, and pvesh is not needed at all.
+func applyPVEDatacenterCfgFromStage(_ context.Context, logger *logging.Logger, stageRoot string) error {
 	stagePath := filepath.Join(stageRoot, "etc/pve/datacenter.cfg")
 	data, err := restoreFS.ReadFile(stagePath)
 	if err != nil {
@@ -174,10 +176,10 @@ func applyPVEDatacenterCfgFromStage(ctx context.Context, logger *logging.Logger,
 		return nil
 	}
 
-	if err := runPvesh(ctx, logger, []string{"set", "/cluster/config", "-conf", stagePath}); err != nil {
-		return err
+	if err := pmxcfsWriteFile(logger, "datacenter.cfg", data); err != nil {
+		return fmt.Errorf("apply staged datacenter.cfg: %w", err)
 	}
-	logger.Info("PVE staged apply: datacenter.cfg applied")
+	logger.Info("PVE staged apply: datacenter.cfg written to pmxcfs (cluster-wide)")
 	return nil
 }
 

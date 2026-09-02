@@ -318,9 +318,18 @@ func TestRunSafeClusterApply_AppliesVMStorageAndDatacenterConfigs(t *testing.T) 
 		t.Fatalf("write datacenter.cfg: %v", err)
 	}
 
+	// datacenter.cfg is no longer a pvesh call (the live node has no 'set'
+	// handler on /cluster/config): it is a pmxcfs write, asserted on the file.
+	pmxRoot := t.TempDir()
+	seamPmxcfs(t, pmxRoot, true, nil)
+
 	reader := bufio.NewReader(strings.NewReader("yes\nyes\nyes\n"))
 	if err := runSafeClusterApply(context.Background(), reader, exportRoot, newTestLogger()); err != nil {
 		t.Fatalf("runSafeClusterApply error: %v", err)
+	}
+
+	if got, err := os.ReadFile(filepath.Join(pmxRoot, "datacenter.cfg")); err != nil || string(got) != "keyboard: it\n" {
+		t.Fatalf("datacenter.cfg not written into pmxcfs: %q err=%v", got, err)
 	}
 
 	wantPrefixes := []string{
@@ -328,7 +337,6 @@ func TestRunSafeClusterApply_AppliesVMStorageAndDatacenterConfigs(t *testing.T) 
 		"pvesh set /nodes/" + node + "/lxc/101/config --hostname=ct101",
 		"pvesh create /storage --storage=local --type=dir --path=/var/lib/vz",
 		"pvesh create /storage --storage=backup_ext --type=nfs --server=10.0.0.1",
-		"pvesh set /cluster/config -conf ",
 	}
 	for _, prefix := range wantPrefixes {
 		found := false

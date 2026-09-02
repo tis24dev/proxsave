@@ -405,7 +405,12 @@ func TestApplyPVEDatacenterCfgFromStage_Branches(t *testing.T) {
 		}
 	})
 
-	t.Run("runPvesh error and success", func(t *testing.T) {
+	t.Run("pmxcfs refusal and pmxcfs success", func(t *testing.T) {
+		// The pvesh endpoint the old arm called does not exist on a live node
+		// ("No 'set' handler defined for '/cluster/config'", probed 2026-09-02);
+		// the arm now writes the staged file into pmxcfs and pvesh is not
+		// involved. The two arms pinned here are the mounted-guard refusal and
+		// the write itself.
 		origFS := restoreFS
 		origCmd := restoreCmd
 		t.Cleanup(func() {
@@ -416,30 +421,25 @@ func TestApplyPVEDatacenterCfgFromStage_Branches(t *testing.T) {
 		fakeFS := NewFakeFS()
 		t.Cleanup(func() { _ = os.RemoveAll(fakeFS.Root) })
 		restoreFS = fakeFS
+		restoreCmd = &FakeCommandRunner{}
 
 		stagePath := "/stage/etc/pve/datacenter.cfg"
 		if err := fakeFS.AddFile(stagePath, []byte("keyboard: it\n")); err != nil {
 			t.Fatalf("write staged datacenter.cfg: %v", err)
 		}
 
-		failCmd := &FakeCommandRunner{
-			Errors: map[string]error{
-				"pvesh set /cluster/config -conf " + stagePath: errors.New("pvesh failed"),
-			},
-		}
-		restoreCmd = failCmd
-		if err := applyPVEDatacenterCfgFromStage(ctx, logger, "/stage"); err == nil || !strings.Contains(err.Error(), "pvesh [set /cluster/config -conf") {
-			t.Fatalf("expected pvesh failure, got %v", err)
+		seamPmxcfs(t, "/etc/pve", false, nil)
+		if err := applyPVEDatacenterCfgFromStage(ctx, logger, "/stage"); err == nil || !strings.Contains(err.Error(), "not mounted") {
+			t.Fatalf("expected the mounted-guard refusal, got %v", err)
 		}
 
-		okCmd := &FakeCommandRunner{}
-		restoreCmd = okCmd
+		seamPmxcfs(t, "/etc/pve", true, nil)
 		if err := applyPVEDatacenterCfgFromStage(ctx, logger, "/stage"); err != nil {
 			t.Fatalf("expected success, got %v", err)
 		}
-		calls := strings.Join(okCmd.CallsList(), "\n")
-		if !strings.Contains(calls, "pvesh set /cluster/config -conf "+stagePath) {
-			t.Fatalf("missing datacenter apply call; calls=%v", okCmd.CallsList())
+		got, err := fakeFS.ReadFile("/etc/pve/datacenter.cfg")
+		if err != nil || string(got) != "keyboard: it\n" {
+			t.Fatalf("datacenter.cfg not written into pmxcfs: %q err=%v", got, err)
 		}
 	})
 }

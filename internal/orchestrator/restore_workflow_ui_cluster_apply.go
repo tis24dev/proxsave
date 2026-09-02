@@ -331,11 +331,19 @@ func (f *safeClusterApplyUIFlow) confirmAndApplyDatacenterCfg(dcCfg string, size
 		f.logger.Info("Skipping datacenter.cfg apply")
 		return nil
 	}
-	logging.DebugStep(f.logger, "safe cluster apply (ui)", "Apply datacenter.cfg via pvesh")
-	if err := runPvesh(f.ctx, f.logger, []string{"set", "/cluster/config", "-conf", dcCfg}); err != nil {
+	// Not pvesh: the live node has no 'set' handler on /cluster/config (probed
+	// 2026-09-02, PVE 9.1.9), so the old call never applied anything. The file
+	// write IS the cluster-wide apply - /etc/pve is pmxcfs.
+	logging.DebugStep(f.logger, "safe cluster apply (ui)", "Write datacenter.cfg into pmxcfs")
+	data, err := restoreFS.ReadFile(dcCfg)
+	if err != nil {
+		f.logger.Warning("Failed to read exported datacenter.cfg: %v", err)
+		return nil
+	}
+	if err := pmxcfsWriteFile(f.logger, "datacenter.cfg", data); err != nil {
 		f.logger.Warning("Failed to apply datacenter.cfg: %v", err)
 	} else {
-		f.logger.Info("datacenter.cfg applied successfully")
+		f.logger.Info("datacenter.cfg written to pmxcfs (cluster-wide)")
 	}
 	return nil
 }
