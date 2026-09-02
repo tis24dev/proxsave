@@ -56,3 +56,24 @@ func TestBuildBackupCandidatePathsNormalizesBundleInput(t *testing.T) {
 		})
 	}
 }
+
+// The bundle build stages `<archive>.bundle.tar.tmp-<rand>` IN BACKUP_PATH
+// (fs.CreateTemp with pattern "<base>.tmp-*", orchestrator.go), with NO leading dot.
+// A crash during bundling leaves that file behind, it matches the backup glob, and a
+// prefix-only check let every List count it as a backup forever: phantom counts, a
+// missing-.metadata WARNING each pass (pinning exit 1), and nothing ever deleting it.
+// The temp marker must therefore match anywhere in the name.
+func TestBackupTempArtifactMatchesBundleTempMidName(t *testing.T) {
+	cases := map[string]bool{
+		"host-backup-20250101-120000.tar.zst.bundle.tar.tmp-12345": true,
+		".tmp-host-backup-20250101-120000.tar.zst":                 true,
+		"host-backup-20250101-120000.tar.zst.partial":              true,
+		"host-backup-20250101-120000.tar.zst":                      false,
+		"host-backup-20250101-120000.tar.zst.bundle.tar":           false,
+	}
+	for path, want := range cases {
+		if got := isBackupTempArtifact("/backups/" + path); got != want {
+			t.Errorf("isBackupTempArtifact(%q) = %v, want %v", path, got, want)
+		}
+	}
+}
