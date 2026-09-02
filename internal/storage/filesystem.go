@@ -176,14 +176,19 @@ func (d *FilesystemDetector) getMountPoint(path string) (string, error) {
 		return "", err
 	}
 
-	lines := strings.Split(string(data), "\n")
-	bestMatch := "/"
-	bestMatchLen := 0
-
 	absPath, err := filepath.Abs(path)
 	if err != nil {
 		absPath = path
 	}
+
+	return bestMountPointFor(strings.Split(string(data), "\n"), absPath), nil
+}
+
+// bestMountPointFor picks the deepest mount point owning absPath from /proc/mounts
+// lines, defaulting to "/".
+func bestMountPointFor(lines []string, absPath string) string {
+	bestMatch := "/"
+	bestMatchLen := 0
 
 	for _, line := range lines {
 		fields := strings.Fields(line)
@@ -195,8 +200,10 @@ func (d *FilesystemDetector) getMountPoint(path string) (string, error) {
 		// Unescape octal sequences like \040 (space)
 		mountPoint = unescapeOctal(mountPoint)
 
-		// Check if this path is under this mount point
-		if strings.HasPrefix(absPath, mountPoint) {
+		// Under this mount point by PATH BOUNDARY: a bare prefix check let a
+		// sibling mount whose path is a string prefix win (/mnt/nas vs /mnt/nas2),
+		// and a dead sibling then aborted the backup of a healthy path.
+		if mountPoint == "/" || absPath == mountPoint || strings.HasPrefix(absPath, mountPoint+"/") {
 			if len(mountPoint) > bestMatchLen {
 				bestMatch = mountPoint
 				bestMatchLen = len(mountPoint)
@@ -204,7 +211,7 @@ func (d *FilesystemDetector) getMountPoint(path string) (string, error) {
 		}
 	}
 
-	return bestMatch, nil
+	return bestMatch
 }
 
 // getFilesystemType gets the filesystem type for a mount point using df

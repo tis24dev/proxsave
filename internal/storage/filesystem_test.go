@@ -309,3 +309,25 @@ func TestFilesystemDetectorTestOwnershipSupport_FailsWhenDirNotWritable(t *testi
 		t.Fatalf("expected ownership support test to fail when directory is not writable")
 	}
 }
+
+// A mount point must own the path by PATH BOUNDARY, not by string prefix: with
+// mounts "/" and "/mnt/nas", BACKUP_PATH=/mnt/nas2 lives on "/", but a bare
+// HasPrefix picked "/mnt/nas" - and a dead /mnt/nas then turned into a critical
+// StorageError aborting the backup of a perfectly healthy sibling path.
+func TestBestMountPointForRespectsPathBoundaries(t *testing.T) {
+	lines := []string{
+		"rootfs / ext4 rw 0 0",
+		"nas /mnt/nas nfs4 rw 0 0",
+	}
+	cases := map[string]string{
+		"/mnt/nas2":    "/",
+		"/mnt/nas":     "/mnt/nas",
+		"/mnt/nas/sub": "/mnt/nas",
+		"/var/backups": "/",
+	}
+	for path, want := range cases {
+		if got := bestMountPointFor(lines, path); got != want {
+			t.Errorf("bestMountPointFor(%q) = %q, want %q", path, got, want)
+		}
+	}
+}
