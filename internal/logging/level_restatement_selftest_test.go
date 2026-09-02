@@ -34,6 +34,7 @@ func (fakeLogger) Critical(string, ...any)    {}
 func (fakeLogger) NotifyError(string, ...any) {}
 func (fakeLogger) Skip(string, ...any)        {}
 func (fakeLogger) Fatal(int, string, ...any)  {}
+func (fakeLogger) AppendRaw(string)           {}
 
 func logBootstrapWarning(l fakeLogger, format string, args ...any)          {}
 func logWarning(l fakeLogger, format string, args ...any)                   {}
@@ -63,6 +64,16 @@ func plant() {
 	logWarning(l, "WARNING: through the identity-shaped wrapper")
 	logDebug(l, "✓ glyph through the debug wrapper")
 	logTelegramRegistrationDebug(l, "WARNING: through the telegram wrapper")
+
+	// The third audit's holes: text the scanner must now resolve without a plain literal.
+	l.Warning("WARNING: " + "concatenated literal")
+	l.Warning(fmt.Sprintf("WARNING: inline sprintf %d", 1))
+	msg := "WARNING: via a variable"
+	l.Warning(msg)
+	built := fmt.Sprintf("⚠ sprintf into a variable")
+	l.Warning(built)
+	l.Info("legacy marker [WARNING] mid literal")
+	l.AppendRaw("✓ glyph through AppendRaw")
 }
 `
 	if err := os.WriteFile(filepath.Join(nested, "fixture.go"), []byte(src), 0o600); err != nil {
@@ -80,20 +91,26 @@ func plant() {
 	sort.Strings(got)
 	want := []string{
 		"glyph|DEBUG|✓ glyph through the debug wrap",
+		"glyph|INFO|✓ glyph through AppendRaw",
 		"glyph|INFO|✓ planted glyph restatement",
+		"glyph|WARNING|⚠ sprintf into a variable",
 		"word|CRITICAL|CRITICAL: method was not in th",
 		"word|CRITICAL|CRITICAL: through Fatal, forma",
 		"word|ERROR|ERROR opening the archive, no ",
 		"word|ERROR|ERROR: literal in argument 1",
 		"word|ERROR|error: through NotifyError",
 		"word|INFO|info: through Skip",
+		"word|WARNING|WARNING: concatenated literal",
+		"word|WARNING|WARNING: inline sprintf %d",
 		"word|WARNING|WARNING: level the column cont",
 		"word|WARNING|WARNING: planted through the w",
 		"word|WARNING|WARNING: planted word restatem",
 		"word|WARNING|WARNING: through the identity-",
 		"word|WARNING|WARNING: through the telegram ",
+		"word|WARNING|WARNING: via a variable",
 		"word|WARNING|WARNING: ⚠ word and glyph in o",
 		"word|WARNING|Warning - dash spelling",
+		"word|WARNING|legacy marker [WARNING] mid li",
 		"word|WARNING|warn: the short spelling",
 	}
 	sort.Strings(want)

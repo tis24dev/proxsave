@@ -202,8 +202,11 @@ func collectExecPathCandidates() []string {
 }
 
 func warnExecPathMissing() {
-	msg := "WARNING: Unable to determine proxsave/proxmox-backup executable path; symlink and cron setup skipped"
-	fmt.Fprintln(os.Stderr, msg)
+	// The stderr copy keeps the word: that stream has no level column, so the
+	// prefix is its only severity marker (same call as the JSON-mode stderr
+	// lines in main_config_modes). The logger line drops it - its column says it.
+	msg := "Unable to determine proxsave/proxmox-backup executable path; symlink and cron setup skipped"
+	fmt.Fprintln(os.Stderr, "WARNING: "+msg)
 	logging.Warning("%s", msg)
 }
 

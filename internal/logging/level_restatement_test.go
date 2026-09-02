@@ -32,14 +32,14 @@ import (
 // test enforces is the one the maintainer stated for the whole screen campaign: the TUI lends the
 // CLI its SENTENCE, never its glyph and never its colour.
 //
-// WHAT THIS TEST CANNOT SEE. It reads string LITERALS at the call site. A message built into a
-// variable, or assembled with fmt.Sprintf before the call, is invisible to it. That is a real gap
-// and not a bug in the rule: cmd/proxsave/runtime_helpers.go:453 and :457 build "⚠ %s initialized
-// with warnings" with fmt.Sprintf, and logStorageInitSummary at :497 then reads that very glyph
-// back with strings.HasPrefix to CHOOSE between logging.Warning and logging.Info. There the glyph
-// is load-bearing, and removing it would silently downgrade the line (and a WARNING is what
-// promotes an otherwise clean run to exit 1, through ParseLogCounts and applyIssueExitCode). This
-// test does not reach that pair, so the comment there has to carry the warning instead.
+// WHAT THIS TEST CANNOT SEE. It resolves compile-time text: literals, "+" chains of them, inline
+// fmt.Sprintf formats, and a SAME-FUNCTION variable last assigned one of those (that resolution
+// caught runtime_helpers.go's warnExecPathMissing, whose "WARNING: " travelled through msg).
+// Text that crosses a function boundary is still invisible: formatStorageInitSummary builds
+// "⚠ %s initialized with warnings" and its callers log the returned string, so those glyphs never
+// appear here. The old strings.HasPrefix("⚠") read-back that once made that glyph load-bearing is
+// gone - the level is a returned flag now (storage_init_summary_level_test.go pins it) - but the
+// cross-function gap itself remains a declared limitation of this gate.
 //
 // NO BASELINE, ON PURPOSE. The rule arrived after the violations: 143 call sites broke it when
 // the campaign opened (85 in words, 58 as a glyph, under the original scanner; the extended
@@ -62,13 +62,16 @@ var levelOfLoggerMethod = map[string]string{
 	"Critical":    "CRITICAL",
 	// Fatal's format string sits at argument 1 (argument 0 is the exit code); the
 	// every-literal scan reaches it there.
-	"Fatal":   "CRITICAL",
-	"Warning": "WARNING",
-	"Info":    "INFO",
-	"Skip":    "INFO",
-	"Step":    "INFO",
-	"Phase":   "INFO",
-	"Debug":   "DEBUG",
+	"Fatal": "CRITICAL",
+	// AppendRaw writes "[ts] INFO     msg" into the file (logger.go): a severity
+	// word or glyph in its literal restates that column.
+	"AppendRaw": "INFO",
+	"Warning":   "WARNING",
+	"Info":      "INFO",
+	"Skip":      "INFO",
+	"Step":      "INFO",
+	"Phase":     "INFO",
+	"Debug":     "DEBUG",
 }
 
 // wrapperFuncs are plain-function wrappers whose string literal sits past a leading
@@ -226,7 +229,33 @@ func scanForLevelRestatement(t *testing.T, root string) []levelViolation {
 		}
 		rel = filepath.ToSlash(rel)
 
+		// varText tracks, per function and in lexical order, identifiers whose last
+		// assignment resolves to compile-time text (a literal, a "+" chain, an
+		// inline Sprintf): msg := fmt.Sprintf("WARNING: ..."); l.Warning(msg) was
+		// structurally invisible. Best effort by design: a reassignment from
+		// anything unresolvable clears the entry rather than keeping stale text.
+		varText := map[string]string{}
 		ast.Inspect(file, func(n ast.Node) bool {
+			switch node := n.(type) {
+			case *ast.FuncDecl:
+				varText = map[string]string{}
+				return true
+			case *ast.AssignStmt:
+				if len(node.Lhs) == len(node.Rhs) {
+					for i, lhs := range node.Lhs {
+						id, ok := lhs.(*ast.Ident)
+						if !ok || id.Name == "_" {
+							continue
+						}
+						if text, ok := literalText(node.Rhs[i]); ok {
+							varText[id.Name] = text
+						} else {
+							delete(varText, id.Name)
+						}
+					}
+				}
+				return true
+			}
 			call, ok := n.(*ast.CallExpr)
 			if !ok || len(call.Args) == 0 {
 				return true
@@ -249,16 +278,18 @@ func scanForLevelRestatement(t *testing.T, root string) []levelViolation {
 			default:
 				return true
 			}
-			// Every string literal in the call is inspected, not only the format:
-			// Warning("%s", "ERROR: planted") restated through argument 1 and the
-			// scanner never saw it.
+			// Every argument is inspected, not only the format: Warning("%s",
+			// "ERROR: planted") restated through argument 1 and the scanner never
+			// saw it. literalText also folds "+" chains and inline Sprintf, and
+			// varText resolves a same-function variable.
 			for i := firstArg; i < len(call.Args); i++ {
-				lit, ok := call.Args[i].(*ast.BasicLit)
-				if !ok || lit.Kind != token.STRING {
-					continue
+				text, resolvable := literalText(call.Args[i])
+				if !resolvable {
+					if id, isIdent := call.Args[i].(*ast.Ident); isIdent {
+						text, resolvable = varText[id.Name], varText[id.Name] != ""
+					}
 				}
-				text, unquoteErr := strconv.Unquote(lit.Value)
-				if unquoteErr != nil {
+				if !resolvable {
 					continue
 				}
 				kind, wordLevel := restatementKind(level, text)
@@ -266,7 +297,7 @@ func scanForLevelRestatement(t *testing.T, root string) []levelViolation {
 					continue
 				}
 				out = append(out, levelViolation{
-					file: rel, line: fset.Position(lit.Pos()).Line, method: method,
+					file: rel, line: fset.Position(call.Args[i].Pos()).Line, method: method,
 					level: level, wordLevel: wordLevel, literal: text, kind: kind,
 				})
 			}
@@ -290,6 +321,14 @@ func scanForLevelRestatement(t *testing.T, root string) []levelViolation {
 // restatementKind reports "word" when the literal opens with its own level, "glyph" when it
 // carries a severity glyph anywhere, and "" when it is clean. The word check wins when both
 // apply, so one call site produces one baseline entry.
+// bracketedLevelTokens are flagged ANYWHERE in the literal, not only as a prefix:
+// "[WARNING]" mid-sentence is the legacy Bash level marker, unambiguous wherever it
+// sits, unlike the bare words the prefix rule deliberately confines to the opening.
+var bracketedLevelTokens = map[string]string{
+	"[error]": "ERROR", "[critical]": "CRITICAL", "[warning]": "WARNING",
+	"[warn]": "WARNING", "[info]": "INFO", "[debug]": "DEBUG",
+}
+
 // restatementKind flags a literal that opens with ANY level word, not only the
 // call's own: the column owns severity words, and a Debug line opening "WARNING: "
 // contradicts its column instead of repeating it, which is worse, not better.
@@ -303,12 +342,54 @@ func restatementKind(level, literal string) (kind, wordLevel string) {
 			}
 		}
 	}
+	for token, lvl := range bracketedLevelTokens {
+		if strings.Contains(lower, token) {
+			return "word", lvl
+		}
+	}
 	for _, glyph := range severityGlyphs {
 		if strings.Contains(literal, glyph) {
 			return "glyph", level
 		}
 	}
 	return "", ""
+}
+
+// literalText resolves an expression to compile-time string text where the AST
+// alone allows it: a string literal, a parenthesised one, a "+" chain of them, or
+// an inline fmt.Sprintf whose format is one of those. A literal head glued to a
+// computed tail resolves to the head, which is all the prefix rule needs.
+// Anything else stays a declared limitation of this gate.
+func literalText(expr ast.Expr) (string, bool) {
+	switch e := expr.(type) {
+	case *ast.BasicLit:
+		if e.Kind != token.STRING {
+			return "", false
+		}
+		text, err := strconv.Unquote(e.Value)
+		return text, err == nil
+	case *ast.ParenExpr:
+		return literalText(e.X)
+	case *ast.BinaryExpr:
+		if e.Op != token.ADD {
+			return "", false
+		}
+		left, okL := literalText(e.X)
+		if right, okR := literalText(e.Y); okL && okR {
+			return left + right, true
+		}
+		if okL {
+			return left, true
+		}
+		return "", false
+	case *ast.CallExpr:
+		if sel, ok := e.Fun.(*ast.SelectorExpr); ok && sel.Sel.Name == "Sprintf" && len(e.Args) > 0 {
+			return literalText(e.Args[0])
+		}
+		return "", false
+	default:
+		return "", false
+	}
 }
 
 // moduleRoot walks up from the test's directory to the go.mod, so the scan covers the whole
