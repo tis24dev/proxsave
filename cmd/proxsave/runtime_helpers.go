@@ -450,7 +450,7 @@ func fetchStorageStats(ctx context.Context, backend storage.Storage, logger *log
 // which made a glyph that reads as decoration load-bearing: deleting it downgraded the
 // line to INFO in silence, dropping it from warningCount and from the exit-code
 // promotion in applyIssueExitCode. It is a value now, and the string carries no
-// promotion in applyIssueExitCode. It is a value now. The glyph STAYS on the line -
+// severity of its own. The glyph STAYS on the line -
 // it is part of how this screen reads - but nothing downstream depends on it.
 func formatStorageInitSummary(name string, cfg *config.Config, location storage.BackupLocation, stats *storage.StorageStats, backups []*types.BackupMetadata) (string, bool) {
 	retentionConfig := storage.NewRetentionConfigFromConfig(cfg, location)
