@@ -39,6 +39,14 @@ func (c *CloudStorage) resolveRetentionOwners(ctx context.Context, backups []*ty
 		return
 	}
 
+	// The run ctx is cancel-only; every archive costs one `rclone cat` and this
+	// function waits on ALL of them, so an unfloored ctx let a single wedged cat
+	// hang the unattended run forever. One shared management budget bounds the whole
+	// attribution phase: archives left unresolved when it expires keep an empty
+	// Hostname and degrade to the filename token, the documented fallback.
+	ctx, cancel := c.boundManagementCtx(ctx)
+	defer cancel()
+
 	// One round trip per archive, so a large remote is worth parallelising. Bounded by
 	// the same CLOUD_PARALLEL_MAX_JOBS the upload path uses, rather than a second knob:
 	// both are round trips to the same remote and the operator already tuned that
