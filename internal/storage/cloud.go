@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"sync"
@@ -1654,6 +1655,40 @@ func (c *CloudStorage) Delete(ctx context.Context, backupFile string) error {
 	return err
 }
 
+// rcloneFailureDetail merges rclone's own output with the exec error for a failed
+// rclone call. rclone's stderr names the object and the reason, so it leads; the
+// exec error is appended only when it says more than "exit status N". That "more"
+// is the SIGKILL shape: defaultExecCommand sets cmd.WaitDelay, so a cancelled or
+// stalled call gets its process killed and CombinedOutput returns whatever rclone
+// printed so far - typically a NOTICE - plus "signal: killed". Printing the output
+// alone presented that NOTICE as the failure cause and left the kill on no line.
+func rcloneFailureDetail(msg string, err error) string {
+	msg = stripRcloneTimestamps(msg)
+	if err == nil {
+		return msg
+	}
+	if msg == "" {
+		return err.Error()
+	}
+	if strings.HasPrefix(err.Error(), "exit status ") {
+		return msg
+	}
+	return err.Error() + ": " + msg
+}
+
+// stripRcloneTimestamps removes the "2026/09/02 01:00:00 " rclone prefixes from every
+// line of its captured output before the text lands in a log message: the console line
+// already prints the timestamp in its own column, so keeping rclone's says it twice.
+func stripRcloneTimestamps(msg string) string {
+	lines := strings.Split(msg, "\n")
+	for i, line := range lines {
+		lines[i] = rcloneTimestampPrefix.ReplaceAllString(line, "")
+	}
+	return strings.Join(lines, "\n")
+}
+
+var rcloneTimestampPrefix = regexp.MustCompile(`^\s*\d{4}/\d{2}/\d{2} \d{2}:\d{2}:\d{2}(?:\.\d+)? `)
+
 func (c *CloudStorage) deleteBackupInternal(ctx context.Context, backupFile string) (logDeleted bool, err error) {
 	done := logging.DebugStart(c.logger, "cloud delete", "file=%s", backupFile)
 	defer func() { done(err) }()
@@ -1717,13 +1752,8 @@ func (c *CloudStorage) deleteBackupInternal(ctx context.Context, backupFile stri
 				continue
 			}
 			// rel, not filepath.Base(f): f is an rclone remote path ("remote:name"),
-			// which holds no slash, so Base returns it whole. msg is rclone's own
-			// stderr and names the object and the reason; the exec error beside it
-			// only ever says "exit status N", so it speaks only when msg is silent.
-			detail := msg
-			if detail == "" {
-				detail = err.Error()
-			}
+			// which holds no slash, so Base returns it whole.
+			detail := rcloneFailureDetail(msg, err)
 			c.logger.Warning("Cloud Storage: retention - failed to delete %s: %s", rel, detail)
 			// rel for the same reason as the line above: Base is a no-op on a remote
 			// path, and the summary would name the same file differently from the
@@ -1804,13 +1834,9 @@ func (c *CloudStorage) deleteAssociatedLog(ctx context.Context, backupFile strin
 			}
 			return false
 		}
-		// rclone's stderr names the object and the reason; the exec error beside it
-		// only ever says "exit status N". Carrying the exec error alone left the
-		// reason on a Debug line a default install never prints.
-		detail := msg
-		if detail == "" {
-			detail = err.Error()
-		}
+		// Carrying the exec error alone left rclone's reason on a Debug line a
+		// default install never prints; rcloneFailureDetail keeps the reason first.
+		detail := rcloneFailureDetail(msg, err)
 		c.logger.Warning("Cloud Storage: logs - failed to delete %s: %s", cloudPath, detail)
 		return false
 	}
