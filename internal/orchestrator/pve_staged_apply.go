@@ -87,6 +87,10 @@ func maybeApplyPVEConfigsFromStage(ctx context.Context, logger *logging.Logger, 
 				logger.Warning("PVE staged apply: jobs.cfg: %v", err)
 				failedItems = append(failedItems, "jobs.cfg")
 			}
+			if err := applyPVEVzdumpCronFromStage(logger, stageRoot); err != nil {
+				logger.Warning("PVE staged apply: vzdump.cron: %v", err)
+				failedItems = append(failedItems, "vzdump.cron")
+			}
 		}
 	}
 
@@ -180,6 +184,33 @@ func applyPVEDatacenterCfgFromStage(_ context.Context, logger *logging.Logger, s
 		return fmt.Errorf("apply staged datacenter.cfg: %w", err)
 	}
 	logger.Info("PVE staged apply: datacenter.cfg written to pmxcfs (cluster-wide)")
+	return nil
+}
+
+// applyPVEVzdumpCronFromStage writes the staged vzdump.cron into pmxcfs. The
+// file was collected under pve_jobs and documented as staged-applied, but no
+// restore path ever read it back (fable-check bug 5): legacy cron backup jobs
+// silently vanished from every staged restore. There is no pvesh endpoint for
+// vzdump.cron; the file lives in pmxcfs, so the write IS the cluster-wide
+// apply, the same way datacenter.cfg is handled.
+func applyPVEVzdumpCronFromStage(logger *logging.Logger, stageRoot string) error {
+	stagePath := filepath.Join(stageRoot, "etc/pve/vzdump.cron")
+	data, err := restoreFS.ReadFile(stagePath)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			logging.DebugStep(logger, "pve staged apply vzdump.cron", "Skipped: vzdump.cron not present in staging directory")
+			return nil
+		}
+		return fmt.Errorf("read staged vzdump.cron: %w", err)
+	}
+	if strings.TrimSpace(string(data)) == "" {
+		logging.DebugStep(logger, "pve staged apply vzdump.cron", "Staged vzdump.cron is empty; skipping apply")
+		return nil
+	}
+	if err := pmxcfsWriteFile(logger, "vzdump.cron", data); err != nil {
+		return fmt.Errorf("apply staged vzdump.cron: %w", err)
+	}
+	logger.Info("PVE staged apply: vzdump.cron written to pmxcfs (cluster-wide)")
 	return nil
 }
 
