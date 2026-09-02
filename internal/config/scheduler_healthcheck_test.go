@@ -159,6 +159,7 @@ func TestRealTemplateContainsNewKeys(t *testing.T) {
 		"HEALTHCHECK_NOTIFY_TELEGRAM_URL=", "HEALTHCHECK_NOTIFY_TELEGRAM_ID=",
 		"HEALTHCHECK_NOTIFY_GOTIFY_URL=", "HEALTHCHECK_NOTIFY_GOTIFY_ID=",
 		"HEALTHCHECK_NOTIFY_WEBHOOK_URL=", "HEALTHCHECK_NOTIFY_WEBHOOK_ID=",
+		"PERSONAL_SCRIPT_PRE_RUN=", "PERSONAL_SCRIPT_POST_RUN=",
 	} {
 		if !strings.Contains(tmpl, key) {
 			t.Errorf("embedded template is missing new key %q", key)

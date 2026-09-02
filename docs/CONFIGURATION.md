@@ -7,6 +7,7 @@ Complete reference for all 200+ configuration variables in `configs/backup.env`.
 - [Configuration File Location](#configuration-file-location)
 - [General Settings](#general-settings)
 - [Scheduler engine](#scheduler-engine)
+- [Personal scripts (daemon)](#personal-scripts-daemon)
 - [Healthchecks connector (daemon)](#healthchecks-connector-daemon)
 - [Restore Behavior & Dual-Role Hosts](#restore-behavior--dual-role-hosts)
 - [Security Settings](#security-settings)
@@ -89,6 +90,42 @@ MAX_RUN_DURATION=1h            # daemon watchdog: hard timeout for one backup
 The compiled default for `SCHEDULER_MODE` is `cron`, but a fresh install defaults to the daemon and writes `SCHEDULER_MODE=daemon`.
 
 The key's **presence** matters as much as its value. `--upgrade` installs the daemon only on a host where that same upgrade's config merge had to add `SCHEDULER_MODE`, i.e. one that has never recorded an engine. Once the line is in the file the value is honoured and no upgrade revisits the host.
+
+---
+
+## Personal scripts (daemon)
+
+Two scripts of your own, started by the resident daemon around each supervised run. Empty by
+default, which means nothing is started. The full contract is in [DAEMON.md](DAEMON.md); the
+keys are:
+
+```bash
+PERSONAL_SCRIPT_PRE_RUN=       # path to a script started before the run (works only with the daemon)
+PERSONAL_SCRIPT_POST_RUN=      # path to a script started after the run, whatever the outcome (works only with the daemon)
+```
+
+Both take a filesystem path and nothing else: the path is executed directly, with no shell, so
+arguments, pipes and redirections in the value are not interpreted. Two characters need care,
+as in every other value in this file. An unquoted `#` truncates the value, so quote a path that
+contains one. A `$` is expanded and no form of quoting suppresses it, not double quotes, not
+single quotes, not a backslash: the name is looked up in this file first, then in the daemon's
+own environment, and a name neither defines is replaced by nothing, silently. `$$`, `$@`, `$*`,
+`$!`, `$?`, `$-`, `$0` to `$9` and a `${` with no closing brace are consumed the same way. Only
+a `$` at the end of the value, or one before a character that is neither a letter, a digit, an
+underscore nor one of those, survives. Rename the script rather than fighting the expansion.
+
+These scripts belong to you. ProxSave starts them and reports nothing about them: their output
+is discarded, their exit code is ignored, they never fail a backup or change its exit code, and
+they appear in no log, notification, ping or metric. Each is killed after 10 minutes, on every
+path but the abandoned-child unwind described in [DAEMON.md](DAEMON.md). They run
+only under the daemon, never under a manual `proxsave --backup` or a cron-mode run.
+
+The one line ProxSave will ever log about them is a refusal at daemon start: the path must not
+traverse a symlink, it and every directory above it must belong to root (or the user the
+daemon runs as), the script must not be writable by group or others, and a group- or
+other-writable directory must carry the sticky bit. A path that fails is disabled for that
+daemon with a `WARNING` naming the variable, the path and the reason (see
+[SECURITY.md](SECURITY.md)).
 
 ---
 

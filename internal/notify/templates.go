@@ -57,10 +57,11 @@ func BuildEmailPlainText(data *NotificationData) string {
 	if len(data.LogCategories) > 0 {
 		body.WriteString("ISSUE DETAILS:\n")
 		for _, cat := range data.LogCategories {
+			// Label and count only. The label now names the operation that failed
+			// ("Cloud Storage: retention"), so an example line would only repeat one
+			// arbitrary instance of a group the count already sizes; the log file is
+			// where the individual lines live.
 			fmt.Fprintf(&body, "  - [%s] %s (count: %d)\n", cat.Type, cat.Label, cat.Count)
-			if cat.Example != "" {
-				fmt.Fprintf(&body, "    Example: %s\n", cat.Example)
-			}
 		}
 		body.WriteString("\n")
 	}

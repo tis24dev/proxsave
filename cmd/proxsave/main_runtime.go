@@ -36,7 +36,7 @@ func detectAndPrintEnvironment(bootstrap *logging.BootstrapLogger) *environment.
 	bootstrap.Println("Detecting Proxmox environment...")
 	envInfo, err := environment.Detect()
 	if err != nil {
-		bootstrap.Warning("WARNING: %v", err)
+		bootstrap.Warning("%v", err)
 		bootstrap.Println("Continuing with limited functionality...")
 	}
 	bootstrap.Printf("✓ Proxmox Type: %s", envInfo.Type)
@@ -62,7 +62,7 @@ func redetectHostBackupEnvironment(rt *appRuntime) {
 	prefix := strings.TrimSpace(rt.cfg.SystemRootPrefix)
 	if prefix == "" || prefix == string(filepath.Separator) {
 		if rt.cfg.HostBackupMode {
-			rt.bootstrap.Warning("WARNING: HOST_BACKUP_MODE is set but SYSTEM_ROOT_PREFIX is empty; host-backup mode has no effect")
+			rt.bootstrap.Warning("HOST_BACKUP_MODE is set but SYSTEM_ROOT_PREFIX is empty; host-backup mode has no effect")
 		}
 		return
 	}
@@ -90,9 +90,9 @@ func redetectHostBackupEnvironment(rt *appRuntime) {
 		// (chroot/snapshot/CI) on a non-Proxmox live system stays quiet to avoid spam.
 		switch {
 		case rt.cfg.HostBackupMode:
-			rt.bootstrap.Warning("WARNING: no Proxmox host detected under SYSTEM_ROOT_PREFIX=%s; the host filesystem may not be mounted (archive labeled unknown)", prefix)
+			rt.bootstrap.Warning("no Proxmox host detected under SYSTEM_ROOT_PREFIX=%s; the host filesystem may not be mounted (archive labeled unknown)", prefix)
 		case liveType.SupportsPVE() || liveType.SupportsPBS():
-			rt.bootstrap.Warning("WARNING: %s detected on the live system but none under SYSTEM_ROOT_PREFIX=%s; the host filesystem may not be mounted (archive labeled unknown)", liveType, prefix)
+			rt.bootstrap.Warning("%s detected on the live system but none under SYSTEM_ROOT_PREFIX=%s; the host filesystem may not be mounted (archive labeled unknown)", liveType, prefix)
 		default:
 			rt.bootstrap.Debug("no Proxmox detected under SYSTEM_ROOT_PREFIX=%s; archive labeled unknown", prefix)
 		}
@@ -128,7 +128,7 @@ func warnHostBackupMountShape(rt *appRuntime, prefix string, detected types.Prox
 	}
 	pvePath := filepath.Join(prefix, "etc", "pve")
 	if info, err := os.Stat(pvePath); err != nil || !info.IsDir() {
-		rt.bootstrap.Warning("WARNING: %s is not present; the /etc/pve bind mount may be missing (cluster and Ceph config will be incomplete)", pvePath)
+		rt.bootstrap.Warning("%s is not present; the /etc/pve bind mount may be missing (cluster and Ceph config will be incomplete)", pvePath)
 	}
 }
 
@@ -190,7 +190,7 @@ func loadRunConfig(args *cli.Args, bootstrap *logging.BootstrapLogger) (*config.
 
 	initialEnvBaseDir := os.Getenv("BASE_DIR")
 	if err := ensureConfigExists(args.ConfigPath, bootstrap); err != nil {
-		bootstrap.Error("ERROR: %v", err)
+		bootstrap.Error("%v", err)
 		return nil, "", false, types.ExitConfigError.Int(), false
 	}
 
@@ -198,7 +198,7 @@ func loadRunConfig(args *cli.Args, bootstrap *logging.BootstrapLogger) (*config.
 	logging.DebugStepBootstrap(bootstrap, "main run", "loading configuration")
 	cfg, err := config.LoadConfigWithBaseDir(args.ConfigPath, autoBaseDir)
 	if err != nil {
-		bootstrap.Error("ERROR: Failed to load configuration: %v", err)
+		bootstrap.Error("Failed to load configuration: %v", err)
 		return nil, "", false, types.ExitConfigError.Int(), false
 	}
 	_ = os.Setenv("BASE_DIR", cfg.BaseDir)
@@ -209,7 +209,7 @@ func loadRunConfig(args *cli.Args, bootstrap *logging.BootstrapLogger) (*config.
 func validateRunConfig(rt *appRuntime) (int, bool) {
 	printDryRunBootstrapStatus(rt)
 	if err := validateFutureFeatures(rt.cfg); err != nil {
-		rt.bootstrap.Error("ERROR: Invalid configuration: %v", err)
+		rt.bootstrap.Error("Invalid configuration: %v", err)
 		return types.ExitConfigError.Int(), false
 	}
 	warnLogPathConfiguration(rt.cfg, rt.bootstrap)
@@ -230,13 +230,13 @@ func printDryRunBootstrapStatus(rt *appRuntime) {
 
 func warnLogPathConfiguration(cfg *config.Config, bootstrap *logging.BootstrapLogger) {
 	if strings.TrimSpace(cfg.LogPath) == "" {
-		bootstrap.Warning("WARNING: LOG_PATH is empty - file logging disabled, using stdout only")
+		bootstrap.Warning("LOG_PATH is empty - file logging disabled, using stdout only")
 	}
 	if cfg.SecondaryEnabled && strings.TrimSpace(cfg.SecondaryLogPath) == "" {
-		bootstrap.Warning("WARNING: Secondary storage enabled but SECONDARY_LOG_PATH is empty - secondary log copy and cleanup will be disabled for this run")
+		bootstrap.Warning("Secondary storage enabled but SECONDARY_LOG_PATH is empty - secondary log copy and cleanup will be disabled for this run")
 	}
 	if cfg.CloudEnabled && strings.TrimSpace(cfg.CloudLogPath) == "" {
-		bootstrap.Warning("WARNING: Cloud storage enabled but CLOUD_LOG_PATH is empty - cloud log copy and cleanup will be disabled for this run")
+		bootstrap.Warning("Cloud storage enabled but CLOUD_LOG_PATH is empty - cloud log copy and cleanup will be disabled for this run")
 	}
 }
 
@@ -246,12 +246,12 @@ func runNetworkPreflight(cfg *config.Config, bootstrap *logging.BootstrapLogger)
 		return
 	}
 	if cfg.DisableNetworkPreflight {
-		bootstrap.Warning("WARNING: Network preflight disabled via DISABLE_NETWORK_PREFLIGHT; features: %s", strings.Join(reasons, ", "))
+		bootstrap.Warning("Network preflight disabled via DISABLE_NETWORK_PREFLIGHT; features: %s", strings.Join(reasons, ", "))
 		return
 	}
 	if err := checkInternetConnectivity(networkPreflightTimeout); err != nil {
-		bootstrap.Warning("WARNING: Network connectivity unavailable for: %s. %v", strings.Join(reasons, ", "), err)
-		bootstrap.Warning("WARNING: Disabling network-dependent features for this run")
+		bootstrap.Warning("Network connectivity unavailable for: %s. %v", strings.Join(reasons, ", "), err)
+		bootstrap.Warning("Disabling network-dependent features for this run")
 		disableNetworkFeaturesForRun(cfg, bootstrap)
 	}
 }
@@ -296,7 +296,7 @@ func initializeRestoreSessionLogger(rt *appRuntime, fallback *logging.Logger) *l
 	logging.DebugStepBootstrap(rt.bootstrap, "main run", "restore log enabled")
 	restoreLogger, restoreLogPath, closeFn, err := logging.StartSessionLogger("restore", rt.logLevel, rt.cfg.UseColor)
 	if err != nil {
-		rt.bootstrap.Warning("WARNING: Unable to start restore log: %v", err)
+		rt.bootstrap.Warning("Unable to start restore log: %v", err)
 		return fallback
 	}
 	rt.sessionLogCloser = closeFn

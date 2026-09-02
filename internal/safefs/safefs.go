@@ -62,6 +62,50 @@ func (e *TimeoutError) Error() string {
 
 func (e *TimeoutError) Unwrap() error { return ErrTimeout }
 
+// CancelError is returned when a bounded filesystem operation is abandoned because its
+// context was CANCELLED (as opposed to timed out). It names the operation and the path the
+// caller asked for, and unwraps to context.Canceled.
+//
+// It exists because the cancelled shape was the only one that did not name the file. The
+// other three all do - "remove /x: permission denied" from the syscall, "remove /x: timeout
+// after 30s" and "remove /x: timeout" from TimeoutError - so a caller wanting the file in a
+// log line had to repeat it from its own arguments, printing it twice on the three shapes
+// that already carried it. Callers can now let the error speak.
+//
+// "remove /x: canceled" names the operation the caller REQUESTED and then abandoned, not a
+// syscall that ran. That is deliberate and it is not a claim about the disk: runBounded's
+// select picks uniformly among ready cases, so a cancelled Remove may have issued no syscall
+// and left the file, or issued one whose abandoned worker deletes the file after the caller
+// returned. Neither branch can predict its own disk state, so no wording can promise one.
+// The timeout shape has always said the same thing under the same conditions, and the
+// standard library does it too (net.Dial renders "dial tcp 10.0.0.1:80: operation was
+// canceled" from the same kind of guard).
+type CancelError struct {
+	Op   string
+	Path string
+}
+
+func (e *CancelError) Error() string {
+	if e == nil {
+		return "filesystem operation canceled"
+	}
+	return fmt.Sprintf("%s %s: canceled", e.Op, e.Path)
+}
+
+// Unwrap keeps the identity every consumer already reads: 19 production sites ask
+// errors.Is(err, context.Canceled), and IsAbandoned answers from the same chain.
+func (e *CancelError) Unwrap() error { return context.Canceled }
+
+// cancelErrorFrom reuses the Op and Path the caller already supplied for the timeout shape,
+// so the two abandonment errors name the operation identically. A nil bound (a caller that
+// passed no descriptor) keeps the bare context error rather than inventing one.
+func cancelErrorFrom(bound *TimeoutError) error {
+	if bound == nil {
+		return context.Canceled
+	}
+	return &CancelError{Op: bound.Op, Path: bound.Path}
+}
+
 func effectiveTimeout(ctx context.Context, timeout time.Duration) time.Duration {
 	if timeout <= 0 {
 		return 0
@@ -85,6 +129,15 @@ func normalizeContextErr(ctx context.Context, deadlineErr error) error {
 	}
 	if errors.Is(err, context.DeadlineExceeded) {
 		return deadlineErr
+	}
+	// Only a genuine cancellation is renamed. A context whose Err() is neither of the two
+	// standard causes passes through untouched: turning it into a CancelError would make
+	// IsAbandoned answer true, and that answer tells a caller to SKIP closing its file
+	// handles (see copy.go and internal/backup/checksum.go).
+	if errors.Is(err, context.Canceled) {
+		if bound, ok := deadlineErr.(*TimeoutError); ok {
+			return cancelErrorFrom(bound)
+		}
 	}
 	return err
 }
@@ -158,6 +211,12 @@ func runBounded[T any](ctx context.Context, limiter *operationLimiter, timeout t
 		if err := limiter.acquire(ctx, timer.C); err != nil {
 			if errors.Is(err, ErrTimeout) {
 				return zero, timeoutErr
+			}
+			// acquire hands back the bare context error; name it the same way the
+			// select below does, so waiting for a slot and waiting for the worker
+			// are indistinguishable to the caller.
+			if errors.Is(err, context.Canceled) {
+				return zero, cancelErrorFrom(timeoutErr)
 			}
 			return zero, err
 		}

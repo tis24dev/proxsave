@@ -75,8 +75,8 @@ func (s *StorageAdapter) Sync(ctx context.Context, stats *BackupStats) error {
 				s.setStorageStatus(stats, "error")
 				return fmt.Errorf("%s filesystem detection failed (CRITICAL): %w", s.backend.Name(), err)
 			}
-			s.logger.Warning("WARNING: %s filesystem detection failed: %v", s.backend.Name(), err)
-			s.logger.Warning("WARNING: %s operations will be skipped", s.backend.Name())
+			s.logger.Warning("%s", storageFailureText(err, s.backend.Name(), "filesystem detection failed"))
+			s.logger.Warning("%s operations will be skipped", s.backend.Name())
 			s.setStorageStatus(stats, "error")
 			return nil
 		}
@@ -104,14 +104,16 @@ func (s *StorageAdapter) Sync(ctx context.Context, stats *BackupStats) error {
 		}
 
 		// Non-critical error - log warning and continue
-		s.logger.Warning("WARNING: %s store operation failed: %v", s.backend.Name(), err)
+		s.logger.Warning("%s", storageFailureText(err, s.backend.Name(), "store operation failed"))
 		// When the PRIMARY archive was saved and only a sidecar failed, do NOT claim the whole
 		// backup was not saved (that reads as data loss when the archive is safe, F08-08).
+		// se != nil guards the typed-nil shape: errors.As matches a nil
+		// *StorageError in the chain and leaves the target nil (PR #303 review).
 		var se *storage.StorageError
-		if errors.As(err, &se) && se.PrimarySaved {
-			s.logger.Warning("WARNING: %s: primary backup saved, but a sidecar file was not uploaded", s.backend.Name())
+		if errors.As(err, &se) && se != nil && se.PrimarySaved {
+			s.logger.Warning("%s: primary backup saved, but a sidecar file was not uploaded", s.backend.Name())
 		} else {
-			s.logger.Warning("WARNING: Backup was not saved to %s", s.backend.Name())
+			s.logger.Warning("Backup was not saved to %s", s.backend.Name())
 		}
 		hasErrors = true
 		// Don't return error - continue with retention
@@ -143,7 +145,7 @@ func (s *StorageAdapter) Sync(ctx context.Context, stats *BackupStats) error {
 			}
 
 			// Non-critical error - log warning and continue
-			s.logger.Warning("WARNING: %s retention failed: %v", s.backend.Name(), err)
+			s.logger.Warning("%s", storageFailureText(err, s.backend.Name(), "retention failed"))
 			hasWarnings = true
 		} else {
 			// Read on every successful pass, not only when something was deleted. The
@@ -349,4 +351,28 @@ func (s *StorageAdapter) setStorageStatus(stats *BackupStats, status string) {
 	default:
 		stats.LocalStatus = status
 	}
+}
+
+// storageFailureText renders a backend failure for the operator.
+//
+// A *storage.StorageError already names the location, the operation and the path, so it
+// is printed on its own: repeating "Secondary Storage store operation failed" in front of
+// "secondary storage store operation failed for /path" said the same sentence twice, in
+// two spellings.
+//
+// Anything else is printed with the backend name and the operation in front, because it
+// carries no attribution of its own. That is not a theoretical branch: Store and
+// ApplyRetention return a bare ctx.Err() on the non-critical backends
+// (internal/storage/secondary.go:137, :689, :795, :880 and internal/storage/cloud.go:733,
+// :1928, :2060), and on the retention arm there is no sibling line to say which backend
+// it was - collapsing it to the error alone leaves "context canceled" and nothing else.
+func storageFailureText(err error, backendName, operation string) string {
+	var se *storage.StorageError
+	if errors.As(err, &se) {
+		// %v, not err.Error(): a typed-nil *StorageError satisfies errors.As while
+		// panicking on Error(), and these two arms exist to log and carry on. fmt
+		// renders it "<nil>", which is what the literal they replaced already did.
+		return fmt.Sprintf("%v", err)
+	}
+	return fmt.Sprintf("%s %s: %v", backendName, operation, err)
 }

@@ -205,6 +205,41 @@ cat /proc/self/gid_map
 
 ---
 
+#### A personal pre/post script seems not to run, and nothing is logged
+
+**Symptoms**:
+- `PERSONAL_SCRIPT_PRE_RUN` or `PERSONAL_SCRIPT_POST_RUN` is set, but the script's effect never
+  happens, and no log line, warning, notification or ping mentions it.
+
+**Cause**:
+- Silence is by design: ProxSave starts these scripts and reports nothing about them, so a
+  script that never started looks exactly like one that ran and did nothing. The usual reasons
+  it never starts are a path that does not exist, a missing
+  shebang, a value that is a command line rather than a bare path (no shell is used, so
+  arguments, pipes and redirections are not interpreted), a path edited in `backup.env` without
+  restarting the daemon, or a run that was not the daemon's (a manual `proxsave --backup` and a
+  cron-mode run start neither script).
+- The one cause that DOES log: the trusted-path gate at daemon start. A path that traverses a
+  symlink, is not executable, is writable by group or others, or sits under a directory not
+  owned by root (or writable by others without the sticky bit) is disabled for that daemon
+  with a `WARNING` naming the variable, the path and the reason.
+
+**Resolution**:
+```bash
+journalctl -u proxsave-daemon.service | grep PERSONAL_SCRIPT   # a gate refusal names the reason
+ls -l /usr/local/bin/my-pre-run.sh      # owned by root, mode 0700 or 0755, no group/other write
+head -1 /usr/local/bin/my-pre-run.sh    # a shebang, e.g. #!/bin/sh
+/usr/local/bin/my-pre-run.sh; echo $?   # runs by hand, as root
+grep PERSONAL_SCRIPT /opt/proxsave/configs/backup.env
+systemctl restart proxsave-daemon.service   # the paths are read at daemon start
+```
+- Have the script write its own log if you want a record: ProxSave will not write one for you.
+- A script still running after 10 minutes is killed, silently, and the daemon carries on. The
+  one exception is the abandoned-child unwind, where the post script is started and left to
+  systemd's cgroup teardown (see [DAEMON.md](DAEMON.md)).
+
+---
+
 ### 3. Cloud Storage Issues
 
 #### Error: `rclone not found in PATH`

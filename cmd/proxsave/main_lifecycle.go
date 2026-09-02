@@ -145,7 +145,7 @@ func resolveRunConfigPath(args *cli.Args, bootstrap *logging.BootstrapLogger) (i
 	logging.DebugStepBootstrap(bootstrap, "main run", "resolving config path")
 	resolvedConfigPath, err := resolveInstallConfigPath(args.ConfigPath)
 	if err != nil {
-		bootstrap.Error("ERROR: %v", err)
+		bootstrap.Error("%v", err)
 		return types.ExitConfigError.Int(), false
 	}
 	args.ConfigPath = resolvedConfigPath
@@ -169,7 +169,7 @@ func prepareRuntime(ctx context.Context, args *cli.Args, bootstrap *logging.Boot
 
 func enforceGoRuntimeVersion(bootstrap *logging.BootstrapLogger) (int, bool) {
 	if err := checkGoRuntimeVersion(goRuntimeMinVersion); err != nil {
-		bootstrap.Error("ERROR: %v", err)
+		bootstrap.Error("%v", err)
 		return types.ExitEnvironmentError.Int(), false
 	}
 	return types.ExitSuccess.Int(), true

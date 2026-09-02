@@ -227,7 +227,7 @@ func (e *EmailNotifier) Send(ctx context.Context, data *NotificationData) (*Noti
 			result.Error = fmt.Errorf("no valid email recipient configured")
 			return result, nil
 		default:
-			e.logger.Warning("WARNING: Email recipient is empty after configuration/detection")
+			e.logger.Warning("Email recipient is empty after configuration/detection")
 			e.logger.Info("  EMAIL_DELIVERY_METHOD=pmf routes via Proxmox Notifications; recipient is only used for the To: header")
 		}
 	}
@@ -236,9 +236,9 @@ func (e *EmailNotifier) Send(ctx context.Context, data *NotificationData) (*Noti
 		redactedRecipient := redactEmail(recipient)
 		if e.config.FallbackSendmail {
 			if autoDetected {
-				e.logger.Warning("WARNING: Auto-detected recipient %s belongs to root and is blocked for relay delivery", redactedRecipient)
+				e.logger.Warning("Auto-detected recipient %s belongs to root and is blocked for relay delivery", redactedRecipient)
 			} else {
-				e.logger.Warning("WARNING: Configured email recipient %s belongs to root and is blocked for relay delivery", redactedRecipient)
+				e.logger.Warning("Configured email recipient %s belongs to root and is blocked for relay delivery", redactedRecipient)
 			}
 			preflightFallbackReason = "recipient_blocked_root"
 			preflightFallbackCause = fmt.Errorf("recipient %s is not allowed (root accounts are blocked)", redactedRecipient)
@@ -280,7 +280,7 @@ func (e *EmailNotifier) Send(ctx context.Context, data *NotificationData) (*Noti
 			result.Error = fmt.Errorf("invalid email recipient format: %s", redactedRecipient)
 			return result, nil
 		default:
-			e.logger.Warning("WARNING: Invalid email format: %s", redactedRecipient)
+			e.logger.Warning("Invalid email format: %s", redactedRecipient)
 		}
 	}
 
@@ -305,7 +305,7 @@ func (e *EmailNotifier) Send(ctx context.Context, data *NotificationData) (*Noti
 		// Fallback to local sendmail if relay fails and fallback is enabled.
 		if err != nil && e.config.FallbackSendmail {
 			relayErr = err // Store original relay error
-			e.logger.Warning("WARNING: Email delivery via cloud relay failed: %v", err)
+			e.logger.Warning("Email delivery via cloud relay failed: %v", err)
 			e.logger.Info("Attempting sendmail fallback after relay delivery failure...")
 			e.logger.Debug("Email fallback decision: stage=delivery reason=relay_send_failed cause=%v", relayErr)
 
@@ -322,7 +322,7 @@ func (e *EmailNotifier) Send(ctx context.Context, data *NotificationData) (*Noti
 		}
 		err = sendErr
 		if err != nil {
-			e.logger.Warning("WARNING: PMF delivery failed: %v", err)
+			e.logger.Warning("PMF delivery failed: %v", err)
 			err = e.sendPMFFallbackChain(ctx, result, recipient, subject, htmlBody, textBody, data, err)
 		}
 	} else {
@@ -463,7 +463,7 @@ func (e *EmailNotifier) sendPMFFallbackChain(
 		if relayErr == nil {
 			return nil
 		}
-		e.logger.Warning("WARNING: Relay fallback failed after PMF failure: %v", relayErr)
+		e.logger.Warning("Relay fallback failed after PMF failure: %v", relayErr)
 		if !e.config.FallbackSendmail {
 			return fmt.Errorf("pmf failed: %w; relay fallback failed: %v", pmfErr, relayErr)
 		}

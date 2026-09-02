@@ -311,6 +311,11 @@ func runDaemon(rt *appRuntime) int {
 }
 
 func (d *daemon) run(ctx context.Context) int {
+	// The trusted-path gate for the operator scripts, once, before any tick can start
+	// one: a refused path is blanked here with a loud reason (validatePersonalScripts),
+	// so the silent starters below never see it.
+	validatePersonalScripts(d.cfg)
+
 	// CRITICAL: install the SIGUSR1 handler BEFORE publishing the pidfile below. Go's DEFAULT action
 	// for SIGUSR1 is to TERMINATE the process, and the pidfile is exactly what a standalone backup
 	// run uses to discover us and send SIGUSR1 to hand off its outcome. If the pid became
@@ -590,6 +595,48 @@ func (d *daemon) runOnce(parentCtx context.Context) bool {
 		logging.Info("daemon: BACKUP_ENABLED=false; skipping the scheduled run (no outcome ping)")
 		return false
 	}
+	// The two operator scripts bracket the run, and this is the only place in the daemon from
+	// which they are ever started. ABOVE the run id, the start ping and the watchdog context
+	// below on purpose: context.WithTimeout(parentCtx, d.maxRunDuration()) starts the
+	// MAX_RUN_DURATION clock, so a pre script started any lower would spend the backup's own
+	// budget and could turn a healthy backup into a reported hang, and one started after the
+	// start ping would silently add its own time to the run duration the remote monitor
+	// measures from that ping. BELOW the two guards above on purpose: those two returns mean
+	// no run happens at all, a tick that arrived during shutdown and backups administratively
+	// off, and neither script belongs to a run that does not exist.
+	//
+	// The post is a defer for the one reason a defer exists: every return BELOW this line is
+	// a run that happened and each of them must reach it, the abandon, the shutdown, the
+	// hang, the skip, the ordinary exit, a cmd.Start that never forked (superviseChild
+	// reports that as reaped=true), and a panic unwind. It is registered before the
+	// defer cancel() below, so LIFO cancels the run context first and the post is never
+	// handed a live one; it is handed no context of the run's at all.
+	//
+	// The post is waited for on every path but two, where the daemon is on its way out and a
+	// wait would be actively harmful. The first is the abandoned-child unwind (postWaits): the
+	// daemon exits so systemd can restart it, and every other step there is bounded to 2 to 15
+	// seconds. The second is any shutdown (parentCtx cancelled): the whole teardown budget is
+	// a stock TimeoutStopSec of 90 seconds, so a waited script would be SIGKILLed along with
+	// the daemon, leaving the pid and info files behind and no clean-stop line. On both the
+	// script is started and left to the unit's cgroup.
+	//
+	// Neither call logs anything, at any level, on any outcome. That is deliberate and is not
+	// an omission to be repaired: these scripts are the operator's, not ours.
+	// Both waited calls carry parentCtx.Done() as their stop: a shutdown landing
+	// MID-WAIT abandons the wait (never the script) instead of holding this
+	// goroutine through the 90-second teardown budget - the same harm the
+	// detached branch below documents avoiding for a shutdown that has already
+	// happened when the post fires.
+	postWaits := true
+	runPersonalScript(d.cfg.PersonalScriptPreRun, parentCtx.Done())
+	defer func() {
+		if postWaits && parentCtx.Err() == nil {
+			runPersonalScript(d.cfg.PersonalScriptPostRun, parentCtx.Done())
+			return
+		}
+		startPersonalScriptDetached(d.cfg.PersonalScriptPostRun)
+	}()
+
 	r := d.getReporter()
 	rid := health.NewRunID()
 	d.reportBestEffort("start", false, func() error { return d.startPing(parentCtx, r, rid) })
@@ -625,6 +672,7 @@ func (d *daemon) runOnce(parentCtx context.Context) bool {
 	// It must come first: every branch below assumes a finished process, and runErr is
 	// meaningless when the wait never completed.
 	if !reaped {
+		postWaits = false // do not delay the restart this unwind exists to trigger
 		return d.abandonChild(parentCtx, r, cmd, rid, logBody)
 	}
 

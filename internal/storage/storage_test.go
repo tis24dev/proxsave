@@ -1090,7 +1090,7 @@ func TestStorageErrorFormatting(t *testing.T) {
 				Err:        errors.New("disk full"),
 				IsCritical: false,
 			},
-			expected: "WARNING: primary storage store operation failed for /backups/full.tar: disk full",
+			expected: "primary storage store operation failed for /backups/full.tar: disk full",
 		},
 		{
 			name: "critical and recoverable",
@@ -1102,7 +1102,7 @@ func TestStorageErrorFormatting(t *testing.T) {
 				IsCritical:  true,
 				Recoverable: true,
 			},
-			expected: "CRITICAL: secondary storage delete operation failed for /mnt/secondary/old.tar (recoverable): permission denied",
+			expected: "secondary storage delete operation failed for /mnt/secondary/old.tar (recoverable): permission denied",
 		},
 	}
 

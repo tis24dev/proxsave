@@ -141,12 +141,15 @@ func (l *LocalStorage) Store(ctx context.Context, backupFile string, metadata *t
 
 	// Verify file exists (bounded against a dead/stale mount).
 	if _, err := safefs.Stat(ctx, backupFile, fsIoTimeout(l.config)); err != nil {
-		l.logger.Debug("Local storage: source file %s not found", backupFile)
+		// Bounded against a dead/stale mount: see the twin in cloud.go. This backend
+		// is critical and logs nothing here, so the wording that travels is the
+		// error's; it must not claim "not found" over a stat that timed out.
+		l.logger.Debug("Local storage: source file %s could not be read", backupFile)
 		return &StorageError{
 			Location:   LocationPrimary,
 			Operation:  "store",
 			Path:       backupFile,
-			Err:        fmt.Errorf("backup file not found: %w", err),
+			Err:        fmt.Errorf("backup file could not be read: %w", err),
 			IsCritical: true,
 		}
 	}
@@ -154,7 +157,7 @@ func (l *LocalStorage) Store(ctx context.Context, backupFile string, metadata *t
 	// Set proper permissions on the backup file
 	l.logger.Debug("Local storage: setting ownership/permissions on %s", filepath.Base(backupFile))
 	if err := l.fsDetector.SetPermissions(ctx, backupFile, 0, 0, 0600, l.fsInfo); err != nil {
-		l.logger.Warning("Failed to set permissions on %s: %v", backupFile, err)
+		l.logger.Warning("Local Storage: permissions - failed to set them on %s: %v", backupFile, err)
 		// Not critical - continue
 	}
 
@@ -250,7 +253,7 @@ func (l *LocalStorage) List(ctx context.Context) (backups []*types.BackupMetadat
 		// Parse metadata if available
 		metadata, err := l.loadMetadata(ctx, match)
 		if err != nil {
-			l.logger.Warning("Missing .metadata for %s - using filename metadata", filepath.Base(match))
+			l.logger.Warning("Local Storage: listing - .metadata missing for %s, using the filename metadata", filepath.Base(match))
 			// Create minimal metadata from filename
 			metadata = &types.BackupMetadata{
 				BackupFile: match,
@@ -413,7 +416,7 @@ func (l *LocalStorage) deleteBackupInternal(ctx context.Context, backupFile stri
 				l.logger.Debug("Local storage: file already removed %s", f)
 				continue
 			}
-			l.logger.Warning("Failed to remove %s: %v", f, err)
+			l.logger.Warning("Local Storage: retention - failed to remove %s: %v", f, err)
 			failedFiles = append(failedFiles, f)
 			if !isBackupSidecar(f) {
 				dataFailed = true
@@ -575,7 +578,7 @@ func (l *LocalStorage) ApplyRetention(ctx context.Context, config RetentionConfi
 func (l *LocalStorage) applyGFSRetention(ctx context.Context, backups []*types.BackupMetadata, config RetentionConfig) (int, error) {
 	eligible, inert := partitionRetentionEligible(backups)
 	for _, in := range inert {
-		l.logger.Warning("Local storage: backup %s ignored by retention (%s)", in.Backup.BackupFile, in.Reason)
+		l.logger.Warning("Local Storage: retention - ignored %s (%s)", in.Backup.BackupFile, in.Reason)
 	}
 	backups = eligible
 
@@ -618,11 +621,11 @@ func (l *LocalStorage) applyGFSRetention(ctx context.Context, backups []*types.B
 		logDeleted, err := l.deleteBackupInternal(ctx, backup.BackupFile)
 		if err != nil {
 			if !errors.Is(err, errBackupSidecarDeleteOnly) {
-				l.logger.Warning("Failed to delete %s: %v", backup.BackupFile, err)
+				l.logger.Warning("Local Storage: retention - failed to delete %s: %v", backup.BackupFile, err)
 				continue
 			}
 			// Archive removed, only sidecar(s) failed: count as deleted but warn.
-			l.logger.Warning("Local storage: %s archive removed but sidecar cleanup failed: %v", backup.BackupFile, err)
+			l.logger.Warning("Local Storage: retention - %s removed but the sidecar cleanup failed: %v", backup.BackupFile, err)
 		}
 
 		deleted++
@@ -669,7 +672,7 @@ func (l *LocalStorage) applySimpleRetention(ctx context.Context, backups []*type
 
 	eligible, inert := partitionRetentionEligible(backups)
 	for _, in := range inert {
-		l.logger.Warning("Local storage: backup %s ignored by retention (%s)", in.Backup.BackupFile, in.Reason)
+		l.logger.Warning("Local Storage: retention - ignored %s (%s)", in.Backup.BackupFile, in.Reason)
 	}
 	backups = eligible
 
@@ -703,11 +706,11 @@ func (l *LocalStorage) applySimpleRetention(ctx context.Context, backups []*type
 		logDeleted, err := l.deleteBackupInternal(ctx, backup.BackupFile)
 		if err != nil {
 			if !errors.Is(err, errBackupSidecarDeleteOnly) {
-				l.logger.Warning("Failed to delete %s: %v", backup.BackupFile, err)
+				l.logger.Warning("Local Storage: retention - failed to delete %s: %v", backup.BackupFile, err)
 				continue
 			}
 			// Archive removed, only sidecar(s) failed: count as deleted but warn.
-			l.logger.Warning("Local storage: %s archive removed but sidecar cleanup failed: %v", backup.BackupFile, err)
+			l.logger.Warning("Local Storage: retention - %s removed but the sidecar cleanup failed: %v", backup.BackupFile, err)
 		}
 
 		deleted++

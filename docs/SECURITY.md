@@ -40,9 +40,28 @@ The interesting boundaries are the few places where **untrusted content** enters
 ## Execution model
 
 Every external process ProxSave runs goes through `internal/safeexec`, which builds argv
-directly and never wraps a caller's command in a shell. The single exception is the resident
-daemon's backup child (see **Self re-execution** below), which re-execs the running binary
-with a raw `exec.CommandContext` under a documented `#nosec G204`, bypassing the allowlist.
+directly and never wraps a caller's command in a shell. There are two exceptions, both in the resident
+daemon and both under a documented `#nosec G204` that bypasses the allowlist. The first is the
+daemon's backup child (see **Self re-execution** below), which re-execs the running binary. The
+second is the operator's own `PERSONAL_SCRIPT_PRE_RUN` and `PERSONAL_SCRIPT_POST_RUN`
+(`cmd/proxsave/personal_scripts.go`), read from the root-owned `backup.env` and executed
+directly: no shell, no arguments, the daemon's own environment minus `LOG_FILE` and `BASE_DIR`
+and nothing added to it, every descriptor on `/dev/null`, a
+hard `SIGKILL` at 10 minutes for the script process itself, and an exit status that is
+discarded. That kill reaches one pid: anything the script forks and leaves running survives it,
+and is collected only when the unit's cgroup is torn down, since the unit keeps systemd's
+default `KillMode=control-group`. The 10-minute kill holds on every path but one: on the
+abandoned-child unwind the daemon exits immediately so systemd can restart it, so there the
+post-run script is started and left to the cgroup instead of being waited for and killed (see
+[DAEMON.md](DAEMON.md)). The allowlist is for the
+external tools ProxSave itself drives; the scripts instead pass a trusted-path gate at daemon
+startup (`validatePersonalScripts`): the path may not traverse a symlink, the target and every
+directory above it must belong to root or the daemon's own user, the target must not be
+writable by group or others, and a group/other-writable directory must carry the sticky bit.
+A path that fails is refused LOUDLY - one `WARNING` naming the variable, the path and the
+reason - and the setting is blanked for that daemon, so the refusal is never the silent
+non-execution the per-start silence rule would otherwise make of it. Under those rules no
+non-root user can replace any path component between the check and any later execution.
 Several callers do invoke `/bin/sh`
 on purpose, but only one of them puts shell **text** on a command line: the background
 rollback timer runs `sh -c '<compile-time constant>'` and passes the sleep seconds and the

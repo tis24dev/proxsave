@@ -1056,6 +1056,35 @@ alone, so such a host ends with two nightly backups and the run that loses the p
 silently, which is the worse of the two. The daemon-only healthchecks are switched back off
 with the daemon, so a reverted host does not warn about a service that is no longer installed.
 
+### Run your own script around each backup
+
+The daemon can start a script of yours before the run and another after it, for example to
+stop a service that must not be running while its data is copied and to start it again
+afterwards:
+
+```bash
+PERSONAL_SCRIPT_PRE_RUN=/usr/local/bin/proxsave-pre.sh
+PERSONAL_SCRIPT_POST_RUN=/usr/local/bin/proxsave-post.sh
+```
+
+```bash
+#!/bin/sh
+# /usr/local/bin/proxsave-pre.sh, chmod 700, owned by root
+systemctl stop my-noisy-service
+```
+
+```bash
+#!/bin/sh
+# /usr/local/bin/proxsave-post.sh, chmod 700, owned by root
+# Started after every outcome, so the service comes back even when the backup failed.
+systemctl start my-noisy-service
+```
+
+These are your scripts: ProxSave starts them and says nothing about them. Their output is
+discarded, their exit code is ignored, a failure never blocks or fails the backup, and each is
+killed after 10 minutes (except on the abandoned-child unwind, see [DAEMON.md](DAEMON.md)). They run only under the daemon, and only around the run it schedules.
+Write your own log line if you need a record. See [DAEMON.md](DAEMON.md) for the full contract.
+
 See [DAEMON.md](DAEMON.md) for the daemon itself and [HEALTHCHECKS.md](HEALTHCHECKS.md)
 for the monitoring modes (centralized vs self), the monitoring portal, and the full
 configuration keys.

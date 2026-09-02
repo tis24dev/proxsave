@@ -80,7 +80,7 @@ func runUpgradeConfigMode(ctx context.Context, args *cli.Args, bootstrap *loggin
 	}
 	logging.DebugStepBootstrap(bootstrap, "main run", "mode=upgrade-config")
 	if err := ensureConfigExists(args.ConfigPath, bootstrap); err != nil {
-		bootstrap.Error("ERROR: %v", err)
+		bootstrap.Error("%v", err)
 		return types.ExitConfigError.Int(), true
 	}
 
@@ -88,7 +88,7 @@ func runUpgradeConfigMode(ctx context.Context, args *cli.Args, bootstrap *loggin
 	baseDir, _ := detectedBaseDirOrFallback()
 	result, err := applyConfigUpgrade(ctx, args.ConfigPath, baseDir)
 	if err != nil {
-		bootstrap.Error("ERROR: Failed to upgrade configuration: %v", err)
+		bootstrap.Error("Failed to upgrade configuration: %v", err)
 		return types.ExitConfigError.Int(), true
 	}
 	logConfigUpgradeWarnings(bootstrap, result.Warnings)
@@ -107,14 +107,14 @@ func runUpgradeConfigDryMode(_ context.Context, args *cli.Args, bootstrap *loggi
 	}
 	logging.DebugStepBootstrap(bootstrap, "main run", "mode=upgrade-config-dry")
 	if err := ensureConfigExists(args.ConfigPath, bootstrap); err != nil {
-		bootstrap.Error("ERROR: %v", err)
+		bootstrap.Error("%v", err)
 		return types.ExitConfigError.Int(), true
 	}
 
 	bootstrap.Printf("Planning configuration upgrade using embedded template: %s", args.ConfigPath)
 	result, err := config.PlanUpgradeConfigFile(args.ConfigPath)
 	if err != nil {
-		bootstrap.Error("ERROR: Failed to plan configuration upgrade: %v", err)
+		bootstrap.Error("Failed to plan configuration upgrade: %v", err)
 		return types.ExitConfigError.Int(), true
 	}
 	logConfigUpgradeWarnings(bootstrap, result.Warnings)

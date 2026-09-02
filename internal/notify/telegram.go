@@ -338,7 +338,7 @@ func (t *TelegramNotifier) fetchCentralizedCredentials(ctx context.Context) (str
 		if provisioned := strings.TrimSpace(response.NotifySecret); provisioned != "" && t.config.BaseDir != "" {
 			t.logger.RegisterSecret(provisioned) // mask before any I/O can echo it
 			if err := identity.PersistNotifySecret(ctx, t.config.BaseDir, provisioned, t.logger); err != nil {
-				t.logger.Warning("WARNING: failed to persist provisioned relay secret: %v", err)
+				t.logger.Warning("failed to persist provisioned relay secret: %v", err)
 			} else {
 				t.config.NotifySecret = provisioned // adopt in-memory for this run
 				t.logger.Debug("Telegram: adopted+persisted per-server relay secret (overwrite)")

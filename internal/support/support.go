@@ -103,7 +103,7 @@ func RunIntro(ctx context.Context, bootstrap *logging.BootstrapLogger) (meta Met
 				bootstrap.Warning("Support mode interrupted by signal")
 				return Meta{}, false, true
 			}
-			bootstrap.Error("ERROR: %v", err)
+			bootstrap.Error("Failed to read input: %v", err)
 			return Meta{}, false, false
 		}
 		if !granted {
@@ -121,7 +121,7 @@ func RunIntro(ctx context.Context, bootstrap *logging.BootstrapLogger) (meta Met
 				bootstrap.Warning("Support mode interrupted by signal")
 				return Meta{}, false, true
 			}
-			bootstrap.Error("ERROR: Failed to read input: %v", err)
+			bootstrap.Error("Failed to read input: %v", err)
 			return Meta{}, false, false
 		}
 		nickname := strings.TrimSpace(line)
@@ -142,7 +142,7 @@ func RunIntro(ctx context.Context, bootstrap *logging.BootstrapLogger) (meta Met
 				bootstrap.Warning("Support mode interrupted by signal")
 				return Meta{}, false, true
 			}
-			bootstrap.Error("ERROR: Failed to read input: %v", err)
+			bootstrap.Error("Failed to read input: %v", err)
 			return Meta{}, false, false
 		}
 		issue := strings.TrimSpace(line)

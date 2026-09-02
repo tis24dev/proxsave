@@ -202,8 +202,11 @@ func collectExecPathCandidates() []string {
 }
 
 func warnExecPathMissing() {
-	msg := "WARNING: Unable to determine proxsave/proxmox-backup executable path; symlink and cron setup skipped"
-	fmt.Fprintln(os.Stderr, msg)
+	// The stderr copy keeps the word: that stream has no level column, so the
+	// prefix is its only severity marker (same call as the JSON-mode stderr
+	// lines in main_config_modes). The logger line drops it - its column says it.
+	msg := "Unable to determine proxsave/proxmox-backup executable path; symlink and cron setup skipped"
+	fmt.Fprintln(os.Stderr, "WARNING: "+msg)
 	logging.Warning("%s", msg)
 }
 
@@ -370,7 +373,7 @@ func detectFilesystemInfo(ctx context.Context, backend storage.Storage, path str
 		if backend.IsCritical() {
 			return nil, err
 		}
-		logger.Debug("WARNING: %s filesystem detection failed: %v", backend.Name(), err)
+		logger.Debug("%s filesystem detection failed: %v", backend.Name(), err)
 		if backend.Location() == storage.LocationCloud {
 			return nil, err
 		}
@@ -441,7 +444,15 @@ func fetchStorageStats(ctx context.Context, backend storage.Storage, logger *log
 	return stats
 }
 
-func formatStorageInitSummary(name string, cfg *config.Config, location storage.BackupLocation, stats *storage.StorageStats, backups []*types.BackupMetadata) string {
+// formatStorageInitSummary builds the storage-init headline and its detail lines, and
+// returns whether that headline is a WARNING. The level used to travel inside the
+// string as a leading "⚠" that logStorageInitSummary read back with strings.HasPrefix,
+// which made a glyph that reads as decoration load-bearing: deleting it downgraded the
+// line to INFO in silence, dropping it from warningCount and from the exit-code
+// promotion in applyIssueExitCode. It is a value now, and the string carries no
+// severity of its own. The glyph STAYS on the line -
+// it is part of how this screen reads - but nothing downstream depends on it.
+func formatStorageInitSummary(name string, cfg *config.Config, location storage.BackupLocation, stats *storage.StorageStats, backups []*types.BackupMetadata) (string, bool) {
 	retentionConfig := storage.NewRetentionConfigFromConfig(cfg, location)
 	if retentionConfig.Policy == "gfs" {
 		retentionConfig = storage.EffectiveGFSRetentionConfig(retentionConfig)
@@ -452,9 +463,9 @@ func formatStorageInitSummary(name string, cfg *config.Config, location storage.
 		if retentionConfig.Policy == "gfs" {
 			return fmt.Sprintf("⚠ %s initialized with warnings (%s; GFS retention: daily=%d, weekly=%d, monthly=%d, yearly=%d)",
 				name, reason, retentionConfig.Daily, retentionConfig.Weekly,
-				retentionConfig.Monthly, retentionConfig.Yearly)
+				retentionConfig.Monthly, retentionConfig.Yearly), true
 		}
-		return fmt.Sprintf("⚠ %s initialized with warnings (%s; retention %s)", name, reason, formatBackupNoun(retentionConfig.MaxBackups))
+		return fmt.Sprintf("⚠ %s initialized with warnings (%s; retention %s)", name, reason, formatBackupNoun(retentionConfig.MaxBackups)), true
 	}
 
 	if retentionConfig.Policy == "gfs" {
@@ -477,26 +488,35 @@ func formatStorageInitSummary(name string, cfg *config.Config, location storage.
 				retentionConfig.Daily, retentionConfig.Weekly,
 				retentionConfig.Monthly, retentionConfig.Yearly)
 		}
-		return result
+		return result, false
 	}
 
 	result := fmt.Sprintf("✓ %s initialized (present %s)", name, formatBackupNoun(stats.TotalBackups))
 	result += fmt.Sprintf("\n  Policy: simple (keep %d newest)", retentionConfig.MaxBackups)
-	return result
+	return result, false
 }
 
-func logStorageInitSummary(summary string) {
+// logStorageInitSummary prints a storage-init summary. warn selects the level of the
+// HEADLINE - the first non-empty line - and nothing else: the detail lines below it are
+// always Info, except the GFS estimate, which stays at Debug so it never reaches the
+// run footer. See formatStorageInitSummary for why the level is a parameter and not a
+// glyph read back out of the text.
+func logStorageInitSummary(summary string, warn bool) {
 	if summary == "" {
 		return
 	}
+	headline := true
 	for _, line := range strings.Split(summary, "\n") {
 		trimmed := strings.TrimSpace(line)
 		if trimmed == "" {
 			continue
 		}
-		if strings.HasPrefix(trimmed, "⚠") {
-			logging.Warning("%s", line)
-			continue
+		if headline {
+			headline = false
+			if warn {
+				logging.Warning("%s", line)
+				continue
+			}
 		}
 		if strings.Contains(trimmed, "Kept (est.):") {
 			logging.Debug("%s", line)
@@ -541,7 +561,7 @@ func cleanupGlobalProxmoxBackupEntrypoints(execPath string, bootstrap *logging.B
 		// from the ones to remove, and ensureGoSymlink cannot recreate a
 		// replacement either. Removing here would leave the host with no working
 		// proxsave/proxmox-backup command, so do nothing.
-		logBootstrapWarning(bootstrap, "WARNING: current executable path is unknown; skipping proxsave/proxmox-backup entrypoint cleanup to avoid removing a working entrypoint that cannot be recreated")
+		logBootstrapWarning(bootstrap, "current executable path is unknown; skipping proxsave/proxmox-backup entrypoint cleanup to avoid removing a working entrypoint that cannot be recreated")
 		return
 	}
 
@@ -628,7 +648,7 @@ func cleanupGlobalProxmoxBackupEntrypoints(execPath string, bootstrap *logging.B
 			continue
 		}
 		if err := os.Remove(cand); err != nil {
-			logBootstrapWarning(bootstrap, "WARNING: Failed to remove existing proxsave/proxmox-backup symlink %s: %v", cand, err)
+			logBootstrapWarning(bootstrap, "Failed to remove existing proxsave/proxmox-backup symlink %s: %v", cand, err)
 			continue
 		}
 		bootstrap.Info("Removed existing proxsave/proxmox-backup symlink: %s", cand)
@@ -645,7 +665,7 @@ func cleanupGlobalProxmoxBackupEntrypoints(execPath string, bootstrap *logging.B
 func ensureGoSymlink(execPath string, bootstrap *logging.BootstrapLogger) {
 	execPath = strings.TrimSpace(execPath)
 	if execPath == "" {
-		logBootstrapWarning(bootstrap, "WARNING: Unable to update the proxsave entrypoint: executable path is unknown")
+		logBootstrapWarning(bootstrap, "Unable to update the proxsave entrypoint: executable path is unknown")
 		return
 	}
 
@@ -682,25 +702,25 @@ func installEntrypointSymlink(execPath, dest string, bootstrap *logging.Bootstra
 			// backup fails, refuse to replace it rather than clobber it.
 			backup, err := backupRealFile(dest)
 			if err != nil {
-				logBootstrapWarning(bootstrap, "WARNING: Not replacing real file %s: failed to back it up: %v", dest, err)
+				logBootstrapWarning(bootstrap, "Not replacing real file %s: failed to back it up: %v", dest, err)
 				return
 			}
-			logBootstrapWarning(bootstrap, "WARNING: Backed up existing real file %s to %s before installing the proxsave symlink", dest, backup)
+			logBootstrapWarning(bootstrap, "Backed up existing real file %s to %s before installing the proxsave symlink", dest, backup)
 		}
 	} else if !os.IsNotExist(err) {
-		logBootstrapWarning(bootstrap, "WARNING: Unable to inspect %s: %v", dest, err)
+		logBootstrapWarning(bootstrap, "Unable to inspect %s: %v", dest, err)
 		return
 	}
 
 	tmp := dest + ".proxsave-new"
 	_ = os.Remove(tmp) // clear any leftover from a previous interrupted run
 	if err := os.Symlink(execPath, tmp); err != nil {
-		logBootstrapWarning(bootstrap, "WARNING: Failed to create symlink %s -> %s: %v", dest, execPath, err)
+		logBootstrapWarning(bootstrap, "Failed to create symlink %s -> %s: %v", dest, execPath, err)
 		return
 	}
 	if err := os.Rename(tmp, dest); err != nil {
 		_ = os.Remove(tmp)
-		logBootstrapWarning(bootstrap, "WARNING: Failed to install symlink %s -> %s: %v", dest, execPath, err)
+		logBootstrapWarning(bootstrap, "Failed to install symlink %s -> %s: %v", dest, execPath, err)
 		return
 	}
 	logBootstrapInfo(bootstrap, "Created symlink: %s -> %s", dest, execPath)
@@ -748,7 +768,7 @@ func removeLegacyEntrypoint(dest string, bootstrap *logging.BootstrapLogger) {
 	info, err := os.Lstat(dest)
 	if err != nil {
 		if !os.IsNotExist(err) {
-			logBootstrapWarning(bootstrap, "WARNING: Unable to inspect legacy entrypoint %s: %v", dest, err)
+			logBootstrapWarning(bootstrap, "Unable to inspect legacy entrypoint %s: %v", dest, err)
 		}
 		return
 	}
@@ -757,7 +777,7 @@ func removeLegacyEntrypoint(dest string, bootstrap *logging.BootstrapLogger) {
 		return
 	}
 	if err := os.Remove(dest); err != nil {
-		logBootstrapWarning(bootstrap, "WARNING: Failed to remove legacy entrypoint %s: %v", dest, err)
+		logBootstrapWarning(bootstrap, "Failed to remove legacy entrypoint %s: %v", dest, err)
 		return
 	}
 	logBootstrapInfo(bootstrap, "Removed legacy 'proxmox-backup' entrypoint: %s", dest)
@@ -766,7 +786,7 @@ func removeLegacyEntrypoint(dest string, bootstrap *logging.BootstrapLogger) {
 func migrateLegacyCronEntries(ctx context.Context, baseDir, execPath string, bootstrap *logging.BootstrapLogger, cronSchedule string) {
 	execPath = strings.TrimSpace(execPath)
 	if execPath == "" {
-		logBootstrapWarning(bootstrap, "WARNING: Unable to update cron entry: executable path is unknown")
+		logBootstrapWarning(bootstrap, "Unable to update cron entry: executable path is unknown")
 		return
 	}
 
@@ -777,7 +797,7 @@ func migrateLegacyCronEntries(ctx context.Context, baseDir, execPath string, boo
 		// PBS binary and we must never schedule that as root in cron.
 		fallback := strings.TrimSpace(execPath)
 		if fallback == "" {
-			logBootstrapWarning(bootstrap, "WARNING: Unable to locate Go binary for cron migration")
+			logBootstrapWarning(bootstrap, "Unable to locate Go binary for cron migration")
 			return
 		}
 		logBootstrapInfo(bootstrap, "proxsave symlink not found; falling back to %s for cron entries", fallback)
@@ -822,7 +842,7 @@ func migrateLegacyCronEntries(ctx context.Context, baseDir, execPath string, boo
 
 	current, err := readCron()
 	if err != nil {
-		logBootstrapWarning(bootstrap, "WARNING: Unable to inspect existing cron entries: %v", err)
+		logBootstrapWarning(bootstrap, "Unable to inspect existing cron entries: %v", err)
 		return
 	}
 
@@ -854,7 +874,7 @@ func migrateLegacyCronEntries(ctx context.Context, baseDir, execPath string, boo
 
 	newCron := strings.Join(updatedLines, "\n") + "\n"
 	if err := writeCron(newCron); err != nil {
-		logBootstrapWarning(bootstrap, "WARNING: Failed to update cron entries: %v", err)
+		logBootstrapWarning(bootstrap, "Failed to update cron entries: %v", err)
 		return
 	}
 

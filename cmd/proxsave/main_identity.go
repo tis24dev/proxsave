@@ -35,7 +35,7 @@ func initializeServerIdentity(rt *appRuntime) {
 func detectServerIdentity(rt *appRuntime) *identity.Info {
 	info, err := identity.DetectWithContext(rt.ctx, rt.cfg.BaseDir, rt.logger)
 	if err != nil {
-		logging.Warning("WARNING: Failed to load server identity: %v", err)
+		logging.Warning("Failed to load server identity: %v", err)
 	}
 	return info
 }

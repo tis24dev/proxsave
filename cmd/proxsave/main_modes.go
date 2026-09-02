@@ -211,7 +211,7 @@ func runCleanupGuardsMode(ctx context.Context, args *cli.Args, bootstrap *loggin
 	// uses, so one stub covers both front-ends in tests.
 	report, err := cleanupGuardsReport(ctx, logger, args.DryRun)
 	if err != nil {
-		bootstrap.Error("ERROR: %v", err)
+		bootstrap.Error("%v", err)
 		return types.ExitGenericError.Int(), true
 	}
 
@@ -265,7 +265,7 @@ func runNewKeyMode(ctx context.Context, args *cli.Args, bootstrap *logging.Boots
 		if isInstallAbortedError(err) || errors.Is(err, orchestrator.ErrAgeRecipientSetupAborted) {
 			return types.ExitSuccess.Int(), true
 		}
-		bootstrap.Error("ERROR: %v", err)
+		bootstrap.Error("%v", err)
 		return types.ExitConfigError.Int(), true
 	}
 	return types.ExitSuccess.Int(), true
@@ -289,7 +289,7 @@ func runDecryptOnlyMode(ctx context.Context, args *cli.Args, bootstrap *logging.
 			// (its CLI-execution lines are left untouched).
 			return types.ExitSuccess.Int(), true
 		}
-		bootstrap.Error("ERROR: %v", err)
+		bootstrap.Error("%v", err)
 		return types.ExitGenericError.Int(), true
 	}
 	bootstrap.Info("Decrypt workflow completed successfully")
@@ -312,7 +312,7 @@ func runNewInstallMode(ctx context.Context, args *cli.Args, bootstrap *logging.B
 		if isInstallAbortedError(err) {
 			return types.ExitSuccess.Int(), true
 		}
-		bootstrap.Error("ERROR: %v", err)
+		bootstrap.Error("%v", err)
 		return types.ExitConfigError.Int(), true
 	}
 	if sessionLogger != nil {
@@ -346,7 +346,7 @@ func runInstallMode(ctx context.Context, args *cli.Args, bootstrap *logging.Boot
 		if isInstallAbortedError(err) {
 			return types.ExitSuccess.Int(), true
 		}
-		bootstrap.Error("ERROR: %v", err)
+		bootstrap.Error("%v", err)
 		return types.ExitConfigError.Int(), true
 	}
 	if sessionLogger != nil {

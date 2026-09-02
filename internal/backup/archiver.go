@@ -901,7 +901,7 @@ func (a *Archiver) addToTar(ctx context.Context, tarWriter *tar.Writer, sourceDi
 		}
 
 		if err != nil {
-			a.logger.Warning("Error accessing path %s: %v", path, err)
+			a.logger.Warning("Failed to access path %s: %v", path, err)
 			// A walk error on a directory means filepath.Walk does not descend into
 			// it, so a whole subtree may be missing from the archive: record it so
 			// the run fails instead of shipping a silently incomplete archive.
