@@ -76,7 +76,7 @@ func TestPersonalScriptSurvivesAGrandchildHoldingItsOutput(t *testing.T) {
 	script := writePersonalScript(t, dir, "grandchild.sh", "sleep 5 &\necho out\necho err 1>&2\nexit 0")
 
 	done := make(chan struct{})
-	go func() { defer close(done); runPersonalScript(script) }()
+	go func() { defer close(done); runPersonalScript(script, nil) }()
 
 	select {
 	case <-done:
@@ -96,7 +96,7 @@ func TestPersonalScriptIsKilledAtItsTimeout(t *testing.T) {
 	script := writePersonalScript(t, dir, "sigterm-proof.sh", `trap "" TERM`+"\nsleep 5")
 
 	start := time.Now()
-	runPersonalScript(script)
+	runPersonalScript(script, nil)
 	elapsed := time.Since(start)
 
 	if elapsed >= personalScriptReapSlack {
@@ -146,7 +146,7 @@ func TestPersonalScriptDropsEveryUnusablePath(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			done := make(chan struct{})
-			go func() { defer close(done); runPersonalScript(tc.path) }()
+			go func() { defer close(done); runPersonalScript(tc.path, nil) }()
 			select {
 			case <-done:
 			case <-time.After(10 * time.Second):
@@ -286,7 +286,7 @@ func TestStartedScriptsGetNoShellNoArgumentsAndAnUnchangedEnvironment(t *testing
 	t.Run("the waited starter", func(t *testing.T) {
 		dir := t.TempDir()
 		dump := filepath.Join(dir, "dump")
-		runPersonalScript(dumpScript(t, dir, "dump.sh", dump))
+		runPersonalScript(dumpScript(t, dir, "dump.sh", dump), nil)
 		assertShape(t, dump)
 	})
 
@@ -321,7 +321,7 @@ func TestNoShellIsInvolved(t *testing.T) {
 			t.Fatalf("write: %v", err)
 		}
 
-		runPersonalScript(script)
+		runPersonalScript(script, nil)
 
 		if _, err := os.Stat(marker); err == nil {
 			t.Fatal("the file was interpreted by a shell: execve must fail on a script with no shebang")
@@ -332,7 +332,7 @@ func TestNoShellIsInvolved(t *testing.T) {
 		dir := t.TempDir()
 		marker := filepath.Join(dir, "marker")
 
-		runPersonalScript("/bin/true; touch " + marker)
+		runPersonalScript("/bin/true; touch "+marker, nil)
 
 		if _, err := os.Stat(marker); err == nil {
 			t.Fatal("the value was parsed as a command line: no shell may be involved")
@@ -354,7 +354,7 @@ func TestAbandonedWaitGoroutineDoesNotLeak(t *testing.T) {
 
 	before := runtime.NumGoroutine()
 	for i := 0; i < 10; i++ {
-		runPersonalScript(script)
+		runPersonalScript(script, nil)
 	}
 
 	deadline := time.Now().Add(10 * time.Second)
@@ -384,5 +384,39 @@ func TestPersonalScriptsFileImportsNoReportingPackage(t *testing.T) {
 				t.Errorf("personal_scripts.go imports %q: these scripts report nothing, at any level, on any outcome", path)
 			}
 		}
+	}
+}
+
+// TestAShutdownStopsTheWaitButNotTheScript pins the two halves of the stop contract at
+// once. A shutdown that lands mid-script must not keep the scheduler goroutine parked
+// for up to personalScriptTimeout+personalScriptReapSlack - the daemon's whole teardown
+// budget is a stock TimeoutStopSec of 90 seconds, and daemon.go spells out that a wait
+// held through it SIGKILLs the daemon with the pid and info files still on disk. And the
+// stop must abandon only the WAIT: the script keeps its whole budget (the kill stays
+// with os/exec's context watcher and the unit's cgroup), because a shutdown must not
+// silently truncate what the feature grants.
+func TestAShutdownStopsTheWaitButNotTheScript(t *testing.T) {
+	dir := t.TempDir()
+	marker := filepath.Join(dir, "survived")
+	script := writePersonalScript(t, dir, "slow.sh", "sleep 1\ntouch "+marker)
+
+	stop := make(chan struct{})
+	time.AfterFunc(50*time.Millisecond, func() { close(stop) })
+
+	start := time.Now()
+	runPersonalScript(script, stop)
+	if elapsed := time.Since(start); elapsed >= time.Second {
+		t.Fatalf("the wait outlived the stop signal by %s: shutdown is blocked on the script", elapsed)
+	}
+
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		if _, err := os.Stat(marker); err == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the script was killed when the wait stopped: the stop abandons the wait, never the script")
+		}
+		time.Sleep(20 * time.Millisecond)
 	}
 }

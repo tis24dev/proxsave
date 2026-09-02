@@ -121,7 +121,17 @@ func personalScriptCmdDetached(path string) *exec.Cmd {
 // The context is rooted at context.Background() and NOT at any context of the daemon's: a
 // shutdown must not silently truncate the budget the feature grants, and the helper has no
 // business observing the run's lifecycle.
-func runPersonalScript(path string) {
+//
+// stop bounds the WAIT, never the script. It is the daemon's shutdown signal
+// (parentCtx.Done()): when it fires, the helper walks away exactly as the detached starter
+// would have, and the script keeps everything the paragraph above promises it - the context
+// deliberately stays uncancelled, so os/exec's watcher still delivers the 10-minute SIGKILL,
+// and a script alive at unit teardown is collected by KillMode=control-group like the
+// detached post-run. Without the stop arm, a shutdown landing mid-script parked the
+// scheduler goroutine for up to timeout+slack, blew the stock 90-second TimeoutStopSec, and
+// the daemon was SIGKILLed with the pid and info files still on disk - the exact harm the
+// detached post-run path documents avoiding. A nil stop never fires.
+func runPersonalScript(path string, stop <-chan struct{}) {
 	// Belt and braces: the loader already trims (parsePersonalScriptSettings), so no shipped
 	// path reaches here padded and no test can cover this line through the config. It stays
 	// because the two starters are the boundary, and a caller that builds a value some other
@@ -131,8 +141,17 @@ func runPersonalScript(path string) {
 		return // disabled: nothing is started and the run is byte-identical to before
 	}
 
+	// The stop arms below leave ON PURPOSE without cancelling, so the script keeps
+	// its budget after the wait is abandoned; the timeout's own timer releases the
+	// context's resources when it fires. The guarded defer is that intent spelled
+	// in a shape vet's lostcancel check can read.
 	ctx, cancel := context.WithTimeout(context.Background(), personalScriptTimeout)
-	defer cancel()
+	abandoned := false
+	defer func() {
+		if !abandoned {
+			cancel()
+		}
+	}()
 
 	cmd := personalScriptCmd(ctx, path)
 	if err := cmd.Start(); err != nil {
@@ -145,6 +164,9 @@ func runPersonalScript(path string) {
 	select {
 	case <-waitCh:
 		return
+	case <-stop:
+		abandoned = true
+		return // shutdown: abandon the wait, not the script (see the doc comment)
 	case <-ctx.Done():
 	}
 
@@ -153,6 +175,8 @@ func runPersonalScript(path string) {
 	select {
 	case <-waitCh:
 	case <-timer.C:
+	case <-stop:
+		abandoned = true
 	}
 }
 

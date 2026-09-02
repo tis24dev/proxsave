@@ -617,11 +617,16 @@ func (d *daemon) runOnce(parentCtx context.Context) bool {
 	//
 	// Neither call logs anything, at any level, on any outcome. That is deliberate and is not
 	// an omission to be repaired: these scripts are the operator's, not ours.
+	// Both waited calls carry parentCtx.Done() as their stop: a shutdown landing
+	// MID-WAIT abandons the wait (never the script) instead of holding this
+	// goroutine through the 90-second teardown budget - the same harm the
+	// detached branch below documents avoiding for a shutdown that has already
+	// happened when the post fires.
 	postWaits := true
-	runPersonalScript(d.cfg.PersonalScriptPreRun)
+	runPersonalScript(d.cfg.PersonalScriptPreRun, parentCtx.Done())
 	defer func() {
 		if postWaits && parentCtx.Err() == nil {
-			runPersonalScript(d.cfg.PersonalScriptPostRun)
+			runPersonalScript(d.cfg.PersonalScriptPostRun, parentCtx.Done())
 			return
 		}
 		startPersonalScriptDetached(d.cfg.PersonalScriptPostRun)

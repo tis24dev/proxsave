@@ -121,7 +121,9 @@ func TestPreScriptDoesNotSpendTheBackupBudget(t *testing.T) {
 
 // TestShutdownDoesNotTruncateTheScriptBudget pins the context.Background() root. Rooted at the
 // daemon's own context instead, a SIGTERM landing mid-script kills it, which is the truncation
-// the helper's doc comment forbids.
+// the helper's doc comment forbids. Since the release-PR fix the shutdown also stops the WAIT
+// (runOnce returns before the script is done), so the proof is the ledger line appearing
+// AFTER runOnce came back, not on its return.
 func TestShutdownDoesNotTruncateTheScriptBudget(t *testing.T) {
 	dir := t.TempDir()
 	ledger := filepath.Join(dir, "ledger")
@@ -137,8 +139,16 @@ func TestShutdownDoesNotTruncateTheScriptBudget(t *testing.T) {
 
 	d.runOnce(ctx)
 
-	if got := readLedger(t, ledger); !strings.HasPrefix(got, "pre\n") {
-		t.Fatalf("ledger = %q: a shutdown must not cut the script's own budget short", got)
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		if data, err := os.ReadFile(ledger); err == nil && strings.HasPrefix(string(data), "pre\n") {
+			break
+		}
+		if time.Now().After(deadline) {
+			got, _ := os.ReadFile(ledger)
+			t.Fatalf("ledger = %q: a shutdown must not cut the script's own budget short", string(got))
+		}
+		time.Sleep(50 * time.Millisecond)
 	}
 }
 
