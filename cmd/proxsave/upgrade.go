@@ -220,8 +220,10 @@ func upgradeAcquireBinary(ctx context.Context, args *cli.Args, bootstrap *loggin
 	logging.DebugStepBootstrap(bootstrap, "upgrade workflow", "fetching latest release info")
 	tag, latestVersion, _, err := fetchLatestRelease(ctx)
 	if err != nil {
-		// fetchLatestRelease's errors all open with "failed to ...", so a wrapper
-		// saying the same verb printed it twice. The cause names the operation.
+		// Four of fetchLatestRelease's five errors open with "failed to ...", so a
+		// wrapper repeated the verb. The fifth, "empty tag_name in latest release
+		// response", does not name the operation: on that shape the cause stands
+		// bare. Known cost.
 		bootstrap.Error("%v", err)
 		return "", "", types.ExitConfigError.Int(), true, err
 	}
