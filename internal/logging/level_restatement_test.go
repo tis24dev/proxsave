@@ -57,20 +57,39 @@ import (
 var levelOfLoggerMethod = map[string]string{
 	"Error":       "ERROR",
 	"NotifyError": "ERROR",
+	"Critical":    "CRITICAL",
 	"Warning":     "WARNING",
 	"Info":        "INFO",
 	"Skip":        "INFO",
 	"Step":        "INFO",
 	"Phase":       "INFO",
+	"Debug":       "DEBUG",
+}
+
+// wrapperFuncs are plain-function wrappers whose string literal sits past a leading
+// logger argument. 33 production call sites route through logBootstrapWarning alone,
+// and a restatement written there was structurally invisible to the scanner.
+var wrapperFuncs = map[string]struct {
+	level    string
+	firstArg int
+}{
+	"logBootstrapWarning": {"WARNING", 1},
+	"logBootstrapInfo":    {"INFO", 1},
+	"logBootstrapDebug":   {"DEBUG", 1},
 }
 
 // restatedWordPrefixes are the openings that repeat the level in words. Prefix-only on purpose:
 // the doubled token is what the reader sees at the start of the message, and matching anywhere
 // would flag a sentence that merely mentions an error it is reporting about something else.
 var restatedWordPrefixes = map[string][]string{
-	"ERROR":   {"error:", "error -", "[error]", "fatal:", "critical:", "[critical]"},
-	"WARNING": {"warning:", "warn:", "[warning]", "[warn]"},
-	"INFO":    {"info:", "[info]"},
+	"ERROR": {"error:", "error -", "error ", "[error]", "fatal:"},
+	// No bare "critical " here: unlike error/warning, the word is an ordinary
+	// adjective in this tree ("Critical files collected successfully"), and the
+	// space form flags those. The punctuated forms are unambiguous.
+	"CRITICAL": {"critical:", "critical -", "[critical]"},
+	"WARNING":  {"warning:", "warning -", "warning ", "warn:", "[warning]", "[warn]"},
+	"INFO":     {"info:", "info -", "[info]"},
+	"DEBUG":    {"debug:", "debug -", "[debug]"},
 }
 
 // severityGlyphs are the TUI's severity alphabet plus the emoji family that three files use
@@ -80,15 +99,19 @@ var restatedWordPrefixes = map[string][]string{
 var severityGlyphs = []string{"✓", "⚠", "✗", "ℹ", "✅", "❌", "➖"}
 
 type levelViolation struct {
-	file    string // module-relative
-	line    int
-	method  string
-	level   string
-	literal string
-	kind    string // "word" or "glyph"
+	file      string // module-relative
+	line      int
+	method    string
+	level     string // the level the column prints
+	wordLevel string // the level the opening words spell (kind "word" only)
+	literal   string
+	kind      string // "word" or "glyph"
 }
 
 func (v levelViolation) String() string {
+	if v.kind == "word" && v.wordLevel != v.level {
+		return fmt.Sprintf("%s:%d %s(%q) opens with %s while its column prints %s", v.file, v.line, v.method, truncate(v.literal, 60), v.wordLevel, v.level)
+	}
 	return fmt.Sprintf("%s:%d %s(%q) restates %s as a %s", v.file, v.line, v.method, truncate(v.literal, 60), v.level, v.kind)
 }
 
@@ -200,26 +223,43 @@ func scanForLevelRestatement(t *testing.T, root string) []levelViolation {
 			if !ok || len(call.Args) == 0 {
 				return true
 			}
-			sel, ok := call.Fun.(*ast.SelectorExpr)
-			if !ok {
+			var method, level string
+			firstArg := 0
+			switch fun := call.Fun.(type) {
+			case *ast.SelectorExpr:
+				lvl, known := levelOfLoggerMethod[fun.Sel.Name]
+				if !known {
+					return true
+				}
+				method, level = fun.Sel.Name, lvl
+			case *ast.Ident:
+				w, known := wrapperFuncs[fun.Name]
+				if !known {
+					return true
+				}
+				method, level, firstArg = fun.Name, w.level, w.firstArg
+			default:
 				return true
 			}
-			level, ok := levelOfLoggerMethod[sel.Sel.Name]
-			if !ok {
-				return true
-			}
-			lit, ok := call.Args[0].(*ast.BasicLit)
-			if !ok || lit.Kind != token.STRING {
-				return true
-			}
-			text, unquoteErr := strconv.Unquote(lit.Value)
-			if unquoteErr != nil {
-				return true
-			}
-			line := fset.Position(lit.Pos()).Line
-			if kind := restatementKind(level, text); kind != "" {
+			// Every string literal in the call is inspected, not only the format:
+			// Warning("%s", "ERROR: planted") restated through argument 1 and the
+			// scanner never saw it.
+			for i := firstArg; i < len(call.Args); i++ {
+				lit, ok := call.Args[i].(*ast.BasicLit)
+				if !ok || lit.Kind != token.STRING {
+					continue
+				}
+				text, unquoteErr := strconv.Unquote(lit.Value)
+				if unquoteErr != nil {
+					continue
+				}
+				kind, wordLevel := restatementKind(level, text)
+				if kind == "" {
+					continue
+				}
 				out = append(out, levelViolation{
-					file: rel, line: line, method: sel.Sel.Name, level: level, literal: text, kind: kind,
+					file: rel, line: fset.Position(lit.Pos()).Line, method: method,
+					level: level, wordLevel: wordLevel, literal: text, kind: kind,
 				})
 			}
 			return true
@@ -242,19 +282,25 @@ func scanForLevelRestatement(t *testing.T, root string) []levelViolation {
 // restatementKind reports "word" when the literal opens with its own level, "glyph" when it
 // carries a severity glyph anywhere, and "" when it is clean. The word check wins when both
 // apply, so one call site produces one baseline entry.
-func restatementKind(level, literal string) string {
+// restatementKind flags a literal that opens with ANY level word, not only the
+// call's own: the column owns severity words, and a Debug line opening "WARNING: "
+// contradicts its column instead of repeating it, which is worse, not better.
+// The second return names the level the words spell, for the report.
+func restatementKind(level, literal string) (kind, wordLevel string) {
 	lower := strings.ToLower(strings.TrimSpace(literal))
-	for _, prefix := range restatedWordPrefixes[level] {
-		if strings.HasPrefix(lower, prefix) {
-			return "word"
+	for lvl, prefixes := range restatedWordPrefixes {
+		for _, prefix := range prefixes {
+			if strings.HasPrefix(lower, prefix) {
+				return "word", lvl
+			}
 		}
 	}
 	for _, glyph := range severityGlyphs {
 		if strings.Contains(literal, glyph) {
-			return "glyph"
+			return "glyph", level
 		}
 	}
-	return ""
+	return "", ""
 }
 
 // moduleRoot walks up from the test's directory to the go.mod, so the scan covers the whole
