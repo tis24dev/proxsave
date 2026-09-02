@@ -249,3 +249,52 @@ func TestASingleArchiveThatVanishedBetweenGlobAndStatStaysSilent(t *testing.T) {
 		t.Fatalf("a single vanished archive wrote %d WARNING lines, want 0:\n%s", n, buf.String())
 	}
 }
+
+// The per-archive loop already returns on an abandoned stat (the test above), but
+// the location probe after it did not: a cancellation landing between the last
+// archive stat and the probe made the probe's CancelError read as "location
+// stopped answering", and List returned an EMPTY list with a NIL error. Retention
+// and stats then ran on that empty answer after the operator had already aborted.
+func TestAnAbandonedLocationProbeReturnsTheErrorNotAnEmptyList(t *testing.T) {
+	dir := t.TempDir()
+	for i := 0; i < 3; i++ {
+		p := filepath.Join(dir, fmt.Sprintf("host-backup-202605%02d-000000.tar.zst", i+1))
+		if err := os.Symlink(p, p); err != nil { // self-link: ELOOP, so zero archives are readable
+			t.Fatalf("symlink %s: %v", p, err)
+		}
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	// The seam cancels the context the moment the PROBE's stat runs (the probe is
+	// the only stat List aims at the base directory), which is exactly the window
+	// the per-archive arm cannot cover.
+	restore := safefs.SetOsStatForTest(func(p string) (os.FileInfo, error) {
+		if p == dir {
+			cancel()
+			time.Sleep(50 * time.Millisecond)
+		}
+		return os.Stat(p)
+	})
+	defer restore()
+
+	logger := logging.New(types.LogLevelDebug, false)
+	buf := &bytes.Buffer{}
+	logger.SetOutput(buf)
+	// FS_IO_TIMEOUT on, as shipped (default 30): with the 0 opt-out safefs runs
+	// unbounded and the probe's stat is never raced against the cancellation.
+	s, err := NewSecondaryStorage(&config.Config{SecondaryPath: dir, FsIoTimeoutSeconds: 30}, logger, "")
+	if err != nil {
+		t.Fatalf("NewSecondaryStorage: %v", err)
+	}
+	got, err := s.List(ctx)
+	if err == nil {
+		t.Fatalf("List returned %d backups and a nil error after the probe was abandoned", len(got))
+	}
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("List error = %v; want it to unwrap to context.Canceled", err)
+	}
+	if n := countWarningLines(buf.String()); n != 0 {
+		t.Fatalf("an abandoned probe wrote %d WARNING lines, want 0:\n%s", n, buf.String())
+	}
+}

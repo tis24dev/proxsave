@@ -508,6 +508,13 @@ func (s *SecondaryStorage) List(ctx context.Context) (backups []*types.BackupMet
 		located := true
 		if len(backups) == 0 {
 			if _, statErr := safefs.Stat(ctx, s.basePath, timeout); statErr != nil {
+				// An abandoned probe (cancel or bound expiry) is the run being
+				// stopped, not the location answering for itself: return it, the
+				// same way the per-archive loop above does, instead of reporting
+				// a stopped location and handing retention an empty list.
+				if safefs.IsAbandoned(statErr) {
+					return nil, statErr
+				}
 				located = false
 				s.logger.Warning("Secondary Storage: listing - location stopped answering, %d archive(s) not listed: %v",
 					skipped, statErr)
