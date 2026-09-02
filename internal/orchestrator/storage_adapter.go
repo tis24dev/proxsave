@@ -107,8 +107,10 @@ func (s *StorageAdapter) Sync(ctx context.Context, stats *BackupStats) error {
 		s.logger.Warning("%s", storageFailureText(err, s.backend.Name(), "store operation failed"))
 		// When the PRIMARY archive was saved and only a sidecar failed, do NOT claim the whole
 		// backup was not saved (that reads as data loss when the archive is safe, F08-08).
+		// se != nil guards the typed-nil shape: errors.As matches a nil
+		// *StorageError in the chain and leaves the target nil (PR #303 review).
 		var se *storage.StorageError
-		if errors.As(err, &se) && se.PrimarySaved {
+		if errors.As(err, &se) && se != nil && se.PrimarySaved {
 			s.logger.Warning("%s: primary backup saved, but a sidecar file was not uploaded", s.backend.Name())
 		} else {
 			s.logger.Warning("Backup was not saved to %s", s.backend.Name())
