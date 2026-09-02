@@ -370,7 +370,7 @@ func detectFilesystemInfo(ctx context.Context, backend storage.Storage, path str
 		if backend.IsCritical() {
 			return nil, err
 		}
-		logger.Debug("WARNING: %s filesystem detection failed: %v", backend.Name(), err)
+		logger.Debug("%s filesystem detection failed: %v", backend.Name(), err)
 		if backend.Location() == storage.LocationCloud {
 			return nil, err
 		}
@@ -558,7 +558,7 @@ func cleanupGlobalProxmoxBackupEntrypoints(execPath string, bootstrap *logging.B
 		// from the ones to remove, and ensureGoSymlink cannot recreate a
 		// replacement either. Removing here would leave the host with no working
 		// proxsave/proxmox-backup command, so do nothing.
-		logBootstrapWarning(bootstrap, "WARNING: current executable path is unknown; skipping proxsave/proxmox-backup entrypoint cleanup to avoid removing a working entrypoint that cannot be recreated")
+		logBootstrapWarning(bootstrap, "current executable path is unknown; skipping proxsave/proxmox-backup entrypoint cleanup to avoid removing a working entrypoint that cannot be recreated")
 		return
 	}
 
@@ -645,7 +645,7 @@ func cleanupGlobalProxmoxBackupEntrypoints(execPath string, bootstrap *logging.B
 			continue
 		}
 		if err := os.Remove(cand); err != nil {
-			logBootstrapWarning(bootstrap, "WARNING: Failed to remove existing proxsave/proxmox-backup symlink %s: %v", cand, err)
+			logBootstrapWarning(bootstrap, "Failed to remove existing proxsave/proxmox-backup symlink %s: %v", cand, err)
 			continue
 		}
 		bootstrap.Info("Removed existing proxsave/proxmox-backup symlink: %s", cand)
@@ -662,7 +662,7 @@ func cleanupGlobalProxmoxBackupEntrypoints(execPath string, bootstrap *logging.B
 func ensureGoSymlink(execPath string, bootstrap *logging.BootstrapLogger) {
 	execPath = strings.TrimSpace(execPath)
 	if execPath == "" {
-		logBootstrapWarning(bootstrap, "WARNING: Unable to update the proxsave entrypoint: executable path is unknown")
+		logBootstrapWarning(bootstrap, "Unable to update the proxsave entrypoint: executable path is unknown")
 		return
 	}
 
@@ -699,25 +699,25 @@ func installEntrypointSymlink(execPath, dest string, bootstrap *logging.Bootstra
 			// backup fails, refuse to replace it rather than clobber it.
 			backup, err := backupRealFile(dest)
 			if err != nil {
-				logBootstrapWarning(bootstrap, "WARNING: Not replacing real file %s: failed to back it up: %v", dest, err)
+				logBootstrapWarning(bootstrap, "Not replacing real file %s: failed to back it up: %v", dest, err)
 				return
 			}
-			logBootstrapWarning(bootstrap, "WARNING: Backed up existing real file %s to %s before installing the proxsave symlink", dest, backup)
+			logBootstrapWarning(bootstrap, "Backed up existing real file %s to %s before installing the proxsave symlink", dest, backup)
 		}
 	} else if !os.IsNotExist(err) {
-		logBootstrapWarning(bootstrap, "WARNING: Unable to inspect %s: %v", dest, err)
+		logBootstrapWarning(bootstrap, "Unable to inspect %s: %v", dest, err)
 		return
 	}
 
 	tmp := dest + ".proxsave-new"
 	_ = os.Remove(tmp) // clear any leftover from a previous interrupted run
 	if err := os.Symlink(execPath, tmp); err != nil {
-		logBootstrapWarning(bootstrap, "WARNING: Failed to create symlink %s -> %s: %v", dest, execPath, err)
+		logBootstrapWarning(bootstrap, "Failed to create symlink %s -> %s: %v", dest, execPath, err)
 		return
 	}
 	if err := os.Rename(tmp, dest); err != nil {
 		_ = os.Remove(tmp)
-		logBootstrapWarning(bootstrap, "WARNING: Failed to install symlink %s -> %s: %v", dest, execPath, err)
+		logBootstrapWarning(bootstrap, "Failed to install symlink %s -> %s: %v", dest, execPath, err)
 		return
 	}
 	logBootstrapInfo(bootstrap, "Created symlink: %s -> %s", dest, execPath)
@@ -765,7 +765,7 @@ func removeLegacyEntrypoint(dest string, bootstrap *logging.BootstrapLogger) {
 	info, err := os.Lstat(dest)
 	if err != nil {
 		if !os.IsNotExist(err) {
-			logBootstrapWarning(bootstrap, "WARNING: Unable to inspect legacy entrypoint %s: %v", dest, err)
+			logBootstrapWarning(bootstrap, "Unable to inspect legacy entrypoint %s: %v", dest, err)
 		}
 		return
 	}
@@ -774,7 +774,7 @@ func removeLegacyEntrypoint(dest string, bootstrap *logging.BootstrapLogger) {
 		return
 	}
 	if err := os.Remove(dest); err != nil {
-		logBootstrapWarning(bootstrap, "WARNING: Failed to remove legacy entrypoint %s: %v", dest, err)
+		logBootstrapWarning(bootstrap, "Failed to remove legacy entrypoint %s: %v", dest, err)
 		return
 	}
 	logBootstrapInfo(bootstrap, "Removed legacy 'proxmox-backup' entrypoint: %s", dest)
@@ -783,7 +783,7 @@ func removeLegacyEntrypoint(dest string, bootstrap *logging.BootstrapLogger) {
 func migrateLegacyCronEntries(ctx context.Context, baseDir, execPath string, bootstrap *logging.BootstrapLogger, cronSchedule string) {
 	execPath = strings.TrimSpace(execPath)
 	if execPath == "" {
-		logBootstrapWarning(bootstrap, "WARNING: Unable to update cron entry: executable path is unknown")
+		logBootstrapWarning(bootstrap, "Unable to update cron entry: executable path is unknown")
 		return
 	}
 
@@ -794,7 +794,7 @@ func migrateLegacyCronEntries(ctx context.Context, baseDir, execPath string, boo
 		// PBS binary and we must never schedule that as root in cron.
 		fallback := strings.TrimSpace(execPath)
 		if fallback == "" {
-			logBootstrapWarning(bootstrap, "WARNING: Unable to locate Go binary for cron migration")
+			logBootstrapWarning(bootstrap, "Unable to locate Go binary for cron migration")
 			return
 		}
 		logBootstrapInfo(bootstrap, "proxsave symlink not found; falling back to %s for cron entries", fallback)
@@ -839,7 +839,7 @@ func migrateLegacyCronEntries(ctx context.Context, baseDir, execPath string, boo
 
 	current, err := readCron()
 	if err != nil {
-		logBootstrapWarning(bootstrap, "WARNING: Unable to inspect existing cron entries: %v", err)
+		logBootstrapWarning(bootstrap, "Unable to inspect existing cron entries: %v", err)
 		return
 	}
 
@@ -871,7 +871,7 @@ func migrateLegacyCronEntries(ctx context.Context, baseDir, execPath string, boo
 
 	newCron := strings.Join(updatedLines, "\n") + "\n"
 	if err := writeCron(newCron); err != nil {
-		logBootstrapWarning(bootstrap, "WARNING: Failed to update cron entries: %v", err)
+		logBootstrapWarning(bootstrap, "Failed to update cron entries: %v", err)
 		return
 	}
 

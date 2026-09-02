@@ -346,27 +346,27 @@ func (c *CloudStorage) DetectFilesystem(ctx context.Context) (info *FilesystemIn
 		if errors.As(err, &rcErr) {
 			switch rcErr.kind {
 			case remoteErrorTimeout:
-				c.logger.Debug("WARNING: Cloud remote %s did not respond within %ds: %v",
+				c.logger.Debug("Cloud remote %s did not respond within %ds: %v",
 					c.remoteLabel(), c.config.RcloneTimeoutConnection, rcErr)
 				c.logger.Debug("HINT: Consider increasing RCLONE_TIMEOUT_CONNECTION for slow remotes")
 			case remoteErrorAuth:
-				c.logger.Debug("WARNING: Cloud remote %s authentication/config failed: %v", c.remoteLabel(), rcErr)
+				c.logger.Debug("Cloud remote %s authentication/config failed: %v", c.remoteLabel(), rcErr)
 				c.logger.Debug("HINT: Check your rclone configuration with: rclone config show %s", c.remote)
 			case remoteErrorPath:
-				c.logger.Debug("WARNING: Cloud remote path %s is not accessible: %v", c.remoteLabel(), rcErr)
+				c.logger.Debug("Cloud remote path %s is not accessible: %v", c.remoteLabel(), rcErr)
 				c.logger.Debug("HINT: Verify CLOUD_REMOTE_PATH or create the path using: rclone mkdir %s", c.remoteLabel())
 			case remoteErrorNetwork:
-				c.logger.Debug("WARNING: Cloud remote %s is not reachable: %v", c.remoteLabel(), rcErr)
+				c.logger.Debug("Cloud remote %s is not reachable: %v", c.remoteLabel(), rcErr)
 				c.logger.Debug("HINT: Check network connection, DNS and firewall rules")
 			default:
-				c.logger.Debug("WARNING: Cloud remote %s is not accessible: %v", c.remoteLabel(), rcErr)
+				c.logger.Debug("Cloud remote %s is not accessible: %v", c.remoteLabel(), rcErr)
 				c.logger.Debug("HINT: Check your rclone configuration and network connectivity")
 			}
 		} else {
-			c.logger.Debug("WARNING: Cloud remote %s is not accessible: %v", c.remoteLabel(), err)
+			c.logger.Debug("Cloud remote %s is not accessible: %v", c.remoteLabel(), err)
 			c.logger.Debug("HINT: Check your rclone configuration with: rclone config show %s", c.remote)
 		}
-		c.logger.Debug("WARNING: Cloud backup will be skipped")
+		c.logger.Debug("Cloud backup will be skipped")
 
 		return nil, &StorageError{
 			Location:    LocationCloud,
@@ -613,7 +613,7 @@ func (c *CloudStorage) tryWriteTest(ctx context.Context) error {
 	c.logger.Debug("Running (remote write cleanup): %s", strings.Join(argsDelete, " "))
 	_, err = c.exec(ctx, argsDelete[0], argsDelete[1:]...)
 	if err != nil {
-		c.logger.Debug("Warning: write test file cleanup failed (may lack delete permissions): %v", err)
+		c.logger.Debug("write test file cleanup failed (may lack delete permissions): %v", err)
 		// Don't return error - write succeeded which confirms write access
 	}
 
@@ -1485,7 +1485,7 @@ func (c *CloudStorage) List(ctx context.Context) (backups []*types.BackupMetadat
 	output, err := c.exec(ctx, args[0], args[1:]...)
 
 	if err != nil {
-		c.logger.Debug("WARNING: Cloud storage - failed to list backups: %v", err)
+		c.logger.Debug("Cloud storage - failed to list backups: %v", err)
 		return nil, &StorageError{
 			Location:    LocationCloud,
 			Operation:   "list",
@@ -1960,7 +1960,7 @@ func (c *CloudStorage) ApplyRetention(ctx context.Context, config RetentionConfi
 	logging.DebugStep(c.logger, "cloud retention", "listing backups")
 	backups, err := c.List(ctx)
 	if err != nil {
-		c.logger.Debug("WARNING: Cloud storage - failed to list backups for retention: %v", err)
+		c.logger.Debug("Cloud storage - failed to list backups for retention: %v", err)
 		return 0, &StorageError{
 			Location:    LocationCloud,
 			Operation:   "apply_retention",
@@ -2161,7 +2161,7 @@ func (c *CloudStorage) GetStats(ctx context.Context) (stats *StorageStats, err e
 	logging.DebugStep(c.logger, "cloud stats", "listing backups")
 	backups, err := c.List(ctx)
 	if err != nil {
-		c.logger.Debug("WARNING: Cloud storage - failed to get stats: %v", err)
+		c.logger.Debug("Cloud storage - failed to get stats: %v", err)
 		return nil, err
 	}
 
