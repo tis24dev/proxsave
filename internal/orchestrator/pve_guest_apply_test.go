@@ -2,6 +2,7 @@ package orchestrator
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -152,4 +153,57 @@ func TestStoppedGuestFallsBackToTheConfFile(t *testing.T) {
 		t.Fatalf("fallback conf not written: %q err=%v", got, err)
 	}
 	_ = filepath.Join
+}
+
+func assertUncertainGuestStatusSkipsFileFallback(t *testing.T, statusOutput []byte, statusErr error, logMarkers ...string) {
+	t.Helper()
+	fakeFS, pvesh, logger, node := guestApplyFixture(t)
+	pvesh.guests["100"] = true
+	pvesh.failSet = map[string]bool{"100": true}
+	if statusOutput != nil {
+		pvesh.statusOutput["100"] = statusOutput
+	}
+	if statusErr != nil {
+		pvesh.statusError["100"] = statusErr
+	}
+
+	buf := &strings.Builder{}
+	logger.SetOutput(buf)
+	conf := "name: vm100\ncores: 4\n"
+	stagePath := "/export/etc/pve/nodes/" + node() + "/qemu-server/100.conf"
+	if err := fakeFS.AddFile(stagePath, []byte(conf)); err != nil {
+		t.Fatal(err)
+	}
+
+	applied, failed := applyVMConfigs(context.Background(), []vmEntry{{
+		VMID: "100", Kind: "qemu", Name: "vm100", Path: stagePath,
+	}}, logger)
+	if applied != 0 || failed != 1 {
+		t.Fatalf("applied=%d failed=%d, want 0/1", applied, failed)
+	}
+	if _, err := fakeFS.ReadFile("/etc/pve/nodes/" + node() + "/qemu-server/100.conf"); err == nil {
+		t.Fatal("the file fallback ran without an explicit stopped status")
+	}
+	logOutput := buf.String()
+	for _, marker := range append([]string{"100"}, logMarkers...) {
+		if !strings.Contains(logOutput, marker) {
+			t.Fatalf("warning does not contain %q:\n%s", marker, logOutput)
+		}
+	}
+}
+
+func TestGuestStatusProbeFailureSkipsFileFallback(t *testing.T) {
+	assertUncertainGuestStatusSkipsFileFallback(t, nil, errors.New("status unavailable"), "status unavailable")
+}
+
+func TestMalformedGuestStatusSkipsFileFallback(t *testing.T) {
+	assertUncertainGuestStatusSkipsFileFallback(t, []byte(`{"status":`), nil, "status")
+}
+
+func TestPrettyPrintedRunningStatusSkipsFileFallback(t *testing.T) {
+	assertUncertainGuestStatusSkipsFileFallback(t, []byte("{\n  \"vmid\": 100,\n  \"status\": \"running\"\n}"), nil, "running")
+}
+
+func TestUnknownGuestStatusSkipsFileFallback(t *testing.T) {
+	assertUncertainGuestStatusSkipsFileFallback(t, []byte(`{"status":"unknown","vmid":100}`), nil, "unknown")
 }

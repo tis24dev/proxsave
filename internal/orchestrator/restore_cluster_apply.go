@@ -4,6 +4,7 @@ package orchestrator
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -187,8 +188,15 @@ func readVMName(confPath string) string {
 
 func applyVMConfigs(ctx context.Context, entries []vmEntry, logger *logging.Logger) (applied, failed int) {
 	node := localNodeName()
+	done := logging.DebugStart(logger, "pve guest configs apply", "entries=%d current_node=%s", len(entries), node)
+	var traceErr error
+	defer func() {
+		logging.DebugStep(logger, "pve guest configs apply", "Result: ok=%d failed=%d", applied, failed)
+		done(traceErr)
+	}()
 	for _, vm := range entries {
 		if err := ctx.Err(); err != nil {
+			traceErr = err
 			logger.Warning("VM apply aborted: %v", err)
 			return applied, failed
 		}
@@ -236,8 +244,14 @@ func applyVMConfigs(ctx context.Context, entries []vmEntry, logger *logging.Logg
 		// case where the file must not win (maintainer's call, 2026-09-02).
 		args := append([]string{"set", target}, filterGuestCreateOnlyArgs(configArgs)...)
 		if err := runPvesh(ctx, logger, args); err != nil {
-			if running := pveshGuestRunning(ctx, logger, node, vm); running {
-				logger.Warning("Failed to apply %s (vmid=%s kind=%s) and the guest is running; skipping the file fallback (config race with a live guest): %v", target, vm.VMID, vm.Kind, err)
+			status, statusErr := pveshGuestStatus(ctx, node, vm)
+			if statusErr != nil {
+				logger.Warning("Failed to apply %s (vmid=%s kind=%s) and could not verify that the guest is stopped; skipping the file fallback: %v (status probe: %v)", target, vm.VMID, vm.Kind, err, statusErr)
+				failed++
+				continue
+			}
+			if status != "stopped" {
+				logger.Warning("Failed to apply %s (vmid=%s kind=%s) and guest status is %q, not explicitly stopped; skipping the file fallback: %v", target, vm.VMID, vm.Kind, status, err)
 				failed++
 				continue
 			}
@@ -289,17 +303,26 @@ func filterGuestCreateOnlyArgs(args []string) []string {
 	return out
 }
 
-// pveshGuestRunning reports whether status/current answers "running". Any
-// error or unparsable answer counts as NOT running: in restore context the
-// guard exists only to avoid racing a demonstrably live guest.
-func pveshGuestRunning(ctx context.Context, logger *logging.Logger, node string, vm vmEntry) bool {
+// pveshGuestStatus returns the explicit status/current state. Callers must
+// positively observe "stopped" before a direct pmxcfs fallback; a command or
+// parse error is never equivalent to a stopped guest.
+func pveshGuestStatus(ctx context.Context, node string, vm vmEntry) (string, error) {
 	statusPath := fmt.Sprintf("/nodes/%s/%s/%s/status/current", node, vm.Kind, vm.VMID)
 	out, err := restoreCmd.Run(ctx, "pvesh", "get", statusPath, "--output-format=json")
 	if err != nil {
-		logger.Debug("guest status probe %s failed (treated as not running): %v", statusPath, err)
-		return false
+		return "", fmt.Errorf("pvesh get %s: %w", statusPath, err)
 	}
-	return strings.Contains(string(out), `"status":"running"`)
+	var payload struct {
+		Status string `json:"status"`
+	}
+	if err := json.Unmarshal(out, &payload); err != nil {
+		return "", fmt.Errorf("parse guest status %s: %w", statusPath, err)
+	}
+	status := strings.ToLower(strings.TrimSpace(payload.Status))
+	if status == "" {
+		return "", fmt.Errorf("guest status %s is empty", statusPath)
+	}
+	return status, nil
 }
 
 func localNodeName() string {

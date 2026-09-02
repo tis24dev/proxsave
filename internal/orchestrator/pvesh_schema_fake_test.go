@@ -29,12 +29,20 @@ type schemaAwarePvesh struct {
 	running map[string]bool
 	// failSet forces `set .../<vmid>/config` to fail regardless of args, for
 	// exercising the file-fallback arms.
-	failSet map[string]bool
-	calls   []string
+	failSet      map[string]bool
+	statusOutput map[string][]byte
+	statusError  map[string]error
+	calls        []string
 }
 
 func newSchemaAwarePvesh(existingStorages ...string) *schemaAwarePvesh {
-	s := &schemaAwarePvesh{storages: map[string]bool{}, guests: map[string]bool{}, running: map[string]bool{}}
+	s := &schemaAwarePvesh{
+		storages:     map[string]bool{},
+		guests:       map[string]bool{},
+		running:      map[string]bool{},
+		statusOutput: map[string][]byte{},
+		statusError:  map[string]error{},
+	}
 	for _, id := range existingStorages {
 		s.storages[id] = true
 	}
@@ -48,10 +56,25 @@ func (s *schemaAwarePvesh) Run(_ context.Context, name string, args ...string) (
 	}
 	if len(args) >= 2 && args[0] == "get" && strings.HasSuffix(args[1], "/status/current") {
 		vmid := pveshFakePathVMID(strings.TrimSuffix(args[1], "/status/current"))
-		if s.running[vmid] {
-			return []byte(`{"status":"running","vmid":` + vmid + `}`), nil
+		if err, ok := s.statusError[vmid]; ok {
+			return s.statusOutput[vmid], err
 		}
-		return []byte(`{"status":"stopped","vmid":` + vmid + `}`), nil
+		if out, ok := s.statusOutput[vmid]; ok {
+			return out, nil
+		}
+		if !s.guests[vmid] {
+			return []byte("Configuration file 'nodes/pve/lxc/" + vmid + ".conf' does not exist"), errString("exit status 2")
+		}
+		parts := strings.Split(strings.Trim(args[1], "/"), "/")
+		node, kind := "pve", "qemu"
+		if len(parts) >= 4 {
+			node, kind = parts[1], parts[2]
+		}
+		status := "stopped"
+		if s.running[vmid] {
+			status = "running"
+		}
+		return []byte(`{"name":"guest-` + vmid + `","node":"` + node + `","status":"` + status + `","type":"` + kind + `","vmid":` + vmid + `}`), nil
 	}
 	if len(args) >= 2 && args[0] == "get" && strings.HasSuffix(args[1], "/config") && (strings.Contains(args[1], "/qemu/") || strings.Contains(args[1], "/lxc/")) {
 		if !s.guests[pveshFakePathVMID(strings.TrimSuffix(args[1], "/config"))] {
