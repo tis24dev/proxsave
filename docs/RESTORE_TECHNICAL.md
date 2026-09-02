@@ -1231,10 +1231,13 @@ func runSafeClusterApply(ctx context.Context, reader *bufio.Reader, exportRoot s
         applyStorageCfg(ctx, storageCfg, logger)
     }
 
-    // 3. Apply datacenter.cfg
+    // 3. Apply datacenter.cfg - written into pmxcfs: the API has no whole-file
+    // endpoint (a live node answers `pvesh set /cluster/config` with
+    // "No 'set' handler defined"), and /etc/pve is the cluster-replicated
+    // filesystem, so the file write IS the cluster-wide apply.
     dcCfg := filepath.Join(exportRoot, "etc/pve/datacenter.cfg")
-    if fileExists(dcCfg) && promptYesNo("Apply datacenter.cfg via pvesh?") {
-        runPvesh(ctx, logger, []string{"set", "/cluster/config", "-conf", dcCfg})
+    if fileExists(dcCfg) && promptYesNo("Apply datacenter.cfg?") {
+        pmxcfsWriteFile(logger, "datacenter.cfg", readFile(dcCfg))
     }
 }
 ```

@@ -98,12 +98,12 @@ var notes = []Note{
 		Lines: []string{
 			"Run your own scripts around each backup: PERSONAL_SCRIPT_PRE_RUN and PERSONAL_SCRIPT_POST_RUN in backup.env",
 			"The notification issue list names the failed operation (upload, retention, listing), one entry per fault",
-			"Secondary storage reports unreadable archives and a location that stopped answering instead of skipping them silently",
-			"A backup that hits those secondary faults ends with exit 1 instead of reporting success",
+			"Secondary storage reports unreadable archives and a stopped location, and those faults end the run with exit 1",
 			"Log messages no longer repeat the level word the level column already prints",
 			"A cloud delete killed mid-transfer reports the kill, not rclone's last progress line",
 			"Personal scripts must live on a root-owned, non-writable path chain; unsafe paths are refused at daemon start",
 			"A daemon shutdown no longer waits for a running personal script; the script keeps its own 10-minute budget",
+			"Staged PVE restore really applies datacenter.cfg, vzdump.cron, storage definitions and guest configs",
 		},
 		Actions: []string{
 			"If runs start ending with exit 1 naming unreadable secondary archives, repair or remove those files",

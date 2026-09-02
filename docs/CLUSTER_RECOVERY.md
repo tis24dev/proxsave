@@ -148,11 +148,11 @@ In the TUI it is a selector titled `Cluster restore mode` with `SAFE`, `RECOVERY
 
 SAFE never writes config.db, never stops `pve-cluster`/`pvedaemon`/`pveproxy`/`pvestatd`, and never unmounts `/etc/pve`. It extracts the cluster files to an export directory and re-applies them to the RUNNING cluster through `pvesh`/`pveum`:
 
-- storage definitions (`pvesh create /storage` from storage.cfg), unless the `storage_pve` category already restores them;
-- datacenter options (`pvesh set /cluster/config`);
+- storage definitions from storage.cfg (`pvesh create /storage`, falling back to `pvesh set /storage/<id>` for definitions that already exist);
+- datacenter options (datacenter.cfg written into pmxcfs, which replicates cluster-wide; the API has no whole-file endpoint);
 - resource pools (`pveum pool add/modify` for definitions, then membership, with an optional allow-move guard when a pool lists guests);
 - PCI, USB, and directory resource mappings;
-- VM and CT configs, re-created on the CURRENT node via `pvesh create` then `pvesh set` under `/nodes/<node>/qemu|lxc/<vmid>/config`.
+- VM and CT configs on the CURRENT node: existing guests via `pvesh set` under `/nodes/<node>/qemu|lxc/<vmid>/config` (minus the create-only keys the update schema refuses, with the staged conf written into pmxcfs as the fallback when the guest is not running); missing guests registered by writing the conf into pmxcfs (config only - disks are not part of a config restore).
 
 Use SAFE when the node or cluster is up and you want to merge the backed-up configuration back in without touching the live database. SAFE needs `pvesh` on PATH; without it, it logs a skip and applies nothing.
 

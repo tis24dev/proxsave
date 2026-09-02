@@ -387,5 +387,5 @@ func (u *cliWorkflowUI) ConfirmApplyStorageCfg(ctx context.Context, storageCfgPa
 func (u *cliWorkflowUI) ConfirmApplyDatacenterCfg(ctx context.Context, datacenterCfgPath string) (bool, error) {
 	fmt.Fprintln(u.w())
 	fmt.Fprintf(u.w(), "Datacenter configuration found: %s\n", components.SanitizeLine(strings.TrimSpace(datacenterCfgPath)))
-	return promptYesNo(ctx, u.reader, "Apply datacenter.cfg via pvesh? (y/N): ")
+	return promptYesNo(ctx, u.reader, "Apply datacenter.cfg? (y/N): ")
 }

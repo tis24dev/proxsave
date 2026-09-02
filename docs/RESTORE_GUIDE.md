@@ -714,7 +714,7 @@ Exported 23 files/directories
 
 When using Cluster SAFE mode, after extraction:
 ```text
-SAFE cluster restore: applying configs via pvesh (node=pve01)
+SAFE cluster restore: applying configs (node=pve01)
 
 Found 3 VM/CT configs for node pve01
 Apply all VM/CT configs via pvesh? (y/N): y
@@ -819,7 +819,7 @@ Cluster backup detected. Choose how to restore:
 
 Exporting 1 export-only category(ies) to: /opt/proxsave/proxmox-config-export-*/
 
-SAFE cluster restore: applying configs via pvesh (node=pve01)
+SAFE cluster restore: applying configs (node=pve01)
 Found 5 VM/CT configs for node pve01
 Apply all VM/CT configs via pvesh? (y/N): y
 Applied VM/CT config 100 (webserver)
@@ -914,10 +914,10 @@ Cluster backup detected. Choose how to restore the cluster database:
 
 **Post-restore actions (SAFE mode)**:
 After export, the workflow offers interactive options to apply configurations via `pvesh`:
-1. **VM/CT configs**: Scans exported configs (under `/etc/pve/nodes/<node>/...`) and applies them via `pvesh set /nodes/<node>/qemu/<vmid>/config`
+1. **VM/CT configs**: Scans exported configs (under `/etc/pve/nodes/<node>/...`) and applies them via `pvesh set /nodes/<node>/qemu/<vmid>/config` (create-only keys such as `meta`/`ostemplate` are stripped; if the set fails and the guest is not running, the exported conf is written into pmxcfs; a missing guest is registered by writing its conf)
    - If the target node hostname differs from the hostname stored in the backup (common after hardware migration / reinstall), ProxSave detects the mismatch and prompts you to select the exported node directory to import from (instead of silently reporting "No VM/CT configs found").
-2. **Storage configuration**: applies each `storage.cfg` block via `pvesh create /storage --storage=<id> --type=<type> ...`
-3. **Datacenter configuration**: Applies `datacenter.cfg` via `pvesh set /cluster/config`
+2. **Storage configuration**: applies each `storage.cfg` block via `pvesh create /storage --storage=<id> --type=<type> ...`, falling back to `pvesh set /storage/<id>` when the definition already exists (as `local` always does)
+3. **Datacenter configuration**: writes `datacenter.cfg` into pmxcfs (`/etc/pve`), which replicates it cluster-wide - the API has no whole-file endpoint for it
 
 Each action prompts for confirmation before execution.
 
@@ -1470,16 +1470,16 @@ Parses `storage.cfg` and applies each storage definition:
 
 ```text
 Datacenter configuration found: /opt/proxsave/proxmox-config-export-*/etc/pve/datacenter.cfg
-Apply datacenter.cfg via pvesh? (y/N): y
+Apply datacenter.cfg? (y/N): y
 ```
 
 Applies datacenter-wide settings:
-- Applied via: `pvesh set /cluster/config -conf <file>`
-- Affects all cluster nodes
+- Applied via: file write into pmxcfs (`/etc/pve/datacenter.cfg`)
+- Affects all cluster nodes (pmxcfs replicates the file cluster-wide)
 
 **Interactive Flow**:
 ```text
-SAFE cluster restore: applying configs via pvesh (node=pve01)
+SAFE cluster restore: applying configs (node=pve01)
 
 Apply PVE resource mappings (pvesh)? (y/N): y
 Applied pci mapping device1
@@ -1501,7 +1501,7 @@ Applied storage definition backup-nfs
 Storage apply completed: ok=2 failed=0
 
 Datacenter configuration found: .../etc/pve/datacenter.cfg
-Apply datacenter.cfg via pvesh? (y/N): n
+Apply datacenter.cfg? (y/N): n
 Skipping datacenter.cfg apply
 
 Pools apply (membership) completed: ok=1 failed=0
@@ -1583,7 +1583,7 @@ These configurations are included in every backup and can be restored using **th
 
 5. **After extraction completes**, you'll see:
    ```text
-   SAFE cluster restore: applying configs via pvesh (node=pve01)
+   SAFE cluster restore: applying configs (node=pve01)
 
    Found 5 VM/CT configs for node pve01
    Apply all VM/CT configs via pvesh? (y/N): y

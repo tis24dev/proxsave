@@ -50,7 +50,7 @@ func (f *safeClusterApplyUIFlow) run() error {
 	}
 	f.detectCurrentNode()
 	f.logger.Info("")
-	f.logger.Info("SAFE cluster restore: applying configs via pvesh (node=%s)", f.currentNode)
+	f.logger.Info("SAFE cluster restore: applying configs (node=%s)", f.currentNode)
 	f.applyResourceMappings()
 	if err := f.preparePools(); err != nil {
 		return err

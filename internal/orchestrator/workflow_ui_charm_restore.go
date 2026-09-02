@@ -314,7 +314,7 @@ func (u *charmWorkflowUI) ConfirmApplyStorageCfg(ctx context.Context, storageCfg
 
 func (u *charmWorkflowUI) ConfirmApplyDatacenterCfg(ctx context.Context, datacenterCfgPath string) (bool, error) {
 	return u.confirmApply(ctx, "Apply datacenter.cfg",
-		fmt.Sprintf("Datacenter configuration found:\n\n%s\n\nApply datacenter.cfg via pvesh now?", strings.TrimSpace(datacenterCfgPath)))
+		fmt.Sprintf("Datacenter configuration found:\n\n%s\n\nApply datacenter.cfg now?", strings.TrimSpace(datacenterCfgPath)))
 }
 
 func (u *charmWorkflowUI) confirmApply(ctx context.Context, title, message string) (bool, error) {
