@@ -164,18 +164,20 @@ func (c *Collector) collectSystemNetworkStatic(ctx context.Context) error {
 	}
 
 	c.logger.Debug("Collecting network configuration files (/etc/network/*)")
+	// Both helpers answer a missing source with nil, so err here is a REAL copy
+	// failure; the old "No ... found" Debug wording was false from the first port.
 	if err := c.safeCopyFile(ctx,
 		c.systemPath("/etc/network/interfaces"),
 		filepath.Join(c.tempDir, "etc/network/interfaces"),
 		"Network interfaces"); err != nil {
-		c.logger.Debug("No /etc/network/interfaces found")
+		c.logger.Warning("Failed to collect /etc/network/interfaces: %v", err)
 	}
 
 	if err := c.safeCopyDir(ctx,
 		c.systemPath("/etc/network/interfaces.d"),
 		filepath.Join(c.tempDir, "etc/network/interfaces.d"),
 		"Network interfaces.d"); err != nil {
-		c.logger.Debug("No /etc/network/interfaces.d found")
+		c.logger.Warning("Failed to collect /etc/network/interfaces.d: %v", err)
 	}
 
 	extraNetworkFiles := []struct {
@@ -1339,8 +1341,11 @@ func (c *Collector) collectCriticalFiles(ctx context.Context) error {
 			return err
 		}
 		dest := filepath.Join(c.tempDir, strings.TrimPrefix(file, "/"))
+		// A returned error is ALWAYS a real failure (safeCopyFile answers a missing
+		// source with nil), and these are the files a restore needs most: mute at
+		// Debug since the initial Go port while fstab and logrotate siblings warned.
 		if err := c.safeCopyFile(ctx, c.systemPath(file), dest, fmt.Sprintf("critical file %s", filepath.Base(file))); err != nil && !errors.Is(err, os.ErrNotExist) {
-			c.logger.Debug("Failed to copy critical file %s: %v", file, err)
+			c.logger.Warning("Failed to copy critical file %s: %v", file, err)
 		}
 	}
 
@@ -1406,19 +1411,21 @@ func (c *Collector) collectCustomPaths(ctx context.Context) error {
 		info, err := os.Lstat(physicalPath)
 		if err != nil {
 			if !os.IsNotExist(err) {
-				c.logger.Debug("Custom path %s not accessible: %v", physicalPath, err)
+				c.logger.Warning("Custom path %s not accessible: %v", physicalPath, err)
 			}
 			continue
 		}
 
 		dest := filepath.Join(c.tempDir, strings.TrimPrefix(logicalPath, "/"))
+		// The operator asked for these by name; a real copy failure (not-found is
+		// answered with nil inside the helpers) must not hide at Debug.
 		if info.IsDir() {
 			if err := c.safeCopyDir(ctx, physicalPath, dest, fmt.Sprintf("custom directory %s", logicalPath)); err != nil {
-				c.logger.Debug("Failed to copy custom directory %s: %v", physicalPath, err)
+				c.logger.Warning("Failed to copy custom directory %s: %v", physicalPath, err)
 			}
 		} else {
 			if err := c.safeCopyFile(ctx, physicalPath, dest, fmt.Sprintf("custom file %s", filepath.Base(logicalPath))); err != nil {
-				c.logger.Debug("Failed to copy custom file %s: %v", physicalPath, err)
+				c.logger.Warning("Failed to copy custom file %s: %v", physicalPath, err)
 			}
 		}
 	}
