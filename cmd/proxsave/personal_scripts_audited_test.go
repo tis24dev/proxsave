@@ -438,6 +438,8 @@ func capturePersonalScriptValidation(t *testing.T, pre, post string) (preOut, po
 	logger := logging.New(types.LogLevelDebug, false)
 	buf := &bytes.Buffer{}
 	logger.SetOutput(buf)
+	prev := logging.GetDefaultLogger()
+	t.Cleanup(func() { logging.SetDefaultLogger(prev) })
 	logging.SetDefaultLogger(logger)
 	cfg := &config.Config{PersonalScriptPreRun: pre, PersonalScriptPostRun: post}
 	validatePersonalScripts(cfg)

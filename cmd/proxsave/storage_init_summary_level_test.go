@@ -41,6 +41,8 @@ func renderInitSummary(t *testing.T, summary string, warn bool) string {
 	logger := logging.New(types.LogLevelDebug, false)
 	buf := &bytes.Buffer{}
 	logger.SetOutput(buf)
+	prev := logging.GetDefaultLogger()
+	t.Cleanup(func() { logging.SetDefaultLogger(prev) })
 	logging.SetDefaultLogger(logger)
 	logStorageInitSummary(summary, warn)
 	return buf.String()
@@ -126,6 +128,8 @@ func TestCloudUnavailableHeadlineIsAWarning(t *testing.T) {
 	logger := logging.New(types.LogLevelInfo, false)
 	buf := &bytes.Buffer{}
 	logger.SetOutput(buf)
+	prev := logging.GetDefaultLogger()
+	t.Cleanup(func() { logging.SetDefaultLogger(prev) })
 	logging.SetDefaultLogger(logger)
 
 	cfg := &config.Config{CloudEnabled: true, CloudRemote: "remote"}
