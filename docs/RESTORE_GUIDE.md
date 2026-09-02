@@ -914,7 +914,7 @@ Cluster backup detected. Choose how to restore the cluster database:
 
 **Post-restore actions (SAFE mode)**:
 After export, the workflow offers interactive options to apply configurations via `pvesh`:
-1. **VM/CT configs**: Scans exported configs (under `/etc/pve/nodes/<node>/...`) and applies them via `pvesh set /nodes/<node>/qemu/<vmid>/config` (create-only keys such as `meta`/`ostemplate` are stripped; if the set fails and the guest is not running, the exported conf is written into pmxcfs; a missing guest is registered by writing its conf)
+1. **VM/CT configs**: Scans exported configs (under `/etc/pve/nodes/<node>/...`) and first loads the cluster-wide guest inventory. Existing guests on the current node are applied via `pvesh set /nodes/<node>/qemu|lxc/<vmid>/config` (create-only keys such as `meta`/`ostemplate` are stripped; if the set fails, the exported conf is written into pmxcfs only when `status/current` explicitly reports `stopped`). A VMID absent cluster-wide is registered by writing its conf; a VMID owned by another node or present as the other guest type is skipped without mutation. An unavailable or invalid inventory stops the entire guest batch before mutation.
    - If the target node hostname differs from the hostname stored in the backup (common after hardware migration / reinstall), ProxSave detects the mismatch and prompts you to select the exported node directory to import from (instead of silently reporting "No VM/CT configs found").
 2. **Storage configuration**: applies each `storage.cfg` block via `pvesh create /storage --storage=<id> --type=<type> ...`, falling back to `pvesh set /storage/<id>` when the definition already exists (as `local` always does)
 3. **Datacenter configuration**: writes `datacenter.cfg` into pmxcfs (`/etc/pve`), which replicates it cluster-wide - the API has no whole-file endpoint for it
@@ -1446,10 +1446,16 @@ Apply all VM/CT configs via pvesh? (y/N): y
 
 For each VM/CT config found in the export:
 - Reads config from `<export>/etc/pve/nodes/<node>/qemu-server/<vmid>.conf`
-- Applies via: `pvesh set /nodes/<node>/qemu/<vmid>/config --filename <config>`
-- Reports success/failure for each VM
+- Loads one cluster-wide inventory with `pvesh get /cluster/resources --type vm --output-format=json` before changing any guest
+- Stops the entire selected guest batch without mutation if the inventory command fails or its JSON is malformed, incomplete, or contains duplicate VMIDs
+- Skips a VMID already owned by another node; SAFE does not move guests between nodes
+- Skips a VMID whose live type (`qemu` or `lxc`) differs from the staged config type
+- Updates a matching guest on the current node with `pvesh set /nodes/<node>/<type>/<vmid>/config --<key>=<value> ...`, excluding create-only keys
+- If that API update fails, writes the staged conf into pmxcfs only after the JSON status probe explicitly reports `stopped`; command errors, malformed status, `running`, and unknown states all skip the fallback
+- Registers a VMID that is absent cluster-wide by writing the staged conf into pmxcfs on the current node
+- Reports success/failure for each VM/CT
 
-**Note**: This creates or updates VM configurations in the cluster. Disk images are NOT affected.
+**Note**: This registers or updates guest configurations only. Disk images are NOT affected.
 
 #### 4. Storage Configuration Apply
 

@@ -11,7 +11,9 @@ package orchestrator
 // it deletes again. Still: test node only, file-level backups first.
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -126,6 +128,29 @@ func TestLivePVEExistingGuestWithMeta(t *testing.T) {
 func TestLivePVEMissingLxcRegistration(t *testing.T) {
 	logger := livePVEGuard(t)
 	const vmid = "990"
+	inventoryOut, err := exec.Command("pvesh", "get", "/cluster/resources", "--type", "vm", "--output-format=json").CombinedOutput()
+	if err != nil {
+		t.Fatalf("cannot prove that CT %s is absent cluster-wide: %v (output: %s)", vmid, err, strings.TrimSpace(string(inventoryOut)))
+	}
+	inventoryOut = bytes.TrimSpace(inventoryOut)
+	if len(inventoryOut) == 0 || inventoryOut[0] != '[' {
+		t.Fatalf("cannot prove that CT %s is absent cluster-wide: expected a JSON array", vmid)
+	}
+	var guests []struct {
+		VMID int    `json:"vmid"`
+		Node string `json:"node"`
+	}
+	if err := json.Unmarshal(inventoryOut, &guests); err != nil {
+		t.Fatalf("cannot prove that CT %s is absent cluster-wide: parse inventory: %v", vmid, err)
+	}
+	for index, guest := range guests {
+		if guest.VMID <= 0 || strings.TrimSpace(guest.Node) == "" {
+			t.Fatalf("cannot prove that CT %s is absent cluster-wide: incomplete inventory item %d", vmid, index)
+		}
+		if guest.VMID == 990 {
+			t.Fatalf("CT %s already exists in the cluster on node %s; refusing to touch it", vmid, guest.Node)
+		}
+	}
 	confPath := "/etc/pve/lxc/" + vmid + ".conf"
 	if _, err := os.Stat(confPath); err == nil {
 		t.Fatalf("CT %s already exists on this node; refusing to touch it", vmid)

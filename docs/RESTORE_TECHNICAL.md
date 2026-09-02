@@ -1212,9 +1212,12 @@ After extraction in SAFE mode, `runSafeClusterApply()` offers API-based restorat
 
 **Key Functions**:
 - `scanVMConfigs()`: Scans `<export>/etc/pve/nodes/<node>/qemu-server/` and `lxc/`
-- `applyVMConfigs()`: Applies each config via `pvesh set /nodes/<node>/<type>/<vmid>/config`
+- `loadPVEGuestInventory()`: Loads and strictly validates the cluster-wide `qemu`/`lxc` ownership map from `/cluster/resources`
+- `applyVMConfigs()`: Classifies every VMID before mutation; skips remote/type-mismatched guests, updates matching local guests through `pvesh`, and registers cluster-wide-absent guests through pmxcfs
 - `applyStorageCfg()`: Parses storage.cfg blocks and applies via `pvesh set /cluster/storage/<id>`
 - `runPvesh()`: Executes pvesh commands with logging
+
+Guest apply is fail-closed. The inventory is loaded once before the loop; any command, JSON validation, incomplete-record, or duplicate-VMID error marks the selected guest entries failed without mutating them. A failed API update may fall back to the staged pmxcfs file only when a JSON `status/current` response explicitly says `stopped`.
 
 **Flow**:
 ```go
