@@ -316,6 +316,19 @@ func (d *daemon) run(ctx context.Context) int {
 	// so the silent starters below never see it.
 	validatePersonalScripts(d.cfg)
 
+	// SINGLE-INSTANCE guard, before anything below is published: a second daemon would
+	// overwrite .daemon.pid/.daemon_info.json with its own identity and, on exit, DELETE
+	// both, hiding the still-running incumbent from every standalone handoff until a unit
+	// restart - and double-schedule the daily backup while both live. The probe is the
+	// same liveness + /proc cmdline gate the standalone handoff trusts, so a stale file
+	// (dead pid, or a recycled pid belonging to something else) never blocks a restart.
+	// ExitBackupSkipped for the same reason the concurrent-backup skip uses it: nothing
+	// is wrong with the host, the work is simply already owned by another process.
+	if pid, err := health.ReadDaemonPID(d.cfg.BaseDir); err == nil && pid > 0 && pid != os.Getpid() && daemonAliveProbe(pid) {
+		logging.Warning("daemon: another proxsave daemon is already running (pid=%d) - refusing a second instance so its pid file survives", pid)
+		return types.ExitBackupSkipped.Int()
+	}
+
 	// CRITICAL: install the SIGUSR1 handler BEFORE publishing the pidfile below. Go's DEFAULT action
 	// for SIGUSR1 is to TERMINATE the process, and the pidfile is exactly what a standalone backup
 	// run uses to discover us and send SIGUSR1 to hand off its outcome. If the pid became
