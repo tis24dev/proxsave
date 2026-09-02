@@ -41,12 +41,14 @@ import (
 // promotes an otherwise clean run to exit 1, through ParseLogCounts and applyIssueExitCode). This
 // test does not reach that pair, so the comment there has to carry the warning instead.
 //
-// NO BASELINE, ON PURPOSE. The rule arrived after the violations: 143 call sites already break
-// it. Freezing them in a known-violations file would leave this test GREEN on a tree that has
-// 143 of the defect, which tells a reader looking at the traffic light something false. The
+// NO BASELINE, ON PURPOSE. The rule arrived after the violations: 143 call sites broke it when
+// the campaign opened (85 in words, 58 as a glyph, under the original scanner; the extended
+// scanner re-baselined the totals). Freezing them in a known-violations file would leave this
+// test GREEN on a tree full of the defect, which tells a reader looking at the traffic light
+// something false. The
 // maintainer chose a red suite instead, accepted and expected until the list reaches zero, and a
 // cleanup done one FILE per commit with the result of each edit MEASURED rather than reasoned
-// about: see TestRemovingARestatementChangesNothingButTheLine in internal/orchestrator, which
+// about: see TestRemovingARestatementLeavesExactlyOneLevelWord in internal/orchestrator, which
 // renders the line through the real logger and re-counts it through the real ParseLogCounts,
 // before and after. Static reasoning that "the column classifies, so the word is free" is not
 // the evidence this cleanup runs on.
@@ -163,7 +165,7 @@ func TestLoggerCallersDoNotRestateTheirOwnLevel(t *testing.T) {
 		"(%d in words, %d as a glyph).\n"+
 		"The console writes \"[ts] LEVEL   message\"; opening the message with the level, or drawing a\n"+
 		"severity glyph, says it twice. Drop it and let the column carry it - but MEASURE each edit\n"+
-		"with TestRemovingARestatementChangesNothingButTheLine before trusting it.\n",
+		"with TestRemovingARestatementLeavesExactlyOneLevelWord before trusting it.\n",
 		len(found), len(files), words, glyphs)
 	for _, f := range files {
 		fmt.Fprintf(&b, "\n%s (%d)\n", f, len(byFile[f]))
