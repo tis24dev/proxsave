@@ -255,6 +255,22 @@ func scanForLevelRestatement(t *testing.T, root string) []levelViolation {
 					}
 				}
 				return true
+			case *ast.ValueSpec:
+				// `var msg = "WARNING: ..."` is the same lexical shape as `msg := ...`
+				// and was invisible until the release-PR review pointed it out.
+				if len(node.Names) == len(node.Values) {
+					for i, name := range node.Names {
+						if name.Name == "_" {
+							continue
+						}
+						if text, ok := literalText(node.Values[i]); ok {
+							varText[name.Name] = text
+						} else {
+							delete(varText, name.Name)
+						}
+					}
+				}
+				return true
 			}
 			call, ok := n.(*ast.CallExpr)
 			if !ok || len(call.Args) == 0 {

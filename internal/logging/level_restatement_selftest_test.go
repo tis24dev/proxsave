@@ -70,6 +70,8 @@ func plant() {
 	l.Warning(fmt.Sprintf("WARNING: inline sprintf %d", 1))
 	msg := "WARNING: via a variable"
 	l.Warning(msg)
+	var declared = "WARNING: via a var declaration"
+	l.Warning(declared)
 	built := fmt.Sprintf("⚠ sprintf into a variable")
 	l.Warning(built)
 	l.Info("legacy marker [WARNING] mid literal")
@@ -107,6 +109,7 @@ func plant() {
 		"word|WARNING|WARNING: planted word restatem",
 		"word|WARNING|WARNING: through the identity-",
 		"word|WARNING|WARNING: through the telegram ",
+		"word|WARNING|WARNING: via a var declaration",
 		"word|WARNING|WARNING: via a variable",
 		"word|WARNING|WARNING: ⚠ word and glyph in o",
 		"word|WARNING|Warning - dash spelling",
