@@ -128,7 +128,7 @@ func sortLogCategories(list []notify.LogCategory) {
 			// refreshLogIssuesFromFile (extensions.go) keeps only the first 10: a warning
 			// whose message happens to start lowercase was therefore dropped from the
 			// notification before any warning that started uppercase, whatever it said.
-			// 39 production warnings begin lowercase against 642 uppercase, so this was
+			// 39 production warnings begin lowercase against 645 uppercase, so this was
 			// never about one line.
 			if strings.ToLower(list[j].Label) > strings.ToLower(list[j+1].Label) {
 				list[j], list[j+1] = list[j+1], list[j]
