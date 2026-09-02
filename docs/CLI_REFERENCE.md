@@ -442,6 +442,11 @@ proxsave -l info    # debug|info|warning|error|critical
 - **Console**: Colored output (if `USE_COLOR=true`)
 - **File**: `LOG_PATH/backup-$(hostname)-YYYYMMDD-HHMMSS.log`
 
+The level threshold mutes the **console only** for warnings and above: a warning or
+error raised below the chosen level is still counted (footer, exit code) and still
+written to the log file, so the artifact shipped with notifications keeps the
+evidence. Levels below warning are filtered everywhere, as before.
+
 **`--log-level` vs `DEBUG_LEVEL`**:
 - `DEBUG_LEVEL` (config) sets the base log level: `standard` resolves to `info`, `advanced` and `extreme` both resolve to `debug`. Default is `info`.
 - `--log-level` (CLI flag) overrides `DEBUG_LEVEL` for that run.

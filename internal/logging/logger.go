@@ -392,7 +392,15 @@ func (l *Logger) log(level types.LogLevel, format string, args ...interface{}) {
 func (l *Logger) logWithLabel(level types.LogLevel, label string, colorOverride string, format string, args ...interface{}) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	if level > l.level {
+	// The threshold is a CONSOLE filter (maintainer call, 2026-09-02). It used to
+	// return here for every level, before the counters, the issue capture and the
+	// file sink - so `--log-level error` made a warning vanish from the footer,
+	// the exit code AND the shipped log at once. Warning-weight lines and above
+	// are always counted and always reach the file; only their display is muted.
+	// Below warning the threshold keeps its full meaning.
+	consoleMuted := level > l.level
+	if consoleMuted && level != types.LogLevelWarning &&
+		level != types.LogLevelError && level != types.LogLevelCritical {
 		return
 	}
 
@@ -466,13 +474,16 @@ func (l *Logger) logWithLabel(level types.LogLevel, label string, colorOverride 
 		l.issueLines = append(l.issueLines, issue)
 	}
 
-	// Write to stdout with colors.
-	_, _ = fmt.Fprint(l.output, outputStdout)
+	// Write to stdout with colors - unless the console threshold mutes it. The
+	// mirror is a display tap, so it mutes with the console.
+	if !consoleMuted {
+		_, _ = fmt.Fprint(l.output, outputStdout)
 
-	// Mirror the COLORED line to the optional tap (parallel to the file sink, so a
-	// muted console never starves it). In-memory, non-blocking; never wedges l.mu.
-	if l.mirror != nil {
-		_, _ = io.WriteString(l.mirror, outputStdout)
+		// Mirror the COLORED line to the optional tap (parallel to the file sink, so a
+		// muted console never starves it). In-memory, non-blocking; never wedges l.mu.
+		if l.mirror != nil {
+			_, _ = io.WriteString(l.mirror, outputStdout)
+		}
 	}
 
 	// If a log file is open and not disabled, write there too (without colors),
