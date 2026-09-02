@@ -541,11 +541,30 @@ func normalizeTextFile(root *os.Root, name string) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	normalized := bytes.ReplaceAll(data, []byte("\r"), nil)
+	// Only CRLF pairs in plain single-byte text are collapsed - the documented
+	// contract ("removal of \r from CRLF text files"). The extension gate upstream
+	// cannot tell content: a .txt can be UTF-16 (where stripping every 0x0D byte
+	// breaks a code unit in half and shifts everything after it into garbage) and a
+	// .log can carry lone \r progress lines or embedded binary. Measured, not
+	// hypothetical: both corruptions were reproduced live before this guard.
+	if !isPlainSingleByteText(data) {
+		return false, nil
+	}
+	normalized := bytes.ReplaceAll(data, []byte("\r\n"), []byte("\n"))
 	if bytes.Equal(data, normalized) {
 		return false, nil
 	}
 	return true, atomicRootRewrite(root, name, normalized)
+}
+
+// isPlainSingleByteText reports whether data is safe for byte-level CRLF
+// normalization: no UTF-16/UTF-32 BOM and no NUL byte (the cheapest reliable tell
+// for wide encodings without a BOM and for binary payloads alike).
+func isPlainSingleByteText(data []byte) bool {
+	if bytes.HasPrefix(data, []byte{0xFF, 0xFE}) || bytes.HasPrefix(data, []byte{0xFE, 0xFF}) {
+		return false
+	}
+	return !bytes.ContainsRune(data, 0)
 }
 
 func normalizeConfigFile(root *os.Root, name string) (bool, error) {
