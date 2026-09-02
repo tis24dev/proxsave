@@ -55,7 +55,11 @@ func (s *schemaAwarePvesh) Run(_ context.Context, name string, args ...string) (
 	}
 	if len(args) >= 2 && args[0] == "get" && strings.HasSuffix(args[1], "/config") && (strings.Contains(args[1], "/qemu/") || strings.Contains(args[1], "/lxc/")) {
 		if !s.guests[pveshFakePathVMID(strings.TrimSuffix(args[1], "/config"))] {
-			return nil, errString("no such guest (500 Configuration file does not exist)")
+			// Live shape (measured on PVE 9.1.9): the reason lands on the
+			// command's OUTPUT, the Go error is a bare exit status. An earlier
+			// fake put the reason inside the error and masked that
+			// pveshGuestExists never matched it on a real node.
+			return []byte("Configuration file 'nodes/pve/lxc/990.conf' does not exist"), errString("exit status 2")
 		}
 		return []byte("{}"), nil
 	}
@@ -91,6 +95,14 @@ func (s *schemaAwarePvesh) Run(_ context.Context, name string, args ...string) (
 		id := strings.TrimPrefix(args[1], "/storage/")
 		if !s.storages[id] {
 			return nil, errString("no such storage '" + id + "'")
+		}
+		// Live shape (measured on PVE 9.1.9): `path` is create-only for storage
+		// too - "Unknown option: path" on the OUTPUT, bare exit status as the
+		// error. Any --path in a set is refused.
+		for _, a := range args[2:] {
+			if strings.HasPrefix(a, "--path=") {
+				return []byte("Unknown option: path\n400 unable to parse option"), errString("exit status 255")
+			}
 		}
 		return nil, nil
 	}

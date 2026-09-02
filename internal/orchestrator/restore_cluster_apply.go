@@ -312,13 +312,33 @@ func localNodeName() string {
 }
 
 func pveshGuestExists(ctx context.Context, logger *logging.Logger, target string) (bool, error) {
-	if err := runPvesh(ctx, logger, []string{"get", target}); err != nil {
-		if isPveshNotFoundError(err) {
-			return false, nil
-		}
-		return false, err
+	// The reason for a missing guest lands on pvesh's OUTPUT ("Configuration
+	// file '...' does not exist", measured live on PVE 9.1.9); the Go error is a
+	// bare "exit status 2". Matching the error alone never fired on a real node,
+	// so a missing guest read as a failed check instead of as absent - which is
+	// why the not-found match must read the output too.
+	out, err := restoreCmd.Run(ctx, "pvesh", "get", target)
+	if len(out) > 0 {
+		logger.Debug("pvesh [get %s] output: %s", target, strings.TrimSpace(string(out)))
 	}
-	return true, nil
+	if err == nil {
+		return true, nil
+	}
+	if isPveshNotFoundError(err) || isPveshNotFoundText(string(out)) {
+		return false, nil
+	}
+	return false, fmt.Errorf("pvesh [get %s] failed: %w", target, err)
+}
+
+// isPveshNotFoundText matches the not-found reasons pvesh prints on its output.
+func isPveshNotFoundText(out string) bool {
+	lower := strings.ToLower(out)
+	for _, marker := range []string{"does not exist", "not found", "no such"} {
+		if strings.Contains(lower, marker) {
+			return true
+		}
+	}
+	return false
 }
 
 func isPveshNotFoundError(err error) bool {
@@ -374,6 +394,61 @@ func pveshArgsFromProxmoxEntries(entries []proxmoxNotificationEntry) []string {
 		args = append(args, fmt.Sprintf("--%s=%s", key, value))
 	}
 	return args
+}
+
+// pveshSetStorageDroppingCreateOnly runs `pvesh set /storage/<id>` and, on the
+// live "Unknown option: <key>" refusal (create-only keys: `path` on a dir
+// storage, measured on PVE 9.1.9; server/export on nfs are the same family),
+// drops the named key and retries. The set schema varies by storage type and
+// PVE version, so the refusal itself is the authoritative list - a hardcoded
+// whitelist would drift.
+func pveshSetStorageDroppingCreateOnly(ctx context.Context, logger *logging.Logger, id string, args []string) error {
+	for attempt := 0; attempt <= len(args); attempt++ {
+		full := append([]string{"set", "/storage/" + id}, args...)
+		out, err := restoreCmd.Run(ctx, "pvesh", full...)
+		if len(out) > 0 {
+			logger.Debug("pvesh %v output: %s", full, strings.TrimSpace(string(out)))
+		}
+		if err == nil {
+			return nil
+		}
+		key := pveshUnknownOptionFrom(string(out))
+		if key == "" {
+			return fmt.Errorf("pvesh %v failed: %w", full, err)
+		}
+		trimmed := args[:0:0]
+		for _, arg := range args {
+			if strings.HasPrefix(arg, "--"+key+"=") {
+				logger.Debug("storage %s: dropping create-only key --%s from the set fallback", id, key)
+				continue
+			}
+			trimmed = append(trimmed, arg)
+		}
+		if len(trimmed) == len(args) {
+			return fmt.Errorf("pvesh %v failed: %w", full, err)
+		}
+		if len(trimmed) == 0 {
+			// Nothing left to update: the definition already matches on every
+			// settable key, which is a success, not a failure.
+			return nil
+		}
+		args = trimmed
+	}
+	return fmt.Errorf("storage %s: the set fallback did not converge", id)
+}
+
+// pveshUnknownOptionFrom extracts the key from pvesh's "Unknown option: <key>" output.
+func pveshUnknownOptionFrom(out string) string {
+	const marker = "Unknown option: "
+	idx := strings.Index(out, marker)
+	if idx < 0 {
+		return ""
+	}
+	rest := out[idx+len(marker):]
+	if end := strings.IndexAny(rest, " \t\r\n"); end >= 0 {
+		rest = rest[:end]
+	}
+	return strings.TrimSpace(rest)
 }
 
 func storageBlockPveshArgs(block storageBlock) ([]string, bool) {
@@ -448,14 +523,14 @@ func applyStorageCfg(ctx context.Context, cfgPath string, logger *logging.Logger
 			// node, probed live 2026-09-02: "storage ID 'local' already defined"),
 			// so update it - the same create-then-set shape the backup-jobs apply
 			// has always had. --storage and --type are create-only and stay out.
-			setArgs := []string{"set", "/storage/" + blk.ID}
+			setArgs := make([]string, 0, len(createArgs))
 			for _, arg := range createArgs {
 				if strings.HasPrefix(arg, "--storage=") || strings.HasPrefix(arg, "--type=") {
 					continue
 				}
 				setArgs = append(setArgs, arg)
 			}
-			if setErr := runPvesh(ctx, logger, setArgs); setErr != nil {
+			if setErr := pveshSetStorageDroppingCreateOnly(ctx, logger, blk.ID, setArgs); setErr != nil {
 				logger.Warning("Failed to apply storage %s: %v (create: %v)", blk.ID, setErr, runErr)
 				failed++
 			} else {
