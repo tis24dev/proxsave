@@ -1976,7 +1976,7 @@ func (c *CloudStorage) ApplyRetention(ctx context.Context, config RetentionConfi
 func (c *CloudStorage) applyGFSRetention(ctx context.Context, backups []*types.BackupMetadata, config RetentionConfig) (int, error) {
 	eligible, inert := partitionRetentionEligible(backups)
 	for _, in := range inert {
-		c.logger.Warning("Cloud Storage: retention - %s ignored (%s)", in.Backup.BackupFile, in.Reason)
+		c.logger.Warning("Cloud Storage: retention - ignored %s (%s)", in.Backup.BackupFile, in.Reason)
 	}
 	backups = eligible
 
@@ -2024,7 +2024,7 @@ func (c *CloudStorage) applySimpleRetention(ctx context.Context, backups []*type
 
 	eligible, inert := partitionRetentionEligible(backups)
 	for _, in := range inert {
-		c.logger.Warning("Cloud Storage: retention - %s ignored (%s)", in.Backup.BackupFile, in.Reason)
+		c.logger.Warning("Cloud Storage: retention - ignored %s (%s)", in.Backup.BackupFile, in.Reason)
 	}
 	backups = eligible
 

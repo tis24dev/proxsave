@@ -578,7 +578,7 @@ func (l *LocalStorage) ApplyRetention(ctx context.Context, config RetentionConfi
 func (l *LocalStorage) applyGFSRetention(ctx context.Context, backups []*types.BackupMetadata, config RetentionConfig) (int, error) {
 	eligible, inert := partitionRetentionEligible(backups)
 	for _, in := range inert {
-		l.logger.Warning("Local Storage: retention - %s ignored (%s)", in.Backup.BackupFile, in.Reason)
+		l.logger.Warning("Local Storage: retention - ignored %s (%s)", in.Backup.BackupFile, in.Reason)
 	}
 	backups = eligible
 
@@ -672,7 +672,7 @@ func (l *LocalStorage) applySimpleRetention(ctx context.Context, backups []*type
 
 	eligible, inert := partitionRetentionEligible(backups)
 	for _, in := range inert {
-		l.logger.Warning("Local Storage: retention - %s ignored (%s)", in.Backup.BackupFile, in.Reason)
+		l.logger.Warning("Local Storage: retention - ignored %s (%s)", in.Backup.BackupFile, in.Reason)
 	}
 	backups = eligible
 

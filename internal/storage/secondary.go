@@ -115,7 +115,7 @@ func (s *SecondaryStorage) DetectFilesystem(ctx context.Context) (info *Filesyst
 	if err != nil {
 		// Non-critical error - log warning
 		s.logger.Warning("Secondary Storage: setup - failed to detect the filesystem type: %v", err)
-		s.logger.Warning("Secondary Storage: permissions - copying anyway, ownership will not be set")
+		s.logger.Warning("Secondary Storage: permissions - copying anyway, ownership and permission hardening will not be applied")
 		// Create minimal fsInfo with unknown type
 		fsInfo = &FilesystemInfo{
 			Path:              s.basePath,
@@ -762,7 +762,7 @@ func (s *SecondaryStorage) resolveRetentionOwners(ctx context.Context, backups [
 func (s *SecondaryStorage) applyGFSRetention(ctx context.Context, backups []*types.BackupMetadata, config RetentionConfig) (int, error) {
 	eligible, inert := partitionRetentionEligible(backups)
 	for _, in := range inert {
-		s.logger.Warning("Secondary Storage: retention - %s ignored (%s)", in.Backup.BackupFile, in.Reason)
+		s.logger.Warning("Secondary Storage: retention - ignored %s (%s)", in.Backup.BackupFile, in.Reason)
 	}
 	backups = eligible
 
@@ -855,7 +855,7 @@ func (s *SecondaryStorage) applySimpleRetention(ctx context.Context, backups []*
 
 	eligible, inert := partitionRetentionEligible(backups)
 	for _, in := range inert {
-		s.logger.Warning("Secondary Storage: retention - %s ignored (%s)", in.Backup.BackupFile, in.Reason)
+		s.logger.Warning("Secondary Storage: retention - ignored %s (%s)", in.Backup.BackupFile, in.Reason)
 	}
 	backups = eligible
 
