@@ -58,12 +58,15 @@ var levelOfLoggerMethod = map[string]string{
 	"Error":       "ERROR",
 	"NotifyError": "ERROR",
 	"Critical":    "CRITICAL",
-	"Warning":     "WARNING",
-	"Info":        "INFO",
-	"Skip":        "INFO",
-	"Step":        "INFO",
-	"Phase":       "INFO",
-	"Debug":       "DEBUG",
+	// Fatal's format string sits at argument 1 (argument 0 is the exit code); the
+	// every-literal scan reaches it there.
+	"Fatal":   "CRITICAL",
+	"Warning": "WARNING",
+	"Info":    "INFO",
+	"Skip":    "INFO",
+	"Step":    "INFO",
+	"Phase":   "INFO",
+	"Debug":   "DEBUG",
 }
 
 // wrapperFuncs are plain-function wrappers whose string literal sits past a leading
@@ -73,9 +76,12 @@ var wrapperFuncs = map[string]struct {
 	level    string
 	firstArg int
 }{
-	"logBootstrapWarning": {"WARNING", 1},
-	"logBootstrapInfo":    {"INFO", 1},
-	"logBootstrapDebug":   {"DEBUG", 1},
+	"logBootstrapWarning":          {"WARNING", 1},
+	"logBootstrapInfo":             {"INFO", 1},
+	"logBootstrapDebug":            {"DEBUG", 1},
+	"logWarning":                   {"WARNING", 1}, // internal/identity, internal/orchestrator/backup_sources
+	"logDebug":                     {"DEBUG", 1},   // same two packages
+	"logTelegramRegistrationDebug": {"DEBUG", 1},
 }
 
 // restatedWordPrefixes are the openings that repeat the level in words. Prefix-only on purpose:
