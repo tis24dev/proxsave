@@ -9,10 +9,12 @@ import (
 
 // personalScriptWarning is the note the maintainer froze, byte for byte. It is deliberately
 // alarming and it is not to be reworded here or in the template without his explicit yes.
-// Reworded once, 2026-09-02, with that yes: the original said a failure "will block the
-// backup", which runPersonalScript has never done - every error is dropped on purpose - and
-// the release-PR review called the contradiction out. The alarm now names the real dangers.
-const personalScriptWarning = "# WARNING: runs as root, output is discarded, failures are silently ignored (the backup runs anyway). Use with caution."
+// Reworded twice, 2026-09-02, with that yes both times: first because the original said a
+// failure "will block the backup", which runPersonalScript has never done - every error is
+// dropped on purpose - and the release-PR review called the contradiction out; then to open
+// with "works only with the daemon", the one fact an operator reading just this line in a
+// cron-mode installation needs. The alarm names the real dangers.
+const personalScriptWarning = "# WARNING: works only with the daemon; runs as root, output is discarded, failures are silently ignored (the backup runs anyway). Use with caution."
 
 // TestPersonalScriptPathsAreReadFromTheConfig pins the read site. Without the explicit-value
 // rows a typo in either key name passes the entire repo suite: nothing else in the tree

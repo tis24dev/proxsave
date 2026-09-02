@@ -100,8 +100,8 @@ default, which means nothing is started. The full contract is in [DAEMON.md](DAE
 keys are:
 
 ```bash
-PERSONAL_SCRIPT_PRE_RUN=       # path to a script started before the run
-PERSONAL_SCRIPT_POST_RUN=      # path to a script started after the run, whatever the outcome
+PERSONAL_SCRIPT_PRE_RUN=       # path to a script started before the run (works only with the daemon)
+PERSONAL_SCRIPT_POST_RUN=      # path to a script started after the run, whatever the outcome (works only with the daemon)
 ```
 
 Both take a filesystem path and nothing else: the path is executed directly, with no shell, so
@@ -119,6 +119,13 @@ is discarded, their exit code is ignored, they never fail a backup or change its
 they appear in no log, notification, ping or metric. Each is killed after 10 minutes, on every
 path but the abandoned-child unwind described in [DAEMON.md](DAEMON.md). They run
 only under the daemon, never under a manual `proxsave --backup` or a cron-mode run.
+
+The one line ProxSave will ever log about them is a refusal at daemon start: the path must not
+traverse a symlink, it and every directory above it must belong to root (or the user the
+daemon runs as), the script must not be writable by group or others, and a group- or
+other-writable directory must carry the sticky bit. A path that fails is disabled for that
+daemon with a `WARNING` naming the variable, the path and the reason (see
+[SECURITY.md](SECURITY.md)).
 
 ---
 

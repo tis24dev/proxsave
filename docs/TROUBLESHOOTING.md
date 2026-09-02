@@ -214,15 +214,20 @@ cat /proc/self/gid_map
 **Cause**:
 - Silence is by design: ProxSave starts these scripts and reports nothing about them, so a
   script that never started looks exactly like one that ran and did nothing. The usual reasons
-  it never starts are a path that does not exist, a file with no execute bit, a missing
+  it never starts are a path that does not exist, a missing
   shebang, a value that is a command line rather than a bare path (no shell is used, so
   arguments, pipes and redirections are not interpreted), a path edited in `backup.env` without
   restarting the daemon, or a run that was not the daemon's (a manual `proxsave --backup` and a
   cron-mode run start neither script).
+- The one cause that DOES log: the trusted-path gate at daemon start. A path that traverses a
+  symlink, is not executable, is writable by group or others, or sits under a directory not
+  owned by root (or writable by others without the sticky bit) is disabled for that daemon
+  with a `WARNING` naming the variable, the path and the reason.
 
 **Resolution**:
 ```bash
-ls -l /usr/local/bin/my-pre-run.sh      # exists, and mode 0700 or 0755
+journalctl -u proxsave-daemon.service | grep PERSONAL_SCRIPT   # a gate refusal names the reason
+ls -l /usr/local/bin/my-pre-run.sh      # owned by root, mode 0700 or 0755, no group/other write
 head -1 /usr/local/bin/my-pre-run.sh    # a shebang, e.g. #!/bin/sh
 /usr/local/bin/my-pre-run.sh; echo $?   # runs by hand, as root
 grep PERSONAL_SCRIPT /opt/proxsave/configs/backup.env

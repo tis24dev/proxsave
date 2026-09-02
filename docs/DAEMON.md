@@ -181,8 +181,8 @@ MAX_RUN_DURATION=1h            # watchdog hard timeout for one backup
 BACKUP_ENABLED=true            # false: daemon skips the scheduled run (backup check goes down)
 
 # Personal scripts: your own, started around each run (daemon only)
-PERSONAL_SCRIPT_PRE_RUN=       # path to a script started before the run
-PERSONAL_SCRIPT_POST_RUN=      # path to a script started after the run, whatever the outcome
+PERSONAL_SCRIPT_PRE_RUN=       # path to a script started before the run (works only with the daemon)
+PERSONAL_SCRIPT_POST_RUN=      # path to a script started after the run, whatever the outcome (works only with the daemon)
 
 # Monitoring: enabled here, configured in HEALTHCHECKS.md
 HEALTHCHECK_ENABLED=false      # forced true by --daemon-setup / auto-migration
@@ -207,9 +207,10 @@ They are **yours, not ProxSave's**, and the whole contract follows from that:
   run recap, in an email, Telegram, Gotify or webhook notification, in a healthchecks ping, or
   in the Prometheus metrics. If you want a record of what your script did, your script writes
   it.
-- **Their exit code is ignored.** A script that fails, or is missing, or is not executable,
-  changes nothing: the backup runs anyway, the run's own exit code is unaffected, and no
-  warning is counted. `PERSONAL_SCRIPT_POST_RUN` is started after **every** outcome: success,
+- **Their exit code is ignored.** A script that fails or goes missing at run time changes
+  nothing: the backup runs anyway, the run's own exit code is unaffected, and no warning is
+  counted in the run. (A path that is not executable never gets that far: the trusted-path
+  gate below refuses it at daemon start.) `PERSONAL_SCRIPT_POST_RUN` is started after **every** outcome: success,
   failure, a child that skipped because another backup held the lock, hang, and a run
   interrupted by a shutdown. Neither script starts when there is no run at all, which is
   `BACKUP_ENABLED=false` or a tick arriving while the daemon is stopping.
@@ -225,6 +226,15 @@ They are **yours, not ProxSave's**, and the whole contract follows from that:
   a pre script that takes minutes needs a schedule grace on the monitor wide enough to cover
   it. Both the run and its announcement move later by the pre script's duration; what does not
   move is the run duration the monitor measures, which still begins at the backup itself.
+- **The path must be trustworthy, and the refusal is the one loud thing here.** At daemon
+  start each configured path passes a trusted-path gate: it must be absolute, must not
+  traverse a symlink, the script and every directory above it must belong to root (or the
+  user the daemon runs as), the script must be executable and not writable by group or
+  others, and a group- or other-writable directory must carry the sticky bit (the `/tmp`
+  shape). A path that fails any of it is disabled for that daemon and the gate says so, once:
+  a `WARNING` in the daemon's log naming the variable, the path and the reason. That warning
+  is deliberate and is the single exception to the silence above - without it, a refused path
+  would be indistinguishable from a script that ran and did nothing.
 - **Started as they are.** The path is executed directly: no shell, so no pipes, redirections
   or arguments in the value, and no arguments passed. The script inherits the daemon's own
   environment with two variables removed, `LOG_FILE` and `BASE_DIR`: the first names the run
@@ -232,14 +242,15 @@ They are **yours, not ProxSave's**, and the whole contract follows from that:
   are the only way a script could learn about the run or write into ProxSave's log. Nothing is
   added, so there is no run id either. The script runs as the daemon does, as `root`, in the
   daemon's working directory. Make it executable and give it a shebang.
-- **A stop does not queue behind the post script.** A `systemctl stop` or `systemctl restart`
+- **A stop does not queue behind either script.** A `systemctl stop` or `systemctl restart`
   landing while the run is in flight still starts `PERSONAL_SCRIPT_POST_RUN`, but does not wait
   for it: the daemon's whole teardown budget is the unit's stop timeout, 90 seconds on a stock
   host, so a waited script would be `SIGKILL`ed along with the daemon and would leave
   `.daemon.pid` and `.daemon_info.json` behind. Started and left behind, the script gets its
   chance and the daemon exits cleanly; systemd then collects whatever is still running with the
-  rest of the cgroup. A **pre** script IS waited for, so a slow one does hold a stop for its own
-  duration.
+  rest of the cgroup. A stop landing while a pre or post script is already being **waited for**
+  works the same way: the daemon abandons the wait, never the script - it keeps its own
+  10-minute budget and is collected with the cgroup if still alive at teardown.
 - **The other exception to the wait.** On the abandoned-child path (see the D-state caveat
   below) the daemon must exit fast so systemd can restart it, so there too the post script is
   started and left behind rather than waited for. On both this path and a shutdown there is no
