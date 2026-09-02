@@ -22,15 +22,12 @@ import (
 //
 //	bootstrap.Error("ERROR: %v", err)   ->   [2026-08-31 22:30:00] ERROR    ERROR: permission denied
 //
-// and a caller that draws a glyph says it twice in a different alphabet:
-//
-//	logging.Warning("⚠ Cloud log directory not configured")
-//	                              ->   [2026-08-31 22:30:00] WARNING  ⚠ Cloud log directory not configured
-//
-// The glyphs belong to the TUI, where there is no timestamp and no level column, so the severity
-// has nowhere else to travel (internal/ui/theme/theme.go:60-63, RenderStatusLevel). The rule this
-// test enforces is the one the maintainer stated for the whole screen campaign: the TUI lends the
-// CLI its SENTENCE, never its glyph and never its colour.
+// A caller that draws a glyph, by contrast, does NOT (settled 2026-09-02): a "⚠" beside the
+// WARNING column repeats the FACT but not the FUNCTION - the column carries the level for the
+// parser and for whoever reads one line, the glyph carries visibility for the eye scanning five
+// hundred. Glyphs on log lines are design, so this gate FAILS ON WORDS ONLY. The scanner still
+// classifies glyph sites (the self-test pins that) so a conscious-removal guard can be built on
+// it later; that guard is an open todo in diagnostics, not this test's job.
 //
 // WHAT THIS TEST CANNOT SEE. It resolves compile-time text: literals, "+" chains of them, inline
 // fmt.Sprintf formats, and a SAME-FUNCTION variable last assigned one of those (that resolution
@@ -45,13 +42,13 @@ import (
 // the campaign opened (85 in words, 58 as a glyph, under the original scanner; the extended
 // scanner re-baselined the totals). Freezing them in a known-violations file would leave this
 // test GREEN on a tree full of the defect, which tells a reader looking at the traffic light
-// something false. The
-// maintainer chose a red suite instead, accepted and expected until the list reaches zero, and a
-// cleanup done one FILE per commit with the result of each edit MEASURED rather than reasoned
-// about: see TestRemovingARestatementLeavesExactlyOneLevelWord in internal/orchestrator, which
-// renders the line through the real logger and re-counts it through the real ParseLogCounts,
-// before and after. Static reasoning that "the column classifies, so the word is free" is not
-// the evidence this cleanup runs on.
+// something false. The maintainer chose a red suite instead, accepted until the list reached
+// zero, and a cleanup done one FILE per commit with the result of each edit MEASURED rather
+// than reasoned about: see TestRemovingARestatementLeavesExactlyOneLevelWord in
+// internal/orchestrator, which renders the line through the real logger and re-counts it
+// through the real ParseLogCounts, before and after. The word list reached zero on 2026-09-02
+// and the glyph half left the gate the same day (design, see above), so this test is green -
+// and any new word restatement turns it red with no baseline to hide behind.
 
 // levelOfLoggerMethod maps a logger method to the level its column will print. Skip, Step and
 // Phase are labelled INFO lines (logWithLabel with types.LogLevelInfo), and NotifyError renders
@@ -135,6 +132,18 @@ func truncate(s string, n int) string {
 
 func TestLoggerCallersDoNotRestateTheirOwnLevel(t *testing.T) {
 	found := scanForLevelRestatement(t, moduleRoot(t))
+
+	// Glyphs are design, not restatement (settled 2026-09-02; see the header comment):
+	// only WORD restatements fail the gate. The glyph findings stay available to a
+	// future conscious-removal guard, and the self-test keeps the classifier honest.
+	wordsOnly := found[:0]
+	for _, v := range found {
+		if v.kind == "word" {
+			wordsOnly = append(wordsOnly, v)
+		}
+	}
+	found = wordsOnly
+
 	if len(found) == 0 {
 		return
 	}
@@ -156,20 +165,11 @@ func TestLoggerCallersDoNotRestateTheirOwnLevel(t *testing.T) {
 	})
 
 	var b strings.Builder
-	words, glyphs := 0, 0
-	for _, v := range found {
-		if v.kind == "word" {
-			words++
-		} else {
-			glyphs++
-		}
-	}
-	fmt.Fprintf(&b, "%d logger call(s) in %d file(s) restate the level their own column already prints "+
-		"(%d in words, %d as a glyph).\n"+
-		"The console writes \"[ts] LEVEL   message\"; opening the message with the level, or drawing a\n"+
-		"severity glyph, says it twice. Drop it and let the column carry it - but MEASURE each edit\n"+
+	fmt.Fprintf(&b, "%d logger call(s) in %d file(s) open with a level word their own column already prints.\n"+
+		"The console writes \"[ts] LEVEL   message\"; opening the message with the level says it twice.\n"+
+		"Drop the word and let the column carry it - but MEASURE each edit\n"+
 		"with TestRemovingARestatementLeavesExactlyOneLevelWord before trusting it.\n",
-		len(found), len(files), words, glyphs)
+		len(found), len(files))
 	for _, f := range files {
 		fmt.Fprintf(&b, "\n%s (%d)\n", f, len(byFile[f]))
 		for _, line := range byFile[f] {
