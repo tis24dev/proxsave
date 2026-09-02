@@ -206,34 +206,100 @@ func applyVMConfigs(ctx context.Context, entries []vmEntry, logger *logging.Logg
 			failed++
 			continue
 		}
-		if !exists {
-			createArgs, err := pveshCreateGuestArgs(node, vm, configArgs)
-			if err != nil {
-				logger.Warning("Failed to prepare VM/CT create for %s (vmid=%s kind=%s): %v", target, vm.VMID, vm.Kind, err)
-				failed++
-				continue
-			}
-			if err := runPvesh(ctx, logger, createArgs); err != nil {
-				logger.Warning("Failed to create VM/CT config %s (vmid=%s kind=%s): %v", target, vm.VMID, vm.Kind, err)
-				failed++
-				continue
-			}
+		display := vm.VMID
+		if vm.Name != "" {
+			display = fmt.Sprintf("%s (%s)", vm.VMID, vm.Name)
 		}
 
-		args := append([]string{"set", target}, configArgs...)
-		if err := runPvesh(ctx, logger, args); err != nil {
-			logger.Warning("Failed to apply %s (vmid=%s kind=%s): %v", target, vm.VMID, vm.Kind, err)
-			failed++
-		} else {
-			display := vm.VMID
-			if vm.Name != "" {
-				display = fmt.Sprintf("%s (%s)", vm.VMID, vm.Name)
+		if !exists {
+			// pvesh create is a dead end here: ostemplate is create-time-only and
+			// never persists into a CT conf, so an LXC could NEVER be created this
+			// way (fable-check bug 3), and for qemu the conf itself is the
+			// registration. Writing the staged conf into pmxcfs IS how a guest
+			// comes into existence on PVE; its disks are not part of a config
+			// restore and the log says so.
+			if err := writeGuestConfToPmxcfs(logger, node, vm); err != nil {
+				logger.Warning("Failed to register VM/CT config %s (vmid=%s kind=%s): %v", target, vm.VMID, vm.Kind, err)
+				failed++
+				continue
 			}
-			logger.Info("Applied VM/CT config %s", display)
+			logger.Info("Registered VM/CT config %s via pmxcfs (config only: disks are not part of a config restore)", display)
 			applied++
+			continue
 		}
+
+		// Existing guest: the API first, minus the create-only keys the update
+		// schema refuses (`meta` on qemu, `ostemplate` on lxc - one rejected key
+		// fails the WHOLE set, which is how no modern guest ever got its config
+		// applied, fable-check bug 2). The staged conf file is the fidelity net,
+		// guarded off a RUNNING guest: a config race with a live guest is the one
+		// case where the file must not win (maintainer's call, 2026-09-02).
+		args := append([]string{"set", target}, filterGuestCreateOnlyArgs(configArgs)...)
+		if err := runPvesh(ctx, logger, args); err != nil {
+			if running := pveshGuestRunning(ctx, logger, node, vm); running {
+				logger.Warning("Failed to apply %s (vmid=%s kind=%s) and the guest is running; skipping the file fallback (config race with a live guest): %v", target, vm.VMID, vm.Kind, err)
+				failed++
+				continue
+			}
+			if wErr := writeGuestConfToPmxcfs(logger, node, vm); wErr != nil {
+				logger.Warning("Failed to apply %s (vmid=%s kind=%s): %v (pmxcfs fallback: %v)", target, vm.VMID, vm.Kind, err, wErr)
+				failed++
+				continue
+			}
+			logger.Info("Applied VM/CT config %s via pmxcfs after the API refused: %v", display, err)
+			applied++
+			continue
+		}
+		logger.Info("Applied VM/CT config %s", display)
+		applied++
 	}
 	return applied, failed
+}
+
+// guestConfDir maps a guest kind to its pmxcfs config directory.
+func guestConfDir(kind string) string {
+	if kind == "qemu" {
+		return "qemu-server"
+	}
+	return kind
+}
+
+// writeGuestConfToPmxcfs writes the staged conf byte-for-byte to
+// /etc/pve/nodes/<node>/<kind-dir>/<vmid>.conf.
+func writeGuestConfToPmxcfs(logger *logging.Logger, node string, vm vmEntry) error {
+	data, err := restoreFS.ReadFile(vm.Path)
+	if err != nil {
+		return fmt.Errorf("read staged conf %s: %w", vm.Path, err)
+	}
+	rel := filepath.Join("nodes", node, guestConfDir(vm.Kind), vm.VMID+".conf")
+	return pmxcfsWriteFile(logger, rel, data)
+}
+
+// filterGuestCreateOnlyArgs drops the keys the live update schemas refuse
+// (probed 2026-09-02 on PVE 9.1.9): --meta is absent from the qemu set schema
+// and --ostemplate from the lxc one; either fails the whole set.
+func filterGuestCreateOnlyArgs(args []string) []string {
+	out := make([]string, 0, len(args))
+	for _, arg := range args {
+		if strings.HasPrefix(arg, "--meta=") || strings.HasPrefix(arg, "--ostemplate=") {
+			continue
+		}
+		out = append(out, arg)
+	}
+	return out
+}
+
+// pveshGuestRunning reports whether status/current answers "running". Any
+// error or unparsable answer counts as NOT running: in restore context the
+// guard exists only to avoid racing a demonstrably live guest.
+func pveshGuestRunning(ctx context.Context, logger *logging.Logger, node string, vm vmEntry) bool {
+	statusPath := fmt.Sprintf("/nodes/%s/%s/%s/status/current", node, vm.Kind, vm.VMID)
+	out, err := restoreCmd.Run(ctx, "pvesh", "get", statusPath, "--output-format=json")
+	if err != nil {
+		logger.Debug("guest status probe %s failed (treated as not running): %v", statusPath, err)
+		return false
+	}
+	return strings.Contains(string(out), `"status":"running"`)
 }
 
 func localNodeName() string {
@@ -253,36 +319,6 @@ func pveshGuestExists(ctx context.Context, logger *logging.Logger, target string
 		return false, err
 	}
 	return true, nil
-}
-
-func pveshCreateGuestArgs(node string, vm vmEntry, configArgs []string) ([]string, error) {
-	args := []string{
-		"create",
-		fmt.Sprintf("/nodes/%s/%s", node, vm.Kind),
-		fmt.Sprintf("--vmid=%s", vm.VMID),
-	}
-	switch vm.Kind {
-	case "qemu":
-		return args, nil
-	case "lxc":
-		ostemplate, ok := pveshArgValue(configArgs, "ostemplate")
-		if !ok {
-			return nil, fmt.Errorf("missing ostemplate in LXC config")
-		}
-		return append(args, fmt.Sprintf("--ostemplate=%s", ostemplate)), nil
-	default:
-		return nil, fmt.Errorf("unsupported guest kind %q", vm.Kind)
-	}
-}
-
-func pveshArgValue(args []string, key string) (string, bool) {
-	prefix := "--" + key + "="
-	for _, arg := range args {
-		if strings.HasPrefix(arg, prefix) {
-			return strings.TrimPrefix(arg, prefix), true
-		}
-	}
-	return "", false
 }
 
 func isPveshNotFoundError(err error) bool {

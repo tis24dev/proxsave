@@ -22,11 +22,19 @@ type schemaAwarePvesh struct {
 	// storages holds the ids that "exist"; create on an existing id fails the way
 	// the live node failed on 'local', set on a missing id fails too.
 	storages map[string]bool
-	calls    []string
+	// guests maps vmid -> exists; running maps vmid -> the guest answers
+	// status/current with "running". A get on a missing guest answers the
+	// not-found shape isPveshNotFoundError matches.
+	guests  map[string]bool
+	running map[string]bool
+	// failSet forces `set .../<vmid>/config` to fail regardless of args, for
+	// exercising the file-fallback arms.
+	failSet map[string]bool
+	calls   []string
 }
 
 func newSchemaAwarePvesh(existingStorages ...string) *schemaAwarePvesh {
-	s := &schemaAwarePvesh{storages: map[string]bool{}}
+	s := &schemaAwarePvesh{storages: map[string]bool{}, guests: map[string]bool{}, running: map[string]bool{}}
 	for _, id := range existingStorages {
 		s.storages[id] = true
 	}
@@ -38,13 +46,36 @@ func (s *schemaAwarePvesh) Run(_ context.Context, name string, args ...string) (
 	if name != "pvesh" {
 		return nil, nil // which, etc.
 	}
+	if len(args) >= 2 && args[0] == "get" && strings.HasSuffix(args[1], "/status/current") {
+		vmid := pveshFakePathVMID(strings.TrimSuffix(args[1], "/status/current"))
+		if s.running[vmid] {
+			return []byte(`{"status":"running","vmid":` + vmid + `}`), nil
+		}
+		return []byte(`{"status":"stopped","vmid":` + vmid + `}`), nil
+	}
+	if len(args) >= 2 && args[0] == "get" && strings.HasSuffix(args[1], "/config") && (strings.Contains(args[1], "/qemu/") || strings.Contains(args[1], "/lxc/")) {
+		if !s.guests[pveshFakePathVMID(strings.TrimSuffix(args[1], "/config"))] {
+			return nil, errString("no such guest (500 Configuration file does not exist)")
+		}
+		return []byte("{}"), nil
+	}
 	if len(args) >= 2 && args[0] == "set" && args[1] == "/cluster/config" {
 		return nil, errString("No 'set' handler defined for '/cluster/config'")
+	}
+	if len(args) >= 2 && args[0] == "set" && strings.HasSuffix(args[1], "/config") && s.failSet[pveshFakePathVMID(strings.TrimSuffix(args[1], "/config"))] {
+		return nil, errString("500 unable to apply configuration")
 	}
 	if len(args) >= 2 && args[0] == "set" && strings.Contains(args[1], "/qemu/") && strings.HasSuffix(args[1], "/config") {
 		for _, a := range args[2:] {
 			if strings.HasPrefix(a, "--meta=") {
 				return nil, errString("400 Parameter verification failed. meta: property is not defined in schema and the schema does not allow additional properties")
+			}
+		}
+	}
+	if len(args) >= 2 && args[0] == "set" && strings.Contains(args[1], "/lxc/") && strings.HasSuffix(args[1], "/config") {
+		for _, a := range args[2:] {
+			if strings.HasPrefix(a, "--ostemplate=") {
+				return nil, errString("400 Parameter verification failed. ostemplate: property is not defined in schema and the schema does not allow additional properties")
 			}
 		}
 	}
@@ -109,4 +140,12 @@ func TestSchemaAwarePveshReproducesTheLiveRejections(t *testing.T) {
 	if _, err = f.Run(ctx, "pvesh", "set", "/cluster/options", "--keyboard=it"); err != nil {
 		t.Fatalf("set /cluster/options exists on the live node: %v", err)
 	}
+}
+
+func pveshFakePathVMID(path string) string {
+	parts := strings.Split(path, "/")
+	if len(parts) == 0 {
+		return ""
+	}
+	return parts[len(parts)-1]
 }
