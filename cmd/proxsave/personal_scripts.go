@@ -80,12 +80,12 @@ func personalScriptEnv() []string {
 // there are no pipes).
 func personalScriptCmd(ctx context.Context, path string) *exec.Cmd {
 	// #nosec G204 -- the path is the operator's own PERSONAL_SCRIPT_PRE_RUN or
-	// PERSONAL_SCRIPT_POST_RUN value, read from the root-owned backup.env and executed
-	// directly with no shell, no arguments and no injected environment. safeexec's allowlist
-	// is for the external tools proxsave itself drives, and safeexec.TrustedCommandContext
-	// refuses a relative or world-writable path, which under this feature's silence rule
-	// would be an undebuggable non-execution of a script the operator deliberately
-	// configured.
+	// PERSONAL_SCRIPT_POST_RUN value, read from the root-owned backup.env, executed
+	// directly with no shell, no arguments and no injected environment, and already
+	// through the trusted-path gate: validatePersonalScripts (daemon startup) refused
+	// and blanked anything symlinked, loosely owned or loosely writable, LOUDLY - which
+	// is why the old objection to safeexec.TrustedCommandContext (a silent, undebuggable
+	// non-execution under this feature's silence rule) no longer applies here.
 	cmd := exec.CommandContext(ctx, path)
 	cmd.Env = personalScriptEnv()
 	return cmd
@@ -96,7 +96,8 @@ func personalScriptCmd(ctx context.Context, path string) *exec.Cmd {
 // the script is the cgroup's job. It exists as its own function so the shape assertions can
 // reach it; a second inline exec.Command would be a second thing to keep in step by hand.
 func personalScriptCmdDetached(path string) *exec.Cmd {
-	// #nosec G204 -- same operator-supplied path, same rationale as personalScriptCmd.
+	// #nosec G204 -- same operator-supplied path, same gate, same rationale as
+	// personalScriptCmd.
 	cmd := exec.Command(path)
 	cmd.Env = personalScriptEnv()
 	return cmd

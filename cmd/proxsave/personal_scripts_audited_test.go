@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"go/parser"
 	"go/token"
@@ -11,6 +12,10 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/tis24dev/proxsave/internal/config"
+	"github.com/tis24dev/proxsave/internal/logging"
+	"github.com/tis24dev/proxsave/internal/types"
 )
 
 // writePersonalScript drops an executable script in dir and returns its absolute path. 0o700, not
@@ -137,9 +142,10 @@ func TestPersonalScriptDropsEveryUnusablePath(t *testing.T) {
 		{"no shebang", noShebang},
 		{"bare name not on PATH", "proxsave-no-such-command-anywhere"},
 		{"exits non-zero", writePersonalScript(t, dir, "exit3.sh", "exit 3")},
-		// The world-writable row is what documents why safeexec.TrustedCommandContext was not
-		// used: ValidateTrustedExecutablePath refuses this file, and under the silence rule
-		// that refusal would be indistinguishable from a script that ran and did nothing.
+		// The world-writable row pins the DIVISION of labour: the starter itself stays
+		// permissive and silent (its frozen rule), because the trusted-path gate lives at
+		// daemon startup - validatePersonalScripts refuses and blanks this file LOUDLY
+		// before any tick, so the starter can only meet it in a test.
 		{"world writable but runnable", worldWritable},
 	}
 
@@ -418,5 +424,111 @@ func TestAShutdownStopsTheWaitButNotTheScript(t *testing.T) {
 			t.Fatal("the script was killed when the wait stopped: the stop abandons the wait, never the script")
 		}
 		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+// The trusted-path gate, added on the release-PR review (#303). The starters stay
+// silent and permissive on purpose (their frozen rule); the gate lives at daemon
+// startup instead, where a refusal can be LOUD - which is exactly what dissolves
+// the recorded objection that a refused path would be an undebuggable
+// non-execution. Each refusal names the variable, the path and the reason, and
+// blanks the setting so the run behaves as if it were never configured.
+func capturePersonalScriptValidation(t *testing.T, pre, post string) (preOut, postOut, logged string) {
+	t.Helper()
+	logger := logging.New(types.LogLevelDebug, false)
+	buf := &bytes.Buffer{}
+	logger.SetOutput(buf)
+	logging.SetDefaultLogger(logger)
+	cfg := &config.Config{PersonalScriptPreRun: pre, PersonalScriptPostRun: post}
+	validatePersonalScripts(cfg)
+	return cfg.PersonalScriptPreRun, cfg.PersonalScriptPostRun, buf.String()
+}
+
+func TestPersonalScriptValidationRefusesAWorldWritableScript(t *testing.T) {
+	dir := t.TempDir()
+	script := writePersonalScript(t, dir, "loose.sh", "exit 0")
+	if err := os.Chmod(script, 0o777); err != nil {
+		t.Fatal(err)
+	}
+
+	pre, _, logged := capturePersonalScriptValidation(t, script, "")
+	if pre != "" {
+		t.Fatalf("a world-writable script survived validation: %q", pre)
+	}
+	if !strings.Contains(logged, "PERSONAL_SCRIPT_PRE_RUN") || !strings.Contains(logged, "world-writable") {
+		t.Fatalf("the refusal does not name the variable and the reason:\n%s", logged)
+	}
+	if !strings.Contains(logged, "WARNING") {
+		t.Fatalf("the refusal is not loud:\n%s", logged)
+	}
+}
+
+func TestPersonalScriptValidationRefusesAGroupWritableScript(t *testing.T) {
+	dir := t.TempDir()
+	script := writePersonalScript(t, dir, "group.sh", "exit 0")
+	if err := os.Chmod(script, 0o775); err != nil {
+		t.Fatal(err)
+	}
+
+	_, post, logged := capturePersonalScriptValidation(t, "", script)
+	if post != "" {
+		t.Fatalf("a group-writable script survived validation: %q", post)
+	}
+	if !strings.Contains(logged, "PERSONAL_SCRIPT_POST_RUN") {
+		t.Fatalf("the refusal does not name the variable:\n%s", logged)
+	}
+}
+
+func TestPersonalScriptValidationRefusesASymlink(t *testing.T) {
+	dir := t.TempDir()
+	target := writePersonalScript(t, dir, "real.sh", "exit 0")
+	link := filepath.Join(dir, "link.sh")
+	if err := os.Symlink(target, link); err != nil {
+		t.Fatal(err)
+	}
+
+	pre, _, logged := capturePersonalScriptValidation(t, link, "")
+	if pre != "" {
+		t.Fatalf("a symlinked script survived validation: %q", pre)
+	}
+	if !strings.Contains(logged, "symlink") {
+		t.Fatalf("the refusal does not name the symlink:\n%s", logged)
+	}
+}
+
+func TestPersonalScriptValidationKeepsATrustedPathAndStaysSilent(t *testing.T) {
+	dir := t.TempDir()
+	script := writePersonalScript(t, dir, "good.sh", "exit 0")
+
+	pre, post, logged := capturePersonalScriptValidation(t, script, script)
+	if pre != script || post != script {
+		t.Fatalf("a trusted path did not survive: pre=%q post=%q\n%s", pre, post, logged)
+	}
+	if strings.Contains(logged, "WARNING") {
+		t.Fatalf("a trusted path produced a warning:\n%s", logged)
+	}
+}
+
+func TestPersonalScriptValidationLeavesEmptySettingsAlone(t *testing.T) {
+	pre, post, logged := capturePersonalScriptValidation(t, "", "   ")
+	if pre != "" || post != "" {
+		t.Fatalf("empty settings changed: pre=%q post=%q", pre, post)
+	}
+	if strings.Contains(logged, "WARNING") {
+		t.Fatalf("empty settings produced a warning:\n%s", logged)
+	}
+}
+
+// TestTheDaemonRunsTheTrustedPathGate pins the wiring the way the call-site scan above pins
+// the starters: textually. Every behavioural gate test drives validatePersonalScripts
+// directly, so without this line a deleted call in run() would leave the whole gate green
+// and dead.
+func TestTheDaemonRunsTheTrustedPathGate(t *testing.T) {
+	data, err := os.ReadFile("daemon.go")
+	if err != nil {
+		t.Fatalf("read daemon.go: %v", err)
+	}
+	if !strings.Contains(string(data), "validatePersonalScripts(d.cfg)") {
+		t.Fatal("daemon.go no longer runs validatePersonalScripts at startup: the gate is dead code")
 	}
 }

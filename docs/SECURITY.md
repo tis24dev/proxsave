@@ -54,10 +54,14 @@ default `KillMode=control-group`. The 10-minute kill holds on every path but one
 abandoned-child unwind the daemon exits immediately so systemd can restart it, so there the
 post-run script is started and left to the cgroup instead of being waited for and killed (see
 [DAEMON.md](DAEMON.md)). The allowlist is for the
-external tools ProxSave itself drives, and `safeexec.TrustedCommandContext` is not usable here
-because it refuses a relative or world-writable path, which under that feature's silence rule
-would be an undebuggable non-execution of a script the operator deliberately configured. The
-paths are as trusted as `backup.env` itself: anyone who can set them is already root.
+external tools ProxSave itself drives; the scripts instead pass a trusted-path gate at daemon
+startup (`validatePersonalScripts`): the path may not traverse a symlink, the target and every
+directory above it must belong to root or the daemon's own user, the target must not be
+writable by group or others, and a group/other-writable directory must carry the sticky bit.
+A path that fails is refused LOUDLY - one `WARNING` naming the variable, the path and the
+reason - and the setting is blanked for that daemon, so the refusal is never the silent
+non-execution the per-start silence rule would otherwise make of it. Under those rules no
+non-root user can replace any path component between the check and any later execution.
 Several callers do invoke `/bin/sh`
 on purpose, but only one of them puts shell **text** on a command line: the background
 rollback timer runs `sh -c '<compile-time constant>'` and passes the sleep seconds and the

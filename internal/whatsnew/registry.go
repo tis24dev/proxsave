@@ -102,10 +102,13 @@ var notes = []Note{
 			"A backup that hits those secondary faults ends with exit 1 instead of reporting success",
 			"Log messages no longer repeat the level word the level column already prints",
 			"A cloud delete killed mid-transfer reports the kill, not rclone's last progress line",
+			"Personal scripts must live on a root-owned, non-writable path chain; unsafe paths are refused at daemon start",
+			"A daemon shutdown no longer waits for a running personal script; the script keeps its own 10-minute budget",
 		},
 		Actions: []string{
 			"If runs start ending with exit 1 naming unreadable secondary archives, repair or remove those files",
 			"Update any log-parsing script of yours that matches WARNING: or ERROR: inside the message text",
+			"If the daemon warns a personal script was disabled, move it to a root-owned directory and chmod it 0755 or stricter",
 		},
 	},
 }

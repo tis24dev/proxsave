@@ -311,6 +311,11 @@ func runDaemon(rt *appRuntime) int {
 }
 
 func (d *daemon) run(ctx context.Context) int {
+	// The trusted-path gate for the operator scripts, once, before any tick can start
+	// one: a refused path is blanked here with a loud reason (validatePersonalScripts),
+	// so the silent starters below never see it.
+	validatePersonalScripts(d.cfg)
+
 	// CRITICAL: install the SIGUSR1 handler BEFORE publishing the pidfile below. Go's DEFAULT action
 	// for SIGUSR1 is to TERMINATE the process, and the pidfile is exactly what a standalone backup
 	// run uses to discover us and send SIGUSR1 to hand off its outcome. If the pid became
