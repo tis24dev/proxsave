@@ -1645,8 +1645,13 @@ func TestApplyVMConfigs_SuccessfulApply(t *testing.T) {
 	orig := restoreCmd
 	t.Cleanup(func() { restoreCmd = orig })
 
+	node := localNodeName()
 	fake := &FakeCommandRunner{
-		Outputs: map[string][]byte{},
+		Outputs: map[string][]byte{
+			pveGuestInventoryCommand: guestInventoryJSON(t,
+				pveGuestResource{VMID: 100, Node: node, Kind: "qemu", Status: "stopped"},
+			),
+		},
 	}
 	restoreCmd = fake
 
@@ -1684,11 +1689,9 @@ func TestApplyVMConfigs_RegistersMissingGuestViaPmxcfs(t *testing.T) {
 	t.Cleanup(func() { restoreCmd = orig })
 
 	node := localNodeName()
-	getCall := fmt.Sprintf("pvesh get /nodes/%s/qemu/100/config", node)
 	fake := &FakeCommandRunner{
-		Outputs: map[string][]byte{},
-		Errors: map[string]error{
-			getCall: fmt.Errorf("not found"),
+		Outputs: map[string][]byte{
+			pveGuestInventoryCommand: guestInventoryJSON(t),
 		},
 	}
 	restoreCmd = fake

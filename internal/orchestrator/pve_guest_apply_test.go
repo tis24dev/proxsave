@@ -207,3 +207,126 @@ func TestPrettyPrintedRunningStatusSkipsFileFallback(t *testing.T) {
 func TestUnknownGuestStatusSkipsFileFallback(t *testing.T) {
 	assertUncertainGuestStatusSkipsFileFallback(t, []byte(`{"status":"unknown","vmid":100}`), nil, "unknown")
 }
+
+func TestRemoteGuestIsNeverAppliedOnTheCurrentNode(t *testing.T) {
+	fakeFS, pvesh, logger, node := guestApplyFixture(t)
+	pvesh.guests["100"] = true
+	pvesh.guestNodes["100"] = "pve-remote"
+
+	buf := &strings.Builder{}
+	logger.SetOutput(buf)
+	stagePath := "/export/etc/pve/nodes/" + node() + "/qemu-server/100.conf"
+	if err := fakeFS.AddFile(stagePath, []byte("name: vm100\ncores: 4\n")); err != nil {
+		t.Fatal(err)
+	}
+
+	applied, failed := applyVMConfigs(context.Background(), []vmEntry{{
+		VMID: "100", Kind: "qemu", Name: "vm100", Path: stagePath,
+	}}, logger)
+	if applied != 0 || failed != 1 {
+		t.Fatalf("applied=%d failed=%d, want 0/1", applied, failed)
+	}
+	if _, err := fakeFS.ReadFile("/etc/pve/nodes/" + node() + "/qemu-server/100.conf"); err == nil {
+		t.Fatal("remote guest config was written on the current node")
+	}
+	for _, call := range pvesh.calls {
+		if strings.Contains(call, "set /nodes/") || strings.Contains(call, "/status/current") {
+			t.Fatalf("remote guest reached a mutating or fallback-probe call: %s", call)
+		}
+	}
+	output := buf.String()
+	for _, marker := range []string{"100", "pve-remote", "Start pve guest configs apply", "End pve guest configs apply"} {
+		if !strings.Contains(output, marker) {
+			t.Fatalf("log does not contain %q:\n%s", marker, output)
+		}
+	}
+}
+
+func TestGuestKindMismatchIsNeverApplied(t *testing.T) {
+	fakeFS, pvesh, logger, node := guestApplyFixture(t)
+	pvesh.guests["100"] = true
+	pvesh.guestKinds["100"] = "lxc"
+
+	buf := &strings.Builder{}
+	logger.SetOutput(buf)
+	stagePath := "/export/etc/pve/nodes/" + node() + "/qemu-server/100.conf"
+	if err := fakeFS.AddFile(stagePath, []byte("name: vm100\n")); err != nil {
+		t.Fatal(err)
+	}
+
+	applied, failed := applyVMConfigs(context.Background(), []vmEntry{{
+		VMID: "100", Kind: "qemu", Name: "vm100", Path: stagePath,
+	}}, logger)
+	if applied != 0 || failed != 1 {
+		t.Fatalf("applied=%d failed=%d, want 0/1", applied, failed)
+	}
+	if _, err := fakeFS.ReadFile("/etc/pve/nodes/" + node() + "/qemu-server/100.conf"); err == nil {
+		t.Fatal("type-mismatched guest config was written")
+	}
+	for _, call := range pvesh.calls {
+		if strings.Contains(call, "set /nodes/") || strings.Contains(call, "/status/current") {
+			t.Fatalf("type-mismatched guest reached a mutating or fallback-probe call: %s", call)
+		}
+	}
+	if output := buf.String(); !strings.Contains(output, "100") || !strings.Contains(output, "lxc") || !strings.Contains(output, "qemu") {
+		t.Fatalf("warning does not explain the type mismatch:\n%s", output)
+	}
+}
+
+func TestGuestInventoryFailureSkipsEveryMutation(t *testing.T) {
+	fakeFS, pvesh, logger, node := guestApplyFixture(t)
+	pvesh.guests["100"] = true
+	pvesh.guests["101"] = true
+	pvesh.guestKinds["101"] = "lxc"
+	pvesh.inventoryError = errors.New("cluster inventory unavailable")
+
+	buf := &strings.Builder{}
+	logger.SetOutput(buf)
+	qemuPath := "/export/etc/pve/nodes/" + node() + "/qemu-server/100.conf"
+	lxcPath := "/export/etc/pve/nodes/" + node() + "/lxc/101.conf"
+	if err := fakeFS.AddFile(qemuPath, []byte("name: vm100\n")); err != nil {
+		t.Fatal(err)
+	}
+	if err := fakeFS.AddFile(lxcPath, []byte("hostname: ct101\n")); err != nil {
+		t.Fatal(err)
+	}
+
+	applied, failed := applyVMConfigs(context.Background(), []vmEntry{
+		{VMID: "100", Kind: "qemu", Name: "vm100", Path: qemuPath},
+		{VMID: "101", Kind: "lxc", Name: "ct101", Path: lxcPath},
+	}, logger)
+	if applied != 0 || failed != 2 {
+		t.Fatalf("applied=%d failed=%d, want 0/2", applied, failed)
+	}
+	if len(pvesh.calls) != 1 || !strings.Contains(pvesh.calls[0], "get /cluster/resources --type vm") {
+		t.Fatalf("inventory failure must stop after one read-only query: %v", pvesh.calls)
+	}
+	if output := buf.String(); !strings.Contains(output, "cluster inventory unavailable") {
+		t.Fatalf("warning does not report the inventory failure:\n%s", output)
+	}
+}
+
+func TestMalformedGuestInventorySkipsEveryMutation(t *testing.T) {
+	fakeFS, pvesh, logger, node := guestApplyFixture(t)
+	pvesh.inventoryOutput = []byte(`{"vmid":100}`)
+
+	buf := &strings.Builder{}
+	logger.SetOutput(buf)
+	stagePath := "/export/etc/pve/nodes/" + node() + "/qemu-server/100.conf"
+	if err := fakeFS.AddFile(stagePath, []byte("name: vm100\n")); err != nil {
+		t.Fatal(err)
+	}
+
+	applied, failed := applyVMConfigs(context.Background(), []vmEntry{{
+		VMID: "100", Kind: "qemu", Name: "vm100", Path: stagePath,
+	}}, logger)
+	if applied != 0 || failed != 1 {
+		t.Fatalf("applied=%d failed=%d, want 0/1", applied, failed)
+	}
+	if len(pvesh.calls) != 1 || !strings.Contains(pvesh.calls[0], "get /cluster/resources --type vm") {
+		t.Fatalf("malformed inventory must stop after one read-only query: %v", pvesh.calls)
+	}
+	if output := buf.String(); !strings.Contains(output, "expected a JSON array") {
+		t.Fatalf("warning does not report malformed inventory:\n%s", output)
+	}
+}

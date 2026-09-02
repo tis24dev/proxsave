@@ -2,6 +2,9 @@ package orchestrator
 
 import (
 	"context"
+	"encoding/json"
+	"sort"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -22,23 +25,29 @@ type schemaAwarePvesh struct {
 	// storages holds the ids that "exist"; create on an existing id fails the way
 	// the live node failed on 'local', set on a missing id fails too.
 	storages map[string]bool
-	// guests maps vmid -> exists; running maps vmid -> the guest answers
-	// status/current with "running". A get on a missing guest answers the
-	// not-found shape isPveshNotFoundError matches.
-	guests  map[string]bool
-	running map[string]bool
+	// guests maps vmid -> exists cluster-wide. guestNodes and guestKinds may
+	// override the generated /cluster/resources record; running controls the
+	// status/current response.
+	guests     map[string]bool
+	guestNodes map[string]string
+	guestKinds map[string]string
+	running    map[string]bool
 	// failSet forces `set .../<vmid>/config` to fail regardless of args, for
 	// exercising the file-fallback arms.
-	failSet      map[string]bool
-	statusOutput map[string][]byte
-	statusError  map[string]error
-	calls        []string
+	failSet         map[string]bool
+	statusOutput    map[string][]byte
+	statusError     map[string]error
+	inventoryOutput []byte
+	inventoryError  error
+	calls           []string
 }
 
 func newSchemaAwarePvesh(existingStorages ...string) *schemaAwarePvesh {
 	s := &schemaAwarePvesh{
 		storages:     map[string]bool{},
 		guests:       map[string]bool{},
+		guestNodes:   map[string]string{},
+		guestKinds:   map[string]string{},
 		running:      map[string]bool{},
 		statusOutput: map[string][]byte{},
 		statusError:  map[string]error{},
@@ -53,6 +62,44 @@ func (s *schemaAwarePvesh) Run(_ context.Context, name string, args ...string) (
 	s.calls = append(s.calls, commandKey(name, args))
 	if name != "pvesh" {
 		return nil, nil // which, etc.
+	}
+	if len(args) == 5 && args[0] == "get" && args[1] == "/cluster/resources" && args[2] == "--type" && args[3] == "vm" && args[4] == "--output-format=json" {
+		if s.inventoryError != nil {
+			return s.inventoryOutput, s.inventoryError
+		}
+		if s.inventoryOutput != nil {
+			return s.inventoryOutput, nil
+		}
+		vmids := make([]string, 0, len(s.guests))
+		for vmid, exists := range s.guests {
+			if exists {
+				vmids = append(vmids, vmid)
+			}
+		}
+		sort.Strings(vmids)
+		resources := make([]pveGuestResource, 0, len(vmids))
+		for _, vmid := range vmids {
+			numericVMID, err := strconv.Atoi(vmid)
+			if err != nil {
+				return nil, err
+			}
+			node := s.guestNodes[vmid]
+			if node == "" {
+				node = localNodeName()
+			}
+			kind := s.guestKinds[vmid]
+			if kind == "" {
+				kind = "qemu"
+			}
+			status := "stopped"
+			if s.running[vmid] {
+				status = "running"
+			}
+			resources = append(resources, pveGuestResource{
+				VMID: numericVMID, Node: node, Kind: kind, Status: status, Name: "guest-" + vmid,
+			})
+		}
+		return json.Marshal(resources)
 	}
 	if len(args) >= 2 && args[0] == "get" && strings.HasSuffix(args[1], "/status/current") {
 		vmid := pveshFakePathVMID(strings.TrimSuffix(args[1], "/status/current"))

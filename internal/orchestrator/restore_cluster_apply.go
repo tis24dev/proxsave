@@ -194,6 +194,24 @@ func applyVMConfigs(ctx context.Context, entries []vmEntry, logger *logging.Logg
 		logging.DebugStep(logger, "pve guest configs apply", "Result: ok=%d failed=%d", applied, failed)
 		done(traceErr)
 	}()
+	if len(entries) == 0 {
+		return 0, 0
+	}
+	if err := ctx.Err(); err != nil {
+		traceErr = err
+		logger.Warning("VM apply aborted: %v", err)
+		return applied, failed
+	}
+
+	inventory, err := loadPVEGuestInventory(ctx)
+	if err != nil {
+		traceErr = err
+		failed = len(entries)
+		logger.Warning("Failed to load the cluster-wide VM/CT inventory; refusing to apply %d guest config(s): %v", len(entries), err)
+		return applied, failed
+	}
+	logging.DebugStep(logger, "pve guest configs apply", "Loaded cluster-wide inventory: guests=%d", len(inventory))
+
 	for _, vm := range entries {
 		if err := ctx.Err(); err != nil {
 			traceErr = err
@@ -201,25 +219,27 @@ func applyVMConfigs(ctx context.Context, entries []vmEntry, logger *logging.Logg
 			return applied, failed
 		}
 		target := fmt.Sprintf("/nodes/%s/%s/%s/config", node, vm.Kind, vm.VMID)
-		configArgs, err := pveshArgsFromColonConfigFile(vm.Path)
-		if err != nil {
-			logger.Warning("Failed to read %s (vmid=%s kind=%s): %v", vm.Path, vm.VMID, vm.Kind, err)
-			failed++
-			continue
-		}
-
-		exists, err := pveshGuestExists(ctx, logger, target)
-		if err != nil {
-			logger.Warning("Failed to check existing VM/CT config %s (vmid=%s kind=%s): %v", target, vm.VMID, vm.Kind, err)
-			failed++
-			continue
-		}
 		display := vm.VMID
 		if vm.Name != "" {
 			display = fmt.Sprintf("%s (%s)", vm.VMID, vm.Name)
 		}
 
+		resource, exists := inventory[vm.VMID]
+		if exists && resource.Node != node {
+			logging.DebugStep(logger, "pve guest configs apply", "vmid=%s classification=remote owner_node=%s current_node=%s", vm.VMID, resource.Node, node)
+			logger.Warning("Skipping VM/CT config %s: vmid=%s already belongs to remote node %s (current node: %s)", display, vm.VMID, resource.Node, node)
+			failed++
+			continue
+		}
+		if exists && resource.Kind != vm.Kind {
+			logging.DebugStep(logger, "pve guest configs apply", "vmid=%s classification=type-mismatch inventory_kind=%s staged_kind=%s", vm.VMID, resource.Kind, vm.Kind)
+			logger.Warning("Skipping VM/CT config %s: vmid=%s is %s in the cluster inventory but the staged config is %s", display, vm.VMID, resource.Kind, vm.Kind)
+			failed++
+			continue
+		}
+
 		if !exists {
+			logging.DebugStep(logger, "pve guest configs apply", "vmid=%s classification=absent action=register-pmxcfs", vm.VMID)
 			// pvesh create is a dead end here: ostemplate is create-time-only and
 			// never persists into a CT conf, so an LXC could NEVER be created this
 			// way (fable-check bug 3), and for qemu the conf itself is the
@@ -233,6 +253,14 @@ func applyVMConfigs(ctx context.Context, entries []vmEntry, logger *logging.Logg
 			}
 			logger.Info("Registered VM/CT config %s via pmxcfs (config only: disks are not part of a config restore)", display)
 			applied++
+			continue
+		}
+
+		logging.DebugStep(logger, "pve guest configs apply", "vmid=%s classification=local kind=%s action=pvesh-set", vm.VMID, vm.Kind)
+		configArgs, err := pveshArgsFromColonConfigFile(vm.Path)
+		if err != nil {
+			logger.Warning("Failed to read %s (vmid=%s kind=%s): %v", vm.Path, vm.VMID, vm.Kind, err)
+			failed++
 			continue
 		}
 
@@ -332,49 +360,6 @@ func localNodeName() string {
 		return host
 	}
 	return "localhost"
-}
-
-func pveshGuestExists(ctx context.Context, logger *logging.Logger, target string) (bool, error) {
-	// The reason for a missing guest lands on pvesh's OUTPUT ("Configuration
-	// file '...' does not exist", measured live on PVE 9.1.9); the Go error is a
-	// bare "exit status 2". Matching the error alone never fired on a real node,
-	// so a missing guest read as a failed check instead of as absent - which is
-	// why the not-found match must read the output too.
-	out, err := restoreCmd.Run(ctx, "pvesh", "get", target)
-	if len(out) > 0 {
-		logger.Debug("pvesh [get %s] output: %s", target, strings.TrimSpace(string(out)))
-	}
-	if err == nil {
-		return true, nil
-	}
-	if isPveshNotFoundError(err) || isPveshNotFoundText(string(out)) {
-		return false, nil
-	}
-	return false, fmt.Errorf("pvesh [get %s] failed: %w", target, err)
-}
-
-// isPveshNotFoundText matches the not-found reasons pvesh prints on its output.
-func isPveshNotFoundText(out string) bool {
-	lower := strings.ToLower(out)
-	for _, marker := range []string{"does not exist", "not found", "no such"} {
-		if strings.Contains(lower, marker) {
-			return true
-		}
-	}
-	return false
-}
-
-func isPveshNotFoundError(err error) bool {
-	if err == nil {
-		return false
-	}
-	msg := strings.ToLower(err.Error())
-	for _, marker := range []string{"not found", "does not exist", "no such", "unable to find", "404"} {
-		if strings.Contains(msg, marker) {
-			return true
-		}
-	}
-	return false
 }
 
 type storageBlock struct {

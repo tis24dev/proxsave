@@ -22,11 +22,16 @@ func (runOnlyRunner) Run(ctx context.Context, name string, args ...string) ([]by
 type zfsContextTestKey struct{}
 
 type recordingRunner struct {
-	calls []string
+	calls           []string
+	inventoryOutput []byte
 }
 
 func (r *recordingRunner) Run(ctx context.Context, name string, args ...string) ([]byte, error) {
-	r.calls = append(r.calls, commandKey(name, args))
+	key := commandKey(name, args)
+	r.calls = append(r.calls, key)
+	if key == pveGuestInventoryCommand && r.inventoryOutput != nil {
+		return r.inventoryOutput, nil
+	}
 	return []byte("ok"), nil
 }
 
@@ -274,7 +279,10 @@ func TestRunSafeClusterApply_AppliesVMStorageAndDatacenterConfigs(t *testing.T) 
 	}
 	t.Setenv("PATH", pathDir+string(os.PathListSeparator)+os.Getenv("PATH"))
 
-	runner := &recordingRunner{}
+	runner := &recordingRunner{inventoryOutput: guestInventoryJSON(t,
+		pveGuestResource{VMID: 100, Node: localNodeName(), Kind: "qemu", Status: "stopped"},
+		pveGuestResource{VMID: 101, Node: localNodeName(), Kind: "lxc", Status: "stopped"},
+	)}
 	restoreCmd = runner
 
 	exportRoot := t.TempDir()
@@ -488,7 +496,9 @@ func TestRunSafeClusterApply_UsesSingleExportedNodeWhenHostnameMismatch(t *testi
 	}
 	t.Setenv("PATH", pathDir+string(os.PathListSeparator)+os.Getenv("PATH"))
 
-	runner := &recordingRunner{}
+	runner := &recordingRunner{inventoryOutput: guestInventoryJSON(t,
+		pveGuestResource{VMID: 100, Node: localNodeName(), Kind: "qemu", Status: "stopped"},
+	)}
 	restoreCmd = runner
 
 	exportRoot := t.TempDir()
@@ -541,7 +551,9 @@ func TestRunSafeClusterApply_PromptsForSourceNodeWhenMultipleExportNodes(t *test
 	}
 	t.Setenv("PATH", pathDir+string(os.PathListSeparator)+os.Getenv("PATH"))
 
-	runner := &recordingRunner{}
+	runner := &recordingRunner{inventoryOutput: guestInventoryJSON(t,
+		pveGuestResource{VMID: 101, Node: localNodeName(), Kind: "qemu", Status: "stopped"},
+	)}
 	restoreCmd = runner
 
 	exportRoot := t.TempDir()
