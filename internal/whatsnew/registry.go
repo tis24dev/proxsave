@@ -93,6 +93,21 @@ var notes = []Note{
 			"If an upgrade reports a cron wrapper of yours, remove the duplicate schedule from your crontab and upgrade again",
 		},
 	},
+	{
+		Version: "0.33.0",
+		Lines: []string{
+			"Run your own scripts around each backup: PERSONAL_SCRIPT_PRE_RUN and PERSONAL_SCRIPT_POST_RUN in backup.env",
+			"The notification issue list names the failed operation (upload, retention, listing), one entry per fault",
+			"Secondary storage reports unreadable archives and a location that stopped answering instead of skipping them silently",
+			"A backup that hits those secondary faults ends with exit 1 instead of reporting success",
+			"Log messages no longer repeat the level word the level column already prints",
+			"A cloud delete killed mid-transfer reports the kill, not rclone's last progress line",
+		},
+		Actions: []string{
+			"If runs start ending with exit 1 naming unreadable secondary archives, repair or remove those files",
+			"Update any log-parsing script of yours that matches WARNING: or ERROR: inside the message text",
+		},
+	},
 }
 
 // LookupNotes returns the notes for versions in the half-open range (from, to], ascending by
