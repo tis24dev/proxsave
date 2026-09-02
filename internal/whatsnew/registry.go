@@ -114,12 +114,18 @@ var notes = []Note{
 	{
 		Version: "0.34.0",
 		Lines: []string{
-			"Staged PVE restore really applies datacenter.cfg, vzdump.cron and existing storage definitions",
-			"Guest configs survive restore on modern PVE: rejected keys are stripped and the conf file is the fallback",
-			"A guest missing from the node is registered by restoring its config file (disks are not part of it)",
+			"Staged PVE restore really applies datacenter.cfg, vzdump.cron, storage definitions and guest configs",
+			"A guest missing from the node is registered from its restored config file; rejected keys no longer fail it",
+			"Copy failures of critical files and interrupted collections now warn in the log instead of hiding at debug",
+			"Text cleanup in backups only touches CRLF line endings in plain text; UTF-16 and binary files stay untouched",
+			"The PVE cluster database is captured as a consistent snapshot, including changes not yet checkpointed",
+			"Cloud retention no longer stalls the run when rclone hangs; a missing cloud log no longer skips log cleanup",
+			"A failed notification now always exits 1, and --log-level only quiets the console, never the exit code",
+			"Starting --daemon twice is refused, so the running daemon stays discoverable by backup handoffs",
 		},
 		Actions: []string{
 			"After a staged PVE restore, check the restore log: applied items say pmxcfs or pvesh, failures stay warnings",
+			"If a monitoring script gates on the exit code, note a failed notification now exits 1 on every install",
 		},
 	},
 }
