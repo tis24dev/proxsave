@@ -192,7 +192,7 @@ func (c *Collector) collectSystemNetworkStatic(ctx context.Context) error {
 			c.systemPath(file.path),
 			filepath.Join(c.tempDir, strings.TrimPrefix(file.path, "/")),
 			file.desc); err != nil {
-			c.logger.Debug("Failed to collect %s: %v", file.path, err)
+			c.logger.Warning("Failed to collect %s: %v", file.path, err)
 		}
 	}
 
@@ -200,21 +200,21 @@ func (c *Collector) collectSystemNetworkStatic(ctx context.Context) error {
 		c.systemPath("/etc/netplan"),
 		filepath.Join(c.tempDir, "etc/netplan"),
 		"Netplan configuration"); err != nil {
-		c.logger.Debug("No /etc/netplan found")
+		c.logger.Debug("Failed to collect /etc/netplan: %v", err)
 	}
 
 	if err := c.safeCopyDir(ctx,
 		c.systemPath("/etc/systemd/network"),
 		filepath.Join(c.tempDir, "etc/systemd/network"),
 		"systemd-networkd configuration"); err != nil {
-		c.logger.Debug("No /etc/systemd/network found")
+		c.logger.Debug("Failed to collect /etc/systemd/network: %v", err)
 	}
 
 	if err := c.safeCopyDir(ctx,
 		c.systemPath("/etc/NetworkManager/system-connections"),
 		filepath.Join(c.tempDir, "etc/NetworkManager/system-connections"),
 		"NetworkManager connections"); err != nil {
-		c.logger.Debug("No NetworkManager system-connections found")
+		c.logger.Debug("Failed to collect /etc/NetworkManager/system-connections: %v", err)
 	}
 
 	return nil

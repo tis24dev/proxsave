@@ -111,6 +111,88 @@ func TestInterfacesCopyFailureWarnsAndTellsTheTruth(t *testing.T) {
 	}
 }
 
+func TestOptionalNetworkCopyFailuresAreWarnings(t *testing.T) {
+	tests := []struct {
+		path             string
+		isDir            bool
+		warningNeedle    string
+		falseMissingText string
+	}{
+		{
+			path:          "/etc/cloud/cloud.cfg.d/99-disable-network-config.cfg",
+			warningNeedle: "Failed to collect /etc/cloud/cloud.cfg.d/99-disable-network-config.cfg:",
+		},
+		{
+			path:          "/etc/dnsmasq.d/lxc-vmbr1.conf",
+			warningNeedle: "Failed to collect /etc/dnsmasq.d/lxc-vmbr1.conf:",
+		},
+		{
+			path:             "/etc/netplan",
+			isDir:            true,
+			warningNeedle:    "Failed to copy directory Netplan configuration:",
+			falseMissingText: "No /etc/netplan found",
+		},
+		{
+			path:             "/etc/systemd/network",
+			isDir:            true,
+			warningNeedle:    "Failed to copy directory systemd-networkd configuration:",
+			falseMissingText: "No /etc/systemd/network found",
+		},
+		{
+			path:             "/etc/NetworkManager/system-connections",
+			isDir:            true,
+			warningNeedle:    "Failed to copy directory NetworkManager connections:",
+			falseMissingText: "No NetworkManager system-connections found",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(strings.TrimPrefix(tt.path, "/etc/"), func(t *testing.T) {
+			sysRoot := t.TempDir()
+			source := filepath.Join(sysRoot, strings.TrimPrefix(tt.path, "/"))
+			if tt.isDir {
+				if err := os.MkdirAll(source, 0o755); err != nil {
+					t.Fatalf("create source directory: %v", err)
+				}
+				if err := os.WriteFile(filepath.Join(source, "entry.conf"), []byte("data\n"), 0o600); err != nil {
+					t.Fatalf("create source entry: %v", err)
+				}
+			} else {
+				if err := os.MkdirAll(filepath.Dir(source), 0o755); err != nil {
+					t.Fatalf("create source parent: %v", err)
+				}
+				if err := os.WriteFile(source, []byte("data\n"), 0o600); err != nil {
+					t.Fatalf("create source file: %v", err)
+				}
+			}
+
+			c, buf := failureLevelCollector(t, sysRoot, &CollectorConfig{BackupNetworkConfigs: true})
+			destination := filepath.Join(c.tempDir, strings.TrimPrefix(tt.path, "/"))
+			if tt.isDir {
+				if err := os.MkdirAll(filepath.Dir(destination), 0o755); err != nil {
+					t.Fatalf("create destination parent: %v", err)
+				}
+				if err := os.WriteFile(destination, []byte("block"), 0o600); err != nil {
+					t.Fatalf("create destination blocker: %v", err)
+				}
+			} else if err := os.MkdirAll(destination, 0o755); err != nil {
+				t.Fatalf("create destination blocker: %v", err)
+			}
+
+			if err := c.collectSystemNetworkStatic(context.Background()); err != nil {
+				t.Fatalf("collectSystemNetworkStatic: %v", err)
+			}
+			out := buf.String()
+			if hits := warningsMatching(out, tt.warningNeedle); len(hits) != 1 {
+				t.Fatalf("a real copy failure for %s must produce one WARNING with its cause, got %d:\n%s", tt.path, len(hits), buf.String())
+			}
+			if tt.falseMissingText != "" && strings.Contains(out, tt.falseMissingText) {
+				t.Fatalf("a real copy failure for %s was mislabeled as missing:\n%s", tt.path, out)
+			}
+		})
+	}
+}
+
 func TestCustomPathCopyFailureIsAWarning(t *testing.T) {
 	if os.Geteuid() == 0 {
 		t.Skip("needs non-root so mode 0000 denies the read")
