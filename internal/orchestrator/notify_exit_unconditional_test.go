@@ -1,6 +1,7 @@
 package orchestrator
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -43,10 +44,22 @@ func TestFailedOrDryRunSkipsTheSuccessReparse(t *testing.T) {
 	if err := os.WriteFile(logFile, []byte("[2026-09-02 10:00:01] NOTIFY-ERR x: failed\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	o := &Orchestrator{cfg: &config.Config{MetricsEnabled: false}, dryRun: true}
-	stats := &BackupStats{LogFilePath: logFile, ExitCode: types.ExitSuccess.Int()}
-	o.exportBackupMetrics(&backupRunContext{stats: stats}, nil)
-	if stats.ExitCode != types.ExitSuccess.Int() || stats.NotifyCount != 0 {
-		t.Fatalf("dry run must not re-parse: exit=%d notify=%d", stats.ExitCode, stats.NotifyCount)
-	}
+
+	t.Run("dry run", func(t *testing.T) {
+		o := &Orchestrator{cfg: &config.Config{MetricsEnabled: false}, dryRun: true}
+		stats := &BackupStats{LogFilePath: logFile, ExitCode: types.ExitSuccess.Int()}
+		o.exportBackupMetrics(&backupRunContext{stats: stats}, nil)
+		if stats.ExitCode != types.ExitSuccess.Int() || stats.NotifyCount != 0 {
+			t.Fatalf("dry run must not re-parse: exit=%d notify=%d", stats.ExitCode, stats.NotifyCount)
+		}
+	})
+
+	t.Run("failed run", func(t *testing.T) {
+		o := &Orchestrator{cfg: &config.Config{MetricsEnabled: false}}
+		stats := &BackupStats{LogFilePath: logFile, ExitCode: types.ExitBackupError.Int()}
+		o.exportBackupMetrics(&backupRunContext{stats: stats}, errors.New("archive failed"))
+		if stats.ExitCode != types.ExitBackupError.Int() || stats.NotifyCount != 0 {
+			t.Fatalf("failed run must not re-parse: exit=%d notify=%d", stats.ExitCode, stats.NotifyCount)
+		}
+	})
 }
