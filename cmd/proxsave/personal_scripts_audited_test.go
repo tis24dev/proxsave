@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"go/parser"
 	"go/token"
 	"io/fs"
@@ -10,6 +11,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -444,6 +446,51 @@ func capturePersonalScriptValidation(t *testing.T, pre, post string) (preOut, po
 	cfg := &config.Config{PersonalScriptPreRun: pre, PersonalScriptPostRun: post}
 	validatePersonalScripts(cfg)
 	return cfg.PersonalScriptPreRun, cfg.PersonalScriptPostRun, buf.String()
+}
+
+type personalScriptOwnerFixture struct {
+	uid uint32
+}
+
+func (personalScriptOwnerFixture) Name() string       { return "owner-fixture" }
+func (personalScriptOwnerFixture) Size() int64        { return 0 }
+func (personalScriptOwnerFixture) Mode() os.FileMode  { return 0o700 }
+func (personalScriptOwnerFixture) ModTime() time.Time { return time.Time{} }
+func (personalScriptOwnerFixture) IsDir() bool        { return false }
+func (f personalScriptOwnerFixture) Sys() any         { return &syscall.Stat_t{Uid: f.uid} }
+
+func TestPersonalScriptOwnerErrorAllowsOnlyRootOrDaemonUIDAndGuidesRecovery(t *testing.T) {
+	daemonUID := os.Geteuid()
+	for name, uid := range map[string]uint32{
+		"root":       0,
+		"daemon uid": uint32(daemonUID),
+	} {
+		t.Run(name, func(t *testing.T) {
+			if err := personalScriptOwnerError("/trusted/script", personalScriptOwnerFixture{uid: uid}); err != nil {
+				t.Fatalf("trusted uid %d was refused: %v", uid, err)
+			}
+		})
+	}
+
+	foreignUID := uint32(4242)
+	if int(foreignUID) == daemonUID {
+		foreignUID++
+	}
+	err := personalScriptOwnerError("/home/operator", personalScriptOwnerFixture{uid: foreignUID})
+	if err == nil {
+		t.Fatal("a path component owned by a foreign uid was accepted")
+	}
+	for _, want := range []string{
+		"/home/operator",
+		fmt.Sprintf("uid %d", foreignUID),
+		fmt.Sprintf("daemon uid %d", daemonUID),
+		"Keep the user home ownership unchanged",
+		"/usr/local/bin",
+	} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("ownership refusal is missing %q: %v", want, err)
+		}
+	}
 }
 
 func TestPersonalScriptValidationRefusesAWorldWritableScript(t *testing.T) {

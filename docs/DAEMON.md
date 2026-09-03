@@ -234,7 +234,9 @@ They are **yours, not ProxSave's**, and the whole contract follows from that:
   shape). A path that fails any of it is disabled for that daemon and the gate says so, once:
   a `WARNING` in the daemon's log naming the variable, the path and the reason. That warning
   is deliberate and is the single exception to the silence above - without it, a refused path
-  would be indistinguishable from a script that ran and did nothing.
+  would be indistinguishable from a script that ran and did nothing. Do not change a user's
+  home directory to `root:root` to satisfy this check. Move the script to a fully root-owned
+  path such as `/usr/local/bin`, then update `backup.env` and restart the daemon.
 - **Started as they are.** The path is executed directly: no shell, so no pipes, redirections
   or arguments in the value, and no arguments passed. The script inherits the daemon's own
   environment with two variables removed, `LOG_FILE` and `BASE_DIR`: the first names the run

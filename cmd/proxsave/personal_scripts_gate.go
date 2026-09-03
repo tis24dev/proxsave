@@ -94,7 +94,7 @@ func personalScriptOwnerError(path string, info os.FileInfo) error {
 		return fmt.Errorf("owner of %s cannot be determined", path)
 	}
 	if st.Uid != 0 && int(st.Uid) != os.Geteuid() {
-		return fmt.Errorf("%s is owned by uid %d, not root and not the daemon's own user", path, st.Uid)
+		return fmt.Errorf("%s is owned by uid %d; accepted owners are root or daemon uid %d. Keep the user home ownership unchanged and move the script to a root-owned path such as /usr/local/bin", path, st.Uid, os.Geteuid())
 	}
 	return nil
 }
