@@ -916,6 +916,11 @@ func (c *Collector) effectivePVEConfigPath() string {
 // pmxcfs commit holding the write lock. Any failure is the caller's cue to fall
 // back to a raw copy, loudly.
 func (c *Collector) snapshotSQLiteDB(ctx context.Context, src, dest string) error {
+	if c.dryRun {
+		c.logger.Debug("[DRY RUN] Would capture PVE cluster database via sqlite3 .backup: %s", dest)
+		c.incFilesProcessed()
+		return nil
+	}
 	if _, err := c.depLookPath("sqlite3"); err != nil {
 		return fmt.Errorf("sqlite3 not available: %w", err)
 	}

@@ -34,6 +34,51 @@ func configDBCollector(t *testing.T, deps CollectorDeps) (*Collector, string, *b
 	return NewCollectorWithDeps(logger, cfg, t.TempDir(), types.ProxmoxVE, false, deps), clusterDir, buf
 }
 
+func TestConfigDBDryRunDoesNotWriteOrInvokeSQLite(t *testing.T) {
+	var lookups, runs int
+	deps := CollectorDeps{
+		LookPath: func(name string) (string, error) {
+			lookups++
+			return "/usr/bin/" + name, nil
+		},
+		RunCommand: func(ctx context.Context, name string, args ...string) ([]byte, error) {
+			runs++
+			return nil, nil
+		},
+	}
+	c, clusterDir, buf := configDBCollector(t, deps)
+	c.dryRun = true
+	src := filepath.Join(clusterDir, "config.db")
+	dest := c.targetPathFor(src)
+	destDir := filepath.Dir(dest)
+
+	if _, err := os.Stat(destDir); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("test precondition: destination directory exists before dry-run: %v", err)
+	}
+	if err := c.collectPVEClusterSnapshot(context.Background(), false); err != nil {
+		t.Fatalf("collectPVEClusterSnapshot: %v", err)
+	}
+	if lookups != 0 || runs != 0 {
+		t.Fatalf("dry-run dependency calls = (LookPath=%d, RunCommand=%d), want (0, 0)", lookups, runs)
+	}
+	if _, err := os.Stat(destDir); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("dry-run created destination directory %s: %v", destDir, err)
+	}
+	if _, err := os.Stat(dest); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("dry-run created SQLite snapshot %s: %v", dest, err)
+	}
+	stats := c.GetStats()
+	if stats.FilesProcessed != 1 {
+		t.Fatalf("FilesProcessed = %d, want 1 simulated config.db capture", stats.FilesProcessed)
+	}
+	if stats.BytesCollected != 0 {
+		t.Fatalf("BytesCollected = %d, want 0 in dry-run", stats.BytesCollected)
+	}
+	if !strings.Contains(buf.String(), "[DRY RUN] Would capture PVE cluster database via sqlite3 .backup") {
+		t.Fatalf("missing dry-run SQLite capture diagnostic:\n%s", buf.String())
+	}
+}
+
 func TestConfigDBCaptureGoesThroughSQLiteBackup(t *testing.T) {
 	var gotName string
 	var gotArgs []string
