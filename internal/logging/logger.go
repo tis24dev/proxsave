@@ -474,16 +474,15 @@ func (l *Logger) logWithLabel(level types.LogLevel, label string, colorOverride 
 		l.issueLines = append(l.issueLines, issue)
 	}
 
-	// Write to stdout with colors - unless the console threshold mutes it. The
-	// mirror is a display tap, so it mutes with the console.
+	// Write to stdout with colors - unless the console threshold mutes it.
 	if !consoleMuted {
 		_, _ = fmt.Fprint(l.output, outputStdout)
+	}
 
-		// Mirror the COLORED line to the optional tap (parallel to the file sink, so a
-		// muted console never starves it). In-memory, non-blocking; never wedges l.mu.
-		if l.mirror != nil {
-			_, _ = io.WriteString(l.mirror, outputStdout)
-		}
+	// Mirror the COLORED line to the optional tap independently of console
+	// visibility, so every recorded line remains available for a later UI replay.
+	if l.mirror != nil {
+		_, _ = io.WriteString(l.mirror, outputStdout)
 	}
 
 	// If a log file is open and not disabled, write there too (without colors),

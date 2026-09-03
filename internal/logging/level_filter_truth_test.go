@@ -68,6 +68,25 @@ func TestErrorsBelowConsoleLevelStillCountAndReachTheFile(t *testing.T) {
 	}
 }
 
+func TestMirrorReceivesRecordedLinesBelowConsoleLevel(t *testing.T) {
+	logger, console, _ := muteLevelLogger(t, types.LogLevelCritical)
+	var mirror bytes.Buffer
+	logger.SetMirror(&mirror)
+
+	logger.Warning("muted warning")
+	logger.Error("muted error")
+	logger.Critical("visible critical")
+
+	if got := console.String(); strings.Contains(got, "muted warning") || strings.Contains(got, "muted error") {
+		t.Fatalf("console threshold leaked muted lines:\n%s", got)
+	}
+	for _, want := range []string{"muted warning", "muted error", "visible critical"} {
+		if !strings.Contains(mirror.String(), want) {
+			t.Fatalf("mirror lost recorded line %q:\n%s", want, mirror.String())
+		}
+	}
+}
+
 func TestBelowWarningTheThresholdKeepsItsFullMeaning(t *testing.T) {
 	logger, console, logPath := muteLevelLogger(t, types.LogLevelError)
 
