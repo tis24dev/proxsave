@@ -226,6 +226,7 @@ cat /proc/self/gid_map
 
 **Resolution**:
 ```bash
+proxsave --daemon-status --log-level debug      # first: READY/REFUSED plus UID and path evidence
 journalctl -u proxsave-daemon.service | grep PERSONAL_SCRIPT   # a gate refusal names the reason
 namei -l /path/to/my-pre-run.sh         # inspect ownership and mode of every path component
 ls -l /usr/local/bin/my-pre-run.sh      # owned by root, mode 0700 or 0755, no group/other write
@@ -234,6 +235,11 @@ head -1 /usr/local/bin/my-pre-run.sh    # a shebang, e.g. #!/bin/sh
 grep PERSONAL_SCRIPT /opt/proxsave/configs/backup.env
 systemctl restart proxsave-daemon.service   # the paths are read at daemon start
 ```
+- The status command is read-only: it does not execute either script, start a backup, acquire the
+  daemon lock, or send a healthcheck ping. `READY` means the path passes the same gate used by the
+  daemon; `REFUSED` gives the exact reason; `NOT CONFIGURED` means the setting is empty. Debug output
+  says whether the UID came from the live daemon or from the current-process fallback and lists the
+  owner/mode evidence. A script refusal does not change the command's daemon-health exit code.
 - Do not change a user's home directory to `root:root`. Copy or move the script to a fully
   root-owned path such as `/usr/local/bin`, update `backup.env`, then restart the daemon.
 - Have the script write its own log if you want a record: ProxSave will not write one for you.
