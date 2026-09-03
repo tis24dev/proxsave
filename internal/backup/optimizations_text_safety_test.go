@@ -1,6 +1,7 @@
 package backup
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
 	"testing"
@@ -61,6 +62,13 @@ func TestNormalizeLeavesBinaryBearingLogsAlone(t *testing.T) {
 	bin := []byte("prefix\x00\r\nraw\rbytes")
 	if changed, after := normalizeInDir(t, "mixed.log", bin); changed || string(after) != string(bin) {
 		t.Fatalf("a NUL-bearing log was rewritten (changed=%v): %q", changed, after)
+	}
+}
+
+func TestNormalizeLeavesNULFreeBinaryAlone(t *testing.T) {
+	bin := []byte{0x01, 0x02, 'A', '\r', '\n', 0x7F}
+	if changed, after := normalizeInDir(t, "opaque.log", bin); changed || !bytes.Equal(after, bin) {
+		t.Fatalf("a NUL-free binary log was rewritten (changed=%v):\nbefore % x\nafter  % x", changed, bin, after)
 	}
 }
 

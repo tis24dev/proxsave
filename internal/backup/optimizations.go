@@ -13,6 +13,8 @@ import (
 	"path/filepath"
 	"strings"
 	"syscall"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/tis24dev/proxsave/internal/logging"
 )
@@ -558,13 +560,25 @@ func normalizeTextFile(root *os.Root, name string) (bool, error) {
 }
 
 // isPlainSingleByteText reports whether data is safe for byte-level CRLF
-// normalization: no UTF-16/UTF-32 BOM and no NUL byte (the cheapest reliable tell
-// for wide encodings without a BOM and for binary payloads alike).
+// normalization. Invalid UTF-8 and control characters other than common text
+// whitespace are treated as binary so an extension alone can never authorize a
+// destructive rewrite.
 func isPlainSingleByteText(data []byte) bool {
-	if bytes.HasPrefix(data, []byte{0xFF, 0xFE}) || bytes.HasPrefix(data, []byte{0xFE, 0xFF}) {
+	if !utf8.Valid(data) {
 		return false
 	}
-	return !bytes.ContainsRune(data, 0)
+	for len(data) > 0 {
+		r, size := utf8.DecodeRune(data)
+		data = data[size:]
+		switch r {
+		case '\t', '\n', '\r':
+			continue
+		}
+		if unicode.IsControl(r) {
+			return false
+		}
+	}
+	return true
 }
 
 func normalizeConfigFile(root *os.Root, name string) (bool, error) {
