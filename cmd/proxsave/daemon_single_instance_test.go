@@ -2,11 +2,14 @@ package main
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/tis24dev/proxsave/internal/config"
 	"github.com/tis24dev/proxsave/internal/health"
+	"github.com/tis24dev/proxsave/internal/types"
 )
 
 // A second `proxsave --daemon` used to start with no probe at all: it overwrote
@@ -40,8 +43,8 @@ func TestDaemonRefusesSecondInstanceAndLeavesTheIncumbentsFilesAlone(t *testing.
 		t.Fatal("run() never returned")
 	}
 
-	if code == 0 {
-		t.Fatal("a second daemon instance exited 0: it ran instead of refusing")
+	if code != types.ExitBackupSkipped.Int() {
+		t.Fatalf("second daemon exit = %d, want %d", code, types.ExitBackupSkipped.Int())
 	}
 	pid, err := health.ReadDaemonPID(base)
 	if err != nil || pid != incumbent {
@@ -74,5 +77,79 @@ func TestDaemonStartsOverAStalePidFile(t *testing.T) {
 		}
 	case <-time.After(10 * time.Second):
 		t.Fatal("run() never returned")
+	}
+}
+
+func TestConcurrentDaemonCannotPassTheSingleInstanceGate(t *testing.T) {
+	base := t.TempDir()
+	first := &daemon{cfg: &config.Config{BaseDir: base, SchedulerTime: "03:00"}, now: time.Now}
+	firstCtx, cancelFirst := context.WithCancel(context.Background())
+	firstResult := make(chan int, 1)
+	firstStopped := make(chan struct{})
+	go func() {
+		defer close(firstStopped)
+		firstResult <- first.run(firstCtx)
+	}()
+	t.Cleanup(func() {
+		cancelFirst()
+		select {
+		case <-firstStopped:
+		case <-time.After(10 * time.Second):
+			t.Error("first daemon did not stop")
+		}
+	})
+
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		pid, err := health.ReadDaemonPID(base)
+		if err == nil && pid == os.Getpid() {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("first daemon never published its pid: pid=%d err=%v", pid, err)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	second := &daemon{cfg: &config.Config{BaseDir: base, SchedulerTime: "03:00"}, now: time.Now}
+	secondCtx, cancelSecond := context.WithCancel(context.Background())
+	cancelSecond()
+	if code := second.run(secondCtx); code != types.ExitBackupSkipped.Int() {
+		t.Fatalf("second daemon exit = %d, want %d", code, types.ExitBackupSkipped.Int())
+	}
+	pid, err := health.ReadDaemonPID(base)
+	if err != nil || pid != os.Getpid() {
+		t.Fatalf("second daemon disturbed incumbent pid: pid=%d err=%v", pid, err)
+	}
+
+	cancelFirst()
+	select {
+	case code := <-firstResult:
+		if code != types.ExitSuccess.Int() {
+			t.Fatalf("first daemon exit = %d, want success", code)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("first daemon did not return")
+	}
+
+	successor := &daemon{cfg: &config.Config{BaseDir: base, SchedulerTime: "03:00"}, now: time.Now}
+	successorCtx, cancelSuccessor := context.WithCancel(context.Background())
+	cancelSuccessor()
+	if code := successor.run(successorCtx); code != types.ExitSuccess.Int() {
+		t.Fatalf("successor daemon exit = %d after release, want success", code)
+	}
+}
+
+func TestDaemonFailsClosedWhenOwnershipCannotBeEstablished(t *testing.T) {
+	base := filepath.Join(t.TempDir(), "base-file")
+	if err := os.WriteFile(base, []byte("not a directory"), 0o600); err != nil {
+		t.Fatalf("create base file: %v", err)
+	}
+	d := &daemon{cfg: &config.Config{BaseDir: base, SchedulerTime: "03:00"}, now: time.Now}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	if code := d.run(ctx); code != types.ExitGenericError.Int() {
+		t.Fatalf("run() = %d when ownership is unknown, want %d", code, types.ExitGenericError.Int())
 	}
 }

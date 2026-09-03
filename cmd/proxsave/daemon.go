@@ -311,19 +311,34 @@ func runDaemon(rt *appRuntime) int {
 }
 
 func (d *daemon) run(ctx context.Context) int {
+	ownershipDone := logging.DebugStart(d.logger, "daemon ownership", "base_dir=%s", d.cfg.BaseDir)
+	releaseOwnership, err := acquireDaemonLock(d.cfg.BaseDir)
+	if err != nil {
+		if errors.Is(err, errDaemonLockHeld) {
+			if pid, pidErr := health.ReadDaemonPID(d.cfg.BaseDir); pidErr == nil && pid > 0 {
+				logging.Warning("daemon: another proxsave daemon is already running (pid=%d) - refusing a second instance so its pid file survives", pid)
+			} else {
+				logging.Warning("daemon: another proxsave daemon already owns %s - refusing a second instance", d.cfg.BaseDir)
+			}
+			ownershipDone(err)
+			return types.ExitBackupSkipped.Int()
+		}
+		logging.Error("daemon: cannot establish single-instance ownership: %v", err)
+		ownershipDone(err)
+		return types.ExitGenericError.Int()
+	}
+	ownershipDone(nil)
+	defer releaseOwnership()
+
 	// The trusted-path gate for the operator scripts, once, before any tick can start
 	// one: a refused path is blanked here with a loud reason (validatePersonalScripts),
 	// so the silent starters below never see it.
 	validatePersonalScripts(d.cfg)
 
-	// SINGLE-INSTANCE guard, before anything below is published: a second daemon would
-	// overwrite .daemon.pid/.daemon_info.json with its own identity and, on exit, DELETE
-	// both, hiding the still-running incumbent from every standalone handoff until a unit
-	// restart - and double-schedule the daily backup while both live. The probe is the
-	// same liveness + /proc cmdline gate the standalone handoff trusts, so a stale file
-	// (dead pid, or a recycled pid belonging to something else) never blocks a restart.
-	// ExitBackupSkipped for the same reason the concurrent-backup skip uses it: nothing
-	// is wrong with the host, the work is simply already owned by another process.
+	// The flock above is authoritative between new daemons. Keep this PID probe while
+	// holding it for rolling compatibility with an older incumbent that publishes its
+	// identity but does not take the lock. The same liveness + /proc cmdline gate the
+	// standalone handoff trusts ensures a stale or recycled PID never blocks a restart.
 	if pid, err := health.ReadDaemonPID(d.cfg.BaseDir); err == nil && pid > 0 && pid != os.Getpid() && daemonAliveProbe(pid) {
 		logging.Warning("daemon: another proxsave daemon is already running (pid=%d) - refusing a second instance so its pid file survives", pid)
 		return types.ExitBackupSkipped.Int()
