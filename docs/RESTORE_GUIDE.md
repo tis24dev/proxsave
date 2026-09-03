@@ -831,7 +831,7 @@ Applied VM/CT config 101 (database)
 
 When restoring from a **cluster backup** and selecting **RECOVERY mode** (option 2):
 
-1. **Same as Standalone** - Direct database restore
+1. **Direct database restore** - The selected `pve_cluster` payload, including `config.db`, is restored
 2. **WARNING displayed** - User must confirm node isolation
 3. **Split-brain risk** - CRITICAL to isolate node before proceeding
 
@@ -887,7 +887,7 @@ syncs via corosync (cluster communication)
 
 ### Cluster Restore Modes: SAFE vs RECOVERY
 
-When the backup was created from a cluster node (detected via manifest `ClusterMode: cluster`) and you select the `pve_cluster` category, the restore workflow presents two options:
+When the analyzed archive contains the `pve_cluster` payload and that category is selected, the restore workflow presents two options. The manifest's `ClusterMode` is used only to warn when its claim disagrees with the payload:
 
 ```text
 Cluster backup detected. Choose how to restore the cluster database:
@@ -1468,7 +1468,8 @@ Parses `storage.cfg` and applies each storage definition:
 - Each `storage: <name>` block is extracted
 - Applied via: `pvesh create /storage --storage=<id> --type=<type> --<key>=<value> ...`
 - Blocks are keyed on the `<type>: <id>` header (`dir: local`, `nfs: backup`); the older `storage: <id>` form is still accepted
-- There is no existence check and no update path: a storage that already exists makes `pvesh create` fail, and it is counted as a failure rather than updated. Remove or rename the existing definition first if you need it replaced
+- If `pvesh create` fails (including when the definition already exists), ProxSave retries with `pvesh set /storage/<id>` and drops keys that the live set schema reports as create-only
+- The storage is counted as failed only when both the create attempt and the set fallback fail
 
 **Note**: Storage directories are NOT created automatically. Run `pvesm status` to verify, then create missing directories manually.
 
