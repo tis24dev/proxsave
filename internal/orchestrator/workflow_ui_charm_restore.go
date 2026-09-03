@@ -313,14 +313,18 @@ func (u *charmWorkflowUI) ConfirmApplyStorageCfg(ctx context.Context, storageCfg
 }
 
 func (u *charmWorkflowUI) ConfirmApplyDatacenterCfg(ctx context.Context, datacenterCfgPath string) (bool, error) {
-	return u.confirmApply(ctx, "Apply datacenter.cfg",
+	return u.confirmApplyWithLabel(ctx, "Apply datacenter.cfg", "Write to pmxcfs",
 		fmt.Sprintf("Datacenter configuration found:\n\n%s\n\nApply datacenter.cfg now?", strings.TrimSpace(datacenterCfgPath)))
 }
 
 func (u *charmWorkflowUI) confirmApply(ctx context.Context, title, message string) (bool, error) {
+	return u.confirmApplyWithLabel(ctx, title, "Apply via API", message)
+}
+
+func (u *charmWorkflowUI) confirmApplyWithLabel(ctx context.Context, title, yesLabel, message string) (bool, error) {
 	res, err := shell.Ask(ctx, u.session, components.NewConfirm(
 		title, message,
-		components.WithLabels("Apply via API", "Skip"),
+		components.WithLabels(yesLabel, "Skip"),
 		components.WithDefaultYes(false),
 		components.WithDanger(),
 	))
