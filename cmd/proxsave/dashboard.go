@@ -202,6 +202,14 @@ func isTerminalInteractive() bool {
 	return true
 }
 
+type dashboardActionDisposition uint8
+
+const (
+	dashboardActionUnhandled dashboardActionDisposition = iota
+	dashboardActionHandled
+	dashboardActionReload
+)
+
 // maybeRunDashboard shows the interactive dashboard when proxsave is invoked
 // completely bare (no flags at all) on an interactive terminal. The chosen
 // action is dispatched by MUTATING args and letting the existing flag-driven
@@ -281,10 +289,15 @@ func maybeRunDashboard(ctx context.Context, args *cli.Args, bootstrap *logging.B
 		// and loop back to the menu. These never leave the dashboard, so the flag
 		// dispatch below is untouched.
 		diagCtx, cancelDiag := withDashboardIdle(ctx)
-		handledDiag := runDashboardDiagnostic(diagCtx, session, action, args, bootstrap)
+		disposition := runDashboardDiagnostic(diagCtx, session, action, args, bootstrap)
 		cancelDiag()
-		if handledDiag {
+		switch disposition {
+		case dashboardActionHandled:
 			continue
+		case dashboardActionReload:
+			keepAlive = true
+			closeDashboardAndRelaunch(ctx, session, getExecInfo().ExecPath, bootstrap)
+			return types.ExitSuccess.Int(), true
 		}
 
 		switch action {
@@ -388,14 +401,15 @@ func runDashboardInstallChoice(ctx context.Context, session *shell.Session) (men
 }
 
 // runDashboardDiagnostic runs the check screen for a diagnostics-group action in
-// the live dashboard session and reports whether it handled the action (so the
-// dashboard loops back to the menu). Non-diagnostic actions return false, leaving
+// the live dashboard session and reports how it handled the action. Ordinary
+// diagnostics loop back to the menu; a successful upgrade requests a process reload.
+// Non-diagnostic actions return dashboardActionUnhandled, leaving
 // them for the normal flag dispatch. Every screen already exists and is reused
 // verbatim; each is non-blocking (errors are swallowed - a failed check must never
 // abort the dashboard). When a setup screen is not eligible (that feature is not
 // configured on this host) it renders nothing, so a short notice is shown instead
 // of a blank flicker.
-func runDashboardDiagnostic(ctx context.Context, session *shell.Session, action menu.Action, args *cli.Args, bootstrap *logging.BootstrapLogger) bool {
+func runDashboardDiagnostic(ctx context.Context, session *shell.Session, action menu.Action, args *cli.Args, bootstrap *logging.BootstrapLogger) dashboardActionDisposition {
 	configPath := ""
 	if args != nil {
 		configPath = args.ConfigPath
@@ -425,7 +439,7 @@ func runDashboardDiagnostic(ctx context.Context, session *shell.Session, action 
 		_, _ = dashboardRunPostInstallAudit(ctx, session, getExecInfo().ExecPath, configPath)
 	case menu.ActionCheckUpgrade:
 		logging.DebugStepBootstrap(bootstrap, "dashboard", "action=check-upgrade")
-		runDashboardUpgradeMenu(ctx, session, configPath)
+		return runDashboardUpgradeMenu(ctx, session, configPath)
 	case menu.ActionDaemonSetup:
 		logging.DebugStepBootstrap(bootstrap, "dashboard", "action=daemon-setup")
 		runDashboardDaemonAdmin(ctx, session, true, configPath, baseDir)
@@ -442,9 +456,9 @@ func runDashboardDiagnostic(ctx context.Context, session *shell.Session, action 
 		logging.DebugStepBootstrap(bootstrap, "dashboard", "action=cleanup-guards")
 		runDashboardCleanupGuards(ctx, session)
 	default:
-		return false
+		return dashboardActionUnhandled
 	}
-	return true
+	return dashboardActionHandled
 }
 
 // Seams so the daemon admin ops can be stubbed in tests (they otherwise run real

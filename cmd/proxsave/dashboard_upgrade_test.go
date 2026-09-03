@@ -3,6 +3,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -80,10 +81,9 @@ func TestRenderReleaseNotes(t *testing.T) {
 	}
 }
 
-// TestDashboardUpgradeScreen drives the in-session upgrade screen directly: Check (shows
-// the available version, sanitized) -> Run upgrade (calls the real upgrade with
-// Upgrade+AutoYes+ConfigPath, keeps the binary-upgrade detail screen after each
-// result) -> Back. Both terminal result keywords stay ALL-CAPS.
+// TestDashboardUpgradeScreen drives a successful in-session upgrade. After the daemon
+// result is dismissed, control must propagate a reload disposition instead of returning to
+// the old binary's upgrade screen.
 func TestDashboardUpgradeScreen(t *testing.T) {
 	origVer, origChk := dashboardUpgradeVersion, dashboardUpgradeCheck
 	origRun := dashboardUpgradeRun
@@ -110,10 +110,7 @@ func TestDashboardUpgradeScreen(t *testing.T) {
 		runCalls++
 		gotArgs = args
 		gotOpts = opts
-		if runCalls == 1 {
-			return 0 // first run succeeds
-		}
-		return 1 // second run exercises the failure result
+		return 0
 	}
 
 	// Build an observed session eagerly (the shared seam creates it lazily via a flow).
@@ -123,10 +120,9 @@ func TestDashboardUpgradeScreen(t *testing.T) {
 	driver.session = shell.StartObservedForTest(ctx, shell.Config{AppName: "ProxSave", Subtitle: "Dashboard"},
 		driver.buf, func(title string) { driver.pushes <- screenPush{title: title, at: driver.buf.Len()} })
 
-	done := make(chan struct{})
+	done := make(chan dashboardActionDisposition, 1)
 	go func() {
-		runDashboardUpgrade(ctx, driver.session, "/tmp/backup.env")
-		close(done)
+		done <- runDashboardUpgrade(ctx, driver.session, "/tmp/backup.env")
 	}()
 
 	// waitFor polls the accumulated output until it contains substr (the screen-title
@@ -178,27 +174,60 @@ func TestDashboardUpgradeScreen(t *testing.T) {
 		t.Fatal("dashboard upgrade must defer Screen 0 to the replacement dashboard")
 	}
 
-	driver.keys("enter")         // dismiss the notice
-	driver.waitScreen("Upgrade") // back on the screen, now showing UPGRADED with a Re-check button
-	_ = waitFor("UPGRADED")
-	driver.keys("enter") // Re-check -> update remains available
+	driver.keys("enter") // dismiss the notice
+	if runCalls != 1 {
+		t.Fatalf("run upgrade calls = %d, want 1", runCalls)
+	}
+	select {
+	case got := <-done:
+		if got != dashboardActionReload {
+			t.Fatalf("successful dashboard upgrade disposition = %v, want reload", got)
+		}
+	case <-time.After(uitest.Deadline(60 * time.Second)):
+		t.Fatal("successful upgrade did not request dashboard reload")
+	}
+}
+
+// TestDashboardUpgradeFailureStaysInScreen catches the opposite branch: a failed upgrade
+// remains retryable in the current dashboard and returns handled only when the user backs out.
+func TestDashboardUpgradeFailureStaysInScreen(t *testing.T) {
+	origVer, origChk, origRun := dashboardUpgradeVersion, dashboardUpgradeCheck, dashboardUpgradeRun
+	t.Cleanup(func() {
+		dashboardUpgradeVersion, dashboardUpgradeCheck, dashboardUpgradeRun = origVer, origChk, origRun
+	})
+	dashboardUpgradeVersion = func() string { return "1.0.0" }
+	dashboardUpgradeCheck = func(context.Context, *logging.Logger, string) *UpdateInfo {
+		return &UpdateInfo{NewVersion: true, Current: "1.0.0", Latest: "2.0.0", Tag: "v2.0.0"}
+	}
+	dashboardUpgradeRun = func(context.Context, *cli.Args, *logging.BootstrapLogger, upgradeRunOptions) int { return 1 }
+
+	driver := &newkeyUIDriver{t: t, buf: &shell.SyncBuffer{}, pushes: make(chan screenPush, 64)}
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	driver.session = shell.StartObservedForTest(ctx, shell.Config{AppName: "ProxSave", Subtitle: "Dashboard"},
+		driver.buf, func(title string) { driver.pushes <- screenPush{title: title, at: driver.buf.Len()} })
+
+	done := make(chan dashboardActionDisposition, 1)
+	go func() { done <- runDashboardUpgrade(ctx, driver.session, "/tmp/backup.env") }()
+
 	driver.waitScreen("Upgrade")
-	driver.keys("enter") // Run upgrade again, this time failing
+	driver.keys("enter")
 	driver.waitScreen("Running upgrade")
 	driver.waitOutput("enter continue")
 	driver.keys("enter")
 	driver.waitScreen("Upgrade failed")
-	_ = waitFor("FAILED") // failure result uses the same ALL-CAPS convention
+	driver.waitOutput("FAILED")
 	driver.keys("enter")
-	driver.waitScreen("Upgrade") // failure also returns to the binary-upgrade detail screen
-	if runCalls != 2 {
-		t.Fatalf("run upgrade calls = %d, want 2", runCalls)
-	}
-	driver.keys("down enter") // Back (2nd item) -> return
+	driver.waitScreen("Upgrade")
+	driver.keys("down enter")
+
 	select {
-	case <-done:
+	case got := <-done:
+		if got != dashboardActionHandled {
+			t.Fatalf("failed dashboard upgrade disposition = %v, want handled", got)
+		}
 	case <-time.After(uitest.Deadline(60 * time.Second)):
-		t.Fatal("upgrade screen did not return")
+		t.Fatal("failed upgrade screen did not return after Back")
 	}
 }
 
@@ -217,10 +246,9 @@ func TestDashboardUpgradeExternalCheckFailureIsWarning(t *testing.T) {
 	driver.session = shell.StartObservedForTest(ctx, shell.Config{AppName: "ProxSave", Subtitle: "Dashboard"},
 		driver.buf, func(title string) { driver.pushes <- screenPush{title: title, at: driver.buf.Len()} })
 
-	done := make(chan struct{})
+	done := make(chan dashboardActionDisposition, 1)
 	go func() {
-		runDashboardUpgrade(ctx, driver.session, "/tmp/backup.env")
-		close(done)
+		done <- runDashboardUpgrade(ctx, driver.session, "/tmp/backup.env")
 	}()
 
 	driver.waitScreen("Upgrade")
@@ -242,7 +270,10 @@ func TestDashboardUpgradeExternalCheckFailureIsWarning(t *testing.T) {
 
 	driver.keys("down enter") // Back, not Re-check
 	select {
-	case <-done:
+	case got := <-done:
+		if got != dashboardActionHandled {
+			t.Fatalf("external-check Back disposition = %v, want handled", got)
+		}
 	case <-time.After(uitest.Deadline(60 * time.Second)):
 		t.Fatal("upgrade screen did not return after external check failure")
 	}
@@ -267,10 +298,9 @@ func TestDashboardUpgradeMenu(t *testing.T) {
 	driver.session = shell.StartObservedForTest(ctx, shell.Config{AppName: "ProxSave", Subtitle: "Dashboard"},
 		driver.buf, func(title string) { driver.pushes <- screenPush{title: title, at: driver.buf.Len()} })
 
-	done := make(chan struct{})
+	done := make(chan dashboardActionDisposition, 1)
 	go func() {
-		runDashboardUpgradeMenu(ctx, driver.session, "/tmp/backup.env")
-		close(done)
+		done <- runDashboardUpgradeMenu(ctx, driver.session, "/tmp/backup.env")
 	}()
 
 	waitFor := func(substr string) {
@@ -293,7 +323,10 @@ func TestDashboardUpgradeMenu(t *testing.T) {
 	waitFor("NO UPGRADE")        // ...which opened AND auto-checked (deterministic stub): the two are split
 	cancel()
 	select {
-	case <-done:
+	case got := <-done:
+		if got != dashboardActionHandled {
+			t.Fatalf("upgrade chooser disposition = %v, want handled", got)
+		}
 	case <-time.After(uitest.Deadline(60 * time.Second)):
 		t.Fatal("upgrade chooser did not return")
 	}
@@ -341,10 +374,9 @@ func TestDashboardUpgradeRestartDaemonRelaunchNote(t *testing.T) {
 	driver.session = shell.StartObservedForTest(ctx, shell.Config{AppName: "ProxSave", Subtitle: "Dashboard"},
 		driver.buf, func(title string) { driver.pushes <- screenPush{title: title, at: driver.buf.Len()} })
 
-	done := make(chan struct{})
+	done := make(chan dashboardActionDisposition, 1)
 	go func() {
-		runDashboardUpgrade(ctx, driver.session, "/tmp/backup.env")
-		close(done)
+		done <- runDashboardUpgrade(ctx, driver.session, "/tmp/backup.env")
 	}()
 
 	waitFor := func(substr string) {
@@ -370,11 +402,64 @@ func TestDashboardUpgradeRestartDaemonRelaunchNote(t *testing.T) {
 	driver.waitScreen("Daemon restart")
 	waitFor("RESTARTED, ALIGNED") // the aligned success keyword
 	waitFor("relaunch proxsave")  // ...plus the relaunch note (absent in the active branch before the fix)
+	driver.keys("enter")
 
-	cancel()
 	select {
-	case <-done:
+	case got := <-done:
+		if got != dashboardActionReload {
+			t.Fatalf("aligned restart disposition = %v, want reload", got)
+		}
 	case <-time.After(uitest.Deadline(60 * time.Second)):
-		t.Fatal("upgrade screen did not return")
+		t.Fatal("aligned restart did not request dashboard reload")
+	}
+}
+
+// TestDashboardUpgradeRestartFailureStillReloads pins the installed-binary boundary: once
+// binary and config upgrade succeeded, a daemon restart error is shown but cannot send the
+// operator back into the old process.
+func TestDashboardUpgradeRestartFailureStillReloads(t *testing.T) {
+	origVer, origChk := dashboardUpgradeVersion, dashboardUpgradeCheck
+	origRun, origInstalled, origLoad := dashboardUpgradeRun, daemonInstalledProbe, upgradeLoadConfig
+	t.Cleanup(func() {
+		dashboardUpgradeVersion, dashboardUpgradeCheck = origVer, origChk
+		dashboardUpgradeRun, daemonInstalledProbe, upgradeLoadConfig = origRun, origInstalled, origLoad
+	})
+	dashboardUpgradeVersion = func() string { return "1.0.0" }
+	dashboardUpgradeCheck = func(context.Context, *logging.Logger, string) *UpdateInfo {
+		return &UpdateInfo{NewVersion: true, Current: "1.0.0", Latest: "2.0.0", Tag: "v2.0.0"}
+	}
+	dashboardUpgradeRun = func(context.Context, *cli.Args, *logging.BootstrapLogger, upgradeRunOptions) int { return 0 }
+	daemonInstalledProbe = func() bool { return true }
+	upgradeLoadConfig = func(string, string) (*config.Config, error) { return &config.Config{}, nil }
+	shrinkRestartBudgets(t)
+	stubRestartSeams(t,
+		func(context.Context) error { return errors.New("systemctl boom") },
+		func(string) bool { return false },
+		func(health.DaemonStateInput) health.DaemonState { return health.DaemonState{} })
+
+	driver := &newkeyUIDriver{t: t, buf: &shell.SyncBuffer{}, pushes: make(chan screenPush, 64)}
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	driver.session = shell.StartObservedForTest(ctx, shell.Config{AppName: "ProxSave", Subtitle: "Dashboard"},
+		driver.buf, func(title string) { driver.pushes <- screenPush{title: title, at: driver.buf.Len()} })
+	done := make(chan dashboardActionDisposition, 1)
+	go func() { done <- runDashboardUpgrade(ctx, driver.session, "/tmp/backup.env") }()
+
+	driver.waitScreen("Upgrade")
+	driver.keys("enter")
+	driver.waitScreen("Running upgrade")
+	driver.waitOutput("enter continue")
+	driver.keys("enter")
+	driver.waitScreen("Daemon restart")
+	driver.waitOutput("RESTART FAILED")
+	driver.keys("enter")
+
+	select {
+	case got := <-done:
+		if got != dashboardActionReload {
+			t.Fatalf("failed restart disposition = %v, want reload", got)
+		}
+	case <-time.After(uitest.Deadline(60 * time.Second)):
+		t.Fatal("failed restart did not request dashboard reload")
 	}
 }
