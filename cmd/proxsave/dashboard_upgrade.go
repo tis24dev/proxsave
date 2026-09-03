@@ -155,7 +155,6 @@ func runDashboardUpgrade(ctx context.Context, session *shell.Session, configPath
 		}
 		avail = false
 		if upgRun(ctx, session, configPath) == types.ExitSuccess.Int() {
-			kw, sty, sym = "UPGRADED", theme.SuccessText, symOk
 			dashboardUpgradeRestartDaemon(ctx, session, configPath)
 			return dashboardActionReload
 		} else {

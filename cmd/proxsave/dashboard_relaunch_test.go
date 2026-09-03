@@ -103,7 +103,7 @@ func TestRelaunchDashboardErrorIsInsideDebugWorkflow(t *testing.T) {
 	start := strings.Index(out, "Start dashboard relaunch")
 	visibleErr := strings.Index(out, "Dashboard reload failed after upgrade: construction boom")
 	end := strings.Index(out, "End dashboard relaunch (error=construction boom")
-	if start < 0 || visibleErr < 0 || end < 0 || !(start < visibleErr && visibleErr < end) {
+	if start < 0 || visibleErr < 0 || end < 0 || start >= visibleErr || visibleErr >= end {
 		t.Fatalf("relaunch log order must be DEBUG start, timestamped error, DEBUG end; got:\n%s", out)
 	}
 	for _, marker := range []string{"Start dashboard relaunch", "Dashboard reload failed after upgrade", "End dashboard relaunch"} {
