@@ -1,6 +1,7 @@
 package orchestrator
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -28,6 +29,7 @@ import (
 var (
 	pmxcfsRoot      = "/etc/pve"
 	pmxcfsIsMounted = isMounted
+	pmxcfsCloseRoot = func(root *os.Root) error { return root.Close() }
 )
 
 func pmxcfsWriteFile(logger *logging.Logger, relPath string, data []byte) error {
@@ -68,12 +70,16 @@ func cleanPmxcfsRelativePath(relPath string) (string, error) {
 	return cleanPath, nil
 }
 
-func pmxcfsWriteFileAtRoot(logger *logging.Logger, relPath string, data []byte) error {
+func pmxcfsWriteFileAtRoot(logger *logging.Logger, relPath string, data []byte) (retErr error) {
 	root, err := os.OpenRoot(pmxcfsRoot)
 	if err != nil {
 		return fmt.Errorf("open pmxcfs root %s: %w", pmxcfsRoot, err)
 	}
-	defer root.Close()
+	defer func() {
+		if closeErr := pmxcfsCloseRoot(root); closeErr != nil {
+			retErr = errors.Join(retErr, fmt.Errorf("close pmxcfs root %s: %w", pmxcfsRoot, closeErr))
+		}
+	}()
 
 	mounted, err := pmxcfsIsMounted(pmxcfsRoot)
 	if err != nil {

@@ -244,9 +244,10 @@ func applyVMConfigs(ctx context.Context, entries []vmEntry, logger *logging.Logg
 			// never persists into a CT conf, so an LXC could NEVER be created this
 			// way (fable-check bug 3), and for qemu the conf itself is the
 			// registration. Writing the staged conf into pmxcfs IS how a guest
-			// comes into existence on PVE; its disks are not part of a config
-			// restore and the log says so.
-			if err := writeGuestConfToPmxcfs(logger, node, vm); err != nil {
+			// comes into existence on PVE; the native guest locks below repeat
+			// the cluster-wide absence check before doing so. Its disks are not
+			// part of a config restore and the log says so.
+			if err := writeGuestConfToPmxcfs(ctx, logger, node, vm, guestMustBeAbsent); err != nil {
 				logger.Warning("Failed to register VM/CT config %s (vmid=%s kind=%s): %v", target, vm.VMID, vm.Kind, err)
 				failed++
 				continue
@@ -268,8 +269,9 @@ func applyVMConfigs(ctx context.Context, entries []vmEntry, logger *logging.Logg
 		// schema refuses (`meta` on qemu, `ostemplate` on lxc - one rejected key
 		// fails the WHOLE set, which is how no modern guest ever got its config
 		// applied, fable-check bug 2). The staged conf file is the fidelity net,
-		// guarded off a RUNNING guest: a config race with a live guest is the one
-		// case where the file must not win (maintainer's call, 2026-09-02).
+		// guarded off a RUNNING guest both before and inside PVE's native guest
+		// locks: a config race with a live guest is the one case where the file
+		// must not win (maintainer's call, 2026-09-02).
 		args := append([]string{"set", target}, filterGuestCreateOnlyArgs(configArgs)...)
 		if err := runPvesh(ctx, logger, args); err != nil {
 			status, statusErr := pveshGuestStatus(ctx, node, vm)
@@ -283,7 +285,7 @@ func applyVMConfigs(ctx context.Context, entries []vmEntry, logger *logging.Logg
 				failed++
 				continue
 			}
-			if wErr := writeGuestConfToPmxcfs(logger, node, vm); wErr != nil {
+			if wErr := writeGuestConfToPmxcfs(ctx, logger, node, vm, guestMustBeStopped); wErr != nil {
 				logger.Warning("Failed to apply %s (vmid=%s kind=%s): %v (pmxcfs fallback: %v)", target, vm.VMID, vm.Kind, err, wErr)
 				failed++
 				continue
@@ -306,15 +308,14 @@ func guestConfDir(kind string) string {
 	return kind
 }
 
-// writeGuestConfToPmxcfs writes the staged conf byte-for-byte to
-// /etc/pve/nodes/<node>/<kind-dir>/<vmid>.conf.
-func writeGuestConfToPmxcfs(logger *logging.Logger, node string, vm vmEntry) error {
+// writeGuestConfToPmxcfs applies the staged conf byte-for-byte while PVE's
+// native guest locks protect the required cluster and runtime precondition.
+func writeGuestConfToPmxcfs(ctx context.Context, logger *logging.Logger, node string, vm vmEntry, precondition guestApplyPrecondition) error {
 	data, err := restoreFS.ReadFile(vm.Path)
 	if err != nil {
 		return fmt.Errorf("read staged conf %s: %w", vm.Path, err)
 	}
-	rel := filepath.Join("nodes", node, guestConfDir(vm.Kind), vm.VMID+".conf")
-	return pmxcfsWriteFile(logger, rel, data)
+	return pveGuestLockedWriter(ctx, logger, node, vm, precondition, data)
 }
 
 // filterGuestCreateOnlyArgs drops the keys the live update schemas refuse

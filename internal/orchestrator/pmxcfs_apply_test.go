@@ -67,6 +67,47 @@ func TestPmxcfsWriteFileSurfacesTheMountCheckError(t *testing.T) {
 	}
 }
 
+func TestPmxcfsWriteFileSurfacesRootCloseError(t *testing.T) {
+	root := t.TempDir()
+	seamPmxcfs(t, root, true, nil)
+	useRealPmxcfsRestoreFS(t)
+
+	origClose := pmxcfsCloseRoot
+	t.Cleanup(func() { pmxcfsCloseRoot = origClose })
+	closeErr := errors.New("close root failed")
+	pmxcfsCloseRoot = func(root *os.Root) error {
+		_ = root.Close()
+		return closeErr
+	}
+
+	err := pmxcfsWriteFile(logging.New(types.LogLevelDebug, false), "datacenter.cfg", []byte("keyboard: it\n"))
+	if !errors.Is(err, closeErr) {
+		t.Fatalf("want root close error, got %v", err)
+	}
+	if got, readErr := os.ReadFile(filepath.Join(root, "datacenter.cfg")); readErr != nil || string(got) != "keyboard: it\n" {
+		t.Fatalf("successful write was lost: content=%q err=%v", got, readErr)
+	}
+}
+
+func TestPmxcfsWriteFileRetainsOperationAndRootCloseErrors(t *testing.T) {
+	operationErr := errors.New("mount check failed")
+	closeErr := errors.New("close root failed")
+	seamPmxcfs(t, t.TempDir(), false, operationErr)
+	useRealPmxcfsRestoreFS(t)
+
+	origClose := pmxcfsCloseRoot
+	t.Cleanup(func() { pmxcfsCloseRoot = origClose })
+	pmxcfsCloseRoot = func(root *os.Root) error {
+		_ = root.Close()
+		return closeErr
+	}
+
+	err := pmxcfsWriteFile(logging.New(types.LogLevelDebug, false), "datacenter.cfg", []byte("x"))
+	if !errors.Is(err, operationErr) || !errors.Is(err, closeErr) {
+		t.Fatalf("want operation and close errors retained, got %v", err)
+	}
+}
+
 func TestPmxcfsWriteFileRejectsUnsafeRelativePaths(t *testing.T) {
 	logger := logging.New(types.LogLevelDebug, false)
 	tests := []struct {

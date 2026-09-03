@@ -1685,8 +1685,10 @@ func TestApplyVMConfigs_RegistersMissingGuestViaPmxcfs(t *testing.T) {
 	// create was a dead end for LXC (ostemplate) and needless for qemu, so a
 	// missing guest is now registered by writing its staged conf into pmxcfs
 	// (fable-check bugs 2-3; see pve_guest_apply_test.go for the full matrix).
-	orig := restoreCmd
-	t.Cleanup(func() { restoreCmd = orig })
+	orig, origLockedWriter := restoreCmd, pveGuestLockedWriter
+	t.Cleanup(func() {
+		restoreCmd, pveGuestLockedWriter = orig, origLockedWriter
+	})
 
 	node := localNodeName()
 	fake := &FakeCommandRunner{
@@ -1698,6 +1700,10 @@ func TestApplyVMConfigs_RegistersMissingGuestViaPmxcfs(t *testing.T) {
 
 	pmxRoot := t.TempDir()
 	seamPmxcfs(t, pmxRoot, true, nil)
+	pveGuestLockedWriter = func(_ context.Context, logger *logging.Logger, currentNode string, vm vmEntry, _ guestApplyPrecondition, data []byte) error {
+		rel := filepath.Join("nodes", currentNode, guestConfDir(vm.Kind), vm.VMID+".conf")
+		return pmxcfsWriteFile(logger, rel, data)
+	}
 
 	dir := t.TempDir()
 	configPath := filepath.Join(dir, "100.conf")

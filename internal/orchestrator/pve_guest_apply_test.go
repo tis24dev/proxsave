@@ -3,7 +3,9 @@ package orchestrator
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -13,8 +15,10 @@ import (
 
 func guestApplyFixture(t *testing.T) (*FakeFS, *schemaAwarePvesh, *logging.Logger, func() string) {
 	t.Helper()
-	origFS, origCmd := restoreFS, restoreCmd
-	t.Cleanup(func() { restoreFS, restoreCmd = origFS, origCmd })
+	origFS, origCmd, origLockedWriter := restoreFS, restoreCmd, pveGuestLockedWriter
+	t.Cleanup(func() {
+		restoreFS, restoreCmd, pveGuestLockedWriter = origFS, origCmd, origLockedWriter
+	})
 	fakeFS := NewFakeFS()
 	t.Cleanup(func() { _ = os.RemoveAll(fakeFS.Root) })
 	restoreFS = fakeFS
@@ -22,6 +26,58 @@ func guestApplyFixture(t *testing.T) (*FakeFS, *schemaAwarePvesh, *logging.Logge
 	restoreCmd = pvesh
 	seamPmxcfs(t, "/etc/pve", true, nil)
 	logBuf := logging.New(types.LogLevelDebug, false)
+	pveGuestLockedWriter = func(
+		_ context.Context,
+		logger *logging.Logger,
+		currentNode string,
+		vm vmEntry,
+		precondition guestApplyPrecondition,
+		data []byte,
+	) error {
+		// Run the test hook before the simulated locked decision. Race tests use
+		// pmxcfsIsMounted to inject a create/start at this exact boundary.
+		mounted, err := pmxcfsIsMounted(pmxcfsRoot)
+		if err != nil {
+			return err
+		}
+		if !mounted {
+			return fmt.Errorf("%s is not mounted", pmxcfsRoot)
+		}
+
+		exists := pvesh.guests[vm.VMID]
+		switch precondition {
+		case guestMustBeAbsent:
+			if exists {
+				return fmt.Errorf("guest %s appeared before locked apply", vm.VMID)
+			}
+		case guestMustBeStopped:
+			if !exists {
+				return fmt.Errorf("guest %s disappeared before locked apply", vm.VMID)
+			}
+			owner := pvesh.guestNodes[vm.VMID]
+			if owner == "" {
+				owner = currentNode
+			}
+			if owner != currentNode {
+				return fmt.Errorf("guest %s belongs to node %s", vm.VMID, owner)
+			}
+			kind := pvesh.guestKinds[vm.VMID]
+			if kind == "" {
+				kind = "qemu"
+			}
+			if kind != vm.Kind {
+				return fmt.Errorf("guest %s is %s, not %s", vm.VMID, kind, vm.Kind)
+			}
+			if pvesh.running[vm.VMID] {
+				return fmt.Errorf("guest %s is running", vm.VMID)
+			}
+		default:
+			return fmt.Errorf("invalid guest apply precondition %q", precondition)
+		}
+
+		rel := filepath.Join("nodes", currentNode, guestConfDir(vm.Kind), vm.VMID+".conf")
+		return pmxcfsWriteFile(logger, rel, data)
+	}
 	return fakeFS, pvesh, logBuf, localNodeName
 }
 

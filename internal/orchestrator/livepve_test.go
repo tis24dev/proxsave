@@ -217,3 +217,66 @@ func TestLivePVEMissingLxcRegistration(t *testing.T) {
 		t.Fatalf("API answers but without our hostname: %s", out)
 	}
 }
+
+func TestLivePVELockedGuestApplyRejectsExistingVMIDAsAbsent(t *testing.T) {
+	logger := livePVEGuard(t)
+	const (
+		vmid     = "101"
+		confPath = "/etc/pve/qemu-server/101.conf"
+	)
+	before, err := os.ReadFile(confPath)
+	if err != nil {
+		t.Skipf("no VM %s on this node: %v", vmid, err)
+	}
+	node := localNodeName()
+	stage := liveStage(t, "etc/pve/nodes/"+node+"/qemu-server/"+vmid+".conf", []byte("name: must-not-apply\n"))
+	err = writeGuestConfToPmxcfs(context.Background(), logger, node, vmEntry{
+		VMID: vmid,
+		Kind: "qemu",
+		Path: filepath.Join(stage, "etc/pve/nodes", node, "qemu-server", vmid+".conf"),
+	}, guestMustBeAbsent)
+	if err == nil {
+		t.Fatalf("expected an existing VMID to fail the absent precondition")
+	}
+	after, readErr := os.ReadFile(confPath)
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	if !bytes.Equal(after, before) {
+		t.Fatalf("VM %s configuration changed despite failed absent precondition", vmid)
+	}
+}
+
+func TestLivePVELockedGuestApplyRejectsRunningGuest(t *testing.T) {
+	logger := livePVEGuard(t)
+	const (
+		vmid     = "102"
+		confPath = "/etc/pve/qemu-server/102.conf"
+	)
+	node := localNodeName()
+	vm := vmEntry{VMID: vmid, Kind: "qemu"}
+	status, err := pveshGuestStatus(context.Background(), node, vm)
+	if err != nil {
+		t.Skipf("cannot read VM %s status: %v", vmid, err)
+	}
+	if status != "running" {
+		t.Skipf("VM %s is %q, need a running test guest", vmid, status)
+	}
+	before, err := os.ReadFile(confPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stage := liveStage(t, "etc/pve/nodes/"+node+"/qemu-server/"+vmid+".conf", []byte("name: must-not-apply\n"))
+	vm.Path = filepath.Join(stage, "etc/pve/nodes", node, "qemu-server", vmid+".conf")
+	err = writeGuestConfToPmxcfs(context.Background(), logger, node, vm, guestMustBeStopped)
+	if err == nil {
+		t.Fatalf("expected a running guest to fail the stopped precondition")
+	}
+	after, readErr := os.ReadFile(confPath)
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	if !bytes.Equal(after, before) {
+		t.Fatalf("VM %s configuration changed despite failed stopped precondition", vmid)
+	}
+}
