@@ -127,7 +127,15 @@ func logUpgradeDaemonRestart(bootstrap *logging.BootstrapLogger, rv *RestartVeri
 //
 // The shared setup (logger, banner, config load) runs before either phase so the
 // --localfile path prints the same header and honours the same guards.
+type upgradeRunOptions struct {
+	deferWhatsnew bool
+}
+
 func runUpgrade(ctx context.Context, args *cli.Args, bootstrap *logging.BootstrapLogger) int {
+	return runUpgradeWithOptions(ctx, args, bootstrap, upgradeRunOptions{})
+}
+
+func runUpgradeWithOptions(ctx context.Context, args *cli.Args, bootstrap *logging.BootstrapLogger, opts upgradeRunOptions) int {
 	baseDir, _ := detectedBaseDirOrFallback()
 	_ = os.Setenv("BASE_DIR", baseDir)
 
@@ -189,7 +197,7 @@ func runUpgrade(ctx context.Context, args *cli.Args, bootstrap *logging.Bootstra
 	}
 
 	// Phase 2: local finalize, shared by the download and --localfile paths.
-	code, finalizeErr := upgradeFinalizePhase(ctx, args, bootstrap, sessionLogger, baseDir, execPath, versionInstalled, upgradeErr)
+	code, finalizeErr := upgradeFinalizePhase(ctx, args, bootstrap, sessionLogger, baseDir, execPath, versionInstalled, upgradeErr, opts)
 	workflowErr = finalizeErr
 	return code
 }
@@ -276,7 +284,7 @@ func upgradeAcquireBinary(ctx context.Context, args *cli.Args, bootstrap *loggin
 // which both reach it with the target binary already in place. Returns the
 // process exit code and the error to attribute to the workflow span (nil on full
 // success, the config-upgrade error, or the binary-install error).
-func upgradeFinalizePhase(ctx context.Context, args *cli.Args, bootstrap *logging.BootstrapLogger, sessionLogger *logging.Logger, baseDir, execPath, versionInstalled string, upgradeErr error) (int, error) {
+func upgradeFinalizePhase(ctx context.Context, args *cli.Args, bootstrap *logging.BootstrapLogger, sessionLogger *logging.Logger, baseDir, execPath, versionInstalled string, upgradeErr error, opts upgradeRunOptions) (int, error) {
 	var cfgUpgradeResult *config.UpgradeResult
 	var cfgUpgradeErr error
 	if upgradeErr == nil {
@@ -352,12 +360,12 @@ func upgradeFinalizePhase(ctx context.Context, args *cli.Args, bootstrap *loggin
 	// new) for the freshly installed release by re-invoking the installed binary with
 	// --show-whatsnew. The notes registry is compiled into each binary, so the INSTALLED
 	// binary -- not necessarily this process (the download path finalizes from the OLD
-	// binary) -- is the one that must render them. Best-effort and gated (interactive AND
-	// not auto-yes) inside the helper; never changes the exit code. A config-upgrade
+	// binary) -- is the one that must render them. Best-effort and gated by the terminal/
+	// deferred-presentation policy inside the helper; never changes the exit code. A config-upgrade
 	// failure (cfgUpgradeErr) leaves the footer showing "Configuration: ERROR" and a
 	// nonzero exit, so opening a celebratory notes screen there would contradict it.
 	if upgradeErr == nil && cfgUpgradeErr == nil {
-		runWhatsnewAfterUpgrade(ctx, execPath, args, bootstrap)
+		runWhatsnewAfterUpgrade(ctx, execPath, args, bootstrap, opts)
 	}
 
 	// The workflow span error mirrors the exit code's reasoning: a binary-install
@@ -1004,13 +1012,11 @@ func upgradeConfigWithBinary(ctx context.Context, execPath, configPath string) (
 var whatsnewAfterUpgradeInteractive = isTerminalInteractive
 
 // shouldRunWhatsnewAfterUpgrade decides whether to open Screen 0 at the end of an upgrade.
-// It requires an interactive terminal AND that the operator did NOT request auto-yes
-// (`--upgrade y`). Auto-yes signals non-interactive intent even when a pty IS allocated
-// (ssh -tt, Ansible with a pty, `script -c`), where isTerminalInteractive() alone is true;
-// opening a screen that waits for a human keypress there would stall the process until the
-// Screen 0 timeout on an otherwise successful automated upgrade, so auto-yes must skip it.
-func shouldRunWhatsnewAfterUpgrade(args *cli.Args) bool {
-	if args == nil || args.UpgradeAutoYes {
+// It follows the actual terminal: auto-yes controls only the initial confirmation and does
+// not make a TTY-driven upgrade non-interactive. The dashboard explicitly defers the screen
+// because its replacement process owns post-upgrade presentation.
+func shouldRunWhatsnewAfterUpgrade(args *cli.Args, opts upgradeRunOptions) bool {
+	if args == nil || opts.deferWhatsnew {
 		return false
 	}
 	return whatsnewAfterUpgradeInteractive()
@@ -1021,11 +1027,11 @@ func shouldRunWhatsnewAfterUpgrade(args *cli.Args) bool {
 // upgrade. It MUST be the installed binary that renders it: the notes registry is compiled
 // into each binary, so on the download path -- where THIS process is still the OLD binary --
 // only execPath knows the new release's notes. Stdio is inherited so the child paints the
-// TUI on the real terminal. Gated by shouldRunWhatsnewAfterUpgrade (interactive AND not
-// auto-yes) so an automated upgrade never blocks, and best-effort so a render failure never
-// changes the upgrade's exit code.
-func runWhatsnewAfterUpgrade(ctx context.Context, execPath string, args *cli.Args, bootstrap *logging.BootstrapLogger) {
-	if !shouldRunWhatsnewAfterUpgrade(args) {
+// TUI on the real terminal. Gated by shouldRunWhatsnewAfterUpgrade so a no-TTY automated
+// upgrade never blocks and the dashboard can defer presentation; best-effort so a render
+// failure never changes the upgrade's exit code.
+func runWhatsnewAfterUpgrade(ctx context.Context, execPath string, args *cli.Args, bootstrap *logging.BootstrapLogger, opts upgradeRunOptions) {
+	if !shouldRunWhatsnewAfterUpgrade(args, opts) {
 		return
 	}
 	execPath = strings.TrimSpace(execPath)

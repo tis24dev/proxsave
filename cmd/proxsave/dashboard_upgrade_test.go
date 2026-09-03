@@ -104,10 +104,12 @@ func TestDashboardUpgradeScreen(t *testing.T) {
 		}
 	}
 	var gotArgs *cli.Args
+	var gotOpts upgradeRunOptions
 	runCalls := 0
-	dashboardUpgradeRun = func(ctx context.Context, args *cli.Args, bl *logging.BootstrapLogger) int {
+	dashboardUpgradeRun = func(ctx context.Context, args *cli.Args, bl *logging.BootstrapLogger, opts upgradeRunOptions) int {
 		runCalls++
 		gotArgs = args
+		gotOpts = opts
 		if runCalls == 1 {
 			return 0 // first run succeeds
 		}
@@ -171,6 +173,9 @@ func TestDashboardUpgradeScreen(t *testing.T) {
 	_ = waitFor("NEW BINARY ON DISK") // inactive-daemon success uses the dashboard ALL-CAPS status convention
 	if gotArgs == nil || !gotArgs.Upgrade || !gotArgs.UpgradeAutoYes || gotArgs.ConfigPath != "/tmp/backup.env" {
 		t.Fatalf("run upgrade must pass Upgrade+AutoYes+ConfigPath, got %+v", gotArgs)
+	}
+	if !gotOpts.deferWhatsnew {
+		t.Fatal("dashboard upgrade must defer Screen 0 to the replacement dashboard")
 	}
 
 	driver.keys("enter")         // dismiss the notice
@@ -311,7 +316,7 @@ func TestDashboardUpgradeRestartDaemonRelaunchNote(t *testing.T) {
 	dashboardUpgradeCheck = func(context.Context, *logging.Logger, string) *UpdateInfo {
 		return &UpdateInfo{NewVersion: true, Current: "1.0.0", Latest: "2.0.0", Tag: "v2.0.0"}
 	}
-	dashboardUpgradeRun = func(context.Context, *cli.Args, *logging.BootstrapLogger) int { return 0 }
+	dashboardUpgradeRun = func(context.Context, *cli.Args, *logging.BootstrapLogger, upgradeRunOptions) int { return 0 }
 
 	// Daemon-ACTIVE path: an installed unit + active presence route the post-upgrade restart
 	// through restartAndVerifyDaemon. A readable (empty) config keeps the backup lock path

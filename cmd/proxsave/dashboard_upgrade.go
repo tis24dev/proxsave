@@ -20,7 +20,7 @@ import (
 
 var (
 	dashboardUpgradeCheck   = checkForUpdates
-	dashboardUpgradeRun     = runUpgrade
+	dashboardUpgradeRun     = runUpgradeWithOptions
 	dashboardUpgradeVersion = buildinfo.String
 )
 
@@ -249,7 +249,7 @@ func upgRun(ctx context.Context, session *shell.Session, configPath string) int 
 			// pipe into the panel (restored on return/panic), so the panel shows the same
 			// colored [ts] LEVEL lines as the CLI instead of losing them to the altscreen.
 			defer captureRunOutput(bl, emit)()
-			code = dashboardUpgradeRun(taskCtx, ar, bl)
+			code = dashboardUpgradeRun(taskCtx, ar, bl, upgradeRunOptions{deferWhatsnew: true})
 			return buildUpgradeOutcomePrompt(code), nil
 		})
 	if streamErr != nil {

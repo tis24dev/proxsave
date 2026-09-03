@@ -123,11 +123,10 @@ func TestUpgradeShowsWhatsnewAfterFooter(t *testing.T) {
 	}
 }
 
-// TestShouldRunWhatsnewAfterUpgrade pins the post-upgrade gate: Screen 0 opens only on an
-// interactive terminal AND when the operator did not request auto-yes. Auto-yes (`--upgrade
-// y`) means non-interactive intent even under a pty (ssh -tt, Ansible, script -c), so it must
-// skip the screen; otherwise a successful automated upgrade would stall until the Screen 0
-// timeout waiting for a keypress nobody sends.
+// TestShouldRunWhatsnewAfterUpgrade pins the post-upgrade gate: Screen 0 follows the actual
+// terminal. Auto-yes only suppresses the initial confirmation; a manual `--upgrade y` in a
+// TTY still shows Screen 0, while the dashboard explicitly defers presentation to its
+// replacement process.
 func TestShouldRunWhatsnewAfterUpgrade(t *testing.T) {
 	orig := whatsnewAfterUpgradeInteractive
 	t.Cleanup(func() { whatsnewAfterUpgradeInteractive = orig })
@@ -135,19 +134,21 @@ func TestShouldRunWhatsnewAfterUpgrade(t *testing.T) {
 	cases := []struct {
 		name        string
 		args        *cli.Args
+		opts        upgradeRunOptions
 		interactive bool
 		want        bool
 	}{
-		{"interactive human upgrade shows", &cli.Args{}, true, true},
-		{"auto-yes under a pty skips (no stall)", &cli.Args{UpgradeAutoYes: true}, true, false},
-		{"non-interactive skips", &cli.Args{}, false, false},
-		{"auto-yes and non-interactive skips", &cli.Args{UpgradeAutoYes: true}, false, false},
-		{"nil args skips", nil, true, false},
+		{"interactive prompted upgrade shows", &cli.Args{}, upgradeRunOptions{}, true, true},
+		{"interactive auto-yes upgrade shows", &cli.Args{UpgradeAutoYes: true}, upgradeRunOptions{}, true, true},
+		{"non-interactive prompted upgrade skips", &cli.Args{}, upgradeRunOptions{}, false, false},
+		{"non-interactive auto-yes upgrade skips", &cli.Args{UpgradeAutoYes: true}, upgradeRunOptions{}, false, false},
+		{"dashboard defers presentation", &cli.Args{UpgradeAutoYes: true}, upgradeRunOptions{deferWhatsnew: true}, true, false},
+		{"nil args skips", nil, upgradeRunOptions{}, true, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			whatsnewAfterUpgradeInteractive = func() bool { return tc.interactive }
-			if got := shouldRunWhatsnewAfterUpgrade(tc.args); got != tc.want {
+			if got := shouldRunWhatsnewAfterUpgrade(tc.args, tc.opts); got != tc.want {
 				t.Fatalf("shouldRunWhatsnewAfterUpgrade = %v, want %v", got, tc.want)
 			}
 		})
