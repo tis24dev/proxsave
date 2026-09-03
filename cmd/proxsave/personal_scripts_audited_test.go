@@ -466,7 +466,7 @@ func TestPersonalScriptOwnerErrorAllowsOnlyRootOrDaemonUIDAndGuidesRecovery(t *t
 		"daemon uid": uint32(daemonUID),
 	} {
 		t.Run(name, func(t *testing.T) {
-			if err := personalScriptOwnerError("/trusted/script", personalScriptOwnerFixture{uid: uid}); err != nil {
+			if err := personalScriptOwnerError("/trusted/script", personalScriptOwnerFixture{uid: uid}, daemonUID); err != nil {
 				t.Fatalf("trusted uid %d was refused: %v", uid, err)
 			}
 		})
@@ -476,7 +476,7 @@ func TestPersonalScriptOwnerErrorAllowsOnlyRootOrDaemonUIDAndGuidesRecovery(t *t
 	if int(foreignUID) == daemonUID {
 		foreignUID++
 	}
-	err := personalScriptOwnerError("/home/operator", personalScriptOwnerFixture{uid: foreignUID})
+	err := personalScriptOwnerError("/home/operator", personalScriptOwnerFixture{uid: foreignUID}, daemonUID)
 	if err == nil {
 		t.Fatal("a path component owned by a foreign uid was accepted")
 	}

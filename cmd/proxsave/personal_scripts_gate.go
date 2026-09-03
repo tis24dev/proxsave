@@ -1,15 +1,10 @@
 package main
 
 import (
-	"fmt"
 	"os"
-	"path/filepath"
-	"strings"
-	"syscall"
 
 	"github.com/tis24dev/proxsave/internal/config"
 	"github.com/tis24dev/proxsave/internal/logging"
-	"github.com/tis24dev/proxsave/internal/safeexec"
 )
 
 // This file is the LOUD half of the personal-script feature and lives apart from
@@ -33,68 +28,22 @@ import (
 // later execution, which is why the starters do not re-validate: the window belongs to root
 // alone.
 func validatePersonalScripts(cfg *config.Config) {
-	cfg.PersonalScriptPreRun = validatedPersonalScriptPath("PERSONAL_SCRIPT_PRE_RUN", cfg.PersonalScriptPreRun)
-	cfg.PersonalScriptPostRun = validatedPersonalScriptPath("PERSONAL_SCRIPT_POST_RUN", cfg.PersonalScriptPostRun)
+	if cfg == nil {
+		return
+	}
+	diagnostics := inspectPersonalScripts(cfg, os.Geteuid())
+	cfg.PersonalScriptPreRun = applyPersonalScriptDiagnostic(diagnostics.Pre)
+	cfg.PersonalScriptPostRun = applyPersonalScriptDiagnostic(diagnostics.Post)
 }
 
-func validatedPersonalScriptPath(key, path string) string {
-	path = strings.TrimSpace(path)
-	if path == "" {
+func applyPersonalScriptDiagnostic(diagnostic personalScriptDiagnostic) string {
+	switch diagnostic.State {
+	case personalScriptReady:
+		return diagnostic.Path
+	case personalScriptRefused:
+		logging.Warning("%s disabled for this daemon: %s", diagnostic.Key, diagnostic.Reason)
+		return ""
+	default:
 		return ""
 	}
-	if err := personalScriptPathError(path); err != nil {
-		logging.Warning("%s disabled for this daemon: %v", key, err)
-		return ""
-	}
-	return path
-}
-
-func personalScriptPathError(path string) error {
-	clean := filepath.Clean(path)
-	resolved, err := filepath.EvalSymlinks(clean)
-	if err != nil {
-		return fmt.Errorf("resolve %s: %w", path, err)
-	}
-	if resolved != clean {
-		return fmt.Errorf("%s traverses a symlink (resolves to %s)", path, resolved)
-	}
-	if err := safeexec.ValidateTrustedExecutablePath(clean); err != nil {
-		return err
-	}
-	info, err := os.Stat(clean)
-	if err != nil {
-		return fmt.Errorf("stat %s: %w", path, err)
-	}
-	if err := personalScriptOwnerError(clean, info); err != nil {
-		return err
-	}
-	if info.Mode().Perm()&0o022 != 0 {
-		return fmt.Errorf("%s is writable by group or others (mode %04o)", clean, info.Mode().Perm())
-	}
-	for dir := filepath.Dir(clean); ; dir = filepath.Dir(dir) {
-		dirInfo, err := os.Stat(dir)
-		if err != nil {
-			return fmt.Errorf("stat %s: %w", dir, err)
-		}
-		if err := personalScriptOwnerError(dir, dirInfo); err != nil {
-			return err
-		}
-		if dirInfo.Mode().Perm()&0o022 != 0 && dirInfo.Mode()&os.ModeSticky == 0 {
-			return fmt.Errorf("directory %s is writable by group or others without the sticky bit (mode %04o)", dir, dirInfo.Mode().Perm())
-		}
-		if dir == "/" {
-			return nil
-		}
-	}
-}
-
-func personalScriptOwnerError(path string, info os.FileInfo) error {
-	st, ok := info.Sys().(*syscall.Stat_t)
-	if !ok {
-		return fmt.Errorf("owner of %s cannot be determined", path)
-	}
-	if st.Uid != 0 && int(st.Uid) != os.Geteuid() {
-		return fmt.Errorf("%s is owned by uid %d; accepted owners are root or daemon uid %d. Keep the user home ownership unchanged and move the script to a root-owned path such as /usr/local/bin", path, st.Uid, os.Geteuid())
-	}
-	return nil
 }
