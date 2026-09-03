@@ -903,43 +903,20 @@ const (
 func runDashboardDaemonStatus(ctx context.Context, session *shell.Session, configPath, baseDir string) {
 	errDaemonStatusEsc := errors.New("daemon status: esc")
 	for {
-		mode := "unknown"
-		var interval time.Duration
-		if cfg, err := daemonStatusLoadConfig(configPath, baseDir); err == nil && cfg != nil {
-			mode = cfg.SchedulerMode
-			interval = cfg.HealthcheckHeartbeatInterval
-			if strings.TrimSpace(cfg.BaseDir) != "" {
-				baseDir = cfg.BaseDir
+		var cfg *config.Config
+		if loaded, err := daemonStatusLoadConfig(configPath, baseDir); err == nil && loaded != nil {
+			cfg = loaded
+			if strings.TrimSpace(loaded.BaseDir) != "" {
+				baseDir = loaded.BaseDir
 			}
 		}
-		unit := "not installed"
-		if daemonUnitInstalled() {
-			unit = "installed"
-		}
-		active := daemonUnitActiveState(ctx)
-		if active == "" {
-			active = "unknown"
-		}
-
-		// Combined verdict via the SHARED daemon-state checker (systemd existence refined onto the
-		// heartbeat, plus on-disk binary alignment). probeProxsaveDaemonAlive is the stricter signal-0
-		// + /proc/cmdline liveness gate. The raw unit/active words stay from the direct probes so the
-		// systemctl vocabulary is shown verbatim. This is IDENTICAL to before -- presentation only.
-		ds := health.CheckDaemonState(health.DaemonStateInput{
-			BaseDir:           baseDir,
-			SchedulerMode:     mode,
-			HeartbeatInterval: interval,
-			Now:               time.Now(),
-			Presence:          daemonPresenceProbe(ctx),
-			ProcAlive:         probeProxsaveDaemonAlive,
-			ProcStale:         procBinaryStaleProbe,
-		})
-		level, keyword, explanation := daemonStatusStyle(ds)
+		diagnostics := daemonDiagnosticsCollector(ctx, cfg, baseDir)
 		// Dashboard "Status:" keywords are ALL-CAPS (the house convention across every
 		// dashboard Status screen). daemonStatusStyle is shared with the plain-text
 		// --daemon-status CLI line, so uppercase HERE (the graphical consumer) rather than at
 		// the source, keeping the CLI/log readout in its natural case.
-		prompt := buildDaemonStatusPrompt(level, strings.ToUpper(keyword), explanation, mode, unit, active, ds)
+		diagnostics.Keyword = strings.ToUpper(diagnostics.Keyword)
+		prompt := buildDaemonStatusPrompt(diagnostics)
 
 		items := []components.SelectorItem[daemonStatusAction]{
 			{Label: "Re-check", Description: "re-run the daemon state check", Value: daemonStatusActionCheck},
@@ -975,7 +952,7 @@ func renderDaemonStatusLevel(level orchestrator.HealthcheckSetupLevel, text stri
 // buildHealthcheckPrompt): a short intro, a two-line Status block (a colored keyword + a Subtle
 // explanation), then a Details block with the scheduler/service facts. The wording/logic of the
 // detail lines is unchanged from the old Notice body; only the presentation moved into the prompt.
-func buildDaemonStatusPrompt(level orchestrator.HealthcheckSetupLevel, keyword, explanation, mode, unit, active string, ds health.DaemonState) string {
+func buildDaemonStatusPrompt(diagnostics daemonDiagnostics) string {
 	// Every dynamic segment below carries text from outside this file (keyword/explanation from
 	// daemonStatusStyle, mode from the config file, active from systemctl, Version/Commit RAW from
 	// .daemon_info.json), so each is SanitizeText-scrubbed before theme rendering to keep raw
@@ -987,8 +964,8 @@ func buildDaemonStatusPrompt(level orchestrator.HealthcheckSetupLevel, keyword, 
 	b.WriteString("\n\n")
 
 	b.WriteString(theme.Text.Render("Status: "))
-	b.WriteString(renderDaemonStatusLevel(level, components.SanitizeText(keyword)))
-	if exp := components.SanitizeText(explanation); exp != "" {
+	b.WriteString(renderDaemonStatusLevel(diagnostics.Level, components.SanitizeText(diagnostics.Keyword)))
+	if exp := components.SanitizeText(diagnostics.Explanation); exp != "" {
 		b.WriteString("\n")
 		b.WriteString(theme.Subtle.Render(exp))
 	}
@@ -996,24 +973,24 @@ func buildDaemonStatusPrompt(level orchestrator.HealthcheckSetupLevel, keyword, 
 	b.WriteString("\n\n")
 	b.WriteString(theme.Text.Render("Details:"))
 	b.WriteString("\n")
-	b.WriteString(theme.Text.Render("Scheduler mode: " + components.SanitizeText(mode)))
+	b.WriteString(theme.Text.Render("Scheduler mode: " + components.SanitizeText(diagnostics.Mode)))
 	b.WriteString("\n")
-	b.WriteString(theme.Text.Render("Daemon service (" + daemonUnitName + "): " + unit))
+	b.WriteString(theme.Text.Render("Daemon service (" + daemonUnitName + "): " + diagnostics.Unit))
 	b.WriteString("\n")
-	b.WriteString(theme.Text.Render("Service state (systemctl is-active): " + components.SanitizeText(active)))
+	b.WriteString(theme.Text.Render("Service state (systemctl is-active): " + components.SanitizeText(diagnostics.Active)))
 	// The running version comes from the identity record (HaveInfo). The alignment verdict comes from
 	// the record-independent /proc probe, so show it whenever AlignChecked -- a live daemon on a
 	// replaced binary reads "Binary alignment: BEHIND". Binary alignment is known only when
 	// AlignChecked; otherwise it is UNKNOWN -- report "unknown" rather than imply "aligned" or a false
 	// "behind".
-	if ds.HaveInfo {
+	if diagnostics.State.HaveInfo {
 		b.WriteString("\n")
-		b.WriteString(theme.Text.Render("Running version: " + components.SanitizeText(ds.Version) + " (" + components.SanitizeText(ds.Commit) + ")"))
+		b.WriteString(theme.Text.Render("Running version: " + components.SanitizeText(diagnostics.State.Version) + " (" + components.SanitizeText(diagnostics.State.Commit) + ")"))
 	}
-	if ds.HaveInfo || ds.AlignChecked {
+	if diagnostics.State.HaveInfo || diagnostics.State.AlignChecked {
 		align := "unknown"
-		if ds.AlignChecked {
-			if ds.Aligned {
+		if diagnostics.State.AlignChecked {
+			if diagnostics.State.Aligned {
 				align = "aligned"
 			} else {
 				align = "BEHIND (restart needed)"

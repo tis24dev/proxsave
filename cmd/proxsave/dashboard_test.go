@@ -333,7 +333,15 @@ func TestBuildDaemonStatusPrompt(t *testing.T) {
 		Diagnosis:    health.Diagnosis{State: health.TxRunningNoReport},
 	}
 	level, keyword, expl := daemonStatusStyle(behind)
-	prompt := ansi.Strip(buildDaemonStatusPrompt(level, keyword, expl, "daemon", "installed", "active", behind))
+	prompt := ansi.Strip(buildDaemonStatusPrompt(daemonDiagnostics{
+		Mode:        "daemon",
+		Unit:        "installed",
+		Active:      "active",
+		State:       behind,
+		Level:       level,
+		Keyword:     keyword,
+		Explanation: expl,
+	}))
 	for _, want := range []string{
 		"Status: ",
 		keyword,
@@ -379,13 +387,15 @@ func TestBuildDaemonStatusPromptSanitizesInjection(t *testing.T) {
 		Diagnosis:    health.Diagnosis{State: health.TxRunningNoReport},
 	}
 	level, keyword, expl := daemonStatusStyle(behind)
-	prompt := buildDaemonStatusPrompt(
-		level, keyword, expl,
-		"cron\x1b]0;evilmode\x07", // mode: from the config file
-		"installed",
-		"active\x9b\x1b]0;x\x07running", // active: from systemctl (0x9b is the bare C1 CSI byte)
-		behind,
-	)
+	prompt := buildDaemonStatusPrompt(daemonDiagnostics{
+		Mode:        "cron\x1b]0;evilmode\x07", // mode: from the config file
+		Unit:        "installed",
+		Active:      "active\x9b\x1b]0;x\x07running", // active: from systemctl (0x9b is the bare C1 CSI byte)
+		State:       behind,
+		Level:       level,
+		Keyword:     keyword,
+		Explanation: expl,
+	})
 	assertNoRawInjection(t, prompt)
 	// OSC payloads ("pwned", "evilmode") are stripped WHOLE with their escape, so
 	// they must NOT survive. Commit's CSI erase carries no payload, so "abcdef"

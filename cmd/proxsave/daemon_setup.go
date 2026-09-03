@@ -11,7 +11,6 @@ import (
 
 	"github.com/tis24dev/proxsave/internal/config"
 	"github.com/tis24dev/proxsave/internal/cron"
-	"github.com/tis24dev/proxsave/internal/health"
 	"github.com/tis24dev/proxsave/internal/installer"
 	"github.com/tis24dev/proxsave/internal/logging"
 	"github.com/tis24dev/proxsave/internal/orchestrator"
@@ -126,48 +125,19 @@ func cronModeRecordClause(revert cronRevertReport) string {
 // alignment) - non-interactively, then exits. Exit 0 when the daemon is running and aligned,
 // non-zero otherwise, so scripts can gate on it.
 func runDaemonStatus(rt *appRuntime) int {
-	ctx := rt.ctx
-	mode := "unknown"
-	baseDir := ""
-	var interval time.Duration
-	if rt.cfg != nil {
-		mode = rt.cfg.SchedulerMode
-		interval = rt.cfg.HealthcheckHeartbeatInterval
-		baseDir = strings.TrimSpace(rt.cfg.BaseDir)
-	}
-	if baseDir == "" {
-		baseDir, _ = detectedBaseDirOrFallback()
-	}
-	unit := "not installed"
-	if daemonUnitInstalled() {
-		unit = "installed"
-	}
-	active := daemonUnitActiveState(ctx)
-	if active == "" {
-		active = "unknown"
-	}
-	ds := health.CheckDaemonState(health.DaemonStateInput{
-		BaseDir:           baseDir,
-		SchedulerMode:     mode,
-		HeartbeatInterval: interval,
-		Now:               time.Now(),
-		Presence:          daemonPresenceProbe(ctx),
-		ProcAlive:         probeProxsaveDaemonAlive,
-		ProcStale:         procBinaryStaleProbe,
-	})
-	level, keyword, _ := daemonStatusStyle(ds)
+	diagnostics := daemonDiagnosticsCollector(rt.ctx, rt.cfg, "")
 
-	logging.Info("Daemon status: %s", keyword)
-	logging.Info("Scheduler mode: %s", mode)
-	logging.Info("Daemon service (%s): %s", daemonUnitName, unit)
-	logging.Info("Service state (systemctl is-active): %s", active)
-	if ds.HaveInfo {
-		logging.Info("Running version: %s (%s)", ds.Version, ds.Commit)
+	logging.Info("Daemon status: %s", diagnostics.Keyword)
+	logging.Info("Scheduler mode: %s", diagnostics.Mode)
+	logging.Info("Daemon service (%s): %s", daemonUnitName, diagnostics.Unit)
+	logging.Info("Service state (systemctl is-active): %s", diagnostics.Active)
+	if diagnostics.State.HaveInfo {
+		logging.Info("Running version: %s (%s)", diagnostics.State.Version, diagnostics.State.Commit)
 	}
-	if ds.HaveInfo || ds.AlignChecked {
+	if diagnostics.State.HaveInfo || diagnostics.State.AlignChecked {
 		align := "unknown"
-		if ds.AlignChecked {
-			if ds.Aligned {
+		if diagnostics.State.AlignChecked {
+			if diagnostics.State.Aligned {
 				align = "aligned"
 			} else {
 				align = "BEHIND (restart needed)"
@@ -175,7 +145,7 @@ func runDaemonStatus(rt *appRuntime) int {
 		}
 		logging.Info("Binary alignment: %s", align)
 	}
-	if level == orchestrator.HealthcheckSetupLevelOk {
+	if diagnostics.Level == orchestrator.HealthcheckSetupLevelOk {
 		return types.ExitSuccess.Int()
 	}
 	return types.ExitGenericError.Int()
