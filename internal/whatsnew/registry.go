@@ -120,12 +120,12 @@ var notes = []Note{
 			"Text cleanup in backups only touches CRLF line endings in plain text; UTF-16 and binary files stay untouched",
 			"The PVE cluster database is captured as a consistent snapshot, including changes not yet checkpointed",
 			"Cloud retention no longer stalls the run when rclone hangs; a missing cloud log no longer skips log cleanup",
-			"A failed notification now always exits 1, and --log-level only quiets the console, never the exit code",
+			"A failed notification promotes an otherwise clean non-dry-run run to exit 1; --log-level only quiets the console",
 			"Starting --daemon twice is refused, so the running daemon stays discoverable by backup handoffs",
 		},
 		Actions: []string{
 			"After a staged PVE restore, check the restore log: applied items say pmxcfs or pvesh, failures stay warnings",
-			"If a monitoring script gates on the exit code, note a failed notification now exits 1 on every install",
+			"If a monitoring script gates on exit codes, account for failed notifications promoting clean non-dry runs to exit 1",
 		},
 	},
 }
