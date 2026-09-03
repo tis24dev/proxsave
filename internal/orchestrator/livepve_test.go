@@ -50,6 +50,41 @@ func liveStage(t *testing.T, rel string, data []byte) string {
 	return root
 }
 
+func liveStorageBlock(t *testing.T, data []byte, storageID string) []byte {
+	t.Helper()
+	var block []string
+	collecting := false
+	for _, line := range strings.Split(string(data), "\n") {
+		trimmed := strings.TrimSpace(line)
+		isHeader := line == strings.TrimLeft(line, " \t")
+		_, id, ok := parseSectionHeader(trimmed)
+		if isHeader && ok {
+			if collecting {
+				break
+			}
+			collecting = id == storageID
+		}
+		if collecting {
+			if trimmed == "" {
+				break
+			}
+			block = append(block, line)
+		}
+	}
+	if len(block) == 0 {
+		t.Fatalf("storage %q is not defined in /etc/pve/storage.cfg", storageID)
+	}
+	return []byte(strings.Join(block, "\n") + "\n")
+}
+
+func TestLiveStorageBlockExtractsOnlyRequestedDefinition(t *testing.T) {
+	const config = "dir: local\n\tpath /var/lib/vz\n\tcomment local: storage\n\tcontent iso,vztmpl\n\nlvmthin: local-lvm\n\tthinpool data\n"
+	want := []byte("dir: local\n\tpath /var/lib/vz\n\tcomment local: storage\n\tcontent iso,vztmpl\n")
+	if got := liveStorageBlock(t, []byte(config), "local"); !bytes.Equal(got, want) {
+		t.Fatalf("local storage block mismatch:\nwant %q\ngot  %q", want, got)
+	}
+}
+
 func TestLivePVEDatacenterCfg(t *testing.T) {
 	logger := livePVEGuard(t)
 	before, err := os.ReadFile("/etc/pve/datacenter.cfg")
@@ -84,10 +119,13 @@ func TestLivePVEVzdumpCron(t *testing.T) {
 
 func TestLivePVEStorageCreateThenSet(t *testing.T) {
 	logger := livePVEGuard(t)
-	// The current `local` block, identical values: create must fail (already
-	// defined), the set fallback must apply cleanly.
-	cfg := "dir: local\n\tpath /var/lib/vz\n\tcontent iso,vztmpl,backup,import\n"
-	stage := liveStage(t, "etc/pve/storage.cfg", []byte(cfg))
+	current, err := os.ReadFile("/etc/pve/storage.cfg")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Reapply only the node's current `local` block: create must fail (already
+	// defined), then the set fallback must apply the existing values unchanged.
+	stage := liveStage(t, "etc/pve/storage.cfg", liveStorageBlock(t, current, "local"))
 	applied, failed, err := applyStorageCfg(context.Background(), filepath.Join(stage, "etc/pve/storage.cfg"), logger)
 	if err != nil {
 		t.Fatalf("applyStorageCfg: %v", err)
