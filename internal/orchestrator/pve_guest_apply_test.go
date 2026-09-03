@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 
@@ -104,16 +103,7 @@ func TestRunningGuestSkipsTheFileFallback(t *testing.T) {
 	if err := fakeFS.AddFile(stagePath, []byte(conf)); err != nil {
 		t.Fatal(err)
 	}
-	// Force the API to fail even without create-only keys: an exact-key error on
-	// the filtered set would need the fake to know the filtered args; simplest is
-	// a conf whose only content beyond the name is the rejected key, so the
-	// filtered set still succeeds - instead make the guest set fail by pointing
-	// the entry at a conf with a key the fake refuses on qemu: none exists, so
-	// drive the failure through --meta NOT being filtered is impossible once the
-	// filter works. The honest failure seam is the fake itself: mark the set as
-	// failing via a bogus storage-style rejection is not available - so this test
-	// plants meta AND teaches the fake that vm100's set always fails by using the
-	// running flag only for the fallback decision and an explicit set failure:
+	// Force the filtered set to fail so the test reaches the running-status guard.
 	pvesh.failSet = map[string]bool{"100": true}
 
 	applied, failed := applyVMConfigs(context.Background(), []vmEntry{{
@@ -152,7 +142,6 @@ func TestStoppedGuestFallsBackToTheConfFile(t *testing.T) {
 	if err != nil || string(got) != conf {
 		t.Fatalf("fallback conf not written: %q err=%v", got, err)
 	}
-	_ = filepath.Join
 }
 
 func assertUncertainGuestStatusSkipsFileFallback(t *testing.T, statusOutput []byte, statusErr error, logMarkers ...string) {
