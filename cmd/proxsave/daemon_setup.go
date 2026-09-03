@@ -126,25 +126,7 @@ func cronModeRecordClause(revert cronRevertReport) string {
 // non-zero otherwise, so scripts can gate on it.
 func runDaemonStatus(rt *appRuntime) int {
 	diagnostics := daemonDiagnosticsCollector(rt.ctx, rt.cfg, "")
-
-	logging.Info("Daemon status: %s", diagnostics.Keyword)
-	logging.Info("Scheduler mode: %s", diagnostics.Mode)
-	logging.Info("Daemon service (%s): %s", daemonUnitName, diagnostics.Unit)
-	logging.Info("Service state (systemctl is-active): %s", diagnostics.Active)
-	if diagnostics.State.HaveInfo {
-		logging.Info("Running version: %s (%s)", diagnostics.State.Version, diagnostics.State.Commit)
-	}
-	if diagnostics.State.HaveInfo || diagnostics.State.AlignChecked {
-		align := "unknown"
-		if diagnostics.State.AlignChecked {
-			if diagnostics.State.Aligned {
-				align = "aligned"
-			} else {
-				align = "BEHIND (restart needed)"
-			}
-		}
-		logging.Info("Binary alignment: %s", align)
-	}
+	logDaemonDiagnostics(rt.logger, diagnostics)
 	if diagnostics.Level == orchestrator.HealthcheckSetupLevelOk {
 		return types.ExitSuccess.Int()
 	}

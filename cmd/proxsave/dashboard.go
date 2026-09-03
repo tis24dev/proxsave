@@ -999,7 +999,35 @@ func buildDaemonStatusPrompt(diagnostics daemonDiagnostics) string {
 		b.WriteString("\n")
 		b.WriteString(theme.Text.Render("Binary alignment: " + align))
 	}
+	b.WriteString("\n")
+	b.WriteString(buildDashboardPersonalScriptLine("Personal pre-run script", diagnostics.Scripts.Pre))
+	b.WriteString("\n")
+	b.WriteString(buildDashboardPersonalScriptLine("Personal post-run script", diagnostics.Scripts.Post))
 	return b.String()
+}
+
+func buildDashboardPersonalScriptLine(label string, diagnostic personalScriptDiagnostic) string {
+	line := theme.Text.Render(label + ": ")
+	path := components.SanitizeText(diagnostic.Path)
+	reason := components.SanitizeText(diagnostic.Reason)
+	switch diagnostic.State {
+	case personalScriptReady:
+		line += theme.SuccessText.Render("READY")
+		if path != "" {
+			line += theme.Subtle.Render(" — " + path)
+		}
+	case personalScriptRefused:
+		line += theme.ErrorText.Render("REFUSED")
+		if path != "" {
+			line += theme.Subtle.Render(" — " + path)
+		}
+		if reason != "" {
+			line += theme.Subtle.Render(" — " + reason)
+		}
+	default:
+		line += theme.Subtle.Render("NOT CONFIGURED")
+	}
+	return line
 }
 
 // daemonStatusStyle maps a composed daemon state to a shared HealthcheckSetupLevel (the SAME
