@@ -41,12 +41,15 @@ func isBackupSidecar(path string) bool {
 // written before promotion) rather than a completed backup. Such files must
 // never be counted as backups by any List filter.
 //
-// ".tmp-" is matched anywhere in the name, not only as a leading dot: the bundle
-// build stages "<archive>.bundle.tar.tmp-<rand>" in BACKUP_PATH (fs.CreateTemp with
-// pattern "<base>.tmp-*"), and a crash mid-bundle leaves that file matching the
-// backup glob - counted as a backup forever, warned about every pass, deleted never.
+// The bundle build stages "<archive>.bundle.tar.tmp-<rand>" in BACKUP_PATH
+// (fs.CreateTemp with pattern "<base>.tmp-*"), while secondary copies use a
+// leading ".tmp-". Matching only those concrete forms avoids hiding a completed
+// backup whose hostname happens to contain ".tmp-".
 func isBackupTempArtifact(path string) bool {
-	return strings.Contains(filepath.Base(path), ".tmp-") || strings.HasSuffix(path, ".partial")
+	base := filepath.Base(path)
+	return strings.HasPrefix(base, ".tmp-") ||
+		strings.Contains(base, bundleSuffix+".tmp-") ||
+		strings.HasSuffix(base, ".partial")
 }
 
 // trimBundleSuffix removes the .bundle.tar suffix from a path if present.

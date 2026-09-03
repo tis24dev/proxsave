@@ -62,7 +62,8 @@ func TestBuildBackupCandidatePathsNormalizesBundleInput(t *testing.T) {
 // A crash during bundling leaves that file behind, it matches the backup glob, and a
 // prefix-only check let every List count it as a backup forever: phantom counts, a
 // missing-.metadata WARNING each pass (pinning exit 1), and nothing ever deleting it.
-// The temp marker must therefore match anywhere in the name.
+// The bundle staging marker must therefore match even though it is not a prefix,
+// without treating an unrelated ".tmp-" in a completed backup name as temporary.
 func TestBackupTempArtifactMatchesBundleTempMidName(t *testing.T) {
 	cases := map[string]bool{
 		"host-backup-20250101-120000.tar.zst.bundle.tar.tmp-12345": true,
@@ -70,6 +71,7 @@ func TestBackupTempArtifactMatchesBundleTempMidName(t *testing.T) {
 		"host-backup-20250101-120000.tar.zst.partial":              true,
 		"host-backup-20250101-120000.tar.zst":                      false,
 		"host-backup-20250101-120000.tar.zst.bundle.tar":           false,
+		"node.tmp-lab-backup-20250101-120000.tar.zst":              false,
 	}
 	for path, want := range cases {
 		if got := isBackupTempArtifact("/backups/" + path); got != want {
