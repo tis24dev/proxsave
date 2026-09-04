@@ -1014,15 +1014,15 @@ func buildDashboardPersonalScriptLine(label string, diagnostic personalScriptDia
 	case personalScriptReady:
 		line += theme.SuccessText.Render("READY")
 		if path != "" {
-			line += theme.Subtle.Render(" — " + path)
+			line += theme.Subtle.Render(" (" + path + ")")
 		}
 	case personalScriptRefused:
 		line += theme.ErrorText.Render("REFUSED")
 		if path != "" {
-			line += theme.Subtle.Render(" — " + path)
+			line += theme.Subtle.Render(" (" + path + ")")
 		}
 		if reason != "" {
-			line += theme.Subtle.Render(" — " + reason)
+			line += theme.Subtle.Render(": " + reason)
 		}
 	default:
 		line += theme.Subtle.Render("NOT CONFIGURED")

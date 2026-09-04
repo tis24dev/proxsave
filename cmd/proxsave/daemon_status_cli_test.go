@@ -53,6 +53,7 @@ func TestParseProcEffectiveUIDRejectsMissingAndMalformedData(t *testing.T) {
 		"missing":     "Name:\tproxsave\n",
 		"too short":   "Uid:\t1000\n",
 		"not numeric": "Uid:\t1000\toperator\t1002\t1003\n",
+		"negative":    "Uid:\t0\t-1\t0\t0\n",
 	} {
 		t.Run(name, func(t *testing.T) {
 			if _, err := parseProcEffectiveUID([]byte(data)); err == nil {

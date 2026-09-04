@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"fmt"
-	"math"
 	"os"
 	"strconv"
 	"strings"
@@ -108,14 +107,14 @@ func parseProcEffectiveUID(data []byte) (int, error) {
 		if len(fields) < 3 {
 			return 0, fmt.Errorf("malformed Uid line: %q", line)
 		}
-		uid, err := strconv.ParseUint(fields[2], 10, 32)
+		uid, err := strconv.Atoi(fields[2])
 		if err != nil {
 			return 0, fmt.Errorf("parse effective uid %q: %w", fields[2], err)
 		}
-		if strconv.IntSize == 32 && uid > math.MaxInt32 {
-			return 0, fmt.Errorf("effective uid %q exceeds the native int range", fields[2])
+		if uid < 0 {
+			return 0, fmt.Errorf("effective uid %q must not be negative", fields[2])
 		}
-		return int(uid), nil
+		return uid, nil
 	}
 	return 0, fmt.Errorf("uid line not found")
 }
@@ -199,13 +198,13 @@ func logPersonalScriptDiagnostic(logger *logging.Logger, label string, diagnosti
 	reason := daemonDiagnosticText(diagnostic.Reason)
 	switch diagnostic.State {
 	case personalScriptReady:
-		logger.Info("%s: READY — %s", label, path)
+		logger.Info("%s: READY (%s)", label, path)
 	case personalScriptRefused:
 		if path == "" {
-			logger.Warning("%s: REFUSED — %s", label, reason)
+			logger.Warning("%s: REFUSED: %s", label, reason)
 			return
 		}
-		logger.Warning("%s: REFUSED — %s — %s", label, path, reason)
+		logger.Warning("%s: REFUSED (%s): %s", label, path, reason)
 	default:
 		logger.Info("%s: NOT CONFIGURED", label)
 	}
