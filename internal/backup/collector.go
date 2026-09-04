@@ -727,6 +727,8 @@ func (c *Collector) applyMetadata(dest string, info os.FileInfo) {
 	}
 
 	if ok {
+		// ProxSave is built and released only for linux/amd64, where these
+		// Timespec fields are int64; 32-bit syscall widths are unsupported.
 		atime := time.Unix(stat.Atim.Sec, stat.Atim.Nsec)
 		mtime := time.Unix(stat.Mtim.Sec, stat.Mtim.Nsec)
 		if err := os.Chtimes(dest, atime, mtime); err != nil {
