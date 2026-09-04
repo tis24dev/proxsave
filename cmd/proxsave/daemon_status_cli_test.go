@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -27,6 +28,23 @@ func TestParseProcEffectiveUIDUsesTheEffectiveColumn(t *testing.T) {
 	}
 	if uid != 1001 {
 		t.Fatalf("effective uid = %d, want 1001", uid)
+	}
+}
+
+func TestParseProcEffectiveUIDHandlesMaximumLinuxUIDWithoutOverflow(t *testing.T) {
+	data := []byte("Uid:\t0\t4294967295\t0\t0\n")
+	uid, err := parseProcEffectiveUID(data)
+	if strconv.IntSize == 32 {
+		if err == nil {
+			t.Fatalf("effective uid overflowed native int as %d", uid)
+		}
+		return
+	}
+	if err != nil {
+		t.Fatalf("parse maximum Linux uid: %v", err)
+	}
+	if uint64(uid) != 4294967295 {
+		t.Fatalf("effective uid = %d, want 4294967295", uid)
 	}
 }
 

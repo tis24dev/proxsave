@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"math"
 	"os"
 	"strconv"
 	"strings"
@@ -110,6 +111,9 @@ func parseProcEffectiveUID(data []byte) (int, error) {
 		uid, err := strconv.ParseUint(fields[2], 10, 32)
 		if err != nil {
 			return 0, fmt.Errorf("parse effective uid %q: %w", fields[2], err)
+		}
+		if strconv.IntSize == 32 && uid > math.MaxInt32 {
+			return 0, fmt.Errorf("effective uid %q exceeds the native int range", fields[2])
 		}
 		return int(uid), nil
 	}
