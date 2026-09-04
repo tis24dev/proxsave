@@ -240,3 +240,33 @@ func TestApplyRetentionLeavesSameShortNameForeignFQDNAlone(t *testing.T) {
 		}
 	}
 }
+
+// TestResolveRetentionOwnersBoundsItsContext pins the timeout floor on retention's
+// manifest attribution. The run ctx is cancel-only (no deadline), each archive costs
+// one `rclone cat`, and resolveRetentionOwners waits on ALL of them: one wedged cat
+// used to block wg.Wait() forever and hang the unattended cron/daemon run, while the
+// file header of cloud.go promises the retention paths are floored. The whole
+// attribution phase must therefore run under boundManagementCtx: every exec must see
+// a deadline when the caller's ctx has none.
+func TestResolveRetentionOwnersBoundsItsContext(t *testing.T) {
+	cfg := &config.Config{CloudEnabled: true, CloudRemote: "gdrive"}
+	cs := newCloudStorageForTest(cfg)
+
+	deadlines := 0
+	cs.execCommand = func(ctx context.Context, name string, args ...string) ([]byte, error) {
+		if _, ok := ctx.Deadline(); ok {
+			deadlines++
+		}
+		return []byte(`{"hostname":"server1"}`), nil
+	}
+
+	list := []*types.BackupMetadata{
+		{BackupFile: "a-backup-20250102-100000.tar.zst"},
+		{BackupFile: "b-backup-20250103-100000.tar.zst"},
+	}
+	cs.resolveRetentionOwners(context.Background(), list)
+
+	if deadlines != len(list) {
+		t.Fatalf("%d of %d manifest reads ran with a deadline; a deadline-less run ctx must be floored so a wedged rclone cat cannot hang retention forever", deadlines, len(list))
+	}
+}

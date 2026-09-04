@@ -1799,11 +1799,6 @@ func (c *CloudStorage) deleteAssociatedLog(ctx context.Context, backupFile strin
 	if base == "" {
 		return false
 	}
-	baseForWarning := c.cloudLogBase(base)
-	if baseForWarning == "" {
-		baseForWarning = base
-	}
-
 	host, ts, ok := extractLogKeyFromBackup(backupFile)
 	if !ok {
 		return false
@@ -1820,18 +1815,21 @@ func (c *CloudStorage) deleteAssociatedLog(ctx context.Context, backupFile strin
 		return false
 	}
 
-	args := c.buildRcloneArgs("delete")
+	// `deletefile` is the single-object delete. The directory-oriented `delete` used
+	// here before answered a merely-absent log with "directory not found" on
+	// directory-listing backends - misread as the whole CLOUD_LOG_PATH being gone,
+	// poisoning cleanup for every remaining backup - and with exit 0 on prefix
+	// backends, counting a deletion that never happened. The absence of ONE log says
+	// nothing about the base path, so every not-found wording lands in the benign
+	// branch; the real path-missing detection stays with countLogFiles' lsf.
+	args := c.buildRcloneArgs("deletefile")
 	args = append(args, cloudPath)
 	c.logger.Debug("Cloud logs: deleting log %s", cloudPath)
 	output, err := c.exec(ctx, args[0], args[1:]...)
 	if err != nil {
 		msg := strings.TrimSpace(string(output))
 		if isRcloneObjectNotFound(msg) || isRcloneObjectNotFound(err.Error()) {
-			if strings.Contains(strings.ToLower(msg), "directory") {
-				c.markCloudLogPathMissing(baseForWarning, msg)
-			} else {
-				c.logger.Debug("Cloud logs: log already removed %s (%s)", cloudPath, msg)
-			}
+			c.logger.Debug("Cloud logs: log already removed %s (%s)", cloudPath, msg)
 			return false
 		}
 		// Carrying the exec error alone left rclone's reason on a Debug line a

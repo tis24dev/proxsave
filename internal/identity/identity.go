@@ -21,9 +21,9 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"syscall"
 	"time"
 
+	"github.com/tis24dev/proxsave/internal/filelock"
 	"github.com/tis24dev/proxsave/internal/logging"
 	"github.com/tis24dev/proxsave/internal/safeexec"
 )
@@ -193,8 +193,9 @@ func readFileUnderRoot(dir, name string) ([]byte, error) {
 // It exists because a concurrent hook a (installer) and hook b (enable-now daemon) can run
 // against the same server_id, and two DISTINCT minted secrets strand the host (last-write
 // wins on disk vs confirm-locks-reissue on the server). It returns an unlock func the
-// caller MUST defer and call exactly once. The lock file is opened confined to the identity
-// directory via os.Root (the basename is a constant, mirroring LoadNotifySecret).
+// caller MUST defer and call exactly once. The shared filelock primitive opens the lock file
+// confined to the identity directory via os.Root (the basename is a constant, mirroring
+// LoadNotifySecret).
 func LockNotifySecret(baseDir string) (unlock func(), err error) {
 	baseDir = strings.TrimSpace(baseDir)
 	if baseDir == "" {
@@ -204,24 +205,12 @@ func LockNotifySecret(baseDir string) (unlock func(), err error) {
 	if err := os.MkdirAll(dir, 0o750); err != nil {
 		return nil, fmt.Errorf("failed to create identity directory %s: %w", dir, err)
 	}
-	root, err := os.OpenRoot(dir)
+	releaseLock, err := filelock.Acquire(filepath.Join(dir, notifySecretLockFileName))
 	if err != nil {
-		return nil, err
-	}
-	f, err := root.OpenFile(notifySecretLockFileName, os.O_CREATE|os.O_RDWR, 0o600)
-	if err != nil {
-		_ = root.Close()
-		return nil, err
-	}
-	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX); err != nil {
-		_ = f.Close()
-		_ = root.Close()
-		return nil, fmt.Errorf("flock notify secret: %w", err)
+		return nil, fmt.Errorf("lock notify secret: %w", err)
 	}
 	return func() {
-		_ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
-		_ = f.Close()
-		_ = root.Close()
+		_ = releaseLock()
 	}, nil
 }
 

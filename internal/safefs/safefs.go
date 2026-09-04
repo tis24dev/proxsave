@@ -397,11 +397,12 @@ func CreateTemp(ctx context.Context, dir, pattern string, timeout time.Duration)
 // actually-used byte counts. "Available" tracks Bavail (space a non-root user can
 // allocate), while "used" tracks Blocks-Bfree (space already consumed).
 func SpaceUsageFromStatfs(stat syscall.Statfs_t) (totalBytes, availableBytes, usedBytes int64) {
-	totalBytes = statfsBlocksToBytes(stat.Blocks, stat.Bsize)
-	availableBytes = statfsBlocksToBytes(stat.Bavail, stat.Bsize)
+	blockSize := int64(stat.Bsize)
+	totalBytes = statfsBlocksToBytes(stat.Blocks, blockSize)
+	availableBytes = statfsBlocksToBytes(stat.Bavail, blockSize)
 
 	if stat.Blocks > stat.Bfree {
-		usedBytes = statfsBlocksToBytes(stat.Blocks-stat.Bfree, stat.Bsize)
+		usedBytes = statfsBlocksToBytes(stat.Blocks-stat.Bfree, blockSize)
 	}
 	if availableBytes > totalBytes {
 		availableBytes = totalBytes

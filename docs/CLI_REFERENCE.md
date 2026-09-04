@@ -106,7 +106,7 @@ proxsave -h
 | `--daemon` | | Run as the resident backup daemon (schedules + supervises runs, reports to healthchecks). Invoked by `proxsave-daemon.service`; not run by hand. See [docs/DAEMON.md](DAEMON.md) and [docs/HEALTHCHECKS.md](HEALTHCHECKS.md). |
 | `--daemon-setup` | | Switch this install to daemon mode: install+enable the service and remove the cron entry. |
 | `--daemon-remove` | | Revert to the cron scheduler, disable the service, and block future upgrades from reinstalling the daemon. |
-| `--daemon-status` | | Print the daemon status (scheduler mode, service state, running version, binary alignment) and exit. Exit code is `0` only when the daemon is running and aligned, non-zero otherwise, so scripts can gate on it. |
+| `--daemon-status` | | Read-only daemon status (scheduler/service state, version/alignment, and personal pre/post script readiness) and exit. `--log-level debug` adds daemon-UID and path-component evidence without executing scripts. Exit code remains based only on daemon health: `0` when running and aligned, non-zero otherwise. |
 | `--show-whatsnew` | | Show the release-notes screen once and exit, then mark it seen. `--upgrade` calls it for you on an interactive terminal; run it by hand after an unattended upgrade to stop the "unseen release notes" warning. |
 
 ---
@@ -442,6 +442,11 @@ proxsave -l info    # debug|info|warning|error|critical
 - **Console**: Colored output (if `USE_COLOR=true`)
 - **File**: `LOG_PATH/backup-$(hostname)-YYYYMMDD-HHMMSS.log`
 
+The level threshold mutes the **console only** for warnings and above: a warning or
+error raised below the chosen level is still counted (footer, exit code) and still
+written to the log file, so the artifact shipped with notifications keeps the
+evidence. Levels below warning are filtered everywhere, as before.
+
 **`--log-level` vs `DEBUG_LEVEL`**:
 - `DEBUG_LEVEL` (config) sets the base log level: `standard` resolves to `info`, `advanced` and `extreme` both resolve to `debug`. Default is `info`.
 - `--log-level` (CLI flag) overrides `DEBUG_LEVEL` for that run.
@@ -699,7 +704,7 @@ crontab -e
 | `--daemon` | - | Run as the resident backup daemon (installed as `proxsave-daemon.service`; not run by hand) |
 | `--daemon-setup` | - | Switch this install to daemon mode (install+enable the service, remove the cron entry) |
 | `--daemon-remove` | - | Revert to the cron scheduler, disable the service, and block future upgrades from reinstalling the daemon |
-| `--daemon-status` | - | Print daemon status and exit (`0` only when running and aligned) |
+| `--daemon-status` | - | Read-only daemon and personal-script status; add `--log-level debug` for UID/path evidence. Scripts are not executed; exit is `0` only when the daemon is running and aligned |
 | `--cleanup-guards` | - | Remove leftover ProxSave mount guards under `/var/lib/proxsave/guards` (use with `--dry-run` to preview) |
 | `--support` | - | Run in support mode (force DEBUG logging and email log). Available for the standard backup run and `--restore` |
 

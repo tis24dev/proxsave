@@ -10,6 +10,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/tis24dev/proxsave/internal/filelock"
 	"github.com/tis24dev/proxsave/internal/logging"
 )
 
@@ -209,22 +210,13 @@ func (r *TempDirRegistry) withLock(mutator func([]tempDirRecord) ([]tempDirRecor
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	lockFile, err := os.OpenFile(r.lockPath, os.O_CREATE|os.O_RDWR, 0o600)
+	releaseLock, err := filelock.Acquire(r.lockPath)
 	if err != nil {
-		return fmt.Errorf("open registry lock: %w", err)
+		return fmt.Errorf("lock registry: %w", err)
 	}
 	defer func() {
-		if closeErr := lockFile.Close(); closeErr != nil && err == nil {
-			err = fmt.Errorf("close registry lock: %w", closeErr)
-		}
-	}()
-
-	if err := syscall.Flock(int(lockFile.Fd()), syscall.LOCK_EX); err != nil {
-		return fmt.Errorf("flock registry: %w", err)
-	}
-	defer func() {
-		if unlockErr := syscall.Flock(int(lockFile.Fd()), syscall.LOCK_UN); unlockErr != nil && err == nil {
-			err = fmt.Errorf("unlock registry: %w", unlockErr)
+		if releaseErr := releaseLock(); releaseErr != nil && err == nil {
+			err = fmt.Errorf("release registry lock: %w", releaseErr)
 		}
 	}()
 

@@ -202,6 +202,14 @@ func isTerminalInteractive() bool {
 	return true
 }
 
+type dashboardActionDisposition uint8
+
+const (
+	dashboardActionUnhandled dashboardActionDisposition = iota
+	dashboardActionHandled
+	dashboardActionReload
+)
+
 // maybeRunDashboard shows the interactive dashboard when proxsave is invoked
 // completely bare (no flags at all) on an interactive terminal. The chosen
 // action is dispatched by MUTATING args and letting the existing flag-driven
@@ -281,10 +289,15 @@ func maybeRunDashboard(ctx context.Context, args *cli.Args, bootstrap *logging.B
 		// and loop back to the menu. These never leave the dashboard, so the flag
 		// dispatch below is untouched.
 		diagCtx, cancelDiag := withDashboardIdle(ctx)
-		handledDiag := runDashboardDiagnostic(diagCtx, session, action, args, bootstrap)
+		disposition := runDashboardDiagnostic(diagCtx, session, action, args, bootstrap)
 		cancelDiag()
-		if handledDiag {
+		switch disposition {
+		case dashboardActionHandled:
 			continue
+		case dashboardActionReload:
+			keepAlive = true
+			closeDashboardAndRelaunch(ctx, session, getExecInfo().ExecPath, bootstrap)
+			return types.ExitSuccess.Int(), true
 		}
 
 		switch action {
@@ -388,14 +401,15 @@ func runDashboardInstallChoice(ctx context.Context, session *shell.Session) (men
 }
 
 // runDashboardDiagnostic runs the check screen for a diagnostics-group action in
-// the live dashboard session and reports whether it handled the action (so the
-// dashboard loops back to the menu). Non-diagnostic actions return false, leaving
+// the live dashboard session and reports how it handled the action. Ordinary
+// diagnostics loop back to the menu; a successful upgrade requests a process reload.
+// Non-diagnostic actions return dashboardActionUnhandled, leaving
 // them for the normal flag dispatch. Every screen already exists and is reused
 // verbatim; each is non-blocking (errors are swallowed - a failed check must never
 // abort the dashboard). When a setup screen is not eligible (that feature is not
 // configured on this host) it renders nothing, so a short notice is shown instead
 // of a blank flicker.
-func runDashboardDiagnostic(ctx context.Context, session *shell.Session, action menu.Action, args *cli.Args, bootstrap *logging.BootstrapLogger) bool {
+func runDashboardDiagnostic(ctx context.Context, session *shell.Session, action menu.Action, args *cli.Args, bootstrap *logging.BootstrapLogger) dashboardActionDisposition {
 	configPath := ""
 	if args != nil {
 		configPath = args.ConfigPath
@@ -425,7 +439,7 @@ func runDashboardDiagnostic(ctx context.Context, session *shell.Session, action 
 		_, _ = dashboardRunPostInstallAudit(ctx, session, getExecInfo().ExecPath, configPath)
 	case menu.ActionCheckUpgrade:
 		logging.DebugStepBootstrap(bootstrap, "dashboard", "action=check-upgrade")
-		runDashboardUpgradeMenu(ctx, session, configPath)
+		return runDashboardUpgradeMenu(ctx, session, configPath)
 	case menu.ActionDaemonSetup:
 		logging.DebugStepBootstrap(bootstrap, "dashboard", "action=daemon-setup")
 		runDashboardDaemonAdmin(ctx, session, true, configPath, baseDir)
@@ -442,9 +456,9 @@ func runDashboardDiagnostic(ctx context.Context, session *shell.Session, action 
 		logging.DebugStepBootstrap(bootstrap, "dashboard", "action=cleanup-guards")
 		runDashboardCleanupGuards(ctx, session)
 	default:
-		return false
+		return dashboardActionUnhandled
 	}
-	return true
+	return dashboardActionHandled
 }
 
 // Seams so the daemon admin ops can be stubbed in tests (they otherwise run real
@@ -889,43 +903,20 @@ const (
 func runDashboardDaemonStatus(ctx context.Context, session *shell.Session, configPath, baseDir string) {
 	errDaemonStatusEsc := errors.New("daemon status: esc")
 	for {
-		mode := "unknown"
-		var interval time.Duration
-		if cfg, err := daemonStatusLoadConfig(configPath, baseDir); err == nil && cfg != nil {
-			mode = cfg.SchedulerMode
-			interval = cfg.HealthcheckHeartbeatInterval
-			if strings.TrimSpace(cfg.BaseDir) != "" {
-				baseDir = cfg.BaseDir
+		var cfg *config.Config
+		if loaded, err := daemonStatusLoadConfig(configPath, baseDir); err == nil && loaded != nil {
+			cfg = loaded
+			if strings.TrimSpace(loaded.BaseDir) != "" {
+				baseDir = loaded.BaseDir
 			}
 		}
-		unit := "not installed"
-		if daemonUnitInstalled() {
-			unit = "installed"
-		}
-		active := daemonUnitActiveState(ctx)
-		if active == "" {
-			active = "unknown"
-		}
-
-		// Combined verdict via the SHARED daemon-state checker (systemd existence refined onto the
-		// heartbeat, plus on-disk binary alignment). probeProxsaveDaemonAlive is the stricter signal-0
-		// + /proc/cmdline liveness gate. The raw unit/active words stay from the direct probes so the
-		// systemctl vocabulary is shown verbatim. This is IDENTICAL to before -- presentation only.
-		ds := health.CheckDaemonState(health.DaemonStateInput{
-			BaseDir:           baseDir,
-			SchedulerMode:     mode,
-			HeartbeatInterval: interval,
-			Now:               time.Now(),
-			Presence:          daemonPresenceProbe(ctx),
-			ProcAlive:         probeProxsaveDaemonAlive,
-			ProcStale:         procBinaryStaleProbe,
-		})
-		level, keyword, explanation := daemonStatusStyle(ds)
+		diagnostics := daemonDiagnosticsCollector(ctx, cfg, baseDir)
 		// Dashboard "Status:" keywords are ALL-CAPS (the house convention across every
 		// dashboard Status screen). daemonStatusStyle is shared with the plain-text
 		// --daemon-status CLI line, so uppercase HERE (the graphical consumer) rather than at
 		// the source, keeping the CLI/log readout in its natural case.
-		prompt := buildDaemonStatusPrompt(level, strings.ToUpper(keyword), explanation, mode, unit, active, ds)
+		diagnostics.Keyword = strings.ToUpper(diagnostics.Keyword)
+		prompt := buildDaemonStatusPrompt(diagnostics)
 
 		items := []components.SelectorItem[daemonStatusAction]{
 			{Label: "Re-check", Description: "re-run the daemon state check", Value: daemonStatusActionCheck},
@@ -961,7 +952,7 @@ func renderDaemonStatusLevel(level orchestrator.HealthcheckSetupLevel, text stri
 // buildHealthcheckPrompt): a short intro, a two-line Status block (a colored keyword + a Subtle
 // explanation), then a Details block with the scheduler/service facts. The wording/logic of the
 // detail lines is unchanged from the old Notice body; only the presentation moved into the prompt.
-func buildDaemonStatusPrompt(level orchestrator.HealthcheckSetupLevel, keyword, explanation, mode, unit, active string, ds health.DaemonState) string {
+func buildDaemonStatusPrompt(diagnostics daemonDiagnostics) string {
 	// Every dynamic segment below carries text from outside this file (keyword/explanation from
 	// daemonStatusStyle, mode from the config file, active from systemctl, Version/Commit RAW from
 	// .daemon_info.json), so each is SanitizeText-scrubbed before theme rendering to keep raw
@@ -973,8 +964,8 @@ func buildDaemonStatusPrompt(level orchestrator.HealthcheckSetupLevel, keyword, 
 	b.WriteString("\n\n")
 
 	b.WriteString(theme.Text.Render("Status: "))
-	b.WriteString(renderDaemonStatusLevel(level, components.SanitizeText(keyword)))
-	if exp := components.SanitizeText(explanation); exp != "" {
+	b.WriteString(renderDaemonStatusLevel(diagnostics.Level, components.SanitizeText(diagnostics.Keyword)))
+	if exp := components.SanitizeText(diagnostics.Explanation); exp != "" {
 		b.WriteString("\n")
 		b.WriteString(theme.Subtle.Render(exp))
 	}
@@ -982,24 +973,24 @@ func buildDaemonStatusPrompt(level orchestrator.HealthcheckSetupLevel, keyword, 
 	b.WriteString("\n\n")
 	b.WriteString(theme.Text.Render("Details:"))
 	b.WriteString("\n")
-	b.WriteString(theme.Text.Render("Scheduler mode: " + components.SanitizeText(mode)))
+	b.WriteString(theme.Text.Render("Scheduler mode: " + components.SanitizeText(diagnostics.Mode)))
 	b.WriteString("\n")
-	b.WriteString(theme.Text.Render("Daemon service (" + daemonUnitName + "): " + unit))
+	b.WriteString(theme.Text.Render("Daemon service (" + daemonUnitName + "): " + diagnostics.Unit))
 	b.WriteString("\n")
-	b.WriteString(theme.Text.Render("Service state (systemctl is-active): " + components.SanitizeText(active)))
+	b.WriteString(theme.Text.Render("Service state (systemctl is-active): " + components.SanitizeText(diagnostics.Active)))
 	// The running version comes from the identity record (HaveInfo). The alignment verdict comes from
 	// the record-independent /proc probe, so show it whenever AlignChecked -- a live daemon on a
 	// replaced binary reads "Binary alignment: BEHIND". Binary alignment is known only when
 	// AlignChecked; otherwise it is UNKNOWN -- report "unknown" rather than imply "aligned" or a false
 	// "behind".
-	if ds.HaveInfo {
+	if diagnostics.State.HaveInfo {
 		b.WriteString("\n")
-		b.WriteString(theme.Text.Render("Running version: " + components.SanitizeText(ds.Version) + " (" + components.SanitizeText(ds.Commit) + ")"))
+		b.WriteString(theme.Text.Render("Running version: " + components.SanitizeText(diagnostics.State.Version) + " (" + components.SanitizeText(diagnostics.State.Commit) + ")"))
 	}
-	if ds.HaveInfo || ds.AlignChecked {
+	if diagnostics.State.HaveInfo || diagnostics.State.AlignChecked {
 		align := "unknown"
-		if ds.AlignChecked {
-			if ds.Aligned {
+		if diagnostics.State.AlignChecked {
+			if diagnostics.State.Aligned {
 				align = "aligned"
 			} else {
 				align = "BEHIND (restart needed)"
@@ -1008,7 +999,35 @@ func buildDaemonStatusPrompt(level orchestrator.HealthcheckSetupLevel, keyword, 
 		b.WriteString("\n")
 		b.WriteString(theme.Text.Render("Binary alignment: " + align))
 	}
+	b.WriteString("\n")
+	b.WriteString(buildDashboardPersonalScriptLine("Personal pre-run script", diagnostics.Scripts.Pre))
+	b.WriteString("\n")
+	b.WriteString(buildDashboardPersonalScriptLine("Personal post-run script", diagnostics.Scripts.Post))
 	return b.String()
+}
+
+func buildDashboardPersonalScriptLine(label string, diagnostic personalScriptDiagnostic) string {
+	line := theme.Text.Render(label + ": ")
+	path := components.SanitizeText(diagnostic.Path)
+	reason := components.SanitizeText(diagnostic.Reason)
+	switch diagnostic.State {
+	case personalScriptReady:
+		line += theme.SuccessText.Render("READY")
+		if path != "" {
+			line += theme.Subtle.Render(" (" + path + ")")
+		}
+	case personalScriptRefused:
+		line += theme.ErrorText.Render("REFUSED")
+		if path != "" {
+			line += theme.Subtle.Render(" (" + path + ")")
+		}
+		if reason != "" {
+			line += theme.Subtle.Render(": " + reason)
+		}
+	default:
+		line += theme.Subtle.Render("NOT CONFIGURED")
+	}
+	return line
 }
 
 // daemonStatusStyle maps a composed daemon state to a shared HealthcheckSetupLevel (the SAME

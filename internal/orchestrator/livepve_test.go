@@ -1,0 +1,282 @@
+//go:build livepve
+
+package orchestrator
+
+// Live validation harness for the staged-apply series (fable-check bugs 1-5).
+// Build:  CGO_ENABLED=0 go test -c -tags livepve ./internal/orchestrator -o livepve.test
+// Run AS ROOT ON A PVE TEST NODE:  ./livepve.test -test.run TestLivePVE -test.v
+//
+// Every test is idempotent on purpose: identical bytes for the files, identical
+// values for the API calls, and the one thing it CREATES (CT 990, config only)
+// it deletes again. Still: test node only, file-level backups first.
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"github.com/tis24dev/proxsave/internal/logging"
+	"github.com/tis24dev/proxsave/internal/types"
+)
+
+func livePVEGuard(t *testing.T) *logging.Logger {
+	t.Helper()
+	if os.Geteuid() != 0 {
+		t.Skip("live PVE checks need root")
+	}
+	if _, err := os.Stat("/etc/pve/local"); err != nil {
+		t.Skip("not a PVE node (no /etc/pve/local)")
+	}
+	logger := logging.New(types.LogLevelDebug, false)
+	logger.SetOutput(os.Stdout)
+	return logger
+}
+
+func liveStage(t *testing.T, rel string, data []byte) string {
+	t.Helper()
+	root := t.TempDir()
+	full := filepath.Join(root, rel)
+	if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(full, data, 0o640); err != nil {
+		t.Fatal(err)
+	}
+	return root
+}
+
+func liveStorageBlock(t *testing.T, data []byte, storageID string) []byte {
+	t.Helper()
+	var block []string
+	collecting := false
+	for _, line := range strings.Split(string(data), "\n") {
+		trimmed := strings.TrimSpace(line)
+		isHeader := line == strings.TrimLeft(line, " \t")
+		_, id, ok := parseSectionHeader(trimmed)
+		if isHeader && ok {
+			if collecting {
+				break
+			}
+			collecting = id == storageID
+		}
+		if collecting {
+			if trimmed == "" {
+				break
+			}
+			block = append(block, line)
+		}
+	}
+	if len(block) == 0 {
+		t.Fatalf("storage %q is not defined in /etc/pve/storage.cfg", storageID)
+	}
+	return []byte(strings.Join(block, "\n") + "\n")
+}
+
+func TestLiveStorageBlockExtractsOnlyRequestedDefinition(t *testing.T) {
+	const config = "dir: local\n\tpath /var/lib/vz\n\tcomment local: storage\n\tcontent iso,vztmpl\n\nlvmthin: local-lvm\n\tthinpool data\n"
+	want := []byte("dir: local\n\tpath /var/lib/vz\n\tcomment local: storage\n\tcontent iso,vztmpl\n")
+	if got := liveStorageBlock(t, []byte(config), "local"); !bytes.Equal(got, want) {
+		t.Fatalf("local storage block mismatch:\nwant %q\ngot  %q", want, got)
+	}
+}
+
+func TestLivePVEDatacenterCfg(t *testing.T) {
+	logger := livePVEGuard(t)
+	before, err := os.ReadFile("/etc/pve/datacenter.cfg")
+	if err != nil {
+		t.Fatal(err)
+	}
+	stage := liveStage(t, "etc/pve/datacenter.cfg", before)
+	if err := applyPVEDatacenterCfgFromStage(context.Background(), logger, stage); err != nil {
+		t.Fatalf("datacenter apply: %v", err)
+	}
+	after, err := os.ReadFile("/etc/pve/datacenter.cfg")
+	if err != nil || string(after) != string(before) {
+		t.Fatalf("datacenter.cfg changed or unreadable after identical apply: err=%v\nbefore=%q\nafter=%q", err, before, after)
+	}
+}
+
+func TestLivePVEVzdumpCron(t *testing.T) {
+	logger := livePVEGuard(t)
+	before, err := os.ReadFile("/etc/pve/vzdump.cron")
+	if err != nil {
+		t.Fatal(err)
+	}
+	stage := liveStage(t, "etc/pve/vzdump.cron", before)
+	if err := applyPVEVzdumpCronFromStage(logger, stage); err != nil {
+		t.Fatalf("vzdump.cron apply: %v", err)
+	}
+	after, err := os.ReadFile("/etc/pve/vzdump.cron")
+	if err != nil || string(after) != string(before) {
+		t.Fatalf("vzdump.cron changed after identical apply: err=%v", err)
+	}
+}
+
+func TestLivePVEStorageCreateThenSet(t *testing.T) {
+	logger := livePVEGuard(t)
+	current, err := os.ReadFile("/etc/pve/storage.cfg")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Reapply only the node's current `local` block: create must fail (already
+	// defined), then the set fallback must apply the existing values unchanged.
+	stage := liveStage(t, "etc/pve/storage.cfg", liveStorageBlock(t, current, "local"))
+	applied, failed, err := applyStorageCfg(context.Background(), filepath.Join(stage, "etc/pve/storage.cfg"), logger)
+	if err != nil {
+		t.Fatalf("applyStorageCfg: %v", err)
+	}
+	if applied != 1 || failed != 0 {
+		t.Fatalf("applied=%d failed=%d, want 1/0 (create-then-set on existing 'local')", applied, failed)
+	}
+}
+
+func TestLivePVEExistingGuestWithMeta(t *testing.T) {
+	logger := livePVEGuard(t)
+	const conf = "/etc/pve/qemu-server/101.conf"
+	before, err := os.ReadFile(conf)
+	if err != nil {
+		t.Skipf("no VM 101 on this node: %v", err)
+	}
+	if !strings.Contains(string(before), "meta:") {
+		t.Skip("VM 101 has no meta line; the bug-2 shape is not on this node")
+	}
+	node := localNodeName()
+	stage := liveStage(t, "etc/pve/nodes/"+node+"/qemu-server/101.conf", before)
+	applied, failed := applyVMConfigs(context.Background(), []vmEntry{{
+		VMID: "101", Kind: "qemu", Name: "openwrt25",
+		Path: filepath.Join(stage, "etc/pve/nodes", node, "qemu-server", "101.conf"),
+	}}, logger)
+	if applied != 1 || failed != 0 {
+		t.Fatalf("applied=%d failed=%d, want 1/0 for the meta-carrying stopped guest", applied, failed)
+	}
+	after, err := os.ReadFile(conf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(after), "meta: creation-qemu") {
+		t.Fatalf("the guest lost its meta line:\n%s", after)
+	}
+}
+
+func TestLivePVEMissingLxcRegistration(t *testing.T) {
+	logger := livePVEGuard(t)
+	const vmid = "990"
+	inventoryOut, err := exec.Command("pvesh", "get", "/cluster/resources", "--type", "vm", "--output-format=json").CombinedOutput()
+	if err != nil {
+		t.Fatalf("cannot prove that CT %s is absent cluster-wide: %v (output: %s)", vmid, err, strings.TrimSpace(string(inventoryOut)))
+	}
+	inventoryOut = bytes.TrimSpace(inventoryOut)
+	if len(inventoryOut) == 0 || inventoryOut[0] != '[' {
+		t.Fatalf("cannot prove that CT %s is absent cluster-wide: expected a JSON array", vmid)
+	}
+	var guests []struct {
+		VMID int    `json:"vmid"`
+		Node string `json:"node"`
+	}
+	if err := json.Unmarshal(inventoryOut, &guests); err != nil {
+		t.Fatalf("cannot prove that CT %s is absent cluster-wide: parse inventory: %v", vmid, err)
+	}
+	for index, guest := range guests {
+		if guest.VMID <= 0 || strings.TrimSpace(guest.Node) == "" {
+			t.Fatalf("cannot prove that CT %s is absent cluster-wide: incomplete inventory item %d", vmid, index)
+		}
+		if guest.VMID == 990 {
+			t.Fatalf("CT %s already exists in the cluster on node %s; refusing to touch it", vmid, guest.Node)
+		}
+	}
+	confPath := "/etc/pve/lxc/" + vmid + ".conf"
+	if _, err := os.Stat(confPath); err == nil {
+		t.Fatalf("CT %s already exists on this node; refusing to touch it", vmid)
+	}
+	t.Cleanup(func() {
+		if err := exec.Command("pvesh", "delete", "/nodes/"+localNodeName()+"/lxc/"+vmid).Run(); err != nil {
+			_ = os.Remove(confPath)
+		}
+	})
+
+	conf := "hostname: proxsave-livecheck\nmemory: 128\ncores: 1\nostype: unmanaged\n"
+	node := localNodeName()
+	stage := liveStage(t, "etc/pve/nodes/"+node+"/lxc/"+vmid+".conf", []byte(conf))
+	applied, failed := applyVMConfigs(context.Background(), []vmEntry{{
+		VMID: vmid, Kind: "lxc", Name: "proxsave-livecheck",
+		Path: filepath.Join(stage, "etc/pve/nodes", node, "lxc", vmid+".conf"),
+	}}, logger)
+	if applied != 1 || failed != 0 {
+		t.Fatalf("applied=%d failed=%d, want 1/0 for the missing-guest registration", applied, failed)
+	}
+	out, err := exec.Command("pvesh", "get", "/nodes/"+node+"/lxc/"+vmid+"/config", "--output-format=json").Output()
+	if err != nil {
+		t.Fatalf("the registered CT does not answer on the API: %v", err)
+	}
+	if !strings.Contains(string(out), "proxsave-livecheck") {
+		t.Fatalf("API answers but without our hostname: %s", out)
+	}
+}
+
+func TestLivePVELockedGuestApplyRejectsExistingVMIDAsAbsent(t *testing.T) {
+	logger := livePVEGuard(t)
+	const (
+		vmid     = "101"
+		confPath = "/etc/pve/qemu-server/101.conf"
+	)
+	before, err := os.ReadFile(confPath)
+	if err != nil {
+		t.Skipf("no VM %s on this node: %v", vmid, err)
+	}
+	node := localNodeName()
+	stage := liveStage(t, "etc/pve/nodes/"+node+"/qemu-server/"+vmid+".conf", []byte("name: must-not-apply\n"))
+	err = writeGuestConfToPmxcfs(context.Background(), logger, node, vmEntry{
+		VMID: vmid,
+		Kind: "qemu",
+		Path: filepath.Join(stage, "etc/pve/nodes", node, "qemu-server", vmid+".conf"),
+	}, guestMustBeAbsent)
+	if err == nil {
+		t.Fatalf("expected an existing VMID to fail the absent precondition")
+	}
+	after, readErr := os.ReadFile(confPath)
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	if !bytes.Equal(after, before) {
+		t.Fatalf("VM %s configuration changed despite failed absent precondition", vmid)
+	}
+}
+
+func TestLivePVELockedGuestApplyRejectsRunningGuest(t *testing.T) {
+	logger := livePVEGuard(t)
+	const (
+		vmid     = "102"
+		confPath = "/etc/pve/qemu-server/102.conf"
+	)
+	node := localNodeName()
+	vm := vmEntry{VMID: vmid, Kind: "qemu"}
+	status, err := pveshGuestStatus(context.Background(), node, vm)
+	if err != nil {
+		t.Skipf("cannot read VM %s status: %v", vmid, err)
+	}
+	if status != "running" {
+		t.Skipf("VM %s is %q, need a running test guest", vmid, status)
+	}
+	before, err := os.ReadFile(confPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stage := liveStage(t, "etc/pve/nodes/"+node+"/qemu-server/"+vmid+".conf", []byte("name: must-not-apply\n"))
+	vm.Path = filepath.Join(stage, "etc/pve/nodes", node, "qemu-server", vmid+".conf")
+	err = writeGuestConfToPmxcfs(context.Background(), logger, node, vm, guestMustBeStopped)
+	if err == nil {
+		t.Fatalf("expected a running guest to fail the stopped precondition")
+	}
+	after, readErr := os.ReadFile(confPath)
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	if !bytes.Equal(after, before) {
+		t.Fatalf("VM %s configuration changed despite failed stopped precondition", vmid)
+	}
+}

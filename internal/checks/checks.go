@@ -372,7 +372,10 @@ func (c *Checker) CheckLockFile() CheckResult {
 					// fall through to create a fresh lock below
 				} else {
 					result.Message = formatInProgress(age, meta)
-					c.logger.Error("%s", result.Message)
+					// Debug, not Error: the caller's logResult already renders this
+					// exact fact as the one red "✗ Lock File (BACKUP_IN_PROGRESS)"
+					// line; a second bare ERROR recapped errors=2 for one skip.
+					c.logger.Debug("%s", result.Message)
 					return result
 				}
 			} else if errors.Is(killErr, syscall.ESRCH) {
@@ -394,7 +397,7 @@ func (c *Checker) CheckLockFile() CheckResult {
 					}
 				} else {
 					result.Message = formatInProgress(age, meta)
-					c.logger.Error("%s", result.Message)
+					c.logger.Debug("%s", result.Message) // see the Debug note above
 					return result
 				}
 			}
@@ -408,7 +411,7 @@ func (c *Checker) CheckLockFile() CheckResult {
 			}
 		} else {
 			result.Message = formatInProgress(age, meta)
-			c.logger.Error("%s", result.Message)
+			c.logger.Debug("%s", result.Message) // see the Debug note above
 			return result
 		}
 	}
@@ -426,7 +429,7 @@ func (c *Checker) CheckLockFile() CheckResult {
 				// spurious failure notification.
 				result.Code = CheckCodeBackupInProgress
 				result.Message = "Another backup acquired the lock"
-				c.logger.Error("%s", result.Message)
+				c.logger.Debug("%s", result.Message) // see the Debug note above
 				return result
 			}
 			result.Error = fmt.Errorf("failed to create lock file: %w", err)

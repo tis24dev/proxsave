@@ -964,6 +964,8 @@ func (a *Archiver) addToTar(ctx context.Context, tarWriter *tar.Writer, sourceDi
 		if stat, ok := linkInfo.Sys().(*syscall.Stat_t); ok {
 			header.Uid = int(stat.Uid)
 			header.Gid = int(stat.Gid)
+			// ProxSave is built and released only for linux/amd64, where these
+			// Timespec fields are int64; 32-bit syscall widths are unsupported.
 			// Preserve access and modification times
 			header.AccessTime = time.Unix(stat.Atim.Sec, stat.Atim.Nsec)
 			header.ChangeTime = time.Unix(stat.Ctim.Sec, stat.Ctim.Nsec)

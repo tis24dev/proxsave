@@ -148,15 +148,17 @@ In the TUI it is a selector titled `Cluster restore mode` with `SAFE`, `RECOVERY
 
 SAFE never writes config.db, never stops `pve-cluster`/`pvedaemon`/`pveproxy`/`pvestatd`, and never unmounts `/etc/pve`. It extracts the cluster files to an export directory and re-applies them to the RUNNING cluster through `pvesh`/`pveum`:
 
-- storage definitions (`pvesh create /storage` from storage.cfg), unless the `storage_pve` category already restores them;
-- datacenter options (`pvesh set /cluster/config`);
+- storage definitions from storage.cfg (`pvesh create /storage`, falling back to `pvesh set /storage/<id>` for definitions that already exist);
+- datacenter options (datacenter.cfg written into pmxcfs, which replicates cluster-wide; the API has no whole-file endpoint);
 - resource pools (`pveum pool add/modify` for definitions, then membership, with an optional allow-move guard when a pool lists guests);
 - PCI, USB, and directory resource mappings;
-- VM and CT configs, re-created on the CURRENT node via `pvesh create` then `pvesh set` under `/nodes/<node>/qemu|lxc/<vmid>/config`.
+- VM and CT configs: before any guest mutation, SAFE loads the cluster-wide inventory with `pvesh get /cluster/resources --type vm --output-format=json`. An unavailable, malformed, incomplete, or ambiguous inventory fails the whole selected guest batch closed. A VMID owned by another node, or present with a different guest type, is reported and skipped; SAFE never moves it. Existing guests on the current node are updated with `pvesh set` under `/nodes/<node>/qemu|lxc/<vmid>/config` (minus create-only keys); if that fails, the staged conf is written into pmxcfs only after `status/current` explicitly reports `stopped`. A VMID absent cluster-wide is registered on the current node by writing the conf into pmxcfs (config only - disks are not part of a config restore).
 
 Use SAFE when the node or cluster is up and you want to merge the backed-up configuration back in without touching the live database. SAFE needs `pvesh` on PATH; without it, it logs a skip and applies nothing.
 
 If the backup's VM/CT configs are stored under a node name that does not match the current host (a hostname change), SAFE handles it for you: it warns, and either auto-selects the single exported node or asks which exported node to import the guest configs from. The chosen configs are applied to the current node. You do not need to copy `/etc/pve/nodes/...` by hand.
+
+Selecting an exported node controls only which backed-up files are considered. It does not override live cluster ownership: if one of those VMIDs already belongs to another node, SAFE skips it rather than applying or moving it to the current node.
 
 This applies only when the guest configs are actually in the export, which means the restore included `pve_config_export`. FULL includes it; CUSTOM includes it if you select it; STORAGE and SYSTEM BASE strip export-only categories, so in those modes SAFE applies no guest config and the node-name handling never runs.
 

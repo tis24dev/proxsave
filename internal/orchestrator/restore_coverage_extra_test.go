@@ -22,11 +22,16 @@ func (runOnlyRunner) Run(ctx context.Context, name string, args ...string) ([]by
 type zfsContextTestKey struct{}
 
 type recordingRunner struct {
-	calls []string
+	calls           []string
+	inventoryOutput []byte
 }
 
 func (r *recordingRunner) Run(ctx context.Context, name string, args ...string) ([]byte, error) {
-	r.calls = append(r.calls, commandKey(name, args))
+	key := commandKey(name, args)
+	r.calls = append(r.calls, key)
+	if key == pveGuestInventoryCommand && r.inventoryOutput != nil {
+		return r.inventoryOutput, nil
+	}
 	return []byte("ok"), nil
 }
 
@@ -274,7 +279,10 @@ func TestRunSafeClusterApply_AppliesVMStorageAndDatacenterConfigs(t *testing.T) 
 	}
 	t.Setenv("PATH", pathDir+string(os.PathListSeparator)+os.Getenv("PATH"))
 
-	runner := &recordingRunner{}
+	runner := &recordingRunner{inventoryOutput: guestInventoryJSON(t,
+		pveGuestResource{VMID: 100, Node: localNodeName(), Kind: "qemu", Status: "stopped"},
+		pveGuestResource{VMID: 101, Node: localNodeName(), Kind: "lxc", Status: "stopped"},
+	)}
 	restoreCmd = runner
 
 	exportRoot := t.TempDir()
@@ -318,9 +326,18 @@ func TestRunSafeClusterApply_AppliesVMStorageAndDatacenterConfigs(t *testing.T) 
 		t.Fatalf("write datacenter.cfg: %v", err)
 	}
 
+	// datacenter.cfg is no longer a pvesh call (the live node has no 'set'
+	// handler on /cluster/config): it is a pmxcfs write, asserted on the file.
+	pmxRoot := t.TempDir()
+	seamPmxcfs(t, pmxRoot, true, nil)
+
 	reader := bufio.NewReader(strings.NewReader("yes\nyes\nyes\n"))
 	if err := runSafeClusterApply(context.Background(), reader, exportRoot, newTestLogger()); err != nil {
 		t.Fatalf("runSafeClusterApply error: %v", err)
+	}
+
+	if got, err := os.ReadFile(filepath.Join(pmxRoot, "datacenter.cfg")); err != nil || string(got) != "keyboard: it\n" {
+		t.Fatalf("datacenter.cfg not written into pmxcfs: %q err=%v", got, err)
 	}
 
 	wantPrefixes := []string{
@@ -328,7 +345,6 @@ func TestRunSafeClusterApply_AppliesVMStorageAndDatacenterConfigs(t *testing.T) 
 		"pvesh set /nodes/" + node + "/lxc/101/config --hostname=ct101",
 		"pvesh create /storage --storage=local --type=dir --path=/var/lib/vz",
 		"pvesh create /storage --storage=backup_ext --type=nfs --server=10.0.0.1",
-		"pvesh set /cluster/config -conf ",
 	}
 	for _, prefix := range wantPrefixes {
 		found := false
@@ -480,7 +496,9 @@ func TestRunSafeClusterApply_UsesSingleExportedNodeWhenHostnameMismatch(t *testi
 	}
 	t.Setenv("PATH", pathDir+string(os.PathListSeparator)+os.Getenv("PATH"))
 
-	runner := &recordingRunner{}
+	runner := &recordingRunner{inventoryOutput: guestInventoryJSON(t,
+		pveGuestResource{VMID: 100, Node: localNodeName(), Kind: "qemu", Status: "stopped"},
+	)}
 	restoreCmd = runner
 
 	exportRoot := t.TempDir()
@@ -533,7 +551,9 @@ func TestRunSafeClusterApply_PromptsForSourceNodeWhenMultipleExportNodes(t *test
 	}
 	t.Setenv("PATH", pathDir+string(os.PathListSeparator)+os.Getenv("PATH"))
 
-	runner := &recordingRunner{}
+	runner := &recordingRunner{inventoryOutput: guestInventoryJSON(t,
+		pveGuestResource{VMID: 101, Node: localNodeName(), Kind: "qemu", Status: "stopped"},
+	)}
 	restoreCmd = runner
 
 	exportRoot := t.TempDir()

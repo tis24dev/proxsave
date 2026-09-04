@@ -36,6 +36,7 @@ An in-place `--upgrade` replaces the on-disk binary without restarting the resid
 
 ```bash
 proxsave --daemon-status                       # read-only status + exit code (see below)
+proxsave --daemon-status --log-level debug     # include script-path ownership/mode evidence
 systemctl status proxsave-daemon.service       # is it running?
 journalctl -u proxsave-daemon.service -f       # follow its log
 proxsave --daemon-setup                        # switch to the daemon
@@ -51,9 +52,13 @@ Daemon service (proxsave-daemon.service): installed | not installed
 Service state (systemctl is-active): <active|inactive|...>
 Running version: <version> (<commit>)
 Binary alignment: aligned | BEHIND (restart needed) | unknown
+Personal pre-run script: NOT CONFIGURED | READY — <path> | REFUSED — <path> — <reason>
+Personal post-run script: NOT CONFIGURED | READY — <path> | REFUSED — <path> — <reason>
 ```
 
-The last two lines (`Running version:` and `Binary alignment:`) appear only when a running daemon and its identity record are available; they are omitted when the daemon is not installed or not running. It exits `0` **only** when the daemon is running, beating, and aligned; every gap (not installed, not running, stale, running but not reporting, or behind) exits non-zero, so `proxsave --daemon-status` can gate a script. It cannot be combined with `--daemon`, `--daemon-setup`, or `--daemon-remove`.
+`Running version:` and `Binary alignment:` appear only when their daemon evidence is available. The two personal-script lines always appear. `READY` means the configured path passes the same trusted-path gate used at daemon startup; `REFUSED` includes the exact refusal reason. With debug logging, the block also shows the UID used for that decision and every inspected path component's owner and mode. It reads the effective UID from the live daemon's `/proc/<pid>/status` when possible and explicitly reports a fallback to the status command's UID when it cannot.
+
+This check is read-only: it never executes a personal script, starts a backup, acquires daemon ownership, or sends a healthcheck ping. Script status does not alter its exit code. It exits `0` **only** when the daemon is running, beating, and aligned; every daemon gap (not installed, not running, stale, running but not reporting, or behind) exits non-zero, so `proxsave --daemon-status` can gate a script. It cannot be combined with `--daemon`, `--daemon-setup`, or `--daemon-remove`.
 
 ## Install
 
@@ -202,7 +207,7 @@ They are **yours, not ProxSave's**, and the whole contract follows from that:
 
 - **Daemon runs only.** A manual `proxsave --backup`, a cron-mode run, and a dashboard run
   start neither script. Only the run the daemon schedules and supervises is bracketed.
-- **Nothing is reported about them.** Their standard output and standard error go to
+- **Nothing is reported about their execution.** Their standard output and standard error go to
   `/dev/null`. Nothing they print or fail at appears in the run log, in the log file, in the
   run recap, in an email, Telegram, Gotify or webhook notification, in a healthchecks ping, or
   in the Prometheus metrics. If you want a record of what your script did, your script writes
@@ -234,7 +239,9 @@ They are **yours, not ProxSave's**, and the whole contract follows from that:
   shape). A path that fails any of it is disabled for that daemon and the gate says so, once:
   a `WARNING` in the daemon's log naming the variable, the path and the reason. That warning
   is deliberate and is the single exception to the silence above - without it, a refused path
-  would be indistinguishable from a script that ran and did nothing.
+  would be indistinguishable from a script that ran and did nothing. Do not change a user's
+  home directory to `root:root` to satisfy this check. Move the script to a fully root-owned
+  path such as `/usr/local/bin`, then update `backup.env` and restart the daemon.
 - **Started as they are.** The path is executed directly: no shell, so no pipes, redirections
   or arguments in the value, and no arguments passed. The script inherits the daemon's own
   environment with two variables removed, `LOG_FILE` and `BASE_DIR`: the first names the run
@@ -264,9 +271,11 @@ Both values are read once, when the daemon starts. Changing a path in `backup.en
 effect at the next daemon restart; changing the contents of the script file takes effect at
 the next run.
 
-Because ProxSave says nothing about these scripts, a script that never runs looks exactly like
-a script that ran and did nothing. Test it by hand first, as root:
-`/usr/local/bin/my-pre-run.sh; echo $?`.
+To diagnose the configured paths without executing either script, run
+`proxsave --daemon-status --log-level debug`. It applies the daemon startup gate, reports
+`READY`, `REFUSED` with the exact reason, or `NOT CONFIGURED`, and includes the UID plus
+ownership/mode evidence. This does not prove the script's own logic succeeds; test that separately,
+as root, with `/usr/local/bin/my-pre-run.sh; echo $?`.
 
 ## Caveat: uninterruptible sleep (D state)
 

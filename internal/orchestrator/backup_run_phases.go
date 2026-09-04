@@ -103,18 +103,27 @@ func (o *Orchestrator) initBackupRun(run *backupRunContext) *BackupStats {
 
 func (o *Orchestrator) exportBackupMetrics(run *backupRunContext, runErr error) {
 	stats := run.stats
+	// On a successful, non-dry run the pre-notification issue snapshot was taken before
+	// notifications ran, so a notify/communication failure logged during dispatch is not
+	// yet counted. Re-parse the log so it surfaces as a warning (status 1) instead of
+	// vanishing to success (0). Idempotent: a clean run stays success.
+	//
+	// This runs BEFORE the metrics gate on purpose: it decides the PROCESS exit code
+	// (this whole function is a defer inside RunGoBackup, and the cmd layer exits with
+	// stats.ExitCode), and it sat behind the gate for two releases - the same notify
+	// failure exited 1 with METRICS_ENABLED=true and 0 on a default install. The
+	// contract (maintainer call, 2026-09-02): a notification failure is warning-weight
+	// ALWAYS, whatever the metrics setting - monitoring must learn notifications are
+	// broken exactly when email cannot say so. NOTIFICATIONS.md states the same.
+	if runErr == nil && !o.dryRun && stats != nil {
+		o.finalizeSuccessIssueStats(stats)
+	}
+
 	if !o.shouldExportBackupMetrics(stats) {
 		return
 	}
 
 	o.ensureBackupStatsTiming(stats)
-	// On a successful, non-dry run the pre-notification issue snapshot was taken before
-	// notifications ran, so a notify/communication failure logged during dispatch is not
-	// yet counted. Re-parse the log so it surfaces as a warning (status 1) instead of
-	// vanishing to success (0). Idempotent: a clean run stays success.
-	if runErr == nil && !o.dryRun {
-		o.finalizeSuccessIssueStats(stats)
-	}
 	stats.ExitCode = backupMetricsExitCode(stats, runErr)
 	o.exportPrometheusBackupMetrics(stats)
 }

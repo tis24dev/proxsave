@@ -355,6 +355,7 @@ func TestCharmConfirmApplyPrompts(t *testing.T) {
 		resCh <- result{ok, err}
 	}()
 	d.waitScreen("Apply storage.cfg")
+	d.waitOutput("Apply via API")
 	d.keys("left enter") // deliberate apply
 	if res := <-resCh; res.err != nil || !res.ok {
 		t.Fatalf("deliberate apply failed, got %+v", res)
@@ -365,6 +366,7 @@ func TestCharmConfirmApplyPrompts(t *testing.T) {
 		resCh <- result{ok, err}
 	}()
 	d.waitScreen("Apply datacenter.cfg")
+	d.waitOutput("Write to pmxcfs")
 	d.keys("esc")
 	if res := <-resCh; res.err != nil || res.ok {
 		t.Fatalf("esc must decline, got %+v", res)

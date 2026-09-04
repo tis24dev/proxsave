@@ -1140,44 +1140,37 @@ defer func() {
 
 ### Standalone vs Cluster Detection
 
-The `ClusterMode` field in the backup manifest determines restore behavior:
-
-| Manifest Value | Detection | Prompt Shown | Restore Behavior |
-|----------------|-----------|--------------|------------------|
-| `"standalone"` or empty | Standalone | NO | Direct database restore |
-| `"cluster"` | Cluster | YES | SAFE or RECOVERY choice |
-
-**ClusterMode is set during backup** in `backup_run_helpers.go` (`standaloneClusterMode()`):
-```go
-func standaloneClusterMode(collector *backup.Collector) string {
-    if collector.IsClusteredPVE() {
-        return "cluster"
-    }
-    return "standalone"
-}
-```
+The analyzed archive payload determines restore behavior. `AnalyzeRestoreArchive()`
+sets `RestoreDecisionInfo.ClusterPayload` when the archive contains the
+`pve_cluster` category, and `PlanRestore()` carries that value into the plan. The
+manifest's `ClusterMode` is retained as consistency metadata: a disagreement with
+the payload produces a warning, but does not override the payload decision.
 
 ### Detection Logic
 
-The workflow detects cluster backups via the manifest's `ClusterMode` field:
+The SAFE/RECOVERY prompt is shown only when the selected plan both contains the
+payload and would otherwise restore the `pve_cluster` category normally:
 
 ```go
-if systemType == SystemTypePVE &&
-   strings.EqualFold(strings.TrimSpace(candidate.Manifest.ClusterMode), "cluster") &&
-   hasCategoryID(selectedCategories, "pve_cluster") {
-    // Cluster backup detected, prompt for SAFE vs RECOVERY
+plan := PlanRestore(decisionInfo.ClusterPayload, selectedCategories, systemType, mode)
+if plan.ClusterBackup && plan.NeedsClusterRestore {
+    // Prompt for SAFE vs RECOVERY.
 }
 ```
 
-**For standalone backups**: This condition is FALSE, so:
-- No SAFE/RECOVERY prompt is shown
-- `pve_cluster` remains in `normalCategories`
-- Database is restored directly (same as RECOVERY mode)
+| Analyzed archive and selection | Prompt | `config.db` handling |
+|--------------------------------|--------|----------------------|
+| No `pve_cluster` payload, or category not selected | No | Not restored |
+| Payload selected, manifest says standalone or is empty | Yes | SAFE exports it; RECOVERY restores it |
+| Payload selected, manifest says cluster | Yes | SAFE exports it; RECOVERY restores it |
+| Archive analysis failed and full-restore fallback is used | No | Intentionally skipped |
 
-**For cluster backups**: This condition is TRUE, so:
-- SAFE/RECOVERY prompt is shown
-- User chooses restore strategy
-- SAFE mode redirects to export + pvesh API
+A standalone PVE backup commonly contains `pve_cluster` data, so it normally gets
+the same choice. SAFE moves that category to export-only and leaves
+`/var/lib/pve-cluster/config.db` untouched. RECOVERY keeps it in the normal
+restore set, stops PVE cluster services, unmounts `/etc/pve`, restores the
+database, then restarts the services. Staged `/etc/pve` applies are skipped in
+RECOVERY because the restored database owns that state.
 
 ### SAFE Mode Implementation
 
@@ -1212,9 +1205,12 @@ After extraction in SAFE mode, `runSafeClusterApply()` offers API-based restorat
 
 **Key Functions**:
 - `scanVMConfigs()`: Scans `<export>/etc/pve/nodes/<node>/qemu-server/` and `lxc/`
-- `applyVMConfigs()`: Applies each config via `pvesh set /nodes/<node>/<type>/<vmid>/config`
+- `loadPVEGuestInventory()`: Loads and strictly validates the cluster-wide `qemu`/`lxc` ownership map from `/cluster/resources`
+- `applyVMConfigs()`: Classifies every VMID before mutation; skips remote/type-mismatched guests, updates matching local guests through `pvesh`, and registers cluster-wide-absent guests through pmxcfs
 - `applyStorageCfg()`: Parses storage.cfg blocks and applies via `pvesh set /cluster/storage/<id>`
 - `runPvesh()`: Executes pvesh commands with logging
+
+Guest apply is fail-closed. The inventory is loaded once before the loop; any command, JSON validation, incomplete-record, or duplicate-VMID error marks the selected guest entries failed without mutating them. A failed API update may fall back to the staged pmxcfs file only when a JSON `status/current` response explicitly says `stopped`.
 
 **Flow**:
 ```go
@@ -1231,10 +1227,13 @@ func runSafeClusterApply(ctx context.Context, reader *bufio.Reader, exportRoot s
         applyStorageCfg(ctx, storageCfg, logger)
     }
 
-    // 3. Apply datacenter.cfg
+    // 3. Apply datacenter.cfg - written into pmxcfs: the API has no whole-file
+    // endpoint (a live node answers `pvesh set /cluster/config` with
+    // "No 'set' handler defined"), and /etc/pve is the cluster-replicated
+    // filesystem, so the file write IS the cluster-wide apply.
     dcCfg := filepath.Join(exportRoot, "etc/pve/datacenter.cfg")
-    if fileExists(dcCfg) && promptYesNo("Apply datacenter.cfg via pvesh?") {
-        runPvesh(ctx, logger, []string{"set", "/cluster/config", "-conf", dcCfg})
+    if fileExists(dcCfg) && promptYesNo("Apply datacenter.cfg?") {
+        pmxcfsWriteFile(logger, "datacenter.cfg", readFile(dcCfg))
     }
 }
 ```

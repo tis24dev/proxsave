@@ -1645,8 +1645,13 @@ func TestApplyVMConfigs_SuccessfulApply(t *testing.T) {
 	orig := restoreCmd
 	t.Cleanup(func() { restoreCmd = orig })
 
+	node := localNodeName()
 	fake := &FakeCommandRunner{
-		Outputs: map[string][]byte{},
+		Outputs: map[string][]byte{
+			pveGuestInventoryCommand: guestInventoryJSON(t,
+				pveGuestResource{VMID: 100, Node: node, Kind: "qemu", Status: "stopped"},
+			),
+		},
 	}
 	restoreCmd = fake
 
@@ -1675,19 +1680,30 @@ func TestApplyVMConfigs_SuccessfulApply(t *testing.T) {
 	}
 }
 
-func TestApplyVMConfigs_CreatesMissingGuestBeforeSet(t *testing.T) {
-	orig := restoreCmd
-	t.Cleanup(func() { restoreCmd = orig })
+func TestApplyVMConfigs_RegistersMissingGuestViaPmxcfs(t *testing.T) {
+	// The old contract created the guest via pvesh and then set its config; the
+	// create was a dead end for LXC (ostemplate) and needless for qemu, so a
+	// missing guest is now registered by writing its staged conf into pmxcfs
+	// (fable-check bugs 2-3; see pve_guest_apply_test.go for the full matrix).
+	orig, origLockedWriter := restoreCmd, pveGuestLockedWriter
+	t.Cleanup(func() {
+		restoreCmd, pveGuestLockedWriter = orig, origLockedWriter
+	})
 
 	node := localNodeName()
-	getCall := fmt.Sprintf("pvesh get /nodes/%s/qemu/100/config", node)
 	fake := &FakeCommandRunner{
-		Outputs: map[string][]byte{},
-		Errors: map[string]error{
-			getCall: fmt.Errorf("not found"),
+		Outputs: map[string][]byte{
+			pveGuestInventoryCommand: guestInventoryJSON(t),
 		},
 	}
 	restoreCmd = fake
+
+	pmxRoot := t.TempDir()
+	seamPmxcfs(t, pmxRoot, true, nil)
+	pveGuestLockedWriter = func(_ context.Context, logger *logging.Logger, currentNode string, vm vmEntry, _ guestApplyPrecondition, data []byte) error {
+		rel := filepath.Join("nodes", currentNode, guestConfDir(vm.Kind), vm.VMID+".conf")
+		return pmxcfsWriteFile(logger, rel, data)
+	}
 
 	dir := t.TempDir()
 	configPath := filepath.Join(dir, "100.conf")
@@ -1702,12 +1718,13 @@ func TestApplyVMConfigs_CreatesMissingGuestBeforeSet(t *testing.T) {
 	if applied != 1 || failed != 0 {
 		t.Fatalf("expected (1,0), got (%d,%d)", applied, failed)
 	}
-	calls := strings.Join(fake.CallsList(), "\n")
-	if !strings.Contains(calls, fmt.Sprintf("pvesh create /nodes/%s/qemu --vmid=100", node)) {
-		t.Fatalf("missing create call; calls=%s", calls)
+	got, err := os.ReadFile(filepath.Join(pmxRoot, "nodes", node, "qemu-server", "100.conf"))
+	if err != nil || string(got) != "name: test-vm" {
+		t.Fatalf("conf not registered in pmxcfs: %q err=%v", got, err)
 	}
-	if !strings.Contains(calls, fmt.Sprintf("pvesh set /nodes/%s/qemu/100/config --name=test-vm", node)) {
-		t.Fatalf("missing set call; calls=%s", calls)
+	calls := strings.Join(fake.CallsList(), "\n")
+	if strings.Contains(calls, "pvesh create /nodes/") {
+		t.Fatalf("pvesh create must be gone; calls=%s", calls)
 	}
 }
 

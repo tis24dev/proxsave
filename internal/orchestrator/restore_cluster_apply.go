@@ -4,6 +4,7 @@ package orchestrator
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -187,12 +188,76 @@ func readVMName(confPath string) string {
 
 func applyVMConfigs(ctx context.Context, entries []vmEntry, logger *logging.Logger) (applied, failed int) {
 	node := localNodeName()
+	done := logging.DebugStart(logger, "pve guest configs apply", "entries=%d current_node=%s", len(entries), node)
+	var traceErr error
+	defer func() {
+		logging.DebugStep(logger, "pve guest configs apply", "Result: ok=%d failed=%d", applied, failed)
+		done(traceErr)
+	}()
+	if len(entries) == 0 {
+		return 0, 0
+	}
+	if err := ctx.Err(); err != nil {
+		traceErr = err
+		logger.Warning("VM apply aborted: %v", err)
+		return applied, failed
+	}
+
+	inventory, err := loadPVEGuestInventory(ctx)
+	if err != nil {
+		traceErr = err
+		failed = len(entries)
+		logger.Warning("Failed to load the cluster-wide VM/CT inventory; refusing to apply %d guest config(s): %v", len(entries), err)
+		return applied, failed
+	}
+	logging.DebugStep(logger, "pve guest configs apply", "Loaded cluster-wide inventory: guests=%d", len(inventory))
+
 	for _, vm := range entries {
 		if err := ctx.Err(); err != nil {
+			traceErr = err
 			logger.Warning("VM apply aborted: %v", err)
 			return applied, failed
 		}
 		target := fmt.Sprintf("/nodes/%s/%s/%s/config", node, vm.Kind, vm.VMID)
+		display := vm.VMID
+		if vm.Name != "" {
+			display = fmt.Sprintf("%s (%s)", vm.VMID, vm.Name)
+		}
+
+		resource, exists := inventory[vm.VMID]
+		if exists && resource.Node != node {
+			logging.DebugStep(logger, "pve guest configs apply", "vmid=%s classification=remote owner_node=%s current_node=%s", vm.VMID, resource.Node, node)
+			logger.Warning("Skipping VM/CT config %s: vmid=%s already belongs to remote node %s (current node: %s)", display, vm.VMID, resource.Node, node)
+			failed++
+			continue
+		}
+		if exists && resource.Kind != vm.Kind {
+			logging.DebugStep(logger, "pve guest configs apply", "vmid=%s classification=type-mismatch inventory_kind=%s staged_kind=%s", vm.VMID, resource.Kind, vm.Kind)
+			logger.Warning("Skipping VM/CT config %s: vmid=%s is %s in the cluster inventory but the staged config is %s", display, vm.VMID, resource.Kind, vm.Kind)
+			failed++
+			continue
+		}
+
+		if !exists {
+			logging.DebugStep(logger, "pve guest configs apply", "vmid=%s classification=absent action=register-pmxcfs", vm.VMID)
+			// pvesh create is a dead end here: ostemplate is create-time-only and
+			// never persists into a CT conf, so an LXC could NEVER be created this
+			// way (fable-check bug 3), and for qemu the conf itself is the
+			// registration. Writing the staged conf into pmxcfs IS how a guest
+			// comes into existence on PVE; the native guest locks below repeat
+			// the cluster-wide absence check before doing so. Its disks are not
+			// part of a config restore and the log says so.
+			if err := writeGuestConfToPmxcfs(ctx, logger, node, vm, guestMustBeAbsent); err != nil {
+				logger.Warning("Failed to register VM/CT config %s (vmid=%s kind=%s): %v", target, vm.VMID, vm.Kind, err)
+				failed++
+				continue
+			}
+			logger.Info("Registered VM/CT config %s via pmxcfs (config only: disks are not part of a config restore)", display)
+			applied++
+			continue
+		}
+
+		logging.DebugStep(logger, "pve guest configs apply", "vmid=%s classification=local kind=%s action=pvesh-set", vm.VMID, vm.Kind)
 		configArgs, err := pveshArgsFromColonConfigFile(vm.Path)
 		if err != nil {
 			logger.Warning("Failed to read %s (vmid=%s kind=%s): %v", vm.Path, vm.VMID, vm.Kind, err)
@@ -200,40 +265,93 @@ func applyVMConfigs(ctx context.Context, entries []vmEntry, logger *logging.Logg
 			continue
 		}
 
-		exists, err := pveshGuestExists(ctx, logger, target)
-		if err != nil {
-			logger.Warning("Failed to check existing VM/CT config %s (vmid=%s kind=%s): %v", target, vm.VMID, vm.Kind, err)
-			failed++
+		// Existing guest: the API first, minus the create-only keys the update
+		// schema refuses (`meta` on qemu, `ostemplate` on lxc - one rejected key
+		// fails the WHOLE set, which is how no modern guest ever got its config
+		// applied, fable-check bug 2). The staged conf file is the fidelity net,
+		// guarded off a RUNNING guest both before and inside PVE's native guest
+		// locks: a config race with a live guest is the one case where the file
+		// must not win (maintainer's call, 2026-09-02).
+		args := append([]string{"set", target}, filterGuestCreateOnlyArgs(configArgs)...)
+		if err := runPvesh(ctx, logger, args); err != nil {
+			status, statusErr := pveshGuestStatus(ctx, node, vm)
+			if statusErr != nil {
+				logger.Warning("Failed to apply %s (vmid=%s kind=%s) and could not verify that the guest is stopped; skipping the file fallback: %v (status probe: %v)", target, vm.VMID, vm.Kind, err, statusErr)
+				failed++
+				continue
+			}
+			if status != "stopped" {
+				logger.Warning("Failed to apply %s (vmid=%s kind=%s) and guest status is %q, not explicitly stopped; skipping the file fallback: %v", target, vm.VMID, vm.Kind, status, err)
+				failed++
+				continue
+			}
+			if wErr := writeGuestConfToPmxcfs(ctx, logger, node, vm, guestMustBeStopped); wErr != nil {
+				logger.Warning("Failed to apply %s (vmid=%s kind=%s): %v (pmxcfs fallback: %v)", target, vm.VMID, vm.Kind, err, wErr)
+				failed++
+				continue
+			}
+			logger.Info("Applied VM/CT config %s via pmxcfs after the API refused: %v", display, err)
+			applied++
 			continue
 		}
-		if !exists {
-			createArgs, err := pveshCreateGuestArgs(node, vm, configArgs)
-			if err != nil {
-				logger.Warning("Failed to prepare VM/CT create for %s (vmid=%s kind=%s): %v", target, vm.VMID, vm.Kind, err)
-				failed++
-				continue
-			}
-			if err := runPvesh(ctx, logger, createArgs); err != nil {
-				logger.Warning("Failed to create VM/CT config %s (vmid=%s kind=%s): %v", target, vm.VMID, vm.Kind, err)
-				failed++
-				continue
-			}
-		}
-
-		args := append([]string{"set", target}, configArgs...)
-		if err := runPvesh(ctx, logger, args); err != nil {
-			logger.Warning("Failed to apply %s (vmid=%s kind=%s): %v", target, vm.VMID, vm.Kind, err)
-			failed++
-		} else {
-			display := vm.VMID
-			if vm.Name != "" {
-				display = fmt.Sprintf("%s (%s)", vm.VMID, vm.Name)
-			}
-			logger.Info("Applied VM/CT config %s", display)
-			applied++
-		}
+		logger.Info("Applied VM/CT config %s", display)
+		applied++
 	}
 	return applied, failed
+}
+
+// guestConfDir maps a guest kind to its pmxcfs config directory.
+func guestConfDir(kind string) string {
+	if kind == "qemu" {
+		return "qemu-server"
+	}
+	return kind
+}
+
+// writeGuestConfToPmxcfs applies the staged conf byte-for-byte while PVE's
+// native guest locks protect the required cluster and runtime precondition.
+func writeGuestConfToPmxcfs(ctx context.Context, logger *logging.Logger, node string, vm vmEntry, precondition guestApplyPrecondition) error {
+	data, err := restoreFS.ReadFile(vm.Path)
+	if err != nil {
+		return fmt.Errorf("read staged conf %s: %w", vm.Path, err)
+	}
+	return pveGuestLockedWriter(ctx, logger, node, vm, precondition, data)
+}
+
+// filterGuestCreateOnlyArgs drops the keys the live update schemas refuse
+// (probed 2026-09-02 on PVE 9.1.9): --meta is absent from the qemu set schema
+// and --ostemplate from the lxc one; either fails the whole set.
+func filterGuestCreateOnlyArgs(args []string) []string {
+	out := make([]string, 0, len(args))
+	for _, arg := range args {
+		if strings.HasPrefix(arg, "--meta=") || strings.HasPrefix(arg, "--ostemplate=") {
+			continue
+		}
+		out = append(out, arg)
+	}
+	return out
+}
+
+// pveshGuestStatus returns the explicit status/current state. Callers must
+// positively observe "stopped" before a direct pmxcfs fallback; a command or
+// parse error is never equivalent to a stopped guest.
+func pveshGuestStatus(ctx context.Context, node string, vm vmEntry) (string, error) {
+	statusPath := fmt.Sprintf("/nodes/%s/%s/%s/status/current", node, vm.Kind, vm.VMID)
+	out, err := restoreCmd.Run(ctx, "pvesh", "get", statusPath, "--output-format=json")
+	if err != nil {
+		return "", fmt.Errorf("pvesh get %s: %w", statusPath, err)
+	}
+	var payload struct {
+		Status string `json:"status"`
+	}
+	if err := json.Unmarshal(out, &payload); err != nil {
+		return "", fmt.Errorf("parse guest status %s: %w", statusPath, err)
+	}
+	status := strings.ToLower(strings.TrimSpace(payload.Status))
+	if status == "" {
+		return "", fmt.Errorf("guest status %s is empty", statusPath)
+	}
+	return status, nil
 }
 
 func localNodeName() string {
@@ -243,59 +361,6 @@ func localNodeName() string {
 		return host
 	}
 	return "localhost"
-}
-
-func pveshGuestExists(ctx context.Context, logger *logging.Logger, target string) (bool, error) {
-	if err := runPvesh(ctx, logger, []string{"get", target}); err != nil {
-		if isPveshNotFoundError(err) {
-			return false, nil
-		}
-		return false, err
-	}
-	return true, nil
-}
-
-func pveshCreateGuestArgs(node string, vm vmEntry, configArgs []string) ([]string, error) {
-	args := []string{
-		"create",
-		fmt.Sprintf("/nodes/%s/%s", node, vm.Kind),
-		fmt.Sprintf("--vmid=%s", vm.VMID),
-	}
-	switch vm.Kind {
-	case "qemu":
-		return args, nil
-	case "lxc":
-		ostemplate, ok := pveshArgValue(configArgs, "ostemplate")
-		if !ok {
-			return nil, fmt.Errorf("missing ostemplate in LXC config")
-		}
-		return append(args, fmt.Sprintf("--ostemplate=%s", ostemplate)), nil
-	default:
-		return nil, fmt.Errorf("unsupported guest kind %q", vm.Kind)
-	}
-}
-
-func pveshArgValue(args []string, key string) (string, bool) {
-	prefix := "--" + key + "="
-	for _, arg := range args {
-		if strings.HasPrefix(arg, prefix) {
-			return strings.TrimPrefix(arg, prefix), true
-		}
-	}
-	return "", false
-}
-
-func isPveshNotFoundError(err error) bool {
-	if err == nil {
-		return false
-	}
-	msg := strings.ToLower(err.Error())
-	for _, marker := range []string{"not found", "does not exist", "no such", "unable to find", "404"} {
-		if strings.Contains(msg, marker) {
-			return true
-		}
-	}
-	return false
 }
 
 type storageBlock struct {
@@ -338,6 +403,61 @@ func pveshArgsFromProxmoxEntries(entries []proxmoxNotificationEntry) []string {
 		args = append(args, fmt.Sprintf("--%s=%s", key, value))
 	}
 	return args
+}
+
+// pveshSetStorageDroppingCreateOnly runs `pvesh set /storage/<id>` and, on the
+// live "Unknown option: <key>" refusal (create-only keys: `path` on a dir
+// storage, measured on PVE 9.1.9; server/export on nfs are the same family),
+// drops the named key and retries. The set schema varies by storage type and
+// PVE version, so the refusal itself is the authoritative list - a hardcoded
+// whitelist would drift.
+func pveshSetStorageDroppingCreateOnly(ctx context.Context, logger *logging.Logger, id string, args []string) error {
+	for attempt := 0; attempt <= len(args); attempt++ {
+		full := append([]string{"set", "/storage/" + id}, args...)
+		out, err := restoreCmd.Run(ctx, "pvesh", full...)
+		if len(out) > 0 {
+			logger.Debug("pvesh %v output: %s", full, strings.TrimSpace(string(out)))
+		}
+		if err == nil {
+			return nil
+		}
+		key := pveshUnknownOptionFrom(string(out))
+		if key == "" {
+			return fmt.Errorf("pvesh %v failed: %w", full, err)
+		}
+		trimmed := args[:0:0]
+		for _, arg := range args {
+			if strings.HasPrefix(arg, "--"+key+"=") {
+				logger.Debug("storage %s: dropping create-only key --%s from the set fallback", id, key)
+				continue
+			}
+			trimmed = append(trimmed, arg)
+		}
+		if len(trimmed) == len(args) {
+			return fmt.Errorf("pvesh %v failed: %w", full, err)
+		}
+		if len(trimmed) == 0 {
+			// Nothing left to update: the definition already matches on every
+			// settable key, which is a success, not a failure.
+			return nil
+		}
+		args = trimmed
+	}
+	return fmt.Errorf("storage %s: the set fallback did not converge", id)
+}
+
+// pveshUnknownOptionFrom extracts the key from pvesh's "Unknown option: <key>" output.
+func pveshUnknownOptionFrom(out string) string {
+	const marker = "Unknown option: "
+	idx := strings.Index(out, marker)
+	if idx < 0 {
+		return ""
+	}
+	rest := out[idx+len(marker):]
+	if end := strings.IndexAny(rest, " \t\r\n"); end >= 0 {
+		rest = rest[:end]
+	}
+	return strings.TrimSpace(rest)
 }
 
 func storageBlockPveshArgs(block storageBlock) ([]string, bool) {
@@ -408,8 +528,24 @@ func applyStorageCfg(ctx context.Context, cfgPath string, logger *logging.Logger
 		args := append([]string{"create", "/storage"}, createArgs...)
 
 		if runErr := runPvesh(ctx, logger, args); runErr != nil {
-			logger.Warning("Failed to apply storage %s: %v", blk.ID, runErr)
-			failed++
+			// Fallback: the definition already exists (`dir: local` does on every
+			// node, probed live 2026-09-02: "storage ID 'local' already defined"),
+			// so update it - the same create-then-set shape the backup-jobs apply
+			// has always had. --storage and --type are create-only and stay out.
+			setArgs := make([]string, 0, len(createArgs))
+			for _, arg := range createArgs {
+				if strings.HasPrefix(arg, "--storage=") || strings.HasPrefix(arg, "--type=") {
+					continue
+				}
+				setArgs = append(setArgs, arg)
+			}
+			if setErr := pveshSetStorageDroppingCreateOnly(ctx, logger, blk.ID, setArgs); setErr != nil {
+				logger.Warning("Failed to apply storage %s: %v (create: %v)", blk.ID, setErr, runErr)
+				failed++
+			} else {
+				logger.Info("Updated existing storage definition %s", blk.ID)
+				applied++
+			}
 		} else {
 			logger.Info("Applied storage definition %s", blk.ID)
 			applied++

@@ -309,3 +309,57 @@ func TestFilesystemDetectorTestOwnershipSupport_FailsWhenDirNotWritable(t *testi
 		t.Fatalf("expected ownership support test to fail when directory is not writable")
 	}
 }
+
+// A mount point must own the path by PATH BOUNDARY, not by string prefix: with
+// mounts "/" and "/mnt/nas", BACKUP_PATH=/mnt/nas2 lives on "/", but a bare
+// HasPrefix picked "/mnt/nas" - and a dead /mnt/nas then turned into a critical
+// StorageError aborting the backup of a perfectly healthy sibling path.
+func TestBestMountPointForRespectsPathBoundaries(t *testing.T) {
+	lines := []string{
+		"rootfs / ext4 rw 0 0",
+		"nas /mnt/nas nfs4 rw 0 0",
+	}
+	cases := map[string]string{
+		"/mnt/nas2":    "/",
+		"/mnt/nas":     "/mnt/nas",
+		"/mnt/nas/sub": "/mnt/nas",
+		"/var/backups": "/",
+	}
+	for path, want := range cases {
+		if got := bestMountPointFor(lines, path); got != want {
+			t.Errorf("bestMountPointFor(%q) = %q, want %q", path, got, want)
+		}
+	}
+}
+
+// getFilesystemType answered with the FIRST /proc/mounts entry for the mount
+// point. Under a systemd automount the autofs placeholder precedes the real
+// filesystem at the same path - both lines below are verbatim from the live PVE
+// test node - so the backup path resolved to autofs, parseFilesystemType said
+// Unknown, the network write-probe never ran (Unknown is not a network FS) and
+// SetPermissions silently skipped chown/chmod 0600 on the stored backups. The
+// kernel appends mounts in order (verified live with stacked mounts), so the
+// LAST matching entry is the filesystem a path actually resolves to.
+func TestLastMountEntryWinsOverAutofsPlaceholder(t *testing.T) {
+	lines := []string{
+		"systemd-1 /proc/sys/fs/binfmt_misc autofs rw,relatime,fd=37,pgrp=1,timeout=0,minproto=5,maxproto=5,direct,pipe_ino=12636 0 0",
+		"binfmt_misc /proc/sys/fs/binfmt_misc binfmt_misc rw,nosuid,nodev,noexec,relatime 0 0",
+	}
+	fsTypeStr, device, ok := lastMountEntryFor(lines, "/proc/sys/fs/binfmt_misc")
+	if !ok || fsTypeStr != "binfmt_misc" || device != "binfmt_misc" {
+		t.Fatalf("want the real filesystem behind the autofs placeholder, got type=%q device=%q ok=%v", fsTypeStr, device, ok)
+	}
+
+	nas := []string{
+		"systemd-1 /mnt/nas autofs rw,relatime,fd=41,pgrp=1,timeout=120,minproto=5,maxproto=5,direct 0 0",
+		"nas:/export /mnt/nas nfs4 rw,relatime,vers=4.2 0 0",
+	}
+	fsTypeStr, device, ok = lastMountEntryFor(nas, "/mnt/nas")
+	if !ok || fsTypeStr != "nfs4" || device != "nas:/export" {
+		t.Fatalf("the triggered nfs4 mount must win over its autofs trigger, got type=%q device=%q ok=%v", fsTypeStr, device, ok)
+	}
+
+	if _, _, ok := lastMountEntryFor(nas, "/mnt/other"); ok {
+		t.Fatal("an absent mount point must not match")
+	}
+}

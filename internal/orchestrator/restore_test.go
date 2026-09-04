@@ -1385,16 +1385,11 @@ func TestPveshArgsFromColonConfigLinesStopsAtSectionHeader(t *testing.T) {
 	}
 }
 
-func TestPveshCreateGuestArgsIncludesLXCOstemplate(t *testing.T) {
-	args, err := pveshCreateGuestArgs("node1", vmEntry{VMID: "101", Kind: "lxc"}, []string{"--hostname=ct101", "--ostemplate=local:vztmpl/debian.tar.zst"})
-	if err != nil {
-		t.Fatalf("pveshCreateGuestArgs error = %v", err)
-	}
-	got := strings.Join(args, " ")
-	if !strings.Contains(got, "create /nodes/node1/lxc --vmid=101") || !strings.Contains(got, "--ostemplate=local:vztmpl/debian.tar.zst") {
-		t.Fatalf("unexpected create args: %v", args)
-	}
-}
+// TestPveshCreateGuestArgsIncludesLXCOstemplate is gone with its subject:
+// pveshCreateGuestArgs demanded an ostemplate no real conf carries (the test
+// hand-fed it, an input no backup produces - fable-check bug 3). A missing
+// guest is now registered by writing its staged conf into pmxcfs; see
+// pve_guest_apply_test.go.
 
 // --------------------------------------------------------------------------
 // detectConfiguredZFSPools tests

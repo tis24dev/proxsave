@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/tis24dev/proxsave/internal/cli"
 	"github.com/tis24dev/proxsave/internal/logging"
 	"github.com/tis24dev/proxsave/internal/orchestrator"
 	"github.com/tis24dev/proxsave/internal/types"
@@ -15,13 +16,15 @@ import (
 )
 
 // TestVERF01 is the consolidated end-to-end verification of the "what's new" feature over
-// the REAL gate (Decide/ShouldWarn/MarkSeen/LoadState/StatePath) and the two wirings. Four
+// the REAL gate (Decide/ShouldWarn/MarkSeen/LoadState/StatePath) and the two wirings. Five
 // scenarios must hold together in one session:
 //  1. a fresh install (seeded to current) shows nothing on either channel;
 //  2. a real upgrader (absent flag) shows Screen 0 exactly once, then goes silent;
 //  3. a non-interactive run emits exactly one captured WARNING WITHOUT writing the flag,
 //     so the backup state is untouched and the warning re-fires on every run;
-//  4. a timeout/Esc leaves the flag unwritten, so ShouldWarn still reports unseen.
+//  4. an auto-confirmed upgrade without a TTY skips Screen 0 and leaves the previous seen
+//     version intact, so exactly one warning reaches notification accounting;
+//  5. a timeout/Esc leaves the flag unwritten, so ShouldWarn still reports unseen.
 //
 // The live on-TTY paint of Screen 0 and the real --backup channel delivery stay manual UAT
 // (03-VALIDATION.md); everything gate/wiring is verified here.
@@ -97,6 +100,40 @@ func TestVERF01(t *testing.T) {
 		}
 		if got := warnOnce(t, base); got != 1 {
 			t.Fatalf("second non-interactive run warningCount = %d, want 1 (warns every run)", got)
+		}
+	})
+
+	t.Run("auto_yes_without_tty_leaves_healthchecks_warning_armed", func(t *testing.T) {
+		origInteractive := whatsnewAfterUpgradeInteractive
+		whatsnewAfterUpgradeInteractive = func() bool { return false }
+		t.Cleanup(func() { whatsnewAfterUpgradeInteractive = origInteractive })
+
+		base := t.TempDir()
+		if err := whatsnew.MarkSeen(base, "0.32.0"); err != nil {
+			t.Fatalf("seed previous version: %v", err)
+		}
+		if shouldRunWhatsnewAfterUpgrade(&cli.Args{UpgradeAutoYes: true}, upgradeRunOptions{}) {
+			t.Fatal("auto-confirmed no-TTY upgrade must not start Screen 0")
+		}
+
+		logPath := filepath.Join(t.TempDir(), "run.log")
+		logger := logging.New(types.LogLevelDebug, false)
+		logger.SetOutput(&bytes.Buffer{})
+		if err := logger.OpenLogFile(logPath); err != nil {
+			t.Fatalf("OpenLogFile: %v", err)
+		}
+		maybeWarnWhatsnew(logger, base, "0.33.0", false)
+		if err := logger.CloseLogFile(); err != nil {
+			t.Fatalf("CloseLogFile: %v", err)
+		}
+
+		_, _, warningCount, _ := orchestrator.ParseLogCounts(logPath, 10)
+		if warningCount != 1 {
+			t.Fatalf("warningCount = %d, want 1", warningCount)
+		}
+		state, present, err := whatsnew.LoadState(base)
+		if err != nil || !present || state.LastSeenNotesVersion != "0.32.0" {
+			t.Fatalf("seen state changed after unattended path: state=%+v present=%v err=%v", state, present, err)
 		}
 	})
 

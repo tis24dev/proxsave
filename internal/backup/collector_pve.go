@@ -426,8 +426,17 @@ func (c *Collector) collectPVEClusterSnapshot(ctx context.Context, clustered boo
 		if info, err := os.Stat(configDB); err == nil && !info.IsDir() {
 			target := c.targetPathFor(configDB)
 			c.logger.Debug("Copying PVE cluster database %s to %s", configDB, target)
-			if err := c.safeCopyFile(ctx, configDB, target, "PVE cluster database"); err != nil {
-				c.logger.Warning("Failed to copy PVE cluster database %s: %v", configDB, err)
+			// config.db runs in WAL mode under a live pmxcfs: the base file is
+			// stale up to the last checkpoint (measured: base 40KB hours old,
+			// -wal 4.1MB current) and a raw read can tear a page mid-write.
+			// sqlite3's .backup goes through the online-backup API, which reads
+			// base+WAL consistently - and this snapshot lands LAST on the target,
+			// after the clustered directory copy, so it is what RECOVERY restores.
+			if err := c.snapshotSQLiteDB(ctx, configDB, target); err != nil {
+				c.logger.Warning("PVE cluster database %s: sqlite snapshot failed (%v) - falling back to a raw copy, which can tear mid-write and misses WAL data not yet checkpointed", configDB, err)
+				if err := c.safeCopyFile(ctx, configDB, target, "PVE cluster database"); err != nil {
+					c.logger.Warning("Failed to copy PVE cluster database %s: %v", configDB, err)
+				}
 			}
 		} else if err != nil && !errors.Is(err, os.ErrNotExist) {
 			c.logger.Warning("Failed to stat PVE cluster database %s: %v", configDB, err)
@@ -898,6 +907,42 @@ func (c *Collector) effectivePVEConfigPath() string {
 		return c.systemPath(path)
 	}
 	return c.systemPath("/etc/pve")
+}
+
+// snapshotSQLiteDB captures a live SQLite database consistently via sqlite3's
+// ".backup" dot-command (the online-backup API): it takes a shared lock, reads
+// base+WAL as one coherent snapshot, and writes a plain journal-less database
+// file - exactly what a verbatim restore wants. The 5s busy timeout rides out a
+// pmxcfs commit holding the write lock. Any failure is the caller's cue to fall
+// back to a raw copy, loudly.
+func (c *Collector) snapshotSQLiteDB(ctx context.Context, src, dest string) error {
+	if c.dryRun {
+		c.logger.Debug("[DRY RUN] Would capture PVE cluster database via sqlite3 .backup: %s", dest)
+		c.incFilesProcessed()
+		return nil
+	}
+	if _, err := c.depLookPath("sqlite3"); err != nil {
+		return fmt.Errorf("sqlite3 not available: %w", err)
+	}
+	if strings.ContainsAny(dest, `"`+"\n") {
+		return fmt.Errorf("destination %q not representable in a sqlite3 dot-command", dest)
+	}
+	if err := os.MkdirAll(filepath.Dir(dest), 0o750); err != nil {
+		return fmt.Errorf("create snapshot dir: %w", err)
+	}
+	out, err := c.depRunCommand(ctx, "sqlite3", "-cmd", ".timeout 5000", src, fmt.Sprintf(".backup %q", dest))
+	if err != nil {
+		if msg := strings.TrimSpace(string(out)); msg != "" {
+			return fmt.Errorf("%s: %w", msg, err)
+		}
+		return err
+	}
+	c.incFilesProcessed()
+	if info, statErr := os.Stat(dest); statErr == nil {
+		c.addBytesCollected(info.Size())
+	}
+	c.logger.Debug("Successfully captured PVE cluster database via sqlite3 .backup: %s", dest)
+	return nil
 }
 
 func (c *Collector) effectivePVEClusterPath() string {

@@ -193,9 +193,17 @@ func (s *StorageAdapter) Sync(ctx context.Context, stats *BackupStats) error {
 		}
 	}
 
-	if hasWarnings {
+	// The closing line follows the WORST thing the adapter saw, mirroring
+	// finalizeStorageStatus below: a failed store used to close green whenever
+	// retention then ran clean, so the log's last word contradicted the
+	// notification's "error". Still WARNING-level: the store failure itself is
+	// logged as recoverable and the exit contract stays warning-weight.
+	switch {
+	case hasErrors:
+		s.logger.Warning("✗ %s operations completed with errors", s.backend.Name())
+	case hasWarnings:
 		s.logger.Warning("✗ %s operations completed with warnings", s.backend.Name())
-	} else {
+	default:
 		s.logger.Info("✓ %s operations completed", s.backend.Name())
 	}
 	s.finalizeStorageStatus(stats, hasErrors, hasWarnings)

@@ -20,7 +20,7 @@ import (
 
 var (
 	dashboardUpgradeCheck   = checkForUpdates
-	dashboardUpgradeRun     = runUpgrade
+	dashboardUpgradeRun     = runUpgradeWithOptions
 	dashboardUpgradeVersion = buildinfo.String
 )
 
@@ -67,7 +67,7 @@ func releaseTagURL(tag string) string {
 // screen carries the other's button: "Check upgrade" opens the binary upgrade screen
 // (runDashboardUpgrade), "Check config" opens the config upgrade flow (--upgrade-config),
 // and Back/esc returns to the dashboard menu. It loops so each sub-flow returns here.
-func runDashboardUpgradeMenu(ctx context.Context, session *shell.Session, configPath string) {
+func runDashboardUpgradeMenu(ctx context.Context, session *shell.Session, configPath string) dashboardActionDisposition {
 	back := errors.New("back")
 	for {
 		prompt := theme.Emphasis.Render("Current version: ") + theme.Text.Render(upgradeSafeToken(dashboardUpgradeVersion()))
@@ -80,11 +80,13 @@ func runDashboardUpgradeMenu(ctx context.Context, session *shell.Session, config
 			components.WithSelectorPromptStyled[upgAct](prompt),
 			components.WithSelectorBack[upgAct](back)))
 		if err != nil || a == upgBack {
-			return
+			return dashboardActionHandled
 		}
 		switch a {
 		case upgGo:
-			runDashboardUpgrade(ctx, session, configPath)
+			if disposition := runDashboardUpgrade(ctx, session, configPath); disposition == dashboardActionReload {
+				return disposition
+			}
 		case upgConfig:
 			runDashboardUpdateConfig(ctx, session, configPath)
 		}
@@ -96,7 +98,7 @@ func runDashboardUpgradeMenu(ctx context.Context, session *shell.Session, config
 // "Run upgrade" streams the upgrade INSIDE the altscreen session via components.RunStreamTask
 // (upgRun), the same contained viewport panel backup and install-finalize use, then drives
 // the single daemon restart. It loops back to the menu on Back.
-func runDashboardUpgrade(ctx context.Context, session *shell.Session, configPath string) {
+func runDashboardUpgrade(ctx context.Context, session *shell.Session, configPath string) dashboardActionDisposition {
 	cur := upgradeSafeToken(dashboardUpgradeVersion())
 	// Symbols on the RESULT keyword (consistent with the Telegram/healthcheck check
 	// screens): green ✓ ok, yellow ⚠ attention, red ✗ error. The pre-check "NOT CHECKED"
@@ -145,7 +147,7 @@ func runDashboardUpgrade(ctx context.Context, session *shell.Session, configPath
 			},
 			components.WithSelectorPromptStyled[upgAct](p), components.WithSelectorBack[upgAct](back)))
 		if err != nil || a == upgBack {
-			return
+			return dashboardActionHandled
 		}
 		if !avail {
 			pendingCheck = true // "Re-check" pressed: re-run the check on the next loop
@@ -153,8 +155,8 @@ func runDashboardUpgrade(ctx context.Context, session *shell.Session, configPath
 		}
 		avail = false
 		if upgRun(ctx, session, configPath) == types.ExitSuccess.Int() {
-			kw, sty, sym = "UPGRADED", theme.SuccessText, symOk
 			dashboardUpgradeRestartDaemon(ctx, session, configPath)
+			return dashboardActionReload
 		} else {
 			kw, sty, sym = "FAILED", theme.ErrorText, symErr
 			showDaemonResultScreen(ctx, session, "Upgrade failed", orchestrator.HealthcheckSetupLevelError,
@@ -249,7 +251,7 @@ func upgRun(ctx context.Context, session *shell.Session, configPath string) int 
 			// pipe into the panel (restored on return/panic), so the panel shows the same
 			// colored [ts] LEVEL lines as the CLI instead of losing them to the altscreen.
 			defer captureRunOutput(bl, emit)()
-			code = dashboardUpgradeRun(taskCtx, ar, bl)
+			code = dashboardUpgradeRun(taskCtx, ar, bl, upgradeRunOptions{deferWhatsnew: true})
 			return buildUpgradeOutcomePrompt(code), nil
 		})
 	if streamErr != nil {

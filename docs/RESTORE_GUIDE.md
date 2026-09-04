@@ -714,7 +714,7 @@ Exported 23 files/directories
 
 When using Cluster SAFE mode, after extraction:
 ```text
-SAFE cluster restore: applying configs via pvesh (node=pve01)
+SAFE cluster restore: applying configs (node=pve01)
 
 Found 3 VM/CT configs for node pve01
 Apply all VM/CT configs via pvesh? (y/N): y
@@ -819,7 +819,7 @@ Cluster backup detected. Choose how to restore:
 
 Exporting 1 export-only category(ies) to: /opt/proxsave/proxmox-config-export-*/
 
-SAFE cluster restore: applying configs via pvesh (node=pve01)
+SAFE cluster restore: applying configs (node=pve01)
 Found 5 VM/CT configs for node pve01
 Apply all VM/CT configs via pvesh? (y/N): y
 Applied VM/CT config 100 (webserver)
@@ -831,7 +831,7 @@ Applied VM/CT config 101 (database)
 
 When restoring from a **cluster backup** and selecting **RECOVERY mode** (option 2):
 
-1. **Same as Standalone** - Direct database restore
+1. **Direct database restore** - The selected `pve_cluster` payload, including `config.db`, is restored
 2. **WARNING displayed** - User must confirm node isolation
 3. **Split-brain risk** - CRITICAL to isolate node before proceeding
 
@@ -887,7 +887,7 @@ syncs via corosync (cluster communication)
 
 ### Cluster Restore Modes: SAFE vs RECOVERY
 
-When the backup was created from a cluster node (detected via manifest `ClusterMode: cluster`) and you select the `pve_cluster` category, the restore workflow presents two options:
+When the analyzed archive contains the `pve_cluster` payload and that category is selected, the restore workflow presents two options. The manifest's `ClusterMode` is used only to warn when its claim disagrees with the payload:
 
 ```text
 Cluster backup detected. Choose how to restore the cluster database:
@@ -914,10 +914,10 @@ Cluster backup detected. Choose how to restore the cluster database:
 
 **Post-restore actions (SAFE mode)**:
 After export, the workflow offers interactive options to apply configurations via `pvesh`:
-1. **VM/CT configs**: Scans exported configs (under `/etc/pve/nodes/<node>/...`) and applies them via `pvesh set /nodes/<node>/qemu/<vmid>/config`
+1. **VM/CT configs**: Scans exported configs (under `/etc/pve/nodes/<node>/...`) and first loads the cluster-wide guest inventory. Existing guests on the current node are applied via `pvesh set /nodes/<node>/qemu|lxc/<vmid>/config` (create-only keys such as `meta`/`ostemplate` are stripped; if the set fails, the exported conf is written into pmxcfs only when `status/current` explicitly reports `stopped`). A VMID absent cluster-wide is registered by writing its conf; a VMID owned by another node or present as the other guest type is skipped without mutation. An unavailable or invalid inventory stops the entire guest batch before mutation.
    - If the target node hostname differs from the hostname stored in the backup (common after hardware migration / reinstall), ProxSave detects the mismatch and prompts you to select the exported node directory to import from (instead of silently reporting "No VM/CT configs found").
-2. **Storage configuration**: applies each `storage.cfg` block via `pvesh create /storage --storage=<id> --type=<type> ...`
-3. **Datacenter configuration**: Applies `datacenter.cfg` via `pvesh set /cluster/config`
+2. **Storage configuration**: applies each `storage.cfg` block via `pvesh create /storage --storage=<id> --type=<type> ...`, falling back to `pvesh set /storage/<id>` when the definition already exists (as `local` always does)
+3. **Datacenter configuration**: writes `datacenter.cfg` into pmxcfs (`/etc/pve`), which replicates it cluster-wide - the API has no whole-file endpoint for it
 
 Each action prompts for confirmation before execution.
 
@@ -1446,10 +1446,16 @@ Apply all VM/CT configs via pvesh? (y/N): y
 
 For each VM/CT config found in the export:
 - Reads config from `<export>/etc/pve/nodes/<node>/qemu-server/<vmid>.conf`
-- Applies via: `pvesh set /nodes/<node>/qemu/<vmid>/config --filename <config>`
-- Reports success/failure for each VM
+- Loads one cluster-wide inventory with `pvesh get /cluster/resources --type vm --output-format=json` before changing any guest
+- Stops the entire selected guest batch without mutation if the inventory command fails or its JSON is malformed, incomplete, or contains duplicate VMIDs
+- Skips a VMID already owned by another node; SAFE does not move guests between nodes
+- Skips a VMID whose live type (`qemu` or `lxc`) differs from the staged config type
+- Updates a matching guest on the current node with `pvesh set /nodes/<node>/<type>/<vmid>/config --<key>=<value> ...`, excluding create-only keys
+- If that API update fails, writes the staged conf into pmxcfs only after the JSON status probe explicitly reports `stopped`; command errors, malformed status, `running`, and unknown states all skip the fallback
+- Registers a VMID that is absent cluster-wide by writing the staged conf into pmxcfs on the current node
+- Reports success/failure for each VM/CT
 
-**Note**: This creates or updates VM configurations in the cluster. Disk images are NOT affected.
+**Note**: This registers or updates guest configurations only. Disk images are NOT affected.
 
 #### 4. Storage Configuration Apply
 
@@ -1462,7 +1468,8 @@ Parses `storage.cfg` and applies each storage definition:
 - Each `storage: <name>` block is extracted
 - Applied via: `pvesh create /storage --storage=<id> --type=<type> --<key>=<value> ...`
 - Blocks are keyed on the `<type>: <id>` header (`dir: local`, `nfs: backup`); the older `storage: <id>` form is still accepted
-- There is no existence check and no update path: a storage that already exists makes `pvesh create` fail, and it is counted as a failure rather than updated. Remove or rename the existing definition first if you need it replaced
+- If `pvesh create` fails (including when the definition already exists), ProxSave retries with `pvesh set /storage/<id>` and drops keys that the live set schema reports as create-only
+- The storage is counted as failed only when both the create attempt and the set fallback fail
 
 **Note**: Storage directories are NOT created automatically. Run `pvesm status` to verify, then create missing directories manually.
 
@@ -1470,16 +1477,16 @@ Parses `storage.cfg` and applies each storage definition:
 
 ```text
 Datacenter configuration found: /opt/proxsave/proxmox-config-export-*/etc/pve/datacenter.cfg
-Apply datacenter.cfg via pvesh? (y/N): y
+Apply datacenter.cfg? (y/N): y
 ```
 
 Applies datacenter-wide settings:
-- Applied via: `pvesh set /cluster/config -conf <file>`
-- Affects all cluster nodes
+- Applied via: file write into pmxcfs (`/etc/pve/datacenter.cfg`)
+- Affects all cluster nodes (pmxcfs replicates the file cluster-wide)
 
 **Interactive Flow**:
 ```text
-SAFE cluster restore: applying configs via pvesh (node=pve01)
+SAFE cluster restore: applying configs (node=pve01)
 
 Apply PVE resource mappings (pvesh)? (y/N): y
 Applied pci mapping device1
@@ -1501,7 +1508,7 @@ Applied storage definition backup-nfs
 Storage apply completed: ok=2 failed=0
 
 Datacenter configuration found: .../etc/pve/datacenter.cfg
-Apply datacenter.cfg via pvesh? (y/N): n
+Apply datacenter.cfg? (y/N): n
 Skipping datacenter.cfg apply
 
 Pools apply (membership) completed: ok=1 failed=0
@@ -1583,7 +1590,7 @@ These configurations are included in every backup and can be restored using **th
 
 5. **After extraction completes**, you'll see:
    ```text
-   SAFE cluster restore: applying configs via pvesh (node=pve01)
+   SAFE cluster restore: applying configs (node=pve01)
 
    Found 5 VM/CT configs for node pve01
    Apply all VM/CT configs via pvesh? (y/N): y

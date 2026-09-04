@@ -13,6 +13,8 @@ import (
 	"path/filepath"
 	"strings"
 	"syscall"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/tis24dev/proxsave/internal/logging"
 )
@@ -541,11 +543,42 @@ func normalizeTextFile(root *os.Root, name string) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	normalized := bytes.ReplaceAll(data, []byte("\r"), nil)
+	// Only CRLF pairs in plain single-byte text are collapsed - the documented
+	// contract ("removal of \r from CRLF text files"). The extension gate upstream
+	// cannot tell content: a .txt can be UTF-16 (where stripping every 0x0D byte
+	// breaks a code unit in half and shifts everything after it into garbage) and a
+	// .log can carry lone \r progress lines or embedded binary. Measured, not
+	// hypothetical: both corruptions were reproduced live before this guard.
+	if !isPlainSingleByteText(data) {
+		return false, nil
+	}
+	normalized := bytes.ReplaceAll(data, []byte("\r\n"), []byte("\n"))
 	if bytes.Equal(data, normalized) {
 		return false, nil
 	}
 	return true, atomicRootRewrite(root, name, normalized)
+}
+
+// isPlainSingleByteText reports whether data is safe for byte-level CRLF
+// normalization. Invalid UTF-8 and control characters other than common text
+// whitespace are treated as binary so an extension alone can never authorize a
+// destructive rewrite.
+func isPlainSingleByteText(data []byte) bool {
+	if !utf8.Valid(data) {
+		return false
+	}
+	for len(data) > 0 {
+		r, size := utf8.DecodeRune(data)
+		data = data[size:]
+		switch r {
+		case '\t', '\n', '\r':
+			continue
+		}
+		if unicode.IsControl(r) {
+			return false
+		}
+	}
+	return true
 }
 
 func normalizeConfigFile(root *os.Root, name string) (bool, error) {

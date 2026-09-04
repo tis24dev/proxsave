@@ -294,7 +294,7 @@ func runRecipe(ctx context.Context, r recipe, state *collectionState) error {
 	if state == nil {
 		return fmt.Errorf("collection state is required")
 	}
-	for _, brick := range r.Bricks {
+	for i, brick := range r.Bricks {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
@@ -302,6 +302,16 @@ func runRecipe(ctx context.Context, r recipe, state *collectionState) error {
 			return fmt.Errorf("recipe %s brick %s has no runner", r.Name, brick.ID)
 		}
 		if err := brick.Run(ctx, state); err != nil {
+			// The abort itself is the caller's error to escalate; what nothing
+			// traced before is the TAIL: bricks that never ran record nothing, not
+			// even in the manifest, so their targets were missing from the archive
+			// with no line at any level. Name the hole before propagating.
+			if rest := r.Bricks[i+1:]; len(rest) > 0 && state.collector != nil && state.collector.logger != nil {
+				for _, skipped := range rest {
+					state.collector.logger.Debug("Collection: recipe %s - brick %q never ran", r.Name, skipped.ID)
+				}
+				state.collector.logger.Warning("Collection: recipe %s aborted at brick %q - %d later bricks never ran, their targets are missing from this backup", r.Name, brick.ID, len(rest))
+			}
 			return err
 		}
 	}
