@@ -83,9 +83,9 @@ socket was rejected as unnecessary complexity and a new privileged interface.
 
 Each configured slot has one of four states:
 
-- `not_configured`: the setting is empty.
+- `not-configured`: the setting is empty.
 - `ready`: all validation checks pass without an advisory.
-- `ready_with_warning`: the target is accepted and retained, but at least one
+- `ready-with-warning`: the target is accepted and retained, but at least one
   ancestor is owned by a UID other than root or the daemon UID.
 - `refused`: the target fails a hard validation rule and is blanked in the
   daemon's in-memory configuration.
@@ -112,7 +112,7 @@ valid.
 
 An ancestor owned by a UID other than root or the effective daemon UID is no
 longer a refusal by itself. If its mode passes the existing writability rule,
-the result becomes `ready_with_warning`. The configured path remains in the
+the result becomes `ready-with-warning`. The configured path remains in the
 daemon configuration and is executed normally.
 
 The startup warning must explain the consequence rather than claim that root
@@ -153,7 +153,7 @@ The persisted schema contains:
   "personal_scripts": {
     "pre": {
       "path": "/home/howard/dd/mount-pve",
-      "state": "ready_with_warning",
+      "state": "ready-with-warning",
       "reason": "/home/howard is owned by uid 1000",
       "components": [
         {"path": "/home/howard/dd/mount-pve", "uid": 0, "mode": 493},
@@ -163,7 +163,7 @@ The persisted schema contains:
     },
     "post": {
       "path": "/home/howard/dd/umount-pve",
-      "state": "ready_with_warning",
+      "state": "ready-with-warning",
       "reason": "/home/howard is owned by uid 1000",
       "components": [
         {"path": "/home/howard/dd/umount-pve", "uid": 0, "mode": 493},
@@ -191,7 +191,7 @@ before starting scheduled work:
 
 1. Inspect both personal-script settings using the daemon's effective UID.
 2. Log any refusal or advisory once.
-3. Retain `ready` and `ready_with_warning` paths; blank only `refused` paths.
+3. Retain `ready` and `ready-with-warning` paths; blank only `refused` paths.
 4. Capture one startup timestamp for both daemon identity and runtime records.
 5. Publish PID, daemon identity, and the runtime snapshot atomically per file.
 6. Start heartbeat and scheduling work.
@@ -238,14 +238,14 @@ The collector compares, per script slot:
 
 It derives one of these synchronization results:
 
-- `in_sync`: daemon-startup and current views agree;
-- `configuration_drift`: the configuration source or configured script paths
+- `in-sync`: daemon-startup and current views agree;
+- `configuration-drift`: the configuration source or configured script paths
   differ, including configured versus empty; restart required to apply the
   current file;
-- `path_state_changed`: the configured path agrees but its current validation
+- `path-state-changed`: the configured path agrees but its current validation
   evidence differs from the daemon-startup evidence;
-- `runtime_state_unavailable`: no authoritative daemon snapshot exists;
-- `not_applicable`: no live daemon exists.
+- `runtime-state-unavailable`: no authoritative daemon snapshot exists;
+- `not-applicable`: no live daemon exists.
 
 These results are labeled **Personal-script configuration synchronization**.
 They must never be presented as proof that all daemon configuration is in sync.
@@ -296,7 +296,7 @@ The current-file result is never relabeled as the running-daemon result.
 
 ## Error Handling and Compatibility
 
-- Missing runtime file: report `runtime_state_unavailable`.
+- Missing runtime file: report `runtime-state-unavailable`.
 - Malformed JSON: report the parse failure in sanitized form and do not trust
   partial fields.
 - PID or start mismatch: report stale runtime state and ignore its verdicts.
@@ -317,7 +317,7 @@ refusals, warnings, and drift are visible diagnostic findings.
 ### Policy tests
 
 - A root-owned executable below a UID-1000, mode-`0700` home produces
-  `ready_with_warning` and remains configured.
+  `ready-with-warning` and remains configured.
 - The same script is actually invoked by daemon pre/post execution.
 - A target owned by neither root nor daemon remains `refused`.
 - A group/other-writable target remains `refused`.
@@ -339,10 +339,10 @@ refusals, warnings, and drift are visible diagnostic findings.
 
 - A matching PID and start timestamp produces an authoritative daemon view.
 - A PID mismatch or timestamp mismatch rejects a stale snapshot.
-- Different configured paths produce `configuration_drift`.
+- Different configured paths produce `configuration-drift`.
 - Empty current values with daemon-loaded paths reproduce and correctly explain
   the machines 1/3 scenario.
-- Equal paths with changed ownership or mode produce `path_state_changed`.
+- Equal paths with changed ownership or mode produce `path-state-changed`.
 - A live old daemon without a snapshot never causes current config to be
   mislabeled as daemon state.
 - UID resolution preserves its live `/proc` source and explicit fallback source.
