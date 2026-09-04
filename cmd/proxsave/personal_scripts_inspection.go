@@ -120,6 +120,7 @@ func inspectPersonalScript(key, path string, daemonUID int) personalScriptDiagno
 			return refuse(fmt.Errorf("directory %s is writable by group or others without the sticky bit (mode %04o)", dir, dirInfo.Mode().Perm()))
 		}
 		if dir == "/" {
+			diagnostic.Path = clean
 			diagnostic.State = personalScriptReady
 			return diagnostic
 		}

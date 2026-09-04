@@ -548,10 +548,11 @@ func TestPersonalScriptValidationRefusesASymlink(t *testing.T) {
 func TestPersonalScriptValidationKeepsATrustedPathAndStaysSilent(t *testing.T) {
 	dir := t.TempDir()
 	script := writePersonalScript(t, dir, "good.sh", "exit 0")
+	configured := filepath.Dir(script) + string(os.PathSeparator) + "." + string(os.PathSeparator) + filepath.Base(script)
 
-	pre, post, logged := capturePersonalScriptValidation(t, script, script)
+	pre, post, logged := capturePersonalScriptValidation(t, configured, configured)
 	if pre != script || post != script {
-		t.Fatalf("a trusted path did not survive: pre=%q post=%q\n%s", pre, post, logged)
+		t.Fatalf("trusted paths were not normalized: pre=%q post=%q want=%q\n%s", pre, post, script, logged)
 	}
 	if strings.Contains(logged, "WARNING") {
 		t.Fatalf("a trusted path produced a warning:\n%s", logged)
