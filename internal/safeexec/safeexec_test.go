@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"sort"
 	"strings"
 	"testing"
@@ -38,6 +39,23 @@ func TestCommandContextAllowlist(t *testing.T) {
 		if _, err := CommandContext(ctx, name); !errors.Is(err, ErrCommandNotAllowed) {
 			t.Fatalf("CommandContext(%q) malformed-name error = %v, want ErrCommandNotAllowed", name, err)
 		}
+	}
+}
+
+func TestCommandContextAllowsSQLiteSnapshot(t *testing.T) {
+	args := []string{
+		"-cmd",
+		".timeout 5000",
+		"/var/lib/pve-cluster/config.db",
+		`.backup "/tmp/config.db"`,
+	}
+	cmd, err := CommandContext(context.Background(), "sqlite3", args...)
+	if err != nil {
+		t.Fatalf("CommandContext(sqlite3) error = %v", err)
+	}
+	want := append([]string{"sqlite3"}, args...)
+	if got := cmd.Args; !reflect.DeepEqual(got, want) {
+		t.Fatalf("CommandContext(sqlite3) args = %q, want %q", got, want)
 	}
 }
 

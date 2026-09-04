@@ -200,6 +200,9 @@ var allowedCommandFactories = map[string]commandFactory{
 	"smartctl": func(ctx context.Context, args ...string) *exec.Cmd {
 		return withArgs(exec.CommandContext(ctx, "smartctl"), args...)
 	},
+	"sqlite3": func(ctx context.Context, args ...string) *exec.Cmd {
+		return withArgs(exec.CommandContext(ctx, "sqlite3"), args...)
+	},
 	"ss": func(ctx context.Context, args ...string) *exec.Cmd {
 		return withArgs(exec.CommandContext(ctx, "ss"), args...)
 	},
