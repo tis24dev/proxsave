@@ -223,15 +223,16 @@ func TestSpaceUsageFromStatfsSaturatesOverflowingProducts(t *testing.T) {
 	}
 
 	total, available, used := SpaceUsageFromStatfs(stat)
+	want := int64(math.MaxInt64)
 
-	if total != math.MaxInt64 {
-		t.Fatalf("total = %d; want %d", total, math.MaxInt64)
+	if total != want {
+		t.Fatalf("total = %d; want %d", total, want)
 	}
-	if available != math.MaxInt64 {
-		t.Fatalf("available = %d; want %d", available, math.MaxInt64)
+	if available != want {
+		t.Fatalf("available = %d; want %d", available, want)
 	}
-	if used != math.MaxInt64 {
-		t.Fatalf("used = %d; want %d", used, math.MaxInt64)
+	if used != want {
+		t.Fatalf("used = %d; want %d", used, want)
 	}
 }
 
