@@ -14,9 +14,10 @@ import (
 type personalScriptState string
 
 const (
-	personalScriptNotConfigured personalScriptState = "not-configured"
-	personalScriptReady         personalScriptState = "ready"
-	personalScriptRefused       personalScriptState = "refused"
+	personalScriptNotConfigured    personalScriptState = "not-configured"
+	personalScriptReady            personalScriptState = "ready"
+	personalScriptReadyWithWarning personalScriptState = "ready-with-warning"
+	personalScriptRefused          personalScriptState = "refused"
 )
 
 type personalScriptPathComponent struct {
@@ -74,6 +75,7 @@ func inspectPersonalScript(key, path string, daemonUID int) personalScriptDiagno
 	}
 
 	refuse := func(err error) personalScriptDiagnostic {
+		diagnostic.Path = ""
 		diagnostic.State = personalScriptRefused
 		diagnostic.Reason = err.Error()
 		return diagnostic
@@ -105,6 +107,7 @@ func inspectPersonalScript(key, path string, daemonUID int) personalScriptDiagno
 		return refuse(fmt.Errorf("%s is writable by group or others (mode %04o)", clean, info.Mode().Perm()))
 	}
 
+	var advisories []string
 	for dir := filepath.Dir(clean); ; dir = filepath.Dir(dir) {
 		dirInfo, err := personalScriptStat(dir)
 		if err != nil {
@@ -113,15 +116,27 @@ func inspectPersonalScript(key, path string, daemonUID int) personalScriptDiagno
 		if err := appendPersonalScriptComponent(&diagnostic, dir, dirInfo); err != nil {
 			return refuse(err)
 		}
-		if err := personalScriptOwnerError(dir, dirInfo, daemonUID); err != nil {
+		uid, err := personalScriptOwnerUID(dir, dirInfo)
+		if err != nil {
 			return refuse(err)
+		}
+		if uid != 0 && int(uid) != daemonUID {
+			advisories = append(advisories, fmt.Sprintf(
+				"%s is owned by uid %d; that owner can replace descendants executed as daemon uid %d",
+				dir, uid, daemonUID,
+			))
 		}
 		if dirInfo.Mode().Perm()&0o022 != 0 && dirInfo.Mode()&os.ModeSticky == 0 {
 			return refuse(fmt.Errorf("directory %s is writable by group or others without the sticky bit (mode %04o)", dir, dirInfo.Mode().Perm()))
 		}
 		if dir == "/" {
 			diagnostic.Path = clean
-			diagnostic.State = personalScriptReady
+			if len(advisories) > 0 {
+				diagnostic.State = personalScriptReadyWithWarning
+				diagnostic.Reason = strings.Join(advisories, "; ")
+			} else {
+				diagnostic.State = personalScriptReady
+			}
 			return diagnostic
 		}
 	}

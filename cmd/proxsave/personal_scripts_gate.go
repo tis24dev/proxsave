@@ -17,28 +17,31 @@ import (
 // records: under the starters' frozen silence rule a refused path would be an undebuggable
 // non-execution, so the refusal happens where it can be LOUD - one WARNING naming the
 // variable, the path and the reason - and the setting is blanked, so every later tick
-// behaves as if it were never configured.
+// behaves as if it were never configured. A foreign-owned ancestor is instead an
+// administrator trust warning: the normalized path stays enabled after the administrator
+// has chosen to configure it.
 //
-// What it enforces, and why it is enough against the threat (a non-root user swapping the
-// file a root daemon will execute): the path may not traverse a symlink, the target and
-// every directory above it must belong to root or to the daemon's own user, the target must
-// not be writable by group or others, and a directory writable by group or others must
-// carry the sticky bit (the /tmp shape, where non-owners cannot rename or unlink entries).
-// Under those rules no non-root user can replace any component between this check and any
-// later execution, which is why the starters do not re-validate: the window belongs to root
-// alone.
-func validatePersonalScripts(cfg *config.Config) {
-	if cfg == nil {
-		return
-	}
+// What it enforces, and why: the path may not traverse a symlink, the target must belong
+// to root or to the daemon's own user and must not be writable by group or others, and a
+// directory writable by group or others must carry the sticky bit (the /tmp shape, where
+// non-owners cannot rename or unlink entries). A foreign-owned ancestor can replace its
+// descendants, so accepting that path records and logs the administrator's trust decision.
+func validatePersonalScripts(cfg *config.Config) personalScriptsDiagnostics {
 	diagnostics := inspectPersonalScripts(cfg, os.Geteuid())
+	if cfg == nil {
+		return diagnostics
+	}
 	cfg.PersonalScriptPreRun = applyPersonalScriptDiagnostic(diagnostics.Pre)
 	cfg.PersonalScriptPostRun = applyPersonalScriptDiagnostic(diagnostics.Post)
+	return diagnostics
 }
 
 func applyPersonalScriptDiagnostic(diagnostic personalScriptDiagnostic) string {
 	switch diagnostic.State {
 	case personalScriptReady:
+		return diagnostic.Path
+	case personalScriptReadyWithWarning:
+		logging.Warning("%s enabled with administrator trust warning: %s", diagnostic.Key, diagnostic.Reason)
 		return diagnostic.Path
 	case personalScriptRefused:
 		logging.Warning("%s disabled for this daemon: %s", diagnostic.Key, diagnostic.Reason)
