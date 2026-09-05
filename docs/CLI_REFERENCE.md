@@ -822,6 +822,13 @@ unless it excludes them. For `--cleanup-guards`, `17` is the one to act on but n
 report as a bug — and `1` means the opposite of what it means elsewhere: there it is the
 cleanup itself failing, which is a different remedy.
 
+**Note**: `--log-level` does not change any exit code. Since 0.34.0 the threshold is a
+console filter only (see Log levels above), so a warning raised under `--log-level error`
+is still counted and still promotes an otherwise clean run to `1`. In earlier releases the
+same warning was dropped before the counters and the run exited `0`, so a wrapper that
+relied on a high `--log-level` to keep exit codes quiet will start reporting `1` on the
+same hosts. Filter on the code, not on the log level.
+
 **Note**: Cloud storage is non-critical. A cloud upload failure does **not** abort the
 run with a storage error (`5`): the local backup is kept, but the failure is recorded as a
 warning, so the run finishes with a non-zero exit code (`1`, generic error), not `0`.
