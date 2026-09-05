@@ -128,6 +128,14 @@ var notes = []Note{
 			"If a monitoring script gates on exit codes, account for failed notifications promoting clean non-dry runs to exit 1",
 		},
 	},
+	{
+		Version: "0.35.0",
+		Lines: []string{
+			"PVE cluster database snapshots no longer fail before sqlite3 can run",
+			"Personal pre- and post-backup scripts can run below user-owned homes with an administrator trust warning",
+			"Daemon status compares loaded and current personal scripts, with paths, ownership, modes, refusal reasons, and drift",
+		},
+	},
 }
 
 // LookupNotes returns the notes for versions in the half-open range (from, to], ascending by
