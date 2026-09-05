@@ -79,12 +79,24 @@ func maybeApplyPVEConfigsFromStage(ctx context.Context, logger *logging.Logger, 
 			// apply": no later gate would run to set aborted, so the operator's own
 			// abort would be reported back as a staged-apply failure.
 			//
-			// The discriminator is the PARENT ctx, not the error. An arm can carry
-			// its own inner deadline (maybeApplyPVEStorageMountGuardsFromStage
-			// derives mountCtx below), and that timeout expiring is an item failure
-			// with a live restore, not an operator abort. Reading ctx.Err() cannot
-			// confuse the two.
+			// Two things are decided here and they are NOT the same question.
+			//
+			// Whether the restore is aborting is decided by the PARENT ctx, never by
+			// the error. An arm can carry its own inner deadline
+			// (maybeApplyPVEStorageMountGuardsFromStage derives mountCtx below), and
+			// that timeout expiring with a live restore is an item failure, not an
+			// operator abort. Only ctx.Err() tells the two apart.
+			//
+			// Whether THIS arm also failed on its own is decided by the error. An
+			// abort landing exactly while an arm was failing for a reason of its own
+			// must not erase which item that was: the tail below already prints both
+			// ("aborted: X (N item(s) had already failed: ...)"), so the name is kept
+			// unless the error IS the abort propagating out of the arm.
 			if cerr := ctx.Err(); cerr != nil {
+				if !errors.Is(err, cerr) {
+					logger.Warning("PVE staged apply: %s: %v", name, err)
+					failedItems = append(failedItems, name)
+				}
 				aborted = cerr
 				return
 			}

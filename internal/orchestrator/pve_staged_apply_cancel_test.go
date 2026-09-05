@@ -300,7 +300,87 @@ func TestApplyArmClassifiesACancellationAsAnAbort(t *testing.T) {
 	if appendsItem < 0 {
 		t.Fatal("applyArm's error branch no longer records failed items; this test needs rewriting")
 	}
-	if ctxErr >= appendsItem || setsAborted >= appendsItem {
-		t.Fatalf("the cancellation check must precede the failedItems append (ctxErr@%d aborted@%d append@%d)", ctxErr, setsAborted, appendsItem)
+	if ctxErr >= appendsItem {
+		t.Fatalf("the cancellation check must precede the failedItems append (ctxErr@%d append@%d)", ctxErr, appendsItem)
+	}
+
+	// aborted is NOT required to precede the append: an abort landing while an arm
+	// was failing for a reason of its own records the item first and then aborts, so
+	// the tail can print both. What must hold is that the ctx check comes first, and
+	// that setting aborted is not itself conditional on the error type: whether the
+	// restore is aborting is the parent ctx's answer, never the arm's error.
+	var abortedGuardedByErrorsIs bool
+	ast.Inspect(errBranch, func(n ast.Node) bool {
+		stmt, ok := n.(*ast.IfStmt)
+		if !ok {
+			return true
+		}
+		call, ok := stmt.Cond.(*ast.UnaryExpr)
+		if !ok || call.Op != token.NOT {
+			return true
+		}
+		inner, ok := call.X.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		sel, ok := inner.Fun.(*ast.SelectorExpr)
+		if !ok || sel.Sel.Name != "Is" {
+			return true
+		}
+		// Body AND Else: putting `aborted = cerr` in the else of `if !errors.Is(...)`
+		// is the exact shape that keys the abort on the error type, which is what
+		// this refuses. Inspecting only the body would miss it.
+		for _, branch := range []ast.Node{stmt.Body, stmt.Else} {
+			if branch == nil {
+				continue
+			}
+			ast.Inspect(branch, func(m ast.Node) bool {
+				assign, ok := m.(*ast.AssignStmt)
+				if !ok {
+					return true
+				}
+				for _, lhs := range assign.Lhs {
+					if id, ok := lhs.(*ast.Ident); ok && id.Name == "aborted" {
+						abortedGuardedByErrorsIs = true
+					}
+				}
+				return true
+			})
+		}
+		return true
+	})
+	if abortedGuardedByErrorsIs {
+		t.Fatal("aborted is set inside an errors.Is guard: an arm's own inner deadline would then be read as an operator abort")
+	}
+
+	// The mirror of the same rule: an abort landing while an arm failed on its own
+	// must not erase WHICH item failed. Inside the cancellation branch there has to
+	// be a failedItems append, guarded by errors.Is so it is skipped only when the
+	// arm's error IS the abort propagating out of it.
+	var itemKeptOnAbort bool
+	ast.Inspect(errBranch, func(n ast.Node) bool {
+		stmt, ok := n.(*ast.IfStmt)
+		if !ok {
+			return true
+		}
+		if _, ok := stmt.Cond.(*ast.UnaryExpr); !ok {
+			return true
+		}
+		ast.Inspect(stmt.Body, func(m ast.Node) bool {
+			assign, ok := m.(*ast.AssignStmt)
+			if !ok {
+				return true
+			}
+			for _, lhs := range assign.Lhs {
+				if id, ok := lhs.(*ast.Ident); ok && id.Name == "failedItems" {
+					itemKeptOnAbort = true
+				}
+			}
+			return true
+		})
+		return true
+	})
+	if !itemKeptOnAbort {
+		t.Fatal("an abort discards the failed item name: an arm that failed on its own as the abort landed disappears from the diagnostic")
 	}
 }
