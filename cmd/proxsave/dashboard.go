@@ -1051,7 +1051,7 @@ func buildDashboardPersonalScriptSynchronization(comparison personalScriptCompar
 		return prefix + theme.WarningText.Render("OUT OF SYNC") + theme.Subtle.Render(" ("+reason+")")
 	case personalScriptPathStateChanged:
 		return prefix + theme.WarningText.Render("PATH STATE CHANGED SINCE STARTUP") + theme.Subtle.Render(" ("+reason+")")
-	case personalScriptRuntimeUnavailable:
+	case personalScriptRuntimeUnavailable, personalScriptCurrentUnavailable:
 		return prefix + theme.WarningText.Render("UNKNOWN") + theme.Subtle.Render(" ("+reason+")")
 	case personalScriptSyncNotApplicable:
 		return prefix + theme.Subtle.Render("NOT APPLICABLE")
@@ -1083,6 +1083,11 @@ func buildDashboardPersonalScriptLine(label string, diagnostic personalScriptDia
 		if path != "" {
 			line += theme.Subtle.Render(" (" + path + ")")
 		}
+		if reason != "" {
+			line += theme.Subtle.Render(": " + reason)
+		}
+	case personalScriptUnknown:
+		line += theme.WarningText.Render("UNKNOWN")
 		if reason != "" {
 			line += theme.Subtle.Render(": " + reason)
 		}

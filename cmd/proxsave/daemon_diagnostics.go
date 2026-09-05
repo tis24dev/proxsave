@@ -35,6 +35,7 @@ const (
 	personalScriptConfigurationDrift personalScriptSynchronization = "configuration-drift"
 	personalScriptPathStateChanged   personalScriptSynchronization = "path-state-changed"
 	personalScriptRuntimeUnavailable personalScriptSynchronization = "runtime-state-unavailable"
+	personalScriptCurrentUnavailable personalScriptSynchronization = "current-configuration-unavailable"
 	personalScriptSyncNotApplicable  personalScriptSynchronization = "not-applicable"
 )
 
@@ -254,6 +255,15 @@ func comparePersonalScript(
 	current personalScriptDiagnostic,
 ) personalScriptComparison {
 	comparison := personalScriptComparison{Running: running, Current: current}
+	// The CURRENT side is checked first and on purpose. With no configuration to
+	// read there is nothing to compare against, whatever the daemon is doing, and
+	// the config-path arm below would otherwise measure the daemon's real path
+	// against an empty one and blame the daemon for the operator's unreadable file.
+	if current.State == personalScriptUnknown {
+		comparison.Synchronization = personalScriptCurrentUnavailable
+		comparison.SyncReason = current.Reason
+		return comparison
+	}
 	if runtime.Availability == daemonRuntimeNotApplicable {
 		comparison.Synchronization = personalScriptSyncNotApplicable
 		comparison.SyncReason = "no live daemon exists; current configuration is prospective"
@@ -408,7 +418,7 @@ func logPersonalScriptSynchronization(logger *logging.Logger, comparison persona
 		logger.Warning("  Synchronization: OUT OF SYNC (%s)", reason)
 	case personalScriptPathStateChanged:
 		logger.Warning("  Synchronization: PATH STATE CHANGED SINCE STARTUP (%s)", reason)
-	case personalScriptRuntimeUnavailable:
+	case personalScriptRuntimeUnavailable, personalScriptCurrentUnavailable:
 		logger.Warning("  Synchronization: UNKNOWN (%s)", reason)
 	case personalScriptSyncNotApplicable:
 		logger.Info("  Synchronization: NOT APPLICABLE")
@@ -431,6 +441,8 @@ func logPersonalScriptDiagnostic(logger *logging.Logger, label string, diagnosti
 			return
 		}
 		logger.Warning("%s: REFUSED (%s): %s", label, path, reason)
+	case personalScriptUnknown:
+		logger.Warning("%s: UNKNOWN: %s", label, reason)
 	default:
 		logger.Info("%s: NOT CONFIGURED", label)
 	}

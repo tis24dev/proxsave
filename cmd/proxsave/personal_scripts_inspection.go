@@ -18,7 +18,16 @@ const (
 	personalScriptReady            personalScriptState = "ready"
 	personalScriptReadyWithWarning personalScriptState = "ready-with-warning"
 	personalScriptRefused          personalScriptState = "refused"
+	// personalScriptUnknown is the CURRENT side only: there is no configuration to
+	// inspect, so no verdict can be reached. A daemon never publishes it (see
+	// personalScriptDiagnosticFromRuntime, which rejects it as an invalid record),
+	// and it is not "not-configured", which asserts the settings were empty.
+	personalScriptUnknown personalScriptState = "unknown"
 )
+
+// personalScriptConfigUnreadable is the one reason text for the unknown state, so
+// the CLI and the dashboard cannot drift apart on it.
+const personalScriptConfigUnreadable = "current configuration could not be read"
 
 type personalScriptPathComponent struct {
 	Path string
@@ -48,15 +57,31 @@ var (
 
 // inspectPersonalScripts returns both configured-script verdicts without
 // logging, mutating the configuration, or executing either script.
+//
+// A nil cfg is "no configuration to read", NOT "both settings are empty". Reading
+// it as the empty string made every consumer state two falsehoods at once: the
+// current side rendered NOT CONFIGURED, and the daemon-status comparison then saw
+// a config path of "" against the running daemon's real one and told the operator
+// to restart the daemon, when the daemon was fine and the config file was not.
 func inspectPersonalScripts(cfg *config.Config, daemonUID int) personalScriptsDiagnostics {
-	pre, post := "", ""
-	if cfg != nil {
-		pre = cfg.PersonalScriptPreRun
-		post = cfg.PersonalScriptPostRun
+	if cfg == nil {
+		return personalScriptsDiagnostics{
+			Pre:  unknownPersonalScript("PERSONAL_SCRIPT_PRE_RUN", daemonUID),
+			Post: unknownPersonalScript("PERSONAL_SCRIPT_POST_RUN", daemonUID),
+		}
 	}
 	return personalScriptsDiagnostics{
-		Pre:  inspectPersonalScript("PERSONAL_SCRIPT_PRE_RUN", pre, daemonUID),
-		Post: inspectPersonalScript("PERSONAL_SCRIPT_POST_RUN", post, daemonUID),
+		Pre:  inspectPersonalScript("PERSONAL_SCRIPT_PRE_RUN", cfg.PersonalScriptPreRun, daemonUID),
+		Post: inspectPersonalScript("PERSONAL_SCRIPT_POST_RUN", cfg.PersonalScriptPostRun, daemonUID),
+	}
+}
+
+func unknownPersonalScript(key string, daemonUID int) personalScriptDiagnostic {
+	return personalScriptDiagnostic{
+		Key:       key,
+		State:     personalScriptUnknown,
+		Reason:    personalScriptConfigUnreadable,
+		DaemonUID: daemonUID,
 	}
 }
 
