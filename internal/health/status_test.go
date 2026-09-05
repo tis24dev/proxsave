@@ -4,8 +4,20 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
+
+func TestWriteJSONAtomicReportsMarshalError(t *testing.T) {
+	path := StatusPath(t.TempDir())
+	err := writeJSONAtomic(path, make(chan struct{}))
+	if err == nil || !strings.Contains(err.Error(), "marshal") {
+		t.Fatalf("writeJSONAtomic error = %v, want marshal error", err)
+	}
+	if _, statErr := os.Stat(path); !os.IsNotExist(statErr) {
+		t.Fatalf("destination created after marshal failure: %v", statErr)
+	}
+}
 
 // TestRecordPingRoundTripEachKind writes one kind at a time and confirms that,
 // after each write, LoadStatus returns exactly the record set, the other kinds
