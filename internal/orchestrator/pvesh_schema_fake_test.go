@@ -39,6 +39,9 @@ type schemaAwarePvesh struct {
 	// now discriminates between them (pveshSchemaRefusal).
 	failSet         map[string]bool
 	schemaRefuseSet map[string]bool
+	// refuseSetKeys refuses a guest set that CARRIES one of these keys, naming it
+	// the way the live node does, so the drop-and-retry arm can be driven.
+	refuseSetKeys   map[string]bool
 	statusOutput    map[string][]byte
 	statusError     map[string]error
 	inventoryOutput []byte
@@ -150,6 +153,16 @@ func (s *schemaAwarePvesh) Run(_ context.Context, name string, args ...string) (
 			// same family as the --meta rejection below.
 			return []byte("400 Parameter verification failed. balloon: property is not defined in schema and the schema does not allow additional properties"),
 				errString("exit status 255")
+		}
+		for _, a := range args[2:] {
+			if !strings.HasPrefix(a, "--") {
+				continue
+			}
+			key := strings.TrimPrefix(strings.SplitN(a, "=", 2)[0], "--")
+			if s.refuseSetKeys[key] {
+				return []byte("400 Parameter verification failed. " + key + ": property is not defined in schema and the schema does not allow additional properties"),
+					errString("exit status 255")
+			}
 		}
 	}
 	if len(args) >= 2 && args[0] == "set" && strings.Contains(args[1], "/qemu/") && strings.HasSuffix(args[1], "/config") {

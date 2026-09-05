@@ -440,3 +440,66 @@ func TestPveshSchemaRefusalSeparatesPayloadFromOperation(t *testing.T) {
 		})
 	}
 }
+
+// filterGuestCreateOnlyArgs knows two create-only keys by name. The set schema
+// varies by PVE version, so a third one appearing costs the WHOLE config apply on
+// a guest the conf file cannot rescue - a running one. The refusal names the key,
+// so drop it and retry: the guest loses that key instead of every key, and the
+// line says which one it lost.
+func TestRunningGuestKeepsEveryKeyTheSchemaAccepts(t *testing.T) {
+	fakeFS, pvesh, logger, node := guestApplyFixture(t)
+	pvesh.guests["100"] = true
+	pvesh.running["100"] = true
+	pvesh.refuseSetKeys = map[string]bool{"balloon": true}
+
+	buf := &strings.Builder{}
+	logger.SetOutput(buf)
+
+	conf := "name: vm100\nballoon: 0\ncores: 4\n"
+	stagePath := "/export/etc/pve/nodes/" + node() + "/qemu-server/100.conf"
+	if err := fakeFS.AddFile(stagePath, []byte(conf)); err != nil {
+		t.Fatal(err)
+	}
+
+	applied, failed := applyVMConfigs(context.Background(), []vmEntry{{
+		VMID: "100", Kind: "qemu", Name: "vm100", Path: stagePath,
+	}}, logger)
+	if applied != 1 || failed != 0 {
+		t.Fatalf("applied=%d failed=%d, want 1/0: the accepted keys must still land", applied, failed)
+	}
+	if _, err := fakeFS.ReadFile("/etc/pve/nodes/" + node() + "/qemu-server/100.conf"); err == nil {
+		t.Fatal("the conf file was written under a running guest")
+	}
+	calls := strings.Join(pvesh.calls, "\n")
+	if !strings.Contains(calls, "--cores=4") || strings.Contains(calls[strings.LastIndex(calls, "\n"):], "--balloon=") {
+		t.Fatalf("the retry did not resend the accepted keys without --balloon:\n%s", calls)
+	}
+	out := buf.String()
+	if !strings.Contains(out, "without balloon") {
+		t.Fatalf("the outcome does not name the key whose staged value was dropped:\n%s", out)
+	}
+}
+
+func TestPveshRefusedKeyFromNamesTheKeyAcrossBothShapes(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		out  string
+		want string
+	}{
+		{"storage shape on the output", errString("exit status 255"), "Unknown option: path\n400 unable to parse option", "path"},
+		{"guest shape in the error", errString("400 Parameter verification failed. meta: property is not defined in schema and the schema does not allow additional properties"), "", "meta"},
+		{"guest shape on the output", errString("exit status 255"), "400 Parameter verification failed. balloon: property is not defined in schema", "balloon"},
+		// Same opening sentence, a VALUE error: dropping the key here would discard
+		// a staged value the operator asked to restore.
+		{"value error names nothing", errString("exit status 2"), "400 Parameter verification failed. cores: value 999 does not match the regex pattern", ""},
+		{"unrelated failure", errString("500 unable to apply configuration"), "", ""},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := pveshRefusedKeyFrom(tc.err, []byte(tc.out)); got != tc.want {
+				t.Fatalf("pveshRefusedKeyFrom = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
