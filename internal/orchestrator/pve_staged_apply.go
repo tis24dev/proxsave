@@ -35,6 +35,17 @@ func maybeApplyPVEConfigsFromStage(ctx context.Context, logger *logging.Logger, 
 		logger.Info("Dry run enabled: skipping staged PVE config apply")
 		return nil
 	}
+	// Cancellation is checked here and again before EVERY arm below. The
+	// between-steps check in runStagedApplySteps guards only the boundary between
+	// staged-apply steps; inside this one the arms write straight into pmxcfs, so
+	// without a per-arm gate an aborted restore still applied datacenter.cfg,
+	// vzdump.cron and the storage definitions cluster-wide. An abort returns
+	// ctx.Err() rather than the failedItems aggregate, so the caller reads it as an
+	// abort (input.IsAborted matches context.Canceled) and not as "with warnings".
+	if cerr := ctx.Err(); cerr != nil {
+		logger.Warning("PVE staged apply aborted: %v", cerr)
+		return cerr
+	}
 	if !isRealRestoreFS(restoreFS) {
 		logger.Debug("Skipping staged PVE config apply: non-system filesystem in use")
 		return nil
@@ -48,34 +59,41 @@ func maybeApplyPVEConfigsFromStage(ctx context.Context, logger *logging.Logger, 
 	// caller reports the restore "with warnings" instead of a clean success
 	// rather than silently swallowing failed applies (BH-003).
 	var failedItems []string
+	var aborted error
+
+	// applyArm runs ONE arm behind the shared cancellation gate, so an arm added
+	// later cannot be added without it. Per-arm wording is unchanged.
+	applyArm := func(name string, run func() error) {
+		if aborted != nil {
+			return
+		}
+		if cerr := ctx.Err(); cerr != nil {
+			aborted = cerr
+			return
+		}
+		if err := run(); err != nil {
+			logger.Warning("PVE staged apply: %s: %v", name, err)
+			failedItems = append(failedItems, name)
+		}
+	}
 
 	if plan.HasCategoryID("storage_pve") {
-		if err := applyPVEVzdumpConfFromStage(logger, stageRoot); err != nil {
-			logger.Warning("PVE staged apply: vzdump.conf: %v", err)
-			failedItems = append(failedItems, "vzdump.conf")
-		}
+		applyArm("vzdump.conf", func() error { return applyPVEVzdumpConfFromStage(logger, stageRoot) })
 
 		// In cluster RECOVERY mode, config.db restoration owns storage.cfg/datacenter.cfg.
 		// Still apply mount guards because they only protect mountpoints from accidental writes.
 		if plan.NeedsClusterRestore {
 			logging.DebugStep(logger, "pve staged apply", "Skip PVE storage/datacenter apply: cluster RECOVERY restores config.db")
 		} else {
-			if err := applyPVEStorageCfgFromStage(ctx, logger, stageRoot); err != nil {
-				logger.Warning("PVE staged apply: storage.cfg: %v", err)
-				failedItems = append(failedItems, "storage.cfg")
-			}
+			applyArm("storage.cfg", func() error { return applyPVEStorageCfgFromStage(ctx, logger, stageRoot) })
 		}
 
-		if err := maybeApplyPVEStorageMountGuardsFromStage(ctx, logger, plan, stageRoot, destRoot); err != nil {
-			logger.Warning("PVE staged apply: mount guards: %v", err)
-			failedItems = append(failedItems, "mount guards")
-		}
+		applyArm("mount guards", func() error {
+			return maybeApplyPVEStorageMountGuardsFromStage(ctx, logger, plan, stageRoot, destRoot)
+		})
 
 		if !plan.NeedsClusterRestore {
-			if err := applyPVEDatacenterCfgFromStage(ctx, logger, stageRoot); err != nil {
-				logger.Warning("PVE staged apply: datacenter.cfg: %v", err)
-				failedItems = append(failedItems, "datacenter.cfg")
-			}
+			applyArm("datacenter.cfg", func() error { return applyPVEDatacenterCfgFromStage(ctx, logger, stageRoot) })
 		}
 	}
 
@@ -83,15 +101,19 @@ func maybeApplyPVEConfigsFromStage(ctx context.Context, logger *logging.Logger, 
 		if plan.NeedsClusterRestore {
 			logging.DebugStep(logger, "pve staged apply", "Skip PVE backup jobs apply: cluster RECOVERY restores config.db")
 		} else {
-			if err := applyPVEBackupJobsFromStage(ctx, logger, stageRoot); err != nil {
-				logger.Warning("PVE staged apply: jobs.cfg: %v", err)
-				failedItems = append(failedItems, "jobs.cfg")
-			}
-			if err := applyPVEVzdumpCronFromStage(logger, stageRoot); err != nil {
-				logger.Warning("PVE staged apply: vzdump.cron: %v", err)
-				failedItems = append(failedItems, "vzdump.cron")
-			}
+			applyArm("jobs.cfg", func() error { return applyPVEBackupJobsFromStage(ctx, logger, stageRoot) })
+			applyArm("vzdump.cron", func() error { return applyPVEVzdumpCronFromStage(logger, stageRoot) })
 		}
+	}
+
+	if aborted != nil {
+		if len(failedItems) > 0 {
+			logger.Warning("PVE staged apply aborted: %v (%d item(s) had already failed: %s)",
+				aborted, len(failedItems), strings.Join(failedItems, ", "))
+		} else {
+			logger.Warning("PVE staged apply aborted: %v", aborted)
+		}
+		return aborted
 	}
 
 	if len(failedItems) > 0 {
