@@ -128,16 +128,21 @@ func whatsnewResolve(baseDir, toolVersion string) (show bool, body string) {
 func whatsnewRender(ctx context.Context, session *shell.Session, baseDir, toolVersion, body string) {
 	wnCtx, cancel := context.WithTimeout(ctx, whatsnewScreenTimeout)
 	defer cancel()
-	// The resolution is deliberately discarded: it says how the screen was closed,
-	// which is no longer what decides whether the notes were seen.
-	_ = whatsnewRun(wnCtx, session, body)
-	// The one case that still does not count: the PARENT was torn down, so the
-	// screen never really ran. That is an external SIGINT or SIGTERM
-	// (setupRunContextWithSignals cancels ctx), not the operator closing the screen.
-	// A Ctrl+C typed INTO the screen does not land here: the terminal is in raw mode,
-	// bubbletea reads it as a key and the router turns it into tea.Interrupt, so the
-	// parent context stays alive and the notes count as seen, which is the point.
+	err := whatsnewRun(wnCtx, session, body)
+	// A torn-down PARENT means the screen never really ran: an external SIGINT or
+	// SIGTERM, which setupRunContextWithSignals maps to ctx cancellation. A Ctrl+C
+	// typed INTO the screen does not land here, because the terminal is in raw mode
+	// and bubbletea reads it as a key the router turns into tea.Interrupt.
 	if ctx.Err() != nil {
+		return
+	}
+	// The 10-minute timeout is the other exit that does not count, and it is the only
+	// one the interactivity gate cannot rule out. isTerminalInteractive proves a
+	// TERMINAL, not a person: a detached tmux window, an expect script or an `ssh -t`
+	// from a wrapper all carry a real TTY. Every OTHER resolution is a keystroke, so
+	// it is evidence a person was there; sitting untouched for ten minutes is the
+	// opposite.
+	if errors.Is(err, context.DeadlineExceeded) {
 		return
 	}
 	_ = whatsnewSaveSeen(baseDir, toolVersion)

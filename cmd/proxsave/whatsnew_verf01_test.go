@@ -142,7 +142,7 @@ func TestVERF01(t *testing.T) {
 	// operator who read the notes and pressed Esc kept getting a WARNING on every
 	// scheduled backup, which ParseLogCounts counted and applyIssueExitCode promoted
 	// to exit 1, reported to Healthchecks as down.
-	t.Run("any_exit_from_the_screen_disarms_the_warning", func(t *testing.T) {
+	t.Run("any_keystroke_that_closes_the_screen_disarms_the_warning", func(t *testing.T) {
 		cases := []struct {
 			name   string
 			runErr error
@@ -150,7 +150,6 @@ func TestVERF01(t *testing.T) {
 			{"continue", nil},
 			{"esc", shell.ErrAborted},
 			{"ctrl+c", shell.ErrClosed},
-			{"timeout", context.DeadlineExceeded},
 		}
 		for _, tc := range cases {
 			t.Run(tc.name, func(t *testing.T) {
@@ -170,6 +169,24 @@ func TestVERF01(t *testing.T) {
 					t.Fatalf("the warning survived a %s: ShouldWarn = (%v, %v)", tc.name, show, err)
 				}
 			})
+		}
+	})
+
+	// The 10-minute timeout stays armed. It is the only resolution that is not a
+	// keystroke, and it is exactly what a detached tmux window or an `ssh -t` from a
+	// wrapper produces: a real TTY with nobody in front of it, which
+	// isTerminalInteractive cannot tell apart from a person.
+	t.Run("the_screen_timing_out_leaves_the_warning_armed", func(t *testing.T) {
+		stubWhatsnewSeams(t)
+		base := t.TempDir()
+		whatsnewRun = func(ctx context.Context, session *shell.Session, body string) error {
+			return context.DeadlineExceeded
+		}
+
+		maybeShowWhatsnew(context.Background(), nil, base, "0.30.0")
+
+		if _, err := os.Stat(whatsnew.StatePath(base)); !os.IsNotExist(err) {
+			t.Fatalf("an untouched screen wrote the flag; StatePath err = %v, want not-exist", err)
 		}
 	})
 

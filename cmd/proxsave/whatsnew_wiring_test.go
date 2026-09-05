@@ -39,11 +39,11 @@ func stubWhatsnewSeams(t *testing.T) {
 // applyIssueExitCode promoted to exit 1, which the daemon reports to Healthchecks as
 // down (issue #305).
 //
-// Presence is established before this point and not by which key was pressed:
-// maybeShowWhatsnew and showWhatsnewScreen both gate on a real terminal, and
-// --dry-run returns before rendering. Reaching the write means a person saw the
-// screen. Only a torn-down PARENT context still skips it, which is covered
-// separately by TestMaybeShowWhatsnewTimeout.
+// Every resolution except the timeout is a KEYSTROKE, which is the evidence that a
+// person was there. isTerminalInteractive only proves a terminal: a detached tmux
+// window, an expect script or an `ssh -t` from a wrapper all carry a real TTY, and
+// there the screen would sit untouched until the 10-minute timeout. That one does
+// not write, and neither does a torn-down parent (TestMaybeShowWhatsnewTimeout).
 func TestScreen0WritesOnceHoweverTheScreenIsClosed(t *testing.T) {
 	const (
 		base    = "/tmp/whatsnew-base"
@@ -57,7 +57,7 @@ func TestScreen0WritesOnceHoweverTheScreenIsClosed(t *testing.T) {
 		{"continue writes once", nil, 1},
 		{"esc writes: the notes were read", shell.ErrAborted, 1},
 		{"ctrl+c writes: bubbletea reports it as a closed session", shell.ErrClosed, 1},
-		{"the 10-minute timeout writes: the screen was on the operator's terminal", context.DeadlineExceeded, 1},
+		{"the 10-minute timeout does NOT write: a TTY is not a person", context.DeadlineExceeded, 0},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
