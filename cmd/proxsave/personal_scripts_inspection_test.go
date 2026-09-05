@@ -342,3 +342,82 @@ func TestApplyPersonalScriptDiagnosticKeepsAdvisoryPathAndWarnsOnce(t *testing.T
 		t.Fatalf("warning count = %d, want 1\n%s", got, buf.String())
 	}
 }
+
+// The accepted foreign-owned ancestor rests on one kernel setting: its owner can
+// unlink the script and put another file in its place, and what stops them is the
+// execution-time gate refusing anything not owned by root - which only holds while
+// fs.protected_hardlinks forbids linking a root-owned executable they neither own
+// nor can write. docs/SECURITY.md used to describe the trust decision without ever
+// naming that dependency; the advisory now carries it.
+func TestForeignOwnedAncestorAdvisoryNamesTheHardlinkProtection(t *testing.T) {
+	tests := []struct {
+		name    string
+		value   int
+		probeer error
+		want    string
+	}{
+		{"enforced", 1, nil, "cannot hard-link a root-owned executable"},
+		{"disabled", 0, nil, "CAN hard-link a root-owned executable"},
+		{"unreadable", 0, errors.New("permission denied"), "could not be read"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			orig := personalScriptHardlinkProtection
+			t.Cleanup(func() { personalScriptHardlinkProtection = orig })
+			personalScriptHardlinkProtection = func() (int, error) { return tc.value, tc.probeer }
+
+			got := personalScriptHardlinkAdvisory()
+			if !strings.Contains(got, tc.want) {
+				t.Fatalf("advisory = %q, want it to contain %q", got, tc.want)
+			}
+		})
+	}
+}
+
+// The clause rides along with the ownership advisory, in the same reason string,
+// and never appears on a path that raised no advisory at all.
+func TestHardlinkClauseRidesWithTheOwnershipAdvisoryOnly(t *testing.T) {
+	orig := personalScriptHardlinkProtection
+	t.Cleanup(func() { personalScriptHardlinkProtection = orig })
+	personalScriptHardlinkProtection = func() (int, error) { return 0, nil }
+
+	origStat := personalScriptStat
+	origEval := personalScriptEvalSymlinks
+	origValidate := personalScriptValidateExecutable
+	t.Cleanup(func() {
+		personalScriptStat = origStat
+		personalScriptEvalSymlinks = origEval
+		personalScriptValidateExecutable = origValidate
+	})
+	personalScriptEvalSymlinks = func(p string) (string, error) { return p, nil }
+	personalScriptValidateExecutable = func(string) error { return nil }
+
+	// uid 1000 on the home, root everywhere else: the accepted advisory shape.
+	foreign := map[string]uint32{"/home/operator": 1000}
+	personalScriptStat = func(p string) (os.FileInfo, error) {
+		mode := os.FileMode(0o755)
+		if p == "/home/operator/pre.sh" {
+			mode = 0o700
+		} else {
+			mode |= os.ModeDir
+		}
+		return personalScriptInspectionFileInfo{name: filepath.Base(p), mode: mode, uid: foreign[p], dir: mode.IsDir()}, nil
+	}
+
+	got := inspectPersonalScript("PERSONAL_SCRIPT_PRE_RUN", "/home/operator/pre.sh", 0)
+	if got.State != personalScriptReadyWithWarning {
+		t.Fatalf("state = %q, want ready-with-warning: %+v", got.State, got)
+	}
+	if !strings.Contains(got.Reason, "owned by uid 1000") || !strings.Contains(got.Reason, "fs.protected_hardlinks is 0") {
+		t.Fatalf("the reason does not carry both the advisory and its mitigation: %q", got.Reason)
+	}
+
+	foreign = map[string]uint32{}
+	clean := inspectPersonalScript("PERSONAL_SCRIPT_PRE_RUN", "/home/operator/pre.sh", 0)
+	if clean.State != personalScriptReady {
+		t.Fatalf("state = %q, want ready: %+v", clean.State, clean)
+	}
+	if strings.Contains(clean.Reason, "protected_hardlinks") {
+		t.Fatalf("a path with no advisory got the mitigation clause anyway: %q", clean.Reason)
+	}
+}

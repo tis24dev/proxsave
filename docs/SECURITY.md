@@ -68,6 +68,26 @@ non-loosely-writable. This shape is `READY WITH WARNING`, remains enabled, and p
 startup warning per advisory setting. A symlink, unsafe target, or loosely writable non-sticky
 ancestor is `REFUSED`, blanked for that daemon, and produces one startup warning per refused
 setting, so neither policy result becomes silent non-execution.
+
+**What actually holds the accepted ancestor, and what it rests on.** The startup gate is a
+DIAGNOSTIC; it is not what protects the interval between startup and a run. Every invocation goes
+through a second, silent gate (`openPersonalScriptForExecution`): the final component is opened
+with `O_NOFOLLOW`, the OPENED INODE is then checked for regular/executable/not group- or
+other-writable/owned by root or the daemon UID, and the child execs `/proc/self/fd/3`, so
+replacing the pathname after the check cannot change the inode that runs. That gate is the reason
+a foreign-owned ancestor can be accepted at all.
+
+Its whole strength is the ownership check, and that check has exactly one bypass: the ancestor's
+owner cannot `chown` a file to root, but they could **hard-link** an existing root-owned
+executable into the name the daemon runs. `fs.protected_hardlinks=1` forbids linking a file the
+linker neither owns nor can write, and it is the kernel default on Proxmox VE; with it set to `0`
+the ownership check stops nothing and the trust decision has no mitigation behind it. The startup
+advisory therefore names the setting's current value alongside the ownership warning, so the
+operator sees the dependency rather than inferring it. Two limits are worth stating plainly: the
+per-run gate opens through `safefs.OpenFileUnderRoot`, which roots at the PARENT directory and so
+guards only the final component - an ancestor owner can still swap an intermediate directory for a
+symlink, they just cannot make a non-root-owned file pass - and the check is repeated per run, not
+held, so it proves what the inode was at exec time and nothing about later runs.
 Several callers do invoke `/bin/sh`
 on purpose, but only one of them puts shell **text** on a command line: the background
 rollback timer runs `sh -c '<compile-time constant>'` and passes the sleep seconds and the
