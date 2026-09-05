@@ -53,13 +53,13 @@ Service state (systemctl is-active): <active|inactive|...>
 Running version: <version> (<commit>)
 Binary alignment: aligned | BEHIND (restart needed) | unknown
 Personal pre-run script:
-  Running daemon: NOT CONFIGURED | READY | READY WITH WARNING | REFUSED
+  Running daemon: NOT RUNNING | NOT CONFIGURED | READY | READY WITH WARNING | REFUSED
   Current configuration: NOT CONFIGURED | READY | READY WITH WARNING | REFUSED
-  Synchronization: IN SYNC | OUT OF SYNC | PATH STATE CHANGED SINCE STARTUP | UNKNOWN
+  Synchronization: NOT APPLICABLE | IN SYNC | OUT OF SYNC | PATH STATE CHANGED SINCE STARTUP | UNKNOWN
 Personal post-run script:
-  Running daemon: NOT CONFIGURED | READY | READY WITH WARNING | REFUSED
+  Running daemon: NOT RUNNING | NOT CONFIGURED | READY | READY WITH WARNING | REFUSED
   Current configuration: NOT CONFIGURED | READY | READY WITH WARNING | REFUSED
-  Synchronization: IN SYNC | OUT OF SYNC | PATH STATE CHANGED SINCE STARTUP | UNKNOWN
+  Synchronization: NOT APPLICABLE | IN SYNC | OUT OF SYNC | PATH STATE CHANGED SINCE STARTUP | UNKNOWN
 ```
 
 `Running version:` and `Binary alignment:` appear only when their daemon evidence is available. The two personal-script sections always appear. `Running daemon` is the state captured and applied at daemon startup; `Current configuration` is what a restart would load and how that path looks now. `NOT CONFIGURED` means the setting was empty, `READY` means the path passed without an advisory, `READY WITH WARNING` means it remains enabled under an explicit administrator trust decision, and `REFUSED` includes the exact refusal reason. If a live daemon has not published matching runtime state, the command says `RUNNING DAEMON STATE UNAVAILABLE`; it never turns missing runtime evidence into a false `NOT CONFIGURED` verdict.

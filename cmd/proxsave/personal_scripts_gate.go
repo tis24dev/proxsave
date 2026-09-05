@@ -12,12 +12,11 @@ import (
 // that file's import list (TestPersonalScriptsFileImportsNoReportingPackage), and the gate
 // exists precisely to speak - once, at daemon startup - where the starters never may.
 
-// validatePersonalScripts is the trusted-path gate for both operator scripts, run ONCE at
-// daemon startup. It lives here and not in the starters for the reason personalScriptCmd
-// records: under the starters' frozen silence rule a refused path would be an undebuggable
-// non-execution, so the refusal happens where it can be LOUD - one WARNING naming the
-// variable, the path and the reason - and the setting is blanked, so every later tick
-// behaves as if it were never configured. A foreign-owned ancestor is instead an
+// validatePersonalScripts is the diagnostic trusted-path gate for both operator scripts,
+// run ONCE at daemon startup. It lives here because a refusal must be LOUD - one WARNING
+// naming the variable, the path and the reason - while the execution-time opened-inode gate
+// in personal_scripts.go must stay silent. A startup refusal blanks the setting, so every
+// later tick behaves as if it were never configured. A foreign-owned ancestor is instead an
 // administrator trust warning: the normalized path stays enabled after the administrator
 // has chosen to configure it.
 //
@@ -25,7 +24,8 @@ import (
 // to root or to the daemon's own user and must not be writable by group or others, and a
 // directory writable by group or others must carry the sticky bit (the /tmp shape, where
 // non-owners cannot rename or unlink entries). A foreign-owned ancestor can replace its
-// descendants, so accepting that path records and logs the administrator's trust decision.
+// descendants, so accepting that path records and logs the administrator's trust decision;
+// execution remains safe because the starter pins and validates the opened target inode.
 func validatePersonalScripts(cfg *config.Config) personalScriptsDiagnostics {
 	diagnostics := inspectPersonalScripts(cfg, os.Geteuid())
 	if cfg == nil {
