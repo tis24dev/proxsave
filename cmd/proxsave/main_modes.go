@@ -179,6 +179,7 @@ func enabledModes(modes []incompatibleMode) []string {
 func dispatchPreRuntimeModes(ctx context.Context, args *cli.Args, bootstrap *logging.BootstrapLogger, toolVersion string) (int, bool) {
 	for _, handler := range []preRuntimeModeHandler{
 		runShowWhatsnewMode,
+		runUpgradeFinalizeMode,
 		runUpgradeMode,
 		runNewKeyMode,
 		runDecryptOnlyMode,
@@ -227,6 +228,26 @@ func runUpgradeMode(ctx context.Context, args *cli.Args, bootstrap *logging.Boot
 	}
 	logging.DebugStepBootstrap(bootstrap, "main run", "mode=upgrade")
 	return runUpgrade(ctx, args, bootstrap), true
+}
+
+// runUpgradeFinalizeMode handles --upgrade-finalize: run only the post-install
+// finalize phase and exit.
+//
+// This is the mode --upgrade re-invokes on the freshly INSTALLED binary, so the
+// finalize policy that runs belongs to the release being installed rather than to
+// the one being replaced - which is why every change to that policy used to take
+// effect one upgrade late. It is not a user-facing entry point: run by hand it
+// would refresh docs, restart the daemon and print an upgrade footer for a version
+// nobody installed.
+//
+// Reached only after the caller verified and installed the binary, so upgradeErr is
+// nil by construction here.
+func runUpgradeFinalizeMode(ctx context.Context, args *cli.Args, bootstrap *logging.BootstrapLogger, _ string) (int, bool) {
+	if !args.UpgradeFinalize {
+		return types.ExitSuccess.Int(), false
+	}
+	logging.DebugStepBootstrap(bootstrap, "main run", "mode=upgrade-finalize")
+	return runUpgradeFinalize(ctx, args, bootstrap), true
 }
 
 // runShowWhatsnewMode handles --show-whatsnew: open Screen 0 (what's new) once and exit.

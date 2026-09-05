@@ -285,6 +285,22 @@ func upgradeAcquireBinary(ctx context.Context, args *cli.Args, bootstrap *loggin
 // process exit code and the error to attribute to the workflow span (nil on full
 // success, the config-upgrade error, or the binary-install error).
 func upgradeFinalizePhase(ctx context.Context, args *cli.Args, bootstrap *logging.BootstrapLogger, sessionLogger *logging.Logger, baseDir, execPath, versionInstalled string, upgradeErr error, opts upgradeRunOptions) (int, error) {
+	// Hand the whole phase to the binary that was just installed, when it is new
+	// enough to have the entry point. Everything below this line is release-specific
+	// policy - which keys the config merge adds, whether the daemon is migrated,
+	// what the footer says - and running it from the binary being REPLACED is why
+	// every change to it landed one release late.
+	//
+	// Only the finalize moves. Download, signature and checksum verification and the
+	// install stay here, because the downloaded binary is untrusted until this one
+	// has verified it and it cannot be the party that verifies itself. upgradeErr
+	// != nil means the install failed, so there is nothing new to delegate to.
+	if upgradeErr == nil && !args.UpgradeFinalize {
+		if code, err, delegated := delegateUpgradeFinalize(ctx, args, bootstrap, execPath, versionInstalled, opts); delegated {
+			return code, err
+		}
+	}
+
 	var cfgUpgradeResult *config.UpgradeResult
 	var cfgUpgradeErr error
 	if upgradeErr == nil {
@@ -379,6 +395,110 @@ func upgradeFinalizePhase(ctx context.Context, args *cli.Args, bootstrap *loggin
 		workflowErr = cfgUpgradeErr
 	}
 	return upgradeExitCode(upgradeErr, cfgUpgradeErr), workflowErr
+}
+
+// runUpgradeFinalize is the child half of the split: it runs upgradeFinalizePhase
+// and nothing else. It repeats the caller's setup that the phase depends on - the
+// BASE_DIR export and the config existence check - and deliberately does NOT
+// reprint the upgrade banner, because the parent already printed it on the same
+// terminal.
+//
+// execPath is this process's own binary: the child IS the installed one, which is
+// the entire point of handing the phase over.
+func runUpgradeFinalize(ctx context.Context, args *cli.Args, bootstrap *logging.BootstrapLogger) int {
+	baseDir, _ := detectedBaseDirOrFallback()
+	_ = os.Setenv("BASE_DIR", baseDir)
+
+	if bootstrap != nil && args.LogLevel != types.LogLevelNone {
+		bootstrap.SetLevel(args.LogLevel)
+	}
+	if err := ensureConfigExists(args.ConfigPath, bootstrap); err != nil {
+		bootstrap.Error("%v", err)
+		return types.ExitConfigError.Int()
+	}
+
+	version := strings.TrimSpace(args.UpgradeFinalizeVersion)
+	if version == "" {
+		version = strings.TrimPrefix(buildinfo.String(), "v")
+	}
+
+	code, _ := upgradeFinalizePhase(ctx, args, bootstrap, nil, baseDir,
+		getExecInfo().ExecPath, version, nil,
+		upgradeRunOptions{deferWhatsnew: args.UpgradeFinalizeSkipWhatsnew})
+	return code
+}
+
+// upgradeFinalizeDelegationFloor is the first release whose binary carries
+// --upgrade-finalize. Below it the flag does not exist, so the old binary keeps
+// doing the finalize itself, exactly as before.
+const upgradeFinalizeDelegationFloor = "0.36.0"
+
+// upgradeFinalizeCommand is a seam so a test can drive the delegation without
+// spawning the installed binary.
+var upgradeFinalizeCommand = safeexec.TrustedCommandContext
+
+// delegateUpgradeFinalize runs the finalize phase inside the freshly installed
+// binary. delegated=false means the caller must do the phase itself.
+//
+// The gate is a VERSION COMPARISON, deliberately, and it fails closed: a version
+// that does not parse, or one below the floor, keeps the in-process path. The two
+// alternatives are worse. A probe flag costs a process spawn on every upgrade and
+// answers weakly - a binary that does not know the flag prints usage and exits
+// non-zero, which is indistinguishable from "the flag exists and failed". A
+// try-then-fall-back on the exit code cannot tell "no such flag" from "the finalize
+// ran and failed", and getting that wrong either skips the finalize or runs the
+// config merge twice.
+//
+// A child that never STARTS (exec format error, missing loader) is the one case
+// that falls back: the host must be left no worse than before the split existed.
+// A child that starts and exits non-zero is a finalize that genuinely failed, and
+// it is NOT retried in-process - the config merge is not something to assume
+// idempotent.
+//
+// What this does not do, stated because the parent-child shape invites the
+// assumption: it cannot roll the binary back. installBinary renames the new file
+// over the old one and keeps no copy, so no rollback capability exists here today.
+// The parent's job is to report, and to still finalize when the child cannot run.
+func delegateUpgradeFinalize(ctx context.Context, args *cli.Args, bootstrap *logging.BootstrapLogger, execPath, versionInstalled string, opts upgradeRunOptions) (int, error, bool) {
+	if compareVersions(versionInstalled, upgradeFinalizeDelegationFloor) < 0 {
+		logging.DebugStepBootstrap(bootstrap, "upgrade workflow", "finalize stays in this binary: installed %q is below %s", versionInstalled, upgradeFinalizeDelegationFloor)
+		return 0, nil, false
+	}
+
+	cmdArgs := []string{"--upgrade-finalize", "--upgrade-finalize-version", versionInstalled}
+	if configPath := strings.TrimSpace(args.ConfigPath); configPath != "" {
+		cmdArgs = append(cmdArgs, "--config", configPath)
+	}
+	if opts.deferWhatsnew || args.UpgradeAutoYes {
+		cmdArgs = append(cmdArgs, "--upgrade-finalize-skip-whatsnew")
+	}
+	// Without this the half of the upgrade that moved to the child would go quiet
+	// under `--upgrade --log-level debug`, which is the flag someone reaches for
+	// precisely when the finalize is what they are trying to see. LogLevelNone means
+	// "unset, let the config decide" and must NOT be forwarded as a choice.
+	if args.LogLevel != types.LogLevelNone {
+		cmdArgs = append(cmdArgs, "--log-level", strings.ToLower(args.LogLevel.String()))
+	}
+
+	cmd, err := upgradeFinalizeCommand(ctx, execPath, cmdArgs...)
+	if err != nil {
+		bootstrap.Warning("Upgrade: cannot hand the finalize to the installed binary (%v); finalizing here instead", err)
+		return 0, nil, false
+	}
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+
+	logging.DebugStepBootstrap(bootstrap, "upgrade workflow", "delegating finalize to %s %v", execPath, cmdArgs)
+	if err := cmd.Start(); err != nil {
+		bootstrap.Warning("Upgrade: the installed binary would not start for the finalize (%v); finalizing here instead", err)
+		return 0, nil, false
+	}
+	if err := cmd.Wait(); err != nil {
+		bootstrap.Error("Upgrade: the installed binary reported a finalize failure: %v", err)
+		return types.ExitGenericError.Int(), err, true
+	}
+	return types.ExitSuccess.Int(), nil, true
 }
 
 // upgradeExitCode maps the binary-install and config-upgrade outcomes to a process

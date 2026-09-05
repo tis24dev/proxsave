@@ -50,8 +50,24 @@ type Args struct {
 	// the upgrade flow re-invokes the freshly installed binary with this flag so Screen 0
 	// opens at the end of every upgrade, rendered by the binary that actually carries the
 	// notes (the notes registry is compiled into each binary).
-	ShowWhatsnew  bool
-	CleanupGuards bool
+	ShowWhatsnew bool
+	// UpgradeFinalize runs ONLY the post-install finalize phase and exits. Internal
+	// plumbing, the same shape as ShowWhatsnew: --upgrade re-invokes the freshly
+	// INSTALLED binary with this flag so the finalize logic that runs is the new
+	// release's, not the one being replaced. Download, signature/checksum
+	// verification and the install itself stay in the old binary and are never
+	// delegated: the downloaded binary is untrusted until that binary has verified
+	// it, so it cannot be the one to verify itself.
+	UpgradeFinalize bool
+	// UpgradeFinalizeVersion carries the version the parent installed, for the
+	// footer the child prints. The child cannot read it from its own build info on
+	// the --localfile path, where the on-disk binary may predate the tag.
+	UpgradeFinalizeVersion string
+	// UpgradeFinalizeSkipWhatsnew collapses the parent's two reasons for not opening
+	// Screen 0 (auto-yes, or the dashboard owning presentation) into one bit, since
+	// the child only needs the verdict.
+	UpgradeFinalizeSkipWhatsnew bool
+	CleanupGuards               bool
 	Backup        bool
 	Daemon        bool
 	DaemonSetup   bool
@@ -138,6 +154,13 @@ func Parse() *Args {
 
 	flag.BoolVar(&args.ShowWhatsnew, "show-whatsnew", false,
 		"Show the what's-new screen once and exit (for internal use by --upgrade)")
+
+	flag.BoolVar(&args.UpgradeFinalize, "upgrade-finalize", false,
+		"Run only the post-install finalize phase and exit (for internal use by --upgrade)")
+	flag.StringVar(&args.UpgradeFinalizeVersion, "upgrade-finalize-version", "",
+		"With --upgrade-finalize: the version the caller installed (for internal use by --upgrade)")
+	flag.BoolVar(&args.UpgradeFinalizeSkipWhatsnew, "upgrade-finalize-skip-whatsnew", false,
+		"With --upgrade-finalize: do not open the what's-new screen (for internal use by --upgrade)")
 
 	// Custom usage message
 	flag.Usage = func() {

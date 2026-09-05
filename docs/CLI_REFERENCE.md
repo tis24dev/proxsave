@@ -249,6 +249,7 @@ See also: [upgrading configuration](#configuration-upgrade)
 | `--upgrade-config` | Merge current config with latest template |
 | `--upgrade-config-dry-run` | Preview config upgrade without changes |
 | `--upgrade-config-json` | Internal: upgrade the config and print a JSON summary to stdout (used by `--upgrade`; not for direct use) |
+| `--upgrade-finalize` | Internal: run only the post-install finalize phase (config merge, docs/symlinks, daemon migrate+restart, permissions, footer, release notes). `--upgrade` re-invokes the freshly installed binary with it from 0.36.0 on, so the finalize policy that runs belongs to the release being installed rather than to the one being replaced. Not for direct use: run by hand it restarts the daemon and prints an upgrade footer for a version nobody installed |
 
 ---
 
