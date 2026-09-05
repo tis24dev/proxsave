@@ -172,3 +172,42 @@ func TestPBSManagerListIDsReadStdoutOnly(t *testing.T) {
 	}
 	fake.used(t, "RunStdout "+cmd)
 }
+
+// listPVEPoolIDs takes fields[0] of every non-empty line as a pool ID, so a
+// warning on stderr is ingested as data. Measured on a live PVE 9.1.9 node
+// (2026-09-05): `pveum pool list` under a missing locale exits 0 with 556 bytes
+// of Perl warning on stderr, and running the loop over the merged bytes yields 17
+// phantom IDs, one per LC_ variable the warning enumerates.
+//
+// The real IDs survive alongside the phantoms, so an assertion that only names
+// them passes with the defect in place. The set SIZE is what separates the two.
+func TestPoolListIgnoresALocaleWarningOnStderr(t *testing.T) {
+	orig := restoreCmd
+	t.Cleanup(func() { restoreCmd = orig })
+
+	const cmd = "pveum pool list"
+	fake := &streamSplitFake{
+		stdout: map[string]string{cmd: "poolid comment\nproduction \nlab \n"},
+		stderr: map[string]string{cmd: measuredPerlLocaleWarning},
+	}
+	restoreCmd = fake
+
+	pools, err := listPVEPoolIDs(context.Background())
+	if err != nil {
+		t.Fatalf("a locale warning on stderr broke the pool list: %v", err)
+	}
+	if len(pools) != 2 {
+		got := make([]string, 0, len(pools))
+		for id := range pools {
+			got = append(got, id)
+		}
+		sort.Strings(got)
+		t.Fatalf("pool set has %d entries, want 2: %v", len(pools), got)
+	}
+	for _, want := range []string{"production", "lab"} {
+		if _, ok := pools[want]; !ok {
+			t.Fatalf("pool %q missing from %v", want, pools)
+		}
+	}
+	fake.used(t, "RunStdout "+cmd)
+}

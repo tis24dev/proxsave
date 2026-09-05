@@ -22,12 +22,30 @@ import (
 // `AcceptEnv LANG LC_*` in sshd_config and has 4 locales generated; macOS Terminal
 // forwards LC_CTYPE=UTF-8 by default. An operator restoring over ssh from a Mac is
 // the whole reproduction.
+// The warning VERBATIM, captured from that node on 2026-09-05 (556 bytes). It is
+// kept whole rather than abridged because the count of lines is itself evidence:
+// a parser that splits on newlines and takes the first field, as listPVEPoolIDs
+// does, gets 17 distinct phantom entries out of it, one per variable enumerated
+// here. An abridged sample would understate the damage by a factor of four.
 const measuredPerlLocaleWarning = "perl: warning: Setting locale failed.\n" +
 	"perl: warning: Please check that your locale settings:\n" +
+	"\tLANGUAGE = (unset),\n" +
 	"\tLC_ALL = \"xx_YY.UTF-8\",\n" +
-	"\tLANG = \"xx_YY.UTF-8\"\n" +
+	"\tLC_CTYPE = (unset),\n" +
+	"\tLC_NUMERIC = (unset),\n" +
+	"\tLC_COLLATE = (unset),\n" +
+	"\tLC_TIME = (unset),\n" +
+	"\tLC_MESSAGES = (unset),\n" +
+	"\tLC_MONETARY = (unset),\n" +
+	"\tLC_ADDRESS = (unset),\n" +
+	"\tLC_IDENTIFICATION = (unset),\n" +
+	"\tLC_MEASUREMENT = (unset),\n" +
+	"\tLC_PAPER = (unset),\n" +
+	"\tLC_TELEPHONE = (unset),\n" +
+	"\tLC_NAME = (unset),\n" +
+	"\tLANG = \"en_US.UTF-8\"\n" +
 	"    are supported and installed on your system.\n" +
-	"perl: warning: Falling back to the standard locale (\"C\").\n"
+	"perl: warning: Falling back to a fallback locale (\"en_US.UTF-8\").\n"
 
 // localeNoisyPvesh answers the way the live node answered: Run returns the merged
 // stream (what CombinedOutput would hand back), RunStdout returns only the data.

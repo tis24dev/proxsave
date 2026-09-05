@@ -122,14 +122,39 @@ func discoverRcloneBackups(ctx context.Context, cfg *config.Config, remotePath s
 		return nil, err
 	}
 	safeexec.ApplyWaitDelay(cmd)
+	// Stdout and stderr are kept apart. Every non-empty line of this output becomes
+	// a remote FILENAME below, so anything rclone writes to stderr is ingested as
+	// data. Measured on a live node (2026-09-05): `rclone lsf` on a directory with
+	// three entries exits 0, writes them to stdout and a NOTICE line to stderr when
+	// the config file is absent; the merged bytes give the loop a fourth "file"
+	// named after the NOTICE.
+	//
+	// That exact route is NOT reachable here and the fix is on the invariant, not on
+	// a reproduction: fullPath above always carries a colon, so a missing config
+	// means an unknown remote and the command fails into the branch below instead.
+	// What is left is every other NOTICE rclone prints on a successful lsf, token
+	// refreshes and deprecations on cloud backends among them, and those were not
+	// measured. The suffix filter further down discards a bogus entry rather than
+	// treating it as a backup, so the cost when it does happen is an inflated
+	// nonCandidateEntries count, not a phantom archive.
+	//
+	// Both error branches keep reporting the MERGED text: there it is a transcript
+	// for a human, and rclone puts the reason for a failure on stderr.
+	var stdout, stderrBuf bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderrBuf
 	lsfStart := time.Now()
-	output, err := cmd.CombinedOutput()
-	if err != nil {
+	if runErr := cmd.Run(); runErr != nil {
+		merged := strings.TrimSpace(stderrBuf.String() + "\n" + stdout.String())
 		if errors.Is(lsfCtx.Err(), context.DeadlineExceeded) {
-			return nil, fmt.Errorf("timed out while listing rclone remote %s (timeout=%s). Increase RCLONE_TIMEOUT_CONNECTION if needed: %w (output: %s)", fullPath, timeout, err, strings.TrimSpace(string(output)))
+			return nil, fmt.Errorf("timed out while listing rclone remote %s (timeout=%s). Increase RCLONE_TIMEOUT_CONNECTION if needed: %w (output: %s)", fullPath, timeout, runErr, merged)
 		}
-		return nil, fmt.Errorf("failed to list rclone remote %s: %w (output: %s)", fullPath, err, string(output))
+		return nil, fmt.Errorf("failed to list rclone remote %s: %w (output: %s)", fullPath, runErr, merged)
 	}
+	if noise := strings.TrimSpace(stderrBuf.String()); noise != "" {
+		logDebug(logger, "Cloud (rclone): lsf %s wrote to stderr while succeeding: %s", fullPath, noise)
+	}
+	output := stdout.Bytes()
 	logging.DebugStep(logger, "discover rclone backups", "rclone lsf output bytes=%d elapsed=%s", len(output), time.Since(lsfStart))
 
 	candidates = make([]*backupCandidate, 0)
