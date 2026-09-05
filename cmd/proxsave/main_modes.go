@@ -96,6 +96,23 @@ func validateUpgradeCompatibility(args *cli.Args) []string {
 	if args.LocalFile && !args.Upgrade {
 		return []string{"The --localfile flag only applies to --upgrade (use: --upgrade --localfile)."}
 	}
+	// Neither the upgrade nor its finalize phase has ever honoured --dry-run: not one
+	// line of cmd/proxsave/upgrade.go reads args.DryRun, so the combination merges the
+	// configuration, refreshes the support docs and symlinks, repoints legacy cron
+	// entries, may install or restart the resident daemon, and normalizes permissions
+	// on a live installation - while the operator was told nothing would change.
+	//
+	// This refuses the combination rather than implementing a dry run of it. A truthful
+	// dry run would have to model every one of those effects, and a partial one is worse
+	// than none: it teaches the operator that the flag is honoured here. The refusal
+	// mirrors the one --daemon already carries below.
+	//
+	// It closes a gap that PREDATES --upgrade-finalize (`--upgrade --dry-run` has always
+	// silently mutated), so it turns an invocation that used to be accepted into an
+	// error. That is the point: it used to lie.
+	if args.DryRun && (args.Upgrade || args.UpgradeFinalize) {
+		return []string{"--dry-run is not supported with --upgrade: the upgrade and its finalize phase always modify the installation."}
+	}
 	return nil
 }
 
@@ -179,6 +196,7 @@ func enabledModes(modes []incompatibleMode) []string {
 func dispatchPreRuntimeModes(ctx context.Context, args *cli.Args, bootstrap *logging.BootstrapLogger, toolVersion string) (int, bool) {
 	for _, handler := range []preRuntimeModeHandler{
 		runShowWhatsnewMode,
+		runUpgradeFinalizeMode,
 		runUpgradeMode,
 		runNewKeyMode,
 		runDecryptOnlyMode,
@@ -227,6 +245,26 @@ func runUpgradeMode(ctx context.Context, args *cli.Args, bootstrap *logging.Boot
 	}
 	logging.DebugStepBootstrap(bootstrap, "main run", "mode=upgrade")
 	return runUpgrade(ctx, args, bootstrap), true
+}
+
+// runUpgradeFinalizeMode handles --upgrade-finalize: run only the post-install
+// finalize phase and exit.
+//
+// This is the mode --upgrade re-invokes on the freshly INSTALLED binary, so the
+// finalize policy that runs belongs to the release being installed rather than to
+// the one being replaced - which is why every change to that policy used to take
+// effect one upgrade late. It is not a user-facing entry point: run by hand it
+// would refresh docs, restart the daemon and print an upgrade footer for a version
+// nobody installed.
+//
+// Reached only after the caller verified and installed the binary, so upgradeErr is
+// nil by construction here.
+func runUpgradeFinalizeMode(ctx context.Context, args *cli.Args, bootstrap *logging.BootstrapLogger, _ string) (int, bool) {
+	if !args.UpgradeFinalize {
+		return types.ExitSuccess.Int(), false
+	}
+	logging.DebugStepBootstrap(bootstrap, "main run", "mode=upgrade-finalize")
+	return runUpgradeFinalize(ctx, args, bootstrap), true
 }
 
 // runShowWhatsnewMode handles --show-whatsnew: open Screen 0 (what's new) once and exit.

@@ -108,7 +108,7 @@ func TestLivePVEVzdumpCron(t *testing.T) {
 		t.Fatal(err)
 	}
 	stage := liveStage(t, "etc/pve/vzdump.cron", before)
-	if err := applyPVEVzdumpCronFromStage(logger, stage); err != nil {
+	if err := applyPVEVzdumpCronFromStage(context.Background(), logger, stage); err != nil {
 		t.Fatalf("vzdump.cron apply: %v", err)
 	}
 	after, err := os.ReadFile("/etc/pve/vzdump.cron")

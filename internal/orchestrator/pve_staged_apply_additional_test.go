@@ -196,13 +196,13 @@ func TestApplyPVEVzdumpConfFromStage_Branches(t *testing.T) {
 	logger := newTestLogger()
 	stageRoot := "/stage"
 
-	if err := applyPVEVzdumpConfFromStage(logger, stageRoot); err != nil {
+	if err := applyPVEVzdumpConfFromStage(context.Background(), logger, stageRoot); err != nil {
 		t.Fatalf("missing staged file should be ignored: %v", err)
 	}
 
 	stagePath := filepath.Join(stageRoot, "etc/vzdump.conf")
 	restoreFS = readFileFailFS{FS: fakeFS, failPath: stagePath, err: errors.New("boom")}
-	if err := applyPVEVzdumpConfFromStage(logger, stageRoot); err == nil || !strings.Contains(err.Error(), "read staged etc/vzdump.conf") {
+	if err := applyPVEVzdumpConfFromStage(context.Background(), logger, stageRoot); err == nil || !strings.Contains(err.Error(), "read staged etc/vzdump.conf") {
 		t.Fatalf("expected staged read error, got %v", err)
 	}
 	restoreFS = fakeFS
@@ -213,7 +213,7 @@ func TestApplyPVEVzdumpConfFromStage_Branches(t *testing.T) {
 	if err := fakeFS.AddFile(stagePath, []byte(" \n\t")); err != nil {
 		t.Fatalf("write staged empty vzdump.conf: %v", err)
 	}
-	if err := applyPVEVzdumpConfFromStage(logger, stageRoot); err != nil {
+	if err := applyPVEVzdumpConfFromStage(context.Background(), logger, stageRoot); err != nil {
 		t.Fatalf("empty staged vzdump.conf: %v", err)
 	}
 	if _, err := fakeFS.Stat("/etc/vzdump.conf"); err == nil || !os.IsNotExist(err) {
@@ -223,7 +223,7 @@ func TestApplyPVEVzdumpConfFromStage_Branches(t *testing.T) {
 	if err := fakeFS.AddFile(stagePath, []byte("  dumpdir /mnt/backup  \n\n")); err != nil {
 		t.Fatalf("write staged non-empty vzdump.conf: %v", err)
 	}
-	if err := applyPVEVzdumpConfFromStage(logger, stageRoot); err != nil {
+	if err := applyPVEVzdumpConfFromStage(context.Background(), logger, stageRoot); err != nil {
 		t.Fatalf("non-empty staged vzdump.conf: %v", err)
 	}
 	got, err := fakeFS.ReadFile("/etc/vzdump.conf")

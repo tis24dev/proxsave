@@ -273,16 +273,39 @@ func applyVMConfigs(ctx context.Context, entries []vmEntry, logger *logging.Logg
 		// locks: a config race with a live guest is the one case where the file
 		// must not win (maintainer's call, 2026-09-02).
 		args := append([]string{"set", target}, filterGuestCreateOnlyArgs(configArgs)...)
-		if err := runPvesh(ctx, logger, args); err != nil {
-			status, statusErr := pveshGuestStatus(ctx, node, vm)
-			if statusErr != nil {
-				logger.Warning("Failed to apply %s (vmid=%s kind=%s) and could not verify that the guest is stopped; skipping the file fallback: %v (status probe: %v)", target, vm.VMID, vm.Kind, err, statusErr)
+		if out, err := runPveshWithOutput(ctx, logger, args); err != nil {
+			// The file fallback answers ONE failure: the update schema refused a key
+			// filterGuestCreateOnlyArgs did not know to drop. Everything else - no
+			// quorum, permission denied, a 500 from a payload the API accepted - is
+			// the API failing to apply a config it understood, and overwriting the
+			// conf verbatim is not a remedy for it: the API's rejection is the only
+			// validation the staged bytes ever get, so a fallback on every error
+			// writes an invalid conf into pmxcfs cluster-wide. This narrows a
+			// deliberate "fails for any reason" decision on the maintainer's
+			// instruction (2026-09-05).
+			if !pveshSchemaRefusal(err, out) {
+				logging.DebugStep(logger, "pve guest configs apply", "vmid=%s classification=api-failure action=refuse-file-fallback", vm.VMID)
+				logger.Warning("Failed to apply %s (vmid=%s kind=%s): %v - the API refused the operation, not the payload, so the staged conf file is not a remedy", target, vm.VMID, vm.Kind, err)
 				failed++
 				continue
 			}
+			status, statusErr := pveshGuestStatus(ctx, node, vm)
+			if statusErr != nil {
+				logger.Warning("Failed to apply %s (vmid=%s kind=%s) and could not verify that the guest is stopped, so the staged conf file cannot be used: %v (status probe: %v)", target, vm.VMID, vm.Kind, err, statusErr)
+				if applyGuestConfigDroppingRefusedKeys(ctx, logger, target, display, vm.VMID, configArgs) {
+					applied++
+				} else {
+					failed++
+				}
+				continue
+			}
 			if status != "stopped" {
-				logger.Warning("Failed to apply %s (vmid=%s kind=%s) and guest status is %q, not explicitly stopped; skipping the file fallback: %v", target, vm.VMID, vm.Kind, status, err)
-				failed++
+				logger.Warning("Failed to apply %s (vmid=%s kind=%s) and guest status is %q, not explicitly stopped, so the staged conf file cannot be used: %v", target, vm.VMID, vm.Kind, status, err)
+				if applyGuestConfigDroppingRefusedKeys(ctx, logger, target, display, vm.VMID, configArgs) {
+					applied++
+				} else {
+					failed++
+				}
 				continue
 			}
 			if wErr := writeGuestConfToPmxcfs(ctx, logger, node, vm, guestMustBeStopped); wErr != nil {
@@ -318,6 +341,34 @@ func writeGuestConfToPmxcfs(ctx context.Context, logger *logging.Logger, node st
 	return pveGuestLockedWriter(ctx, logger, node, vm, precondition, data)
 }
 
+// applyGuestConfigDroppingRefusedKeys is the arm for a guest the staged conf file
+// cannot be written for - it is running, or its state could not be established -
+// after the update schema refused a key.
+//
+// Failing outright throws away every key the API WOULD have accepted, and for a
+// running guest that is the entire config apply: one create-only key the prefilter
+// does not know about used to cost the whole config. Dropping the refused key and
+// retrying costs that key alone. The dropped names are logged at WARNING because
+// their staged values are NOT applied - a partial apply reported as a plain
+// success would be the same silence this whole arm exists to remove.
+func applyGuestConfigDroppingRefusedKeys(ctx context.Context, logger *logging.Logger, target, display, vmid string, configArgs []string) bool {
+	changed, dropped, err := pveshSetDroppingRefusedKeys(ctx, logger, "vmid "+vmid, target, filterGuestCreateOnlyArgs(configArgs))
+	if err != nil {
+		logger.Warning("Failed to apply VM/CT config %s through the API without the refused keys: %v", display, err)
+		return false
+	}
+	if !changed {
+		logger.Warning("Applied nothing for VM/CT config %s: the update schema refuses every staged key (%s)", display, strings.Join(dropped, ", "))
+		return false
+	}
+	if len(dropped) > 0 {
+		logger.Warning("Applied VM/CT config %s through the API without %s: the update schema refuses those keys, and the guest is not confirmed stopped so the staged conf file could not supply them", display, strings.Join(dropped, ", "))
+		return true
+	}
+	logger.Info("Applied VM/CT config %s", display)
+	return true
+}
+
 // filterGuestCreateOnlyArgs drops the keys the live update schemas refuse
 // (probed 2026-09-02 on PVE 9.1.9): --meta is absent from the qemu set schema
 // and --ostemplate from the lxc one; either fails the whole set.
@@ -337,7 +388,7 @@ func filterGuestCreateOnlyArgs(args []string) []string {
 // parse error is never equivalent to a stopped guest.
 func pveshGuestStatus(ctx context.Context, node string, vm vmEntry) (string, error) {
 	statusPath := fmt.Sprintf("/nodes/%s/%s/%s/status/current", node, vm.Kind, vm.VMID)
-	out, err := restoreCmd.Run(ctx, "pvesh", "get", statusPath, "--output-format=json")
+	out, err := runCommandStdout(ctx, "pvesh", "get", statusPath, "--output-format=json")
 	if err != nil {
 		return "", fmt.Errorf("pvesh get %s: %w", statusPath, err)
 	}
@@ -411,50 +462,107 @@ func pveshArgsFromProxmoxEntries(entries []proxmoxNotificationEntry) []string {
 // drops the named key and retries. The set schema varies by storage type and
 // PVE version, so the refusal itself is the authoritative list - a hardcoded
 // whitelist would drift.
-func pveshSetStorageDroppingCreateOnly(ctx context.Context, logger *logging.Logger, id string, args []string) error {
-	for attempt := 0; attempt <= len(args); attempt++ {
-		full := append([]string{"set", "/storage/" + id}, args...)
-		out, err := restoreCmd.Run(ctx, "pvesh", full...)
+//
+// changed reports whether a set actually reached the node. It is false in the two
+// shapes where there was nothing to send: a staged block whose only keys are the
+// create-only header ones (--storage/--type, stripped by the caller), and a block
+// whose every remaining key came back refused. Both mean the existing definition
+// already matches everything this restore could change, which is a success - but
+// not an update, and the caller must not announce one.
+func pveshSetStorageDroppingCreateOnly(ctx context.Context, logger *logging.Logger, id string, args []string) (changed bool, err error) {
+	changed, _, err = pveshSetDroppingRefusedKeys(ctx, logger, "storage "+id, "/storage/"+id, args)
+	return changed, err
+}
+
+// pveshSetDroppingRefusedKeys runs `pvesh set <path>` and, on a refusal that NAMES
+// a key, drops that key and retries. It is shared by the storage and guest arms so
+// there is ONE implementation of "the refusal is the authoritative list": the set
+// schema varies by endpoint, storage type and PVE version, and a hardcoded list
+// drifts silently against every one of them.
+//
+// changed reports whether a set actually reached the node; dropped names the keys
+// that were refused, because their staged values were NOT applied and a caller
+// that stays silent about that loses the fact. An empty args list is nothing to do,
+// not a failure: `pvesh set <path>` with no option is refused by the live node, and
+// reporting that blamed the restore for a definition that already matched.
+func pveshSetDroppingRefusedKeys(ctx context.Context, logger *logging.Logger, subject, path string, args []string) (changed bool, dropped []string, err error) {
+	if len(args) == 0 {
+		logger.Debug("%s: no settable key to send", subject)
+		return false, nil, nil
+	}
+	// The bound is taken ONCE, before the loop. Reading len(args) in the condition
+	// measured the shrinking slice, so the attempts ran out before convergence as
+	// soon as more than half the keys were refused - `nfs: id / server / export /
+	// content` is enough (3 settable keys, 2 refused: 2 attempts allowed, 3 needed).
+	// The result was "did not converge" in place of pvesh's real error, on a
+	// definition the retry would have applied.
+	for attempt, total := 0, len(args); attempt <= total; attempt++ {
+		full := append([]string{"set", path}, args...)
+		out, runErr := restoreCmd.Run(ctx, "pvesh", full...)
 		if len(out) > 0 {
 			logger.Debug("pvesh %v output: %s", full, strings.TrimSpace(string(out)))
 		}
-		if err == nil {
-			return nil
+		if runErr == nil {
+			return true, dropped, nil
 		}
-		key := pveshUnknownOptionFrom(string(out))
+		key := pveshRefusedKeyFrom(runErr, out)
 		if key == "" {
-			return fmt.Errorf("pvesh %v failed: %w", full, err)
+			return false, dropped, fmt.Errorf("pvesh %v failed: %w", full, runErr)
 		}
 		trimmed := args[:0:0]
 		for _, arg := range args {
 			if strings.HasPrefix(arg, "--"+key+"=") {
-				logger.Debug("storage %s: dropping create-only key --%s from the set fallback", id, key)
+				logger.Debug("%s: dropping key --%s refused by the set schema", subject, key)
 				continue
 			}
 			trimmed = append(trimmed, arg)
 		}
 		if len(trimmed) == len(args) {
-			return fmt.Errorf("pvesh %v failed: %w", full, err)
+			return false, dropped, fmt.Errorf("pvesh %v failed: %w", full, runErr)
 		}
+		dropped = append(dropped, key)
 		if len(trimmed) == 0 {
-			// Nothing left to update: the definition already matches on every
-			// settable key, which is a success, not a failure.
-			return nil
+			logger.Debug("%s: every staged key is refused by the set schema; nothing left to update", subject)
+			return false, dropped, nil
 		}
 		args = trimmed
 	}
-	return fmt.Errorf("storage %s: the set fallback did not converge", id)
+	return false, dropped, fmt.Errorf("%s: the set fallback did not converge", subject)
 }
 
-// pveshUnknownOptionFrom extracts the key from pvesh's "Unknown option: <key>" output.
-func pveshUnknownOptionFrom(out string) string {
-	const marker = "Unknown option: "
-	idx := strings.Index(out, marker)
+// pveshRefusedKeyFrom names the key a refusal is about, across the two shapes
+// measured on PVE 9.1.9 (2026-09-02): "Unknown option: <key>" on the storage
+// endpoint, and "400 Parameter verification failed. <key>: property is not defined
+// in schema ..." on the guest one.
+//
+// The second is only read when the message says the property is ABSENT from the
+// schema. PVE opens value errors with the same sentence - "Parameter verification
+// failed. cores: value does not match the regex pattern" - and dropping the key
+// there would silently discard a staged value the operator asked to restore, which
+// is worse than the failure it would be hiding.
+func pveshRefusedKeyFrom(err error, out []byte) string {
+	text := string(out)
+	if err != nil {
+		text += "\n" + err.Error()
+	}
+	if key := afterMarkerUpTo(text, "Unknown option: ", " \t\r\n"); key != "" {
+		return key
+	}
+	lower := strings.ToLower(text)
+	if !strings.Contains(lower, "property is not defined in schema") &&
+		!strings.Contains(lower, "does not allow additional properties") {
+		return ""
+	}
+	return afterMarkerUpTo(text, "Parameter verification failed.", ":")
+}
+
+func afterMarkerUpTo(text, marker, stop string) string {
+	idx := strings.Index(text, marker)
 	if idx < 0 {
 		return ""
 	}
-	rest := out[idx+len(marker):]
-	if end := strings.IndexAny(rest, " \t\r\n"); end >= 0 {
+	rest := strings.TrimSpace(text[idx+len(marker):])
+	if end := strings.IndexAny(rest, stop); end >= 0 {
 		rest = rest[:end]
 	}
 	return strings.TrimSpace(rest)
@@ -519,6 +627,14 @@ func applyStorageCfg(ctx context.Context, cfgPath string, logger *logging.Logger
 	}
 
 	for _, blk := range blocks {
+		// Same rule as the jobs arm: a cancelled restore propagates instead of being
+		// counted as failures. The caller turns failed>0 into "storage.cfg applied
+		// with N failure(s)", which errors.Is cannot match against context.Canceled,
+		// so an abort would be reported as storage definitions that failed to apply.
+		// The counts so far are returned with it: they say what really landed.
+		if cerr := ctx.Err(); cerr != nil {
+			return applied, failed, cerr
+		}
 		createArgs, ok := storageBlockPveshArgs(blk)
 		if !ok {
 			logger.Warning("Skipping storage %s: storage type missing", blk.ID)
@@ -539,11 +655,18 @@ func applyStorageCfg(ctx context.Context, cfgPath string, logger *logging.Logger
 				}
 				setArgs = append(setArgs, arg)
 			}
-			if setErr := pveshSetStorageDroppingCreateOnly(ctx, logger, blk.ID, setArgs); setErr != nil {
+			changed, setErr := pveshSetStorageDroppingCreateOnly(ctx, logger, blk.ID, setArgs)
+			switch {
+			case setErr != nil:
 				logger.Warning("Failed to apply storage %s: %v (create: %v)", blk.ID, setErr, runErr)
 				failed++
-			} else {
+			case changed:
 				logger.Info("Updated existing storage definition %s", blk.ID)
+				applied++
+			default:
+				// Nothing was sent, so saying "Updated" would claim a write that
+				// never happened; the definition is nonetheless in the staged state.
+				logger.Info("Storage definition %s already matches every settable key", blk.ID)
 				applied++
 			}
 		} else {
@@ -608,14 +731,57 @@ func parseStorageBlocks(cfgPath string) ([]storageBlock, error) {
 }
 
 func runPvesh(ctx context.Context, logger *logging.Logger, args []string) error {
+	_, err := runPveshWithOutput(ctx, logger, args)
+	return err
+}
+
+// runPveshWithOutput is runPvesh for the callers that must CLASSIFY the failure,
+// not just report it. The reason usually lands on the output with a bare exit
+// status as the Go error (measured on PVE 9.1.9), so an error alone cannot tell
+// a refused payload from a refused operation.
+func runPveshWithOutput(ctx context.Context, logger *logging.Logger, args []string) ([]byte, error) {
 	output, err := restoreCmd.Run(ctx, "pvesh", args...)
 	if len(output) > 0 {
 		logger.Debug("pvesh %v output: %s", args, strings.TrimSpace(string(output)))
 	}
 	if err != nil {
-		return fmt.Errorf("pvesh %v failed: %w", args, err)
+		return output, fmt.Errorf("pvesh %v failed: %w", args, err)
 	}
-	return nil
+	return output, nil
+}
+
+// pveshSchemaRefusal reports whether pvesh refused the PAYLOAD - a key the
+// endpoint's schema does not accept - as opposed to failing to apply a payload it
+// accepted. Measured shapes on PVE 9.1.9 (2026-09-02, recorded in
+// diagnostics/design-staged-apply-pmxcfs-2026-09-02.md): "400 Parameter
+// verification failed. meta: property is not defined in schema and the schema does
+// not allow additional properties", and "Unknown option: <key>" alongside "400
+// unable to parse option". Both err and out are searched because the reason lands
+// on either one depending on the endpoint.
+//
+// "Parameter verification failed" alone is deliberately NOT a marker. PVE opens
+// VALUE errors with the same sentence - "400 Parameter verification failed. cores:
+// value does not match the regex pattern" - and that is the staged conf carrying a
+// value the API rejects. The API's rejection is the only validation those bytes
+// get, so treating a value error as a schema refusal would write exactly the conf
+// PVE just refused straight into pmxcfs, cluster-wide. The key-absent phrasing is
+// what the fallback answers, so the key-absent phrasing is what is matched.
+func pveshSchemaRefusal(err error, out []byte) bool {
+	text := strings.ToLower(string(out))
+	if err != nil {
+		text += "\n" + strings.ToLower(err.Error())
+	}
+	for _, marker := range []string{
+		"property is not defined in schema",
+		"does not allow additional properties",
+		"unknown option:",
+		"unable to parse option",
+	} {
+		if strings.Contains(text, marker) {
+			return true
+		}
+	}
+	return false
 }
 
 func shortHost(host string) string {

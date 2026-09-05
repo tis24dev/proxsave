@@ -35,6 +35,7 @@ const (
 	personalScriptConfigurationDrift personalScriptSynchronization = "configuration-drift"
 	personalScriptPathStateChanged   personalScriptSynchronization = "path-state-changed"
 	personalScriptRuntimeUnavailable personalScriptSynchronization = "runtime-state-unavailable"
+	personalScriptCurrentUnavailable personalScriptSynchronization = "current-configuration-unavailable"
 	personalScriptSyncNotApplicable  personalScriptSynchronization = "not-applicable"
 )
 
@@ -93,7 +94,12 @@ var (
 
 // collectDaemonDiagnostics owns every probe and verdict used by the two
 // daemon-status frontends. Renderers receive facts; they never recompute them.
-func collectDaemonDiagnostics(ctx context.Context, cfg *config.Config, baseDir string) daemonDiagnostics {
+//
+// cfgErr is the error that PREVENTED cfg from existing, and it is separate from
+// cfg being nil on purpose: a caller that never attempted a load passes nil for
+// both, while the dashboard passes the loader's own words so the screen can name
+// the file it could not read instead of only that it could not read one.
+func collectDaemonDiagnostics(ctx context.Context, cfg *config.Config, cfgErr error, baseDir string) daemonDiagnostics {
 	mode := "unknown"
 	var interval time.Duration
 	if cfg != nil {
@@ -128,6 +134,9 @@ func collectDaemonDiagnostics(ctx context.Context, cfg *config.Config, baseDir s
 	level, keyword, explanation := daemonStatusStyle(state)
 	daemonUID := daemonUIDResolver(state)
 	currentScripts := personalScriptsInspector(cfg, daemonUID.Value)
+	if cfg == nil && cfgErr != nil {
+		currentScripts = unknownPersonalScripts(daemonUID.Value, cfgErr)
+	}
 	runtimeDiagnostic, runningScripts := resolveDaemonRuntime(state, baseDir)
 
 	currentConfigPath := ""
@@ -227,9 +236,11 @@ func personalScriptDiagnosticFromRuntime(
 	default:
 		return personalScriptDiagnostic{}, false
 	}
-	var components []personalScriptPathComponent
+	// Not named "components": this file imports internal/ui/components, and a local
+	// of that name shadows the package for the rest of the function.
+	var pathComponents []personalScriptPathComponent
 	for _, component := range in.Components {
-		components = append(components, personalScriptPathComponent{
+		pathComponents = append(pathComponents, personalScriptPathComponent{
 			Path: component.Path,
 			UID:  component.UID,
 			Mode: os.FileMode(component.Mode),
@@ -241,7 +252,7 @@ func personalScriptDiagnosticFromRuntime(
 		State:      state,
 		Reason:     in.Reason,
 		DaemonUID:  daemonUID,
-		Components: components,
+		Components: pathComponents,
 	}, true
 }
 
@@ -252,6 +263,15 @@ func comparePersonalScript(
 	current personalScriptDiagnostic,
 ) personalScriptComparison {
 	comparison := personalScriptComparison{Running: running, Current: current}
+	// The CURRENT side is checked first and on purpose. With no configuration to
+	// read there is nothing to compare against, whatever the daemon is doing, and
+	// the config-path arm below would otherwise measure the daemon's real path
+	// against an empty one and blame the daemon for the operator's unreadable file.
+	if current.State == personalScriptUnknown {
+		comparison.Synchronization = personalScriptCurrentUnavailable
+		comparison.SyncReason = current.Reason
+		return comparison
+	}
 	if runtime.Availability == daemonRuntimeNotApplicable {
 		comparison.Synchronization = personalScriptSyncNotApplicable
 		comparison.SyncReason = "no live daemon exists; current configuration is prospective"
@@ -406,7 +426,7 @@ func logPersonalScriptSynchronization(logger *logging.Logger, comparison persona
 		logger.Warning("  Synchronization: OUT OF SYNC (%s)", reason)
 	case personalScriptPathStateChanged:
 		logger.Warning("  Synchronization: PATH STATE CHANGED SINCE STARTUP (%s)", reason)
-	case personalScriptRuntimeUnavailable:
+	case personalScriptRuntimeUnavailable, personalScriptCurrentUnavailable:
 		logger.Warning("  Synchronization: UNKNOWN (%s)", reason)
 	case personalScriptSyncNotApplicable:
 		logger.Info("  Synchronization: NOT APPLICABLE")
@@ -429,6 +449,8 @@ func logPersonalScriptDiagnostic(logger *logging.Logger, label string, diagnosti
 			return
 		}
 		logger.Warning("%s: REFUSED (%s): %s", label, path, reason)
+	case personalScriptUnknown:
+		logger.Warning("%s: UNKNOWN: %s", label, reason)
 	default:
 		logger.Info("%s: NOT CONFIGURED", label)
 	}

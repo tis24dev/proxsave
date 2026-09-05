@@ -161,8 +161,12 @@ func expectedPBSNotificationNames(cfgRaw string) (targets, matchers map[string]s
 	return targets, matchers, nil
 }
 
+// pbsNotificationTargetNames and pbsNotificationMatcherNames capture STDOUT ONLY:
+// both hand the bytes straight to jsonListNameSet, and anything the tool writes to
+// stderr would make that parse fail on a byte it never meant as data. Same reason
+// as runPBSManagerRedacted (pbs_api_apply.go), which documents the measurements.
 func pbsNotificationTargetNames(ctx context.Context) (map[string]struct{}, error) {
-	out, err := restoreCmd.Run(ctx, "proxmox-backup-manager", "notification", "target", "list", "--output-format=json")
+	out, err := runCommandStdout(ctx, "proxmox-backup-manager", "notification", "target", "list", "--output-format=json")
 	if err != nil {
 		return nil, fmt.Errorf("proxmox-backup-manager notification target list failed: %w", err)
 	}
@@ -170,7 +174,7 @@ func pbsNotificationTargetNames(ctx context.Context) (map[string]struct{}, error
 }
 
 func pbsNotificationMatcherNames(ctx context.Context) (map[string]struct{}, error) {
-	out, err := restoreCmd.Run(ctx, "proxmox-backup-manager", "notification", "matcher", "list", "--output-format=json")
+	out, err := runCommandStdout(ctx, "proxmox-backup-manager", "notification", "matcher", "list", "--output-format=json")
 	if err != nil {
 		return nil, fmt.Errorf("proxmox-backup-manager notification matcher list failed: %w", err)
 	}

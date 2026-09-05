@@ -32,9 +32,16 @@ type schemaAwarePvesh struct {
 	guestNodes map[string]string
 	guestKinds map[string]string
 	running    map[string]bool
-	// failSet forces `set .../<vmid>/config` to fail regardless of args, for
-	// exercising the file-fallback arms.
+	// failSet forces `set .../<vmid>/config` to fail regardless of args with a
+	// 500: the API understood the payload and could not apply it. schemaRefuseSet
+	// forces the OTHER shape, a 400 refusing the payload itself, which is the only
+	// one the conf-file fallback answers. The two are separate because the fallback
+	// now discriminates between them (pveshSchemaRefusal).
 	failSet         map[string]bool
+	schemaRefuseSet map[string]bool
+	// refuseSetKeys refuses a guest set that CARRIES one of these keys, naming it
+	// the way the live node does, so the drop-and-retry arm can be driven.
+	refuseSetKeys   map[string]bool
 	statusOutput    map[string][]byte
 	statusError     map[string]error
 	inventoryOutput []byte
@@ -136,8 +143,27 @@ func (s *schemaAwarePvesh) Run(_ context.Context, name string, args ...string) (
 	if len(args) >= 2 && args[0] == "set" && args[1] == "/cluster/config" {
 		return nil, errString("No 'set' handler defined for '/cluster/config'")
 	}
-	if len(args) >= 2 && args[0] == "set" && strings.HasSuffix(args[1], "/config") && s.failSet[pveshFakePathVMID(strings.TrimSuffix(args[1], "/config"))] {
-		return nil, errString("500 unable to apply configuration")
+	if len(args) >= 2 && args[0] == "set" && strings.HasSuffix(args[1], "/config") {
+		vmid := pveshFakePathVMID(strings.TrimSuffix(args[1], "/config"))
+		if s.failSet[vmid] {
+			return nil, errString("500 unable to apply configuration")
+		}
+		if s.schemaRefuseSet[vmid] {
+			// The live 400 shape for a key the update schema does not carry, the
+			// same family as the --meta rejection below.
+			return []byte("400 Parameter verification failed. balloon: property is not defined in schema and the schema does not allow additional properties"),
+				errString("exit status 255")
+		}
+		for _, a := range args[2:] {
+			if !strings.HasPrefix(a, "--") {
+				continue
+			}
+			key := strings.TrimPrefix(strings.SplitN(a, "=", 2)[0], "--")
+			if s.refuseSetKeys[key] {
+				return []byte("400 Parameter verification failed. " + key + ": property is not defined in schema and the schema does not allow additional properties"),
+					errString("exit status 255")
+			}
+		}
 	}
 	if len(args) >= 2 && args[0] == "set" && strings.Contains(args[1], "/qemu/") && strings.HasSuffix(args[1], "/config") {
 		for _, a := range args[2:] {

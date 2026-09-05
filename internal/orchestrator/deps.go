@@ -1,12 +1,15 @@
 package orchestrator
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"io/fs"
 	"os"
 	"os/exec"
+	"strings"
 	"syscall"
 	"time"
 
@@ -175,6 +178,48 @@ func (osCommandRunner) Run(ctx context.Context, name string, args ...string) ([]
 		return out, nil
 	}
 	return out, err
+}
+
+// RunStdout captures ONLY stdout, for a command whose output is DATA a caller
+// parses rather than a transcript a caller logs.
+//
+// Measured on a live PVE 9.1.9 node (2026-09-05): with a locale the host does not
+// have, `pvesh get /cluster/resources --output-format=json` exits 0 and writes
+// perfectly valid JSON to stdout while Perl writes "perl: warning: Setting locale
+// failed." to stderr. CombinedOutput merges the two, the merged bytes start with
+// 'p', and every json.Unmarshal on them fails. That is not exotic: the stock
+// sshd_config on that node carries `AcceptEnv LANG LC_*`, and macOS Terminal
+// forwards LC_CTYPE=UTF-8 by default, so an operator running a restore over ssh
+// from a Mac is enough to reach it.
+//
+// On failure stderr is folded into the error, because that is where pvesh puts
+// its reason and dropping it would trade one silent loss for another. On success
+// stderr is discarded on purpose: those are exactly the bytes that must not reach
+// the parser, and no caller of this method has ever consumed them - today they
+// silently corrupt the parse instead. Use Run for anything whose output is meant
+// to be read by a human.
+func (osCommandRunner) RunStdout(ctx context.Context, name string, args ...string) ([]byte, error) {
+	cmd, err := safeexec.CommandContext(ctx, name, args...)
+	if err != nil {
+		return nil, err
+	}
+	cmd.WaitDelay = defaultCommandWaitDelay
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	runErr := cmd.Run()
+	// Same translation Run documents at length, and for the same reason: both
+	// sinks are bytes.Buffer, so every byte the child wrote is already captured
+	// before the timer can start.
+	if runErr != nil && errors.Is(runErr, exec.ErrWaitDelay) {
+		runErr = nil
+	}
+	if runErr != nil {
+		if msg := strings.TrimSpace(stderr.String()); msg != "" {
+			return stdout.Bytes(), fmt.Errorf("%w: %s", runErr, msg)
+		}
+	}
+	return stdout.Bytes(), runErr
 }
 
 // RunStream returns a stdout pipe for streaming commands that read from stdin.

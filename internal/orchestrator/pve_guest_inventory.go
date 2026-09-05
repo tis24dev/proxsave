@@ -19,7 +19,9 @@ type pveGuestResource struct {
 
 func loadPVEGuestInventory(ctx context.Context) (map[string]pveGuestResource, error) {
 	const endpoint = "/cluster/resources"
-	out, err := restoreCmd.Run(ctx, "pvesh", "get", endpoint, "--type", "vm", "--output-format=json")
+	// stdout only: a locale warning on stderr is valid JSON's undoing, and pvesh
+	// exits 0 while emitting it (measured on PVE 9.1.9, 2026-09-05).
+	out, err := runCommandStdout(ctx, "pvesh", "get", endpoint, "--type", "vm", "--output-format=json")
 	if err != nil {
 		return nil, fmt.Errorf("pvesh get %s: %w", endpoint, err)
 	}

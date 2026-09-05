@@ -101,8 +101,31 @@ func anyPoolHasVMs(pools []pvePoolSpec) bool {
 	return false
 }
 
+// listPVEPoolIDs reads the pool IDs already on the node.
+//
+// It captures STDOUT ONLY. The loop below takes fields[0] of every non-empty
+// line as a pool ID, so anything the tool writes to stderr is ingested as data.
+//
+// Measured on a live PVE 9.1.9 node (2026-09-05): with LC_ALL set to a locale the
+// host does not have, `pveum pool list` exits 0 and writes 556 bytes of
+// "perl: warning: Setting locale failed." to stderr. Running this very loop over
+// the merged bytes yielded 17 phantom IDs, one per variable the warning
+// enumerates: perl:, LANGUAGE, LC_ALL, LC_CTYPE, LC_NUMERIC, LC_COLLATE, LC_TIME,
+// LC_MESSAGES, LC_MONETARY, LC_ADDRESS, LC_IDENTIFICATION, LC_MEASUREMENT,
+// LC_PAPER, LC_TELEPHONE, LC_NAME, LANG, are.
+//
+// The real IDs survive alongside them, so nothing is lost; what breaks is
+// pvePoolAlreadyExists, which would report a backup pool named like one of those
+// tokens as already present and skip it. LANG, LC_TIME and are are all valid PVE
+// pool IDs. The stock sshd_config on that node carries `AcceptEnv LANG LC_*`, so
+// an operator sshing in with a locale it lacks is the whole reproduction.
+//
+// Parsing on a non-nil error stays deliberate: a partial list beats none. It only
+// gets better here, because stdout alone is empty when pveum failed outright, so
+// the raw == "" branch surfaces the error instead of parsing a warning, and
+// runCommandStdout folds stderr into that error.
 func listPVEPoolIDs(ctx context.Context) (map[string]struct{}, error) {
-	output, err := restoreCmd.Run(ctx, "pveum", "pool", "list")
+	output, err := runCommandStdout(ctx, "pveum", "pool", "list")
 	raw := strings.TrimSpace(string(output))
 	if raw == "" {
 		if err != nil {

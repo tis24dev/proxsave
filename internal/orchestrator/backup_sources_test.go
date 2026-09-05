@@ -1207,3 +1207,79 @@ exit 1
 		t.Fatalf("inspectRcloneChecksumFile() error = %v; want stderr output", err)
 	}
 }
+
+// Every non-empty line of `rclone lsf` output becomes a remote filename, so
+// anything rclone writes to stderr is ingested as one.
+//
+// Two honest caveats, both load bearing for whoever reads this next.
+//
+// First, the route measured on a live node (2026-09-05) is not reachable from
+// here: `rclone lsf` prints its "Config file not found" NOTICE to stderr while
+// exiting 0, but discoverRcloneBackups always builds a remote:path form, and a
+// missing config makes that remote unknown and the command fail instead. What is
+// left is other NOTICEs on a successful lsf, which were not measured.
+//
+// Second, a realistic NOTICE is invisible at this boundary: the classifier below
+// matches on HasSuffix, so a line ending in prose is counted as a non-candidate
+// and dropped. The stderr payload here is therefore CHOSEN to be observable, two
+// lines that look like an archive and its metadata. That is not a claim rclone
+// prints this; it is how a capture test is made to fail when the capture
+// regresses. What is asserted is the boundary, not a field failure.
+func TestDiscoverRcloneBackupsIgnoresRcloneNoiseOnStderr(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	manifest := backup.Manifest{
+		ArchivePath:    "gdrive:pbs-backups/server1/node-backup-20251205.tar.xz",
+		CreatedAt:      time.Date(2025, 12, 5, 12, 0, 0, 0, time.UTC),
+		EncryptionMode: "none",
+		SHA256:         checksumHexForBytes([]byte("node-backup-20251205")),
+	}
+	metaBytes, err := json.Marshal(&manifest)
+	if err != nil {
+		t.Fatalf("marshal manifest: %v", err)
+	}
+	metadataPath := filepath.Join(tmpDir, "node-backup-20251205.tar.xz.metadata")
+	if err := os.WriteFile(metadataPath, metaBytes, 0o600); err != nil {
+		t.Fatalf("write metadata: %v", err)
+	}
+
+	scriptPath := filepath.Join(tmpDir, "rclone")
+	script := `#!/bin/sh
+subcmd="$1"
+case "$subcmd" in
+  lsf)
+    printf 'ghost-backup-20251205.tar.xz\nghost-backup-20251205.tar.xz.metadata\n' >&2
+    printf 'node-backup-20251205.tar.xz\n'
+    printf 'node-backup-20251205.tar.xz.metadata\n'
+    ;;
+  cat)
+    cat "$METADATA_PATH"
+    ;;
+  *)
+    echo "unexpected subcommand: $subcmd" >&2
+    exit 1
+    ;;
+esac
+`
+	if err := os.WriteFile(scriptPath, []byte(script), 0o755); err != nil {
+		t.Fatalf("write fake rclone: %v", err)
+	}
+
+	prependPathEnv(t, tmpDir)
+	t.Setenv("METADATA_PATH", metadataPath)
+
+	candidates, err := discoverRcloneBackups(context.Background(), nil, "gdrive:pbs-backups/server1", nil, nil)
+	if err != nil {
+		t.Fatalf("stderr on a successful lsf broke the listing: %v", err)
+	}
+	if len(candidates) != 1 {
+		names := make([]string, 0, len(candidates))
+		for _, c := range candidates {
+			names = append(names, c.RawMetadataPath)
+		}
+		t.Fatalf("got %d candidates, want 1: %v", len(candidates), names)
+	}
+	if strings.Contains(candidates[0].RawMetadataPath, "ghost") {
+		t.Fatalf("stderr leaked into the listing: %q", candidates[0].RawMetadataPath)
+	}
+}

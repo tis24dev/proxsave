@@ -35,6 +35,17 @@ func maybeApplyPVEConfigsFromStage(ctx context.Context, logger *logging.Logger, 
 		logger.Info("Dry run enabled: skipping staged PVE config apply")
 		return nil
 	}
+	// Cancellation is checked here and again before EVERY arm below. The
+	// between-steps check in runStagedApplySteps guards only the boundary between
+	// staged-apply steps; inside this one the arms write straight into pmxcfs, so
+	// without a per-arm gate an aborted restore still applied datacenter.cfg,
+	// vzdump.cron and the storage definitions cluster-wide. An abort returns
+	// ctx.Err() rather than the failedItems aggregate, so the caller reads it as an
+	// abort (input.IsAborted matches context.Canceled) and not as "with warnings".
+	if cerr := ctx.Err(); cerr != nil {
+		logger.Warning("PVE staged apply aborted: %v", cerr)
+		return cerr
+	}
 	if !isRealRestoreFS(restoreFS) {
 		logger.Debug("Skipping staged PVE config apply: non-system filesystem in use")
 		return nil
@@ -48,34 +59,69 @@ func maybeApplyPVEConfigsFromStage(ctx context.Context, logger *logging.Logger, 
 	// caller reports the restore "with warnings" instead of a clean success
 	// rather than silently swallowing failed applies (BH-003).
 	var failedItems []string
+	var aborted error
+
+	// applyArm runs ONE arm behind the shared cancellation gate, so an arm added
+	// later cannot be added without it. Per-arm wording is unchanged.
+	applyArm := func(name string, run func() error) {
+		if aborted != nil {
+			return
+		}
+		if cerr := ctx.Err(); cerr != nil {
+			aborted = cerr
+			return
+		}
+		if err := run(); err != nil {
+			// An arm can return the caller's cancellation now that the helpers check
+			// ctx immediately before each irreversible write. That is an ABORT, not
+			// an item that failed to apply. Recording it in failedItems would make
+			// the LAST arm's cancellation surface as "1 PVE config item(s) failed to
+			// apply": no later gate would run to set aborted, so the operator's own
+			// abort would be reported back as a staged-apply failure.
+			//
+			// Two things are decided here and they are NOT the same question.
+			//
+			// Whether the restore is aborting is decided by the PARENT ctx, never by
+			// the error. An arm can carry its own inner deadline
+			// (maybeApplyPVEStorageMountGuardsFromStage derives mountCtx below), and
+			// that timeout expiring with a live restore is an item failure, not an
+			// operator abort. Only ctx.Err() tells the two apart.
+			//
+			// Whether THIS arm also failed on its own is decided by the error. An
+			// abort landing exactly while an arm was failing for a reason of its own
+			// must not erase which item that was: the tail below already prints both
+			// ("aborted: X (N item(s) had already failed: ...)"), so the name is kept
+			// unless the error IS the abort propagating out of the arm.
+			if cerr := ctx.Err(); cerr != nil {
+				if !errors.Is(err, cerr) {
+					logger.Warning("PVE staged apply: %s: %v", name, err)
+					failedItems = append(failedItems, name)
+				}
+				aborted = cerr
+				return
+			}
+			logger.Warning("PVE staged apply: %s: %v", name, err)
+			failedItems = append(failedItems, name)
+		}
+	}
 
 	if plan.HasCategoryID("storage_pve") {
-		if err := applyPVEVzdumpConfFromStage(logger, stageRoot); err != nil {
-			logger.Warning("PVE staged apply: vzdump.conf: %v", err)
-			failedItems = append(failedItems, "vzdump.conf")
-		}
+		applyArm("vzdump.conf", func() error { return applyPVEVzdumpConfFromStage(ctx, logger, stageRoot) })
 
 		// In cluster RECOVERY mode, config.db restoration owns storage.cfg/datacenter.cfg.
 		// Still apply mount guards because they only protect mountpoints from accidental writes.
 		if plan.NeedsClusterRestore {
 			logging.DebugStep(logger, "pve staged apply", "Skip PVE storage/datacenter apply: cluster RECOVERY restores config.db")
 		} else {
-			if err := applyPVEStorageCfgFromStage(ctx, logger, stageRoot); err != nil {
-				logger.Warning("PVE staged apply: storage.cfg: %v", err)
-				failedItems = append(failedItems, "storage.cfg")
-			}
+			applyArm("storage.cfg", func() error { return applyPVEStorageCfgFromStage(ctx, logger, stageRoot) })
 		}
 
-		if err := maybeApplyPVEStorageMountGuardsFromStage(ctx, logger, plan, stageRoot, destRoot); err != nil {
-			logger.Warning("PVE staged apply: mount guards: %v", err)
-			failedItems = append(failedItems, "mount guards")
-		}
+		applyArm("mount guards", func() error {
+			return maybeApplyPVEStorageMountGuardsFromStage(ctx, logger, plan, stageRoot, destRoot)
+		})
 
 		if !plan.NeedsClusterRestore {
-			if err := applyPVEDatacenterCfgFromStage(ctx, logger, stageRoot); err != nil {
-				logger.Warning("PVE staged apply: datacenter.cfg: %v", err)
-				failedItems = append(failedItems, "datacenter.cfg")
-			}
+			applyArm("datacenter.cfg", func() error { return applyPVEDatacenterCfgFromStage(ctx, logger, stageRoot) })
 		}
 	}
 
@@ -83,15 +129,19 @@ func maybeApplyPVEConfigsFromStage(ctx context.Context, logger *logging.Logger, 
 		if plan.NeedsClusterRestore {
 			logging.DebugStep(logger, "pve staged apply", "Skip PVE backup jobs apply: cluster RECOVERY restores config.db")
 		} else {
-			if err := applyPVEBackupJobsFromStage(ctx, logger, stageRoot); err != nil {
-				logger.Warning("PVE staged apply: jobs.cfg: %v", err)
-				failedItems = append(failedItems, "jobs.cfg")
-			}
-			if err := applyPVEVzdumpCronFromStage(logger, stageRoot); err != nil {
-				logger.Warning("PVE staged apply: vzdump.cron: %v", err)
-				failedItems = append(failedItems, "vzdump.cron")
-			}
+			applyArm("jobs.cfg", func() error { return applyPVEBackupJobsFromStage(ctx, logger, stageRoot) })
+			applyArm("vzdump.cron", func() error { return applyPVEVzdumpCronFromStage(ctx, logger, stageRoot) })
 		}
+	}
+
+	if aborted != nil {
+		if len(failedItems) > 0 {
+			logger.Warning("PVE staged apply aborted: %v (%d item(s) had already failed: %s)",
+				aborted, len(failedItems), strings.Join(failedItems, ", "))
+		} else {
+			logger.Warning("PVE staged apply aborted: %v", aborted)
+		}
+		return aborted
 	}
 
 	if len(failedItems) > 0 {
@@ -100,7 +150,13 @@ func maybeApplyPVEConfigsFromStage(ctx context.Context, logger *logging.Logger, 
 	return nil
 }
 
-func applyPVEVzdumpConfFromStage(logger *logging.Logger, stageRoot string) error {
+// The ctx is not decoration. applyArm gates cancellation BETWEEN arms, so without
+// a check in here the window in which a cancelled restore can still write is a
+// whole arm: reading the staged file, trimming it, and only then writing. The
+// checks below shrink that window to the instant before each irreversible call.
+// They cannot close it: cancellation can still land between the check and the
+// write, and there is no atomic "write unless cancelled" to reach for.
+func applyPVEVzdumpConfFromStage(ctx context.Context, logger *logging.Logger, stageRoot string) error {
 	rel := "etc/vzdump.conf"
 	stagePath := filepath.Join(stageRoot, rel)
 	data, err := restoreFS.ReadFile(stagePath)
@@ -115,10 +171,16 @@ func applyPVEVzdumpConfFromStage(logger *logging.Logger, stageRoot string) error
 	trimmed := strings.TrimSpace(string(data))
 	destPath := "/etc/vzdump.conf"
 	if trimmed == "" {
+		if cerr := ctx.Err(); cerr != nil {
+			return cerr
+		}
 		logger.Warning("PVE staged apply: %s is empty; removing %s", rel, destPath)
 		return removeIfExists(destPath)
 	}
 
+	if cerr := ctx.Err(); cerr != nil {
+		return cerr
+	}
 	if err := writeFileAtomic(destPath, []byte(trimmed+"\n"), 0o644); err != nil {
 		return fmt.Errorf("write %s: %w", destPath, err)
 	}
@@ -165,7 +227,7 @@ func applyPVEStorageCfgFromStage(ctx context.Context, logger *logging.Logger, st
 // apply. The API has no whole-file endpoint (options live per-key under
 // /cluster/options); the file write replicates cluster-wide because /etc/pve IS
 // pmxcfs, and pvesh is not needed at all.
-func applyPVEDatacenterCfgFromStage(_ context.Context, logger *logging.Logger, stageRoot string) error {
+func applyPVEDatacenterCfgFromStage(ctx context.Context, logger *logging.Logger, stageRoot string) error {
 	stagePath := filepath.Join(stageRoot, "etc/pve/datacenter.cfg")
 	data, err := restoreFS.ReadFile(stagePath)
 	if err != nil {
@@ -180,6 +242,9 @@ func applyPVEDatacenterCfgFromStage(_ context.Context, logger *logging.Logger, s
 		return nil
 	}
 
+	if cerr := ctx.Err(); cerr != nil {
+		return cerr
+	}
 	if err := pmxcfsWriteFile(logger, "datacenter.cfg", data); err != nil {
 		return fmt.Errorf("apply staged datacenter.cfg: %w", err)
 	}
@@ -193,7 +258,7 @@ func applyPVEDatacenterCfgFromStage(_ context.Context, logger *logging.Logger, s
 // silently vanished from every staged restore. There is no pvesh endpoint for
 // vzdump.cron; the file lives in pmxcfs, so the write IS the cluster-wide
 // apply, the same way datacenter.cfg is handled.
-func applyPVEVzdumpCronFromStage(logger *logging.Logger, stageRoot string) error {
+func applyPVEVzdumpCronFromStage(ctx context.Context, logger *logging.Logger, stageRoot string) error {
 	stagePath := filepath.Join(stageRoot, "etc/pve/vzdump.cron")
 	data, err := restoreFS.ReadFile(stagePath)
 	if err != nil {
@@ -206,6 +271,9 @@ func applyPVEVzdumpCronFromStage(logger *logging.Logger, stageRoot string) error
 	if strings.TrimSpace(string(data)) == "" {
 		logging.DebugStep(logger, "pve staged apply vzdump.cron", "Staged vzdump.cron is empty; skipping apply")
 		return nil
+	}
+	if cerr := ctx.Err(); cerr != nil {
+		return cerr
 	}
 	if err := pmxcfsWriteFile(logger, "vzdump.cron", data); err != nil {
 		return fmt.Errorf("apply staged vzdump.cron: %w", err)
@@ -254,6 +322,15 @@ func applyPVEBackupJobsFromStage(ctx context.Context, logger *logging.Logger, st
 	applied := 0
 	failed := 0
 	for _, job := range jobs {
+		// A cancelled restore must PROPAGATE, not be counted. Without this the loop
+		// keeps calling pvesh for every remaining job, each failing instantly on the
+		// dead ctx, and returns "applied=N failed=M" - a plain formatted string that
+		// errors.Is cannot match against context.Canceled. applyArm then records
+		// jobs.cfg as an item that failed on its own, so the restore aborts with a
+		// diagnostic blaming the job configuration for the operator's own abort.
+		if cerr := ctx.Err(); cerr != nil {
+			return cerr
+		}
 		jobID := strings.TrimSpace(job.Name)
 		if jobID == "" {
 			continue

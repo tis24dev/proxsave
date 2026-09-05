@@ -903,14 +903,19 @@ const (
 func runDashboardDaemonStatus(ctx context.Context, session *shell.Session, configPath, baseDir string) {
 	errDaemonStatusEsc := errors.New("daemon status: esc")
 	for {
+		// cfgErr is kept, not discarded: this is the ONE screen that reaches the
+		// collector without a configuration, and the personal-script block says so.
+		// Without the cause it could only report that the file was unreadable, never
+		// which file or why - the same half-answer runDashboardDaemonAdmin refuses.
 		var cfg *config.Config
-		if loaded, err := daemonStatusLoadConfig(configPath, baseDir); err == nil && loaded != nil {
+		loaded, cfgErr := daemonStatusLoadConfig(configPath, baseDir)
+		if cfgErr == nil && loaded != nil {
 			cfg = loaded
 			if strings.TrimSpace(loaded.BaseDir) != "" {
 				baseDir = loaded.BaseDir
 			}
 		}
-		diagnostics := daemonDiagnosticsCollector(ctx, cfg, baseDir)
+		diagnostics := daemonDiagnosticsCollector(ctx, cfg, cfgErr, baseDir)
 		// Dashboard "Status:" keywords are ALL-CAPS (the house convention across every
 		// dashboard Status screen). daemonStatusStyle is shared with the plain-text
 		// --daemon-status CLI line, so uppercase HERE (the graphical consumer) rather than at
@@ -1051,7 +1056,7 @@ func buildDashboardPersonalScriptSynchronization(comparison personalScriptCompar
 		return prefix + theme.WarningText.Render("OUT OF SYNC") + theme.Subtle.Render(" ("+reason+")")
 	case personalScriptPathStateChanged:
 		return prefix + theme.WarningText.Render("PATH STATE CHANGED SINCE STARTUP") + theme.Subtle.Render(" ("+reason+")")
-	case personalScriptRuntimeUnavailable:
+	case personalScriptRuntimeUnavailable, personalScriptCurrentUnavailable:
 		return prefix + theme.WarningText.Render("UNKNOWN") + theme.Subtle.Render(" ("+reason+")")
 	case personalScriptSyncNotApplicable:
 		return prefix + theme.Subtle.Render("NOT APPLICABLE")
@@ -1083,6 +1088,11 @@ func buildDashboardPersonalScriptLine(label string, diagnostic personalScriptDia
 		if path != "" {
 			line += theme.Subtle.Render(" (" + path + ")")
 		}
+		if reason != "" {
+			line += theme.Subtle.Render(": " + reason)
+		}
+	case personalScriptUnknown:
+		line += theme.WarningText.Render("UNKNOWN")
 		if reason != "" {
 			line += theme.Subtle.Render(": " + reason)
 		}

@@ -88,8 +88,27 @@ func popEntryValue(entries []proxmoxNotificationEntry, keys ...string) (value st
 	return value, remaining, ok
 }
 
+// runPBSManagerRedacted runs proxmox-backup-manager, redacting the named flags and
+// argument positions before the command reaches an error message.
+//
+// It captures STDOUT ONLY, because eight callers parse the output as JSON (every
+// `... list --output-format=json` below, via parsePBSListIDs and the datastore
+// list in applyPBSDatastores) and anything the tool writes to stderr makes that
+// parse fail on a byte it never meant as data. internal/backup already reached the
+// same conclusion for this binary and documents it at collector_deps.go:15
+// (smartctl failures on `disk list`).
+//
+// Unlike pvesh this is NOT the locale bug: proxmox-backup-manager is Rust, and on
+// a live PVE 9.1.9 node (2026-09-05) `datastore list`, `disk list` and `user list`
+// all wrote 0 bytes to stderr even with LC_ALL set to a locale the host lacks. The
+// mechanism is identical, the reachability is not demonstrated; stdout-only is the
+// correct capture for parsed output either way.
+//
+// Every mutating caller writes `_, err :=` and drops the output, so the switch
+// costs no diagnostics: on failure runCommandStdout folds stderr into the error,
+// where the redacted message below carries it.
 func runPBSManagerRedacted(ctx context.Context, args []string, redactFlags []string, redactIndexes []int) ([]byte, error) {
-	out, err := restoreCmd.Run(ctx, "proxmox-backup-manager", args...)
+	out, err := runCommandStdout(ctx, "proxmox-backup-manager", args...)
 	if err == nil {
 		return out, nil
 	}
