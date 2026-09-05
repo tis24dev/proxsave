@@ -136,6 +136,24 @@ var notes = []Note{
 			"Daemon status compares loaded and current personal scripts, with paths, ownership, modes, refusal reasons, and drift",
 		},
 	},
+	{
+		Version: "0.36.0",
+		Lines: []string{
+			"A restore aborted mid-apply stops instead of writing more PVE configuration cluster-wide",
+			"Guest config restore survives a locale warning from pvesh instead of refusing every guest on the node",
+			"A guest config the API rejects for a bad value is no longer written into the cluster anyway",
+			"A running guest keeps every setting the API accepts instead of losing its whole configuration",
+			"Storage definitions apply where they used to fail: already matching, or carrying mostly create-only keys",
+			"Daemon status says the configuration could not be read instead of blaming the daemon and asking for a restart",
+			"The personal-script warning names the kernel setting that trust decision depends on",
+			"--upgrade finalizes with the newly installed binary, and no longer waits on the notes screen when unattended",
+		},
+		Actions: []string{
+			"If you relied on --upgrade y showing the release notes, run proxsave --show-whatsnew after the upgrade",
+			"The upgrade TO 0.36.0 still finalizes from the old binary; the new path starts with the upgrade after it",
+			"If a personal script lives below a user-owned home, check the fs.protected_hardlinks value now shown at startup",
+		},
+	},
 }
 
 // LookupNotes returns the notes for versions in the half-open range (from, to], ascending by
