@@ -411,19 +411,33 @@ func pveshArgsFromProxmoxEntries(entries []proxmoxNotificationEntry) []string {
 // drops the named key and retries. The set schema varies by storage type and
 // PVE version, so the refusal itself is the authoritative list - a hardcoded
 // whitelist would drift.
-func pveshSetStorageDroppingCreateOnly(ctx context.Context, logger *logging.Logger, id string, args []string) error {
+//
+// changed reports whether a set actually reached the node. It is false in the two
+// shapes where there was nothing to send: a staged block whose only keys are the
+// create-only header ones (--storage/--type, stripped by the caller), and a block
+// whose every remaining key came back refused. Both mean the existing definition
+// already matches everything this restore could change, which is a success - but
+// not an update, and the caller must not announce one.
+func pveshSetStorageDroppingCreateOnly(ctx context.Context, logger *logging.Logger, id string, args []string) (changed bool, err error) {
+	if len(args) == 0 {
+		// `pvesh set /storage/<id>` with no option fails on the live node, and
+		// reporting that as an apply failure blamed the restore for a block that
+		// simply had nothing settable in it.
+		logger.Debug("storage %s: the staged block carries no settable key; nothing to send", id)
+		return false, nil
+	}
 	for attempt := 0; attempt <= len(args); attempt++ {
 		full := append([]string{"set", "/storage/" + id}, args...)
-		out, err := restoreCmd.Run(ctx, "pvesh", full...)
+		out, runErr := restoreCmd.Run(ctx, "pvesh", full...)
 		if len(out) > 0 {
 			logger.Debug("pvesh %v output: %s", full, strings.TrimSpace(string(out)))
 		}
-		if err == nil {
-			return nil
+		if runErr == nil {
+			return true, nil
 		}
 		key := pveshUnknownOptionFrom(string(out))
 		if key == "" {
-			return fmt.Errorf("pvesh %v failed: %w", full, err)
+			return false, fmt.Errorf("pvesh %v failed: %w", full, runErr)
 		}
 		trimmed := args[:0:0]
 		for _, arg := range args {
@@ -434,16 +448,15 @@ func pveshSetStorageDroppingCreateOnly(ctx context.Context, logger *logging.Logg
 			trimmed = append(trimmed, arg)
 		}
 		if len(trimmed) == len(args) {
-			return fmt.Errorf("pvesh %v failed: %w", full, err)
+			return false, fmt.Errorf("pvesh %v failed: %w", full, runErr)
 		}
 		if len(trimmed) == 0 {
-			// Nothing left to update: the definition already matches on every
-			// settable key, which is a success, not a failure.
-			return nil
+			logger.Debug("storage %s: every staged key is create-only; nothing left to update", id)
+			return false, nil
 		}
 		args = trimmed
 	}
-	return fmt.Errorf("storage %s: the set fallback did not converge", id)
+	return false, fmt.Errorf("storage %s: the set fallback did not converge", id)
 }
 
 // pveshUnknownOptionFrom extracts the key from pvesh's "Unknown option: <key>" output.
@@ -539,11 +552,18 @@ func applyStorageCfg(ctx context.Context, cfgPath string, logger *logging.Logger
 				}
 				setArgs = append(setArgs, arg)
 			}
-			if setErr := pveshSetStorageDroppingCreateOnly(ctx, logger, blk.ID, setArgs); setErr != nil {
+			changed, setErr := pveshSetStorageDroppingCreateOnly(ctx, logger, blk.ID, setArgs)
+			switch {
+			case setErr != nil:
 				logger.Warning("Failed to apply storage %s: %v (create: %v)", blk.ID, setErr, runErr)
 				failed++
-			} else {
+			case changed:
 				logger.Info("Updated existing storage definition %s", blk.ID)
+				applied++
+			default:
+				// Nothing was sent, so saying "Updated" would claim a write that
+				// never happened; the definition is nonetheless in the staged state.
+				logger.Info("Storage definition %s already matches every settable key", blk.ID)
 				applied++
 			}
 		} else {
