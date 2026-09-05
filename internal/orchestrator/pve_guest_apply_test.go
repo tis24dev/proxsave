@@ -424,6 +424,10 @@ func TestPveshSchemaRefusalSeparatesPayloadFromOperation(t *testing.T) {
 		{"meta rejection in the error", errString("400 Parameter verification failed. meta: property is not defined in schema and the schema does not allow additional properties"), "", true},
 		{"unknown option on the output", errString("exit status 255"), "Unknown option: path\n400 unable to parse option", true},
 		{"apply failure", errString("500 unable to apply configuration"), "", false},
+		// Same opening sentence as the schema refusal, entirely different meaning:
+		// the staged conf carries a value the API rejects. Writing it verbatim into
+		// pmxcfs is precisely what the fallback must never do.
+		{"value error wearing the same prefix", errString("exit status 2"), "400 Parameter verification failed. cores: value 999 does not match the regex pattern", false},
 		{"no quorum", errString("exit status 2"), "cluster not ready - no quorum?", false},
 		{"permission denied", errString("exit status 2"), "403 Permission check failed", false},
 		{"no error at all", nil, "", false},

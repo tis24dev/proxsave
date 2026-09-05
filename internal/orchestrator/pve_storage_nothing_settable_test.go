@@ -106,3 +106,53 @@ func TestApplyStorageCfgDoesNotClaimAnUpdateItNeverSent(t *testing.T) {
 		})
 	}
 }
+
+// The retry bound used to read the SHRINKING args slice, so it ran out of
+// attempts before converging as soon as more than half the keys were refused.
+// `nfs: id / server / export / content` reaches that: 3 settable keys, 2 of them
+// create-only, 2 attempts allowed against the 3 needed. The storage was reported
+// as "the set fallback did not converge" - a message that also replaced pvesh's
+// real error - on a definition the retry would have applied.
+func TestSetFallbackConvergesWhenMostKeysAreRefused(t *testing.T) {
+	origCmd := restoreCmd
+	t.Cleanup(func() { restoreCmd = origCmd })
+	runner := &createOnlyRunner{refuse: map[string]bool{"server": true, "export": true, "path": true}}
+	restoreCmd = runner
+	logger, _ := nothingSettableLogger(t)
+
+	changed, err := pveshSetStorageDroppingCreateOnly(context.Background(), logger, "nas",
+		[]string{"--server=10.0.0.1", "--export=/srv/backups", "--content=backup"})
+	if err != nil {
+		t.Fatalf("the retry gave up before converging: %v", err)
+	}
+	if !changed {
+		t.Fatal("changed=false, but --content was accepted and sent")
+	}
+	if runner.calls != 3 {
+		t.Fatalf("pvesh calls = %d, want 3 (two drops plus the accepted set)", runner.calls)
+	}
+	if last := runner.lastArgs; strings.Join(last, " ") != "set /storage/nas --content=backup" {
+		t.Fatalf("the surviving set was never sent; last call: %v", last)
+	}
+}
+
+type createOnlyRunner struct {
+	refuse   map[string]bool
+	calls    int
+	lastArgs []string
+}
+
+func (r *createOnlyRunner) Run(_ context.Context, _ string, args ...string) ([]byte, error) {
+	r.calls++
+	r.lastArgs = append([]string(nil), args...)
+	for _, a := range args {
+		if !strings.HasPrefix(a, "--") {
+			continue
+		}
+		key := strings.TrimPrefix(strings.SplitN(a, "=", 2)[0], "--")
+		if r.refuse[key] {
+			return []byte("Unknown option: " + key + "\n400 unable to parse option"), errString("exit status 255")
+		}
+	}
+	return nil, nil
+}

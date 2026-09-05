@@ -441,7 +441,13 @@ func pveshSetStorageDroppingCreateOnly(ctx context.Context, logger *logging.Logg
 		logger.Debug("storage %s: the staged block carries no settable key; nothing to send", id)
 		return false, nil
 	}
-	for attempt := 0; attempt <= len(args); attempt++ {
+	// The bound is taken ONCE, before the loop. Reading len(args) in the condition
+	// measured the shrinking slice, so the attempts ran out before convergence as
+	// soon as more than half the keys were refused - `nfs: id / server / export /
+	// content` is enough (3 settable keys, 2 refused: 2 attempts allowed, 3 needed).
+	// The result was "the set fallback did not converge" in place of pvesh's real
+	// error, on a storage the retry would have applied.
+	for attempt, total := 0, len(args); attempt <= total; attempt++ {
 		full := append([]string{"set", "/storage/" + id}, args...)
 		out, runErr := restoreCmd.Run(ctx, "pvesh", full...)
 		if len(out) > 0 {
@@ -670,14 +676,22 @@ func runPveshWithOutput(ctx context.Context, logger *logging.Logger, args []stri
 // not allow additional properties", and "Unknown option: <key>" alongside "400
 // unable to parse option". Both err and out are searched because the reason lands
 // on either one depending on the endpoint.
+//
+// "Parameter verification failed" alone is deliberately NOT a marker. PVE opens
+// VALUE errors with the same sentence - "400 Parameter verification failed. cores:
+// value does not match the regex pattern" - and that is the staged conf carrying a
+// value the API rejects. The API's rejection is the only validation those bytes
+// get, so treating a value error as a schema refusal would write exactly the conf
+// PVE just refused straight into pmxcfs, cluster-wide. The key-absent phrasing is
+// what the fallback answers, so the key-absent phrasing is what is matched.
 func pveshSchemaRefusal(err error, out []byte) bool {
 	text := strings.ToLower(string(out))
 	if err != nil {
 		text += "\n" + strings.ToLower(err.Error())
 	}
 	for _, marker := range []string{
-		"parameter verification failed",
 		"property is not defined in schema",
+		"does not allow additional properties",
 		"unknown option:",
 		"unable to parse option",
 	} {
