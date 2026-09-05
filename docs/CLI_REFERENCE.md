@@ -99,7 +99,7 @@ proxsave -h
 | Flag | Short | Description |
 |------|-------|-------------|
 | `--config <path>` | `-c` | Path to configuration file (default `configs/backup.env`, resolved under the install dir, e.g. `/opt/proxsave/configs/backup.env`). An absolute path is used as-is; a relative path is joined onto the install dir, not the current directory. |
-| `--dry-run` | `-n` | Test mode - no actual changes made |
+| `--dry-run` | `-n` | Test mode - no actual changes made. Refused with `--upgrade` and `--upgrade-finalize`: neither has ever honoured it, so the combination is an error rather than a silent full upgrade |
 | `--version` | `-v` | Display version information |
 | `--help` | `-h` | Show help message |
 | `--backup` | | Run the backup now and skip the interactive dashboard. This is the default behavior when proxsave runs non-interactively (cron, pipe, systemd). |
@@ -249,6 +249,8 @@ See also: [upgrading configuration](#configuration-upgrade)
 | `--upgrade-config` | Merge current config with latest template |
 | `--upgrade-config-dry-run` | Preview config upgrade without changes |
 | `--upgrade-config-json` | Internal: upgrade the config and print a JSON summary to stdout (used by `--upgrade`; not for direct use) |
+| `--upgrade-finalize` | Internal: run only the post-install finalize phase (config merge, docs/symlinks, daemon migrate+restart, permissions, footer, release notes). `--upgrade` re-invokes the freshly installed binary with it from 0.36.0 on, so the finalize policy that runs belongs to the release being installed rather than to the one being replaced. Not for direct use: run by hand it restarts the daemon and prints an upgrade footer for a version nobody installed |
+| `--upgrade-finalize-skip-daemon-restart` | Internal, with `--upgrade-finalize`: do not restart the resident daemon, because the caller restarts it itself. `--upgrade` forwards this when the dashboard is driving, since the suppression lives in a package variable a child process cannot see. Without it the daemon is restarted twice |
 
 ---
 
@@ -688,7 +690,7 @@ crontab -e
 | `--help` | `-h` | Show help message |
 | `--version` | `-v` | Display version information |
 | `--config <path>` | `-c` | Path to configuration file |
-| `--dry-run` | `-n` | Test mode - no actual changes |
+| `--dry-run` | `-n` | Test mode - no actual changes. Not accepted with `--upgrade` |
 | `--log-level <level>` | `-l` | Set log level (debug\|info\|warning\|error\|critical) |
 | `--cli` | - | Force CLI mode instead of TUI (only for: --install, --new-install, --newkey, --decrypt, --restore) |
 | `--install` | - | Interactive installation wizard |
@@ -821,6 +823,13 @@ page you on warning-only runs, every time two runs overlap, and on anything you 
 unless it excludes them. For `--cleanup-guards`, `17` is the one to act on but not to
 report as a bug — and `1` means the opposite of what it means elsewhere: there it is the
 cleanup itself failing, which is a different remedy.
+
+**Note**: `--log-level` does not change any exit code. Since 0.34.0 the threshold is a
+console filter only (see Log levels above), so a warning raised under `--log-level error`
+is still counted and still promotes an otherwise clean run to `1`. In earlier releases the
+same warning was dropped before the counters and the run exited `0`, so a wrapper that
+relied on a high `--log-level` to keep exit codes quiet will start reporting `1` on the
+same hosts. Filter on the code, not on the log level.
 
 **Note**: Cloud storage is non-critical. A cloud upload failure does **not** abort the
 run with a storage error (`5`): the local backup is kept, but the failure is recorded as a

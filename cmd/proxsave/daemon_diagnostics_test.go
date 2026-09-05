@@ -302,7 +302,7 @@ func TestCollectDaemonDiagnosticsBuildsOneSharedSnapshot(t *testing.T) {
 		BaseDir:                      t.TempDir(),
 		HealthcheckHeartbeatInterval: time.Minute,
 	}
-	got := collectDaemonDiagnostics(context.Background(), cfg, cfg.BaseDir)
+	got := collectDaemonDiagnostics(context.Background(), cfg, nil, cfg.BaseDir)
 
 	if got.Mode != "daemon" || got.Unit != "installed" || got.Active != "active" {
 		t.Fatalf("incomplete shared snapshot: %+v", got)
@@ -320,7 +320,7 @@ func TestRunDaemonStatusUsesSharedDiagnosticsCollector(t *testing.T) {
 	t.Cleanup(func() { daemonDiagnosticsCollector = origCollector })
 
 	called := 0
-	daemonDiagnosticsCollector = func(context.Context, *config.Config, string) daemonDiagnostics {
+	daemonDiagnosticsCollector = func(context.Context, *config.Config, error, string) daemonDiagnostics {
 		called++
 		return daemonDiagnostics{
 			Mode:    "daemon",

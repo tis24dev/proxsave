@@ -125,7 +125,9 @@ func cronModeRecordClause(revert cronRevertReport) string {
 // alignment) - non-interactively, then exits. Exit 0 when the daemon is running and aligned,
 // non-zero otherwise, so scripts can gate on it.
 func runDaemonStatus(rt *appRuntime) int {
-	diagnostics := daemonDiagnosticsCollector(rt.ctx, rt.cfg, "")
+	// No cfgErr: the run bootstrap already exited on an unreadable config, so rt.cfg
+	// is never nil here and there is no failed attempt to report.
+	diagnostics := daemonDiagnosticsCollector(rt.ctx, rt.cfg, nil, "")
 	logDaemonDiagnostics(rt.logger, diagnostics)
 	if diagnostics.Level == orchestrator.HealthcheckSetupLevelOk {
 		return types.ExitSuccess.Int()

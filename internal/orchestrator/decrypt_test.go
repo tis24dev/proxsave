@@ -4646,3 +4646,53 @@ exit 0
 		t.Logf("Got error (expected): %v", err)
 	}
 }
+
+// rclone writes NOTICE and WARNING lines to stderr while the file content goes to
+// stdout. Merged, those lines land in front of the JSON, json.Unmarshal fails, and
+// the function does NOT fail with it: it falls through to the legacy KEY=VALUE
+// branch, which finds no "=" in JSON and returns a manifest carrying only
+// ArchivePath. A run then proceeds with no sha256 and no recorded archive size, so
+// the loss is silent.
+//
+// The NOTICE below is the one measured on a live node (2026-09-05) when the rclone
+// config is missing.
+func TestInspectRcloneMetadataManifestIgnoresRcloneNoiseOnStderr(t *testing.T) {
+	tmpDir := t.TempDir()
+	metadataPath := filepath.Join(tmpDir, "backup.metadata")
+
+	const manifestJSON = `{"archive_path":"gdrive:backup.tar.xz","archive_size":4096,` +
+		`"sha256":"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",` +
+		`"compression_type":"zstd","proxmox_type":"pve","hostname":"pve-test"}`
+	if err := os.WriteFile(metadataPath, []byte(manifestJSON), 0o644); err != nil {
+		t.Fatalf("write metadata: %v", err)
+	}
+
+	scriptPath := filepath.Join(tmpDir, "rclone")
+	script := fmt.Sprintf("#!/bin/sh\n"+
+		"echo '2026/09/05 19:53:22 NOTICE: Config file \"/root/.config/rclone/rclone.conf\" not found - using defaults' >&2\n"+
+		"cat %q\n", metadataPath)
+	if err := os.WriteFile(scriptPath, []byte(script), 0o755); err != nil {
+		t.Fatalf("write fake rclone: %v", err)
+	}
+
+	prependPathEnv(t, tmpDir)
+
+	logger := logging.New(types.LogLevelError, false)
+	logger.SetOutput(io.Discard)
+
+	got, err := inspectRcloneMetadataManifest(context.Background(), "gdrive:backup.metadata", "gdrive:backup.tar.xz", logger)
+	if err != nil {
+		t.Fatalf("a NOTICE on stderr broke the manifest read: %v", err)
+	}
+	// The legacy fallback would produce exactly this manifest minus every field
+	// below, so these assertions are what separates a real parse from it.
+	if got.SHA256 != "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855" {
+		t.Fatalf("sha256 lost, the legacy fallback answered instead: %+v", got)
+	}
+	if got.ArchiveSize != 4096 {
+		t.Fatalf("ArchiveSize=%d; want 4096", got.ArchiveSize)
+	}
+	if got.CompressionType != "zstd" || got.Hostname != "pve-test" {
+		t.Fatalf("manifest did not parse: %+v", got)
+	}
+}

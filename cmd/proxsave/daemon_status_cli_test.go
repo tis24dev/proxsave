@@ -150,7 +150,7 @@ func TestCollectDaemonDiagnosticsInspectsScriptsWithResolvedUID(t *testing.T) {
 		PersonalScriptPreRun:  "/pre",
 		PersonalScriptPostRun: "/post",
 	}
-	got := collectDaemonDiagnostics(context.Background(), cfg, cfg.BaseDir)
+	got := collectDaemonDiagnostics(context.Background(), cfg, nil, cfg.BaseDir)
 	if inspections != 1 {
 		t.Fatalf("script inspections = %d, want 1", inspections)
 	}
@@ -206,7 +206,7 @@ func TestCollectDaemonDiagnosticsComparesResidentReadyWithCurrentEmpty(t *testin
 	}); err != nil {
 		t.Fatal(err)
 	}
-	got := collectDaemonDiagnostics(context.Background(), cfg, "/ignored-base")
+	got := collectDaemonDiagnostics(context.Background(), cfg, nil, "/ignored-base")
 	if got.Runtime.Availability != daemonRuntimeAvailable || !got.State.ProcessAlive {
 		t.Fatalf("resident state unavailable: %+v", got)
 	}
@@ -303,7 +303,7 @@ func TestLogDaemonDiagnosticsUsesStandardEnvelopeAndSeverity(t *testing.T) {
 func TestRunDaemonStatusExitRemainsBasedOnDaemonState(t *testing.T) {
 	origCollector := daemonDiagnosticsCollector
 	t.Cleanup(func() { daemonDiagnosticsCollector = origCollector })
-	daemonDiagnosticsCollector = func(context.Context, *config.Config, string) daemonDiagnostics {
+	daemonDiagnosticsCollector = func(context.Context, *config.Config, error, string) daemonDiagnostics {
 		return daemonDiagnostics{
 			Level:   orchestrator.HealthcheckSetupLevelOk,
 			Keyword: "running",

@@ -43,7 +43,7 @@ func TestGuestCreatedAfterInventoryIsNotOverwritten(t *testing.T) {
 func TestGuestStartedAfterStatusProbeIsNotOverwritten(t *testing.T) {
 	fakeFS, pvesh, logger, node := guestApplyFixture(t)
 	pvesh.guests["100"] = true
-	pvesh.failSet = map[string]bool{"100": true}
+	pvesh.schemaRefuseSet = map[string]bool{"100": true}
 
 	stagePath := "/export/etc/pve/nodes/" + node() + "/qemu-server/100.conf"
 	if err := fakeFS.AddFile(stagePath, []byte("name: restored-vm\ncores: 4\n")); err != nil {

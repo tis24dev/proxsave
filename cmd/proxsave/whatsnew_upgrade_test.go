@@ -139,7 +139,10 @@ func TestShouldRunWhatsnewAfterUpgrade(t *testing.T) {
 		want        bool
 	}{
 		{"interactive prompted upgrade shows", &cli.Args{}, upgradeRunOptions{}, true, true},
-		{"interactive auto-yes upgrade shows", &cli.Args{UpgradeAutoYes: true}, upgradeRunOptions{}, true, true},
+		// A pty is routinely allocated where no human is watching (ssh -tt, Ansible
+		// with a pty, script -c), so the terminal check alone cannot decide this.
+		// Auto-yes is the operator saying nobody will answer prompts.
+		{"auto-yes upgrade skips even with a tty", &cli.Args{UpgradeAutoYes: true}, upgradeRunOptions{}, true, false},
 		{"non-interactive prompted upgrade skips", &cli.Args{}, upgradeRunOptions{}, false, false},
 		{"non-interactive auto-yes upgrade skips", &cli.Args{UpgradeAutoYes: true}, upgradeRunOptions{}, false, false},
 		{"dashboard defers presentation", &cli.Args{UpgradeAutoYes: true}, upgradeRunOptions{deferWhatsnew: true}, true, false},

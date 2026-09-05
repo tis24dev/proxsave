@@ -286,11 +286,39 @@ func inspectRcloneMetadataManifest(ctx context.Context, remoteMetadataPath, remo
 		return nil, fmt.Errorf("prepare rclone metadata cat: %w", err)
 	}
 	safeexec.ApplyWaitDelay(cmd)
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		return nil, fmt.Errorf("rclone cat %s failed: %w (output: %s)", remoteMetadataPath, err, strings.TrimSpace(string(output)))
+	// Stdout and stderr are kept apart, the way readRcloneManifestStreaming already
+	// does a few lines above. This function parses the bytes, and rclone writes its
+	// NOTICE and WARNING lines to stderr while the file content goes to stdout;
+	// merged, those lines land in front of the JSON and json.Unmarshal fails on a
+	// byte rclone never meant as data.
+	//
+	// This one is a repair on the invariant, not on a reproduction. Measured on a
+	// live node (2026-09-05): `rclone cat` on a real JSON file wrote 0 bytes to
+	// stderr with a config present, under a broken locale included; with the config
+	// MISSING it wrote 102 bytes ("NOTICE: Config file ... not found - using
+	// defaults") and the merged bytes stopped parsing. A missing config also makes a
+	// `remote:path` read fail outright, so that exact route exits at the error above
+	// instead. Other rclone NOTICEs on a successful cat (deprecations, token
+	// refreshes on cloud backends) were not measured.
+	//
+	// The damage if it is ever reached is the worst of the family, which is why it is
+	// repaired anyway: a failed parse does not fail the call, it falls through to the
+	// legacy KEY=VALUE branch below and yields a manifest carrying only ArchivePath,
+	// with no checksum. The legacy branch itself stays: it is a real older format,
+	// and what changes is only that valid JSON no longer reaches it.
+	var stdout, stderrBuf bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderrBuf
+	if err := cmd.Run(); err != nil {
+		// The reason is on stderr; the error path is a transcript, so both streams are
+		// reported here.
+		return nil, fmt.Errorf("rclone cat %s failed: %w (output: %s)", remoteMetadataPath, err,
+			strings.TrimSpace(stderrBuf.String()+"\n"+stdout.String()))
 	}
-	data := bytes.TrimSpace(output)
+	if noise := strings.TrimSpace(stderrBuf.String()); noise != "" {
+		logDebug(logger, "rclone cat %s wrote to stderr while succeeding: %s", remoteMetadataPath, noise)
+	}
+	data := bytes.TrimSpace(stdout.Bytes())
 	if len(data) == 0 {
 		return nil, fmt.Errorf("metadata file is empty")
 	}
