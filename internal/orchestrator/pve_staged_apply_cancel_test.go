@@ -221,3 +221,86 @@ func stagedCancelFS(t *testing.T) *FakeFS {
 	})
 	return fs
 }
+
+// Giving the helpers a ctx created a new way for an arm to fail: it can now return
+// the caller's cancellation. Recorded as an ordinary failed item, the LAST arm's
+// cancellation would surface as "1 PVE config item(s) failed to apply", because no
+// later gate runs to set aborted. An operator abort would be reported back as a
+// staged-apply failure, and input.IsAborted would not match it.
+//
+// This is a SHAPE test, and what it proves is limited: the arms sit behind
+// isRealRestoreFS and a root check, so a behavioural test would need two
+// production seams added for one assertion. What it pins is the ordering inside
+// applyArm's error branch: ctx.Err() must be consulted and aborted set BEFORE
+// anything is appended to failedItems. It does not prove the runtime path; the
+// four subtests above prove the helpers return the cancellation that this branch
+// then has to classify.
+func TestApplyArmClassifiesACancellationAsAnAbort(t *testing.T) {
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, "pve_staged_apply.go", nil, 0)
+	if err != nil {
+		t.Fatalf("parse pve_staged_apply.go: %v", err)
+	}
+
+	var errBranch *ast.BlockStmt
+	ast.Inspect(file, func(n ast.Node) bool {
+		stmt, ok := n.(*ast.IfStmt)
+		if !ok || stmt.Init == nil {
+			return true
+		}
+		assign, ok := stmt.Init.(*ast.AssignStmt)
+		if !ok || len(assign.Rhs) != 1 {
+			return true
+		}
+		call, ok := assign.Rhs[0].(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		if id, ok := call.Fun.(*ast.Ident); ok && id.Name == "run" && errBranch == nil {
+			errBranch = stmt.Body
+		}
+		return true
+	})
+	if errBranch == nil {
+		t.Fatal("the `if err := run(); err != nil` branch is gone from applyArm; this test needs rewriting")
+	}
+
+	ctxErr, setsAborted, appendsItem := -1, -1, -1
+	ast.Inspect(errBranch, func(n ast.Node) bool {
+		switch v := n.(type) {
+		case *ast.CallExpr:
+			if sel, ok := v.Fun.(*ast.SelectorExpr); ok && sel.Sel.Name == "Err" {
+				if id, ok := sel.X.(*ast.Ident); ok && id.Name == "ctx" && ctxErr < 0 {
+					ctxErr = int(v.Pos())
+				}
+			}
+		case *ast.AssignStmt:
+			for _, lhs := range v.Lhs {
+				id, ok := lhs.(*ast.Ident)
+				if !ok {
+					continue
+				}
+				if id.Name == "aborted" && setsAborted < 0 {
+					setsAborted = int(v.Pos())
+				}
+				if id.Name == "failedItems" && appendsItem < 0 {
+					appendsItem = int(v.Pos())
+				}
+			}
+		}
+		return true
+	})
+
+	if ctxErr < 0 {
+		t.Fatal("applyArm's error branch never consults ctx.Err(): a cancelled arm is recorded as a failed item")
+	}
+	if setsAborted < 0 {
+		t.Fatal("applyArm's error branch never sets aborted: the last arm's cancellation would be reported as an apply failure")
+	}
+	if appendsItem < 0 {
+		t.Fatal("applyArm's error branch no longer records failed items; this test needs rewriting")
+	}
+	if ctxErr >= appendsItem || setsAborted >= appendsItem {
+		t.Fatalf("the cancellation check must precede the failedItems append (ctxErr@%d aborted@%d append@%d)", ctxErr, setsAborted, appendsItem)
+	}
+}

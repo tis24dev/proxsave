@@ -72,6 +72,22 @@ func maybeApplyPVEConfigsFromStage(ctx context.Context, logger *logging.Logger, 
 			return
 		}
 		if err := run(); err != nil {
+			// An arm can return the caller's cancellation now that the helpers check
+			// ctx immediately before each irreversible write. That is an ABORT, not
+			// an item that failed to apply. Recording it in failedItems would make
+			// the LAST arm's cancellation surface as "1 PVE config item(s) failed to
+			// apply": no later gate would run to set aborted, so the operator's own
+			// abort would be reported back as a staged-apply failure.
+			//
+			// The discriminator is the PARENT ctx, not the error. An arm can carry
+			// its own inner deadline (maybeApplyPVEStorageMountGuardsFromStage
+			// derives mountCtx below), and that timeout expiring is an item failure
+			// with a live restore, not an operator abort. Reading ctx.Err() cannot
+			// confuse the two.
+			if cerr := ctx.Err(); cerr != nil {
+				aborted = cerr
+				return
+			}
 			logger.Warning("PVE staged apply: %s: %v", name, err)
 			failedItems = append(failedItems, name)
 		}
