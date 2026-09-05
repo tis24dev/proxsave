@@ -75,7 +75,6 @@ type daemonDiagnostics struct {
 	Keyword           string
 	Explanation       string
 	DaemonUID         daemonUIDDiagnostic
-	Scripts           personalScriptsDiagnostics
 	Runtime           daemonRuntimeDiagnostic
 	ScriptComparisons personalScriptComparisons
 }
@@ -152,7 +151,6 @@ func collectDaemonDiagnostics(ctx context.Context, cfg *config.Config, baseDir s
 		Keyword:           keyword,
 		Explanation:       explanation,
 		DaemonUID:         daemonUID,
-		Scripts:           currentScripts,
 		Runtime:           runtimeDiagnostic,
 		ScriptComparisons: scripts,
 	}
@@ -367,14 +365,53 @@ func logDaemonDiagnostics(logger *logging.Logger, diagnostics daemonDiagnostics)
 		logger.Info("Binary alignment: %s", alignment)
 	}
 
-	logPersonalScriptDiagnostic(logger, "Personal pre-run script", diagnostics.Scripts.Pre)
-	logPersonalScriptDiagnostic(logger, "Personal post-run script", diagnostics.Scripts.Post)
+	if diagnostics.Runtime.Availability == daemonRuntimeAvailable {
+		logger.Info("Running daemon configuration: %s", daemonDiagnosticText(diagnostics.Runtime.ConfigPath))
+		logger.Info("Running daemon loaded at: %s", time.Unix(diagnostics.Runtime.StartTS, 0).Format(time.RFC3339))
+	} else if diagnostics.Runtime.Availability != daemonRuntimeNotApplicable {
+		logger.Warning("Running daemon personal-script state: UNAVAILABLE (%s)", daemonDiagnosticText(diagnostics.Runtime.Reason))
+	}
+	logPersonalScriptComparison(logger, "Personal pre-run script", diagnostics.Runtime, diagnostics.ScriptComparisons.Pre)
+	logPersonalScriptComparison(logger, "Personal post-run script", diagnostics.Runtime, diagnostics.ScriptComparisons.Post)
 	logging.DebugStep(logger, "daemon diagnostics", "daemon uid: value=%d source=%q fallback_reason=%q",
 		diagnostics.DaemonUID.Value,
 		daemonDiagnosticText(diagnostics.DaemonUID.Source),
 		daemonDiagnosticText(diagnostics.DaemonUID.FallbackReason))
-	logPersonalScriptEvidence(logger, "pre-run", diagnostics.Scripts.Pre)
-	logPersonalScriptEvidence(logger, "post-run", diagnostics.Scripts.Post)
+	logPersonalScriptEvidence(logger, "running daemon pre-run", diagnostics.ScriptComparisons.Pre.Running)
+	logPersonalScriptEvidence(logger, "current config pre-run", diagnostics.ScriptComparisons.Pre.Current)
+	logPersonalScriptEvidence(logger, "running daemon post-run", diagnostics.ScriptComparisons.Post.Running)
+	logPersonalScriptEvidence(logger, "current config post-run", diagnostics.ScriptComparisons.Post.Current)
+}
+
+func logPersonalScriptComparison(logger *logging.Logger, label string, runtime daemonRuntimeDiagnostic, comparison personalScriptComparison) {
+	logger.Info("%s:", label)
+	if runtime.Availability == daemonRuntimeAvailable {
+		logPersonalScriptDiagnostic(logger, "  Running daemon", comparison.Running)
+	} else if runtime.Availability == daemonRuntimeNotApplicable {
+		logger.Info("  Running daemon: NOT RUNNING")
+	} else {
+		logger.Warning("  Running daemon state: UNAVAILABLE (%s)", daemonDiagnosticText(runtime.Reason))
+	}
+	logPersonalScriptDiagnostic(logger, "  Current configuration", comparison.Current)
+	logPersonalScriptSynchronization(logger, comparison)
+}
+
+func logPersonalScriptSynchronization(logger *logging.Logger, comparison personalScriptComparison) {
+	reason := daemonDiagnosticText(comparison.SyncReason)
+	switch comparison.Synchronization {
+	case personalScriptInSync:
+		logger.Info("  Synchronization: IN SYNC")
+	case personalScriptConfigurationDrift:
+		logger.Warning("  Synchronization: OUT OF SYNC (%s)", reason)
+	case personalScriptPathStateChanged:
+		logger.Warning("  Synchronization: PATH STATE CHANGED SINCE STARTUP (%s)", reason)
+	case personalScriptRuntimeUnavailable:
+		logger.Warning("  Synchronization: UNKNOWN (%s)", reason)
+	case personalScriptSyncNotApplicable:
+		logger.Info("  Synchronization: NOT APPLICABLE")
+	default:
+		logger.Warning("  Synchronization: UNKNOWN")
+	}
 }
 
 func logPersonalScriptDiagnostic(logger *logging.Logger, label string, diagnostic personalScriptDiagnostic) {
@@ -383,6 +420,8 @@ func logPersonalScriptDiagnostic(logger *logging.Logger, label string, diagnosti
 	switch diagnostic.State {
 	case personalScriptReady:
 		logger.Info("%s: READY (%s)", label, path)
+	case personalScriptReadyWithWarning:
+		logger.Warning("%s: READY WITH WARNING (%s): %s", label, path, reason)
 	case personalScriptRefused:
 		if path == "" {
 			logger.Warning("%s: REFUSED: %s", label, reason)

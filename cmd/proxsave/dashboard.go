@@ -999,11 +999,64 @@ func buildDaemonStatusPrompt(diagnostics daemonDiagnostics) string {
 		b.WriteString("\n")
 		b.WriteString(theme.Text.Render("Binary alignment: " + align))
 	}
+	if diagnostics.Runtime.Availability == daemonRuntimeAvailable {
+		b.WriteString("\n")
+		b.WriteString(theme.Text.Render("Running daemon configuration: " + components.SanitizeText(diagnostics.Runtime.ConfigPath)))
+		b.WriteString("\n")
+		b.WriteString(theme.Text.Render("Running daemon loaded at: " + time.Unix(diagnostics.Runtime.StartTS, 0).Format(time.RFC3339)))
+	} else if diagnostics.Runtime.Availability != daemonRuntimeNotApplicable {
+		b.WriteString("\n")
+		b.WriteString(theme.WarningText.Render("Running daemon personal-script state: UNAVAILABLE"))
+		if reason := components.SanitizeText(diagnostics.Runtime.Reason); reason != "" {
+			b.WriteString(theme.Subtle.Render(" (" + reason + ")"))
+		}
+	}
 	b.WriteString("\n")
-	b.WriteString(buildDashboardPersonalScriptLine("Personal pre-run script", diagnostics.Scripts.Pre))
+	b.WriteString(buildDashboardPersonalScriptComparison("Personal pre-run script", diagnostics.Runtime, diagnostics.ScriptComparisons.Pre))
 	b.WriteString("\n")
-	b.WriteString(buildDashboardPersonalScriptLine("Personal post-run script", diagnostics.Scripts.Post))
+	b.WriteString(buildDashboardPersonalScriptComparison("Personal post-run script", diagnostics.Runtime, diagnostics.ScriptComparisons.Post))
 	return b.String()
+}
+
+func buildDashboardPersonalScriptComparison(label string, runtime daemonRuntimeDiagnostic, comparison personalScriptComparison) string {
+	var b strings.Builder
+	b.WriteString(theme.Text.Render(label + ":"))
+	b.WriteString("\n")
+	if runtime.Availability == daemonRuntimeAvailable {
+		b.WriteString(buildDashboardPersonalScriptLine("  Running daemon", comparison.Running))
+	} else if runtime.Availability == daemonRuntimeNotApplicable {
+		b.WriteString(theme.Subtle.Render("  Running daemon: NOT RUNNING"))
+	} else {
+		reason := components.SanitizeText(runtime.Reason)
+		b.WriteString(theme.WarningText.Render("  Running daemon state: UNAVAILABLE"))
+		if reason != "" {
+			b.WriteString(theme.Subtle.Render(" (" + reason + ")"))
+		}
+	}
+	b.WriteString("\n")
+	b.WriteString(buildDashboardPersonalScriptLine("  Current configuration", comparison.Current))
+	b.WriteString("\n")
+	b.WriteString(buildDashboardPersonalScriptSynchronization(comparison))
+	return b.String()
+}
+
+func buildDashboardPersonalScriptSynchronization(comparison personalScriptComparison) string {
+	reason := components.SanitizeText(comparison.SyncReason)
+	prefix := theme.Text.Render("  Synchronization: ")
+	switch comparison.Synchronization {
+	case personalScriptInSync:
+		return prefix + theme.SuccessText.Render("IN SYNC")
+	case personalScriptConfigurationDrift:
+		return prefix + theme.WarningText.Render("OUT OF SYNC") + theme.Subtle.Render(" ("+reason+")")
+	case personalScriptPathStateChanged:
+		return prefix + theme.WarningText.Render("PATH STATE CHANGED SINCE STARTUP") + theme.Subtle.Render(" ("+reason+")")
+	case personalScriptRuntimeUnavailable:
+		return prefix + theme.WarningText.Render("UNKNOWN") + theme.Subtle.Render(" ("+reason+")")
+	case personalScriptSyncNotApplicable:
+		return prefix + theme.Subtle.Render("NOT APPLICABLE")
+	default:
+		return prefix + theme.WarningText.Render("UNKNOWN")
+	}
 }
 
 func buildDashboardPersonalScriptLine(label string, diagnostic personalScriptDiagnostic) string {
@@ -1015,6 +1068,14 @@ func buildDashboardPersonalScriptLine(label string, diagnostic personalScriptDia
 		line += theme.SuccessText.Render("READY")
 		if path != "" {
 			line += theme.Subtle.Render(" (" + path + ")")
+		}
+	case personalScriptReadyWithWarning:
+		line += theme.WarningText.Render("READY WITH WARNING")
+		if path != "" {
+			line += theme.Subtle.Render(" (" + path + ")")
+		}
+		if reason != "" {
+			line += theme.Subtle.Render(": " + reason)
 		}
 	case personalScriptRefused:
 		line += theme.ErrorText.Render("REFUSED")
