@@ -436,6 +436,22 @@ func maybeApplyPVEStorageMountGuardsFromStage(ctx context.Context, logger *loggi
 
 	protected := make(map[string]struct{})
 	for _, item := range pveStorageMountGuardItems(candidates, mountCandidates, mounts) {
+		// Every OTHER outcome in this loop is a warning and a continue, and the
+		// function returns nil on purpose: a mountpoint that could not be guarded
+		// must not fail the restore. A cancellation is not one of those outcomes.
+		//
+		// Without this the loop keeps going through the whole candidate list while
+		// the operator is aborting, and each iteration can mkdir, activate storage,
+		// mount, bind read-only and set chattr +i. Those are exactly the effects an
+		// abort is meant to stop. Returning nil also hid the abort from applyArm,
+		// which then saw a clean arm: this was the only one of the three aggregating
+		// arms whose cancellation was silent rather than mislabelled.
+		//
+		// The parent ctx is what is read, not an error: mountCtx below derives its
+		// own deadline, and that timeout is a per-item failure with a live restore.
+		if cerr := ctx.Err(); cerr != nil {
+			return cerr
+		}
 		guardTarget := filepath.Clean(strings.TrimSpace(item.GuardTarget))
 		if guardTarget == "" || guardTarget == "." || guardTarget == string(os.PathSeparator) {
 			continue

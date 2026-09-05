@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -115,5 +116,78 @@ func TestCancelledStorageArmPropagatesInsteadOfCounting(t *testing.T) {
 	}
 	if applies := cmd.applyCalls(); len(applies) != 0 {
 		t.Fatalf("the loop kept applying after cancellation: %v", applies)
+	}
+}
+
+// The mount guard arm was the third of the three, and the only one whose
+// cancellation was SILENT rather than mislabelled: every outcome in its loop is a
+// warning and a continue, and the function ends with return nil on purpose,
+// because a mountpoint that could not be guarded must not fail the restore.
+//
+// A cancellation is not one of those outcomes. Without a check the loop walks the
+// whole candidate list while the operator is aborting, and each iteration can
+// mkdir, activate storage, mount, bind read-only and set chattr +i. Returning nil
+// also hid the abort from applyArm, which saw a clean arm and carried on.
+func TestCancelledMountGuardArmStopsInsteadOfGuarding(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	logger := newTestLogger()
+
+	origFS, origCmd, origGeteuid := restoreFS, restoreCmd, mountGuardGeteuid
+	origRead, origMkdir := mountGuardReadFile, mountGuardMkdirAll
+	origMount, origUnmount := mountGuardSysMount, mountGuardSysUnmount
+	t.Cleanup(func() {
+		restoreFS, restoreCmd, mountGuardGeteuid = origFS, origCmd, origGeteuid
+		mountGuardReadFile, mountGuardMkdirAll = origRead, origMkdir
+		mountGuardSysMount, mountGuardSysUnmount = origMount, origUnmount
+	})
+
+	restoreFS = osFS{}
+	mountGuardGeteuid = func() int { return 0 }
+	mountGuardReadFile = func(path string) ([]byte, error) {
+		switch path {
+		case "/proc/self/mountinfo", "/proc/mounts":
+			return []byte(""), nil
+		default:
+			return nil, os.ErrNotExist
+		}
+	}
+	// If the loop is ever entered these must not run, so they fail the test loudly
+	// rather than quietly doing nothing.
+	mountGuardMkdirAll = func(string, os.FileMode) error {
+		t.Error("a cancelled restore created a guard directory")
+		return nil
+	}
+	mountGuardSysMount = func(string, string, string, uintptr, string) error {
+		t.Error("a cancelled restore mounted a guard")
+		return nil
+	}
+	mountGuardSysUnmount = func(string, int) error { return nil }
+
+	stageRoot := t.TempDir()
+	stageCfgPath := filepath.Join(stageRoot, "etc/pve/storage.cfg")
+	if err := os.MkdirAll(filepath.Dir(stageCfgPath), 0o755); err != nil {
+		t.Fatalf("mkdir staged storage.cfg dir: %v", err)
+	}
+	offlineID := uniquePveMountTestStorageID(t, "cancelled")
+	if err := os.WriteFile(stageCfgPath, []byte("nfs: "+offlineID+"\n"), 0o644); err != nil {
+		t.Fatalf("write staged storage.cfg: %v", err)
+	}
+	target := pveMountTargetForStorageID(offlineID)
+	cleanupPveMountTestTarget(t, target)
+	cleanupPveMountTestGuardDir(t, target)
+
+	fakeCmd := &FakeCommandRunner{}
+	restoreCmd = fakeCmd
+
+	err := maybeApplyPVEStorageMountGuardsFromStage(ctx, logger, pvePlan(false, "storage_pve"), stageRoot, "/")
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("err = %v, want context.Canceled: the abort stayed invisible to applyArm", err)
+	}
+	if calls := strings.Join(fakeCmd.CallsList(), "\n"); strings.Contains(calls, "mount "+target) || strings.Contains(calls, "pvesm activate") {
+		t.Fatalf("the loop kept guarding after cancellation: %v", fakeCmd.CallsList())
+	}
+	if got := readGuardIndexLines(t); len(got) != 0 {
+		t.Fatalf("a cancelled restore recorded guards: %#v", got)
 	}
 }
