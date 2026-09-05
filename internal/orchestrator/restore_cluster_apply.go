@@ -273,7 +273,22 @@ func applyVMConfigs(ctx context.Context, entries []vmEntry, logger *logging.Logg
 		// locks: a config race with a live guest is the one case where the file
 		// must not win (maintainer's call, 2026-09-02).
 		args := append([]string{"set", target}, filterGuestCreateOnlyArgs(configArgs)...)
-		if err := runPvesh(ctx, logger, args); err != nil {
+		if out, err := runPveshWithOutput(ctx, logger, args); err != nil {
+			// The file fallback answers ONE failure: the update schema refused a key
+			// filterGuestCreateOnlyArgs did not know to drop. Everything else - no
+			// quorum, permission denied, a 500 from a payload the API accepted - is
+			// the API failing to apply a config it understood, and overwriting the
+			// conf verbatim is not a remedy for it: the API's rejection is the only
+			// validation the staged bytes ever get, so a fallback on every error
+			// writes an invalid conf into pmxcfs cluster-wide. This narrows a
+			// deliberate "fails for any reason" decision on the maintainer's
+			// instruction (2026-09-05).
+			if !pveshSchemaRefusal(err, out) {
+				logging.DebugStep(logger, "pve guest configs apply", "vmid=%s classification=api-failure action=refuse-file-fallback", vm.VMID)
+				logger.Warning("Failed to apply %s (vmid=%s kind=%s): %v - the API refused the operation, not the payload, so the staged conf file is not a remedy", target, vm.VMID, vm.Kind, err)
+				failed++
+				continue
+			}
 			status, statusErr := pveshGuestStatus(ctx, node, vm)
 			if statusErr != nil {
 				logger.Warning("Failed to apply %s (vmid=%s kind=%s) and could not verify that the guest is stopped; skipping the file fallback: %v (status probe: %v)", target, vm.VMID, vm.Kind, err, statusErr)
@@ -628,14 +643,49 @@ func parseStorageBlocks(cfgPath string) ([]storageBlock, error) {
 }
 
 func runPvesh(ctx context.Context, logger *logging.Logger, args []string) error {
+	_, err := runPveshWithOutput(ctx, logger, args)
+	return err
+}
+
+// runPveshWithOutput is runPvesh for the callers that must CLASSIFY the failure,
+// not just report it. The reason usually lands on the output with a bare exit
+// status as the Go error (measured on PVE 9.1.9), so an error alone cannot tell
+// a refused payload from a refused operation.
+func runPveshWithOutput(ctx context.Context, logger *logging.Logger, args []string) ([]byte, error) {
 	output, err := restoreCmd.Run(ctx, "pvesh", args...)
 	if len(output) > 0 {
 		logger.Debug("pvesh %v output: %s", args, strings.TrimSpace(string(output)))
 	}
 	if err != nil {
-		return fmt.Errorf("pvesh %v failed: %w", args, err)
+		return output, fmt.Errorf("pvesh %v failed: %w", args, err)
 	}
-	return nil
+	return output, nil
+}
+
+// pveshSchemaRefusal reports whether pvesh refused the PAYLOAD - a key the
+// endpoint's schema does not accept - as opposed to failing to apply a payload it
+// accepted. Measured shapes on PVE 9.1.9 (2026-09-02, recorded in
+// diagnostics/design-staged-apply-pmxcfs-2026-09-02.md): "400 Parameter
+// verification failed. meta: property is not defined in schema and the schema does
+// not allow additional properties", and "Unknown option: <key>" alongside "400
+// unable to parse option". Both err and out are searched because the reason lands
+// on either one depending on the endpoint.
+func pveshSchemaRefusal(err error, out []byte) bool {
+	text := strings.ToLower(string(out))
+	if err != nil {
+		text += "\n" + strings.ToLower(err.Error())
+	}
+	for _, marker := range []string{
+		"parameter verification failed",
+		"property is not defined in schema",
+		"unknown option:",
+		"unable to parse option",
+	} {
+		if strings.Contains(text, marker) {
+			return true
+		}
+	}
+	return false
 }
 
 func shortHost(host string) string {

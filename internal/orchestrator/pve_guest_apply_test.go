@@ -160,7 +160,7 @@ func TestRunningGuestSkipsTheFileFallback(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Force the filtered set to fail so the test reaches the running-status guard.
-	pvesh.failSet = map[string]bool{"100": true}
+	pvesh.schemaRefuseSet = map[string]bool{"100": true}
 
 	applied, failed := applyVMConfigs(context.Background(), []vmEntry{{
 		VMID: "100", Kind: "qemu", Name: "vm100", Path: stagePath,
@@ -177,11 +177,12 @@ func TestRunningGuestSkipsTheFileFallback(t *testing.T) {
 	}
 }
 
-// A stopped guest whose set fails for any reason gets the file: fidelity net.
+// A stopped guest whose set is refused BY SCHEMA gets the file: the fidelity net
+// for a create-only key filterGuestCreateOnlyArgs did not know to drop.
 func TestStoppedGuestFallsBackToTheConfFile(t *testing.T) {
 	fakeFS, pvesh, logger, node := guestApplyFixture(t)
 	pvesh.guests["100"] = true
-	pvesh.failSet = map[string]bool{"100": true}
+	pvesh.schemaRefuseSet = map[string]bool{"100": true}
 
 	conf := "name: vm100\ncores: 4\n"
 	stagePath := "/export/etc/pve/nodes/" + node() + "/qemu-server/100.conf"
@@ -204,7 +205,7 @@ func assertUncertainGuestStatusSkipsFileFallback(t *testing.T, statusOutput []by
 	t.Helper()
 	fakeFS, pvesh, logger, node := guestApplyFixture(t)
 	pvesh.guests["100"] = true
-	pvesh.failSet = map[string]bool{"100": true}
+	pvesh.schemaRefuseSet = map[string]bool{"100": true}
 	if statusOutput != nil {
 		pvesh.statusOutput["100"] = statusOutput
 	}
@@ -373,5 +374,65 @@ func TestMalformedGuestInventorySkipsEveryMutation(t *testing.T) {
 	}
 	if output := buf.String(); !strings.Contains(output, "expected a JSON array") {
 		t.Fatalf("warning does not report malformed inventory:\n%s", output)
+	}
+}
+
+// The conf-file fallback answers exactly ONE failure: the update schema refusing
+// a key. Everything else is the API failing to apply a payload it understood -
+// no quorum, permission denied, a 500 - and the staged bytes are not a remedy
+// for it. The API's rejection is the only validation those bytes ever get, so a
+// fallback on every error is how an invalid conf reaches pmxcfs cluster-wide.
+// This test pins the narrowing of a deliberate "fails for any reason" decision.
+func TestNonSchemaSetFailureNeverReachesTheConfFile(t *testing.T) {
+	fakeFS, pvesh, logger, node := guestApplyFixture(t)
+	pvesh.guests["100"] = true
+	pvesh.failSet = map[string]bool{"100": true}
+
+	buf := &strings.Builder{}
+	logger.SetOutput(buf)
+
+	conf := "name: vm100\ncores: 4\n"
+	stagePath := "/export/etc/pve/nodes/" + node() + "/qemu-server/100.conf"
+	if err := fakeFS.AddFile(stagePath, []byte(conf)); err != nil {
+		t.Fatal(err)
+	}
+
+	applied, failed := applyVMConfigs(context.Background(), []vmEntry{{
+		VMID: "100", Kind: "qemu", Name: "vm100", Path: stagePath,
+	}}, logger)
+	if applied != 0 || failed != 1 {
+		t.Fatalf("applied=%d failed=%d, want 0/1", applied, failed)
+	}
+	if _, err := fakeFS.ReadFile("/etc/pve/nodes/" + node() + "/qemu-server/100.conf"); err == nil {
+		t.Fatal("a 500 from the API wrote the staged conf into pmxcfs")
+	}
+	if calls := strings.Join(pvesh.calls, "\n"); strings.Contains(calls, "/status/current") {
+		t.Fatalf("a non-schema failure still probed the guest status:\n%s", calls)
+	}
+	if out := buf.String(); !strings.Contains(out, "refused the operation, not the payload") {
+		t.Fatalf("the warning does not say why the file is not a remedy:\n%s", out)
+	}
+}
+
+func TestPveshSchemaRefusalSeparatesPayloadFromOperation(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		out  string
+		want bool
+	}{
+		{"meta rejection in the error", errString("400 Parameter verification failed. meta: property is not defined in schema and the schema does not allow additional properties"), "", true},
+		{"unknown option on the output", errString("exit status 255"), "Unknown option: path\n400 unable to parse option", true},
+		{"apply failure", errString("500 unable to apply configuration"), "", false},
+		{"no quorum", errString("exit status 2"), "cluster not ready - no quorum?", false},
+		{"permission denied", errString("exit status 2"), "403 Permission check failed", false},
+		{"no error at all", nil, "", false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := pveshSchemaRefusal(tc.err, []byte(tc.out)); got != tc.want {
+				t.Fatalf("pveshSchemaRefusal = %v, want %v", got, tc.want)
+			}
+		})
 	}
 }
