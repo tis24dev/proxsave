@@ -385,11 +385,12 @@ func logDaemonDiagnostics(logger *logging.Logger, diagnostics daemonDiagnostics)
 
 func logPersonalScriptComparison(logger *logging.Logger, label string, runtime daemonRuntimeDiagnostic, comparison personalScriptComparison) {
 	logger.Info("%s:", label)
-	if runtime.Availability == daemonRuntimeAvailable {
+	switch runtime.Availability {
+	case daemonRuntimeAvailable:
 		logPersonalScriptDiagnostic(logger, "  Running daemon", comparison.Running)
-	} else if runtime.Availability == daemonRuntimeNotApplicable {
+	case daemonRuntimeNotApplicable:
 		logger.Info("  Running daemon: NOT RUNNING")
-	} else {
+	default:
 		logger.Warning("  Running daemon state: UNAVAILABLE (%s)", daemonDiagnosticText(runtime.Reason))
 	}
 	logPersonalScriptDiagnostic(logger, "  Current configuration", comparison.Current)

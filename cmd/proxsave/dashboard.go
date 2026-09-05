@@ -1022,11 +1022,12 @@ func buildDashboardPersonalScriptComparison(label string, runtime daemonRuntimeD
 	var b strings.Builder
 	b.WriteString(theme.Text.Render(label + ":"))
 	b.WriteString("\n")
-	if runtime.Availability == daemonRuntimeAvailable {
+	switch runtime.Availability {
+	case daemonRuntimeAvailable:
 		b.WriteString(buildDashboardPersonalScriptLine("  Running daemon", comparison.Running))
-	} else if runtime.Availability == daemonRuntimeNotApplicable {
+	case daemonRuntimeNotApplicable:
 		b.WriteString(theme.Subtle.Render("  Running daemon: NOT RUNNING"))
-	} else {
+	default:
 		reason := components.SanitizeText(runtime.Reason)
 		b.WriteString(theme.WarningText.Render("  Running daemon state: UNAVAILABLE"))
 		if reason != "" {
