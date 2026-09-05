@@ -352,7 +352,7 @@ func filterGuestCreateOnlyArgs(args []string) []string {
 // parse error is never equivalent to a stopped guest.
 func pveshGuestStatus(ctx context.Context, node string, vm vmEntry) (string, error) {
 	statusPath := fmt.Sprintf("/nodes/%s/%s/%s/status/current", node, vm.Kind, vm.VMID)
-	out, err := restoreCmd.Run(ctx, "pvesh", "get", statusPath, "--output-format=json")
+	out, err := runCommandStdout(ctx, "pvesh", "get", statusPath, "--output-format=json")
 	if err != nil {
 		return "", fmt.Errorf("pvesh get %s: %w", statusPath, err)
 	}
