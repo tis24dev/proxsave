@@ -140,7 +140,7 @@ var notes = []Note{
 		Version: "0.36.0",
 		Lines: []string{
 			"A restore aborted mid-apply stops instead of writing more PVE configuration cluster-wide",
-			"Guest config restore survives a locale warning from pvesh instead of refusing every guest on the node",
+			"Restores and notification emails no longer break when your ssh session forwards a locale the node does not have",
 			"A guest config the API rejects for a bad value is no longer written into the cluster anyway",
 			"A running guest keeps every setting the API accepts instead of losing its whole configuration",
 			"Storage definitions apply where they used to fail: already matching, or carrying mostly create-only keys",
