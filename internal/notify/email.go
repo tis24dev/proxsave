@@ -640,10 +640,10 @@ func (e *EmailNotifier) detectRecipientPVEViaPvesh(ctx context.Context, targetUs
 	cmdName := "pvesh"
 	args := []string{"get", endpoint, "--output-format=json"}
 
-	out, err := runCombinedOutput(ctx, cmdName, args...)
+	out, errOut, err := runCapturedOutput(ctx, cmdName, args...)
 	if err != nil {
 		e.logger.Debug("Recipient auto-detection: pvesh call failed (cmd=%s %s): %v", cmdName, strings.Join(args, " "), err)
-		if diag := strings.TrimSpace(string(out)); diag != "" {
+		if diag := commandDiagnostic(out, errOut); diag != "" {
 			e.logger.Debug("Recipient auto-detection: pvesh diagnostic output: %s", truncateForLog(diag, recipientDetectMaxDiagBytes))
 		}
 		return "", fmt.Errorf("pvesh API query failed: %w", err)
@@ -666,7 +666,7 @@ func (e *EmailNotifier) detectRecipientPVEViaPvesh(ctx context.Context, targetUs
 }
 
 func (e *EmailNotifier) detectRecipientViaUserListCLI(ctx context.Context, cmdName string, args []string, targetUserID string) (string, error) {
-	out, err := runCombinedOutput(ctx, cmdName, args...)
+	out, errOut, err := runCapturedOutput(ctx, cmdName, args...)
 	if err != nil {
 		// Command not found or non-zero exit status: include diagnostics in debug logs.
 		if errors.Is(err, exec.ErrNotFound) {
@@ -674,7 +674,7 @@ func (e *EmailNotifier) detectRecipientViaUserListCLI(ctx context.Context, cmdNa
 		} else {
 			e.logger.Debug("Recipient auto-detection: %s command failed (args=%s): %v", cmdName, strings.Join(args, " "), err)
 		}
-		if diag := strings.TrimSpace(string(out)); diag != "" {
+		if diag := commandDiagnostic(out, errOut); diag != "" {
 			e.logger.Debug("Recipient auto-detection: %s diagnostic output: %s", cmdName, truncateForLog(diag, recipientDetectMaxDiagBytes))
 		}
 		return "", fmt.Errorf("failed to query Proxmox user list via %s: %w", cmdName, err)
@@ -738,17 +738,49 @@ func (e *EmailNotifier) detectRecipientViaUserCfg(cfgPath string, targetUserID s
 	return "", fmt.Errorf("%s user not found in %s", targetUserID, cfgPath)
 }
 
-func runCombinedOutput(ctx context.Context, name string, args ...string) ([]byte, error) {
-	cmd, err := safeexec.CommandContext(ctx, name, args...)
-	if err != nil {
-		return nil, err
+// runCapturedOutput keeps stdout and stderr apart. Both callers parse stdout as
+// JSON, and a merged capture makes that parse fail on a byte the tool never meant
+// as data.
+//
+// Measured on a live PVE 9.1.9 node (2026-09-05), locale as the only variable:
+//
+//	pvesh get /access/users/root@pam   control rc=0 stdout=74B stderr=0B   merged parses
+//	                                   LC_ALL=xx_YY.UTF-8 rc=0 stdout=74B stderr=542B merged FAILS
+//	pveum user list                    control rc=0 stdout=89B stderr=0B   merged parses
+//	                                   LC_ALL=xx_YY.UTF-8 rc=0 stdout=89B stderr=542B merged FAILS
+//
+// Both commands exit 0 and their JSON is intact; what breaks the parse is Perl's
+// "Setting locale failed." on stderr. Both are the SAME Perl, so a locale the node
+// lacks takes out tiers 1 and 2 of detectRecipientPVE together and the recipient is
+// only found because tier 3 reads /etc/pve/user.cfg directly. That node ships the
+// stock `AcceptEnv LANG LC_*` in sshd_config, so an operator sshing in with a
+// locale it does not have is the whole reproduction.
+//
+// A var so tests can drive it without executing anything. This mirrors
+// internal/backup/collector_deps.go, which keeps the streams apart for the same
+// reason and states it for proxmox-backup-manager.
+var runCapturedOutput = func(ctx context.Context, name string, args ...string) (stdout, stderr []byte, err error) {
+	cmd, cmdErr := safeexec.CommandContext(ctx, name, args...)
+	if cmdErr != nil {
+		return nil, nil, cmdErr
 	}
 	safeexec.ApplyWaitDelay(cmd)
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		return out, err
+	var outBuf, errBuf bytes.Buffer
+	cmd.Stdout = &outBuf
+	cmd.Stderr = &errBuf
+	runErr := cmd.Run()
+	return outBuf.Bytes(), errBuf.Bytes(), runErr
+}
+
+// commandDiagnostic picks what to show a human when a detection command failed.
+// The reason is normally on stderr; some tools put it on stdout instead, so that
+// is the fallback rather than a merge, which would reintroduce the very mixing
+// this file exists to avoid.
+func commandDiagnostic(stdout, stderr []byte) string {
+	if msg := strings.TrimSpace(string(stderr)); msg != "" {
+		return msg
 	}
-	return out, nil
+	return strings.TrimSpace(string(stdout))
 }
 
 func truncateForLog(s string, maxBytes int) string {
