@@ -322,6 +322,15 @@ func applyPVEBackupJobsFromStage(ctx context.Context, logger *logging.Logger, st
 	applied := 0
 	failed := 0
 	for _, job := range jobs {
+		// A cancelled restore must PROPAGATE, not be counted. Without this the loop
+		// keeps calling pvesh for every remaining job, each failing instantly on the
+		// dead ctx, and returns "applied=N failed=M" - a plain formatted string that
+		// errors.Is cannot match against context.Canceled. applyArm then records
+		// jobs.cfg as an item that failed on its own, so the restore aborts with a
+		// diagnostic blaming the job configuration for the operator's own abort.
+		if cerr := ctx.Err(); cerr != nil {
+			return cerr
+		}
 		jobID := strings.TrimSpace(job.Name)
 		if jobID == "" {
 			continue

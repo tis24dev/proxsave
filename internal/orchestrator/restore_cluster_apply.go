@@ -627,6 +627,14 @@ func applyStorageCfg(ctx context.Context, cfgPath string, logger *logging.Logger
 	}
 
 	for _, blk := range blocks {
+		// Same rule as the jobs arm: a cancelled restore propagates instead of being
+		// counted as failures. The caller turns failed>0 into "storage.cfg applied
+		// with N failure(s)", which errors.Is cannot match against context.Canceled,
+		// so an abort would be reported as storage definitions that failed to apply.
+		// The counts so far are returned with it: they say what really landed.
+		if cerr := ctx.Err(); cerr != nil {
+			return applied, failed, cerr
+		}
 		createArgs, ok := storageBlockPveshArgs(blk)
 		if !ok {
 			logger.Warning("Skipping storage %s: storage type missing", blk.ID)
