@@ -1012,11 +1012,23 @@ func upgradeConfigWithBinary(ctx context.Context, execPath, configPath string) (
 var whatsnewAfterUpgradeInteractive = isTerminalInteractive
 
 // shouldRunWhatsnewAfterUpgrade decides whether to open Screen 0 at the end of an upgrade.
-// It follows the actual terminal: auto-yes controls only the initial confirmation and does
-// not make a TTY-driven upgrade non-interactive. The dashboard explicitly defers the screen
-// because its replacement process owns post-upgrade presentation.
+// It requires an interactive terminal AND that the operator did NOT request auto-yes
+// (`--upgrade y`), and the dashboard defers the screen because its replacement process owns
+// post-upgrade presentation.
+//
+// The auto-yes arm was removed in 0.35.0 on the reading that the flag "controls only the
+// initial confirmation", and the terminal check alone would then decide. It does not: a pty
+// is routinely allocated where no human is watching - `ssh -tt`, Ansible with a pty,
+// `script -c` - so isTerminalInteractive() is true there and the child opened by
+// runWhatsnewAfterUpgrade waits for a keypress until whatsnewScreenTimeout, which is 10
+// minutes. That is 10 minutes added to every SUCCESSFUL automated upgrade, at the end, after
+// the binary is already in place. Auto-yes is the operator saying nobody will answer
+// prompts; it has to mean that for this prompt too.
+//
+// Cost, accepted: someone who types `--upgrade y` at a real terminal no longer gets the notes
+// opened for them. `proxsave --show-whatsnew` renders them on demand.
 func shouldRunWhatsnewAfterUpgrade(args *cli.Args, opts upgradeRunOptions) bool {
-	if args == nil || opts.deferWhatsnew {
+	if args == nil || opts.deferWhatsnew || args.UpgradeAutoYes {
 		return false
 	}
 	return whatsnewAfterUpgradeInteractive()
