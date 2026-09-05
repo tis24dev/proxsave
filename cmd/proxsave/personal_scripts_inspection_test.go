@@ -16,6 +16,50 @@ import (
 	"github.com/tis24dev/proxsave/internal/types"
 )
 
+func TestInspectPersonalScriptRetainsNormalizedConfiguredPath(t *testing.T) {
+	dir := t.TempDir()
+	script := writePersonalScript(t, dir, "script.sh", "exit 0")
+	link := filepath.Join(dir, "link.sh")
+	if err := os.Symlink(script, link); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name      string
+		path      string
+		mode      os.FileMode
+		wantPath  string
+		wantState personalScriptState
+	}{
+		{"empty", " \t ", 0o700, "", personalScriptNotConfigured},
+		{"ready", " \t" + dir + "/./script.sh  ", 0o700, script, personalScriptReady},
+		{"missing", " " + dir + "/./missing.sh ", 0o700, filepath.Join(dir, "missing.sh"), personalScriptRefused},
+		{"symlink", " " + dir + "/./link.sh ", 0o700, link, personalScriptRefused},
+		{"directory", " " + dir + "/. ", 0o700, dir, personalScriptRefused},
+		{"not executable", " " + dir + "/./script.sh ", 0o600, script, personalScriptRefused},
+		{"group writable", " " + dir + "/./script.sh ", 0o720, script, personalScriptRefused},
+		{"world writable", " " + dir + "/./script.sh ", 0o702, script, personalScriptRefused},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := os.Chmod(script, tc.mode); err != nil {
+				t.Fatal(err)
+			}
+			got := inspectPersonalScript("PERSONAL_SCRIPT_PRE_RUN", tc.path, os.Geteuid())
+			stateMatches := got.State == tc.wantState || (tc.wantState == personalScriptReady && got.State == personalScriptReadyWithWarning)
+			if !stateMatches || got.Path != tc.wantPath {
+				t.Errorf("inspection = %+v, want state %q and path %q", got, tc.wantState, tc.wantPath)
+			}
+			if got.State == personalScriptRefused {
+				if got.Reason == "" {
+					t.Error("refusal lost its reason")
+				}
+				if enabled := applyPersonalScriptDiagnostic(got); enabled != "" {
+					t.Errorf("refused path survived execution gate: %q", enabled)
+				}
+			}
+		})
+	}
+}
+
 type personalScriptInspectionFileInfo struct {
 	name string
 	mode os.FileMode

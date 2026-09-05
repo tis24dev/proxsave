@@ -14,6 +14,58 @@ import (
 	"github.com/tis24dev/proxsave/internal/types"
 )
 
+func TestComparePersonalScriptActualInspectionTransitions(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		startupMode   os.FileMode
+		currentMode   os.FileMode
+		removeSetting bool
+		startupState  personalScriptState
+		currentState  personalScriptState
+		want          personalScriptSynchronization
+	}{
+		{"accepted to refused", 0o700, 0o720, false, personalScriptReady, personalScriptRefused, personalScriptPathStateChanged},
+		{"refused to accepted", 0o720, 0o700, false, personalScriptRefused, personalScriptReady, personalScriptPathStateChanged},
+		{"refused to empty setting", 0o720, 0o720, true, personalScriptRefused, personalScriptNotConfigured, personalScriptConfigurationDrift},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			script := writePersonalScript(t, dir, "transition.sh", "exit 0")
+			configured := " \t" + dir + "/./transition.sh  "
+			if err := os.Chmod(script, tc.startupMode); err != nil {
+				t.Fatal(err)
+			}
+			running := inspectPersonalScript("PERSONAL_SCRIPT_PRE_RUN", configured, os.Geteuid())
+			if err := os.Chmod(script, tc.currentMode); err != nil {
+				t.Fatal(err)
+			}
+			currentPath := script
+			if tc.removeSetting {
+				configured, currentPath = "", ""
+			}
+			current := inspectPersonalScript("PERSONAL_SCRIPT_PRE_RUN", configured, os.Geteuid())
+			startupMatches := running.State == tc.startupState || (tc.startupState == personalScriptReady && running.State == personalScriptReadyWithWarning)
+			currentMatches := current.State == tc.currentState || (tc.currentState == personalScriptReady && current.State == personalScriptReadyWithWarning)
+			if !startupMatches || !currentMatches {
+				t.Fatalf("unexpected inspection states: running=%+v current=%+v", running, current)
+			}
+			if running.Path != script || current.Path != currentPath {
+				t.Errorf("configured paths lost: running=%q current=%q; want %q and %q", running.Path, current.Path, script, currentPath)
+			}
+			for _, diagnostic := range []personalScriptDiagnostic{running, current} {
+				if diagnostic.State == personalScriptRefused && applyPersonalScriptDiagnostic(diagnostic) != "" {
+					t.Error("refused inspection survived execution gate")
+				}
+			}
+			runtime := daemonRuntimeDiagnostic{Availability: daemonRuntimeAvailable, ConfigPath: "/daemon.env"}
+			got := comparePersonalScript(runtime, "/daemon.env", running, current)
+			if got.Synchronization != tc.want {
+				t.Errorf("synchronization = %q, want %q", got.Synchronization, tc.want)
+			}
+		})
+	}
+}
+
 func TestResolveDaemonRuntimeRequiresLiveMatchingIdentity(t *testing.T) {
 	original := daemonRuntimeReader
 	t.Cleanup(func() { daemonRuntimeReader = original })

@@ -75,13 +75,13 @@ func inspectPersonalScript(key, path string, daemonUID int) personalScriptDiagno
 	}
 
 	refuse := func(err error) personalScriptDiagnostic {
-		diagnostic.Path = ""
 		diagnostic.State = personalScriptRefused
 		diagnostic.Reason = err.Error()
 		return diagnostic
 	}
 
 	clean := filepath.Clean(path)
+	diagnostic.Path = clean
 	resolved, err := personalScriptEvalSymlinks(clean)
 	if err != nil {
 		return refuse(fmt.Errorf("resolve %s: %w", path, err))
