@@ -26,8 +26,17 @@ const (
 )
 
 // personalScriptConfigUnreadable is the one reason text for the unknown state, so
-// the CLI and the dashboard cannot drift apart on it.
+// the CLI and the dashboard cannot drift apart on it. personalScriptUnreadableReason
+// appends the loader's own words when the caller has them: "could not be read" tells
+// the operator which screen is guessing, the cause tells them which file to fix.
 const personalScriptConfigUnreadable = "current configuration could not be read"
+
+func personalScriptUnreadableReason(cause error) string {
+	if cause == nil {
+		return personalScriptConfigUnreadable
+	}
+	return personalScriptConfigUnreadable + ": " + cause.Error()
+}
 
 type personalScriptPathComponent struct {
 	Path string
@@ -65,10 +74,10 @@ var (
 // to restart the daemon, when the daemon was fine and the config file was not.
 func inspectPersonalScripts(cfg *config.Config, daemonUID int) personalScriptsDiagnostics {
 	if cfg == nil {
-		return personalScriptsDiagnostics{
-			Pre:  unknownPersonalScript("PERSONAL_SCRIPT_PRE_RUN", daemonUID),
-			Post: unknownPersonalScript("PERSONAL_SCRIPT_POST_RUN", daemonUID),
-		}
+		// No cause to name from here: this entry point is handed a config, not the
+		// attempt that failed to produce one. A caller that HAS the loader's error
+		// calls unknownPersonalScripts directly.
+		return unknownPersonalScripts(daemonUID, nil)
 	}
 	return personalScriptsDiagnostics{
 		Pre:  inspectPersonalScript("PERSONAL_SCRIPT_PRE_RUN", cfg.PersonalScriptPreRun, daemonUID),
@@ -76,11 +85,21 @@ func inspectPersonalScripts(cfg *config.Config, daemonUID int) personalScriptsDi
 	}
 }
 
-func unknownPersonalScript(key string, daemonUID int) personalScriptDiagnostic {
+// unknownPersonalScripts is the single builder of the unknown verdict, so the two
+// ways in (a nil config, and a caller holding the load error) cannot word it
+// differently.
+func unknownPersonalScripts(daemonUID int, cause error) personalScriptsDiagnostics {
+	return personalScriptsDiagnostics{
+		Pre:  unknownPersonalScript("PERSONAL_SCRIPT_PRE_RUN", daemonUID, cause),
+		Post: unknownPersonalScript("PERSONAL_SCRIPT_POST_RUN", daemonUID, cause),
+	}
+}
+
+func unknownPersonalScript(key string, daemonUID int, cause error) personalScriptDiagnostic {
 	return personalScriptDiagnostic{
 		Key:       key,
 		State:     personalScriptUnknown,
-		Reason:    personalScriptConfigUnreadable,
+		Reason:    personalScriptUnreadableReason(cause),
 		DaemonUID: daemonUID,
 	}
 }

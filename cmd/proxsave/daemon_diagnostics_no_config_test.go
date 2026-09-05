@@ -2,8 +2,11 @@ package main
 
 import (
 	"bytes"
+	"context"
+	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/tis24dev/proxsave/internal/health"
 	"github.com/tis24dev/proxsave/internal/logging"
@@ -43,7 +46,7 @@ func TestInspectPersonalScriptsWithoutAConfigIsUnknownNotEmpty(t *testing.T) {
 // one: with nothing to compare against, no synchronization statement is available,
 // and the config-path arm would otherwise blame the daemon.
 func TestComparePersonalScriptWithoutACurrentConfigNeverBlamesTheDaemon(t *testing.T) {
-	current := unknownPersonalScript("PERSONAL_SCRIPT_PRE_RUN", 0)
+	current := unknownPersonalScript("PERSONAL_SCRIPT_PRE_RUN", 0, nil)
 	running := personalScriptDiagnostic{Path: "/pre", State: personalScriptReady}
 	for _, availability := range []daemonRuntimeAvailability{
 		daemonRuntimeAvailable, daemonRuntimeMissing, daemonRuntimeStale,
@@ -75,8 +78,8 @@ func TestDaemonDiagnosticsRenderersNameTheUnknownCurrentState(t *testing.T) {
 		Keyword: "running",
 		Runtime: daemonRuntimeDiagnostic{Availability: daemonRuntimeNotApplicable, Reason: "daemon process is not live"},
 		ScriptComparisons: personalScriptComparisons{
-			Pre:  comparePersonalScript(daemonRuntimeDiagnostic{Availability: daemonRuntimeNotApplicable}, "", personalScriptDiagnostic{}, unknownPersonalScript("PERSONAL_SCRIPT_PRE_RUN", 0)),
-			Post: comparePersonalScript(daemonRuntimeDiagnostic{Availability: daemonRuntimeNotApplicable}, "", personalScriptDiagnostic{}, unknownPersonalScript("PERSONAL_SCRIPT_POST_RUN", 0)),
+			Pre:  comparePersonalScript(daemonRuntimeDiagnostic{Availability: daemonRuntimeNotApplicable}, "", personalScriptDiagnostic{}, unknownPersonalScript("PERSONAL_SCRIPT_PRE_RUN", 0, nil)),
+			Post: comparePersonalScript(daemonRuntimeDiagnostic{Availability: daemonRuntimeNotApplicable}, "", personalScriptDiagnostic{}, unknownPersonalScript("PERSONAL_SCRIPT_POST_RUN", 0, nil)),
 		},
 	}
 
@@ -105,6 +108,56 @@ func TestDaemonDiagnosticsRenderersNameTheUnknownCurrentState(t *testing.T) {
 	if strings.Count(prompt, personalScriptConfigUnreadable) != 4 {
 		t.Fatalf("reason count = %d, want 4 (state + synchronization, per script):\n%s",
 			strings.Count(prompt, personalScriptConfigUnreadable), prompt)
+	}
+}
+
+// Saying only that the configuration could not be read leaves the operator with
+// no file to go and fix, so the loader's own words ride along. The dashboard is
+// the one caller that reaches the collector without a config, and it is the one
+// that holds the error.
+func TestCollectDaemonDiagnosticsCarriesTheConfigLoadCause(t *testing.T) {
+	origInstalled := daemonStatusUnitInstalledProbe
+	origActive := daemonStatusActiveStateProbe
+	origPresence := daemonPresenceProbe
+	origNow := daemonStatusNow
+	t.Cleanup(func() {
+		daemonStatusUnitInstalledProbe = origInstalled
+		daemonStatusActiveStateProbe = origActive
+		daemonPresenceProbe = origPresence
+		daemonStatusNow = origNow
+	})
+	daemonStatusUnitInstalledProbe = func() bool { return true }
+	daemonStatusActiveStateProbe = func(context.Context) string { return "active" }
+	daemonPresenceProbe = func(context.Context) health.DaemonPresence {
+		return health.DaemonPresence{Probed: true, Installed: true, Active: true}
+	}
+	daemonStatusNow = func() time.Time { return time.Unix(1_700_000_000, 0) }
+
+	cause := errors.New("open /etc/proxsave/backup.env: permission denied")
+	got := collectDaemonDiagnostics(context.Background(), nil, cause, t.TempDir())
+
+	for _, tc := range []struct {
+		label      string
+		comparison personalScriptComparison
+	}{
+		{"pre", got.ScriptComparisons.Pre},
+		{"post", got.ScriptComparisons.Post},
+	} {
+		if !strings.Contains(tc.comparison.Current.Reason, cause.Error()) {
+			t.Fatalf("%s: the current state drops the load cause: %q", tc.label, tc.comparison.Current.Reason)
+		}
+		if !strings.Contains(tc.comparison.SyncReason, cause.Error()) {
+			t.Fatalf("%s: the synchronization verdict drops the load cause: %q", tc.label, tc.comparison.SyncReason)
+		}
+		if tc.comparison.Synchronization != personalScriptCurrentUnavailable {
+			t.Fatalf("%s: synchronization = %q", tc.label, tc.comparison.Synchronization)
+		}
+	}
+
+	// A caller with a config, or one that never attempted a load, must be unchanged.
+	clean := collectDaemonDiagnostics(context.Background(), nil, nil, t.TempDir())
+	if clean.ScriptComparisons.Pre.Current.Reason != personalScriptConfigUnreadable {
+		t.Fatalf("a nil cause invented one: %q", clean.ScriptComparisons.Pre.Current.Reason)
 	}
 }
 

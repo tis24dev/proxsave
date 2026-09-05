@@ -94,7 +94,12 @@ var (
 
 // collectDaemonDiagnostics owns every probe and verdict used by the two
 // daemon-status frontends. Renderers receive facts; they never recompute them.
-func collectDaemonDiagnostics(ctx context.Context, cfg *config.Config, baseDir string) daemonDiagnostics {
+//
+// cfgErr is the error that PREVENTED cfg from existing, and it is separate from
+// cfg being nil on purpose: a caller that never attempted a load passes nil for
+// both, while the dashboard passes the loader's own words so the screen can name
+// the file it could not read instead of only that it could not read one.
+func collectDaemonDiagnostics(ctx context.Context, cfg *config.Config, cfgErr error, baseDir string) daemonDiagnostics {
 	mode := "unknown"
 	var interval time.Duration
 	if cfg != nil {
@@ -129,6 +134,9 @@ func collectDaemonDiagnostics(ctx context.Context, cfg *config.Config, baseDir s
 	level, keyword, explanation := daemonStatusStyle(state)
 	daemonUID := daemonUIDResolver(state)
 	currentScripts := personalScriptsInspector(cfg, daemonUID.Value)
+	if cfg == nil && cfgErr != nil {
+		currentScripts = unknownPersonalScripts(daemonUID.Value, cfgErr)
+	}
 	runtimeDiagnostic, runningScripts := resolveDaemonRuntime(state, baseDir)
 
 	currentConfigPath := ""
