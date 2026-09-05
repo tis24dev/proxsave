@@ -333,7 +333,8 @@ func (d *daemon) run(ctx context.Context) int {
 	// The trusted-path gate for the operator scripts, once, before any tick can start
 	// one: a refused path is blanked here with a loud reason (validatePersonalScripts),
 	// so the silent starters below never see it.
-	validatePersonalScripts(d.cfg)
+	scriptDiagnostics := validatePersonalScripts(d.cfg)
+	daemonStartTS := d.now().Unix()
 
 	// The flock above is authoritative between new daemons. Keep this PID probe while
 	// holding it for rolling compatibility with an older incumbent that publishes its
@@ -381,10 +382,11 @@ func (d *daemon) run(ctx context.Context) int {
 		ExecPath: d.execPath,
 		Version:  version.String(),
 		Commit:   version.Commit,
-		StartTS:  d.now().Unix(),
+		StartTS:  daemonStartTS,
 	}); err != nil {
 		logging.Debug("daemon: write daemon info failed: %v", err)
 	}
+	d.publishDaemonRuntime(daemonStartTS, scriptDiagnostics)
 	defer d.removeDaemonFiles()
 
 	// Inherit an abandon from a PREVIOUS process before anything can ping. The daemon exits
@@ -996,20 +998,20 @@ func (d *daemon) persistAbandonMarker(pid int, start uint64, rid string) {
 	}
 }
 
-// removeDaemonFiles clears the pid file and .daemon_info.json on the way out, under a
-// deadline.
+// removeDaemonFiles clears the pid file, .daemon_info.json, and .daemon_runtime.json on the
+// way out, under a deadline.
 //
 // The deadline is not decoration. This runs in run()'s LAST defer, so it is the final thing
 // between the daemon and its exit -- and on the ABANDON path the exit is the whole point:
-// maintainer decision, systemd Restart=always brings a clean daemon back. Both removals are
+// maintainer decision, systemd Restart=always brings a clean daemon back. All three removals are
 // plain os.Remove against BaseDir, which on that path may be the very filesystem that parked
 // the child in D state; persistAbandonMarker goes to considerable lengths to bound its own
 // writes for exactly this reason, and it would all be for nothing if the process then blocked
 // here forever, unable to die and so never restarted. A removal that times out is left to the
 // straggler goroutine (the process is about to be gone anyway) and the next daemon overwrites
-// both files at startup regardless.
+// all three files at startup regardless.
 //
-// removeDaemonFilesIO is the seam that lets a test wedge those two syscalls; nil means the
+// removeDaemonFilesIO is the seam that lets a test wedge those three syscalls; nil means the
 // real ones.
 func (d *daemon) removeDaemonFiles() {
 	io := d.removeDaemonFilesIO
@@ -1020,6 +1022,9 @@ func (d *daemon) removeDaemonFiles() {
 			}
 			if err := health.RemoveDaemonInfo(d.cfg.BaseDir); err != nil {
 				logging.Debug("daemon: remove daemon info failed: %v", err)
+			}
+			if err := health.RemoveDaemonRuntime(d.cfg.BaseDir); err != nil {
+				logging.Debug("daemon: remove daemon runtime failed: %v", err)
 			}
 		}
 	}

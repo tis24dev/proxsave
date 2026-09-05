@@ -52,11 +52,19 @@ Daemon service (proxsave-daemon.service): installed | not installed
 Service state (systemctl is-active): <active|inactive|...>
 Running version: <version> (<commit>)
 Binary alignment: aligned | BEHIND (restart needed) | unknown
-Personal pre-run script: NOT CONFIGURED | READY — <path> | REFUSED — <path> — <reason>
-Personal post-run script: NOT CONFIGURED | READY — <path> | REFUSED — <path> — <reason>
+Personal pre-run script:
+  Running daemon: NOT RUNNING | NOT CONFIGURED | READY | READY WITH WARNING | REFUSED
+  Current configuration: NOT CONFIGURED | READY | READY WITH WARNING | REFUSED
+  Synchronization: NOT APPLICABLE | IN SYNC | OUT OF SYNC | PATH STATE CHANGED SINCE STARTUP | UNKNOWN
+Personal post-run script:
+  Running daemon: NOT RUNNING | NOT CONFIGURED | READY | READY WITH WARNING | REFUSED
+  Current configuration: NOT CONFIGURED | READY | READY WITH WARNING | REFUSED
+  Synchronization: NOT APPLICABLE | IN SYNC | OUT OF SYNC | PATH STATE CHANGED SINCE STARTUP | UNKNOWN
 ```
 
-`Running version:` and `Binary alignment:` appear only when their daemon evidence is available. The two personal-script lines always appear. `READY` means the configured path passes the same trusted-path gate used at daemon startup; `REFUSED` includes the exact refusal reason. With debug logging, the block also shows the UID used for that decision and every inspected path component's owner and mode. It reads the effective UID from the live daemon's `/proc/<pid>/status` when possible and explicitly reports a fallback to the status command's UID when it cannot.
+`Running version:` and `Binary alignment:` appear only when their daemon evidence is available. The two personal-script sections always appear. `Running daemon` is the state captured and applied at daemon startup; `Current configuration` is what a restart would load and how that path looks now. `NOT CONFIGURED` means the setting was empty, `READY` means the path passed without an advisory, `READY WITH WARNING` means it remains enabled under an explicit administrator trust decision, and `REFUSED` includes the exact refusal reason. If a live daemon has not published matching runtime state, the command says `RUNNING DAEMON STATE UNAVAILABLE`; it never turns missing runtime evidence into a false `NOT CONFIGURED` verdict.
+
+With debug logging, the block also shows the UID used for each decision and every inspected path component's owner and mode. It reads the effective UID from the live daemon's `/proc/<pid>/status` when possible and explicitly reports a fallback to the status command's UID when it cannot. The synchronization verdict distinguishes a changed config source or script path (`OUT OF SYNC`, restart required) from changed ownership, mode, or policy evidence at the same path (`PATH STATE CHANGED SINCE STARTUP`).
 
 This check is read-only: it never executes a personal script, starts a backup, acquires daemon ownership, or sends a healthcheck ping. Script status does not alter its exit code. It exits `0` **only** when the daemon is running, beating, and aligned; every daemon gap (not installed, not running, stale, running but not reporting, or behind) exits non-zero, so `proxsave --daemon-status` can gate a script. It cannot be combined with `--daemon`, `--daemon-setup`, or `--daemon-remove`.
 
@@ -231,17 +239,20 @@ They are **yours, not ProxSave's**, and the whole contract follows from that:
   a pre script that takes minutes needs a schedule grace on the monitor wide enough to cover
   it. Both the run and its announcement move later by the pre script's duration; what does not
   move is the run duration the monitor measures, which still begins at the backup itself.
-- **The path must be trustworthy, and the refusal is the one loud thing here.** At daemon
-  start each configured path passes a trusted-path gate: it must be absolute, must not
-  traverse a symlink, the script and every directory above it must belong to root (or the
-  user the daemon runs as), the script must be executable and not writable by group or
-  others, and a group- or other-writable directory must carry the sticky bit (the `/tmp`
-  shape). A path that fails any of it is disabled for that daemon and the gate says so, once:
-  a `WARNING` in the daemon's log naming the variable, the path and the reason. That warning
-  is deliberate and is the single exception to the silence above - without it, a refused path
-  would be indistinguishable from a script that ran and did nothing. Do not change a user's
-  home directory to `root:root` to satisfy this check. Move the script to a fully root-owned
-  path such as `/usr/local/bin`, then update `backup.env` and restart the daemon.
+- **The path must be trustworthy, and startup warnings are the one loud thing here.** At
+  daemon start each configured path passes a trusted-path gate. The script file itself must
+  be owned by root (or by the daemon UID when the service deliberately runs as another user),
+  executable, and not writable by group or others. Symlinked paths and loosely writable
+  non-sticky directories are refused.
+
+  A non-loosely-writable parent owned by another UID, such as a mode-0700 user home, is
+  accepted with `READY WITH WARNING`. The configured path is an explicit trust decision by
+  the root administrator: that owner can replace descendants which the daemon later executes
+  with daemon privileges. The path remains enabled, and startup emits one `WARNING` for each
+  advisory setting. A `REFUSED` path is disabled for that daemon and likewise produces one
+  startup `WARNING`, naming the setting and reason. These advisory/refusal warnings are the
+  single exception to the scripts' execution silence; without them, a policy decision would
+  be indistinguishable from a script that ran and did nothing.
 - **Started as they are.** The path is executed directly: no shell, so no pipes, redirections
   or arguments in the value, and no arguments passed. The script inherits the daemon's own
   environment with two variables removed, `LOG_FILE` and `BASE_DIR`: the first names the run
@@ -272,10 +283,11 @@ effect at the next daemon restart; changing the contents of the script file take
 the next run.
 
 To diagnose the configured paths without executing either script, run
-`proxsave --daemon-status --log-level debug`. It applies the daemon startup gate, reports
-`READY`, `REFUSED` with the exact reason, or `NOT CONFIGURED`, and includes the UID plus
-ownership/mode evidence. This does not prove the script's own logic succeeds; test that separately,
-as root, with `/usr/local/bin/my-pre-run.sh; echo $?`.
+`proxsave --daemon-status --log-level debug`. It reports the running daemon's startup snapshot
+beside a current inspection as `NOT CONFIGURED`, `READY`, `READY WITH WARNING`, or `REFUSED`,
+then reports whether the two are synchronized. Debug output includes the UID plus ownership/mode
+evidence. This does not prove the script's own logic succeeds; test that separately, as root, with
+`/path/to/my-pre-run.sh; echo $?`.
 
 ## Caveat: uninterruptible sleep (D state)
 

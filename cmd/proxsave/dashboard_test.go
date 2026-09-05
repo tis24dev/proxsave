@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"os"
@@ -366,6 +367,65 @@ func TestBuildDaemonStatusPrompt(t *testing.T) {
 		if strings.Contains(prompt, gone) {
 			t.Errorf("the status screen must not mention %q\n---\n%s", gone, prompt)
 		}
+	}
+}
+
+func TestBuildDaemonStatusPromptAndCLIAgreeOnRuntimeAndSynchronization(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		availability daemonRuntimeAvailability
+		sync         personalScriptSynchronization
+		wantRunning  string
+		wantSync     string
+	}{
+		{"in sync", daemonRuntimeAvailable, personalScriptInSync, "Running daemon: REFUSED", "Synchronization: IN SYNC"},
+		{"configuration drift", daemonRuntimeAvailable, personalScriptConfigurationDrift, "Running daemon: REFUSED", "Synchronization: OUT OF SYNC"},
+		{"path changed", daemonRuntimeAvailable, personalScriptPathStateChanged, "Running daemon: REFUSED", "Synchronization: PATH STATE CHANGED SINCE STARTUP"},
+		{"missing", daemonRuntimeMissing, personalScriptRuntimeUnavailable, "Running daemon state: UNAVAILABLE", "Synchronization: UNKNOWN"},
+		{"stale", daemonRuntimeStale, personalScriptRuntimeUnavailable, "Running daemon state: UNAVAILABLE", "Synchronization: UNKNOWN"},
+		{"invalid", daemonRuntimeInvalid, personalScriptRuntimeUnavailable, "Running daemon state: UNAVAILABLE", "Synchronization: UNKNOWN"},
+		{"unsupported", daemonRuntimeUnsupported, personalScriptRuntimeUnavailable, "Running daemon state: UNAVAILABLE", "Synchronization: UNKNOWN"},
+		{"not running", daemonRuntimeNotApplicable, personalScriptSyncNotApplicable, "Running daemon: NOT RUNNING", "Synchronization: NOT APPLICABLE"},
+		{"unknown sync", daemonRuntimeAvailable, "", "Running daemon: REFUSED", "Synchronization: UNKNOWN"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			comparison := personalScriptComparison{
+				Running:         personalScriptDiagnostic{Path: "/running.sh", State: personalScriptRefused, Reason: "unsafe\x1b]0;refusal-payload\x07owner"},
+				Current:         personalScriptDiagnostic{Path: "/current.sh", State: personalScriptReady},
+				Synchronization: tc.sync,
+				SyncReason:      "sync\x1b]0;sync-payload\x07detail",
+			}
+			diagnostics := daemonDiagnostics{
+				Runtime:           daemonRuntimeDiagnostic{Availability: tc.availability, Reason: "runtime\x1b]0;runtime-payload\x07detail"},
+				ScriptComparisons: personalScriptComparisons{Pre: comparison, Post: comparison},
+			}
+			buf := &bytes.Buffer{}
+			logger := logging.New(types.LogLevelInfo, false)
+			logger.SetOutput(buf)
+			logDaemonDiagnostics(logger, diagnostics)
+			for name, out := range map[string]string{"cli": buf.String(), "dashboard": ansi.Strip(buildDaemonStatusPrompt(diagnostics))} {
+				assertNoRawInjection(t, out)
+				for _, want := range []string{tc.wantRunning, tc.wantSync, "Current configuration: READY (/current.sh)"} {
+					if !strings.Contains(out, want) {
+						t.Errorf("%s missing %q:\n%s", name, want, out)
+					}
+				}
+				for _, forbidden := range []string{"payload", "Running daemon: NOT CONFIGURED"} {
+					if strings.Contains(out, forbidden) {
+						t.Errorf("%s retained %q:\n%s", name, forbidden, out)
+					}
+				}
+				if tc.availability == daemonRuntimeAvailable {
+					if !strings.Contains(out, "REFUSED (/running.sh): unsafeowner") {
+						t.Errorf("%s omitted refusal detail:\n%s", name, out)
+					}
+				} else if tc.availability != daemonRuntimeNotApplicable {
+					if !strings.Contains(out, "UNAVAILABLE (runtimedetail)") {
+						t.Errorf("%s omitted unavailable reason:\n%s", name, out)
+					}
+				}
+			}
+		})
 	}
 }
 

@@ -16,6 +16,50 @@ import (
 	"github.com/tis24dev/proxsave/internal/types"
 )
 
+func TestInspectPersonalScriptRetainsNormalizedConfiguredPath(t *testing.T) {
+	dir := t.TempDir()
+	script := writePersonalScript(t, dir, "script.sh", "exit 0")
+	link := filepath.Join(dir, "link.sh")
+	if err := os.Symlink(script, link); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name      string
+		path      string
+		mode      os.FileMode
+		wantPath  string
+		wantState personalScriptState
+	}{
+		{"empty", " \t ", 0o700, "", personalScriptNotConfigured},
+		{"ready", " \t" + dir + "/./script.sh  ", 0o700, script, personalScriptReady},
+		{"missing", " " + dir + "/./missing.sh ", 0o700, filepath.Join(dir, "missing.sh"), personalScriptRefused},
+		{"symlink", " " + dir + "/./link.sh ", 0o700, link, personalScriptRefused},
+		{"directory", " " + dir + "/. ", 0o700, dir, personalScriptRefused},
+		{"not executable", " " + dir + "/./script.sh ", 0o600, script, personalScriptRefused},
+		{"group writable", " " + dir + "/./script.sh ", 0o720, script, personalScriptRefused},
+		{"world writable", " " + dir + "/./script.sh ", 0o702, script, personalScriptRefused},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := os.Chmod(script, tc.mode); err != nil {
+				t.Fatal(err)
+			}
+			got := inspectPersonalScript("PERSONAL_SCRIPT_PRE_RUN", tc.path, os.Geteuid())
+			stateMatches := got.State == tc.wantState || (tc.wantState == personalScriptReady && got.State == personalScriptReadyWithWarning)
+			if !stateMatches || got.Path != tc.wantPath {
+				t.Errorf("inspection = %+v, want state %q and path %q", got, tc.wantState, tc.wantPath)
+			}
+			if got.State == personalScriptRefused {
+				if got.Reason == "" {
+					t.Error("refusal lost its reason")
+				}
+				if enabled := applyPersonalScriptDiagnostic(got); enabled != "" {
+					t.Errorf("refused path survived execution gate: %q", enabled)
+				}
+			}
+		})
+	}
+}
+
 type personalScriptInspectionFileInfo struct {
 	name string
 	mode os.FileMode
@@ -150,7 +194,7 @@ func TestInspectPersonalScriptStatesAndReasons(t *testing.T) {
 			wantParts:  1,
 		},
 		{
-			name: "foreign owned target",
+			name: "foreign owned target stays refused",
 			path: "/srv/scripts/script.sh",
 			eval: func(path string) (string, error) { return path, nil },
 			stat: func(string) (os.FileInfo, error) {
@@ -162,19 +206,23 @@ func TestInspectPersonalScriptStatesAndReasons(t *testing.T) {
 			wantParts:  1,
 		},
 		{
-			name: "foreign owned parent",
+			name: "foreign owned parent is advisory",
 			path: "/home/operator/script.sh",
 			eval: func(path string) (string, error) { return path, nil },
 			stat: func(path string) (os.FileInfo, error) {
-				if path == "/home/operator" {
+				switch path {
+				case "/home/operator":
 					return personalScriptInspectionFileInfo{name: "operator", mode: os.ModeDir | 0o700, uid: 4242, dir: true}, nil
+				case "/":
+					return rootDir, nil
+				default:
+					return trustedFile, nil
 				}
-				return trustedFile, nil
 			},
 			validate:   func(string) error { return nil },
-			wantState:  personalScriptRefused,
+			wantState:  personalScriptReadyWithWarning,
 			wantReason: "/home/operator is owned by uid 4242",
-			wantParts:  2,
+			wantParts:  4,
 		},
 		{
 			name: "writable non sticky parent",
@@ -270,5 +318,27 @@ func TestPersonalScriptValidationEmitsOneWarningPerRefusedSetting(t *testing.T) 
 		if got := strings.Count(logged, key+" disabled for this daemon:"); got != 1 {
 			t.Errorf("%s warning count = %d, want 1\n%s", key, got, logged)
 		}
+	}
+}
+
+func TestApplyPersonalScriptDiagnosticKeepsAdvisoryPathAndWarnsOnce(t *testing.T) {
+	logger := logging.New(types.LogLevelDebug, false)
+	buf := &bytes.Buffer{}
+	logger.SetOutput(buf)
+	previous := logging.GetDefaultLogger()
+	logging.SetDefaultLogger(logger)
+	t.Cleanup(func() { logging.SetDefaultLogger(previous) })
+
+	diagnostic := personalScriptDiagnostic{
+		Key:    "PERSONAL_SCRIPT_PRE_RUN",
+		Path:   "/home/operator/script.sh",
+		State:  personalScriptReadyWithWarning,
+		Reason: "/home/operator is owned by uid 4242; that owner can replace descendants executed as daemon uid 0",
+	}
+	if got := applyPersonalScriptDiagnostic(diagnostic); got != diagnostic.Path {
+		t.Fatalf("advisory path = %q, want %q", got, diagnostic.Path)
+	}
+	if got := strings.Count(buf.String(), "PERSONAL_SCRIPT_PRE_RUN enabled with administrator trust warning:"); got != 1 {
+		t.Fatalf("warning count = %d, want 1\n%s", got, buf.String())
 	}
 }

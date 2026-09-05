@@ -35,9 +35,8 @@ func DaemonInfoPath(baseDir string) string {
 }
 
 // WriteDaemonInfo writes info as indented JSON atomically (daemon side), reusing the shared
-// writeJSONAtomic idiom (MkdirAll -> WriteFile ".tmp" 0o600 -> Rename) so a concurrent reader sees
-// either the old or the new file, never a partial one, and no immutable +i attribute blocks the
-// rewrite.
+// writeJSONAtomic idiom (unique private sibling -> Rename) so a concurrent reader sees either the
+// old or the new file, never a partial one, and no immutable +i attribute blocks the rewrite.
 func WriteDaemonInfo(baseDir string, info DaemonInfo) error {
 	return writeJSONAtomic(DaemonInfoPath(baseDir), info)
 }

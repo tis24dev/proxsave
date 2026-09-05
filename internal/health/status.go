@@ -4,12 +4,12 @@
 // section to report REAL transmission (heartbeat / backup outcome) instead of a
 // cosmetic "active" derived from a secret merely being present on disk.
 //
-// The write is an atomic read-modify-write cloned from
-// internal/orchestrator/temp_registry.go (MarshalIndent -> WriteFile ".tmp" 0o600
-// -> Rename) so a reader never observes a torn file, and it deliberately does NOT
-// reuse identity.PersistNotifySecret (that path sets the immutable +i attribute,
-// which would block every rewrite). This file stays logging-free and stdlib-only
-// so both the daemon and the orchestrator can import it without a logger.
+// Writes marshal into a unique private sibling confined beneath the identity
+// directory, then rename it over the destination so a reader never observes a torn
+// file. They deliberately do NOT reuse identity.PersistNotifySecret (that path sets
+// the immutable +i attribute, which would block every rewrite). This file stays
+// logging-free and stdlib-only so both the daemon and the orchestrator can import it
+// without a logger.
 
 package health
 
@@ -20,6 +20,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 )
 
 // Ping kind constants. These are the values RecordPing accepts for the kind
@@ -368,29 +369,60 @@ func writeStatus(baseDir string, st Status) error {
 	return writeJSONAtomic(StatusPath(baseDir), st)
 }
 
-// writeJSONAtomic writes v as indented JSON to path atomically, byte-for-byte the same
-// idiom as temp_registry.saveEntries: MkdirAll(dir, 0o750) so the parent dir exists,
-// MarshalIndent for a human-readable file, WriteFile to a ".tmp" sibling at 0o600, then
-// Rename over the final path so a concurrent reader sees either the old or the new file,
-// never a partial one. Shared by the status file and the per-run notify-results file, both
-// of which live in the identity dir and must NOT set the immutable +i attribute (which
-// would block every rewrite).
+var atomicJSONTempSequence atomic.Uint64
+
+// writeJSONAtomic writes v as indented JSON to path atomically. Every operation after
+// creating the parent is relative to an os.Root opened on that directory, so neither a
+// temporary-file symlink nor a concurrent directory rename can redirect the write outside
+// it. A process-local sequence and O_EXCL give concurrent writers separate temporary files;
+// Rename exposes only a complete file to readers. The shared health files must not set the
+// immutable +i attribute because that would block every rewrite.
 func writeJSONAtomic(path string, v any) error {
 	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, 0o750); err != nil {
 		return fmt.Errorf("create dir %s: %w", dir, err)
 	}
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		return fmt.Errorf("open dir %s: %w", dir, err)
+	}
+	defer func() { _ = root.Close() }()
+
+	name := filepath.Base(path)
 	data, err := json.MarshalIndent(v, "", "  ")
 	if err != nil {
-		return fmt.Errorf("marshal %s: %w", filepath.Base(path), err)
+		return fmt.Errorf("marshal %s: %w", name, err)
 	}
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, data, 0o600); err != nil {
-		return fmt.Errorf("write %s: %w", filepath.Base(path), err)
+
+	// Remove the fixed-name temporary file used by older builds. Root.Remove removes a
+	// symlink itself rather than its target, making upgrades safe even if that entry was
+	// replaced before this version starts.
+	if err := root.Remove(name + ".tmp"); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("remove stale temporary file for %s: %w", name, err)
 	}
-	if err := os.Rename(tmp, path); err != nil {
-		_ = os.Remove(tmp) // best-effort cleanup so a failed rename leaves no stray ".tmp"
-		return fmt.Errorf("rename %s: %w", filepath.Base(path), err)
+
+	tmpName := fmt.Sprintf("%s.tmp.%d.%d", name, os.Getpid(), atomicJSONTempSequence.Add(1))
+	f, err := root.OpenFile(tmpName, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		return fmt.Errorf("create temporary file for %s: %w", name, err)
+	}
+	if err := f.Chmod(0o600); err != nil {
+		_ = f.Close()
+		_ = root.Remove(tmpName)
+		return fmt.Errorf("chmod %s: %w", name, err)
+	}
+	if _, err := f.Write(data); err != nil {
+		_ = f.Close()
+		_ = root.Remove(tmpName)
+		return fmt.Errorf("write %s: %w", name, err)
+	}
+	if err := f.Close(); err != nil {
+		_ = root.Remove(tmpName)
+		return fmt.Errorf("close %s: %w", name, err)
+	}
+	if err := root.Rename(tmpName, name); err != nil {
+		_ = root.Remove(tmpName)
+		return fmt.Errorf("rename %s: %w", name, err)
 	}
 	return nil
 }

@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strconv"
@@ -153,8 +154,71 @@ func TestCollectDaemonDiagnosticsInspectsScriptsWithResolvedUID(t *testing.T) {
 	if inspections != 1 {
 		t.Fatalf("script inspections = %d, want 1", inspections)
 	}
-	if got.DaemonUID.Value != 4242 || got.Scripts.Pre.State != personalScriptReady || got.Scripts.Post.State != personalScriptRefused {
+	if got.DaemonUID.Value != 4242 || got.ScriptComparisons.Pre.Current.State != personalScriptReady || got.ScriptComparisons.Post.Current.State != personalScriptRefused {
 		t.Fatalf("collector omitted shared script diagnostics: %+v", got)
+	}
+}
+
+func TestCollectDaemonDiagnosticsComparesResidentReadyWithCurrentEmpty(t *testing.T) {
+	// Keep a live process with the daemon's argv identity for the real liveness probe.
+	resident := exec.Command("sh", "-c", "read unused", "proxsave", "--daemon")
+	stdin, err := resident.StdinPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := resident.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = stdin.Close(); _ = resident.Wait() })
+
+	origInstalled := daemonStatusUnitInstalledProbe
+	origActive := daemonStatusActiveStateProbe
+	origPresence := daemonPresenceProbe
+	origRead := daemonProcStatusReadFile
+	t.Cleanup(func() {
+		daemonStatusUnitInstalledProbe = origInstalled
+		daemonStatusActiveStateProbe = origActive
+		daemonPresenceProbe = origPresence
+		daemonProcStatusReadFile = origRead
+	})
+	daemonStatusUnitInstalledProbe = func() bool { return true }
+	daemonStatusActiveStateProbe = func(context.Context) string { return "active" }
+	daemonPresenceProbe = func(context.Context) health.DaemonPresence {
+		return health.DaemonPresence{Probed: true, Installed: true, Active: true}
+	}
+	daemonProcStatusReadFile = func(path string) ([]byte, error) {
+		if path != "/proc/"+strconv.Itoa(resident.Process.Pid)+"/status" {
+			t.Fatalf("unexpected process UID path: %s", path)
+		}
+		return []byte("Uid:\t1000\t4242\t1000\t1000\n"), nil
+	}
+	base := t.TempDir()
+	cfg := &config.Config{SchedulerMode: "daemon", BaseDir: base, ConfigPath: "/daemon.env"}
+	if err := health.WriteDaemonInfo(base, health.DaemonInfo{PID: resident.Process.Pid, StartTS: 100}); err != nil {
+		t.Fatal(err)
+	}
+	if err := health.WriteDaemonRuntime(base, health.DaemonRuntimeState{
+		SchemaVersion: health.DaemonRuntimeSchemaVersion, PID: resident.Process.Pid, StartTS: 100, ConfigPath: "/daemon.env", DaemonUID: 1234,
+		PersonalScripts: health.DaemonRuntimeScripts{
+			Pre:  health.DaemonRuntimeScript{Path: "/pre", State: "ready"},
+			Post: health.DaemonRuntimeScript{State: "not-configured"},
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	got := collectDaemonDiagnostics(context.Background(), cfg, "/ignored-base")
+	if got.Runtime.Availability != daemonRuntimeAvailable || !got.State.ProcessAlive {
+		t.Fatalf("resident state unavailable: %+v", got)
+	}
+	pre := got.ScriptComparisons.Pre
+	if pre.Running.Path != "/pre" || pre.Running.State != personalScriptReady || pre.Current.Path != "" || pre.Current.State != personalScriptNotConfigured || pre.Synchronization != personalScriptConfigurationDrift {
+		t.Fatalf("resident-ready/current-empty drift lost: %+v", pre)
+	}
+	if got.DaemonUID.Value != 4242 || got.DaemonUID.Source != "running daemon /proc" || pre.Current.DaemonUID != 4242 || pre.Running.DaemonUID != 1234 || got.Runtime.DaemonUID != 1234 {
+		t.Fatalf("persisted UID replaced current process evidence: %+v", got)
+	}
+	if got.ScriptComparisons.Pre.Current.State != personalScriptNotConfigured || got.ScriptComparisons.Post.Synchronization != personalScriptInSync {
+		t.Fatalf("current inspection or unchanged post script incorrect: %+v", got)
 	}
 }
 
@@ -172,13 +236,26 @@ func TestLogDaemonDiagnosticsUsesStandardEnvelopeAndSeverity(t *testing.T) {
 		Keyword:     "running",
 		Explanation: "daemon is healthy",
 		DaemonUID:   daemonUIDDiagnostic{Value: 1001, Source: "running daemon /proc"},
-		Scripts: personalScriptsDiagnostics{
-			Pre: personalScriptDiagnostic{
-				Key: "PERSONAL_SCRIPT_PRE_RUN", Path: script, State: personalScriptReady, DaemonUID: 1001,
-				Components: []personalScriptPathComponent{{Path: script, UID: 1001, Mode: 0o700}},
+		Runtime: daemonRuntimeDiagnostic{
+			Availability: daemonRuntimeAvailable,
+			ConfigPath:   "/opt/proxsave/configs/backup.env",
+			StartTS:      1_700_000_000,
+			DaemonUID:    1001,
+		},
+		ScriptComparisons: personalScriptComparisons{
+			Pre: personalScriptComparison{
+				Running: personalScriptDiagnostic{
+					Key: "PERSONAL_SCRIPT_PRE_RUN", Path: script, State: personalScriptReady, DaemonUID: 1001,
+					Components: []personalScriptPathComponent{{Path: script, UID: 1001, Mode: 0o700}},
+				},
+				Current:         personalScriptDiagnostic{State: personalScriptNotConfigured, DaemonUID: 1001},
+				Synchronization: personalScriptConfigurationDrift,
+				SyncReason:      "restart the daemon to apply current personal-script configuration",
 			},
-			Post: personalScriptDiagnostic{
-				Key: "PERSONAL_SCRIPT_POST_RUN", Path: "/home/operator/post.sh", State: personalScriptRefused, Reason: reason, DaemonUID: 1001,
+			Post: personalScriptComparison{
+				Running:         personalScriptDiagnostic{Path: "/home/operator/post.sh", State: personalScriptReadyWithWarning, Reason: reason, DaemonUID: 1001},
+				Current:         personalScriptDiagnostic{Path: "/home/operator/post.sh", State: personalScriptReadyWithWarning, Reason: reason, DaemonUID: 1001},
+				Synchronization: personalScriptInSync,
 			},
 		},
 	}
@@ -190,14 +267,27 @@ func TestLogDaemonDiagnosticsUsesStandardEnvelopeAndSeverity(t *testing.T) {
 	out := buf.String()
 
 	start := strings.Index(out, "DEBUG    Start daemon diagnostics")
-	ready := strings.Index(out, "INFO     Personal pre-run script: READY")
-	refused := strings.Index(out, "WARNING  Personal post-run script: REFUSED")
+	ready := strings.Index(out, "INFO       Running daemon: READY")
+	warning := strings.Index(out, "WARNING    Running daemon: READY WITH WARNING")
 	end := strings.Index(out, "DEBUG    End daemon diagnostics")
-	if start < 0 || ready < 0 || refused < 0 || end < 0 || start >= ready || ready >= refused || refused >= end {
+	if start < 0 || ready < 0 || warning < 0 || end < 0 || start >= ready || ready >= warning || warning >= end {
 		t.Fatalf("diagnostic lines are not enclosed and ordered correctly:\n%s", out)
 	}
-	if strings.Count(out, reason) != 1 {
-		t.Fatalf("refusal reason count = %d, want 1:\n%s", strings.Count(out, reason), out)
+	if strings.Count(out, reason) != 2 {
+		t.Fatalf("warning reason count = %d, want 2 (one per source):\n%s", strings.Count(out, reason), out)
+	}
+	for _, want := range []string{
+		"Running daemon configuration: /opt/proxsave/configs/backup.env",
+		"Running daemon loaded at: ",
+		"Personal pre-run script:", "Running daemon: READY", "Current configuration: NOT CONFIGURED",
+		"Synchronization: OUT OF SYNC", "Personal post-run script:", "READY WITH WARNING", "Synchronization: IN SYNC",
+		"running daemon pre-run: key=", "current config pre-run: key=",
+		"running daemon post-run: key=", "current config post-run: key=",
+		"running daemon pre-run component: path=",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("missing %q:\n%s", want, out)
+		}
 	}
 	timestamped := regexp.MustCompile(`^\[\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\] (DEBUG|INFO|WARNING) +`)
 	for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
@@ -217,8 +307,13 @@ func TestRunDaemonStatusExitRemainsBasedOnDaemonState(t *testing.T) {
 		return daemonDiagnostics{
 			Level:   orchestrator.HealthcheckSetupLevelOk,
 			Keyword: "running",
-			Scripts: personalScriptsDiagnostics{
-				Post: personalScriptDiagnostic{Key: "PERSONAL_SCRIPT_POST_RUN", Path: "/unsafe", State: personalScriptRefused, Reason: "unsafe"},
+			Runtime: daemonRuntimeDiagnostic{Availability: daemonRuntimeAvailable},
+			ScriptComparisons: personalScriptComparisons{
+				Post: personalScriptComparison{
+					Running:         personalScriptDiagnostic{Key: "PERSONAL_SCRIPT_POST_RUN", Path: "/unsafe", State: personalScriptRefused, Reason: "unsafe"},
+					Current:         personalScriptDiagnostic{Key: "PERSONAL_SCRIPT_POST_RUN", Path: "/unsafe", State: personalScriptRefused, Reason: "unsafe"},
+					Synchronization: personalScriptInSync,
+				},
 			},
 		}
 	}
@@ -230,33 +325,107 @@ func TestRunDaemonStatusExitRemainsBasedOnDaemonState(t *testing.T) {
 }
 
 func TestBuildDaemonStatusPromptRendersSanitizedPersonalScripts(t *testing.T) {
-	diagnostics := daemonDiagnostics{
-		Mode:        "daemon",
-		Unit:        "installed",
-		Active:      "active",
-		Level:       orchestrator.HealthcheckSetupLevelOk,
-		Keyword:     "RUNNING",
-		Explanation: "daemon is healthy",
-		DaemonUID:   daemonUIDDiagnostic{Value: 1001, Source: "running daemon /proc"},
-		Scripts: personalScriptsDiagnostics{
-			Pre:  personalScriptDiagnostic{Key: "PERSONAL_SCRIPT_PRE_RUN", Path: "/safe/pre.sh", State: personalScriptReady},
-			Post: personalScriptDiagnostic{Key: "PERSONAL_SCRIPT_POST_RUN", Path: "/bad\x1b]0;pwned\x07/post.sh", State: personalScriptRefused, Reason: "unsafe\x9b\x1b[2Jreason"},
-		},
-	}
+	diagnostics := personalScriptRendererInjectionFixture()
 	prompt := buildDaemonStatusPrompt(diagnostics)
 	assertNoRawInjection(t, prompt)
 	plain := ansi.Strip(prompt)
 	for _, want := range []string{
-		"Personal pre-run script: READY",
-		"/safe/pre.sh",
-		"Personal post-run script: REFUSED",
-		"reason",
+		"Personal pre-run script:", "Running daemon: READY", "/safe/pre.sh",
+		"Personal post-run script:", "Current configuration: READY WITH WARNING",
+		"Running daemon configuration: /bad/backup.env", "unsafeowner", "restartdaemon",
+		"Synchronization: IN SYNC", "Synchronization: OUT OF SYNC",
 	} {
 		if !strings.Contains(plain, want) {
 			t.Errorf("prompt missing %q:\n%s", want, plain)
 		}
 	}
-	if strings.Contains(plain, "pwned") {
-		t.Fatalf("prompt retained OSC payload:\n%s", plain)
+	for _, forbidden := range []string{"runtime-config", "script-path", "reason", "sync-reason"} {
+		if strings.Contains(plain, forbidden) {
+			t.Fatalf("sanitizer retained %q:\n%s", forbidden, plain)
+		}
+	}
+}
+
+func personalScriptRendererInjectionFixture() daemonDiagnostics {
+	return daemonDiagnostics{
+		Runtime: daemonRuntimeDiagnostic{
+			Availability: daemonRuntimeAvailable,
+			ConfigPath:   "/bad\x1b]0;runtime-config\x07/backup.env", StartTS: 1_700_000_000, DaemonUID: 1001,
+		},
+		ScriptComparisons: personalScriptComparisons{
+			Pre: personalScriptComparison{
+				Running:         personalScriptDiagnostic{Path: "/safe/pre.sh", State: personalScriptReady},
+				Current:         personalScriptDiagnostic{Path: "/safe/pre.sh", State: personalScriptReady},
+				Synchronization: personalScriptInSync,
+			},
+			Post: personalScriptComparison{
+				Running:         personalScriptDiagnostic{Path: "/bad\x1b]0;script-path\x07/post.sh", State: personalScriptReadyWithWarning, Reason: "unsafe\x1b]0;reason\x07owner"},
+				Current:         personalScriptDiagnostic{Path: "/bad\x1b]0;script-path\x07/post.sh", State: personalScriptReadyWithWarning, Reason: "unsafe\x1b]0;reason\x07owner"},
+				Synchronization: personalScriptConfigurationDrift,
+				SyncReason:      "restart\x1b]0;sync-reason\x07daemon",
+			},
+		},
+	}
+}
+
+func TestLogDaemonDiagnosticsDoesNotCallUnavailableRuntimeNotConfigured(t *testing.T) {
+	diagnostics := daemonDiagnostics{
+		Runtime: daemonRuntimeDiagnostic{Availability: daemonRuntimeMissing, Reason: "running daemon did not publish runtime state"},
+		ScriptComparisons: personalScriptComparisons{
+			Pre: personalScriptComparison{
+				Current:         personalScriptDiagnostic{Path: "/current/pre.sh", State: personalScriptReady},
+				Synchronization: personalScriptRuntimeUnavailable,
+				SyncReason:      "running daemon did not publish runtime state",
+			},
+		},
+	}
+	logger := logging.New(types.LogLevelDebug, false)
+	buf := &bytes.Buffer{}
+	logger.SetOutput(buf)
+	logDaemonDiagnostics(logger, diagnostics)
+	out := buf.String()
+	if !strings.Contains(out, "Running daemon state: UNAVAILABLE") {
+		t.Fatalf("missing unavailable state:\n%s", out)
+	}
+	if strings.Contains(out, "Running daemon: NOT CONFIGURED") {
+		t.Fatalf("unavailable runtime was mislabeled:\n%s", out)
+	}
+	if !strings.Contains(out, "Current configuration: READY (/current/pre.sh)") || !strings.Contains(out, "Synchronization: UNKNOWN") {
+		t.Fatalf("unavailable runtime hid current configuration or synchronization:\n%s", out)
+	}
+}
+
+func TestLogDaemonDiagnosticsSanitizesComparisonSourcesAndEvidence(t *testing.T) {
+	diagnostics := personalScriptRendererInjectionFixture()
+	for _, diagnostic := range []*personalScriptDiagnostic{
+		&diagnostics.ScriptComparisons.Pre.Running, &diagnostics.ScriptComparisons.Pre.Current,
+		&diagnostics.ScriptComparisons.Post.Running, &diagnostics.ScriptComparisons.Post.Current,
+	} {
+		diagnostic.Key = "PERSONAL\x1b]0;key-payload\x07_SCRIPT"
+		diagnostic.Components = []personalScriptPathComponent{{Path: "/bad\x1b]0;component-payload\x07/file", UID: 1001, Mode: 0o755}}
+	}
+	for _, level := range []types.LogLevel{types.LogLevelInfo, types.LogLevelDebug} {
+		logger := logging.New(level, false)
+		buf := &bytes.Buffer{}
+		logger.SetOutput(buf)
+		logDaemonDiagnostics(logger, diagnostics)
+		out := buf.String()
+		assertNoRawInjection(t, out)
+		for _, forbidden := range []string{"runtime-config", "script-path", "sync-reason", "key-payload", "component-payload"} {
+			if strings.Contains(out, forbidden) {
+				t.Errorf("sanitizer retained %q:\n%s", forbidden, out)
+			}
+		}
+		for _, want := range []string{"Running daemon configuration: /bad/backup.env", "Running daemon: READY WITH WARNING (/bad/post.sh): unsafeowner", "Current configuration: READY WITH WARNING (/bad/post.sh): unsafeowner", "Synchronization: OUT OF SYNC (restartdaemon)"} {
+			if !strings.Contains(out, want) {
+				t.Errorf("missing %q:\n%s", want, out)
+			}
+		}
+		for _, source := range []string{"running daemon pre-run", "current config pre-run", "running daemon post-run", "current config post-run"} {
+			want := source + " component: path=\"/bad/file\" uid=1001 mode=0755"
+			if strings.Contains(out, want) != (level == types.LogLevelDebug) {
+				t.Errorf("unexpected evidence visibility at %v for %q:\n%s", level, want, out)
+			}
+		}
 	}
 }

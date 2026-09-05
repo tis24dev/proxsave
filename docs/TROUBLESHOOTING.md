@@ -219,29 +219,42 @@ cat /proc/self/gid_map
   arguments, pipes and redirections are not interpreted), a path edited in `backup.env` without
   restarting the daemon, or a run that was not the daemon's (a manual `proxsave --backup` and a
   cron-mode run start neither script).
-- The one cause that DOES log: the trusted-path gate at daemon start. A path that traverses a
-  symlink, is not executable, is writable by group or others, or sits under a directory not
-  owned by root (or writable by others without the sticky bit) is disabled for that daemon
-  with a `WARNING` naming the variable, the path and the reason.
+- The trusted-path gate is the one cause that DOES log. A symlinked path, a target that is not
+  executable or is not owned by root/the daemon UID, a target writable by group or others, or
+  a loosely writable non-sticky parent is `REFUSED` and disabled for that daemon. A
+  non-loosely-writable parent owned by another UID, including a mode-0700 user home, is
+  `READY WITH WARNING`: the configured path remains enabled because root selected it
+  explicitly, but that parent owner can replace descendants later executed with daemon
+  privileges. Each advisory or refusal produces one startup `WARNING` naming the setting and
+  reason.
 
 **Resolution**:
 ```bash
-proxsave --daemon-status --log-level debug      # first: READY/REFUSED plus UID and path evidence
-journalctl -u proxsave-daemon.service | grep PERSONAL_SCRIPT   # a gate refusal names the reason
+proxsave --daemon-status --log-level debug      # running/current state, sync, UID and path evidence
+journalctl -u proxsave-daemon.service | grep PERSONAL_SCRIPT   # startup advisory/refusal and reason
 namei -l /path/to/my-pre-run.sh         # inspect ownership and mode of every path component
-ls -l /usr/local/bin/my-pre-run.sh      # owned by root, mode 0700 or 0755, no group/other write
-head -1 /usr/local/bin/my-pre-run.sh    # a shebang, e.g. #!/bin/sh
-/usr/local/bin/my-pre-run.sh; echo $?   # runs by hand, as root
+ls -l /path/to/my-pre-run.sh            # target owned by root/daemon UID, executable, not loosely writable
+head -1 /path/to/my-pre-run.sh          # a shebang, e.g. #!/bin/sh
+/path/to/my-pre-run.sh; echo $?         # runs by hand, as root
 grep PERSONAL_SCRIPT /opt/proxsave/configs/backup.env
 systemctl restart proxsave-daemon.service   # the paths are read at daemon start
 ```
 - The status command is read-only: it does not execute either script, start a backup, acquire the
-  daemon lock, or send a healthcheck ping. `READY` means the path passes the same gate used by the
-  daemon; `REFUSED` gives the exact reason; `NOT CONFIGURED` means the setting is empty. Debug output
-  says whether the UID came from the live daemon or from the current-process fallback and lists the
-  owner/mode evidence. A script refusal does not change the command's daemon-health exit code.
-- Do not change a user's home directory to `root:root`. Copy or move the script to a fully
-  root-owned path such as `/usr/local/bin`, update `backup.env`, then restart the daemon.
+  daemon lock, or send a healthcheck ping. Its four path states are `NOT CONFIGURED`, `READY`,
+  `READY WITH WARNING`, and `REFUSED`. Debug output lists the UID and owner/mode evidence. A script
+  refusal does not change the command's daemon-health exit code.
+- **Running daemon** is the state captured and applied at daemon startup. **Current
+  configuration** is what a restart would load and how that path looks now.
+- `OUT OF SYNC` means the personal-script path or config source changed; restart
+  `proxsave-daemon.service`.
+- `PATH STATE CHANGED SINCE STARTUP` means ownership, mode, or verdict differs from the startup
+  snapshot.
+- `RUNNING DAEMON STATE UNAVAILABLE` indicates an old/not-restarted daemon or a
+  runtime-publication failure. It does not mean the script is unconfigured; current configuration
+  remains a prospective verdict and synchronization is unknown.
+- Do not change a user's home directory to `root:root`. A mode-0700 home can remain owned by its
+  user; review the `READY WITH WARNING` trust decision, ensure the script target itself satisfies
+  the stricter ownership/mode rule, and restart the daemon after configuration changes.
 - Have the script write its own log if you want a record: ProxSave will not write one for you.
 - A script still running after 10 minutes is killed, silently, and the daemon carries on. The
   one exception is the abandoned-child unwind, where the post script is started and left to

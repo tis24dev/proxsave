@@ -8,6 +8,7 @@ import (
 	"go/token"
 	"io/fs"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -60,6 +61,74 @@ func TestPersonalScriptCmdLeavesEveryDescriptorNil(t *testing.T) {
 	}
 	if cmd.WaitDelay != 0 {
 		t.Errorf("WaitDelay must stay 0: there are no pipes to drain; got %s", cmd.WaitDelay)
+	}
+}
+
+func TestPersonalScriptCommandsExecuteTheOpenedFileAfterPathReplacement(t *testing.T) {
+	builders := map[string]func(string) *exec.Cmd{
+		"waited": func(path string) *exec.Cmd {
+			return personalScriptCmd(context.Background(), path)
+		},
+		"detached": personalScriptCmdDetached,
+	}
+
+	for name, build := range builders {
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			originalMarker := filepath.Join(dir, "original-ran")
+			replacementMarker := filepath.Join(dir, "replacement-ran")
+			path := writePersonalScript(t, dir, "configured.sh", "touch "+originalMarker)
+			replacement := writePersonalScript(t, dir, "replacement.sh", "touch "+replacementMarker)
+
+			cmd := build(path)
+			for _, file := range cmd.ExtraFiles {
+				file := file
+				t.Cleanup(func() { _ = file.Close() })
+			}
+			if err := os.Rename(replacement, path); err != nil {
+				t.Fatalf("replace configured path: %v", err)
+			}
+			if err := cmd.Run(); err != nil {
+				t.Fatalf("run pinned command: %v", err)
+			}
+
+			if _, err := os.Stat(originalMarker); err != nil {
+				t.Fatalf("opened original did not run: %v", err)
+			}
+			if _, err := os.Stat(replacementMarker); !os.IsNotExist(err) {
+				t.Fatalf("pathname replacement ran with daemon privileges: %v", err)
+			}
+		})
+	}
+}
+
+func TestPersonalScriptCommandFailsClosedWithInheritedFD3(t *testing.T) {
+	const probeEnv = "PROXSAVE_TEST_PERSONAL_SCRIPT_INHERITED_FD3"
+	if os.Getenv(probeEnv) == "1" {
+		cmd := personalScriptCmd(context.Background(), filepath.Join(t.TempDir(), "missing.sh"))
+		if err := startPersonalScriptCmd(cmd); err == nil {
+			_ = cmd.Wait()
+		}
+		return
+	}
+
+	dir := t.TempDir()
+	marker := filepath.Join(dir, "inherited-fd-ran")
+	malicious := writePersonalScript(t, dir, "inherited.sh", "touch "+marker)
+	file, err := os.Open(malicious)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = file.Close() }()
+
+	probe := exec.Command(os.Args[0], "-test.run=^TestPersonalScriptCommandFailsClosedWithInheritedFD3$")
+	probe.Env = append(os.Environ(), probeEnv+"=1")
+	probe.ExtraFiles = []*os.File{file}
+	if output, err := probe.CombinedOutput(); err != nil {
+		t.Fatalf("run inherited-fd probe: %v\n%s", err, output)
+	}
+	if _, err := os.Stat(marker); !os.IsNotExist(err) {
+		t.Fatalf("unvalidated inherited descriptor executed: %v", err)
 	}
 }
 
@@ -144,10 +213,9 @@ func TestPersonalScriptDropsEveryUnusablePath(t *testing.T) {
 		{"no shebang", noShebang},
 		{"bare name not on PATH", "proxsave-no-such-command-anywhere"},
 		{"exits non-zero", writePersonalScript(t, dir, "exit3.sh", "exit 3")},
-		// The world-writable row pins the DIVISION of labour: the starter itself stays
-		// permissive and silent (its frozen rule), because the trusted-path gate lives at
-		// daemon startup - validatePersonalScripts refuses and blanks this file LOUDLY
-		// before any tick, so the starter can only meet it in a test.
+		// The world-writable row pins the execution-time backstop: the starter stays
+		// silent, but refuses an unsafe opened inode if the path changed after the LOUD
+		// startup gate accepted it.
 		{"world writable but runnable", worldWritable},
 	}
 
@@ -318,8 +386,8 @@ func TestStartedScriptsGetNoShellNoArgumentsAndAnUnchangedEnvironment(t *testing
 	})
 }
 
-// TestNoShellIsInvolved is the behavioural half of "the path goes to execve as it stands".
-// The argument-count assertions above cannot see a shell wrapper applied inside the starter.
+// TestNoShellIsInvolved is the behavioural half of the direct FD-backed exec. The
+// argument-count assertions above cannot see a shell wrapper applied inside the starter.
 func TestNoShellIsInvolved(t *testing.T) {
 	t.Run("a file with no shebang is not interpreted", func(t *testing.T) {
 		dir := t.TempDir()
@@ -429,12 +497,11 @@ func TestAShutdownStopsTheWaitButNotTheScript(t *testing.T) {
 	}
 }
 
-// The trusted-path gate, added on the release-PR review (#303). The starters stay
-// silent and permissive on purpose (their frozen rule); the gate lives at daemon
-// startup instead, where a refusal can be LOUD - which is exactly what dissolves
-// the recorded objection that a refused path would be an undebuggable
-// non-execution. Each refusal names the variable, the path and the reason, and
-// blanks the setting so the run behaves as if it were never configured.
+// The trusted-path gate, added on the release-PR review (#303). The diagnostic gate
+// lives at daemon startup, where a refusal can be LOUD; the starters independently
+// bind and revalidate the opened inode while staying silent. Each startup refusal
+// names the variable, the path and the reason, and blanks the setting so the run
+// behaves as if it were never configured.
 func capturePersonalScriptValidation(t *testing.T, pre, post string) (preOut, postOut, logged string) {
 	t.Helper()
 	logger := logging.New(types.LogLevelDebug, false)
