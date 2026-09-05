@@ -50,6 +50,28 @@ func TestDaemonRuntimeRoundTripIsAtomicAndPrivate(t *testing.T) {
 	}
 }
 
+func TestWriteDaemonRuntimeRestrictsPreexistingTemporaryFile(t *testing.T) {
+	base := t.TempDir()
+	tmpPath := DaemonRuntimePath(base) + ".tmp"
+	if err := os.MkdirAll(filepath.Dir(tmpPath), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(tmpPath, []byte("stale"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := WriteDaemonRuntime(base, daemonRuntimeFixture()); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	info, err := os.Stat(DaemonRuntimePath(base))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0o600 {
+		t.Fatalf("mode = %04o, want 0600", info.Mode().Perm())
+	}
+}
+
 func TestReadDaemonRuntimeMissingEmptyAndMalformed(t *testing.T) {
 	base := t.TempDir()
 	zero := DaemonRuntimeState{}
