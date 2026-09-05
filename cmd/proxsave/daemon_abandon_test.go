@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/tis24dev/proxsave/internal/config"
 	"github.com/tis24dev/proxsave/internal/health"
 	"github.com/tis24dev/proxsave/internal/types"
 )
@@ -1705,6 +1706,33 @@ func TestDaemonFileCleanupCannotHoldTheExit(t *testing.T) {
 	case <-done:
 	case <-time.After(daemonAbandonIOWait + 10*time.Second):
 		t.Fatal("the exit is hostage to the identity dir: on a wedged BaseDir the daemon never returns from run() and systemd never restarts it")
+	}
+}
+
+func TestDaemonFileCleanupRemovesRuntimeState(t *testing.T) {
+	base := t.TempDir()
+	if err := health.WriteDaemonPID(base, os.Getpid()); err != nil {
+		t.Fatal(err)
+	}
+	if err := health.WriteDaemonInfo(base, health.DaemonInfo{PID: os.Getpid(), StartTS: 100}); err != nil {
+		t.Fatal(err)
+	}
+	if err := health.WriteDaemonRuntime(base, health.DaemonRuntimeState{
+		SchemaVersion: health.DaemonRuntimeSchemaVersion, PID: os.Getpid(), StartTS: 100,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	d := &daemon{cfg: &config.Config{BaseDir: base}}
+	d.removeDaemonFiles()
+	paths := []string{
+		health.DaemonPIDPath(base),
+		health.DaemonInfoPath(base),
+		health.DaemonRuntimePath(base),
+	}
+	for _, path := range paths {
+		if _, err := os.Stat(path); !os.IsNotExist(err) {
+			t.Errorf("cleanup left %s: %v", path, err)
+		}
 	}
 }
 
