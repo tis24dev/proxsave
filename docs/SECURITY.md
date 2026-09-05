@@ -55,13 +55,19 @@ abandoned-child unwind the daemon exits immediately so systemd can restart it, s
 post-run script is started and left to the cgroup instead of being waited for and killed (see
 [DAEMON.md](DAEMON.md)). The allowlist is for the
 external tools ProxSave itself drives; the scripts instead pass a trusted-path gate at daemon
-startup (`validatePersonalScripts`): the path may not traverse a symlink, the target and every
-directory above it must belong to root or the daemon's own user, the target must not be
-writable by group or others, and a group/other-writable directory must carry the sticky bit.
-A path that fails is refused LOUDLY - one `WARNING` naming the variable, the path and the
-reason - and the setting is blanked for that daemon, so the refusal is never the silent
-non-execution the per-start silence rule would otherwise make of it. Under those rules no
-non-root user can replace any path component between the check and any later execution.
+startup (`validatePersonalScripts`). The path may not traverse a symlink. The script target
+itself must belong to root or the daemon's own UID, must be executable, and must not be writable
+by group or others. A group/other-writable directory must carry the sticky bit.
+
+Root can traverse a UID-1000 mode-0700 home; that home therefore does not need to be renamed or
+made root-owned. ProxSave intentionally accepts a foreign-owned, non-loosely-writable ancestor
+selected in root-owned configuration. This is an explicit administrator trust decision, not a
+claim that the path is immutable: the ancestor owner can replace descendants that the daemon
+later executes with daemon privileges. The target itself remains root/daemon-owned and
+non-loosely-writable. This shape is `READY WITH WARNING`, remains enabled, and produces one
+startup warning per advisory setting. A symlink, unsafe target, or loosely writable non-sticky
+ancestor is `REFUSED`, blanked for that daemon, and produces one startup warning per refused
+setting, so neither policy result becomes silent non-execution.
 Several callers do invoke `/bin/sh`
 on purpose, but only one of them puts shell **text** on a command line: the background
 rollback timer runs `sh -c '<compile-time constant>'` and passes the sleep seconds and the
