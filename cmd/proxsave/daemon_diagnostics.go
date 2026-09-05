@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
+	"reflect"
 	"strconv"
 	"strings"
 	"time"
@@ -15,6 +17,47 @@ import (
 	"github.com/tis24dev/proxsave/internal/ui/components"
 )
 
+type daemonRuntimeAvailability string
+
+const (
+	daemonRuntimeAvailable     daemonRuntimeAvailability = "available"
+	daemonRuntimeMissing       daemonRuntimeAvailability = "missing"
+	daemonRuntimeStale         daemonRuntimeAvailability = "stale"
+	daemonRuntimeInvalid       daemonRuntimeAvailability = "invalid"
+	daemonRuntimeUnsupported   daemonRuntimeAvailability = "unsupported"
+	daemonRuntimeNotApplicable daemonRuntimeAvailability = "not-applicable"
+)
+
+type personalScriptSynchronization string
+
+const (
+	personalScriptInSync             personalScriptSynchronization = "in-sync"
+	personalScriptConfigurationDrift personalScriptSynchronization = "configuration-drift"
+	personalScriptPathStateChanged   personalScriptSynchronization = "path-state-changed"
+	personalScriptRuntimeUnavailable personalScriptSynchronization = "runtime-state-unavailable"
+	personalScriptSyncNotApplicable  personalScriptSynchronization = "not-applicable"
+)
+
+type daemonRuntimeDiagnostic struct {
+	Availability daemonRuntimeAvailability
+	Reason       string
+	ConfigPath   string
+	StartTS      int64
+	DaemonUID    int
+}
+
+type personalScriptComparison struct {
+	Running         personalScriptDiagnostic
+	Current         personalScriptDiagnostic
+	Synchronization personalScriptSynchronization
+	SyncReason      string
+}
+
+type personalScriptComparisons struct {
+	Pre  personalScriptComparison
+	Post personalScriptComparison
+}
+
 type daemonUIDDiagnostic struct {
 	Value          int
 	Source         string
@@ -24,15 +67,17 @@ type daemonUIDDiagnostic struct {
 // daemonDiagnostics is the single presentation-neutral snapshot consumed by
 // both the plain CLI and the dashboard daemon-status renderers.
 type daemonDiagnostics struct {
-	Mode        string
-	Unit        string
-	Active      string
-	State       health.DaemonState
-	Level       orchestrator.HealthcheckSetupLevel
-	Keyword     string
-	Explanation string
-	DaemonUID   daemonUIDDiagnostic
-	Scripts     personalScriptsDiagnostics
+	Mode              string
+	Unit              string
+	Active            string
+	State             health.DaemonState
+	Level             orchestrator.HealthcheckSetupLevel
+	Keyword           string
+	Explanation       string
+	DaemonUID         daemonUIDDiagnostic
+	Scripts           personalScriptsDiagnostics
+	Runtime           daemonRuntimeDiagnostic
+	ScriptComparisons personalScriptComparisons
 }
 
 var (
@@ -44,6 +89,7 @@ var (
 	daemonCurrentEUID              = os.Geteuid
 	daemonUIDResolver              = resolveDaemonEffectiveUID
 	personalScriptsInspector       = inspectPersonalScripts
+	daemonRuntimeReader            = health.ReadDaemonRuntime
 )
 
 // collectDaemonDiagnostics owns every probe and verdict used by the two
@@ -82,18 +128,156 @@ func collectDaemonDiagnostics(ctx context.Context, cfg *config.Config, baseDir s
 	})
 	level, keyword, explanation := daemonStatusStyle(state)
 	daemonUID := daemonUIDResolver(state)
-	scripts := personalScriptsInspector(cfg, daemonUID.Value)
-	return daemonDiagnostics{
-		Mode:        mode,
-		Unit:        unit,
-		Active:      active,
-		State:       state,
-		Level:       level,
-		Keyword:     keyword,
-		Explanation: explanation,
-		DaemonUID:   daemonUID,
-		Scripts:     scripts,
+	currentScripts := personalScriptsInspector(cfg, daemonUID.Value)
+	runtimeDiagnostic, runningScripts := resolveDaemonRuntime(state, baseDir)
+
+	currentConfigPath := ""
+	if cfg != nil {
+		currentConfigPath = cfg.ConfigPath
 	}
+	scripts := personalScriptComparisons{
+		Pre: comparePersonalScript(
+			runtimeDiagnostic, currentConfigPath, runningScripts.Pre, currentScripts.Pre,
+		),
+		Post: comparePersonalScript(
+			runtimeDiagnostic, currentConfigPath, runningScripts.Post, currentScripts.Post,
+		),
+	}
+	return daemonDiagnostics{
+		Mode:              mode,
+		Unit:              unit,
+		Active:            active,
+		State:             state,
+		Level:             level,
+		Keyword:           keyword,
+		Explanation:       explanation,
+		DaemonUID:         daemonUID,
+		Scripts:           currentScripts,
+		Runtime:           runtimeDiagnostic,
+		ScriptComparisons: scripts,
+	}
+}
+
+func resolveDaemonRuntime(state health.DaemonState, baseDir string) (daemonRuntimeDiagnostic, personalScriptsDiagnostics) {
+	if !state.ProcessAlive {
+		return daemonRuntimeDiagnostic{
+			Availability: daemonRuntimeNotApplicable,
+			Reason:       "daemon process is not live",
+		}, personalScriptsDiagnostics{}
+	}
+	if !state.HaveInfo {
+		return daemonRuntimeDiagnostic{
+			Availability: daemonRuntimeMissing,
+			Reason:       "daemon identity record is unavailable",
+		}, personalScriptsDiagnostics{}
+	}
+
+	record, found, err := daemonRuntimeReader(baseDir)
+	if err != nil {
+		return daemonRuntimeDiagnostic{Availability: daemonRuntimeInvalid, Reason: err.Error()}, personalScriptsDiagnostics{}
+	}
+	if !found {
+		return daemonRuntimeDiagnostic{
+			Availability: daemonRuntimeMissing,
+			Reason:       "running daemon did not publish runtime state",
+		}, personalScriptsDiagnostics{}
+	}
+	if record.SchemaVersion != health.DaemonRuntimeSchemaVersion {
+		return daemonRuntimeDiagnostic{
+			Availability: daemonRuntimeUnsupported,
+			Reason:       fmt.Sprintf("runtime schema %d is unsupported", record.SchemaVersion),
+		}, personalScriptsDiagnostics{}
+	}
+	if record.PID != state.PID || record.StartTS != state.StartTS {
+		return daemonRuntimeDiagnostic{
+			Availability: daemonRuntimeStale,
+			Reason:       "runtime PID/start does not match the live daemon",
+		}, personalScriptsDiagnostics{}
+	}
+
+	pre, okPre := personalScriptDiagnosticFromRuntime(
+		"PERSONAL_SCRIPT_PRE_RUN", record.DaemonUID, record.PersonalScripts.Pre,
+	)
+	post, okPost := personalScriptDiagnosticFromRuntime(
+		"PERSONAL_SCRIPT_POST_RUN", record.DaemonUID, record.PersonalScripts.Post,
+	)
+	if !okPre || !okPost {
+		return daemonRuntimeDiagnostic{
+			Availability: daemonRuntimeInvalid,
+			Reason:       "runtime record contains an unknown personal-script state",
+		}, personalScriptsDiagnostics{}
+	}
+	return daemonRuntimeDiagnostic{
+		Availability: daemonRuntimeAvailable,
+		ConfigPath:   record.ConfigPath,
+		StartTS:      record.StartTS,
+		DaemonUID:    record.DaemonUID,
+	}, personalScriptsDiagnostics{Pre: pre, Post: post}
+}
+
+func personalScriptDiagnosticFromRuntime(
+	key string,
+	daemonUID int,
+	in health.DaemonRuntimeScript,
+) (personalScriptDiagnostic, bool) {
+	state := personalScriptState(in.State)
+	switch state {
+	case personalScriptNotConfigured,
+		personalScriptReady,
+		personalScriptReadyWithWarning,
+		personalScriptRefused:
+	default:
+		return personalScriptDiagnostic{}, false
+	}
+	var components []personalScriptPathComponent
+	for _, component := range in.Components {
+		components = append(components, personalScriptPathComponent{
+			Path: component.Path,
+			UID:  component.UID,
+			Mode: os.FileMode(component.Mode),
+		})
+	}
+	return personalScriptDiagnostic{
+		Key:        key,
+		Path:       in.Path,
+		State:      state,
+		Reason:     in.Reason,
+		DaemonUID:  daemonUID,
+		Components: components,
+	}, true
+}
+
+func comparePersonalScript(
+	runtime daemonRuntimeDiagnostic,
+	currentConfigPath string,
+	running personalScriptDiagnostic,
+	current personalScriptDiagnostic,
+) personalScriptComparison {
+	comparison := personalScriptComparison{Running: running, Current: current}
+	if runtime.Availability == daemonRuntimeNotApplicable {
+		comparison.Synchronization = personalScriptSyncNotApplicable
+		comparison.SyncReason = "no live daemon exists; current configuration is prospective"
+		return comparison
+	}
+	if runtime.Availability != daemonRuntimeAvailable {
+		comparison.Synchronization = personalScriptRuntimeUnavailable
+		comparison.SyncReason = runtime.Reason
+		return comparison
+	}
+	if filepath.Clean(runtime.ConfigPath) != filepath.Clean(currentConfigPath) ||
+		running.Path != current.Path {
+		comparison.Synchronization = personalScriptConfigurationDrift
+		comparison.SyncReason = "restart the daemon to apply current personal-script configuration"
+		return comparison
+	}
+	if running.State != current.State || running.Reason != current.Reason ||
+		!reflect.DeepEqual(running.Components, current.Components) {
+		comparison.Synchronization = personalScriptPathStateChanged
+		comparison.SyncReason = "path ownership or mode changed after daemon startup"
+		return comparison
+	}
+	comparison.Synchronization = personalScriptInSync
+	return comparison
 }
 
 // parseProcEffectiveUID reads the second numeric value from Linux's Uid line:

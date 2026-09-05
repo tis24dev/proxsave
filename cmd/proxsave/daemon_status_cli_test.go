@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strconv"
@@ -155,6 +156,69 @@ func TestCollectDaemonDiagnosticsInspectsScriptsWithResolvedUID(t *testing.T) {
 	}
 	if got.DaemonUID.Value != 4242 || got.Scripts.Pre.State != personalScriptReady || got.Scripts.Post.State != personalScriptRefused {
 		t.Fatalf("collector omitted shared script diagnostics: %+v", got)
+	}
+}
+
+func TestCollectDaemonDiagnosticsComparesResidentReadyWithCurrentEmpty(t *testing.T) {
+	// Keep a live process with the daemon's argv identity for the real liveness probe.
+	resident := exec.Command("sh", "-c", "read unused", "proxsave", "--daemon")
+	stdin, err := resident.StdinPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := resident.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = stdin.Close(); _ = resident.Wait() })
+
+	origInstalled := daemonStatusUnitInstalledProbe
+	origActive := daemonStatusActiveStateProbe
+	origPresence := daemonPresenceProbe
+	origRead := daemonProcStatusReadFile
+	t.Cleanup(func() {
+		daemonStatusUnitInstalledProbe = origInstalled
+		daemonStatusActiveStateProbe = origActive
+		daemonPresenceProbe = origPresence
+		daemonProcStatusReadFile = origRead
+	})
+	daemonStatusUnitInstalledProbe = func() bool { return true }
+	daemonStatusActiveStateProbe = func(context.Context) string { return "active" }
+	daemonPresenceProbe = func(context.Context) health.DaemonPresence {
+		return health.DaemonPresence{Probed: true, Installed: true, Active: true}
+	}
+	daemonProcStatusReadFile = func(path string) ([]byte, error) {
+		if path != "/proc/"+strconv.Itoa(resident.Process.Pid)+"/status" {
+			t.Fatalf("unexpected process UID path: %s", path)
+		}
+		return []byte("Uid:\t1000\t4242\t1000\t1000\n"), nil
+	}
+	base := t.TempDir()
+	cfg := &config.Config{SchedulerMode: "daemon", BaseDir: base, ConfigPath: "/daemon.env"}
+	if err := health.WriteDaemonInfo(base, health.DaemonInfo{PID: resident.Process.Pid, StartTS: 100}); err != nil {
+		t.Fatal(err)
+	}
+	if err := health.WriteDaemonRuntime(base, health.DaemonRuntimeState{
+		SchemaVersion: health.DaemonRuntimeSchemaVersion, PID: resident.Process.Pid, StartTS: 100, ConfigPath: "/daemon.env", DaemonUID: 1234,
+		PersonalScripts: health.DaemonRuntimeScripts{
+			Pre:  health.DaemonRuntimeScript{Path: "/pre", State: "ready"},
+			Post: health.DaemonRuntimeScript{State: "not-configured"},
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	got := collectDaemonDiagnostics(context.Background(), cfg, "/ignored-base")
+	if got.Runtime.Availability != daemonRuntimeAvailable || !got.State.ProcessAlive {
+		t.Fatalf("resident state unavailable: %+v", got)
+	}
+	pre := got.ScriptComparisons.Pre
+	if pre.Running.Path != "/pre" || pre.Running.State != personalScriptReady || pre.Current.Path != "" || pre.Current.State != personalScriptNotConfigured || pre.Synchronization != personalScriptConfigurationDrift {
+		t.Fatalf("resident-ready/current-empty drift lost: %+v", pre)
+	}
+	if got.DaemonUID.Value != 4242 || got.DaemonUID.Source != "running daemon /proc" || pre.Current.DaemonUID != 4242 || pre.Running.DaemonUID != 1234 || got.Runtime.DaemonUID != 1234 {
+		t.Fatalf("persisted UID replaced current process evidence: %+v", got)
+	}
+	if got.Scripts.Pre.State != personalScriptNotConfigured || got.ScriptComparisons.Post.Synchronization != personalScriptInSync {
+		t.Fatalf("transitional/current inspection or unchanged post script incorrect: %+v", got)
 	}
 }
 
