@@ -328,7 +328,7 @@ func TestFinalizeChildHonoursTheSkipDaemonRestartFlag(t *testing.T) {
 	if callsPhase < 0 {
 		t.Fatal("runUpgradeFinalize no longer calls upgradeFinalizePhase; this test needs rewriting")
 	}
-	if !(readsFlag < callsPhase && clearsVar < callsPhase) {
+	if readsFlag >= callsPhase || clearsVar >= callsPhase {
 		t.Fatalf("the restart suppression must precede upgradeFinalizePhase (flag@%d clear@%d phase@%d)", readsFlag, clearsVar, callsPhase)
 	}
 }
