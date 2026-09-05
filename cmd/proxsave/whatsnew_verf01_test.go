@@ -137,13 +137,20 @@ func TestVERF01(t *testing.T) {
 		}
 	})
 
-	t.Run("timeout_esc_flag_not_cleared_warning_persists", func(t *testing.T) {
+	// End to end on the REAL state file: showing the screen disarms the warning
+	// however it was closed. Before issue #305 only an explicit continue did, so an
+	// operator who read the notes and pressed Esc kept getting a WARNING on every
+	// scheduled backup, which ParseLogCounts counted and applyIssueExitCode promoted
+	// to exit 1, reported to Healthchecks as down.
+	t.Run("any_exit_from_the_screen_disarms_the_warning", func(t *testing.T) {
 		cases := []struct {
 			name   string
 			runErr error
 		}{
-			{"timeout", context.DeadlineExceeded},
+			{"continue", nil},
 			{"esc", shell.ErrAborted},
+			{"ctrl+c", shell.ErrClosed},
+			{"timeout", context.DeadlineExceeded},
 		}
 		for _, tc := range cases {
 			t.Run(tc.name, func(t *testing.T) {
@@ -155,13 +162,37 @@ func TestVERF01(t *testing.T) {
 
 				maybeShowWhatsnew(context.Background(), nil, base, "0.30.0")
 
-				if _, err := os.Stat(whatsnew.StatePath(base)); !os.IsNotExist(err) {
-					t.Fatalf("%s wrote/cleared the flag; StatePath err = %v, want not-exist", tc.name, err)
+				state, present, err := whatsnew.LoadState(base)
+				if err != nil || !present || state.LastSeenNotesVersion != "0.30.0" {
+					t.Fatalf("%s left the flag unwritten: state=%+v present=%v err=%v", tc.name, state, present, err)
 				}
-				if show, ver, err := whatsnew.ShouldWarn(base, "0.30.0"); !show || ver != "0.30.0" || err != nil {
-					t.Fatalf("ShouldWarn after %s = (%v, %q, %v), want (true, \"0.30.0\", nil)", tc.name, show, ver, err)
+				if show, _, err := whatsnew.ShouldWarn(base, "0.30.0"); show || err != nil {
+					t.Fatalf("the warning survived a %s: ShouldWarn = (%v, %v)", tc.name, show, err)
 				}
 			})
+		}
+	})
+
+	// The one exit that still does not count: the PARENT was torn down, so the screen
+	// never really ran. That is an external SIGINT or SIGTERM, not the operator
+	// closing the screen; a Ctrl+C typed into the TUI never reaches this branch,
+	// because the terminal is in raw mode and bubbletea reads it as a key.
+	t.Run("a_torn_down_parent_leaves_the_warning_armed", func(t *testing.T) {
+		stubWhatsnewSeams(t)
+		base := t.TempDir()
+		whatsnewRun = func(ctx context.Context, session *shell.Session, body string) error {
+			return ctx.Err()
+		}
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+
+		maybeShowWhatsnew(ctx, nil, base, "0.30.0")
+
+		if _, err := os.Stat(whatsnew.StatePath(base)); !os.IsNotExist(err) {
+			t.Fatalf("a cancelled parent wrote the flag; StatePath err = %v, want not-exist", err)
+		}
+		if show, ver, err := whatsnew.ShouldWarn(base, "0.30.0"); !show || ver != "0.30.0" || err != nil {
+			t.Fatalf("ShouldWarn = (%v, %q, %v), want (true, \"0.30.0\", nil)", show, ver, err)
 		}
 	})
 }

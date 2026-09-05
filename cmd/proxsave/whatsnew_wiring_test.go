@@ -32,11 +32,19 @@ func stubWhatsnewSeams(t *testing.T) {
 	})
 }
 
-// TestScreen0WriteOnlyOnContinue is the MANDATORY continue-only-write contract
-// (SCRN-03, Pitfall 9, threat T-01-07): the seen-flag is written EXACTLY ONCE on an
-// explicit continue (whatsnewRun returns nil) and NEVER on Esc (shell.ErrAborted) or
-// a timeout (context.DeadlineExceeded).
-func TestScreen0WriteOnlyOnContinue(t *testing.T) {
+// The seen-flag is written EXACTLY ONCE once the screen has been shown, however the
+// operator left it. The old contract wrote only on an explicit continue, so reading
+// the notes and closing with Esc or Ctrl+C left the flag unwritten and the next
+// scheduled backup logged a WARNING that ParseLogCounts counted and
+// applyIssueExitCode promoted to exit 1, which the daemon reports to Healthchecks as
+// down (issue #305).
+//
+// Presence is established before this point and not by which key was pressed:
+// maybeShowWhatsnew and showWhatsnewScreen both gate on a real terminal, and
+// --dry-run returns before rendering. Reaching the write means a person saw the
+// screen. Only a torn-down PARENT context still skips it, which is covered
+// separately by TestMaybeShowWhatsnewTimeout.
+func TestScreen0WritesOnceHoweverTheScreenIsClosed(t *testing.T) {
 	const (
 		base    = "/tmp/whatsnew-base"
 		current = "0.30.0"
@@ -47,8 +55,9 @@ func TestScreen0WriteOnlyOnContinue(t *testing.T) {
 		wantCalls int
 	}{
 		{"continue writes once", nil, 1},
-		{"esc never writes", shell.ErrAborted, 0},
-		{"timeout never writes", context.DeadlineExceeded, 0},
+		{"esc writes: the notes were read", shell.ErrAborted, 1},
+		{"ctrl+c writes: bubbletea reports it as a closed session", shell.ErrClosed, 1},
+		{"the 10-minute timeout writes: the screen was on the operator's terminal", context.DeadlineExceeded, 1},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

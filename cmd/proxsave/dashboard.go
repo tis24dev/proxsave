@@ -108,16 +108,39 @@ func whatsnewResolve(baseDir, toolVersion string) (show bool, body string) {
 }
 
 // whatsnewRender pushes Screen 0 (body) onto session, bounded by the total
-// whatsnewScreenTimeout, and clears the seen-flag ONLY on an explicit continue
-// (err == nil): a timeout (context.DeadlineExceeded) or Esc (shell.ErrAborted) is a
-// non-nil error and leaves the flag untouched, so the write stays out of any
-// defer/teardown and the fallback warning keeps firing next run (SCRN-03/04, Pitfall 9).
+// whatsnewScreenTimeout, and marks the notes seen once the screen has been shown,
+// HOWEVER the operator left it: continue, Esc, q, Ctrl+C (shell.ErrClosed) or the
+// timeout.
+//
+// It used to write only on an explicit continue, so reading the notes and closing
+// with Esc or Ctrl+C, which is what most people do, left the flag unwritten. The
+// next scheduled backup then logged "has unseen release notes" as a WARNING,
+// ParseLogCounts counted it, and applyIssueExitCode promoted an otherwise clean
+// run to exit 1, which the daemon reports to Healthchecks as down (issue #305).
+// Demanding a specific keystroke to disarm that is not a gate, it is a trap.
+//
+// Nothing is lost by dropping the confirmation, because presence is established
+// BEFORE this point and not by which key was pressed: showWhatsnewScreen and
+// maybeShowWhatsnew both gate on a real terminal (dashboardIsInteractive), the
+// post-upgrade hand-off gates on whatsnewAfterUpgradeInteractive, and --dry-run
+// returns before rendering. An unattended run never reaches this function, so
+// reaching it means a person saw the screen.
 func whatsnewRender(ctx context.Context, session *shell.Session, baseDir, toolVersion, body string) {
 	wnCtx, cancel := context.WithTimeout(ctx, whatsnewScreenTimeout)
 	defer cancel()
-	if whatsnewRun(wnCtx, session, body) == nil {
-		_ = whatsnewSaveSeen(baseDir, toolVersion)
+	// The resolution is deliberately discarded: it says how the screen was closed,
+	// which is no longer what decides whether the notes were seen.
+	_ = whatsnewRun(wnCtx, session, body)
+	// The one case that still does not count: the PARENT was torn down, so the
+	// screen never really ran. That is an external SIGINT or SIGTERM
+	// (setupRunContextWithSignals cancels ctx), not the operator closing the screen.
+	// A Ctrl+C typed INTO the screen does not land here: the terminal is in raw mode,
+	// bubbletea reads it as a key and the router turns it into tea.Interrupt, so the
+	// parent context stays alive and the notes count as seen, which is the point.
+	if ctx.Err() != nil {
+		return
 	}
+	_ = whatsnewSaveSeen(baseDir, toolVersion)
 }
 
 // showWhatsnewScreen runs ONLY Screen 0 (what's new) and returns, without the dashboard
