@@ -227,9 +227,11 @@ func personalScriptDiagnosticFromRuntime(
 	default:
 		return personalScriptDiagnostic{}, false
 	}
-	var components []personalScriptPathComponent
+	// Not named "components": this file imports internal/ui/components, and a local
+	// of that name shadows the package for the rest of the function.
+	var pathComponents []personalScriptPathComponent
 	for _, component := range in.Components {
-		components = append(components, personalScriptPathComponent{
+		pathComponents = append(pathComponents, personalScriptPathComponent{
 			Path: component.Path,
 			UID:  component.UID,
 			Mode: os.FileMode(component.Mode),
@@ -241,7 +243,7 @@ func personalScriptDiagnosticFromRuntime(
 		State:      state,
 		Reason:     in.Reason,
 		DaemonUID:  daemonUID,
-		Components: components,
+		Components: pathComponents,
 	}, true
 }
 
