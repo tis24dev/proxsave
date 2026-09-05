@@ -127,3 +127,97 @@ func TestEveryPVEStagedApplyArmGoesThroughApplyArm(t *testing.T) {
 		t.Fatalf("these arms bypass the %s cancellation gate: %s", gate, strings.Join(escaped, ", "))
 	}
 }
+
+// applyArm gates cancellation BETWEEN arms. Without a check inside the helpers the
+// window in which a cancelled restore can still write is a whole arm: read the
+// staged file, trim it, and only then write. These three drive each helper with an
+// already-cancelled context and assert that the irreversible call did not happen.
+//
+// This narrows the window, it does not close it: cancellation can still land
+// between the check and the write, and there is no atomic "write unless cancelled"
+// available. The point is that "cancelled before the arm even started reading"
+// must never reach a write, which is the case an aborted restore actually hits.
+func TestCancelledContextSkipsEachPVEStagedWrite(t *testing.T) {
+	t.Run("vzdump.conf write", func(t *testing.T) {
+		fs := stagedCancelFS(t)
+		if err := fs.AddFile("/stage/etc/vzdump.conf", []byte("tmpdir: /var/tmp\n")); err != nil {
+			t.Fatal(err)
+		}
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		err := applyPVEVzdumpConfFromStage(ctx, logging.New(types.LogLevelError, false), "/stage")
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("err = %v, want context.Canceled", err)
+		}
+		if _, err := fs.ReadFile("/etc/vzdump.conf"); err == nil {
+			t.Fatal("a cancelled restore wrote /etc/vzdump.conf anyway")
+		}
+	})
+
+	// The empty-staged-file branch REMOVES the destination, which is irreversible in
+	// the same way a write is and reaches a different call.
+	t.Run("vzdump.conf removal", func(t *testing.T) {
+		fs := stagedCancelFS(t)
+		if err := fs.AddFile("/stage/etc/vzdump.conf", []byte("  \n")); err != nil {
+			t.Fatal(err)
+		}
+		if err := fs.AddFile("/etc/vzdump.conf", []byte("tmpdir: /var/tmp\n")); err != nil {
+			t.Fatal(err)
+		}
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		err := applyPVEVzdumpConfFromStage(ctx, logging.New(types.LogLevelError, false), "/stage")
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("err = %v, want context.Canceled", err)
+		}
+		if _, err := fs.ReadFile("/etc/vzdump.conf"); err != nil {
+			t.Fatalf("a cancelled restore removed /etc/vzdump.conf anyway: %v", err)
+		}
+	})
+
+	t.Run("datacenter.cfg pmxcfs write", func(t *testing.T) {
+		fs := stagedCancelFS(t)
+		seamPmxcfs(t, "/etc/pve", true, nil)
+		if err := fs.AddFile("/stage/etc/pve/datacenter.cfg", []byte("keyboard: it\n")); err != nil {
+			t.Fatal(err)
+		}
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		err := applyPVEDatacenterCfgFromStage(ctx, logging.New(types.LogLevelError, false), "/stage")
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("err = %v, want context.Canceled", err)
+		}
+		if _, err := fs.ReadFile("/etc/pve/datacenter.cfg"); err == nil {
+			t.Fatal("a cancelled restore wrote datacenter.cfg into pmxcfs anyway")
+		}
+	})
+
+	t.Run("vzdump.cron pmxcfs write", func(t *testing.T) {
+		fs := stagedCancelFS(t)
+		seamPmxcfs(t, "/etc/pve", true, nil)
+		if err := fs.AddFile("/stage/etc/pve/vzdump.cron", []byte("0 2 * * 6 root vzdump 101\n")); err != nil {
+			t.Fatal(err)
+		}
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		err := applyPVEVzdumpCronFromStage(ctx, logging.New(types.LogLevelError, false), "/stage")
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("err = %v, want context.Canceled", err)
+		}
+		if _, err := fs.ReadFile("/etc/pve/vzdump.cron"); err == nil {
+			t.Fatal("a cancelled restore wrote vzdump.cron into pmxcfs anyway")
+		}
+	})
+}
+
+func stagedCancelFS(t *testing.T) *FakeFS {
+	t.Helper()
+	orig := restoreFS
+	fs := NewFakeFS()
+	restoreFS = fs
+	t.Cleanup(func() {
+		restoreFS = orig
+		_ = os.RemoveAll(fs.Root)
+	})
+	return fs
+}

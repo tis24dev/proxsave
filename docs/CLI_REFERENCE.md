@@ -99,7 +99,7 @@ proxsave -h
 | Flag | Short | Description |
 |------|-------|-------------|
 | `--config <path>` | `-c` | Path to configuration file (default `configs/backup.env`, resolved under the install dir, e.g. `/opt/proxsave/configs/backup.env`). An absolute path is used as-is; a relative path is joined onto the install dir, not the current directory. |
-| `--dry-run` | `-n` | Test mode - no actual changes made |
+| `--dry-run` | `-n` | Test mode - no actual changes made. Refused with `--upgrade` and `--upgrade-finalize`: neither has ever honoured it, so the combination is an error rather than a silent full upgrade |
 | `--version` | `-v` | Display version information |
 | `--help` | `-h` | Show help message |
 | `--backup` | | Run the backup now and skip the interactive dashboard. This is the default behavior when proxsave runs non-interactively (cron, pipe, systemd). |
@@ -250,6 +250,7 @@ See also: [upgrading configuration](#configuration-upgrade)
 | `--upgrade-config-dry-run` | Preview config upgrade without changes |
 | `--upgrade-config-json` | Internal: upgrade the config and print a JSON summary to stdout (used by `--upgrade`; not for direct use) |
 | `--upgrade-finalize` | Internal: run only the post-install finalize phase (config merge, docs/symlinks, daemon migrate+restart, permissions, footer, release notes). `--upgrade` re-invokes the freshly installed binary with it from 0.36.0 on, so the finalize policy that runs belongs to the release being installed rather than to the one being replaced. Not for direct use: run by hand it restarts the daemon and prints an upgrade footer for a version nobody installed |
+| `--upgrade-finalize-skip-daemon-restart` | Internal, with `--upgrade-finalize`: do not restart the resident daemon, because the caller restarts it itself. `--upgrade` forwards this when the dashboard is driving, since the suppression lives in a package variable a child process cannot see. Without it the daemon is restarted twice |
 
 ---
 
@@ -689,7 +690,7 @@ crontab -e
 | `--help` | `-h` | Show help message |
 | `--version` | `-v` | Display version information |
 | `--config <path>` | `-c` | Path to configuration file |
-| `--dry-run` | `-n` | Test mode - no actual changes |
+| `--dry-run` | `-n` | Test mode - no actual changes. Not accepted with `--upgrade` |
 | `--log-level <level>` | `-l` | Set log level (debug\|info\|warning\|error\|critical) |
 | `--cli` | - | Force CLI mode instead of TUI (only for: --install, --new-install, --newkey, --decrypt, --restore) |
 | `--install` | - | Interactive installation wizard |

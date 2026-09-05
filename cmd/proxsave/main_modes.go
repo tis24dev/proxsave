@@ -96,6 +96,23 @@ func validateUpgradeCompatibility(args *cli.Args) []string {
 	if args.LocalFile && !args.Upgrade {
 		return []string{"The --localfile flag only applies to --upgrade (use: --upgrade --localfile)."}
 	}
+	// Neither the upgrade nor its finalize phase has ever honoured --dry-run: not one
+	// line of cmd/proxsave/upgrade.go reads args.DryRun, so the combination merges the
+	// configuration, refreshes the support docs and symlinks, repoints legacy cron
+	// entries, may install or restart the resident daemon, and normalizes permissions
+	// on a live installation - while the operator was told nothing would change.
+	//
+	// This refuses the combination rather than implementing a dry run of it. A truthful
+	// dry run would have to model every one of those effects, and a partial one is worse
+	// than none: it teaches the operator that the flag is honoured here. The refusal
+	// mirrors the one --daemon already carries below.
+	//
+	// It closes a gap that PREDATES --upgrade-finalize (`--upgrade --dry-run` has always
+	// silently mutated), so it turns an invocation that used to be accepted into an
+	// error. That is the point: it used to lie.
+	if args.DryRun && (args.Upgrade || args.UpgradeFinalize) {
+		return []string{"--dry-run is not supported with --upgrade: the upgrade and its finalize phase always modify the installation."}
+	}
 	return nil
 }
 

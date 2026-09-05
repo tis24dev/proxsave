@@ -78,7 +78,7 @@ func maybeApplyPVEConfigsFromStage(ctx context.Context, logger *logging.Logger, 
 	}
 
 	if plan.HasCategoryID("storage_pve") {
-		applyArm("vzdump.conf", func() error { return applyPVEVzdumpConfFromStage(logger, stageRoot) })
+		applyArm("vzdump.conf", func() error { return applyPVEVzdumpConfFromStage(ctx, logger, stageRoot) })
 
 		// In cluster RECOVERY mode, config.db restoration owns storage.cfg/datacenter.cfg.
 		// Still apply mount guards because they only protect mountpoints from accidental writes.
@@ -102,7 +102,7 @@ func maybeApplyPVEConfigsFromStage(ctx context.Context, logger *logging.Logger, 
 			logging.DebugStep(logger, "pve staged apply", "Skip PVE backup jobs apply: cluster RECOVERY restores config.db")
 		} else {
 			applyArm("jobs.cfg", func() error { return applyPVEBackupJobsFromStage(ctx, logger, stageRoot) })
-			applyArm("vzdump.cron", func() error { return applyPVEVzdumpCronFromStage(logger, stageRoot) })
+			applyArm("vzdump.cron", func() error { return applyPVEVzdumpCronFromStage(ctx, logger, stageRoot) })
 		}
 	}
 
@@ -122,7 +122,13 @@ func maybeApplyPVEConfigsFromStage(ctx context.Context, logger *logging.Logger, 
 	return nil
 }
 
-func applyPVEVzdumpConfFromStage(logger *logging.Logger, stageRoot string) error {
+// The ctx is not decoration. applyArm gates cancellation BETWEEN arms, so without
+// a check in here the window in which a cancelled restore can still write is a
+// whole arm: reading the staged file, trimming it, and only then writing. The
+// checks below shrink that window to the instant before each irreversible call.
+// They cannot close it: cancellation can still land between the check and the
+// write, and there is no atomic "write unless cancelled" to reach for.
+func applyPVEVzdumpConfFromStage(ctx context.Context, logger *logging.Logger, stageRoot string) error {
 	rel := "etc/vzdump.conf"
 	stagePath := filepath.Join(stageRoot, rel)
 	data, err := restoreFS.ReadFile(stagePath)
@@ -137,10 +143,16 @@ func applyPVEVzdumpConfFromStage(logger *logging.Logger, stageRoot string) error
 	trimmed := strings.TrimSpace(string(data))
 	destPath := "/etc/vzdump.conf"
 	if trimmed == "" {
+		if cerr := ctx.Err(); cerr != nil {
+			return cerr
+		}
 		logger.Warning("PVE staged apply: %s is empty; removing %s", rel, destPath)
 		return removeIfExists(destPath)
 	}
 
+	if cerr := ctx.Err(); cerr != nil {
+		return cerr
+	}
 	if err := writeFileAtomic(destPath, []byte(trimmed+"\n"), 0o644); err != nil {
 		return fmt.Errorf("write %s: %w", destPath, err)
 	}
@@ -187,7 +199,7 @@ func applyPVEStorageCfgFromStage(ctx context.Context, logger *logging.Logger, st
 // apply. The API has no whole-file endpoint (options live per-key under
 // /cluster/options); the file write replicates cluster-wide because /etc/pve IS
 // pmxcfs, and pvesh is not needed at all.
-func applyPVEDatacenterCfgFromStage(_ context.Context, logger *logging.Logger, stageRoot string) error {
+func applyPVEDatacenterCfgFromStage(ctx context.Context, logger *logging.Logger, stageRoot string) error {
 	stagePath := filepath.Join(stageRoot, "etc/pve/datacenter.cfg")
 	data, err := restoreFS.ReadFile(stagePath)
 	if err != nil {
@@ -202,6 +214,9 @@ func applyPVEDatacenterCfgFromStage(_ context.Context, logger *logging.Logger, s
 		return nil
 	}
 
+	if cerr := ctx.Err(); cerr != nil {
+		return cerr
+	}
 	if err := pmxcfsWriteFile(logger, "datacenter.cfg", data); err != nil {
 		return fmt.Errorf("apply staged datacenter.cfg: %w", err)
 	}
@@ -215,7 +230,7 @@ func applyPVEDatacenterCfgFromStage(_ context.Context, logger *logging.Logger, s
 // silently vanished from every staged restore. There is no pvesh endpoint for
 // vzdump.cron; the file lives in pmxcfs, so the write IS the cluster-wide
 // apply, the same way datacenter.cfg is handled.
-func applyPVEVzdumpCronFromStage(logger *logging.Logger, stageRoot string) error {
+func applyPVEVzdumpCronFromStage(ctx context.Context, logger *logging.Logger, stageRoot string) error {
 	stagePath := filepath.Join(stageRoot, "etc/pve/vzdump.cron")
 	data, err := restoreFS.ReadFile(stagePath)
 	if err != nil {
@@ -228,6 +243,9 @@ func applyPVEVzdumpCronFromStage(logger *logging.Logger, stageRoot string) error
 	if strings.TrimSpace(string(data)) == "" {
 		logging.DebugStep(logger, "pve staged apply vzdump.cron", "Staged vzdump.cron is empty; skipping apply")
 		return nil
+	}
+	if cerr := ctx.Err(); cerr != nil {
+		return cerr
 	}
 	if err := pmxcfsWriteFile(logger, "vzdump.cron", data); err != nil {
 		return fmt.Errorf("apply staged vzdump.cron: %w", err)

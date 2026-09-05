@@ -67,12 +67,19 @@ type Args struct {
 	// Screen 0 (auto-yes, or the dashboard owning presentation) into one bit, since
 	// the child only needs the verdict.
 	UpgradeFinalizeSkipWhatsnew bool
-	CleanupGuards               bool
-	Backup        bool
-	Daemon        bool
-	DaemonSetup   bool
-	DaemonRemove  bool
-	DaemonStatus  bool
+	// UpgradeFinalizeSkipDaemonRestart carries the parent's decision NOT to restart
+	// the resident daemon inline, because the parent restarts it itself afterwards.
+	// The dashboard does exactly that (dashboard_upgrade.go, upgRun), and it does it
+	// by flipping a package var, which a child PROCESS cannot see: without this flag
+	// the child restarts too and the operator gets two service interruptions, with
+	// the second one able to be deferred behind a backup that started in between.
+	UpgradeFinalizeSkipDaemonRestart bool
+	CleanupGuards                    bool
+	Backup                           bool
+	Daemon                           bool
+	DaemonSetup                      bool
+	DaemonRemove                     bool
+	DaemonStatus                     bool
 }
 
 var osExit = os.Exit
@@ -161,6 +168,8 @@ func Parse() *Args {
 		"With --upgrade-finalize: the version the caller installed (for internal use by --upgrade)")
 	flag.BoolVar(&args.UpgradeFinalizeSkipWhatsnew, "upgrade-finalize-skip-whatsnew", false,
 		"With --upgrade-finalize: do not open the what's-new screen (for internal use by --upgrade)")
+	flag.BoolVar(&args.UpgradeFinalizeSkipDaemonRestart, "upgrade-finalize-skip-daemon-restart", false,
+		"With --upgrade-finalize: do not restart the resident daemon; the caller does it (for internal use by --upgrade)")
 
 	// Custom usage message
 	flag.Usage = func() {

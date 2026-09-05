@@ -417,6 +417,15 @@ func runUpgradeFinalize(ctx context.Context, args *cli.Args, bootstrap *logging.
 		return types.ExitConfigError.Int()
 	}
 
+	// The parent restarts the daemon itself when it passes this (the dashboard does),
+	// so the child must not. Restoring it afterwards is pointless in a process that
+	// exits next, but it keeps the var's meaning honest for anything that reads it.
+	if args.UpgradeFinalizeSkipDaemonRestart {
+		prev := upgradeRestartsDaemon
+		upgradeRestartsDaemon = false
+		defer func() { upgradeRestartsDaemon = prev }()
+	}
+
 	version := strings.TrimSpace(args.UpgradeFinalizeVersion)
 	if version == "" {
 		version = strings.TrimPrefix(buildinfo.String(), "v")
@@ -460,6 +469,16 @@ var upgradeFinalizeCommand = safeexec.TrustedCommandContext
 // over the old one and keeps no copy, so no rollback capability exists here today.
 // The parent's job is to report, and to still finalize when the child cannot run.
 func delegateUpgradeFinalize(ctx context.Context, args *cli.Args, bootstrap *logging.BootstrapLogger, execPath, versionInstalled string, opts upgradeRunOptions) (int, error, bool) {
+	// The parse check has to be its own gate, because compareVersions cannot be the
+	// one to fail closed: it degrades an unparsable component to 0 rather than
+	// rejecting it, so "999.not-a-version" reads as [999,0] and compares ABOVE the
+	// floor. Its other caller (upgradeAcquireBinary) wants exactly that degradation,
+	// where a malformed remote version simply means "not newer", so the fix belongs
+	// here and not there.
+	if !parsableVersionCore(versionInstalled) {
+		bootstrap.Warning("Upgrade: installed version %q does not parse; finalizing here instead of delegating", versionInstalled)
+		return 0, nil, false
+	}
 	if compareVersions(versionInstalled, upgradeFinalizeDelegationFloor) < 0 {
 		logging.DebugStepBootstrap(bootstrap, "upgrade workflow", "finalize stays in this binary: installed %q is below %s", versionInstalled, upgradeFinalizeDelegationFloor)
 		return 0, nil, false
@@ -471,6 +490,12 @@ func delegateUpgradeFinalize(ctx context.Context, args *cli.Args, bootstrap *log
 	}
 	if opts.deferWhatsnew || args.UpgradeAutoYes {
 		cmdArgs = append(cmdArgs, "--upgrade-finalize-skip-whatsnew")
+	}
+	// upgradeRestartsDaemon is a package var, so the dashboard's decision to own the
+	// restart itself (upgRun sets it false) stops at this process boundary. Forward
+	// it, or the child restarts the daemon and the dashboard restarts it again.
+	if !upgradeRestartsDaemon {
+		cmdArgs = append(cmdArgs, "--upgrade-finalize-skip-daemon-restart")
 	}
 	// Without this the half of the upgrade that moved to the child would go quiet
 	// under `--upgrade --log-level debug`, which is the flag someone reaches for
@@ -499,6 +524,40 @@ func delegateUpgradeFinalize(ctx context.Context, args *cli.Args, bootstrap *log
 		return types.ExitGenericError.Int(), err, true
 	}
 	return types.ExitSuccess.Int(), nil, true
+}
+
+// parsableVersionCore reports whether every dot-separated component of v's numeric
+// core is a non-negative integer. The core is what precedes the first "-" or "+"
+// (semver prerelease and build metadata), so "0.37.0-rc1" and "0.37.0+deadbeef"
+// parse while "0.37.x" and "999.not-a-version" do not.
+//
+// It exists because delegating on a version nobody could parse is the worst
+// outcome available: the child either lacks --upgrade-finalize and exits on an
+// argument error, or is not the binary anyone thinks it is. Either way
+// delegateUpgradeFinalize reports a finalize failure and does NOT retry in
+// process, so the config merge, the docs refresh, the symlinks and the daemon
+// migration are all skipped while the upgrade reports failure.
+func parsableVersionCore(v string) bool {
+	v = strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(v), "v"))
+	if v == "" {
+		return false
+	}
+	if idx := strings.IndexAny(v, "-+"); idx >= 0 {
+		v = v[:idx]
+	}
+	if v == "" {
+		return false
+	}
+	for _, part := range strings.Split(v, ".") {
+		if part == "" {
+			return false
+		}
+		n, err := strconv.Atoi(part)
+		if err != nil || n < 0 {
+			return false
+		}
+	}
+	return true
 }
 
 // upgradeExitCode maps the binary-install and config-upgrade outcomes to a process

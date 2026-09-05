@@ -1,6 +1,7 @@
 package orchestrator
 
 import (
+	"context"
 	"os"
 	"strings"
 	"testing"
@@ -27,7 +28,7 @@ func TestApplyPVEVzdumpCronFromStageWritesThroughPmxcfs(t *testing.T) {
 		t.Fatal(err)
 	}
 	logger := logging.New(types.LogLevelDebug, false)
-	if err := applyPVEVzdumpCronFromStage(logger, "/stage"); err != nil {
+	if err := applyPVEVzdumpCronFromStage(context.Background(), logger, "/stage"); err != nil {
 		t.Fatalf("applyPVEVzdumpCronFromStage: %v", err)
 	}
 	got, err := fakeFS.ReadFile("/etc/pve/vzdump.cron")
@@ -45,13 +46,13 @@ func TestApplyPVEVzdumpCronFromStageSkipsAbsentAndEmpty(t *testing.T) {
 	seamPmxcfs(t, "/etc/pve", true, nil)
 	logger := logging.New(types.LogLevelDebug, false)
 
-	if err := applyPVEVzdumpCronFromStage(logger, "/stage"); err != nil {
+	if err := applyPVEVzdumpCronFromStage(context.Background(), logger, "/stage"); err != nil {
 		t.Fatalf("absent vzdump.cron must be a silent skip: %v", err)
 	}
 	if err := fakeFS.AddFile("/stage/etc/pve/vzdump.cron", []byte(" \n\t")); err != nil {
 		t.Fatal(err)
 	}
-	if err := applyPVEVzdumpCronFromStage(logger, "/stage"); err != nil {
+	if err := applyPVEVzdumpCronFromStage(context.Background(), logger, "/stage"); err != nil {
 		t.Fatalf("empty vzdump.cron must be a silent skip: %v", err)
 	}
 	if _, err := fakeFS.ReadFile("/etc/pve/vzdump.cron"); err == nil {
@@ -71,7 +72,7 @@ func TestApplyPVEVzdumpCronFromStageRefusesWithoutPmxcfs(t *testing.T) {
 		t.Fatal(err)
 	}
 	logger := logging.New(types.LogLevelDebug, false)
-	err := applyPVEVzdumpCronFromStage(logger, "/stage")
+	err := applyPVEVzdumpCronFromStage(context.Background(), logger, "/stage")
 	if err == nil || !strings.Contains(err.Error(), "not mounted") {
 		t.Fatalf("want the mounted-guard refusal, got %v", err)
 	}
@@ -90,7 +91,7 @@ func TestVzdumpCronArmIsWiredIntoTheStagedApply(t *testing.T) {
 	if jobs < 0 {
 		t.Fatal("pve_jobs branch not found")
 	}
-	if !strings.Contains(src[jobs:], "applyPVEVzdumpCronFromStage(") {
+	if !strings.Contains(src[jobs:], "applyPVEVzdumpCronFromStage(ctx, ") {
 		t.Fatal("applyPVEVzdumpCronFromStage is not wired into the pve_jobs branch: the arm is dead code")
 	}
 }

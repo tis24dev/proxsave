@@ -152,6 +152,7 @@ var notes = []Note{
 			"If you relied on --upgrade y showing the release notes, run proxsave --show-whatsnew after the upgrade",
 			"The upgrade TO 0.36.0 still finalizes from the old binary; the new path starts with the upgrade after it",
 			"If a personal script lives below a user-owned home, check the fs.protected_hardlinks value now shown at startup",
+			"Remove --dry-run from any script that runs proxsave --upgrade: the combination is now refused instead of upgrading",
 		},
 	},
 }
