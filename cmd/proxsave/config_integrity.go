@@ -123,7 +123,20 @@ func renderConfigIntegrityReport(bootstrap *logging.BootstrapLogger, report *con
 	for _, name := range report.Absent {
 		bootstrap.Warning("%s%s is absent and falls back to its default", integrityFindingIndent, name)
 	}
+	nearMiss := make(map[string]string, len(report.NearMiss))
+	for _, candidate := range report.NearMiss {
+		nearMiss[candidate.Name] = candidate.Suggestion
+	}
 	for _, name := range report.Unknown {
+		// A name one character away from a real variable is a typo, not a retired
+		// setting, and the two have opposite consequences: the retired one changes
+		// nothing, the typo silently disables what the operator asked for. Naming the
+		// variable it was probably meant to be is what turns the line into a fix.
+		if suggestion, ok := nearMiss[name]; ok {
+			bootstrap.Warning("%s%s is not a known variable and is ignored; did you mean %s?",
+				integrityFindingIndent, name, suggestion)
+			continue
+		}
 		bootstrap.Info("%s%s is not a known variable and is ignored", integrityFindingIndent, name)
 	}
 	for _, legacy := range report.Legacy {
@@ -189,6 +202,12 @@ func integrityVerdictCounts(report *config.ConfigIntegrityReport) string {
 	}
 	if n := len(report.Unknown); n > 0 {
 		parts = append(parts, fmt.Sprintf("%d unknown", n))
+	}
+	// Counted separately although every near miss is also counted as unknown: the
+	// summary line is what an operator scanning a log stops on, and "7 unknown" alone
+	// reads as housekeeping, while a possible typo is a setting that is not applied.
+	if n := len(report.NearMiss); n > 0 {
+		parts = append(parts, fmt.Sprintf("%d possible typo", n))
 	}
 	if n := len(report.Legacy); n > 0 {
 		parts = append(parts, fmt.Sprintf("%d legacy", n))

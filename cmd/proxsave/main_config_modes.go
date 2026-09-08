@@ -94,11 +94,41 @@ func runUpgradeConfigMode(ctx context.Context, args *cli.Args, bootstrap *loggin
 	logConfigUpgradeWarnings(bootstrap, result.Warnings)
 	if !result.Changed {
 		bootstrap.Println("Configuration is already up to date with the embedded template; no changes were made.")
+		reportConfigFindingsTheMergeLeaves(bootstrap, args.ConfigPath)
 		return types.ExitSuccess.Int(), true
 	}
 
 	printConfigUpgradeApplyResult(bootstrap, result)
+	reportConfigFindingsTheMergeLeaves(bootstrap, args.ConfigPath)
 	return types.ExitSuccess.Int(), true
+}
+
+// reportConfigFindingsTheMergeLeaves names what the template merge does NOT fix, so
+// the repair command stops being the one surface that says nothing about it.
+//
+// The merge only ADDS what the template has and the file lacks. A variable assigned
+// twice and a variable whose name is one character off are both invisible to it: the
+// key is present, so nothing is missing, and "already up to date with the embedded
+// template" was printed over a file every backup run then warns about. Reported by an
+// operator whose CUSTOM_BACKUP_PATHS was duplicated for months while --upgrade-config
+// answered that there was nothing to do.
+//
+// This only reports. Removing the discarded lines is an edit to the operator's file
+// that the merge has never made, and it is not made here either.
+func reportConfigFindingsTheMergeLeaves(bootstrap *logging.BootstrapLogger, configPath string) {
+	report, err := config.AuditConfigFile(configPath)
+	if err != nil {
+		logging.DebugStepBootstrap(bootstrap, "config upgrade", "audit after merge failed: %v", err)
+		return
+	}
+	for _, duplicated := range report.Duplicated {
+		bootstrap.Warning("- %s. The merge does not remove it: delete the discarded line(s) by hand.",
+			duplicatedVariableSentence(duplicated))
+	}
+	for _, candidate := range report.NearMiss {
+		bootstrap.Warning("- %s is not a variable ProxSave reads; did you mean %s? Nothing on that line is applied.",
+			candidate.Name, candidate.Suggestion)
+	}
 }
 
 func runUpgradeConfigDryMode(_ context.Context, args *cli.Args, bootstrap *logging.BootstrapLogger, _ string) (int, bool) {
@@ -120,10 +150,12 @@ func runUpgradeConfigDryMode(_ context.Context, args *cli.Args, bootstrap *loggi
 	logConfigUpgradeWarnings(bootstrap, result.Warnings)
 	if !result.Changed {
 		bootstrap.Println("Configuration is already up to date with the embedded template; no changes are required.")
+		reportConfigFindingsTheMergeLeaves(bootstrap, args.ConfigPath)
 		return types.ExitSuccess.Int(), true
 	}
 
 	printConfigUpgradeDryRunResult(bootstrap, result)
+	reportConfigFindingsTheMergeLeaves(bootstrap, args.ConfigPath)
 	return types.ExitSuccess.Int(), true
 }
 

@@ -696,3 +696,126 @@ func TestUpgradePrunesRemovedChunkKeysExactly(t *testing.T) {
 		t.Fatalf("upgraded config must still load: %v", err)
 	}
 }
+
+// A missing key belongs INSIDE the section that documents it. The merge used to write
+// it immediately after the previous key, which put it above its own header: the
+// operator then found the variable detached from the block that explains it, and a
+// header documenting nothing. Reported against CUSTOM_BACKUP_PATHS on a live host.
+func TestUpgradeConfigInsertsMissingKeyInsideItsSection(t *testing.T) {
+	template := strings.Join([]string{
+		"FIRST=default",
+		"",
+		"# ----------------------------------------------------------------------",
+		"# Custom paths",
+		"# ----------------------------------------------------------------------",
+		"# One entry per line inside the quotes",
+		"CUSTOM_BACKUP_PATHS=\"",
+		"# /srv/example.conf",
+		"\"",
+		"",
+		"LAST=default",
+		"",
+	}, "\n")
+
+	withTemplate(t, template, func() {
+		tmpDir := t.TempDir()
+		configPath := filepath.Join(tmpDir, "backup.env")
+		// Same file WITHOUT the block: the section header and its comment are already
+		// there, exactly as an operator who deleted only the variable would leave it.
+		existing := strings.Join([]string{
+			"FIRST=mine",
+			"",
+			"# ----------------------------------------------------------------------",
+			"# Custom paths",
+			"# ----------------------------------------------------------------------",
+			"# One entry per line inside the quotes",
+			"",
+			"LAST=mine",
+			"",
+		}, "\n")
+		if err := os.WriteFile(configPath, []byte(existing), 0600); err != nil {
+			t.Fatalf("failed to write config: %v", err)
+		}
+
+		result, err := UpgradeConfigFile(configPath)
+		if err != nil {
+			t.Fatalf("UpgradeConfigFile returned error: %v", err)
+		}
+		if !result.Changed {
+			t.Fatalf("expected the merge to add the missing key")
+		}
+
+		data, err := os.ReadFile(configPath)
+		if err != nil {
+			t.Fatalf("failed to read upgraded config: %v", err)
+		}
+		lines := strings.Split(string(data), "\n")
+		keyLine := -1
+		for i, line := range lines {
+			if strings.HasPrefix(line, "CUSTOM_BACKUP_PATHS=") {
+				keyLine = i
+				break
+			}
+		}
+		if keyLine < 0 {
+			t.Fatalf("missing key was not added: %s", data)
+		}
+		if got := strings.TrimSpace(lines[keyLine-1]); got != "# One entry per line inside the quotes" {
+			t.Fatalf("key was not inserted inside its section; line above it is %q", got)
+		}
+		if got := strings.TrimSpace(lines[keyLine-3]); got != "# Custom paths" {
+			t.Fatalf("section header is no longer above the key; got %q", got)
+		}
+	})
+}
+
+// The walk stops at the first line the user's file does not share with the template,
+// so a file that moved or rewrote those comments keeps the previous placement instead
+// of having the merge guess where the section now starts.
+func TestUpgradeConfigKeepsAnchorPlacementWhenContextDiffers(t *testing.T) {
+	template := strings.Join([]string{
+		"FIRST=default",
+		"",
+		"# Custom paths",
+		"CUSTOM_BACKUP_PATHS=\"",
+		"\"",
+		"",
+		"LAST=default",
+		"",
+	}, "\n")
+
+	withTemplate(t, template, func() {
+		tmpDir := t.TempDir()
+		configPath := filepath.Join(tmpDir, "backup.env")
+		existing := strings.Join([]string{
+			"FIRST=mine",
+			"",
+			"# my own note about paths",
+			"",
+			"LAST=mine",
+			"",
+		}, "\n")
+		if err := os.WriteFile(configPath, []byte(existing), 0600); err != nil {
+			t.Fatalf("failed to write config: %v", err)
+		}
+
+		if _, err := UpgradeConfigFile(configPath); err != nil {
+			t.Fatalf("UpgradeConfigFile returned error: %v", err)
+		}
+
+		data, err := os.ReadFile(configPath)
+		if err != nil {
+			t.Fatalf("failed to read upgraded config: %v", err)
+		}
+		lines := strings.Split(string(data), "\n")
+		for i, line := range lines {
+			if strings.HasPrefix(line, "CUSTOM_BACKUP_PATHS=") {
+				if got := strings.TrimSpace(lines[i-1]); got != "" {
+					t.Fatalf("expected the key right after the anchor's blank line, got %q above it", got)
+				}
+				return
+			}
+		}
+		t.Fatalf("missing key was not added: %s", data)
+	})
+}

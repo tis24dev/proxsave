@@ -181,12 +181,17 @@ var notes = []Note{
 			"The release notes screen closes with enter only; esc no longer offers a second exit that did the same thing",
 			"PBS ACME accounts stop reporting not configured: they are a directory, now backed up and restored as one",
 			"BACKUP_PBS_ACME_ACCOUNTS=false now really keeps the ACME account keys out of the archive",
+			"A misspelled variable in backup.env is called out as a probable typo, with the name it was meant to be",
+			"proxsave --upgrade-config reports a variable set twice instead of answering that the file is up to date",
+			"A variable the upgrade adds back is written inside its own section, not above the header that documents it",
 		},
 		Actions: []string{
 			"If the daemon says a personal script was not started for a run, the reason names what changed about the file",
 			"To clear a personal-script trust warning without moving the script, see Clearing a READY WITH WARNING in DAEMON.md",
 			"A PBS restore mirrors the ACME accounts: an account on the node that the backup does not carry is removed",
 			"Archives taken before this fix hold no accounts directory, and restoring one leaves the node accounts untouched",
+			"If a run names a possible typo in backup.env, fix that line: nothing written on it is applied today",
+			"A variable set twice still has to be cleaned by hand, and --upgrade-config names the lines to delete",
 		},
 	},
 }

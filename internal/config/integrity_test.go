@@ -418,3 +418,65 @@ func TestALegacyAliasGetsItsOwnCategory(t *testing.T) {
 		})
 	}
 }
+
+// A name one character away from a real variable is a typo that silently disables the
+// setting, so the audit names the variable it was probably meant to be instead of
+// filing it with the retired names. Taken from a live host, where CUSTOM_BACKUP_PATHS
+// had lost its leading C and kept two custom paths out of every run.
+func TestAuditReportsNearMissAsPossibleTypo(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "backup.env")
+	content := "USTOM_BACKUP_PATHS=\"\n/etc/nut/\n\"\nSOMETHING_ENTIRELY_ELSE=1\n"
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	report, err := AuditConfigFile(path)
+	if err != nil {
+		t.Fatalf("AuditConfigFile: %v", err)
+	}
+
+	if len(report.NearMiss) != 1 {
+		t.Fatalf("expected exactly one near miss, got %+v", report.NearMiss)
+	}
+	if got := report.NearMiss[0].Name; got != "USTOM_BACKUP_PATHS" {
+		t.Fatalf("unexpected near-miss name %q", got)
+	}
+	if got := report.NearMiss[0].Suggestion; got != "CUSTOM_BACKUP_PATHS" {
+		t.Fatalf("unexpected suggestion %q", got)
+	}
+	if !report.HasIssues() {
+		t.Fatal("a typo leaves a line with no effect and has to count as an issue")
+	}
+
+	var unknownHasIt bool
+	for _, name := range report.Unknown {
+		if name == "USTOM_BACKUP_PATHS" {
+			unknownHasIt = true
+		}
+	}
+	if !unknownHasIt {
+		t.Fatal("a near miss must stay classified as unknown; only the wording changes")
+	}
+}
+
+func TestIsOneEditApart(t *testing.T) {
+	for _, tc := range []struct {
+		a, b string
+		want bool
+	}{
+		{"USTOM_BACKUP_PATHS", "CUSTOM_BACKUP_PATHS", true},  // dropped first character
+		{"CUSTOM_BACKUP_PATHSS", "CUSTOM_BACKUP_PATHS", true}, // one character too many
+		{"CUSTOM_BACKUP_PATHZ", "CUSTOM_BACKUP_PATHS", true},  // one character changed
+		{"CUSTOM_BACKUP_PATSH", "CUSTOM_BACKUP_PATHS", true},  // two adjacent swapped
+		{"CUSTOM_BACKUP_PATHS", "CUSTOM_BACKUP_PATHS", false}, // identical is not a typo
+		{"CUSTOM_BACKUP_PATH", "CUSTOM_BLACKLIST", false},     // a different name
+		{"USTOM_BACKUP_PATH", "CUSTOM_BACKUP_PATHS", false},   // two edits away
+		{"", "A", true},
+		{"", "", false},
+	} {
+		if got := isOneEditApart(tc.a, tc.b); got != tc.want {
+			t.Fatalf("isOneEditApart(%q, %q) = %v, want %v", tc.a, tc.b, got, tc.want)
+		}
+	}
+}

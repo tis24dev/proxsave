@@ -248,6 +248,13 @@ func computeConfigUpgrade(configPath string) (*UpgradeResult, string, []byte, er
 		upper string
 		lines []string
 		index int
+		// start and end are the entry's own line span inside templateLines. They are
+		// what lets a missing key be inserted INSIDE its section: the lines between the
+		// previous entry's end and this entry's start are the section header and the
+		// comments that document the key, and the merge walks past the ones the user's
+		// file already carries instead of writing the key above them.
+		start int
+		end   int
 	}
 
 	templateEntries := make([]templateEntry, 0)
@@ -284,6 +291,8 @@ func computeConfigUpgrade(configPath string) (*UpgradeResult, string, []byte, er
 				upper: upperKey,
 				lines: templateLines[i : blockEnd+1],
 				index: len(templateEntries),
+				start: i,
+				end:   blockEnd,
 			})
 			i = blockEnd
 			continue
@@ -293,6 +302,8 @@ func computeConfigUpgrade(configPath string) (*UpgradeResult, string, []byte, er
 			upper: upperKey,
 			lines: []string{line},
 			index: len(templateEntries),
+			start: i,
+			end:   i,
 		})
 	}
 
@@ -393,28 +404,56 @@ func computeConfigUpgrade(configPath string) (*UpgradeResult, string, []byte, er
 		return "", false
 	}
 
-	findPrevAnchor := func(entryIndex int) (int, bool) {
+	findPrevAnchor := func(entryIndex int) (int, int, bool) {
 		for i := entryIndex - 1; i >= 0; i-- {
 			if userKey, ok := resolveUserKey(templateEntries[i]); ok {
 				ranges := userRanges[userKey]
 				if len(ranges) == 0 {
 					continue
 				}
-				return ranges[len(ranges)-1].end + 1, true
+				return ranges[len(ranges)-1].end + 1, i, true
 			}
 		}
-		return 0, false
+		return 0, 0, false
+	}
+
+	// skipSharedContext walks the insertion point forward over the lines the template
+	// puts between the anchor key and the missing key - the section header and the
+	// comments that document the key - for as long as the user's file repeats them
+	// verbatim. Without it a missing key is written immediately after the previous
+	// key, which lands it ABOVE its own section header: the operator then sees the
+	// variable appear detached from the block that explains it, and above a header
+	// that now documents nothing (#313 follow-up, reported for CUSTOM_BACKUP_PATHS).
+	//
+	// The comparison is on trimmed text and stops at the first line that differs, so a
+	// file that moved or edited those comments keeps today's placement rather than
+	// having the merge guess. Pruned lines stop it too: inserting after a line that is
+	// about to be removed would leave the key stranded again.
+	skipSharedContext := func(userIdx, prevEntryIdx int, entry templateEntry) int {
+		for ti := templateEntries[prevEntryIdx].end + 1; ti < entry.start; ti++ {
+			if userIdx >= len(originalLines) {
+				break
+			}
+			if userIdx < len(skipOriginalLines) && skipOriginalLines[userIdx] {
+				break
+			}
+			if strings.TrimSpace(templateLines[ti]) != strings.TrimSpace(originalLines[userIdx]) {
+				break
+			}
+			userIdx++
+		}
+		return userIdx
 	}
 
 	ops := make([]insertOp, 0, len(missingEntries))
 	unanchored := make([]templateEntry, 0)
 	for _, entry := range missingEntries {
-		prev, ok := findPrevAnchor(entry.index)
+		prev, prevEntryIdx, ok := findPrevAnchor(entry.index)
 		if !ok {
 			unanchored = append(unanchored, entry)
 			continue
 		}
-		insertIndex := normalizeInsertIndex(prev)
+		insertIndex := normalizeInsertIndex(skipSharedContext(prev, prevEntryIdx, entry))
 		ops = append(ops, insertOp{
 			index: insertIndex,
 			lines: entry.lines,
