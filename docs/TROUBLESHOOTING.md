@@ -25,8 +25,27 @@ Complete troubleshooting guide for Proxsave with common issues, solutions, and d
 
 This guide covers the most common issues encountered when using Proxsave, along with step-by-step solutions and debugging procedures.
 
+**Start at the dashboard**. Running `proxsave` with no arguments on a terminal opens it, and the
+checks that answer most questions are already there. All of them except `Post-install` run the moment
+you open them, so they tell you the current state before you change anything; `Post-install` waits for
+you to press `Check`, because it has to run a full dry-run first:
+
+| Dashboard entry | What it answers |
+|-----------------|-----------------|
+| `Daemon` > `Status` | is the scheduler installed, running, beating, and on the binary now on disk |
+| `Diagnostic Checks` > `Healthchecks` | is backup monitoring provisioned, and is the daemon really transmitting |
+| `Upgrade` > `Check upgrade` / `Check config` | is this the latest release, and is `backup.env` missing variables the template added |
+| `Diagnostic Checks` > `Post-install` | which collectors are enabled here but have nothing to collect, so they warn on every run |
+
+`Recovery` > `Support` runs a debug backup and mails the log to the maintainer, and
+`Recovery` > `Cleanup guards` clears leftover restore mount guards. The dashboard opens only when
+`proxsave` is invoked with no flags at all on a real terminal; see [DASHBOARD.md](DASHBOARD.md).
+
+The flags used in the recipes below reach the same code another way. Use them on a headless host,
+from a script or a cron job, or when the TUI cannot run.
+
 **Before troubleshooting**:
-1. Check you're running the latest version: `proxsave --version`
+1. Check you're running the latest version: the dashboard's `Upgrade` > `Check upgrade`, or `proxsave --version`
 2. Try dry-run mode first: `proxsave --dry-run --log-level debug`
 3. Review the newest log in `LOG_PATH` (default `/opt/proxsave/log`; use your own directory if `LOG_PATH` or `LOCAL_LOG_PATH` is set in `configs/backup.env`). The filename carries the FQDN, so glob the directory rather than guessing: `ls -t /opt/proxsave/log/backup-*.log | head -1`
 
@@ -98,7 +117,12 @@ make build
 
 **Cause**: Configuration file doesn't exist or is in wrong location.
 
-**Solution**:
+**Solution**: open the dashboard and pick `Install` > `Edit install`. It re-runs the interactive
+installer against the current configuration and writes the file. `Wipe install` is the same
+installer after resetting the install directory (`build/`, `env/` and `identity/` are preserved);
+it asks you to confirm the wipe first.
+
+The same two flows without the TUI:
 ```bash
 # Run installer to create config
 proxsave --install
@@ -946,7 +970,97 @@ chattr -i /mnt/pve/<id>
 
 ### 8. Backup Monitoring Issues
 
-The full status vocabulary, both the check-screen keywords and the per-sensor states, is documented in [HEALTHCHECKS.md](HEALTHCHECKS.md#troubleshooting). This section covers the cases that send people looking for a fix.
+Two dashboard screens cover this whole area, and both run when you open them: `Daemon` > `Status`
+says whether the daemon (the only process that ever pings) is alive and on the current binary, and
+`Diagnostic Checks` > `Healthchecks` says whether monitoring is provisioned and transmitting. Read
+those before changing a variable. The full status vocabulary, both the check-screen keywords and
+the per-sensor states, is documented in [HEALTHCHECKS.md](HEALTHCHECKS.md#troubleshooting). This
+section covers the cases that send people looking for a fix.
+
+#### A clean backup exits `1` and the log carries a `Healthchecks:` warning
+
+**Symptoms**:
+- A backup that collected everything and wrote its archive still finishes yellow, "completed with
+  warnings", and returns exit `1`.
+- Early in the run, under the `Initializing notification channels` step, the log carries one
+  warning and then a skip:
+
+  ```text
+  WARNING  Healthchecks: daemon not installed
+  SKIP     Healthchecks: disabled
+  ```
+
+  The reason varies: `no alive check configured` (self mode with neither `HEALTHCHECK_ALIVE_URL`
+  nor `HEALTHCHECK_ALIVE_ID` set), `no SERVER_ID` (centralized mode on a host with no server
+  identity), `daemon not installed`, `daemon not running`, `daemon running, not reporting`,
+  `daemon stale (last beat ...)`, or `status file unreadable`. On a host still scheduled by cron
+  the line names the engine as well: `Healthchecks: daemon not installed (cron mode: only the
+  resident daemon transmits)`.
+
+**Cause**:
+- `HEALTHCHECK_ENABLED=true` states that you want this host monitored. At the start of every run
+  ProxSave checks that the monitoring configuration names a destination it could ping, and that
+  the resident daemon, the only process that ever pings, is alive. If either check fails,
+  monitoring is switched off for that run and the reason is logged as a warning.
+- A warning promotes an otherwise clean run from exit `0` to exit `1`, and the daemon reports that
+  code to the backup check, so the monitor goes down on a backup that was fine. The warning is
+  deliberate: without it the host would report success on every run while transmitting nothing.
+
+**Resolution**: open `Daemon` > `Status` in the dashboard first. It gives the same verdict in
+words (`RUNNING`, `NOT INSTALLED`, `NOT RUNNING`, `RUNNING, NOT REPORTING`, `STALE`,
+`BEHIND - RESTART NEEDED`), which tells you which of the four fixes below applies.
+
+- **The daemon is missing or stopped and you want monitoring.** Install or start it:
+  ```bash
+  proxsave --daemon-status     # the same verdict, scriptable: exit 0 only when running and aligned
+  proxsave --daemon-setup      # dashboard equivalent: Daemon > Install
+  systemctl start proxsave-daemon.service
+  ```
+- **Self mode with nothing to ping** (`no alive check configured`). The service-alive check is the
+  mandatory one: a backup-only self configuration has no liveness signal.
+  ```bash
+  # configs/backup.env
+  HEALTHCHECK_ALIVE_URL=https://hc-ping.com/<uuid>
+  # or, with HEALTHCHECK_PING_ENDPOINT set:
+  HEALTHCHECK_ALIVE_ID=<uuid-or-slug>
+  ```
+- **Centralized mode reporting `no SERVER_ID`.** This host has no server identity. Re-run the
+  installer from the dashboard (`Install` > `Edit install`) to regenerate it.
+- **You do not want monitoring on this host.** Turn it off and the warning goes with it:
+  ```bash
+  # configs/backup.env
+  HEALTHCHECK_ENABLED=false
+  ```
+  `proxsave --daemon-remove` writes that itself when it reverts a host to cron. A host reverted by
+  an older build still carries `HEALTHCHECK_ENABLED=true` and nothing rewrites it for you, which is
+  the usual reason a cron-scheduled host warns on every run.
+
+The `Healthchecks:` line at the END of a run is a different line with the same prefix. It reports
+what the daemon actually transmitted, and it is written after the run's exit code has already been
+decided, so it never changes it.
+
+#### The daemon still runs the old binary after an upgrade
+
+**Symptoms**:
+- `Daemon` > `Status` reads `BEHIND - RESTART NEEDED`, or `proxsave --daemon-status` prints
+  `Binary alignment: BEHIND (restart needed)`.
+- A behaviour the release notes describe does not show up in scheduled runs, only in runs you
+  start by hand.
+
+**Cause**:
+- An in-place upgrade replaces the binary on disk without restarting the service, and systemd keeps
+  the old process alive. ProxSave detects it without hashing anything: Linux will not let a running
+  executable be overwritten, so the upgrade unlinks it and `/proc/<pid>/exe` ends in `" (deleted)"`.
+
+**Resolution**:
+- Dashboard: `Daemon` > `Restart`. It waits for an in-progress daemon-supervised backup to finish
+  before restarting, and reports `DEFERRED - BACKUP RUNNING` rather than killing it; run it again
+  once the backup ends. Success reads `RESTARTED, ALIGNED (v<version>)`.
+- Command line: `systemctl restart proxsave-daemon.service`, then `proxsave --daemon-status` to
+  confirm.
+- `proxsave --upgrade` and the dashboard upgrade already do this restart-and-verify for you.
+  `proxsave --daemon-setup` does not wait: it restarts immediately and cancels a
+  daemon-supervised backup that is running at that moment. See [DAEMON.md](DAEMON.md).
 
 #### The monitoring check never leaves `PROVISIONING`
 
@@ -956,7 +1070,8 @@ The full status vocabulary, both the check-screen keywords and the per-sensor st
 **Cause**:
 - Centralized monitoring provisions this host's credential automatically on a daemon run. No Telegram pairing and no API key are involved. A state that never advances means the request is not getting through.
 
-**Resolution**:
+**Resolution**: check `Daemon` > `Status` in the dashboard first. Provisioning only happens on a
+daemon run, so a daemon that is not running explains the stall on its own.
 ```bash
 # 1. Is the daemon actually running? It is what provisions.
 proxsave --daemon-status
@@ -994,7 +1109,10 @@ journalctl -u proxsave-daemon.service -f
 - It only bites unattended upgrades. `--upgrade` shows the screen for you on an interactive terminal, which clears the flag; an upgrade run from a script or over a pipe skips it.
 
 **Resolution**:
-- Run `proxsave --show-whatsnew` once on the host, or open the dashboard and page through the release-notes screen. Either clears the flag and the next run is green again.
+- Open the dashboard once on the host: the release-notes screen is shown before the menu, and
+  paging through it clears the flag. `proxsave --show-whatsnew` does the same thing on its own.
+- Both need a real terminal. Piped or automated, either one is a no-op and the flag stays set, so
+  clear it from a session you are actually sitting at.
 
 #### A backup ran but `proxsave-backup` stayed silent
 
@@ -1006,6 +1124,8 @@ journalctl -u proxsave-daemon.service -f
 
 **Resolution**:
 - Start the daemon before running standalone backups, or let the daemon run the scheduled backup.
+  `Daemon` > `Status` in the dashboard says whether it is up, and `Daemon` > `Install` puts this
+  host on the daemon scheduler if it is still on cron.
 
 #### Self mode: `UNREACHABLE`
 
@@ -1293,7 +1413,11 @@ Any other relevant information...
 
 ### Use Support Mode
 
-For complex issues requiring developer assistance:
+For complex issues requiring developer assistance, open the dashboard and choose
+`Recovery` > `Support`. It shows the consent note, asks for your GitHub nickname and the issue
+number, then streams the debug backup inside the dashboard frame.
+
+The same thing without the TUI:
 
 ```bash
 # Run in support mode (sends debug log to developer)
@@ -1347,11 +1471,17 @@ A backup that finishes with warnings (no errors) is promoted from `0` to exit `1
 (generic error) before the notification phase; a run that raised errors becomes `4`
 (backup error) when its code is still `0`/`1`, otherwise it keeps its more specific code.
 
+Because the count is taken before the notification phase, only warnings logged up to that point
+change the code. Two warnings that turn an otherwise clean backup into an exit `1` are the monitoring
+init warning (see [A clean backup exits `1` and the log carries a `Healthchecks:` warning](#a-clean-backup-exits-1-and-the-log-carries-a-healthchecks-warning))
+and the unseen release notes after an upgrade (see [Every backup reports warnings and the monitor went red right after an upgrade](#every-backup-reports-warnings-and-the-monitor-went-red-right-after-an-upgrade)).
+
 ---
 
 ## Related Documentation
 
 ### Configuration & Setup
+- **[Dashboard](DASHBOARD.md)** - The interactive menu, its checks, and what each screen reports
 - **[Configuration Guide](CONFIGURATION.md)** - Complete variable reference
 - **[CLI Reference](CLI_REFERENCE.md)** - All command-line flags
 
@@ -1373,7 +1503,12 @@ A backup that finishes with warnings (no errors) is promoted from `0` to exit `1
 
 ## Quick Diagnostic Checklist
 
-Use this checklist for rapid troubleshooting:
+Start with the dashboard: run `proxsave` with no arguments on a terminal and read
+`Daemon` > `Status`, `Diagnostic Checks` > `Healthchecks` and `Upgrade` > `Check upgrade`. Those
+three cover the scheduler, the monitoring and the version without touching a file.
+
+Use the checklist below when there is no terminal to run the dashboard on, or when the dashboard
+itself will not start:
 
 ```bash
 # 1. Check binary exists and is executable
@@ -1422,7 +1557,11 @@ A: No. Cloud uploads are non-critical. Local backup succeeded, which is the prim
 A: Use `--dry-run` mode: `proxsave --dry-run --log-level debug`
 
 **Q: Logs show warnings about deprecated variables?**
-A: Update your configuration: `proxsave --upgrade-config`
+A: Merge the current template into your configuration. In the dashboard that is
+`Upgrade` > `Check config`, which lists what it would change before you apply it; on the command
+line it is `proxsave --upgrade-config` (`proxsave --upgrade-config-dry-run` to look first). The
+merge adds the variables the template gained and removes a known set of obsolete or auto-managed
+ones, keeping your values and any custom variables you added.
 
 **Q: Can I run backup while another backup is in progress?**
 A: No. Proxsave uses a lock file (`.backup.lock` under `LOCK_PATH`, default `<BASE_DIR>/lock/.backup.lock`) to prevent concurrent runs. The lock stores `pid/host/time`; on the same host, proxsave checks PID liveness to avoid "stuck" locks after an interrupted run.

@@ -55,6 +55,22 @@ sha256sum --ignore-missing -c SHA256SUMS
 
 > The release signature (above) and the SLSA attestations (below) are complementary: the signature is the lightweight check the installer enforces with no extra tooling, while attestations add an independently verifiable, transparency-logged build provenance via the GitHub CLI.
 
+### How an operator gets a verified release
+
+The everyday upgrade route is the dashboard: run `proxsave` with no arguments on a TTY, then **Upgrade** > **Check upgrade**. It runs the same `--upgrade` code in-session, so the signature and checksum check described above is the same one, not a second path. `--upgrade` on its own is the headless equivalent, for scripts and for hosts with no terminal; append `y` to auto-confirm. Both also merge new configuration keys and restart the resident daemon onto the new binary, which downloading a file by hand does not: a replaced binary leaves the running daemon on the old code until the service is restarted (see [DAEMON.md](DAEMON.md)).
+
+### Which binary runs the upgrade
+
+An in-place `proxsave --upgrade`, dashboard row included, is executed by the binary already on the host. That is deliberate for the verification itself: a freshly downloaded binary cannot be the party that verifies itself, so the release check, the download, the signature and checksum check, and the install all stay with the release you are upgrading FROM. Only the post-install finalize phase is handed to the newly installed binary, and only when both ends are new enough to do it. The practical consequence is that a fix to the upgrade flow shipped in a new release cannot help a host upgrading from an older one.
+
+When a release note says the upgrade path itself changed, take the externally fetched route instead. The script downloads the release and verifies `SHA256SUMS.sig` itself, swaps the binary in, and only then runs `--upgrade --localfile` on it, so the finalize is the new release's code:
+
+```bash
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/tis24dev/proxsave/main/install.sh)" -- --upgrade
+```
+
+See [SECURITY.md](SECURITY.md#threat-model) for the same split stated against the trust boundary.
+
 ## Why attestations matter
 
 Provenance attestations protect against:
@@ -211,11 +227,13 @@ sudo mv "${ASSET}" /usr/local/bin/proxsave
 proxsave --version
 ```
 
-For most users the recommended path is still the install script, which performs the `SHA256SUMS.sig` signature check automatically:
+The recipe above is the manual path, for an air-gapped host or an audit. For a first install the recommended path is the install script, which performs the `SHA256SUMS.sig` signature check automatically:
 
 ```bash
 bash -c "$(curl -fsSL https://raw.githubusercontent.com/tis24dev/proxsave/main/install.sh)"
 ```
+
+On a host that already runs ProxSave, upgrade from the dashboard (**Upgrade** > **Check upgrade**) rather than downloading a binary by hand; see [How an operator gets a verified release](#how-an-operator-gets-a-verified-release).
 
 ## What gets verified
 

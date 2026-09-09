@@ -3,6 +3,11 @@
 Complete guide for restoring Proxmox VE, Proxmox Backup Server, and dual-role
 PVE+PBS backups using the interactive restore workflow.
 
+Restore is a **dashboard** action: run `proxsave` with no arguments on a terminal and
+pick **Tools > Restore**. The `--restore` flag runs the same workflow directly, and
+stays fully documented here as the path for headless hosts, rescue shells and any
+situation where the dashboard cannot open.
+
 ## Table of Contents
 
 - [Quick Start](#quick-start)
@@ -21,38 +26,72 @@ PVE+PBS backups using the interactive restore workflow.
 
 ## Quick Start
 
-### Basic Restore
+### Normal path: the dashboard
+
+Run `proxsave` as root with **no arguments** on a terminal and choose **Restore** in the
+`Tools` group:
+
+```text
+─── Tools ───
+  Restore           restore a backup onto this system
+  Decrypt           convert an encrypted backup into a plaintext bundle
+```
+
+The dashboard is a launcher only: the `Restore` row sets exactly what `--restore` sets
+and then runs the identical workflow, so everything in this guide applies to both. The
+full menu is documented in [DASHBOARD.md](DASHBOARD.md).
+
+The dashboard opens only when the invocation is **completely bare** (any flag, even
+`--config`, skips it) and stdin and stdout are both real terminals with `TERM` set and
+not `dumb`. That is why a restore driven from cron, from a pipe, or over `ssh` without a
+TTY has to use the flag below.
+
+### Emergency, headless and recovery path: `--restore`
 
 ```bash
-# Run the interactive restore workflow (launches the TUI by default)
+# Same workflow, entered directly (launches the TUI by default)
 proxsave --restore
 
-# Add --cli to force the classic text prompts instead of the TUI
+# Force the classic text prompts instead of the TUI
 proxsave --restore --cli
-
-# The steps, either way:
-# 1. Select backup source location
-# 2. Choose specific backup from list
-# 3. Enter the AGE key or passphrase in a single field (if encrypted)
-# 4. Select restore mode
-# 5. Review restore plan
-# 6. Confirm twice: type RESTORE (or press the RESTORE button), then confirm the overwrite
-# 7. Wait for completion
-# 8. Verify services and cluster status
 ```
+
+Use the flag when the dashboard is not available or not wanted:
+
+- a broken or freshly reinstalled host where you want to skip straight to the workflow
+- a serial or `dumb` terminal, or `ssh` without a TTY (the workflow falls back to the
+  text prompts automatically, exactly as `--cli` would)
+- a rescue shell or a console session with a limited terminal
+- a restore that needs a non-default `--config` path, since any flag skips the menu
+
+### The steps, either way
+
+1. Select backup source location
+2. Choose specific backup from list
+3. Enter the AGE key or passphrase in a single field (if encrypted)
+4. Select restore mode
+5. Review restore plan
+6. Confirm twice: type RESTORE (or press the RESTORE button), then confirm the overwrite
+7. Wait for completion
+8. Verify services and cluster status
 
 ### Requirements
 
-- **Root privileges**: Required for system path restoration
+- **Root privileges**: Required for system path restoration (restoring to `/` as a
+  non-root user is refused outright)
 - **Sufficient disk space**: For decryption and safety backups
 - **Service availability**: Target system services must be accessible
 - **Network isolation**: For cluster restores, node should be isolated
+- **A real terminal**: For the dashboard. Without one, use `proxsave --restore`
 
 ---
 
 ## Overview
 
-The `--restore` command provides an **interactive, category-based restoration system** that allows selective or full restoration of Proxmox configuration files from backup archives.
+Restore is an **interactive, category-based restoration system** that allows selective
+or full restoration of Proxmox configuration files from backup archives. It is reached
+from the dashboard (**Tools > Restore**) or, on a host where the dashboard cannot open,
+with `proxsave --restore`. Both entry points run the same workflow.
 
 ### How to Use the Restore Docs
 
@@ -61,14 +100,18 @@ The restore documentation is split on purpose:
 - [RESTORE_GUIDE.md](RESTORE_GUIDE.md): operator workflow, modes, warnings, and practical examples
 - [RESTORE_TECHNICAL.md](RESTORE_TECHNICAL.md): implementation details, detection logic, and internal architecture
 - [RESTORE_DIAGRAMS.md](RESTORE_DIAGRAMS.md): visual companion for the main workflow and decision paths
+- [DASHBOARD.md](DASHBOARD.md): the menu the restore workflow is normally started from
 
 ### Interactive UI: TUI by default, `--cli` for text prompts
 
-`proxsave --restore` and `proxsave --decrypt` launch a **Charm TUI** by default: a
+The restore and decrypt workflows run a **Charm TUI** by default, whether they were
+started from the dashboard or from `proxsave --restore` / `proxsave --decrypt`: a
 selector for the restore mode, a multi-select list for CUSTOM categories, and labeled
 confirmation buttons. Add **`--cli`** to force the classic text prompts and numbered
 menus instead (`--cli` works with `--install`, `--new-install`, `--newkey`,
-`--decrypt`, and `--restore`). Both paths run the same restore engine and ask the same questions.
+`--decrypt`, and `--restore`). Both paths run the same restore engine and ask the same
+questions. A `--restore` run that has no interactive terminal uses the text prompts
+automatically, without `--cli`.
 
 The numbered-menu and text transcripts throughout this guide show the `--cli`
 experience because it is the clearest to read on the page; in the default TUI the same
@@ -485,30 +528,32 @@ Phase 14: Post-Restore Tasks
 
 #### Phase 1: Backup Selection
 
-**Interactive prompts**:
+**Interactive prompts**: the sources offered are built from the configuration, so a
+disabled secondary or an unconfigured cloud remote simply does not appear. Each line is
+`<label> (<path>)`:
+
 ```text
-Select backup source:
-  [1] Primary backup path: /opt/proxsave/backup
-  [2] Secondary backup path: /mnt/secondary/backups
-  [3] Cloud/local path: /mnt/cloud-backups
-  [0] Cancel
+Select the backup source:
+  [1] Local backups (/opt/proxsave/backup)
+  [2] Secondary backups (/mnt/secondary/backups)
+  [3] Cloud backups (rclone) (GoogleDrive:/proxsave/backup)
+  [0] Exit
 ```
 
-**Backup list display**:
+**Backup list display**: one line per backup, describing it from its manifest rather
+than from its filename:
+
 ```text
 Available backups:
-  [1] pve01-backup-20251120-143052.tar.xz.bundle.tar
-      Created: 2025-11-20 14:30:52
-      Encrypted: Yes (AGE)
-      Tool Version: v1.2.0
-      System: Proxmox Virtual Environment (PVE)
-
-  [2] backup-pve01-20251119-020015.bundle.tar
-      Created: 2025-11-19 02:00:15
-      Encrypted: Yes (AGE)
-      Tool Version: v1.2.0
-      System: Proxmox Virtual Environment (PVE)
+  [1] 2025-11-20 14:30:52 • Host pve01 • ENCRYPTED • Tool v1.2.0 • PVE v8.2.4 (standalone)
+  [2] 2025-11-19 02:00:15 • Host pve01 • ENCRYPTED • Tool v1.2.0 • PVE v8.2.4 (standalone)
+  [0] Exit
 ```
+
+The fields are: creation time, host the backup came from, `ENCRYPTED` or `PLAIN`, the
+ProxSave version that wrote it, and the backup's target roles with the Proxmox version
+and the cluster mode. Missing manifest values render as `unknown date`, `unknown host`,
+`Tool unknown` or `UNKNOWN`.
 
 #### Phase 2: Decryption
 
@@ -1128,6 +1173,11 @@ After Restore:
 
 **Recommended Approaches**:
 
+The sequences below write `proxsave --restore` because they are meant to be followed
+command by command on a console. On a node whose terminal can still render the menu,
+run `proxsave` bare and pick **Tools > Restore** at that step instead; it is the same
+workflow.
+
 **Option 1: Standalone Node Restore (Safest)**
 ```bash
 # Before restore: Remove node from cluster
@@ -1603,7 +1653,8 @@ These configurations are included in every backup and can be restored using **th
 
 **Step-by-Step Procedure**:
 
-1. **Run restore workflow**:
+1. **Open the restore workflow**: run `proxsave` bare and pick **Tools > Restore** in
+   the dashboard. On a host without a usable terminal, enter it directly:
    ```bash
    proxsave --restore
    ```
@@ -1694,12 +1745,10 @@ https://your-pve:8006
 
 **Step-by-Step Procedure**:
 
-1. **Run restore and select pve_config_export category**:
-   ```bash
-   proxsave --restore
-   # Select "Custom" mode
-   # Enable "PVE Config Export" category
-   ```
+1. **Open the restore workflow and select the pve_config_export category**: run
+   `proxsave` bare and pick **Tools > Restore**, or enter it directly with
+   `proxsave --restore` on a host without a usable terminal. Then select `CUSTOM`
+   mode and enable the `PVE Config Export` category.
 
 2. **Locate exported files**:
    ```bash
@@ -1773,15 +1822,15 @@ grep "^scsi\|^virtio\|^ide\|^sata" qemu-server/100.conf
 - Requires stopping PVE services and unmounting `/etc/pve/`
 
 **Advantages**:
-✅ Complete restore of entire cluster state
-✅ All VMs, users, storage, settings restored together
-✅ Ideal for disaster recovery
+- Complete restore of entire cluster state
+- All VMs, users, storage, settings restored together
+- Ideal for disaster recovery
 
 **Disadvantages**:
-⚠️ Service interruption required
-⚠️ Overwrites current cluster state
-⚠️ All-or-nothing (can't selectively restore single VM)
-⚠️ Risk of cluster desynchronization in multi-node setups
+- Service interruption required
+- Overwrites current cluster state
+- All-or-nothing (can't selectively restore single VM)
+- Risk of cluster desynchronization in multi-node setups
 
 **When to Use**:
 - Bare-metal disaster recovery
@@ -2109,18 +2158,19 @@ if cleanDestRoot == "/" && strings.HasPrefix(target, "/etc/pve") {
 **PBS Datastore Mount Guards**:
 - When restoring PBS datastore definitions, ProxSave can apply a temporary read-only bind-mount guard on mount roots that currently resolve to the root filesystem. If the bind mount cannot be created, it logs a warning and proceeds unguarded (no persistent `chattr +i` flag is set).
 - Purpose: prevent accidental writes to `/` if a datastore mountpoint is missing/offline at restore time (PBS will show the datastore as unavailable until storage is mounted).
-- Optional cleanup: `proxsave --cleanup-guards` (use `--dry-run` to preview). See **Clearing mount guards after the storage is back** below.
+- Optional cleanup: dashboard **Recovery > Cleanup guards**, or `proxsave --cleanup-guards` (use `--dry-run` to preview) on a headless host. See **Clearing mount guards after the storage is back** below.
 
 **PVE Storage Mount Guards**:
 - When restoring PVE storage definitions (from `storage.cfg`), ProxSave applies the same "restore even if offline" strategy for mount-backed storage:
   - Network storages (`nfs`, `cifs`, `cephfs`, `glusterfs`) use mountpoints under `/mnt/pve/<storageid>`. ProxSave attempts `pvesm activate <storageid>`; if the mountpoint still resolves to the root filesystem, it applies a temporary read-only bind-mount guard (or, if the bind mount cannot be created, logs a warning and proceeds unguarded).
   - `dir` storages are guarded only when their `path` lives under a mountpoint restored via `/etc/fstab` (to avoid guarding local root filesystem paths).
 - Purpose: prevent PVE from writing into `/mnt/pve/...` (or other mount roots) when the backing storage is offline at restore time.
-- Optional cleanup: `proxsave --cleanup-guards` (use `--dry-run` to preview). See **Clearing mount guards after the storage is back** below.
+- Optional cleanup: dashboard **Recovery > Cleanup guards**, or `proxsave --cleanup-guards` (use `--dry-run` to preview) on a headless host. See **Clearing mount guards after the storage is back** below.
 
 **Clearing mount guards after the storage is back**:
-- Bringing the storage online again is enough to *use* it: a real mount stacks on top of a bind-mount guard automatically. The guard is not deleted, only shadowed; a reboot or `--cleanup-guards` removes the bind-mount leftover. A **legacy** `chattr +i` flag (set by older versions when a bind mount failed) leaves the directory immutable across reboots until it is cleared.
-- `proxsave --cleanup-guards` (preview with `--dry-run`) unmounts bind-mount guards **and** clears any **legacy** `chattr +i` immutable flags, but only on mountpoints that are **not currently mounted** (clearing a live mount would touch the wrong inode); it prints a summary of what was cleared vs left pending. The guard directory is kept until nothing is pending.
+- The normal route is the dashboard: run `proxsave` bare and pick **Recovery > Cleanup guards**. It is a two-step screen, a read-only check first (which offers Apply only when it actually finds guards), then the cleanup itself, reporting `DONE` or `PENDING`. `proxsave --cleanup-guards` (preview with `--dry-run`) is the same operation from the command line, for a headless host or a script.
+- Bringing the storage online again is enough to *use* it: a real mount stacks on top of a bind-mount guard automatically. The guard is not deleted, only shadowed; a reboot or a cleanup run removes the bind-mount leftover. A **legacy** `chattr +i` flag (set by older versions when a bind mount failed) leaves the directory immutable across reboots until it is cleared.
+- The cleanup unmounts bind-mount guards **and** clears any **legacy** `chattr +i` immutable flags, but only on mountpoints that are **not currently mounted** (clearing a live mount would touch the wrong inode); it prints a summary of what was cleared vs left pending. The guard directory is kept until nothing is pending.
 - To clear a legacy flag while the storage is mounted: unmount it, run `--cleanup-guards` again (or `chattr -i <mountpoint>`), then remount.
 - If you deleted `/var/lib/proxsave/guards` manually and a mountpoint is still read-only, ProxSave has no record left to clear: check `lsattr -d <mountpoint>` and run `chattr -i <mountpoint>` while the storage is unmounted.
 
@@ -2202,16 +2252,21 @@ Services stopped → Defer restart scheduled → Restore → (Failure) → Defer
 
 ### General Issues
 
-**Issue: "restore: permission denied"**
+**Issue: "restore to / requires root privileges"**
 
 **Cause**: Not running as root
 
-**Solution**:
+**Solution**: become root first, then open the dashboard and pick **Tools > Restore**:
 ```bash
-sudo proxsave --restore
+sudo proxsave
 # Or
 su -
-proxsave --restore
+proxsave
+```
+
+On a headless host, the same applies to the flag:
+```bash
+sudo proxsave --restore
 ```
 
 ---
@@ -2252,36 +2307,53 @@ vi /opt/proxsave/configs/backup.env
 # Set correct BACKUP_PATH
 ```
 
+The paths can also be set from the dashboard, **Maintenance > Install > Edit install**,
+which re-runs the interactive setup over the existing `backup.env`.
+
 ---
 
 ### Decryption Issues
 
-**Issue: "Decryption failed: incorrect passphrase"**
+**Issue: "Provided key or passphrase does not match this archive."**
 
-**Cause**: Wrong AGE passphrase entered
+**Cause**: The secret was accepted as valid input but does not open this archive. This
+is the catch-all failure: everything that does **not** start with `AGE-SECRET-KEY-` is
+treated as a passphrase, so a mistyped passphrase, the passphrase of a different
+install, and a **file path** typed into the field all land here.
 
-**Solution**:
-```bash
-# Retry with correct passphrase
-# Or use AGE identity file instead
-proxsave --restore
-# Select option [2] Use AGE identity file
-```
+**Solution**: the prompt loops, so just answer again with the right secret; `0` exits.
+The single field takes **either** form:
+
+- An AGE secret key, the `AGE-SECRET-KEY-...` string itself
+- The passphrase the recipients were derived from
+
+There is no identity-file option in the restore or decrypt flow: the field takes the key
+material or the passphrase, never a path to a file holding it. `AGE_RECIPIENT_FILE`
+(default `${BASE_DIR}/identity/age/recipient.txt`, so
+`/opt/proxsave/identity/age/recipient.txt` with stock paths) holds the **public
+recipients** used to encrypt; it cannot decrypt anything and is not what this prompt is
+asking for.
+
+In the TUI the field is titled `Decrypt key` and reads "Provide the AGE secret key or
+passphrase used for `<backup name>`. Enter 0 to exit." Under `--cli` it is the single
+line `Enter decryption key or passphrase for <backup name> (0 = exit):`.
+
+If the secret is genuinely lost, the backup cannot be decrypted. Creating a new key
+(dashboard **Maintenance > New key**, or `proxsave --newkey`) only changes what future
+backups are encrypted with.
 
 ---
 
-**Issue: "AGE identity file not found"**
+**Issue: "Invalid key or passphrase."**
 
-**Cause**: Default key file missing
+**Cause**: The input begins with `AGE-SECRET-KEY-` but could not be parsed as an AGE
+secret key: truncated, mistyped, or carrying stray characters from a copy and paste.
+This message is specific to that case; a wrong passphrase reports the mismatch above
+instead.
 
-**Solution**:
-```bash
-# Check for key file
-ls -la /opt/proxsave/age/recipients
-
-# If missing, use passphrase instead
-# Or specify correct key file path when prompted
-```
+**Solution**: re-paste the whole key on a single line, with no line break and no quotes
+around it. Surrounding whitespace is trimmed for you, and the key is upper-cased before
+parsing, so a key pasted in lowercase is fine.
 
 ---
 
@@ -2623,7 +2695,9 @@ the selected categories to the roles supported by the current host.
 
 **Q: Can I automate restore operations?**
 
-A: No. The restore workflow is intentionally interactive to prevent accidental data loss. All selections require user input and confirmation.
+A: No. The restore workflow is intentionally interactive to prevent accidental data loss. All selections require user input and confirmation. There is no flag, environment variable or config key that answers the prompts for you.
+
+`--restore` exists so a host that cannot open the dashboard can still be restored by hand, not so a script can restore it. Backups are the automated half of ProxSave (the resident daemon, or cron); restores are not.
 
 ---
 
@@ -2698,6 +2772,8 @@ A: Yes, two approaches:
 ```
 
 **Approach 2: Decrypt-only mode**
+
+Dashboard **Tools > Decrypt**, or the flag on a headless host:
 ```bash
 # Decrypt without restoring
 proxsave --decrypt
@@ -2752,7 +2828,8 @@ A: Full procedure:
 # 2. Configure same hostname as backup
 hostnamectl set-hostname <original-hostname>
 
-# 3. Run restore
+# 3. Run restore: "proxsave" bare, then Tools > Restore in the dashboard,
+#    or the flag below on a console that cannot render it
 proxsave --restore
 # Select: STORAGE mode or Custom (include pve_cluster)
 
@@ -2866,9 +2943,9 @@ See [VM/CT Configuration Restore](#vmct-configuration-restore) for detailed proc
 
 A: Not directly. Categories are the smallest granularity.
 
-**Workaround**:
+**Workaround**: decrypt the backup to a plaintext bundle (dashboard **Tools > Decrypt**,
+or `proxsave --decrypt`), then take the file out of it yourself:
 ```bash
-# Use --decrypt to create plaintext archive
 proxsave --decrypt
 
 # Manually extract specific files
@@ -2912,7 +2989,8 @@ A: Yes, in two ways:
    CLOUD_REMOTE_PATH=/pbs-backups/server1
    ```
 
-   - During `--decrypt` or `--restore` (CLI or TUI), ProxSave will read the same
+   - In the restore and decrypt workflows (from the dashboard or from `--restore` /
+     `--decrypt`, CLI or TUI), ProxSave will read the same
      `CLOUD_REMOTE` / `CLOUD_REMOTE_PATH` combination and show an entry:
        - `Cloud backups (rclone)`
    - When selected, the tool:
@@ -2969,9 +3047,11 @@ find /tmp/proxsave/ -name "restore_*.log" -mtime +7 -delete
 ## Additional Resources
 
 **Related Documentation**:
+- [DASHBOARD.md](DASHBOARD.md) - The menu restore is normally started from
 - [RESTORE_TECHNICAL.md](RESTORE_TECHNICAL.md) - Technical architecture and internals
 - [RESTORE_DIAGRAMS.md](RESTORE_DIAGRAMS.md) - Visual workflow diagrams
 - [CLUSTER_RECOVERY.md](CLUSTER_RECOVERY.md) - Advanced cluster disaster recovery
+- [CLI_REFERENCE.md](CLI_REFERENCE.md) - Every flag, including the ones used here
 - [README.md](../README.md) - Main project documentation
 
 **Proxmox Documentation**:
@@ -2979,7 +3059,7 @@ find /tmp/proxsave/ -name "restore_*.log" -mtime +7 -delete
 - [Proxmox Backup Server Documentation](https://pbs.proxmox.com/docs/)
 
 **Support**:
-- Project Issues: [GitHub Issues](https://github.com/your-repo/proxsave/issues)
+- Project Issues: [GitHub Issues](https://github.com/tis24dev/proxsave/issues)
 - Proxmox Forum: [forum.proxmox.com](https://forum.proxmox.com/)
 
 ---
@@ -2997,6 +3077,8 @@ The restore workflow provides a **safe, interactive, and flexible** system for r
 ✅ **Multiple abort points** for user control
 
 **Remember**:
+- Start from the dashboard: `proxsave` with no arguments, then **Tools > Restore**
+- Keep `--restore` for the host that cannot open it: headless, rescue shell, no TTY
 - Always verify backups before disaster strikes
 - Test restore procedures on non-production systems
 - Isolate cluster nodes before cluster database restore

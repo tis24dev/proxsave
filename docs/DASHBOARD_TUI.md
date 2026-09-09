@@ -1,8 +1,8 @@
 # Dashboard TUI Architecture
 
-This is the developer reference for the interactive terminal UI: the dashboard and every graphical flow (backup stream, restore, decrypt, new key, install). It covers the Charm (bubbletea v2) stack ProxSave is built on, the load-bearing invariants that are easy to break, and how to add a screen or test one headlessly.
+This is the developer reference for the interactive terminal UI: the dashboard and every graphical flow (what's-new screen, backup stream, restore, decrypt, new key, install). It covers the Charm (bubbletea v2) stack ProxSave is built on, the load-bearing invariants that are easy to break, and how to add a screen or test one headlessly.
 
-For the operator-facing walkthrough of the screens, see [DASHBOARD.md](DASHBOARD.md).
+The two dashboard documents divide the work: [DASHBOARD.md](DASHBOARD.md) is the operator's guide, and says what every menu entry does, which flag it corresponds to, and what each screen means. This file says how it is built and what breaks if you change it. Behaviour an operator can observe belongs there, not here.
 
 ## Overview
 
@@ -20,11 +20,12 @@ The design has a few deliberate, non-obvious rules. Break any of these and the s
 
 | Path | Role |
 |------|------|
-| `cmd/proxsave/dashboard.go` (+ `dashboard_*.go`) | The entry gate, the menu dispatch, the session handoff, and the in-session diagnostic/daemon/upgrade/cleanup/support screens. |
+| `cmd/proxsave/dashboard.go` (+ `dashboard_*.go`) | The entry gate, Screen 0, the menu dispatch, the session handoff, the post-upgrade relaunch, and the in-session diagnostic/daemon/upgrade/cleanup/support screens. |
 | `internal/ui/shell/` | The core: `Session` (`session.go`), the `Ask` bridge (`ask.go`), the `Screen`/`Resolver` model (`screen.go`), routing and rendering (`router.go`), the test harness (`testing.go`). |
 | `internal/ui/components/` | The reusable screens: selector, multiselect, formgrid, confirm, input, pager, streamtask, taskview, notice, and the sanitizer. |
 | `internal/ui/theme/theme.go` | The Proxmox palette, symbols, and the Status keyword mappers. |
 | `internal/ui/flows/menu/menu.go` | The launcher menu (builds items, returns an `Action`). |
+| `internal/ui/flows/whatsnew/whatsnew.go` | Screen 0: renders a caller-supplied notes body in a `Pager`. Presentational only. |
 | `internal/ui/flows/{install,agesetup}/` | The install wizard, diagnostic setup screens, and the AGE new-key flow. |
 | `internal/orchestrator/workflow_ui_charm*.go` | The adapter that maps engine prompts to components for backup/restore/decrypt. |
 
@@ -39,9 +40,24 @@ Both are package vars defaulting to the real checks, so tests can force the dash
 
 Dispatch is by args-mutation. When you pick an action the dashboard sets the same field the flag sets (`args.Restore`, `args.Decrypt`, `args.ForceNewKey`, `args.Install`, `args.NewInstall`, `args.Support`) and returns `handled=false` so the normal flag-driven flow runs it. The one exception is Backup, which mutates nothing: it sets `keepAlive` and stashes the session, then lets the ordinary no-flag run proceed and adopt that session. Because a menu choice can flip an args field, `rejectIncompatibleModes` runs a second time right after `maybeRunDashboard` so the menu can never reach a combination the flags would reject.
 
-`maybeRunDashboard` returns `handled=true` (stop here) only for a terminal action (Exit), the idle timeout, or a dashboard failure. It never falls through into a backup on failure. The idle timeout is `dashboardIdleTimeout = 10 * time.Minute`, applied per menu render (so interaction resets it), and on `DeadlineExceeded` it exits `ExitSuccess` with a distinct stderr message.
+The in-session actions (diagnostics, daemon, cleanup, upgrade) go through `runDashboardDiagnostic`, which returns a `dashboardActionDisposition` rather than a bool: `Unhandled` leaves the action to the flag dispatch below, `Handled` loops back to the menu, and `Reload` is the successful binary upgrade. `Reload` sets `keepAlive`, closes the session and runs the installed binary as a child on the same stdio, waiting for it (`closeDashboardAndRelaunch` -> `relaunchDashboardAfterUpgrade`), because this process is still the old binary. The relaunched dashboard's own exit code is what the process returns; only a child that never started is treated as a reload failure.
 
-The menu itself (`menu.Run`) is a pure launcher: it assembles `[]components.SelectorItem`, calls `shell.Ask`, and returns an `Action`. It reads nothing and mutates nothing; the daemon group is context-aware only because the caller passes in a precomputed `menu.DaemonState` (from `SchedulerMode`, `DaemonOptOut`, or an unreadable config). Esc, Ctrl+C, and a dying UI all resolve to `ActionExit` with a nil error, so a human at the menu never gets a surprise backup out of a failed screen.
+`maybeRunDashboard` returns `handled=true` (stop here) only for a terminal action (Exit), the idle timeout, a dashboard failure, or a post-upgrade reload. It never falls through into a backup on failure. The idle timeout is `dashboardIdleTimeout = input.DefaultIdleTimeout` (10 minutes), applied per menu render (so interaction resets it) and again, via `withDashboardIdle`, around every sub-screen the menu opens, so an abandoned check cannot hold the terminal either. On `DeadlineExceeded` it exits `ExitSuccess` with a distinct stderr message; any other menu error prints the "Dashboard unavailable" one.
+
+The menu itself (`menu.Run`) is a pure launcher: it assembles `[]components.SelectorItem`, calls `shell.Ask`, and returns an `Action`. It reads nothing and mutates nothing; the daemon group is context-aware only because the caller passes in a precomputed `menu.DaemonState`, which `dashboardDaemonState` derives from `SchedulerMode` alone (`daemon` -> Active, anything else -> OnCron, unreadable config -> Unknown). It deliberately does not consult `DAEMON_OPT_OUT`: that only ever relabelled the same `ActionDaemonSetup` row "Re-enable" instead of "Install", a difference the operator could not act on. Esc, Ctrl+C, and a dying UI all resolve to `ActionExit` with a nil error, so a human at the menu never gets a surprise backup out of a failed screen.
+
+## Screen 0: the what's-new gate
+
+`maybeShowWhatsnew` runs once, after the session starts and before the first `menu.Run`. Reaching that line already proves bare + interactive, so it adds no TTY check of its own. The same helpers back the `--show-whatsnew` mode (`showWhatsnewScreen`), which the upgrade flow re-invokes on the freshly installed binary, since each binary compiles in its own notes registry and the old one cannot render the new release's notes.
+
+Four rules hold the design together, and each is a bug that was paid for:
+
+- **Fail toward silence.** `whatsnewResolve` returns `show=false` on a not-unseen verdict and on any `Decide` error. A corrupt seen-flag (`whatsnew.ErrStateParse`) self-heals best-effort by quarantining the file and re-seeding `last_seen=current`, then stays silent; a non-parse IO error writes nothing, so a real permission fault is never masked.
+- **Decide before starting a program.** `showWhatsnewScreen` resolves the show/skip decision *before* building a session. A program started only to be closed on a no-op leaks the terminal's async mode-2026/2027 capability replies into the parent shell as stray input. The dashboard does not have this problem because its program stays alive for the menu loop.
+- **Mark seen on every exit that reaches a person.** `whatsnewRender` writes the flag on continue *and* on Ctrl+C, but not on a torn-down parent context, not on the `whatsnewScreenTimeout` deadline, and not on an `ErrClosed` that is not a user interrupt (`shell.IsUserInterrupt`). Writing only on an explicit continue is what caused issue #305: operators closed the screen with Esc, the flag stayed unwritten, and the next scheduled run logged a warning that `applyIssueExitCode` promoted to exit 1, which the daemon reported to Healthchecks as down.
+- **One key out.** The pager is built `WithPagerNoAbort`, so esc and `q` reach nothing and Enter is the only resolution. This is not the trap above returning: the trap was a flag going unwritten behind a gesture nobody knew they owed.
+
+`whatsnewScreenTimeout` is a dedicated total cap (10 minutes, `context.WithTimeout` around the whole flow), deliberately distinct from the shared `withDashboardIdle` used by the menu loop. The non-interactive counterpart is `maybeWarnWhatsnew`, which logs one WARNING per automated run while the notes are unseen and shares the exact gate core (`whatsnew.ShouldWarn`).
 
 ## The Session
 
@@ -51,7 +67,7 @@ The menu itself (`menu.Run`) is a pure launcher: it assembles `[]components.Sele
 - Cancelling `ctx` kills the program and restores the terminal (it is passed via `tea.WithContext`). `Close()` calls `prog.Quit()` then blocks on `done`, so the terminal is restored before the caller prints anything. `Close` is idempotent and swallows the two expected terminations, `tea.ErrProgramKilled` (context kill) and `tea.ErrInterrupted` (Ctrl+C), returning nil for them.
 - `Send` forwards to `prog.Send` and is a safe no-op once the program has terminated.
 
-`closedErr()` wraps `runErr` into `ErrClosed`; a blocked `Ask` returns this when `done` fires. `IsAbort(err)` matches `ErrClosed` or the legacy `ErrAborted`, and flows use it to turn a UI death or a Ctrl+C into a clean abort.
+`closedErr()` wraps `runErr` into `ErrClosed` with `%w`, so the cause survives in the chain; a blocked `Ask` returns this when `done` fires. `IsAbort(err)` matches `ErrClosed` or the legacy `ErrAborted`, and flows use it to turn a UI death or a Ctrl+C into a clean abort. `IsUserInterrupt(err)` is the narrower question: `ErrClosed` *and* `tea.ErrInterrupted` underneath, which is the only thing separating a person pressing Ctrl+C from the program dying under them. Screen 0 is the caller that needs the distinction.
 
 ## Session handoff: Adopt, stash, release
 
@@ -111,7 +127,7 @@ All nine live in `internal/ui/components`, embed `shell.Resolver`, are driven th
 | `FormGrid` | A single-screen aligned form (label left, control right), never a sequence of one-field screens. Toggle, text, and select fields; per-field `Active` gate and `Validate`; a fixed consent note above the fields; Tab reaches Cancel; only the Continue button submits. |
 | `Confirm` | Yes/No, default focus equals the Enter default and defaults to No. `WithDefaultYes` flips it, `WithDanger` renders a warning and disables the single-key `y`/`n` shortcuts, `WithCountdown` adds a timer. |
 | `Input` | Single-line text or secret (`WithSecret` masks it). `WithValidate` rejects inline (the error is sanitized because it can echo the value). Enter confirms; Esc aborts with `shell.ErrAborted` unless a back sentinel is set with `WithInputBack`. |
-| `Pager` | Scrollable static text (restore plans, reports). Enter confirms, Esc or `q` aborts, so a reflex Esc on a plan never counts as acceptance. Self-wraps like StreamTask. |
+| `Pager` | Scrollable static text (restore plans, reports, Screen 0). Enter confirms, Esc or `q` aborts, so a reflex Esc on a plan never counts as acceptance; `WithPagerNoAbort` removes both keys for a screen with nothing to cancel. Self-wraps like StreamTask. |
 | `Task` | Spinner plus title plus a single latest progress line. Resolves only on completion, never on input alone; Esc cancels. |
 | `StreamTask` | A contained, scrollable, colored live-log panel. See [below](#streamtask-performance). |
 | `Notice` | A message with a single acknowledge; `NoticeKind` sets the accent. |
@@ -136,7 +152,9 @@ The raw ring is bounded at 5000 lines; older lines drop first with a `(showing l
 
 `StatusColor`/`StatusSymbol` map status keywords: `success`/`ok`/`done`/`completed` to green `✓`; `error`/`failed`/`fail` to red `✗`; `warning`/`warn` to yellow `⚠`; `info`/`pending`/`running` to blue `ℹ` (note `pending` and `running` share the info color); anything else to light `•`.
 
-Result screens across the daemon, install, and workflow code do not use this directly; they delegate to `orchestrator.RenderStatusLevel`, which is the one renderer for a styled `Status:` line and has four levels: Ok (green `✓`), Error (red `✗`), Warn (yellow `⚠`), and Neutral (yellow, no symbol). Neutral is a front-end-only pre-check state (`NOT CHECKED`); `NOT CONFIGURED` is a Warn keyword (with the `⚠`), not a Neutral one. Keeping every result screen on one renderer is what stops the Status look from drifting.
+Result screens across the daemon, install, and workflow code do not use this directly; they delegate to `orchestrator.RenderStatusLevel`, which is the one renderer for a styled `Status:` line and has four levels: Ok (green `✓`), Error (red `✗`), Warn (yellow `⚠`), and Neutral (yellow, no symbol). `orchestrator.BuildStatusPrompt` composes the keyword and its explanation into the block those screens hand to `WithSelectorPromptStyled`, sanitizing both. Neutral is a front-end-only pre-check state (`NOT CHECKED`); `NOT CONFIGURED` is a Warn keyword (with the `⚠`), not a Neutral one. Keeping every result screen on one renderer is what stops the Status look from drifting.
+
+What each level means to the operator is [DASHBOARD.md](DASHBOARD.md)'s job, not this file's. Add a level here only if you are prepared to give it a meaning there.
 
 ## Sanitization
 
@@ -199,7 +217,12 @@ To add a component screen:
 
 To add a flow, drive your screens with `shell.Ask` one at a time against a session from `newUISession` (so it participates in the dashboard handoff), map aborts through your flow's sentinel, and keep the console muted for the session's lifetime.
 
-To add a dashboard action, prefer args-mutation: set the flag the action corresponds to and let the existing flow run, rather than re-implementing the mode in the menu path.
+To add a dashboard action, prefer args-mutation: set the flag the action corresponds to and let the existing flow run, rather than re-implementing the mode in the menu path. An action that must stay inside the session has two ready shapes, and using one of them is what keeps the dashboard looking like a single program:
+
+- `runDashboardCheckApply` (`dashboard_check_apply.go`) is the two-step read-only-check-then-apply brick behind Cleanup guards and Check config. It owns the flow and the screens; the caller supplies only a check closure and an apply closure. A check that finds nothing is rendered green with a re-Check action and never offers Apply.
+- `showDaemonResultScreen` is the single styled result renderer shared by every daemon action, the upgrade outcome, and the skip verdicts of the diagnostic checks, so none of them can drift from the daemon-status screen.
+
+Whichever you pick, swallow the errors: a failed check must return to the menu, never abort the dashboard. And give the action a row in [DASHBOARD.md](DASHBOARD.md)'s menu-to-flag table, including "none, dashboard only" when it has no flag.
 
 ## Testing headlessly
 

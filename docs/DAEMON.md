@@ -1,6 +1,8 @@
 # Resident daemon
 
-ProxSave can run as a **resident daemon** instead of a one-shot `cron` job. The daemon schedules and supervises each backup, adds a hang watchdog, and reports to an external monitor so silent failures (a crash before notifying, a run that hangs, a host that is simply down) are caught by an external dead-man switch.
+The **resident daemon** is ProxSave's normal scheduler. New installs default to it; `cron` is the opt-out engine, still fully supported and still what a host reverted with `--daemon-remove` runs, but no longer the recommended one. The daemon schedules and supervises each backup, adds a hang watchdog, and reports to an external monitor so silent failures (a crash before notifying, a run that hangs, a host that is simply down) are caught by an external dead-man switch. Monitoring only transmits under the daemon: a host on cron reports nothing, whatever the `HEALTHCHECK_*` keys say.
+
+Installing, disabling, restarting and inspecting the daemon are all reachable from the interactive dashboard, which is what `proxsave` with no arguments opens on a TTY. The `--daemon-*` flags do the same work without the TUI, for headless hosts, scripts and recovery. Both routes are in [Operating](#operating).
 
 This document covers the daemon itself. The monitoring side, which checks exist, what they cover, and how to configure the centralized or self-hosted monitor, is in [HEALTHCHECKS.md](HEALTHCHECKS.md).
 
@@ -22,17 +24,39 @@ When `BACKUP_ENABLED=false`, the daemon skips the scheduled run entirely: no chi
 
 ## Standalone backups: the SIGUSR1 handoff
 
-A backup run outside the daemon (by hand, or the dashboard "run now") does not ping the monitor itself. The resident daemon is the sole pinger. Instead, a standalone run drops a handoff file (`.manual_backup_outcome.json`) and wakes the daemon with `SIGUSR1`; the daemon then pings the backup check with that run's outcome. A handoff older than 15 minutes is dropped without pinging (so a long-past run never flips the check), and if no live daemon is found nothing pings.
+A backup run outside the daemon (by hand with `--backup`, from a cron line, or from the dashboard's **Backup** row) does not ping the monitor itself. The resident daemon is the sole pinger. Instead, a standalone run drops a handoff file (`.manual_backup_outcome.json`) and wakes the daemon with `SIGUSR1`; the daemon then pings the backup check with that run's outcome. A handoff older than 15 minutes is dropped without pinging (so a long-past run never flips the check), and if no live daemon is found nothing pings.
 
 ## Binary alignment after an upgrade
 
 An in-place `--upgrade` replaces the on-disk binary without restarting the resident daemon, so the daemon can keep running the **old** code (systemd keeps the old process alive). ProxSave detects this hash-free: Linux blocks overwriting a running executable, so an upgrade unlinks it and `/proc/<pid>/exe` ends in `" (deleted)"`, which alone proves the daemon is behind.
 
-`--upgrade` and the dashboard reconcile this with a restart-and-verify: they wait (bounded, up to 4 minutes) for any in-progress daemon-supervised backup to finish (deferring the restart, never killing the backup), restart the service, then poll until the daemon is back, aligned, and freshly started. `--daemon-status` reports the same `behind - restart needed` verdict.
+`--upgrade`, the dashboard's **Upgrade**, and the dashboard's **Daemon** > **Restart** reconcile this with a restart-and-verify: they wait (bounded, up to 4 minutes) for any in-progress daemon-supervised backup to finish (deferring the restart, never killing the backup), restart the service, then poll until the daemon is back, aligned, and freshly started. `--daemon-status` and the dashboard's **Daemon** > **Status** report the same verdict: `behind - restart needed` from the flag, `BEHIND - RESTART NEEDED` on the dashboard screen, which puts every status keyword in ALL-CAPS.
 
 `--daemon-setup` does **not** do that. It restarts the unit immediately and then only polls until the daemon is alive with a readable alignment, accepting one that is still behind. If a daemon-supervised backup is running at that moment it is cancelled: the child gets SIGTERM, and SIGKILL if it does not stop within 30 seconds, and the run ends with no outcome ping, so the monitor sees a start that never finished. `--daemon-status` will not warn you: it reports liveness, unit state and binary alignment, never whether a backup is running. Check for the lock file under `LOCK_PATH`, or just run `--daemon-setup` outside the backup window.
 
 ## Operating
+
+### From the dashboard
+
+Run `proxsave` with no arguments on a TTY and the dashboard opens. Its **Daemon** group is the everyday route, and it is context-aware: it offers only the command that fits the engine currently recorded in `SCHEDULER_MODE`.
+
+| Configured engine | Rows offered |
+|-------------------|--------------|
+| cron | **Install** (switch to the resident daemon scheduler), **Status** |
+| daemon | **Disable** (stop the daemon and revert to the cron scheduler), **Restart**, **Status** |
+| config unreadable | **Status** only |
+
+**Install** and **Disable** run the same operations as `--daemon-setup` and `--daemon-remove`, in-session, and report the outcome on a result screen instead of in the log. Console logging is muted while they run, so that screen is the only channel: it states what happened to the crontab (how many proxsave lines were removed, or that none were present), and it goes yellow rather than green when the host also carries a schedule ProxSave does not own.
+
+**Restart** is the one action with no flag of its own. It waits (bounded, up to 4 minutes) for a daemon-supervised backup to finish before restarting, then polls until the daemon is back, aligned and freshly started. `systemctl restart proxsave-daemon.service` does none of that waiting and will kill a backup in flight.
+
+**Status** shows the same verdict `proxsave --daemon-status` prints, on a screen with a `Re-check` row that recomputes it, so you can restart the service elsewhere and watch it flip to aligned without leaving the dashboard.
+
+The scheduler engine itself is also editable from **Install** > **Edit install**, which re-runs the install wizard against the existing configuration: `Scheduler engine` is one of its fields. Monitoring lives under **Healthchecks** in the **Diagnostic Checks** group; see [HEALTHCHECKS.md](HEALTHCHECKS.md).
+
+### From the command line
+
+The flags are the same operations without the TUI, for headless hosts, cron jobs, scripts, and recovery when the dashboard cannot run:
 
 ```bash
 proxsave --daemon-status                       # read-only status + exit code (see below)
@@ -42,6 +66,8 @@ journalctl -u proxsave-daemon.service -f       # follow its log
 proxsave --daemon-setup                        # switch to the daemon
 proxsave --daemon-remove                       # revert to cron
 ```
+
+`--daemon` itself is not an operator command: it is what `proxsave-daemon.service` puts in its `ExecStart`. Running it by hand does not talk to the daemon systemd owns, and it does not become a second one either: an ownership lock (`<BASE_DIR>/identity/.daemon.lock`) makes it warn that another daemon already owns this install and exit `16`.
 
 `proxsave --daemon-status` prints a combined verdict and is meant for scripts:
 
@@ -82,19 +108,33 @@ This check is read-only: it never executes a personal script, starts a backup, a
 
 ## Install
 
-New installs default to the daemon. The install wizard (TUI and `--cli`) asks for the **Scheduler engine** (daemon or cron) just before the **Run at** time. Choosing the daemon installs `proxsave-daemon.service`, removes the proxsave cron entry ([what that means exactly](#what-removes-the-cron-entry-means)), and turns on centralized monitoring. The wizard then asks for the monitoring mode; see [HEALTHCHECKS.md](HEALTHCHECKS.md).
+New installs default to the daemon. The install wizard (TUI and `--cli`) asks for the **Scheduler engine** (daemon or cron), then **Healthchecks**, then the **Run at** time. Choosing the daemon installs `proxsave-daemon.service` and removes the proxsave cron entry ([what that means exactly](#what-removes-the-cron-entry-means)); choosing cron tears down a daemon unit left over from a previous install, so the two engines can never both be scheduling.
+
+The **Healthchecks** question is asked only with the daemon engine selected, because the daemon is the only thing that pings: under cron the TUI field is inactive, the `--cli` prompt is skipped, and monitoring is written off. With the daemon it defaults to the centralized ProxSave monitoring server, and answering `Off` is what leaves a daemon host deliberately unmonitored. See [HEALTHCHECKS.md](HEALTHCHECKS.md).
+
+The wizard does not need a flag: from the dashboard, **Install** > **Edit install** runs the same flow against the existing configuration, prefilled from it, so a no-op pass never flips the engine.
 
 ## Retrofit existing installs
 
+The dashboard is the ordinary route: the **Daemon** group offers **Install** on a cron host and **Disable** on a daemon host, and each runs exactly the operation its flag runs, including the `backup.env` writes and the crontab changes described below. The flags are for hosts where the TUI is not an option.
+
 - `--upgrade` **auto-migrates** to the daemon only on a host that has never recorded a scheduler engine, i.e. one where that same upgrade's config merge had to add `SCHEDULER_MODE`. Once the key is in the file the value is honoured and no upgrade revisits the host: `cron` means cron, whether you chose it in the wizard, edited it by hand or reached it with `--daemon-remove`. On the host it does migrate it **refuses**, and changes nothing at all, if the crontab still schedules ProxSave through an entry ProxSave does not own ([below](#what-removes-the-cron-entry-means)): installing the daemon on top of one would run every backup twice. `--daemon-setup` installs it anyway and reports what it found.
 
-  Note that on the ordinary download path this decision is made by the binary being *replaced*, because `--upgrade` never re-execs; only the `backup.env` merge runs under the new binary. A change to this rule therefore takes effect one release later.
-- `--daemon-setup` switches to the daemon at any time. It installs the service, removes the proxsave cron entry ([what that means exactly](#what-removes-the-cron-entry-means)), writes `SCHEDULER_MODE=daemon` and `HEALTHCHECK_ENABLED=true`, then restarts and verifies the daemon. It reports how many cron lines it actually removed, or that it found none, and it **warns and proceeds** (rather than refusing) if an entry it does not own survives, because you asked for the daemon explicitly.
-- `--daemon-remove` reverts to cron and disables the service. It records `SCHEDULER_MODE=cron`, and that record is what stops later upgrades reinstalling the daemon: the key is present, so it is honoured. It **always** writes a canonical cron line at `SCHEDULER_TIME`, and when the host also schedules ProxSave through an entry ProxSave does not own it says so and leaves that entry alone.
+  Note that with an in-place `proxsave --upgrade` this decision is made by the binary being *replaced*, because that command never re-execs; only the `backup.env` merge runs under the new binary. A change to this rule therefore takes effect one release later on that path, and the dashboard's **Upgrade** row is on it too: it runs the same upgrade code in the process already running. The externally fetched route has no such lag:
+
+  ```bash
+  bash -c "$(curl -fsSL https://raw.githubusercontent.com/tis24dev/proxsave/main/install.sh)" -- --upgrade
+  ```
+
+  That script downloads the new binary first and then hands the finalization to *that* binary (it appends `--localfile`, which skips the release check and download the script already did), so migration logic shipped in the new release is what runs. Use it when upgrading from an older release, or when a release note says the upgrade path itself changed.
+- `--daemon-setup`, and the dashboard's **Install**, switch to the daemon at any time. They install the service, remove the proxsave cron entry ([what that means exactly](#what-removes-the-cron-entry-means)), write `SCHEDULER_MODE=daemon` and `HEALTHCHECK_ENABLED=true`, then restart and verify the daemon. They report how many cron lines were actually removed, or that none were found, and they **warn and proceed** (rather than refusing) if an entry ProxSave does not own survives, because you asked for the daemon explicitly.
+- `--daemon-remove`, and the dashboard's **Disable**, revert to cron and disable the service. They record `SCHEDULER_MODE=cron`, and that record is what stops later upgrades reinstalling the daemon: the key is present, so it is honoured. A canonical cron line at `SCHEDULER_TIME` is **always** written, and when the host also schedules ProxSave through an entry ProxSave does not own it says so and leaves that entry alone.
 
   It used to withhold the line in that case, to avoid a second nightly backup. That was the wrong side of the trade. `--daemon-setup` deletes every proxsave cron line on the way in, so a host arriving at a revert has none, and one misidentified entry left it with no daemon and no cron line, at exit `0`, with nothing able to notice: the run that would have noticed is the backup that was never scheduled. The detector answers "is this named after proxsave", not "does this run a proxsave backup" ([below](#what-removes-the-cron-entry-means)), so misidentification is not exotic. A host that really does carry both now runs the backup twice, and the run that loses the per-run lock exits `16` where you can see it.
 
-Enabling the daemon sets `HEALTHCHECK_ENABLED=true` even though its raw config default is `false`, so a retrofitted host gets the dead-man switch. `--daemon-remove` sets it back to `false`. That symmetry matters: the checks it turns on are daemon-only, so a host left on cron with `HEALTHCHECK_ENABLED=true` warned `Healthchecks: daemon not installed` on every otherwise successful run and exited `1` for a daemon it was never meant to have. The rollback is what fixes that, by clearing the key the operator never chose. A cron host that still carries `HEALTHCHECK_ENABLED=true` on purpose is warned about it, and that warning still costs the exit code: monitoring cannot work without the daemon, and the key says the operator wants monitoring.
+  Unlike `--daemon-setup`, the revert never tears the daemon down on top of a running backup: removing the unit stops it, which would kill the run. It waits up to 4 minutes for the per-run lock to free, and if the backup is still running when that elapses it aborts having changed nothing, at exit `1` on the flag and on a `DEFERRED - BACKUP RUNNING` screen in the dashboard. Retry when the backup finishes. It aborts the same way, again changing nothing, when the configuration cannot be read, because then the real `LOCK_PATH` is unknown and it cannot tell whether a backup is running at all.
+
+Retrofitting the daemon sets `HEALTHCHECK_ENABLED=true` even though its raw config default is `false`, so a retrofitted host gets the dead-man switch. That is `--daemon-setup`, the dashboard's **Install**, and the upgrade auto-migration; the install wizard is not one of them, because there you answered the monitoring question yourself. `--daemon-remove` and the dashboard's **Disable** set the key back to `false`. That symmetry matters: the checks it turns on are daemon-only, so a host left on cron with `HEALTHCHECK_ENABLED=true` warned `Healthchecks: daemon not installed` on every otherwise successful run and exited `1` for a daemon it was never meant to have. The rollback is what fixes that, by clearing the key the operator never chose. A cron host that still carries `HEALTHCHECK_ENABLED=true` on purpose is warned about it, and that warning still costs the exit code: monitoring cannot work without the daemon, and the key says the operator wants monitoring.
 
 A host that reverted with an **older** build still carries that stale `true`, and nothing it runs rewrites the key for it, so it warns and exits `1` on every otherwise successful backup. ProxSave does not repair it: on disk that host is indistinguishable from one whose operator set the key on purpose, and rewriting a monitoring setting on evidence that cannot tell the two apart takes away a choice instead of tidying a leftover.
 
@@ -145,7 +185,7 @@ The third line is normal on a fresh daemon install, which never had a cron entry
 
 ### The run time is inherited, not reset
 
-`SCHEDULER_TIME` only exists since 0.30; on an older install the crontab line was the sole record of the run time. So before the config merge adds the key — and before the migration deletes that cron line — the existing proxsave cron entry is read and its time is written to `SCHEDULER_TIME`. A host running at 21:00 keeps running at 21:00.
+`SCHEDULER_TIME` only exists since 0.30; on an older install the crontab line was the sole record of the run time. So before the config merge adds the key, and before the migration deletes that cron line, the existing proxsave cron entry is read and its time is written to `SCHEDULER_TIME`. A host running at 21:00 keeps running at 21:00.
 
 `--daemon-setup` and the dashboard's install action do the same, and there the key is **overwritten** rather than seeded. On a cron host the crontab is the schedule and `SCHEDULER_TIME` is a leftover nothing keeps in step, so a cron line edited to 21:00 would otherwise hand the daemon whatever hour the key still held.
 
@@ -155,7 +195,7 @@ The third line is normal on a fresh daemon install, which never had a cron entry
 - Only the **root crontab** is inherited from, because that is the table ProxSave owns and is about to rewrite: taking its time is continuity, since the line it came from is the line being replaced.
 - A proxsave entry under `/etc/crontab` or `/etc/cron.d` is **reported and never adopted**. ProxSave does not edit files it did not place, so that entry survives the install; copying its hour into `SCHEDULER_TIME` would put the line ProxSave writes in the exact minute the surviving one already occupies, and the two runs would meet on the per-run lock with one exiting `16` every night. Left alone the host keeps its `/etc` entry and gains ProxSave's at `02:00`: still two backups, both of which succeed. The note names the file and the hour so you can settle it.
 - Under `/etc` only a **direct** `proxsave` command is reported this way, not the heuristics the advisories use. Nothing there opens a script to look inside.
-- A wrapper entry is not adopted anywhere, so `SCHEDULER_TIME` stays at `02:00`, the very minute the wrapper is likely already using. ProxSave says so ("No proxsave cron entry was found, but … appears to run ProxSave") instead of staying silent, but it will not adopt a run time out of a script it did not write: set `SCHEDULER_TIME` yourself.
+- A wrapper entry is not adopted anywhere, so `SCHEDULER_TIME` stays at `02:00`, the very minute the wrapper is likely already using. ProxSave says so ("No proxsave cron entry was found, but ... appears to run ProxSave") instead of staying silent, but it will not adopt a run time out of a script it did not write: set `SCHEDULER_TIME` yourself.
 
 ## systemd unit
 
@@ -194,13 +234,15 @@ The daemon coordinates through six small files under `<BASE_DIR>/identity/`, all
 | `.daemon_abandoned.json` | a backup child the kernel would not let the daemon reap: the orphan's pid and start time, the run id, and when it happened. See [the D-state caveat](#caveat-uninterruptible-sleep-d-state) |
 
 `.daemon.pid` and `.daemon_info.json` are written at startup and removed on shutdown.
-`.daemon_abandoned.json` is the exception that deliberately **survives** shutdown — that is its whole purpose — and is removed only once something shows backups can run again.
+`.daemon_abandoned.json` is the exception that deliberately **survives** shutdown - that is its whole purpose - and is removed only once something shows backups can run again.
+
+A seventh file in the same directory, `.daemon.lock`, is not state but the single-instance ownership lock (an advisory `flock`, mode `0600`). It stays on disk between runs; what matters is who holds the lock, not that the file exists.
 
 ## Configuration keys (`backup.env`)
 
 ```ini
 # Scheduler engine
-SCHEDULER_MODE=cron            # cron | daemon
+SCHEDULER_MODE=cron            # cron | daemon. Raw template value; the wizard writes daemon by default
 SCHEDULER_TIME=02:00           # daily HH:MM ("Run at")
 MAX_RUN_DURATION=1h            # watchdog hard timeout for one backup
 BACKUP_ENABLED=true            # false: daemon skips the scheduled run (backup check goes down)
@@ -210,7 +252,7 @@ PERSONAL_SCRIPT_PRE_RUN=       # path to a script started before the run (works 
 PERSONAL_SCRIPT_POST_RUN=      # path to a script started after the run, whatever the outcome (works only with the daemon)
 
 # Monitoring: enabled here, configured in HEALTHCHECKS.md
-HEALTHCHECK_ENABLED=false      # forced true by --daemon-setup / auto-migration
+HEALTHCHECK_ENABLED=false      # forced true by --daemon-setup, the dashboard's Install, auto-migration
 ```
 
 The `HEALTHCHECK_*` keys that decide *where* and *what* the daemon reports live in [HEALTHCHECKS.md](HEALTHCHECKS.md).

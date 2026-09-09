@@ -29,13 +29,33 @@ The interesting boundaries are the few places where **untrusted content** enters
 - **Release artifacts.** `install.sh` and `proxsave --upgrade` check the detached ECDSA
   P-256 signature over `SHA256SUMS` against a public key pinned in the tool itself, then
   check the downloaded archive's SHA256 against that authenticated list. A missing or
-  invalid signature aborts. That is the **download** path only: `proxsave --upgrade
+  invalid signature aborts. The dashboard's **Upgrade** > **Check upgrade** row runs that
+  same `--upgrade` code in-session, so it is the same check, not a second one. That is the
+  **download** path only: `proxsave --upgrade
   --localfile` skips the release check and the download, so it verifies nothing at all and
   just finalizes around the binary already on disk. Every release also publishes SLSA build
   provenance, but that
   attestation is **not** part of the automatic path: verifying it is a separate manual
   step with the GitHub CLI (see
   [PROVENANCE_VERIFICATION.md](PROVENANCE_VERIFICATION.md)).
+
+**Which binary runs the upgrade.** An in-place `proxsave --upgrade`, including the
+dashboard row, is executed by the binary already on the host: the release check, the
+download, the signature and checksum verification and the install are all the OLD
+release's code. That is deliberate for the verification itself, since a downloaded binary
+cannot be the party that verifies itself. Only the post-install **finalize** phase (the
+config merge, the daemon migration, the footer) is handed to the freshly installed binary
+through the internal `--upgrade-finalize` flag, and only when both ends are new enough: a
+host whose current binary predates that split does the finalize itself, and so does one
+whose freshly installed binary will not start as a child. So a fix to the upgrade flow
+shipped in a new release cannot help a host upgrading from an older one. The externally
+fetched route downloads and swaps the binary first, then runs the finalize on the new one:
+
+```bash
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/tis24dev/proxsave/main/install.sh)" -- --upgrade
+```
+
+Use it when a release note says the upgrade path itself changed.
 
 ## Execution model
 
@@ -173,7 +193,8 @@ each need a second key of their own; and finally, always, the suspicious-process
 
 The resident daemon and the `--daemon-*` admin commands are dispatched before it and skip it
 (each supervised backup child runs its own). The same preflight also runs once at the end of
-`--install` and `--upgrade`, but there the gates are **overridden in code**:
+`--install` and `--upgrade`, which is also what the dashboard's **Install** and **Upgrade**
+rows run, but there the gates are **overridden in code**:
 `SECURITY_CHECK_ENABLED`, `AUTO_FIX_PERMISSIONS` and `CONTINUE_ON_SECURITY_ISSUES` are all
 forced to `true`, and the network block is forced off. So an upgrade runs the preflight and
 auto-fixes modes and ownership even on a host where you turned both off, and it can never
@@ -246,10 +267,15 @@ hang. A child stuck in uninterruptible sleep is not reported at all: the daemon 
 after the child is reaped, and a D-state process is never reaped, so the daemon blocks in the
 same wedge and stops scheduling. Only the monitor's silence on the missing finish ping
 catches that case (see [DAEMON.md](DAEMON.md)). The daemon also supervises `--backup`
-children only, so a restore, a manual run, or a dashboard "run now" has no watchdog at all.
+children only, so a restore, a manual run, or a dashboard **Backup** has no watchdog at all
+(the dashboard runs the backup in its own process, not as a daemon child).
 `FS_IO_TIMEOUT=0` disables bounding everywhere.
 
-**Preflight configuration keys** (`backup.env`):
+**Preflight configuration keys** (`backup.env`). None of these are fields in the install
+wizard, so the dashboard cannot set them: edit `backup.env` directly. What the dashboard
+does offer for the config file is **Upgrade** > **Check config**, which merges keys the
+shipped template has and your file does not (the same operation as `--upgrade-config`), so
+a key added by a newer release appears with its default instead of staying absent.
 
 | Key | Default | Effect |
 |-----|---------|--------|

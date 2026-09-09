@@ -13,6 +13,31 @@ For the per-channel healthchecks sensors, the monitoring portal, and what each s
 means see [HEALTHCHECKS.md](HEALTHCHECKS.md); for the daemon that pings them see
 [DAEMON.md](DAEMON.md).
 
+## Setting the channels up
+
+The everyday route is the dashboard: run `proxsave` with no arguments on a TTY and it
+opens. **Install** > **Edit install** re-runs the install wizard against the existing
+configuration, and its fields cover the switches this document depends on: `Telegram
+notifications`, `Email notifications` with its `Email delivery mode`, `Scheduler engine`
+and `Healthchecks`. The **Diagnostic Checks** group then verifies what the wizard wrote:
+**Telegram** runs the relay pairing screen and re-checks the registration, **Healthchecks**
+shows the monitoring state and the portal details.
+
+Two of those fields are coupled. `Healthchecks` is only selectable when `Scheduler engine`
+is the daemon, because the daemon is the only process that pings; with cron the field is
+dimmed and monitoring is written off: the wizard writes `HEALTHCHECK_ENABLED=false` and
+`HEALTHCHECK_MODE=off`, and only the first of the two turns anything off (see
+[HEALTHCHECKS.md](HEALTHCHECKS.md#turning-monitoring-off)).
+Tier 2 below therefore exists only on a host the daemon schedules.
+
+Everything the wizard does not ask about is a hand edit of `backup.env`: the email
+recipient, Gotify, webhooks, the Telegram delivery-confirmation keys, the Gotify
+priorities. See [CONFIGURATION.md](CONFIGURATION.md).
+
+`--install` and `--new-install` reach the same wizard without going through the dashboard,
+for headless hosts, scripts, and recovery. They still draw the TUI; add `--cli` for
+text-mode prompts when the terminal cannot render it. See [DASHBOARD.md](DASHBOARD.md).
+
 ## The one invariant: notifications never abort the backup
 
 A notification is always best-effort. No channel can fail, delay, or block a backup:
@@ -47,6 +72,11 @@ There are two independent layers, and it helps to keep them apart:
   This is the "is my monitoring actually working" layer. See
   [HEALTHCHECKS.md](HEALTHCHECKS.md).
 
+Tier 2 requires the daemon. It is the only process that pings, so a host still on the
+cron scheduler raises no `notify-*` sensor at all, however the keys are set, and a run
+you start yourself (from the dashboard, or `proxsave --backup` by hand) leaves them
+untouched even under the daemon: see the handoff file below.
+
 The two tiers are decoupled on purpose. A Telegram message the relay accepted but
 Telegram did not deliver keeps the run green (Tier 1 success), yet drives the
 `notify-telegram` sensor DOWN (Tier 2), so an undelivered message never reports "ok".
@@ -73,7 +103,9 @@ resident daemon (the only process that pings the monitor) reads it after the chi
 exits. Two guards keep it honest:
 
 - The write is **gated on `PROXSAVE_RUN_ID`**, which only the daemon sets on its
-  child. A bare `proxsave --backup` by hand writes no file and leaves nothing stale.
+  child. A run that is not the daemon's child writes no file and leaves nothing stale:
+  that covers a dashboard **Backup**, which runs in the same process as the menu, and a
+  bare `proxsave --backup` by hand.
 - The daemon **rejects any file whose run id is not the run it supervised**, and an
   empty result set is written as an empty object so the daemon can tell "child ran,
   nothing to report" from "child crashed" (missing file).
@@ -457,13 +489,16 @@ A channel is anything that implements `notify.Notifier`
 |---------|--------------|---------------|
 | Telegram: "sent to ProxSave server" but "delivery not confirmed" | acceptance ok, poll ended before a definite answer (durable outbox still retrying) | raise `TELEGRAM_CONFIRM_TIMEOUT_SECONDS`, or accept it (delivery is best-effort) |
 | Telegram: "not delivered (bot blocked by the user)" | the user blocked the bot | unblock the bot, re-pair |
-| Telegram: "could not send to ProxSave server" repeatedly | stale relay secret or unknown server | the client reprovisions once automatically; if it persists, re-pair (`--install` Telegram step) |
+| Telegram: "could not send to ProxSave server" repeatedly | stale relay secret or unknown server | the client reprovisions once automatically; if it persists, re-pair from the dashboard: **Diagnostic Checks** > **Telegram**. The same screen is the Telegram step of `--install` |
 | `426` on `get-chat-id` | server needs a newer client to finish pairing | upgrade ProxSave to v0.28.0 or later |
 | `notify-telegram` sensor DOWN but run green | message accepted but not delivered (Tier 2 is stricter than Tier 1) | fix the delivery cause above; the run staying green is by design |
 | Email relay `INVALID_SIGNATURE` | the report shape changed so the HMAC no longer matches, or this binary's compiled-in relay secret is out of date | keep the stock report shape; the relay endpoint is not configurable, so there is no private worker to check. If the shape is untouched, upgrade: the secret is compiled in and a server-side rotation breaks an old binary |
 | Email: "recipient is not allowed (root accounts are blocked)" | `relay` method with a `root@` recipient and no sendmail fallback | set a real recipient, enable `EMAIL_FALLBACK_SENDMAIL`, or use `sendmail`/`pmf` |
 | Portal address and a `Login:` line instead of a link | you have set a portal password, so the server stopped minting links | expected; sign in at that address with that identity |
-| Nothing printed about the portal at all | the mint did not succeed, or the value failed the sanitizer | minting is best effort and quiet; run the dashboard check again. Opening the link is not what retires it, so this is never the expected end state |
+| Nothing printed about the portal at all | the mint did not succeed, or the value failed the sanitizer | minting is best effort and quiet; re-open **Diagnostic Checks** > **Healthchecks** in the dashboard. Opening the link is not what retires it, so this is never the expected end state |
+| No `notify-*` sensor ever appears | this host is on the cron scheduler, or the runs are not daemon-supervised | switch the scheduler in the dashboard **Daemon** group; see [DAEMON.md](DAEMON.md) |
 
 See [CONFIGURATION.md](CONFIGURATION.md) for every key, [DAEMON.md](DAEMON.md) for the
-monitoring sensors, and [INSTALL.md](INSTALL.md) for the Telegram pairing wizard.
+monitoring sensors, and [DASHBOARD.md](DASHBOARD.md) for the dashboard screens that
+pair Telegram and show the monitoring state. [INSTALL.md](INSTALL.md) covers the same
+pairing step inside the installer.

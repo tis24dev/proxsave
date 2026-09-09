@@ -5,6 +5,7 @@ Technical architecture and implementation details for the restore system.
 ## Table of Contents
 
 - [Architecture Overview](#architecture-overview)
+- [Entry Points](#entry-points)
 - [Module Structure](#module-structure)
 - [Execution Flow](#execution-flow)
 - [Category System](#category-system)
@@ -23,6 +24,46 @@ This document is the implementation-oriented companion to
 examples; use this file for internal restore logic, module responsibilities,
 and decision flow details.
 
+### Entry Points
+
+The restore workflow has one engine and two ways in. Both set the same field and run
+the same dispatch, so nothing behaves differently between them.
+
+| Entry | What it does | Code |
+|-------|--------------|------|
+| Dashboard, `Restore` item (the normal route) | `menu.Run()` returns `ActionRestore`; the dashboard sets `args.Restore = true` and hands its live session to the flow | `internal/ui/flows/menu/menu.go`, `cmd/proxsave/dashboard.go` |
+| `proxsave --restore` (headless, scripted, recovery) | `cli.Parse()` sets `Args.Restore` directly | `internal/cli/args.go` |
+
+The dashboard opens only on a **completely bare** `proxsave` run on an interactive
+terminal: `dashboardBareInvocationCheck()` is `len(os.Args) <= 1`, and
+`isTerminalInteractive()` requires stdin and stdout to both be terminals with a `TERM`
+that is set and is not `dumb` (`cmd/proxsave/dashboard.go`). Any flag at all, `--config`
+included, suppresses it. That is why every command in this document that combines
+restore with another flag is written as a flag invocation: such a run cannot come from
+the menu.
+
+Both entries converge on `dispatchRestoreMode()` (`cmd/proxsave/main_restore_decrypt.go`),
+which chooses the front-end and never the engine:
+
+```go
+restoreCLI := rt.args.ForceCLI || !restoreIsInteractive()
+if restoreCLI {
+    return runRestoreCLIFn(rt) // RunRestoreWorkflow: stdin prompts
+}
+return runRestoreTUIFn(rt) // RunRestoreWorkflowTUI: Charm screens
+```
+
+So the plain-text prompts quoted throughout this document are the CLI front-end,
+reached with `--cli` or by any non-interactive invocation (cron, a pipe, ssh without a
+tty). An interactive `--restore` and the dashboard's `Restore` item both render the TUI
+front-end. The two share the engine, `runRestoreWorkflowWithUI()`, behind the
+`RestoreWorkflowUI` interface.
+
+A restore launched from the dashboard does not start a second program:
+`newUISession()` (`internal/orchestrator/ui_hooks.go`) adopts the dashboard's
+already-running session through the `uiSessionHandoff` hook, so the frame never leaves
+the screen between the menu and the restore.
+
 ### Design Principles
 
 1. **Safety First**: Multiple layers of protection against data loss
@@ -35,21 +76,23 @@ and decision flow details.
 
 ```text
 ┌─────────────────────────────────────────────────────────┐
-│                    CLI Entry Point                       │
-│              cmd/proxsave/main.go                  │
+│                       Entry Points                      │
+│   Dashboard "Restore"  (bare proxsave on a TTY)         │
+│   proxsave --restore   (headless / scripted / recovery) │
+│   cmd/proxsave/dashboard.go, main_restore_decrypt.go    │
 └────────────────────┬────────────────────────────────────┘
                      │
                      ↓
 ┌─────────────────────────────────────────────────────────┐
-│              Restore Orchestrator                        │
-│        internal/orchestrator/restore.go                  │
+│                   Restore Orchestrator                  │
+│   restore.go (CLI entry) / restore_tui.go (TUI entry)   │
 │  ┌──────────────────────────────────────────────────┐   │
-│  │  RunRestoreWorkflow()                            │   │
+│  │  runRestoreWorkflowWithUI()                      │   │
 │  │   - Coordinate all phases                        │   │
 │  │   - Manage service lifecycle                     │   │
 │  │   - Error handling and cleanup                   │   │
 │  └──────────────────────────────────────────────────┘   │
-└─────┬──────────┬──────────┬──────────┬─────────────────┘
+└─────┬──────────┬──────────┬──────────┬──────────────────┘
       │          │          │          │
       ↓          ↓          ↓          ↓
 ┌──────────┐ ┌────────┐ ┌────────┐ ┌──────────────┐
@@ -65,7 +108,7 @@ and decision flow details.
 ### Data Flow
 
 ```text
-User Input (--restore flag)
+Entry: dashboard "Restore" item, or --restore
   ↓
 Backup Selection
   ├─ Scan configured paths
@@ -127,8 +170,12 @@ Completion Summary
 
 | File | Purpose | Key Functions |
 |------|---------|---------------|
-| `cmd/proxsave/main.go` | Entry point, CLI parsing | `main()`, flag handling |
-| `internal/orchestrator/restore.go` | Entry stub (body in `restore_workflow_ui_run.go`) | `RunRestoreWorkflow()` |
+| `internal/cli/args.go` | Flag parsing (`--restore`, `--cli`, and the rest) | `Parse()` |
+| `internal/ui/flows/menu/menu.go` | Dashboard menu; `Restore` is one of its items | `Run()` |
+| `cmd/proxsave/dashboard.go` | Dashboard launcher: a menu action sets the matching `Args` field | `maybeRunDashboard()` |
+| `cmd/proxsave/main_restore_decrypt.go` | Restore dispatch: TUI or CLI front-end, exit codes | `dispatchRestoreMode()`, `runRestoreCLI()`, `runRestoreTUI()` |
+| `internal/orchestrator/restore.go` | CLI entry stub (body in `restore_workflow_ui_run.go`) | `RunRestoreWorkflow()` |
+| `internal/orchestrator/restore_tui.go` | TUI entry stub; adopts the dashboard session when one is offered | `RunRestoreWorkflowTUI()` |
 | `internal/orchestrator/categories.go` | Category definitions | `GetAllCategories()`, `PathMatchesCategory()` |
 | `internal/orchestrator/selective.go` | Category selection UI | `ShowRestoreModeMenuWithReader()`, `ShowCategorySelectionMenuWithReader()` |
 | `internal/orchestrator/restore_plan_render.go` | Shared restore-plan body (no chrome) | `buildRestorePlanText()` |
@@ -139,34 +186,39 @@ Completion Summary
 
 ### File: cmd/proxsave/main_restore_decrypt.go
 
-**`runRestoreCLI()` / `runRestoreTUI()`**: Entry point for the restore flag
+**`dispatchRestoreMode()`**: the single restore dispatch, reached identically from the
+dashboard's `Restore` item and from `--restore`
 
 ```go
-if args.Restore {
-    logging.Info("Restore mode enabled - starting interactive workflow...")
-    if err := orchestrator.RunRestoreWorkflow(ctx, cfg, logger, version); err != nil {
-        if errors.Is(err, orchestrator.ErrRestoreAborted) ||
-           errors.Is(err, orchestrator.ErrDecryptAborted) {
-            logging.Info("Restore workflow aborted by user")
-            return finalize(exitCodeInterrupted)
-        }
-        logging.Error("Restore workflow failed: %v", err)
-        return finalize(types.ExitGenericError.Int())
+func dispatchRestoreMode(rt *appRuntime) modeResult {
+    if !rt.args.Restore { // set by --restore, or by the dashboard's Restore item
+        return modeResult{exitCode: types.ExitSuccess.Int()}
     }
-    logging.Info("Restore workflow completed successfully")
-    return finalize(types.ExitSuccess.Int())
+
+    restoreCLI := rt.args.ForceCLI || !restoreIsInteractive()
+    if restoreCLI {
+        return runRestoreCLIFn(rt) // RunRestoreWorkflow
+    }
+    return runRestoreTUIFn(rt) // RunRestoreWorkflowTUI
 }
 ```
 
 **Responsibilities**:
-- Parse `--restore` flag
-- Call orchestrator
-- Handle errors and exit codes
-- Distinguish user abort vs system error
+- Act on `Args.Restore`, whichever entry set it
+- Choose the front-end: `--cli`, or a non-interactive stdin/stdout pair, forces the CLI one
+- Handle errors and exit codes (`finishFailedRestore()` / `finishSuccessfulRestore()`)
+- Distinguish a user abort from a system error: `ErrRestoreAborted` on both paths, plus
+  `ErrDecryptAborted` on the TUI path, exit with `exitCodeInterrupted` (128 + SIGINT)
+- Report a run that finished with warnings as "completed with warnings", not as a success
+- On a bare dashboard invocation, `ErrDecryptNoBackups` exits cleanly with no ERROR line:
+  the operator already saw the graphical empty-state screen. A `--restore` run is not
+  bare, so it keeps the ERROR line
 
 ### File: internal/orchestrator/restore.go (entry point; workflow body in restore_workflow_ui_run.go)
 
-**Main function**: `RunRestoreWorkflow()`, a thin dispatch stub that delegates to `runRestoreWorkflowWithUI()` (`restore_workflow_ui_run.go`)
+**Main function**: `RunRestoreWorkflow()`, a thin dispatch stub that builds the CLI
+front-end (`newCLIWorkflowUI`) and delegates to `runRestoreWorkflowWithUI()`
+(`restore_workflow_ui_run.go`)
 
 **Signature**:
 ```go
@@ -174,9 +226,29 @@ func RunRestoreWorkflow(
     ctx context.Context,
     cfg *config.Config,
     logger *logging.Logger,
-    version string,
+    version, runHostname string,
 ) error
 ```
+
+`runHostname` is the name this run resolved for itself; the access control host check
+compares a restored bundle's hostname against it. Passing `""` makes that check strict.
+
+Its TUI twin is `RunRestoreWorkflowTUI()` (`restore_tui.go`), which takes the same
+arguments plus `configPath` and `buildSig` for the frame header, builds the Charm
+front-end (`newCharmWorkflowUI`), and calls the same `runRestoreWorkflowWithUI()`:
+
+```go
+func RunRestoreWorkflowTUI(
+    ctx context.Context,
+    cfg *config.Config,
+    logger *logging.Logger,
+    version, configPath, buildSig, runHostname string,
+) error
+```
+
+While the TUI session owns the terminal, console log output is swapped to `io.Discard`
+(log files are unaffected), because raw stdout writes would corrupt the alternate
+screen.
 
 **Key Sections** (the workflow body lives in `restore_workflow_ui_run.go`, driven by
 `run()` → `runSelectiveRestore()`; each step below names the implementing function(s)
@@ -281,7 +353,7 @@ type Category struct {
 **Key Functions**:
 
 1. **`GetAllCategories()`** (`categories.go`):
-   - Returns complete list of 15+ categories
+   - Returns the complete list: 32 categories covering 143 archive paths
    - Hardcoded category definitions
    - Each category includes ID, name, description, paths
 
@@ -295,13 +367,15 @@ type Category struct {
    - Filters export-only categories
    - Mode-specific category lists
 
-4. **`GetStorageModeCategories()`** (`categories.go`):
-   - PVE: cluster, storage, jobs, zfs
-   - PBS: config, datastore, jobs, zfs
+4. **`GetStorageModeCategories()`** (`categories.go`), selected by category ID:
+   - PVE: `pve_cluster`, `storage_pve`, `pve_jobs`, `zfs`, `filesystem`, `storage_stack`
+   - PBS: `pbs_config`, `datastore_pbs`, `maintenance_pbs`, `pbs_jobs`, `pbs_remotes`,
+     `zfs`, `filesystem`, `storage_stack`
+   - Dual: the union of both lists
 
 5. **`GetBaseModeCategories()`** (`categories.go`):
-   - Common categories only
-   - Network, SSL, SSH, services
+   - `network`, `ssl`, `ssh`, `services`, `filesystem`
+   - Selected by ID, not by `CategoryType`
 
 **SSH Category Coverage**
 
@@ -380,11 +454,17 @@ type Category struct {
 
 #### Phase 1: Initialization
 
-**File**: `cmd/proxsave/main_restore_decrypt.go` (`runRestoreCLI()` / `runRestoreTUI()`)
+**File**: `cmd/proxsave/main_restore_decrypt.go` (`dispatchRestoreMode()` ->
+`runRestoreCLI()` / `runRestoreTUI()`)
 
 ```go
-// runRestoreCLI dispatches to the orchestrator
-err := orchestrator.RunRestoreWorkflow(ctx, cfg, logger, version)
+// runRestoreCLI: stdin prompts (--cli, or any non-interactive invocation)
+err := orchestrator.RunRestoreWorkflow(rt.ctx, rt.cfg, rt.logger, rt.toolVersion, rt.hostname)
+
+// runRestoreTUI: Charm screens (an interactive --restore, or the dashboard's
+// Restore item, whose live session this run adopts)
+err := orchestrator.RunRestoreWorkflowTUI(rt.ctx, rt.cfg, rt.logger, rt.toolVersion,
+    rt.args.ConfigPath, buildSignature(), rt.hostname)
 ```
 
 **Inputs**:
@@ -392,6 +472,8 @@ err := orchestrator.RunRestoreWorkflow(ctx, cfg, logger, version)
 - Config (from backup.env)
 - Logger
 - Version string
+- Run hostname (what the access control host check compares against)
+- TUI only: config path and build signature, for the frame header
 
 **Outputs**:
 - Error (or nil on success)
@@ -618,21 +700,38 @@ if err := w.confirmRestorePlan(); err != nil {
 }
 ```
 
-**Mode Selection UI** (`ShowRestoreModeMenuWithReader()` in `selective.go`):
+**Mode Selection UI** (`ShowRestoreModeMenuWithReader()` in `selective.go`, the CLI
+front-end; on a PVE host):
 ```text
 Select restore mode:
   [1] FULL restore - Restore everything from backup
-  [2] STORAGE only - Cluster/storage + jobs
-  [3] SYSTEM BASE only - Network + SSL + SSH + services
+  [2] STORAGE only - PVE cluster + storage + jobs + mounts
+  [3] SYSTEM BASE only - Network + SSL + SSH + services + filesystem
   [4] CUSTOM selection - Choose specific categories
   [0] Cancel
-
-Your selection: _
+Choice: _
 ```
 
-**Custom Selection UI** (`ShowCategorySelectionMenuWithReader()` in `selective.go`):
+Line `[2]` is written from the detected system type:
+
+| System type | Line `[2]` |
+|-------------|------------|
+| PVE | `STORAGE only - PVE cluster + storage + jobs + mounts` |
+| PBS | `DATASTORE only - PBS datastore definitions + sync/verify/prune jobs + mounts` |
+| Dual | `STORAGE/DATASTORE only - PVE storage + PBS datastore/jobs + common mounts` |
+| Unknown | `STORAGE/DATASTORE only - Storage or datastore configuration` |
+
+The TUI front-end (`charmWorkflowUI.SelectRestoreMode()` in
+`workflow_ui_charm_restore.go`) offers the same four modes as a selector titled
+`Select restore mode`, with the labels `FULL restore`, `STORAGE/DATASTORE only`,
+`SYSTEM BASE only`, and `CUSTOM selection`; the storage line's description is chosen
+from the same system type, and `Unknown` reads `not available for this system`.
+
+**Custom Selection UI** (`ShowCategorySelectionMenuWithReader()` in `selective.go`,
+the CLI front-end):
 ```text
-Available categories:
+CUSTOM CATEGORY SELECTION
+
   [1] [ ] PVE Cluster Configuration
       Proxmox VE cluster configuration and database
   [2] [ ] Network Configuration
@@ -640,14 +739,19 @@ Available categories:
   ...
 
 Commands:
-  - Type number to toggle
-  - 'a' = select all
-  - 'n' = deselect all
-  - 'c' = continue
-  - '0' = cancel
+  1-9    - Toggle category selection
+  a      - Select all
+  n      - Deselect all
+  c      - Continue with selected categories
+  b      - Back to mode selection
+  0      - Cancel
 
-Your selection: _
+Choice: _
 ```
+
+The TUI front-end renders the same list as a multi-select
+(`charmWorkflowUI.SelectCategories()`); Esc there returns to the mode selection
+(`errRestoreBackToMode`), the same as `b` above, and does not cancel the restore.
 
 ---
 
@@ -1587,16 +1691,20 @@ if checksumFile exists {
 
 ```go
 func ConfirmRestoreOperationWithReader(ctx context.Context, reader *bufio.Reader, logger *logging.Logger) (bool, error) {
-    fmt.Print(`Type "RESTORE" (exact case) to proceed, or "cancel"/"0" to abort: `)
+    for {
+        fmt.Print("Type 'RESTORE' to proceed or 'cancel' to abort: ")
 
-    response, _ := reader.ReadString('\n')
-    response = strings.TrimSpace(response)
+        response, _ := reader.ReadString('\n')
+        response = strings.TrimSpace(response)
 
-    if response == "RESTORE" {
-        return true, nil
+        if response == "RESTORE" { // exact case
+            return true, nil
+        }
+        if strings.ToLower(response) == "cancel" || response == "0" {
+            return false, nil
+        }
+        fmt.Println("Invalid input. Please type 'RESTORE' or 'cancel'.")
     }
-
-    return false, nil
 }
 ```
 
@@ -1662,22 +1770,28 @@ if filesFailed > 0 {
 
 ### Context Cancellation
 
-**Interrupt Handling** (`main.go`):
+**Interrupt Handling** (`cmd/proxsave/main_signals.go` -> `setupRunContext()`):
 
 ```go
+sigChan := make(chan os.Signal, 1)
+signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
 ctx, cancel := context.WithCancel(context.Background())
-defer cancel()
-
-// Setup signal handler
-sigCh := make(chan os.Signal, 1)
-signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
 
 go func() {
-    <-sigCh
-    logging.Info("Received interrupt signal, cancelling operations...")
-    cancel()
+    defer signal.Stop(sigChan)
+    select {
+    case sig := <-sigChan:
+        bootstrap.Info("\nReceived signal %v, initiating graceful shutdown...", sig)
+        cancel()
+    case <-ctx.Done():
+    }
 }()
 ```
+
+The handler deliberately does **not** close `os.Stdin`. Cancelling the context already
+tears the TUI down (bubbletea restores the terminal) and unblocks every CLI prompt
+(`internal/input` selects on `ctx.Done()`); closing stdin instead races bubbletea's
+`term.Restore()` and can leave the terminal in raw mode (F01-02).
 
 **Context Propagation**:
 ```go
@@ -1726,30 +1840,41 @@ func RunRestoreWorkflow(...) error {
 
 ### Adding a New Restore Mode
 
-**Step 1**: Define mode constant
+**Step 1**: Define mode constant. `RestoreMode` is a **string** type declared in
+`categories.go`, not an integer:
 
 ```go
-// File: internal/orchestrator/selective.go
+// File: internal/orchestrator/categories.go
+type RestoreMode string
+
 const (
-    RestoreModeFull    RestoreMode = 1
-    RestoreModeStorage RestoreMode = 2
-    RestoreModeBase    RestoreMode = 3
-    RestoreModeCustom  RestoreMode = 4
-    RestoreModeMyNew   RestoreMode = 5  // ← Add here
+    RestoreModeFull    RestoreMode = "full"
+    RestoreModeStorage RestoreMode = "storage"
+    RestoreModeBase    RestoreMode = "base"
+    RestoreModeCustom  RestoreMode = "custom"
+    RestoreModeMyNew   RestoreMode = "mynew" // <- Add here
 )
 ```
 
-**Step 2**: Add to menu
+**Step 2**: Add it to **both** front-ends behind `RestoreWorkflowUI.SelectRestoreMode()`.
+A mode added to only one of them is unreachable from the other:
 
 ```go
-// File: internal/orchestrator/selective.go (the menu rendered behind RestoreWorkflowUI.SelectRestoreMode)
+// File: internal/orchestrator/selective.go (CLI front-end)
 func ShowRestoreModeMenuWithReader(ctx context.Context, reader *bufio.Reader, logger *logging.Logger, systemType SystemType) (RestoreMode, error) {
     fmt.Println("Select restore mode:")
-    fmt.Println("  [1] FULL restore")
-    fmt.Println("  [2] STORAGE only")
-    fmt.Println("  [3] SYSTEM BASE only")
-    fmt.Println("  [4] CUSTOM selection")
-    fmt.Println("  [5] MY NEW MODE")  // ← Add here
+    fmt.Println("  [1] FULL restore - Restore everything from backup")
+    // ... [2] varies with systemType, [3], [4] ...
+    fmt.Println("  [5] MY NEW MODE")  // <- Add here, and a "5" case in the read loop
+    // ...
+}
+
+// File: internal/orchestrator/workflow_ui_charm_restore.go (TUI front-end)
+func (u *charmWorkflowUI) SelectRestoreMode(ctx context.Context, systemType SystemType) (RestoreMode, error) {
+    items := []components.SelectorItem[RestoreMode]{
+        // ... existing items ...
+        {Label: "MY NEW MODE", Description: "...", Value: RestoreModeMyNew}, // <- Add here
+    }
     // ...
 }
 ```
@@ -1965,10 +2090,11 @@ func TestPathMatchesCategory(t *testing.T) {
 **Full Restore Workflow**:
 ```bash
 #!/bin/bash
-# Test full restore workflow
+# Test full restore workflow. Both commands are flag invocations on purpose: a
+# script has no TTY, so the dashboard never opens and the CLI front-end is used.
 
 # 1. Create test backup
-proxsave
+proxsave --backup
 
 # 2. Modify system files
 echo "test" > /etc/hostname
@@ -2014,7 +2140,14 @@ func (m *MockServiceManager) Stop(service string) error {
 ```bash
 # Set log level to debug
 proxsave --restore --log-level=debug
+
+# Same run with the plain text prompts instead of the TUI screens
+proxsave --restore --log-level=debug --cli
 ```
+
+This is necessarily a flag invocation: any flag suppresses the dashboard
+(`dashboardBareInvocationCheck()`), so there is no menu equivalent for a debug-level
+restore. On an interactive terminal it still renders the TUI unless you add `--cli`.
 
 ### Review Detailed Logs
 
@@ -2055,19 +2188,22 @@ tar -xzf backup.tar.gz ./etc/pve/storage.cfg -O | less
 
 The restore system is built on these technical foundations:
 
+- **One engine, two entries**: the dashboard's `Restore` item and `--restore` both
+  reach `dispatchRestoreMode()`, which only picks the front-end
+- **Two interchangeable front-ends** (CLI prompts, Charm screens) behind the
+  `RestoreWorkflowUI` interface
 - **Modular architecture** with clear separation of concerns
 - **Category-based abstraction** for flexible file selection
-- **Two-pass extraction** for normal vs export-only files
+- **Three-tier extraction**: normal, export-only, and staged (sensitive) categories
 - **Service lifecycle management** with defer pattern
 - **Multiple safety layers** (backups, confirmations, guards)
 - **Stream-based processing** for memory efficiency
 - **Comprehensive error handling** with graceful degradation
 
 **Total Implementation**:
-- **~3,500 lines** across 8 core files
-- **15+ categories** with 100+ file paths
-- **4 restore modes** plus custom selection
-- **11-phase workflow** with comprehensive logging
+- **32 categories** covering **143 archive paths**
+- **4 restore modes**: FULL, STORAGE/DATASTORE, SYSTEM BASE, CUSTOM
+- **10-phase workflow** with comprehensive logging
 
 **Related Documentation**:
 - [RESTORE_GUIDE.md](RESTORE_GUIDE.md) - Complete user guide

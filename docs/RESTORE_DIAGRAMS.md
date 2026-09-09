@@ -5,6 +5,12 @@ Use this file as a visual companion to [RESTORE_GUIDE.md](RESTORE_GUIDE.md) and
 [RESTORE_TECHNICAL.md](RESTORE_TECHNICAL.md), not as the primary place for
 textual restore rules.
 
+Every flow below starts at the same place. The normal entry is the dashboard:
+`proxsave` with no arguments on a terminal, then **Tools > Restore** (see
+[DASHBOARD.md](DASHBOARD.md)). `proxsave --restore` enters the identical workflow
+directly and is the path for a headless host, a rescue shell, or any terminal the
+dashboard cannot use. Nothing downstream of the entry point differs between the two.
+
 ## Table of Contents
 
 - [Complete Restore Workflow](#complete-restore-workflow)
@@ -21,7 +27,7 @@ textual restore rules.
 
 ```mermaid
 flowchart TD
-    Start([User runs --restore]) --> SelectBackup[Select Backup Source]
+    Start(["Dashboard, Tools group: Restore<br/>or proxsave --restore"]) --> SelectBackup[Select Backup Source]
     SelectBackup --> ScanBackups[Scan for Backups]
     ScanBackups --> ChooseBackup[Choose Specific Backup]
 
@@ -53,7 +59,9 @@ flowchart TD
 
     ShowPlan --> Confirm{Type RESTORE?}
     Confirm -->|No| Abort
-    Confirm -->|Yes| SafetyBackup[Create Safety Backup]
+    Confirm -->|Yes| ConfirmOverwrite{Confirm overwrite?}
+    ConfirmOverwrite -->|No| Abort
+    ConfirmOverwrite -->|Yes| SafetyBackup[Create Safety Backup]
 
     SafetyBackup --> SafetyOK{Success?}
     SafetyOK -->|No| AskContinue{Continue anyway?}
@@ -722,7 +730,8 @@ a warning and proceeds **without** a persistent guard. Older versions set a
 `chattr +i` immutable flag here; it survived reboots and could silently re-block the
 mountpoint once the storage was later unmounted, so it was removed.
 
-**Cleanup** (`proxsave --cleanup-guards`):
+**Cleanup** (dashboard **Recovery > Cleanup guards**, or `proxsave --cleanup-guards`
+on a headless host):
 - bind-mount guards are unmounted (they also disappear on reboot);
 - **legacy** `chattr +i` immutable flags (from older versions) are cleared, but
   **skipped while the target is masked by a real mount** (clearing would touch the
@@ -763,5 +772,6 @@ mmdc -i docs/RESTORE_DIAGRAMS.md -o diagrams/ -t svg
 ## Related Documentation
 
 - [RESTORE_GUIDE.md](RESTORE_GUIDE.md) - Complete user guide
+- [DASHBOARD.md](DASHBOARD.md) - The menu restore is normally started from
 - [RESTORE_TECHNICAL.md](RESTORE_TECHNICAL.md) - Technical architecture
 - [CLUSTER_RECOVERY.md](CLUSTER_RECOVERY.md) - Disaster recovery procedures

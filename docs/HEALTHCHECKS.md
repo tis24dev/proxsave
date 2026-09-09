@@ -6,9 +6,14 @@ the failures ProxSave cannot report itself are still caught: a crash before the
 notification phase, an OOM kill, a run wedged on a dead mount, a host that never came
 back from a reboot.
 
-Monitoring is driven by the resident daemon, which is the only thing that pings. A host
-still on the cron scheduler reports nothing, no matter how the keys below are set. See
-[DAEMON.md](DAEMON.md) for the scheduler engines and how to switch.
+Monitoring is driven by the resident daemon, which is the only thing that pings and is
+also the default scheduler. A host still on the cron scheduler reports nothing, no matter
+how the keys below are set. See [DAEMON.md](DAEMON.md) for the scheduler engines, and for
+switching between them from the dashboard or with the `--daemon-*` flags.
+
+There is exactly one off switch, `HEALTHCHECK_ENABLED`. Set it to `false` and this host
+sends nothing anywhere; everything else on this page decides **where** the pings go, never
+whether they are sent. See [Turning monitoring off](#turning-monitoring-off).
 
 ## Why silence is the signal
 
@@ -32,9 +37,9 @@ The daemon reports four families of checks, each shown on the monitor as a
 | `proxsave-updates` | immediately at daemon start, then every `HEALTHCHECK_UPDATE_INTERVAL` | `/0` when up to date, `/1` when a newer release exists, so the check goes down and tells you to upgrade |
 | `proxsave-notify-<channel>` | after each daemon-supervised run, one per channel the backup attempted | whether that notification channel actually delivered |
 
-A run you start yourself, from the dashboard or by hand, leaves the per-channel checks
-untouched. Only `proxsave-backup` picks up a standalone run, through the handoff
-described below.
+A run you start yourself, from the dashboard's **Backup** row or by hand, leaves the
+per-channel checks untouched. Only `proxsave-backup` picks up a standalone run, through
+the handoff described below.
 
 ### Ping details
 
@@ -82,21 +87,52 @@ daemon itself is healthy.
 
 ### Backups run outside the daemon
 
-A backup started by hand, or from the dashboard's "run now", does not ping the monitor
+A backup started by hand, or from the dashboard's **Backup** row, does not ping the monitor
 itself. The resident daemon is the only pinger. A standalone run instead drops a handoff
 file and wakes the daemon with `SIGUSR1`, and the daemon pings `proxsave-backup` with
 that outcome. A handoff older than 15 minutes is discarded without pinging, so a
 long-past run never flips the check, and if no live daemon is found nothing pings at
 all.
 
+## Turning monitoring off
+
+`HEALTHCHECK_ENABLED` is the only switch that stops transmission. It ships `false` in the
+config template, so a host that never enabled the daemon is already silent. It is written
+`true` by the install wizard when you pick either monitoring mode, and forced `true` by
+every path that retrofits the daemon onto an existing install: `--daemon-setup`, the
+dashboard's **Daemon** > **Install**, and the upgrade auto-migration. `--daemon-remove` and
+the dashboard's **Daemon** > **Disable** write it back to `false`.
+
+To send nothing anywhere while keeping the daemon as your scheduler, set it yourself:
+
+```bash
+HEALTHCHECK_ENABLED=false
+```
+
+That value survives later upgrades. It does not survive re-running `--daemon-setup` or the
+dashboard's **Daemon** > **Install**, which force it back to `true` every time: choosing
+the daemon engine turns monitoring on.
+
+Note what does **not** turn monitoring off. `HEALTHCHECK_MODE` cannot: see below. Blanking
+the self-mode ping URLs cannot either, and is worse than doing nothing (see
+[Self mode](#self-mode-your-own-healthchecks)).
+
 ## Two modes
 
-`HEALTHCHECK_MODE` picks where the pings go.
+`HEALTHCHECK_MODE` picks where the pings go. It has exactly two values at run time.
 
 - **`centralized`** (the default): ProxSave runs the monitor for you and provisions
   this host's checks. Nothing to set up, no API key on this machine.
 - **`self`**: you point the daemon at your own healthchecks instance, self-hosted or
   the SaaS, and own the checks yourself.
+
+Anything else in the file is read as `centralized`. The comparison is on the lowercased,
+trimmed value against the single literal `self`; every other string, including an empty
+value, a typo, and the `off` the install wizard itself writes when you answer `Off`,
+resolves to `centralized`. So `HEALTHCHECK_MODE=off` in `backup.env` is not an off switch:
+what silences that host is the `HEALTHCHECK_ENABLED=false` the wizard writes next to it.
+Edit one of them by hand and you can end up with `off` sitting beside `true`, which is a
+centralized host that reports.
 
 ## Centralized: the ProxSave monitoring server
 
@@ -178,6 +214,29 @@ In self mode ProxSave pings the URLs you give it and does nothing else. There is
 identity, no portal, and no provisioning: the checks, the alert rules, and the
 retention are yours to manage on your own instance.
 
+**The service-alive check is mandatory in self mode.** With `HEALTHCHECK_ENABLED=true`,
+`HEALTHCHECK_MODE=self` and both `HEALTHCHECK_ALIVE_URL` and `HEALTHCHECK_ALIVE_ID` empty,
+every run warns
+
+```text
+WARNING  Healthchecks: no alive check configured
+SKIP     Healthchecks: disabled
+```
+
+and that warning costs the run its exit code: an otherwise clean backup ends at `1`
+instead of `0`. It is deliberate rather than pedantic. `HEALTHCHECK_ENABLED=true` says you
+want monitoring, and self mode with no liveness check is the one shape that looks
+configured and catches nothing: the dead-man switch is the whole point, and a backup-only
+self config has no liveness signal at all. Either fill in an alive check, or set
+`HEALTHCHECK_ENABLED=false` and be honestly unmonitored. Blanking the URLs is not the way
+to switch monitoring off.
+
+Centralized mode has the matching rule with a different missing piece: a host with no
+Server ID, the identity generated at install time, warns `Healthchecks: no SERVER_ID`
+instead, at the same cost to the exit code. On a host whose configured engine is cron,
+either reason arrives with `(cron mode: only the resident daemon transmits)` appended,
+because there nothing would have transmitted even with the key filled in.
+
 ### During install
 
 Choosing `Your own server` on the monitoring step opens a form that collects the full
@@ -213,12 +272,21 @@ fills in for you. In centralized mode they are an optional fallback cache that n
 
 ## Where monitoring shows up
 
-**Install wizard.** With the daemon engine selected, step 8 asks for the monitoring
-mode, then a screen verifies the connection. In centralized mode it also boxes the
-portal: a fresh login link, or the portal address plus your sign-in identity once you
-have a password. `--cli` installs show the same information as plain text.
+**Install wizard.** The configuration form's `Healthchecks` field asks for the monitoring
+mode, immediately after `Scheduler engine` and before `Run at (HH:MM)`. Its three answers
+are `Off`, `ProxSave HC Server` (centralized) and `Your own server` (self), and it is
+active only with the daemon engine selected: under cron it is inactive and monitoring is
+written off. A screen then verifies the connection. In centralized mode it also boxes
+the portal: a fresh login link, or the portal address plus your sign-in identity once you
+have a password. `--cli` installs ask the same question, again only on the daemon engine,
+and show the same information as plain text.
 
-**Dashboard.** `Healthchecks` under the diagnostic checks runs on entry and reports the
+**Dashboard.** This is the everyday route to both halves of monitoring. **Install** >
+**Edit install** re-runs the wizard above against the existing configuration, which is
+where the monitoring mode is changed; the **Daemon** group is where the engine that
+transmits it is installed or disabled ([DAEMON.md](DAEMON.md#operating)).
+
+`Healthchecks`, under **Diagnostic Checks**, runs on entry and reports the
 real operational state, not just one-shot reachability. In centralized mode it boxes
 the portal, in whichever of the two states applies. Under the verdict, a `Sensors:`
 list gives one colored line per monitored check with its state and the age of its last
@@ -232,7 +300,8 @@ and reports what was really sent. A missing record reads as "nothing transmitted
 which is honest for a first run or a stopped daemon, and never as a false success.
 
 **`proxsave --daemon-status`.** A scriptable verdict on the daemon itself, covered in
-[DAEMON.md](DAEMON.md).
+[DAEMON.md](DAEMON.md). The dashboard's **Daemon** > **Status** shows the same verdict
+without the exit code.
 
 ## Troubleshooting
 
@@ -248,7 +317,7 @@ fully healthy centralized state; in self mode it is `REACHABLE`.
 | `PROVISIONING` | the credential or the server-side setup is not ready yet | check again shortly; if it persists, this host cannot reach the monitoring server |
 | `UNREACHABLE` | the monitor did not answer from this host | check outbound connectivity and DNS |
 | `UNCONFIRMED` | provisioned, but reachability could not be confirmed | run the check again |
-| `NOT INSTALLED` | the monitor is reachable but the daemon service is not installed | `proxsave --daemon-setup` |
+| `NOT INSTALLED` | the monitor is reachable but the daemon service is not installed | `proxsave --daemon-setup`. The dashboard's **Daemon > Install** row does the same thing, but it is offered only while `SCHEDULER_MODE` still reads `cron`: a host recorded as `daemon` whose unit went missing is shown Disable, Restart and Status instead, so use the flag there |
 | `NOT RUNNING` | the service is installed and stopped, or never wrote a heartbeat | `systemctl start proxsave-daemon.service` |
 | `RUNNING, NOT REPORTING` | the process is up but has written no heartbeat yet | usually a stale build; restart the service |
 | `STALE` | the last heartbeat is older than twice the heartbeat interval, and the interval is floored at one minute first, so the smallest stale window is two minutes | the daemon is stopped or wedged; check `journalctl -u proxsave-daemon.service`. On a systemd host you will normally see `RUNNING, NOT REPORTING` instead: an active unit with a stale heartbeat is reclassified, so `STALE` surfaces only when systemd could not be asked |
@@ -261,11 +330,18 @@ fully healthy centralized state; in self mode it is `REACHABLE`.
 | `PARKED` | the server had removed this host's unused account | cleared and re-registered automatically |
 | `DISABLED` | centralized monitoring is turned off on the server | nothing to configure here |
 | `NO IDENTITY` | this host has no server identity | re-run the installer to regenerate it |
-| `NOT ENABLED` | monitoring is off on this host | switch to the daemon scheduler with monitoring enabled |
-| `NOT CONFIGURED` | self mode selected but no alive URL entered | fill in the healthchecks parameters |
+| `NOT ENABLED` | monitoring is off on this host: `HEALTHCHECK_ENABLED=false` | nothing, if that is what you want. Otherwise switch to the daemon scheduler, which sets the key |
+| `NOT CONFIGURED` | self mode selected but `HEALTHCHECK_ALIVE_URL` is empty | fill in the healthchecks parameters, or set `HEALTHCHECK_ENABLED=false` |
 | `CONFIG ERROR` | `backup.env` could not be loaded | re-run the installer to repair it |
 | `STATUS UNREADABLE` | the on-disk monitoring status file could not be read | a corrupt file is quarantined and reset automatically |
 | `UNKNOWN` | the daemon state could not be determined | check the service and its log |
+
+Self-mode `NOT CONFIGURED` and the run-start refusal described under
+[Self mode](#self-mode-your-own-healthchecks) are not the same test, and they can disagree.
+This screen reads `HEALTHCHECK_ALIVE_URL` alone; the run accepts either that or
+`HEALTHCHECK_ALIVE_ID`. A host configured with only an alive **id** therefore shows
+`NOT CONFIGURED` here while its backups run clean at exit `0`. Setting the full alive URL
+satisfies both.
 
 ### What the sensor list tells you
 
@@ -336,8 +412,10 @@ systemctl restart proxsave-daemon.service
 ## Configuration keys
 
 ```bash
-HEALTHCHECK_ENABLED=false      # true with the daemon (--daemon-setup, upgrade auto-migration); --daemon-remove sets it back
-HEALTHCHECK_MODE=centralized   # centralized | self
+HEALTHCHECK_ENABLED=false      # the only off switch. Template default false; forced true by --daemon-setup,
+                               # the dashboard's Daemon > Install, and the upgrade auto-migration;
+                               # --daemon-remove and Daemon > Disable write it back to false
+HEALTHCHECK_MODE=centralized   # centralized | self. Any other value, "off" included, reads as centralized
 HEALTHCHECK_HEARTBEAT_INTERVAL=5m
 HEALTHCHECK_UPDATE_INTERVAL=5m
 HEALTHCHECK_SEND_LOG=true      # attach a log tail on a failed or hung supervised run
