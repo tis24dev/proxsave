@@ -112,6 +112,11 @@ type Config struct {
 	MinDiskSecondaryGB float64
 	MinDiskCloudGB     float64
 	SafetyFactor       float64
+	// SkipPermissionCheck feeds checks.CheckerConfig.SkipPermissionCheck, which drops the
+	// ownership/mode verification of the backup and log directories from the pre-backup
+	// checks. Test-only, as the template says: a host that skips it can write archives
+	// nobody but root can read back.
+	SkipPermissionCheck bool
 
 	// Optimization settings
 	EnableDeduplication    bool
@@ -614,6 +619,12 @@ func (c *Config) parseOptimizationSettings() {
 	c.MinDiskPrimaryGB = sanitizeMinDisk(c.getFloat("MIN_DISK_SPACE_PRIMARY_GB", 10.0))
 	c.MinDiskSecondaryGB = sanitizeMinDisk(c.getFloat("MIN_DISK_SPACE_SECONDARY_GB", c.MinDiskPrimaryGB))
 	c.MinDiskCloudGB = sanitizeMinDisk(c.getFloat("MIN_DISK_SPACE_CLOUD_GB", c.MinDiskPrimaryGB))
+
+	// SKIP_PERMISSION_CHECK ships in the template and is listed in envOverrideKeys, so it
+	// was settable and readable while nothing carried it to the checker: the key looked
+	// honoured and was inert. It is read here with the other knobs configurePreBackupChecker
+	// copies into checks.CheckerConfig.
+	c.SkipPermissionCheck = c.getBool("SKIP_PERMISSION_CHECK", false)
 }
 
 func (c *Config) parseSecuritySettings() {
