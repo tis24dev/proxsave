@@ -72,19 +72,25 @@ func (o *Orchestrator) RegisterNotificationChannel(channel NotificationChannel) 
 	o.notificationChannels = append(o.notificationChannels, channel)
 }
 
-// notifyOnExemptNames lists the dispatch-table entries that NOTIFY_ON must never filter,
+// reportingOnlyChannel marks the dispatch-table entries that NOTIFY_ON must never filter,
 // because they are not notification channels: they implement NotificationChannel to get a
 // slot in the ordered dispatch, but they send nothing outward. Healthchecks is one (see
 // healthcheck_section.go) -- it renders the Phase-7 section and captures the portal
 // magic-link onto stats.HealthcheckLink, both of which are reporting, not delivery, and
-// both of which the R3 ordering contract depends on. A name allowlist rather than an
-// index/position check so a second such entry cannot be added without deciding this.
-var notifyOnExemptNames = map[string]bool{
-	healthchecksSectionName: true,
+// both of which the R3 ordering contract depends on.
+//
+// A marker interface rather than a Name() allowlist: Name() is operator-visible display
+// text on a slice that does not enforce uniqueness, so a second channel answering
+// "Healthchecks" would inherit the exemption and send on the runs the operator silenced.
+// The method is unexported, so only this package can claim the exemption, and claiming it
+// is a deliberate act -- a future Tier-2 entry has to opt in rather than be forgotten.
+type reportingOnlyChannel interface {
+	reportingOnly()
 }
 
-func notifyOnExempt(name string) bool {
-	return notifyOnExemptNames[name]
+func notifyOnExempt(ch NotificationChannel) bool {
+	_, ok := ch.(reportingOnlyChannel)
+	return ok
 }
 
 // notifyOutcome classifies a run for NOTIFY_ON filtering. Deliberately not a bare
@@ -180,18 +186,6 @@ func (o *Orchestrator) dispatchNotifications(ctx context.Context, stats *BackupS
 			continue
 		}
 
-		if !notifyOnExempt(entry.name) && !notify.NotifyOnAllows(policy, outcome) {
-			o.logger.Skip("%s: NOTIFY_ON=%s and this run is a %s", entry.name, policy, outcome)
-			// Record the suppression so stats.NotifyResults stays non-empty. An empty
-			// map makes persistNotifyResults write {} and the daemon then bails on
-			// len(nr.Results)==0, which would leave every per-channel sensor to go DOWN
-			// on grace expiry after each quiet run. "disabled" is already the severity
-			// severityToSuffix skips without pinging, and pruneNotifyRecords clears the
-			// row, so a suppressed channel reports nothing instead of reporting wrong.
-			setNotifyResult(stats, entry.name, "disabled")
-			continue
-		}
-
 		channel, ok := channelsByName[entry.name]
 		if !ok || channel == nil {
 			if entry.name == "Email" && cfg != nil {
@@ -217,7 +211,28 @@ func (o *Orchestrator) dispatchNotifications(ctx context.Context, stats *BackupS
 			continue
 		}
 
+		// Claimed before the NOTIFY_ON gate below, so a suppressed channel is not picked
+		// up again by the remainder loop and skipped a second time.
 		usedChannels[channel] = true
+
+		// NOTIFY_ON is applied here, BELOW the initialization check above and not before
+		// it. A channel that is enabled but failed to initialize is a broken configuration,
+		// not a quiet run: it has to keep warning and keep recording "error" whatever the
+		// threshold says. Gating earlier would hide a misconfigured notifier behind the
+		// very setting the operator uses to stop reading successful runs, and would drop
+		// the WARNING that promotes that run's exit code -- which NOTIFY_ON must not touch.
+		if !notifyOnExempt(channel) && !notify.NotifyOnAllows(policy, outcome) {
+			o.logger.Skip("%s: NOTIFY_ON=%s and this run is a %s", entry.name, policy, outcome)
+			// Record the suppression so stats.NotifyResults stays non-empty. An empty
+			// map makes persistNotifyResults write {} and the daemon then bails on
+			// len(nr.Results)==0, which would leave every per-channel sensor to go DOWN
+			// on grace expiry after each quiet run. "disabled" is already the severity
+			// severityToSuffix skips without pinging, and pruneNotifyRecords clears the
+			// row, so a suppressed channel reports nothing instead of reporting wrong.
+			setNotifyResult(stats, entry.name, "disabled")
+			continue
+		}
+
 		_ = channel.Notify(ctx, stats) // Ignore errors - notifications are non-critical
 	}
 
@@ -230,7 +245,7 @@ func (o *Orchestrator) dispatchNotifications(ctx context.Context, stats *BackupS
 			continue
 		}
 		name := strings.TrimSpace(ch.Name())
-		if !notifyOnExempt(name) && !notify.NotifyOnAllows(policy, outcome) {
+		if !notifyOnExempt(ch) && !notify.NotifyOnAllows(policy, outcome) {
 			o.logger.Skip("%s: NOTIFY_ON=%s and this run is a %s", name, policy, outcome)
 			setNotifyResult(stats, name, "disabled")
 			continue

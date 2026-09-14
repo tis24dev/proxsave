@@ -25,17 +25,30 @@ func (s *notifySpy) Notify(context.Context, *BackupStats) error {
 	return nil
 }
 
+// reportingSpy is a notifySpy that claims the NOTIFY_ON exemption the way the real
+// Healthchecks section does -- by implementing the marker, not by answering to a name.
+type reportingSpy struct{ notifySpy }
+
+func (s *reportingSpy) reportingOnly() {}
+
 // dispatchWith runs one notification phase with a single spy channel and returns the spy
 // plus everything the logger emitted.
 func dispatchWith(t *testing.T, cfg *config.Config, stats *BackupStats, name string) (*notifySpy, string) {
 	t.Helper()
+	spy := &notifySpy{name: name}
+	return spy, dispatchChannels(t, cfg, stats, spy)
+}
+
+// dispatchChannels runs one notification phase over exactly the given channels and returns
+// everything the logger emitted.
+func dispatchChannels(t *testing.T, cfg *config.Config, stats *BackupStats, channels ...NotificationChannel) string {
+	t.Helper()
 	var buf bytes.Buffer
 	logger := logging.New(types.LogLevelInfo, false)
 	logger.SetOutput(&buf)
-	spy := &notifySpy{name: name}
-	o := &Orchestrator{logger: logger, cfg: cfg, notificationChannels: []NotificationChannel{spy}}
+	o := &Orchestrator{logger: logger, cfg: cfg, notificationChannels: channels}
 	o.dispatchNotifications(context.Background(), stats)
-	return spy, buf.String()
+	return buf.String()
 }
 
 // The feature itself: a channel that is ENABLED is still not dispatched when the run's
@@ -105,7 +118,8 @@ func TestNotifyOnSuppressesAnEnabledChannelBelowTheThreshold(t *testing.T) {
 func TestNotifyOnNeverFiltersTheHealthchecksSection(t *testing.T) {
 	for _, policy := range []string{config.NotifyOnWarning, config.NotifyOnFailure} {
 		cfg := &config.Config{HealthcheckEnabled: true, NotifyOn: policy}
-		spy, out := dispatchWith(t, cfg, &BackupStats{ExitCode: 0}, healthchecksSectionName)
+		spy := &reportingSpy{notifySpy{name: healthchecksSectionName}}
+		out := dispatchChannels(t, cfg, &BackupStats{ExitCode: 0}, spy)
 
 		if spy.calls != 1 {
 			t.Fatalf("NOTIFY_ON=%s on a clean run: Healthchecks dispatched %d times, want 1; log:\n%s", policy, spy.calls, out)
@@ -115,15 +129,67 @@ func TestNotifyOnNeverFiltersTheHealthchecksSection(t *testing.T) {
 		}
 	}
 
-	// Stated as a rule and not just as the observed behaviour of one name, because the
-	// exemption is what a future Tier-2 entry in the same slice has to be added to.
-	if !notifyOnExempt(healthchecksSectionName) {
+	// Stated as a rule and not just as the observed behaviour of one instance, because the
+	// exemption is what a future Tier-2 entry in the same slice has to opt into.
+	if !notifyOnExempt(NewHealthchecksChannel(&config.Config{}, logging.New(types.LogLevelInfo, false))) {
 		t.Fatal("the Healthchecks section must be exempt from NOTIFY_ON")
 	}
 	for _, name := range []string{"Email", "Telegram", "Gotify", "Webhook"} {
-		if notifyOnExempt(name) {
+		if notifyOnExempt(&notifySpy{name: name}) {
 			t.Fatalf("%s sends to the operator and must be subject to NOTIFY_ON", name)
 		}
+	}
+}
+
+// The exemption is claimed by implementing the marker, never by answering to a display
+// name. Name() is operator-visible text on a slice that enforces no uniqueness, so if the
+// gate trusted it, any channel calling itself "Healthchecks" would send on precisely the
+// runs the operator silenced -- the one bypass that looks like the feature is broken.
+func TestTheExemptionCannotBeClaimedByNameAlone(t *testing.T) {
+	cfg := &config.Config{NotifyOn: config.NotifyOnFailure}
+	stats := &BackupStats{}
+	impostor := &notifySpy{name: healthchecksSectionName}
+	out := dispatchChannels(t, cfg, stats, impostor)
+
+	if impostor.calls != 0 {
+		t.Fatalf("a sending channel named %q dispatched %d times on a clean run under NOTIFY_ON=failure, want 0; log:\n%s",
+			healthchecksSectionName, impostor.calls, out)
+	}
+	if got := stats.NotifyResults[healthchecksSectionName]; got != "disabled" {
+		t.Fatalf("NotifyResults[%s] = %q; a filtered impostor is recorded like any other suppressed channel", healthchecksSectionName, got)
+	}
+}
+
+// NOTIFY_ON gates DELIVERY, so it is applied below the initialization check and never
+// above it. An enabled channel that failed to build (a mistyped EMAIL_DELIVERY_METHOD is
+// the live case) is a broken configuration rather than a quiet run: it has to keep
+// warning, and the warning is what promotes the run's exit code, which this feature
+// promises not to touch. Gating first would hide a dead notifier behind the very setting
+// the operator uses to stop reading successful runs, and would downgrade its sensor from
+// "error" to a pruned "disabled" -- reporting health it never checked.
+func TestABrokenChannelStillReportsItselfBelowTheThreshold(t *testing.T) {
+	cfg := &config.Config{
+		EmailEnabled:        true,
+		EmailDeliveryMethod: "carrier-pigeon",
+		NotifyOn:            config.NotifyOnFailure,
+	}
+	stats := &BackupStats{}
+	out := dispatchChannels(t, cfg, stats) // enabled, but nothing registered
+
+	if !strings.Contains(out, "Email: enabled but not initialized") {
+		t.Fatalf("a misconfigured channel must still warn under NOTIFY_ON=failure, got:\n%s", out)
+	}
+	if !strings.Contains(out, `EMAIL_DELIVERY_METHOD="carrier-pigeon"`) {
+		t.Fatalf("the warning must still name the value that broke it, got:\n%s", out)
+	}
+	if strings.Contains(out, "Email: NOTIFY_ON=") {
+		t.Fatalf("a channel that never initialized was not suppressed by policy and must not say it was, got:\n%s", out)
+	}
+	if got := stats.NotifyResults["Email"]; got != "error" {
+		t.Fatalf("NotifyResults[Email] = %q; want \"error\" so the per-channel sensor goes DOWN instead of being pruned", got)
+	}
+	if stats.EmailStatus != "error" {
+		t.Fatalf("EmailStatus = %q; want \"error\" so the other channels render the failure", stats.EmailStatus)
 	}
 }
 
@@ -148,6 +214,11 @@ func TestASuppressedChannelIsRecordedAsDisabledForTheDaemonHandoff(t *testing.T)
 	}
 	if got := stats.NotifyResults["Webhook"]; got != "disabled" {
 		t.Fatalf("NotifyResults[Webhook] = %q; want \"disabled\", the severity the daemon skips without pinging", got)
+	}
+	// Exactly once. A suppressed channel is claimed in usedChannels before the gate, so
+	// the remainder loop cannot pick it up and skip it a second time.
+	if n := strings.Count(out, "Webhook: NOTIFY_ON="); n != 1 {
+		t.Fatalf("the suppression was reported %d times, want 1; log:\n%s", n, out)
 	}
 }
 

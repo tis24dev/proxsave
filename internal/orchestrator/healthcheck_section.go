@@ -75,6 +75,12 @@ func NewHealthchecksChannel(cfg *config.Config, logger *logging.Logger) *Healthc
 // healthchecksSectionName) so the section is dispatched exactly once.
 func (h *HealthchecksChannel) Name() string { return healthchecksSectionName }
 
+// reportingOnly claims the NOTIFY_ON exemption (see reportingOnlyChannel in extensions.go).
+// This section reports, it does not deliver, so the severity threshold an operator sets to
+// stop hearing about clean runs must not take it down with the channels that do deliver --
+// a run nobody was told about is exactly the run this section has to keep describing.
+func (h *HealthchecksChannel) reportingOnly() {}
+
 // Notify reports the monitoring state and (centralized) captures/mints and STORES the
 // RAW portal link on stats.HealthcheckLink (it does not display it; the epilogue does).
 // Errors are never returned as fatal: it always returns nil, and every failure degrades

@@ -255,7 +255,7 @@ func TestTheDebugBlockExplainsEveryDecisionItMade(t *testing.T) {
 		// why the one that was NOT accepted failed every rule
 		"PERSONAL_SCRIPTS_PRERUN is assigned in the file and matched no rule: not assigned in the template, not documented there, not a webhook endpoint field, not a legacy alias",
 		// which write form won, since the two resolve in opposite ways
-		"CUSTOM_BACKUP_PATHS assigned on lines 419, 491; line 491 wins (block form: it replaces everything before it)",
+		"CUSTOM_BACKUP_PATHS assigned on lines 426, 498; line 498 wins (block form: it replaces everything before it)",
 		// the template's own two halves, so the counts above can be reconstructed
 		"template assigns 182 variables and documents",
 	} {
