@@ -194,6 +194,7 @@ var notes = []Note{
 			"A PBS archive whose acme/accounts holds anything but plain account files is refused, and no live account is touched",
 			"If a run names a possible typo in backup.env, fix that line: nothing written on it is applied today",
 			"A variable set twice still has to be cleaned by hand, and --upgrade-config names the lines to delete",
+			"Several variables missing from the same section are each written back under their own comment, not stacked",
 			"If SKIP_PERMISSION_CHECK=true is left over from a test, clear it: the next run really skips that check",
 		},
 	},

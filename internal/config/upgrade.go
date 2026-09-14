@@ -429,19 +429,45 @@ func computeConfigUpgrade(configPath string) (*UpgradeResult, string, []byte, er
 	// file that moved or edited those comments keeps today's placement rather than
 	// having the merge guess. Pruned lines stop it too: inserting after a line that is
 	// about to be removed would leave the key stranded again.
-	skipSharedContext := func(userIdx, prevEntryIdx int, entry templateEntry) int {
-		for ti := templateEntries[prevEntryIdx].end + 1; ti < entry.start; ti++ {
+	//
+	// matchTemplateRun is that walk over one run of template lines. It reports whether the
+	// whole run matched, because a run that stopped early has to stop the walk for good:
+	// resuming past a line the user's file does not have would consume unrelated lines.
+	matchTemplateRun := func(userIdx, from, to int) (int, bool) {
+		for ti := from; ti < to; ti++ {
 			if userIdx >= len(originalLines) {
-				break
+				return userIdx, false
 			}
 			if userIdx < len(skipOriginalLines) && skipOriginalLines[userIdx] {
-				break
+				return userIdx, false
 			}
 			if strings.TrimSpace(templateLines[ti]) != strings.TrimSpace(originalLines[userIdx]) {
-				break
+				return userIdx, false
 			}
 			userIdx++
 		}
+		return userIdx, true
+	}
+
+	// Between the anchor and the missing key there can be OTHER missing keys: findPrevAnchor
+	// walks back to the first key the user's file actually has, so every entry it stepped
+	// over is missing too. Their own template lines are therefore lines the user's file
+	// cannot carry, and comparing them would fail on the first one - stranding the key at
+	// the anchor, above its own comments and, when the anchor is the last key of the
+	// previous section, under the wrong section header. Step over each such span WITHOUT
+	// advancing userIdx, then keep matching the comments the two files do share.
+	skipSharedContext := func(userIdx, prevEntryIdx int, entry templateEntry) int {
+		ti := templateEntries[prevEntryIdx].end + 1
+		for k := prevEntryIdx + 1; k < entry.index; k++ {
+			mid := templateEntries[k]
+			next, whole := matchTemplateRun(userIdx, ti, mid.start)
+			userIdx = next
+			if !whole {
+				return userIdx
+			}
+			ti = mid.end + 1
+		}
+		userIdx, _ = matchTemplateRun(userIdx, ti, entry.start)
 		return userIdx
 	}
 
