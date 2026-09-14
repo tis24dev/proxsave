@@ -3,6 +3,7 @@ package orchestrator
 import (
 	"errors"
 	"os"
+	"strings"
 	"testing"
 )
 
@@ -110,7 +111,10 @@ func TestApplyPBSAcmeAccountsFromStage_EmptyStagedDirectoryRemovesAll(t *testing
 	}
 }
 
-func TestApplyPBSAcmeAccountsFromStage_SkipsNonRegularStagedEntries(t *testing.T) {
+// A staged entry that is not a regular account file makes the whole apply refuse. Applying
+// the rest and skipping that one is what the mirror cannot survive: the skipped name would
+// be missing from the keep-set and the live account of that name would be deleted.
+func TestApplyPBSAcmeAccountsFromStage_RejectsNonRegularStagedEntries(t *testing.T) {
 	fakeFS := withFakeRestoreFS(t)
 
 	if err := fakeFS.WriteFile(stagedAcmeAccountsDir+"/le", []byte(`{"account":{}}`), 0o600); err != nil {
@@ -120,17 +124,98 @@ func TestApplyPBSAcmeAccountsFromStage_SkipsNonRegularStagedEntries(t *testing.T
 		t.Fatalf("mkdir staged nested: %v", err)
 	}
 
-	if err := applyPBSAcmeAccountsFromStage(newTestLogger(), "/stage"); err != nil {
-		t.Fatalf("applyPBSAcmeAccountsFromStage: %v", err)
+	err := applyPBSAcmeAccountsFromStage(newTestLogger(), "/stage")
+	if err == nil {
+		t.Fatal("expected an error when a staged entry is not a regular account file")
+	}
+	if !strings.Contains(err.Error(), "nested") {
+		t.Fatalf("expected the error to name the rejected entry, got: %v", err)
 	}
 
-	if _, err := fakeFS.Stat("/etc/proxmox-backup/acme/accounts/le"); err != nil {
-		t.Fatalf("expected the regular staged account applied: %v", err)
-	}
-	if _, err := fakeFS.Stat("/etc/proxmox-backup/acme/accounts/nested"); err == nil {
-		t.Fatal("expected a non-regular staged entry not to be carried onto the system")
+	// Nothing is applied from a refused stage, not even the entries that were valid.
+	if _, err := fakeFS.Stat("/etc/proxmox-backup/acme/accounts/le"); err == nil {
+		t.Fatal("expected no account applied from a refused stage")
 	} else if !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("stat nested: %v", err)
+		t.Fatalf("stat le: %v", err)
+	}
+}
+
+// The reason the apply refuses: a skipped entry used to take the live account of the same
+// name down with it, losing a working registration and its private key while the staged
+// replacement was never written either.
+func TestApplyPBSAcmeAccountsFromStage_NonRegularStagedEntryKeepsSameNamedLiveAccount(t *testing.T) {
+	fakeFS := withFakeRestoreFS(t)
+
+	live := []byte(`{"account":"live"}`)
+	if err := fakeFS.WriteFile("/etc/proxmox-backup/acme/accounts/le", live, 0o600); err != nil {
+		t.Fatalf("write live account: %v", err)
+	}
+	if err := fakeFS.MkdirAll(stagedAcmeAccountsDir+"/le", 0o700); err != nil {
+		t.Fatalf("mkdir staged le: %v", err)
+	}
+
+	if err := applyPBSAcmeAccountsFromStage(newTestLogger(), "/stage"); err == nil {
+		t.Fatal("expected an error when the staged entry is not a regular account file")
+	}
+
+	got, err := fakeFS.ReadFile("/etc/proxmox-backup/acme/accounts/le")
+	if err != nil {
+		t.Fatalf("expected the live account left in place: %v", err)
+	}
+	if string(got) != string(live) {
+		t.Fatalf("expected the live account untouched, got %q", string(got))
+	}
+}
+
+// A refused stage removes nothing and overwrites nothing, for every account on the node.
+func TestApplyPBSAcmeAccountsFromStage_RejectedStageLeavesOtherLiveAccountsIntact(t *testing.T) {
+	fakeFS := withFakeRestoreFS(t)
+
+	live := []byte(`{"account":"live"}`)
+	for _, name := range []string{"le", "le-staging"} {
+		if err := fakeFS.WriteFile("/etc/proxmox-backup/acme/accounts/"+name, live, 0o600); err != nil {
+			t.Fatalf("write live account %s: %v", name, err)
+		}
+	}
+	if err := fakeFS.WriteFile(stagedAcmeAccountsDir+"/le", []byte(`{"account":"staged"}`), 0o600); err != nil {
+		t.Fatalf("write staged account: %v", err)
+	}
+	if err := fakeFS.MkdirAll(stagedAcmeAccountsDir+"/nested", 0o700); err != nil {
+		t.Fatalf("mkdir staged nested: %v", err)
+	}
+
+	if err := applyPBSAcmeAccountsFromStage(newTestLogger(), "/stage"); err == nil {
+		t.Fatal("expected an error when a staged entry is not a regular account file")
+	}
+
+	for _, name := range []string{"le", "le-staging"} {
+		got, err := fakeFS.ReadFile("/etc/proxmox-backup/acme/accounts/" + name)
+		if err != nil {
+			t.Fatalf("expected the live account %s left in place: %v", name, err)
+		}
+		if string(got) != string(live) {
+			t.Fatalf("expected the live account %s untouched, got %q", name, string(got))
+		}
+	}
+}
+
+// The refusal comes before the destination is touched, so a node that never had the
+// directory does not end up with an empty one created for an archive that was rejected.
+func TestApplyPBSAcmeAccountsFromStage_RejectedStageDoesNotCreateDestinationDir(t *testing.T) {
+	fakeFS := withFakeRestoreFS(t)
+
+	if err := fakeFS.MkdirAll(stagedAcmeAccountsDir+"/nested", 0o700); err != nil {
+		t.Fatalf("mkdir staged nested: %v", err)
+	}
+
+	if err := applyPBSAcmeAccountsFromStage(newTestLogger(), "/stage"); err == nil {
+		t.Fatal("expected an error when a staged entry is not a regular account file")
+	}
+
+	if _, err := fakeFS.Stat("/etc/proxmox-backup/acme/accounts"); err == nil {
+		t.Fatal("expected the destination directory not to be created for a refused stage")
+	} else if !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("stat destination: %v", err)
 	}
 }
 

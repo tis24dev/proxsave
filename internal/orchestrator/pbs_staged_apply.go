@@ -688,32 +688,22 @@ func applyPBSAcmeAccountsFromStage(logger *logging.Logger, stageRoot string) err
 		return fmt.Errorf("read staged %s: %w", pbsAcmeAccountsRelPath, err)
 	}
 
+	// Validate the whole staged set BEFORE the destination is touched, so a malformed
+	// archive leaves the node exactly as it was: not even the account directory is created
+	// for it.
+	names, err := readPBSAcmeStagedAccounts(stageDir, entries)
+	if err != nil {
+		return err
+	}
+
 	destDir := filepath.Join(string(os.PathSeparator), filepath.FromSlash(pbsAcmeAccountsRelPath))
 	if err := ensurePBSAcmeAccountsDir(destDir); err != nil {
 		return err
 	}
 
-	applied := make(map[string]struct{}, len(entries))
-	for _, entry := range entries {
-		if entry == nil {
-			continue
-		}
-		name := strings.TrimSpace(entry.Name())
-		if name == "" || name == "." || name == ".." {
-			continue
-		}
+	applied := make(map[string]struct{}, len(names))
+	for _, name := range names {
 		rel := path.Join(pbsAcmeAccountsRelPath, name)
-
-		srcInfo, err := restoreFS.Lstat(filepath.Join(stageDir, name))
-		if err != nil {
-			return fmt.Errorf("stat staged %s: %w", rel, err)
-		}
-		if !srcInfo.Mode().IsRegular() {
-			// PBS writes plain files here. A symlink, socket or nested directory is not an
-			// account and is not carried onto the system.
-			logger.Warning("PBS staged apply: skipping non-regular staged entry %s", rel)
-			continue
-		}
 
 		data, err := restoreFS.ReadFile(filepath.Join(stageDir, name))
 		if err != nil {
@@ -733,6 +723,51 @@ func applyPBSAcmeAccountsFromStage(logger *logging.Logger, stageRoot string) err
 	logging.DebugStep(logger, "pbs staged apply acme accounts",
 		"Applied %d account(s) to %s, removed %d not present in the backup", len(applied), destDir, removed)
 	return nil
+}
+
+// readPBSAcmeStagedAccounts returns the account names the staged directory carries, and
+// refuses the whole set when any entry is not a regular file. PBS writes one plain file per
+// account, so a symlink, a socket or a nested directory there means the archive is malformed:
+// the same class of fault as a staged accounts path that is a file instead of a directory,
+// and it gets the same answer.
+//
+// It refuses instead of skipping the entry because the caller MIRRORS. A skipped name never
+// reaches the keep-set, so removePBSAcmeAccountsNotIn would delete the live account of that
+// name: the node would lose a working registration and its private key, while the staged
+// replacement it was supposed to get was never written either. Refusing leaves every live
+// account in place and surfaces the archive as a failed item, which the restore reports as
+// completed with warnings.
+func readPBSAcmeStagedAccounts(stageDir string, entries []os.DirEntry) ([]string, error) {
+	names := make([]string, 0, len(entries))
+	var rejected []string
+
+	for _, entry := range entries {
+		if entry == nil {
+			continue
+		}
+		name := strings.TrimSpace(entry.Name())
+		if name == "" || name == "." || name == ".." {
+			continue
+		}
+
+		info, err := restoreFS.Lstat(filepath.Join(stageDir, name))
+		if err != nil {
+			return nil, fmt.Errorf("stat staged %s: %w", path.Join(pbsAcmeAccountsRelPath, name), err)
+		}
+		if !info.Mode().IsRegular() {
+			rejected = append(rejected, name)
+			continue
+		}
+		names = append(names, name)
+	}
+
+	if len(rejected) > 0 {
+		// ReadDir is os.ReadDir on every FS in use here, which sorts by name, so the
+		// rejected list reads the same way on every run.
+		return nil, fmt.Errorf("not a regular account file: %s; no account was applied and none was removed",
+			strings.Join(rejected, ", "))
+	}
+	return names, nil
 }
 
 // ensurePBSAcmeAccountsDir creates the account directory with the mode and owner PBS uses,

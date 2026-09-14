@@ -191,6 +191,7 @@ var notes = []Note{
 			"To clear a personal-script trust warning without moving the script, see Clearing a READY WITH WARNING in DAEMON.md",
 			"A PBS restore mirrors the ACME accounts: an account on the node that the backup does not carry is removed",
 			"Archives taken before this fix hold no accounts directory, and restoring one leaves the node accounts untouched",
+			"A PBS archive whose acme/accounts holds anything but plain account files is refused, and no live account is touched",
 			"If a run names a possible typo in backup.env, fix that line: nothing written on it is applied today",
 			"A variable set twice still has to be cleaned by hand, and --upgrade-config names the lines to delete",
 			"If SKIP_PERMISSION_CHECK=true is left over from a test, clear it: the next run really skips that check",
