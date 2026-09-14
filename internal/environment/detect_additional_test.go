@@ -451,7 +451,7 @@ func TestDetectPBSViaCommand(t *testing.T) {
 
 // TestDetectPVE tests complete PVE detection
 func TestDetectPVE(t *testing.T) {
-	version, ok := detectPVE()
+	version, ok := detectPVE(nil)
 
 	// On non-PVE systems, should return false
 	// On PVE systems, should return true with version
@@ -462,7 +462,7 @@ func TestDetectPVE(t *testing.T) {
 
 // TestDetectPBS tests complete PBS detection
 func TestDetectPBS(t *testing.T) {
-	version, ok := detectPBS()
+	version, ok := detectPBS(nil)
 
 	// On non-PBS systems, should return false
 	// On PBS systems, should return true with version

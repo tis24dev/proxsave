@@ -46,8 +46,36 @@ func detectAndPrintEnvironment(bootstrap *logging.BootstrapLogger) *environment.
 	} else {
 		bootstrap.Printf("  Version: %s", envInfo.Version)
 	}
+	logDetectionProvenance(bootstrap, envInfo)
 	bootstrap.Println("")
 	return envInfo
+}
+
+// logDetectionProvenance records, at debug, which marker decided each half of the
+// type and the whole ladder that led there. The type drives which recipe the backup
+// runs, so a wrong one aborts a run on a missing command the host never had (issue
+// #315), and until now nothing in the log said what detection had looked at.
+// Bootstrap debug entries are recorded unconditionally and filtered at flush by the
+// resolved run level, so this costs a normal run nothing and still reaches the log
+// when debug comes from backup.env, which is not loaded yet at this point.
+func logDetectionProvenance(bootstrap *logging.BootstrapLogger, info *environment.EnvironmentInfo) {
+	if bootstrap == nil || info == nil {
+		return
+	}
+	bootstrap.Debug("Detection verdict: type %s, PVE decided by %s, PBS decided by %s",
+		info.Type, detectionSourceLabel(info.PVESource), detectionSourceLabel(info.PBSSource))
+	for _, step := range info.Steps {
+		bootstrap.Debug("Detection probe: %s", step)
+	}
+}
+
+// detectionSourceLabel keeps the verdict line readable when a product was not
+// detected at all and so has no deciding marker.
+func detectionSourceLabel(source string) string {
+	if strings.TrimSpace(source) == "" {
+		return "no marker"
+	}
+	return source
 }
 
 // redetectHostBackupEnvironment re-runs Proxmox detection under SYSTEM_ROOT_PREFIX
@@ -80,6 +108,7 @@ func redetectHostBackupEnvironment(rt *appRuntime) {
 	}
 	info := environment.DetectHostUnderPrefix(prefix)
 	rt.envInfo = info
+	logDetectionProvenance(rt.bootstrap, info)
 
 	if info.Type == types.ProxmoxUnknown {
 		// Fail closed: PVE/PBS collectors are skipped and the manifest records

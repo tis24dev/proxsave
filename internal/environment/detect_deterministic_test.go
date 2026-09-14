@@ -299,7 +299,7 @@ func TestDetectPVE_FallbackOrder(t *testing.T) {
 			return "pve-manager/7.4-3/d4a3b4a1", nil
 		})
 
-		version, ok := detectPVE()
+		version, ok := detectPVE(nil)
 		if !ok || version != "7.4-3" {
 			t.Fatalf("detectPVE() = (%q, %v), want (%q, %v)", version, ok, "7.4-3", true)
 		}
@@ -315,7 +315,7 @@ func TestDetectPVE_FallbackOrder(t *testing.T) {
 		setValue(t, &pveVersionFile, versionFile)
 		setValue(t, &pveLegacyFile, filepath.Join(tmpDir, "missing-legacy"))
 
-		version, ok := detectPVE()
+		version, ok := detectPVE(nil)
 		if !ok || version != "7.4-1" {
 			t.Fatalf("detectPVE() = (%q, %v), want (%q, %v)", version, ok, "7.4-1", true)
 		}
@@ -332,7 +332,7 @@ func TestDetectPVE_FallbackOrder(t *testing.T) {
 		}
 		setValue(t, &pveSourceFiles, []string{sourceFile})
 
-		version, ok := detectPVE()
+		version, ok := detectPVE(nil)
 		if !ok || version != "unknown" {
 			t.Fatalf("detectPVE() = (%q, %v), want (%q, %v)", version, ok, "unknown", true)
 		}
@@ -350,7 +350,7 @@ func TestDetectPVE_FallbackOrder(t *testing.T) {
 		}
 		setValue(t, &pveDirCandidates, []string{dirCandidate})
 
-		version, ok := detectPVE()
+		version, ok := detectPVE(nil)
 		if !ok || version != "unknown" {
 			t.Fatalf("detectPVE() = (%q, %v), want (%q, %v)", version, ok, "unknown", true)
 		}
@@ -363,7 +363,7 @@ func TestDetectPVE_FallbackOrder(t *testing.T) {
 		setValue(t, &pveSourceFiles, []string{})
 		setValue(t, &pveDirCandidates, []string{})
 
-		version, ok := detectPVE()
+		version, ok := detectPVE(nil)
 		if ok || version != "" {
 			t.Fatalf("detectPVE() = (%q, %v), want (%q, %v)", version, ok, "", false)
 		}
@@ -381,7 +381,7 @@ func TestDetectPBS_FallbackOrder(t *testing.T) {
 			return "version: 2.4.1", nil
 		})
 
-		version, ok := detectPBS()
+		version, ok := detectPBS(nil)
 		if !ok || version != "2.4.1" {
 			t.Fatalf("detectPBS() = (%q, %v), want (%q, %v)", version, ok, "2.4.1", true)
 		}
@@ -396,7 +396,7 @@ func TestDetectPBS_FallbackOrder(t *testing.T) {
 		}
 		setValue(t, &pbsVersionFile, versionFile)
 
-		version, ok := detectPBS()
+		version, ok := detectPBS(nil)
 		if !ok || version != "2.4-1" {
 			t.Fatalf("detectPBS() = (%q, %v), want (%q, %v)", version, ok, "2.4-1", true)
 		}
@@ -412,7 +412,7 @@ func TestDetectPBS_FallbackOrder(t *testing.T) {
 		}
 		setValue(t, &pbsSourceFiles, []string{sourceFile})
 
-		version, ok := detectPBS()
+		version, ok := detectPBS(nil)
 		if !ok || version != "unknown" {
 			t.Fatalf("detectPBS() = (%q, %v), want (%q, %v)", version, ok, "unknown", true)
 		}
@@ -429,7 +429,7 @@ func TestDetectPBS_FallbackOrder(t *testing.T) {
 		}
 		setValue(t, &pbsDirCandidates, []string{dirCandidate})
 
-		version, ok := detectPBS()
+		version, ok := detectPBS(nil)
 		if !ok || version != "unknown" {
 			t.Fatalf("detectPBS() = (%q, %v), want (%q, %v)", version, ok, "unknown", true)
 		}
@@ -441,7 +441,7 @@ func TestDetectPBS_FallbackOrder(t *testing.T) {
 		setValue(t, &pbsSourceFiles, []string{})
 		setValue(t, &pbsDirCandidates, []string{})
 
-		version, ok := detectPBS()
+		version, ok := detectPBS(nil)
 		if ok || version != "" {
 			t.Fatalf("detectPBS() = (%q, %v), want (%q, %v)", version, ok, "", false)
 		}

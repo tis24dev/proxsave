@@ -178,7 +178,7 @@ var notes = []Note{
 		Version: "0.38.0",
 		Lines: []string{
 			"A personal script the daemon refuses to start now says so, instead of the run looking as if it ran",
-			"The release notes screen closes with enter only; esc no longer offers a second exit that did the same thing",
+			"A debug run names the marker that decided PVE, PBS or dual, and every marker it checked before that one",
 			"PBS ACME accounts stop reporting not configured: they are a directory, now backed up and restored as one",
 			"BACKUP_PBS_ACME_ACCOUNTS=false now really keeps the ACME account keys out of the archive",
 			"A misspelled variable in backup.env is called out as a probable typo, with the name it was meant to be",
