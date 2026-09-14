@@ -1188,6 +1188,46 @@ notifications**, **Email notifications** and **Email delivery mode**. Gotify and
 have no form fields and are configured here only. After enabling Telegram,
 `Diagnostic Checks` -> `Telegram` verifies the pairing without running a backup.
 
+### Which runs get notified (`NOTIFY_ON`)
+
+```bash
+# When to send, on every channel below
+NOTIFY_ON=always                   # always | warning | failure
+```
+
+`NOTIFY_ON` is a **severity threshold, not an exact match**:
+
+| Value | Notified | Silent |
+|-------|----------|--------|
+| `always` (default) | success, warning, failure | nothing |
+| `warning` | warning **and** failure | success |
+| `failure` | failure | success, warning |
+
+So `NOTIFY_ON=warning` means "warnings and anything worse", not "warnings only". It is the
+setting for *tell me when something needs looking at*.
+
+It applies on top of each channel's own `*_ENABLED` flag, and to every channel at once;
+there is no per-channel form. A channel skipped by the threshold says so in the log:
+
+```
+SKIP     Webhook: NOTIFY_ON=warning and this run is a success
+```
+
+Two things it deliberately does **not** change:
+
+- **The exit code.** A run that ends with warnings still exits `1`, still logs the
+  warnings, and still reports `status=warning` in the Prometheus textfile. `NOTIFY_ON` is
+  a delivery decision only, so anything watching the exit code sees what it saw before.
+- **Healthchecks.** The [healthchecks connector](HEALTHCHECKS.md) is not a notification
+  channel and is never filtered. That is the point: it is what still reports a run you
+  chose not to hear about - including a run that never happened at all, which no
+  notification channel can tell you about by construction. If you set `NOTIFY_ON` to
+  anything other than `always`, read HEALTHCHECKS.md.
+
+An unrecognised value is not silently accepted: it is named in a warning and treated as
+`always`, because the failure mode of a typo here is silence, and silence looks exactly
+like a backup that never ran.
+
 ### Telegram
 
 **From the dashboard**: the form's **Telegram notifications** toggle writes

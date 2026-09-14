@@ -9,7 +9,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/tis24dev/proxsave/internal/config"
 	"github.com/tis24dev/proxsave/internal/health"
+	"github.com/tis24dev/proxsave/internal/notify"
 	"github.com/tis24dev/proxsave/internal/safefs"
 	"github.com/tis24dev/proxsave/internal/storage"
 	"github.com/tis24dev/proxsave/internal/types"
@@ -70,6 +72,37 @@ func (o *Orchestrator) RegisterNotificationChannel(channel NotificationChannel) 
 	o.notificationChannels = append(o.notificationChannels, channel)
 }
 
+// notifyOnExemptNames lists the dispatch-table entries that NOTIFY_ON must never filter,
+// because they are not notification channels: they implement NotificationChannel to get a
+// slot in the ordered dispatch, but they send nothing outward. Healthchecks is one (see
+// healthcheck_section.go) -- it renders the Phase-7 section and captures the portal
+// magic-link onto stats.HealthcheckLink, both of which are reporting, not delivery, and
+// both of which the R3 ordering contract depends on. A name allowlist rather than an
+// index/position check so a second such entry cannot be added without deciding this.
+var notifyOnExemptNames = map[string]bool{
+	healthchecksSectionName: true,
+}
+
+func notifyOnExempt(name string) bool {
+	return notifyOnExemptNames[name]
+}
+
+// notifyOutcome classifies a run for NOTIFY_ON filtering. Deliberately not a bare
+// StatusFromExitCode(stats.ExitCode): DispatchEarlyErrorNotification assembles its own
+// stats and ExitCode is an int nothing validates, so an early-init failure that ever
+// carried 0 would classify as a success and be suppressed -- the one outcome nobody
+// configures NOTIFY_ON to hide. Failed/ErrorCount are set on that path and are the
+// authoritative signal. A nil stats is unclassifiable and therefore delivers.
+func notifyOutcome(stats *BackupStats) notify.NotificationStatus {
+	if stats == nil {
+		return notify.StatusFailure
+	}
+	if stats.Failed || stats.ErrorCount > 0 {
+		return notify.StatusFailure
+	}
+	return notify.StatusFromExitCode(stats.ExitCode)
+}
+
 func (o *Orchestrator) dispatchNotifications(ctx context.Context, stats *BackupStats) {
 	if o == nil || o.logger == nil {
 		return
@@ -89,6 +122,22 @@ func (o *Orchestrator) dispatchNotifications(ctx context.Context, stats *BackupS
 	}
 
 	cfg := o.cfg
+
+	// NOTIFY_ON: a global severity threshold layered on top of each channel's own
+	// *_ENABLED flag. It decides DELIVERY only; the exit code, the log counts and the
+	// Prometheus status gauge are all computed elsewhere and are untouched by it, so a
+	// suppressed run still reports exactly what it reported before.
+	policy := config.NotifyOnAlways
+	if cfg != nil {
+		policy = cfg.NotifyOn
+	}
+	outcome := notifyOutcome(stats)
+	if policy != "" && !config.IsValidNotifyOn(policy) {
+		// Mirrors the EMAIL_DELIVERY_METHOD handling below: the parser passes an
+		// unrecognised value through and the point of use is where it gets named,
+		// because that is where there is a logger the operator will read.
+		o.logger.Warning("NOTIFY_ON=%q not recognized (allowed: always|warning|failure); delivering every outcome", policy)
+	}
 
 	// If email notifications are disabled in configuration, reflect this explicitly
 	// in the aggregated backup stats so that downstream channels (e.g. Telegram)
@@ -131,6 +180,18 @@ func (o *Orchestrator) dispatchNotifications(ctx context.Context, stats *BackupS
 			continue
 		}
 
+		if !notifyOnExempt(entry.name) && !notify.NotifyOnAllows(policy, outcome) {
+			o.logger.Skip("%s: NOTIFY_ON=%s and this run is a %s", entry.name, policy, outcome)
+			// Record the suppression so stats.NotifyResults stays non-empty. An empty
+			// map makes persistNotifyResults write {} and the daemon then bails on
+			// len(nr.Results)==0, which would leave every per-channel sensor to go DOWN
+			// on grace expiry after each quiet run. "disabled" is already the severity
+			// severityToSuffix skips without pinging, and pruneNotifyRecords clears the
+			// row, so a suppressed channel reports nothing instead of reporting wrong.
+			setNotifyResult(stats, entry.name, "disabled")
+			continue
+		}
+
 		channel, ok := channelsByName[entry.name]
 		if !ok || channel == nil {
 			if entry.name == "Email" && cfg != nil {
@@ -161,8 +222,17 @@ func (o *Orchestrator) dispatchNotifications(ctx context.Context, stats *BackupS
 	}
 
 	// Dispatch any remaining channels (custom or future ones) that weren't part of the fixed list above.
+	// NOTIFY_ON applies here too, under the same exemption: a channel is filtered because it
+	// SENDS, and the operator asking for quiet successes means all of them, not just the four
+	// the table happens to name today.
 	for _, ch := range o.notificationChannels {
 		if ch == nil || usedChannels[ch] {
+			continue
+		}
+		name := strings.TrimSpace(ch.Name())
+		if !notifyOnExempt(name) && !notify.NotifyOnAllows(policy, outcome) {
+			o.logger.Skip("%s: NOTIFY_ON=%s and this run is a %s", name, policy, outcome)
+			setNotifyResult(stats, name, "disabled")
 			continue
 		}
 		_ = ch.Notify(ctx, stats)

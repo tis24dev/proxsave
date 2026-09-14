@@ -191,6 +191,11 @@ type Config struct {
 	AgeRecipients         []string
 	AgeRecipientFile      string
 
+	// Notification delivery filter. Global: applies to every notification channel
+	// (Email/Telegram/Gotify/Webhook) on top of each channel's own *_ENABLED flag.
+	// A severity THRESHOLD, not an exact match: "warning" means warning and worse.
+	NotifyOn string // "always" (default) | "warning" | "failure"
+
 	// Telegram Notifications
 	TelegramEnabled      bool
 	TelegramBotType      string // "personal" or "centralized"
@@ -440,6 +445,7 @@ var envOverrideKeys = []string{
 	"MAX_LOCAL_BACKUPS", "MAX_SECONDARY_BACKUPS", "MAX_CLOUD_BACKUPS",
 	"RETENTION_DAILY", "RETENTION_WEEKLY", "RETENTION_MONTHLY", "RETENTION_YEARLY",
 	"BUNDLE_ASSOCIATED_FILES", "ENCRYPT_ARCHIVE", "AGE_RECIPIENT", "AGE_RECIPIENT_FILE",
+	"NOTIFY_ON",
 	"TELEGRAM_ENABLE", "TELEGRAM_ENABLED", "BOT_TELEGRAM_TYPE", "TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID",
 	"EMAIL_ENABLE", "EMAIL_ENABLED", "EMAIL_DELIVERY_METHOD", "EMAIL_FALLBACK_PMF", "EMAIL_FALLBACK_SENDMAIL",
 	"EMAIL_RECIPIENT", "EMAIL_FROM",
@@ -790,6 +796,8 @@ func (c *Config) parseRetentionSettings() {
 }
 
 func (c *Config) parseNotificationSettings() {
+	c.NotifyOn = NormalizeNotifyOn(c.getString("NOTIFY_ON", NotifyOnAlways))
+
 	c.TelegramEnabled = c.getBoolWithLegacyAlias(telegramEnabledKey, telegramEnableLegacyKey, false)
 	c.TelegramBotType = c.getString("BOT_TELEGRAM_TYPE", "centralized")
 	c.TelegramBotToken = c.getString("TELEGRAM_BOT_TOKEN", "")
@@ -847,6 +855,45 @@ func (c *Config) parseNotificationSettings() {
 		c.MetricsPath = "/var/lib/prometheus/node-exporter"
 	} else {
 		c.MetricsPath = rawMetricsPath
+	}
+}
+
+// NOTIFY_ON values. A severity THRESHOLD, not an exact match: NotifyOnWarning
+// delivers warnings AND failures, NotifyOnFailure only failures. NotifyOnAlways is
+// the default and is the behaviour every install had before the key existed.
+const (
+	NotifyOnAlways  = "always"
+	NotifyOnWarning = "warning"
+	NotifyOnFailure = "failure"
+)
+
+// NormalizeNotifyOn canonicalises a NOTIFY_ON value. An empty value is the default
+// (always), so both an unset key and a bare "NOTIFY_ON=" keep today's behaviour.
+// An unrecognised value is returned as-is rather than silently coerced, exactly like
+// NormalizeEmailDeliveryMethod: the caller warns about it at the point of use, where
+// there is a logger and the operator can see it. Delivery itself fails open.
+func NormalizeNotifyOn(v string) string {
+	normalized := strings.ToLower(strings.TrimSpace(v))
+	switch normalized {
+	case "", NotifyOnAlways, "all", "any":
+		return NotifyOnAlways
+	case NotifyOnWarning, "warn", "warnings":
+		return NotifyOnWarning
+	case NotifyOnFailure, "failures", "failed", "fail", "error", "errors":
+		return NotifyOnFailure
+	default:
+		return normalized
+	}
+}
+
+// IsValidNotifyOn reports whether v is one of the canonical NOTIFY_ON values, i.e.
+// whether NormalizeNotifyOn understood it.
+func IsValidNotifyOn(v string) bool {
+	switch v {
+	case NotifyOnAlways, NotifyOnWarning, NotifyOnFailure:
+		return true
+	default:
+		return false
 	}
 }
 
