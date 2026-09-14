@@ -92,8 +92,39 @@ Email, Telegram, Gotify, Webhook, Healthchecks
 Healthchecks is deliberately **last**. The Telegram relay may piggyback a fresh
 portal magic-link on its response; dispatching Healthchecks last means that link has
 already been captured onto the run's stats before the Healthchecks section renders.
-Each channel is gated independently on its own `*_ENABLED` flag, so the ordering is
-about link capture, not about one channel depending on another.
+Each channel is gated independently on its own `*_ENABLED` flag, and then on the shared
+`NOTIFY_ON` threshold below, so the ordering is about link capture, not about one channel
+depending on another.
+
+### Which runs get notified (`NOTIFY_ON`)
+
+`NOTIFY_ON` filters Tier 1 by the run's outcome, across every channel at once. It is a
+severity **threshold**: `always` (the default) sends everything, `warning` sends warnings
+and failures, `failure` sends failures only. Full table in
+[CONFIGURATION.md](CONFIGURATION.md#which-runs-get-notified-notify_on).
+
+It is layered on top of `*_ENABLED`, not a replacement for it, and the log distinguishes
+the two:
+
+```text
+SKIP     Gotify: disabled                                       # GOTIFY_ENABLED=false
+SKIP     Gotify: NOTIFY_ON=warning and this run is a success    # enabled, below threshold
+```
+
+Three boundaries are worth stating explicitly, because they are what keep the filter from
+losing information rather than just volume:
+
+- **It is Tier 1 only.** The **Healthchecks** section is Tier 2 - a reporting surface that
+  sends nothing outward - and is never filtered, whatever `NOTIFY_ON` says. A run that
+  notifies nobody still reports, and so does a run that never started.
+- **A filtered channel is recorded as `disabled`** in the handoff file, which is the same
+  severity a switched-off channel gets: the daemon skips it without pinging and prunes the
+  row. Recording nothing at all would leave the file empty, and an empty result set means
+  "nothing to report" to the daemon - so every quiet run would leave every
+  `proxsave-notify-*` sensor to expire into a false DOWN.
+- **It does not touch the exit code.** `ParseLogCounts` and the exit-code promotion are
+  unchanged, so a suppressed warning run still exits `1` and still exports
+  `status=warning`. Suppression is a delivery decision, nothing more.
 
 ### The per-channel handoff file
 
@@ -482,6 +513,11 @@ A channel is anything that implements `notify.Notifier`
    keeping Healthchecks last.
 4. The adapter records the per-channel severity into `.notify_results.json` for you, so
    the daemon can raise a `proxsave-notify-<name>` sensor without further work.
+5. The `NOTIFY_ON` gate in the entries loop picks the new channel up automatically. Add it
+   to `notifyOnExemptNames` **only** if it sends nothing outward, the way the Healthchecks
+   section does; a channel that reaches the operator belongs under the threshold. Note
+   that an exempt entry is also responsible for its own `.notify_results.json` story,
+   since the gate is what records `disabled` for the others.
 
 ## Troubleshooting
 

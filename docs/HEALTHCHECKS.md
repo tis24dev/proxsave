@@ -25,6 +25,14 @@ The daemon closes it by pushing to something outside this host. Each check has a
 expected cadence on the monitor side. Miss it and the check goes down and your alerts
 fire, whether ProxSave was able to say anything or not.
 
+This is also what makes [`NOTIFY_ON`](CONFIGURATION.md#which-runs-get-notified-notify_on)
+safe to use. Silencing the message for clean runs drops a *report you were already getting
+another way*; it drops no check, because the per-run message was never what caught a run
+that did not happen. The **Healthchecks** section is not a notification channel and
+`NOTIFY_ON` never filters it, so a run nobody was told about still pings. The corollary is
+the part worth acting on: setting `NOTIFY_ON` on a host still running under cron turns off
+the only thing that was reporting at all. Move to the daemon first, or leave it `always`.
+
 ## What gets monitored
 
 The daemon reports four families of checks, each shown on the monitor as a
