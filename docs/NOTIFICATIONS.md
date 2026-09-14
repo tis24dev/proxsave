@@ -111,7 +111,7 @@ SKIP     Gotify: disabled                                       # GOTIFY_ENABLED
 SKIP     Gotify: NOTIFY_ON=warning and this run is a success    # enabled, below threshold
 ```
 
-Three boundaries are worth stating explicitly, because they are what keep the filter from
+Four boundaries are worth stating explicitly, because they are what keep the filter from
 losing information rather than just volume:
 
 - **It is Tier 1 only.** The **Healthchecks** section is Tier 2 - a reporting surface that
@@ -122,6 +122,11 @@ losing information rather than just volume:
   row. Recording nothing at all would leave the file empty, and an empty result set means
   "nothing to report" to the daemon - so every quiet run would leave every
   `proxsave-notify-*` sensor to expire into a false DOWN.
+- **It does not hide a broken channel.** A channel that is enabled but failed to build -
+  a mistyped `EMAIL_DELIVERY_METHOD` is the usual cause - still logs
+  `enabled but not initialized` and still records `error`, at every threshold. The filter
+  applies to channels that are working and have nothing to say, never to one that could
+  not say anything.
 - **It does not touch the exit code.** `ParseLogCounts` and the exit-code promotion are
   unchanged, so a suppressed warning run still exits `1` and still exports
   `status=warning`. Suppression is a delivery decision, nothing more.
@@ -513,11 +518,12 @@ A channel is anything that implements `notify.Notifier`
    keeping Healthchecks last.
 4. The adapter records the per-channel severity into `.notify_results.json` for you, so
    the daemon can raise a `proxsave-notify-<name>` sensor without further work.
-5. The `NOTIFY_ON` gate in the entries loop picks the new channel up automatically. Add it
-   to `notifyOnExemptNames` **only** if it sends nothing outward, the way the Healthchecks
-   section does; a channel that reaches the operator belongs under the threshold. Note
-   that an exempt entry is also responsible for its own `.notify_results.json` story,
-   since the gate is what records `disabled` for the others.
+5. The `NOTIFY_ON` gate in the entries loop picks the new channel up automatically. Give it
+   a `reportingOnly()` method **only** if it sends nothing outward, the way the Healthchecks
+   section does; a channel that reaches the operator belongs under the threshold. The
+   exemption is claimed by that marker and never by the channel's name, so a display name
+   cannot grant it by accident. Note that an exempt entry is also responsible for its own
+   `.notify_results.json` story, since the gate is what records `disabled` for the others.
 
 ## Troubleshooting
 

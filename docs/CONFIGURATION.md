@@ -1213,8 +1213,12 @@ there is no per-channel form. A channel skipped by the threshold says so in the 
 SKIP     Webhook: NOTIFY_ON=warning and this run is a success
 ```
 
-Two things it deliberately does **not** change:
+Three things it deliberately does **not** change:
 
+- **A broken channel.** One that is enabled but failed to build - a mistyped
+  `EMAIL_DELIVERY_METHOD` is the usual cause - still warns and is still reported as an
+  error at every threshold. The filter quietens channels that work and have nothing to
+  say; it never quietens one that could not say anything.
 - **The exit code.** A run that ends with warnings still exits `1`, still logs the
   warnings, and still reports `status=warning` in the Prometheus textfile. `NOTIFY_ON` is
   a delivery decision only, so anything watching the exit code sees what it saw before.
@@ -1223,6 +1227,12 @@ Two things it deliberately does **not** change:
   chose not to hear about - including a run that never happened at all, which no
   notification channel can tell you about by construction. If you set `NOTIFY_ON` to
   anything other than `always`, read HEALTHCHECKS.md.
+
+  That cover is not automatic, and this is the part to check before you change the value.
+  It needs **both** `HEALTHCHECK_ENABLED=true`, which is *not* the default, and the daemon
+  scheduler: a host still running under cron transmits nothing however the healthcheck keys
+  are set. Without the two of them, `warning` or `failure` means a host that crashed, froze
+  or never started the run says nothing on any channel and raises no alarm anywhere.
 
 An unrecognised value is not silently accepted: it is named in a warning and treated as
 `always`, because the failure mode of a typo here is silence, and silence looks exactly
