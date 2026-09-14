@@ -449,13 +449,36 @@ func computeConfigUpgrade(configPath string) (*UpgradeResult, string, []byte, er
 		return userIdx, true
 	}
 
+	// skipDisabledEntry consumes the user's commented-out copy of a missing entry, which is
+	// how a variable gets switched off without being deleted. It is all or nothing: a span
+	// that does not match from its first line to its last consumes NOTHING, so a file that
+	// simply deleted the variable walks on exactly as before. A block value is matched line
+	// by line, so a half-commented block is not mistaken for a disabled one.
+	skipDisabledEntry := func(userIdx int, mid templateEntry) int {
+		probe := userIdx
+		for ti := mid.start; ti <= mid.end; ti++ {
+			if probe >= len(originalLines) {
+				return userIdx
+			}
+			if probe < len(skipOriginalLines) && skipOriginalLines[probe] {
+				return userIdx
+			}
+			if !isDisabledCopyOf(originalLines[probe], templateLines[ti]) {
+				return userIdx
+			}
+			probe++
+		}
+		return probe
+	}
+
 	// Between the anchor and the missing key there can be OTHER missing keys: findPrevAnchor
 	// walks back to the first key the user's file actually has, so every entry it stepped
 	// over is missing too. Their own template lines are therefore lines the user's file
-	// cannot carry, and comparing them would fail on the first one - stranding the key at
-	// the anchor, above its own comments and, when the anchor is the last key of the
-	// previous section, under the wrong section header. Step over each such span WITHOUT
-	// advancing userIdx, then keep matching the comments the two files do share.
+	// cannot carry as they stand, and comparing them would fail on the first one - stranding
+	// the key at the anchor, above its own comments and, when the anchor is the last key of
+	// the previous section, under the wrong section header. Step over each such span, taking
+	// the commented-out copy with it when the file has one, then keep matching the comments
+	// the two files do share.
 	skipSharedContext := func(userIdx, prevEntryIdx int, entry templateEntry) int {
 		ti := templateEntries[prevEntryIdx].end + 1
 		for k := prevEntryIdx + 1; k < entry.index; k++ {
@@ -465,6 +488,7 @@ func computeConfigUpgrade(configPath string) (*UpgradeResult, string, []byte, er
 			if !whole {
 				return userIdx
 			}
+			userIdx = skipDisabledEntry(userIdx, mid)
 			ti = mid.end + 1
 		}
 		userIdx, _ = matchTemplateRun(userIdx, ti, entry.start)
@@ -603,6 +627,23 @@ func parseEnvValues(lines []string) (map[string][]envValue, []string, map[string
 	}
 
 	return userValues, userKeyOrder, caseMap, caseConflicts, warnings, userRanges, nil
+}
+
+// isDisabledCopyOf reports whether userLine is templateLine switched off with a leading #.
+// Switching a variable off that way is as common as deleting it, and it leaves a line the
+// template has no match for, which is why the placement walk has to recognise it rather
+// than stop there. The comparison is on the whole line after the marker, inline comment
+// included, so a disabled line whose value was also edited is NOT a copy and is left alone.
+func isDisabledCopyOf(userLine, templateLine string) bool {
+	trimmed := strings.TrimSpace(userLine)
+	if !strings.HasPrefix(trimmed, "#") {
+		return false
+	}
+	uncommented := strings.TrimSpace(strings.TrimPrefix(trimmed, "#"))
+	if uncommented == "" {
+		return false
+	}
+	return uncommented == strings.TrimSpace(templateLine)
 }
 
 func splitKeyValueRaw(line string) (string, string, string, bool) {

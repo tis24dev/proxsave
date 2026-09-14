@@ -999,3 +999,209 @@ func indexOfLinePrefix(lines []string, prefix string) int {
 	}
 	return -1
 }
+
+// Switching two adjacent variables off with a leading # leaves lines the template has no
+// match for. The walk recognises its own line commented out and steps over it, so the
+// second variable still comes back under its own comment rather than beside the first.
+func TestUpgradeConfigInsertsTwoCommentedOutKeysEachUnderItsOwnComment(t *testing.T) {
+	template := strings.Join([]string{
+		"FIRST=default",
+		"",
+		"# what ALPHA does",
+		"ALPHA=alpha-default",
+		"",
+		"# what BETA does",
+		"BETA=beta-default        # trailing note",
+		"",
+		"LAST=default",
+		"",
+	}, "\n")
+
+	withTemplate(t, template, func() {
+		tmpDir := t.TempDir()
+		configPath := filepath.Join(tmpDir, "backup.env")
+		// The operator disabled both variables instead of deleting them: one with a space
+		// after the marker, one without.
+		existing := strings.Join([]string{
+			"FIRST=mine",
+			"",
+			"# what ALPHA does",
+			"# ALPHA=alpha-default",
+			"",
+			"# what BETA does",
+			"#BETA=beta-default        # trailing note",
+			"",
+			"LAST=mine",
+			"",
+		}, "\n")
+		if err := os.WriteFile(configPath, []byte(existing), 0600); err != nil {
+			t.Fatalf("failed to write config: %v", err)
+		}
+
+		if _, err := UpgradeConfigFile(configPath); err != nil {
+			t.Fatalf("UpgradeConfigFile returned error: %v", err)
+		}
+
+		data, err := os.ReadFile(configPath)
+		if err != nil {
+			t.Fatalf("failed to read upgraded config: %v", err)
+		}
+		lines := strings.Split(string(data), "\n")
+		for _, tc := range []struct{ prefix, comment string }{
+			{"ALPHA=", "# what ALPHA does"},
+			{"BETA=", "# what BETA does"},
+		} {
+			idx := indexOfLiveLinePrefix(lines, tc.prefix)
+			if idx < 0 {
+				t.Fatalf("missing key %s was not added: %s", tc.prefix, data)
+			}
+			if got := strings.TrimSpace(lines[idx-1]); got != tc.comment {
+				t.Fatalf("%s was not inserted under its own comment; line above it is %q", tc.prefix, got)
+			}
+		}
+	})
+}
+
+// One deleted, one commented out: the walk has to handle both spellings of "missing" in
+// the same file.
+func TestUpgradeConfigInsertsMissingKeysWhenOneWasDeletedAndOneCommentedOut(t *testing.T) {
+	template := strings.Join([]string{
+		"FIRST=default",
+		"",
+		"# what ALPHA does",
+		"ALPHA=alpha-default",
+		"",
+		"# what BETA does",
+		"BETA=beta-default",
+		"",
+	}, "\n")
+
+	for _, tc := range []struct {
+		name     string
+		existing []string
+	}{
+		{
+			name: "alpha deleted, beta commented out",
+			existing: []string{
+				"FIRST=mine",
+				"",
+				"# what ALPHA does",
+				"",
+				"# what BETA does",
+				"# BETA=beta-default",
+				"",
+			},
+		},
+		{
+			name: "alpha commented out, beta deleted",
+			existing: []string{
+				"FIRST=mine",
+				"",
+				"# what ALPHA does",
+				"# ALPHA=alpha-default",
+				"",
+				"# what BETA does",
+				"",
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			withTemplate(t, template, func() {
+				configPath := filepath.Join(t.TempDir(), "backup.env")
+				if err := os.WriteFile(configPath, []byte(strings.Join(tc.existing, "\n")), 0600); err != nil {
+					t.Fatalf("failed to write config: %v", err)
+				}
+
+				if _, err := UpgradeConfigFile(configPath); err != nil {
+					t.Fatalf("UpgradeConfigFile returned error: %v", err)
+				}
+
+				data, err := os.ReadFile(configPath)
+				if err != nil {
+					t.Fatalf("failed to read upgraded config: %v", err)
+				}
+				lines := strings.Split(string(data), "\n")
+				for _, want := range []struct{ prefix, comment string }{
+					{"ALPHA=", "# what ALPHA does"},
+					{"BETA=", "# what BETA does"},
+				} {
+					idx := indexOfLiveLinePrefix(lines, want.prefix)
+					if idx < 0 {
+						t.Fatalf("missing key %s was not added: %s", want.prefix, data)
+					}
+					if got := strings.TrimSpace(lines[idx-1]); got != want.comment {
+						t.Fatalf("%s was not inserted under its own comment; line above it is %q", want.prefix, got)
+					}
+				}
+			})
+		})
+	}
+}
+
+// A disabled line whose value was ALSO edited is not a copy of the template line, so the
+// walk stops there instead of stepping over something the operator changed on purpose.
+func TestUpgradeConfigKeepsAnchorPlacementWhenDisabledLineWasEdited(t *testing.T) {
+	template := strings.Join([]string{
+		"FIRST=default",
+		"",
+		"# what ALPHA does",
+		"ALPHA=alpha-default",
+		"",
+		"# what BETA does",
+		"BETA=beta-default",
+		"",
+	}, "\n")
+
+	withTemplate(t, template, func() {
+		configPath := filepath.Join(t.TempDir(), "backup.env")
+		existing := strings.Join([]string{
+			"FIRST=mine",
+			"",
+			"# what ALPHA does",
+			"# ALPHA=something-i-changed",
+			"",
+			"# what BETA does",
+			"",
+		}, "\n")
+		if err := os.WriteFile(configPath, []byte(existing), 0600); err != nil {
+			t.Fatalf("failed to write config: %v", err)
+		}
+
+		if _, err := UpgradeConfigFile(configPath); err != nil {
+			t.Fatalf("UpgradeConfigFile returned error: %v", err)
+		}
+
+		data, err := os.ReadFile(configPath)
+		if err != nil {
+			t.Fatalf("failed to read upgraded config: %v", err)
+		}
+		lines := strings.Split(string(data), "\n")
+		beta := indexOfLiveLinePrefix(lines, "BETA=")
+		if beta < 0 {
+			t.Fatalf("missing key BETA was not added: %s", data)
+		}
+		// The walk stops at the edited line, so BETA keeps the placement it had before:
+		// beside ALPHA, at the point the two files stopped agreeing. The merge does not
+		// guess that a rewritten line was meant to be this variable.
+		if got := strings.TrimSpace(lines[beta-1]); got != "ALPHA=alpha-default" {
+			t.Fatalf("expected BETA to stay beside ALPHA at the stopping point, got %q above it", got)
+		}
+		if idx := indexOfLinePrefix(lines, "# ALPHA=something-i-changed"); idx < 0 {
+			t.Fatalf("the edited line the operator wrote was not preserved: %s", data)
+		}
+	})
+}
+
+// indexOfLiveLinePrefix finds the ACTIVE line for a key, skipping any commented-out copy.
+func indexOfLiveLinePrefix(lines []string, prefix string) int {
+	for i, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "#") {
+			continue
+		}
+		if strings.HasPrefix(trimmed, prefix) {
+			return i
+		}
+	}
+	return -1
+}
