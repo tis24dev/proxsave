@@ -112,8 +112,21 @@ var (
 	// rootPrefix re-anchors the hardcoded detection paths under a mounted host
 	// filesystem (SYSTEM_ROOT_PREFIX). Empty means detect against the real root,
 	// the historical behavior. It is a package-level seam, like statFunc and
-	// readFileFunc above, set only by DetectWith for the duration of a single
-	// bootstrap detection, which runs before any concurrent goroutine exists.
+	// readFileFunc above.
+	//
+	// EXACTLY TWO functions set it, each for the duration of one call and each
+	// restoring the previous value in a defer: DetectWith and MarkerSnapshot. Both
+	// are called from the process bootstrap, which is sequential and runs before any
+	// goroutine of this program exists, so the two never overlap. That is the whole
+	// safety argument - there is no lock - and it holds only while the call sites stay
+	// where they are.
+	//
+	// A third setter, or either of these two reached from a goroutine, breaks it: one
+	// call would inspect paths under another call's prefix and return a snapshot or a
+	// verdict for the wrong machine. This is not hypothetical bookkeeping. MarkerSnapshot
+	// became the second setter without anyone noticing that this comment named only the
+	// first, which is why TestRootPrefixHasExactlyTwoSetters now reads the package source
+	// and fails when a third assignment appears.
 	rootPrefix string
 )
 
