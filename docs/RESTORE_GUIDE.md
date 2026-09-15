@@ -208,7 +208,7 @@ Each category is handled in one of three ways:
 ### PBS-Specific Categories (9 categories)
 
 **PBS staged apply behavior**: During restore on PBS, ProxSave prompts you to choose how to reconcile PBS objects:
-- **Merge (existing PBS)**: intended for restoring onto an already operational PBS; applies supported PBS categories via `proxmox-backup-manager` without deleting existing objects that are not in the backup.
+- **Merge (existing PBS)**: intended for restoring onto an already operational PBS; applies supported PBS categories via `proxmox-backup-manager` without deleting existing objects that are not in the backup. This covers the API-applied categories only: see the paragraph below for what is written straight from the stage in both modes.
 - **Clean 1:1 (fresh PBS install)**: intended for restoring onto a new, clean PBS; attempts to make supported PBS objects match the backup (may remove objects not in the backup).
 
 API apply is automatic for supported PBS staged categories, and file-based fallback for those is offered only in **Clean 1:1** mode. A few PBS items are always written straight from the stage in both modes, because there is no stable API for them: the `acme/accounts/` directory (mirrored, so an account the backup does not carry is removed), `acme/plugins.cfg`, `metricserver.cfg`, `proxy.cfg`, and the whole `pbs_tape` category. `proxy.cfg` in particular carries the listen address and certificate settings, so Merge mode is not a guarantee that nothing outside the API touches `/etc/proxmox-backup`.

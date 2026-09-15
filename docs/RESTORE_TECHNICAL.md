@@ -988,8 +988,10 @@ re-checks context cancellation between steps, and degrades a non-fatal error to 
 6. **Notifications staged apply** (`maybeApplyNotificationsFromStage`, `restore_notifications.go`): PVE and PBS notification endpoints/matchers.
 
 **PBS apply model (interactive).** On PBS hosts the apply offers **Merge (existing PBS)**
-vs **Clean 1:1 (fresh PBS install)**. Merge creates/updates only (no deletions); Clean 1:1
-attempts a 1:1 reconciliation (may remove objects not in the backup) via
+vs **Clean 1:1 (fresh PBS install)**. Merge creates/updates only, no deletions, THROUGH THE
+API; the file-only items below are written in both modes, whole-file, and the
+`acme/accounts/` directory is mirrored, so Merge does remove an ACME account the backup does
+not carry. Clean 1:1 attempts a 1:1 reconciliation (may remove objects not in the backup) via
 `proxmox-backup-manager`, and may fall back to writing staged `*.cfg` files into
 `/etc/proxmox-backup` (Clean 1:1 only). API coverage: `pbs_host` (node + traffic control),
 `datastore_pbs` (datastores + S3), `pbs_remotes`, `pbs_jobs` (sync/verify/prune),

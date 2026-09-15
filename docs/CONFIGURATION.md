@@ -366,10 +366,19 @@ Restore behavior is chosen **interactively at restore time** when PBS-specific
 categories are going to be applied. This is not configured through `backup.env`.
 
 You will be asked to choose a behavior:
-- **Merge (existing PBS)**: intended for restoring onto an already operational PBS; ProxSave applies supported PBS categories via `proxmox-backup-manager` without deleting existing objects that are not in the backup.
+- **Merge (existing PBS)**: intended for restoring onto an already operational PBS; ProxSave applies supported PBS categories via `proxmox-backup-manager` without deleting existing objects that are not in the backup. The choice governs the API-applied categories: it does not stop the file-only items below from being written.
 - **Clean 1:1 (fresh PBS install)**: intended for restoring onto a new, clean PBS; ProxSave attempts to make supported PBS objects match the backup (may remove objects that exist on the system but are not in the backup).
 
 ProxSave applies supported PBS staged categories via API automatically (and may fall back to file-based staged apply only in **Clean 1:1** mode).
+
+A few PBS items have no stable API and are written straight from the stage in **both** modes.
+They are rewritten whole, so a section the backup does not carry is gone from the file
+afterwards: `acme/plugins.cfg`, `metricserver.cfg`, `proxy.cfg` and the whole `pbs_tape`
+category (`tape.cfg`, `tape-job.cfg`, `media-pool.cfg`, `tape-encryption-keys.json`). The
+`acme/accounts/` directory goes further and is mirrored, so an ACME account registered on the
+node that the backup does not carry is **removed**, in Merge as well. Merge is therefore a
+statement about the API-applied objects, not a promise that nothing outside the API touches
+`/etc/proxmox-backup`. Full list in [RESTORE_GUIDE.md](RESTORE_GUIDE.md).
 
 ### Dual-role hosts
 
