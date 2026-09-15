@@ -41,7 +41,12 @@ func writePersonalScript(t *testing.T, dir, name, body string) string {
 // build a pipe plus a goroutine, and Wait then blocks until that pipe reaches EOF, which a
 // backgrounded grandchild holding the descriptor withholds for its own whole lifetime.
 func TestPersonalScriptCmdLeavesEveryDescriptorNil(t *testing.T) {
-	cmd, refusal := personalScriptCmd(context.Background(), "/usr/local/bin/whatever")
+	// Under t.TempDir, the way the sibling test below already does it: a fixed
+	// /usr/local/bin name is a name the host may own. On the PVE test node that
+	// directory holds a dozen operator-installed entries, and one of them landing on
+	// this name, root-owned and 0755, would pass the gate and fail the assertion below
+	// for a reason that has nothing to do with what this test pins.
+	cmd, refusal := personalScriptCmd(context.Background(), filepath.Join(t.TempDir(), "missing.sh"))
 	if refusal == nil {
 		t.Fatal("a path that does not exist must be refused by the per-run gate")
 	}
