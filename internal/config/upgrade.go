@@ -248,6 +248,13 @@ func computeConfigUpgrade(configPath string) (*UpgradeResult, string, []byte, er
 		upper string
 		lines []string
 		index int
+		// start and end are the entry's own line span inside templateLines. They are
+		// what lets a missing key be inserted INSIDE its section: the lines between the
+		// previous entry's end and this entry's start are the section header and the
+		// comments that document the key, and the merge walks past the ones the user's
+		// file already carries instead of writing the key above them.
+		start int
+		end   int
 	}
 
 	templateEntries := make([]templateEntry, 0)
@@ -284,6 +291,8 @@ func computeConfigUpgrade(configPath string) (*UpgradeResult, string, []byte, er
 				upper: upperKey,
 				lines: templateLines[i : blockEnd+1],
 				index: len(templateEntries),
+				start: i,
+				end:   blockEnd,
 			})
 			i = blockEnd
 			continue
@@ -293,6 +302,8 @@ func computeConfigUpgrade(configPath string) (*UpgradeResult, string, []byte, er
 			upper: upperKey,
 			lines: []string{line},
 			index: len(templateEntries),
+			start: i,
+			end:   i,
 		})
 	}
 
@@ -393,28 +404,106 @@ func computeConfigUpgrade(configPath string) (*UpgradeResult, string, []byte, er
 		return "", false
 	}
 
-	findPrevAnchor := func(entryIndex int) (int, bool) {
+	findPrevAnchor := func(entryIndex int) (int, int, bool) {
 		for i := entryIndex - 1; i >= 0; i-- {
 			if userKey, ok := resolveUserKey(templateEntries[i]); ok {
 				ranges := userRanges[userKey]
 				if len(ranges) == 0 {
 					continue
 				}
-				return ranges[len(ranges)-1].end + 1, true
+				return ranges[len(ranges)-1].end + 1, i, true
 			}
 		}
-		return 0, false
+		return 0, 0, false
+	}
+
+	// skipSharedContext walks the insertion point forward over the lines the template
+	// puts between the anchor key and the missing key - the section header and the
+	// comments that document the key - for as long as the user's file repeats them
+	// verbatim. Without it a missing key is written immediately after the previous
+	// key, which lands it ABOVE its own section header: the operator then sees the
+	// variable appear detached from the block that explains it, and above a header
+	// that now documents nothing (#313 follow-up, reported for CUSTOM_BACKUP_PATHS).
+	//
+	// The comparison is on trimmed text and stops at the first line that differs, so a
+	// file that moved or edited those comments keeps today's placement rather than
+	// having the merge guess. Pruned lines stop it too: inserting after a line that is
+	// about to be removed would leave the key stranded again.
+	//
+	// matchTemplateRun is that walk over one run of template lines. It reports whether the
+	// whole run matched, because a run that stopped early has to stop the walk for good:
+	// resuming past a line the user's file does not have would consume unrelated lines.
+	matchTemplateRun := func(userIdx, from, to int) (int, bool) {
+		for ti := from; ti < to; ti++ {
+			if userIdx >= len(originalLines) {
+				return userIdx, false
+			}
+			if userIdx < len(skipOriginalLines) && skipOriginalLines[userIdx] {
+				return userIdx, false
+			}
+			if strings.TrimSpace(templateLines[ti]) != strings.TrimSpace(originalLines[userIdx]) {
+				return userIdx, false
+			}
+			userIdx++
+		}
+		return userIdx, true
+	}
+
+	// skipDisabledEntry consumes the user's commented-out copy of a missing entry, which is
+	// how a variable gets switched off without being deleted. It is all or nothing: a span
+	// that does not match from its first line to its last consumes NOTHING, so a file that
+	// simply deleted the variable walks on exactly as before. A block value is matched line
+	// by line, so a half-commented block is not mistaken for a disabled one.
+	skipDisabledEntry := func(userIdx int, mid templateEntry) int {
+		probe := userIdx
+		for ti := mid.start; ti <= mid.end; ti++ {
+			if probe >= len(originalLines) {
+				return userIdx
+			}
+			if probe < len(skipOriginalLines) && skipOriginalLines[probe] {
+				return userIdx
+			}
+			if !isDisabledCopyOf(originalLines[probe], templateLines[ti]) {
+				return userIdx
+			}
+			probe++
+		}
+		return probe
+	}
+
+	// Between the anchor and the missing key there can be OTHER missing keys: findPrevAnchor
+	// walks back to the first key the user's file actually has, so every entry it stepped
+	// over is missing too. Their own template lines are therefore lines the user's file
+	// cannot carry as they stand, and comparing them would fail on the first one - stranding
+	// the key at the anchor, above its own comments and, when the anchor is the last key of
+	// the previous section, under the wrong section header. Step over each such span, taking
+	// the commented-out copy with it when the file has one, then keep matching the comments
+	// the two files do share.
+	skipSharedContext := func(userIdx, prevEntryIdx int, entry templateEntry) int {
+		ti := templateEntries[prevEntryIdx].end + 1
+		for k := prevEntryIdx + 1; k < entry.index; k++ {
+			mid := templateEntries[k]
+			next, whole := matchTemplateRun(userIdx, ti, mid.start)
+			userIdx = next
+			if !whole {
+				return userIdx
+			}
+			userIdx = skipDisabledEntry(userIdx, mid)
+			ti = mid.end + 1
+		}
+		userIdx, _ = matchTemplateRun(userIdx, ti, entry.start)
+		return userIdx
 	}
 
 	ops := make([]insertOp, 0, len(missingEntries))
 	unanchored := make([]templateEntry, 0)
 	for _, entry := range missingEntries {
-		prev, ok := findPrevAnchor(entry.index)
+		prev, prevEntryIdx, ok := findPrevAnchor(entry.index)
 		if !ok {
 			unanchored = append(unanchored, entry)
 			continue
 		}
-		insertIndex := normalizeInsertIndex(prev)
+		insertIndex := normalizeInsertIndex(skipSharedContext(prev, prevEntryIdx, entry))
 		ops = append(ops, insertOp{
 			index: insertIndex,
 			lines: entry.lines,
@@ -538,6 +627,23 @@ func parseEnvValues(lines []string) (map[string][]envValue, []string, map[string
 	}
 
 	return userValues, userKeyOrder, caseMap, caseConflicts, warnings, userRanges, nil
+}
+
+// isDisabledCopyOf reports whether userLine is templateLine switched off with a leading #.
+// Switching a variable off that way is as common as deleting it, and it leaves a line the
+// template has no match for, which is why the placement walk has to recognise it rather
+// than stop there. The comparison is on the whole line after the marker, inline comment
+// included, so a disabled line whose value was also edited is NOT a copy and is left alone.
+func isDisabledCopyOf(userLine, templateLine string) bool {
+	trimmed := strings.TrimSpace(userLine)
+	if !strings.HasPrefix(trimmed, "#") {
+		return false
+	}
+	uncommented := strings.TrimSpace(strings.TrimPrefix(trimmed, "#"))
+	if uncommented == "" {
+		return false
+	}
+	return uncommented == strings.TrimSpace(templateLine)
 }
 
 func splitKeyValueRaw(line string) (string, string, string, bool) {

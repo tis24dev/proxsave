@@ -20,6 +20,7 @@ type Pager struct {
 	content      string
 	confirmLabel string
 	abortErr     error
+	allowAbort   bool
 	vp           viewport.Model
 	wrapWidth    int // width the content was last wrapped to (-1 = not yet)
 }
@@ -38,15 +39,33 @@ func WithPagerAbort(err error) PagerOption {
 	return func(p *Pager) { p.abortErr = err }
 }
 
-// NewPager builds a scrollable text screen. Esc aborts (shell.ErrAborted by
-// default, or the WithPagerAbort sentinel): a reflex Esc on a restore plan
-// must never count as acceptance.
+// WithPagerNoAbort removes the esc/q exit entirely: the screen resolves on enter
+// and nothing else, and the footer stops offering a key that is not there.
+//
+// It is NOT WithPagerAbort(nil), which would leave esc and q resolving - with a
+// nil error, so indistinguishable from continue - while the footer no longer
+// mentions them. A key that works and is not advertised is the same lie as a key
+// advertised and not meaningful.
+//
+// This is for a screen with nothing to abort, where a second way out carries no
+// second meaning. Ctrl+C is untouched: the router intercepts it above every
+// screen (shell/router.go) and it remains the emergency exit from here as from
+// anywhere else.
+func WithPagerNoAbort() PagerOption {
+	return func(p *Pager) { p.allowAbort = false }
+}
+
+// NewPager builds a scrollable text screen. Esc aborts by default
+// (shell.ErrAborted, or the WithPagerAbort sentinel): a reflex Esc on a restore
+// plan must never count as acceptance. WithPagerNoAbort removes that exit for a
+// screen that has nothing to abort.
 func NewPager(title, content string, opts ...PagerOption) *Pager {
 	p := &Pager{
 		title:        sanitizeLine(title),
 		content:      sanitize(content),
 		confirmLabel: "continue",
 		abortErr:     shell.ErrAborted,
+		allowAbort:   true,
 		vp:           viewport.New(),
 		wrapWidth:    -1,
 	}
@@ -66,7 +85,7 @@ func (p *Pager) Title() string { return p.title }
 
 func (p *Pager) Help() string {
 	help := "↑/↓ scroll · enter " + p.confirmLabel
-	if p.abortErr != nil {
+	if p.allowAbort && p.abortErr != nil {
 		help += " · esc cancel"
 	}
 	return help
@@ -78,6 +97,12 @@ func (p *Pager) Update(msg tea.Msg) (shell.Screen, tea.Cmd) {
 		case "enter":
 			return p, p.Resolve(struct{}{}, nil)
 		case "esc", "q":
+			if !p.allowAbort {
+				// Swallowed, not passed on: the viewport below would not act on
+				// either key anyway, and returning here keeps the screen open
+				// rather than resolving it by another name.
+				return p, nil
+			}
 			return p, p.Resolve(struct{}{}, p.abortErr)
 		}
 	}

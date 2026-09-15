@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -104,7 +105,7 @@ func personalScriptEnv() []string {
 // documented triggers are a child that fails to exit after cancellation (unreachable, the
 // cancellation is SIGKILL) and a child that exits leaving I/O pipes unclosed (unreachable,
 // there are no pipes).
-func personalScriptCmd(ctx context.Context, path string) *exec.Cmd {
+func personalScriptCmd(ctx context.Context, path string) (*exec.Cmd, error) {
 	return configurePersonalScriptCmd(exec.CommandContext(ctx, personalScriptFDPath), path)
 }
 
@@ -112,7 +113,7 @@ func personalScriptCmd(ctx context.Context, path string) *exec.Cmd {
 // same bare command, with no context attached, because there the daemon is exiting and killing
 // the script is the cgroup's job. It exists as its own function so the shape assertions can
 // reach it; a second inline exec.Command would be a second thing to keep in step by hand.
-func personalScriptCmdDetached(path string) *exec.Cmd {
+func personalScriptCmdDetached(path string) (*exec.Cmd, error) {
 	return configurePersonalScriptCmd(exec.Command(personalScriptFDPath), path)
 }
 
@@ -122,13 +123,20 @@ const personalScriptFDPath = "/proc/self/fd/3"
 // os/exec to resolve the configured pathname later in Cmd.Start. The startup inspection still
 // supplies the operator-facing diagnostic; this execution-time gate protects the interval
 // after startup from a foreign-owned ancestor replacing one of its descendants.
-func configurePersonalScriptCmd(cmd *exec.Cmd, path string) *exec.Cmd {
+//
+// It RETURNS the refusal rather than reporting it, and the command alongside it stays usable
+// only when there is none. Returning a value is not a breach of the silence rule this file is
+// built on: nothing here writes anywhere, and the caller that does the writing lives in
+// personal_scripts_gate.go, which is where every loud thing about this feature already lives.
+func configurePersonalScriptCmd(cmd *exec.Cmd, path string) (*exec.Cmd, error) {
 	cmd.Args[0] = path
 	cmd.Env = personalScriptEnv()
-	if file := openPersonalScriptForExecution(path); file != nil {
-		cmd.ExtraFiles = []*os.File{file}
+	file, err := openPersonalScriptForExecution(path)
+	if err != nil {
+		return cmd, err
 	}
-	return cmd
+	cmd.ExtraFiles = []*os.File{file}
+	return cmd, nil
 }
 
 // personalScriptProbes holds the script paths whose parent-directory open was abandoned by
@@ -176,15 +184,24 @@ func releasePersonalScriptProbe(path string) {
 // validates the opened inode itself. OpenFileUnderRoot removes the variable-path gosec sink;
 // O_NONBLOCK stops a final component replaced by a FIFO from parking the check, and
 // personalScriptOpenTimeout bounds the parent-directory open that flag cannot reach.
-// Returning nil makes startPersonalScriptCmd refuse the command silently, preserving the
+// A non-nil error makes startPersonalScriptCmd refuse the command, preserving the
 // personal-script error contract without ever relying on whatever descriptor 3 the daemon
 // might have inherited.
-func openPersonalScriptForExecution(path string) *os.File {
+//
+// Each refusal carries its own sentence because the caller reports it and the sentences do not
+// mean the same thing to the operator. "Owned by uid 1000" says the inode the daemon was told
+// to trust was replaced by one it will not run; "could not be opened" says it is gone. Both end
+// in the script not running, which is exactly why a single shared wording would be useless.
+//
+// The wording is deliberately NOT personalScriptOwnerError's: that one closes with advice for an
+// operator configuring a path at daemon start, and here the path was already accepted. What
+// changed is the file.
+func openPersonalScriptForExecution(path string) (*os.File, error) {
 	if !filepath.IsAbs(path) {
-		return nil
+		return nil, fmt.Errorf("%s is not an absolute path", path)
 	}
 	if !claimPersonalScriptProbe(path) {
-		return nil
+		return nil, fmt.Errorf("a previous open of %s has not returned", path)
 	}
 	// probeWithin's contract is the one this needs: the goroutine it gives up on is abandoned,
 	// not cancelled, because a blocking open cannot be cancelled at all. If that open ever does
@@ -198,8 +215,11 @@ func openPersonalScriptForExecution(path string) *os.File {
 		}
 		return opened
 	})
-	if !answered || file == nil {
-		return nil
+	if !answered {
+		return nil, fmt.Errorf("opening %s did not complete within %s", path, personalScriptOpenTimeout)
+	}
+	if file == nil {
+		return nil, fmt.Errorf("%s could not be opened", path)
 	}
 	keep := false
 	defer func() {
@@ -209,14 +229,23 @@ func openPersonalScriptForExecution(path string) *os.File {
 	}()
 
 	info, err := file.Stat()
-	if err != nil || !info.Mode().IsRegular() || info.Mode().Perm()&0o111 == 0 || info.Mode().Perm()&0o022 != 0 {
-		return nil
+	switch {
+	case err != nil:
+		return nil, fmt.Errorf("%s could not be inspected after opening it: %w", path, err)
+	case !info.Mode().IsRegular():
+		return nil, fmt.Errorf("%s is not a regular file", path)
+	case info.Mode().Perm()&0o111 == 0:
+		return nil, fmt.Errorf("%s is not executable (mode %04o)", path, info.Mode().Perm())
+	case info.Mode().Perm()&0o022 != 0:
+		return nil, fmt.Errorf("%s is writable by group or others (mode %04o)", path, info.Mode().Perm())
 	}
-	if err := personalScriptOwnerError(path, info, os.Geteuid()); err != nil {
-		return nil
+	if uid, ownerErr := personalScriptOwnerUID(path, info); ownerErr != nil {
+		return nil, ownerErr
+	} else if daemonUID := os.Geteuid(); uid != 0 && int(uid) != daemonUID {
+		return nil, fmt.Errorf("%s is owned by uid %d; accepted owners are root or daemon uid %d", path, uid, daemonUID)
 	}
 	keep = true
-	return file
+	return file, nil
 }
 
 // startPersonalScriptCmd refuses to call Start unless configurePersonalScriptCmd supplied
@@ -246,11 +275,16 @@ func startPersonalScriptCmd(cmd *exec.Cmd) error {
 
 // runPersonalScript starts one operator script, waits for it, and reports nothing at all:
 // not a log line at any level, not a warning, not a metric, not a recap row, not a ping.
-// Every error it can meet is dropped on purpose. A path that does not exist, is not absolute,
-// is a directory, has no execute bit or fails the inode trust checks is refused before Start;
-// an executable text file with no shebang fails in Start (os/exec has no shell fallback).
-// The script's own exit code and a timeout kill are discarded the same way.
 // Nothing here can change the run's outcome, its exit code or its log.
+//
+// It RETURNS one thing and drops everything else, and the split is the whole point. A refusal by
+// the per-run gate - the path is not absolute, the file is gone, the open did not come back, the
+// opened inode is not a regular executable owned by root or the daemon - is returned, because it
+// says THE SCRIPT DID NOT RUN and the operator has no other way to learn that. Everything the
+// script itself does is still dropped: an executable text file with no shebang fails in Start
+// (os/exec has no shell fallback), and its exit code and a timeout kill go the same way.
+//
+// The caller decides what to do with the returned refusal; this file still writes nowhere.
 //
 // The wait is bounded in two phases rather than by a plain cmd.Run(), for the reason spelled
 // out on personalScriptReapSlack. Phase one is the whole normal case. Phase two starts the
@@ -273,14 +307,14 @@ func startPersonalScriptCmd(cmd *exec.Cmd) error {
 // scheduler goroutine for up to timeout+slack, blew the stock 90-second TimeoutStopSec, and
 // the daemon was SIGKILLed with the pid and info files still on disk - the exact harm the
 // detached post-run path documents avoiding. A nil stop never fires.
-func runPersonalScript(path string, stop <-chan struct{}) {
+func runPersonalScript(path string, stop <-chan struct{}) error {
 	// Belt and braces: the loader already trims (parsePersonalScriptSettings), so no shipped
 	// path reaches here padded and no test can cover this line through the config. It stays
 	// because the two starters are the boundary, and a caller that builds a value some other
 	// way must not turn a blank into a fork attempt.
 	path = strings.TrimSpace(path)
 	if path == "" {
-		return // disabled: nothing is started and the run is byte-identical to before
+		return nil // disabled: nothing is started and the run is byte-identical to before
 	}
 
 	// The stop arms below leave ON PURPOSE without cancelling, so the script keeps
@@ -295,9 +329,14 @@ func runPersonalScript(path string, stop <-chan struct{}) {
 		}
 	}()
 
-	cmd := personalScriptCmd(ctx, path)
+	cmd, refusal := personalScriptCmd(ctx, path)
+	if refusal != nil {
+		return refusal
+	}
 	if err := startPersonalScriptCmd(cmd); err != nil {
-		return
+		// The gate passed and the fork did not. That is the script's own failure to be
+		// runnable - a missing shebang is the shipped example - and the contract drops it.
+		return nil
 	}
 
 	waitCh := make(chan error, 1)
@@ -305,10 +344,10 @@ func runPersonalScript(path string, stop <-chan struct{}) {
 
 	select {
 	case <-waitCh:
-		return
+		return nil
 	case <-stop:
 		abandoned = true
-		return // shutdown: abandon the wait, not the script (see the doc comment)
+		return nil // shutdown: abandon the wait, not the script (see the doc comment)
 	case <-ctx.Done():
 	}
 
@@ -320,6 +359,7 @@ func runPersonalScript(path string, stop <-chan struct{}) {
 	case <-stop:
 		abandoned = true
 	}
+	return nil
 }
 
 // startPersonalScriptDetached starts the post-run script and does NOT wait for it. It serves
@@ -342,11 +382,18 @@ func runPersonalScript(path string, stop <-chan struct{}) {
 // nothing is reaped, which costs nothing because the daemon is on its way out and the script
 // is reparented to init.
 //
-// Like runPersonalScript, it reports nothing on any outcome.
-func startPersonalScriptDetached(path string) {
+// Like runPersonalScript, it reports nothing on any outcome, and like it, it returns a per-run
+// gate refusal for its caller to report. A daemon on its way out still owes the operator the
+// same sentence: the post script did not run, and here is what stopped it.
+func startPersonalScriptDetached(path string) error {
 	path = strings.TrimSpace(path)
 	if path == "" {
-		return
+		return nil
 	}
-	_ = startPersonalScriptCmd(personalScriptCmdDetached(path))
+	cmd, refusal := personalScriptCmdDetached(path)
+	if refusal != nil {
+		return refusal
+	}
+	_ = startPersonalScriptCmd(cmd)
+	return nil
 }

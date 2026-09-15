@@ -104,6 +104,20 @@ type KnownVariable struct {
 	Rule string
 }
 
+// NearMissVariable is an unknown variable whose name is ONE edit away from a name the
+// loader does read: a dropped, added, changed or swapped character. It exists because
+// "not a known variable and is ignored" is the same sentence for a setting that was
+// retired and for one the operator meant to set and mistyped, and only the second one
+// silently disables something they asked for. Measured on a live host: a
+// CUSTOM_BACKUP_PATHS that lost its leading C kept two custom backup paths out of every
+// run for months, reported only as one more unknown name in a list of seven.
+type NearMissVariable struct {
+	// Name is the name as written in the file.
+	Name string
+	// Suggestion is the known variable it is one edit away from.
+	Suggestion string
+}
+
 // The rules templateKnows can accept a variable by, in the words the debug line uses.
 const (
 	knownDocumented = "documented there as a commented example"
@@ -162,6 +176,10 @@ type ConfigIntegrityReport struct {
 	// loader DOES read it, so it is not unknown, and for seven of them it wins over the
 	// canonical name, so it is not harmless either.
 	Legacy []LegacyVariable
+	// NearMiss is the subset of Unknown that is one character away from a name the
+	// loader reads. Every entry is ALSO in Unknown: the classification does not change,
+	// only what the operator is told about it.
+	NearMiss []NearMissVariable
 
 	// assignments answers "how is this variable written in the file" for callers that
 	// need to explain ONE variable rather than list the file's findings, e.g. the
@@ -196,6 +214,13 @@ func (r *ConfigIntegrityReport) HasIssues() bool {
 		return false
 	}
 	if len(r.Duplicated) > 0 || len(r.Absent) > 0 {
+		return true
+	}
+	// An unknown name on its own is not an issue: it is usually a setting that was
+	// retired, and the file is otherwise sound. One character away from a real variable
+	// is a different fact - the line the operator wrote has no effect - which is the
+	// duplicate's harm under another shape and is graded the same way.
+	if len(r.NearMiss) > 0 {
 		return true
 	}
 	// A legacy name alone works and discards nothing. A legacy name WITH its canonical
@@ -276,6 +301,9 @@ func AuditConfigFile(path string) (*ConfigIntegrityReport, error) {
 		switch rule, known := templateKnows(name, templateScan.assignedAt, documented); {
 		case !known:
 			report.Unknown = append(report.Unknown, name)
+			if suggestion, ok := nearMissKnownName(name, templateScan.assignedAt, documented); ok {
+				report.NearMiss = append(report.NearMiss, NearMissVariable{Name: name, Suggestion: suggestion})
+			}
 		case rule != "":
 			report.KnownOutsideTemplate = append(report.KnownOutsideTemplate, KnownVariable{Name: name, Rule: rule})
 		}
@@ -422,6 +450,78 @@ func replacingAssignment(upperKey string, at []envAssignment) int {
 // aliases no template has ever carried.
 // It returns the rule that accepted the variable, empty when the template assigns it
 // outright and no rule was needed, and reports whether anything accepted it at all.
+// nearMissKnownName reports the known variable that `name` is one edit away from: one
+// character dropped, added, changed, or two adjacent ones swapped. Those four are the
+// typos an operator's editor produces; anything further apart is a different name, not
+// a slip, so the check stays at distance one rather than ranking candidates.
+//
+// The candidate set is the same one templateKnows accepts by, minus the webhook rule,
+// which matches by shape rather than by name and has nothing to be near.
+//
+// The first match in the template's own order wins. Two known names at distance one
+// from the same typo is possible in principle (a family like BACKUP_PBS_ACME_ACCOUNTS
+// / BACKUP_PBS_ACME_PLUGINS differs by more than one character, so it does not arise
+// today), and naming one is still better than naming none: the operator reads the
+// suggestion against the line they wrote.
+func nearMissKnownName(name string, assigned map[string][]envAssignment, documented map[string]struct{}) (string, bool) {
+	best := ""
+	for candidate := range assigned {
+		if isOneEditApart(name, candidate) && (best == "" || candidate < best) {
+			best = candidate
+		}
+	}
+	if best != "" {
+		return best, true
+	}
+	for candidate := range documented {
+		if isOneEditApart(name, candidate) && (best == "" || candidate < best) {
+			best = candidate
+		}
+	}
+	return best, best != ""
+}
+
+// isOneEditApart is Damerau-Levenshtein distance == 1, written out rather than as a
+// full distance matrix because only the answer "exactly one" is ever needed: the four
+// cases below are the whole of it at that distance.
+func isOneEditApart(a, b string) bool {
+	if a == b {
+		return false
+	}
+	switch len(a) - len(b) {
+	case 0:
+		diff := -1
+		for i := range len(a) {
+			if a[i] == b[i] {
+				continue
+			}
+			if diff >= 0 {
+				// A second difference is only still distance one when it is the
+				// other half of a swap of two adjacent characters.
+				return diff == i-1 && a[diff] == b[i] && a[i] == b[diff] && a[i+1:] == b[i+1:]
+			}
+			diff = i
+		}
+		return diff >= 0
+	case 1:
+		return isOneCharDeletionOf(a, b)
+	case -1:
+		return isOneCharDeletionOf(b, a)
+	}
+	return false
+}
+
+// isOneCharDeletionOf reports whether removing exactly one character from long yields
+// short. It is the dropped-character case, and reversed, the added-character one.
+func isOneCharDeletionOf(long, short string) bool {
+	for i := range len(long) {
+		if long[:i]+long[i+1:] == short {
+			return true
+		}
+	}
+	return false
+}
+
 func templateKnows(upperKey string, assigned map[string][]envAssignment, documented map[string]struct{}) (string, bool) {
 	if _, ok := assigned[upperKey]; ok {
 		return "", true

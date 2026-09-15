@@ -174,7 +174,10 @@ func GetAllCategories() []Category {
 			Paths: []string{
 				"./etc/proxmox-backup/node.cfg",
 				"./etc/proxmox-backup/proxy.cfg",
-				"./etc/proxmox-backup/acme/accounts.cfg",
+				// The ACME accounts are a directory of per-account JSON documents; the
+				// trailing slash is what makes PathMatchesCategory select the whole
+				// subtree during extraction (#313).
+				"./etc/proxmox-backup/acme/accounts/",
 				"./etc/proxmox-backup/acme/plugins.cfg",
 				"./etc/proxmox-backup/metricserver.cfg",
 				"./etc/proxmox-backup/traffic-control.cfg",

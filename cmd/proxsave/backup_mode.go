@@ -308,6 +308,7 @@ func configurePreBackupChecker(opts backupModeOptions, orch *orchestrator.Orches
 	checkerConfig.MinDiskSecondaryGB = cfg.MinDiskSecondaryGB
 	checkerConfig.MinDiskCloudGB = cfg.MinDiskCloudGB
 	checkerConfig.FsIoTimeout = time.Duration(cfg.FsIoTimeoutSeconds) * time.Second
+	checkerConfig.SkipPermissionCheck = cfg.SkipPermissionCheck
 	checkerConfig.DryRun = opts.dryRun
 	checkerDone := logging.DebugStart(logger, "pre-backup check config", "dry_run=%v", opts.dryRun)
 	if err := checkerConfig.Validate(); err != nil {

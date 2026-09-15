@@ -160,7 +160,7 @@ func Parse() *Args {
 		"Upgrade configuration file using the embedded template and print JSON summary to stdout (for internal use by --upgrade)")
 
 	flag.BoolVar(&args.ShowWhatsnew, "show-whatsnew", false,
-		"Show the what's-new screen once and exit (for internal use by --upgrade)")
+		"Show the release-notes screen once, mark the notes seen, and exit. --upgrade re-invokes it on the freshly installed binary at an interactive terminal; run it by hand after an unattended upgrade (--upgrade y) to clear the unseen-notes warning that otherwise ends every backup at exit 1")
 
 	flag.BoolVar(&args.UpgradeFinalize, "upgrade-finalize", false,
 		"Run only the post-install finalize phase and exit (for internal use by --upgrade)")

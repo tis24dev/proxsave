@@ -109,15 +109,20 @@ func whatsnewResolve(baseDir, toolVersion string) (show bool, body string) {
 
 // whatsnewRender pushes Screen 0 (body) onto session, bounded by the total
 // whatsnewScreenTimeout, and marks the notes seen once the screen has been shown,
-// HOWEVER the operator left it: continue, Esc, q, Ctrl+C (shell.ErrClosed) or the
-// timeout.
+// HOWEVER the operator left it: continue or Ctrl+C (shell.ErrClosed).
 //
 // It used to write only on an explicit continue, so reading the notes and closing
 // with Esc or Ctrl+C, which is what most people do, left the flag unwritten. The
 // next scheduled backup then logged "has unseen release notes" as a WARNING,
 // ParseLogCounts counted it, and applyIssueExitCode promoted an otherwise clean
 // run to exit 1, which the daemon reports to Healthchecks as down (issue #305).
-// Demanding a specific keystroke to disarm that is not a gate, it is a trap.
+// Demanding a specific keystroke to DISARM THAT is not a gate, it is a trap.
+//
+// Screen 0 has since dropped esc and q (WithPagerNoAbort), so enter is the only
+// key that closes it. That is not the trap above coming back: the trap was the
+// flag going unwritten behind a gesture people did not know they owed, and this
+// function writes it on every exit that reaches it. Requiring one key to LEAVE a
+// screen costs a keystroke; requiring one to disarm a warning cost a red backup.
 //
 // Nothing is lost by dropping the confirmation, because presence is established
 // BEFORE this point and not by which key was pressed: showWhatsnewScreen and
@@ -151,9 +156,9 @@ func whatsnewRender(ctx context.Context, session *shell.Session, baseDir, toolVe
 	// terminal failure the operator never got to read past. Only an interrupt is a
 	// person; every other closed session is the UI going away on its own.
 	//
-	// Esc and q do NOT come through here at all - the pager resolves them itself, as
-	// nil or as its abort sentinel - so narrowing this arm cannot re-arm the warning
-	// for the keystrokes issue #305 was about.
+	// Esc and q reach nothing at all now: the pager swallows them (WithPagerNoAbort),
+	// so they neither resolve nor arrive here, and narrowing this arm cannot re-arm
+	// the warning for the keystrokes issue #305 was about.
 	if errors.Is(err, shell.ErrClosed) && !shell.IsUserInterrupt(err) {
 		return
 	}

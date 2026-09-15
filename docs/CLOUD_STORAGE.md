@@ -25,7 +25,7 @@ Proxsave integrates with [rclone](https://rclone.org/) to provide seamless cloud
 
 **Key capabilities**:
 - **Multi-provider support**: Google Drive, S3, Backblaze B2, OneDrive, MinIO, and 40+ more
-- **Non-critical uploads**: the local backup is written first and an upload failure never fails the run. The upload itself is synchronous and inside the run, so it does add to the total duration: size your window accordingly
+- **Non-critical uploads**: the local backup is written first and an upload failure never fails the run. The upload itself is synchronous and inside the run, so it does add to the total duration. Under the resident daemon that duration is bounded: the upload counts against `MAX_RUN_DURATION` (default `1h`), after which the child is killed and the run is reported as a hang. Size that key, not just the schedule
 - **Automatic retry logic**: Configurable retry attempts with exponential backoff
 - **Bandwidth management**: Upload rate limiting for shared networks
 - **Parallel/sequential modes**: Optimize for network speed and API limits
@@ -351,6 +351,29 @@ This ensures rclone config is backed up with your system, enabling disaster reco
 
 ## Configure proxsave
 
+### From the dashboard
+
+Configure the rclone remote itself first (previous section): the dashboard does not run
+`rclone config` for you. Once the remote exists, run `proxsave` with no arguments on a TTY
+to open the dashboard, then **Install** > **Edit install**. That re-runs the install wizard
+against your existing configuration and three of its fields are the cloud ones:
+
+| Wizard field | Key it writes |
+|--------------|---------------|
+| `Cloud backups (rclone)` | `CLOUD_ENABLED` |
+| `Rclone backup remote` | `CLOUD_REMOTE` (the wizard accepts the legacy `remote:path` form here) |
+| `Rclone log remote` | `CLOUD_LOG_PATH` |
+
+The wizard requires both text fields once the toggle is on: it refuses an empty value
+rather than writing `CLOUD_ENABLED=true` with an empty `CLOUD_REMOTE`, which is a hard
+configuration error at run time. `CLOUD_LOG_PATH` is required by the wizard only: blanking
+it by hand later is legal and simply turns cloud log upload off. Turning the toggle off
+blanks both keys.
+
+Every other key in this guide is a hand edit of `backup.env`, `CLOUD_REMOTE_PATH` and the
+retention and tuning keys included. `--install` reaches the same wizard without going
+through the dashboard, for headless hosts and scripts; add `--cli` for text-mode prompts.
+
 ### Minimal Configuration
 
 ```bash
@@ -433,7 +456,7 @@ RETENTION_YEARLY=3
 | `CLOUD_BATCH_SIZE` | `20` | Files per batch (deletion) |
 | `CLOUD_BATCH_PAUSE` | `1` | Seconds between batches |
 | `MAX_CLOUD_BACKUPS` | `30`, template ships `15` | Simple retention (ignored if GFS enabled) |
-| `RCLONE_FLAGS` | _(empty)_ | Extra global rclone flags, split on whitespace and injected verbatim into **every backup-path** rclone command (right after the subcommand). The restore and decrypt cloud scan builds its rclone calls separately and does **not** receive them — see [How ProxSave invokes rclone](#how-proxsave-invokes-rclone). No shell quoting or validation, so keep each flag a single token (e.g. `--fast-list --checkers 8`). |
+| `RCLONE_FLAGS` | _(empty)_ | Extra global rclone flags, split on whitespace and injected verbatim into **every backup-path** rclone command (right after the subcommand). The restore and decrypt cloud scan builds its rclone calls separately and does **not** receive them: see [How ProxSave invokes rclone](#how-proxsave-invokes-rclone). No shell quoting or validation, so keep each flag a single token (e.g. `--fast-list --checkers 8`). |
 | `BUNDLE_ASSOCIATED_FILES` | `true` | Bundle the archive and its sidecars into one `.bundle.tar` before upload (the default cloud layout). Set `false` to upload the raw archive plus separate sidecars. See [Cloud layout](#cloud-layout-bundle-vs-raw). |
 
 **Legacy env-var aliases.** For backward compatibility ProxSave also accepts these
@@ -640,8 +663,9 @@ CLOUD_BATCH_PAUSE=0
 cd /opt/proxsave
 make build
 
-# Dry-run test
-DRY_RUN=true ./build/proxsave
+# Dry-run test. --backup is what keeps this a run: a bare invocation on a terminal
+# opens the dashboard instead. --dry-run is the flag form of DRY_RUN=true.
+./build/proxsave --backup --dry-run
 
 # Check output:
 # ✓ "Cloud remote gdrive:pbs-backups is accessible"
@@ -654,9 +678,12 @@ DRY_RUN=true ./build/proxsave
 
 ### Real Backup Test
 
+On an installed host the everyday way to run one now is the dashboard's **Backup** row.
+Against a development build, or on a headless host, use the flag:
+
 ```bash
 # Real backup
-./build/proxsave
+./build/proxsave --backup
 
 # Verify upload
 rclone ls gdrive:pbs-backups/
@@ -881,6 +908,8 @@ cp -a /restore/* /
 - **[Restore Technical](RESTORE_TECHNICAL.md)** - Technical implementation details
 
 ### Reference
+- **[Dashboard](DASHBOARD.md)** - The interactive menu, including the Install wizard that writes the cloud keys
+- **[Daemon](DAEMON.md)** - The resident scheduler and its `MAX_RUN_DURATION` watchdog
 - **[Examples](EXAMPLES.md)** - Real-world cloud backup scenarios
 - **[Troubleshooting](TROUBLESHOOTING.md)** - Cloud storage troubleshooting
 - **[CLI Reference](CLI_REFERENCE.md)** - Command-line flags
@@ -910,7 +939,7 @@ Example comparison:
 A: Logs follow backup retention automatically. To disable cloud log upload: `CLOUD_LOG_PATH=""` (empty).
 
 **Q: Does cloud upload slow down backups?**
-A: Local backup completes first (critical). Cloud upload happens after but delays backup completion. For very slow clouds, consider separate cron job for upload.
+A: Yes. The local backup completes first (critical), but the upload runs inside the same run, so it delays completion. There is no upload-only mode and no way to hand the upload to a separate job: the run owns it. On a host scheduled by the resident daemon this matters twice over, because the upload counts against `MAX_RUN_DURATION` (default `1h`), and a run that overruns it is killed and reported as a hang rather than finishing slowly. Size that key for the slowest upload you expect, and remember that `RCLONE_BANDWIDTH_LIMIT` makes the run longer, not shorter.
 
 **Q: Can I backup directly to cloud only (no local)?**
 A: No, local storage is mandatory (critical). Cloud is always secondary/tertiary. Philosophy: fast local backup → slow cloud archival.

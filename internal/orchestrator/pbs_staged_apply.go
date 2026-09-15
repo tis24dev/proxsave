@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 
@@ -82,8 +83,12 @@ func maybeApplyPBSConfigsFromStage(ctx context.Context, logger *logging.Logger, 
 	if plan.HasCategoryID("pbs_host") {
 		// Always restore file-only configs (no stable API coverage yet).
 		// ACME should be applied before node config (node.cfg references ACME accounts/plugins).
+		// The accounts are a directory, not a .cfg, so they get their own apply.
+		if err := applyPBSAcmeAccountsFromStage(logger, stageRoot); err != nil {
+			logger.Warning("PBS staged apply: %s: %v", pbsAcmeAccountsRelPath, err)
+			failedItems = append(failedItems, pbsAcmeAccountsRelPath)
+		}
 		for _, rel := range []string{
-			"etc/proxmox-backup/acme/accounts.cfg",
 			"etc/proxmox-backup/acme/plugins.cfg",
 			"etc/proxmox-backup/metricserver.cfg",
 			"etc/proxmox-backup/proxy.cfg",
@@ -635,6 +640,188 @@ func applyPBSJobConfigsFromStage(ctx context.Context, logger *logging.Logger, st
 		}
 	}
 	return nil
+}
+
+// pbsAcmeAccountsRelPath is the archive-relative directory holding the PBS ACME account
+// registrations: one JSON document per account. PBS has no acme/accounts.cfg (#313).
+const pbsAcmeAccountsRelPath = "etc/proxmox-backup/acme/accounts"
+
+// applyPBSAcmeAccountsFromStage mirrors the staged ACME account directory onto the system.
+// These cannot go through applyPBSConfigFileFromStage: that reads a single file and refuses
+// anything without a PBS section header, which the per-account JSON does not have.
+//
+// The directory is MIRRORED, not merged: an account on the system that the backup does not
+// carry is removed. That is what every other pbs_host apply does to the contents of the file
+// it rewrites (writeFileAtomic replaces the whole .cfg, dropping any section the backup lacks),
+// and a half-merged account set would leave the node holding registrations the restored
+// node.cfg never references.
+//
+// A stage WITHOUT the directory carries no information about accounts (an archive taken before
+// this was collected, or BACKUP_PBS_ACME_ACCOUNTS=false at backup time) and leaves the system
+// untouched, so a restore can never wipe the accounts of a working node just because the backup
+// predates the fix. A staged directory that exists and is empty does say "no accounts" and is
+// mirrored as such.
+//
+// Modes and ownership are set explicitly rather than inherited: /etc/proxmox-backup is
+// 0700 backup:backup on a real PBS, so inheriting from it would hand the ACME private keys to
+// the unprivileged backup service account. PBS itself creates this directory 0700 root:root.
+func applyPBSAcmeAccountsFromStage(logger *logging.Logger, stageRoot string) error {
+	stageDir := filepath.Join(stageRoot, pbsAcmeAccountsRelPath)
+
+	info, err := restoreFS.Lstat(stageDir)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			logging.DebugStep(logger, "pbs staged apply acme accounts", "Skip: %s not present in staging directory", pbsAcmeAccountsRelPath)
+			return nil
+		}
+		return fmt.Errorf("stat staged %s: %w", pbsAcmeAccountsRelPath, err)
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("staged %s must not be a symlink", pbsAcmeAccountsRelPath)
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("staged %s is not a directory", pbsAcmeAccountsRelPath)
+	}
+
+	entries, err := restoreFS.ReadDir(stageDir)
+	if err != nil {
+		return fmt.Errorf("read staged %s: %w", pbsAcmeAccountsRelPath, err)
+	}
+
+	// Validate the whole staged set BEFORE the destination is touched, so a malformed
+	// archive leaves the node exactly as it was: not even the account directory is created
+	// for it.
+	names, err := readPBSAcmeStagedAccounts(stageDir, entries)
+	if err != nil {
+		return err
+	}
+
+	destDir := filepath.Join(string(os.PathSeparator), filepath.FromSlash(pbsAcmeAccountsRelPath))
+	if err := ensurePBSAcmeAccountsDir(destDir); err != nil {
+		return err
+	}
+
+	applied := make(map[string]struct{}, len(names))
+	for _, name := range names {
+		rel := path.Join(pbsAcmeAccountsRelPath, name)
+
+		data, err := restoreFS.ReadFile(filepath.Join(stageDir, name))
+		if err != nil {
+			return fmt.Errorf("read staged %s: %w", rel, err)
+		}
+		if err := writeFileAtomic(filepath.Join(destDir, name), data, 0o600); err != nil {
+			return fmt.Errorf("write %s: %w", filepath.Join(destDir, name), err)
+		}
+		applied[name] = struct{}{}
+	}
+
+	removed, err := removePBSAcmeAccountsNotIn(logger, destDir, applied)
+	if err != nil {
+		return err
+	}
+
+	logging.DebugStep(logger, "pbs staged apply acme accounts",
+		"Applied %d account(s) to %s, removed %d not present in the backup", len(applied), destDir, removed)
+	return nil
+}
+
+// readPBSAcmeStagedAccounts returns the account names the staged directory carries, and
+// refuses the whole set when any entry is not a regular file. PBS writes one plain file per
+// account, so a symlink, a socket or a nested directory there means the archive is malformed:
+// the same class of fault as a staged accounts path that is a file instead of a directory,
+// and it gets the same answer.
+//
+// It refuses instead of skipping the entry because the caller MIRRORS. A skipped name never
+// reaches the keep-set, so removePBSAcmeAccountsNotIn would delete the live account of that
+// name: the node would lose a working registration and its private key, while the staged
+// replacement it was supposed to get was never written either. Refusing leaves every live
+// account in place and surfaces the archive as a failed item, which the restore reports as
+// completed with warnings.
+func readPBSAcmeStagedAccounts(stageDir string, entries []os.DirEntry) ([]string, error) {
+	names := make([]string, 0, len(entries))
+	var rejected []string
+
+	for _, entry := range entries {
+		if entry == nil {
+			continue
+		}
+		name := strings.TrimSpace(entry.Name())
+		if name == "" || name == "." || name == ".." {
+			continue
+		}
+
+		info, err := restoreFS.Lstat(filepath.Join(stageDir, name))
+		if err != nil {
+			return nil, fmt.Errorf("stat staged %s: %w", path.Join(pbsAcmeAccountsRelPath, name), err)
+		}
+		if !info.Mode().IsRegular() {
+			rejected = append(rejected, name)
+			continue
+		}
+		names = append(names, name)
+	}
+
+	if len(rejected) > 0 {
+		// ReadDir is os.ReadDir on every FS in use here, which sorts by name, so the
+		// rejected list reads the same way on every run.
+		return nil, fmt.Errorf("not a regular account file: %s; no account was applied and none was removed",
+			strings.Join(rejected, ", "))
+	}
+	return names, nil
+}
+
+// ensurePBSAcmeAccountsDir creates the account directory with the mode and owner PBS uses,
+// instead of the nearest-parent metadata ensureDirExistsWithInheritedMeta would copy.
+func ensurePBSAcmeAccountsDir(destDir string) error {
+	if err := restoreFS.MkdirAll(destDir, 0o700); err != nil {
+		return fmt.Errorf("mkdir %s: %w", destDir, err)
+	}
+
+	dir, err := restoreFS.Open(destDir)
+	if err != nil {
+		return fmt.Errorf("open %s: %w", destDir, err)
+	}
+	defer func() { _ = dir.Close() }()
+
+	if err := atomicFileChmod(dir, 0o700); err != nil {
+		return fmt.Errorf("chmod %s: %w", destDir, err)
+	}
+	if atomicGeteuid() == 0 {
+		if err := atomicFileChown(dir, 0, 0); err != nil {
+			return fmt.Errorf("chown %s: %w", destDir, err)
+		}
+	}
+	return nil
+}
+
+// removePBSAcmeAccountsNotIn is the mirroring half: it drops the account entries the backup
+// did not carry. It reports how many it removed so the caller can log the whole outcome.
+func removePBSAcmeAccountsNotIn(logger *logging.Logger, destDir string, keep map[string]struct{}) (int, error) {
+	entries, err := restoreFS.ReadDir(destDir)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return 0, nil
+		}
+		return 0, fmt.Errorf("read %s: %w", destDir, err)
+	}
+
+	removed := 0
+	for _, entry := range entries {
+		if entry == nil {
+			continue
+		}
+		name := entry.Name()
+		if _, ok := keep[name]; ok {
+			continue
+		}
+		target := filepath.Join(destDir, name)
+		if err := restoreFS.RemoveAll(target); err != nil {
+			return removed, fmt.Errorf("remove %s: %w", target, err)
+		}
+		logger.Info("PBS staged apply: removed ACME account not present in the backup: %s", name)
+		removed++
+	}
+	return removed, nil
 }
 
 func applyPBSConfigFileFromStage(ctx context.Context, logger *logging.Logger, stageRoot, relPath string) error {

@@ -29,13 +29,33 @@ The interesting boundaries are the few places where **untrusted content** enters
 - **Release artifacts.** `install.sh` and `proxsave --upgrade` check the detached ECDSA
   P-256 signature over `SHA256SUMS` against a public key pinned in the tool itself, then
   check the downloaded archive's SHA256 against that authenticated list. A missing or
-  invalid signature aborts. That is the **download** path only: `proxsave --upgrade
+  invalid signature aborts. The dashboard's **Upgrade** > **Check upgrade** row runs that
+  same `--upgrade` code in-session, so it is the same check, not a second one. That is the
+  **download** path only: `proxsave --upgrade
   --localfile` skips the release check and the download, so it verifies nothing at all and
   just finalizes around the binary already on disk. Every release also publishes SLSA build
   provenance, but that
   attestation is **not** part of the automatic path: verifying it is a separate manual
   step with the GitHub CLI (see
   [PROVENANCE_VERIFICATION.md](PROVENANCE_VERIFICATION.md)).
+
+**Which binary runs the upgrade.** An in-place `proxsave --upgrade`, including the
+dashboard row, is executed by the binary already on the host: the release check, the
+download, the signature and checksum verification and the install are all the OLD
+release's code. That is deliberate for the verification itself, since a downloaded binary
+cannot be the party that verifies itself. Only the post-install **finalize** phase (the
+config merge, the daemon migration, the footer) is handed to the freshly installed binary
+through the internal `--upgrade-finalize` flag, and only when both ends are new enough: a
+host whose current binary predates that split does the finalize itself, and so does one
+whose freshly installed binary will not start as a child. So a fix to the upgrade flow
+shipped in a new release cannot help a host upgrading from an older one. The externally
+fetched route downloads and swaps the binary first, then runs the finalize on the new one:
+
+```bash
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/tis24dev/proxsave/main/install.sh)" -- --upgrade
+```
+
+Use it when a release note says the upgrade path itself changed.
 
 ## Execution model
 
@@ -69,9 +89,19 @@ startup warning per advisory setting. A symlink, unsafe target, or loosely writa
 ancestor is `REFUSED`, blanked for that daemon, and produces one startup warning per refused
 setting, so neither policy result becomes silent non-execution.
 
+An administrator who wants the advisory gone has two options beyond moving the script, and they
+differ in what they change. A **hard link** of the script into a root-owned directory removes the
+cause: the ancestor chain becomes root-owned and the inode is still one the other user cannot
+modify. A **bind mount** of the user-owned directory onto a root-owned mountpoint removes only
+the advisory: `filepath.EvalSymlinks` does not see a bind mount, so the chain the gate reads is
+the mountpoint's while the real directory stays writable by its owner. Neither touches the per-run
+gate below, which is where the actual protection lives, so masking the chain costs the operator
+the statement of the risk and nothing else. Chowning a user home to root is not one of the
+options: root already traverses a mode-0700 home, which is the reason the shape is accepted.
+
 **What actually holds the accepted ancestor, and what it rests on.** The startup gate is a
 DIAGNOSTIC; it is not what protects the interval between startup and a run. Every invocation goes
-through a second, silent gate (`openPersonalScriptForExecution`): the final component is opened
+through a second gate (`openPersonalScriptForExecution`), silent when it passes: the final component is opened
 with `O_NOFOLLOW`, the OPENED INODE is then checked for regular/executable/not group- or
 other-writable/owned by root or the daemon UID, and the child execs `/proc/self/fd/3`, so
 replacing the pathname after the check cannot change the inode that runs. That gate is the reason
@@ -88,6 +118,15 @@ per-run gate opens through `safefs.OpenFileUnderRoot`, which roots at the PARENT
 guards only the final component - an ancestor owner can still swap an intermediate directory for a
 symlink, they just cannot make a non-root-owned file pass - and the check is repeated per run, not
 held, so it proves what the inode was at exec time and nothing about later runs.
+
+**A per-run refusal is reported.** The gate is silent about what the script does and loud about
+ProxSave's own decision not to start it: a refusal writes one `WARNING` to the daemon's log
+naming the variable and the specific reason (`PERSONAL_SCRIPT_PRE_RUN was not started for this
+run: ...`). This closes the gap the startup warning could not: a file replaced after startup with
+one the gate will not run left the daemon knowing the script had not run while the operator saw
+an ordinary successful backup. The script's own output, exit code and timeout kill are still
+discarded, and the line lands in the daemon's log rather than the run's, so no recap,
+notification, healthchecks ping or metric is affected.
 Several callers do invoke `/bin/sh`
 on purpose, but only one of them puts shell **text** on a command line: the background
 rollback timer runs `sh -c '<compile-time constant>'` and passes the sleep seconds and the
@@ -154,7 +193,8 @@ each need a second key of their own; and finally, always, the suspicious-process
 
 The resident daemon and the `--daemon-*` admin commands are dispatched before it and skip it
 (each supervised backup child runs its own). The same preflight also runs once at the end of
-`--install` and `--upgrade`, but there the gates are **overridden in code**:
+`--install` and `--upgrade`, which is also what the dashboard's **Install** and **Upgrade**
+rows run, but there the gates are **overridden in code**:
 `SECURITY_CHECK_ENABLED`, `AUTO_FIX_PERMISSIONS` and `CONTINUE_ON_SECURITY_ISSUES` are all
 forced to `true`, and the network block is forced off. So an upgrade runs the preflight and
 auto-fixes modes and ownership even on a host where you turned both off, and it can never
@@ -227,10 +267,16 @@ hang. A child stuck in uninterruptible sleep is not reported at all: the daemon 
 after the child is reaped, and a D-state process is never reaped, so the daemon blocks in the
 same wedge and stops scheduling. Only the monitor's silence on the missing finish ping
 catches that case (see [DAEMON.md](DAEMON.md)). The daemon also supervises `--backup`
-children only, so a restore, a manual run, or a dashboard "run now" has no watchdog at all.
+children only, so a restore, a manual run, or a dashboard **Backup** has no watchdog at all
+(the dashboard backup is not a daemon child: it runs in the same process as the menu, which
+keeps its session open and hands it to the run).
 `FS_IO_TIMEOUT=0` disables bounding everywhere.
 
-**Preflight configuration keys** (`backup.env`):
+**Preflight configuration keys** (`backup.env`). None of these are fields in the install
+wizard, so the dashboard cannot set them: edit `backup.env` directly. What the dashboard
+does offer for the config file is **Upgrade** > **Check config**, which merges keys the
+shipped template has and your file does not (the same operation as `--upgrade-config`), so
+a key added by a newer release appears with its default instead of staying absent.
 
 | Key | Default | Effect |
 |-----|---------|--------|

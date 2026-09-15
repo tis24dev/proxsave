@@ -650,21 +650,24 @@ func (d *daemon) runOnce(parentCtx context.Context) bool {
 	// the daemon, leaving the pid and info files behind and no clean-stop line. On both the
 	// script is started and left to the unit's cgroup.
 	//
-	// Neither call logs anything, at any level, on any outcome. That is deliberate and is not
-	// an omission to be repaired: these scripts are the operator's, not ours.
+	// Neither call logs anything the SCRIPT does, at any level, on any outcome: not its output,
+	// not its exit code, not a timeout kill. That is deliberate and is not an omission to be
+	// repaired - these scripts are the operator's, not ours. The one thing they do report is
+	// ProxSave's own decision not to start one, because a per-run gate refusal means the script
+	// did not run and nothing else would ever say so (personal_scripts_gate.go).
 	// Both waited calls carry parentCtx.Done() as their stop: a shutdown landing
 	// MID-WAIT abandons the wait (never the script) instead of holding this
 	// goroutine through the 90-second teardown budget - the same harm the
 	// detached branch below documents avoiding for a shutdown that has already
 	// happened when the post fires.
 	postWaits := true
-	runPersonalScript(d.cfg.PersonalScriptPreRun, parentCtx.Done())
+	runPersonalScriptReporting(d.logger, personalScriptPreRunKey, d.cfg.PersonalScriptPreRun, parentCtx.Done())
 	defer func() {
 		if postWaits && parentCtx.Err() == nil {
-			runPersonalScript(d.cfg.PersonalScriptPostRun, parentCtx.Done())
+			runPersonalScriptReporting(d.logger, personalScriptPostRunKey, d.cfg.PersonalScriptPostRun, parentCtx.Done())
 			return
 		}
-		startPersonalScriptDetached(d.cfg.PersonalScriptPostRun)
+		startPersonalScriptDetachedReporting(d.logger, personalScriptPostRunKey, d.cfg.PersonalScriptPostRun)
 	}()
 
 	r := d.getReporter()
@@ -2213,35 +2216,18 @@ func enabledNotifyChannels(cfg *config.Config) []string {
 }
 
 // selfURLs resolves the ping URLs from self-mode config: full URLs if given, otherwise
-// assembled from the ping endpoint (+ optional ping key) and check IDs. The updates URL
-// prefers an explicit full URL, else assembles from its own check ID.
+// assembled from the ping endpoint (+ optional ping key) and check IDs. The resolution
+// itself lives on config.Config, because the dashboard's healthcheck screen has to reach
+// the same answer for the alive check and used to read the full URL alone.
 func (d *daemon) selfURLs() (string, string, map[string]string) {
-	base := strings.TrimRight(strings.TrimSpace(d.cfg.HealthcheckPingEndpoint), "/")
-	build := func(id string) string {
-		id = strings.TrimSpace(id)
-		if base == "" || id == "" {
-			return ""
-		}
-		if d.cfg.HealthcheckPingKey != "" {
-			return base + "/" + d.cfg.HealthcheckPingKey + "/" + id
-		}
-		return base + "/" + id
-	}
+	build := d.cfg.HealthcheckSelfPingURL
 	checks := map[string]string{}
-	updates := strings.TrimSpace(d.cfg.HealthcheckUpdatesURL)
-	if updates == "" {
-		updates = build(d.cfg.HealthcheckUpdatesID)
-	}
-	if updates != "" {
+	if updates := build(d.cfg.HealthcheckUpdatesURL, d.cfg.HealthcheckUpdatesID); updates != "" {
 		checks[health.CheckKeyUpdates] = updates
 	}
 	// Per-notification-channel checks (self mode): full URL or assembled from a check ID.
 	addNotify := func(ch, fullURL, id string) {
-		u := strings.TrimSpace(fullURL)
-		if u == "" {
-			u = build(id)
-		}
-		if u != "" {
+		if u := build(fullURL, id); u != "" {
 			checks[health.CheckKeyNotify(ch)] = u
 		}
 	}
@@ -2249,14 +2235,8 @@ func (d *daemon) selfURLs() (string, string, map[string]string) {
 	addNotify("telegram", d.cfg.HealthcheckNotifyTelegramURL, d.cfg.HealthcheckNotifyTelegramID)
 	addNotify("gotify", d.cfg.HealthcheckNotifyGotifyURL, d.cfg.HealthcheckNotifyGotifyID)
 	addNotify("webhook", d.cfg.HealthcheckNotifyWebhookURL, d.cfg.HealthcheckNotifyWebhookID)
-	alive := strings.TrimSpace(d.cfg.HealthcheckAliveURL)
-	if alive == "" {
-		alive = build(d.cfg.HealthcheckAliveID)
-	}
-	backup := strings.TrimSpace(d.cfg.HealthcheckBackupURL)
-	if backup == "" {
-		backup = build(d.cfg.HealthcheckBackupID)
-	}
+	alive := build(d.cfg.HealthcheckAliveURL, d.cfg.HealthcheckAliveID)
+	backup := build(d.cfg.HealthcheckBackupURL, d.cfg.HealthcheckBackupID)
 	return alive, backup, checks
 }
 

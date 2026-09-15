@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strings"
 	"syscall"
@@ -40,7 +41,15 @@ func writePersonalScript(t *testing.T, dir, name, body string) string {
 // build a pipe plus a goroutine, and Wait then blocks until that pipe reaches EOF, which a
 // backgrounded grandchild holding the descriptor withholds for its own whole lifetime.
 func TestPersonalScriptCmdLeavesEveryDescriptorNil(t *testing.T) {
-	cmd := personalScriptCmd(context.Background(), "/usr/local/bin/whatever")
+	// Under t.TempDir, the way the sibling test below already does it: a fixed
+	// /usr/local/bin name is a name the host may own. On the PVE test node that
+	// directory holds a dozen operator-installed entries, and one of them landing on
+	// this name, root-owned and 0755, would pass the gate and fail the assertion below
+	// for a reason that has nothing to do with what this test pins.
+	cmd, refusal := personalScriptCmd(context.Background(), filepath.Join(t.TempDir(), "missing.sh"))
+	if refusal == nil {
+		t.Fatal("a path that does not exist must be refused by the per-run gate")
+	}
 
 	if cmd.Stdout != nil || cmd.Stderr != nil || cmd.Stdin != nil {
 		t.Fatalf("stdin/stdout/stderr must all stay nil (os.DevNull, no copy goroutine); got stdin=%v stdout=%v stderr=%v", cmd.Stdin, cmd.Stdout, cmd.Stderr)
@@ -65,8 +74,8 @@ func TestPersonalScriptCmdLeavesEveryDescriptorNil(t *testing.T) {
 }
 
 func TestPersonalScriptCommandsExecuteTheOpenedFileAfterPathReplacement(t *testing.T) {
-	builders := map[string]func(string) *exec.Cmd{
-		"waited": func(path string) *exec.Cmd {
+	builders := map[string]func(string) (*exec.Cmd, error){
+		"waited": func(path string) (*exec.Cmd, error) {
 			return personalScriptCmd(context.Background(), path)
 		},
 		"detached": personalScriptCmdDetached,
@@ -80,7 +89,10 @@ func TestPersonalScriptCommandsExecuteTheOpenedFileAfterPathReplacement(t *testi
 			path := writePersonalScript(t, dir, "configured.sh", "touch "+originalMarker)
 			replacement := writePersonalScript(t, dir, "replacement.sh", "touch "+replacementMarker)
 
-			cmd := build(path)
+			cmd, refusal := build(path)
+			if refusal != nil {
+				t.Fatalf("the per-run gate refused a script it must accept: %v", refusal)
+			}
 			for _, file := range cmd.ExtraFiles {
 				file := file
 				t.Cleanup(func() { _ = file.Close() })
@@ -105,7 +117,7 @@ func TestPersonalScriptCommandsExecuteTheOpenedFileAfterPathReplacement(t *testi
 func TestPersonalScriptCommandFailsClosedWithInheritedFD3(t *testing.T) {
 	const probeEnv = "PROXSAVE_TEST_PERSONAL_SCRIPT_INHERITED_FD3"
 	if os.Getenv(probeEnv) == "1" {
-		cmd := personalScriptCmd(context.Background(), filepath.Join(t.TempDir(), "missing.sh"))
+		cmd, _ := personalScriptCmd(context.Background(), filepath.Join(t.TempDir(), "missing.sh"))
 		if err := startPersonalScriptCmd(cmd); err == nil {
 			_ = cmd.Wait()
 		}
@@ -240,63 +252,98 @@ func TestPersonalScriptDropsEveryUnusablePath(t *testing.T) {
 // then prove a negative from its absence; this instead pins the call sites, which is what a
 // future wiring mistake would change. The scan is textual on purpose: a mention in a comment
 // in a third file is also worth stopping at.
+//
+// There are two rings, because the starters gained a reporting wrapper. The MUTE starters may be
+// named only by the file that defines them and by the one file allowed to give them a voice; the
+// REPORTING wrappers may be named only by that file and by the daemon. What neither ring permits
+// is a third caller anywhere, which is the whole rule: a manual backup, a cron-mode run and the
+// dashboard must reach none of them.
+//
+// The match is word-bounded so runPersonalScript does not silently match
+// runPersonalScriptReporting. Without it the wrapper would satisfy the mute starter's own
+// daemon-must-still-call-it half, and deleting the real call site would pass.
 func TestOnlyTheDaemonStartsThePersonalScripts(t *testing.T) {
-	allowed := map[string]bool{
-		filepath.FromSlash("cmd/proxsave/personal_scripts.go"): true,
-		filepath.FromSlash("cmd/proxsave/daemon.go"):           true,
+	const (
+		defining  = "cmd/proxsave/personal_scripts.go"
+		reporting = "cmd/proxsave/personal_scripts_gate.go"
+		daemonGo  = "cmd/proxsave/daemon.go"
+	)
+	rings := []struct {
+		names         []string
+		allowed       []string
+		mustBeNamedBy string
+	}{
+		{
+			names:         []string{"runPersonalScript", "startPersonalScriptDetached"},
+			allowed:       []string{defining, reporting},
+			mustBeNamedBy: reporting,
+		},
+		{
+			names:         []string{"runPersonalScriptReporting", "startPersonalScriptDetachedReporting"},
+			allowed:       []string{reporting, daemonGo},
+			mustBeNamedBy: daemonGo,
+		},
 	}
 	root := filepath.Join("..", "..")
 
-	for _, name := range []string{"runPersonalScript", "startPersonalScriptDetached"} {
-		var seenInDaemon bool
-		err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
-			if err != nil {
-				return err
-			}
-			// Skip dot directories and anything holding its own .git entry. Without this the
-			// walk descends into the agent worktrees this repo keeps under .claude/, finds the
-			// same two files in a nested checkout, and fails on a tree where nothing is wrong.
-			if d.IsDir() {
-				if path != root && strings.HasPrefix(d.Name(), ".") {
-					return fs.SkipDir
+	for _, ring := range rings {
+		allowed := map[string]bool{}
+		for _, file := range ring.allowed {
+			allowed[filepath.FromSlash(file)] = true
+		}
+		required := filepath.FromSlash(ring.mustBeNamedBy)
+		for _, name := range ring.names {
+			mention := regexp.MustCompile(`\b` + regexp.QuoteMeta(name) + `\b`)
+			var seenInRequired bool
+			err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+				if err != nil {
+					return err
 				}
-				if path != root {
-					if _, statErr := os.Stat(filepath.Join(path, ".git")); statErr == nil {
+				// Skip dot directories and anything holding its own .git entry. Without this the
+				// walk descends into the agent worktrees this repo keeps under .claude/, finds the
+				// same two files in a nested checkout, and fails on a tree where nothing is wrong.
+				if d.IsDir() {
+					if path != root && strings.HasPrefix(d.Name(), ".") {
 						return fs.SkipDir
 					}
+					if path != root {
+						if _, statErr := os.Stat(filepath.Join(path, ".git")); statErr == nil {
+							return fs.SkipDir
+						}
+					}
+					return nil
+				}
+				if !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
+					return nil
+				}
+				data, readErr := os.ReadFile(path)
+				if readErr != nil {
+					return readErr
+				}
+				if !mention.Match(data) {
+					return nil
+				}
+				rel, relErr := filepath.Rel(root, path)
+				if relErr != nil {
+					rel = path
+				}
+				if rel == required {
+					seenInRequired = true
+				}
+				if !allowed[rel] {
+					t.Errorf("%s names %s: these scripts run for the daemon's own scheduled run and nothing else", rel, name)
 				}
 				return nil
+			})
+			if err != nil {
+				t.Fatalf("walk: %v", err)
 			}
-			if !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
-				return nil
+			// The other half of the rule, and the half a deleted call site would break: the
+			// chain must still be wired. Without this the whole test passes on a tree where the
+			// feature was removed.
+			if !seenInRequired {
+				t.Errorf("%s no longer names %s: the daemon is the only thing that starts these scripts", ring.mustBeNamedBy, name)
 			}
-			data, readErr := os.ReadFile(path)
-			if readErr != nil {
-				return readErr
-			}
-			if !strings.Contains(string(data), name) {
-				return nil
-			}
-			rel, relErr := filepath.Rel(root, path)
-			if relErr != nil {
-				rel = path
-			}
-			if rel == filepath.FromSlash("cmd/proxsave/daemon.go") {
-				seenInDaemon = true
-			}
-			if !allowed[rel] {
-				t.Errorf("%s names %s: these scripts run for the daemon's own scheduled run and nothing else", rel, name)
-			}
-			return nil
-		})
-		if err != nil {
-			t.Fatalf("walk: %v", err)
-		}
-		// The other half of the rule, and the half a deleted call site would break: the daemon
-		// must still start them. Without this the whole test passes on a tree where the
-		// feature was removed.
-		if !seenInDaemon {
-			t.Errorf("cmd/proxsave/daemon.go no longer names %s: the daemon is the only thing that starts these scripts", name)
 		}
 	}
 }
@@ -759,7 +806,7 @@ func TestATimedOutOpenLeavesOneProbeNoMatterHowManyRuns(t *testing.T) {
 	base := parkedParentOpens(t)
 
 	for i := 0; i < 8; i++ {
-		if file := openPersonalScriptForExecution(script); file != nil {
+		if file, refusal := openPersonalScriptForExecution(script); refusal == nil {
 			_ = file.Close()
 			t.Fatalf("run %d opened a script whose parent is a FIFO", i)
 		}
@@ -774,7 +821,7 @@ func TestATimedOutOpenLeavesOneProbeNoMatterHowManyRuns(t *testing.T) {
 func TestTheProbeBoundIsPerPathNotGlobal(t *testing.T) {
 	stuck := fifoParentScript(t)
 	base := parkedParentOpens(t)
-	if file := openPersonalScriptForExecution(stuck); file != nil {
+	if file, refusal := openPersonalScriptForExecution(stuck); refusal == nil {
 		_ = file.Close()
 		t.Fatal("opened a script whose parent is a FIFO")
 	}
@@ -785,16 +832,16 @@ func TestTheProbeBoundIsPerPathNotGlobal(t *testing.T) {
 	if err := syscall.Mkfifo(otherFifo, 0o755); err != nil {
 		t.Skipf("mkfifo is unavailable here: %v", err)
 	}
-	if file := openPersonalScriptForExecution(filepath.Join(otherFifo, "post.sh")); file != nil {
+	if file, refusal := openPersonalScriptForExecution(filepath.Join(otherFifo, "post.sh")); refusal == nil {
 		_ = file.Close()
 		t.Fatal("opened a second script whose parent is a FIFO")
 	}
 	waitForParkedParentOpens(t, base+2, "a second stuck path must get its own probe")
 
 	healthy := writePersonalScript(t, t.TempDir(), "ok.sh", "true")
-	file := openPersonalScriptForExecution(healthy)
-	if file == nil {
-		t.Fatal("a healthy script was refused while an unrelated path was stuck: the bound is global, not per path")
+	file, refusal := openPersonalScriptForExecution(healthy)
+	if refusal != nil {
+		t.Fatalf("a healthy script was refused while an unrelated path was stuck: the bound is global, not per path: %v", refusal)
 	}
 	_ = file.Close()
 }
@@ -807,7 +854,7 @@ func TestTheProbeBoundIsPerPathNotGlobal(t *testing.T) {
 func TestTheProbeBoundLiftsWhenTheOpenFinallyReturns(t *testing.T) {
 	script := fifoParentScript(t)
 	base := parkedParentOpens(t)
-	if file := openPersonalScriptForExecution(script); file != nil {
+	if file, refusal := openPersonalScriptForExecution(script); refusal == nil {
 		_ = file.Close()
 		t.Fatal("opened a script whose parent is a FIFO")
 	}
@@ -822,9 +869,180 @@ func TestTheProbeBoundLiftsWhenTheOpenFinallyReturns(t *testing.T) {
 		t.Fatalf("close the writer so the path blocks again: %v", err)
 	}
 
-	if file := openPersonalScriptForExecution(script); file != nil {
+	if file, refusal := openPersonalScriptForExecution(script); refusal == nil {
 		_ = file.Close()
 		t.Fatal("opened a script whose parent is a FIFO")
 	}
 	waitForParkedParentOpens(t, base+1, "the path blocked again and the bound never lifted: the script is refused for the daemon's lifetime")
+}
+
+// capturePersonalScriptStart runs one script through the REPORTING starter with the default
+// logger redirected, so a test can assert on what the daemon would have written. The logger is
+// handed in AND installed as the default because the two halves of the line come from different
+// places: the debug bracket takes the logger it is given, the warning goes to the package-level
+// default.
+func capturePersonalScriptStart(t *testing.T, key, path string) string {
+	t.Helper()
+	logger := logging.New(types.LogLevelDebug, false)
+	buf := &bytes.Buffer{}
+	logger.SetOutput(buf)
+	prev := logging.GetDefaultLogger()
+	t.Cleanup(func() { logging.SetDefaultLogger(prev) })
+	logging.SetDefaultLogger(logger)
+	runPersonalScriptReporting(logger, key, path, nil)
+	return buf.String()
+}
+
+// TestAPerRunGateRefusalIsReported is the fix for the hole the startup gate never covered.
+//
+// The startup gate speaks once, about the path as it was when the daemon started. The per-run
+// gate re-validates the OPENED INODE before every invocation, which is the only thing standing
+// between an accepted foreign-owned ancestor and its owner swapping the file, and until this it
+// refused in total silence: the daemon knew the script had not run, the operator saw an ordinary
+// green backup and had nothing anywhere to tell the two apart.
+//
+// Each row is a way the file can stop being the one the daemon was told to trust, and the point
+// of asserting the reason and not just the presence of a line is that "it is gone" and "it is no
+// longer safe to run" send an operator to two different places.
+func TestAPerRunGateRefusalIsReported(t *testing.T) {
+	dir := t.TempDir()
+
+	notExecutable := filepath.Join(dir, "not-executable.sh")
+	if err := os.WriteFile(notExecutable, []byte("#!/bin/sh\nexit 0\n"), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	groupWritable := filepath.Join(dir, "group-writable.sh")
+	if err := os.WriteFile(groupWritable, []byte("#!/bin/sh\nexit 0\n"), 0o700); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	// Chmod, not the WriteFile mode: the process umask clears the group bits this row is
+	// entirely about, and the file then passes the check the row exists to fail.
+	if err := os.Chmod(groupWritable, 0o770); err != nil {
+		t.Fatalf("chmod: %v", err)
+	}
+
+	cases := []struct {
+		name       string
+		key        string
+		path       string
+		wantReason string
+	}{
+		{"the file is gone", personalScriptPreRunKey, filepath.Join(dir, "nope.sh"), "could not be opened"},
+		{"the path is a directory", personalScriptPostRunKey, dir, "is not a regular file"},
+		{"the execute bit is gone", personalScriptPreRunKey, notExecutable, "is not executable (mode 0600)"},
+		{"the group can write it", personalScriptPostRunKey, groupWritable, "is writable by group or others (mode 0770)"},
+		{"the path is relative", personalScriptPreRunKey, "personal-script.sh", "is not an absolute path"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			logged := capturePersonalScriptStart(t, tc.key, tc.path)
+
+			if !strings.Contains(logged, "WARNING") {
+				t.Fatalf("a refused script must produce one WARNING; got %q", logged)
+			}
+			if !strings.Contains(logged, tc.key) {
+				t.Errorf("the warning must name the variable to edit (%s); got %q", tc.key, logged)
+			}
+			if !strings.Contains(logged, "was not started for this run") {
+				t.Errorf("the warning must say the script did not run; got %q", logged)
+			}
+			if !strings.Contains(logged, tc.wantReason) {
+				t.Errorf("the warning must carry the reason %q; got %q", tc.wantReason, logged)
+			}
+			if !strings.Contains(logged, tc.path) {
+				t.Errorf("the warning must carry the path %q; got %q", tc.path, logged)
+			}
+		})
+	}
+}
+
+// TestTheScriptsOwnFailuresAreStillSilent is the other half, and the one a well-meant widening
+// of the fix above would break. What gained a voice is ProxSave's decision NOT TO START a
+// script. What the script itself does when it does start is still the operator's business:
+// DAEMON.md promises nothing it prints or fails at reaches any surface, and an exit code or a
+// missing shebang is exactly that.
+func TestTheScriptsOwnFailuresAreStillSilent(t *testing.T) {
+	dir := t.TempDir()
+
+	noShebang := filepath.Join(dir, "no-shebang")
+	if err := os.WriteFile(noShebang, []byte("this is not a program\n"), 0o700); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	cases := []struct {
+		name string
+		path string
+	}{
+		{"exits non-zero", writePersonalScript(t, dir, "exit3.sh", "exit 3")},
+		{"has no shebang and cannot be forked", noShebang},
+		{"is not configured at all", ""},
+		{"is whitespace only", "   "},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			logged := capturePersonalScriptStart(t, personalScriptPreRunKey, tc.path)
+			if strings.Contains(logged, "WARNING") {
+				t.Errorf("the script's own outcome must reach no surface at any level; got %q", logged)
+			}
+		})
+	}
+}
+
+// TestAnUnconfiguredScriptIsNotEvenTraced pins the quiet end of the bracket. A daemon with no
+// personal scripts configured is the shipped state, and it must not pay two debug lines per run
+// telling a reader that nothing was configured - the startup diagnostic already said so once.
+func TestAnUnconfiguredScriptIsNotEvenTraced(t *testing.T) {
+	if logged := capturePersonalScriptStart(t, personalScriptPreRunKey, ""); logged != "" {
+		t.Errorf("an empty setting must produce no output at all, not even a debug bracket; got %q", logged)
+	}
+}
+
+// TestTheDebugBracketFramesEveryStart asserts the bracket itself, on both outcomes. It is what
+// gives an operator running at debug level the ordering they need to read a slow run: the pre
+// script's End line precedes the backup's launch line, and its duration is the delay DAEMON.md
+// warns a slow pre script adds to the monitor's start signal.
+func TestTheDebugBracketFramesEveryStart(t *testing.T) {
+	dir := t.TempDir()
+
+	t.Run("a script that runs", func(t *testing.T) {
+		logged := capturePersonalScriptStart(t, personalScriptPreRunKey, writePersonalScript(t, dir, "ok.sh", "exit 0"))
+		if !strings.Contains(logged, "Start personal script") || !strings.Contains(logged, "End personal script") {
+			t.Fatalf("both ends of the bracket must be written; got %q", logged)
+		}
+		if strings.Contains(logged, "error=") {
+			t.Errorf("a script that started must not close its bracket with an error; got %q", logged)
+		}
+	})
+
+	t.Run("a script that is refused", func(t *testing.T) {
+		logged := capturePersonalScriptStart(t, personalScriptPreRunKey, filepath.Join(dir, "gone.sh"))
+		if !strings.Contains(logged, "Start personal script") || !strings.Contains(logged, "End personal script") {
+			t.Fatalf("both ends of the bracket must be written; got %q", logged)
+		}
+		if !strings.Contains(logged, "error=") {
+			t.Errorf("a refused script must close its bracket with the refusal; got %q", logged)
+		}
+	})
+}
+
+// TestTheDetachedStarterReportsItsRefusalToo covers the two paths that start the post script and
+// walk away - the abandoned-child unwind and any shutdown. The daemon is leaving on both, which
+// is when an operator is least able to reconstruct what happened afterwards, so the one line is
+// worth more there rather than less.
+func TestTheDetachedStarterReportsItsRefusalToo(t *testing.T) {
+	logger := logging.New(types.LogLevelDebug, false)
+	buf := &bytes.Buffer{}
+	logger.SetOutput(buf)
+	prev := logging.GetDefaultLogger()
+	t.Cleanup(func() { logging.SetDefaultLogger(prev) })
+	logging.SetDefaultLogger(logger)
+
+	startPersonalScriptDetachedReporting(logger, personalScriptPostRunKey, filepath.Join(t.TempDir(), "gone.sh"))
+
+	logged := buf.String()
+	if !strings.Contains(logged, personalScriptPostRunKey) || !strings.Contains(logged, "was not started for this run") {
+		t.Errorf("the detached starter must report a refusal exactly as the waited one does; got %q", logged)
+	}
 }

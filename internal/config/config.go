@@ -112,6 +112,11 @@ type Config struct {
 	MinDiskSecondaryGB float64
 	MinDiskCloudGB     float64
 	SafetyFactor       float64
+	// SkipPermissionCheck feeds checks.CheckerConfig.SkipPermissionCheck, which drops the
+	// ownership/mode verification of the backup and log directories from the pre-backup
+	// checks. Test-only, as the template says: a host that skips it can write archives
+	// nobody but root can read back.
+	SkipPermissionCheck bool
 
 	// Optimization settings
 	EnableDeduplication    bool
@@ -614,6 +619,12 @@ func (c *Config) parseOptimizationSettings() {
 	c.MinDiskPrimaryGB = sanitizeMinDisk(c.getFloat("MIN_DISK_SPACE_PRIMARY_GB", 10.0))
 	c.MinDiskSecondaryGB = sanitizeMinDisk(c.getFloat("MIN_DISK_SPACE_SECONDARY_GB", c.MinDiskPrimaryGB))
 	c.MinDiskCloudGB = sanitizeMinDisk(c.getFloat("MIN_DISK_SPACE_CLOUD_GB", c.MinDiskPrimaryGB))
+
+	// SKIP_PERMISSION_CHECK ships in the template and is listed in envOverrideKeys, so it
+	// was settable and readable while nothing carried it to the checker: the key looked
+	// honoured and was inert. It is read here with the other knobs configurePreBackupChecker
+	// copies into checks.CheckerConfig.
+	c.SkipPermissionCheck = c.getBool("SKIP_PERMISSION_CHECK", false)
 }
 
 func (c *Config) parseSecuritySettings() {
@@ -1870,4 +1881,28 @@ func (c *Config) GetRetentionPolicy() string {
 		return "gfs"
 	}
 	return "simple"
+}
+
+// HealthcheckSelfPingURL resolves one self-mode ping target: the full URL when the operator
+// gave one, otherwise HEALTHCHECK_PING_ENDPOINT (plus the optional ping key) and the check
+// id. It returns "" when there is nothing to ping.
+//
+// It lives here because two places answer the same question and used to answer it
+// differently. The daemon assembles the URL from an id, so a host configured with
+// HEALTHCHECK_ALIVE_ID alone pings correctly and its backups exit 0; the dashboard's
+// healthcheck screen read HEALTHCHECK_ALIVE_URL alone and reported that same host as NOT
+// CONFIGURED. One resolver, one answer.
+func (c *Config) HealthcheckSelfPingURL(fullURL, checkID string) string {
+	if url := strings.TrimSpace(fullURL); url != "" {
+		return url
+	}
+	id := strings.TrimSpace(checkID)
+	base := strings.TrimRight(strings.TrimSpace(c.HealthcheckPingEndpoint), "/")
+	if id == "" || base == "" {
+		return ""
+	}
+	if key := strings.TrimSpace(c.HealthcheckPingKey); key != "" {
+		return base + "/" + key + "/" + id
+	}
+	return base + "/" + id
 }

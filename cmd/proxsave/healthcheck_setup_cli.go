@@ -26,7 +26,7 @@ func logHealthcheckSetupBootstrapOutcome(bootstrap *logging.BootstrapLogger, sta
 	case orchestrator.HealthcheckSetupEligibleSelf:
 		logBootstrapInfo(bootstrap, "Healthcheck setup: self mode (reachability check of your own alive URL)")
 	case orchestrator.HealthcheckSetupSkipSelfMode:
-		logBootstrapInfo(bootstrap, "Healthcheck setup: self mode but no alive URL configured yet (skipping)")
+		logBootstrapInfo(bootstrap, "Healthcheck setup: self mode but no alive check configured yet, neither a ping URL nor a check id (skipping)")
 	case orchestrator.HealthcheckSetupSkipIdentityUnavailable:
 		// A-aware: no ServerID vs missing relay secret read distinctly, and the
 		// missing-secret copy no longer says "pair Telegram" (the relay secret is now

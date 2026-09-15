@@ -28,8 +28,8 @@ func TestMaybeApplyPBSConfigsFromStage_SkipsWhenNonRoot(t *testing.T) {
 	pbsStagedApplyGeteuidFn = func() int { return 1000 }
 
 	stageRoot := "/stage"
-	if err := fakeFS.WriteFile(stageRoot+"/etc/proxmox-backup/acme/accounts.cfg", []byte("account: a1\n    foo bar\n"), 0o640); err != nil {
-		t.Fatalf("write staged accounts.cfg: %v", err)
+	if err := fakeFS.WriteFile(stageRoot+"/etc/proxmox-backup/acme/accounts/le", []byte(`{"account":{"status":"valid"}}`), 0o600); err != nil {
+		t.Fatalf("write staged ACME account: %v", err)
 	}
 
 	plan := &RestorePlan{
@@ -41,7 +41,7 @@ func TestMaybeApplyPBSConfigsFromStage_SkipsWhenNonRoot(t *testing.T) {
 		t.Fatalf("maybeApplyPBSConfigsFromStage: %v", err)
 	}
 
-	if _, err := fakeFS.Stat("/etc/proxmox-backup/acme/accounts.cfg"); err == nil {
+	if _, err := fakeFS.Stat("/etc/proxmox-backup/acme/accounts/le"); err == nil {
 		t.Fatalf("expected no writes when non-root")
 	}
 }
@@ -69,8 +69,8 @@ func TestMaybeApplyPBSConfigsFromStage_CleanMode_ApiUnavailableFallsBackToFiles(
 	}
 
 	stageRoot := "/stage"
-	if err := fakeFS.WriteFile(stageRoot+"/etc/proxmox-backup/acme/accounts.cfg", []byte("account: a1\n    foo bar\n"), 0o640); err != nil {
-		t.Fatalf("write staged accounts.cfg: %v", err)
+	if err := fakeFS.WriteFile(stageRoot+"/etc/proxmox-backup/acme/accounts/le", []byte(`{"account":{"status":"valid"}}`), 0o600); err != nil {
+		t.Fatalf("write staged ACME account: %v", err)
 	}
 	if err := fakeFS.WriteFile(stageRoot+"/etc/proxmox-backup/traffic-control.cfg", []byte("traffic-control: tc1\n    rate 10mbit\n"), 0o640); err != nil {
 		t.Fatalf("write staged traffic-control.cfg: %v", err)
@@ -129,7 +129,7 @@ func TestMaybeApplyPBSConfigsFromStage_CleanMode_ApiUnavailableFallsBackToFiles(
 	}
 
 	for _, path := range []string{
-		"/etc/proxmox-backup/acme/accounts.cfg",
+		"/etc/proxmox-backup/acme/accounts/le",
 		"/etc/proxmox-backup/traffic-control.cfg",
 		"/etc/proxmox-backup/node.cfg",
 		"/etc/proxmox-backup/s3.cfg",
@@ -169,8 +169,8 @@ func TestMaybeApplyPBSConfigsFromStage_MergeMode_ApiUnavailableSkipsApiCategorie
 	}
 
 	stageRoot := "/stage"
-	if err := fakeFS.WriteFile(stageRoot+"/etc/proxmox-backup/acme/accounts.cfg", []byte("account: a1\n    foo bar\n"), 0o640); err != nil {
-		t.Fatalf("write staged accounts.cfg: %v", err)
+	if err := fakeFS.WriteFile(stageRoot+"/etc/proxmox-backup/acme/accounts/le", []byte(`{"account":{"status":"valid"}}`), 0o600); err != nil {
+		t.Fatalf("write staged ACME account: %v", err)
 	}
 	if err := fakeFS.WriteFile(stageRoot+"/etc/proxmox-backup/node.cfg", []byte("node: n1\n    description test\n"), 0o640); err != nil {
 		t.Fatalf("write staged node.cfg: %v", err)
@@ -194,8 +194,8 @@ func TestMaybeApplyPBSConfigsFromStage_MergeMode_ApiUnavailableSkipsApiCategorie
 		t.Fatalf("maybeApplyPBSConfigsFromStage: %v", err)
 	}
 
-	if _, err := fakeFS.Stat("/etc/proxmox-backup/acme/accounts.cfg"); err != nil {
-		t.Fatalf("expected accounts.cfg to exist: %v", err)
+	if _, err := fakeFS.Stat("/etc/proxmox-backup/acme/accounts/le"); err != nil {
+		t.Fatalf("expected the ACME account file to exist: %v", err)
 	}
 
 	// Merge mode requires API for these categories, so they must not be file-applied.
@@ -284,8 +284,8 @@ func TestMaybeApplyPBSConfigsFromStage_ApiErrorsTriggerFallbackOnlyInCleanMode(t
 	}
 
 	stageRoot := "/stage"
-	if err := fakeFS.WriteFile(stageRoot+"/etc/proxmox-backup/acme/accounts.cfg", []byte("account: a1\n    foo bar\n"), 0o640); err != nil {
-		t.Fatalf("write staged accounts.cfg: %v", err)
+	if err := fakeFS.WriteFile(stageRoot+"/etc/proxmox-backup/acme/accounts/le", []byte(`{"account":{"status":"valid"}}`), 0o600); err != nil {
+		t.Fatalf("write staged ACME account: %v", err)
 	}
 	if err := fakeFS.WriteFile(stageRoot+"/etc/proxmox-backup/traffic-control.cfg", []byte("traffic-control: tc1\n    rate 10mbit\n"), 0o640); err != nil {
 		t.Fatalf("write staged traffic-control.cfg: %v", err)
@@ -357,8 +357,8 @@ func TestMaybeApplyPBSConfigsFromStage_ApiErrorsTriggerFallbackOnlyInCleanMode(t
 	fakeFS2 := NewFakeFS()
 	t.Cleanup(func() { _ = os.RemoveAll(fakeFS2.Root) })
 	restoreFS = fakeFS2
-	if err := fakeFS2.WriteFile(stageRoot+"/etc/proxmox-backup/acme/accounts.cfg", []byte("account: a1\n    foo bar\n"), 0o640); err != nil {
-		t.Fatalf("write staged accounts.cfg (merge): %v", err)
+	if err := fakeFS2.WriteFile(stageRoot+"/etc/proxmox-backup/acme/accounts/le", []byte(`{"account":{"status":"valid"}}`), 0o600); err != nil {
+		t.Fatalf("write staged ACME account (merge): %v", err)
 	}
 	if err := fakeFS2.WriteFile(stageRoot+"/etc/proxmox-backup/node.cfg", []byte("node: n1\n    description test\n"), 0o640); err != nil {
 		t.Fatalf("write staged node.cfg (merge): %v", err)

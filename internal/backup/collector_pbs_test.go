@@ -1001,3 +1001,129 @@ func TestCollectPBSConfigSnapshotKeepsUserConfigSecretsWhenEnabled(t *testing.T)
 		}
 	}
 }
+
+// PBS keeps the ACME accounts as a directory of per-account JSON documents. The three
+// tests below pin the three things #313 got wrong: the toggle has to prune the
+// directory, an enabled toggle has to keep it, and the manifest has to describe it as
+// collected instead of warning that a non-existent accounts.cfg is "not configured".
+func TestCollectPBSConfigSnapshotExcludesAcmeAccountsDirWhenDisabled(t *testing.T) {
+	pbsRoot := t.TempDir()
+	accounts := filepath.Join(pbsRoot, "acme", "accounts")
+	if err := os.MkdirAll(accounts, 0o700); err != nil {
+		t.Fatalf("mkdir accounts: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(accounts, "le"), []byte(`{"account":{}}`), 0o600); err != nil {
+		t.Fatalf("write account: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(pbsRoot, "acme", "plugins.cfg"), []byte("standalone: standalone\n"), 0o600); err != nil {
+		t.Fatalf("write plugins.cfg: %v", err)
+	}
+
+	cfg := GetDefaultCollectorConfig()
+	cfg.PBSConfigPath = pbsRoot
+	cfg.BackupPBSAcmeAccounts = false
+	cfg.BackupPBSAcmePlugins = true
+
+	collector := NewCollectorWithDeps(newTestLogger(), cfg, t.TempDir(), types.ProxmoxBS, false, CollectorDeps{})
+	if err := collector.collectPBSConfigSnapshot(context.Background(), pbsRoot); err != nil {
+		t.Fatalf("collectPBSConfigSnapshot failed: %v", err)
+	}
+
+	dest := filepath.Join(collector.tempDir, "etc/proxmox-backup")
+	if _, err := os.Stat(filepath.Join(dest, "acme", "accounts")); err == nil {
+		t.Fatal("expected acme/accounts pruned when BACKUP_PBS_ACME_ACCOUNTS=false")
+	} else if !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("stat acme/accounts: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dest, "acme", "plugins.cfg")); err != nil {
+		t.Fatalf("expected acme/plugins.cfg retained (different toggle): %v", err)
+	}
+}
+
+func TestCollectPBSConfigSnapshotKeepsAcmeAccountsDirWhenEnabled(t *testing.T) {
+	pbsRoot := t.TempDir()
+	accounts := filepath.Join(pbsRoot, "acme", "accounts")
+	if err := os.MkdirAll(accounts, 0o700); err != nil {
+		t.Fatalf("mkdir accounts: %v", err)
+	}
+	for _, name := range []string{"le", "le-staging"} {
+		if err := os.WriteFile(filepath.Join(accounts, name), []byte(`{"account":{}}`), 0o600); err != nil {
+			t.Fatalf("write account %s: %v", name, err)
+		}
+	}
+
+	cfg := GetDefaultCollectorConfig()
+	cfg.PBSConfigPath = pbsRoot
+	cfg.BackupPBSAcmeAccounts = true
+
+	collector := NewCollectorWithDeps(newTestLogger(), cfg, t.TempDir(), types.ProxmoxBS, false, CollectorDeps{})
+	if err := collector.collectPBSConfigSnapshot(context.Background(), pbsRoot); err != nil {
+		t.Fatalf("collectPBSConfigSnapshot failed: %v", err)
+	}
+
+	dest := filepath.Join(collector.tempDir, "etc/proxmox-backup", "acme", "accounts")
+	for _, name := range []string{"le", "le-staging"} {
+		if _, err := os.Stat(filepath.Join(dest, name)); err != nil {
+			t.Fatalf("expected account %s collected when BACKUP_PBS_ACME_ACCOUNTS=true: %v", name, err)
+		}
+	}
+}
+
+func TestCollectPBSManifestACMEAccountsDescribesDirectory(t *testing.T) {
+	pbsRoot := t.TempDir()
+	accounts := filepath.Join(pbsRoot, "acme", "accounts")
+	if err := os.MkdirAll(accounts, 0o700); err != nil {
+		t.Fatalf("mkdir accounts: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(accounts, "le"), []byte(`{"account":{}}`), 0o600); err != nil {
+		t.Fatalf("write account: %v", err)
+	}
+
+	cfg := GetDefaultCollectorConfig()
+	cfg.PBSConfigPath = pbsRoot
+	cfg.BackupPBSAcmeAccounts = true
+
+	collector := NewCollectorWithDeps(newTestLogger(), cfg, t.TempDir(), types.ProxmoxBS, false, CollectorDeps{})
+	if err := collector.collectPBSConfigSnapshot(context.Background(), pbsRoot); err != nil {
+		t.Fatalf("collectPBSConfigSnapshot failed: %v", err)
+	}
+	collector.initPBSManifest()
+	if err := collector.collectPBSManifestACMEAccounts(context.Background(), pbsRoot); err != nil {
+		t.Fatalf("collectPBSManifestACMEAccounts failed: %v", err)
+	}
+
+	entry, ok := collector.pbsManifest["acme/accounts"]
+	if !ok {
+		t.Fatalf("expected manifest key acme/accounts, got %v", collector.pbsManifest)
+	}
+	if entry.Status != StatusCollected {
+		t.Fatalf("expected status %s, got %s", StatusCollected, entry.Status)
+	}
+	if _, stale := collector.pbsManifest["acme/accounts.cfg"]; stale {
+		t.Fatal("manifest still carries the acme/accounts.cfg key PBS never creates")
+	}
+	if collector.stats.FilesNotFound != 0 {
+		t.Fatalf("expected no not-found count for a present directory, got %d", collector.stats.FilesNotFound)
+	}
+}
+
+func TestCollectPBSManifestACMEAccountsCountsMissingDirectory(t *testing.T) {
+	pbsRoot := t.TempDir()
+
+	cfg := GetDefaultCollectorConfig()
+	cfg.PBSConfigPath = pbsRoot
+	cfg.BackupPBSAcmeAccounts = true
+
+	collector := NewCollectorWithDeps(newTestLogger(), cfg, t.TempDir(), types.ProxmoxBS, false, CollectorDeps{})
+	collector.initPBSManifest()
+	if err := collector.collectPBSManifestACMEAccounts(context.Background(), pbsRoot); err != nil {
+		t.Fatalf("collectPBSManifestACMEAccounts failed: %v", err)
+	}
+
+	if got := collector.pbsManifest["acme/accounts"].Status; got != StatusNotFound {
+		t.Fatalf("expected status %s for an absent directory, got %s", StatusNotFound, got)
+	}
+	if collector.stats.FilesNotFound != 1 {
+		t.Fatalf("expected 1 not-found, got %d", collector.stats.FilesNotFound)
+	}
+}

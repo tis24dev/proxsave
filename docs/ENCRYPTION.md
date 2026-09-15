@@ -40,7 +40,7 @@ Proxsave uses the **[age](https://age-encryption.org/)** format (via `filippo.io
 | **Encryption algorithm** | ChaCha20-Poly1305 (AEAD) with X25519 key exchange |
 | **Key types** | Passphrase or X25519 key pair. SSH public keys (`ssh-ed25519` / `ssh-rsa`) are accepted as recipients but ProxSave cannot decrypt with the matching SSH private key: see the warning below |
 | **Multiple recipients** | Single backup can be decrypted with any configured recipient |
-| **Interactive setup** | `--newkey` (or the first encrypted run) helps you configure recipients |
+| **Interactive setup** | Dashboard **Maintenance** > **New key**, the same flow as `--newkey`; the install wizard runs it too when you turn `Backup encryption (AGE)` on, and so does the first encrypted run with no recipients configured |
 | **Streaming mode** | Encrypts during backup creation, so there is no temporary plaintext **archive**. The staging tree under `/tmp/proxsave` is plaintext |
 | **Security** | Passphrases read with `term.ReadPassword`, buffers zeroed after use |
 | **File permissions** | Recipient files are created 0700/0600; the security check verifies them and auto-fixes only when `AUTO_FIX_PERMISSIONS` is enabled (otherwise it warns) |
@@ -85,7 +85,7 @@ covers backup staging:
 
 Every path below belongs to a **live** run until that run ends, so check first and delete by
 name. A glob run against a working host takes the staging directory out from under a backup,
-a decrypt or a restore in progress — and the safety tarballs are not leftovers at all, they
+a decrypt or a restore in progress, and the safety tarballs are not leftovers at all: they
 are the restore's rollback.
 
 ```bash
@@ -117,7 +117,7 @@ The same applies in reverse, and the restore side is worse. `proxsave --decrypt`
 Nothing sweeps it either, since it is not registered. A restore also leaves its rollback and
 safety tarballs (`restore_backup_`, `network_rollback_backup_`, `firewall_rollback_backup_`,
 `ha_rollback_backup_`, `pve_access_control_rollback_backup_`, each `_<timestamp>.tar.gz`)
-deliberately in place — they are the rollback. Those are written **mode 0600**, so their
+deliberately in place: they are the rollback. Those are written **mode 0600**, so their
 contents are not readable by other local users even though `/tmp/proxsave` itself is `0755`
 and shared; their names and sizes still are. Clean them up yourself once a restore has
 settled.
@@ -129,9 +129,22 @@ than land it on a shared filesystem.
 
 ## Quick Start
 
+Encryption is set up from the dashboard: run `proxsave` with no arguments on a TTY and it
+opens. Two of its rows cover everything below.
+
+- **Install** > **Edit install** re-runs the install wizard against the existing
+  configuration. Its `Backup encryption (AGE)` toggle is what writes `ENCRYPT_ARCHIVE`,
+  and when you turn it on the AGE recipient setup runs straight after the wizard.
+- **Maintenance** > **New key** opens that same recipient setup on its own.
+
+The flags in this guide reach the same flows without going through the dashboard, for
+headless hosts, scripts, and recovery. They still draw the TUI; add `--cli` for text-mode
+prompts when the terminal cannot render it. See [DASHBOARD.md](DASHBOARD.md).
+
 ### 1. Generate Recipients
 
-**Option A: Interactive wizard** (recommended for beginners):
+**Option A: Interactive wizard** (recommended for beginners). In the dashboard,
+**Maintenance** > **New key**; headless, the same flow is:
 
 ```bash
 proxsave --newkey
@@ -153,7 +166,12 @@ grep "# public key:" age-keys.txt | cut -d: -f2 | tr -d ' '
 
 ### 2. Configure Environment
 
-Add to `configs/backup.env`:
+`ENCRYPT_ARCHIVE` is the one key the wizard writes for you (dashboard **Install** >
+**Edit install**, field `Backup encryption (AGE)`). The recipient keys are not wizard
+fields: `--newkey` writes the recipient **file** and never edits `configs/backup.env`, so
+an inline recipient or a non-default file path is a hand edit.
+
+In `configs/backup.env`:
 
 ```bash
 # Enable encryption
@@ -169,12 +187,21 @@ AGE_RECIPIENT_FILE=${BASE_DIR}/identity/age/recipient.txt
 
 ### 3. Run Encrypted Backup
 
+From the dashboard, the **Backup** row. From a script or a headless host:
+
 ```bash
-proxsave
+proxsave --backup
 # Archive will be encrypted (archive ends with .age; if bundling is enabled, output ends with .age.bundle.tar)
 ```
 
+A bare `proxsave` opens the dashboard on a terminal and runs the backup only when it is
+not on one (cron, a systemd unit, a pipe), so scripts should say `--backup` explicitly.
+On a host scheduled by the resident daemon you do not start runs by hand at all: the
+daemon does it. See [DAEMON.md](DAEMON.md).
+
 ### 4. Decrypt When Needed
+
+From the dashboard, **Tools** > **Decrypt**. Without the dashboard:
 
 ```bash
 # Interactive decryption
@@ -252,7 +279,10 @@ SSH recipients carry their own asymmetry, in the opposite direction:
 
 ### Interactive Wizard
 
-You can create/update recipients in two ways:
+The everyday route is the dashboard: **Maintenance** > **New key**. It runs the same
+recipient setup as the flags below, in the same session.
+
+The flags reach it without the dashboard, on a headless host or from a script:
 
 ```bash
 # Dedicated wizard (TUI by default)
@@ -292,8 +322,12 @@ is also rejected outright.
 
 ### Backup Execution
 
+Nothing about the run changes when encryption is on, so it is the ordinary backup: the
+resident daemon on schedule, the dashboard **Backup** row when you want one now, or
+`proxsave --backup` from a script or a headless host.
+
 ```bash
-proxsave
+proxsave --backup
 ```
 
 **Encryption flow**:
@@ -364,7 +398,9 @@ fixed-salt archives.
 
 ## Decrypting Backups
 
-The `--decrypt` workflow converts an encrypted backup into a decrypted bundle for inspection or transfer.
+The decrypt workflow converts an encrypted backup into a decrypted bundle for inspection or
+transfer. In the dashboard it is **Tools** > **Decrypt**; the flag reaches the same flow on
+a headless host (add `--cli` for text-mode prompts):
 
 ```bash
 proxsave --decrypt
@@ -418,7 +454,9 @@ rm -rf /tmp/emergency   # once you have what you needed
 
 ## Restoring Encrypted Backups
 
-Encrypted backups can be restored using the standard `--restore` command. The decryption is handled automatically during the restore workflow.
+Encrypted backups are restored through the standard restore workflow, which handles the
+decryption automatically. In the dashboard it is **Tools** > **Restore**; the flag reaches
+the same flow on a headless host (add `--cli` for text-mode prompts).
 
 ### Quick Restore Summary
 
@@ -507,7 +545,8 @@ To really drop a compromised recipient, clear all of these:
    `AGE_RECIPIENT_FILE`, which is only `${BASE_DIR}/identity/age/recipient.txt` when the key
    is empty.
 
-Then run:
+Then run the recipient setup, from the dashboard (**Maintenance** > **New key**) or the
+flag:
 
 ```bash
 proxsave --newkey
@@ -649,7 +688,7 @@ rm -f /tmp/emergency/archive.inner
 ### Encryption Implementation
 
 - **Algorithm**: ChaCha20-Poly1305 (AEAD) with X25519 ECDH
-- **Key derivation**: scrypt (N=2^15, r=8, p=1) for passphrases. The current scheme uses a **per-installation random salt** (v2), generated once, stored `0600` at `identity/age/passphrase.salt`, mirrored as the `# passphrase-salt:` line inside the recipient file (every backup rewrites that comment from the sibling before reading it back, so the sibling wins whenever the two differ; once the sibling is gone the comment still supplies the salt stamped into new manifests, but it can **not** re-derive the recipient — the setup wizard reads the sibling alone and mints a fresh random salt when it is missing, yielding a different recipient), and embedded in each manifest as `passphrase_salt` so the passphrase alone can re-derive the recipient on any host. At decrypt ProxSave tries salts in order: the manifest's per-install salt first, then two fixed legacy namespaces (`proxsave/age-passphrase/v1`, then the pre-rebrand `proxmox-backup-go/age-passphrase/v1`), so archives from older versions and from before the rename stay decryptable.
+- **Key derivation**: scrypt (N=2^15, r=8, p=1) for passphrases. The current scheme uses a **per-installation random salt** (v2), generated once, stored `0600` at `identity/age/passphrase.salt`, mirrored as the `# passphrase-salt:` line inside the recipient file (every backup rewrites that comment from the sibling before reading it back, so the sibling wins whenever the two differ; once the sibling is gone the comment still supplies the salt stamped into new manifests, but it can **not** re-derive the recipient, because the setup wizard reads the sibling alone and mints a fresh random salt when it is missing, yielding a different recipient), and embedded in each manifest as `passphrase_salt` so the passphrase alone can re-derive the recipient on any host. At decrypt ProxSave tries salts in order: the manifest's per-install salt first, then two fixed legacy namespaces (`proxsave/age-passphrase/v1`, then the pre-rebrand `proxmox-backup-go/age-passphrase/v1`), so archives from older versions and from before the rename stay decryptable.
 - **Random nonces**: Unique per encryption operation
 - **Authentication**: Poly1305 MAC prevents tampering
 
@@ -667,7 +706,7 @@ rm -f /tmp/emergency/archive.inner
 
 ### Private Key Protection
 
-**⚠️ CRITICAL**: Private keys allow decryption of ALL backups. Protect them as you would the data itself.
+**CRITICAL**: Private keys allow decryption of ALL backups. Protect them as you would the data itself.
 
 **Storage recommendations** (choose 2+ for redundancy):
 
@@ -742,6 +781,8 @@ AGE encryption meets requirements for:
 - **[Cluster Recovery](CLUSTER_RECOVERY.md)** - Disaster recovery procedures
 
 ### Reference
+- **[Dashboard](DASHBOARD.md)** - The interactive menu: New key, Backup, Decrypt, Restore
+- **[Daemon](DAEMON.md)** - The resident scheduler that runs the encrypted backups
 - **[CLI Reference](CLI_REFERENCE.md)** - All command flags including `--decrypt`, `--newkey`
 - **[Troubleshooting](TROUBLESHOOTING.md)** - Common encryption/decryption issues
 - **[Examples](EXAMPLES.md)** - Real-world encrypted backup scenarios
@@ -771,12 +812,17 @@ AGE_RECIPIENT=age1abc123...,age1def456...
 
 ### Common Commands
 
+On a terminal, `proxsave` with no arguments opens the dashboard, where these are
+**Maintenance** > **New key**, **Backup**, **Tools** > **Decrypt** and **Tools** >
+**Restore**. The flags below reach the same flows without the dashboard, on a headless host
+or from a script; add `--cli` when the terminal cannot draw the TUI.
+
 ```bash
 # Generate new keys
 proxsave --newkey
 
 # Run encrypted backup
-proxsave
+proxsave --backup
 
 # Decrypt backup (interactive)
 proxsave --decrypt

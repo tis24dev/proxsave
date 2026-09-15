@@ -11,6 +11,19 @@ import (
 	"time"
 )
 
+const (
+	// pbsAcmeAccountsRelDir is where PBS keeps the ACME account registrations, relative to
+	// the PBS configuration root: one JSON document per account (acme/accounts/le,
+	// acme/accounts/le-staging), created 0700 root:root. There is no acme/accounts.cfg on
+	// any PBS release; only the ACME plugins live in a single acme/plugins.cfg (#313).
+	pbsAcmeAccountsRelDir = "acme/accounts"
+
+	// pbsAcmeAccountsExcludePattern prunes that directory from the /etc/proxmox-backup
+	// snapshot when BACKUP_PBS_ACME_ACCOUNTS is off. The account documents hold the ACME
+	// private keys, so the toggle has to remove the directory, not a file that never exists.
+	pbsAcmeAccountsExcludePattern = "**/acme/accounts"
+)
+
 func (c *Collector) pbsConfigPath() string {
 	if c.config != nil && c.config.PBSConfigPath != "" {
 		return c.systemPath(c.config.PBSConfigPath)
@@ -118,7 +131,13 @@ func (c *Collector) collectPBSConfigSnapshot(ctx context.Context, root string) e
 		extraExclude = append(extraExclude, "node.cfg")
 	}
 	if !c.config.BackupPBSAcmeAccounts {
-		extraExclude = append(extraExclude, "**/acme/accounts.cfg")
+		// PBS keeps the ACME accounts as a DIRECTORY of per-account JSON documents
+		// (acme/accounts/<name>), not as an acme/accounts.cfg file, so the pattern has to
+		// name the directory: safeCopyDir prunes a subtree only when the pattern matches
+		// the directory itself. It stays anchored to acme/ because uniqueCandidates also
+		// matches a bare basename, and a plain "accounts" would drop every file of that
+		// name anywhere in the backup.
+		extraExclude = append(extraExclude, pbsAcmeAccountsExcludePattern)
 	}
 	if !c.config.BackupPBSAcmePlugins {
 		extraExclude = append(extraExclude, "**/acme/plugins.cfg")
@@ -179,6 +198,44 @@ func (c *Collector) setPBSManifestEntry(ctx context.Context, root, key, descript
 	c.pbsManifest[key] = c.collectPBSConfigFile(ctx, root, key, description, enabled, disableHint)
 }
 
+// setPBSManifestDirEntry records the manifest entry for a PBS configuration DIRECTORY.
+// collectPBSConfigFile cannot describe one: os.Stat succeeds on a directory, safeCopyFile
+// then skips it as a non-regular file and returns nil, so the entry would read "collected"
+// for something never copied. The bytes are already in the archive from the
+// /etc/proxmox-backup snapshot (brickPBSConfigDirectoryCopy runs before the manifest
+// bricks), so this only describes what that snapshot captured, the same way
+// populatePVEManifest describes the PVE directories.
+func (c *Collector) setPBSManifestDirEntry(root, key, description string, enabled bool, disableHint string) {
+	src := filepath.Join(root, key)
+	dest := filepath.Join(c.tempDir, "etc/proxmox-backup", key)
+	entry := c.describePathForManifest(src, dest, enabled)
+	c.pbsManifest[key] = entry
+
+	switch entry.Status {
+	case StatusCollected:
+		c.logger.Info("  %s: collected", description)
+	case StatusDisabled:
+		if strings.TrimSpace(disableHint) != "" {
+			c.logger.Info("  %s: disabled (%s=false)", description, disableHint)
+		} else {
+			c.logger.Info("  %s: disabled", description)
+		}
+	case StatusSkipped:
+		c.incFilesSkipped()
+		c.logger.Info("  %s: skipped (excluded)", description)
+	case StatusNotFound:
+		c.incFilesNotFound()
+		if strings.TrimSpace(disableHint) != "" {
+			c.logger.Warning("  %s: not configured. If unused, set %s=false to disable.", description, disableHint)
+		} else {
+			c.logger.Warning("  %s: not configured", description)
+		}
+	default:
+		c.incFilesFailed()
+		c.logger.Warning("  %s: failed - %s", description, entry.Error)
+	}
+}
+
 func (c *Collector) collectPBSManifestDatastore(ctx context.Context, root string) error {
 	c.logger.Info("Collecting PBS configuration files:")
 	c.setPBSManifestEntry(ctx, root, "datastore.cfg", "Datastore configuration", c.config.BackupDatastoreConfigs, "BACKUP_DATASTORE_CONFIGS")
@@ -195,8 +252,8 @@ func (c *Collector) collectPBSManifestNode(ctx context.Context, root string) err
 	return nil
 }
 
-func (c *Collector) collectPBSManifestACMEAccounts(ctx context.Context, root string) error {
-	c.setPBSManifestEntry(ctx, root, filepath.Join("acme", "accounts.cfg"), "ACME accounts", c.config.BackupPBSAcmeAccounts, "BACKUP_PBS_ACME_ACCOUNTS")
+func (c *Collector) collectPBSManifestACMEAccounts(_ context.Context, root string) error {
+	c.setPBSManifestDirEntry(root, pbsAcmeAccountsRelDir, "ACME accounts", c.config.BackupPBSAcmeAccounts, "BACKUP_PBS_ACME_ACCOUNTS")
 	return nil
 }
 

@@ -90,7 +90,10 @@ func TestRedetectPBSHostBackupNoPveWarning(t *testing.T) {
 	if !strings.Contains(out, "host-backup mode") {
 		t.Fatalf("expected host-backup framing, got:\n%s", out)
 	}
-	if strings.Contains(out, "/etc/pve") {
+	// The assertion is on the warning, not on the string "/etc/pve": the detection
+	// probe trace names every candidate it looked at, /etc/pve among them, and that is
+	// a debug line about a path that missed, not a warning about a missing bind mount.
+	if strings.Contains(out, "bind mount may be missing") {
 		t.Fatalf("PBS host must not get an /etc/pve warning, got:\n%s", out)
 	}
 }

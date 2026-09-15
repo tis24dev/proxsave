@@ -147,8 +147,8 @@ func inspectPersonalScripts(cfg *config.Config, daemonUID int) personalScriptsDi
 		return unknownPersonalScripts(daemonUID, nil)
 	}
 	return personalScriptsDiagnostics{
-		Pre:  inspectPersonalScript("PERSONAL_SCRIPT_PRE_RUN", cfg.PersonalScriptPreRun, daemonUID),
-		Post: inspectPersonalScript("PERSONAL_SCRIPT_POST_RUN", cfg.PersonalScriptPostRun, daemonUID),
+		Pre:  inspectPersonalScript(personalScriptPreRunKey, cfg.PersonalScriptPreRun, daemonUID),
+		Post: inspectPersonalScript(personalScriptPostRunKey, cfg.PersonalScriptPostRun, daemonUID),
 	}
 }
 
@@ -157,8 +157,8 @@ func inspectPersonalScripts(cfg *config.Config, daemonUID int) personalScriptsDi
 // differently.
 func unknownPersonalScripts(daemonUID int, cause error) personalScriptsDiagnostics {
 	return personalScriptsDiagnostics{
-		Pre:  unknownPersonalScript("PERSONAL_SCRIPT_PRE_RUN", daemonUID, cause),
-		Post: unknownPersonalScript("PERSONAL_SCRIPT_POST_RUN", daemonUID, cause),
+		Pre:  unknownPersonalScript(personalScriptPreRunKey, daemonUID, cause),
+		Post: unknownPersonalScript(personalScriptPostRunKey, daemonUID, cause),
 	}
 }
 

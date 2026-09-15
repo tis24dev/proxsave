@@ -99,24 +99,56 @@ func TestWhatsNewContinueResolvesNil(t *testing.T) {
 	}
 }
 
-// TestWhatsNewCancelResolvesError pins the abort contract: Esc and q both
-// resolve with a non-nil shell.ErrAborted, type-distinct from continue's nil so
-// a reflex dismiss never counts as "seen".
-func TestWhatsNewCancelResolvesError(t *testing.T) {
+// TestWhatsNewIgnoresEveryExitKeyButEnter pins the one-way-out contract. Esc and q
+// close every other pager in the product; here they must do NOTHING, and the proof
+// is that enter still resolves after them - a screen that had already resolved
+// could not.
+//
+// The reason they are gone is not that dismissing was dangerous: the caller marks
+// the notes seen however the screen is closed, so esc and enter had the same
+// effect under two names, and the footer called one of them "cancel" over a screen
+// with nothing to cancel. Ctrl+C is untouched and stays the emergency exit; it is
+// the router's, above every screen, and never reaches this flow.
+func TestWhatsNewIgnoresEveryExitKeyButEnter(t *testing.T) {
 	for _, key := range []string{"esc", "q"} {
 		t.Run(key, func(t *testing.T) {
 			d := newDriver(t)
 			ch := runFlow(d, context.Background())
 			d.waitScreen("What's new")
+			d.waitBuffer("continue")
+
 			d.keys(key)
-			err := <-ch
-			if err == nil {
-				t.Fatalf("%s must resolve a non-nil error, got nil", key)
+			select {
+			case err := <-ch:
+				t.Fatalf("%s must not resolve Screen 0, got %v", key, err)
+			case <-time.After(200 * time.Millisecond):
 			}
-			if !shell.IsAbort(err) {
-				t.Fatalf("%s must resolve shell.ErrAborted, got %v", key, err)
+
+			d.keys("enter")
+			if err := <-ch; err != nil {
+				t.Fatalf("enter must still resolve nil after %s was ignored, got %v", key, err)
 			}
 		})
+	}
+}
+
+// TestWhatsNewFooterOffersOnlyEnter is the other half: the key is gone AND the
+// screen stops advertising it. A footer that still read "esc cancel" would send a
+// person pressing a key that does nothing, which is the failure this change was
+// made to remove, only reversed.
+func TestWhatsNewFooterOffersOnlyEnter(t *testing.T) {
+	d := newDriver(t)
+	ch := runFlow(d, context.Background())
+	d.waitScreen("What's new")
+	d.waitBuffer("continue")
+
+	if got := d.buf.String(); strings.Contains(got, "esc") {
+		t.Fatalf("Screen 0 must not offer esc in its footer; got %q", got)
+	}
+
+	d.keys("enter")
+	if err := <-ch; err != nil {
+		t.Fatalf("continue (enter) must resolve nil, got %v", err)
 	}
 }
 
@@ -135,6 +167,6 @@ func TestWhatsNewContextCancelSurfacesError(t *testing.T) {
 		t.Fatal("a cancelled context must surface as a non-nil error")
 	}
 	if shell.IsAbort(err) {
-		t.Fatalf("context cancel must be distinct from the Esc abort error, got %v", err)
+		t.Fatalf("context cancel must be distinct from a pager abort, got %v", err)
 	}
 }

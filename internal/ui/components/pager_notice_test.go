@@ -164,3 +164,59 @@ func TestNoticeViewShowsSeverity(t *testing.T) {
 		t.Error("warning notice must show the warning symbol")
 	}
 }
+
+// TestPagerNoAbortSwallowsEscAndQ pins WithPagerNoAbort where it matters: the keys
+// must not resolve the screen by ANY route. Asserting only "the error is nil" would
+// pass on a pager that resolved with a nil error, which is the WithPagerAbort(nil)
+// shape this option exists to not be - there the screen closes and the caller cannot
+// tell the exit from a continue.
+func TestPagerNoAbortSwallowsEscAndQ(t *testing.T) {
+	for _, key := range []string{"esc", "q"} {
+		t.Run(key, func(t *testing.T) {
+			p := NewPager("What's new", "content", WithPagerNoAbort())
+			resolved := false
+			p.Bind(func(_ struct{}, _ error) { resolved = true })
+
+			press(t, p, key)
+			if resolved {
+				t.Fatalf("%s must not resolve a no-abort pager, by any error", key)
+			}
+
+			press(t, p, "enter")
+			if !resolved {
+				t.Fatalf("enter must still resolve after %s was swallowed", key)
+			}
+		})
+	}
+}
+
+// TestPagerNoAbortDropsEscFromTheFooter is the visible half. A key that is gone must
+// stop being offered, or the screen sends a person pressing something inert.
+func TestPagerNoAbortDropsEscFromTheFooter(t *testing.T) {
+	if help := NewPager("What's new", "content", WithPagerNoAbort()).Help(); strings.Contains(help, "esc") {
+		t.Fatalf("a no-abort pager must not offer esc; got %q", help)
+	}
+	if help := NewPager("What's new", "content", WithPagerNoAbort()).Help(); !strings.Contains(help, "enter") {
+		t.Fatalf("a no-abort pager must still offer enter; got %q", help)
+	}
+}
+
+// TestPagerKeepsItsAbortByDefault is the regression guard for the OTHER pager in the
+// product. The restore plan opts into nothing, and there a reflex esc must keep
+// declining the restore: this option is per-screen, never a change of default.
+func TestPagerKeepsItsAbortByDefault(t *testing.T) {
+	p := NewPager("Restore plan", "content")
+	var gotErr error
+	resolved := false
+	p.Bind(func(_ struct{}, err error) {
+		resolved = true
+		gotErr = err
+	})
+	press(t, p, "esc")
+	if !resolved || !shell.IsAbort(gotErr) {
+		t.Fatalf("esc must still abort a default pager; resolved=%v err=%v", resolved, gotErr)
+	}
+	if help := NewPager("Restore plan", "content").Help(); !strings.Contains(help, "esc") {
+		t.Fatalf("a default pager must still offer esc; got %q", help)
+	}
+}

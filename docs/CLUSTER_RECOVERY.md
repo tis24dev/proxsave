@@ -5,6 +5,7 @@ Advanced disaster recovery procedures for Proxmox VE cluster database restoratio
 ## Table of Contents
 
 - [Overview](#overview)
+- [Starting a restore](#starting-a-restore)
 - [Understanding PVE Cluster Architecture](#understanding-pve-cluster-architecture)
 - [Cluster restore modes: SAFE vs RECOVERY](#cluster-restore-modes-safe-vs-recovery)
 - [Recovery Scenarios](#recovery-scenarios)
@@ -37,6 +38,32 @@ This guide covers **advanced cluster database recovery** using proxsave's restor
 - VM/CT recovery (use Proxmox Backup Server or `pve-zsync`)
 - Simple configuration changes (use web UI or `/etc/pve`)
 - Initial cluster creation (use `pvecm create`)
+
+---
+
+## Starting a restore
+
+Every procedure in this guide is driven from ProxSave's restore workflow. There are two
+ways to open it and they run the same code:
+
+- **The dashboard, `Restore`.** Run `proxsave` with no arguments on a terminal and pick
+  `Restore` from the menu. This is the normal way to use ProxSave, including for the
+  recoveries below, whenever the node still gives you a usable console.
+- **`proxsave --restore`.** The flag path: a headless host, a terminal whose `TERM` is
+  unset or `dumb`, a scripted or piped run, and any case where the menu cannot render.
+  The dashboard opens only on a **completely bare** `proxsave`, so any flag, `--config`
+  included, suppresses it; a restore that has to carry another flag is necessarily a
+  flag invocation.
+
+Both open the same workflow. On an interactive terminal you get the graphical (TUI)
+screens; `--cli`, and any non-interactive invocation, gives the plain text prompts. The
+menus quoted throughout this guide are that text rendering, because it is the one that
+pastes into a document. The questions, the choices and their consequences are identical
+in the TUI, where each menu is a selector.
+
+The other ProxSave commands used below have the same shape: `Backup` in the dashboard is
+`proxsave --backup`, `Decrypt` is `proxsave --decrypt`, and `Recovery > Cleanup guards`
+is `proxsave --cleanup-guards`. See [DASHBOARD.md](DASHBOARD.md) for the menu as a whole.
 
 ---
 
@@ -187,6 +214,10 @@ If a datastore or storage mountpoint is offline during a restore (its device is 
 proxsave --cleanup-guards            # remove leftover guards
 proxsave --cleanup-guards --dry-run  # preview only
 ```
+
+In the dashboard the same operation is `Recovery > Cleanup guards`: a read-only check
+first (green when there is nothing to clean, yellow with a count when guards are
+present), then `Apply` for the real removal.
 
 `--cleanup-guards` also clears any legacy `chattr +i` immutable flags left by older versions.
 
@@ -364,12 +395,23 @@ pvecm status
 
 #### Step 2: Run Restore Workflow
 
+Open the dashboard and choose `Restore`:
+
 ```bash
-# Run restore (works from any directory)
+proxsave
+```
+
+On a headless or console-only node, or when the menu cannot render, call the workflow
+directly. Either form works from any directory:
+
+```bash
 proxsave --restore
 ```
 
 #### Step 3: Interactive Selection
+
+The prompts below are the text rendering (`--cli`, or any non-interactive run). The TUI
+asks exactly the same questions as selectors, in the same order.
 
 ```text
 Select backup source:
@@ -413,7 +455,7 @@ RESTORE PLAN:
   - Filesystem Configuration
   - Storage Stack (Mounts/Targets)
 
-Type RESTORE to proceed or 0 to cancel: RESTORE
+Type 'RESTORE' to proceed or 'cancel' to abort: RESTORE
 ```
 
 #### Step 4: Automated Process (RECOVERY)
@@ -531,6 +573,8 @@ hostname
 # reboot
 
 # 2. Run restore (STORAGE or FULL mode)
+#    Dashboard: run bare `proxsave` and pick Restore. The flag below is the
+#    headless/console equivalent.
 proxsave --restore
 # Select: [2] STORAGE only
 # At the cluster prompt choose RECOVERY: the primary is offline, so this
@@ -812,6 +856,7 @@ pvesm status
 
 ```bash
 # Use CUSTOM mode to restore only specific categories
+# (Dashboard: Restore; the flag is the headless equivalent.)
 proxsave --restore
 
 # Select: [4] CUSTOM selection
@@ -895,6 +940,7 @@ pvecm add <working-node-ip>
 
 ```bash
 # 1. Create fresh backup
+#    Dashboard equivalent: run bare `proxsave` and pick Backup.
 proxsave --backup
 
 # 2. Document configuration
@@ -936,7 +982,8 @@ reboot
 mkdir -p /opt/proxsave/backup
 mv /root/*.bundle.tar /opt/proxsave/backup/
 
-# 3. Run restore
+# 3. Run restore (dashboard: bare `proxsave` -> Restore; the flag is the
+#    headless equivalent on a freshly installed node)
 proxsave --restore
 
 # Select: [2] STORAGE only (or FULL)
@@ -1063,7 +1110,7 @@ vi /etc/hosts
 # 3. Reboot
 reboot
 
-# 4. Run restore normally
+# 4. Run restore normally (dashboard: bare `proxsave` -> Restore)
 proxsave --restore
 ```
 
@@ -1075,6 +1122,7 @@ proxsave --restore
 
 ```bash
 # Run restore (works despite the hostname mismatch)
+# Dashboard: bare `proxsave` -> Restore; the flag is the headless equivalent.
 proxsave --restore
 
 # Select: [2] STORAGE only
@@ -1712,7 +1760,7 @@ ls /tmp/psrecover        # <host>-backup-<ts>.<ext> (plus .age if encrypted), .m
 #    .tar.lzma, .tar.zst, or plain .tar for COMPRESSION_TYPE=none. Take the name from ls:
 ARCHIVE=$(ls /tmp/psrecover/*-backup-* | grep -Ev '\.(metadata|sha256)$' | head -1)
 
-#    If the archive ends in .age, decrypt it first:
+#    If the archive ends in .age, decrypt it first (dashboard: Decrypt):
 #      proxsave --decrypt
 #    or, with the age CLI:
 #      age -d -i /path/to/key.txt -o "${ARCHIVE%.age}" "$ARCHIVE" && ARCHIVE="${ARCHIVE%.age}"

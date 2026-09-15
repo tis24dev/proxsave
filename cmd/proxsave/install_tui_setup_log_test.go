@@ -40,7 +40,7 @@ func TestLogHealthcheckSetupOutcomeRecordsWhyTheStepWasSkipped(t *testing.T) {
 		eligibility orchestrator.HealthcheckSetupEligibility
 		want        string
 	}{
-		{"self mode without a URL", orchestrator.HealthcheckSetupSkipSelfMode, "no alive URL configured yet"},
+		{"self mode with neither a URL nor an id", orchestrator.HealthcheckSetupSkipSelfMode, "no alive check configured yet"},
 		{"self mode", orchestrator.HealthcheckSetupEligibleSelf, "self mode"},
 	}
 	for _, tc := range cases {
@@ -99,7 +99,7 @@ func TestLogHealthcheckSetupOutcomeStaysSilentOnBootstrapFailure(t *testing.T) {
 	if strings.Contains(out, "not verified") {
 		t.Fatalf("a failed step must not get a verdict line, got %q", out)
 	}
-	if strings.Contains(out, "no alive URL configured yet") {
+	if strings.Contains(out, "no alive check configured yet") {
 		t.Fatalf("a failed step must not get an eligibility diagnosis either, got %q", out)
 	}
 }

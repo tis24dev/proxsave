@@ -696,3 +696,512 @@ func TestUpgradePrunesRemovedChunkKeysExactly(t *testing.T) {
 		t.Fatalf("upgraded config must still load: %v", err)
 	}
 }
+
+// A missing key belongs INSIDE the section that documents it. The merge used to write
+// it immediately after the previous key, which put it above its own header: the
+// operator then found the variable detached from the block that explains it, and a
+// header documenting nothing. Reported against CUSTOM_BACKUP_PATHS on a live host.
+func TestUpgradeConfigInsertsMissingKeyInsideItsSection(t *testing.T) {
+	template := strings.Join([]string{
+		"FIRST=default",
+		"",
+		"# ----------------------------------------------------------------------",
+		"# Custom paths",
+		"# ----------------------------------------------------------------------",
+		"# One entry per line inside the quotes",
+		"CUSTOM_BACKUP_PATHS=\"",
+		"# /srv/example.conf",
+		"\"",
+		"",
+		"LAST=default",
+		"",
+	}, "\n")
+
+	withTemplate(t, template, func() {
+		tmpDir := t.TempDir()
+		configPath := filepath.Join(tmpDir, "backup.env")
+		// Same file WITHOUT the block: the section header and its comment are already
+		// there, exactly as an operator who deleted only the variable would leave it.
+		existing := strings.Join([]string{
+			"FIRST=mine",
+			"",
+			"# ----------------------------------------------------------------------",
+			"# Custom paths",
+			"# ----------------------------------------------------------------------",
+			"# One entry per line inside the quotes",
+			"",
+			"LAST=mine",
+			"",
+		}, "\n")
+		if err := os.WriteFile(configPath, []byte(existing), 0600); err != nil {
+			t.Fatalf("failed to write config: %v", err)
+		}
+
+		result, err := UpgradeConfigFile(configPath)
+		if err != nil {
+			t.Fatalf("UpgradeConfigFile returned error: %v", err)
+		}
+		if !result.Changed {
+			t.Fatalf("expected the merge to add the missing key")
+		}
+
+		data, err := os.ReadFile(configPath)
+		if err != nil {
+			t.Fatalf("failed to read upgraded config: %v", err)
+		}
+		lines := strings.Split(string(data), "\n")
+		keyLine := -1
+		for i, line := range lines {
+			if strings.HasPrefix(line, "CUSTOM_BACKUP_PATHS=") {
+				keyLine = i
+				break
+			}
+		}
+		if keyLine < 0 {
+			t.Fatalf("missing key was not added: %s", data)
+		}
+		if got := strings.TrimSpace(lines[keyLine-1]); got != "# One entry per line inside the quotes" {
+			t.Fatalf("key was not inserted inside its section; line above it is %q", got)
+		}
+		if got := strings.TrimSpace(lines[keyLine-3]); got != "# Custom paths" {
+			t.Fatalf("section header is no longer above the key; got %q", got)
+		}
+	})
+}
+
+// The walk stops at the first line the user's file does not share with the template,
+// so a file that moved or rewrote those comments keeps the previous placement instead
+// of having the merge guess where the section now starts.
+func TestUpgradeConfigKeepsAnchorPlacementWhenContextDiffers(t *testing.T) {
+	template := strings.Join([]string{
+		"FIRST=default",
+		"",
+		"# Custom paths",
+		"CUSTOM_BACKUP_PATHS=\"",
+		"\"",
+		"",
+		"LAST=default",
+		"",
+	}, "\n")
+
+	withTemplate(t, template, func() {
+		tmpDir := t.TempDir()
+		configPath := filepath.Join(tmpDir, "backup.env")
+		existing := strings.Join([]string{
+			"FIRST=mine",
+			"",
+			"# my own note about paths",
+			"",
+			"LAST=mine",
+			"",
+		}, "\n")
+		if err := os.WriteFile(configPath, []byte(existing), 0600); err != nil {
+			t.Fatalf("failed to write config: %v", err)
+		}
+
+		if _, err := UpgradeConfigFile(configPath); err != nil {
+			t.Fatalf("UpgradeConfigFile returned error: %v", err)
+		}
+
+		data, err := os.ReadFile(configPath)
+		if err != nil {
+			t.Fatalf("failed to read upgraded config: %v", err)
+		}
+		lines := strings.Split(string(data), "\n")
+		for i, line := range lines {
+			if strings.HasPrefix(line, "CUSTOM_BACKUP_PATHS=") {
+				if got := strings.TrimSpace(lines[i-1]); got != "" {
+					t.Fatalf("expected the key right after the anchor's blank line, got %q above it", got)
+				}
+				return
+			}
+		}
+		t.Fatalf("missing key was not added: %s", data)
+	})
+}
+
+// Two keys missing after the SAME present anchor. The walk to the second one crosses the
+// first one's template lines, which the user's file cannot have: skipping them without
+// consuming a user line is what keeps each key under its own comment instead of stranding
+// the second one beside the first.
+func TestUpgradeConfigInsertsTwoMissingKeysEachUnderItsOwnComment(t *testing.T) {
+	template := strings.Join([]string{
+		"FIRST=default",
+		"",
+		"# what ALPHA does",
+		"ALPHA=alpha-default",
+		"",
+		"# what BETA does",
+		"BETA=beta-default",
+		"",
+		"LAST=default",
+		"",
+	}, "\n")
+
+	withTemplate(t, template, func() {
+		tmpDir := t.TempDir()
+		configPath := filepath.Join(tmpDir, "backup.env")
+		// Both comment blocks are still there; only the two variables were deleted.
+		existing := strings.Join([]string{
+			"FIRST=mine",
+			"",
+			"# what ALPHA does",
+			"",
+			"# what BETA does",
+			"",
+			"LAST=mine",
+			"",
+		}, "\n")
+		if err := os.WriteFile(configPath, []byte(existing), 0600); err != nil {
+			t.Fatalf("failed to write config: %v", err)
+		}
+
+		if _, err := UpgradeConfigFile(configPath); err != nil {
+			t.Fatalf("UpgradeConfigFile returned error: %v", err)
+		}
+
+		data, err := os.ReadFile(configPath)
+		if err != nil {
+			t.Fatalf("failed to read upgraded config: %v", err)
+		}
+		lines := strings.Split(string(data), "\n")
+		for _, tc := range []struct{ prefix, comment string }{
+			{"ALPHA=", "# what ALPHA does"},
+			{"BETA=", "# what BETA does"},
+		} {
+			idx := indexOfLinePrefix(lines, tc.prefix)
+			if idx < 0 {
+				t.Fatalf("missing key %s was not added: %s", tc.prefix, data)
+			}
+			if got := strings.TrimSpace(lines[idx-1]); got != tc.comment {
+				t.Fatalf("%s was not inserted under its own comment; line above it is %q", tc.prefix, got)
+			}
+		}
+	})
+}
+
+// The same fault, one section further: when the anchor is the last key of the previous
+// section, the second missing key used to land under THAT section's header.
+func TestUpgradeConfigInsertsSecondMissingKeyUnderItsOwnSectionHeader(t *testing.T) {
+	template := strings.Join([]string{
+		"FIRST=default",
+		"",
+		"# what ALPHA does",
+		"ALPHA=alpha-default",
+		"",
+		"# ----------------------------------------------------------------------",
+		"# Disk space",
+		"# ----------------------------------------------------------------------",
+		"BETA=beta-default",
+		"",
+	}, "\n")
+
+	withTemplate(t, template, func() {
+		tmpDir := t.TempDir()
+		configPath := filepath.Join(tmpDir, "backup.env")
+		existing := strings.Join([]string{
+			"FIRST=mine",
+			"",
+			"# what ALPHA does",
+			"",
+			"# ----------------------------------------------------------------------",
+			"# Disk space",
+			"# ----------------------------------------------------------------------",
+			"",
+		}, "\n")
+		if err := os.WriteFile(configPath, []byte(existing), 0600); err != nil {
+			t.Fatalf("failed to write config: %v", err)
+		}
+
+		if _, err := UpgradeConfigFile(configPath); err != nil {
+			t.Fatalf("UpgradeConfigFile returned error: %v", err)
+		}
+
+		data, err := os.ReadFile(configPath)
+		if err != nil {
+			t.Fatalf("failed to read upgraded config: %v", err)
+		}
+		lines := strings.Split(string(data), "\n")
+		beta := indexOfLinePrefix(lines, "BETA=")
+		header := indexOfLinePrefix(lines, "# Disk space")
+		if beta < 0 || header < 0 {
+			t.Fatalf("expected both the key and its section header: %s", data)
+		}
+		if beta < header {
+			t.Fatalf("BETA landed above its own section header (key at %d, header at %d): %s", beta, header, data)
+		}
+	})
+}
+
+// Three in a row: every intermediate missing entry has to be stepped over, not just one.
+func TestUpgradeConfigInsertsThreeMissingKeysEachUnderItsOwnComment(t *testing.T) {
+	template := strings.Join([]string{
+		"FIRST=default",
+		"",
+		"# what ALPHA does",
+		"ALPHA=alpha-default",
+		"",
+		"# what BETA does",
+		"BETA=beta-default",
+		"",
+		"# what GAMMA does",
+		"GAMMA=gamma-default",
+		"",
+	}, "\n")
+
+	withTemplate(t, template, func() {
+		tmpDir := t.TempDir()
+		configPath := filepath.Join(tmpDir, "backup.env")
+		existing := strings.Join([]string{
+			"FIRST=mine",
+			"",
+			"# what ALPHA does",
+			"",
+			"# what BETA does",
+			"",
+			"# what GAMMA does",
+			"",
+		}, "\n")
+		if err := os.WriteFile(configPath, []byte(existing), 0600); err != nil {
+			t.Fatalf("failed to write config: %v", err)
+		}
+
+		if _, err := UpgradeConfigFile(configPath); err != nil {
+			t.Fatalf("UpgradeConfigFile returned error: %v", err)
+		}
+
+		data, err := os.ReadFile(configPath)
+		if err != nil {
+			t.Fatalf("failed to read upgraded config: %v", err)
+		}
+		lines := strings.Split(string(data), "\n")
+		for _, tc := range []struct{ prefix, comment string }{
+			{"ALPHA=", "# what ALPHA does"},
+			{"BETA=", "# what BETA does"},
+			{"GAMMA=", "# what GAMMA does"},
+		} {
+			idx := indexOfLinePrefix(lines, tc.prefix)
+			if idx < 0 {
+				t.Fatalf("missing key %s was not added: %s", tc.prefix, data)
+			}
+			if got := strings.TrimSpace(lines[idx-1]); got != tc.comment {
+				t.Fatalf("%s was not inserted under its own comment; line above it is %q", tc.prefix, got)
+			}
+		}
+	})
+}
+
+func indexOfLinePrefix(lines []string, prefix string) int {
+	for i, line := range lines {
+		if strings.HasPrefix(strings.TrimSpace(line), prefix) {
+			return i
+		}
+	}
+	return -1
+}
+
+// Switching two adjacent variables off with a leading # leaves lines the template has no
+// match for. The walk recognises its own line commented out and steps over it, so the
+// second variable still comes back under its own comment rather than beside the first.
+func TestUpgradeConfigInsertsTwoCommentedOutKeysEachUnderItsOwnComment(t *testing.T) {
+	template := strings.Join([]string{
+		"FIRST=default",
+		"",
+		"# what ALPHA does",
+		"ALPHA=alpha-default",
+		"",
+		"# what BETA does",
+		"BETA=beta-default        # trailing note",
+		"",
+		"LAST=default",
+		"",
+	}, "\n")
+
+	withTemplate(t, template, func() {
+		tmpDir := t.TempDir()
+		configPath := filepath.Join(tmpDir, "backup.env")
+		// The operator disabled both variables instead of deleting them: one with a space
+		// after the marker, one without.
+		existing := strings.Join([]string{
+			"FIRST=mine",
+			"",
+			"# what ALPHA does",
+			"# ALPHA=alpha-default",
+			"",
+			"# what BETA does",
+			"#BETA=beta-default        # trailing note",
+			"",
+			"LAST=mine",
+			"",
+		}, "\n")
+		if err := os.WriteFile(configPath, []byte(existing), 0600); err != nil {
+			t.Fatalf("failed to write config: %v", err)
+		}
+
+		if _, err := UpgradeConfigFile(configPath); err != nil {
+			t.Fatalf("UpgradeConfigFile returned error: %v", err)
+		}
+
+		data, err := os.ReadFile(configPath)
+		if err != nil {
+			t.Fatalf("failed to read upgraded config: %v", err)
+		}
+		lines := strings.Split(string(data), "\n")
+		for _, tc := range []struct{ prefix, comment string }{
+			{"ALPHA=", "# what ALPHA does"},
+			{"BETA=", "# what BETA does"},
+		} {
+			idx := indexOfLiveLinePrefix(lines, tc.prefix)
+			if idx < 0 {
+				t.Fatalf("missing key %s was not added: %s", tc.prefix, data)
+			}
+			if got := strings.TrimSpace(lines[idx-1]); got != tc.comment {
+				t.Fatalf("%s was not inserted under its own comment; line above it is %q", tc.prefix, got)
+			}
+		}
+	})
+}
+
+// One deleted, one commented out: the walk has to handle both spellings of "missing" in
+// the same file.
+func TestUpgradeConfigInsertsMissingKeysWhenOneWasDeletedAndOneCommentedOut(t *testing.T) {
+	template := strings.Join([]string{
+		"FIRST=default",
+		"",
+		"# what ALPHA does",
+		"ALPHA=alpha-default",
+		"",
+		"# what BETA does",
+		"BETA=beta-default",
+		"",
+	}, "\n")
+
+	for _, tc := range []struct {
+		name     string
+		existing []string
+	}{
+		{
+			name: "alpha deleted, beta commented out",
+			existing: []string{
+				"FIRST=mine",
+				"",
+				"# what ALPHA does",
+				"",
+				"# what BETA does",
+				"# BETA=beta-default",
+				"",
+			},
+		},
+		{
+			name: "alpha commented out, beta deleted",
+			existing: []string{
+				"FIRST=mine",
+				"",
+				"# what ALPHA does",
+				"# ALPHA=alpha-default",
+				"",
+				"# what BETA does",
+				"",
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			withTemplate(t, template, func() {
+				configPath := filepath.Join(t.TempDir(), "backup.env")
+				if err := os.WriteFile(configPath, []byte(strings.Join(tc.existing, "\n")), 0600); err != nil {
+					t.Fatalf("failed to write config: %v", err)
+				}
+
+				if _, err := UpgradeConfigFile(configPath); err != nil {
+					t.Fatalf("UpgradeConfigFile returned error: %v", err)
+				}
+
+				data, err := os.ReadFile(configPath)
+				if err != nil {
+					t.Fatalf("failed to read upgraded config: %v", err)
+				}
+				lines := strings.Split(string(data), "\n")
+				for _, want := range []struct{ prefix, comment string }{
+					{"ALPHA=", "# what ALPHA does"},
+					{"BETA=", "# what BETA does"},
+				} {
+					idx := indexOfLiveLinePrefix(lines, want.prefix)
+					if idx < 0 {
+						t.Fatalf("missing key %s was not added: %s", want.prefix, data)
+					}
+					if got := strings.TrimSpace(lines[idx-1]); got != want.comment {
+						t.Fatalf("%s was not inserted under its own comment; line above it is %q", want.prefix, got)
+					}
+				}
+			})
+		})
+	}
+}
+
+// A disabled line whose value was ALSO edited is not a copy of the template line, so the
+// walk stops there instead of stepping over something the operator changed on purpose.
+func TestUpgradeConfigKeepsAnchorPlacementWhenDisabledLineWasEdited(t *testing.T) {
+	template := strings.Join([]string{
+		"FIRST=default",
+		"",
+		"# what ALPHA does",
+		"ALPHA=alpha-default",
+		"",
+		"# what BETA does",
+		"BETA=beta-default",
+		"",
+	}, "\n")
+
+	withTemplate(t, template, func() {
+		configPath := filepath.Join(t.TempDir(), "backup.env")
+		existing := strings.Join([]string{
+			"FIRST=mine",
+			"",
+			"# what ALPHA does",
+			"# ALPHA=something-i-changed",
+			"",
+			"# what BETA does",
+			"",
+		}, "\n")
+		if err := os.WriteFile(configPath, []byte(existing), 0600); err != nil {
+			t.Fatalf("failed to write config: %v", err)
+		}
+
+		if _, err := UpgradeConfigFile(configPath); err != nil {
+			t.Fatalf("UpgradeConfigFile returned error: %v", err)
+		}
+
+		data, err := os.ReadFile(configPath)
+		if err != nil {
+			t.Fatalf("failed to read upgraded config: %v", err)
+		}
+		lines := strings.Split(string(data), "\n")
+		beta := indexOfLiveLinePrefix(lines, "BETA=")
+		if beta < 0 {
+			t.Fatalf("missing key BETA was not added: %s", data)
+		}
+		// The walk stops at the edited line, so BETA keeps the placement it had before:
+		// beside ALPHA, at the point the two files stopped agreeing. The merge does not
+		// guess that a rewritten line was meant to be this variable.
+		if got := strings.TrimSpace(lines[beta-1]); got != "ALPHA=alpha-default" {
+			t.Fatalf("expected BETA to stay beside ALPHA at the stopping point, got %q above it", got)
+		}
+		if idx := indexOfLinePrefix(lines, "# ALPHA=something-i-changed"); idx < 0 {
+			t.Fatalf("the edited line the operator wrote was not preserved: %s", data)
+		}
+	})
+}
+
+// indexOfLiveLinePrefix finds the ACTIVE line for a key, skipping any commented-out copy.
+func indexOfLiveLinePrefix(lines []string, prefix string) int {
+	for i, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "#") {
+			continue
+		}
+		if strings.HasPrefix(trimmed, prefix) {
+			return i
+		}
+	}
+	return -1
+}

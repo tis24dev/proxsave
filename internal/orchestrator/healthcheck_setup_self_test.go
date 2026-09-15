@@ -117,3 +117,76 @@ func TestCheckAndClassifyHealthcheckSelf(t *testing.T) {
 		})
 	}
 }
+
+// A host configured with HEALTHCHECK_ALIVE_ID and no full URL pings a real check and its
+// backups exit 0. This screen used to read the full URL alone and call that host NOT
+// CONFIGURED, so the dashboard disagreed with the run about the same configuration.
+func TestBuildHealthcheckSetupBootstrapSelfAcceptsAnAliveID(t *testing.T) {
+	tests := []struct {
+		name    string
+		cfg     *config.Config
+		want    HealthcheckSetupEligibility
+		wantURL string
+	}{
+		{
+			"alive id alone is a configured self host",
+			&config.Config{
+				HealthcheckEnabled:      true,
+				HealthcheckMode:         "self",
+				HealthcheckPingEndpoint: "https://hc-ping.com",
+				HealthcheckAliveID:      "abc-123",
+			},
+			HealthcheckSetupEligibleSelf,
+			"https://hc-ping.com/abc-123",
+		},
+		{
+			"alive id with a ping key",
+			&config.Config{
+				HealthcheckEnabled:      true,
+				HealthcheckMode:         "self",
+				HealthcheckPingEndpoint: "https://hc-ping.com",
+				HealthcheckPingKey:      "pk",
+				HealthcheckAliveID:      "slug",
+			},
+			HealthcheckSetupEligibleSelf,
+			"https://hc-ping.com/pk/slug",
+		},
+		{
+			"a full url still wins over the id",
+			&config.Config{
+				HealthcheckEnabled:      true,
+				HealthcheckMode:         "self",
+				HealthcheckPingEndpoint: "https://hc-ping.com",
+				HealthcheckAliveURL:     "https://example.test/ping/x",
+				HealthcheckAliveID:      "abc-123",
+			},
+			HealthcheckSetupEligibleSelf,
+			"https://example.test/ping/x",
+		},
+		{
+			"an id with no ping endpoint has nothing to ping",
+			&config.Config{
+				HealthcheckEnabled: true,
+				HealthcheckMode:    "self",
+				HealthcheckAliveID: "abc-123",
+			},
+			HealthcheckSetupSkipSelfMode,
+			"",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			stubHealthcheckBootstrap(t, tc.cfg, nil, "", "")
+			state, err := BuildHealthcheckSetupBootstrap(context.Background(), "/cfg", "/base")
+			if err != nil {
+				t.Fatalf("bootstrap returned error: %v", err)
+			}
+			if state.Eligibility != tc.want {
+				t.Fatalf("Eligibility = %d, want %d", state.Eligibility, tc.want)
+			}
+			if state.HealthcheckAliveURL != tc.wantURL {
+				t.Fatalf("HealthcheckAliveURL = %q, want %q", state.HealthcheckAliveURL, tc.wantURL)
+			}
+		})
+	}
+}
