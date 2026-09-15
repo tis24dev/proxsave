@@ -303,7 +303,7 @@ daemon with a `WARNING` naming the variable, the path and the reason (see
 
 ## Healthchecks connector (daemon)
 
-The daemon can push to an external [healthchecks](https://healthchecks.io/) monitor. The four checks, the monitoring portal, and the centralized-vs-self behavior are documented in [HEALTHCHECKS.md](HEALTHCHECKS.md).
+The daemon can push to an external [healthchecks](https://healthchecks.io/) monitor. The checks it reports, the monitoring portal, and the centralized-vs-self behavior are documented in [HEALTHCHECKS.md](HEALTHCHECKS.md).
 
 **From the dashboard**: the configuration form's **Healthchecks** field offers `Off`,
 `ProxSave HC Server` (centralized) and `Your own server` (self). It is active only when the

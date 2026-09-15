@@ -268,7 +268,8 @@ after the child is reaped, and a D-state process is never reaped, so the daemon 
 same wedge and stops scheduling. Only the monitor's silence on the missing finish ping
 catches that case (see [DAEMON.md](DAEMON.md)). The daemon also supervises `--backup`
 children only, so a restore, a manual run, or a dashboard **Backup** has no watchdog at all
-(the dashboard runs the backup in its own process, not as a daemon child).
+(the dashboard backup is not a daemon child: it runs in the same process as the menu, which
+keeps its session open and hands it to the run).
 `FS_IO_TIMEOUT=0` disables bounding everywhere.
 
 **Preflight configuration keys** (`backup.env`). None of these are fields in the install

@@ -57,7 +57,7 @@ sha256sum --ignore-missing -c SHA256SUMS
 
 ### How an operator gets a verified release
 
-The everyday upgrade route is the dashboard: run `proxsave` with no arguments on a TTY, then **Upgrade** > **Check upgrade**. It runs the same `--upgrade` code in-session, so the signature and checksum check described above is the same one, not a second path. `--upgrade` on its own is the headless equivalent, for scripts and for hosts with no terminal; append `y` to auto-confirm. Both also merge new configuration keys and restart the resident daemon onto the new binary, which downloading a file by hand does not: a replaced binary leaves the running daemon on the old code until the service is restarted (see [DAEMON.md](DAEMON.md)).
+The everyday upgrade route is the dashboard: run `proxsave` with no arguments on a TTY, then **Upgrade** > **Check upgrade**. It runs the same `--upgrade` code in-session, so the signature and checksum check described above is the same one, not a second path. `--upgrade` on its own is the headless equivalent, for scripts and for hosts with no terminal; append `y` to auto-confirm. Both also merge new configuration keys and, on a host where the resident daemon is actually running, restart it onto the new binary, which downloading a file by hand does not: a replaced binary leaves the running daemon on the old code until the service is restarted (see [DAEMON.md](DAEMON.md)). A host on the cron scheduler has no resident daemon, so there is nothing to restart there.
 
 ### Which binary runs the upgrade
 

@@ -1111,8 +1111,8 @@ proxsave --daemon-status
 
 Both routes run the same code. `--daemon-setup` writes `SCHEDULER_MODE=daemon` and `HEALTHCHECK_ENABLED=true` and starts
 `proxsave-daemon.service`. The daemon runs the backup daily at `SCHEDULER_TIME`, under a
-`MAX_RUN_DURATION` watchdog, and reports four checks (alive, backup, updates, and one per
-notification channel) to an external healthchecks monitor.
+`MAX_RUN_DURATION` watchdog, and reports three fixed checks (alive, backup, updates) plus one
+per notification channel to an external healthchecks monitor.
 
 It also deletes every cron line whose command is named `proxsave` or `proxmox-backup`, and
 tells you how many it removed, or that it found none. "None" on a host that was running on
@@ -1274,7 +1274,7 @@ CLOUD_LOG_PATH=
 ### Using ProxSave
 - **[Dashboard](DASHBOARD.md)** - The interactive menu, screen by screen
 - **[Daemon](DAEMON.md)** - The resident scheduler, its watchdog and its reporting
-- **[Healthchecks](HEALTHCHECKS.md)** - Monitoring modes, the portal, and the four checks
+- **[Healthchecks](HEALTHCHECKS.md)** - Monitoring modes, the portal, and the checks the daemon reports
 
 ### Configuration
 - **[Configuration Guide](CONFIGURATION.md)** - Complete variable reference

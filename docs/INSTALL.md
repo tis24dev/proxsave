@@ -250,10 +250,15 @@ For more details, see [CLI Reference - Binary Upgrade](CLI_REFERENCE.md#binary-u
 
 > Allows you to compile your binary file from individual project files.
 
-This is the path for a host that cannot fetch a release (no outbound network to GitHub), an
-architecture other than linux/amd64, or development work on the code itself. On a normal host use
-[Direct Install](#direct-install) instead. Note that `--upgrade` never rebuilds from source: it
-downloads the published linux/amd64 release and installs it over whatever you built.
+This is the path for an architecture other than linux/amd64, for which no release is published,
+and for development work on the code itself. On a normal host use [Direct Install](#direct-install)
+instead. Note that `--upgrade` never rebuilds from source: it downloads the published linux/amd64
+release and installs it over whatever you built.
+
+The recipe below still needs outbound access to GitHub and to go.dev: it clones the repository and
+runs `go mod tidy`. It is not an offline install, and it is not a substitute for one. On a
+different architecture, fetch the Go toolchain for that architecture rather than the
+`linux-amd64` tarball named below; everything after that step is architecture-independent.
 
 ### Prerequisites
 
@@ -413,8 +418,9 @@ When shown, it does **not** modify your `backup.env`. It only:
 - Install session log under `/tmp/proxsave/install-*.log` (includes audit results and Telegram pairing outcome)
 
 After completion, re-open the wizard from the dashboard (`Install` > `Edit install`) to change any answer,
-or edit `configs/backup.env` directly for the advanced variables the wizard does not ask about. See
-[CONFIGURATION.md](CONFIGURATION.md).
+or edit the configuration file directly for the advanced variables the wizard does not ask about. That
+file is `configs/backup.env` under `BASE_DIR` unless you passed `--config`, in which case it is the path
+the install banner printed. See [CONFIGURATION.md](CONFIGURATION.md).
 
 ### Scheduling and the daemon
 
