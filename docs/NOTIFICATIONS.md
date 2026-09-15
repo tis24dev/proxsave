@@ -497,7 +497,7 @@ A channel is anything that implements `notify.Notifier`
 | Portal address and a `Login:` line instead of a link | you have set a portal password, so the server stopped minting links | expected; sign in at that address with that identity |
 | Nothing printed about the portal at all | the mint did not succeed, or the value failed the sanitizer | minting is best effort and quiet; re-open **Diagnostic Checks** > **Healthchecks** in the dashboard. Opening the link is not what retires it, so this is never the expected end state |
 | No `notify-*` sensor ever appears | this host is on the cron scheduler, or the runs are not daemon-supervised | switch the scheduler in the dashboard **Daemon** group; see [DAEMON.md](DAEMON.md) |
-| No sensor of any kind appears, and the host IS on the daemon | `HEALTHCHECK_ENABLED=false`, so the daemon pings nothing at all | set the variable to `true` in `backup.env`. The healthchecks screen does not write it: only the installer and `--daemon-setup` do |
+| No sensor of any kind appears, and the host IS on the daemon | `HEALTHCHECK_ENABLED=false`, so the daemon pings nothing at all | set the variable to `true` in `backup.env`. The healthchecks screen never writes it. Three things do: the installer, `--daemon-setup` (to `true`), and `--daemon-remove` (to `false`, on the way back to cron). Nothing rewrites it afterwards, so a value left by an earlier revert survives |
 
 See [CONFIGURATION.md](CONFIGURATION.md) for every key, [DAEMON.md](DAEMON.md) for the
 monitoring sensors, and [DASHBOARD.md](DASHBOARD.md) for the dashboard screens that
