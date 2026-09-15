@@ -48,6 +48,21 @@ var (
 	// false PBS positive on a PVE-only host.
 	pbsBinaryCandidates = []string{"/usr/sbin/proxmox-backup-proxy", "/usr/bin/proxmox-backup-manager", "/usr/sbin/proxmox-backup-manager"}
 
+	// commandBinaryCandidates are the paths the two binaries the command probes run can
+	// live at. The marker table reports these with their executable bit, which the offline
+	// candidates above are never asked for, so the list is its own - but it has to stay a
+	// SUPERSET of what those lists hold for the same two binaries, or the table reports a
+	// binary as absent while the offline section finds it. It did: the list this replaces
+	// named /usr/bin/proxmox-backup-manager only, and PBS 4.2.5 installs it in /usr/sbin,
+	// so a real PBS host read "exists: NO" for a binary it has.
+	// TestCommandBinaryCandidatesCoverTheOfflineOnes fails if the two ever diverge again.
+	commandBinaryCandidates = []string{
+		"/usr/bin/pveversion",
+		"/usr/sbin/pveversion",
+		"/usr/bin/proxmox-backup-manager",
+		"/usr/sbin/proxmox-backup-manager",
+	}
+
 	// Package data directories, on-disk and product-specific.
 	pveShareDir = "/usr/share/pve-manager"
 	pbsShareDir = "/usr/share/proxmox-backup"
@@ -786,13 +801,22 @@ func markerLines() []string {
 		lines = append(lines, fmt.Sprintf(format, args...))
 	}
 
+	// The ladder refuses to run these under a prefix, and the snapshot has to refuse them
+	// for the same reason: lookPath searches the appliance's PATH and would answer for the
+	// appliance. The reason travels on each line rather than once above them, because every
+	// line leaves here on its own as a "Detection marker:" log entry.
 	add("=== Command availability check ===")
-	add("command -v pveversion: %s", lookPathOrNotFound("pveversion"))
-	add("command -v proxmox-backup-manager: %s", lookPathOrNotFound("proxmox-backup-manager"))
+	for _, cmd := range []string{"pveversion", "proxmox-backup-manager"} {
+		if hostRooted() {
+			add("command -v %s: skipped (answers for the appliance, not the mounted host)", cmd)
+			continue
+		}
+		add("command -v %s: %s", cmd, lookPathOrNotFound(cmd))
+	}
 	add("")
 
 	add("=== File existence check ===")
-	for _, bin := range []string{"/usr/bin/pveversion", "/usr/sbin/pveversion", "/usr/bin/proxmox-backup-manager"} {
+	for _, bin := range commandBinaryCandidates {
 		add("%s exists: %s", resolveUnderPrefix(bin), boolToYes(fileExists(bin)))
 		add("%s executable: %s", resolveUnderPrefix(bin), boolToYes(isExecutable(bin)))
 	}
@@ -881,8 +905,12 @@ func boolToYes(b bool) string {
 	return "NO"
 }
 
+// isExecutable re-anchors like fileExists and dirExists do. Stating the bare literal is
+// what let the marker table print a host path and answer for the appliance's own copy of
+// it: under a prefix the line read "executable: YES" for a file the mounted host did not
+// have, and "executable: NO" for one it had and could run.
 func isExecutable(path string) bool {
-	info, err := statFunc(path)
+	info, err := statFunc(resolveUnderPrefix(path))
 	if err != nil {
 		return false
 	}

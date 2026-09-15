@@ -195,6 +195,8 @@ var notes = []Note{
 			"If a run names a possible typo in backup.env, fix that line: nothing written on it is applied today",
 			"A variable set twice still has to be cleaned by hand, and --upgrade-config names the lines to delete",
 			"Several variables missing from the same section are each written back under their own comment, not stacked",
+			"A debug run under SYSTEM_ROOT_PREFIX reports the mounted host only: command probes are listed as skipped",
+			"The detection marker table now stats proxmox-backup-manager in /usr/sbin too, where PBS 4 installs it",
 			"If SKIP_PERMISSION_CHECK=true is left over from a test, clear it: the next run really skips that check",
 		},
 	},
