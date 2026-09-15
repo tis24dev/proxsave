@@ -2216,35 +2216,18 @@ func enabledNotifyChannels(cfg *config.Config) []string {
 }
 
 // selfURLs resolves the ping URLs from self-mode config: full URLs if given, otherwise
-// assembled from the ping endpoint (+ optional ping key) and check IDs. The updates URL
-// prefers an explicit full URL, else assembles from its own check ID.
+// assembled from the ping endpoint (+ optional ping key) and check IDs. The resolution
+// itself lives on config.Config, because the dashboard's healthcheck screen has to reach
+// the same answer for the alive check and used to read the full URL alone.
 func (d *daemon) selfURLs() (string, string, map[string]string) {
-	base := strings.TrimRight(strings.TrimSpace(d.cfg.HealthcheckPingEndpoint), "/")
-	build := func(id string) string {
-		id = strings.TrimSpace(id)
-		if base == "" || id == "" {
-			return ""
-		}
-		if d.cfg.HealthcheckPingKey != "" {
-			return base + "/" + d.cfg.HealthcheckPingKey + "/" + id
-		}
-		return base + "/" + id
-	}
+	build := d.cfg.HealthcheckSelfPingURL
 	checks := map[string]string{}
-	updates := strings.TrimSpace(d.cfg.HealthcheckUpdatesURL)
-	if updates == "" {
-		updates = build(d.cfg.HealthcheckUpdatesID)
-	}
-	if updates != "" {
+	if updates := build(d.cfg.HealthcheckUpdatesURL, d.cfg.HealthcheckUpdatesID); updates != "" {
 		checks[health.CheckKeyUpdates] = updates
 	}
 	// Per-notification-channel checks (self mode): full URL or assembled from a check ID.
 	addNotify := func(ch, fullURL, id string) {
-		u := strings.TrimSpace(fullURL)
-		if u == "" {
-			u = build(id)
-		}
-		if u != "" {
+		if u := build(fullURL, id); u != "" {
 			checks[health.CheckKeyNotify(ch)] = u
 		}
 	}
@@ -2252,14 +2235,8 @@ func (d *daemon) selfURLs() (string, string, map[string]string) {
 	addNotify("telegram", d.cfg.HealthcheckNotifyTelegramURL, d.cfg.HealthcheckNotifyTelegramID)
 	addNotify("gotify", d.cfg.HealthcheckNotifyGotifyURL, d.cfg.HealthcheckNotifyGotifyID)
 	addNotify("webhook", d.cfg.HealthcheckNotifyWebhookURL, d.cfg.HealthcheckNotifyWebhookID)
-	alive := strings.TrimSpace(d.cfg.HealthcheckAliveURL)
-	if alive == "" {
-		alive = build(d.cfg.HealthcheckAliveID)
-	}
-	backup := strings.TrimSpace(d.cfg.HealthcheckBackupURL)
-	if backup == "" {
-		backup = build(d.cfg.HealthcheckBackupID)
-	}
+	alive := build(d.cfg.HealthcheckAliveURL, d.cfg.HealthcheckAliveID)
+	backup := build(d.cfg.HealthcheckBackupURL, d.cfg.HealthcheckBackupID)
 	return alive, backup, checks
 }
 

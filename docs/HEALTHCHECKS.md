@@ -331,17 +331,22 @@ fully healthy centralized state; in self mode it is `REACHABLE`.
 | `DISABLED` | centralized monitoring is turned off on the server | nothing to configure here |
 | `NO IDENTITY` | this host has no server identity | re-run the installer to regenerate it |
 | `NOT ENABLED` | monitoring is off on this host: `HEALTHCHECK_ENABLED=false` | nothing, if that is what you want. Otherwise switch to the daemon scheduler, which sets the key |
-| `NOT CONFIGURED` | self mode selected but `HEALTHCHECK_ALIVE_URL` is empty | fill in the healthchecks parameters, or set `HEALTHCHECK_ENABLED=false` |
+| `NOT CONFIGURED` | self mode selected but there is no service-alive check to ping: no `HEALTHCHECK_ALIVE_URL`, and no `HEALTHCHECK_ALIVE_ID` that resolves against `HEALTHCHECK_PING_ENDPOINT` | fill in the healthchecks parameters, or set `HEALTHCHECK_ENABLED=false` |
 | `CONFIG ERROR` | `backup.env` could not be loaded | re-run the installer to repair it |
 | `STATUS UNREADABLE` | the on-disk monitoring status file could not be read | a corrupt file is quarantined and reset automatically |
 | `UNKNOWN` | the daemon state could not be determined | check the service and its log |
 
-Self-mode `NOT CONFIGURED` and the run-start refusal described under
-[Self mode](#self-mode-your-own-healthchecks) are not the same test, and they can disagree.
-This screen reads `HEALTHCHECK_ALIVE_URL` alone; the run accepts either that or
-`HEALTHCHECK_ALIVE_ID`. A host configured with only an alive **id** therefore shows
-`NOT CONFIGURED` here while its backups run clean at exit `0`. Setting the full alive URL
-satisfies both.
+Self-mode `NOT CONFIGURED` asks the same question the run asks at start-up: is there a
+service-alive check to ping. Both accept a full `HEALTHCHECK_ALIVE_URL` or a
+`HEALTHCHECK_ALIVE_ID`, which is assembled against `HEALTHCHECK_PING_ENDPOINT` (and the
+optional `HEALTHCHECK_PING_KEY`). A host configured with only an alive **id** is a
+configured host on both sides.
+
+The one case where the screen is stricter than the run: an alive **id** with
+`HEALTHCHECK_PING_ENDPOINT` set to empty resolves to no URL at all, so this screen says
+`NOT CONFIGURED` while the run's start-up check, which only looks for a non-empty id, lets
+the backup proceed and then has nothing to ping. Leave the ping endpoint at its default
+unless you run your own healthchecks instance, in which case point it at that.
 
 ### What the sensor list tells you
 

@@ -219,7 +219,7 @@ func ClassifyHealthcheckSetupSkip(res HealthcheckSetupBootstrap) HealthcheckSetu
 		st.Message = "The configuration could not be loaded, so backup monitoring could not be checked. Re-run the installer to repair it."
 	case HealthcheckSetupSkipSelfMode:
 		st.Keyword = "NOT CONFIGURED"
-		st.Message = "Self-mode monitoring is selected but no service-alive ping URL is configured yet. Enter the healthchecks parameters to finish setup."
+		st.Message = "Self-mode monitoring is selected but no service-alive check is configured yet: set a ping URL, or a check id with a ping endpoint. Enter the healthchecks parameters to finish setup."
 	case HealthcheckSetupSkipIdentityUnavailable:
 		// Two distinct causes collapse into this eligibility upstream: no ServerID at all,
 		// or a ServerID with no relay secret on disk yet. res.ServerID splits them (a

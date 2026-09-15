@@ -1882,3 +1882,27 @@ func (c *Config) GetRetentionPolicy() string {
 	}
 	return "simple"
 }
+
+// HealthcheckSelfPingURL resolves one self-mode ping target: the full URL when the operator
+// gave one, otherwise HEALTHCHECK_PING_ENDPOINT (plus the optional ping key) and the check
+// id. It returns "" when there is nothing to ping.
+//
+// It lives here because two places answer the same question and used to answer it
+// differently. The daemon assembles the URL from an id, so a host configured with
+// HEALTHCHECK_ALIVE_ID alone pings correctly and its backups exit 0; the dashboard's
+// healthcheck screen read HEALTHCHECK_ALIVE_URL alone and reported that same host as NOT
+// CONFIGURED. One resolver, one answer.
+func (c *Config) HealthcheckSelfPingURL(fullURL, checkID string) string {
+	if url := strings.TrimSpace(fullURL); url != "" {
+		return url
+	}
+	id := strings.TrimSpace(checkID)
+	base := strings.TrimRight(strings.TrimSpace(c.HealthcheckPingEndpoint), "/")
+	if id == "" || base == "" {
+		return ""
+	}
+	if key := strings.TrimSpace(c.HealthcheckPingKey); key != "" {
+		return base + "/" + key + "/" + id
+	}
+	return base + "/" + id
+}

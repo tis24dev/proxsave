@@ -179,8 +179,8 @@ var notes = []Note{
 		Lines: []string{
 			"A personal script the daemon refuses to start now says so, instead of the run looking as if it ran",
 			"A debug run names the marker that decided PVE, PBS or dual, and every marker it checked before that one",
-			"PBS ACME accounts stop reporting not configured: they are a directory, now backed up and restored as one",
-			"BACKUP_PBS_ACME_ACCOUNTS=false now really keeps the ACME account keys out of the archive",
+			"PBS ACME accounts are backed up and restored as a directory, and BACKUP_PBS_ACME_ACCOUNTS=false really excludes them",
+			"The healthchecks screen accepts HEALTHCHECK_ALIVE_ID: an id alone no longer reads as not configured",
 			"A misspelled variable in backup.env is called out as a probable typo, with the name it was meant to be",
 			"proxsave --upgrade-config reports a variable set twice instead of answering that the file is up to date",
 			"A variable the upgrade adds back is written inside its own section, not above the header that documents it",
@@ -197,6 +197,7 @@ var notes = []Note{
 			"Several variables missing from the same section are each written back under their own comment, not stacked",
 			"A debug run under SYSTEM_ROOT_PREFIX reports the mounted host only: command probes are listed as skipped",
 			"The detection marker table now stats proxmox-backup-manager in /usr/sbin too, where PBS 4 installs it",
+			"A self-mode host set up with an alive check id needs no full URL: the screen and the run now agree on it",
 			"If SKIP_PERMISSION_CHECK=true is left over from a test, clear it: the next run really skips that check",
 		},
 	},

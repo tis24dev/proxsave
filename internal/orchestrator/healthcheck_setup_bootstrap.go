@@ -41,8 +41,10 @@ type HealthcheckSetupBootstrap struct {
 	HealthcheckMode    string
 	ServerAPIHost      string
 
-	// HealthcheckAliveURL is the self-mode full service-alive ping URL (cfg.HealthcheckAliveURL).
-	// It is the sole input the self reachability check needs; centralized mode leaves it empty.
+	// HealthcheckAliveURL is the self-mode service-alive ping URL, RESOLVED the way the run
+	// resolves it (config.HealthcheckSelfPingURL): the full URL when the operator gave one,
+	// otherwise assembled from the ping endpoint and HEALTHCHECK_ALIVE_ID. It is the sole
+	// input the self reachability check needs; centralized mode leaves it empty.
 	HealthcheckAliveURL string
 
 	// HealthcheckHeartbeatInterval is the daemon's configured heartbeat period; the
@@ -101,7 +103,10 @@ func BuildHealthcheckSetupBootstrap(ctx context.Context, configPath, baseDir str
 		state.ServerAPIHost = strings.TrimSpace(cfg.ServerAPIHost)
 		state.HealthcheckHeartbeatInterval = cfg.HealthcheckHeartbeatInterval
 		state.HealthcheckUpdateInterval = cfg.HealthcheckUpdateInterval
-		state.HealthcheckAliveURL = strings.TrimSpace(cfg.HealthcheckAliveURL)
+		// Resolved the way the run resolves it, not read off HEALTHCHECK_ALIVE_URL: a host
+		// carrying HEALTHCHECK_ALIVE_ID alone pings a real check and its backups exit 0,
+		// and this screen used to call that host NOT CONFIGURED.
+		state.HealthcheckAliveURL = cfg.HealthcheckSelfPingURL(cfg.HealthcheckAliveURL, cfg.HealthcheckAliveID)
 	}
 
 	if !state.HealthcheckEnabled {
