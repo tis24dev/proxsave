@@ -417,11 +417,3 @@ func (s *collectionState) ensurePVERuntimeInfo() *pveRuntimeInfo {
 	return s.pve.runtimeInfo
 }
 
-func newDualRecipe() recipe {
-	bricks := append([]collectionBrick{}, newPVERecipe().Bricks...)
-	bricks = append(bricks, newPBSRecipe().Bricks...)
-	return recipe{
-		Name:   "dual",
-		Bricks: bricks,
-	}
-}

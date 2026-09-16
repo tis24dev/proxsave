@@ -35,6 +35,10 @@ type BackupManifest struct {
 	Hostname       string                   `json:"hostname"`
 	ProxmoxType    string                   `json:"proxmox_type"`
 	ProxmoxTargets []string                 `json:"proxmox_targets,omitempty"`
+	// Incomplete names any role whose collection aborted while the run carried on.
+	// Absent on a whole backup. It is what stops a partial archive from reading like
+	// a complete one once the run log is gone.
+	Incomplete []incompleteTarget `json:"incomplete_targets,omitempty"`
 	PBSConfigs     map[string]ManifestEntry `json:"pbs_configs,omitempty"`
 	PVEConfigs     map[string]ManifestEntry `json:"pve_configs,omitempty"`
 	SystemFiles    map[string]ManifestEntry `json:"system_files,omitempty"`
@@ -58,6 +62,7 @@ func (c *Collector) WriteManifest(hostname string) error {
 		Hostname:       hostname,
 		ProxmoxType:    string(c.proxType),
 		ProxmoxTargets: append([]string(nil), c.proxType.Targets()...),
+		Incomplete:     append([]incompleteTarget(nil), c.incomplete...),
 		PBSConfigs:     c.pbsManifest,
 		PVEConfigs:     c.pveManifest,
 		SystemFiles:    c.systemManifest,

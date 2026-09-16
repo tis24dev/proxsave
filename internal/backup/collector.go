@@ -70,6 +70,19 @@ type Collector struct {
 	// collectingCustomPaths is set while copying operator-supplied CUSTOM_BACKUP_PATHS,
 	// during which the source walk prunes the staging workspace to avoid self-copy (#56).
 	collectingCustomPaths bool
+
+	// incomplete records a role whose collection aborted while the run carried on.
+	// It exists only for the dual case, where the two halves are independent: losing
+	// PBS is no reason to throw away the PVE payload that is already staged. Whatever
+	// lands here is reported and written into the manifest, so a partial archive is
+	// never mistaken for a whole one.
+	incomplete []incompleteTarget
+}
+
+// incompleteTarget is one role that did not finish, and why.
+type incompleteTarget struct {
+	Target string `json:"target"`
+	Reason string `json:"reason"`
 }
 
 var osSymlink = os.Symlink
@@ -460,25 +473,33 @@ func (c *Collector) CollectAll(ctx context.Context) error {
 	c.logger.Info("Starting backup collection for %s", c.proxType)
 	c.logger.Debug("Collector dry-run=%v tempDir=%s", c.dryRun, c.tempDir)
 
+	// roleErr is held rather than returned on the spot. The common system payload
+	// below is independent of which hypervisor this is, and returning here skipped it:
+	// a run that lost its PBS half also lost the network, storage-stack and hardware
+	// snapshot it had nothing to do with (issue #315).
+	var roleErr error
 	switch c.proxType {
 	case types.ProxmoxVE:
 		c.logger.Debug("Invoking PVE-specific collectors (configs, jobs, schedules, storage metadata)")
 		if err := c.CollectPVEConfigs(ctx); err != nil {
-			return fmt.Errorf("PVE collection failed: %w", err)
+			roleErr = fmt.Errorf("PVE collection failed: %w", err)
+		} else {
+			c.logger.Debug("PVE-specific collection completed")
 		}
-		c.logger.Debug("PVE-specific collection completed")
 	case types.ProxmoxBS:
 		c.logger.Debug("Invoking PBS-specific collectors (datastores, users, namespaces, pxar metadata)")
 		if err := c.CollectPBSConfigs(ctx); err != nil {
-			return fmt.Errorf("PBS collection failed: %w", err)
+			roleErr = fmt.Errorf("PBS collection failed: %w", err)
+		} else {
+			c.logger.Debug("PBS-specific collection completed")
 		}
-		c.logger.Debug("PBS-specific collection completed")
 	case types.ProxmoxDual:
 		c.logger.Debug("Invoking dual-role collectors (PVE + PBS recipes, shared system/common once)")
 		if err := c.CollectDualConfigs(ctx); err != nil {
-			return fmt.Errorf("dual collection failed: %w", err)
+			roleErr = fmt.Errorf("dual collection failed: %w", err)
+		} else {
+			c.logger.Debug("Dual-role collection completed")
 		}
-		c.logger.Debug("Dual-role collection completed")
 	case types.ProxmoxUnknown:
 		c.logger.Warning("Unknown Proxmox type, collecting generic system info only")
 		c.logger.Debug("Skipping hypervisor-specific collection because type is unknown")
@@ -493,6 +514,10 @@ func (c *Collector) CollectAll(ctx context.Context) error {
 		c.logger.Warning("System info collection had warnings: %v", err)
 	}
 	c.logger.Debug("Baseline system information collected successfully")
+
+	if roleErr != nil {
+		return roleErr
+	}
 
 	stats := c.GetStats()
 	c.logger.Debug("Collection completed: %d files, %d failed, %d dirs created",
