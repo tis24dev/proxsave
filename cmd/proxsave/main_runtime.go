@@ -67,6 +67,36 @@ func logDetectionProvenance(bootstrap *logging.BootstrapLogger, info *environmen
 	for _, step := range info.Steps {
 		bootstrap.Debug("Detection probe: %s", step)
 	}
+	warnDetectionResidue(bootstrap, info)
+}
+
+// warnDetectionResidue reports, at warning, a product that left files behind without
+// being installed. The trace above says the same thing, but only on a debug run, and
+// the operator who needs this is the one looking at a type they did not expect: they
+// see PVE where a PBS directory exists, and nothing at a normal level tells them that
+// ProxSave looked at that directory and decided it does not count (issue #315).
+//
+// It stays quiet on a host that has the product, because the ladder returns at the
+// first marker that proves an install and never reaches the residue rungs, so there
+// is nothing to report on a healthy host of either kind.
+func warnDetectionResidue(bootstrap *logging.BootstrapLogger, info *environment.EnvironmentInfo) {
+	if bootstrap == nil || info == nil {
+		return
+	}
+	for _, residue := range []struct {
+		product string
+		marker  string
+		pkg     string
+	}{
+		{"PVE", info.PVEResidual, "pve-manager"},
+		{"PBS", info.PBSResidual, "proxmox-backup-server"},
+	} {
+		if strings.TrimSpace(residue.marker) == "" {
+			continue
+		}
+		bootstrap.Warning("%s files without a %s install - %s is present but the %s package is not, so this host is collected as %s",
+			residue.product, residue.product, residue.marker, residue.pkg, info.Type)
+	}
 }
 
 // detectionSourceLabel keeps the verdict line readable when a product was not

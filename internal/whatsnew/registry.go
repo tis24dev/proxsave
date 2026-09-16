@@ -201,6 +201,18 @@ var notes = []Note{
 			"If SKIP_PERMISSION_CHECK=true is left over from a test, clear it: the next run really skips that check",
 		},
 	},
+	{
+		Version: "0.39.0",
+		Lines: []string{
+			"A PVE host with leftover proxmox-backup files is no longer taken for a PBS server, and its backup runs again",
+			"A run says when a product left files behind without being installed, and names the file it found",
+		},
+		Actions: []string{
+			"If a run used to fail with failed to get PBS version on a host without PBS, it now completes as a PVE backup",
+			"The leftover directories are still reported: remove them, or install PBS, only if you want the notice to stop",
+			"An archive taken before this fix is labelled dual, so restoring it on the corrected host reports partial match",
+		},
+	},
 }
 
 // LookupNotes returns the notes for versions in the half-open range (from, to], ascending by
