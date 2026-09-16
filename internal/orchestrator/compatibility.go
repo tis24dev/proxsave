@@ -5,6 +5,8 @@ import (
 	"strings"
 
 	"github.com/tis24dev/proxsave/internal/backup"
+	"github.com/tis24dev/proxsave/internal/environment"
+	"github.com/tis24dev/proxsave/internal/types"
 )
 
 var compatFS FS = osFS{}
@@ -42,25 +44,36 @@ func (s SystemType) Overlaps(other SystemType) bool {
 	return (s.SupportsPVE() && other.SupportsPVE()) || (s.SupportsPBS() && other.SupportsPBS())
 }
 
-// DetectCurrentSystem detects the type of the current system (PVE or PBS)
+// detectEnvironment is the seam that lets a test drive DetectCurrentSystem without a
+// Proxmox host, the way compatFS does for the file probes in this file.
+var detectEnvironment = environment.Detect
+
+// DetectCurrentSystem reports what this host is, for the restore side.
+//
+// It used to carry its own rule, and the rule had rotted: hasPBS was
+// `/etc/proxmox-backup` OR `/usr/sbin/proxmox-backup-proxy`, and the second path does
+// not exist on PBS 3.4.9 or on 4.2.0 (the proxy is a systemd unit, not a binary on
+// PATH). So the OR was never a choice between two proofs. Every PBS restore decision
+// rested on one directory, which no package owns and no removal deletes: the same
+// marker that turned a PVE-only host into a dual backup in issue #315.
+//
+// Backup and restore now read the same ladder, so a host cannot be one type while
+// being collected and another while being restored onto.
 func DetectCurrentSystem() SystemType {
-	hasPVE := fileExists("/etc/pve") || fileExists("/usr/bin/qm") || fileExists("/usr/bin/pct")
-	hasPBS := fileExists("/etc/proxmox-backup") || fileExists("/usr/sbin/proxmox-backup-proxy")
-
-	// Check for PVE indicators
-	if hasPVE && hasPBS {
+	info, _ := detectEnvironment()
+	if info == nil {
+		return SystemTypeUnknown
+	}
+	switch info.Type {
+	case types.ProxmoxDual:
 		return SystemTypeDual
-	}
-	if hasPVE {
+	case types.ProxmoxVE:
 		return SystemTypePVE
-	}
-
-	// Check for PBS indicators
-	if hasPBS {
+	case types.ProxmoxBS:
 		return SystemTypePBS
+	default:
+		return SystemTypeUnknown
 	}
-
-	return SystemTypeUnknown
 }
 
 // DetectBackupType detects the type of backup from manifest

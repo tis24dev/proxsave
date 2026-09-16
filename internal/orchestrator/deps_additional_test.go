@@ -4,13 +4,13 @@ import (
 	"context"
 	"io"
 	"os"
-	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/tis24dev/proxsave/internal/config"
+	"github.com/tis24dev/proxsave/internal/environment"
 	"github.com/tis24dev/proxsave/internal/logging"
 	"github.com/tis24dev/proxsave/internal/types"
 )
@@ -204,17 +204,11 @@ func TestOSCommandRunner_RunAndRunStream(t *testing.T) {
 	}
 }
 
-func TestRealSystemDetectorUsesCompatFS(t *testing.T) {
-	orig := compatFS
-	t.Cleanup(func() { compatFS = orig })
-
-	fake := NewFakeFS()
-	t.Cleanup(func() { _ = os.RemoveAll(fake.Root) })
-	compatFS = fake
-
-	if err := fake.AddDir(filepath.Join(string(os.PathSeparator), "etc", "pve")); err != nil {
-		t.Fatalf("AddDir: %v", err)
-	}
+// TestRealSystemDetectorUsesTheDetectionLadder: the injected detector must reach the
+// same rule the backup side uses. It used to read /etc/pve off compatFS, which is how
+// restore ended up with a second, weaker opinion about what this host is.
+func TestRealSystemDetectorUsesTheDetectionLadder(t *testing.T) {
+	stubDetection(t, &environment.EnvironmentInfo{Type: types.ProxmoxVE}, nil)
 
 	got := (realSystemDetector{}).DetectCurrentSystem()
 	if got != SystemTypePVE {

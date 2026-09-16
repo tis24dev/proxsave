@@ -206,11 +206,13 @@ var notes = []Note{
 		Lines: []string{
 			"A PVE host with leftover proxmox-backup files is no longer taken for a PBS server, and its backup runs again",
 			"A run says when a product left files behind without being installed, and names the file it found",
+			"Restore reads the host type from the same check the backup uses, instead of keeping a weaker one of its own",
 		},
 		Actions: []string{
 			"If a run used to fail with failed to get PBS version on a host without PBS, it now completes as a PVE backup",
 			"The leftover directories are still reported: remove them, or install PBS, only if you want the notice to stop",
 			"An archive taken before this fix is labelled dual, so restoring it on the corrected host reports partial match",
+			"A PVE host with leftover PBS files no longer offers PBS restore categories and no longer stops PBS services",
 		},
 	},
 }
