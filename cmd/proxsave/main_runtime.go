@@ -67,27 +67,34 @@ func logDetectionProvenance(bootstrap *logging.BootstrapLogger, info *environmen
 	for _, step := range info.Steps {
 		bootstrap.Debug("Detection probe: %s", step)
 	}
-	warnDetectionResidue(bootstrap, info)
+	reportDetectionResidue(bootstrap, info)
 }
 
-// warnDetectionResidue reports, at warning, a product whose files are present while no
-// marker proved it installed. The trace above says the same thing, but only on a debug
-// run, and the operator who needs this is the one looking at a type they did not
-// expect: they see PVE where a PBS directory exists, and nothing at a normal level
-// tells them that ProxSave looked at that directory and decided it does not count
-// (issue #315).
+// reportDetectionResidue reports a product whose files are present while no marker
+// proved it installed. The trace above says the same thing, but only on a debug run,
+// and the operator who needs this is the one looking at a type they did not expect:
+// they see PVE where a PBS directory exists, and nothing at a normal level tells them
+// that ProxSave looked at that directory and decided it does not count (issue #315).
 //
-// The wording stops short of declaring the package absent, which the residue does not
-// prove. dpkgPackageInstalled returns false both when the stanza says not-installed and
-// when the status file cannot be read at all, and under SYSTEM_ROOT_PREFIX the second
-// is the common case: a mount carrying /etc but not the /var that holds the package
-// database. Saying "no installed-product marker answered" is what was actually
-// observed; saying "the package is not installed" would be a guess, and on a partial
-// mount a wrong one about a host that has it.
+// INFO, not warning, and the level is the point. A residue is recorded only when a
+// product was NOT proved installed, which leaves exactly two situations, and the
+// mount-shape matrix confirms there is no third:
 //
-// It stays quiet whenever a product is found, because the ladder returns at the first
-// marker that proves an install and records no residue for that product.
-func warnDetectionResidue(bootstrap *logging.BootstrapLogger, info *environment.EnvironmentInfo) {
+//   - the type came out pve, pbs or dual: the product is genuinely absent, the backup
+//     is complete and correct, and the leftovers are untidy filesystem, not a fault.
+//     Warning here pinned such a host at exit 1 on every run, for something its
+//     operator often cannot remove (/var/lib/proxmox-backup belongs to the PVE
+//     file-restore stack), so a nightly monitor would alarm forever on a healthy node.
+//   - the type came out unknown: that IS a fault, and it already carries three
+//     warnings that decide the exit code between them - the detection error here,
+//     which now names the residue, the host-backup mount warning, and the collector
+//     saying it is collecting generic system info only. A fourth would be noise.
+//
+// The wording also stops short of declaring the package absent, which the residue does
+// not prove: dpkgPackageInstalled returns false both when the stanza says
+// not-installed and when the status file cannot be read, and under SYSTEM_ROOT_PREFIX
+// the second is the common case.
+func reportDetectionResidue(bootstrap *logging.BootstrapLogger, info *environment.EnvironmentInfo) {
 	if bootstrap == nil || info == nil {
 		return
 	}
@@ -102,7 +109,7 @@ func warnDetectionResidue(bootstrap *logging.BootstrapLogger, info *environment.
 		if strings.TrimSpace(residue.marker) == "" {
 			continue
 		}
-		bootstrap.Warning("%s files without a %s install - %s is present but nothing proved %s is installed, so this host is collected as %s",
+		bootstrap.Info("%s files without a %s install - %s is present but nothing proved %s is installed, so this host is collected as %s",
 			residue.product, residue.product, residue.marker, residue.pkg, info.Type)
 	}
 }
