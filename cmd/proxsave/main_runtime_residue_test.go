@@ -9,9 +9,15 @@ import (
 )
 
 // TestResidueWarningStaysQuietOnAHealthyHost is the one that keeps this line useful.
-// Detection returns at the first marker that proves an install and never reaches the
-// residue rungs, so a host that has the product records no residue and must produce no
-// warning. A line that fired on every run would be ignored by the time it mattered.
+// A product that was found records no residue, so a healthy host of either kind must
+// produce no warning. A line that fired on every run would be ignored by the time it
+// mattered.
+//
+// It is the RESIDUE FIELD being empty that makes it quiet, not the ladder stopping
+// early: since the versionless-command rung keeps walking, a host whose command
+// answered without a version does reach the residue rungs, and detectPVE/detectPBS
+// still return an empty residue because the product was proved installed. That is
+// covered on the detection side by TestAVersionlessCommandStillProvesTheInstall.
 func TestResidueWarningStaysQuietOnAHealthyHost(t *testing.T) {
 	for _, info := range []*environment.EnvironmentInfo{
 		{Type: types.ProxmoxVE},

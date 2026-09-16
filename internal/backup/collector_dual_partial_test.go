@@ -2,6 +2,7 @@ package backup
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"os"
@@ -17,6 +18,14 @@ import (
 // configuration directories the caller asks for is created; the other is absent, which
 // is how each half is made to fail at its validate brick.
 func dualCollector(t *testing.T, withPVE, withPBS bool) *Collector {
+	t.Helper()
+	return dualCollectorWithDryRun(t, withPVE, withPBS, true)
+}
+
+// dualCollectorWithDryRun is the same fixture with the dry-run switch exposed: the
+// manifest is only written on a real run, so a test that reads it back off disk needs
+// dryRun=false.
+func dualCollectorWithDryRun(t *testing.T, withPVE, withPBS, dryRun bool) *Collector {
 	t.Helper()
 	logger := logging.New(types.LogLevelError, false)
 	logger.SetOutput(io.Discard)
@@ -49,7 +58,7 @@ func dualCollector(t *testing.T, withPVE, withPBS bool) *Collector {
 		return []byte("[]"), nil
 	}
 
-	return NewCollectorWithDeps(logger, cfg, t.TempDir(), types.ProxmoxDual, true, deps)
+	return NewCollectorWithDeps(logger, cfg, t.TempDir(), types.ProxmoxDual, dryRun, deps)
 }
 
 // TestDualKeepsThePVEHalfWhenPBSFails is the loss issue #315 caused. The two halves
@@ -101,22 +110,39 @@ func TestDualFailsWhenBothHalvesFail(t *testing.T) {
 }
 
 // TestIncompleteTargetTravelsInTheManifest: a log can be rotated away or never read,
-// and the archive then looks whole. The manifest is what goes with it.
+// and the archive then looks whole. This writes the manifest and reads it back off
+// disk, because an earlier version of this test asserted the in-memory field and
+// claimed the manifest in its name without ever producing one.
 func TestIncompleteTargetTravelsInTheManifest(t *testing.T) {
-	collector := dualCollector(t, true, false)
+	collector := dualCollectorWithDryRun(t, true, false, false)
 	if err := collector.CollectAll(context.Background()); err != nil {
 		t.Fatalf("CollectAll: %v", err)
 	}
+	if err := collector.WriteManifest("host.example"); err != nil {
+		t.Fatalf("WriteManifest: %v", err)
+	}
 
-	if len(collector.incomplete) != 1 {
-		t.Fatalf("collector.incomplete = %v, want one entry", collector.incomplete)
+	path := filepath.Join(collector.tempDir, "manifest.json")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read %s: %v", path, err)
 	}
-	entry := collector.incomplete[0]
-	if entry.Target != "pbs" {
-		t.Fatalf("incomplete target = %q, want pbs", entry.Target)
+	var written BackupManifest
+	if err := json.Unmarshal(data, &written); err != nil {
+		t.Fatalf("unmarshal manifest: %v", err)
 	}
-	if strings.TrimSpace(entry.Reason) == "" {
-		t.Fatal("the recorded reason is empty: the manifest would say a half is missing without saying why")
+
+	if len(written.Incomplete) != 1 {
+		t.Fatalf("manifest incomplete_targets = %+v, want one entry", written.Incomplete)
+	}
+	if written.Incomplete[0].Target != "pbs" {
+		t.Fatalf("incomplete target = %q, want pbs", written.Incomplete[0].Target)
+	}
+	if strings.TrimSpace(written.Incomplete[0].Reason) == "" {
+		t.Fatal("the manifest says a half is missing without saying why")
+	}
+	if !strings.Contains(string(data), "incomplete_targets") {
+		t.Fatal("the JSON key is absent: a reader of the archive cannot see the gap")
 	}
 }
 

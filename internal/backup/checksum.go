@@ -30,10 +30,17 @@ type Manifest struct {
 	CompressionMode  string    `json:"compression_mode,omitempty"`
 	ProxmoxType      string    `json:"proxmox_type"`
 	ProxmoxTargets   []string  `json:"proxmox_targets,omitempty"`
-	ProxmoxVersion   string    `json:"proxmox_version,omitempty"`
-	PVEVersion       string    `json:"pve_version,omitempty"`
-	PBSVersion       string    `json:"pbs_version,omitempty"`
-	Hostname         string    `json:"hostname"`
+	// IncompleteTargets names a role this archive was supposed to carry and does
+	// not, because its collection aborted while the run carried on. Absent on a
+	// whole archive. This is the sidecar, the record restore actually reads, so the
+	// gap has to be here: the collection manifest is an ExportOnly diagnostic that
+	// restore never opens, and a half-empty dual archive recorded only there would
+	// pass the compatibility check as a whole one.
+	IncompleteTargets []string `json:"incomplete_targets,omitempty"`
+	ProxmoxVersion    string   `json:"proxmox_version,omitempty"`
+	PVEVersion        string   `json:"pve_version,omitempty"`
+	PBSVersion        string   `json:"pbs_version,omitempty"`
+	Hostname          string   `json:"hostname"`
 	// ServerID is the server identity of the machine that wrote the archive, the
 	// same 16-digit value the identity file persists. Retention uses it to confirm
 	// that an archive naming a spelling of this host's name really is this host's

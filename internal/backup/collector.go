@@ -497,6 +497,8 @@ func (c *Collector) CollectAll(ctx context.Context) error {
 		c.logger.Debug("Invoking dual-role collectors (PVE + PBS recipes, shared system/common once)")
 		if err := c.CollectDualConfigs(ctx); err != nil {
 			roleErr = fmt.Errorf("dual collection failed: %w", err)
+		} else if targets := c.IncompleteTargets(); len(targets) > 0 {
+			c.logger.Debug("Dual-role collection finished without %s", strings.Join(targets, ", "))
 		} else {
 			c.logger.Debug("Dual-role collection completed")
 		}
@@ -507,6 +509,13 @@ func (c *Collector) CollectAll(ctx context.Context) error {
 
 	// Collect common system information (always collect)
 	if err := ctx.Err(); err != nil {
+		// A cancelled context ends the run, but not at the cost of what already went
+		// wrong: returning the bare context error here dropped roleErr, so a log said
+		// "context canceled" where the phase that actually died was named one line
+		// earlier. Join keeps both reachable through errors.Is.
+		if roleErr != nil {
+			return errors.Join(roleErr, err)
+		}
 		return err
 	}
 	c.logger.Debug("Collecting baseline system information (network/system files, commands, hardware data)")

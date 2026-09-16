@@ -324,3 +324,104 @@ func TestAVersionlessCommandStillProvesTheInstall(t *testing.T) {
 		t.Fatalf("Type = %v, want ProxmoxVE", info.Type)
 	}
 }
+
+// TestProvenanceNamesTheRungThatDecided: the versionless-command rung is a hit that
+// keeps walking, and decidedBy returning the first hit named it as the decider while
+// dpkg one rung down supplied the version. An operator reading "PVE decided by command
+// (pveversion)" above a step list showing that probe produced nothing was pointed at
+// the wrong marker.
+func TestProvenanceNamesTheRungThatDecided(t *testing.T) {
+	tmp := t.TempDir()
+	setValue(t, &additionalPaths, []string{})
+	nullFilesystemMarkerSeams(t, tmp)
+
+	dpkgStatus := filepath.Join(tmp, "dpkg-status")
+	writeFile(t, dpkgStatus, dpkgStanza("pve-manager", "9.2.18")+dpkgStanza("proxmox-backup-server", "4.2.0-1"))
+	setValue(t, &dpkgStatusFile, dpkgStatus)
+
+	setValue(t, &lookPathFunc, func(cmd string) (string, error) {
+		switch cmd {
+		case "pveversion":
+			return "/usr/bin/pveversion", nil
+		case "proxmox-backup-manager":
+			return "/usr/sbin/proxmox-backup-manager", nil
+		}
+		return "", errors.New("not found")
+	})
+	setValue(t, &runCommandFunc, func(string, ...string) (string, error) {
+		return "", errors.New("command timed out")
+	})
+
+	info, err := detectEnvironmentInfo()
+	if err != nil {
+		t.Fatalf("detectEnvironmentInfo: %v", err)
+	}
+	if info.Type != types.ProxmoxDual {
+		t.Fatalf("Type = %v, want ProxmoxDual", info.Type)
+	}
+	if !strings.HasPrefix(info.PVESource, "dpkg pve-manager") {
+		t.Fatalf("PVESource = %q, want the dpkg rung that supplied the version", info.PVESource)
+	}
+	if !strings.HasPrefix(info.PBSSource, "dpkg proxmox-backup-server") {
+		t.Fatalf("PBSSource = %q, want the dpkg rung that supplied the version", info.PBSSource)
+	}
+}
+
+// TestProvenanceFallsBackToTheCommandWhenNothingElseAnswers: with no later marker, the
+// rung that kept walking is the whole provenance there is, and an empty source line
+// would be worse than naming it.
+func TestProvenanceFallsBackToTheCommandWhenNothingElseAnswers(t *testing.T) {
+	tmp := t.TempDir()
+	setValue(t, &additionalPaths, []string{})
+	nullFilesystemMarkerSeams(t, tmp)
+	setValue(t, &lookPathFunc, func(cmd string) (string, error) {
+		if cmd == "pveversion" {
+			return "/usr/bin/pveversion", nil
+		}
+		return "", errors.New("not found")
+	})
+	setValue(t, &runCommandFunc, func(string, ...string) (string, error) {
+		return "no version here", nil
+	})
+
+	info, _ := detectEnvironmentInfo()
+	if info.Type != types.ProxmoxVE {
+		t.Fatalf("Type = %v, want ProxmoxVE", info.Type)
+	}
+	if !strings.HasPrefix(info.PVESource, "command (") {
+		t.Fatalf("PVESource = %q, want the command rung named as the only provenance", info.PVESource)
+	}
+}
+
+// TestThePBSHalfOfTheVersionlessCommandFix: the PVE half had a test and the PBS half
+// had none, so the symmetry was asserted nowhere.
+func TestThePBSHalfOfTheVersionlessCommandFix(t *testing.T) {
+	tmp := t.TempDir()
+	setValue(t, &additionalPaths, []string{})
+	nullFilesystemMarkerSeams(t, tmp)
+
+	dpkgStatus := filepath.Join(tmp, "dpkg-status")
+	writeFile(t, dpkgStatus, dpkgStanza("proxmox-backup-server", "4.2.0-1"))
+	setValue(t, &dpkgStatusFile, dpkgStatus)
+
+	setValue(t, &lookPathFunc, func(cmd string) (string, error) {
+		if cmd == "proxmox-backup-manager" {
+			return "/usr/sbin/proxmox-backup-manager", nil
+		}
+		return "", errors.New("not found")
+	})
+	setValue(t, &runCommandFunc, func(string, ...string) (string, error) {
+		return "", errors.New("command proxmox-backup-manager timed out")
+	})
+
+	info, err := detectEnvironmentInfo()
+	if err != nil {
+		t.Fatalf("detectEnvironmentInfo: %v", err)
+	}
+	if info.Type != types.ProxmoxBS {
+		t.Fatalf("Type = %v, want ProxmoxBS", info.Type)
+	}
+	if info.PBSVersion != "4.2.0-1" {
+		t.Fatalf("PBSVersion = %q, want 4.2.0-1 recovered from dpkg", info.PBSVersion)
+	}
+}

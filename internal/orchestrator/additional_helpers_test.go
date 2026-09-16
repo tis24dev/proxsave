@@ -1747,6 +1747,12 @@ func TestDispatchNotificationsAndLogsSkipsWithNoLog(t *testing.T) {
 }
 
 func TestCheckSystemRequirementsNoPanic(t *testing.T) {
+	// DetectCurrentSystem now walks the real detection ladder, which runs pveversion
+	// and proxmox-backup-manager with a 5s timeout each. Left unstubbed this test asks
+	// the build host what it is, so it both slows down and answers differently on a
+	// developer laptop and on the PVE box the suite is usually run on.
+	stubDetection(t, &environment.EnvironmentInfo{Type: types.ProxmoxBS}, nil)
+
 	// manifest nil
 	CheckSystemRequirements(nil)
 	// just ensure no panic

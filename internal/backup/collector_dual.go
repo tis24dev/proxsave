@@ -2,6 +2,7 @@ package backup
 
 import (
 	"context"
+	"errors"
 	"fmt"
 )
 
@@ -32,7 +33,10 @@ func (c *Collector) CollectDualConfigs(ctx context.Context) error {
 
 	switch {
 	case pveErr != nil && pbsErr != nil:
-		return fmt.Errorf("both halves failed: PVE: %w; PBS: %v", pveErr, pbsErr)
+		// Both causes are wrapped, not just the first. %w on one and %v on the other
+		// put the PBS text in the message while leaving it unreachable to errors.Is,
+		// so a caller testing for a sentinel saw only half the failure.
+		return fmt.Errorf("both halves failed: %w", errors.Join(pveErr, pbsErr))
 	case pveErr != nil:
 		c.noteIncompleteTarget("pve", pveErr)
 	case pbsErr != nil:
@@ -65,6 +69,15 @@ func (c *Collector) noteIncompleteTarget(target string, cause error) {
 
 	c.logger.Warning("Collection: the %s half of this dual host did not finish - %s", target, reason)
 	c.logger.Warning("Collection: this backup carries the other role and the system payload, and is marked incomplete for %s", target)
+}
+
+// incompleteSnapshot copies the recorded gaps under the same lock every other access
+// to the slice takes. WriteManifest read it bare, which is a race the moment anything
+// records a gap off the collection goroutine.
+func (c *Collector) incompleteSnapshot() []incompleteTarget {
+	c.statsMu.Lock()
+	defer c.statsMu.Unlock()
+	return append([]incompleteTarget(nil), c.incomplete...)
 }
 
 // IncompleteTargets returns the roles whose collection did not finish, for a caller

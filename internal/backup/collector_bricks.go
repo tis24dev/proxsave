@@ -416,4 +416,3 @@ func (s *collectionState) ensurePVERuntimeInfo() *pveRuntimeInfo {
 	}
 	return s.pve.runtimeInfo
 }
-

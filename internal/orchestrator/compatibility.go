@@ -76,14 +76,26 @@ func DetectCurrentSystem() SystemType {
 	}
 }
 
-// DetectBackupType detects the type of backup from manifest
+// DetectBackupType detects the type of backup from manifest.
+//
+// A role the archive was supposed to carry and does not is subtracted first. The
+// targets field records what the run SET OUT to collect; incomplete_targets records
+// what it failed to bring back. A dual run that lost its PBS half ships a PVE
+// archive, and calling it dual would let it clear ValidateCompatibility against a
+// dual host as though nothing were missing, with the PBS categories offered and
+// nothing behind them.
 func DetectBackupType(manifest *backup.Manifest) SystemType {
 	if manifest == nil {
 		return SystemTypeUnknown
 	}
 
-	if len(manifest.ProxmoxTargets) > 0 {
-		return parseSystemTargets(manifest.ProxmoxTargets)
+	if targets := completedTargets(manifest); len(targets) > 0 {
+		return parseSystemTargets(targets)
+	}
+	if len(manifest.ProxmoxTargets) > 0 && len(manifest.IncompleteTargets) > 0 {
+		// Every declared target failed. The archive carries no role payload at all,
+		// so it is not a backup of either product.
+		return SystemTypeUnknown
 	}
 
 	// Check ProxmoxType field if present
@@ -106,6 +118,28 @@ func DetectBackupType(manifest *backup.Manifest) SystemType {
 
 	// If we can't determine from manifest, return unknown
 	return SystemTypeUnknown
+}
+
+// completedTargets is the declared target list with every incomplete role removed.
+// Matching is case-insensitive and trimmed because the two lists are written by
+// different code paths: targets by ProxmoxType.Targets(), incomplete by the
+// collector naming the recipe that failed.
+func completedTargets(manifest *backup.Manifest) []string {
+	if len(manifest.ProxmoxTargets) == 0 {
+		return nil
+	}
+	missing := make(map[string]struct{}, len(manifest.IncompleteTargets))
+	for _, target := range manifest.IncompleteTargets {
+		missing[strings.ToLower(strings.TrimSpace(target))] = struct{}{}
+	}
+	kept := make([]string, 0, len(manifest.ProxmoxTargets))
+	for _, target := range manifest.ProxmoxTargets {
+		if _, gone := missing[strings.ToLower(strings.TrimSpace(target))]; gone {
+			continue
+		}
+		kept = append(kept, target)
+	}
+	return kept
 }
 
 func parseSystemTypeString(value string) SystemType {

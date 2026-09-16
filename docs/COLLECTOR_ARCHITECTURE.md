@@ -50,13 +50,12 @@ split across files:
 - `newPVERecipe()` (`collector_bricks_pve.go`)
 - `newPBSRecipe()` (`collector_bricks_pbs.go`)
 - `newSystemRecipe()` (`collector_bricks_system.go`)
-- `newDualRecipe()` (`collector_bricks.go`)
 
 ### Composition Rules
 
 - `newPVERecipe()` = PVE-only bricks
 - `newPBSRecipe()` = PBS-only bricks
-- `newDualRecipe()` = PVE bricks + PBS bricks
+- the dual branch runs `newPVERecipe()` and `newPBSRecipe()` as two recipes over one state
 - `newSystemRecipe()` = common/system bricks only
 
 `system/common` is executed once. It is not duplicated inside `dual`.
@@ -125,8 +124,15 @@ user-list.
 
 ## Dual Branch
 
-`CollectDualConfigs()` runs `newDualRecipe()` and collects both product roles in
-a single backup run.
+`CollectDualConfigs()` runs `newPVERecipe()` and `newPBSRecipe()` as two separate
+recipes over one shared collection state, and collects both product roles in a single
+backup run.
+
+They are separate on purpose. `runRecipe` is fail-fast, so as one concatenated recipe
+an abort anywhere in the PBS half discarded the PVE payload already collected, and the
+workspace holding it was deleted (issue #315). A half that fails is now recorded in
+`incomplete_targets` and reported at warning; the other half is kept. Both halves
+failing is still an error, because no role payload is left to keep.
 
 Important semantics:
 
@@ -219,7 +225,7 @@ real collector flow.
 ## Related Files
 
 - `internal/backup/collector.go`
-- `internal/backup/collector_bricks.go` (recipe machinery, brick IDs, `newDualRecipe()`)
+- `internal/backup/collector_bricks.go` (recipe machinery, brick IDs)
 - `internal/backup/collector_bricks_pve.go` (`newPVERecipe()`)
 - `internal/backup/collector_bricks_pbs.go` (`newPBSRecipe()`, `newPBSUserConfigRecipe()`)
 - `internal/backup/collector_bricks_system.go` (`newSystemRecipe()`)

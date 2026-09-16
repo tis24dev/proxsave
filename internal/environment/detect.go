@@ -115,11 +115,13 @@ var (
 	// readFileFunc above.
 	//
 	// EXACTLY TWO functions set it, each for the duration of one call and each
-	// restoring the previous value in a defer: DetectWith and MarkerSnapshot. Both
-	// are called from the process bootstrap, which is sequential and runs before any
-	// goroutine of this program exists, so the two never overlap. That is the whole
-	// safety argument - there is no lock - and it holds only while the call sites stay
-	// where they are.
+	// restoring the previous value in a defer: DetectWith and MarkerSnapshot.
+	//
+	// Neither is bootstrap-only any more: orchestrator.DetectCurrentSystem calls
+	// environment.Detect on the restore path, so a set/restore pair now happens while
+	// a restore is being planned as well. That is still safe for the same reason it
+	// always was, and only for that reason: every call site is on the one goroutine
+	// its run uses, so no two overlap. There is no lock.
 	//
 	// A third setter, or either of these two reached from a goroutine, breaks it: one
 	// call would inspect paths under another call's prefix and return a snapshot or a
@@ -201,13 +203,17 @@ const (
 // type".
 type DetectionStep struct {
 	Product  string // productPVE or productPBS
-	Marker   string // command, version-file, dpkg, cluster-db, binary, share-dir, directory
+	Marker   string // command, version-file, dpkg, cluster-db, binary, share-dir, apt-source, directory
 	Target   string // path(s) or command consulted
 	Hit      bool
 	Skipped  bool // probe not run at all (command probes under a host prefix)
 	Residual bool // marker found, but it does not prove the product is installed
-	Version  string
-	Note     string // why a probe was skipped, or what the residue means
+	// Continued marks a hit that proved the product installed WITHOUT ending the
+	// ladder, because it carried no version and a later rung may still have one. It
+	// is what keeps decidedBy naming the rung that actually ended the walk.
+	Continued bool
+	Version   string
+	Note      string // why a probe was skipped, or what the residue means
 }
 
 // String renders the step as the single line a debug log carries.
@@ -264,10 +270,22 @@ func (t *detectionTrace) skip(product, marker, target, note string) {
 }
 
 // decidedBy names the marker that ended the ladder for product; empty when none did.
+//
+// A Continued step is skipped on purpose. The versionless-command rung is a hit that
+// keeps walking, and returning the first hit named it as the decider while the version
+// came from dpkg one rung further down, so the provenance line pointed a diagnosing
+// operator at the probe that had failed.
 func (t *detectionTrace) decidedBy(product string) string {
 	if t == nil {
 		return ""
 	}
+	for _, step := range t.steps {
+		if step.Product == product && step.Hit && !step.Continued {
+			return fmt.Sprintf("%s (%s)", step.Marker, step.Target)
+		}
+	}
+	// Every hit kept walking: the command proved the install and no later marker
+	// answered, so that rung is the whole provenance there is.
 	for _, step := range t.steps {
 		if step.Product == product && step.Hit {
 			return fmt.Sprintf("%s (%s)", step.Marker, step.Target)
@@ -462,7 +480,7 @@ func detectPVE(trace *detectionTrace) (string, bool, string) {
 			return version, true, ""
 		case markerInstalledNoVersion:
 			installedWithoutVersion = true
-			trace.add(DetectionStep{Product: productPVE, Marker: "command", Target: "pveversion", Hit: true,
+			trace.add(DetectionStep{Product: productPVE, Marker: "command", Target: "pveversion", Hit: true, Continued: true,
 				Note: "the command is installed but gave no version; looking for one further down"})
 		default:
 			trace.miss(productPVE, "command", "pveversion")
@@ -557,7 +575,7 @@ func detectPBS(trace *detectionTrace) (string, bool, string) {
 			return version, true, ""
 		case markerInstalledNoVersion:
 			installedWithoutVersion = true
-			trace.add(DetectionStep{Product: productPBS, Marker: "command", Target: "proxmox-backup-manager", Hit: true,
+			trace.add(DetectionStep{Product: productPBS, Marker: "command", Target: "proxmox-backup-manager", Hit: true, Continued: true,
 				Note: "the command is installed but gave no version; looking for one further down"})
 		default:
 			trace.miss(productPBS, "command", "proxmox-backup-manager")
@@ -690,10 +708,10 @@ func dpkgStanzaField(stanza, key string) string {
 //
 // That failure is not rare. pveversion takes 4.4 to 5.2 seconds on the lab host and
 // commandTimeout is 5, so it times out intermittently on nothing more unusual than a
-// busy node. The caller uses markerInstalled to stop the ladder and markerResidual to
-// carry on, so a run that got the binary but not the version keeps walking and lets
-// dpkg supply it, instead of settling for "unknown" with the real version one rung
-// further down.
+// busy node. The caller stops the ladder on markerInstalled and keeps walking on
+// markerInstalledNoVersion, so a run that got the binary but not the version lets dpkg
+// supply it instead of settling for "unknown" with the real version one rung further
+// down.
 func detectPVEViaCommand() (string, markerOutcome) {
 	cmdPath, err := lookPathFunc("pveversion")
 	if err != nil {
@@ -779,9 +797,6 @@ func detectPBSViaVersionFile() (string, markerOutcome) {
 	}
 	return "", markerResidual
 }
-
-
-
 
 func extendPath() {
 	currentPath := os.Getenv("PATH")

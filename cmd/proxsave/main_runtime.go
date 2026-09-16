@@ -70,15 +70,23 @@ func logDetectionProvenance(bootstrap *logging.BootstrapLogger, info *environmen
 	warnDetectionResidue(bootstrap, info)
 }
 
-// warnDetectionResidue reports, at warning, a product that left files behind without
-// being installed. The trace above says the same thing, but only on a debug run, and
-// the operator who needs this is the one looking at a type they did not expect: they
-// see PVE where a PBS directory exists, and nothing at a normal level tells them that
-// ProxSave looked at that directory and decided it does not count (issue #315).
+// warnDetectionResidue reports, at warning, a product whose files are present while no
+// marker proved it installed. The trace above says the same thing, but only on a debug
+// run, and the operator who needs this is the one looking at a type they did not
+// expect: they see PVE where a PBS directory exists, and nothing at a normal level
+// tells them that ProxSave looked at that directory and decided it does not count
+// (issue #315).
 //
-// It stays quiet on a host that has the product, because the ladder returns at the
-// first marker that proves an install and never reaches the residue rungs, so there
-// is nothing to report on a healthy host of either kind.
+// The wording stops short of declaring the package absent, which the residue does not
+// prove. dpkgPackageInstalled returns false both when the stanza says not-installed and
+// when the status file cannot be read at all, and under SYSTEM_ROOT_PREFIX the second
+// is the common case: a mount carrying /etc but not the /var that holds the package
+// database. Saying "no installed-product marker answered" is what was actually
+// observed; saying "the package is not installed" would be a guess, and on a partial
+// mount a wrong one about a host that has it.
+//
+// It stays quiet whenever a product is found, because the ladder returns at the first
+// marker that proves an install and records no residue for that product.
 func warnDetectionResidue(bootstrap *logging.BootstrapLogger, info *environment.EnvironmentInfo) {
 	if bootstrap == nil || info == nil {
 		return
@@ -94,7 +102,7 @@ func warnDetectionResidue(bootstrap *logging.BootstrapLogger, info *environment.
 		if strings.TrimSpace(residue.marker) == "" {
 			continue
 		}
-		bootstrap.Warning("%s files without a %s install - %s is present but the %s package is not, so this host is collected as %s",
+		bootstrap.Warning("%s files without a %s install - %s is present but nothing proved %s is installed, so this host is collected as %s",
 			residue.product, residue.product, residue.marker, residue.pkg, info.Type)
 	}
 }
