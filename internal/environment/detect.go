@@ -965,11 +965,17 @@ func markerLines() []string {
 	add("%s exists: %s", resolveUnderPrefix(pveShareDir), boolToYes(dirExists(pveShareDir)))
 	add("%s exists: %s", resolveUnderPrefix(pbsShareDir), boolToYes(dirExists(pbsShareDir)))
 	add("%s exists: %s", resolveUnderPrefix(dpkgStatusFile), boolToYes(fileExists(dpkgStatusFile)))
-	if _, ok := dpkgPackageInstalled("pve-manager"); ok {
-		add("dpkg pve-manager: installed")
-	}
-	if _, ok := dpkgPackageInstalled("proxmox-backup-server"); ok {
-		add("dpkg proxmox-backup-server: installed")
+	// Both lines are printed whichever way they come out. They used to print only when
+	// the package was installed, which is the one case that needs no explaining: on the
+	// host in issue #315 the table listed nine PBS markers and silently omitted the one
+	// that said proxmox-backup-server is NOT installed, so the decisive evidence read as
+	// a check that had never run. Every other marker here reports YES or NO.
+	for _, pkg := range []string{"pve-manager", "proxmox-backup-server"} {
+		if version, ok := dpkgPackageInstalled(pkg); ok {
+			add("dpkg %s: installed (%s)", pkg, version)
+		} else {
+			add("dpkg %s: not installed", pkg)
+		}
 	}
 	add("")
 

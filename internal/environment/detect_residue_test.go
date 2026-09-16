@@ -241,3 +241,23 @@ func TestEmptyPBSVersionFileIsResidue(t *testing.T) {
 func dpkgStanza(pkg, version string) string {
 	return "Package: " + pkg + "\nStatus: install ok installed\nVersion: " + version + "\n\n"
 }
+
+// TestMarkerTableReportsBothDpkgProbesEitherWay: the table is an inventory, and every
+// other marker in it reports YES or NO. These two used to print only when the package
+// was installed, so on the host in issue #315 the line that would have said
+// proxmox-backup-server is absent was simply missing, and an absent line reads as a
+// check that never ran rather than as a negative answer.
+func TestMarkerTableReportsBothDpkgProbesEitherWay(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, filepath.Join(root, "var/lib/dpkg/status"), dpkgStanza("pve-manager", "9.2.18"))
+
+	joined := strings.Join(MarkerSnapshot(DetectOptions{RootPrefix: root}), "\n")
+	for _, want := range []string{
+		"dpkg pve-manager: installed (9.2.18)",
+		"dpkg proxmox-backup-server: not installed",
+	} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("snapshot missing %q:\n%s", want, joined)
+		}
+	}
+}
