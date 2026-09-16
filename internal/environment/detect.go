@@ -173,13 +173,20 @@ type EnvironmentInfo struct {
 	PBSVersion string
 
 	// PVESource and PBSSource name the marker that ended each product ladder, and
-	// Steps is the whole ladder that led there. They are provenance only: nothing
-	// branches on them. Detection stops at its first hit, so a dual verdict can rest
-	// on a single leftover directory on a PVE-only host, and no log used to say which
-	// marker decided it (issue #315).
+	// Steps is the whole ladder that led there. They are provenance: the verdict is
+	// decided by the ladder, not by reading these back.
 	PVESource string
 	PBSSource string
 	Steps     []DetectionStep
+
+	// PVEResidual and PBSResidual name a marker that was found but does NOT prove the
+	// product is installed: a directory the package never owned, or an empty version
+	// file. They are empty when the product is installed, and empty when nothing at all
+	// was found. A non-empty residual with an absent product is the whole explanation
+	// for a verdict an operator did not expect (issue #315), so it is reported rather
+	// than discarded.
+	PVEResidual string
+	PBSResidual string
 }
 
 // Product labels used by the detection trace.
@@ -193,13 +200,14 @@ const (
 // answer it gave. A recorded run reads as "these markers missed, this one decided the
 // type".
 type DetectionStep struct {
-	Product string // productPVE or productPBS
-	Marker  string // command, version-file, dpkg, cluster-db, binary, share-dir, apt-source, directory
-	Target  string // path(s) or command consulted
-	Hit     bool
-	Skipped bool   // probe not run at all (command probes under a host prefix)
-	Version string // version the marker yielded, when it carries one
-	Note    string // why a probe was skipped
+	Product  string // productPVE or productPBS
+	Marker   string // command, version-file, dpkg, cluster-db, binary, share-dir, directory
+	Target   string // path(s) or command consulted
+	Hit      bool
+	Skipped  bool // probe not run at all (command probes under a host prefix)
+	Residual bool // marker found, but it does not prove the product is installed
+	Version  string
+	Note     string // why a probe was skipped, or what the residue means
 }
 
 // String renders the step as the single line a debug log carries.
@@ -212,6 +220,8 @@ func (s DetectionStep) String() string {
 		outcome = "HIT, version " + s.Version
 	case s.Hit:
 		outcome = "HIT, no version"
+	case s.Residual:
+		outcome = "residue, does not prove an install"
 	}
 	line := fmt.Sprintf("%s %s (%s): %s", s.Product, s.Marker, s.Target, outcome)
 	if s.Note != "" {
