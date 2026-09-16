@@ -261,3 +261,66 @@ func TestMarkerTableReportsBothDpkgProbesEitherWay(t *testing.T) {
 		}
 	}
 }
+
+// TestATimedOutCommandStillGetsItsVersionFromDpkg is measured, not hypothetical:
+// pveversion takes 4.4 to 5.2 seconds on the lab host and commandTimeout is 5, so it
+// times out on nothing more unusual than a busy node. The rung used to answer
+// "installed, version unknown" and stop the ladder one step above dpkg, which holds
+// the real version, leaving the run to report a host with no version at all.
+func TestATimedOutCommandStillGetsItsVersionFromDpkg(t *testing.T) {
+	tmp := t.TempDir()
+	setValue(t, &additionalPaths, []string{})
+	nullFilesystemMarkerSeams(t, tmp)
+
+	dpkgStatus := filepath.Join(tmp, "dpkg-status")
+	writeFile(t, dpkgStatus, dpkgStanza("pve-manager", "9.2.18"))
+	setValue(t, &dpkgStatusFile, dpkgStatus)
+
+	setValue(t, &lookPathFunc, func(cmd string) (string, error) {
+		if cmd == "pveversion" {
+			return "/usr/bin/pveversion", nil
+		}
+		return "", errors.New("not found")
+	})
+	setValue(t, &runCommandFunc, func(string, ...string) (string, error) {
+		return "", errors.New("command pveversion timed out")
+	})
+
+	info, err := detectEnvironmentInfo()
+	if err != nil {
+		t.Fatalf("detectEnvironmentInfo: %v", err)
+	}
+	if info.Type != types.ProxmoxVE {
+		t.Fatalf("Type = %v, want ProxmoxVE", info.Type)
+	}
+	if info.PVEVersion != "9.2.18" {
+		t.Fatalf("PVEVersion = %q, want 9.2.18 recovered from dpkg", info.PVEVersion)
+	}
+}
+
+// TestAVersionlessCommandStillProvesTheInstall: if every version-bearing marker is
+// gone too, the host is still PVE. The binary on PATH is the proof; only the version
+// is missing.
+func TestAVersionlessCommandStillProvesTheInstall(t *testing.T) {
+	tmp := t.TempDir()
+	setValue(t, &additionalPaths, []string{})
+	nullFilesystemMarkerSeams(t, tmp)
+
+	setValue(t, &lookPathFunc, func(cmd string) (string, error) {
+		if cmd == "pveversion" {
+			return "/usr/bin/pveversion", nil
+		}
+		return "", errors.New("not found")
+	})
+	setValue(t, &runCommandFunc, func(string, ...string) (string, error) {
+		return "no version in this output", nil
+	})
+
+	info, err := detectEnvironmentInfo()
+	if err != nil {
+		t.Fatalf("detectEnvironmentInfo: %v", err)
+	}
+	if info.Type != types.ProxmoxVE {
+		t.Fatalf("Type = %v, want ProxmoxVE", info.Type)
+	}
+}

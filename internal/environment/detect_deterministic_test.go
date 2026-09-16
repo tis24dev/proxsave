@@ -61,9 +61,9 @@ func TestDetectPVEViaCommand_Branches(t *testing.T) {
 	t.Run("not found", func(t *testing.T) {
 		setValue(t, &lookPathFunc, func(string) (string, error) { return "", errors.New("not found") })
 
-		version, ok := detectPVEViaCommand()
-		if ok || version != "" {
-			t.Fatalf("detectPVEViaCommand() = (%q, %v), want (%q, %v)", version, ok, "", false)
+		version, outcome := detectPVEViaCommand()
+		if outcome != markerAbsent || version != "" {
+			t.Fatalf("detectPVEViaCommand() = (%q, %v), want (%q, %v)", version, outcome, "", markerAbsent)
 		}
 	})
 
@@ -71,9 +71,9 @@ func TestDetectPVEViaCommand_Branches(t *testing.T) {
 		setValue(t, &lookPathFunc, func(string) (string, error) { return "/fake/pveversion", nil })
 		setValue(t, &runCommandFunc, func(string, ...string) (string, error) { return "", errors.New("boom") })
 
-		version, ok := detectPVEViaCommand()
-		if !ok || version != "unknown" {
-			t.Fatalf("detectPVEViaCommand() = (%q, %v), want (%q, %v)", version, ok, "unknown", true)
+		version, outcome := detectPVEViaCommand()
+		if outcome != markerInstalledNoVersion || version != "" {
+			t.Fatalf("detectPVEViaCommand() = (%q, %v), want (%q, %v): the binary proves the install, the run did not give a version", version, outcome, "", markerInstalledNoVersion)
 		}
 	})
 
@@ -83,9 +83,9 @@ func TestDetectPVEViaCommand_Branches(t *testing.T) {
 			return "no version here", nil
 		})
 
-		version, ok := detectPVEViaCommand()
-		if !ok || version != "unknown" {
-			t.Fatalf("detectPVEViaCommand() = (%q, %v), want (%q, %v)", version, ok, "unknown", true)
+		version, outcome := detectPVEViaCommand()
+		if outcome != markerInstalledNoVersion || version != "" {
+			t.Fatalf("detectPVEViaCommand() = (%q, %v), want (%q, %v): the binary proves the install, the run did not give a version", version, outcome, "", markerInstalledNoVersion)
 		}
 	})
 
@@ -95,9 +95,9 @@ func TestDetectPVEViaCommand_Branches(t *testing.T) {
 			return "pve-manager/7.4-3/d4a3b4a1 (running kernel: 5.15.35-1-pve)", nil
 		})
 
-		version, ok := detectPVEViaCommand()
-		if !ok || version != "7.4-3" {
-			t.Fatalf("detectPVEViaCommand() = (%q, %v), want (%q, %v)", version, ok, "7.4-3", true)
+		version, outcome := detectPVEViaCommand()
+		if outcome != markerInstalled || version != "7.4-3" {
+			t.Fatalf("detectPVEViaCommand() = (%q, %v), want (%q, %v)", version, outcome, "7.4-3", markerInstalled)
 		}
 	})
 }
@@ -106,9 +106,9 @@ func TestDetectPBSViaCommand_Branches(t *testing.T) {
 	t.Run("not found", func(t *testing.T) {
 		setValue(t, &lookPathFunc, func(string) (string, error) { return "", errors.New("not found") })
 
-		version, ok := detectPBSViaCommand()
-		if ok || version != "" {
-			t.Fatalf("detectPBSViaCommand() = (%q, %v), want (%q, %v)", version, ok, "", false)
+		version, outcome := detectPBSViaCommand()
+		if outcome != markerAbsent || version != "" {
+			t.Fatalf("detectPBSViaCommand() = (%q, %v), want (%q, %v)", version, outcome, "", markerAbsent)
 		}
 	})
 
@@ -116,9 +116,9 @@ func TestDetectPBSViaCommand_Branches(t *testing.T) {
 		setValue(t, &lookPathFunc, func(string) (string, error) { return "/fake/proxmox-backup-manager", nil })
 		setValue(t, &runCommandFunc, func(string, ...string) (string, error) { return "", errors.New("boom") })
 
-		version, ok := detectPBSViaCommand()
-		if !ok || version != "unknown" {
-			t.Fatalf("detectPBSViaCommand() = (%q, %v), want (%q, %v)", version, ok, "unknown", true)
+		version, outcome := detectPBSViaCommand()
+		if outcome != markerInstalledNoVersion || version != "" {
+			t.Fatalf("detectPBSViaCommand() = (%q, %v), want (%q, %v): the binary proves the install, the run did not give a version", version, outcome, "", markerInstalledNoVersion)
 		}
 	})
 
@@ -128,9 +128,9 @@ func TestDetectPBSViaCommand_Branches(t *testing.T) {
 			return "proxmox-backup-manager 2.4.1\nno version here", nil
 		})
 
-		version, ok := detectPBSViaCommand()
-		if !ok || version != "unknown" {
-			t.Fatalf("detectPBSViaCommand() = (%q, %v), want (%q, %v)", version, ok, "unknown", true)
+		version, outcome := detectPBSViaCommand()
+		if outcome != markerInstalledNoVersion || version != "" {
+			t.Fatalf("detectPBSViaCommand() = (%q, %v), want (%q, %v): the binary proves the install, the run did not give a version", version, outcome, "", markerInstalledNoVersion)
 		}
 	})
 
@@ -140,9 +140,9 @@ func TestDetectPBSViaCommand_Branches(t *testing.T) {
 			return "proxmox-backup-manager 2.4.1\nversion: 2.4.1", nil
 		})
 
-		version, ok := detectPBSViaCommand()
-		if !ok || version != "2.4.1" {
-			t.Fatalf("detectPBSViaCommand() = (%q, %v), want (%q, %v)", version, ok, "2.4.1", true)
+		version, outcome := detectPBSViaCommand()
+		if outcome != markerInstalled || version != "2.4.1" {
+			t.Fatalf("detectPBSViaCommand() = (%q, %v), want (%q, %v)", version, outcome, "2.4.1", markerInstalled)
 		}
 	})
 }

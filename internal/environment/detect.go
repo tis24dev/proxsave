@@ -452,13 +452,21 @@ func detectPVE(trace *detectionTrace) (string, bool, string) {
 		}
 	}
 
+	installedWithoutVersion := false
 	if hostRooted() {
 		trace.skip(productPVE, "command", "pveversion", "a command run here answers for the appliance, not for the mounted host")
-	} else if version, ok := detectPVEViaCommand(); ok {
-		trace.hit(productPVE, "command", "pveversion", version)
-		return version, true, ""
 	} else {
-		trace.miss(productPVE, "command", "pveversion")
+		switch version, outcome := detectPVEViaCommand(); outcome {
+		case markerInstalled:
+			trace.hit(productPVE, "command", "pveversion", version)
+			return version, true, ""
+		case markerInstalledNoVersion:
+			installedWithoutVersion = true
+			trace.add(DetectionStep{Product: productPVE, Marker: "command", Target: "pveversion", Hit: true,
+				Note: "the command is installed but gave no version; looking for one further down"})
+		default:
+			trace.miss(productPVE, "command", "pveversion")
+		}
 	}
 
 	versionFiles := targetList(pveVersionFile, pveLegacyFile)
@@ -511,6 +519,9 @@ func detectPVE(trace *detectionTrace) (string, bool, string) {
 		trace.miss(productPVE, "directory", targetList(pveDirCandidates...))
 	}
 
+	if installedWithoutVersion {
+		return "unknown", true, ""
+	}
 	return "", false, residue
 }
 
@@ -536,13 +547,21 @@ func detectPBS(trace *detectionTrace) (string, bool, string) {
 		}
 	}
 
+	installedWithoutVersion := false
 	if hostRooted() {
 		trace.skip(productPBS, "command", "proxmox-backup-manager", "a command run here answers for the appliance, not for the mounted host")
-	} else if version, ok := detectPBSViaCommand(); ok {
-		trace.hit(productPBS, "command", "proxmox-backup-manager", version)
-		return version, true, ""
 	} else {
-		trace.miss(productPBS, "command", "proxmox-backup-manager")
+		switch version, outcome := detectPBSViaCommand(); outcome {
+		case markerInstalled:
+			trace.hit(productPBS, "command", "proxmox-backup-manager", version)
+			return version, true, ""
+		case markerInstalledNoVersion:
+			installedWithoutVersion = true
+			trace.add(DetectionStep{Product: productPBS, Marker: "command", Target: "proxmox-backup-manager", Hit: true,
+				Note: "the command is installed but gave no version; looking for one further down"})
+		default:
+			trace.miss(productPBS, "command", "proxmox-backup-manager")
+		}
 	}
 
 	switch version, outcome := detectPBSViaVersionFile(); outcome {
@@ -588,6 +607,9 @@ func detectPBS(trace *detectionTrace) (string, bool, string) {
 		trace.miss(productPBS, "directory", targetList(pbsDirCandidates...))
 	}
 
+	if installedWithoutVersion {
+		return "unknown", true, ""
+	}
 	return "", false, residue
 }
 
@@ -662,40 +684,52 @@ func dpkgStanzaField(stanza, key string) string {
 	return ""
 }
 
-func detectPVEViaCommand() (string, bool) {
+// detectPVEViaCommand runs pveversion. The binary being on PATH already proves PVE is
+// installed, so the outcome is never "absent" once lookPath succeeds; what the run adds
+// is the version, and it can fail to add it.
+//
+// That failure is not rare. pveversion takes 4.4 to 5.2 seconds on the lab host and
+// commandTimeout is 5, so it times out intermittently on nothing more unusual than a
+// busy node. The caller uses markerInstalled to stop the ladder and markerResidual to
+// carry on, so a run that got the binary but not the version keeps walking and lets
+// dpkg supply it, instead of settling for "unknown" with the real version one rung
+// further down.
+func detectPVEViaCommand() (string, markerOutcome) {
 	cmdPath, err := lookPathFunc("pveversion")
 	if err != nil {
-		return "", false
+		return "", markerAbsent
 	}
 
 	output, err := runCommandFunc(cmdPath)
 	if err != nil {
-		return "unknown", true
+		return "", markerInstalledNoVersion
 	}
 
 	version := extractPVEVersion(output)
 	if version == "" {
-		return "unknown", true
+		return "", markerInstalledNoVersion
 	}
-	return version, true
+	return version, markerInstalled
 }
 
-func detectPBSViaCommand() (string, bool) {
+// detectPBSViaCommand is the PBS half, with the same three outcomes as
+// detectPVEViaCommand and for the same reason.
+func detectPBSViaCommand() (string, markerOutcome) {
 	cmdPath, err := lookPathFunc("proxmox-backup-manager")
 	if err != nil {
-		return "", false
+		return "", markerAbsent
 	}
 
 	output, err := runCommandFunc(cmdPath, "version")
 	if err != nil {
-		return "unknown", true
+		return "", markerInstalledNoVersion
 	}
 
 	version := extractPBSVersion(output)
 	if version == "" {
-		return "unknown", true
+		return "", markerInstalledNoVersion
 	}
-	return version, true
+	return version, markerInstalled
 }
 
 // markerOutcome is what a version-file probe found. The middle state is the point:
@@ -706,7 +740,12 @@ type markerOutcome int
 
 const (
 	markerAbsent markerOutcome = iota
+	// markerResidual: something is there that does not prove an install.
 	markerResidual
+	// markerInstalledNoVersion: the product IS installed and this probe could not say
+	// which version. Distinct from markerResidual, which says the opposite about the
+	// product, and distinct from markerInstalled, which ends the ladder.
+	markerInstalledNoVersion
 	markerInstalled
 )
 
