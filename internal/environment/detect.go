@@ -741,17 +741,8 @@ func detectPBSViaVersionFile() (string, markerOutcome) {
 	return "", markerResidual
 }
 
-func detectPVEViaSources() bool {
-	return firstMatchingSource(pveSourceFiles, pveSourceTokens) != ""
-}
 
-func detectPBSViaSources() bool {
-	return firstMatchingSource(pbsSourceFiles, pbsSourceTokens) != ""
-}
 
-func detectViaDirectories(paths []string) bool {
-	return firstExistingDir(paths) != ""
-}
 
 func extendPath() {
 	currentPath := os.Getenv("PATH")

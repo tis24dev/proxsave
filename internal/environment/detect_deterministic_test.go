@@ -266,11 +266,11 @@ func TestDetectViaSources_Branches(t *testing.T) {
 	setValue(t, &pveSourceFiles, []string{pveSource})
 	setValue(t, &pbsSourceFiles, []string{pbsSource})
 
-	if !detectPVEViaSources() {
-		t.Fatal("detectPVEViaSources() should be true")
+	if firstMatchingSource(pveSourceFiles, pveSourceTokens) == "" {
+		t.Fatal("the PVE source file should match its token")
 	}
-	if !detectPBSViaSources() {
-		t.Fatal("detectPBSViaSources() should be true")
+	if firstMatchingSource(pbsSourceFiles, pbsSourceTokens) == "" {
+		t.Fatal("the PBS source file should match its token")
 	}
 
 	emptySource := filepath.Join(tmpDir, "empty.list")
@@ -280,11 +280,11 @@ func TestDetectViaSources_Branches(t *testing.T) {
 	setValue(t, &pveSourceFiles, []string{emptySource})
 	setValue(t, &pbsSourceFiles, []string{emptySource})
 
-	if detectPVEViaSources() {
-		t.Fatal("detectPVEViaSources() should be false")
+	if path := firstMatchingSource(pveSourceFiles, pveSourceTokens); path != "" {
+		t.Fatalf("a source file with no product token matched PVE: %s", path)
 	}
-	if detectPBSViaSources() {
-		t.Fatal("detectPBSViaSources() should be false")
+	if path := firstMatchingSource(pbsSourceFiles, pbsSourceTokens); path != "" {
+		t.Fatalf("a source file with no product token matched PBS: %s", path)
 	}
 }
 
