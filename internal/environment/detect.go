@@ -674,6 +674,14 @@ func dpkgPackageInstalled(pkg string) (string, bool) {
 	if err != nil {
 		return "", false
 	}
+	return dpkgPackageInstalledIn(data, pkg)
+}
+
+// dpkgPackageInstalledIn is the parse half of dpkgPackageInstalled, split out so a
+// caller holding the status file can classify several packages against the ONE read
+// that produced its verdict. Re-reading per package would let a status file that
+// became unreadable between reads come back as a clean "not installed".
+func dpkgPackageInstalledIn(data []byte, pkg string) (string, bool) {
 	for _, stanza := range strings.Split(string(data), "\n\n") {
 		if dpkgStanzaField(stanza, "Package") != pkg {
 			continue
@@ -1015,20 +1023,24 @@ func markerLines() []string {
 	// host in issue #315 the table listed nine PBS markers and silently omitted the one
 	// that said proxmox-backup-server is NOT installed, so the decisive evidence read as
 	// a check that had never run. Every other marker here reports YES or NO.
-	// dpkgPackageInstalled answers false for two different facts: the package is absent,
-	// or the status file could not be read at all. Printing "not installed" for both
-	// states as proven something the run never managed to check - the case being a
-	// SYSTEM_ROOT_PREFIX mount that carries no /var/lib/dpkg/status. Reading the file
-	// once here separates them, so "not installed" keeps meaning exactly that.
-	_, dpkgReadErr := readFileFunc(resolveUnderPrefix(dpkgStatusFile))
+	// A package probe answers false for two different facts: the package is absent, or
+	// the status file could not be read at all. Printing "not installed" for both states
+	// as proven something the run never managed to check - the case being a
+	// SYSTEM_ROOT_PREFIX mount that carries no /var/lib/dpkg/status.
+	//
+	// The file is read ONCE and both packages are classified against that read. Calling
+	// dpkgPackageInstalled per package would read it again each time, so a status file
+	// that stopped being readable after the check above would be reported as a package
+	// that is simply not installed - the very claim this is here to stop making.
+	dpkgStatus, dpkgReadErr := readFileFunc(resolveUnderPrefix(dpkgStatusFile))
 	for _, pkg := range []string{"pve-manager", "proxmox-backup-server"} {
-		version, ok := dpkgPackageInstalled(pkg)
-		switch {
-		case ok:
-			add("dpkg %s: installed (%s)", pkg, version)
-		case dpkgReadErr != nil:
+		if dpkgReadErr != nil {
 			add("dpkg %s: not proven installed (%v)", pkg, dpkgReadErr)
-		default:
+			continue
+		}
+		if version, ok := dpkgPackageInstalledIn(dpkgStatus, pkg); ok {
+			add("dpkg %s: installed (%s)", pkg, version)
+		} else {
 			add("dpkg %s: not installed", pkg)
 		}
 	}

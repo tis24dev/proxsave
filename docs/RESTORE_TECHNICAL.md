@@ -590,6 +590,15 @@ func DetectBackupType(manifest *backup.Manifest) SystemType {
         }
     }
     // Fallback: hostname heuristics
+    if manifest.Hostname != "" {
+        hostname := strings.ToLower(manifest.Hostname)
+        if strings.Contains(hostname, "pve") {
+            return SystemTypePVE
+        }
+        if strings.Contains(hostname, "pbs") {
+            return SystemTypePBS
+        }
+    }
     return SystemTypeUnknown
 }
 ```

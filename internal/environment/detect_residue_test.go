@@ -444,3 +444,43 @@ func TestMarkerTableDoesNotCallAnUnreadableDpkgStatusProofOfAbsence(t *testing.T
 		}
 	}
 }
+
+// The marker table classifies both packages against ONE read of the dpkg status file.
+// Re-reading per package reopens the very hole the "not proven installed" line closes:
+// a status file that stops being readable after the first read would come back as a
+// package that is simply not installed, which is a claim the run cannot support. The
+// stub here serves the file once and refuses every later read of it.
+func TestMarkerTableClassifiesBothPackagesFromOneDpkgRead(t *testing.T) {
+	root := t.TempDir()
+	statusPath := filepath.Join(root, "var/lib/dpkg/status")
+	writeFile(t, statusPath, dpkgStanza("pve-manager", "9.2.18"))
+
+	status, err := os.ReadFile(statusPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	served := 0
+	setValue(t, &readFileFunc, func(path string) ([]byte, error) {
+		if path != statusPath {
+			return os.ReadFile(path)
+		}
+		served++
+		if served > 1 {
+			return nil, errors.New("dpkg status: refused on purpose after the first read")
+		}
+		return status, nil
+	})
+
+	joined := strings.Join(MarkerSnapshot(DetectOptions{RootPrefix: root}), "\n")
+	for _, want := range []string{
+		"dpkg pve-manager: installed (9.2.18)",
+		"dpkg proxmox-backup-server: not installed",
+	} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("snapshot missing %q after %d dpkg read(s):\n%s", want, served, joined)
+		}
+	}
+	if served != 1 {
+		t.Fatalf("dpkg status read %d times, want exactly 1: the verdict must come from the read it checked", served)
+	}
+}
