@@ -1015,10 +1015,20 @@ func markerLines() []string {
 	// host in issue #315 the table listed nine PBS markers and silently omitted the one
 	// that said proxmox-backup-server is NOT installed, so the decisive evidence read as
 	// a check that had never run. Every other marker here reports YES or NO.
+	// dpkgPackageInstalled answers false for two different facts: the package is absent,
+	// or the status file could not be read at all. Printing "not installed" for both
+	// states as proven something the run never managed to check - the case being a
+	// SYSTEM_ROOT_PREFIX mount that carries no /var/lib/dpkg/status. Reading the file
+	// once here separates them, so "not installed" keeps meaning exactly that.
+	_, dpkgReadErr := readFileFunc(resolveUnderPrefix(dpkgStatusFile))
 	for _, pkg := range []string{"pve-manager", "proxmox-backup-server"} {
-		if version, ok := dpkgPackageInstalled(pkg); ok {
+		version, ok := dpkgPackageInstalled(pkg)
+		switch {
+		case ok:
 			add("dpkg %s: installed (%s)", pkg, version)
-		} else {
+		case dpkgReadErr != nil:
+			add("dpkg %s: not proven installed (%v)", pkg, dpkgReadErr)
+		default:
 			add("dpkg %s: not installed", pkg)
 		}
 	}

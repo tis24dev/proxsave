@@ -209,6 +209,7 @@ var notes = []Note{
 			"Restore reads the host type from the same check the backup uses, instead of keeping a weaker one of its own",
 			"On a PVE plus PBS host, one role failing no longer discards the other role and the shared system payload",
 			"A slow pveversion no longer costs the run its version number: the version is read from the package instead",
+			"The marker table stops calling a package not installed when it could not read the dpkg status file at all",
 		},
 		Actions: []string{
 			"If a run used to fail with failed to get PBS version on a host without PBS, it now completes as a PVE backup",

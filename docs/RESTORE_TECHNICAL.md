@@ -573,11 +573,21 @@ against a dual host instead of clearing the check as though nothing were missing
 
 ```go
 func DetectBackupType(manifest *backup.Manifest) SystemType {
-    if len(manifest.ProxmoxTargets) > 0 {
-        return parseSystemTargets(manifest.ProxmoxTargets)
+    if manifest == nil {
+        return SystemTypeUnknown
+    }
+    // Declared targets minus every role recorded in incomplete_targets.
+    if targets := completedTargets(manifest); len(targets) > 0 {
+        return parseSystemTargets(targets)
+    }
+    if len(manifest.ProxmoxTargets) > 0 && len(manifest.IncompleteTargets) > 0 {
+        // Every declared target failed: the archive carries no role payload at all.
+        return SystemTypeUnknown
     }
     if manifest.ProxmoxType != "" {
-        return parseSystemTypeString(manifest.ProxmoxType)
+        if backupType := parseSystemTypeString(manifest.ProxmoxType); backupType != SystemTypeUnknown {
+            return backupType
+        }
     }
     // Fallback: hostname heuristics
     return SystemTypeUnknown

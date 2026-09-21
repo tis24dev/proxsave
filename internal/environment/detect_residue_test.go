@@ -425,3 +425,22 @@ func TestThePBSHalfOfTheVersionlessCommandFix(t *testing.T) {
 		t.Fatalf("PBSVersion = %q, want 4.2.0-1 recovered from dpkg", info.PBSVersion)
 	}
 }
+
+// An unreadable dpkg status file is not evidence that a package is absent. The table
+// used to print "not installed" for it, which reads as a checked fact rather than as
+// a check that never ran, and on a SYSTEM_ROOT_PREFIX mount without /var/lib/dpkg/status
+// that is the whole explanation an operator gets for the verdict.
+func TestMarkerTableDoesNotCallAnUnreadableDpkgStatusProofOfAbsence(t *testing.T) {
+	root := t.TempDir() // no var/lib/dpkg/status under it at all
+
+	joined := strings.Join(MarkerSnapshot(DetectOptions{RootPrefix: root}), "\n")
+	for _, pkg := range []string{"pve-manager", "proxmox-backup-server"} {
+		want := "dpkg " + pkg + ": not proven installed ("
+		if !strings.Contains(joined, want) {
+			t.Fatalf("snapshot missing %q:\n%s", want, joined)
+		}
+		if strings.Contains(joined, "dpkg "+pkg+": not installed") {
+			t.Fatalf("snapshot still claims %s is not installed without having read dpkg:\n%s", pkg, joined)
+		}
+	}
+}
