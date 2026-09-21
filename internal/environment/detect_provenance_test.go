@@ -19,14 +19,19 @@ func stepFor(steps []DetectionStep, product, marker string) (DetectionStep, bool
 	return DetectionStep{}, false
 }
 
-// TestDetectionProvenanceNamesDecidingMarker is the issue #315 case: a host whose
-// only PBS marker is a leftover directory is reported as dual, and the trace has to
-// say so - naming the directory that decided it and showing that every version-bearing
-// PBS marker missed.
+// TestDetectionProvenanceNamesDecidingMarker is the issue #315 case, and this test
+// used to assert the bug: a host whose only PBS marker is a leftover directory was
+// reported as dual. It is now the record of what the host deserves. PVE decides on a
+// version-bearing marker and PBS decides on nothing, because a directory no package
+// owns survives the package and so cannot stand for it.
+//
+// The leftover is still reported. It is the reason the operator expected PBS, so the
+// trace names it as residue and PBSSource stays empty: nothing decided that half.
 func TestDetectionProvenanceNamesDecidingMarker(t *testing.T) {
 	root := t.TempDir()
 	writeFile(t, filepath.Join(root, "etc/pve-manager/version"), "8.2.2\n")
-	if err := os.MkdirAll(filepath.Join(root, "var/lib/proxmox-backup"), 0o755); err != nil {
+	leftover := filepath.Join(root, "var/lib/proxmox-backup")
+	if err := os.MkdirAll(leftover, 0o755); err != nil {
 		t.Fatal(err)
 	}
 
@@ -34,16 +39,26 @@ func TestDetectionProvenanceNamesDecidingMarker(t *testing.T) {
 	if err != nil {
 		t.Fatalf("DetectWith: %v", err)
 	}
-	if info.Type != types.ProxmoxDual {
-		t.Fatalf("Type = %v, want ProxmoxDual", info.Type)
+	if info.Type != types.ProxmoxVE {
+		t.Fatalf("Type = %v, want ProxmoxVE", info.Type)
 	}
 
 	if !strings.HasPrefix(info.PVESource, "version-file (") {
 		t.Fatalf("PVESource = %q, want the version-file marker", info.PVESource)
 	}
-	wantDir := filepath.Join(root, "var/lib/proxmox-backup")
-	if !strings.Contains(info.PBSSource, wantDir) {
-		t.Fatalf("PBSSource = %q, want the deciding directory %s", info.PBSSource, wantDir)
+	if info.PBSSource != "" {
+		t.Fatalf("PBSSource = %q, want no marker to have decided PBS", info.PBSSource)
+	}
+	if !strings.Contains(info.PBSResidual, leftover) {
+		t.Fatalf("PBSResidual = %q, want it to name %s", info.PBSResidual, leftover)
+	}
+
+	dirStep, ok := stepFor(info.Steps, productPBS, "directory")
+	if !ok {
+		t.Fatal("no PBS directory step recorded: the rung is still walked, it just does not decide")
+	}
+	if dirStep.Hit || !dirStep.Residual {
+		t.Fatalf("PBS directory step = %v, want residue", dirStep)
 	}
 
 	versionStep, ok := stepFor(info.Steps, productPBS, "version-file")

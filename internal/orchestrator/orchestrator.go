@@ -56,8 +56,11 @@ func (e *EarlyErrorState) HasError() bool {
 
 // BackupStats contains statistics from backup operations
 type BackupStats struct {
-	Hostname                  string
-	ProxmoxType               types.ProxmoxType
+	Hostname    string
+	ProxmoxType types.ProxmoxType
+	// IncompleteTargets names roles whose collection aborted while the run carried
+	// on, so the archive ships without them. Empty on a whole backup.
+	IncompleteTargets         []string
 	ProxmoxTargets            []string
 	ProxmoxVersion            string
 	PVEVersion                string

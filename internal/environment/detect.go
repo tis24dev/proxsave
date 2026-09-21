@@ -115,11 +115,13 @@ var (
 	// readFileFunc above.
 	//
 	// EXACTLY TWO functions set it, each for the duration of one call and each
-	// restoring the previous value in a defer: DetectWith and MarkerSnapshot. Both
-	// are called from the process bootstrap, which is sequential and runs before any
-	// goroutine of this program exists, so the two never overlap. That is the whole
-	// safety argument - there is no lock - and it holds only while the call sites stay
-	// where they are.
+	// restoring the previous value in a defer: DetectWith and MarkerSnapshot.
+	//
+	// Neither is bootstrap-only any more: orchestrator.DetectCurrentSystem calls
+	// environment.Detect on the restore path, so a set/restore pair now happens while
+	// a restore is being planned as well. That is still safe for the same reason it
+	// always was, and only for that reason: every call site is on the one goroutine
+	// its run uses, so no two overlap. There is no lock.
 	//
 	// A third setter, or either of these two reached from a goroutine, breaks it: one
 	// call would inspect paths under another call's prefix and return a snapshot or a
@@ -142,12 +144,12 @@ func GetVersion(pType types.ProxmoxType) (string, error) {
 
 	switch pType {
 	case types.ProxmoxVE:
-		if version, ok := detectPVE(nil); ok && version != "" && version != "unknown" {
+		if version, ok, _ := detectPVE(nil); ok && version != "" && version != "unknown" {
 			return version, nil
 		}
 		return "", fmt.Errorf("unable to determine Proxmox VE version")
 	case types.ProxmoxBS:
-		if version, ok := detectPBS(nil); ok && version != "" && version != "unknown" {
+		if version, ok, _ := detectPBS(nil); ok && version != "" && version != "unknown" {
 			return version, nil
 		}
 		return "", fmt.Errorf("unable to determine Proxmox Backup Server version")
@@ -173,13 +175,20 @@ type EnvironmentInfo struct {
 	PBSVersion string
 
 	// PVESource and PBSSource name the marker that ended each product ladder, and
-	// Steps is the whole ladder that led there. They are provenance only: nothing
-	// branches on them. Detection stops at its first hit, so a dual verdict can rest
-	// on a single leftover directory on a PVE-only host, and no log used to say which
-	// marker decided it (issue #315).
+	// Steps is the whole ladder that led there. They are provenance: the verdict is
+	// decided by the ladder, not by reading these back.
 	PVESource string
 	PBSSource string
 	Steps     []DetectionStep
+
+	// PVEResidual and PBSResidual name a marker that was found but does NOT prove the
+	// product is installed: a directory the package never owned, or an empty version
+	// file. They are empty when the product is installed, and empty when nothing at all
+	// was found. A non-empty residual with an absent product is the whole explanation
+	// for a verdict an operator did not expect (issue #315), so it is reported rather
+	// than discarded.
+	PVEResidual string
+	PBSResidual string
 }
 
 // Product labels used by the detection trace.
@@ -193,13 +202,18 @@ const (
 // answer it gave. A recorded run reads as "these markers missed, this one decided the
 // type".
 type DetectionStep struct {
-	Product string // productPVE or productPBS
-	Marker  string // command, version-file, dpkg, cluster-db, binary, share-dir, apt-source, directory
-	Target  string // path(s) or command consulted
-	Hit     bool
-	Skipped bool   // probe not run at all (command probes under a host prefix)
-	Version string // version the marker yielded, when it carries one
-	Note    string // why a probe was skipped
+	Product  string // productPVE or productPBS
+	Marker   string // command, version-file, dpkg, cluster-db, binary, share-dir, apt-source, directory
+	Target   string // path(s) or command consulted
+	Hit      bool
+	Skipped  bool // probe not run at all (command probes under a host prefix)
+	Residual bool // marker found, but it does not prove the product is installed
+	// Continued marks a hit that proved the product installed WITHOUT ending the
+	// ladder, because it carried no version and a later rung may still have one. It
+	// is what keeps decidedBy naming the rung that actually ended the walk.
+	Continued bool
+	Version   string
+	Note      string // why a probe was skipped, or what the residue means
 }
 
 // String renders the step as the single line a debug log carries.
@@ -212,6 +226,8 @@ func (s DetectionStep) String() string {
 		outcome = "HIT, version " + s.Version
 	case s.Hit:
 		outcome = "HIT, no version"
+	case s.Residual:
+		outcome = "residue, does not prove an install"
 	}
 	line := fmt.Sprintf("%s %s (%s): %s", s.Product, s.Marker, s.Target, outcome)
 	if s.Note != "" {
@@ -241,15 +257,35 @@ func (t *detectionTrace) miss(product, marker, target string) {
 	t.add(DetectionStep{Product: product, Marker: marker, Target: target})
 }
 
+// residue records a marker that was found and deliberately does not decide. It is
+// not a miss: a miss says the host has nothing there, and this says the host has
+// something there that does not answer the question. Both readings matter to whoever
+// is holding an unexpected verdict, so they are recorded apart.
+func (t *detectionTrace) residue(product, marker, target, note string) {
+	t.add(DetectionStep{Product: product, Marker: marker, Target: target, Residual: true, Note: note})
+}
+
 func (t *detectionTrace) skip(product, marker, target, note string) {
 	t.add(DetectionStep{Product: product, Marker: marker, Target: target, Skipped: true, Note: note})
 }
 
 // decidedBy names the marker that ended the ladder for product; empty when none did.
+//
+// A Continued step is skipped on purpose. The versionless-command rung is a hit that
+// keeps walking, and returning the first hit named it as the decider while the version
+// came from dpkg one rung further down, so the provenance line pointed a diagnosing
+// operator at the probe that had failed.
 func (t *detectionTrace) decidedBy(product string) string {
 	if t == nil {
 		return ""
 	}
+	for _, step := range t.steps {
+		if step.Product == product && step.Hit && !step.Continued {
+			return fmt.Sprintf("%s (%s)", step.Marker, step.Target)
+		}
+	}
+	// Every hit kept walking: the command proved the install and no later marker
+	// answered, so that rung is the whole provenance there is.
 	for _, step := range t.steps {
 		if step.Product == product && step.Hit {
 			return fmt.Sprintf("%s (%s)", step.Marker, step.Target)
@@ -339,16 +375,18 @@ func detectEnvironmentInfo() (*EnvironmentInfo, error) {
 	extendPath()
 
 	trace := &detectionTrace{}
-	pveVersion, hasPVE := detectPVE(trace)
-	pbsVersion, hasPBS := detectPBS(trace)
+	pveVersion, hasPVE, pveResidue := detectPVE(trace)
+	pbsVersion, hasPBS, pbsResidue := detectPBS(trace)
 
 	info := &EnvironmentInfo{
-		Type:       resolveType(hasPVE, hasPBS),
-		PVEVersion: normalizedDetectedVersion(pveVersion),
-		PBSVersion: normalizedDetectedVersion(pbsVersion),
-		PVESource:  trace.decidedBy(productPVE),
-		PBSSource:  trace.decidedBy(productPBS),
-		Steps:      trace.steps,
+		Type:        resolveType(hasPVE, hasPBS),
+		PVEVersion:  normalizedDetectedVersion(pveVersion),
+		PBSVersion:  normalizedDetectedVersion(pbsVersion),
+		PVESource:   trace.decidedBy(productPVE),
+		PBSSource:   trace.decidedBy(productPBS),
+		Steps:       trace.steps,
+		PVEResidual: pveResidue,
+		PBSResidual: pbsResidue,
 	}
 	info.Version = combineVersions(info.PVEVersion, info.PBSVersion)
 
@@ -356,11 +394,32 @@ func detectEnvironmentInfo() (*EnvironmentInfo, error) {
 		return info, nil
 	}
 
-	debugPath := writeDetectionDebug()
-	if debugPath != "" {
-		return info, fmt.Errorf("unable to detect Proxmox environment (debug saved to %s)", debugPath)
+	// A host with residue and no install is a different failure from a host with
+	// nothing on it, and the difference is actionable: under SYSTEM_ROOT_PREFIX it
+	// usually means the mount carries /etc but not the /usr and /var that hold the
+	// package evidence. Saying only "unable to detect" would send the operator
+	// looking for the wrong thing.
+	if residue := firstNonEmpty(info.PVEResidual, info.PBSResidual); residue != "" {
+		return info, fmt.Errorf("unable to detect Proxmox environment: %s was found but no installed product was%s",
+			residue, debugSuffix(writeDetectionDebug()))
 	}
-	return info, fmt.Errorf("unable to detect Proxmox environment")
+	return info, fmt.Errorf("unable to detect Proxmox environment%s", debugSuffix(writeDetectionDebug()))
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+func debugSuffix(path string) string {
+	if path == "" {
+		return ""
+	}
+	return " (debug saved to " + path + ")"
 }
 
 func resolveType(hasPVE, hasPBS bool) types.ProxmoxType {
@@ -397,118 +456,179 @@ func combineVersions(pveVersion, pbsVersion string) string {
 	}
 }
 
-// detectPVE walks the PVE marker ladder and returns at the first marker that fires.
-// Every rung it reaches is recorded in trace (nil records nothing), so a log can say
-// which marker produced the verdict and which ones it had already ruled out.
-func detectPVE(trace *detectionTrace) (string, bool) {
+// detectPVE walks the PVE marker ladder and returns at the first marker that PROVES
+// the product is installed. Every rung it reaches is recorded in trace (nil records
+// nothing), so a log can say which marker produced the verdict and which ones it had
+// already ruled out. The third return is the first residue seen: see detectPBS, which
+// is where that distinction is load-bearing.
+func detectPVE(trace *detectionTrace) (string, bool, string) {
+	residue := ""
+	noteResidue := func(marker, target, note string) {
+		trace.residue(productPVE, marker, target, note)
+		if residue == "" {
+			residue = fmt.Sprintf("%s (%s)", marker, target)
+		}
+	}
+
+	installedWithoutVersion := false
 	if hostRooted() {
 		trace.skip(productPVE, "command", "pveversion", "a command run here answers for the appliance, not for the mounted host")
-	} else if version, ok := detectPVEViaCommand(); ok {
-		trace.hit(productPVE, "command", "pveversion", version)
-		return version, true
 	} else {
-		trace.miss(productPVE, "command", "pveversion")
+		switch version, outcome := detectPVEViaCommand(); outcome {
+		case markerInstalled:
+			trace.hit(productPVE, "command", "pveversion", version)
+			return version, true, ""
+		case markerInstalledNoVersion:
+			installedWithoutVersion = true
+			trace.add(DetectionStep{Product: productPVE, Marker: "command", Target: "pveversion", Hit: true, Continued: true,
+				Note: "the command is installed but gave no version; looking for one further down"})
+		default:
+			trace.miss(productPVE, "command", "pveversion")
+		}
 	}
 
 	versionFiles := targetList(pveVersionFile, pveLegacyFile)
-	if version, ok := detectPVEViaVersionFiles(); ok {
+	switch version, outcome := detectPVEViaVersionFiles(); outcome {
+	case markerInstalled:
 		trace.hit(productPVE, "version-file", versionFiles, version)
-		return version, true
+		return version, true, ""
+	case markerResidual:
+		noteResidue("version-file", versionFiles, "the file is there but carries no version")
+	default:
+		trace.miss(productPVE, "version-file", versionFiles)
 	}
-	trace.miss(productPVE, "version-file", versionFiles)
 
 	// dpkg is version-bearing and reliable offline, so it precedes the version-less
 	// markers below and recovers the real version even when the pmxcfs version files
 	// are absent.
 	if version, ok := dpkgPackageInstalled("pve-manager"); ok {
 		trace.hit(productPVE, "dpkg pve-manager", resolveUnderPrefix(dpkgStatusFile), version)
-		return version, true
+		return version, true, ""
 	}
 	trace.miss(productPVE, "dpkg pve-manager", resolveUnderPrefix(dpkgStatusFile))
 
 	if fileExists(pveClusterDB) {
 		trace.hit(productPVE, "cluster-db", resolveUnderPrefix(pveClusterDB), "")
-		return "unknown", true
+		return "unknown", true, ""
 	}
 	trace.miss(productPVE, "cluster-db", resolveUnderPrefix(pveClusterDB))
 
 	if path := firstExistingFile(pveBinaryCandidates); path != "" {
 		trace.hit(productPVE, "binary", path, "")
-		return "unknown", true
+		return "unknown", true, ""
 	}
 	trace.miss(productPVE, "binary", targetList(pveBinaryCandidates...))
 
 	if dirExists(pveShareDir) {
 		trace.hit(productPVE, "share-dir", resolveUnderPrefix(pveShareDir), "")
-		return "unknown", true
+		return "unknown", true, ""
 	}
 	trace.miss(productPVE, "share-dir", resolveUnderPrefix(pveShareDir))
 
 	if path := firstMatchingSource(pveSourceFiles, pveSourceTokens); path != "" {
-		trace.hit(productPVE, "apt-source", path, "")
-		return "unknown", true
+		noteResidue("apt-source", path, "a configured repository is not an installed package")
+	} else {
+		trace.miss(productPVE, "apt-source", targetList(pveSourceFiles...))
 	}
-	trace.miss(productPVE, "apt-source", targetList(pveSourceFiles...))
 
 	if path := firstExistingDir(pveDirCandidates); path != "" {
-		trace.hit(productPVE, "directory", path, "")
-		return "unknown", true
+		noteResidue("directory", path, "no package owns this directory and none removes it")
+	} else {
+		trace.miss(productPVE, "directory", targetList(pveDirCandidates...))
 	}
-	trace.miss(productPVE, "directory", targetList(pveDirCandidates...))
 
-	return "", false
+	if installedWithoutVersion {
+		return "unknown", true, ""
+	}
+	return "", false, residue
 }
 
-// detectPBS is the PBS half of the same ladder, traced the same way. The version-less
-// rungs here are the ones that turn a PVE-only host into a dual verdict when a PBS
-// install left something behind, which is why each records the exact path it matched.
-func detectPBS(trace *detectionTrace) (string, bool) {
-	if hostRooted() {
-		trace.skip(productPBS, "command", "proxmox-backup-manager", "a command run here answers for the appliance, not for the mounted host")
-	} else if version, ok := detectPBSViaCommand(); ok {
-		trace.hit(productPBS, "command", "proxmox-backup-manager", version)
-		return version, true
-	} else {
-		trace.miss(productPBS, "command", "proxmox-backup-manager")
+// detectPBS is the PBS half of the same ladder, traced the same way, and it is the
+// half where the split between an install and its leftovers was bought with a broken
+// backup (issue #315).
+//
+// Everything proxmox-backup-server SHIPS goes away when the package does: the manager
+// binary, /usr/share/proxmox-backup (dpkg -S names the package as its owner) and the
+// dpkg stanza itself. Everything PBS CREATES stays: /etc/proxmox-backup and
+// /var/lib/proxmox-backup belong to no package, are made at runtime, and the server
+// postrm does not remove them even on purge. Measured on PBS 3.4.9 and 4.2.0.
+//
+// So the two kinds of marker answer different questions. The shipped ones answer "is
+// PBS installed"; the created ones answer "was PBS ever here", which is not the
+// question the backup recipe needs. Only the first kind ends this ladder.
+func detectPBS(trace *detectionTrace) (string, bool, string) {
+	residue := ""
+	noteResidue := func(marker, target, note string) {
+		trace.residue(productPBS, marker, target, note)
+		if residue == "" {
+			residue = fmt.Sprintf("%s (%s)", marker, target)
+		}
 	}
 
-	if version, ok := detectPBSViaVersionFile(); ok {
-		trace.hit(productPBS, "version-file", resolveUnderPrefix(pbsVersionFile), version)
-		return version, true
+	installedWithoutVersion := false
+	if hostRooted() {
+		trace.skip(productPBS, "command", "proxmox-backup-manager", "a command run here answers for the appliance, not for the mounted host")
+	} else {
+		switch version, outcome := detectPBSViaCommand(); outcome {
+		case markerInstalled:
+			trace.hit(productPBS, "command", "proxmox-backup-manager", version)
+			return version, true, ""
+		case markerInstalledNoVersion:
+			installedWithoutVersion = true
+			trace.add(DetectionStep{Product: productPBS, Marker: "command", Target: "proxmox-backup-manager", Hit: true, Continued: true,
+				Note: "the command is installed but gave no version; looking for one further down"})
+		default:
+			trace.miss(productPBS, "command", "proxmox-backup-manager")
+		}
 	}
-	trace.miss(productPBS, "version-file", resolveUnderPrefix(pbsVersionFile))
+
+	switch version, outcome := detectPBSViaVersionFile(); outcome {
+	case markerInstalled:
+		trace.hit(productPBS, "version-file", resolveUnderPrefix(pbsVersionFile), version)
+		return version, true, ""
+	case markerResidual:
+		noteResidue("version-file", resolveUnderPrefix(pbsVersionFile), "the file is there but carries no version")
+	default:
+		trace.miss(productPBS, "version-file", resolveUnderPrefix(pbsVersionFile))
+	}
 
 	if version, ok := dpkgPackageInstalled("proxmox-backup-server"); ok {
 		trace.hit(productPBS, "dpkg proxmox-backup-server", resolveUnderPrefix(dpkgStatusFile), version)
-		return version, true
+		return version, true, ""
 	}
 	trace.miss(productPBS, "dpkg proxmox-backup-server", resolveUnderPrefix(dpkgStatusFile))
 
 	if path := firstExistingFile(pbsBinaryCandidates); path != "" {
 		trace.hit(productPBS, "binary", path, "")
-		return "unknown", true
+		return "unknown", true, ""
 	}
 	trace.miss(productPBS, "binary", targetList(pbsBinaryCandidates...))
 
 	if dirExists(pbsShareDir) {
 		trace.hit(productPBS, "share-dir", resolveUnderPrefix(pbsShareDir), "")
-		return "unknown", true
+		return "unknown", true, ""
 	}
 	trace.miss(productPBS, "share-dir", resolveUnderPrefix(pbsShareDir))
 
+	// The apt candidates carry the token "pbs", and the repository Proxmox tells you to
+	// add on a non-PBS host to keep proxmox-backup-client current is called pbs-client.
+	// A configured repository never proved an install; on this rung it used to.
 	if path := firstMatchingSource(pbsSourceFiles, pbsSourceTokens); path != "" {
-		trace.hit(productPBS, "apt-source", path, "")
-		return "unknown", true
+		noteResidue("apt-source", path, "a configured repository is not an installed package")
+	} else {
+		trace.miss(productPBS, "apt-source", targetList(pbsSourceFiles...))
 	}
-	trace.miss(productPBS, "apt-source", targetList(pbsSourceFiles...))
 
 	if path := firstExistingDir(pbsDirCandidates); path != "" {
-		trace.hit(productPBS, "directory", path, "")
-		return "unknown", true
+		noteResidue("directory", path, "no package owns this directory and none removes it")
+	} else {
+		trace.miss(productPBS, "directory", targetList(pbsDirCandidates...))
 	}
-	trace.miss(productPBS, "directory", targetList(pbsDirCandidates...))
 
-	return "", false
+	if installedWithoutVersion {
+		return "unknown", true, ""
+	}
+	return "", false, residue
 }
 
 // firstExistingFile returns the first candidate that resolves to a regular file
@@ -554,6 +674,14 @@ func dpkgPackageInstalled(pkg string) (string, bool) {
 	if err != nil {
 		return "", false
 	}
+	return dpkgPackageInstalledIn(data, pkg)
+}
+
+// dpkgPackageInstalledIn is the parse half of dpkgPackageInstalled, split out so a
+// caller holding the status file can classify several packages against the ONE read
+// that produced its verdict. Re-reading per package would let a status file that
+// became unreadable between reads come back as a clean "not installed".
+func dpkgPackageInstalledIn(data []byte, pkg string) (string, bool) {
 	for _, stanza := range strings.Split(string(data), "\n\n") {
 		if dpkgStanzaField(stanza, "Package") != pkg {
 			continue
@@ -582,80 +710,100 @@ func dpkgStanzaField(stanza, key string) string {
 	return ""
 }
 
-func detectPVEViaCommand() (string, bool) {
+// detectPVEViaCommand runs pveversion. The binary being on PATH already proves PVE is
+// installed, so the outcome is never "absent" once lookPath succeeds; what the run adds
+// is the version, and it can fail to add it.
+//
+// That failure is not rare. pveversion takes 4.4 to 5.2 seconds on the lab host and
+// commandTimeout is 5, so it times out intermittently on nothing more unusual than a
+// busy node. The caller stops the ladder on markerInstalled and keeps walking on
+// markerInstalledNoVersion, so a run that got the binary but not the version lets dpkg
+// supply it instead of settling for "unknown" with the real version one rung further
+// down.
+func detectPVEViaCommand() (string, markerOutcome) {
 	cmdPath, err := lookPathFunc("pveversion")
 	if err != nil {
-		return "", false
+		return "", markerAbsent
 	}
 
 	output, err := runCommandFunc(cmdPath)
 	if err != nil {
-		return "unknown", true
+		return "", markerInstalledNoVersion
 	}
 
 	version := extractPVEVersion(output)
 	if version == "" {
-		return "unknown", true
+		return "", markerInstalledNoVersion
 	}
-	return version, true
+	return version, markerInstalled
 }
 
-func detectPBSViaCommand() (string, bool) {
+// detectPBSViaCommand is the PBS half, with the same three outcomes as
+// detectPVEViaCommand and for the same reason.
+func detectPBSViaCommand() (string, markerOutcome) {
 	cmdPath, err := lookPathFunc("proxmox-backup-manager")
 	if err != nil {
-		return "", false
+		return "", markerAbsent
 	}
 
 	output, err := runCommandFunc(cmdPath, "version")
 	if err != nil {
-		return "unknown", true
+		return "", markerInstalledNoVersion
 	}
 
 	version := extractPBSVersion(output)
 	if version == "" {
-		return "unknown", true
+		return "", markerInstalledNoVersion
 	}
-	return version, true
+	return version, markerInstalled
 }
 
-func detectPVEViaVersionFiles() (string, bool) {
+// markerOutcome is what a version-file probe found. The middle state is the point:
+// a file that exists but says nothing is neither "the product is here" nor "there is
+// nothing here", and collapsing it onto either one loses the only detail that
+// explains the verdict.
+type markerOutcome int
+
+const (
+	markerAbsent markerOutcome = iota
+	// markerResidual: something is there that does not prove an install.
+	markerResidual
+	// markerInstalledNoVersion: the product IS installed and this probe could not say
+	// which version. Distinct from markerResidual, which says the opposite about the
+	// product, and distinct from markerInstalled, which ends the ladder.
+	markerInstalledNoVersion
+	markerInstalled
+)
+
+func detectPVEViaVersionFiles() (string, markerOutcome) {
+	outcome := markerAbsent
+
 	if fileExists(pveVersionFile) {
 		if version := readAndTrim(pveVersionFile); version != "" {
-			return version, true
+			return version, markerInstalled
 		}
+		outcome = markerResidual
 	}
 
 	if fileExists(pveLegacyFile) {
 		data := readAndTrim(pveLegacyFile)
 		if version := extractPVEVersion(data); version != "" {
-			return version, true
+			return version, markerInstalled
 		}
-		return "unknown", true
+		outcome = markerResidual
 	}
 
-	return "", false
+	return "", outcome
 }
 
-func detectPBSViaVersionFile() (string, bool) {
-	if fileExists(pbsVersionFile) {
-		if version := readAndTrim(pbsVersionFile); version != "" {
-			return version, true
-		}
-		return "unknown", true
+func detectPBSViaVersionFile() (string, markerOutcome) {
+	if !fileExists(pbsVersionFile) {
+		return "", markerAbsent
 	}
-	return "", false
-}
-
-func detectPVEViaSources() bool {
-	return firstMatchingSource(pveSourceFiles, pveSourceTokens) != ""
-}
-
-func detectPBSViaSources() bool {
-	return firstMatchingSource(pbsSourceFiles, pbsSourceTokens) != ""
-}
-
-func detectViaDirectories(paths []string) bool {
-	return firstExistingDir(paths) != ""
+	if version := readAndTrim(pbsVersionFile); version != "" {
+		return version, markerInstalled
+	}
+	return "", markerResidual
 }
 
 func extendPath() {
@@ -870,11 +1018,31 @@ func markerLines() []string {
 	add("%s exists: %s", resolveUnderPrefix(pveShareDir), boolToYes(dirExists(pveShareDir)))
 	add("%s exists: %s", resolveUnderPrefix(pbsShareDir), boolToYes(dirExists(pbsShareDir)))
 	add("%s exists: %s", resolveUnderPrefix(dpkgStatusFile), boolToYes(fileExists(dpkgStatusFile)))
-	if _, ok := dpkgPackageInstalled("pve-manager"); ok {
-		add("dpkg pve-manager: installed")
-	}
-	if _, ok := dpkgPackageInstalled("proxmox-backup-server"); ok {
-		add("dpkg proxmox-backup-server: installed")
+	// Both lines are printed whichever way they come out. They used to print only when
+	// the package was installed, which is the one case that needs no explaining: on the
+	// host in issue #315 the table listed nine PBS markers and silently omitted the one
+	// that said proxmox-backup-server is NOT installed, so the decisive evidence read as
+	// a check that had never run. Every other marker here reports YES or NO.
+	// A package probe answers false for two different facts: the package is absent, or
+	// the status file could not be read at all. Printing "not installed" for both states
+	// as proven something the run never managed to check - the case being a
+	// SYSTEM_ROOT_PREFIX mount that carries no /var/lib/dpkg/status.
+	//
+	// The file is read ONCE and both packages are classified against that read. Calling
+	// dpkgPackageInstalled per package would read it again each time, so a status file
+	// that stopped being readable after the check above would be reported as a package
+	// that is simply not installed - the very claim this is here to stop making.
+	dpkgStatus, dpkgReadErr := readFileFunc(resolveUnderPrefix(dpkgStatusFile))
+	for _, pkg := range []string{"pve-manager", "proxmox-backup-server"} {
+		if dpkgReadErr != nil {
+			add("dpkg %s: not proven installed (%v)", pkg, dpkgReadErr)
+			continue
+		}
+		if version, ok := dpkgPackageInstalledIn(dpkgStatus, pkg); ok {
+			add("dpkg %s: installed (%s)", pkg, version)
+		} else {
+			add("dpkg %s: not installed", pkg)
+		}
 	}
 	add("")
 

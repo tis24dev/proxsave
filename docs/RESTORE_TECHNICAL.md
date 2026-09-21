@@ -552,34 +552,53 @@ if err := ValidateCompatibility(systemType, backupType); err != nil {
 **System Detection** (`compatibility.go`):
 ```go
 func DetectCurrentSystem() SystemType {
-    hasPVE := fileExists("/etc/pve") || fileExists("/usr/bin/qm") || fileExists("/usr/bin/pct")
-    hasPBS := fileExists("/etc/proxmox-backup") || fileExists("/usr/sbin/proxmox-backup-proxy")
-
-    switch {
-    case hasPVE && hasPBS:
-        return SystemTypeDual
-    case hasPVE:
-        return SystemTypePVE
-    case hasPBS:
-        return SystemTypePBS
-    default:
-        return SystemTypeUnknown
-    }
+    info, _ := detectEnvironment() // environment.Detect
+    // maps types.ProxmoxDual/VE/BS onto SystemTypeDual/PVE/PBS, unknown otherwise
 }
 ```
 
+Restore does not carry its own rule for what this host is: it reads the same detection
+ladder the backup side uses. The rule it replaced tested `/etc/proxmox-backup` OR
+`/usr/sbin/proxmox-backup-proxy`, and that second path exists on no PBS release (the
+proxy is a systemd unit, not a binary on PATH), so every PBS restore decision rested on
+one directory that no package owns and no removal deletes. That is the marker which
+turned a PVE-only host into a dual backup in issue #315.
+
 Restore compatibility is therefore **capability-based**, not exact-match only.
 
-**Backup Type Detection**:
+**Backup Type Detection** subtracts any role the archive was meant to carry and does
+not, recorded in the sidecar manifest as `incomplete_targets`. A dual run that lost its
+PBS half ships a PVE archive and is treated as one, so it reports partial compatibility
+against a dual host instead of clearing the check as though nothing were missing.
+
 ```go
 func DetectBackupType(manifest *backup.Manifest) SystemType {
-    if len(manifest.ProxmoxTargets) > 0 {
-        return parseSystemTargets(manifest.ProxmoxTargets)
+    if manifest == nil {
+        return SystemTypeUnknown
+    }
+    // Declared targets minus every role recorded in incomplete_targets.
+    if targets := completedTargets(manifest); len(targets) > 0 {
+        return parseSystemTargets(targets)
+    }
+    if len(manifest.ProxmoxTargets) > 0 && len(manifest.IncompleteTargets) > 0 {
+        // Every declared target failed: the archive carries no role payload at all.
+        return SystemTypeUnknown
     }
     if manifest.ProxmoxType != "" {
-        return parseSystemTypeString(manifest.ProxmoxType)
+        if backupType := parseSystemTypeString(manifest.ProxmoxType); backupType != SystemTypeUnknown {
+            return backupType
+        }
     }
     // Fallback: hostname heuristics
+    if manifest.Hostname != "" {
+        hostname := strings.ToLower(manifest.Hostname)
+        if strings.Contains(hostname, "pve") {
+            return SystemTypePVE
+        }
+        if strings.Contains(hostname, "pbs") {
+            return SystemTypePBS
+        }
+    }
     return SystemTypeUnknown
 }
 ```

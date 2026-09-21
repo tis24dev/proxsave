@@ -61,9 +61,9 @@ func TestDetectPVEViaCommand_Branches(t *testing.T) {
 	t.Run("not found", func(t *testing.T) {
 		setValue(t, &lookPathFunc, func(string) (string, error) { return "", errors.New("not found") })
 
-		version, ok := detectPVEViaCommand()
-		if ok || version != "" {
-			t.Fatalf("detectPVEViaCommand() = (%q, %v), want (%q, %v)", version, ok, "", false)
+		version, outcome := detectPVEViaCommand()
+		if outcome != markerAbsent || version != "" {
+			t.Fatalf("detectPVEViaCommand() = (%q, %v), want (%q, %v)", version, outcome, "", markerAbsent)
 		}
 	})
 
@@ -71,9 +71,9 @@ func TestDetectPVEViaCommand_Branches(t *testing.T) {
 		setValue(t, &lookPathFunc, func(string) (string, error) { return "/fake/pveversion", nil })
 		setValue(t, &runCommandFunc, func(string, ...string) (string, error) { return "", errors.New("boom") })
 
-		version, ok := detectPVEViaCommand()
-		if !ok || version != "unknown" {
-			t.Fatalf("detectPVEViaCommand() = (%q, %v), want (%q, %v)", version, ok, "unknown", true)
+		version, outcome := detectPVEViaCommand()
+		if outcome != markerInstalledNoVersion || version != "" {
+			t.Fatalf("detectPVEViaCommand() = (%q, %v), want (%q, %v): the binary proves the install, the run did not give a version", version, outcome, "", markerInstalledNoVersion)
 		}
 	})
 
@@ -83,9 +83,9 @@ func TestDetectPVEViaCommand_Branches(t *testing.T) {
 			return "no version here", nil
 		})
 
-		version, ok := detectPVEViaCommand()
-		if !ok || version != "unknown" {
-			t.Fatalf("detectPVEViaCommand() = (%q, %v), want (%q, %v)", version, ok, "unknown", true)
+		version, outcome := detectPVEViaCommand()
+		if outcome != markerInstalledNoVersion || version != "" {
+			t.Fatalf("detectPVEViaCommand() = (%q, %v), want (%q, %v): the binary proves the install, the run did not give a version", version, outcome, "", markerInstalledNoVersion)
 		}
 	})
 
@@ -95,9 +95,9 @@ func TestDetectPVEViaCommand_Branches(t *testing.T) {
 			return "pve-manager/7.4-3/d4a3b4a1 (running kernel: 5.15.35-1-pve)", nil
 		})
 
-		version, ok := detectPVEViaCommand()
-		if !ok || version != "7.4-3" {
-			t.Fatalf("detectPVEViaCommand() = (%q, %v), want (%q, %v)", version, ok, "7.4-3", true)
+		version, outcome := detectPVEViaCommand()
+		if outcome != markerInstalled || version != "7.4-3" {
+			t.Fatalf("detectPVEViaCommand() = (%q, %v), want (%q, %v)", version, outcome, "7.4-3", markerInstalled)
 		}
 	})
 }
@@ -106,9 +106,9 @@ func TestDetectPBSViaCommand_Branches(t *testing.T) {
 	t.Run("not found", func(t *testing.T) {
 		setValue(t, &lookPathFunc, func(string) (string, error) { return "", errors.New("not found") })
 
-		version, ok := detectPBSViaCommand()
-		if ok || version != "" {
-			t.Fatalf("detectPBSViaCommand() = (%q, %v), want (%q, %v)", version, ok, "", false)
+		version, outcome := detectPBSViaCommand()
+		if outcome != markerAbsent || version != "" {
+			t.Fatalf("detectPBSViaCommand() = (%q, %v), want (%q, %v)", version, outcome, "", markerAbsent)
 		}
 	})
 
@@ -116,9 +116,9 @@ func TestDetectPBSViaCommand_Branches(t *testing.T) {
 		setValue(t, &lookPathFunc, func(string) (string, error) { return "/fake/proxmox-backup-manager", nil })
 		setValue(t, &runCommandFunc, func(string, ...string) (string, error) { return "", errors.New("boom") })
 
-		version, ok := detectPBSViaCommand()
-		if !ok || version != "unknown" {
-			t.Fatalf("detectPBSViaCommand() = (%q, %v), want (%q, %v)", version, ok, "unknown", true)
+		version, outcome := detectPBSViaCommand()
+		if outcome != markerInstalledNoVersion || version != "" {
+			t.Fatalf("detectPBSViaCommand() = (%q, %v), want (%q, %v): the binary proves the install, the run did not give a version", version, outcome, "", markerInstalledNoVersion)
 		}
 	})
 
@@ -128,9 +128,9 @@ func TestDetectPBSViaCommand_Branches(t *testing.T) {
 			return "proxmox-backup-manager 2.4.1\nno version here", nil
 		})
 
-		version, ok := detectPBSViaCommand()
-		if !ok || version != "unknown" {
-			t.Fatalf("detectPBSViaCommand() = (%q, %v), want (%q, %v)", version, ok, "unknown", true)
+		version, outcome := detectPBSViaCommand()
+		if outcome != markerInstalledNoVersion || version != "" {
+			t.Fatalf("detectPBSViaCommand() = (%q, %v), want (%q, %v): the binary proves the install, the run did not give a version", version, outcome, "", markerInstalledNoVersion)
 		}
 	})
 
@@ -140,9 +140,9 @@ func TestDetectPBSViaCommand_Branches(t *testing.T) {
 			return "proxmox-backup-manager 2.4.1\nversion: 2.4.1", nil
 		})
 
-		version, ok := detectPBSViaCommand()
-		if !ok || version != "2.4.1" {
-			t.Fatalf("detectPBSViaCommand() = (%q, %v), want (%q, %v)", version, ok, "2.4.1", true)
+		version, outcome := detectPBSViaCommand()
+		if outcome != markerInstalled || version != "2.4.1" {
+			t.Fatalf("detectPBSViaCommand() = (%q, %v), want (%q, %v)", version, outcome, "2.4.1", markerInstalled)
 		}
 	})
 }
@@ -159,9 +159,9 @@ func TestDetectPVEViaVersionFiles_Branches(t *testing.T) {
 		setValue(t, &pveVersionFile, versionFile)
 		setValue(t, &pveLegacyFile, filepath.Join(tmpDir, "missing-legacy"))
 
-		version, ok := detectPVEViaVersionFiles()
-		if !ok || version != "7.4-1" {
-			t.Fatalf("detectPVEViaVersionFiles() = (%q, %v), want (%q, %v)", version, ok, "7.4-1", true)
+		version, outcome := detectPVEViaVersionFiles()
+		if outcome != markerInstalled || version != "7.4-1" {
+			t.Fatalf("detectPVEViaVersionFiles() = (%q, %v), want (%q, %v)", version, outcome, "7.4-1", markerInstalled)
 		}
 	})
 
@@ -178,9 +178,9 @@ func TestDetectPVEViaVersionFiles_Branches(t *testing.T) {
 		setValue(t, &pveVersionFile, versionFile)
 		setValue(t, &pveLegacyFile, legacyFile)
 
-		version, ok := detectPVEViaVersionFiles()
-		if !ok || version != "7.4-3" {
-			t.Fatalf("detectPVEViaVersionFiles() = (%q, %v), want (%q, %v)", version, ok, "7.4-3", true)
+		version, outcome := detectPVEViaVersionFiles()
+		if outcome != markerInstalled || version != "7.4-3" {
+			t.Fatalf("detectPVEViaVersionFiles() = (%q, %v), want (%q, %v)", version, outcome, "7.4-3", markerInstalled)
 		}
 	})
 
@@ -193,9 +193,9 @@ func TestDetectPVEViaVersionFiles_Branches(t *testing.T) {
 		setValue(t, &pveVersionFile, filepath.Join(tmpDir, "missing-version"))
 		setValue(t, &pveLegacyFile, legacyFile)
 
-		version, ok := detectPVEViaVersionFiles()
-		if !ok || version != "unknown" {
-			t.Fatalf("detectPVEViaVersionFiles() = (%q, %v), want (%q, %v)", version, ok, "unknown", true)
+		version, outcome := detectPVEViaVersionFiles()
+		if outcome != markerResidual || version != "" {
+			t.Fatalf("detectPVEViaVersionFiles() = (%q, %v), want (%q, %v): a file with no version in it proves nothing", version, outcome, "", markerResidual)
 		}
 	})
 
@@ -203,9 +203,9 @@ func TestDetectPVEViaVersionFiles_Branches(t *testing.T) {
 		setValue(t, &pveVersionFile, filepath.Join(tmpDir, "missing-version-2"))
 		setValue(t, &pveLegacyFile, filepath.Join(tmpDir, "missing-legacy-2"))
 
-		version, ok := detectPVEViaVersionFiles()
-		if ok || version != "" {
-			t.Fatalf("detectPVEViaVersionFiles() = (%q, %v), want (%q, %v)", version, ok, "", false)
+		version, outcome := detectPVEViaVersionFiles()
+		if outcome != markerAbsent || version != "" {
+			t.Fatalf("detectPVEViaVersionFiles() = (%q, %v), want (%q, %v)", version, outcome, "", markerAbsent)
 		}
 	})
 }
@@ -221,9 +221,9 @@ func TestDetectPBSViaVersionFile_Branches(t *testing.T) {
 
 		setValue(t, &pbsVersionFile, versionFile)
 
-		version, ok := detectPBSViaVersionFile()
-		if !ok || version != "2.4-1" {
-			t.Fatalf("detectPBSViaVersionFile() = (%q, %v), want (%q, %v)", version, ok, "2.4-1", true)
+		version, outcome := detectPBSViaVersionFile()
+		if outcome != markerInstalled || version != "2.4-1" {
+			t.Fatalf("detectPBSViaVersionFile() = (%q, %v), want (%q, %v)", version, outcome, "2.4-1", markerInstalled)
 		}
 	})
 
@@ -235,18 +235,18 @@ func TestDetectPBSViaVersionFile_Branches(t *testing.T) {
 
 		setValue(t, &pbsVersionFile, versionFile)
 
-		version, ok := detectPBSViaVersionFile()
-		if !ok || version != "unknown" {
-			t.Fatalf("detectPBSViaVersionFile() = (%q, %v), want (%q, %v)", version, ok, "unknown", true)
+		version, outcome := detectPBSViaVersionFile()
+		if outcome != markerResidual || version != "" {
+			t.Fatalf("detectPBSViaVersionFile() = (%q, %v), want (%q, %v): an empty file proves nothing", version, outcome, "", markerResidual)
 		}
 	})
 
 	t.Run("missing", func(t *testing.T) {
 		setValue(t, &pbsVersionFile, filepath.Join(tmpDir, "missing-pbs-version"))
 
-		version, ok := detectPBSViaVersionFile()
-		if ok || version != "" {
-			t.Fatalf("detectPBSViaVersionFile() = (%q, %v), want (%q, %v)", version, ok, "", false)
+		version, outcome := detectPBSViaVersionFile()
+		if outcome != markerAbsent || version != "" {
+			t.Fatalf("detectPBSViaVersionFile() = (%q, %v), want (%q, %v)", version, outcome, "", markerAbsent)
 		}
 	})
 }
@@ -266,11 +266,11 @@ func TestDetectViaSources_Branches(t *testing.T) {
 	setValue(t, &pveSourceFiles, []string{pveSource})
 	setValue(t, &pbsSourceFiles, []string{pbsSource})
 
-	if !detectPVEViaSources() {
-		t.Fatal("detectPVEViaSources() should be true")
+	if firstMatchingSource(pveSourceFiles, pveSourceTokens) == "" {
+		t.Fatal("the PVE source file should match its token")
 	}
-	if !detectPBSViaSources() {
-		t.Fatal("detectPBSViaSources() should be true")
+	if firstMatchingSource(pbsSourceFiles, pbsSourceTokens) == "" {
+		t.Fatal("the PBS source file should match its token")
 	}
 
 	emptySource := filepath.Join(tmpDir, "empty.list")
@@ -280,11 +280,11 @@ func TestDetectViaSources_Branches(t *testing.T) {
 	setValue(t, &pveSourceFiles, []string{emptySource})
 	setValue(t, &pbsSourceFiles, []string{emptySource})
 
-	if detectPVEViaSources() {
-		t.Fatal("detectPVEViaSources() should be false")
+	if path := firstMatchingSource(pveSourceFiles, pveSourceTokens); path != "" {
+		t.Fatalf("a source file with no product token matched PVE: %s", path)
 	}
-	if detectPBSViaSources() {
-		t.Fatal("detectPBSViaSources() should be false")
+	if path := firstMatchingSource(pbsSourceFiles, pbsSourceTokens); path != "" {
+		t.Fatalf("a source file with no product token matched PBS: %s", path)
 	}
 }
 
@@ -299,7 +299,7 @@ func TestDetectPVE_FallbackOrder(t *testing.T) {
 			return "pve-manager/7.4-3/d4a3b4a1", nil
 		})
 
-		version, ok := detectPVE(nil)
+		version, ok, _ := detectPVE(nil)
 		if !ok || version != "7.4-3" {
 			t.Fatalf("detectPVE() = (%q, %v), want (%q, %v)", version, ok, "7.4-3", true)
 		}
@@ -315,13 +315,13 @@ func TestDetectPVE_FallbackOrder(t *testing.T) {
 		setValue(t, &pveVersionFile, versionFile)
 		setValue(t, &pveLegacyFile, filepath.Join(tmpDir, "missing-legacy"))
 
-		version, ok := detectPVE(nil)
+		version, ok, _ := detectPVE(nil)
 		if !ok || version != "7.4-1" {
 			t.Fatalf("detectPVE() = (%q, %v), want (%q, %v)", version, ok, "7.4-1", true)
 		}
 	})
 
-	t.Run("via sources", func(t *testing.T) {
+	t.Run("an apt source is residue, not a verdict", func(t *testing.T) {
 		setValue(t, &lookPathFunc, func(string) (string, error) { return "", errors.New("not found") })
 		setValue(t, &pveVersionFile, filepath.Join(tmpDir, "missing-version"))
 		setValue(t, &pveLegacyFile, filepath.Join(tmpDir, "missing-legacy"))
@@ -332,13 +332,16 @@ func TestDetectPVE_FallbackOrder(t *testing.T) {
 		}
 		setValue(t, &pveSourceFiles, []string{sourceFile})
 
-		version, ok := detectPVE(nil)
-		if !ok || version != "unknown" {
-			t.Fatalf("detectPVE() = (%q, %v), want (%q, %v)", version, ok, "unknown", true)
+		version, ok, residue := detectPVE(nil)
+		if ok || version != "" {
+			t.Fatalf("detectPVE() = (%q, %v), want it not to decide: a configured repository is not an installed package", version, ok)
+		}
+		if !strings.Contains(residue, "apt-source") {
+			t.Fatalf("residue = %q, want the apt source named", residue)
 		}
 	})
 
-	t.Run("via directories", func(t *testing.T) {
+	t.Run("a leftover directory is residue, not a verdict", func(t *testing.T) {
 		setValue(t, &lookPathFunc, func(string) (string, error) { return "", errors.New("not found") })
 		setValue(t, &pveVersionFile, filepath.Join(tmpDir, "missing-version-2"))
 		setValue(t, &pveLegacyFile, filepath.Join(tmpDir, "missing-legacy-2"))
@@ -350,9 +353,12 @@ func TestDetectPVE_FallbackOrder(t *testing.T) {
 		}
 		setValue(t, &pveDirCandidates, []string{dirCandidate})
 
-		version, ok := detectPVE(nil)
-		if !ok || version != "unknown" {
-			t.Fatalf("detectPVE() = (%q, %v), want (%q, %v)", version, ok, "unknown", true)
+		version, ok, residue := detectPVE(nil)
+		if ok || version != "" {
+			t.Fatalf("detectPVE() = (%q, %v), want it not to decide: no package owns this directory", version, ok)
+		}
+		if !strings.Contains(residue, dirCandidate) {
+			t.Fatalf("residue = %q, want it to name %s", residue, dirCandidate)
 		}
 	})
 
@@ -363,7 +369,7 @@ func TestDetectPVE_FallbackOrder(t *testing.T) {
 		setValue(t, &pveSourceFiles, []string{})
 		setValue(t, &pveDirCandidates, []string{})
 
-		version, ok := detectPVE(nil)
+		version, ok, _ := detectPVE(nil)
 		if ok || version != "" {
 			t.Fatalf("detectPVE() = (%q, %v), want (%q, %v)", version, ok, "", false)
 		}
@@ -381,7 +387,7 @@ func TestDetectPBS_FallbackOrder(t *testing.T) {
 			return "version: 2.4.1", nil
 		})
 
-		version, ok := detectPBS(nil)
+		version, ok, _ := detectPBS(nil)
 		if !ok || version != "2.4.1" {
 			t.Fatalf("detectPBS() = (%q, %v), want (%q, %v)", version, ok, "2.4.1", true)
 		}
@@ -396,13 +402,13 @@ func TestDetectPBS_FallbackOrder(t *testing.T) {
 		}
 		setValue(t, &pbsVersionFile, versionFile)
 
-		version, ok := detectPBS(nil)
+		version, ok, _ := detectPBS(nil)
 		if !ok || version != "2.4-1" {
 			t.Fatalf("detectPBS() = (%q, %v), want (%q, %v)", version, ok, "2.4-1", true)
 		}
 	})
 
-	t.Run("via sources", func(t *testing.T) {
+	t.Run("an apt source is residue, not a verdict", func(t *testing.T) {
 		setValue(t, &lookPathFunc, func(string) (string, error) { return "", errors.New("not found") })
 		setValue(t, &pbsVersionFile, filepath.Join(tmpDir, "missing-pbs-version"))
 
@@ -412,13 +418,16 @@ func TestDetectPBS_FallbackOrder(t *testing.T) {
 		}
 		setValue(t, &pbsSourceFiles, []string{sourceFile})
 
-		version, ok := detectPBS(nil)
-		if !ok || version != "unknown" {
-			t.Fatalf("detectPBS() = (%q, %v), want (%q, %v)", version, ok, "unknown", true)
+		version, ok, residue := detectPBS(nil)
+		if ok || version != "" {
+			t.Fatalf("detectPBS() = (%q, %v), want it not to decide: a configured repository is not an installed package", version, ok)
+		}
+		if !strings.Contains(residue, "apt-source") {
+			t.Fatalf("residue = %q, want the apt source named", residue)
 		}
 	})
 
-	t.Run("via directories", func(t *testing.T) {
+	t.Run("a leftover directory is residue, not a verdict", func(t *testing.T) {
 		setValue(t, &lookPathFunc, func(string) (string, error) { return "", errors.New("not found") })
 		setValue(t, &pbsVersionFile, filepath.Join(tmpDir, "missing-pbs-version-2"))
 		setValue(t, &pbsSourceFiles, []string{})
@@ -429,9 +438,12 @@ func TestDetectPBS_FallbackOrder(t *testing.T) {
 		}
 		setValue(t, &pbsDirCandidates, []string{dirCandidate})
 
-		version, ok := detectPBS(nil)
-		if !ok || version != "unknown" {
-			t.Fatalf("detectPBS() = (%q, %v), want (%q, %v)", version, ok, "unknown", true)
+		version, ok, residue := detectPBS(nil)
+		if ok || version != "" {
+			t.Fatalf("detectPBS() = (%q, %v), want it not to decide: no package owns this directory", version, ok)
+		}
+		if !strings.Contains(residue, dirCandidate) {
+			t.Fatalf("residue = %q, want it to name %s", residue, dirCandidate)
 		}
 	})
 
@@ -441,7 +453,7 @@ func TestDetectPBS_FallbackOrder(t *testing.T) {
 		setValue(t, &pbsSourceFiles, []string{})
 		setValue(t, &pbsDirCandidates, []string{})
 
-		version, ok := detectPBS(nil)
+		version, ok, _ := detectPBS(nil)
 		if ok || version != "" {
 			t.Fatalf("detectPBS() = (%q, %v), want (%q, %v)", version, ok, "", false)
 		}

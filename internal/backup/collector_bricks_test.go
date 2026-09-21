@@ -210,7 +210,6 @@ func TestRealRecipesHaveCompleteUniqueBricks(t *testing.T) {
 		newPBSPXARRecipe(),
 		newPBSUserConfigRecipe(),
 		newSystemRecipe(),
-		newDualRecipe(),
 	}
 
 	for _, r := range recipes {

@@ -500,8 +500,8 @@ func TestCollectPBSConfigsReturnsErrorWhenNotPBSSystem(t *testing.T) {
 
 	collector := NewCollector(newTestLogger(), cfg, t.TempDir(), types.ProxmoxBS, false)
 	err := collector.CollectPBSConfigs(context.Background())
-	if err == nil || !strings.Contains(err.Error(), "not a PBS system") {
-		t.Fatalf("expected not-a-PBS error, got %v", err)
+	if err == nil || !strings.Contains(err.Error(), "the configuration directory a PBS node always has") {
+		t.Fatalf("expected the missing-config-directory error, got %v", err)
 	}
 }
 

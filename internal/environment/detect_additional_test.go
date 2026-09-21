@@ -225,30 +225,12 @@ func TestDetectViaDirectories(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := detectViaDirectories(tt.paths)
+			result := firstExistingDir(tt.paths) != ""
 			if result != tt.expected {
-				t.Errorf("detectViaDirectories() = %v, want %v", result, tt.expected)
+				t.Errorf("firstExistingDir() found = %v, want %v", result, tt.expected)
 			}
 		})
 	}
-}
-
-// TestDetectPVEViaSources tests PVE detection via apt sources
-func TestDetectPVEViaSources(t *testing.T) {
-	// Since this function checks actual system paths, we test the logic
-	// On most systems this will return false
-	result := detectPVEViaSources()
-	// Just verify it doesn't panic
-	_ = result
-}
-
-// TestDetectPBSViaSources tests PBS detection via apt sources
-func TestDetectPBSViaSources(t *testing.T) {
-	// Since this function checks actual system paths, we test the logic
-	// On most systems this will return false
-	result := detectPBSViaSources()
-	// Just verify it doesn't panic
-	_ = result
 }
 
 // TestExtendPath tests PATH environment variable extension
@@ -451,7 +433,7 @@ func TestDetectPBSViaCommand(t *testing.T) {
 
 // TestDetectPVE tests complete PVE detection
 func TestDetectPVE(t *testing.T) {
-	version, ok := detectPVE(nil)
+	version, ok, _ := detectPVE(nil)
 
 	// On non-PVE systems, should return false
 	// On PVE systems, should return true with version
@@ -462,7 +444,7 @@ func TestDetectPVE(t *testing.T) {
 
 // TestDetectPBS tests complete PBS detection
 func TestDetectPBS(t *testing.T) {
-	version, ok := detectPBS(nil)
+	version, ok, _ := detectPBS(nil)
 
 	// On non-PBS systems, should return false
 	// On PBS systems, should return true with version

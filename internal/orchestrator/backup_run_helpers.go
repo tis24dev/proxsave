@@ -107,6 +107,7 @@ func (o *Orchestrator) applyBackupCollectionStats(stats *BackupStats, collStats 
 	stats.FilesIncluded = int(collStats.FilesProcessed)
 	stats.FilesMissing = int(collStats.FilesNotFound)
 	stats.UncompressedSize = collStats.BytesCollected
+	stats.IncompleteTargets = collector.IncompleteTargets()
 	if stats.ProxmoxType.SupportsPVE() {
 		stats.ClusterMode = standaloneClusterMode(collector)
 	}
@@ -329,19 +330,20 @@ func (o *Orchestrator) newArchiveManifest(stats *BackupStats, archivePath, check
 		return nil, err
 	}
 	return &backup.Manifest{
-		ArchivePath:      archivePath,
-		ArchiveSize:      stats.ArchiveSize,
-		SHA256:           checksum,
-		CreatedAt:        stats.Timestamp,
-		CompressionType:  string(stats.Compression),
-		CompressionLevel: stats.CompressionLevel,
-		CompressionMode:  stats.CompressionMode,
-		ProxmoxType:      string(stats.ProxmoxType),
-		ProxmoxTargets:   append([]string(nil), stats.ProxmoxTargets...),
-		ProxmoxVersion:   stats.ProxmoxVersion,
-		PVEVersion:       stats.PVEVersion,
-		PBSVersion:       stats.PBSVersion,
-		Hostname:         stats.Hostname,
+		ArchivePath:       archivePath,
+		ArchiveSize:       stats.ArchiveSize,
+		SHA256:            checksum,
+		CreatedAt:         stats.Timestamp,
+		CompressionType:   string(stats.Compression),
+		CompressionLevel:  stats.CompressionLevel,
+		CompressionMode:   stats.CompressionMode,
+		ProxmoxType:       string(stats.ProxmoxType),
+		ProxmoxTargets:    append([]string(nil), stats.ProxmoxTargets...),
+		IncompleteTargets: append([]string(nil), stats.IncompleteTargets...),
+		ProxmoxVersion:    stats.ProxmoxVersion,
+		PVEVersion:        stats.PVEVersion,
+		PBSVersion:        stats.PBSVersion,
+		Hostname:          stats.Hostname,
 		// The one place the run's server identity reaches the archives. It is what
 		// lets a later run recognise this archive as its own after the machine stops
 		// resolving the name stamped beside it (discussion #292). Empty when this

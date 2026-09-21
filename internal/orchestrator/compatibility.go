@@ -5,6 +5,8 @@ import (
 	"strings"
 
 	"github.com/tis24dev/proxsave/internal/backup"
+	"github.com/tis24dev/proxsave/internal/environment"
+	"github.com/tis24dev/proxsave/internal/types"
 )
 
 var compatFS FS = osFS{}
@@ -42,35 +44,58 @@ func (s SystemType) Overlaps(other SystemType) bool {
 	return (s.SupportsPVE() && other.SupportsPVE()) || (s.SupportsPBS() && other.SupportsPBS())
 }
 
-// DetectCurrentSystem detects the type of the current system (PVE or PBS)
+// detectEnvironment is the seam that lets a test drive DetectCurrentSystem without a
+// Proxmox host, the way compatFS does for the file probes in this file.
+var detectEnvironment = environment.Detect
+
+// DetectCurrentSystem reports what this host is, for the restore side.
+//
+// It used to carry its own rule, and the rule had rotted: hasPBS was
+// `/etc/proxmox-backup` OR `/usr/sbin/proxmox-backup-proxy`, and the second path does
+// not exist on PBS 3.4.9 or on 4.2.0 (the proxy is a systemd unit, not a binary on
+// PATH). So the OR was never a choice between two proofs. Every PBS restore decision
+// rested on one directory, which no package owns and no removal deletes: the same
+// marker that turned a PVE-only host into a dual backup in issue #315.
+//
+// Backup and restore now read the same ladder, so a host cannot be one type while
+// being collected and another while being restored onto.
 func DetectCurrentSystem() SystemType {
-	hasPVE := fileExists("/etc/pve") || fileExists("/usr/bin/qm") || fileExists("/usr/bin/pct")
-	hasPBS := fileExists("/etc/proxmox-backup") || fileExists("/usr/sbin/proxmox-backup-proxy")
-
-	// Check for PVE indicators
-	if hasPVE && hasPBS {
+	info, _ := detectEnvironment()
+	if info == nil {
+		return SystemTypeUnknown
+	}
+	switch info.Type {
+	case types.ProxmoxDual:
 		return SystemTypeDual
-	}
-	if hasPVE {
+	case types.ProxmoxVE:
 		return SystemTypePVE
-	}
-
-	// Check for PBS indicators
-	if hasPBS {
+	case types.ProxmoxBS:
 		return SystemTypePBS
+	default:
+		return SystemTypeUnknown
 	}
-
-	return SystemTypeUnknown
 }
 
-// DetectBackupType detects the type of backup from manifest
+// DetectBackupType detects the type of backup from manifest.
+//
+// A role the archive was supposed to carry and does not is subtracted first. The
+// targets field records what the run SET OUT to collect; incomplete_targets records
+// what it failed to bring back. A dual run that lost its PBS half ships a PVE
+// archive, and calling it dual would let it clear ValidateCompatibility against a
+// dual host as though nothing were missing, with the PBS categories offered and
+// nothing behind them.
 func DetectBackupType(manifest *backup.Manifest) SystemType {
 	if manifest == nil {
 		return SystemTypeUnknown
 	}
 
-	if len(manifest.ProxmoxTargets) > 0 {
-		return parseSystemTargets(manifest.ProxmoxTargets)
+	if targets := completedTargets(manifest); len(targets) > 0 {
+		return parseSystemTargets(targets)
+	}
+	if len(manifest.ProxmoxTargets) > 0 && len(manifest.IncompleteTargets) > 0 {
+		// Every declared target failed. The archive carries no role payload at all,
+		// so it is not a backup of either product.
+		return SystemTypeUnknown
 	}
 
 	// Check ProxmoxType field if present
@@ -93,6 +118,28 @@ func DetectBackupType(manifest *backup.Manifest) SystemType {
 
 	// If we can't determine from manifest, return unknown
 	return SystemTypeUnknown
+}
+
+// completedTargets is the declared target list with every incomplete role removed.
+// Matching is case-insensitive and trimmed because the two lists are written by
+// different code paths: targets by ProxmoxType.Targets(), incomplete by the
+// collector naming the recipe that failed.
+func completedTargets(manifest *backup.Manifest) []string {
+	if len(manifest.ProxmoxTargets) == 0 {
+		return nil
+	}
+	missing := make(map[string]struct{}, len(manifest.IncompleteTargets))
+	for _, target := range manifest.IncompleteTargets {
+		missing[strings.ToLower(strings.TrimSpace(target))] = struct{}{}
+	}
+	kept := make([]string, 0, len(manifest.ProxmoxTargets))
+	for _, target := range manifest.ProxmoxTargets {
+		if _, gone := missing[strings.ToLower(strings.TrimSpace(target))]; gone {
+			continue
+		}
+		kept = append(kept, target)
+	}
+	return kept
 }
 
 func parseSystemTypeString(value string) SystemType {

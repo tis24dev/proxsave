@@ -67,6 +67,51 @@ func logDetectionProvenance(bootstrap *logging.BootstrapLogger, info *environmen
 	for _, step := range info.Steps {
 		bootstrap.Debug("Detection probe: %s", step)
 	}
+	reportDetectionResidue(bootstrap, info)
+}
+
+// reportDetectionResidue reports a product whose files are present while no marker
+// proved it installed. The trace above says the same thing, but only on a debug run,
+// and the operator who needs this is the one looking at a type they did not expect:
+// they see PVE where a PBS directory exists, and nothing at a normal level tells them
+// that ProxSave looked at that directory and decided it does not count (issue #315).
+//
+// INFO, not warning, and the level is the point. A residue is recorded only when a
+// product was NOT proved installed, which leaves exactly two situations, and the
+// mount-shape matrix confirms there is no third:
+//
+//   - the type came out pve, pbs or dual: the product is genuinely absent, the backup
+//     is complete and correct, and the leftovers are untidy filesystem, not a fault.
+//     Warning here pinned such a host at exit 1 on every run, for something its
+//     operator often cannot remove (/var/lib/proxmox-backup belongs to the PVE
+//     file-restore stack), so a nightly monitor would alarm forever on a healthy node.
+//   - the type came out unknown: that IS a fault, and it already carries three
+//     warnings that decide the exit code between them - the detection error here,
+//     which now names the residue, the host-backup mount warning, and the collector
+//     saying it is collecting generic system info only. A fourth would be noise.
+//
+// The wording also stops short of declaring the package absent, which the residue does
+// not prove: dpkgPackageInstalled returns false both when the stanza says
+// not-installed and when the status file cannot be read, and under SYSTEM_ROOT_PREFIX
+// the second is the common case.
+func reportDetectionResidue(bootstrap *logging.BootstrapLogger, info *environment.EnvironmentInfo) {
+	if bootstrap == nil || info == nil {
+		return
+	}
+	for _, residue := range []struct {
+		product string
+		marker  string
+		pkg     string
+	}{
+		{"PVE", info.PVEResidual, "pve-manager"},
+		{"PBS", info.PBSResidual, "proxmox-backup-server"},
+	} {
+		if strings.TrimSpace(residue.marker) == "" {
+			continue
+		}
+		bootstrap.Info("%s files without a %s install - %s is present but nothing proved %s is installed, so this host is collected as %s",
+			residue.product, residue.product, residue.marker, residue.pkg, info.Type)
+	}
 }
 
 // detectionSourceLabel keeps the verdict line readable when a product was not

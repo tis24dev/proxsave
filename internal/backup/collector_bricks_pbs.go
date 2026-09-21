@@ -18,14 +18,24 @@ func newPBSRecipe() recipe {
 				c := state.collector
 				c.logger.Debug("Validating PBS environment before collection")
 
+				// This is a sanity check on the path the recipe is about to read, not a
+				// second opinion on what the host is. It used to read as one: a bare Stat
+				// on a directory that no package owns and no removal deletes, logged as
+				// "Detected %s, proceeding with PBS collection". On the host in issue #315
+				// that line was the third place in the codebase to conclude PBS from a
+				// leftover, and it agreed with a type that was already wrong.
+				//
+				// The type is settled before any recipe runs, so reaching here means PBS is
+				// installed. A missing config directory is then a real anomaly on a real
+				// PBS host, which is what the error says.
 				pbsConfigPath := c.pbsConfigPath()
 				if _, err := os.Stat(pbsConfigPath); err != nil {
 					if errors.Is(err, os.ErrNotExist) {
-						return fmt.Errorf("not a PBS system: %s not found", pbsConfigPath)
+						return fmt.Errorf("PBS is installed but %s is missing: the configuration directory a PBS node always has", pbsConfigPath)
 					}
 					return fmt.Errorf("failed to access PBS config path %s: %w", pbsConfigPath, err)
 				}
-				c.logger.Debug("Detected %s, proceeding with PBS collection", pbsConfigPath)
+				c.logger.Debug("PBS configuration directory present at %s", pbsConfigPath)
 				return nil
 			},
 		},

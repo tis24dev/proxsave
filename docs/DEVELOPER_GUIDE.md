@@ -166,7 +166,6 @@ wrappers. It is built from explicit recipes and fine-grained bricks:
 
 - `newPVERecipe()`
 - `newPBSRecipe()`
-- `newDualRecipe()`
 - `newSystemRecipe()`
 
 Important invariants:
