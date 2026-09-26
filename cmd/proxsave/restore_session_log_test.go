@@ -9,6 +9,7 @@ import (
 
 	"github.com/tis24dev/proxsave/internal/config"
 	"github.com/tis24dev/proxsave/internal/logging"
+	"github.com/tis24dev/proxsave/internal/orchestrator"
 	"github.com/tis24dev/proxsave/internal/types"
 )
 
@@ -17,6 +18,11 @@ import (
 // restore's own directory, the one the workflow writes its safety backup, rollback
 // archives and detailed logs to, not under /tmp.
 func TestRestoreSessionLogLivesOutsideTmp(t *testing.T) {
+	// Same directory as the workflow's safety backup, rollback archives and logs:
+	// orchestrator.RestoreRunDir, fixed on its first call for the whole process.
+	if got, want := restoreRunDir(), orchestrator.RestoreRunDir(); got != want {
+		t.Fatalf("restoreRunDir() = %s, want orchestrator.RestoreRunDir() = %s", got, want)
+	}
 	if got := restoreRunDir(); !strings.HasPrefix(got, "/var/lib/proxsave/restore/") {
 		t.Fatalf("restoreRunDir() = %s, want a /var/lib/proxsave/restore/<ts> directory", got)
 	}
