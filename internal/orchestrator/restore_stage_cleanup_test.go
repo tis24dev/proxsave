@@ -1,6 +1,7 @@
 package orchestrator
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"os"
@@ -68,6 +69,7 @@ type stageRunOutcome struct {
 	exportRoot     string
 	exportedKey    bool
 	stageAtRestart []bool
+	log            string
 }
 
 // runSelectiveRestoreWithStage drives runSelectiveRestore (the production sequence)
@@ -122,7 +124,10 @@ func runSelectiveRestoreWithStage(t *testing.T, failAfterStaging bool) stageRunO
 	}
 	cfg := &config.Config{BaseDir: "/opt/proxsave"}
 	ui := &fakeRestoreWorkflowUI{mode: RestoreModeCustom, categories: cats, confirmRestore: true}
-	w := newRestoreUIWorkflowRun(ctx, cfg, logging.New(types.LogLevelError, false), "vtest", ui, "")
+	logBuf := &bytes.Buffer{}
+	logger := logging.New(types.LogLevelInfo, false)
+	logger.SetOutput(logBuf)
+	w := newRestoreUIWorkflowRun(ctx, cfg, logger, "vtest", ui, "")
 	w.candidate = &backupCandidate{DisplayBase: "test", Manifest: &backup.Manifest{CreatedAt: now.Now(), ProxmoxType: "pve"}}
 	w.prepared = &preparedBundle{ArchivePath: "/bundle.tar", Manifest: backup.Manifest{ArchivePath: "/bundle.tar"}, cleanup: func() {}}
 	w.systemType = SystemTypePVE
@@ -159,6 +164,7 @@ func runSelectiveRestoreWithStage(t *testing.T, failAfterStaging bool) stageRunO
 		o.exportedKey = true
 	}
 	o.stageAtRestart = runner.stageAtRestart
+	o.log = logBuf.String()
 	return o
 }
 
@@ -167,7 +173,7 @@ func runSelectiveRestoreWithStage(t *testing.T, failAfterStaging bool) stageRunO
 // product of SAFE, stays.
 func TestRestoreRemovesDecryptedStageAfterSuccessfulRun(t *testing.T) {
 	o := runSelectiveRestoreWithStage(t, false)
-	t.Logf("%+v", o)
+	t.Logf("err=%v stage=%s staged=%v left=%v export=%s key=%v probes=%v", o.err, o.stageRoot, o.stagedShadow, o.stageLeft, o.exportRoot, o.exportedKey, o.stageAtRestart)
 	if o.err != nil {
 		t.Fatalf("runSelectiveRestore: %v", o.err)
 	}
@@ -183,13 +189,19 @@ func TestRestoreRemovesDecryptedStageAfterSuccessfulRun(t *testing.T) {
 	if len(o.stageAtRestart) == 0 || !o.stageAtRestart[len(o.stageAtRestart)-1] {
 		t.Errorf("the deferred PBS services cleanup did not find the stage (probes=%v)", o.stageAtRestart)
 	}
+	if !strings.Contains(o.log, "Restore completed") {
+		t.Fatalf("control broken: the completion summary was not logged")
+	}
+	if strings.Contains(o.log, "Staging directory:") {
+		t.Errorf("the completion summary still names the stage, which is removed when the run returns")
+	}
 }
 
 // Same as above for a restore that fails once the stage holds /etc/shadow: the stage
 // goes on failure too, still after the deferred PBS services cleanup.
 func TestRestoreRemovesDecryptedStageAfterFailedRun(t *testing.T) {
 	o := runSelectiveRestoreWithStage(t, true)
-	t.Logf("%+v", o)
+	t.Logf("err=%v stage=%s staged=%v left=%v export=%s key=%v probes=%v", o.err, o.stageRoot, o.stagedShadow, o.stageLeft, o.exportRoot, o.exportedKey, o.stageAtRestart)
 	if !errors.Is(o.err, context.Canceled) {
 		t.Fatalf("control broken: the run did not fail after staging (err=%v)", o.err)
 	}

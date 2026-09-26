@@ -253,9 +253,6 @@ func (w *restoreUIWorkflowRun) logRestoreArtifacts() {
 	if w.exportLogPath != "" {
 		w.logger.Info("Export detailed log: %s", w.exportLogPath)
 	}
-	if w.stageRoot != "" {
-		w.logger.Info("Staging directory: %s", w.stageRoot)
-	}
 	if w.stageLogPath != "" {
 		w.logger.Info("Staging detailed log: %s", w.stageLogPath)
 	}
