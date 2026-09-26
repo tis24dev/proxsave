@@ -279,7 +279,7 @@ func (f *networkRollbackUIApplyFlow) preflightFailureMessage(preflight networkPr
 
 func (f *networkRollbackUIApplyFlow) rollbackStagedPreflightFailure(preflight networkPreflightResult) error {
 	logging.DebugStep(f.logger, "network safe apply (ui)", "Preflight failed in staged mode: rolling back network files automatically")
-	rollbackLog, rbErr := rollbackNetworkFilesNow(f.ctx, f.logger, f.networkRollbackPath, f.diagnosticsDir)
+	rollbackLog, rbErr := rollbackNetworkFilesNow(f.ctx, f.logger, f.networkRollbackPath, "")
 	if strings.TrimSpace(rollbackLog) != "" {
 		f.info("Network rollback log: %s", rollbackLog)
 	}
@@ -312,7 +312,7 @@ func (f *networkRollbackUIApplyFlow) rollbackStagedApplyFailure(applyErr error) 
 		return applyErr
 	}
 	logging.DebugStep(f.logger, "network safe apply (ui)", "Staged apply failed: rolling back network files automatically")
-	rollbackLog, rbErr := rollbackNetworkFilesNow(f.ctx, f.logger, f.networkRollbackPath, f.diagnosticsDir)
+	rollbackLog, rbErr := rollbackNetworkFilesNow(f.ctx, f.logger, f.networkRollbackPath, "")
 	if strings.TrimSpace(rollbackLog) != "" {
 		f.info("Network rollback log: %s", rollbackLog)
 	}
@@ -361,7 +361,7 @@ func (f *networkRollbackUIApplyFlow) confirmPreflightRollback(message string) er
 
 func (f *networkRollbackUIApplyFlow) rollbackPreflightFailureNow() error {
 	logging.DebugStep(f.logger, "network safe apply (ui)", "Rollback network files now (backup=%s)", strings.TrimSpace(f.networkRollbackPath))
-	rollbackLog, rbErr := rollbackNetworkFilesNow(f.ctx, f.logger, f.networkRollbackPath, f.diagnosticsDir)
+	rollbackLog, rbErr := rollbackNetworkFilesNow(f.ctx, f.logger, f.networkRollbackPath, "")
 	if strings.TrimSpace(rollbackLog) != "" {
 		f.info("Network rollback log: %s", rollbackLog)
 	}
@@ -375,7 +375,10 @@ func (f *networkRollbackUIApplyFlow) rollbackPreflightFailureNow() error {
 
 func (f *networkRollbackUIApplyFlow) armRollbackAndApply() error {
 	logging.DebugStep(f.logger, "network safe apply (ui)", "Arm rollback timer BEFORE applying changes")
-	handle, err := armNetworkRollback(f.ctx, f.logger, f.rollbackBackupPath, f.timeout, f.diagnosticsDir)
+	// Work dir "" (/tmp/proxsave), not the diagnostics dir: marker and script only
+	// matter inside the rollback window, and the diagnostics dir lives in the
+	// restore's own directory, which is kept. The rollback log goes there anyway.
+	handle, err := armNetworkRollback(f.ctx, f.logger, f.rollbackBackupPath, f.timeout, "")
 	if err != nil {
 		return err
 	}

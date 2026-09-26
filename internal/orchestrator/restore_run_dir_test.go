@@ -3,6 +3,7 @@ package orchestrator
 import (
 	"bytes"
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -234,6 +235,76 @@ func TestRestoreOperatorLeftoversLiveInTheRunDirectory(t *testing.T) {
 		}
 		if strings.Contains(script, "\numask ") {
 			t.Errorf("%s script changes the umask of everything it runs", name)
+		}
+	}
+}
+
+// The interactive network apply keeps its diagnostics in the restore's own
+// directory, but the marker and script of its rollbacks (armed and immediate) only
+// matter inside the rollback window and stay in the /tmp/proxsave work dir, like
+// those of HA, firewall and access control. Only their log goes to the run dir.
+func TestRestoreNetworkRollbackWorkFilesStayOutOfTheRunDirectory(t *testing.T) {
+	origRestoreFS, origRestoreCmd, origRestoreTime := restoreFS, restoreCmd, restoreTime
+	t.Cleanup(func() { restoreFS, restoreCmd, restoreTime = origRestoreFS, origRestoreCmd, origRestoreTime })
+	fakeFS := NewFakeFS()
+	t.Cleanup(func() { _ = os.RemoveAll(fakeFS.Root) })
+	restoreFS = fakeFS
+	cmd := &FakeCommandRunner{}
+	restoreCmd = cmd
+	restoreTime = &FakeTime{Current: time.Date(2026, 9, 26, 10, 0, 0, 0, time.UTC)}
+	// Empty PATH: applyNetworkConfig fails and the armed rollback uses the nohup
+	// fallback through the fake runner, as in TestArmRollbackAndApply_ApplyFailureSurfacesNotCommitted.
+	t.Setenv("PATH", t.TempDir())
+
+	diagDir, err := createNetworkDiagnosticsDir()
+	if err != nil {
+		t.Fatalf("createNetworkDiagnosticsDir: %v", err)
+	}
+	f := &networkRollbackUIApplyFlow{
+		ctx:                 context.Background(),
+		ui:                  &fakeRestoreWorkflowUI{},
+		logger:              newDiscardLogger(),
+		rollbackBackupPath:  "/safety-backup.tar",
+		networkRollbackPath: "/network-backup.tar",
+		timeout:             time.Hour,
+		diagnosticsDir:      diagDir,
+	}
+
+	_ = f.armRollbackAndApply()
+	if f.handle == nil {
+		t.Fatalf("control broken: the rollback was not armed")
+	}
+	_ = f.rollbackStagedPreflightFailure(networkPreflightResult{})
+	_ = f.rollbackStagedApplyFailure(errors.New("apply failed"))
+	_ = f.rollbackPreflightFailureNow()
+
+	for name, p := range map[string]string{"armed rollback marker": f.handle.markerPath, "armed rollback script": f.handle.scriptPath} {
+		if !strings.HasPrefix(p, "/tmp/proxsave/") {
+			t.Errorf("%s is %s, not in the /tmp/proxsave work dir", name, p)
+		}
+	}
+	if filepath.Dir(f.handle.logPath) != RestoreRunDir() {
+		t.Errorf("armed rollback log %s is not in the run directory %s", f.handle.logPath, RestoreRunDir())
+	}
+	immediate := 0
+	for _, c := range cmd.CallsList() {
+		if strings.HasPrefix(c, "sh ") && strings.Contains(c, "network_rollback_now_") {
+			immediate++
+			if !strings.HasPrefix(c, "sh /tmp/proxsave/") {
+				t.Errorf("immediate rollback script ran from %q, not from the /tmp/proxsave work dir", c)
+			}
+		}
+	}
+	if immediate != 3 {
+		t.Fatalf("control broken: %d immediate rollback scripts ran, want 3 (calls=%v)", immediate, cmd.CallsList())
+	}
+	entries, err := fakeFS.ReadDir(diagDir)
+	if err != nil {
+		t.Fatalf("read diagnostics dir %s: %v", diagDir, err)
+	}
+	for _, e := range entries {
+		if strings.HasPrefix(e.Name(), "network_rollback") {
+			t.Errorf("rollback work file %s left in the persistent diagnostics dir %s", e.Name(), diagDir)
 		}
 	}
 }
