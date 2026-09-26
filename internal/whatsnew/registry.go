@@ -228,6 +228,7 @@ var notes = []Note{
 			"GRUB settings and /etc/kernel/cmdline are saved for reference only, under proxsave-info: a restore never writes them",
 			"A restore writes its safety backup, rollback archives and logs to /var/lib/proxsave/restore, which survives a reboot",
 			"A restore deletes its staging directory, which holds decrypted secrets, when it ends, whether it succeeded or failed",
+			"A restore also keeps its NIC repair copy, network diagnostics and deferred datastore list in /var/lib/proxsave/restore",
 		},
 		Actions: []string{
 			"With DRY_RUN=true in backup.env, a restore from the CLI or the dashboard is refused until DRY_RUN is set to false",

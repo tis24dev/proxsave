@@ -2037,7 +2037,7 @@ This protects SSH/GUI access during network changes.
 - After applying changes, ProxSave runs local checks (SSH route if available, default route, link state, IP addresses, gateway ping, DNS config/resolve, local web UI port)
 - On PVE systems, additional checks are included for cluster networking: `/etc/pve` (pmxcfs) mount status, `pve-cluster` / `corosync` service state, and `pvecm status` quorum
 - The result is shown to help decide whether to type `COMMIT`
-- Diagnostics are saved under `/tmp/proxsave/network_apply_*` (snapshots `before.txt` / `after.txt` / `after_rollback.txt` when relevant, `health_before.txt` / `health_after.txt`, `preflight.txt`, `plan.txt`, and `ifquery_*`)
+- Diagnostics are saved under `/var/lib/proxsave/restore/<timestamp>/network_apply_*` (snapshots `before.txt` / `after.txt` / `after_rollback.txt` when relevant, `health_before.txt` / `health_after.txt`, `preflight.txt`, `plan.txt`, and `ifquery_*`)
 
 **NIC name repair**:
 - If physical NIC names changed after reinstall (e.g. `eno1` → `enp3s0`), ProxSave attempts an automatic mapping using backup network inventory (permanent MAC / MAC / PCI path / udev IDs like `ID_PATH`, `ID_NET_NAME_PATH`, `ID_NET_NAME_SLOT`, `ID_SERIAL`)
@@ -2045,12 +2045,12 @@ This protects SSH/GUI access during network changes.
 - If you skip live network apply, ProxSave may still install the staged config to disk (no reload) after safe NIC repair + preflight; if validation fails, it rolls back and keeps the staged copy.
 - If a mapping would overwrite an interface name that already exists on the current system, ProxSave prompts before applying it (conflict-safe)
 - If persistent NIC naming rules are detected (custom udev `NAME=` rules or systemd `.link` files), ProxSave warns and prompts before applying NIC repair to avoid conflicts with user-intended naming
-- A backup of the pre-repair files is stored under `/tmp/proxsave/nic_repair_*`
+- A backup of the pre-repair files is stored under `/var/lib/proxsave/restore/<timestamp>/nic_repair_*`
 
 **Preflight validation**:
 - After NIC repair, ProxSave runs a **gate** validation of the ifupdown configuration before reloading networking (e.g. `ifup -n -a` / `ifup --no-act -a` / `ifreload --syntax-check -a`)
-- If validation fails, live apply is aborted and the validator output is saved under `/tmp/proxsave/network_apply_*/preflight.txt`
-- Additionally (diagnostics-only), ProxSave can run `ifquery --check -a` **before and after apply** to show how the runtime state matches the target config. Its output is saved under `/tmp/proxsave/network_apply_*/ifquery_*`. Note that `ifquery --check` can show `[fail]` **before apply** even when the config is valid (because the running state still reflects the old config).
+- If validation fails, live apply is aborted and the validator output is saved under `/var/lib/proxsave/restore/<timestamp>/network_apply_*/preflight.txt`
+- Additionally (diagnostics-only), ProxSave can run `ifquery --check -a` **before and after apply** to show how the runtime state matches the target config. Its output is saved under `/var/lib/proxsave/restore/<timestamp>/network_apply_*/ifquery_*`. Note that `ifquery --check` can show `[fail]` **before apply** even when the config is valid (because the running state still reflects the old config).
 - On staged installs/applies, a failed preflight triggers an **automatic rollback of network files** (no prompt), returning to the pre-restore state and keeping the staged copy for review.
 
 **Result reporting**:
@@ -2071,7 +2071,7 @@ The status can be one of:
 - **DISARMED/CLEARED**: reconnect using the **post-apply IP** (the applied config remains active).
 
 Notes:
-- *Pre-apply IP* is derived from the `before.txt` snapshot in `/tmp/proxsave/network_apply_*` and may be `unknown` if it cannot be parsed.
+- *Pre-apply IP* is derived from the `before.txt` snapshot in `/var/lib/proxsave/restore/<timestamp>/network_apply_*` and may be `unknown` if it cannot be parsed.
 - *Post-apply IP* is what ProxSave could observe on the management interface after applying the new config; it may include CIDR suffixes (for example `10.0.0.4/24`) or multiple addresses.
 
 **Example outputs**
@@ -2086,7 +2086,7 @@ NETWORK ROLLBACK
   Status: ARMED (will execute automatically)
   Pre-apply IP (from snapshot): 192.168.1.100
   Post-apply IP (observed): 10.0.0.4/24
-  Rollback log: /tmp/proxsave/network_rollback_20260122_153012.log
+  Rollback log: /var/lib/proxsave/restore/20260122_153012/network_rollback_20260122_153012.log
 
 Connection will be temporarily interrupted during restore.
 Remember to reconnect using the pre-apply IP: 192.168.1.100
@@ -2106,7 +2106,7 @@ NETWORK ROLLBACK
   Status: EXECUTED (marker removed)
   Pre-apply IP (from snapshot): 192.168.1.100
   Post-apply IP (observed): 10.0.0.4/24
-  Rollback log: /tmp/proxsave/network_rollback_20260122_153012.log
+  Rollback log: /var/lib/proxsave/restore/20260122_153012/network_rollback_20260122_153012.log
 
 Rollback executed: reconnect using the pre-apply IP: 192.168.1.100
 ===========================================
@@ -2120,7 +2120,7 @@ NETWORK ROLLBACK
   Status: DISARMED/CLEARED (marker removed before deadline)
   Pre-apply IP (from snapshot): 192.168.1.100
   Post-apply IP (observed): 10.0.0.4/24
-  Rollback log: /tmp/proxsave/network_rollback_20260122_153012.log
+  Rollback log: /var/lib/proxsave/restore/20260122_153012/network_rollback_20260122_153012.log
 
 Rollback will NOT run: reconnect using the post-apply IP: 10.0.0.4/24
 ===========================================
@@ -2552,7 +2552,7 @@ zpool import <pool-name>
 #   A bind-mount guard is shadowed when the real storage mounts on top (and is cleared by a reboot or --cleanup-guards).
 #   Older versions set a chattr +i fallback that persisted across reboots; --cleanup-guards still clears any such legacy flags (or clear manually with chattr -i while unmounted).
 # - If the datastore path is not empty and contains unexpected files/directories (not a PBS datastore), ProxSave will defer that datastore block
-#   and save it under `/tmp/proxsave/datastore.cfg.deferred.*` for manual review.
+#   and save it under `/var/lib/proxsave/restore/<timestamp>/datastore.cfg.deferred.*` for manual review.
 # - ProxSave does not format disks or import ZFS pools: mount/import the underlying storage first, then restart PBS.
 ls -ld /mnt/datastore /mnt/datastore/<DatastoreName> 2>/dev/null
 namei -l /mnt/datastore/<DatastoreName> 2>/dev/null || true
@@ -3036,6 +3036,10 @@ What a restore keeps is in its own directory, `/var/lib/proxsave/restore/TIMESTA
 - `restore_TIMESTAMP_<seq>.log` - Detailed restore logs (preserved)
 - `restore_backup_TIMESTAMP.tar.gz` - Safety backup (preserved)
 - `network_rollback_backup_*`, `firewall_rollback_backup_*`, `ha_rollback_backup_*`, `pve_access_control_rollback_backup_*` - Rollback archives (preserved)
+- `*_rollback_*.log` - Logs of the armed rollbacks (preserved; the rollback scripts and markers stay in `/tmp/proxsave/`)
+- `nic_repair_*/` - Network files as restored, before a NIC name repair (preserved)
+- `network_apply_*/` - Network apply diagnostics (preserved)
+- `datastore.cfg.deferred.*` - PBS datastore definitions that were not applied (preserved)
 
 **Cleanup**:
 ```bash

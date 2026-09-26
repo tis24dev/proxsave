@@ -174,9 +174,11 @@ a `nohup` background timer when `systemd-run` is unavailable **or its invocation
 only the network flow also has an immediate path that runs its script inline. Each script embeds three runtime values, the
 log path, the marker path, and the rollback archive path (the access-control script adds
 five compile-time `/etc/pve` target paths). None of them is operator, backup, or server
-input: the three runtime values are composed from a fixed base (`/tmp/proxsave` for the log
-and the marker, the restore's own `/var/lib/proxsave/restore/<timestamp>` for the rollback
-archive), a compile-time prefix, and a timestamp. **That provenance is the guarantee.** A `shellQuote`
+input: the three runtime values are composed from a fixed base (`/tmp/proxsave` for the
+marker, the restore's own `/var/lib/proxsave/restore/<timestamp>` for the log and the rollback
+archive), a compile-time prefix, and a timestamp. Each script creates its log `0600` in a
+subshell (`umask 077`), so the umask of the rest of the script, and of what it runs, is
+unchanged. **That provenance is the guarantee.** A `shellQuote`
 helper is applied on the way in, but it only quotes a value containing whitespace or one of
 `"'\$&;|<>`, so in practice every one of these paths is emitted verbatim, and its trigger
 set omits the backtick, the glob characters `*` `?` `[` `]`, the grouping `(` `)`, the

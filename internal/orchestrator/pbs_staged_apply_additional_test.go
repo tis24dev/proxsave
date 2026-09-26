@@ -643,14 +643,14 @@ func TestApplyPBSDatastoreCfgFromStage_DefersUnsafeAndAppliesSafe(t *testing.T) 
 		t.Fatalf("did not expect Unsafe datastore in output: %q", string(out))
 	}
 
-	entries, err := fakeFS.ReadDir("/tmp/proxsave")
+	entries, err := fakeFS.ReadDir(RestoreRunDir())
 	if err != nil {
 		t.Fatalf("readdir deferred dir: %v", err)
 	}
 	if len(entries) != 1 {
 		t.Fatalf("expected 1 deferred file, got %d", len(entries))
 	}
-	deferredPath := filepath.Join("/tmp/proxsave", entries[0].Name())
+	deferredPath := filepath.Join(RestoreRunDir(), entries[0].Name())
 	deferred, err := fakeFS.ReadFile(deferredPath)
 	if err != nil {
 		t.Fatalf("read deferred file: %v", err)
@@ -829,8 +829,8 @@ func TestApplyPBSDatastoreCfgFromStage_ContinuesWhenDeferredWriteFails(t *testin
 		t.Fatalf("unexpected apply result: %q", string(out))
 	}
 
-	if entries, err := fakeFS.ReadDir("/tmp/proxsave"); err != nil {
-		t.Fatalf("readdir /tmp/proxsave: %v", err)
+	if entries, err := fakeFS.ReadDir(RestoreRunDir()); err != nil {
+		t.Fatalf("readdir %s: %v", RestoreRunDir(), err)
 	} else if len(entries) != 0 {
 		t.Fatalf("expected no deferred files due to forced write error, got %d", len(entries))
 	}

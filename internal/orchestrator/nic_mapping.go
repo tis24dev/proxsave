@@ -750,9 +750,9 @@ func rewriteIfupdownConfigFiles(logger *logging.Logger, renameMap map[string]str
 		return nil, "", nil
 	}
 
-	baseDir := "/tmp/proxsave"
+	baseDir := RestoreRunDir()
 	logging.DebugStep(logger, "NIC repair rewrite", "Create backup directory under %s", baseDir)
-	if err := restoreFS.MkdirAll(baseDir, 0o755); err != nil {
+	if err := restoreFS.MkdirAll(baseDir, 0o700); err != nil {
 		return nil, "", fmt.Errorf("create nic repair base directory: %w", err)
 	}
 

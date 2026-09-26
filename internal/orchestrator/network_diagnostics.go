@@ -21,8 +21,8 @@ var networkDiagnosticsSequence uint64
 const snapshotLogMaxExtractedLines = 20
 
 func createNetworkDiagnosticsDir() (string, error) {
-	baseDir := "/tmp/proxsave"
-	if err := restoreFS.MkdirAll(baseDir, 0o755); err != nil {
+	baseDir := RestoreRunDir()
+	if err := restoreFS.MkdirAll(baseDir, 0o700); err != nil {
 		return "", fmt.Errorf("create diagnostics directory: %w", err)
 	}
 	seq := atomic.AddUint64(&networkDiagnosticsSequence, 1)

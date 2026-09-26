@@ -453,11 +453,15 @@ func armFirewallRollback(ctx context.Context, logger *logging.Logger, backupPath
 	}
 
 	timestamp := nowRestore().Format("20060102_150405")
+	logPath, err := rollbackLogPath(fmt.Sprintf("firewall_rollback_%s.log", timestamp))
+	if err != nil {
+		return nil, err
+	}
 	handle = &firewallRollbackHandle{
 		workDir:    baseDir,
 		markerPath: filepath.Join(baseDir, fmt.Sprintf("firewall_rollback_pending_%s", timestamp)),
 		scriptPath: filepath.Join(baseDir, fmt.Sprintf("firewall_rollback_%s.sh", timestamp)),
-		logPath:    filepath.Join(baseDir, fmt.Sprintf("firewall_rollback_%s.log", timestamp)),
+		logPath:    logPath,
 		armedAt:    nowRestore(),
 		timeout:    timeout,
 	}
@@ -526,6 +530,9 @@ func buildFirewallRollbackScript(markerPath, backupPath, logPath string) string 
 		"#!/bin/sh",
 		"set -eu",
 		fmt.Sprintf("LOG=%s", shellQuote(logPath)),
+		// Create the log 0600 in a subshell: the umask of the rest of the script, and
+		// of what it runs (ifreload and its hooks), stays as it was.
+		`(umask 077 && : >> "$LOG")`,
 		fmt.Sprintf("MARKER=%s", shellQuote(markerPath)),
 		fmt.Sprintf("BACKUP=%s", shellQuote(backupPath)),
 		`echo "[INFO] ========================================" >> "$LOG"`,

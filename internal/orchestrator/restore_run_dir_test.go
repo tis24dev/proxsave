@@ -105,3 +105,120 @@ func TestRestorePersistentMaterialLivesOutsideTmpInOneDirectory(t *testing.T) {
 		}
 	}
 }
+
+// What a restore hands to the operator on the network and PBS side must outlive the
+// reboot it recommends as well: the copy of the network files taken before a NIC
+// rename, the datastore definitions it did not apply, the network diagnostics and
+// the log of each armed rollback. Marker and script of an armed rollback only matter
+// inside its window and stay in /tmp/proxsave; the log is created 0600 by the script
+// itself, without changing the umask of what the script runs.
+func TestRestoreOperatorLeftoversLiveInTheRunDirectory(t *testing.T) {
+	origRestoreFS, origRestoreCmd, origRestoreTime := restoreFS, restoreCmd, restoreTime
+	t.Cleanup(func() { restoreFS, restoreCmd, restoreTime = origRestoreFS, origRestoreCmd, origRestoreTime })
+	fakeFS := NewFakeFS()
+	t.Cleanup(func() { _ = os.RemoveAll(fakeFS.Root) })
+	restoreFS = fakeFS
+	restoreCmd = &FakeCommandRunner{}
+	restoreTime = &FakeTime{Current: time.Date(2026, 9, 26, 10, 0, 0, 0, time.UTC)}
+	t.Setenv("PATH", t.TempDir())
+	ctx := context.Background()
+	logger := logging.New(types.LogLevelError, false)
+	runDir := RestoreRunDir()
+
+	if err := fakeFS.WriteFile("/etc/network/interfaces", []byte("auto eno1\niface eno1 inet manual\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, nicBackup, err := rewriteIfupdownConfigFiles(logger, map[string]string{"eno1": "enp3s0"})
+	if err != nil {
+		t.Fatalf("rewriteIfupdownConfigFiles: %v", err)
+	}
+	deferred, err := writeDeferredPBSDatastoreCfg([]pbsDatastoreBlock{{Name: "DS1", Path: "/mnt/ds1", Lines: []string{"datastore: DS1", "    path /mnt/ds1"}}})
+	if err != nil {
+		t.Fatalf("writeDeferredPBSDatastoreCfg: %v", err)
+	}
+	diagDir, err := createNetworkDiagnosticsDir()
+	if err != nil {
+		t.Fatalf("createNetworkDiagnosticsDir: %v", err)
+	}
+
+	entries := map[string]string{
+		"NIC repair backup":      nicBackup,
+		"deferred datastore.cfg": deferred,
+		"network diagnostics":    diagDir,
+	}
+	windowOnly := map[string]string{}
+	scripts := map[string]string{}
+
+	netHandle, err := armNetworkRollback(ctx, logger, "/backup.tgz", time.Second, "")
+	if err != nil {
+		t.Fatalf("armNetworkRollback: %v", err)
+	}
+	entries["network rollback log"] = netHandle.logPath
+	windowOnly["network rollback marker"], scripts["network rollback"] = netHandle.markerPath, netHandle.scriptPath
+	nowLog, err := rollbackNetworkFilesNow(ctx, logger, "/backup.tgz", "")
+	if err != nil {
+		t.Fatalf("rollbackNetworkFilesNow: %v", err)
+	}
+	entries["immediate network rollback log"] = nowLog
+	haHandle, err := armHARollback(ctx, logger, "/backup.tgz", time.Second, "/tmp/proxsave")
+	if err != nil {
+		t.Fatalf("armHARollback: %v", err)
+	}
+	entries["HA rollback log"] = haHandle.logPath
+	windowOnly["HA rollback marker"], scripts["HA rollback"] = haHandle.markerPath, haHandle.scriptPath
+	fwHandle, err := armFirewallRollback(ctx, logger, "/backup.tgz", time.Second, "/tmp/proxsave")
+	if err != nil {
+		t.Fatalf("armFirewallRollback: %v", err)
+	}
+	entries["firewall rollback log"] = fwHandle.logPath
+	windowOnly["firewall rollback marker"], scripts["firewall rollback"] = fwHandle.markerPath, fwHandle.scriptPath
+	acHandle, err := armAccessControlRollback(ctx, logger, "/backup.tgz", time.Second, "/tmp/proxsave")
+	if err != nil {
+		t.Fatalf("armAccessControlRollback: %v", err)
+	}
+	entries["access control rollback log"] = acHandle.logPath
+	windowOnly["access control rollback marker"], scripts["access control rollback"] = acHandle.markerPath, acHandle.scriptPath
+
+	for name, p := range entries {
+		if strings.HasPrefix(p, "/tmp/") {
+			t.Errorf("%s is under /tmp (%s) while the run recommends a reboot", name, p)
+		}
+		if filepath.Dir(p) != runDir {
+			t.Errorf("%s is in %s, not in the run directory %s", name, filepath.Dir(p), runDir)
+		}
+	}
+	if info, err := fakeFS.Stat(deferred); err != nil {
+		t.Errorf("stat %s: %v", deferred, err)
+	} else if got := info.Mode().Perm(); got != 0o600 {
+		t.Errorf("deferred datastore.cfg mode = %o, want 600", got)
+	}
+	for _, dir := range []string{nicBackup, diagDir} {
+		if info, err := fakeFS.Stat(dir); err != nil {
+			t.Errorf("stat %s: %v", dir, err)
+		} else if got := info.Mode().Perm(); got != 0o700 {
+			t.Errorf("%s mode = %o, want 700", dir, got)
+		}
+	}
+	for name, p := range windowOnly {
+		if !strings.HasPrefix(p, "/tmp/proxsave/") {
+			t.Errorf("%s moved out of the /tmp/proxsave work dir: %s", name, p)
+		}
+	}
+	const createLog = `(umask 077 && : >> "$LOG")`
+	for name, p := range scripts {
+		raw, err := fakeFS.ReadFile(p)
+		if err != nil {
+			t.Errorf("%s script %s: %v", name, p, err)
+			continue
+		}
+		script := string(raw)
+		at := strings.Index(script, createLog)
+		first := strings.Index(script, `>> "$LOG"`)
+		if at < 0 || at+len(createLog)-len(`>> "$LOG")`) != first {
+			t.Errorf("%s script does not create its log 0600 before the first write to it", name)
+		}
+		if strings.Contains(script, "\numask ") {
+			t.Errorf("%s script changes the umask of everything it runs", name)
+		}
+	}
+}

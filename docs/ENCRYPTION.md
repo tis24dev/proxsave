@@ -119,8 +119,9 @@ What a restore keeps on purpose is not under `/tmp`: it goes into the restore's 
 `/var/lib/proxsave/restore/<timestamp>/`, created **mode 0700**, one directory per restore. It
 holds the rollback and safety tarballs (`restore_backup_`, `network_rollback_backup_`,
 `firewall_rollback_backup_`, `ha_rollback_backup_`, `pve_access_control_rollback_backup_`,
-each `_<timestamp>.tar.gz`), their `*_location.txt` files, the restore session log and the
-detailed restore logs, all **mode 0600**. They are the rollback and the record of what the
+each `_<timestamp>.tar.gz`), their `*_location.txt` files, the restore session log, the
+detailed restore logs and the rollback logs, all **mode 0600**, plus what the restore hands to
+you on the network and PBS side (`nic_repair_*`, `network_apply_*`, `datastore.cfg.deferred.*`). They are the rollback and the record of what the
 restore did, and they survive the reboot the restore recommends, including on a host whose
 `/tmp` is a tmpfs. ProxSave never deletes them. Clean them up yourself once a restore has
 settled.
