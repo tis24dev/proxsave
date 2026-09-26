@@ -262,6 +262,18 @@ func (w *restoreUIWorkflowRun) extractStagedCategories() (bool, error) {
 	return true, nil
 }
 
+// removeStage deletes the staging tree once nothing reads it any more. It holds the
+// decrypted sensitive categories (/etc/shadow, /etc/pve/priv material) in the clear;
+// its detailed log is not inside it but in RestoreRunDir, and stays.
+func (w *restoreUIWorkflowRun) removeStage() {
+	if w.stageRoot == "" {
+		return
+	}
+	if err := restoreFS.RemoveAll(w.stageRoot); err != nil {
+		w.logger.Warning("Failed to remove staging directory %s: %v", w.stageRoot, err)
+	}
+}
+
 func (w *restoreUIWorkflowRun) handleStageExtractError(err error) error {
 	if restoreAbortOrInput(err) {
 		return err

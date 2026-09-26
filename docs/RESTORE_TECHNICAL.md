@@ -805,10 +805,12 @@ func CreateSafetyBackup(
     categories []Category,
     destRoot string,
 ) (*SafetyBackupResult, error) {
-    // 1. Create backup archive
+    // 1. Create backup archive in the restore's own directory,
+    //    /var/lib/proxsave/restore/<ts> (RestoreRunDir, 0700), which survives
+    //    the reboot the restore recommends
     timestamp := time.Now().Format("20060102_150405")
     backupPath := filepath.Join(
-        "/tmp/proxsave",
+        RestoreRunDir(),
         fmt.Sprintf("restore_backup_%s.tar.gz", timestamp),
     )
 
@@ -964,7 +966,9 @@ a fixed order:
    never onto the live system.
 4. **Cluster SAFE apply** runs when applicable.
 5. **Staged (sensitive) categories** are extracted into a per-run stage dir
-   (`/tmp/proxsave/restore-stage-<ts>_<seq>`) and then applied (Phase 10).
+   (`/tmp/proxsave/restore-stage-<ts>_<seq>`) and then applied (Phase 10). The stage holds
+   them in the clear and is deleted when `runSelectiveRestore` returns, on success or
+   failure, after the deferred services cleanup that still reads it.
 
 ```go
 // restore_workflow_ui_run.go: prepareAndRestoreSelectedPayloads (processing order)
@@ -981,7 +985,8 @@ Staged categories are extracted **strictly**:
 staged apply is skipped and the live system is left untouched (BH-002), so a partial tree
 is never applied to sensitive config. The plain (non-staged) tiers use
 `extractSelectiveArchive`, a thin wrapper over `extractSelectiveArchiveStrict(..., false)`
-that creates the detailed log under `/tmp/proxsave` and calls `extractArchiveNative`.
+that creates the detailed log in the restore's own directory (`RestoreRunDir()`,
+`/var/lib/proxsave/restore/<ts>`) and calls `extractArchiveNative`.
 
 **Which categories are staged** (`isStagedCategoryID`, `staging.go`): `network`,
 `datastore_pbs`, `pbs_jobs`, `pbs_remotes`, `pbs_host`, `pbs_tape`, `storage_pve`,
@@ -2065,7 +2070,7 @@ categories is skipped entirely.
 ```text
 Normal tier   -> destRoot (/)                     (skipped if empty)
 Export tier   -> proxmox-config-export-<ts>       (skipped if empty)
-Staged tier   -> /tmp/proxsave/restore-stage-*    (skipped if empty), then applied
+Staged tier   -> /tmp/proxsave/restore-stage-*    (skipped if empty), then applied, then deleted
 Dedup pass    -> streams the archive to rebuild deduplicated symlinks (issue #70)
 ```
 
@@ -2178,8 +2183,10 @@ restore. On an interactive terminal it still renders the TUI unless you add `--c
 ### Review Detailed Logs
 
 ```bash
-# Restore log (name is restore_<timestamp>_<seq>.log, seq is a per-process counter)
-cat /tmp/proxsave/restore_20251120_143052_1.log
+# Restore logs, in the restore's own directory /var/lib/proxsave/restore/<timestamp>/:
+# the session log restore-<host>-<timestamp>.log and the detailed logs
+# restore_<timestamp>_<seq>.log (seq is a per-process counter)
+cat /var/lib/proxsave/restore/20251120_143052/restore_20251120_143052_1.log
 
 # Service logs
 journalctl -u pve-cluster --since "10 minutes ago"

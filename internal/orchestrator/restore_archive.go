@@ -126,8 +126,9 @@ func extractSelectiveArchiveStrict(ctx context.Context, archivePath, destRoot st
 		return "", fmt.Errorf("restore to %s requires root privileges", destRoot)
 	}
 
-	// Create detailed log directory
-	logDir := "/tmp/proxsave"
+	// Create detailed log directory: the restore's own directory, which survives the
+	// reboot the restore recommends.
+	logDir := RestoreRunDir()
 	if err := restoreFS.MkdirAll(logDir, 0o700); err != nil {
 		logger.Warning("Could not create log directory: %v", err)
 	}
@@ -136,7 +137,7 @@ func extractSelectiveArchiveStrict(ctx context.Context, archivePath, destRoot st
 	timestamp := nowRestore().Format("20060102_150405")
 	logSeq := atomic.AddUint64(&restoreLogSequence, 1)
 	logPath = filepath.Join(logDir, fmt.Sprintf("restore_%s_%d.log", timestamp, logSeq))
-	logFile, err := restoreFS.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0640)
+	logFile, err := restoreFS.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
 	if err != nil {
 		logger.Warning("Could not create detailed log file: %v", err)
 		logFile = nil

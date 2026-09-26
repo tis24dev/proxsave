@@ -17,6 +17,7 @@ import (
 	"github.com/tis24dev/proxsave/internal/config"
 	"github.com/tis24dev/proxsave/internal/environment"
 	"github.com/tis24dev/proxsave/internal/logging"
+	"github.com/tis24dev/proxsave/internal/orchestrator"
 	"github.com/tis24dev/proxsave/internal/safefs"
 	"github.com/tis24dev/proxsave/internal/types"
 )
@@ -370,9 +371,14 @@ func initializeRunLogger(rt *appRuntime) *logging.Logger {
 	return logger
 }
 
+// restoreRunDir is the directory the restore session log goes into: the same one
+// the restore workflow writes its safety backup, rollback archives and detailed
+// logs to. A var only so tests can redirect it; production never reassigns it.
+var restoreRunDir = orchestrator.RestoreRunDir
+
 func initializeRestoreSessionLogger(rt *appRuntime, fallback *logging.Logger) *logging.Logger {
 	logging.DebugStepBootstrap(rt.bootstrap, "main run", "restore log enabled")
-	restoreLogger, restoreLogPath, closeFn, err := logging.StartSessionLogger("restore", rt.logLevel, rt.cfg.UseColor)
+	restoreLogger, restoreLogPath, closeFn, err := logging.StartSessionLoggerIn(restoreRunDir(), "restore", rt.logLevel, rt.cfg.UseColor)
 	if err != nil {
 		rt.bootstrap.Warning("Unable to start restore log: %v", err)
 		return fallback

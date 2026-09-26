@@ -82,3 +82,46 @@ func TestStartSessionLogger_CreatesAndWritesLogFile(t *testing.T) {
 	}
 	_ = os.Remove(logPath)
 }
+
+// StartSessionLoggerIn is the restore's variant: same file name, but in the given
+// directory, created owner-only, instead of the shared /tmp/proxsave.
+func TestStartSessionLoggerIn_WritesIntoOwnerOnlyDir(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "restore", "20260926_100000")
+	logger, logPath, cleanup, err := StartSessionLoggerIn(dir, "restore", types.LogLevelDebug, false)
+	if err != nil {
+		t.Fatalf("StartSessionLoggerIn error: %v", err)
+	}
+	t.Cleanup(cleanup)
+
+	if filepath.Dir(logPath) != dir {
+		t.Fatalf("logPath dir = %q; want %q", filepath.Dir(logPath), dir)
+	}
+	if base := filepath.Base(logPath); !strings.HasPrefix(base, "restore-") || !strings.HasSuffix(base, ".log") {
+		t.Fatalf("unexpected log file name: %q", base)
+	}
+	info, err := os.Stat(dir)
+	if err != nil {
+		t.Fatalf("stat %s: %v", dir, err)
+	}
+	if got := info.Mode().Perm(); got != 0o700 {
+		t.Fatalf("dir mode = %o; want 700", got)
+	}
+
+	logger.SetOutput(io.Discard)
+	logger.Info("hello restore")
+	cleanup()
+	info, err = os.Stat(logPath)
+	if err != nil {
+		t.Fatalf("stat %s: %v", logPath, err)
+	}
+	if got := info.Mode().Perm(); got != 0o600 {
+		t.Fatalf("log file mode = %o; want 600", got)
+	}
+	data, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatalf("ReadFile(%q): %v", logPath, err)
+	}
+	if !strings.Contains(string(data), "hello restore") {
+		t.Fatalf("expected log file to contain message, got %q", string(data))
+	}
+}

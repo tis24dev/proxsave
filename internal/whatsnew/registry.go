@@ -226,6 +226,8 @@ var notes = []Note{
 			"A FULL restore on a PVE-only or PBS-only host exports the other product's categories instead of writing them",
 			"Backups now include /etc/default and udev rules, which the restore listed but no backup ever saved",
 			"GRUB settings and /etc/kernel/cmdline are saved for reference only, under proxsave-info: a restore never writes them",
+			"A restore writes its safety backup, rollback archives and logs to /var/lib/proxsave/restore, which survives a reboot",
+			"A restore deletes its staging directory, which holds decrypted secrets, when it ends, whether it succeeded or failed",
 		},
 		Actions: []string{
 			"With DRY_RUN=true in backup.env, a restore from the CLI or the dashboard is refused until DRY_RUN is set to false",

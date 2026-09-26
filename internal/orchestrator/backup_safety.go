@@ -46,8 +46,8 @@ func createSafetyBackup(logger *logging.Logger, selectedCategories []Category, d
 	defer func() { done(err) }()
 
 	timestamp := safetyNow().Format("20060102_150405")
-	baseDir := filepath.Join("/tmp", "proxsave")
-	if err := safetyFS.MkdirAll(baseDir, 0755); err != nil {
+	baseDir := RestoreRunDir()
+	if err := safetyFS.MkdirAll(baseDir, 0o700); err != nil {
 		return nil, fmt.Errorf("create safety backup directory: %w", err)
 	}
 	backupDir := filepath.Join(baseDir, fmt.Sprintf("%s_%s", prefix, timestamp))
@@ -59,9 +59,9 @@ func createSafetyBackup(logger *logging.Logger, selectedCategories []Category, d
 	// 0600, not safetyFS.Create's 0666&^umask (0644 on a stock host). This archive is
 	// the pre-restore copy of whatever is about to be overwritten, so on a PVE or PBS
 	// node it holds /etc/shadow, /etc/pve/priv material and access-control config in
-	// the clear. It is written into /tmp/proxsave, which is 0755 and shared, and it is
-	// deliberately NOT deleted afterwards -- it is the rollback. World-readable was
-	// therefore not a brief window but the steady state.
+	// the clear, and it is deliberately NOT deleted afterwards -- it is the rollback.
+	// It lives in the restore's own directory (RestoreRunDir, 0700) so that it
+	// survives the reboot the restore recommends.
 	file, err := safetyFS.OpenFile(backupArchive, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
 	if err != nil {
 		return nil, fmt.Errorf("create backup archive: %w", err)
@@ -158,7 +158,7 @@ func createSafetyBackup(logger *logging.Logger, selectedCategories []Category, d
 
 	if spec.WriteLocationFile && locationFileName != "" {
 		locationFile := filepath.Join(baseDir, locationFileName)
-		if err := safetyFS.WriteFile(locationFile, []byte(backupArchive), 0644); err != nil {
+		if err := safetyFS.WriteFile(locationFile, []byte(backupArchive), 0o600); err != nil {
 			logger.Warning("Could not write backup location file: %v", err)
 		} else {
 			logger.Info("Backup location saved to: %s", locationFile)
@@ -475,42 +475,6 @@ func RestoreSafetyBackup(logger *logging.Logger, backupPath string, destRoot str
 	}
 
 	logger.Info("Safety backup restored: %d files", filesRestored)
-	return nil
-}
-
-// CleanupOldSafetyBackups removes safety backups older than the specified duration
-func CleanupOldSafetyBackups(logger *logging.Logger, olderThan time.Duration) error {
-	tmpDir := "/tmp"
-	pattern := "restore_backup_*"
-
-	matches, err := filepath.Glob(filepath.Join(tmpDir, pattern))
-	if err != nil {
-		return err
-	}
-
-	now := safetyNow()
-	removed := 0
-
-	for _, match := range matches {
-		info, err := safetyFS.Stat(match)
-		if err != nil {
-			continue
-		}
-
-		if now.Sub(info.ModTime()) > olderThan {
-			if err := safetyFS.Remove(match); err != nil {
-				logger.Warning("Cannot remove old backup %s: %v", match, err)
-			} else {
-				logger.Debug("Removed old safety backup: %s", match)
-				removed++
-			}
-		}
-	}
-
-	if removed > 0 {
-		logger.Info("Cleaned up %d old safety backup(s)", removed)
-	}
-
 	return nil
 }
 

@@ -703,10 +703,10 @@ In the TUI this second gate is a danger-styled confirm with `Overwrite and resto
 ```text
 Creating safety backup of existing files...
 Safety backup created successfully.
-Safety backup location: /tmp/proxsave/restore_backup_20251120_143052.tar.gz
+Safety backup location: /var/lib/proxsave/restore/20251120_143052/restore_backup_20251120_143052.tar.gz
 
 You can restore from this backup if needed using:
-  tar -xzf /tmp/proxsave/restore_backup_20251120_143052.tar.gz -C /
+  tar -xzf /var/lib/proxsave/restore/20251120_143052/restore_backup_20251120_143052.tar.gz -C /
 ```
 
 #### Phase 9: Service Management (PVE Cluster)
@@ -746,7 +746,7 @@ Continue restore with PBS services still running? (y/N): _
 
 ```text
 Extracting selected categories from archive into /
-Detailed restore log: /tmp/proxsave/restore_20251120_143052.log
+Detailed restore log: /var/lib/proxsave/restore/20251120_143052/restore_20251120_143052.log
 
 Extracting: /var/lib/pve-cluster/config.db
 Extracting: /var/lib/pve-cluster/.version
@@ -787,10 +787,10 @@ RESTORE COMPLETED
 
 Restore completed successfully.
 Temporary decrypted bundle removed.
-Detailed restore log: /tmp/proxsave/restore_20251120_143052.log
+Detailed restore log: /var/lib/proxsave/restore/20251120_143052/restore_20251120_143052.log
 Export directory: /opt/proxsave/proxmox-config-export-20251120-143052/
-Safety backup preserved at: /tmp/proxsave/restore_backup_20251120_143052.tar.gz
-Remove it manually if restore was successful: rm /tmp/proxsave/restore_backup_20251120_143052.tar.gz
+Safety backup preserved at: /var/lib/proxsave/restore/20251120_143052/restore_backup_20251120_143052.tar.gz
+Remove it manually if restore was successful: rm /var/lib/proxsave/restore/20251120_143052/restore_backup_20251120_143052.tar.gz
 
 IMPORTANT: You may need to restart services for changes to take effect.
   PVE services were stopped/restarted during restore; verify status with: pvecm status
@@ -1237,7 +1237,7 @@ journalctl -xe -u pve-cluster
 # - Certificate issues
 
 # Solution: Restore from safety backup
-tar -xzf /tmp/proxsave/restore_backup_*.tar.gz -C /
+tar -xzf /var/lib/proxsave/restore/*/restore_backup_*.tar.gz -C /
 systemctl restart pve-cluster pvedaemon pveproxy pvestatd
 ```
 
@@ -1340,7 +1340,7 @@ Pass 1: Normal Categories
   ├─ Destination: / (system root)
   ├─ Categories: All non-export-only
   ├─ Safety backup: Created before extraction
-  └─ Log: /tmp/proxsave/restore_TIMESTAMP.log
+  └─ Log: /var/lib/proxsave/restore/TIMESTAMP/restore_TIMESTAMP.log
 
 Pass 2: Export-Only Categories
   ├─ Destination: <BASE_DIR>/proxmox-config-export-YYYYMMDD-HHMMSS/
@@ -1349,7 +1349,7 @@ Pass 2: Export-Only Categories
   └─ Log: Separate section in same log file
 
 Pass 3: Staged Categories
-  ├─ Destination: /tmp/proxsave/restore-stage-*
+  ├─ Destination: /tmp/proxsave/restore-stage-* (deleted when the restore ends)
   ├─ Categories: Sensitive staged apply (e.g. network, notifications, access control)
   └─ Apply: Written after extraction via safe file/API apply steps
 ```
@@ -1936,7 +1936,7 @@ Multiple layers of protection prevent data loss and corruption during restore.
 
 > There is one path without it. If ProxSave cannot analyse the archive's categories it announces `Backup category analysis failed; ProxSave will run a full restore (no selective modes)` and, after the same two confirmations, extracts the whole archive onto `/`. That flow takes **no safety backup**, does not stop the PVE or PBS services, and does not separate export-only categories, so there is no rollback tarball afterwards. If you see that message and you are not certain, abort and take your own copy first.
 
-**Location**: `/tmp/proxsave/restore_backup_YYYYMMDD_HHMMSS.tar.gz`
+**Location**: `/var/lib/proxsave/restore/YYYYMMDD_HHMMSS/restore_backup_YYYYMMDD_HHMMSS.tar.gz` (outside `/tmp`, so it survives the reboot the restore recommends)
 
 **Contents**:
 - All files that will be overwritten by restore
@@ -1945,7 +1945,7 @@ Multiple layers of protection prevent data loss and corruption during restore.
 
 **Rollback Command**:
 ```bash
-tar -xzf /tmp/proxsave/restore_backup_20251120_143052.tar.gz -C /
+tar -xzf /var/lib/proxsave/restore/20251120_143052/restore_backup_20251120_143052.tar.gz -C /
 ```
 
 **If Safety Backup Fails**:
@@ -2021,11 +2021,11 @@ new network configuration immediately using a **transactional rollback timer**.
 
 **How it works**:
 - On live restores (writing to `/`), ProxSave **stages** network files first under `/tmp/proxsave/restore-stage-*` and does **not** overwrite `/etc/network/*` during archive extraction.
-- After extraction, ProxSave performs a prevention-first **staged install**: it writes the staged files to disk (no reload), runs safe NIC repair + preflight validation, and **rolls back automatically** if validation fails (leaving the staged copy for review).
+- After extraction, ProxSave performs a prevention-first **staged install**: it writes the staged files to disk (no reload), runs safe NIC repair + preflight validation, and **rolls back automatically** if validation fails (leaving the staged copy for review until the restore ends, when the staging directory is deleted).
 - If rollback backup creation fails (or ProxSave is not running as root), ProxSave keeps network files staged and avoids writing to `/etc`.
 - When you choose to apply live, ProxSave (re)validates and reloads networking inside the rollback timer window.
 - ProxSave arms a local rollback job **before** applying changes
-- Rollback restores **only network-related files** using a dedicated archive under `/tmp/proxsave/network_rollback_backup_*` (so it won't undo other restored categories)
+- Rollback restores **only network-related files** using a dedicated archive under `/var/lib/proxsave/restore/<timestamp>/network_rollback_backup_*` (so it won't undo other restored categories)
 - Rollback also prunes network config files that were **created after** the backup (e.g. extra files under `/etc/network/interfaces.d/`), so rollback returns to the exact pre-restore state
 - The user has **180 seconds** to type `COMMIT`
 - If `COMMIT` is not received, ProxSave triggers the rollback and restores the pre-restore network configuration
@@ -2188,7 +2188,7 @@ if cleanDestRoot == "/" && strings.HasPrefix(target, "/etc/pve") {
 
 ### 8. Comprehensive Logging
 
-**Detailed Log**: `/tmp/proxsave/restore_YYYYMMDD_HHMMSS.log`
+**Detailed Log**: `/var/lib/proxsave/restore/YYYYMMDD_HHMMSS/restore_YYYYMMDD_HHMMSS.log`, next to the restore session log `restore-<host>-<timestamp>.log`
 
 **Contents**:
 ```text
@@ -2215,13 +2215,13 @@ SUMMARY:
 **Usage**:
 ```bash
 # Review what was restored
-cat /tmp/proxsave/restore_20251120_143052.log
+cat /var/lib/proxsave/restore/20251120_143052/restore_20251120_143052.log
 
 # Search for specific file
-grep "storage.cfg" /tmp/proxsave/restore_20251120_143052.log
+grep "storage.cfg" /var/lib/proxsave/restore/20251120_143052/restore_20251120_143052.log
 
 # Check for failures
-grep "FAILED" /tmp/proxsave/restore_20251120_143052.log
+grep "FAILED" /var/lib/proxsave/restore/20251120_143052/restore_20251120_143052.log
 ```
 
 ### 9. Checksum Verification
@@ -2276,19 +2276,15 @@ sudo proxsave --restore
 
 **Issue: "Failed to create safety backup"**
 
-**Cause**: Insufficient disk space in `/tmp`
+**Cause**: Insufficient disk space on the filesystem holding `/var/lib/proxsave/restore/`, or no write access to it (the restore runs as root)
 
 **Solution**:
 ```bash
 # Check available space
-df -h /tmp
+df -h /var/lib/proxsave
 
-# Clean up temporary files
-rm -rf /tmp/proxsave/proxmox-decrypt-*
-rm -f /tmp/proxsave/restore_backup_*.tar.gz
-
-# Or expand /tmp (if tmpfs)
-mount -o remount,size=10G /tmp
+# Safety backups of earlier restores, kept until you remove them
+ls -la /var/lib/proxsave/restore/
 ```
 
 ---
@@ -2389,7 +2385,7 @@ systemctl status pve-cluster
 journalctl -xe -u pve-cluster
 
 # Restore from safety backup
-tar -xzf /tmp/proxsave/restore_backup_*.tar.gz -C /
+tar -xzf /var/lib/proxsave/restore/*/restore_backup_*.tar.gz -C /
 
 # Restart services
 systemctl restart pve-cluster pvedaemon pveproxy pvestatd
@@ -2419,7 +2415,7 @@ systemctl restart pve-cluster
 journalctl -u pve-cluster | tail -50
 
 # If config.db corrupted, restore safety backup
-tar -xzf /tmp/proxsave/restore_backup_*.tar.gz -C /
+tar -xzf /var/lib/proxsave/restore/*/restore_backup_*.tar.gz -C /
 systemctl restart pve-cluster
 ```
 
@@ -2750,7 +2746,7 @@ A: Use the safety backup:
 systemctl stop pve-cluster pvedaemon pveproxy pvestatd
 
 # Extract safety backup
-tar -xzf /tmp/proxsave/restore_backup_*.tar.gz -C /
+tar -xzf /var/lib/proxsave/restore/*/restore_backup_*.tar.gz -C /
 
 # Restart services
 systemctl restart pve-cluster pvedaemon pveproxy pvestatd
@@ -3031,18 +3027,20 @@ A: AGE encryption only:
 
 **Q: Where are temporary files stored?**
 
-A: All in `/tmp/proxsave/`:
+A: Temporary files are in `/tmp/proxsave/`:
 - `proxmox-decrypt-*/` - Decryption workspace (deleted after restore)
-- `restore_TIMESTAMP.log` - Detailed restore log (preserved)
+- `restore-stage-*/` - Staged sensitive categories, in the clear (deleted when the restore ends, on success or failure)
+
+What a restore keeps is in its own directory, `/var/lib/proxsave/restore/TIMESTAMP/` (mode 0700, files 0600), which survives the reboot the restore recommends:
+- `restore-<host>-<timestamp>.log` - Restore session log (preserved)
+- `restore_TIMESTAMP_<seq>.log` - Detailed restore logs (preserved)
 - `restore_backup_TIMESTAMP.tar.gz` - Safety backup (preserved)
+- `network_rollback_backup_*`, `firewall_rollback_backup_*`, `ha_rollback_backup_*`, `pve_access_control_rollback_backup_*` - Rollback archives (preserved)
 
 **Cleanup**:
 ```bash
-# Remove safety backup after successful restore
-rm /tmp/proxsave/restore_backup_*.tar.gz
-
-# Remove old logs
-find /tmp/proxsave/ -name "restore_*.log" -mtime +7 -delete
+# Remove a restore's directory once that restore has settled
+rm -r /var/lib/proxsave/restore/TIMESTAMP
 ```
 
 ---

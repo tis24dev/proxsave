@@ -74,6 +74,9 @@ func (w *restoreUIWorkflowRun) run() error {
 }
 
 func (w *restoreUIWorkflowRun) runSelectiveRestore() error {
+	// Deferred first so it runs last: the deferred services cleanup below still reads
+	// the stage (PBS notifications repair), on success and on failure alike.
+	defer w.removeStage()
 	if err := w.confirmRestorePlan(); err != nil {
 		return err
 	}

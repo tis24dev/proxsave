@@ -576,39 +576,6 @@ func TestRestoreSafetyBackup_AllowsSafeTargetWhenParentPathIsSymlink(t *testing.
 	}
 }
 
-func TestCleanupOldSafetyBackups(t *testing.T) {
-	logger := logging.New(types.LogLevelInfo, false)
-
-	// Create unique files directly under /tmp to match the glob pattern
-	tag := strings.ReplaceAll(t.Name(), "/", "_")
-	oldBackup := filepath.Join("/tmp", "restore_backup_"+tag+"_old")
-	newBackup := filepath.Join("/tmp", "restore_backup_"+tag+"_new")
-	if err := os.WriteFile(oldBackup, []byte("old"), 0644); err != nil {
-		t.Fatalf("failed to create old backup: %v", err)
-	}
-	if err := os.WriteFile(newBackup, []byte("new"), 0644); err != nil {
-		t.Fatalf("failed to create new backup: %v", err)
-	}
-	oldTime := time.Now().Add(-72 * time.Hour)
-	if err := os.Chtimes(oldBackup, oldTime, oldTime); err != nil {
-		t.Fatalf("failed to chtimes old backup: %v", err)
-	}
-
-	if err := CleanupOldSafetyBackups(logger, 24*time.Hour); err != nil {
-		t.Fatalf("CleanupOldSafetyBackups error: %v", err)
-	}
-
-	if _, err := os.Stat(oldBackup); err == nil {
-		t.Fatalf("old backup should have been removed")
-	}
-	if _, err := os.Stat(newBackup); err != nil {
-		t.Fatalf("new backup should remain: %v", err)
-	}
-
-	// Cleanup
-	_ = os.Remove(newBackup)
-}
-
 func TestCreateSafetyBackupArchivesSelectedPaths(t *testing.T) {
 	fake := NewFakeFS()
 	t.Cleanup(func() { _ = os.RemoveAll(fake.Root) })
@@ -645,7 +612,7 @@ func TestCreateSafetyBackupArchivesSelectedPaths(t *testing.T) {
 	}
 
 	expectedName := "restore_backup_" + fixed.Format("20060102_150405") + ".tar.gz"
-	expectedPath := filepath.Join("/tmp", "proxsave", expectedName)
+	expectedPath := filepath.Join(RestoreRunDir(), expectedName)
 	if result.BackupPath != expectedPath {
 		t.Fatalf("unexpected backup path: got %s want %s", result.BackupPath, expectedPath)
 	}
@@ -693,7 +660,7 @@ func TestCreateSafetyBackupArchivesSelectedPaths(t *testing.T) {
 	assertContains("etc/config.txt")
 	assertContains("var/lib/app/state.txt")
 
-	locationData, err := os.ReadFile(fake.onDisk(filepath.Join("/tmp", "proxsave", "restore_backup_location.txt")))
+	locationData, err := os.ReadFile(fake.onDisk(filepath.Join(RestoreRunDir(), "restore_backup_location.txt")))
 	if err != nil {
 		t.Fatalf("location file: %v", err)
 	}
@@ -2423,10 +2390,11 @@ func TestBackupDirectory_WithMixedContent(t *testing.T) {
 // TestCreateSafetyBackupArchiveIsOwnerOnly pins the permission on the pre-restore
 // archive. It is the copy of everything the restore is about to overwrite, so on a PVE
 // or PBS node it carries /etc/shadow, /etc/pve/priv material and access-control config
-// in the clear. It lands in /tmp/proxsave, which is 0755 and shared with every local
-// user, and it is deliberately never deleted -- it IS the rollback. safetyFS.Create
-// would open it 0666&^umask, i.e. 0644 on a stock host, so any local account could
-// read the node's secrets at leisure.
+// in the clear, and it is deliberately never deleted -- it IS the rollback. It used to
+// land in /tmp/proxsave, 0755 and shared with every local user; it now sits in the
+// restore's own 0700 directory, but the archive keeps its own 0600 so that its
+// protection never depends on the directory. safetyFS.Create would open it
+// 0666&^umask, i.e. 0644 on a stock host.
 func TestCreateSafetyBackupArchiveIsOwnerOnly(t *testing.T) {
 	fake := NewFakeFS()
 	t.Cleanup(func() { _ = os.RemoveAll(fake.Root) })
@@ -2455,6 +2423,6 @@ func TestCreateSafetyBackupArchiveIsOwnerOnly(t *testing.T) {
 		t.Fatalf("stat archive: %v", err)
 	}
 	if perm := info.Mode().Perm(); perm != 0o600 {
-		t.Fatalf("safety archive is %04o, want 0600: it holds /etc/shadow under a world-readable /tmp/proxsave and is never deleted", perm)
+		t.Fatalf("safety archive is %04o, want 0600: it holds /etc/shadow and is never deleted", perm)
 	}
 }

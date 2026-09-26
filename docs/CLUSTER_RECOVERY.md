@@ -227,11 +227,11 @@ If your restore scope includes the network category (FULL, SYSTEM BASE, or a CUS
 
 ### The safety backup
 
-Before overwriting anything, ProxSave writes a safety backup of the current configuration to `/tmp/proxsave/restore_backup_<YYYYMMDD_HHMMSS>.tar.gz` and keeps it. At the end it prints where it is and how to remove it:
+Before overwriting anything, ProxSave writes a safety backup of the current configuration to `/var/lib/proxsave/restore/<YYYYMMDD_HHMMSS>/restore_backup_<YYYYMMDD_HHMMSS>.tar.gz` and keeps it, outside `/tmp` so that it survives the reboot the restore recommends. At the end it prints where it is and how to remove it:
 
 ```text
-Safety backup preserved at: /tmp/proxsave/restore_backup_20251120_143052.tar.gz
-Remove it manually if restore was successful: rm /tmp/proxsave/restore_backup_20251120_143052.tar.gz
+Safety backup preserved at: /var/lib/proxsave/restore/20251120_143052/restore_backup_20251120_143052.tar.gz
+Remove it manually if restore was successful: rm /var/lib/proxsave/restore/20251120_143052/restore_backup_20251120_143052.tar.gz
 ```
 
 If any staged step fails, the run ends with `Restore completed with warnings.` rather than aborting, and this safety backup is your rollback.
@@ -466,15 +466,15 @@ Because you chose RECOVERY, ProxSave restores config.db with the cluster service
 Selected RECOVERY cluster restore: full cluster database will be restored; ensure other nodes are isolated
 
 Creating Safety backup of current configuration...
-Safety backup location: /tmp/proxsave/restore_backup_20251120_143052.tar.gz
+Safety backup location: /var/lib/proxsave/restore/20251120_143052/restore_backup_20251120_143052.tar.gz
 
 Preparing system for cluster database restore: stopping PVE services and unmounting /etc/pve
 
 ... extraction of the selected categories ...
 
 Restore completed successfully.
-Safety backup preserved at: /tmp/proxsave/restore_backup_20251120_143052.tar.gz
-Remove it manually if restore was successful: rm /tmp/proxsave/restore_backup_20251120_143052.tar.gz
+Safety backup preserved at: /var/lib/proxsave/restore/20251120_143052/restore_backup_20251120_143052.tar.gz
+Remove it manually if restore was successful: rm /var/lib/proxsave/restore/20251120_143052/restore_backup_20251120_143052.tar.gz
 ```
 
 ProxSave stops `pve-cluster`, `pvedaemon`, `pveproxy`, `pvestatd`, unmounts `/etc/pve`, extracts `/var/lib/pve-cluster/` (config.db), then restarts the four services. It does not print a per-service checkmark line for each one. No `/etc/pve` files are written directly: config.db owns them, so `/etc/pve` is repopulated from the restored database a moment after pmxcfs remounts, not by the file-extraction phase.
@@ -524,7 +524,7 @@ ls -la /etc/pve/lxc/
 # pct start <ctid>
 
 # 3. Remove safety backup (after thorough verification)
-rm /tmp/proxsave/restore_backup_*.tar.gz
+rm /var/lib/proxsave/restore/*/restore_backup_*.tar.gz
 
 # 4. Update backups schedule if needed
 cat /etc/pve/vzdump.cron
@@ -1521,7 +1521,7 @@ journalctl -xe -u pve-cluster
 ```bash
 # Rollback to safety backup
 systemctl stop pve-cluster
-tar -xzf /tmp/proxsave/restore_backup_*.tar.gz -C /
+tar -xzf /var/lib/proxsave/restore/*/restore_backup_*.tar.gz -C /
 systemctl start pve-cluster
 ```
 
@@ -1724,7 +1724,7 @@ umount -f /etc/pve 2>/dev/null
 fusermount -uz /etc/pve 2>/dev/null
 
 # 3. Restore from safety backup
-tar -xzf /tmp/proxsave/restore_backup_*.tar.gz -C /
+tar -xzf /var/lib/proxsave/restore/*/restore_backup_*.tar.gz -C /
 
 # 4. Restart services
 systemctl start pve-cluster

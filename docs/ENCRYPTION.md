@@ -85,8 +85,7 @@ covers backup staging:
 
 Every path below belongs to a **live** run until that run ends, so check first and delete by
 name. A glob run against a working host takes the staging directory out from under a backup,
-a decrypt or a restore in progress, and the safety tarballs are not leftovers at all: they
-are the restore's rollback.
+a decrypt or a restore in progress.
 
 ```bash
 # 1. Is anything running? If this prints a PID, stop here.
@@ -100,8 +99,7 @@ ls -la /tmp/proxsave/
 #    globs on a host that is still working.
 #      proxsave-*           backup staging, from a killed backup
 #      proxmox-decrypt-*    decrypt staging: a FULLY DECRYPTED archive
-#      restore-stage-*      restore staging: plaintext shadow and pve priv
-#      *_backup_*.tar.gz    the restore's rollback -- only once that restore has settled
+#      restore-stage-*      restore staging: plaintext shadow and pve priv, from a killed restore
 rm -rf /tmp/proxsave/restore-stage-20260803-120000_1
 ```
 
@@ -109,17 +107,22 @@ Two practical consequences. `/tmp` needs room for a full uncompressed copy of ev
 being backed up, on top of the archive itself. And if `/tmp` is a tmpfs the staged plaintext
 is in RAM and can reach swap; if it is on disk, it is written to persistent storage.
 
-The same applies in reverse, and the restore side is worse. `proxsave --decrypt` stages under
+The same applies in reverse. `proxsave --decrypt` stages under
 `/tmp/proxsave/proxmox-decrypt-*` and removes it at the end of a normal run. `proxsave
 --restore` extracts the sensitive categories in the clear into
 `/tmp/proxsave/restore-stage-<timestamp>_<seq>/`, which holds material such as `/etc/shadow`,
-`/etc/gshadow` and `/etc/pve/priv/*.cfg`, and **never deletes it**, on success or failure.
-Nothing sweeps it either, since it is not registered. A restore also leaves its rollback and
-safety tarballs (`restore_backup_`, `network_rollback_backup_`, `firewall_rollback_backup_`,
-`ha_rollback_backup_`, `pve_access_control_rollback_backup_`, each `_<timestamp>.tar.gz`)
-deliberately in place: they are the rollback. Those are written **mode 0600**, so their
-contents are not readable by other local users even though `/tmp/proxsave` itself is `0755`
-and shared; their names and sizes still are. Clean them up yourself once a restore has
+`/etc/gshadow` and `/etc/pve/priv/*.cfg`, and deletes it when the restore ends, on success or
+failure. It is not registered, so a restore killed with `SIGKILL` or by a power loss leaves it
+behind and nothing sweeps it.
+
+What a restore keeps on purpose is not under `/tmp`: it goes into the restore's own directory,
+`/var/lib/proxsave/restore/<timestamp>/`, created **mode 0700**, one directory per restore. It
+holds the rollback and safety tarballs (`restore_backup_`, `network_rollback_backup_`,
+`firewall_rollback_backup_`, `ha_rollback_backup_`, `pve_access_control_rollback_backup_`,
+each `_<timestamp>.tar.gz`), their `*_location.txt` files, the restore session log and the
+detailed restore logs, all **mode 0600**. They are the rollback and the record of what the
+restore did, and they survive the reboot the restore recommends, including on a host whose
+`/tmp` is a tmpfs. ProxSave never deletes them. Clean them up yourself once a restore has
 settled.
 
 If you decrypt by hand with the `age` CLI, your own output is plaintext too: pipe it rather

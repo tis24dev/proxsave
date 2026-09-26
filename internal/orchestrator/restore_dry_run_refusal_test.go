@@ -141,7 +141,7 @@ func observeRecoveryRestore(t *testing.T, fs *FakeFS, cmd *FakeCommandRunner) re
 			o.umounted = true
 		}
 	}
-	matches, _ := filepath.Glob(filepath.Join(fs.Root, "tmp", "proxsave", "restore_backup_*.tar.gz"))
+	matches, _ := filepath.Glob(filepath.Join(fs.Root, RestoreRunDir(), "restore_backup_*.tar.gz"))
 	o.safetyBackups = len(matches)
 	return o
 }
