@@ -1932,9 +1932,9 @@ Multiple layers of protection prevent data loss and corruption during restore.
 
 ### 1. Safety Backup
 
-**Automatic** backup before any changes are written, on the selective restore path.
+**Automatic** backup before any changes are written, on the selective restore path and on the full-restore fallback.
 
-> There is one path without it. If ProxSave cannot analyse the archive's categories it announces `Backup category analysis failed; ProxSave will run a full restore (no selective modes)` and, after the same two confirmations, extracts the whole archive onto `/`. That flow takes **no safety backup**, does not stop the PVE or PBS services, and does not separate export-only categories, so there is no rollback tarball afterwards. If you see that message and you are not certain, abort and take your own copy first.
+> The full-restore fallback runs when ProxSave cannot analyse the archive's categories: it announces `Backup category analysis failed; ProxSave will run a full restore (no selective modes)` and, after confirmation, extracts the whole archive onto `/`. It takes this safety backup first, but not the network, firewall, HA and access control rollback archives, since it runs none of the transactional applies they undo. On a PBS host it stops the PBS services when the plan includes PBS categories. It does not stop `pve-cluster` and does not write the cluster database (`/var/lib/pve-cluster/`), since it cannot tell whether the archive holds usable cluster data. Export-only categories, and on a single-role host the categories of the other product, are kept off the live system.
 
 **Location**: `/var/lib/proxsave/restore/YYYYMMDD_HHMMSS/restore_backup_YYYYMMDD_HHMMSS.tar.gz` (outside `/tmp`, so it survives the reboot the restore recommends)
 
