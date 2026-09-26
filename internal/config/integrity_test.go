@@ -465,7 +465,7 @@ func TestIsOneEditApart(t *testing.T) {
 		a, b string
 		want bool
 	}{
-		{"USTOM_BACKUP_PATHS", "CUSTOM_BACKUP_PATHS", true},  // dropped first character
+		{"USTOM_BACKUP_PATHS", "CUSTOM_BACKUP_PATHS", true},   // dropped first character
 		{"CUSTOM_BACKUP_PATHSS", "CUSTOM_BACKUP_PATHS", true}, // one character too many
 		{"CUSTOM_BACKUP_PATHZ", "CUSTOM_BACKUP_PATHS", true},  // one character changed
 		{"CUSTOM_BACKUP_PATSH", "CUSTOM_BACKUP_PATHS", true},  // two adjacent swapped
