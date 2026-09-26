@@ -267,7 +267,9 @@ instead of line numbers, which drift on every edit):
    `restore_plan.go` which splits the selection via `splitRestoreCategories()` in `staging.go`):
    - User selects restore mode (Full/Storage/Base/Custom)
    - Interactive category selection for Custom mode
-   - Build the plan, splitting categories into normal / staged / export-only
+   - Build the plan, splitting categories into normal / staged / export-only; on a
+     single-role host the other role's categories go to export
+     (`redirectOtherProductCategoriesToExport()` in `restore_plan.go`)
 
 3. **PBS Behavior + Cluster SAFE/RECOVERY Prompt** (`configurePlanForRuntime()` →
    `selectPBSRestoreBehavior()` and `selectClusterRestoreMode()` → `applyClusterRestoreChoice()`
@@ -609,7 +611,9 @@ func DetectBackupType(manifest *backup.Manifest) SystemType {
 - **full compatibility**: same role set
 
 When compatibility is partial, restore continues with warnings and later filters
-the category set to the roles supported by the current host.
+the category set to the roles supported by the current host: on a single-role host
+`PlanRestore()` sends the other role's categories to export, in every mode and in
+the analysis-failure fallback, where export means skipped.
 
 ---
 
@@ -709,7 +713,8 @@ func PathMatchesCategory(filePath string, category Category) bool {
 categories, mode, err := w.selectModeAndCategories()
 
 // Build the plan; PlanRestore splits the selection 3-way via splitRestoreCategories
-// (normal / staged / export-only)
+// (normal / staged / export-only), and on a single-role host sends the other role's
+// categories to export
 w.plan = PlanRestore(w.decisionInfo.ClusterPayload, categories, w.systemType, mode)
 
 // Later, in runSelectiveRestore(), the plan is shown and confirmed:

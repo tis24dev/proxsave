@@ -77,8 +77,22 @@ func (w *restoreUIWorkflowRun) confirmFullRestore() error {
 // PlanRestore is reused rather than hand-building the struct, so the normal/staged/
 // export split - including the ExportOnly separation this fallback was missing -
 // comes from the same code the selective path uses and cannot drift from it.
+//
+// The categories of the product this host does not run are added whether or not
+// they exist here. PlanRestore sends them to export, which for this fallback is the
+// skip list, so they cost the safety backup nothing. Keeping only the present ones
+// would skip the other product's paths the live system already has and still write
+// the ones it lacks, e.g. /etc/corosync/ and /etc/ceph/ on a clean PBS host.
 func (w *restoreUIWorkflowRun) synthesizeFullRestorePlan() *RestorePlan {
-	categories := categoriesPresentUnderRoot(GetAllCategories(), w.destRoot)
+	all := GetAllCategories()
+	categories := categoriesPresentUnderRoot(all, w.destRoot)
+	if otherProduct, ok := otherProductCategoryType(w.systemType); ok {
+		for _, cat := range all {
+			if cat.Type == otherProduct && !hasCategoryID(categories, cat.ID) {
+				categories = append(categories, cat)
+			}
+		}
+	}
 	plan := PlanRestore(false, categories, w.systemType, RestoreModeFull)
 
 	// The cluster stays up: this fallback runs because the archive could not be

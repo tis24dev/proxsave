@@ -223,9 +223,11 @@ var notes = []Note{
 		Version: "0.40.0",
 		Lines: []string{
 			"A restore under dry-run (--dry-run or DRY_RUN=true) is now refused: it used to modify the live system anyway",
+			"A FULL restore on a PVE-only or PBS-only host exports the other product's categories instead of writing them",
 		},
 		Actions: []string{
 			"With DRY_RUN=true in backup.env, a restore from the CLI or the dashboard is refused until DRY_RUN is set to false",
+			"A PBS host once restored in FULL from a PVE+PBS archive can hold /var/lib/pve-cluster/config.db and be detected as dual",
 		},
 	},
 }

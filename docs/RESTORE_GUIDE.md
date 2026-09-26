@@ -151,7 +151,9 @@ Examples:
 - `pve` backup on `dual` host: restore `PVE + Common`
 
 When compatibility is partial, ProxSave automatically filters selectable
-restore categories to the roles supported by the current host.
+restore categories to the roles supported by the current host. On a host that
+runs one role only, the categories of the other role are extracted to the
+export directory instead of being written to the system, in every restore mode.
 
 `unknown` hosts can still use export-oriented or common-only workflows, but
 ProxSave warns because role-specific compatibility cannot be verified.
@@ -312,8 +314,9 @@ Four predefined modes provide common restoration scenarios, plus custom selectio
 - **Export-only** categories (e.g. `pve_config_export`, `pbs_config`) are extracted to the export directory for manual review/application
 - On a `dual` host, FULL restore can include PVE, PBS, and Common categories in
   the same run
-- On a single-role host restoring a `dual` backup, ProxSave automatically
-  filters the FULL selection to compatible categories
+- On a single-role host restoring a `dual` backup, the categories of the other
+  role are extracted to the export directory instead of being written to the
+  system
 
 **Command Flow**:
 ```text

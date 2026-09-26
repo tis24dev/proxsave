@@ -20,7 +20,8 @@ type fullRestoreUIFlow struct {
 	logger    *logging.Logger
 	dryRun    bool
 	// plan is the synthesized full-restore plan; only ExportCategories is read, to
-	// keep export-only content out of the live system.
+	// keep export-only content, and the product this host does not run, out of the
+	// live system.
 	plan *RestorePlan
 }
 
@@ -71,7 +72,9 @@ func (f *fullRestoreUIFlow) extract() error {
 // fallback wrote /etc/proxmox-backup/ and /var/lib/proxsave-info/ straight to /.
 //
 // The prefixes come from the plan's own ExportCategories and from categories.go, so
-// there is no second list to keep in step with them.
+// there is no second list to keep in step with them. On a host that runs one product
+// only, ExportCategories also holds every category of the other product
+// (synthesizeFullRestorePlan), so those are skipped too.
 func (f *fullRestoreUIFlow) skipPath(name string) bool {
 	clean := normalizeArchiveEntryPath(name)
 	if f.safeFstabMerge() && clean == "etc/fstab" {

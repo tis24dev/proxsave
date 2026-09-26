@@ -514,7 +514,9 @@ proxsave --restore --cli
 **Compatibility model**:
 - `dual` backups persist explicit targets (`pve`, `pbs`)
 - restoring a `dual` backup to a single-role host is allowed
-- ProxSave restores only categories compatible with the current host role
+- ProxSave restores only categories compatible with the current host role; on a
+  single-role host the categories of the other role are extracted to the export
+  directory instead, in every restore mode
 - `common` categories remain available across roles
 
 **WARNING**: Restore operations overwrite files in-place. **Always test in a VM or snapshot your system first!**
