@@ -219,6 +219,15 @@ var notes = []Note{
 			"A dual backup that lost one role exits with the warning code and names the missing role in its manifest",
 		},
 	},
+	{
+		Version: "0.40.0",
+		Lines: []string{
+			"A restore under dry-run (--dry-run or DRY_RUN=true) is now refused: it used to modify the live system anyway",
+		},
+		Actions: []string{
+			"With DRY_RUN=true in backup.env, a restore from the CLI or the dashboard is refused until DRY_RUN is set to false",
+		},
+	},
 }
 
 // LookupNotes returns the notes for versions in the half-open range (from, to], ascending by

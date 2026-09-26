@@ -47,6 +47,11 @@ func runRestoreWorkflowWithUI(ctx context.Context, cfg *config.Config, logger *l
 	if cfg == nil {
 		return fmt.Errorf("configuration not available")
 	}
+	// Before the first prompt: the CLI entry reaches this line without having asked
+	// anything, and every step below either asks or writes.
+	if cfg.DryRun {
+		return ErrRestoreDryRun
+	}
 	if ui == nil {
 		return fmt.Errorf("restore UI not available")
 	}

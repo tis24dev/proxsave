@@ -43,16 +43,48 @@ func TestDryRunIsRefusedWithUpgradeAndItsFinalize(t *testing.T) {
 	}
 }
 
-// The guard must not catch anything else: --backup and --restore have their own
-// dry-run support and must keep it.
+// A restore cannot run without modifying the system: it stops services, unmounts
+// /etc/pve in RECOVERY, extracts the direct-write categories over the live files and
+// writes a safety backup, and only some of its later steps ever read the flag. Under
+// --dry-run it did all of that while the operator was told nothing would change.
+//
+// The combination is refused rather than implemented, for the same reason as the
+// upgrade above. DRY_RUN=true in the configuration is refused too, at the restore
+// dispatch, because it is only known once the configuration is loaded.
+func TestDryRunIsRefusedWithRestore(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		args        cli.Args
+		wantRefusal bool
+	}{
+		{"restore with dry-run is refused", cli.Args{Restore: true, DryRun: true}, true},
+		{"restore without dry-run is fine", cli.Args{Restore: true}, false},
+		{"dry-run alone is fine", cli.Args{DryRun: true}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			messages := validateModeCompatibility(&tc.args)
+			refused := false
+			for _, m := range messages {
+				if strings.Contains(m, "--dry-run is not supported with --restore") {
+					refused = true
+				}
+			}
+			if refused != tc.wantRefusal {
+				t.Fatalf("refused = %v, want %v (messages: %v)", refused, tc.wantRefusal, messages)
+			}
+		})
+	}
+}
+
+// The guards must not catch anything else: --backup has its own dry-run support and
+// must keep it.
 func TestDryRunStaysAllowedOnTheModesThatImplementIt(t *testing.T) {
 	for _, args := range []cli.Args{
 		{Backup: true, DryRun: true},
-		{Restore: true, DryRun: true},
 	} {
 		for _, m := range validateModeCompatibility(&args) {
-			if strings.Contains(m, "--dry-run is not supported with --upgrade") {
-				t.Fatalf("the upgrade guard fired on %+v: %s", args, m)
+			if strings.Contains(m, "--dry-run is not supported") {
+				t.Fatalf("a dry-run guard fired on %+v: %s", args, m)
 			}
 		}
 	}

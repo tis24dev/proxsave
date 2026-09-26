@@ -221,6 +221,7 @@ COLORIZE_STEP_LOGS=true            # true | false (requires USE_COLOR=true)
 DEBUG_LEVEL=standard               # standard | advanced | extreme
 
 # Dry-run mode (test without changes)
+# A restore is refused while this is true: it cannot run without modifying the system
 DRY_RUN=false                      # true | false
 
 # Enable/disable always-on pprof profiling (CPU + heap)

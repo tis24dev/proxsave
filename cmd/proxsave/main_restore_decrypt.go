@@ -3,6 +3,7 @@ package main
 
 import (
 	"errors"
+	"fmt"
 	"strings"
 	"time"
 
@@ -22,6 +23,14 @@ var (
 func dispatchRestoreMode(rt *appRuntime) modeResult {
 	if !rt.args.Restore {
 		return modeResult{exitCode: types.ExitSuccess.Int()}
+	}
+	// DRY_RUN=true in the configuration: a restore cannot run without modifying the
+	// system, so it is refused here, before either workflow starts. The --dry-run flag
+	// never gets this far (validateRestoreCompatibility refused it), so what is left is
+	// the variable, which is known only once the configuration is loaded. The
+	// dashboard's Restore entry comes through here too.
+	if rt.cfg != nil && rt.cfg.DryRun {
+		return finishFailedRestore(rt, fmt.Errorf("DRY_RUN is true: %w", orchestrator.ErrRestoreDryRun), false)
 	}
 
 	restoreCLI := rt.args.ForceCLI || !restoreIsInteractive()
@@ -58,6 +67,12 @@ func finishFailedRestore(rt *appRuntime, err error, includeDecryptAbort bool) mo
 	if isRestoreAbort(err, includeDecryptAbort) {
 		logging.Warning("Restore workflow aborted by user")
 		return restoreModeResult(rt, exitCodeInterrupted)
+	}
+	if errors.Is(err, orchestrator.ErrRestoreDryRun) {
+		// A refusal, not a failure of the restore: same exit code as the --dry-run
+		// flag refusal in rejectIncompatibleModes, whichever guard caught it.
+		logging.Error("%v", err)
+		return restoreModeResult(rt, types.ExitConfigError.Int())
 	}
 	if errors.Is(err, orchestrator.ErrDecryptNoBackups) && dashboardIsBareInvocation() {
 		// Dashboard bare invocation: the user already saw the graceful "Status:"

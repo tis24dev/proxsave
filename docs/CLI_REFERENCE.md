@@ -96,8 +96,9 @@ of `--daemon`, `--daemon-setup`, `--daemon-remove`, `--daemon-status` at a time 
 them with another mode; `--install` not with `--new-install` or `--upgrade`;
 `--cleanup-guards` and `--support` each with their own short list of incompatible modes; and
 `--dry-run` refused with `--upgrade`, `--upgrade-finalize`, `--daemon`, `--daemon-setup` and
-`--daemon-remove`, none of which have ever honoured it. The run stops with the reason
-printed. Modifiers (`--config`, `--log-level`, `--cli`) do combine with the mode they apply
+`--daemon-remove`, none of which have ever honoured it, and with `--restore`, which cannot run
+without modifying the system (`DRY_RUN=true` refuses a restore too). The run stops with the
+reason printed. Modifiers (`--config`, `--log-level`, `--cli`) do combine with the mode they apply
 to.
 
 **Configuration precedence** (highest to lowest):
@@ -182,7 +183,7 @@ proxsave -h
 | Flag | Short | Description |
 |------|-------|-------------|
 | `--config <path>` | `-c` | Path to configuration file (default `configs/backup.env`, resolved under the install dir, e.g. `/opt/proxsave/configs/backup.env`). An absolute path is used as-is; a relative path is joined onto the install dir, not the current directory. |
-| `--dry-run` | `-n` | Test mode - no actual changes made. Refused with `--upgrade` and `--upgrade-finalize`: neither has ever honoured it, so the combination is an error rather than a silent full upgrade. Refused with `--daemon`, `--daemon-setup` and `--daemon-remove` for the same reason |
+| `--dry-run` | `-n` | Test mode - no actual changes made. Refused with `--upgrade` and `--upgrade-finalize`: neither has ever honoured it, so the combination is an error rather than a silent full upgrade. Refused with `--daemon`, `--daemon-setup` and `--daemon-remove` for the same reason. Refused with `--restore`, and a restore is refused while `DRY_RUN=true` too: a restore cannot run without modifying the system |
 | `--version` | `-v` | Display version information |
 | `--help` | `-h` | Show help message |
 | `--backup` | | Run the backup now and skip the interactive dashboard. This is the default behavior when proxsave runs non-interactively (cron, pipe, systemd). Dashboard: **Backup**. |
@@ -861,7 +862,7 @@ means the flag has no menu row.
 | `--help` | `-h` | - | Show help message |
 | `--version` | `-v` | - | Display version information |
 | `--config <path>` | `-c` | - | Path to configuration file. Passing it suppresses the dashboard, like any other flag |
-| `--dry-run` | `-n` | - | Test mode - no actual changes. Refused with `--upgrade`, `--upgrade-finalize`, `--daemon`, `--daemon-setup` and `--daemon-remove` |
+| `--dry-run` | `-n` | - | Test mode - no actual changes. Refused with `--upgrade`, `--upgrade-finalize`, `--daemon`, `--daemon-setup`, `--daemon-remove` and `--restore` |
 | `--log-level <level>` | `-l` | - | Set log level (debug\|info\|warning\|error\|critical) |
 | `--cli` | - | - | Force CLI mode instead of TUI (only for: --install, --new-install, --newkey, --decrypt, --restore) |
 | `--install` | - | Install > Edit install | Interactive installation wizard |
@@ -960,6 +961,7 @@ The ones below are on the list and are the ones worth using:
 proxsave -c /etc/pbs/prod.env
 
 # Dry-run mode: overridden via this environment variable
+# (a restore is refused while DRY_RUN is true, from the environment or from backup.env)
 DRY_RUN=true proxsave
 
 # BASE_DIR is not an override; it is detected from the installed executable.
