@@ -70,6 +70,8 @@ type stageRunOutcome struct {
 	exportedKey    bool
 	stageAtRestart []bool
 	log            string
+	fstabPrompted  int
+	fstabTempLeft  []string
 }
 
 // runSelectiveRestoreWithStage drives runSelectiveRestore (the production sequence)
@@ -96,7 +98,7 @@ func runSelectiveRestoreWithStage(t *testing.T, failAfterStaging bool) stageRunO
 	if err := writeTarFile(tmpTar, map[string]string{
 		"etc/passwd":               "root:x:0:0::/root:/bin/bash\n",
 		"etc/shadow":               "root:$6$DECRYPTED-HASH:19000::::::\n",
-		"etc/fstab":                "UUID=r / ext4 defaults 0 1\n",
+		"etc/fstab":                "UUID=r / ext4 defaults 0 1\nserver:/export /mnt/nas nfs defaults 0 0\n",
 		"etc/pve/priv/authkey.key": "PRIVATE KEY\n",
 	}); err != nil {
 		t.Fatal(err)
@@ -165,6 +167,9 @@ func runSelectiveRestoreWithStage(t *testing.T, failAfterStaging bool) stageRunO
 	}
 	o.stageAtRestart = runner.stageAtRestart
 	o.log = logBuf.String()
+	o.fstabPrompted = ui.fstabMergeCalls
+	// FakeFS.MkdirTemp("", ...) creates directly under its Root.
+	o.fstabTempLeft, _ = filepath.Glob(filepath.Join(fakeFS.Root, "proxsave-fstab-*"))
 	return o
 }
 
@@ -173,12 +178,20 @@ func runSelectiveRestoreWithStage(t *testing.T, failAfterStaging bool) stageRunO
 // product of SAFE, stays.
 func TestRestoreRemovesDecryptedStageAfterSuccessfulRun(t *testing.T) {
 	o := runSelectiveRestoreWithStage(t, false)
-	t.Logf("err=%v stage=%s staged=%v left=%v export=%s key=%v probes=%v", o.err, o.stageRoot, o.stagedShadow, o.stageLeft, o.exportRoot, o.exportedKey, o.stageAtRestart)
+	t.Logf("err=%v stage=%s staged=%v left=%v export=%s key=%v probes=%v fstabPrompted=%d fstabTempLeft=%v", o.err, o.stageRoot, o.stagedShadow, o.stageLeft, o.exportRoot, o.exportedKey, o.stageAtRestart, o.fstabPrompted, o.fstabTempLeft)
 	if o.err != nil {
 		t.Fatalf("runSelectiveRestore: %v", o.err)
 	}
 	if !o.stagedShadow {
 		t.Fatalf("control broken: the stage never held etc/shadow (%+v)", o)
+	}
+	// The fstab Smart Merge extracts from the same archive into a temporary
+	// directory and has always removed it: the control that the run reached it.
+	if o.fstabPrompted != 1 {
+		t.Fatalf("control broken: the fstab merge never read its temporary extraction (prompts=%d)", o.fstabPrompted)
+	}
+	if len(o.fstabTempLeft) != 0 {
+		t.Errorf("fstab merge temporary directory left behind: %v", o.fstabTempLeft)
 	}
 	if o.stageLeft {
 		t.Errorf("stage %s still exists after the run", o.stageRoot)
@@ -201,12 +214,20 @@ func TestRestoreRemovesDecryptedStageAfterSuccessfulRun(t *testing.T) {
 // goes on failure too, still after the deferred PBS services cleanup.
 func TestRestoreRemovesDecryptedStageAfterFailedRun(t *testing.T) {
 	o := runSelectiveRestoreWithStage(t, true)
-	t.Logf("err=%v stage=%s staged=%v left=%v export=%s key=%v probes=%v", o.err, o.stageRoot, o.stagedShadow, o.stageLeft, o.exportRoot, o.exportedKey, o.stageAtRestart)
+	t.Logf("err=%v stage=%s staged=%v left=%v export=%s key=%v probes=%v fstabPrompted=%d fstabTempLeft=%v", o.err, o.stageRoot, o.stagedShadow, o.stageLeft, o.exportRoot, o.exportedKey, o.stageAtRestart, o.fstabPrompted, o.fstabTempLeft)
 	if !errors.Is(o.err, context.Canceled) {
 		t.Fatalf("control broken: the run did not fail after staging (err=%v)", o.err)
 	}
 	if !o.stagedShadow {
 		t.Fatalf("control broken: the stage never held etc/shadow (%+v)", o)
+	}
+	// The fstab Smart Merge extracts from the same archive into a temporary
+	// directory and has always removed it: the control that the run reached it.
+	if o.fstabPrompted != 1 {
+		t.Fatalf("control broken: the fstab merge never read its temporary extraction (prompts=%d)", o.fstabPrompted)
+	}
+	if len(o.fstabTempLeft) != 0 {
+		t.Errorf("fstab merge temporary directory left behind: %v", o.fstabTempLeft)
 	}
 	if o.stageLeft {
 		t.Errorf("stage %s still exists after the failed run", o.stageRoot)

@@ -1,6 +1,7 @@
 package orchestrator
 
 import (
+	"bytes"
 	"context"
 	"os"
 	"path/filepath"
@@ -16,8 +17,19 @@ import (
 // (Debian 13, the base of PVE 9 and PBS 4, measured on pve-test) that reboot empties
 // /tmp. The safety backup, the four rollback archives and the detailed logs are what
 // the operator has to go back to after it, so none of them may live under /tmp, and
-// all the files of one restore sit in one directory.
+// all the files of one restore sit in one directory. TMPDIR is set to show the
+// directory does not follow it, as /tmp/proxsave did not either.
 func TestRestorePersistentMaterialLivesOutsideTmpInOneDirectory(t *testing.T) {
+	tmpDir := t.TempDir()
+	t.Setenv("TMPDIR", tmpDir)
+	rebootLog := &bytes.Buffer{}
+	rebootLogger := logging.New(types.LogLevelInfo, false)
+	rebootLogger.SetOutput(rebootLog)
+	(&restoreUIWorkflowRun{logger: rebootLogger}).logRebootRecommendation()
+	if !strings.Contains(rebootLog.String(), "SYSTEM REBOOT RECOMMENDED") {
+		t.Fatalf("control broken: the restore no longer recommends a reboot (%q)", rebootLog.String())
+	}
+
 	origSafetyFS, origSafetyNow, origRestoreFS, origRestoreTime := safetyFS, safetyNow, restoreFS, restoreTime
 	t.Cleanup(func() {
 		safetyFS, safetyNow, restoreFS, restoreTime = origSafetyFS, origSafetyNow, origRestoreFS, origRestoreTime
@@ -82,6 +94,9 @@ func TestRestorePersistentMaterialLivesOutsideTmpInOneDirectory(t *testing.T) {
 
 	if !strings.HasPrefix(runDir, "/var/lib/proxsave/restore/") {
 		t.Errorf("run directory %s is not under /var/lib/proxsave/restore/", runDir)
+	}
+	if strings.HasPrefix(runDir, tmpDir) {
+		t.Errorf("run directory %s follows TMPDIR (%s)", runDir, tmpDir)
 	}
 	if info, err := fakeFS.Stat(runDir); err != nil {
 		t.Errorf("stat run directory %s: %v", runDir, err)
