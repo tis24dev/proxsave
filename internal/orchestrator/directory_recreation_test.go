@@ -1,6 +1,7 @@
 package orchestrator
 
 import (
+	"bytes"
 	"fmt"
 	"io"
 	"os"
@@ -854,5 +855,52 @@ func TestValidateRecreationPath(t *testing.T) {
 		if err := validateRecreationPath(p); err == nil {
 			t.Errorf("validateRecreationPath(%q) = nil; want rejected", p)
 		}
+	}
+}
+
+// The copy of datastore.cfg taken before it is normalized is what the Warning
+// points the operator to, after a restore that recommends a reboot: it goes into the
+// restore's own directory, owner-only, not under /tmp.
+func TestNormalizePBSDatastoreCfgKeepsItsBackupOutsideTmp(t *testing.T) {
+	if got := datastoreCfgBackupDir(); !strings.HasPrefix(got, "/var/lib/proxsave/restore/") {
+		t.Fatalf("datastoreCfgBackupDir() = %s, want a /var/lib/proxsave/restore/<ts> directory", got)
+	}
+	runDir := filepath.Join(t.TempDir(), "restore", "20260926_100000")
+	origDir := datastoreCfgBackupDir
+	datastoreCfgBackupDir = func() string { return runDir }
+	t.Cleanup(func() { datastoreCfgBackupDir = origDir })
+
+	cfgPath := filepath.Join(t.TempDir(), "datastore.cfg")
+	original := "datastore: main\npath /mnt/main\n"
+	writeFile(t, cfgPath, original)
+	buf := &bytes.Buffer{}
+	logger := logging.New(types.LogLevelInfo, false)
+	logger.SetOutput(buf)
+
+	if err := normalizePBSDatastoreCfg(cfgPath, logger); err != nil {
+		t.Fatalf("normalizePBSDatastoreCfg: %v", err)
+	}
+	_, backupPath, found := strings.Cut(buf.String(), "backup saved to ")
+	if !found {
+		t.Fatalf("no backup path in the log: %q", buf.String())
+	}
+	backupPath = strings.TrimSpace(strings.SplitN(backupPath, "\n", 2)[0])
+	if filepath.Dir(backupPath) != runDir {
+		t.Errorf("pre-normalize backup %s is not in the restore run directory %s", backupPath, runDir)
+	}
+	if info, err := os.Stat(runDir); err != nil {
+		t.Errorf("stat %s: %v", runDir, err)
+	} else if got := info.Mode().Perm(); got != 0o700 {
+		t.Errorf("restore run directory mode = %o, want 700", got)
+	}
+	info, err := os.Stat(backupPath)
+	if err != nil {
+		t.Fatalf("stat %s: %v", backupPath, err)
+	}
+	if got := info.Mode().Perm(); got != 0o600 {
+		t.Errorf("pre-normalize backup mode = %o, want 600", got)
+	}
+	if raw, err := os.ReadFile(backupPath); err != nil || string(raw) != original {
+		t.Errorf("pre-normalize backup = %q (err %v), want the original %q", raw, err, original)
 	}
 }

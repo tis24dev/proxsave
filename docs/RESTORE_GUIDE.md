@@ -2601,7 +2601,8 @@ Note: newer ProxSave versions attempt to auto-repair `/etc/resolv.conf` during r
 
 **Solution**:
 ```bash
-# ProxSave will attempt to auto-normalize datastore.cfg during restore and store a backup under /tmp/proxsave/,
+# ProxSave will attempt to auto-normalize datastore.cfg during restore and keep a copy of the original
+# in /var/lib/proxsave/restore/<timestamp>/ (datastore.cfg.pre-normalize.*),
 # but you can also fix it manually:
 cp -a /etc/proxmox-backup/datastore.cfg /root/datastore.cfg.bak.$(date +%F_%H%M%S)
 
@@ -3040,6 +3041,7 @@ What a restore keeps is in its own directory, `/var/lib/proxsave/restore/TIMESTA
 - `nic_repair_*/` - Network files as restored, before a NIC name repair (preserved)
 - `network_apply_*/` - Network apply diagnostics (preserved)
 - `datastore.cfg.deferred.*` - PBS datastore definitions that were not applied (preserved)
+- `datastore.cfg.pre-normalize.*` - PBS datastore.cfg as it was before ProxSave fixed its indentation (preserved)
 
 **Cleanup**:
 ```bash
