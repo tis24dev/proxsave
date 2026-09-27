@@ -712,3 +712,47 @@ func TestWriteDetectionDebug_Branches(t *testing.T) {
 		}
 	})
 }
+
+// TestDetectBareMetalClusterDBIsResidue is the case measured in production, at the real
+// root, where the command probes and the /usr binaries are consulted directly. A host
+// with every PVE package purged keeps only config.db, and a PBS host restored in FULL
+// from a PVE+PBS archive with 0.39.0 or older holds it too; neither is a PVE install.
+func TestDetectBareMetalClusterDBIsResidue(t *testing.T) {
+	tmpDir := t.TempDir()
+	setValue(t, &additionalPaths, []string{})
+	setValue(t, &debugBaseDir, tmpDir)
+	nullFilesystemMarkerSeams(t, tmpDir)
+	clusterDB := filepath.Join(tmpDir, "config.db")
+	if err := os.WriteFile(clusterDB, []byte("SQLite format 3\x00"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	setValue(t, &pveClusterDB, clusterDB)
+	setValue(t, &lookPathFunc, func(string) (string, error) { return "", errors.New("not found") })
+	wantResidue := "cluster-db (" + clusterDB + ")"
+
+	t.Run("every PVE package purged", func(t *testing.T) {
+		info, err := Detect()
+		if err == nil || info.Type != types.ProxmoxUnknown {
+			t.Fatalf("Detect() = (%v, %v), want ProxmoxUnknown with an error", info.Type, err)
+		}
+		if info.PVEResidual != wantResidue || info.PVESource != "" {
+			t.Fatalf("PVEResidual = %q, PVESource = %q, want %q and empty", info.PVEResidual, info.PVESource, wantResidue)
+		}
+	})
+
+	t.Run("PBS host with a leftover config.db", func(t *testing.T) {
+		pbsManager := filepath.Join(tmpDir, "proxmox-backup-manager")
+		if err := os.WriteFile(pbsManager, []byte("\x7fELF"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		setValue(t, &pbsBinaryCandidates, []string{pbsManager})
+
+		info, err := Detect()
+		if err != nil || info.Type != types.ProxmoxBS {
+			t.Fatalf("Detect() = (%v, %v), want ProxmoxBS, not dual", info.Type, err)
+		}
+		if info.PVEResidual != wantResidue || info.PVESource != "" {
+			t.Fatalf("PVEResidual = %q, PVESource = %q, want %q and empty", info.PVEResidual, info.PVESource, wantResidue)
+		}
+	})
+}

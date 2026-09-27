@@ -102,29 +102,50 @@ func TestDetectWithPrefixSkipsCommandProbes(t *testing.T) {
 // TestDetectWithPrefixClusterDBAloneIsResidue: config.db is created by pmxcfs, owned
 // by no package and kept by pve-cluster's postrm even on purge, so on its own it proves
 // PVE was once here, not that it is installed. Measured on PVE 9.2.2 with every PVE
-// package purged: config.db was the only PVE file left. The mp1-missing host-backup
-// shape does not reach this rung: mp0 carries /usr and the dpkg status, which decide
-// first (TestDetectWithPrefixPVEViaClusterDBAndBinary).
+// package purged and a reboot: config.db and an empty /etc/pve were all that was left.
+// On the ISO layouts /usr and /var/lib share the root filesystem, so the mp1-missing
+// host-backup mount (mp0 = / only) carries the dpkg status and /usr, which decide
+// first; with a separate /var the non-recursive mp0 carries /usr but not config.db,
+// and the binary decides (TestDetectWithPrefixPVEViaClusterDBAndBinary).
 func TestDetectWithPrefixClusterDBAloneIsResidue(t *testing.T) {
-	root := t.TempDir()
-	writeFile(t, filepath.Join(root, "var/lib/pve-cluster/config.db"), "SQLite format 3\x00")
+	for _, tc := range []struct {
+		name    string
+		withDir bool
+	}{
+		{"config.db alone", false},
+		{"config.db and an empty /etc/pve, every PVE package purged", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			writeFile(t, filepath.Join(root, "var/lib/pve-cluster/config.db"), "SQLite format 3\x00")
+			if tc.withDir {
+				if err := os.MkdirAll(filepath.Join(root, "etc/pve"), 0o755); err != nil {
+					t.Fatal(err)
+				}
+			}
 
-	info, err := DetectWith(DetectOptions{RootPrefix: root})
-	if err == nil {
-		t.Fatalf("config.db alone must not detect Proxmox, got Type = %v", info.Type)
-	}
-	want := "cluster-db (" + filepath.Join(root, "var/lib/pve-cluster/config.db") + ")"
-	if info.PVEResidual != want {
-		t.Fatalf("PVEResidual = %q, want %q", info.PVEResidual, want)
-	}
-	if !strings.Contains(err.Error(), want) {
-		t.Fatalf("error %q does not name the residue %q", err, want)
+			info, err := DetectWith(DetectOptions{RootPrefix: root})
+			if err == nil {
+				t.Fatalf("config.db must not detect Proxmox, got Type = %v", info.Type)
+			}
+			want := "cluster-db (" + filepath.Join(root, "var/lib/pve-cluster/config.db") + ")"
+			if info.PVEResidual != want {
+				t.Fatalf("PVEResidual = %q, want %q", info.PVEResidual, want)
+			}
+			if info.PVESource != "" {
+				t.Fatalf("PVESource = %q, want empty: a residue never decides the verdict", info.PVESource)
+			}
+			if !strings.Contains(err.Error(), want) {
+				t.Fatalf("error %q does not name the residue %q", err, want)
+			}
+		})
 	}
 }
 
 // TestDetectWithPrefixPBSHostWithClusterDB is the shape a FULL restore of a PVE+PBS
-// archive leaves on a PBS-only host: config.db written, no PVE package. It is a PBS
-// host with a PVE leftover, not a dual host.
+// archive left on a PBS-only host with 0.39.0 or older: config.db written, no PVE
+// package. From ad1a429 on, that restore exports pve_cluster instead of writing it, but
+// hosts restored before keep the file. It is a PBS host with a PVE leftover, not dual.
 func TestDetectWithPrefixPBSHostWithClusterDB(t *testing.T) {
 	root := t.TempDir()
 	writeFile(t, filepath.Join(root, "usr/sbin/proxmox-backup-manager"), "\x7fELF")
@@ -141,12 +162,15 @@ func TestDetectWithPrefixPBSHostWithClusterDB(t *testing.T) {
 	if info.PVEResidual != want {
 		t.Fatalf("PVEResidual = %q, want %q", info.PVEResidual, want)
 	}
+	if info.PVESource != "" {
+		t.Fatalf("PVESource = %q, want empty: a residue never decides the verdict", info.PVESource)
+	}
 }
 
 // TestDetectWithPrefixPVEViaClusterDBAndBinary: a real PVE whose dpkg status cannot
 // be read still has the binaries its packages ship, so demoting config.db costs it
-// nothing. The mp1-missing host-backup mount (mp0 = / without the /etc/pve bind)
-// carries /usr, so this is its shape.
+// nothing. It guards the order (binary before the residue) and passes on the code
+// before the demotion too; the tests above are the ones that tell the two apart.
 func TestDetectWithPrefixPVEViaClusterDBAndBinary(t *testing.T) {
 	root := t.TempDir()
 	writeFile(t, filepath.Join(root, "usr/bin/pmxcfs"), "\x7fELF")

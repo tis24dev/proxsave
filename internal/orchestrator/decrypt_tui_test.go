@@ -18,6 +18,8 @@ func TestNormalizeProxmoxVersion(t *testing.T) {
 		{"V9", "V9"},
 		{"unknown", "unknown"},
 		{"Unknown", "unknown"},
+		// Only the literal value detection records is special; anything else is a version.
+		{"unknown-1", "vunknown-1"},
 	}
 
 	for _, tt := range cases {

@@ -35,8 +35,9 @@ var (
 	// pveClusterDB is the pmxcfs SQLite backing store. pmxcfs creates it at runtime:
 	// no package owns it and pve-cluster's postrm leaves it behind even on purge, so it
 	// outlives PVE (measured on PVE 9.2.2 with every PVE package purged), and a FULL
-	// restore of a PVE+PBS archive writes it onto a PBS-only host. Like the PBS
-	// directories it answers "was PVE ever here", so detectPVE reports it as residue.
+	// restore of a PVE+PBS archive done with 0.39.0 or older wrote it onto a PBS-only
+	// host. Like the PBS directories it answers "was PVE ever here", so detectPVE
+	// reports it as residue.
 	pveClusterDB = "/var/lib/pve-cluster/config.db"
 
 	// pveBinaryCandidates and pbsBinaryCandidates are product-specific binaries
