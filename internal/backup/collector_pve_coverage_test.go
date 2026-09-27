@@ -203,6 +203,39 @@ func TestPVERuntimeCommandSuccessAndFailureBranches(t *testing.T) {
 		}
 	})
 
+	// pve-manager purged, pve-cluster left: pveversion is gone but /etc/pve is live, so
+	// the recipe has to go on and collect it instead of failing the whole run.
+	t.Run("missing pveversion is skipped, not critical", func(t *testing.T) {
+		var ran []string
+		collector := newPVECollectorWithDeps(t, CollectorDeps{
+			LookPath: func(cmd string) (string, error) {
+				if cmd == "pveversion" {
+					return "", errors.New("not found")
+				}
+				return "/usr/bin/" + cmd, nil
+			},
+			RunCommand: func(_ context.Context, name string, _ ...string) ([]byte, error) {
+				ran = append(ran, name)
+				return []byte("[]"), nil
+			},
+		})
+		commandsDir := collector.proxsaveCommandsDir("pve")
+		if err := collector.collectPVECoreRuntime(context.Background(), commandsDir, &pveRuntimeInfo{}); err != nil {
+			t.Fatalf("a missing pveversion must not fail the core runtime: %v", err)
+		}
+		for _, name := range ran {
+			if name == "pveversion" {
+				t.Fatal("pveversion must not run when it is not installed")
+			}
+		}
+		if len(ran) == 0 {
+			t.Fatal("the commands after pveversion must still run")
+		}
+		if _, err := os.Stat(filepath.Join(commandsDir, "pveversion.txt")); !os.IsNotExist(err) {
+			t.Fatalf("pveversion.txt must not be written, stat err = %v", err)
+		}
+	})
+
 	t.Run("core runtime output write errors", func(t *testing.T) {
 		cases := []struct {
 			name      string

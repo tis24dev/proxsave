@@ -498,11 +498,17 @@ func (c *Collector) collectPVEVZDumpSnapshot(ctx context.Context) error {
 }
 
 func (c *Collector) collectPVECoreRuntime(ctx context.Context, commandsDir string, info *pveRuntimeInfo) error {
+	// pveversion is critical only when it is installed. One that runs and fails is a
+	// broken PVE toolchain. A missing one is pve-manager purged while pve-cluster,
+	// qemu-server and pve-container stay (the ISO installer marks them manual), with
+	// /etc/pve still mounted and holding the guest configuration: measured on PVE 9.2.2,
+	// failing on it there ended the run at exit 9 with no archive.
+	_, lookErr := c.depLookPath("pveversion")
 	if err := c.safeCmdOutput(ctx,
 		commandSpec("pveversion", "-v"),
 		filepath.Join(commandsDir, "pveversion.txt"),
 		"PVE version",
-		true); err != nil {
+		lookErr == nil); err != nil {
 		return fmt.Errorf("failed to get PVE version (critical): %w", err)
 	}
 
