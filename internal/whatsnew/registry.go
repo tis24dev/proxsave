@@ -234,6 +234,7 @@ var notes = []Note{
 		Actions: []string{
 			"With DRY_RUN=true in backup.env, a restore from the CLI or the dashboard is refused until DRY_RUN is set to false",
 			"A PBS host holding /var/lib/pve-cluster/config.db from an old FULL restore is collected as PBS again, with a note",
+			"A host with every PVE package purged now completes a generic backup instead of failing on pveversion with no archive",
 		},
 	},
 }
