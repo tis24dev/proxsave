@@ -72,16 +72,20 @@ flowchart TD
     CheckCluster -->|Yes| StopServices[Stop PVE Services]
     StopServices --> UnmountPVE[Unmount /etc/pve]
     UnmountPVE --> DeferRestart[Defer Service Restart]
-    DeferRestart --> ExtractNormal
+    DeferRestart --> ZFSHostFiles
 
-    CheckCluster -->|No| ExtractNormal[Extract Normal Categories]
+    CheckCluster -->|No| ZFSHostFiles["ZFS host files check (zfs selected):<br/>keep this host's /etc/hostid and<br/>pool cache when it has pools imported"]
+    ZFSHostFiles --> ExtractNormal["Extract Normal Categories<br/>(the old host's GRUB settings,<br/>kernel cmdline, ESP list: never)"]
     ExtractNormal --> ExtractExport{Export Categories?}
     ExtractExport -->|Yes| ExtractToExport[Extract to Export Dir]
     ExtractExport -->|No| PostRestore
     ExtractToExport --> PostRestore[Post-Restore Tasks]
 
     PostRestore --> RecreateDir[Recreate Directories]
-    RecreateDir --> CheckZFS{ZFS Category?}
+    RecreateDir --> CheckBoot{boot Category?}
+    CheckBoot -->|Yes| BootMerge["Merge the old host's kernel<br/>parameters into this host's GRUB<br/>or /etc/kernel/cmdline, then rebuild<br/>initramfs + bootloader once"]
+    CheckBoot -->|No| CheckZFS
+    BootMerge --> CheckZFS{ZFS Category?}
     CheckZFS -->|Yes| WarnZFS[Warn About ZFS Import]
     CheckZFS -->|No| RestartServices
     WarnZFS --> RestartServices[Restart Services - Deferred]
@@ -113,7 +117,7 @@ flowchart TD
     SystemFull -->|PVE| PVEFull[PVE Categories:<br/>- pve_cluster<br/>- storage_pve<br/>- pve_jobs<br/>- pve_notifications<br/>- pve_access_control<br/>- pve_firewall<br/>- pve_ha<br/>- pve_sdn<br/>- corosync<br/>- ceph<br/>+ Common]
     SystemFull -->|PBS| PBSFull[PBS Categories:<br/>- pbs_host<br/>- datastore_pbs<br/>- maintenance_pbs<br/>- pbs_jobs<br/>- pbs_remotes<br/>- pbs_notifications<br/>- pbs_access_control<br/>- pbs_tape<br/>+ Common]
     SystemFull -->|DUAL| DualFull[Dual Categories:<br/>- PVE categories<br/>- PBS categories<br/>- Common categories]
-    SystemFull -->|Unknown| CommonFull[Common Only:<br/>- filesystem<br/>- storage_stack<br/>- network<br/>- ssl<br/>- ssh<br/>- scripts<br/>- crontabs<br/>- services<br/>- accounts<br/>- user_data<br/>- zfs<br/>- proxsave_info]
+    SystemFull -->|Unknown| CommonFull[Common Only:<br/>- filesystem<br/>- storage_stack<br/>- network<br/>- ssl<br/>- ssh<br/>- scripts<br/>- crontabs<br/>- services<br/>- accounts<br/>- user_data<br/>- zfs<br/>- boot<br/>- proxsave_info]
 
     Storage --> SystemStorage{System Type?}
     SystemStorage -->|PVE| PVEStorage[- pve_cluster<br/>- storage_pve<br/>- pve_jobs<br/>- filesystem<br/>- storage_stack<br/>- zfs]
