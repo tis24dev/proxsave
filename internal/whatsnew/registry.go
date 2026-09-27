@@ -224,6 +224,8 @@ var notes = []Note{
 		Lines: []string{
 			"A restore under dry-run (--dry-run or DRY_RUN=true) is now refused: it used to modify the live system anyway",
 			"A FULL restore on a PVE-only or PBS-only host exports the other product's categories instead of writing them",
+			"Backups now include /etc/default and udev rules, which the restore listed but no backup ever saved",
+			"GRUB settings and /etc/kernel/cmdline are saved for reference only, under proxsave-info: a restore never writes them",
 		},
 		Actions: []string{
 			"With DRY_RUN=true in backup.env, a restore from the CLI or the dashboard is refused until DRY_RUN is set to false",

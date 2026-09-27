@@ -152,6 +152,7 @@ const (
 	brickSystemAptStatic                BrickID = "system_apt_static"
 	brickSystemCronStatic               BrickID = "system_cron_static"
 	brickSystemServicesStatic           BrickID = "system_services_static"
+	brickSystemDefaultsStatic           BrickID = "system_defaults_static"
 	brickSystemLoggingStatic            BrickID = "system_logging_static"
 	brickSystemSSLStatic                BrickID = "system_ssl_static"
 	brickSystemSysctlStatic             BrickID = "system_sysctl_static"

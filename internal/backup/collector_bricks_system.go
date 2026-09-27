@@ -24,6 +24,7 @@ func newSystemStaticBricks() []collectionBrick {
 		collectorBrick(brickSystemAptStatic, "Collect static APT configuration", (*Collector).collectSystemAptStatic),
 		collectorBrick(brickSystemCronStatic, "Collect static cron configuration", (*Collector).collectSystemCronStatic),
 		collectorBrick(brickSystemServicesStatic, "Collect static service configuration", (*Collector).collectSystemServicesStatic),
+		collectorBrick(brickSystemDefaultsStatic, "Collect service defaults, udev rules and boot configuration", (*Collector).collectSystemDefaultsStatic),
 		collectorBrick(brickSystemLoggingStatic, "Collect static logging configuration", (*Collector).collectSystemLoggingStatic),
 		collectorBrick(brickSystemSSLStatic, "Collect static SSL configuration", (*Collector).collectSystemSSLStatic),
 		collectorBrick(brickSystemSysctlStatic, "Collect static sysctl configuration", (*Collector).collectSystemSysctlStatic),

@@ -406,6 +406,76 @@ func (c *Collector) collectSystemServicesStatic(ctx context.Context) error {
 	return nil
 }
 
+// collectSystemDefaultsStatic collects /etc/default and the udev rules, which the
+// services restore category writes straight to the live system, and keeps the boot
+// configuration for reference only. GRUB settings and the kernel command line carry
+// host-specific tokens (root device, IOMMU, ESP UUIDs) that can leave another host
+// unbootable, so they go under proxsave-info, which every restore mode treats as
+// export-only, and never sit at ./etc/default/grub where services would write them.
+func (c *Collector) collectSystemDefaultsStatic(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if !c.config.BackupSystemDefaults {
+		return nil
+	}
+
+	c.logger.Debug("Collecting service defaults, udev rules and boot configuration")
+	stagedDefault := filepath.Join(c.tempDir, "etc/default")
+	if err := c.safeCopyDir(ctx,
+		c.systemPath("/etc/default"),
+		stagedDefault,
+		"Service defaults"); err != nil {
+		c.logger.Debug("No /etc/default found")
+	}
+	for _, name := range []string{"grub", "grub.d"} {
+		c.moveToBootReference(filepath.Join(stagedDefault, name), c.proxsaveInfoDir("boot", "etc", "default", name))
+	}
+
+	if err := c.safeCopyDir(ctx,
+		c.systemPath("/etc/udev/rules.d"),
+		filepath.Join(c.tempDir, "etc/udev/rules.d"),
+		"Udev rules"); err != nil {
+		c.logger.Debug("No /etc/udev/rules.d found")
+	}
+
+	for _, name := range []string{"cmdline", "proxmox-boot-uuids"} {
+		if err := c.safeCopyFile(ctx,
+			c.systemPath(filepath.Join("/etc/kernel", name)),
+			c.proxsaveInfoDir("boot", "etc", "kernel", name),
+			"Kernel "+name); err != nil {
+			c.logger.Debug("No /etc/kernel/%s found", name)
+		}
+	}
+
+	return nil
+}
+
+// moveToBootReference moves an entry already staged under ./etc/default into the
+// boot reference tree, so it is collected once and restored nowhere. When the move
+// fails the staged entry is dropped rather than left where a restore would write it.
+func (c *Collector) moveToBootReference(staged, dest string) {
+	if c.dryRun {
+		return
+	}
+	if _, err := os.Lstat(staged); err != nil {
+		return
+	}
+	err := c.ensureDir(filepath.Dir(dest))
+	if err == nil {
+		err = os.Rename(staged, dest)
+	}
+	if err != nil {
+		c.logger.Warning("Boot configuration %s not collected: %v", filepath.Base(staged), err)
+		c.recordSystemManifestEntry(dest, ManifestEntry{Status: StatusFailed, Error: err.Error()})
+		if rmErr := os.RemoveAll(staged); rmErr != nil {
+			c.logger.Warning("Failed to remove staged %s: %v", staged, rmErr)
+		}
+		return
+	}
+	c.recordSystemManifestEntry(dest, ManifestEntry{Status: StatusCollected})
+}
+
 func (c *Collector) collectSystemLoggingStatic(ctx context.Context) error {
 	if err := ctx.Err(); err != nil {
 		return err

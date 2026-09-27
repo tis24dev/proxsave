@@ -1599,6 +1599,11 @@ BACKUP_CRON_JOBS=true              # /etc/crontab, /etc/cron.*
 # Systemd services
 BACKUP_SYSTEMD_SERVICES=true       # /etc/systemd/system
 
+# Service defaults and udev rules, restored with the services category. GRUB settings
+# (/etc/default/grub, grub.d) and /etc/kernel/cmdline, proxmox-boot-uuids are kept for
+# reference only under /var/lib/proxsave-info/boot/, which a restore never writes to the system
+BACKUP_SYSTEM_DEFAULTS=true        # /etc/default, /etc/udev/rules.d/
+
 # SSL certificates
 BACKUP_SSL_CERTS=true              # /etc/ssl/certs, /etc/pve/local/pve-ssl.*
 

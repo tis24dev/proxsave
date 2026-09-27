@@ -265,6 +265,7 @@ type CollectorConfig struct {
 	BackupAptSources        bool
 	BackupCronJobs          bool
 	BackupSystemdServices   bool
+	BackupSystemDefaults    bool
 	BackupSSLCerts          bool
 	BackupSysctlConfig      bool
 	BackupKernelModules     bool
@@ -434,6 +435,7 @@ func GetDefaultCollectorConfig() *CollectorConfig {
 		BackupAptSources:        true,
 		BackupCronJobs:          true,
 		BackupSystemdServices:   true,
+		BackupSystemDefaults:    true,
 		BackupSSLCerts:          true,
 		BackupSysctlConfig:      true,
 		BackupKernelModules:     true,
