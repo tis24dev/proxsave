@@ -687,6 +687,8 @@ Categories to restore:
 Type 'RESTORE' to proceed or 'cancel' to abort:
 ```
 
+The file list names what the extraction writes over the system. Export-only categories (their files go to the export directory), the `boot` category (it merges kernel parameters into this host's own file) and the backed-up host's boot files (never written) are not in it.
+
 Confirmation is **two stages**. After you type `RESTORE` (or, in the TUI, press the
 `RESTORE` button), ProxSave asks a second, explicit overwrite question before touching
 anything:
