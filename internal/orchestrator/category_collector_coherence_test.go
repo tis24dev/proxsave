@@ -2,6 +2,7 @@ package orchestrator
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -14,11 +15,12 @@ import (
 	"github.com/tis24dev/proxsave/internal/types"
 )
 
-// coherenceFixtureNames gives every directory path of a common restore category the
-// name of a file its collector really copies: several collectors select by name
-// (/etc/apt, /root) or by reference (key files named in /etc/crypttab), so a made-up
-// name would be a false negative of the test, not of the product. A new directory in
-// a common category fails the test until it gets an entry here.
+// coherenceFixtureNames gives every directory path of a restore category the name
+// of a file its collector really copies: several collectors select by name
+// (/etc/apt, /root, /etc/corosync) or by reference (key files named in
+// /etc/crypttab), so a made-up name would be a false negative of the test, not of
+// the product. A new directory in a category fails the test until it gets an entry
+// here.
 var coherenceFixtureNames = map[string]string{
 	"etc/systemd/system/":                    "example.service",
 	"etc/default/":                           "zfs",
@@ -58,6 +60,14 @@ var coherenceFixtureNames = map[string]string{
 	"root/":                                  ".bashrc",
 	"home/":                                  "alice/notes.txt",
 	"etc/zfs/":                               "zpool.cache",
+	"etc/pve/":                               "storage.cfg",
+	"var/lib/pve-cluster/":                   "config.db",
+	"etc/pve/firewall/":                      "cluster.fw",
+	"etc/pve/sdn/":                           "zones.cfg",
+	"etc/corosync/":                          "authkey",
+	"etc/ceph/":                              "ceph.conf",
+	"etc/proxmox-backup/":                    "datastore.cfg",
+	"etc/proxmox-backup/acme/accounts/":      "default",
 }
 
 // coherenceFixtureContent overrides the planted content where a collector reads the
@@ -68,33 +78,45 @@ var coherenceFixtureContent = map[string]string{
 		"vol3 UUID=c /etc/cryptsetup-keys.d/vol3.key luks\n",
 }
 
-// coherenceExceptions are common category paths the system recipe does not produce
-// on purpose, each with the reason.
+// coherenceRuntimePrefix holds what a backup generates rather than copies: command
+// outputs, inventories and the boot reference copies are written under it at backup
+// time, so no system file sits at the same path to be collected.
+const coherenceRuntimePrefix = "./var/lib/proxsave-info/"
+
+// coherenceExceptions are category paths no collector copies from the same path on
+// the system, on purpose, each with the reason.
 var coherenceExceptions = map[string]string{
-	"./etc/proxmox-backup/proxy.pem": "collected by the PBS recipe, not the system one",
-	"./etc/proxmox-backup/proxy.key": "collected by the PBS recipe, not the system one",
-	"./etc/proxmox-backup/ssl/":      "collected by the PBS recipe, not the system one",
-	"./etc/default/grub":             "boot: the live file the merge writes, listed so the safety backup covers it; GRUB settings are collected under proxsave-info/boot",
-	"./etc/kernel/cmdline":           "boot: the live file the merge writes, listed so the safety backup covers it; the kernel command line is collected under proxsave-info/boot",
+	"./manifest.json":      "written by the archiver after collection, not copied from the system",
+	"./etc/default/grub":   "boot: the live file the merge writes, listed so the safety backup covers it; GRUB settings are collected under proxsave-info/boot",
+	"./etc/kernel/cmdline": "boot: the live file the merge writes, listed so the safety backup covers it; the kernel command line is collected under proxsave-info/boot",
 }
 
-// Every path a common restore category lists must be produced by the system
-// recipe: a category path no collector fills restores nothing, silently. That is
-// how ./etc/default/ and ./etc/udev/rules.d/ sat in "services" from the first Go
-// commit until the services brick collected them.
-func TestCommonCategoryPathsAreCollected(t *testing.T) {
+// coherenceRecipes are the collections a backup runs, each on its own collector.
+var coherenceRecipes = []struct {
+	name    string
+	role    types.ProxmoxType
+	collect func(*backup.Collector, context.Context) error
+}{
+	{"system", types.ProxmoxVE, (*backup.Collector).CollectSystemInfo},
+	{"pve", types.ProxmoxVE, (*backup.Collector).CollectPVEConfigs},
+	{"pbs", types.ProxmoxBS, (*backup.Collector).CollectPBSConfigs},
+}
+
+// Every path a restore category lists must be produced by a collector: a category
+// path no collector fills restores nothing, silently. That is how ./etc/default/ and
+// ./etc/udev/rules.d/ sat in "services" from the first Go commit until the services
+// brick collected them. The system, PVE and PBS recipes run over one fixture holding
+// a file under every category path, with every Backup* variable on and every
+// command stubbed; nothing runs on the host.
+func TestCategoryPathsAreCollected(t *testing.T) {
 	root := t.TempDir()
-	tempDir := t.TempDir()
 
 	listed := map[string]bool{}
 	planted := map[string]string{}
 	for _, cat := range GetAllCategories() {
-		if cat.Type != CategoryTypeCommon || cat.ExportOnly {
-			continue
-		}
 		for _, p := range cat.Paths {
 			listed[p] = true
-			if _, skip := coherenceExceptions[p]; skip {
+			if _, skip := coherenceExceptions[p]; skip || strings.HasPrefix(p, coherenceRuntimePrefix) {
 				continue
 			}
 			rel := strings.TrimPrefix(p, "./")
@@ -125,45 +147,70 @@ func TestCommonCategoryPathsAreCollected(t *testing.T) {
 	}
 	for p := range coherenceExceptions {
 		if !listed[p] {
-			t.Errorf("exception %s is no longer listed by any common category: drop it", p)
+			t.Errorf("exception %s is no longer listed by any category: drop it", p)
 		}
 	}
 
-	cc := backup.GetDefaultCollectorConfig()
-	v := reflect.ValueOf(cc).Elem()
-	for i := 0; i < v.NumField(); i++ {
-		f := v.Field(i)
-		if f.Kind() == reflect.Bool && strings.HasPrefix(v.Type().Field(i).Name, "Backup") {
-			f.SetBool(true)
+	var tempDirs []string
+	for _, r := range coherenceRecipes {
+		cc := backup.GetDefaultCollectorConfig()
+		v := reflect.ValueOf(cc).Elem()
+		for i := 0; i < v.NumField(); i++ {
+			f := v.Field(i)
+			if f.Kind() == reflect.Bool && strings.HasPrefix(v.Type().Field(i).Name, "Backup") {
+				f.SetBool(true)
+			}
 		}
-	}
-	cc.SystemRootPrefix = root
+		cc.SystemRootPrefix = root
 
-	// Every command exists and prints nothing: nothing runs on the host.
-	deps := backup.CollectorDeps{
-		LookPath:   func(name string) (string, error) { return "/usr/bin/" + name, nil },
-		RunCommand: func(context.Context, string, ...string) ([]byte, error) { return []byte{}, nil },
-		RunCommandWithEnv: func(context.Context, []string, string, ...string) ([]byte, error) {
-			return []byte{}, nil
-		},
-		RunCommandCaptured: func(context.Context, []string, string, ...string) ([]byte, []byte, error) {
-			return []byte{}, nil, nil
-		},
-		DetectUnprivilegedContainer: func() (bool, string) { return false, "" },
-	}
-	c := backup.NewCollectorWithDeps(logging.New(types.LogLevelError, false), cc, tempDir, types.ProxmoxVE, false, deps)
-	if err := c.CollectSystemInfo(context.Background()); err != nil {
-		t.Fatalf("CollectSystemInfo: %v", err)
+		// Every command exists and prints nothing, except sqlite3: the stub would
+		// "succeed" without writing the config.db snapshot, so it is reported missing
+		// and the collector falls back to the raw copy it makes on any real host
+		// without the tool.
+		deps := backup.CollectorDeps{
+			LookPath: func(name string) (string, error) {
+				if name == "sqlite3" {
+					return "", errors.New("not installed")
+				}
+				return "/usr/bin/" + name, nil
+			},
+			RunCommand: func(context.Context, string, ...string) ([]byte, error) { return []byte{}, nil },
+			RunCommandWithEnv: func(context.Context, []string, string, ...string) ([]byte, error) {
+				return []byte{}, nil
+			},
+			RunCommandCaptured: func(context.Context, []string, string, ...string) ([]byte, []byte, error) {
+				return []byte{}, nil, nil
+			},
+			DetectUnprivilegedContainer: func() (bool, string) { return false, "" },
+		}
+		tempDir := t.TempDir()
+		c := backup.NewCollectorWithDeps(logging.New(types.LogLevelError, false), cc, tempDir, r.role, false, deps)
+		if err := r.collect(c, context.Background()); err != nil {
+			t.Fatalf("%s recipe: %v", r.name, err)
+		}
+		tempDirs = append(tempDirs, tempDir)
 	}
 
+	// The PVE recipe names its targets after the absolute source path
+	// (targetPathFor), so under SYSTEM_ROOT_PREFIX a file lands below the prefix; on
+	// a host without one that is the natural path. Both count as collected here.
+	rootRel := strings.TrimPrefix(filepath.ToSlash(root), "/")
 	var missing []string
 	for p, file := range planted {
-		if _, err := os.Lstat(filepath.Join(tempDir, filepath.FromSlash(file))); err != nil {
+		found := false
+		for _, dir := range tempDirs {
+			for _, rel := range []string{file, rootRel + "/" + file} {
+				if _, err := os.Lstat(filepath.Join(dir, filepath.FromSlash(rel))); err == nil {
+					found = true
+				}
+			}
+		}
+		if !found {
 			missing = append(missing, p+" (planted "+file+")")
 		}
 	}
 	sort.Strings(missing)
 	if len(missing) > 0 {
-		t.Errorf("%d common category path(s) no system collector produces:\n  %s", len(missing), strings.Join(missing, "\n  "))
+		t.Errorf("%d category path(s) no collector produces:\n  %s", len(missing), strings.Join(missing, "\n  "))
 	}
 }
