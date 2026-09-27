@@ -233,7 +233,7 @@ var notes = []Note{
 		},
 		Actions: []string{
 			"With DRY_RUN=true in backup.env, a restore from the CLI or the dashboard is refused until DRY_RUN is set to false",
-			"A PBS host once restored in FULL from a PVE+PBS archive can hold /var/lib/pve-cluster/config.db and be detected as dual",
+			"A PBS host holding /var/lib/pve-cluster/config.db from an old FULL restore is collected as PBS again, with a note",
 		},
 	},
 }

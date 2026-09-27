@@ -3,6 +3,7 @@ package environment
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/tis24dev/proxsave/internal/types"
@@ -98,12 +99,57 @@ func TestDetectWithPrefixSkipsCommandProbes(t *testing.T) {
 	}
 }
 
-// TestDetectWithPrefixPVEViaClusterDB locks the golden offline marker: a mounted
-// host whose /etc/pve pmxcfs bind is absent (only the persistent
-// /var/lib/pve-cluster/config.db present) must still detect as PVE. This is the
-// exact mp1-missing mount shape the host-backup mount-shape warning targets.
-func TestDetectWithPrefixPVEViaClusterDB(t *testing.T) {
+// TestDetectWithPrefixClusterDBAloneIsResidue: config.db is created by pmxcfs, owned
+// by no package and kept by pve-cluster's postrm even on purge, so on its own it proves
+// PVE was once here, not that it is installed. Measured on PVE 9.2.2 with every PVE
+// package purged: config.db was the only PVE file left. The mp1-missing host-backup
+// shape does not reach this rung: mp0 carries /usr and the dpkg status, which decide
+// first (TestDetectWithPrefixPVEViaClusterDBAndBinary).
+func TestDetectWithPrefixClusterDBAloneIsResidue(t *testing.T) {
 	root := t.TempDir()
+	writeFile(t, filepath.Join(root, "var/lib/pve-cluster/config.db"), "SQLite format 3\x00")
+
+	info, err := DetectWith(DetectOptions{RootPrefix: root})
+	if err == nil {
+		t.Fatalf("config.db alone must not detect Proxmox, got Type = %v", info.Type)
+	}
+	want := "cluster-db (" + filepath.Join(root, "var/lib/pve-cluster/config.db") + ")"
+	if info.PVEResidual != want {
+		t.Fatalf("PVEResidual = %q, want %q", info.PVEResidual, want)
+	}
+	if !strings.Contains(err.Error(), want) {
+		t.Fatalf("error %q does not name the residue %q", err, want)
+	}
+}
+
+// TestDetectWithPrefixPBSHostWithClusterDB is the shape a FULL restore of a PVE+PBS
+// archive leaves on a PBS-only host: config.db written, no PVE package. It is a PBS
+// host with a PVE leftover, not a dual host.
+func TestDetectWithPrefixPBSHostWithClusterDB(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, filepath.Join(root, "usr/sbin/proxmox-backup-manager"), "\x7fELF")
+	writeFile(t, filepath.Join(root, "var/lib/pve-cluster/config.db"), "SQLite format 3\x00")
+
+	info, err := DetectWith(DetectOptions{RootPrefix: root})
+	if err != nil {
+		t.Fatalf("DetectWith: %v", err)
+	}
+	if info.Type != types.ProxmoxBS {
+		t.Fatalf("Type = %v, want ProxmoxBS", info.Type)
+	}
+	want := "cluster-db (" + filepath.Join(root, "var/lib/pve-cluster/config.db") + ")"
+	if info.PVEResidual != want {
+		t.Fatalf("PVEResidual = %q, want %q", info.PVEResidual, want)
+	}
+}
+
+// TestDetectWithPrefixPVEViaClusterDBAndBinary: a real PVE whose dpkg status cannot
+// be read still has the binaries its packages ship, so demoting config.db costs it
+// nothing. The mp1-missing host-backup mount (mp0 = / without the /etc/pve bind)
+// carries /usr, so this is its shape.
+func TestDetectWithPrefixPVEViaClusterDBAndBinary(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, filepath.Join(root, "usr/bin/pmxcfs"), "\x7fELF")
 	writeFile(t, filepath.Join(root, "var/lib/pve-cluster/config.db"), "SQLite format 3\x00")
 
 	info, err := DetectWith(DetectOptions{RootPrefix: root})
@@ -112,6 +158,9 @@ func TestDetectWithPrefixPVEViaClusterDB(t *testing.T) {
 	}
 	if info.Type != types.ProxmoxVE {
 		t.Fatalf("Type = %v, want ProxmoxVE", info.Type)
+	}
+	if info.PVEResidual != "" {
+		t.Fatalf("PVEResidual = %q, want empty on an installed PVE", info.PVEResidual)
 	}
 }
 
