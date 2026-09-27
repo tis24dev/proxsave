@@ -1515,21 +1515,6 @@ func TestParseSystemSettingsHostBackupMode(t *testing.T) {
 	})
 }
 
-func TestParseSystemSettingsSystemDefaults(t *testing.T) {
-	// Defaults to true like the sibling system collectors, so an existing
-	// backup.env without the variable collects /etc/default after an upgrade.
-	cfg := &Config{raw: map[string]string{}}
-	cfg.parseSystemSettings()
-	if !cfg.BackupSystemDefaults {
-		t.Fatal("BACKUP_SYSTEM_DEFAULTS must default to true")
-	}
-	off := &Config{raw: map[string]string{"BACKUP_SYSTEM_DEFAULTS": "false"}}
-	off.parseSystemSettings()
-	if off.BackupSystemDefaults {
-		t.Fatal("explicit BACKUP_SYSTEM_DEFAULTS=false must disable collection")
-	}
-}
-
 func TestParseSystemSettingsScriptRepositoryDefaultsFalse(t *testing.T) {
 	// A config missing the key must default to false, matching the shipped template
 	// (#69), so it does not silently snapshot /opt/proxsave.

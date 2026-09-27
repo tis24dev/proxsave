@@ -403,24 +403,11 @@ func (c *Collector) collectSystemServicesStatic(ctx context.Context) error {
 		c.logger.Debug("No /etc/systemd/system found")
 	}
 
-	return nil
-}
-
-// collectSystemDefaultsStatic collects /etc/default and the udev rules, which the
-// services restore category writes straight to the live system, and keeps the boot
-// configuration for reference only. GRUB settings and the kernel command line carry
-// host-specific tokens (root device, IOMMU, ESP UUIDs) that can leave another host
-// unbootable, so they go under proxsave-info, which every restore mode treats as
-// export-only, and never sit at ./etc/default/grub where services would write them.
-func (c *Collector) collectSystemDefaultsStatic(ctx context.Context) error {
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	if !c.config.BackupSystemDefaults {
-		return nil
-	}
-
-	c.logger.Debug("Collecting service defaults, udev rules and boot configuration")
+	// /etc/default and the udev rules are restored by the services category, which
+	// writes them straight to the live system. GRUB settings carry host-specific
+	// tokens (root device, IOMMU) that can leave another host unbootable, so they go
+	// under proxsave-info, which every restore mode treats as export-only, and never
+	// sit at ./etc/default/grub where services would write them.
 	stagedDefault := filepath.Join(c.tempDir, "etc/default")
 	if err := c.safeCopyDir(ctx,
 		c.systemPath("/etc/default"),
@@ -437,15 +424,6 @@ func (c *Collector) collectSystemDefaultsStatic(ctx context.Context) error {
 		filepath.Join(c.tempDir, "etc/udev/rules.d"),
 		"Udev rules"); err != nil {
 		c.logger.Debug("No /etc/udev/rules.d found")
-	}
-
-	for _, name := range []string{"cmdline", "proxmox-boot-uuids"} {
-		if err := c.safeCopyFile(ctx,
-			c.systemPath(filepath.Join("/etc/kernel", name)),
-			c.proxsaveInfoDir("boot", "etc", "kernel", name),
-			"Kernel "+name); err != nil {
-			c.logger.Debug("No /etc/kernel/%s found", name)
-		}
 	}
 
 	return nil
@@ -571,6 +549,18 @@ func (c *Collector) collectSystemKernelModuleStatic(ctx context.Context) error {
 		filepath.Join(c.tempDir, "etc/modprobe.d"),
 		"Modprobe.d directory"); err != nil {
 		c.logger.Debug("No /etc/modprobe.d found")
+	}
+
+	// The kernel command line and the ESP list are kept for reference only, under
+	// proxsave-info: the command line carries the root device and the ESP UUIDs belong
+	// to the disks of this host.
+	for _, name := range []string{"cmdline", "proxmox-boot-uuids"} {
+		if err := c.safeCopyFile(ctx,
+			c.systemPath(filepath.Join("/etc/kernel", name)),
+			c.proxsaveInfoDir("boot", "etc", "kernel", name),
+			"Kernel "+name); err != nil {
+			c.logger.Debug("No /etc/kernel/%s found", name)
+		}
 	}
 
 	return nil

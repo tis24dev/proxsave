@@ -79,7 +79,7 @@ var coherenceExceptions = map[string]string{
 // Every path a common restore category lists must be produced by the system
 // recipe: a category path no collector fills restores nothing, silently. That is
 // how ./etc/default/ and ./etc/udev/rules.d/ sat in "services" from the first Go
-// commit until BACKUP_SYSTEM_DEFAULTS.
+// commit until the services brick collected them.
 func TestCommonCategoryPathsAreCollected(t *testing.T) {
 	root := t.TempDir()
 	tempDir := t.TempDir()

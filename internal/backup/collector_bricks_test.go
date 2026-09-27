@@ -392,7 +392,6 @@ func TestNewSystemRecipeOrder(t *testing.T) {
 		brickSystemAptStatic,
 		brickSystemCronStatic,
 		brickSystemServicesStatic,
-		brickSystemDefaultsStatic,
 		brickSystemLoggingStatic,
 		brickSystemSSLStatic,
 		brickSystemSysctlStatic,

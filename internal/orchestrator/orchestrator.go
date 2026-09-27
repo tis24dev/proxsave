@@ -1210,7 +1210,6 @@ func applyCollectorOverrides(cc *backup.CollectorConfig, cfg *config.Config) {
 	cc.BackupAptSources = cfg.BackupAptSources
 	cc.BackupCronJobs = cfg.BackupCronJobs
 	cc.BackupSystemdServices = cfg.BackupSystemdServices
-	cc.BackupSystemDefaults = cfg.BackupSystemDefaults
 	cc.BackupSSLCerts = cfg.BackupSSLCerts
 	cc.BackupSysctlConfig = cfg.BackupSysctlConfig
 	cc.BackupKernelModules = cfg.BackupKernelModules

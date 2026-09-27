@@ -1596,13 +1596,10 @@ BACKUP_APT_SOURCES=true            # /etc/apt/sources.list*
 # Cron jobs
 BACKUP_CRON_JOBS=true              # /etc/crontab, /etc/cron.*
 
-# Systemd services
-BACKUP_SYSTEMD_SERVICES=true       # /etc/systemd/system
-
-# Service defaults and udev rules, restored with the services category. GRUB settings
-# (/etc/default/grub, grub.d) and /etc/kernel/cmdline, proxmox-boot-uuids are kept for
-# reference only under /var/lib/proxsave-info/boot/, which a restore never writes to the system
-BACKUP_SYSTEM_DEFAULTS=true        # /etc/default, /etc/udev/rules.d/
+# Systemd services, service defaults and udev rules, restored with the services category.
+# GRUB settings (/etc/default/grub, grub.d) are kept for reference only under
+# /var/lib/proxsave-info/boot/, which a restore never writes to the system
+BACKUP_SYSTEMD_SERVICES=true       # /etc/systemd/system, /etc/default, /etc/udev/rules.d/
 
 # SSL certificates
 BACKUP_SSL_CERTS=true              # /etc/ssl/certs, /etc/pve/local/pve-ssl.*
@@ -1610,8 +1607,9 @@ BACKUP_SSL_CERTS=true              # /etc/ssl/certs, /etc/pve/local/pve-ssl.*
 # Sysctl configuration
 BACKUP_SYSCTL_CONFIG=true          # /etc/sysctl.conf, /etc/sysctl.d/
 
-# Kernel modules
-BACKUP_KERNEL_MODULES=true         # /etc/modules, /etc/modprobe.d/
+# Kernel modules. /etc/kernel/cmdline and /etc/kernel/proxmox-boot-uuids are kept for
+# reference only under /var/lib/proxsave-info/boot/, which a restore never writes to the system
+BACKUP_KERNEL_MODULES=true         # /etc/modules, /etc/modprobe.d/, /etc/kernel/cmdline
 
 # Firewall rules (the dashboard form's "Backup firewall rules" toggle writes this one)
 BACKUP_FIREWALL_RULES=false        # iptables, nftables

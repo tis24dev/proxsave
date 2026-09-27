@@ -10,8 +10,8 @@ import (
 	"github.com/tis24dev/proxsave/internal/types"
 )
 
-// writeDefaultsFixture plants the files collectSystemDefaultsStatic reads, under a
-// fake system root, including the /dev/null udev mask a stock PVE 9 ships.
+// writeDefaultsFixture plants the boot and service-default files the system recipe
+// reads, under a fake system root, including the /dev/null udev mask a stock PVE 9 ships.
 func writeDefaultsFixture(t *testing.T, root string) {
 	t.Helper()
 	files := map[string]string{
@@ -37,15 +37,32 @@ func writeDefaultsFixture(t *testing.T, root string) {
 	}
 }
 
-func newDefaultsCollector(t *testing.T, root string, enabled bool) (*Collector, string) {
+// collectDefaults runs the real system recipe over root with every command stubbed
+// (present, empty output), so what reaches tempDir is what the two variables that
+// govern these files let through: BACKUP_SYSTEMD_SERVICES for /etc/default and the
+// udev rules, BACKUP_KERNEL_MODULES for /etc/kernel.
+func collectDefaults(t *testing.T, root string, services, kernelModules bool, customPaths ...string) (*Collector, string) {
 	t.Helper()
 	tempDir := t.TempDir()
 	cfg := GetDefaultCollectorConfig()
 	cfg.SystemRootPrefix = root
-	cfg.BackupSystemDefaults = enabled
+	cfg.BackupSystemdServices = services
+	cfg.BackupKernelModules = kernelModules
+	cfg.CustomBackupPaths = customPaths
 	c := NewCollectorWithDeps(logging.New(types.LogLevelError, false), cfg, tempDir, types.ProxmoxVE, false, CollectorDeps{
+		LookPath:   func(name string) (string, error) { return "/usr/bin/" + name, nil },
+		RunCommand: func(context.Context, string, ...string) ([]byte, error) { return []byte{}, nil },
+		RunCommandWithEnv: func(context.Context, []string, string, ...string) ([]byte, error) {
+			return []byte{}, nil
+		},
+		RunCommandCaptured: func(context.Context, []string, string, ...string) ([]byte, []byte, error) {
+			return []byte{}, nil, nil
+		},
 		DetectUnprivilegedContainer: func() (bool, string) { return false, "" },
 	})
+	if err := c.CollectSystemInfo(context.Background()); err != nil {
+		t.Fatalf("CollectSystemInfo: %v", err)
+	}
 	return c, tempDir
 }
 
@@ -60,14 +77,10 @@ func assertStaged(t *testing.T, tempDir, rel string, want bool) {
 // The services restore category writes ./etc/default/ straight to the live system,
 // so the GRUB files must never sit there: they are kept under proxsave-info, which
 // every restore mode treats as export-only.
-func TestCollectSystemDefaultsStaticRoutesBootFilesToProxsaveInfo(t *testing.T) {
+func TestSystemRecipeRoutesBootFilesToProxsaveInfo(t *testing.T) {
 	root := t.TempDir()
 	writeDefaultsFixture(t, root)
-	c, tempDir := newDefaultsCollector(t, root, true)
-
-	if err := c.collectSystemDefaultsStatic(context.Background()); err != nil {
-		t.Fatalf("collectSystemDefaultsStatic: %v", err)
-	}
+	_, tempDir := collectDefaults(t, root, true, true)
 
 	assertStaged(t, tempDir, "etc/default/zfs", true)
 	assertStaged(t, tempDir, "etc/default/pve-ha-manager", true)
@@ -89,28 +102,46 @@ func TestCollectSystemDefaultsStaticRoutesBootFilesToProxsaveInfo(t *testing.T) 
 	}
 }
 
-func TestCollectSystemDefaultsStaticDisabledCollectsNothing(t *testing.T) {
+// BACKUP_SYSTEMD_SERVICES governs /etc/default (GRUB reference copy included) and the
+// udev rules; the /etc/kernel files follow BACKUP_KERNEL_MODULES.
+func TestBackupSystemdServicesGatesDefaultsAndUdevRules(t *testing.T) {
 	root := t.TempDir()
 	writeDefaultsFixture(t, root)
-	c, tempDir := newDefaultsCollector(t, root, false)
+	_, tempDir := collectDefaults(t, root, false, true)
 
-	if err := c.collectSystemDefaultsStatic(context.Background()); err != nil {
-		t.Fatalf("collectSystemDefaultsStatic: %v", err)
-	}
-
-	for _, rel := range []string{"etc/default", "etc/udev", "etc/kernel", "var/lib/proxsave-info/boot"} {
+	for _, rel := range []string{"etc/default", "etc/udev", "var/lib/proxsave-info/boot/etc/default"} {
 		assertStaged(t, tempDir, rel, false)
 	}
+	assertStaged(t, tempDir, "var/lib/proxsave-info/boot/etc/kernel/cmdline", true)
+	assertStaged(t, tempDir, "var/lib/proxsave-info/boot/etc/kernel/proxmox-boot-uuids", true)
+}
+
+// BACKUP_KERNEL_MODULES governs /etc/kernel/cmdline and proxmox-boot-uuids, next to
+// /etc/modules and /etc/modprobe.d.
+func TestBackupKernelModulesGatesKernelBootFiles(t *testing.T) {
+	root := t.TempDir()
+	writeDefaultsFixture(t, root)
+	_, tempDir := collectDefaults(t, root, true, false)
+
+	assertStaged(t, tempDir, "var/lib/proxsave-info/boot/etc/kernel", false)
+	assertStaged(t, tempDir, "etc/kernel", false)
+	assertStaged(t, tempDir, "etc/default/zfs", true)
+	assertStaged(t, tempDir, "var/lib/proxsave-info/boot/etc/default/grub", true)
 }
 
 // A GRUB host on LVM has no /etc/kernel at all (measured on pve-test), and a
 // minimal system may have no udev rules: neither is a warning.
-func TestCollectSystemDefaultsStaticMissingSourcesAreQuiet(t *testing.T) {
+func TestMissingBootSourcesAreQuiet(t *testing.T) {
 	root := t.TempDir()
-	c, _ := newDefaultsCollector(t, root, true)
-
-	if err := c.collectSystemDefaultsStatic(context.Background()); err != nil {
-		t.Fatalf("collectSystemDefaultsStatic: %v", err)
+	cfg := GetDefaultCollectorConfig()
+	cfg.SystemRootPrefix = root
+	c := NewCollectorWithDeps(logging.New(types.LogLevelError, false), cfg, t.TempDir(), types.ProxmoxVE, false, CollectorDeps{
+		DetectUnprivilegedContainer: func() (bool, string) { return false, "" },
+	})
+	for _, collect := range []func(context.Context) error{c.collectSystemServicesStatic, c.collectSystemKernelModuleStatic} {
+		if err := collect(context.Background()); err != nil {
+			t.Fatal(err)
+		}
 	}
 	if n := c.logger.WarningCount(); n != 0 {
 		t.Fatalf("missing sources produced %d warning(s)", n)
@@ -123,18 +154,7 @@ func TestCollectSystemDefaultsStaticMissingSourcesAreQuiet(t *testing.T) {
 func TestCollectSystemInfoCustomBackupPathsKeepsGrubInPlace(t *testing.T) {
 	root := t.TempDir()
 	writeDefaultsFixture(t, root)
-	c, tempDir := newDefaultsCollector(t, root, true)
-	c.config.CustomBackupPaths = []string{"/etc/default"}
-	c.deps.LookPath = func(name string) (string, error) { return "/usr/bin/" + name, nil }
-	c.deps.RunCommand = func(context.Context, string, ...string) ([]byte, error) { return []byte{}, nil }
-	c.deps.RunCommandWithEnv = func(context.Context, []string, string, ...string) ([]byte, error) { return []byte{}, nil }
-	c.deps.RunCommandCaptured = func(context.Context, []string, string, ...string) ([]byte, []byte, error) {
-		return []byte{}, nil, nil
-	}
-
-	if err := c.CollectSystemInfo(context.Background()); err != nil {
-		t.Fatalf("CollectSystemInfo: %v", err)
-	}
+	_, tempDir := collectDefaults(t, root, true, true, "/etc/default")
 
 	assertStaged(t, tempDir, "etc/default/grub", true)
 	assertStaged(t, tempDir, "var/lib/proxsave-info/boot/etc/default/grub", true)

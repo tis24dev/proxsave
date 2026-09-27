@@ -333,7 +333,6 @@ type Config struct {
 	BackupAptSources        bool
 	BackupCronJobs          bool
 	BackupSystemdServices   bool
-	BackupSystemDefaults    bool
 	BackupSSLCerts          bool
 	BackupSysctlConfig      bool
 	BackupKernelModules     bool
@@ -1012,7 +1011,6 @@ func (c *Config) parseSystemSettings() {
 	c.BackupAptSources = c.getBool("BACKUP_APT_SOURCES", true)
 	c.BackupCronJobs = c.getBoolWithFallback([]string{"BACKUP_CRON_JOBS", "BACKUP_CRONTABS"}, true)
 	c.BackupSystemdServices = c.getBool("BACKUP_SYSTEMD_SERVICES", true)
-	c.BackupSystemDefaults = c.getBool("BACKUP_SYSTEM_DEFAULTS", true)
 	c.BackupSSLCerts = c.getBool("BACKUP_SSL_CERTS", true)
 	c.BackupSysctlConfig = c.getBool("BACKUP_SYSCTL_CONFIG", true)
 	c.BackupKernelModules = c.getBool("BACKUP_KERNEL_MODULES", true)
