@@ -45,8 +45,11 @@ func (w *restoreUIWorkflowRun) extractNormalCategories() error {
 		return nil
 	}
 
+	if err := w.decideHostidRestore(restoreEntryMatchesCategories(hostidArchivePath, categories)); err != nil {
+		return err
+	}
 	detailedLogPath, err := extractSelectiveArchiveWith(w.ctx, w.prepared.ArchivePath, w.destRoot, categories, w.mode, w.logger, selectiveExtraction{
-		skipFn:      func(name string) bool { return isBootNeverLivePath(normalizeArchiveEntryPath(name)) },
+		skipFn:      w.skipSystemPathEntry,
 		onExtracted: w.recordBootRebuildInput,
 	})
 	if err != nil {
@@ -58,6 +61,13 @@ func (w *restoreUIWorkflowRun) extractNormalCategories() error {
 	}
 	w.detailedLogPath = detailedLogPath
 	return nil
+}
+
+// skipSystemPathEntry keeps from the live system what must never reach it: the old
+// host's boot files, and its /etc/hostid when decideHostidRestore said so.
+func (w *restoreUIWorkflowRun) skipSystemPathEntry(name string) bool {
+	clean := normalizeArchiveEntryPath(name)
+	return isBootNeverLivePath(clean) || (w.skipHostid && clean == hostidArchivePath)
 }
 
 func (w *restoreUIWorkflowRun) systemExtractionCategories() []Category {

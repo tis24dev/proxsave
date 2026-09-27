@@ -42,6 +42,11 @@ func (w *restoreUIWorkflowRun) runFullRestore() error {
 	}
 	defer cleanupServices()
 
+	// This fallback writes every entry, /etc/hostid included when the archive holds it.
+	if err := w.decideHostidRestore(true); err != nil {
+		return err
+	}
+
 	// Built only now: the flow reads the plan for its export-only skip list, so it
 	// must not be constructed before the plan exists.
 	return newFullRestoreUIFlow(w).extract()

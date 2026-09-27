@@ -544,34 +544,41 @@ func rebuildBootAfterRestore(ctx context.Context, logger *logging.Logger, target
 	return warned, nil
 }
 
-// readBackedUpKernelCmdline extracts the backed-up host's /proc/cmdline from the
-// archive into a temporary directory and returns it.
+// readBackedUpKernelCmdline returns the backed-up host's /proc/cmdline, or "" when
+// the archive does not hold it.
 func readBackedUpKernelCmdline(ctx context.Context, logger *logging.Logger, archivePath string) (string, error) {
-	dir, err := restoreFS.MkdirTemp("", "proxsave-boot-")
+	data, _, err := readArchiveFile(ctx, logger, archivePath, bootKernelCmdlineArchivePath)
+	return string(data), err
+}
+
+// readArchiveFile extracts one archive entry into a temporary directory and returns
+// its content; found is false when the archive does not hold it.
+func readArchiveFile(ctx context.Context, logger *logging.Logger, archivePath, entry string) (data []byte, found bool, err error) {
+	dir, err := restoreFS.MkdirTemp("", "proxsave-read-")
 	if err != nil {
-		return "", fmt.Errorf("create temporary directory: %w", err)
+		return nil, false, fmt.Errorf("create temporary directory: %w", err)
 	}
 	defer func() {
 		if err := restoreFS.RemoveAll(dir); err != nil {
-			logger.Debug("Failed to remove temporary boot directory %s: %v", dir, err)
+			logger.Debug("Failed to remove temporary directory %s: %v", dir, err)
 		}
 	}()
 	err = extractArchiveNative(ctx, restoreArchiveOptions{
 		archivePath: archivePath,
 		destRoot:    dir,
 		logger:      logger,
-		categories:  []Category{{ID: "boot_cmdline_source", Paths: []string{bootKernelCmdlineArchivePath}}},
+		categories:  []Category{{ID: "read_archive_file", Paths: []string{entry}}},
 		mode:        RestoreModeCustom,
 	})
 	if err != nil {
-		return "", err
+		return nil, false, err
 	}
-	data, err := restoreFS.ReadFile(filepath.Join(dir, strings.TrimPrefix(bootKernelCmdlineArchivePath, "./")))
+	data, err = restoreFS.ReadFile(filepath.Join(dir, normalizeArchiveEntryPath(entry)))
 	if err != nil {
 		if os.IsNotExist(err) {
-			return "", nil
+			return nil, false, nil
 		}
-		return "", err
+		return nil, false, err
 	}
-	return string(data), nil
+	return data, true, nil
 }
