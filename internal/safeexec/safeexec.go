@@ -155,6 +155,9 @@ var allowedCommandFactories = map[string]commandFactory{
 	"proxmox-backup-manager": func(ctx context.Context, args ...string) *exec.Cmd {
 		return withArgs(exec.CommandContext(ctx, "proxmox-backup-manager"), args...)
 	},
+	"proxmox-boot-tool": func(ctx context.Context, args ...string) *exec.Cmd {
+		return withArgs(exec.CommandContext(ctx, "proxmox-boot-tool"), args...)
+	},
 	"proxmox-mail-forward": func(ctx context.Context, args ...string) *exec.Cmd {
 		return withArgs(exec.CommandContext(ctx, "proxmox-mail-forward"), args...)
 	},
@@ -226,6 +229,12 @@ var allowedCommandFactories = map[string]commandFactory{
 	},
 	"umount": func(ctx context.Context, args ...string) *exec.Cmd {
 		return withArgs(exec.CommandContext(ctx, "umount"), args...)
+	},
+	"update-grub": func(ctx context.Context, args ...string) *exec.Cmd {
+		return withArgs(exec.CommandContext(ctx, "update-grub"), args...)
+	},
+	"update-initramfs": func(ctx context.Context, args ...string) *exec.Cmd {
+		return withArgs(exec.CommandContext(ctx, "update-initramfs"), args...)
 	},
 	"uname": func(ctx context.Context, args ...string) *exec.Cmd {
 		return withArgs(exec.CommandContext(ctx, "uname"), args...)

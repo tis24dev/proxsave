@@ -7,6 +7,8 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/tis24dev/proxsave/internal/safeexec"
 )
 
 // Command lines measured on the two reference hosts (todo-boot-config section 7 and
@@ -327,5 +329,30 @@ func TestDetectBootTarget(t *testing.T) {
 				t.Fatal("an unrecognized bootloader must carry the reason")
 			}
 		})
+	}
+}
+
+// Every command the boot category and the ZFS host-file checks run must pass the
+// safeexec allowlist the production runner goes through: the fakes these tests use
+// accept any name, so a command missing from the list fails only on a real host,
+// with "command not allowed".
+func TestBootAndZFSCommandsAreAllowedBySafeexec(t *testing.T) {
+	var names []string
+	for _, target := range []bootTarget{
+		{kind: bootLoaderGRUB},
+		{kind: bootLoaderGRUB, proxmoxBootTool: true},
+		{kind: bootLoaderSystemdBoot, proxmoxBootTool: true},
+		{kind: bootLoaderUnknown},
+	} {
+		for _, argv := range bootRebuildCommands(target) {
+			names = append(names, argv[0])
+		}
+	}
+	// detectBootTarget and listImportedZFSPools.
+	names = append(names, "proxmox-boot-tool", "which", "zpool")
+	for _, name := range names {
+		if _, err := safeexec.CommandContext(context.Background(), name, "--version"); err != nil {
+			t.Errorf("%s: %v", name, err)
+		}
 	}
 }
