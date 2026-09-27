@@ -4,9 +4,13 @@ import (
 	"context"
 	"encoding/binary"
 	"encoding/hex"
+	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -76,24 +80,25 @@ func listImportedZFSPools(ctx context.Context) ([]string, error) {
 	return pools, nil
 }
 
-// decideZFSHostFiles sets skipHostid and skipZFSCaches before an extraction that
-// would write the backup's /etc/hostid (writesHostid) or its pool cache files
-// (writesCaches) over this host. The archive is read once for all of them, and the
-// pools are listed only when the archive holds one of the files.
-func (w *restoreUIWorkflowRun) decideZFSHostFiles(writesHostid, writesCaches bool) error {
-	w.skipHostid, w.skipZFSCaches = false, false
-	if !writesHostid && !writesCaches {
+// decideZFSHostFiles sets skipHostid, skipZFSCaches and skipZFSConf before an
+// extraction that would write the backup's /etc/hostid (writesHostid), its pool cache
+// files (writesCaches) or its /etc/modprobe.d/zfs.conf (writesZFSConf) over this host.
+// The archive is read once for all of them, and the pools are listed only when the
+// archive holds the hostid or a cache file.
+func (w *restoreUIWorkflowRun) decideZFSHostFiles(writesHostid, writesCaches, writesZFSConf bool) error {
+	w.skipHostid, w.skipZFSCaches, w.skipZFSConf = false, false, false
+	if !writesHostid && !writesCaches && !writesZFSConf {
 		return nil
 	}
 	dir, cleanup, err := extractArchiveSubset(w.ctx, w.logger, w.prepared.ArchivePath,
-		[]string{"./" + hostidArchivePath, "./" + zfsHostCachePaths[0], "./" + zfsHostCachePaths[1] + "/"})
+		[]string{"./" + hostidArchivePath, "./" + zfsHostCachePaths[0], "./" + zfsHostCachePaths[1] + "/", "./" + zfsARCConfArchivePath})
 	if err != nil {
 		if restoreAbortOrInput(err) || w.ctx.Err() != nil {
 			return err
 		}
-		w.skipHostid, w.skipZFSCaches = writesHostid, writesCaches
+		w.skipHostid, w.skipZFSCaches, w.skipZFSConf = writesHostid, writesCaches, writesZFSConf
 		w.restoreHadWarnings = true
-		w.logger.Warning("ZFS host files - backup /etc/hostid and pool cache not written: cannot read them from the backup (%v)", err)
+		w.logger.Warning("ZFS host files - backup /etc/hostid, pool cache and zfs.conf not written: cannot read them from the backup (%v)", err)
 		return nil
 	}
 	defer cleanup()
@@ -105,8 +110,12 @@ func (w *restoreUIWorkflowRun) decideZFSHostFiles(writesHostid, writesCaches boo
 			caches = append(caches, filepath.Base(p))
 		}
 	}
+	backupConf, confFound, _ := readExtractedFile(dir, zfsARCConfArchivePath)
 	checkHostid := writesHostid && hostidFound
 	checkCaches := writesCaches && len(caches) > 0
+	if writesZFSConf && confFound {
+		w.decideZFSARCConf(backupConf)
+	}
 	if !checkHostid && !checkCaches {
 		return nil
 	}
@@ -158,4 +167,66 @@ func zfsCacheRestoreDecision(pools []string, listErr error) (write bool, reason 
 	sort.Strings(sorted)
 	return false, fmt.Sprintf("pools %s are imported on this host, and at boot zfs-import-cache stops on another host's list",
 		strings.Join(sorted, ", "))
+}
+
+// The services category restores /etc/modprobe.d, and with it zfs.conf, where the PVE
+// installer writes zfs_arc_max as 10% of the RAM it finds. Measured: 3184 MiB on a
+// 31.1 GiB host and 6403 MiB on a 62.5 GiB one, a file no package owns. Written onto a
+// new machine, the old machine's limit caps the ARC on more RAM and takes memory from
+// the guests on less, and the boot rebuild makes it hold from the first boot. A host
+// with its own zfs.conf keeps it; one without gets the backup's, the only limit anyone
+// chose for it. A kept backup copy goes to the export directory.
+const zfsARCConfArchivePath = "etc/modprobe.d/zfs.conf"
+
+// zfsARCConfRestoreDecision reports whether the backup's zfs.conf may be written: when
+// it changes nothing, or when this host has none of its own.
+func zfsARCConfRestoreDecision(backup, live []byte, liveFound bool) bool {
+	return !liveFound || string(backup) == string(live)
+}
+
+var zfsARCMaxOption = regexp.MustCompile(`(?m)^[ \t]*options[ \t]+zfs[ \t].*\bzfs_arc_max=([0-9]+)`)
+
+// formatZFSARCMax renders the zfs_arc_max a zfs.conf sets, in MiB, or "not set".
+func formatZFSARCMax(conf []byte) string {
+	m := zfsARCMaxOption.FindSubmatch(conf)
+	if m == nil {
+		return "not set"
+	}
+	n, err := strconv.ParseUint(string(m[1]), 10, 64)
+	if err != nil {
+		return string(m[1])
+	}
+	return fmt.Sprintf("%d MiB", n>>20)
+}
+
+// decideZFSARCConf sets skipZFSConf when this host has a zfs.conf of its own that
+// differs from the backup's. A live file that exists but cannot be read counts as
+// this host's own: keeping it never changes the host.
+func (w *restoreUIWorkflowRun) decideZFSARCConf(backup []byte) {
+	live, err := restoreFS.ReadFile(filepath.Join(w.destRoot, zfsARCConfArchivePath))
+	liveFound := err == nil || !errors.Is(err, os.ErrNotExist)
+	if zfsARCConfRestoreDecision(backup, live, liveFound) {
+		return
+	}
+	w.skipZFSConf = true
+	w.restoreHadWarnings = true
+	w.logger.Warning("ZFS ARC limit - backup /%s not written: this host keeps its own (zfs_arc_max %s here, %s in the backup)%s",
+		zfsARCConfArchivePath, formatZFSARCMax(live), formatZFSARCMax(backup), w.exportKeptHostFile(zfsARCConfArchivePath, backup))
+}
+
+// exportKeptHostFile writes a backup file this host kept its own copy of into the
+// export directory, so the old value stays at hand, and returns the clause naming
+// where it went, or why it did not.
+func (w *restoreUIWorkflowRun) exportKeptHostFile(entry string, data []byte) string {
+	if w.exportRoot == "" {
+		w.exportRoot = exportDestRoot(w.cfg.BaseDir)
+	}
+	dest := filepath.Join(w.exportRoot, entry)
+	if err := restoreFS.MkdirAll(filepath.Dir(dest), 0o700); err != nil {
+		return fmt.Sprintf("; its copy could not be exported (%v)", err)
+	}
+	if err := restoreFS.WriteFile(dest, data, 0o644); err != nil {
+		return fmt.Sprintf("; its copy could not be exported (%v)", err)
+	}
+	return "; the backup's copy is in " + dest
 }

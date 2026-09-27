@@ -51,10 +51,11 @@ type restoreUIWorkflowRun struct {
 	// bootRebuildInputsWritten holds the bootRebuildInputs the system-path
 	// extraction wrote to, in the order first seen.
 	bootRebuildInputsWritten []string
-	// skipHostid and skipZFSCaches keep the backup's /etc/hostid and pool cache files
-	// off this host (decideZFSHostFiles).
+	// skipHostid, skipZFSCaches and skipZFSConf keep the backup's /etc/hostid, pool
+	// cache files and zfs.conf off this host (decideZFSHostFiles).
 	skipHostid    bool
 	skipZFSCaches bool
+	skipZFSConf   bool
 }
 
 func newRestoreUIWorkflowRun(ctx context.Context, cfg *config.Config, logger *logging.Logger, version string, ui RestoreWorkflowUI, runHostname string) *restoreUIWorkflowRun {

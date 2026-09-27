@@ -143,8 +143,8 @@ func TestZFSRestoreKeepsHostidWhenPoolsCannotBeListed(t *testing.T) {
 	}
 }
 
-// The analysis-failure fallback applies the same rules to /etc/hostid and the pool
-// cache.
+// The analysis-failure fallback applies the same rules to /etc/hostid, the pool cache
+// and zfs.conf.
 func TestFullRestoreFallbackKeepsZFSHostFilesWhenPoolsAreImported(t *testing.T) {
 	origRestoreFS, origRestoreCmd, origRestoreSystem := restoreFS, restoreCmd, restoreSystem
 	origCompatFS, origPrepare, origAnalyze, origSafetyFS := compatFS, prepareRestoreBundleFunc, analyzeRestoreArchiveFunc, safetyFS
@@ -167,10 +167,14 @@ func TestFullRestoreFallbackKeepsZFSHostFilesWhenPoolsAreImported(t *testing.T) 
 	if err := fakeFS.AddFile("/etc/zfs/zpool.cache", []byte("this host's cache\n")); err != nil {
 		t.Fatal(err)
 	}
+	if err := fakeFS.AddFile("/etc/modprobe.d/zfs.conf", []byte(thisHostZFSConf)); err != nil {
+		t.Fatal(err)
+	}
 	if err := writeTarFile(tmpTar, map[string]string{
-		"etc/hosts":           "127.0.0.1 localhost\n",
-		"etc/hostid":          string(oldHostHostid),
-		"etc/zfs/zpool.cache": "old host's cache\n",
+		"etc/hosts":               "127.0.0.1 localhost\n",
+		"etc/hostid":              string(oldHostHostid),
+		"etc/zfs/zpool.cache":     "old host's cache\n",
+		"etc/modprobe.d/zfs.conf": oldHostZFSConf,
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -199,6 +203,9 @@ func TestFullRestoreFallbackKeepsZFSHostFilesWhenPoolsAreImported(t *testing.T) 
 	}
 	if got, _ := fakeFS.ReadFile("/etc/zfs/zpool.cache"); string(got) != "this host's cache\n" {
 		t.Fatalf("/etc/zfs/zpool.cache overwritten: %q", got)
+	}
+	if got, _ := fakeFS.ReadFile("/etc/modprobe.d/zfs.conf"); string(got) != thisHostZFSConf {
+		t.Fatalf("/etc/modprobe.d/zfs.conf overwritten: %q", got)
 	}
 }
 
@@ -271,5 +278,137 @@ func TestZFSRestoreWritesPoolCacheWithoutImportedPools(t *testing.T) {
 	}
 	if got := r.read(t, "/etc/zfs/zfs-list.cache/rpool"); got != "old host's mount list\n" {
 		t.Fatalf("zfs-list.cache/rpool = %q, want the backup's", got)
+	}
+}
+
+// zfs.conf as the PVE installer wrote it on two real hosts: 10% of 31.1 GiB and of
+// 62.5 GiB of RAM.
+const (
+	oldHostZFSConf  = "options zfs zfs_arc_max=3338665984\n"
+	thisHostZFSConf = "options zfs zfs_arc_max=6714032128\n"
+)
+
+func TestFormatZFSARCMax(t *testing.T) {
+	for _, tc := range []struct {
+		in   string
+		want string
+	}{
+		{oldHostZFSConf, "3184 MiB"},
+		{thisHostZFSConf, "6403 MiB"},
+		{"options zfs zfs_arc_min=1073741824 zfs_arc_max=8589934592\n", "8192 MiB"},
+		{"# options zfs zfs_arc_max=8589934592\n", "not set"},
+		{"", "not set"},
+	} {
+		if got := formatZFSARCMax([]byte(tc.in)); got != tc.want {
+			t.Errorf("formatZFSARCMax(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+}
+
+func TestZFSARCConfRestoreDecision(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		live      string
+		liveFound bool
+		write     bool
+	}{
+		{name: "same file", live: oldHostZFSConf, liveFound: true, write: true},
+		{name: "this host has none", write: true},
+		{name: "this host has its own", live: thisHostZFSConf, liveFound: true},
+		{name: "this host has an empty one", live: "", liveFound: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := zfsARCConfRestoreDecision([]byte(oldHostZFSConf), []byte(tc.live), tc.liveFound); got != tc.write {
+				t.Fatalf("write = %v, want %v", got, tc.write)
+			}
+		})
+	}
+}
+
+func runServicesRestore(t *testing.T, live map[string]string) bootRestoreRun {
+	t.Helper()
+	archive := map[string]string{
+		"etc/modprobe.d/zfs.conf":      oldHostZFSConf,
+		"etc/modprobe.d/vfio-pci.conf": "options vfio-pci disable_idle_d3=1\n",
+	}
+	return runBootRestore(t, live, archive, nil, nil, RestoreModeCustom, "services")
+}
+
+// A new host installed with ZFS has the installer's limit for its own RAM: it keeps
+// it, and the old host's goes to the export directory with a warning naming both.
+func TestServicesRestoreKeepsThisHostsZFSConf(t *testing.T) {
+	r := runServicesRestore(t, map[string]string{"/etc/modprobe.d/zfs.conf": thisHostZFSConf})
+	if r.err != nil {
+		t.Fatalf("restore: %v", r.err)
+	}
+	if got := r.read(t, "/etc/modprobe.d/zfs.conf"); got != thisHostZFSConf {
+		t.Fatalf("/etc/modprobe.d/zfs.conf overwritten with %q", got)
+	}
+	if got := r.read(t, "/etc/modprobe.d/vfio-pci.conf"); got != "options vfio-pci disable_idle_d3=1\n" {
+		t.Fatalf("control: the rest of /etc/modprobe.d must be restored: %q", got)
+	}
+	exported, _ := filepath.Glob(filepath.Join(r.fs.Root, "base", "proxmox-config-export-*", "etc", "modprobe.d", "zfs.conf"))
+	if len(exported) != 1 {
+		t.Fatalf("expected one exported zfs.conf, found %v", exported)
+	}
+	if data, _ := os.ReadFile(exported[0]); string(data) != oldHostZFSConf {
+		t.Fatalf("exported zfs.conf = %q, want the backup's", data)
+	}
+	want := "ZFS ARC limit - backup /etc/modprobe.d/zfs.conf not written: this host keeps its own (zfs_arc_max 6403 MiB here, 3184 MiB in the backup); the backup's copy is in /base/proxmox-config-export-"
+	if !strings.Contains(r.log, want) {
+		t.Fatalf("log misses %q:\n%s", want, r.log)
+	}
+	if !strings.Contains(r.log, "Restore completed with warnings.") {
+		t.Fatalf("a kept zfs.conf is a warning:\n%s", r.log)
+	}
+}
+
+// A host without a zfs.conf of its own gets the backup's: it is the only limit anyone
+// chose for it.
+func TestServicesRestoreWritesZFSConfWhenHostHasNone(t *testing.T) {
+	r := runServicesRestore(t, nil)
+	if r.err != nil {
+		t.Fatalf("restore: %v", r.err)
+	}
+	if got := r.read(t, "/etc/modprobe.d/zfs.conf"); got != oldHostZFSConf {
+		t.Fatalf("/etc/modprobe.d/zfs.conf = %q, want the backup's", got)
+	}
+	if strings.Contains(r.log, "ZFS ARC limit") {
+		t.Fatalf("no warning expected when this host has no zfs.conf:\n%s", r.log)
+	}
+}
+
+// tickingTime moves one second forward on every read, as a real clock does between two
+// steps of a restore.
+type tickingTime struct{ current time.Time }
+
+func (c *tickingTime) Now() time.Time {
+	now := c.current
+	c.current = c.current.Add(time.Second)
+	return now
+}
+
+// The kept zfs.conf and the export-only categories share one export directory. The
+// export directory name carries the time, so computing it twice would split them.
+func TestServicesRestoreExportsKeptZFSConfWithTheExportCategories(t *testing.T) {
+	bootRestoreClock = &tickingTime{current: time.Date(2026, 9, 27, 10, 0, 0, 0, time.UTC)}
+	t.Cleanup(func() { bootRestoreClock = nil })
+	archive := map[string]string{
+		"etc/modprobe.d/zfs.conf":            oldHostZFSConf,
+		"var/lib/proxsave-info/commands.txt": "diagnostics\n",
+	}
+	r := runBootRestore(t, map[string]string{"/etc/modprobe.d/zfs.conf": thisHostZFSConf}, archive, nil, nil,
+		RestoreModeCustom, "services", "proxsave_info")
+	if r.err != nil {
+		t.Fatalf("restore: %v", r.err)
+	}
+	dirs, _ := filepath.Glob(filepath.Join(r.fs.Root, "base", "proxmox-config-export-*"))
+	if len(dirs) != 1 {
+		t.Fatalf("expected one export directory, found %v", dirs)
+	}
+	for _, entry := range []string{"etc/modprobe.d/zfs.conf", "var/lib/proxsave-info/commands.txt"} {
+		if _, err := os.Stat(filepath.Join(dirs[0], entry)); err != nil {
+			t.Fatalf("%s missing from the export directory: %v", entry, err)
+		}
 	}
 }

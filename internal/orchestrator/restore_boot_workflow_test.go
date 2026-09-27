@@ -63,6 +63,10 @@ type bootRestoreRun struct {
 
 // runBootRestore runs the real restore workflow on a PVE host whose live files are
 // live, from an archive holding archive, with commands answered by outputs/errs.
+// bootRestoreClock, when set, replaces the fixed restore clock of runBootRestore, for a
+// test that needs time to move between two reads of it.
+var bootRestoreClock TimeProvider
+
 func runBootRestore(t *testing.T, live, archive, outputs map[string]string, errs map[string]error, mode RestoreMode, categoryIDs ...string) bootRestoreRun {
 	t.Helper()
 	origRestoreFS, origRestoreCmd, origRestoreSystem := restoreFS, restoreCmd, restoreSystem
@@ -79,6 +83,9 @@ func runBootRestore(t *testing.T, live, archive, outputs map[string]string, errs
 	restoreFS, compatFS, safetyFS = fakeFS, fakeFS, fakeFS
 	fakeNow := &FakeTime{Current: time.Date(2026, 9, 27, 10, 0, 0, 0, time.UTC)}
 	restoreTime, safetyNow = fakeNow, fakeNow.Now
+	if bootRestoreClock != nil {
+		restoreTime = bootRestoreClock
+	}
 	restoreSystem = fakeSystemDetector{systemType: SystemTypePVE}
 
 	for path, content := range live {

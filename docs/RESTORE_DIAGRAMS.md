@@ -74,7 +74,7 @@ flowchart TD
     UnmountPVE --> DeferRestart[Defer Service Restart]
     DeferRestart --> ZFSHostFiles
 
-    CheckCluster -->|No| ZFSHostFiles["ZFS host files check (zfs selected):<br/>keep this host's /etc/hostid and<br/>pool cache when it has pools imported"]
+    CheckCluster -->|No| ZFSHostFiles["ZFS host files check (zfs or services selected):<br/>keep this host's /etc/hostid and<br/>pool cache when it has pools imported,<br/>and its own zfs.conf ARC limit"]
     ZFSHostFiles --> ExtractNormal["Extract Normal Categories<br/>(the old host's GRUB settings,<br/>kernel cmdline, ESP list: never)"]
     ExtractNormal --> ExtractExport{Export Categories?}
     ExtractExport -->|Yes| ExtractToExport[Extract to Export Dir]

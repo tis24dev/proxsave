@@ -228,7 +228,7 @@ var notes = []Note{
 			"New boot category, in FULL: old kernel parameters join this host's; old GRUB and kernel cmdline are never written",
 			"A restore keeps its safety backup, rollback archives, logs and diagnostics in /var/lib/proxsave/restore, past a reboot",
 			"A restore deletes its staging directory, which holds decrypted secrets, when it ends, whether it succeeded or failed",
-			"A restore keeps this host's /etc/hostid and ZFS pool cache when the host already has ZFS pools imported",
+			"A restore keeps this host's /etc/hostid and ZFS pool cache when it has pools imported, and its own ZFS ARC limit",
 			"Hosts with PVE removed or a leftover config.db are backed up again; a missing version reads unknown, not vunknown",
 		},
 		Actions: []string{

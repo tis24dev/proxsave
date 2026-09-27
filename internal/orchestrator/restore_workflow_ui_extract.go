@@ -47,7 +47,8 @@ func (w *restoreUIWorkflowRun) extractNormalCategories() error {
 
 	writesCaches := restoreEntryMatchesCategories(zfsHostCachePaths[0], categories) ||
 		restoreEntryMatchesCategories(zfsHostCachePaths[1]+"/", categories)
-	if err := w.decideZFSHostFiles(restoreEntryMatchesCategories(hostidArchivePath, categories), writesCaches); err != nil {
+	if err := w.decideZFSHostFiles(restoreEntryMatchesCategories(hostidArchivePath, categories), writesCaches,
+		restoreEntryMatchesCategories(zfsARCConfArchivePath, categories)); err != nil {
 		return err
 	}
 	detailedLogPath, err := extractSelectiveArchiveWith(w.ctx, w.prepared.ArchivePath, w.destRoot, categories, w.mode, w.logger, selectiveExtraction{
@@ -66,13 +67,14 @@ func (w *restoreUIWorkflowRun) extractNormalCategories() error {
 }
 
 // skipSystemPathEntry keeps from the live system what must never reach it: the old
-// host's boot files, and its /etc/hostid and pool cache files when
+// host's boot files, and its /etc/hostid, pool cache files and zfs.conf when
 // decideZFSHostFiles said so.
 func (w *restoreUIWorkflowRun) skipSystemPathEntry(name string) bool {
 	clean := normalizeArchiveEntryPath(name)
 	return isBootNeverLivePath(clean) ||
 		(w.skipHostid && clean == hostidArchivePath) ||
-		(w.skipZFSCaches && isZFSHostCachePath(clean))
+		(w.skipZFSCaches && isZFSHostCachePath(clean)) ||
+		(w.skipZFSConf && clean == zfsARCConfArchivePath)
 }
 
 func (w *restoreUIWorkflowRun) systemExtractionCategories() []Category {
@@ -166,7 +168,11 @@ func (w *restoreUIWorkflowRun) exportCategories() error {
 	if len(w.plan.ExportCategories) == 0 {
 		return nil
 	}
-	w.exportRoot = exportDestRoot(w.cfg.BaseDir)
+	// decideZFSHostFiles may already have exported a kept host file here: one
+	// directory per restore.
+	if w.exportRoot == "" {
+		w.exportRoot = exportDestRoot(w.cfg.BaseDir)
+	}
 	w.logger.Info("")
 	w.logger.Info("Exporting %d export-only category(ies) to: %s", len(w.plan.ExportCategories), w.exportRoot)
 	if err := restoreFS.MkdirAll(w.exportRoot, 0o700); err != nil {
