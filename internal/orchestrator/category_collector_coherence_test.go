@@ -74,6 +74,8 @@ var coherenceExceptions = map[string]string{
 	"./etc/proxmox-backup/proxy.pem": "collected by the PBS recipe, not the system one",
 	"./etc/proxmox-backup/proxy.key": "collected by the PBS recipe, not the system one",
 	"./etc/proxmox-backup/ssl/":      "collected by the PBS recipe, not the system one",
+	"./etc/default/grub":             "boot: the live file the merge writes, listed so the safety backup covers it; GRUB settings are collected under proxsave-info/boot",
+	"./etc/kernel/cmdline":           "boot: the live file the merge writes, listed so the safety backup covers it; the kernel command line is collected under proxsave-info/boot",
 }
 
 // Every path a common restore category lists must be produced by the system

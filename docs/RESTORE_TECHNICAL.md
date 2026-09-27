@@ -321,8 +321,11 @@ instead of line numbers, which drift on every edit):
 
 10. **Post-Restore** (`runPostRestoreApplyWorkflows()` in `restore_workflow_ui_run.go` →
     `recreateStorageDirectories()` / `applyNetworkConfig()` / `applyFirewallConfig()` /
-    `applyHAConfig()`; then `logRestoreCompletion()` and `checkZFSPoolsAfterRestore()`):
+    `applyHAConfig()`; then `applyBootConfiguration()`, `logRestoreCompletion()` and
+    `checkZFSPoolsAfterRestore()`):
     - Recreate storage/datastore directories
+    - Merge the kernel command line and rebuild initramfs and bootloader (only when the
+      `boot` category is selected; see Safety Mechanisms, 3b)
     - Check ZFS pools (only when the `zfs` category is selected; no-op if `zpool` is absent)
     - Display completion summary
 
@@ -355,7 +358,7 @@ type Category struct {
 **Key Functions**:
 
 1. **`GetAllCategories()`** (`categories.go`):
-   - Returns the complete list: 32 categories covering 143 archive paths
+   - Returns the complete list: 33 categories covering 146 archive paths
    - Hardcoded category definitions
    - Each category includes ID, name, description, paths
 
@@ -1640,6 +1643,17 @@ When restoring to the real system root (`/`), ProxSave avoids blindly overwritin
 **Normalization**:
 - Entries written by the merge are normalized to include `nofail` (and `_netdev` for network mounts) to prevent offline storage from blocking boot/restore.
 
+### 3b. Kernel Command Line Merge (`boot` category)
+
+`interceptBootCategory` takes `boot` out of the system-path extraction, like `filesystem`: its archive path is the backed-up host's `/proc/cmdline` (`var/lib/proxsave-info/commands/system/kernel_cmdline.txt`), which is read, not restored. `applyBootConfiguration` runs once, after `runPostRestoreApplyWorkflows` (`restore_workflow_ui_boot.go`, engine in `restore_boot.go`):
+
+1. `readBackedUpKernelCmdline` extracts the source into a temporary directory.
+2. `detectBootTarget` recognizes the live bootloader, or returns `bootLoaderUnknown` with the reason: no `/etc/kernel/proxmox-boot-uuids` means GRUB when `/etc/default/grub`, `/boot/grub/grub.cfg` and `update-grub` exist; with it, `proxmox-boot-tool status` must report every ESP with the same single mode (`uefi` is systemd-boot and needs a one-line `/etc/kernel/cmdline` with `root=`; `grub` needs `/etc/default/grub`). The mode per ESP follows proxmox-kernel-helper (`zz-proxmox-boot`: `EFI/proxmox/grubx64.efi` on the ESP means GRUB, then `update-grub` reads `/etc/default/grub`).
+3. `mergeKernelCmdline` (pure) carries every source parameter except `root`, `boot`, `ro`, `rw`, `BOOT_IMAGE`, `initrd` and what follows `--`; a key the target sets stays the target's (keys compare with `-` and `_` as one character). `setGrubCmdlineDefault` rewrites only the value of one plain, literal `GRUB_CMDLINE_LINUX_DEFAULT` assignment; a drop-in in `/etc/default/grub.d/` that names the variable stops the write.
+4. `rebuildBootAfterRestore` runs `update-initramfs -u -k all`, then `proxmox-boot-tool refresh` (with `/etc/kernel/proxmox-boot-uuids`) or `update-grub` (neither on `bootLoaderUnknown`), when a file changed or the system-path extraction wrote a `bootRebuildInputs` path (`etc/modprobe.d`, `etc/modules`, `etc/hostid`, `etc/zfs`, recorded through `restoreArchiveOptions.onExtracted`). Failures are warnings; the commands have no timeout of their own, since an interrupted `update-initramfs` leaves a truncated initrd.
+
+`bootNeverLivePaths` (`etc/kernel/proxmox-boot-uuids`) is dropped by the system-path extraction (`skipFn`) and by the full-restore fallback (`skipPath`).
+
 ### 4. PBS Datastore Mount Guards (Offline Storage)
 
 For PBS datastores whose paths live under typical mount roots (for example `/mnt/...`), ProxSave aims for a "restore even if offline" behavior:
@@ -2234,7 +2248,7 @@ The restore system is built on these technical foundations:
 - **Comprehensive error handling** with graceful degradation
 
 **Total Implementation**:
-- **32 categories** covering **143 archive paths**
+- **33 categories** covering **146 archive paths**
 - **4 restore modes**: FULL, STORAGE/DATASTORE, SYSTEM BASE, CUSTOM
 - **10-phase workflow** with comprehensive logging
 

@@ -445,6 +445,21 @@ func GetAllCategories() []Category {
 			},
 		},
 		{
+			ID:   "boot",
+			Name: "Boot Configuration (Kernel Command Line)",
+			Description: "Kernel parameters of the backed-up host (IOMMU, VFIO, ...) added to this host's boot configuration; " +
+				"initramfs and bootloader rebuilt",
+			Type: CategoryTypeCommon,
+			Paths: []string{
+				// The source: the backed-up host's /proc/cmdline. The two live files the
+				// merge may write are listed so the safety backup covers them; the archive
+				// never holds them at these paths (they are kept under proxsave-info/boot).
+				bootKernelCmdlineArchivePath,
+				"./etc/default/grub",
+				"./etc/kernel/cmdline",
+			},
+		},
+		{
 			ID:          "proxsave_info",
 			Name:        "ProxSave Diagnostics (Export Only)",
 			Description: "ProxSave command outputs and inventory reports (export-only; never written to system paths)",

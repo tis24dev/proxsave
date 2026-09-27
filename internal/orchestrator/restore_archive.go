@@ -115,6 +115,19 @@ func extractSelectiveArchive(ctx context.Context, archivePath, destRoot string, 
 // error. The staged restore path passes failOnPartial=true so an incomplete
 // stage is never applied to the live system; best-effort callers pass false.
 func extractSelectiveArchiveStrict(ctx context.Context, archivePath, destRoot string, categories []Category, mode RestoreMode, logger *logging.Logger, failOnPartial bool) (logPath string, err error) {
+	return extractSelectiveArchiveWith(ctx, archivePath, destRoot, categories, mode, logger, selectiveExtraction{failOnPartial: failOnPartial})
+}
+
+// selectiveExtraction holds the optional behaviour of extractSelectiveArchiveWith.
+type selectiveExtraction struct {
+	failOnPartial bool
+	// skipFn drops matching entries before they are written.
+	skipFn func(entryName string) bool
+	// onExtracted is called with the name of every entry written.
+	onExtracted func(entryName string)
+}
+
+func extractSelectiveArchiveWith(ctx context.Context, archivePath, destRoot string, categories []Category, mode RestoreMode, logger *logging.Logger, opt selectiveExtraction) (logPath string, err error) {
 	done := logging.DebugStart(logger, "extract selective archive", "archive=%s dest=%s categories=%d mode=%s", archivePath, destRoot, len(categories), mode)
 	defer func() { done(err) }()
 	if err := restoreFS.MkdirAll(destRoot, 0o755); err != nil {
@@ -162,7 +175,9 @@ func extractSelectiveArchiveStrict(ctx context.Context, archivePath, destRoot st
 		mode:                    mode,
 		logFile:                 logFile,
 		logFilePath:             logPath,
-		failOnPartialExtraction: failOnPartial,
+		skipFn:                  opt.skipFn,
+		failOnPartialExtraction: opt.failOnPartial,
+		onExtracted:             opt.onExtracted,
 	}); err != nil {
 		return logPath, err
 	}

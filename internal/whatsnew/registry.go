@@ -225,10 +225,11 @@ var notes = []Note{
 			"A restore under dry-run (--dry-run or DRY_RUN=true) is now refused: it used to modify the live system anyway",
 			"A FULL restore on a PVE-only or PBS-only host exports the other product's categories instead of writing them",
 			"Backups now include /etc/default and udev rules, which the restore listed but no backup ever saved",
-			"GRUB settings and /etc/kernel/cmdline are saved for reference only, under proxsave-info: a restore never writes them",
+			"GRUB settings, /etc/kernel/cmdline and the ESP list are saved under proxsave-info; a restore never writes those copies",
 			"A restore writes its safety backup, rollback archives and logs to /var/lib/proxsave/restore, which survives a reboot",
 			"A restore deletes its staging directory, which holds decrypted secrets, when it ends, whether it succeeded or failed",
 			"A restore also keeps its NIC repair copy, network diagnostics and deferred datastore list in /var/lib/proxsave/restore",
+			"New boot restore category, in FULL: the old host's kernel parameters (IOMMU, VFIO) join this host's boot configuration",
 		},
 		Actions: []string{
 			"With DRY_RUN=true in backup.env, a restore from the CLI or the dashboard is refused until DRY_RUN is set to false",

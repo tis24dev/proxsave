@@ -45,7 +45,10 @@ func (w *restoreUIWorkflowRun) extractNormalCategories() error {
 		return nil
 	}
 
-	detailedLogPath, err := extractSelectiveArchive(w.ctx, w.prepared.ArchivePath, w.destRoot, categories, w.mode, w.logger)
+	detailedLogPath, err := extractSelectiveArchiveWith(w.ctx, w.prepared.ArchivePath, w.destRoot, categories, w.mode, w.logger, selectiveExtraction{
+		skipFn:      func(name string) bool { return isBootNeverLivePath(normalizeArchiveEntryPath(name)) },
+		onExtracted: w.recordBootRebuildInput,
+	})
 	if err != nil {
 		w.logger.Error("Restore failed: %v", err)
 		if w.safetyBackup != nil {

@@ -38,6 +38,8 @@ type restoreArchiveOptions struct {
 	// partial extraction is reported as a warning); the staged restore path sets
 	// it true so an incomplete stage is never applied to the live system (BH-002).
 	failOnPartialExtraction bool
+	// onExtracted, when set, is called with the name of every entry written.
+	onExtracted func(entryName string)
 }
 
 type restoreExtractionStats struct {
@@ -203,6 +205,9 @@ func processRestoreArchiveEntries(ctx context.Context, tarReader *tar.Reader, op
 		stats.filesExtracted++
 		extractedSet[dedupCleanArchivePath(header.Name)] = true
 		extractionLog.recordRestored(header.Name)
+		if opts.onExtracted != nil {
+			opts.onExtracted(header.Name)
+		}
 		if stats.filesExtracted%100 == 0 {
 			opts.logger.Debug("Extracted %d files...", stats.filesExtracted)
 		}

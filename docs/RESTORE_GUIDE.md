@@ -165,6 +165,7 @@ ProxSave warns because role-specific compatibility cannot be verified.
 - Custom scripts and cron jobs
 - ZFS configurations and pool cache
 - Backup jobs and scheduled tasks
+- Kernel parameters set on the backed-up host (IOMMU, VFIO, ...), merged into the restore host's boot configuration (`boot` category)
 
 ### What Does NOT Get Restored
 
@@ -178,10 +179,10 @@ ProxSave warns because role-specific compatibility cannot be verified.
 ## Category System
 
 Restore operations are organized into categories that group related configuration
-files. The code defines **32 categories** in total: **11 PVE**, **9 PBS**, and **12
-Common**. A host only sees the categories relevant to it: a **PVE host sees 23** (11
-PVE + 12 Common) and a **PBS host sees 21** (9 PBS + 12 Common); a `dual` host sees all
-32.
+files. The code defines **33 categories** in total: **11 PVE**, **9 PBS**, and **13
+Common**. A host only sees the categories relevant to it: a **PVE host sees 24** (11
+PVE + 13 Common) and a **PBS host sees 22** (9 PBS + 13 Common); a `dual` host sees all
+33.
 
 ### Category Handling Types
 
@@ -227,7 +228,7 @@ API apply is automatic for supported PBS staged categories, and file-based fallb
 | `pbs_access_control` | PBS Access Control | **Staged** access control + secrets restored 1:1 (root@pam safety rail) | `./etc/proxmox-backup/user.cfg`<br>`./etc/proxmox-backup/domains.cfg`<br>`./etc/proxmox-backup/acl.cfg`<br>`./etc/proxmox-backup/token.cfg`<br>`./etc/proxmox-backup/shadow.json`<br>`./etc/proxmox-backup/token.shadow`<br>`./etc/proxmox-backup/tfa.json`<br>`./var/lib/proxsave-info/commands/pbs/user_list.json`<br>`./var/lib/proxsave-info/commands/pbs/realms_ldap.json`<br>`./var/lib/proxsave-info/commands/pbs/realms_ad.json`<br>`./var/lib/proxsave-info/commands/pbs/realms_openid.json`<br>`./var/lib/proxsave-info/commands/pbs/acl_list.json` |
 | `pbs_tape` | PBS Tape Backup | **Staged** tape config, jobs and encryption keys | `./etc/proxmox-backup/tape.cfg`<br>`./etc/proxmox-backup/tape-job.cfg`<br>`./etc/proxmox-backup/media-pool.cfg`<br>`./etc/proxmox-backup/tape-encryption-keys.json`<br>`./var/lib/proxsave-info/commands/pbs/tape_drives.json`<br>`./var/lib/proxsave-info/commands/pbs/tape_changers.json`<br>`./var/lib/proxsave-info/commands/pbs/tape_pools.json` |
 
-### Common Categories (12 categories)
+### Common Categories (13 categories)
 
 | Category | Name | Description | Paths |
 |----------|------|-------------|-------|
@@ -242,6 +243,7 @@ API apply is automatic for supported PBS staged categories, and file-based fallb
 | `accounts` | System Accounts & Auth (WARNING) | Local system accounts and sudo policy, applied with a **safe merge** for `passwd`/`group`/`shadow`/`gshadow` that preserves the current host root and system accounts. `/etc/sudoers` is **replaced wholesale** with the backed-up file once `visudo -c` passes, so sudo rules added since the backup are lost; `/etc/sudoers.d` is not part of the category | `./etc/passwd`<br>`./etc/group`<br>`./etc/shadow`<br>`./etc/gshadow`<br>`./etc/sudoers` |
 | `user_data` | User Data (Home Directories) | Root and user home directories (/root and /home) | `./root/`<br>`./home/` |
 | `zfs` | ZFS Configuration | ZFS pool cache and configs | `./etc/zfs/`<br>`./etc/hostid` |
+| `boot` | Boot Configuration (Kernel Command Line) | Kernel parameters of the backed-up host (IOMMU, VFIO, ...) **merged** into this host's boot configuration, then initramfs and bootloader rebuilt; see [Kernel Command Line Merge](#11-kernel-command-line-merge-boot-category). Not in BASE or STORAGE | `./var/lib/proxsave-info/commands/system/kernel_cmdline.txt` (the source)<br>`./etc/default/grub`, `./etc/kernel/cmdline` (the live files the merge may write, listed so the safety backup covers them) |
 | `proxsave_info` | ProxSave Diagnostics (Export Only) | **Export-only** ProxSave command outputs and inventory reports, and boot configuration kept for reference (GRUB, kernel command line) (never written to system) | `./var/lib/proxsave-info/`<br>`./manifest.json` |
 
 ### Category Availability
@@ -2248,6 +2250,32 @@ Services stopped → Defer restart scheduled → Restore → (Failure) → Defer
 ```
 
 **Prevents**: System left with services stopped after failed restore
+
+### 11. Kernel Command Line Merge (`boot` category)
+
+A restore usually runs on a new machine, whose root device, pool name and ESPs differ from the backed-up host. The `boot` category therefore never writes the old host's boot files: GRUB settings (`/etc/default/grub`, `/etc/default/grub.d/`), `/etc/kernel/cmdline` and `/etc/kernel/proxmox-boot-uuids` are kept in the archive under `var/lib/proxsave-info/boot/` and only reach the export directory. `/etc/kernel/proxmox-boot-uuids` is never written to the live system, in any mode, including the full-restore fallback. One exception is the operator's own choice: with `/etc/default` in `CUSTOM_BACKUP_PATHS`, the archive also holds the GRUB settings at their natural path, and the `services` category writes them as it did before.
+
+**Source**: the backed-up host's effective kernel command line (`/proc/cmdline` at backup time), stored in `var/lib/proxsave-info/commands/system/kernel_cmdline.txt` by every backup.
+
+**Merge rule**:
+- Every parameter is carried except `root=`, `boot=`, `ro`, `rw`, `BOOT_IMAGE=` and `initrd=`, and anything after `--` (arguments for init).
+- A parameter this host already has is not added again. When both hosts set the same parameter with different values, this host's value stays (the kernel treats `-` and `_` in parameter names as the same character, so `vfio-pci.ids` and `vfio_pci.ids` are one parameter).
+
+**Where the parameters are written** (Proxmox VE admin guide, *Host Bootloader*, *Editing the Kernel Commandline*):
+
+| This host | File written | Rebuild |
+|-----------|--------------|---------|
+| GRUB, no `/etc/kernel/proxmox-boot-uuids`; `/etc/default/grub`, `/boot/grub/grub.cfg` and `update-grub` present | the value of `GRUB_CMDLINE_LINUX_DEFAULT` in `/etc/default/grub`, the rest of the file untouched | `update-initramfs -u -k all`, then `update-grub` |
+| `proxmox-boot-tool status` reports every ESP as `uefi` (systemd-boot); `/etc/kernel/cmdline` is one line with `root=` | `/etc/kernel/cmdline` | `update-initramfs -u -k all`, then `proxmox-boot-tool refresh` |
+| `proxmox-boot-tool status` reports every ESP as `grub` | the value of `GRUB_CMDLINE_LINUX_DEFAULT` in `/etc/default/grub` | `update-initramfs -u -k all`, then `proxmox-boot-tool refresh` |
+
+Anything else is not recognized with certainty, and nothing is written: the ESPs disagree, `proxmox-boot-tool status` fails, `GRUB_CMDLINE_LINUX_DEFAULT` is not one plain assignment of a literal value, or a file in `/etc/default/grub.d/` sets it too. The restore logs a warning with the reason and the parameters the backup carries.
+
+**Rebuild**: runs once, at the end of the restore, when the merge changed a file or the restore wrote under `/etc/modprobe.d`, `/etc/modules`, `/etc/hostid` or `/etc/zfs`, which the initramfs copies. On a bootloader not recognized with certainty only `update-initramfs` runs, and the bootloader is left as it is. A failed command is a warning with the command and its error; the next command still runs and the restore goes on.
+
+**Safety backup**: the pre-restore `/etc/default/grub` and `/etc/kernel/cmdline` are in the safety backup, like every other file the restore may write.
+
+**Log**: every step is in the restore log, on lines starting with `Boot configuration -`: the backed-up command line, the bootloader found, the parameters added (or not carried because this host sets them differently), and each command run.
 
 ---
 

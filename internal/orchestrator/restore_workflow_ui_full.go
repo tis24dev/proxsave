@@ -64,10 +64,10 @@ func (f *fullRestoreUIFlow) extract() error {
 	return nil
 }
 
-// skipPath keeps three classes of entry out of a plain extraction: /etc/fstab, which
+// skipPath keeps four classes of entry out of a plain extraction: /etc/fstab, which
 // is merged afterwards instead of overwritten; the PVE cluster database, which this
-// fallback has no safe way to write; and everything belonging to an ExportOnly
-// category. The selective path never writes export-only content to system paths
+// fallback has no safe way to write; the bootNeverLivePaths (the ESP list of the
+// backed-up host); and everything belonging to an ExportOnly category. The selective path never writes export-only content to system paths
 // (splitRestoreCategories routes it to an export directory); before this, the
 // fallback wrote /etc/proxmox-backup/ and /var/lib/proxsave-info/ straight to /.
 //
@@ -81,6 +81,9 @@ func (f *fullRestoreUIFlow) skipPath(name string) bool {
 		return true
 	}
 	if matchesAnyArchivePrefix(clean, clusterDBArchivePaths()) {
+		return true
+	}
+	if isBootNeverLivePath(clean) {
 		return true
 	}
 	return f.isExportOnlyPath(clean)

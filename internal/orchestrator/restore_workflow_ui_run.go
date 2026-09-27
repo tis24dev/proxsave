@@ -45,6 +45,12 @@ type restoreUIWorkflowRun struct {
 	pbsServicesStopped          bool
 	needsPBSServices            bool
 	needsFilesystemRestore      bool
+	// needsBootConfiguration is set when the boot category is selected: it is taken
+	// out of the system-path extraction and applied by applyBootConfiguration.
+	needsBootConfiguration bool
+	// bootRebuildInputsWritten holds the bootRebuildInputs the system-path
+	// extraction wrote to, in the order first seen.
+	bootRebuildInputsWritten []string
 }
 
 func newRestoreUIWorkflowRun(ctx context.Context, cfg *config.Config, logger *logging.Logger, version string, ui RestoreWorkflowUI, runHostname string) *restoreUIWorkflowRun {
@@ -94,6 +100,9 @@ func (w *restoreUIWorkflowRun) runSelectiveRestore() error {
 	if err := w.runPostRestoreApplyWorkflows(); err != nil {
 		return err
 	}
+	if err := w.applyBootConfiguration(); err != nil {
+		return err
+	}
 	w.logRestoreCompletion()
 	w.logServiceRestartAdvice()
 	w.checkZFSPoolsAfterRestore()
@@ -103,6 +112,7 @@ func (w *restoreUIWorkflowRun) runSelectiveRestore() error {
 
 func (w *restoreUIWorkflowRun) prepareAndRestoreSelectedPayloads() error {
 	w.interceptFilesystemCategory()
+	w.interceptBootCategory()
 	if err := w.extractNormalCategories(); err != nil {
 		return err
 	}
