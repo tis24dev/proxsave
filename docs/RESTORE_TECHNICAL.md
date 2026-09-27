@@ -358,7 +358,7 @@ type Category struct {
 **Key Functions**:
 
 1. **`GetAllCategories()`** (`categories.go`):
-   - Returns the complete list: 33 categories covering 146 archive paths
+   - Returns the complete list: 33 categories covering 150 archive paths
    - Hardcoded category definitions
    - Each category includes ID, name, description, paths
 
@@ -1652,7 +1652,7 @@ When restoring to the real system root (`/`), ProxSave avoids blindly overwritin
 3. `mergeKernelCmdline` (pure) carries every source parameter except `root`, `boot`, `ro`, `rw`, `BOOT_IMAGE`, `initrd` and what follows `--`; a key the target sets stays the target's (keys compare with `-` and `_` as one character). `setGrubCmdlineDefault` rewrites only the value of one plain, literal `GRUB_CMDLINE_LINUX_DEFAULT` assignment; a drop-in in `/etc/default/grub.d/` that names the variable stops the write.
 4. `rebuildBootAfterRestore` runs `update-initramfs -u -k all`, then `proxmox-boot-tool refresh` (with `/etc/kernel/proxmox-boot-uuids`) or `update-grub` (neither on `bootLoaderUnknown`), when a file changed or the system-path extraction wrote a `bootRebuildInputs` path (`etc/modprobe.d`, `etc/modules`, `etc/hostid`, `etc/zfs`, recorded through `restoreArchiveOptions.onExtracted`). Failures are warnings; the commands have no timeout of their own, since an interrupted `update-initramfs` leaves a truncated initrd.
 
-`bootNeverLivePaths` (`etc/kernel/proxmox-boot-uuids`) is dropped by the system-path extraction (`skipFn`) and by the full-restore fallback (`skipPath`).
+`bootNeverLivePaths` (`etc/default/grub`, `etc/default/grub.d/`, `etc/kernel/cmdline`, `etc/kernel/proxmox-boot-uuids`) are dropped by the system-path extraction (`skipFn`) and by the full-restore fallback (`skipPath`), whatever category matches them; `proxsave_info` lists the same natural paths, so a copy `CUSTOM_BACKUP_PATHS` puts there is exported.
 
 ### 4. PBS Datastore Mount Guards (Offline Storage)
 
@@ -2248,7 +2248,7 @@ The restore system is built on these technical foundations:
 - **Comprehensive error handling** with graceful degradation
 
 **Total Implementation**:
-- **33 categories** covering **146 archive paths**
+- **33 categories** covering **150 archive paths**
 - **4 restore modes**: FULL, STORAGE/DATASTORE, SYSTEM BASE, CUSTOM
 - **10-phase workflow** with comprehensive logging
 

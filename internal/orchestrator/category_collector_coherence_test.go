@@ -86,9 +86,11 @@ const coherenceRuntimePrefix = "./var/lib/proxsave-info/"
 // coherenceExceptions are category paths no collector copies from the same path on
 // the system, on purpose, each with the reason.
 var coherenceExceptions = map[string]string{
-	"./manifest.json":      "written by the archiver after collection, not copied from the system",
-	"./etc/default/grub":   "boot: the live file the merge writes, listed so the safety backup covers it; GRUB settings are collected under proxsave-info/boot",
-	"./etc/kernel/cmdline": "boot: the live file the merge writes, listed so the safety backup covers it; the kernel command line is collected under proxsave-info/boot",
+	"./manifest.json":                 "written by the archiver after collection, not copied from the system",
+	"./etc/default/grub":              "boot lists the live file the merge writes, for the safety backup; proxsave_info exports a copy CUSTOM_BACKUP_PATHS puts there; collected under proxsave-info/boot",
+	"./etc/kernel/cmdline":            "boot lists the live file the merge writes, for the safety backup; proxsave_info exports a copy CUSTOM_BACKUP_PATHS puts there; collected under proxsave-info/boot",
+	"./etc/default/grub.d/":           "proxsave_info exports a copy CUSTOM_BACKUP_PATHS puts there; collected under proxsave-info/boot",
+	"./etc/kernel/proxmox-boot-uuids": "proxsave_info exports a copy CUSTOM_BACKUP_PATHS puts there; collected under proxsave-info/boot",
 }
 
 // coherenceRecipes are the collections a backup runs, each on its own collector.

@@ -148,9 +148,10 @@ func TestMissingBootSourcesAreQuiet(t *testing.T) {
 	}
 }
 
-// With CUSTOM_BACKUP_PATHS naming /etc/default the operator already chose to have
-// /etc/default/grub restored in place; the custom-path brick runs after the static
-// one, so that choice survives.
+// With CUSTOM_BACKUP_PATHS naming /etc/default the custom-path brick, which runs after
+// the static one, also collects /etc/default/grub at its natural path. The restore
+// never writes that copy to the system (orchestrator bootNeverLivePaths); it exports
+// it with proxsave_info.
 func TestCollectSystemInfoCustomBackupPathsKeepsGrubInPlace(t *testing.T) {
 	root := t.TempDir()
 	writeDefaultsFixture(t, root)

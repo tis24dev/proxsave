@@ -40,18 +40,23 @@ var bootSystemParams = map[string]bool{
 	"initrd":     true,
 }
 
-// bootNeverLivePaths are archive entries no restore writes to the live system,
-// whatever collected them: the ESP list names the partitions of the host that made
-// the backup.
-var bootNeverLivePaths = []string{"etc/kernel/proxmox-boot-uuids"}
+// bootNeverLivePaths are archive entries, and the trees under them, that no restore
+// writes to the live system, whatever collected them: the old host's GRUB settings
+// and kernel command line name its root device and pool, and its ESP list names its
+// partitions. The collector keeps them under proxsave-info/boot; CUSTOM_BACKUP_PATHS
+// can also put them at these natural paths, which proxsave_info exports. Reproduced
+// on a PVE 9.2 VM: the grub.d/zfs.cfg of a ZFS host, written on an LVM host, put a
+// second root= on the command line at the next update-grub, and the boot stopped
+// in the initramfs.
+var bootNeverLivePaths = []string{
+	"etc/default/grub",
+	"etc/default/grub.d",
+	"etc/kernel/cmdline",
+	"etc/kernel/proxmox-boot-uuids",
+}
 
 func isBootNeverLivePath(clean string) bool {
-	for _, p := range bootNeverLivePaths {
-		if clean == p {
-			return true
-		}
-	}
-	return false
+	return matchesAnyArchivePrefix(clean, bootNeverLivePaths)
 }
 
 // bootRebuildInputs are the paths whose restore makes the initramfs stale: module

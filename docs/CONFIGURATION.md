@@ -1665,6 +1665,8 @@ BACKUP_BLACKLIST="
 
 **Format**: Bash-style heredoc, one path per line, `#` for comments.
 
+**Note (boot files)**: a custom path that brings in `/etc/default/grub`, `/etc/default/grub.d/`, `/etc/kernel/cmdline` or `/etc/kernel/proxmox-boot-uuids` is collected, but a restore never writes those files to the system: they name the backed-up host's root device, pool and ESPs, and go to the export directory with `proxsave_info`. The `boot` restore category carries the kernel parameters instead.
+
 ---
 
 ## Related Documentation

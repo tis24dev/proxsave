@@ -430,10 +430,11 @@ func TestBootRestoreRebuildFailureIsAWarning(t *testing.T) {
 	}
 }
 
-// The ESP list names the partitions of the host that made the backup. With
-// CUSTOM_BACKUP_PATHS=/etc/kernel it sits at its natural path in the archive; the
-// analysis-failure fallback extracts everything else, but never that.
-func TestFullRestoreFallbackNeverWritesProxmoxBootUUIDs(t *testing.T) {
+// The old host's boot files name its root device, its pool and its ESPs. With
+// CUSTOM_BACKUP_PATHS naming /etc/default or /etc/kernel they sit at their natural
+// paths in the archive; the analysis-failure fallback extracts everything else, but
+// never those.
+func TestFullRestoreFallbackNeverWritesOldBootFiles(t *testing.T) {
 	origRestoreFS, origRestoreCmd, origRestoreSystem := restoreFS, restoreCmd, restoreSystem
 	origCompatFS, origPrepare, origAnalyze, origSafetyFS := compatFS, prepareRestoreBundleFunc, analyzeRestoreArchiveFunc, safetyFS
 	t.Cleanup(func() {
@@ -453,6 +454,9 @@ func TestFullRestoreFallbackNeverWritesProxmoxBootUUIDs(t *testing.T) {
 	if err := writeTarFile(tmpTar, map[string]string{
 		"etc/hosts":                     "127.0.0.1 localhost\n",
 		"etc/kernel/proxmox-boot-uuids": "936E-9A3F\n",
+		"etc/kernel/cmdline":            mikPve1KernelCmdlin + "\n",
+		"etc/default/grub":              "GRUB_CMDLINE_LINUX_DEFAULT=\"quiet intremap=off\"\n",
+		"etc/default/grub.d/zfs.cfg":    "GRUB_CMDLINE_LINUX=\"$GRUB_CMDLINE_LINUX root=ZFS=rpool/ROOT/pve-1 boot=zfs\"\n",
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -478,6 +482,11 @@ func TestFullRestoreFallbackNeverWritesProxmoxBootUUIDs(t *testing.T) {
 	}
 	if got, _ := fakeFS.ReadFile("/etc/kernel/proxmox-boot-uuids"); string(got) != "AAAA-1111\n" {
 		t.Fatalf("the backed-up ESP list reached the live system: %q", got)
+	}
+	for _, p := range []string{"/etc/kernel/cmdline", "/etc/default/grub", "/etc/default/grub.d/zfs.cfg"} {
+		if _, err := fakeFS.Lstat(p); err == nil {
+			t.Errorf("the old host's %s reached the live system", p)
+		}
 	}
 }
 
@@ -519,5 +528,50 @@ func TestSystemPathExtractionNeverWritesProxmoxBootUUIDs(t *testing.T) {
 	}
 	if _, err := fakeFS.Lstat("/etc/kernel/proxmox-boot-uuids"); err == nil {
 		t.Fatal("the backed-up ESP list reached the live system")
+	}
+}
+
+// With CUSTOM_BACKUP_PATHS naming /etc/default and /etc/kernel, the archive holds the
+// old host's GRUB settings and kernel command line at their natural paths too. On a
+// new machine they name a root that is not there (reproduced on a PVE 9.2 VM: the
+// grub.d/zfs.cfg of a ZFS host put a second root= on an LVM host's command line at
+// the next update-grub, and the boot stopped in the initramfs). None of them reaches
+// the live system; the merge still works on this host's own file.
+func TestBootRestoreNeverWritesOldBootFilesFromCustomPaths(t *testing.T) {
+	archive := mikPve1Archive()
+	archive["etc/default/grub"] = "GRUB_CMDLINE_LINUX_DEFAULT=\"quiet intel_iommu=on iommu=pt pcie_aspm=off intremap=off\"\n"
+	archive["etc/default/grub.d/zfs.cfg"] = "GRUB_CMDLINE_LINUX=\"$GRUB_CMDLINE_LINUX root=ZFS=rpool/ROOT/pve-1 boot=zfs\"\n"
+	archive["etc/kernel/cmdline"] = mikPve1KernelCmdlin + "\n"
+	r := runBootRestore(t, pveTestLive(), archive, grubHostOutputs, nil, RestoreModeCustom, "services", "boot")
+	if r.err != nil {
+		t.Fatalf("restore: %v", r.err)
+	}
+	wantGrub := strings.Replace(stockGrubDefault, `GRUB_CMDLINE_LINUX_DEFAULT="quiet"`,
+		`GRUB_CMDLINE_LINUX_DEFAULT="quiet intel_iommu=on iommu=pt pcie_aspm=off"`, 1)
+	if got := r.read(t, "/etc/default/grub"); got != wantGrub {
+		t.Fatalf("/etc/default/grub must be this host's file plus the merged parameters:\n%s", got)
+	}
+	r.assertAbsent(t, "/etc/default/grub.d/zfs.cfg", "/etc/kernel/cmdline")
+	if got := r.read(t, "/etc/default/zfs"); got != "ZFS_MOUNT=yes\n" {
+		t.Fatalf("control: the rest of /etc/default must still be restored: %q", got)
+	}
+}
+
+// In FULL the old host's boot files at their natural paths reach the export
+// directory with proxsave_info.
+func TestBootRestoreExportsOldBootFilesFromCustomPaths(t *testing.T) {
+	archive := mikPve1Archive()
+	archive["etc/default/grub"] = "GRUB_CMDLINE_LINUX_DEFAULT=\"quiet intremap=off\"\n"
+	archive["etc/default/grub.d/zfs.cfg"] = "GRUB_CMDLINE_LINUX=\"$GRUB_CMDLINE_LINUX root=ZFS=rpool/ROOT/pve-1 boot=zfs\"\n"
+	archive["etc/kernel/cmdline"] = mikPve1KernelCmdlin + "\n"
+	r := runBootRestore(t, pveTestLive(), archive, grubHostOutputs, nil, RestoreModeFull)
+	if r.err != nil {
+		t.Fatalf("restore: %v", r.err)
+	}
+	r.assertAbsent(t, "/etc/default/grub.d/zfs.cfg", "/etc/kernel/cmdline")
+	for _, rel := range []string{"etc/default/grub", "etc/default/grub.d/zfs.cfg", "etc/kernel/cmdline", "etc/kernel/proxmox-boot-uuids"} {
+		if !r.exportHolds(t, rel) {
+			t.Errorf("%s must reach the export directory", rel)
+		}
 	}
 }

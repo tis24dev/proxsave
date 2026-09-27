@@ -452,8 +452,10 @@ func GetAllCategories() []Category {
 			Type: CategoryTypeCommon,
 			Paths: []string{
 				// The source: the backed-up host's /proc/cmdline. The two live files the
-				// merge may write are listed so the safety backup covers them; the archive
-				// never holds them at these paths (they are kept under proxsave-info/boot).
+				// merge may write are listed so the safety backup covers them; the old
+				// host's copies are kept under proxsave-info/boot, and one that
+				// CUSTOM_BACKUP_PATHS puts at these paths is never restored
+				// (bootNeverLivePaths).
 				bootKernelCmdlineArchivePath,
 				"./etc/default/grub",
 				"./etc/kernel/cmdline",
@@ -462,11 +464,18 @@ func GetAllCategories() []Category {
 		{
 			ID:          "proxsave_info",
 			Name:        "ProxSave Diagnostics (Export Only)",
-			Description: "ProxSave command outputs and inventory reports (export-only; never written to system paths)",
+			Description: "ProxSave command outputs and inventory reports, and the backed-up host's boot files (export-only; never written to system paths)",
 			Type:        CategoryTypeCommon,
 			Paths: []string{
 				"./var/lib/proxsave-info/",
 				"./manifest.json",
+				// The backed-up host's boot files at their natural paths, where
+				// CUSTOM_BACKUP_PATHS can put them: never written (bootNeverLivePaths),
+				// exported with the rest of the diagnostics.
+				"./etc/default/grub",
+				"./etc/default/grub.d/",
+				"./etc/kernel/cmdline",
+				"./etc/kernel/proxmox-boot-uuids",
 			},
 			ExportOnly: true,
 		},
