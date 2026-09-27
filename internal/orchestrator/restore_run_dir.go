@@ -32,6 +32,15 @@ func RestoreRunDir() string {
 	return restoreRunDirPath
 }
 
+// rollbackLogProbe is the line every rollback script runs right after it sets LOG. It
+// creates the log 0600 in a subshell, so the umask of the rest of the script, and of
+// what it runs (ifreload and its hooks), stays as it was. If the log cannot be created
+// the script logs to /dev/null instead: the scripts run under `set -eu`, so the first
+// failed write to the log would stop the rollback before it restored anything. That
+// happens when RestoreRunDir's filesystem is full or read-only while the files the
+// rollback restores are still writable, e.g. /var on its own filesystem.
+const rollbackLogProbe = `if ! (umask 077 && : >> "$LOG") 2>/dev/null; then LOG=/dev/null; fi`
+
 // rollbackLogPath places the log of a rollback script in RestoreRunDir. The script
 // can run after ProxSave has exited, and its log is what is left to read after the
 // reboot the restore recommends. Marker and script stay in the work dir: they only

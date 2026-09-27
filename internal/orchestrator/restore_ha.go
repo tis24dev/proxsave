@@ -443,9 +443,7 @@ func buildHARollbackScript(markerPath, backupPath, logPath string) string {
 		"#!/bin/sh",
 		"set -eu",
 		fmt.Sprintf("LOG=%s", shellQuote(logPath)),
-		// Create the log 0600 in a subshell: the umask of the rest of the script, and
-		// of what it runs (ifreload and its hooks), stays as it was.
-		`(umask 077 && : >> "$LOG")`,
+		rollbackLogProbe,
 		fmt.Sprintf("MARKER=%s", shellQuote(markerPath)),
 		fmt.Sprintf("BACKUP=%s", shellQuote(backupPath)),
 		`echo "[INFO] ========================================" >> "$LOG"`,

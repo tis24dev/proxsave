@@ -720,9 +720,7 @@ func buildRollbackScript(markerPath, backupPath, logPath string, restartNetworki
 		"#!/bin/sh",
 		"set -eu",
 		fmt.Sprintf("LOG=%s", shellQuote(logPath)),
-		// Create the log 0600 in a subshell: the umask of the rest of the script, and
-		// of what it runs (ifreload and its hooks), stays as it was.
-		`(umask 077 && : >> "$LOG")`,
+		rollbackLogProbe,
 		fmt.Sprintf("MARKER=%s", shellQuote(markerPath)),
 		fmt.Sprintf("BACKUP=%s", shellQuote(backupPath)),
 		// RUNNING signals that the revert is actually in progress: it is written
