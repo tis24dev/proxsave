@@ -1580,6 +1580,8 @@ a warning naming both variables; the rest of the backup is unaffected.
 
 Set `HOST_BACKUP_MODE=true` only in a privileged LXC that shares the host `/dev/zfs` and owns no independent ZFS pools of its own, otherwise the ZFS inventory could record the container's pools as the host's. The host network inventory relies on the host `/sys/class/net`, so it is only complete if the host sysfs is carried under the prefix (a plain non-recursive bind of `/` does not carry it); when it is absent ProxSave logs that the host sysfs is not available rather than reporting container interfaces.
 
+The PVE cluster database (`/var/lib/pve-cluster/config.db`) is captured with `sqlite3 .backup`, which runs inside the LXC. On a Proxmox host `sqlite3` is always installed (`pve-cluster` depends on it), but in the container it is a separate package: without it ProxSave copies the database raw, which can tear mid-write and miss changes not yet checkpointed, and logs a warning on every run.
+
 ### System Collectors
 
 ```bash
