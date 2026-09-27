@@ -40,6 +40,10 @@ type restoreArchiveOptions struct {
 	failOnPartialExtraction bool
 	// onExtracted, when set, is called with the name of every entry written.
 	onExtracted func(entryName string)
+	// readOnly marks an extraction into a temporary directory that only reads the
+	// archive (extractArchiveSubset). It prints no "Successfully restored" summary:
+	// nothing was restored, and on a real run the lines sat next to the restore's own.
+	readOnly bool
 }
 
 type restoreExtractionStats struct {
@@ -80,7 +84,9 @@ func extractArchiveNative(ctx context.Context, opts restoreArchiveOptions) (err 
 	}
 
 	extractionLog.writeSummary(stats)
-	logRestoreExtractionSummary(opts, stats)
+	if !opts.readOnly {
+		logRestoreExtractionSummary(opts, stats)
+	}
 
 	// Turn deduplicated symlinks back into regular files by rebuilding them from the
 	// archive, so selective restore never leaves a dangling link and full restore

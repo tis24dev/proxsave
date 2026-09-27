@@ -581,6 +581,7 @@ func extractArchiveSubset(ctx context.Context, logger *logging.Logger, archivePa
 		logger:      logger,
 		categories:  []Category{{ID: "read_archive_subset", Paths: paths}},
 		mode:        RestoreModeCustom,
+		readOnly:    true,
 	})
 	if err != nil {
 		cleanup()

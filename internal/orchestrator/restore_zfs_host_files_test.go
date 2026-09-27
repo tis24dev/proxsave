@@ -376,6 +376,12 @@ func TestServicesRestoreWritesZFSConfWhenHostHasNone(t *testing.T) {
 	if strings.Contains(r.log, "ZFS ARC limit") {
 		t.Fatalf("no warning expected when this host has no zfs.conf:\n%s", r.log)
 	}
+	// Reading zfs.conf out of the archive restores nothing: only the real extraction
+	// reports a summary. Measured on a real run, the read printed "Successfully
+	// restored all 3 configuration files/directories" before the restore's own.
+	if got := strings.Count(r.log, "Successfully restored all"); got != 1 {
+		t.Fatalf("%d restore summaries, want 1:\n%s", got, r.log)
+	}
 }
 
 // tickingTime moves one second forward on every read, as a real clock does between two
