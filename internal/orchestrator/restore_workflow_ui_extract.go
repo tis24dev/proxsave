@@ -45,7 +45,9 @@ func (w *restoreUIWorkflowRun) extractNormalCategories() error {
 		return nil
 	}
 
-	if err := w.decideHostidRestore(restoreEntryMatchesCategories(hostidArchivePath, categories)); err != nil {
+	writesCaches := restoreEntryMatchesCategories(zfsHostCachePaths[0], categories) ||
+		restoreEntryMatchesCategories(zfsHostCachePaths[1]+"/", categories)
+	if err := w.decideZFSHostFiles(restoreEntryMatchesCategories(hostidArchivePath, categories), writesCaches); err != nil {
 		return err
 	}
 	detailedLogPath, err := extractSelectiveArchiveWith(w.ctx, w.prepared.ArchivePath, w.destRoot, categories, w.mode, w.logger, selectiveExtraction{
@@ -64,10 +66,13 @@ func (w *restoreUIWorkflowRun) extractNormalCategories() error {
 }
 
 // skipSystemPathEntry keeps from the live system what must never reach it: the old
-// host's boot files, and its /etc/hostid when decideHostidRestore said so.
+// host's boot files, and its /etc/hostid and pool cache files when
+// decideZFSHostFiles said so.
 func (w *restoreUIWorkflowRun) skipSystemPathEntry(name string) bool {
 	clean := normalizeArchiveEntryPath(name)
-	return isBootNeverLivePath(clean) || (w.skipHostid && clean == hostidArchivePath)
+	return isBootNeverLivePath(clean) ||
+		(w.skipHostid && clean == hostidArchivePath) ||
+		(w.skipZFSCaches && isZFSHostCachePath(clean))
 }
 
 func (w *restoreUIWorkflowRun) systemExtractionCategories() []Category {

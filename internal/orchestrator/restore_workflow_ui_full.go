@@ -19,8 +19,10 @@ type fullRestoreUIFlow struct {
 	destRoot  string
 	logger    *logging.Logger
 	dryRun    bool
-	// skipHostid keeps the backup's /etc/hostid off this host (decideHostidRestore).
-	skipHostid bool
+	// skipHostid and skipZFSCaches keep the backup's /etc/hostid and pool cache files
+	// off this host (decideZFSHostFiles).
+	skipHostid    bool
+	skipZFSCaches bool
 	// plan is the synthesized full-restore plan; only ExportCategories is read, to
 	// keep export-only content, and the product this host does not run, out of the
 	// live system.
@@ -32,15 +34,16 @@ type fullRestoreUIFlow struct {
 // in runFullRestore, which reuses the selective path's own methods.
 func newFullRestoreUIFlow(w *restoreUIWorkflowRun) *fullRestoreUIFlow {
 	return &fullRestoreUIFlow{
-		ctx:        w.ctx,
-		ui:         w.ui,
-		candidate:  w.candidate,
-		prepared:   w.prepared,
-		destRoot:   w.destRoot,
-		logger:     w.logger,
-		dryRun:     w.cfg.DryRun,
-		skipHostid: w.skipHostid,
-		plan:       w.plan,
+		ctx:           w.ctx,
+		ui:            w.ui,
+		candidate:     w.candidate,
+		prepared:      w.prepared,
+		destRoot:      w.destRoot,
+		logger:        w.logger,
+		dryRun:        w.cfg.DryRun,
+		skipHostid:    w.skipHostid,
+		skipZFSCaches: w.skipZFSCaches,
+		plan:          w.plan,
 	}
 }
 
@@ -70,8 +73,8 @@ func (f *fullRestoreUIFlow) extract() error {
 // skipPath keeps five classes of entry out of a plain extraction: /etc/fstab, which
 // is merged afterwards instead of overwritten; the PVE cluster database, which this
 // fallback has no safe way to write; the bootNeverLivePaths (the backed-up host's
-// boot files); /etc/hostid when decideHostidRestore keeps it off this host; and
-// everything belonging to an ExportOnly category. The selective path never writes export-only content to system paths
+// boot files); /etc/hostid and the pool cache files when decideZFSHostFiles keeps
+// them off this host; and everything belonging to an ExportOnly category. The selective path never writes export-only content to system paths
 // (splitRestoreCategories routes it to an export directory); before this, the
 // fallback wrote /etc/proxmox-backup/ and /var/lib/proxsave-info/ straight to /.
 //
@@ -87,7 +90,7 @@ func (f *fullRestoreUIFlow) skipPath(name string) bool {
 	if matchesAnyArchivePrefix(clean, clusterDBArchivePaths()) {
 		return true
 	}
-	if isBootNeverLivePath(clean) || (f.skipHostid && clean == hostidArchivePath) {
+	if isBootNeverLivePath(clean) || (f.skipHostid && clean == hostidArchivePath) || (f.skipZFSCaches && isZFSHostCachePath(clean)) {
 		return true
 	}
 	return f.isExportOnlyPath(clean)

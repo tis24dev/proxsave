@@ -554,25 +554,43 @@ func readBackedUpKernelCmdline(ctx context.Context, logger *logging.Logger, arch
 // readArchiveFile extracts one archive entry into a temporary directory and returns
 // its content; found is false when the archive does not hold it.
 func readArchiveFile(ctx context.Context, logger *logging.Logger, archivePath, entry string) (data []byte, found bool, err error) {
-	dir, err := restoreFS.MkdirTemp("", "proxsave-read-")
+	dir, cleanup, err := extractArchiveSubset(ctx, logger, archivePath, []string{entry})
 	if err != nil {
-		return nil, false, fmt.Errorf("create temporary directory: %w", err)
+		return nil, false, err
 	}
-	defer func() {
+	defer cleanup()
+	return readExtractedFile(dir, entry)
+}
+
+// extractArchiveSubset extracts the archive entries matching paths (category path
+// syntax) into a temporary directory, in one pass over the archive. cleanup removes
+// the directory.
+func extractArchiveSubset(ctx context.Context, logger *logging.Logger, archivePath string, paths []string) (dir string, cleanup func(), err error) {
+	dir, err = restoreFS.MkdirTemp("", "proxsave-read-")
+	if err != nil {
+		return "", nil, fmt.Errorf("create temporary directory: %w", err)
+	}
+	cleanup = func() {
 		if err := restoreFS.RemoveAll(dir); err != nil {
 			logger.Debug("Failed to remove temporary directory %s: %v", dir, err)
 		}
-	}()
+	}
 	err = extractArchiveNative(ctx, restoreArchiveOptions{
 		archivePath: archivePath,
 		destRoot:    dir,
 		logger:      logger,
-		categories:  []Category{{ID: "read_archive_file", Paths: []string{entry}}},
+		categories:  []Category{{ID: "read_archive_subset", Paths: paths}},
 		mode:        RestoreModeCustom,
 	})
 	if err != nil {
-		return nil, false, err
+		cleanup()
+		return "", nil, err
 	}
+	return dir, cleanup, nil
+}
+
+// readExtractedFile reads entry from a directory extractArchiveSubset filled.
+func readExtractedFile(dir, entry string) (data []byte, found bool, err error) {
 	data, err = restoreFS.ReadFile(filepath.Join(dir, normalizeArchiveEntryPath(entry)))
 	if err != nil {
 		if os.IsNotExist(err) {

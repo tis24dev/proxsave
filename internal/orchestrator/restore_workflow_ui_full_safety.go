@@ -42,8 +42,9 @@ func (w *restoreUIWorkflowRun) runFullRestore() error {
 	}
 	defer cleanupServices()
 
-	// This fallback writes every entry, /etc/hostid included when the archive holds it.
-	if err := w.decideHostidRestore(true); err != nil {
+	// This fallback writes every entry, /etc/hostid and the pool cache files included
+	// when the archive holds them.
+	if err := w.decideZFSHostFiles(true, true); err != nil {
 		return err
 	}
 

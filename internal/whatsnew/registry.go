@@ -229,7 +229,7 @@ var notes = []Note{
 			"A restore keeps its safety backup, rollback archives, logs and diagnostics in /var/lib/proxsave/restore, past a reboot",
 			"A restore deletes its staging directory, which holds decrypted secrets, when it ends, whether it succeeded or failed",
 			"New boot restore category, in FULL: the old host's kernel parameters (IOMMU, VFIO) join this host's boot configuration",
-			"A restore no longer writes the old host's /etc/hostid on a host whose ZFS pools were imported with another hostid",
+			"A restore keeps this host's /etc/hostid and ZFS pool cache when the host already has ZFS pools imported",
 		},
 		Actions: []string{
 			"With DRY_RUN=true in backup.env, a restore from the CLI or the dashboard is refused until DRY_RUN is set to false",

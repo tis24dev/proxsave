@@ -143,8 +143,9 @@ func TestZFSRestoreKeepsHostidWhenPoolsCannotBeListed(t *testing.T) {
 	}
 }
 
-// The analysis-failure fallback applies the same rule.
-func TestFullRestoreFallbackKeepsHostidWhenPoolsAreImported(t *testing.T) {
+// The analysis-failure fallback applies the same rules to /etc/hostid and the pool
+// cache.
+func TestFullRestoreFallbackKeepsZFSHostFilesWhenPoolsAreImported(t *testing.T) {
 	origRestoreFS, origRestoreCmd, origRestoreSystem := restoreFS, restoreCmd, restoreSystem
 	origCompatFS, origPrepare, origAnalyze, origSafetyFS := compatFS, prepareRestoreBundleFunc, analyzeRestoreArchiveFunc, safetyFS
 	t.Cleanup(func() {
@@ -163,9 +164,13 @@ func TestFullRestoreFallbackKeepsHostidWhenPoolsAreImported(t *testing.T) {
 		t.Fatal(err)
 	}
 	tmpTar := filepath.Join(t.TempDir(), "bundle.tar")
+	if err := fakeFS.AddFile("/etc/zfs/zpool.cache", []byte("this host's cache\n")); err != nil {
+		t.Fatal(err)
+	}
 	if err := writeTarFile(tmpTar, map[string]string{
-		"etc/hosts":  "127.0.0.1 localhost\n",
-		"etc/hostid": string(oldHostHostid),
+		"etc/hosts":           "127.0.0.1 localhost\n",
+		"etc/hostid":          string(oldHostHostid),
+		"etc/zfs/zpool.cache": "old host's cache\n",
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -191,5 +196,80 @@ func TestFullRestoreFallbackKeepsHostidWhenPoolsAreImported(t *testing.T) {
 	}
 	if got, _ := fakeFS.ReadFile("/etc/hostid"); string(got) != string(thisHostid) {
 		t.Fatalf("/etc/hostid overwritten with %x", got)
+	}
+	if got, _ := fakeFS.ReadFile("/etc/zfs/zpool.cache"); string(got) != "this host's cache\n" {
+		t.Fatalf("/etc/zfs/zpool.cache overwritten: %q", got)
+	}
+}
+
+func TestZFSCacheRestoreDecision(t *testing.T) {
+	if write, _ := zfsCacheRestoreDecision(nil, nil); !write {
+		t.Fatal("no pool imported: the backup's cache must be written")
+	}
+	if write, reason := zfsCacheRestoreDecision([]string{"vm", "rpool"}, nil); write || !strings.Contains(reason, "pools rpool, vm are imported on this host") {
+		t.Fatalf("pools imported: write=%v reason=%q", write, reason)
+	}
+	if write, reason := zfsCacheRestoreDecision(nil, errors.New("exit status 1")); write || !strings.Contains(reason, "cannot be listed") {
+		t.Fatalf("listing failed: write=%v reason=%q", write, reason)
+	}
+}
+
+// runZFSCacheRestore restores the zfs category over a host that already has its own
+// pool cache, from an archive holding another host's cache files.
+func runZFSCacheRestore(t *testing.T, outputs map[string]string, errs map[string]error) bootRestoreRun {
+	t.Helper()
+	live := map[string]string{
+		"/etc/hostid":                  string(thisHostid),
+		"/etc/zfs/zpool.cache":         "this host's cache\n",
+		"/etc/zfs/zfs-list.cache/tank": "this host's mount list\n",
+	}
+	archive := map[string]string{
+		"etc/hostid":                   string(thisHostid),
+		"etc/zfs/zpool.cache":          "old host's cache\n",
+		"etc/zfs/zfs-list.cache/rpool": "old host's mount list\n",
+		"etc/zfs/zed.d/zed.rc":         "ZED_EMAIL_ADDR=root\n",
+	}
+	return runBootRestore(t, live, archive, outputs, errs, RestoreModeCustom, "zfs")
+}
+
+// Reproduced on a PVE 9.2 VM with root on ZFS and a data pool: another host's
+// zpool.cache made zfs-import-cache.service fail ("cannot import 'rpool': pool
+// already exists") and the data pool was not imported at boot; a pool that is not a
+// PVE storage (a PBS datastore, a manual mount) stayed out. A host with pools
+// imported keeps its own cache files.
+func TestZFSRestoreKeepsPoolCacheWhenPoolsAreImported(t *testing.T) {
+	r := runZFSCacheRestore(t, map[string]string{
+		"which zpool":           "/usr/sbin/zpool\n",
+		"zpool list -H -o name": "rpool\nvm\n",
+	}, nil)
+	if r.err != nil {
+		t.Fatalf("restore: %v", r.err)
+	}
+	if got := r.read(t, "/etc/zfs/zpool.cache"); got != "this host's cache\n" {
+		t.Fatalf("/etc/zfs/zpool.cache overwritten: %q", got)
+	}
+	r.assertAbsent(t, "/etc/zfs/zfs-list.cache/rpool")
+	if got := r.read(t, "/etc/zfs/zfs-list.cache/tank"); got != "this host's mount list\n" {
+		t.Fatalf("this host's zfs-list.cache touched: %q", got)
+	}
+	if got := r.read(t, "/etc/zfs/zed.d/zed.rc"); got != "ZED_EMAIL_ADDR=root\n" {
+		t.Fatalf("control: the rest of /etc/zfs must be restored: %q", got)
+	}
+	want := "ZFS pool cache - backup zpool.cache and zfs-list.cache not written: pools rpool, vm are imported on this host"
+	if !strings.Contains(r.log, want) {
+		t.Fatalf("log misses %q:\n%s", want, r.log)
+	}
+}
+
+func TestZFSRestoreWritesPoolCacheWithoutImportedPools(t *testing.T) {
+	r := runZFSCacheRestore(t, map[string]string{"which zpool": "/usr/sbin/zpool\n", "zpool list -H -o name": ""}, nil)
+	if r.err != nil {
+		t.Fatalf("restore: %v", r.err)
+	}
+	if got := r.read(t, "/etc/zfs/zpool.cache"); got != "old host's cache\n" {
+		t.Fatalf("/etc/zfs/zpool.cache = %q, want the backup's", got)
+	}
+	if got := r.read(t, "/etc/zfs/zfs-list.cache/rpool"); got != "old host's mount list\n" {
+		t.Fatalf("zfs-list.cache/rpool = %q, want the backup's", got)
 	}
 }
