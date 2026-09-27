@@ -86,6 +86,11 @@ func normalizeProxmoxVersion(value string) string {
 	if version == "" {
 		return ""
 	}
+	// "unknown" is what detection records when no marker carried a version. It is not
+	// a version number, so it takes no "v": the backup list read "PVE vunknown".
+	if strings.EqualFold(version, "unknown") {
+		return "unknown"
+	}
 	if !strings.HasPrefix(strings.ToLower(version), "v") {
 		version = "v" + version
 	}

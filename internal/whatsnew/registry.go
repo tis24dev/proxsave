@@ -236,6 +236,7 @@ var notes = []Note{
 			"A PBS host holding /var/lib/pve-cluster/config.db from an old FULL restore is collected as PBS again, with a note",
 			"A host with every PVE package purged now completes a generic backup instead of failing on pveversion with no archive",
 			"A PVE host with pve-manager purged but pve-cluster left now gets its /etc/pve backed up instead of exit 9",
+			"The restore backup list reads PVE unknown, not PVE vunknown, for an archive that recorded no version",
 		},
 	},
 }
