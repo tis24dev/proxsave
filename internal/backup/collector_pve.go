@@ -963,8 +963,36 @@ func (c *Collector) effectivePVEClusterPath() string {
 	return c.systemPath("/var/lib/pve-cluster")
 }
 
+// targetPathFor is where a PVE source lands in the archive: its canonical host path,
+// whatever PVE_CONFIG_PATH, PVE_CLUSTER_PATH, COROSYNC_CONFIG_PATH, VZDUMP_CONFIG_PATH,
+// CEPH_CONFIG_PATH or SYSTEM_ROOT_PREFIX pointed the read at, so the restore categories
+// (./etc/pve/, ./var/lib/pve-cluster/, ...) find it. It used to copy the source path as it
+// was: under SYSTEM_ROOT_PREFIX=/host, /etc/pve landed in the archive as ./host/etc/pve and
+// no restore category matched it.
 func (c *Collector) targetPathFor(src string) string {
 	clean := filepath.Clean(src)
+	switch clean {
+	case filepath.Clean(c.effectiveCorosyncConfigPath()):
+		return filepath.Join(c.tempDir, "etc/pve/corosync.conf")
+	case filepath.Clean(c.effectiveVzdumpConfigPath()):
+		return filepath.Join(c.tempDir, "etc/vzdump.conf")
+	}
+	if rel, ok := pathRelWithin(c.effectivePVEConfigPath(), clean); ok {
+		return filepath.Join(c.tempDir, "etc/pve", rel)
+	}
+	if rel, ok := pathRelWithin(c.effectivePVEClusterPath(), clean); ok {
+		return filepath.Join(c.tempDir, "var/lib/pve-cluster", rel)
+	}
+	for _, cephRoot := range c.cephConfigPaths() {
+		if rel, ok := pathRelWithin(cephRoot, clean); ok {
+			return filepath.Join(c.tempDir, "etc/ceph", rel)
+		}
+	}
+	if c.hostRootPrefixActive() {
+		if rel, ok := pathRelWithin(c.config.SystemRootPrefix, clean); ok {
+			clean = filepath.Join(string(os.PathSeparator), rel)
+		}
+	}
 	if filepath.IsAbs(clean) {
 		clean = strings.TrimPrefix(clean, string(os.PathSeparator))
 	}
@@ -973,6 +1001,19 @@ func (c *Collector) targetPathFor(src string) string {
 		clean = "pve"
 	}
 	return filepath.Join(c.tempDir, clean)
+}
+
+// pathRelWithin returns path relative to root when path is root or lies under it.
+func pathRelWithin(root, path string) (string, bool) {
+	root = strings.TrimSpace(root)
+	if root == "" {
+		return "", false
+	}
+	rel, err := filepath.Rel(filepath.Clean(root), filepath.Clean(path))
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(os.PathSeparator)) {
+		return "", false
+	}
+	return rel, true
 }
 
 func (c *Collector) pveInfoDir() string {

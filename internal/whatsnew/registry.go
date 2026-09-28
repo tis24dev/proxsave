@@ -228,7 +228,7 @@ var notes = []Note{
 			"New boot category, in FULL: old kernel parameters join this host's; old GRUB and kernel cmdline are never written",
 			"A restore keeps its safety backup and logs in /var/lib/proxsave/restore past a reboot, and deletes its decrypted staging",
 			"A restore keeps this host's /etc/hostid and ZFS pool cache when it has pools imported, and its own ZFS ARC limit",
-			"Hosts with PVE removed or a leftover config.db are backed up again; a missing version reads unknown, not vunknown",
+			"Backups taken with SYSTEM_ROOT_PREFIX store PVE files at their host paths, so restore finds them",
 			"A RECOVERY cluster restore stops the HA services, restarts the cluster right after writing, refuses a quorate cluster",
 		},
 		Actions: []string{

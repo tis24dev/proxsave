@@ -1554,6 +1554,8 @@ HOST_BACKUP_MODE=false             # Appliance backing up a host mounted read-on
 
 **Note**: `${PVE_CONFIG_PATH}` (and other `${VAR}` references) are resolved from the same `backup.env` file too, so you do not need to `export` them.
 
+**Note**: the PVE path overrides, `CEPH_CONFIG_PATH` and `SYSTEM_ROOT_PREFIX` choose where a file is read, not where it is stored. The archive always holds `/etc/pve`, `/var/lib/pve-cluster`, `/etc/pve/corosync.conf`, `/etc/vzdump.conf`, `/etc/corosync/authkey` and `/etc/ceph` at those paths, which is where the restore looks for them.
+
 ### PBS API credentials (remote server only)
 
 Three variables let the PBS collectors reach a **remote** Proxmox Backup Server. A local
