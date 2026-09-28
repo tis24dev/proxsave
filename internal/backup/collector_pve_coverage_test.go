@@ -251,9 +251,10 @@ func TestPVERuntimeCommandSuccessAndFailureBranches(t *testing.T) {
 		})
 	}
 
-	// Under SYSTEM_ROOT_PREFIX the command runs in the appliance, never on the host, so a
-	// missing one there says nothing about the host and stays a failure.
-	t.Run("missing pveversion under a root prefix stays critical", func(t *testing.T) {
+	// Under SYSTEM_ROOT_PREFIX the command would run in the appliance, never on the host, so
+	// the core runtime commands are skipped there and a missing pveversion ends nothing.
+	t.Run("missing pveversion under a root prefix is not reached", func(t *testing.T) {
+		var ran []string
 		collector := newPVECollectorWithDeps(t, CollectorDeps{
 			LookPath: func(cmd string) (string, error) {
 				if cmd == "pveversion" {
@@ -261,12 +262,15 @@ func TestPVERuntimeCommandSuccessAndFailureBranches(t *testing.T) {
 				}
 				return "/usr/bin/" + cmd, nil
 			},
-			RunCommand: func(context.Context, string, ...string) ([]byte, error) { return []byte("[]"), nil },
+			RunCommand: func(_ context.Context, name string, _ ...string) ([]byte, error) {
+				ran = append(ran, name)
+				return []byte("[]"), nil
+			},
 		})
 		collector.config.SystemRootPrefix = t.TempDir()
 		err := collector.collectPVECoreRuntime(context.Background(), collector.proxsaveCommandsDir("pve"), &pveRuntimeInfo{})
-		if err == nil || !strings.Contains(err.Error(), "critical command not available: pveversion") {
-			t.Fatalf("err = %v, want the critical pveversion failure under a prefix", err)
+		if err != nil || len(ran) != 0 {
+			t.Fatalf("err = %v, ran = %v; want no command and no error under a prefix", err, ran)
 		}
 	})
 

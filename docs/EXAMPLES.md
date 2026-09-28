@@ -1014,7 +1014,7 @@ usual, so the appliance is managed the same way as a host install.
 ### Expected Results
 - Proxmox type is detected from the mounted host (`/host/etc/pve`, `/host/etc/proxmox-backup`), not the container.
 - Absolute symlinks such as `/etc/ceph/ceph.conf -> /etc/pve/ceph.conf` resolve under the prefix, so Ceph configuration is collected.
-- ZFS pool state is collected (shared kernel); namespace-scoped and cluster-daemon commands (udevadm, ethtool, pvesh, ceph) are skipped and their data comes from the host files.
+- ZFS pool state is collected (shared kernel); namespace-scoped and cluster-daemon commands (udevadm, ethtool, the PVE CLI, crontab, systemctl, ceph) are skipped and their data comes from the host files, so the container needs no PVE packages.
 - Symlink targets are stored verbatim, so the archive restores onto a real host unchanged.
 - No writes to the host filesystem.
 

@@ -497,17 +497,34 @@ func (c *Collector) collectPVEVZDumpSnapshot(ctx context.Context) error {
 	return nil
 }
 
+// pveRuntimeCommandsApply reports whether the PVE runtime commands may run. Under
+// SYSTEM_ROOT_PREFIX they would run in this system, not in the host mounted under the
+// prefix: pvesh, pveum, pvecm, pvesm, pvenode and pveversion answer for this system's own
+// /etc/pve and daemons, crontab and systemctl for its own schedules (measured on a Debian 13
+// appliance: the container's timers and no root crontab, then exit 9 on the missing
+// pveversion). The host's PVE files are read from under the prefix instead, and its crontabs
+// and systemd units by the system recipe. The skip is logged once per run.
+func (c *Collector) pveRuntimeCommandsApply() bool {
+	if !c.hostRootPrefixActive() {
+		return true
+	}
+	if !c.pveRuntimeSkipLogged {
+		c.pveRuntimeSkipLogged = true
+		c.logger.Info("PVE runtime commands - skipped under SYSTEM_ROOT_PREFIX, they would describe this system, not the host")
+	}
+	return false
+}
+
 func (c *Collector) collectPVECoreRuntime(ctx context.Context, commandsDir string, info *pveRuntimeInfo) error {
-	// pveversion is critical when it is installed, and always under SYSTEM_ROOT_PREFIX.
-	// One that runs and fails is a broken PVE toolchain. A missing one on a real root is
-	// pve-manager purged while pve-cluster, qemu-server and pve-container stay (the ISO
-	// installer marks them manual), with /etc/pve still mounted and holding the guest
-	// configuration: measured on PVE 9.2.2, failing on it there ended the run at exit 9
-	// with no archive, so there it is skipped with a warning. Under a prefix the command
-	// runs in the appliance, which does not have it; letting the recipe go on there wrote
-	// the PVE files under the prefix and the container's schedules and storage (measured
-	// on a Debian 13 appliance), so there it stays a failure.
-	if _, lookErr := c.depLookPath("pveversion"); lookErr != nil && !c.hostRootPrefixActive() {
+	if !c.pveRuntimeCommandsApply() {
+		return nil
+	}
+	// pveversion is critical when it is installed. One that runs and fails is a broken PVE
+	// toolchain. A missing one is pve-manager purged while pve-cluster, qemu-server and
+	// pve-container stay (the ISO installer marks them manual), with /etc/pve still mounted
+	// and holding the guest configuration: measured on PVE 9.2.2, failing on it there ended
+	// the run at exit 9 with no archive, so it is skipped with a warning.
+	if _, lookErr := c.depLookPath("pveversion"); lookErr != nil {
 		c.logger.Warning("PVE version - skipped, pveversion is not installed")
 	} else if err := c.safeCmdOutput(ctx,
 		commandSpec("pveversion", "-v"),
@@ -558,7 +575,7 @@ func (c *Collector) collectPVECoreRuntime(ctx context.Context, commandsDir strin
 }
 
 func (c *Collector) collectPVEACLRuntime(ctx context.Context, commandsDir string) error {
-	if !c.config.BackupPVEACL {
+	if !c.config.BackupPVEACL || !c.pveRuntimeCommandsApply() {
 		return nil
 	}
 
@@ -594,6 +611,9 @@ func (c *Collector) collectPVEACLRuntime(ctx context.Context, commandsDir string
 }
 
 func (c *Collector) collectPVEClusterRuntime(ctx context.Context, commandsDir string, clustered bool) error {
+	if !c.pveRuntimeCommandsApply() {
+		return nil
+	}
 	if clustered && c.config.BackupClusterConfig {
 		if err := c.safeCmdOutput(ctx,
 			commandSpec("pvecm", "status"),
@@ -644,6 +664,9 @@ func (c *Collector) collectPVEClusterRuntime(ctx context.Context, commandsDir st
 }
 
 func (c *Collector) collectPVEStorageRuntime(ctx context.Context, commandsDir string, info *pveRuntimeInfo) error {
+	if !c.pveRuntimeCommandsApply() {
+		return nil
+	}
 	hostname, _ := os.Hostname()
 	nodeName := shortHostname(hostname)
 	if nodeName == "" {
@@ -802,6 +825,9 @@ func (c *Collector) collectPVELXCConfigs(ctx context.Context) error {
 }
 
 func (c *Collector) collectPVEGuestInventory(ctx context.Context) error {
+	if !c.pveRuntimeCommandsApply() {
+		return nil
+	}
 	commandsDir, err := c.ensureCommandsDir("pve")
 	if err != nil {
 		return err
@@ -853,6 +879,9 @@ func (c *Collector) collectPVEBackupJobDefinitions(ctx context.Context) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
+	if !c.pveRuntimeCommandsApply() {
+		return nil
+	}
 	jobsDir := c.pveJobsDir()
 	if err := c.ensureDir(jobsDir); err != nil {
 		return fmt.Errorf("failed to create jobs directory: %w", err)
@@ -871,6 +900,9 @@ func (c *Collector) collectPVEBackupJobDefinitions(ctx context.Context) error {
 func (c *Collector) collectPVEBackupJobHistory(ctx context.Context, nodes []string) error {
 	if err := ctx.Err(); err != nil {
 		return err
+	}
+	if !c.pveRuntimeCommandsApply() {
+		return nil
 	}
 	jobsDir := c.pveJobsDir()
 	if err := c.ensureDir(jobsDir); err != nil {
@@ -1051,6 +1083,9 @@ func (c *Collector) collectPVEScheduleCrontab(ctx context.Context) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
+	if !c.pveRuntimeCommandsApply() {
+		return nil
+	}
 	schedulesDir := c.pveSchedulesDir()
 	if err := c.ensureDir(schedulesDir); err != nil {
 		return fmt.Errorf("failed to create schedules directory: %w", err)
@@ -1069,6 +1104,9 @@ func (c *Collector) collectPVEScheduleCrontab(ctx context.Context) error {
 func (c *Collector) collectPVEScheduleTimers(ctx context.Context) error {
 	if err := ctx.Err(); err != nil {
 		return err
+	}
+	if !c.pveRuntimeCommandsApply() {
+		return nil
 	}
 	schedulesDir := c.pveSchedulesDir()
 	if err := c.ensureDir(schedulesDir); err != nil {
@@ -1112,6 +1150,9 @@ func (c *Collector) collectPVEReplicationDefinitions(ctx context.Context) error 
 	if err := ctx.Err(); err != nil {
 		return err
 	}
+	if !c.pveRuntimeCommandsApply() {
+		return nil
+	}
 	repDir := c.pveReplicationDir()
 	if err := c.ensureDir(repDir); err != nil {
 		return fmt.Errorf("failed to create replication directory: %w", err)
@@ -1130,6 +1171,9 @@ func (c *Collector) collectPVEReplicationDefinitions(ctx context.Context) error 
 func (c *Collector) collectPVEReplicationStatus(ctx context.Context, nodes []string) error {
 	if err := ctx.Err(); err != nil {
 		return err
+	}
+	if !c.pveRuntimeCommandsApply() {
+		return nil
 	}
 	repDir := c.pveReplicationDir()
 	if err := c.ensureDir(repDir); err != nil {
@@ -2116,6 +2160,9 @@ func (c *Collector) aggregateReplicationStatus(ctx context.Context, replicationD
 }
 
 func (c *Collector) writePVEVersionInfo(ctx context.Context, baseInfoDir string) error {
+	if !c.pveRuntimeCommandsApply() {
+		return nil
+	}
 	versionFile := filepath.Join(baseInfoDir, "pve_version.txt")
 	if err := c.safeCmdOutput(ctx, commandSpec("pveversion"), versionFile, "PVE version info", false); err != nil {
 		return err

@@ -56,6 +56,9 @@ type Collector struct {
 
 	// clusteredPVE records whether cluster mode was detected during PVE collection.
 	clusteredPVE bool
+	// pveRuntimeSkipLogged records that the PVE runtime commands skip under
+	// SYSTEM_ROOT_PREFIX has been logged, so the run carries it once.
+	pveRuntimeSkipLogged bool
 
 	// Manifest tracking for backup contents
 	pbsManifest    map[string]ManifestEntry
