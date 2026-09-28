@@ -550,6 +550,105 @@ func TestStopPVEClusterServicesRestartsWhatItStoppedWhenAStopFails(t *testing.T)
 	}
 }
 
+// slowUnitRunner answers "systemctl is-active <unit>" as active for the first
+// activeChecks queries and inactive after that (never, when activeChecks < 0);
+// every other command goes to the embedded fake.
+type slowUnitRunner struct {
+	*FakeCommandRunner
+	unit         string
+	activeChecks int
+	checks       int
+}
+
+func (r *slowUnitRunner) Run(ctx context.Context, name string, args ...string) ([]byte, error) {
+	if name != "systemctl" || len(args) != 2 || args[0] != "is-active" || args[1] != r.unit {
+		return r.FakeCommandRunner.Run(ctx, name, args...)
+	}
+	r.Calls = append(r.Calls, commandKey(name, args))
+	r.Contexts = append(r.Contexts, ctx)
+	r.checks++
+	if r.activeChecks < 0 || r.checks <= r.activeChecks {
+		return []byte("active\n"), nil
+	}
+	return []byte("inactive\n"), errors.New("inactive")
+}
+
+func (r *slowUnitRunner) assertNoKill(t *testing.T) {
+	t.Helper()
+	for _, c := range r.CallsList() {
+		if strings.HasPrefix(c, "systemctl kill") {
+			t.Fatalf("pve-ha-lrm stop sent a signal: %q; calls=%q", c, r.CallsList())
+		}
+	}
+}
+
+func withHALRMStopTimeout(t *testing.T, d time.Duration) {
+	t.Helper()
+	orig := haLRMStopTimeout
+	t.Cleanup(func() { haLRMStopTimeout = orig })
+	haLRMStopTimeout = d
+}
+
+// Measured on an isolated node whose old HA master was powered off: the LRM took
+// 93 s to stop, waiting for the master lock to time out, and the generic stop had
+// sent SIGTERM at +76 s (SIGKILL would follow). A SIGKILL before the LRM closes its
+// watchdog fences the node. pve-ha-lrm gets one no-block stop and a long wait, and
+// never systemctl kill.
+func TestStopHALRMWaitsForASlowStopWithoutSignals(t *testing.T) {
+	origCmd := restoreCmd
+	t.Cleanup(func() { restoreCmd = origCmd })
+	fastServiceTimers(t)
+	withHALRMStopTimeout(t, 10*time.Second)
+	// Well past the 4 x 50 ms verify windows of the generic stop.
+	runner := &slowUnitRunner{FakeCommandRunner: inactiveServicesRunner(), unit: "pve-ha-lrm", activeChecks: 60}
+	restoreCmd = runner
+
+	if err := stopPVEClusterServices(context.Background(), newTestLogger()); err != nil {
+		t.Fatalf("stopPVEClusterServices: %v", err)
+	}
+	runner.assertNoKill(t)
+	calls := runner.CallsList()
+	if n := countCalls(calls, "systemctl stop --no-block pve-ha-lrm"); n != 1 {
+		t.Fatalf("pve-ha-lrm no-block stop issued %d times, want 1; calls=%q", n, calls)
+	}
+	if n := countCalls(calls, "systemctl stop pve-ha-lrm"); n != 0 {
+		t.Fatalf("pve-ha-lrm got a blocking stop; calls=%q", calls)
+	}
+	if runner.checks <= runner.activeChecks {
+		t.Fatalf("stop returned before pve-ha-lrm went inactive: %d checks", runner.checks)
+	}
+	assertCallsInOrder(t, calls,
+		"systemctl stop --no-block pve-ha-lrm",
+		"systemctl stop --no-block pve-ha-crm",
+		"systemctl stop --no-block pve-cluster",
+		"systemctl stop --no-block pvestatd",
+	)
+}
+
+// An LRM still active after the limit fails the stop through the usual error, with no
+// signal sent, and nothing else stopped: pve-ha-lrm is the first service stopped.
+func TestStopHALRMFailsAfterTheLimitWithoutSignals(t *testing.T) {
+	origCmd := restoreCmd
+	t.Cleanup(func() { restoreCmd = origCmd })
+	fastServiceTimers(t)
+	withHALRMStopTimeout(t, 150*time.Millisecond)
+	runner := &slowUnitRunner{FakeCommandRunner: inactiveServicesRunner(), unit: "pve-ha-lrm", activeChecks: -1}
+	restoreCmd = runner
+
+	err := stopPVEClusterServices(context.Background(), newTestLogger())
+	if err == nil || !strings.Contains(err.Error(), "failed to stop PVE services (pve-ha-lrm)") ||
+		!strings.Contains(err.Error(), "pve-ha-lrm still active after 150ms") {
+		t.Fatalf("err = %v, want the pve-ha-lrm stop failure after the 150ms limit", err)
+	}
+	runner.assertNoKill(t)
+	for _, c := range runner.CallsList() {
+		if (strings.HasPrefix(c, "systemctl stop") && !strings.HasSuffix(c, " pve-ha-lrm")) ||
+			strings.HasPrefix(c, "systemctl start") || strings.HasPrefix(c, "systemctl restart") {
+			t.Fatalf("failed pve-ha-lrm stop went on to %q; calls=%q", c, runner.CallsList())
+		}
+	}
+}
+
 // The restart of the 6 services gets 30 s each plus 10 s: 190 s.
 func TestPVEClusterRestartTimeoutCoversSixServices(t *testing.T) {
 	origCmd := restoreCmd

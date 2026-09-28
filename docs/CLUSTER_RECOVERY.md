@@ -194,12 +194,14 @@ This applies only when the guest configs are actually in the export, which means
 RECOVERY restores the entire cluster database by overwriting `/var/lib/pve-cluster/`. To do that safely it:
 
 1. probes the quorum with `pvecm status` right after you pick RECOVERY, when the node has a `corosync.conf`, and refuses a quorate cluster with more than 1 node online (see below);
-2. stops `pve-ha-lrm` and `pve-ha-crm`, then `pve-cluster`, `pvedaemon`, `pveproxy`, `pvestatd`, in that order (escalating to SIGKILL if a service will not stop);
+2. stops `pve-ha-lrm` and `pve-ha-crm`, then `pve-cluster`, `pvedaemon`, `pveproxy`, `pvestatd`, in that order. Every service except `pve-ha-lrm` escalates to SIGKILL if it will not stop. `pve-ha-lrm` is never signalled: it gets one `systemctl stop --no-block` and up to 180 seconds to go inactive, and the restore stops if it is still active after that;
 3. unmounts `/etc/pve` (a failure here is a warning, not fatal);
 4. extracts `./var/lib/pve-cluster/` (config.db) directly to disk while pmxcfs is down;
 5. restarts `pve-cluster`, `pvedaemon`, `pveproxy`, `pvestatd`, then `pve-ha-crm` and `pve-ha-lrm`, right after that extraction and before the later steps (network apply, boot rebuild). If the restore fails before that point, they are restarted when the run ends.
 
 The HA services are stopped first because a running `pve-ha-lrm` keeps the node's watchdog open: with pmxcfs down for 60 seconds the watchdog expires and the node is hard-reset (fenced) in the middle of the restore. Stopped, the LRM freezes its HA resources and closes the watchdog cleanly, and the CRM releases its lock so the master moves to another node. After the restart the LRM resumes the resources it froze.
+
+The LRM stop can be slow: it waits for the CRM master to acknowledge the freeze, and when the old master is a node that went down, its master lock only times out about 120 seconds after it died. On an isolated node whose old master was powered off, the stop took 93 seconds. A SIGKILL before the LRM closes its watchdog would leave the watchdog armed and fence the node, which is why `pve-ha-lrm` is only ever asked to stop and given 180 seconds.
 
 The quorum probe exists because on a member of a quorate cluster the restored config.db does not survive: when `pve-cluster` starts again, pmxcfs syncs from the cluster leader and the leader's copy replaces it. What the probe does:
 

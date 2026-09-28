@@ -20,6 +20,12 @@ var (
 	serviceStatusCheckTimeout = 5 * time.Second
 	servicePollInterval       = 500 * time.Millisecond
 	serviceRetryDelay         = 500 * time.Millisecond
+	// haLRMStopTimeout is how long the stop of pve-ha-lrm may take before it fails.
+	// The LRM freezes its services and waits for the CRM master to acknowledge; when
+	// the old master is a dead node, its HA master lock only times out about 120 s
+	// after it died, and this is that plus margin. Measured on a 3-node PVE cluster
+	// with the master powered off: 93 s.
+	haLRMStopTimeout = 180 * time.Second
 )
 
 type restoreCommandResult struct {
@@ -73,12 +79,31 @@ func stopPVEClusterServices(ctx context.Context, logger *logging.Logger) error {
 		if pveUnitNotInstalled(ctx, logger, service) {
 			continue
 		}
-		if err := stopServiceWithRetries(ctx, logger, service); err != nil {
+		stop := stopServiceWithRetries
+		if service == "pve-ha-lrm" {
+			stop = stopHALRMWithoutSignals
+		}
+		if err := stop(ctx, logger, service); err != nil {
 			restartPVEServicesAfterFailedStop(logger, stopped)
 			return fmt.Errorf("failed to stop PVE services (%s): %w", service, err)
 		}
 		stopped = append(stopped, service)
 	}
+	return nil
+}
+
+// stopHALRMWithoutSignals stops pve-ha-lrm with a single no-block stop and waits up
+// to haLRMStopTimeout for it to go inactive. It never escalates to systemctl kill:
+// the LRM closes its watchdog only when it exits on its own, and a SIGKILL before
+// that leaves the watchdog armed, so the node is fenced.
+func stopHALRMWithoutSignals(ctx context.Context, logger *logging.Logger, service string) error {
+	if err := runCommandWithTimeoutCountdown(ctx, logger, serviceStopNoBlockTimeout, service, "stop (no-block)", "systemctl", "stop", "--no-block", service); err != nil {
+		return err
+	}
+	if err := waitForServiceInactive(ctx, logger, service, haLRMStopTimeout); err != nil {
+		return err
+	}
+	resetFailedService(ctx, logger, service)
 	return nil
 }
 

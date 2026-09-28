@@ -178,7 +178,7 @@ sequenceDiagram
     Restore->>Restore: Detect needsClusterRestore = true
 
     Note over Restore,Services: Service Stop Phase
-    Restore->>Services: systemctl stop pve-ha-lrm
+    Restore->>Services: systemctl stop --no-block pve-ha-lrm (wait up to 180 s, never killed)
     Services-->>Restore: Stopped (HA resources frozen, watchdog closed)
     Restore->>Services: systemctl stop pve-ha-crm
     Services-->>Restore: Stopped (CRM lock released)
@@ -312,7 +312,7 @@ stateDiagram-v2
 
     state Stopping {
         [*] --> StopLRM
-        StopLRM: systemctl stop pve-ha-lrm
+        StopLRM: systemctl stop --no-block pve-ha-lrm (up to 180 s, never killed)
         StopLRM --> StopCRM
         StopCRM: systemctl stop pve-ha-crm
         StopCRM --> StopCluster

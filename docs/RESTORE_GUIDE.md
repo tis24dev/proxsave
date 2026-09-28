@@ -747,6 +747,8 @@ Successfully unmounted /etc/pve
 
 The HA services are stopped first: `pve-ha-lrm` keeps the node's watchdog open, and with `pve-cluster` down for 60 seconds that watchdog expires and the node is hard-reset (fenced). Stopping the LRM freezes its HA resources and closes the watchdog cleanly; stopping the CRM releases its lock so another node takes over as master.
 
+`pve-ha-lrm` is never signalled: it gets one `systemctl stop --no-block` and up to 180 seconds to go inactive, and the restore stops with `failed to stop PVE services (pve-ha-lrm)` if it is still active after that. Its stop waits for the CRM master to acknowledge the freeze; when the old master is a node that went down, its lock only times out about 120 seconds after it died (measured: 93 seconds on an isolated node whose old master was powered off). A SIGKILL before the LRM closes its watchdog would fence the node. The other services keep the escalating stop (blocking stop, then SIGTERM, then SIGKILL).
+
 The services are started again as soon as the cluster database has been written, before the later steps (network apply, boot rebuild): `pve-cluster`, `pvedaemon`, `pveproxy`, `pvestatd`, then `pve-ha-crm` and `pve-ha-lrm`. If the restore fails before that point, they are started when the run ends.
 
 #### Phase 10: Service Management (PBS)
@@ -1057,7 +1059,7 @@ When restoring the `pve_cluster` category, the workflow automatically:
 
 **Stops services** (in order):
 ```text
-1. pve-ha-lrm   → Freezes HA resources, closes the watchdog cleanly
+1. pve-ha-lrm   → Freezes HA resources, closes the watchdog cleanly (no-block stop, up to 180 s, never killed)
 2. pve-ha-crm   → Releases the CRM lock; the master moves to another node
 3. pve-cluster  → Stops pmxcfs, unmounts /etc/pve
 4. pvedaemon    → Stops API daemon
@@ -1112,7 +1114,8 @@ Before Restore:
   └─────────────┘
 
 Stop Phase:
-  systemctl stop pve-ha-lrm   ← Watchdog closed, HA resources frozen
+  systemctl stop --no-block pve-ha-lrm ← Wait up to 180 s, never killed;
+                                         watchdog closed, HA resources frozen
   systemctl stop pve-ha-crm
   systemctl stop pve-cluster  ← /etc/pve unmounted
   systemctl stop pvedaemon

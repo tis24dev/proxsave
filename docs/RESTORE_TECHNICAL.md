@@ -907,7 +907,7 @@ if needsClusterRestore {
 ```go
 func stopPVEClusterServices(ctx context.Context, logger *logging.Logger) error {
     commands := [][]string{
-        {"systemctl", "stop", "pve-ha-lrm"}, // closes the watchdog before pmxcfs goes down
+        {"systemctl", "stop", "pve-ha-lrm"}, // closes the watchdog before pmxcfs goes down; see below
         {"systemctl", "stop", "pve-ha-crm"},
         {"systemctl", "stop", "pve-cluster"},
         {"systemctl", "stop", "pvedaemon"},
@@ -1225,6 +1225,16 @@ The HA services are stopped first because a running `pve-ha-lrm` fences the node
 (watchdog hard reset) when pmxcfs stays down for 60 seconds. `systemctl stop pve-ha-lrm`
 freezes the HA resources and closes the watchdog cleanly; `systemctl stop pve-ha-crm`
 releases the CRM lock so the master moves to another node.
+
+Every service except `pve-ha-lrm` goes through `stopServiceWithRetries()` (no-block stop,
+blocking stop, SIGTERM, SIGKILL). `pve-ha-lrm` goes through `stopHALRMWithoutSignals()`:
+one `systemctl stop --no-block`, then `waitForServiceInactive()` for up to
+`haLRMStopTimeout` (180 s), and never `systemctl kill`. The LRM stop waits for the CRM
+master to acknowledge the freeze; when the old master is a dead node, its lock times out
+about 120 s after it died (measured: 93 s on an isolated node, while the generic stop had
+already sent SIGTERM at +76 s). A SIGKILL before the LRM closes its watchdog leaves it
+armed and fences the node. Still active after the limit, the stop fails with
+`failed to stop PVE services (pve-ha-lrm)`, before any other service has been stopped.
 
 **PBS Service Dependency Graph**:
 
