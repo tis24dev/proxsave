@@ -193,10 +193,24 @@ This applies only when the guest configs are actually in the export, which means
 
 RECOVERY restores the entire cluster database by overwriting `/var/lib/pve-cluster/`. To do that safely it:
 
-1. stops `pve-cluster`, `pvedaemon`, `pveproxy`, `pvestatd` in that order (escalating to SIGKILL if a service will not stop);
-2. unmounts `/etc/pve` (a failure here is a warning, not fatal);
-3. extracts `./var/lib/pve-cluster/` (config.db) directly to disk while pmxcfs is down;
-4. restarts the four services during cleanup.
+1. probes the quorum with `pvecm status` right after you pick RECOVERY, when the node has a `corosync.conf`, and refuses a quorate cluster with more than 1 node online (see below);
+2. stops `pve-ha-lrm` and `pve-ha-crm`, then `pve-cluster`, `pvedaemon`, `pveproxy`, `pvestatd`, in that order (escalating to SIGKILL if a service will not stop);
+3. unmounts `/etc/pve` (a failure here is a warning, not fatal);
+4. extracts `./var/lib/pve-cluster/` (config.db) directly to disk while pmxcfs is down;
+5. restarts `pve-cluster`, `pvedaemon`, `pveproxy`, `pvestatd`, then `pve-ha-crm` and `pve-ha-lrm`, right after that extraction and before the later steps (network apply, boot rebuild). If the restore fails before that point, they are restarted when the run ends.
+
+The HA services are stopped first because a running `pve-ha-lrm` keeps the node's watchdog open: with pmxcfs down for 60 seconds the watchdog expires and the node is hard-reset (fenced) in the middle of the restore. Stopped, the LRM freezes its HA resources and closes the watchdog cleanly, and the CRM releases its lock so the master moves to another node. After the restart the LRM resumes the resources it froze.
+
+The quorum probe exists because on a member of a quorate cluster the restored config.db does not survive: when `pve-cluster` starts again, pmxcfs syncs from the cluster leader and the leader's copy replaces it. What the probe does:
+
+| `pvecm status` reports | Result |
+|---|---|
+| Quorate, more than 1 node online | The restore stops before anything is stopped or written: `Cluster RECOVERY refused - quorate cluster, N nodes online: its copy would replace the restored config.db` |
+| Quorate, 1 node online | Proceeds |
+| Not quorate | Proceeds |
+| Cannot be read (pvecm fails, or no `Quorate:` line) | Proceeds, with the warning `Cluster RECOVERY - quorum unknown (<reason>), proceeding` |
+
+A node without `corosync.conf` (`/etc/pve/corosync.conf` or `/etc/corosync/corosync.conf`) is standalone: it proceeds with no probe and no message.
 
 While pmxcfs is down, ProxSave does not write individual `/etc/pve` files. The config areas that live under `/etc/pve` (storage, jobs, firewall, HA, SDN, access control, notifications) each skip their own apply step during a cluster RECOVERY, because config.db now owns them; a shadow-guard strips any `/etc/pve` path from the direct-extraction set as a backstop. Everything under `/etc/pve` comes back from the restored config.db once `/etc/pve` is remounted.
 
@@ -477,7 +491,7 @@ Safety backup preserved at: /var/lib/proxsave/restore/20251120_143052/restore_ba
 Remove it manually if restore was successful: rm /var/lib/proxsave/restore/20251120_143052/restore_backup_20251120_143052.tar.gz
 ```
 
-ProxSave stops `pve-cluster`, `pvedaemon`, `pveproxy`, `pvestatd`, unmounts `/etc/pve`, extracts `/var/lib/pve-cluster/` (config.db), then restarts the four services. It does not print a per-service checkmark line for each one. No `/etc/pve` files are written directly: config.db owns them, so `/etc/pve` is repopulated from the restored database a moment after pmxcfs remounts, not by the file-extraction phase.
+ProxSave stops `pve-ha-lrm`, `pve-ha-crm`, `pve-cluster`, `pvedaemon`, `pveproxy`, `pvestatd`, unmounts `/etc/pve`, extracts `/var/lib/pve-cluster/` (config.db), then restarts `pve-cluster`, `pvedaemon`, `pveproxy`, `pvestatd`, `pve-ha-crm`, `pve-ha-lrm` before the remaining steps of the restore. It does not print a per-service checkmark line for each one. No `/etc/pve` files are written directly: config.db owns them, so `/etc/pve` is repopulated from the restored database a moment after pmxcfs remounts, not by the file-extraction phase.
 
 Had you chosen SAFE, this step would instead apply what the selected categories actually exported, through `pvesh` on the running cluster, with no service stop and no config.db write. Note what STORAGE mode does not carry: the VM/CT configs live in `pve_config_export`, which is export-only and is stripped from STORAGE, so none are applied. `storage.cfg` and `datacenter.cfg` belong to `storage_pve` and are still applied through `pvesh`, as are pools and resource mappings. Use FULL, or CUSTOM including `pve_config_export`, when you want the guest configs applied.
 
@@ -870,7 +884,7 @@ proxsave --restore
 # Type "RESTORE" to proceed
 ```
 
-**Important**: Never run a RECOVERY cluster restore on a node that is still in the cluster; it overwrites config.db and can corrupt the cluster. The conservative choice is to leave `PVE Cluster Configuration` unselected here. If you do select it, ProxSave prompts SAFE vs RECOVERY, and on a live member SAFE is the only correct answer (it applies configs via the API and never writes config.db).
+**Important**: Never run a RECOVERY cluster restore on a node that is still in the cluster; it overwrites config.db and can corrupt the cluster. On a member of a quorate cluster with other nodes online, ProxSave refuses RECOVERY (`Cluster RECOVERY refused - quorate cluster, N nodes online: ...`). The conservative choice is to leave `PVE Cluster Configuration` unselected here. If you do select it, ProxSave prompts SAFE vs RECOVERY, and on a live member SAFE is the only correct answer (it applies configs via the API and never writes config.db).
 
 #### Step 6: Migrate VMs/CTs to Replacement Node
 

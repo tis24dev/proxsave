@@ -145,11 +145,12 @@ Safety Backup
   └─ Store in /tmp
   ↓
 Service Management (if cluster)
-  ├─ Stop PVE services
+  ├─ Stop HA services, then PVE services
   └─ Unmount /etc/pve
   ↓
 File Extraction (three tiers)
   ├─ Normal categories → /
+  ├─ (RECOVERY) Restart PVE and HA services once config.db is written
   ├─ Export categories → export dir (read-only)
   ├─ Staged categories → stage dir, then applied
   └─ Log all operations
@@ -157,7 +158,7 @@ File Extraction (three tiers)
 Post-Restore Tasks
   ├─ Recreate directories
   ├─ Check ZFS pools (when the ZFS category is selected)
-  └─ Restart services (deferred)
+  └─ Restart PBS services (deferred; PVE services only if the run ended before their restart)
   ↓
 Completion Summary
 ```
@@ -278,6 +279,9 @@ instead of line numbers, which drift on every edit):
    - Detect cluster payload in backup (`plan.ClusterBackup && plan.NeedsClusterRestore`)
    - Prompt user: SAFE (export+API) vs RECOVERY (full restore)
    - SAFE mode redirects pve_cluster to export-only
+   - RECOVERY probes the quorum (`refuseRecoveryOnQuorateCluster()`, see
+     [Cluster SAFE/RECOVERY Mode](#cluster-saferecovery-mode)) and refuses a quorate cluster
+     with more than 1 node online
 
 4. **Plan confirmation** (`confirmRestorePlan()` in `restore_workflow_ui_plan.go`, called from
    `runSelectiveRestore()` before any writes):
@@ -293,9 +297,13 @@ instead of line numbers, which drift on every edit):
    in `restore_workflow_ui_backups_services.go` → `stopPVEClusterServices()` /
    `unmountEtcPVE()` / `startPVEClusterServices()` in `restore_services.go`):
    - Detect cluster restore need (RECOVERY mode)
-   - Stop PVE services: pve-cluster, pvedaemon, pveproxy, pvestatd
+   - Stop HA services, then PVE services: pve-ha-lrm, pve-ha-crm, pve-cluster, pvedaemon,
+     pveproxy, pvestatd
    - Unmount /etc/pve
-   - Defer restart
+   - Restart once, right after `extractNormalCategories()` has written the cluster database
+     (`restartStoppedPVEClusterServices()`, called from `prepareAndRestoreSelectedPayloads()`):
+     pve-cluster, pvedaemon, pveproxy, pvestatd, pve-ha-crm, pve-ha-lrm. The deferred cleanup
+     restarts them only when the run ends before that point
 
 7. **PBS Service Management** (`preparePBSServices()` in
    `restore_workflow_ui_backups_services.go` → `stopPBSServices()` / `startPBSServices()`
@@ -899,6 +907,8 @@ if needsClusterRestore {
 ```go
 func stopPVEClusterServices(ctx context.Context, logger *logging.Logger) error {
     commands := [][]string{
+        {"systemctl", "stop", "pve-ha-lrm"}, // closes the watchdog before pmxcfs goes down
+        {"systemctl", "stop", "pve-ha-crm"},
         {"systemctl", "stop", "pve-cluster"},
         {"systemctl", "stop", "pvedaemon"},
         {"systemctl", "stop", "pveproxy"},
@@ -921,6 +931,8 @@ func startPVEClusterServices(ctx context.Context, logger *logging.Logger) error 
         {"systemctl", "start", "pvedaemon"},
         {"systemctl", "start", "pveproxy"},
         {"systemctl", "start", "pvestatd"},
+        {"systemctl", "start", "pve-ha-crm"},
+        {"systemctl", "start", "pve-ha-lrm"},
     }
     for _, cmd := range commands {
         if err := runCommand(ctx, logger, cmd[0], cmd[1:]...); err != nil {
@@ -1202,9 +1214,17 @@ pveproxy
 pvestatd
     (provides statistics)
 
-Stop order:  pve-cluster → pvedaemon → pveproxy → pvestatd
-Start order: pve-cluster → pvedaemon → pveproxy → pvestatd
+pve-ha-crm, pve-ha-lrm
+    (need /etc/pve; pve-ha-lrm holds the node's watchdog open)
+
+Stop order:  pve-ha-lrm → pve-ha-crm → pve-cluster → pvedaemon → pveproxy → pvestatd
+Start order: pve-cluster → pvedaemon → pveproxy → pvestatd → pve-ha-crm → pve-ha-lrm
 ```
+
+The HA services are stopped first because a running `pve-ha-lrm` fences the node
+(watchdog hard reset) when pmxcfs stays down for 60 seconds. `systemctl stop pve-ha-lrm`
+freezes the HA resources and closes the watchdog cleanly; `systemctl stop pve-ha-crm`
+releases the CRM lock so the master moves to another node.
 
 **PBS Service Dependency Graph**:
 
@@ -1306,9 +1326,30 @@ if plan.ClusterBackup && plan.NeedsClusterRestore {
 A standalone PVE backup commonly contains `pve_cluster` data, so it normally gets
 the same choice. SAFE moves that category to export-only and leaves
 `/var/lib/pve-cluster/config.db` untouched. RECOVERY keeps it in the normal
-restore set, stops PVE cluster services, unmounts `/etc/pve`, restores the
-database, then restarts the services. Staged `/etc/pve` applies are skipped in
-RECOVERY because the restored database owns that state.
+restore set, stops the HA services and the PVE cluster services, unmounts `/etc/pve`,
+restores the database, then restarts the services right after that extraction, before
+the later steps (network apply, boot rebuild). Staged `/etc/pve` applies are skipped in
+RECOVERY because the restored database owns that state. With the services back up, the
+post-apply network health check runs its PVE checks (`pvecm status`, ports, services)
+in RECOVERY too.
+
+### RECOVERY Quorum Probe
+
+`applyClusterRestoreChoice()` calls `refuseRecoveryOnQuorateCluster()` when RECOVERY is
+chosen, before any service is stopped or file written. On a member of a quorate cluster
+the restored `config.db` is discarded: when `pve-cluster` starts again, pmxcfs syncs from
+the cluster leader and the leader's copy replaces it.
+
+| Condition | Result |
+|-----------|--------|
+| No `corosync.conf` (`detectCorosyncConfig()`: `/etc/pve/corosync.conf` or `/etc/corosync/corosync.conf`) | Proceeds, no probe, no message |
+| `pvecm status`: quorate, more than 1 node online | Error `Cluster RECOVERY refused - quorate cluster, N nodes online: its copy would replace the restored config.db` |
+| `pvecm status`: quorate, 1 node online | Proceeds |
+| `pvecm status`: not quorate | Proceeds |
+| `pvecm status` fails or prints no `Quorate:` line | Proceeds with warning `Cluster RECOVERY - quorum unknown (<reason>), proceeding` |
+
+The probe reuses `pvecmQuorumStatus()` from the network health checks, with the same
+3 second timeout; N is the `Nodes:` value `pvecm status` printed.
 
 ### SAFE Mode Implementation
 

@@ -92,15 +92,13 @@ func (f *networkConfigUIApplyFlow) runConfirmedNetworkApply() error {
 	if err != nil || rollbackPath == "" {
 		return err
 	}
-	systemType, suppressPVEChecks := f.networkApplyOptions()
 	return applyNetworkWithRollbackWithUI(f.ctx, f.ui, f.logger, networkRollbackUIApplyRequest{
 		rollbackBackupPath:  rollbackPath,
 		networkRollbackPath: f.networkRollbackPath,
 		stageRoot:           f.stageRoot,
 		archivePath:         f.archivePath,
 		timeout:             defaultNetworkRollbackTimeout,
-		systemType:          systemType,
-		suppressPVEChecks:   suppressPVEChecks,
+		systemType:          f.networkApplyOptions(),
 	})
 }
 
@@ -252,11 +250,14 @@ func (f *networkConfigUIApplyFlow) promptNICRepair() error {
 	return nil
 }
 
-func (f *networkConfigUIApplyFlow) networkApplyOptions() (SystemType, bool) {
+// networkApplyOptions returns the system type the post-apply health checks run for.
+// A cluster RECOVERY no longer suppresses the PVE checks: its services are started
+// again right after the cluster database is written, before this apply runs.
+func (f *networkConfigUIApplyFlow) networkApplyOptions() SystemType {
 	if f.plan == nil {
-		return SystemTypeUnknown, false
+		return SystemTypeUnknown
 	}
-	return f.plan.SystemType, f.plan.SystemType.SupportsPVE() && f.plan.NeedsClusterRestore
+	return f.plan.SystemType
 }
 
 func (f *networkConfigUIApplyFlow) debug(format string, args ...interface{}) {

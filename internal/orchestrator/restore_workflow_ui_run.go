@@ -42,9 +42,12 @@ type restoreUIWorkflowRun struct {
 	exportRoot                  string
 	needsClusterRestore         bool
 	clusterServicesStopped      bool
-	pbsServicesStopped          bool
-	needsPBSServices            bool
-	needsFilesystemRestore      bool
+	// clusterServicesRestarted is set once the PVE services stopped for a cluster
+	// RECOVERY have been started again, so the deferred cleanup does not repeat it.
+	clusterServicesRestarted bool
+	pbsServicesStopped       bool
+	needsPBSServices         bool
+	needsFilesystemRestore   bool
 	// needsBootConfiguration is set when the boot category is selected: it is taken
 	// out of the system-path extraction and applied by applyBootConfiguration.
 	needsBootConfiguration bool
@@ -121,6 +124,8 @@ func (w *restoreUIWorkflowRun) prepareAndRestoreSelectedPayloads() error {
 	if err := w.extractNormalCategories(); err != nil {
 		return err
 	}
+	// The cluster database is on disk: nothing after this needs pmxcfs down.
+	w.restartStoppedPVEClusterServices()
 	if err := w.smartMergeFilesystemCategory(); err != nil {
 		return err
 	}

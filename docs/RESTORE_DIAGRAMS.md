@@ -69,14 +69,15 @@ flowchart TD
     AskContinue -->|Yes| CheckCluster
     SafetyOK -->|Yes| CheckCluster{Cluster Restore?}
 
-    CheckCluster -->|Yes| StopServices[Stop PVE Services]
+    CheckCluster -->|Yes| StopServices["Stop pve-ha-lrm, pve-ha-crm,<br/>then PVE Services"]
     StopServices --> UnmountPVE[Unmount /etc/pve]
-    UnmountPVE --> DeferRestart[Defer Service Restart]
+    UnmountPVE --> DeferRestart["Arm fallback restart<br/>(runs only if the restore<br/>ends before the early restart)"]
     DeferRestart --> ZFSHostFiles
 
     CheckCluster -->|No| ZFSHostFiles["ZFS host files check (zfs or services selected):<br/>keep this host's /etc/hostid and<br/>pool cache when it has pools imported,<br/>and its own zfs.conf ARC limit"]
     ZFSHostFiles --> ExtractNormal["Extract Normal Categories<br/>(the old host's GRUB settings,<br/>kernel cmdline, ESP list: never)"]
-    ExtractNormal --> ExtractExport{Export Categories?}
+    ExtractNormal --> RestartPVE["Cluster RECOVERY only: restart<br/>pve-cluster, pvedaemon, pveproxy,<br/>pvestatd, then pve-ha-crm, pve-ha-lrm"]
+    RestartPVE --> ExtractExport{Export Categories?}
     ExtractExport -->|Yes| ExtractToExport[Extract to Export Dir]
     ExtractExport -->|No| PostRestore
     ExtractToExport --> PostRestore[Post-Restore Tasks]
@@ -88,7 +89,7 @@ flowchart TD
     BootMerge --> CheckZFS{ZFS Category?}
     CheckZFS -->|Yes| WarnZFS[Warn About ZFS Import]
     CheckZFS -->|No| RestartServices
-    WarnZFS --> RestartServices[Restart Services - Deferred]
+    WarnZFS --> RestartServices[Restart PBS Services - Deferred]
 
     RestartServices --> DisplaySummary[Display Summary]
     DisplaySummary --> Success([Success])
@@ -170,10 +171,17 @@ sequenceDiagram
     participant FS as Filesystem
     participant DB as config.db
 
-    User->>Restore: Start restore with pve_cluster
+    User->>Restore: Start restore with pve_cluster, choose RECOVERY
+    Restore->>Services: pvecm status (only with corosync.conf present)
+    Services-->>Restore: Quorate with more than 1 node online: refused, run stops
+    Services-->>Restore: Otherwise (1 node, not quorate, unreadable): proceed
     Restore->>Restore: Detect needsClusterRestore = true
 
     Note over Restore,Services: Service Stop Phase
+    Restore->>Services: systemctl stop pve-ha-lrm
+    Services-->>Restore: Stopped (HA resources frozen, watchdog closed)
+    Restore->>Services: systemctl stop pve-ha-crm
+    Services-->>Restore: Stopped (CRM lock released)
     Restore->>Services: systemctl stop pve-cluster
     Services->>FS: Unmount /etc/pve (FUSE)
     Services->>DB: Close file handles
@@ -190,14 +198,14 @@ sequenceDiagram
     Restore->>FS: umount /etc/pve
     FS-->>Restore: Unmounted (or already unmounted)
 
-    Note over Restore: Schedule Deferred Restart (defer)
+    Note over Restore: Arm fallback restart (defer), used only if the run ends before the restart below
 
     Note over Restore,DB: Restore Phase
     Restore->>DB: Extract /var/lib/pve-cluster/
     Restore->>DB: Extract config.db
     DB-->>Restore: Files restored
 
-    Note over Restore,Services: Deferred Restart Executes
+    Note over Restore,Services: Restart right after the extraction
     Restore->>Services: systemctl start pve-cluster
     Services->>DB: Open config.db
     Services->>FS: Mount /etc/pve (FUSE)
@@ -212,6 +220,13 @@ sequenceDiagram
 
     Restore->>Services: systemctl start pvestatd
     Services-->>Restore: Started
+
+    Restore->>Services: systemctl start pve-ha-crm
+    Services-->>Restore: Started
+    Restore->>Services: systemctl start pve-ha-lrm
+    Services-->>Restore: Started (HA resources resumed)
+
+    Note over Restore,Services: Later steps (network apply with PVE health checks, boot rebuild)
 
     Restore-->>User: Restore Complete
 
@@ -296,7 +311,11 @@ stateDiagram-v2
     Running --> Stopping: User initiates restore
 
     state Stopping {
-        [*] --> StopCluster
+        [*] --> StopLRM
+        StopLRM: systemctl stop pve-ha-lrm
+        StopLRM --> StopCRM
+        StopCRM: systemctl stop pve-ha-crm
+        StopCRM --> StopCluster
         StopCluster: systemctl stop pve-cluster
         StopCluster --> StopDaemon
         StopDaemon: systemctl stop pvedaemon
@@ -344,10 +363,14 @@ stateDiagram-v2
         StartProxy: systemctl start pveproxy
         StartProxy --> StartStatd
         StartStatd: systemctl start pvestatd
-        StartStatd --> [*]
+        StartStatd --> StartCRM
+        StartCRM: systemctl start pve-ha-crm
+        StartCRM --> StartLRM
+        StartLRM: systemctl start pve-ha-lrm
+        StartLRM --> [*]
     }
 
-    Restarting --> Restored: Services restarted
+    Restarting --> Restored: Services restarted right after the extraction
 
     state Restored {
         [*] --> ServicesRestored

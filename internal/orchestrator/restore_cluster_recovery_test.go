@@ -1,0 +1,498 @@
+package orchestrator
+
+import (
+	"bytes"
+	"context"
+	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/tis24dev/proxsave/internal/backup"
+	"github.com/tis24dev/proxsave/internal/config"
+	"github.com/tis24dev/proxsave/internal/logging"
+	"github.com/tis24dev/proxsave/internal/types"
+)
+
+// clusterRecoveryServices are the services a cluster RECOVERY stops, in stop order.
+var clusterRecoveryServices = []string{"pve-ha-lrm", "pve-ha-crm", "pve-cluster", "pvedaemon", "pveproxy", "pvestatd"}
+
+type clusterRecoveryOptions struct {
+	live       map[string]string
+	archive    map[string]string
+	outputs    map[string]string
+	errs       map[string]error
+	categories []string
+}
+
+type clusterRecoveryRun struct {
+	fs  *FakeFS
+	cmd *FakeCommandRunner
+	log string
+	err error
+}
+
+// runClusterRecoveryRestore runs the real restore workflow on a PVE host, from a
+// cluster archive holding config.db, with the operator choosing RECOVERY. The live
+// config.db is "db-live", the archive's is "db-from-backup".
+func runClusterRecoveryRestore(t *testing.T, opts clusterRecoveryOptions) clusterRecoveryRun {
+	t.Helper()
+	origRestoreFS, origRestoreCmd, origRestoreSystem := restoreFS, restoreCmd, restoreSystem
+	origRestoreTime, origCompatFS, origPrepare := restoreTime, compatFS, prepareRestoreBundleFunc
+	origSafetyFS, origSafetyNow := safetyFS, safetyNow
+	t.Cleanup(func() {
+		restoreFS, restoreCmd, restoreSystem = origRestoreFS, origRestoreCmd, origRestoreSystem
+		restoreTime, compatFS, prepareRestoreBundleFunc = origRestoreTime, origCompatFS, origPrepare
+		safetyFS, safetyNow = origSafetyFS, origSafetyNow
+	})
+
+	fakeFS := NewFakeFS()
+	t.Cleanup(func() { _ = os.RemoveAll(fakeFS.Root) })
+	restoreFS, compatFS, safetyFS = fakeFS, fakeFS, fakeFS
+	fakeNow := &FakeTime{Current: time.Date(2026, 9, 27, 10, 0, 0, 0, time.UTC)}
+	restoreTime, safetyNow = fakeNow, fakeNow.Now
+	restoreSystem = fakeSystemDetector{systemType: SystemTypePVE}
+
+	live := map[string]string{"/var/lib/pve-cluster/config.db": "db-live\n"}
+	for path, content := range opts.live {
+		live[path] = content
+	}
+	for path, content := range live {
+		if err := fakeFS.AddFile(path, []byte(content)); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	cmd := &FakeCommandRunner{
+		Outputs: map[string][]byte{"umount /etc/pve": []byte("not mounted\n")},
+		Errors:  map[string]error{"umount /etc/pve": errors.New("not mounted")},
+	}
+	for _, svc := range clusterRecoveryServices {
+		cmd.Outputs["systemctl stop --no-block "+svc] = []byte("ok")
+		cmd.Outputs["systemctl is-active "+svc] = []byte("inactive\n")
+		cmd.Errors["systemctl is-active "+svc] = errors.New("inactive")
+		cmd.Outputs["systemctl reset-failed "+svc] = []byte("ok")
+		cmd.Outputs["systemctl start "+svc] = []byte("ok")
+	}
+	for k, v := range opts.outputs {
+		cmd.Outputs[k] = []byte(v)
+	}
+	for k, v := range opts.errs {
+		cmd.Errors[k] = v
+	}
+	restoreCmd = cmd
+
+	archive := map[string]string{"var/lib/pve-cluster/config.db": "db-from-backup\n"}
+	for path, content := range opts.archive {
+		archive[path] = content
+	}
+	tmpTar := filepath.Join(t.TempDir(), "bundle.tar")
+	if err := writeTarFile(tmpTar, archive); err != nil {
+		t.Fatal(err)
+	}
+	tarBytes, err := os.ReadFile(tmpTar)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := fakeFS.WriteFile("/bundle.tar", tarBytes, 0o640); err != nil {
+		t.Fatal(err)
+	}
+	prepareRestoreBundleFunc = stubPreparedRestoreBundle("/bundle.tar", &backup.Manifest{
+		CreatedAt:     fakeNow.Now(),
+		ClusterMode:   "cluster",
+		ProxmoxType:   "pve",
+		ScriptVersion: "vtest",
+	})
+
+	categories := opts.categories
+	if len(categories) == 0 {
+		categories = []string{"pve_cluster"}
+	}
+	ui := &fakeRestoreWorkflowUI{
+		mode:              RestoreModeCustom,
+		confirmRestore:    true,
+		confirmCompatible: true,
+		clusterMode:       ClusterRestoreRecovery,
+	}
+	for _, id := range categories {
+		ui.categories = append(ui.categories, mustCategoryByID(t, id))
+	}
+
+	var buf bytes.Buffer
+	logger := logging.New(types.LogLevelInfo, false)
+	logger.SetOutput(&buf)
+	runErr := runRestoreWorkflowWithUI(context.Background(), &config.Config{BaseDir: "/base"}, logger, "vtest", ui, "")
+	return clusterRecoveryRun{fs: fakeFS, cmd: cmd, log: buf.String(), err: runErr}
+}
+
+func (r clusterRecoveryRun) configDB(t *testing.T) string {
+	t.Helper()
+	data, err := r.fs.ReadFile("/var/lib/pve-cluster/config.db")
+	if err != nil {
+		t.Fatalf("read config.db: %v", err)
+	}
+	return string(data)
+}
+
+func (r clusterRecoveryRun) count(call string) int {
+	n := 0
+	for _, c := range r.cmd.CallsList() {
+		if c == call {
+			n++
+		}
+	}
+	return n
+}
+
+func (r clusterRecoveryRun) index(call string) int {
+	for i, c := range r.cmd.CallsList() {
+		if c == call {
+			return i
+		}
+	}
+	return -1
+}
+
+// assertCallsInOrder fails unless want appears in calls as a subsequence, in order.
+func assertCallsInOrder(t *testing.T, calls []string, want ...string) {
+	t.Helper()
+	next := 0
+	for _, w := range want {
+		found := false
+		for next < len(calls) {
+			c := calls[next]
+			next++
+			if c == w {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("calls out of order: %q not found after the previous expected call; want order %q; calls=%q", w, want, calls)
+		}
+	}
+}
+
+// pvecmStatusOutput is what pvecm status prints on PVE 9 for a cluster with nodes
+// members online out of expected.
+func pvecmStatusOutput(nodes, expected int, quorate bool) string {
+	quorateText := "No"
+	flags := ""
+	if quorate {
+		quorateText = "Yes"
+		flags = "Quorate"
+	}
+	return fmt.Sprintf(`Cluster information
+-------------------
+Name:             lab
+Config Version:   3
+Transport:        knet
+Secure auth:      on
+
+Quorum information
+------------------
+Date:             Sun Sep 27 10:00:00 2026
+Quorum provider:  corosync_votequorum
+Nodes:            %d
+Node ID:          0x00000001
+Ring ID:          1.2d
+Quorate:          %s
+
+Votequorum information
+----------------------
+Expected votes:   %d
+Highest expected: %d
+Total votes:      %d
+Quorum:           %d
+Flags:            %s
+`, nodes, quorateText, expected, expected, nodes, expected/2+1, flags)
+}
+
+var corosyncLive = map[string]string{"/etc/pve/corosync.conf": "totem {\n  cluster_name: lab\n}\n"}
+
+// On a member of a quorate cluster, the config.db RECOVERY writes is replaced by the
+// leader's copy when pve-cluster starts again (measured on a 3-node PVE 9.2.2
+// cluster), while the restore reported success. The quorum is probed right after the
+// operator picks RECOVERY: a quorate cluster with other nodes online is refused before
+// any service is stopped or file written; every other case proceeds.
+func TestClusterRecoveryQuorumProbe(t *testing.T) {
+	cases := []struct {
+		name        string
+		live        map[string]string
+		outputs     map[string]string
+		errs        map[string]error
+		wantErr     string
+		wantWarning string
+		wantPvecm   bool
+	}{
+		{
+			name:      "quorate cluster with 3 nodes online is refused",
+			live:      corosyncLive,
+			outputs:   map[string]string{"pvecm status": pvecmStatusOutput(3, 3, true)},
+			wantErr:   "Cluster RECOVERY refused - quorate cluster, 3 nodes online: its copy would replace the restored config.db",
+			wantPvecm: true,
+		},
+		{
+			name:      "quorate cluster with 1 node online proceeds",
+			live:      corosyncLive,
+			outputs:   map[string]string{"pvecm status": pvecmStatusOutput(1, 1, true)},
+			wantPvecm: true,
+		},
+		{
+			name:      "cluster without quorum proceeds",
+			live:      corosyncLive,
+			outputs:   map[string]string{"pvecm status": pvecmStatusOutput(2, 5, false)},
+			wantPvecm: true,
+		},
+		{
+			name: "standalone node without corosync.conf proceeds silently",
+		},
+		{
+			name:        "pvecm failing with output proceeds with a warning",
+			live:        corosyncLive,
+			outputs:     map[string]string{"pvecm status": "Cannot initialize CMAP service\n"},
+			errs:        map[string]error{"pvecm status": errors.New("exit status 2")},
+			wantWarning: "Cluster RECOVERY - quorum unknown (could not determine quorum: Cannot initialize CMAP service), proceeding",
+			wantPvecm:   true,
+		},
+		{
+			name:        "pvecm failing without output proceeds with a warning",
+			live:        corosyncLive,
+			errs:        map[string]error{"pvecm status": errors.New("exit status 2")},
+			wantWarning: "Cluster RECOVERY - quorum unknown (pvecm status failed: exit status 2), proceeding",
+			wantPvecm:   true,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			r := runClusterRecoveryRestore(t, clusterRecoveryOptions{live: tc.live, outputs: tc.outputs, errs: tc.errs})
+
+			if got := r.count("pvecm status") > 0; got != tc.wantPvecm {
+				t.Fatalf("pvecm status called=%v, want %v; calls=%q", got, tc.wantPvecm, r.cmd.CallsList())
+			}
+			if tc.wantWarning != "" {
+				if !strings.Contains(r.log, tc.wantWarning) {
+					t.Fatalf("missing warning %q in log:\n%s", tc.wantWarning, r.log)
+				}
+			} else if strings.Contains(r.log, "quorum unknown") {
+				t.Fatalf("unexpected quorum warning in log:\n%s", r.log)
+			}
+
+			if tc.wantErr != "" {
+				if r.err == nil || r.err.Error() != tc.wantErr {
+					t.Fatalf("err = %v, want %q", r.err, tc.wantErr)
+				}
+				for _, c := range r.cmd.CallsList() {
+					if strings.HasPrefix(c, "systemctl stop") || c == "umount /etc/pve" {
+						t.Fatalf("refused RECOVERY still ran %q; calls=%q", c, r.cmd.CallsList())
+					}
+				}
+				if got := r.configDB(t); got != "db-live\n" {
+					t.Fatalf("refused RECOVERY changed the live config.db: %q", got)
+				}
+				return
+			}
+
+			if r.err != nil {
+				t.Fatalf("restore: %v", r.err)
+			}
+			if r.count("systemctl stop --no-block pve-cluster") != 1 {
+				t.Fatalf("RECOVERY did not stop pve-cluster; calls=%q", r.cmd.CallsList())
+			}
+			if got := r.configDB(t); got != "db-from-backup\n" {
+				t.Fatalf("RECOVERY did not restore config.db: %q", got)
+			}
+		})
+	}
+}
+
+// With pmxcfs down for 60 s, a running pve-ha-lrm lets its watchdog expire and the
+// node is fenced; a real FULL RECOVERY died that way 54 s after the stop. The HA
+// services are stopped before pve-cluster and started again after it, CRM before LRM.
+func TestClusterRecoveryStopsHAServicesFirstAndStartsThemLast(t *testing.T) {
+	r := runClusterRecoveryRestore(t, clusterRecoveryOptions{})
+	if r.err != nil {
+		t.Fatalf("restore: %v", r.err)
+	}
+	calls := r.cmd.CallsList()
+	assertCallsInOrder(t, calls,
+		"systemctl stop --no-block pve-ha-lrm",
+		"systemctl stop --no-block pve-ha-crm",
+		"systemctl stop --no-block pve-cluster",
+		"systemctl stop --no-block pvedaemon",
+		"systemctl stop --no-block pveproxy",
+		"systemctl stop --no-block pvestatd",
+		"systemctl start pve-cluster",
+		"systemctl start pvedaemon",
+		"systemctl start pveproxy",
+		"systemctl start pvestatd",
+		"systemctl start pve-ha-crm",
+		"systemctl start pve-ha-lrm",
+	)
+	for _, svc := range clusterRecoveryServices {
+		if n := r.count("systemctl start " + svc); n != 1 {
+			t.Fatalf("%s started %d times, want 1; calls=%q", svc, n, calls)
+		}
+	}
+}
+
+// Only the extraction that writes config.db needs pmxcfs down. The services come
+// back right after it, before the later steps (here the boot rebuild), and the
+// deferred cleanup does not start them a second time.
+func TestClusterRecoveryRestartsPVEServicesBeforeLaterSteps(t *testing.T) {
+	archive := mikPve1Archive()
+	r := runClusterRecoveryRestore(t, clusterRecoveryOptions{
+		live:       pveTestLive(),
+		archive:    archive,
+		outputs:    grubHostOutputs,
+		categories: []string{"pve_cluster", "boot"},
+	})
+	if r.err != nil {
+		t.Fatalf("restore: %v", r.err)
+	}
+	start := r.index("systemctl start pve-cluster")
+	rebuild := r.index("update-initramfs -u -k all")
+	if start < 0 || rebuild < 0 {
+		t.Fatalf("start pve-cluster at %d, update-initramfs at %d; calls=%q", start, rebuild, r.cmd.CallsList())
+	}
+	if start > rebuild {
+		t.Fatalf("pve-cluster started after the boot rebuild; calls=%q", r.cmd.CallsList())
+	}
+	if n := r.count("systemctl start pve-cluster"); n != 1 {
+		t.Fatalf("pve-cluster started %d times, want 1; calls=%q", n, r.cmd.CallsList())
+	}
+	if got := r.configDB(t); got != "db-from-backup\n" {
+		t.Fatalf("RECOVERY did not restore config.db: %q", got)
+	}
+}
+
+// A run that fails while the services are still down (here the extraction of an
+// unreadable archive) restarts them from the deferred cleanup, once each, as before.
+func TestClusterRecoveryRestartsPVEServicesWhenExtractionFails(t *testing.T) {
+	origAnalyze := analyzeRestoreArchiveFunc
+	t.Cleanup(func() { analyzeRestoreArchiveFunc = origAnalyze })
+	// The analysis reads the valid archive; the extraction then meets garbage.
+	analyzeRestoreArchiveFunc = func(_ string, logger *logging.Logger) ([]Category, *RestoreDecisionInfo, error) {
+		if err := restoreFS.WriteFile("/bundle-valid.tar", mustReadFakeFile(t, "/bundle.tar"), 0o640); err != nil {
+			t.Fatal(err)
+		}
+		if err := restoreFS.WriteFile("/bundle.tar", []byte("not a tar archive, not gzip either"), 0o640); err != nil {
+			t.Fatal(err)
+		}
+		return origAnalyze("/bundle-valid.tar", logger)
+	}
+
+	r := runClusterRecoveryRestore(t, clusterRecoveryOptions{})
+	if r.err == nil {
+		t.Fatalf("restore of an unreadable archive succeeded; calls=%q", r.cmd.CallsList())
+	}
+	if r.count("systemctl stop --no-block pve-cluster") != 1 {
+		t.Fatalf("RECOVERY did not stop pve-cluster; calls=%q", r.cmd.CallsList())
+	}
+	for _, svc := range clusterRecoveryServices {
+		if n := r.count("systemctl start " + svc); n != 1 {
+			t.Fatalf("%s started %d times after the failed extraction, want 1; calls=%q", svc, n, r.cmd.CallsList())
+		}
+	}
+	if got := r.configDB(t); got != "db-live\n" {
+		t.Fatalf("failed extraction changed config.db: %q", got)
+	}
+}
+
+func mustReadFakeFile(t *testing.T, path string) []byte {
+	t.Helper()
+	data, err := restoreFS.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read %s: %v", path, err)
+	}
+	return data
+}
+
+func countCalls(calls []string, want string) int {
+	n := 0
+	for _, c := range calls {
+		if c == want {
+			n++
+		}
+	}
+	return n
+}
+
+// healthCapturingUI records the health report the network COMMIT prompt receives.
+type healthCapturingUI struct {
+	*fakeRestoreWorkflowUI
+	health *networkHealthReport
+}
+
+func (u *healthCapturingUI) PromptNetworkCommit(ctx context.Context, remaining time.Duration, health networkHealthReport, nicRepair *nicRepairResult, diagnosticsDir string) (bool, error) {
+	h := health
+	u.health = &h
+	return true, nil
+}
+
+// The PVE services are running again by the time the network is applied, so a
+// cluster RECOVERY runs the same post-apply PVE checks as any other restore instead of
+// reporting them as skipped.
+func TestNetworkApplyInClusterRecoveryRunsPVEChecks(t *testing.T) {
+	origFS, origCmd, origTime, origSeq := restoreFS, restoreCmd, restoreTime, networkDiagnosticsSequence
+	t.Cleanup(func() {
+		restoreFS, restoreCmd, restoreTime, networkDiagnosticsSequence = origFS, origCmd, origTime, origSeq
+	})
+	fakeFS := NewFakeFS()
+	t.Cleanup(func() { _ = os.RemoveAll(fakeFS.Root) })
+	restoreFS = fakeFS
+	restoreTime = &FakeTime{Current: time.Date(2026, 9, 27, 10, 0, 0, 0, time.UTC)}
+	networkDiagnosticsSequence = 0
+	if err := fakeFS.AddFile("/etc/pve/corosync.conf", []byte("totem {}\n")); err != nil {
+		t.Fatal(err)
+	}
+
+	pathDir := t.TempDir()
+	for _, tool := range []string{"ifquery", "ifup", "ifreload"} {
+		writeExecutableTestTool(t, pathDir, tool)
+	}
+	t.Setenv("PATH", pathDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	cmd := &FakeCommandRunner{
+		Outputs: map[string][]byte{
+			"ip route show default":           []byte("default via 192.168.1.1 dev vmbr0\n"),
+			"systemctl is-active pve-cluster": []byte("active\n"),
+			"systemctl is-active corosync":    []byte("active\n"),
+			"pvecm status":                    []byte(pvecmStatusOutput(1, 1, true)),
+		},
+		Errors: map[string]error{},
+	}
+	restoreCmd = cmd
+
+	ui := &healthCapturingUI{fakeRestoreWorkflowUI: &fakeRestoreWorkflowUI{}}
+	flow := &networkConfigUIApplyFlow{
+		ctx:                 context.Background(),
+		ui:                  ui,
+		logger:              newTestLogger(),
+		plan:                &RestorePlan{SystemType: SystemTypePVE, NeedsClusterRestore: true},
+		networkRollbackPath: "/tmp/proxsave/network_rollback_backup_20260927_100000.tar.gz",
+	}
+	_ = flow.runConfirmedNetworkApply()
+
+	if ui.health == nil {
+		t.Fatalf("network COMMIT prompt never reached; calls=%q", cmd.CallsList())
+	}
+	names := map[string]string{}
+	for _, c := range ui.health.Checks {
+		names[c.Name] = c.Message
+		if strings.Contains(c.Message, "cluster database restore in progress") {
+			t.Fatalf("PVE checks reported as skipped: %s: %s", c.Name, c.Message)
+		}
+	}
+	for _, want := range []string{"Corosync config", "pve-cluster service", "Cluster quorum"} {
+		if _, ok := names[want]; !ok {
+			t.Fatalf("health report lacks %q; checks=%v", want, names)
+		}
+	}
+	if countCalls(cmd.CallsList(), "pvecm status") == 0 {
+		t.Fatalf("pvecm status not run by the health check; calls=%q", cmd.CallsList())
+	}
+}

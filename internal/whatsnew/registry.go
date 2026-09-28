@@ -226,10 +226,10 @@ var notes = []Note{
 			"A FULL restore on a PVE-only or PBS-only host exports the other product's categories instead of writing them",
 			"Backups now include /etc/default and udev rules, which the restore listed but no backup ever saved",
 			"New boot category, in FULL: old kernel parameters join this host's; old GRUB and kernel cmdline are never written",
-			"A restore keeps its safety backup, rollback archives, logs and diagnostics in /var/lib/proxsave/restore, past a reboot",
-			"A restore deletes its staging directory, which holds decrypted secrets, when it ends, whether it succeeded or failed",
+			"A restore keeps its safety backup and logs in /var/lib/proxsave/restore past a reboot, and deletes its decrypted staging",
 			"A restore keeps this host's /etc/hostid and ZFS pool cache when it has pools imported, and its own ZFS ARC limit",
 			"Hosts with PVE removed or a leftover config.db are backed up again; a missing version reads unknown, not vunknown",
+			"A RECOVERY cluster restore stops the HA services, restarts the cluster right after writing, refuses a quorate cluster",
 		},
 		Actions: []string{
 			"With DRY_RUN=true in backup.env, a restore from the CLI or the dashboard is refused until DRY_RUN is set to false",

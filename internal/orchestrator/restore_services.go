@@ -44,8 +44,13 @@ type serviceInactiveWaiter struct {
 	ticker          *time.Ticker
 }
 
+// stopPVEClusterServices stops the HA services before pmxcfs. pve-ha-lrm holds the
+// node's watchdog open while pmxcfs is down: with pve-cluster stopped for 60 s it
+// expires and the node is hard-reset (fenced) in the middle of the restore. Stopped
+// first, the LRM freezes its services and closes the watchdog cleanly, and the CRM
+// releases its lock so the master moves to another node.
 func stopPVEClusterServices(ctx context.Context, logger *logging.Logger) error {
-	services := []string{"pve-cluster", "pvedaemon", "pveproxy", "pvestatd"}
+	services := []string{"pve-ha-lrm", "pve-ha-crm", "pve-cluster", "pvedaemon", "pveproxy", "pvestatd"}
 	for _, service := range services {
 		if err := stopServiceWithRetries(ctx, logger, service); err != nil {
 			return fmt.Errorf("failed to stop PVE services (%s): %w", service, err)
@@ -54,8 +59,10 @@ func stopPVEClusterServices(ctx context.Context, logger *logging.Logger) error {
 	return nil
 }
 
+// startPVEClusterServices starts pmxcfs and the API services before the HA services,
+// the reverse of the stop order: the CRM, then the LRM, come back once /etc/pve is up.
 func startPVEClusterServices(ctx context.Context, logger *logging.Logger) error {
-	services := []string{"pve-cluster", "pvedaemon", "pveproxy", "pvestatd"}
+	services := []string{"pve-cluster", "pvedaemon", "pveproxy", "pvestatd", "pve-ha-crm", "pve-ha-lrm"}
 	for _, service := range services {
 		if err := startServiceWithRetries(ctx, logger, service); err != nil {
 			return fmt.Errorf("failed to start PVE services (%s): %w", service, err)

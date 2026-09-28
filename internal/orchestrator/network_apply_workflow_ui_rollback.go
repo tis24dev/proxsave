@@ -23,7 +23,6 @@ type networkRollbackUIApplyFlow struct {
 	archivePath         string
 	timeout             time.Duration
 	systemType          SystemType
-	suppressPVEChecks   bool
 	diagnosticsDir      string
 	iface               string
 	source              string
@@ -39,20 +38,18 @@ type networkRollbackUIApplyRequest struct {
 	archivePath         string
 	timeout             time.Duration
 	systemType          SystemType
-	suppressPVEChecks   bool
 }
 
 func applyNetworkWithRollbackWithUI(ctx context.Context, ui RestoreWorkflowUI, logger *logging.Logger, req networkRollbackUIApplyRequest) (err error) {
 	done := logging.DebugStart(
 		logger,
 		"network safe apply (ui)",
-		"rollbackBackup=%s networkRollback=%s timeout=%s systemType=%s stage=%s suppressPVEChecks=%v",
+		"rollbackBackup=%s networkRollback=%s timeout=%s systemType=%s stage=%s",
 		strings.TrimSpace(req.rollbackBackupPath),
 		strings.TrimSpace(req.networkRollbackPath),
 		req.timeout,
 		req.systemType,
 		strings.TrimSpace(req.stageRoot),
-		req.suppressPVEChecks,
 	)
 	defer func() { done(err) }()
 
@@ -66,7 +63,6 @@ func applyNetworkWithRollbackWithUI(ctx context.Context, ui RestoreWorkflowUI, l
 		archivePath:         req.archivePath,
 		timeout:             req.timeout,
 		systemType:          req.systemType,
-		suppressPVEChecks:   req.suppressPVEChecks,
 	}
 	return flow.run()
 }
@@ -420,14 +416,7 @@ func (f *networkRollbackUIApplyFlow) runPostApplyHealthChecks() {
 		EnableDNSResolve:   true,
 		LocalPortChecks:    defaultNetworkPortChecks(f.systemType),
 	}
-	if f.suppressPVEChecks {
-		healthOptions.SystemType = SystemTypeUnknown
-		healthOptions.LocalPortChecks = nil
-	}
 	f.health = runNetworkHealthChecks(f.ctx, healthOptions)
-	if f.suppressPVEChecks {
-		f.health.add("PVE service checks", networkHealthOK, "skipped (cluster database restore in progress; services will be restarted after restore completes)")
-	}
 	logNetworkHealthReport(f.logger, f.health)
 	if f.diagnosticsDir == "" {
 		return

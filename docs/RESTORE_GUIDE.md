@@ -477,7 +477,8 @@ Phase 6: Cluster Restore Mode (PVE backups carrying pve_cluster)
   ├─ Detect the pve_cluster payload in the archive (not the manifest ClusterMode)
   ├─ Prompt: SAFE (export+API) vs RECOVERY (full restore)
   ├─ SAFE: Redirect pve_cluster to export-only, apply via pvesh
-  └─ RECOVERY: Proceed with direct database restore
+  └─ RECOVERY: Probe the quorum (pvecm status); refuse a quorate cluster with more than 1 node online,
+     otherwise proceed with direct database restore
 
 Phase 7: Restore Plan & Confirmation
   ├─ Display detailed restore plan
@@ -492,9 +493,10 @@ Phase 8: Safety Backup
 
 Phase 9: Service Management (PVE Cluster Restore)
   ├─ Detect if pve_cluster category selected (RECOVERY mode)
-  ├─ Stop: pve-cluster, pvedaemon, pveproxy, pvestatd
+  ├─ Stop: pve-ha-lrm, pve-ha-crm, then pve-cluster, pvedaemon, pveproxy, pvestatd
   ├─ Unmount /etc/pve
-  └─ Defer restart for after restore
+  └─ Restart right after the cluster database is written (not at the end of the run):
+     pve-cluster, pvedaemon, pveproxy, pvestatd, then pve-ha-crm, pve-ha-lrm
 
 Phase 10: Service Management (PBS Restore)
   ├─ Detect if PBS-specific categories selected
@@ -628,6 +630,17 @@ Cluster backup detected. Choose how to restore the cluster database:
 Choice: _
 ```
 
+When RECOVERY is chosen and the node has a `corosync.conf` (`/etc/pve/corosync.conf` or `/etc/corosync/corosync.conf`), ProxSave runs `pvecm status` before any restore step:
+
+| `pvecm status` reports | Result |
+|---|---|
+| Quorate, more than 1 node online | The restore stops: `Cluster RECOVERY refused - quorate cluster, N nodes online: its copy would replace the restored config.db` |
+| Quorate, 1 node online | Proceeds |
+| Not quorate | Proceeds |
+| Cannot be read (pvecm fails, or no `Quorate:` line) | Proceeds, with the warning `Cluster RECOVERY - quorum unknown (<reason>), proceeding` |
+
+A node without `corosync.conf` (standalone) proceeds without the probe. The refusal exists because on a member of a quorate cluster the restored `config.db` does not survive: when `pve-cluster` starts again, pmxcfs syncs from the cluster leader and the leader's copy replaces the restored one. Isolate the node first (see [CLUSTER_RECOVERY.md](CLUSTER_RECOVERY.md)), or use SAFE.
+
 See [Cluster Restore Modes](#cluster-restore-modes-safe-vs-recovery) for detailed explanation.
 
 #### Phase 7: Restore Plan
@@ -719,6 +732,8 @@ You can restore from this backup if needed using:
 ```text
 Preparing system for cluster database restore: stopping PVE services and unmounting /etc/pve
 
+Stopping pve-ha-lrm...
+Stopping pve-ha-crm...
 Stopping pve-cluster...
 Stopping pvedaemon...
 Stopping pveproxy...
@@ -728,6 +743,10 @@ All PVE services stopped successfully.
 Unmounting /etc/pve...
 Successfully unmounted /etc/pve
 ```
+
+The HA services are stopped first: `pve-ha-lrm` keeps the node's watchdog open, and with `pve-cluster` down for 60 seconds that watchdog expires and the node is hard-reset (fenced). Stopping the LRM freezes its HA resources and closes the watchdog cleanly; stopping the CRM releases its lock so another node takes over as master.
+
+The services are started again as soon as the cluster database has been written, before the later steps (network apply, boot rebuild): `pve-cluster`, `pvedaemon`, `pveproxy`, `pvestatd`, then `pve-ha-crm` and `pve-ha-lrm`. If the restore fails before that point, they are started when the run ends.
 
 #### Phase 10: Service Management (PBS)
 
@@ -846,10 +865,10 @@ Cluster payload detected. Choose how to restore the cluster database:
 > 2
 
 Preparing system for cluster database restore: stopping PVE services...
-Stopping pve-cluster, pvedaemon, pveproxy, pvestatd...
+Stopping pve-ha-lrm, pve-ha-crm, pve-cluster, pvedaemon, pveproxy, pvestatd...
 Unmounting /etc/pve...
 Extracting /var/lib/pve-cluster/config.db...
-Restarting PVE services...
+Restarting PVE services (pve-cluster, pvedaemon, pveproxy, pvestatd, pve-ha-crm, pve-ha-lrm)...
 ```
 
 ### Cluster Restore - SAFE Mode
@@ -886,6 +905,7 @@ When restoring from a **cluster backup** and selecting **RECOVERY mode** (option
 1. **Direct database restore** - The selected `pve_cluster` payload, including `config.db`, is restored
 2. **WARNING displayed** - User must confirm node isolation
 3. **Split-brain risk** - CRITICAL to isolate node before proceeding
+4. **Quorum probe** - A node that is a member of a quorate cluster with more than 1 node online is refused before anything is stopped or written: its cluster would replace the restored `config.db` as soon as `pve-cluster` starts again (see [Phase 6](#phase-6-cluster-restore-mode-pve-backups-carrying-pve_cluster))
 
 ```text
 Cluster backup detected. Choose how to restore:
@@ -897,6 +917,12 @@ Ensure other nodes are ISOLATED before proceeding!
 
 Preparing system for cluster database restore...
 [Same flow as Standalone]
+```
+
+On a node that is still quorate with its peers, the run stops at this point instead:
+
+```text
+Cluster RECOVERY refused - quorate cluster, 3 nodes online: its copy would replace the restored config.db
 ```
 
 ### When to Use Each Mode
@@ -976,10 +1002,11 @@ Each action prompts for confirmation before execution.
 #### Option 2: RECOVERY Mode (Full Cluster Restore)
 
 **What it does**:
-- Stops PVE cluster services (pve-cluster, pvedaemon, pveproxy, pvestatd)
+- Probes the quorum with `pvecm status` and refuses a quorate cluster with more than 1 node online
+- Stops the HA services (pve-ha-lrm, pve-ha-crm), then the PVE cluster services (pve-cluster, pvedaemon, pveproxy, pvestatd)
 - Unmounts `/etc/pve` FUSE filesystem
 - Writes directly to `/var/lib/pve-cluster/config.db`
-- Restarts services with restored configuration
+- Restarts the services with the restored configuration right after that write, before the later restore steps
 - Avoids restoring files under `/etc/pve/*` while pmxcfs is stopped/unmounted (to prevent "shadowed" writes on the underlying disk). Those files are expected to come from the restored `config.db`.
 
 **When to use**:
@@ -1029,11 +1056,15 @@ When restoring the `pve_cluster` category, the workflow automatically:
 
 **Stops services** (in order):
 ```text
-1. pve-cluster  → Stops pmxcfs, unmounts /etc/pve
-2. pvedaemon    → Stops API daemon
-3. pveproxy     → Stops web interface
-4. pvestatd     → Stops statistics collection
+1. pve-ha-lrm   → Freezes HA resources, closes the watchdog cleanly
+2. pve-ha-crm   → Releases the CRM lock; the master moves to another node
+3. pve-cluster  → Stops pmxcfs, unmounts /etc/pve
+4. pvedaemon    → Stops API daemon
+5. pveproxy     → Stops web interface
+6. pvestatd     → Stops statistics collection
 ```
+
+The HA services go first because `pve-ha-lrm` left running while pmxcfs is down lets its watchdog expire after 60 seconds, and the node is hard-reset (fenced) in the middle of the restore.
 
 **Unmounts filesystem**:
 ```bash
@@ -1045,13 +1076,17 @@ umount /etc/pve
 - Includes config.db and all related files
 - Preserves permissions and ownership
 
-**Restarts services** (in order):
+**Restarts services** (in order), right after the cluster database is written and before the later steps (network apply, boot rebuild); if the restore fails before that point, when the run ends:
 ```text
 1. pve-cluster  → Starts pmxcfs, reads restored config.db, remounts /etc/pve
 2. pvedaemon    → Reads cluster config from /etc/pve
 3. pveproxy     → Connects to pvedaemon
 4. pvestatd     → Resumes statistics
+5. pve-ha-crm   → Rejoins the CRM election
+6. pve-ha-lrm   → Resumes the HA resources it froze
 ```
+
+Because the services are already running when the network is applied, the post-apply network health check runs its PVE checks (`pvecm status`, ports, services) in RECOVERY as in any other restore.
 
 ### Service Stop/Restart Flow
 
@@ -1076,6 +1111,8 @@ Before Restore:
   └─────────────┘
 
 Stop Phase:
+  systemctl stop pve-ha-lrm   ← Watchdog closed, HA resources frozen
+  systemctl stop pve-ha-crm
   systemctl stop pve-cluster  ← /etc/pve unmounted
   systemctl stop pvedaemon
   systemctl stop pveproxy
@@ -1086,12 +1123,16 @@ Restore Phase:
   Extract: /var/lib/pve-cluster/config.db
   Extract: /var/lib/pve-cluster/* (all files)
 
-Restart Phase (deferred):
+Restart Phase (right after the extraction):
   systemctl start pve-cluster ← Reads restored config.db
                                ← Remounts /etc/pve
   systemctl start pvedaemon   ← Reads /etc/pve config
   systemctl start pveproxy
   systemctl start pvestatd
+  systemctl start pve-ha-crm
+  systemctl start pve-ha-lrm
+
+Later steps (network apply, boot rebuild) run with the services up.
 
 After Restore:
   ┌─────────────┐

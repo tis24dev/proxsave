@@ -5,7 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/tis24dev/proxsave/internal/logging"
 	"github.com/tis24dev/proxsave/internal/types"
@@ -185,8 +187,50 @@ func (w *restoreUIWorkflowRun) applyClusterRestoreChoice(choice ClusterRestoreMo
 	case ClusterRestoreRecovery:
 		w.plan.ApplyClusterSafeMode(false)
 		w.logger.Warning("Selected RECOVERY cluster restore: full cluster database will be restored; ensure other nodes are isolated")
+		return w.refuseRecoveryOnQuorateCluster()
 	default:
 		return fmt.Errorf("invalid cluster restore mode selected")
+	}
+	return nil
+}
+
+// clusterRecoveryQuorumTimeout bounds the pvecm status probe; it is the timeout the
+// post-apply cluster health check gives the same command.
+const clusterRecoveryQuorumTimeout = 3 * time.Second
+
+// clusterRecoveryRefusedError stops a RECOVERY on a member of a quorate cluster.
+type clusterRecoveryRefusedError struct {
+	nodes string
+}
+
+func (e *clusterRecoveryRefusedError) Error() string {
+	return fmt.Sprintf("Cluster RECOVERY refused - quorate cluster, %s nodes online: its copy would replace the restored config.db", e.nodes)
+}
+
+// refuseRecoveryOnQuorateCluster probes the quorum before any restore step runs. On a
+// member of a quorate cluster with other nodes online, the config.db RECOVERY writes
+// is thrown away: when pve-cluster starts again, pmxcfs syncs from the cluster leader
+// and the restored database is replaced by the leader's copy, while the restore would
+// still report success. A standalone node (no corosync.conf), a node alone in its
+// cluster, and a node without quorum proceed as before; so does a node whose quorum
+// cannot be read, with a warning.
+func (w *restoreUIWorkflowRun) refuseRecoveryOnQuorateCluster() error {
+	if _, clustered := detectCorosyncConfig(); !clustered {
+		return nil
+	}
+	info, available, message := pvecmQuorumStatus(w.ctx, clusterRecoveryQuorumTimeout)
+	if !available {
+		message = "pvecm not available"
+	}
+	if message != "" {
+		w.logger.Warning("Cluster RECOVERY - quorum unknown (%s), proceeding", message)
+		return nil
+	}
+	if !info.Quorate {
+		return nil
+	}
+	if nodes, err := strconv.Atoi(strings.TrimSpace(info.Nodes)); err == nil && nodes > 1 {
+		return &clusterRecoveryRefusedError{nodes: info.Nodes}
 	}
 	return nil
 }

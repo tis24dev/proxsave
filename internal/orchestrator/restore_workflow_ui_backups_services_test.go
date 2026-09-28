@@ -28,7 +28,7 @@ func TestPrepareRestoreServicesCleansUpPreviousServicesOnLaterError(t *testing.T
 			"which systemctl": errors.New("missing"),
 		},
 	}
-	for _, svc := range []string{"pve-cluster", "pvedaemon", "pveproxy", "pvestatd"} {
+	for _, svc := range []string{"pve-ha-lrm", "pve-ha-crm", "pve-cluster", "pvedaemon", "pveproxy", "pvestatd"} {
 		cmd.Outputs["systemctl stop --no-block "+svc] = []byte("ok")
 		cmd.Outputs["systemctl is-active "+svc] = []byte("inactive\n")
 		cmd.Errors["systemctl is-active "+svc] = errors.New("inactive")
@@ -56,16 +56,20 @@ func TestPrepareRestoreServicesCleansUpPreviousServicesOnLaterError(t *testing.T
 		t.Fatalf("expected nil cleanup on prepare error")
 	}
 
-	for _, want := range []string{
+	wantStarts := []string{
 		"systemctl start pve-cluster",
 		"systemctl start pvedaemon",
 		"systemctl start pveproxy",
 		"systemctl start pvestatd",
-	} {
+		"systemctl start pve-ha-crm",
+		"systemctl start pve-ha-lrm",
+	}
+	for _, want := range wantStarts {
 		if !slices.Contains(cmd.Calls, want) {
 			t.Fatalf("missing cleanup command %q; calls=%v", want, cmd.Calls)
 		}
 	}
+	assertCallsInOrder(t, cmd.Calls, wantStarts...)
 }
 
 // newSafetyBackupTestRun builds a restoreUIWorkflowRun wired to a sandboxed

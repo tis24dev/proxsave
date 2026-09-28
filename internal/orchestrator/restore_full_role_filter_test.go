@@ -74,7 +74,7 @@ func fullRestoreOfDualArchive(t *testing.T, host SystemType) roleFilterOutcome {
 		Outputs: map[string][]byte{"umount /etc/pve": []byte("not mounted\n")},
 		Errors:  map[string]error{"umount /etc/pve": errors.New("not mounted")},
 	}
-	for _, svc := range []string{"pve-cluster", "pvedaemon", "pveproxy", "pvestatd", "proxmox-backup-proxy", "proxmox-backup"} {
+	for _, svc := range []string{"pve-ha-lrm", "pve-ha-crm", "pve-cluster", "pvedaemon", "pveproxy", "pvestatd", "proxmox-backup-proxy", "proxmox-backup"} {
 		cmd.Outputs["systemctl stop --no-block "+svc] = []byte("ok")
 		cmd.Outputs["systemctl is-active "+svc] = []byte("inactive\n")
 		cmd.Errors["systemctl is-active "+svc] = errors.New("inactive")
