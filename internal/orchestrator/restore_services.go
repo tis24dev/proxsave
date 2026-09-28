@@ -101,10 +101,24 @@ func stopHALRMWithoutSignals(ctx context.Context, logger *logging.Logger, servic
 		return err
 	}
 	if err := waitForServiceInactive(ctx, logger, service, haLRMStopTimeout); err != nil {
+		if errors.Is(err, errServiceStillActive) {
+			cancelHALRMStopJob(logger, service)
+		}
 		return err
 	}
 	resetFailedService(ctx, logger, service)
 	return nil
+}
+
+// cancelHALRMStopJob runs systemctl start on pve-ha-lrm after its stop timed out. The
+// no-block stop job is still queued: left alone, the LRM would stop later, after the
+// restore gave up, with nothing to start it again. The start replaces the queued stop
+// job and leaves the LRM running. Its own context, like the other restarts, so a
+// cancelled restore still gets it.
+func cancelHALRMStopJob(logger *logging.Logger, service string) {
+	if err := runCommandWithTimeout(context.Background(), logger, serviceStartTimeout, "systemctl", "start", service); err != nil && logger != nil {
+		logger.Warning("Failed to restart PVE services (%s) after the stop failed: %v", service, err)
+	}
 }
 
 // restartPVEServicesAfterFailedStop starts stopped again, last stopped first. It uses
@@ -456,8 +470,13 @@ func (waiter serviceInactiveWaiter) ensureTimeRemaining(remaining time.Duration)
 		return nil
 	}
 	waiter.writeNewline()
-	return fmt.Errorf("%s still active after %s", waiter.service, waiter.timeout)
+	return fmt.Errorf("%s %w after %s", waiter.service, errServiceStillActive, waiter.timeout)
 }
+
+// errServiceStillActive marks the waitForServiceInactive error for a unit still
+// active when the wait ran out, as opposed to a failed status query or a cancelled
+// context. The error text is unchanged: "<unit> still active after <timeout>".
+var errServiceStillActive = errors.New("still active")
 
 func (waiter serviceInactiveWaiter) logStopped() {
 	if waiter.logger != nil {

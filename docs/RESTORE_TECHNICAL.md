@@ -1235,6 +1235,12 @@ about 120 s after it died (measured: 93 s on an isolated node, while the generic
 already sent SIGTERM at +76 s). A SIGKILL before the LRM closes its watchdog leaves it
 armed and fences the node. Still active after the limit, the stop fails with
 `failed to stop PVE services (pve-ha-lrm)`, before any other service has been stopped.
+Before returning that error, `cancelHALRMStopJob()` runs one `systemctl start pve-ha-lrm`:
+the no-block stop job is still queued, and the start replaces it and leaves the LRM
+running, instead of letting it stop after the restore gave up. A failed start is the
+warning `Failed to restart PVE services (pve-ha-lrm) after the stop failed: <err>`, and the
+stop error is returned either way. A failed status query or a cancelled context during
+the wait fails the stop without that start (`errServiceStillActive` marks the timeout).
 
 **PBS Service Dependency Graph**:
 

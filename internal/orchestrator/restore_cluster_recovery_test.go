@@ -617,6 +617,9 @@ func TestStopHALRMWaitsForASlowStopWithoutSignals(t *testing.T) {
 	if runner.checks <= runner.activeChecks {
 		t.Fatalf("stop returned before pve-ha-lrm went inactive: %d checks", runner.checks)
 	}
+	if n := countCalls(calls, "systemctl start pve-ha-lrm"); n != 0 {
+		t.Fatalf("successful pve-ha-lrm stop was followed by a start; calls=%q", calls)
+	}
 	assertCallsInOrder(t, calls,
 		"systemctl stop --no-block pve-ha-lrm",
 		"systemctl stop --no-block pve-ha-crm",
@@ -626,7 +629,9 @@ func TestStopHALRMWaitsForASlowStopWithoutSignals(t *testing.T) {
 }
 
 // An LRM still active after the limit fails the stop through the usual error, with no
-// signal sent, and nothing else stopped: pve-ha-lrm is the first service stopped.
+// signal sent, and nothing else stopped: pve-ha-lrm is the first service stopped. The
+// no-block stop job is still queued then, so one systemctl start replaces it and
+// leaves the LRM running, instead of letting it stop later with nothing to restart it.
 func TestStopHALRMFailsAfterTheLimitWithoutSignals(t *testing.T) {
 	origCmd := restoreCmd
 	t.Cleanup(func() { restoreCmd = origCmd })
@@ -636,17 +641,54 @@ func TestStopHALRMFailsAfterTheLimitWithoutSignals(t *testing.T) {
 	restoreCmd = runner
 
 	err := stopPVEClusterServices(context.Background(), newTestLogger())
-	if err == nil || !strings.Contains(err.Error(), "failed to stop PVE services (pve-ha-lrm)") ||
-		!strings.Contains(err.Error(), "pve-ha-lrm still active after 150ms") {
+	if err == nil || err.Error() != "failed to stop PVE services (pve-ha-lrm): pve-ha-lrm still active after 150ms" {
 		t.Fatalf("err = %v, want the pve-ha-lrm stop failure after the 150ms limit", err)
 	}
 	runner.assertNoKill(t)
-	for _, c := range runner.CallsList() {
+	calls := runner.CallsList()
+	if n := countCalls(calls, "systemctl start pve-ha-lrm"); n != 1 {
+		t.Fatalf("systemctl start pve-ha-lrm issued %d times after the timeout, want 1; calls=%q", n, calls)
+	}
+	assertCallsInOrder(t, calls, "systemctl stop --no-block pve-ha-lrm", "systemctl start pve-ha-lrm")
+	for _, c := range calls {
 		if (strings.HasPrefix(c, "systemctl stop") && !strings.HasSuffix(c, " pve-ha-lrm")) ||
-			strings.HasPrefix(c, "systemctl start") || strings.HasPrefix(c, "systemctl restart") {
-			t.Fatalf("failed pve-ha-lrm stop went on to %q; calls=%q", c, runner.CallsList())
+			(strings.HasPrefix(c, "systemctl start") && c != "systemctl start pve-ha-lrm") ||
+			strings.HasPrefix(c, "systemctl restart") {
+			t.Fatalf("failed pve-ha-lrm stop went on to %q; calls=%q", c, calls)
 		}
 	}
+}
+
+// When the start that replaces the queued stop job fails, that is a warning in the
+// format of the other restart warnings, and the stop error is still the one returned.
+func TestStopHALRMTimeoutWarnsWhenTheStartFails(t *testing.T) {
+	origCmd := restoreCmd
+	t.Cleanup(func() { restoreCmd = origCmd })
+	fastServiceTimers(t)
+	withHALRMStopTimeout(t, 150*time.Millisecond)
+	fake := inactiveServicesRunner()
+	fake.Errors["systemctl start pve-ha-lrm"] = errors.New("exit status 1")
+	runner := &slowUnitRunner{FakeCommandRunner: fake, unit: "pve-ha-lrm", activeChecks: -1}
+	restoreCmd = runner
+
+	var buf bytes.Buffer
+	logger := logging.New(types.LogLevelInfo, false)
+	logger.SetOutput(&buf)
+	err := stopPVEClusterServices(context.Background(), logger)
+	if err == nil || err.Error() != "failed to stop PVE services (pve-ha-lrm): pve-ha-lrm still active after 150ms" {
+		t.Fatalf("err = %v, want the original pve-ha-lrm stop failure", err)
+	}
+	if !strings.Contains(buf.String(), "Failed to restart PVE services (pve-ha-lrm) after the stop failed: systemctl start pve-ha-lrm failed: exit status 1") {
+		t.Fatalf("missing restart warning in log:\n%s", buf.String())
+	}
+	calls := runner.CallsList()
+	if n := countCalls(calls, "systemctl start pve-ha-lrm"); n != 1 {
+		t.Fatalf("systemctl start pve-ha-lrm issued %d times, want 1; calls=%q", n, calls)
+	}
+	if n := countCalls(calls, "systemctl restart pve-ha-lrm"); n != 0 {
+		t.Fatalf("failed start was retried with a restart; calls=%q", calls)
+	}
+	runner.assertNoKill(t)
 }
 
 // The restart of the 6 services gets 30 s each plus 10 s: 190 s.

@@ -194,7 +194,7 @@ This applies only when the guest configs are actually in the export, which means
 RECOVERY restores the entire cluster database by overwriting `/var/lib/pve-cluster/`. To do that safely it:
 
 1. probes the quorum with `pvecm status` right after you pick RECOVERY, when the node has a `corosync.conf`, and refuses a quorate cluster with more than 1 node online (see below);
-2. stops `pve-ha-lrm` and `pve-ha-crm`, then `pve-cluster`, `pvedaemon`, `pveproxy`, `pvestatd`, in that order. Every service except `pve-ha-lrm` escalates to SIGKILL if it will not stop. `pve-ha-lrm` is never signalled: it gets one `systemctl stop --no-block` and up to 180 seconds to go inactive, and the restore stops if it is still active after that;
+2. stops `pve-ha-lrm` and `pve-ha-crm`, then `pve-cluster`, `pvedaemon`, `pveproxy`, `pvestatd`, in that order. Every service except `pve-ha-lrm` escalates to SIGKILL if it will not stop. `pve-ha-lrm` is never signalled: it gets one `systemctl stop --no-block` and up to 180 seconds to go inactive. If it is still active after that, ProxSave runs `systemctl start pve-ha-lrm`, which cancels the queued stop and leaves the LRM running, and the restore stops;
 3. unmounts `/etc/pve` (a failure here is a warning, not fatal);
 4. extracts `./var/lib/pve-cluster/` (config.db) directly to disk while pmxcfs is down;
 5. restarts `pve-cluster`, `pvedaemon`, `pveproxy`, `pvestatd`, then `pve-ha-crm` and `pve-ha-lrm`, right after that extraction and before the later steps (network apply, boot rebuild). If the restore fails before that point, they are restarted when the run ends.
