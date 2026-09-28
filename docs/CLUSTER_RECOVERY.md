@@ -209,6 +209,7 @@ The quorum probe exists because on a member of a quorate cluster the restored co
 | Quorate, 1 node online | Proceeds |
 | Not quorate | Proceeds |
 | Cannot be read (pvecm fails, or no `Quorate:` line) | Proceeds, with the warning `Cluster RECOVERY - quorum unknown (<reason>), proceeding` |
+| Quorate, but the `Nodes:` count is not a number | Proceeds, with the warning `Cluster RECOVERY - quorum unknown (node count unreadable), proceeding` |
 
 A node without `corosync.conf` (`/etc/pve/corosync.conf` or `/etc/corosync/corosync.conf`) is standalone: it proceeds with no probe and no message.
 

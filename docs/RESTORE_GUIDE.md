@@ -638,6 +638,7 @@ When RECOVERY is chosen and the node has a `corosync.conf` (`/etc/pve/corosync.c
 | Quorate, 1 node online | Proceeds |
 | Not quorate | Proceeds |
 | Cannot be read (pvecm fails, or no `Quorate:` line) | Proceeds, with the warning `Cluster RECOVERY - quorum unknown (<reason>), proceeding` |
+| Quorate, but the `Nodes:` count is not a number | Proceeds, with the warning `Cluster RECOVERY - quorum unknown (node count unreadable), proceeding` |
 
 A node without `corosync.conf` (standalone) proceeds without the probe. The refusal exists because on a member of a quorate cluster the restored `config.db` does not survive: when `pve-cluster` starts again, pmxcfs syncs from the cluster leader and the leader's copy replaces the restored one. Isolate the node first (see [CLUSTER_RECOVERY.md](CLUSTER_RECOVERY.md)), or use SAFE.
 
@@ -2429,11 +2430,13 @@ parsing, so a key pasted in lowercase is fine.
 
 ### Service Issues
 
-**Issue: "Failed to stop pve-cluster: Unit not found"**
+**Issue: a PVE service unit is not installed**
 
-**Cause**: Not a PVE system or service not installed
+**Behavior**: A cluster RECOVERY skips, both when stopping and when restarting, any of `pve-ha-lrm`, `pve-ha-crm`, `pve-cluster`, `pvedaemon`, `pveproxy`, `pvestatd` whose unit is not installed (`systemctl show -p LoadState --value <unit>` prints `not-found`). The skip is logged only at debug level, so the restore does not stop on it.
 
-**Solution**:
+**Cause**: Not a PVE system, or the package providing the unit is not installed (for example `pve-ha-manager` for the HA services)
+
+**Solution** (when the unit should be there):
 ```bash
 # This is normal on PBS systems
 # Or check if PVE installed

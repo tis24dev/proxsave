@@ -190,7 +190,7 @@ func (w *restoreUIWorkflowRun) restartStoppedPVEClusterServices() {
 		return
 	}
 	w.clusterServicesRestarted = true
-	restartCtx, cancel := context.WithTimeout(context.Background(), 2*serviceStartTimeout+2*serviceVerifyTimeout+10*time.Second)
+	restartCtx, cancel := context.WithTimeout(context.Background(), pveClusterRestartTimeout())
 	defer cancel()
 	if err := startPVEClusterServices(restartCtx, w.logger); err != nil {
 		w.logger.Warning("Failed to restart PVE services after restore: %v", err)

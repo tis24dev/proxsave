@@ -44,26 +44,83 @@ type serviceInactiveWaiter struct {
 	ticker          *time.Ticker
 }
 
-// stopPVEClusterServices stops the HA services before pmxcfs. pve-ha-lrm holds the
-// node's watchdog open while pmxcfs is down: with pve-cluster stopped for 60 s it
-// expires and the node is hard-reset (fenced) in the middle of the restore. Stopped
-// first, the LRM freezes its services and closes the watchdog cleanly, and the CRM
-// releases its lock so the master moves to another node.
+// pveClusterStopOrder is the order a cluster RECOVERY stops the PVE services in: the
+// HA services before pmxcfs. pve-ha-lrm holds the node's watchdog open while pmxcfs
+// is down: with pve-cluster stopped for 60 s it expires and the node is hard-reset
+// (fenced) in the middle of the restore. Stopped first, the LRM freezes its services
+// and closes the watchdog cleanly, and the CRM releases its lock so the master moves
+// to another node.
+var pveClusterStopOrder = []string{"pve-ha-lrm", "pve-ha-crm", "pve-cluster", "pvedaemon", "pveproxy", "pvestatd"}
+
+// pveClusterStartOrder starts pmxcfs and the API services before the HA services,
+// the reverse of the stop order: the CRM, then the LRM, come back once /etc/pve is up.
+var pveClusterStartOrder = []string{"pve-cluster", "pvedaemon", "pveproxy", "pvestatd", "pve-ha-crm", "pve-ha-lrm"}
+
+// pveClusterRestartTimeout bounds a restart of the PVE services: 30 s
+// (serviceStartTimeout) per service plus 10 s, for the 6 services, i.e. 190 s.
+func pveClusterRestartTimeout() time.Duration {
+	return time.Duration(len(pveClusterStartOrder))*serviceStartTimeout + 10*time.Second
+}
+
+// stopPVEClusterServices stops the services in pveClusterStopOrder, skipping a unit
+// that is not installed. When one fails to stop, the ones it already stopped are
+// started again, in reverse stop order, before the error is returned: the caller
+// treats a failed stop as "nothing to restart", so leaving them down would leave this
+// node out of the cluster after the restore gave up.
 func stopPVEClusterServices(ctx context.Context, logger *logging.Logger) error {
-	services := []string{"pve-ha-lrm", "pve-ha-crm", "pve-cluster", "pvedaemon", "pveproxy", "pvestatd"}
-	for _, service := range services {
+	var stopped []string
+	for _, service := range pveClusterStopOrder {
+		if pveUnitNotInstalled(ctx, logger, service) {
+			continue
+		}
 		if err := stopServiceWithRetries(ctx, logger, service); err != nil {
+			restartPVEServicesAfterFailedStop(logger, stopped)
 			return fmt.Errorf("failed to stop PVE services (%s): %w", service, err)
 		}
+		stopped = append(stopped, service)
 	}
 	return nil
 }
 
-// startPVEClusterServices starts pmxcfs and the API services before the HA services,
-// the reverse of the stop order: the CRM, then the LRM, come back once /etc/pve is up.
+// restartPVEServicesAfterFailedStop starts stopped again, last stopped first. It uses
+// its own context, like the deferred restart, so a cancelled restore still gets its
+// services back.
+func restartPVEServicesAfterFailedStop(logger *logging.Logger, stopped []string) {
+	if len(stopped) == 0 {
+		return
+	}
+	restartCtx, cancel := context.WithTimeout(context.Background(), pveClusterRestartTimeout())
+	defer cancel()
+	for i := len(stopped) - 1; i >= 0; i-- {
+		if err := startServiceWithRetries(restartCtx, logger, stopped[i]); err != nil && logger != nil {
+			logger.Warning("Failed to restart PVE services (%s) after the stop failed: %v", stopped[i], err)
+		}
+	}
+}
+
+// pveUnitNotInstalled reports whether systemd has no unit file for service
+// (LoadState not-found), e.g. pve-ha-manager removed. Such a unit is neither stopped
+// nor started. Any other answer, including a failed query, counts as installed.
+func pveUnitNotInstalled(ctx context.Context, logger *logging.Logger, service string) bool {
+	checkCtx, cancel := context.WithTimeout(ctx, serviceStatusCheckTimeout)
+	defer cancel()
+	output, err := restoreCmd.Run(checkCtx, "systemctl", "show", "-p", "LoadState", "--value", service)
+	if err != nil || strings.TrimSpace(string(output)) != "not-found" {
+		return false
+	}
+	if logger != nil {
+		logger.Debug("Skipping %s: unit not installed (LoadState=not-found)", service)
+	}
+	return true
+}
+
+// startPVEClusterServices starts the services in pveClusterStartOrder, skipping a
+// unit that is not installed.
 func startPVEClusterServices(ctx context.Context, logger *logging.Logger) error {
-	services := []string{"pve-cluster", "pvedaemon", "pveproxy", "pvestatd", "pve-ha-crm", "pve-ha-lrm"}
-	for _, service := range services {
+	for _, service := range pveClusterStartOrder {
+		if pveUnitNotInstalled(ctx, logger, service) {
+			continue
+		}
 		if err := startServiceWithRetries(ctx, logger, service); err != nil {
 			return fmt.Errorf("failed to start PVE services (%s): %w", service, err)
 		}

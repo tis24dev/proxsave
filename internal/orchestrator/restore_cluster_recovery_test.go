@@ -265,6 +265,14 @@ func TestClusterRecoveryQuorumProbe(t *testing.T) {
 			wantWarning: "Cluster RECOVERY - quorum unknown (pvecm status failed: exit status 2), proceeding",
 			wantPvecm:   true,
 		},
+		{
+			name: "quorate with an unreadable node count proceeds with a warning",
+			live: corosyncLive,
+			outputs: map[string]string{"pvecm status": strings.Replace(pvecmStatusOutput(3, 3, true),
+				"Nodes:            3", "Nodes:            three", 1)},
+			wantWarning: "Cluster RECOVERY - quorum unknown (node count unreadable), proceeding",
+			wantPvecm:   true,
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -431,6 +439,147 @@ func (u *healthCapturingUI) PromptNetworkCommit(ctx context.Context, remaining t
 	h := health
 	u.health = &h
 	return true, nil
+}
+
+// fastServiceTimers shrinks the service stop/start waits so a failing stop takes
+// milliseconds, and makes the LoadState query keep the caller's deadline.
+func fastServiceTimers(t *testing.T) {
+	t.Helper()
+	origVerify, origStatus, origPoll, origRetry := serviceVerifyTimeout, serviceStatusCheckTimeout, servicePollInterval, serviceRetryDelay
+	t.Cleanup(func() {
+		serviceVerifyTimeout, serviceStatusCheckTimeout, servicePollInterval, serviceRetryDelay = origVerify, origStatus, origPoll, origRetry
+	})
+	serviceVerifyTimeout = 50 * time.Millisecond
+	serviceStatusCheckTimeout = 20 * time.Millisecond
+	servicePollInterval = 5 * time.Millisecond
+	serviceRetryDelay = time.Millisecond
+}
+
+// inactiveServicesRunner answers every PVE service as stopped and loaded.
+func inactiveServicesRunner() *FakeCommandRunner {
+	cmd := &FakeCommandRunner{Outputs: map[string][]byte{}, Errors: map[string]error{}}
+	for _, svc := range clusterRecoveryServices {
+		cmd.Outputs["systemctl show -p LoadState --value "+svc] = []byte("loaded\n")
+		cmd.Outputs["systemctl is-active "+svc] = []byte("inactive\n")
+		cmd.Errors["systemctl is-active "+svc] = errors.New("inactive")
+	}
+	return cmd
+}
+
+// A host without pve-ha-manager has no pve-ha-lrm/pve-ha-crm units: systemctl
+// stop on them exits 5 on every attempt, which aborted the restore. A unit that
+// is not installed (LoadState not-found) is now neither stopped nor started; the
+// installed ones are handled as before.
+func TestPVEClusterServicesSkipUnitsNotInstalled(t *testing.T) {
+	origCmd := restoreCmd
+	t.Cleanup(func() { restoreCmd = origCmd })
+	fastServiceTimers(t)
+	cmd := inactiveServicesRunner()
+	for _, svc := range []string{"pve-ha-lrm", "pve-ha-crm"} {
+		cmd.Outputs["systemctl show -p LoadState --value "+svc] = []byte("not-found\n")
+	}
+	restoreCmd = cmd
+
+	var buf bytes.Buffer
+	logger := logging.New(types.LogLevelInfo, false)
+	logger.SetOutput(&buf)
+	if err := stopPVEClusterServices(context.Background(), logger); err != nil {
+		t.Fatalf("stopPVEClusterServices: %v", err)
+	}
+	if err := startPVEClusterServices(context.Background(), logger); err != nil {
+		t.Fatalf("startPVEClusterServices: %v", err)
+	}
+	calls := cmd.CallsList()
+	for _, svc := range []string{"pve-ha-lrm", "pve-ha-crm"} {
+		for _, c := range calls {
+			if strings.HasPrefix(c, "systemctl ") && strings.HasSuffix(c, " "+svc) && !strings.HasPrefix(c, "systemctl show ") {
+				t.Fatalf("unit not installed was acted on: %q; calls=%q", c, calls)
+			}
+		}
+	}
+	for _, svc := range []string{"pve-cluster", "pvedaemon", "pveproxy", "pvestatd"} {
+		if countCalls(calls, "systemctl stop --no-block "+svc) != 1 || countCalls(calls, "systemctl start "+svc) != 1 {
+			t.Fatalf("installed unit %s not stopped and started once; calls=%q", svc, calls)
+		}
+	}
+	if strings.Contains(buf.String(), "not installed") {
+		t.Fatalf("skip logged above Debug:\n%s", buf.String())
+	}
+}
+
+// When a stop fails after other services were stopped, the ones already stopped are
+// started again, last stopped first, and the original error is returned. A failed
+// restart is a warning and does not stop the others.
+func TestStopPVEClusterServicesRestartsWhatItStoppedWhenAStopFails(t *testing.T) {
+	origCmd := restoreCmd
+	t.Cleanup(func() { restoreCmd = origCmd })
+	fastServiceTimers(t)
+	cmd := inactiveServicesRunner()
+	cmd.Outputs["systemctl is-active pve-cluster"] = []byte("active\n")
+	delete(cmd.Errors, "systemctl is-active pve-cluster")
+	for _, args := range []string{"start", "restart"} {
+		cmd.Errors["systemctl "+args+" pve-ha-crm"] = errors.New("crm will not start")
+	}
+	restoreCmd = cmd
+
+	var buf bytes.Buffer
+	logger := logging.New(types.LogLevelInfo, false)
+	logger.SetOutput(&buf)
+	err := stopPVEClusterServices(context.Background(), logger)
+	if err == nil || !strings.Contains(err.Error(), "failed to stop PVE services (pve-cluster)") {
+		t.Fatalf("err = %v, want the pve-cluster stop error", err)
+	}
+	calls := cmd.CallsList()
+	assertCallsInOrder(t, calls,
+		"systemctl stop --no-block pve-ha-lrm",
+		"systemctl stop --no-block pve-ha-crm",
+		"systemctl stop --no-block pve-cluster",
+		"systemctl start pve-ha-crm",
+		"systemctl start pve-ha-lrm",
+	)
+	for _, svc := range []string{"pve-cluster", "pvedaemon", "pveproxy", "pvestatd"} {
+		if countCalls(calls, "systemctl start "+svc) != 0 {
+			t.Fatalf("%s started although it was never stopped; calls=%q", svc, calls)
+		}
+	}
+	if countCalls(calls, "systemctl stop --no-block pvedaemon") != 0 {
+		t.Fatalf("stop went on past the failure; calls=%q", calls)
+	}
+	if !strings.Contains(buf.String(), "Failed to restart PVE services (pve-ha-crm) after the stop failed") {
+		t.Fatalf("missing restart warning for pve-ha-crm in log:\n%s", buf.String())
+	}
+}
+
+// The restart of the 6 services gets 30 s each plus 10 s: 190 s.
+func TestPVEClusterRestartTimeoutCoversSixServices(t *testing.T) {
+	origCmd := restoreCmd
+	t.Cleanup(func() { restoreCmd = origCmd })
+	origStatus := serviceStatusCheckTimeout
+	t.Cleanup(func() { serviceStatusCheckTimeout = origStatus })
+	// Longer than the restart budget, so the LoadState query carries its deadline.
+	serviceStatusCheckTimeout = time.Hour
+	cmd := inactiveServicesRunner()
+	restoreCmd = cmd
+
+	w := &restoreUIWorkflowRun{ctx: context.Background(), logger: newTestLogger(), clusterServicesStopped: true}
+	before := time.Now()
+	w.restartStoppedPVEClusterServices()
+
+	for i, c := range cmd.Calls {
+		if c != "systemctl show -p LoadState --value pve-cluster" {
+			continue
+		}
+		deadline, ok := cmd.Contexts[i].Deadline()
+		if !ok {
+			t.Fatalf("restart context has no deadline")
+		}
+		budget := deadline.Sub(before)
+		if budget < 189*time.Second || budget > 191*time.Second {
+			t.Fatalf("restart budget = %s, want 190s", budget)
+		}
+		return
+	}
+	t.Fatalf("restart never queried pve-cluster; calls=%q", cmd.Calls)
 }
 
 // The PVE services are running again by the time the network is applied, so a

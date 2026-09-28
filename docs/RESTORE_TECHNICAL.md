@@ -1347,6 +1347,7 @@ the cluster leader and the leader's copy replaces it.
 | `pvecm status`: quorate, 1 node online | Proceeds |
 | `pvecm status`: not quorate | Proceeds |
 | `pvecm status` fails or prints no `Quorate:` line | Proceeds with warning `Cluster RECOVERY - quorum unknown (<reason>), proceeding` |
+| `pvecm status`: quorate, `Nodes:` not a number | Proceeds with warning `Cluster RECOVERY - quorum unknown (node count unreadable), proceeding` |
 
 The probe reuses `pvecmQuorumStatus()` from the network health checks, with the same
 3 second timeout; N is the `Nodes:` value `pvecm status` printed.

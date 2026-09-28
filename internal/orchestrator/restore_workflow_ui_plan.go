@@ -223,16 +223,25 @@ func (w *restoreUIWorkflowRun) refuseRecoveryOnQuorateCluster() error {
 		message = "pvecm not available"
 	}
 	if message != "" {
-		w.logger.Warning("Cluster RECOVERY - quorum unknown (%s), proceeding", message)
+		w.warnClusterRecoveryQuorumUnknown(message)
 		return nil
 	}
 	if !info.Quorate {
 		return nil
 	}
-	if nodes, err := strconv.Atoi(strings.TrimSpace(info.Nodes)); err == nil && nodes > 1 {
+	nodes, err := strconv.Atoi(strings.TrimSpace(info.Nodes))
+	if err != nil {
+		w.warnClusterRecoveryQuorumUnknown("node count unreadable")
+		return nil
+	}
+	if nodes > 1 {
 		return &clusterRecoveryRefusedError{nodes: info.Nodes}
 	}
 	return nil
+}
+
+func (w *restoreUIWorkflowRun) warnClusterRecoveryQuorumUnknown(reason string) {
+	w.logger.Warning("Cluster RECOVERY - quorum unknown (%s), proceeding", reason)
 }
 
 func (w *restoreUIWorkflowRun) warnAccessControlHostnameMismatch() {

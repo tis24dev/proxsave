@@ -31,8 +31,14 @@ func TestStopPVEClusterServices_Success(t *testing.T) {
 	if err := startPVEClusterServices(context.Background(), logger); err != nil {
 		t.Fatalf("startPVEClusterServices: %v", err)
 	}
-	if len(fake.Calls) != 6 {
-		t.Fatalf("expected 6 systemctl calls, got %d: %v", len(fake.Calls), fake.Calls)
+	starts := 0
+	for _, call := range fake.Calls {
+		if strings.HasPrefix(call, "systemctl start ") {
+			starts++
+		}
+	}
+	if starts != 6 {
+		t.Fatalf("expected 6 systemctl start calls, got %d: %v", starts, fake.Calls)
 	}
 	// The HA services come back after pmxcfs and the API services, CRM before LRM.
 	assertCallsInOrder(t, fake.Calls,
