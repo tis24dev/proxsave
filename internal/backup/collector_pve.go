@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/tis24dev/proxsave/internal/safefs"
@@ -1322,11 +1323,13 @@ func (c *Collector) preparePVEStorageScan(ctx context.Context, storage pveStorag
 	}
 
 	c.logger.Info("Probing datastore %s (path=%s)%s", storage.Name, storage.Path, c.formatPVEStorageRuntime(storage))
-	stat, err := safefs.Stat(ctx, storage.Path, ioTimeout)
+	stat, err := safefs.Stat(ctx, c.systemPath(storage.Path), ioTimeout)
 	if err != nil {
 		if errors.Is(err, safefs.ErrTimeout) {
 			c.logger.Warning("PVE datastore %s skipped: filesystem probe timed out for %s (%v). Not scanning for vzdump backup files.", storage.Name, storage.Path, err)
 			c.logPVEStorageSkipDetails(storage, "filesystem_probe_timeout", err)
+		} else if c.hostRootPrefixActive() {
+			c.logPVEStorageNotVisible(storage, err)
 		} else {
 			c.logger.Warning("PVE datastore %s skipped: path %s not accessible (%v). Not scanning for vzdump backup files.", storage.Name, storage.Path, err)
 			c.logPVEStorageSkipDetails(storage, "path_not_accessible", err)
@@ -1336,6 +1339,10 @@ func (c *Collector) preparePVEStorageScan(ctx context.Context, storage pveStorag
 	if !stat.IsDir() {
 		c.logger.Warning("PVE datastore %s skipped: path %s is not a directory. Not scanning for vzdump backup files.", storage.Name, storage.Path)
 		c.logPVEStorageSkipDetails(storage, "path_not_directory", nil)
+		return nil, nil
+	}
+	if c.pveStorageMountNotCarried(storage, stat) {
+		c.logPVEStorageNotVisible(storage, nil)
 		return nil, nil
 	}
 
@@ -1348,6 +1355,35 @@ func (c *Collector) preparePVEStorageScan(ctx context.Context, storage pveStorag
 		Storage: storage,
 		MetaDir: metaDir,
 	}, nil
+}
+
+// pveMountStorageTypes are the storage types whose path is always a mount point the PVE
+// host mounts itself (under /mnt/pve).
+var pveMountStorageTypes = map[string]bool{"nfs": true, "cifs": true, "cephfs": true, "glusterfs": true}
+
+// pveStorageMountNotCarried reports a network storage seen under SYSTEM_ROOT_PREFIX as the
+// bare mount point it leaves on the host root: the bind of the host root does not carry the
+// separate mount, so the directory sits on the prefix root's own filesystem and reads empty.
+// A storage "dir" on a separate host disk looks the same and cannot be told apart here.
+func (c *Collector) pveStorageMountNotCarried(storage pveStorageEntry, info os.FileInfo) bool {
+	if !c.hostRootPrefixActive() || !pveMountStorageTypes[strings.ToLower(strings.TrimSpace(storage.Type))] {
+		return false
+	}
+	rootInfo, err := os.Stat(c.config.SystemRootPrefix)
+	if err != nil {
+		return false
+	}
+	st, ok := info.Sys().(*syscall.Stat_t)
+	rootSt, rootOK := rootInfo.Sys().(*syscall.Stat_t)
+	return ok && rootOK && st.Dev == rootSt.Dev
+}
+
+// logPVEStorageNotVisible reports a storage the host has but this system cannot see under
+// SYSTEM_ROOT_PREFIX. It is not a fault of the storage, so it is not a warning: an appliance
+// with a network storage would otherwise end every run with one.
+func (c *Collector) logPVEStorageNotVisible(storage pveStorageEntry, err error) {
+	c.logger.Info("PVE datastore %s skipped: path %s not visible under SYSTEM_ROOT_PREFIX (a separate mount is not carried into this system). Not scanning for vzdump backup files.", storage.Name, storage.Path)
+	c.logPVEStorageSkipDetails(storage, "path_not_visible_under_prefix", err)
 }
 
 func (c *Collector) collectPVEStorageMetadataJSONStep(ctx context.Context, result *pveStorageScanResult, ioTimeout time.Duration) error {
@@ -1374,7 +1410,7 @@ func (c *Collector) collectPVEStorageMetadataJSONStep(ctx context.Context, resul
 		ScannedAt: time.Now(),
 	}
 
-	dirSamples, dirSampleErr := c.sampleDirectoriesBounded(ctx, storage.Path, 2, 20, ioTimeout)
+	dirSamples, dirSampleErr := c.sampleDirectoriesBounded(ctx, c.systemPath(storage.Path), 2, 20, ioTimeout)
 	if errors.Is(dirSampleErr, safefs.ErrTimeout) {
 		c.logger.Warning("Skipping datastore %s (path=%s)%s: directory sampling timed out (%v)", storage.Name, storage.Path, formatRuntime, dirSampleErr)
 		result.SkipRemaining = true
@@ -1392,7 +1428,7 @@ func (c *Collector) collectPVEStorageMetadataJSONStep(ctx context.Context, resul
 		meta.SampleDirectories = dirSamples
 	}
 
-	diskUsageText, diskUsageErr := c.describeDiskUsage(ctx, storage.Path, ioTimeout)
+	diskUsageText, diskUsageErr := c.describeDiskUsage(ctx, c.systemPath(storage.Path), ioTimeout)
 	if errors.Is(diskUsageErr, safefs.ErrTimeout) {
 		c.logger.Warning("Skipping datastore %s (path=%s)%s: disk usage probe timed out (%v)", storage.Name, storage.Path, formatRuntime, diskUsageErr)
 		result.SkipRemaining = true
@@ -1417,7 +1453,7 @@ func (c *Collector) collectPVEStorageMetadataJSONStep(ctx context.Context, resul
 	}
 	excludePatterns := c.config.PxarFileExcludePatterns
 
-	fileSummaries, sampleFileErr := c.sampleFilesBounded(ctx, storage.Path, includePatterns, excludePatterns, 3, 100, ioTimeout)
+	fileSummaries, sampleFileErr := c.sampleFilesBounded(ctx, c.systemPath(storage.Path), includePatterns, excludePatterns, 3, 100, ioTimeout)
 	if errors.Is(sampleFileErr, safefs.ErrTimeout) {
 		c.logger.Warning("Skipping datastore %s (path=%s)%s: file sampling timed out (%v)", storage.Name, storage.Path, formatRuntime, sampleFileErr)
 		result.SkipRemaining = true
@@ -1453,7 +1489,8 @@ func (c *Collector) collectPVEStorageMetadataTextStep(ctx context.Context, resul
 	storage := result.Storage
 	formatRuntime := c.formatPVEStorageRuntime(storage)
 
-	fileSampleLines, fileSampleErr := c.sampleMetadataFileStats(ctx, storage.Path, 3, 10, ioTimeout)
+	readPath := c.systemPath(storage.Path)
+	fileSampleLines, fileSampleErr := c.sampleMetadataFileStats(ctx, readPath, 3, 10, ioTimeout)
 	if errors.Is(fileSampleErr, safefs.ErrTimeout) {
 		c.logger.Warning("Skipping datastore %s (path=%s)%s: metadata sampling timed out (%v)", storage.Name, storage.Path, formatRuntime, fileSampleErr)
 		result.SkipRemaining = true
@@ -1464,6 +1501,12 @@ func (c *Collector) collectPVEStorageMetadataTextStep(ctx context.Context, resul
 	}
 	if fileSampleErr != nil {
 		c.logger.Debug("General file sampling for %s failed: %v", storage.Name, fileSampleErr)
+	}
+	if readPath != storage.Path {
+		// The sample lines name files by their full path: report the host's, not the prefix's.
+		for i, line := range fileSampleLines {
+			fileSampleLines[i] = strings.Replace(line, " "+readPath, " "+storage.Path, 1)
+		}
 	}
 	result.FileSampleLines = fileSampleLines
 	result.FileSampleErr = fileSampleErr
@@ -1572,7 +1615,8 @@ func (c *Collector) collectDetailedPVEBackups(ctx context.Context, storage pveSt
 	type dirItem struct {
 		path string
 	}
-	stack := []dirItem{{path: storage.Path}}
+	readPath := c.systemPath(storage.Path)
+	stack := []dirItem{{path: readPath}}
 
 	for len(stack) > 0 {
 		if err := ctx.Err(); err != nil {
@@ -1643,7 +1687,8 @@ func (c *Collector) collectDetailedPVEBackups(ctx context.Context, storage pveSt
 					c.logger.Debug("Failed to copy small backup %s: %v", fullPath, err)
 				}
 			}
-			if includeDir != "" && strings.Contains(fullPath, includePattern) {
+			hostPath := storage.Path + strings.TrimPrefix(fullPath, readPath)
+			if includeDir != "" && strings.Contains(hostPath, includePattern) {
 				if err := c.copyBackupSample(ctx, fullPath, includeDir, fmt.Sprintf("selected PVE backup %s", name)); err != nil {
 					c.logger.Debug("Failed to copy pattern backup %s: %v", fullPath, err)
 				}
@@ -1680,6 +1725,7 @@ func (c *Collector) newPatternWriters(storage pveStorageEntry, analysisDir strin
 			c.logger.Warning("Failed to prepare writer for pattern %s: %v", pattern, err)
 			continue
 		}
+		pw.readRoot = c.systemPath(storage.Path)
 		writers = append(writers, pw)
 	}
 	return writers
@@ -1689,12 +1735,15 @@ type patternWriter struct {
 	pattern     string
 	storageName string
 	storagePath string
-	filePath    string
-	file        *os.File
-	writer      *bufio.Writer
-	count       int64
-	totalSize   int64
-	errorCount  int64
+	// readRoot is where storagePath is read from, under SYSTEM_ROOT_PREFIX; empty means
+	// storagePath itself.
+	readRoot   string
+	filePath   string
+	file       *os.File
+	writer     *bufio.Writer
+	count      int64
+	totalSize  int64
+	errorCount int64
 }
 
 func newPatternWriter(storageName, storagePath, analysisDir, pattern string, dryRun bool) (*patternWriter, error) {
@@ -1747,7 +1796,11 @@ func (pw *patternWriter) Write(path string, info os.FileInfo) error {
 		return nil
 	}
 
-	rel, err := filepath.Rel(pw.storagePath, path)
+	root := pw.storagePath
+	if pw.readRoot != "" {
+		root = pw.readRoot
+	}
+	rel, err := filepath.Rel(root, path)
 	if err != nil || strings.HasPrefix(rel, "..") {
 		rel = path
 	}
