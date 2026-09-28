@@ -24,6 +24,10 @@ type fullRestoreUIFlow struct {
 	skipHostid    bool
 	skipZFSCaches bool
 	skipZFSConf   bool
+	// restoreHadWarnings is the workflow's flag as runFullRestore leaves it before the
+	// flow is built (decideZFSHostFiles sets it); the closing line reads it with the
+	// logger's own count.
+	restoreHadWarnings bool
 	// plan is the synthesized full-restore plan; only ExportCategories is read, to
 	// keep export-only content, and the product this host does not run, out of the
 	// live system.
@@ -46,6 +50,8 @@ func newFullRestoreUIFlow(w *restoreUIWorkflowRun) *fullRestoreUIFlow {
 		skipZFSCaches: w.skipZFSCaches,
 		skipZFSConf:   w.skipZFSConf,
 		plan:          w.plan,
+
+		restoreHadWarnings: w.restoreHadWarnings,
 	}
 }
 
@@ -68,7 +74,7 @@ func (f *fullRestoreUIFlow) extract() error {
 	if err := f.mergeFstabIfSafe(); err != nil {
 		return err
 	}
-	f.logger.Info("Restore completed successfully.")
+	logRestoreVerdict(f.logger, f.restoreHadWarnings)
 	return nil
 }
 

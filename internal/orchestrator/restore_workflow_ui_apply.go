@@ -234,13 +234,22 @@ func (w *restoreUIWorkflowRun) logGenericRollbackNotCommitted(label string, arme
 
 func (w *restoreUIWorkflowRun) logRestoreCompletion() {
 	w.logger.Info("")
-	if w.restoreHadWarnings {
-		w.logger.Warning("Restore completed with warnings.")
-	} else {
-		w.logger.Info("Restore completed successfully.")
-	}
+	logRestoreVerdict(w.logger, w.restoreHadWarnings)
 	w.logger.Info("Temporary decrypted bundle removed.")
 	w.logRestoreArtifacts()
+}
+
+// logRestoreVerdict writes the restore's closing line. It counts every warning the
+// logger took, the same count the CLI wrapper's "Restore workflow completed ..." line
+// and the footer read: with the flag alone, a warning logged outside the flagged
+// steps (a sudoers file failing visudo, a firewall restart failing) left this line
+// saying "completed successfully" right above the wrapper's "completed with warnings".
+func logRestoreVerdict(logger *logging.Logger, flagged bool) {
+	if flagged || logger.HasWarnings() {
+		logger.Warning("Restore completed with warnings.")
+		return
+	}
+	logger.Info("Restore completed successfully.")
 }
 
 func (w *restoreUIWorkflowRun) logRestoreArtifacts() {

@@ -1,6 +1,7 @@
 package orchestrator
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"os"
@@ -192,11 +193,19 @@ func TestFullRestoreFallbackKeepsZFSHostFilesWhenPoolsAreImported(t *testing.T) 
 		return nil, nil, errors.New("boom")
 	}
 	ui := &fakeRestoreWorkflowUI{confirmRestore: true, confirmCompatible: true}
-	if err := runRestoreWorkflowWithUI(context.Background(), &config.Config{BaseDir: "/base"}, logging.New(types.LogLevelError, false), "vtest", ui, ""); err != nil {
+	var logBuf bytes.Buffer
+	logger := logging.New(types.LogLevelInfo, false)
+	logger.SetOutput(&logBuf)
+	if err := runRestoreWorkflowWithUI(context.Background(), &config.Config{BaseDir: "/base"}, logger, "vtest", ui, ""); err != nil {
 		t.Fatalf("restore: %v", err)
 	}
 	if _, err := fakeFS.ReadFile("/etc/hosts"); err != nil {
 		t.Fatalf("control: the fallback must still extract /etc/hosts: %v", err)
+	}
+	// The fallback used to close with "Restore completed successfully." whatever it had
+	// warned about, the three host files it kept included.
+	if log := logBuf.String(); !strings.Contains(log, "Restore completed with warnings.") || strings.Contains(log, "Restore completed successfully.") {
+		t.Fatalf("fallback verdict must be \"completed with warnings\":\n%s", log)
 	}
 	if got, _ := fakeFS.ReadFile("/etc/hostid"); string(got) != string(thisHostid) {
 		t.Fatalf("/etc/hostid overwritten with %x", got)
