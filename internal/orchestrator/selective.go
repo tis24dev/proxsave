@@ -204,7 +204,7 @@ func ShowCategorySelectionMenuWithReader(ctx context.Context, reader *bufio.Read
 
 		fmt.Println()
 		fmt.Println("Commands:")
-		fmt.Println("  1-9    - Toggle category selection")
+		fmt.Printf("  %-7s- Toggle category selection\n", categoryToggleRange(len(relevantCategories)))
 		fmt.Println("  a      - Select all")
 		fmt.Println("  n      - Deselect all")
 		fmt.Println("  c      - Continue with selected categories")
@@ -276,6 +276,15 @@ func ShowCategorySelectionMenuWithReader(ctx context.Context, reader *bufio.Read
 			selected[index] = !selected[index]
 		}
 	}
+}
+
+// categoryToggleRange is the numbers the CUSTOM menu accepts for a toggle: the help
+// line used to read "1-9" whatever the count, with 18 or more categories listed.
+func categoryToggleRange(count int) string {
+	if count <= 1 {
+		return "1"
+	}
+	return fmt.Sprintf("1-%d", count)
 }
 
 // GetCategoriesForMode returns categories based on the selected restore mode

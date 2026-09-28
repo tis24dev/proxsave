@@ -1,8 +1,14 @@
 package orchestrator
 
 import (
+	"bufio"
+	"bytes"
 	"context"
+	"errors"
+	"fmt"
+	"io"
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/tis24dev/proxsave/internal/logging"
@@ -119,5 +125,55 @@ func TestShowRestoreModeMenu_ContextCanceledReturnsErrRestoreAborted(t *testing.
 	_, err = ShowRestoreModeMenu(ctx, logger, SystemTypePVE)
 	if err != ErrRestoreAborted {
 		t.Fatalf("err=%v want=%v", err, ErrRestoreAborted)
+	}
+}
+
+// The toggle help names the numbers the menu really accepts: it read "1-9" with 18
+// or more categories listed.
+func TestShowCategorySelectionMenu_HelpNamesTheToggleRange(t *testing.T) {
+	logger := logging.New(types.LogLevelError, false)
+	many := make([]Category, 0, 12)
+	for i := 0; i < 12; i++ {
+		id := fmt.Sprintf("common_%02d", i)
+		many = append(many, Category{ID: id, Name: id, Type: CategoryTypeCommon})
+	}
+
+	cases := []struct {
+		name string
+		cats []Category
+		want string
+	}{
+		{"twelve", many, "  1-12   - Toggle category selection\n"},
+		{"one", many[:1], "  1      - Toggle category selection\n"},
+		{"none", nil, "  1      - Toggle category selection\n"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			oldOut := os.Stdout
+			r, w, err := os.Pipe()
+			if err != nil {
+				t.Fatalf("os.Pipe: %v", err)
+			}
+			os.Stdout = w
+			var out bytes.Buffer
+			done := make(chan struct{})
+			go func() {
+				_, _ = io.Copy(&out, r)
+				close(done)
+			}()
+
+			_, menuErr := ShowCategorySelectionMenuWithReader(context.Background(), bufio.NewReader(strings.NewReader("0\n")), logger, tc.cats, SystemTypePVE)
+
+			_ = w.Close()
+			os.Stdout = oldOut
+			<-done
+
+			if !errors.Is(menuErr, ErrRestoreAborted) {
+				t.Fatalf("menu error = %v; want ErrRestoreAborted", menuErr)
+			}
+			if !strings.Contains(out.String(), tc.want) {
+				t.Fatalf("help line %q missing from:\n%s", tc.want, out.String())
+			}
+		})
 	}
 }
