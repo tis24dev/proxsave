@@ -127,6 +127,7 @@ func (o *Orchestrator) writeBackupCollectionMetadata(tempDir, hostname string, s
 	// while the embedded diagnostic metadata is incomplete (PS-BH-003). The backup
 	// data itself is unaffected, so a warning (not an error) is the right severity.
 	if err := o.writeBackupMetadata(tempDir, stats); err != nil {
+		collector.NoteStagingWriteError(err)
 		o.logger.Warning("Failed to write backup metadata: %v", err)
 	}
 	if err := collector.WriteManifest(hostname); err != nil {

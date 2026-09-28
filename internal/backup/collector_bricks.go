@@ -314,6 +314,13 @@ func runRecipe(ctx context.Context, r recipe, state *collectionState) error {
 			}
 			return err
 		}
+		// A brick that hit a full working directory may have logged it and carried on;
+		// the bricks after it would only write empty or truncated files.
+		if state.collector != nil {
+			if err := state.collector.StagingNoSpaceErr(); err != nil {
+				return err
+			}
+		}
 	}
 	return nil
 }
