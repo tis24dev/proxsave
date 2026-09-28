@@ -1237,10 +1237,12 @@ armed and fences the node. Still active after the limit, the stop fails with
 `failed to stop PVE services (pve-ha-lrm)`, before any other service has been stopped.
 Before returning that error, `cancelHALRMStopJob()` runs one `systemctl start pve-ha-lrm`:
 the no-block stop job is still queued, and the start replaces it and leaves the LRM
-running, instead of letting it stop after the restore gave up. A failed start is the
+running, instead of letting it stop after the restore gave up. The same start runs on
+every other failure of the LRM stop too: a failed `systemctl stop --no-block`, a failed
+`systemctl is-active` query during the wait, and a restore cancelled during the wait. It
+runs on its own context, so a cancelled restore still issues it. A failed start is the
 warning `Failed to restart PVE services (pve-ha-lrm) after the stop failed: <err>`, and the
-stop error is returned either way. A failed status query or a cancelled context during
-the wait fails the stop without that start (`errServiceStillActive` marks the timeout).
+original stop error is returned in every case.
 
 **PBS Service Dependency Graph**:
 

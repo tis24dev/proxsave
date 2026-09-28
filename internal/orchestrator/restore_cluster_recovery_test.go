@@ -558,15 +558,33 @@ type slowUnitRunner struct {
 	unit         string
 	activeChecks int
 	checks       int
+	// cancelAtCheck, when > 0, calls cancel on that is-active query (the restore
+	// being cancelled during the wait).
+	cancelAtCheck int
+	cancel        context.CancelFunc
+	// failQuery makes every is-active query on unit hang until its own timeout.
+	failQuery bool
+	// startCtxErrs records ctx.Err() of each "systemctl start <unit>" when it runs.
+	startCtxErrs []error
 }
 
 func (r *slowUnitRunner) Run(ctx context.Context, name string, args ...string) ([]byte, error) {
+	if name == "systemctl" && len(args) == 2 && args[0] == "start" && args[1] == r.unit {
+		r.startCtxErrs = append(r.startCtxErrs, ctx.Err())
+	}
 	if name != "systemctl" || len(args) != 2 || args[0] != "is-active" || args[1] != r.unit {
 		return r.FakeCommandRunner.Run(ctx, name, args...)
 	}
 	r.Calls = append(r.Calls, commandKey(name, args))
 	r.Contexts = append(r.Contexts, ctx)
 	r.checks++
+	if r.failQuery {
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}
+	if r.cancelAtCheck > 0 && r.checks == r.cancelAtCheck && r.cancel != nil {
+		r.cancel()
+	}
 	if r.activeChecks < 0 || r.checks <= r.activeChecks {
 		return []byte("active\n"), nil
 	}
@@ -689,6 +707,81 @@ func TestStopHALRMTimeoutWarnsWhenTheStartFails(t *testing.T) {
 		t.Fatalf("failed start was retried with a restart; calls=%q", calls)
 	}
 	runner.assertNoKill(t)
+}
+
+// Every failure of the LRM stop, not only the timeout, issues one systemctl start on
+// its own context before the original error is returned: the no-block stop job may
+// still be queued, and nothing else would start the LRM again.
+func TestStopHALRMStartsItAgainOnEveryFailure(t *testing.T) {
+	cases := []struct {
+		name    string
+		setup   func(r *slowUnitRunner, cancel context.CancelFunc)
+		wantErr string
+		waited  bool
+	}{
+		{
+			name: "restore cancelled during the wait",
+			setup: func(r *slowUnitRunner, cancel context.CancelFunc) {
+				r.activeChecks = -1
+				r.cancelAtCheck = 3
+				r.cancel = cancel
+			},
+			wantErr: "failed to stop PVE services (pve-ha-lrm): context canceled",
+			waited:  true,
+		},
+		{
+			name: "is-active query fails",
+			setup: func(r *slowUnitRunner, _ context.CancelFunc) {
+				r.failQuery = true
+			},
+			wantErr: "failed to stop PVE services (pve-ha-lrm): systemctl is-active pve-ha-lrm timed out after 20ms",
+			waited:  true,
+		},
+		{
+			name: "no-block stop command fails",
+			setup: func(r *slowUnitRunner, _ context.CancelFunc) {
+				r.Outputs["systemctl stop --no-block pve-ha-lrm"] = []byte("Failed to stop pve-ha-lrm.service: Access denied\n")
+				r.Errors["systemctl stop --no-block pve-ha-lrm"] = errors.New("exit status 4")
+			},
+			wantErr: "failed to stop PVE services (pve-ha-lrm): systemctl stop --no-block pve-ha-lrm failed: Failed to stop pve-ha-lrm.service: Access denied",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			origCmd := restoreCmd
+			t.Cleanup(func() { restoreCmd = origCmd })
+			fastServiceTimers(t)
+			withHALRMStopTimeout(t, 10*time.Second)
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			runner := &slowUnitRunner{FakeCommandRunner: inactiveServicesRunner(), unit: "pve-ha-lrm"}
+			tc.setup(runner, cancel)
+			restoreCmd = runner
+
+			err := stopPVEClusterServices(ctx, newTestLogger())
+			if err == nil || err.Error() != tc.wantErr {
+				t.Fatalf("err = %v, want %q", err, tc.wantErr)
+			}
+			calls := runner.CallsList()
+			if n := countCalls(calls, "systemctl start pve-ha-lrm"); n != 1 {
+				t.Fatalf("systemctl start pve-ha-lrm issued %d times, want 1; calls=%q", n, calls)
+			}
+			if runner.startCtxErrs[0] != nil {
+				t.Fatalf("start ran on a dead context: %v", runner.startCtxErrs[0])
+			}
+			if got := runner.checks > 0; got != tc.waited {
+				t.Fatalf("waited for pve-ha-lrm=%v, want %v; calls=%q", got, tc.waited, calls)
+			}
+			runner.assertNoKill(t)
+			for _, c := range calls {
+				if (strings.HasPrefix(c, "systemctl stop") && !strings.HasSuffix(c, " pve-ha-lrm")) ||
+					(strings.HasPrefix(c, "systemctl start") && c != "systemctl start pve-ha-lrm") ||
+					strings.HasPrefix(c, "systemctl restart") {
+					t.Fatalf("failed pve-ha-lrm stop went on to %q; calls=%q", c, calls)
+				}
+			}
+		})
+	}
 }
 
 // The restart of the 6 services gets 30 s each plus 10 s: 190 s.

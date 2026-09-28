@@ -95,26 +95,27 @@ func stopPVEClusterServices(ctx context.Context, logger *logging.Logger) error {
 // stopHALRMWithoutSignals stops pve-ha-lrm with a single no-block stop and waits up
 // to haLRMStopTimeout for it to go inactive. It never escalates to systemctl kill:
 // the LRM closes its watchdog only when it exits on its own, and a SIGKILL before
-// that leaves the watchdog armed, so the node is fenced.
+// that leaves the watchdog armed, so the node is fenced. Every failure, of the stop
+// command or of the wait (timeout, failed status query, cancelled restore), goes
+// through cancelHALRMStopJob before its error is returned.
 func stopHALRMWithoutSignals(ctx context.Context, logger *logging.Logger, service string) error {
 	if err := runCommandWithTimeoutCountdown(ctx, logger, serviceStopNoBlockTimeout, service, "stop (no-block)", "systemctl", "stop", "--no-block", service); err != nil {
+		cancelHALRMStopJob(logger, service)
 		return err
 	}
 	if err := waitForServiceInactive(ctx, logger, service, haLRMStopTimeout); err != nil {
-		if errors.Is(err, errServiceStillActive) {
-			cancelHALRMStopJob(logger, service)
-		}
+		cancelHALRMStopJob(logger, service)
 		return err
 	}
 	resetFailedService(ctx, logger, service)
 	return nil
 }
 
-// cancelHALRMStopJob runs systemctl start on pve-ha-lrm after its stop timed out. The
-// no-block stop job is still queued: left alone, the LRM would stop later, after the
-// restore gave up, with nothing to start it again. The start replaces the queued stop
-// job and leaves the LRM running. Its own context, like the other restarts, so a
-// cancelled restore still gets it.
+// cancelHALRMStopJob runs systemctl start on pve-ha-lrm after its stop failed. The
+// no-block stop job may still be queued: left alone, the LRM would stop later, after
+// the restore gave up, with nothing to start it again. The start replaces the queued
+// stop job and leaves the LRM running; where nothing was queued it is harmless. Its
+// own context, like the other restarts, so a cancelled restore still issues it.
 func cancelHALRMStopJob(logger *logging.Logger, service string) {
 	if err := runCommandWithTimeout(context.Background(), logger, serviceStartTimeout, "systemctl", "start", service); err != nil && logger != nil {
 		logger.Warning("Failed to restart PVE services (%s) after the stop failed: %v", service, err)
@@ -470,13 +471,8 @@ func (waiter serviceInactiveWaiter) ensureTimeRemaining(remaining time.Duration)
 		return nil
 	}
 	waiter.writeNewline()
-	return fmt.Errorf("%s %w after %s", waiter.service, errServiceStillActive, waiter.timeout)
+	return fmt.Errorf("%s still active after %s", waiter.service, waiter.timeout)
 }
-
-// errServiceStillActive marks the waitForServiceInactive error for a unit still
-// active when the wait ran out, as opposed to a failed status query or a cancelled
-// context. The error text is unchanged: "<unit> still active after <timeout>".
-var errServiceStillActive = errors.New("still active")
 
 func (waiter serviceInactiveWaiter) logStopped() {
 	if waiter.logger != nil {
