@@ -169,7 +169,7 @@ func (w *restoreUIWorkflowRun) selectClusterRestoreMode() error {
 	if !w.plan.NeedsClusterRestore || !w.plan.ClusterBackup {
 		return nil
 	}
-	w.logger.Info("Cluster payload detected in backup; enabling guarded restore options for pve_cluster")
+	w.logger.Info("PVE configuration database - in the backup: SAFE exports it, RECOVERY writes it to this host")
 	choice, err := w.ui.SelectClusterRestoreMode(w.ctx)
 	if err != nil {
 		return err
