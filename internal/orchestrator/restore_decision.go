@@ -109,6 +109,14 @@ func inspectRestoreArchiveContents(archivePath string, logger *logging.Logger) (
 	}
 
 	logger.Debug("Found %d entries in archive", len(archivePaths))
+	prefix := detectLegacyPVEPrefix(archivePaths)
+	rememberLegacyPVEPrefix(archivePath, prefix)
+	if prefix != "" {
+		for i, name := range archivePaths {
+			archivePaths[i], _ = remapLegacyPVEEntry(name, prefix)
+		}
+		logger.Info("PVE configuration - stored under %s/ in this backup (taken with SYSTEM_ROOT_PREFIX), restored to its host paths", prefix)
+	}
 	availableCategories := AnalyzeArchivePaths(archivePaths, GetAllCategories())
 
 	decision := buildRestoreDecisionInfo(metadata, availableCategories, logger)
