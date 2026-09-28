@@ -652,7 +652,7 @@ flowchart TD
     MorePBS -->|Yes| LoopPBS
     MorePBS -->|No| CheckZFSCat{zfs Category<br/>Restored?}
 
-    CheckZFSCat -->|Yes| WarnZFSImport["Warn: ZFS pools<br/>may need manual import"]
+    CheckZFSCat -->|Yes| WarnZFSImport["Info: ZFS pools<br/>importable, not imported"]
     CheckZFSCat -->|No| Done
     WarnZFSImport --> DisplayCmds["Display:<br/>zpool import<br/>zpool import pool-name"]
     DisplayCmds --> Done

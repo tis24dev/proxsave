@@ -723,8 +723,7 @@ Creating safety backup of existing files...
 Safety backup created successfully.
 Safety backup location: /var/lib/proxsave/restore/20251120_143052/restore_backup_20251120_143052.tar.gz
 
-You can restore from this backup if needed using:
-  tar -xzf /var/lib/proxsave/restore/20251120_143052/restore_backup_20251120_143052.tar.gz -C /
+Safety backup - holds the current versions of the files this restore overwrites (tar.gz, paths relative to /)
 ```
 
 #### Phase 9: Service Management (PVE Cluster)
@@ -816,10 +815,10 @@ Temporary decrypted bundle removed.
 Detailed restore log: /var/lib/proxsave/restore/20251120_143052/restore_20251120_143052.log
 Export directory: /opt/proxsave/proxmox-config-export-20251120-143052/
 Safety backup preserved at: /var/lib/proxsave/restore/20251120_143052/restore_backup_20251120_143052.tar.gz
-Remove it manually if restore was successful: rm /var/lib/proxsave/restore/20251120_143052/restore_backup_20251120_143052.tar.gz
+Safety backup - kept until removed, ProxSave never deletes it
 
-IMPORTANT: You may need to restart services for changes to take effect.
-  PVE services were stopped/restarted during restore; verify status with: pvecm status
+Services - some restored files take effect only when the services that read them restart
+  PVE services - stopped and started again during this restore
 REBOOT RECOMMENDED: Reboot the node (or at least restart networking and core services) so hostname/IP and service changes from the restore are fully applied.
 
 Recreating storage directories from /etc/pve/storage.cfg...

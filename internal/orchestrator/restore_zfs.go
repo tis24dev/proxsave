@@ -95,17 +95,8 @@ func logNoImportableZFSPools(ctx context.Context, logger *logging.Logger, config
 }
 
 func logManualZFSImportInstructions(logger *logging.Logger, importablePools []string) {
-	logger.Info("⚠ IMPORTANT: ZFS pools may need manual import after restore!")
-	logger.Info("  Before rebooting, run these commands:")
-	logger.Info("  1. Check available pools:  zpool import")
-	for _, pool := range importablePools {
-		logger.Info("  2. Import pool manually:   zpool import %s", pool)
-	}
-	logger.Info("  3. Verify pool status:     zpool status")
-	logger.Info("")
-	logger.Info("  If pools fail to import, check:")
-	logger.Info("  - journalctl -u zfs-import@<pool-name>.service or import@<pool-name>.service")
-	logger.Info("  - zpool import -d /dev/disk/by-id")
+	logger.Info("ZFS pools - importable, not imported: %s", strings.Join(importablePools, ", "))
+	logger.Info("ZFS pools - a pool that is not imported stays unavailable after the reboot, with the storages and datastores on it")
 	logger.Info("")
 }
 

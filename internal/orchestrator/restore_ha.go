@@ -176,7 +176,7 @@ func maybeApplyPVEHAWithUI(
 	}
 	logging.DebugStep(logger, "pve ha restore (ui)", "User choice: applyNow=%v", applyNow)
 	if !applyNow {
-		logger.Info("Skipping PVE HA apply (you can apply manually later).")
+		logger.Info("PVE HA - not applied: this host keeps its current HA configuration")
 		return nil
 	}
 

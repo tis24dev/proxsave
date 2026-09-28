@@ -45,10 +45,10 @@ func (w *restoreUIWorkflowRun) createSafetyBackup(categories []Category) error {
 	}
 	w.safetyBackup = backup
 	w.logger.Info("Safety backup location: %s", backup.BackupPath)
-	w.logger.Info("You can restore from this backup if needed using: tar -xzf %s -C /", backup.BackupPath)
+	w.logger.Info("Safety backup - holds the current versions of the files this restore overwrites (tar.gz, paths relative to /)")
 	for _, c := range categories {
 		if c.ID == "accounts" {
-			w.logger.Info("System accounts rollback: this safety backup includes /etc/passwd, /etc/group, /etc/shadow, /etc/gshadow and /etc/sudoers; restore just those with: tar -xzf %s -C / etc/passwd etc/group etc/shadow etc/gshadow etc/sudoers", backup.BackupPath)
+			w.logger.Info("Safety backup - also holds the current /etc/passwd, /etc/group, /etc/shadow, /etc/gshadow and /etc/sudoers")
 			break
 		}
 	}

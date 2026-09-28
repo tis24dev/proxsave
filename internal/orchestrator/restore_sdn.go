@@ -64,7 +64,7 @@ func maybeApplyPVESDNFromStage(ctx context.Context, logger *logging.Logger, plan
 	}
 
 	logger.Info("PVE SDN staged apply: applied %d item(s)", len(applied))
-	logger.Warning("PVE SDN note: this restores SDN definitions only; you may still need to apply SDN changes via the Proxmox UI/CLI")
+	logger.Warning("PVE SDN - definitions restored as pending changes; the network uses them only after an SDN apply")
 	return nil
 }
 

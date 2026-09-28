@@ -389,7 +389,7 @@ func clearImmutableGuards(ctx context.Context, logger *logging.Logger, dryRun bo
 		// with chattr -i.
 		resolved, leafExists, ok, rErr := resolveGuardTargetWithinAllowlist(target)
 		if rErr != nil {
-			logger.Warning("Guard cleanup: cannot resolve %s: %v; leaving immutable flag (clear manually with: chattr -i %s)", target, rErr, target)
+			logger.Warning("Guard cleanup: cannot resolve %s: %v; leaving immutable flag", target, rErr)
 			pending++
 			continue
 		}
@@ -409,7 +409,7 @@ func clearImmutableGuards(ctx context.Context, logger *logging.Logger, dryRun bo
 		// would then hit the live mount root below.
 		mounted, mErr := isMounted(resolved)
 		if mErr != nil {
-			logger.Warning("Guard cleanup: cannot determine mount status of %s: %v; leaving immutable flag (clear manually with: chattr -i %s)", resolved, mErr, resolved)
+			logger.Warning("Guard cleanup: cannot determine mount status of %s: %v; leaving immutable flag", resolved, mErr)
 			pending++
 			continue
 		}
@@ -429,7 +429,7 @@ func clearImmutableGuards(ctx context.Context, logger *logging.Logger, dryRun bo
 		}
 
 		if _, err := cleanupRunCmd(ctx, "chattr", "-i", resolved); err != nil {
-			logger.Warning("Guard cleanup: failed to clear immutable flag on %s: %v (clear manually with: chattr -i %s)", resolved, err, resolved)
+			logger.Warning("Guard cleanup: failed to clear immutable flag on %s: %v; it stays immutable", resolved, err)
 			pending++
 			continue
 		}

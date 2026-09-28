@@ -178,7 +178,7 @@ func maybeApplyPVEFirewallWithUI(
 	}
 	logging.DebugStep(logger, "pve firewall restore (ui)", "User choice: applyNow=%v", applyNow)
 	if !applyNow {
-		logger.Info("Skipping PVE firewall apply (you can apply manually later).")
+		logger.Info("PVE firewall - not applied: this host keeps its current firewall configuration")
 		return nil
 	}
 

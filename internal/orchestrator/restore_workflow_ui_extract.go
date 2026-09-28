@@ -58,7 +58,7 @@ func (w *restoreUIWorkflowRun) extractNormalCategories() error {
 	if err != nil {
 		w.logger.Error("Restore failed: %v", err)
 		if w.safetyBackup != nil {
-			w.logger.Info("You can rollback using the safety backup at: %s", w.safetyBackup.BackupPath)
+			w.logger.Info("Safety backup - the files this restore overwrote are in %s", w.safetyBackup.BackupPath)
 		}
 		return err
 	}

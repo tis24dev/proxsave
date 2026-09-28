@@ -59,8 +59,8 @@ func (o *Orchestrator) prepareAgeRecipientsWithUI(ctx context.Context, ui AgeSet
 		if ui == nil {
 			if !o.isInteractiveShell() {
 				if o.logger != nil {
-					o.logger.Error("Encryption setup requires interaction. Run the script interactively to complete the AGE recipient setup, then re-run in automated mode.")
-					o.logger.Debug("HINT Set AGE_RECIPIENT or AGE_RECIPIENT_FILE to bypass the interactive setup and re-run.")
+					o.logger.Error("Encryption setup - needs an interactive session to set the AGE recipient; this run is not interactive")
+					o.logger.Debug("AGE_RECIPIENT or AGE_RECIPIENT_FILE in backup.env set the recipient without the interactive setup")
 				}
 				return nil, nil, fmt.Errorf("age recipients not configured")
 			}

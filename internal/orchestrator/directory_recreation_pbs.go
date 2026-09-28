@@ -131,9 +131,9 @@ func shouldSkipRootFilesystemDatastore(preflight pbsDatastorePreflight, logger *
 	}
 
 	logger.Warning("PBS datastore preflight: %s resolves to the root filesystem (mount missing?), skipping datastore directory initialization to avoid writing to the wrong disk", preflight.basePath)
-	logger.Info("Mount/import the datastore disk/pool first, then restart PBS services.")
+	logger.Info("PBS datastore - left uninitialized until its disk or pool is mounted at %s", preflight.basePath)
 	if _, err := os.Stat(zpoolCachePath); err == nil {
-		logger.Info("ZFS detected: if this datastore was on ZFS, you may need to import the pool first (e.g. `zpool import` then `zpool import <pool-name>`).")
+		logger.Info("ZFS detected: a datastore on a ZFS pool is available only once that pool is imported")
 	}
 	return true
 }

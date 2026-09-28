@@ -109,7 +109,7 @@ func TestCreateSafetyBackupLogsAccountsRollbackHintWhenAccountsCategoryPresent(t
 		t.Fatalf("createSafetyBackup failed: %v", err)
 	}
 
-	if !strings.Contains(buf.String(), "System accounts rollback") {
+	if !strings.Contains(buf.String(), "Safety backup - also holds the current /etc/passwd") {
 		t.Fatalf("expected accounts rollback hint in log output, got: %q", buf.String())
 	}
 }
@@ -123,7 +123,7 @@ func TestCreateSafetyBackupOmitsAccountsRollbackHintWhenAccountsCategoryAbsent(t
 		t.Fatalf("createSafetyBackup failed: %v", err)
 	}
 
-	if strings.Contains(buf.String(), "System accounts rollback") {
+	if strings.Contains(buf.String(), "Safety backup - also holds the current /etc/passwd") {
 		t.Fatalf("did not expect accounts rollback hint in log output, got: %q", buf.String())
 	}
 }

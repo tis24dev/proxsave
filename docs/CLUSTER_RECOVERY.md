@@ -244,11 +244,11 @@ If your restore scope includes the network category (FULL, SYSTEM BASE, or a CUS
 
 ### The safety backup
 
-Before overwriting anything, ProxSave writes a safety backup of the current configuration to `/var/lib/proxsave/restore/<YYYYMMDD_HHMMSS>/restore_backup_<YYYYMMDD_HHMMSS>.tar.gz` and keeps it, outside `/tmp` so that it survives the reboot the restore recommends. At the end it prints where it is and how to remove it:
+Before overwriting anything, ProxSave writes a safety backup of the current configuration to `/var/lib/proxsave/restore/<YYYYMMDD_HHMMSS>/restore_backup_<YYYYMMDD_HHMMSS>.tar.gz` and keeps it, outside `/tmp` so that it survives the reboot the restore recommends. At the end it prints where it is:
 
 ```text
 Safety backup preserved at: /var/lib/proxsave/restore/20251120_143052/restore_backup_20251120_143052.tar.gz
-Remove it manually if restore was successful: rm /var/lib/proxsave/restore/20251120_143052/restore_backup_20251120_143052.tar.gz
+Safety backup - kept until removed, ProxSave never deletes it
 ```
 
 If any staged step fails, the run ends with `Restore completed with warnings.` rather than aborting, and this safety backup is your rollback.
@@ -491,7 +491,7 @@ Preparing system for cluster database restore: stopping PVE services and unmount
 
 Restore completed successfully.
 Safety backup preserved at: /var/lib/proxsave/restore/20251120_143052/restore_backup_20251120_143052.tar.gz
-Remove it manually if restore was successful: rm /var/lib/proxsave/restore/20251120_143052/restore_backup_20251120_143052.tar.gz
+Safety backup - kept until removed, ProxSave never deletes it
 ```
 
 ProxSave stops `pve-ha-lrm`, `pve-ha-crm`, `pve-cluster`, `pvedaemon`, `pveproxy`, `pvestatd`, unmounts `/etc/pve`, extracts `/var/lib/pve-cluster/` (config.db), then restarts `pve-cluster`, `pvedaemon`, `pveproxy`, `pvestatd`, `pve-ha-crm`, `pve-ha-lrm` before the remaining steps of the restore. It does not print a per-service checkmark line for each one. No `/etc/pve` files are written directly: config.db owns them, so `/etc/pve` is repopulated from the restored database a moment after pmxcfs remounts, not by the file-extraction phase.
