@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/tis24dev/proxsave/internal/logging"
 	"github.com/tis24dev/proxsave/internal/types"
@@ -95,5 +96,81 @@ func TestPVEStorageMissingPathWarnsWithoutPrefix(t *testing.T) {
 	)
 	if !strings.Contains(buf.String(), "PVE datastore gone skipped: path "+missing+" not accessible") {
 		t.Fatalf("missing path on a real root did not warn:\n%s", buf.String())
+	}
+}
+
+// A storage.cfg path written with a trailing slash ("path /var/lib/vz/", kept by a hand
+// edit or by an nfs/cifs --path given that way) used to put "//" in the host path the
+// include pattern is matched against: under SYSTEM_ROOT_PREFIX "vz/dump" then selected
+// nothing, silently, and metadata.txt named /var/lib/vz//dump/... Without a prefix the
+// same path must keep matching as it always did.
+func TestPVEBackupIncludePatternWithTrailingSlashStoragePath(t *testing.T) {
+	const backupName = "vzdump-qemu-100-2026_09_01-00_00_00.vma.zst"
+	selected := func(t *testing.T, prefix, storagePath, pattern string) bool {
+		t.Helper()
+		cfg := GetDefaultCollectorConfig()
+		cfg.SystemRootPrefix = prefix
+		cfg.BackupPVEBackupFiles = true
+		cfg.PVEBackupIncludePattern = pattern
+		logger := logging.New(types.LogLevelError, false)
+		logger.SetOutput(&bytes.Buffer{})
+		tempDir := t.TempDir()
+		c := NewCollector(logger, cfg, tempDir, types.ProxmoxVE, false)
+		storage := pveStorageEntry{Name: "local", Path: storagePath, Type: "dir"}
+		if err := c.collectDetailedPVEBackups(context.Background(), storage, filepath.Join(tempDir, "meta"), 5*time.Second); err != nil {
+			t.Fatalf("collectDetailedPVEBackups: %v", err)
+		}
+		_, err := os.Stat(filepath.Join(tempDir, "var/lib/pve-cluster/selected_backups", "local", backupName))
+		return err == nil
+	}
+
+	root := t.TempDir()
+	writeArchivePathFixture(t, root, map[string]string{"var/lib/vz/dump/" + backupName: "x"})
+	host := t.TempDir()
+	writeArchivePathFixture(t, host, map[string]string{"vz/dump/" + backupName: "x"})
+
+	for _, tc := range []struct{ name, prefix, path, pattern string }{
+		{"prefix, trailing slash, pattern across the storage root", root, "/var/lib/vz/", "vz/dump"},
+		{"prefix, trailing slash, full host path", root, "/var/lib/vz/", "/var/lib/vz/dump/vzdump-qemu-100"},
+		{"prefix, trailing slash, file name", root, "/var/lib/vz/", "vzdump-qemu-100"},
+		{"prefix, clean path", root, "/var/lib/vz", "vz/dump"},
+		{"no prefix, trailing slash", "", filepath.Join(host, "vz") + "/", "vz/dump"},
+		{"no prefix, double trailing slash, full host path", "", filepath.Join(host, "vz") + "//", filepath.Join(host, "vz", "dump", "vzdump-qemu-100")},
+	} {
+		if !selected(t, tc.prefix, tc.path, tc.pattern) {
+			t.Errorf("%s: path %q pattern %q selected nothing", tc.name, tc.path, tc.pattern)
+		}
+	}
+
+	// The metadata sample lines name the file at its host path, without "//".
+	writeArchivePathFixture(t, root, map[string]string{
+		"etc/pve/storage.cfg": "dir: local\n\tpath /var/lib/vz/\n\tcontent backup,iso\n",
+	})
+	cfg := GetDefaultCollectorConfig()
+	cfg.SystemRootPrefix = root
+	cfg.BackupPVEBackupFiles = true
+	logger := logging.New(types.LogLevelError, false)
+	logger.SetOutput(&bytes.Buffer{})
+	tempDir := t.TempDir()
+	c := NewCollector(logger, cfg, tempDir, types.ProxmoxVE, false)
+	runSelectedBricksForTest(t, context.Background(), c, newPVERecipe(), nil,
+		brickPVEStorageResolve, brickPVEStorageProbe, brickPVEStorageMetadataJSON,
+		brickPVEStorageMetadataText, brickPVEStorageBackupAnalysis, brickPVEStorageSummary,
+	)
+	sawHostPath := false
+	for _, file := range archiveFileList(t, tempDir) {
+		data, err := os.ReadFile(filepath.Join(tempDir, file))
+		if err != nil {
+			continue
+		}
+		if strings.Contains(string(data), "/var/lib/vz//") {
+			t.Errorf("%s names a path with \"//\":\n%s", file, data)
+		}
+		if strings.Contains(string(data), "/var/lib/vz/dump/"+backupName) {
+			sawHostPath = true
+		}
+	}
+	if !sawHostPath {
+		t.Fatalf("no collected file names /var/lib/vz/dump/%s: the check above saw nothing", backupName)
 	}
 }

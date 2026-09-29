@@ -1504,8 +1504,9 @@ func (c *Collector) collectPVEStorageMetadataTextStep(ctx context.Context, resul
 	}
 	if readPath != storage.Path {
 		// The sample lines name files by their full path: report the host's, not the prefix's.
+		hostRoot := filepath.Clean(storage.Path)
 		for i, line := range fileSampleLines {
-			fileSampleLines[i] = strings.Replace(line, " "+readPath, " "+storage.Path, 1)
+			fileSampleLines[i] = strings.Replace(line, " "+readPath, " "+hostRoot, 1)
 		}
 	}
 	result.FileSampleLines = fileSampleLines
@@ -1687,7 +1688,14 @@ func (c *Collector) collectDetailedPVEBackups(ctx context.Context, storage pveSt
 					c.logger.Debug("Failed to copy small backup %s: %v", fullPath, err)
 				}
 			}
-			hostPath := storage.Path + strings.TrimPrefix(fullPath, readPath)
+			// The include pattern matches the host's path, not the prefix's. filepath.Rel
+			// and Join clean both sides, so a storage.cfg path written with a trailing
+			// slash ("path /var/lib/vz/") cannot put "//" in the middle and break a
+			// pattern such as "vz/dump".
+			hostPath := fullPath
+			if rel, err := filepath.Rel(readPath, fullPath); err == nil {
+				hostPath = filepath.Join(storage.Path, rel)
+			}
 			if includeDir != "" && strings.Contains(hostPath, includePattern) {
 				if err := c.copyBackupSample(ctx, fullPath, includeDir, fmt.Sprintf("selected PVE backup %s", name)); err != nil {
 					c.logger.Debug("Failed to copy pattern backup %s: %v", fullPath, err)
