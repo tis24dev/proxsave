@@ -529,7 +529,7 @@ func TestBootstrapRuntimeNamesEveryRunItHandsBack(t *testing.T) {
 
 			dir := t.TempDir()
 			// The restore row streams its live log into the restore's own directory
-			// (restoreRunDir, /var/lib/proxsave/restore/<ts> in production): keep it
+			// (restoreRunDir, <BASE_DIR>/restore/<ts> in production): keep it
 			// inside the test's temporary tree.
 			origRunDir := restoreRunDir
 			restoreRunDir = func() string { return filepath.Join(dir, "restore-run") }

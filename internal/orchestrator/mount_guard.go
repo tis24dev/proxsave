@@ -14,10 +14,26 @@ import (
 	"time"
 )
 
-// mountGuardBaseDir is the directory under which ProxSave records mount guards.
-// It is a var (not a const) only so tests can redirect it to a temporary
-// directory; production never reassigns it.
-var mountGuardBaseDir = "/var/lib/proxsave/guards"
+// mountGuardBaseDir is the directory under which ProxSave creates mount guards:
+// <BASE_DIR>/guards, set by SetBaseDir. Tests redirect it to a temporary directory.
+var mountGuardBaseDir = filepath.Join(fallbackBaseDir, "guards")
+
+// legacyMountGuardBaseDir is where ProxSave created mount guards before they moved
+// under BASE_DIR. A host can still have guards there, bind-mounted until the next
+// reboot or recorded in the chattr-targets index, so cleanup reads it as well, with no
+// expiry, and removes it once nothing is left in it. Nothing creates guards there
+// anymore. A var only so tests can redirect it.
+var legacyMountGuardBaseDir = "/var/lib/proxsave/guards"
+
+// mountGuardBaseDirs returns the guard directories cleanup reads: the current one
+// first, then the legacy one when it is a different path.
+func mountGuardBaseDirs() []string {
+	dirs := []string{filepath.Clean(mountGuardBaseDir)}
+	if legacy := filepath.Clean(legacyMountGuardBaseDir); legacy != dirs[0] {
+		dirs = append(dirs, legacy)
+	}
+	return dirs
+}
 
 const mountGuardMountAttemptTimeout = 10 * time.Second
 

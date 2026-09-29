@@ -23,8 +23,8 @@ func TestRestoreSessionLogLivesOutsideTmp(t *testing.T) {
 	if got, want := restoreRunDir(), orchestrator.RestoreRunDir(); got != want {
 		t.Fatalf("restoreRunDir() = %s, want orchestrator.RestoreRunDir() = %s", got, want)
 	}
-	if got := restoreRunDir(); !strings.HasPrefix(got, "/var/lib/proxsave/restore/") {
-		t.Fatalf("restoreRunDir() = %s, want a /var/lib/proxsave/restore/<ts> directory", got)
+	if got := restoreRunDir(); filepath.Base(filepath.Dir(got)) != "restore" || strings.HasPrefix(got, "/tmp/") {
+		t.Fatalf("restoreRunDir() = %s, want a <BASE_DIR>/restore/<ts> directory", got)
 	}
 
 	runDir := filepath.Join(t.TempDir(), "restore", "20260926_100000")

@@ -1698,7 +1698,7 @@ BACKUP_ZFS_CONFIG=true             # /etc/zfs, /etc/hostid, zpool cache & proper
 BACKUP_ROOT_HOME=true              # /root (excluding .cache, .local/share/Trash)
 
 # Backup script repository
-BACKUP_SCRIPT_REPOSITORY=false     # Snapshot the ProxSave install dir (excludes .git and backup/log output)
+BACKUP_SCRIPT_REPOSITORY=false     # Snapshot the ProxSave install dir (excludes .git, backup/log output, restore/ and guards/)
 
 # Backup configuration file
 BACKUP_CONFIG_FILE=true            # Include this backup.env configuration file in the backup

@@ -116,7 +116,7 @@ failure. It is not registered, so a restore killed with `SIGKILL` or by a power 
 behind and nothing sweeps it.
 
 What a restore keeps on purpose is not under `/tmp`: it goes into the restore's own directory,
-`/var/lib/proxsave/restore/<timestamp>/`, created **mode 0700**, one directory per restore. It
+`<BASE_DIR>/restore/<timestamp>/` (`/opt/proxsave/restore/<timestamp>/` by default), created **mode 0700**, one directory per restore. It
 holds the rollback and safety tarballs (`restore_backup_`, `network_rollback_backup_`,
 `firewall_rollback_backup_`, `ha_rollback_backup_`, `pve_access_control_rollback_backup_`,
 each `_<timestamp>.tar.gz`), their `*_location.txt` files, the restore session log, the

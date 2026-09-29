@@ -1591,6 +1591,14 @@ func (c *Collector) collectScriptRepository(ctx context.Context) error {
 		if err != nil || rel == "." {
 			return nil
 		}
+		// The repository is BASE_DIR. Its top-level restore and guards directories are
+		// host state, not scripts: restore holds the safety backups of past restores,
+		// with /etc/shadow and /etc/pve/priv material in the clear, and guards the mount
+		// guards. Only the top level: a directory with either name inside the operator's
+		// own scripts is kept.
+		if d.IsDir() && (rel == "restore" || rel == "guards") {
+			return filepath.SkipDir
+		}
 		// Skip VCS metadata and runtime/output dirs at ANY depth (not just the top
 		// level): .git/.svn/.hg carry full history/objects (large and sensitive), and
 		// backup(s)/log(s) are regenerated output that only bloats the snapshot.

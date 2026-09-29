@@ -93,8 +93,8 @@ func TestRestorePersistentMaterialLivesOutsideTmpInOneDirectory(t *testing.T) {
 		files[name] = filepath.Join(runDir, name)
 	}
 
-	if !strings.HasPrefix(runDir, "/var/lib/proxsave/restore/") {
-		t.Errorf("run directory %s is not under /var/lib/proxsave/restore/", runDir)
+	if filepath.Dir(runDir) != restoreRunBaseDir {
+		t.Errorf("run directory %s is not under %s", runDir, restoreRunBaseDir)
 	}
 	if strings.HasPrefix(runDir, tmpDir) {
 		t.Errorf("run directory %s follows TMPDIR (%s)", runDir, tmpDir)

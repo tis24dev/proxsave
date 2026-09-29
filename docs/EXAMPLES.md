@@ -176,7 +176,7 @@ The same steps without a TTY:
 ```bash
 # 1. Install
 proxsave --install
-# (use --new-install to wipe everything except build/, env/, and identity/ before installing)
+# (use --new-install to wipe everything except build/, env/, guards/, identity/, and restore/ before installing)
 
 # 2. Edit configuration
 nano /opt/proxsave/configs/backup.env
@@ -281,7 +281,7 @@ The same without a TTY:
 
 ```bash
 proxsave --install
-# (use --new-install if you want to reset the install dir first, keeping build/, env/, and identity/)
+# (use --new-install if you want to reset the install dir first, keeping build/, env/, guards/, identity/, and restore/)
 # (paste configuration above)
 proxsave --dry-run
 proxsave --backup

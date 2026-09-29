@@ -526,7 +526,7 @@ flowchart TD
 
 ```mermaid
 flowchart TD
-    Start([Categories Selected]) --> CreatePath[Create /var/lib/proxsave/restore/TIMESTAMP/]
+    Start([Categories Selected]) --> CreatePath[Create /opt/proxsave/restore/TIMESTAMP/]
     CreatePath --> CreateArchive[Create restore_backup_TIMESTAMP.tar.gz]
     CreateArchive --> LoopCats[For Each Category]
 
@@ -553,7 +553,7 @@ flowchart TD
     MoreCats -->|No| CloseTar[Close TAR Archive]
 
     CloseTar --> Success([Safety Backup Created])
-    Success --> DisplayPath["Display:<br/>/var/lib/proxsave/restore/TIMESTAMP/restore_backup_TIMESTAMP.tar.gz"]
+    Success --> DisplayPath["Display:<br/>/opt/proxsave/restore/TIMESTAMP/restore_backup_TIMESTAMP.tar.gz"]
     DisplayPath --> Rollback["Show Rollback Command:<br/>tar -xzf backup.tar.gz -C /"]
 
     style Start fill:#87CEEB

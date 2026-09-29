@@ -721,7 +721,7 @@ In the TUI this second gate is a danger-styled confirm with `Overwrite and resto
 ```text
 Creating safety backup of existing files...
 Safety backup created successfully.
-Safety backup location: /var/lib/proxsave/restore/20251120_143052/restore_backup_20251120_143052.tar.gz
+Safety backup location: /opt/proxsave/restore/20251120_143052/restore_backup_20251120_143052.tar.gz
 
 Safety backup - holds the current versions of the files this restore overwrites (tar.gz, paths relative to /)
 ```
@@ -771,7 +771,7 @@ Continue restore with PBS services still running? (y/N): _
 
 ```text
 Extracting selected categories from archive into /
-Detailed restore log: /var/lib/proxsave/restore/20251120_143052/restore_20251120_143052.log
+Detailed restore log: /opt/proxsave/restore/20251120_143052/restore_20251120_143052.log
 
 Extracting: /var/lib/pve-cluster/config.db
 Extracting: /var/lib/pve-cluster/.version
@@ -812,9 +812,9 @@ RESTORE COMPLETED
 
 Restore completed successfully.
 Temporary decrypted bundle removed.
-Detailed restore log: /var/lib/proxsave/restore/20251120_143052/restore_20251120_143052.log
+Detailed restore log: /opt/proxsave/restore/20251120_143052/restore_20251120_143052.log
 Export directory: /opt/proxsave/proxmox-config-export-20251120-143052/
-Safety backup preserved at: /var/lib/proxsave/restore/20251120_143052/restore_backup_20251120_143052.tar.gz
+Safety backup preserved at: /opt/proxsave/restore/20251120_143052/restore_backup_20251120_143052.tar.gz
 Safety backup - kept until removed, ProxSave never deletes it
 
 Services - some restored files take effect only when the services that read them restart
@@ -1285,7 +1285,7 @@ journalctl -xe -u pve-cluster
 # - Certificate issues
 
 # Solution: Restore from safety backup
-tar -xzf /var/lib/proxsave/restore/*/restore_backup_*.tar.gz -C /
+tar -xzf /opt/proxsave/restore/*/restore_backup_*.tar.gz -C /
 systemctl restart pve-cluster pvedaemon pveproxy pvestatd
 ```
 
@@ -1388,7 +1388,7 @@ Pass 1: Normal Categories
   ├─ Destination: / (system root)
   ├─ Categories: All non-export-only
   ├─ Safety backup: Created before extraction
-  └─ Log: /var/lib/proxsave/restore/TIMESTAMP/restore_TIMESTAMP.log
+  └─ Log: /opt/proxsave/restore/TIMESTAMP/restore_TIMESTAMP.log
 
 Pass 2: Export-Only Categories
   ├─ Destination: <BASE_DIR>/proxmox-config-export-YYYYMMDD-HHMMSS/
@@ -1984,7 +1984,7 @@ Multiple layers of protection prevent data loss and corruption during restore.
 
 > The full-restore fallback runs when ProxSave cannot analyse the archive's categories: it announces `Backup category analysis failed; ProxSave will run a full restore (no selective modes)` and, after confirmation, extracts the whole archive onto `/`. It takes this safety backup first, but not the network, firewall, HA and access control rollback archives, since it runs none of the transactional applies they undo. On a PBS host it stops the PBS services when the plan includes PBS categories. It does not stop `pve-cluster` and does not write the cluster database (`/var/lib/pve-cluster/`), since it cannot tell whether the archive holds usable cluster data. Export-only categories, and on a single-role host the categories of the other product, are kept off the live system.
 
-**Location**: `/var/lib/proxsave/restore/YYYYMMDD_HHMMSS/restore_backup_YYYYMMDD_HHMMSS.tar.gz` (outside `/tmp`, so it survives the reboot the restore recommends)
+**Location**: `<BASE_DIR>/restore/YYYYMMDD_HHMMSS/restore_backup_YYYYMMDD_HHMMSS.tar.gz` (`/opt/proxsave/restore/...` by default) (outside `/tmp`, so it survives the reboot the restore recommends)
 
 **Contents**:
 - All files that will be overwritten by restore
@@ -1993,7 +1993,7 @@ Multiple layers of protection prevent data loss and corruption during restore.
 
 **Rollback Command**:
 ```bash
-tar -xzf /var/lib/proxsave/restore/20251120_143052/restore_backup_20251120_143052.tar.gz -C /
+tar -xzf /opt/proxsave/restore/20251120_143052/restore_backup_20251120_143052.tar.gz -C /
 ```
 
 **If Safety Backup Fails**:
@@ -2073,7 +2073,7 @@ new network configuration immediately using a **transactional rollback timer**.
 - If rollback backup creation fails (or ProxSave is not running as root), ProxSave keeps network files staged and avoids writing to `/etc`.
 - When you choose to apply live, ProxSave (re)validates and reloads networking inside the rollback timer window.
 - ProxSave arms a local rollback job **before** applying changes
-- Rollback restores **only network-related files** using a dedicated archive under `/var/lib/proxsave/restore/<timestamp>/network_rollback_backup_*` (so it won't undo other restored categories)
+- Rollback restores **only network-related files** using a dedicated archive under `/opt/proxsave/restore/<timestamp>/network_rollback_backup_*` (so it won't undo other restored categories)
 - Rollback also prunes network config files that were **created after** the backup (e.g. extra files under `/etc/network/interfaces.d/`), so rollback returns to the exact pre-restore state
 - The user has **180 seconds** to type `COMMIT`
 - If `COMMIT` is not received, ProxSave triggers the rollback and restores the pre-restore network configuration
@@ -2085,7 +2085,7 @@ This protects SSH/GUI access during network changes.
 - After applying changes, ProxSave runs local checks (SSH route if available, default route, link state, IP addresses, gateway ping, DNS config/resolve, local web UI port)
 - On PVE systems, additional checks are included for cluster networking: `/etc/pve` (pmxcfs) mount status, `pve-cluster` / `corosync` service state, and `pvecm status` quorum
 - The result is shown to help decide whether to type `COMMIT`
-- Diagnostics are saved under `/var/lib/proxsave/restore/<timestamp>/network_apply_*` (snapshots `before.txt` / `after.txt` / `after_rollback.txt` when relevant, `health_before.txt` / `health_after.txt`, `preflight.txt`, `plan.txt`, and `ifquery_*`)
+- Diagnostics are saved under `/opt/proxsave/restore/<timestamp>/network_apply_*` (snapshots `before.txt` / `after.txt` / `after_rollback.txt` when relevant, `health_before.txt` / `health_after.txt`, `preflight.txt`, `plan.txt`, and `ifquery_*`)
 
 **NIC name repair**:
 - If physical NIC names changed after reinstall (e.g. `eno1` → `enp3s0`), ProxSave attempts an automatic mapping using backup network inventory (permanent MAC / MAC / PCI path / udev IDs like `ID_PATH`, `ID_NET_NAME_PATH`, `ID_NET_NAME_SLOT`, `ID_SERIAL`)
@@ -2093,12 +2093,12 @@ This protects SSH/GUI access during network changes.
 - If you skip live network apply, ProxSave may still install the staged config to disk (no reload) after safe NIC repair + preflight; if validation fails, it rolls back and keeps the staged copy.
 - If a mapping would overwrite an interface name that already exists on the current system, ProxSave prompts before applying it (conflict-safe)
 - If persistent NIC naming rules are detected (custom udev `NAME=` rules or systemd `.link` files), ProxSave warns and prompts before applying NIC repair to avoid conflicts with user-intended naming
-- A backup of the pre-repair files is stored under `/var/lib/proxsave/restore/<timestamp>/nic_repair_*`
+- A backup of the pre-repair files is stored under `/opt/proxsave/restore/<timestamp>/nic_repair_*`
 
 **Preflight validation**:
 - After NIC repair, ProxSave runs a **gate** validation of the ifupdown configuration before reloading networking (e.g. `ifup -n -a` / `ifup --no-act -a` / `ifreload --syntax-check -a`)
-- If validation fails, live apply is aborted and the validator output is saved under `/var/lib/proxsave/restore/<timestamp>/network_apply_*/preflight.txt`
-- Additionally (diagnostics-only), ProxSave can run `ifquery --check -a` **before and after apply** to show how the runtime state matches the target config. Its output is saved under `/var/lib/proxsave/restore/<timestamp>/network_apply_*/ifquery_*`. Note that `ifquery --check` can show `[fail]` **before apply** even when the config is valid (because the running state still reflects the old config).
+- If validation fails, live apply is aborted and the validator output is saved under `/opt/proxsave/restore/<timestamp>/network_apply_*/preflight.txt`
+- Additionally (diagnostics-only), ProxSave can run `ifquery --check -a` **before and after apply** to show how the runtime state matches the target config. Its output is saved under `/opt/proxsave/restore/<timestamp>/network_apply_*/ifquery_*`. Note that `ifquery --check` can show `[fail]` **before apply** even when the config is valid (because the running state still reflects the old config).
 - On staged installs/applies, a failed preflight triggers an **automatic rollback of network files** (no prompt), returning to the pre-restore state and keeping the staged copy for review.
 
 **Result reporting**:
@@ -2119,7 +2119,7 @@ The status can be one of:
 - **DISARMED/CLEARED**: reconnect using the **post-apply IP** (the applied config remains active).
 
 Notes:
-- *Pre-apply IP* is derived from the `before.txt` snapshot in `/var/lib/proxsave/restore/<timestamp>/network_apply_*` and may be `unknown` if it cannot be parsed.
+- *Pre-apply IP* is derived from the `before.txt` snapshot in `/opt/proxsave/restore/<timestamp>/network_apply_*` and may be `unknown` if it cannot be parsed.
 - *Post-apply IP* is what ProxSave could observe on the management interface after applying the new config; it may include CIDR suffixes (for example `10.0.0.4/24`) or multiple addresses.
 
 **Example outputs**
@@ -2134,7 +2134,7 @@ NETWORK ROLLBACK
   Status: ARMED (will execute automatically)
   Pre-apply IP (from snapshot): 192.168.1.100
   Post-apply IP (observed): 10.0.0.4/24
-  Rollback log: /var/lib/proxsave/restore/20260122_153012/network_rollback_20260122_153012.log
+  Rollback log: /opt/proxsave/restore/20260122_153012/network_rollback_20260122_153012.log
 
 Connection will be temporarily interrupted during restore.
 Remember to reconnect using the pre-apply IP: 192.168.1.100
@@ -2154,7 +2154,7 @@ NETWORK ROLLBACK
   Status: EXECUTED (marker removed)
   Pre-apply IP (from snapshot): 192.168.1.100
   Post-apply IP (observed): 10.0.0.4/24
-  Rollback log: /var/lib/proxsave/restore/20260122_153012/network_rollback_20260122_153012.log
+  Rollback log: /opt/proxsave/restore/20260122_153012/network_rollback_20260122_153012.log
 
 Rollback executed: reconnect using the pre-apply IP: 192.168.1.100
 ===========================================
@@ -2168,7 +2168,7 @@ NETWORK ROLLBACK
   Status: DISARMED/CLEARED (marker removed before deadline)
   Pre-apply IP (from snapshot): 192.168.1.100
   Post-apply IP (observed): 10.0.0.4/24
-  Rollback log: /var/lib/proxsave/restore/20260122_153012/network_rollback_20260122_153012.log
+  Rollback log: /opt/proxsave/restore/20260122_153012/network_rollback_20260122_153012.log
 
 Rollback will NOT run: reconnect using the post-apply IP: 10.0.0.4/24
 ===========================================
@@ -2223,7 +2223,7 @@ if cleanDestRoot == "/" && strings.HasPrefix(target, "/etc/pve") {
 - Bringing the storage online again is enough to *use* it: a real mount stacks on top of a bind-mount guard automatically. The guard is not deleted, only shadowed; a reboot or a cleanup run removes the bind-mount leftover. A **legacy** `chattr +i` flag (set by older versions when a bind mount failed) leaves the directory immutable across reboots until it is cleared.
 - The cleanup unmounts bind-mount guards **and** clears any **legacy** `chattr +i` immutable flags, but only on mountpoints that are **not currently mounted** (clearing a live mount would touch the wrong inode); it prints a summary of what was cleared vs left pending. The guard directory is kept until nothing is pending.
 - To clear a legacy flag while the storage is mounted: unmount it, run `--cleanup-guards` again (or `chattr -i <mountpoint>`), then remount.
-- If you deleted `/var/lib/proxsave/guards` manually and a mountpoint is still read-only, ProxSave has no record left to clear: check `lsattr -d <mountpoint>` and run `chattr -i <mountpoint>` while the storage is unmounted.
+- If you deleted the guard directory (`<BASE_DIR>/guards`, or `/var/lib/proxsave/guards` from an older version) manually and a mountpoint is still read-only, ProxSave has no record left to clear: check `lsattr -d <mountpoint>` and run `chattr -i <mountpoint>` while the storage is unmounted.
 
 ### 7. Service Management Fail-Fast
 
@@ -2236,7 +2236,7 @@ if cleanDestRoot == "/" && strings.HasPrefix(target, "/etc/pve") {
 
 ### 8. Comprehensive Logging
 
-**Detailed Log**: `/var/lib/proxsave/restore/YYYYMMDD_HHMMSS/restore_YYYYMMDD_HHMMSS.log`, next to the restore session log `restore-<host>-<timestamp>.log`
+**Detailed Log**: `/opt/proxsave/restore/YYYYMMDD_HHMMSS/restore_YYYYMMDD_HHMMSS.log`, next to the restore session log `restore-<host>-<timestamp>.log`
 
 **Contents**:
 ```text
@@ -2263,13 +2263,13 @@ SUMMARY:
 **Usage**:
 ```bash
 # Review what was restored
-cat /var/lib/proxsave/restore/20251120_143052/restore_20251120_143052.log
+cat /opt/proxsave/restore/20251120_143052/restore_20251120_143052.log
 
 # Search for specific file
-grep "storage.cfg" /var/lib/proxsave/restore/20251120_143052/restore_20251120_143052.log
+grep "storage.cfg" /opt/proxsave/restore/20251120_143052/restore_20251120_143052.log
 
 # Check for failures
-grep "FAILED" /var/lib/proxsave/restore/20251120_143052/restore_20251120_143052.log
+grep "FAILED" /opt/proxsave/restore/20251120_143052/restore_20251120_143052.log
 ```
 
 ### 9. Checksum Verification
@@ -2350,7 +2350,7 @@ sudo proxsave --restore
 
 **Issue: "Failed to create safety backup"**
 
-**Cause**: Insufficient disk space on the filesystem holding `/var/lib/proxsave/restore/`, or no write access to it (the restore runs as root)
+**Cause**: Insufficient disk space on the filesystem holding `<BASE_DIR>/restore/`, or no write access to it (the restore runs as root)
 
 **Solution**:
 ```bash
@@ -2358,7 +2358,7 @@ sudo proxsave --restore
 df -h /var/lib/proxsave
 
 # Safety backups of earlier restores, kept until you remove them
-ls -la /var/lib/proxsave/restore/
+ls -la /opt/proxsave/restore/
 ```
 
 ---
@@ -2461,7 +2461,7 @@ systemctl status pve-cluster
 journalctl -xe -u pve-cluster
 
 # Restore from safety backup
-tar -xzf /var/lib/proxsave/restore/*/restore_backup_*.tar.gz -C /
+tar -xzf /opt/proxsave/restore/*/restore_backup_*.tar.gz -C /
 
 # Restart services
 systemctl restart pve-cluster pvedaemon pveproxy pvestatd
@@ -2491,7 +2491,7 @@ systemctl restart pve-cluster
 journalctl -u pve-cluster | tail -50
 
 # If config.db corrupted, restore safety backup
-tar -xzf /var/lib/proxsave/restore/*/restore_backup_*.tar.gz -C /
+tar -xzf /opt/proxsave/restore/*/restore_backup_*.tar.gz -C /
 systemctl restart pve-cluster
 ```
 
@@ -2628,7 +2628,7 @@ zpool import <pool-name>
 #   A bind-mount guard is shadowed when the real storage mounts on top (and is cleared by a reboot or --cleanup-guards).
 #   Older versions set a chattr +i fallback that persisted across reboots; --cleanup-guards still clears any such legacy flags (or clear manually with chattr -i while unmounted).
 # - If the datastore path is not empty and contains unexpected files/directories (not a PBS datastore), ProxSave will defer that datastore block
-#   and save it under `/var/lib/proxsave/restore/<timestamp>/datastore.cfg.deferred.*` for manual review.
+#   and save it under `/opt/proxsave/restore/<timestamp>/datastore.cfg.deferred.*` for manual review.
 # - ProxSave does not format disks or import ZFS pools: mount/import the underlying storage first, then restart PBS.
 ls -ld /mnt/datastore /mnt/datastore/<DatastoreName> 2>/dev/null
 namei -l /mnt/datastore/<DatastoreName> 2>/dev/null || true
@@ -2678,7 +2678,7 @@ Note: newer ProxSave versions attempt to auto-repair `/etc/resolv.conf` during r
 **Solution**:
 ```bash
 # ProxSave will attempt to auto-normalize datastore.cfg during restore and keep a copy of the original
-# in /var/lib/proxsave/restore/<timestamp>/ (datastore.cfg.pre-normalize.*),
+# in /opt/proxsave/restore/<timestamp>/ (datastore.cfg.pre-normalize.*),
 # but you can also fix it manually:
 cp -a /etc/proxmox-backup/datastore.cfg /root/datastore.cfg.bak.$(date +%F_%H%M%S)
 
@@ -2823,7 +2823,7 @@ A: Use the safety backup:
 systemctl stop pve-cluster pvedaemon pveproxy pvestatd
 
 # Extract safety backup
-tar -xzf /var/lib/proxsave/restore/*/restore_backup_*.tar.gz -C /
+tar -xzf /opt/proxsave/restore/*/restore_backup_*.tar.gz -C /
 
 # Restart services
 systemctl restart pve-cluster pvedaemon pveproxy pvestatd
@@ -3108,7 +3108,7 @@ A: Temporary files are in `/tmp/proxsave/`:
 - `proxmox-decrypt-*/` - Decryption workspace (deleted after restore)
 - `restore-stage-*/` - Staged sensitive categories, in the clear (deleted when the restore ends, on success or failure)
 
-What a restore keeps is in its own directory, `/var/lib/proxsave/restore/TIMESTAMP/` (mode 0700, files 0600), which survives the reboot the restore recommends:
+What a restore keeps is in its own directory, `<BASE_DIR>/restore/TIMESTAMP/` (`/opt/proxsave/restore/TIMESTAMP/` by default, mode 0700, files 0600), which survives the reboot the restore recommends:
 - `restore-<host>-<timestamp>.log` - Restore session log (preserved)
 - `restore_TIMESTAMP_<seq>.log` - Detailed restore logs (preserved)
 - `restore_backup_TIMESTAMP.tar.gz` - Safety backup (preserved)
@@ -3122,7 +3122,7 @@ What a restore keeps is in its own directory, `/var/lib/proxsave/restore/TIMESTA
 **Cleanup**:
 ```bash
 # Remove a restore's directory once that restore has settled
-rm -r /var/lib/proxsave/restore/TIMESTAMP
+rm -r /opt/proxsave/restore/TIMESTAMP
 ```
 
 ---

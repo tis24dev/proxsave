@@ -9,12 +9,11 @@ import (
 // restoreRunBaseDir holds what a restore must keep past the reboot it recommends:
 // the safety backup, the rollback archives, the restore and rollback logs, and what
 // it hands to the operator (the NIC repair copy, deferred datastore definitions,
-// network diagnostics). /tmp does not qualify: on Debian 13 (PVE 9, PBS 4) it is a
-// tmpfs, emptied by that reboot.
-const restoreRunBaseDir = "/var/lib/proxsave/restore"
-
+// network diagnostics). It is <BASE_DIR>/restore, set by SetBaseDir. /tmp does not
+// qualify: on Debian 13 (PVE 9, PBS 4) it is a tmpfs, emptied by that reboot.
 var (
 	restoreRunDirMu   sync.Mutex
+	restoreRunBaseDir = filepath.Join(fallbackBaseDir, "restore")
 	restoreRunDirPath string
 )
 

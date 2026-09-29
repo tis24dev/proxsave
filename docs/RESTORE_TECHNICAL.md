@@ -817,7 +817,7 @@ func CreateSafetyBackup(
     destRoot string,
 ) (*SafetyBackupResult, error) {
     // 1. Create backup archive in the restore's own directory,
-    //    /var/lib/proxsave/restore/<ts> (RestoreRunDir, 0700), which survives
+    //    <BASE_DIR>/restore/<ts> (RestoreRunDir, 0700), which survives
     //    the reboot the restore recommends
     timestamp := time.Now().Format("20060102_150405")
     backupPath := filepath.Join(
@@ -1001,7 +1001,7 @@ staged apply is skipped and the live system is left untouched (BH-002), so a par
 is never applied to sensitive config. The plain (non-staged) tiers use
 `extractSelectiveArchive`, a thin wrapper over `extractSelectiveArchiveStrict(..., false)`
 that creates the detailed log in the restore's own directory (`RestoreRunDir()`,
-`/var/lib/proxsave/restore/<ts>`) and calls `extractArchiveNative`.
+`<BASE_DIR>/restore/<ts>`) and calls `extractArchiveNative`.
 
 **Which categories are staged** (`isStagedCategoryID`, `staging.go`): `network`,
 `datastore_pbs`, `pbs_jobs`, `pbs_remotes`, `pbs_host`, `pbs_tape`, `storage_pve`,
@@ -1730,7 +1730,7 @@ For PBS datastores whose paths live under typical mount roots (for example `/mnt
 Optional maintenance:
 - `proxsave --cleanup-guards` (preview with `--dry-run`) unmounts guard bind mounts **and** clears any **legacy** `chattr +i` immutable flags recorded by older versions, but only on mountpoints that are **not currently mounted** (clearing a live mount would touch the wrong inode). It prints a summary (unmounted / hidden-remaining / immutable-cleared / immutable-pending) and keeps the guard directory and its index until nothing is pending.
 - To clear a legacy immutable flag on a mountpoint whose storage is already mounted: unmount it, run `--cleanup-guards` again (or `chattr -i <mountpoint>`), then remount.
-- If you deleted `/var/lib/proxsave/guards` manually and a mountpoint is still read-only, ProxSave no longer has a record to clear: check with `lsattr -d <mountpoint>` and clear it yourself with `chattr -i <mountpoint>` while the storage is unmounted.
+- If you deleted the guard directory (`<BASE_DIR>/guards`, or `/var/lib/proxsave/guards` from an older version) manually and a mountpoint is still read-only, ProxSave no longer has a record to clear: check with `lsattr -d <mountpoint>` and clear it yourself with `chattr -i <mountpoint>` while the storage is unmounted.
 
 #### PVE Storage Mount Guards (Offline Storage)
 
@@ -2259,10 +2259,10 @@ restore. On an interactive terminal it still renders the TUI unless you add `--c
 ### Review Detailed Logs
 
 ```bash
-# Restore logs, in the restore's own directory /var/lib/proxsave/restore/<timestamp>/:
+# Restore logs, in the restore's own directory <BASE_DIR>/restore/<timestamp>/:
 # the session log restore-<host>-<timestamp>.log and the detailed logs
 # restore_<timestamp>_<seq>.log (seq is a per-process counter)
-cat /var/lib/proxsave/restore/20251120_143052/restore_20251120_143052_1.log
+cat /opt/proxsave/restore/20251120_143052/restore_20251120_143052_1.log
 
 # Service logs
 journalctl -u pve-cluster --since "10 minutes ago"

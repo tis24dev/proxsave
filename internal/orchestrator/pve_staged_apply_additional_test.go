@@ -656,7 +656,7 @@ func containsGuardTarget(values []string, want string) bool {
 func TestMaybeApplyPVEStorageMountGuardsFromStage_EarlyAndFallback(t *testing.T) {
 	ctx := context.Background()
 	logger := newTestLogger()
-	withTempGuardBaseDir(t) // keep the chattr index off the real /var/lib/proxsave
+	withTempGuardBaseDir(t) // keep the chattr index off the real guard directories
 
 	if err := maybeApplyPVEStorageMountGuardsFromStage(ctx, logger, nil, "/stage", "/"); err != nil {
 		t.Fatalf("nil plan: expected nil error, got %v", err)
@@ -813,7 +813,7 @@ func TestMaybeApplyPVEStorageMountGuardsFromStage_ActivateAndGuardBranches(t *te
 	logger := newTestLogger()
 	plan := pvePlan(false, "storage_pve")
 	requireWritablePveMountRoot(t)
-	withTempGuardBaseDir(t) // keep any chattr index off the real /var/lib/proxsave
+	withTempGuardBaseDir(t) // keep any chattr index off the real guard directories
 
 	origFS := restoreFS
 	origCmd := restoreCmd

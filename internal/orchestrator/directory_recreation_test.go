@@ -862,8 +862,8 @@ func TestValidateRecreationPath(t *testing.T) {
 // points the operator to, after a restore that recommends a reboot: it goes into the
 // restore's own directory, owner-only, not under /tmp.
 func TestNormalizePBSDatastoreCfgKeepsItsBackupOutsideTmp(t *testing.T) {
-	if got := datastoreCfgBackupDir(); !strings.HasPrefix(got, "/var/lib/proxsave/restore/") {
-		t.Fatalf("datastoreCfgBackupDir() = %s, want a /var/lib/proxsave/restore/<ts> directory", got)
+	if got := datastoreCfgBackupDir(); filepath.Dir(got) != restoreRunBaseDir {
+		t.Fatalf("datastoreCfgBackupDir() = %s, want a %s/<ts> directory", got, restoreRunBaseDir)
 	}
 	runDir := filepath.Join(t.TempDir(), "restore", "20260926_100000")
 	origDir := datastoreCfgBackupDir

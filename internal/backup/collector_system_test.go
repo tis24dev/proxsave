@@ -1458,6 +1458,35 @@ func TestCollectScriptRepositoryCopiesAndSkipsRuntimeDirs(t *testing.T) {
 	assertAbsent(filepath.Join("nested", "log", "skip"))
 }
 
+// The script repository is BASE_DIR, and BASE_DIR/restore holds the safety backups
+// of past restores (/etc/shadow and /etc/pve/priv material in the clear) while
+// BASE_DIR/guards holds the mount guards. Neither may reach a backup archive. Only
+// the top level is host state: the operator's own restore/ or guards/ directory
+// deeper in the tree is kept.
+func TestCollectScriptRepositorySkipsTopLevelRestoreAndGuards(t *testing.T) {
+	collector := newTestCollector(t)
+	repo := t.TempDir()
+	collector.config.ScriptRepositoryPath = repo
+
+	writeFileAt(t, filepath.Join(repo, "restore", "20260929_101500", "restore_backup_20260929_101512.tar.gz"), "secret\n")
+	writeFileAt(t, filepath.Join(repo, "guards", "chattr-targets"), "/mnt/datastore\n")
+	writeFileAt(t, filepath.Join(repo, "scripts", "restore", "run.sh"), "#!/bin/sh\n")
+	writeFileAt(t, filepath.Join(repo, "scripts", "guards", "check.sh"), "#!/bin/sh\n")
+
+	if err := collector.collectScriptRepository(context.Background()); err != nil {
+		t.Fatalf("collectScriptRepository: %v", err)
+	}
+
+	target := collector.proxsaveInfoDir("script-repository", filepath.Base(repo))
+	for _, rel := range []string{"restore", "guards"} {
+		if _, err := os.Stat(filepath.Join(target, rel)); !os.IsNotExist(err) {
+			t.Fatalf("expected top-level %s to be skipped, stat err=%v", rel, err)
+		}
+	}
+	assertFileExists(t, filepath.Join(target, "scripts", "restore", "run.sh"))
+	assertFileExists(t, filepath.Join(target, "scripts", "guards", "check.sh"))
+}
+
 func TestCollectScriptRepositorySkipAndCancelBranches(t *testing.T) {
 	for _, tc := range []struct {
 		name string
