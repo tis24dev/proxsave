@@ -194,7 +194,9 @@ type Config struct {
 	// Notification delivery filter. Global: applies to every notification channel
 	// (Email/Telegram/Gotify/Webhook) on top of each channel's own *_ENABLED flag.
 	// A severity THRESHOLD, not an exact match: "warning" means warning and worse.
-	NotifyOn string // "always" (default) | "warning" | "failure"
+	NotifyOn string // "warning" (default) | "always" | "failure"
+	// NotifyOnSource is where NotifyOn came from: "backup.env" or "default".
+	NotifyOnSource string
 
 	// Telegram Notifications
 	TelegramEnabled      bool
@@ -796,7 +798,11 @@ func (c *Config) parseRetentionSettings() {
 }
 
 func (c *Config) parseNotificationSettings() {
-	c.NotifyOn = NormalizeNotifyOn(c.getString("NOTIFY_ON", NotifyOnAlways))
+	c.NotifyOnSource = "default"
+	if _, ok := c.raw["NOTIFY_ON"]; ok {
+		c.NotifyOnSource = "backup.env"
+	}
+	c.NotifyOn = NormalizeNotifyOn(c.getString("NOTIFY_ON", NotifyOnWarning))
 
 	c.TelegramEnabled = c.getBoolWithLegacyAlias(telegramEnabledKey, telegramEnableLegacyKey, false)
 	c.TelegramBotType = c.getString("BOT_TELEGRAM_TYPE", "centralized")
@@ -868,16 +874,17 @@ const (
 )
 
 // NormalizeNotifyOn canonicalises a NOTIFY_ON value. An empty value is the default
-// (always), so both an unset key and a bare "NOTIFY_ON=" keep today's behaviour.
+// (warning), so an unset variable and a bare "NOTIFY_ON=" behave the same. warning applies
+// only when the Healthchecks monitor is confirmed; otherwise the run notifies everything.
 // An unrecognised value is returned as-is rather than silently coerced, exactly like
 // NormalizeEmailDeliveryMethod: the caller warns about it at the point of use, where
 // there is a logger and the operator can see it. Delivery itself fails open.
 func NormalizeNotifyOn(v string) string {
 	normalized := strings.ToLower(strings.TrimSpace(v))
 	switch normalized {
-	case "", NotifyOnAlways, "all", "any":
+	case NotifyOnAlways, "all", "any":
 		return NotifyOnAlways
-	case NotifyOnWarning, "warn", "warnings":
+	case "", NotifyOnWarning, "warn", "warnings":
 		return NotifyOnWarning
 	case NotifyOnFailure, "failures", "failed", "fail", "error", "errors":
 		return NotifyOnFailure

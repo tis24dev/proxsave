@@ -193,6 +193,12 @@ type BackupStats struct {
 
 // Orchestrator coordinates the backup process using Go components
 type Orchestrator struct {
+	// notifyFilter* carry the NOTIFY_ON threshold this run applies (cmd/proxsave notify_filter.go):
+	// the decision taken at initialization, the refresh taken again before dispatch, and the value
+	// the normal dispatch uses. An early-error dispatch never goes through the refresh and
+	// notifies every outcome.
+	notifyFilterRefresh  func(context.Context) string
+	notifyFilterDispatch string
 	checker              *checks.Checker
 	logger               *logging.Logger
 	cfg                  *config.Config

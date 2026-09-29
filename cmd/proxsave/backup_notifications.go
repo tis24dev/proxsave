@@ -27,7 +27,8 @@ func initializeBackupNotifications(opts backupModeOptions, orch *orchestrator.Or
 	initializeTelegramNotification(opts, orch)
 	initializeGotifyNotification(opts, orch)
 	initializeWebhookNotification(opts, orch)
-	initializeHealthcheckSection(opts, orch)
+	section := initializeHealthcheckSection(opts, orch)
+	logNotifyFilterInit(opts, orch, section)
 	notifyDone(nil)
 
 	fmt.Println()
@@ -101,13 +102,15 @@ func initializeEmailNotification(opts backupModeOptions, orch *orchestrator.Orch
 // That problem report is a WARNING on BOTH engines, and it costs the run the same exit code
 // on both. reportHealthchecksUnusable only adds the ENGINE to the reason, because "the daemon
 // is not there" reads differently on a host that was never meant to have one.
-func initializeHealthcheckSection(opts backupModeOptions, orch *orchestrator.Orchestrator) {
+// initializeHealthcheckSection returns how the section ended (hcSection* in notify_filter.go),
+// which the NOTIFY_ON decision reads right after it.
+func initializeHealthcheckSection(opts backupModeOptions, orch *orchestrator.Orchestrator) string {
 	cfg := opts.cfg
 	logger := opts.logger
 	if cfg == nil || !cfg.HealthcheckEnabled {
 		logging.DebugStep(logger, "notifications init", "healthchecks disabled")
 		logging.Skip("Healthchecks: disabled")
-		return
+		return hcSectionDisabled
 	}
 	// Verify config, then that the monitoring daemon (the ONLY pinger) is actually alive -
 	// a valid config is worthless if the daemon is down. On ANY problem, switch the
@@ -119,15 +122,16 @@ func initializeHealthcheckSection(opts backupModeOptions, orch *orchestrator.Orc
 	// all and initializes normally.
 	if problem := healthcheckConfigProblem(cfg); problem != "" {
 		reportHealthchecksUnusable(cfg, logger, problem)
-		return
+		return hcSectionDisabled
 	}
 	if problem := healthcheckDaemonProblem(opts.ctx, cfg, logger); problem != "" {
 		reportHealthchecksUnusable(cfg, logger, problem)
-		return
+		return hcSectionNotTransmitting
 	}
 	logging.DebugStep(logger, "notifications init", "healthchecks enabled (mode=%s, daemon up)", cfg.HealthcheckMode)
 	orch.RegisterNotificationChannel(orchestrator.NewHealthchecksChannel(cfg, logger))
 	logging.Info("✓ Healthchecks initialized (mode: %s)", cfg.HealthcheckMode)
+	return hcSectionInitialized
 }
 
 // disableHealthchecks switches the section to disabled with a reason, mirroring

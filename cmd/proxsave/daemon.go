@@ -2047,7 +2047,10 @@ func (d *daemon) fetchCentralized(ctx context.Context) (alive, backup string, ch
 	channels := enabledNotifyChannels(d.cfg)
 	// Return the exact secret sent to the server as secretUsed so buildReporter can
 	// value-guard an ErrHCAuth secret removal against precisely this comparand.
-	cfg, ferr := health.FetchCentralizedConfigWithChannels(ctx, nil, d.cfg.ServerAPIHost, d.cfg.ServerID, secret, false, channels)
+	// The notify threshold rides the same poll (contract 1), so the relay keeps the notify checks
+	// event-driven for warning/failure and periodic for always. An unrecognised NOTIFY_ON is
+	// negotiated as always: that is what the run does with it.
+	cfg, ferr := health.FetchCentralizedConfigWithPolicy(ctx, nil, d.cfg.ServerAPIHost, d.cfg.ServerID, secret, channels, negotiatedNotifyOn(d.cfg))
 	if ferr != nil {
 		return "", "", nil, secret, ferr
 	}
@@ -2490,4 +2493,13 @@ func daemonSelfExecPath() string {
 		return p
 	}
 	return daemonExecPath
+}
+
+// negotiatedNotifyOn is the NOTIFY_ON value the daemon sends to the relay: the configured one when
+// valid, always otherwise.
+func negotiatedNotifyOn(cfg *config.Config) string {
+	if cfg == nil || !config.IsValidNotifyOn(cfg.NotifyOn) || cfg.NotifyOn == "" {
+		return config.NotifyOnAlways
+	}
+	return cfg.NotifyOn
 }

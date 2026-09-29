@@ -132,17 +132,28 @@ func (o *Orchestrator) dispatchNotifications(ctx context.Context, stats *BackupS
 	// NOTIFY_ON: a global severity threshold layered on top of each channel's own
 	// *_ENABLED flag. It decides DELIVERY only; the exit code, the log counts and the
 	// Prometheus status gauge are all computed elsewhere and are untouched by it, so a
-	// suppressed run still reports exactly what it reported before.
-	policy := config.NotifyOnAlways
-	if cfg != nil {
-		policy = cfg.NotifyOn
+	// suppressed run still reports exactly what it reported before. The threshold applied
+	// is the one decided for this run (notifyFilterDispatch), never the raw setting: below
+	// always it needs a confirmed Healthchecks monitor, and an early-error dispatch, which
+	// does not go through startNotificationGroup, notifies every outcome.
+	policy := o.notifyFilterDispatch
+	if !config.IsValidNotifyOn(policy) {
+		policy = config.NotifyOnAlways
 	}
 	outcome := notifyOutcome(stats)
-	if policy != "" && !config.IsValidNotifyOn(policy) {
+	if cfg != nil && cfg.NotifyOn != "" && !config.IsValidNotifyOn(cfg.NotifyOn) {
 		// Mirrors the EMAIL_DELIVERY_METHOD handling below: the parser passes an
 		// unrecognised value through and the point of use is where it gets named,
 		// because that is where there is a logger the operator will read.
-		o.logger.Warning("NOTIFY_ON=%q not recognized (allowed: always|warning|failure); delivering every outcome", policy)
+		o.logger.Warning("NOTIFY_ON=%q not recognized (allowed: always|warning|failure); delivering every outcome", cfg.NotifyOn)
+	}
+	if stats != nil {
+		o.logger.Debug("notifications dispatch: run outcome=%s warnings=%d errors=%d", outcome, stats.WarningCount, stats.ErrorCount)
+	}
+	if notify.NotifyOnAllows(policy, outcome) {
+		o.logger.Info("Notifications: sending")
+	} else {
+		o.logger.Info("Notifications: skipped")
 	}
 
 	// If email notifications are disabled in configuration, reflect this explicitly
@@ -222,7 +233,7 @@ func (o *Orchestrator) dispatchNotifications(ctx context.Context, stats *BackupS
 		// very setting the operator uses to stop reading successful runs, and would drop
 		// the WARNING that promotes that run's exit code -- which NOTIFY_ON must not touch.
 		if !notifyOnExempt(channel) && !notify.NotifyOnAllows(policy, outcome) {
-			o.logger.Skip("%s: NOTIFY_ON=%s and this run is a %s", entry.name, policy, outcome)
+			o.logger.Skip("%s: filtered", entry.name)
 			// Record the suppression so stats.NotifyResults stays non-empty. An empty
 			// map makes persistNotifyResults write {} and the daemon then bails on
 			// len(nr.Results)==0, which would leave every per-channel sensor to go DOWN
@@ -246,7 +257,7 @@ func (o *Orchestrator) dispatchNotifications(ctx context.Context, stats *BackupS
 		}
 		name := strings.TrimSpace(ch.Name())
 		if !notifyOnExempt(ch) && !notify.NotifyOnAllows(policy, outcome) {
-			o.logger.Skip("%s: NOTIFY_ON=%s and this run is a %s", name, policy, outcome)
+			o.logger.Skip("%s: filtered", name)
 			setNotifyResult(stats, name, "disabled")
 			continue
 		}
@@ -281,6 +292,15 @@ func (o *Orchestrator) persistNotifyResults(stats *BackupStats) {
 func (o *Orchestrator) startNotificationGroup(ctx context.Context, stats *BackupStats) {
 	if o == nil {
 		return
+	}
+	// The threshold is decided (and, when the relay's answer expired, re-read) BEFORE the issue
+	// snapshot: its DEBUG lines must not fall between the snapshot and the dispatch.
+	o.notifyFilterDispatch = config.NotifyOnAlways
+	if o.notifyFilterRefresh != nil {
+		o.notifyFilterDispatch = o.notifyFilterRefresh(ctx)
+	}
+	if o.logger != nil {
+		o.logger.Info("Notification filter: %s", o.notifyFilterDispatch)
 	}
 	o.snapshotPreNotificationIssues(stats)
 	applyIssueExitCode(stats)
@@ -666,5 +686,13 @@ func describeEarlyErrorPhase(phase string) string {
 			return "Initialization failed"
 		}
 		return fmt.Sprintf("%s failed", phase)
+	}
+}
+
+// SetNotifyFilter hands the orchestrator the threshold decided at initialization and the refresh
+// that decides it again before dispatch (cmd/proxsave notify_filter.go).
+func (o *Orchestrator) SetNotifyFilter(refresh func(context.Context) string) {
+	if o != nil {
+		o.notifyFilterRefresh = refresh
 	}
 }
