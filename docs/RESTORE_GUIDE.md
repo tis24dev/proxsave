@@ -2364,8 +2364,8 @@ sudo proxsave --restore
 
 **Solution**:
 ```bash
-# Check available space
-df -h /var/lib/proxsave
+# Check available space on the filesystem holding BASE_DIR (/opt/proxsave by default)
+df -h /opt/proxsave
 
 # Safety backups of earlier restores, kept until you remove them
 ls -la /opt/proxsave/restore/

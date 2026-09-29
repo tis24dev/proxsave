@@ -8,7 +8,7 @@ import (
 )
 
 // The rollback scripts run under `set -eu` and write their log into RestoreRunDir,
-// under /var/lib/proxsave. On a host where /var is its own filesystem and is full or
+// under BASE_DIR. On a host where that is its own filesystem (/opt, say) and is full or
 // read-only while / is still writable, the log cannot be written but the files the
 // rollback restores can. A log that cannot be written must not stop the rollback.
 //
