@@ -76,6 +76,13 @@ func TestMergeKernelCmdline(t *testing.T) {
 			wantAdded:  []string{"intel_iommu=on"},
 		},
 		{
+			name:       "memory map, CMA, core split and kdump parameters never carried",
+			source:     "mem=64G memmap=2G$0x80000000 memmap=exactmap crashkernel=512M-:192M kernelcore=4G movablecore=8G cma=256M@0-4G hugetlb_cma=8G zfs.zfs_arc_min=1073741824 sysctl.vm.nr_hugepages=512 mem_encrypt=on transparent_hugepage=madvise",
+			target:     pveTestGrubDefault,
+			wantMerged: "quiet mem_encrypt=on transparent_hugepage=madvise",
+			wantAdded:  []string{"mem_encrypt=on", "transparent_hugepage=madvise"},
+		},
+		{
 			name:       "key on both sides with different values: target wins",
 			source:     "quiet iommu=off intel_iommu=on",
 			target:     "quiet iommu=pt",

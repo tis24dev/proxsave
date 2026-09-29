@@ -35,24 +35,38 @@ const bootKernelCmdlineArchivePath = "./var/lib/proxsave-info/commands/system/ke
 //   - how its root is mounted and where it resumes from: rootflags= or rootfstype=
 //     of another filesystem make the target's root mount fail (initramfs-tools stops
 //     in its shell), and resume= names a swap device the target does not have;
-//   - what was sized on its RAM: the ZFS ARC limit, which the restore keeps from this
-//     host (decideZFSARCConf, for /etc/modprobe.d/zfs.conf), and the huge pages
-//     reserved at boot.
+//   - what was sized on its RAM or laid out on its memory map: the ZFS ARC limits,
+//     which the restore keeps from this host (decideZFSARCConf, for
+//     /etc/modprobe.d/zfs.conf), the huge pages and CMA areas reserved at boot, the
+//     kernelcore/movablecore split, mem= (on x86 a top physical address: RAM above it
+//     is dropped) and memmap= (ranges of the old firmware map: exactmap, @ and % can
+//     stop the boot on other hardware, and a $ in it makes the GRUB value unquotable);
+//   - crashkernel=: the kdump reservation, which kdump-tools writes on GRUB hosts
+//     through its own grub.d drop-in and which, without kdump-tools, only takes RAM.
 var bootSystemParams = map[string]bool{
-	"root":               true,
-	"boot":               true,
-	"ro":                 true,
-	"rw":                 true,
-	"BOOT_IMAGE":         true,
-	"initrd":             true,
-	"rootflags":          true,
-	"rootfstype":         true,
-	"resume":             true,
-	"resume_offset":      true,
-	"zfs.zfs_arc_max":    true,
-	"hugepages":          true,
-	"hugepagesz":         true,
-	"default_hugepagesz": true,
+	"root":                   true,
+	"boot":                   true,
+	"ro":                     true,
+	"rw":                     true,
+	"BOOT_IMAGE":             true,
+	"initrd":                 true,
+	"rootflags":              true,
+	"rootfstype":             true,
+	"resume":                 true,
+	"resume_offset":          true,
+	"zfs.zfs_arc_max":        true,
+	"hugepages":              true,
+	"hugepagesz":             true,
+	"default_hugepagesz":     true,
+	"zfs.zfs_arc_min":        true,
+	"sysctl.vm.nr_hugepages": true,
+	"hugetlb_cma":            true,
+	"cma":                    true,
+	"kernelcore":             true,
+	"movablecore":            true,
+	"mem":                    true,
+	"memmap":                 true,
+	"crashkernel":            true,
 }
 
 // bootNeverLivePaths are archive entries, and the trees under them, that no restore
