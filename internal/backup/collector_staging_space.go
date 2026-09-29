@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"syscall"
+
+	"github.com/tis24dev/proxsave/internal/safefs"
 )
 
 // stagingWriteError marks a failure to write into the working directory, as opposed to
@@ -58,7 +60,8 @@ func stagingFilesystemFacts(path string) (fsType, size string) {
 	fsType, size = "unknown filesystem", "unknown size"
 	var st syscall.Statfs_t
 	if err := syscall.Statfs(path, &st); err == nil {
-		size = FormatBytes(int64(st.Blocks) * int64(st.Bsize))
+		total, _, _ := safefs.SpaceUsageFromStatfs(st)
+		size = FormatBytes(total)
 	}
 	data, err := os.ReadFile("/proc/mounts")
 	if err != nil {
