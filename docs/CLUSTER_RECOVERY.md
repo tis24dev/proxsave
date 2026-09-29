@@ -210,9 +210,8 @@ The quorum probe exists because on a member of a quorate cluster the restored co
 | Quorate, more than 1 node online | The restore stops before anything is stopped or written: `Cluster RECOVERY refused - quorate cluster, N nodes online: its copy would replace the restored config.db` |
 | Quorate, 1 node online | Proceeds |
 | Not quorate | Proceeds |
-| Cannot be read (pvecm fails, times out, or prints no `Quorate:` line), or quorate with a `Nodes:` count that is not a number, and `systemctl is-active corosync` says `inactive` or `failed` | Proceeds, with the warning `Cluster RECOVERY - quorum unknown (<reason>), corosync inactive, proceeding` (or `failed`) |
+| Cannot be read (pvecm is not installed, fails, times out, or prints no `Quorate:` line), or quorate with a `Nodes:` count that is not a number, and `systemctl is-active corosync` says `inactive` or `failed` | Proceeds, with the warning `Cluster RECOVERY - quorum unknown (<reason>), corosync inactive, proceeding` (or `failed`) |
 | Same, with corosync in any other state (`active`, `activating`, ...) or a state that cannot be read | The restore stops before anything is stopped or written: `Cluster RECOVERY refused - quorum unknown (<reason>), corosync <state>: in a quorate cluster, its copy would replace the restored config.db` |
-| `pvecm` is not installed | Proceeds, with the warning `Cluster RECOVERY - quorum unknown (pvecm not available), proceeding` |
 
 A node without `corosync.conf` (`/etc/pve/corosync.conf` or `/etc/corosync/corosync.conf`) is standalone: it proceeds with no probe and no message. pvecm also fails when pmxcfs is down (no `/etc/pve/corosync.conf`) while corosync is up and quorate with its peers; `pve-cluster` would then start again and sync from the leader. So a quorum that cannot be read lets the restore proceed only when systemctl shows corosync stopped, which is also the state after `systemctl stop corosync`.
 

@@ -224,16 +224,14 @@ func (e *clusterRecoveryQuorumUnknownError) Error() string {
 // and the restored database is replaced by the leader's copy, while the restore would
 // still report success. A standalone node (no corosync.conf), a node alone in its
 // cluster, and a node without quorum proceed as before. A node whose quorum cannot be
-// read goes to refuseUnknownQuorumUnlessCorosyncStopped; one without pvecm proceeds with
-// a warning.
+// read, pvecm missing included, goes to refuseUnknownQuorumUnlessCorosyncStopped.
 func (w *restoreUIWorkflowRun) refuseRecoveryOnQuorateCluster() error {
 	if _, clustered := detectCorosyncConfig(); !clustered {
 		return nil
 	}
 	info, available, message := pvecmQuorumStatus(w.ctx, clusterRecoveryQuorumTimeout)
 	if !available {
-		w.logger.Warning("Cluster RECOVERY - quorum unknown (pvecm not available), proceeding")
-		return nil
+		return w.refuseUnknownQuorumUnlessCorosyncStopped("pvecm not available")
 	}
 	if message != "" {
 		return w.refuseUnknownQuorumUnlessCorosyncStopped(message)

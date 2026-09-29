@@ -321,11 +321,23 @@ func TestClusterRecoveryQuorumProbe(t *testing.T) {
 			wantPvecm: true,
 		},
 		{
-			name:        "pvecm not installed proceeds with a warning",
-			live:        corosyncLive,
-			errs:        map[string]error{"pvecm status": &exec.Error{Name: "pvecm", Err: exec.ErrNotFound}},
-			wantWarning: "Cluster RECOVERY - quorum unknown (pvecm not available), proceeding",
+			name:    "pvecm not installed with corosync stopped proceeds with a warning",
+			live:    corosyncLive,
+			outputs: map[string]string{"systemctl is-active corosync": "inactive\n"},
+			errs: map[string]error{
+				"pvecm status":                 &exec.Error{Name: "pvecm", Err: exec.ErrNotFound},
+				"systemctl is-active corosync": errors.New("exit status 3"),
+			},
+			wantWarning: "Cluster RECOVERY - quorum unknown (pvecm not available), corosync inactive, proceeding",
 			wantPvecm:   true,
+		},
+		{
+			name:      "pvecm not installed with corosync active is refused",
+			live:      corosyncLive,
+			outputs:   map[string]string{"systemctl is-active corosync": "active\n"},
+			errs:      map[string]error{"pvecm status": &exec.Error{Name: "pvecm", Err: exec.ErrNotFound}},
+			wantErr:   "Cluster RECOVERY refused - quorum unknown (pvecm not available), corosync active: in a quorate cluster, its copy would replace the restored config.db",
+			wantPvecm: true,
 		},
 	}
 	for _, tc := range cases {
