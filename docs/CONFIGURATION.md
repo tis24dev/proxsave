@@ -1202,26 +1202,46 @@ have no form fields and are configured here only. After enabling Telegram,
 
 ```bash
 # When to send, on every channel below
-NOTIFY_ON=always                   # always | warning | failure
+NOTIFY_ON=warning                  # always | warning | failure
 ```
 
 `NOTIFY_ON` is a **severity threshold, not an exact match**:
 
 | Value | Notified | Silent |
 |-------|----------|--------|
-| `always` (default) | success, warning, failure | nothing |
-| `warning` | warning **and** failure | success |
+| `always` | success, warning, failure | nothing |
+| `warning` (default) | warning **and** failure | success |
 | `failure` | failure | success, warning |
 
 So `NOTIFY_ON=warning` means "warnings and anything worse", not "warnings only". It is the
 setting for *tell me when something needs looking at*.
 
+Below `always` a clean run is silent, so something else has to alarm when a run never
+happens: the [healthchecks monitor](HEALTHCHECKS.md), which `NOTIFY_ON` never filters. A run
+applies `warning` or `failure` only when that monitor is confirmed, and notifies every
+outcome otherwise:
+
+- `HEALTHCHECK_ENABLED=true`
+- the daemon transmitting
+- centralized mode: an alert channel on the portal that has already delivered a DOWN
+- centralized mode: the server applying this `NOTIFY_ON`
+- self mode: no `HEALTHCHECK_NOTIFY_*` variable set
+
+The run log and the Healthchecks check screens show which filter applies now; details in
+[HEALTHCHECKS.md](HEALTHCHECKS.md#alert-delivery-and-notify_on).
+
 It applies on top of each channel's own `*_ENABLED` flag, and to every channel at once;
-there is no per-channel form. A channel skipped by the threshold says so in the log:
+there is no per-channel form. A channel skipped by the filter says so in the log:
 
 ```
-SKIP     Webhook: NOTIFY_ON=warning and this run is a success
+SKIP     Webhook: filtered
 ```
+
+The install wizard asks for it as **Notify level** (`Every run`, `Warnings and failures`,
+`Failures only`) right after the Healthchecks mode. With Healthchecks off or the cron
+engine it does not ask and writes `always`, since no level below that can apply there.
+Upgrading from a release without `NOTIFY_ON` writes `NOTIFY_ON=warning` into the existing
+`backup.env`; the configuration merge adds the line only, without the template's comments.
 
 Three things it deliberately does **not** change:
 
@@ -1233,16 +1253,8 @@ Three things it deliberately does **not** change:
   warnings, and still reports `status=warning` in the Prometheus textfile. `NOTIFY_ON` is
   a delivery decision only, so anything watching the exit code sees what it saw before.
 - **Healthchecks.** The [healthchecks connector](HEALTHCHECKS.md) is not a notification
-  channel and is never filtered. That is the point: it is what still reports a run you
-  chose not to hear about - including a run that never happened at all, which no
-  notification channel can tell you about by construction. If you set `NOTIFY_ON` to
-  anything other than `always`, read HEALTHCHECKS.md.
-
-  That cover is not automatic, and this is the part to check before you change the value.
-  It needs **both** `HEALTHCHECK_ENABLED=true`, which is *not* the default, and the daemon
-  scheduler: a host still running under cron transmits nothing however the healthcheck keys
-  are set. Without the two of them, `warning` or `failure` means a host that crashed, froze
-  or never started the run says nothing on any channel and raises no alarm anywhere.
+  channel and is never filtered. It is what still reports a run you chose not to hear
+  about, including a run that never happened at all.
 
 An unrecognised value is not silently accepted: it is named in a warning and treated as
 `always`, because the failure mode of a typo here is silence, and silence looks exactly
