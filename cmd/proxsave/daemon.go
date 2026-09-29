@@ -136,6 +136,14 @@ type daemon struct {
 	fetchWarned      bool      // centralized fetch already warned once (throttle recurring WARN)
 	updateWarned     bool      // an update is already known available (WARN once per transition)
 	provisionRetryAt time.Time // next relay-secret self-heal attempt; guarded by mu
+	// notifyWant is the policy the next centralized config poll negotiates (backup.env as last
+	// read by refreshNotifyPolicy; d.cfg until the first scheduled run). notifyApplied is the
+	// policy the relay last confirmed it applied, nil when none is confirmed. Both guarded by mu.
+	notifyWant    *notifyPolicy
+	notifyApplied *notifyPolicy
+	notifyPolls   uint64 // config polls that reached the relay; guarded by mu
+	// notifyRefreshWaitOverride replaces notifyPolicyRefreshWait in tests.
+	notifyRefreshWaitOverride time.Duration
 	// aliveMu orders the TRANSMISSIONS to the service-alive check: one beat's ping+record, or
 	// the one abandon degrade, never both at once. A bare latch cannot do this. beat() reads
 	// it, then spends up to a full pingTimeout inside r.Heartbeat, so a beat that entered
@@ -670,6 +678,9 @@ func (d *daemon) runOnce(parentCtx context.Context) bool {
 		startPersonalScriptDetachedReporting(d.logger, personalScriptPostRunKey, d.cfg.PersonalScriptPostRun)
 	}()
 
+	// Before the start ping, so its bounded wait is not counted in the run duration the remote
+	// monitor measures, and before getReporter, so a renegotiated channel set is the one pinged.
+	d.refreshNotifyPolicy(parentCtx)
 	r := d.getReporter()
 	rid := health.NewRunID()
 	d.reportBestEffort("start", false, func() error { return d.startPing(parentCtx, r, rid) })
@@ -2044,16 +2055,19 @@ func (d *daemon) fetchCentralized(ctx context.Context) (alive, backup string, ch
 	}
 	// Send the authoritative enabled-notification set so the server provisions one check per
 	// enabled channel (Fase 2C). Always non-nil in centralized mode (empty -> "none" sentinel).
-	channels := enabledNotifyChannels(d.cfg)
-	// Return the exact secret sent to the server as secretUsed so buildReporter can
-	// value-guard an ErrHCAuth secret removal against precisely this comparand.
 	// The notify threshold rides the same poll (contract 1), so the relay keeps the notify checks
 	// event-driven for warning/failure and periodic for always. An unrecognised NOTIFY_ON is
-	// negotiated as always: that is what the run does with it.
-	cfg, ferr := health.FetchCentralizedConfigWithPolicy(ctx, nil, d.cfg.ServerAPIHost, d.cfg.ServerID, secret, channels, negotiatedNotifyOn(d.cfg))
+	// negotiated as always: that is what the run does with it. Both come from backup.env as
+	// last read before a scheduled run (refreshNotifyPolicy), so a hand edit reaches the relay
+	// without a daemon restart.
+	want := d.wantedNotifyPolicy()
+	// Return the exact secret sent to the server as secretUsed so buildReporter can
+	// value-guard an ErrHCAuth secret removal against precisely this comparand.
+	cfg, ferr := health.FetchCentralizedConfigWithPolicy(ctx, nil, d.cfg.ServerAPIHost, d.cfg.ServerID, secret, want.channels, want.notifyOn)
 	if ferr != nil {
 		return "", "", nil, secret, ferr
 	}
+	d.recordNotifyPolicyAck(want, cfg.NotifyPolicy)
 	return cfg.AliveURL, cfg.BackupURL, cfg.Checks, secret, nil
 }
 

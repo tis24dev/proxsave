@@ -91,7 +91,12 @@ func FetchDeliveryStatus(ctx context.Context, client *http.Client, serverAPIHost
 // PolicyConfirmed reports whether the relay applied exactly this request: same threshold,
 // same channel set, applied on the notify checks.
 func (s DeliveryStatus) PolicyConfirmed(requested string, channels []string) bool {
-	a := s.NotifyPolicy
+	return s.NotifyPolicy.Confirms(requested, channels)
+}
+
+// Confirms reports whether this ack is the relay applying exactly this request: same threshold,
+// same channel set, applied on the notify checks. A nil ack confirms nothing.
+func (a *NotifyPolicyAck) Confirms(requested string, channels []string) bool {
 	if a == nil || !a.Applied || a.ContractVersion != 1 || a.Requested != requested {
 		return false
 	}

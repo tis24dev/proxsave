@@ -195,7 +195,7 @@ type Config struct {
 	// (Email/Telegram/Gotify/Webhook) on top of each channel's own *_ENABLED flag.
 	// A severity THRESHOLD, not an exact match: "warning" means warning and worse.
 	NotifyOn string // "warning" (default) | "always" | "failure"
-	// NotifyOnSource is where NotifyOn came from: "backup.env" or "default".
+	// NotifyOnSource is where NotifyOn came from: "backup.env", "environment" or "default".
 	NotifyOnSource string
 
 	// Telegram Notifications
@@ -798,9 +798,15 @@ func (c *Config) parseRetentionSettings() {
 }
 
 func (c *Config) parseNotificationSettings() {
-	c.NotifyOnSource = "default"
-	if _, ok := c.raw["NOTIFY_ON"]; ok {
+	// A shell variable overrides the file (loadEnvOverrides), and a bare "NOTIFY_ON=" takes
+	// the default value, so it is reported as the default too.
+	switch v, ok := c.raw["NOTIFY_ON"]; {
+	case strings.TrimSpace(os.Getenv("NOTIFY_ON")) != "":
+		c.NotifyOnSource = "environment"
+	case ok && strings.TrimSpace(v) != "":
 		c.NotifyOnSource = "backup.env"
+	default:
+		c.NotifyOnSource = "default"
 	}
 	c.NotifyOn = NormalizeNotifyOn(c.getString("NOTIFY_ON", NotifyOnWarning))
 

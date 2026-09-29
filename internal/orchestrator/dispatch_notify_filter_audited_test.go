@@ -40,13 +40,17 @@ func dispatchWith(t *testing.T, cfg *config.Config, stats *BackupStats, name str
 }
 
 // dispatchChannels runs one notification phase over exactly the given channels and returns
-// everything the logger emitted.
+// everything the logger emitted. The run's decided filter is the configured NOTIFY_ON, which
+// is what cmd/proxsave decides when the Healthchecks monitor is confirmed.
 func dispatchChannels(t *testing.T, cfg *config.Config, stats *BackupStats, channels ...NotificationChannel) string {
 	t.Helper()
 	var buf bytes.Buffer
 	logger := logging.New(types.LogLevelInfo, false)
 	logger.SetOutput(&buf)
 	o := &Orchestrator{logger: logger, cfg: cfg, notificationChannels: channels}
+	if cfg != nil {
+		o.notifyFilterDispatch = cfg.NotifyOn
+	}
 	o.dispatchNotifications(context.Background(), stats)
 	return buf.String()
 }
@@ -62,8 +66,8 @@ func TestNotifyOnSuppressesAnEnabledChannelBelowTheThreshold(t *testing.T) {
 		stats    *BackupStats
 		wantSent bool
 	}{
-		// The default. Every install that predates the key lands here and nothing about
-		// it may change, which is the single most important row in this file.
+		// always sends every outcome, and it is also what a run applies whenever the
+		// Healthchecks monitor is not confirmed.
 		{"always on a clean run", config.NotifyOnAlways, &BackupStats{}, true},
 		{"always on a warning run", config.NotifyOnAlways, &BackupStats{ExitCode: 1, WarningCount: 1}, true},
 		{"always on a failure", config.NotifyOnAlways, &BackupStats{ExitCode: 2, ErrorCount: 1}, true},
@@ -96,9 +100,9 @@ func TestNotifyOnSuppressesAnEnabledChannelBelowTheThreshold(t *testing.T) {
 					t.Fatalf("Webhook dispatched %d times, want 0 (NOTIFY_ON=%s); log:\n%s", spy.calls, tc.policy, out)
 				}
 				// The operator has to be able to tell "suppressed by policy" from
-				// "switched off" and from "crashed", so the reason is in the log with
-				// both the policy and the outcome that was compared against it.
-				if !strings.Contains(out, "Webhook: NOTIFY_ON="+tc.policy) {
+				// "switched off" and from "crashed". The filter applied is on the
+				// "Notification filter" line and the outcome in the DEBUG dispatch line.
+				if !strings.Contains(out, "Webhook: filtered") {
 					t.Fatalf("a suppressed channel must say why, got:\n%s", out)
 				}
 				if strings.Contains(out, "Webhook: disabled") {
@@ -124,7 +128,7 @@ func TestNotifyOnNeverFiltersTheHealthchecksSection(t *testing.T) {
 		if spy.calls != 1 {
 			t.Fatalf("NOTIFY_ON=%s on a clean run: Healthchecks dispatched %d times, want 1; log:\n%s", policy, spy.calls, out)
 		}
-		if strings.Contains(out, healthchecksSectionName+": NOTIFY_ON=") {
+		if strings.Contains(out, healthchecksSectionName+": filtered") {
 			t.Fatalf("NOTIFY_ON=%s must not emit a suppression line for the Healthchecks section, got:\n%s", policy, out)
 		}
 	}
@@ -182,7 +186,7 @@ func TestABrokenChannelStillReportsItselfBelowTheThreshold(t *testing.T) {
 	if !strings.Contains(out, `EMAIL_DELIVERY_METHOD="carrier-pigeon"`) {
 		t.Fatalf("the warning must still name the value that broke it, got:\n%s", out)
 	}
-	if strings.Contains(out, "Email: NOTIFY_ON=") {
+	if strings.Contains(out, "Email: filtered") {
 		t.Fatalf("a channel that never initialized was not suppressed by policy and must not say it was, got:\n%s", out)
 	}
 	if got := stats.NotifyResults["Email"]; got != "error" {
@@ -217,7 +221,7 @@ func TestASuppressedChannelIsRecordedAsDisabledForTheDaemonHandoff(t *testing.T)
 	}
 	// Exactly once. A suppressed channel is claimed in usedChannels before the gate, so
 	// the remainder loop cannot pick it up and skip it a second time.
-	if n := strings.Count(out, "Webhook: NOTIFY_ON="); n != 1 {
+	if n := strings.Count(out, "Webhook: filtered"); n != 1 {
 		t.Fatalf("the suppression was reported %d times, want 1; log:\n%s", n, out)
 	}
 }
@@ -315,8 +319,9 @@ func TestNotifyOnDoesNotChangeHowADisabledChannelIsReported(t *testing.T) {
 	logger.SetOutput(&buf)
 	stats := &BackupStats{}
 	o := &Orchestrator{
-		logger: logger,
-		cfg:    &config.Config{NotifyOn: config.NotifyOnFailure}, // every channel off
+		logger:               logger,
+		cfg:                  &config.Config{NotifyOn: config.NotifyOnFailure}, // every channel off
+		notifyFilterDispatch: config.NotifyOnFailure,
 	}
 	o.dispatchNotifications(context.Background(), stats)
 
@@ -325,7 +330,7 @@ func TestNotifyOnDoesNotChangeHowADisabledChannelIsReported(t *testing.T) {
 		if !strings.Contains(out, name+": disabled") {
 			t.Fatalf("%s is switched off and must still report as disabled, got:\n%s", name, out)
 		}
-		if strings.Contains(out, name+": NOTIFY_ON=") {
+		if strings.Contains(out, name+": filtered") {
 			t.Fatalf("%s is switched off and must not be attributed to NOTIFY_ON, got:\n%s", name, out)
 		}
 	}

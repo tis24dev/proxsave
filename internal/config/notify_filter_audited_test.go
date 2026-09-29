@@ -8,10 +8,9 @@ import (
 )
 
 // TestNotifyOnIsReadFromTheConfig pins the read site. Nothing else in the tree
-// cross-checks this string setting against the key name the template documents, so a
+// cross-checks this string setting against the variable name the template assigns, so a
 // typo in either one passes the whole suite: the loader would quietly leave NotifyOn at
-// "always" forever and the only symptom is that the operator keeps getting the
-// notifications they switched off.
+// its default forever and the only symptom is that the operator's setting has no effect.
 func TestNotifyOnIsReadFromTheConfig(t *testing.T) {
 	cases := []struct {
 		name    string
@@ -19,11 +18,12 @@ func TestNotifyOnIsReadFromTheConfig(t *testing.T) {
 		want    string
 	}{
 		{
-			// The key a config predating the feature does not carry at all. This is the
-			// upgrade path for every existing install and it must not change behaviour.
+			// A config the upgrade merge has not reached yet does not carry the variable.
+			// It gets the default, warning, which a run applies only when the Healthchecks
+			// monitor is confirmed.
 			name:    "absent",
 			content: "BACKUP_ENABLED=true\n",
-			want:    NotifyOnAlways,
+			want:    NotifyOnWarning,
 		},
 		{
 			// A bare assignment reaches getString as "" rather than as a missing key, so
@@ -31,7 +31,7 @@ func TestNotifyOnIsReadFromTheConfig(t *testing.T) {
 			// Without the empty case NotifyOn would be "", which is not a policy at all.
 			name:    "assigned empty",
 			content: "NOTIFY_ON=\n",
-			want:    NotifyOnAlways,
+			want:    NotifyOnWarning,
 		},
 		{name: "always", content: "NOTIFY_ON=always\n", want: NotifyOnAlways},
 		{name: "warning", content: "NOTIFY_ON=warning\n", want: NotifyOnWarning},
@@ -68,25 +68,45 @@ func TestNotifyOnIsReadFromTheConfig(t *testing.T) {
 	}
 }
 
-// The shipped template must leave a fresh install notifying on everything. The key is
-// deliberately a COMMENTED example there and not an active assignment: an active one
-// would be Absent in every config written before this release, and an absent template
-// variable is a WARNING, which promotes an otherwise clean run to exit 1. That would turn
-// the feature for quieting noisy notifications into a new source of noisy notifications
-// for every operator who never set it.
-func TestTheShippedTemplateLeavesNotifyOnAtTheDefault(t *testing.T) {
-	if got := loadEnvForTest(t, "shipped.env", DefaultEnvTemplate()).NotifyOn; got != NotifyOnAlways {
-		t.Fatalf("template NotifyOn = %q; want %q", got, NotifyOnAlways)
+// NotifyOnSource feeds the DEBUG "notify_on=<v> source=<s>" line. An empty assignment takes
+// the default value, so it has to say default: "backup.env" would claim the file chose warning.
+func TestNotifyOnSourceNamesWhereTheValueCameFrom(t *testing.T) {
+	cases := []struct {
+		name    string
+		content string
+		want    string
+	}{
+		{name: "absent", content: "BACKUP_ENABLED=true\n", want: "default"},
+		{name: "assigned empty", content: "NOTIFY_ON=\n", want: "default"},
+		{name: "assigned blank", content: "NOTIFY_ON=   \n", want: "default"},
+		{name: "assigned", content: "NOTIFY_ON=warning\n", want: "backup.env"},
+		{name: "assigned always", content: "NOTIFY_ON=always\n", want: "backup.env"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := loadEnvForTest(t, "backup.env", tc.content).NotifyOnSource; got != tc.want {
+				t.Fatalf("NotifyOnSource = %q; want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+// The shipped template assigns NOTIFY_ON=warning on an active line, exactly once. Active is
+// what makes the upgrade merge write it into every existing backup.env, so the operator sees
+// the value in effect in the file instead of in the documentation.
+func TestTheShippedTemplateAssignsNotifyOnAtTheDefault(t *testing.T) {
+	if got := loadEnvForTest(t, "shipped.env", DefaultEnvTemplate()).NotifyOn; got != NotifyOnWarning {
+		t.Fatalf("template NotifyOn = %q; want %q", got, NotifyOnWarning)
 	}
 
-	tmpl := DefaultEnvTemplate()
-	for _, line := range strings.Split(tmpl, "\n") {
+	var active []string
+	for _, line := range strings.Split(DefaultEnvTemplate(), "\n") {
 		if strings.HasPrefix(strings.TrimSpace(line), "NOTIFY_ON=") {
-			t.Fatalf("the template assigns NOTIFY_ON on an uncommented line (%q); it must stay a commented example", line)
+			active = append(active, line)
 		}
 	}
-	if !strings.Contains(tmpl, "# NOTIFY_ON=") {
-		t.Fatal("the template must document NOTIFY_ON as a commented example, or the audit reports it unknown when an operator sets it")
+	if len(active) != 1 || strings.TrimSpace(active[0]) != "NOTIFY_ON=warning" {
+		t.Fatalf("the template must assign NOTIFY_ON=warning on exactly one active line, got %q", active)
 	}
 }
 
@@ -121,6 +141,9 @@ func TestNotifyOnHonoursTheEnvironmentOverride(t *testing.T) {
 	}
 	if cfg.NotifyOn != NotifyOnFailure {
 		t.Fatalf("NotifyOn = %q; the environment must win over the file, want %q", cfg.NotifyOn, NotifyOnFailure)
+	}
+	if cfg.NotifyOnSource != "environment" {
+		t.Fatalf("NotifyOnSource = %q; want \"environment\" when the shell value wins", cfg.NotifyOnSource)
 	}
 }
 
