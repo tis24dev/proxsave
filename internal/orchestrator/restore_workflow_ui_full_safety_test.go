@@ -104,8 +104,8 @@ func TestFullRestoreFallbackKeepsSafetyInvariants(t *testing.T) {
 	}
 
 	// A safety backup must exist: createSafetyBackup writes restore_backup_*.tar.gz
-	// under /tmp/proxsave via safetyFS.
-	entries, err := fakeFS.ReadDir("/tmp/proxsave")
+	// into the restore's own directory (RestoreRunDir) via safetyFS.
+	entries, err := fakeFS.ReadDir(RestoreRunDir())
 	if err != nil {
 		t.Fatalf("no safety backup directory was created: %v", err)
 	}

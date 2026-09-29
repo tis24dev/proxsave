@@ -20,6 +20,12 @@ var (
 	serviceStatusCheckTimeout = 5 * time.Second
 	servicePollInterval       = 500 * time.Millisecond
 	serviceRetryDelay         = 500 * time.Millisecond
+	// haLRMStopTimeout is how long the stop of pve-ha-lrm may take before it fails.
+	// The LRM freezes its services and waits for the CRM master to acknowledge; when
+	// the old master is a dead node, its HA master lock only times out about 120 s
+	// after it died, and this is that plus margin. Measured on a 3-node PVE cluster
+	// with the master powered off: 93 s.
+	haLRMStopTimeout = 180 * time.Second
 )
 
 type restoreCommandResult struct {
@@ -44,24 +50,182 @@ type serviceInactiveWaiter struct {
 	ticker          *time.Ticker
 }
 
+// pveClusterStopOrder is the order a cluster RECOVERY stops the PVE services in: the
+// HA services before pmxcfs. pve-ha-lrm holds the node's watchdog open while pmxcfs
+// is down: with pve-cluster stopped for 60 s it expires and the node is hard-reset
+// (fenced) in the middle of the restore. Stopped first, the LRM freezes its services
+// and closes the watchdog cleanly, and the CRM releases its lock so the master moves
+// to another node.
+var pveClusterStopOrder = []string{"pve-ha-lrm", "pve-ha-crm", "pve-cluster", "pvedaemon", "pveproxy", "pvestatd"}
+
+// pveClusterStartOrder starts pmxcfs and the API services before the HA services,
+// the reverse of the stop order: the CRM, then the LRM, come back once /etc/pve is up.
+var pveClusterStartOrder = []string{"pve-cluster", "pvedaemon", "pveproxy", "pvestatd", "pve-ha-crm", "pve-ha-lrm"}
+
+// pveClusterRestartTimeout bounds a restart of the PVE services: 30 s
+// (serviceStartTimeout) per service plus 10 s, for the 6 services, i.e. 190 s.
+func pveClusterRestartTimeout() time.Duration {
+	return time.Duration(len(pveClusterStartOrder))*serviceStartTimeout + 10*time.Second
+}
+
+// stopPVEClusterServices stops the services in pveClusterStopOrder, skipping a unit
+// that is not installed. When one fails to stop, the ones it already stopped are
+// started again, in reverse stop order, before the error is returned: the caller
+// treats a failed stop as "nothing to restart", so leaving them down would leave this
+// node out of the cluster after the restore gave up.
 func stopPVEClusterServices(ctx context.Context, logger *logging.Logger) error {
-	services := []string{"pve-cluster", "pvedaemon", "pveproxy", "pvestatd"}
-	for _, service := range services {
-		if err := stopServiceWithRetries(ctx, logger, service); err != nil {
+	var stopped []string
+	for _, service := range pveClusterStopOrder {
+		if pveUnitNotInstalled(ctx, logger, service) {
+			continue
+		}
+		stop := stopServiceWithRetries
+		if service == "pve-ha-lrm" {
+			stop = stopHALRMWithoutSignals
+		}
+		if err := stop(ctx, logger, service); err != nil {
+			restartPVEServicesAfterFailedStop(logger, stopped)
 			return fmt.Errorf("failed to stop PVE services (%s): %w", service, err)
 		}
+		stopped = append(stopped, service)
 	}
 	return nil
 }
 
-func startPVEClusterServices(ctx context.Context, logger *logging.Logger) error {
-	services := []string{"pve-cluster", "pvedaemon", "pveproxy", "pvestatd"}
-	for _, service := range services {
-		if err := startServiceWithRetries(ctx, logger, service); err != nil {
-			return fmt.Errorf("failed to start PVE services (%s): %w", service, err)
+// stopHALRMWithoutSignals stops pve-ha-lrm with a single no-block stop and waits up
+// to haLRMStopTimeout for it to go inactive. It never escalates to systemctl kill:
+// the LRM closes its watchdog only when it exits on its own, and a SIGKILL before
+// that leaves the watchdog armed, so the node is fenced. Every failure, of the stop
+// command or of the wait (timeout, failed status query, cancelled restore), goes
+// through cancelHALRMStopJob before its error is returned.
+func stopHALRMWithoutSignals(ctx context.Context, logger *logging.Logger, service string) error {
+	if err := runCommandWithTimeoutCountdown(ctx, logger, serviceStopNoBlockTimeout, service, "stop (no-block)", "systemctl", "stop", "--no-block", service); err != nil {
+		cancelHALRMStopJob(logger, service)
+		return err
+	}
+	if err := waitForServiceInactive(ctx, logger, service, haLRMStopTimeout); err != nil {
+		cancelHALRMStopJob(logger, service)
+		return err
+	}
+	resetFailedService(ctx, logger, service)
+	return nil
+}
+
+// cancelHALRMStopJob runs systemctl start on pve-ha-lrm after its stop failed. The
+// no-block stop job may still be queued: left alone, the LRM would stop later, after
+// the restore gave up, with nothing to start it again. The start replaces the queued
+// stop job and leaves the LRM running; where nothing was queued it is harmless. Its
+// own context, like the other restarts, so a cancelled restore still issues it.
+func cancelHALRMStopJob(logger *logging.Logger, service string) {
+	if err := runCommandWithTimeout(context.Background(), logger, serviceStartTimeout, "systemctl", "start", service); err != nil && logger != nil {
+		logger.Warning("Failed to restart PVE services (%s) after the stop failed: %v", service, err)
+	}
+}
+
+// restartPVEServicesAfterFailedStop starts stopped again, last stopped first. It uses
+// its own context, like the deferred restart, so a cancelled restore still gets its
+// services back.
+func restartPVEServicesAfterFailedStop(logger *logging.Logger, stopped []string) {
+	if len(stopped) == 0 {
+		return
+	}
+	restartCtx, cancel := context.WithTimeout(context.Background(), pveClusterRestartTimeout())
+	defer cancel()
+	for i := len(stopped) - 1; i >= 0; i-- {
+		if err := startServiceWithRetries(restartCtx, logger, stopped[i]); err != nil && logger != nil {
+			logger.Warning("Failed to restart PVE services (%s) after the stop failed: %v", stopped[i], err)
 		}
 	}
-	return nil
+}
+
+// pveUnitNotInstalled reports whether systemd has no unit file for service
+// (LoadState not-found), e.g. pve-ha-manager removed. Such a unit is neither stopped
+// nor started. Any other answer, including a failed query, counts as installed.
+func pveUnitNotInstalled(ctx context.Context, logger *logging.Logger, service string) bool {
+	checkCtx, cancel := context.WithTimeout(ctx, serviceStatusCheckTimeout)
+	defer cancel()
+	output, err := restoreCmd.Run(checkCtx, "systemctl", "show", "-p", "LoadState", "--value", service)
+	if err != nil || strings.TrimSpace(string(output)) != "not-found" {
+		return false
+	}
+	if logger != nil {
+		logger.Debug("Skipping %s: unit not installed (LoadState=not-found)", service)
+	}
+	return true
+}
+
+// pveHAServices are the HA units of pveClusterStartOrder. They are not started while
+// pve-cluster is down: the LRM would arm the node's watchdog with pmxcfs unavailable,
+// and a node whose watchdog expires is fenced.
+var pveHAServices = map[string]bool{"pve-ha-crm": true, "pve-ha-lrm": true}
+
+// pveUnitStartFailure is one unit whose start failed, with the error of its last attempt.
+type pveUnitStartFailure struct {
+	unit string
+	err  error
+}
+
+// pveClusterStartError reports the PVE services a restart left not running: failed
+// holds each unit whose start failed, in start order, and skipped the HA units not
+// started because pve-cluster had failed.
+type pveClusterStartError struct {
+	failed  []pveUnitStartFailure
+	skipped []string
+}
+
+func (e *pveClusterStartError) Error() string {
+	parts := make([]string, 0, len(e.failed))
+	for _, f := range e.failed {
+		parts = append(parts, fmt.Sprintf("%s: %v", f.unit, f.err))
+	}
+	msg := "failed to start PVE services (" + strings.Join(parts, "; ") + ")"
+	if len(e.skipped) > 0 {
+		msg += "; not started while pve-cluster is down: " + strings.Join(e.skipped, ", ")
+	}
+	return msg
+}
+
+// notRunning names the units left down, for the restore's closing advice:
+// "pvedaemon (start failed); pve-ha-crm, pve-ha-lrm (not started while pve-cluster is down)".
+func (e *pveClusterStartError) notRunning() string {
+	units := make([]string, 0, len(e.failed))
+	for _, f := range e.failed {
+		units = append(units, f.unit)
+	}
+	out := strings.Join(units, ", ") + " (start failed)"
+	if len(e.skipped) > 0 {
+		out += "; " + strings.Join(e.skipped, ", ") + " (not started while pve-cluster is down)"
+	}
+	return out
+}
+
+// startPVEClusterServices starts the services in pveClusterStartOrder, skipping a
+// unit that is not installed. A unit that fails to start does not stop the others:
+// a pvedaemon that will not start must not leave the API proxy and HA down with it.
+// The exception is pve-cluster: when it fails, the HA units are not started (see
+// pveHAServices). Any failure is returned as a *pveClusterStartError.
+func startPVEClusterServices(ctx context.Context, logger *logging.Logger) error {
+	var result pveClusterStartError
+	clusterDown := false
+	for _, service := range pveClusterStartOrder {
+		if pveUnitNotInstalled(ctx, logger, service) {
+			continue
+		}
+		if clusterDown && pveHAServices[service] {
+			result.skipped = append(result.skipped, service)
+			continue
+		}
+		if err := startServiceWithRetries(ctx, logger, service); err != nil {
+			result.failed = append(result.failed, pveUnitStartFailure{unit: service, err: err})
+			if service == "pve-cluster" {
+				clusterDown = true
+			}
+		}
+	}
+	if len(result.failed) == 0 {
+		return nil
+	}
+	return &result
 }
 
 func stopPBSServices(ctx context.Context, logger *logging.Logger) error {

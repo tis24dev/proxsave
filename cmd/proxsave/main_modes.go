@@ -51,6 +51,7 @@ func validateModeCompatibility(args *cli.Args) []string {
 		validateSupportCompatibility,
 		validateInstallCompatibility,
 		validateUpgradeCompatibility,
+		validateRestoreCompatibility,
 		validateDaemonCompatibility,
 	} {
 		if messages := rule(args); len(messages) > 0 {
@@ -112,6 +113,25 @@ func validateUpgradeCompatibility(args *cli.Args) []string {
 	// error. That is the point: it used to lie.
 	if args.DryRun && (args.Upgrade || args.UpgradeFinalize) {
 		return []string{"--dry-run is not supported with --upgrade: the upgrade and its finalize phase always modify the installation."}
+	}
+	return nil
+}
+
+func validateRestoreCompatibility(args *cli.Args) []string {
+	// A restore cannot run without modifying the system. Under --dry-run it still
+	// stopped the PVE and PBS services, unmounted /etc/pve in RECOVERY, extracted the
+	// direct-write categories (config.db, corosync, ssh, ...) over the live files and
+	// wrote a safety backup; only the staged applies, the fstab merge and a few later
+	// steps read the flag. The operator was told nothing would change and got a host in
+	// a state nobody asked for.
+	//
+	// This refuses the combination rather than completing a dry run of it, for the
+	// reason given for --upgrade above: a partial dry run is worse than none. It turns
+	// an invocation that used to be accepted into an error, and DRY_RUN=true in the
+	// configuration, known only once it is loaded, is refused at the restore dispatch
+	// (dispatchRestoreMode) with the same exit code.
+	if args.DryRun && args.Restore {
+		return []string{"--dry-run is not supported with --restore: a restore cannot run without modifying the system."}
 	}
 	return nil
 }

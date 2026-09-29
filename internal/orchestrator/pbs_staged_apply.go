@@ -604,8 +604,8 @@ func writeDeferredPBSDatastoreCfg(blocks []pbsDatastoreBlock) (string, error) {
 	if len(blocks) == 0 {
 		return "", nil
 	}
-	base := "/tmp/proxsave"
-	if err := restoreFS.MkdirAll(base, 0o755); err != nil {
+	base := RestoreRunDir()
+	if err := restoreFS.MkdirAll(base, 0o700); err != nil {
 		return "", err
 	}
 

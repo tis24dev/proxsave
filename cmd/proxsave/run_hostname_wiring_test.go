@@ -528,6 +528,12 @@ func TestBootstrapRuntimeNamesEveryRunItHandsBack(t *testing.T) {
 			t.Setenv("LOG_FILE", "")
 
 			dir := t.TempDir()
+			// The restore row streams its live log into the restore's own directory
+			// (restoreRunDir, <BASE_DIR>/restore/<ts> in production): keep it
+			// inside the test's temporary tree.
+			origRunDir := restoreRunDir
+			restoreRunDir = func() string { return filepath.Join(dir, "restore-run") }
+			t.Cleanup(func() { restoreRunDir = origRunDir })
 			configPath := filepath.Join(dir, "backup.env")
 			// The notification flags are pinned OFF explicitly, not left to their
 			// defaults. validateRunConfig runs a network preflight when any of them is
@@ -578,11 +584,10 @@ func TestBootstrapRuntimeNamesEveryRunItHandsBack(t *testing.T) {
 				if rt.logger != nil {
 					_ = rt.logger.CloseLogFile()
 				}
-				// The restore row streams its live log into logging.sessionLogDir,
-				// which is a fixed path outside t.TempDir and is never cleaned up by
+				// Anything that still lands outside t.TempDir is never cleaned up by
 				// anything. Closing the handle is not enough: without this the package
-				// leaves one file per run there for ever. The path is recovered from
-				// LOG_FILE, which initializeRestoreSessionLogger publishes.
+				// would leave one file per run there for ever. The path is recovered
+				// from LOG_FILE, which both log paths publish.
 				if p := os.Getenv("LOG_FILE"); p != "" && !strings.HasPrefix(p, dir) {
 					_ = os.Remove(p)
 				}

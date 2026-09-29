@@ -56,6 +56,13 @@ type Collector struct {
 
 	// clusteredPVE records whether cluster mode was detected during PVE collection.
 	clusteredPVE bool
+	// pveRuntimeSkipLogged records that the PVE runtime commands skip under
+	// SYSTEM_ROOT_PREFIX has been logged, so the run carries it once.
+	pveRuntimeSkipLogged bool
+	// stagingNoSpace is the first write into the working directory that failed for
+	// lack of space; once set, the collection stops (NoteStagingWriteError).
+	stagingSpaceMu sync.Mutex
+	stagingNoSpace error
 
 	// Manifest tracking for backup contents
 	pbsManifest    map[string]ManifestEntry
@@ -518,9 +525,21 @@ func (c *Collector) CollectAll(ctx context.Context) error {
 		}
 		return err
 	}
+	// A full working directory ends the collection wherever it happened: the system
+	// recipe below turns its own errors into a warning, and past that point every write
+	// fails the same way.
+	if err := c.StagingNoSpaceErr(); err != nil {
+		return errors.Join(roleErr, err)
+	}
 	c.logger.Debug("Collecting baseline system information (network/system files, commands, hardware data)")
 	if err := c.CollectSystemInfo(ctx); err != nil {
+		if spaceErr := c.StagingNoSpaceErr(); spaceErr != nil {
+			return errors.Join(roleErr, spaceErr)
+		}
 		c.logger.Warning("System info collection had warnings: %v", err)
+	}
+	if err := c.StagingNoSpaceErr(); err != nil {
+		return errors.Join(roleErr, err)
 	}
 	c.logger.Debug("Baseline system information collected successfully")
 
@@ -733,6 +752,7 @@ func (c *Collector) ensureDir(path string) error {
 	}
 
 	if err := os.MkdirAll(path, 0750); err != nil {
+		c.NoteStagingWriteError(err)
 		return err
 	}
 	if created {
@@ -954,6 +974,7 @@ func (c *Collector) copyRegularFile(src, dest, description string, info os.FileI
 	written, err := copyRegularFileContents(srcFile, src, dest)
 	if err != nil {
 		c.incFilesFailed()
+		c.NoteStagingWriteError(err)
 		return err
 	}
 
@@ -966,21 +987,48 @@ func (c *Collector) copyRegularFile(src, dest, description string, info os.FileI
 	return nil
 }
 
+// copyRegularFileContents copies src into dest. When the copy fails after dest was
+// opened, it removes dest: a copy cut short left the file behind truncated (or empty,
+// when the failure came first), and the archive stored it as if it were the real one. A failure on the dest side comes
+// back as a stagingWriteError, so the caller can tell a full working directory from an
+// unreadable source.
 func copyRegularFileContents(srcFile io.Reader, src, dest string) (int64, error) {
 	destFile, err := osOpenFile(dest, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0600)
 	if err != nil {
-		return 0, fmt.Errorf("failed to create %s: %w", dest, err)
+		// Nothing was created or truncated: whatever sits at dest is not ours to remove.
+		return 0, &stagingWriteError{fmt.Errorf("failed to create %s: %w", dest, err)}
 	}
 
-	written, err := io.Copy(destFile, srcFile)
+	dst := &writeErrRecorder{w: destFile}
+	written, err := io.Copy(dst, srcFile)
 	closeErr := destFile.Close()
 	if err != nil {
+		_ = os.Remove(dest)
+		if dst.err != nil {
+			return 0, &stagingWriteError{fmt.Errorf("failed to copy %s: %w", src, err)}
+		}
 		return 0, fmt.Errorf("failed to copy %s: %w", src, err)
 	}
 	if closeErr != nil {
-		return 0, fmt.Errorf("failed to close %s: %w", dest, closeErr)
+		_ = os.Remove(dest)
+		return 0, &stagingWriteError{fmt.Errorf("failed to close %s: %w", dest, closeErr)}
 	}
 	return written, nil
+}
+
+// writeErrRecorder remembers the error of the destination side of an io.Copy, which
+// returns read and write errors alike.
+type writeErrRecorder struct {
+	w   io.Writer
+	err error
+}
+
+func (r *writeErrRecorder) Write(p []byte) (int, error) {
+	n, err := r.w.Write(p)
+	if err != nil && r.err == nil {
+		r.err = err
+	}
+	return n, err
 }
 
 // isWithinStagingDir reports whether path is the staging tempDir or lives under
@@ -1091,7 +1139,14 @@ func (c *Collector) safeCopyDir(ctx context.Context, src, dest, description stri
 				if ctxErr := ctx.Err(); ctxErr != nil {
 					return ctxErr
 				}
-				c.logger.Warning("Skipping unreadable file %s in %s: %v", path, description, err)
+				if spaceErr := c.StagingNoSpaceErr(); spaceErr != nil {
+					return spaceErr
+				}
+				if isStagingWriteError(err) {
+					c.logger.Warning("Skipping file %s in %s: could not write it to the working directory: %v", path, description, err)
+				} else {
+					c.logger.Warning("Skipping unreadable file %s in %s: %v", path, description, err)
+				}
 				failedCount++
 				return nil
 			}
@@ -1692,15 +1747,34 @@ func (c *Collector) writeReportFile(path string, data []byte) error {
 	}
 	defer func() { _ = root.Close() }()
 
-	if err := root.WriteFile(rel, data, 0o640); err != nil {
+	if err := writeFileInRoot(root, rel, data, 0o640); err != nil {
 		c.incFilesFailed()
-		return fmt.Errorf("failed to write report %s: %w", path, err)
+		c.NoteStagingWriteError(err)
+		return &stagingWriteError{fmt.Errorf("failed to write report %s: %w", path, err)}
 	}
 
 	c.incFilesProcessed()
 	c.addBytesCollected(int64(len(data)))
 	c.logger.Debug("Successfully wrote report file: %s", path)
 	return nil
+}
+
+// writeFileInRoot is os.Root.WriteFile that removes the file when the write fails after
+// it was opened: a report cut short would otherwise go into the archive truncated. A
+// failed open created nothing, so it removes nothing.
+func writeFileInRoot(root *os.Root, name string, data []byte, perm os.FileMode) error {
+	f, err := root.OpenFile(name, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, perm)
+	if err != nil {
+		return err
+	}
+	_, err = f.Write(data)
+	if closeErr := f.Close(); err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		_ = root.Remove(name)
+	}
+	return err
 }
 
 // reportRelPath validates that path lies within the collector staging root

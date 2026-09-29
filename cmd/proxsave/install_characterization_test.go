@@ -99,8 +99,9 @@ func editedExistingConfig() string {
 func TestInstallWizardCharacterization_FreshDeclineAll(t *testing.T) {
 	// No existing config: overwrite mode is implicit (no prompt); every
 	// toggle declined via bare Enter; default scheduler (daemon), default
-	// healthchecks mode (centralized, daemon-only prompt), + run-at accepted.
-	run := runWizardCharacterization(t, "", strings.Repeat("\n", 9))
+	// healthchecks mode (centralized, daemon-only prompt), default notify level
+	// (warning, asked only with a monitor), + run-at accepted.
+	run := runWizardCharacterization(t, "", strings.Repeat("\n", 10))
 	if run.err != nil {
 		t.Fatalf("wizard error: %v", run.err)
 	}
@@ -129,6 +130,7 @@ func TestInstallWizardCharacterization_FreshEnableAll(t *testing.T) {
 		"y",     // encryption
 		"",      // scheduler engine: default daemon
 		"self",  // healthchecks mode (daemon-only): self
+		"",      // notify level: default warning
 		"03:30", // run at
 	}, "\n") + "\n"
 	run := runWizardCharacterization(t, "", script)

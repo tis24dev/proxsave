@@ -174,8 +174,11 @@ a `nohup` background timer when `systemd-run` is unavailable **or its invocation
 only the network flow also has an immediate path that runs its script inline. Each script embeds three runtime values, the
 log path, the marker path, and the rollback archive path (the access-control script adds
 five compile-time `/etc/pve` target paths). None of them is operator, backup, or server
-input: the three runtime values are composed from a fixed `/tmp/proxsave` base, a
-compile-time prefix, and a timestamp. **That provenance is the guarantee.** A `shellQuote`
+input: the three runtime values are composed from a fixed base (`/tmp/proxsave` for the
+marker, the restore's own `<BASE_DIR>/restore/<timestamp>` for the log and the rollback
+archive), a compile-time prefix, and a timestamp. Each script creates its log `0600` in a
+subshell (`umask 077`), so the umask of the rest of the script, and of what it runs, is
+unchanged. **That provenance is the guarantee.** A `shellQuote`
 helper is applied on the way in, but it only quotes a value containing whitespace or one of
 `"'\$&;|<>`, so in practice every one of these paths is emitted verbatim, and its trigger
 set omits the backtick, the glob characters `*` `?` `[` `]`, the grouping `(` `)`, the
@@ -382,7 +385,7 @@ MS_NOSUID | MS_NOEXEC`), so nothing can write into the root filesystem while the
 storage is missing. Only mountpoints under `/mnt/`, `/media/`, or `/run/media/` are
 eligible, and the target is resolved through symlinks and re-checked against that
 allowlist **before** any `mkdir` or `mount`, closing a parent-component symlink escape.
-Guards live under `/var/lib/proxsave/guards`; a bind guard is shadowed by the real mount
+Guards live under `<BASE_DIR>/guards` (`/opt/proxsave/guards` by default; `--cleanup-guards` also clears the ones older versions left in `/var/lib/proxsave/guards`); a bind guard is shadowed by the real mount
 when it returns and is discarded on reboot. Legacy immutable (`chattr +i`) fallbacks are
 recorded in a `0600` index so `proxsave --cleanup-guards` can clear exactly those. See
 [RESTORE_TECHNICAL.md](RESTORE_TECHNICAL.md) and

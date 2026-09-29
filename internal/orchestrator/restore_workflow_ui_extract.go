@@ -45,16 +45,36 @@ func (w *restoreUIWorkflowRun) extractNormalCategories() error {
 		return nil
 	}
 
-	detailedLogPath, err := extractSelectiveArchive(w.ctx, w.prepared.ArchivePath, w.destRoot, categories, w.mode, w.logger)
+	writesCaches := restoreEntryMatchesCategories(zfsHostCachePaths[0], categories) ||
+		restoreEntryMatchesCategories(zfsHostCachePaths[1]+"/", categories)
+	if err := w.decideZFSHostFiles(restoreEntryMatchesCategories(hostidArchivePath, categories), writesCaches,
+		restoreEntryMatchesCategories(zfsARCConfArchivePath, categories)); err != nil {
+		return err
+	}
+	detailedLogPath, err := extractSelectiveArchiveWith(w.ctx, w.prepared.ArchivePath, w.destRoot, categories, w.mode, w.logger, selectiveExtraction{
+		skipFn:      w.skipSystemPathEntry,
+		onExtracted: w.recordBootRebuildInput,
+	})
 	if err != nil {
 		w.logger.Error("Restore failed: %v", err)
 		if w.safetyBackup != nil {
-			w.logger.Info("You can rollback using the safety backup at: %s", w.safetyBackup.BackupPath)
+			w.logger.Info("Safety backup - the files this restore overwrote are in %s", w.safetyBackup.BackupPath)
 		}
 		return err
 	}
 	w.detailedLogPath = detailedLogPath
 	return nil
+}
+
+// skipSystemPathEntry keeps from the live system what must never reach it: the old
+// host's boot files, and its /etc/hostid, pool cache files and zfs.conf when
+// decideZFSHostFiles said so.
+func (w *restoreUIWorkflowRun) skipSystemPathEntry(name string) bool {
+	clean := normalizeArchiveEntryPath(name)
+	return isBootNeverLivePath(clean) ||
+		(w.skipHostid && clean == hostidArchivePath) ||
+		(w.skipZFSCaches && isZFSHostCachePath(clean)) ||
+		(w.skipZFSConf && clean == zfsARCConfArchivePath)
 }
 
 func (w *restoreUIWorkflowRun) systemExtractionCategories() []Category {
@@ -148,7 +168,11 @@ func (w *restoreUIWorkflowRun) exportCategories() error {
 	if len(w.plan.ExportCategories) == 0 {
 		return nil
 	}
-	w.exportRoot = exportDestRoot(w.cfg.BaseDir)
+	// decideZFSHostFiles may already have exported a kept host file here: one
+	// directory per restore.
+	if w.exportRoot == "" {
+		w.exportRoot = exportDestRoot(w.cfg.BaseDir)
+	}
 	w.logger.Info("")
 	w.logger.Info("Exporting %d export-only category(ies) to: %s", len(w.plan.ExportCategories), w.exportRoot)
 	if err := restoreFS.MkdirAll(w.exportRoot, 0o700); err != nil {
@@ -260,6 +284,18 @@ func (w *restoreUIWorkflowRun) extractStagedCategories() (bool, error) {
 	}
 	w.stageLogPath = stageLog
 	return true, nil
+}
+
+// removeStage deletes the staging tree once nothing reads it any more. It holds the
+// decrypted sensitive categories (/etc/shadow, /etc/pve/priv material) in the clear;
+// its detailed log is not inside it but in RestoreRunDir, and stays.
+func (w *restoreUIWorkflowRun) removeStage() {
+	if w.stageRoot == "" {
+		return
+	}
+	if err := restoreFS.RemoveAll(w.stageRoot); err != nil {
+		w.logger.Warning("Failed to remove staging directory %s: %v", w.stageRoot, err)
+	}
 }
 
 func (w *restoreUIWorkflowRun) handleStageExtractError(err error) error {

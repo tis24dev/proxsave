@@ -176,7 +176,7 @@ The same steps without a TTY:
 ```bash
 # 1. Install
 proxsave --install
-# (use --new-install to wipe everything except build/, env/, and identity/ before installing)
+# (use --new-install to wipe everything except build/, env/, guards/, identity/, and restore/ before installing)
 
 # 2. Edit configuration
 nano /opt/proxsave/configs/backup.env
@@ -281,7 +281,7 @@ The same without a TTY:
 
 ```bash
 proxsave --install
-# (use --new-install if you want to reset the install dir first, keeping build/, env/, and identity/)
+# (use --new-install if you want to reset the install dir first, keeping build/, env/, guards/, identity/, and restore/)
 # (paste configuration above)
 proxsave --dry-run
 proxsave --backup
@@ -1014,7 +1014,8 @@ usual, so the appliance is managed the same way as a host install.
 ### Expected Results
 - Proxmox type is detected from the mounted host (`/host/etc/pve`, `/host/etc/proxmox-backup`), not the container.
 - Absolute symlinks such as `/etc/ceph/ceph.conf -> /etc/pve/ceph.conf` resolve under the prefix, so Ceph configuration is collected.
-- ZFS pool state is collected (shared kernel); namespace-scoped and cluster-daemon commands (udevadm, ethtool, pvesh, ceph) are skipped and their data comes from the host files.
+- ZFS pool state is collected (shared kernel); namespace-scoped and cluster-daemon commands (udevadm, ethtool, the PVE CLI, crontab, systemctl, ceph) are skipped and their data comes from the host files, so the container needs no PVE packages.
+- Storages are scanned under `/host`; a network storage whose mount is not carried into the container is logged as not visible.
 - Symlink targets are stored verbatim, so the archive restores onto a real host unchanged.
 - No writes to the host filesystem.
 

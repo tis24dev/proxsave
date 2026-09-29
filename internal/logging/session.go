@@ -17,15 +17,25 @@ const sessionLogDir = "/tmp/proxsave"
 // absolute log path, and a cleanup function that must be invoked when the
 // session completes.
 func StartSessionLogger(flow string, level types.LogLevel, useColor bool) (*Logger, string, func(), error) {
+	return startSessionLogger(sessionLogDir, 0o750, flow, level, useColor)
+}
+
+// StartSessionLoggerIn is StartSessionLogger writing into dir, created 0700. The
+// restore uses it to keep its log with its rollback material, outside /tmp.
+func StartSessionLoggerIn(dir, flow string, level types.LogLevel, useColor bool) (*Logger, string, func(), error) {
+	return startSessionLogger(dir, 0o700, flow, level, useColor)
+}
+
+func startSessionLogger(dir string, dirPerm os.FileMode, flow string, level types.LogLevel, useColor bool) (*Logger, string, func(), error) {
 	flow = sanitizeFlowName(flow)
-	if err := os.MkdirAll(sessionLogDir, 0o750); err != nil {
+	if err := os.MkdirAll(dir, dirPerm); err != nil {
 		return nil, "", nil, fmt.Errorf("create session log directory: %w", err)
 	}
 
 	hostname := detectHostname()
 	timestamp := time.Now().Format("20060102-150405")
 	logName := fmt.Sprintf("%s-%s-%s.log", flow, hostname, timestamp)
-	logPath := filepath.Join(sessionLogDir, logName)
+	logPath := filepath.Join(dir, logName)
 
 	logger := New(level, useColor)
 	if err := logger.OpenLogFile(logPath); err != nil {

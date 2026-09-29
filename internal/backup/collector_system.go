@@ -403,7 +403,55 @@ func (c *Collector) collectSystemServicesStatic(ctx context.Context) error {
 		c.logger.Debug("No /etc/systemd/system found")
 	}
 
+	// /etc/default and the udev rules are restored by the services category, which
+	// writes them straight to the live system. GRUB settings carry host-specific
+	// tokens (root device, IOMMU) that can leave another host unbootable, so they go
+	// under proxsave-info, which every restore mode treats as export-only, and never
+	// sit at ./etc/default/grub where services would write them.
+	stagedDefault := filepath.Join(c.tempDir, "etc/default")
+	if err := c.safeCopyDir(ctx,
+		c.systemPath("/etc/default"),
+		stagedDefault,
+		"Service defaults"); err != nil {
+		c.logger.Debug("No /etc/default found")
+	}
+	for _, name := range []string{"grub", "grub.d"} {
+		c.moveToBootReference(filepath.Join(stagedDefault, name), c.proxsaveInfoDir("boot", "etc", "default", name))
+	}
+
+	if err := c.safeCopyDir(ctx,
+		c.systemPath("/etc/udev/rules.d"),
+		filepath.Join(c.tempDir, "etc/udev/rules.d"),
+		"Udev rules"); err != nil {
+		c.logger.Debug("No /etc/udev/rules.d found")
+	}
+
 	return nil
+}
+
+// moveToBootReference moves an entry already staged under ./etc/default into the
+// boot reference tree, so it is collected once and restored nowhere. When the move
+// fails the staged entry is dropped rather than left where a restore would write it.
+func (c *Collector) moveToBootReference(staged, dest string) {
+	if c.dryRun {
+		return
+	}
+	if _, err := os.Lstat(staged); err != nil {
+		return
+	}
+	err := c.ensureDir(filepath.Dir(dest))
+	if err == nil {
+		err = os.Rename(staged, dest)
+	}
+	if err != nil {
+		c.logger.Warning("Boot configuration %s not collected: %v", filepath.Base(staged), err)
+		c.recordSystemManifestEntry(dest, ManifestEntry{Status: StatusFailed, Error: err.Error()})
+		if rmErr := os.RemoveAll(staged); rmErr != nil {
+			c.logger.Warning("Failed to remove staged %s: %v", staged, rmErr)
+		}
+		return
+	}
+	c.recordSystemManifestEntry(dest, ManifestEntry{Status: StatusCollected})
 }
 
 func (c *Collector) collectSystemLoggingStatic(ctx context.Context) error {
@@ -501,6 +549,18 @@ func (c *Collector) collectSystemKernelModuleStatic(ctx context.Context) error {
 		filepath.Join(c.tempDir, "etc/modprobe.d"),
 		"Modprobe.d directory"); err != nil {
 		c.logger.Debug("No /etc/modprobe.d found")
+	}
+
+	// The kernel command line and the ESP list are kept for reference only, under
+	// proxsave-info: the command line carries the root device and the ESP UUIDs belong
+	// to the disks of this host.
+	for _, name := range []string{"cmdline", "proxmox-boot-uuids"} {
+		if err := c.safeCopyFile(ctx,
+			c.systemPath(filepath.Join("/etc/kernel", name)),
+			c.proxsaveInfoDir("boot", "etc", "kernel", name),
+			"Kernel "+name); err != nil {
+			c.logger.Debug("No /etc/kernel/%s found", name)
+		}
 	}
 
 	return nil
@@ -1530,6 +1590,14 @@ func (c *Collector) collectScriptRepository(ctx context.Context) error {
 		rel, err := filepath.Rel(base, path)
 		if err != nil || rel == "." {
 			return nil
+		}
+		// The repository is BASE_DIR. Its top-level restore and guards directories are
+		// host state, not scripts: restore holds the safety backups of past restores,
+		// with /etc/shadow and /etc/pve/priv material in the clear, and guards the mount
+		// guards. Only the top level: a directory with either name inside the operator's
+		// own scripts is kept.
+		if d.IsDir() && (rel == "restore" || rel == "guards") {
+			return filepath.SkipDir
 		}
 		// Skip VCS metadata and runtime/output dirs at ANY depth (not just the top
 		// level): .git/.svn/.hg carry full history/objects (large and sensitive), and

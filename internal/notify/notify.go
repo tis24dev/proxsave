@@ -7,6 +7,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/tis24dev/proxsave/internal/config"
 	"github.com/tis24dev/proxsave/internal/types"
 )
 
@@ -44,6 +45,25 @@ func StatusFromExitCode(exitCode int) NotificationStatus {
 		return StatusWarning
 	default:
 		return StatusFailure
+	}
+}
+
+// NotifyOnAllows reports whether a run with the given outcome should be delivered
+// under the NOTIFY_ON policy. The policy is a severity THRESHOLD, not an exact match:
+// "warning" delivers warnings and failures, "failure" delivers failures only.
+//
+// Anything else -- "always", the empty string a zero-value Config carries, or a value
+// the operator mistyped -- delivers everything. Silence is the destructive outcome
+// here, so an unreadable policy fails open; config.IsValidNotifyOn is what tells the
+// caller to warn about the typo.
+func NotifyOnAllows(policy string, status NotificationStatus) bool {
+	switch policy {
+	case config.NotifyOnWarning:
+		return status != StatusSuccess
+	case config.NotifyOnFailure:
+		return status == StatusFailure
+	default:
+		return true
 	}
 }
 

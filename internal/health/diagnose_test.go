@@ -145,3 +145,22 @@ func TestRefineWithPresence(t *testing.T) {
 		})
 	}
 }
+
+func TestDaemonProblem(t *testing.T) {
+	cases := []struct {
+		d    Diagnosis
+		want string
+	}{
+		{Diagnosis{State: TxNotInstalled}, "daemon not installed"},
+		{Diagnosis{State: TxNotActive}, "daemon not running"},
+		{Diagnosis{State: TxRunningNoReport}, "daemon running, not reporting"},
+		{Diagnosis{State: TxStale, HbAge: 2 * time.Hour}, "daemon stale (last beat " + HumanizeAge(2*time.Hour) + ")"},
+		{Diagnosis{State: TxTransmitting, DaemonUp: true}, ""},
+		{Diagnosis{}, "daemon not running"},
+	}
+	for _, tc := range cases {
+		if got := DaemonProblem(tc.d); got != tc.want {
+			t.Errorf("DaemonProblem(%+v) = %q; want %q", tc.d, got, tc.want)
+		}
+	}
+}

@@ -37,17 +37,17 @@ func normalizePBSDatastoreCfg(path string, logger *logging.Logger) error {
 	return nil
 }
 
+// datastoreCfgBackupDir is where the copy of datastore.cfg taken before it is
+// normalized goes: the restore's own directory, so the file the warning names is
+// still there after the reboot the restore recommends. A var only so tests can
+// redirect it; production never reassigns it.
+var datastoreCfgBackupDir = RestoreRunDir
+
 func writePBSDatastoreCfgBackup(raw []byte) (backupPath string, err error) {
-	backupDir, err := os.MkdirTemp("/tmp", "proxsave-")
-	if err != nil {
+	backupDir := datastoreCfgBackupDir()
+	if err := os.MkdirAll(backupDir, 0o700); err != nil {
 		return "", err
 	}
-	removeBackupDir := true
-	defer func() {
-		if err != nil && removeBackupDir {
-			_ = os.RemoveAll(backupDir)
-		}
-	}()
 
 	prefix := fmt.Sprintf("datastore.cfg.pre-normalize.%s-", nowRestore().Format("20060102-150405"))
 	backupFile, err := os.CreateTemp(backupDir, prefix)
@@ -71,7 +71,6 @@ func writePBSDatastoreCfgBackup(raw []byte) (backupPath string, err error) {
 	if err = backupFile.Close(); err != nil {
 		return "", err
 	}
-	removeBackupDir = false
 	return backupPath, nil
 }
 

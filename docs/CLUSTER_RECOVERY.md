@@ -193,10 +193,27 @@ This applies only when the guest configs are actually in the export, which means
 
 RECOVERY restores the entire cluster database by overwriting `/var/lib/pve-cluster/`. To do that safely it:
 
-1. stops `pve-cluster`, `pvedaemon`, `pveproxy`, `pvestatd` in that order (escalating to SIGKILL if a service will not stop);
-2. unmounts `/etc/pve` (a failure here is a warning, not fatal);
-3. extracts `./var/lib/pve-cluster/` (config.db) directly to disk while pmxcfs is down;
-4. restarts the four services during cleanup.
+1. probes the quorum with `pvecm status` right after you pick RECOVERY, when the node has a `corosync.conf`, and refuses a quorate cluster with more than 1 node online (see below);
+2. stops `pve-ha-lrm` and `pve-ha-crm`, then `pve-cluster`, `pvedaemon`, `pveproxy`, `pvestatd`, in that order. Every service except `pve-ha-lrm` escalates to SIGKILL if it will not stop. `pve-ha-lrm` is never signalled: it gets one `systemctl stop --no-block` and up to 180 seconds to go inactive. If it is still active after that, ProxSave runs `systemctl start pve-ha-lrm`, which cancels the queued stop and leaves the LRM running, and the restore stops;
+3. unmounts `/etc/pve` (a failure here is a warning, not fatal);
+4. extracts `./var/lib/pve-cluster/` (config.db) directly to disk while pmxcfs is down;
+5. restarts `pve-cluster`, `pvedaemon`, `pveproxy`, `pvestatd`, then `pve-ha-crm` and `pve-ha-lrm`, right after that extraction and before the later steps (network apply, boot rebuild). If the restore fails before that point, they are restarted when the run ends. A unit that fails to start does not stop the others, except that `pve-ha-crm` and `pve-ha-lrm` are not started while `pve-cluster` is down (the LRM would arm the watchdog without pmxcfs). There is one attempt per restore, of three tries per unit; the restore goes on, and its closing advice names the units left down.
+
+The HA services are stopped first because a running `pve-ha-lrm` keeps the node's watchdog open: with pmxcfs down for 60 seconds the watchdog expires and the node is hard-reset (fenced) in the middle of the restore. Stopped, the LRM freezes its HA resources and closes the watchdog cleanly, and the CRM releases its lock so the master moves to another node. After the restart the LRM resumes the resources it froze.
+
+The LRM stop can be slow: it waits for the CRM master to acknowledge the freeze, and when the old master is a node that went down, its master lock only times out about 120 seconds after it died. On an isolated node whose old master was powered off, the stop took 93 seconds. A SIGKILL before the LRM closes its watchdog would leave the watchdog armed and fence the node, which is why `pve-ha-lrm` is only ever asked to stop and given 180 seconds.
+
+The quorum probe exists because on a member of a quorate cluster the restored config.db does not survive: when `pve-cluster` starts again, pmxcfs syncs from the cluster leader and the leader's copy replaces it. What the probe does:
+
+| `pvecm status` reports | Result |
+|---|---|
+| Quorate, more than 1 node online | The restore stops before anything is stopped or written: `Cluster RECOVERY refused - quorate cluster, N nodes online: its copy would replace the restored config.db` |
+| Quorate, 1 node online | Proceeds |
+| Not quorate | Proceeds |
+| Cannot be read (pvecm is not installed, fails, times out, or prints no `Quorate:` line), or quorate with a `Nodes:` count that is not a number, and `systemctl is-active corosync` says `inactive` or `failed` | Proceeds, with the warning `Cluster RECOVERY - quorum unknown (<reason>), corosync inactive, proceeding` (or `failed`) |
+| Same, with corosync in any other state (`active`, `activating`, ...) or a state that cannot be read | The restore stops before anything is stopped or written: `Cluster RECOVERY refused - quorum unknown (<reason>), corosync <state>: in a quorate cluster, its copy would replace the restored config.db` |
+
+A node without `corosync.conf` (`/etc/pve/corosync.conf` or `/etc/corosync/corosync.conf`) is standalone: it proceeds with no probe and no message. pvecm also fails when pmxcfs is down (no `/etc/pve/corosync.conf`) while corosync is up and quorate with its peers; `pve-cluster` would then start again and sync from the leader. So a quorum that cannot be read lets the restore proceed only when systemctl shows corosync stopped, which is also the state after `systemctl stop corosync`.
 
 While pmxcfs is down, ProxSave does not write individual `/etc/pve` files. The config areas that live under `/etc/pve` (storage, jobs, firewall, HA, SDN, access control, notifications) each skip their own apply step during a cluster RECOVERY, because config.db now owns them; a shadow-guard strips any `/etc/pve` path from the direct-extraction set as a backstop. Everything under `/etc/pve` comes back from the restored config.db once `/etc/pve` is remounted.
 
@@ -208,7 +225,7 @@ Older versions of this guide showed the "stopping PVE services / unmounting /etc
 
 ### Offline storage: mount guards
 
-If a datastore or storage mountpoint is offline during a restore (its device is not mounted, so the path resolves to the root filesystem), ProxSave bind-mounts a read-only guard over it under `/var/lib/proxsave/guards`, so the restore cannot write onto the root disk and be shadowed later when the real storage mounts. The guard is a runtime bind mount: it disappears when the real storage mounts on top, and it is gone after a reboot. Current versions no longer set a persistent `chattr +i` flag. To clear leftover guards once storage is back online:
+If a datastore or storage mountpoint is offline during a restore (its device is not mounted, so the path resolves to the root filesystem), ProxSave bind-mounts a read-only guard over it from `<BASE_DIR>/guards` (`/opt/proxsave/guards` by default), so the restore cannot write onto the root disk and be shadowed later when the real storage mounts. The guard is a runtime bind mount: it disappears when the real storage mounts on top, and it is gone after a reboot. Current versions no longer set a persistent `chattr +i` flag. To clear leftover guards once storage is back online:
 
 ```bash
 proxsave --cleanup-guards            # remove leftover guards
@@ -227,11 +244,11 @@ If your restore scope includes the network category (FULL, SYSTEM BASE, or a CUS
 
 ### The safety backup
 
-Before overwriting anything, ProxSave writes a safety backup of the current configuration to `/tmp/proxsave/restore_backup_<YYYYMMDD_HHMMSS>.tar.gz` and keeps it. At the end it prints where it is and how to remove it:
+Before overwriting anything, ProxSave writes a safety backup of the current configuration to `<BASE_DIR>/restore/<YYYYMMDD_HHMMSS>/restore_backup_<YYYYMMDD_HHMMSS>.tar.gz` (`/opt/proxsave/restore/...` by default) and keeps it, outside `/tmp` so that it survives the reboot the restore recommends. At the end it prints where it is:
 
 ```text
-Safety backup preserved at: /tmp/proxsave/restore_backup_20251120_143052.tar.gz
-Remove it manually if restore was successful: rm /tmp/proxsave/restore_backup_20251120_143052.tar.gz
+Safety backup preserved at: /opt/proxsave/restore/20251120_143052/restore_backup_20251120_143118.tar.gz
+Safety backup - kept until removed, ProxSave never deletes it
 ```
 
 If any staged step fails, the run ends with `Restore completed with warnings.` rather than aborting, and this safety backup is your rollback.
@@ -466,18 +483,18 @@ Because you chose RECOVERY, ProxSave restores config.db with the cluster service
 Selected RECOVERY cluster restore: full cluster database will be restored; ensure other nodes are isolated
 
 Creating Safety backup of current configuration...
-Safety backup location: /tmp/proxsave/restore_backup_20251120_143052.tar.gz
+Safety backup location: /opt/proxsave/restore/20251120_143052/restore_backup_20251120_143118.tar.gz
 
 Preparing system for cluster database restore: stopping PVE services and unmounting /etc/pve
 
 ... extraction of the selected categories ...
 
 Restore completed successfully.
-Safety backup preserved at: /tmp/proxsave/restore_backup_20251120_143052.tar.gz
-Remove it manually if restore was successful: rm /tmp/proxsave/restore_backup_20251120_143052.tar.gz
+Safety backup preserved at: /opt/proxsave/restore/20251120_143052/restore_backup_20251120_143118.tar.gz
+Safety backup - kept until removed, ProxSave never deletes it
 ```
 
-ProxSave stops `pve-cluster`, `pvedaemon`, `pveproxy`, `pvestatd`, unmounts `/etc/pve`, extracts `/var/lib/pve-cluster/` (config.db), then restarts the four services. It does not print a per-service checkmark line for each one. No `/etc/pve` files are written directly: config.db owns them, so `/etc/pve` is repopulated from the restored database a moment after pmxcfs remounts, not by the file-extraction phase.
+ProxSave stops `pve-ha-lrm`, `pve-ha-crm`, `pve-cluster`, `pvedaemon`, `pveproxy`, `pvestatd`, unmounts `/etc/pve`, extracts `/var/lib/pve-cluster/` (config.db), then restarts `pve-cluster`, `pvedaemon`, `pveproxy`, `pvestatd`, `pve-ha-crm`, `pve-ha-lrm` before the remaining steps of the restore. It does not print a per-service checkmark line for each one. No `/etc/pve` files are written directly: config.db owns them, so `/etc/pve` is repopulated from the restored database a moment after pmxcfs remounts, not by the file-extraction phase.
 
 Had you chosen SAFE, this step would instead apply what the selected categories actually exported, through `pvesh` on the running cluster, with no service stop and no config.db write. Note what STORAGE mode does not carry: the VM/CT configs live in `pve_config_export`, which is export-only and is stripped from STORAGE, so none are applied. `storage.cfg` and `datacenter.cfg` belong to `storage_pve` and are still applied through `pvesh`, as are pools and resource mappings. Use FULL, or CUSTOM including `pve_config_export`, when you want the guest configs applied.
 
@@ -523,8 +540,10 @@ ls -la /etc/pve/lxc/
 # qm start <vmid>
 # pct start <ctid>
 
-# 3. Remove safety backup (after thorough verification)
-rm /tmp/proxsave/restore_backup_*.tar.gz
+# 3. Remove this restore's safety backup (after thorough verification). TIMESTAMP is
+#    its directory, from its "Safety backup preserved at:" line; the logs and the
+#    safety backups of earlier restores stay.
+rm /opt/proxsave/restore/TIMESTAMP/restore_backup_*.tar.gz
 
 # 4. Update backups schedule if needed
 cat /etc/pve/vzdump.cron
@@ -870,7 +889,7 @@ proxsave --restore
 # Type "RESTORE" to proceed
 ```
 
-**Important**: Never run a RECOVERY cluster restore on a node that is still in the cluster; it overwrites config.db and can corrupt the cluster. The conservative choice is to leave `PVE Cluster Configuration` unselected here. If you do select it, ProxSave prompts SAFE vs RECOVERY, and on a live member SAFE is the only correct answer (it applies configs via the API and never writes config.db).
+**Important**: Never run a RECOVERY cluster restore on a node that is still in the cluster; it overwrites config.db and can corrupt the cluster. On a member of a quorate cluster with other nodes online, ProxSave refuses RECOVERY (`Cluster RECOVERY refused - quorate cluster, N nodes online: ...`). The conservative choice is to leave `PVE Cluster Configuration` unselected here. If you do select it, ProxSave prompts SAFE vs RECOVERY, and on a live member SAFE is the only correct answer (it applies configs via the API and never writes config.db).
 
 #### Step 6: Migrate VMs/CTs to Replacement Node
 
@@ -1521,7 +1540,8 @@ journalctl -xe -u pve-cluster
 ```bash
 # Rollback to safety backup
 systemctl stop pve-cluster
-tar -xzf /tmp/proxsave/restore_backup_*.tar.gz -C /
+# TIMESTAMP: the directory of the restore to undo, from its "Safety backup preserved at:" line
+tar -xzf /opt/proxsave/restore/TIMESTAMP/restore_backup_*.tar.gz -C /
 systemctl start pve-cluster
 ```
 
@@ -1724,7 +1744,8 @@ umount -f /etc/pve 2>/dev/null
 fusermount -uz /etc/pve 2>/dev/null
 
 # 3. Restore from safety backup
-tar -xzf /tmp/proxsave/restore_backup_*.tar.gz -C /
+# TIMESTAMP: the directory of the restore to undo, from its "Safety backup preserved at:" line
+tar -xzf /opt/proxsave/restore/TIMESTAMP/restore_backup_*.tar.gz -C /
 
 # 4. Restart services
 systemctl start pve-cluster

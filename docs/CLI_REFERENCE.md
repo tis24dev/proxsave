@@ -96,8 +96,9 @@ of `--daemon`, `--daemon-setup`, `--daemon-remove`, `--daemon-status` at a time 
 them with another mode; `--install` not with `--new-install` or `--upgrade`;
 `--cleanup-guards` and `--support` each with their own short list of incompatible modes; and
 `--dry-run` refused with `--upgrade`, `--upgrade-finalize`, `--daemon`, `--daemon-setup` and
-`--daemon-remove`, none of which have ever honoured it. The run stops with the reason
-printed. Modifiers (`--config`, `--log-level`, `--cli`) do combine with the mode they apply
+`--daemon-remove`, none of which have ever honoured it, and with `--restore`, which cannot run
+without modifying the system (`DRY_RUN=true` refuses a restore too). The run stops with the
+reason printed. Modifiers (`--config`, `--log-level`, `--cli`) do combine with the mode they apply
 to.
 
 **Configuration precedence** (highest to lowest):
@@ -182,7 +183,7 @@ proxsave -h
 | Flag | Short | Description |
 |------|-------|-------------|
 | `--config <path>` | `-c` | Path to configuration file (default `configs/backup.env`, resolved under the install dir, e.g. `/opt/proxsave/configs/backup.env`). An absolute path is used as-is; a relative path is joined onto the install dir, not the current directory. |
-| `--dry-run` | `-n` | Test mode - no actual changes made. Refused with `--upgrade` and `--upgrade-finalize`: neither has ever honoured it, so the combination is an error rather than a silent full upgrade. Refused with `--daemon`, `--daemon-setup` and `--daemon-remove` for the same reason |
+| `--dry-run` | `-n` | Test mode - no actual changes made. Refused with `--upgrade` and `--upgrade-finalize`: neither has ever honoured it, so the combination is an error rather than a silent full upgrade. Refused with `--daemon`, `--daemon-setup` and `--daemon-remove` for the same reason. Refused with `--restore`, and a restore is refused while `DRY_RUN=true` too: a restore cannot run without modifying the system |
 | `--version` | `-v` | Display version information |
 | `--help` | `-h` | Show help message |
 | `--backup` | | Run the backup now and skip the interactive dashboard. This is the default behavior when proxsave runs non-interactively (cron, pipe, systemd). Dashboard: **Backup**. |
@@ -211,7 +212,7 @@ proxsave --install
 # Interactive installation wizard (CLI mode - for debugging)
 proxsave --install --cli
 
-# Clean reinstall: wipes the install dir except build/, env/ and identity/, then runs
+# Clean reinstall: wipes the install dir except build/, env/, guards/, identity/ and restore/, then runs
 # the wizard. With stock paths that deletes local backup archives and configs/backup.env.
 proxsave --new-install
 
@@ -366,7 +367,7 @@ See also: [upgrading configuration](#configuration-upgrade)
 | Flag | Description |
 |------|-------------|
 | `--install` | Interactive installation wizard. Dashboard: **Install > Edit install** |
-| `--new-install` | Wipe the install directory, keeping only `build/`, `env/` and `identity/`, then launch the wizard. With stock paths this deletes your local backup archives and `configs/backup.env`. Dashboard: **Install > Wipe install** |
+| `--new-install` | Wipe the install directory, keeping only `build/`, `env/`, `guards/`, `identity/` and `restore/`, then launch the wizard. With stock paths this deletes your local backup archives and `configs/backup.env`. Dashboard: **Install > Wipe install** |
 | `--upgrade` | Download and install latest ProxSave binary from GitHub releases. Dashboard: **Upgrade > Check upgrade** |
 | `--upgrade-config` | Merge current config with latest template. Dashboard: **Upgrade > Check config**, whose `Apply` runs this |
 | `--upgrade-config-dry-run` | Preview config upgrade without changes. Dashboard: the check step of **Upgrade > Check config**, which runs it before offering `Apply` |
@@ -513,7 +514,9 @@ proxsave --restore --cli
 **Compatibility model**:
 - `dual` backups persist explicit targets (`pve`, `pbs`)
 - restoring a `dual` backup to a single-role host is allowed
-- ProxSave restores only categories compatible with the current host role
+- ProxSave restores only categories compatible with the current host role; on a
+  single-role host the categories of the other role are extracted to the export
+  directory instead, in every restore mode
 - `common` categories remain available across roles
 
 **WARNING**: Restore operations overwrite files in-place. **Always test in a VM or snapshot your system first!**
@@ -528,7 +531,7 @@ proxsave --restore --cli
 | Flag | Description |
 |------|-------------|
 | `--restore` | Run interactive restore workflow (select bundle, decrypt if needed, apply to system). Dashboard: **Restore** |
-| `--cleanup-guards` | Cleanup ProxSave mount guards under `/var/lib/proxsave/guards` (useful after restores with offline mountpoints; use with `--dry-run` to preview). Dashboard: **Cleanup guards**, which previews first and only then offers `Apply` |
+| `--cleanup-guards` | Cleanup ProxSave mount guards under `<BASE_DIR>/guards`, and those older versions left in `/var/lib/proxsave/guards` (useful after restores with offline mountpoints; use with `--dry-run` to preview). Dashboard: **Cleanup guards**, which previews first and only then offers `Apply` |
 
 ---
 
@@ -552,7 +555,7 @@ proxsave --cleanup-guards
 Notes:
 - Bringing the storage back online is enough to *use* it again (a real mount stacks on top of the guard automatically); `--cleanup-guards` just removes the leftover guard. A bind-mount guard also clears on reboot. A legacy `chattr +i` flag does **not** clear on reboot; it persists until cleared.
 - To clear a legacy flag while the storage is mounted: unmount it, run `--cleanup-guards` again (or `chattr -i <mountpoint>`), then remount.
-- If you deleted `/var/lib/proxsave/guards` manually and a mountpoint is still read-only, ProxSave has no record left: check `lsattr -d <mountpoint>` and run `chattr -i <mountpoint>` while the storage is unmounted.
+- If you deleted the guard directory (`<BASE_DIR>/guards`, or `/var/lib/proxsave/guards` from an older version) manually and a mountpoint is still read-only, ProxSave has no record left: check `lsattr -d <mountpoint>` and run `chattr -i <mountpoint>` while the storage is unmounted.
 
 ## Logging
 
@@ -702,7 +705,7 @@ proxsave --restore
 # Re-run the install wizard against the current configuration
 proxsave --install
 
-# Full reset + installation (preserves build/env/identity)
+# Full reset + installation (preserves build/env/guards/identity/restore)
 proxsave --new-install
 
 # Upgrade binary to latest release
@@ -861,11 +864,11 @@ means the flag has no menu row.
 | `--help` | `-h` | - | Show help message |
 | `--version` | `-v` | - | Display version information |
 | `--config <path>` | `-c` | - | Path to configuration file. Passing it suppresses the dashboard, like any other flag |
-| `--dry-run` | `-n` | - | Test mode - no actual changes. Refused with `--upgrade`, `--upgrade-finalize`, `--daemon`, `--daemon-setup` and `--daemon-remove` |
+| `--dry-run` | `-n` | - | Test mode - no actual changes. Refused with `--upgrade`, `--upgrade-finalize`, `--daemon`, `--daemon-setup`, `--daemon-remove` and `--restore` |
 | `--log-level <level>` | `-l` | - | Set log level (debug\|info\|warning\|error\|critical) |
 | `--cli` | - | - | Force CLI mode instead of TUI (only for: --install, --new-install, --newkey, --decrypt, --restore) |
 | `--install` | - | Install > Edit install | Interactive installation wizard |
-| `--new-install` | - | Install > Wipe install | Wipe the install dir, keeping only `build/`, `env/` and `identity/`, then run the wizard. Deletes local backups and `configs/backup.env` with stock paths |
+| `--new-install` | - | Install > Wipe install | Wipe the install dir, keeping only `build/`, `env/`, `guards/`, `identity/` and `restore/`, then run the wizard. Deletes local backups and `configs/backup.env` with stock paths |
 | `--upgrade` | - | Upgrade > Check upgrade | Download and install latest binary from GitHub releases. Executed by the OLD binary; from 0.36.0 on it hands the finalize to the new one |
 | `--upgrade-config` | - | Upgrade > Check config | Upgrade config from embedded template |
 | `--upgrade-config-dry-run` | - | Upgrade > Check config (check step) | Preview config upgrade |
@@ -879,7 +882,7 @@ means the flag has no menu row.
 | `--daemon-remove` | - | Daemon > Disable | Revert to the cron scheduler, disable the service, and block future upgrades from reinstalling the daemon |
 | `--daemon-status` | - | Daemon > Status | Read-only daemon and personal-script status; add `--log-level debug` for UID/path evidence. Scripts are not executed; exit is `0` only when the daemon is running and aligned |
 | `--show-whatsnew` | - | (opens by itself) | Show the release-notes screen once and exit, then mark it seen |
-| `--cleanup-guards` | - | Cleanup guards | Remove leftover ProxSave mount guards under `/var/lib/proxsave/guards` (use with `--dry-run` to preview) |
+| `--cleanup-guards` | - | Cleanup guards | Remove leftover ProxSave mount guards under `<BASE_DIR>/guards` and the legacy `/var/lib/proxsave/guards` (use with `--dry-run` to preview) |
 | `--support` | - | Support | Run in support mode (force DEBUG logging and email log). Available for the standard backup run and `--restore` |
 
 ### Internal Flags
@@ -911,7 +914,7 @@ proxsave --dry-run --log-level debug
 # Re-run the install wizard
 proxsave --install
 
-# Full reset (preserve build/env/identity) then setup
+# Full reset (preserve build/env/guards/identity/restore) then setup
 proxsave --new-install
 
 # Upgrade binary to latest version
@@ -960,6 +963,7 @@ The ones below are on the list and are the ones worth using:
 proxsave -c /etc/pbs/prod.env
 
 # Dry-run mode: overridden via this environment variable
+# (a restore is refused while DRY_RUN is true, from the environment or from backup.env)
 DRY_RUN=true proxsave
 
 # BASE_DIR is not an override; it is detected from the installed executable.

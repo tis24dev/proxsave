@@ -119,14 +119,14 @@ make build
 
 **Solution**: open the dashboard and pick `Install` > `Edit install`. It re-runs the interactive
 installer against the current configuration and writes the file. `Wipe install` is the same
-installer after resetting the install directory (`build/`, `env/` and `identity/` are preserved);
+installer after resetting the install directory (`build/`, `env/`, `guards/`, `identity/` and `restore/` are preserved);
 it asks you to confirm the wipe first.
 
 The same two flows without the TUI:
 ```bash
 # Run installer to create config
 proxsave --install
-# For a clean reinstall (keeps build/, env/, and identity/), run:
+# For a clean reinstall (keeps build/, env/, guards/, identity/, and restore/), run:
 # proxsave --new-install
 
 # Or copy template manually
@@ -902,7 +902,7 @@ proxsave --cleanup-guards --dry-run
 proxsave --cleanup-guards
 ```
 - `--cleanup-guards` unmounts bind-mount guards and clears any **legacy** `chattr +i` flags, but only on mountpoints that are **not currently mounted**; it prints a summary of what was cleared vs left pending. To clear a flag while the storage is mounted: unmount it, run `--cleanup-guards` again (or `chattr -i <mountpoint>`), then remount.
-- If you already deleted `/var/lib/proxsave/guards` by hand and a mountpoint is still read-only, ProxSave has no record left to clear. Check for the immutable flag and remove it manually while the storage is unmounted:
+- If you already deleted the guard directory (`<BASE_DIR>/guards`, or `/var/lib/proxsave/guards` from an older version) by hand and a mountpoint is still read-only, ProxSave has no record left to clear. Check for the immutable flag and remove it manually while the storage is unmounted:
 ```bash
 lsattr -d /mnt/pve/<id>        # an 'i' in the flags means immutable
 chattr -i /mnt/pve/<id>

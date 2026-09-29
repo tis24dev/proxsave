@@ -414,7 +414,7 @@ func TestRunRestoreWorkflow_ClusterRecoveryModeStopsAndRestartsServices(t *testi
 			"umount /etc/pve": errors.New("not mounted"),
 		},
 	}
-	for _, svc := range []string{"pve-cluster", "pvedaemon", "pveproxy", "pvestatd"} {
+	for _, svc := range []string{"pve-ha-lrm", "pve-ha-crm", "pve-cluster", "pvedaemon", "pveproxy", "pvestatd"} {
 		cmd.Outputs["systemctl stop --no-block "+svc] = []byte("ok")
 		cmd.Outputs["systemctl is-active "+svc] = []byte("inactive\n")
 		cmd.Errors["systemctl is-active "+svc] = errors.New("inactive")
@@ -472,7 +472,9 @@ func TestRunRestoreWorkflow_ClusterRecoveryModeStopsAndRestartsServices(t *testi
 		t.Fatalf("runRestoreWorkflowWithUI error: %v", err)
 	}
 
-	for _, want := range []string{
+	wantCalls := []string{
+		"systemctl stop --no-block pve-ha-lrm",
+		"systemctl stop --no-block pve-ha-crm",
 		"systemctl stop --no-block pve-cluster",
 		"systemctl stop --no-block pvedaemon",
 		"systemctl stop --no-block pveproxy",
@@ -482,7 +484,10 @@ func TestRunRestoreWorkflow_ClusterRecoveryModeStopsAndRestartsServices(t *testi
 		"systemctl start pvedaemon",
 		"systemctl start pveproxy",
 		"systemctl start pvestatd",
-	} {
+		"systemctl start pve-ha-crm",
+		"systemctl start pve-ha-lrm",
+	}
+	for _, want := range wantCalls {
 		found := false
 		for _, call := range cmd.Calls {
 			if call == want {
@@ -494,4 +499,6 @@ func TestRunRestoreWorkflow_ClusterRecoveryModeStopsAndRestartsServices(t *testi
 			t.Fatalf("missing command call %q; calls=%v", want, cmd.Calls)
 		}
 	}
+	// HA down before pmxcfs goes down, back up only after pmxcfs and the API services.
+	assertCallsInOrder(t, cmd.Calls, wantCalls...)
 }

@@ -53,10 +53,13 @@ func buildRestorePlanText(config *SelectiveRestoreConfig) string {
 	}
 
 	b.WriteString("\nFiles/directories that will be restored:\n")
-	allPaths := GetSelectedPaths(config.SelectedCategories)
+	allPaths := GetSelectedPaths(planRestoredCategories(config.SelectedCategories))
 	sort.Strings(allPaths)
 	for _, path := range allPaths {
 		fsPath := strings.TrimPrefix(path, "./")
+		if isBootNeverLivePath(normalizeArchiveEntryPath(path)) {
+			continue
+		}
 		fmt.Fprintf(&b, "  • /%s\n", fsPath)
 	}
 
@@ -71,4 +74,19 @@ func buildRestorePlanText(config *SelectiveRestoreConfig) string {
 	}
 
 	return b.String()
+}
+
+// planRestoredCategories keeps the categories whose paths the extraction writes over
+// the live system: export-only categories go to the export directory, and boot
+// writes nothing from the archive (it merges the backed-up kernel parameters into
+// this host's own file).
+func planRestoredCategories(categories []Category) []Category {
+	var kept []Category
+	for _, cat := range categories {
+		if cat.ExportOnly || cat.ID == "boot" {
+			continue
+		}
+		kept = append(kept, cat)
+	}
+	return kept
 }

@@ -236,3 +236,42 @@ func envContains(env []string, want string) bool {
 	}
 	return false
 }
+
+// A channel NOTIFY_ON filtered did not send, so it is not pinged; but it is still configured, so its
+// row keeps the last real delivery instead of being pruned like a switched-off channel. Yesterday's
+// failed send stays visible while the event-driven check on the monitor is still DOWN for it.
+func TestReportNotifyOutcomesKeepsTheRowOfAFilteredChannel(t *testing.T) {
+	base := t.TempDir()
+	rid := "rid-filtered"
+	yesterday := time.Now().Add(-24 * time.Hour).Unix()
+	if err := health.RecordNotifyPing(base, "self", "notify-telegram", yesterday, true, true, nil); err != nil {
+		t.Fatalf("seed telegram: %v", err)
+	}
+	if err := health.RecordNotifyPing(base, "self", "notify-webhook", yesterday, true, false, nil); err != nil {
+		t.Fatalf("seed webhook: %v", err)
+	}
+	rep := &fakeReporter{checks: map[string]bool{"notify-email": true, "notify-telegram": true, "notify-webhook": true}}
+	d := notifyDaemon(base, "self")
+	results := map[string]string{"Email": "ok", "Telegram": "filtered", "Webhook": "disabled"}
+	if err := health.WriteNotifyResults(base, rid, time.Now().Unix(), results); err != nil {
+		t.Fatalf("WriteNotifyResults: %v", err)
+	}
+
+	d.reportNotifyOutcomes(context.Background(), rep, rid)
+
+	pings := pingByName(rep.snapshot().pings)
+	if len(pings) != 1 || pings["notify-email"].suffix != "/0" {
+		t.Fatalf("want only the notify-email /0 ping, got %#v", pings)
+	}
+	st, err := health.LoadStatus(base)
+	if err != nil {
+		t.Fatalf("LoadStatus: %v", err)
+	}
+	tg := st.Record("notify-telegram")
+	if tg == nil || !tg.Down || tg.TS != yesterday {
+		t.Fatalf("notify-telegram record = %+v; want yesterday's failed send kept as it was", tg)
+	}
+	if r := st.Record("notify-webhook"); r != nil {
+		t.Fatalf("a switched-off channel is still pruned, got %+v", r)
+	}
+}

@@ -175,7 +175,7 @@ New key runs the AGE encryption setup, the same as `proxsave --newkey`. See [ENC
 The single `Install` row opens a small chooser:
 
 - `Edit install` re-runs the installer against your current configuration (`--install`).
-- `Wipe install` resets the installation directory, preserving `build`, `env` and `identity`, then runs the installer (`--new-install`). It asks you to confirm the destructive wipe first.
+- `Wipe install` resets the installation directory, preserving `build`, `env`, `guards`, `identity` and `restore`, then runs the installer (`--new-install`). It asks you to confirm the destructive wipe first.
 - `Back` returns to the menu.
 
 See [INSTALL.md](INSTALL.md).

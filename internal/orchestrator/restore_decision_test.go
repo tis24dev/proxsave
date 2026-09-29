@@ -205,6 +205,55 @@ func TestAnalyzeRestoreArchive_ClusterPayloadUsesArchiveContents(t *testing.T) {
 	}
 }
 
+// Every PVE node has /var/lib/pve-cluster/config.db, so a pve_cluster payload in a
+// standalone backup is the normal case: it used to log "Cluster payload detected in
+// archive despite metadata reporting non-cluster backup" on every standalone restore.
+// The other mismatch, cluster metadata without the payload, still warns.
+func TestAnalyzeRestoreArchive_ClusterMismatchWarnings(t *testing.T) {
+	origRestoreFS := restoreFS
+	t.Cleanup(func() { restoreFS = origRestoreFS })
+	restoreFS = osFS{}
+
+	cases := []struct {
+		name     string
+		files    map[string]string
+		wantWarn bool
+	}{
+		{
+			name: "standalone with config.db",
+			files: map[string]string{
+				"var/lib/pve-cluster/config.db":             "db\n",
+				"var/lib/proxsave-info/backup_metadata.txt": "BACKUP_TYPE=pve\nPVE_CLUSTER_MODE=standalone\nHOSTNAME=node1\n",
+			},
+		},
+		{
+			name: "cluster without config.db",
+			files: map[string]string{
+				"etc/hostname": "node1\n",
+				"var/lib/proxsave-info/backup_metadata.txt": "BACKUP_TYPE=pve\nPVE_CLUSTER_MODE=cluster\nHOSTNAME=node1\n",
+			},
+			wantWarn: true,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			archivePath := filepath.Join(t.TempDir(), "backup.tar")
+			if err := writeTarFile(archivePath, tc.files); err != nil {
+				t.Fatalf("writeTarFile: %v", err)
+			}
+			logger := logging.New(logging.GetDefaultLogger().GetLevel(), false)
+			var out bytes.Buffer
+			logger.SetOutput(&out)
+			if _, _, err := AnalyzeRestoreArchive(archivePath, logger); err != nil {
+				t.Fatalf("AnalyzeRestoreArchive() error: %v", err)
+			}
+			if got := logger.HasWarnings(); got != tc.wantWarn {
+				t.Fatalf("HasWarnings()=%v; want %v; log:\n%s", got, tc.wantWarn, out.String())
+			}
+		})
+	}
+}
+
 func TestCollectRestoreArchiveFacts_RejectsOversizedMetadata(t *testing.T) {
 	archivePath := filepath.Join(t.TempDir(), "backup.tar")
 	oversized := "BACKUP_TYPE=pbs\nHOSTNAME=pbs-node\n" + strings.Repeat("A", restoreDecisionMetadataMaxBytes)

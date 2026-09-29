@@ -295,11 +295,15 @@ func armNetworkRollback(ctx context.Context, logger *logging.Logger, backupPath 
 		return nil, fmt.Errorf("create rollback directory: %w", err)
 	}
 	timestamp := nowRestore().Format("20060102_150405")
+	logPath, err := rollbackLogPath(fmt.Sprintf("network_rollback_%s.log", timestamp))
+	if err != nil {
+		return nil, err
+	}
 	handle = &networkRollbackHandle{
 		workDir:    baseDir,
 		markerPath: filepath.Join(baseDir, fmt.Sprintf("network_rollback_pending_%s", timestamp)),
 		scriptPath: filepath.Join(baseDir, fmt.Sprintf("network_rollback_%s.sh", timestamp)),
-		logPath:    filepath.Join(baseDir, fmt.Sprintf("network_rollback_%s.log", timestamp)),
+		logPath:    logPath,
 		armedAt:    time.Now(),
 		timeout:    timeout,
 	}
@@ -678,7 +682,10 @@ func rollbackNetworkFilesNow(ctx context.Context, logger *logging.Logger, backup
 	timestamp := nowRestore().Format("20060102_150405")
 	markerPath := filepath.Join(baseDir, fmt.Sprintf("network_rollback_now_pending_%s", timestamp))
 	scriptPath := filepath.Join(baseDir, fmt.Sprintf("network_rollback_now_%s.sh", timestamp))
-	logPath = filepath.Join(baseDir, fmt.Sprintf("network_rollback_now_%s.log", timestamp))
+	logPath, err = rollbackLogPath(fmt.Sprintf("network_rollback_now_%s.log", timestamp))
+	if err != nil {
+		return "", err
+	}
 
 	logging.DebugStep(logger, "rollback network files", "Write rollback marker: %s", markerPath)
 	if err := restoreFS.WriteFile(markerPath, []byte("pending\n"), 0o640); err != nil {
@@ -713,6 +720,7 @@ func buildRollbackScript(markerPath, backupPath, logPath string, restartNetworki
 		"#!/bin/sh",
 		"set -eu",
 		fmt.Sprintf("LOG=%s", shellQuote(logPath)),
+		rollbackLogProbe,
 		fmt.Sprintf("MARKER=%s", shellQuote(markerPath)),
 		fmt.Sprintf("BACKUP=%s", shellQuote(backupPath)),
 		// RUNNING signals that the revert is actually in progress: it is written

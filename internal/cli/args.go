@@ -148,7 +148,7 @@ func Parse() *Args {
 	flag.BoolVar(&args.LocalFile, "localfile", false,
 		"With --upgrade: skip the release check and download, and finalize using the binary already on disk (upgrade backup.env, refresh docs/symlinks, install/restart the daemon, fix permissions). Used by upgrade-beta.sh after it swaps in a binary")
 	flag.BoolVar(&args.CleanupGuards, "cleanup-guards", false,
-		"Cleanup ProxSave guard bind mounts and directories (/var/lib/proxsave/guards). Use with --dry-run to preview")
+		"Cleanup ProxSave guard bind mounts and directories (<BASE_DIR>/guards, and /var/lib/proxsave/guards from older versions). Use with --dry-run to preview")
 
 	flag.BoolVar(&args.UpgradeConfig, "upgrade-config", false,
 		"Upgrade configuration file using the embedded template (adds missing keys, preserves existing and custom keys)")

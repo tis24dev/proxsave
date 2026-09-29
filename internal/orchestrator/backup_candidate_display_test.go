@@ -178,3 +178,21 @@ func TestDescribeBackupCandidate_SanitizesManifestFields(t *testing.T) {
 		t.Fatalf("Summary lost legitimate hostname text: %q", display.Summary)
 	}
 }
+
+// TestDescribeBackupCandidate_UnknownVersion pins the line the restore and decrypt lists
+// print for an archive whose detection found no version, as captured on a PVE 9.2.2 host
+// with pve-manager purged. It read "PVE vunknown (standalone)".
+func TestDescribeBackupCandidate_UnknownVersion(t *testing.T) {
+	cand := &backupCandidate{
+		DisplayBase: "backup.tar.xz",
+		Manifest: &backup.Manifest{
+			ProxmoxTargets: []string{"pve"},
+			ProxmoxType:    "pve",
+			ProxmoxVersion: "unknown",
+			ClusterMode:    "standalone",
+		},
+	}
+	if got := describeBackupCandidate(cand).Target; got != "PVE unknown (standalone)" {
+		t.Fatalf("Target=%q, want %q", got, "PVE unknown (standalone)")
+	}
+}

@@ -151,7 +151,9 @@ Examples:
 - `pve` backup on `dual` host: restore `PVE + Common`
 
 When compatibility is partial, ProxSave automatically filters selectable
-restore categories to the roles supported by the current host.
+restore categories to the roles supported by the current host. On a host that
+runs one role only, the categories of the other role are extracted to the
+export directory instead of being written to the system, in every restore mode.
 
 `unknown` hosts can still use export-oriented or common-only workflows, but
 ProxSave warns because role-specific compatibility cannot be verified.
@@ -163,6 +165,7 @@ ProxSave warns because role-specific compatibility cannot be verified.
 - Custom scripts and cron jobs
 - ZFS configurations and pool cache
 - Backup jobs and scheduled tasks
+- Kernel parameters set on the backed-up host (IOMMU, VFIO, ...), merged into the restore host's boot configuration (`boot` category)
 
 ### What Does NOT Get Restored
 
@@ -176,10 +179,10 @@ ProxSave warns because role-specific compatibility cannot be verified.
 ## Category System
 
 Restore operations are organized into categories that group related configuration
-files. The code defines **32 categories** in total: **11 PVE**, **9 PBS**, and **12
-Common**. A host only sees the categories relevant to it: a **PVE host sees 23** (11
-PVE + 12 Common) and a **PBS host sees 21** (9 PBS + 12 Common); a `dual` host sees all
-32.
+files. The code defines **33 categories** in total: **11 PVE**, **9 PBS**, and **13
+Common**. A host only sees the categories relevant to it: a **PVE host sees 24** (11
+PVE + 13 Common) and a **PBS host sees 22** (9 PBS + 13 Common); a `dual` host sees all
+33.
 
 ### Category Handling Types
 
@@ -225,7 +228,7 @@ API apply is automatic for supported PBS staged categories, and file-based fallb
 | `pbs_access_control` | PBS Access Control | **Staged** access control + secrets restored 1:1 (root@pam safety rail) | `./etc/proxmox-backup/user.cfg`<br>`./etc/proxmox-backup/domains.cfg`<br>`./etc/proxmox-backup/acl.cfg`<br>`./etc/proxmox-backup/token.cfg`<br>`./etc/proxmox-backup/shadow.json`<br>`./etc/proxmox-backup/token.shadow`<br>`./etc/proxmox-backup/tfa.json`<br>`./var/lib/proxsave-info/commands/pbs/user_list.json`<br>`./var/lib/proxsave-info/commands/pbs/realms_ldap.json`<br>`./var/lib/proxsave-info/commands/pbs/realms_ad.json`<br>`./var/lib/proxsave-info/commands/pbs/realms_openid.json`<br>`./var/lib/proxsave-info/commands/pbs/acl_list.json` |
 | `pbs_tape` | PBS Tape Backup | **Staged** tape config, jobs and encryption keys | `./etc/proxmox-backup/tape.cfg`<br>`./etc/proxmox-backup/tape-job.cfg`<br>`./etc/proxmox-backup/media-pool.cfg`<br>`./etc/proxmox-backup/tape-encryption-keys.json`<br>`./var/lib/proxsave-info/commands/pbs/tape_drives.json`<br>`./var/lib/proxsave-info/commands/pbs/tape_changers.json`<br>`./var/lib/proxsave-info/commands/pbs/tape_pools.json` |
 
-### Common Categories (12 categories)
+### Common Categories (13 categories)
 
 | Category | Name | Description | Paths |
 |----------|------|-------------|-------|
@@ -236,11 +239,12 @@ API apply is automatic for supported PBS staged categories, and file-based fallb
 | `ssh` | SSH Configuration | SSH keys and authorized_keys | `./root/.ssh/`<br>`./etc/ssh/` |
 | `scripts` | Custom Scripts | User scripts and tools | `./usr/local/bin/`<br>`./usr/local/sbin/` |
 | `crontabs` | Scheduled Tasks | Cron jobs and systemd timers | `./etc/cron.d/`<br>`./etc/crontab`<br>`./var/spool/cron/` |
-| `services` | System Services | Systemd service configs and related system settings | `./etc/systemd/system/`<br>`./etc/default/`<br>`./etc/udev/rules.d/`<br>`./etc/apt/`<br>`./etc/logrotate.d/`<br>`./etc/timezone`<br>`./etc/sysctl.conf`<br>`./etc/sysctl.d/`<br>`./etc/modprobe.d/`<br>`./etc/modules`<br>`./etc/iptables/`<br>`./etc/nftables.conf`<br>`./etc/nftables.d/` |
+| `services` | System Services | Systemd service configs and related system settings. `/etc/modprobe.d/zfs.conf` is **not written** when this host has its own and it differs: the PVE installer sets `zfs_arc_max` there to 10% of the RAM it found, so the old machine's limit would cap the ARC on more RAM or take memory from the guests on less. A warning gives both values and the backup's copy goes to the export directory. A host without a `zfs.conf` gets the backup's | `./etc/systemd/system/`<br>`./etc/default/`<br>`./etc/udev/rules.d/`<br>`./etc/apt/`<br>`./etc/logrotate.d/`<br>`./etc/timezone`<br>`./etc/sysctl.conf`<br>`./etc/sysctl.d/`<br>`./etc/modprobe.d/`<br>`./etc/modules`<br>`./etc/iptables/`<br>`./etc/nftables.conf`<br>`./etc/nftables.d/` |
 | `accounts` | System Accounts & Auth (WARNING) | Local system accounts and sudo policy, applied with a **safe merge** for `passwd`/`group`/`shadow`/`gshadow` that preserves the current host root and system accounts. `/etc/sudoers` is **replaced wholesale** with the backed-up file once `visudo -c` passes, so sudo rules added since the backup are lost; `/etc/sudoers.d` is not part of the category | `./etc/passwd`<br>`./etc/group`<br>`./etc/shadow`<br>`./etc/gshadow`<br>`./etc/sudoers` |
 | `user_data` | User Data (Home Directories) | Root and user home directories (/root and /home) | `./root/`<br>`./home/` |
-| `zfs` | ZFS Configuration | ZFS pool cache and configs | `./etc/zfs/`<br>`./etc/hostid` |
-| `proxsave_info` | ProxSave Diagnostics (Export Only) | **Export-only** ProxSave command outputs and inventory reports (never written to system) | `./var/lib/proxsave-info/`<br>`./manifest.json` |
+| `zfs` | ZFS Configuration | ZFS pool cache and configs. `/etc/hostid` is **not written** when this host has ZFS pools imported under a different hostid, or when its pools cannot be listed: a pool records the hostid it was imported under, and an initramfs rebuilt with another one refuses to import it (for a root pool, the host stops at boot). A warning gives both values. With no pool imported it is written, so pools on disks moved from the old host import under their own hostid. The same rule keeps this host's `/etc/zfs/zpool.cache` and `/etc/zfs/zfs-list.cache/`: another host's cache makes `zfs-import-cache.service` fail at boot and leaves this host's data pools out (PVE brings back a pool that is a `zfspool` storage; a PBS datastore or a manually mounted pool stays out) | `./etc/zfs/`<br>`./etc/hostid` |
+| `boot` | Boot Configuration (Kernel Command Line) | Kernel parameters of the backed-up host (IOMMU, VFIO, ...) **merged** into this host's boot configuration, then initramfs and bootloader rebuilt; see [Kernel Command Line Merge](#11-kernel-command-line-merge-boot-category). Not in BASE or STORAGE | `./var/lib/proxsave-info/commands/system/kernel_cmdline.txt` (the source)<br>`./etc/default/grub`, `./etc/kernel/cmdline` (the live files the merge may write, listed so the safety backup covers them) |
+| `proxsave_info` | ProxSave Diagnostics (Export Only) | **Export-only** ProxSave command outputs and inventory reports, and the backed-up host's boot files (GRUB, kernel command line, ESP list) (never written to system) | `./var/lib/proxsave-info/`<br>`./manifest.json`<br>`./etc/default/grub`<br>`./etc/default/grub.d/`<br>`./etc/kernel/cmdline`<br>`./etc/kernel/proxmox-boot-uuids` |
 
 ### Category Availability
 
@@ -312,8 +316,9 @@ Four predefined modes provide common restoration scenarios, plus custom selectio
 - **Export-only** categories (e.g. `pve_config_export`, `pbs_config`) are extracted to the export directory for manual review/application
 - On a `dual` host, FULL restore can include PVE, PBS, and Common categories in
   the same run
-- On a single-role host restoring a `dual` backup, ProxSave automatically
-  filters the FULL selection to compatible categories
+- On a single-role host restoring a `dual` backup, the categories of the other
+  role are extracted to the export directory instead of being written to the
+  system
 
 **Command Flow**:
 ```text
@@ -472,7 +477,8 @@ Phase 6: Cluster Restore Mode (PVE backups carrying pve_cluster)
   ├─ Detect the pve_cluster payload in the archive (not the manifest ClusterMode)
   ├─ Prompt: SAFE (export+API) vs RECOVERY (full restore)
   ├─ SAFE: Redirect pve_cluster to export-only, apply via pvesh
-  └─ RECOVERY: Proceed with direct database restore
+  └─ RECOVERY: Probe the quorum (pvecm status); refuse a quorate cluster with more than 1 node online,
+     otherwise proceed with direct database restore
 
 Phase 7: Restore Plan & Confirmation
   ├─ Display detailed restore plan
@@ -487,9 +493,10 @@ Phase 8: Safety Backup
 
 Phase 9: Service Management (PVE Cluster Restore)
   ├─ Detect if pve_cluster category selected (RECOVERY mode)
-  ├─ Stop: pve-cluster, pvedaemon, pveproxy, pvestatd
+  ├─ Stop: pve-ha-lrm, pve-ha-crm, then pve-cluster, pvedaemon, pveproxy, pvestatd
   ├─ Unmount /etc/pve
-  └─ Defer restart for after restore
+  └─ Restart right after the cluster database is written (not at the end of the run):
+     pve-cluster, pvedaemon, pveproxy, pvestatd, then pve-ha-crm, pve-ha-lrm
 
 Phase 10: Service Management (PBS Restore)
   ├─ Detect if PBS-specific categories selected
@@ -623,6 +630,18 @@ Cluster backup detected. Choose how to restore the cluster database:
 Choice: _
 ```
 
+When RECOVERY is chosen and the node has a `corosync.conf` (`/etc/pve/corosync.conf` or `/etc/corosync/corosync.conf`), ProxSave runs `pvecm status` before any restore step:
+
+| `pvecm status` reports | Result |
+|---|---|
+| Quorate, more than 1 node online | The restore stops: `Cluster RECOVERY refused - quorate cluster, N nodes online: its copy would replace the restored config.db` |
+| Quorate, 1 node online | Proceeds |
+| Not quorate | Proceeds |
+| Cannot be read (pvecm is not installed, fails, times out, or prints no `Quorate:` line), or quorate with a `Nodes:` count that is not a number, and `systemctl is-active corosync` says `inactive` or `failed` | Proceeds, with the warning `Cluster RECOVERY - quorum unknown (<reason>), corosync inactive, proceeding` (or `failed`) |
+| Same, with corosync in any other state (`active`, `activating`, ...) or a state that cannot be read | The restore stops before anything is stopped or written: `Cluster RECOVERY refused - quorum unknown (<reason>), corosync <state>: in a quorate cluster, its copy would replace the restored config.db` |
+
+A node without `corosync.conf` (standalone) proceeds without the probe. The refusal exists because on a member of a quorate cluster the restored `config.db` does not survive: when `pve-cluster` starts again, pmxcfs syncs from the cluster leader and the leader's copy replaces the restored one. pvecm also fails when pmxcfs is down (no `/etc/pve/corosync.conf`) while corosync is up and quorate with its peers; `pve-cluster` would then start again and sync from the leader. So a quorum that cannot be read lets the restore proceed only when systemctl shows corosync stopped, which is also the state after `systemctl stop corosync`. Isolate the node first (see [CLUSTER_RECOVERY.md](CLUSTER_RECOVERY.md)), or use SAFE.
+
 See [Cluster Restore Modes](#cluster-restore-modes-safe-vs-recovery) for detailed explanation.
 
 #### Phase 7: Restore Plan
@@ -682,6 +701,8 @@ Categories to restore:
 Type 'RESTORE' to proceed or 'cancel' to abort:
 ```
 
+The file list names what the extraction writes over the system. Export-only categories (their files go to the export directory), the `boot` category (it merges kernel parameters into this host's own file) and the backed-up host's boot files (never written) are not in it.
+
 Confirmation is **two stages**. After you type `RESTORE` (or, in the TUI, press the
 `RESTORE` button), ProxSave asks a second, explicit overwrite question before touching
 anything:
@@ -700,10 +721,9 @@ In the TUI this second gate is a danger-styled confirm with `Overwrite and resto
 ```text
 Creating safety backup of existing files...
 Safety backup created successfully.
-Safety backup location: /tmp/proxsave/restore_backup_20251120_143052.tar.gz
+Safety backup location: /opt/proxsave/restore/20251120_143052/restore_backup_20251120_143118.tar.gz
 
-You can restore from this backup if needed using:
-  tar -xzf /tmp/proxsave/restore_backup_20251120_143052.tar.gz -C /
+Safety backup - holds the current versions of the files this restore overwrites (tar.gz, paths relative to /)
 ```
 
 #### Phase 9: Service Management (PVE Cluster)
@@ -712,6 +732,8 @@ You can restore from this backup if needed using:
 ```text
 Preparing system for cluster database restore: stopping PVE services and unmounting /etc/pve
 
+Stopping pve-ha-lrm...
+Stopping pve-ha-crm...
 Stopping pve-cluster...
 Stopping pvedaemon...
 Stopping pveproxy...
@@ -721,6 +743,12 @@ All PVE services stopped successfully.
 Unmounting /etc/pve...
 Successfully unmounted /etc/pve
 ```
+
+The HA services are stopped first: `pve-ha-lrm` keeps the node's watchdog open, and with `pve-cluster` down for 60 seconds that watchdog expires and the node is hard-reset (fenced). Stopping the LRM freezes its HA resources and closes the watchdog cleanly; stopping the CRM releases its lock so another node takes over as master.
+
+`pve-ha-lrm` is never signalled: it gets one `systemctl stop --no-block` and up to 180 seconds to go inactive. If it is still active after that, ProxSave runs `systemctl start pve-ha-lrm`, which cancels the queued stop and leaves the LRM running, and the restore stops with `failed to stop PVE services (pve-ha-lrm)`. Its stop waits for the CRM master to acknowledge the freeze; when the old master is a node that went down, its lock only times out about 120 seconds after it died (measured: 93 seconds on an isolated node whose old master was powered off). A SIGKILL before the LRM closes its watchdog would fence the node. The other services keep the escalating stop (blocking stop, then SIGTERM, then SIGKILL).
+
+The services are started again as soon as the cluster database has been written, before the later steps (network apply, boot rebuild): `pve-cluster`, `pvedaemon`, `pveproxy`, `pvestatd`, then `pve-ha-crm` and `pve-ha-lrm`. If the restore fails before that point, they are started when the run ends. A unit that fails to start does not stop the others, except that `pve-ha-crm` and `pve-ha-lrm` are not started while `pve-cluster` is down (the LRM would arm the watchdog without pmxcfs). There is one attempt per restore, of three tries per unit; the restore goes on, and its closing advice names the units left down.
 
 #### Phase 10: Service Management (PBS)
 
@@ -743,7 +771,7 @@ Continue restore with PBS services still running? (y/N): _
 
 ```text
 Extracting selected categories from archive into /
-Detailed restore log: /tmp/proxsave/restore_20251120_143052.log
+Detailed restore log: /opt/proxsave/restore/20251120_143052/restore_20251120_143409_1.log
 
 Extracting: /var/lib/pve-cluster/config.db
 Extracting: /var/lib/pve-cluster/.version
@@ -784,13 +812,13 @@ RESTORE COMPLETED
 
 Restore completed successfully.
 Temporary decrypted bundle removed.
-Detailed restore log: /tmp/proxsave/restore_20251120_143052.log
+Detailed restore log: /opt/proxsave/restore/20251120_143052/restore_20251120_143409_1.log
 Export directory: /opt/proxsave/proxmox-config-export-20251120-143052/
-Safety backup preserved at: /tmp/proxsave/restore_backup_20251120_143052.tar.gz
-Remove it manually if restore was successful: rm /tmp/proxsave/restore_backup_20251120_143052.tar.gz
+Safety backup preserved at: /opt/proxsave/restore/20251120_143052/restore_backup_20251120_143118.tar.gz
+Safety backup - kept until removed, ProxSave never deletes it
 
-IMPORTANT: You may need to restart services for changes to take effect.
-  PVE services were stopped/restarted during restore; verify status with: pvecm status
+Services - some restored files take effect only when the services that read them restart
+  PVE services - stopped and started again during this restore
 REBOOT RECOMMENDED: Reboot the node (or at least restart networking and core services) so hostname/IP and service changes from the restore are fully applied.
 
 Recreating storage directories from /etc/pve/storage.cfg...
@@ -839,10 +867,10 @@ Cluster payload detected. Choose how to restore the cluster database:
 > 2
 
 Preparing system for cluster database restore: stopping PVE services...
-Stopping pve-cluster, pvedaemon, pveproxy, pvestatd...
+Stopping pve-ha-lrm, pve-ha-crm, pve-cluster, pvedaemon, pveproxy, pvestatd...
 Unmounting /etc/pve...
 Extracting /var/lib/pve-cluster/config.db...
-Restarting PVE services...
+Restarting PVE services (pve-cluster, pvedaemon, pveproxy, pvestatd, pve-ha-crm, pve-ha-lrm)...
 ```
 
 ### Cluster Restore - SAFE Mode
@@ -879,6 +907,7 @@ When restoring from a **cluster backup** and selecting **RECOVERY mode** (option
 1. **Direct database restore** - The selected `pve_cluster` payload, including `config.db`, is restored
 2. **WARNING displayed** - User must confirm node isolation
 3. **Split-brain risk** - CRITICAL to isolate node before proceeding
+4. **Quorum probe** - A node that is a member of a quorate cluster with more than 1 node online is refused before anything is stopped or written: its cluster would replace the restored `config.db` as soon as `pve-cluster` starts again (see [Phase 6](#phase-6-cluster-restore-mode-pve-backups-carrying-pve_cluster))
 
 ```text
 Cluster backup detected. Choose how to restore:
@@ -890,6 +919,12 @@ Ensure other nodes are ISOLATED before proceeding!
 
 Preparing system for cluster database restore...
 [Same flow as Standalone]
+```
+
+On a node that is still quorate with its peers, the run stops at this point instead:
+
+```text
+Cluster RECOVERY refused - quorate cluster, 3 nodes online: its copy would replace the restored config.db
 ```
 
 ### When to Use Each Mode
@@ -969,10 +1004,11 @@ Each action prompts for confirmation before execution.
 #### Option 2: RECOVERY Mode (Full Cluster Restore)
 
 **What it does**:
-- Stops PVE cluster services (pve-cluster, pvedaemon, pveproxy, pvestatd)
+- Probes the quorum with `pvecm status` and refuses a quorate cluster with more than 1 node online
+- Stops the HA services (pve-ha-lrm, pve-ha-crm), then the PVE cluster services (pve-cluster, pvedaemon, pveproxy, pvestatd)
 - Unmounts `/etc/pve` FUSE filesystem
 - Writes directly to `/var/lib/pve-cluster/config.db`
-- Restarts services with restored configuration
+- Restarts the services with the restored configuration right after that write, before the later restore steps
 - Avoids restoring files under `/etc/pve/*` while pmxcfs is stopped/unmounted (to prevent "shadowed" writes on the underlying disk). Those files are expected to come from the restored `config.db`.
 
 **When to use**:
@@ -1022,11 +1058,15 @@ When restoring the `pve_cluster` category, the workflow automatically:
 
 **Stops services** (in order):
 ```text
-1. pve-cluster  → Stops pmxcfs, unmounts /etc/pve
-2. pvedaemon    → Stops API daemon
-3. pveproxy     → Stops web interface
-4. pvestatd     → Stops statistics collection
+1. pve-ha-lrm   → Freezes HA resources, closes the watchdog cleanly (no-block stop, up to 180 s, never killed)
+2. pve-ha-crm   → Releases the CRM lock; the master moves to another node
+3. pve-cluster  → Stops pmxcfs, unmounts /etc/pve
+4. pvedaemon    → Stops API daemon
+5. pveproxy     → Stops web interface
+6. pvestatd     → Stops statistics collection
 ```
+
+The HA services go first because `pve-ha-lrm` left running while pmxcfs is down lets its watchdog expire after 60 seconds, and the node is hard-reset (fenced) in the middle of the restore.
 
 **Unmounts filesystem**:
 ```bash
@@ -1038,13 +1078,17 @@ umount /etc/pve
 - Includes config.db and all related files
 - Preserves permissions and ownership
 
-**Restarts services** (in order):
+**Restarts services** (in order), right after the cluster database is written and before the later steps (network apply, boot rebuild); if the restore fails before that point, when the run ends:
 ```text
 1. pve-cluster  → Starts pmxcfs, reads restored config.db, remounts /etc/pve
 2. pvedaemon    → Reads cluster config from /etc/pve
 3. pveproxy     → Connects to pvedaemon
 4. pvestatd     → Resumes statistics
+5. pve-ha-crm   → Rejoins the CRM election
+6. pve-ha-lrm   → Resumes the HA resources it froze
 ```
+
+Because the services are already running when the network is applied, the post-apply network health check runs its PVE checks (`pvecm status`, ports, services) in RECOVERY as in any other restore.
 
 ### Service Stop/Restart Flow
 
@@ -1069,6 +1113,9 @@ Before Restore:
   └─────────────┘
 
 Stop Phase:
+  systemctl stop --no-block pve-ha-lrm ← Wait up to 180 s, never killed;
+                                         watchdog closed, HA resources frozen
+  systemctl stop pve-ha-crm
   systemctl stop pve-cluster  ← /etc/pve unmounted
   systemctl stop pvedaemon
   systemctl stop pveproxy
@@ -1079,12 +1126,16 @@ Restore Phase:
   Extract: /var/lib/pve-cluster/config.db
   Extract: /var/lib/pve-cluster/* (all files)
 
-Restart Phase (deferred):
+Restart Phase (right after the extraction):
   systemctl start pve-cluster ← Reads restored config.db
                                ← Remounts /etc/pve
   systemctl start pvedaemon   ← Reads /etc/pve config
   systemctl start pveproxy
   systemctl start pvestatd
+  systemctl start pve-ha-crm
+  systemctl start pve-ha-lrm
+
+Later steps (network apply, boot rebuild) run with the services up.
 
 After Restore:
   ┌─────────────┐
@@ -1234,7 +1285,8 @@ journalctl -xe -u pve-cluster
 # - Certificate issues
 
 # Solution: Restore from safety backup
-tar -xzf /tmp/proxsave/restore_backup_*.tar.gz -C /
+# TIMESTAMP: the directory of the restore to undo, from its "Safety backup preserved at:" line
+tar -xzf /opt/proxsave/restore/TIMESTAMP/restore_backup_*.tar.gz -C /
 systemctl restart pve-cluster pvedaemon pveproxy pvestatd
 ```
 
@@ -1337,16 +1389,16 @@ Pass 1: Normal Categories
   ├─ Destination: / (system root)
   ├─ Categories: All non-export-only
   ├─ Safety backup: Created before extraction
-  └─ Log: /tmp/proxsave/restore_TIMESTAMP.log
+  └─ Log: /opt/proxsave/restore/TIMESTAMP/restore_<extraction timestamp>_<seq>.log
 
 Pass 2: Export-Only Categories
   ├─ Destination: <BASE_DIR>/proxmox-config-export-YYYYMMDD-HHMMSS/
   ├─ Categories: Export-only (e.g. pve_config_export, pbs_config)
   ├─ Safety backup: Not created (not overwriting system)
-  └─ Log: Separate section in same log file
+  └─ Log: Its own file in the same directory, restore_<extraction timestamp>_<seq>.log
 
 Pass 3: Staged Categories
-  ├─ Destination: /tmp/proxsave/restore-stage-*
+  ├─ Destination: /tmp/proxsave/restore-stage-* (deleted when the restore ends)
   ├─ Categories: Sensitive staged apply (e.g. network, notifications, access control)
   └─ Apply: Written after extraction via safe file/API apply steps
 ```
@@ -1929,11 +1981,11 @@ Multiple layers of protection prevent data loss and corruption during restore.
 
 ### 1. Safety Backup
 
-**Automatic** backup before any changes are written, on the selective restore path.
+**Automatic** backup before any changes are written, on the selective restore path and on the full-restore fallback.
 
-> There is one path without it. If ProxSave cannot analyse the archive's categories it announces `Backup category analysis failed; ProxSave will run a full restore (no selective modes)` and, after the same two confirmations, extracts the whole archive onto `/`. That flow takes **no safety backup**, does not stop the PVE or PBS services, and does not separate export-only categories, so there is no rollback tarball afterwards. If you see that message and you are not certain, abort and take your own copy first.
+> The full-restore fallback runs when ProxSave cannot analyse the archive's categories: it announces `Backup category analysis failed; ProxSave will run a full restore (no selective modes)` and, after confirmation, extracts the whole archive onto `/`. It takes this safety backup first, but not the network, firewall, HA and access control rollback archives, since it runs none of the transactional applies they undo. On a PBS host it stops the PBS services when the plan includes PBS categories. It does not stop `pve-cluster` and does not write the cluster database (`/var/lib/pve-cluster/`), since it cannot tell whether the archive holds usable cluster data. Export-only categories, and on a single-role host the categories of the other product, are kept off the live system.
 
-**Location**: `/tmp/proxsave/restore_backup_YYYYMMDD_HHMMSS.tar.gz`
+**Location**: `<BASE_DIR>/restore/YYYYMMDD_HHMMSS/restore_backup_YYYYMMDD_HHMMSS.tar.gz` (`/opt/proxsave/restore/...` by default) (outside `/tmp`, so it survives the reboot the restore recommends)
 
 **Contents**:
 - All files that will be overwritten by restore
@@ -1942,7 +1994,7 @@ Multiple layers of protection prevent data loss and corruption during restore.
 
 **Rollback Command**:
 ```bash
-tar -xzf /tmp/proxsave/restore_backup_20251120_143052.tar.gz -C /
+tar -xzf /opt/proxsave/restore/20251120_143052/restore_backup_20251120_143118.tar.gz -C /
 ```
 
 **If Safety Backup Fails**:
@@ -2018,11 +2070,11 @@ new network configuration immediately using a **transactional rollback timer**.
 
 **How it works**:
 - On live restores (writing to `/`), ProxSave **stages** network files first under `/tmp/proxsave/restore-stage-*` and does **not** overwrite `/etc/network/*` during archive extraction.
-- After extraction, ProxSave performs a prevention-first **staged install**: it writes the staged files to disk (no reload), runs safe NIC repair + preflight validation, and **rolls back automatically** if validation fails (leaving the staged copy for review).
+- After extraction, ProxSave performs a prevention-first **staged install**: it writes the staged files to disk (no reload), runs safe NIC repair + preflight validation, and **rolls back automatically** if validation fails (leaving the staged copy for review until the restore ends, when the staging directory is deleted).
 - If rollback backup creation fails (or ProxSave is not running as root), ProxSave keeps network files staged and avoids writing to `/etc`.
 - When you choose to apply live, ProxSave (re)validates and reloads networking inside the rollback timer window.
 - ProxSave arms a local rollback job **before** applying changes
-- Rollback restores **only network-related files** using a dedicated archive under `/tmp/proxsave/network_rollback_backup_*` (so it won't undo other restored categories)
+- Rollback restores **only network-related files** using a dedicated archive under `/opt/proxsave/restore/<timestamp>/network_rollback_backup_*` (so it won't undo other restored categories)
 - Rollback also prunes network config files that were **created after** the backup (e.g. extra files under `/etc/network/interfaces.d/`), so rollback returns to the exact pre-restore state
 - The user has **180 seconds** to type `COMMIT`
 - If `COMMIT` is not received, ProxSave triggers the rollback and restores the pre-restore network configuration
@@ -2034,7 +2086,7 @@ This protects SSH/GUI access during network changes.
 - After applying changes, ProxSave runs local checks (SSH route if available, default route, link state, IP addresses, gateway ping, DNS config/resolve, local web UI port)
 - On PVE systems, additional checks are included for cluster networking: `/etc/pve` (pmxcfs) mount status, `pve-cluster` / `corosync` service state, and `pvecm status` quorum
 - The result is shown to help decide whether to type `COMMIT`
-- Diagnostics are saved under `/tmp/proxsave/network_apply_*` (snapshots `before.txt` / `after.txt` / `after_rollback.txt` when relevant, `health_before.txt` / `health_after.txt`, `preflight.txt`, `plan.txt`, and `ifquery_*`)
+- Diagnostics are saved under `/opt/proxsave/restore/<timestamp>/network_apply_*` (snapshots `before.txt` / `after.txt` / `after_rollback.txt` when relevant, `health_before.txt` / `health_after.txt`, `preflight.txt`, `plan.txt`, and `ifquery_*`)
 
 **NIC name repair**:
 - If physical NIC names changed after reinstall (e.g. `eno1` → `enp3s0`), ProxSave attempts an automatic mapping using backup network inventory (permanent MAC / MAC / PCI path / udev IDs like `ID_PATH`, `ID_NET_NAME_PATH`, `ID_NET_NAME_SLOT`, `ID_SERIAL`)
@@ -2042,12 +2094,12 @@ This protects SSH/GUI access during network changes.
 - If you skip live network apply, ProxSave may still install the staged config to disk (no reload) after safe NIC repair + preflight; if validation fails, it rolls back and keeps the staged copy.
 - If a mapping would overwrite an interface name that already exists on the current system, ProxSave prompts before applying it (conflict-safe)
 - If persistent NIC naming rules are detected (custom udev `NAME=` rules or systemd `.link` files), ProxSave warns and prompts before applying NIC repair to avoid conflicts with user-intended naming
-- A backup of the pre-repair files is stored under `/tmp/proxsave/nic_repair_*`
+- A backup of the pre-repair files is stored under `/opt/proxsave/restore/<timestamp>/nic_repair_*`
 
 **Preflight validation**:
 - After NIC repair, ProxSave runs a **gate** validation of the ifupdown configuration before reloading networking (e.g. `ifup -n -a` / `ifup --no-act -a` / `ifreload --syntax-check -a`)
-- If validation fails, live apply is aborted and the validator output is saved under `/tmp/proxsave/network_apply_*/preflight.txt`
-- Additionally (diagnostics-only), ProxSave can run `ifquery --check -a` **before and after apply** to show how the runtime state matches the target config. Its output is saved under `/tmp/proxsave/network_apply_*/ifquery_*`. Note that `ifquery --check` can show `[fail]` **before apply** even when the config is valid (because the running state still reflects the old config).
+- If validation fails, live apply is aborted and the validator output is saved under `/opt/proxsave/restore/<timestamp>/network_apply_*/preflight.txt`
+- Additionally (diagnostics-only), ProxSave can run `ifquery --check -a` **before and after apply** to show how the runtime state matches the target config. Its output is saved under `/opt/proxsave/restore/<timestamp>/network_apply_*/ifquery_*`. Note that `ifquery --check` can show `[fail]` **before apply** even when the config is valid (because the running state still reflects the old config).
 - On staged installs/applies, a failed preflight triggers an **automatic rollback of network files** (no prompt), returning to the pre-restore state and keeping the staged copy for review.
 
 **Result reporting**:
@@ -2068,7 +2120,7 @@ The status can be one of:
 - **DISARMED/CLEARED**: reconnect using the **post-apply IP** (the applied config remains active).
 
 Notes:
-- *Pre-apply IP* is derived from the `before.txt` snapshot in `/tmp/proxsave/network_apply_*` and may be `unknown` if it cannot be parsed.
+- *Pre-apply IP* is derived from the `before.txt` snapshot in `/opt/proxsave/restore/<timestamp>/network_apply_*` and may be `unknown` if it cannot be parsed.
 - *Post-apply IP* is what ProxSave could observe on the management interface after applying the new config; it may include CIDR suffixes (for example `10.0.0.4/24`) or multiple addresses.
 
 **Example outputs**
@@ -2083,7 +2135,7 @@ NETWORK ROLLBACK
   Status: ARMED (will execute automatically)
   Pre-apply IP (from snapshot): 192.168.1.100
   Post-apply IP (observed): 10.0.0.4/24
-  Rollback log: /tmp/proxsave/network_rollback_20260122_153012.log
+  Rollback log: /opt/proxsave/restore/20260122_153012/network_rollback_20260122_153012.log
 
 Connection will be temporarily interrupted during restore.
 Remember to reconnect using the pre-apply IP: 192.168.1.100
@@ -2103,7 +2155,7 @@ NETWORK ROLLBACK
   Status: EXECUTED (marker removed)
   Pre-apply IP (from snapshot): 192.168.1.100
   Post-apply IP (observed): 10.0.0.4/24
-  Rollback log: /tmp/proxsave/network_rollback_20260122_153012.log
+  Rollback log: /opt/proxsave/restore/20260122_153012/network_rollback_20260122_153012.log
 
 Rollback executed: reconnect using the pre-apply IP: 192.168.1.100
 ===========================================
@@ -2117,7 +2169,7 @@ NETWORK ROLLBACK
   Status: DISARMED/CLEARED (marker removed before deadline)
   Pre-apply IP (from snapshot): 192.168.1.100
   Post-apply IP (observed): 10.0.0.4/24
-  Rollback log: /tmp/proxsave/network_rollback_20260122_153012.log
+  Rollback log: /opt/proxsave/restore/20260122_153012/network_rollback_20260122_153012.log
 
 Rollback will NOT run: reconnect using the post-apply IP: 10.0.0.4/24
 ===========================================
@@ -2172,7 +2224,7 @@ if cleanDestRoot == "/" && strings.HasPrefix(target, "/etc/pve") {
 - Bringing the storage online again is enough to *use* it: a real mount stacks on top of a bind-mount guard automatically. The guard is not deleted, only shadowed; a reboot or a cleanup run removes the bind-mount leftover. A **legacy** `chattr +i` flag (set by older versions when a bind mount failed) leaves the directory immutable across reboots until it is cleared.
 - The cleanup unmounts bind-mount guards **and** clears any **legacy** `chattr +i` immutable flags, but only on mountpoints that are **not currently mounted** (clearing a live mount would touch the wrong inode); it prints a summary of what was cleared vs left pending. The guard directory is kept until nothing is pending.
 - To clear a legacy flag while the storage is mounted: unmount it, run `--cleanup-guards` again (or `chattr -i <mountpoint>`), then remount.
-- If you deleted `/var/lib/proxsave/guards` manually and a mountpoint is still read-only, ProxSave has no record left to clear: check `lsattr -d <mountpoint>` and run `chattr -i <mountpoint>` while the storage is unmounted.
+- If you deleted the guard directory (`<BASE_DIR>/guards`, or `/var/lib/proxsave/guards` from an older version) manually and a mountpoint is still read-only, ProxSave has no record left to clear: check `lsattr -d <mountpoint>` and run `chattr -i <mountpoint>` while the storage is unmounted.
 
 ### 7. Service Management Fail-Fast
 
@@ -2185,40 +2237,45 @@ if cleanDestRoot == "/" && strings.HasPrefix(target, "/etc/pve") {
 
 ### 8. Comprehensive Logging
 
-**Detailed Log**: `/tmp/proxsave/restore_YYYYMMDD_HHMMSS.log`
+**Detailed Logs**: one file per extraction pass, `<BASE_DIR>/restore/YYYYMMDD_HHMMSS/restore_<extraction YYYYMMDD_HHMMSS>_<seq>.log`, next to the restore session log `restore-<host>-<timestamp>.log`. The directory is named when the restore starts and each file when its pass starts, so the two timestamps differ; `<seq>` numbers the extraction passes of the run in order, from `_1`.
 
 **Contents**:
 ```text
-=== RESTORE LOG ===
-Started: 2025-11-20 14:30:52
+=== PROXMOX RESTORE LOG ===
+Date: 2025-11-20 14:34:09
+Mode: CUSTOM selection
+Selected categories: 2 categories
+  - PVE Cluster Configuration (pve_cluster)
+  - PVE Storage Configuration (storage_pve)
+Archive: pve01-backup-20251119-020000.tar.xz
 
-EXTRACTED FILES:
-  /var/lib/pve-cluster/config.db (ownership: 0:0, mode: 0600)
-  /var/lib/pve-cluster/.version (ownership: 0:0, mode: 0644)
-  /etc/vzdump.conf (ownership: 0:0, mode: 0644)
-  ...
+=== FILES RESTORED ===
+RESTORED: ./var/lib/pve-cluster/config.db
+RESTORED: ./etc/vzdump.conf
+...
 
-SKIPPED FILES:
-  ./opt/some-file (does not match any selected category)
-  ...
+=== FILES SKIPPED ===
+SKIPPED: ./opt/some-file (does not match any selected category)
+...
 
-SUMMARY:
-  Files extracted: 47
-  Files skipped: 1203
-  Files failed: 0
-  Duration: 12.3 seconds
+=== SUMMARY ===
+Total files extracted: 47
+Total files skipped: 1203
+Total files failed: 0
+Total files in archive: 1250
 ```
 
 **Usage**:
 ```bash
 # Review what was restored
-cat /tmp/proxsave/restore_20251120_143052.log
+cat /opt/proxsave/restore/20251120_143052/restore_20251120_143409_1.log
 
 # Search for specific file
-grep "storage.cfg" /tmp/proxsave/restore_20251120_143052.log
+grep "storage.cfg" /opt/proxsave/restore/20251120_143052/restore_20251120_143409_1.log
 
-# Check for failures
-grep "FAILED" /tmp/proxsave/restore_20251120_143052.log
+# Check for failures: the detailed log has the count, the session log names each file
+grep "Total files failed" /opt/proxsave/restore/20251120_143052/restore_20251120_143409_1.log
+grep -E "Failed to extract|Refusing hardlink" /opt/proxsave/restore/20251120_143052/restore-*.log
 ```
 
 ### 9. Checksum Verification
@@ -2245,6 +2302,36 @@ Services stopped → Defer restart scheduled → Restore → (Failure) → Defer
 ```
 
 **Prevents**: System left with services stopped after failed restore
+
+### 11. Kernel Command Line Merge (`boot` category)
+
+A restore usually runs on a new machine, whose root device, pool name and ESPs differ from the backed-up host. The `boot` category therefore never writes the old host's boot files: GRUB settings (`/etc/default/grub`, `/etc/default/grub.d/`), `/etc/kernel/cmdline` and `/etc/kernel/proxmox-boot-uuids` are kept in the archive under `var/lib/proxsave-info/boot/` and only reach the export directory. None of these files is written to the live system, in any mode, including the full-restore fallback, not even when `CUSTOM_BACKUP_PATHS` names `/etc/default` or `/etc/kernel` and the archive also holds them at their natural paths: those copies go to the export directory with `proxsave_info`. The rest of `/etc/default` is restored by `services` as before.
+
+**Source**: the backed-up host's effective kernel command line (`/proc/cmdline` at backup time), stored in `var/lib/proxsave-info/commands/system/kernel_cmdline.txt` by every backup.
+
+**Merge rule**:
+- Every parameter is carried except those that describe the backed-up host itself, and anything after `--` (arguments for init):
+  - its root device and boot image: `root=`, `boot=`, `ro`, `rw`, `BOOT_IMAGE=`, `initrd=`;
+  - how its root was mounted and where it resumed from: `rootflags=`, `rootfstype=`, `resume=`, `resume_offset=`. A `rootflags=` or `rootfstype=` of another filesystem makes this host's root mount fail, and the boot stops in the initramfs shell;
+  - what was sized on its RAM or laid out on its memory map: `zfs.zfs_arc_max=` and `zfs.zfs_arc_min=` (the restore keeps this host's ARC limit), `hugepages=`, `hugepagesz=`, `default_hugepagesz=`, `sysctl.vm.nr_hugepages=`, `hugetlb_cma=`, `cma=`, `kernelcore=`, `movablecore=`, `mem=` and `memmap=` (a `memmap=` of another machine's firmware map can stop the boot);
+  - `crashkernel=`: the kdump reservation. On GRUB hosts `kdump-tools` writes it through its own drop-in, sized for this host's RAM; without `kdump-tools` it only takes memory.
+- A parameter this host already has is not added again. When both hosts set the same parameter with different values, this host's value stays (the kernel treats `-` and `_` in parameter names as the same character, so `vfio-pci.ids` and `vfio_pci.ids` are one parameter).
+
+**Where the parameters are written** (Proxmox VE admin guide, *Host Bootloader*, *Editing the Kernel Commandline*):
+
+| This host | File written | Rebuild |
+|-----------|--------------|---------|
+| GRUB, no `/etc/kernel/proxmox-boot-uuids`; `/etc/default/grub`, `/boot/grub/grub.cfg` and `update-grub` present | the value of `GRUB_CMDLINE_LINUX_DEFAULT` in `/etc/default/grub`, the rest of the file untouched | `update-initramfs -u -k all`, then `update-grub` |
+| `proxmox-boot-tool status` reports every ESP as `uefi` (systemd-boot); `/etc/kernel/cmdline` is one line with `root=` | `/etc/kernel/cmdline` | `update-initramfs -u -k all`, then `proxmox-boot-tool refresh` |
+| `proxmox-boot-tool status` reports every ESP as `grub` | the value of `GRUB_CMDLINE_LINUX_DEFAULT` in `/etc/default/grub` | `update-initramfs -u -k all`, then `proxmox-boot-tool refresh` |
+
+Anything else is not recognized with certainty, and nothing is written: the ESPs disagree, `proxmox-boot-tool status` fails, `GRUB_CMDLINE_LINUX_DEFAULT` is not one plain assignment of a literal value, or a file in `/etc/default/grub.d/` sets it too. The restore logs a warning with the reason and the parameters the backup carries.
+
+**Rebuild**: runs once, at the end of the restore, when the merge changed a file or the restore wrote under `/etc/modprobe.d`, `/etc/modules`, `/etc/hostid` or `/etc/zfs`, which the initramfs copies. On a bootloader not recognized with certainty only `update-initramfs` runs, and the bootloader is left as it is. A failed command is a warning with the command and its error; the next command still runs and the restore goes on.
+
+**Safety backup**: the pre-restore `/etc/default/grub` and `/etc/kernel/cmdline` are in the safety backup, like every other file the restore may write.
+
+**Log**: every step is in the restore log, on lines starting with `Boot configuration -`: the backed-up command line, the bootloader found, the parameters added (or not carried because this host sets them differently), and each command run.
 
 ---
 
@@ -2273,19 +2360,15 @@ sudo proxsave --restore
 
 **Issue: "Failed to create safety backup"**
 
-**Cause**: Insufficient disk space in `/tmp`
+**Cause**: Insufficient disk space on the filesystem holding `<BASE_DIR>/restore/`, or no write access to it (the restore runs as root)
 
 **Solution**:
 ```bash
-# Check available space
-df -h /tmp
+# Check available space on the filesystem holding BASE_DIR (/opt/proxsave by default)
+df -h /opt/proxsave
 
-# Clean up temporary files
-rm -rf /tmp/proxsave/proxmox-decrypt-*
-rm -f /tmp/proxsave/restore_backup_*.tar.gz
-
-# Or expand /tmp (if tmpfs)
-mount -o remount,size=10G /tmp
+# Safety backups of earlier restores, kept until you remove them
+ls -la /opt/proxsave/restore/
 ```
 
 ---
@@ -2359,11 +2442,13 @@ parsing, so a key pasted in lowercase is fine.
 
 ### Service Issues
 
-**Issue: "Failed to stop pve-cluster: Unit not found"**
+**Issue: a PVE service unit is not installed**
 
-**Cause**: Not a PVE system or service not installed
+**Behavior**: A cluster RECOVERY skips, both when stopping and when restarting, any of `pve-ha-lrm`, `pve-ha-crm`, `pve-cluster`, `pvedaemon`, `pveproxy`, `pvestatd` whose unit is not installed (`systemctl show -p LoadState --value <unit>` prints `not-found`). The skip is logged only at debug level, so the restore does not stop on it.
 
-**Solution**:
+**Cause**: Not a PVE system, or the package providing the unit is not installed (for example `pve-ha-manager` for the HA services)
+
+**Solution** (when the unit should be there):
 ```bash
 # This is normal on PBS systems
 # Or check if PVE installed
@@ -2386,10 +2471,12 @@ systemctl status pve-cluster
 journalctl -xe -u pve-cluster
 
 # Restore from safety backup
-tar -xzf /tmp/proxsave/restore_backup_*.tar.gz -C /
+# TIMESTAMP: the directory of the restore to undo, from its "Safety backup preserved at:" line
+tar -xzf /opt/proxsave/restore/TIMESTAMP/restore_backup_*.tar.gz -C /
 
-# Restart services
+# Restart services (the HA services last, once pve-cluster is up)
 systemctl restart pve-cluster pvedaemon pveproxy pvestatd
+systemctl start pve-ha-crm pve-ha-lrm
 
 # If still failing, check logs
 journalctl -u pve-cluster --since "10 minutes ago"
@@ -2416,7 +2503,8 @@ systemctl restart pve-cluster
 journalctl -u pve-cluster | tail -50
 
 # If config.db corrupted, restore safety backup
-tar -xzf /tmp/proxsave/restore_backup_*.tar.gz -C /
+# TIMESTAMP: the directory of the restore to undo, from its "Safety backup preserved at:" line
+tar -xzf /opt/proxsave/restore/TIMESTAMP/restore_backup_*.tar.gz -C /
 systemctl restart pve-cluster
 ```
 
@@ -2553,7 +2641,7 @@ zpool import <pool-name>
 #   A bind-mount guard is shadowed when the real storage mounts on top (and is cleared by a reboot or --cleanup-guards).
 #   Older versions set a chattr +i fallback that persisted across reboots; --cleanup-guards still clears any such legacy flags (or clear manually with chattr -i while unmounted).
 # - If the datastore path is not empty and contains unexpected files/directories (not a PBS datastore), ProxSave will defer that datastore block
-#   and save it under `/tmp/proxsave/datastore.cfg.deferred.*` for manual review.
+#   and save it under `/opt/proxsave/restore/<timestamp>/datastore.cfg.deferred.*` for manual review.
 # - ProxSave does not format disks or import ZFS pools: mount/import the underlying storage first, then restart PBS.
 ls -ld /mnt/datastore /mnt/datastore/<DatastoreName> 2>/dev/null
 namei -l /mnt/datastore/<DatastoreName> 2>/dev/null || true
@@ -2602,7 +2690,8 @@ Note: newer ProxSave versions attempt to auto-repair `/etc/resolv.conf` during r
 
 **Solution**:
 ```bash
-# ProxSave will attempt to auto-normalize datastore.cfg during restore and store a backup under /tmp/proxsave/,
+# ProxSave will attempt to auto-normalize datastore.cfg during restore and keep a copy of the original
+# in /opt/proxsave/restore/<timestamp>/ (datastore.cfg.pre-normalize.*),
 # but you can also fix it manually:
 cp -a /etc/proxmox-backup/datastore.cfg /root/datastore.cfg.bak.$(date +%F_%H%M%S)
 
@@ -2747,7 +2836,8 @@ A: Use the safety backup:
 systemctl stop pve-cluster pvedaemon pveproxy pvestatd
 
 # Extract safety backup
-tar -xzf /tmp/proxsave/restore_backup_*.tar.gz -C /
+# TIMESTAMP: the directory of the restore to undo, from its "Safety backup preserved at:" line
+tar -xzf /opt/proxsave/restore/TIMESTAMP/restore_backup_*.tar.gz -C /
 
 # Restart services
 systemctl restart pve-cluster pvedaemon pveproxy pvestatd
@@ -3028,18 +3118,25 @@ A: AGE encryption only:
 
 **Q: Where are temporary files stored?**
 
-A: All in `/tmp/proxsave/`:
+A: Temporary files are in `/tmp/proxsave/`:
 - `proxmox-decrypt-*/` - Decryption workspace (deleted after restore)
-- `restore_TIMESTAMP.log` - Detailed restore log (preserved)
+- `restore-stage-*/` - Staged sensitive categories, in the clear (deleted when the restore ends, on success or failure)
+
+What a restore keeps is in its own directory, `<BASE_DIR>/restore/TIMESTAMP/` (`/opt/proxsave/restore/TIMESTAMP/` by default, mode 0700, files 0600), which survives the reboot the restore recommends:
+- `restore-<host>-<timestamp>.log` - Restore session log (preserved)
+- `restore_TIMESTAMP_<seq>.log` - Detailed restore logs (preserved)
 - `restore_backup_TIMESTAMP.tar.gz` - Safety backup (preserved)
+- `network_rollback_backup_*`, `firewall_rollback_backup_*`, `ha_rollback_backup_*`, `pve_access_control_rollback_backup_*` - Rollback archives (preserved)
+- `*_rollback_*.log` - Logs of the armed rollbacks (preserved; the rollback scripts and markers stay in `/tmp/proxsave/`)
+- `nic_repair_*/` - Network files as restored, before a NIC name repair (preserved)
+- `network_apply_*/` - Network apply diagnostics (preserved)
+- `datastore.cfg.deferred.*` - PBS datastore definitions that were not applied (preserved)
+- `datastore.cfg.pre-normalize.*` - PBS datastore.cfg as it was before ProxSave fixed its indentation (preserved)
 
 **Cleanup**:
 ```bash
-# Remove safety backup after successful restore
-rm /tmp/proxsave/restore_backup_*.tar.gz
-
-# Remove old logs
-find /tmp/proxsave/ -name "restore_*.log" -mtime +7 -delete
+# Remove a restore's directory once that restore has settled
+rm -r /opt/proxsave/restore/TIMESTAMP
 ```
 
 ---

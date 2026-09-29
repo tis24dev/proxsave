@@ -153,10 +153,10 @@ func TestCollectWizardDataDeclineAll(t *testing.T) {
 	}()
 
 	// Single aligned form: inactive dependent rows are skipped. Fresh install
-	// defaults to the daemon, so the Healthchecks row is active too: Enter through
-	// the 9 active rows reaches Continue; the final Enter submits.
+	// defaults to the daemon, so the Healthchecks and Notify level rows are active too:
+	// Enter through the 10 active rows reaches Continue; the final Enter submits.
 	d.waitScreen("Configuration")
-	for i := 0; i < 10; i++ {
+	for i := 0; i < 11; i++ {
 		d.keys("enter")
 	}
 
@@ -171,6 +171,9 @@ func TestCollectWizardDataDeclineAll(t *testing.T) {
 	// Fresh daemon default: Healthchecks defaults to centralized.
 	if data.SchedulerMode != "daemon" || data.HealthcheckMode != "centralized" {
 		t.Fatalf("fresh daemon must default Healthchecks to centralized: mode=%q hc=%q", data.SchedulerMode, data.HealthcheckMode)
+	}
+	if data.NotifyOn != "warning" {
+		t.Fatalf("fresh install must default Notify level to warning, got %q", data.NotifyOn)
 	}
 	if data.NotificationMode != "none" {
 		t.Fatalf("notification mode = %q, want none", data.NotificationMode)
@@ -386,9 +389,9 @@ func TestCollectWizardDataHealthcheckSelect(t *testing.T) {
 		d := newDriver(t)
 		resCh := collectWizardAsync(t, d, "")
 		d.waitScreen("Configuration")
-		d.keys("down down down down down down down")  // 7 downs -> Healthchecks row
-		d.keys("right")                               // centralized -> self
-		d.keys("down down down down down down enter") // to Continue, submit
+		d.keys("down down down down down down down")       // 7 downs -> Healthchecks row
+		d.keys("right")                                    // centralized -> self
+		d.keys("down down down down down down down enter") // Notify level is active: to Continue, submit
 		res := <-resCh
 		if res.err != nil {
 			t.Fatalf("unexpected error: %v", res.err)
@@ -410,8 +413,8 @@ func TestCollectWizardDataHealthcheckSelect(t *testing.T) {
 		if res.err != nil {
 			t.Fatalf("unexpected error: %v", res.err)
 		}
-		if res.data.HealthcheckMode != "off" {
-			t.Fatalf("hc=%q, want off", res.data.HealthcheckMode)
+		if res.data.HealthcheckMode != "off" || res.data.NotifyOn != "always" {
+			t.Fatalf("hc=%q notify=%q, want off/always: no monitor, no level below every run", res.data.HealthcheckMode, res.data.NotifyOn)
 		}
 	})
 
@@ -428,8 +431,8 @@ func TestCollectWizardDataHealthcheckSelect(t *testing.T) {
 		if res.err != nil {
 			t.Fatalf("unexpected error: %v", res.err)
 		}
-		if res.data.SchedulerMode != "cron" || res.data.HealthcheckMode != "off" {
-			t.Fatalf("mode=%q hc=%q, want cron/off", res.data.SchedulerMode, res.data.HealthcheckMode)
+		if res.data.SchedulerMode != "cron" || res.data.HealthcheckMode != "off" || res.data.NotifyOn != "always" {
+			t.Fatalf("mode=%q hc=%q notify=%q, want cron/off/always", res.data.SchedulerMode, res.data.HealthcheckMode, res.data.NotifyOn)
 		}
 	})
 
@@ -752,4 +755,38 @@ func TestRunTelegramSetup(t *testing.T) {
 	if err != nil || notShown.Shown {
 		t.Fatalf("not-eligible must be silent: %+v err=%v", notShown, err)
 	}
+}
+
+// The Notify level row: an Edit prefills the stored level and a no-op edit keeps it; right/left
+// move through Every run, Warnings and failures, Failures only.
+func TestCollectWizardDataNotifyLevel(t *testing.T) {
+	daemonCentralized := func(level string) string {
+		template := config.DefaultEnvTemplate()
+		template = installer.SetEnvValueInTemplate(template, "SCHEDULER_MODE", "daemon")
+		template = installer.SetEnvValueInTemplate(template, "HEALTHCHECK_ENABLED", "true")
+		template = installer.SetEnvValueInTemplate(template, "HEALTHCHECK_MODE", "centralized")
+		return installer.SetEnvValueInTemplate(template, "NOTIFY_ON", level)
+	}
+	t.Run("prefill_failure_roundtrip", func(t *testing.T) {
+		d := newDriver(t)
+		resCh := collectWizardAsync(t, d, daemonCentralized("failure"))
+		d.waitScreen("Configuration")
+		d.keys("down down down down down down down down down down down down enter")
+		res := <-resCh
+		if res.err != nil || res.data.NotifyOn != "failure" {
+			t.Fatalf("notify=%q err=%v, want the stored failure kept", res.data.NotifyOn, res.err)
+		}
+	})
+	t.Run("fresh_right_is_failures_only", func(t *testing.T) {
+		d := newDriver(t)
+		resCh := collectWizardAsync(t, d, "")
+		d.waitScreen("Configuration")
+		d.keys("down down down down down down down down") // 8 downs -> Notify level row
+		d.keys("right")                                   // warning -> failure
+		d.keys("down down enter")                         // Run at, Continue, submit
+		res := <-resCh
+		if res.err != nil || res.data.NotifyOn != "failure" {
+			t.Fatalf("notify=%q err=%v, want failure", res.data.NotifyOn, res.err)
+		}
+	})
 }

@@ -16,13 +16,14 @@ import (
 // withTempGuardBaseDir redirects mountGuardBaseDir to an isolated temp dir for the
 // duration of a test and restores it afterward. Mirrors the cleanup*/mountGuard*
 // save/restore pattern used throughout this package and keeps the chattr index off
-// the real /var/lib/proxsave path.
+// the real guard directories. The legacy directory is pointed at the same temp dir, so
+// cleanup sees only this one.
 func withTempGuardBaseDir(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
-	orig := mountGuardBaseDir
-	mountGuardBaseDir = dir
-	t.Cleanup(func() { mountGuardBaseDir = orig })
+	orig, origLegacy := mountGuardBaseDir, legacyMountGuardBaseDir
+	mountGuardBaseDir, legacyMountGuardBaseDir = dir, dir
+	t.Cleanup(func() { mountGuardBaseDir, legacyMountGuardBaseDir = orig, origLegacy })
 	return dir
 }
 
@@ -275,6 +276,7 @@ func installChattrCleanupSeams(t *testing.T, index []byte, mountinfo string, cha
 	})
 
 	cleanupGeteuid = func() int { return 0 }
+	withSingleGuardDir(t)
 	cleanupStat = func(string) (os.FileInfo, error) { return nil, nil }
 	cleanupReadFile = func(string) ([]byte, error) { return []byte(""), nil } // empty /proc -> no bind guards
 	cleanupRemoveAll = func(string) error { return nil }
@@ -534,6 +536,7 @@ func TestCleanupMountGuards_RoundTripFromRecord(t *testing.T) {
 		mountGuardReadFile = origMGRead
 	})
 	cleanupGeteuid = func() int { return 0 }
+	withSingleGuardDir(t)
 	cleanupStat = func(string) (os.FileInfo, error) { return nil, nil }
 	cleanupReadFile = func(string) ([]byte, error) { return []byte(""), nil }
 	cleanupRemoveAll = func(string) error { return nil }

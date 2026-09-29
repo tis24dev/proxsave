@@ -131,7 +131,7 @@ func WriteConfigFileAtomic(configPath, tmpPath, content string) error {
 // the confirmation both front-ends show before wiping the base directory.
 //
 // Every entry gets exactly one trailing slash. The list is the compile-time set
-// returned by the caller (build, env, identity), all of them BASE_DIR
+// returned by the caller (build, env, guards, identity, restore), all of them BASE_DIR
 // subdirectories, so there is nothing to detect: the Charm copy this replaces
 // stat'ed each path and omitted the slash for a directory that did not exist
 // yet, which made a destructive confirmation prompt render differently

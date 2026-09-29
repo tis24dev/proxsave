@@ -33,7 +33,7 @@ For more information, take a look at our landing page at [proxsave.dev](https://
 bash -c "$(curl -fsSL https://raw.githubusercontent.com/tis24dev/proxsave/main/install.sh)"
 ```
 
-or: if you need a fully clean reinstall use: (preserves `build/`, `env/`, and `identity/`)
+or: if you need a fully clean reinstall use: (preserves `build/`, `env/`, `guards/`, `identity/`, and `restore/`)
 ```bash
 bash -c "$(curl -fsSL https://raw.githubusercontent.com/tis24dev/proxsave/main/install.sh)" _ --new-install
 ```
@@ -60,7 +60,7 @@ proxsave
 | Tools | `Restore` | restores a backup onto this system |
 | Tools | `Decrypt` | converts an encrypted backup into a plaintext bundle |
 | Maintenance | `New key` | creates a new AGE encryption key |
-| Maintenance | `Install` | `Edit install` re-runs the interactive setup (this is how you change the configuration); `Wipe install` resets the install directory first, keeping `build/`, `env/` and `identity/` |
+| Maintenance | `Install` | `Edit install` re-runs the interactive setup (this is how you change the configuration); `Wipe install` resets the install directory first, keeping `build/`, `env/`, `guards/`, `identity/` and `restore/` |
 | Maintenance | `Upgrade` | `Check upgrade` updates the binary to a newer release, merging new template variables into `backup.env` as part of the same run; `Check config` runs that merge on its own |
 | Diagnostic Checks | `Telegram`, `Healthchecks`, `Post-install` | verify the Telegram relay pairing, show the monitoring portal details, re-run the post-install audit |
 | Daemon | `Install`, `Disable`, `Restart`, `Status` | switch the scheduler to the resident daemon or back to cron, restart it, show its state. The group is context aware: `Install` appears on a cron install, `Disable` and `Restart` when the daemon is the active scheduler, `Status` always |
@@ -110,7 +110,7 @@ The flags stay fully supported, for headless hosts, cron jobs, scripts and recov
 | `--newkey`, `--age-newkey` | resets the AGE recipients and runs the interactive key setup |
 | `--support` | forces debug logging and emails the log to the maintainer. Available for a standard backup run and for `--restore` |
 | `--install` | runs the interactive installer (generate or edit `backup.env`) |
-| `--new-install` | resets the installation directory, preserving `build/`, `env/` and `identity/`, then runs the installer |
+| `--new-install` | resets the installation directory, preserving `build/`, `env/`, `guards/`, `identity/` and `restore/`, then runs the installer |
 | `--upgrade [y]` | downloads and installs the latest release, then upgrades `backup.env`. `y` auto-confirms |
 | `--localfile` | with `--upgrade`: skip the release check and download and finalize against the binary already on disk |
 | `--upgrade-config` | adds missing variables to `backup.env` from the embedded template, preserving existing and custom ones |

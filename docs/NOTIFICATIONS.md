@@ -92,8 +92,59 @@ Email, Telegram, Gotify, Webhook, Healthchecks
 Healthchecks is deliberately **last**. The Telegram relay may piggyback a fresh
 portal magic-link on its response; dispatching Healthchecks last means that link has
 already been captured onto the run's stats before the Healthchecks section renders.
-Each channel is gated independently on its own `*_ENABLED` flag, so the ordering is
-about link capture, not about one channel depending on another.
+Each channel is gated independently on its own `*_ENABLED` flag, and then on the shared
+`NOTIFY_ON` threshold below, so the ordering is about link capture, not about one channel
+depending on another.
+
+### Which runs get notified (`NOTIFY_ON`)
+
+`NOTIFY_ON` filters Tier 1 by the run's outcome, across every channel at once. It is a
+severity **threshold**: `always` sends everything, `warning` (the default) sends warnings
+and failures, `failure` sends failures only. Full table in
+[CONFIGURATION.md](CONFIGURATION.md#which-runs-get-notified-notify_on).
+
+A run applies `warning` or `failure` only when the Healthchecks monitor is confirmed to
+alert you on a run that never happens; otherwise it notifies every outcome, whatever the
+value. The conditions, and how the run checks them, are in
+[HEALTHCHECKS.md](HEALTHCHECKS.md#alert-delivery-and-notify_on).
+
+Every run states the setting and its decision in the notification block of its log:
+
+```text
+INFO     Notification setting: NOTIFY_ON=warning
+INFO     Healthchecks status: ready
+INFO     Notification filter: warning
+```
+
+and again at dispatch, where a filtered channel is told apart from a switched-off one:
+
+```text
+INFO     Notification filter: warning
+INFO     Notifications: skipped
+SKIP     Email: filtered                                        # enabled, below the filter
+SKIP     Gotify: disabled                                       # GOTIFY_ENABLED=false
+```
+
+These boundaries are what keep the filter from losing information rather than just volume:
+
+- **It is Tier 1 only.** The **Healthchecks** section is Tier 2 - a reporting surface that
+  sends nothing outward - and is never filtered, whatever `NOTIFY_ON` says. A run that
+  notifies nobody still reports, and so does a run that never started.
+- **A filtered channel is recorded as `filtered`** in the handoff file. The daemon does not
+  ping its `proxsave-notify-*` check, which the server keeps event-driven while the filter
+  is on, and keeps the channel's row, so its last real delivery, a failed one included,
+  stays visible. Recording nothing at all would leave the file empty, and an empty result
+  set means "nothing to report" to the daemon.
+- **It does not hide a broken channel.** A channel that is enabled but failed to build -
+  a mistyped `EMAIL_DELIVERY_METHOD` is the usual cause - still logs
+  `enabled but not initialized` and still records `error`, at every threshold. The filter
+  applies to channels that are working and have nothing to say, never to one that could
+  not say anything.
+- **It does not touch the exit code.** `ParseLogCounts` and the exit-code promotion are
+  unchanged, so a suppressed warning run still exits `1` and still exports
+  `status=warning`. Suppression is a delivery decision, nothing more.
+- **An early error is always notified.** A run that fails before its notification setup
+  never reaches the filter.
 
 ### The per-channel handoff file
 
@@ -482,6 +533,12 @@ A channel is anything that implements `notify.Notifier`
    keeping Healthchecks last.
 4. The adapter records the per-channel severity into `.notify_results.json` for you, so
    the daemon can raise a `proxsave-notify-<name>` sensor without further work.
+5. The `NOTIFY_ON` gate in the entries loop picks the new channel up automatically. Give it
+   a `reportingOnly()` method **only** if it sends nothing outward, the way the Healthchecks
+   section does; a channel that reaches the operator belongs under the threshold. The
+   exemption is claimed by that marker and never by the channel's name, so a display name
+   cannot grant it by accident. Note that an exempt entry is also responsible for its own
+   `.notify_results.json` story, since the gate is what records `filtered` for the others.
 
 ## Troubleshooting
 

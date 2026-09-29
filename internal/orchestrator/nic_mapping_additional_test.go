@@ -1191,7 +1191,7 @@ func TestRewriteIfupdownConfigFiles_BackupStageErrors(t *testing.T) {
 	})
 
 	restoreTime = &FakeTime{Current: time.Date(2025, 1, 1, 1, 2, 3, 0, time.UTC)}
-	expectedBackupDir := "/tmp/proxsave/nic_repair_20250101_010203_1"
+	expectedBackupDir := filepath.Join(RestoreRunDir(), "nic_repair_20250101_010203_1")
 	expectedBackupPath := filepath.Join(expectedBackupDir, "etc/network/interfaces")
 	expectedBackupPathDir := filepath.Dir(expectedBackupPath)
 

@@ -65,7 +65,7 @@ func (w *restoreUIWorkflowRun) recreateStorageDirectories() {
 	if err := RecreateDirectoriesFromConfig(w.systemType, w.logger); err != nil {
 		w.restoreHadWarnings = true
 		w.logger.Warning("Failed to recreate directory structures: %v", err)
-		w.logger.Warning("You may need to manually create storage/datastore directories")
+		w.logger.Warning("Storage and datastore directories - not recreated; a storage or datastore whose directory is missing stays unavailable")
 	}
 }
 
@@ -146,7 +146,7 @@ func (w *restoreUIWorkflowRun) logNetworkRollbackState(armed bool, observedIP, o
 		w.logger.Warning("Network apply not committed; rollback has executed (or marker cleared).")
 	}
 	if reconnectHost != "" && reconnectHost != "unknown" && originalIP != "unknown" {
-		w.logger.Warning("IP now (after apply): %s. Expected after rollback: %s. Reconnect using: %s", observedIP, originalIP, reconnectHost)
+		w.logger.Warning("IP now (after apply): %s. Expected after rollback: %s, reachable as %s", observedIP, originalIP, reconnectHost)
 	} else if originalIP != "unknown" {
 		w.logger.Warning("IP now (after apply): %s. Expected after rollback: %s", observedIP, originalIP)
 	} else {
@@ -234,13 +234,22 @@ func (w *restoreUIWorkflowRun) logGenericRollbackNotCommitted(label string, arme
 
 func (w *restoreUIWorkflowRun) logRestoreCompletion() {
 	w.logger.Info("")
-	if w.restoreHadWarnings {
-		w.logger.Warning("Restore completed with warnings.")
-	} else {
-		w.logger.Info("Restore completed successfully.")
-	}
+	logRestoreVerdict(w.logger, w.restoreHadWarnings)
 	w.logger.Info("Temporary decrypted bundle removed.")
 	w.logRestoreArtifacts()
+}
+
+// logRestoreVerdict writes the restore's closing line. It counts every warning the
+// logger took, the same count the CLI wrapper's "Restore workflow completed ..." line
+// and the footer read: with the flag alone, a warning logged outside the flagged
+// steps (a sudoers file failing visudo, a firewall restart failing) left this line
+// saying "completed successfully" right above the wrapper's "completed with warnings".
+func logRestoreVerdict(logger *logging.Logger, flagged bool) {
+	if flagged || logger.HasWarnings() {
+		logger.Warning("Restore completed with warnings.")
+		return
+	}
+	logger.Info("Restore completed successfully.")
 }
 
 func (w *restoreUIWorkflowRun) logRestoreArtifacts() {
@@ -253,21 +262,18 @@ func (w *restoreUIWorkflowRun) logRestoreArtifacts() {
 	if w.exportLogPath != "" {
 		w.logger.Info("Export detailed log: %s", w.exportLogPath)
 	}
-	if w.stageRoot != "" {
-		w.logger.Info("Staging directory: %s", w.stageRoot)
-	}
 	if w.stageLogPath != "" {
 		w.logger.Info("Staging detailed log: %s", w.stageLogPath)
 	}
 	if w.safetyBackup != nil {
 		w.logger.Info("Safety backup preserved at: %s", w.safetyBackup.BackupPath)
-		w.logger.Info("Remove it manually if restore was successful: rm %s", w.safetyBackup.BackupPath)
+		w.logger.Info("Safety backup - kept until removed, ProxSave never deletes it")
 	}
 }
 
 func (w *restoreUIWorkflowRun) logServiceRestartAdvice() {
 	w.logger.Info("")
-	w.logger.Info("IMPORTANT: You may need to restart services for changes to take effect.")
+	w.logger.Info("Services - some restored files take effect only when the services that read them restart")
 	switch w.systemType {
 	case SystemTypeDual:
 		w.logPVERestartAdvice()
@@ -281,18 +287,22 @@ func (w *restoreUIWorkflowRun) logServiceRestartAdvice() {
 
 func (w *restoreUIWorkflowRun) logPVERestartAdvice() {
 	if w.needsClusterRestore && w.clusterServicesStopped {
-		w.logger.Info("  PVE services were stopped/restarted during restore; verify status with: pvecm status")
+		if w.clusterServicesNotRunning != nil {
+			w.logger.Warning("  PVE services - stopped for this restore and not running: %s", w.clusterServicesNotRunning.notRunning())
+			return
+		}
+		w.logger.Info("  PVE services - stopped and started again during this restore")
 		return
 	}
-	w.logger.Info("  PVE services: systemctl restart pve-cluster pvedaemon pveproxy")
+	w.logger.Info("  PVE services - not restarted by this restore: pve-cluster, pvedaemon, pveproxy")
 }
 
 func (w *restoreUIWorkflowRun) logPBSRestartAdvice() {
 	if w.pbsServicesStopped {
-		w.logger.Info("  PBS services were stopped/restarted during restore; verify status with: systemctl status proxmox-backup proxmox-backup-proxy")
+		w.logger.Info("  PBS services - stopped and started again during this restore")
 		return
 	}
-	w.logger.Info("  PBS services: systemctl restart proxmox-backup-proxy proxmox-backup")
+	w.logger.Info("  PBS services - not restarted by this restore: proxmox-backup-proxy, proxmox-backup")
 }
 
 func (w *restoreUIWorkflowRun) checkZFSPoolsAfterRestore() {

@@ -55,6 +55,9 @@ func TestCollectorCollectAll_PVEBranchWrapsCollectionError(t *testing.T) {
 
 	cfg := GetDefaultCollectorConfig()
 	cfg.PVEConfigPath = filepath.Join(t.TempDir(), "missing")
+	// A fake root: the system half of CollectAll must not copy the real host's /home
+	// (see TestCollectSystemInfo).
+	cfg.SystemRootPrefix = t.TempDir()
 
 	collector := NewCollector(logger, cfg, t.TempDir(), types.ProxmoxVE, false)
 	err := collector.CollectAll(context.Background())
@@ -72,6 +75,9 @@ func TestCollectorCollectAll_PBSBranchWrapsCollectionError(t *testing.T) {
 
 	cfg := GetDefaultCollectorConfig()
 	cfg.PBSConfigPath = filepath.Join(t.TempDir(), "missing")
+	// A fake root: the system half of CollectAll must not copy the real host's /home
+	// (see TestCollectSystemInfo).
+	cfg.SystemRootPrefix = t.TempDir()
 
 	collector := NewCollector(logger, cfg, t.TempDir(), types.ProxmoxBS, false)
 	err := collector.CollectAll(context.Background())

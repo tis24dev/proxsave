@@ -137,22 +137,35 @@ func cleanupMountGuards(ctx context.Context, logger *logging.Logger, dryRun bool
 		return report(), fmt.Errorf("cleanup guards requires root privileges")
 	}
 
-	if _, err := cleanupStat(mountGuardBaseDir); err != nil {
-		if os.IsNotExist(err) {
-			logger.Info("No guard directory found at %s, nothing to clean up.", mountGuardBaseDir)
-			return report(), nil
+	// The current guard directory and the legacy one, each only when it exists.
+	var dirs []string
+	for _, dir := range mountGuardBaseDirs() {
+		if _, err := cleanupStat(dir); err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
+			return report(), fmt.Errorf("stat guards dir %s: %w", dir, err)
 		}
-		return report(), fmt.Errorf("stat guards dir: %w", err)
+		dirs = append(dirs, dir)
+	}
+	if len(dirs) == 0 {
+		logger.Info("No guard directory found at %s, nothing to clean up.", strings.Join(mountGuardBaseDirs(), " or "))
+		return report(), nil
 	}
 	summary.guardDirPresent = true
 
 	// Reverse the chattr +i fallback guards first, independently of the bind-mount
 	// state below. This runs on BOTH paths (the no-guard-mounts early return AND the
-	// bind-mount loop). pending counts targets left immutable (mounted/unresolvable/
-	// failed); while it is > 0 we keep the guard directory and its index so a later
-	// run can finish the job.
-	cleared, pending := clearImmutableGuards(ctx, logger, dryRun)
-	summary.cleared, summary.pending = cleared, pending
+	// bind-mount loop). pendingIn counts, per guard directory, the targets left
+	// immutable (mounted/unresolvable/failed); while it is > 0 we keep that directory
+	// and its index so a later run can finish the job.
+	pendingIn := make(map[string]int, len(dirs))
+	for _, dir := range dirs {
+		cleared, pending := clearImmutableGuards(ctx, logger, dryRun, dir)
+		summary.cleared += cleared
+		summary.pending += pending
+		pendingIn[dir] = pending
+	}
 
 	mountinfo, err := cleanupReadFile("/proc/self/mountinfo")
 	if err != nil {
@@ -162,22 +175,27 @@ func cleanupMountGuards(ctx context.Context, logger *logging.Logger, dryRun bool
 	// without emitting a misleading "summary" line.
 	defer summary.emit(logger)
 
-	visibleMountpoints, hiddenMountpoints, totalGuardMounts := guardMountpointsFromMountinfo(string(mountinfo))
-	summary.bindGuards = totalGuardMounts
-	if totalGuardMounts == 0 {
-		if pending > 0 {
-			logger.Info("Guard cleanup: %d immutable guard target(s) still pending (mounted or uncleared); keeping %s", pending, mountGuardBaseDir)
-			return report(), nil
+	matchers := guardRootMatchersFor(string(mountinfo), dirs)
+	visibleMountpoints, hiddenMountpoints, mountsIn := guardMountpointsFromMountinfo(string(mountinfo), matchers)
+	summary.bindGuards = sumGuardCounts(mountsIn)
+	if summary.bindGuards == 0 {
+		removed := 0
+		for _, dir := range dirs {
+			if pendingIn[dir] > 0 {
+				logger.Info("Guard cleanup: %d immutable guard target(s) still pending (mounted or uncleared); keeping %s", pendingIn[dir], dir)
+				continue
+			}
+			if dryRun {
+				logger.Info("DRY RUN: would remove %s", dir)
+				continue
+			}
+			if err := cleanupRemoveAll(dir); err != nil {
+				return report(), fmt.Errorf("remove guards dir: %w", err)
+			}
+			removed++
+			logger.Info("Removed guard directory %s", dir)
 		}
-		if dryRun {
-			logger.Info("DRY RUN: would remove %s", mountGuardBaseDir)
-			return report(), nil
-		}
-		if err := cleanupRemoveAll(mountGuardBaseDir); err != nil {
-			return report(), fmt.Errorf("remove guards dir: %w", err)
-		}
-		summary.dirRemoved = true
-		logger.Info("Removed guard directory %s", mountGuardBaseDir)
+		summary.dirRemoved = removed == len(dirs)
 		return report(), nil
 	}
 
@@ -231,79 +249,179 @@ func cleanupMountGuards(ctx context.Context, logger *logging.Logger, dryRun bool
 
 	if dryRun {
 		summary.guardsRemaining = len(hiddenMountpoints)
-		if pending > 0 {
-			logger.Info("DRY RUN: would keep %s (%d immutable guard target(s) still pending)", mountGuardBaseDir, pending)
-		} else {
-			logger.Info("DRY RUN: would remove %s", mountGuardBaseDir)
+		for _, dir := range dirs {
+			if pendingIn[dir] > 0 {
+				logger.Info("DRY RUN: would keep %s (%d immutable guard target(s) still pending)", dir, pendingIn[dir])
+			} else {
+				logger.Info("DRY RUN: would remove %s", dir)
+			}
 		}
 		return report(), nil
 	}
 
-	// If any guard mounts remain (for example hidden under a real mount), or any
-	// immutable guard target is still pending, avoid removing the directory/index.
-	// Fail closed: if the verification reread of /proc/self/mountinfo fails we cannot
-	// confirm the guard mounts are gone, so we must NOT remove the directory and must
-	// NOT report "0 remaining". Keep the index so a later run can finish the job.
+	// If any guard mounts remain in a directory (for example hidden under a real
+	// mount), or any of its immutable guard targets is still pending, avoid removing
+	// that directory/index. Fail closed: if the verification reread of
+	// /proc/self/mountinfo fails we cannot confirm the guard mounts are gone, so we
+	// must NOT remove any directory and must NOT report "0 remaining". Keep the index
+	// so a later run can finish the job.
 	after, rerr := cleanupReadFile("/proc/self/mountinfo")
 	if rerr != nil {
 		// -1 records "unknown" so the summary never falsely advertises "0 remaining".
 		summary.guardsRemaining = -1
-		logger.Warning("Guard cleanup: could not re-read /proc/self/mountinfo to confirm guard mounts are gone (%v); keeping %s to be safe (re-run --cleanup-guards once the storage is unmounted)", rerr, mountGuardBaseDir)
+		logger.Warning("Guard cleanup: could not re-read /proc/self/mountinfo to confirm guard mounts are gone (%v); keeping %s to be safe (re-run --cleanup-guards once the storage is unmounted)", rerr, strings.Join(dirs, " and "))
 		return report(), nil
 	}
-	_, _, remaining := guardMountpointsFromMountinfo(string(after))
-	summary.guardsRemaining = remaining
-	if remaining > 0 || pending > 0 {
-		logger.Warning("Guard cleanup: %d guard mount(s) and %d immutable target(s) still present; not removing %s", remaining, pending, mountGuardBaseDir)
-		return report(), nil
-	}
+	_, _, remainingIn := guardMountpointsFromMountinfo(string(after), matchers)
+	summary.guardsRemaining = sumGuardCounts(remainingIn)
 
-	if err := cleanupRemoveAll(mountGuardBaseDir); err != nil {
-		return report(), fmt.Errorf("remove guards dir: %w", err)
+	removed := 0
+	for _, dir := range dirs {
+		if remainingIn[dir] > 0 || pendingIn[dir] > 0 {
+			logger.Warning("Guard cleanup: %d guard mount(s) and %d immutable target(s) still present; not removing %s", remainingIn[dir], pendingIn[dir], dir)
+			continue
+		}
+		if err := cleanupRemoveAll(dir); err != nil {
+			return report(), fmt.Errorf("remove guards dir: %w", err)
+		}
+		removed++
+		logger.Info("Removed guard directory %s (unmounted=%d)", dir, unmounted)
 	}
-	summary.dirRemoved = true
-	logger.Info("Removed guard directory %s (unmounted=%d)", mountGuardBaseDir, unmounted)
+	summary.dirRemoved = removed == len(dirs)
 	return report(), nil
 }
 
-func guardMountpointsFromMountinfo(mountinfo string) (visible, hidden []string, guardMounts int) {
-	prefix := mountGuardBaseDir + string(os.PathSeparator)
+func sumGuardCounts(counts map[string]int) int {
+	total := 0
+	for _, n := range counts {
+		total += n
+	}
+	return total
+}
+
+// mountinfoEntry is one line of /proc/self/mountinfo: the mount id, the major:minor
+// of the filesystem, the root of the mount inside that filesystem, and the mount point.
+type mountinfoEntry struct {
+	id         int
+	device     string
+	root       string
+	mountpoint string
+}
+
+func parseMountinfoEntries(mountinfo string) []mountinfoEntry {
+	var entries []mountinfoEntry
+	for _, line := range strings.Split(mountinfo, "\n") {
+		fields := strings.Fields(strings.TrimSpace(line))
+		if len(fields) < 5 {
+			continue
+		}
+		mountID, err := strconv.Atoi(fields[0])
+		if err != nil {
+			continue
+		}
+		entries = append(entries, mountinfoEntry{
+			id:         mountID,
+			device:     fields[2],
+			root:       unescapeProcPath(fields[3]),
+			mountpoint: unescapeProcPath(fields[4]),
+		})
+	}
+	return entries
+}
+
+// guardRootMatcher recognises the mountinfo entries of guard bind mounts whose
+// source lies under a guard directory. The root field of /proc/self/mountinfo is
+// the source path INSIDE its filesystem, not an absolute path: with the guard
+// directory /opt/proxsave/guards and /opt on a filesystem of its own, a guard's
+// root reads /proxsave/guards/<name>. So the matcher takes the mount that holds the
+// directory (the longest mount point containing it, the topmost when several are
+// stacked there) and expects that filesystem's device and the directory's path
+// inside it. When no entry holds the directory it falls back to the absolute path
+// on any device, which is right whenever the directory sits on the root filesystem.
+type guardRootMatcher struct {
+	dir    string // the guard directory, as cleanup names it
+	device string // major:minor of the filesystem holding dir; "" when unknown
+	root   string // dir as a path inside that filesystem
+}
+
+// cleanupEvalSymlinks resolves a guard directory the way the kernel records bind
+// sources. A var only so tests can replace it.
+var cleanupEvalSymlinks = filepath.EvalSymlinks
+
+func guardRootMatchersFor(mountinfo string, dirs []string) []guardRootMatcher {
+	entries := parseMountinfoEntries(mountinfo)
+	matchers := make([]guardRootMatcher, 0, len(dirs))
+	for _, dir := range dirs {
+		matchers = append(matchers, newGuardRootMatcher(entries, dir))
+	}
+	return matchers
+}
+
+func newGuardRootMatcher(entries []mountinfoEntry, dir string) guardRootMatcher {
+	resolved := filepath.Clean(dir)
+	if r, err := cleanupEvalSymlinks(dir); err == nil && strings.TrimSpace(r) != "" {
+		resolved = filepath.Clean(r)
+	}
+	m := guardRootMatcher{dir: dir, root: resolved}
+	best := -1
+	for i, e := range entries {
+		if !pathWithinMountpoint(resolved, e.mountpoint) {
+			continue
+		}
+		if best < 0 || len(e.mountpoint) > len(entries[best].mountpoint) ||
+			(len(e.mountpoint) == len(entries[best].mountpoint) && e.id > entries[best].id) {
+			best = i
+		}
+	}
+	if best >= 0 {
+		holder := entries[best]
+		m.device = holder.device
+		m.root = filepath.Join(holder.root, strings.TrimPrefix(resolved, strings.TrimSuffix(holder.mountpoint, "/")))
+	}
+	return m
+}
+
+func pathWithinMountpoint(path, mountpoint string) bool {
+	return mountpoint == "/" || path == mountpoint || strings.HasPrefix(path, mountpoint+"/")
+}
+
+func (m guardRootMatcher) matches(e mountinfoEntry) bool {
+	if m.device != "" && e.device != m.device {
+		return false
+	}
+	return e.root == m.root || strings.HasPrefix(e.root, strings.TrimSuffix(m.root, "/")+"/")
+}
+
+// guardMountpointsFromMountinfo classifies the guard bind mounts in mountinfo: a
+// mount point where a guard is the topmost mount is visible (it can be unmounted),
+// one where a guard sits under a real mount is hidden. mountsIn counts the guard
+// mounts per guard directory, keyed by matcher.dir.
+func guardMountpointsFromMountinfo(mountinfo string, matchers []guardRootMatcher) (visible, hidden []string, mountsIn map[string]int) {
 	type mountpointInfo struct {
 		topmostID      int
 		topmostIsGuard bool
 		hasGuard       bool
 	}
 
+	mountsIn = make(map[string]int, len(matchers))
 	mountpoints := make(map[string]*mountpointInfo)
-	for _, line := range strings.Split(mountinfo, "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" {
-			continue
-		}
-		fields := strings.Fields(line)
-		if len(fields) < 5 {
-			continue
-		}
-
-		mountID, err := strconv.Atoi(fields[0])
-		if err != nil {
-			continue
-		}
-		root := unescapeProcPath(fields[3])
-		mp := unescapeProcPath(fields[4])
-
-		isGuard := root == mountGuardBaseDir || strings.HasPrefix(root, prefix)
-		if isGuard {
-			guardMounts++
+	for _, e := range parseMountinfoEntries(mountinfo) {
+		isGuard := false
+		for _, m := range matchers {
+			if m.matches(e) {
+				isGuard = true
+				mountsIn[m.dir]++
+				break
+			}
 		}
 
-		info := mountpoints[mp]
+		info := mountpoints[e.mountpoint]
 		if info == nil {
 			info = &mountpointInfo{topmostID: -1}
-			mountpoints[mp] = info
+			mountpoints[e.mountpoint] = info
 		}
-		if mountID > info.topmostID {
-			info.topmostID = mountID
+		if e.id > info.topmostID {
+			info.topmostID = e.id
 			info.topmostIsGuard = isGuard
 		}
 		if isGuard {
@@ -322,13 +440,14 @@ func guardMountpointsFromMountinfo(mountinfo string) (visible, hidden []string, 
 	}
 	sort.Strings(visible)
 	sort.Strings(hidden)
-	return visible, hidden, guardMounts
+	return visible, hidden, mountsIn
 }
 
 // clearImmutableGuards reverses the `chattr +i` immutable fallback that restore
 // applied when a guard bind-mount could not be created. It is the symmetric
 // counterpart to the bind-mount unmount loop and processes ONLY the targets
-// ProxSave itself recorded in the immutable-guard index. For each one it first
+// ProxSave itself recorded in the immutable-guard index of guardDir (the current or
+// the legacy guard directory). For each one it first
 // resolves the recorded path through symlinks (re-checking the datastore-root
 // allowlist on the RESOLVED path), then decides what to do:
 //
@@ -364,8 +483,8 @@ func guardMountpointsFromMountinfo(mountinfo string) (visible, hidden []string, 
 // directory) only when nothing is pending and no bind-mount guards remain. In dry-run,
 // pending reflects what a real run would leave behind (mounted/unresolvable/escaping
 // targets), so the "would remove" preview is honest.
-func clearImmutableGuards(ctx context.Context, logger *logging.Logger, dryRun bool) (cleared, pending int) {
-	data, err := cleanupChattrReadFile(mountGuardChattrTargetsPath())
+func clearImmutableGuards(ctx context.Context, logger *logging.Logger, dryRun bool, guardDir string) (cleared, pending int) {
+	data, err := cleanupChattrReadFile(mountGuardChattrTargetsPathIn(guardDir))
 	if err != nil {
 		return 0, 0 // missing/unreadable index => nothing was recorded => no-op
 	}
@@ -389,7 +508,7 @@ func clearImmutableGuards(ctx context.Context, logger *logging.Logger, dryRun bo
 		// with chattr -i.
 		resolved, leafExists, ok, rErr := resolveGuardTargetWithinAllowlist(target)
 		if rErr != nil {
-			logger.Warning("Guard cleanup: cannot resolve %s: %v; leaving immutable flag (clear manually with: chattr -i %s)", target, rErr, target)
+			logger.Warning("Guard cleanup: cannot resolve %s: %v; leaving immutable flag", target, rErr)
 			pending++
 			continue
 		}
@@ -409,7 +528,7 @@ func clearImmutableGuards(ctx context.Context, logger *logging.Logger, dryRun bo
 		// would then hit the live mount root below.
 		mounted, mErr := isMounted(resolved)
 		if mErr != nil {
-			logger.Warning("Guard cleanup: cannot determine mount status of %s: %v; leaving immutable flag (clear manually with: chattr -i %s)", resolved, mErr, resolved)
+			logger.Warning("Guard cleanup: cannot determine mount status of %s: %v; leaving immutable flag", resolved, mErr)
 			pending++
 			continue
 		}
@@ -429,7 +548,7 @@ func clearImmutableGuards(ctx context.Context, logger *logging.Logger, dryRun bo
 		}
 
 		if _, err := cleanupRunCmd(ctx, "chattr", "-i", resolved); err != nil {
-			logger.Warning("Guard cleanup: failed to clear immutable flag on %s: %v (clear manually with: chattr -i %s)", resolved, err, resolved)
+			logger.Warning("Guard cleanup: failed to clear immutable flag on %s: %v; it stays immutable", resolved, err)
 			pending++
 			continue
 		}

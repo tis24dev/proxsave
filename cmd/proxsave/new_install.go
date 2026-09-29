@@ -41,7 +41,10 @@ func buildNewInstallPlan(configPath string) (newInstallPlan, error) {
 }
 
 func newInstallPreservedEntries() []string {
-	preserved := []string{"env", "identity", "build"}
+	// guards and restore are host state, not part of the install: the mount guards a
+	// restore left behind (bind mounts still active until the next reboot) and the
+	// safety backup, rollback archives and logs of past restores.
+	preserved := []string{"env", "identity", "build", "guards", "restore"}
 	sort.Strings(preserved)
 	return preserved
 }

@@ -52,7 +52,7 @@ func maybeInstallNetworkConfigFromStage(
 	}
 	if rollbackPath == "" {
 		logger.Warning("Network staged install skipped: network rollback backup not available")
-		logger.Info("Network files remain staged under: %s", stageRoot)
+		logger.Info("Network files remain staged under: %s until the restore ends, then only the backup archive holds them", stageRoot)
 		return false, nil
 	}
 
@@ -116,7 +116,7 @@ func maybeInstallNetworkConfigFromStage(
 		preflight.CommandLine(),
 		rollbackPath,
 	)
-	logger.Info("Staged network files remain available under: %s", stageRoot)
+	logger.Info("Staged network files remain available under: %s until the restore ends, then only the backup archive holds them", stageRoot)
 	return false, fmt.Errorf("network staged install preflight failed; network files rolled back")
 }
 

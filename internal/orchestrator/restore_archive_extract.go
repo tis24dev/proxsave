@@ -38,6 +38,16 @@ type restoreArchiveOptions struct {
 	// partial extraction is reported as a warning); the staged restore path sets
 	// it true so an incomplete stage is never applied to the live system (BH-002).
 	failOnPartialExtraction bool
+	// onExtracted, when set, is called with the name of every entry written.
+	onExtracted func(entryName string)
+	// readOnly marks an extraction into a temporary directory that only reads the
+	// archive (extractArchiveSubset). It prints no "Successfully restored" summary:
+	// nothing was restored, and on a real run the lines sat next to the restore's own.
+	readOnly bool
+	// legacyPVEPrefix is the prefix an older SYSTEM_ROOT_PREFIX backup holds its PVE
+	// files under, found when the archive was analyzed; its entries are restored at
+	// their host paths.
+	legacyPVEPrefix string
 }
 
 type restoreExtractionStats struct {
@@ -68,6 +78,9 @@ func extractArchiveNative(ctx context.Context, opts restoreArchiveOptions) (err 
 	}
 	defer closeDecompressionReader(reader, &err, "close decompression reader")
 
+	if opts.legacyPVEPrefix == "" {
+		opts.legacyPVEPrefix = legacyPVEPrefixFor(opts.archivePath)
+	}
 	extractionLog := newRestoreExtractionLog(opts)
 	defer extractionLog.close()
 	extractionLog.writeHeader(opts)
@@ -78,7 +91,9 @@ func extractArchiveNative(ctx context.Context, opts restoreArchiveOptions) (err 
 	}
 
 	extractionLog.writeSummary(stats)
-	logRestoreExtractionSummary(opts, stats)
+	if !opts.readOnly {
+		logRestoreExtractionSummary(opts, stats)
+	}
 
 	// Turn deduplicated symlinks back into regular files by rebuilding them from the
 	// archive, so selective restore never leaves a dangling link and full restore
@@ -179,6 +194,20 @@ func processRestoreArchiveEntries(ctx context.Context, tarReader *tar.Reader, op
 		if err != nil {
 			return stats, extractedSet, fmt.Errorf("read tar header: %w", err)
 		}
+		if opts.legacyPVEPrefix != "" {
+			mapped, underPrefix := remapLegacyPVEEntry(header.Name, opts.legacyPVEPrefix)
+			if underPrefix && header.Typeflag == tar.TypeDir {
+				// The prefix's own directories: restoring them would only create an
+				// empty /host tree on this system.
+				stats.filesSkipped++
+				extractionLog.recordSkipped(header.Name, "directory of the SYSTEM_ROOT_PREFIX the PVE files were stored under")
+				continue
+			}
+			header.Name = mapped
+			if header.Typeflag == tar.TypeLink {
+				header.Linkname, _ = remapLegacyPVEEntry(header.Linkname, opts.legacyPVEPrefix)
+			}
+		}
 
 		if skipRestoreArchiveEntry(header, opts, selectiveMode, extractionLog, &stats) {
 			continue
@@ -203,6 +232,9 @@ func processRestoreArchiveEntries(ctx context.Context, tarReader *tar.Reader, op
 		stats.filesExtracted++
 		extractedSet[dedupCleanArchivePath(header.Name)] = true
 		extractionLog.recordRestored(header.Name)
+		if opts.onExtracted != nil {
+			opts.onExtracted(header.Name)
+		}
 		if stats.filesExtracted%100 == 0 {
 			opts.logger.Debug("Extracted %d files...", stats.filesExtracted)
 		}
@@ -377,18 +409,22 @@ func materializeDedupSymlinks(ctx context.Context, archivePath, destRoot string,
 	}
 
 	// Map each canonical archive path to the extracted duplicate symlinks that need
-	// its content. Only duplicates actually present on disk are considered.
+	// its content. Only duplicates actually present on disk are considered. In an older
+	// SYSTEM_ROOT_PREFIX backup a duplicate under the prefix was extracted at its host
+	// path; its canonical is still read from the archive by its stored name.
+	legacyPrefix := legacyPVEPrefixFor(archivePath)
 	needByCanonical := map[string][]materializeTarget{}
 	for _, entry := range entries {
 		if strings.TrimSpace(entry.Path) == "" {
 			continue
 		}
-		if extractedSet != nil && !extractedSet[dedupCleanArchivePath(entry.Path)] {
+		extractedPath, _ := remapLegacyPVEEntry(entry.Path, legacyPrefix)
+		if extractedSet != nil && !extractedSet[dedupCleanArchivePath(extractedPath)] {
 			// Only rebuild duplicates actually extracted this run (selective AND full),
 			// never a pre-existing live symlink or an out-of-scope manifest entry (F-05-01).
 			continue
 		}
-		target, _, err := sanitizeRestoreEntryTargetWithFS(restoreFS, destRoot, entry.Path)
+		target, _, err := sanitizeRestoreEntryTargetWithFS(restoreFS, destRoot, extractedPath)
 		if err != nil {
 			continue
 		}

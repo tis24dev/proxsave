@@ -18,8 +18,8 @@ func TestGuardMountpointsFromMountinfo_VisibleAndHidden(t *testing.T) {
 		"30 1 0:1 / /mnt/hidden rw - ext4 /dev/sdb1 rw",
 	}, "\n")
 
-	visible, hidden, mounts := guardMountpointsFromMountinfo(mountinfo)
-	if mounts != 2 {
+	visible, hidden, mountsIn := guardMountpointsFromMountinfo(mountinfo, guardRootMatchersFor(mountinfo, []string{mountGuardBaseDir}))
+	if mounts := mountsIn[mountGuardBaseDir]; mounts != 2 {
 		t.Fatalf("guard mounts=%d want 2 (visible+hidden guard entries)", mounts)
 	}
 	if len(visible) != 1 || visible[0] != "/mnt/visible" {
@@ -32,8 +32,8 @@ func TestGuardMountpointsFromMountinfo_VisibleAndHidden(t *testing.T) {
 
 func TestGuardMountpointsFromMountinfo_UnescapesMountpoint(t *testing.T) {
 	mountinfo := "10 1 0:1 " + mountGuardBaseDir + "/g1 /mnt/with\\040space rw - ext4 /dev/sda1 rw\n"
-	visible, hidden, mounts := guardMountpointsFromMountinfo(mountinfo)
-	if mounts != 1 {
+	visible, hidden, mountsIn := guardMountpointsFromMountinfo(mountinfo, guardRootMatchersFor(mountinfo, []string{mountGuardBaseDir}))
+	if mounts := mountsIn[mountGuardBaseDir]; mounts != 1 {
 		t.Fatalf("guard mounts=%d want 1", mounts)
 	}
 	if len(hidden) != 0 {
@@ -59,6 +59,7 @@ func TestCleanupMountGuards_UnmountsVisibleAndRemovesDirWhenNoRemaining(t *testi
 	})
 
 	cleanupGeteuid = func() int { return 0 }
+	withSingleGuardDir(t)
 	cleanupStat = func(string) (os.FileInfo, error) { return nil, nil }
 
 	initialMountinfo := "10 1 0:1 " + mountGuardBaseDir + "/g1 /mnt/visible rw - ext4 /dev/sda1 rw\n"
@@ -115,6 +116,7 @@ func TestCleanupMountGuards_DoesNotUnmountHiddenGuards(t *testing.T) {
 	})
 
 	cleanupGeteuid = func() int { return 0 }
+	withSingleGuardDir(t)
 	cleanupStat = func(string) (os.FileInfo, error) { return nil, nil }
 
 	hiddenMountinfo := strings.Join([]string{
@@ -160,6 +162,7 @@ func TestCleanupMountGuards_RereadFailureKeepsDir(t *testing.T) {
 	})
 
 	cleanupGeteuid = func() int { return 0 }
+	withSingleGuardDir(t)
 	cleanupStat = func(string) (os.FileInfo, error) { return nil, nil }
 
 	initialMountinfo := "10 1 0:1 " + mountGuardBaseDir + "/g1 /mnt/visible rw - ext4 /dev/sda1 rw\n"
@@ -211,6 +214,7 @@ func TestCleanupMountGuards_RereadFailureSummaryUnknown(t *testing.T) {
 	})
 
 	cleanupGeteuid = func() int { return 0 }
+	withSingleGuardDir(t)
 	cleanupStat = func(string) (os.FileInfo, error) { return nil, nil }
 	initialMountinfo := "10 1 0:1 " + mountGuardBaseDir + "/g1 /mnt/visible rw - ext4 /dev/sda1 rw\n"
 	readCount := 0
@@ -243,4 +247,14 @@ func TestCleanupMountGuards_RereadFailureSummaryUnknown(t *testing.T) {
 	if !strings.Contains(out, "guard-dir=kept") {
 		t.Fatalf("summary must report guard-dir=kept on reread failure; out=%q", out)
 	}
+}
+
+// withSingleGuardDir makes cleanup see one guard directory: the legacy path is set to
+// the current one, so a cleanupStat fake that reports every path as present does not
+// also present /var/lib/proxsave/guards.
+func withSingleGuardDir(t *testing.T) {
+	t.Helper()
+	orig := legacyMountGuardBaseDir
+	legacyMountGuardBaseDir = mountGuardBaseDir
+	t.Cleanup(func() { legacyMountGuardBaseDir = orig })
 }

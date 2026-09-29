@@ -405,9 +405,16 @@ func TestCollectorDryRun(t *testing.T) {
 	}
 }
 
+// The collection runs on a fake root, never on the host that runs the tests: on the real
+// one it copies every /home/<user> whole, which on a CI runner is the checkout, the Go
+// module and build caches and the image's toolchains. Three tests doing that took the
+// race job past its 10-minute package timeout.
 func TestCollectSystemInfo(t *testing.T) {
 	logger := logging.New(types.LogLevelInfo, false)
 	config := GetDefaultCollectorConfig()
+	config.SystemRootPrefix = t.TempDir()
+	writeRootFile(t, config.SystemRootPrefix, "etc/os-release", "ID=debian\nVERSION_ID=\"13\"\n", 0o644)
+	writeRootFile(t, config.SystemRootPrefix, "home/admin/.bashrc", "# test\n", 0o644)
 	tempDir := t.TempDir()
 
 	collector := NewCollector(logger, config, tempDir, types.ProxmoxUnknown, false)

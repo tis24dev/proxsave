@@ -19,8 +19,18 @@ type fullRestoreUIFlow struct {
 	destRoot  string
 	logger    *logging.Logger
 	dryRun    bool
+	// skipHostid, skipZFSCaches and skipZFSConf keep the backup's /etc/hostid, pool
+	// cache files and zfs.conf off this host (decideZFSHostFiles).
+	skipHostid    bool
+	skipZFSCaches bool
+	skipZFSConf   bool
+	// restoreHadWarnings is the workflow's flag as runFullRestore leaves it before the
+	// flow is built (decideZFSHostFiles sets it); the closing line reads it with the
+	// logger's own count.
+	restoreHadWarnings bool
 	// plan is the synthesized full-restore plan; only ExportCategories is read, to
-	// keep export-only content out of the live system.
+	// keep export-only content, and the product this host does not run, out of the
+	// live system.
 	plan *RestorePlan
 }
 
@@ -29,14 +39,19 @@ type fullRestoreUIFlow struct {
 // in runFullRestore, which reuses the selective path's own methods.
 func newFullRestoreUIFlow(w *restoreUIWorkflowRun) *fullRestoreUIFlow {
 	return &fullRestoreUIFlow{
-		ctx:       w.ctx,
-		ui:        w.ui,
-		candidate: w.candidate,
-		prepared:  w.prepared,
-		destRoot:  w.destRoot,
-		logger:    w.logger,
-		dryRun:    w.cfg.DryRun,
-		plan:      w.plan,
+		ctx:           w.ctx,
+		ui:            w.ui,
+		candidate:     w.candidate,
+		prepared:      w.prepared,
+		destRoot:      w.destRoot,
+		logger:        w.logger,
+		dryRun:        w.cfg.DryRun,
+		skipHostid:    w.skipHostid,
+		skipZFSCaches: w.skipZFSCaches,
+		skipZFSConf:   w.skipZFSConf,
+		plan:          w.plan,
+
+		restoreHadWarnings: w.restoreHadWarnings,
 	}
 }
 
@@ -59,25 +74,32 @@ func (f *fullRestoreUIFlow) extract() error {
 	if err := f.mergeFstabIfSafe(); err != nil {
 		return err
 	}
-	f.logger.Info("Restore completed successfully.")
+	logRestoreVerdict(f.logger, f.restoreHadWarnings)
 	return nil
 }
 
-// skipPath keeps three classes of entry out of a plain extraction: /etc/fstab, which
+// skipPath keeps five classes of entry out of a plain extraction: /etc/fstab, which
 // is merged afterwards instead of overwritten; the PVE cluster database, which this
-// fallback has no safe way to write; and everything belonging to an ExportOnly
-// category. The selective path never writes export-only content to system paths
+// fallback has no safe way to write; the bootNeverLivePaths (the backed-up host's
+// boot files); /etc/hostid, the pool cache files and zfs.conf when decideZFSHostFiles
+// keeps them off this host; and everything belonging to an ExportOnly category. The selective path never writes export-only content to system paths
 // (splitRestoreCategories routes it to an export directory); before this, the
 // fallback wrote /etc/proxmox-backup/ and /var/lib/proxsave-info/ straight to /.
 //
 // The prefixes come from the plan's own ExportCategories and from categories.go, so
-// there is no second list to keep in step with them.
+// there is no second list to keep in step with them. On a host that runs one product
+// only, ExportCategories also holds every category of the other product
+// (synthesizeFullRestorePlan), so those are skipped too.
 func (f *fullRestoreUIFlow) skipPath(name string) bool {
 	clean := normalizeArchiveEntryPath(name)
 	if f.safeFstabMerge() && clean == "etc/fstab" {
 		return true
 	}
 	if matchesAnyArchivePrefix(clean, clusterDBArchivePaths()) {
+		return true
+	}
+	if isBootNeverLivePath(clean) || (f.skipHostid && clean == hostidArchivePath) || (f.skipZFSCaches && isZFSHostCachePath(clean)) ||
+		(f.skipZFSConf && clean == zfsARCConfArchivePath) {
 		return true
 	}
 	return f.isExportOnlyPath(clean)

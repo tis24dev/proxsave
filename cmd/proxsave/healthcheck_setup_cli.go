@@ -15,6 +15,7 @@ var (
 	healthcheckSetupCheck          = orchestrator.CheckHealthcheckConnection
 	healthcheckSetupSelfCheck      = orchestrator.CheckHealthcheckSelfConnection
 	healthcheckSetupPromptYesNo    = promptYesNo
+	healthcheckSetupNotifyFilter   = orchestrator.CheckHealthcheckNotifyFilter
 )
 
 func logHealthcheckSetupBootstrapOutcome(bootstrap *logging.BootstrapLogger, state orchestrator.HealthcheckSetupBootstrap) {
@@ -79,6 +80,7 @@ func runHealthcheckSetupCLI(ctx context.Context, reader *bufio.Reader, baseDir, 
 	for {
 		attempts++
 		var st orchestrator.HealthcheckSetupState
+		var nf orchestrator.HealthcheckNotifyFilter
 		if selfMode {
 			// Self mode: pure reachability of the user's own alive URL; no server
 			// fetch, no magic-link (LoginURL stays empty so the box is skipped).
@@ -87,6 +89,8 @@ func runHealthcheckSetupCLI(ctx context.Context, reader *bufio.Reader, baseDir, 
 		} else {
 			res := healthcheckSetupCheck(ctx, state.ServerAPIHost, state.ServerID, baseDir, state.HealthcheckHeartbeatInterval)
 			st = orchestrator.ClassifyHealthcheckSetupResult(res)
+			// The run's own NOTIFY_ON decision, on the daemon diagnosis this check just made.
+			nf = healthcheckSetupNotifyFilter(ctx, configPath, baseDir, state.ServerAPIHost, state.ServerID, res.Daemon)
 		}
 
 		// Show the portal whenever the server told us something about it - even if the
@@ -96,6 +100,7 @@ func runHealthcheckSetupCLI(ctx context.Context, reader *bufio.Reader, baseDir, 
 		printHealthcheckPortal(st)
 
 		printHealthcheckSetupStatus(st)
+		printHealthcheckNotifyBlock(selfMode, nf)
 
 		if st.Verified {
 			logBootstrapInfo(bootstrap, "Healthcheck setup: connection verified (attempts=%d, state=%s)", attempts, st.Keyword)
@@ -169,4 +174,18 @@ func printHealthcheckSetupStatus(st orchestrator.HealthcheckSetupState) {
 	if st.Message != "" {
 		fmt.Printf("  %s\n", st.Message)
 	}
+}
+
+// printHealthcheckNotifyBlock prints the Notifications block under the Status, in the CLI's own
+// layout (title, then the values indented), with the dashboard's text. Nothing when backup.env
+// could not be read.
+func printHealthcheckNotifyBlock(selfMode bool, nf orchestrator.HealthcheckNotifyFilter) {
+	setting, current, ok := orchestrator.HealthcheckNotifyLines(selfMode, nf)
+	if !ok {
+		return
+	}
+	fmt.Println()
+	fmt.Println("Notifications:")
+	fmt.Printf("  Setting: %s\n", setting)
+	fmt.Printf("  Current: %s\n", current)
 }

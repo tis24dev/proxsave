@@ -221,6 +221,7 @@ COLORIZE_STEP_LOGS=true            # true | false (requires USE_COLOR=true)
 DEBUG_LEVEL=standard               # standard | advanced | extreme
 
 # Dry-run mode (test without changes)
+# A restore is refused while this is true: it cannot run without modifying the system
 DRY_RUN=false                      # true | false
 
 # Enable/disable always-on pprof profiling (CPU + heap)
@@ -1197,6 +1198,68 @@ notifications**, **Email notifications** and **Email delivery mode**. Gotify and
 have no form fields and are configured here only. After enabling Telegram,
 `Diagnostic Checks` -> `Telegram` verifies the pairing without running a backup.
 
+### Which runs get notified (`NOTIFY_ON`)
+
+```bash
+# When to send, on every channel below
+NOTIFY_ON=warning                  # always | warning | failure
+```
+
+`NOTIFY_ON` is a **severity threshold, not an exact match**:
+
+| Value | Notified | Silent |
+|-------|----------|--------|
+| `always` | success, warning, failure | nothing |
+| `warning` (default) | warning **and** failure | success |
+| `failure` | failure | success, warning |
+
+So `NOTIFY_ON=warning` means "warnings and anything worse", not "warnings only". It is the
+setting for *tell me when something needs looking at*.
+
+Below `always` a clean run is silent, so something else has to alarm when a run never
+happens: the [healthchecks monitor](HEALTHCHECKS.md), which `NOTIFY_ON` never filters. A run
+applies `warning` or `failure` only when that monitor is confirmed, and notifies every
+outcome otherwise:
+
+- `HEALTHCHECK_ENABLED=true`
+- the daemon transmitting
+- centralized mode: an alert channel on the portal that has already delivered a DOWN
+- centralized mode: the server applying this `NOTIFY_ON`
+- self mode: no `HEALTHCHECK_NOTIFY_*` variable set
+
+The run log and the Healthchecks check screens show which filter applies now; details in
+[HEALTHCHECKS.md](HEALTHCHECKS.md#alert-delivery-and-notify_on).
+
+It applies on top of each channel's own `*_ENABLED` flag, and to every channel at once;
+there is no per-channel form. A channel skipped by the filter says so in the log:
+
+```
+SKIP     Webhook: filtered
+```
+
+The install wizard asks for it as **Notify level** (`Every run`, `Warnings and failures`,
+`Failures only`) right after the Healthchecks mode. With Healthchecks off or the cron
+engine it does not ask and writes `always`, since no level below that can apply there.
+Upgrading from a release without `NOTIFY_ON` writes `NOTIFY_ON=warning` into the existing
+`backup.env`; the configuration merge adds the line only, without the template's comments.
+
+Three things it deliberately does **not** change:
+
+- **A broken channel.** One that is enabled but failed to build - a mistyped
+  `EMAIL_DELIVERY_METHOD` is the usual cause - still warns and is still reported as an
+  error at every threshold. The filter quietens channels that work and have nothing to
+  say; it never quietens one that could not say anything.
+- **The exit code.** A run that ends with warnings still exits `1`, still logs the
+  warnings, and still reports `status=warning` in the Prometheus textfile. `NOTIFY_ON` is
+  a delivery decision only, so anything watching the exit code sees what it saw before.
+- **Healthchecks.** The [healthchecks connector](HEALTHCHECKS.md) is not a notification
+  channel and is never filtered. It is what still reports a run you chose not to hear
+  about, including a run that never happened at all.
+
+An unrecognised value is not silently accepted: it is named in a warning and treated as
+`always`, because the failure mode of a typo here is silence, and silence looks exactly
+like a backup that never ran.
+
 ### Telegram
 
 **From the dashboard**: the form's **Telegram notifications** toggle writes
@@ -1553,6 +1616,8 @@ HOST_BACKUP_MODE=false             # Appliance backing up a host mounted read-on
 
 **Note**: `${PVE_CONFIG_PATH}` (and other `${VAR}` references) are resolved from the same `backup.env` file too, so you do not need to `export` them.
 
+**Note**: the PVE path overrides, `CEPH_CONFIG_PATH` and `SYSTEM_ROOT_PREFIX` choose where a file is read, not where it is stored. The archive always holds `/etc/pve`, `/var/lib/pve-cluster`, `/etc/pve/corosync.conf`, `/etc/vzdump.conf`, `/etc/corosync/authkey` and `/etc/ceph` at those paths, which is where the restore looks for them.
+
 ### PBS API credentials (remote server only)
 
 Three variables let the PBS collectors reach a **remote** Proxmox Backup Server. A local
@@ -1575,9 +1640,11 @@ a warning naming both variables; the rest of the backup is unaffected.
 
 **Use case**: Working with mounted snapshots or mirrors at non-standard paths.
 
-**HA-LXC appliance (`HOST_BACKUP_MODE`)**: run ProxSave inside a privileged LXC that backs up the Proxmox host bind-mounted read-only. A non-empty `SYSTEM_ROOT_PREFIX` already makes Proxmox detection and absolute-symlink resolution prefix-aware. `HOST_BACKUP_MODE=true` additionally frames the run as a host-backup appliance and enables the ZFS inventory, which reports the host pools accurately because a privileged LXC shares the host kernel. Namespace-scoped and cluster-daemon commands (udevadm, ethtool, pvesh, ceph) stay skipped under a prefix because they would describe the container, not the host; their data is collected from the host files instead. Symlink targets are stored verbatim, so a backup taken this way restores onto a real host unchanged.
+**HA-LXC appliance (`HOST_BACKUP_MODE`)**: run ProxSave inside a privileged LXC that backs up the Proxmox host bind-mounted read-only. A non-empty `SYSTEM_ROOT_PREFIX` already makes Proxmox detection and absolute-symlink resolution prefix-aware. `HOST_BACKUP_MODE=true` additionally frames the run as a host-backup appliance and enables the ZFS inventory, which reports the host pools accurately because a privileged LXC shares the host kernel. Namespace-scoped and cluster-daemon commands (udevadm, ethtool, the PVE CLI, ceph) stay skipped under a prefix because they would describe the container, not the host; their data is collected from the host files instead. The PVE runtime commands (`pvesh`, `pveum`, `pvecm`, `pvesm`, `pvenode`, `pveversion`, `crontab -l`, `systemctl list-timers`) are skipped under any prefix, with one line in the log: `PVE runtime commands - skipped under SYSTEM_ROOT_PREFIX, they would describe this system, not the host`. The host's PVE configuration, crontabs and systemd units come from the host tree, so the container needs none of the PVE packages. Storage paths from `storage.cfg` are read under the prefix: a storage whose path is missing there, or a network storage (NFS, CIFS, CephFS, GlusterFS) whose mount is not carried into the container, is logged as not visible and not scanned for backup files. A `dir` storage on a separate host disk that is not carried cannot be told apart from an empty directory and reads as empty. An archive from an older release taken under a prefix stored the PVE files under it (`./host/etc/pve/...`); the restore recognizes that layout when the backup's own metadata says it covered PVE (`BACKUP_TYPE` or `BACKUP_TARGETS` pve or dual) and the prefix holds PVE files only (`etc/pve`, `var/lib/pve-cluster`, `etc/corosync`, `etc/vzdump.conf`, `etc/ceph`), logs `PVE configuration - stored under host/ in this backup (taken with SYSTEM_ROOT_PREFIX), restored to its host paths` and writes them at their host paths. A single `etc/pve` tree elsewhere, for example inside an extracted archive under `/home`, which also holds `etc/hostname` and the rest of a system, is a copy and stays where it is. So do the PVE files of a legacy backup taken with a PVE path variable pointing outside those five paths: the archive does not record the variable. Symlink targets are stored verbatim, so a backup taken this way restores onto a real host unchanged.
 
 Set `HOST_BACKUP_MODE=true` only in a privileged LXC that shares the host `/dev/zfs` and owns no independent ZFS pools of its own, otherwise the ZFS inventory could record the container's pools as the host's. The host network inventory relies on the host `/sys/class/net`, so it is only complete if the host sysfs is carried under the prefix (a plain non-recursive bind of `/` does not carry it); when it is absent ProxSave logs that the host sysfs is not available rather than reporting container interfaces.
+
+The PVE cluster database (`/var/lib/pve-cluster/config.db`) is captured with `sqlite3 .backup`, which runs inside the LXC. On a Proxmox host `sqlite3` is always installed (`pve-cluster` depends on it), but in the container it is a separate package: without it ProxSave copies the database raw, which can tear mid-write and miss changes not yet checkpointed, and logs a warning on every run.
 
 ### System Collectors
 
@@ -1593,8 +1660,10 @@ BACKUP_APT_SOURCES=true            # /etc/apt/sources.list*
 # Cron jobs
 BACKUP_CRON_JOBS=true              # /etc/crontab, /etc/cron.*
 
-# Systemd services
-BACKUP_SYSTEMD_SERVICES=true       # /etc/systemd/system
+# Systemd services, service defaults and udev rules, restored with the services category.
+# GRUB settings (/etc/default/grub, grub.d) are kept for reference only under
+# /var/lib/proxsave-info/boot/, which a restore never writes to the system
+BACKUP_SYSTEMD_SERVICES=true       # /etc/systemd/system, /etc/default, /etc/udev/rules.d/
 
 # SSL certificates
 BACKUP_SSL_CERTS=true              # /etc/ssl/certs, /etc/pve/local/pve-ssl.*
@@ -1602,8 +1671,9 @@ BACKUP_SSL_CERTS=true              # /etc/ssl/certs, /etc/pve/local/pve-ssl.*
 # Sysctl configuration
 BACKUP_SYSCTL_CONFIG=true          # /etc/sysctl.conf, /etc/sysctl.d/
 
-# Kernel modules
-BACKUP_KERNEL_MODULES=true         # /etc/modules, /etc/modprobe.d/
+# Kernel modules. /etc/kernel/cmdline and /etc/kernel/proxmox-boot-uuids are kept for
+# reference only under /var/lib/proxsave-info/boot/, which a restore never writes to the system
+BACKUP_KERNEL_MODULES=true         # /etc/modules, /etc/modprobe.d/, /etc/kernel/cmdline, /etc/kernel/proxmox-boot-uuids
 
 # Firewall rules (the dashboard form's "Backup firewall rules" toggle writes this one)
 BACKUP_FIREWALL_RULES=false        # iptables, nftables
@@ -1628,7 +1698,7 @@ BACKUP_ZFS_CONFIG=true             # /etc/zfs, /etc/hostid, zpool cache & proper
 BACKUP_ROOT_HOME=true              # /root (excluding .cache, .local/share/Trash)
 
 # Backup script repository
-BACKUP_SCRIPT_REPOSITORY=false     # Snapshot the ProxSave install dir (excludes .git and backup/log output)
+BACKUP_SCRIPT_REPOSITORY=false     # Snapshot the ProxSave install dir (excludes .git, backup/log output, restore/ and guards/)
 
 # Backup configuration file
 BACKUP_CONFIG_FILE=true            # Include this backup.env configuration file in the backup
@@ -1658,6 +1728,8 @@ BACKUP_BLACKLIST="
 ```
 
 **Format**: Bash-style heredoc, one path per line, `#` for comments.
+
+**Note (boot files)**: a custom path that brings in `/etc/default/grub`, `/etc/default/grub.d/`, `/etc/kernel/cmdline` or `/etc/kernel/proxmox-boot-uuids` is collected, but a restore never writes those files to the system: they name the backed-up host's root device, pool and ESPs, and go to the export directory with `proxsave_info`. The `boot` restore category carries the kernel parameters instead.
 
 ---
 

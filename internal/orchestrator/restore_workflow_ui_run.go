@@ -42,9 +42,26 @@ type restoreUIWorkflowRun struct {
 	exportRoot                  string
 	needsClusterRestore         bool
 	clusterServicesStopped      bool
-	pbsServicesStopped          bool
-	needsPBSServices            bool
-	needsFilesystemRestore      bool
+	// clusterServicesRestarted is set once the PVE services stopped for a cluster
+	// RECOVERY have been started again, so the deferred cleanup does not repeat it.
+	clusterServicesRestarted bool
+	// clusterServicesNotRunning records what that restart left down, for the closing
+	// advice; nil when every unit started.
+	clusterServicesNotRunning *pveClusterStartError
+	pbsServicesStopped        bool
+	needsPBSServices          bool
+	needsFilesystemRestore    bool
+	// needsBootConfiguration is set when the boot category is selected: it is taken
+	// out of the system-path extraction and applied by applyBootConfiguration.
+	needsBootConfiguration bool
+	// bootRebuildInputsWritten holds the bootRebuildInputs the system-path
+	// extraction wrote to, in the order first seen.
+	bootRebuildInputsWritten []string
+	// skipHostid, skipZFSCaches and skipZFSConf keep the backup's /etc/hostid, pool
+	// cache files and zfs.conf off this host (decideZFSHostFiles).
+	skipHostid    bool
+	skipZFSCaches bool
+	skipZFSConf   bool
 }
 
 func newRestoreUIWorkflowRun(ctx context.Context, cfg *config.Config, logger *logging.Logger, version string, ui RestoreWorkflowUI, runHostname string) *restoreUIWorkflowRun {
@@ -74,6 +91,9 @@ func (w *restoreUIWorkflowRun) run() error {
 }
 
 func (w *restoreUIWorkflowRun) runSelectiveRestore() error {
+	// Deferred first so it runs last: the deferred services cleanup below still reads
+	// the stage (PBS notifications repair), on success and on failure alike.
+	defer w.removeStage()
 	if err := w.confirmRestorePlan(); err != nil {
 		return err
 	}
@@ -91,6 +111,9 @@ func (w *restoreUIWorkflowRun) runSelectiveRestore() error {
 	if err := w.runPostRestoreApplyWorkflows(); err != nil {
 		return err
 	}
+	if err := w.applyBootConfiguration(); err != nil {
+		return err
+	}
 	w.logRestoreCompletion()
 	w.logServiceRestartAdvice()
 	w.checkZFSPoolsAfterRestore()
@@ -100,9 +123,12 @@ func (w *restoreUIWorkflowRun) runSelectiveRestore() error {
 
 func (w *restoreUIWorkflowRun) prepareAndRestoreSelectedPayloads() error {
 	w.interceptFilesystemCategory()
+	w.interceptBootCategory()
 	if err := w.extractNormalCategories(); err != nil {
 		return err
 	}
+	// The cluster database is on disk: nothing after this needs pmxcfs down.
+	w.restartStoppedPVEClusterServices()
 	if err := w.smartMergeFilesystemCategory(); err != nil {
 		return err
 	}

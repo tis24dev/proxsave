@@ -1430,7 +1430,7 @@ func TestMaybeRepairNICNamesCLI_SurfacesApplyError(t *testing.T) {
 		t.Fatalf("write interfaces: %v", err)
 	}
 
-	restoreFS = mkdirAllFailFS{FS: fakeFS, failPath: "/tmp/proxsave", err: errors.New("boom")}
+	restoreFS = mkdirAllFailFS{FS: fakeFS, failPath: RestoreRunDir(), err: errors.New("boom")}
 
 	reader := bufio.NewReader(strings.NewReader(""))
 	// B/C2: an apply error must NOT be swallowed - surface it as a Failed result
@@ -1764,7 +1764,7 @@ func TestRollbackNetworkFilesNow_ErrorCasesAndScriptFailure(t *testing.T) {
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
-		if logPath != "/work/network_rollback_now_20260201_123456.log" {
+		if logPath != filepath.Join(RestoreRunDir(), "network_rollback_now_20260201_123456.log") {
 			t.Fatalf("logPath=%q", logPath)
 		}
 	})
@@ -1782,7 +1782,7 @@ func TestRollbackNetworkFilesNow_ErrorCasesAndScriptFailure(t *testing.T) {
 		if err == nil || !strings.Contains(err.Error(), "rollback script failed") {
 			t.Fatalf("err=%v want rollback script failed", err)
 		}
-		if logPath != "/work/network_rollback_now_20260201_123456.log" {
+		if logPath != filepath.Join(RestoreRunDir(), "network_rollback_now_20260201_123456.log") {
 			t.Fatalf("logPath=%q", logPath)
 		}
 	})
@@ -1813,7 +1813,9 @@ func TestRollbackNetworkFilesNow_DefaultWorkDirUsesTmpProxsave(t *testing.T) {
 	if err != nil {
 		t.Fatalf("rollbackNetworkFilesNow error: %v", err)
 	}
-	if logPath != "/tmp/proxsave/network_rollback_now_20260201_123456.log" {
+	// The script stays in the /tmp/proxsave work dir; its log goes to the restore's
+	// own directory, which survives the reboot the restore recommends.
+	if logPath != filepath.Join(RestoreRunDir(), "network_rollback_now_20260201_123456.log") {
 		t.Fatalf("logPath=%q", logPath)
 	}
 }

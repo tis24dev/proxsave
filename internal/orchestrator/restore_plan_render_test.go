@@ -66,3 +66,31 @@ func TestBuildRestorePlanText(t *testing.T) {
 		t.Fatalf("missing warning text")
 	}
 }
+
+// The "will be restored" list names what the extraction writes over the live
+// system. The boot category writes nothing from the archive (it merges into this
+// host's own file), export-only categories go to the export directory, and the
+// old host's boot files are never written: none of them belongs in the list.
+func TestBuildRestorePlanTextListsOnlyPathsWrittenToTheSystem(t *testing.T) {
+	var cats []Category
+	for _, id := range []string{"services", "boot", "proxsave_info"} {
+		cats = append(cats, *GetCategoryByID(id, GetAllCategories()))
+	}
+	text := buildRestorePlanText(&SelectiveRestoreConfig{Mode: RestoreModeCustom, SystemType: SystemTypePVE, SelectedCategories: cats})
+	for _, absent := range []string{
+		"  • /etc/default/grub\n",
+		"  • /etc/default/grub.d/\n",
+		"  • /etc/kernel/cmdline\n",
+		"  • /etc/kernel/proxmox-boot-uuids\n",
+		"  • /var/lib/proxsave-info/\n",
+		"  • /var/lib/proxsave-info/commands/system/kernel_cmdline.txt\n",
+		"  • /manifest.json\n",
+	} {
+		if strings.Contains(text, absent) {
+			t.Errorf("plan lists %q as restored:\n%s", strings.TrimSpace(absent), text)
+		}
+	}
+	if !strings.Contains(text, "  • /etc/default/\n") || !strings.Contains(text, "  • /etc/modprobe.d/\n") {
+		t.Fatalf("control: the services paths must still be listed:\n%s", text)
+	}
+}

@@ -145,11 +145,12 @@ Safety Backup
   └─ Store in /tmp
   ↓
 Service Management (if cluster)
-  ├─ Stop PVE services
+  ├─ Stop HA services, then PVE services
   └─ Unmount /etc/pve
   ↓
 File Extraction (three tiers)
   ├─ Normal categories → /
+  ├─ (RECOVERY) Restart PVE and HA services once config.db is written
   ├─ Export categories → export dir (read-only)
   ├─ Staged categories → stage dir, then applied
   └─ Log all operations
@@ -157,7 +158,7 @@ File Extraction (three tiers)
 Post-Restore Tasks
   ├─ Recreate directories
   ├─ Check ZFS pools (when the ZFS category is selected)
-  └─ Restart services (deferred)
+  └─ Restart PBS services (deferred; PVE services only if the run ended before their restart)
   ↓
 Completion Summary
 ```
@@ -267,7 +268,9 @@ instead of line numbers, which drift on every edit):
    `restore_plan.go` which splits the selection via `splitRestoreCategories()` in `staging.go`):
    - User selects restore mode (Full/Storage/Base/Custom)
    - Interactive category selection for Custom mode
-   - Build the plan, splitting categories into normal / staged / export-only
+   - Build the plan, splitting categories into normal / staged / export-only; on a
+     single-role host the other role's categories go to export
+     (`redirectOtherProductCategoriesToExport()` in `restore_plan.go`)
 
 3. **PBS Behavior + Cluster SAFE/RECOVERY Prompt** (`configurePlanForRuntime()` →
    `selectPBSRestoreBehavior()` and `selectClusterRestoreMode()` → `applyClusterRestoreChoice()`
@@ -276,6 +279,9 @@ instead of line numbers, which drift on every edit):
    - Detect cluster payload in backup (`plan.ClusterBackup && plan.NeedsClusterRestore`)
    - Prompt user: SAFE (export+API) vs RECOVERY (full restore)
    - SAFE mode redirects pve_cluster to export-only
+   - RECOVERY probes the quorum (`refuseRecoveryOnQuorateCluster()`, see
+     [Cluster SAFE/RECOVERY Mode](#cluster-saferecovery-mode)) and refuses a quorate cluster
+     with more than 1 node online
 
 4. **Plan confirmation** (`confirmRestorePlan()` in `restore_workflow_ui_plan.go`, called from
    `runSelectiveRestore()` before any writes):
@@ -291,9 +297,13 @@ instead of line numbers, which drift on every edit):
    in `restore_workflow_ui_backups_services.go` → `stopPVEClusterServices()` /
    `unmountEtcPVE()` / `startPVEClusterServices()` in `restore_services.go`):
    - Detect cluster restore need (RECOVERY mode)
-   - Stop PVE services: pve-cluster, pvedaemon, pveproxy, pvestatd
+   - Stop HA services, then PVE services: pve-ha-lrm, pve-ha-crm, pve-cluster, pvedaemon,
+     pveproxy, pvestatd
    - Unmount /etc/pve
-   - Defer restart
+   - Restart once, right after `extractNormalCategories()` has written the cluster database
+     (`restartStoppedPVEClusterServices()`, called from `prepareAndRestoreSelectedPayloads()`):
+     pve-cluster, pvedaemon, pveproxy, pvestatd, pve-ha-crm, pve-ha-lrm. The deferred cleanup
+     restarts them only when the run ends before that point
 
 7. **PBS Service Management** (`preparePBSServices()` in
    `restore_workflow_ui_backups_services.go` → `stopPBSServices()` / `startPBSServices()`
@@ -319,8 +329,11 @@ instead of line numbers, which drift on every edit):
 
 10. **Post-Restore** (`runPostRestoreApplyWorkflows()` in `restore_workflow_ui_run.go` →
     `recreateStorageDirectories()` / `applyNetworkConfig()` / `applyFirewallConfig()` /
-    `applyHAConfig()`; then `logRestoreCompletion()` and `checkZFSPoolsAfterRestore()`):
+    `applyHAConfig()`; then `applyBootConfiguration()`, `logRestoreCompletion()` and
+    `checkZFSPoolsAfterRestore()`):
     - Recreate storage/datastore directories
+    - Merge the kernel command line and rebuild initramfs and bootloader (only when the
+      `boot` category is selected; see Safety Mechanisms, 3b)
     - Check ZFS pools (only when the `zfs` category is selected; no-op if `zpool` is absent)
     - Display completion summary
 
@@ -353,7 +366,7 @@ type Category struct {
 **Key Functions**:
 
 1. **`GetAllCategories()`** (`categories.go`):
-   - Returns the complete list: 32 categories covering 143 archive paths
+   - Returns the complete list: 33 categories covering 150 archive paths
    - Hardcoded category definitions
    - Each category includes ID, name, description, paths
 
@@ -609,7 +622,9 @@ func DetectBackupType(manifest *backup.Manifest) SystemType {
 - **full compatibility**: same role set
 
 When compatibility is partial, restore continues with warnings and later filters
-the category set to the roles supported by the current host.
+the category set to the roles supported by the current host: on a single-role host
+`PlanRestore()` sends the other role's categories to export, in every mode and in
+the analysis-failure fallback, where export means skipped.
 
 ---
 
@@ -709,7 +724,8 @@ func PathMatchesCategory(filePath string, category Category) bool {
 categories, mode, err := w.selectModeAndCategories()
 
 // Build the plan; PlanRestore splits the selection 3-way via splitRestoreCategories
-// (normal / staged / export-only)
+// (normal / staged / export-only), and on a single-role host sends the other role's
+// categories to export
 w.plan = PlanRestore(w.decisionInfo.ClusterPayload, categories, w.systemType, mode)
 
 // Later, in runSelectiveRestore(), the plan is shown and confirmed:
@@ -800,10 +816,12 @@ func CreateSafetyBackup(
     categories []Category,
     destRoot string,
 ) (*SafetyBackupResult, error) {
-    // 1. Create backup archive
+    // 1. Create backup archive in the restore's own directory,
+    //    <BASE_DIR>/restore/<ts> (RestoreRunDir, 0700), which survives
+    //    the reboot the restore recommends
     timestamp := time.Now().Format("20060102_150405")
     backupPath := filepath.Join(
-        "/tmp/proxsave",
+        RestoreRunDir(),
         fmt.Sprintf("restore_backup_%s.tar.gz", timestamp),
     )
 
@@ -889,6 +907,8 @@ if needsClusterRestore {
 ```go
 func stopPVEClusterServices(ctx context.Context, logger *logging.Logger) error {
     commands := [][]string{
+        {"systemctl", "stop", "pve-ha-lrm"}, // closes the watchdog before pmxcfs goes down; see below
+        {"systemctl", "stop", "pve-ha-crm"},
         {"systemctl", "stop", "pve-cluster"},
         {"systemctl", "stop", "pvedaemon"},
         {"systemctl", "stop", "pveproxy"},
@@ -911,6 +931,8 @@ func startPVEClusterServices(ctx context.Context, logger *logging.Logger) error 
         {"systemctl", "start", "pvedaemon"},
         {"systemctl", "start", "pveproxy"},
         {"systemctl", "start", "pvestatd"},
+        {"systemctl", "start", "pve-ha-crm"},
+        {"systemctl", "start", "pve-ha-lrm"},
     }
     for _, cmd := range commands {
         if err := runCommand(ctx, logger, cmd[0], cmd[1:]...); err != nil {
@@ -959,7 +981,9 @@ a fixed order:
    never onto the live system.
 4. **Cluster SAFE apply** runs when applicable.
 5. **Staged (sensitive) categories** are extracted into a per-run stage dir
-   (`/tmp/proxsave/restore-stage-<ts>_<seq>`) and then applied (Phase 10).
+   (`/tmp/proxsave/restore-stage-<ts>_<seq>`) and then applied (Phase 10). The stage holds
+   them in the clear and is deleted when `runSelectiveRestore` returns, on success or
+   failure, after the deferred services cleanup that still reads it.
 
 ```go
 // restore_workflow_ui_run.go: prepareAndRestoreSelectedPayloads (processing order)
@@ -976,7 +1000,8 @@ Staged categories are extracted **strictly**:
 staged apply is skipped and the live system is left untouched (BH-002), so a partial tree
 is never applied to sensitive config. The plain (non-staged) tiers use
 `extractSelectiveArchive`, a thin wrapper over `extractSelectiveArchiveStrict(..., false)`
-that creates the detailed log under `/tmp/proxsave` and calls `extractArchiveNative`.
+that creates the detailed log in the restore's own directory (`RestoreRunDir()`,
+`<BASE_DIR>/restore/<ts>`) and calls `extractArchiveNative`.
 
 **Which categories are staged** (`isStagedCategoryID`, `staging.go`): `network`,
 `datastore_pbs`, `pbs_jobs`, `pbs_remotes`, `pbs_host`, `pbs_tape`, `storage_pve`,
@@ -1189,9 +1214,35 @@ pveproxy
 pvestatd
     (provides statistics)
 
-Stop order:  pve-cluster → pvedaemon → pveproxy → pvestatd
-Start order: pve-cluster → pvedaemon → pveproxy → pvestatd
+pve-ha-crm, pve-ha-lrm
+    (need /etc/pve; pve-ha-lrm holds the node's watchdog open)
+
+Stop order:  pve-ha-lrm → pve-ha-crm → pve-cluster → pvedaemon → pveproxy → pvestatd
+Start order: pve-cluster → pvedaemon → pveproxy → pvestatd → pve-ha-crm → pve-ha-lrm
 ```
+
+The HA services are stopped first because a running `pve-ha-lrm` fences the node
+(watchdog hard reset) when pmxcfs stays down for 60 seconds. `systemctl stop pve-ha-lrm`
+freezes the HA resources and closes the watchdog cleanly; `systemctl stop pve-ha-crm`
+releases the CRM lock so the master moves to another node.
+
+Every service except `pve-ha-lrm` goes through `stopServiceWithRetries()` (no-block stop,
+blocking stop, SIGTERM, SIGKILL). `pve-ha-lrm` goes through `stopHALRMWithoutSignals()`:
+one `systemctl stop --no-block`, then `waitForServiceInactive()` for up to
+`haLRMStopTimeout` (180 s), and never `systemctl kill`. The LRM stop waits for the CRM
+master to acknowledge the freeze; when the old master is a dead node, its lock times out
+about 120 s after it died (measured: 93 s on an isolated node, while the generic stop had
+already sent SIGTERM at +76 s). A SIGKILL before the LRM closes its watchdog leaves it
+armed and fences the node. Still active after the limit, the stop fails with
+`failed to stop PVE services (pve-ha-lrm)`, before any other service has been stopped.
+Before returning that error, `cancelHALRMStopJob()` runs one `systemctl start pve-ha-lrm`:
+the no-block stop job is still queued, and the start replaces it and leaves the LRM
+running, instead of letting it stop after the restore gave up. The same start runs on
+every other failure of the LRM stop too: a failed `systemctl stop --no-block`, a failed
+`systemctl is-active` query during the wait, and a restore cancelled during the wait. It
+runs on its own context, so a cancelled restore still issues it. A failed start is the
+warning `Failed to restart PVE services (pve-ha-lrm) after the stop failed: <err>`, and the
+original stop error is returned in every case.
 
 **PBS Service Dependency Graph**:
 
@@ -1293,9 +1344,33 @@ if plan.ClusterBackup && plan.NeedsClusterRestore {
 A standalone PVE backup commonly contains `pve_cluster` data, so it normally gets
 the same choice. SAFE moves that category to export-only and leaves
 `/var/lib/pve-cluster/config.db` untouched. RECOVERY keeps it in the normal
-restore set, stops PVE cluster services, unmounts `/etc/pve`, restores the
-database, then restarts the services. Staged `/etc/pve` applies are skipped in
-RECOVERY because the restored database owns that state.
+restore set, stops the HA services and the PVE cluster services, unmounts `/etc/pve`,
+restores the database, then restarts the services right after that extraction, before
+the later steps (network apply, boot rebuild). Staged `/etc/pve` applies are skipped in
+RECOVERY because the restored database owns that state. With the services back up, the
+post-apply network health check runs its PVE checks (`pvecm status`, ports, services)
+in RECOVERY too.
+
+### RECOVERY Quorum Probe
+
+`applyClusterRestoreChoice()` calls `refuseRecoveryOnQuorateCluster()` when RECOVERY is
+chosen, before any service is stopped or file written. On a member of a quorate cluster
+the restored `config.db` is discarded: when `pve-cluster` starts again, pmxcfs syncs from
+the cluster leader and the leader's copy replaces it.
+
+| Condition | Result |
+|-----------|--------|
+| No `corosync.conf` (`detectCorosyncConfig()`: `/etc/pve/corosync.conf` or `/etc/corosync/corosync.conf`) | Proceeds, no probe, no message |
+| `pvecm status`: quorate, more than 1 node online | Error `Cluster RECOVERY refused - quorate cluster, N nodes online: its copy would replace the restored config.db` |
+| `pvecm status`: quorate, 1 node online | Proceeds |
+| `pvecm status`: not quorate | Proceeds |
+| `pvecm` not installed, or `pvecm status` fails, times out or prints no `Quorate:` line, or is quorate with `Nodes:` not a number; `systemctl is-active corosync` = `inactive` or `failed` | Proceeds with warning `Cluster RECOVERY - quorum unknown (<reason>), corosync <state>, proceeding` |
+| Same, corosync in any other state, or its state unreadable | Error `Cluster RECOVERY refused - quorum unknown (<reason>), corosync <state>: in a quorate cluster, its copy would replace the restored config.db` |
+
+The probe reuses `pvecmQuorumStatus()` from the network health checks, with the same
+3 second timeout; N is the `Nodes:` value `pvecm status` printed. When the quorum cannot be read, `systemctlServiceState()` reads corosync with the same
+timeout: pvecm also fails when pmxcfs is down while corosync is up and quorate with its
+peers, so only `inactive` or `failed` lets the restore proceed.
 
 ### SAFE Mode Implementation
 
@@ -1630,6 +1705,19 @@ When restoring to the real system root (`/`), ProxSave avoids blindly overwritin
 **Normalization**:
 - Entries written by the merge are normalized to include `nofail` (and `_netdev` for network mounts) to prevent offline storage from blocking boot/restore.
 
+### 3b. Kernel Command Line Merge (`boot` category)
+
+`interceptBootCategory` takes `boot` out of the system-path extraction, like `filesystem`: its archive path is the backed-up host's `/proc/cmdline` (`var/lib/proxsave-info/commands/system/kernel_cmdline.txt`), which is read, not restored. `applyBootConfiguration` runs once, after `runPostRestoreApplyWorkflows` (`restore_workflow_ui_boot.go`, engine in `restore_boot.go`):
+
+1. `readBackedUpKernelCmdline` extracts the source into a temporary directory.
+2. `detectBootTarget` recognizes the live bootloader, or returns `bootLoaderUnknown` with the reason: no `/etc/kernel/proxmox-boot-uuids` means GRUB when `/etc/default/grub`, `/boot/grub/grub.cfg` and `update-grub` exist; with it, `proxmox-boot-tool status` must report every ESP with the same single mode (`uefi` is systemd-boot and needs a one-line `/etc/kernel/cmdline` with `root=`; `grub` needs `/etc/default/grub`). The mode per ESP follows proxmox-kernel-helper (`zz-proxmox-boot`: `EFI/proxmox/grubx64.efi` on the ESP means GRUB, then `update-grub` reads `/etc/default/grub`).
+3. `mergeKernelCmdline` (pure) carries every source parameter except those in `bootSystemParams` (`root`, `boot`, `ro`, `rw`, `BOOT_IMAGE`, `initrd`; `rootflags`, `rootfstype`, `resume`, `resume_offset`; `zfs.zfs_arc_max`, `zfs.zfs_arc_min`, `hugepages`, `hugepagesz`, `default_hugepagesz`, `sysctl.vm.nr_hugepages`, `hugetlb_cma`, `cma`, `kernelcore`, `movablecore`, `mem`, `memmap`; `crashkernel`) and what follows `--`; a key the target sets stays the target's (keys compare with `-` and `_` as one character). `setGrubCmdlineDefault` rewrites only the value of one plain, literal `GRUB_CMDLINE_LINUX_DEFAULT` assignment; a drop-in in `/etc/default/grub.d/` that names the variable stops the write.
+4. `rebuildBootAfterRestore` runs `update-initramfs -u -k all`, then `proxmox-boot-tool refresh` (with `/etc/kernel/proxmox-boot-uuids`) or `update-grub` (neither on `bootLoaderUnknown`), when a file changed or the system-path extraction wrote a `bootRebuildInputs` path (`etc/modprobe.d`, `etc/modules`, `etc/hostid`, `etc/zfs`, recorded through `restoreArchiveOptions.onExtracted`). Failures are warnings; the commands have no timeout of their own, since an interrupted `update-initramfs` leaves a truncated initrd.
+
+`decideZFSHostFiles` (`restore_zfs_host_files.go`) runs before the system-path extraction when a selected category writes `etc/hostid`, the pool cache files or `etc/modprobe.d/zfs.conf`, and before the full-restore fallback. It reads the backup's `/etc/hostid`, `/etc/zfs/zpool.cache`, `/etc/zfs/zfs-list.cache/` and `/etc/modprobe.d/zfs.conf` in one pass, the live `/etc/hostid` and `zfs.conf`, and `zpool list -H -o name` (only when the backup holds the hostid or a cache file). The backup's hostid stays off the system when it differs from the live one and a pool is imported (`hostidRestoreDecision`); the backup's cache files stay off whenever a pool is imported (`zfsCacheRestoreDecision`); both stay off when the pools cannot be listed. The backup's `zfs.conf` stays off when this host has one of its own that differs (`zfsARCConfRestoreDecision`), and `exportKeptHostFile` writes it into the export directory, which `exportCategories` then reuses. The skips go through the same `skipFn` / `skipPath`.
+
+`bootNeverLivePaths` (`etc/default/grub`, `etc/default/grub.d/`, `etc/kernel/cmdline`, `etc/kernel/proxmox-boot-uuids`) are dropped by the system-path extraction (`skipFn`) and by the full-restore fallback (`skipPath`), whatever category matches them; `proxsave_info` lists the same natural paths, so a copy `CUSTOM_BACKUP_PATHS` puts there is exported.
+
 ### 4. PBS Datastore Mount Guards (Offline Storage)
 
 For PBS datastores whose paths live under typical mount roots (for example `/mnt/...`), ProxSave aims for a "restore even if offline" behavior:
@@ -1644,7 +1732,7 @@ For PBS datastores whose paths live under typical mount roots (for example `/mnt
 Optional maintenance:
 - `proxsave --cleanup-guards` (preview with `--dry-run`) unmounts guard bind mounts **and** clears any **legacy** `chattr +i` immutable flags recorded by older versions, but only on mountpoints that are **not currently mounted** (clearing a live mount would touch the wrong inode). It prints a summary (unmounted / hidden-remaining / immutable-cleared / immutable-pending) and keeps the guard directory and its index until nothing is pending.
 - To clear a legacy immutable flag on a mountpoint whose storage is already mounted: unmount it, run `--cleanup-guards` again (or `chattr -i <mountpoint>`), then remount.
-- If you deleted `/var/lib/proxsave/guards` manually and a mountpoint is still read-only, ProxSave no longer has a record to clear: check with `lsattr -d <mountpoint>` and clear it yourself with `chattr -i <mountpoint>` while the storage is unmounted.
+- If you deleted the guard directory (`<BASE_DIR>/guards`, or `/var/lib/proxsave/guards` from an older version) manually and a mountpoint is still read-only, ProxSave no longer has a record to clear: check with `lsattr -d <mountpoint>` and clear it yourself with `chattr -i <mountpoint>` while the storage is unmounted.
 
 #### PVE Storage Mount Guards (Offline Storage)
 
@@ -2060,7 +2148,7 @@ categories is skipped entirely.
 ```text
 Normal tier   -> destRoot (/)                     (skipped if empty)
 Export tier   -> proxmox-config-export-<ts>       (skipped if empty)
-Staged tier   -> /tmp/proxsave/restore-stage-*    (skipped if empty), then applied
+Staged tier   -> /tmp/proxsave/restore-stage-*    (skipped if empty), then applied, then deleted
 Dedup pass    -> streams the archive to rebuild deduplicated symlinks (issue #70)
 ```
 
@@ -2173,8 +2261,10 @@ restore. On an interactive terminal it still renders the TUI unless you add `--c
 ### Review Detailed Logs
 
 ```bash
-# Restore log (name is restore_<timestamp>_<seq>.log, seq is a per-process counter)
-cat /tmp/proxsave/restore_20251120_143052_1.log
+# Restore logs, in the restore's own directory <BASE_DIR>/restore/<timestamp>/:
+# the session log restore-<host>-<timestamp>.log and the detailed logs
+# restore_<timestamp>_<seq>.log (seq is a per-process counter)
+cat /opt/proxsave/restore/20251120_143052/restore_20251120_143409_1.log
 
 # Service logs
 journalctl -u pve-cluster --since "10 minutes ago"
@@ -2222,7 +2312,7 @@ The restore system is built on these technical foundations:
 - **Comprehensive error handling** with graceful degradation
 
 **Total Implementation**:
-- **32 categories** covering **143 archive paths**
+- **33 categories** covering **150 archive paths**
 - **4 restore modes**: FULL, STORAGE/DATASTORE, SYSTEM BASE, CUSTOM
 - **10-phase workflow** with comprehensive logging
 

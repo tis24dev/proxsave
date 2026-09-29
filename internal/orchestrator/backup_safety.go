@@ -46,8 +46,8 @@ func createSafetyBackup(logger *logging.Logger, selectedCategories []Category, d
 	defer func() { done(err) }()
 
 	timestamp := safetyNow().Format("20060102_150405")
-	baseDir := filepath.Join("/tmp", "proxsave")
-	if err := safetyFS.MkdirAll(baseDir, 0755); err != nil {
+	baseDir := RestoreRunDir()
+	if err := safetyFS.MkdirAll(baseDir, 0o700); err != nil {
 		return nil, fmt.Errorf("create safety backup directory: %w", err)
 	}
 	backupDir := filepath.Join(baseDir, fmt.Sprintf("%s_%s", prefix, timestamp))
@@ -59,9 +59,9 @@ func createSafetyBackup(logger *logging.Logger, selectedCategories []Category, d
 	// 0600, not safetyFS.Create's 0666&^umask (0644 on a stock host). This archive is
 	// the pre-restore copy of whatever is about to be overwritten, so on a PVE or PBS
 	// node it holds /etc/shadow, /etc/pve/priv material and access-control config in
-	// the clear. It is written into /tmp/proxsave, which is 0755 and shared, and it is
-	// deliberately NOT deleted afterwards -- it is the rollback. World-readable was
-	// therefore not a brief window but the steady state.
+	// the clear, and it is deliberately NOT deleted afterwards -- it is the rollback.
+	// It lives in the restore's own directory (RestoreRunDir, 0700) so that it
+	// survives the reboot the restore recommends.
 	file, err := safetyFS.OpenFile(backupArchive, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
 	if err != nil {
 		return nil, fmt.Errorf("create backup archive: %w", err)
@@ -158,7 +158,7 @@ func createSafetyBackup(logger *logging.Logger, selectedCategories []Category, d
 
 	if spec.WriteLocationFile && locationFileName != "" {
 		locationFile := filepath.Join(baseDir, locationFileName)
-		if err := safetyFS.WriteFile(locationFile, []byte(backupArchive), 0644); err != nil {
+		if err := safetyFS.WriteFile(locationFile, []byte(backupArchive), 0o600); err != nil {
 			logger.Warning("Could not write backup location file: %v", err)
 		} else {
 			logger.Info("Backup location saved to: %s", locationFile)
@@ -327,191 +327,6 @@ func backupDirectory(tw *tar.Writer, sourcePath, archivePath string, result *Saf
 		// Handle regular files
 		return backupFile(tw, path, archiveEntryPath, result, logger)
 	})
-}
-
-// RestoreSafetyBackup restores files from a safety backup (for rollback)
-func RestoreSafetyBackup(logger *logging.Logger, backupPath string, destRoot string) (err error) {
-	done := logging.DebugStart(logger, "restore safety backup", "backup=%s dest=%s", backupPath, destRoot)
-	defer func() { done(err) }()
-	logger.Info("Restoring from safety backup: %s", backupPath)
-
-	file, err := safetyFS.Open(backupPath)
-	if err != nil {
-		return fmt.Errorf("open backup: %w", err)
-	}
-	defer closeIntoErr(&err, file, "close backup archive")
-
-	gzReader, err := gzip.NewReader(file)
-	if err != nil {
-		return fmt.Errorf("create gzip reader: %w", err)
-	}
-	defer closeIntoErr(&err, gzReader, "close gzip reader")
-
-	tarReader := tar.NewReader(gzReader)
-	filesRestored := 0
-	absDestRoot, err := filepath.Abs(destRoot)
-	if err != nil {
-		return fmt.Errorf("resolve destination root: %w", err)
-	}
-
-	for {
-		header, err := tarReader.Next()
-		if err == io.EOF {
-			break
-		}
-		if err != nil {
-			return fmt.Errorf("read tar entry: %w", err)
-		}
-
-		target, _, err := sanitizeRestoreEntryTargetWithFS(safetyFS, absDestRoot, header.Name)
-		if err != nil {
-			logger.Warning("Skipping archive entry %s: %v", header.Name, err)
-			continue
-		}
-
-		relTarget, err := filepath.Rel(absDestRoot, target)
-		if err != nil {
-			logger.Warning("Cannot compute relative path for %s: %v", header.Name, err)
-			continue
-		}
-		if strings.HasPrefix(relTarget, ".."+string(os.PathSeparator)) || relTarget == ".." {
-			logger.Warning("Skipping archive entry %s: relative path escapes root (%s)", header.Name, relTarget)
-			continue
-		}
-
-		// Create parent directories
-		if err := safetyFS.MkdirAll(filepath.Dir(target), 0755); err != nil {
-			logger.Warning("Cannot create directory for %s: %v", target, err)
-			continue
-		}
-
-		// Handle directories
-		if header.Typeflag == tar.TypeDir {
-			if err := safetyFS.MkdirAll(target, os.FileMode(header.Mode&0o7777)); err != nil {
-				logger.Warning("Cannot create directory %s: %v", target, err)
-			}
-			continue
-		}
-
-		// Handle symlinks
-		if header.Typeflag == tar.TypeSymlink {
-			linkTarget := header.Linkname
-
-			if _, pathErr := resolvePathRelativeToBaseWithinRootFS(safetyFS, absDestRoot, filepath.Dir(target), linkTarget); pathErr != nil {
-				if isPathSecurityError(pathErr) {
-					logger.Warning("Skipping symlink %s -> %s: target escapes root: %v", target, linkTarget, pathErr)
-					continue
-				}
-				return fmt.Errorf("validate symlink %s -> %s before creation: %w", target, linkTarget, pathErr)
-			}
-
-			// Remove existing file/symlink before creating new one
-			if err := safetyFS.Remove(target); err != nil && !os.IsNotExist(err) {
-				logger.Warning("Cannot remove existing path %s before symlink restore: %v", target, err)
-				continue
-			}
-
-			// Create the symlink
-			if err := safetyFS.Symlink(linkTarget, target); err != nil {
-				logger.Warning("Cannot create symlink %s: %v", target, err)
-				continue
-			}
-
-			// POST-CREATION VALIDATION: Verify the created symlink's target stays within destRoot
-			actualTarget, err := safetyFS.Readlink(target)
-			if err != nil {
-				logger.Warning("Cannot read created symlink %s: %v", target, err)
-				if removeErr := safetyFS.Remove(target); removeErr != nil && !os.IsNotExist(removeErr) {
-					logger.Warning("Cannot remove unreadable symlink %s: %v", target, removeErr)
-				}
-				continue
-			}
-
-			if _, err := resolvePathRelativeToBaseWithinRootFS(safetyFS, absDestRoot, filepath.Dir(target), actualTarget); err != nil {
-				if removeErr := safetyFS.Remove(target); removeErr != nil && !os.IsNotExist(removeErr) {
-					logger.Warning("Cannot remove unsafe symlink %s: %v", target, removeErr)
-				}
-				if isPathSecurityError(err) {
-					logger.Warning("Removing symlink %s -> %s: target escapes root after creation: %v",
-						target, actualTarget, err)
-					continue
-				}
-				return fmt.Errorf("validate symlink %s -> %s after creation: %w", target, actualTarget, err)
-			}
-
-			logger.Debug("Created safe symlink: %s -> %s", header.Name, linkTarget)
-			continue
-		}
-
-		// Handle regular files
-		outFile, err := safetyFS.OpenFile(target, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, os.FileMode(header.Mode&0o7777))
-		if err != nil {
-			logger.Warning("Cannot create file %s: %v", target, err)
-			continue
-		}
-
-		// Copy exactly the entry's declared size: bounds the write (gosec G110),
-		// and a short read on a truncated/corrupt snapshot becomes an explicit error.
-		if _, err := io.CopyN(outFile, tarReader, header.Size); err != nil {
-			if closeErr := outFile.Close(); closeErr != nil {
-				logger.Warning("Cannot close partially restored file %s: %v", target, closeErr)
-			}
-			if removeErr := safetyFS.Remove(target); removeErr != nil && !os.IsNotExist(removeErr) {
-				logger.Warning("Cannot remove partially restored file %s: %v", target, removeErr)
-			}
-			logger.Warning("Cannot write file %s: %v", target, err)
-			continue
-		}
-		if err := outFile.Close(); err != nil {
-			logger.Warning("Cannot close restored file %s: %v", target, err)
-			if removeErr := safetyFS.Remove(target); removeErr != nil && !os.IsNotExist(removeErr) {
-				logger.Warning("Cannot remove partially restored file %s: %v", target, removeErr)
-			}
-			continue
-		}
-
-		filesRestored++
-		logger.Debug("Restored: %s", header.Name)
-	}
-
-	logger.Info("Safety backup restored: %d files", filesRestored)
-	return nil
-}
-
-// CleanupOldSafetyBackups removes safety backups older than the specified duration
-func CleanupOldSafetyBackups(logger *logging.Logger, olderThan time.Duration) error {
-	tmpDir := "/tmp"
-	pattern := "restore_backup_*"
-
-	matches, err := filepath.Glob(filepath.Join(tmpDir, pattern))
-	if err != nil {
-		return err
-	}
-
-	now := safetyNow()
-	removed := 0
-
-	for _, match := range matches {
-		info, err := safetyFS.Stat(match)
-		if err != nil {
-			continue
-		}
-
-		if now.Sub(info.ModTime()) > olderThan {
-			if err := safetyFS.Remove(match); err != nil {
-				logger.Warning("Cannot remove old backup %s: %v", match, err)
-			} else {
-				logger.Debug("Removed old safety backup: %s", match)
-				removed++
-			}
-		}
-	}
-
-	if removed > 0 {
-		logger.Info("Cleaned up %d old safety backup(s)", removed)
-	}
-
-	return nil
 }
 
 func globFS(fs FS, pattern string) ([]string, error) {

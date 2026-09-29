@@ -1,6 +1,7 @@
 package backup
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"os"
@@ -8,6 +9,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/tis24dev/proxsave/internal/types"
 )
 
 func pveTestBool(v bool) *bool {
@@ -200,6 +203,74 @@ func TestPVERuntimeCommandSuccessAndFailureBranches(t *testing.T) {
 		})
 		if err := collector.collectPVECoreRuntime(context.Background(), t.TempDir(), &pveRuntimeInfo{}); err == nil {
 			t.Fatal("expected critical pveversion failure")
+		}
+	})
+
+	// pve-manager purged, pve-cluster left: pveversion is gone but /etc/pve is live, so
+	// the recipe has to go on and collect it instead of failing the whole run. A dual host
+	// in that state is handled the same way: its PVE half is collected, not incomplete.
+	for _, proxType := range []types.ProxmoxType{types.ProxmoxVE, types.ProxmoxDual} {
+		t.Run("missing pveversion is skipped with a warning on "+string(proxType), func(t *testing.T) {
+			var ran []string
+			collector := newPVECollectorWithDeps(t, CollectorDeps{
+				LookPath: func(cmd string) (string, error) {
+					if cmd == "pveversion" {
+						return "", errors.New("not found")
+					}
+					return "/usr/bin/" + cmd, nil
+				},
+				RunCommand: func(_ context.Context, name string, _ ...string) ([]byte, error) {
+					ran = append(ran, name)
+					return []byte("[]"), nil
+				},
+			})
+			collector.proxType = proxType
+			var logBuf bytes.Buffer
+			collector.logger.SetOutput(&logBuf)
+			commandsDir := collector.proxsaveCommandsDir("pve")
+			if err := collector.collectPVECoreRuntime(context.Background(), commandsDir, &pveRuntimeInfo{}); err != nil {
+				t.Fatalf("a missing pveversion must not fail the core runtime: %v", err)
+			}
+			for _, name := range ran {
+				if name == "pveversion" {
+					t.Fatal("pveversion must not run when it is not installed")
+				}
+			}
+			if len(ran) == 0 {
+				t.Fatal("the commands after pveversion must still run")
+			}
+			if _, err := os.Stat(filepath.Join(commandsDir, "pveversion.txt")); !os.IsNotExist(err) {
+				t.Fatalf("pveversion.txt must not be written, stat err = %v", err)
+			}
+			if got := collector.GetStats().FilesFailed; got != 0 {
+				t.Fatalf("FilesFailed = %d, want 0: a skipped pveversion is not a failed file", got)
+			}
+			if !strings.Contains(logBuf.String(), "WARNING") || !strings.Contains(logBuf.String(), "PVE version - skipped, pveversion is not installed") {
+				t.Fatalf("expected the skip warning, log:\n%s", logBuf.String())
+			}
+		})
+	}
+
+	// Under SYSTEM_ROOT_PREFIX the command would run in the appliance, never on the host, so
+	// the core runtime commands are skipped there and a missing pveversion ends nothing.
+	t.Run("missing pveversion under a root prefix is not reached", func(t *testing.T) {
+		var ran []string
+		collector := newPVECollectorWithDeps(t, CollectorDeps{
+			LookPath: func(cmd string) (string, error) {
+				if cmd == "pveversion" {
+					return "", errors.New("not found")
+				}
+				return "/usr/bin/" + cmd, nil
+			},
+			RunCommand: func(_ context.Context, name string, _ ...string) ([]byte, error) {
+				ran = append(ran, name)
+				return []byte("[]"), nil
+			},
+		})
+		collector.config.SystemRootPrefix = t.TempDir()
+		err := collector.collectPVECoreRuntime(context.Background(), collector.proxsaveCommandsDir("pve"), &pveRuntimeInfo{})
+		if err != nil || len(ran) != 0 {
+			t.Fatalf("err = %v, ran = %v; want no command and no error under a prefix", err, ran)
 		}
 	})
 

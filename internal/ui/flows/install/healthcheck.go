@@ -21,6 +21,7 @@ var (
 	healthcheckBuildBootstrap = orchestrator.BuildHealthcheckSetupBootstrap
 	healthcheckCheck          = orchestrator.CheckHealthcheckConnection
 	healthcheckSelfCheck      = orchestrator.CheckHealthcheckSelfConnection
+	healthcheckNotifyFilter   = orchestrator.CheckHealthcheckNotifyFilter
 )
 
 type healthcheckAction int
@@ -73,7 +74,8 @@ func RunHealthcheckSetup(ctx context.Context, session *shell.Session, baseDir, c
 	statusLevel := orchestrator.HealthcheckSetupLevelNeutral // pre-check: yellow, no symbol
 	magicLink := ""
 	portalURL, portalLogin := "", ""
-	var sensors []health.SensorRow // per-sensor rows, populated after each Check
+	var sensors []health.SensorRow          // per-sensor rows, populated after each Check
+	var notifyBlock *healthcheckNotifyBlock // NOTIFY_ON lines, populated after each Check
 	// In the dashboard (backToMenu) the check runs automatically on entry, like Daemon
 	// status; the installer keeps it manual (the user presses Check).
 	pendingCheck := backToMenu
@@ -84,12 +86,15 @@ func RunHealthcheckSetup(ctx context.Context, session *shell.Session, baseDir, c
 			pendingCheck = false
 			if !result.LastFatal && (result.Verified || result.CheckAttempts < orchestrator.HealthcheckSetupMaxVerificationAttempts) {
 				var res orchestrator.HealthcheckCheckResult
+				var nf orchestrator.HealthcheckNotifyFilter
 				cancelled := false
 				runErr := components.RunTask(ctx, session, "Checking monitoring", "Contacting the monitor...", func(taskCtx context.Context, report func(string)) error {
 					if selfMode {
 						res = healthcheckSelfCheck(taskCtx, result.HealthcheckAliveURL)
 					} else {
 						res = healthcheckCheck(taskCtx, result.ServerAPIHost, result.ServerID, baseDir, result.HealthcheckHeartbeatInterval)
+						// The run's own NOTIFY_ON decision, on the daemon diagnosis this check just made.
+						nf = healthcheckNotifyFilter(taskCtx, configPath, baseDir, result.ServerAPIHost, result.ServerID, res.Daemon)
 					}
 					if taskCtx.Err() != nil {
 						cancelled = true
@@ -101,6 +106,7 @@ func RunHealthcheckSetup(ctx context.Context, session *shell.Session, baseDir, c
 				}
 				if !cancelled {
 					result.CheckAttempts++
+					notifyBlock = newHealthcheckNotifyBlock(selfMode, nf)
 					if res.HaveStatus {
 						sensors = health.SensorRows(res.RawStatus, result.HealthcheckHeartbeatInterval, result.HealthcheckUpdateInterval, time.Now())
 					} else {
@@ -152,7 +158,7 @@ func RunHealthcheckSetup(ctx context.Context, session *shell.Session, baseDir, c
 				}
 			}
 		}
-		prompt := buildHealthcheckPrompt(selfMode, magicLink, portalURL, portalLogin, statusKeyword, statusExplanation, statusLevel, sensors)
+		prompt := buildHealthcheckPrompt(selfMode, magicLink, portalURL, portalLogin, statusKeyword, statusExplanation, statusLevel, sensors, notifyBlock)
 
 		items := make([]components.SelectorItem[healthcheckAction], 0, 3)
 		if !result.LastFatal && (result.Verified || result.CheckAttempts < orchestrator.HealthcheckSetupMaxVerificationAttempts) {
@@ -211,7 +217,7 @@ func RunHealthcheckSetup(ctx context.Context, session *shell.Session, baseDir, c
 // click. portalURL/portalLogin are the fallback the server sends instead once the user
 // has their own password. Every value is already sanitized upstream
 // (serverbot.TrustedLoginURL / SanitizePortalLogin).
-func buildHealthcheckPrompt(selfMode bool, magicLink, portalURL, portalLogin, keyword, explanation string, level orchestrator.HealthcheckSetupLevel, sensors []health.SensorRow) string {
+func buildHealthcheckPrompt(selfMode bool, magicLink, portalURL, portalLogin, keyword, explanation string, level orchestrator.HealthcheckSetupLevel, sensors []health.SensorRow, notify *healthcheckNotifyBlock) string {
 	var b strings.Builder
 	b.WriteString(theme.Text.Render("Backup monitoring (healthchecks) is enabled for this host."))
 	b.WriteString("\n")
@@ -266,6 +272,17 @@ func buildHealthcheckPrompt(selfMode bool, magicLink, portalURL, portalLogin, ke
 		b.WriteString(theme.Subtle.Render(exp))
 	}
 
+	// NOTIFY_ON block, right above the sensors: the setting and the threshold the run applies now.
+	// Plain text, no symbol: it states a setting, not an outcome.
+	if notify != nil {
+		b.WriteString("\n\n")
+		b.WriteString(theme.Text.Render("Notifications:"))
+		b.WriteString("\n")
+		b.WriteString(theme.Text.Render(components.SanitizeText("Setting: " + notify.Setting)))
+		b.WriteString("\n")
+		b.WriteString(theme.Text.Render(components.SanitizeText("Current: " + notify.Current)))
+	}
+
 	// Per-sensor list: what we actually transmit + its real state, one colored line each,
 	// reusing the SAME palette as the Status line. Rendered only once a Check has populated
 	// the rows (before that the block is omitted).
@@ -306,4 +323,19 @@ func sensorSetupLevel(l health.SensorLevel) orchestrator.HealthcheckSetupLevel {
 	default: // health.SensorWarn
 		return orchestrator.HealthcheckSetupLevelWarn
 	}
+}
+
+// healthcheckNotifyBlock is the Notifications block of the check screen (maintainer-approved text).
+type healthcheckNotifyBlock struct {
+	Setting string
+	Current string
+}
+
+// newHealthcheckNotifyBlock renders the decision of one Check; nil when backup.env could not be read.
+func newHealthcheckNotifyBlock(selfMode bool, nf orchestrator.HealthcheckNotifyFilter) *healthcheckNotifyBlock {
+	setting, current, ok := orchestrator.HealthcheckNotifyLines(selfMode, nf)
+	if !ok {
+		return nil
+	}
+	return &healthcheckNotifyBlock{Setting: setting, Current: current}
 }

@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/tis24dev/proxsave/internal/safefs"
@@ -497,8 +498,36 @@ func (c *Collector) collectPVEVZDumpSnapshot(ctx context.Context) error {
 	return nil
 }
 
+// pveRuntimeCommandsApply reports whether the PVE runtime commands may run. Under
+// SYSTEM_ROOT_PREFIX they would run in this system, not in the host mounted under the
+// prefix: pvesh, pveum, pvecm, pvesm, pvenode and pveversion answer for this system's own
+// /etc/pve and daemons, crontab and systemctl for its own schedules (measured on a Debian 13
+// appliance: the container's timers and no root crontab, then exit 9 on the missing
+// pveversion). The host's PVE files are read from under the prefix instead, and its crontabs
+// and systemd units by the system recipe. The skip is logged once per run.
+func (c *Collector) pveRuntimeCommandsApply() bool {
+	if !c.hostRootPrefixActive() {
+		return true
+	}
+	if !c.pveRuntimeSkipLogged {
+		c.pveRuntimeSkipLogged = true
+		c.logger.Info("PVE runtime commands - skipped under SYSTEM_ROOT_PREFIX, they would describe this system, not the host")
+	}
+	return false
+}
+
 func (c *Collector) collectPVECoreRuntime(ctx context.Context, commandsDir string, info *pveRuntimeInfo) error {
-	if err := c.safeCmdOutput(ctx,
+	if !c.pveRuntimeCommandsApply() {
+		return nil
+	}
+	// pveversion is critical when it is installed. One that runs and fails is a broken PVE
+	// toolchain. A missing one is pve-manager purged while pve-cluster, qemu-server and
+	// pve-container stay (the ISO installer marks them manual), with /etc/pve still mounted
+	// and holding the guest configuration: measured on PVE 9.2.2, failing on it there ended
+	// the run at exit 9 with no archive, so it is skipped with a warning.
+	if _, lookErr := c.depLookPath("pveversion"); lookErr != nil {
+		c.logger.Warning("PVE version - skipped, pveversion is not installed")
+	} else if err := c.safeCmdOutput(ctx,
 		commandSpec("pveversion", "-v"),
 		filepath.Join(commandsDir, "pveversion.txt"),
 		"PVE version",
@@ -547,7 +576,7 @@ func (c *Collector) collectPVECoreRuntime(ctx context.Context, commandsDir strin
 }
 
 func (c *Collector) collectPVEACLRuntime(ctx context.Context, commandsDir string) error {
-	if !c.config.BackupPVEACL {
+	if !c.config.BackupPVEACL || !c.pveRuntimeCommandsApply() {
 		return nil
 	}
 
@@ -583,6 +612,9 @@ func (c *Collector) collectPVEACLRuntime(ctx context.Context, commandsDir string
 }
 
 func (c *Collector) collectPVEClusterRuntime(ctx context.Context, commandsDir string, clustered bool) error {
+	if !c.pveRuntimeCommandsApply() {
+		return nil
+	}
 	if clustered && c.config.BackupClusterConfig {
 		if err := c.safeCmdOutput(ctx,
 			commandSpec("pvecm", "status"),
@@ -633,6 +665,9 @@ func (c *Collector) collectPVEClusterRuntime(ctx context.Context, commandsDir st
 }
 
 func (c *Collector) collectPVEStorageRuntime(ctx context.Context, commandsDir string, info *pveRuntimeInfo) error {
+	if !c.pveRuntimeCommandsApply() {
+		return nil
+	}
 	hostname, _ := os.Hostname()
 	nodeName := shortHostname(hostname)
 	if nodeName == "" {
@@ -791,6 +826,9 @@ func (c *Collector) collectPVELXCConfigs(ctx context.Context) error {
 }
 
 func (c *Collector) collectPVEGuestInventory(ctx context.Context) error {
+	if !c.pveRuntimeCommandsApply() {
+		return nil
+	}
 	commandsDir, err := c.ensureCommandsDir("pve")
 	if err != nil {
 		return err
@@ -842,6 +880,9 @@ func (c *Collector) collectPVEBackupJobDefinitions(ctx context.Context) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
+	if !c.pveRuntimeCommandsApply() {
+		return nil
+	}
 	jobsDir := c.pveJobsDir()
 	if err := c.ensureDir(jobsDir); err != nil {
 		return fmt.Errorf("failed to create jobs directory: %w", err)
@@ -860,6 +901,9 @@ func (c *Collector) collectPVEBackupJobDefinitions(ctx context.Context) error {
 func (c *Collector) collectPVEBackupJobHistory(ctx context.Context, nodes []string) error {
 	if err := ctx.Err(); err != nil {
 		return err
+	}
+	if !c.pveRuntimeCommandsApply() {
+		return nil
 	}
 	jobsDir := c.pveJobsDir()
 	if err := c.ensureDir(jobsDir); err != nil {
@@ -952,8 +996,36 @@ func (c *Collector) effectivePVEClusterPath() string {
 	return c.systemPath("/var/lib/pve-cluster")
 }
 
+// targetPathFor is where a PVE source lands in the archive: its canonical host path,
+// whatever PVE_CONFIG_PATH, PVE_CLUSTER_PATH, COROSYNC_CONFIG_PATH, VZDUMP_CONFIG_PATH,
+// CEPH_CONFIG_PATH or SYSTEM_ROOT_PREFIX pointed the read at, so the restore categories
+// (./etc/pve/, ./var/lib/pve-cluster/, ...) find it. It used to copy the source path as it
+// was: under SYSTEM_ROOT_PREFIX=/host, /etc/pve landed in the archive as ./host/etc/pve and
+// no restore category matched it.
 func (c *Collector) targetPathFor(src string) string {
 	clean := filepath.Clean(src)
+	switch clean {
+	case filepath.Clean(c.effectiveCorosyncConfigPath()):
+		return filepath.Join(c.tempDir, "etc/pve/corosync.conf")
+	case filepath.Clean(c.effectiveVzdumpConfigPath()):
+		return filepath.Join(c.tempDir, "etc/vzdump.conf")
+	}
+	if rel, ok := pathRelWithin(c.effectivePVEConfigPath(), clean); ok {
+		return filepath.Join(c.tempDir, "etc/pve", rel)
+	}
+	if rel, ok := pathRelWithin(c.effectivePVEClusterPath(), clean); ok {
+		return filepath.Join(c.tempDir, "var/lib/pve-cluster", rel)
+	}
+	for _, cephRoot := range c.cephConfigPaths() {
+		if rel, ok := pathRelWithin(cephRoot, clean); ok {
+			return filepath.Join(c.tempDir, "etc/ceph", rel)
+		}
+	}
+	if c.hostRootPrefixActive() {
+		if rel, ok := pathRelWithin(c.config.SystemRootPrefix, clean); ok {
+			clean = filepath.Join(string(os.PathSeparator), rel)
+		}
+	}
 	if filepath.IsAbs(clean) {
 		clean = strings.TrimPrefix(clean, string(os.PathSeparator))
 	}
@@ -962,6 +1034,19 @@ func (c *Collector) targetPathFor(src string) string {
 		clean = "pve"
 	}
 	return filepath.Join(c.tempDir, clean)
+}
+
+// pathRelWithin returns path relative to root when path is root or lies under it.
+func pathRelWithin(root, path string) (string, bool) {
+	root = strings.TrimSpace(root)
+	if root == "" {
+		return "", false
+	}
+	rel, err := filepath.Rel(filepath.Clean(root), filepath.Clean(path))
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(os.PathSeparator)) {
+		return "", false
+	}
+	return rel, true
 }
 
 func (c *Collector) pveInfoDir() string {
@@ -999,6 +1084,9 @@ func (c *Collector) collectPVEScheduleCrontab(ctx context.Context) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
+	if !c.pveRuntimeCommandsApply() {
+		return nil
+	}
 	schedulesDir := c.pveSchedulesDir()
 	if err := c.ensureDir(schedulesDir); err != nil {
 		return fmt.Errorf("failed to create schedules directory: %w", err)
@@ -1017,6 +1105,9 @@ func (c *Collector) collectPVEScheduleCrontab(ctx context.Context) error {
 func (c *Collector) collectPVEScheduleTimers(ctx context.Context) error {
 	if err := ctx.Err(); err != nil {
 		return err
+	}
+	if !c.pveRuntimeCommandsApply() {
+		return nil
 	}
 	schedulesDir := c.pveSchedulesDir()
 	if err := c.ensureDir(schedulesDir); err != nil {
@@ -1060,6 +1151,9 @@ func (c *Collector) collectPVEReplicationDefinitions(ctx context.Context) error 
 	if err := ctx.Err(); err != nil {
 		return err
 	}
+	if !c.pveRuntimeCommandsApply() {
+		return nil
+	}
 	repDir := c.pveReplicationDir()
 	if err := c.ensureDir(repDir); err != nil {
 		return fmt.Errorf("failed to create replication directory: %w", err)
@@ -1078,6 +1172,9 @@ func (c *Collector) collectPVEReplicationDefinitions(ctx context.Context) error 
 func (c *Collector) collectPVEReplicationStatus(ctx context.Context, nodes []string) error {
 	if err := ctx.Err(); err != nil {
 		return err
+	}
+	if !c.pveRuntimeCommandsApply() {
+		return nil
 	}
 	repDir := c.pveReplicationDir()
 	if err := c.ensureDir(repDir); err != nil {
@@ -1226,11 +1323,13 @@ func (c *Collector) preparePVEStorageScan(ctx context.Context, storage pveStorag
 	}
 
 	c.logger.Info("Probing datastore %s (path=%s)%s", storage.Name, storage.Path, c.formatPVEStorageRuntime(storage))
-	stat, err := safefs.Stat(ctx, storage.Path, ioTimeout)
+	stat, err := safefs.Stat(ctx, c.systemPath(storage.Path), ioTimeout)
 	if err != nil {
 		if errors.Is(err, safefs.ErrTimeout) {
 			c.logger.Warning("PVE datastore %s skipped: filesystem probe timed out for %s (%v). Not scanning for vzdump backup files.", storage.Name, storage.Path, err)
 			c.logPVEStorageSkipDetails(storage, "filesystem_probe_timeout", err)
+		} else if c.hostRootPrefixActive() {
+			c.logPVEStorageNotVisible(storage, err)
 		} else {
 			c.logger.Warning("PVE datastore %s skipped: path %s not accessible (%v). Not scanning for vzdump backup files.", storage.Name, storage.Path, err)
 			c.logPVEStorageSkipDetails(storage, "path_not_accessible", err)
@@ -1240,6 +1339,10 @@ func (c *Collector) preparePVEStorageScan(ctx context.Context, storage pveStorag
 	if !stat.IsDir() {
 		c.logger.Warning("PVE datastore %s skipped: path %s is not a directory. Not scanning for vzdump backup files.", storage.Name, storage.Path)
 		c.logPVEStorageSkipDetails(storage, "path_not_directory", nil)
+		return nil, nil
+	}
+	if c.pveStorageMountNotCarried(storage, stat) {
+		c.logPVEStorageNotVisible(storage, nil)
 		return nil, nil
 	}
 
@@ -1252,6 +1355,35 @@ func (c *Collector) preparePVEStorageScan(ctx context.Context, storage pveStorag
 		Storage: storage,
 		MetaDir: metaDir,
 	}, nil
+}
+
+// pveMountStorageTypes are the storage types whose path is always a mount point the PVE
+// host mounts itself (under /mnt/pve).
+var pveMountStorageTypes = map[string]bool{"nfs": true, "cifs": true, "cephfs": true, "glusterfs": true}
+
+// pveStorageMountNotCarried reports a network storage seen under SYSTEM_ROOT_PREFIX as the
+// bare mount point it leaves on the host root: the bind of the host root does not carry the
+// separate mount, so the directory sits on the prefix root's own filesystem and reads empty.
+// A storage "dir" on a separate host disk looks the same and cannot be told apart here.
+func (c *Collector) pveStorageMountNotCarried(storage pveStorageEntry, info os.FileInfo) bool {
+	if !c.hostRootPrefixActive() || !pveMountStorageTypes[strings.ToLower(strings.TrimSpace(storage.Type))] {
+		return false
+	}
+	rootInfo, err := os.Stat(c.config.SystemRootPrefix)
+	if err != nil {
+		return false
+	}
+	st, ok := info.Sys().(*syscall.Stat_t)
+	rootSt, rootOK := rootInfo.Sys().(*syscall.Stat_t)
+	return ok && rootOK && st.Dev == rootSt.Dev
+}
+
+// logPVEStorageNotVisible reports a storage the host has but this system cannot see under
+// SYSTEM_ROOT_PREFIX. It is not a fault of the storage, so it is not a warning: an appliance
+// with a network storage would otherwise end every run with one.
+func (c *Collector) logPVEStorageNotVisible(storage pveStorageEntry, err error) {
+	c.logger.Info("PVE datastore %s skipped: path %s not visible under SYSTEM_ROOT_PREFIX (a separate mount is not carried into this system). Not scanning for vzdump backup files.", storage.Name, storage.Path)
+	c.logPVEStorageSkipDetails(storage, "path_not_visible_under_prefix", err)
 }
 
 func (c *Collector) collectPVEStorageMetadataJSONStep(ctx context.Context, result *pveStorageScanResult, ioTimeout time.Duration) error {
@@ -1278,7 +1410,7 @@ func (c *Collector) collectPVEStorageMetadataJSONStep(ctx context.Context, resul
 		ScannedAt: time.Now(),
 	}
 
-	dirSamples, dirSampleErr := c.sampleDirectoriesBounded(ctx, storage.Path, 2, 20, ioTimeout)
+	dirSamples, dirSampleErr := c.sampleDirectoriesBounded(ctx, c.systemPath(storage.Path), 2, 20, ioTimeout)
 	if errors.Is(dirSampleErr, safefs.ErrTimeout) {
 		c.logger.Warning("Skipping datastore %s (path=%s)%s: directory sampling timed out (%v)", storage.Name, storage.Path, formatRuntime, dirSampleErr)
 		result.SkipRemaining = true
@@ -1296,7 +1428,7 @@ func (c *Collector) collectPVEStorageMetadataJSONStep(ctx context.Context, resul
 		meta.SampleDirectories = dirSamples
 	}
 
-	diskUsageText, diskUsageErr := c.describeDiskUsage(ctx, storage.Path, ioTimeout)
+	diskUsageText, diskUsageErr := c.describeDiskUsage(ctx, c.systemPath(storage.Path), ioTimeout)
 	if errors.Is(diskUsageErr, safefs.ErrTimeout) {
 		c.logger.Warning("Skipping datastore %s (path=%s)%s: disk usage probe timed out (%v)", storage.Name, storage.Path, formatRuntime, diskUsageErr)
 		result.SkipRemaining = true
@@ -1321,7 +1453,7 @@ func (c *Collector) collectPVEStorageMetadataJSONStep(ctx context.Context, resul
 	}
 	excludePatterns := c.config.PxarFileExcludePatterns
 
-	fileSummaries, sampleFileErr := c.sampleFilesBounded(ctx, storage.Path, includePatterns, excludePatterns, 3, 100, ioTimeout)
+	fileSummaries, sampleFileErr := c.sampleFilesBounded(ctx, c.systemPath(storage.Path), includePatterns, excludePatterns, 3, 100, ioTimeout)
 	if errors.Is(sampleFileErr, safefs.ErrTimeout) {
 		c.logger.Warning("Skipping datastore %s (path=%s)%s: file sampling timed out (%v)", storage.Name, storage.Path, formatRuntime, sampleFileErr)
 		result.SkipRemaining = true
@@ -1357,7 +1489,8 @@ func (c *Collector) collectPVEStorageMetadataTextStep(ctx context.Context, resul
 	storage := result.Storage
 	formatRuntime := c.formatPVEStorageRuntime(storage)
 
-	fileSampleLines, fileSampleErr := c.sampleMetadataFileStats(ctx, storage.Path, 3, 10, ioTimeout)
+	readPath := c.systemPath(storage.Path)
+	fileSampleLines, fileSampleErr := c.sampleMetadataFileStats(ctx, readPath, 3, 10, ioTimeout)
 	if errors.Is(fileSampleErr, safefs.ErrTimeout) {
 		c.logger.Warning("Skipping datastore %s (path=%s)%s: metadata sampling timed out (%v)", storage.Name, storage.Path, formatRuntime, fileSampleErr)
 		result.SkipRemaining = true
@@ -1368,6 +1501,13 @@ func (c *Collector) collectPVEStorageMetadataTextStep(ctx context.Context, resul
 	}
 	if fileSampleErr != nil {
 		c.logger.Debug("General file sampling for %s failed: %v", storage.Name, fileSampleErr)
+	}
+	if readPath != storage.Path {
+		// The sample lines name files by their full path: report the host's, not the prefix's.
+		hostRoot := filepath.Clean(storage.Path)
+		for i, line := range fileSampleLines {
+			fileSampleLines[i] = strings.Replace(line, " "+readPath, " "+hostRoot, 1)
+		}
 	}
 	result.FileSampleLines = fileSampleLines
 	result.FileSampleErr = fileSampleErr
@@ -1476,7 +1616,8 @@ func (c *Collector) collectDetailedPVEBackups(ctx context.Context, storage pveSt
 	type dirItem struct {
 		path string
 	}
-	stack := []dirItem{{path: storage.Path}}
+	readPath := c.systemPath(storage.Path)
+	stack := []dirItem{{path: readPath}}
 
 	for len(stack) > 0 {
 		if err := ctx.Err(); err != nil {
@@ -1547,7 +1688,15 @@ func (c *Collector) collectDetailedPVEBackups(ctx context.Context, storage pveSt
 					c.logger.Debug("Failed to copy small backup %s: %v", fullPath, err)
 				}
 			}
-			if includeDir != "" && strings.Contains(fullPath, includePattern) {
+			// The include pattern matches the host's path, not the prefix's. filepath.Rel
+			// and Join clean both sides, so a storage.cfg path written with a trailing
+			// slash ("path /var/lib/vz/") cannot put "//" in the middle and break a
+			// pattern such as "vz/dump".
+			hostPath := fullPath
+			if rel, err := filepath.Rel(readPath, fullPath); err == nil {
+				hostPath = filepath.Join(storage.Path, rel)
+			}
+			if includeDir != "" && strings.Contains(hostPath, includePattern) {
 				if err := c.copyBackupSample(ctx, fullPath, includeDir, fmt.Sprintf("selected PVE backup %s", name)); err != nil {
 					c.logger.Debug("Failed to copy pattern backup %s: %v", fullPath, err)
 				}
@@ -1584,6 +1733,7 @@ func (c *Collector) newPatternWriters(storage pveStorageEntry, analysisDir strin
 			c.logger.Warning("Failed to prepare writer for pattern %s: %v", pattern, err)
 			continue
 		}
+		pw.readRoot = c.systemPath(storage.Path)
 		writers = append(writers, pw)
 	}
 	return writers
@@ -1593,12 +1743,15 @@ type patternWriter struct {
 	pattern     string
 	storageName string
 	storagePath string
-	filePath    string
-	file        *os.File
-	writer      *bufio.Writer
-	count       int64
-	totalSize   int64
-	errorCount  int64
+	// readRoot is where storagePath is read from, under SYSTEM_ROOT_PREFIX; empty means
+	// storagePath itself.
+	readRoot   string
+	filePath   string
+	file       *os.File
+	writer     *bufio.Writer
+	count      int64
+	totalSize  int64
+	errorCount int64
 }
 
 func newPatternWriter(storageName, storagePath, analysisDir, pattern string, dryRun bool) (*patternWriter, error) {
@@ -1651,7 +1804,11 @@ func (pw *patternWriter) Write(path string, info os.FileInfo) error {
 		return nil
 	}
 
-	rel, err := filepath.Rel(pw.storagePath, path)
+	root := pw.storagePath
+	if pw.readRoot != "" {
+		root = pw.readRoot
+	}
+	rel, err := filepath.Rel(root, path)
 	if err != nil || strings.HasPrefix(rel, "..") {
 		rel = path
 	}
@@ -2064,6 +2221,9 @@ func (c *Collector) aggregateReplicationStatus(ctx context.Context, replicationD
 }
 
 func (c *Collector) writePVEVersionInfo(ctx context.Context, baseInfoDir string) error {
+	if !c.pveRuntimeCommandsApply() {
+		return nil
+	}
 	versionFile := filepath.Join(baseInfoDir, "pve_version.txt")
 	if err := c.safeCmdOutput(ctx, commandSpec("pveversion"), versionFile, "PVE version info", false); err != nil {
 		return err

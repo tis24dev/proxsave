@@ -109,6 +109,17 @@ func inspectRestoreArchiveContents(archivePath string, logger *logging.Logger) (
 	}
 
 	logger.Debug("Found %d entries in archive", len(archivePaths))
+	prefix := ""
+	if legacyPVEPrefixAllowed(metadata, metadataErr) {
+		prefix = detectLegacyPVEPrefix(archivePaths)
+	}
+	rememberLegacyPVEPrefix(archivePath, prefix)
+	if prefix != "" {
+		for i, name := range archivePaths {
+			archivePaths[i], _ = remapLegacyPVEEntry(name, prefix)
+		}
+		logger.Info("PVE configuration - stored under %s/ in this backup (taken with SYSTEM_ROOT_PREFIX), restored to its host paths", prefix)
+	}
 	availableCategories := AnalyzeArchivePaths(archivePaths, GetAllCategories())
 
 	decision := buildRestoreDecisionInfo(metadata, availableCategories, logger)
@@ -271,13 +282,13 @@ func buildRestoreDecisionInfo(metadata *restoreDecisionMetadata, categories []Ca
 		info.Source = RestoreDecisionSourceInternalMetadata
 	}
 
+	// The opposite mismatch, a pve_cluster payload in a standalone backup, is not one:
+	// the payload is /var/lib/pve-cluster, whose config.db every PVE node has, so a
+	// warning there fired on every standalone restore.
 	if metadata != nil {
 		metadataCluster := strings.EqualFold(strings.TrimSpace(metadata.ClusterMode), "cluster")
-		switch {
-		case metadataCluster && !info.ClusterPayload:
+		if metadataCluster && !info.ClusterPayload {
 			logger.Warning("Internal backup metadata reports cluster mode, but no pve_cluster payload was found; guarded cluster restore remains disabled")
-		case !metadataCluster && info.ClusterPayload:
-			logger.Warning("Cluster payload detected in archive despite metadata reporting non-cluster backup; guarded cluster restore remains enabled")
 		}
 	}
 

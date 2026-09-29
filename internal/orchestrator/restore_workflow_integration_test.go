@@ -21,6 +21,8 @@ func TestStopPVEClusterServices_Success(t *testing.T) {
 			"systemctl start pvedaemon":   {},
 			"systemctl start pveproxy":    {},
 			"systemctl start pvestatd":    {},
+			"systemctl start pve-ha-crm":  {},
+			"systemctl start pve-ha-lrm":  {},
 		},
 	}
 	restoreCmd = fake
@@ -29,9 +31,24 @@ func TestStopPVEClusterServices_Success(t *testing.T) {
 	if err := startPVEClusterServices(context.Background(), logger); err != nil {
 		t.Fatalf("startPVEClusterServices: %v", err)
 	}
-	if len(fake.Calls) != 4 {
-		t.Fatalf("expected 4 systemctl calls, got %d", len(fake.Calls))
+	starts := 0
+	for _, call := range fake.Calls {
+		if strings.HasPrefix(call, "systemctl start ") {
+			starts++
+		}
 	}
+	if starts != 6 {
+		t.Fatalf("expected 6 systemctl start calls, got %d: %v", starts, fake.Calls)
+	}
+	// The HA services come back after pmxcfs and the API services, CRM before LRM.
+	assertCallsInOrder(t, fake.Calls,
+		"systemctl start pve-cluster",
+		"systemctl start pvedaemon",
+		"systemctl start pveproxy",
+		"systemctl start pvestatd",
+		"systemctl start pve-ha-crm",
+		"systemctl start pve-ha-lrm",
+	)
 }
 
 func TestExtractPlainArchive_CorruptedTar(t *testing.T) {

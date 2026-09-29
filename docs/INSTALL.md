@@ -39,7 +39,7 @@ a cron job, or a recovery where the TUI cannot render. They are not the everyday
    bash -c "$(curl -fsSL https://raw.githubusercontent.com/tis24dev/proxsave/main/install.sh)"
    ```
 
-   or, if you need a fully clean reinstall. This keeps `build/`, `env/` and `identity/` and **deletes everything else under the base directory**, which with stock paths means your local backup archives in `backup/`, the logs in `log/`, and `configs/backup.env`. Both installers ask for confirmation first, defaulting to no. Do not run it as a way to reset the configuration unless your backups also live on secondary or cloud storage:
+   or, if you need a fully clean reinstall. This keeps `build/`, `env/`, `guards/`, `identity/` and `restore/` and **deletes everything else under the base directory**, which with stock paths means your local backup archives in `backup/`, the logs in `log/`, and `configs/backup.env`. Both installers ask for confirmation first, defaulting to no. Do not run it as a way to reset the configuration unless your backups also live on secondary or cloud storage:
 
    ```bash
    bash -c "$(curl -fsSL https://raw.githubusercontent.com/tis24dev/proxsave/main/install.sh)" _ --new-install
@@ -316,7 +316,7 @@ freshly built binary, and for hosts where the dashboard cannot be reached.
 ```bash
 ./build/proxsave --install
 
-# Or perform a clean reinstall. Keeps build/, env/ and identity/; deletes everything
+# Or perform a clean reinstall. Keeps build/, env/, guards/, identity/ and restore/; deletes everything
 # else under the base directory, local backup archives and configs/backup.env included.
 ./build/proxsave --new-install
 ```

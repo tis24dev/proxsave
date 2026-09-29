@@ -240,6 +240,9 @@ func (o *Orchestrator) collectBackupData(run *backupRunContext, workspace *backu
 	collStats := collector.GetStats()
 	o.applyBackupCollectionStats(run.stats, collStats, collector)
 	o.writeBackupCollectionMetadata(workspace.tempDir, run.hostname, run.stats, collector)
+	if err := collector.StagingNoSpaceErr(); err != nil {
+		return &BackupError{Phase: "collection", Err: err, Code: types.ExitCollectionError}
+	}
 
 	// The collection manifest is written through the collector after the first
 	// snapshot, so re-snapshot afterwards: this counts the manifest like every other

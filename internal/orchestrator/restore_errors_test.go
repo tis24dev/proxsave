@@ -175,7 +175,7 @@ func TestStopPVEClusterServices_UsesNoBlock(t *testing.T) {
 
 	outputs := map[string][]byte{}
 	errors := map[string]error{}
-	for _, svc := range []string{"pve-cluster", "pvedaemon", "pveproxy", "pvestatd"} {
+	for _, svc := range []string{"pve-ha-lrm", "pve-ha-crm", "pve-cluster", "pvedaemon", "pveproxy", "pvestatd"} {
 		key := fmt.Sprintf("systemctl is-active %s", svc)
 		outputs[key] = []byte("inactive")
 		errors[key] = fmt.Errorf("inactive")
@@ -192,6 +192,8 @@ func TestStopPVEClusterServices_UsesNoBlock(t *testing.T) {
 	}
 
 	wantStops := []string{
+		"systemctl stop --no-block pve-ha-lrm",
+		"systemctl stop --no-block pve-ha-crm",
 		"systemctl stop --no-block pve-cluster",
 		"systemctl stop --no-block pvedaemon",
 		"systemctl stop --no-block pveproxy",
@@ -209,6 +211,9 @@ func TestStopPVEClusterServices_UsesNoBlock(t *testing.T) {
 			t.Fatalf("expected %s to be called, calls: %#v", cmd, fake.Calls)
 		}
 	}
+	// The HA services go first: pve-ha-lrm left running while pmxcfs is down lets
+	// its watchdog expire and fence the node.
+	assertCallsInOrder(t, fake.Calls, wantStops...)
 }
 
 func TestStartPBSServices_CommandTimeout(t *testing.T) {
@@ -1326,7 +1331,13 @@ func TestStopPVEClusterServices_ServiceStillActive(t *testing.T) {
 
 	fake := &FakeCommandRunner{
 		Outputs: map[string][]byte{
+			"systemctl is-active pve-ha-lrm":  []byte("inactive"),
+			"systemctl is-active pve-ha-crm":  []byte("inactive"),
 			"systemctl is-active pve-cluster": []byte("active"),
+		},
+		Errors: map[string]error{
+			"systemctl is-active pve-ha-lrm": fmt.Errorf("inactive"),
+			"systemctl is-active pve-ha-crm": fmt.Errorf("inactive"),
 		},
 	}
 	restoreCmd = fake
@@ -1335,6 +1346,9 @@ func TestStopPVEClusterServices_ServiceStillActive(t *testing.T) {
 	err := stopPVEClusterServices(context.Background(), logger)
 	if err == nil {
 		t.Fatalf("expected error when service stays active")
+	}
+	if !strings.Contains(err.Error(), "(pve-cluster)") {
+		t.Fatalf("expected the error to name pve-cluster, got %v", err)
 	}
 }
 

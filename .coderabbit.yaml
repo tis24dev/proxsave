@@ -1,0 +1,7 @@
+# CodeRabbit reviews at most 150 files per pull request. The characterization goldens under
+# testdata/ are regenerated with -update and checked by the tests that own them, so they are
+# left out of the review, together with this file, to keep docs and tests reviewable.
+reviews:
+  path_filters:
+    - "!**/testdata/**"
+    - "!.coderabbit.yaml"

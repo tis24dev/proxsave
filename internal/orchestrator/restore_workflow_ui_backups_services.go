@@ -3,6 +3,7 @@ package orchestrator
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"time"
 
@@ -45,10 +46,10 @@ func (w *restoreUIWorkflowRun) createSafetyBackup(categories []Category) error {
 	}
 	w.safetyBackup = backup
 	w.logger.Info("Safety backup location: %s", backup.BackupPath)
-	w.logger.Info("You can restore from this backup if needed using: tar -xzf %s -C /", backup.BackupPath)
+	w.logger.Info("Safety backup - holds the current versions of the files this restore overwrites (tar.gz, paths relative to /)")
 	for _, c := range categories {
 		if c.ID == "accounts" {
-			w.logger.Info("System accounts rollback: this safety backup includes /etc/passwd, /etc/group, /etc/shadow, /etc/gshadow and /etc/sudoers; restore just those with: tar -xzf %s -C / etc/passwd etc/group etc/shadow etc/gshadow etc/sudoers", backup.BackupPath)
+			w.logger.Info("Safety backup - also holds the current /etc/passwd, /etc/group, /etc/shadow, /etc/gshadow and /etc/sudoers")
 			break
 		}
 	}
@@ -173,12 +174,30 @@ func (w *restoreUIWorkflowRun) preparePVEClusterRestore() (func(), error) {
 	return w.restartPVEClusterServicesCleanup(), nil
 }
 
+// restartPVEClusterServicesCleanup is the deferred restart. It only does work when
+// the run ends before restartStoppedPVEClusterServices ran after the extraction,
+// i.e. on an error while the services were still down.
 func (w *restoreUIWorkflowRun) restartPVEClusterServicesCleanup() func() {
-	return func() {
-		restartCtx, cancel := context.WithTimeout(context.Background(), 2*serviceStartTimeout+2*serviceVerifyTimeout+10*time.Second)
-		defer cancel()
-		if err := startPVEClusterServices(restartCtx, w.logger); err != nil {
-			w.logger.Warning("Failed to restart PVE services after restore: %v", err)
+	return w.restartStoppedPVEClusterServices
+}
+
+// restartStoppedPVEClusterServices restarts, once, the services
+// preparePVEClusterRestore stopped. The run calls it as soon as extractNormalCategories
+// has written the cluster database: that is the only step that needs pmxcfs down,
+// and every minute it stays down later (the network apply prompt, the boot rebuild)
+// is a minute this node is out of the cluster.
+func (w *restoreUIWorkflowRun) restartStoppedPVEClusterServices() {
+	if !w.clusterServicesStopped || w.clusterServicesRestarted {
+		return
+	}
+	w.clusterServicesRestarted = true
+	restartCtx, cancel := context.WithTimeout(context.Background(), pveClusterRestartTimeout())
+	defer cancel()
+	if err := startPVEClusterServices(restartCtx, w.logger); err != nil {
+		w.logger.Warning("Failed to restart PVE services after restore: %v", err)
+		var startErr *pveClusterStartError
+		if errors.As(err, &startErr) {
+			w.clusterServicesNotRunning = startErr
 		}
 	}
 }

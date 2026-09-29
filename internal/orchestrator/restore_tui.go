@@ -32,6 +32,12 @@ func RunRestoreWorkflowTUI(ctx context.Context, cfg *config.Config, logger *logg
 	if cfg == nil {
 		return fmt.Errorf("configuration not available")
 	}
+	// Before the session: opening it adopts the dashboard's handed-off session and
+	// takes over the screen, for a restore that is not going to run. The engine
+	// refuses too, but only after this entry has opened the session.
+	if cfg.DryRun {
+		return ErrRestoreDryRun
+	}
 	if logger == nil {
 		logger = logging.GetDefaultLogger()
 	}

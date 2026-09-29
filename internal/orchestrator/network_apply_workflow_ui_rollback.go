@@ -23,7 +23,6 @@ type networkRollbackUIApplyFlow struct {
 	archivePath         string
 	timeout             time.Duration
 	systemType          SystemType
-	suppressPVEChecks   bool
 	diagnosticsDir      string
 	iface               string
 	source              string
@@ -39,20 +38,18 @@ type networkRollbackUIApplyRequest struct {
 	archivePath         string
 	timeout             time.Duration
 	systemType          SystemType
-	suppressPVEChecks   bool
 }
 
 func applyNetworkWithRollbackWithUI(ctx context.Context, ui RestoreWorkflowUI, logger *logging.Logger, req networkRollbackUIApplyRequest) (err error) {
 	done := logging.DebugStart(
 		logger,
 		"network safe apply (ui)",
-		"rollbackBackup=%s networkRollback=%s timeout=%s systemType=%s stage=%s suppressPVEChecks=%v",
+		"rollbackBackup=%s networkRollback=%s timeout=%s systemType=%s stage=%s",
 		strings.TrimSpace(req.rollbackBackupPath),
 		strings.TrimSpace(req.networkRollbackPath),
 		req.timeout,
 		req.systemType,
 		strings.TrimSpace(req.stageRoot),
-		req.suppressPVEChecks,
 	)
 	defer func() { done(err) }()
 
@@ -66,7 +63,6 @@ func applyNetworkWithRollbackWithUI(ctx context.Context, ui RestoreWorkflowUI, l
 		archivePath:         req.archivePath,
 		timeout:             req.timeout,
 		systemType:          req.systemType,
-		suppressPVEChecks:   req.suppressPVEChecks,
 	}
 	return flow.run()
 }
@@ -279,7 +275,7 @@ func (f *networkRollbackUIApplyFlow) preflightFailureMessage(preflight networkPr
 
 func (f *networkRollbackUIApplyFlow) rollbackStagedPreflightFailure(preflight networkPreflightResult) error {
 	logging.DebugStep(f.logger, "network safe apply (ui)", "Preflight failed in staged mode: rolling back network files automatically")
-	rollbackLog, rbErr := rollbackNetworkFilesNow(f.ctx, f.logger, f.networkRollbackPath, f.diagnosticsDir)
+	rollbackLog, rbErr := rollbackNetworkFilesNow(f.ctx, f.logger, f.networkRollbackPath, "")
 	if strings.TrimSpace(rollbackLog) != "" {
 		f.info("Network rollback log: %s", rollbackLog)
 	}
@@ -312,7 +308,7 @@ func (f *networkRollbackUIApplyFlow) rollbackStagedApplyFailure(applyErr error) 
 		return applyErr
 	}
 	logging.DebugStep(f.logger, "network safe apply (ui)", "Staged apply failed: rolling back network files automatically")
-	rollbackLog, rbErr := rollbackNetworkFilesNow(f.ctx, f.logger, f.networkRollbackPath, f.diagnosticsDir)
+	rollbackLog, rbErr := rollbackNetworkFilesNow(f.ctx, f.logger, f.networkRollbackPath, "")
 	if strings.TrimSpace(rollbackLog) != "" {
 		f.info("Network rollback log: %s", rollbackLog)
 	}
@@ -361,7 +357,7 @@ func (f *networkRollbackUIApplyFlow) confirmPreflightRollback(message string) er
 
 func (f *networkRollbackUIApplyFlow) rollbackPreflightFailureNow() error {
 	logging.DebugStep(f.logger, "network safe apply (ui)", "Rollback network files now (backup=%s)", strings.TrimSpace(f.networkRollbackPath))
-	rollbackLog, rbErr := rollbackNetworkFilesNow(f.ctx, f.logger, f.networkRollbackPath, f.diagnosticsDir)
+	rollbackLog, rbErr := rollbackNetworkFilesNow(f.ctx, f.logger, f.networkRollbackPath, "")
 	if strings.TrimSpace(rollbackLog) != "" {
 		f.info("Network rollback log: %s", rollbackLog)
 	}
@@ -375,7 +371,10 @@ func (f *networkRollbackUIApplyFlow) rollbackPreflightFailureNow() error {
 
 func (f *networkRollbackUIApplyFlow) armRollbackAndApply() error {
 	logging.DebugStep(f.logger, "network safe apply (ui)", "Arm rollback timer BEFORE applying changes")
-	handle, err := armNetworkRollback(f.ctx, f.logger, f.rollbackBackupPath, f.timeout, f.diagnosticsDir)
+	// Work dir "" (/tmp/proxsave), not the diagnostics dir: marker and script only
+	// matter inside the rollback window, and the diagnostics dir lives in the
+	// restore's own directory, which is kept. The rollback log goes there anyway.
+	handle, err := armNetworkRollback(f.ctx, f.logger, f.rollbackBackupPath, f.timeout, "")
 	if err != nil {
 		return err
 	}
@@ -417,14 +416,7 @@ func (f *networkRollbackUIApplyFlow) runPostApplyHealthChecks() {
 		EnableDNSResolve:   true,
 		LocalPortChecks:    defaultNetworkPortChecks(f.systemType),
 	}
-	if f.suppressPVEChecks {
-		healthOptions.SystemType = SystemTypeUnknown
-		healthOptions.LocalPortChecks = nil
-	}
 	f.health = runNetworkHealthChecks(f.ctx, healthOptions)
-	if f.suppressPVEChecks {
-		f.health.add("PVE service checks", networkHealthOK, "skipped (cluster database restore in progress; services will be restarted after restore completes)")
-	}
 	logNetworkHealthReport(f.logger, f.health)
 	if f.diagnosticsDir == "" {
 		return

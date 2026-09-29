@@ -32,5 +32,10 @@ off         no monitoring
 centralized ProxSave HC Server (zero setup, reuses the Telegram identity)
 self        your own healthchecks/SaaS server (you paste the ping URLs next)
 Healthchecks monitoring: off, centralized, or self [centralized]: 
+--- Notify level ---
+always      every run
+warning     warnings and failures
+failure     failures only
+Notify level: always, warning, or failure [warning]: 
 --- Schedule ---
 Run at (daily, HH:MM) [02:00]: 

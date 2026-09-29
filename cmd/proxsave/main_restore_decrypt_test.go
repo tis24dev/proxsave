@@ -2,9 +2,11 @@ package main
 
 import (
 	"errors"
+	"fmt"
 	"testing"
 
 	"github.com/tis24dev/proxsave/internal/cli"
+	"github.com/tis24dev/proxsave/internal/config"
 	"github.com/tis24dev/proxsave/internal/orchestrator"
 	"github.com/tis24dev/proxsave/internal/types"
 )
@@ -79,4 +81,54 @@ func TestDispatchRestoreModeGatesTUIonNonTTY(t *testing.T) {
 			t.Fatalf("exitCode=%d, want TUI sentinel %d (an interactive terminal must still get the TUI)", res.exitCode, tuiSentinel)
 		}
 	})
+}
+
+// DRY_RUN=true in the configuration refuses the restore at the dispatch, before
+// either workflow starts, with the exit code of the --dry-run flag refusal. The
+// --dry-run flag itself never gets here: validateModeCompatibility refused it
+// already. The dashboard's Restore entry goes through this same dispatch.
+func TestDispatchRestoreModeRefusesDryRunFromTheConfiguration(t *testing.T) {
+	origInteractive := restoreIsInteractive
+	origCLI := runRestoreCLIFn
+	origTUI := runRestoreTUIFn
+	t.Cleanup(func() {
+		restoreIsInteractive = origInteractive
+		runRestoreCLIFn = origCLI
+		runRestoreTUIFn = origTUI
+	})
+	runRestoreCLIFn = func(rt *appRuntime) modeResult {
+		t.Fatalf("the CLI restore workflow started under DRY_RUN=true")
+		return modeResult{}
+	}
+	runRestoreTUIFn = func(rt *appRuntime) modeResult {
+		t.Fatalf("the TUI restore workflow started under DRY_RUN=true")
+		return modeResult{}
+	}
+
+	for _, interactive := range []bool{false, true} {
+		restoreIsInteractive = func() bool { return interactive }
+		rt := &appRuntime{args: &cli.Args{Restore: true}, cfg: &config.Config{DryRun: true}}
+		res := dispatchRestoreMode(rt)
+		if !res.handled || res.exitCode != types.ExitConfigError.Int() {
+			t.Fatalf("interactive=%v: handled=%v exitCode=%d, want handled with %d", interactive, res.handled, res.exitCode, types.ExitConfigError.Int())
+		}
+	}
+}
+
+// The engine refuses a dry-run restore too, as a backstop. If that refusal ever
+// reaches the entrypoint it keeps the configuration-error exit code instead of
+// becoming a generic restore failure.
+func TestFinishFailedRestoreKeepsTheDryRunRefusalAConfigError(t *testing.T) {
+	rt := &appRuntime{args: &cli.Args{}}
+	for _, err := range []error{
+		orchestrator.ErrRestoreDryRun,
+		fmt.Errorf("DRY_RUN is true: %w", orchestrator.ErrRestoreDryRun),
+	} {
+		for _, includeDecryptAbort := range []bool{false, true} {
+			res := finishFailedRestore(rt, err, includeDecryptAbort)
+			if res.exitCode != types.ExitConfigError.Int() {
+				t.Fatalf("finishFailedRestore(%q, %v): exitCode=%d, want %d", err, includeDecryptAbort, res.exitCode, types.ExitConfigError.Int())
+			}
+		}
+	}
 }

@@ -32,10 +32,12 @@ var (
 	// not mounted. It is the reliable offline version source for both PVE and PBS.
 	dpkgStatusFile = "/var/lib/dpkg/status"
 
-	// pveClusterDB is the pmxcfs SQLite backing store. It exists on every PVE host
-	// (clustered or standalone), lives on the persistent root filesystem, and
-	// survives with no pmxcfs FUSE bind, so it identifies a mounted PVE host even
-	// when /etc/pve is an empty mountpoint. Nothing but PVE creates it.
+	// pveClusterDB is the pmxcfs SQLite backing store. pmxcfs creates it at runtime:
+	// no package owns it and pve-cluster's postrm leaves it behind even on purge, so it
+	// outlives PVE (measured on PVE 9.2.2 with every PVE package purged), and a FULL
+	// restore of a PVE+PBS archive done with 0.39.0 or older wrote it onto a PBS-only
+	// host. Like the PBS directories it answers "was PVE ever here", so detectPVE
+	// reports it as residue.
 	pveClusterDB = "/var/lib/pve-cluster/config.db"
 
 	// pveBinaryCandidates and pbsBinaryCandidates are product-specific binaries
@@ -459,8 +461,8 @@ func combineVersions(pveVersion, pbsVersion string) string {
 // detectPVE walks the PVE marker ladder and returns at the first marker that PROVES
 // the product is installed. Every rung it reaches is recorded in trace (nil records
 // nothing), so a log can say which marker produced the verdict and which ones it had
-// already ruled out. The third return is the first residue seen: see detectPBS, which
-// is where that distinction is load-bearing.
+// already ruled out. The third return is the first residue seen: see detectPBS for why
+// a marker the product creates never ends the ladder, which config.db obeys here too.
 func detectPVE(trace *detectionTrace) (string, bool, string) {
 	residue := ""
 	noteResidue := func(marker, target, note string) {
@@ -507,12 +509,6 @@ func detectPVE(trace *detectionTrace) (string, bool, string) {
 	}
 	trace.miss(productPVE, "dpkg pve-manager", resolveUnderPrefix(dpkgStatusFile))
 
-	if fileExists(pveClusterDB) {
-		trace.hit(productPVE, "cluster-db", resolveUnderPrefix(pveClusterDB), "")
-		return "unknown", true, ""
-	}
-	trace.miss(productPVE, "cluster-db", resolveUnderPrefix(pveClusterDB))
-
 	if path := firstExistingFile(pveBinaryCandidates); path != "" {
 		trace.hit(productPVE, "binary", path, "")
 		return "unknown", true, ""
@@ -524,6 +520,12 @@ func detectPVE(trace *detectionTrace) (string, bool, string) {
 		return "unknown", true, ""
 	}
 	trace.miss(productPVE, "share-dir", resolveUnderPrefix(pveShareDir))
+
+	if fileExists(pveClusterDB) {
+		noteResidue("cluster-db", resolveUnderPrefix(pveClusterDB), "no package owns this file and none removes it")
+	} else {
+		trace.miss(productPVE, "cluster-db", resolveUnderPrefix(pveClusterDB))
+	}
 
 	if path := firstMatchingSource(pveSourceFiles, pveSourceTokens); path != "" {
 		noteResidue("apt-source", path, "a configured repository is not an installed package")
