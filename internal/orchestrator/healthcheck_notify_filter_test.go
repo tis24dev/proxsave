@@ -103,3 +103,38 @@ func TestCheckHealthcheckNotifyFilterHealthchecksOffInTheFile(t *testing.T) {
 		t.Fatalf("lines = %q / %q (%v)", setting, current, ok)
 	}
 }
+
+// The block's text, as approved, from the package that owns it.
+func TestHealthcheckNotifyLines(t *testing.T) {
+	d := func(req, eff, status, reason string) HealthcheckNotifyFilter {
+		return HealthcheckNotifyFilter{Loaded: true, Decision: notifyfilter.Decision{Requested: req, Effective: eff, Status: status, Reason: reason}}
+	}
+	cases := []struct {
+		nf            HealthcheckNotifyFilter
+		setting, curr string
+	}{
+		{d("failure", "failure", notifyfilter.StatusReady, ""), "NOTIFY_ON=failure", "failure"},
+		{d("warning", "always", notifyfilter.StatusNotConfigured, notifyfilter.ReasonAlertsNotVerified), "NOTIFY_ON=warning", "always (Healthchecks not configured)"},
+		{d("warning", "always", notifyfilter.StatusNotVerified, notifyfilter.ReasonAlertsNotVerified), "NOTIFY_ON=warning", "always (Healthchecks not verified)"},
+		{d("warning", "always", notifyfilter.StatusDegraded, notifyfilter.ReasonAlertsNotVerified), "NOTIFY_ON=warning", "always (Healthchecks degraded)"},
+		{d("warning", "always", notifyfilter.StatusUnknown, notifyfilter.ReasonAlertsNotVerified), "NOTIFY_ON=warning", "always (Healthchecks status unknown)"},
+		{d("warning", "always", notifyfilter.StatusUnknown, notifyfilter.ReasonStatusUnavailable), "NOTIFY_ON=warning", "always (Healthchecks status unavailable)"},
+		{d("warning", "always", notifyfilter.StatusReady, notifyfilter.ReasonPolicyUnconfirmed), "NOTIFY_ON=warning", "always (setting not yet applied by the server)"},
+		{d("warning", "always", notifyfilter.StatusNotTransmitting, notifyfilter.ReasonNotTransmitting), "NOTIFY_ON=warning", "always (daemon not transmitting)"},
+		{HealthcheckNotifyFilter{Loaded: true, FromDefault: true, Decision: notifyfilter.Decision{Requested: "warning", Effective: "warning"}}, "NOTIFY_ON=warning (default)", "warning"},
+		{HealthcheckNotifyFilter{Loaded: true, Invalid: true, Raw: "warnig", Decision: notifyfilter.Decision{Requested: "always", Effective: "always"}}, "NOTIFY_ON=warnig (not valid, always used)", "always"},
+		{HealthcheckNotifyFilter{Loaded: true, Self: true}, "Self mode", "Self mode"},
+	}
+	for _, tc := range cases {
+		if s, c, ok := HealthcheckNotifyLines(false, tc.nf); !ok || s != tc.setting || c != tc.curr {
+			t.Errorf("lines = %q / %q (%v); want %q / %q", s, c, ok, tc.setting, tc.curr)
+		}
+	}
+	if s, c, ok := HealthcheckNotifyLines(true, HealthcheckNotifyFilter{}); !ok || s != "Self mode" || c != "Self mode" {
+		t.Errorf("self screen: %q / %q (%v)", s, c, ok)
+	}
+	if _, _, ok := HealthcheckNotifyLines(false, HealthcheckNotifyFilter{}); ok {
+		t.Error("unreadable backup.env must print no block")
+	}
+	(&HealthchecksChannel{}).reportingOnly() // the NOTIFY_ON exemption marker
+}
