@@ -771,7 +771,7 @@ Continue restore with PBS services still running? (y/N): _
 
 ```text
 Extracting selected categories from archive into /
-Detailed restore log: /opt/proxsave/restore/20251120_143052/restore_20251120_143052.log
+Detailed restore log: /opt/proxsave/restore/20251120_143052/restore_20251120_143409_1.log
 
 Extracting: /var/lib/pve-cluster/config.db
 Extracting: /var/lib/pve-cluster/.version
@@ -812,7 +812,7 @@ RESTORE COMPLETED
 
 Restore completed successfully.
 Temporary decrypted bundle removed.
-Detailed restore log: /opt/proxsave/restore/20251120_143052/restore_20251120_143052.log
+Detailed restore log: /opt/proxsave/restore/20251120_143052/restore_20251120_143409_1.log
 Export directory: /opt/proxsave/proxmox-config-export-20251120-143052/
 Safety backup preserved at: /opt/proxsave/restore/20251120_143052/restore_backup_20251120_143052.tar.gz
 Safety backup - kept until removed, ProxSave never deletes it
@@ -1388,13 +1388,13 @@ Pass 1: Normal Categories
   ├─ Destination: / (system root)
   ├─ Categories: All non-export-only
   ├─ Safety backup: Created before extraction
-  └─ Log: /opt/proxsave/restore/TIMESTAMP/restore_TIMESTAMP.log
+  └─ Log: /opt/proxsave/restore/TIMESTAMP/restore_<extraction timestamp>_<seq>.log
 
 Pass 2: Export-Only Categories
   ├─ Destination: <BASE_DIR>/proxmox-config-export-YYYYMMDD-HHMMSS/
   ├─ Categories: Export-only (e.g. pve_config_export, pbs_config)
   ├─ Safety backup: Not created (not overwriting system)
-  └─ Log: Separate section in same log file
+  └─ Log: Its own file in the same directory, restore_<extraction timestamp>_<seq>.log
 
 Pass 3: Staged Categories
   ├─ Destination: /tmp/proxsave/restore-stage-* (deleted when the restore ends)
@@ -2236,40 +2236,45 @@ if cleanDestRoot == "/" && strings.HasPrefix(target, "/etc/pve") {
 
 ### 8. Comprehensive Logging
 
-**Detailed Log**: `/opt/proxsave/restore/YYYYMMDD_HHMMSS/restore_YYYYMMDD_HHMMSS.log`, next to the restore session log `restore-<host>-<timestamp>.log`
+**Detailed Logs**: one file per extraction pass, `<BASE_DIR>/restore/YYYYMMDD_HHMMSS/restore_<extraction YYYYMMDD_HHMMSS>_<seq>.log`, next to the restore session log `restore-<host>-<timestamp>.log`. The directory is named when the restore starts and each file when its pass starts, so the two timestamps differ; `<seq>` numbers the extraction passes of the run in order, from `_1`.
 
 **Contents**:
 ```text
-=== RESTORE LOG ===
-Started: 2025-11-20 14:30:52
+=== PROXMOX RESTORE LOG ===
+Date: 2025-11-20 14:34:09
+Mode: CUSTOM selection
+Selected categories: 2 categories
+  - PVE Cluster Configuration (pve_cluster)
+  - PVE Storage Configuration (storage_pve)
+Archive: pve01-backup-20251119-020000.tar.xz
 
-EXTRACTED FILES:
-  /var/lib/pve-cluster/config.db (ownership: 0:0, mode: 0600)
-  /var/lib/pve-cluster/.version (ownership: 0:0, mode: 0644)
-  /etc/vzdump.conf (ownership: 0:0, mode: 0644)
-  ...
+=== FILES RESTORED ===
+RESTORED: ./var/lib/pve-cluster/config.db
+RESTORED: ./etc/vzdump.conf
+...
 
-SKIPPED FILES:
-  ./opt/some-file (does not match any selected category)
-  ...
+=== FILES SKIPPED ===
+SKIPPED: ./opt/some-file (does not match any selected category)
+...
 
-SUMMARY:
-  Files extracted: 47
-  Files skipped: 1203
-  Files failed: 0
-  Duration: 12.3 seconds
+=== SUMMARY ===
+Total files extracted: 47
+Total files skipped: 1203
+Total files failed: 0
+Total files in archive: 1250
 ```
 
 **Usage**:
 ```bash
 # Review what was restored
-cat /opt/proxsave/restore/20251120_143052/restore_20251120_143052.log
+cat /opt/proxsave/restore/20251120_143052/restore_20251120_143409_1.log
 
 # Search for specific file
-grep "storage.cfg" /opt/proxsave/restore/20251120_143052/restore_20251120_143052.log
+grep "storage.cfg" /opt/proxsave/restore/20251120_143052/restore_20251120_143409_1.log
 
-# Check for failures
-grep "FAILED" /opt/proxsave/restore/20251120_143052/restore_20251120_143052.log
+# Check for failures: the detailed log has the count, the session log names each file
+grep "Total files failed" /opt/proxsave/restore/20251120_143052/restore_20251120_143409_1.log
+grep -E "Failed to extract|Refusing hardlink" /opt/proxsave/restore/20251120_143052/restore-*.log
 ```
 
 ### 9. Checksum Verification

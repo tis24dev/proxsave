@@ -2262,7 +2262,7 @@ restore. On an interactive terminal it still renders the TUI unless you add `--c
 # Restore logs, in the restore's own directory <BASE_DIR>/restore/<timestamp>/:
 # the session log restore-<host>-<timestamp>.log and the detailed logs
 # restore_<timestamp>_<seq>.log (seq is a per-process counter)
-cat /opt/proxsave/restore/20251120_143052/restore_20251120_143052_1.log
+cat /opt/proxsave/restore/20251120_143052/restore_20251120_143409_1.log
 
 # Service logs
 journalctl -u pve-cluster --since "10 minutes ago"
