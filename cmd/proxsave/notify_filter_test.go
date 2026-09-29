@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/tis24dev/proxsave/internal/config"
 	"github.com/tis24dev/proxsave/internal/health"
@@ -229,5 +230,88 @@ func TestLogNotifyFilterInitWithHealthchecksOff(t *testing.T) {
 	}
 	if *reads != 0 {
 		t.Fatalf("relay read %d times with Healthchecks off; want 0", *reads)
+	}
+}
+
+// fakeNotifyClock replaces the decision's clock for one test and returns a pointer to its time.
+func fakeNotifyClock(t *testing.T) *time.Time {
+	t.Helper()
+	now := time.Date(2026, 9, 29, 0, 0, 0, 0, time.UTC)
+	orig := notifyFilterNow
+	t.Cleanup(func() { notifyFilterNow = orig })
+	notifyFilterNow = func() time.Time { return now }
+	return &now
+}
+
+// Before dispatch the run reuses its initialization decision while the relay's answer is younger
+// than 120 s: 86% of the runs started at 00:00 UTC end within that, and read the relay once.
+func TestNotifyFilterRefreshReusesAFreshAnswer(t *testing.T) {
+	now := fakeNotifyClock(t)
+	cfg := centralizedNotifyConfig(t)
+	reads := stubDeliveryStatus(t, relayAnswer("ready", config.NotifyOnWarning, true, "telegram"), nil)
+	logger, _ := debugLogger(t)
+
+	d := decideNotifyFilter(context.Background(), cfg, logger, hcSectionInitialized, "notifications init")
+	refresh := notifyFilterRefresh(d, cfg, logger, hcSectionInitialized)
+	*now = now.Add(notifyFilterValidity - time.Second)
+
+	if got := refresh(context.Background()); got != config.NotifyOnWarning {
+		t.Fatalf("refresh = %q; want the initialization decision %q", got, config.NotifyOnWarning)
+	}
+	if *reads != 1 {
+		t.Fatalf("relay read %d times; want 1, the answer is still valid", *reads)
+	}
+}
+
+// An answer older than 120 s is read again before dispatch, and the new decision is the one
+// applied: a relay that stopped confirming in the meantime brings the run back to always.
+func TestNotifyFilterRefreshReadsAnExpiredAnswerAgain(t *testing.T) {
+	now := fakeNotifyClock(t)
+	cfg := centralizedNotifyConfig(t)
+	reads := stubDeliveryStatus(t, relayAnswer("ready", config.NotifyOnWarning, true, "telegram"), nil)
+	logger, buf := debugLogger(t)
+
+	d := decideNotifyFilter(context.Background(), cfg, logger, hcSectionInitialized, "notifications init")
+	refresh := notifyFilterRefresh(d, cfg, logger, hcSectionInitialized)
+	stubDeliveryStatus(t, relayAnswer("degraded", config.NotifyOnWarning, true, "telegram"), nil)
+	*now = now.Add(notifyFilterValidity)
+
+	if got := refresh(context.Background()); got != config.NotifyOnAlways {
+		t.Fatalf("refresh = %q; want %q from the new, degraded answer", got, config.NotifyOnAlways)
+	}
+	if *reads != 1 {
+		t.Fatalf("first stub read %d times; want 1", *reads)
+	}
+	for _, want := range []string{
+		"notifications dispatch: healthchecks delivery state=degraded",
+		"notifications dispatch: notification filter fallback=always reason=alerts_not_verified",
+	} {
+		if !strings.Contains(buf.String(), want) {
+			t.Fatalf("missing %q in:\n%s", want, buf.String())
+		}
+	}
+
+	// The new answer is fresh again: a second refresh reuses it.
+	again := stubDeliveryStatus(t, relayAnswer("ready", config.NotifyOnWarning, true, "telegram"), nil)
+	if got := refresh(context.Background()); got != config.NotifyOnAlways || *again != 0 {
+		t.Fatalf("second refresh = %q after %d reads; want the reused %q and no read", got, *again, config.NotifyOnAlways)
+	}
+}
+
+// A decision that read no relay answer (self mode, Healthchecks off, daemon down) has nothing
+// that can expire, so the refresh never reads the relay.
+func TestNotifyFilterRefreshNeverReadsWithoutARelayAnswer(t *testing.T) {
+	now := fakeNotifyClock(t)
+	cfg := centralizedNotifyConfig(t)
+	cfg.HealthcheckMode = config.HealthcheckModeSelf
+	reads := stubDeliveryStatus(t, relayAnswer("ready", config.NotifyOnWarning, true, "telegram"), nil)
+	logger, _ := debugLogger(t)
+
+	d := decideNotifyFilter(context.Background(), cfg, logger, hcSectionInitialized, "notifications init")
+	refresh := notifyFilterRefresh(d, cfg, logger, hcSectionInitialized)
+	*now = now.Add(time.Hour)
+
+	if got := refresh(context.Background()); got != config.NotifyOnWarning || *reads != 0 {
+		t.Fatalf("refresh = %q after %d relay reads; want %q and none", got, *reads, config.NotifyOnWarning)
 	}
 }

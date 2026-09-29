@@ -47,6 +47,9 @@ const notifyFilterValidity = 120 * time.Second
 
 var fetchDeliveryStatus = health.FetchDeliveryStatus
 
+// notifyFilterNow is the clock the relay answer's age is measured with; tests replace it.
+var notifyFilterNow = time.Now
+
 type notifyFilterDecision struct {
 	requested string
 	status    string
@@ -102,7 +105,7 @@ func decideNotifyFilter(ctx context.Context, cfg *config.Config, logger *logging
 	default:
 		secret, _ := identity.LoadNotifySecret(cfg.BaseDir)
 		st, err := fetchDeliveryStatus(ctx, nil, cfg.ServerAPIHost, cfg.ServerID, secret)
-		d.readAt = time.Now()
+		d.readAt = notifyFilterNow()
 		if err != nil {
 			d.status, d.reason = hcStatusUnknown, "delivery_status_unavailable"
 			logging.DebugStep(logger, op, "healthchecks delivery unavailable: %v", err)
@@ -152,11 +155,18 @@ func logNotifyFilterInit(opts backupModeOptions, orch *orchestrator.Orchestrator
 	if orch == nil {
 		return
 	}
-	orch.SetNotifyFilter(func(ctx context.Context) string {
-		if d.readAt.IsZero() || time.Since(d.readAt) < notifyFilterValidity {
+	orch.SetNotifyFilter(notifyFilterRefresh(d, cfg, logger, section))
+}
+
+// notifyFilterRefresh is the refresh handed to the orchestrator for the decision before dispatch:
+// it reuses the last decision while the relay's answer is younger than notifyFilterValidity, or
+// when the decision read no relay answer at all, and decides again otherwise.
+func notifyFilterRefresh(d notifyFilterDecision, cfg *config.Config, logger *logging.Logger, section string) func(context.Context) string {
+	return func(ctx context.Context) string {
+		if d.readAt.IsZero() || notifyFilterNow().Sub(d.readAt) < notifyFilterValidity {
 			return d.effective
 		}
 		d = decideNotifyFilter(ctx, cfg, logger, section, "notifications dispatch")
 		return d.effective
-	})
+	}
 }
