@@ -45,8 +45,10 @@ func (d *daemon) wantedNotifyPolicy() notifyPolicy {
 }
 
 // recordNotifyPolicyAck keeps what the relay answered to a poll that sent sent: the policy when
-// the relay confirms it applied exactly that, nothing otherwise.
-func (d *daemon) recordNotifyPolicyAck(sent notifyPolicy, ack *health.NotifyPolicyAck) {
+// the relay confirms it applied exactly that, nothing otherwise. It reports whether sent is no
+// longer the policy wanted now: a newer one was asked while this poll was in flight, and this
+// poll may have reached the relay after it.
+func (d *daemon) recordNotifyPolicyAck(sent notifyPolicy, ack *health.NotifyPolicyAck) (stale bool) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	d.notifyPolls++
@@ -55,7 +57,16 @@ func (d *daemon) recordNotifyPolicyAck(sent notifyPolicy, ack *health.NotifyPoli
 		applied := sent
 		d.notifyApplied = &applied
 	}
+	want := notifyPolicy{notifyOn: negotiatedNotifyOn(d.cfg), channels: enabledNotifyChannels(d.cfg)}
+	if d.notifyWant != nil {
+		want = *d.notifyWant
+	}
+	return !sent.equal(want)
 }
+
+// notifyPolicyResends bounds how many times one config poll sends the wanted policy again after
+// finding it had sent a stale one.
+const notifyPolicyResends = 2
 
 // refreshNotifyPolicy runs before each scheduled run. It re-reads NOTIFY_ON and the enabled
 // channels from backup.env and, when they differ from the policy the relay last confirmed, or

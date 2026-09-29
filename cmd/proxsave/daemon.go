@@ -2068,7 +2068,17 @@ func (d *daemon) fetchCentralized(ctx context.Context) (alive, backup string, ch
 	if ferr != nil {
 		return "", "", nil, secret, ferr
 	}
-	d.recordNotifyPolicyAck(want, cfg.NotifyPolicy)
+	// A poll that sent a policy no longer wanted may have reached the relay after a newer one
+	// and put the old policy back there: send the wanted one again, so the relay's last word is
+	// always the policy wanted now.
+	for i := 0; i < notifyPolicyResends && d.recordNotifyPolicyAck(want, cfg.NotifyPolicy); i++ {
+		want = d.wantedNotifyPolicy()
+		next, err := health.FetchCentralizedConfigWithPolicy(ctx, nil, d.cfg.ServerAPIHost, d.cfg.ServerID, secret, want.channels, want.notifyOn)
+		if err != nil {
+			break
+		}
+		cfg = next
+	}
 	return cfg.AliveURL, cfg.BackupURL, cfg.Checks, secret, nil
 }
 

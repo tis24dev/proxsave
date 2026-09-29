@@ -27,6 +27,7 @@ type policyRelay struct {
 	polls   []notifyPolicy
 	applied bool
 	release chan struct{} // when non-nil, every poll waits on it
+	onPoll  func(n int)   // when non-nil, runs before answering poll n (1-based)
 }
 
 func (p *policyRelay) handler(w http.ResponseWriter, r *http.Request) {
@@ -40,8 +41,11 @@ func (p *policyRelay) handler(w http.ResponseWriter, r *http.Request) {
 	}
 	p.mu.Lock()
 	p.polls = append(p.polls, notifyPolicy{notifyOn: q.Get("notify_on"), channels: channels})
-	applied := p.applied
+	applied, n, hook := p.applied, len(p.polls), p.onPoll
 	p.mu.Unlock()
+	if hook != nil {
+		hook(n)
+	}
 	_ = json.NewEncoder(w).Encode(map[string]any{
 		"mode":            "centralized",
 		"alive_ping_url":  "https://hc.invalid/ping/alive",
@@ -249,5 +253,31 @@ func TestEveryConfigPollSendsThePolicyLastRead(t *testing.T) {
 	polls := relay.sent()
 	if len(polls) != 2 || !polls[1].equal(want) {
 		t.Fatalf("relay polls = %+v; want the later poll to carry %+v", polls, want)
+	}
+}
+
+// A poll that sent a policy the daemon no longer wants (a newer one was asked while it was in
+// flight) may reach the relay last and put the old policy back: the daemon sends the wanted one
+// again, so the relay ends on the policy wanted now (Greptile review of PR #323, 2026-09-29).
+func TestAStalePolicyPollIsFollowedByTheWantedOne(t *testing.T) {
+	relay := &policyRelay{applied: true}
+	d := policyDaemon(t, relay, "NOTIFY_ON=warning\nTELEGRAM_ENABLED=true\n")
+	newer := notifyPolicy{notifyOn: config.NotifyOnFailure, channels: []string{"telegram"}}
+	relay.onPoll = func(n int) {
+		if n == 1 { // the operator's change lands while the first poll is on the wire
+			d.mu.Lock()
+			d.notifyWant = &newer
+			d.mu.Unlock()
+		}
+	}
+
+	_ = d.buildReporter(context.Background())
+
+	polls := relay.sent()
+	if len(polls) != 2 || !polls[0].equal(startupPolicy) || !polls[1].equal(newer) {
+		t.Fatalf("relay polls = %+v; want the stale warning, then failure sent again", polls)
+	}
+	if got := d.appliedNotifyPolicy(); got == nil || !got.equal(newer) {
+		t.Fatalf("applied policy = %+v; want %+v", got, newer)
 	}
 }
