@@ -39,6 +39,10 @@ func CheckHealthcheckNotifyFilter(ctx context.Context, configPath, baseDir, serv
 		Raw:         cfg.NotifyOn,
 		FromDefault: cfg.NotifyOnSource == "default",
 	}
+	if !cfg.HealthcheckEnabled { // switched off in the file since the screen opened: what the run applies
+		nf.Self, nf.Decision = false, notifyfilter.Decide(ctx, cfg, nil, notifyfilter.SectionDisabled, "")
+		return nf
+	}
 	if nf.Self {
 		return nf
 	}

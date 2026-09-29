@@ -90,3 +90,16 @@ func TestCheckHealthcheckNotifyFilterSettingFlags(t *testing.T) {
 		t.Fatalf("unreadable backup.env: %+v", nf)
 	}
 }
+
+// Healthchecks switched off in backup.env: the screen shows what the run applies, always, without
+// asking the relay.
+func TestCheckHealthcheckNotifyFilterHealthchecksOffInTheFile(t *testing.T) {
+	path, base, reads := notifyFilterEnv(t, "HEALTHCHECK_ENABLED=false\nHEALTHCHECK_MODE=centralized\nNOTIFY_ON=failure\n", readyFor("failure"), nil)
+	nf := CheckHealthcheckNotifyFilter(context.Background(), path, base, testAPIHost, testServerID, upDaemon)
+	if !nf.Loaded || nf.Effective != config.NotifyOnAlways || *reads != 0 {
+		t.Fatalf("decision = %+v after %d reads; want always and no relay read", nf, *reads)
+	}
+	if setting, current, ok := HealthcheckNotifyLines(false, nf); !ok || setting != "NOTIFY_ON=failure" || current != "always" {
+		t.Fatalf("lines = %q / %q (%v)", setting, current, ok)
+	}
+}
