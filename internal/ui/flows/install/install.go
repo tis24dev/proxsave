@@ -216,6 +216,28 @@ func CollectWizardData(ctx context.Context, session *shell.Session, baseTemplate
 		OptionIndex: hcIndex,
 		Active:      func() bool { return schedulerValues[scheduler.OptionIndex] == "daemon" },
 	}
+	// Notify level (NOTIFY_ON). Active only with a Healthchecks monitor (daemon engine, mode not
+	// Off): without one any level below every run has no effect, and the data block writes always.
+	// Fresh/Overwrite defaults to Warnings and failures; editing an existing config defaults to its
+	// stored level (an absent or invalid one to Warnings and failures).
+	notifyOptions := []string{"Every run", "Warnings and failures", "Failures only"}
+	notifyValues := []string{"always", "warning", "failure"}
+	notifyIndex := 1 // default: warning
+	if strings.TrimSpace(baseTemplate) != "" {
+		for i, v := range notifyValues {
+			if v == prefill.NotifyOn {
+				notifyIndex = i
+			}
+		}
+	}
+	notifyLevel := &components.FormField{
+		Label:       "Notify level",
+		Description: "Which runs send a notification. Below every run it applies only when Healthchecks confirms its alerts; otherwise every run is notified.",
+		Kind:        components.FieldSelect,
+		Options:     notifyOptions,
+		OptionIndex: notifyIndex,
+		Active:      func() bool { return healthcheck.Active() && hcValues[healthcheck.OptionIndex] != "off" },
+	}
 	cronField := &components.FormField{
 		Label:       "Run at (HH:MM)",
 		Description: fmt.Sprintf("Daily backup time; default %s.", cronutil.DefaultTime),
@@ -230,7 +252,7 @@ func CollectWizardData(ctx context.Context, session *shell.Session, baseTemplate
 	fields := []*components.FormField{
 		secondary, secondaryPath, secondaryLog,
 		cloud, cloudRemote, cloudLog,
-		firewall, telegram, email, method, encryption, scheduler, healthcheck, cronField,
+		firewall, telegram, email, method, encryption, scheduler, healthcheck, notifyLevel, cronField,
 	}
 	if _, err := shell.Ask(ctx, session, components.NewFormGrid(
 		"Configuration", fields,
@@ -285,6 +307,11 @@ func CollectWizardData(ctx context.Context, session *shell.Session, baseTemplate
 		data.HealthcheckMode = hcValues[healthcheck.OptionIndex]
 	} else {
 		data.HealthcheckMode = "off"
+	}
+	// Without a monitor the level has no effect: always (the engine forces it too).
+	data.NotifyOn = "always"
+	if data.HealthcheckMode != "off" {
+		data.NotifyOn = notifyValues[notifyLevel.OptionIndex]
 	}
 
 	return data, nil

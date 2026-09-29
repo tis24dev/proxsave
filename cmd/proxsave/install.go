@@ -713,6 +713,18 @@ func collectInstallWizardDataCLI(ctx context.Context, reader *bufio.Reader, prom
 		data.HealthcheckMode = hcMode
 	}
 
+	// Notify level (NOTIFY_ON): asked only with a Healthchecks monitor. Without one any level below
+	// always has no effect, and always is written (the engine forces it too).
+	data.NotifyOn = config.NotifyOnAlways
+	if data.HealthcheckMode != "off" {
+		logging.DebugStepBootstrap(bootstrap, "install config wizard (cli)", "configuring notify level")
+		level, err := configureNotifyLevel(ctx, reader, notifyLevelDefault(fromExisting, prefillBase))
+		if err != nil {
+			return nil, err
+		}
+		data.NotifyOn = level
+	}
+
 	logging.DebugStepBootstrap(bootstrap, "install config wizard (cli)", "configuring run-at time")
 	// configureCronTimeFunc, not configureCronTime: the package-level seam is stubbed
 	// by cmd/proxsave/install_test.go. It always returns a normalized HH:MM, which is
@@ -1175,6 +1187,36 @@ func cronTimeDefault(fromExisting bool, template string) string {
 		return cronutil.DefaultTime
 	}
 	return norm
+}
+
+// notifyLevelDefault picks the Notify level prompt default: warning on a fresh install, the stored
+// level on an Edit (warning when it is absent or not valid). Same rule as the Charm form.
+func notifyLevelDefault(fromExisting bool, template string) string {
+	if fromExisting && strings.TrimSpace(template) != "" {
+		if stored := installer.DeriveInstallWizardPrefill(template).NotifyOn; stored != "" {
+			return stored
+		}
+	}
+	return config.NotifyOnWarning
+}
+
+// configureNotifyLevel prompts for NOTIFY_ON (mirrors configureHealthcheckMode). Called only with a
+// Healthchecks monitor; an empty or unrecognised answer keeps the default.
+func configureNotifyLevel(ctx context.Context, reader *bufio.Reader, def string) (string, error) {
+	fmt.Println("\n--- Notify level ---")
+	fmt.Println("always      every run")
+	fmt.Println("warning     warnings and failures")
+	fmt.Println("failure     failures only")
+	raw, err := promptOptional(ctx, reader, fmt.Sprintf("Notify level: always, warning, or failure [%s]: ", def))
+	if err != nil {
+		return "", err
+	}
+	switch v := strings.ToLower(strings.TrimSpace(raw)); v {
+	case config.NotifyOnAlways, config.NotifyOnWarning, config.NotifyOnFailure:
+		return v, nil
+	default:
+		return def, nil
+	}
 }
 
 // configureHealthcheckMode prompts for the backup-monitoring mode (mirrors

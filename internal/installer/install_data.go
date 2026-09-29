@@ -51,6 +51,7 @@ type InstallWizardPrefill struct {
 	SchedulerMode       string // "cron" | "daemon" (empty on a fresh config)
 	SchedulerTime       string // HH:MM "Run at" time (empty on a fresh config)
 	HealthcheckMode     string // "off" | "centralized" | "self" (empty on a fresh/pre-daemon config)
+	NotifyOn            string // "always" | "warning" | "failure"; empty when absent or not valid
 }
 
 // InstallWizardData holds the collected installation data.
@@ -80,6 +81,7 @@ type InstallWizardData struct {
 	EnableEncryption       bool
 	SchedulerMode          string // "cron" | "daemon"
 	HealthcheckMode        string // "off" | "centralized" | "self"; empty with daemon -> backward-compat centralized-on
+	NotifyOn               string // Notify level: "always" | "warning" | "failure"; empty -> NOTIFY_ON left as stored
 }
 
 // HealthcheckSelfParams holds the full ping URLs the self-mode params screen
@@ -383,6 +385,15 @@ func ApplyInstallData(baseTemplate string, data *InstallWizardData) (string, err
 		clearURLs()
 	}
 
+	// Notify level (NOTIFY_ON). Below always it applies only with a Healthchecks monitor, so without
+	// one (off, or the cron engine) the wizard writes always (maintainer decision). With a monitor
+	// the operator's answer wins; no answer leaves the stored value alone.
+	if hcMode == "off" {
+		template = setEnvValue(template, "NOTIFY_ON", config.NotifyOnAlways)
+	} else if level := config.NormalizeNotifyOn(data.NotifyOn); strings.TrimSpace(data.NotifyOn) != "" && config.IsValidNotifyOn(level) {
+		template = setEnvValue(template, "NOTIFY_ON", level)
+	}
+
 	return template, nil
 }
 
@@ -521,6 +532,12 @@ func DeriveInstallWizardPrefill(baseTemplate string) InstallWizardPrefill {
 		out.HealthcheckMode = hcMode
 	} else {
 		out.HealthcheckMode = "off"
+	}
+
+	if raw := readTemplateString(values, "NOTIFY_ON"); strings.TrimSpace(raw) != "" {
+		if level := config.NormalizeNotifyOn(raw); config.IsValidNotifyOn(level) {
+			out.NotifyOn = level
+		}
 	}
 
 	return out
