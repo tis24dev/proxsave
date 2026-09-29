@@ -25,6 +25,7 @@ import (
 	"github.com/tis24dev/proxsave/internal/identity"
 	"github.com/tis24dev/proxsave/internal/logging"
 	"github.com/tis24dev/proxsave/internal/notify"
+	"github.com/tis24dev/proxsave/internal/notifyfilter"
 	"github.com/tis24dev/proxsave/internal/types"
 	"github.com/tis24dev/proxsave/internal/version"
 )
@@ -2211,25 +2212,9 @@ func provisionRelaySecretOnDaemonSetup(ctx context.Context, configPath, baseDir 
 // sorted, for the ?channels provisioning hint. Metrics/Prometheus is a sink, not a
 // notification channel, and is excluded. A non-nil (possibly empty) slice is always returned
 // so the daemon sends an authoritative set (empty -> the server pauses all notify checks).
+// The run checks the relay's ack against the same set (notifyfilter.EnabledChannels).
 func enabledNotifyChannels(cfg *config.Config) []string {
-	out := []string{}
-	if cfg == nil {
-		return out
-	}
-	if cfg.EmailEnabled {
-		out = append(out, "email")
-	}
-	if cfg.TelegramEnabled {
-		out = append(out, "telegram")
-	}
-	if cfg.GotifyEnabled {
-		out = append(out, "gotify")
-	}
-	if cfg.WebhookEnabled {
-		out = append(out, "webhook")
-	}
-	sort.Strings(out)
-	return out
+	return notifyfilter.EnabledChannels(cfg)
 }
 
 // selfURLs resolves the ping URLs from self-mode config: full URLs if given, otherwise
@@ -2517,10 +2502,7 @@ func daemonSelfExecPath() string {
 }
 
 // negotiatedNotifyOn is the NOTIFY_ON value the daemon sends to the relay: the configured one when
-// valid, always otherwise.
+// valid, always otherwise (notifyfilter.Negotiated, the same value the run requests).
 func negotiatedNotifyOn(cfg *config.Config) string {
-	if cfg == nil || !config.IsValidNotifyOn(cfg.NotifyOn) || cfg.NotifyOn == "" {
-		return config.NotifyOnAlways
-	}
-	return cfg.NotifyOn
+	return notifyfilter.Negotiated(cfg)
 }

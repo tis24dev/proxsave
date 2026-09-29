@@ -12,6 +12,7 @@ import (
 	"github.com/tis24dev/proxsave/internal/config"
 	"github.com/tis24dev/proxsave/internal/health"
 	"github.com/tis24dev/proxsave/internal/logging"
+	"github.com/tis24dev/proxsave/internal/notifyfilter"
 	"github.com/tis24dev/proxsave/internal/types"
 )
 
@@ -19,9 +20,9 @@ import (
 func stubDeliveryStatus(t *testing.T, st health.DeliveryStatus, err error) *int {
 	t.Helper()
 	calls := 0
-	orig := fetchDeliveryStatus
-	t.Cleanup(func() { fetchDeliveryStatus = orig })
-	fetchDeliveryStatus = func(context.Context, *http.Client, string, string, string) (health.DeliveryStatus, error) {
+	orig := notifyfilter.FetchDeliveryStatus
+	t.Cleanup(func() { notifyfilter.FetchDeliveryStatus = orig })
+	notifyfilter.FetchDeliveryStatus = func(context.Context, *http.Client, string, string, string) (health.DeliveryStatus, error) {
 		calls++
 		return st, err
 	}
@@ -78,69 +79,69 @@ func TestDecideNotifyFilter(t *testing.T) {
 		wantReason    string
 		wantReads     int
 	}{
-		{name: "healthchecks off or unusable", section: hcSectionDisabled,
-			wantStatus: hcStatusDisabled, wantEffective: config.NotifyOnAlways, wantReason: "healthchecks_disabled"},
-		{name: "daemon not transmitting", section: hcSectionNotTransmitting,
-			wantStatus: hcStatusNotTransmitting, wantEffective: config.NotifyOnAlways, wantReason: "not_transmitting"},
+		{name: "healthchecks off or unusable", section: notifyfilter.SectionDisabled,
+			wantStatus: notifyfilter.StatusDisabled, wantEffective: config.NotifyOnAlways, wantReason: "healthchecks_disabled"},
+		{name: "daemon not transmitting", section: notifyfilter.SectionNotTransmitting,
+			wantStatus: notifyfilter.StatusNotTransmitting, wantEffective: config.NotifyOnAlways, wantReason: "not_transmitting"},
 
-		{name: "self without notify checks", section: hcSectionInitialized,
+		{name: "self without notify checks", section: notifyfilter.SectionInitialized,
 			mutate:     func(c *config.Config) { c.HealthcheckMode = config.HealthcheckModeSelf },
-			wantStatus: hcStatusSelf, wantEffective: config.NotifyOnWarning},
-		{name: "self with a notify URL", section: hcSectionInitialized,
+			wantStatus: notifyfilter.StatusSelf, wantEffective: config.NotifyOnWarning},
+		{name: "self with a notify URL", section: notifyfilter.SectionInitialized,
 			mutate: func(c *config.Config) {
 				c.HealthcheckMode = config.HealthcheckModeSelf
 				c.HealthcheckNotifyTelegramURL = "https://hc.invalid/ping/notify-telegram"
 			},
-			wantStatus: hcStatusSelf, wantEffective: config.NotifyOnAlways, wantReason: "self_notify_urls_configured"},
-		{name: "self with a notify check id", section: hcSectionInitialized,
+			wantStatus: notifyfilter.StatusSelf, wantEffective: config.NotifyOnAlways, wantReason: "self_notify_urls_configured"},
+		{name: "self with a notify check id", section: notifyfilter.SectionInitialized,
 			mutate: func(c *config.Config) {
 				c.HealthcheckMode = config.HealthcheckModeSelf
 				c.HealthcheckNotifyEmailID = "notify-email"
 			},
-			wantStatus: hcStatusSelf, wantEffective: config.NotifyOnAlways, wantReason: "self_notify_urls_configured"},
+			wantStatus: notifyfilter.StatusSelf, wantEffective: config.NotifyOnAlways, wantReason: "self_notify_urls_configured"},
 
-		{name: "centralized ready with the policy applied", section: hcSectionInitialized, relay: ready,
-			wantStatus: hcStatusReady, wantEffective: config.NotifyOnWarning, wantReads: 1},
-		{name: "centralized ready with another threshold applied", section: hcSectionInitialized,
+		{name: "centralized ready with the policy applied", section: notifyfilter.SectionInitialized, relay: ready,
+			wantStatus: notifyfilter.StatusReady, wantEffective: config.NotifyOnWarning, wantReads: 1},
+		{name: "centralized ready with another threshold applied", section: notifyfilter.SectionInitialized,
 			relay:      relayAnswer("ready", config.NotifyOnFailure, true, "telegram"),
-			wantStatus: hcStatusReady, wantEffective: config.NotifyOnAlways, wantReason: "policy_unconfirmed", wantReads: 1},
-		{name: "centralized ready with another channel set applied", section: hcSectionInitialized,
+			wantStatus: notifyfilter.StatusReady, wantEffective: config.NotifyOnAlways, wantReason: "policy_unconfirmed", wantReads: 1},
+		{name: "centralized ready with another channel set applied", section: notifyfilter.SectionInitialized,
 			relay:      relayAnswer("ready", config.NotifyOnWarning, true, "email", "telegram"),
-			wantStatus: hcStatusReady, wantEffective: config.NotifyOnAlways, wantReason: "policy_unconfirmed", wantReads: 1},
-		{name: "centralized ready with the policy not applied", section: hcSectionInitialized,
+			wantStatus: notifyfilter.StatusReady, wantEffective: config.NotifyOnAlways, wantReason: "policy_unconfirmed", wantReads: 1},
+		{name: "centralized ready with the policy not applied", section: notifyfilter.SectionInitialized,
 			relay:      relayAnswer("ready", config.NotifyOnWarning, false, "telegram"),
-			wantStatus: hcStatusReady, wantEffective: config.NotifyOnAlways, wantReason: "policy_unconfirmed", wantReads: 1},
-		{name: "centralized ready from a relay without the ack", section: hcSectionInitialized,
+			wantStatus: notifyfilter.StatusReady, wantEffective: config.NotifyOnAlways, wantReason: "policy_unconfirmed", wantReads: 1},
+		{name: "centralized ready from a relay without the ack", section: notifyfilter.SectionInitialized,
 			relay:      health.DeliveryStatus{SchemaVersion: 1, State: "ready", ValidForSeconds: 120},
-			wantStatus: hcStatusReady, wantEffective: config.NotifyOnAlways, wantReason: "policy_unconfirmed", wantReads: 1},
-		{name: "centralized not configured", section: hcSectionInitialized,
+			wantStatus: notifyfilter.StatusReady, wantEffective: config.NotifyOnAlways, wantReason: "policy_unconfirmed", wantReads: 1},
+		{name: "centralized not configured", section: notifyfilter.SectionInitialized,
 			relay:      relayAnswer("not_configured", config.NotifyOnWarning, true, "telegram"),
-			wantStatus: hcStatusNotConfigured, wantEffective: config.NotifyOnAlways, wantReason: "alerts_not_verified", wantReads: 1},
-		{name: "centralized unverified", section: hcSectionInitialized,
+			wantStatus: notifyfilter.StatusNotConfigured, wantEffective: config.NotifyOnAlways, wantReason: "alerts_not_verified", wantReads: 1},
+		{name: "centralized unverified", section: notifyfilter.SectionInitialized,
 			relay:      relayAnswer("unverified", config.NotifyOnWarning, true, "telegram"),
-			wantStatus: hcStatusNotVerified, wantEffective: config.NotifyOnAlways, wantReason: "alerts_not_verified", wantReads: 1},
-		{name: "centralized degraded", section: hcSectionInitialized,
+			wantStatus: notifyfilter.StatusNotVerified, wantEffective: config.NotifyOnAlways, wantReason: "alerts_not_verified", wantReads: 1},
+		{name: "centralized degraded", section: notifyfilter.SectionInitialized,
 			relay:      relayAnswer("degraded", config.NotifyOnWarning, true, "telegram"),
-			wantStatus: hcStatusDegraded, wantEffective: config.NotifyOnAlways, wantReason: "alerts_not_verified", wantReads: 1},
-		{name: "centralized unknown", section: hcSectionInitialized,
+			wantStatus: notifyfilter.StatusDegraded, wantEffective: config.NotifyOnAlways, wantReason: "alerts_not_verified", wantReads: 1},
+		{name: "centralized unknown", section: notifyfilter.SectionInitialized,
 			relay:      relayAnswer("unknown", config.NotifyOnWarning, true, "telegram"),
-			wantStatus: hcStatusUnknown, wantEffective: config.NotifyOnAlways, wantReason: "alerts_not_verified", wantReads: 1},
-		{name: "relay unreachable", section: hcSectionInitialized,
+			wantStatus: notifyfilter.StatusUnknown, wantEffective: config.NotifyOnAlways, wantReason: "alerts_not_verified", wantReads: 1},
+		{name: "relay unreachable", section: notifyfilter.SectionInitialized,
 			relayErr:   health.ErrDeliveryUnavailable,
-			wantStatus: hcStatusUnknown, wantEffective: config.NotifyOnAlways, wantReason: "delivery_status_unavailable", wantReads: 1},
+			wantStatus: notifyfilter.StatusUnknown, wantEffective: config.NotifyOnAlways, wantReason: "delivery_status_unavailable", wantReads: 1},
 
-		{name: "NOTIFY_ON=always needs no confirmation", section: hcSectionInitialized,
+		{name: "NOTIFY_ON=always needs no confirmation", section: notifyfilter.SectionInitialized,
 			mutate:     func(c *config.Config) { c.NotifyOn = config.NotifyOnAlways },
 			relay:      relayAnswer("not_configured", config.NotifyOnAlways, true, "telegram"),
-			wantStatus: hcStatusNotConfigured, wantEffective: config.NotifyOnAlways, wantReads: 1},
-		{name: "NOTIFY_ON=failure confirmed", section: hcSectionInitialized,
+			wantStatus: notifyfilter.StatusNotConfigured, wantEffective: config.NotifyOnAlways, wantReads: 1},
+		{name: "NOTIFY_ON=failure confirmed", section: notifyfilter.SectionInitialized,
 			mutate:     func(c *config.Config) { c.NotifyOn = config.NotifyOnFailure },
 			relay:      relayAnswer("ready", config.NotifyOnFailure, true, "telegram"),
-			wantStatus: hcStatusReady, wantEffective: config.NotifyOnFailure, wantReads: 1},
-		{name: "unrecognised NOTIFY_ON is requested as always", section: hcSectionInitialized,
+			wantStatus: notifyfilter.StatusReady, wantEffective: config.NotifyOnFailure, wantReads: 1},
+		{name: "unrecognised NOTIFY_ON is requested as always", section: notifyfilter.SectionInitialized,
 			mutate:     func(c *config.Config) { c.NotifyOn = "only-when-broken" },
 			relay:      relayAnswer("ready", config.NotifyOnAlways, true, "telegram"),
-			wantStatus: hcStatusReady, wantEffective: config.NotifyOnAlways, wantReads: 1},
+			wantStatus: notifyfilter.StatusReady, wantEffective: config.NotifyOnAlways, wantReads: 1},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -151,11 +152,11 @@ func TestDecideNotifyFilter(t *testing.T) {
 			reads := stubDeliveryStatus(t, tc.relay, tc.relayErr)
 			logger, buf := debugLogger(t)
 
-			d := decideNotifyFilter(context.Background(), cfg, logger, tc.section, "notifications init")
+			d := notifyfilter.Decide(context.Background(), cfg, logger, tc.section, "notifications init")
 
-			if d.status != tc.wantStatus || d.effective != tc.wantEffective || d.reason != tc.wantReason {
+			if d.Status != tc.wantStatus || d.Effective != tc.wantEffective || d.Reason != tc.wantReason {
 				t.Fatalf("decision = status %q effective %q reason %q; want %q %q %q",
-					d.status, d.effective, d.reason, tc.wantStatus, tc.wantEffective, tc.wantReason)
+					d.Status, d.Effective, d.Reason, tc.wantStatus, tc.wantEffective, tc.wantReason)
 			}
 			if *reads != tc.wantReads {
 				t.Fatalf("relay read %d times; want %d", *reads, tc.wantReads)
@@ -175,7 +176,7 @@ func TestLogNotifyFilterInitWritesTheApprovedLines(t *testing.T) {
 	stubDeliveryStatus(t, relayAnswer("ready", config.NotifyOnWarning, true, "telegram"), nil)
 	logger, buf := debugLogger(t)
 
-	logNotifyFilterInit(backupModeOptions{ctx: context.Background(), cfg: cfg, logger: logger}, nil, hcSectionInitialized)
+	logNotifyFilterInit(backupModeOptions{ctx: context.Background(), cfg: cfg, logger: logger}, nil, notifyfilter.SectionInitialized)
 
 	out := buf.String()
 	last := -1
@@ -212,7 +213,7 @@ func TestLogNotifyFilterInitWithHealthchecksOff(t *testing.T) {
 	reads := stubDeliveryStatus(t, health.DeliveryStatus{}, errors.New("must not be read"))
 	logger, buf := debugLogger(t)
 
-	logNotifyFilterInit(backupModeOptions{ctx: context.Background(), cfg: cfg, logger: logger}, nil, hcSectionDisabled)
+	logNotifyFilterInit(backupModeOptions{ctx: context.Background(), cfg: cfg, logger: logger}, nil, notifyfilter.SectionDisabled)
 
 	out := buf.String()
 	for _, want := range []string{
@@ -237,9 +238,9 @@ func TestLogNotifyFilterInitWithHealthchecksOff(t *testing.T) {
 func fakeNotifyClock(t *testing.T) *time.Time {
 	t.Helper()
 	now := time.Date(2026, 9, 29, 0, 0, 0, 0, time.UTC)
-	orig := notifyFilterNow
-	t.Cleanup(func() { notifyFilterNow = orig })
-	notifyFilterNow = func() time.Time { return now }
+	orig := notifyfilter.Now
+	t.Cleanup(func() { notifyfilter.Now = orig })
+	notifyfilter.Now = func() time.Time { return now }
 	return &now
 }
 
@@ -251,9 +252,9 @@ func TestNotifyFilterRefreshReusesAFreshAnswer(t *testing.T) {
 	reads := stubDeliveryStatus(t, relayAnswer("ready", config.NotifyOnWarning, true, "telegram"), nil)
 	logger, _ := debugLogger(t)
 
-	d := decideNotifyFilter(context.Background(), cfg, logger, hcSectionInitialized, "notifications init")
-	refresh := notifyFilterRefresh(d, cfg, logger, hcSectionInitialized)
-	*now = now.Add(notifyFilterValidity - time.Second)
+	d := notifyfilter.Decide(context.Background(), cfg, logger, notifyfilter.SectionInitialized, "notifications init")
+	refresh := notifyFilterRefresh(d, cfg, logger, notifyfilter.SectionInitialized)
+	*now = now.Add(notifyfilter.Validity - time.Second)
 
 	if got := refresh(context.Background()); got != config.NotifyOnWarning {
 		t.Fatalf("refresh = %q; want the initialization decision %q", got, config.NotifyOnWarning)
@@ -271,10 +272,10 @@ func TestNotifyFilterRefreshReadsAnExpiredAnswerAgain(t *testing.T) {
 	reads := stubDeliveryStatus(t, relayAnswer("ready", config.NotifyOnWarning, true, "telegram"), nil)
 	logger, buf := debugLogger(t)
 
-	d := decideNotifyFilter(context.Background(), cfg, logger, hcSectionInitialized, "notifications init")
-	refresh := notifyFilterRefresh(d, cfg, logger, hcSectionInitialized)
+	d := notifyfilter.Decide(context.Background(), cfg, logger, notifyfilter.SectionInitialized, "notifications init")
+	refresh := notifyFilterRefresh(d, cfg, logger, notifyfilter.SectionInitialized)
 	stubDeliveryStatus(t, relayAnswer("degraded", config.NotifyOnWarning, true, "telegram"), nil)
-	*now = now.Add(notifyFilterValidity)
+	*now = now.Add(notifyfilter.Validity)
 
 	if got := refresh(context.Background()); got != config.NotifyOnAlways {
 		t.Fatalf("refresh = %q; want %q from the new, degraded answer", got, config.NotifyOnAlways)
@@ -307,8 +308,8 @@ func TestNotifyFilterRefreshNeverReadsWithoutARelayAnswer(t *testing.T) {
 	reads := stubDeliveryStatus(t, relayAnswer("ready", config.NotifyOnWarning, true, "telegram"), nil)
 	logger, _ := debugLogger(t)
 
-	d := decideNotifyFilter(context.Background(), cfg, logger, hcSectionInitialized, "notifications init")
-	refresh := notifyFilterRefresh(d, cfg, logger, hcSectionInitialized)
+	d := notifyfilter.Decide(context.Background(), cfg, logger, notifyfilter.SectionInitialized, "notifications init")
+	refresh := notifyFilterRefresh(d, cfg, logger, notifyfilter.SectionInitialized)
 	*now = now.Add(time.Hour)
 
 	if got := refresh(context.Background()); got != config.NotifyOnWarning || *reads != 0 {
@@ -326,8 +327,8 @@ func TestNotifyFilterRefreshHonoursTheRelayValidity(t *testing.T) {
 	reads := stubDeliveryStatus(t, aged, nil)
 	logger, _ := debugLogger(t)
 
-	d := decideNotifyFilter(context.Background(), cfg, logger, hcSectionInitialized, "notifications init")
-	refresh := notifyFilterRefresh(d, cfg, logger, hcSectionInitialized)
+	d := notifyfilter.Decide(context.Background(), cfg, logger, notifyfilter.SectionInitialized, "notifications init")
+	refresh := notifyFilterRefresh(d, cfg, logger, notifyfilter.SectionInitialized)
 
 	*now = now.Add(19 * time.Second)
 	if refresh(context.Background()); *reads != 1 {
@@ -347,9 +348,9 @@ func TestNotifyFilterRefreshKeepsAnUnavailableAnswerForTheLocalWindow(t *testing
 	reads := stubDeliveryStatus(t, health.DeliveryStatus{}, health.ErrDeliveryUnavailable)
 	logger, _ := debugLogger(t)
 
-	d := decideNotifyFilter(context.Background(), cfg, logger, hcSectionInitialized, "notifications init")
-	refresh := notifyFilterRefresh(d, cfg, logger, hcSectionInitialized)
-	*now = now.Add(notifyFilterValidity - time.Second)
+	d := notifyfilter.Decide(context.Background(), cfg, logger, notifyfilter.SectionInitialized, "notifications init")
+	refresh := notifyFilterRefresh(d, cfg, logger, notifyfilter.SectionInitialized)
+	*now = now.Add(notifyfilter.Validity - time.Second)
 
 	if got := refresh(context.Background()); got != config.NotifyOnAlways || *reads != 1 {
 		t.Fatalf("refresh = %q after %d reads; want always and 1 read", got, *reads)
