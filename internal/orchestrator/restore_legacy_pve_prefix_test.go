@@ -97,6 +97,7 @@ func writeLegacyPrefixArchive(t *testing.T, path string, entries []legacyTarEntr
 var legacyAppliancePVEEntries = []legacyTarEntry{
 	{name: "./etc/", dir: true},
 	{name: "./etc/hostname", content: "pve1\n"},
+	{name: "./var/lib/proxsave-info/backup_metadata.txt", content: "BACKUP_TYPE=pve\nHOSTNAME=pve1\n"},
 	{name: "./host/", dir: true},
 	{name: "./host/etc/", dir: true},
 	{name: "./host/etc/pve/", dir: true},
@@ -185,6 +186,61 @@ func TestCanonicalArchiveIsNotRemapped(t *testing.T) {
 	}
 	if strings.Contains(buf.String(), "restored to its host paths") || legacyPVEPrefixFor(archive) != "" {
 		t.Fatalf("canonical archive was remapped:\n%s", buf.String())
+	}
+}
+
+// Only the PVE recipe wrote PVE files under the prefix, so the remap needs the archive's
+// own metadata to say it covered PVE. A PBS host whose /home holds an extracted PVE
+// archive, which every backup collects whole, has one X/etc/pve too: it is a copy, and it
+// stays where it is. So does any single X/etc/pve of an archive without readable metadata.
+func TestLegacyPrefixNeedsPVEMetadata(t *testing.T) {
+	orig := restoreFS
+	t.Cleanup(func() { restoreFS = orig })
+	restoreFS = osFS{}
+
+	homeCopy := []legacyTarEntry{
+		{name: "./etc/proxmox-backup/datastore.cfg", content: "datastore: store1\n"},
+		{name: "./home/admin/pve1-extract/etc/pve/storage.cfg", content: "dir: local\n"},
+		{name: "./home/admin/pve1-extract/etc/corosync/authkey", content: "k"},
+		{name: "./home/admin/pve1-extract/var/lib/pve-cluster/config.db", content: "db"},
+	}
+	for _, tc := range []struct {
+		name     string
+		metadata string
+		want     string
+	}{
+		{"pbs backup with a PVE copy under /home", "BACKUP_TYPE=pbs\n", ""},
+		{"no metadata", "", ""},
+		{"pve backup", "BACKUP_TYPE=pve\n", "home/admin/pve1-extract"},
+		{"dual backup by its targets", "BACKUP_TARGETS=pve,pbs\n", "home/admin/pve1-extract"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			entries := append([]legacyTarEntry{}, homeCopy...)
+			if tc.metadata != "" {
+				entries = append(entries, legacyTarEntry{name: "./var/lib/proxsave-info/backup_metadata.txt", content: tc.metadata})
+			}
+			archive := filepath.Join(t.TempDir(), "backup.tar")
+			writeLegacyPrefixArchive(t, archive, entries)
+			t.Cleanup(func() { rememberLegacyPVEPrefix(archive, "") })
+
+			logger := logging.New(types.LogLevelInfo, false)
+			var buf bytes.Buffer
+			logger.SetOutput(&buf)
+			categories, _, err := AnalyzeRestoreArchive(archive, logger)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := legacyPVEPrefixFor(archive); got != tc.want {
+				t.Fatalf("legacy prefix = %q, want %q\n%s", got, tc.want, buf.String())
+			}
+			remapped := strings.Contains(buf.String(), "restored to its host paths")
+			if remapped != (tc.want != "") {
+				t.Fatalf("remap line logged = %v, want %v:\n%s", remapped, tc.want != "", buf.String())
+			}
+			if tc.want == "" && (hasCategoryID(categories, "pve_cluster") || hasCategoryID(categories, "corosync")) {
+				t.Fatalf("the /home copy was analysed as PVE configuration: %v", categories)
+			}
+		})
 	}
 }
 

@@ -109,7 +109,10 @@ func inspectRestoreArchiveContents(archivePath string, logger *logging.Logger) (
 	}
 
 	logger.Debug("Found %d entries in archive", len(archivePaths))
-	prefix := detectLegacyPVEPrefix(archivePaths)
+	prefix := ""
+	if legacyPVEPrefixAllowed(metadata, metadataErr) {
+		prefix = detectLegacyPVEPrefix(archivePaths)
+	}
 	rememberLegacyPVEPrefix(archivePath, prefix)
 	if prefix != "" {
 		for i, name := range archivePaths {

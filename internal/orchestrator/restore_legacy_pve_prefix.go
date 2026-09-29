@@ -9,7 +9,8 @@ import (
 // host paths holds them under the prefix: ./host/etc/pve/..., ./host/var/lib/pve-cluster/...
 // (measured on a Debian 13 appliance: 48 PVE entries under ./host/, 723 system entries at
 // their paths). No restore category matches them there. The archive does not record the
-// prefix, so it is read off the paths, and those entries are restored at their host paths.
+// prefix, so it is read off the paths, when the archive's metadata says it covered PVE
+// (legacyPVEPrefixAllowed), and those entries are restored at their host paths.
 
 // legacyPVERoots are the PVE paths the collector used to write under the prefix.
 var legacyPVERoots = []string{"etc/pve", "var/lib/pve-cluster", "etc/corosync", "etc/vzdump.conf", "etc/ceph"}
@@ -35,6 +36,20 @@ func legacyPVEPrefixFor(archivePath string) string {
 	legacyPVEPrefixesMu.Lock()
 	defer legacyPVEPrefixesMu.Unlock()
 	return legacyPVEPrefixes[archivePath]
+}
+
+// legacyPVEPrefixAllowed reports whether the archive's own metadata allows the legacy
+// layout: only the PVE recipe wrote PVE files under the prefix, so the backup must say
+// it covered PVE (BACKUP_TYPE or BACKUP_TARGETS pve or dual). Without that evidence a
+// single X/etc/pve is somebody's copy, for example an extracted PVE archive under a
+// PBS host's /home, which every backup collects whole. An archive whose metadata is
+// missing or unreadable gets no remap: every version with SYSTEM_ROOT_PREFIX (since
+// 3808e6c) writes BACKUP_TYPE.
+func legacyPVEPrefixAllowed(metadata *restoreDecisionMetadata, metadataErr error) bool {
+	if metadata == nil || metadataErr != nil {
+		return false
+	}
+	return metadata.BackupType.SupportsPVE() || parseSystemTargets(metadata.BackupTargets).SupportsPVE()
 }
 
 // detectLegacyPVEPrefix returns the prefix the archive's /etc/pve sits under: the one
