@@ -871,8 +871,8 @@ func (c *Config) parseNotificationSettings() {
 }
 
 // NOTIFY_ON values. A severity THRESHOLD, not an exact match: NotifyOnWarning
-// delivers warnings AND failures, NotifyOnFailure only failures. NotifyOnAlways is
-// the default and is the behaviour every install had before the key existed.
+// delivers warnings AND failures, NotifyOnFailure only failures. NotifyOnWarning is
+// the default; NotifyOnAlways is the behaviour every install had before the key existed.
 const (
 	NotifyOnAlways  = "always"
 	NotifyOnWarning = "warning"

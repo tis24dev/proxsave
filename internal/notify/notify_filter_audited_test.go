@@ -19,7 +19,7 @@ func TestNotifyOnAllowsIsASeverityThreshold(t *testing.T) {
 		status NotificationStatus
 		want   bool
 	}{
-		// always: the default, and the behaviour of every install that predates the key.
+		// always: the behaviour of every install that predates the key.
 		{config.NotifyOnAlways, StatusSuccess, true},
 		{config.NotifyOnAlways, StatusWarning, true},
 		{config.NotifyOnAlways, StatusFailure, true},
