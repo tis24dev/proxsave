@@ -207,32 +207,43 @@ func (e *clusterRecoveryRefusedError) Error() string {
 	return fmt.Sprintf("Cluster RECOVERY refused - quorate cluster, %s nodes online: its copy would replace the restored config.db", e.nodes)
 }
 
+// clusterRecoveryQuorumUnknownError stops a RECOVERY whose quorum cannot be read while
+// corosync is not shown to be stopped.
+type clusterRecoveryQuorumUnknownError struct {
+	reason   string
+	corosync string
+}
+
+func (e *clusterRecoveryQuorumUnknownError) Error() string {
+	return fmt.Sprintf("Cluster RECOVERY refused - quorum unknown (%s), corosync %s: in a quorate cluster, its copy would replace the restored config.db", e.reason, e.corosync)
+}
+
 // refuseRecoveryOnQuorateCluster probes the quorum before any restore step runs. On a
 // member of a quorate cluster with other nodes online, the config.db RECOVERY writes
 // is thrown away: when pve-cluster starts again, pmxcfs syncs from the cluster leader
 // and the restored database is replaced by the leader's copy, while the restore would
 // still report success. A standalone node (no corosync.conf), a node alone in its
-// cluster, and a node without quorum proceed as before; so does a node whose quorum
-// cannot be read, with a warning.
+// cluster, and a node without quorum proceed as before. A node whose quorum cannot be
+// read goes to refuseUnknownQuorumUnlessCorosyncStopped; one without pvecm proceeds with
+// a warning.
 func (w *restoreUIWorkflowRun) refuseRecoveryOnQuorateCluster() error {
 	if _, clustered := detectCorosyncConfig(); !clustered {
 		return nil
 	}
 	info, available, message := pvecmQuorumStatus(w.ctx, clusterRecoveryQuorumTimeout)
 	if !available {
-		message = "pvecm not available"
+		w.logger.Warning("Cluster RECOVERY - quorum unknown (pvecm not available), proceeding")
+		return nil
 	}
 	if message != "" {
-		w.warnClusterRecoveryQuorumUnknown(message)
-		return nil
+		return w.refuseUnknownQuorumUnlessCorosyncStopped(message)
 	}
 	if !info.Quorate {
 		return nil
 	}
 	nodes, err := strconv.Atoi(strings.TrimSpace(info.Nodes))
 	if err != nil {
-		w.warnClusterRecoveryQuorumUnknown("node count unreadable")
-		return nil
+		return w.refuseUnknownQuorumUnlessCorosyncStopped("node count unreadable")
 	}
 	if nodes > 1 {
 		return &clusterRecoveryRefusedError{nodes: info.Nodes}
@@ -240,8 +251,26 @@ func (w *restoreUIWorkflowRun) refuseRecoveryOnQuorateCluster() error {
 	return nil
 }
 
-func (w *restoreUIWorkflowRun) warnClusterRecoveryQuorumUnknown(reason string) {
-	w.logger.Warning("Cluster RECOVERY - quorum unknown (%s), proceeding", reason)
+// refuseUnknownQuorumUnlessCorosyncStopped decides a RECOVERY whose quorum could not be
+// read. pvecm also fails when pmxcfs is down (no /etc/pve/corosync.conf) while corosync
+// is up and quorate with its peers: pve-cluster would then start again, sync from the
+// leader and drop the restored config.db. So the restore proceeds only on proof that
+// corosync is stopped, "inactive" or "failed" from systemctl, which is also the state of
+// the documented isolation (systemctl stop corosync). Any other state, or a state that
+// cannot be read, refuses.
+func (w *restoreUIWorkflowRun) refuseUnknownQuorumUnlessCorosyncStopped(reason string) error {
+	state, message, available := systemctlServiceState(w.ctx, "corosync", clusterRecoveryQuorumTimeout)
+	switch {
+	case !available:
+		return &clusterRecoveryQuorumUnknownError{reason: reason, corosync: "state unknown (systemctl not available)"}
+	case state == "inactive" || state == "failed":
+		w.logger.Warning("Cluster RECOVERY - quorum unknown (%s), corosync %s, proceeding", reason, state)
+		return nil
+	case state == "":
+		return &clusterRecoveryQuorumUnknownError{reason: reason, corosync: "state unknown (" + message + ")"}
+	default:
+		return &clusterRecoveryQuorumUnknownError{reason: reason, corosync: state}
+	}
 }
 
 func (w *restoreUIWorkflowRun) warnAccessControlHostnameMismatch() {

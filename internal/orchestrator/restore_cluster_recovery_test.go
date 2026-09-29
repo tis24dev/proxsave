@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -251,26 +252,79 @@ func TestClusterRecoveryQuorumProbe(t *testing.T) {
 			name: "standalone node without corosync.conf proceeds silently",
 		},
 		{
-			name:        "pvecm failing with output proceeds with a warning",
-			live:        corosyncLive,
-			outputs:     map[string]string{"pvecm status": "Cannot initialize CMAP service\n"},
-			errs:        map[string]error{"pvecm status": errors.New("exit status 2")},
-			wantWarning: "Cluster RECOVERY - quorum unknown (could not determine quorum: Cannot initialize CMAP service), proceeding",
-			wantPvecm:   true,
-		},
-		{
-			name:        "pvecm failing without output proceeds with a warning",
-			live:        corosyncLive,
-			errs:        map[string]error{"pvecm status": errors.New("exit status 2")},
-			wantWarning: "Cluster RECOVERY - quorum unknown (pvecm status failed: exit status 2), proceeding",
-			wantPvecm:   true,
-		},
-		{
-			name: "quorate with an unreadable node count proceeds with a warning",
+			// The documented isolation: with corosync stopped pvecm cannot read CMAP.
+			name: "quorum unknown with corosync stopped proceeds with a warning",
 			live: corosyncLive,
-			outputs: map[string]string{"pvecm status": strings.Replace(pvecmStatusOutput(3, 3, true),
-				"Nodes:            3", "Nodes:            three", 1)},
-			wantWarning: "Cluster RECOVERY - quorum unknown (node count unreadable), proceeding",
+			outputs: map[string]string{
+				"pvecm status":                 "Cannot initialize CMAP service\n",
+				"systemctl is-active corosync": "inactive\n",
+			},
+			errs: map[string]error{
+				"pvecm status":                 errors.New("exit status 2"),
+				"systemctl is-active corosync": errors.New("exit status 3"),
+			},
+			wantWarning: "Cluster RECOVERY - quorum unknown (could not determine quorum: Cannot initialize CMAP service), corosync inactive, proceeding",
+			wantPvecm:   true,
+		},
+		{
+			name: "quorum unknown with corosync failed proceeds with a warning",
+			live: corosyncLive,
+			outputs: map[string]string{
+				"systemctl is-active corosync": "failed\n",
+			},
+			errs: map[string]error{
+				"pvecm status":                 errors.New("exit status 2"),
+				"systemctl is-active corosync": errors.New("exit status 3"),
+			},
+			wantWarning: "Cluster RECOVERY - quorum unknown (pvecm status failed: exit status 2), corosync failed, proceeding",
+			wantPvecm:   true,
+		},
+		{
+			// pmxcfs down, corosync up and quorate with its peers: pvecm dies on the
+			// missing /etc/pve/corosync.conf, and pve-cluster would sync from the leader.
+			name: "quorum unknown with corosync active is refused",
+			live: corosyncLive,
+			outputs: map[string]string{
+				"pvecm status":                 "Error: Corosync config '/etc/pve/corosync.conf' does not exist - is this node part of a cluster?\n",
+				"systemctl is-active corosync": "active\n",
+			},
+			errs:      map[string]error{"pvecm status": errors.New("exit status 2")},
+			wantErr:   "Cluster RECOVERY refused - quorum unknown (could not determine quorum: Error: Corosync config '/etc/pve/corosync.conf' does not exist - is this node part of a cluster?), corosync active: in a quorate cluster, its copy would replace the restored config.db",
+			wantPvecm: true,
+		},
+		{
+			name: "quorum unknown with corosync starting is refused",
+			live: corosyncLive,
+			outputs: map[string]string{
+				"systemctl is-active corosync": "activating\n",
+			},
+			errs:      map[string]error{"pvecm status": errors.New("exit status 2")},
+			wantErr:   "Cluster RECOVERY refused - quorum unknown (pvecm status failed: exit status 2), corosync activating: in a quorate cluster, its copy would replace the restored config.db",
+			wantPvecm: true,
+		},
+		{
+			name:      "quorum unknown with an unreadable corosync state is refused",
+			live:      corosyncLive,
+			errs:      map[string]error{"pvecm status": errors.New("exit status 2")},
+			wantErr:   "Cluster RECOVERY refused - quorum unknown (pvecm status failed: exit status 2), corosync state unknown (systemctl returned no output): in a quorate cluster, its copy would replace the restored config.db",
+			wantPvecm: true,
+		},
+		{
+			name: "quorate with an unreadable node count and corosync active is refused",
+			live: corosyncLive,
+			outputs: map[string]string{
+				"pvecm status": strings.Replace(pvecmStatusOutput(3, 3, true),
+					"Nodes:            3", "Nodes:            three", 1),
+				"systemctl is-active corosync": "active\n",
+			},
+			wantErr:   "Cluster RECOVERY refused - quorum unknown (node count unreadable), corosync active: in a quorate cluster, its copy would replace the restored config.db",
+			wantPvecm: true,
+		},
+		{
+			name:        "pvecm not installed proceeds with a warning",
+			live:        corosyncLive,
+			errs:        map[string]error{"pvecm status": &exec.Error{Name: "pvecm", Err: exec.ErrNotFound}},
+			wantWarning: "Cluster RECOVERY - quorum unknown (pvecm not available), proceeding",
 			wantPvecm:   true,
 		},
 	}

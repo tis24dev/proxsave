@@ -1364,11 +1364,14 @@ the cluster leader and the leader's copy replaces it.
 | `pvecm status`: quorate, more than 1 node online | Error `Cluster RECOVERY refused - quorate cluster, N nodes online: its copy would replace the restored config.db` |
 | `pvecm status`: quorate, 1 node online | Proceeds |
 | `pvecm status`: not quorate | Proceeds |
-| `pvecm status` fails or prints no `Quorate:` line | Proceeds with warning `Cluster RECOVERY - quorum unknown (<reason>), proceeding` |
-| `pvecm status`: quorate, `Nodes:` not a number | Proceeds with warning `Cluster RECOVERY - quorum unknown (node count unreadable), proceeding` |
+| `pvecm status` fails, times out or prints no `Quorate:` line, or is quorate with `Nodes:` not a number; `systemctl is-active corosync` = `inactive` or `failed` | Proceeds with warning `Cluster RECOVERY - quorum unknown (<reason>), corosync <state>, proceeding` |
+| Same, corosync in any other state, or its state unreadable | Error `Cluster RECOVERY refused - quorum unknown (<reason>), corosync <state>: in a quorate cluster, its copy would replace the restored config.db` |
+| `pvecm` not installed | Proceeds with warning `Cluster RECOVERY - quorum unknown (pvecm not available), proceeding` |
 
 The probe reuses `pvecmQuorumStatus()` from the network health checks, with the same
-3 second timeout; N is the `Nodes:` value `pvecm status` printed.
+3 second timeout; N is the `Nodes:` value `pvecm status` printed. When the quorum cannot be read, `systemctlServiceState()` reads corosync with the same
+timeout: pvecm also fails when pmxcfs is down while corosync is up and quorate with its
+peers, so only `inactive` or `failed` lets the restore proceed.
 
 ### SAFE Mode Implementation
 

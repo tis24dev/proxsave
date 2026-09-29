@@ -227,7 +227,7 @@ var notes = []Note{
 			"New boot category, in FULL: old kernel parameters join this host's; old GRUB and kernel cmdline are never written",
 			"A restore keeps safety backup and logs in BASE_DIR/restore past a reboot, and this host's hostid, ZFS cache, ARC limit",
 			"Mount guards moved to BASE_DIR/guards; --cleanup-guards still clears the ones left in /var/lib/proxsave/guards",
-			"A RECOVERY cluster restore stops the HA services, restarts the cluster right after writing, refuses a quorate cluster",
+			"A RECOVERY restore stops HA, restarts the cluster after writing; refuses quorate, or unreadable quorum with corosync up",
 			"NOTIFY_ON=warning is the new default: clean runs stay quiet once the healthchecks monitor is confirmed to alert you",
 		},
 		Actions: []string{
