@@ -154,18 +154,78 @@ func pveUnitNotInstalled(ctx context.Context, logger *logging.Logger, service st
 	return true
 }
 
+// pveHAServices are the HA units of pveClusterStartOrder. They are not started while
+// pve-cluster is down: the LRM would arm the node's watchdog with pmxcfs unavailable,
+// and a node whose watchdog expires is fenced.
+var pveHAServices = map[string]bool{"pve-ha-crm": true, "pve-ha-lrm": true}
+
+// pveUnitStartFailure is one unit whose start failed, with the error of its last attempt.
+type pveUnitStartFailure struct {
+	unit string
+	err  error
+}
+
+// pveClusterStartError reports the PVE services a restart left not running: failed
+// holds each unit whose start failed, in start order, and skipped the HA units not
+// started because pve-cluster had failed.
+type pveClusterStartError struct {
+	failed  []pveUnitStartFailure
+	skipped []string
+}
+
+func (e *pveClusterStartError) Error() string {
+	parts := make([]string, 0, len(e.failed))
+	for _, f := range e.failed {
+		parts = append(parts, fmt.Sprintf("%s: %v", f.unit, f.err))
+	}
+	msg := "failed to start PVE services (" + strings.Join(parts, "; ") + ")"
+	if len(e.skipped) > 0 {
+		msg += "; not started while pve-cluster is down: " + strings.Join(e.skipped, ", ")
+	}
+	return msg
+}
+
+// notRunning names the units left down, for the restore's closing advice:
+// "pvedaemon (start failed); pve-ha-crm, pve-ha-lrm (not started while pve-cluster is down)".
+func (e *pveClusterStartError) notRunning() string {
+	units := make([]string, 0, len(e.failed))
+	for _, f := range e.failed {
+		units = append(units, f.unit)
+	}
+	out := strings.Join(units, ", ") + " (start failed)"
+	if len(e.skipped) > 0 {
+		out += "; " + strings.Join(e.skipped, ", ") + " (not started while pve-cluster is down)"
+	}
+	return out
+}
+
 // startPVEClusterServices starts the services in pveClusterStartOrder, skipping a
-// unit that is not installed.
+// unit that is not installed. A unit that fails to start does not stop the others:
+// a pvedaemon that will not start must not leave the API proxy and HA down with it.
+// The exception is pve-cluster: when it fails, the HA units are not started (see
+// pveHAServices). Any failure is returned as a *pveClusterStartError.
 func startPVEClusterServices(ctx context.Context, logger *logging.Logger) error {
+	var result pveClusterStartError
+	clusterDown := false
 	for _, service := range pveClusterStartOrder {
 		if pveUnitNotInstalled(ctx, logger, service) {
 			continue
 		}
+		if clusterDown && pveHAServices[service] {
+			result.skipped = append(result.skipped, service)
+			continue
+		}
 		if err := startServiceWithRetries(ctx, logger, service); err != nil {
-			return fmt.Errorf("failed to start PVE services (%s): %w", service, err)
+			result.failed = append(result.failed, pveUnitStartFailure{unit: service, err: err})
+			if service == "pve-cluster" {
+				clusterDown = true
+			}
 		}
 	}
-	return nil
+	if len(result.failed) == 0 {
+		return nil
+	}
+	return &result
 }
 
 func stopPBSServices(ctx context.Context, logger *logging.Logger) error {

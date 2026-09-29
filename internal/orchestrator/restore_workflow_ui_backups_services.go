@@ -3,6 +3,7 @@ package orchestrator
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"time"
 
@@ -194,6 +195,10 @@ func (w *restoreUIWorkflowRun) restartStoppedPVEClusterServices() {
 	defer cancel()
 	if err := startPVEClusterServices(restartCtx, w.logger); err != nil {
 		w.logger.Warning("Failed to restart PVE services after restore: %v", err)
+		var startErr *pveClusterStartError
+		if errors.As(err, &startErr) {
+			w.clusterServicesNotRunning = startErr
+		}
 	}
 }
 

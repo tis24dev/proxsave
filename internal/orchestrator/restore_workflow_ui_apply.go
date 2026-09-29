@@ -287,6 +287,10 @@ func (w *restoreUIWorkflowRun) logServiceRestartAdvice() {
 
 func (w *restoreUIWorkflowRun) logPVERestartAdvice() {
 	if w.needsClusterRestore && w.clusterServicesStopped {
+		if w.clusterServicesNotRunning != nil {
+			w.logger.Warning("  PVE services - stopped for this restore and not running: %s", w.clusterServicesNotRunning.notRunning())
+			return
+		}
 		w.logger.Info("  PVE services - stopped and started again during this restore")
 		return
 	}

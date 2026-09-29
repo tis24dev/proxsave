@@ -45,9 +45,12 @@ type restoreUIWorkflowRun struct {
 	// clusterServicesRestarted is set once the PVE services stopped for a cluster
 	// RECOVERY have been started again, so the deferred cleanup does not repeat it.
 	clusterServicesRestarted bool
-	pbsServicesStopped       bool
-	needsPBSServices         bool
-	needsFilesystemRestore   bool
+	// clusterServicesNotRunning records what that restart left down, for the closing
+	// advice; nil when every unit started.
+	clusterServicesNotRunning *pveClusterStartError
+	pbsServicesStopped        bool
+	needsPBSServices          bool
+	needsFilesystemRestore    bool
 	// needsBootConfiguration is set when the boot category is selected: it is taken
 	// out of the system-path extraction and applied by applyBootConfiguration.
 	needsBootConfiguration bool

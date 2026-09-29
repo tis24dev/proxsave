@@ -879,3 +879,66 @@ func TestNetworkApplyInClusterRecoveryRunsPVEChecks(t *testing.T) {
 		t.Fatalf("pvecm status not run by the health check; calls=%q", cmd.CallsList())
 	}
 }
+
+// A RECOVERY restarts the PVE services once, right after config.db. When a unit fails to
+// start, the others are still started, except the HA units while pve-cluster is down (the
+// LRM would arm the watchdog without pmxcfs). The closing advice names what is left down
+// instead of "stopped and started again". The run itself carries on, as before.
+func TestClusterRecoveryFailedRestartIsNamedAndStartsTheRest(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		failing    string
+		notStarted []string
+		advice     string
+	}{
+		{
+			name:       "pve-cluster fails",
+			failing:    "pve-cluster",
+			notStarted: []string{"pve-ha-crm", "pve-ha-lrm"},
+			advice:     "PVE services - stopped for this restore and not running: pve-cluster (start failed); pve-ha-crm, pve-ha-lrm (not started while pve-cluster is down)",
+		},
+		{
+			name:    "pvedaemon fails",
+			failing: "pvedaemon",
+			advice:  "PVE services - stopped for this restore and not running: pvedaemon (start failed)",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fastServiceTimers(t)
+			fail := errors.New("Job for " + tc.failing + ".service failed")
+			r := runClusterRecoveryRestore(t, clusterRecoveryOptions{
+				errs: map[string]error{
+					"systemctl start " + tc.failing:   fail,
+					"systemctl restart " + tc.failing: fail,
+				},
+			})
+			if r.err != nil {
+				t.Fatalf("restore stopped on a failed restart: %v", r.err)
+			}
+			if got := r.configDB(t); got != "db-from-backup\n" {
+				t.Fatalf("config.db = %q, want the restored one", got)
+			}
+			skipped := map[string]bool{}
+			for _, svc := range tc.notStarted {
+				skipped[svc] = true
+				if n := r.count("systemctl start " + svc); n != 0 {
+					t.Errorf("%s started %d times with pve-cluster down", svc, n)
+				}
+			}
+			for _, svc := range pveClusterStartOrder {
+				if svc == tc.failing || skipped[svc] {
+					continue
+				}
+				if n := r.count("systemctl start " + svc); n == 0 {
+					t.Errorf("%s never started after %s failed", svc, tc.failing)
+				}
+			}
+			if !strings.Contains(r.log, tc.advice) {
+				t.Errorf("advice %q missing from the log:\n%s", tc.advice, r.log)
+			}
+			if strings.Contains(r.log, "stopped and started again during this restore") {
+				t.Errorf("advice still says the services were started again:\n%s", r.log)
+			}
+		})
+	}
+}

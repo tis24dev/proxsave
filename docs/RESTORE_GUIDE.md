@@ -748,7 +748,7 @@ The HA services are stopped first: `pve-ha-lrm` keeps the node's watchdog open, 
 
 `pve-ha-lrm` is never signalled: it gets one `systemctl stop --no-block` and up to 180 seconds to go inactive. If it is still active after that, ProxSave runs `systemctl start pve-ha-lrm`, which cancels the queued stop and leaves the LRM running, and the restore stops with `failed to stop PVE services (pve-ha-lrm)`. Its stop waits for the CRM master to acknowledge the freeze; when the old master is a node that went down, its lock only times out about 120 seconds after it died (measured: 93 seconds on an isolated node whose old master was powered off). A SIGKILL before the LRM closes its watchdog would fence the node. The other services keep the escalating stop (blocking stop, then SIGTERM, then SIGKILL).
 
-The services are started again as soon as the cluster database has been written, before the later steps (network apply, boot rebuild): `pve-cluster`, `pvedaemon`, `pveproxy`, `pvestatd`, then `pve-ha-crm` and `pve-ha-lrm`. If the restore fails before that point, they are started when the run ends.
+The services are started again as soon as the cluster database has been written, before the later steps (network apply, boot rebuild): `pve-cluster`, `pvedaemon`, `pveproxy`, `pvestatd`, then `pve-ha-crm` and `pve-ha-lrm`. If the restore fails before that point, they are started when the run ends. A unit that fails to start does not stop the others, except that `pve-ha-crm` and `pve-ha-lrm` are not started while `pve-cluster` is down (the LRM would arm the watchdog without pmxcfs). There is one attempt per restore, of three tries per unit; the restore goes on, and its closing advice names the units left down.
 
 #### Phase 10: Service Management (PBS)
 
@@ -2468,8 +2468,9 @@ journalctl -xe -u pve-cluster
 # Restore from safety backup
 tar -xzf /opt/proxsave/restore/*/restore_backup_*.tar.gz -C /
 
-# Restart services
+# Restart services (the HA services last, once pve-cluster is up)
 systemctl restart pve-cluster pvedaemon pveproxy pvestatd
+systemctl start pve-ha-crm pve-ha-lrm
 
 # If still failing, check logs
 journalctl -u pve-cluster --since "10 minutes ago"
