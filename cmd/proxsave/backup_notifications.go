@@ -11,6 +11,7 @@ import (
 	"github.com/tis24dev/proxsave/internal/health"
 	"github.com/tis24dev/proxsave/internal/logging"
 	"github.com/tis24dev/proxsave/internal/notify"
+	"github.com/tis24dev/proxsave/internal/notifyfilter"
 	"github.com/tis24dev/proxsave/internal/orchestrator"
 )
 
@@ -27,7 +28,8 @@ func initializeBackupNotifications(opts backupModeOptions, orch *orchestrator.Or
 	initializeTelegramNotification(opts, orch)
 	initializeGotifyNotification(opts, orch)
 	initializeWebhookNotification(opts, orch)
-	initializeHealthcheckSection(opts, orch)
+	section := initializeHealthcheckSection(opts, orch)
+	logNotifyFilterInit(opts, orch, section)
 	notifyDone(nil)
 
 	fmt.Println()
@@ -101,13 +103,15 @@ func initializeEmailNotification(opts backupModeOptions, orch *orchestrator.Orch
 // That problem report is a WARNING on BOTH engines, and it costs the run the same exit code
 // on both. reportHealthchecksUnusable only adds the ENGINE to the reason, because "the daemon
 // is not there" reads differently on a host that was never meant to have one.
-func initializeHealthcheckSection(opts backupModeOptions, orch *orchestrator.Orchestrator) {
+// initializeHealthcheckSection returns how the section ended (notifyfilter.Section*),
+// which the NOTIFY_ON decision reads right after it.
+func initializeHealthcheckSection(opts backupModeOptions, orch *orchestrator.Orchestrator) string {
 	cfg := opts.cfg
 	logger := opts.logger
 	if cfg == nil || !cfg.HealthcheckEnabled {
 		logging.DebugStep(logger, "notifications init", "healthchecks disabled")
 		logging.Skip("Healthchecks: disabled")
-		return
+		return notifyfilter.SectionDisabled
 	}
 	// Verify config, then that the monitoring daemon (the ONLY pinger) is actually alive -
 	// a valid config is worthless if the daemon is down. On ANY problem, switch the
@@ -119,15 +123,16 @@ func initializeHealthcheckSection(opts backupModeOptions, orch *orchestrator.Orc
 	// all and initializes normally.
 	if problem := healthcheckConfigProblem(cfg); problem != "" {
 		reportHealthchecksUnusable(cfg, logger, problem)
-		return
+		return notifyfilter.SectionDisabled
 	}
 	if problem := healthcheckDaemonProblem(opts.ctx, cfg, logger); problem != "" {
 		reportHealthchecksUnusable(cfg, logger, problem)
-		return
+		return notifyfilter.SectionNotTransmitting
 	}
 	logging.DebugStep(logger, "notifications init", "healthchecks enabled (mode=%s, daemon up)", cfg.HealthcheckMode)
 	orch.RegisterNotificationChannel(orchestrator.NewHealthchecksChannel(cfg, logger))
 	logging.Info("✓ Healthchecks initialized (mode: %s)", cfg.HealthcheckMode)
+	return notifyfilter.SectionInitialized
 }
 
 // disableHealthchecks switches the section to disabled with a reason, mirroring
@@ -224,7 +229,7 @@ func healthcheckDaemonProblem(ctx context.Context, cfg *config.Config, logger *l
 			d := health.RefineWithPresence(health.Diagnosis{State: health.TxNoHeartbeat}, presence)
 			logging.DebugStep(logger, "notifications init",
 				"healthchecks status unreadable, presence state=%s installed=%t active=%t", d.State, presence.Installed, presence.Active)
-			return daemonProblemForState(d)
+			return health.DaemonProblem(d)
 		}
 		logging.DebugStep(logger, "notifications init", "healthchecks status unreadable: %v", err)
 		return "status file unreadable"
@@ -236,27 +241,7 @@ func healthcheckDaemonProblem(ctx context.Context, cfg *config.Config, logger *l
 	logging.DebugStep(logger, "notifications init",
 		"healthchecks daemon diagnose state=%s daemon_up=%t hb_age=%s installed=%t active=%t",
 		d.State, d.DaemonUp, d.HbAge, presence.Installed, presence.Active)
-	return daemonProblemForState(d)
-}
-
-// daemonProblemForState maps a presence-refined diagnosis to a terse SYNTHETIC reason
-// (bare fact, never an instruction) or "" when the daemon is up. Shares the exact state
-// vocabulary the Phase-7 section renders so the init verdict and the section never drift.
-func daemonProblemForState(d health.Diagnosis) string {
-	switch d.State {
-	case health.TxNotInstalled:
-		return "daemon not installed"
-	case health.TxNotActive:
-		return "daemon not running"
-	case health.TxRunningNoReport:
-		return "daemon running, not reporting"
-	case health.TxStale:
-		return "daemon stale (last beat " + health.HumanizeAge(d.HbAge) + ")"
-	}
-	if d.DaemonUp {
-		return ""
-	}
-	return "daemon not running"
+	return health.DaemonProblem(d)
 }
 
 // healthcheckConfigProblem returns a short reason when the healthcheck config is

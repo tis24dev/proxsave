@@ -182,8 +182,7 @@ var notes = []Note{
 			"PBS ACME accounts are backed up and restored as a directory, and BACKUP_PBS_ACME_ACCOUNTS=false really excludes them",
 			"The healthchecks screen accepts HEALTHCHECK_ALIVE_ID: an id alone no longer reads as not configured",
 			"A misspelled variable in backup.env is called out as a probable typo, with the name it was meant to be",
-			"proxsave --upgrade-config reports a variable set twice instead of answering that the file is up to date",
-			"A variable the upgrade adds back is written inside its own section, not above the header that documents it",
+			"proxsave --upgrade-config reports a variable set twice, and writes each one it adds back inside its own section",
 			"SKIP_PERMISSION_CHECK now takes effect: until now the variable was read and then ignored by the backup",
 		},
 		Actions: []string{
@@ -226,13 +225,16 @@ var notes = []Note{
 			"A FULL restore on a PVE-only or PBS-only host exports the other product's categories instead of writing them",
 			"Backups now include /etc/default and udev rules, which the restore listed but no backup ever saved",
 			"New boot category, in FULL: old kernel parameters join this host's; old GRUB and kernel cmdline are never written",
-			"A restore keeps its safety backup and logs in /var/lib/proxsave/restore past a reboot, and deletes its decrypted staging",
-			"A restore keeps this host's /etc/hostid and ZFS pool cache when it has pools imported, and its own ZFS ARC limit",
+			"A restore keeps its safety backup and logs past a reboot, and this host's hostid, ZFS pool cache and ZFS ARC limit",
 			"Backups taken with SYSTEM_ROOT_PREFIX store PVE files at their host paths, so restore finds them",
 			"A RECOVERY cluster restore stops the HA services, restarts the cluster right after writing, refuses a quorate cluster",
+			"NOTIFY_ON=warning is the new default: clean runs stay quiet once the healthchecks monitor is confirmed to alert you",
 		},
 		Actions: []string{
 			"With DRY_RUN=true in backup.env, a restore from the CLI or the dashboard is refused until DRY_RUN is set to false",
+			"To keep a notification for every run, set NOTIFY_ON=always in backup.env: the upgrade writes NOTIFY_ON=warning there",
+			"Without a confirmed healthchecks monitor every run is still notified; the run log line Notification filter says which",
+			"A hand edit of NOTIFY_ON applies from the next scheduled run; a run started by hand notifies every outcome until then",
 		},
 	},
 }

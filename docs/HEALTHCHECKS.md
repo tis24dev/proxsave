@@ -25,6 +25,14 @@ The daemon closes it by pushing to something outside this host. Each check has a
 expected cadence on the monitor side. Miss it and the check goes down and your alerts
 fire, whether ProxSave was able to say anything or not.
 
+This is also what makes [`NOTIFY_ON`](CONFIGURATION.md#which-runs-get-notified-notify_on)
+safe to use. Silencing the message for clean runs drops a *report you were already getting
+another way*; it drops no check, because the per-run message was never what caught a run
+that did not happen. The **Healthchecks** section is not a notification channel and
+`NOTIFY_ON` never filters it, so a run nobody was told about still pings. And a run applies
+`NOTIFY_ON` below `always` only when this monitor is confirmed to alert you: see
+[Alert delivery and NOTIFY_ON](#alert-delivery-and-notify_on).
+
 ## What gets monitored
 
 The daemon reports four families of checks, each shown on the monitor as a
@@ -273,7 +281,8 @@ fills in for you. In centralized mode they are an optional fallback cache that n
 ## Where monitoring shows up
 
 **Install wizard.** The configuration form's `Healthchecks` field asks for the monitoring
-mode, immediately after `Scheduler engine` and before `Run at (HH:MM)`. Its three answers
+mode, immediately after `Scheduler engine`, followed by `Notify level` (see
+[Alert delivery and NOTIFY_ON](#alert-delivery-and-notify_on)) and `Run at (HH:MM)`. Its three answers
 are `Off`, `ProxSave HC Server` (centralized) and `Your own server` (self), and it is
 active only with the daemon engine selected: under cron it is inactive and monitoring is
 written off. A screen then verifies the connection. In centralized mode it also boxes
@@ -302,6 +311,48 @@ which is honest for a first run or a stopped daemon, and never as a false succes
 **`proxsave --daemon-status`.** A scriptable verdict on the daemon itself, covered in
 [DAEMON.md](DAEMON.md). The dashboard's **Daemon** > **Status** shows the same verdict
 without the exit code.
+
+## Alert delivery and NOTIFY_ON
+
+A monitor that alerts nobody is not a monitor. Before a run lets `NOTIFY_ON=warning` or
+`failure` keep a clean run quiet, it checks that this monitor would reach you, and it
+notifies every outcome when it cannot confirm it.
+
+**Centralized mode.** At the start of every run, ProxSave asks the monitoring server about
+this host's project on the portal. The answer is one of:
+
+| Status | Meaning |
+|---|---|
+| `ready` | an alert channel covering both the alive and the backup check has delivered a DOWN, and no failed delivery came after it |
+| `not configured` | no alert channel is set up for DOWN alerts |
+| `not verified` | alert channels exist, but none has delivered a DOWN yet |
+| `degraded` | an alert channel failed, is switched off or paused, only one of the two checks is covered, or the monitor is not sending alerts |
+| `unknown` | the server could not tell |
+
+Only `ready` lets the filter apply. A DOWN counts whether it was real or a test: after you
+add or change an alert channel on the portal, send it a test notification (the channel's
+**Test!** button), so the server has a delivery to verify. The server also has to apply the
+same `NOTIFY_ON` to this host's `proxsave-notify-*` checks, so that they stop expecting a
+ping after every run. The daemon sends the value, and sends it again before the next
+scheduled run when you change it in `backup.env` or switch a channel on or off. A backup
+started by hand does not: after a change, it notifies every outcome until the next
+scheduled run has passed it on.
+
+**Self mode.** The filter applies when both ping URLs are valid, the daemon is transmitting
+and no `HEALTHCHECK_NOTIFY_*` variable is set: a notify check you run on a period would go
+DOWN on every run the filter kept quiet.
+
+**Where you see it.** The run log (`Healthchecks status` and `Notification filter` lines),
+and the `Notifications:` block of the Healthchecks check screen and of the install check:
+
+```text
+Notifications:
+Setting: NOTIFY_ON=warning
+Current: always (Healthchecks not configured)
+```
+
+`Current` gives the reason in parentheses whenever it differs from the setting; in self mode
+both lines read `Self mode`.
 
 ## Troubleshooting
 

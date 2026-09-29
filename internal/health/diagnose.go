@@ -196,3 +196,23 @@ func HumanizeAge(d time.Duration) string {
 		return fmt.Sprintf("%dd ago", int(d.Hours())/24)
 	}
 }
+
+// DaemonProblem maps a presence-refined diagnosis to a terse SYNTHETIC reason
+// (bare fact, never an instruction) or "" when the daemon is up. Shares the exact state
+// vocabulary the Phase-7 section renders so the init verdict and the section never drift.
+func DaemonProblem(d Diagnosis) string {
+	switch d.State {
+	case TxNotInstalled:
+		return "daemon not installed"
+	case TxNotActive:
+		return "daemon not running"
+	case TxRunningNoReport:
+		return "daemon running, not reporting"
+	case TxStale:
+		return "daemon stale (last beat " + HumanizeAge(d.HbAge) + ")"
+	}
+	if d.DaemonUp {
+		return ""
+	}
+	return "daemon not running"
+}

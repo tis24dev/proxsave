@@ -40,6 +40,9 @@ type CentralizedConfig struct {
 	BackupURL   string `json:"backup_ping_url"`
 	ProjectCode string `json:"project_code"`
 	LoginURL    string `json:"login_url"`
+	// NotifyPolicy is the relay's ack of a contract-1 poll (FetchCentralizedConfigWithPolicy);
+	// nil on a legacy poll or an older relay.
+	NotifyPolicy *NotifyPolicyAck `json:"notify_policy,omitempty"`
 	// PortalURL and PortalLogin are the state-INDEPENDENT portal facts: the plain
 	// sign-in page and the identity that signs in there. The server derives both from
 	// its own constants (no provisioning round-trip), so they ride every answer for a
@@ -116,7 +119,15 @@ func FetchCentralizedConfigWithChannels(ctx context.Context, client *http.Client
 }
 
 func fetchConfig(ctx context.Context, client *http.Client, serverAPIHost, serverID, secret string, includeLogin bool, channels []string) (CentralizedConfig, error) {
+	return fetchConfigQuery(ctx, client, serverAPIHost, serverID, secret, includeLogin, channels, nil)
+}
+
+// fetchConfigQuery is fetchConfig with extra query parameters (the notify policy contract).
+func fetchConfigQuery(ctx context.Context, client *http.Client, serverAPIHost, serverID, secret string, includeLogin bool, channels []string, extra url.Values) (CentralizedConfig, error) {
 	q := url.Values{"server_id": {serverID}}
+	for k, v := range extra {
+		q[k] = v
+	}
 	if includeLogin {
 		q.Set("login", "1")
 	}

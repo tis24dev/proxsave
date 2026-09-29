@@ -25,6 +25,7 @@ import (
 	"github.com/tis24dev/proxsave/internal/identity"
 	"github.com/tis24dev/proxsave/internal/logging"
 	"github.com/tis24dev/proxsave/internal/notify"
+	"github.com/tis24dev/proxsave/internal/notifyfilter"
 	"github.com/tis24dev/proxsave/internal/types"
 	"github.com/tis24dev/proxsave/internal/version"
 )
@@ -136,6 +137,14 @@ type daemon struct {
 	fetchWarned      bool      // centralized fetch already warned once (throttle recurring WARN)
 	updateWarned     bool      // an update is already known available (WARN once per transition)
 	provisionRetryAt time.Time // next relay-secret self-heal attempt; guarded by mu
+	// notifyWant is the policy the next centralized config poll negotiates (backup.env as last
+	// read by refreshNotifyPolicy; d.cfg until the first scheduled run). notifyApplied is the
+	// policy the relay last confirmed it applied, nil when none is confirmed. Both guarded by mu.
+	notifyWant    *notifyPolicy
+	notifyApplied *notifyPolicy
+	notifyPolls   uint64 // config polls that reached the relay; guarded by mu
+	// notifyRefreshWaitOverride replaces notifyPolicyRefreshWait in tests.
+	notifyRefreshWaitOverride time.Duration
 	// aliveMu orders the TRANSMISSIONS to the service-alive check: one beat's ping+record, or
 	// the one abandon degrade, never both at once. A bare latch cannot do this. beat() reads
 	// it, then spends up to a full pingTimeout inside r.Heartbeat, so a beat that entered
@@ -670,6 +679,9 @@ func (d *daemon) runOnce(parentCtx context.Context) bool {
 		startPersonalScriptDetachedReporting(d.logger, personalScriptPostRunKey, d.cfg.PersonalScriptPostRun)
 	}()
 
+	// Before the start ping, so its bounded wait is not counted in the run duration the remote
+	// monitor measures, and before getReporter, so a renegotiated channel set is the one pinged.
+	d.refreshNotifyPolicy(parentCtx)
 	r := d.getReporter()
 	rid := health.NewRunID()
 	d.reportBestEffort("start", false, func() error { return d.startPing(parentCtx, r, rid) })
@@ -2044,12 +2056,29 @@ func (d *daemon) fetchCentralized(ctx context.Context) (alive, backup string, ch
 	}
 	// Send the authoritative enabled-notification set so the server provisions one check per
 	// enabled channel (Fase 2C). Always non-nil in centralized mode (empty -> "none" sentinel).
-	channels := enabledNotifyChannels(d.cfg)
+	// The notify threshold rides the same poll (contract 1), so the relay keeps the notify checks
+	// event-driven for warning/failure and periodic for always. An unrecognised NOTIFY_ON is
+	// negotiated as always: that is what the run does with it. Both come from backup.env as
+	// last read before a scheduled run (refreshNotifyPolicy), so a hand edit reaches the relay
+	// without a daemon restart.
+	want := d.wantedNotifyPolicy()
 	// Return the exact secret sent to the server as secretUsed so buildReporter can
 	// value-guard an ErrHCAuth secret removal against precisely this comparand.
-	cfg, ferr := health.FetchCentralizedConfigWithChannels(ctx, nil, d.cfg.ServerAPIHost, d.cfg.ServerID, secret, false, channels)
+	cfg, ferr := health.FetchCentralizedConfigWithPolicy(ctx, nil, d.cfg.ServerAPIHost, d.cfg.ServerID, secret, want.channels, want.notifyOn)
 	if ferr != nil {
 		return "", "", nil, secret, ferr
+	}
+	// A poll that sent a policy no longer wanted may have reached the relay after a newer one
+	// and put the old policy back there: send the wanted one again, so the relay's last word is
+	// always the policy wanted now. Every answer is recorded, the last resend's included: the
+	// ack is recorded before the bound is checked.
+	for i := 0; d.recordNotifyPolicyAck(want, cfg.NotifyPolicy) && i < notifyPolicyResends; i++ {
+		want = d.wantedNotifyPolicy()
+		next, err := health.FetchCentralizedConfigWithPolicy(ctx, nil, d.cfg.ServerAPIHost, d.cfg.ServerID, secret, want.channels, want.notifyOn)
+		if err != nil {
+			break
+		}
+		cfg = next
 	}
 	return cfg.AliveURL, cfg.BackupURL, cfg.Checks, secret, nil
 }
@@ -2194,25 +2223,9 @@ func provisionRelaySecretOnDaemonSetup(ctx context.Context, configPath, baseDir 
 // sorted, for the ?channels provisioning hint. Metrics/Prometheus is a sink, not a
 // notification channel, and is excluded. A non-nil (possibly empty) slice is always returned
 // so the daemon sends an authoritative set (empty -> the server pauses all notify checks).
+// The run checks the relay's ack against the same set (notifyfilter.EnabledChannels).
 func enabledNotifyChannels(cfg *config.Config) []string {
-	out := []string{}
-	if cfg == nil {
-		return out
-	}
-	if cfg.EmailEnabled {
-		out = append(out, "email")
-	}
-	if cfg.TelegramEnabled {
-		out = append(out, "telegram")
-	}
-	if cfg.GotifyEnabled {
-		out = append(out, "gotify")
-	}
-	if cfg.WebhookEnabled {
-		out = append(out, "webhook")
-	}
-	sort.Strings(out)
-	return out
+	return notifyfilter.EnabledChannels(cfg)
 }
 
 // selfURLs resolves the ping URLs from self-mode config: full URLs if given, otherwise
@@ -2329,11 +2342,17 @@ func (d *daemon) reportNotifyOutcomes(ctx context.Context, r backupReporter, rid
 	sort.Strings(names) // deterministic ping/record order
 	keep := make([]string, 0, len(names))
 	for _, name := range names {
+		key := health.CheckKeyNotify(name)
+		if strings.EqualFold(strings.TrimSpace(nr.Results[name]), "filtered") {
+			// NOTIFY_ON kept this configured channel quiet: no ping, and its row keeps the last
+			// real delivery instead of being pruned like a switched-off channel.
+			keep = append(keep, key)
+			continue
+		}
 		suffix, down, skip := severityToSuffix(nr.Results[name])
 		if skip {
 			continue // "disabled"/unknown: the child did not really send this channel
 		}
-		key := health.CheckKeyNotify(name)
 		keep = append(keep, key)
 		var perr error
 		if r == nil || !r.HasCheck(key) {
@@ -2346,7 +2365,8 @@ func (d *daemon) reportNotifyOutcomes(ctx context.Context, r backupReporter, rid
 		}
 		d.recordNotifyPing(key, down, perr)
 	}
-	// Prune notify rows for channels the child did NOT attempt this run (disabled/removed),
+	// Prune notify rows for channels the child did NOT attempt this run (disabled/removed; a
+	// filtered channel is kept above),
 	// so a stale channel stops showing a phantom row. Only reached after the rid guard, so a
 	// crashed/mismatched child never wipes a still-valid panel (F09-07).
 	d.pruneNotifyRecords(keep)
@@ -2490,4 +2510,10 @@ func daemonSelfExecPath() string {
 		return p
 	}
 	return daemonExecPath
+}
+
+// negotiatedNotifyOn is the NOTIFY_ON value the daemon sends to the relay: the configured one when
+// valid, always otherwise (notifyfilter.Negotiated, the same value the run requests).
+func negotiatedNotifyOn(cfg *config.Config) string {
+	return notifyfilter.Negotiated(cfg)
 }

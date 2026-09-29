@@ -413,6 +413,10 @@ func (n *NotificationAdapter) recordNotifierStatus(stats *BackupStats, result *n
 
 // setNotifyResult records channel -> severity into stats.NotifyResults, lazily allocating
 // the map. Safe on a nil stats / empty name.
+// notifyResultFiltered is the handoff severity of a channel NOTIFY_ON kept quiet this run: the daemon
+// does not ping it and keeps its row, where "disabled" (switched off) also prunes the row.
+const notifyResultFiltered = "filtered"
+
 func setNotifyResult(stats *BackupStats, name, severity string) {
 	if stats == nil || name == "" {
 		return

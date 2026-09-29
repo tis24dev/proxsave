@@ -13,18 +13,25 @@ import (
 	"github.com/tis24dev/proxsave/internal/health"
 	"github.com/tis24dev/proxsave/internal/installer"
 	"github.com/tis24dev/proxsave/internal/logging"
+	"github.com/tis24dev/proxsave/internal/notifyfilter"
 	"github.com/tis24dev/proxsave/internal/orchestrator"
 )
 
 func stubHealthcheckSetupCLIDeps(t *testing.T) {
 	t.Helper()
 	ob, oc, os, op := healthcheckSetupBuildBootstrap, healthcheckSetupCheck, healthcheckSetupSelfCheck, healthcheckSetupPromptYesNo
+	onf := healthcheckSetupNotifyFilter
 	t.Cleanup(func() {
 		healthcheckSetupBuildBootstrap = ob
 		healthcheckSetupCheck = oc
 		healthcheckSetupSelfCheck = os
 		healthcheckSetupPromptYesNo = op
+		healthcheckSetupNotifyFilter = onf
 	})
+	// Off the real relay unless a test says otherwise: no backup.env read, no Notifications block.
+	healthcheckSetupNotifyFilter = func(context.Context, string, string, string, string, health.Diagnosis) orchestrator.HealthcheckNotifyFilter {
+		return orchestrator.HealthcheckNotifyFilter{}
+	}
 }
 
 // TestRunHealthcheckSetupCLI_SelfBranch verifies the self path uses the reachability
@@ -205,5 +212,54 @@ func TestRunHealthcheckSetupCLI_FatalStopsRetry(t *testing.T) {
 	// Only the initial "check now?" prompt; a fatal result never offers "check again".
 	if prompts != 1 {
 		t.Fatalf("fatal must not offer a re-check, prompts=%d", prompts)
+	}
+}
+
+// The CLI prints the dashboard's Notifications block under the Status, in its own indented layout.
+func TestRunHealthcheckSetupCLI_PrintsTheNotificationsBlock(t *testing.T) {
+	stubHealthcheckSetupCLIDeps(t)
+	healthcheckSetupBuildBootstrap = func(ctx context.Context, configPath, baseDir string) (orchestrator.HealthcheckSetupBootstrap, error) {
+		return orchestrator.HealthcheckSetupBootstrap{Eligibility: orchestrator.HealthcheckSetupEligibleCentralized,
+			ServerID: "123456789012", ServerAPIHost: "https://h"}, nil
+	}
+	healthcheckSetupPromptYesNo = func(ctx context.Context, r *bufio.Reader, q string, d bool) (bool, error) { return true, nil }
+	transmitting := health.Diagnosis{State: health.TxTransmitting, DaemonUp: true}
+	healthcheckSetupCheck = func(ctx context.Context, host, id, baseDir string, hb time.Duration) orchestrator.HealthcheckCheckResult {
+		return orchestrator.HealthcheckCheckResult{Reachable: true, DaemonRead: true, Daemon: transmitting}
+	}
+	healthcheckSetupNotifyFilter = func(_ context.Context, configPath, _, host, id string, daemon health.Diagnosis) orchestrator.HealthcheckNotifyFilter {
+		if configPath != "/cfg" || host != "https://h" || id != "123456789012" || daemon != transmitting {
+			t.Errorf("decision got config %q host %q id %q daemon %+v; want the check's own", configPath, host, id, daemon)
+		}
+		return orchestrator.HealthcheckNotifyFilter{Loaded: true, Decision: notifyfilter.Decision{Requested: "failure",
+			Effective: "always", Status: notifyfilter.StatusNotConfigured, Reason: notifyfilter.ReasonAlertsNotVerified}}
+	}
+	out := captureStdout(t, func() {
+		if err := runHealthcheckSetupCLI(context.Background(), bufio.NewReader(strings.NewReader("")), "/base", "/cfg", logging.NewBootstrapLogger()); err != nil {
+			t.Fatalf("err: %v", err)
+		}
+	})
+	want := "\nNotifications:\n  Setting: NOTIFY_ON=failure\n  Current: always (Healthchecks not configured)\n"
+	if i, j := strings.Index(out, "Status: "), strings.Index(out, want); i < 0 || j < i {
+		t.Fatalf("Notifications block missing or above the Status:\n%s", out)
+	}
+}
+
+// Self mode states the mode on both lines, without asking for a decision.
+func TestRunHealthcheckSetupCLI_SelfModeNotificationsBlock(t *testing.T) {
+	stubHealthcheckSetupCLIDeps(t)
+	healthcheckSetupBuildBootstrap = func(ctx context.Context, configPath, baseDir string) (orchestrator.HealthcheckSetupBootstrap, error) {
+		return orchestrator.HealthcheckSetupBootstrap{Eligibility: orchestrator.HealthcheckSetupEligibleSelf,
+			HealthcheckAliveURL: "https://hc.invalid/ping/alive"}, nil
+	}
+	healthcheckSetupPromptYesNo = func(ctx context.Context, r *bufio.Reader, q string, d bool) (bool, error) { return true, nil }
+	healthcheckSetupSelfCheck = func(ctx context.Context, aliveURL string) orchestrator.HealthcheckCheckResult {
+		return orchestrator.HealthcheckCheckResult{Reachable: true}
+	}
+	out := captureStdout(t, func() {
+		_ = runHealthcheckSetupCLI(context.Background(), bufio.NewReader(strings.NewReader("")), "/base", "/cfg", logging.NewBootstrapLogger())
+	})
+	if !strings.Contains(out, "\nNotifications:\n  Setting: Self mode\n  Current: Self mode\n") {
+		t.Fatalf("self mode block missing:\n%s", out)
 	}
 }

@@ -1198,6 +1198,68 @@ notifications**, **Email notifications** and **Email delivery mode**. Gotify and
 have no form fields and are configured here only. After enabling Telegram,
 `Diagnostic Checks` -> `Telegram` verifies the pairing without running a backup.
 
+### Which runs get notified (`NOTIFY_ON`)
+
+```bash
+# When to send, on every channel below
+NOTIFY_ON=warning                  # always | warning | failure
+```
+
+`NOTIFY_ON` is a **severity threshold, not an exact match**:
+
+| Value | Notified | Silent |
+|-------|----------|--------|
+| `always` | success, warning, failure | nothing |
+| `warning` (default) | warning **and** failure | success |
+| `failure` | failure | success, warning |
+
+So `NOTIFY_ON=warning` means "warnings and anything worse", not "warnings only". It is the
+setting for *tell me when something needs looking at*.
+
+Below `always` a clean run is silent, so something else has to alarm when a run never
+happens: the [healthchecks monitor](HEALTHCHECKS.md), which `NOTIFY_ON` never filters. A run
+applies `warning` or `failure` only when that monitor is confirmed, and notifies every
+outcome otherwise:
+
+- `HEALTHCHECK_ENABLED=true`
+- the daemon transmitting
+- centralized mode: an alert channel on the portal that has already delivered a DOWN
+- centralized mode: the server applying this `NOTIFY_ON`
+- self mode: no `HEALTHCHECK_NOTIFY_*` variable set
+
+The run log and the Healthchecks check screens show which filter applies now; details in
+[HEALTHCHECKS.md](HEALTHCHECKS.md#alert-delivery-and-notify_on).
+
+It applies on top of each channel's own `*_ENABLED` flag, and to every channel at once;
+there is no per-channel form. A channel skipped by the filter says so in the log:
+
+```
+SKIP     Webhook: filtered
+```
+
+The install wizard asks for it as **Notify level** (`Every run`, `Warnings and failures`,
+`Failures only`) right after the Healthchecks mode. With Healthchecks off or the cron
+engine it does not ask and writes `always`, since no level below that can apply there.
+Upgrading from a release without `NOTIFY_ON` writes `NOTIFY_ON=warning` into the existing
+`backup.env`; the configuration merge adds the line only, without the template's comments.
+
+Three things it deliberately does **not** change:
+
+- **A broken channel.** One that is enabled but failed to build - a mistyped
+  `EMAIL_DELIVERY_METHOD` is the usual cause - still warns and is still reported as an
+  error at every threshold. The filter quietens channels that work and have nothing to
+  say; it never quietens one that could not say anything.
+- **The exit code.** A run that ends with warnings still exits `1`, still logs the
+  warnings, and still reports `status=warning` in the Prometheus textfile. `NOTIFY_ON` is
+  a delivery decision only, so anything watching the exit code sees what it saw before.
+- **Healthchecks.** The [healthchecks connector](HEALTHCHECKS.md) is not a notification
+  channel and is never filtered. It is what still reports a run you chose not to hear
+  about, including a run that never happened at all.
+
+An unrecognised value is not silently accepted: it is named in a warning and treated as
+`always`, because the failure mode of a typo here is silence, and silence looks exactly
+like a backup that never ran.
+
 ### Telegram
 
 **From the dashboard**: the form's **Telegram notifications** toggle writes

@@ -9,7 +9,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/tis24dev/proxsave/internal/config"
 	"github.com/tis24dev/proxsave/internal/health"
+	"github.com/tis24dev/proxsave/internal/notify"
 	"github.com/tis24dev/proxsave/internal/safefs"
 	"github.com/tis24dev/proxsave/internal/storage"
 	"github.com/tis24dev/proxsave/internal/types"
@@ -70,6 +72,43 @@ func (o *Orchestrator) RegisterNotificationChannel(channel NotificationChannel) 
 	o.notificationChannels = append(o.notificationChannels, channel)
 }
 
+// reportingOnlyChannel marks the dispatch-table entries that NOTIFY_ON must never filter,
+// because they are not notification channels: they implement NotificationChannel to get a
+// slot in the ordered dispatch, but they send nothing outward. Healthchecks is one (see
+// healthcheck_section.go) -- it renders the Phase-7 section and captures the portal
+// magic-link onto stats.HealthcheckLink, both of which are reporting, not delivery, and
+// both of which the R3 ordering contract depends on.
+//
+// A marker interface rather than a Name() allowlist: Name() is operator-visible display
+// text on a slice that does not enforce uniqueness, so a second channel answering
+// "Healthchecks" would inherit the exemption and send on the runs the operator silenced.
+// The method is unexported, so only this package can claim the exemption, and claiming it
+// is a deliberate act -- a future Tier-2 entry has to opt in rather than be forgotten.
+type reportingOnlyChannel interface {
+	reportingOnly()
+}
+
+func notifyOnExempt(ch NotificationChannel) bool {
+	_, ok := ch.(reportingOnlyChannel)
+	return ok
+}
+
+// notifyOutcome classifies a run for NOTIFY_ON filtering. Deliberately not a bare
+// StatusFromExitCode(stats.ExitCode): DispatchEarlyErrorNotification assembles its own
+// stats and ExitCode is an int nothing validates, so an early-init failure that ever
+// carried 0 would classify as a success and be suppressed -- the one outcome nobody
+// configures NOTIFY_ON to hide. Failed/ErrorCount are set on that path and are the
+// authoritative signal. A nil stats is unclassifiable and therefore delivers.
+func notifyOutcome(stats *BackupStats) notify.NotificationStatus {
+	if stats == nil {
+		return notify.StatusFailure
+	}
+	if stats.Failed || stats.ErrorCount > 0 {
+		return notify.StatusFailure
+	}
+	return notify.StatusFromExitCode(stats.ExitCode)
+}
+
 func (o *Orchestrator) dispatchNotifications(ctx context.Context, stats *BackupStats) {
 	if o == nil || o.logger == nil {
 		return
@@ -89,6 +128,33 @@ func (o *Orchestrator) dispatchNotifications(ctx context.Context, stats *BackupS
 	}
 
 	cfg := o.cfg
+
+	// NOTIFY_ON: a global severity threshold layered on top of each channel's own
+	// *_ENABLED flag. It decides DELIVERY only; the exit code, the log counts and the
+	// Prometheus status gauge are all computed elsewhere and are untouched by it, so a
+	// suppressed run still reports exactly what it reported before. The threshold applied
+	// is the one decided for this run (notifyFilterDispatch), never the raw setting: below
+	// always it needs a confirmed Healthchecks monitor, and an early-error dispatch, which
+	// does not go through startNotificationGroup, notifies every outcome.
+	policy := o.notifyFilterDispatch
+	if !config.IsValidNotifyOn(policy) {
+		policy = config.NotifyOnAlways
+	}
+	outcome := notifyOutcome(stats)
+	if cfg != nil && cfg.NotifyOn != "" && !config.IsValidNotifyOn(cfg.NotifyOn) {
+		// Mirrors the EMAIL_DELIVERY_METHOD handling below: the parser passes an
+		// unrecognised value through and the point of use is where it gets named,
+		// because that is where there is a logger the operator will read.
+		o.logger.Warning("NOTIFY_ON=%q not recognized (allowed: always|warning|failure); delivering every outcome", cfg.NotifyOn)
+	}
+	if stats != nil {
+		o.logger.Debug("notifications dispatch: run outcome=%s warnings=%d errors=%d", outcome, stats.WarningCount, stats.ErrorCount)
+	}
+	if notify.NotifyOnAllows(policy, outcome) {
+		o.logger.Info("Notifications: sending")
+	} else {
+		o.logger.Info("Notifications: skipped")
+	}
 
 	// If email notifications are disabled in configuration, reflect this explicitly
 	// in the aggregated backup stats so that downstream channels (e.g. Telegram)
@@ -156,13 +222,43 @@ func (o *Orchestrator) dispatchNotifications(ctx context.Context, stats *BackupS
 			continue
 		}
 
+		// Claimed before the NOTIFY_ON gate below, so a suppressed channel is not picked
+		// up again by the remainder loop and skipped a second time.
 		usedChannels[channel] = true
+
+		// NOTIFY_ON is applied here, BELOW the initialization check above and not before
+		// it. A channel that is enabled but failed to initialize is a broken configuration,
+		// not a quiet run: it has to keep warning and keep recording "error" whatever the
+		// threshold says. Gating earlier would hide a misconfigured notifier behind the
+		// very setting the operator uses to stop reading successful runs, and would drop
+		// the WARNING that promotes that run's exit code -- which NOTIFY_ON must not touch.
+		if !notifyOnExempt(channel) && !notify.NotifyOnAllows(policy, outcome) {
+			o.logger.Skip("%s: filtered", entry.name)
+			// Record the suppression so stats.NotifyResults stays non-empty. An empty
+			// map makes persistNotifyResults write {} and the daemon then bails on
+			// len(nr.Results)==0, which would leave every per-channel sensor to go DOWN
+			// on grace expiry after each quiet run. "filtered" is skipped without a ping,
+			// like "disabled", but the daemon keeps the channel's row, so its last real
+			// delivery stays visible (a daemon that predates it prunes it like "disabled").
+			setNotifyResult(stats, entry.name, notifyResultFiltered)
+			continue
+		}
+
 		_ = channel.Notify(ctx, stats) // Ignore errors - notifications are non-critical
 	}
 
 	// Dispatch any remaining channels (custom or future ones) that weren't part of the fixed list above.
+	// NOTIFY_ON applies here too, under the same exemption: a channel is filtered because it
+	// SENDS, and the operator asking for quiet successes means all of them, not just the four
+	// the table happens to name today.
 	for _, ch := range o.notificationChannels {
 		if ch == nil || usedChannels[ch] {
+			continue
+		}
+		name := strings.TrimSpace(ch.Name())
+		if !notifyOnExempt(ch) && !notify.NotifyOnAllows(policy, outcome) {
+			o.logger.Skip("%s: filtered", name)
+			setNotifyResult(stats, name, notifyResultFiltered)
 			continue
 		}
 		_ = ch.Notify(ctx, stats)
@@ -196,6 +292,15 @@ func (o *Orchestrator) persistNotifyResults(stats *BackupStats) {
 func (o *Orchestrator) startNotificationGroup(ctx context.Context, stats *BackupStats) {
 	if o == nil {
 		return
+	}
+	// The threshold is decided (and, when the relay's answer expired, re-read) BEFORE the issue
+	// snapshot: its DEBUG lines must not fall between the snapshot and the dispatch.
+	o.notifyFilterDispatch = config.NotifyOnAlways
+	if o.notifyFilterRefresh != nil {
+		o.notifyFilterDispatch = o.notifyFilterRefresh(ctx)
+	}
+	if o.logger != nil {
+		o.logger.Info("Notification filter: %s", o.notifyFilterDispatch)
 	}
 	o.snapshotPreNotificationIssues(stats)
 	applyIssueExitCode(stats)
@@ -581,5 +686,13 @@ func describeEarlyErrorPhase(phase string) string {
 			return "Initialization failed"
 		}
 		return fmt.Sprintf("%s failed", phase)
+	}
+}
+
+// SetNotifyFilter hands the orchestrator the threshold decided at initialization and the refresh
+// that decides it again before dispatch (cmd/proxsave notify_filter.go).
+func (o *Orchestrator) SetNotifyFilter(refresh func(context.Context) string) {
+	if o != nil {
+		o.notifyFilterRefresh = refresh
 	}
 }

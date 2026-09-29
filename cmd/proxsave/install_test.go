@@ -759,8 +759,8 @@ func TestRunConfigWizardCLIReturnsCronSchedule(t *testing.T) {
 	tmpConfigPath := configPath + ".tmp"
 	// 6 toggle declines, empty scheduler-engine answer (defaults to daemon on a
 	// fresh install), empty healthcheck-mode answer (daemon-only prompt, defaults
-	// to centralized), then the run-at time.
-	reader := bufio.NewReader(strings.NewReader("n\nn\nn\nn\nn\nn\n\n\n03:15\n"))
+	// to centralized), empty notify-level answer (defaults to warning), then the run-at time.
+	reader := bufio.NewReader(strings.NewReader("n\nn\nn\nn\nn\nn\n\n\n\n03:15\n"))
 
 	var result installConfigResult
 	var err error
@@ -964,7 +964,7 @@ func TestRunConfigWizardCLIHealthcheckModeResult(t *testing.T) {
 		wantHCPrompt  bool
 		wantScheduler string
 	}{
-		{"daemon self", "n\nn\nn\nn\nn\nn\ndaemon\nself\n03:15\n", "self", true, "daemon"},
+		{"daemon self", "n\nn\nn\nn\nn\nn\ndaemon\nself\n\n03:15\n", "self", true, "daemon"},
 		{"daemon off", "n\nn\nn\nn\nn\nn\ndaemon\noff\n03:15\n", "off", true, "daemon"},
 		{"cron forces off without a prompt", "n\nn\nn\nn\nn\nn\ncron\n03:15\n", "off", false, "cron"},
 	}
