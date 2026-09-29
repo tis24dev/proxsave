@@ -30,7 +30,7 @@ func stubDeliveryStatus(t *testing.T, st health.DeliveryStatus, err error) *int 
 
 // relayAnswer is a schema_version 1 answer in state, with an ack for requested on channels.
 func relayAnswer(state, requested string, applied bool, channels ...string) health.DeliveryStatus {
-	st := health.DeliveryStatus{SchemaVersion: 1, State: state}
+	st := health.DeliveryStatus{SchemaVersion: 1, State: state, ValidForSeconds: 120}
 	st.NotifyPolicy = &health.NotifyPolicyAck{
 		ContractVersion: 1, Requested: requested, Applied: applied, Mode: "event_driven", Channels: channels,
 	}
@@ -111,7 +111,7 @@ func TestDecideNotifyFilter(t *testing.T) {
 			relay:      relayAnswer("ready", config.NotifyOnWarning, false, "telegram"),
 			wantStatus: hcStatusReady, wantEffective: config.NotifyOnAlways, wantReason: "policy_unconfirmed", wantReads: 1},
 		{name: "centralized ready from a relay without the ack", section: hcSectionInitialized,
-			relay:      health.DeliveryStatus{SchemaVersion: 1, State: "ready"},
+			relay:      health.DeliveryStatus{SchemaVersion: 1, State: "ready", ValidForSeconds: 120},
 			wantStatus: hcStatusReady, wantEffective: config.NotifyOnAlways, wantReason: "policy_unconfirmed", wantReads: 1},
 		{name: "centralized not configured", section: hcSectionInitialized,
 			relay:      relayAnswer("not_configured", config.NotifyOnWarning, true, "telegram"),
@@ -313,5 +313,45 @@ func TestNotifyFilterRefreshNeverReadsWithoutARelayAnswer(t *testing.T) {
 
 	if got := refresh(context.Background()); got != config.NotifyOnWarning || *reads != 0 {
 		t.Fatalf("refresh = %q after %d relay reads; want %q and none", got, *reads, config.NotifyOnWarning)
+	}
+}
+
+// The relay's own validity shortens the reuse: an answer already 100 s old when it arrived, of the 120 s the relay
+// vouches for, is read again after 20 s, not after 120.
+func TestNotifyFilterRefreshHonoursTheRelayValidity(t *testing.T) {
+	now := fakeNotifyClock(t)
+	cfg := centralizedNotifyConfig(t)
+	aged := relayAnswer("ready", config.NotifyOnWarning, true, "telegram")
+	aged.AgeSeconds = 100
+	reads := stubDeliveryStatus(t, aged, nil)
+	logger, _ := debugLogger(t)
+
+	d := decideNotifyFilter(context.Background(), cfg, logger, hcSectionInitialized, "notifications init")
+	refresh := notifyFilterRefresh(d, cfg, logger, hcSectionInitialized)
+
+	*now = now.Add(19 * time.Second)
+	if refresh(context.Background()); *reads != 1 {
+		t.Fatalf("relay read %d times 19 s in; want 1, the answer still has 1 s left", *reads)
+	}
+	*now = now.Add(time.Second)
+	if refresh(context.Background()); *reads != 2 {
+		t.Fatalf("relay read %d times 20 s in; want 2, the relay's validity is spent", *reads)
+	}
+}
+
+// An answer that failed to arrive keeps the local 120 s: the dispatch does not retry a relay that
+// just failed.
+func TestNotifyFilterRefreshKeepsAnUnavailableAnswerForTheLocalWindow(t *testing.T) {
+	now := fakeNotifyClock(t)
+	cfg := centralizedNotifyConfig(t)
+	reads := stubDeliveryStatus(t, health.DeliveryStatus{}, health.ErrDeliveryUnavailable)
+	logger, _ := debugLogger(t)
+
+	d := decideNotifyFilter(context.Background(), cfg, logger, hcSectionInitialized, "notifications init")
+	refresh := notifyFilterRefresh(d, cfg, logger, hcSectionInitialized)
+	*now = now.Add(notifyFilterValidity - time.Second)
+
+	if got := refresh(context.Background()); got != config.NotifyOnAlways || *reads != 1 {
+		t.Fatalf("refresh = %q after %d reads; want always and 1 read", got, *reads)
 	}
 }

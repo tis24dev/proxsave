@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 )
 
 // relayDeliveryBody is a schema_version 1 answer in the shape proxsave_server
@@ -17,7 +18,7 @@ const relayDeliveryBody = `{
  "capabilities": {"delivery_evidence": true, "event_driven_notify_checks": true},
  "notify_policy": {"contract_version": 1, "requested": "warning", "applied": true, "mode": "event_driven",
    "revision": 3, "channels": ["telegram"]},
- "evaluated_at": "2026-09-29T10:00:00Z", "age_seconds": 12, "valid_for_seconds": 21600,
+ "evaluated_at": "2026-09-29T10:00:00Z", "age_seconds": 12, "valid_for_seconds": 120,
  "state": "ready", "reason_codes": [], "alert_worker": "running",
  "checks": {
    "alive": {"present": true, "armed": true, "status": "up", "configured_down_routes": 1, "verified_down_routes": 1},
@@ -47,7 +48,7 @@ func TestFetchDeliveryStatusParsesTheRelayAnswer(t *testing.T) {
 	if gotAuth != "sekret-token" || gotSID != "123456789012" {
 		t.Fatalf("auth=%q server_id=%q; want the per-server auth of the config poll", gotAuth, gotSID)
 	}
-	if st.State != "ready" || st.ProjectCode != "proj1" || st.AgeSeconds != 12 || st.ValidForSeconds != 21600 {
+	if st.State != "ready" || st.ProjectCode != "proj1" || st.AgeSeconds != 12 || st.ValidForSeconds != 120 {
 		t.Fatalf("unexpected status: %+v", st)
 	}
 	if st.Checks.Alive.VerifiedDownRoutes != 1 || st.Checks.Backup.ConfiguredDownRoutes != 1 || !st.Checks.Backup.Armed {
@@ -70,10 +71,14 @@ func TestFetchDeliveryStatusRejectsWhatIsNotAUsableAnswer(t *testing.T) {
 		{"feature off or reader down", http.StatusServiceUnavailable, `{"error":"HC_DELIVERY_DISABLED"}`},
 		{"auth rejected", http.StatusForbidden, ``},
 		{"bad JSON", http.StatusOK, `{"schema_version": 1, "state": `},
-		{"newer schema", http.StatusOK, `{"schema_version": 2, "state": "ready"}`},
-		{"missing schema", http.StatusOK, `{"state": "ready"}`},
-		{"state outside the contract", http.StatusOK, `{"schema_version": 1, "state": "project_missing"}`},
-		{"empty state", http.StatusOK, `{"schema_version": 1, "state": ""}`},
+		{"newer schema", http.StatusOK, `{"schema_version": 2, "state": "ready", "valid_for_seconds": 120}`},
+		{"missing schema", http.StatusOK, `{"state": "ready", "valid_for_seconds": 120}`},
+		{"state outside the contract", http.StatusOK, `{"schema_version": 1, "state": "project_missing", "valid_for_seconds": 120}`},
+		{"empty state", http.StatusOK, `{"schema_version": 1, "state": "", "valid_for_seconds": 120}`},
+		// The relay's own validity decides too: an evaluation it no longer vouches for is not an answer.
+		{"expired evaluation", http.StatusOK, `{"schema_version": 1, "state": "ready", "age_seconds": 120, "valid_for_seconds": 120}`},
+		{"no validity", http.StatusOK, `{"schema_version": 1, "state": "ready"}`},
+		{"negative age", http.StatusOK, `{"schema_version": 1, "state": "ready", "age_seconds": -1, "valid_for_seconds": 120}`},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -103,7 +108,7 @@ func TestFetchDeliveryStatusAcceptsEveryContractState(t *testing.T) {
 	for state := range DeliveryStates {
 		t.Run(state, func(t *testing.T) {
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				_, _ = io.WriteString(w, `{"schema_version": 1, "state": "`+state+`"}`)
+				_, _ = io.WriteString(w, `{"schema_version": 1, "state": "`+state+`", "valid_for_seconds": 120}`)
 			}))
 			defer srv.Close()
 			st, err := FetchDeliveryStatus(context.Background(), srv.Client(), srv.URL, "1", "s")
@@ -180,5 +185,25 @@ func TestFetchCentralizedConfigWithPolicySendsTheContract(t *testing.T) {
 	}
 	if gotChannels != "none" || gotNotifyOn != "warning" {
 		t.Fatalf("empty channel set sent as channels=%q notify_on=%q; want none, warning", gotChannels, gotNotifyOn)
+	}
+}
+
+// Remaining is what is left of the relay's own validity, never more than the caller's limit.
+func TestDeliveryStatusRemaining(t *testing.T) {
+	cases := []struct {
+		age, validFor int
+		want          time.Duration
+	}{
+		{0, 120, 120 * time.Second},
+		{100, 120, 20 * time.Second},
+		{0, 21600, 120 * time.Second},
+		{120, 120, 0},
+		{0, 0, 0},
+	}
+	for _, tc := range cases {
+		st := DeliveryStatus{AgeSeconds: tc.age, ValidForSeconds: tc.validFor}
+		if got := st.Remaining(120 * time.Second); got != tc.want {
+			t.Errorf("age %d valid_for %d: Remaining = %s; want %s", tc.age, tc.validFor, got, tc.want)
+		}
 	}
 }

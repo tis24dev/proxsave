@@ -42,7 +42,8 @@ const (
 	hcSectionInitialized     = "initialized"
 )
 
-// notifyFilterValidity is how long a relay answer may be reused for the decision before dispatch.
+// notifyFilterValidity is how long a relay answer may be reused for the decision before dispatch, at most: the
+// relay's own validity (valid_for_seconds less age_seconds) can make it shorter.
 const notifyFilterValidity = 120 * time.Second
 
 var fetchDeliveryStatus = health.FetchDeliveryStatus
@@ -56,6 +57,7 @@ type notifyFilterDecision struct {
 	effective string
 	reason    string
 	readAt    time.Time
+	validFor  time.Duration
 }
 
 func deliveryStatusWord(state string) string {
@@ -105,13 +107,14 @@ func decideNotifyFilter(ctx context.Context, cfg *config.Config, logger *logging
 	default:
 		secret, _ := identity.LoadNotifySecret(cfg.BaseDir)
 		st, err := fetchDeliveryStatus(ctx, nil, cfg.ServerAPIHost, cfg.ServerID, secret)
-		d.readAt = notifyFilterNow()
+		d.readAt, d.validFor = notifyFilterNow(), notifyFilterValidity
 		if err != nil {
 			d.status, d.reason = hcStatusUnknown, "delivery_status_unavailable"
 			logging.DebugStep(logger, op, "healthchecks delivery unavailable: %v", err)
 			break
 		}
 		d.status = deliveryStatusWord(st.State)
+		d.validFor = st.Remaining(notifyFilterValidity)
 		confirmed := st.PolicyConfirmed(d.requested, enabledNotifyChannels(cfg))
 		logging.DebugStep(logger, op, "healthchecks delivery state=%s alive_routes=%d/%d backup_routes=%d/%d policy_confirmed=%t reasons=%s",
 			st.State, st.Checks.Alive.VerifiedDownRoutes, st.Checks.Alive.ConfiguredDownRoutes,
@@ -159,11 +162,11 @@ func logNotifyFilterInit(opts backupModeOptions, orch *orchestrator.Orchestrator
 }
 
 // notifyFilterRefresh is the refresh handed to the orchestrator for the decision before dispatch:
-// it reuses the last decision while the relay's answer is younger than notifyFilterValidity, or
+// it reuses the last decision while the relay's answer is still valid (notifyFilterValidity at most), or
 // when the decision read no relay answer at all, and decides again otherwise.
 func notifyFilterRefresh(d notifyFilterDecision, cfg *config.Config, logger *logging.Logger, section string) func(context.Context) string {
 	return func(ctx context.Context) string {
-		if d.readAt.IsZero() || notifyFilterNow().Sub(d.readAt) < notifyFilterValidity {
+		if d.readAt.IsZero() || notifyFilterNow().Sub(d.readAt) < d.validFor {
 			return d.effective
 		}
 		d = decideNotifyFilter(ctx, cfg, logger, section, "notifications dispatch")

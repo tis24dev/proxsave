@@ -85,7 +85,26 @@ func FetchDeliveryStatus(ctx context.Context, client *http.Client, serverAPIHost
 	if st.SchemaVersion != 1 || !DeliveryStates[st.State] {
 		return DeliveryStatus{}, fmt.Errorf("%w: schema %d state %q", ErrDeliveryUnavailable, st.SchemaVersion, st.State)
 	}
+	// The relay states how old its evaluation is and how long it vouches for it: one it no longer vouches for is
+	// not an answer.
+	if st.AgeSeconds < 0 || st.ValidForSeconds <= 0 || st.AgeSeconds >= st.ValidForSeconds {
+		return DeliveryStatus{}, fmt.Errorf("%w: expired (age %ds, valid for %ds)", ErrDeliveryUnavailable, st.AgeSeconds, st.ValidForSeconds)
+	}
 	return st, nil
+}
+
+// Remaining is how much longer the evaluation may be used, from when it was received: what is left of the relay's
+// valid_for_seconds after age_seconds, never more than limit.
+func (s DeliveryStatus) Remaining(limit time.Duration) time.Duration {
+	left := time.Duration(s.ValidForSeconds-s.AgeSeconds) * time.Second
+	switch {
+	case left <= 0:
+		return 0
+	case left > limit:
+		return limit
+	default:
+		return left
+	}
 }
 
 // PolicyConfirmed reports whether the relay applied exactly this request: same threshold,
