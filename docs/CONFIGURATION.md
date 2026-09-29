@@ -1673,7 +1673,7 @@ BACKUP_SYSCTL_CONFIG=true          # /etc/sysctl.conf, /etc/sysctl.d/
 
 # Kernel modules. /etc/kernel/cmdline and /etc/kernel/proxmox-boot-uuids are kept for
 # reference only under /var/lib/proxsave-info/boot/, which a restore never writes to the system
-BACKUP_KERNEL_MODULES=true         # /etc/modules, /etc/modprobe.d/, /etc/kernel/cmdline
+BACKUP_KERNEL_MODULES=true         # /etc/modules, /etc/modprobe.d/, /etc/kernel/cmdline, /etc/kernel/proxmox-boot-uuids
 
 # Firewall rules (the dashboard form's "Backup firewall rules" toggle writes this one)
 BACKUP_FIREWALL_RULES=false        # iptables, nftables

@@ -15,7 +15,7 @@ var postInstallComponentDescriptions = map[string]string{
 	"BACKUP_DATASTORE_CONFIGS":      "Proxmox Backup Server datastore definitions (datastore.cfg). PBS-only; disable on a PVE host.",
 	"BACKUP_FIREWALL_RULES":         "Host-level firewall rules. Disable if you do not manage a firewall on this node.",
 	"BACKUP_INSTALLED_PACKAGES":     "The list of installed Debian packages, so the package set can be reproduced. Low cost; usually keep it.",
-	"BACKUP_KERNEL_MODULES":         "Kernel module configuration (/etc/modules, modprobe.d) and the kernel command line (/etc/kernel/cmdline). Disable if you have no custom module setup.",
+	"BACKUP_KERNEL_MODULES":         "Kernel module configuration (/etc/modules, modprobe.d), plus reference copies of /etc/kernel/cmdline and /etc/kernel/proxmox-boot-uuids. Disable if you have no custom module setup.",
 	"BACKUP_NETWORK_CONFIGS":        "Network configuration (/etc/network/interfaces and related). Generally keep enabled.",
 	"BACKUP_PBS_ACME_ACCOUNTS":      "PBS ACME (Let's Encrypt) account registrations. PBS-only; disable if PBS does not use ACME certificates.",
 	"BACKUP_PBS_ACME_PLUGINS":       "PBS ACME DNS-challenge plugin definitions. PBS-only; disable if you do not use ACME DNS plugins.",
