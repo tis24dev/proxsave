@@ -50,3 +50,50 @@ func CheckHealthcheckNotifyFilter(ctx context.Context, configPath, baseDir, serv
 	nf.Decision = notifyfilter.Decide(ctx, cfg, nil, section, "")
 	return nf
 }
+
+// HealthcheckNotifyLines is the Notifications block both check screens print, the dashboard and the
+// CLI installer (maintainer-approved text): the setting and the filter applied now. ok is false when
+// backup.env could not be read, and the block is then not printed.
+func HealthcheckNotifyLines(selfMode bool, nf HealthcheckNotifyFilter) (setting, current string, ok bool) {
+	if selfMode || nf.Self {
+		return "Self mode", "Self mode", true
+	}
+	if !nf.Loaded {
+		return "", "", false
+	}
+	setting, current = "NOTIFY_ON="+nf.Requested, nf.Effective
+	switch {
+	case nf.Invalid:
+		setting = "NOTIFY_ON=" + nf.Raw + " (not valid, always used)"
+	case nf.FromDefault:
+		setting += " (default)"
+	}
+	if why := healthcheckNotifyReason(nf.Decision); why != "" {
+		current += " (" + why + ")"
+	}
+	return setting, current, true
+}
+
+// healthcheckNotifyReason says why the threshold applied differs from the one requested.
+func healthcheckNotifyReason(d notifyfilter.Decision) string {
+	switch d.Reason {
+	case notifyfilter.ReasonPolicyUnconfirmed:
+		return "setting not yet applied by the server"
+	case notifyfilter.ReasonStatusUnavailable:
+		return "Healthchecks status unavailable"
+	case notifyfilter.ReasonNotTransmitting:
+		return "daemon not transmitting"
+	case notifyfilter.ReasonAlertsNotVerified:
+		switch d.Status {
+		case notifyfilter.StatusNotConfigured:
+			return "Healthchecks not configured"
+		case notifyfilter.StatusNotVerified:
+			return "Healthchecks not verified"
+		case notifyfilter.StatusDegraded:
+			return "Healthchecks degraded"
+		default:
+			return "Healthchecks status unknown"
+		}
+	}
+	return ""
+}

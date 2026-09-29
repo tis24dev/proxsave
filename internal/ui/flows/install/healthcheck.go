@@ -10,7 +10,6 @@ import (
 
 	"github.com/tis24dev/proxsave/internal/health"
 	"github.com/tis24dev/proxsave/internal/installer"
-	"github.com/tis24dev/proxsave/internal/notifyfilter"
 	"github.com/tis24dev/proxsave/internal/orchestrator"
 	"github.com/tis24dev/proxsave/internal/ui/components"
 	"github.com/tis24dev/proxsave/internal/ui/shell"
@@ -334,45 +333,9 @@ type healthcheckNotifyBlock struct {
 
 // newHealthcheckNotifyBlock renders the decision of one Check; nil when backup.env could not be read.
 func newHealthcheckNotifyBlock(selfMode bool, nf orchestrator.HealthcheckNotifyFilter) *healthcheckNotifyBlock {
-	if selfMode || nf.Self {
-		return &healthcheckNotifyBlock{Setting: "Self mode", Current: "Self mode"}
-	}
-	if !nf.Loaded {
+	setting, current, ok := orchestrator.HealthcheckNotifyLines(selfMode, nf)
+	if !ok {
 		return nil
 	}
-	nb := &healthcheckNotifyBlock{Setting: "NOTIFY_ON=" + nf.Requested, Current: nf.Effective}
-	switch {
-	case nf.Invalid:
-		nb.Setting = "NOTIFY_ON=" + nf.Raw + " (not valid, always used)"
-	case nf.FromDefault:
-		nb.Setting += " (default)"
-	}
-	if why := healthcheckNotifyReason(nf.Decision); why != "" {
-		nb.Current += " (" + why + ")"
-	}
-	return nb
-}
-
-// healthcheckNotifyReason says why the threshold applied differs from the one requested.
-func healthcheckNotifyReason(d notifyfilter.Decision) string {
-	switch d.Reason {
-	case notifyfilter.ReasonPolicyUnconfirmed:
-		return "setting not yet applied by the server"
-	case notifyfilter.ReasonStatusUnavailable:
-		return "Healthchecks status unavailable"
-	case notifyfilter.ReasonNotTransmitting:
-		return "daemon not transmitting"
-	case notifyfilter.ReasonAlertsNotVerified:
-		switch d.Status {
-		case notifyfilter.StatusNotConfigured:
-			return "Healthchecks not configured"
-		case notifyfilter.StatusNotVerified:
-			return "Healthchecks not verified"
-		case notifyfilter.StatusDegraded:
-			return "Healthchecks degraded"
-		default:
-			return "Healthchecks status unknown"
-		}
-	}
-	return ""
+	return &healthcheckNotifyBlock{Setting: setting, Current: current}
 }
