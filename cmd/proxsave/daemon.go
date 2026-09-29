@@ -2346,11 +2346,17 @@ func (d *daemon) reportNotifyOutcomes(ctx context.Context, r backupReporter, rid
 	sort.Strings(names) // deterministic ping/record order
 	keep := make([]string, 0, len(names))
 	for _, name := range names {
+		key := health.CheckKeyNotify(name)
+		if strings.EqualFold(strings.TrimSpace(nr.Results[name]), "filtered") {
+			// NOTIFY_ON kept this configured channel quiet: no ping, and its row keeps the last
+			// real delivery instead of being pruned like a switched-off channel.
+			keep = append(keep, key)
+			continue
+		}
 		suffix, down, skip := severityToSuffix(nr.Results[name])
 		if skip {
 			continue // "disabled"/unknown: the child did not really send this channel
 		}
-		key := health.CheckKeyNotify(name)
 		keep = append(keep, key)
 		var perr error
 		if r == nil || !r.HasCheck(key) {
@@ -2363,7 +2369,8 @@ func (d *daemon) reportNotifyOutcomes(ctx context.Context, r backupReporter, rid
 		}
 		d.recordNotifyPing(key, down, perr)
 	}
-	// Prune notify rows for channels the child did NOT attempt this run (disabled/removed),
+	// Prune notify rows for channels the child did NOT attempt this run (disabled/removed; a
+	// filtered channel is kept above),
 	// so a stale channel stops showing a phantom row. Only reached after the rid guard, so a
 	// crashed/mismatched child never wipes a still-valid panel (F09-07).
 	d.pruneNotifyRecords(keep)

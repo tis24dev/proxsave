@@ -237,10 +237,10 @@ func (o *Orchestrator) dispatchNotifications(ctx context.Context, stats *BackupS
 			// Record the suppression so stats.NotifyResults stays non-empty. An empty
 			// map makes persistNotifyResults write {} and the daemon then bails on
 			// len(nr.Results)==0, which would leave every per-channel sensor to go DOWN
-			// on grace expiry after each quiet run. "disabled" is already the severity
-			// severityToSuffix skips without pinging, and pruneNotifyRecords clears the
-			// row, so a suppressed channel reports nothing instead of reporting wrong.
-			setNotifyResult(stats, entry.name, "disabled")
+			// on grace expiry after each quiet run. "filtered" is skipped without a ping,
+			// like "disabled", but the daemon keeps the channel's row, so its last real
+			// delivery stays visible (a daemon that predates it prunes it like "disabled").
+			setNotifyResult(stats, entry.name, notifyResultFiltered)
 			continue
 		}
 
@@ -258,7 +258,7 @@ func (o *Orchestrator) dispatchNotifications(ctx context.Context, stats *BackupS
 		name := strings.TrimSpace(ch.Name())
 		if !notifyOnExempt(ch) && !notify.NotifyOnAllows(policy, outcome) {
 			o.logger.Skip("%s: filtered", name)
-			setNotifyResult(stats, name, "disabled")
+			setNotifyResult(stats, name, notifyResultFiltered)
 			continue
 		}
 		_ = ch.Notify(ctx, stats)

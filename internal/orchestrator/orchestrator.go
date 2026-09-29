@@ -165,7 +165,7 @@ type BackupStats struct {
 	EmailStatus    string
 	// NotifyResults maps each dispatched notification channel's display name
 	// ("Email"/"Telegram"/"Gotify"/"Webhook") to its send severity
-	// ("ok"/"warning"/"error"/"disabled"). It is the per-channel outcome the daemon
+	// ("ok"/"warning"/"error"/"disabled"/"filtered"). It is the per-channel outcome the daemon
 	// reads back (via the notify-results handoff file) to ping one healthchecks check
 	// per enabled channel (Fase 2B / R4). Nil until the first notifier records.
 	NotifyResults map[string]string

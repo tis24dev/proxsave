@@ -23,7 +23,8 @@ const EnvRunID = "PROXSAVE_RUN_ID"
 
 // NotifyResults is the per-run handoff the backup child writes and the daemon reads. Results
 // maps a notification channel's display name ("Email"/"Telegram"/"Gotify"/"Webhook") to its
-// send severity ("ok"/"warning"/"error"/"disabled"); the daemon maps that to a /0 or /1 ping.
+// send severity ("ok"/"warning"/"error"/"disabled"/"filtered"); the daemon maps that to a /0 or /1 ping,
+// or to no ping for "disabled" (row pruned) and "filtered" (NOTIFY_ON kept it quiet; row kept).
 type NotifyResults struct {
 	RID     string            `json:"rid"`
 	TS      int64             `json:"ts"`

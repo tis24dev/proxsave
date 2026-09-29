@@ -159,7 +159,7 @@ func TestTheExemptionCannotBeClaimedByNameAlone(t *testing.T) {
 		t.Fatalf("a sending channel named %q dispatched %d times on a clean run under NOTIFY_ON=failure, want 0; log:\n%s",
 			healthchecksSectionName, impostor.calls, out)
 	}
-	if got := stats.NotifyResults[healthchecksSectionName]; got != "disabled" {
+	if got := stats.NotifyResults[healthchecksSectionName]; got != "filtered" {
 		t.Fatalf("NotifyResults[%s] = %q; a filtered impostor is recorded like any other suppressed channel", healthchecksSectionName, got)
 	}
 }
@@ -203,9 +203,10 @@ func TestABrokenChannelStillReportsItselfBelowTheThreshold(t *testing.T) {
 // write {}, and the daemon bails on len(nr.Results)==0 -- meaning every quiet run leaves
 // the per-channel proxsave-notify-* sensors unpinged until they go DOWN on their own. The
 // operator then gets the alert storm they installed NOTIFY_ON to stop, from the one
-// subsystem that is supposed to stay authoritative. "disabled" is the severity
-// severityToSuffix already skips without pinging and pruneNotifyRecords already clears.
-func TestASuppressedChannelIsRecordedAsDisabledForTheDaemonHandoff(t *testing.T) {
+// subsystem that is supposed to stay authoritative. "filtered" is skipped without a ping like
+// "disabled", but the daemon keeps the channel's row: the channel is configured, it only did not
+// send this run, and its last real delivery stays visible.
+func TestASuppressedChannelIsRecordedAsFilteredForTheDaemonHandoff(t *testing.T) {
 	cfg := &config.Config{WebhookEnabled: true, NotifyOn: config.NotifyOnFailure}
 	stats := &BackupStats{}
 	spy, out := dispatchWith(t, cfg, stats, "Webhook")
@@ -216,8 +217,8 @@ func TestASuppressedChannelIsRecordedAsDisabledForTheDaemonHandoff(t *testing.T)
 	if len(stats.NotifyResults) == 0 {
 		t.Fatal("NotifyResults is empty after a suppressed run; the daemon reads len(Results)==0 as \"nothing to report\" and skips the whole per-channel report")
 	}
-	if got := stats.NotifyResults["Webhook"]; got != "disabled" {
-		t.Fatalf("NotifyResults[Webhook] = %q; want \"disabled\", the severity the daemon skips without pinging", got)
+	if got := stats.NotifyResults["Webhook"]; got != "filtered" {
+		t.Fatalf("NotifyResults[Webhook] = %q; want \"filtered\", which the daemon skips without pinging and without pruning", got)
 	}
 	// Exactly once. A suppressed channel is claimed in usedChannels before the gate, so
 	// the remainder loop cannot pick it up and skip it a second time.
