@@ -2070,8 +2070,9 @@ func (d *daemon) fetchCentralized(ctx context.Context) (alive, backup string, ch
 	}
 	// A poll that sent a policy no longer wanted may have reached the relay after a newer one
 	// and put the old policy back there: send the wanted one again, so the relay's last word is
-	// always the policy wanted now.
-	for i := 0; i < notifyPolicyResends && d.recordNotifyPolicyAck(want, cfg.NotifyPolicy); i++ {
+	// always the policy wanted now. Every answer is recorded, the last resend's included: the
+	// ack is recorded before the bound is checked.
+	for i := 0; d.recordNotifyPolicyAck(want, cfg.NotifyPolicy) && i < notifyPolicyResends; i++ {
 		want = d.wantedNotifyPolicy()
 		next, err := health.FetchCentralizedConfigWithPolicy(ctx, nil, d.cfg.ServerAPIHost, d.cfg.ServerID, secret, want.channels, want.notifyOn)
 		if err != nil {

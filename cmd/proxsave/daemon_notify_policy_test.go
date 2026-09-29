@@ -281,3 +281,33 @@ func TestAStalePolicyPollIsFollowedByTheWantedOne(t *testing.T) {
 		t.Fatalf("applied policy = %+v; want %+v", got, newer)
 	}
 }
+
+// Two changes while polls are in flight: every resend's answer is recorded, the last one included,
+// so the daemon ends on the relay's confirmation of the policy wanted now (Greptile review of PR
+// #323, 16:42).
+func TestTheLastResendAnswerIsRecorded(t *testing.T) {
+	relay := &policyRelay{applied: true}
+	d := policyDaemon(t, relay, "NOTIFY_ON=warning\nTELEGRAM_ENABLED=true\n")
+	second := notifyPolicy{notifyOn: config.NotifyOnFailure, channels: []string{"telegram"}}
+	third := notifyPolicy{notifyOn: config.NotifyOnAlways, channels: []string{"telegram"}}
+	relay.onPoll = func(n int) {
+		d.mu.Lock()
+		defer d.mu.Unlock()
+		switch n {
+		case 1:
+			d.notifyWant = &second
+		case 2:
+			d.notifyWant = &third
+		}
+	}
+
+	_ = d.buildReporter(context.Background())
+
+	polls := relay.sent()
+	if len(polls) != 3 || !polls[2].equal(third) {
+		t.Fatalf("relay polls = %+v; want warning, failure, always", polls)
+	}
+	if got := d.appliedNotifyPolicy(); got == nil || !got.equal(third) {
+		t.Fatalf("applied policy = %+v; want the last resend's confirmation %+v", got, third)
+	}
+}
