@@ -248,7 +248,7 @@ If your restore scope includes the network category (FULL, SYSTEM BASE, or a CUS
 Before overwriting anything, ProxSave writes a safety backup of the current configuration to `<BASE_DIR>/restore/<YYYYMMDD_HHMMSS>/restore_backup_<YYYYMMDD_HHMMSS>.tar.gz` (`/opt/proxsave/restore/...` by default) and keeps it, outside `/tmp` so that it survives the reboot the restore recommends. At the end it prints where it is:
 
 ```text
-Safety backup preserved at: /opt/proxsave/restore/20251120_143052/restore_backup_20251120_143052.tar.gz
+Safety backup preserved at: /opt/proxsave/restore/20251120_143052/restore_backup_20251120_143118.tar.gz
 Safety backup - kept until removed, ProxSave never deletes it
 ```
 
@@ -484,14 +484,14 @@ Because you chose RECOVERY, ProxSave restores config.db with the cluster service
 Selected RECOVERY cluster restore: full cluster database will be restored; ensure other nodes are isolated
 
 Creating Safety backup of current configuration...
-Safety backup location: /opt/proxsave/restore/20251120_143052/restore_backup_20251120_143052.tar.gz
+Safety backup location: /opt/proxsave/restore/20251120_143052/restore_backup_20251120_143118.tar.gz
 
 Preparing system for cluster database restore: stopping PVE services and unmounting /etc/pve
 
 ... extraction of the selected categories ...
 
 Restore completed successfully.
-Safety backup preserved at: /opt/proxsave/restore/20251120_143052/restore_backup_20251120_143052.tar.gz
+Safety backup preserved at: /opt/proxsave/restore/20251120_143052/restore_backup_20251120_143118.tar.gz
 Safety backup - kept until removed, ProxSave never deletes it
 ```
 
@@ -541,8 +541,10 @@ ls -la /etc/pve/lxc/
 # qm start <vmid>
 # pct start <ctid>
 
-# 3. Remove safety backup (after thorough verification)
-rm /opt/proxsave/restore/*/restore_backup_*.tar.gz
+# 3. Remove this restore's safety backup (after thorough verification). TIMESTAMP is
+#    its directory, from its "Safety backup preserved at:" line; the logs and the
+#    safety backups of earlier restores stay.
+rm /opt/proxsave/restore/TIMESTAMP/restore_backup_*.tar.gz
 
 # 4. Update backups schedule if needed
 cat /etc/pve/vzdump.cron
@@ -1539,7 +1541,8 @@ journalctl -xe -u pve-cluster
 ```bash
 # Rollback to safety backup
 systemctl stop pve-cluster
-tar -xzf /opt/proxsave/restore/*/restore_backup_*.tar.gz -C /
+# TIMESTAMP: the directory of the restore to undo, from its "Safety backup preserved at:" line
+tar -xzf /opt/proxsave/restore/TIMESTAMP/restore_backup_*.tar.gz -C /
 systemctl start pve-cluster
 ```
 
@@ -1742,7 +1745,8 @@ umount -f /etc/pve 2>/dev/null
 fusermount -uz /etc/pve 2>/dev/null
 
 # 3. Restore from safety backup
-tar -xzf /opt/proxsave/restore/*/restore_backup_*.tar.gz -C /
+# TIMESTAMP: the directory of the restore to undo, from its "Safety backup preserved at:" line
+tar -xzf /opt/proxsave/restore/TIMESTAMP/restore_backup_*.tar.gz -C /
 
 # 4. Restart services
 systemctl start pve-cluster

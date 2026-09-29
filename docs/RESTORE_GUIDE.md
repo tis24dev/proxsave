@@ -722,7 +722,7 @@ In the TUI this second gate is a danger-styled confirm with `Overwrite and resto
 ```text
 Creating safety backup of existing files...
 Safety backup created successfully.
-Safety backup location: /opt/proxsave/restore/20251120_143052/restore_backup_20251120_143052.tar.gz
+Safety backup location: /opt/proxsave/restore/20251120_143052/restore_backup_20251120_143118.tar.gz
 
 Safety backup - holds the current versions of the files this restore overwrites (tar.gz, paths relative to /)
 ```
@@ -815,7 +815,7 @@ Restore completed successfully.
 Temporary decrypted bundle removed.
 Detailed restore log: /opt/proxsave/restore/20251120_143052/restore_20251120_143409_1.log
 Export directory: /opt/proxsave/proxmox-config-export-20251120-143052/
-Safety backup preserved at: /opt/proxsave/restore/20251120_143052/restore_backup_20251120_143052.tar.gz
+Safety backup preserved at: /opt/proxsave/restore/20251120_143052/restore_backup_20251120_143118.tar.gz
 Safety backup - kept until removed, ProxSave never deletes it
 
 Services - some restored files take effect only when the services that read them restart
@@ -1286,7 +1286,8 @@ journalctl -xe -u pve-cluster
 # - Certificate issues
 
 # Solution: Restore from safety backup
-tar -xzf /opt/proxsave/restore/*/restore_backup_*.tar.gz -C /
+# TIMESTAMP: the directory of the restore to undo, from its "Safety backup preserved at:" line
+tar -xzf /opt/proxsave/restore/TIMESTAMP/restore_backup_*.tar.gz -C /
 systemctl restart pve-cluster pvedaemon pveproxy pvestatd
 ```
 
@@ -1994,7 +1995,7 @@ Multiple layers of protection prevent data loss and corruption during restore.
 
 **Rollback Command**:
 ```bash
-tar -xzf /opt/proxsave/restore/20251120_143052/restore_backup_20251120_143052.tar.gz -C /
+tar -xzf /opt/proxsave/restore/20251120_143052/restore_backup_20251120_143118.tar.gz -C /
 ```
 
 **If Safety Backup Fails**:
@@ -2470,7 +2471,8 @@ systemctl status pve-cluster
 journalctl -xe -u pve-cluster
 
 # Restore from safety backup
-tar -xzf /opt/proxsave/restore/*/restore_backup_*.tar.gz -C /
+# TIMESTAMP: the directory of the restore to undo, from its "Safety backup preserved at:" line
+tar -xzf /opt/proxsave/restore/TIMESTAMP/restore_backup_*.tar.gz -C /
 
 # Restart services (the HA services last, once pve-cluster is up)
 systemctl restart pve-cluster pvedaemon pveproxy pvestatd
@@ -2501,7 +2503,8 @@ systemctl restart pve-cluster
 journalctl -u pve-cluster | tail -50
 
 # If config.db corrupted, restore safety backup
-tar -xzf /opt/proxsave/restore/*/restore_backup_*.tar.gz -C /
+# TIMESTAMP: the directory of the restore to undo, from its "Safety backup preserved at:" line
+tar -xzf /opt/proxsave/restore/TIMESTAMP/restore_backup_*.tar.gz -C /
 systemctl restart pve-cluster
 ```
 
@@ -2833,7 +2836,8 @@ A: Use the safety backup:
 systemctl stop pve-cluster pvedaemon pveproxy pvestatd
 
 # Extract safety backup
-tar -xzf /opt/proxsave/restore/*/restore_backup_*.tar.gz -C /
+# TIMESTAMP: the directory of the restore to undo, from its "Safety backup preserved at:" line
+tar -xzf /opt/proxsave/restore/TIMESTAMP/restore_backup_*.tar.gz -C /
 
 # Restart services
 systemctl restart pve-cluster pvedaemon pveproxy pvestatd
