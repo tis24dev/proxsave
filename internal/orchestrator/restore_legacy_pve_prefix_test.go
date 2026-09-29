@@ -27,6 +27,9 @@ func TestDetectLegacyPVEPrefix(t *testing.T) {
 		{"canonical wins over a nested copy", []string{"./root/old/etc/pve/storage.cfg", "./etc/pve/storage.cfg"}, ""},
 		{"no PVE at all", []string{"./etc/hostname", "./etc/proxmox-backup/datastore.cfg"}, ""},
 		{"two candidates", []string{"./a/etc/pve/x", "./b/etc/pve/y"}, ""},
+		{"only PVE roots and their parents under the prefix", []string{"./host", "./host/etc", "./host/var", "./host/var/lib", "./host/etc/pve/storage.cfg", "./host/etc/vzdump.conf", "./host/etc/ceph/ceph.conf", "./host/var/lib/pve-cluster/config.db"}, "host"},
+		{"a system tree under the prefix is a copy", []string{"./home/u/x/etc/pve/storage.cfg", "./home/u/x/etc/hostname"}, ""},
+		{"an archive marker under the prefix is a copy", []string{"./home/u/x/etc/pve/storage.cfg", "./home/u/x/var/lib/proxsave-info/backup_metadata.txt"}, ""},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -189,33 +192,46 @@ func TestCanonicalArchiveIsNotRemapped(t *testing.T) {
 	}
 }
 
-// Only the PVE recipe wrote PVE files under the prefix, so the remap needs the archive's
-// own metadata to say it covered PVE. A PBS host whose /home holds an extracted PVE
-// archive, which every backup collects whole, has one X/etc/pve too: it is a copy, and it
-// stays where it is. So does any single X/etc/pve of an archive without readable metadata.
+// Only the PVE recipe wrote PVE files under the prefix, and nothing else, so the remap
+// needs the archive's own metadata to say it covered PVE and a prefix that holds PVE files
+// only. An extracted PVE archive under /home, which every backup collects whole, has one
+// X/etc/pve too, next to X/etc/hostname and X/var/lib/proxsave-info: it is a copy and
+// stays where it is, whatever the metadata says. So does any single X/etc/pve of an
+// archive without readable metadata.
 func TestLegacyPrefixNeedsPVEMetadata(t *testing.T) {
 	orig := restoreFS
 	t.Cleanup(func() { restoreFS = orig })
 	restoreFS = osFS{}
 
+	legacyShaped := []legacyTarEntry{
+		{name: "./etc/hostname", content: "pve1\n"},
+		{name: "./host/etc/pve/storage.cfg", content: "dir: local\n"},
+		{name: "./host/etc/corosync/authkey", content: "k"},
+		{name: "./host/var/lib/pve-cluster/config.db", content: "db"},
+	}
 	homeCopy := []legacyTarEntry{
 		{name: "./etc/proxmox-backup/datastore.cfg", content: "datastore: store1\n"},
+		{name: "./home/admin/pve1-extract/etc/hostname", content: "pve1\n"},
 		{name: "./home/admin/pve1-extract/etc/pve/storage.cfg", content: "dir: local\n"},
 		{name: "./home/admin/pve1-extract/etc/corosync/authkey", content: "k"},
 		{name: "./home/admin/pve1-extract/var/lib/pve-cluster/config.db", content: "db"},
+		{name: "./home/admin/pve1-extract/var/lib/proxsave-info/backup_metadata.txt", content: "BACKUP_TYPE=pve\n"},
 	}
 	for _, tc := range []struct {
 		name     string
+		entries  []legacyTarEntry
 		metadata string
 		want     string
 	}{
-		{"pbs backup with a PVE copy under /home", "BACKUP_TYPE=pbs\n", ""},
-		{"no metadata", "", ""},
-		{"pve backup", "BACKUP_TYPE=pve\n", "home/admin/pve1-extract"},
-		{"dual backup by its targets", "BACKUP_TARGETS=pve,pbs\n", "home/admin/pve1-extract"},
+		{"pbs backup with a PVE copy under /home", homeCopy, "BACKUP_TYPE=pbs\n", ""},
+		{"pve backup with a PVE copy under /home", homeCopy, "BACKUP_TYPE=pve\n", ""},
+		{"legacy layout without metadata", legacyShaped, "", ""},
+		{"legacy layout of a pbs backup", legacyShaped, "BACKUP_TYPE=pbs\n", ""},
+		{"legacy layout of a pve backup", legacyShaped, "BACKUP_TYPE=pve\n", "host"},
+		{"legacy layout of a dual backup by its targets", legacyShaped, "BACKUP_TARGETS=pve,pbs\n", "host"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			entries := append([]legacyTarEntry{}, homeCopy...)
+			entries := append([]legacyTarEntry{}, tc.entries...)
 			if tc.metadata != "" {
 				entries = append(entries, legacyTarEntry{name: "./var/lib/proxsave-info/backup_metadata.txt", content: tc.metadata})
 			}
@@ -238,7 +254,7 @@ func TestLegacyPrefixNeedsPVEMetadata(t *testing.T) {
 				t.Fatalf("remap line logged = %v, want %v:\n%s", remapped, tc.want != "", buf.String())
 			}
 			if tc.want == "" && (hasCategoryID(categories, "pve_cluster") || hasCategoryID(categories, "corosync")) {
-				t.Fatalf("the /home copy was analysed as PVE configuration: %v", categories)
+				t.Fatalf("the prefixed copy was analysed as PVE configuration: %v", categories)
 			}
 		})
 	}

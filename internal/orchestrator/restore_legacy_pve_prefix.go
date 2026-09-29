@@ -1,6 +1,7 @@
 package orchestrator
 
 import (
+	"path"
 	"strings"
 	"sync"
 )
@@ -53,8 +54,9 @@ func legacyPVEPrefixAllowed(metadata *restoreDecisionMetadata, metadataErr error
 }
 
 // detectLegacyPVEPrefix returns the prefix the archive's /etc/pve sits under: the one
-// directory X with X/etc/pve entries, when no entry sits at etc/pve itself. Anything else
-// (a canonical etc/pve, no etc/pve at all, two candidates) returns "".
+// directory X with X/etc/pve entries, when no entry sits at etc/pve itself and X holds
+// nothing but PVE files (legacyPrefixHoldsOnlyPVE). Anything else (a canonical etc/pve,
+// no etc/pve at all, two candidates, a candidate with other files) returns "".
 func detectLegacyPVEPrefix(archivePaths []string) string {
 	candidates := map[string]bool{}
 	for _, name := range archivePaths {
@@ -72,9 +74,52 @@ func detectLegacyPVEPrefix(archivePaths []string) string {
 		return ""
 	}
 	for prefix := range candidates {
+		if !legacyPrefixHoldsOnlyPVE(archivePaths, prefix) {
+			return ""
+		}
 		return prefix
 	}
 	return ""
+}
+
+// legacyPrefixHoldsOnlyPVE reports whether every entry under prefix is a legacyPVERoots
+// path, something below one, or one of their parent directories (X, X/etc, X/var,
+// X/var/lib). That is all the collector ever wrote under the prefix, in every released
+// version with SYSTEM_ROOT_PREFIX: a full run of the pre-c66a90b collector puts 42
+// entries there and the measured appliance archive 48, all of that shape. A copy of an
+// extracted archive under /home also holds X/etc/hostname, X/var/lib/proxsave-info and
+// the rest of a system tree, so it is not taken for the legacy layout. Names are checked,
+// never symlink targets: a dedup link under X/etc/pve can point anywhere. An archive taken
+// with a non-default absolute PVE path variable outside these roots is refused too, since
+// the archive does not record the variable; its files stay where the archive has them.
+func legacyPrefixHoldsOnlyPVE(archivePaths []string, prefix string) bool {
+	parents := map[string]bool{"": true}
+	for _, root := range legacyPVERoots {
+		for dir := path.Dir(root); dir != "."; dir = path.Dir(dir) {
+			parents[dir] = true
+		}
+	}
+	for _, name := range archivePaths {
+		clean := normalizeRestoreEntryPath(name)
+		if clean != prefix && !strings.HasPrefix(clean, prefix+"/") {
+			continue
+		}
+		rest := strings.TrimPrefix(strings.TrimPrefix(clean, prefix), "/")
+		if parents[rest] {
+			continue
+		}
+		underRoot := false
+		for _, root := range legacyPVERoots {
+			if rest == root || strings.HasPrefix(rest, root+"/") {
+				underRoot = true
+				break
+			}
+		}
+		if !underRoot {
+			return false
+		}
+	}
+	return true
 }
 
 // remapLegacyPVEEntry returns name with the prefix dropped when it names one of the PVE
