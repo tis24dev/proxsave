@@ -29,15 +29,30 @@ import (
 // bootKernelCmdlineArchivePath is where collectKernelInfo stores /proc/cmdline.
 const bootKernelCmdlineArchivePath = "./var/lib/proxsave-info/commands/system/kernel_cmdline.txt"
 
-// bootSystemParams are never carried: they describe the backed-up host's root
-// device and boot image, which the target has its own of.
+// bootSystemParams are never carried, keyed as kernelParamKey returns them. They
+// describe the backed-up host, not the operator's intent for any host:
+//   - its root device and boot image, which the target has its own of;
+//   - how its root is mounted and where it resumes from: rootflags= or rootfstype=
+//     of another filesystem make the target's root mount fail (initramfs-tools stops
+//     in its shell), and resume= names a swap device the target does not have;
+//   - what was sized on its RAM: the ZFS ARC limit, which the restore keeps from this
+//     host (decideZFSARCConf, for /etc/modprobe.d/zfs.conf), and the huge pages
+//     reserved at boot.
 var bootSystemParams = map[string]bool{
-	"root":       true,
-	"boot":       true,
-	"ro":         true,
-	"rw":         true,
-	"BOOT_IMAGE": true,
-	"initrd":     true,
+	"root":               true,
+	"boot":               true,
+	"ro":                 true,
+	"rw":                 true,
+	"BOOT_IMAGE":         true,
+	"initrd":             true,
+	"rootflags":          true,
+	"rootfstype":         true,
+	"resume":             true,
+	"resume_offset":      true,
+	"zfs.zfs_arc_max":    true,
+	"hugepages":          true,
+	"hugepagesz":         true,
+	"default_hugepagesz": true,
 }
 
 // bootNeverLivePaths are archive entries, and the trees under them, that no restore

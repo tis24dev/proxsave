@@ -67,6 +67,15 @@ func TestMergeKernelCmdline(t *testing.T) {
 			wantMerged: "root=ZFS=rpool/ROOT/pve-1 boot=zfs",
 		},
 		{
+			// A btrfs subvolume root (update-grub adds rootflags=subvol=) onto the ext4/LVM
+			// root of a PVE ISO install: carried, the root mount would fail at the next boot.
+			name:       "root mount, resume and RAM-sized parameters never carried",
+			source:     "root=UUID=0a1b rootflags=subvol=@rootfs rootfstype=btrfs resume=UUID=9f8e resume_offset=34816 zfs.zfs_arc_max=8589934592 hugepages=1024 hugepagesz=2M default_hugepagesz=2M intel_iommu=on",
+			target:     pveTestGrubDefault,
+			wantMerged: "quiet intel_iommu=on",
+			wantAdded:  []string{"intel_iommu=on"},
+		},
+		{
 			name:       "key on both sides with different values: target wins",
 			source:     "quiet iommu=off intel_iommu=on",
 			target:     "quiet iommu=pt",
