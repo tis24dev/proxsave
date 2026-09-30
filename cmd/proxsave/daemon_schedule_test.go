@@ -445,6 +445,66 @@ func TestScheduleInvalidUsedDayRunsDailyAtTheConfiguredTime(t *testing.T) {
 	})
 }
 
+// TestScheduleNotAppliedShowsTheDefaultOfAnEmptyValue: in the not-applied block an empty
+// variable is shown as the default it stands for (it is not invalid), never as a blank value.
+func TestScheduleNotAppliedShowsTheDefaultOfAnEmptyValue(t *testing.T) {
+	t.Run("empty time", func(t *testing.T) {
+		logs := captureDaemonLog(t)
+		d := scheduleDaemon(t, "fortnightly", "mon", "1", "", false, config.HealthcheckModeSelf)
+		runScheduleStart(t, d)
+		assertLogExact(t, logs(),
+			"INFO Applying backup schedule...",
+			"DEBUG schedule: read frequency=fortnightly weekday=mon monthday=1 time= source="+scheduleSource,
+			`DEBUG schedule: invalid SCHEDULER_FREQUENCY="fortnightly" error=frequency must be daily, weekly, or monthly`,
+			"DEBUG schedule: time empty, default 02:00",
+			"INFO   Frequency: fortnightly",
+			"INFO   Time: 02:00",
+			"INFO   In effect: daily at 02:00",
+			`INFO Frequency "fortnightly" is not daily, weekly or monthly`,
+			"WARNING ⚠ Backup schedule: not applied",
+			"DEBUG schedule: next run frequency=daily weekday=mon monthday=1 time=02:00 at=2026-10-01T02:00:00Z",
+			"INFO daemon: next backup at 2026-10-01 02:00 (in 14h1m28s)",
+		)
+	})
+	t.Run("empty frequency", func(t *testing.T) {
+		logs := captureDaemonLog(t)
+		d := scheduleDaemon(t, "", "mon", "1", "25:99", false, config.HealthcheckModeSelf)
+		runScheduleStart(t, d)
+		assertLogExact(t, logs(),
+			"INFO Applying backup schedule...",
+			"DEBUG schedule: read frequency= weekday=mon monthday=1 time=25:99 source="+scheduleSource,
+			`DEBUG schedule: invalid SCHEDULER_TIME="25:99" error=cron hour must be between 00 and 23`,
+			"INFO   Frequency: daily",
+			"INFO   Time: 25:99",
+			"INFO   In effect: daily at 02:00",
+			`INFO Time "25:99" is not HH:MM`,
+			"WARNING ⚠ Backup schedule: not applied",
+			"DEBUG schedule: next run frequency=daily weekday=mon monthday=1 time=02:00 at=2026-10-01T02:00:00Z",
+			"INFO daemon: next backup at 2026-10-01 02:00 (in 14h1m28s)",
+		)
+	})
+}
+
+// TestScheduleNonNumericMonthDayIsQuoted: a day of month that is not a number gets the quoted
+// line; a number outside the range keeps "Day 31 is outside 1-28" (TestScheduleInvalidUsedDay...).
+func TestScheduleNonNumericMonthDayIsQuoted(t *testing.T) {
+	logs := captureDaemonLog(t)
+	d := scheduleDaemon(t, "monthly", "mon", "abc", "02:00", false, config.HealthcheckModeSelf)
+	runScheduleStart(t, d)
+	assertLogExact(t, logs(),
+		"INFO Applying backup schedule...",
+		"DEBUG schedule: read frequency=monthly weekday=mon monthday=abc time=02:00 source="+scheduleSource,
+		`DEBUG schedule: invalid SCHEDULER_MONTHDAY="abc" error=day of month must be between 1 and 28`,
+		"INFO   Frequency: monthly",
+		"INFO   Time: 02:00",
+		"INFO   In effect: daily at 02:00",
+		`INFO Day "abc" is not 1-28`,
+		"WARNING ⚠ Backup schedule: not applied",
+		"DEBUG schedule: next run frequency=daily weekday=mon monthday=1 time=02:00 at=2026-10-01T02:00:00Z",
+		"INFO daemon: next backup at 2026-10-01 02:00 (in 14h1m28s)",
+	)
+}
+
 // TestScheduleInvalidTimeRunsDailyAt0200: a non-empty invalid SCHEDULER_TIME drops the whole
 // cadence to daily at 02:00; the weekly frequency is not kept. The valid day is still shown.
 func TestScheduleInvalidTimeRunsDailyAt0200(t *testing.T) {

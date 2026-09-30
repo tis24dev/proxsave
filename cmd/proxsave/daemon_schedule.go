@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -75,7 +76,7 @@ func readConfiguredCadence(cfg *config.Config) scheduleReading {
 		if monthDayErr != nil {
 			if freq == cron.FrequencyMonthly {
 				r.invalid = append(r.invalid, invalidScheduleValue{"SCHEDULER_MONTHDAY", cfg.SchedulerMonthDay, monthDayErr,
-					fmt.Sprintf("Day %s is outside 1-%d", cfg.SchedulerMonthDay, cron.MaxMonthDay)})
+					monthDayWhy(cfg.SchedulerMonthDay)})
 			} else {
 				r.notes = append(r.notes, fmt.Sprintf("monthday=%q unused by frequency=%s, ignored", cfg.SchedulerMonthDay, freq))
 				monthDay = cron.DefaultMonthDay
@@ -106,6 +107,25 @@ func readConfiguredCadence(cfg *config.Config) scheduleReading {
 		r.cadence = cron.Cadence{Frequency: freq, Weekday: weekday, MonthDay: monthDay, Time: hhmm}
 	}
 	return r
+}
+
+// monthDayWhy is the operator's reason for an invalid SCHEDULER_MONTHDAY: a number outside the
+// range keeps the approved "Day 31 is outside 1-28"; anything that is not a number is quoted, in
+// the form of the weekday line.
+func monthDayWhy(raw string) string {
+	if _, err := strconv.Atoi(strings.TrimSpace(raw)); err == nil {
+		return fmt.Sprintf("Day %s is outside 1-%d", strings.TrimSpace(raw), cron.MaxMonthDay)
+	}
+	return fmt.Sprintf("Day %q is not 1-%d", raw, cron.MaxMonthDay)
+}
+
+// shownOrDefault is a value as the not-applied block shows it: as read, or the default it
+// stands for when it is empty (an empty variable is its default, not an invalid value).
+func shownOrDefault(raw, def string) string {
+	if strings.TrimSpace(raw) == "" {
+		return def
+	}
+	return raw
 }
 
 // dailyCadence is the daily fallback at hhmm, carrying the default days.
@@ -245,11 +265,11 @@ func (d *daemon) logScheduleStart() {
 func (d *daemon) logScheduleNotApplied(reading scheduleReading) {
 	logging.Info("Applying backup schedule...")
 	d.logScheduleRead(reading)
-	logging.Info("  Frequency: %s", d.cfg.SchedulerFrequency)
+	logging.Info("  Frequency: %s", shownOrDefault(d.cfg.SchedulerFrequency, string(cron.FrequencyDaily)))
 	if reading.dayLine != "" {
 		logging.Info("%s", reading.dayLine)
 	}
-	logging.Info("  Time: %s", d.cfg.SchedulerTime)
+	logging.Info("  Time: %s", shownOrDefault(d.cfg.SchedulerTime, cron.DefaultTime))
 	run, _, _ := d.cadenceToRun(reading.cadence, d.now())
 	logging.Info("  In effect: %s", cadenceLabel(run))
 	for _, v := range reading.invalid {
