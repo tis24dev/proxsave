@@ -14,6 +14,7 @@ import (
 	"strings"
 
 	"github.com/tis24dev/proxsave/internal/config"
+	"github.com/tis24dev/proxsave/internal/cron"
 	"github.com/tis24dev/proxsave/pkg/utils"
 )
 
@@ -50,6 +51,9 @@ type InstallWizardPrefill struct {
 	EncryptionEnabled   bool
 	SchedulerMode       string // "cron" | "daemon" (empty on a fresh config)
 	SchedulerTime       string // HH:MM "Run at" time (empty on a fresh config)
+	SchedulerFrequency  string // SCHEDULER_FREQUENCY as stored (empty when absent)
+	SchedulerWeekday    string // SCHEDULER_WEEKDAY as stored (empty when absent)
+	SchedulerMonthDay   string // SCHEDULER_MONTHDAY as stored (empty when absent)
 	HealthcheckMode     string // "off" | "centralized" | "self" (empty on a fresh/pre-daemon config)
 	NotifyOn            string // "always" | "warning" | "failure"; empty when absent or not valid
 }
@@ -78,6 +82,9 @@ type InstallWizardData struct {
 	EmailDeliveryMethod    string // "relay", "sendmail", or "pmf"
 	EmailFallbackSendmail  *bool  // nil from BOTH front-ends on purpose - see the type doc
 	CronTime               string // HH:MM (the "Run at" time)
+	ScheduleFrequency      string // daily | weekly | monthly; empty -> SCHEDULER_FREQUENCY left as stored
+	ScheduleWeekday        string // mon ... sun; empty -> SCHEDULER_WEEKDAY left as stored
+	ScheduleMonthDay       string // 1-28; empty -> SCHEDULER_MONTHDAY left as stored
 	EnableEncryption       bool
 	SchedulerMode          string // "cron" | "daemon"
 	HealthcheckMode        string // "off" | "centralized" | "self"; empty with daemon -> backward-compat centralized-on
@@ -189,6 +196,12 @@ func ValidateOptionalHealthcheckPingURL(v string) error {
 // ExistingConfigAction represents how to handle an already-present configuration file.
 
 // If baseTemplate is empty, the embedded default template is used.
+// Cadence is the schedule the wizard collected; empty answers take the defaults, so the
+// crontab line of a front-end that asked only the time stays daily.
+func (d *InstallWizardData) Cadence() (cron.Cadence, error) {
+	return cron.ParseCadence(d.ScheduleFrequency, d.ScheduleWeekday, d.ScheduleMonthDay, d.CronTime)
+}
+
 func ApplyInstallData(baseTemplate string, data *InstallWizardData) (string, error) {
 	if data == nil {
 		return "", ErrNilInstallData
@@ -344,6 +357,15 @@ func ApplyInstallData(baseTemplate string, data *InstallWizardData) (string, err
 	template = setEnvValue(template, "SCHEDULER_MODE", mode)
 	if strings.TrimSpace(data.CronTime) != "" {
 		template = setEnvValue(template, "SCHEDULER_TIME", strings.TrimSpace(data.CronTime))
+	}
+	for _, kv := range [][2]string{
+		{"SCHEDULER_FREQUENCY", data.ScheduleFrequency},
+		{"SCHEDULER_WEEKDAY", data.ScheduleWeekday},
+		{"SCHEDULER_MONTHDAY", data.ScheduleMonthDay},
+	} {
+		if v := strings.TrimSpace(kv[1]); v != "" {
+			template = setEnvValue(template, kv[0], v)
+		}
 	}
 
 	// Apply the healthchecks connector mode. Healthchecks require the daemon (the
@@ -521,6 +543,9 @@ func DeriveInstallWizardPrefill(baseTemplate string) InstallWizardPrefill {
 	out.EncryptionEnabled = readTemplateBool(values, "ENCRYPT_ARCHIVE")
 	out.SchedulerMode = readTemplateString(values, "SCHEDULER_MODE")
 	out.SchedulerTime = readTemplateString(values, "SCHEDULER_TIME")
+	out.SchedulerFrequency = readTemplateString(values, "SCHEDULER_FREQUENCY")
+	out.SchedulerWeekday = readTemplateString(values, "SCHEDULER_WEEKDAY")
+	out.SchedulerMonthDay = readTemplateString(values, "SCHEDULER_MONTHDAY")
 
 	// Healthchecks mode: not-enabled -> "off"; otherwise the normalized MODE value
 	// (defaulting to centralized when MODE is absent but the connector is enabled).

@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/tis24dev/proxsave/internal/config"
-	"github.com/tis24dev/proxsave/internal/cron"
 	"github.com/tis24dev/proxsave/internal/installer"
 	"github.com/tis24dev/proxsave/internal/logging"
 	"github.com/tis24dev/proxsave/internal/orchestrator"
@@ -564,7 +563,7 @@ func applyCronMode(ctx context.Context, cfg *config.Config, configPath, execToke
 	// host's only schedule on that is the wrong side of the project's own ranking, stated at
 	// cron_indirect_refs.go and again for the /etc habitat below: a double schedule is a
 	// recoverable annoyance the operator can see, an unscheduled host is silent data loss.
-	migrateLegacyCronEntriesFn(ctx, cfg.BaseDir, execToken, bootstrap, cron.TimeToSchedule(cfg.SchedulerTime))
+	migrateLegacyCronEntriesFn(ctx, cfg.BaseDir, execToken, bootstrap, configCronSchedule(cfg))
 	cronScheduled, cronVerified := canonicalCronLinePresent(ctx)
 	var unmanagedAdvisory []string
 	if wrappers := existingWrapperCronFallback(ctx); len(wrappers) > 0 {

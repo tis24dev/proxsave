@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/tis24dev/proxsave/internal/config"
@@ -27,7 +28,7 @@ var (
 	newInstallConfirmTUI             = confirmNewInstallCharm
 	newInstallRunInstall             = runInstall
 	newInstallRunInstallTUI          = runInstallTUI
-	configureCronTimeFunc            = configureCronTime
+	configureScheduleFunc            = configureSchedule
 )
 
 type installConfigResult struct {
@@ -509,7 +510,7 @@ func runConfigWizardCLI(ctx context.Context, reader *bufio.Reader, configPath, t
 	// in runInstall.
 	result = installConfigResult{
 		EnableEncryption: data.EnableEncryption,
-		CronSchedule:     cronutil.TimeToSchedule(data.CronTime),
+		CronSchedule:     installCronSchedule(data),
 		SchedulerMode:    data.SchedulerMode,
 		HealthcheckMode:  data.HealthcheckMode,
 	}
@@ -726,14 +727,17 @@ func collectInstallWizardDataCLI(ctx context.Context, reader *bufio.Reader, prom
 	}
 
 	logging.DebugStepBootstrap(bootstrap, "install config wizard (cli)", "configuring run-at time")
-	// configureCronTimeFunc, not configureCronTime: the package-level seam is stubbed
+	// configureScheduleFunc, not configureSchedule: the package-level seam is stubbed
 	// by cmd/proxsave/install_test.go. It always returns a normalized HH:MM, which is
 	// what keeps ApplyInstallData's "skip SCHEDULER_TIME when blank" branch unreachable.
-	cronTime, err := configureCronTimeFunc(ctx, reader, cronTimeDefault(fromExisting, prefillBase))
+	sched, err := configureScheduleFunc(ctx, reader, scheduleDefaults(fromExisting, prefillBase))
 	if err != nil {
 		return nil, err
 	}
-	data.CronTime = cronTime
+	data.CronTime = sched.Time
+	data.ScheduleFrequency = sched.Frequency
+	data.ScheduleWeekday = sched.Weekday
+	data.ScheduleMonthDay = sched.MonthDay
 
 	return data, nil
 }
@@ -1354,19 +1358,113 @@ func runHealthcheckSelfParamsCLI(ctx context.Context, reader *bufio.Reader, base
 	return nil
 }
 
-func configureCronTime(ctx context.Context, reader *bufio.Reader, defaultCron string) (string, error) {
+// cliSchedule is what the Schedule section of the CLI wizard asks: SCHEDULER_FREQUENCY,
+// SCHEDULER_WEEKDAY, SCHEDULER_MONTHDAY and SCHEDULER_TIME, all normalized.
+type cliSchedule struct {
+	Frequency string
+	Weekday   string
+	MonthDay  string
+	Time      string
+}
+
+// scheduleDefaults seeds the Schedule prompts: the stored values on an Edit, the defaults
+// otherwise or where a stored value is absent or not valid.
+func scheduleDefaults(fromExisting bool, template string) cliSchedule {
+	def := cliSchedule{
+		Frequency: string(cronutil.FrequencyDaily),
+		Weekday:   cronutil.WeekdayName(cronutil.DefaultWeekday),
+		MonthDay:  strconv.Itoa(cronutil.DefaultMonthDay),
+		Time:      cronTimeDefault(fromExisting, template),
+	}
+	if !fromExisting || strings.TrimSpace(template) == "" {
+		return def
+	}
+	p := installer.DeriveInstallWizardPrefill(template)
+	if f, err := cronutil.ParseFrequency(p.SchedulerFrequency); err == nil {
+		def.Frequency = string(f)
+	}
+	if d, err := cronutil.ParseWeekday(p.SchedulerWeekday); err == nil {
+		def.Weekday = cronutil.WeekdayName(d)
+	}
+	if m, err := cronutil.ParseMonthDay(p.SchedulerMonthDay); err == nil {
+		def.MonthDay = strconv.Itoa(m)
+	}
+	return def
+}
+
+// configureSchedule asks the Schedule section. An invalid answer repeats the question with
+// the reason, as the time prompt always did. The day of the frequency not chosen keeps its
+// default, so it is still written and survives a later switch.
+func configureSchedule(ctx context.Context, reader *bufio.Reader, def cliSchedule) (cliSchedule, error) {
+	out := def
 	fmt.Println("\n--- Schedule ---")
+	fmt.Println("daily       every day")
+	fmt.Println("weekly      once a week, on the weekday asked next")
+	fmt.Println("monthly     once a month, on the day of month asked next (1-28)")
 	for {
-		cronTime, err := promptOptional(ctx, reader, fmt.Sprintf("Run at (daily, HH:MM) [%s]: ", defaultCron))
+		raw, err := promptOptional(ctx, reader, fmt.Sprintf("Frequency: daily, weekly, or monthly [%s]: ", def.Frequency))
 		if err != nil {
-			return "", err
+			return cliSchedule{}, err
 		}
-		normalized, err := cronutil.NormalizeTime(cronTime, defaultCron)
+		if strings.TrimSpace(raw) == "" {
+			raw = def.Frequency
+		}
+		f, err := cronutil.ParseFrequency(raw)
+		if err != nil {
+			fmt.Println(err)
+			continue
+		}
+		out.Frequency = string(f)
+		break
+	}
+	switch cronutil.Frequency(out.Frequency) {
+	case cronutil.FrequencyWeekly:
+		for {
+			raw, err := promptOptional(ctx, reader, fmt.Sprintf("Weekday: mon, tue, wed, thu, fri, sat, or sun [%s]: ", def.Weekday))
+			if err != nil {
+				return cliSchedule{}, err
+			}
+			if strings.TrimSpace(raw) == "" {
+				raw = def.Weekday
+			}
+			d, err := cronutil.ParseWeekday(raw)
+			if err != nil {
+				fmt.Println(err)
+				continue
+			}
+			out.Weekday = cronutil.WeekdayName(d)
+			break
+		}
+	case cronutil.FrequencyMonthly:
+		for {
+			raw, err := promptOptional(ctx, reader, fmt.Sprintf("Day of month (1-28) [%s]: ", def.MonthDay))
+			if err != nil {
+				return cliSchedule{}, err
+			}
+			if strings.TrimSpace(raw) == "" {
+				raw = def.MonthDay
+			}
+			m, err := cronutil.ParseMonthDay(raw)
+			if err != nil {
+				fmt.Println(err)
+				continue
+			}
+			out.MonthDay = strconv.Itoa(m)
+			break
+		}
+	}
+	for {
+		raw, err := promptOptional(ctx, reader, fmt.Sprintf("Run at (HH:MM) [%s]: ", def.Time))
+		if err != nil {
+			return cliSchedule{}, err
+		}
+		normalized, err := cronutil.NormalizeTime(raw, def.Time)
 		if err != nil {
 			fmt.Printf("%v\n", err)
 			continue
 		}
-		return normalized, nil
+		out.Time = normalized
+		return out, nil
 	}
 }
 

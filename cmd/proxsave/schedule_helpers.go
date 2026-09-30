@@ -6,6 +6,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/tis24dev/proxsave/internal/config"
 	cronutil "github.com/tis24dev/proxsave/internal/cron"
 	"github.com/tis24dev/proxsave/internal/installer"
 	"github.com/tis24dev/proxsave/internal/logging"
@@ -48,15 +49,17 @@ func buildInstallCronSchedule(skipConfigWizard bool, cronSchedule, configPath st
 	return resolveCronScheduleFromEnv()
 }
 
-// keptCronScheduleFromConfig returns the cron schedule ("MM HH * * *") built from
-// the SCHEDULER_TIME stored in configPath, or "" when the file is unreadable or
-// carries no valid HH:MM time.
+// keptCronScheduleFromConfig returns the crontab schedule built from the SCHEDULER_* values
+// stored in configPath, or "" when the file is unreadable or carries no valid HH:MM time. A
+// frequency or day it cannot read keeps the stored time on a daily line, as before
+// SCHEDULER_FREQUENCY existed, rather than dropping the operator's time for the 02:00 default.
 func keptCronScheduleFromConfig(configPath string) string {
 	data, err := safefs.ReadFileUnderRoot(configPath)
 	if err != nil {
 		return ""
 	}
-	stored := strings.TrimSpace(installer.DeriveInstallWizardPrefill(string(data)).SchedulerTime)
+	p := installer.DeriveInstallWizardPrefill(string(data))
+	stored := strings.TrimSpace(p.SchedulerTime)
 	if stored == "" {
 		return ""
 	}
@@ -64,7 +67,34 @@ func keptCronScheduleFromConfig(configPath string) string {
 	if err != nil {
 		return ""
 	}
+	if c, err := cronutil.ParseCadence(p.SchedulerFrequency, p.SchedulerWeekday, p.SchedulerMonthDay, norm); err == nil {
+		return c.Schedule()
+	}
 	return cronutil.TimeToSchedule(norm)
+}
+
+// installCronSchedule is the crontab schedule for what a wizard collected. A cadence the
+// wizard could not have produced falls back to the daily line at its time.
+func installCronSchedule(data *installer.InstallWizardData) string {
+	if data == nil {
+		return ""
+	}
+	if c, err := data.Cadence(); err == nil {
+		return c.Schedule()
+	}
+	return cronutil.TimeToSchedule(data.CronTime)
+}
+
+// configCronSchedule is the crontab schedule for a loaded config, with the same daily
+// fallback at SCHEDULER_TIME when the frequency or day is not valid.
+func configCronSchedule(cfg *config.Config) string {
+	if cfg == nil {
+		return ""
+	}
+	if c, err := cfg.SchedulerCadence(); err == nil {
+		return c.Schedule()
+	}
+	return cronutil.TimeToSchedule(cfg.SchedulerTime)
 }
 
 // schedulerTimeSeed is the outcome of a SCHEDULER_TIME seeding attempt: Time is

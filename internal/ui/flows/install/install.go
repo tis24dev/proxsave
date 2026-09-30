@@ -9,6 +9,7 @@ package install
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/tis24dev/proxsave/internal/config"
@@ -238,9 +239,56 @@ func CollectWizardData(ctx context.Context, session *shell.Session, baseTemplate
 		OptionIndex: notifyIndex,
 		Active:      func() bool { return healthcheck.Active() && hcValues[healthcheck.OptionIndex] != "off" },
 	}
+	// Frequency, Weekday and Day of month (SCHEDULER_FREQUENCY/WEEKDAY/MONTHDAY). An Edit
+	// prefills the stored values; an absent or invalid one shows the default. The day of the
+	// frequency not chosen is still written, so switching back keeps it.
+	frequencyValues := []string{"daily", "weekly", "monthly"}
+	frequencyIndex := 0
+	for i, v := range frequencyValues {
+		if strings.EqualFold(strings.TrimSpace(prefill.SchedulerFrequency), v) {
+			frequencyIndex = i
+		}
+	}
+	frequency := &components.FormField{
+		Label:       "Frequency",
+		Description: "How often the backup runs; default Daily.",
+		Kind:        components.FieldSelect,
+		Options:     []string{"Daily", "Weekly", "Monthly"},
+		OptionIndex: frequencyIndex,
+	}
+	weekdayValues := []string{"mon", "tue", "wed", "thu", "fri", "sat", "sun"}
+	weekdayIndex := 0
+	for i, v := range weekdayValues {
+		if strings.EqualFold(strings.TrimSpace(prefill.SchedulerWeekday), v) {
+			weekdayIndex = i
+		}
+	}
+	weekday := &components.FormField{
+		Label:       "Weekday",
+		Description: "Day of the weekly backup.",
+		Kind:        components.FieldSelect,
+		Options:     []string{"Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"},
+		OptionIndex: weekdayIndex,
+		Active:      func() bool { return frequencyValues[frequency.OptionIndex] == "weekly" },
+	}
+	monthDayText := strconv.Itoa(cronutil.DefaultMonthDay)
+	if d, err := cronutil.ParseMonthDay(prefill.SchedulerMonthDay); err == nil {
+		monthDayText = strconv.Itoa(d)
+	}
+	monthDay := &components.FormField{
+		Label:       "Day of month (1-28)",
+		Description: "Day of the monthly backup; 1-28, so no month is skipped.",
+		Kind:        components.FieldText,
+		Text:        monthDayText,
+		Active:      func() bool { return frequencyValues[frequency.OptionIndex] == "monthly" },
+		Validate: func(v string) error {
+			_, err := cronutil.ParseMonthDay(v)
+			return err
+		},
+	}
 	cronField := &components.FormField{
 		Label:       "Run at (HH:MM)",
-		Description: fmt.Sprintf("Daily backup time; default %s.", cronutil.DefaultTime),
+		Description: fmt.Sprintf("Backup time; default %s.", cronutil.DefaultTime),
 		Kind:        components.FieldText,
 		Text:        cronFieldDefault(prefill.SchedulerTime),
 		Validate: func(v string) error {
@@ -252,7 +300,8 @@ func CollectWizardData(ctx context.Context, session *shell.Session, baseTemplate
 	fields := []*components.FormField{
 		secondary, secondaryPath, secondaryLog,
 		cloud, cloudRemote, cloudLog,
-		firewall, telegram, email, method, encryption, scheduler, healthcheck, notifyLevel, cronField,
+		firewall, telegram, email, method, encryption, scheduler, healthcheck, notifyLevel,
+		frequency, weekday, monthDay, cronField,
 	}
 	if _, err := shell.Ask(ctx, session, components.NewFormGrid(
 		"Configuration", fields,
@@ -301,6 +350,15 @@ func CollectWizardData(ctx context.Context, session *shell.Session, baseTemplate
 		return nil, err
 	}
 	data.CronTime = normalized
+	data.ScheduleFrequency = frequencyValues[frequency.OptionIndex]
+	data.ScheduleWeekday = weekdayValues[weekday.OptionIndex]
+	mday, err := cronutil.ParseMonthDay(monthDay.Text)
+	if err != nil {
+		// Only an inactive field can get here: the form validates the active one. Keep the
+		// value that was there rather than failing the install on a row nobody filled in.
+		mday, _ = cronutil.ParseMonthDay(monthDayText)
+	}
+	data.ScheduleMonthDay = strconv.Itoa(mday)
 	data.SchedulerMode = schedulerValues[scheduler.OptionIndex]
 	// Healthchecks require the daemon (the sole pinger); cron forces the mode off.
 	if data.SchedulerMode == "daemon" {
