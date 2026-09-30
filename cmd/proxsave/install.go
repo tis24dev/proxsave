@@ -142,13 +142,11 @@ func runInstall(ctx context.Context, configPath string, bootstrap *logging.Boots
 	}
 
 	// Keep-existing kept the operator's backup.env untouched, so nothing has carried
-	// the adopted run time into it. Write it now, past every interactive step: the
+	// the adopted schedule into it. Write it now, past every interactive step: the
 	// install is committed, and buildInstallCronSchedule below reads the value from
 	// the file.
 	if configResult.SkipConfigWizard {
-		if seed := seedSchedulerTimeFromCrontabFn(ctx, configPath); seed.Note != "" {
-			logBootstrapInfo(bootstrap, "%s", seed.Note)
-		}
+		logScheduleLines(bootstrap, seedSchedulerTimeFromCrontabFn(ctx, configPath).Block.lines())
 	}
 
 	logging.DebugStepBootstrap(bootstrap, "install workflow (cli)", "finalizing symlinks and cron")

@@ -169,20 +169,15 @@ func prepareCronHandoverForDaemon(ctx context.Context, configPath, execToken str
 	}
 	adoptSchedulerTimeForDaemon(configPath, lines, bootstrap)
 	outcome, err := removeCanonicalCronEntry(ctx, cronCorrectPaths(execToken), bootstrap)
-	if err != nil {
-		logging.Warning("daemon: failed to remove the cron entry (possible double execution; the per-run lock mitigates): %v", err)
-	}
-	// A proxsave cron line that is still there after the removal is what matters, and whether an
-	// hour was ADOPTED is not the same question. An adoption only happens when the hour changes,
-	// so on the host ProxSave installed itself - SCHEDULER_TIME already equal to the line's hour
-	// - nothing is adopted, and gating on that said nothing on exactly the host where the
+	// A proxsave cron line that is still there after the removal is what matters, and whether a
+	// schedule was ADOPTED is not the same question. An adoption only happens when the schedule
+	// changes, so on the host ProxSave installed itself - backup.env already in step with the
+	// line - nothing is adopted, and gating on that said nothing on exactly the host where the
 	// surviving line and the daemon are guaranteed to share the minute.
 	//
-	// The hour stays either way: SCHEDULER_TIME is ProxSave's own variable and a failed crontab
-	// write is no reason to rewrite it. Only removing the line fixes anything here.
-	if hhmm, ok := schedulerTimeFromCronLines(lines); ok && (err != nil || !outcome.Verified || outcome.Removed == 0) {
-		reportUnremovedCronEntry(hhmm, bootstrap)
-	}
+	// The schedule stays either way: the SCHEDULER_* variables are ProxSave's own and a failed
+	// crontab write is no reason to rewrite them. Only removing the line fixes anything here.
+	reportCronRemoval(lines, outcome, err, bootstrap)
 	// #298: the removal above can only see cron lines whose COMMAND is named proxsave or
 	// proxmox-backup. A wrapper entry survives it silently, and the daemon being installed now
 	// shares the night with it. Say so - and only say so; the wrapper is hand-written, it can

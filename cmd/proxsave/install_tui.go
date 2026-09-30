@@ -313,13 +313,12 @@ func runInstallTUI(ctx context.Context, configPath string, bootstrap *logging.Bo
 	if wizardData != nil {
 		wizardCronSchedule = installCronSchedule(wizardData)
 	}
-	// Keep-existing kept backup.env untouched, so nothing has carried the adopted run
-	// time into it. Write it now, past every interactive step: the install is
+	// Keep-existing kept backup.env untouched, so nothing has carried the adopted
+	// schedule into it. Write it now, past every interactive step: the install is
 	// committed, and buildInstallCronSchedule below reads the value from the file.
+	// The console is quiet here, so the block reaches the install log only.
 	if skipConfigWizard {
-		if seed := seedSchedulerTimeFromCrontabFn(ctx, configPath); seed.Note != "" {
-			logBootstrapInfo(bootstrap, "%s", seed.Note)
-		}
+		logScheduleLines(bootstrap, seedSchedulerTimeFromCrontabFn(ctx, configPath).Block.lines())
 	}
 
 	cronSchedule := buildInstallCronSchedule(skipConfigWizard, wizardCronSchedule, configPath)

@@ -1557,7 +1557,7 @@ func detectIndirectProxsaveCron(ctx context.Context) ([]indirectCronRef, error) 
 // --daemon-remove and deletes its own lines when enabling the daemon. It does not own
 // anything under /etc: those files are hand-placed by an operator or shipped by a
 // package, so this code may REPORT what it finds there and must never edit it.
-// dropCanonicalCronLines and schedulerTimeFromCronLines are correspondingly untouched
+// dropCanonicalCronLines and schedulerCadenceFromCronLines are correspondingly untouched
 // and still see the user crontab only.
 //
 // TWO HABITAT KINDS live in this one list, and systemCronRefs tells them apart by base

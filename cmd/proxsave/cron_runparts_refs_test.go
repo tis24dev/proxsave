@@ -118,9 +118,9 @@ func TestARunPartsScriptIsNeverParsedAsACrontabLine(t *testing.T) {
 		}
 	}
 
-	got, source := schedulerTimeFromSystemCron()
+	got, ref := schedulerTimeFromSystemCron()
 	if got != "05:00" {
-		t.Errorf("schedulerTimeFromSystemCron() = (%q, %q), want (\"05:00\", the cron.d file): a run-parts script has no time and must not be allowed to answer the question", got, source)
+		t.Errorf("schedulerTimeFromSystemCron() = (%q, %q), want (\"05:00\", the cron.d file): a run-parts script has no time and must not be allowed to answer the question", got, ref.Source)
 	}
 }
 

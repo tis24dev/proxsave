@@ -41,6 +41,28 @@ func handoverFixture(t *testing.T, lines []string) (string, func() []string) {
 	return configPath, func() []string { return state }
 }
 
+// reportsUnremovedCronEntry is the removal block for a line the switch could not delete: the
+// entry and its schedule as a detail, the reason, then the WARNING outcome, in that order.
+func reportsUnremovedCronEntry(out, schedule string) bool {
+	parts := []string{
+		"Removing proxsave cron entry...",
+		"cron removal: crontab write failed error=",
+		"cron removal: still present line=",
+		"  Cron entry: " + schedule,
+		"Crontab could not be written",
+		"WARNING  \u26a0 Proxsave cron entry: not removed, remove it by hand to avoid a double backup",
+	}
+	at := 0
+	for _, p := range parts {
+		i := strings.Index(out[at:], p)
+		if i < 0 {
+			return false
+		}
+		at += i + len(p)
+	}
+	return !strings.Contains(out, "daemon: failed to remove the cron entry")
+}
+
 // prepareCronHandoverForDaemon is the part of the cron -> daemon switch that a test can drive:
 // everything around it in applyDaemonMode shells out to systemctl. Three guarantees live here
 // and each one used to be unpinned, so deleting the line that provides it left the suite green.
@@ -203,7 +225,7 @@ func TestPrepareCronHandoverProtectsTheAdoptedTime(t *testing.T) {
 
 		prepareCronHandoverForDaemon(context.Background(), configPath, "/usr/local/bin/proxsave", nil)
 
-		if !strings.Contains(buf.String(), "Could not remove the legacy proxsave cron entry, it still runs at 02:00.") {
+		if !reportsUnremovedCronEntry(buf.String(), "daily at 02:00") {
 			t.Errorf("the surviving entry must be reported whether or not an hour was adopted, out=%q", buf.String())
 		}
 	})
@@ -230,7 +252,7 @@ func TestPrepareCronHandoverProtectsTheAdoptedTime(t *testing.T) {
 
 		prepareCronHandoverForDaemon(context.Background(), configPath, "/usr/local/bin/proxsave", nil)
 
-		if strings.Contains(buf.String(), "Could not remove") {
+		if strings.Contains(buf.String(), "Removing proxsave cron entry") || strings.Contains(buf.String(), "not removed") {
 			t.Errorf("there was no proxsave entry to remove, out=%q", buf.String())
 		}
 	})
@@ -262,7 +284,7 @@ func TestPrepareCronHandoverProtectsTheAdoptedTime(t *testing.T) {
 		if got := storedTime(t, configPath); got != "21:00" {
 			t.Errorf("SCHEDULER_TIME = %q, want the adopted 21:00 left alone", got)
 		}
-		if !strings.Contains(buf.String(), "Could not remove the legacy proxsave cron entry, it still runs at 21:00.") {
+		if !reportsUnremovedCronEntry(buf.String(), "daily at 21:00") {
 			t.Errorf("the surviving entry must be reported, out=%q", buf.String())
 		}
 	})
@@ -294,7 +316,7 @@ func TestPrepareCronHandoverProtectsTheAdoptedTime(t *testing.T) {
 		if got := storedTime(t, configPath); got != "21:00" {
 			t.Errorf("SCHEDULER_TIME = %q, want the adopted 21:00 left alone", got)
 		}
-		if !strings.Contains(buf.String(), "Could not remove the legacy proxsave cron entry, it still runs at 21:00.") {
+		if !reportsUnremovedCronEntry(buf.String(), "daily at 21:00") {
 			t.Errorf("the operator must be told the line is still there and at what time, out=%q", buf.String())
 		}
 		if strings.Contains(buf.String(), "put back") {
@@ -345,4 +367,45 @@ func TestPrepareCronHandoverProtectsTheAdoptedTime(t *testing.T) {
 			t.Errorf("the operator must be told the crontab could not be read, out=%q", buf.String())
 		}
 	})
+}
+
+// A removal that worked is a block too: its evidence names the line it took away, and the
+// outcome comes last. The two blocks keep their order: adoption first, removal second.
+func TestPrepareCronHandoverReportsTheRemoval(t *testing.T) {
+	const line = "0 3 * * 1 /usr/local/bin/proxsave --backup"
+	configPath, crontab := handoverFixture(t, []string{line})
+	_, buf := captureDefaultLog(t)
+
+	prepareCronHandoverForDaemon(context.Background(), configPath, "/usr/local/bin/proxsave", nil)
+
+	if len(crontab()) != 0 {
+		t.Fatalf("the line must be removed, crontab=%v", crontab())
+	}
+	out := buf.String()
+	assertInOrder(t, out,
+		scheduleAdoptHeader, "✓ Backup schedule: adopted from cron entry",
+		"Removing proxsave cron entry...",
+		`cron removal: removed line="`+line+`" verified=true`,
+		"✓ Proxsave cron entry: removed")
+	if strings.Contains(out, "not removed") {
+		t.Errorf("a removal that worked may not warn, out=%q", out)
+	}
+}
+
+// The detail names the whole cadence of the line that stayed, not only its time.
+func TestPrepareCronHandoverNamesTheWeeklyEntryItCouldNotRemove(t *testing.T) {
+	configPath, _ := handoverFixture(t, []string{"0 3 * * 1 /usr/local/bin/proxsave --backup"})
+	crontabWriteLinesFn = func(context.Context, []string) error {
+		return errors.New("crontab update failed: read-only file system")
+	}
+	def, buf := captureDefaultLog(t)
+
+	prepareCronHandoverForDaemon(context.Background(), configPath, "/usr/local/bin/proxsave", nil)
+
+	if !reportsUnremovedCronEntry(buf.String(), "weekly, Monday at 03:00") {
+		t.Errorf("the surviving weekly entry must be reported, out=%q", buf.String())
+	}
+	if def.WarningCount() != 1 {
+		t.Errorf("warnings = %d, want exactly the removal one", def.WarningCount())
+	}
 }

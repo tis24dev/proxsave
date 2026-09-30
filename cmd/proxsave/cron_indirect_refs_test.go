@@ -782,8 +782,8 @@ func TestSystemCronIsReadOnlyAndOutsideRemovalAndSeeding(t *testing.T) {
 	if kept := dropCanonicalCronLines([]string{line}, cronCorrectPaths("/usr/local/bin/proxsave")); len(kept) != 1 {
 		t.Fatal("a system-format line must never be dropped by the user-crontab remover")
 	}
-	if _, ok := schedulerTimeFromCronLines([]string{line}); ok {
-		t.Fatal("SCHEDULER_TIME must not be seeded from a system-format line")
+	if got := schedulerCadenceFromCronLines([]string{line}); got.Found {
+		t.Fatal("the schedule must not be seeded from a system-format line")
 	}
 	if got := wrapperCronLines([]string{line}); len(got) != 0 {
 		t.Fatalf("wrapperCronLines reads the USER crontab format only, got %v", got)
@@ -1100,14 +1100,14 @@ func TestDeriveSchedulerTimeReadsSystemCron(t *testing.T) {
 	t.Run("time in /etc is reported, never adopted", func(t *testing.T) {
 		cp, cronD := setup(t, "0 5 * * * root /usr/local/bin/proxsave --backup", nil)
 		seed := deriveSchedulerTimeFromCrontab(context.Background(), cp)
-		if seed.Time != "" {
-			t.Fatalf("a time ProxSave cannot remove must not be adopted, got %q", seed.Time)
+		if seed.adopted() {
+			t.Fatalf("a time ProxSave cannot remove must not be adopted, got %+v", seed.Cadence)
 		}
-		if !strings.Contains(seed.Note, cronD) {
-			t.Errorf("the note must name the file the finding came from, got %q", seed.Note)
+		if !strings.Contains(seed.Item, cronD) || !strings.Contains(seed.Block.Outcome, cronD) {
+			t.Errorf("the finding must name the file it came from, got item %q outcome %q", seed.Item, seed.Block.Outcome)
 		}
-		if !strings.Contains(seed.Note, "05:00") {
-			t.Errorf("the note must name the time that entry runs at, got %q", seed.Note)
+		if !strings.Contains(strings.Join(seed.Block.Details, "\n"), "05:00") {
+			t.Errorf("the details must name the time that entry runs at, got %q", seed.Block.Details)
 		}
 	})
 
@@ -1115,8 +1115,8 @@ func TestDeriveSchedulerTimeReadsSystemCron(t *testing.T) {
 		cp, _ := setup(t, "0 5 * * * root /usr/local/bin/proxsave --backup",
 			[]string{"30 21 * * * /usr/local/bin/proxsave --backup"})
 		seed := deriveSchedulerTimeFromCrontab(context.Background(), cp)
-		if seed.Time != "21:30" {
-			t.Fatalf("the table ProxSave owns must win, got %q", seed.Time)
+		if seed.Cadence.Time != "21:30" {
+			t.Fatalf("the table ProxSave owns must win, got %q", seed.Cadence.Time)
 		}
 	})
 
@@ -1144,8 +1144,8 @@ func TestDeriveSchedulerTimeReadsSystemCron(t *testing.T) {
 		crontabReadLinesFn = func(context.Context) ([]string, error) { return nil, nil }
 
 		seed := deriveSchedulerTimeFromCrontab(context.Background(), cp)
-		if seed.Time != "" {
-			t.Fatalf("two different times are ambiguous; nothing may be adopted, got %q", seed.Time)
+		if !seed.empty() {
+			t.Fatalf("two different times are ambiguous; nothing may be adopted or reported, got %+v", seed)
 		}
 	})
 
@@ -1154,8 +1154,8 @@ func TestDeriveSchedulerTimeReadsSystemCron(t *testing.T) {
 		if err := os.WriteFile(cp, []byte("SCHEDULER_TIME=23:15\n"), 0o600); err != nil {
 			t.Fatal(err)
 		}
-		if seed := deriveSchedulerTimeFromCrontab(context.Background(), cp); seed.Time != "" {
-			t.Fatalf("an operator value must win over every habitat, got %q", seed.Time)
+		if seed := deriveSchedulerTimeFromCrontab(context.Background(), cp); !seed.empty() {
+			t.Fatalf("an operator value must win over every habitat, got %+v", seed)
 		}
 	})
 }

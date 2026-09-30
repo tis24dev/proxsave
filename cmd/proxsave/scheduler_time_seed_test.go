@@ -36,77 +36,6 @@ func stubCrontabLines(t *testing.T, lines []string, err error) {
 	systemCronPaths = []string{filepath.Join(t.TempDir(), "absent")}
 }
 
-func TestSchedulerTimeFromCronLines(t *testing.T) {
-	tests := []struct {
-		name   string
-		lines  []string
-		want   string
-		wantOK bool
-	}{
-		{
-			name: "single daily proxsave line among unrelated jobs",
-			lines: []string{
-				"MAILTO=root",
-				"# a comment",
-				"30 4 * * * /usr/bin/other-job",
-				"0 21 * * * /usr/local/bin/proxsave --backup",
-			},
-			want: "21:00", wantOK: true,
-		},
-		{
-			name:  "legacy proxmox-backup entrypoint still counts",
-			lines: []string{"0 21 * * * /usr/local/bin/proxmox-backup --backup"},
-			want:  "21:00", wantOK: true,
-		},
-		{
-			name:  "commented out proxsave line is not a schedule",
-			lines: []string{"#0 21 * * * /usr/local/bin/proxsave --backup"},
-			want:  "", wantOK: false,
-		},
-		{
-			name:  "proxsave only as an argument is not a proxsave job",
-			lines: []string{"0 21 * * * /bin/cp /usr/local/bin/proxsave /tmp/"},
-			want:  "", wantOK: false,
-		},
-		{
-			name: "two proxsave lines at different times are ambiguous",
-			lines: []string{
-				"0 21 * * * /usr/local/bin/proxsave --backup",
-				"0 6 * * * /usr/local/bin/proxsave --backup",
-			},
-			want: "", wantOK: false,
-		},
-		{
-			name: "two proxsave lines at the same time agree",
-			lines: []string{
-				"0 21 * * * /usr/local/bin/proxsave --backup",
-				"00 21 * * * /usr/local/bin/proxsave --backup",
-			},
-			want: "21:00", wantOK: true,
-		},
-		{
-			name:  "sub-daily schedule the daemon cannot express",
-			lines: []string{"*/15 * * * * /usr/local/bin/proxsave --backup"},
-			want:  "", wantOK: false,
-		},
-		{
-			name:  "daily shortcut",
-			lines: []string{"@daily /usr/local/bin/proxsave --backup"},
-			want:  "00:00", wantOK: true,
-		},
-		{name: "no lines at all", lines: nil, want: "", wantOK: false},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got, ok := schedulerTimeFromCronLines(tt.lines)
-			if got != tt.want || ok != tt.wantOK {
-				t.Fatalf("schedulerTimeFromCronLines = (%q, %v), want (%q, %v)", got, ok, tt.want, tt.wantOK)
-			}
-		})
-	}
-}
-
 func TestSeedSchedulerTimeFromCrontab(t *testing.T) {
 	writeCfg := func(t *testing.T, content string) string {
 		t.Helper()
@@ -130,11 +59,11 @@ func TestSeedSchedulerTimeFromCrontab(t *testing.T) {
 		stubCrontabLines(t, []string{"0 21 * * * /usr/local/bin/proxsave --backup"}, nil)
 
 		seed := seedSchedulerTimeFromCrontab(context.Background(), cfg)
-		if seed.Time != "21:00" {
-			t.Fatalf("seed.Time = %q, want 21:00", seed.Time)
+		if seed.Cadence.Time != "21:00" {
+			t.Fatalf("seed.Cadence.Time = %q, want 21:00", seed.Cadence.Time)
 		}
-		if seed.Note == "" {
-			t.Error("expected an operator-facing note")
+		if len(seed.Block.lines()) == 0 {
+			t.Error("expected an operator-facing block")
 		}
 		if content := read(t, cfg); !strings.Contains(content, "SCHEDULER_TIME=21:00") {
 			t.Fatalf("SCHEDULER_TIME not written:\n%s", content)
@@ -146,7 +75,7 @@ func TestSeedSchedulerTimeFromCrontab(t *testing.T) {
 		before := read(t, cfg)
 		stubCrontabLines(t, []string{"0 21 * * * /usr/local/bin/proxsave --backup"}, nil)
 
-		if seed := seedSchedulerTimeFromCrontab(context.Background(), cfg); seed != (schedulerTimeSeed{}) {
+		if seed := seedSchedulerTimeFromCrontab(context.Background(), cfg); !seed.empty() {
 			t.Fatalf("expected a no-op seed, got %+v", seed)
 		}
 		if after := read(t, cfg); after != before {
@@ -159,7 +88,7 @@ func TestSeedSchedulerTimeFromCrontab(t *testing.T) {
 		before := read(t, cfg)
 		stubCrontabLines(t, []string{"0 21 * * * /usr/local/bin/proxsave --backup"}, nil)
 
-		if seed := seedSchedulerTimeFromCrontab(context.Background(), cfg); seed != (schedulerTimeSeed{}) {
+		if seed := seedSchedulerTimeFromCrontab(context.Background(), cfg); !seed.empty() {
 			t.Fatalf("expected a no-op seed, got %+v", seed)
 		}
 		if after := read(t, cfg); after != before {
@@ -171,11 +100,11 @@ func TestSeedSchedulerTimeFromCrontab(t *testing.T) {
 		cfg := writeCfg(t, "SCHEDULER_MODE=cron\n")
 		stubCrontabLines(t, []string{"0 21 * * * /usr/local/bin/proxsave --backup"}, nil)
 
-		if seed := seedSchedulerTimeFromCrontab(context.Background(), cfg); seed.Time != "21:00" {
-			t.Fatalf("first call seed.Time = %q, want 21:00", seed.Time)
+		if seed := seedSchedulerTimeFromCrontab(context.Background(), cfg); seed.Cadence.Time != "21:00" {
+			t.Fatalf("first call seed.Cadence.Time = %q, want 21:00", seed.Cadence.Time)
 		}
 		after := read(t, cfg)
-		if seed := seedSchedulerTimeFromCrontab(context.Background(), cfg); seed != (schedulerTimeSeed{}) {
+		if seed := seedSchedulerTimeFromCrontab(context.Background(), cfg); !seed.empty() {
 			t.Fatalf("second call should be a no-op, got %+v", seed)
 		}
 		if again := read(t, cfg); again != after {
@@ -189,11 +118,11 @@ func TestSeedSchedulerTimeFromCrontab(t *testing.T) {
 		stubCrontabLines(t, []string{"*/15 * * * * /usr/local/bin/proxsave --backup"}, nil)
 
 		seed := seedSchedulerTimeFromCrontab(context.Background(), cfg)
-		if seed.Time != "" {
-			t.Fatalf("seed.Time = %q, want empty", seed.Time)
+		if seed.adopted() {
+			t.Fatalf("nothing may be adopted, got %+v", seed.Cadence)
 		}
-		if !strings.Contains(seed.Note, cronutil.DefaultTime) {
-			t.Fatalf("note should name the %s default, got %q", cronutil.DefaultTime, seed.Note)
+		if !strings.Contains(seed.Item, cronutil.DefaultTime) {
+			t.Fatalf("note should name the %s default, got %q", cronutil.DefaultTime, seed.Item)
 		}
 		if after := read(t, cfg); after != before {
 			t.Fatalf("config was modified:\n%s", after)
@@ -204,7 +133,7 @@ func TestSeedSchedulerTimeFromCrontab(t *testing.T) {
 		cfg := writeCfg(t, "SCHEDULER_MODE=cron\n")
 		stubCrontabLines(t, []string{"30 4 * * * /usr/bin/other-job"}, nil)
 
-		if seed := seedSchedulerTimeFromCrontab(context.Background(), cfg); seed != (schedulerTimeSeed{}) {
+		if seed := seedSchedulerTimeFromCrontab(context.Background(), cfg); !seed.empty() {
 			t.Fatalf("expected a zero seed, got %+v", seed)
 		}
 	})
@@ -214,7 +143,7 @@ func TestSeedSchedulerTimeFromCrontab(t *testing.T) {
 		before := read(t, cfg)
 		stubCrontabLines(t, nil, os.ErrPermission)
 
-		if seed := seedSchedulerTimeFromCrontab(context.Background(), cfg); seed != (schedulerTimeSeed{}) {
+		if seed := seedSchedulerTimeFromCrontab(context.Background(), cfg); !seed.empty() {
 			t.Fatalf("expected a zero seed, got %+v", seed)
 		}
 		if after := read(t, cfg); after != before {
@@ -224,11 +153,11 @@ func TestSeedSchedulerTimeFromCrontab(t *testing.T) {
 
 	t.Run("missing or empty config path", func(t *testing.T) {
 		stubCrontabLines(t, []string{"0 21 * * * /usr/local/bin/proxsave --backup"}, nil)
-		if seed := seedSchedulerTimeFromCrontab(context.Background(), ""); seed != (schedulerTimeSeed{}) {
+		if seed := seedSchedulerTimeFromCrontab(context.Background(), ""); !seed.empty() {
 			t.Fatalf("empty path -> %+v, want a zero seed", seed)
 		}
 		missing := filepath.Join(t.TempDir(), "absent.env")
-		if seed := seedSchedulerTimeFromCrontab(context.Background(), missing); seed != (schedulerTimeSeed{}) {
+		if seed := seedSchedulerTimeFromCrontab(context.Background(), missing); !seed.empty() {
 			t.Fatalf("missing file -> %+v, want a zero seed", seed)
 		}
 	})
@@ -251,8 +180,8 @@ func TestSeededTimeDrivesInstallSchedule(t *testing.T) {
 		t.Fatalf("pre-seed schedule = %q, want the %s default", got, cronutil.DefaultTime)
 	}
 
-	if seed := seedSchedulerTimeFromCrontab(context.Background(), cfg); seed.Time != "21:00" {
-		t.Fatalf("seed.Time = %q, want 21:00", seed.Time)
+	if seed := seedSchedulerTimeFromCrontab(context.Background(), cfg); seed.Cadence.Time != "21:00" {
+		t.Fatalf("seed.Cadence.Time = %q, want 21:00", seed.Cadence.Time)
 	}
 
 	if got := buildInstallCronSchedule(true, "", cfg); got != "00 21 * * *" {
@@ -363,7 +292,7 @@ func TestAdoptCronRunTimeIntoBase(t *testing.T) {
 			}
 
 			// The resolver hands a RAW "" base to every answer except Edit, and
-			// ApplySchedulerTimeSeed is a no-op on "" -- so asserting on the returned
+			// ApplyScheduleSeed is a no-op on "" -- so asserting on the returned
 			// base alone would be VACUOUS for three of the four rows: it reads false
 			// whether the gate is Edit-only or the TUI's former Keep-OR-Edit. Count
 			// the derive instead: it is the observable the gate actually controls, and
@@ -432,8 +361,12 @@ func TestApplyConfigUpgradeAdoptsCrontabRunTime(t *testing.T) {
 			t.Error("SCHEDULER_TIME was reported as added; the seeded value should have been preserved instead")
 		}
 	}
-	if !strings.Contains(strings.Join(result.Warnings, "\n"), "21:00") {
-		t.Errorf("adoption note missing from the upgrade warnings: %v", result.Warnings)
+	var notes []string
+	for _, n := range result.Notes {
+		notes = append(notes, n.Text)
+	}
+	if !strings.Contains(strings.Join(notes, "\n"), "  Time: 21:00") {
+		t.Errorf("adoption block missing from the upgrade notes: %v", result.Notes)
 	}
 }
 
@@ -458,14 +391,14 @@ func TestApplyConfigUpgradeKeepsExplicitSchedulerTime(t *testing.T) {
 	if content := string(data); !strings.Contains(content, "SCHEDULER_TIME=07:30") {
 		t.Fatalf("explicit SCHEDULER_TIME was overridden:\n%s", content)
 	}
-	if strings.Contains(strings.Join(result.Warnings, "\n"), "21:00") {
-		t.Errorf("no adoption note expected when the operator set the time: %v", result.Warnings)
+	if strings.Contains(strings.Join(result.Warnings, "\n"), "21:00") || len(result.Notes) != 0 {
+		t.Errorf("no adoption expected when the operator set the time: warnings=%v notes=%v", result.Warnings, result.Notes)
 	}
 }
 
 // TestAdoptCronRunTimeIntoBaseNoteMatchesReality pins that the adoption note is
 // only emitted when the value actually reached the base. The note promises "the
-// daily run time does not change", but ApplySchedulerTimeSeed discards the seed on
+// daily run time does not change", but ApplyScheduleSeed discards the seed on
 // a blank base -- so logging unconditionally told the operator their 21:00 was kept
 // while the wizard went on to offer the 02:00 default. A note the code contradicts
 // is worse than silence.
@@ -495,12 +428,8 @@ func TestAdoptCronRunTimeIntoBaseNoteMatchesReality(t *testing.T) {
 			if got := strings.Contains(base, "SCHEDULER_TIME=21:00"); got != tt.wantSeeded {
 				t.Fatalf("seeded = %v, want %v (base=%q)", got, tt.wantSeeded, base)
 			}
-			wantEntries := 0
-			if tt.wantSeeded {
-				wantEntries = 1
-			}
-			if got := bootstrap.EntryCount(); got != wantEntries {
-				t.Fatalf("bootstrap entries = %d, want %d: the adoption note must not outlive the value it describes", got, wantEntries)
+			if got := bootstrap.EntryCount() > 0; got != tt.wantSeeded {
+				t.Fatalf("block logged = %v, want %v: the adoption block must not outlive the value it describes", got, tt.wantSeeded)
 			}
 		})
 	}

@@ -17,21 +17,25 @@ import (
 type postHeaderConfigModeHandler func(context.Context, *cli.Args, *logging.BootstrapLogger) (int, bool)
 
 // applyConfigUpgrade is the single in-process entry point for the backup.env
-// template merge. It seeds SCHEDULER_TIME from the live proxsave cron line BEFORE
-// the merge can materialize the template default (02:00): afterwards "absent" and
-// "explicitly 02:00" are indistinguishable, and on --upgrade the daemon
-// auto-migration deletes that cron line moments later, leaving the operator's real
-// run time nowhere on the system. The merge preserves existing user values, so the
-// seeded time survives and SCHEDULER_TIME is not even reported as an added key.
+// template merge. It seeds the SCHEDULER_* variables from the live proxsave cron
+// line BEFORE the merge can materialize the template defaults (daily at 02:00):
+// afterwards "absent" and "explicitly the default" are indistinguishable, and on
+// --upgrade the daemon auto-migration deletes that cron line moments later, leaving
+// the operator's real schedule nowhere on the system. The merge preserves existing
+// user values, so the seeded schedule survives and is not reported as added keys.
 //
-// The seeding note travels back as an UpgradeResult warning (the callers already
-// render those) instead of being logged, because this also runs in
-// --upgrade-config-json, whose stdout must stay pure JSON.
+// The seeding block travels back in the UpgradeResult instead of being logged,
+// because this also runs in --upgrade-config-json, whose stdout must stay pure JSON:
+// its INFO and DEBUG lines as Notes, which the callers log before the warnings, and a
+// finding the operator has to see as one Warnings item.
 func applyConfigUpgrade(ctx context.Context, configPath, baseDir string) (*config.UpgradeResult, error) {
 	seed := seedSchedulerTimeFromCrontabFn(ctx, configPath)
 	result, err := config.UpgradeConfigFileWithBaseDir(configPath, baseDir)
-	if result != nil && seed.Note != "" {
-		result.Warnings = append(result.Warnings, seed.Note)
+	if result != nil {
+		result.Notes = append(result.Notes, seed.upgradeNotes()...)
+		if seed.Item != "" {
+			result.Warnings = append(result.Warnings, seed.Item)
+		}
 	}
 	return result, err
 }
@@ -91,6 +95,7 @@ func runUpgradeConfigMode(ctx context.Context, args *cli.Args, bootstrap *loggin
 		bootstrap.Error("Failed to upgrade configuration: %v", err)
 		return types.ExitConfigError.Int(), true
 	}
+	logConfigUpgradeNotes(bootstrap, result.Notes)
 	logConfigUpgradeWarnings(bootstrap, result.Warnings)
 	if !result.Changed {
 		bootstrap.Println("Configuration is already up to date with the embedded template; no changes were made.")
@@ -157,6 +162,18 @@ func runUpgradeConfigDryMode(_ context.Context, args *cli.Args, bootstrap *loggi
 	printConfigUpgradeDryRunResult(bootstrap, result)
 	reportConfigFindingsTheMergeLeaves(bootstrap, args.ConfigPath)
 	return types.ExitSuccess.Int(), true
+}
+
+// logConfigUpgradeNotes logs an upgrade's Notes at their level, in order. The callers run it
+// BEFORE the warnings list, so a block that ends in an outcome is read before the list.
+func logConfigUpgradeNotes(bootstrap *logging.BootstrapLogger, notes []config.UpgradeNote) {
+	for _, note := range notes {
+		if note.Level == config.UpgradeNoteDebug {
+			logBootstrapDebug(bootstrap, "%s", note.Text)
+			continue
+		}
+		logBootstrapInfo(bootstrap, "%s", note.Text)
+	}
 }
 
 func logConfigUpgradeWarnings(bootstrap *logging.BootstrapLogger, warnings []string) {

@@ -5,6 +5,9 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/tis24dev/proxsave/internal/cron"
 )
 
 func writeExistingConfig(t *testing.T, content string) string {
@@ -123,20 +126,23 @@ func TestExistingConfigPresent(t *testing.T) {
 	}
 }
 
-// TestApplySchedulerTimeSeedEmptyBase pins S3: the mirror keeps its blank-base
+// weeklyAt21 is the cadence of "0 21 * * 1", the shape an adoption hands the mirror.
+var weeklyAt21 = cron.Cadence{Frequency: cron.FrequencyWeekly, Weekday: time.Monday, MonthDay: 1, Time: "21:00"}
+
+// TestApplyScheduleSeedEmptyBase pins S3: the mirror keeps its blank-base
 // guard. Without it a blank base becomes "\nSCHEDULER_TIME=HH:MM", which flips
 // ApplyInstallData's editingExisting to true, defeats its
 // blank->embedded-default substitution and writes a gutted config.
-func TestApplySchedulerTimeSeedEmptyBase(t *testing.T) {
-	if got := ApplySchedulerTimeSeed("", "21:00"); got != "" {
+func TestApplyScheduleSeedEmptyBase(t *testing.T) {
+	if got := ApplyScheduleSeed("", weeklyAt21); got != "" {
 		t.Fatalf("empty base must stay empty, got %q", got)
 	}
-	if got := ApplySchedulerTimeSeed("SCHEDULER_MODE=cron\n", ""); got != "SCHEDULER_MODE=cron\n" {
-		t.Fatalf("empty time must leave the base untouched, got %q", got)
+	if got := ApplyScheduleSeed("SCHEDULER_MODE=cron\n", cron.Cadence{}); got != "SCHEDULER_MODE=cron\n" {
+		t.Fatalf("no adopted cadence must leave the base untouched, got %q", got)
 	}
 }
 
-// TestApplySchedulerTimeSeedWhitespaceBase pins the half that used to escape.
+// TestApplyScheduleSeedWhitespaceBase pins the half that used to escape.
 // The guard was an exact-empty comparison, so a backup.env holding nothing but a
 // newline was seeded, turned editingExisting on, and got the gutted config -- while
 // a 0-byte file one keystroke away got the full template. There is nothing in a
@@ -145,25 +151,53 @@ func TestApplySchedulerTimeSeedEmptyBase(t *testing.T) {
 //
 // A comments-only base is the deliberate other side of that line: it is content the
 // operator wrote, so it stays an existing configuration and is still seeded.
-func TestApplySchedulerTimeSeedWhitespaceBase(t *testing.T) {
+func TestApplyScheduleSeedWhitespaceBase(t *testing.T) {
 	for _, base := range []string{" ", "\n", "\n\n", "  \t\n  "} {
-		if got := ApplySchedulerTimeSeed(base, "21:00"); got != base {
+		if got := ApplyScheduleSeed(base, weeklyAt21); got != base {
 			t.Errorf("whitespace-only base %q must be left alone like an empty one, got %q", base, got)
 		}
 	}
 	const commented = "# SCHEDULER_MODE=cron\n"
-	if got := ApplySchedulerTimeSeed(commented, "21:00"); got == commented {
+	if got := ApplyScheduleSeed(commented, weeklyAt21); got == commented {
 		t.Errorf("a comments-only base is real content and must still be seeded, got %q", got)
 	}
 }
 
-func TestApplySchedulerTimeSeedMirrorsTime(t *testing.T) {
-	got := ApplySchedulerTimeSeed("SCHEDULER_MODE=cron\n", "21:00")
-	if !strings.Contains(got, "SCHEDULER_TIME=21:00") {
-		t.Fatalf("expected SCHEDULER_TIME=21:00 in %q", got)
+// The whole cadence reaches the base, not only the time: the wizard prefills Frequency,
+// Weekday and Day of month from it, and ApplyInstallData writes back what they show.
+func TestApplyScheduleSeedMirrorsTheWholeCadence(t *testing.T) {
+	got := ApplyScheduleSeed("SCHEDULER_MODE=cron\nSCHEDULER_TIME=02:00\n", weeklyAt21)
+	for _, want := range []string{
+		"SCHEDULER_MODE=cron",
+		"SCHEDULER_FREQUENCY=weekly",
+		"SCHEDULER_WEEKDAY=mon",
+		"SCHEDULER_MONTHDAY=1",
+		"SCHEDULER_TIME=21:00",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("expected %q in %q", want, got)
+		}
 	}
-	if !strings.Contains(got, "SCHEDULER_MODE=cron") {
-		t.Fatalf("expected the existing base to survive, got %q", got)
+	if strings.Contains(got, "SCHEDULER_TIME=02:00") {
+		t.Errorf("the adopted time must replace the stored one, got %q", got)
+	}
+}
+
+func TestScheduleVariablesNamesAllFour(t *testing.T) {
+	got := ScheduleVariables(cron.Cadence{Frequency: cron.FrequencyMonthly, Weekday: time.Sunday, MonthDay: 15, Time: "03:00"})
+	want := map[string]string{
+		"SCHEDULER_FREQUENCY": "monthly",
+		"SCHEDULER_WEEKDAY":   "sun",
+		"SCHEDULER_MONTHDAY":  "15",
+		"SCHEDULER_TIME":      "03:00",
+	}
+	if len(got) != len(want) {
+		t.Fatalf("ScheduleVariables = %v, want %v", got, want)
+	}
+	for k, v := range want {
+		if got[k] != v {
+			t.Errorf("%s = %q, want %q", k, got[k], v)
+		}
 	}
 }
 

@@ -29,6 +29,19 @@ type keyRange struct {
 	end   int
 }
 
+// Levels of an UpgradeNote. A finding that is a warning is not a note: it goes to
+// UpgradeResult.Warnings, the list every caller already renders as warnings.
+const (
+	UpgradeNoteInfo  = "info"
+	UpgradeNoteDebug = "debug"
+)
+
+// UpgradeNote is one line of UpgradeResult.Notes: its level and its text.
+type UpgradeNote struct {
+	Level string
+	Text  string
+}
+
 // UpgradeResult describes the outcome of a configuration upgrade.
 type UpgradeResult struct {
 	// BackupPath is the path of the backup created from the previous config.
@@ -44,6 +57,11 @@ type UpgradeResult struct {
 	CaseConflictKeys []string
 	// Warnings includes non-fatal parsing or merge issues detected while upgrading.
 	Warnings []string
+	// Notes are lines the caller logs, in order and at their level, BEFORE Warnings:
+	// the INFO block of an outcome that needs no action and the DEBUG evidence behind
+	// either list. Filled by the caller of the merge, never by the merge itself. A
+	// binary built before the field existed decodes a result carrying it and ignores it.
+	Notes []UpgradeNote
 	// PreservedValues is the number of existing key=value pairs from the user's
 	// configuration that were kept during the merge for keys present in the
 	// template.

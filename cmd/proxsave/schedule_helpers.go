@@ -2,8 +2,10 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
+	"sort"
 	"strings"
 
 	"github.com/tis24dev/proxsave/internal/config"
@@ -11,6 +13,7 @@ import (
 	"github.com/tis24dev/proxsave/internal/installer"
 	"github.com/tis24dev/proxsave/internal/logging"
 	"github.com/tis24dev/proxsave/internal/safefs"
+	"github.com/tis24dev/proxsave/internal/ui/theme"
 )
 
 // resolveCronScheduleFromEnv returns a cron schedule string derived from the
@@ -97,15 +100,125 @@ func configCronSchedule(cfg *config.Config) string {
 	return cronutil.TimeToSchedule(cfg.SchedulerTime)
 }
 
-// schedulerTimeSeed is the outcome of a SCHEDULER_TIME seeding attempt: Time is
-// the HH:MM written into backup.env ("" when nothing was written) and Note is a
-// one-line operator-facing explanation ("" when there is nothing to report). The
-// note is RETURNED rather than logged because --upgrade-config-json must keep
-// stdout pure JSON (upgradeConfigWithBinary json.Unmarshals the child's entire
-// stdout); that caller surfaces it as an UpgradeResult warning instead.
+// Texts of the adoption and removal blocks, approved by the maintainer (todo points 44-55).
+const (
+	scheduleAdoptHeader         = "Adopting backup schedule from cron entry..."
+	scheduleAdoptedOutcome      = theme.SymbolSuccess + " Backup schedule: adopted from cron entry"
+	scheduleWriteFailedOutcome  = theme.SymbolWarning + " Backup schedule: not adopted from cron entry"
+	scheduleWriteFailedWhy      = "backup.env could not be written"
+	cronRemovalHeader           = "Removing proxsave cron entry..."
+	cronRemovedOutcome          = theme.SymbolSuccess + " Proxsave cron entry: removed"
+	cronNotRemovedOutcome       = theme.SymbolWarning + " Proxsave cron entry: not removed, remove it by hand to avoid a double backup"
+	cronNotRemovedWhy           = "Crontab could not be written"
+	reasonLinesDisagree         = "lines_disagree"
+	reasonFileNotManaged        = "file_not_managed"
+	reasonWrapperNotInterpreted = "wrapper_not_interpreted"
+)
+
+// scheduleLineLevel is the level one line of a schedule block is logged at.
+type scheduleLineLevel int
+
+const (
+	scheduleLineDebug scheduleLineLevel = iota
+	scheduleLineInfo
+	scheduleLineWarning
+)
+
+// scheduleLine is one line of a schedule block, at its level.
+type scheduleLine struct {
+	Level scheduleLineLevel
+	Text  string
+}
+
+// scheduleBlock is a log block in the shape the log rules fix: the header, the DEBUG evidence
+// of what was read, the indented details, the operator's reason (only for an outcome that is
+// not OK) and the outcome LAST. Every part is optional; an empty block renders nothing.
+type scheduleBlock struct {
+	Header  string
+	Debug   []string
+	Details []string
+	Why     string
+	Outcome string
+	Warn    bool // the outcome is a WARNING rather than INFO
+}
+
+func (b scheduleBlock) lines() []scheduleLine {
+	var out []scheduleLine
+	if b.Header != "" {
+		out = append(out, scheduleLine{scheduleLineInfo, b.Header})
+	}
+	for _, text := range b.Debug {
+		out = append(out, scheduleLine{scheduleLineDebug, text})
+	}
+	for _, text := range b.Details {
+		out = append(out, scheduleLine{scheduleLineInfo, text})
+	}
+	if b.Why != "" {
+		out = append(out, scheduleLine{scheduleLineInfo, b.Why})
+	}
+	if b.Outcome != "" {
+		level := scheduleLineInfo
+		if b.Warn {
+			level = scheduleLineWarning
+		}
+		out = append(out, scheduleLine{level, b.Outcome})
+	}
+	return out
+}
+
+// logScheduleLines logs a block through the bootstrap logger, or through the global logger
+// when there is none (the --daemon-setup path, see runDaemonSetup).
+func logScheduleLines(bootstrap *logging.BootstrapLogger, lines []scheduleLine) {
+	for _, line := range lines {
+		switch line.Level {
+		case scheduleLineDebug:
+			logBootstrapDebug(bootstrap, "%s", line.Text)
+		case scheduleLineWarning:
+			logBootstrapWarning(bootstrap, "%s", line.Text)
+		default:
+			logBootstrapInfo(bootstrap, "%s", line.Text)
+		}
+	}
+}
+
+// schedulerTimeSeed is the outcome of adopting the host's cron schedule into backup.env.
+// Cadence is what was adopted (no Frequency when nothing was). Block is what the install
+// front-ends log, in full. Item is the one line --upgrade-config and --upgrade list among the
+// configuration warnings when the outcome is one ("" otherwise); the block then travels only
+// as its DEBUG evidence, see upgradeNotes.
+//
+// Nothing here is LOGGED by the functions that build it, because --upgrade-config-json must
+// keep stdout pure JSON (upgradeConfigWithBinary json.Unmarshals the child's entire stdout).
 type schedulerTimeSeed struct {
-	Time string
-	Note string
+	Cadence cronutil.Cadence
+	Block   scheduleBlock
+	Item    string
+
+	// inEffect is the schedule backup.env states without the adoption, which is what runs
+	// when the adoption cannot be written.
+	inEffect cronutil.Cadence
+}
+
+func (s schedulerTimeSeed) adopted() bool { return s.Cadence.Frequency != "" }
+
+// empty reports a seed with nothing to write and nothing to say.
+func (s schedulerTimeSeed) empty() bool {
+	return !s.adopted() && s.Item == "" && len(s.Block.lines()) == 0
+}
+
+// upgradeNotes is the block as config.UpgradeResult.Notes. When the outcome is a warning item
+// only the DEBUG evidence travels: the item says the rest, in the warnings list.
+func (s schedulerTimeSeed) upgradeNotes() []config.UpgradeNote {
+	var notes []config.UpgradeNote
+	for _, line := range s.Block.lines() {
+		switch {
+		case line.Level == scheduleLineDebug:
+			notes = append(notes, config.UpgradeNote{Level: config.UpgradeNoteDebug, Text: line.Text})
+		case line.Level == scheduleLineInfo && s.Item == "":
+			notes = append(notes, config.UpgradeNote{Level: config.UpgradeNoteInfo, Text: line.Text})
+		}
+	}
+	return notes
 }
 
 // seedSchedulerTimeFromCrontabFn is a seam so the install/upgrade tests can drive
@@ -115,39 +228,73 @@ var seedSchedulerTimeFromCrontabFn = seedSchedulerTimeFromCrontab
 // deriveSchedulerTimeFromCrontabFn is the read-only twin of the seam above.
 var deriveSchedulerTimeFromCrontabFn = deriveSchedulerTimeFromCrontab
 
-// seedSchedulerTimeFromCrontab records the time the host ACTUALLY runs its backup
-// at into SCHEDULER_TIME, derived from the proxsave cron line, so the daemon that
-// replaces cron - and the cron line a (re)install rewrites from the config -
-// inherit it instead of the 02:00 template default. SCHEDULER_TIME only exists
-// since 0.30: on every older install the crontab is the sole record of the
-// operator's run time, and both the config merge and the daemon migration used to
-// discard it.
+// seedSchedulerTimeFromCrontab records the schedule the host ACTUALLY runs its backup on into
+// the four SCHEDULER_* variables, derived from the proxsave cron line, so the daemon that
+// replaces cron - and the cron line a (re)install rewrites from the config - inherit it
+// instead of the template defaults. SCHEDULER_TIME only exists since 0.30 and
+// SCHEDULER_FREQUENCY since 0.41: on older installs the crontab is the sole record of the
+// operator's schedule, and both the config merge and the daemon migration used to discard it.
 //
-// Precedence: an EXPLICIT operator SCHEDULER_TIME always wins; this only fills a
-// value the operator never set. "Never set" is KEY ABSENCE (or an empty value),
-// never a value comparison, which is why every caller runs this BEFORE the writer
-// that would materialize the template default. Once the key exists this is a
-// no-op, so it is safe to call on every install and every upgrade.
+// Precedence: an EXPLICIT operator schedule always wins; this only fills what the operator
+// never stated. "Never stated" is KEY ABSENCE (or an empty value), never a value comparison,
+// which is why every caller runs this BEFORE the writer that would materialize the template
+// defaults. The gate is deriveSchedulerTimeFromCrontab's; once both SCHEDULER_TIME and
+// SCHEDULER_FREQUENCY exist this is a no-op, so it is safe to call on every install and every
+// upgrade.
 //
-// Best-effort: an unreadable config or crontab, no proxsave cron line, or a
-// schedule the daemon cannot express leaves the file untouched (DefaultTime keeps
-// applying).
+// Best-effort: an unreadable config or crontab, no proxsave cron line, or a schedule the
+// daemon cannot express leaves the file untouched (the defaults keep applying).
 func seedSchedulerTimeFromCrontab(ctx context.Context, configPath string) schedulerTimeSeed {
 	seed := deriveSchedulerTimeFromCrontab(ctx, configPath)
-	if seed.Time == "" {
+	if !seed.adopted() {
 		return seed
 	}
-	if err := setBackupEnvKeys(configPath, map[string]string{"SCHEDULER_TIME": seed.Time}); err != nil {
-		return schedulerTimeSeed{Note: fmt.Sprintf("Failed to record the existing cron run time %s as SCHEDULER_TIME: %v", seed.Time, err)}
+	vars := installer.ScheduleVariables(seed.Cadence)
+	if err := setBackupEnvKeys(configPath, vars); err != nil {
+		return seed.writeFailed(configPath, err)
 	}
+	seed.Block.Debug = append(seed.Block.Debug, fmt.Sprintf("schedule adopt: wrote %s file=%s", formatScheduleVariables(vars), configPath))
 	return seed
+}
+
+// writeFailed turns an adoption whose write failed into the block that says so. The warnings
+// list has no approved one-line text for this case yet, so its item keeps the note of before.
+func (s schedulerTimeSeed) writeFailed(configPath string, err error) schedulerTimeSeed {
+	debug := append(append([]string(nil), s.Block.Debug...),
+		fmt.Sprintf("schedule adopt: write failed file=%s error=%v", configPath, err),
+		fmt.Sprintf("schedule adopt: kept %s source=%s", cadenceFields(s.inEffect), configPath))
+	return schedulerTimeSeed{
+		Block: scheduleBlock{
+			Header:  scheduleAdoptHeader,
+			Debug:   debug,
+			Details: cadenceDetails(s.inEffect),
+			Why:     scheduleWriteFailedWhy,
+			Outcome: scheduleWriteFailedOutcome,
+			Warn:    true,
+		},
+		Item:     fmt.Sprintf("Failed to record the existing cron run time %s as SCHEDULER_TIME: %v", s.Cadence.Time, err),
+		inEffect: s.inEffect,
+	}
 }
 
 // deriveSchedulerTimeFromCrontab is seedSchedulerTimeFromCrontab without the write.
 // It exists because the install wizard must NOT touch backup.env before the operator
 // has committed: on the Edit path the wizard rewrites the whole file at the end from
-// its in-memory template, so the adopted time only has to reach that template, and an
-// install cancelled halfway then leaves the host byte-identical.
+// its in-memory template, so the adopted schedule only has to reach that template, and
+// an install cancelled halfway then leaves the host byte-identical.
+//
+// The gate (todo point 15): SCHEDULER_TIME and SCHEDULER_FREQUENCY both present is an
+// explicit schedule and nothing is adopted. SCHEDULER_TIME present without
+// SCHEDULER_FREQUENCY still leaves the frequency unstated, so a weekly or monthly line is
+// adopted WHOLE, its time replacing the stored one; a daily line adds nothing the stored time
+// does not already say, and the explicit time wins. With no SCHEDULER_TIME every line the
+// daemon can express is adopted.
+//
+// A line the daemon cannot express is reported, never rounded. A monthly line on day 29-31 is
+// reported whether or not SCHEDULER_TIME is set, because the install is about to rewrite it
+// as a line that runs on another day. Every other unreadable line, the /etc line and the
+// wrapper are reported only when SCHEDULER_TIME is absent, as they were before the frequency
+// existed.
 func deriveSchedulerTimeFromCrontab(ctx context.Context, configPath string) schedulerTimeSeed {
 	configPath = strings.TrimSpace(configPath)
 	if configPath == "" {
@@ -157,230 +304,519 @@ func deriveSchedulerTimeFromCrontab(ctx context.Context, configPath string) sche
 	if err != nil {
 		return schedulerTimeSeed{}
 	}
-	if strings.TrimSpace(installer.DeriveInstallWizardPrefill(string(data)).SchedulerTime) != "" {
-		return schedulerTimeSeed{} // explicit operator value: never overridden
+	prefill := installer.DeriveInstallWizardPrefill(string(data))
+	storedTime := strings.TrimSpace(prefill.SchedulerTime)
+	storedFrequency := strings.TrimSpace(prefill.SchedulerFrequency)
+	if storedTime != "" && storedFrequency != "" {
+		return schedulerTimeSeed{} // explicit operator schedule: never overridden
 	}
 	lines, err := crontabReadLinesFn(ctx)
 	if err != nil {
 		return schedulerTimeSeed{}
 	}
-	hhmm, ok := schedulerTimeFromCronLines(lines)
-	if !ok {
-		if hasProxsaveCronLine(lines) {
-			return schedulerTimeSeed{Note: fmt.Sprintf(
-				"The existing proxsave cron entry is not a single daily time; SCHEDULER_TIME stays at the %s default - set it in backup.env if the backup must run at another time.",
-				cronutil.DefaultTime)}
+	inEffect := cadenceInEffect(prefill)
+	reading := schedulerCadenceFromCronLines(lines)
+	switch {
+	case reading.Found && reading.Reason == "":
+		if storedTime != "" && reading.Cadence.Frequency == cronutil.FrequencyDaily {
+			return schedulerTimeSeed{}
 		}
-		// No cron line NAMES the proxsave binary, but one may still run it indirectly
-		// (#298). That wrapper's schedule is then the ONLY record of the host's real run
-		// time, which is exactly why the silence hurt: SCHEDULER_TIME kept the 02:00
-		// default, i.e. the very minute the wrapper already occupied. The time is still
-		// not adopted - it belongs to a script we did not write and cannot interpret - so
-		// say so and let the operator set it. Lexical rules only (cronProbeNamesOnly):
-		// this also runs in the install wizard and in --upgrade-config-json, neither of
-		// which should be reading scripts off disk.
-		if hhmm, source := schedulerTimeFromSystemCron(); hhmm != "" {
-			return schedulerTimeSeed{Note: fmt.Sprintf(
-				"A proxsave cron entry in %s runs the backup at %s and ProxSave does not edit files it did not place, so that entry stays; SCHEDULER_TIME keeps the %s default and applies only to the entry ProxSave writes.", source, hhmm, cronutil.DefaultTime)}
+		return schedulerTimeSeed{
+			Cadence: reading.Cadence,
+			Block: scheduleBlock{
+				Header: scheduleAdoptHeader,
+				Debug: []string{
+					reading.debugText(),
+					fmt.Sprintf("schedule adopt: SCHEDULER_TIME=%s SCHEDULER_FREQUENCY=%s source=%s",
+						valueOrAbsent(storedTime), valueOrAbsent(storedFrequency), configPath),
+				},
+				Details: cadenceDetails(reading.Cadence),
+				Outcome: scheduleAdoptedOutcome,
+			},
+			inEffect: inEffect,
 		}
-		if refs := indirectProxsaveCronRefs(lines, cronProbeNamesOnly); len(refs) > 0 {
-			at := ""
-			if t := cronutil.ScheduleToTime(refs[0].Line); t != "" {
-				at = fmt.Sprintf(" at %s", t)
-			}
-			return schedulerTimeSeed{Note: fmt.Sprintf(
-				"No proxsave cron entry was found, but %s appears to run ProxSave%s; SCHEDULER_TIME stays at the %s default - set it in backup.env so the scheduler does not collide with that entry.",
-				refs[0].Command, at, cronutil.DefaultTime)}
+	case reading.Found && reading.Reason == cronutil.ReasonMonthDayOutOfRange:
+		return monthDayOutOfRangeSeed(reading, inEffect, configPath)
+	case reading.Found:
+		if storedTime != "" {
+			return schedulerTimeSeed{}
 		}
+		// No approved text for a step, a list, a range or two lines that disagree: the note
+		// of before stays, word for word, until there is one.
+		note := fmt.Sprintf(
+			"The existing proxsave cron entry is not a single daily time; SCHEDULER_TIME stays at the %s default - set it in backup.env if the backup must run at another time.",
+			cronutil.DefaultTime)
+		return schedulerTimeSeed{
+			Block:    scheduleBlock{Debug: []string{reading.debugText()}, Outcome: note},
+			Item:     note,
+			inEffect: inEffect,
+		}
+	}
+	if storedTime != "" {
 		return schedulerTimeSeed{}
 	}
-	return schedulerTimeSeed{Time: hhmm, Note: fmt.Sprintf(
-		"SCHEDULER_TIME was not set: adopted %s from the existing proxsave cron entry so the daily run time does not change.", hhmm)}
+	// The root crontab schedules nothing that NAMES the proxsave binary. Two other places may
+	// still run it, and each is reported, not adopted: the line survives the install either way,
+	// so adopting its schedule would put ProxSave's own line in the very minute it occupies.
+	if hhmm, ref := schedulerTimeFromSystemCron(); hhmm != "" {
+		return etcLineSeed(ref, hhmm, inEffect)
+	}
+	// No cron line NAMES the proxsave binary, but one may still run it indirectly (#298). Its
+	// schedule belongs to a script we did not write and cannot interpret. Lexical rules only
+	// (cronProbeNamesOnly): this also runs in the install wizard and in --upgrade-config-json,
+	// neither of which should be reading scripts off disk.
+	if refs := indirectProxsaveCronRefs(lines, cronProbeNamesOnly); len(refs) > 0 {
+		return wrapperSeed(refs[0], inEffect)
+	}
+	return schedulerTimeSeed{}
+}
+
+// monthDayOutOfRangeSeed reports a monthly line on day 29-31. Its day is outside the 1-28 a
+// cadence allows, so no month skips the backup, and it is not rounded to one the operator did
+// not choose. It is shared by install, upgrade and the cron -> daemon switch.
+func monthDayOutOfRangeSeed(r cronCadenceReading, inEffect cronutil.Cadence, configPath string) schedulerTimeSeed {
+	schedule := cronScheduleFields(r.Line)
+	day := cronMonthDayField(r.Line)
+	return schedulerTimeSeed{
+		Block: scheduleBlock{
+			Header: scheduleAdoptHeader,
+			Debug: []string{
+				r.debugText(),
+				fmt.Sprintf("schedule adopt: kept %s source=%s", cadenceFields(inEffect), configPath),
+			},
+			Details: cadenceDetails(inEffect),
+			Why:     fmt.Sprintf("Day %s is outside 1-%d", day, cronutil.MaxMonthDay),
+			Outcome: fmt.Sprintf("%s Backup schedule: cron entry %q not adopted", theme.SymbolWarning, schedule),
+			Warn:    true,
+		},
+		Item: fmt.Sprintf("%s Backup schedule: cron entry %q not adopted, day %s is outside 1-%d, %s",
+			theme.SymbolWarning, schedule, day, cronutil.MaxMonthDay, inEffectItemLabel(inEffect)),
+		inEffect: inEffect,
+	}
+}
+
+// etcLineSeed reports a proxsave line under /etc/crontab or /etc/cron.d, which ProxSave never
+// edits, so it keeps running next to the line ProxSave writes.
+func etcLineSeed(ref indirectCronRef, hhmm string, inEffect cronutil.Cadence) schedulerTimeSeed {
+	kept := cronutil.Cadence{Frequency: cronutil.FrequencyDaily, Weekday: cronutil.DefaultWeekday, MonthDay: cronutil.DefaultMonthDay, Time: hhmm}
+	return schedulerTimeSeed{
+		Block: scheduleBlock{
+			Header: scheduleAdoptHeader,
+			Debug: []string{
+				"schedule adopt: root crontab has no proxsave line",
+				fmt.Sprintf("schedule adopt: %s line=%q parsed %s, not adopted reason=%s", ref.Source, ref.Line, cadenceFields(kept), reasonFileNotManaged),
+			},
+			Details: append(cadenceDetails(inEffect), fmt.Sprintf("  Kept: %s, %s", ref.Source, cadenceLabel(kept))),
+			Why:     fmt.Sprintf("Two backups a day: %s is not edited by ProxSave", ref.Source),
+			Outcome: fmt.Sprintf("%s Backup schedule: cron entry in %s not adopted", theme.SymbolWarning, ref.Source),
+			Warn:    true,
+		},
+		Item: fmt.Sprintf("%s Backup schedule: cron entry in %s not adopted, two backups a day, %s",
+			theme.SymbolWarning, ref.Source, inEffectItemLabel(inEffect)),
+		inEffect: inEffect,
+	}
+}
+
+// wrapperSeed reports a root-crontab line whose command appears to run ProxSave through a
+// script (#298). Its schedule is named when it parses, and never adopted.
+func wrapperSeed(ref indirectCronRef, inEffect cronutil.Cadence) schedulerTimeSeed {
+	parsed, kept := "", ref.Command
+	if c, err := cronutil.ParseSchedule(ref.Line); err == nil {
+		parsed = "parsed " + cadenceFields(c)
+		kept = ref.Command + ", " + cadenceLabel(c)
+	} else {
+		parsed = "not parsed reason=" + scheduleErrorReason(err)
+	}
+	return schedulerTimeSeed{
+		Block: scheduleBlock{
+			Header: scheduleAdoptHeader,
+			Debug: []string{
+				"schedule adopt: root crontab has no proxsave line",
+				fmt.Sprintf("schedule adopt: indirect command=%s line=%q %s, not adopted reason=%s", ref.Command, ref.Line, parsed, reasonWrapperNotInterpreted),
+			},
+			Details: append(cadenceDetails(inEffect), "  Kept: "+kept),
+			Why:     fmt.Sprintf("Two backups a day: %s appears to run ProxSave", ref.Command),
+			Outcome: fmt.Sprintf("%s Backup schedule: cron entry for %s not adopted", theme.SymbolWarning, ref.Command),
+			Warn:    true,
+		},
+		Item: fmt.Sprintf("%s Backup schedule: cron entry for %s not adopted, two backups a day, %s",
+			theme.SymbolWarning, ref.Command, inEffectItemLabel(inEffect)),
+		inEffect: inEffect,
+	}
 }
 
 // schedulerTimeFromSystemCron reads the run time of a proxsave cron line under /etc/crontab or
-// /etc/cron.d, returning the time and the file it came from, or "" when the habitat says
+// /etc/cron.d, returning the time and the line it came from, or "" when the habitat says
 // nothing unambiguous. Its caller reports it and does not adopt it; see below.
 //
 // It runs only after the root crontab has yielded nothing, and that order is the priority
 // rule, not an implementation detail: the root crontab is the table ProxSave owns and is
-// about to rewrite, so a time found there is the one it is going to reinstate.
+// about to rewrite, so a schedule found there is the one it is going to reinstate.
 //
 // The time it returns is REPORTED, never adopted, and that is the whole difference between
-// the two habitats. Adopting a root-crontab time is continuity, because the line it came from
-// is the line ProxSave is about to replace. Adopting an /etc time is a collision: ProxSave
+// the two habitats. Adopting a root-crontab schedule is continuity, because the line it came
+// from is the line ProxSave is about to replace. Adopting an /etc time is a collision: ProxSave
 // never edits /etc, so that entry SURVIVES the install, and writing its hour into
 // SCHEDULER_TIME puts the line ProxSave is about to write in the exact minute the surviving
 // one already occupies. The two runs then meet on the per-run lock and one exits 16 every
 // night. Left alone, the host keeps its /etc entry and gains ProxSave's at the default hour:
 // still two backups, both of which succeed.
 //
-// Same unanimity rule as schedulerTimeFromCronLines: two proxsave lines at different times, or
-// a schedule the daemon cannot express, say nothing. A finding that names one of several hours
-// would read as the host's run time.
-func schedulerTimeFromSystemCron() (string, string) {
-	found, source := "", ""
+// Daily lines only, as before SCHEDULER_FREQUENCY existed: the report says "two backups a
+// day", which a weekly or monthly /etc line would make untrue. Same unanimity rule as
+// schedulerCadenceFromCronLines: two proxsave lines at different times say nothing. A finding
+// that names one of several hours would read as the host's run time.
+func schedulerTimeFromSystemCron() (string, indirectCronRef) {
+	found := ""
+	var at indirectCronRef
 	for _, ref := range systemCronDirectProxsaveLines() {
 		hhmm := cronutil.ScheduleToTime(ref.Line)
 		if hhmm == "" || (found != "" && found != hhmm) {
-			return "", ""
+			return "", indirectCronRef{}
 		}
-		found, source = hhmm, ref.Source
+		found, at = hhmm, ref
 	}
-	return found, source
+	return found, at
 }
 
-// schedulerTimeFromCronLines derives the single daily HH:MM the proxsave cron
-// entries run at. It returns ok=false unless the crontab expresses exactly ONE
-// unambiguous daily time for proxsave: every proxsave-owned line (matched the same
-// way dropCanonicalCronLines matches the lines it deletes, so we read exactly what
-// is about to be removed) must convert to the same HH:MM. No proxsave line, a
-// schedule the daemon cannot express, or two proxsave lines at different times all
-// return false.
-func schedulerTimeFromCronLines(lines []string) (string, bool) {
-	found := ""
+// cronCadenceReading is what the proxsave lines of a crontab say about the schedule. Found is
+// false when no line names the binary. Otherwise Reason is "" and Cadence is the schedule all
+// of them agree on, or Reason says why there is none and Line is the line it is about.
+type cronCadenceReading struct {
+	Found   bool
+	Line    string
+	Cadence cronutil.Cadence
+	Reason  string
+}
+
+// schedulerCadenceFromCronLines reads the one cadence the proxsave cron entries run on. Every
+// proxsave-owned line (matched the same way dropCanonicalCronLines matches the lines it
+// deletes, so we read exactly what is about to be removed) must parse with
+// cronutil.ParseSchedule, and all of them must describe the same cadence: picking one of
+// several would move the backup on purpose.
+func schedulerCadenceFromCronLines(lines []string) cronCadenceReading {
+	var reading cronCadenceReading
 	for _, line := range lines {
 		if !commandTokenMatchesTarget(strings.Trim(cronCommandToken(line), "\"'")) {
 			continue
 		}
-		hhmm := cronutil.ScheduleToTime(line)
-		if hhmm == "" || (found != "" && found != hhmm) {
-			return "", false
+		c, err := cronutil.ParseSchedule(line)
+		if err != nil {
+			return cronCadenceReading{Found: true, Line: line, Reason: scheduleErrorReason(err)}
 		}
-		found = hhmm
+		if !reading.Found {
+			reading = cronCadenceReading{Found: true, Line: line, Cadence: c}
+			continue
+		}
+		if c.Schedule() != reading.Cadence.Schedule() {
+			return cronCadenceReading{Found: true, Line: line, Reason: reasonLinesDisagree}
+		}
 	}
-	return found, found != ""
+	return reading
 }
 
-// adoptSchedulerTimeForDaemon carries the host's real run time across a cron -> daemon switch,
-// by overwriting SCHEDULER_TIME with the time of the proxsave cron entry that is about to be
-// deleted.
+// debugText is the DEBUG evidence of a reading: what the line parsed to, or why it did not.
+func (r cronCadenceReading) debugText() string {
+	if r.Reason != "" {
+		return fmt.Sprintf("schedule adopt: cron line=%q not adoptable reason=%s", r.Line, r.Reason)
+	}
+	return fmt.Sprintf("schedule adopt: cron line=%q parsed %s", r.Line, cadenceFields(r.Cadence))
+}
+
+func scheduleErrorReason(err error) string {
+	var scheduleErr *cronutil.ScheduleError
+	if errors.As(err, &scheduleErr) {
+		return scheduleErr.Reason
+	}
+	return "unparsed"
+}
+
+// cadenceInEffect is the schedule backup.env states: its SCHEDULER_* values with their
+// defaults, or a daily run at the stored time (the 02:00 default when that is unreadable too)
+// when the frequency or a day is not valid.
+func cadenceInEffect(p installer.InstallWizardPrefill) cronutil.Cadence {
+	if c, err := cronutil.ParseCadence(p.SchedulerFrequency, p.SchedulerWeekday, p.SchedulerMonthDay, p.SchedulerTime); err == nil {
+		return c
+	}
+	hhmm, err := cronutil.NormalizeTime(p.SchedulerTime, cronutil.DefaultTime)
+	if err != nil {
+		hhmm = cronutil.DefaultTime
+	}
+	return cronutil.Cadence{Frequency: cronutil.FrequencyDaily, Weekday: cronutil.DefaultWeekday, MonthDay: cronutil.DefaultMonthDay, Time: hhmm}
+}
+
+// cadenceFields is a cadence in DEBUG key=value form.
+func cadenceFields(c cronutil.Cadence) string {
+	switch c.Frequency {
+	case cronutil.FrequencyWeekly:
+		return fmt.Sprintf("frequency=weekly weekday=%s time=%s", cronutil.WeekdayName(c.Weekday), c.Time)
+	case cronutil.FrequencyMonthly:
+		return fmt.Sprintf("frequency=monthly monthday=%d time=%s", c.MonthDay, c.Time)
+	default:
+		return fmt.Sprintf("frequency=%s time=%s", c.Frequency, c.Time)
+	}
+}
+
+// cadenceDetails is a cadence as the indented detail lines of a block: Frequency, then the
+// day that frequency uses (none for daily), then Time.
+func cadenceDetails(c cronutil.Cadence) []string {
+	out := []string{"  Frequency: " + string(c.Frequency)}
+	switch c.Frequency {
+	case cronutil.FrequencyWeekly:
+		out = append(out, "  Weekday: "+c.Weekday.String())
+	case cronutil.FrequencyMonthly:
+		out = append(out, fmt.Sprintf("  Day of month: %d", c.MonthDay))
+	}
+	return append(out, "  Time: "+c.Time)
+}
+
+// cadenceLabel is a cadence inside one line: "daily at 03:00", "weekly, Monday at 03:00",
+// "monthly, day 15 at 03:00".
+func cadenceLabel(c cronutil.Cadence) string {
+	switch c.Frequency {
+	case cronutil.FrequencyWeekly:
+		return fmt.Sprintf("weekly, %s at %s", c.Weekday, c.Time)
+	case cronutil.FrequencyMonthly:
+		return fmt.Sprintf("monthly, day %d at %s", c.MonthDay, c.Time)
+	default:
+		return fmt.Sprintf("%s at %s", c.Frequency, c.Time)
+	}
+}
+
+// inEffectItemLabel is the schedule a warnings-list item says stays in effect. It says
+// "default" only when that schedule really is the default one, daily at 02:00.
+func inEffectItemLabel(c cronutil.Cadence) string {
+	if c.Frequency == cronutil.FrequencyDaily && c.Time == cronutil.DefaultTime {
+		return "default " + cadenceLabel(c)
+	}
+	return cadenceLabel(c)
+}
+
+// cronScheduleFields is the schedule part of a cron line: its five time fields, or the
+// @shortcut.
+func cronScheduleFields(line string) string {
+	fields := strings.Fields(line)
+	if len(fields) > 0 && strings.HasPrefix(fields[0], "@") {
+		return fields[0]
+	}
+	if len(fields) < 5 {
+		return strings.TrimSpace(line)
+	}
+	return strings.Join(fields[:5], " ")
+}
+
+// cronMonthDayField is the day-of-month field of a cron line.
+func cronMonthDayField(line string) string {
+	if fields := strings.Fields(line); len(fields) >= 3 {
+		return fields[2]
+	}
+	return ""
+}
+
+func valueOrAbsent(v string) string {
+	if v == "" {
+		return "absent"
+	}
+	return v
+}
+
+// formatScheduleVariables renders variables as sorted KEY=value pairs for a DEBUG line.
+func formatScheduleVariables(vars map[string]string) string {
+	keys := make([]string, 0, len(vars))
+	for k := range vars {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	parts := make([]string, 0, len(keys))
+	for _, k := range keys {
+		parts = append(parts, k+"="+vars[k])
+	}
+	return strings.Join(parts, " ")
+}
+
+// adoptSchedulerTimeForDaemon carries the host's real schedule across a cron -> daemon switch,
+// by overwriting the four SCHEDULER_* variables with the cadence of the proxsave cron entry
+// that is about to be deleted.
 //
-// It must run BEFORE removeCanonicalCronEntry, which is the only record of that time on a cron
-// host: in cron mode the crontab IS the schedule and SCHEDULER_TIME is a leftover nothing keeps
-// in step, so an operator who edited the cron line moved the backup while the key stayed where
-// the installer left it. The daemon then reads the key, and the host would silently start
-// running at a different hour the moment it is retrofitted. It takes the crontab lines rather
-// than reading them itself, so the hour it adopts and the lines the removal acts on are the same
-// snapshot.
+// It must run BEFORE removeCanonicalCronEntry, which is the only record of that schedule on a
+// cron host: in cron mode the crontab IS the schedule and the SCHEDULER_* variables are
+// leftovers nothing keeps in step, so an operator who edited the cron line moved the backup
+// while the variables stayed where the installer left them. The daemon then reads them, and
+// the host would silently start running on a different schedule the moment it is
+// retrofitted. It takes the crontab lines rather than reading them itself, so the schedule it
+// adopts and the lines the removal acts on are the same snapshot.
 //
-// It OVERWRITES, unlike the install-time seeding, which fills the key only when it is ABSENT
-// because "an explicit operator value is never overridden" (deriveSchedulerTimeFromCrontab).
-// That gate is right at install time, where the key and the crontab are two independent
-// statements of intent and neither has been in force over the other. Here it is not: the host
-// has been running on cron, so the crontab is the statement that has been in force.
+// It OVERWRITES, unlike the install-time seeding, which fills the variables only when they
+// are ABSENT because "an explicit operator value is never overridden"
+// (deriveSchedulerTimeFromCrontab). That gate is right at install time, where the variables
+// and the crontab are two independent statements of intent and neither has been in force
+// over the other. Here it is not: the host has been running on cron, so the crontab is the
+// statement that has been in force.
 //
-// It says nothing and writes nothing when there is no single daily time to carry: no proxsave
-// cron line at all, two lines at different times, or a cadence that is not one run a day. The
-// daemon runs once daily, so picking one of several would move the backup on purpose. The
-// value already in the key then stands, which is the same answer the install path gives.
+// It writes nothing when there is no single cadence to carry: no proxsave cron line at all,
+// two lines that disagree, or a schedule no cadence expresses. Picking one of several would
+// move the backup on purpose. The values already in backup.env then stand, which is the same
+// answer the install path gives. Only a monthly line on day 29-31 is reported as a warning;
+// every other unreadable line has no approved text and stays at DEBUG, as silent as before.
 //
 // The ROOT crontab only. A proxsave line under /etc is deliberately not read here: ProxSave
-// never edits /etc, so that line SURVIVES the switch, and adopting its time would schedule the
+// never edits /etc, so that line SURVIVES the switch, and adopting its schedule would put the
 // daemon in the exact minute it already occupies.
-// It returns NOTHING. It used to hand the adopted hour back so the caller could name the time
-// in its warning, and no caller ever did: prepareCronHandoverForDaemon recomputes the hour with
-// schedulerTimeFromCronLines(lines) and its own comment there explains why gating that warning on
-// the adoption is wrong. An adoption only happens when the hour CHANGES, so on the host ProxSave
-// installed itself nothing is adopted and the returned hour was empty on exactly the host whose
-// surviving cron line shares the daemon's minute.
 func adoptSchedulerTimeForDaemon(configPath string, lines []string, bootstrap *logging.BootstrapLogger) {
 	configPath = strings.TrimSpace(configPath)
 	if configPath == "" {
 		return
 	}
-	hhmm, ok := schedulerTimeFromCronLines(lines)
-	if !ok {
+	reading := schedulerCadenceFromCronLines(lines)
+	if !reading.Found {
 		return
 	}
 	data, err := safefs.ReadFileUnderRoot(configPath)
 	if err != nil {
+		logBootstrapDebug(bootstrap, "schedule adopt: config unreadable file=%s error=%v, nothing adopted", configPath, err)
 		return
 	}
-	stored := strings.TrimSpace(installer.DeriveInstallWizardPrefill(string(data)).SchedulerTime)
-	if stored == hhmm {
+	prefill := installer.DeriveInstallWizardPrefill(string(data))
+	inEffect := cadenceInEffect(prefill)
+	switch {
+	case reading.Reason == cronutil.ReasonMonthDayOutOfRange:
+		logScheduleLines(bootstrap, monthDayOutOfRangeSeed(reading, inEffect, configPath).Block.lines())
+		return
+	case reading.Reason != "":
+		logBootstrapDebug(bootstrap, "%s", reading.debugText())
+		logBootstrapDebug(bootstrap, "schedule adopt: kept %s source=%s", cadenceFields(inEffect), configPath)
 		return
 	}
-	if err := setBackupEnvKeys(configPath, map[string]string{"SCHEDULER_TIME": hhmm}); err != nil {
-		// A WARNING, not a debug line. The removal that follows goes ahead either way - the
-		// switch before this adoption existed removed the cron entry unconditionally, so
-		// refusing here would be a new refusal rather than a fix - and the host then runs at
-		// whatever SCHEDULER_TIME already said. The operator cannot infer that from anything
-		// else on screen, and the old DebugStepBootstrap said nothing at all on the
-		// --daemon-setup path, where bootstrap is nil and that helper returns immediately.
-		logBootstrapWarning(bootstrap, "Could not record %s as SCHEDULER_TIME in %s: %v. The daemon will run at %s instead, the time already recorded.", hhmm, configPath, err, schedulerTimeOrDefaultLabel(stored))
+	// Already in step: nothing to write and nothing to say. An ABSENT SCHEDULER_TIME is not in
+	// step even when the default matches: nothing has been stated, and writing it records the
+	// schedule the host has been running on.
+	if strings.TrimSpace(prefill.SchedulerTime) != "" && inEffect.Schedule() == reading.Cadence.Schedule() {
+		logBootstrapDebug(bootstrap, "%s", reading.debugText())
+		logBootstrapDebug(bootstrap, "schedule adopt: backup.env already has %s source=%s, nothing written", cadenceFields(inEffect), configPath)
 		return
 	}
-	logBootstrapInfo(bootstrap, "SCHEDULER_TIME set to %s, the time of the proxsave cron entry this switch removes, so the daily run time does not change.", hhmm)
+	block := scheduleBlock{
+		Header: scheduleAdoptHeader,
+		Debug: []string{
+			reading.debugText(),
+			fmt.Sprintf("schedule adopt: before %s source=%s", cadenceFields(inEffect), configPath),
+		},
+	}
+	vars := installer.ScheduleVariables(reading.Cadence)
+	if err := setBackupEnvKeys(configPath, vars); err != nil {
+		// The removal that follows goes ahead either way - the switch before this adoption
+		// existed removed the cron entry unconditionally, so refusing here would be a new
+		// refusal rather than a fix - and the host then runs on whatever backup.env already
+		// said. The operator cannot infer that from anything else on screen, so it is a
+		// WARNING, with the schedule in effect as its details.
+		block.Debug = append(block.Debug,
+			fmt.Sprintf("schedule adopt: write failed file=%s error=%v", configPath, err),
+			fmt.Sprintf("schedule adopt: kept %s source=%s", cadenceFields(inEffect), configPath))
+		block.Details = cadenceDetails(inEffect)
+		block.Why = scheduleWriteFailedWhy
+		block.Outcome = scheduleWriteFailedOutcome
+		block.Warn = true
+	} else {
+		block.Debug = append(block.Debug, fmt.Sprintf("schedule adopt: wrote %s file=%s", formatScheduleVariables(vars), configPath))
+		block.Details = cadenceDetails(reading.Cadence)
+		block.Outcome = scheduleAdoptedOutcome
+	}
+	logScheduleLines(bootstrap, block.lines())
 }
 
-// schedulerTimeOrDefaultLabel names the time the daemon will actually use when an adoption
-// could not be written. An ABSENT key is not the same as a recorded one: nothing has been
-// stated, so the compiled default is what runs, and saying "" there would name no time at all.
-func schedulerTimeOrDefaultLabel(stored string) string {
-	if stored == "" {
-		return "the compiled default"
+// reportCronRemoval is the block that says whether the proxsave cron entry the switch to the
+// daemon removes is really gone. lines is the crontab snapshot the adoption read, so the
+// entries named are the ones the removal was asked to take away.
+//
+// When the removal failed the adopted schedule stays. It replaced a RESTORE that put
+// SCHEDULER_TIME back to what the adoption had overwritten, and where the variable had been
+// absent it wrote the compiled default - which was worse than doing nothing twice over. The
+// SCHEDULER_* variables are ProxSave's own, so a failed crontab write is no reason to rewrite
+// them; and writing the default over an absent variable turned "never recorded" into
+// "recorded as 02:00", which is exactly the gate that stops any later install or upgrade
+// adopting the host's real schedule from the crontab.
+//
+// So the adopted schedule stays and the operator is told. This is one of the cases where
+// ProxSave says what to do rather than only what happened, and it earns it: it has just proved
+// it cannot remove that line itself, and the operator asked for this switch. The per-run lock
+// keeps the two schedules from overlapping; it does not stop the backup running twice.
+//
+// Nothing is said when the snapshot had no proxsave line: there was nothing to remove.
+func reportCronRemoval(lines []string, outcome cronRemovalOutcome, err error, bootstrap *logging.BootstrapLogger) {
+	present := proxsaveCronLines(lines)
+	if len(present) == 0 {
+		if err != nil {
+			logBootstrapDebug(bootstrap, "cron removal: no proxsave line in the snapshot, removal failed error=%v", err)
+		}
+		return
 	}
-	return stored
-}
-
-// reportUnremovedCronEntry tells the operator that the proxsave cron entry ProxSave has just
-// tried and failed to delete is still scheduled, and at what time.
-//
-// It replaced a RESTORE. That restore put SCHEDULER_TIME back to what the adoption had
-// overwritten, and where the variable had been absent it wrote the compiled default - which was
-// worse than doing nothing twice over. SCHEDULER_TIME is a template variable ProxSave owns, so a
-// failed crontab write is no reason to rewrite it; and writing the default over an absent
-// variable turned "never recorded" into "recorded as 02:00", which is exactly the gate that stops
-// any later install or upgrade adopting the host's real run time from the crontab. On a host
-// whose surviving line already ran at the default, it also put the daemon in that very minute
-// while announcing it had avoided one.
-//
-// So the adopted hour stays and the operator is told. This is one of the cases where ProxSave
-// says what to do rather than only what happened, and it earns it: it has just proved it cannot
-// remove that line itself, and the operator asked for this switch.
-func reportUnremovedCronEntry(hhmm string, bootstrap *logging.BootstrapLogger) {
-	logBootstrapWarning(bootstrap, "Could not remove the legacy proxsave cron entry, it still runs at %s. Remove it by hand or the backup runs twice.", hhmm)
+	block := scheduleBlock{Header: cronRemovalHeader}
+	if err == nil && outcome.Verified && outcome.Removed > 0 {
+		for _, line := range present {
+			block.Debug = append(block.Debug, fmt.Sprintf("cron removal: removed line=%q verified=%t", line, outcome.Verified))
+		}
+		block.Outcome = cronRemovedOutcome
+		logScheduleLines(bootstrap, block.lines())
+		return
+	}
+	if err != nil {
+		block.Debug = append(block.Debug, fmt.Sprintf("cron removal: crontab write failed error=%v", err))
+		for _, line := range present {
+			block.Debug = append(block.Debug, fmt.Sprintf("cron removal: still present line=%q, per-run lock prevents overlap", line))
+		}
+		block.Why = cronNotRemovedWhy
+	} else {
+		// The second read matched nothing although the snapshot had the line: it changed under
+		// us. Nothing confirms it is gone, and "Crontab could not be written" would be untrue.
+		for _, line := range present {
+			block.Debug = append(block.Debug, fmt.Sprintf("cron removal: removed=%d verified=%t, line=%q not confirmed removed", outcome.Removed, outcome.Verified, line))
+		}
+	}
+	if r := schedulerCadenceFromCronLines(lines); r.Found && r.Reason == "" {
+		block.Details = []string{"  Cron entry: " + cadenceLabel(r.Cadence)}
+	}
+	block.Outcome = cronNotRemovedOutcome
+	block.Warn = true
+	logScheduleLines(bootstrap, block.lines())
 }
 
 // adoptCronRunTimeIntoBase is the ONE place both front-ends adopt the host's cron
-// run time into the wizard's in-memory base. It returns the (possibly seeded) base
+// schedule into the wizard's in-memory base. It returns the (possibly seeded) base
 // and writes nothing to disk: on Edit the wizard rewrites the whole file at the end
 // from this template, so an install cancelled halfway leaves the host byte-identical.
 //
 // The gate is decision.FromExistingFile, i.e. Edit ONLY. Cancel must leave the host
-// untouched and Overwrite is about to replace the file, so an adoption note there
+// untouched and Overwrite is about to replace the file, so an adoption block there
 // would describe a value nobody will use. Keep existing has no wizard to carry the
 // value, so its write stays deferred to the commit point in runInstall/runInstallTUI,
-// which is also the single place its note is logged.
+// which is also the single place its block is logged.
 func adoptCronRunTimeIntoBase(ctx context.Context, decision installer.ExistingConfigDecision, configPath string, bootstrap *logging.BootstrapLogger) string {
 	if !decision.FromExistingFile {
 		return decision.BaseTemplate
 	}
 	seed := deriveSchedulerTimeFromCrontabFn(ctx, configPath)
-	if seed.Note == "" {
+	if seed.empty() {
 		return decision.BaseTemplate
 	}
-	seeded := installer.ApplySchedulerTimeSeed(decision.BaseTemplate, seed.Time)
-	// The adoption note promises "the daily run time does not change", so it may
-	// only be logged when the value actually reached the base:
-	// ApplySchedulerTimeSeed discards it on a blank base (see its guard), and a
-	// note the code then contradicts is worse than silence. The other variant
-	// carries no Time -- it warns that the cron entry could not be interpreted --
-	// and is truthful whatever the base looks like.
-	if seed.Time == "" || seeded != decision.BaseTemplate {
-		logBootstrapInfo(bootstrap, "%s", seed.Note)
+	seeded := installer.ApplyScheduleSeed(decision.BaseTemplate, seed.Cadence)
+	// The adoption block says the schedule was adopted, so it may only be logged when
+	// the value actually reached the base: ApplyScheduleSeed discards it on a blank base
+	// (see its guard), and a block the code then contradicts is worse than silence. The
+	// other blocks adopt nothing and are truthful whatever the base looks like.
+	if !seed.adopted() || seeded != decision.BaseTemplate {
+		logScheduleLines(bootstrap, seed.Block.lines())
 	}
 	return seeded
 }
 
-// hasProxsaveCronLine reports whether the crontab schedules proxsave at all (used
-// to warn only when there was a schedule we refused to interpret).
-func hasProxsaveCronLine(lines []string) bool {
+// proxsaveCronLines returns the crontab lines that schedule proxsave (the same matcher
+// dropCanonicalCronLines deletes by).
+func proxsaveCronLines(lines []string) []string {
+	var out []string
 	for _, line := range lines {
 		if commandTokenMatchesTarget(strings.Trim(cronCommandToken(line), "\"'")) {
-			return true
+			out = append(out, line)
 		}
 	}
-	return false
+	return out
 }
