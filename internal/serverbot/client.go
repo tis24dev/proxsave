@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/http/httptrace"
+	"net/url"
 	"strings"
 	"time"
 
@@ -76,13 +78,33 @@ func refuseRedirect(_ *http.Request, via []*http.Request) error {
 // LOAD-BEARING: an HTTP status is NEVER an error. err != nil only on an encode/build/
 // dial/read failure, and that error is a *TransportError whose message is already
 // redacted (URL stripped, per-request secret masked).
+//
+// With a logger, each call writes DEBUG lines under req.LogOperation ("serverbot" when empty):
+// the URL without its query, then the stages the exchange completed (dns ok addr=..., connected,
+// request written), then either "response http=<code> elapsed=<ms>" or "failed stage=dns|connect|
+// request|response error=<the TransportError's redacted message>". NEVER a body, NEVER a secret.
 func (c *Client) Do(ctx context.Context, req Request) (*Response, error) {
+	op := req.LogOperation
+	if op == "" {
+		op = defaultLogOperation
+	}
+	method := req.Method
+	if method == "" {
+		method = http.MethodGet
+	}
+	c.logURL(op, method, req.Path)
+
 	timeout := req.Timeout
 	if timeout <= 0 {
 		timeout = defaultTimeout
 	}
 	reqCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
+	var trace *stages
+	if c.logger != nil {
+		trace = &stages{}
+		reqCtx = httptrace.WithClientTrace(reqCtx, trace.clientTrace())
+	}
 
 	endpoint := c.base + req.Path
 	if enc := req.Query.Encode(); enc != "" {
@@ -93,18 +115,14 @@ func (c *Client) Do(ctx context.Context, req Request) (*Response, error) {
 	if req.Body != nil {
 		raw, err := json.Marshal(req.Body)
 		if err != nil {
-			return nil, newTransportError("encode", err, req.Secret)
+			return nil, c.failed(op, "encode", nil, newTransportError("encode", err, req.Secret))
 		}
 		bodyReader = bytes.NewReader(raw)
 	}
 
-	method := req.Method
-	if method == "" {
-		method = http.MethodGet
-	}
 	httpReq, err := http.NewRequestWithContext(reqCtx, method, endpoint, bodyReader)
 	if err != nil {
-		return nil, newTransportError("build", err, req.Secret)
+		return nil, c.failed(op, "build", nil, newTransportError("build", err, req.Secret))
 	}
 
 	httpReq.Header.Set(versionHeader, version.String())
@@ -121,9 +139,14 @@ func (c *Client) Do(ctx context.Context, req Request) (*Response, error) {
 		httpReq.Header.Set("Content-Type", "application/json")
 	}
 
+	started := time.Now()
 	resp, err := c.http.Do(httpReq)
 	if err != nil {
-		return nil, newTransportError("request", err, req.Secret)
+		te := newTransportError("request", err, req.Secret)
+		if trace != nil {
+			return nil, c.failed(op, trace.failedStage(), trace, te)
+		}
+		return nil, te
 	}
 	defer func() { _ = resp.Body.Close() }()
 
@@ -133,16 +156,54 @@ func (c *Client) Do(ctx context.Context, req Request) (*Response, error) {
 	}
 	body, err := io.ReadAll(io.LimitReader(resp.Body, maxBytes))
 	if err != nil {
-		return nil, newTransportError("read", err, req.Secret)
+		return nil, c.failed(op, "response", trace, newTransportError("read", err, req.Secret))
 	}
 
-	if c.logger != nil {
-		// Debug only: method + path + status. NEVER the body, NEVER the secret.
-		c.logger.Debug("serverbot: %s %s -> %d", method, req.Path, resp.StatusCode)
+	if trace != nil {
+		c.logStages(op, trace)
+		logging.DebugStep(c.logger, op, "response http=%d elapsed=%dms", resp.StatusCode, time.Since(started).Milliseconds())
 	}
 	return &Response{
 		Status: resp.StatusCode,
 		Header: resp.Header.Clone(),
 		Body:   body,
 	}, nil
+}
+
+// logURL writes the DEBUG line naming where the call goes: the host and path, never the query
+// (server_id and friends live there) and never a password embedded in the host. The method is
+// named only when it is not GET.
+func (c *Client) logURL(op, method, path string) {
+	if c.logger == nil {
+		return
+	}
+	target := c.base + path
+	if u, err := url.Parse(target); err == nil {
+		target = u.Redacted()
+	}
+	if method == http.MethodGet {
+		logging.DebugStep(c.logger, op, "url=%s", target)
+		return
+	}
+	logging.DebugStep(c.logger, op, "url=%s method=%s", target, method)
+}
+
+// logStages writes one DEBUG line per stage the round trip completed.
+func (c *Client) logStages(op string, trace *stages) {
+	if trace == nil {
+		return
+	}
+	for _, line := range trace.completed() {
+		logging.DebugStep(c.logger, op, "%s", line)
+	}
+}
+
+// failed writes the completed stages and the failed one, and returns te unchanged. The error text
+// is the TransportError's own redacted message, so the line carries nothing te would not.
+func (c *Client) failed(op, stage string, trace *stages, te *TransportError) *TransportError {
+	if c.logger != nil {
+		c.logStages(op, trace)
+		logging.DebugStep(c.logger, op, "failed stage=%s error=%s", stage, te.redacted)
+	}
+	return te
 }

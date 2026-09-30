@@ -22,6 +22,9 @@ type Request struct {
 	Body      any           // != nil -> json.Marshal + Content-Type: application/json
 	Timeout   time.Duration // per-request ctx cap; 0 -> 5s
 	MaxBytes  int64         // response read cap; 0 -> 8192
+	// LogOperation is the DEBUG operation the call's transport stages are logged under, e.g.
+	// "notifications init"; "" -> "serverbot". Only read when the Client has a logger.
+	LogOperation string
 }
 
 // Response carries the RAW HTTP status and a clone of the response headers
