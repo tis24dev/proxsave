@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"io"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
@@ -22,7 +24,7 @@ func stubDeliveryStatus(t *testing.T, st health.DeliveryStatus, err error) *int 
 	calls := 0
 	orig := notifyfilter.FetchDeliveryStatus
 	t.Cleanup(func() { notifyfilter.FetchDeliveryStatus = orig })
-	notifyfilter.FetchDeliveryStatus = func(context.Context, *http.Client, string, string, string) (health.DeliveryStatus, error) {
+	notifyfilter.FetchDeliveryStatus = func(context.Context, *http.Client, string, string, string, *logging.Logger, string) (health.DeliveryStatus, error) {
 		calls++
 		return st, err
 	}
@@ -161,7 +163,7 @@ func TestDecideNotifyFilter(t *testing.T) {
 			if *reads != tc.wantReads {
 				t.Fatalf("relay read %d times; want %d", *reads, tc.wantReads)
 			}
-			fallback := "notifications init: notification filter fallback=always reason=" + tc.wantReason
+			fallback := "notifications init: filter fallback=always reason=" + tc.wantReason
 			if got := strings.Contains(buf.String(), fallback); got != (tc.wantReason != "") {
 				t.Fatalf("fallback DEBUG line present=%v, want %v (%q) in:\n%s", got, tc.wantReason != "", fallback, buf.String())
 			}
@@ -169,25 +171,12 @@ func TestDecideNotifyFilter(t *testing.T) {
 	}
 }
 
-// The initialization block writes the approved lines in the approved order: the setting, its
-// DEBUG details, the Healthchecks status, then the filter. INFO lines carry no parentheses.
-func TestLogNotifyFilterInitWritesTheApprovedLines(t *testing.T) {
-	cfg := centralizedNotifyConfig(t)
-	stubDeliveryStatus(t, relayAnswer("ready", config.NotifyOnWarning, true, "telegram"), nil)
-	logger, buf := debugLogger(t)
-
-	logNotifyFilterInit(backupModeOptions{ctx: context.Background(), cfg: cfg, logger: logger}, nil, notifyfilter.SectionInitialized)
-
-	out := buf.String()
+// assertBlock checks that every want is in out, in order, that the block's last line is the
+// outcome, and that no line of it is above INFO: a WARNING would raise the run's exit code.
+func assertBlock(t *testing.T, out, outcome string, wants ...string) {
+	t.Helper()
 	last := -1
-	for _, want := range []string{
-		"Notification setting: NOTIFY_ON=warning",
-		"notifications init: notify_on=warning source=default",
-		"notifications init: healthchecks mode=centralized",
-		"notifications init: healthchecks delivery state=ready alive_routes=0/0 backup_routes=0/0 policy_confirmed=true",
-		"Healthchecks status: ready",
-		"Notification filter: warning",
-	} {
+	for _, want := range wants {
 		i := strings.Index(out, want)
 		if i < 0 {
 			t.Fatalf("missing %q in:\n%s", want, out)
@@ -197,12 +186,126 @@ func TestLogNotifyFilterInitWritesTheApprovedLines(t *testing.T) {
 		}
 		last = i
 	}
-	for _, line := range strings.Split(out, "\n") {
-		for _, prefix := range []string{"Notification setting:", "Healthchecks status:", "Notification filter:"} {
-			if i := strings.Index(line, prefix); i >= 0 && strings.ContainsAny(line[i:], "()") {
-				t.Fatalf("INFO line carries an explanation in parentheses: %q", line)
+	lines := strings.Split(strings.TrimRight(out, "\n"), "\n")
+	final := lines[len(lines)-1]
+	if !strings.HasSuffix(final, outcome) || !strings.Contains(final, "INFO") {
+		t.Fatalf("the block must end with the INFO outcome %q, ends with %q in:\n%s", outcome, final, out)
+	}
+	for _, line := range lines {
+		if strings.Contains(line, "WARNING") || strings.Contains(line, "ERROR") {
+			t.Fatalf("the notification filter block logged above INFO: %q", line)
+		}
+		for _, old := range []string{"Notification setting:", "Notification filter: always", "Notification filter: warning"} {
+			if strings.Contains(line, old) {
+				t.Fatalf("a replaced line is still written: %q", line)
 			}
 		}
+	}
+}
+
+// The initialization block: INFO "Applying...", the DEBUG evidence, the INFO details indented
+// two spaces, the outcome last.
+func TestLogNotifyFilterInitWritesTheApprovedLines(t *testing.T) {
+	cfg := centralizedNotifyConfig(t)
+	stubDeliveryStatus(t, relayAnswer("ready", config.NotifyOnWarning, true, "telegram"), nil)
+	logger, buf := debugLogger(t)
+
+	logNotifyFilterInit(backupModeOptions{ctx: context.Background(), cfg: cfg, logger: logger}, nil, notifyfilter.SectionInitialized)
+
+	assertBlock(t, buf.String(), "✓ Notification filter: applied",
+		"INFO     Applying notification filter...",
+		"notifications init: read notify_on=warning source=default",
+		"notifications init: healthchecks mode=centralized section=initialized",
+		"notifications init: delivery state=ready alive_routes=0/0 backup_routes=0/0 policy_confirmed=true",
+		"  Setting: warning",
+		"  Healthchecks status: ready",
+		"  Filter in effect: warning",
+		"✓ Notification filter: applied",
+	)
+	if strings.Contains(buf.String(), "filter fallback=") {
+		t.Fatalf("an applied filter logged a fallback:\n%s", buf.String())
+	}
+}
+
+// NOTIFY_ON read from backup.env names the file it was read from.
+func TestLogNotifyFilterInitNamesTheConfigFile(t *testing.T) {
+	cfg := centralizedNotifyConfig(t)
+	cfg.NotifyOnSource, cfg.ConfigPath = "backup.env", "/opt/proxsave/env/backup.env"
+	stubDeliveryStatus(t, relayAnswer("ready", config.NotifyOnWarning, true, "telegram"), nil)
+	logger, buf := debugLogger(t)
+
+	logNotifyFilterInit(backupModeOptions{ctx: context.Background(), cfg: cfg, logger: logger}, nil, notifyfilter.SectionInitialized)
+
+	if !strings.Contains(buf.String(), "notifications init: read notify_on=warning source=/opt/proxsave/env/backup.env") {
+		t.Fatalf("missing the config path in:\n%s", buf.String())
+	}
+}
+
+// A relay that does not confirm: the fallback is in DEBUG, the details say what is in effect,
+// and the outcome is an INFO "not applied", never a WARNING.
+func TestLogNotifyFilterInitNotApplied(t *testing.T) {
+	cfg := centralizedNotifyConfig(t)
+	stubDeliveryStatus(t, relayAnswer("degraded", config.NotifyOnWarning, true, "telegram"), nil)
+	logger, buf := debugLogger(t)
+
+	logNotifyFilterInit(backupModeOptions{ctx: context.Background(), cfg: cfg, logger: logger}, nil, notifyfilter.SectionInitialized)
+
+	assertBlock(t, buf.String(), "⚠ Notification filter: not applied",
+		"INFO     Applying notification filter...",
+		"notifications init: delivery state=degraded",
+		"notifications init: filter fallback=always reason=alerts_not_verified",
+		"  Setting: warning",
+		"  Healthchecks status: degraded",
+		"  Filter in effect: always",
+		"⚠ Notification filter: not applied",
+	)
+}
+
+// The real relay read: its URL and transport stages sit between the mode and the delivery state.
+func TestLogNotifyFilterInitLogsTheRelayStages(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w, `{"schema_version":1,"state":"ready","valid_for_seconds":120,
+			"notify_policy":{"contract_version":1,"requested":"warning","applied":true,"channels":["telegram"]}}`)
+	}))
+	defer srv.Close()
+	cfg := centralizedNotifyConfig(t)
+	cfg.ServerAPIHost = srv.URL
+	logger, buf := debugLogger(t)
+
+	logNotifyFilterInit(backupModeOptions{ctx: context.Background(), cfg: cfg, logger: logger}, nil, notifyfilter.SectionInitialized)
+
+	assertBlock(t, buf.String(), "✓ Notification filter: applied",
+		"Applying notification filter...",
+		"notifications init: healthchecks mode=centralized",
+		"notifications init: url="+srv.URL+"/api/healthcheck/delivery-status",
+		"notifications init: connected",
+		"notifications init: request written",
+		"notifications init: response http=200 elapsed=",
+		"notifications init: delivery state=ready",
+		"  Setting: warning",
+		"✓ Notification filter: applied",
+	)
+}
+
+// Self mode: same block, no relay, the DEBUG lines that apply.
+func TestLogNotifyFilterInitSelfMode(t *testing.T) {
+	cfg := centralizedNotifyConfig(t)
+	cfg.HealthcheckMode = config.HealthcheckModeSelf
+	reads := stubDeliveryStatus(t, health.DeliveryStatus{}, errors.New("must not be read"))
+	logger, buf := debugLogger(t)
+
+	logNotifyFilterInit(backupModeOptions{ctx: context.Background(), cfg: cfg, logger: logger}, nil, notifyfilter.SectionInitialized)
+
+	assertBlock(t, buf.String(), "✓ Notification filter: applied",
+		"Applying notification filter...",
+		"notifications init: healthchecks mode=self section=initialized",
+		"notifications init: self notify_urls=false",
+		"  Setting: warning",
+		"  Healthchecks status: self",
+		"  Filter in effect: warning",
+	)
+	if strings.Contains(buf.String(), "url=") || *reads != 0 {
+		t.Fatalf("self mode read the relay (%d reads):\n%s", *reads, buf.String())
 	}
 }
 
@@ -216,18 +319,16 @@ func TestLogNotifyFilterInitWithHealthchecksOff(t *testing.T) {
 	logNotifyFilterInit(backupModeOptions{ctx: context.Background(), cfg: cfg, logger: logger}, nil, notifyfilter.SectionDisabled)
 
 	out := buf.String()
-	for _, want := range []string{
-		"Notification setting: NOTIFY_ON=warning",
-		"Healthchecks status: disabled",
-		"Notification filter: always",
-		"notifications init: notification filter fallback=always reason=healthchecks_disabled",
-	} {
-		if !strings.Contains(out, want) {
-			t.Fatalf("missing %q in:\n%s", want, out)
-		}
-	}
-	if strings.Contains(out, "healthchecks mode=") {
-		t.Fatalf("no mode line when Healthchecks is off:\n%s", out)
+	assertBlock(t, out, "⚠ Notification filter: not applied",
+		"Applying notification filter...",
+		"notifications init: read notify_on=warning source=default",
+		"notifications init: filter fallback=always reason=healthchecks_disabled",
+		"  Setting: warning",
+		"  Healthchecks status: disabled",
+		"  Filter in effect: always",
+	)
+	if strings.Contains(out, "healthchecks mode=") || strings.Contains(out, "url=") {
+		t.Fatalf("no mode or relay line when Healthchecks is off:\n%s", out)
 	}
 	if *reads != 0 {
 		t.Fatalf("relay read %d times with Healthchecks off; want 0", *reads)
@@ -250,17 +351,20 @@ func TestNotifyFilterRefreshReusesAFreshAnswer(t *testing.T) {
 	now := fakeNotifyClock(t)
 	cfg := centralizedNotifyConfig(t)
 	reads := stubDeliveryStatus(t, relayAnswer("ready", config.NotifyOnWarning, true, "telegram"), nil)
-	logger, _ := debugLogger(t)
+	logger, buf := debugLogger(t)
 
 	d := notifyfilter.Decide(context.Background(), cfg, logger, notifyfilter.SectionInitialized, "notifications init")
 	refresh := notifyFilterRefresh(d, cfg, logger, notifyfilter.SectionInitialized)
 	*now = now.Add(notifyfilter.Validity - time.Second)
 
-	if got := refresh(context.Background()); got != config.NotifyOnWarning {
+	if got := refresh(context.Background()).Effective; got != config.NotifyOnWarning {
 		t.Fatalf("refresh = %q; want the initialization decision %q", got, config.NotifyOnWarning)
 	}
 	if *reads != 1 {
 		t.Fatalf("relay read %d times; want 1, the answer is still valid", *reads)
+	}
+	if want := "notifications dispatch: reused init decision age=1m59s valid_for=2m0s"; !strings.Contains(buf.String(), want) {
+		t.Fatalf("missing %q in:\n%s", want, buf.String())
 	}
 }
 
@@ -277,25 +381,31 @@ func TestNotifyFilterRefreshReadsAnExpiredAnswerAgain(t *testing.T) {
 	stubDeliveryStatus(t, relayAnswer("degraded", config.NotifyOnWarning, true, "telegram"), nil)
 	*now = now.Add(notifyfilter.Validity)
 
-	if got := refresh(context.Background()); got != config.NotifyOnAlways {
+	if got := refresh(context.Background()).Effective; got != config.NotifyOnAlways {
 		t.Fatalf("refresh = %q; want %q from the new, degraded answer", got, config.NotifyOnAlways)
 	}
 	if *reads != 1 {
 		t.Fatalf("first stub read %d times; want 1", *reads)
 	}
 	for _, want := range []string{
-		"notifications dispatch: healthchecks delivery state=degraded",
-		"notifications dispatch: notification filter fallback=always reason=alerts_not_verified",
+		"notifications dispatch: delivery state=degraded",
+		"notifications dispatch: filter fallback=always reason=alerts_not_verified",
 	} {
 		if !strings.Contains(buf.String(), want) {
 			t.Fatalf("missing %q in:\n%s", want, buf.String())
 		}
 	}
+	if strings.Contains(buf.String(), "reused") {
+		t.Fatalf("an expired answer was reported as reused:\n%s", buf.String())
+	}
 
-	// The new answer is fresh again: a second refresh reuses it.
+	// The new answer is fresh again: a second refresh reuses it, and says it is the dispatch one.
 	again := stubDeliveryStatus(t, relayAnswer("ready", config.NotifyOnWarning, true, "telegram"), nil)
-	if got := refresh(context.Background()); got != config.NotifyOnAlways || *again != 0 {
+	if got := refresh(context.Background()).Effective; got != config.NotifyOnAlways || *again != 0 {
 		t.Fatalf("second refresh = %q after %d reads; want the reused %q and no read", got, *again, config.NotifyOnAlways)
+	}
+	if want := "notifications dispatch: reused dispatch decision age=0s"; !strings.Contains(buf.String(), want) {
+		t.Fatalf("missing %q in:\n%s", want, buf.String())
 	}
 }
 
@@ -306,14 +416,17 @@ func TestNotifyFilterRefreshNeverReadsWithoutARelayAnswer(t *testing.T) {
 	cfg := centralizedNotifyConfig(t)
 	cfg.HealthcheckMode = config.HealthcheckModeSelf
 	reads := stubDeliveryStatus(t, relayAnswer("ready", config.NotifyOnWarning, true, "telegram"), nil)
-	logger, _ := debugLogger(t)
+	logger, buf := debugLogger(t)
 
 	d := notifyfilter.Decide(context.Background(), cfg, logger, notifyfilter.SectionInitialized, "notifications init")
 	refresh := notifyFilterRefresh(d, cfg, logger, notifyfilter.SectionInitialized)
 	*now = now.Add(time.Hour)
 
-	if got := refresh(context.Background()); got != config.NotifyOnWarning || *reads != 0 {
+	if got := refresh(context.Background()).Effective; got != config.NotifyOnWarning || *reads != 0 {
 		t.Fatalf("refresh = %q after %d relay reads; want %q and none", got, *reads, config.NotifyOnWarning)
+	}
+	if want := "notifications dispatch: reused init decision relay_read=none status=self"; !strings.Contains(buf.String(), want) {
+		t.Fatalf("missing %q in:\n%s", want, buf.String())
 	}
 }
 
@@ -352,7 +465,7 @@ func TestNotifyFilterRefreshKeepsAnUnavailableAnswerForTheLocalWindow(t *testing
 	refresh := notifyFilterRefresh(d, cfg, logger, notifyfilter.SectionInitialized)
 	*now = now.Add(notifyfilter.Validity - time.Second)
 
-	if got := refresh(context.Background()); got != config.NotifyOnAlways || *reads != 1 {
+	if got := refresh(context.Background()).Effective; got != config.NotifyOnAlways || *reads != 1 {
 		t.Fatalf("refresh = %q after %d reads; want always and 1 read", got, *reads)
 	}
 }

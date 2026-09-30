@@ -10,6 +10,7 @@ import (
 
 	"github.com/tis24dev/proxsave/internal/config"
 	"github.com/tis24dev/proxsave/internal/logging"
+	"github.com/tis24dev/proxsave/internal/notifyfilter"
 	"github.com/tis24dev/proxsave/internal/types"
 )
 
@@ -47,13 +48,14 @@ func TestDispatchAppliesTheDecidedFilterNotTheSetting(t *testing.T) {
 	}
 }
 
-// The notification boundary asks the refresh once, states the filter, then dispatches with it.
+// The notification boundary asks the refresh once, states only the outcome, then dispatches with
+// the decided filter.
 func TestStartNotificationGroupAppliesTheRefreshedFilter(t *testing.T) {
 	o, spy, buf := decidedOrchestrator()
 	refreshes := 0
-	o.SetNotifyFilter(func(context.Context) string {
+	o.SetNotifyFilter(func(context.Context) notifyfilter.Decision {
 		refreshes++
-		return config.NotifyOnFailure
+		return notifyfilter.Decision{Requested: config.NotifyOnFailure, Effective: config.NotifyOnFailure}
 	})
 
 	o.startNotificationGroup(context.Background(), &BackupStats{})
@@ -67,7 +69,7 @@ func TestStartNotificationGroupAppliesTheRefreshedFilter(t *testing.T) {
 	}
 	last := -1
 	for _, want := range []string{
-		"Notification filter: failure",
+		"INFO     ✓ Notification filter: applied",
 		"notifications dispatch: run outcome=success warnings=0 errors=0",
 		"Notifications: skipped",
 		"Webhook: filtered",
@@ -78,10 +80,38 @@ func TestStartNotificationGroupAppliesTheRefreshedFilter(t *testing.T) {
 		}
 		last = i
 	}
+	for _, never := range []string{"Setting:", "Healthchecks status:", "Filter in effect:", "Notification filter: failure"} {
+		if strings.Contains(out, never) {
+			t.Fatalf("phase [7] states only the outcome, found %q in:\n%s", never, out)
+		}
+	}
+}
+
+// A refresh that fell back to always: the dispatch notifies every outcome and the outcome is an
+// INFO "not applied", never a WARNING (a WARNING would raise the run's exit code).
+func TestStartNotificationGroupNotApplied(t *testing.T) {
+	o, spy, buf := decidedOrchestrator()
+	o.SetNotifyFilter(func(context.Context) notifyfilter.Decision {
+		return notifyfilter.Decision{Requested: config.NotifyOnFailure, Effective: config.NotifyOnAlways}
+	})
+
+	stats := &BackupStats{}
+	o.startNotificationGroup(context.Background(), stats)
+
+	out := buf.String()
+	if spy.calls != 1 {
+		t.Fatalf("Webhook dispatched %d times, want 1; log:\n%s", spy.calls, out)
+	}
+	if !strings.Contains(out, "INFO     ⚠ Notification filter: not applied") {
+		t.Fatalf("missing the INFO outcome in:\n%s", out)
+	}
+	if strings.Contains(out, "WARNING") || stats.WarningCount != 0 {
+		t.Fatalf("a filter not applied must not be a WARNING (%d warnings):\n%s", stats.WarningCount, out)
+	}
 }
 
 // Without a decision handed over (cmd/proxsave never initialized the filter) the boundary
-// notifies every outcome, whatever backup.env asks for.
+// notifies every outcome, whatever backup.env asks for, and says the filter is not applied.
 func TestStartNotificationGroupWithoutADecisionNotifiesEverything(t *testing.T) {
 	o, spy, buf := decidedOrchestrator()
 
@@ -90,8 +120,13 @@ func TestStartNotificationGroupWithoutADecisionNotifiesEverything(t *testing.T) 
 	if spy.calls != 1 {
 		t.Fatalf("Webhook dispatched %d times, want 1; log:\n%s", spy.calls, buf.String())
 	}
-	if !strings.Contains(buf.String(), "Notification filter: always") {
-		t.Fatalf("missing \"Notification filter: always\" in:\n%s", buf.String())
+	for _, want := range []string{
+		"notifications dispatch: no init decision requested=failure fallback=always",
+		"⚠ Notification filter: not applied",
+	} {
+		if !strings.Contains(buf.String(), want) {
+			t.Fatalf("missing %q in:\n%s", want, buf.String())
+		}
 	}
 }
 
@@ -99,9 +134,9 @@ func TestStartNotificationGroupWithoutADecisionNotifiesEverything(t *testing.T) 
 func TestAnEarlyErrorIsNotifiedWhateverTheSetting(t *testing.T) {
 	o, spy, buf := decidedOrchestrator()
 	refreshes := 0
-	o.SetNotifyFilter(func(context.Context) string {
+	o.SetNotifyFilter(func(context.Context) notifyfilter.Decision {
 		refreshes++
-		return config.NotifyOnFailure
+		return notifyfilter.Decision{Requested: config.NotifyOnFailure, Effective: config.NotifyOnFailure}
 	})
 
 	o.DispatchEarlyErrorNotification(context.Background(), &EarlyErrorState{

@@ -59,7 +59,7 @@ func stubRelay(t *testing.T, st health.DeliveryStatus, err error) *int {
 	reads := 0
 	orig := FetchDeliveryStatus
 	t.Cleanup(func() { FetchDeliveryStatus = orig })
-	FetchDeliveryStatus = func(context.Context, *http.Client, string, string, string) (health.DeliveryStatus, error) {
+	FetchDeliveryStatus = func(context.Context, *http.Client, string, string, string, *logging.Logger, string) (health.DeliveryStatus, error) {
 		reads++
 		return st, err
 	}
@@ -121,7 +121,7 @@ func TestDecide(t *testing.T) {
 				t.Fatalf("decision = %+v after %d reads; want status %q effective %q reason %q, %d reads",
 					d, *reads, tc.status, tc.effective, tc.reason, tc.reads)
 			}
-			fallback := strings.Contains(buf.String(), "op: notification filter fallback=always reason="+tc.reason)
+			fallback := strings.Contains(buf.String(), "op: filter fallback=always reason="+tc.reason)
 			if fallback != (tc.reason != "") {
 				t.Fatalf("fallback DEBUG line present=%v; want %v:\n%s", fallback, tc.reason != "", buf.String())
 			}
@@ -145,5 +145,50 @@ func TestDecideValidity(t *testing.T) {
 	stubRelay(t, health.DeliveryStatus{}, errors.New("down"))
 	if d := Decide(context.Background(), cfg, nil, SectionInitialized, ""); d.ValidFor != Validity {
 		t.Fatalf("unavailable answer: ValidFor %v; want the local %v", d.ValidFor, Validity)
+	}
+}
+
+// The relay read gets the decision's logger and operation, so its transport stages land in the
+// run log under "notifications init" or "notifications dispatch".
+func TestDecideHandsItsLoggerAndOperationToTheRelayRead(t *testing.T) {
+	var gotLogger *logging.Logger
+	var gotOp string
+	orig := FetchDeliveryStatus
+	t.Cleanup(func() { FetchDeliveryStatus = orig })
+	FetchDeliveryStatus = func(_ context.Context, _ *http.Client, _, _, _ string, logger *logging.Logger, op string) (health.DeliveryStatus, error) {
+		gotLogger, gotOp = logger, op
+		return answer("ready", "warning", true, 0), nil
+	}
+	logger := logging.New(types.LogLevelDebug, false)
+	logger.SetOutput(&bytes.Buffer{})
+	cfg := &config.Config{BaseDir: t.TempDir(), HealthcheckEnabled: true, HealthcheckMode: config.HealthcheckModeCentralized,
+		NotifyOn: config.NotifyOnWarning, TelegramEnabled: true}
+
+	Decide(context.Background(), cfg, logger, SectionInitialized, "notifications dispatch")
+
+	if gotLogger != logger || gotOp != "notifications dispatch" {
+		t.Fatalf("relay read got logger %p op %q; want %p and %q", gotLogger, gotOp, logger, "notifications dispatch")
+	}
+}
+
+// The outcome closes the block: applied when the run applies the threshold it asked for, not
+// applied when it fell back. The symbol marks the outcome, never a value.
+func TestOutcome(t *testing.T) {
+	cases := []struct {
+		d    Decision
+		want string
+	}{
+		{Decision{Requested: "warning", Effective: "warning"}, "✓ Notification filter: applied"},
+		{Decision{Requested: "always", Effective: "always"}, "✓ Notification filter: applied"},
+		{Decision{Requested: "warning", Effective: "always"}, "⚠ Notification filter: not applied"},
+		{Decision{Requested: "failure", Effective: "always"}, "⚠ Notification filter: not applied"},
+	}
+	for _, tc := range cases {
+		if got := tc.d.Outcome(); got != tc.want {
+			t.Errorf("Outcome(%s -> %s) = %q; want %q", tc.d.Requested, tc.d.Effective, got, tc.want)
+		}
+		if got := tc.d.Applied(); got != (tc.d.Requested == tc.d.Effective) {
+			t.Errorf("Applied(%s -> %s) = %v", tc.d.Requested, tc.d.Effective, got)
+		}
 	}
 }

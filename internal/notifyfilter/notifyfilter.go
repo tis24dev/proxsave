@@ -22,6 +22,7 @@ import (
 	"github.com/tis24dev/proxsave/internal/health"
 	"github.com/tis24dev/proxsave/internal/identity"
 	"github.com/tis24dev/proxsave/internal/logging"
+	"github.com/tis24dev/proxsave/internal/ui/theme"
 )
 
 // Healthchecks status words shown on the run's INFO line (maintainer-approved set).
@@ -72,6 +73,19 @@ type Decision struct {
 	Reason    string // why Effective differs from Requested, "" when it does not
 	ReadAt    time.Time
 	ValidFor  time.Duration
+}
+
+// Applied reports whether the run applies the threshold it asked for.
+func (d Decision) Applied() bool { return d.Effective == d.Requested }
+
+// Outcome is the INFO line that closes a notification filter block, at initialization and
+// before dispatch. It is an INFO even when not applied: the run still notifies every outcome,
+// nothing needs the operator, and a WARNING would raise the run's exit code.
+func (d Decision) Outcome() string {
+	if d.Applied() {
+		return theme.SymbolSuccess + " Notification filter: applied"
+	}
+	return theme.SymbolWarning + " Notification filter: not applied"
 }
 
 // Negotiated is the NOTIFY_ON value the daemon sends to the relay and the run requests: the
@@ -145,7 +159,7 @@ func Decide(ctx context.Context, cfg *config.Config, logger *logging.Logger, sec
 		d.Status, d.Reason = StatusNotTransmitting, ReasonNotTransmitting
 	case cfg.HealthcheckMode == config.HealthcheckModeSelf:
 		d.Status = StatusSelf
-		logging.DebugStep(logger, op, "healthchecks mode=self notify_urls=%t", SelfNotifyChecksConfigured(cfg))
+		logging.DebugStep(logger, op, "self notify_urls=%t", SelfNotifyChecksConfigured(cfg))
 		if SelfNotifyChecksConfigured(cfg) {
 			d.Reason = ReasonSelfNotifyChecks
 		} else {
@@ -153,17 +167,17 @@ func Decide(ctx context.Context, cfg *config.Config, logger *logging.Logger, sec
 		}
 	default:
 		secret, _ := identity.LoadNotifySecret(cfg.BaseDir)
-		st, err := FetchDeliveryStatus(ctx, nil, cfg.ServerAPIHost, cfg.ServerID, secret)
+		st, err := FetchDeliveryStatus(ctx, nil, cfg.ServerAPIHost, cfg.ServerID, secret, logger, op)
 		d.ReadAt, d.ValidFor = Now(), Validity
 		if err != nil {
 			d.Status, d.Reason = StatusUnknown, ReasonStatusUnavailable
-			logging.DebugStep(logger, op, "healthchecks delivery unavailable: %v", err)
+			logging.DebugStep(logger, op, "delivery unavailable: %v", err)
 			break
 		}
 		d.Status = statusWord(st.State)
 		d.ValidFor = st.Remaining(Validity)
 		confirmed := st.PolicyConfirmed(d.Requested, EnabledChannels(cfg))
-		logging.DebugStep(logger, op, "healthchecks delivery state=%s alive_routes=%d/%d backup_routes=%d/%d policy_confirmed=%t reasons=%s",
+		logging.DebugStep(logger, op, "delivery state=%s alive_routes=%d/%d backup_routes=%d/%d policy_confirmed=%t reasons=%s",
 			st.State, st.Checks.Alive.VerifiedDownRoutes, st.Checks.Alive.ConfiguredDownRoutes,
 			st.Checks.Backup.VerifiedDownRoutes, st.Checks.Backup.ConfiguredDownRoutes, confirmed,
 			strings.Join(st.ReasonCodes, ","))
@@ -180,7 +194,7 @@ func Decide(ctx context.Context, cfg *config.Config, logger *logging.Logger, sec
 		d.Effective, d.Reason = config.NotifyOnAlways, ""
 	}
 	if d.Effective != d.Requested {
-		logging.DebugStep(logger, op, "notification filter fallback=%s reason=%s", d.Effective, d.Reason)
+		logging.DebugStep(logger, op, "filter fallback=%s reason=%s", d.Effective, d.Reason)
 	}
 	return d
 }

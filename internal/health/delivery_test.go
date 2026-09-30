@@ -38,7 +38,7 @@ func TestFetchDeliveryStatusParsesTheRelayAnswer(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	st, err := FetchDeliveryStatus(context.Background(), srv.Client(), srv.URL, "123456789012", "sekret-token")
+	st, err := FetchDeliveryStatus(context.Background(), srv.Client(), srv.URL, "123456789012", "sekret-token", nil, "")
 	if err != nil {
 		t.Fatalf("FetchDeliveryStatus: %v", err)
 	}
@@ -87,7 +87,7 @@ func TestFetchDeliveryStatusRejectsWhatIsNotAUsableAnswer(t *testing.T) {
 				_, _ = io.WriteString(w, tc.body)
 			}))
 			defer srv.Close()
-			if _, err := FetchDeliveryStatus(context.Background(), srv.Client(), srv.URL, "1", "s"); !errors.Is(err, ErrDeliveryUnavailable) {
+			if _, err := FetchDeliveryStatus(context.Background(), srv.Client(), srv.URL, "1", "s", nil, ""); !errors.Is(err, ErrDeliveryUnavailable) {
 				t.Fatalf("err = %v; want ErrDeliveryUnavailable", err)
 			}
 		})
@@ -97,7 +97,7 @@ func TestFetchDeliveryStatusRejectsWhatIsNotAUsableAnswer(t *testing.T) {
 		srv := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
 		url := srv.URL
 		srv.Close()
-		if _, err := FetchDeliveryStatus(context.Background(), nil, url, "1", "s"); !errors.Is(err, ErrDeliveryUnavailable) {
+		if _, err := FetchDeliveryStatus(context.Background(), nil, url, "1", "s", nil, ""); !errors.Is(err, ErrDeliveryUnavailable) {
 			t.Fatalf("err = %v; want ErrDeliveryUnavailable", err)
 		}
 	})
@@ -111,7 +111,7 @@ func TestFetchDeliveryStatusAcceptsEveryContractState(t *testing.T) {
 				_, _ = io.WriteString(w, `{"schema_version": 1, "state": "`+state+`", "valid_for_seconds": 120}`)
 			}))
 			defer srv.Close()
-			st, err := FetchDeliveryStatus(context.Background(), srv.Client(), srv.URL, "1", "s")
+			st, err := FetchDeliveryStatus(context.Background(), srv.Client(), srv.URL, "1", "s", nil, "")
 			if err != nil || st.State != state {
 				t.Fatalf("state %q: got %+v, %v", state, st, err)
 			}

@@ -20,6 +20,7 @@ import (
 	"github.com/tis24dev/proxsave/internal/logging"
 	"github.com/tis24dev/proxsave/internal/metrics"
 	"github.com/tis24dev/proxsave/internal/notify"
+	"github.com/tis24dev/proxsave/internal/notifyfilter"
 	"github.com/tis24dev/proxsave/internal/safefs"
 	"github.com/tis24dev/proxsave/internal/storage"
 	"github.com/tis24dev/proxsave/internal/types"
@@ -197,7 +198,7 @@ type Orchestrator struct {
 	// the decision taken at initialization, the refresh taken again before dispatch, and the value
 	// the normal dispatch uses. An early-error dispatch never goes through the refresh and
 	// notifies every outcome.
-	notifyFilterRefresh  func(context.Context) string
+	notifyFilterRefresh  func(context.Context) notifyfilter.Decision
 	notifyFilterDispatch string
 	checker              *checks.Checker
 	logger               *logging.Logger

@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/tis24dev/proxsave/internal/logging"
 	"github.com/tis24dev/proxsave/internal/serverbot"
 )
 
@@ -63,19 +64,23 @@ const deliveryTimeout = 5 * time.Second
 
 // FetchDeliveryStatus asks the relay, with the same per-server auth as the config poll.
 // It never provisions and never retries: a caller that gets an error applies always.
-func FetchDeliveryStatus(ctx context.Context, client *http.Client, serverAPIHost, serverID, secret string) (DeliveryStatus, error) {
-	resp, err := serverbot.New(serverAPIHost, client, nil).Do(ctx, serverbot.Request{
-		Method:   http.MethodGet,
-		Path:     "/api/healthcheck/delivery-status",
-		Query:    url.Values{"server_id": {serverID}},
-		Secret:   secret,
-		Timeout:  deliveryTimeout,
-		MaxBytes: 16384,
+// With a logger, the transport stages are logged in DEBUG under op (serverbot.Request.LogOperation),
+// and an answer other than 200 adds an excerpt of its body with the secret masked.
+func FetchDeliveryStatus(ctx context.Context, client *http.Client, serverAPIHost, serverID, secret string, logger *logging.Logger, op string) (DeliveryStatus, error) {
+	resp, err := serverbot.New(serverAPIHost, client, logger).Do(ctx, serverbot.Request{
+		Method:       http.MethodGet,
+		Path:         "/api/healthcheck/delivery-status",
+		Query:        url.Values{"server_id": {serverID}},
+		Secret:       secret,
+		Timeout:      deliveryTimeout,
+		MaxBytes:     16384,
+		LogOperation: op,
 	})
 	if err != nil {
 		return DeliveryStatus{}, fmt.Errorf("%w: %v", ErrDeliveryUnavailable, err)
 	}
 	if resp.Status != http.StatusOK {
+		logging.DebugStep(logger, op, "response body=%q", logging.RedactSecrets(resp.Snippet(200), secret))
 		return DeliveryStatus{}, fmt.Errorf("%w: http %d", ErrDeliveryUnavailable, resp.Status)
 	}
 	var st DeliveryStatus

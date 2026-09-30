@@ -12,6 +12,7 @@ import (
 	"github.com/tis24dev/proxsave/internal/config"
 	"github.com/tis24dev/proxsave/internal/health"
 	"github.com/tis24dev/proxsave/internal/notify"
+	"github.com/tis24dev/proxsave/internal/notifyfilter"
 	"github.com/tis24dev/proxsave/internal/safefs"
 	"github.com/tis24dev/proxsave/internal/storage"
 	"github.com/tis24dev/proxsave/internal/types"
@@ -294,13 +295,19 @@ func (o *Orchestrator) startNotificationGroup(ctx context.Context, stats *Backup
 		return
 	}
 	// The threshold is decided (and, when the relay's answer expired, re-read) BEFORE the issue
-	// snapshot: its DEBUG lines must not fall between the snapshot and the dispatch.
-	o.notifyFilterDispatch = config.NotifyOnAlways
+	// snapshot: its DEBUG lines must not fall between the snapshot and the dispatch. Phase [7]
+	// states only the outcome, after the refresh's DEBUG evidence (the relay read or the reuse);
+	// the details are in the initialization block. It is an INFO even when not applied: a
+	// WARNING here would raise the run's exit code.
+	d := notifyfilter.Decision{Requested: notifyfilter.Negotiated(o.cfg), Effective: config.NotifyOnAlways}
 	if o.notifyFilterRefresh != nil {
-		o.notifyFilterDispatch = o.notifyFilterRefresh(ctx)
+		d = o.notifyFilterRefresh(ctx)
+	} else if o.logger != nil {
+		o.logger.Debug("notifications dispatch: no init decision requested=%s fallback=%s", d.Requested, d.Effective)
 	}
+	o.notifyFilterDispatch = d.Effective
 	if o.logger != nil {
-		o.logger.Info("Notification filter: %s", o.notifyFilterDispatch)
+		o.logger.Info("%s", d.Outcome())
 	}
 	o.snapshotPreNotificationIssues(stats)
 	applyIssueExitCode(stats)
@@ -691,7 +698,7 @@ func describeEarlyErrorPhase(phase string) string {
 
 // SetNotifyFilter hands the orchestrator the threshold decided at initialization and the refresh
 // that decides it again before dispatch (cmd/proxsave notify_filter.go).
-func (o *Orchestrator) SetNotifyFilter(refresh func(context.Context) string) {
+func (o *Orchestrator) SetNotifyFilter(refresh func(context.Context) notifyfilter.Decision) {
 	if o != nil {
 		o.notifyFilterRefresh = refresh
 	}

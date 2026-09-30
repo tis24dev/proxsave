@@ -10,6 +10,7 @@ import (
 
 	"github.com/tis24dev/proxsave/internal/config"
 	"github.com/tis24dev/proxsave/internal/health"
+	"github.com/tis24dev/proxsave/internal/logging"
 	"github.com/tis24dev/proxsave/internal/notifyfilter"
 )
 
@@ -28,7 +29,7 @@ func notifyFilterEnv(t *testing.T, body string, st health.DeliveryStatus, err er
 	reads := 0
 	orig := notifyfilter.FetchDeliveryStatus
 	t.Cleanup(func() { notifyfilter.FetchDeliveryStatus = orig })
-	notifyfilter.FetchDeliveryStatus = func(_ context.Context, _ *http.Client, host, id, _ string) (health.DeliveryStatus, error) {
+	notifyfilter.FetchDeliveryStatus = func(_ context.Context, _ *http.Client, host, id, _ string, _ *logging.Logger, _ string) (health.DeliveryStatus, error) {
 		reads++
 		if host != testAPIHost || id != testServerID {
 			t.Errorf("relay read with host %q id %q; want the ones the check resolved", host, id)

@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"time"
 
 	"github.com/tis24dev/proxsave/internal/config"
 	"github.com/tis24dev/proxsave/internal/logging"
@@ -12,38 +13,67 @@ import (
 // The run decides its NOTIFY_ON threshold with notifyfilter.Decide at initialization, and again
 // before dispatch when the relay's answer has expired.
 
-// logNotifyFilterInit writes the three INFO lines of the initialization block and hands the
-// decision to the orchestrator, with the refresh used before dispatch.
+// logNotifyFilterInit writes the initialization block (INFO "Applying notification filter...",
+// the DEBUG evidence, the INFO details, the outcome last) and hands the decision to the
+// orchestrator, with the refresh used before dispatch. No line of it is above INFO: a filter not
+// applied still notifies every outcome, and a WARNING would raise the run's exit code.
 func logNotifyFilterInit(opts backupModeOptions, orch *orchestrator.Orchestrator, section string) {
 	cfg, logger := opts.cfg, opts.logger
-	source := "default"
-	if cfg != nil && cfg.NotifyOnSource != "" {
-		source = cfg.NotifyOnSource
-	}
-	requested := notifyfilter.Negotiated(cfg)
-	logging.Info("Notification setting: NOTIFY_ON=%s", requested)
-	logging.DebugStep(logger, "notifications init", "notify_on=%s source=%s", requested, source)
+	logging.Info("Applying notification filter...")
+	logNotifyOnRead(cfg, logger)
 	if cfg != nil && cfg.HealthcheckEnabled {
-		logging.DebugStep(logger, "notifications init", "healthchecks mode=%s", cfg.HealthcheckMode)
+		logging.DebugStep(logger, "notifications init", "healthchecks mode=%s section=%s", cfg.HealthcheckMode, section)
 	}
 	d := notifyfilter.Decide(opts.ctx, cfg, logger, section, "notifications init")
-	logging.Info("Healthchecks status: %s", d.Status)
-	logging.Info("Notification filter: %s", d.Effective)
+	logging.Info("  Setting: %s", d.Requested)
+	logging.Info("  Healthchecks status: %s", d.Status)
+	logging.Info("  Filter in effect: %s", d.Effective)
+	logging.Info("%s", d.Outcome())
 	if orch == nil {
 		return
 	}
 	orch.SetNotifyFilter(notifyFilterRefresh(d, cfg, logger, section))
 }
 
+// logNotifyOnRead is the DEBUG evidence of the setting: the value read and where from (the
+// configuration file's path when it came from backup.env), and the value requested when an
+// unrecognised one is requested as always.
+func logNotifyOnRead(cfg *config.Config, logger *logging.Logger) {
+	requested := notifyfilter.Negotiated(cfg)
+	value, source := requested, "default"
+	if cfg != nil {
+		value = cfg.NotifyOn
+		if cfg.NotifyOnSource != "" {
+			source = cfg.NotifyOnSource
+		}
+		if source == "backup.env" && cfg.ConfigPath != "" {
+			source = cfg.ConfigPath
+		}
+	}
+	if value == requested {
+		logging.DebugStep(logger, "notifications init", "read notify_on=%s source=%s", value, source)
+		return
+	}
+	logging.DebugStep(logger, "notifications init", "read notify_on=%q source=%s requested=%s", value, source, requested)
+}
+
 // notifyFilterRefresh is the refresh handed to the orchestrator for the decision before dispatch:
 // it reuses the last decision while the relay's answer is still valid (notifyfilter.Validity at
-// most), or when the decision read no relay answer at all, and decides again otherwise.
-func notifyFilterRefresh(d notifyfilter.Decision, cfg *config.Config, logger *logging.Logger, section string) func(context.Context) string {
-	return func(ctx context.Context) string {
-		if d.ReadAt.IsZero() || notifyfilter.Now().Sub(d.ReadAt) < d.ValidFor {
-			return d.Effective
+// most), or when the decision read no relay answer at all, and decides again otherwise. Each
+// reuse is recorded in DEBUG with the answer's age, so the dispatch outcome has its evidence.
+func notifyFilterRefresh(d notifyfilter.Decision, cfg *config.Config, logger *logging.Logger, section string) func(context.Context) notifyfilter.Decision {
+	const op = "notifications dispatch"
+	from := "init"
+	return func(ctx context.Context) notifyfilter.Decision {
+		if d.ReadAt.IsZero() {
+			logging.DebugStep(logger, op, "reused %s decision relay_read=none status=%s", from, d.Status)
+			return d
 		}
-		d = notifyfilter.Decide(ctx, cfg, logger, section, "notifications dispatch")
-		return d.Effective
+		if age := notifyfilter.Now().Sub(d.ReadAt); age < d.ValidFor {
+			logging.DebugStep(logger, op, "reused %s decision age=%s valid_for=%s", from, age.Round(time.Millisecond), d.ValidFor)
+			return d
+		}
+		d, from = notifyfilter.Decide(ctx, cfg, logger, section, op), "dispatch"
+		return d
 	}
 }
