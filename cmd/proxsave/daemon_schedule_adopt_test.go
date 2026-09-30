@@ -65,6 +65,21 @@ func TestAdoptSchedulerTimeForDaemon(t *testing.T) {
 			wantKeys: []string{"SCHEDULER_TIME=21:00"},
 		},
 		{
+			// A19: an empty SCHEDULER_TIME is its default, 02:00, so a 02:00 line is in step.
+			name:     "empty SCHEDULER_TIME is the default and in step with a 02:00 line",
+			stored:   "SCHEDULER_TIME=\n",
+			lines:    []string{"0 2 * * *" + bin},
+			wantKeys: []string{"SCHEDULER_TIME=\n"},
+		},
+		{
+			// A12: an ABSENT one is not stated, so the same line is adopted and written.
+			name:      "absent SCHEDULER_TIME is adopted even at the default time",
+			stored:    "",
+			lines:     []string{"0 2 * * *" + bin},
+			wantKeys:  []string{"SCHEDULER_TIME=02:00", "SCHEDULER_FREQUENCY=daily"},
+			wantBlock: true,
+		},
+		{
 			name:     "no proxsave cron line: the variables are left alone",
 			stored:   "SCHEDULER_TIME=03:15\n",
 			lines:    []string{"0 6 * * * /usr/bin/rsync /a /b"},

@@ -774,8 +774,9 @@ func adoptSchedulerTimeForDaemon(configPath string, lines []string, bootstrap *l
 	}
 	// Already in step: nothing to write and nothing to say. An ABSENT SCHEDULER_TIME is not in
 	// step even when the default matches: nothing has been stated, and writing it records the
-	// schedule the host has been running on.
-	if strings.TrimSpace(prefill.SchedulerTime) != "" && inEffect.Schedule() == reading.Cadence.Schedule() {
+	// schedule the host has been running on. A PRESENT but empty one is its default, 02:00
+	// (A19), and is in step with a line at that time like any stated value.
+	if installer.EnvKeyPresent(string(data), "SCHEDULER_TIME") && inEffect.Schedule() == reading.Cadence.Schedule() {
 		logScheduleLines(bootstrap, scheduleBlock{Debug: append(reading.debugLines(),
 			fmt.Sprintf("schedule adopt: backup.env already has %s source=%s, nothing written", cadenceFields(inEffect), configPath))}.lines())
 		return
