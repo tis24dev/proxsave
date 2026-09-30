@@ -113,7 +113,9 @@ func dailyCadence(hhmm string) cron.Cadence {
 	return cron.Cadence{Frequency: cron.FrequencyDaily, Weekday: cron.DefaultWeekday, MonthDay: cron.DefaultMonthDay, Time: hhmm}
 }
 
-// cadenceLabel is the "In effect" value of the not-applied block.
+// cadenceLabel is a cadence inside one line: "daily at 03:00", "weekly, Monday at 03:00",
+// "monthly, day 15 at 03:00". It is the "In effect" value of the not-applied block and the
+// schedule the install and upgrade blocks name.
 func cadenceLabel(c cron.Cadence) string {
 	switch c.Frequency {
 	case cron.FrequencyWeekly:

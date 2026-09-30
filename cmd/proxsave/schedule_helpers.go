@@ -570,19 +570,6 @@ func cadenceDetails(c cronutil.Cadence) []string {
 	return append(out, "  Time: "+c.Time)
 }
 
-// cadenceLabel is a cadence inside one line: "daily at 03:00", "weekly, Monday at 03:00",
-// "monthly, day 15 at 03:00".
-func cadenceLabel(c cronutil.Cadence) string {
-	switch c.Frequency {
-	case cronutil.FrequencyWeekly:
-		return fmt.Sprintf("weekly, %s at %s", c.Weekday, c.Time)
-	case cronutil.FrequencyMonthly:
-		return fmt.Sprintf("monthly, day %d at %s", c.MonthDay, c.Time)
-	default:
-		return fmt.Sprintf("%s at %s", c.Frequency, c.Time)
-	}
-}
-
 // inEffectItemLabel is the schedule a warnings-list item says stays in effect. It says
 // "default" only when that schedule really is the default one, daily at 02:00.
 func inEffectItemLabel(c cronutil.Cadence) string {
