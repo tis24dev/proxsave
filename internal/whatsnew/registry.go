@@ -240,11 +240,11 @@ var notes = []Note{
 	{
 		Version: "0.41.0",
 		Lines: []string{
-			"Security check now covers the PBS token files ProxSave reads: secure_account/pbs_token, pbs_api_token, /root/.pbs-token",
-			"With AUTO_FIX_PERMISSIONS=true a token file not at 0600 root is corrected once, and that run ends with a warning",
+			"Backups can run daily, weekly or monthly (SCHEDULER_FREQUENCY); ProxSave HC Server adapts the backup check to it",
+			"PBS token files are now security-checked: one not at 0600 root is fixed on the next run, which ends with a warning",
 		},
 		Actions: []string{
-			"A token symlink whose target is not 0600 root blocks the backup while AUTO_FIX_PERMISSIONS=true",
+			"A PBS token symlink whose target is not 0600 root blocks the backup while AUTO_FIX_PERMISSIONS=true",
 		},
 	},
 }

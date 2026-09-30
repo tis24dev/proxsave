@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/tis24dev/proxsave/internal/cron"
 )
 
 func TestParseSchedulerHealthcheckDefaults(t *testing.T) {
@@ -124,6 +126,103 @@ func TestHealthcheckNotifyConfigParse(t *testing.T) {
 	}
 }
 
+func TestParseSchedulerCadence(t *testing.T) {
+	c := &Config{raw: map[string]string{}}
+	c.parseSchedulerSettings()
+	if c.SchedulerFrequency != "daily" || c.SchedulerWeekday != "mon" || c.SchedulerMonthDay != "1" {
+		t.Fatalf("defaults = %q %q %q; want daily mon 1", c.SchedulerFrequency, c.SchedulerWeekday, c.SchedulerMonthDay)
+	}
+	cad, err := c.SchedulerCadence()
+	if err != nil || cad != (cron.Cadence{Frequency: cron.FrequencyDaily, Weekday: time.Monday, MonthDay: 1, Time: "02:00"}) {
+		t.Fatalf("SchedulerCadence() = %+v, %v; want daily at 02:00", cad, err)
+	}
+
+	c = &Config{raw: map[string]string{
+		"SCHEDULER_FREQUENCY": " Weekly ",
+		"SCHEDULER_WEEKDAY":   "fri",
+		"SCHEDULER_MONTHDAY":  "15",
+		"SCHEDULER_TIME":      "3:30",
+	}}
+	c.parseSchedulerSettings()
+	cad, err = c.SchedulerCadence()
+	if err != nil || cad != (cron.Cadence{Frequency: cron.FrequencyWeekly, Weekday: time.Friday, MonthDay: 15, Time: "03:30"}) {
+		t.Fatalf("SchedulerCadence() = %+v, %v; want weekly on fri at 03:30", cad, err)
+	}
+
+	c = &Config{raw: map[string]string{"SCHEDULER_FREQUENCY": "monthly", "SCHEDULER_MONTHDAY": "31"}}
+	c.parseSchedulerSettings()
+	if _, err := c.SchedulerCadence(); err == nil {
+		t.Fatal("SchedulerCadence accepted SCHEDULER_MONTHDAY=31")
+	}
+}
+
+// An upgrade replaces an inline comment an earlier template wrote, and only that: the value is
+// the operator's, and a comment the operator edited is theirs too.
+func TestUpgradeRefreshesRetiredTemplateComment(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "backup.env")
+	old := "SCHEDULER_MODE=cron\n" +
+		`SCHEDULER_TIME=03:30           # daily HH:MM ("Run at") used by daemon mode; cron mode uses the crontab` + "\n" +
+		"MAX_RUN_DURATION=1h\n"
+	if err := os.WriteFile(path, []byte(old), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := UpgradeConfigFileWithBaseDir(path, dir); err != nil {
+		t.Fatalf("upgrade: %v", err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := string(data)
+	want := `SCHEDULER_TIME=03:30           # HH:MM ("Run at")`
+	if !strings.Contains(got, want+"\n") {
+		t.Fatalf("retired comment not refreshed; want line %q in:\n%s", want, got)
+	}
+	if strings.Count(got, "SCHEDULER_TIME=") != 1 {
+		t.Fatalf("SCHEDULER_TIME duplicated:\n%s", got)
+	}
+
+	// An operator's own comment stays.
+	own := "SCHEDULER_MODE=cron\nSCHEDULER_TIME=03:30 # my backup window\nMAX_RUN_DURATION=1h\n"
+	if err := os.WriteFile(path, []byte(own), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := UpgradeConfigFileWithBaseDir(path, dir); err != nil {
+		t.Fatalf("upgrade: %v", err)
+	}
+	data, _ = os.ReadFile(path)
+	if !strings.Contains(string(data), "SCHEDULER_TIME=03:30 # my backup window\n") {
+		t.Fatalf("operator comment changed:\n%s", data)
+	}
+}
+
+// A file whose only difference from the template is a retired comment is still rewritten.
+func TestUpgradeRefreshesRetiredCommentWithNothingMissing(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "backup.env")
+	tmpl := DefaultEnvTemplate()
+	retired := strings.Replace(tmpl, `SCHEDULER_TIME=02:00           # HH:MM ("Run at")`,
+		`SCHEDULER_TIME=02:00           # daily HH:MM ("Run at") used by daemon mode; cron mode uses the crontab`, 1)
+	if retired == tmpl {
+		t.Fatal("template line for SCHEDULER_TIME not found")
+	}
+	if err := os.WriteFile(path, []byte(retired), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	res, err := UpgradeConfigFileWithBaseDir(path, dir)
+	if err != nil {
+		t.Fatalf("upgrade: %v", err)
+	}
+	if !res.Changed {
+		t.Fatal("upgrade reported no change for a retired comment")
+	}
+	data, _ := os.ReadFile(path)
+	if string(data) != tmpl {
+		t.Fatal("file not equal to the template after refreshing the comment")
+	}
+}
+
 func TestSchedulerHealthcheckNormalizeFallback(t *testing.T) {
 	c := &Config{raw: map[string]string{
 		"SCHEDULER_MODE":   "garbage",
@@ -149,7 +248,8 @@ func TestSchedulerHealthcheckNormalizeFallback(t *testing.T) {
 func TestRealTemplateContainsNewKeys(t *testing.T) {
 	tmpl := DefaultEnvTemplate()
 	for _, key := range []string{
-		"SCHEDULER_MODE=", "SCHEDULER_TIME=", "MAX_RUN_DURATION=",
+		"SCHEDULER_MODE=", "SCHEDULER_FREQUENCY=", "SCHEDULER_WEEKDAY=", "SCHEDULER_MONTHDAY=",
+		"SCHEDULER_TIME=", "MAX_RUN_DURATION=",
 		"HEALTHCHECK_ENABLED=", "HEALTHCHECK_MODE=", "HEALTHCHECK_HEARTBEAT_INTERVAL=",
 		"HEALTHCHECK_SEND_LOG=", "HEALTHCHECK_ALIVE_URL=", "HEALTHCHECK_BACKUP_URL=",
 		"HEALTHCHECK_PING_ENDPOINT=", "HEALTHCHECK_PING_KEY=", "HEALTHCHECK_ALIVE_ID=",

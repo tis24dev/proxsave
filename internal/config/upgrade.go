@@ -243,6 +243,8 @@ func computeConfigUpgrade(configPath string) (*UpgradeResult, string, []byte, er
 	normalizedTemplate := strings.ReplaceAll(template, "\r\n", "\n")
 	templateLines := strings.Split(normalizedTemplate, "\n")
 
+	refreshedComments := refreshRetiredTemplateComments(originalLines, skipOriginalLines, templateLines)
+
 	type templateEntry struct {
 		key   string
 		upper string
@@ -357,8 +359,8 @@ func computeConfigUpgrade(configPath string) (*UpgradeResult, string, []byte, er
 		}
 	}
 
-	// If nothing is missing and nothing is pruned, do not rewrite the file.
-	if len(missingKeys) == 0 && prunedLineCount == 0 {
+	// If nothing is missing, pruned or refreshed, do not rewrite the file.
+	if len(missingKeys) == 0 && prunedLineCount == 0 && refreshedComments == 0 {
 		result.Changed = false
 		result.Warnings = warnings
 		result.MissingKeys = missingKeys
@@ -568,6 +570,60 @@ func computeConfigUpgrade(configPath string) (*UpgradeResult, string, []byte, er
 	result.Warnings = warnings
 	result.Changed = true
 	return result, newContent, originalContent, nil
+}
+
+// retiredTemplateComments lists, per key, the inline comments earlier templates wrote. A line
+// that still carries one was written by ProxSave, not by the operator, so the merge replaces
+// that comment with the current template's. The value, and any comment the operator wrote,
+// are never touched.
+var retiredTemplateComments = map[string][]string{
+	// Said "daily" and "used by daemon mode" before SCHEDULER_FREQUENCY existed.
+	"SCHEDULER_TIME": {`# daily HH:MM ("Run at") used by daemon mode; cron mode uses the crontab`},
+}
+
+// refreshRetiredTemplateComments rewrites, in place, the inline comment of every user line whose
+// comment is a retired template comment for its key, keeping everything before the comment
+// (key, value and spacing) byte for byte. It returns how many lines it rewrote.
+func refreshRetiredTemplateComments(lines []string, skip []bool, templateLines []string) int {
+	current := make(map[string]string)
+	for _, tl := range templateLines {
+		if utils.IsComment(strings.TrimSpace(tl)) {
+			continue
+		}
+		if key, _, comment, ok := splitKeyValueRaw(tl); ok && comment != "" {
+			current[strings.ToUpper(key)] = comment
+		}
+	}
+	refreshed := 0
+	for i, line := range lines {
+		if i < len(skip) && skip[i] {
+			continue
+		}
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" || utils.IsComment(trimmed) {
+			continue
+		}
+		key, _, comment, ok := splitKeyValueRaw(line)
+		if !ok || comment == "" {
+			continue
+		}
+		upper := strings.ToUpper(key)
+		replacement, has := current[upper]
+		if !has {
+			continue
+		}
+		for _, retired := range retiredTemplateComments[upper] {
+			if comment != retired {
+				continue
+			}
+			if idx := utils.FindInlineCommentIndex(line); idx >= 0 {
+				lines[i] = line[:idx] + replacement
+				refreshed++
+			}
+			break
+		}
+	}
+	return refreshed
 }
 
 func parseEnvValues(lines []string) (map[string][]envValue, []string, map[string]string, map[string]bool, []string, map[string][]keyRange, error) {
