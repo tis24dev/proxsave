@@ -428,6 +428,11 @@ func (d *daemon) run(ctx context.Context) int {
 		}
 	}
 
+	// The schedule block, once, before any background loop can log: the cadence the scheduler
+	// is about to run on, reported ahead of the heartbeat and update lines. A refused second
+	// instance returned above and prints none.
+	d.logScheduleStart()
+
 	// loopCtx is how an ABANDONED run stops the background loops. They all return ONLY on
 	// their context being done, and on the abandon path the caller's context is still live --
 	// no SIGTERM arrived, we are the ones deciding to die -- so without a cancel of our own
@@ -598,14 +603,17 @@ func (d *daemon) processManualOutcome(ctx context.Context) {
 }
 
 // scheduleLoop waits for the next run of the cadence in effect and supervises a backup, until
-// the context is cancelled. It reports that cadence once, before the first "next backup" line
-// (logScheduleStart). It returns true when a run had to ABANDON a child the kernel will not
-// let us reap: there is nothing useful to schedule behind such a child (it still holds the
-// backup lock, so the next run would only exit ExitBackupSkipped), so the loop unwinds and
-// lets run() exit for a systemd restart instead.
+// the context is cancelled. run() reported that cadence before the first "next backup" line
+// (logScheduleStart); while a SCHEDULER_* value is invalid, the not-applied block is printed
+// again before every later one. It returns true when a run had to ABANDON a child the kernel
+// will not let us reap: there is nothing useful to schedule behind such a child (it still
+// holds the backup lock, so the next run would only exit ExitBackupSkipped), so the loop
+// unwinds and lets run() exit for a systemd restart instead.
 func (d *daemon) scheduleLoop(ctx context.Context) bool {
-	d.logScheduleStart()
-	for {
+	for first := true; ; first = false {
+		if !first {
+			d.logScheduleNotAppliedAgain()
+		}
 		next := d.nextScheduledRun(d.now())
 		wait := next.Sub(d.now())
 		if wait < 0 {
