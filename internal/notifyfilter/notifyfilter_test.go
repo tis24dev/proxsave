@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"io"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
@@ -190,5 +192,97 @@ func TestOutcome(t *testing.T) {
 		if got := tc.d.Applied(); got != (tc.d.Requested == tc.d.Effective) {
 			t.Errorf("Applied(%s -> %s) = %v", tc.d.Requested, tc.d.Effective, got)
 		}
+	}
+}
+
+// Decide names why the relay's answer could not be used, from what the real read returned: no
+// HTTP answer, a status other than 200, or a 200 that is not a usable status. A request that
+// could not be built, an answer that was used, and an error no kind matches name nothing.
+func TestDecideNamesWhyTheRelayAnswerWasUnavailable(t *testing.T) {
+	serve := func(t *testing.T, h http.HandlerFunc) string {
+		srv := httptest.NewServer(h)
+		t.Cleanup(srv.Close)
+		return srv.URL
+	}
+	answering := func(status int, body string) func(*testing.T) string {
+		return func(t *testing.T) string {
+			return serve(t, func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(status)
+				_, _ = io.WriteString(w, body)
+			})
+		}
+	}
+	cases := []struct {
+		name        string
+		host        func(*testing.T) string
+		stub        error // replaces the real read when set
+		reason      string
+		unavailable string
+		stage       string // the failed stage the read logged, when it failed in transport
+	}{
+		{name: "connection refused", host: func(t *testing.T) string {
+			srv := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+			srv.Close()
+			return srv.URL
+		}, reason: ReasonStatusUnavailable, unavailable: UnavailableUnreachable, stage: "connect"},
+		{name: "hung up without an answer", host: func(t *testing.T) string {
+			return serve(t, func(w http.ResponseWriter, _ *http.Request) {
+				if conn, _, err := w.(http.Hijacker).Hijack(); err == nil {
+					_ = conn.Close()
+				}
+			})
+		}, reason: ReasonStatusUnavailable, unavailable: UnavailableUnreachable, stage: "response"},
+		{name: "answer broke off", host: func(t *testing.T) string {
+			return serve(t, func(w http.ResponseWriter, _ *http.Request) {
+				conn, rw, err := w.(http.Hijacker).Hijack()
+				if err != nil {
+					return
+				}
+				defer conn.Close()
+				_, _ = rw.WriteString("HTTP/1.1 200 OK\r\nContent-Length: 100\r\n\r\nabc")
+				_ = rw.Flush()
+			})
+		}, reason: ReasonStatusUnavailable, unavailable: UnavailableUnreachable, stage: "response"},
+		{name: "http 503", host: answering(http.StatusServiceUnavailable, `{"error":"HC_DELIVERY_DISABLED"}`),
+			reason: ReasonStatusUnavailable, unavailable: UnavailableHTTPStatus},
+		{name: "http 404", host: answering(http.StatusNotFound, ``), reason: ReasonStatusUnavailable, unavailable: UnavailableHTTPStatus},
+		{name: "bad JSON", host: answering(http.StatusOK, `{"schema_version": 1, "state": `),
+			reason: ReasonStatusUnavailable, unavailable: UnavailableUnusable},
+		{name: "unknown schema", host: answering(http.StatusOK, `{"schema_version": 2, "state": "ready", "valid_for_seconds": 120}`),
+			reason: ReasonStatusUnavailable, unavailable: UnavailableUnusable},
+		{name: "unknown state", host: answering(http.StatusOK, `{"schema_version": 1, "state": "project_missing", "valid_for_seconds": 120}`),
+			reason: ReasonStatusUnavailable, unavailable: UnavailableUnusable},
+		{name: "expired evaluation", host: answering(http.StatusOK, `{"schema_version": 1, "state": "ready", "age_seconds": 120, "valid_for_seconds": 120}`),
+			reason: ReasonStatusUnavailable, unavailable: UnavailableUnusable},
+		{name: "request not built", host: func(*testing.T) string { return "http://[::1" },
+			reason: ReasonStatusUnavailable, unavailable: "", stage: "build"},
+		{name: "usable answer", host: answering(http.StatusOK, `{"schema_version": 1, "state": "degraded", "valid_for_seconds": 120}`),
+			reason: ReasonAlertsNotVerified, unavailable: ""},
+		{name: "error of no known kind", stub: errors.New("down"), reason: ReasonStatusUnavailable, unavailable: ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := &config.Config{BaseDir: t.TempDir(), HealthcheckEnabled: true, HealthcheckMode: config.HealthcheckModeCentralized,
+				NotifyOn: config.NotifyOnWarning, TelegramEnabled: true, ServerID: "123456789012"}
+			if tc.stub != nil {
+				stubRelay(t, health.DeliveryStatus{}, tc.stub)
+			} else {
+				cfg.ServerAPIHost = tc.host(t)
+			}
+
+			var buf bytes.Buffer
+			logger := logging.New(types.LogLevelDebug, false)
+			logger.SetOutput(&buf)
+
+			d := Decide(context.Background(), cfg, logger, SectionInitialized, "op")
+
+			if d.Reason != tc.reason || d.Unavailable != tc.unavailable {
+				t.Fatalf("decision = reason %q unavailable %q; want %q %q", d.Reason, d.Unavailable, tc.reason, tc.unavailable)
+			}
+			if failed := strings.Contains(buf.String(), "op: failed stage="); failed != (tc.stage != "") ||
+				(tc.stage != "" && !strings.Contains(buf.String(), "op: failed stage="+tc.stage+" ")) {
+				t.Fatalf("want failed stage %q in:\n%s", tc.stage, buf.String())
+			}
+		})
 	}
 }

@@ -14,6 +14,7 @@ package notifyfilter
 
 import (
 	"context"
+	"errors"
 	"sort"
 	"strings"
 	"time"
@@ -22,6 +23,7 @@ import (
 	"github.com/tis24dev/proxsave/internal/health"
 	"github.com/tis24dev/proxsave/internal/identity"
 	"github.com/tis24dev/proxsave/internal/logging"
+	"github.com/tis24dev/proxsave/internal/serverbot"
 	"github.com/tis24dev/proxsave/internal/ui/theme"
 )
 
@@ -54,6 +56,18 @@ const (
 	ReasonPolicyUnconfirmed    = "policy_unconfirmed"
 )
 
+// Why the relay's delivery status could not be used (Decision.Unavailable).
+const (
+	// UnavailableUnreachable: no HTTP answer, the call failed at the dns, connect, request or
+	// response stage.
+	UnavailableUnreachable = "unreachable"
+	// UnavailableHTTPStatus: the relay answered with an HTTP status other than 200.
+	UnavailableHTTPStatus = "http_status"
+	// UnavailableUnusable: the relay answered 200 with bad JSON, a schema or state outside the
+	// contract, or an evaluation it no longer vouches for.
+	UnavailableUnusable = "unusable_answer"
+)
+
 // Validity is how long a relay answer may be reused for the decision before dispatch, at most: the
 // relay's own validity (valid_for_seconds less age_seconds) can make it shorter.
 const Validity = 120 * time.Second
@@ -71,8 +85,11 @@ type Decision struct {
 	Status    string // Healthchecks status word
 	Effective string // the threshold applied
 	Reason    string // why Effective differs from Requested, "" when it does not
-	ReadAt    time.Time
-	ValidFor  time.Duration
+	// Unavailable is why the relay's delivery status could not be used (Unavailable*): "" when
+	// the relay was not asked, answered usably, or failed in a way none of them names.
+	Unavailable string
+	ReadAt      time.Time
+	ValidFor    time.Duration
 }
 
 // Applied reports whether the run applies the threshold it asked for.
@@ -170,7 +187,7 @@ func Decide(ctx context.Context, cfg *config.Config, logger *logging.Logger, sec
 		st, err := FetchDeliveryStatus(ctx, nil, cfg.ServerAPIHost, cfg.ServerID, secret, logger, op)
 		d.ReadAt, d.ValidFor = Now(), Validity
 		if err != nil {
-			d.Status, d.Reason = StatusUnknown, ReasonStatusUnavailable
+			d.Status, d.Reason, d.Unavailable = StatusUnknown, ReasonStatusUnavailable, unavailable(err)
 			logging.DebugStep(logger, op, "delivery unavailable: %v", err)
 			break
 		}
@@ -197,4 +214,26 @@ func Decide(ctx context.Context, cfg *config.Config, logger *logging.Logger, sec
 		logging.DebugStep(logger, op, "filter fallback=%s reason=%s", d.Effective, d.Reason)
 	}
 	return d
+}
+
+// unavailable names why FetchDeliveryStatus gave no usable answer, from the error it returned: a
+// transport failure once the call was on its way (serverbot's "request" and "read" failures, the
+// dns, connect, request and response stages), an HTTP status other than 200, or a 200 answer
+// that is not a usable status. It is "" for any other error, such as a request that could not
+// be built.
+func unavailable(err error) string {
+	var te *serverbot.TransportError
+	var he *health.DeliveryHTTPStatusError
+	var ae *health.DeliveryAnswerError
+	switch {
+	case errors.As(err, &te):
+		if te.Op == "request" || te.Op == "read" {
+			return UnavailableUnreachable
+		}
+	case errors.As(err, &he):
+		return UnavailableHTTPStatus
+	case errors.As(err, &ae):
+		return UnavailableUnusable
+	}
+	return ""
 }

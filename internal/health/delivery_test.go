@@ -8,6 +8,8 @@ import (
 	"net/http/httptest"
 	"testing"
 	"time"
+
+	"github.com/tis24dev/proxsave/internal/serverbot"
 )
 
 // relayDeliveryBody is a schema_version 1 answer in the shape proxsave_server
@@ -206,4 +208,66 @@ func TestDeliveryStatusRemaining(t *testing.T) {
 			t.Errorf("age %d valid_for %d: Remaining = %s; want %s", tc.age, tc.validFor, got, tc.want)
 		}
 	}
+}
+
+// Every error also says which failure it was, with its text unchanged: a *DeliveryHTTPStatusError
+// for a status other than 200, a *DeliveryAnswerError for a 200 that is not a usable status, the
+// *serverbot.TransportError of a call that got no HTTP answer.
+func TestFetchDeliveryStatusSaysWhichFailureItWas(t *testing.T) {
+	cases := []struct {
+		name   string
+		status int
+		body   string
+		text   string
+		http   int
+	}{
+		{"http 503", http.StatusServiceUnavailable, `{"error":"HC_DELIVERY_DISABLED"}`, "healthcheck delivery status unavailable: http 503", 503},
+		{"http 404", http.StatusNotFound, ``, "healthcheck delivery status unavailable: http 404", 404},
+		{"bad JSON", http.StatusOK, `{"schema_version": 1, "state": `, "healthcheck delivery status unavailable: bad JSON", 0},
+		{"newer schema", http.StatusOK, `{"schema_version": 2, "state": "ready", "valid_for_seconds": 120}`,
+			`healthcheck delivery status unavailable: schema 2 state "ready"`, 0},
+		{"state outside the contract", http.StatusOK, `{"schema_version": 1, "state": "project_missing", "valid_for_seconds": 120}`,
+			`healthcheck delivery status unavailable: schema 1 state "project_missing"`, 0},
+		{"expired evaluation", http.StatusOK, `{"schema_version": 1, "state": "ready", "age_seconds": 120, "valid_for_seconds": 120}`,
+			"healthcheck delivery status unavailable: expired (age 120s, valid for 120s)", 0},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(tc.status)
+				_, _ = io.WriteString(w, tc.body)
+			}))
+			defer srv.Close()
+			_, err := FetchDeliveryStatus(context.Background(), srv.Client(), srv.URL, "1", "s", nil, "")
+			if err == nil || err.Error() != tc.text || !errors.Is(err, ErrDeliveryUnavailable) {
+				t.Fatalf("err = %v; want ErrDeliveryUnavailable with text %q", err, tc.text)
+			}
+			var he *DeliveryHTTPStatusError
+			var ae *DeliveryAnswerError
+			var te *serverbot.TransportError
+			gotHTTP, gotAnswer := errors.As(err, &he), errors.As(err, &ae)
+			if gotHTTP != (tc.http != 0) || gotAnswer == (tc.http != 0) || errors.As(err, &te) {
+				t.Fatalf("err %v: http status error %v, answer error %v, transport error %v", err, gotHTTP, gotAnswer, te != nil)
+			}
+			if gotHTTP && he.Status != tc.http {
+				t.Fatalf("http status error carries %d; want %d", he.Status, tc.http)
+			}
+		})
+	}
+
+	t.Run("relay unreachable", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+		url := srv.URL
+		srv.Close()
+		_, err := FetchDeliveryStatus(context.Background(), nil, url, "1", "s", nil, "")
+		var te *serverbot.TransportError
+		var he *DeliveryHTTPStatusError
+		var ae *DeliveryAnswerError
+		if !errors.Is(err, ErrDeliveryUnavailable) || !errors.As(err, &te) || te.Op != "request" || errors.As(err, &he) || errors.As(err, &ae) {
+			t.Fatalf("err = %v; want ErrDeliveryUnavailable carrying only a request *serverbot.TransportError", err)
+		}
+		if want := "healthcheck delivery status unavailable: " + te.Error(); err.Error() != want {
+			t.Fatalf("err text = %q; want %q", err.Error(), want)
+		}
+	})
 }

@@ -7,6 +7,9 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"regexp"
+	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -467,5 +470,307 @@ func TestNotifyFilterRefreshKeepsAnUnavailableAnswerForTheLocalWindow(t *testing
 
 	if got := refresh(context.Background()).Effective; got != config.NotifyOnAlways || *reads != 1 {
 		t.Fatalf("refresh = %q after %d reads; want always and 1 read", got, *reads)
+	}
+}
+
+// elapsedRe is the relay answer's timing, which changes from run to run.
+var elapsedRe = regexp.MustCompile(`elapsed=\d+ms`)
+
+// blockLines is the log as "LEVEL message" lines, without the timestamp and the level's padding,
+// with the elapsed milliseconds of a relay answer written as "elapsed=N".
+func blockLines(out string) []string {
+	var lines []string
+	for _, line := range strings.Split(strings.TrimRight(out, "\n"), "\n") {
+		if i := strings.Index(line, "] "); strings.HasPrefix(line, "[") && i >= 0 {
+			line = line[i+2:]
+		}
+		if len(line) > 9 {
+			line = strings.TrimSpace(line[:8]) + " " + line[9:]
+		}
+		lines = append(lines, elapsedRe.ReplaceAllString(line, "elapsed=N"))
+	}
+	return lines
+}
+
+// assertLines checks the whole block, line by line.
+func assertLines(t *testing.T, out string, want ...string) {
+	t.Helper()
+	if got := blockLines(out); !slices.Equal(got, want) {
+		t.Fatalf("block:\n%s\nwant:\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
+	}
+}
+
+// relayServer answers the delivery-status read with status and body.
+func relayServer(t *testing.T, status int, body string) string {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(status)
+		_, _ = io.WriteString(w, body)
+	}))
+	t.Cleanup(srv.Close)
+	return srv.URL
+}
+
+// closedRelay is the address of a relay that refuses the connection.
+func closedRelay(t *testing.T) (url, addr string) {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	url, addr = srv.URL, srv.Listener.Addr().String()
+	srv.Close()
+	return url, addr
+}
+
+// silentRelay is a relay that takes the request and hangs up without an answer.
+func silentRelay(t *testing.T) string {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		if conn, _, err := w.(http.Hijacker).Hijack(); err == nil {
+			_ = conn.Close()
+		}
+	}))
+	t.Cleanup(srv.Close)
+	return srv.URL
+}
+
+// The why-line of a filter not applied: after the details, before the outcome, an INFO naming
+// what could not vouch for the filter. The relay read is the real one, so the kind of failure is
+// the one the transport and the answer produce.
+func TestLogNotifyFilterInitSaysWhyTheRelayDidNotVouch(t *testing.T) {
+	const op = "DEBUG notifications init: "
+	head := []string{
+		"INFO Applying notification filter...",
+		op + "read notify_on=warning source=default",
+		op + "healthchecks mode=centralized section=initialized",
+	}
+	tail := func(why string) []string {
+		return []string{
+			op + "filter fallback=always reason=delivery_status_unavailable",
+			"INFO   Setting: warning",
+			"INFO   Healthchecks status: unknown",
+			"INFO   Filter in effect: always",
+			"INFO " + why,
+			"INFO ⚠ Notification filter: not applied",
+		}
+	}
+	answered := func(url string, status int) []string {
+		return []string{
+			op + "url=" + url + "/api/healthcheck/delivery-status",
+			op + "connected",
+			op + "request written",
+			op + "response http=" + strconv.Itoa(status) + " elapsed=N",
+		}
+	}
+	cases := []struct {
+		name  string
+		relay func(t *testing.T) (url string, read []string)
+		why   string
+	}{
+		{"connection refused", func(t *testing.T) (string, []string) {
+			url, addr := closedRelay(t)
+			refused := "Get: dial tcp " + addr + ": connect: connection refused"
+			return url, []string{
+				op + "url=" + url + "/api/healthcheck/delivery-status",
+				op + "failed stage=connect error=" + refused,
+				op + "delivery unavailable: healthcheck delivery status unavailable: request: " + refused,
+			}
+		}, "ProxSave HC Server not reachable"},
+		{"no answer", func(t *testing.T) (string, []string) {
+			url := silentRelay(t)
+			return url, []string{
+				op + "url=" + url + "/api/healthcheck/delivery-status",
+				op + "connected",
+				op + "request written",
+				op + "failed stage=response error=Get: EOF",
+				op + "delivery unavailable: healthcheck delivery status unavailable: request: Get: EOF",
+			}
+		}, "ProxSave HC Server not reachable"},
+		{"http 503", func(t *testing.T) (string, []string) {
+			url := relayServer(t, http.StatusServiceUnavailable, `{"error":"HC_DELIVERY_DISABLED"}`)
+			return url, append(answered(url, 503),
+				op+`response body="{\"error\":\"HC_DELIVERY_DISABLED\"}"`,
+				op+"delivery unavailable: healthcheck delivery status unavailable: http 503")
+		}, "ProxSave HC Server not ready"},
+		{"http 404", func(t *testing.T) (string, []string) {
+			url := relayServer(t, http.StatusNotFound, ``)
+			return url, append(answered(url, 404),
+				op+`response body=""`,
+				op+"delivery unavailable: healthcheck delivery status unavailable: http 404")
+		}, "ProxSave HC Server not ready"},
+		{"200 with bad JSON", func(t *testing.T) (string, []string) {
+			url := relayServer(t, http.StatusOK, `{"schema_version": 1, "state": `)
+			return url, append(answered(url, 200),
+				op+"delivery unavailable: healthcheck delivery status unavailable: bad JSON")
+		}, "ProxSave HC Server did not confirm"},
+		{"200 with an unknown schema", func(t *testing.T) (string, []string) {
+			url := relayServer(t, http.StatusOK, `{"schema_version": 2, "state": "ready", "valid_for_seconds": 120}`)
+			return url, append(answered(url, 200),
+				op+`delivery unavailable: healthcheck delivery status unavailable: schema 2 state "ready"`)
+		}, "ProxSave HC Server did not confirm"},
+		{"200 with an unknown state", func(t *testing.T) (string, []string) {
+			url := relayServer(t, http.StatusOK, `{"schema_version": 1, "state": "project_missing", "valid_for_seconds": 120}`)
+			return url, append(answered(url, 200),
+				op+`delivery unavailable: healthcheck delivery status unavailable: schema 1 state "project_missing"`)
+		}, "ProxSave HC Server did not confirm"},
+		{"200 with an expired evaluation", func(t *testing.T) (string, []string) {
+			url := relayServer(t, http.StatusOK, `{"schema_version": 1, "state": "ready", "age_seconds": 120, "valid_for_seconds": 120}`)
+			return url, append(answered(url, 200),
+				op+"delivery unavailable: healthcheck delivery status unavailable: expired (age 120s, valid for 120s)")
+		}, "ProxSave HC Server did not confirm"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := centralizedNotifyConfig(t)
+			url, read := tc.relay(t)
+			cfg.ServerAPIHost = url
+			logger, buf := debugLogger(t)
+
+			logNotifyFilterInit(backupModeOptions{ctx: context.Background(), cfg: cfg, logger: logger}, nil, notifyfilter.SectionInitialized)
+
+			want := append(append(append([]string{}, head...), read...), tail(tc.why)...)
+			assertLines(t, buf.String(), want...)
+		})
+	}
+}
+
+// The why-lines that do not come from a failed relay read: a relay that answered ready without
+// confirming the policy, and self mode with notify URLs of the operator's own server. Every other
+// filter not applied has no why-line, its Healthchecks status says why; an applied filter never
+// has one.
+func TestLogNotifyFilterInitWhyLineOrNone(t *testing.T) {
+	const op = "DEBUG notifications init: "
+	read := op + "read notify_on=warning source=default"
+	centralized := op + "healthchecks mode=centralized section=initialized"
+	details := func(status, effective string) []string {
+		return []string{"INFO   Setting: warning", "INFO   Healthchecks status: " + status, "INFO   Filter in effect: " + effective}
+	}
+	notApplied, applied := "INFO ⚠ Notification filter: not applied", "INFO ✓ Notification filter: applied"
+	delivery := func(state string, confirmed bool) string {
+		return op + "delivery state=" + state + " alive_routes=0/0 backup_routes=0/0 policy_confirmed=" + strconv.FormatBool(confirmed) + " reasons="
+	}
+	lines := func(groups ...[]string) []string {
+		var out []string
+		for _, g := range groups {
+			out = append(out, g...)
+		}
+		return out
+	}
+	cases := []struct {
+		name    string
+		mutate  func(*config.Config)
+		section string
+		relay   health.DeliveryStatus
+		want    []string
+	}{
+		{"ready, policy not confirmed", nil, notifyfilter.SectionInitialized,
+			relayAnswer("ready", config.NotifyOnFailure, true, "telegram"),
+			lines([]string{"INFO Applying notification filter...", read, centralized, delivery("ready", false),
+				op + "filter fallback=always reason=policy_unconfirmed"}, details("ready", "always"),
+				[]string{"INFO ProxSave HC Server did not confirm", notApplied})},
+		{"self with a notify URL", func(c *config.Config) {
+			c.HealthcheckMode, c.HealthcheckNotifyTelegramURL = config.HealthcheckModeSelf, "https://hc.invalid/ping/notify-telegram"
+		}, notifyfilter.SectionInitialized, health.DeliveryStatus{},
+			lines([]string{"INFO Applying notification filter...", read, op + "healthchecks mode=self section=initialized",
+				op + "self notify_urls=true", op + "filter fallback=always reason=self_notify_urls_configured"},
+				details("self", "always"), []string{"INFO Alerts on your own server not verified", notApplied})},
+
+		{"healthchecks disabled", func(c *config.Config) { c.HealthcheckEnabled = false }, notifyfilter.SectionDisabled,
+			health.DeliveryStatus{},
+			lines([]string{"INFO Applying notification filter...", read, op + "filter fallback=always reason=healthchecks_disabled"},
+				details("disabled", "always"), []string{notApplied})},
+		{"not transmitting", nil, notifyfilter.SectionNotTransmitting, health.DeliveryStatus{},
+			lines([]string{"INFO Applying notification filter...", read, op + "healthchecks mode=centralized section=not_transmitting",
+				op + "filter fallback=always reason=not_transmitting"}, details("not transmitting", "always"), []string{notApplied})},
+		{"not configured", nil, notifyfilter.SectionInitialized, relayAnswer("not_configured", config.NotifyOnWarning, true, "telegram"),
+			lines([]string{"INFO Applying notification filter...", read, centralized, delivery("not_configured", true),
+				op + "filter fallback=always reason=alerts_not_verified"}, details("not configured", "always"), []string{notApplied})},
+		{"not verified", nil, notifyfilter.SectionInitialized, relayAnswer("unverified", config.NotifyOnWarning, true, "telegram"),
+			lines([]string{"INFO Applying notification filter...", read, centralized, delivery("unverified", true),
+				op + "filter fallback=always reason=alerts_not_verified"}, details("not verified", "always"), []string{notApplied})},
+		{"degraded", nil, notifyfilter.SectionInitialized, relayAnswer("degraded", config.NotifyOnWarning, true, "telegram"),
+			lines([]string{"INFO Applying notification filter...", read, centralized, delivery("degraded", true),
+				op + "filter fallback=always reason=alerts_not_verified"}, details("degraded", "always"), []string{notApplied})},
+		{"relay state unknown", nil, notifyfilter.SectionInitialized, relayAnswer("unknown", config.NotifyOnWarning, true, "telegram"),
+			lines([]string{"INFO Applying notification filter...", read, centralized, delivery("unknown", true),
+				op + "filter fallback=always reason=alerts_not_verified"}, details("unknown", "always"), []string{notApplied})},
+
+		{"applied", nil, notifyfilter.SectionInitialized, relayAnswer("ready", config.NotifyOnWarning, true, "telegram"),
+			lines([]string{"INFO Applying notification filter...", read, centralized, delivery("ready", true)},
+				details("ready", "warning"), []string{applied})},
+		{"applied in self mode", func(c *config.Config) { c.HealthcheckMode = config.HealthcheckModeSelf },
+			notifyfilter.SectionInitialized, health.DeliveryStatus{},
+			lines([]string{"INFO Applying notification filter...", read, op + "healthchecks mode=self section=initialized",
+				op + "self notify_urls=false"}, details("self", "warning"), []string{applied})},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := centralizedNotifyConfig(t)
+			if tc.mutate != nil {
+				tc.mutate(cfg)
+			}
+			stubDeliveryStatus(t, tc.relay, nil)
+			logger, buf := debugLogger(t)
+
+			logNotifyFilterInit(backupModeOptions{ctx: context.Background(), cfg: cfg, logger: logger}, nil, tc.section)
+
+			assertLines(t, buf.String(), tc.want...)
+		})
+	}
+}
+
+// NOTIFY_ON=always is applied whatever the relay says, so an unreachable relay gets no why-line.
+func TestLogNotifyFilterInitNoWhyLineWhenAlwaysIsRequested(t *testing.T) {
+	cfg := centralizedNotifyConfig(t)
+	cfg.NotifyOn = config.NotifyOnAlways
+	url, addr := closedRelay(t)
+	cfg.ServerAPIHost = url
+	logger, buf := debugLogger(t)
+
+	logNotifyFilterInit(backupModeOptions{ctx: context.Background(), cfg: cfg, logger: logger}, nil, notifyfilter.SectionInitialized)
+
+	const op = "DEBUG notifications init: "
+	refused := "Get: dial tcp " + addr + ": connect: connection refused"
+	assertLines(t, buf.String(),
+		"INFO Applying notification filter...",
+		op+"read notify_on=always source=default",
+		op+"healthchecks mode=centralized section=initialized",
+		op+"url="+url+"/api/healthcheck/delivery-status",
+		op+"failed stage=connect error="+refused,
+		op+"delivery unavailable: healthcheck delivery status unavailable: request: "+refused,
+		"INFO   Setting: always",
+		"INFO   Healthchecks status: unknown",
+		"INFO   Filter in effect: always",
+		"INFO ✓ Notification filter: applied",
+	)
+}
+
+// Every decision and its why-line: none for an applied filter, whatever its reason fields say, and
+// none for a relay failure no row names.
+func TestNotifyFilterWhy(t *testing.T) {
+	notApplied := func(reason, unavailable string) notifyfilter.Decision {
+		return notifyfilter.Decision{Requested: config.NotifyOnWarning, Effective: config.NotifyOnAlways, Reason: reason, Unavailable: unavailable}
+	}
+	cases := []struct {
+		name string
+		d    notifyfilter.Decision
+		want string
+	}{
+		{"unreachable", notApplied(notifyfilter.ReasonStatusUnavailable, notifyfilter.UnavailableUnreachable), "ProxSave HC Server not reachable"},
+		{"http status", notApplied(notifyfilter.ReasonStatusUnavailable, notifyfilter.UnavailableHTTPStatus), "ProxSave HC Server not ready"},
+		{"unusable answer", notApplied(notifyfilter.ReasonStatusUnavailable, notifyfilter.UnavailableUnusable), "ProxSave HC Server did not confirm"},
+		{"policy unconfirmed", notApplied(notifyfilter.ReasonPolicyUnconfirmed, ""), "ProxSave HC Server did not confirm"},
+		{"self notify URLs", notApplied(notifyfilter.ReasonSelfNotifyChecks, ""), "Alerts on your own server not verified"},
+		{"unavailable, no kind", notApplied(notifyfilter.ReasonStatusUnavailable, ""), ""},
+		{"alerts not verified", notApplied(notifyfilter.ReasonAlertsNotVerified, ""), ""},
+		{"not transmitting", notApplied(notifyfilter.ReasonNotTransmitting, ""), ""},
+		{"healthchecks disabled", notApplied(notifyfilter.ReasonHealthchecksDisabled, ""), ""},
+		{"applied with a failed read", notifyfilter.Decision{Requested: config.NotifyOnAlways, Effective: config.NotifyOnAlways,
+			Unavailable: notifyfilter.UnavailableUnreachable}, ""},
+		{"applied, whatever its reason says", notifyfilter.Decision{Requested: config.NotifyOnWarning, Effective: config.NotifyOnWarning,
+			Reason: notifyfilter.ReasonStatusUnavailable, Unavailable: notifyfilter.UnavailableUnreachable}, ""},
+	}
+	for _, tc := range cases {
+		if got := notifyFilterWhy(tc.d); got != tc.want {
+			t.Errorf("%s: notifyFilterWhy = %q; want %q", tc.name, got, tc.want)
+		}
 	}
 }

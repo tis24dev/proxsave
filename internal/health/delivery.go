@@ -60,12 +60,26 @@ var DeliveryStates = map[string]bool{
 // relay feature off, the reader down, an old relay without the route, a bad body.
 var ErrDeliveryUnavailable = errors.New("healthcheck delivery status unavailable")
 
+// DeliveryHTTPStatusError is a relay answer with an HTTP status other than 200.
+type DeliveryHTTPStatusError struct{ Status int }
+
+func (e *DeliveryHTTPStatusError) Error() string { return fmt.Sprintf("http %d", e.Status) }
+
+// DeliveryAnswerError is a 200 answer that is not a usable status: a body that is not JSON, a
+// schema or state outside the contract, an evaluation the relay no longer vouches for.
+type DeliveryAnswerError struct{ Detail string }
+
+func (e *DeliveryAnswerError) Error() string { return e.Detail }
+
 const deliveryTimeout = 5 * time.Second
 
 // FetchDeliveryStatus asks the relay, with the same per-server auth as the config poll.
 // It never provisions and never retries: a caller that gets an error applies always.
 // With a logger, the transport stages are logged in DEBUG under op (serverbot.Request.LogOperation),
 // and an answer other than 200 adds an excerpt of its body with the secret masked.
+// Every error is ErrDeliveryUnavailable, and also says which failure it was: the
+// *serverbot.TransportError of a call that got no HTTP answer, a *DeliveryHTTPStatusError, or a
+// *DeliveryAnswerError.
 func FetchDeliveryStatus(ctx context.Context, client *http.Client, serverAPIHost, serverID, secret string, logger *logging.Logger, op string) (DeliveryStatus, error) {
 	resp, err := serverbot.New(serverAPIHost, client, logger).Do(ctx, serverbot.Request{
 		Method:       http.MethodGet,
@@ -77,25 +91,31 @@ func FetchDeliveryStatus(ctx context.Context, client *http.Client, serverAPIHost
 		LogOperation: op,
 	})
 	if err != nil {
-		return DeliveryStatus{}, fmt.Errorf("%w: %v", ErrDeliveryUnavailable, err)
+		return DeliveryStatus{}, fmt.Errorf("%w: %w", ErrDeliveryUnavailable, err)
 	}
 	if resp.Status != http.StatusOK {
 		logging.DebugStep(logger, op, "response body=%q", logging.RedactSecrets(resp.Snippet(200), secret))
-		return DeliveryStatus{}, fmt.Errorf("%w: http %d", ErrDeliveryUnavailable, resp.Status)
+		return DeliveryStatus{}, fmt.Errorf("%w: %w", ErrDeliveryUnavailable, &DeliveryHTTPStatusError{Status: resp.Status})
 	}
 	var st DeliveryStatus
 	if err := resp.JSON(&st); err != nil {
-		return DeliveryStatus{}, fmt.Errorf("%w: bad JSON", ErrDeliveryUnavailable)
+		return DeliveryStatus{}, unusableDelivery("bad JSON")
 	}
 	if st.SchemaVersion != 1 || !DeliveryStates[st.State] {
-		return DeliveryStatus{}, fmt.Errorf("%w: schema %d state %q", ErrDeliveryUnavailable, st.SchemaVersion, st.State)
+		return DeliveryStatus{}, unusableDelivery(fmt.Sprintf("schema %d state %q", st.SchemaVersion, st.State))
 	}
 	// The relay states how old its evaluation is and how long it vouches for it: one it no longer vouches for is
 	// not an answer.
 	if st.AgeSeconds < 0 || st.ValidForSeconds <= 0 || st.AgeSeconds >= st.ValidForSeconds {
-		return DeliveryStatus{}, fmt.Errorf("%w: expired (age %ds, valid for %ds)", ErrDeliveryUnavailable, st.AgeSeconds, st.ValidForSeconds)
+		return DeliveryStatus{}, unusableDelivery(fmt.Sprintf("expired (age %ds, valid for %ds)", st.AgeSeconds, st.ValidForSeconds))
 	}
 	return st, nil
+}
+
+// unusableDelivery is the error of a 200 answer that is not a usable status; its text is
+// "healthcheck delivery status unavailable: <detail>".
+func unusableDelivery(detail string) error {
+	return fmt.Errorf("%w: %w", ErrDeliveryUnavailable, &DeliveryAnswerError{Detail: detail})
 }
 
 // Remaining is how much longer the evaluation may be used, from when it was received: what is left of the relay's

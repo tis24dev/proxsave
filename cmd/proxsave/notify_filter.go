@@ -14,9 +14,10 @@ import (
 // before dispatch when the relay's answer has expired.
 
 // logNotifyFilterInit writes the initialization block (INFO "Applying notification filter...",
-// the DEBUG evidence, the INFO details, the outcome last) and hands the decision to the
-// orchestrator, with the refresh used before dispatch. No line of it is above INFO: a filter not
-// applied still notifies every outcome, and a WARNING would raise the run's exit code.
+// the DEBUG evidence, the INFO details, the why-line of a filter not applied when there is one,
+// the outcome last) and hands the decision to the orchestrator, with the refresh used before
+// dispatch. No line of it is above INFO: a filter not applied still notifies every outcome, and a
+// WARNING would raise the run's exit code.
 func logNotifyFilterInit(opts backupModeOptions, orch *orchestrator.Orchestrator, section string) {
 	cfg, logger := opts.cfg, opts.logger
 	logging.Info("Applying notification filter...")
@@ -28,11 +29,41 @@ func logNotifyFilterInit(opts backupModeOptions, orch *orchestrator.Orchestrator
 	logging.Info("  Setting: %s", d.Requested)
 	logging.Info("  Healthchecks status: %s", d.Status)
 	logging.Info("  Filter in effect: %s", d.Effective)
+	if why := notifyFilterWhy(d); why != "" {
+		logging.Info("%s", why)
+	}
 	logging.Info("%s", d.Outcome())
 	if orch == nil {
 		return
 	}
 	orch.SetNotifyFilter(notifyFilterRefresh(d, cfg, logger, section))
+}
+
+// notifyFilterWhy is the INFO line the initialization block writes before a "not applied"
+// outcome, naming what could not vouch for the filter: the relay (not reachable, not ready, did
+// not confirm) or the operator's own Healthchecks server in self mode. It is "" for an applied
+// filter, and when the Healthchecks status line already says why (disabled, not transmitting,
+// not configured, not verified, degraded). Phase [7] writes no why-line.
+func notifyFilterWhy(d notifyfilter.Decision) string {
+	if d.Applied() {
+		return ""
+	}
+	switch d.Reason {
+	case notifyfilter.ReasonStatusUnavailable:
+		switch d.Unavailable {
+		case notifyfilter.UnavailableUnreachable:
+			return "ProxSave HC Server not reachable"
+		case notifyfilter.UnavailableHTTPStatus:
+			return "ProxSave HC Server not ready"
+		case notifyfilter.UnavailableUnusable:
+			return "ProxSave HC Server did not confirm"
+		}
+	case notifyfilter.ReasonPolicyUnconfirmed:
+		return "ProxSave HC Server did not confirm"
+	case notifyfilter.ReasonSelfNotifyChecks:
+		return "Alerts on your own server not verified"
+	}
+	return ""
 }
 
 // logNotifyOnRead is the DEBUG evidence of the setting: the value read and where from (the
