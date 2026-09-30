@@ -145,6 +145,13 @@ type daemon struct {
 	notifyPolls   uint64 // config polls that reached the relay; guarded by mu
 	// notifyRefreshWaitOverride replaces notifyPolicyRefreshWait in tests.
 	notifyRefreshWaitOverride time.Duration
+	// confirmedCadence is the seam the relay negotiation of SCHEDULER_FREQUENCY plugs into
+	// (todo points 17-22 and 39-40): in centralized mode it returns the cadence in effect for
+	// the configured one, i.e. the one the ProxSave HC Server has confirmed. nil means nothing
+	// can be confirmed yet, and the cadence in effect is unconfirmedCadence (daily at
+	// SCHEDULER_TIME). Not consulted with healthchecks off or in self mode, which apply the
+	// configured cadence at once. Set at construction, never written after.
+	confirmedCadence func(configured cron.Cadence) cron.Cadence
 	// aliveMu orders the TRANSMISSIONS to the service-alive check: one beat's ping+record, or
 	// the one abandon degrade, never both at once. A bare latch cannot do this. beat() reads
 	// it, then spends up to a full pingTimeout inside r.Heartbeat, so a beat that entered
@@ -314,9 +321,16 @@ func runDaemon(rt *appRuntime) int {
 	health.SetCorruptStatusHook(func(quarantinedPath string) {
 		logging.Debug("daemon: healthcheck status file was corrupt, quarantined to %s and reset", quarantinedPath)
 	})
-	logging.Info("ProxSave daemon starting (run-at=%s max-run=%s healthcheck=%v mode=%s)",
-		d.cfg.SchedulerTime, d.maxRunDuration(), d.cfg.HealthcheckEnabled, d.cfg.HealthcheckMode)
+	d.logStart()
 	return d.run(rt.ctx)
+}
+
+// logStart is the daemon's first journal line: the state in INFO, what it was started with in
+// DEBUG before it (log-block rules: INFO is for the operator, details are evidence).
+func (d *daemon) logStart() {
+	logging.DebugStep(logging.GetDefaultLogger(), "daemon start", "run_at=%s max_run=%s healthcheck=%t mode=%s",
+		d.cfg.SchedulerTime, d.maxRunDuration(), d.cfg.HealthcheckEnabled, d.cfg.HealthcheckMode)
+	logging.Info("ProxSave daemon starting")
 }
 
 func (d *daemon) run(ctx context.Context) int {
@@ -583,23 +597,21 @@ func (d *daemon) processManualOutcome(ctx context.Context) {
 	}
 }
 
-// scheduleLoop waits for the next daily run time and supervises a backup, until the context
-// is cancelled. It returns true when a run had to ABANDON a child the kernel will not let us
-// reap: there is nothing useful to schedule behind such a child (it still holds the backup
-// lock, so tomorrow's run would only exit ExitBackupSkipped), so the loop unwinds and lets
-// run() exit for a systemd restart instead.
+// scheduleLoop waits for the next run of the cadence in effect and supervises a backup, until
+// the context is cancelled. It reports that cadence once, before the first "next backup" line
+// (logScheduleStart). It returns true when a run had to ABANDON a child the kernel will not
+// let us reap: there is nothing useful to schedule behind such a child (it still holds the
+// backup lock, so the next run would only exit ExitBackupSkipped), so the loop unwinds and
+// lets run() exit for a systemd restart instead.
 func (d *daemon) scheduleLoop(ctx context.Context) bool {
+	d.logScheduleStart()
 	for {
-		next, err := cron.NextDaily(d.now(), d.cfg.SchedulerTime)
-		if err != nil {
-			logging.Error("daemon: invalid SCHEDULER_TIME %q (%v); using %s", d.cfg.SchedulerTime, err, cron.DefaultTime)
-			next, _ = cron.NextDaily(d.now(), cron.DefaultTime)
-		}
+		next := d.nextScheduledRun(d.now())
 		wait := next.Sub(d.now())
 		if wait < 0 {
 			wait = 0
 		}
-		logging.Info("daemon: next backup at %s (in %s)", next.Format("2006-01-02 15:04"), wait.Round(time.Second))
+		logging.Info("daemon: next backup at %s (in %s)", next.Format("2006-01-02 15:04"), cron.WaitLabel(wait))
 
 		timer := time.NewTimer(wait)
 		select {
