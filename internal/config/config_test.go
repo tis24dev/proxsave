@@ -1284,6 +1284,21 @@ func TestAutoDetectPBSTokenParsesFiles(t *testing.T) {
 	}
 }
 
+func TestPBSTokenFilesOrderAndFallback(t *testing.T) {
+	got := PBSTokenFiles("/srv/secure")
+	want := []string{"/srv/secure/pbs_token", "/srv/secure/pbs_api_token", "/root/.pbs-token"}
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Fatalf("PBSTokenFiles(/srv/secure) = %v; want %v", got, want)
+	}
+
+	fallback := filepath.Join(defaultBaseDir(), "secure_account")
+	got = PBSTokenFiles("")
+	want = []string{filepath.Join(fallback, "pbs_token"), filepath.Join(fallback, "pbs_api_token"), "/root/.pbs-token"}
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Fatalf("PBSTokenFiles(\"\") = %v; want %v", got, want)
+	}
+}
+
 func TestAutoDetectPBSAuthEnvAndTokenPriority(t *testing.T) {
 	setBaseDirEnv(t, "/pbs/base")
 

@@ -1884,20 +1884,23 @@ type WebhookAuth struct {
 	Secret string
 }
 
-// autoDetectPBSToken tries to read API token from secure_account directory
-func autoDetectPBSToken(secureAccountPath string) (token, secret string) {
+// PBSTokenFiles returns the files autoDetectPBSToken reads a PBS API token from, in the order it
+// tries them. The security check verifies the permissions of this same list, so a file read as a
+// credential is never left unchecked.
+func PBSTokenFiles(secureAccountPath string) []string {
 	if secureAccountPath == "" {
 		secureAccountPath = filepath.Join(defaultBaseDir(), "secure_account")
 	}
-
-	// Try multiple possible token file locations
-	tokenFiles := []string{
+	return []string{
 		filepath.Join(secureAccountPath, "pbs_token"),
 		filepath.Join(secureAccountPath, "pbs_api_token"),
 		"/root/.pbs-token", // Alternative location
 	}
+}
 
-	for _, tokenFile := range tokenFiles {
+// autoDetectPBSToken tries to read API token from secure_account directory
+func autoDetectPBSToken(secureAccountPath string) (token, secret string) {
+	for _, tokenFile := range PBSTokenFiles(secureAccountPath) {
 		if utils.FileExists(tokenFile) {
 			if data, err := os.ReadFile(tokenFile); err == nil {
 				lines := strings.Split(string(data), "\n")

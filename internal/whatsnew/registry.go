@@ -237,6 +237,16 @@ var notes = []Note{
 			"A hand edit of NOTIFY_ON applies from the next scheduled run; a run started by hand notifies every outcome until then",
 		},
 	},
+	{
+		Version: "0.41.0",
+		Lines: []string{
+			"Security check now covers the PBS token files ProxSave reads: secure_account/pbs_token, pbs_api_token, /root/.pbs-token",
+			"With AUTO_FIX_PERMISSIONS=true a token file not at 0600 root is corrected once, and that run ends with a warning",
+		},
+		Actions: []string{
+			"A token symlink whose target is not 0600 root blocks the backup while AUTO_FIX_PERMISSIONS=true",
+		},
+	},
 }
 
 // LookupNotes returns the notes for versions in the half-open range (from, to], ascending by
