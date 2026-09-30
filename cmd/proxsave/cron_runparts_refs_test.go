@@ -118,9 +118,10 @@ func TestARunPartsScriptIsNeverParsedAsACrontabLine(t *testing.T) {
 		}
 	}
 
-	got, ref := schedulerTimeFromSystemCron()
-	if got != "05:00" {
-		t.Errorf("schedulerTimeFromSystemCron() = (%q, %q), want (\"05:00\", the cron.d file): a run-parts script has no time and must not be allowed to answer the question", got, ref.Source)
+	etc := systemCronProxsaveCadences()
+	at, ok := agreedDailySystemCronLine(etc)
+	if !ok || len(etc) != 1 || etc[at].Cadence.Time != "05:00" || etc[at].Ref.Source != filepath.Join(root, "cron.d", "proxsave") {
+		t.Errorf("systemCronProxsaveCadences() = %+v, want the one daily 05:00 line of the cron.d file: a run-parts script has no schedule and must not be allowed to answer the question", etc)
 	}
 }
 

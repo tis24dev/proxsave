@@ -1661,10 +1661,10 @@ func systemCronProxsaveRefs() []indirectCronRef {
 // runPartsVisibleTo reports whether a scan mode may see the run-parts habitat.
 //
 // scanDirectOnly may not, for two independent reasons and either would be enough. A
-// run-parts script has NO cron time: cron.ScheduleToTime on its path returns "", and
-// schedulerTimeFromSystemCron turns one unreadable time into "say nothing at all", so a
-// single such finding would silence a real /etc/cron.d entry and drop the host to the
-// 02:00 default. And that view is reached from the install wizard and from
+// run-parts script has NO cron schedule: cron.ParseSchedule on its path fails, and
+// systemCronProxsaveCadences would report that path as an /etc line whose schedule does not
+// parse, next to (and instead of the plain "two backups a day" for) a real /etc/cron.d
+// entry. And that view is reached from the install wizard and from
 // --upgrade-config-json, which must not open operator scripts off disk, while the
 // run-parts walk is nothing but a content probe.
 //
@@ -1936,10 +1936,10 @@ func directProxsaveCronRefs(lines []string, commandToken func(string) string) []
 // operator scripts off disk to decide a default.
 //
 // The run-parts habitat is excluded from this view for both of those reasons at once, and
-// for a third that is decisive on its own: a run-parts script has no cron time, and one
-// unreadable time makes schedulerTimeFromSystemCron say nothing at all, so a single such
-// finding here would silence a perfectly good /etc/cron.d line and drop the host to the
-// 02:00 default. See runPartsVisibleTo.
+// for a third that is decisive on its own: a run-parts script has no cron schedule, so a
+// single such finding here would be reported as an /etc line that does not parse, and a
+// perfectly good /etc/cron.d line next to it would lose its "two backups a day" report. See
+// runPartsVisibleTo.
 func systemCronDirectProxsaveLines() []indirectCronRef {
 	return systemCronRefs(scanDirectOnly)
 }

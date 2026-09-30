@@ -71,20 +71,6 @@ func TestAdoptSchedulerTimeForDaemon(t *testing.T) {
 			wantKeys: []string{"SCHEDULER_TIME=03:15"},
 		},
 		{
-			// Two different schedules cannot be carried over as one. Guessing which one to keep
-			// would move the backup on purpose.
-			name:     "two different times: nothing to adopt",
-			stored:   "SCHEDULER_TIME=03:15\n",
-			lines:    []string{"0 21 * * *" + bin, "0 5 * * *" + bin},
-			wantKeys: []string{"SCHEDULER_TIME=03:15"},
-		},
-		{
-			name:     "a step: nothing to adopt, nothing visible",
-			stored:   "SCHEDULER_TIME=03:15\n",
-			lines:    []string{"*/30 * * * *" + bin},
-			wantKeys: []string{"SCHEDULER_TIME=03:15"},
-		},
-		{
 			name:     "unreadable crontab: the variables are left alone",
 			stored:   "SCHEDULER_TIME=03:15\n",
 			lines:    nil,

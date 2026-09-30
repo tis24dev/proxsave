@@ -123,6 +123,7 @@ func TestSchedulerCadenceFromCronLines(t *testing.T) {
 // Point 15: SCHEDULER_TIME and SCHEDULER_FREQUENCY both present is an explicit schedule and
 // nothing is adopted; SCHEDULER_TIME alone still leaves the frequency unstated, so a weekly or
 // monthly line is adopted whole, time included; with no SCHEDULER_TIME any line is adopted.
+// Present means present in the file, an empty value included (A16, A19).
 func TestDeriveScheduleGate(t *testing.T) {
 	const bin = " /usr/local/bin/proxsave --backup"
 	for _, tc := range []struct {
@@ -136,8 +137,12 @@ func TestDeriveScheduleGate(t *testing.T) {
 		{name: "time present, weekly line: whole cadence adopted", stored: "SCHEDULER_TIME=02:00\n", line: "0 3 * * 1" + bin, want: "00 03 * * 1"},
 		{name: "time present, monthly line: whole cadence adopted", stored: "SCHEDULER_TIME=02:00\n", line: "0 3 15 * *" + bin, want: "00 03 15 * *"},
 		{name: "time present, daily line: the explicit time wins", stored: "SCHEDULER_TIME=02:00\n", line: "0 21 * * *" + bin, silence: true},
-		{name: "time present, a step: silent as before", stored: "SCHEDULER_TIME=02:00\n", line: "*/15 * * * *" + bin, silence: true},
 		{name: "nothing stored, daily line", stored: "", line: "0 21 * * *" + bin, want: "00 21 * * *"},
+		{name: "both present and empty: explicit", stored: "SCHEDULER_TIME=\nSCHEDULER_FREQUENCY=\n", line: "0 3 * * 1" + bin, silence: true},
+		{name: "empty time present, weekly line: whole cadence adopted", stored: "SCHEDULER_TIME=\n", line: "0 3 * * 1" + bin, want: "00 03 * * 1"},
+		{name: "empty time present, daily line: the stated default wins", stored: "SCHEDULER_TIME=\n", line: "0 21 * * *" + bin, silence: true},
+		{name: "empty frequency present, time absent: any line adopted", stored: "SCHEDULER_FREQUENCY=\n", line: "0 21 * * *" + bin, want: "00 21 * * *"},
+		{name: "commented time is absent", stored: "# SCHEDULER_TIME=05:00\n", line: "0 21 * * *" + bin, want: "00 21 * * *"},
 		{name: "nothing stored, weekly line", stored: "", line: "0 21 * * 5" + bin, want: "00 21 * * 5"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -225,18 +230,23 @@ func TestAdoptionBlocks(t *testing.T) {
 		}
 	})
 
-	// No approved text for these yet: the note of before stays, word for word.
-	t.Run("a step keeps the old note", func(t *testing.T) {
+	// A2: a step, a list, a range or a name is not a cadence; the old "not a single daily
+	// time" note is gone.
+	t.Run("a step", func(t *testing.T) {
 		cfg := writeScheduleCfg(t, "")
 		stubCrontabLines(t, []string{"*/15 * * * *" + bin}, nil)
 		seed := deriveSchedulerTimeFromCrontab(context.Background(), cfg)
-		const note = "The existing proxsave cron entry is not a single daily time; SCHEDULER_TIME stays at the 02:00 default - set it in backup.env if the backup must run at another time."
 		assertLines(t, seedLines(seed), []string{
+			"INFO Adopting backup schedule from cron entry...",
 			`DEBUG schedule adopt: cron line="*/15 * * * *` + bin + `" not adoptable reason=minute_not_literal`,
-			"INFO " + note,
+			"DEBUG schedule adopt: kept frequency=daily time=02:00 source=" + cfg,
+			"INFO   Frequency: daily",
+			"INFO   Time: 02:00",
+			`INFO "*/15 * * * *" is not daily, weekly or monthly`,
+			`WARNING ⚠ Backup schedule: cron entry "*/15 * * * *" not adopted`,
 		})
-		if seed.Item != note {
-			t.Fatalf("item = %q, want the old note", seed.Item)
+		if want := `⚠ Backup schedule: cron entry "*/15 * * * *" not adopted, not daily, weekly or monthly, default daily at 02:00`; seed.Item != want {
+			t.Fatalf("item = %q, want %q", seed.Item, want)
 		}
 	})
 
@@ -293,9 +303,10 @@ func TestAdoptionBlocks(t *testing.T) {
 	})
 }
 
-// The seed writes all four variables, so the file states the whole schedule the cron line had.
-func TestSeedWritesAllFourVariables(t *testing.T) {
-	cfg := writeScheduleCfg(t, "BACKUP_PATH=/data\nSCHEDULER_TIME=02:00\n")
+// The seed writes the frequency, the time and the day the cadence uses (A13), so the file
+// states the whole schedule the cron line had. The day it does not use is never touched.
+func TestSeedWritesTheCadenceVariables(t *testing.T) {
+	cfg := writeScheduleCfg(t, "BACKUP_PATH=/data\nSCHEDULER_TIME=02:00\nSCHEDULER_MONTHDAY=31\n")
 	stubCrontabLines(t, []string{"0 3 * * 1 /usr/local/bin/proxsave --backup"}, nil)
 
 	seed := seedSchedulerTimeFromCrontab(context.Background(), cfg)
@@ -306,13 +317,19 @@ func TestSeedWritesAllFourVariables(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"SCHEDULER_FREQUENCY=weekly", "SCHEDULER_WEEKDAY=mon", "SCHEDULER_MONTHDAY=1", "SCHEDULER_TIME=03:00", "BACKUP_PATH=/data"} {
-		if !strings.Contains(string(data), want) {
-			t.Errorf("%q missing from:\n%s", want, data)
-		}
+	if want := "BACKUP_PATH=/data\nSCHEDULER_TIME=03:00\nSCHEDULER_MONTHDAY=31\n\nSCHEDULER_FREQUENCY=weekly\nSCHEDULER_WEEKDAY=mon"; string(data) != want {
+		t.Fatalf("config =\n%q\nwant\n%q", data, want)
 	}
-	got := strings.Join(seedLines(seed), "\n")
-	assertInOrder(t, got, "DEBUG schedule adopt: wrote ", "file="+cfg, "INFO   Frequency: weekly", "✓ Backup schedule: adopted from cron entry")
+	assertLines(t, seedLines(seed), []string{
+		"INFO Adopting backup schedule from cron entry...",
+		`DEBUG schedule adopt: cron line="0 3 * * 1 /usr/local/bin/proxsave --backup" parsed frequency=weekly weekday=mon time=03:00`,
+		"DEBUG schedule adopt: SCHEDULER_TIME=02:00 SCHEDULER_FREQUENCY=absent source=" + cfg,
+		"DEBUG schedule adopt: wrote SCHEDULER_FREQUENCY=weekly SCHEDULER_TIME=03:00 SCHEDULER_WEEKDAY=mon file=" + cfg,
+		"INFO   Frequency: weekly",
+		"INFO   Weekday: Monday",
+		"INFO   Time: 03:00",
+		"INFO ✓ Backup schedule: adopted from cron entry",
+	})
 
 	// And a second call finds both variables present: explicit, nothing to do.
 	if again := seedSchedulerTimeFromCrontab(context.Background(), cfg); !again.empty() {

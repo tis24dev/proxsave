@@ -164,39 +164,85 @@ func TestApplyScheduleSeedWhitespaceBase(t *testing.T) {
 }
 
 // The whole cadence reaches the base, not only the time: the wizard prefills Frequency,
-// Weekday and Day of month from it, and ApplyInstallData writes back what they show.
+// Weekday and Day of month from it, and ApplyInstallData writes back what they show. The
+// day the cadence does not use is never touched (A13), whatever it holds.
 func TestApplyScheduleSeedMirrorsTheWholeCadence(t *testing.T) {
-	got := ApplyScheduleSeed("SCHEDULER_MODE=cron\nSCHEDULER_TIME=02:00\n", weeklyAt21)
-	for _, want := range []string{
-		"SCHEDULER_MODE=cron",
-		"SCHEDULER_FREQUENCY=weekly",
-		"SCHEDULER_WEEKDAY=mon",
-		"SCHEDULER_MONTHDAY=1",
-		"SCHEDULER_TIME=21:00",
-	} {
-		if !strings.Contains(got, want) {
-			t.Errorf("expected %q in %q", want, got)
-		}
-	}
-	if strings.Contains(got, "SCHEDULER_TIME=02:00") {
-		t.Errorf("the adopted time must replace the stored one, got %q", got)
+	const base = "SCHEDULER_MODE=cron\nSCHEDULER_TIME=02:00\nSCHEDULER_MONTHDAY=31\n"
+	got := ApplyScheduleSeed(base, weeklyAt21)
+	want := "SCHEDULER_MODE=cron\nSCHEDULER_TIME=21:00\nSCHEDULER_MONTHDAY=31\n\nSCHEDULER_FREQUENCY=weekly\nSCHEDULER_WEEKDAY=mon"
+	if got != want {
+		t.Fatalf("ApplyScheduleSeed weekly =\n%q\nwant\n%q", got, want)
 	}
 }
 
-func TestScheduleVariablesNamesAllFour(t *testing.T) {
-	got := ScheduleVariables(cron.Cadence{Frequency: cron.FrequencyMonthly, Weekday: time.Sunday, MonthDay: 15, Time: "03:00"})
-	want := map[string]string{
-		"SCHEDULER_FREQUENCY": "monthly",
-		"SCHEDULER_WEEKDAY":   "sun",
-		"SCHEDULER_MONTHDAY":  "15",
-		"SCHEDULER_TIME":      "03:00",
+// A13: each frequency writes only its own day; the other day and its value stay as they were,
+// absent included.
+func TestApplyScheduleSeedLeavesTheUnusedDayAlone(t *testing.T) {
+	const base = "SCHEDULER_MODE=cron\nSCHEDULER_WEEKDAY=someday\nSCHEDULER_MONTHDAY=31\n"
+	for _, tc := range []struct {
+		name string
+		c    cron.Cadence
+		want string
+	}{
+		{"daily touches neither day", cron.Cadence{Frequency: cron.FrequencyDaily, Weekday: time.Monday, MonthDay: 1, Time: "03:00"},
+			"SCHEDULER_MODE=cron\nSCHEDULER_WEEKDAY=someday\nSCHEDULER_MONTHDAY=31\n\nSCHEDULER_FREQUENCY=daily\nSCHEDULER_TIME=03:00"},
+		{"monthly touches only the day of the month", cron.Cadence{Frequency: cron.FrequencyMonthly, Weekday: time.Monday, MonthDay: 15, Time: "03:00"},
+			"SCHEDULER_MODE=cron\nSCHEDULER_WEEKDAY=someday\nSCHEDULER_MONTHDAY=15\n\nSCHEDULER_FREQUENCY=monthly\nSCHEDULER_TIME=03:00"},
+		{"weekly touches only the weekday", cron.Cadence{Frequency: cron.FrequencyWeekly, Weekday: time.Sunday, MonthDay: 1, Time: "03:00"},
+			"SCHEDULER_MODE=cron\nSCHEDULER_WEEKDAY=sun\nSCHEDULER_MONTHDAY=31\n\nSCHEDULER_FREQUENCY=weekly\nSCHEDULER_TIME=03:00"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := ApplyScheduleSeed(base, tc.c); got != tc.want {
+				t.Fatalf("ApplyScheduleSeed =\n%q\nwant\n%q", got, tc.want)
+			}
+		})
 	}
-	if len(got) != len(want) {
-		t.Fatalf("ScheduleVariables = %v, want %v", got, want)
+	if got := ApplyScheduleSeed("SCHEDULER_MODE=cron\n", cron.Cadence{Frequency: cron.FrequencyMonthly, MonthDay: 15, Time: "03:00"}); strings.Contains(got, "SCHEDULER_WEEKDAY") {
+		t.Fatalf("an absent unused day must stay absent, got %q", got)
 	}
-	for k, v := range want {
-		if got[k] != v {
-			t.Errorf("%s = %q, want %q", k, got[k], v)
+}
+
+// A13: the variables an adoption writes are the frequency, the time and the day it uses.
+func TestScheduleVariablesNamesOnlyTheDayItUses(t *testing.T) {
+	for _, tc := range []struct {
+		c    cron.Cadence
+		want map[string]string
+	}{
+		{cron.Cadence{Frequency: cron.FrequencyMonthly, Weekday: time.Sunday, MonthDay: 15, Time: "03:00"},
+			map[string]string{"SCHEDULER_FREQUENCY": "monthly", "SCHEDULER_MONTHDAY": "15", "SCHEDULER_TIME": "03:00"}},
+		{cron.Cadence{Frequency: cron.FrequencyWeekly, Weekday: time.Sunday, MonthDay: 15, Time: "03:00"},
+			map[string]string{"SCHEDULER_FREQUENCY": "weekly", "SCHEDULER_WEEKDAY": "sun", "SCHEDULER_TIME": "03:00"}},
+		{cron.Cadence{Frequency: cron.FrequencyDaily, Weekday: time.Sunday, MonthDay: 15, Time: "03:00"},
+			map[string]string{"SCHEDULER_FREQUENCY": "daily", "SCHEDULER_TIME": "03:00"}},
+	} {
+		got := ScheduleVariables(tc.c)
+		if len(got) != len(tc.want) {
+			t.Fatalf("ScheduleVariables(%s) = %v, want %v", tc.c.Frequency, got, tc.want)
+		}
+		for k, v := range tc.want {
+			if got[k] != v {
+				t.Errorf("%s: %s = %q, want %q", tc.c.Frequency, k, got[k], v)
+			}
+		}
+	}
+}
+
+// A16/A19: an empty value is present; a commented or missing one is not.
+func TestEnvKeyPresent(t *testing.T) {
+	for _, tc := range []struct {
+		content string
+		want    bool
+	}{
+		{"SCHEDULER_TIME=\n", true},
+		{"SCHEDULER_TIME=03:00\n", true},
+		{"export SCHEDULER_TIME=03:00\n", true},
+		{"scheduler_time=03:00\n", true},
+		{"# SCHEDULER_TIME=03:00\n", false},
+		{"SCHEDULER_TIMEOUT=5\n", false},
+		{"", false},
+	} {
+		if got := EnvKeyPresent(tc.content, "SCHEDULER_TIME"); got != tc.want {
+			t.Errorf("EnvKeyPresent(%q) = %v, want %v", tc.content, got, tc.want)
 		}
 	}
 }

@@ -329,7 +329,7 @@ func TestAdoptCronRunTimeIntoBase(t *testing.T) {
 }
 
 // TestApplyConfigUpgradeAdoptsCrontabRunTime is the end-to-end regression pin for
-// the reported bug: the 0.30 template merge must not invent SCHEDULER_TIME=02:00
+// the reported bug: the 0.30 template merge must not leave SCHEDULER_TIME=02:00
 // on a host whose crontab says 21:00, because the daemon auto-migration deletes
 // that cron line moments later.
 func TestApplyConfigUpgradeAdoptsCrontabRunTime(t *testing.T) {
@@ -356,10 +356,16 @@ func TestApplyConfigUpgradeAdoptsCrontabRunTime(t *testing.T) {
 	if strings.Contains(content, "SCHEDULER_TIME="+cronutil.DefaultTime) {
 		t.Fatalf("merged config carries the template default:\n%s", content)
 	}
+	// A18: the merge adds the variable at its template place and reports it as added; the
+	// adoption then writes the value over it.
+	added := false
 	for _, key := range result.MissingKeys {
 		if key == "SCHEDULER_TIME" {
-			t.Error("SCHEDULER_TIME was reported as added; the seeded value should have been preserved instead")
+			added = true
 		}
+	}
+	if !added {
+		t.Errorf("SCHEDULER_TIME must be reported as added by the merge, got %v", result.MissingKeys)
 	}
 	var notes []string
 	for _, n := range result.Notes {

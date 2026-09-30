@@ -1120,7 +1120,10 @@ func TestDeriveSchedulerTimeReadsSystemCron(t *testing.T) {
 		}
 	})
 
-	t.Run("two /etc lines at different times: adopt nothing", func(t *testing.T) {
+	// Two /etc lines on different schedules are not "two backups a day" and are never adopted,
+	// but they are reported (A7 bis, combination 4): one Kept per line with its own file, the
+	// reason and the outcome naming the first line's file.
+	t.Run("two /etc lines at different times: adopt nothing, report both", func(t *testing.T) {
 		d := t.TempDir()
 		cronD := filepath.Join(d, "cron.d")
 		if err := os.MkdirAll(cronD, 0o755); err != nil {
@@ -1144,18 +1147,52 @@ func TestDeriveSchedulerTimeReadsSystemCron(t *testing.T) {
 		crontabReadLinesFn = func(context.Context) ([]string, error) { return nil, nil }
 
 		seed := deriveSchedulerTimeFromCrontab(context.Background(), cp)
-		if !seed.empty() {
-			t.Fatalf("two different times are ambiguous; nothing may be adopted or reported, got %+v", seed)
+		if seed.adopted() {
+			t.Fatalf("two different times are ambiguous; nothing may be adopted, got %+v", seed.Cadence)
+		}
+		a, b := filepath.Join(cronD, "proxsave-a"), filepath.Join(cronD, "proxsave-b")
+		assertLines(t, seedLines(seed), []string{
+			"INFO Adopting backup schedule from cron entry...",
+			"DEBUG schedule adopt: root crontab has no proxsave line",
+			"DEBUG schedule adopt: " + a + ` line="0 5 * * * root /usr/local/bin/proxsave --backup" parsed frequency=daily time=05:00, not adopted reason=file_not_managed`,
+			"DEBUG schedule adopt: " + b + ` line="0 6 * * * root /usr/local/bin/proxsave --backup" parsed frequency=daily time=06:00, not adopted reason=file_not_managed`,
+			"INFO   Frequency: daily",
+			"INFO   Time: 02:00",
+			"INFO   Kept: " + a + ", daily at 05:00",
+			"INFO   Kept: " + b + ", daily at 06:00",
+			"INFO Two schedules: " + a + " is not edited by ProxSave",
+			"WARNING ⚠ Backup schedule: cron entry in " + a + " not adopted",
+		})
+		if want := "⚠ Backup schedule: cron entry in " + a + " not adopted, two schedules, default daily at 02:00"; seed.Item != want {
+			t.Fatalf("item = %q, want %q", seed.Item, want)
 		}
 	})
 
-	t.Run("explicit SCHEDULER_TIME is never overridden", func(t *testing.T) {
-		cp, _ := setup(t, "0 5 * * * root /usr/local/bin/proxsave --backup", nil)
+	// SCHEDULER_TIME is never overridden by an /etc line. With SCHEDULER_FREQUENCY absent the
+	// line is still reported, exactly as with no SCHEDULER_TIME (A5), against the stored time.
+	t.Run("explicit SCHEDULER_TIME is never overridden, the /etc line is reported", func(t *testing.T) {
+		cp, cronD := setup(t, "0 5 * * * root /usr/local/bin/proxsave --backup", nil)
 		if err := os.WriteFile(cp, []byte("SCHEDULER_TIME=23:15\n"), 0o600); err != nil {
 			t.Fatal(err)
 		}
+		seed := deriveSchedulerTimeFromCrontab(context.Background(), cp)
+		if seed.adopted() {
+			t.Fatalf("an operator value must win over every habitat, got %+v", seed.Cadence)
+		}
+		src := filepath.Join(cronD, "proxsave")
+		if want := "⚠ Backup schedule: cron entry in " + src + " not adopted, two backups a day, daily at 23:15"; seed.Item != want {
+			t.Fatalf("item = %q, want %q", seed.Item, want)
+		}
+	})
+
+	// Both variables present is an explicit schedule: nothing is adopted and nothing reported.
+	t.Run("explicit SCHEDULER_TIME and SCHEDULER_FREQUENCY: silent", func(t *testing.T) {
+		cp, _ := setup(t, "0 5 * * * root /usr/local/bin/proxsave --backup", nil)
+		if err := os.WriteFile(cp, []byte("SCHEDULER_TIME=23:15\nSCHEDULER_FREQUENCY=daily\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
 		if seed := deriveSchedulerTimeFromCrontab(context.Background(), cp); !seed.empty() {
-			t.Fatalf("an operator value must win over every habitat, got %+v", seed)
+			t.Fatalf("an explicit schedule must win over every habitat, got %+v", seed)
 		}
 	})
 }

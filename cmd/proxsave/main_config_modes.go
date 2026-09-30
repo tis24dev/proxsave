@@ -17,27 +17,34 @@ import (
 type postHeaderConfigModeHandler func(context.Context, *cli.Args, *logging.BootstrapLogger) (int, bool)
 
 // applyConfigUpgrade is the single in-process entry point for the backup.env
-// template merge. It seeds the SCHEDULER_* variables from the live proxsave cron
-// line BEFORE the merge can materialize the template defaults (daily at 02:00):
-// afterwards "absent" and "explicitly the default" are indistinguishable, and on
-// --upgrade the daemon auto-migration deletes that cron line moments later, leaving
-// the operator's real schedule nowhere on the system. The merge preserves existing
-// user values, so the seeded schedule survives and is not reported as added keys.
+// template merge. It decides the adoption of the live proxsave cron schedule on the
+// file as it is BEFORE the merge, because the merge materializes the template
+// defaults (daily at 02:00) and afterwards "absent" and "explicitly the default" are
+// indistinguishable; on --upgrade the daemon auto-migration then deletes that cron
+// line moments later, leaving the operator's real schedule nowhere on the system.
 //
-// The seeding block travels back in the UpgradeResult instead of being logged,
+// It WRITES the adopted variables only AFTER the merge (A18). The merge then inserts
+// every missing SCHEDULER_* variable at its template place, with its comment, and the
+// summary reports it as an added key; the adoption only replaces the values. A merge
+// that fails adopts nothing. A write that fails after a good merge is one Warnings
+// item (A3), with the error as DEBUG evidence.
+//
+// The adoption block travels back in the UpgradeResult instead of being logged,
 // because this also runs in --upgrade-config-json, whose stdout must stay pure JSON:
 // its INFO and DEBUG lines as Notes, which the callers log before the warnings, and a
 // finding the operator has to see as one Warnings item.
 func applyConfigUpgrade(ctx context.Context, configPath, baseDir string) (*config.UpgradeResult, error) {
-	seed := seedSchedulerTimeFromCrontabFn(ctx, configPath)
+	seed := deriveSchedulerTimeFromCrontabFn(ctx, configPath)
 	result, err := config.UpgradeConfigFileWithBaseDir(configPath, baseDir)
-	if result != nil {
-		result.Notes = append(result.Notes, seed.upgradeNotes()...)
-		if seed.Item != "" {
-			result.Warnings = append(result.Warnings, seed.Item)
-		}
+	if err != nil || result == nil {
+		return result, err
 	}
-	return result, err
+	seed = seed.written(strings.TrimSpace(configPath))
+	result.Notes = append(result.Notes, seed.upgradeNotes()...)
+	if seed.Item != "" {
+		result.Warnings = append(result.Warnings, seed.Item)
+	}
+	return result, nil
 }
 
 func runUpgradeConfigJSONMode(ctx context.Context, args *cli.Args) (int, bool) {
