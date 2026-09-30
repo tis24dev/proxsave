@@ -87,7 +87,10 @@ func ParseMonthDay(s string) (int, error) {
 }
 
 // ParseCadence reads the four SCHEDULER_* values. Empty values take their defaults, so a
-// config that predates SCHEDULER_FREQUENCY stays daily at SCHEDULER_TIME.
+// config that predates SCHEDULER_FREQUENCY stays daily at SCHEDULER_TIME. Only the day the
+// frequency uses is validated: the weekday for weekly, the day of the month for monthly,
+// neither for daily. A day the frequency does not use cannot move the backup, so an invalid
+// one is ignored and the Cadence carries its default (DefaultWeekday, DefaultMonthDay).
 func ParseCadence(frequency, weekday, monthDay, hhmm string) (Cadence, error) {
 	freq, err := ParseFrequency(frequency)
 	if err != nil {
@@ -95,11 +98,17 @@ func ParseCadence(frequency, weekday, monthDay, hhmm string) (Cadence, error) {
 	}
 	day, err := ParseWeekday(weekday)
 	if err != nil {
-		return Cadence{}, err
+		if freq == FrequencyWeekly {
+			return Cadence{}, err
+		}
+		day = DefaultWeekday
 	}
 	mday, err := ParseMonthDay(monthDay)
 	if err != nil {
-		return Cadence{}, err
+		if freq == FrequencyMonthly {
+			return Cadence{}, err
+		}
+		mday = DefaultMonthDay
 	}
 	norm, err := NormalizeTime(hhmm, DefaultTime)
 	if err != nil {

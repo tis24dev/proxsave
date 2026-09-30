@@ -46,6 +46,49 @@ func TestParseCadenceFields(t *testing.T) {
 	}
 }
 
+// TestParseCadenceIgnoresAnInvalidUnusedDay: only the day the frequency uses is validated. An
+// invalid day the frequency does not use is ignored and the cadence carries its default; a
+// valid unused day is kept, so switching frequency keeps it.
+func TestParseCadenceIgnoresAnInvalidUnusedDay(t *testing.T) {
+	for _, tc := range []struct {
+		name                          string
+		freq, weekday, monthday, hhmm string
+		want                          Cadence
+	}{
+		{"weekly ignores the monthday", "weekly", "fri", "31", "03:30",
+			Cadence{Frequency: FrequencyWeekly, Weekday: time.Friday, MonthDay: DefaultMonthDay, Time: "03:30"}},
+		{"monthly ignores the weekday", "monthly", "someday", "15", "03:30",
+			Cadence{Frequency: FrequencyMonthly, Weekday: DefaultWeekday, MonthDay: 15, Time: "03:30"}},
+		{"daily ignores both days", "daily", "someday", "x", "03:30",
+			Cadence{Frequency: FrequencyDaily, Weekday: DefaultWeekday, MonthDay: DefaultMonthDay, Time: "03:30"}},
+		{"empty frequency is daily and ignores both days", "", "7", "0", "",
+			Cadence{Frequency: FrequencyDaily, Weekday: DefaultWeekday, MonthDay: DefaultMonthDay, Time: DefaultTime}},
+		{"a valid unused day is kept", "daily", "sat", "20", "03:30",
+			Cadence{Frequency: FrequencyDaily, Weekday: time.Saturday, MonthDay: 20, Time: "03:30"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := ParseCadence(tc.freq, tc.weekday, tc.monthday, tc.hhmm)
+			if err != nil {
+				t.Fatalf("ParseCadence(%q, %q, %q, %q) = %v; an unused day must not be validated",
+					tc.freq, tc.weekday, tc.monthday, tc.hhmm, err)
+			}
+			if got != tc.want {
+				t.Fatalf("ParseCadence(%q, %q, %q, %q) = %+v, want %+v", tc.freq, tc.weekday, tc.monthday, tc.hhmm, got, tc.want)
+			}
+		})
+	}
+
+	// The day the frequency uses is still validated, whatever the other day holds.
+	for _, tc := range []struct{ freq, weekday, monthday string }{
+		{"weekly", "someday", "15"},
+		{"monthly", "fri", "31"},
+	} {
+		if _, err := ParseCadence(tc.freq, tc.weekday, tc.monthday, "02:00"); err == nil {
+			t.Errorf("ParseCadence(%q, %q, %q) accepted an invalid day the frequency uses", tc.freq, tc.weekday, tc.monthday)
+		}
+	}
+}
+
 func TestCadenceNext(t *testing.T) {
 	loc := time.UTC
 	// 2026-09-30 is a Wednesday.
