@@ -60,6 +60,12 @@ func notifyFilterWhy(d notifyfilter.Decision) string {
 		}
 	case notifyfilter.ReasonPolicyUnconfirmed:
 		return "ProxSave HC Server did not confirm"
+	case notifyfilter.ReasonAlertsNotVerified:
+		// The relay answered that it cannot tell whether alerts reach the operator: the status
+		// line reads "unknown", the same word as a relay that did not answer at all.
+		if d.Status == notifyfilter.StatusUnknown {
+			return "ProxSave HC Server did not confirm"
+		}
 	case notifyfilter.ReasonSelfNotifyChecks:
 		return "Alerts on your own server not verified"
 	}

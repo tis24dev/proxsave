@@ -691,7 +691,8 @@ func TestLogNotifyFilterInitWhyLineOrNone(t *testing.T) {
 				op + "filter fallback=always reason=alerts_not_verified"}, details("degraded", "always"), []string{notApplied})},
 		{"relay state unknown", nil, notifyfilter.SectionInitialized, relayAnswer("unknown", config.NotifyOnWarning, true, "telegram"),
 			lines([]string{"INFO Applying notification filter...", read, centralized, delivery("unknown", true),
-				op + "filter fallback=always reason=alerts_not_verified"}, details("unknown", "always"), []string{notApplied})},
+				op + "filter fallback=always reason=alerts_not_verified"}, details("unknown", "always"),
+				[]string{"INFO ProxSave HC Server did not confirm", notApplied})},
 
 		{"applied", nil, notifyfilter.SectionInitialized, relayAnswer("ready", config.NotifyOnWarning, true, "telegram"),
 			lines([]string{"INFO Applying notification filter...", read, centralized, delivery("ready", true)},
@@ -761,6 +762,8 @@ func TestNotifyFilterWhy(t *testing.T) {
 		{"self notify URLs", notApplied(notifyfilter.ReasonSelfNotifyChecks, ""), "Alerts on your own server not verified"},
 		{"unavailable, no kind", notApplied(notifyfilter.ReasonStatusUnavailable, ""), ""},
 		{"alerts not verified", notApplied(notifyfilter.ReasonAlertsNotVerified, ""), ""},
+		{"relay state unknown", notifyfilter.Decision{Requested: config.NotifyOnWarning, Effective: config.NotifyOnAlways,
+			Reason: notifyfilter.ReasonAlertsNotVerified, Status: notifyfilter.StatusUnknown}, "ProxSave HC Server did not confirm"},
 		{"not transmitting", notApplied(notifyfilter.ReasonNotTransmitting, ""), ""},
 		{"healthchecks disabled", notApplied(notifyfilter.ReasonHealthchecksDisabled, ""), ""},
 		{"applied with a failed read", notifyfilter.Decision{Requested: config.NotifyOnAlways, Effective: config.NotifyOnAlways,
