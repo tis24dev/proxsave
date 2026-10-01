@@ -414,3 +414,39 @@ func TestUpgradeRealTemplateKeepsExistingInstallSafe(t *testing.T) {
 		t.Errorf("merge clobbered the user's BACKUP_PATH: %q", raw["BACKUP_PATH"])
 	}
 }
+
+// The ping URL comments that called the centralized value a server-filled cache are refreshed,
+// the operator's self-mode URL kept.
+func TestUpgradeRefreshesRetiredPingURLComments(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "backup.env")
+	tmpl := DefaultEnvTemplate()
+	retired := strings.Replace(tmpl,
+		`HEALTHCHECK_ALIVE_URL=              # self: the FULL service-alive ping URL you paste (e.g. https://hc-ping.com/<uuid>); centralized: fallback when ProxSave HC Server is unreachable`,
+		`HEALTHCHECK_ALIVE_URL=https://hc-ping.com/alive # centralized: cache auto-filled from the server (do not edit by hand). self: the FULL service-alive ping URL you paste (e.g. https://hc-ping.com/<uuid>)`, 1)
+	retired = strings.Replace(retired,
+		`HEALTHCHECK_BACKUP_URL=             # self: the FULL backup-outcome ping URL you paste; centralized: fallback when ProxSave HC Server is unreachable`,
+		`HEALTHCHECK_BACKUP_URL=             # centralized: cache auto-filled from the server (do not edit by hand). self: the FULL backup-outcome ping URL you paste`, 1)
+	if strings.Count(retired, "cache auto-filled from the server") != 2 {
+		t.Fatal("template lines for the ping URLs not found")
+	}
+	if err := os.WriteFile(path, []byte(retired), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := UpgradeConfigFileWithBaseDir(path, dir); err != nil {
+		t.Fatalf("upgrade: %v", err)
+	}
+	data, _ := os.ReadFile(path)
+	got := string(data)
+	for _, want := range []string{
+		`HEALTHCHECK_ALIVE_URL=https://hc-ping.com/alive # self: the FULL service-alive ping URL you paste (e.g. https://hc-ping.com/<uuid>); centralized: fallback when ProxSave HC Server is unreachable`,
+		`HEALTHCHECK_BACKUP_URL=             # self: the FULL backup-outcome ping URL you paste; centralized: fallback when ProxSave HC Server is unreachable`,
+	} {
+		if !strings.Contains(got, want+"\n") {
+			t.Fatalf("retired comment not refreshed; want line %q", want)
+		}
+	}
+	if strings.Contains(got, "cache auto-filled") {
+		t.Fatal("a retired ping URL comment survived the upgrade")
+	}
+}

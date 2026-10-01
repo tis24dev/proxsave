@@ -597,6 +597,10 @@ func computeConfigUpgrade(configPath string) (*UpgradeResult, string, []byte, er
 var retiredTemplateComments = map[string][]string{
 	// Said "daily" and "used by daemon mode" before SCHEDULER_FREQUENCY existed.
 	"SCHEDULER_TIME": {`# daily HH:MM ("Run at") used by daemon mode; cron mode uses the crontab`},
+	// Called the centralized value a cache the server fills; nothing writes it, and the daemon
+	// reads it only when ProxSave HC Server cannot be reached.
+	"HEALTHCHECK_ALIVE_URL":  {`# centralized: cache auto-filled from the server (do not edit by hand). self: the FULL service-alive ping URL you paste (e.g. https://hc-ping.com/<uuid>)`},
+	"HEALTHCHECK_BACKUP_URL": {`# centralized: cache auto-filled from the server (do not edit by hand). self: the FULL backup-outcome ping URL you paste`},
 }
 
 // refreshRetiredTemplateComments rewrites, in place, the inline comment of every user line whose
