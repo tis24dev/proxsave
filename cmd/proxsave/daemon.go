@@ -143,6 +143,17 @@ type daemon struct {
 	notifyWant    *notifyPolicy
 	notifyApplied *notifyPolicy
 	notifyPolls   uint64 // config polls that reached the relay; guarded by mu
+	// pollMu makes the daemon send one /api/healthcheck/config poll at a time (pollCentralized
+	// holds it across the request and its resends). The relay provisions under a per-server
+	// lock it does not wait on: a second poll that arrives while the first is provisioning
+	// gets the stale stored ack, so two polls at once (the heartbeat's schedule retry and the
+	// update check's re-resolve fire in phase) can leave the schedule unconfirmed. Serialized,
+	// the later poll finds nothing left to provision and gets a fresh ack.
+	//
+	// Lock order: it is taken after the relay secret is resolved, so it is never held while
+	// waiting on the relay-secret flock, and only mu is taken under it (a leaf). Its hold is
+	// bounded by the poll's own fetch timeout per request.
+	pollMu sync.Mutex
 	// notifyRefreshWaitOverride replaces notifyPolicyRefreshWait in tests.
 	notifyRefreshWaitOverride time.Duration
 	// confirmedCadence is the seam the relay negotiation of SCHEDULER_FREQUENCY plugs into
@@ -2194,6 +2205,10 @@ func (d *daemon) pollCentralized(ctx context.Context, op, prefix string) configP
 	if secret == "" {
 		return configPoll{err: errNoRelaySecret}
 	}
+	// One config poll at a time (pollMu), taken only now: relaySecret can wait on the
+	// relay-secret flock, and that wait must not hold back every other poll of the daemon.
+	d.pollMu.Lock()
+	defer d.pollMu.Unlock()
 	// Send the authoritative enabled-notification set so the server provisions one check per
 	// enabled channel (Fase 2C). Always non-nil in centralized mode (empty -> "none" sentinel).
 	// The notify threshold rides the same poll (contract 1), so the relay keeps the notify checks
