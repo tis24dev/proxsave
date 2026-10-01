@@ -2117,7 +2117,7 @@ func (d *daemon) buildReporter(ctx context.Context) *health.Reporter {
 // a concurrent hook that persisted+confirmed a fresh secret is never clobbered (which would
 // strand the host).
 func (d *daemon) afterFailedPoll(p configPoll) {
-	if p.err == nil || !(errors.Is(p.err, health.ErrHCAuth) || errors.Is(p.err, health.ErrHCParked)) {
+	if p.err == nil || (!errors.Is(p.err, health.ErrHCAuth) && !errors.Is(p.err, health.ErrHCParked)) {
 		return
 	}
 	if cleared, rmErr := identity.RemoveNotifySecretIfMatches(d.cfg.BaseDir, p.secret); rmErr != nil {

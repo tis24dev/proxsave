@@ -845,7 +845,7 @@ func TestUpgradeFinalizePhaseLogsTheNotesBeforeTheFooter(t *testing.T) {
 	if got := gotypes.ExprString(notes[0].Args[1]); got != "cfgUpgradeResult.Notes" {
 		t.Fatalf("logConfigUpgradeNotes is passed %q, want cfgUpgradeResult.Notes", got)
 	}
-	if !(merge[0].Pos() < notes[0].Pos() && notes[0].Pos() < footer[0].Pos()) {
+	if merge[0].Pos() >= notes[0].Pos() || notes[0].Pos() >= footer[0].Pos() {
 		t.Fatal("upgradeFinalizePhase must log the Notes after the merge and before the footer that lists the warnings")
 	}
 	footerArgs := make([]string, 0, len(footer[0].Args))
