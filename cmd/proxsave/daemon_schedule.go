@@ -164,6 +164,12 @@ func (d *daemon) cadenceInEffect(configured cron.Cadence) cron.Cadence {
 	if !d.relayNegotiatesSchedule() {
 		return configured
 	}
+	// An invalid value runs the daily fallback (todo D1/D5), whatever the relay confirmed for an
+	// earlier, valid, schedule: a monthly confirmation must not postpone it by weeks. The poll
+	// asks for daily, and the relay's longer period still covers a daily run meanwhile.
+	if len(readConfiguredCadence(d.cfg).invalid) > 0 {
+		return configured
+	}
 	if d.confirmedCadence != nil {
 		return d.confirmedCadence(configured)
 	}

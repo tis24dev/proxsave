@@ -152,7 +152,8 @@ func compareBackupSchedule(state health.DaemonState, runtime daemonRuntimeDiagno
 // it applied it at once, else started on the frequency the relay last confirmed, daily when none
 // ever was (as cadenceInEffect).
 func runningCadence(started cron.Cadence, st health.ScheduleState) cron.Cadence {
-	if !st.Negotiated() {
+	// A daemon that started on an invalid value runs its daily fallback, confirmed or not.
+	if !st.Negotiated() || st.ConfiguredInvalid {
 		return started
 	}
 	confirmed, err := cron.ParseFrequency(st.LastConfirmed)

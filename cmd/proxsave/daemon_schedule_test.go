@@ -344,8 +344,10 @@ func TestScheduleConfirmedCadenceInvalidFallsBackToTheConfiguredTime(t *testing.
 		{"empty time", "",
 			"DEBUG schedule: cadence in effect invalid error=invalid weekday 9, using daily at 02:00",
 			"INFO daemon: next backup at 2026-10-01 02:00 (in 14h1m28s)"},
+		// An invalid SCHEDULER_TIME is an invalid value: its daily fallback runs and the seam is
+		// not consulted at all.
 		{"invalid time", "25:99",
-			"DEBUG schedule: cadence in effect invalid error=invalid weekday 9, using daily at 02:00",
+			"",
 			"INFO daemon: next backup at 2026-10-01 02:00 (in 14h1m28s)"},
 	}
 	for _, tc := range cases {
@@ -354,6 +356,12 @@ func TestScheduleConfirmedCadenceInvalidFallsBackToTheConfiguredTime(t *testing.
 			d := scheduleDaemon(t, "weekly", "mon", "1", tc.hhmm, true, config.HealthcheckModeCentralized)
 			d.confirmedCadence = invalidSeam
 			runScheduleStart(t, d)
+			if tc.wantDebug == "" {
+				got := logs()
+				assertLogSequence(t, got, tc.wantNext)
+				assertNoLogLine(t, got, "cadence in effect invalid")
+				return
+			}
 			assertLogSequence(t, logs(), tc.wantDebug, tc.wantNext)
 		})
 	}

@@ -139,6 +139,14 @@ func TestBackupScheduleBlock(t *testing.T) {
 			}(), freq: "daily", weekday: "mon", day: "1", hhmm: "02:00", alive: true},
 			[]string{"INFO   Daemon now: DAILY (02:00)", "INFO   Configuration: DAILY (02:00)",
 				"WARNING   Synchronization: OUT OF SYNC (restart the daemon to apply current schedule configuration)"}},
+		{"started invalid after a monthly confirmation runs daily",
+			scheduleStatusCase{state: func() *health.ScheduleState {
+				st := startedState("daily", "mon", 1, "02:00", "monthly", "centralized")
+				st.ConfiguredInvalid = true
+				return st
+			}(), freq: "fortnightly", weekday: "mon", day: "1", hhmm: "02:00", alive: true},
+			[]string{"INFO   Daemon now: DAILY (02:00)", `WARNING   Configuration: INVALID (Frequency "fortnightly" is not daily, weekly or monthly)`,
+				`WARNING   Synchronization: UNKNOWN (Frequency "fortnightly" is not daily, weekly or monthly)`}},
 		{"another configuration file",
 			scheduleStatusCase{state: startedState("daily", "mon", 1, "02:00", "daily", "centralized"), freq: "daily", weekday: "mon", day: "1", hhmm: "02:00", alive: true,
 				currentPath: "/opt/proxsave/configs/other.env"},

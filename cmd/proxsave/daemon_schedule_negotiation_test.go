@@ -804,3 +804,24 @@ func TestScheduleHandEditAppliesAtRestart(t *testing.T) {
 		t.Fatalf("schedule state = %+v (configured %+v); want last_confirmed=weekly, configured monthly day 15", st, st.Configured)
 	}
 }
+
+// An invalid value runs the daily fallback even when the relay confirmed monthly before and is
+// unreachable now: the earlier confirmation must not postpone the backup by weeks (D1/D5).
+func TestScheduleInvalidValueIgnoresAnEarlierConfirmation(t *testing.T) {
+	for _, tc := range []struct{ name, freq, hhmm, inEffect, next string }{
+		{"invalid time", "monthly", "25:99", "INFO   In effect: daily at 02:00", "INFO daemon: next backup at 2026-10-01 02:00 (in 14h1m28s)"},
+		{"invalid frequency", "fortnightly", "04:15", "INFO   In effect: daily at 04:15", "INFO daemon: next backup at 2026-10-01 04:15 (in 16h16m28s)"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			d := negotiationDaemon(t, closedRelayURL(), tc.freq, "mon", "1", tc.hhmm)
+			st := health.ScheduleState{LastConfirmed: "monthly", Healthchecks: health.ScheduleHealthchecksCentralized,
+				Configured: &health.ScheduleCadence{Frequency: "monthly", Weekday: "mon", MonthDay: 1, Time: "02:00"}}
+			if err := health.WriteScheduleState(d.cfg.BaseDir, st); err != nil {
+				t.Fatal(err)
+			}
+			got := startLines(t, d)
+			assertLogSequence(t, got, tc.inEffect, "WARNING ⚠ Backup schedule: not applied", tc.next)
+			assertNoLogLine(t, got, "monthly, day 1")
+		})
+	}
+}
