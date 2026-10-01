@@ -244,6 +244,7 @@ var notes = []Note{
 			"The daemon journal shows the backup schedule at start; an invalid SCHEDULER_* value warns and backups run daily",
 			"Install and upgrade adopt a weekly or monthly proxsave cron line, and warn about a cron line they cannot adopt",
 			"The run log says whether the NOTIFY_ON filter is applied and, when it is not, why",
+			"The daemon keeps its state in BASE_DIR/daemon_state; identity/ now holds only the server identity and keys",
 			"PBS token files are now security-checked: one not at 0600 root is fixed on the next run, which ends with a warning",
 		},
 		Actions: []string{

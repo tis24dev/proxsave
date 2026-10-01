@@ -51,7 +51,7 @@ func TestReadDaemonInfoEmpty(t *testing.T) {
 	base := t.TempDir()
 	path := DaemonInfoPath(base)
 	if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
-		t.Fatalf("mkdir identity dir: %v", err)
+		t.Fatalf("mkdir daemon_state dir: %v", err)
 	}
 	if err := os.WriteFile(path, nil, 0o600); err != nil {
 		t.Fatalf("write empty file: %v", err)
@@ -70,7 +70,7 @@ func TestReadDaemonInfoGarbage(t *testing.T) {
 	base := t.TempDir()
 	path := DaemonInfoPath(base)
 	if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
-		t.Fatalf("mkdir identity dir: %v", err)
+		t.Fatalf("mkdir daemon_state dir: %v", err)
 	}
 	if err := os.WriteFile(path, []byte("{not json"), 0o600); err != nil {
 		t.Fatalf("write garbage: %v", err)

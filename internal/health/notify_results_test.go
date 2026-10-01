@@ -69,7 +69,7 @@ func TestLoadNotifyResultsMissingAndEmpty(t *testing.T) {
 	// Zero-byte file at the results path (e.g. an interrupted write).
 	path := NotifyResultsPath(base)
 	if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
-		t.Fatalf("mkdir identity dir: %v", err)
+		t.Fatalf("mkdir daemon_state dir: %v", err)
 	}
 	if err := os.WriteFile(path, nil, 0o600); err != nil {
 		t.Fatalf("write empty results file: %v", err)
@@ -89,7 +89,7 @@ func TestLoadNotifyResultsMalformed(t *testing.T) {
 	base := t.TempDir()
 	path := NotifyResultsPath(base)
 	if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
-		t.Fatalf("mkdir identity dir: %v", err)
+		t.Fatalf("mkdir daemon_state dir: %v", err)
 	}
 	if err := os.WriteFile(path, []byte("{garbage"), 0o600); err != nil {
 		t.Fatalf("write bad results file: %v", err)

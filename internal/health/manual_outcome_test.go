@@ -36,7 +36,7 @@ func TestLoadManualOutcomeMissingAndEmpty(t *testing.T) {
 
 	path := ManualOutcomePath(base)
 	if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
-		t.Fatalf("mkdir identity dir: %v", err)
+		t.Fatalf("mkdir daemon_state dir: %v", err)
 	}
 	if err := os.WriteFile(path, nil, 0o600); err != nil {
 		t.Fatalf("write empty outcome file: %v", err)
@@ -56,7 +56,7 @@ func TestLoadManualOutcomeMalformed(t *testing.T) {
 	base := t.TempDir()
 	path := ManualOutcomePath(base)
 	if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
-		t.Fatalf("mkdir identity dir: %v", err)
+		t.Fatalf("mkdir daemon_state dir: %v", err)
 	}
 	if err := os.WriteFile(path, []byte("{garbage"), 0o600); err != nil {
 		t.Fatalf("write bad outcome file: %v", err)

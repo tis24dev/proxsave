@@ -196,7 +196,7 @@ type daemon struct {
 	// cannot be lifted is not a safety net, it is a false RED on the check that pages people --
 	// the exact mirror of the false green it exists to remove.
 	aliveDegraded atomic.Bool
-	// abandonMarkerOnDisk records that a marker file may be sitting in the identity dir -- this
+	// abandonMarkerOnDisk records that a marker file may be sitting in the daemon_state dir -- this
 	// process either read one at startup or could not tell (an unreadable marker is still a
 	// marker). It is what makes the removal in clearAbandonMarker unconditional on the degrade:
 	// a process that hit ReadAbandon's error branch never degrades, and must still delete the
@@ -238,7 +238,7 @@ type daemon struct {
 	// Lock order: innermost. Nothing is taken while it is held.
 	abandonMu sync.Mutex
 	// abandonMarkerWritten latches once THIS process has persisted a marker for a child of its
-	// OWN. From that instant the file in the identity dir describes the orphan the successor
+	// OWN. From that instant the file in the daemon_state dir describes the orphan the successor
 	// must inherit -- not the inherited one any clear path in this process is reasoning about
 	// -- so no clear may remove it. A latch rather than a comparison because there is nothing
 	// to compare: both markers live at the same path.
@@ -353,6 +353,10 @@ func (d *daemon) run(ctx context.Context) int {
 	ownershipDone(nil)
 	defer releaseOwnership()
 
+	// Releases before 0.41.0 kept the daemon's files in identity/. Move them into daemon_state/
+	// before anything below reads one: the pid probe, the abandon marker, the status file.
+	movedFromIdentity := moveDaemonStateFromIdentity(d.cfg.BaseDir)
+
 	// The trusted-path gate for the operator scripts, once, before any tick can start
 	// one: a refused path is blanked here with a loud reason (validatePersonalScripts),
 	// so the silent starters below never see it.
@@ -391,8 +395,20 @@ func (d *daemon) run(ctx context.Context) int {
 	// Record our PID so a STANDALONE backup run can find us to hand off its outcome, and clear it
 	// on shutdown. Best-effort: a pid-file hiccup must not stop the daemon. Published AFTER the
 	// SIGUSR1 handler above so the pid is never signallable while the default-terminate action holds.
+	//
+	// On the start that moved files out of identity/, the pid and the info record below are ALSO
+	// written there: the previous release drives an --upgrade to this one, restarts this daemon and
+	// then polls identity/ for 30 s to confirm the restart. Later starts write daemon_state/ only;
+	// this release's what's-new check removes the identity/ copies (removeLegacyDaemonCopies).
 	if err := health.WriteDaemonPID(d.cfg.BaseDir, os.Getpid()); err != nil {
 		logging.Debug("daemon: write pid file failed: %v", err)
+	}
+	if movedFromIdentity {
+		if err := health.WriteLegacyDaemonPID(d.cfg.BaseDir, os.Getpid()); err != nil {
+			logging.Debug("daemon state: write .daemon.pid to identity/ failed error=%v", err)
+		} else {
+			logging.Debug("daemon state: wrote .daemon.pid also to identity/ for the release that ran the upgrade")
+		}
 	}
 	// Alongside the bare pid (the SIGUSR1 handoff contract), record the daemon's IDENTITY -- the
 	// binary it booted from, version/commit, start time -- in the companion .daemon_info.json, so a
@@ -400,14 +416,22 @@ func (d *daemon) run(ctx context.Context) int {
 	// the running binary behind the file on disk?") is answered separately and hash-free via
 	// /proc/<pid>/exe (see daemon_state.go), so nothing is hashed here. Best-effort: a write hiccup is
 	// only Debug-logged and must not fail startup.
-	if err := health.WriteDaemonInfo(d.cfg.BaseDir, health.DaemonInfo{
+	info := health.DaemonInfo{
 		PID:      os.Getpid(),
 		ExecPath: d.execPath,
 		Version:  version.String(),
 		Commit:   version.Commit,
 		StartTS:  daemonStartTS,
-	}); err != nil {
+	}
+	if err := health.WriteDaemonInfo(d.cfg.BaseDir, info); err != nil {
 		logging.Debug("daemon: write daemon info failed: %v", err)
+	}
+	if movedFromIdentity {
+		if err := health.WriteLegacyDaemonInfo(d.cfg.BaseDir, info); err != nil {
+			logging.Debug("daemon state: write .daemon_info.json to identity/ failed error=%v", err)
+		} else {
+			logging.Debug("daemon state: wrote .daemon_info.json also to identity/ for the release that ran the upgrade")
+		}
 	}
 	d.publishDaemonRuntime(daemonStartTS, scriptDiagnostics)
 	defer d.removeDaemonFiles()
@@ -1117,7 +1141,7 @@ func (d *daemon) loadAbandonMarker() {
 	if err != nil {
 		// We could not read it, so we do not know whether an abandon happened: do NOT degrade on
 		// a guess. But a file we failed to read is still probably there, so remember that this
-		// process owes the identity dir a cleanup once a run proves the wedge is over -- see
+		// process owes the daemon_state dir a cleanup once a run proves the wedge is over -- see
 		// abandonMarkerOnDisk.
 		d.abandonMarkerOnDisk.Store(true)
 		logging.Debug("daemon: read abandoned-child marker failed: %v", err)
@@ -1354,7 +1378,7 @@ func procIsBackupChild(pid int) bool {
 // nothing at all otherwise.
 func (d *daemon) reviewAbandonDegrade() {
 	// Cheap pre-check for the abandon path: once the latch is closed this process is on its
-	// way out after abandoning a child of its OWN, and the marker in the identity dir is the
+	// way out after abandoning a child of its OWN, and the marker in the daemon_state dir is the
 	// fresh one abandonChild just wrote for the successor -- not the inherited one this review
 	// is about. This is an optimisation, NOT the barrier: the latch and this load are separate
 	// atomics, so a beat that read it a moment too early is still on its way to the clear. The
@@ -1391,7 +1415,7 @@ func (d *daemon) reviewAbandonDegrade() {
 //     deliberately reads as a real abandon (WriteAbandon does not fsync, and these hosts get
 //     hard-reset). There is nothing to probe, so the run's own evidence is all there is and
 //     only a code that proves the run REACHED the lock qualifies; see exitProvesLockWasTaken.
-//   - Nothing was degraded, but a file is still owed to the identity dir: one this process
+//   - Nothing was degraded, but a file is still owed to the daemon_state dir: one this process
 //     could not READ at startup (ReadAbandon's error branch), or one it deliberately KEPT
 //     because backups are administratively off. Neither is a free pass, and the SAME evidence
 //     rule applies. Both of those states are reached with a marker that may name a LIVE orphan
@@ -2302,7 +2326,7 @@ func (d *daemon) buildBackupCmd(ctx context.Context, tail *tailBuffer, rid strin
 		cmd = exec.CommandContext(ctx, d.execPath, args...)
 	}
 	// Correlate the child's per-channel notify-results handoff with THIS run: the child
-	// writes <baseDir>/identity/.notify_results.json tagged with this rid, and the daemon
+	// writes <baseDir>/daemon_state/.notify_results.json tagged with this rid, and the daemon
 	// rejects any file whose rid does not match. Preserve the inherited environment (PATH,
 	// etc.) via os.Environ() so the child still finds its tools.
 	if rid != "" {

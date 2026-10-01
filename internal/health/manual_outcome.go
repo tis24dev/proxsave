@@ -4,7 +4,7 @@
 // this per-run handoff and wakes the daemon with SIGUSR1, and the daemon pings + records the
 // backup-outcome check through its own finish path. If no daemon is running, nothing pings
 // (coherent: without the daemon, healthchecks transmits nothing anyway). It is a sibling of the
-// status/notify-results files in the identity dir, written with the same atomic, non-immutable
+// status/notify-results files in the daemon_state dir, written with the same atomic, non-immutable
 // idiom (writeJSONAtomic), and stays logging-free + stdlib-only like its siblings.
 
 package health
@@ -28,9 +28,9 @@ type ManualOutcome struct {
 }
 
 // ManualOutcomePath returns the per-run manual-outcome file path, a sibling of the status file in
-// the identity dir (same same-uid, non-immutable rationale as StatusPath).
+// the daemon_state dir (same same-uid, non-immutable rationale as StatusPath).
 func ManualOutcomePath(baseDir string) string {
-	return filepath.Join(baseDir, "identity", ".manual_backup_outcome.json")
+	return filepath.Join(DaemonStateDir(baseDir), ".manual_backup_outcome.json")
 }
 
 // WriteManualOutcome writes the standalone-run outcome atomically (run side).

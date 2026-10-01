@@ -37,7 +37,7 @@ type DaemonRuntimeState struct {
 }
 
 func DaemonRuntimePath(baseDir string) string {
-	return filepath.Join(baseDir, "identity", ".daemon_runtime.json")
+	return filepath.Join(DaemonStateDir(baseDir), ".daemon_runtime.json")
 }
 
 func WriteDaemonRuntime(baseDir string, state DaemonRuntimeState) error {

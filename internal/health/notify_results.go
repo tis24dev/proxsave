@@ -1,7 +1,7 @@
 // notify_results.go carries the per-run notification outcomes from the backup CHILD (which
 // sends the notifications in Phase-7) to the resident DAEMON (which is the only pinger), so
 // the daemon can emit one healthchecks ping per notification channel. It is a sibling of the
-// status file in the identity dir, written with the same atomic, non-immutable idiom.
+// status file in the daemon_state dir, written with the same atomic, non-immutable idiom.
 //
 // The daemon sets EnvRunID on the child and rejects any results file whose RID does not match
 // the run it supervised (a stale file from a prior run, or a child that never reached Phase-7).
@@ -32,9 +32,9 @@ type NotifyResults struct {
 }
 
 // NotifyResultsPath returns the per-run results file path, a sibling of the status file in the
-// identity dir (same same-uid, non-immutable rationale as StatusPath).
+// daemon_state dir (same same-uid, non-immutable rationale as StatusPath).
 func NotifyResultsPath(baseDir string) string {
-	return filepath.Join(baseDir, "identity", ".notify_results.json")
+	return filepath.Join(DaemonStateDir(baseDir), ".notify_results.json")
 }
 
 // WriteNotifyResults writes the per-run results atomically (child side). A nil results map is

@@ -2,8 +2,8 @@
 // to wake (SIGUSR1) for the manual-outcome handoff. The daemon writes it at startup and removes
 // it on shutdown; a standalone run reads it, verifies the pid is a LIVE proxsave --daemon process
 // (see the run side), and only then signals. A plain-text pid keeps this trivial. It is a sibling
-// of the status/handoff files in the identity dir, written with the same atomic rename idiom, and
-// stays logging-free + stdlib-only like its siblings.
+// of the status/handoff files in the daemon_state dir, written with the same atomic rename idiom,
+// and stays logging-free + stdlib-only like its siblings.
 
 package health
 
@@ -15,19 +15,39 @@ import (
 	"strings"
 )
 
-// DaemonPIDPath returns the daemon-pid file path, a sibling of the status file in the identity dir
-// (same same-uid, non-immutable rationale as StatusPath).
+// daemonPIDFileName is the pid file's name, the same in daemon_state/ and in the identity/ copy
+// written for an older release (LegacyDaemonPIDPath).
+const daemonPIDFileName = ".daemon.pid"
+
+// DaemonPIDPath returns the daemon-pid file path, a sibling of the status file in the
+// daemon_state dir (same same-uid, non-immutable rationale as StatusPath).
 func DaemonPIDPath(baseDir string) string {
-	return filepath.Join(baseDir, "identity", ".daemon.pid")
+	return filepath.Join(DaemonStateDir(baseDir), daemonPIDFileName)
 }
 
-// WriteDaemonPID writes pid as plain text atomically (daemon side): MkdirAll the identity dir,
+// LegacyDaemonPIDPath returns identity/.daemon.pid, where releases before 0.41.0 read the pid.
+// The previous release drives an upgrade to this one and, after restarting the daemon, polls
+// this path to confirm the restart; nothing in this release reads it.
+func LegacyDaemonPIDPath(baseDir string) string {
+	return filepath.Join(LegacyIdentityDir(baseDir), daemonPIDFileName)
+}
+
+// WriteDaemonPID writes pid as plain text atomically (daemon side): MkdirAll the daemon_state dir,
 // WriteFile a ".tmp" sibling at 0o600, then Rename over the final path so a concurrent reader sees
 // either the old or the new file, never a partial one.
 func WriteDaemonPID(baseDir string, pid int) error {
-	path := DaemonPIDPath(baseDir)
+	return writeDaemonPIDAt(DaemonPIDPath(baseDir), pid)
+}
+
+// WriteLegacyDaemonPID writes the same pid file into identity/ (LegacyDaemonPIDPath), for the
+// previous release verifying the upgrade it just performed.
+func WriteLegacyDaemonPID(baseDir string, pid int) error {
+	return writeDaemonPIDAt(LegacyDaemonPIDPath(baseDir), pid)
+}
+
+func writeDaemonPIDAt(path string, pid int) error {
 	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0o750); err != nil {
+	if err := os.MkdirAll(dir, DaemonStateDirPerm); err != nil {
 		return fmt.Errorf("create dir %s: %w", dir, err)
 	}
 	tmp := path + ".tmp"

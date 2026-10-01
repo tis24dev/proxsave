@@ -7,15 +7,18 @@ import (
 	"path/filepath"
 
 	"github.com/tis24dev/proxsave/internal/filelock"
+	"github.com/tis24dev/proxsave/internal/health"
 )
 
 const daemonLockFileName = ".daemon.lock"
 
 var errDaemonLockHeld = errors.New("daemon ownership lock is already held")
 
+// acquireDaemonLock takes the single-instance flock in BASE_DIR/daemon_state, creating the
+// directory root-only (0700) when it is missing.
 func acquireDaemonLock(baseDir string) (release func(), err error) {
-	dir := filepath.Join(baseDir, "identity")
-	if err := os.MkdirAll(dir, 0o750); err != nil {
+	dir := health.DaemonStateDir(baseDir)
+	if err := os.MkdirAll(dir, health.DaemonStateDirPerm); err != nil {
 		return nil, fmt.Errorf("create daemon lock directory %s: %w", dir, err)
 	}
 	path := filepath.Join(dir, daemonLockFileName)

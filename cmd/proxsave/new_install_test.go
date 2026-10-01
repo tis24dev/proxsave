@@ -14,7 +14,7 @@ import (
 )
 
 func testNewInstallPreservedEntries() []string {
-	return []string{"build", "env", "guards", "identity", "restore"}
+	return []string{"build", "daemon_state", "env", "guards", "identity", "restore"}
 }
 
 func registerNewInstallBuildSignature(t *testing.T, fn func() string) {
@@ -120,7 +120,7 @@ func TestConfirmNewInstallCLIContinue(t *testing.T) {
 	if !confirmed {
 		t.Fatalf("expected confirmation=true")
 	}
-	if !strings.Contains(output, "Preserved entries: build/ env/ guards/ identity/ restore/") {
+	if !strings.Contains(output, "Preserved entries: build/ daemon_state/ env/ guards/ identity/ restore/") {
 		t.Fatalf("expected preserved entries output, got %q", output)
 	}
 }

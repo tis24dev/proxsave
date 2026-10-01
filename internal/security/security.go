@@ -21,6 +21,7 @@ import (
 
 	"github.com/tis24dev/proxsave/internal/config"
 	"github.com/tis24dev/proxsave/internal/environment"
+	"github.com/tis24dev/proxsave/internal/health"
 	"github.com/tis24dev/proxsave/internal/logging"
 	"github.com/tis24dev/proxsave/internal/safeexec"
 	"github.com/tis24dev/proxsave/internal/safefs"
@@ -652,6 +653,7 @@ func (c *Checker) verifyDirectories(ctx context.Context) {
 		{c.cfg.SecureAccount, 0o700, false},
 		{filepath.Join(c.cfg.BaseDir, "identity"), 0o700, false},
 		{filepath.Join(c.cfg.BaseDir, "identity", "age"), 0o700, false},
+		{health.DaemonStateDir(c.cfg.BaseDir), health.DaemonStateDirPerm, false},
 	}
 
 	for _, dir := range dirs {
