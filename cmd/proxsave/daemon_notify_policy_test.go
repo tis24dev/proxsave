@@ -133,9 +133,32 @@ func TestRefreshNotifyPolicySendsAHandEditBeforeTheRun(t *testing.T) {
 	if got := d.appliedNotifyPolicy(); got == nil || !got.equal(want) {
 		t.Fatalf("applied policy = %+v; want %+v", got, want)
 	}
-	if line := "daemon: notification policy sent notify_on=failure channels=telegram applied=true"; !strings.Contains(logged.String(), line) {
-		t.Fatalf("missing DEBUG line %q in:\n%s", line, logged.String())
+	// The changed level is the approved block (todo point 42): the stages of the poll in DEBUG,
+	// the level, applied.
+	assertLogExact(t, normalized(debugEntries(logged.String()), d),
+		"INFO Applying notify level...",
+		"DEBUG notify policy: read notify_on=failure channels=telegram source="+strings.ReplaceAll(d.cfg.ConfigPath, d.cfg.BaseDir, "BASE"),
+		"DEBUG notify policy: url=http://RELAY/api/healthcheck/config frequency=daily notify_on=failure channels=telegram",
+		"DEBUG notify policy: connected",
+		"DEBUG notify policy: request written",
+		"DEBUG notify policy: response http=200 elapsed=Nms",
+		"DEBUG notify policy: ack notify_on=failure channels=telegram mode= applied=true",
+		"INFO   Notify level: failure",
+		"INFO ✓ Notify level: applied",
+	)
+}
+
+// debugEntries is a captureDaemonDebug buffer as "LEVEL message" entries, like captureDaemonLog.
+func debugEntries(raw string) []string {
+	var out []string
+	for _, line := range strings.Split(strings.TrimRight(raw, "\n"), "\n") {
+		_, rest, ok := strings.Cut(line, "] ")
+		if !ok || len(rest) < 9 {
+			continue
+		}
+		out = append(out, strings.TrimSpace(rest[:9])+" "+rest[9:])
 	}
+	return out
 }
 
 // A channel switched on by hand is part of what the run checks against the relay, so it is
@@ -166,9 +189,9 @@ func TestRefreshNotifyPolicySkipsTheRelayWhenNothingChanged(t *testing.T) {
 	if polls := relay.sent(); len(polls) != 0 {
 		t.Fatalf("relay polls = %+v; want none when the confirmed policy is unchanged", polls)
 	}
-	if strings.Contains(logged.String(), "notification policy sent") {
-		t.Fatalf("nothing was sent, so nothing may be logged as sent:\n%s", logged.String())
-	}
+	// Nothing sent: one DEBUG line and no block (todo point 42).
+	assertLogExact(t, debugEntries(logged.String()),
+		"DEBUG notify policy: before run notify_on=warning channels=telegram already confirmed, not sent")
 }
 
 // A policy the relay did not apply (unreachable at daemon start, or a deferred conversion) is
@@ -197,9 +220,66 @@ func TestRefreshNotifyPolicyLogsAnUnappliedAnswer(t *testing.T) {
 
 	d.refreshNotifyPolicy(context.Background())
 
-	if line := "daemon: notification policy sent notify_on=warning channels=none applied=false"; !strings.Contains(logged.String(), line) {
-		t.Fatalf("missing DEBUG line %q in:\n%s", line, logged.String())
+	// The relay answered and did not apply it: the pending form, every outcome notified meanwhile.
+	assertLogExact(t, normalized(debugEntries(logged.String()), d),
+		"INFO Applying notify level...",
+		"DEBUG notify policy: read notify_on=warning channels=none source="+strings.ReplaceAll(d.cfg.ConfigPath, d.cfg.BaseDir, "BASE"),
+		"DEBUG notify policy: url=http://RELAY/api/healthcheck/config frequency=daily notify_on=warning channels=none",
+		"DEBUG notify policy: connected",
+		"DEBUG notify policy: request written",
+		"DEBUG notify policy: response http=200 elapsed=Nms",
+		"DEBUG notify policy: ack notify_on=warning channels=none mode= applied=false",
+		"INFO   Notify level: warning",
+		"INFO   In effect: always",
+		"INFO ProxSave HC Server did not confirm",
+		"INFO ⚠ Notify level: pending, no action needed",
+	)
+}
+
+// An unreachable relay before a run: the pending form with the network why line, and the run
+// is held only by the bounded wait.
+func TestRefreshNotifyPolicyUnreachableRelayIsPending(t *testing.T) {
+	relay := &policyRelay{applied: true}
+	d := policyDaemon(t, relay, "NOTIFY_ON=failure\nTELEGRAM_ENABLED=true\n")
+	d.notifyApplied = &startupPolicy
+	d.cfg.ServerAPIHost = closedRelayURL()
+	logged := captureDaemonDebug(t)
+
+	d.refreshNotifyPolicy(context.Background())
+
+	got := normalized(debugEntries(logged.String()), d)
+	assertLogSequence(t, got,
+		"INFO Applying notify level...",
+		"DEBUG notify policy: url=http://RELAY/api/healthcheck/config frequency=daily notify_on=failure channels=telegram",
+		"DEBUG notify policy: failed stage=connect error=Get: dial tcp RELAY: connect: connection refused",
+		"INFO   Notify level: failure",
+		"INFO   In effect: always",
+		"INFO ProxSave HC Server not reachable",
+		"INFO ⚠ Notify level: pending, no action needed",
+	)
+	if got := d.appliedNotifyPolicy(); got == nil || !got.equal(startupPolicy) {
+		t.Fatalf("applied policy = %+v; an unanswered poll must leave the last confirmation", got)
 	}
+}
+
+// A relay slower than the bounded wait: pending, not reachable, and the run goes on.
+func TestRefreshNotifyPolicyTimeoutIsPendingNotReachable(t *testing.T) {
+	relay := &policyRelay{applied: true, release: make(chan struct{})}
+	d := policyDaemon(t, relay, "NOTIFY_ON=failure\nTELEGRAM_ENABLED=true\n")
+	d.notifyRefreshWaitOverride = 50 * time.Millisecond
+	t.Cleanup(func() { close(relay.release) })
+	logs := captureDaemonLog(t) // a locked sink: the poll is still writing to it after the wait
+
+	d.refreshNotifyPolicy(context.Background())
+
+	assertLogSequence(t, logs(),
+		"INFO Applying notify level...",
+		"DEBUG notify policy: no answer within 50ms",
+		"INFO   Notify level: failure",
+		"INFO   In effect: always",
+		"INFO ProxSave HC Server not reachable",
+		"INFO ⚠ Notify level: pending, no action needed",
+	)
 }
 
 // A slow relay delays the run by the bounded wait and no more; the poll finishes on its own.

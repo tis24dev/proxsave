@@ -100,7 +100,7 @@ func runScheduleStart(t *testing.T, d *daemon) {
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	d.logScheduleStart()
+	d.logScheduleStart(context.Background())
 	if d.scheduleLoop(ctx) {
 		t.Fatal("a cancelled scheduleLoop must not report an abandon")
 	}
@@ -227,13 +227,17 @@ func TestScheduleHealthchecksDisabledAppliesWithoutBackupCheck(t *testing.T) {
 	)
 }
 
+// TestScheduleCentralizedWeeklyRunsDailyUntilNegotiated: with no relay secret no poll can be
+// sent, and no block has a text for that: DEBUG only, daily in effect (nothing confirmed on disk).
 func TestScheduleCentralizedWeeklyRunsDailyUntilNegotiated(t *testing.T) {
 	logs := captureDaemonLog(t)
 	d := scheduleDaemon(t, "weekly", "mon", "1", "02:00", true, config.HealthcheckModeCentralized)
 	runScheduleStart(t, d)
-	assertLogExact(t, logs(),
+	assertLogExact(t, normalized(logs(), d),
 		"DEBUG schedule: read frequency=weekly weekday=mon monthday=1 time=02:00 source="+scheduleSource,
-		"DEBUG schedule: centralized frequency=weekly not negotiated yet, in effect daily",
+		"DEBUG schedule: read last_confirmed=none source="+stateFile+" default=daily",
+		"DEBUG schedule: not sent, no relay secret on disk (centralized provisioning pending)",
+		"DEBUG schedule: fallback frequency=daily reason=unconfirmed retry_every=5m0s",
 		"DEBUG schedule: next run frequency=daily weekday=mon monthday=1 time=02:00 at=2026-10-01T02:00:00Z",
 		"INFO daemon: next backup at 2026-10-01 02:00 (in 14h1m28s)",
 	)
@@ -243,9 +247,11 @@ func TestScheduleCentralizedDailyLogsNoBlock(t *testing.T) {
 	logs := captureDaemonLog(t)
 	d := scheduleDaemon(t, "daily", "mon", "1", "02:00", true, config.HealthcheckModeCentralized)
 	runScheduleStart(t, d)
-	assertLogExact(t, logs(),
+	assertLogExact(t, normalized(logs(), d),
 		"DEBUG schedule: read frequency=daily weekday=mon monthday=1 time=02:00 source="+scheduleSource,
-		"DEBUG schedule: centralized frequency=daily, in effect daily",
+		"DEBUG schedule: read last_confirmed=none source="+stateFile+" default=daily",
+		"DEBUG schedule: not sent, no relay secret on disk (centralized provisioning pending)",
+		"DEBUG schedule: fallback frequency=daily reason=unconfirmed retry_every=5m0s",
 		"DEBUG schedule: next run frequency=daily weekday=mon monthday=1 time=02:00 at=2026-10-01T02:00:00Z",
 		"INFO daemon: next backup at 2026-10-01 02:00 (in 14h1m28s)",
 	)
@@ -611,7 +617,7 @@ func TestScheduleNoErrorLinesAnyMore(t *testing.T) {
 // second select.
 func driveTwoNextBackups(t *testing.T, d *daemon) {
 	t.Helper()
-	d.logScheduleStart()
+	d.logScheduleStart(context.Background())
 	later := time.Date(2026, 10, 1, 3, 0, 0, 0, time.UTC)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

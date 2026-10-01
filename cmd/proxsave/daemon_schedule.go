@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"strconv"
 	"strings"
@@ -156,7 +157,9 @@ func (d *daemon) relayNegotiatesSchedule() bool {
 	return d.cfg.HealthcheckEnabled && d.cfg.HealthcheckMode != config.HealthcheckModeSelf
 }
 
-// cadenceInEffect is the cadence the scheduler runs on for the configured one.
+// cadenceInEffect is the cadence the scheduler runs on for the configured one. In centralized
+// mode the relay confirms a frequency, not a day or a time, so it is the configured cadence on
+// the frequency the relay last confirmed (todo point 17), daily when none ever was (point 22).
 func (d *daemon) cadenceInEffect(configured cron.Cadence) cron.Cadence {
 	if !d.relayNegotiatesSchedule() {
 		return configured
@@ -164,7 +167,14 @@ func (d *daemon) cadenceInEffect(configured cron.Cadence) cron.Cadence {
 	if d.confirmedCadence != nil {
 		return d.confirmedCadence(configured)
 	}
-	return unconfirmedCadence(configured)
+	d.mu.Lock()
+	confirmed := d.scheduleLastConfirmed
+	d.mu.Unlock()
+	if confirmed == "" {
+		return unconfirmedCadence(configured)
+	}
+	configured.Frequency = confirmed
+	return configured
 }
 
 // cadenceToRun is the cadence the scheduler actually runs on and its next run after now: the
@@ -185,9 +195,8 @@ func (d *daemon) cadenceToRun(configured cron.Cadence, now time.Time) (run cron.
 
 // unconfirmedCadence is the centralized cadence in effect while the relay has confirmed
 // nothing: daily at the configured time (todo point 22, "no confirmed cadence on disk: the old
-// one is daily"). Until the negotiation exists nothing is ever confirmed, so a weekly or
-// monthly SCHEDULER_FREQUENCY keeps running daily in centralized mode; the backup check on the
-// monitor still has a 24 h period, and a slower cadence would turn it DOWN.
+// one is daily"). The backup check on the monitor then still has a 24 h period, and a slower
+// cadence would turn it DOWN.
 func unconfirmedCadence(configured cron.Cadence) cron.Cadence {
 	configured.Frequency = cron.FrequencyDaily
 	return configured
@@ -208,35 +217,26 @@ func (d *daemon) logScheduleRead(reading scheduleReading) {
 }
 
 // logScheduleStart reports, once at start (run(), before the background loops), the cadence
-// the scheduler is about to run on.
+// the scheduler is about to run on. It reports whether a centralized config poll was sent.
 //
 // With an invalid value it is the not-applied block (logScheduleNotApplied), in every mode.
 //
 // With healthchecks off or in self mode it is the approved block (todo points 34, 38, 41):
 // "Applying backup schedule...", the evidence in DEBUG, the details, the outcome last.
 //
-// In centralized mode it is DEBUG only. The approved centralized blocks (applied after the
-// relay confirms, pending while it does not: points 38-39) are made of the relay attempt lines
-// the negotiation unit will produce; printing them without an attempt would claim one.
-func (d *daemon) logScheduleStart() {
+// In centralized mode the cadence is negotiated with the relay first (startScheduleNegotiation):
+// the applied or pending block, then the notify level and ping URLs blocks.
+func (d *daemon) logScheduleStart(ctx context.Context) (polled bool) {
 	reading := readConfiguredCadence(d.cfg)
+	if d.relayNegotiatesSchedule() {
+		return d.startScheduleNegotiation(ctx, reading)
+	}
 	if len(reading.invalid) > 0 {
 		d.logScheduleNotApplied(reading)
-		return
+		return false
 	}
 	configured := reading.cadence
 	logger := logging.GetDefaultLogger()
-	if d.relayNegotiatesSchedule() {
-		d.logScheduleRead(reading)
-		if inEffect := d.cadenceInEffect(configured); inEffect.Frequency != configured.Frequency {
-			logging.DebugStep(logger, "schedule", "centralized frequency=%s not negotiated yet, in effect %s",
-				configured.Frequency, inEffect.Frequency)
-		} else {
-			logging.DebugStep(logger, "schedule", "centralized frequency=%s, in effect %s", configured.Frequency, inEffect.Frequency)
-		}
-		return
-	}
-
 	logging.Info("Applying backup schedule...")
 	d.logScheduleRead(reading)
 	if !d.cfg.HealthcheckEnabled {
@@ -244,20 +244,27 @@ func (d *daemon) logScheduleStart() {
 	} else {
 		logging.DebugStep(logger, "schedule", "healthchecks mode=self, no relay negotiation")
 	}
-	logging.Info("  Frequency: %s", configured.Frequency)
-	switch configured.Frequency {
-	case cron.FrequencyWeekly:
-		logging.Info("  Weekday: %s", configured.Weekday)
-	case cron.FrequencyMonthly:
-		logging.Info("  Day of month: %d", configured.MonthDay)
-	}
-	logging.Info("  Time: %s", configured.Time)
+	logCadenceDetails(configured)
 	// On the operator's own server ProxSave does not manage the backup check's period, so a
 	// slower cadence is worth naming there (point 24: only when it is not daily).
 	if d.cfg.HealthcheckEnabled && configured.Frequency != cron.FrequencyDaily {
 		logging.Info("  Backup check: pinged %s on your own server", configured.Frequency)
 	}
 	logging.Info("%s Backup schedule: applied", theme.SymbolSuccess)
+	return false
+}
+
+// logCadenceDetails is the detail lines of a cadence: the frequency, the day it uses (none for
+// daily) and the time.
+func logCadenceDetails(c cron.Cadence) {
+	logging.Info("  Frequency: %s", c.Frequency)
+	switch c.Frequency {
+	case cron.FrequencyWeekly:
+		logging.Info("  Weekday: %s", c.Weekday)
+	case cron.FrequencyMonthly:
+		logging.Info("  Day of month: %d", c.MonthDay)
+	}
+	logging.Info("  Time: %s", c.Time)
 }
 
 // logScheduleNotApplied is the block for a schedule with an invalid value: the values as
@@ -265,6 +272,12 @@ func (d *daemon) logScheduleStart() {
 func (d *daemon) logScheduleNotApplied(reading scheduleReading) {
 	logging.Info("Applying backup schedule...")
 	d.logScheduleRead(reading)
+	d.logScheduleNotAppliedOutcome(reading)
+}
+
+// logScheduleNotAppliedOutcome is the not-applied block after its evidence: the details, the
+// cadence in effect, the why lines and the WARNING outcome.
+func (d *daemon) logScheduleNotAppliedOutcome(reading scheduleReading) {
 	logging.Info("  Frequency: %s", shownOrDefault(d.cfg.SchedulerFrequency, string(cron.FrequencyDaily)))
 	if reading.dayLine != "" {
 		logging.Info("%s", reading.dayLine)
