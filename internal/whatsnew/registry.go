@@ -241,6 +241,9 @@ var notes = []Note{
 		Version: "0.41.0",
 		Lines: []string{
 			"Backups can run daily, weekly or monthly (SCHEDULER_FREQUENCY); ProxSave HC Server adapts the backup check to it",
+			"The daemon journal shows the backup schedule at start; an invalid SCHEDULER_* value warns and backups run daily",
+			"Install and upgrade adopt a weekly or monthly proxsave cron line, and warn about a cron line they cannot adopt",
+			"The run log says whether the NOTIFY_ON filter is applied and, when it is not, why",
 			"PBS token files are now security-checked: one not at 0600 root is fixed on the next run, which ends with a warning",
 		},
 		Actions: []string{
