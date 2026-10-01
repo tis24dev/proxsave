@@ -23,6 +23,7 @@ import (
 	"github.com/tis24dev/proxsave/internal/ui/shell"
 	"github.com/tis24dev/proxsave/internal/ui/theme"
 	"github.com/tis24dev/proxsave/internal/uitest"
+	"github.com/tis24dev/proxsave/internal/whatsnew"
 )
 
 // installDashboardGates fixes the two gate seams for a test. It also pins the
@@ -99,7 +100,7 @@ func installDashboardSessionSeam(t *testing.T) *newkeyUIDriver {
 	// byte-identical to before this hook existed. The Screen 0 behavior itself is
 	// covered by whatsnew_wiring_test.go.
 	origDecide := whatsnewDecide
-	whatsnewDecide = func(baseDir, current string) (bool, string, error) { return false, "", nil }
+	whatsnewDecide = func(loc whatsnew.Location, current string) (bool, string, error) { return false, "", nil }
 	t.Cleanup(func() {
 		testDashboardSession = orig
 		whatsnewDecide = origDecide

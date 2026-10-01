@@ -8,14 +8,20 @@ import (
 	"testing"
 )
 
+// testLoc is the Location the tests use: LOG_PATH and BASE_DIR both on the temp dir, no
+// timeout, so StatePath(base) is the flag and base/identity/ the old location.
+func testLoc(base string) Location {
+	return Location{LogPath: base, BaseDir: base}
+}
+
 // TestMarkSeenRoundTrip: MarkSeen then LoadState returns the persisted version with
 // present=true and a nil error.
 func TestMarkSeenRoundTrip(t *testing.T) {
 	base := t.TempDir()
-	if err := MarkSeen(base, "0.30.0"); err != nil {
+	if err := MarkSeen(testLoc(base), "0.30.0"); err != nil {
 		t.Fatalf("MarkSeen: %v", err)
 	}
-	st, present, err := LoadState(base)
+	st, present, err := LoadState(testLoc(base))
 	if err != nil {
 		t.Fatalf("LoadState: unexpected error %v", err)
 	}
@@ -27,31 +33,33 @@ func TestMarkSeenRoundTrip(t *testing.T) {
 	}
 }
 
-// TestMarkSeenMkdirAllAndModes: on a base with no identity/ dir, MarkSeen creates it
-// and writes the file at StatePath; the file mode is 0600 and the dir mode is 0750.
+// TestMarkSeenMkdirAllAndModes: with no LOG_PATH dir yet, MarkSeen creates it and writes
+// the file at StatePath; the file mode is 0600 and the dir mode is 0755, the mode the run
+// creates LOG_PATH with and the security check expects.
 func TestMarkSeenMkdirAllAndModes(t *testing.T) {
-	base := t.TempDir()
-	// Sanity: identity/ must not exist yet.
-	if _, err := os.Stat(filepath.Dir(StatePath(base))); !os.IsNotExist(err) {
-		t.Fatalf("identity/ should not exist before MarkSeen, stat err = %v", err)
+	logPath := filepath.Join(t.TempDir(), "log")
+	loc := Location{LogPath: logPath, BaseDir: t.TempDir()}
+	// Sanity: LOG_PATH must not exist yet.
+	if _, err := os.Stat(logPath); !os.IsNotExist(err) {
+		t.Fatalf("LOG_PATH should not exist before MarkSeen, stat err = %v", err)
 	}
-	if err := MarkSeen(base, "0.30.0"); err != nil {
+	if err := MarkSeen(loc, "0.30.0"); err != nil {
 		t.Fatalf("MarkSeen: %v", err)
 	}
 
-	fi, err := os.Stat(StatePath(base))
+	fi, err := os.Stat(StatePath(logPath))
 	if err != nil {
 		t.Fatalf("stat flag file: %v", err)
 	}
 	if got := fi.Mode().Perm(); got != 0o600 {
 		t.Fatalf("flag file mode = %o, want 0600", got)
 	}
-	di, err := os.Stat(filepath.Dir(StatePath(base)))
+	di, err := os.Stat(logPath)
 	if err != nil {
-		t.Fatalf("stat identity dir: %v", err)
+		t.Fatalf("stat LOG_PATH: %v", err)
 	}
-	if got := di.Mode().Perm(); got != 0o750 {
-		t.Fatalf("identity dir mode = %o, want 0750", got)
+	if got := di.Mode().Perm(); got != 0o755 {
+		t.Fatalf("LOG_PATH mode = %o, want 0755", got)
 	}
 }
 
@@ -59,7 +67,7 @@ func TestMarkSeenMkdirAllAndModes(t *testing.T) {
 // nil error.
 func TestLoadStateMissingFile(t *testing.T) {
 	base := t.TempDir()
-	st, present, err := LoadState(base)
+	st, present, err := LoadState(testLoc(base))
 	if err != nil {
 		t.Fatalf("LoadState on missing file: unexpected error %v", err)
 	}
@@ -76,12 +84,12 @@ func TestLoadStateEmptyFile(t *testing.T) {
 	base := t.TempDir()
 	path := StatePath(base)
 	if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
-		t.Fatalf("mkdir identity dir: %v", err)
+		t.Fatalf("mkdir LOG_PATH: %v", err)
 	}
 	if err := os.WriteFile(path, nil, 0o600); err != nil {
 		t.Fatalf("write empty flag file: %v", err)
 	}
-	st, present, err := LoadState(base)
+	st, present, err := LoadState(testLoc(base))
 	if err != nil {
 		t.Fatalf("LoadState on empty file: unexpected error %v", err)
 	}
@@ -99,12 +107,12 @@ func TestLoadStateMalformedJSON(t *testing.T) {
 	base := t.TempDir()
 	path := StatePath(base)
 	if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
-		t.Fatalf("mkdir identity dir: %v", err)
+		t.Fatalf("mkdir LOG_PATH: %v", err)
 	}
 	if err := os.WriteFile(path, []byte("{not json"), 0o600); err != nil {
 		t.Fatalf("write bad flag file: %v", err)
 	}
-	st, present, err := LoadState(base)
+	st, present, err := LoadState(testLoc(base))
 	if err == nil {
 		t.Fatalf("LoadState on bad JSON should error")
 	}
@@ -137,12 +145,12 @@ func TestLoadStateNonSemverVersion(t *testing.T) {
 			base := t.TempDir()
 			path := StatePath(base)
 			if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
-				t.Fatalf("mkdir identity dir: %v", err)
+				t.Fatalf("mkdir LOG_PATH: %v", err)
 			}
 			if err := os.WriteFile(path, []byte(tc.content), 0o600); err != nil {
 				t.Fatalf("write flag: %v", err)
 			}
-			st, present, err := LoadState(base)
+			st, present, err := LoadState(testLoc(base))
 			if err == nil {
 				t.Fatalf("LoadState on %s should error", tc.name)
 			}
@@ -165,7 +173,7 @@ func TestMarkSeenRejectsNonSemver(t *testing.T) {
 	for _, v := range []string{"garbage", "", "pr-v0.30.0-beta5-dev.8+gsha.dirty"} {
 		t.Run(v, func(t *testing.T) {
 			base := t.TempDir()
-			if err := MarkSeen(base, v); err == nil {
+			if err := MarkSeen(testLoc(base), v); err == nil {
 				t.Fatalf("MarkSeen(%q) err = nil, want non-nil (refuse non-semver)", v)
 			}
 			if _, err := os.Stat(StatePath(base)); !os.IsNotExist(err) {
@@ -182,13 +190,13 @@ func TestMarkSeenSelfHealsCorruptFile(t *testing.T) {
 	base := t.TempDir()
 	path := StatePath(base)
 	if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
-		t.Fatalf("mkdir identity dir: %v", err)
+		t.Fatalf("mkdir LOG_PATH: %v", err)
 	}
 	if err := os.WriteFile(path, []byte("{garbage bytes"), 0o600); err != nil {
 		t.Fatalf("write garbage flag file: %v", err)
 	}
 
-	if err := MarkSeen(base, "0.30.0"); err != nil {
+	if err := MarkSeen(testLoc(base), "0.30.0"); err != nil {
 		t.Fatalf("MarkSeen over corrupt file: %v", err)
 	}
 
@@ -219,33 +227,34 @@ func TestMarkSeenSelfHealsCorruptFile(t *testing.T) {
 	}
 
 	// And LoadState now reads it cleanly.
-	got, present, err := LoadState(base)
+	got, present, err := LoadState(testLoc(base))
 	if err != nil || !present || got.LastSeenNotesVersion != "0.30.0" {
 		t.Fatalf("post-heal LoadState = (%+v, %v, %v), want the new version present", got, present, err)
 	}
 }
 
-// TestStatePathShape pins the file location the installer seed and dashboard read both
-// depend on.
+// TestStatePathShape pins the file location the installer seed, the dashboard and the run
+// nudge all depend on (LOG_PATH), and the old one the first read moves it from (identity/).
 func TestStatePathShape(t *testing.T) {
-	base := "/opt/proxsave"
-	want := filepath.Join(base, "identity", ".whatsnew_seen.json")
-	if got := StatePath(base); got != want {
+	if got, want := StatePath("/opt/proxsave/log"), "/opt/proxsave/log/.whatsnew_seen.json"; got != want {
 		t.Fatalf("StatePath = %q, want %q", got, want)
+	}
+	if got, want := LegacyStatePath("/opt/proxsave"), "/opt/proxsave/identity/.whatsnew_seen.json"; got != want {
+		t.Fatalf("LegacyStatePath = %q, want %q", got, want)
 	}
 }
 
 // TestMarkSeenLeavesNoTmp: the write goes through a ".tmp" sibling renamed into place,
-// so the identity dir must hold no leftover temp afterwards.
+// so LOG_PATH must hold no leftover temp afterwards.
 func TestMarkSeenLeavesNoTmp(t *testing.T) {
 	base := t.TempDir()
-	if err := MarkSeen(base, "0.30.0"); err != nil {
+	if err := MarkSeen(testLoc(base), "0.30.0"); err != nil {
 		t.Fatalf("MarkSeen: %v", err)
 	}
 	dir := filepath.Dir(StatePath(base))
 	entries, err := os.ReadDir(dir)
 	if err != nil {
-		t.Fatalf("read identity dir: %v", err)
+		t.Fatalf("read LOG_PATH: %v", err)
 	}
 	for _, e := range entries {
 		if filepath.Ext(e.Name()) == ".tmp" {

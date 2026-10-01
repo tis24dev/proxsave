@@ -17,8 +17,9 @@ var whatsnewShouldWarn = whatsnew.ShouldWarn
 // the counterpart of Screen 0 (maybeShowWhatsnew): while the seen-flag is unseen it writes a
 // single WARNING line that rides the existing ParseLogCounts -> LogCategories -> email/webhook
 // capture path (no new NotificationData field, no dispatch, no goroutine). It is a pure gated
-// logger call: one filesystem read via the gate, a semver compare, then a buffered write, so
-// it never touches backup outcome or timing (NOTF-03). It fails toward SILENCE: on a gate error
+// logger call: one filesystem read via the gate (bounded by FS_IO_TIMEOUT), a semver compare,
+// then a buffered write, so it never touches backup outcome or timing (NOTF-03). It fails
+// toward SILENCE: on a gate error
 // or a seen verdict it emits only DEBUG lines, never the WARNING. A corrupt seen-flag
 // (errors.Is(err, whatsnew.ErrStateParse)) self-heals best-effort: it quarantines the unreadable
 // file to .corrupt and re-seeds last_seen=current via whatsnewSaveSeen (a failed write logs a
@@ -27,25 +28,36 @@ var whatsnewShouldWarn = whatsnew.ShouldWarn
 // the filesystem. Any non-parse error emits only the generic gate-error DEBUG line without
 // writing. The DEBUG bracket lines are bare-fact English; the single imperative lives only in
 // the locked WARNING copy.
-func maybeWarnWhatsnew(logger *logging.Logger, baseDir, toolVersion string, dryRun bool) {
+//
+// loc places the seen-flag in LOG_PATH (whatsnewLocationFromConfig). Under --dry-run it is made
+// ReadOnly, so not even the one-time move of the flag from identity/ happens: a check that
+// would need it stays silent instead. Outside --dry-run this is also where a run drops the
+// identity/ copies of .daemon.pid and .daemon_info.json the daemon wrote for the previous
+// release's upgrade verification (removeLegacyDaemonCopies), with a DEBUG line per file.
+func maybeWarnWhatsnew(logger *logging.Logger, loc whatsnew.Location, toolVersion string, dryRun bool) {
 	if logger == nil {
 		return
 	}
+	if dryRun {
+		loc.ReadOnly = true
+	} else {
+		removeLegacyDaemonCopies(loc.BaseDir, logger.Debug)
+	}
 	logger.Debug("Checking for unseen ProxSave release notes (current %s)", toolVersion)
-	show, ver, err := whatsnewShouldWarn(baseDir, toolVersion)
+	show, ver, err := whatsnewShouldWarn(loc, toolVersion)
 	switch {
 	case err != nil:
 		if errors.Is(err, whatsnew.ErrStateParse) {
 			// Corrupt seen-flag self-heal. Under --dry-run the preflight must not mutate the
 			// filesystem, so skip the quarantine+re-seed write and just log; the flag heals on
 			// the next non-dry run. Otherwise log the ACTUAL outcome (a best-effort MarkSeen can
-			// fail on a read-only identity dir; the DEBUG line must not claim a re-seed that did
+			// fail on a read-only LOG_PATH; the DEBUG line must not claim a re-seed that did
 			// not happen).
 			switch {
 			case dryRun:
 				logger.Debug("Release notes check: corrupt seen-flag self-heal skipped (dry-run)")
 			default:
-				if serr := whatsnewSaveSeen(baseDir, toolVersion); serr != nil {
+				if serr := whatsnewSaveSeen(loc, toolVersion); serr != nil {
 					logger.Debug("Release notes check: corrupt seen-flag self-heal write failed: %v", serr)
 				} else {
 					logger.Debug("Release notes check self-healed: corrupt seen-flag quarantined to .corrupt and re-seeded to the current version")

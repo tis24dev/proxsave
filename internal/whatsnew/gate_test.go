@@ -53,7 +53,7 @@ func TestIsUnseen(t *testing.T) {
 func TestShouldWarn(t *testing.T) {
 	t.Run("absent flag shows normalized version", func(t *testing.T) {
 		base := t.TempDir()
-		show, ver, err := ShouldWarn(base, "0.30.0")
+		show, ver, err := ShouldWarn(testLoc(base), "0.30.0")
 		if err != nil {
 			t.Fatalf("ShouldWarn absent flag: unexpected err %v", err)
 		}
@@ -64,10 +64,10 @@ func TestShouldWarn(t *testing.T) {
 
 	t.Run("older last-seen shows", func(t *testing.T) {
 		base := t.TempDir()
-		if err := MarkSeen(base, "0.29.0"); err != nil {
+		if err := MarkSeen(testLoc(base), "0.29.0"); err != nil {
 			t.Fatalf("MarkSeen: %v", err)
 		}
-		show, ver, err := ShouldWarn(base, "0.30.0")
+		show, ver, err := ShouldWarn(testLoc(base), "0.30.0")
 		if err != nil {
 			t.Fatalf("ShouldWarn older last-seen: unexpected err %v", err)
 		}
@@ -78,10 +78,10 @@ func TestShouldWarn(t *testing.T) {
 
 	t.Run("seen is silent", func(t *testing.T) {
 		base := t.TempDir()
-		if err := MarkSeen(base, "0.30.0"); err != nil {
+		if err := MarkSeen(testLoc(base), "0.30.0"); err != nil {
 			t.Fatalf("MarkSeen: %v", err)
 		}
-		show, ver, err := ShouldWarn(base, "0.30.0")
+		show, ver, err := ShouldWarn(testLoc(base), "0.30.0")
 		if err != nil {
 			t.Fatalf("ShouldWarn seen: unexpected err %v", err)
 		}
@@ -92,10 +92,10 @@ func TestShouldWarn(t *testing.T) {
 
 	t.Run("downgrade is silent", func(t *testing.T) {
 		base := t.TempDir()
-		if err := MarkSeen(base, "0.30.0"); err != nil {
+		if err := MarkSeen(testLoc(base), "0.30.0"); err != nil {
 			t.Fatalf("MarkSeen: %v", err)
 		}
-		show, ver, err := ShouldWarn(base, "0.29.0")
+		show, ver, err := ShouldWarn(testLoc(base), "0.29.0")
 		if err != nil {
 			t.Fatalf("ShouldWarn downgrade: unexpected err %v", err)
 		}
@@ -106,7 +106,7 @@ func TestShouldWarn(t *testing.T) {
 
 	t.Run("dev build short-circuits before state read", func(t *testing.T) {
 		base := t.TempDir()
-		show, ver, err := ShouldWarn(base, "0.0.0-dev")
+		show, ver, err := ShouldWarn(testLoc(base), "0.0.0-dev")
 		if err != nil {
 			t.Fatalf("ShouldWarn dev build: unexpected err %v", err)
 		}
@@ -117,7 +117,7 @@ func TestShouldWarn(t *testing.T) {
 
 	t.Run("version is v-stripped", func(t *testing.T) {
 		base := t.TempDir()
-		show, ver, err := ShouldWarn(base, "v0.30.0")
+		show, ver, err := ShouldWarn(testLoc(base), "v0.30.0")
 		if err != nil {
 			t.Fatalf("ShouldWarn v-prefixed: unexpected err %v", err)
 		}
@@ -134,7 +134,7 @@ func TestShouldWarn(t *testing.T) {
 		if err := os.WriteFile(StatePath(base), []byte("{not json"), 0o644); err != nil {
 			t.Fatalf("write garbage: %v", err)
 		}
-		show, ver, err := ShouldWarn(base, "0.30.0")
+		show, ver, err := ShouldWarn(testLoc(base), "0.30.0")
 		if err == nil {
 			t.Fatalf("ShouldWarn corrupt flag err = nil, want non-nil")
 		}
@@ -145,7 +145,7 @@ func TestShouldWarn(t *testing.T) {
 
 	t.Run("unparseable current fails toward silence", func(t *testing.T) {
 		base := t.TempDir()
-		show, ver, err := ShouldWarn(base, "not-a-version")
+		show, ver, err := ShouldWarn(testLoc(base), "not-a-version")
 		if err == nil {
 			t.Fatalf("ShouldWarn unparseable current err = nil, want non-nil")
 		}
@@ -209,10 +209,10 @@ func TestDevBuildGateSilent(t *testing.T) {
 	for _, v := range devVersions {
 		t.Run(v, func(t *testing.T) {
 			base := t.TempDir()
-			if show, body, err := Decide(base, v); show || body != "" || err != nil {
+			if show, body, err := Decide(testLoc(base), v); show || body != "" || err != nil {
 				t.Fatalf("Decide(%q) = (%v, %q, %v), want (false, \"\", nil)", v, show, body, err)
 			}
-			if show, ver, err := ShouldWarn(base, v); show || ver != "" || err != nil {
+			if show, ver, err := ShouldWarn(testLoc(base), v); show || ver != "" || err != nil {
 				t.Fatalf("ShouldWarn(%q) = (%v, %q, %v), want (false, \"\", nil)", v, show, ver, err)
 			}
 		})
@@ -224,7 +224,7 @@ func TestDevBuildGateSilent(t *testing.T) {
 // least one bulleted highlight (structural, so it does not couple to the exact 0.30 copy).
 func TestDecideAbsentFlagShows(t *testing.T) {
 	base := t.TempDir()
-	show, body, err := Decide(base, "0.30.0")
+	show, body, err := Decide(testLoc(base), "0.30.0")
 	if err != nil {
 		t.Fatalf("Decide: unexpected err %v", err)
 	}
@@ -246,7 +246,7 @@ func TestDecideAbsentFlagShows(t *testing.T) {
 // IsDevBuild guard, before any state read.
 func TestDecideDevBuildSilent(t *testing.T) {
 	base := t.TempDir()
-	show, body, err := Decide(base, "0.0.0-dev")
+	show, body, err := Decide(testLoc(base), "0.0.0-dev")
 	if err != nil {
 		t.Fatalf("Decide dev build: unexpected err %v", err)
 	}
@@ -255,14 +255,14 @@ func TestDecideDevBuildSilent(t *testing.T) {
 	}
 }
 
-// TestDecideAfterMarkSeenSilent: after MarkSeen(base, 0.30.0), Decide with current 0.30.0
+// TestDecideAfterMarkSeenSilent: after MarkSeen(testLoc(base), 0.30.0), Decide with current 0.30.0
 // returns (false, "", nil) because the version is already seen.
 func TestDecideAfterMarkSeenSilent(t *testing.T) {
 	base := t.TempDir()
-	if err := MarkSeen(base, "0.30.0"); err != nil {
+	if err := MarkSeen(testLoc(base), "0.30.0"); err != nil {
 		t.Fatalf("MarkSeen: %v", err)
 	}
-	show, body, err := Decide(base, "0.30.0")
+	show, body, err := Decide(testLoc(base), "0.30.0")
 	if err != nil {
 		t.Fatalf("Decide after MarkSeen: unexpected err %v", err)
 	}
@@ -277,10 +277,10 @@ func TestDecideAfterMarkSeenSilent(t *testing.T) {
 // did not cover.
 func TestDecideDowngradeSilent(t *testing.T) {
 	base := t.TempDir()
-	if err := MarkSeen(base, "0.30.0"); err != nil {
+	if err := MarkSeen(testLoc(base), "0.30.0"); err != nil {
 		t.Fatalf("MarkSeen: %v", err)
 	}
-	show, body, err := Decide(base, "0.29.0")
+	show, body, err := Decide(testLoc(base), "0.29.0")
 	if err != nil {
 		t.Fatalf("Decide downgrade: unexpected err %v", err)
 	}
@@ -293,10 +293,10 @@ func TestDecideDowngradeSilent(t *testing.T) {
 // downgrade too, complementing the existing TestShouldWarn "downgrade is silent" subtest.
 func TestShouldWarnDowngradeSilent(t *testing.T) {
 	base := t.TempDir()
-	if err := MarkSeen(base, "0.30.0"); err != nil {
+	if err := MarkSeen(testLoc(base), "0.30.0"); err != nil {
 		t.Fatalf("MarkSeen: %v", err)
 	}
-	show, ver, err := ShouldWarn(base, "0.29.0")
+	show, ver, err := ShouldWarn(testLoc(base), "0.29.0")
 	if err != nil {
 		t.Fatalf("ShouldWarn downgrade: unexpected err %v", err)
 	}
@@ -310,7 +310,7 @@ func TestShouldWarnDowngradeSilent(t *testing.T) {
 // upgrade is silent -- the line's notes are seen exactly once across the whole X.Y.Z line.
 func TestDecideBetaShowsFinalNotes(t *testing.T) {
 	base := t.TempDir()
-	show, body, err := Decide(base, "0.30.0-beta6")
+	show, body, err := Decide(testLoc(base), "0.30.0-beta6")
 	if err != nil || !show {
 		t.Fatalf("Decide(beta) = (%v, _, %v), want show=true, nil err", show, err)
 	}
@@ -320,13 +320,13 @@ func TestDecideBetaShowsFinalNotes(t *testing.T) {
 	if strings.Contains(body, "This version has updates. See the changelog") {
 		t.Fatalf("beta rendered the empty-state instead of the final notes\n%s", body)
 	}
-	if err := MarkSeen(base, "0.30.0-beta6"); err != nil {
+	if err := MarkSeen(testLoc(base), "0.30.0-beta6"); err != nil {
 		t.Fatalf("MarkSeen: %v", err)
 	}
-	if show, _, err := Decide(base, "0.30.0"); show || err != nil {
+	if show, _, err := Decide(testLoc(base), "0.30.0"); show || err != nil {
 		t.Fatalf("Decide(final after beta ack) = (%v, _, %v), want (false, _, nil)", show, err)
 	}
-	if show, _, err := ShouldWarn(base, "0.30.0"); show || err != nil {
+	if show, _, err := ShouldWarn(testLoc(base), "0.30.0"); show || err != nil {
 		t.Fatalf("ShouldWarn(final after beta ack) = (%v, _, %v), want (false, _, nil)", show, err)
 	}
 }

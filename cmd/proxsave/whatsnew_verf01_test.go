@@ -32,13 +32,13 @@ import (
 func TestVERF01(t *testing.T) {
 	t.Run("fresh_install_silent", func(t *testing.T) {
 		base := t.TempDir()
-		if err := whatsnew.MarkSeen(base, "0.30.0"); err != nil { // STATE-03 install seed
+		if err := whatsnew.MarkSeen(testWhatsnewLoc(base), "0.30.0"); err != nil { // STATE-03 install seed
 			t.Fatalf("MarkSeen (install seed): %v", err)
 		}
-		if show, body, err := whatsnew.Decide(base, "0.30.0"); show || body != "" || err != nil {
+		if show, body, err := whatsnew.Decide(testWhatsnewLoc(base), "0.30.0"); show || body != "" || err != nil {
 			t.Fatalf("Decide after fresh seed = (%v, %q, %v), want (false, \"\", nil)", show, body, err)
 		}
-		if show, ver, err := whatsnew.ShouldWarn(base, "0.30.0"); show || ver != "" || err != nil {
+		if show, ver, err := whatsnew.ShouldWarn(testWhatsnewLoc(base), "0.30.0"); show || ver != "" || err != nil {
 			t.Fatalf("ShouldWarn after fresh seed = (%v, %q, %v), want (false, \"\", nil)", show, ver, err)
 		}
 	})
@@ -54,7 +54,7 @@ func TestVERF01(t *testing.T) {
 			return nil // continue
 		}
 
-		maybeShowWhatsnew(context.Background(), nil, base, current)
+		maybeShowWhatsnew(context.Background(), nil, testWhatsnewLoc(base), current)
 		if runCalls != 1 {
 			t.Fatalf("first pass: whatsnewRun calls = %d, want 1", runCalls)
 		}
@@ -62,11 +62,11 @@ func TestVERF01(t *testing.T) {
 			t.Fatalf("first pass: seen flag not written: %v", err)
 		}
 
-		maybeShowWhatsnew(context.Background(), nil, base, current)
+		maybeShowWhatsnew(context.Background(), nil, testWhatsnewLoc(base), current)
 		if runCalls != 1 {
 			t.Fatalf("second pass: whatsnewRun calls = %d, want 1 (Screen 0 shows once)", runCalls)
 		}
-		if show, ver, err := whatsnew.ShouldWarn(base, current); show || ver != "" || err != nil {
+		if show, ver, err := whatsnew.ShouldWarn(testWhatsnewLoc(base), current); show || ver != "" || err != nil {
 			t.Fatalf("ShouldWarn after continue = (%v, %q, %v), want (false, \"\", nil)", show, ver, err)
 		}
 	})
@@ -82,7 +82,7 @@ func TestVERF01(t *testing.T) {
 			if err := logger.OpenLogFile(logPath); err != nil {
 				t.Fatalf("OpenLogFile: %v", err)
 			}
-			maybeWarnWhatsnew(logger, base, "0.30.0", false)
+			maybeWarnWhatsnew(logger, testWhatsnewLoc(base), "0.30.0", false)
 			if err := logger.CloseLogFile(); err != nil {
 				t.Fatalf("CloseLogFile: %v", err)
 			}
@@ -110,7 +110,7 @@ func TestVERF01(t *testing.T) {
 		t.Cleanup(func() { whatsnewAfterUpgradeInteractive = origInteractive })
 
 		base := t.TempDir()
-		if err := whatsnew.MarkSeen(base, "0.32.0"); err != nil {
+		if err := whatsnew.MarkSeen(testWhatsnewLoc(base), "0.32.0"); err != nil {
 			t.Fatalf("seed previous version: %v", err)
 		}
 		if shouldRunWhatsnewAfterUpgrade(&cli.Args{UpgradeAutoYes: true}, upgradeRunOptions{}) {
@@ -123,7 +123,7 @@ func TestVERF01(t *testing.T) {
 		if err := logger.OpenLogFile(logPath); err != nil {
 			t.Fatalf("OpenLogFile: %v", err)
 		}
-		maybeWarnWhatsnew(logger, base, "0.33.0", false)
+		maybeWarnWhatsnew(logger, testWhatsnewLoc(base), "0.33.0", false)
 		if err := logger.CloseLogFile(); err != nil {
 			t.Fatalf("CloseLogFile: %v", err)
 		}
@@ -132,7 +132,7 @@ func TestVERF01(t *testing.T) {
 		if warningCount != 1 {
 			t.Fatalf("warningCount = %d, want 1", warningCount)
 		}
-		state, present, err := whatsnew.LoadState(base)
+		state, present, err := whatsnew.LoadState(testWhatsnewLoc(base))
 		if err != nil || !present || state.LastSeenNotesVersion != "0.32.0" {
 			t.Fatalf("seen state changed after unattended path: state=%+v present=%v err=%v", state, present, err)
 		}
@@ -168,13 +168,13 @@ func TestVERF01(t *testing.T) {
 					return tc.runErr
 				}
 
-				maybeShowWhatsnew(context.Background(), nil, base, "0.30.0")
+				maybeShowWhatsnew(context.Background(), nil, testWhatsnewLoc(base), "0.30.0")
 
-				state, present, err := whatsnew.LoadState(base)
+				state, present, err := whatsnew.LoadState(testWhatsnewLoc(base))
 				if err != nil || !present || state.LastSeenNotesVersion != "0.30.0" {
 					t.Fatalf("%s left the flag unwritten: state=%+v present=%v err=%v", tc.name, state, present, err)
 				}
-				if show, _, err := whatsnew.ShouldWarn(base, "0.30.0"); show || err != nil {
+				if show, _, err := whatsnew.ShouldWarn(testWhatsnewLoc(base), "0.30.0"); show || err != nil {
 					t.Fatalf("the warning survived a %s: ShouldWarn = (%v, %v)", tc.name, show, err)
 				}
 			})
@@ -193,12 +193,12 @@ func TestVERF01(t *testing.T) {
 			return shell.ClosedByUIFailure(errors.New("read /dev/tty: input/output error"))
 		}
 
-		maybeShowWhatsnew(context.Background(), nil, base, "0.30.0")
+		maybeShowWhatsnew(context.Background(), nil, testWhatsnewLoc(base), "0.30.0")
 
 		if _, err := os.Stat(whatsnew.StatePath(base)); !os.IsNotExist(err) {
 			t.Fatalf("the seen-flag was written after the UI died: the operator never saw the notes (stat err=%v)", err)
 		}
-		if show, _, err := whatsnew.ShouldWarn(base, "0.30.0"); !show || err != nil {
+		if show, _, err := whatsnew.ShouldWarn(testWhatsnewLoc(base), "0.30.0"); !show || err != nil {
 			t.Fatalf("the warning was disarmed by a UI failure: ShouldWarn = (%v, %v)", show, err)
 		}
 	})
@@ -214,7 +214,7 @@ func TestVERF01(t *testing.T) {
 			return context.DeadlineExceeded
 		}
 
-		maybeShowWhatsnew(context.Background(), nil, base, "0.30.0")
+		maybeShowWhatsnew(context.Background(), nil, testWhatsnewLoc(base), "0.30.0")
 
 		if _, err := os.Stat(whatsnew.StatePath(base)); !os.IsNotExist(err) {
 			t.Fatalf("an untouched screen wrote the flag; StatePath err = %v, want not-exist", err)
@@ -234,12 +234,12 @@ func TestVERF01(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
 		cancel()
 
-		maybeShowWhatsnew(ctx, nil, base, "0.30.0")
+		maybeShowWhatsnew(ctx, nil, testWhatsnewLoc(base), "0.30.0")
 
 		if _, err := os.Stat(whatsnew.StatePath(base)); !os.IsNotExist(err) {
 			t.Fatalf("a cancelled parent wrote the flag; StatePath err = %v, want not-exist", err)
 		}
-		if show, ver, err := whatsnew.ShouldWarn(base, "0.30.0"); !show || ver != "0.30.0" || err != nil {
+		if show, ver, err := whatsnew.ShouldWarn(testWhatsnewLoc(base), "0.30.0"); !show || ver != "0.30.0" || err != nil {
 			t.Fatalf("ShouldWarn = (%v, %q, %v), want (true, \"0.30.0\", nil)", show, ver, err)
 		}
 	})

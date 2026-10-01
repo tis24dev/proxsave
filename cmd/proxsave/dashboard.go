@@ -78,12 +78,12 @@ const whatsnewScreenTimeout = 10 * time.Minute
 // (context.DeadlineExceeded) or Esc (shell.ErrAborted) is a non-nil error and must leave
 // the flag untouched, so the write sits inside `if err == nil`, never in a
 // defer/teardown (SCRN-03, SCRN-04, Pitfall 9).
-func maybeShowWhatsnew(ctx context.Context, session *shell.Session, baseDir, toolVersion string) {
-	show, body := whatsnewResolve(baseDir, toolVersion)
+func maybeShowWhatsnew(ctx context.Context, session *shell.Session, loc whatsnew.Location, toolVersion string) {
+	show, body := whatsnewResolve(loc, toolVersion)
 	if !show {
 		return
 	}
-	whatsnewRender(ctx, session, baseDir, toolVersion, body)
+	whatsnewRender(ctx, session, loc, toolVersion, body)
 }
 
 // whatsnewResolve makes the Screen 0 SHOW/skip decision WITHOUT touching any TTY, so a
@@ -96,11 +96,16 @@ func maybeShowWhatsnew(ctx context.Context, session *shell.Session, baseDir, too
 // args.DryRun), so the self-heal write can never coexist with --dry-run. Callers MUST NOT
 // start a session unless this returns show=true: starting one only to Close it on a no-op
 // leaks the terminal's async capability-query responses (mode 2026/2027) into the shell.
-func whatsnewResolve(baseDir, toolVersion string) (show bool, body string) {
-	show, body, err := whatsnewDecide(baseDir, toolVersion)
+//
+// It is also where the dashboard and --show-whatsnew drop the identity/ copies of .daemon.pid
+// and .daemon_info.json the daemon wrote for the previous release's upgrade verification
+// (removeLegacyDaemonCopies), silently: the dashboard has no visible log.
+func whatsnewResolve(loc whatsnew.Location, toolVersion string) (show bool, body string) {
+	removeLegacyDaemonCopies(loc.BaseDir, nil)
+	show, body, err := whatsnewDecide(loc, toolVersion)
 	if err != nil {
 		if errors.Is(err, whatsnew.ErrStateParse) {
-			_ = whatsnewSaveSeen(baseDir, toolVersion)
+			_ = whatsnewSaveSeen(loc, toolVersion)
 		}
 		return false, ""
 	}
@@ -130,7 +135,7 @@ func whatsnewResolve(baseDir, toolVersion string) (show bool, body string) {
 // post-upgrade hand-off gates on whatsnewAfterUpgradeInteractive, and --dry-run
 // returns before rendering. An unattended run never reaches this function, so
 // reaching it means a person saw the screen.
-func whatsnewRender(ctx context.Context, session *shell.Session, baseDir, toolVersion, body string) {
+func whatsnewRender(ctx context.Context, session *shell.Session, loc whatsnew.Location, toolVersion, body string) {
 	wnCtx, cancel := context.WithTimeout(ctx, whatsnewScreenTimeout)
 	defer cancel()
 	err := whatsnewRun(wnCtx, session, body)
@@ -162,7 +167,7 @@ func whatsnewRender(ctx context.Context, session *shell.Session, baseDir, toolVe
 	if errors.Is(err, shell.ErrClosed) && !shell.IsUserInterrupt(err) {
 		return
 	}
-	_ = whatsnewSaveSeen(baseDir, toolVersion)
+	_ = whatsnewSaveSeen(loc, toolVersion)
 }
 
 // showWhatsnewScreen runs ONLY Screen 0 (what's new) and returns, without the dashboard
@@ -196,7 +201,12 @@ func showWhatsnewScreen(ctx context.Context, args *cli.Args, toolVersion string)
 	// which then leak into the parent shell as stray input ("2026: command not found"). So
 	// a not-unseen verdict (or a corrupt-flag self-heal) must never spin up a TTY at all.
 	baseDir, _ := detectedBaseDirOrFallback()
-	show, body := whatsnewResolve(baseDir, toolVersion)
+	configPath := ""
+	if args != nil {
+		configPath = args.ConfigPath
+	}
+	loc := whatsnewLocation(configPath, baseDir)
+	show, body := whatsnewResolve(loc, toolVersion)
 	if !show {
 		return
 	}
@@ -209,10 +219,6 @@ func showWhatsnewScreen(ctx context.Context, args *cli.Args, toolVersion string)
 		if strings.TrimSpace(buildSig) == "" {
 			buildSig = "n/a"
 		}
-		configPath := ""
-		if args != nil {
-			configPath = args.ConfigPath
-		}
 		session = shell.Start(ctx, shell.Config{
 			AppName:    "ProxSave",
 			Subtitle:   "Dashboard",
@@ -224,7 +230,7 @@ func showWhatsnewScreen(ctx context.Context, args *cli.Args, toolVersion string)
 	}
 	defer func() { _ = session.Close() }()
 
-	whatsnewRender(ctx, session, baseDir, toolVersion, body)
+	whatsnewRender(ctx, session, loc, toolVersion, body)
 }
 
 // dashboardBareInvocationCheck: only a completely bare `proxsave` (no flags
@@ -292,10 +298,10 @@ func maybeRunDashboard(ctx context.Context, args *cli.Args, bootstrap *logging.B
 	// bare-invocation check is needed here -- reaching this line already guarantees
 	// bare + interactive (the early return at the top of maybeRunDashboard), so
 	// Screen 0 stays bare-interactive-only (SCRN-02/05). The base is resolved via the
-	// same detectedBaseDirOrFallback the install seed uses, so write-path == read-path
-	// (open question A1).
+	// same detectedBaseDirOrFallback the install seed uses and LOG_PATH comes from the
+	// same configuration, so write-path == read-path (open question A1).
 	baseDir, _ := detectedBaseDirOrFallback()
-	maybeShowWhatsnew(ctx, session, baseDir, toolVersion)
+	maybeShowWhatsnew(ctx, session, whatsnewLocation(args.ConfigPath, baseDir), toolVersion)
 
 	for {
 		// Idle timeout: a pty-allocating wrapper (script, tmux, ssh -tt) that

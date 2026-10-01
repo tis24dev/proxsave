@@ -13,11 +13,12 @@ import (
 	"github.com/tis24dev/proxsave/internal/logging"
 	"github.com/tis24dev/proxsave/internal/orchestrator"
 	"github.com/tis24dev/proxsave/internal/types"
+	"github.com/tis24dev/proxsave/internal/whatsnew"
 )
 
 // stubWhatsnewShouldWarn saves and restores the whatsnewShouldWarn seam so a test can
 // drive the gate verdict without real disk or a GitHub fetch, and leak nothing.
-func stubWhatsnewShouldWarn(t *testing.T, fn func(baseDir, current string) (bool, string, error)) {
+func stubWhatsnewShouldWarn(t *testing.T, fn func(loc whatsnew.Location, current string) (bool, string, error)) {
 	t.Helper()
 	orig := whatsnewShouldWarn
 	t.Cleanup(func() { whatsnewShouldWarn = orig })
@@ -62,12 +63,12 @@ const lockedWarnCopy = "ProxSave 0.30.0 has unseen release notes. Open proxsave 
 // TestMaybeWarnWhatsnewUnseen: an unseen verdict emits EXACTLY ONE WARNING (the locked
 // copy) and the buffer carries it, bracketed by DEBUG lines.
 func TestMaybeWarnWhatsnewUnseen(t *testing.T) {
-	stubWhatsnewShouldWarn(t, func(baseDir, current string) (bool, string, error) {
+	stubWhatsnewShouldWarn(t, func(loc whatsnew.Location, current string) (bool, string, error) {
 		return true, "0.30.0", nil
 	})
 	logger, buf := captureLogger(t)
 
-	maybeWarnWhatsnew(logger, "/base", "0.30.0", false)
+	maybeWarnWhatsnew(logger, testWhatsnewLoc("/base"), "0.30.0", false)
 
 	if got := logger.WarningCount(); got != 1 {
 		t.Fatalf("WarningCount = %d, want 1", got)
@@ -82,12 +83,12 @@ func TestMaybeWarnWhatsnewUnseen(t *testing.T) {
 
 // TestMaybeWarnWhatsnewSeen: a seen verdict emits no WARNING and a bare-fact DEBUG line.
 func TestMaybeWarnWhatsnewSeen(t *testing.T) {
-	stubWhatsnewShouldWarn(t, func(baseDir, current string) (bool, string, error) {
+	stubWhatsnewShouldWarn(t, func(loc whatsnew.Location, current string) (bool, string, error) {
 		return false, "", nil
 	})
 	logger, buf := captureLogger(t)
 
-	maybeWarnWhatsnew(logger, "/base", "0.30.0", false)
+	maybeWarnWhatsnew(logger, testWhatsnewLoc("/base"), "0.30.0", false)
 
 	if got := logger.WarningCount(); got != 0 {
 		t.Fatalf("WarningCount = %d, want 0", got)
@@ -103,12 +104,12 @@ func TestMaybeWarnWhatsnewSeen(t *testing.T) {
 // TestMaybeWarnWhatsnewGateError: a gate error fails toward silence (no WARNING) and emits
 // a bare-fact DEBUG skip line carrying the error.
 func TestMaybeWarnWhatsnewGateError(t *testing.T) {
-	stubWhatsnewShouldWarn(t, func(baseDir, current string) (bool, string, error) {
+	stubWhatsnewShouldWarn(t, func(loc whatsnew.Location, current string) (bool, string, error) {
 		return false, "", errors.New("boom")
 	})
 	logger, buf := captureLogger(t)
 
-	maybeWarnWhatsnew(logger, "/base", "0.30.0", false)
+	maybeWarnWhatsnew(logger, testWhatsnewLoc("/base"), "0.30.0", false)
 
 	if got := logger.WarningCount(); got != 0 {
 		t.Fatalf("WarningCount = %d, want 0 (fail toward silence)", got)
@@ -124,12 +125,12 @@ func TestMaybeWarnWhatsnewGateError(t *testing.T) {
 // TestMaybeWarnWhatsnewCopy: the emitted WARNING equals the locked single line with the
 // normalized version and is pure ASCII (no em dash U+2014, no en dash U+2013, no emoji).
 func TestMaybeWarnWhatsnewCopy(t *testing.T) {
-	stubWhatsnewShouldWarn(t, func(baseDir, current string) (bool, string, error) {
+	stubWhatsnewShouldWarn(t, func(loc whatsnew.Location, current string) (bool, string, error) {
 		return true, "0.30.0", nil
 	})
 	logger, _ := captureLogger(t)
 
-	maybeWarnWhatsnew(logger, "/base", "0.30.0", false)
+	maybeWarnWhatsnew(logger, testWhatsnewLoc("/base"), "0.30.0", false)
 
 	got := singleEmittedWarning(t, logger)
 	if got != lockedWarnCopy {
@@ -142,11 +143,11 @@ func TestMaybeWarnWhatsnewCopy(t *testing.T) {
 
 // TestMaybeWarnWhatsnewNilLogger: a nil logger is a no-op and must not panic.
 func TestMaybeWarnWhatsnewNilLogger(t *testing.T) {
-	stubWhatsnewShouldWarn(t, func(baseDir, current string) (bool, string, error) {
+	stubWhatsnewShouldWarn(t, func(loc whatsnew.Location, current string) (bool, string, error) {
 		return true, "0.30.0", nil
 	})
 	// Must not panic.
-	maybeWarnWhatsnew(nil, "/base", "0.30.0", false)
+	maybeWarnWhatsnew(nil, testWhatsnewLoc("/base"), "0.30.0", false)
 }
 
 // TestMaybeWarnWhatsnewDeliveredToEmailCategories exercises the REAL gate (no stub) and the
@@ -164,7 +165,7 @@ func TestMaybeWarnWhatsnewDeliveredToEmailCategories(t *testing.T) {
 		t.Fatalf("OpenLogFile: %v", err)
 	}
 
-	maybeWarnWhatsnew(logger, base, "v0.30.0", false) // real ShouldWarn; v-prefix exercises the v-strip
+	maybeWarnWhatsnew(logger, testWhatsnewLoc(base), "v0.30.0", false) // real ShouldWarn; v-prefix exercises the v-strip
 
 	if err := logger.CloseLogFile(); err != nil {
 		t.Fatalf("CloseLogFile: %v", err)

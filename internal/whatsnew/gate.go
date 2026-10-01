@@ -84,11 +84,11 @@ func IsUnseen(current, lastSeen string, present bool) (bool, error) {
 // prerelease/metadata) so a prerelease build sees its final line's notes (a beta of 0.30.0
 // gets the 0.30.0 entry). RenderBody's header still shows the RAW running build, so a beta
 // honestly reads "ProxSave 0.30.0-beta6" above the 0.30.0 notes.
-func Decide(baseDir, current string) (show bool, body string, err error) {
+func Decide(loc Location, current string) (show bool, body string, err error) {
 	if IsDevBuild(current) {
 		return false, "", nil
 	}
-	state, present, err := LoadState(baseDir)
+	state, present, err := LoadState(loc)
 	if err != nil {
 		return false, "", err
 	}
@@ -109,11 +109,11 @@ func Decide(baseDir, current string) (show bool, body string, err error) {
 // returns the normalized (v-stripped) current version for the caller's warning copy. Like
 // Decide it fails toward SILENCE: every error path and every not-unseen path returns
 // show=false with an empty version, so the nudge can only ever go quiet, never show-all.
-func ShouldWarn(baseDir, current string) (show bool, version string, err error) {
+func ShouldWarn(loc Location, current string) (show bool, version string, err error) {
 	if IsDevBuild(current) {
 		return false, "", nil
 	}
-	state, present, err := LoadState(baseDir)
+	state, present, err := LoadState(loc)
 	if err != nil {
 		return false, "", err
 	}

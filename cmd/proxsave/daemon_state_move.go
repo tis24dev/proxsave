@@ -5,6 +5,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/tis24dev/proxsave/internal/health"
 	"github.com/tis24dev/proxsave/internal/logging"
@@ -76,4 +77,45 @@ func moveDaemonStateEntry(identityDir, stateDir, name string) bool {
 	}
 	logging.Debug("daemon state: moved %s from identity/ to daemon_state/", name)
 	return true
+}
+
+// removeLegacyDaemonCopies deletes identity/.daemon.pid and identity/.daemon_info.json once
+// daemon_state/ has the same file. The daemon writes those two copies only on the start that
+// moved its files out of identity/, for the previous release, which restarts the daemon during
+// --upgrade and then polls identity/ to confirm the restart. Once this release's what's-new check
+// runs, that verification is over. It runs on every check and is a no-op once identity/ is clean.
+// A copy is kept while daemon_state/ lacks the file, so a daemon an older release still runs is
+// never stripped of its pid file.
+//
+// Best-effort: debugf receives the DEBUG lines (nil keeps it silent, for the dashboard, which has
+// no visible log).
+func removeLegacyDaemonCopies(baseDir string, debugf func(format string, args ...any)) {
+	if strings.TrimSpace(baseDir) == "" {
+		return
+	}
+	if debugf == nil {
+		debugf = func(string, ...any) {}
+	}
+	pairs := []struct{ legacy, current string }{
+		{health.LegacyDaemonPIDPath(baseDir), health.DaemonPIDPath(baseDir)},
+		{health.LegacyDaemonInfoPath(baseDir), health.DaemonInfoPath(baseDir)},
+	}
+	for _, p := range pairs {
+		name := filepath.Base(p.legacy)
+		if _, err := os.Lstat(p.legacy); err != nil {
+			if !errors.Is(err, fs.ErrNotExist) {
+				debugf("daemon state: remove %s from identity/ failed error=%v", name, err)
+			}
+			continue
+		}
+		if _, err := os.Lstat(p.current); err != nil {
+			debugf("daemon state: kept %s in identity/, daemon_state/ does not have it", name)
+			continue
+		}
+		if err := os.Remove(p.legacy); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			debugf("daemon state: remove %s from identity/ failed error=%v", name, err)
+			continue
+		}
+		debugf("daemon state: removed %s from identity/, daemon_state/ has it", name)
+	}
 }

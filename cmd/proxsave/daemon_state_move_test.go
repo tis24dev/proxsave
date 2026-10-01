@@ -335,3 +335,33 @@ func TestDaemonStartWithNothingToMoveWritesOnlyDaemonState(t *testing.T) {
 	requireAbsent(t, filepath.Join(identityDir, ".daemon.pid"))
 	requireAbsent(t, filepath.Join(identityDir, ".daemon_info.json"))
 }
+
+// removeLegacyDaemonCopies drops an identity/ copy only while daemon_state/ has the file.
+func TestRemoveLegacyDaemonCopies(t *testing.T) {
+	base := t.TempDir()
+	writeTestFile(t, health.LegacyDaemonPIDPath(base), "123\n")
+	writeTestFile(t, health.LegacyDaemonInfoPath(base), "{}")
+	writeTestFile(t, health.DaemonPIDPath(base), "123\n")
+	// daemon_state/.daemon_info.json deliberately missing.
+
+	var lines []string
+	removeLegacyDaemonCopies(base, func(format string, args ...any) {
+		lines = append(lines, format)
+	})
+
+	requireAbsent(t, health.LegacyDaemonPIDPath(base))
+	if _, err := os.Stat(health.LegacyDaemonInfoPath(base)); err != nil {
+		t.Fatalf("identity/.daemon_info.json removed although daemon_state/ lacks it: %v", err)
+	}
+	if len(lines) != 2 {
+		t.Fatalf("DEBUG lines = %q, want one per file", lines)
+	}
+
+	// Idempotent: a second pass with identity/ clean says nothing.
+	_ = os.Remove(health.LegacyDaemonInfoPath(base))
+	lines = nil
+	removeLegacyDaemonCopies(base, func(format string, args ...any) { lines = append(lines, format) })
+	if len(lines) != 0 {
+		t.Fatalf("second pass logged %q, want nothing", lines)
+	}
+}
