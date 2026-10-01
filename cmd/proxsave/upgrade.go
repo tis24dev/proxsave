@@ -1141,7 +1141,7 @@ func upgradeFooterBody(upgradeErr error, version, configPath, baseDir, telegramC
 	fmt.Println("  --backup           - Run a backup now (what bare proxsave does when non-interactive)")
 	fmt.Println("  --upgrade          - Update proxsave binary to latest release (also adds missing keys to backup.env)")
 	fmt.Println("  --install          - Re-run interactive installation/setup")
-	fmt.Println("  --new-install      - Wipe installation directory (keep build/env/identity) then run installer")
+	fmt.Println("  --new-install      - Wipe installation directory (keep build/daemon_state/env/guards/identity/restore) then run installer")
 	fmt.Println("  --upgrade-config   - Upgrade configuration file using the embedded template (run after installing a new binary)")
 	fmt.Println()
 

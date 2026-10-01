@@ -465,7 +465,7 @@ func installFooterBody(installErr error, configPath, baseDir, telegramCode, perm
 	fmt.Println("  --help             - Show all options")
 	fmt.Println("  --dry-run          - Test without changes")
 	fmt.Println("  --install          - Re-run interactive installation/setup")
-	fmt.Println("  --new-install      - Wipe installation directory (keep build/env/identity) then run installer")
+	fmt.Println("  --new-install      - Wipe installation directory (keep build/daemon_state/env/guards/identity/restore) then run installer")
 	fmt.Println("  --upgrade          - Update proxsave binary to latest release (also adds missing keys to backup.env)")
 	fmt.Println("  --newkey           - Generate a new encryption key for backups")
 	fmt.Println("  --decrypt          - Decrypt an existing backup archive")

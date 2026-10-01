@@ -142,7 +142,7 @@ func Parse() *Args {
 	flag.BoolVar(&args.Install, "install", false,
 		"Run the interactive installer (generate/configure backup.env)")
 	flag.BoolVar(&args.NewInstall, "new-install", false,
-		"Reset the installation directory (preserving build/env/identity) and launch the interactive installer")
+		"Reset the installation directory (preserving build/daemon_state/env/guards/identity/restore) and launch the interactive installer")
 	flag.BoolVar(&args.Upgrade, "upgrade", false,
 		"Download and install the latest ProxSave binary (also upgrades backup.env by adding missing keys from the new template). Append 'y' to auto-confirm (e.g., --upgrade y)")
 	flag.BoolVar(&args.LocalFile, "localfile", false,

@@ -160,7 +160,7 @@ func runDashboardUpgrade(ctx context.Context, session *shell.Session, configPath
 		} else {
 			kw, sty, sym = "FAILED", theme.ErrorText, symErr
 			showDaemonResultScreen(ctx, session, "Upgrade failed", orchestrator.HealthcheckSetupLevelError,
-				"FAILED", "Run 'proxsave --upgrade' from a shell for details.")
+				"FAILED", "The cause is in the upgrade log shown before this screen.")
 		}
 	}
 }

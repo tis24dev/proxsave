@@ -74,7 +74,7 @@ func RunPostInstallAudit(ctx context.Context, session *shell.Session, execPath, 
 
 	var suggestions []installer.PostInstallAuditSuggestion
 	collectErr := components.RunTask(ctx, session, "Post-install check", "Running dry-run...", func(taskCtx context.Context, report func(string)) error {
-		report("Running proxsave --dry-run (this may take a minute)...")
+		report("Running a dry-run backup (this may take a minute)...")
 		found, err := auditCollect(taskCtx, execPath, configPath)
 		if err != nil {
 			return err
