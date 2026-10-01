@@ -237,3 +237,43 @@ func TestFailedStageNamesTheFirstIncompleteStage(t *testing.T) {
 		})
 	}
 }
+
+// A caller's prefix starts every stage line of the call and its detail ends the url= line, so
+// the stages of one attempt read as that attempt's (the daemon's schedule poll).
+func TestDoPrefixesEveryStageLineAndDetailsTheURLLine(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{}`))
+	}))
+	defer srv.Close()
+	base := strings.Replace(srv.URL, "127.0.0.1", "localhost", 1)
+	lg, buf := stageLogger()
+
+	if _, err := New(base, nil, lg).Do(context.Background(), Request{
+		Path: "/api/healthcheck/config", Secret: "SEKRET-abc", LogOperation: "schedule",
+		LogPrefix: "attempt=1/3", LogURLDetail: "frequency=weekly notify_on=warning channels=email",
+	}); err != nil {
+		t.Fatalf("Do: %v", err)
+	}
+	assertInOrder(t, buf.String(),
+		"schedule: attempt=1/3 url="+base+"/api/healthcheck/config frequency=weekly notify_on=warning channels=email\n",
+		"schedule: attempt=1/3 dns ok addr=",
+		"schedule: attempt=1/3 connected\n",
+		"schedule: attempt=1/3 request written\n",
+		"schedule: attempt=1/3 response http=200 elapsed=",
+	)
+
+	// A refused connection: the failed line carries the prefix too.
+	lg, buf = stageLogger()
+	dead := httptest.NewServer(http.NotFoundHandler())
+	deadURL := dead.URL
+	dead.Close()
+	_, err := New(deadURL, nil, lg).Do(context.Background(), Request{
+		Path: "/api/healthcheck/config", LogOperation: "schedule", LogPrefix: "attempt=2/3",
+	})
+	var te *TransportError
+	if !errors.As(err, &te) || te.Stage != "connect" {
+		t.Fatalf("Do against a closed server = %v; want a TransportError with Stage connect", err)
+	}
+	assertInOrder(t, buf.String(), "schedule: attempt=2/3 url="+deadURL+"/api/healthcheck/config\n",
+		"schedule: attempt=2/3 failed stage=connect error=")
+}
