@@ -39,7 +39,7 @@ a cron job, or a recovery where the TUI cannot render. They are not the everyday
    bash -c "$(curl -fsSL https://raw.githubusercontent.com/tis24dev/proxsave/main/install.sh)"
    ```
 
-   or, if you need a fully clean reinstall. This keeps `build/`, `env/`, `guards/`, `identity/` and `restore/` and **deletes everything else under the base directory**, which with stock paths means your local backup archives in `backup/`, the logs in `log/`, and `configs/backup.env`. Both installers ask for confirmation first, defaulting to no. Do not run it as a way to reset the configuration unless your backups also live on secondary or cloud storage:
+   or, if you need a fully clean reinstall. This keeps `build/`, `daemon_state/`, `env/`, `guards/`, `identity/` and `restore/` and **deletes everything else under the base directory**, which with stock paths means your local backup archives in `backup/`, the logs in `log/`, and `configs/backup.env`. Both installers ask for confirmation first, defaulting to no. Do not run it as a way to reset the configuration unless your backups also live on secondary or cloud storage:
 
    ```bash
    bash -c "$(curl -fsSL https://raw.githubusercontent.com/tis24dev/proxsave/main/install.sh)" _ --new-install
@@ -316,7 +316,7 @@ freshly built binary, and for hosts where the dashboard cannot be reached.
 ```bash
 ./build/proxsave --install
 
-# Or perform a clean reinstall. Keeps build/, env/, guards/, identity/ and restore/; deletes everything
+# Or perform a clean reinstall. Keeps build/, daemon_state/, env/, guards/, identity/ and restore/; deletes everything
 # else under the base directory, local backup archives and configs/backup.env included.
 ./build/proxsave --new-install
 ```
@@ -348,9 +348,13 @@ Final install steps still run:
 6. **Encryption**: AGE encryption setup (runs sub-wizard immediately if enabled)
 7. **Scheduler engine**: choose the ProxSave local daemon or system cron. Fresh installs and Overwrite default to the daemon (a resident systemd service with a hang watchdog and healthchecks); editing an existing config keeps its current engine. See [DAEMON.md](DAEMON.md).
 8. **Healthchecks** (daemon only): with the daemon engine, choose the monitoring mode: `Off`, `ProxSave HC Server` (centralized, zero setup, the default), or `Your own server` (self). Self mode opens a follow-up screen to paste your ping URLs, then a verification screen. Centralized mode goes straight to the verification screen, which also hands you the way into your monitoring portal: a single-use link until you set a portal password, the portal address and your sign-in identity afterwards. With the cron engine this choice is dimmed and forced off. See [HEALTHCHECKS.md](HEALTHCHECKS.md).
-9. **Run at (HH:MM)**: the daily backup time (default `02:00`), used by whichever engine you chose (the daemon's daily run, or the cron entry).
-10. **Post-install check (optional)**: Runs `proxsave --dry-run` and shows actionable warnings like `set BACKUP_*=false to disable`, allowing you to disable unused collectors and reduce WARNING noise
-11. **Telegram pairing (optional)**: If Telegram centralized mode is enabled and the installer can load a valid config plus a Server ID, it shows your Server ID and lets you verify pairing with the bot (retry/skip supported). Otherwise installation continues and logs why pairing was skipped.
+9. **Notify level** (daemon with monitoring only): which runs notify you, `Every run`, `Warnings and failures` or `Failures only` (`NOTIFY_ON`). With monitoring off or the cron engine it is not asked and `always` is written. See [CONFIGURATION.md](CONFIGURATION.md#which-runs-get-notified-notify_on).
+10. **Frequency**: how often the backup runs, `Daily` (default), `Weekly` or `Monthly` (`SCHEDULER_FREQUENCY`).
+11. **Weekday** (weekly only): the day of the weekly backup, default Monday (`SCHEDULER_WEEKDAY`).
+12. **Day of month (1-28)** (monthly only): the day of the monthly backup, default 1 (`SCHEDULER_MONTHDAY`). Days 29-31 are not accepted, so no month is skipped.
+13. **Run at (HH:MM)**: the backup time (default `02:00`, `SCHEDULER_TIME`). Frequency, day and time are used by whichever engine you chose: the daemon's schedule, or the cron entry the install writes. When `backup.env` records no schedule yet, the install takes it from an existing proxsave cron line; see [DAEMON.md](DAEMON.md#the-schedule-is-inherited-not-reset).
+14. **Post-install check (optional)**: Runs `proxsave --dry-run` and shows actionable warnings like `set BACKUP_*=false to disable`, allowing you to disable unused collectors and reduce WARNING noise
+15. **Telegram pairing (optional)**: If Telegram centralized mode is enabled and the installer can load a valid config plus a Server ID, it shows your Server ID and lets you verify pairing with the bot (retry/skip supported). Otherwise installation continues and logs why pairing was skipped.
 
 #### Backup monitoring wizard (TUI)
 

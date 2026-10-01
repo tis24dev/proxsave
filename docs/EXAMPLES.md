@@ -176,7 +176,7 @@ The same steps without a TTY:
 ```bash
 # 1. Install
 proxsave --install
-# (use --new-install to wipe everything except build/, env/, guards/, identity/, and restore/ before installing)
+# (use --new-install to wipe everything except build/, daemon_state/, env/, guards/, identity/, and restore/ before installing)
 
 # 2. Edit configuration
 nano /opt/proxsave/configs/backup.env
@@ -192,7 +192,8 @@ proxsave --backup
 ### Scheduling
 
 A fresh install schedules the backup through the resident daemon
-(`proxsave-daemon.service`), at `SCHEDULER_TIME`. Nothing more is needed. See
+(`proxsave-daemon.service`), daily at `SCHEDULER_TIME` unless `SCHEDULER_FREQUENCY` says
+weekly or monthly. Nothing more is needed. See
 [Example 11](#example-11-resident-daemon-and-healthchecks-monitoring) and
 [DAEMON.md](DAEMON.md).
 
@@ -281,7 +282,7 @@ The same without a TTY:
 
 ```bash
 proxsave --install
-# (use --new-install if you want to reset the install dir first, keeping build/, env/, guards/, identity/, and restore/)
+# (use --new-install if you want to reset the install dir first, keeping build/, daemon_state/, env/, guards/, identity/, and restore/)
 # (paste configuration above)
 proxsave --dry-run
 proxsave --backup
@@ -537,10 +538,10 @@ RETENTION_YEARLY=5
 
 #### Step 3: Schedule Nightly Backup
 
-Set the run time in the dashboard (`Maintenance` -> `Install` -> `Edit install`, the
-**Run at (HH:MM)** field) and let the resident daemon own the schedule
+Set the schedule in the dashboard (`Maintenance` -> `Install` -> `Edit install`, the
+**Frequency** and **Run at (HH:MM)** fields) and let the resident daemon own the schedule
 (already the engine on a fresh install; `Daemon` -> `Install` switches a cron host). Both
-write to `configs/backup.env`: `SCHEDULER_TIME=02:00` and
+write to `configs/backup.env`: `SCHEDULER_FREQUENCY=daily`, `SCHEDULER_TIME=02:00` and
 `SCHEDULER_MODE=daemon`.
 
 Only on a host kept on cron does the crontab matter:
@@ -624,7 +625,7 @@ MAX_CLOUD_BACKUPS=168
 #### Step 3: Hourly Backup
 
 This is the one scenario in this guide that cron does better. The resident daemon runs the
-backup once a day, at `SCHEDULER_TIME`; it has no sub-daily schedule. An hourly cadence
+backup daily, weekly or monthly, at `SCHEDULER_TIME`; it has no sub-daily schedule. An hourly cadence
 therefore means staying on cron: keep `SCHEDULER_MODE=cron` (or revert with
 `Daemon` -> `Disable`) and write the entry yourself.
 
@@ -897,8 +898,9 @@ Then, still in the dashboard:
 
 ### Scheduling
 
-The resident daemon runs the backup daily at `SCHEDULER_TIME`, under a `MAX_RUN_DURATION`
-watchdog, and reports to an external monitor. That is the recommended engine for a
+The resident daemon runs the backup at the configured schedule (`SCHEDULER_FREQUENCY`,
+daily by default, at `SCHEDULER_TIME`), under a `MAX_RUN_DURATION` watchdog, and reports to an
+external monitor. That is the recommended engine for a
 production host. A cron entry applies only where the daemon was deliberately declined:
 
 ```bash
@@ -1111,7 +1113,7 @@ proxsave --daemon-status
 ```
 
 Both routes run the same code. `--daemon-setup` writes `SCHEDULER_MODE=daemon` and `HEALTHCHECK_ENABLED=true` and starts
-`proxsave-daemon.service`. The daemon runs the backup daily at `SCHEDULER_TIME`, under a
+`proxsave-daemon.service`. The daemon runs the backup at the configured schedule (daily at `SCHEDULER_TIME` by default), under a
 `MAX_RUN_DURATION` watchdog, and reports three fixed checks (alive, backup, updates) plus one
 per notification channel to an external healthchecks monitor.
 
@@ -1137,10 +1139,10 @@ journalctl -u proxsave-daemon.service -f      # follow its log
 proxsave --daemon-remove                      # revert to a cron entry
 ```
 
-`--daemon-remove` always writes a cron line at `SCHEDULER_TIME` and records `SCHEDULER_MODE=cron`,
+`--daemon-remove` always writes a cron line at the configured schedule and records `SCHEDULER_MODE=cron`,
 which is what stops upgrades reinstalling the daemon: the key is present, so it is honoured. If the
 host also schedules ProxSave through an entry ProxSave does not own, that entry is reported and left
-alone, so such a host ends with two nightly backups and the run that loses the per-run lock exits
+alone, so such a host ends with two backups at each scheduled time and the run that loses the per-run lock exits
 `16`. Withholding the line instead would leave a misidentified host with nothing scheduled at all,
 silently, which is the worse of the two. The daemon-only healthchecks are switched back off
 with the daemon, so a reverted host does not warn about a service that is no longer installed.

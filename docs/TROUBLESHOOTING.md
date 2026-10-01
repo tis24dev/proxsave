@@ -119,14 +119,14 @@ make build
 
 **Solution**: open the dashboard and pick `Install` > `Edit install`. It re-runs the interactive
 installer against the current configuration and writes the file. `Wipe install` is the same
-installer after resetting the install directory (`build/`, `env/`, `guards/`, `identity/` and `restore/` are preserved);
+installer after resetting the install directory (`build/`, `daemon_state/`, `env/`, `guards/`, `identity/` and `restore/` are preserved);
 it asks you to confirm the wipe first.
 
 The same two flows without the TUI:
 ```bash
 # Run installer to create config
 proxsave --install
-# For a clean reinstall (keeps build/, env/, guards/, identity/, and restore/), run:
+# For a clean reinstall (keeps build/, daemon_state/, env/, guards/, identity/, and restore/), run:
 # proxsave --new-install
 
 # Or copy template manually

@@ -55,7 +55,7 @@ and `CRON_MINUTE` lines, which are derived at runtime and deprecated in the file
 [Storage Paths](#storage-paths)), and with email enabled it drops the transitional
 `EMAIL_FALLBACK_PMF` after carrying its value onto `EMAIL_FALLBACK_SENDMAIL`.
 
-The form has fourteen fields and writes exactly the variables below. Everything else in
+The form has eighteen fields and writes exactly the variables below. Everything else in
 this reference is hand-edited.
 
 | Form field | Variables it writes | Section here |
@@ -73,6 +73,10 @@ this reference is hand-edited.
 | Backup encryption (AGE) | `ENCRYPT_ARCHIVE` | [Encryption & Bundling](#encryption--bundling) |
 | Scheduler engine | `SCHEDULER_MODE` | [Scheduler engine](#scheduler-engine) |
 | Healthchecks | `HEALTHCHECK_ENABLED`, `HEALTHCHECK_MODE` | [Healthchecks connector](#healthchecks-connector-daemon) |
+| Notify level | `NOTIFY_ON` (`always` when Healthchecks is off) | [Which runs get notified](#which-runs-get-notified-notify_on) |
+| Frequency | `SCHEDULER_FREQUENCY` | [Scheduler engine](#scheduler-engine) |
+| Weekday | `SCHEDULER_WEEKDAY` | [Scheduler engine](#scheduler-engine) |
+| Day of month (1-28) | `SCHEDULER_MONTHDAY` | [Scheduler engine](#scheduler-engine) |
 | Run at (HH:MM) | `SCHEDULER_TIME` | [Scheduler engine](#scheduler-engine) |
 
 Note what the form does **not** write, because it is easy to assume otherwise:
@@ -248,14 +252,38 @@ behavior is documented in [DAEMON.md](DAEMON.md).
 
 **From the dashboard**: the `Daemon` group offers the one command that fits the current
 state (`Install` on a cron host, `Disable` and `Restart` on a daemon host) plus a read-only
-`Status`. The daily run time and the engine are also on the configuration form, as
-**Run at (HH:MM)** and **Scheduler engine**. The keys behind all of that are:
+`Status`. The schedule and the engine are also on the configuration form, as
+**Frequency**, **Weekday**, **Day of month (1-28)**, **Run at (HH:MM)** and **Scheduler
+engine**. The keys behind all of that are:
 
 ```bash
 SCHEDULER_MODE=cron            # cron | daemon (any unrecognized value normalizes to cron)
-SCHEDULER_TIME=02:00           # daily HH:MM "Run at" time
+SCHEDULER_FREQUENCY=daily      # daily, weekly or monthly
+SCHEDULER_WEEKDAY=mon          # weekly only: mon, tue, wed, thu, fri, sat or sun
+SCHEDULER_MONTHDAY=1           # monthly only: 1-28
+SCHEDULER_TIME=02:00           # HH:MM ("Run at")
 MAX_RUN_DURATION=1h            # daemon watchdog: hard timeout for one backup
 ```
+
+The backup runs daily, weekly on `SCHEDULER_WEEKDAY`, or monthly on `SCHEDULER_MONTHDAY`, at
+`SCHEDULER_TIME`. A monthly backup takes days 1-28 only, so no month is skipped. A variable
+that is missing or empty takes its default (`daily`, `mon`, `1`, `02:00`), and the day the
+frequency does not use is ignored.
+
+When they take effect depends on the engine:
+
+- **Daemon**: it reads them when it starts, so an edit applies at the next daemon restart
+  (`--daemon-status` says `OUT OF SYNC` until then). With the centralized monitor a new
+  frequency applies once ProxSave HC Server confirms it, and the daemon says `pending` until
+  then. An invalid value is reported before every backup, which then runs daily. Details in
+  [DAEMON.md](DAEMON.md#backup-schedule).
+- **Cron**: the crontab entry runs the backup, and `--install` writes these values into it. A
+  hand edit of `backup.env` changes nothing until the next `--install`.
+
+`--upgrade-config` and `--upgrade` add a missing variable with its default but not the
+template comment above it: an existing `backup.env` gains the lines without that block.
+Where the file records no schedule yet, they take it from the proxsave crontab line instead;
+see [DAEMON.md](DAEMON.md#the-schedule-is-inherited-not-reset).
 
 The compiled default for `SCHEDULER_MODE` is `cron`, but a fresh install defaults to the daemon and writes `SCHEDULER_MODE=daemon`.
 
@@ -615,6 +643,10 @@ BACKUP_PATH=${BASE_DIR}/backup
 # Primary log storage
 LOG_PATH=${BASE_DIR}/log
 ```
+
+`LOG_PATH` also holds `.whatsnew_seen.json`, the release notes ProxSave has already shown. It is
+read and written within `FS_IO_TIMEOUT`, so a log directory on a dead mount only means no notes
+are shown; pointing `LOG_PATH` elsewhere shows every release's notes once more.
 
 **Path resolution**: `${BASE_DIR}` expands automatically from the installed `proxsave` executable path. Scalar string values also support `$VAR` / `${VAR}` expansion (config keys first, then environment variables), but `BASE_DIR` itself is not configurable from `backup.env` or the parent environment.
 
