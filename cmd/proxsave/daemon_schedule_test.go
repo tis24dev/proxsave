@@ -3,6 +3,8 @@ package main
 import (
 	"bytes"
 	"context"
+	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -13,6 +15,8 @@ import (
 	"github.com/tis24dev/proxsave/internal/cron"
 	"github.com/tis24dev/proxsave/internal/health"
 	"github.com/tis24dev/proxsave/internal/logging"
+	"github.com/tis24dev/proxsave/internal/notify"
+	"github.com/tis24dev/proxsave/internal/serverbot"
 	"github.com/tis24dev/proxsave/internal/types"
 )
 
@@ -227,34 +231,85 @@ func TestScheduleHealthchecksDisabledAppliesWithoutBackupCheck(t *testing.T) {
 	)
 }
 
-// TestScheduleCentralizedWeeklyRunsDailyUntilNegotiated: with no relay secret no poll can be
-// sent, and no block has a text for that: DEBUG only, daily in effect (nothing confirmed on disk).
-func TestScheduleCentralizedWeeklyRunsDailyUntilNegotiated(t *testing.T) {
+// TestScheduleCentralizedNoRelaySecretIsPending: with no relay secret, and none provisioned (no
+// ServerID: nothing was asked of the relay), no poll can be sent. The start prints the blocks of
+// an unreachable relay (part B, point 3b): daily in effect, nothing confirmed on disk.
+func TestScheduleCentralizedNoRelaySecretIsPending(t *testing.T) {
 	logs := captureDaemonLog(t)
 	d := scheduleDaemon(t, "weekly", "mon", "1", "02:00", true, config.HealthcheckModeCentralized)
 	runScheduleStart(t, d)
 	assertLogExact(t, normalized(logs(), d),
+		"INFO Applying backup schedule...",
 		"DEBUG schedule: read frequency=weekly weekday=mon monthday=1 time=02:00 source="+scheduleSource,
 		"DEBUG schedule: read last_confirmed=none source="+stateFile+" default=daily",
 		"DEBUG schedule: not sent, no relay secret on disk (centralized provisioning pending)",
 		"DEBUG schedule: fallback frequency=daily reason=unconfirmed retry_every=5m0s",
+		"INFO   Frequency: weekly",
+		"INFO   Weekday: Monday",
+		"INFO   Time: 02:00",
+		"INFO   In effect: daily at 02:00",
+		"INFO ProxSave HC Server not reachable",
+		"INFO ⚠ Backup schedule: pending, no action needed",
+		"INFO Applying notify level...",
+		`DEBUG notify policy: read notify_on="" requested=always channels=none source=`+scheduleSource,
+		"DEBUG notify policy: same response as schedule, not sent",
+		"INFO   Notify level: always",
+		"INFO   In effect: always",
+		"INFO ProxSave HC Server not reachable",
+		"INFO ⚠ Notify level: pending, no action needed",
+		"INFO Applying healthchecks ping URLs...",
+		"DEBUG ping urls: same response as schedule, not sent",
+		"DEBUG ping urls: fallback cached alive_url=none backup_url=none source="+scheduleSource,
+		"INFO   Ping URLs: none",
+		"INFO ProxSave HC Server not reachable",
+		"WARNING ⚠ Healthchecks ping URLs: not available",
 		"DEBUG schedule: next run frequency=daily weekday=mon monthday=1 time=02:00 at=2026-10-01T02:00:00Z",
 		"INFO daemon: next backup at 2026-10-01 02:00 (in 14h1m28s)",
 	)
+	assertNoLogLine(t, logs(), "centralized fetch failed")
 }
 
-func TestScheduleCentralizedDailyLogsNoBlock(t *testing.T) {
-	logs := captureDaemonLog(t)
-	d := scheduleDaemon(t, "daily", "mon", "1", "02:00", true, config.HealthcheckModeCentralized)
-	runScheduleStart(t, d)
-	assertLogExact(t, normalized(logs(), d),
-		"DEBUG schedule: read frequency=daily weekday=mon monthday=1 time=02:00 source="+scheduleSource,
-		"DEBUG schedule: read last_confirmed=none source="+stateFile+" default=daily",
-		"DEBUG schedule: not sent, no relay secret on disk (centralized provisioning pending)",
-		"DEBUG schedule: fallback frequency=daily reason=unconfirmed retry_every=5m0s",
-		"DEBUG schedule: next run frequency=daily weekday=mon monthday=1 time=02:00 at=2026-10-01T02:00:00Z",
-		"INFO daemon: next backup at 2026-10-01 02:00 (in 14h1m28s)",
-	)
+// TestScheduleCentralizedNoRelaySecretWhy: the why line of a start with no relay secret says how
+// far the provisioning attempt got: no HTTP answer is not reachable, every answer that gave no
+// secret is not ready.
+func TestScheduleCentralizedNoRelaySecretWhy(t *testing.T) {
+	cases := []struct {
+		name string
+		fail func() error
+		why  string
+	}{
+		{"transport", func() error {
+			return fmt.Errorf("relay provision: request failed: %w", &serverbot.TransportError{Op: "request", Stage: "connect"})
+		}, "ProxSave HC Server not reachable"},
+		{"rate limited", func() error { return &notify.RelayProvisionRateLimitError{RetryAfter: time.Minute} }, "ProxSave HC Server not ready"},
+		{"unexpected status", func() error { return errors.New("relay provision: unexpected status 500") }, "ProxSave HC Server not ready"},
+		{"already provisioned", func() error { return nil }, "ProxSave HC Server not ready"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			orig := provisionRelaySecretFn
+			t.Cleanup(func() { provisionRelaySecretFn = orig })
+			provisionRelaySecretFn = func(context.Context, string, string, string, *logging.Logger) (bool, error) {
+				return false, tc.fail()
+			}
+			logs := captureDaemonLog(t)
+			d := scheduleDaemon(t, "daily", "mon", "1", "02:00", true, config.HealthcheckModeCentralized)
+			d.cfg.ServerID = "123456789012"
+			runScheduleStart(t, d)
+			got := logs()
+			assertLogSequence(t, got,
+				"INFO "+tc.why,
+				"INFO ⚠ Backup schedule: pending, no action needed",
+				"INFO "+tc.why,
+				"INFO ⚠ Notify level: pending, no action needed",
+				"INFO "+tc.why,
+				"WARNING ⚠ Healthchecks ping URLs: not available",
+			)
+			if n := countLogLines(got, "INFO "+tc.why); n != 3 {
+				t.Fatalf("why line %q written %d times; want 3", tc.why, n)
+			}
+		})
+	}
 }
 
 // TestScheduleCentralizedUsesTheConfirmedCadence pins the seam the relay negotiation plugs
@@ -307,6 +362,9 @@ func TestScheduleWithoutFrequencyStaysDaily(t *testing.T) {
 		t.Run(mode, func(t *testing.T) {
 			logs := captureDaemonLog(t)
 			d := scheduleDaemon(t, "", "", "", "03:00", true, mode)
+			// The URLs cached in backup.env: a centralized start with no relay secret then
+			// reports them not refreshed, an INFO, instead of a WARNING with none at all.
+			d.cfg.HealthcheckAliveURL, d.cfg.HealthcheckBackupURL = "https://hc.invalid/ping/alive", "https://hc.invalid/ping/backup"
 			runScheduleStart(t, d)
 			got := logs()
 			assertLogSequence(t, got, "INFO daemon: next backup at 2026-10-01 03:00 (in 15h1m28s)")

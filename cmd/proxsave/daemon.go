@@ -26,6 +26,7 @@ import (
 	"github.com/tis24dev/proxsave/internal/logging"
 	"github.com/tis24dev/proxsave/internal/notify"
 	"github.com/tis24dev/proxsave/internal/notifyfilter"
+	"github.com/tis24dev/proxsave/internal/serverbot"
 	"github.com/tis24dev/proxsave/internal/types"
 	"github.com/tis24dev/proxsave/internal/version"
 )
@@ -183,6 +184,16 @@ type daemon struct {
 	scheduleChanged chan struct{}
 	// scheduleAttemptGapOverride replaces scheduleAttemptGap in tests.
 	scheduleAttemptGapOverride time.Duration
+	// notifyBlockPending says the last "Applying notify level..." block ended pending, with
+	// notifyBlockRaw the NOTIFY_ON it read; pingURLsBlockOpen says the start's ping URLs block
+	// ended not refreshed or not available. A heartbeat poll the relay answers prints those
+	// blocks again once they are resolved (logResolvedStartBlocks). All guarded by mu.
+	notifyBlockPending bool
+	notifyBlockRaw     string
+	pingURLsBlockOpen  bool
+	// provisionReach is how far the last relay-secret provisioning attempt got with the relay:
+	// the why line of a start with no relay secret. Guarded by mu.
+	provisionReach pollReach
 	// aliveMu orders the TRANSMISSIONS to the service-alive check: one beat's ping+record, or
 	// the one abandon degrade, never both at once. A bare latch cannot do this. beat() reads
 	// it, then spends up to a full pingTimeout inside r.Heartbeat, so a beat that entered
@@ -488,13 +499,9 @@ func (d *daemon) run(ctx context.Context) int {
 	// The schedule block, once, before any background loop can log: the cadence the scheduler
 	// is about to run on, reported ahead of the heartbeat and update lines. A refused second
 	// instance returned above and prints none. In centralized mode it is followed by the notify
-	// level and, when the poll failed, the ping URLs blocks, all read from the same answers.
-	if polled := d.logScheduleStart(ctx); d.relayNegotiatesSchedule() && !polled {
-		// No relay secret, so no poll was sent: today's resolution and its warning.
-		if r := d.buildReporter(ctx); r != nil {
-			d.setReporter(r)
-		}
-	}
+	// level and, when the poll failed or could not be sent, the ping URLs blocks, all read from
+	// the same answers; the reporter is set from them.
+	d.logScheduleStart(ctx)
 
 	// loopCtx is how an ABANDONED run stops the background loops. They all return ONLY on
 	// their context being done, and on the abandon path the caller's context is still live --
@@ -2201,6 +2208,11 @@ func (d *daemon) relaySecret(ctx context.Context) string {
 // (absent on old servers -> ""). With op set, the transport stages are logged in DEBUG under
 // op, each message after prefix (health.PollLog); with op empty the poll logs nothing.
 func (d *daemon) pollCentralized(ctx context.Context, op, prefix string) configPoll {
+	return d.pollCentralizedTo(ctx, logging.GetDefaultLogger(), op, prefix)
+}
+
+// pollCentralizedTo is pollCentralized with the transport stages logged to logger.
+func (d *daemon) pollCentralizedTo(ctx context.Context, logger *logging.Logger, op, prefix string) configPoll {
 	secret := d.relaySecret(ctx)
 	if secret == "" {
 		return configPoll{err: errNoRelaySecret}
@@ -2222,7 +2234,7 @@ func (d *daemon) pollCentralized(ctx context.Context, op, prefix string) configP
 	fetch := func(want notifyPolicy) (health.CentralizedConfig, int, error) {
 		plog := health.PollLog{}
 		if op != "" {
-			plog = health.PollLog{Logger: logging.GetDefaultLogger(), Operation: op, Prefix: prefix,
+			plog = health.PollLog{Logger: logger, Operation: op, Prefix: prefix,
 				URLDetail: fmt.Sprintf("frequency=%s notify_on=%s channels=%s", freq, want.notifyOn, want.channelList())}
 		}
 		return health.FetchCentralizedConfigPoll(ctx, nil, d.cfg.ServerAPIHost, d.cfg.ServerID, secret,
@@ -2287,36 +2299,54 @@ var provisionRelaySecretFn = notify.ProvisionRelaySecret
 func provisionRelaySecretAttempt(
 	ctx context.Context, cfg *config.Config, logger *logging.Logger,
 ) (string, time.Duration) {
+	secret, retryAfter, _ := provisionRelaySecretAttemptReach(ctx, cfg, logger)
+	return secret, retryAfter
+}
+
+// provisionRelaySecretAttemptReach is provisionRelaySecretAttempt that also says how far an
+// attempt that yielded no secret got with the relay: reachNone when no HTTP answer came (none
+// was asked for, or the request failed in transport), reachNotReady for every answer that gave
+// no secret (a 429, an unexpected status, a secret the relay already issued).
+func provisionRelaySecretAttemptReach(
+	ctx context.Context, cfg *config.Config, logger *logging.Logger,
+) (string, time.Duration, pollReach) {
 	if cfg == nil || !cfg.HealthcheckEnabled || cfg.HealthcheckMode != config.HealthcheckModeCentralized {
-		return "", 0
+		return "", 0, reachNone
 	}
 	baseDir := strings.TrimSpace(cfg.BaseDir)
 	if baseDir == "" {
-		return "", 0
+		return "", 0, reachNone
 	}
 	if s, _ := identity.LoadNotifySecret(baseDir); strings.TrimSpace(s) != "" {
-		return strings.TrimSpace(s), 0 // already provisioned; do not churn
+		return strings.TrimSpace(s), 0, reachAnswered // already provisioned; do not churn
 	}
 	serverID := strings.TrimSpace(cfg.ServerID)
 	if serverID == "" {
-		return "", 0
+		return "", 0, reachNone
 	}
 	if _, err := provisionRelaySecretFn(ctx, cfg.ServerAPIHost, serverID, baseDir, logger); err != nil {
 		var limited *notify.RelayProvisionRateLimitError
 		if errors.As(err, &limited) {
 			logging.Debug(
 				"daemon: relay-secret provisioning rate limited (server backoff honored)")
-			return "", limited.RetryAfter
+			return "", limited.RetryAfter, reachNotReady
 		}
 		logging.Debug("daemon: relay-secret provisioning attempt failed (will retry later): %v", err)
-		return "", 0
+		var te *serverbot.TransportError
+		if errors.As(err, &te) {
+			return "", 0, reachNone
+		}
+		return "", 0, reachNotReady
 	}
 	// Reload regardless of the provisioned flag: ProvisionRelaySecret returns false when it
 	// adopts a secret a concurrent provisioner persisted under the cross-process lock, so a
 	// usable secret may be on disk even then; LoadNotifySecret yields "" when there is
 	// genuinely none, degrading gracefully.
 	s, _ := identity.LoadNotifySecret(baseDir)
-	return strings.TrimSpace(s), 0
+	if strings.TrimSpace(s) == "" {
+		return "", 0, reachNotReady
+	}
+	return strings.TrimSpace(s), 0, reachAnswered
 }
 
 // provisionRelaySecretBestEffort keeps the one-shot setup callers' established
@@ -2343,7 +2373,10 @@ func (d *daemon) maybeProvisionRelaySecret(ctx context.Context) string {
 	d.provisionRetryAt = now.Add(daemonProvisionRetryInterval)
 	d.mu.Unlock()
 
-	secret, retryAfter := provisionRelaySecretAttempt(ctx, d.cfg, d.logger)
+	secret, retryAfter, reach := provisionRelaySecretAttemptReach(ctx, d.cfg, d.logger)
+	d.mu.Lock()
+	d.provisionReach = reach
+	d.mu.Unlock()
 	if retryAfter > daemonProvisionRetryInterval {
 		retryAt := d.now().Add(
 			retryAfter + daemonProvisionRetryJitter(d.cfg.ServerID, retryAfter))

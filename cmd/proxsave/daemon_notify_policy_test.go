@@ -257,6 +257,9 @@ func TestRefreshNotifyPolicyUnreachableRelayIsPending(t *testing.T) {
 		"INFO ProxSave HC Server not reachable",
 		"INFO ⚠ Notify level: pending, no action needed",
 	)
+	// The block's why line and DEBUG evidence report the failed poll: no "centralized fetch
+	// failed" WARNING inside it (part B, point 3a).
+	assertNoLogLine(t, got, "centralized fetch failed")
 	if got := d.appliedNotifyPolicy(); got == nil || !got.equal(startupPolicy) {
 		t.Fatalf("applied policy = %+v; an unanswered poll must leave the last confirmation", got)
 	}

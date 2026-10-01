@@ -5,12 +5,15 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strings"
+	"sync"
 	"time"
 
 	"github.com/tis24dev/proxsave/internal/cron"
 	"github.com/tis24dev/proxsave/internal/health"
 	"github.com/tis24dev/proxsave/internal/logging"
 	"github.com/tis24dev/proxsave/internal/serverbot"
+	"github.com/tis24dev/proxsave/internal/types"
 	"github.com/tis24dev/proxsave/internal/ui/theme"
 )
 
@@ -77,6 +80,52 @@ func pollFailure(p configPoll) string {
 		return fmt.Sprintf("http=%d", p.status)
 	default:
 		return fmt.Sprintf("http=%d error=%v", p.status, p.err)
+	}
+}
+
+// sameResponse is the DEBUG line of a block read from the schedule's poll p when p returned no
+// usable answer: not sent at all, or how it failed.
+func sameResponse(p configPoll) string {
+	if !p.sent {
+		return "same response as schedule, not sent"
+	}
+	return "same response as schedule, failed " + pollFailure(p)
+}
+
+// debugRecorder holds DEBUG lines back to write them later, in order. A heartbeat's schedule
+// retry knows only after its poll whether its evidence belongs under an "Applying backup
+// schedule..." header (a confirmation) or stands on its own (todo point 40: DEBUG only).
+type debugRecorder struct {
+	logger *logging.Logger
+	mu     sync.Mutex
+	lines  []string
+}
+
+// recordedDebugPrefix is what the recorder's logger writes between the timestamp and the
+// message: the level, padded as every logger pads it.
+const recordedDebugPrefix = "DEBUG    "
+
+func newDebugRecorder() *debugRecorder {
+	r := &debugRecorder{logger: logging.New(types.LogLevelDebug, false)}
+	r.logger.SetOutput(logging.NewLineWriter(func(line string) {
+		if _, rest, ok := strings.Cut(line, "] "); ok {
+			line = strings.TrimPrefix(rest, recordedDebugPrefix)
+		}
+		r.mu.Lock()
+		r.lines = append(r.lines, line)
+		r.mu.Unlock()
+	}))
+	return r
+}
+
+// flush writes the held lines to the daemon's log, in the order they were recorded.
+func (r *debugRecorder) flush() {
+	r.mu.Lock()
+	lines := r.lines
+	r.lines = nil
+	r.mu.Unlock()
+	for _, line := range lines {
+		logging.Debug("%s", line)
 	}
 }
 
@@ -179,9 +228,14 @@ func (d *daemon) confirmSchedule(freq cron.Frequency) {
 
 // scheduleAttempt sends one schedule poll, its stages logged under "schedule: <prefix>".
 func (d *daemon) scheduleAttempt(ctx context.Context, prefix string) configPoll {
-	p := d.pollCentralized(ctx, "schedule", prefix)
+	return d.scheduleAttemptTo(ctx, logging.GetDefaultLogger(), prefix)
+}
+
+// scheduleAttemptTo is scheduleAttempt with its DEBUG lines written to logger.
+func (d *daemon) scheduleAttemptTo(ctx context.Context, logger *logging.Logger, prefix string) configPoll {
+	p := d.pollCentralizedTo(ctx, logger, "schedule", prefix)
 	if !p.sent {
-		logging.DebugStep(logging.GetDefaultLogger(), "schedule", "%s not sent error=%v", prefix, p.err)
+		logging.DebugStep(logger, "schedule", "%s not sent error=%v", prefix, p.err)
 		return p
 	}
 	d.afterFailedPoll(p)
@@ -196,7 +250,11 @@ func scheduleConfirmedBy(p configPoll) bool {
 // logScheduleAck is the DEBUG evidence of what poll p answered about the schedule. A transport
 // failure is already logged by the poll's own stages.
 func logScheduleAck(prefix string, p configPoll) {
-	logger := logging.GetDefaultLogger()
+	logScheduleAckTo(logging.GetDefaultLogger(), prefix, p)
+}
+
+// logScheduleAckTo is logScheduleAck written to logger.
+func logScheduleAckTo(logger *logging.Logger, prefix string, p configPoll) {
 	switch {
 	case !p.sent, p.err != nil && p.status == 0:
 	case p.err != nil && p.status == http.StatusOK:
@@ -229,39 +287,37 @@ func (d *daemon) logScheduleFallback() {
 // startScheduleNegotiation is the centralized start (todo points 38-39, 42-43, 50-52): the
 // backup schedule block around up to three polls, then the notify level block and, when no poll
 // returned usable ping URLs, the ping URLs block, all read from those polls; the reporter is set
-// from them. With no relay secret no poll can be sent and no block has a text for that: the
-// schedule stays DEBUG only (an invalid value still gets its not-applied block) and run()
-// resolves the ping URLs as before. It reports whether a poll was sent.
+// from them. With no relay secret, and none provisioned, no poll can be sent: the same blocks,
+// their why line saying how far the provisioning got with the relay (part B, point 3b). It
+// reports whether a poll was sent.
 func (d *daemon) startScheduleNegotiation(ctx context.Context, reading scheduleReading) bool {
 	configured := reading.cadence
 	stateLine := d.loadScheduleState(configured)
 	d.scheduleChanged = make(chan struct{}, 1)
 	logger := logging.GetDefaultLogger()
-	invalid := len(reading.invalid) > 0
-
-	if d.relaySecret(ctx) == "" {
-		if invalid {
-			logging.Info("Applying backup schedule...")
-		}
-		d.logScheduleRead(reading)
-		logging.DebugStep(logger, "schedule", "%s", stateLine)
-		logging.DebugStep(logger, "schedule", "not sent, %v", errNoRelaySecret)
-		d.logScheduleFallback()
-		if invalid {
-			d.logScheduleNotAppliedOutcome(reading)
-		}
-		return false
-	}
 
 	logging.Info("Applying backup schedule...")
 	d.logScheduleRead(reading)
 	logging.DebugStep(logger, "schedule", "%s", stateLine)
-	last, good, haveGood, confirmed := d.runStartAttempts(ctx)
+	var last, good configPoll
+	var haveGood, confirmed bool
+	var why pollReach
+	sent := d.relaySecret(ctx) != ""
+	if sent {
+		last, good, haveGood, confirmed = d.runStartAttempts(ctx)
+		why = last.answer()
+	} else {
+		last = configPoll{err: errNoRelaySecret}
+		d.mu.Lock()
+		why = d.provisionReach
+		d.mu.Unlock()
+		logging.DebugStep(logger, "schedule", "not sent, %v", errNoRelaySecret)
+	}
 	if !confirmed {
 		d.logScheduleFallback()
 	}
 	switch {
-	case invalid:
+	case len(reading.invalid) > 0:
 		d.logScheduleNotAppliedOutcome(reading)
 	case confirmed:
 		logCadenceDetails(configured)
@@ -270,7 +326,7 @@ func (d *daemon) startScheduleNegotiation(ctx context.Context, reading scheduleR
 		logCadenceDetails(configured)
 		run, _, _ := d.cadenceToRun(configured, d.now())
 		logging.Info("  In effect: %s", cadenceLabel(run))
-		logging.Info("%s", last.answer().why())
+		logging.Info("%s", why.why())
 		logging.Info("%s Backup schedule: pending, no action needed", theme.SymbolWarning)
 	}
 
@@ -288,14 +344,14 @@ func (d *daemon) startScheduleNegotiation(ctx context.Context, reading scheduleR
 	if haveGood {
 		d.logNotifyPolicyAnswer(good)
 	} else {
-		logging.DebugStep(logger, "notify policy", "same response as schedule, failed %s", pollFailure(last))
+		logging.DebugStep(logger, "notify policy", "%s", sameResponse(last))
 	}
-	d.logNotifyLevelOutcome(want, last.answer())
+	d.logNotifyLevelOutcome(d.cfg.NotifyOn, want, why)
 
 	if !haveGood {
-		d.logPingURLsNotRefreshed(last)
+		d.logPingURLsNotRefreshed(last, why)
 	}
-	return true
+	return sent
 }
 
 // runStartAttempts sends the start polls until one confirms the schedule: last is the last poll
@@ -329,11 +385,15 @@ func (d *daemon) runStartAttempts(ctx context.Context) (last, good configPoll, h
 }
 
 // logPingURLsNotRefreshed is the start block for ping URLs the polls did not return (todo point
-// 43): the URLs cached in backup.env stay in use, or there are none.
-func (d *daemon) logPingURLsNotRefreshed(last configPoll) {
+// 43): the URLs cached in backup.env stay in use, or there are none; why names the reason. The
+// block is remembered as open for logResolvedStartBlocks.
+func (d *daemon) logPingURLsNotRefreshed(last configPoll, why pollReach) {
 	logger := logging.GetDefaultLogger()
+	d.mu.Lock()
+	d.pingURLsBlockOpen = true
+	d.mu.Unlock()
 	logging.Info("Applying healthchecks ping URLs...")
-	logging.DebugStep(logger, "ping urls", "same response as schedule, failed %s", pollFailure(last))
+	logging.DebugStep(logger, "ping urls", "%s", sameResponse(last))
 	alive, backup := d.cfg.HealthcheckAliveURL != "", d.cfg.HealthcheckBackupURL != ""
 	setOrNone := func(set bool) string {
 		if set {
@@ -345,21 +405,22 @@ func (d *daemon) logPingURLsNotRefreshed(last configPoll) {
 		setOrNone(alive), setOrNone(backup), d.configPath)
 	if alive || backup {
 		logging.Info("  Ping URLs: cached from backup.env")
-		logging.Info("%s", last.answer().why())
+		logging.Info("%s", why.why())
 		logging.Info("%s Healthchecks ping URLs: not refreshed", theme.SymbolWarning)
 		return
 	}
 	logging.Info("  Ping URLs: none")
-	logging.Info("%s", last.answer().why())
+	logging.Info("%s", why.why())
 	logging.Warning("%s Healthchecks ping URLs: not available", theme.SymbolWarning)
 }
 
 // retryScheduleOnHeartbeat is the heartbeat's retry of a schedule the relay has not confirmed
 // (todo point 40): one attempt, attempt=1/1. A failure is DEBUG only. A confirmation prints the
-// applied block (with an invalid value, whose block repeats before every next-backup line, only
-// its DEBUG evidence) and wakes scheduleLoop, which prints the next backup of the cadence now in
-// effect and waits on it. The poll's ping URLs and notify ack are kept like any poll's. It
-// reports whether a poll was sent.
+// applied block, its evidence after the header (with an invalid value, whose block repeats
+// before every next-backup line, only its DEBUG evidence) and wakes scheduleLoop, which prints
+// the next backup of the cadence now in effect and waits on it. An answer also prints the start
+// blocks it resolves (logResolvedStartBlocks). The poll's ping URLs and notify ack are kept like
+// any poll's. It reports whether a poll was sent.
 func (d *daemon) retryScheduleOnHeartbeat(ctx context.Context) bool {
 	if !d.relayNegotiatesSchedule() {
 		return false
@@ -372,10 +433,14 @@ func (d *daemon) retryScheduleOnHeartbeat(ctx context.Context) bool {
 		return false
 	}
 	logger := logging.GetDefaultLogger()
-	logging.DebugStep(logger, "schedule", "heartbeat retry wanted=%s last_confirmed=%s", want, orNone(last))
+	// The retry's evidence is held back until its outcome is known: a confirmation writes it
+	// under the "Applying backup schedule..." header, anything else on its own.
+	rec := newDebugRecorder()
+	logging.DebugStep(rec.logger, "schedule", "heartbeat retry wanted=%s last_confirmed=%s", want, orNone(last))
 	const prefix = "attempt=1/1"
-	p := d.scheduleAttempt(ctx, prefix)
+	p := d.scheduleAttemptTo(ctx, rec.logger, prefix)
 	if !p.sent {
+		rec.flush()
 		return false
 	}
 	if p.err == nil {
@@ -384,26 +449,60 @@ func (d *daemon) retryScheduleOnHeartbeat(ctx context.Context) bool {
 		}
 	}
 	if !scheduleConfirmedBy(p) {
-		logScheduleAck(prefix, p)
+		logScheduleAckTo(rec.logger, prefix, p)
+		rec.flush()
+		d.logResolvedStartBlocks(p)
 		return true
 	}
 
 	reading := readConfiguredCadence(d.cfg)
 	if len(reading.invalid) > 0 {
-		logScheduleAck(prefix, p)
+		logScheduleAckTo(rec.logger, prefix, p)
+		rec.flush()
 		d.confirmSchedule(p.frequency)
 	} else {
 		logging.Info("Applying backup schedule...")
 		d.logScheduleRead(reading)
 		logging.DebugStep(logger, "schedule", "read last_confirmed=%s source=%s", orNone(last), health.ScheduleStatePath(d.cfg.BaseDir))
+		rec.flush()
 		logScheduleAck(prefix, p)
 		d.confirmSchedule(p.frequency)
 		logCadenceDetails(configured)
 		logging.Info("%s Backup schedule: applied", theme.SymbolSuccess)
 	}
+	d.logResolvedStartBlocks(p)
 	select {
 	case d.scheduleChanged <- struct{}{}:
 	default:
 	}
 	return true
+}
+
+// logResolvedStartBlocks writes, after a heartbeat poll p the relay answered, the blocks left
+// open that p resolves, in the start's order (part B, point 2): the notify level block that ended
+// pending, once the relay confirms the level, and the start's ping URLs block, p having returned
+// them.
+func (d *daemon) logResolvedStartBlocks(p configPoll) {
+	if !p.sent || p.err != nil {
+		return
+	}
+	want := d.wantedNotifyPolicy()
+	d.mu.Lock()
+	notify := d.notifyBlockPending && d.notifyApplied != nil && d.notifyApplied.equal(want)
+	raw := d.notifyBlockRaw
+	ping := d.pingURLsBlockOpen
+	d.pingURLsBlockOpen = false
+	d.mu.Unlock()
+	if notify {
+		logging.Info("Applying notify level...")
+		d.logNotifyPolicyRead(raw, want, d.configPath)
+		d.logNotifyPolicyAnswer(p)
+		d.logNotifyLevelOutcome(raw, want, p.answer())
+	}
+	if ping {
+		logging.Info("Applying healthchecks ping URLs...")
+		logging.DebugStep(logging.GetDefaultLogger(), "ping urls", "same response as schedule, alive_url=set backup_url=set")
+		logging.Info("  Ping URLs: from ProxSave HC Server")
+		logging.Info("%s Healthchecks ping URLs: applied", theme.SymbolSuccess)
+	}
 }

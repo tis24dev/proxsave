@@ -123,7 +123,9 @@ func (d *daemon) refreshNotifyPolicy(ctx context.Context) {
 		}
 		p := d.pollCentralized(ctx, op, "")
 		d.afterFailedPoll(p)
-		if r := d.reporterFromPoll(p, false); r != nil {
+		// Inside the block a failed poll is reported by its why line and its DEBUG evidence, not
+		// by the "centralized fetch failed" WARNING: the ping URLs were resolved at start.
+		if r := d.reporterFromPoll(p, block); r != nil {
 			d.setReporter(r)
 		}
 		result = p
@@ -146,11 +148,11 @@ func (d *daemon) refreshNotifyPolicy(ctx context.Context) {
 	}
 	if !answered {
 		logging.DebugStep(logger, "notify policy", "no answer within %s", wait)
-		d.logNotifyLevelOutcome(want, reachNone)
+		d.logNotifyLevelOutcome(fresh.NotifyOn, want, reachNone)
 		return
 	}
 	d.logNotifyPolicyAnswer(result)
-	d.logNotifyLevelOutcome(want, result.answer())
+	d.logNotifyLevelOutcome(fresh.NotifyOn, want, result.answer())
 }
 
 // logNotifyPolicyRead is the DEBUG evidence of what the notify level block sends: NOTIFY_ON as
@@ -192,9 +194,11 @@ func (d *daemon) logNotifyPolicyAnswer(p configPoll) {
 
 // logNotifyLevelOutcome ends the notify level block: the level, then applied when the relay has
 // confirmed want, else what is in effect meanwhile (every outcome notified), why, and pending.
-func (d *daemon) logNotifyLevelOutcome(want notifyPolicy, answer pollReach) {
+// A pending block is remembered with raw, the NOTIFY_ON it read, for logResolvedStartBlocks.
+func (d *daemon) logNotifyLevelOutcome(raw string, want notifyPolicy, answer pollReach) {
 	d.mu.Lock()
 	confirmed := d.notifyApplied != nil && d.notifyApplied.equal(want)
+	d.notifyBlockPending, d.notifyBlockRaw = !confirmed, raw
 	d.mu.Unlock()
 	logging.Info("  Notify level: %s", want.notifyOn)
 	if confirmed {

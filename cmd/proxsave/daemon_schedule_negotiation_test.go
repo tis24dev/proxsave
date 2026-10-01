@@ -526,8 +526,9 @@ func waitForLine(t *testing.T, logs func() []string, line string) {
 	t.Fatalf("log never reached %q\nlog:\n%s", line, strings.Join(logs(), "\n"))
 }
 
-// A heartbeat retry the relay confirms prints the whole applied block, and the scheduler, which
-// was waiting on the daily cadence, prints the next backup of the weekly one and waits on it.
+// A heartbeat retry the relay confirms prints the whole applied block, its evidence after the
+// header, and the scheduler, which was waiting on the daily cadence, prints the next backup of
+// the weekly one and waits on it. The start's notify level was applied: no block for it.
 func TestScheduleHeartbeatConfirmationReArmsTheWait(t *testing.T) {
 	relay := newScheduleRelay(t, func(_ int, q url.Values) (int, any) { return http.StatusOK, relayBody(q, false, true) })
 	d := negotiationDaemon(t, relay.server.URL, "weekly", "mon", "1", "02:00")
@@ -552,14 +553,14 @@ func TestScheduleHeartbeatConfirmationReArmsTheWait(t *testing.T) {
 		t.Fatal("scheduleLoop did not return")
 	}
 	assertLogExact(t, normalized(logs()[mark:], d),
+		"INFO Applying backup schedule...",
+		"DEBUG schedule: read frequency=weekly weekday=mon monthday=1 time=02:00 source="+scheduleSource,
+		"DEBUG schedule: read last_confirmed=none source="+stateFile,
 		"DEBUG schedule: heartbeat retry wanted=weekly last_confirmed=none",
 		"DEBUG schedule: attempt=1/1 url=http://RELAY/api/healthcheck/config frequency=weekly notify_on=warning channels=email,telegram",
 		"DEBUG schedule: attempt=1/1 connected reused=true",
 		"DEBUG schedule: attempt=1/1 request written",
 		"DEBUG schedule: attempt=1/1 response http=200 elapsed=Nms",
-		"INFO Applying backup schedule...",
-		"DEBUG schedule: read frequency=weekly weekday=mon monthday=1 time=02:00 source="+scheduleSource,
-		"DEBUG schedule: read last_confirmed=none source="+stateFile,
 		"DEBUG schedule: attempt=1/1 ack frequency=weekly applied=true",
 		"DEBUG schedule: saved confirmed=weekly to "+stateFile,
 		"INFO   Frequency: weekly",
@@ -578,6 +579,121 @@ func TestScheduleHeartbeatConfirmationReArmsTheWait(t *testing.T) {
 	if st, _, _ := health.ReadScheduleState(d.cfg.BaseDir); st.LastConfirmed != "weekly" {
 		t.Fatalf("schedule state last_confirmed = %q, want weekly", st.LastConfirmed)
 	}
+}
+
+// heartbeatConfirmation runs one heartbeat retry while scheduleLoop waits, and returns the log
+// it wrote, through the next-backup line the confirmation re-arms.
+func heartbeatConfirmation(t *testing.T, d *daemon, logs func() []string, firstNext, nextAfter string) []string {
+	t.Helper()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan bool, 1)
+	go func() { done <- d.scheduleLoop(ctx) }()
+	waitForLine(t, logs, firstNext)
+	mark := len(logs())
+	if !d.retryScheduleOnHeartbeat(ctx) {
+		t.Fatal("the heartbeat sent no retry while the schedule is pending")
+	}
+	waitForLine(t, logs, nextAfter)
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("scheduleLoop did not return")
+	}
+	return normalized(logs()[mark:], d)
+}
+
+// A start the relay did not answer left the notify level pending and no ping URLs: the heartbeat
+// that gets the answer prints, after the schedule block, those two blocks applied, in the start's
+// order, then the next backup (part B, point 2).
+func TestScheduleHeartbeatAnswerResolvesTheStartBlocks(t *testing.T) {
+	relay := newScheduleRelay(t, func(int, url.Values) (int, any) {
+		return http.StatusServiceUnavailable, map[string]string{"error": "HC_NOT_READY"}
+	})
+	d := negotiationDaemon(t, relay.server.URL, "weekly", "mon", "1", "02:00")
+	d.cfg.HealthcheckAliveURL, d.cfg.HealthcheckBackupURL = "", ""
+	logs := captureDaemonLog(t)
+	d.logScheduleStart(context.Background())
+	relay.setReply(nil)
+	got := heartbeatConfirmation(t, d, logs,
+		"INFO daemon: next backup at 2026-10-01 02:00 (in 14h1m28s)",
+		"INFO daemon: next backup at 2026-10-05 02:00 (in 4d 14h1m28s)")
+	assertLogExact(t, got,
+		"INFO Applying backup schedule...",
+		"DEBUG schedule: read frequency=weekly weekday=mon monthday=1 time=02:00 source="+scheduleSource,
+		"DEBUG schedule: read last_confirmed=none source="+stateFile,
+		"DEBUG schedule: heartbeat retry wanted=weekly last_confirmed=none",
+		"DEBUG schedule: attempt=1/1 url=http://RELAY/api/healthcheck/config frequency=weekly notify_on=warning channels=email,telegram",
+		"DEBUG schedule: attempt=1/1 connected reused=true",
+		"DEBUG schedule: attempt=1/1 request written",
+		"DEBUG schedule: attempt=1/1 response http=200 elapsed=Nms",
+		"DEBUG schedule: attempt=1/1 ack frequency=weekly applied=true",
+		"DEBUG schedule: saved confirmed=weekly to "+stateFile,
+		"INFO   Frequency: weekly",
+		"INFO   Weekday: Monday",
+		"INFO   Time: 02:00",
+		"INFO ✓ Backup schedule: applied",
+		"INFO Applying notify level...",
+		"DEBUG notify policy: read notify_on=warning channels=email,telegram source="+scheduleSource,
+		"DEBUG notify policy: ack notify_on=warning channels=email,telegram mode=event_driven applied=true",
+		"INFO   Notify level: warning",
+		"INFO ✓ Notify level: applied",
+		"INFO Applying healthchecks ping URLs...",
+		"DEBUG ping urls: same response as schedule, alive_url=set backup_url=set",
+		"INFO   Ping URLs: from ProxSave HC Server",
+		"INFO ✓ Healthchecks ping URLs: applied",
+		"DEBUG schedule: next run frequency=weekly weekday=mon monthday=1 time=02:00 at=2026-10-05T02:00:00Z",
+		"INFO daemon: next backup at 2026-10-05 02:00 (in 4d 14h1m28s)",
+	)
+	if r := d.getReporter(); r == nil || !r.HasAliveURL() || !r.HasBackupURL() {
+		t.Fatal("the heartbeat's ping URLs were not put to use")
+	}
+}
+
+// An answer that does not confirm the schedule still resolves the other blocks: the notify level
+// and the ping URLs print applied, the schedule stays DEBUG only and pending, no next-backup line.
+// They print once: the confirmation that follows prints the schedule block alone.
+func TestScheduleHeartbeatAnswerWithoutConfirmationResolvesTheOtherBlocks(t *testing.T) {
+	relay := newScheduleRelay(t, func(int, url.Values) (int, any) {
+		return http.StatusServiceUnavailable, map[string]string{"error": "HC_NOT_READY"}
+	})
+	d := negotiationDaemon(t, relay.server.URL, "weekly", "mon", "1", "02:00")
+	d.cfg.HealthcheckAliveURL, d.cfg.HealthcheckBackupURL = "", ""
+	_ = startLines(t, d)
+
+	relay.setReply(func(_ int, q url.Values) (int, any) { return http.StatusOK, relayBody(q, false, true) })
+	logs := captureDaemonLog(t)
+	if !d.retryScheduleOnHeartbeat(context.Background()) {
+		t.Fatal("the heartbeat sent no retry while the schedule is pending")
+	}
+	assertLogExact(t, normalized(logs(), d),
+		"DEBUG schedule: heartbeat retry wanted=weekly last_confirmed=none",
+		"DEBUG schedule: attempt=1/1 url=http://RELAY/api/healthcheck/config frequency=weekly notify_on=warning channels=email,telegram",
+		"DEBUG schedule: attempt=1/1 connected reused=true",
+		"DEBUG schedule: attempt=1/1 request written",
+		"DEBUG schedule: attempt=1/1 response http=200 elapsed=Nms",
+		"DEBUG schedule: attempt=1/1 ack frequency=weekly applied=false",
+		"INFO Applying notify level...",
+		"DEBUG notify policy: read notify_on=warning channels=email,telegram source="+scheduleSource,
+		"DEBUG notify policy: ack notify_on=warning channels=email,telegram mode=event_driven applied=true",
+		"INFO   Notify level: warning",
+		"INFO ✓ Notify level: applied",
+		"INFO Applying healthchecks ping URLs...",
+		"DEBUG ping urls: same response as schedule, alive_url=set backup_url=set",
+		"INFO   Ping URLs: from ProxSave HC Server",
+		"INFO ✓ Healthchecks ping URLs: applied",
+	)
+
+	relay.setReply(nil)
+	logs = captureDaemonLog(t)
+	if !d.retryScheduleOnHeartbeat(context.Background()) {
+		t.Fatal("the heartbeat sent no retry while the schedule is pending")
+	}
+	got := logs()
+	assertLogSequence(t, got, "INFO Applying backup schedule...", "INFO ✓ Backup schedule: applied")
+	assertNoLogLine(t, got, "Notify level")
+	assertNoLogLine(t, got, "Ping URLs")
 }
 
 // A heartbeat tick whose schedule retry already polled the relay does not poll it a second time
