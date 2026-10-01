@@ -493,7 +493,7 @@ func blockLines(out string) []string {
 }
 
 // assertLines checks the whole block, line by line.
-func assertLines(t *testing.T, out string, want ...string) {
+func assertNotifyLines(t *testing.T, out string, want ...string) {
 	t.Helper()
 	if got := blockLines(out); !slices.Equal(got, want) {
 		t.Fatalf("block:\n%s\nwant:\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
@@ -627,7 +627,7 @@ func TestLogNotifyFilterInitSaysWhyTheRelayDidNotVouch(t *testing.T) {
 			logNotifyFilterInit(backupModeOptions{ctx: context.Background(), cfg: cfg, logger: logger}, nil, notifyfilter.SectionInitialized)
 
 			want := append(append(append([]string{}, head...), read...), tail(tc.why)...)
-			assertLines(t, buf.String(), want...)
+			assertNotifyLines(t, buf.String(), want...)
 		})
 	}
 }
@@ -713,7 +713,7 @@ func TestLogNotifyFilterInitWhyLineOrNone(t *testing.T) {
 
 			logNotifyFilterInit(backupModeOptions{ctx: context.Background(), cfg: cfg, logger: logger}, nil, tc.section)
 
-			assertLines(t, buf.String(), tc.want...)
+			assertNotifyLines(t, buf.String(), tc.want...)
 		})
 	}
 }
@@ -730,7 +730,7 @@ func TestLogNotifyFilterInitNoWhyLineWhenAlwaysIsRequested(t *testing.T) {
 
 	const op = "DEBUG notifications init: "
 	refused := "Get: dial tcp " + addr + ": connect: connection refused"
-	assertLines(t, buf.String(),
+	assertNotifyLines(t, buf.String(),
 		"INFO Applying notification filter...",
 		op+"read notify_on=always source=default",
 		op+"healthchecks mode=centralized section=initialized",
