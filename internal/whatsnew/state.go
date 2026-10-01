@@ -176,6 +176,11 @@ func adoptLegacyState(loc Location) error {
 	}
 	dst := StatePath(loc.LogPath)
 	if _, err := safefs.Lstat(fsCtx, dst, loc.Timeout); err == nil {
+		// LOG_PATH already holds the flag: it wins, and a copy left in identity/ goes, the
+		// same rule the daemon applies to its own state files (identity/ holds identity only).
+		if !loc.ReadOnly {
+			_ = safefs.Remove(fsCtx, LegacyStatePath(loc.BaseDir), loc.Timeout) // best-effort; absent is fine
+		}
 		return nil
 	} else if !errors.Is(err, fs.ErrNotExist) {
 		return fmt.Errorf("stat whatsnew state: %w", err)

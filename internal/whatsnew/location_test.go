@@ -55,7 +55,8 @@ func TestLoadStateMovesTheFlagFromIdentity(t *testing.T) {
 	}
 }
 
-// LOG_PATH already holding a flag wins: identity/ is not read, and is left alone.
+// LOG_PATH already holding a flag wins: identity/ is not read, and its copy is removed, the
+// same rule the daemon applies to its state files (identity/ holds identity only).
 func TestLoadStatePrefersTheFlagInLogPath(t *testing.T) {
 	baseDir := t.TempDir()
 	logPath := t.TempDir()
@@ -69,8 +70,8 @@ func TestLoadStatePrefersTheFlagInLogPath(t *testing.T) {
 	if err != nil || !present || st.LastSeenNotesVersion != "0.40.0" {
 		t.Fatalf("LoadState = (%+v, %v, %v), want the LOG_PATH flag 0.40.0", st, present, err)
 	}
-	if _, err := os.Stat(legacy); err != nil {
-		t.Fatalf("identity/ flag touched although LOG_PATH had one: %v", err)
+	if _, err := os.Stat(legacy); !os.IsNotExist(err) {
+		t.Fatalf("identity/ flag still there although LOG_PATH had one (stat err = %v)", err)
 	}
 }
 
