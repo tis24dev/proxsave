@@ -231,12 +231,15 @@ func (d *daemon) logScheduleStart(ctx context.Context) (polled bool) {
 	if d.relayNegotiatesSchedule() {
 		return d.startScheduleNegotiation(ctx, reading)
 	}
+	logger := logging.GetDefaultLogger()
 	if len(reading.invalid) > 0 {
-		d.logScheduleNotApplied(reading)
+		logging.Info("Applying backup schedule...")
+		d.logScheduleRead(reading)
+		logging.DebugStep(logger, "schedule", "%s", d.saveScheduleStart(reading))
+		d.logScheduleNotAppliedOutcome(reading)
 		return false
 	}
 	configured := reading.cadence
-	logger := logging.GetDefaultLogger()
 	logging.Info("Applying backup schedule...")
 	d.logScheduleRead(reading)
 	if !d.cfg.HealthcheckEnabled {
@@ -244,6 +247,7 @@ func (d *daemon) logScheduleStart(ctx context.Context) (polled bool) {
 	} else {
 		logging.DebugStep(logger, "schedule", "healthchecks mode=self, no relay negotiation")
 	}
+	logging.DebugStep(logger, "schedule", "%s", d.saveScheduleStart(reading))
 	logCadenceDetails(configured)
 	// On the operator's own server ProxSave does not manage the backup check's period, so a
 	// slower cadence is worth naming there (point 24: only when it is not daily).

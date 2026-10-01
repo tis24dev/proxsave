@@ -243,6 +243,7 @@ var notes = []Note{
 			"Backups can run daily, weekly or monthly (SCHEDULER_FREQUENCY); ProxSave HC Server adapts the backup check to it",
 			"The daemon journal shows the backup schedule at start; an invalid SCHEDULER_* value warns and backups run daily",
 			"A new frequency applies once ProxSave HC Server confirms it; until then the daemon journal says pending",
+			"--daemon-status and the dashboard daemon screen show the backup schedule in effect and whether backup.env matches it",
 			"Install and upgrade adopt a weekly or monthly proxsave cron line, and warn about a cron line they cannot adopt",
 			"The run log says whether the NOTIFY_ON filter is applied and, when it is not, why",
 			"The daemon keeps its state in BASE_DIR/daemon_state; identity/ now holds only the server identity and keys",

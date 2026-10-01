@@ -54,13 +54,35 @@ type ScheduleCadence struct {
 
 // ScheduleState is what the daemon keeps about the backup schedule in daemon_state/: the
 // frequency the ProxSave HC Server last confirmed (empty when none ever was) and the cadence
-// backup.env configured when the daemon started. Only a centralized daemon writes it.
+// backup.env configured when the daemon started, with how healthchecks ran then. Every daemon
+// writes it at start; only a centralized one records a confirmation, so a daemon that goes back
+// to centralized runs daily until the relay confirms again.
 type ScheduleState struct {
 	SchemaVersion int              `json:"schema_version"`
 	LastConfirmed string           `json:"last_confirmed,omitempty"`
 	ConfirmedTS   int64            `json:"confirmed_ts,omitempty"`
 	Configured    *ScheduleCadence `json:"configured,omitempty"`
 	ConfiguredTS  int64            `json:"configured_ts,omitempty"`
+	// ConfiguredInvalid says backup.env held an invalid value at start: Configured is then the
+	// fallback the daemon runs.
+	ConfiguredInvalid bool `json:"configured_invalid,omitempty"`
+	// Healthchecks is how the daemon ran healthchecks at start: ScheduleHealthchecksCentralized,
+	// ScheduleHealthchecksSelf or ScheduleHealthchecksOff. Empty is centralized: the first
+	// layout was written by a centralized daemon only.
+	Healthchecks string `json:"healthchecks,omitempty"`
+}
+
+// The values of ScheduleState.Healthchecks.
+const (
+	ScheduleHealthchecksCentralized = "centralized"
+	ScheduleHealthchecksSelf        = "self"
+	ScheduleHealthchecksOff         = "off"
+)
+
+// Negotiated reports whether the daemon that wrote st had its cadence confirmed by the relay,
+// rather than applied at once.
+func (st ScheduleState) Negotiated() bool {
+	return st.Healthchecks == "" || st.Healthchecks == ScheduleHealthchecksCentralized
 }
 
 // ScheduleStatePath is BASE_DIR/daemon_state/.schedule_state.json.

@@ -14,6 +14,7 @@ import (
 
 	"github.com/tis24dev/proxsave/internal/cli"
 	"github.com/tis24dev/proxsave/internal/config"
+	"github.com/tis24dev/proxsave/internal/cron"
 	"github.com/tis24dev/proxsave/internal/health"
 	"github.com/tis24dev/proxsave/internal/input"
 	"github.com/tis24dev/proxsave/internal/installer"
@@ -1069,9 +1070,59 @@ func buildDaemonStatusPrompt(diagnostics daemonDiagnostics) string {
 		}
 	}
 	b.WriteString("\n")
+	b.WriteString(buildDashboardBackupSchedule(diagnostics.Schedule))
+	b.WriteString("\n")
 	b.WriteString(buildDashboardPersonalScriptComparison("Personal pre-run script", diagnostics.Runtime, diagnostics.ScriptComparisons.Pre))
 	b.WriteString("\n")
 	b.WriteString(buildDashboardPersonalScriptComparison("Personal post-run script", diagnostics.Runtime, diagnostics.ScriptComparisons.Post))
+	return b.String()
+}
+
+// buildDashboardBackupSchedule is the dashboard form of the backup schedule block (todo points
+// 30-31, part C): values in the normal colour with their detail in grey, IN SYNC green, OUT OF
+// SYNC and the unavailable states yellow, PENDING normal, NOT RUNNING and NOT APPLICABLE grey.
+func buildDashboardBackupSchedule(c scheduleComparison) string {
+	value := func(cad cron.Cadence) string {
+		keyword, detail := scheduleStatusValue(cad)
+		return theme.Text.Render(keyword) + theme.Subtle.Render(" ("+detail+")")
+	}
+	var b strings.Builder
+	b.WriteString(theme.Text.Render("Backup schedule:"))
+	b.WriteString("\n")
+	b.WriteString(theme.Text.Render("  Daemon now: "))
+	switch c.RunningState {
+	case scheduleSideNotRunning:
+		b.WriteString(theme.Subtle.Render("NOT RUNNING"))
+	case scheduleSideUnavailable:
+		b.WriteString(theme.WarningText.Render("UNAVAILABLE") + theme.Subtle.Render(" ("+components.SanitizeText(c.RunningReason)+")"))
+	default:
+		b.WriteString(value(c.Running))
+	}
+	b.WriteString("\n")
+	b.WriteString(theme.Text.Render("  Configuration: "))
+	switch c.CurrentState {
+	case scheduleSideInvalid:
+		b.WriteString(theme.WarningText.Render("INVALID") + theme.Subtle.Render(" ("+components.SanitizeText(c.CurrentReason)+")"))
+	case scheduleSideUnknown:
+		b.WriteString(theme.WarningText.Render("UNKNOWN") + theme.Subtle.Render(": "+components.SanitizeText(c.CurrentReason)))
+	default:
+		b.WriteString(value(c.Current))
+	}
+	b.WriteString("\n")
+	b.WriteString(theme.Text.Render("  Synchronization: "))
+	reason := components.SanitizeText(c.SyncReason)
+	switch c.Sync {
+	case scheduleInSync:
+		b.WriteString(theme.SuccessText.Render("IN SYNC"))
+	case scheduleOutOfSync:
+		b.WriteString(theme.WarningText.Render("OUT OF SYNC") + theme.Subtle.Render(" ("+reason+")"))
+	case schedulePending:
+		b.WriteString(theme.Text.Render("PENDING") + theme.Subtle.Render(" ("+reason+")"))
+	case scheduleSyncNotApplicable:
+		b.WriteString(theme.Subtle.Render("NOT APPLICABLE"))
+	default:
+		b.WriteString(theme.WarningText.Render("UNKNOWN") + theme.Subtle.Render(" ("+reason+")"))
+	}
 	return b.String()
 }
 

@@ -165,10 +165,11 @@ func TestScheduleSelfWeeklyBlockAndNextRun(t *testing.T) {
 	logs := captureDaemonLog(t)
 	d := scheduleDaemon(t, "weekly", "mon", "1", "02:00", true, config.HealthcheckModeSelf)
 	runScheduleStart(t, d)
-	assertLogExact(t, logs(),
+	assertLogExact(t, normalized(logs(), d),
 		"INFO Applying backup schedule...",
 		"DEBUG schedule: read frequency=weekly weekday=mon monthday=1 time=02:00 source="+scheduleSource,
 		"DEBUG schedule: healthchecks mode=self, no relay negotiation",
+		"DEBUG schedule: saved configured frequency=weekly healthchecks=self to "+stateFile,
 		"INFO   Frequency: weekly",
 		"INFO   Weekday: Monday",
 		"INFO   Time: 02:00",
@@ -183,10 +184,11 @@ func TestScheduleSelfMonthlyNamesTheDayAndTheCheckPeriod(t *testing.T) {
 	logs := captureDaemonLog(t)
 	d := scheduleDaemon(t, "monthly", "mon", "15", "03:30", true, config.HealthcheckModeSelf)
 	runScheduleStart(t, d)
-	assertLogExact(t, logs(),
+	assertLogExact(t, normalized(logs(), d),
 		"INFO Applying backup schedule...",
 		"DEBUG schedule: read frequency=monthly weekday=mon monthday=15 time=03:30 source="+scheduleSource,
 		"DEBUG schedule: healthchecks mode=self, no relay negotiation",
+		"DEBUG schedule: saved configured frequency=monthly healthchecks=self to "+stateFile,
 		"INFO   Frequency: monthly",
 		"INFO   Day of month: 15",
 		"INFO   Time: 03:30",
@@ -201,10 +203,11 @@ func TestScheduleSelfDailyHasNoBackupCheckLine(t *testing.T) {
 	logs := captureDaemonLog(t)
 	d := scheduleDaemon(t, "daily", "mon", "1", "02:00", true, config.HealthcheckModeSelf)
 	runScheduleStart(t, d)
-	assertLogExact(t, logs(),
+	assertLogExact(t, normalized(logs(), d),
 		"INFO Applying backup schedule...",
 		"DEBUG schedule: read frequency=daily weekday=mon monthday=1 time=02:00 source="+scheduleSource,
 		"DEBUG schedule: healthchecks mode=self, no relay negotiation",
+		"DEBUG schedule: saved configured frequency=daily healthchecks=self to "+stateFile,
 		"INFO   Frequency: daily",
 		"INFO   Time: 02:00",
 		"INFO ✓ Backup schedule: applied",
@@ -218,10 +221,11 @@ func TestScheduleHealthchecksDisabledAppliesWithoutBackupCheck(t *testing.T) {
 	// Mode centralized in the file, but healthchecks off: nothing to negotiate, applied at once.
 	d := scheduleDaemon(t, "monthly", "mon", "15", "02:00", false, config.HealthcheckModeCentralized)
 	runScheduleStart(t, d)
-	assertLogExact(t, logs(),
+	assertLogExact(t, normalized(logs(), d),
 		"INFO Applying backup schedule...",
 		"DEBUG schedule: read frequency=monthly weekday=mon monthday=15 time=02:00 source="+scheduleSource,
 		"DEBUG schedule: healthchecks disabled, no relay negotiation",
+		"DEBUG schedule: saved configured frequency=monthly healthchecks=off to "+stateFile,
 		"INFO   Frequency: monthly",
 		"INFO   Day of month: 15",
 		"INFO   Time: 02:00",
@@ -382,11 +386,12 @@ func TestScheduleEmptyTimeIsTheSilentDefault(t *testing.T) {
 	logs := captureDaemonLog(t)
 	d := scheduleDaemon(t, "weekly", "fri", "1", "", false, config.HealthcheckModeSelf)
 	runScheduleStart(t, d)
-	assertLogExact(t, logs(),
+	assertLogExact(t, normalized(logs(), d),
 		"INFO Applying backup schedule...",
 		"DEBUG schedule: read frequency=weekly weekday=fri monthday=1 time= source="+scheduleSource,
 		"DEBUG schedule: time empty, default 02:00",
 		"DEBUG schedule: healthchecks disabled, no relay negotiation",
+		"DEBUG schedule: saved configured frequency=weekly healthchecks=off to "+stateFile,
 		"INFO   Frequency: weekly",
 		"INFO   Weekday: Friday",
 		"INFO   Time: 02:00",
@@ -403,11 +408,12 @@ func TestScheduleInvalidUnusedDayIsIgnored(t *testing.T) {
 		logs := captureDaemonLog(t)
 		d := scheduleDaemon(t, "monthly", "someday", "15", "02:00", false, config.HealthcheckModeSelf)
 		runScheduleStart(t, d)
-		assertLogExact(t, logs(),
+		assertLogExact(t, normalized(logs(), d),
 			"INFO Applying backup schedule...",
 			"DEBUG schedule: read frequency=monthly weekday=someday monthday=15 time=02:00 source="+scheduleSource,
 			`DEBUG schedule: weekday="someday" unused by frequency=monthly, ignored`,
 			"DEBUG schedule: healthchecks disabled, no relay negotiation",
+			"DEBUG schedule: saved configured frequency=monthly healthchecks=off to "+stateFile,
 			"INFO   Frequency: monthly",
 			"INFO   Day of month: 15",
 			"INFO   Time: 02:00",
@@ -420,11 +426,12 @@ func TestScheduleInvalidUnusedDayIsIgnored(t *testing.T) {
 		logs := captureDaemonLog(t)
 		d := scheduleDaemon(t, "weekly", "mon", "31", "02:00", false, config.HealthcheckModeSelf)
 		runScheduleStart(t, d)
-		assertLogExact(t, logs(),
+		assertLogExact(t, normalized(logs(), d),
 			"INFO Applying backup schedule...",
 			"DEBUG schedule: read frequency=weekly weekday=mon monthday=31 time=02:00 source="+scheduleSource,
 			`DEBUG schedule: monthday="31" unused by frequency=weekly, ignored`,
 			"DEBUG schedule: healthchecks disabled, no relay negotiation",
+			"DEBUG schedule: saved configured frequency=weekly healthchecks=off to "+stateFile,
 			"INFO   Frequency: weekly",
 			"INFO   Weekday: Monday",
 			"INFO   Time: 02:00",
@@ -437,12 +444,13 @@ func TestScheduleInvalidUnusedDayIsIgnored(t *testing.T) {
 		logs := captureDaemonLog(t)
 		d := scheduleDaemon(t, "daily", "someday", "31", "02:00", false, config.HealthcheckModeSelf)
 		runScheduleStart(t, d)
-		assertLogExact(t, logs(),
+		assertLogExact(t, normalized(logs(), d),
 			"INFO Applying backup schedule...",
 			"DEBUG schedule: read frequency=daily weekday=someday monthday=31 time=02:00 source="+scheduleSource,
 			`DEBUG schedule: weekday="someday" unused by frequency=daily, ignored`,
 			`DEBUG schedule: monthday="31" unused by frequency=daily, ignored`,
 			"DEBUG schedule: healthchecks disabled, no relay negotiation",
+			"DEBUG schedule: saved configured frequency=daily healthchecks=off to "+stateFile,
 			"INFO   Frequency: daily",
 			"INFO   Time: 02:00",
 			"INFO ✓ Backup schedule: applied",
@@ -456,10 +464,11 @@ func TestScheduleInvalidFrequencyRunsDailyAtTheConfiguredTime(t *testing.T) {
 	logs := captureDaemonLog(t)
 	d := scheduleDaemon(t, "fortnightly", "mon", "1", "04:15", true, config.HealthcheckModeSelf)
 	runScheduleStart(t, d)
-	assertLogExact(t, logs(),
+	assertLogExact(t, normalized(logs(), d),
 		"INFO Applying backup schedule...",
 		"DEBUG schedule: read frequency=fortnightly weekday=mon monthday=1 time=04:15 source="+scheduleSource,
 		`DEBUG schedule: invalid SCHEDULER_FREQUENCY="fortnightly" error=frequency must be daily, weekly, or monthly`,
+		"DEBUG schedule: saved configured frequency=daily healthchecks=self to "+stateFile,
 		"INFO   Frequency: fortnightly",
 		"INFO   Time: 04:15",
 		"INFO   In effect: daily at 04:15",
@@ -477,10 +486,11 @@ func TestScheduleInvalidUsedDayRunsDailyAtTheConfiguredTime(t *testing.T) {
 		logs := captureDaemonLog(t)
 		d := scheduleDaemon(t, "weekly", "someday", "1", "04:15", false, config.HealthcheckModeSelf)
 		runScheduleStart(t, d)
-		assertLogExact(t, logs(),
+		assertLogExact(t, normalized(logs(), d),
 			"INFO Applying backup schedule...",
 			"DEBUG schedule: read frequency=weekly weekday=someday monthday=1 time=04:15 source="+scheduleSource,
 			`DEBUG schedule: invalid SCHEDULER_WEEKDAY="someday" error=weekday must be one of mon, tue, wed, thu, fri, sat, sun`,
+			"DEBUG schedule: saved configured frequency=daily healthchecks=off to "+stateFile,
 			"INFO   Frequency: weekly",
 			"INFO   Time: 04:15",
 			"INFO   In effect: daily at 04:15",
@@ -494,10 +504,11 @@ func TestScheduleInvalidUsedDayRunsDailyAtTheConfiguredTime(t *testing.T) {
 		logs := captureDaemonLog(t)
 		d := scheduleDaemon(t, "monthly", "mon", "31", "04:15", false, config.HealthcheckModeSelf)
 		runScheduleStart(t, d)
-		assertLogExact(t, logs(),
+		assertLogExact(t, normalized(logs(), d),
 			"INFO Applying backup schedule...",
 			"DEBUG schedule: read frequency=monthly weekday=mon monthday=31 time=04:15 source="+scheduleSource,
 			`DEBUG schedule: invalid SCHEDULER_MONTHDAY="31" error=day of month must be between 1 and 28`,
+			"DEBUG schedule: saved configured frequency=daily healthchecks=off to "+stateFile,
 			"INFO   Frequency: monthly",
 			"INFO   Time: 04:15",
 			"INFO   In effect: daily at 04:15",
@@ -516,11 +527,12 @@ func TestScheduleNotAppliedShowsTheDefaultOfAnEmptyValue(t *testing.T) {
 		logs := captureDaemonLog(t)
 		d := scheduleDaemon(t, "fortnightly", "mon", "1", "", false, config.HealthcheckModeSelf)
 		runScheduleStart(t, d)
-		assertLogExact(t, logs(),
+		assertLogExact(t, normalized(logs(), d),
 			"INFO Applying backup schedule...",
 			"DEBUG schedule: read frequency=fortnightly weekday=mon monthday=1 time= source="+scheduleSource,
 			`DEBUG schedule: invalid SCHEDULER_FREQUENCY="fortnightly" error=frequency must be daily, weekly, or monthly`,
 			"DEBUG schedule: time empty, default 02:00",
+			"DEBUG schedule: saved configured frequency=daily healthchecks=off to "+stateFile,
 			"INFO   Frequency: fortnightly",
 			"INFO   Time: 02:00",
 			"INFO   In effect: daily at 02:00",
@@ -534,10 +546,11 @@ func TestScheduleNotAppliedShowsTheDefaultOfAnEmptyValue(t *testing.T) {
 		logs := captureDaemonLog(t)
 		d := scheduleDaemon(t, "", "mon", "1", "25:99", false, config.HealthcheckModeSelf)
 		runScheduleStart(t, d)
-		assertLogExact(t, logs(),
+		assertLogExact(t, normalized(logs(), d),
 			"INFO Applying backup schedule...",
 			"DEBUG schedule: read frequency= weekday=mon monthday=1 time=25:99 source="+scheduleSource,
 			`DEBUG schedule: invalid SCHEDULER_TIME="25:99" error=cron hour must be between 00 and 23`,
+			"DEBUG schedule: saved configured frequency=daily healthchecks=off to "+stateFile,
 			"INFO   Frequency: daily",
 			"INFO   Time: 25:99",
 			"INFO   In effect: daily at 02:00",
@@ -555,10 +568,11 @@ func TestScheduleNonNumericMonthDayIsQuoted(t *testing.T) {
 	logs := captureDaemonLog(t)
 	d := scheduleDaemon(t, "monthly", "mon", "abc", "02:00", false, config.HealthcheckModeSelf)
 	runScheduleStart(t, d)
-	assertLogExact(t, logs(),
+	assertLogExact(t, normalized(logs(), d),
 		"INFO Applying backup schedule...",
 		"DEBUG schedule: read frequency=monthly weekday=mon monthday=abc time=02:00 source="+scheduleSource,
 		`DEBUG schedule: invalid SCHEDULER_MONTHDAY="abc" error=day of month must be between 1 and 28`,
+		"DEBUG schedule: saved configured frequency=daily healthchecks=off to "+stateFile,
 		"INFO   Frequency: monthly",
 		"INFO   Time: 02:00",
 		"INFO   In effect: daily at 02:00",
@@ -575,10 +589,11 @@ func TestScheduleInvalidTimeRunsDailyAt0200(t *testing.T) {
 	logs := captureDaemonLog(t)
 	d := scheduleDaemon(t, "weekly", "mon", "1", "25:99", false, config.HealthcheckModeSelf)
 	runScheduleStart(t, d)
-	assertLogExact(t, logs(),
+	assertLogExact(t, normalized(logs(), d),
 		"INFO Applying backup schedule...",
 		"DEBUG schedule: read frequency=weekly weekday=mon monthday=1 time=25:99 source="+scheduleSource,
 		`DEBUG schedule: invalid SCHEDULER_TIME="25:99" error=cron hour must be between 00 and 23`,
+		"DEBUG schedule: saved configured frequency=daily healthchecks=off to "+stateFile,
 		"INFO   Frequency: weekly",
 		"INFO   Weekday: Monday",
 		"INFO   Time: 25:99",
@@ -595,11 +610,12 @@ func TestScheduleTwoInvalidValues(t *testing.T) {
 	logs := captureDaemonLog(t)
 	d := scheduleDaemon(t, "fortnightly", "mon", "1", "25:99", true, config.HealthcheckModeSelf)
 	runScheduleStart(t, d)
-	assertLogExact(t, logs(),
+	assertLogExact(t, normalized(logs(), d),
 		"INFO Applying backup schedule...",
 		"DEBUG schedule: read frequency=fortnightly weekday=mon monthday=1 time=25:99 source="+scheduleSource,
 		`DEBUG schedule: invalid SCHEDULER_FREQUENCY="fortnightly" error=frequency must be daily, weekly, or monthly`,
 		`DEBUG schedule: invalid SCHEDULER_TIME="25:99" error=cron hour must be between 00 and 23`,
+		"DEBUG schedule: saved configured frequency=daily healthchecks=self to "+stateFile,
 		"INFO   Frequency: fortnightly",
 		"INFO   Time: 25:99",
 		"INFO   In effect: daily at 02:00",
@@ -617,11 +633,12 @@ func TestScheduleInvalidDayAndTimeKeepTheWhyOrder(t *testing.T) {
 	logs := captureDaemonLog(t)
 	d := scheduleDaemon(t, "monthly", "mon", "0", "7pm", false, config.HealthcheckModeSelf)
 	runScheduleStart(t, d)
-	assertLogExact(t, logs(),
+	assertLogExact(t, normalized(logs(), d),
 		"INFO Applying backup schedule...",
 		"DEBUG schedule: read frequency=monthly weekday=mon monthday=0 time=7pm source="+scheduleSource,
 		`DEBUG schedule: invalid SCHEDULER_MONTHDAY="0" error=day of month must be between 1 and 28`,
 		`DEBUG schedule: invalid SCHEDULER_TIME="7pm" error=cron time must be in HH:MM format`,
+		"DEBUG schedule: saved configured frequency=daily healthchecks=off to "+stateFile,
 		"INFO   Frequency: monthly",
 		"INFO   Time: 7pm",
 		"INFO   In effect: daily at 02:00",
@@ -720,8 +737,11 @@ func TestScheduleNotAppliedBlockRepeatsBeforeEveryNextBackup(t *testing.T) {
 		`INFO Time "25:99" is not HH:MM`,
 		"WARNING ⚠ Backup schedule: not applied",
 	}
+	// The start saves the cadence it runs on; the repeats only report.
 	var want []string
-	want = append(want, block...)
+	want = append(want, block[:4]...)
+	want = append(want, "DEBUG schedule: saved configured frequency=daily healthchecks=off to "+stateFile)
+	want = append(want, block[4:]...)
 	want = append(want,
 		"DEBUG schedule: next run frequency=daily weekday=mon monthday=1 time=02:00 at=2026-10-01T02:00:00Z",
 		"INFO daemon: next backup at 2026-10-01 02:00 (in 0s)",
@@ -732,7 +752,7 @@ func TestScheduleNotAppliedBlockRepeatsBeforeEveryNextBackup(t *testing.T) {
 		"DEBUG schedule: next run frequency=daily weekday=mon monthday=1 time=02:00 at=2026-10-02T02:00:00Z",
 		"INFO daemon: next backup at 2026-10-02 02:00 (in 23h0m0s)",
 	)
-	assertLogExact(t, logs(), want...)
+	assertLogExact(t, normalized(logs(), d), want...)
 }
 
 // TestScheduleAppliedBlockIsPrintedOnce: a valid schedule is reported at start only.

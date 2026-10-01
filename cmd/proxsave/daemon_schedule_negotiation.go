@@ -172,7 +172,8 @@ func orNone(f cron.Frequency) string {
 // loadScheduleState reads the last confirmed frequency from .schedule_state.json, records the
 // cadence configured at this start there, and returns the DEBUG line of what it read. A missing,
 // unreadable or unknown value is no confirmed frequency: daily (todo point 22).
-func (d *daemon) loadScheduleState(configured cron.Cadence) string {
+func (d *daemon) loadScheduleState(reading scheduleReading) string {
+	configured := reading.cadence
 	path := health.ScheduleStatePath(d.cfg.BaseDir)
 	st, found, err := health.ReadScheduleState(d.cfg.BaseDir)
 	var last cron.Frequency
@@ -194,6 +195,8 @@ func (d *daemon) loadScheduleState(configured cron.Cadence) string {
 	}
 	st.Configured = cadenceState(configured)
 	st.ConfiguredTS = d.now().Unix()
+	st.ConfiguredInvalid = len(reading.invalid) > 0
+	st.Healthchecks = health.ScheduleHealthchecksCentralized
 	d.mu.Lock()
 	d.scheduleWant = configured.Frequency
 	d.scheduleConfigured = configured
@@ -205,6 +208,28 @@ func (d *daemon) loadScheduleState(configured cron.Cadence) string {
 		line += fmt.Sprintf("; save configured failed error=%v", werr)
 	}
 	return line
+}
+
+// saveScheduleStart records, for a daemon that applies its cadence at once (healthchecks off or
+// self mode), the cadence configured at this start in .schedule_state.json, with no confirmed
+// frequency (part C, case 1): --daemon-status reads what the daemon runs from it. It returns the
+// DEBUG line of the save.
+func (d *daemon) saveScheduleStart(reading scheduleReading) string {
+	mode := health.ScheduleHealthchecksSelf
+	if !d.cfg.HealthcheckEnabled {
+		mode = health.ScheduleHealthchecksOff
+	}
+	st := health.ScheduleState{
+		Configured:        cadenceState(reading.cadence),
+		ConfiguredTS:      d.now().Unix(),
+		ConfiguredInvalid: len(reading.invalid) > 0,
+		Healthchecks:      mode,
+	}
+	path := health.ScheduleStatePath(d.cfg.BaseDir)
+	if err := health.WriteScheduleState(d.cfg.BaseDir, st); err != nil {
+		return fmt.Sprintf("save configured failed file=%s error=%v", path, err)
+	}
+	return fmt.Sprintf("saved configured frequency=%s healthchecks=%s to %s", reading.cadence.Frequency, mode, path)
 }
 
 // confirmSchedule records the relay's confirmation of freq, in memory and in
@@ -292,7 +317,7 @@ func (d *daemon) logScheduleFallback() {
 // reports whether a poll was sent.
 func (d *daemon) startScheduleNegotiation(ctx context.Context, reading scheduleReading) bool {
 	configured := reading.cadence
-	stateLine := d.loadScheduleState(configured)
+	stateLine := d.loadScheduleState(reading)
 	d.scheduleChanged = make(chan struct{}, 1)
 	logger := logging.GetDefaultLogger()
 
