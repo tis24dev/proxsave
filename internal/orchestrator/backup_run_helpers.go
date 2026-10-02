@@ -265,10 +265,9 @@ func backupArchiveCreationError(err error) error {
 	return &BackupError{Phase: phase, Err: err, Code: code}
 }
 
-func (o *Orchestrator) skipDryRunArtifactVerification(stats *BackupStats, artifacts *backupArtifacts) error {
+func (o *Orchestrator) skipDryRunArtifactVerification(stats *BackupStats) error {
 	fmt.Println()
 	o.logStep(4, "Verification skipped (dry run mode)")
-	o.logger.Info("[DRY RUN] Would create archive: %s", artifacts.archivePath)
 	stats.EndTime = o.now()
 	return nil
 }
