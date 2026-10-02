@@ -32,7 +32,7 @@ func TestArchiveDoesNotAttachStderrOnOutputOpenFailure(t *testing.T) {
 	logger := logging.New(types.LogLevelError, false)
 
 	// Arm 1: output-file open fails before any goroutine is needed. A path under a
-	// non-existent directory makes createBackupOutputFile's os.OpenRoot(dir) fail.
+	// non-existent directory makes createArchiveOutputFile's os.OpenRoot(dir) fail.
 	attaches = 0
 	a := NewArchiver(logger, &ArchiverConfig{
 		Compression:      types.CompressionXZ,
@@ -53,7 +53,7 @@ func TestArchiveDoesNotAttachStderrOnOutputOpenFailure(t *testing.T) {
 
 	// Arm 2: encryption setup fails after the output file opens but before the
 	// stderr reader should attach. Encryption is enabled with no AGE recipients, so
-	// wrapEncryptionWriter errors while createBackupOutputFile still succeeds (the
+	// wrapEncryptionWriter errors while createArchiveOutputFile still succeeds (the
 	// output directory exists). With the attach placed after wrapEncryptionWriter
 	// (matching pipeTarThroughCommand) this early return cannot leak the goroutine.
 	attaches = 0

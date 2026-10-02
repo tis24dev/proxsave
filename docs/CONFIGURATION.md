@@ -555,9 +555,16 @@ When `SET_BACKUP_PERMISSIONS=true`, the system applies Bash-compatible ownership
 - Does NOT touch binary files, config files, or system paths
 
 **Permissions (chmod)**:
-- Applies mode `0750` (rwxr-x---) to directories only
-- Files keep their existing permissions (unchanged)
-- Conservative and safe approach
+- Applies mode `0750` (rwxr-x---) to directories
+- Applies mode `0640` (rw-r-----) to the files of a backup set: the archive or bundle and its `.sha256`, `.metadata` and `.manifest.json`
+- Every other file (logs included) keeps its existing permissions
+- The backup written by the current run gets `BACKUP_USER:BACKUP_GROUP` and `0640` on `BACKUP_PATH` and `SECONDARY_PATH` as soon as it is stored, not at the next run
+
+**Without it** (`SET_BACKUP_PERMISSIONS=false`, the default): every file of a backup set is `0600` owned by `root:root`, so only root can read the backups.
+
+**Turning it off later**: files already at `0640` stay as they are until retention removes them; new backups are `0600` `root:root` again.
+
+**Cloud storage** is not covered: the mode of a cloud copy is whatever the rclone backend gives it.
 
 **Requirements**:
 - Both `BACKUP_USER` and `BACKUP_GROUP` must be set
@@ -587,7 +594,8 @@ BACKUP_USER=backup
 BACKUP_GROUP=backup
 SET_BACKUP_PERMISSIONS=true
 
-# Result: All backup/log directories owned by backup:backup with mode 0750
+# Result: backup/log directories owned by backup:backup with mode 0750,
+#         backup files owned by backup:backup with mode 0640
 ```
 
 ---

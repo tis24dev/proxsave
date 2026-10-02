@@ -26,10 +26,10 @@ cloud log upload dest=charremote:<ROOT>/cloud-log/backup-charhost-20260102-03040
 
 ===== files per location after the run =====
 [backup path (local)]
-  charhost-backup-20260102-030405.tar mode=0640 size=16384
+  charhost-backup-20260102-030405.tar mode=0600 size=16384
   charhost-backup-20260102-030405.tar.manifest.json mode=0600 size=658
-  charhost-backup-20260102-030405.tar.metadata mode=0640 size=658
-  charhost-backup-20260102-030405.tar.sha256 mode=0640 size=102
+  charhost-backup-20260102-030405.tar.metadata mode=0600 size=658
+  charhost-backup-20260102-030405.tar.sha256 mode=0600 size=102
 [secondary path]
   charhost-backup-20260102-030405.tar mode=0640 size=16384 (same bytes as the reference location)
 [cloud path]
