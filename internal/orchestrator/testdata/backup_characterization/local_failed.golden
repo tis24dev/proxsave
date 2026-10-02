@@ -431,7 +431,7 @@ charhost-backup-20260102-030405.tar.bundle.tar:
   "CloudGFSWeekly": 0,
   "CloudGFSMonthly": 0,
   "CloudGFSYearly": 0,
-  "ErrorCount": 0,
+  "ErrorCount": 1,
   "WarningCount": 3,
   "NotifyCount": 0,
   "LogFilePath": "<ROOT>/log/backup-charhost-20260102-030405.log",

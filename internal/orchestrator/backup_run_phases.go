@@ -153,6 +153,18 @@ func (o *Orchestrator) finalizeFailedBackupStats(run *backupRunContext, runErr e
 	stats.Failed = true
 	o.ensureBackupStatsTiming(stats)
 	o.parseFailedBackupLogCounts(stats)
+	// The ERROR line that reports this failure is written by the caller
+	// (handleBackupRunError, cmd/proxsave/backup_execution.go) only after RunGoBackup
+	// returns, so the log parsed above does not hold it yet and exportBackupMetrics
+	// would publish errors_total 0 next to status 2 (F5). Count it here. With a log
+	// file the notifications are not affected: snapshotPreNotificationIssues re-reads
+	// the log after that line is written and overwrites this count, so it is never
+	// counted twice. Without one nothing re-reads, and this count is what they show.
+	// A canceled run is reported with a WARNING, not an ERROR, so it adds nothing;
+	// the test is the caller's own (ctx.Err() == context.Canceled).
+	if run.ctx == nil || run.ctx.Err() != context.Canceled {
+		stats.ErrorCount++
+	}
 	stats.ExitCode = backupFailureExitCode(runErr)
 
 	// Every location this run did not describe still holds what it held at startup,
