@@ -383,3 +383,61 @@ func TestSaveStatsReportDryRunLeavesNoReportPath(t *testing.T) {
 		t.Fatalf("report is not JSON: %s", data)
 	}
 }
+
+// N4: the current run's own profiles (passed from bootstrap) are not "previous
+// execution" files: a real cleanup keeps them and removes the others, a dry run
+// leaves everything and does not count them.
+func TestCleanupPreviousExecutionArtifactsKeepsRunProfiles(t *testing.T) {
+	origRoot := workspaceRoot
+	workspaceRoot = t.TempDir()
+	t.Cleanup(func() { workspaceRoot = origRoot })
+
+	profDir := filepath.Join("/tmp", "proxsave")
+	if err := os.MkdirAll(profDir, 0o755); err != nil {
+		t.Fatalf("prepare %s: %v", profDir, err)
+	}
+	stamp := time.Now().UnixNano()
+	ownCPU := filepath.Join(profDir, fmt.Sprintf("cpu-n4own-%d.pprof", stamp))
+	ownHeap := filepath.Join(profDir, fmt.Sprintf("heap-n4own-%d.pprof", stamp))
+	prevCPU := filepath.Join(profDir, fmt.Sprintf("cpu-n4prev-%d.pprof", stamp))
+	prevHeap := filepath.Join(profDir, fmt.Sprintf("heap-n4prev-%d.pprof", stamp))
+	for _, p := range []string{ownCPU, ownHeap, prevCPU, prevHeap} {
+		if err := os.WriteFile(p, []byte("pprof"), 0o600); err != nil {
+			t.Fatalf("write %s: %v", p, err)
+		}
+		p := p
+		t.Cleanup(func() { _ = os.Remove(p) })
+	}
+
+	newOrch := func(dryRun bool, out *bytes.Buffer) *Orchestrator {
+		logger := logging.New(types.LogLevelInfo, false)
+		logger.SetOutput(out)
+		reg, err := NewTempDirRegistry(logging.New(types.LogLevelError, false), filepath.Join(t.TempDir(), "registry.json"))
+		if err != nil {
+			t.Fatalf("NewTempDirRegistry: %v", err)
+		}
+		o := &Orchestrator{logger: logger, dryRun: dryRun, logPath: t.TempDir(), tempRegistry: reg}
+		o.SetRunProfilePaths(ownCPU, "", ownHeap)
+		return o
+	}
+
+	wantFiles := tmpProfileCount(t) - 2
+	var dryOut bytes.Buffer
+	newOrch(true, &dryOut).cleanupPreviousExecutionArtifacts(context.Background())
+	outputLine(t, dryOut.String(), fmt.Sprintf("[DRY RUN] Would remove %d item(s) from previous executions (%d file(s), 0 dir(s))", wantFiles, wantFiles))
+	for _, p := range []string{ownCPU, ownHeap, prevCPU, prevHeap} {
+		requireExists(t, p, p)
+	}
+
+	var realOut bytes.Buffer
+	newOrch(false, &realOut).cleanupPreviousExecutionArtifacts(context.Background())
+	outputLine(t, realOut.String(), fmt.Sprintf("Cleanup of previous execution files completed successfully (%d item(s) removed: %d file(s), 0 dir(s))", wantFiles, wantFiles))
+	if _, err := os.Stat(ownCPU); err != nil {
+		t.Fatalf("this run's CPU profile must survive the cleanup: %v", err)
+	}
+	if _, err := os.Stat(ownHeap); err != nil {
+		t.Fatalf("this run's heap profile path must survive the cleanup: %v", err)
+	}
+	requireGone(t, prevCPU, "previous CPU profile")
+	requireGone(t, prevHeap, "previous heap profile")
+}
