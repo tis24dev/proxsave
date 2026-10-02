@@ -191,11 +191,8 @@ func (o *Orchestrator) prepareBackupWorkspace(run *backupRunContext, workspace *
 	}
 	workspace.tempDir = tempDir
 
-	if o.dryRun {
-		o.logger.Info("[DRY RUN] Temporary directory would be: %s", workspace.tempDir)
-	} else {
-		o.logger.Debug("Using temporary directory: %s", workspace.tempDir)
-	}
+	// Dry run creates the workspace too (collection stages into it), so it says what a real run says.
+	o.logger.Debug("Using temporary directory: %s", workspace.tempDir)
 	return nil
 }
 
@@ -333,7 +330,12 @@ func (o *Orchestrator) createBackupArchive(run *backupRunContext, workspace *bac
 	o.logResolvedBackupCompression(run.stats)
 
 	partialPath := archivePath + ".partial"
-	if err := createBackupArchiveFile(run.ctx, archiver, workspace.tempDir, partialPath); err != nil {
+	createPath := partialPath
+	if o.dryRun {
+		// Nothing is written in dry run: name the archive a real run leaves, not the internal partial.
+		createPath = archivePath
+	}
+	if err := createBackupArchiveFile(run.ctx, archiver, workspace.tempDir, createPath); err != nil {
 		// A failed or cancelled CreateArchive can leave a truncated partial; remove
 		// it so nothing lingers on the backup path.
 		discardPartialArchive(workspace.fs, partialPath)
@@ -352,7 +354,7 @@ func (o *Orchestrator) createBackupArchive(run *backupRunContext, workspace *bac
 func (o *Orchestrator) verifyAndWriteBackupArtifacts(run *backupRunContext, workspace *backupWorkspace, artifacts *backupArtifacts) error {
 	stats := run.stats
 	if o.dryRun {
-		return o.skipDryRunArtifactVerification(stats, artifacts)
+		return o.skipDryRunArtifactVerification(stats)
 	}
 
 	fmt.Println()
@@ -394,11 +396,18 @@ func (o *Orchestrator) verifyAndWriteBackupArtifacts(run *backupRunContext, work
 }
 
 func (o *Orchestrator) bundleBackupArtifacts(run *backupRunContext, workspace *backupWorkspace, artifacts *backupArtifacts) error {
+	bundleEnabled := o.cfg != nil && o.cfg.BundleAssociatedFiles
 	if o.dryRun {
+		fmt.Println()
+		if bundleEnabled {
+			o.logStep(5, "Bundling skipped (dry run mode)")
+		} else {
+			// Same line a real run prints when bundling is off.
+			o.logger.Skip("Bundling disabled")
+		}
 		return nil
 	}
 
-	bundleEnabled := o.cfg != nil && o.cfg.BundleAssociatedFiles
 	if !bundleEnabled {
 		fmt.Println()
 		o.logger.Skip("Bundling disabled")

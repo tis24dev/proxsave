@@ -864,12 +864,13 @@ func (o *Orchestrator) SaveStatsReport(stats *BackupStats) (err error) {
 
 	timestampStr := stats.Timestamp.Format("20060102-150405")
 	reportPath := filepath.Join(o.logPath, fmt.Sprintf("backup-stats-%s.json", timestampStr))
-	stats.ReportPath = reportPath
 
 	if o.dryRun {
+		// ReportPath stays empty: nothing is written, so the caller must not claim a saved report.
 		o.logger.Info("[DRY RUN] Would write stats report: %s", reportPath)
 		return nil
 	}
+	stats.ReportPath = reportPath
 
 	if err := fs.MkdirAll(o.logPath, 0755); err != nil {
 		return fmt.Errorf("create log directory: %w", err)
@@ -969,6 +970,7 @@ func (o *Orchestrator) SaveStatsReport(stats *BackupStats) (err error) {
 
 // cleanupPreviousExecutionArtifacts performs unified cleanup of old JSON stats, pprof files,
 // and orphaned temp directories. Returns the TempDirRegistry for use by the caller.
+// In dry run it removes nothing: it counts what a real run would remove and reports that.
 func (o *Orchestrator) cleanupPreviousExecutionArtifacts(ctx context.Context) *TempDirRegistry {
 	fs := o.filesystem()
 	timeout := o.fsIoTimeout()
@@ -1040,6 +1042,11 @@ func (o *Orchestrator) cleanupPreviousExecutionArtifacts(ctx context.Context) *T
 
 		for _, file := range statsFiles {
 			filename := filepath.Base(file)
+			if o.dryRun {
+				o.logger.Debug("[DRY RUN] Would remove stats file %s", filename)
+				removedFiles++
+				continue
+			}
 			if err := boundedRemove(file); err != nil {
 				o.logger.Debug("Failed to remove file %s: %v", filename, err)
 				failedFiles++
@@ -1060,6 +1067,11 @@ func (o *Orchestrator) cleanupPreviousExecutionArtifacts(ctx context.Context) *T
 
 		for _, file := range cpuProfiles {
 			filename := filepath.Base(file)
+			if o.dryRun {
+				o.logger.Debug("[DRY RUN] Would remove CPU profile %s", filename)
+				removedFiles++
+				continue
+			}
 			if err := boundedRemove(file); err != nil {
 				o.logger.Debug("Failed to remove CPU profile %s: %v", filename, err)
 				failedFiles++
@@ -1080,6 +1092,11 @@ func (o *Orchestrator) cleanupPreviousExecutionArtifacts(ctx context.Context) *T
 
 		for _, file := range heapProfiles {
 			filename := filepath.Base(file)
+			if o.dryRun {
+				o.logger.Debug("[DRY RUN] Would remove heap profile %s", filename)
+				removedFiles++
+				continue
+			}
 			if err := boundedRemove(file); err != nil {
 				o.logger.Debug("Failed to remove heap profile %s: %v", filename, err)
 				failedFiles++
@@ -1098,8 +1115,13 @@ func (o *Orchestrator) cleanupPreviousExecutionArtifacts(ctx context.Context) *T
 		}
 		o.logger.Debug("Checking for orphaned temp directories older than %s", tempDirCleanupAge)
 
-		// CleanupOrphaned now returns the count of directories removed
-		count, err := registry.CleanupOrphaned(tempDirCleanupAge)
+		// CleanupOrphaned returns the count of directories removed; CountOrphaned
+		// returns the count it would remove, touching none of them (dry run).
+		sweep := registry.CleanupOrphaned
+		if o.dryRun {
+			sweep = registry.CountOrphaned
+		}
+		count, err := sweep(tempDirCleanupAge)
 		if err != nil {
 			o.logger.Debug("Temp dir cleanup skipped: %v", err)
 		} else {
@@ -1109,7 +1131,11 @@ func (o *Orchestrator) cleanupPreviousExecutionArtifacts(ctx context.Context) *T
 
 	// Final summary - only show if cleanup was actually performed
 	if cleanupStarted {
-		if removedFiles > 0 || removedDirs > 0 {
+		if o.dryRun {
+			if removedFiles > 0 || removedDirs > 0 {
+				o.logger.Info("[DRY RUN] Would remove %d item(s) from previous executions (%d file(s), %d dir(s))", removedFiles+removedDirs, removedFiles, removedDirs)
+			}
+		} else if removedFiles > 0 || removedDirs > 0 {
 			totalRemoved := removedFiles + removedDirs
 			if failedFiles > 0 {
 				o.logger.Info("Cleanup of previous execution files completed with errors (%d item(s) removed: %d file(s), %d dir(s); %d failed)", totalRemoved, removedFiles, removedDirs, failedFiles)

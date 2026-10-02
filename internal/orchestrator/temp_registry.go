@@ -156,6 +156,18 @@ func (r *TempDirRegistry) Deregister(dir string) error {
 // CleanupOrphaned removes entries whose processes are gone or directories are too old.
 // Returns the number of directories successfully removed.
 func (r *TempDirRegistry) CleanupOrphaned(maxAge time.Duration) (int, error) {
+	return r.sweepOrphaned(maxAge, false)
+}
+
+// CountOrphaned is the dry-run counterpart of CleanupOrphaned: it returns how many
+// directories CleanupOrphaned would remove and removes none of them, keeping their
+// entries. Untrusted entries are still dropped from the registry with the same
+// warning, as in a real run: that touches the registry only, never the filesystem.
+func (r *TempDirRegistry) CountOrphaned(maxAge time.Duration) (int, error) {
+	return r.sweepOrphaned(maxAge, true)
+}
+
+func (r *TempDirRegistry) sweepOrphaned(maxAge time.Duration, dryRun bool) (int, error) {
 	now := time.Now().UTC()
 	cleanedCount := 0
 	err := r.withLock(func(entries []tempDirRecord) ([]tempDirRecord, error) {
@@ -170,6 +182,14 @@ func (r *TempDirRegistry) CleanupOrphaned(maxAge time.Duration) (int, error) {
 						r.logger.Warning("Refusing to remove registry entry %s: not a ProxSave workspace under %s; dropping untrusted entry", entry.Path, workspaceRoot)
 					}
 					// Drop the untrusted entry without touching the filesystem path.
+					continue
+				}
+				if dryRun {
+					if r.logger != nil {
+						r.logger.Debug("[DRY RUN] Would remove orphaned temp dir %s (pid=%d)", entry.Path, entry.PID)
+					}
+					updated = append(updated, entry)
+					cleanedCount++
 					continue
 				}
 				if r.logger != nil {

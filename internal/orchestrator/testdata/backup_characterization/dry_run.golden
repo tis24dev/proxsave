@@ -32,7 +32,7 @@ exit code (as cmd/proxsave computes it): 1
 
 [<TIME>] STEP     [1] Initializing backup statistics and temporary workspace
 [<TIME>] DEBUG    Creating temporary directory for collection output
-[<TIME>] INFO     [DRY RUN] Temporary directory would be: <ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM>
+[<TIME>] DEBUG    Using temporary directory: <ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM>
 
 [<TIME>] STEP     [2] Collection of configuration files and optimizations
 [<TIME>] INFO     Collecting configuration files...
@@ -159,11 +159,12 @@ exit code (as cmd/proxsave computes it): 1
 [<TIME>] DEBUG    Resolving compression (requested=none level=0 mode=standard)
 [<TIME>] DEBUG    Compression resolved to none (level 0, threads 0)
 [<TIME>] INFO     Creating compressed archive with none (level 0, mode standard, threads auto)
-[<TIME>] DEBUG    Creating archive: <ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM> -> <ROOT>/backup/charhost-backup-20260102-030405.tar.partial (compression: none)
-[<TIME>] INFO     [DRY RUN] Would create archive: <ROOT>/backup/charhost-backup-20260102-030405.tar.partial
+[<TIME>] DEBUG    Creating archive: <ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM> -> <ROOT>/backup/charhost-backup-20260102-030405.tar (compression: none)
+[<TIME>] INFO     [DRY RUN] Would create archive: <ROOT>/backup/charhost-backup-20260102-030405.tar
 
 [<TIME>] STEP     [4] Verification skipped (dry run mode)
-[<TIME>] INFO     [DRY RUN] Would create archive: <ROOT>/backup/charhost-backup-20260102-030405.tar
+
+[<TIME>] STEP     [5] Bundling skipped (dry run mode)
 [<TIME>] DEBUG    Parsing log file for error/warning counts: <ROOT>/log/backup-charhost-20260102-030405.log
 [<TIME>] DEBUG    Found 0 errors and 1 warnings in log file
 [<TIME>] DEBUG    Aggregated exit code based on log analysis: 1
@@ -183,7 +184,7 @@ exit code (as cmd/proxsave computes it): 1
 [<TIME>] DEBUG    Checking for orphaned temp directories older than 24h0m0s
 [<TIME>] STEP     [1] Initializing backup statistics and temporary workspace
 [<TIME>] DEBUG    Creating temporary directory for collection output
-[<TIME>] INFO     [DRY RUN] Temporary directory would be: <ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM>
+[<TIME>] DEBUG    Using temporary directory: <ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM>
 [<TIME>] STEP     [2] Collection of configuration files and optimizations
 [<TIME>] INFO     Collecting configuration files...
 [<TIME>] DEBUG    Collector dry-run=true excludePatterns=0
@@ -308,10 +309,10 @@ exit code (as cmd/proxsave computes it): 1
 [<TIME>] DEBUG    Resolving compression (requested=none level=0 mode=standard)
 [<TIME>] DEBUG    Compression resolved to none (level 0, threads 0)
 [<TIME>] INFO     Creating compressed archive with none (level 0, mode standard, threads auto)
-[<TIME>] DEBUG    Creating archive: <ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM> -> <ROOT>/backup/charhost-backup-20260102-030405.tar.partial (compression: none)
-[<TIME>] INFO     [DRY RUN] Would create archive: <ROOT>/backup/charhost-backup-20260102-030405.tar.partial
-[<TIME>] STEP     [4] Verification skipped (dry run mode)
+[<TIME>] DEBUG    Creating archive: <ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM> -> <ROOT>/backup/charhost-backup-20260102-030405.tar (compression: none)
 [<TIME>] INFO     [DRY RUN] Would create archive: <ROOT>/backup/charhost-backup-20260102-030405.tar
+[<TIME>] STEP     [4] Verification skipped (dry run mode)
+[<TIME>] STEP     [5] Bundling skipped (dry run mode)
 [<TIME>] DEBUG    Parsing log file for error/warning counts: <ROOT>/log/backup-charhost-20260102-030405.log
 [<TIME>] DEBUG    Found 0 errors and 1 warnings in log file
 [<TIME>] DEBUG    Aggregated exit code based on log analysis: 1

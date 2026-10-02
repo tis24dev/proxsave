@@ -111,11 +111,14 @@ func TestSaveStatsReportDryRun(t *testing.T) {
 		t.Fatalf("SaveStatsReport (dry-run) failed: %v", err)
 	}
 
-	if stats.ReportPath == "" {
-		t.Error("ReportPath should be populated")
+	// Nothing is written, so no report path is handed back (the caller would print
+	// "Statistics report saved" for it).
+	if stats.ReportPath != "" {
+		t.Errorf("ReportPath must stay empty in dry run, got %q", stats.ReportPath)
 	}
 
-	if _, err := os.Stat(stats.ReportPath); !os.IsNotExist(err) {
+	reportPath := filepath.Join(tempDir, "backup-stats-"+now.Format("20060102-150405")+".json")
+	if _, err := os.Stat(reportPath); !os.IsNotExist(err) {
 		t.Error("Dry-run should not create a report file on disk")
 	}
 }
