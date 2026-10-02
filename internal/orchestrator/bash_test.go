@@ -198,21 +198,23 @@ func (m *mockNotifier) Notify(ctx context.Context, stats *BackupStats) error {
 	return m.err
 }
 
-func TestDispatchPostBackupNoTargets(t *testing.T) {
+func TestSyncStorageTargetsNoTargets(t *testing.T) {
 	logger := logging.New(types.LogLevelInfo, false)
 	orch := New(logger, false)
+	stats := &BackupStats{}
 
-	if err := orch.dispatchPostBackup(context.Background(), &BackupStats{}); err != nil {
-		t.Fatalf("dispatchPostBackup with no targets should not error: %v", err)
+	if err := orch.syncStorageTargets(context.Background(), stats); err != nil {
+		t.Fatalf("syncStorageTargets with no targets should not error: %v", err)
 	}
+	orch.FinalizeAfterRun(context.Background(), stats)
 }
 
-func TestDispatchPostBackupStorageError(t *testing.T) {
+func TestSyncStorageTargetsStorageError(t *testing.T) {
 	logger := logging.New(types.LogLevelInfo, false)
 	orch := New(logger, false)
 	orch.RegisterStorageTarget(&mockStorage{err: errors.New("storage failure")})
 
-	err := orch.dispatchPostBackup(context.Background(), &BackupStats{})
+	err := orch.syncStorageTargets(context.Background(), &BackupStats{})
 	if err == nil {
 		t.Fatal("expected error when storage target fails")
 	}
@@ -229,14 +231,16 @@ func TestDispatchPostBackupStorageError(t *testing.T) {
 	}
 }
 
-func TestDispatchPostBackupNotificationError(t *testing.T) {
+func TestFinalizeAfterRunNotificationError(t *testing.T) {
 	logger := logging.New(types.LogLevelInfo, false)
 	orch := New(logger, false)
 	orch.RegisterNotificationChannel(&mockNotifier{err: errors.New("notify failure")})
+	stats := &BackupStats{}
 
 	// Notifications are non-critical: errors should NOT abort backup
-	err := orch.dispatchPostBackup(context.Background(), &BackupStats{})
+	err := orch.syncStorageTargets(context.Background(), stats)
 	if err != nil {
 		t.Fatalf("notification errors should not abort backup, got: %v", err)
 	}
+	orch.FinalizeAfterRun(context.Background(), stats)
 }

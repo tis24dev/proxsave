@@ -471,7 +471,7 @@ func (o *Orchestrator) dispatchNotificationsAndLogs(ctx context.Context, stats *
 	o.startNotificationGroup(ctx, stats)
 }
 
-func (o *Orchestrator) dispatchPostBackup(ctx context.Context, stats *BackupStats) error {
+func (o *Orchestrator) syncStorageTargets(ctx context.Context, stats *BackupStats) error {
 	if o == nil {
 		return nil
 	}
@@ -485,9 +485,6 @@ func (o *Orchestrator) dispatchPostBackup(ctx context.Context, stats *BackupStat
 			}
 		}
 	}
-
-	// Phase 2 + 3: Notifications and log management (non-critical)
-	o.FinalizeAfterRun(ctx, stats)
 	return nil
 }
 

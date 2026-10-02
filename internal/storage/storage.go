@@ -192,7 +192,7 @@ type RetentionSummary struct {
 // calling the two concurrently on ONE backend is a data race. Nothing does today:
 // StorageAdapter.Sync (internal/orchestrator/storage_adapter.go) is the only
 // caller, it reads the summary a few lines below its own ApplyRetention call on the
-// same goroutine, and dispatchPostBackup runs the adapters one after another, each
+// same goroutine, and syncStorageTargets runs the adapters one after another, each
 // over a backend of its own. An implementation that means to be read from another
 // goroutine has to provide its own synchronisation.
 type RetentionReporter interface {

@@ -758,7 +758,7 @@ func TestDispatchNotificationsUsesNameMappingNotRegistrationOrder(t *testing.T) 
 	}
 }
 
-func TestDispatchPostBackupSnapshotsIssuesImmediatelyBeforeNotifications(t *testing.T) {
+func TestFinalizeAfterRunSnapshotsIssuesImmediatelyBeforeNotifications(t *testing.T) {
 	logger := logging.New(types.LogLevelInfo, false)
 	var buf bytes.Buffer
 	logger.SetOutput(&buf)
@@ -798,9 +798,10 @@ func TestDispatchPostBackupSnapshotsIssuesImmediatelyBeforeNotifications(t *test
 		TelegramStatus:   "unknown",
 	}
 
-	if err := o.dispatchPostBackup(context.Background(), stats); err != nil {
-		t.Fatalf("dispatchPostBackup returned error: %v", err)
+	if err := o.syncStorageTargets(context.Background(), stats); err != nil {
+		t.Fatalf("syncStorageTargets returned error: %v", err)
 	}
+	o.FinalizeAfterRun(context.Background(), stats)
 
 	if !email.called || !telegram.called {
 		t.Fatalf("expected both notifiers to be called (email=%v telegram=%v)", email.called, telegram.called)
