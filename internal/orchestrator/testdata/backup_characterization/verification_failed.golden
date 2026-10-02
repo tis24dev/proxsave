@@ -156,6 +156,9 @@ exit code (as cmd/proxsave computes it): 8
 [<TIME>] DEBUG    Removed temporary workspace <ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM>
 [<TIME>] DEBUG    Parsing log file for error/warning counts after failure: <ROOT>/log/backup-charhost-20260102-030405.log
 [<TIME>] DEBUG    Found 0 errors and 3 warnings in log file (failure path)
+[<TIME>] DEBUG    Local Storage: run failed before this location's statistics were read; reporting the startup figures (backups=8, owned=0, scoped=false)
+[<TIME>] DEBUG    Secondary Storage: run failed before this location's statistics were read; reporting the startup figures (backups=5, owned=0, scoped=false)
+[<TIME>] DEBUG    Cloud Storage (rclone): run failed before this location's statistics were read; reporting the startup figures (backups=4, owned=0, scoped=false)
 [<TIME>] DEBUG    End backup run (error=verification phase failed: tar verification failed: exit status 2 (stderr: tar: injected verification failure), duration=<DURATION>)
 
 ===== stderr =====
@@ -287,6 +290,9 @@ exit code (as cmd/proxsave computes it): 8
 [<TIME>] DEBUG    Removed temporary workspace <ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM>
 [<TIME>] DEBUG    Parsing log file for error/warning counts after failure: <ROOT>/log/backup-charhost-20260102-030405.log
 [<TIME>] DEBUG    Found 0 errors and 3 warnings in log file (failure path)
+[<TIME>] DEBUG    Local Storage: run failed before this location's statistics were read; reporting the startup figures (backups=8, owned=0, scoped=false)
+[<TIME>] DEBUG    Secondary Storage: run failed before this location's statistics were read; reporting the startup figures (backups=5, owned=0, scoped=false)
+[<TIME>] DEBUG    Cloud Storage (rclone): run failed before this location's statistics were read; reporting the startup figures (backups=4, owned=0, scoped=false)
 [<TIME>] DEBUG    End backup run (error=verification phase failed: tar verification failed: exit status 2 (stderr: tar: injected verification failure), duration=<DURATION>)
 
 ===== BackupStats returned by RunGoBackup =====
@@ -330,38 +336,38 @@ exit code (as cmd/proxsave computes it): 8
   "CloudPath": "charremote",
   "LocalStatus": "",
   "LocalStatusSummary": "",
-  "SecondaryStatus": "ok",
-  "CloudStatus": "ok",
+  "SecondaryStatus": "skipped",
+  "CloudStatus": "skipped",
   "ServerID": "",
   "ServerMAC": "",
   "ClusterMode": "",
   "FilesIncluded": 1,
   "FilesMissing": 0,
   "SecondaryEnabled": true,
-  "LocalBackups": 0,
-  "LocalFreeSpace": 0,
-  "LocalUsedSpace": 0,
-  "LocalTotalSpace": 0,
-  "SecondaryBackups": 0,
-  "SecondaryFreeSpace": 0,
-  "SecondaryUsedSpace": 0,
-  "SecondaryTotalSpace": 0,
+  "LocalBackups": 8,
+  "LocalFreeSpace": 107374182400,
+  "LocalUsedSpace": 53687091200,
+  "LocalTotalSpace": 161061273600,
+  "SecondaryBackups": 5,
+  "SecondaryFreeSpace": 214748364800,
+  "SecondaryUsedSpace": 322122547200,
+  "SecondaryTotalSpace": 536870912000,
   "CloudEnabled": true,
-  "CloudBackups": 0,
+  "CloudBackups": 4,
   "MaxLocalBackups": 0,
   "MaxSecondaryBackups": 0,
   "MaxCloudBackups": 0,
-  "LocalRetentionPolicy": "",
+  "LocalRetentionPolicy": "simple",
   "LocalGFSDaily": 0,
   "LocalGFSWeekly": 0,
   "LocalGFSMonthly": 0,
   "LocalGFSYearly": 0,
-  "SecondaryRetentionPolicy": "",
+  "SecondaryRetentionPolicy": "simple",
   "SecondaryGFSDaily": 0,
   "SecondaryGFSWeekly": 0,
   "SecondaryGFSMonthly": 0,
   "SecondaryGFSYearly": 0,
-  "CloudRetentionPolicy": "",
+  "CloudRetentionPolicy": "simple",
   "CloudGFSDaily": 0,
   "CloudGFSWeekly": 0,
   "CloudGFSMonthly": 0,

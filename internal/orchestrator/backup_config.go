@@ -98,14 +98,19 @@ func InitializeBackupStats(
 		}
 	}
 
+	// An enabled copy starts as "skipped", not "ok": nothing has been copied yet, and
+	// StorageAdapter.Sync is the only writer of a real outcome (it sets "ok" the moment
+	// it starts, then error or warning as they happen). A run that fails before the
+	// copies, or whose critical local store fails first, never reaches Sync for them,
+	// and the "ok" this used to start from reached every channel as a copy that worked.
 	if stats.SecondaryEnabled {
-		stats.SecondaryStatus = "ok"
+		stats.SecondaryStatus = "skipped"
 	} else {
 		stats.SecondaryStatus = "disabled"
 	}
 
 	if stats.CloudEnabled {
-		stats.CloudStatus = "ok"
+		stats.CloudStatus = "skipped"
 	} else {
 		stats.CloudStatus = "disabled"
 	}
