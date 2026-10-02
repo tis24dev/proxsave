@@ -76,8 +76,10 @@ func TestInitializeBackupStats(t *testing.T) {
 	if stats.LocalPath != "/var/backups" {
 		t.Fatalf("LocalPath fallback not applied, got %q", stats.LocalPath)
 	}
-	if stats.SecondaryStatus != "ok" || stats.CloudStatus != "ok" {
-		t.Fatalf("storage statuses not set: secondary=%s cloud=%s", stats.SecondaryStatus, stats.CloudStatus)
+	// "skipped" until StorageAdapter.Sync runs: a copy that never started must not
+	// reach the notifications as one that succeeded (F1).
+	if stats.SecondaryStatus != "skipped" || stats.CloudStatus != "skipped" {
+		t.Fatalf("storage statuses: secondary=%s cloud=%s, want skipped/skipped", stats.SecondaryStatus, stats.CloudStatus)
 	}
 	if stats.TelegramStatus != "centralized" {
 		t.Fatalf("telegram status = %s, want centralized", stats.TelegramStatus)

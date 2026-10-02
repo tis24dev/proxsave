@@ -2,6 +2,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"time"
 
@@ -81,6 +82,9 @@ func registerPrimaryStorage(opts backupModeOptions, orch *orchestrator.Orchestra
 	localAdapter := orchestrator.NewStorageAdapter(localBackend, logger, cfg)
 	localAdapter.SetFilesystemInfo(localFS)
 	localAdapter.SetInitialStats(localStats)
+	localOwned, localOwnedKnown := startupOwnedBackups(opts.ctx, localBackend, localStats, localBackups)
+	logging.DebugStep(logger, "storage init", "primary owned=%d known=%v", localOwned, localOwnedKnown)
+	localAdapter.SetInitialOwnedBackups(localOwned, localOwnedKnown)
 	orch.RegisterStorageTarget(localAdapter)
 	logStorageInitSummary(formatStorageInitSummary("Local storage", cfg, storage.LocationPrimary, localStats, localBackups))
 }
@@ -110,6 +114,9 @@ func initializeSecondaryStorage(opts backupModeOptions, orch *orchestrator.Orche
 	secondaryAdapter := orchestrator.NewStorageAdapter(secondaryBackend, logger, cfg)
 	secondaryAdapter.SetFilesystemInfo(secondaryFS)
 	secondaryAdapter.SetInitialStats(secondaryStats)
+	secondaryOwned, secondaryOwnedKnown := startupOwnedBackups(opts.ctx, secondaryBackend, secondaryStats, secondaryBackups)
+	logging.DebugStep(logger, "storage init", "secondary owned=%d known=%v", secondaryOwned, secondaryOwnedKnown)
+	secondaryAdapter.SetInitialOwnedBackups(secondaryOwned, secondaryOwnedKnown)
 	orch.RegisterStorageTarget(secondaryAdapter)
 	logStorageInitSummary(formatStorageInitSummary("Secondary storage", cfg, storage.LocationSecondary, secondaryStats, secondaryBackups))
 	return secondaryFS
@@ -163,7 +170,27 @@ func initializeCloudStorage(opts backupModeOptions, orch *orchestrator.Orchestra
 	cloudAdapter := orchestrator.NewStorageAdapter(cloudBackend, logger, cfg)
 	cloudAdapter.SetFilesystemInfo(cloudFS)
 	cloudAdapter.SetInitialStats(cloudStats)
+	cloudOwned, cloudOwnedKnown := startupOwnedBackups(opts.ctx, cloudBackend, cloudStats, cloudBackups)
+	logging.DebugStep(logger, "storage init", "cloud owned=%d known=%v", cloudOwned, cloudOwnedKnown)
+	cloudAdapter.SetInitialOwnedBackups(cloudOwned, cloudOwnedKnown)
 	orch.RegisterStorageTarget(cloudAdapter)
 	logStorageInitSummary(formatStorageInitSummary("Cloud storage", cfg, storage.LocationCloud, cloudStats, cloudBackups))
 	return cloudFS
+}
+
+// startupOwnedBackups counts the archives this host owns in the startup listing,
+// with the meaning a successful run's count has (discussion #292). A failed run
+// reports it for the locations it never reached (StorageAdapter.applyInitialStats).
+//
+// known is false unless the two startup reads agree. GetStats lists the location
+// itself and counts that listing, while fetchBackupList returns nil on a failed
+// listing, which is also what an empty location returns: scoping that nil would
+// report "0 owned" beside a location GetStats saw full. A listing that changed
+// between the two reads is refused the same way, and the caller keeps the unscoped
+// total.
+func startupOwnedBackups(ctx context.Context, backend storage.Storage, stats *storage.StorageStats, backups []*types.BackupMetadata) (int, bool) {
+	if backend == nil || stats == nil || len(backups) != stats.TotalBackups {
+		return 0, false
+	}
+	return storage.CountOwnedBackups(ctx, backend, backups)
 }

@@ -154,6 +154,16 @@ func (o *Orchestrator) finalizeFailedBackupStats(run *backupRunContext, runErr e
 	o.ensureBackupStatsTiming(stats)
 	o.parseFailedBackupLogCounts(stats)
 	stats.ExitCode = backupFailureExitCode(runErr)
+
+	// Every location this run did not describe still holds what it held at startup,
+	// and the notifications, the dashboard and the metrics read these fields next.
+	// This defer runs before exportBackupMetrics and before the caller dispatches the
+	// notifications (handleBackupRunError -> FinalizeAfterRun), so all of them see it.
+	for _, target := range o.storageTargets {
+		if filler, ok := target.(startupStatsFiller); ok {
+			filler.applyInitialStats(stats)
+		}
+	}
 }
 
 func (o *Orchestrator) prepareBackupWorkspace(run *backupRunContext, workspace *backupWorkspace) error {

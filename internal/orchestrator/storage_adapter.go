@@ -18,6 +18,15 @@ type StorageAdapter struct {
 	config       *config.Config // Main configuration for retention policy
 	fsInfo       *storage.FilesystemInfo
 	initialStats *storage.StorageStats
+	// initialOwned is how many archives this host owned at the location when the
+	// run started, with the meaning RetentionSummary.Owned has (discussion #292).
+	// It is only worth anything while initialOwnedKnown is set.
+	initialOwned      int
+	initialOwnedKnown bool
+	// statsApplied records that this location's figures reached the run's
+	// BackupStats. applyInitialStats reads it: a location Sync already described
+	// keeps what Sync wrote.
+	statsApplied bool
 }
 
 // NewStorageAdapter creates a new storage adapter
@@ -39,6 +48,60 @@ func (s *StorageAdapter) SetFilesystemInfo(info *storage.FilesystemInfo) {
 // SetInitialStats caches storage stats gathered during initialization.
 func (s *StorageAdapter) SetInitialStats(stats *storage.StorageStats) {
 	s.initialStats = stats
+}
+
+// SetInitialOwnedBackups caches the number of archives this host owned at the
+// location when the run started (storage.CountOwnedBackups over the startup
+// listing). known=false keeps the unscoped total, the same fallback Sync uses when
+// retention did not produce a scoped count.
+func (s *StorageAdapter) SetInitialOwnedBackups(owned int, known bool) {
+	s.initialOwned, s.initialOwnedKnown = owned, known
+}
+
+// startupStatsFiller is implemented by storage targets that can describe their
+// location as it stood when the run started.
+type startupStatsFiller interface {
+	applyInitialStats(stats *BackupStats)
+}
+
+// applyInitialStats writes the figures read at startup for a location this run
+// never described: a failed run reaches the notifications without Sync having run
+// for it, or with Sync stopped before its statistics step (a critical local store
+// failure returns there), and the zero values left behind used to read as an empty
+// location ("0/7 backups", "0 B free") while it held real archives.
+//
+// The fields and their meaning are the ones Sync writes on a successful run:
+// the count is the scoped one under the same condition Sync uses it (a retention
+// limit is configured and the host could name itself), otherwise the unscoped
+// total; the free/used/total space comes from the same GetStats; the retention
+// policy and GFS tiers are rebuilt from the same configuration, through
+// EffectiveGFSRetentionConfig, the silent half of NormalizeGFSRetentionConfig.
+// What differs is the moment: these figures are from before the run, and on a
+// location the run never reached that is also what it holds now.
+//
+// Callers reach it only on the failure path (finalizeFailedBackupStats). A
+// successful run keeps exactly what Sync wrote, including a location whose
+// statistics read failed.
+func (s *StorageAdapter) applyInitialStats(stats *BackupStats) {
+	if s == nil || stats == nil || s.statsApplied || s.initialStats == nil || s.backend == nil || s.config == nil {
+		return
+	}
+	if !s.backend.IsEnabled() {
+		return
+	}
+	retentionConfig := storage.NewRetentionConfigFromConfig(s.config, s.backend.Location())
+	if retentionConfig.Policy == "gfs" {
+		retentionConfig = storage.EffectiveGFSRetentionConfig(retentionConfig)
+	}
+	scopedBackups := -1
+	if s.initialOwnedKnown && (retentionConfig.MaxBackups > 0 || retentionConfig.Policy == "gfs") {
+		scopedBackups = s.initialOwned
+	}
+	if s.logger != nil {
+		s.logger.Debug("%s: run failed before this location's statistics were read; reporting the startup figures (backups=%d, owned=%d, scoped=%v)",
+			s.backend.Name(), s.initialStats.TotalBackups, s.initialOwned, scopedBackups >= 0)
+	}
+	s.applyStorageStats(s.initialStats, retentionConfig, scopedBackups, stats)
 }
 
 // Sync implements the StorageTarget interface
@@ -265,6 +328,7 @@ func (s *StorageAdapter) applyStorageStats(storageStats *storage.StorageStats, r
 	if storageStats == nil || stats == nil {
 		return
 	}
+	s.statsApplied = true
 
 	// storageStats.TotalBackups comes from a listing that matches every hostname, so
 	// on a location shared with another ProxSave host it counts that host's archives
