@@ -349,18 +349,21 @@ func (o *Orchestrator) verifyAndWriteBackupArtifacts(run *backupRunContext, work
 
 	if err := artifacts.archiver.VerifyArchive(run.ctx, artifacts.partialPath); err != nil {
 		discardPartialArchive(workspace.fs, artifacts.partialPath)
+		clearDiscardedArchiveStats(stats)
 		return &BackupError{Phase: "verification", Err: err, Code: types.ExitVerificationError}
 	}
 
 	checksum, err := o.generateArchiveChecksum(run.ctx, artifacts.partialPath)
 	if err != nil {
 		discardPartialArchive(workspace.fs, artifacts.partialPath)
+		clearDiscardedArchiveStats(stats)
 		return err
 	}
 	stats.Checksum = checksum
 
 	if err := promoteBackupArchive(workspace.fs, artifacts.partialPath, artifacts.archivePath); err != nil {
 		discardPartialArchive(workspace.fs, artifacts.partialPath)
+		clearDiscardedArchiveStats(stats)
 		return &BackupError{Phase: "archive", Err: fmt.Errorf("promote verified archive: %w", err), Code: types.ExitArchiveError}
 	}
 

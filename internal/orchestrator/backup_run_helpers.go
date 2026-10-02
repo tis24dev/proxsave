@@ -239,6 +239,21 @@ func discardPartialArchive(fs FS, partialPath string) {
 	_ = fs.RemoveAll(partialPath)
 }
 
+// clearDiscardedArchiveStats forgets what the stats recorded about a partial
+// archive that was then discarded: its final name, its size and the figures
+// derived from it, and its checksum. No file ever existed under that name, so the
+// notifications, the dashboard and the metrics must report the run the way they
+// report a run whose archive was never created (a compression failure).
+func clearDiscardedArchiveStats(stats *BackupStats) {
+	stats.ArchivePath = ""
+	stats.ArchiveSize = 0
+	stats.CompressedSize = 0
+	stats.CompressionRatio = 0
+	stats.CompressionRatioPercent = 0
+	stats.CompressionSavingsPercent = 0
+	stats.Checksum = ""
+}
+
 func backupArchiveCreationError(err error) error {
 	phase := "archive"
 	code := types.ExitArchiveError
