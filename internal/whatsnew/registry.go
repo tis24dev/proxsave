@@ -253,12 +253,6 @@ var notes = []Note{
 			"A PBS token symlink whose target is not 0600 root blocks the backup while AUTO_FIX_PERMISSIONS=true",
 		},
 	},
-	{
-		Version: "0.42.0",
-		Lines: []string{
-			"A failed backup no longer shows unstarted copies as ok or its destinations as empty: it shows what they held at startup",
-		},
-	},
 }
 
 // LookupNotes returns the notes for versions in the half-open range (from, to], ascending by
