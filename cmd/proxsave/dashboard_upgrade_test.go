@@ -167,6 +167,11 @@ func TestDashboardUpgradeScreen(t *testing.T) {
 	driver.keys("enter")
 	driver.waitScreen("Upgrade complete")
 	_ = waitFor("NEW BINARY ON DISK") // inactive-daemon success uses the dashboard ALL-CAPS status convention
+	// The keyword says it all, and leaving the screen relaunches the dashboard from the new
+	// binary, so no line repeats the keyword or sends the operator to relaunch by hand.
+	if out := waitFor("return to the dashboard menu"); strings.Contains(out, "relaunch") || strings.Contains(out, "New binary on disk") {
+		t.Fatalf("inactive-daemon result screen must carry no relaunch or repeated line, out tail:\n%s", tailStr(out))
+	}
 	if gotArgs == nil || !gotArgs.Upgrade || !gotArgs.UpgradeAutoYes || gotArgs.ConfigPath != "/tmp/backup.env" {
 		t.Fatalf("run upgrade must pass Upgrade+AutoYes+ConfigPath, got %+v", gotArgs)
 	}
@@ -332,12 +337,11 @@ func TestDashboardUpgradeMenu(t *testing.T) {
 	}
 }
 
-// TestDashboardUpgradeRestartDaemonRelaunchNote drives a daemon-ACTIVE upgrade: after the
-// upgrade installs and the resident daemon restarts cleanly (aligned), the result screen must
-// still tell the user their interactive process runs the old binary and must be relaunched --
-// the same relaunch note the daemon-inactive branch already shows. Both the "RESTARTED, ALIGNED"
-// keyword AND the "relaunch proxsave" note must appear.
-func TestDashboardUpgradeRestartDaemonRelaunchNote(t *testing.T) {
+// TestDashboardUpgradeRestartDaemonNoRelaunchNote drives a daemon-ACTIVE upgrade: after the
+// upgrade installs and the resident daemon restarts cleanly (aligned), the result screen shows
+// the "RESTARTED, ALIGNED" keyword and nothing else: no note asks the operator to relaunch,
+// because leaving the screen relaunches the dashboard from the new binary (reload disposition).
+func TestDashboardUpgradeRestartDaemonNoRelaunchNote(t *testing.T) {
 	origVer, origChk := dashboardUpgradeVersion, dashboardUpgradeCheck
 	origRun, origInstalled, origLoad := dashboardUpgradeRun, daemonInstalledProbe, upgradeLoadConfig
 	t.Cleanup(func() {
@@ -400,8 +404,11 @@ func TestDashboardUpgradeRestartDaemonRelaunchNote(t *testing.T) {
 	driver.waitOutput("enter continue")
 	driver.keys("enter") // leave the stream panel -> daemon-active restart step
 	driver.waitScreen("Daemon restart")
-	waitFor("RESTARTED, ALIGNED") // the aligned success keyword
-	waitFor("relaunch proxsave")  // ...plus the relaunch note (absent in the active branch before the fix)
+	waitFor("RESTARTED, ALIGNED")           // the aligned success keyword
+	waitFor("return to the dashboard menu") // the Back item, rendered below the status block
+	if out := ansi.Strip(driver.buf.String()[driver.matchStart:]); strings.Contains(out, "relaunch") || strings.Contains(out, "old version") {
+		t.Fatalf("aligned restart result screen must carry no relaunch note, out tail:\n%s", tailStr(out))
+	}
 	driver.keys("enter")
 
 	select {

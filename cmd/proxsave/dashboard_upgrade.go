@@ -283,14 +283,16 @@ func buildUpgradeOutcomePrompt(code int) string {
 // the resident daemon (when active) so it loads the freshly installed binary, then shows
 // the outcome via the SAME styled result screen as the daemon-status check
 // (showDaemonResultScreen), so the post-upgrade restart result matches the daemon menu.
-// When the daemon is not active there is nothing to restart -- the new binary just needs a
-// relaunch of this process. This is the SINGLE restart on the dashboard path: runUpgrade's
+// When the daemon is not active there is nothing to restart and the screen only says the new
+// binary is on disk. Neither screen asks the operator to relaunch anything: leaving it returns
+// dashboardActionReload, and the dashboard relaunches itself from the new binary
+// (closeDashboardAndRelaunch). This is the SINGLE restart on the dashboard path: runUpgrade's
 // own inline restart is suppressed (upgradeRestartsDaemon is set false in upgRun), so there
 // is no double restart.
 func dashboardUpgradeRestartDaemon(ctx context.Context, session *shell.Session, configPath string) {
 	if !daemonIsActive(ctx) {
 		showDaemonResultScreen(ctx, session, "Upgrade complete", orchestrator.HealthcheckSetupLevelOk,
-			"NEW BINARY ON DISK", "New binary on disk. This process still runs the old version; relaunch proxsave.")
+			"NEW BINARY ON DISK", "")
 		return
 	}
 	baseDir, _ := detectedBaseDirOrFallback()
@@ -303,15 +305,5 @@ func dashboardUpgradeRestartDaemon(ctx context.Context, session *shell.Session, 
 			return nil
 		})
 	level, keyword, explanation := restartVerifyStatus(rv)
-	// The daemon was restarted onto the new binary, but THIS interactive process is still
-	// the old one, so append the relaunch note (as the daemon-inactive branch above does).
-	// restartVerifyStatus is shared with the plain Restart button, where this note would be
-	// wrong, so append here rather than in the shared helper.
-	const relaunch = "This process still runs the old version; relaunch proxsave."
-	if strings.TrimSpace(explanation) == "" {
-		explanation = relaunch
-	} else {
-		explanation += " " + relaunch
-	}
 	showDaemonResultScreen(ctx, session, "Daemon restart", level, keyword, explanation)
 }
