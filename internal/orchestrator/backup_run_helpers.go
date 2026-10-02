@@ -303,7 +303,7 @@ func (o *Orchestrator) generateArchiveChecksum(ctx context.Context, archivePath 
 
 func (o *Orchestrator) writeArchiveChecksum(workspace *backupWorkspace, artifacts *backupArtifacts, checksum string) error {
 	checksumContent := fmt.Sprintf("%s  %s\n", checksum, filepath.Base(artifacts.archivePath))
-	if err := workspace.fs.WriteFile(artifacts.checksumPath, []byte(checksumContent), 0o640); err != nil {
+	if err := workspace.fs.WriteFile(artifacts.checksumPath, []byte(checksumContent), backup.ArtifactFilePerm); err != nil {
 		return fmt.Errorf("write checksum file %s: %w", artifacts.checksumPath, err)
 	}
 	o.logger.Debug("Checksum file written to %s", artifacts.checksumPath)
@@ -382,7 +382,8 @@ func (o *Orchestrator) archiveEncryptionMode() string {
 
 func (o *Orchestrator) writeLegacyMetadataAlias(workspace *backupWorkspace, artifacts *backupArtifacts) {
 	metadataAlias := artifacts.archivePath + ".metadata"
-	if err := copyFile(workspace.fs, artifacts.manifestPath, metadataAlias); err != nil {
+	// Byte-identical to the manifest, so it gets the manifest's mode, not copyFile's.
+	if err := copyFileWithPerm(workspace.fs, artifacts.manifestPath, metadataAlias, backup.ArtifactFilePerm); err != nil {
 		o.logger.Warning("Failed to write legacy metadata file %s: %v", metadataAlias, err)
 	} else {
 		o.logger.Debug("Legacy metadata file written to %s", metadataAlias)

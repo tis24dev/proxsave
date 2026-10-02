@@ -154,12 +154,11 @@ func (l *LocalStorage) Store(ctx context.Context, backupFile string, metadata *t
 		}
 	}
 
-	// Set proper permissions on the backup file
+	// Set owner and mode on every file of the backup set (not critical on failure).
 	l.logger.Debug("Local storage: setting ownership/permissions on %s", filepath.Base(backupFile))
-	if err := l.fsDetector.SetPermissions(ctx, backupFile, 0, 0, 0600, l.fsInfo); err != nil {
-		l.logger.Warning("Local Storage: permissions - failed to set them on %s: %v", backupFile, err)
-		// Not critical - continue
-	}
+	setBackupSetPermissions(ctx, l.config, l.logger, l.fsDetector, l.fsInfo, backupFile, func(path string, err error) {
+		l.logger.Warning("Local Storage: permissions - failed to set them on %s: %v", path, err)
+	})
 
 	l.logger.Debug("Backup stored successfully in local storage: %s", backupFile)
 

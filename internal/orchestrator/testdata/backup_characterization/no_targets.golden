@@ -25,9 +25,9 @@ cloud log upload dest=charremote:<ROOT>/cloud-log/backup-charhost-20260102-03040
 
 ===== bundle members =====
 charhost-backup-20260102-030405.tar.bundle.tar:
-  charhost-backup-20260102-030405.tar.metadata size=658 mode=640 type=0
-  charhost-backup-20260102-030405.tar.sha256 size=102 mode=640 type=0
-  charhost-backup-20260102-030405.tar size=16384 mode=640 type=0
+  charhost-backup-20260102-030405.tar.metadata size=658 mode=600 type=0
+  charhost-backup-20260102-030405.tar.sha256 size=102 mode=600 type=0
+  charhost-backup-20260102-030405.tar size=16384 mode=600 type=0
 
 ===== stdout (console) =====
 [<TIME>] DEBUG    Start backup run: type=unknown hostname=charhost

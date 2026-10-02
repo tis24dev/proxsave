@@ -1317,7 +1317,14 @@ func applyCollectorOverrides(cc *backup.CollectorConfig, cfg *config.Config) {
 	cc.PBSPassword = cfg.PBSPassword
 	cc.PBSFingerprint = cfg.PBSFingerprint
 }
-func copyFile(fs FS, src, dest string) (err error) {
+func copyFile(fs FS, src, dest string) error {
+	return copyFileWithPerm(fs, src, dest, 0o640)
+}
+
+// copyFileWithPerm is copyFile with the mode a newly created dest gets (an existing
+// dest keeps its own). The backup run uses it for the files of a backup set, which
+// are created with backup.ArtifactFilePerm rather than copyFile's 0640.
+func copyFileWithPerm(fs FS, src, dest string, perm os.FileMode) (err error) {
 	if fs == nil {
 		fs = osFS{}
 	}
@@ -1327,7 +1334,7 @@ func copyFile(fs FS, src, dest string) (err error) {
 	}
 	defer closeIntoErr(&err, in, "close source file")
 
-	out, err := fs.OpenFile(dest, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0640)
+	out, err := fs.OpenFile(dest, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, perm)
 	if err != nil {
 		return err
 	}

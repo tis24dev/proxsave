@@ -221,13 +221,12 @@ func (s *SecondaryStorage) Store(ctx context.Context, backupFile string, metadat
 		}
 	}
 
-	// Set permissions on destination (best effort)
+	// Set owner and mode on every copied file of the backup set (best effort)
 	if s.fsInfo != nil && s.fsInfo.SupportsOwnership {
-		if err := s.fsDetector.SetPermissions(ctx, destFile, 0, 0, 0600, s.fsInfo); err != nil {
+		setBackupSetPermissions(ctx, s.config, s.logger, s.fsDetector, s.fsInfo, destFile, func(path string, err error) {
 			s.logger.Warning("Secondary Storage: permissions - failed to set them on %s: %v",
-				filepath.Base(destFile), err)
-			// Not critical - continue
-		}
+				filepath.Base(path), err)
+		})
 	}
 
 	s.logger.Debug("✓ Secondary Storage: File copied")
