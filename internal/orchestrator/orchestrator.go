@@ -229,6 +229,10 @@ type Orchestrator struct {
 	notificationChannels []NotificationChannel
 	tempRegistry         *TempDirRegistry
 
+	// runProfilePaths are this run's own pprof files (cleaned paths), which the
+	// cleanup of previous executions must leave in place.
+	runProfilePaths map[string]struct{}
+
 	// Identity
 	serverID  string
 	serverMAC string
@@ -355,6 +359,37 @@ func (o *Orchestrator) SetEnvironmentInfo(info *environment.EnvironmentInfo) {
 // SetStartTime injects the timestamp to reuse across logs/backups.
 func (o *Orchestrator) SetStartTime(t time.Time) {
 	o.startTime = t
+}
+
+// SetRunProfilePaths names the pprof files this run writes (empty paths are
+// ignored). The cleanup of previous executions skips exactly these paths, so the
+// current run's profiles stay until the next run.
+func (o *Orchestrator) SetRunProfilePaths(paths ...string) {
+	o.runProfilePaths = nil
+	for _, p := range paths {
+		if p == "" {
+			continue
+		}
+		if o.runProfilePaths == nil {
+			o.runProfilePaths = make(map[string]struct{}, len(paths))
+		}
+		o.runProfilePaths[filepath.Clean(p)] = struct{}{}
+	}
+}
+
+// withoutRunProfiles drops this run's own profiles from a list of cleanup candidates.
+func (o *Orchestrator) withoutRunProfiles(paths []string) []string {
+	if len(o.runProfilePaths) == 0 {
+		return paths
+	}
+	kept := make([]string, 0, len(paths))
+	for _, p := range paths {
+		if _, own := o.runProfilePaths[filepath.Clean(p)]; own {
+			continue
+		}
+		kept = append(kept, p)
+	}
+	return kept
 }
 
 func (o *Orchestrator) now() time.Time {
@@ -1023,6 +1058,9 @@ func (o *Orchestrator) cleanupPreviousExecutionArtifacts(ctx context.Context) *T
 	if matches, err := filepath.Glob(filepath.Join("/tmp", "proxsave", "heap-*.pprof")); err == nil {
 		heapProfiles = matches
 	}
+	// This run's own profiles are not from a previous execution.
+	cpuProfiles = o.withoutRunProfiles(cpuProfiles)
+	heapProfiles = o.withoutRunProfiles(heapProfiles)
 
 	// Get temp directory registry
 	registry := o.ensureTempRegistry()

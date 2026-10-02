@@ -29,6 +29,7 @@ type backupModeOptions struct {
 	toolVersion      string
 	dryRun           bool
 	startTime        time.Time
+	cpuProfilePath   string
 	heapProfilePath  string
 	serverIDValue    string
 	serverMACValue   string
@@ -168,6 +169,7 @@ func configureBackupOrchestrator(opts backupModeOptions, orch *orchestrator.Orch
 	orch.SetIdentity(opts.serverIDValue, opts.serverMACValue)
 	orch.SetEnvironmentInfo(opts.envInfo)
 	orch.SetStartTime(opts.startTime)
+	orch.SetRunProfilePaths(opts.cpuProfilePath, opts.heapProfilePath)
 	if opts.updateInfo != nil {
 		orch.SetUpdateInfo(opts.updateInfo.NewVersion, opts.updateInfo.Current, opts.updateInfo.Latest)
 	}

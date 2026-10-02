@@ -34,6 +34,7 @@ type appRuntime struct {
 	autoBaseDirFound  bool
 	sessionLogCloser  func()
 	heapProfilePath   string
+	cpuProfilePath    string
 	cpuProfileFile    *os.File
 	serverIDValue     string
 	serverMACValue    string
