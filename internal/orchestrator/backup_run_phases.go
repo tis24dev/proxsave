@@ -462,5 +462,5 @@ func (o *Orchestrator) dispatchBackupArtifacts(run *backupRunContext) error {
 	}
 
 	o.logger.Debug("Dispatching archive to %d storage targets", len(o.storageTargets))
-	return o.dispatchPostBackup(run.ctx, run.stats)
+	return o.syncStorageTargets(run.ctx, run.stats)
 }

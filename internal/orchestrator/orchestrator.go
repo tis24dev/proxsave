@@ -578,19 +578,17 @@ func (o *Orchestrator) RunGoBackup(ctx context.Context, envInfo *environment.Env
 	if err := o.collectBackupData(run, workspace); err != nil {
 		return stats, err
 	}
-	artifacts, err := o.createBackupArchive(run, workspace)
-	if err != nil {
-		return stats, err
+	blocks := []blockBackup{&blockPath{o: o}}
+	for _, block := range blocks {
+		if err := block.execute(run, workspace); err != nil {
+			return stats, err
+		}
 	}
-	if err := o.verifyAndWriteBackupArtifacts(run, workspace, artifacts); err != nil {
-		return stats, err
-	}
-	if err := o.bundleBackupArtifacts(run, workspace, artifacts); err != nil {
-		return stats, err
-	}
-	o.finalizeBackupStats(run)
-	if err := o.dispatchBackupArtifacts(run); err != nil {
-		return stats, err
+
+	// Phase 2 + 3: Notifications and log management (non-critical).
+	// Skipped in dry run, like the storage dispatch.
+	if !o.dryRun {
+		o.FinalizeAfterRun(run.ctx, run.stats)
 	}
 
 	fmt.Println()
