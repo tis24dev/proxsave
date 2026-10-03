@@ -1453,6 +1453,26 @@ func ensureDirectoryExists(logger *logging.Logger, name, path string) {
 	logger.Info("%s created: %s", name, dirPath)
 }
 
+// reportDirectoryDryRun is ensureDirectoryExists for a dry run, which creates no
+// destination directory: a missing directory is reported with the line the checks use
+// ("[DRY RUN] Would create directory: <path>") and left missing.
+func reportDirectoryDryRun(logger *logging.Logger, name, path string) {
+	if logger == nil {
+		return
+	}
+	dirPath := strings.TrimSpace(path)
+	if dirPath == "" {
+		return
+	}
+	if utils.DirExists(dirPath) {
+		logger.Info("✓ %s exists: %s", name, dirPath)
+		return
+	}
+	logger.Warning("✗ %s not found: %s", name, dirPath)
+	logger.Debug("DRY RUN: %s %s is missing and is not created", name, dirPath)
+	logger.Info("[DRY RUN] Would create directory: %s", dirPath)
+}
+
 func isLocalPath(path string) bool {
 	clean := strings.TrimSpace(path)
 	if clean == "" {
