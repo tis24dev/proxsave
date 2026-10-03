@@ -3,8 +3,11 @@ package safefs
 import (
 	"errors"
 	"io/fs"
+	"math"
 	"os"
+	"strconv"
 	"strings"
+	"time"
 )
 
 // SystemErrorText renders the cause an operator-facing fact line shows after its label:
@@ -16,8 +19,8 @@ import (
 //	stat /mnt/backup/x.tar: no such file or directory  ->  no such file or directory
 //	copy failed: open /mnt/x: permission denied         ->  copy failed: permission denied
 //
-// A bounded operation that timed out reads "timed out after <dur>", the phrase the fact
-// lines use for a dead or stale mount.
+// A bounded operation that timed out reads "timed out after <N>s", the phrase the fact
+// lines use for a dead or stale mount, in whole seconds (WholeSeconds).
 func SystemErrorText(err error) string {
 	if err == nil {
 		return ""
@@ -28,7 +31,7 @@ func SystemErrorText(err error) string {
 	if errors.As(err, &te) && te != nil {
 		cause := "timed out"
 		if te.Timeout > 0 {
-			cause = "timed out after " + te.Timeout.String()
+			cause = "timed out after " + WholeSeconds(te.Timeout)
 		}
 		return replaceCause(text, te.Error(), cause)
 	}
@@ -53,4 +56,13 @@ func replaceCause(text, pathText, cause string) string {
 		return strings.TrimSpace(strings.Replace(text, pathText, cause, 1))
 	}
 	return cause
+}
+
+// WholeSeconds renders a duration for a fact line in whole seconds, a fraction rounded
+// up: "120s", never "2m0s"; 500ms reads "1s". Every timeout fact of the run uses it.
+func WholeSeconds(d time.Duration) string {
+	if d <= 0 {
+		return "0s"
+	}
+	return strconv.FormatInt(int64(math.Ceil(d.Seconds())), 10) + "s"
 }

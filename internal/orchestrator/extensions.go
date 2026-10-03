@@ -556,7 +556,7 @@ func (o *Orchestrator) dispatchLogFile(ctx context.Context, logFilePath string) 
 		switch {
 		case mkErr != nil && errors.Is(mkErr, safefs.ErrTimeout):
 			o.logger.Debug("Secondary log copy: creating %s timed out after %s (dead/stale mount?): %v", o.cfg.SecondaryLogPath, timeout, mkErr)
-			o.logger.Info("  Directory not created: timed out after %s", timeout)
+			o.logger.Info("  Directory not created: timed out after %s", safefs.WholeSeconds(timeout))
 			o.logger.Warning("%s Log not copied to secondary", theme.SymbolWarning)
 		case mkErr != nil:
 			o.logger.Debug("Secondary log copy: failed to create %s: %v", o.cfg.SecondaryLogPath, mkErr)
@@ -568,7 +568,7 @@ func (o *Orchestrator) dispatchLogFile(ctx context.Context, logFilePath string) 
 				o.logger.Info("%s Log copied to secondary", theme.SymbolSuccess)
 			case errors.Is(err, safefs.ErrTimeout):
 				o.logger.Debug("Secondary log copy: copy to %s timed out after %s (dead/stale mount?): %v", secondaryLogPath, timeout, err)
-				o.logger.Info("  Copy failed: timed out after %s", timeout)
+				o.logger.Info("  Copy failed: timed out after %s", safefs.WholeSeconds(timeout))
 				o.logger.Warning("%s Log not copied to secondary", theme.SymbolWarning)
 			default:
 				o.logger.Debug("Secondary log copy: failed to copy to %s: %v", secondaryLogPath, err)
@@ -607,7 +607,7 @@ func (o *Orchestrator) dispatchLogFile(ctx context.Context, logFilePath string) 
 				o.logger.Warning("%s Log not copied to cloud", theme.SymbolWarning)
 			case probeErr != nil && errors.Is(probeErr, safefs.ErrTimeout):
 				o.logger.Debug("Cloud log copy: source log %s unreachable after %s (dead/stale mount?): %v", logFilePath, timeout, probeErr)
-				o.logger.Info("  Source log not accessible: timed out after %s", timeout)
+				o.logger.Info("  Source log not accessible: timed out after %s", safefs.WholeSeconds(timeout))
 				o.logger.Warning("%s Log not copied to cloud", theme.SymbolWarning)
 			case probeErr != nil:
 				o.logger.Debug("Cloud log copy: cannot stat source log %s: %v", logFilePath, probeErr)

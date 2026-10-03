@@ -1040,7 +1040,7 @@ func (c *CloudStorage) Store(ctx context.Context, backupFile string, metadata *t
 					// neither again. "skipping" is the whole point: the sidecar does not
 					// go up.
 					c.logger.Debug("Cloud Storage: upload - skipping sidecar: %v", err)
-					c.logger.Info("  Sidecar skipped: %s unreadable after %s", filepath.Base(srcFile), statTimeout(err, c.fsIoTimeout()))
+					c.logger.Info("  Sidecar skipped: %s unreadable after %s", filepath.Base(srcFile), safefs.WholeSeconds(statTimeout(err, c.fsIoTimeout())))
 					issues.add(StoreIssueSidecarNotSaved)
 				}
 				continue // Skip if missing or unreachable
@@ -1641,7 +1641,7 @@ func (c *CloudStorage) verifyRemoteChecksum(ctx context.Context, localFile, remo
 			// "backup saved, checksum not verified". The full chain stays in DEBUG.
 			c.logger.Debug("Cloud Storage: verify - could not hash local %s, object kept on size-only verification: %v", filename, err)
 			if errors.Is(err, safefs.ErrTimeout) {
-				c.logger.Info("  Checksum failed: local file unreadable after %s", statTimeout(err, c.fsIoTimeout()))
+				c.logger.Info("  Checksum failed: local file unreadable after %s", safefs.WholeSeconds(statTimeout(err, c.fsIoTimeout())))
 			} else {
 				c.logger.Info("  Checksum failed: %s", safefs.SystemErrorText(err))
 			}
