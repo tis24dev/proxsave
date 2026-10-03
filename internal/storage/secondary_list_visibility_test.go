@@ -8,6 +8,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"syscall"
 	"testing"
@@ -136,7 +137,7 @@ func TestUnreadableArchivesAreReportedOnceNotOncePerArchive(t *testing.T) {
 	}
 	// The gap is recorded once, with the count and the shared cause, and the retention
 	// fact renders it on one line.
-	if s.lastListGap.count != 5 || s.lastListGap.cause != "too many levels of symbolic links" {
+	if want := []listingGapCause{{count: 5, cause: "too many levels of symbolic links"}}; !reflect.DeepEqual(s.lastListGap.causes, want) {
 		t.Fatalf("listing gap = %+v, want 5 archives with the symlink-loop cause", s.lastListGap)
 	}
 	factBuf := &bytes.Buffer{}
@@ -197,8 +198,26 @@ func TestArchivesThatFailedForDifferentReasonsEachCarryTheirOwn(t *testing.T) {
 	if n := countWarningLines(out); n != 0 {
 		t.Fatalf("wrote %d WARNING lines from List, want 0:\n%s", n, out)
 	}
-	if s.lastListGap.count != 2 || s.lastListGap.cause != "too many levels of symbolic links" {
-		t.Fatalf("listing gap = %+v, want 2 archives with the first archive's cause", s.lastListGap)
+	// One count per distinct cause, in the order the causes were first met; the
+	// retention facts print one line each and the outcome keeps the total.
+	want0 := []listingGapCause{
+		{count: 1, cause: "too many levels of symbolic links"},
+		{count: 1, cause: "input/output error"},
+	}
+	if !reflect.DeepEqual(s.lastListGap.causes, want0) {
+		t.Fatalf("listing gap = %+v, want one entry per cause in first-seen order", s.lastListGap)
+	}
+	factBuf := &bytes.Buffer{}
+	factLogger := logging.New(types.LogLevelInfo, false)
+	factLogger.SetOutput(factBuf)
+	if n := logListingGap(factLogger, s.lastListGap); n != 2 {
+		t.Fatalf("logListingGap returned %d, want the total 2", n)
+	}
+	facts := factBuf.String()
+	first := strings.Index(facts, "INFO       Not listed: 1 backups, too many levels of symbolic links\n")
+	second := strings.Index(facts, "INFO       Not listed: 1 backups, input/output error\n")
+	if first < 0 || second < 0 || second < first || strings.Count(facts, "Not listed:") != 2 {
+		t.Fatalf("the retention facts = %q, want one line per cause in first-seen order", facts)
 	}
 	items := itemLines(out)
 	if len(items) != 2 {
@@ -241,7 +260,7 @@ func TestAVanishedLocationIsNamedInsteadOfReturningNothingInSilence(t *testing.T
 	}
 	// Not silent: the gap is recorded for the retention fact, and the DEBUG line
 	// names the location and the count.
-	if s.lastListGap.count != 4 || s.lastListGap.cause != "no such file or directory" {
+	if want := []listingGapCause{{count: 4, cause: "no such file or directory"}}; !reflect.DeepEqual(s.lastListGap.causes, want) {
 		t.Fatalf("listing gap = %+v, want 4 archives not listed, no such file or directory", s.lastListGap)
 	}
 	var detail string

@@ -174,7 +174,7 @@ func (l *LocalStorage) Store(ctx context.Context, backupFile string, metadata *t
 	}
 	setBackupSetPermissions(ctx, l.config, l.logger, l.fsDetector, l.fsInfo, backupFile, func(path string, err error) {
 		l.logger.Debug("Local Storage: permissions - failed to set them on %s: %v", path, err)
-		l.logger.Info("  Permissions failed: %s: %s", filepath.Base(path), safefs.SystemErrorText(err))
+		logPermissionsFailure(l.logger, path, err)
 		issues.add(StoreIssuePermissionsNotSet)
 	})
 

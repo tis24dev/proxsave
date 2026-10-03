@@ -313,8 +313,8 @@ func TestFormatStorageInitSummary(t *testing.T) {
 	if strings.Contains(summary, "Total:") || strings.Contains(summary, "Retention policy:") {
 		t.Fatalf("GFS summary must replace Total: with Backups: and carry no policy line, got: %q", summary)
 	}
-	if got, want := formatRetentionPolicyLine(cfgGFS, storage.LocationPrimary), "  Retention policy: GFS (daily=1, weekly=1, monthly=0, yearly=-1)"; got != want {
-		t.Fatalf("GFS policy line = %q, want %q", got, want)
+	if got := formatRetentionPolicyLine(cfgGFS, storage.LocationPrimary); got != "" {
+		t.Fatalf("GFS policy line = %q, want none (the GFS limits are DEBUG)", got)
 	}
 
 	empty, _ := formatStorageInitSummary("Local", cfgGFS, storage.LocationPrimary, &storage.StorageStats{TotalBackups: 0}, nil)

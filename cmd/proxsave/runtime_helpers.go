@@ -430,6 +430,8 @@ func formatFilesystemDetail(info *storage.FilesystemInfo) string {
 
 // logStoragePath opens a storage-init block: the path line, then the configuration
 // under it. "The path is read first, then checked": what the run finds there follows.
+// A GFS policy has no configuration line: its tiers are the facts the block closes on
+// (formatStorageInitSummary), and the configured limits stay in DEBUG.
 func logStoragePath(label, path string, cfg *config.Config, location storage.BackupLocation) {
 	cleanPath := strings.TrimSpace(path)
 	if cleanPath == "" {
@@ -437,17 +439,22 @@ func logStoragePath(label, path string, cfg *config.Config, location storage.Bac
 		return
 	}
 	logging.Info("Path %s: %s", label, cleanPath)
-	logging.Info("%s", formatRetentionPolicyLine(cfg, location))
+	if rc := storage.NewRetentionConfigFromConfig(cfg, location); rc.Policy == "gfs" {
+		rc = storage.EffectiveGFSRetentionConfig(rc)
+		logging.Debug("storage init: %s retention policy=gfs daily=%d weekly=%d monthly=%d yearly=%d",
+			strings.ToLower(label), rc.Daily, rc.Weekly, rc.Monthly, rc.Yearly)
+	}
+	if line := formatRetentionPolicyLine(cfg, location); line != "" {
+		logging.Info("%s", line)
+	}
 }
 
 // formatRetentionPolicyLine is the configuration fact of a storage-init block, in the
-// words step [6] uses for the same policy.
+// words step [6] uses for the same policy. It is empty for GFS, which prints none.
 func formatRetentionPolicyLine(cfg *config.Config, location storage.BackupLocation) string {
 	rc := storage.NewRetentionConfigFromConfig(cfg, location)
 	if rc.Policy == "gfs" {
-		rc = storage.EffectiveGFSRetentionConfig(rc)
-		return fmt.Sprintf("  Retention policy: GFS (daily=%d, weekly=%d, monthly=%d, yearly=%d)",
-			rc.Daily, rc.Weekly, rc.Monthly, rc.Yearly)
+		return ""
 	}
 	return fmt.Sprintf("  Retention policy: simple (keep %d newest)", rc.MaxBackups)
 }
@@ -475,7 +482,7 @@ func logStorageFilesystem(info *storage.FilesystemInfo, detectErr error) string 
 
 // logStorageNotInitialized closes the block of a destination the run cannot use: the
 // cause when the caller has one to print, the "✗" outcome and the SKIP. causeLine is
-// printed as is ("  Directory not created: ...", "Cloud storage: ...").
+// printed as is ("  Directory not created: ...", "  Invalid CLOUD_REMOTE: ...").
 func logStorageNotInitialized(label, name, causeLine string) {
 	if causeLine != "" {
 		logging.Info("%s", causeLine)

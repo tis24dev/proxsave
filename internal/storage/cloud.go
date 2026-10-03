@@ -880,9 +880,12 @@ func (c *CloudStorage) Store(ctx context.Context, backupFile string, metadata *t
 		// The fact line carries the short cause; the caller closes the block with the
 		// outcome, and the full chain stays in DEBUG.
 		c.logger.Debug("Cloud Storage: upload - failed to send the %s: %v", target, err)
-		if primaryFailed {
+		switch {
+		case primaryFailed && AttemptsReported(err):
+			// The attempt lines above carry the cause; the outcome follows them directly.
+		case primaryFailed:
 			c.logger.Info("  Upload failed: %s", uploadPrimaryCause(err))
-		} else {
+		default:
 			c.logger.Info("  Sidecar failed: %s", uploadFailureFact(err))
 		}
 		return &StorageError{
@@ -997,7 +1000,7 @@ func (c *CloudStorage) uploadWithRetry(ctx context.Context, localFile, remoteFil
 		// A failed attempt is a fact under "Storing backup..." (or the log copy), never
 		// a WARNING: an attempt that fails and the next one that succeeds leave the
 		// backup saved, and the outcome line says so. With a single attempt the
-		// "Upload failed" fact already carries the cause.
+		// "Upload failed" fact carries the cause; with several, the attempt lines do.
 		if ctx.Err() == context.DeadlineExceeded {
 			c.logger.Debug("Cloud Storage: upload - attempt %d/%d failed, operation timeout (%ds exceeded): %v",
 				attempt,
@@ -1031,15 +1034,43 @@ func (c *CloudStorage) uploadWithRetry(ctx context.Context, localFile, remoteFil
 		}
 	}
 
+	var failed error
 	if ctx.Err() == context.DeadlineExceeded {
-		return fmt.Errorf("upload failed: operation timeout (%ds exceeded) after %d attempts",
+		failed = fmt.Errorf("upload failed: operation timeout (%ds exceeded) after %d attempts",
 			c.config.RcloneTimeoutOperation,
 			attemptsMade)
+	} else {
+		failed = fmt.Errorf("upload failed after %d attempts: %w",
+			attemptsMade,
+			lastErr)
 	}
+	if retries > 1 && attemptsMade == retries {
+		// Every attempt ran and failed, and each one is already an "  Attempt <i>/<n>
+		// failed" fact: the caller prints no cause of its own after them.
+		c.logger.Debug("Cloud Storage: upload - all %d attempts failed for %s", retries, filepath.Base(localFile))
+		return &attemptsReportedError{err: failed}
+	}
+	return failed
+}
 
-	return fmt.Errorf("upload failed after %d attempts: %w",
-		attemptsMade,
-		lastErr)
+// attemptsReportedError is an upload whose every attempt failed and was printed as an
+// "  Attempt <i>/<n> failed" fact. Its text is the error it wraps, unchanged.
+type attemptsReportedError struct {
+	err error
+}
+
+func (e *attemptsReportedError) Error() string { return e.err.Error() }
+
+func (e *attemptsReportedError) Unwrap() error { return e.err }
+
+// AttemptsReported reports whether err is an upload whose failed attempts are already
+// on screen, one "  Attempt <i>/<n> failed" fact each (RCLONE_RETRIES > 1, all of them
+// failed). The caller then closes the block with its outcome and no "failed" fact: the
+// cause is on the attempt lines. With a single attempt there is no attempt line, and
+// the caller's fact carries the cause.
+func AttemptsReported(err error) bool {
+	var reported *attemptsReportedError
+	return errors.As(err, &reported)
 }
 
 type uploadTask struct {

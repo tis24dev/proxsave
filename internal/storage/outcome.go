@@ -93,6 +93,12 @@ func ErrorCause(err error) string {
 	return safefs.SystemErrorText(err)
 }
 
+// CapitalizedCause is ErrorCause for a fact line that opens with the cause itself,
+// without a label: the first letter upper-cased ("  Invalid CLOUD_REMOTE: ...").
+func CapitalizedCause(err error) string {
+	return capitalizeFirst(ErrorCause(err))
+}
+
 // capitalizeFirst upper-cases the first letter of a cause that opens its own fact
 // line ("  Timed out after 30s").
 func capitalizeFirst(s string) string {
@@ -170,22 +176,51 @@ func (t retentionTally) apply(s *RetentionSummary) {
 	s.LogsNotDeleted = t.logsNotDeleted
 }
 
-// listingGap is what the last listing could not see: how many archives were left out
-// and the cause they share. Retention prints it as a fact; the other readers of the
-// listing (statistics, the post-copy count) only log it at DEBUG.
+// listingGap is what the last listing could not see: the archives it left out, counted
+// per distinct cause in the order the causes were first met. Retention prints one fact
+// per cause; the other readers of the listing (statistics, the post-copy count) only
+// log it at DEBUG.
 type listingGap struct {
+	causes []listingGapCause
+}
+
+// listingGapCause is how many archives the listing left out for one cause.
+type listingGapCause struct {
 	count int
 	cause string
 }
 
-// logListingGap prints the fact for the archives the listing left out, before the
-// scale of the pass, and returns how many there were.
-func logListingGap(logger *logging.Logger, gap listingGap) int {
-	if gap.count <= 0 {
-		return 0
+// add counts one more archive left out for cause, under the line of that cause.
+func (g *listingGap) add(cause string, n int) {
+	if n <= 0 {
+		return
 	}
-	logger.Info("  Not listed: %d backups, %s", gap.count, gap.cause)
-	return gap.count
+	for i := range g.causes {
+		if g.causes[i].cause == cause {
+			g.causes[i].count += n
+			return
+		}
+	}
+	g.causes = append(g.causes, listingGapCause{count: n, cause: cause})
+}
+
+// total is how many archives the listing left out, all causes together.
+func (g listingGap) total() int {
+	n := 0
+	for _, c := range g.causes {
+		n += c.count
+	}
+	return n
+}
+
+// logListingGap prints one fact per cause for the archives the listing left out,
+// before the scale of the pass, and returns how many there were in all. The listing
+// already wrote each archive and its cause at DEBUG.
+func logListingGap(logger *logging.Logger, gap listingGap) int {
+	for _, c := range gap.causes {
+		logger.Info("  Not listed: %d backups, %s", c.count, c.cause)
+	}
+	return gap.total()
 }
 
 // logListingNoMetadata prints one fact per archive the listing could only describe

@@ -179,7 +179,7 @@ func (s *SecondaryStorage) Store(ctx context.Context, backupFile string, metadat
 	if err := safefs.MkdirAll(ctx, s.basePath, 0700, fsIoTimeout(s.config)); err != nil {
 		s.logger.Debug("Secondary storage: failed to create destination folder %s", s.basePath)
 		s.logger.Debug("Secondary Storage: copy - failed to create the destination directory %s: %v", s.basePath, err)
-		s.logger.Info("  Copy failed: mkdir %s", safefs.SystemErrorText(err))
+		s.logger.Info("  Directory not created: %s", safefs.SystemErrorText(err))
 		return &StorageError{
 			Location:    LocationSecondary,
 			Operation:   "store",
@@ -244,7 +244,7 @@ func (s *SecondaryStorage) Store(ctx context.Context, backupFile string, metadat
 		setBackupSetPermissions(ctx, s.config, s.logger, s.fsDetector, s.fsInfo, destFile, func(path string, err error) {
 			s.logger.Debug("Secondary Storage: permissions - failed to set them on %s: %v",
 				filepath.Base(path), err)
-			s.logger.Info("  Permissions failed: %s: %s", filepath.Base(path), safefs.SystemErrorText(err))
+			logPermissionsFailure(s.logger, path, err)
 			issues.add(StoreIssuePermissionsNotSet)
 		})
 	}
@@ -473,9 +473,10 @@ func (s *SecondaryStorage) List(ctx context.Context) (backups []*types.BackupMet
 	// reported once after the loop.
 	vanished := 0
 	// unreadable holds one already-rendered entry per archive the listing lost, each
-	// carrying its own cause, so no archive ever borrows another's. unreadableCause is
-	// the bare cause of each, for the retention fact, which names the first.
-	var unreadable, unreadableCause []string
+	// carrying its own cause, so no archive ever borrows another's. unreadableGap counts
+	// them per bare cause, for the retention facts (one line per cause).
+	var unreadable []string
+	var unreadableGap listingGap
 
 	// Filter and parse backup files
 	for _, match := range matches {
@@ -514,7 +515,7 @@ func (s *SecondaryStorage) List(ctx context.Context) (backups []*types.BackupMet
 				continue
 			}
 			unreadable = append(unreadable, fmt.Sprintf("%s: %s", listingFailureCause(err), filepath.Base(match)))
-			unreadableCause = append(unreadableCause, listingFailureCause(err))
+			unreadableGap.add(listingFailureCause(err), 1)
 			continue
 		}
 
@@ -551,7 +552,8 @@ func (s *SecondaryStorage) List(ctx context.Context) (backups []*types.BackupMet
 				located = false
 				s.logger.Debug("Secondary Storage: listing - location stopped answering, %d archive(s) not listed: %v",
 					skipped, statErr)
-				s.lastListGap = listingGap{count: skipped, cause: listingFailureCause(statErr)}
+				s.lastListGap = listingGap{}
+				s.lastListGap.add(listingFailureCause(statErr), skipped)
 			}
 		}
 		// The WARNING carries the datum - the count and the consequence - and stands
@@ -567,7 +569,7 @@ func (s *SecondaryStorage) List(ctx context.Context) (backups []*types.BackupMet
 			}
 			s.logger.Debug("Secondary Storage: listing incomplete, %d archive(s) could not be read - retention and the stats run on the rest.",
 				len(unreadable))
-			s.lastListGap = listingGap{count: len(unreadable), cause: unreadableCause[0]}
+			s.lastListGap = unreadableGap
 		}
 	}
 

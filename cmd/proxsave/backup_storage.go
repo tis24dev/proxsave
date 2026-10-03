@@ -116,7 +116,7 @@ func initializeSecondaryStorage(opts backupModeOptions, orch *orchestrator.Orche
 		// instead of failing on it one by one.
 		logging.DebugStep(logger, "storage init", "secondary unavailable, disabling: %v", err)
 		disableSecondaryForRun(cfg, checker)
-		logStorageNotInitialized("Secondary", "Secondary storage", "Secondary storage: "+safefs.SystemErrorText(err))
+		logStorageNotInitialized("Secondary", "Secondary storage", "  "+storage.CapitalizedCause(err))
 		return nil
 	}
 
@@ -168,7 +168,7 @@ func initializeCloudStorage(opts backupModeOptions, orch *orchestrator.Orchestra
 	if err != nil {
 		logging.DebugStep(logger, "storage init", "cloud backend unavailable, disabling: %v", err)
 		disableCloudForRun(cfg, checker)
-		logStorageNotInitialized("Cloud", "Cloud storage", "Cloud storage: "+safefs.SystemErrorText(err))
+		logStorageNotInitialized("Cloud", "Cloud storage", "  "+storage.CapitalizedCause(err))
 		return nil
 	}
 
@@ -184,8 +184,9 @@ func initializeCloudStorage(opts backupModeOptions, orch *orchestrator.Orchestra
 		return nil
 	}
 
+	// A remote has no filesystem of its own to show: what the backend reports stays in
+	// DEBUG, and the block goes on with what the check found ("  Accessible").
 	logging.DebugStep(logger, "storage init", "cloud filesystem=%s", formatDetailedFilesystemLabel(cfg.CloudRemote, cloudFS))
-	logStorageFilesystem(cloudFS, nil)
 	cloudStats := fetchStorageStats(opts.ctx, cloudBackend, logger, "Cloud storage")
 	cloudBackups := fetchBackupList(opts.ctx, cloudBackend)
 	logging.DebugStep(logger, "storage init", "cloud stats=%v backups=%d", cloudStats != nil, len(cloudBackups))

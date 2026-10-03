@@ -616,7 +616,11 @@ func (o *Orchestrator) dispatchLogFile(ctx context.Context, logFilePath string) 
 					o.logger.Warning("%s Log copied to cloud, checksum not verified", theme.SymbolWarning)
 				case err != nil:
 					o.logger.Debug("Cloud log copy: failed to upload to %s: %v", destination, err)
-					o.logger.Info("  Copy failed: %s", storage.ErrorCause(err))
+					// With several attempts, each one is already a fact with its cause
+					// ("  Attempt <i>/<n> failed: ..."): the outcome follows them.
+					if !storage.AttemptsReported(err) {
+						o.logger.Info("  Copy failed: %s", storage.ErrorCause(err))
+					}
 					o.logger.Warning("%s Log not copied to cloud", theme.SymbolWarning)
 				default:
 					o.logger.Info("%s Log copied to cloud", theme.SymbolSuccess)

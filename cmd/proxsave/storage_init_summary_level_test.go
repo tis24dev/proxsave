@@ -202,12 +202,45 @@ func TestGFSSummaryWithoutStatsIsAWarningToo(t *testing.T) {
 		t.Fatalf("a GFS summary built without stats must report warn=true, got false: %s", summary)
 	}
 	// Without stats there are no tiers to count: the GFS block carries the unknown
-	// count and the outcome; its policy is the configuration line above.
+	// count and the outcome, and no policy line anywhere (the limits are in DEBUG).
 	if want := "  Backups: unknown, statistics unavailable\n⚠ Local storage: initialized, statistics unavailable"; summary != want {
 		t.Fatalf("GFS summary without stats = %q, want %q", summary, want)
 	}
-	if got := formatRetentionPolicyLine(cfg, storage.LocationPrimary); got != "  Retention policy: GFS (daily=2, weekly=1, monthly=0, yearly=0)" {
-		t.Fatalf("GFS policy line = %q", got)
+	if got := formatRetentionPolicyLine(cfg, storage.LocationPrimary); got != "" {
+		t.Fatalf("GFS policy line = %q, want none", got)
+	}
+}
+
+// A GFS block opens on the path alone: no "  Retention policy:" line at INFO, the
+// configured limits at DEBUG. The simple policy keeps its line under the path.
+func TestStoragePathGFSPolicyGoesToDebug(t *testing.T) {
+	render := func(cfg *config.Config) string {
+		logger := logging.New(types.LogLevelDebug, false)
+		buf := &bytes.Buffer{}
+		logger.SetOutput(buf)
+		prev := logging.GetDefaultLogger()
+		t.Cleanup(func() { logging.SetDefaultLogger(prev) })
+		logging.SetDefaultLogger(logger)
+		logStoragePath("Primary", "/backup", cfg, storage.LocationPrimary)
+		return buf.String()
+	}
+
+	out := render(&config.Config{RetentionPolicy: "gfs", RetentionDaily: 2, RetentionWeekly: 1})
+	if strings.Contains(out, "Retention policy:") {
+		t.Fatalf("a GFS block must carry no policy line:\n%s", out)
+	}
+	requireOrder(t, out,
+		"INFO     Path Primary: /backup\n",
+		"DEBUG    storage init: primary retention policy=gfs daily=2 weekly=1 monthly=0 yearly=0\n",
+	)
+
+	out = render(&config.Config{RetentionPolicy: "simple", LocalRetentionDays: 7})
+	requireOrder(t, out,
+		"INFO     Path Primary: /backup\n",
+		"INFO       Retention policy: simple (keep 7 newest)\n",
+	)
+	if strings.Contains(out, "retention policy=gfs") {
+		t.Fatalf("a simple block has no GFS debug line:\n%s", out)
 	}
 }
 

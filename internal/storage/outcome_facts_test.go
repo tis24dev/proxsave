@@ -325,3 +325,192 @@ func TestCloudCheckTimeoutIsAFact(t *testing.T) {
 		t.Fatalf("missing the timeout fact:\n%s", buf.String())
 	}
 }
+
+// With RCLONE_RETRIES > 1, every failed attempt is a fact with its cause, and when
+// all of them fail no "  Upload failed" line repeats the cause after them: the caller's
+// outcome follows the attempt lines directly. With a single attempt there is no
+// attempt line, and "  Upload failed" carries the cause.
+func TestCloudUploadAttemptLinesReplaceTheUploadFailedFact(t *testing.T) {
+	const cause = "Failed to copyto: open /x: read-only file system"
+	failingCopy := func(_ context.Context, _ string, args ...string) ([]byte, error) {
+		if len(args) > 0 && args[0] == "copyto" {
+			return []byte("2026/10/03 10:00:00 " + cause + "\n"), errors.New("exit status 1")
+		}
+		return nil, nil
+	}
+	dir := t.TempDir()
+	archive := filepath.Join(dir, "host-backup-20261003-100000.tar.zst")
+	if err := os.WriteFile(archive, []byte("archive"), 0o600); err != nil {
+		t.Fatalf("write archive: %v", err)
+	}
+
+	cfg := &config.Config{CloudEnabled: true, CloudRemote: "remote:backup", RcloneRetries: 3}
+	cs, buf := newCloudWithCapturedLog(t, cfg, failingCopy)
+	err := cs.Store(context.Background(), archive, &types.BackupMetadata{BackupFile: archive})
+	if err == nil {
+		t.Fatalf("Store must fail when every attempt fails")
+	}
+	if !AttemptsReported(err) {
+		t.Fatalf("AttemptsReported(%v) = false, want true after 3 failed attempts", err)
+	}
+	out := stripTimes(buf.String())
+	want := "INFO       Attempt 1/3 failed: " + cause + "\n" +
+		"INFO       Attempt 2/3 failed: " + cause + "\n" +
+		"INFO       Attempt 3/3 failed: " + cause + "\n"
+	if !strings.Contains(out, want) || strings.Contains(out, "Upload failed") || strings.Contains(out, "WARNING") {
+		t.Fatalf("want the three attempt facts and no \"Upload failed\" line:\n%s", out)
+	}
+
+	cfg = &config.Config{CloudEnabled: true, CloudRemote: "remote:backup", RcloneRetries: 1}
+	cs, buf = newCloudWithCapturedLog(t, cfg, failingCopy)
+	err = cs.Store(context.Background(), archive, &types.BackupMetadata{BackupFile: archive})
+	if err == nil || AttemptsReported(err) {
+		t.Fatalf("a single failed attempt is not reported by attempt lines: err=%v", err)
+	}
+	out = stripTimes(buf.String())
+	if !strings.Contains(out, "INFO       Upload failed: "+cause+"\n") || strings.Contains(out, "Attempt") {
+		t.Fatalf("want \"Upload failed\" with the cause and no attempt line:\n%s", out)
+	}
+}
+
+// What a failing SIDECAR upload prints with RCLONE_RETRIES=3, pinned as it is today
+// (round 3 leaves it unchanged for the maintainer to decide): the attempt lines of the
+// sidecar, without its name, then "  Sidecar failed: <file>: <cause>". The caller then
+// closes the block with "⚠ Cloud Storage (rclone): backup saved, sidecar file not saved".
+func TestCloudSidecarUploadFailureWithRetries(t *testing.T) {
+	const cause = "Failed to copyto: permission denied"
+	dir := t.TempDir()
+	archive := filepath.Join(dir, "host-backup-20261003-100000.tar.zst")
+	if err := os.WriteFile(archive, []byte("archive"), 0o600); err != nil {
+		t.Fatalf("write archive: %v", err)
+	}
+	if err := os.WriteFile(archive+".sha256", []byte("sum"), 0o600); err != nil {
+		t.Fatalf("write sidecar: %v", err)
+	}
+	cfg := &config.Config{CloudEnabled: true, CloudRemote: "remote:backup", RcloneRetries: 3}
+	cs, buf := newCloudWithCapturedLog(t, cfg, func(_ context.Context, _ string, args ...string) ([]byte, error) {
+		switch args[0] {
+		case "copyto":
+			if strings.HasSuffix(args[len(args)-2], ".sha256") {
+				return []byte("2026/10/03 10:00:00 " + cause + "\n"), errors.New("exit status 1")
+			}
+		case "lsl":
+			if strings.HasSuffix(args[len(args)-1], filepath.Base(archive)) {
+				return []byte("        7 2026-10-03 10:00:00.000000000 " + filepath.Base(archive) + "\n"), nil
+			}
+		}
+		return nil, nil
+	})
+	err := cs.Store(context.Background(), archive, &types.BackupMetadata{BackupFile: archive})
+	var se *StorageError
+	if !errors.As(err, &se) || !se.PrimarySaved {
+		t.Fatalf("Store = %v, want a StorageError with the primary saved", err)
+	}
+	var visible []string
+	for _, line := range strings.Split(stripTimes(buf.String()), "\n") {
+		if strings.HasPrefix(line, "INFO") || strings.HasPrefix(line, "WARNING") {
+			visible = append(visible, line)
+		}
+	}
+	want := []string{
+		"INFO       Attempt 1/3 failed: " + cause,
+		"INFO       Attempt 2/3 failed: " + cause,
+		"INFO       Attempt 3/3 failed: " + cause,
+		"INFO       Sidecar failed: " + filepath.Base(archive) + ".sha256: " + cause,
+	}
+	if strings.Join(visible, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("visible lines =\n%s\nwant\n%s", strings.Join(visible, "\n"), strings.Join(want, "\n"))
+	}
+}
+
+// A file whose owner or mode could not be set gets one fact per failed operation, in
+// the order they run: the chown ("Owner failed"), then the chmod ("Permissions failed").
+func TestPermissionsFailureFactsFollowTheOperations(t *testing.T) {
+	ownerErr := &os.PathError{Op: "chown", Path: "/b/a.tar.zst", Err: os.ErrPermission}
+	modeErr := &os.PathError{Op: "chmod", Path: "/b/a.tar.zst", Err: errors.New("read-only file system")}
+
+	logger, buf := newCapturedLogger()
+	logPermissionsFailure(logger, "/b/a.tar.zst", &PermissionsError{Owner: ownerErr})
+	if got := stripTimes(buf.String()); got != "INFO       Owner failed: a.tar.zst: permission denied\n" {
+		t.Fatalf("chown only = %q", got)
+	}
+
+	logger, buf = newCapturedLogger()
+	logPermissionsFailure(logger, "/b/a.tar.zst", &PermissionsError{Owner: ownerErr, Mode: modeErr})
+	want := "INFO       Owner failed: a.tar.zst: permission denied\n" +
+		"INFO       Permissions failed: a.tar.zst: read-only file system\n"
+	if got := stripTimes(buf.String()); got != want {
+		t.Fatalf("chown and chmod = %q, want %q", got, want)
+	}
+
+	logger, buf = newCapturedLogger()
+	logPermissionsFailure(logger, "/b/a.tar.zst", &PermissionsError{Mode: modeErr})
+	if got := stripTimes(buf.String()); got != "INFO       Permissions failed: a.tar.zst: read-only file system\n" {
+		t.Fatalf("chmod only = %q", got)
+	}
+}
+
+// The Primary's Store reports a chown that failed: the fact, and one
+// StoreIssuePermissionsNotSet for the caller's "⚠ Local Storage: permissions not set".
+func TestLocalStoreReportsAFailedChown(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root can chown to root; the failure needs an unprivileged run")
+	}
+	dir := t.TempDir()
+	logger, buf := newCapturedLogger()
+	local, err := NewLocalStorage(&config.Config{BackupPath: dir}, logger, "")
+	if err != nil {
+		t.Fatalf("NewLocalStorage: %v", err)
+	}
+	name := "host-backup-20260101-000000.tar.zst"
+	archive := filepath.Join(dir, name)
+	for _, f := range []string{archive, archive + ".sha256"} {
+		if err := os.WriteFile(f, []byte("x"), 0o644); err != nil {
+			t.Fatalf("write %s: %v", f, err)
+		}
+	}
+	if err := local.Store(context.Background(), archive, &types.BackupMetadata{BackupFile: archive}); err != nil {
+		t.Fatalf("Store: %v", err)
+	}
+	out := stripTimes(buf.String())
+	for _, want := range []string{
+		"INFO       Owner failed: " + name + ": operation not permitted\n",
+		"INFO       Owner failed: " + name + ".sha256: operation not permitted\n",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("missing %q in:\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, "Permissions failed") || strings.Contains(out, "WARNING") {
+		t.Fatalf("the chmod succeeded and the backend writes no outcome:\n%s", out)
+	}
+	if issues := local.LastStoreIssues(); len(issues) != 1 || issues[0] != StoreIssuePermissionsNotSet {
+		t.Fatalf("LastStoreIssues = %v, want one StoreIssuePermissionsNotSet", issues)
+	}
+}
+
+// A secondary destination directory that cannot be created at step [6] is the same
+// fact the storage initialization and the step [8] log copy print: "  Directory not
+// created: <cause>". The caller closes the block with "✗ Secondary Storage: backup not saved".
+func TestSecondaryStoreDirectoryNotCreated(t *testing.T) {
+	blocker := filepath.Join(t.TempDir(), "file")
+	if err := os.WriteFile(blocker, []byte("x"), 0o600); err != nil {
+		t.Fatalf("write blocker: %v", err)
+	}
+	archive := filepath.Join(t.TempDir(), "host-backup-20260101-000000.tar.zst")
+	if err := os.WriteFile(archive, []byte("x"), 0o600); err != nil {
+		t.Fatalf("write archive: %v", err)
+	}
+	logger, buf := newCapturedLogger()
+	s, err := NewSecondaryStorage(&config.Config{SecondaryEnabled: true, SecondaryPath: filepath.Join(blocker, "sub")}, logger, "")
+	if err != nil {
+		t.Fatalf("NewSecondaryStorage: %v", err)
+	}
+	if err := s.Store(context.Background(), archive, &types.BackupMetadata{BackupFile: archive}); err == nil {
+		t.Fatalf("Store must fail when the destination directory cannot be created")
+	}
+	out := stripTimes(buf.String())
+	if out != "INFO       Directory not created: not a directory\n" {
+		t.Fatalf("visible lines = %q, want only the directory fact", out)
+	}
+}

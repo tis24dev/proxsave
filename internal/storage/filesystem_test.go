@@ -276,6 +276,38 @@ func TestFilesystemDetectorSetPermissions_ReturnsErrorWhenChmodFails(t *testing.
 	if !errors.Is(err, os.ErrNotExist) && !strings.Contains(err.Error(), "no such file") {
 		t.Fatalf("unexpected error: %v", err)
 	}
+	// The chown ran first and failed too: both operations travel, neither is dropped.
+	var pe *PermissionsError
+	if !errors.As(err, &pe) || pe.Owner == nil || pe.Mode == nil {
+		t.Fatalf("error = %#v, want a *PermissionsError carrying the chown and the chmod failures", err)
+	}
+}
+
+// A chown that fails is returned too, not only logged at DEBUG, and the chmod still
+// runs after it.
+func TestFilesystemDetectorSetPermissions_ReturnsTheChownFailure(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root can chown to any owner; the failure needs an unprivileged run")
+	}
+	detector := NewFilesystemDetector(newTestLogger())
+	path := filepath.Join(t.TempDir(), "file.txt")
+	if err := os.WriteFile(path, []byte("x"), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	info := &FilesystemInfo{Type: FilesystemExt4, SupportsOwnership: true}
+
+	err := detector.SetPermissions(context.Background(), path, 0, 0, 0o600, info)
+	var pe *PermissionsError
+	if !errors.As(err, &pe) || pe.Owner == nil || pe.Mode != nil {
+		t.Fatalf("error = %#v, want a *PermissionsError with the chown failure only", err)
+	}
+	if !errors.Is(err, os.ErrPermission) {
+		t.Fatalf("error = %v, want it to unwrap to the chown's permission error", err)
+	}
+	st, statErr := os.Stat(path)
+	if statErr != nil || st.Mode().Perm() != 0o600 {
+		t.Fatalf("the chmod must still run after a failed chown: mode=%v err=%v", st.Mode().Perm(), statErr)
+	}
 }
 
 func TestFilesystemDetectorSetPermissions_SucceedsForExistingFile(t *testing.T) {

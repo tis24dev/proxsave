@@ -101,7 +101,8 @@ func backupFileOwnership(cfg *config.Config, logger *logging.Logger) (int, int, 
 
 // setBackupSetPermissions gives every file of the backup set backupFile belongs to
 // (the bundle, or the archive and its sidecars) that exists next to it the owner and
-// mode backupFileOwnership returns. warn reports a file whose mode could not be set.
+// mode backupFileOwnership returns. warn reports a file whose owner or mode could not
+// be set; the error is the *PermissionsError SetPermissions returned.
 func setBackupSetPermissions(ctx context.Context, cfg *config.Config, logger *logging.Logger, d *FilesystemDetector, fsInfo *FilesystemInfo, backupFile string, warn func(path string, err error)) {
 	uid, gid, mode := backupFileOwnership(cfg, logger)
 	logger.Debug("Backup files: owner %d:%d, mode %o for the files of %s", uid, gid, mode, filepath.Base(backupFile))
@@ -116,5 +117,23 @@ func setBackupSetPermissions(ctx context.Context, cfg *config.Config, logger *lo
 		if err := d.SetPermissions(ctx, path, uid, gid, mode, fsInfo); err != nil {
 			warn(path, err)
 		}
+	}
+}
+
+// logPermissionsFailure prints the facts for one file whose owner or mode could not be
+// set, one line per failed operation in the order they run: "  Owner failed: <file>:
+// <cause>" for the chown, "  Permissions failed: <file>: <cause>" for the chmod.
+func logPermissionsFailure(logger *logging.Logger, path string, err error) {
+	name := filepath.Base(path)
+	var pe *PermissionsError
+	if !errors.As(err, &pe) || pe == nil {
+		logger.Info("  Permissions failed: %s: %s", name, safefs.SystemErrorText(err))
+		return
+	}
+	if pe.Owner != nil {
+		logger.Info("  Owner failed: %s: %s", name, safefs.SystemErrorText(pe.Owner))
+	}
+	if pe.Mode != nil {
+		logger.Info("  Permissions failed: %s: %s", name, safefs.SystemErrorText(pe.Mode))
 	}
 }
