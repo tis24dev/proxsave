@@ -530,17 +530,23 @@ var (
 	// The collection manifest stamps its own wall-clock time (RFC3339 with trailing zeros
 	// trimmed), so its size moves by a few bytes from run to run.
 	backupCharManifestSizeRe = regexp.MustCompile(`(manifest\.json \()\d+( bytes\))`)
-	backupCharStatsSizeRe    = regexp.MustCompile(`(?m)^(\s*"(?:BytesCollected|UncompressedSize|CompressionRatio|CompressionRatioPercent)": )[^,\n]+`)
+	// The network report stamps the wall-clock time in the local zone and the machine's
+	// hostname, which no seam reaches: the size a dry run reports for it moves from run
+	// to run and from machine to machine.
+	backupCharNetworkReportSizeRe = regexp.MustCompile(`(network_report\.txt \()\d+( bytes\))`)
+	// The DMI probe names the effective user id it refused to run dmidecode under.
+	backupCharEUIDRe      = regexp.MustCompile(`\(euid=\d+\)`)
+	backupCharStatsSizeRe = regexp.MustCompile(`(?m)^(\s*"(?:BytesCollected|UncompressedSize|CompressionRatio|CompressionRatioPercent)": )[^,\n]+`)
 	// A log-category label is cut at a fixed width with "..." appended; when the cut falls
 	// inside the root directory, what is left of it is a prefix the full-root replacement
 	// cannot see.
 	backupCharTruncatedPathRe = regexp.MustCompile(`/[^\s"]*\.\.\.`)
 )
 
-// maskBackupChar replaces only what changes from one run to the next: the root
-// directory (whole, or cut short in a log-category label), log timestamps, durations,
-// SHA-256 sums, the random suffix of the workspace and the size of the collection
-// manifest.
+// maskBackupChar replaces only what changes from one run or one machine to the next: the
+// root directory (whole, or cut short in a log-category label), log timestamps,
+// durations, SHA-256 sums, the random suffix of the workspace, the size of the
+// collection manifest and of the network report, and the effective user id.
 func maskBackupChar(dirs backupCharDirs, s string) string {
 	s = strings.ReplaceAll(s, dirs.root, "<ROOT>")
 	s = backupCharTruncatedPathRe.ReplaceAllStringFunc(s, func(m string) string {
@@ -554,6 +560,8 @@ func maskBackupChar(dirs backupCharDirs, s string) string {
 	s = backupCharSHA256Re.ReplaceAllString(s, "<SHA256>")
 	s = backupCharWorkspaceRe.ReplaceAllString(s, "${1}<RANDOM>")
 	s = backupCharManifestSizeRe.ReplaceAllString(s, "${1}<SIZE>${2}")
+	s = backupCharNetworkReportSizeRe.ReplaceAllString(s, "${1}<SIZE>${2}")
+	s = backupCharEUIDRe.ReplaceAllString(s, "(euid=<EUID>)")
 	return s
 }
 
@@ -746,13 +754,34 @@ var backupCharFakeXZFailing = "#!/bin/sh\nexec 2>&-\ncat >/dev/null\nexit 1\n"
 
 var backupCharFakeTarFailing = "#!/bin/sh\necho 'tar: injected verification failure' >&2\nexit 2\n"
 
+// backupCharDryRunCommands is every command the collection looks up in PATH during a
+// dry run with this configuration. A dry run executes none of them, yet whether each is
+// found decides the line it prints ("Would execute command", "Command not available", or
+// no line at all for pvs, vgs and lvs), so the host's PATH would decide the golden. Only
+// presence can be forced: the collector appends /usr/local/sbin, /usr/sbin and /sbin to
+// PATH itself, so a host command cannot be hidden.
+var backupCharDryRunCommands = []string{
+	"cat", "uname", "hostname", "ip", "bridge", "df", "mount", "lsblk", "blkid",
+	"free", "lscpu", "lspci", "lsusb", "pvs", "vgs", "lvs", "dmidecode", "sensors",
+}
+
+// backupCharDryRunFakes returns a fake for each of backupCharDryRunCommands. The fake
+// fails loudly, since nothing in a dry run may run it.
+func backupCharDryRunFakes() map[string]string {
+	fakes := make(map[string]string, len(backupCharDryRunCommands))
+	for _, name := range backupCharDryRunCommands {
+		fakes[name] = "#!/bin/sh\necho \"characterization: $0 ran during a dry run\" >&2\nexit 97\n"
+	}
+	return fakes
+}
+
 func TestBackupCharacterization(t *testing.T) {
 	cases := []backupCharCase{
 		{name: "all_ok"},
 		{name: "secondary_failed", failSecond: true},
 		{name: "cloud_failed", failCloud: true},
 		{name: "local_failed", failLocal: true},
-		{name: "dry_run", dryRun: true},
+		{name: "dry_run", dryRun: true, fakeBinaries: backupCharDryRunFakes()},
 		{name: "bundle_disabled", noBundle: true},
 		{name: "no_targets", noTargets: true},
 		{name: "age_encryption", encrypt: true},
@@ -762,7 +791,7 @@ func TestBackupCharacterization(t *testing.T) {
 		{name: "pbs_upload_failed", pbs: "upload_failed"},
 		{name: "pbs_prune_denied", pbs: "prune_denied"},
 		{name: "pbs_not_initialized", pbs: "not_initialized"},
-		{name: "pbs_dry_run", pbs: "ok", dryRun: true},
+		{name: "pbs_dry_run", pbs: "ok", dryRun: true, fakeBinaries: backupCharDryRunFakes()},
 		{name: "local_failed_pbs_enabled", pbs: "ok", failLocal: true},
 	}
 	for _, tc := range cases {

@@ -124,9 +124,16 @@ exit code (as cmd/proxsave computes it): 1
 [<TIME>] DEBUG    [DRY RUN] Would execute command: blkid > <ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM>/var/lib/proxsave-info/commands/system/blkid.txt
 [<TIME>] DEBUG    [DRY RUN] Would execute command: free -h > <ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM>/var/lib/proxsave-info/commands/system/free.txt
 [<TIME>] DEBUG    [DRY RUN] Would execute command: lscpu > <ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM>/var/lib/proxsave-info/commands/system/lscpu.txt
-[<TIME>] DEBUG    Command not available: lspci (skipping PCI devices)
-[<TIME>] DEBUG    Skipping USB devices: command lsusb not available: exec: "lsusb": executable file not found in $PATH
-[<TIME>] DEBUG    [DRY RUN] Would write report file: <ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM>/var/lib/proxsave-info/commands/system/network_report.txt (83 bytes)
+[<TIME>] DEBUG    [DRY RUN] Would execute command: lspci -v > <ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM>/var/lib/proxsave-info/commands/system/lspci.txt
+[<TIME>] DEBUG    Collecting USB devices via command: lsusb > <ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM>/var/lib/proxsave-info/commands/system/lsusb.txt
+[<TIME>] DEBUG    [DRY RUN] Would execute command: lsusb > <ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM>/var/lib/proxsave-info/commands/system/lsusb.txt
+[<TIME>] DEBUG    Collecting LVM physical volumes via command: pvs > <ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM>/var/lib/proxsave-info/commands/system/lvm_pvs.txt
+[<TIME>] DEBUG    [DRY RUN] Would execute command: pvs > <ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM>/var/lib/proxsave-info/commands/system/lvm_pvs.txt
+[<TIME>] DEBUG    Collecting LVM volume groups via command: vgs > <ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM>/var/lib/proxsave-info/commands/system/lvm_vgs.txt
+[<TIME>] DEBUG    [DRY RUN] Would execute command: vgs > <ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM>/var/lib/proxsave-info/commands/system/lvm_vgs.txt
+[<TIME>] DEBUG    Collecting LVM logical volumes via command: lvs > <ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM>/var/lib/proxsave-info/commands/system/lvm_lvs.txt
+[<TIME>] DEBUG    [DRY RUN] Would execute command: lvs > <ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM>/var/lib/proxsave-info/commands/system/lvm_lvs.txt
+[<TIME>] DEBUG    [DRY RUN] Would write report file: <ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM>/var/lib/proxsave-info/commands/system/network_report.txt (<SIZE> bytes)
 [<TIME>] DEBUG    Collecting kernel information (uname/modules)
 [<TIME>] DEBUG    Collecting kernel information into <ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM>/var/lib/proxsave-info/commands/system
 [<TIME>] DEBUG    Collecting Kernel command line via command: cat <ROOT>/sysroot/proc/cmdline > <ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM>/var/lib/proxsave-info/commands/system/kernel_cmdline.txt
@@ -137,8 +144,8 @@ exit code (as cmd/proxsave computes it): 1
 [<TIME>] DEBUG    Kernel information collected successfully
 [<TIME>] DEBUG    Collecting hardware inventory (CPU/memory/devices)
 [<TIME>] DEBUG    Collecting hardware inventory into <ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM>/var/lib/proxsave-info/commands/system
-[<TIME>] DEBUG    Skipping Hardware DMI information: dmidecode requires root privileges (euid=1000)
-[<TIME>] DEBUG    Skipping Hardware sensors: command sensors not available: exec: "sensors": executable file not found in $PATH
+[<TIME>] DEBUG    Skipping Hardware DMI information: dmidecode requires root privileges (euid=<EUID>)
+[<TIME>] DEBUG    Skipping Hardware sensors: hardware sensor sysfs not detected
 [<TIME>] DEBUG    Hardware information snapshot completed
 [<TIME>] DEBUG    Hardware inventory collected successfully
 [<TIME>] DEBUG    Collecting user home directories under /home
@@ -279,9 +286,16 @@ exit code (as cmd/proxsave computes it): 1
 [<TIME>] DEBUG    [DRY RUN] Would execute command: blkid > <ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM>/var/lib/proxsave-info/commands/system/blkid.txt
 [<TIME>] DEBUG    [DRY RUN] Would execute command: free -h > <ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM>/var/lib/proxsave-info/commands/system/free.txt
 [<TIME>] DEBUG    [DRY RUN] Would execute command: lscpu > <ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM>/var/lib/proxsave-info/commands/system/lscpu.txt
-[<TIME>] DEBUG    Command not available: lspci (skipping PCI devices)
-[<TIME>] DEBUG    Skipping USB devices: command lsusb not available: exec: "lsusb": executable file not found in $PATH
-[<TIME>] DEBUG    [DRY RUN] Would write report file: <ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM>/var/lib/proxsave-info/commands/system/network_report.txt (83 bytes)
+[<TIME>] DEBUG    [DRY RUN] Would execute command: lspci -v > <ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM>/var/lib/proxsave-info/commands/system/lspci.txt
+[<TIME>] DEBUG    Collecting USB devices via command: lsusb > <ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM>/var/lib/proxsave-info/commands/system/lsusb.txt
+[<TIME>] DEBUG    [DRY RUN] Would execute command: lsusb > <ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM>/var/lib/proxsave-info/commands/system/lsusb.txt
+[<TIME>] DEBUG    Collecting LVM physical volumes via command: pvs > <ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM>/var/lib/proxsave-info/commands/system/lvm_pvs.txt
+[<TIME>] DEBUG    [DRY RUN] Would execute command: pvs > <ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM>/var/lib/proxsave-info/commands/system/lvm_pvs.txt
+[<TIME>] DEBUG    Collecting LVM volume groups via command: vgs > <ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM>/var/lib/proxsave-info/commands/system/lvm_vgs.txt
+[<TIME>] DEBUG    [DRY RUN] Would execute command: vgs > <ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM>/var/lib/proxsave-info/commands/system/lvm_vgs.txt
+[<TIME>] DEBUG    Collecting LVM logical volumes via command: lvs > <ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM>/var/lib/proxsave-info/commands/system/lvm_lvs.txt
+[<TIME>] DEBUG    [DRY RUN] Would execute command: lvs > <ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM>/var/lib/proxsave-info/commands/system/lvm_lvs.txt
+[<TIME>] DEBUG    [DRY RUN] Would write report file: <ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM>/var/lib/proxsave-info/commands/system/network_report.txt (<SIZE> bytes)
 [<TIME>] DEBUG    Collecting kernel information (uname/modules)
 [<TIME>] DEBUG    Collecting kernel information into <ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM>/var/lib/proxsave-info/commands/system
 [<TIME>] DEBUG    Collecting Kernel command line via command: cat <ROOT>/sysroot/proc/cmdline > <ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM>/var/lib/proxsave-info/commands/system/kernel_cmdline.txt
@@ -292,8 +306,8 @@ exit code (as cmd/proxsave computes it): 1
 [<TIME>] DEBUG    Kernel information collected successfully
 [<TIME>] DEBUG    Collecting hardware inventory (CPU/memory/devices)
 [<TIME>] DEBUG    Collecting hardware inventory into <ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM>/var/lib/proxsave-info/commands/system
-[<TIME>] DEBUG    Skipping Hardware DMI information: dmidecode requires root privileges (euid=1000)
-[<TIME>] DEBUG    Skipping Hardware sensors: command sensors not available: exec: "sensors": executable file not found in $PATH
+[<TIME>] DEBUG    Skipping Hardware DMI information: dmidecode requires root privileges (euid=<EUID>)
+[<TIME>] DEBUG    Skipping Hardware sensors: hardware sensor sysfs not detected
 [<TIME>] DEBUG    Hardware information snapshot completed
 [<TIME>] DEBUG    Hardware inventory collected successfully
 [<TIME>] DEBUG    Collecting user home directories under /home
