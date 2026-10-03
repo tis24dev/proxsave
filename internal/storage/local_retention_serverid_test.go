@@ -131,10 +131,10 @@ func TestLocalRetentionAdoptsArchivesWrittenUnderALostFQDN(t *testing.T) {
 	if deleted != 2 {
 		t.Errorf("deleted = %d, want 2; the count feeds the run summary and the retention report", deleted)
 	}
-	if strings.Contains(buf.String(), "different spelling") {
-		t.Errorf("retention still reported these archives as an unresolvable spelling mismatch after adopting them. The warning promotes the run to exit 1 for a condition that no longer exists. Log: %s", buf.String())
+	if strings.Contains(buf.String(), "not rotated") {
+		t.Errorf("retention still reported these archives as not rotated after adopting them. The outcome then promotes the run to exit 1 for a condition that no longer exists. Log: %s", buf.String())
 	}
-	if !strings.Contains(buf.String(), "back into rotation") {
+	if !strings.Contains(buf.String(), "  Adopted: 3 backups named pve.home.arpa, same server identity") {
 		t.Errorf("nothing said the archives had been brought back. The recovery is invisible to the operator otherwise. Log: %s", buf.String())
 	}
 	if n := logger.WarningCount(); n != 0 {
@@ -146,8 +146,7 @@ func TestLocalRetentionAdoptsArchivesWrittenUnderALostFQDN(t *testing.T) {
 // the test above, and it is what proves the adoption really came from the identity
 // rather than from something that widened the hostname rule. The fixture is identical
 // except that the archives record no server identity, which is every archive written
-// before this change: nothing is deleted and the existing warning still fires, word
-// for word.
+// before this change: nothing is deleted and the not-rotated fact names them.
 func TestLocalRetentionLeavesTheSameFixtureAloneWithoutAServerIdentity(t *testing.T) {
 	original := retentionHostname
 	retentionHostname = func() (string, error) { return "pve", nil }
@@ -175,8 +174,11 @@ func TestLocalRetentionLeavesTheSameFixtureAloneWithoutAServerIdentity(t *testin
 	if deleted != 0 {
 		t.Errorf("deleted = %d, want 0: an archive with no server identity must be classified exactly as it was before the field existed", deleted)
 	}
-	if !strings.Contains(buf.String(), "different spelling") {
-		t.Errorf("the pre-existing spelling-mismatch warning stopped firing for a population nothing has claimed. The operator's only signal that rotation has stopped is that line. Log: %s", buf.String())
+	if !strings.Contains(buf.String(), "  Named pve.home.arpa, not rotated: 3 backups") {
+		t.Errorf("the not-rotated fact stopped firing for a population nothing has claimed. The operator's only signal that rotation has stopped is that line. Log: %s", buf.String())
+	}
+	if summary := l.LastRetentionSummary(); summary.NotRotated != 3 || summary.NotRotatedNames != "pve.home.arpa" {
+		t.Errorf("summary not rotated = %d %q, want 3 \"pve.home.arpa\": the outcome line reads them", summary.NotRotated, summary.NotRotatedNames)
 	}
 }
 
@@ -188,7 +190,7 @@ func TestLocalRetentionLeavesTheSameFixtureAloneWithoutAServerIdentity(t *testin
 // That is exactly what a clone or a restored container looks like from here, and
 // inheriting the source machine's identity is expected, supported behaviour. Claiming
 // these archives would be a clone pruning the source machine's backups, so retention
-// refuses and says why.
+// refuses and names them as not rotated.
 func TestLocalRetentionRefusesASecondSiteCarryingOurServerIdentity(t *testing.T) {
 	original := retentionHostname
 	retentionHostname = func() (string, error) { return "pve", nil }
@@ -221,8 +223,8 @@ func TestLocalRetentionRefusesASecondSiteCarryingOurServerIdentity(t *testing.T)
 	if deleted != 0 {
 		t.Errorf("deleted = %d, want 0", deleted)
 	}
-	if !strings.Contains(buf.String(), "carry this host's own server identity") {
-		t.Errorf("nothing told the operator that the refused archives carry this host's own identity, which is the one fact that explains why they are being left alone. Log: %s", buf.String())
+	if !strings.Contains(buf.String(), "  Named pve.siteb.example, not rotated: 2 backups") {
+		t.Errorf("nothing told the operator that the refused archives are not rotated. Log: %s", buf.String())
 	}
 }
 

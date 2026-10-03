@@ -590,7 +590,22 @@ func (l *LocalStorage) ApplyRetention(ctx context.Context, config RetentionConfi
 	// Drop anything this host does not own before counting or deleting: the
 	// "*-backup-*" glob that produced this list matches every hostname, and the list
 	// also carries other spellings of this host's own name.
-	backups, unmanaged := applyRetentionHostScope("Local storage", retentionIdentity{hostname: l.hostname, aliases: l.hostAliases, serverID: l.serverID}, backups, l.logger)
+	scope, err := applyRetentionHostScope("Local storage", retentionIdentity{hostname: l.hostname, aliases: l.hostAliases, serverID: l.serverID}, backups, l.logger)
+	if err != nil {
+		// This machine cannot name itself, so no backup can be attributed to it: the
+		// pass does not start and the caller closes the block with "Retention not
+		// applied". The fact line was printed by applyRetentionHostScope.
+		return 0, &StorageError{
+			Location:    LocationPrimary,
+			Operation:   "apply_retention",
+			Path:        l.basePath,
+			Err:         err,
+			IsCritical:  false,
+			Recoverable: true,
+		}
+	}
+	backups = scope.owned
+	l.retTally.notRotated = scope.notRotated
 
 	// This is the only frame that knows the number: the listing above matches every
 	// hostname, and GetStats reruns that same unscoped listing for its own count. The
@@ -604,10 +619,10 @@ func (l *LocalStorage) ApplyRetention(ctx context.Context, config RetentionConfi
 	// ones would read "2/7" while storing twenty-two. Archives belonging to a named
 	// other machine are excluded, which is what scoping is for.
 	//
-	// Left invalid when the host cannot name itself: applyRetentionHostScope returns
-	// nil there and warns, so publishing 0 would print "0/7" beside a directory
-	// holding forty archives, which is a worse lie than the one being fixed.
-	owned, scoped = len(backups)+unmanaged, strings.TrimSpace(l.hostname) != ""
+	// Left invalid when the host cannot name itself: the pass returned above, so
+	// publishing 0 would print "0/7" beside a directory holding forty archives, which
+	// is a worse lie than the one being fixed.
+	owned, scoped = len(backups)+scope.unmanaged, true
 
 	if len(backups) == 0 {
 		l.logger.Debug("Local storage: no backups to apply retention")

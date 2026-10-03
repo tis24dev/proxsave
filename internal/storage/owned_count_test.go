@@ -31,7 +31,7 @@ func TestOwnedBackupCountMatchesRetentionScope(t *testing.T) {
 		nil,
 	}
 
-	scoped, unmanaged := applyRetentionHostScope("Test storage", id, listing, nil)
+	scoped, unmanaged := scopeListing(t, "Test storage", id, listing, nil)
 	want := len(scoped) + unmanaged
 	if got := ownedBackupCount(listing, id); got != want {
 		t.Fatalf("ownedBackupCount = %d, retention scope publishes %d (scoped %d + unmanaged %d): the startup count would mean something else than the count a successful run prints", got, want, len(scoped), unmanaged)

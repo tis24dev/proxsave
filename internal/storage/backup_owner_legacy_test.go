@@ -182,17 +182,13 @@ func TestLegacyArchiveNamingItsHostStillRotatesOnThatHost(t *testing.T) {
 // seams:
 //
 //  1. the scoped set is exactly the archive this host can name (classification),
-//  2. a line naming the case exists, so the operator can find out why rotation
-//     stopped (reporting),
-//  3. that line is INFO and NOTHING was emitted at WARNING (the exit code).
+//  2. a DEBUG line names the case, so a debug log says why they do not rotate,
+//  3. NOTHING was emitted at INFO or WARNING (no visible line, and the exit code).
 //
 // The third is the load-bearing one. An archive nobody can name is a fixed backlog
 // fact that no future run will change: counting it as a run issue would promote
 // every affected run to exit 1 for ever through applyIssueExitCode, which is the
-// symptom of discussion #292 rather than a report of it. Asserting ZERO warnings
-// rather than merely checking the new line's level is what catches the half-fix that
-// downgrades the new line while leaving the pre-existing generic warning counting
-// the same entries.
+// symptom of discussion #292 rather than a report of it.
 func TestUnclaimedLegacyArchivesAreReportedWithoutRaisingTheRunSeverity(t *testing.T) {
 	backups := []*types.BackupMetadata{
 		{BackupFile: "hostA-backup-20250103-100000.tar.zst", Hostname: "hostA"},
@@ -200,40 +196,43 @@ func TestUnclaimedLegacyArchivesAreReportedWithoutRaisingTheRunSeverity(t *testi
 	}
 
 	logger := &levelRecordingLogger{}
-	scoped, _ := applyRetentionHostScope("Local storage", hostOnly("hostA"), backups, logger)
+	scoped, _ := scopeListing(t, "Local storage", hostOnly("hostA"), backups, logger)
 
 	if len(scoped) != 1 || scoped[0] != backups[0] {
 		t.Fatalf("scoped %d entries (%+v), want exactly the archive this host can name", len(scoped), scoped)
 	}
-	if level := logger.levelOf("no host will ever delete them"); level == "" {
-		t.Error("nothing named the unclaimed archives. Retention silently stops rotating them, and the operator's only way to find out is disk usage")
-	} else if level != "INFO" {
-		t.Errorf("the unclaimed-archive line was emitted at %s, want INFO. A WARNING line is counted by ParseLogCounts and promotes the run to exit 1, and since these archives are never pruned it would do so on every run for ever", level)
+	if level := logger.levelOf("no host will ever delete them"); level != "DEBUG" {
+		t.Errorf("the unclaimed-archive line was emitted at %q, want DEBUG: these archives get no visible line", level)
 	}
-	if n := logger.countAtLevel("WARNING"); n != 0 {
-		t.Errorf("%d WARNING line(s) emitted for a location where nothing is contended: %q. Every one of them promotes an otherwise clean run to exit 1, permanently", n, logger.messagesAtLevel("WARNING"))
+	if n := logger.countAtLevel("INFO") + logger.countAtLevel("WARNING"); n != 0 {
+		t.Errorf("%d visible line(s) emitted for a location where nothing changes what retention sees: %+v", n, logger.lines)
 	}
 }
 
-// TestForeignHostArchivesStillRaiseTheRunSeverity is the other half of the split,
-// and what stops the test above from being a blanket mute. Another machine writing
-// into this location is live information about what retention will and will not
-// prune, it can change from run to run, and it reaches the run status today. It must
-// keep doing so.
-func TestForeignHostArchivesStillRaiseTheRunSeverity(t *testing.T) {
+// TestForeignHostArchivesAreNotReported is the other half of the split. Another
+// machine writing into this location is that machine's business: its backups are
+// left alone and never reported, so they neither print a line nor move the exit
+// code. The DEBUG line naming each out-of-scope archive stays.
+func TestForeignHostArchivesAreNotReported(t *testing.T) {
 	backups := []*types.BackupMetadata{
 		{BackupFile: "hostA-backup-20250103-100000.tar.zst", Hostname: "hostA"},
 		{BackupFile: "hostB-backup-20250102-100000.tar.zst", Hostname: "hostB"},
 	}
 
 	logger := &levelRecordingLogger{}
-	scoped, _ := applyRetentionHostScope("Local storage", hostOnly("hostA"), backups, logger)
+	scoped, unmanaged := scopeListing(t, "Local storage", hostOnly("hostA"), backups, logger)
 
 	if len(scoped) != 1 || scoped[0] != backups[0] {
 		t.Fatalf("scoped %d entries (%+v), want exactly this host's own archive", len(scoped), scoped)
 	}
-	if level := logger.levelOf("do not belong to hostA"); level != "WARNING" {
-		t.Errorf("an archive attributed to another host was reported at %q, want WARNING. It changes what retention prunes here and has to reach the run status and the exit code, exactly as it does today. Lines: %+v", level, logger.lines)
+	if unmanaged != 0 {
+		t.Errorf("managed-by-nobody = %d, want 0: another host's archive is that host's to rotate", unmanaged)
+	}
+	if level := logger.levelOf("retention out of scope: hostB-backup-20250102-100000.tar.zst"); level != "DEBUG" {
+		t.Errorf("the other host's archive was written at %q, want DEBUG. Lines: %+v", level, logger.lines)
+	}
+	if n := logger.countAtLevel("INFO") + logger.countAtLevel("WARNING"); n != 0 {
+		t.Errorf("%d visible line(s) about another host's backups: %+v", n, logger.lines)
 	}
 }
 

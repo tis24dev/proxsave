@@ -381,8 +381,11 @@ func (s *StorageAdapter) logRetentionOutcome(summary storage.RetentionSummary, d
 	s.logger.Debug("%s: retention outcome planned=%d deleted=%d not_deleted=%d left_behind=%d not_listed=%d skipped=%d no_metadata=%d logs_deleted=%d logs_not_deleted=%d",
 		s.backend.Name(), planned, backupsDeleted, summary.NotDeleted, summary.LeftBehind, summary.NotListed,
 		summary.Skipped, summary.NoMetadata, logsDeleted, summary.LogsNotDeleted)
+	if summary.NotRotated > 0 {
+		s.logger.Debug("%s: retention outcome not_rotated=%d names=%s", s.backend.Name(), summary.NotRotated, summary.NotRotatedNames)
+	}
 
-	if planned == 0 && summary.Skipped == 0 && summary.NotListed == 0 && summary.NoMetadata == 0 && logsPlanned == 0 {
+	if planned == 0 && summary.Skipped == 0 && summary.NotListed == 0 && summary.NoMetadata == 0 && summary.NotRotated == 0 && logsPlanned == 0 {
 		s.logger.Info("%s Nothing to delete", theme.SymbolSuccess)
 		return
 	}
@@ -398,6 +401,8 @@ func (s *StorageAdapter) logRetentionOutcome(summary storage.RetentionSummary, d
 		s.logger.Warning("%s Backups deleted: %d, %d skipped", theme.SymbolWarning, backupsDeleted, summary.Skipped)
 	case summary.NoMetadata > 0:
 		s.logger.Warning("%s Backups deleted: %d, %d without metadata", theme.SymbolWarning, backupsDeleted, summary.NoMetadata)
+	case summary.NotRotated > 0:
+		s.logger.Warning("%s Backups deleted: %d, %d named %s not rotated", theme.SymbolWarning, backupsDeleted, summary.NotRotated, summary.NotRotatedNames)
 	default:
 		s.logger.Info("%s Backups deleted: %d", theme.SymbolSuccess, backupsDeleted)
 	}

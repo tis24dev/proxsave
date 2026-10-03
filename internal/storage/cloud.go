@@ -2466,14 +2466,28 @@ func (c *CloudStorage) ApplyRetention(ctx context.Context, config RetentionConfi
 	// and drop everything this host does not own, BEFORE anything is counted toward
 	// the keep limit or selected for deletion.
 	c.resolveRetentionOwners(ctx, backups)
-	backups, unmanaged := applyRetentionHostScope("Cloud storage", retentionIdentity{hostname: c.hostname, aliases: c.hostAliases, serverID: c.serverID}, backups, c.logger)
+	scope, err := applyRetentionHostScope("Cloud storage", retentionIdentity{hostname: c.hostname, aliases: c.hostAliases, serverID: c.serverID}, backups, c.logger)
+	if err != nil {
+		// See LocalStorage.ApplyRetention: a host that cannot name itself does not
+		// start the pass.
+		return 0, &StorageError{
+			Location:    LocationCloud,
+			Operation:   "apply_retention",
+			Path:        c.remoteLabel(),
+			Err:         err,
+			IsCritical:  false,
+			Recoverable: true,
+		}
+	}
+	backups = scope.owned
+	c.retTally.notRotated = scope.notRotated
 
 	// Taken here rather than from a second listing: the attribution above costs one
 	// rclone cat per archive, and cloud_retention_owner.go records that List stays
 	// deliberately cheap for exactly that reason. Recomputing this count elsewhere
 	// would mean paying it again. See LocalStorage.ApplyRetention for why the
 	// archives no host manages are added back rather than dropped.
-	owned, scoped = len(backups)+unmanaged, strings.TrimSpace(c.hostname) != ""
+	owned, scoped = len(backups)+scope.unmanaged, true
 
 	if len(backups) == 0 {
 		c.logger.Debug("Cloud storage: no backups to apply retention")

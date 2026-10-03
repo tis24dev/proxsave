@@ -123,10 +123,10 @@ func TestAdoptionIsBoundedByThePopulationRetentionReports(t *testing.T) {
 // deletable.
 //
 // The end-to-end half is the part that matters. It pins all three consequences at once:
-// the entry stays out of scope, so it is not deletable; the CONTENDED warning is still
-// printed, so ParseLogCounts still sees it and the run's exit code is unchanged; and
-// the second return stays 0, so RetentionSummary.Owned does not absorb an archive this
-// host was told belongs to somebody else.
+// the entry stays out of scope, so it is not deletable; it is not reported as adopted
+// (another host's backups are never reported, only written at DEBUG); and the second
+// return stays 0, so RetentionSummary.Owned does not absorb an archive this host
+// treats as somebody else's.
 func TestAdoptionRefusesAnArchiveUnderAnAliasShortLabel(t *testing.T) {
 	id := renamedHost("pve", "backup01", ourServerID)
 	if len(id.aliases) != 1 || id.aliases[0] != "backup01" {
@@ -157,7 +157,7 @@ func TestAdoptionRefusesAnArchiveUnderAnAliasShortLabel(t *testing.T) {
 	}
 
 	logger := &levelRecordingLogger{}
-	scoped, unmanaged := applyRetentionHostScope("Local storage", id, []*types.BackupMetadata{own, contended}, logger)
+	scoped, unmanaged := scopeListing(t, "Local storage", id, []*types.BackupMetadata{own, contended}, logger)
 
 	if len(scoped) != 1 {
 		t.Errorf("scoped %d of 2 entries, want 1. Only the archive naming \"pve\" is this host's; claiming the other one makes another machine's backup deletable on a shared location", len(scoped))
@@ -165,11 +165,14 @@ func TestAdoptionRefusesAnArchiveUnderAnAliasShortLabel(t *testing.T) {
 	if unmanaged != 0 {
 		t.Errorf("managed-by-nobody = %d, want 0. A contended archive is the other machine's to prune and its to report, so counting it here inflates this host's owned total, which is the \"40/7\" summary discussion #292 opened with", unmanaged)
 	}
-	if level := logger.levelOf("do not belong to pve"); level != "WARNING" {
-		t.Errorf("the contended line was emitted at %q, want WARNING. Adoption swallowing it removes the operator's only notice that another machine writes here, and with it the run's exit code promotion", level)
+	if level := logger.levelOf("retention out of scope: backup01.lan-backup-20250102-100000.tar.zst"); level != "DEBUG" {
+		t.Errorf("the out-of-scope archive was written at %q, want DEBUG only. Lines: %+v", level, logger.lines)
 	}
-	if level := logger.levelOf("back into rotation"); level != "" {
+	if level := logger.levelOf("Adopted:"); level != "" {
 		t.Errorf("an adoption line was printed at %s for an archive this host may not claim", level)
+	}
+	if n := logger.countAtLevel("WARNING"); n != 0 {
+		t.Errorf("%d WARNING line(s) about a location holding this host's own archive and another host's: %+v", n, logger.lines)
 	}
 }
 

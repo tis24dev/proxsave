@@ -1,13 +1,12 @@
 package storage
 
 import (
-	"bytes"
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
 	"github.com/tis24dev/proxsave/internal/config"
-	"github.com/tis24dev/proxsave/internal/logging"
 	"github.com/tis24dev/proxsave/internal/types"
 )
 
@@ -24,6 +23,18 @@ import (
 // "unknown" sentinel among them) still reach the code that refuses it.
 func hostOnly(hostname string, written ...string) retentionIdentity {
 	return retentionIdentity{hostname: hostname, aliases: written}
+}
+
+// scopeListing runs applyRetentionHostScope for a host that can name itself and
+// returns the two values most tests read: the owned set and the managed-by-nobody
+// count. The host that cannot name itself has its own test, which reads the error.
+func scopeListing(t *testing.T, location string, id retentionIdentity, backups []*types.BackupMetadata, logger retentionScopeLogger) ([]*types.BackupMetadata, int) {
+	t.Helper()
+	scope, err := applyRetentionHostScope(location, id, backups, logger)
+	if err != nil {
+		t.Fatalf("applyRetentionHostScope: %v", err)
+	}
+	return scope.owned, scope.unmanaged
 }
 
 func TestBackupOwnerHost(t *testing.T) {
@@ -232,13 +243,12 @@ func TestRetentionSpellingMismatchesCountsLikelySelf(t *testing.T) {
 // NAS several hosts write into, so "scope by nothing" means "prune everything in
 // the listing, including theirs".
 //
-// It asserts the warning as well as the empty result, and both halves are load
-// bearing. Returning the listing instead of nil is caught by the length; deleting
-// the guard outright is NOT, because backupBelongsToHost already refuses a blank
-// hostname, so scoping still yields nothing. What that mutation really removes is
-// this warning, which is the operator's only signal that retention is off for the
-// run. Rewording the message therefore turns this test red on purpose: read it as
-// a prompt to check who else quotes the wording, not as a retention bug.
+// It asserts the error and the fact line as well as the empty result, and all three
+// are load bearing. Returning the listing instead of nothing is caught by the length;
+// deleting the guard outright is NOT, because backupBelongsToHost already refuses a
+// blank hostname, so scoping still yields nothing. What that mutation really removes
+// is the error, which is what makes the caller close the block with "Retention not
+// applied", and the fact line, which is the operator's only signal of why.
 //
 // Both entries carry a non-empty Hostname on purpose: they are attributable, so the
 // only reason they are out of scope is the blank local name.
@@ -248,17 +258,20 @@ func TestApplyRetentionHostScopeDeletesNothingWhenThisMachineCannotNameItself(t 
 		{BackupFile: "other-backup-20250101-100000.tar.zst", Hostname: "other"},
 	}
 
-	logger := logging.New(types.LogLevelDebug, false)
-	var buf bytes.Buffer
-	logger.SetOutput(&buf)
+	logger := &levelRecordingLogger{}
+	scope, err := applyRetentionHostScope("Local storage", hostOnly(""), backups, logger)
 
-	scoped, _ := applyRetentionHostScope("Local storage", hostOnly(""), backups, logger)
-
-	if len(scoped) != 0 {
-		t.Errorf("scoped %d of %d entries; a machine that cannot name itself must delete nothing, not everything: on a shared location these are another machine's backups", len(scoped), len(backups))
+	if len(scope.owned) != 0 {
+		t.Errorf("scoped %d of %d entries; a machine that cannot name itself must delete nothing, not everything: on a shared location these are another machine's backups", len(scope.owned), len(backups))
 	}
-	if !strings.Contains(buf.String(), "the local hostname is unknown") {
-		t.Errorf("the blank-hostname guard printed no warning; retention silently doing nothing is indistinguishable from retention working. Got: %s", buf.String())
+	if !errors.Is(err, errRetentionHostnameNotResolved) {
+		t.Errorf("err = %v, want errRetentionHostnameNotResolved: without it the caller closes the block as a pass that ran, and retention silently doing nothing is indistinguishable from retention working", err)
+	}
+	if level := logger.levelOf("Hostname: not resolved"); level != "INFO" {
+		t.Errorf("the hostname fact was emitted at %q, want INFO. Lines: %+v", level, logger.lines)
+	}
+	if n := logger.countAtLevel("WARNING"); n != 0 {
+		t.Errorf("%d WARNING line(s) from the scope; the outcome \"Retention not applied\" is the caller's: %q", n, logger.messagesAtLevel("WARNING"))
 	}
 }
 

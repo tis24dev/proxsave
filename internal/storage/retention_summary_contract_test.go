@@ -2,6 +2,7 @@ package storage
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -134,19 +135,11 @@ func TestASummaryDisownsThePassThatBailed(t *testing.T) {
 	}
 }
 
-// TestScopeValidIsNotAPassRanFlag is the guard against the fix nobody should make.
-//
-// ScopeValid is the closest existing field to "a pass has run" and it is the wrong
-// one: it answers "did the scope account for the listing", so it is deliberately
-// FALSE after a real, complete pass on a host that cannot name itself
-// (applyRetentionHostScope owns nothing there and warns, and publishing 0 owned
-// beside a limit would be a worse lie than the unscoped total). Reusing it as a
-// has-a-pass-run flag would silently report exactly that machine as never having
-// run retention.
-//
-// This test fails if PassCompleted is ever aliased to ScopeValid, in either
-// direction, which is a one-token change that every other test here would accept.
-func TestScopeValidIsNotAPassRanFlag(t *testing.T) {
+// TestAHostThatCannotNameItselfDoesNotStartThePass pins the contract of the one pass
+// that stops at the scope. A host that cannot name itself attributes nothing, so the
+// pass returns an error (the caller closes the block with "Retention not applied"),
+// deletes nothing, and publishes neither a scope nor a completed pass.
+func TestAHostThatCannotNameItselfDoesNotStartThePass(t *testing.T) {
 	original := retentionHostname
 	retentionHostname = func() (string, error) { return "", nil }
 	defer func() { retentionHostname = original }()
@@ -156,16 +149,20 @@ func TestScopeValidIsNotAPassRanFlag(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewLocalStorage: %v", err)
 	}
-	if _, err := l.ApplyRetention(context.Background(), RetentionConfig{Policy: "simple", MaxBackups: 1}); err != nil {
-		t.Fatalf("ApplyRetention: %v", err)
+	deleted, err := l.ApplyRetention(context.Background(), RetentionConfig{Policy: "simple", MaxBackups: 1})
+	if !errors.Is(err, errRetentionHostnameNotResolved) {
+		t.Fatalf("ApplyRetention err = %v, want errRetentionHostnameNotResolved", err)
+	}
+	if deleted != 0 {
+		t.Fatalf("deleted = %d, want 0: a host that cannot name itself must delete nothing", deleted)
 	}
 
 	summary := l.LastRetentionSummary()
 	if summary.ScopeValid {
-		t.Fatalf("an unnamed host published an ownership scope of %d; that is what ScopeValid exists to withhold, and this test needs it withheld", summary.Owned)
+		t.Fatalf("an unnamed host published an ownership scope of %d; that is what ScopeValid exists to withhold", summary.Owned)
 	}
-	if !summary.PassCompleted {
-		t.Fatal("a complete retention pass on a host that cannot name itself is reported as no pass at all: the two fields answer different questions, and collapsing them hides a whole class of machine from any caller that asks whether retention ran")
+	if summary.PassCompleted {
+		t.Fatal("a pass that did not start is reported as completed")
 	}
 }
 
@@ -324,10 +321,10 @@ func TestEveryReporterDisownsThePassThatBailed(t *testing.T) {
 	})
 }
 
-// TestScopeValidIsNotAPassRanFlagOnEveryBackend is the other sharp case on the two
-// backends the local test cannot reach. Aliasing PassCompleted to ScopeValid is a
-// one-token change, and it has to be refused in all three copies, not one.
-func TestScopeValidIsNotAPassRanFlagOnEveryBackend(t *testing.T) {
+// TestAHostThatCannotNameItselfDoesNotStartThePassOnEveryBackend is the same contract
+// on the two backends the local test cannot reach: three copies of the scope call are
+// three places to forget the error.
+func TestAHostThatCannotNameItselfDoesNotStartThePassOnEveryBackend(t *testing.T) {
 	original := retentionHostname
 	retentionHostname = func() (string, error) { return "", nil }
 	defer func() { retentionHostname = original }()
@@ -338,15 +335,15 @@ func TestScopeValidIsNotAPassRanFlagOnEveryBackend(t *testing.T) {
 		if err != nil {
 			t.Fatalf("NewSecondaryStorage: %v", err)
 		}
-		if _, err := s.ApplyRetention(context.Background(), RetentionConfig{Policy: "simple", MaxBackups: 1}); err != nil {
-			t.Fatalf("ApplyRetention: %v", err)
+		if _, err := s.ApplyRetention(context.Background(), RetentionConfig{Policy: "simple", MaxBackups: 1}); !errors.Is(err, errRetentionHostnameNotResolved) {
+			t.Fatalf("ApplyRetention err = %v, want errRetentionHostnameNotResolved", err)
 		}
 		summary := s.LastRetentionSummary()
 		if summary.ScopeValid {
 			t.Fatalf("an unnamed host published a secondary ownership scope of %d; that is what ScopeValid exists to withhold", summary.Owned)
 		}
-		if !summary.PassCompleted {
-			t.Fatal("a complete secondary pass on a host that cannot name itself is reported as no pass at all: the two fields answer different questions")
+		if summary.PassCompleted {
+			t.Fatal("a secondary pass that did not start is reported as completed")
 		}
 	})
 
@@ -356,24 +353,31 @@ func TestScopeValidIsNotAPassRanFlagOnEveryBackend(t *testing.T) {
 		if err != nil {
 			t.Fatalf("NewCloudStorage: %v", err)
 		}
+		var deletes int
 		cs.execCommand = func(ctx context.Context, name string, args ...string) ([]byte, error) {
 			for _, a := range args {
 				if a == "lsl" {
 					return []byte("      100 2025-01-01 10:00:00.000000000 pve.home.arpa-backup-20250101-100000.tar.zst\n"), nil
 				}
+				if a == "delete" || a == "deletefile" {
+					deletes++
+				}
 			}
 			return nil, nil
 		}
 		cs.sleep = func(time.Duration) {}
-		if _, err := cs.ApplyRetention(context.Background(), RetentionConfig{Policy: "simple", MaxBackups: 1}); err != nil {
-			t.Fatalf("ApplyRetention: %v", err)
+		if _, err := cs.ApplyRetention(context.Background(), RetentionConfig{Policy: "simple", MaxBackups: 1}); !errors.Is(err, errRetentionHostnameNotResolved) {
+			t.Fatalf("ApplyRetention err = %v, want errRetentionHostnameNotResolved", err)
+		}
+		if deletes != 0 {
+			t.Fatalf("an unnamed host ran %d rclone delete(s)", deletes)
 		}
 		summary := cs.LastRetentionSummary()
 		if summary.ScopeValid {
 			t.Fatalf("an unnamed host published a cloud ownership scope of %d", summary.Owned)
 		}
-		if !summary.PassCompleted {
-			t.Fatal("a complete cloud pass on a host that cannot name itself is reported as no pass at all")
+		if summary.PassCompleted {
+			t.Fatal("a cloud pass that did not start is reported as completed")
 		}
 	})
 }

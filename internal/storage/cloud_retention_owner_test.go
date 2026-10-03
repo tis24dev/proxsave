@@ -239,6 +239,9 @@ func TestApplyRetentionLeavesSameShortNameForeignFQDNAlone(t *testing.T) {
 			t.Fatalf("retention deleted another machine's backup: %+v", calls)
 		}
 	}
+	if summary := cs.LastRetentionSummary(); summary.NotRotated != 2 || summary.NotRotatedNames != "pve.siteb.example" {
+		t.Errorf("cloud summary not rotated = %d %q, want 2 \"pve.siteb.example\": they carry this host's short name, and the outcome line reads them", summary.NotRotated, summary.NotRotatedNames)
+	}
 }
 
 // TestResolveRetentionOwnersBoundsItsContext pins the timeout floor on retention's

@@ -167,6 +167,7 @@ type retentionTally struct {
 	notListed      int
 	noMetadata     int
 	logsNotDeleted int
+	notRotated     []retentionNameCount
 }
 
 func (t retentionTally) apply(s *RetentionSummary) {
@@ -177,6 +178,21 @@ func (t retentionTally) apply(s *RetentionSummary) {
 	s.NotListed = t.notListed
 	s.NoMetadata = t.noMetadata
 	s.LogsNotDeleted = t.logsNotDeleted
+	s.NotRotated = 0
+	names := make([]string, 0, len(t.notRotated))
+	for _, g := range t.notRotated {
+		s.NotRotated += g.count
+		names = append(names, g.name)
+	}
+	s.NotRotatedNames = joinNames(names)
+}
+
+// joinNames renders a list of names for one line: "a", "a and b", "a, b and c".
+func joinNames(names []string) string {
+	if len(names) <= 1 {
+		return strings.Join(names, "")
+	}
+	return strings.Join(names[:len(names)-1], ", ") + " and " + names[len(names)-1]
 }
 
 // listingGap is what the last listing could not see: the archives it left out, counted

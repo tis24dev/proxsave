@@ -777,13 +777,27 @@ func (s *SecondaryStorage) ApplyRetention(ctx context.Context, config RetentionC
 	// same directory, and the "*-backup-*" glob that produced this list matches every
 	// hostname.
 	s.resolveRetentionOwners(ctx, backups)
-	backups, unmanaged := applyRetentionHostScope("Secondary storage", retentionIdentity{hostname: s.hostname, aliases: s.hostAliases, serverID: s.serverID}, backups, s.logger)
+	scope, err := applyRetentionHostScope("Secondary storage", retentionIdentity{hostname: s.hostname, aliases: s.hostAliases, serverID: s.serverID}, backups, s.logger)
+	if err != nil {
+		// See LocalStorage.ApplyRetention: a host that cannot name itself does not
+		// start the pass.
+		return 0, &StorageError{
+			Location:    LocationSecondary,
+			Operation:   "apply_retention",
+			Path:        s.basePath,
+			Err:         err,
+			IsCritical:  false,
+			Recoverable: true,
+		}
+	}
+	backups = scope.owned
+	s.retTally.notRotated = scope.notRotated
 
 	// The shared NAS mount is the documented secondary layout, so this is the
 	// location where the unscoped count was most often somebody else's
 	// (discussion #292). See LocalStorage.ApplyRetention for why the archives no
 	// host manages are added back rather than dropped.
-	owned, scoped = len(backups)+unmanaged, strings.TrimSpace(s.hostname) != ""
+	owned, scoped = len(backups)+scope.unmanaged, true
 
 	if len(backups) == 0 {
 		s.logger.Debug("Secondary storage: no backups to apply retention")

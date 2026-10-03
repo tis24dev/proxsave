@@ -165,42 +165,6 @@ func (l *levelRecordingLogger) firstMessageContaining(needle string) string {
 	return ""
 }
 
-// TestTwinKeyedCountNeverExceedsTheSpellingMismatchItRefines is requirement 1 stated
-// as an assertion over the rendered line rather than over an internal count. The
-// twin-keyed clause is APPENDED to the spelling-mismatch warning and reads "N of
-// them", so it presents itself as a subset of the number printed a sentence earlier.
-// A number that can exceed the population it claims to be part of is not a rounding
-// problem: it tells the operator that more archives carry this host's identity than
-// there are archives under this host's name, which is the opposite of what happened.
-//
-// It kills replacing twinKeyed[refusalCompetingSpelling] with a count over the whole
-// foreign set, which is what the shipped code did: on the first scenario that renders
-// "4 of them" underneath "1 of those".
-func TestTwinKeyedCountNeverExceedsTheSpellingMismatchItRefines(t *testing.T) {
-	for _, sc := range twinKeyedScenarios() {
-		t.Run(sc.name, func(t *testing.T) {
-			logger := &levelRecordingLogger{}
-			applyRetentionHostScope("Local storage", sc.id, sc.backups, logger)
-
-			message := logger.firstMessageContaining("of those carry this host's short name")
-			if message == "" {
-				return
-			}
-			those := countedIn(message, "of those carry this host's short name")
-			them := countedIn(message, "of them also carry this host's own server identity")
-			if them < 0 {
-				return
-			}
-			if those < 0 {
-				t.Fatalf("the spelling-mismatch line no longer reports a count: %q", message)
-			}
-			if them > those {
-				t.Errorf("the line says %d of those carry this host's short name and then %d of them also carry this host's identity. The second number is presented as a subset of the first and cannot exceed it; the operator is being told more archives are twin-keyed than there are archives in the population being described: %q", those, them, message)
-			}
-		})
-	}
-}
-
 // TestTwinKeyedRefusalsAreReportedUnderTheClauseThatFired is requirement 2. The
 // appended clause asserts ONE cause, clause e, "this host still answers to another
 // spelling of that short name". On the rename artefact that is false: this host
@@ -262,9 +226,11 @@ func TestEveryTwinKeyedArchiveIsReportedWhateverBucketItFellInto(t *testing.T) {
 			// operator needs is clause d's. Production splits that group before it
 			// reports it, and the assertions below have to walk the same three
 			// populations or they would pin a partition nothing prints.
+			// The clause e group has no line of its own: clause e is reached only
+			// after clause d passed, so those archives carry this host's short name
+			// and are counted in the "Named <name>, not rotated" fact instead.
 			rendered := map[retentionRefusal][]*types.BackupMetadata{
-				refusalCompetingSpelling: grouped[refusalCompetingSpelling],
-				refusalNoManifestHost:    grouped[refusalNoManifestHost],
+				refusalNoManifestHost: grouped[refusalNoManifestHost],
 			}
 			otherLabel := append([]*types.BackupMetadata(nil), grouped[refusalOtherShortLabel]...)
 			var bareOwnLabel []*types.BackupMetadata
@@ -285,8 +251,10 @@ func TestEveryTwinKeyedArchiveIsReportedWhateverBucketItFellInto(t *testing.T) {
 				total += len(g)
 			}
 			twinKeyedTotal := 0
-			for _, g := range grouped {
-				twinKeyedTotal += len(g)
+			for reason, g := range grouped {
+				if reason != refusalCompetingSpelling {
+					twinKeyedTotal += len(g)
+				}
 			}
 			if total != twinKeyedTotal {
 				t.Fatalf("the rendered populations hold %d archive(s) but %d carry this host's identity. The split dropped or duplicated one, so an archive is reported twice or not at all", total, twinKeyedTotal)
@@ -302,9 +270,6 @@ func TestEveryTwinKeyedArchiveIsReportedWhateverBucketItFellInto(t *testing.T) {
 				// than merely the presence of a sentence.
 				phrase, countPhrase := "", "backup(s) retention left alone carry this host's own server identity"
 				switch reason {
-				case refusalCompetingSpelling:
-					phrase = "of them also carry this host's own server identity"
-					countPhrase = phrase
 				case refusalOtherShortLabel:
 					phrase = "the first label this host reports under is"
 				case refusalUnqualifiedName:
@@ -334,7 +299,7 @@ func TestEveryTwinKeyedArchiveIsReportedWhateverBucketItFellInto(t *testing.T) {
 			}
 			if reported == 0 && len(foreign) > 0 {
 				for _, b := range foreign {
-					if archiveCarriesLocalServerID(b, sc.id) {
+					if archiveCarriesLocalServerID(b, sc.id) && retentionAdoptionRefusal(b, sc.id) != refusalCompetingSpelling {
 						t.Fatalf("the fixture holds a twin-keyed out-of-scope archive (%s) that the grouping did not return, so this scenario asserts nothing", b.BackupFile)
 					}
 				}
@@ -357,10 +322,10 @@ func TestTwinKeyedReportingLeavesSeverityAndTheUnmanagedCountWhereTheyWere(t *te
 	for _, sc := range twinKeyedScenarios() {
 		t.Run(sc.name, func(t *testing.T) {
 			baseLogger := &levelRecordingLogger{}
-			baseScoped, baseUnmanaged := applyRetentionHostScope("Local storage", sc.base, sc.backups, baseLogger)
+			baseScoped, baseUnmanaged := scopeListing(t, "Local storage", sc.base, sc.backups, baseLogger)
 
 			logger := &levelRecordingLogger{}
-			scoped, unmanaged := applyRetentionHostScope("Local storage", sc.id, sc.backups, logger)
+			scoped, unmanaged := scopeListing(t, "Local storage", sc.id, sc.backups, logger)
 
 			if len(scoped) != len(baseScoped) {
 				t.Fatalf("the identity adopted %d entrie(s) on a fixture built to have none adopted, so the severity comparison below would be measuring a classification change instead of a reporting one", len(scoped)-len(baseScoped))

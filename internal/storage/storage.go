@@ -163,10 +163,11 @@ type RetentionSummary struct {
 	// cannot: a healthy pass that finds everything within the limit publishes zeros,
 	// which is byte for byte what a backend that has never run reports. ScopeValid
 	// cannot either, and reusing it would be wrong rather than merely imprecise. It
-	// answers "did the scope account for the listing", so it is deliberately false
-	// after a real pass on a host that cannot name itself (applyRetentionHostScope
-	// returns nothing owned there and warns), and a caller reading it as "a pass
-	// ran" would mis-report exactly that machine.
+	// answers "did the scope account for the listing", so it stays true on a pass
+	// that scoped the listing and then failed (a context cancelled during the
+	// deletions), and a caller reading it as "a pass completed" would mis-report
+	// exactly that pass. A host that cannot name itself publishes both false: its
+	// pass does not start (applyRetentionHostScope returns an error there).
 	//
 	// False deliberately does NOT separate "no pass has run" from "the last pass
 	// failed". The only question a reader of this struct can act on is whether the
@@ -189,6 +190,13 @@ type RetentionSummary struct {
 	NoMetadata int
 	// LogsNotDeleted counts the associated logs whose removal failed.
 	LogsNotDeleted int
+	// NotRotated counts the archives named under this host's short name in a spelling
+	// it does not answer to, which retention left alone.
+	NotRotated int
+	// NotRotatedNames are the names those archives carry, in the order first met,
+	// joined for the outcome line: "a", "a and b", "a, b and c". A string rather than
+	// a slice so the summary stays comparable.
+	NotRotatedNames string
 }
 
 // RetentionReporter can be implemented by storage backends that expose details

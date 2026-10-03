@@ -302,6 +302,24 @@ func TestRetentionOutcomesAreAutonomous(t *testing.T) {
 			want:    []string{"WARNING  ⚠ Backups deleted: 1, 2 without metadata"},
 		},
 		{
+			name:    "backups named under another spelling, not rotated",
+			summary: storage.RetentionSummary{Planned: 1, BackupsDeleted: 1, NotRotated: 3, NotRotatedNames: "pve.home.arpa", LogsDeleted: 1},
+			want:    []string{"WARNING  ⚠ Backups deleted: 1, 3 named pve.home.arpa not rotated", "INFO     ✓ Logs deleted: 1"},
+		},
+		{
+			name:    "not rotated with nothing to delete",
+			summary: storage.RetentionSummary{NotRotated: 2, NotRotatedNames: "pve.home.arpa and pve.lan"},
+			want:    []string{"WARNING  ⚠ Backups deleted: 0, 2 named pve.home.arpa and pve.lan not rotated"},
+			absent:  []string{"Nothing to delete"},
+		},
+		{
+			// Last in the precedence: another cause on the same pass takes the line.
+			name:    "not rotated beside backups without metadata",
+			summary: storage.RetentionSummary{Planned: 1, BackupsDeleted: 1, NoMetadata: 2, NotRotated: 3, NotRotatedNames: "pve.home.arpa"},
+			want:    []string{"WARNING  ⚠ Backups deleted: 1, 2 without metadata"},
+			absent:  []string{"not rotated"},
+		},
+		{
 			name:    "a log not deleted",
 			summary: storage.RetentionSummary{Planned: 2, BackupsDeleted: 2, LogsDeleted: 1, LogsNotDeleted: 1},
 			want:    []string{"INFO     ✓ Backups deleted: 2", "WARNING  ⚠ Logs deleted: 1 of 2"},

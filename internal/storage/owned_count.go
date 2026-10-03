@@ -19,10 +19,9 @@ import (
 // "rclone cat" per archive on the cloud, under the same management budget), then
 // scopeRetentionToHost, then the two populations Owned adds back, archives nobody
 // can name and archives carrying this host's short name under another spelling. It
-// does NONE of applyRetentionHostScope's reporting. That function writes WARNING
-// lines, every WARNING is counted by ParseLogCounts and pins the run at exit 1
-// through applyIssueExitCode, and a count taken at startup must add no line of
-// that kind. Nothing here logs above Debug.
+// does NONE of applyRetentionHostScope's reporting. That function prints facts
+// under "Applying retention policy...", and a count taken at startup, outside any
+// retention block, must add no line. Nothing here logs above Debug.
 //
 // The number is taken before any pass deletes, so it equals Owned only for a pass
 // that would delete nothing. That is exactly the case it is for: on the path that

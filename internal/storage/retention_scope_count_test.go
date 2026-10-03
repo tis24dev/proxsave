@@ -2,6 +2,7 @@ package storage
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -128,8 +129,8 @@ func TestRetentionOwnedCountIsNetOfWhatThePassDeleted(t *testing.T) {
 }
 
 // TestRetentionPublishesNoScopeWhenTheHostCannotNameItself pins the one case where
-// the scoped number is the more alarming lie. applyRetentionHostScope returns nil
-// on an unnamed host and warns that retention will delete nothing, so publishing
+// the scoped number is the more alarming lie. applyRetentionHostScope returns an
+// error on an unnamed host and retention deletes nothing, so publishing
 // that as an owned count would print "0/7" beside a directory holding five
 // archives. Leaving the scope invalid keeps the unscoped total, which is at least
 // a number the operator can reconcile with what is on the disk.
@@ -144,8 +145,8 @@ func TestRetentionPublishesNoScopeWhenTheHostCannotNameItself(t *testing.T) {
 		t.Fatalf("NewLocalStorage: %v", err)
 	}
 
-	if _, err := l.ApplyRetention(context.Background(), RetentionConfig{Policy: "simple", MaxBackups: 2}); err != nil {
-		t.Fatalf("ApplyRetention: %v", err)
+	if _, err := l.ApplyRetention(context.Background(), RetentionConfig{Policy: "simple", MaxBackups: 2}); !errors.Is(err, errRetentionHostnameNotResolved) {
+		t.Fatalf("ApplyRetention err = %v, want errRetentionHostnameNotResolved", err)
 	}
 	summary := l.LastRetentionSummary()
 	if summary.ScopeValid {
