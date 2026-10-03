@@ -92,17 +92,18 @@ func TestStorageInitSummaryLevelComesFromTheFlagNotTheText(t *testing.T) {
 	}
 }
 
-func TestStorageInitSummaryDetailLinesStayBelowTheHeadline(t *testing.T) {
-	// A GFS summary is a headline plus indented detail. Only the headline takes the
-	// warn level; the estimate line stays at Debug so it never reaches the footer.
-	summary := "Local storage initialized (present 2 backups)\n  Daily: 1/1\n  Kept (est.): 1, To delete (est.): 1"
+func TestStorageInitSummaryOnlyTheOutcomeTakesTheWarnLevel(t *testing.T) {
+	// A GFS summary is indented fact lines closed by the outcome. Only the outcome, the
+	// last line, takes the warn level; the estimate line stays at Debug so it never
+	// reaches the footer, wherever it sits.
+	summary := "  Backups: 2\n  Daily: 1/1\n  Kept (est.): 1, To delete (est.): 1\nLocal storage: initialized"
 	out := renderInitSummary(t, summary, true)
 
 	var levels []string
 	for _, line := range strings.Split(strings.TrimRight(out, "\n"), "\n") {
 		levels = append(levels, levelColumnOf(line))
 	}
-	want := []string{"WARNING", "INFO", "DEBUG"}
+	want := []string{"INFO", "INFO", "DEBUG", "WARNING"}
 	if len(levels) != len(want) {
 		t.Fatalf("rendered %d lines, want %d:\n%s", len(levels), len(want), out)
 	}
@@ -113,10 +114,10 @@ func TestStorageInitSummaryDetailLinesStayBelowTheHeadline(t *testing.T) {
 	}
 }
 
-// The cloud-disabled path builds its own headline instead of borrowing
-// formatStorageInitSummary, so its level is a literal true at the call site and nothing
-// else pins it. A mutation flipping it to false left every test green, which means the
-// line could silently become INFO and leave warningCount.
+// The cloud-disabled path builds its own block instead of borrowing
+// formatStorageInitSummary, so the level of its outcome is fixed at the call site and
+// nothing else pins it. A mutation turning it into Info left every test green, which
+// means the line could silently become INFO and leave warningCount.
 //
 // The path is reached through a real DetectFilesystem, which looks rclone up on
 // PATH. Pointing PATH at an empty directory forces the not-found arm on every
@@ -138,26 +139,42 @@ func TestCloudUnavailableHeadlineIsAWarning(t *testing.T) {
 	}, nil, nil)
 
 	out := buf.String()
-	var headline string
-	for _, line := range strings.Split(out, "\n") {
-		if strings.Contains(line, "Cloud storage initialized with warnings") {
-			headline = line
+	lines := strings.Split(strings.TrimRight(out, "\n"), "\n")
+	outcome, cause, skip := -1, -1, -1
+	for i, line := range lines {
+		switch {
+		case strings.Contains(line, "✗ Cloud storage: not initialized"):
+			outcome = i
+		case strings.Contains(line, "Cloud remote: rclone command not found in PATH"):
+			cause = i
+		case strings.Contains(line, "Path Cloud: disabled"):
+			skip = i
 		}
 	}
-	if headline == "" {
-		t.Fatalf("the disabled path wrote no headline at all:\n%s", out)
+	if outcome < 0 {
+		t.Fatalf("the disabled path wrote no outcome at all:\n%s", out)
 	}
-	if got := levelColumnOf(headline); got != "WARNING" {
-		t.Fatalf("the cloud-unavailable headline rendered at %s, so it never reaches warningCount:\n%s", got, headline)
+	if got := levelColumnOf(lines[outcome]); got != "WARNING" {
+		t.Fatalf("the cloud-unavailable outcome rendered at %s, so it never reaches warningCount:\n%s", got, lines[outcome])
 	}
-	// The headline this path borrows carries the ⚠ and the retention figure; both
-	// vanished once when this call stopped borrowing it, and the maintainer reverted
-	// that. The glyph is content here, not the level: the level is pinned above.
-	if !strings.Contains(headline, "⚠") || !strings.Contains(headline, "retention") {
-		t.Fatalf("the cloud-unavailable headline lost its ⚠ or its retention figure:\n%s", headline)
+	// The cause is a fact line BEFORE the outcome, never appended to it, and the SKIP
+	// closes the block after it.
+	if cause < 0 || cause > outcome {
+		t.Fatalf("the cause line is missing or follows the outcome:\n%s", out)
 	}
-	if !strings.Contains(headline, "; filesystem detection") {
-		t.Fatalf("the cloud-unavailable headline no longer appends the cause:\n%s", headline)
+	if got := levelColumnOf(lines[cause]); got != "INFO" {
+		t.Fatalf("the cause line rendered at %s, want INFO:\n%s", got, lines[cause])
+	}
+	if skip < outcome || levelColumnOf(lines[skip]) != "SKIP" {
+		t.Fatalf("the SKIP line is missing or precedes the outcome:\n%s", out)
+	}
+	for _, want := range []string{"Path Cloud: remote", "  Filesystem: unknown (detection unavailable)"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("the cloud-unavailable block lost %q:\n%s", want, out)
+		}
+	}
+	if cfg.CloudEnabled || cfg.CloudLogPath != "" {
+		t.Fatalf("the unavailable cloud must be disabled for the run: enabled=%v logPath=%q", cfg.CloudEnabled, cfg.CloudLogPath)
 	}
 }
 

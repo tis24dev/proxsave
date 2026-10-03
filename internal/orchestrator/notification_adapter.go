@@ -31,7 +31,7 @@ func (n *NotificationAdapter) Name() string {
 
 // Notify implements the NotificationChannel interface
 func (n *NotificationAdapter) Notify(ctx context.Context, stats *BackupStats) error {
-	n.logger.Info("%s: starting", n.notifier.Name())
+	n.logger.Info("%s: starting...", n.notifier.Name())
 	n.logger.Debug("=== NotificationAdapter.Notify() called for '%s' notifier ===", n.notifier.Name())
 
 	if !n.notifier.IsEnabled() {

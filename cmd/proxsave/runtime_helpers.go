@@ -23,6 +23,7 @@ import (
 	"github.com/tis24dev/proxsave/internal/serverbot"
 	"github.com/tis24dev/proxsave/internal/storage"
 	"github.com/tis24dev/proxsave/internal/types"
+	"github.com/tis24dev/proxsave/internal/ui/theme"
 	"github.com/tis24dev/proxsave/pkg/utils"
 )
 
@@ -404,8 +405,14 @@ func formatDetailedFilesystemLabel(path string, info *storage.FilesystemInfo) st
 	if cleanPath == "" {
 		return "disabled"
 	}
+	return fmt.Sprintf("%s -> Filesystem: %s", cleanPath, formatFilesystemDetail(info))
+}
+
+// formatFilesystemDetail is the value of the "  Filesystem:" fact line under a storage
+// path: the type, whether it takes ownership, [network] when it is one, and the mount.
+func formatFilesystemDetail(info *storage.FilesystemInfo) string {
 	if info == nil {
-		return fmt.Sprintf("%s -> Filesystem: unknown (detection unavailable)", cleanPath)
+		return "unknown (detection unavailable)"
 	}
 
 	ownership := "no ownership"
@@ -423,13 +430,29 @@ func formatDetailedFilesystemLabel(path string, info *storage.FilesystemInfo) st
 		mount = "unknown"
 	}
 
-	return fmt.Sprintf("%s -> Filesystem: %s (%s)%s [mount: %s]",
-		cleanPath,
-		info.Type,
-		ownership,
-		network,
-		mount,
-	)
+	return fmt.Sprintf("%s (%s)%s [mount: %s]", info.Type, ownership, network, mount)
+}
+
+// logStoragePath opens a storage-init block: the path line and its filesystem fact.
+func logStoragePath(label, path string, info *storage.FilesystemInfo) {
+	cleanPath := strings.TrimSpace(path)
+	if cleanPath == "" {
+		logging.Info("Path %s: disabled", label)
+		return
+	}
+	logging.Info("Path %s: %s", label, cleanPath)
+	logging.Info("  Filesystem: %s", formatFilesystemDetail(info))
+}
+
+// logStorageNotInitialized prints the block of a destination the run cannot use: its
+// path, the filesystem nobody could detect, the cause, the "✗" outcome and the SKIP
+// that closes it. causeLabel names what failed ("Cloud remote", "Secondary storage").
+func logStorageNotInitialized(label, name, path, causeLabel, cause string) {
+	logging.Info("Path %s: %s", label, strings.TrimSpace(path))
+	logging.Info("  Filesystem: %s", formatFilesystemDetail(nil))
+	logging.Info("%s: %s", causeLabel, cause)
+	logging.Warning("%s %s: not initialized", theme.SymbolError, name)
+	logging.Skip("Path %s: disabled", label)
 }
 
 func fetchStorageStats(ctx context.Context, backend storage.Storage, logger *logging.Logger, label string) *storage.StorageStats {
@@ -444,14 +467,24 @@ func fetchStorageStats(ctx context.Context, backend storage.Storage, logger *log
 	return stats
 }
 
-// formatStorageInitSummary builds the storage-init headline and its detail lines, and
-// returns whether that headline is a WARNING. The level used to travel inside the
-// string as a leading "⚠" that logStorageInitSummary read back with strings.HasPrefix,
-// which made a glyph that reads as decoration load-bearing: deleting it downgraded the
-// line to INFO in silence, dropping it from warningCount and from the exit-code
-// promotion in applyIssueExitCode. It is a value now, and the string carries no
-// severity of its own. The glyph STAYS on the line -
-// it is part of how this screen reads - but nothing downstream depends on it.
+// formatStorageInitSummary builds the lines that close a storage-init block, below the
+// path and filesystem lines, and returns whether its OUTCOME - the last line - is a
+// WARNING. The level used to travel inside the string as a leading "⚠" that
+// logStorageInitSummary read back with strings.HasPrefix, which made a glyph that reads
+// as decoration load-bearing: deleting it downgraded the line to INFO in silence,
+// dropping it from warningCount and from the exit-code promotion in
+// applyIssueExitCode. It is a value now, and the string carries no severity of its
+// own. The glyph STAYS on the line - it is part of how this screen reads - but nothing
+// downstream depends on it.
+//
+// With stats the block reads facts first and the outcome last:
+//
+//	  Backups: 3
+//	  Retention policy: simple (keep 5 newest)
+//	✓ Secondary storage: initialized
+//
+// GFS lists the tiers instead of the policy line. Without stats the single line it
+// has always printed stays.
 func formatStorageInitSummary(name string, cfg *config.Config, location storage.BackupLocation, stats *storage.StorageStats, backups []*types.BackupMetadata) (string, bool) {
 	retentionConfig := storage.NewRetentionConfigFromConfig(cfg, location)
 	if retentionConfig.Policy == "gfs" {
@@ -468,16 +501,14 @@ func formatStorageInitSummary(name string, cfg *config.Config, location storage.
 		return fmt.Sprintf("⚠ %s initialized with warnings (%s; retention %s)", name, reason, formatBackupNoun(retentionConfig.MaxBackups)), true
 	}
 
+	result := fmt.Sprintf("  Backups: %d", stats.TotalBackups)
 	if retentionConfig.Policy == "gfs" {
-		result := fmt.Sprintf("✓ %s initialized (present %s)", name, formatBackupNoun(stats.TotalBackups))
-		if stats.TotalBackups > 0 && backups != nil && len(backups) > 0 {
+		if stats.TotalBackups > 0 && len(backups) > 0 {
 			classification := storage.ClassifyBackupsGFS(backups, retentionConfig)
 			gfsStats := storage.GetRetentionStats(classification)
 
-			total := stats.TotalBackups
-			kept := total - gfsStats[storage.CategoryDelete]
+			kept := stats.TotalBackups - gfsStats[storage.CategoryDelete]
 
-			result += fmt.Sprintf("\n  Total: %d/-", total)
 			result += fmt.Sprintf("\n  Daily: %d/%d", gfsStats[storage.CategoryDaily], retentionConfig.Daily)
 			result += fmt.Sprintf("\n  Weekly: %d/%d", gfsStats[storage.CategoryWeekly], retentionConfig.Weekly)
 			result += fmt.Sprintf("\n  Monthly: %d/%d", gfsStats[storage.CategoryMonthly], retentionConfig.Monthly)
@@ -488,16 +519,15 @@ func formatStorageInitSummary(name string, cfg *config.Config, location storage.
 				retentionConfig.Daily, retentionConfig.Weekly,
 				retentionConfig.Monthly, retentionConfig.Yearly)
 		}
-		return result, false
+	} else {
+		result += fmt.Sprintf("\n  Retention policy: simple (keep %d newest)", retentionConfig.MaxBackups)
 	}
-
-	result := fmt.Sprintf("✓ %s initialized (present %s)", name, formatBackupNoun(stats.TotalBackups))
-	result += fmt.Sprintf("\n  Policy: simple (keep %d newest)", retentionConfig.MaxBackups)
+	result += fmt.Sprintf("\n%s %s: initialized", theme.SymbolSuccess, name)
 	return result, false
 }
 
 // logStorageInitSummary prints a storage-init summary. warn selects the level of the
-// HEADLINE - the first non-empty line - and nothing else: the detail lines below it are
+// OUTCOME - the last non-empty line - and nothing else: the fact lines above it are
 // always Info, except the GFS estimate, which stays at Debug so it never reaches the
 // run footer. See formatStorageInitSummary for why the level is a parameter and not a
 // glyph read back out of the text.
@@ -505,22 +535,19 @@ func logStorageInitSummary(summary string, warn bool) {
 	if summary == "" {
 		return
 	}
-	headline := true
+	lines := make([]string, 0, 8)
 	for _, line := range strings.Split(summary, "\n") {
-		trimmed := strings.TrimSpace(line)
-		if trimmed == "" {
-			continue
+		if strings.TrimSpace(line) != "" {
+			lines = append(lines, line)
 		}
-		if headline {
-			headline = false
-			if warn {
-				logging.Warning("%s", line)
-				continue
-			}
-		}
-		if strings.Contains(trimmed, "Kept (est.):") {
+	}
+	for i, line := range lines {
+		switch {
+		case strings.Contains(line, "Kept (est.):"):
 			logging.Debug("%s", line)
-		} else {
+		case i == len(lines)-1 && warn:
+			logging.Warning("%s", line)
+		default:
 			logging.Info("%s", line)
 		}
 	}

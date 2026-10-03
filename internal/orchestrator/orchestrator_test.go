@@ -935,7 +935,7 @@ func TestRunGoBackup_BundleAndDispatchFailure(t *testing.T) {
 	if _, err := os.Stat(rawArchivePath); err == nil || !os.IsNotExist(err) {
 		t.Fatalf("expected raw archive to be removed, stat err=%v", err)
 	}
-	if !strings.Contains(buf.String(), "Policy: simple") {
+	if !strings.Contains(buf.String(), "Retention policy: simple") {
 		t.Fatalf("expected retention policy log, got: %s", buf.String())
 	}
 }

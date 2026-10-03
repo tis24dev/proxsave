@@ -92,7 +92,13 @@ func handleBackupRunError(ctx context.Context, orch *orchestrator.Orchestrator, 
 
 	var backupErr *orchestrator.BackupError
 	if errors.As(err, &backupErr) {
-		logging.Error("Backup %s failed: %v", backupErr.Phase, backupErr.Err)
+		if backupErr.Phase == "storage" && orchestrator.OutcomeLogged(backupErr.Err) {
+			// Step [6] already closed the destination with its "✗" outcome and the
+			// fact above it; the chain goes to DEBUG instead of a second ERROR line.
+			logging.Debug("Backup %s failed: %v", backupErr.Phase, backupErr.Err)
+		} else {
+			logging.Error("Backup %s failed: %v", backupErr.Phase, backupErr.Err)
+		}
 		orch.FinalizeAfterRun(ctx, stats)
 		return stats, nil, backupErr.Code.Int()
 	}

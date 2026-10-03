@@ -7,8 +7,10 @@ import (
 	"time"
 
 	"github.com/tis24dev/proxsave/internal/checks"
+	"github.com/tis24dev/proxsave/internal/config"
 	"github.com/tis24dev/proxsave/internal/logging"
 	"github.com/tis24dev/proxsave/internal/orchestrator"
+	"github.com/tis24dev/proxsave/internal/safefs"
 	"github.com/tis24dev/proxsave/internal/storage"
 	"github.com/tis24dev/proxsave/internal/types"
 )
@@ -41,7 +43,7 @@ func initializeBackupStorage(opts backupModeOptions, orch *orchestrator.Orchestr
 	state.localFS = localFS
 	registerPrimaryStorage(opts, orch, localBackend, localFS)
 
-	state.secondaryFS = initializeSecondaryStorage(opts, orch)
+	state.secondaryFS = initializeSecondaryStorage(opts, orch, checker)
 	state.cloudFS = initializeCloudStorage(opts, orch, checker)
 	storageDone(nil)
 
@@ -67,7 +69,7 @@ func initializePrimaryStorage(opts backupModeOptions) (storage.Storage, *storage
 	}
 
 	logging.DebugStep(logger, "storage init", "primary filesystem=%s", formatDetailedFilesystemLabel(cfg.BackupPath, localFS))
-	logging.Info("Path Primary: %s", formatDetailedFilesystemLabel(cfg.BackupPath, localFS))
+	logStoragePath("Primary", cfg.BackupPath, localFS)
 	return localBackend, localFS, "", nil
 }
 
@@ -89,7 +91,7 @@ func registerPrimaryStorage(opts backupModeOptions, orch *orchestrator.Orchestra
 	logStorageInitSummary(formatStorageInitSummary("Local storage", cfg, storage.LocationPrimary, localStats, localBackups))
 }
 
-func initializeSecondaryStorage(opts backupModeOptions, orch *orchestrator.Orchestrator) *storage.FilesystemInfo {
+func initializeSecondaryStorage(opts backupModeOptions, orch *orchestrator.Orchestrator, checker *checks.Checker) *storage.FilesystemInfo {
 	cfg := opts.cfg
 	logger := opts.logger
 	if !cfg.SecondaryEnabled {
@@ -100,14 +102,23 @@ func initializeSecondaryStorage(opts backupModeOptions, orch *orchestrator.Orche
 	logging.DebugStep(logger, "storage init", "secondary backend")
 	secondaryBackend, err := storage.NewSecondaryStorage(cfg, logger, opts.hostname)
 	if err != nil {
-		logging.Warning("Failed to initialize secondary storage: %v", err)
-		logging.Info("Path Secondary: %s", formatDetailedFilesystemLabel(cfg.SecondaryPath, nil))
+		// The destination cannot be used for this run: it is disabled exactly like an
+		// unreachable cloud, so the later steps (disk space, [6], log copy) skip it
+		// instead of failing on it one by one.
+		logging.DebugStep(logger, "storage init", "secondary unavailable, disabling: %v", err)
+		path := cfg.SecondaryPath
+		cfg.SecondaryEnabled = false
+		cfg.SecondaryLogPath = ""
+		if checker != nil {
+			checker.DisableSecondary()
+		}
+		logStorageNotInitialized("Secondary", "Secondary storage", path, "Secondary storage", safefs.SystemErrorText(err))
 		return nil
 	}
 
 	secondaryFS, _ := detectFilesystemInfo(opts.ctx, secondaryBackend, cfg.SecondaryPath, logger)
 	logging.DebugStep(logger, "storage init", "secondary filesystem=%s", formatDetailedFilesystemLabel(cfg.SecondaryPath, secondaryFS))
-	logging.Info("Path Secondary: %s", formatDetailedFilesystemLabel(cfg.SecondaryPath, secondaryFS))
+	logStoragePath("Secondary", cfg.SecondaryPath, secondaryFS)
 	secondaryStats := fetchStorageStats(opts.ctx, secondaryBackend, logger, "Secondary storage")
 	secondaryBackups := fetchBackupList(opts.ctx, secondaryBackend)
 	logging.DebugStep(logger, "storage init", "secondary stats=%v backups=%d", secondaryStats != nil, len(secondaryBackups))
@@ -133,37 +144,31 @@ func initializeCloudStorage(opts backupModeOptions, orch *orchestrator.Orchestra
 	logging.DebugStep(logger, "storage init", "cloud backend")
 	cloudBackend, err := storage.NewCloudStorage(cfg, logger, opts.hostname)
 	if err != nil {
-		logging.Warning("Failed to initialize cloud storage: %v", err)
-		logging.Info("Path Cloud: %s", formatDetailedFilesystemLabel(cfg.CloudRemote, nil))
-		logStorageInitSummary(formatStorageInitSummary("Cloud storage", cfg, storage.LocationCloud, nil, nil))
+		logging.DebugStep(logger, "storage init", "cloud backend unavailable, disabling: %v", err)
+		remote := cfg.CloudRemote
+		disableCloudForRun(cfg, checker)
+		logStorageNotInitialized("Cloud", "Cloud storage", remote, "Cloud storage", safefs.SystemErrorText(err))
 		return nil
 	}
 
 	cloudFS, err := detectFilesystemInfo(opts.ctx, cloudBackend, cfg.CloudRemote, logger)
 	if cloudFS == nil {
-		reason := "filesystem detection unavailable"
+		// The remote did not answer: the block shows the path, the filesystem nobody
+		// could detect, rclone's own last line as the cause, then the "✗" outcome and
+		// the SKIP. The full error chain stays in DEBUG.
+		cause := "filesystem detection unavailable"
 		if err != nil {
-			reason = fmt.Sprintf("filesystem detection failed: %v", err)
+			cause = storage.ErrorCause(err)
 		}
-		logging.DebugStep(logger, "storage init", "cloud unavailable, disabling: %s", reason)
-		cfg.CloudEnabled = false
-		cfg.CloudLogPath = ""
-		if checker != nil {
-			checker.DisableCloud()
-		}
-		// The same "⚠ ... initialized with warnings (...; retention N)" headline the
-		// other backends print, with the cause appended - the shape this screen has
-		// always had. A rewrite that replaced it with a bare "not available" line lost
-		// the ⚠ and the retention figure and was reverted; the glyph and the level
-		// travel separately (the level is the literal true below, not the glyph).
-		summary, _ := formatStorageInitSummary("Cloud storage", cfg, storage.LocationCloud, nil, nil)
-		logStorageInitSummary(fmt.Sprintf("%s; %s", summary, reason), true)
-		logging.Skip("Path Cloud: disabled (%s)", reason)
+		logging.DebugStep(logger, "storage init", "cloud unavailable, disabling: %v", err)
+		remote := cfg.CloudRemote
+		disableCloudForRun(cfg, checker)
+		logStorageNotInitialized("Cloud", "Cloud storage", remote, "Cloud remote", cause)
 		return nil
 	}
 
 	logging.DebugStep(logger, "storage init", "cloud filesystem=%s", formatDetailedFilesystemLabel(cfg.CloudRemote, cloudFS))
-	logging.Info("Path Cloud: %s", formatDetailedFilesystemLabel(cfg.CloudRemote, cloudFS))
+	logStoragePath("Cloud", cfg.CloudRemote, cloudFS)
 	cloudStats := fetchStorageStats(opts.ctx, cloudBackend, logger, "Cloud storage")
 	cloudBackups := fetchBackupList(opts.ctx, cloudBackend)
 	logging.DebugStep(logger, "storage init", "cloud stats=%v backups=%d", cloudStats != nil, len(cloudBackups))
@@ -176,6 +181,16 @@ func initializeCloudStorage(opts backupModeOptions, orch *orchestrator.Orchestra
 	orch.RegisterStorageTarget(cloudAdapter)
 	logStorageInitSummary(formatStorageInitSummary("Cloud storage", cfg, storage.LocationCloud, cloudStats, cloudBackups))
 	return cloudFS
+}
+
+// disableCloudForRun turns the cloud destination off for the rest of the run: no
+// upload at [6], no log copy, no disk-space check.
+func disableCloudForRun(cfg *config.Config, checker *checks.Checker) {
+	cfg.CloudEnabled = false
+	cfg.CloudLogPath = ""
+	if checker != nil {
+		checker.DisableCloud()
+	}
 }
 
 // startupOwnedBackups counts the archives this host owns in the startup listing,

@@ -170,6 +170,7 @@ exit code (as cmd/proxsave computes it): 1
 [<TIME>] DEBUG    Aggregated exit code based on log analysis: 1
 
 [<TIME>] STEP     [6] Storage dispatch skipped (dry run mode)
+[<TIME>] DEBUG    Disabled storage targets: secondary=false cloud=false
 
 [<TIME>] DEBUG    Go backup completed in 0.0s
 [<TIME>] DEBUG    Removed temporary workspace <ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM>
@@ -317,6 +318,7 @@ exit code (as cmd/proxsave computes it): 1
 [<TIME>] DEBUG    Found 0 errors and 1 warnings in log file
 [<TIME>] DEBUG    Aggregated exit code based on log analysis: 1
 [<TIME>] STEP     [6] Storage dispatch skipped (dry run mode)
+[<TIME>] DEBUG    Disabled storage targets: secondary=false cloud=false
 [<TIME>] DEBUG    Go backup completed in 0.0s
 [<TIME>] DEBUG    Removed temporary workspace <ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM>
 [<TIME>] DEBUG    End backup run (ok, duration=<DURATION>)

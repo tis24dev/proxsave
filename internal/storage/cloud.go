@@ -83,10 +83,18 @@ type CloudStorage struct {
 	// See the note on LocalStorage.lastRetCompleted: no count in lastRet can say
 	// whether a pass ran at all, so the answer is published beside them.
 	lastRetCompleted bool
-	remoteFilesMu    sync.RWMutex
-	remoteFiles      map[string]struct{}
-	logPathMu        sync.Mutex
-	logPathMissing   bool
+	// retTally counts what the last retention pass could not do (see LocalStorage).
+	retTally retentionTally
+	// storeIssues records what the last Store left undone around the backup.
+	// activeStore is the same recorder while a Store runs and nil otherwise, so the
+	// verify path reports into it only for the backup and keeps its own warnings
+	// when UploadToRemotePath sends a log.
+	storeIssues    *storeIssueRecorder
+	activeStore    *storeIssueRecorder
+	remoteFilesMu  sync.RWMutex
+	remoteFiles    map[string]struct{}
+	logPathMu      sync.Mutex
+	logPathMissing bool
 	// hostname is this machine's name, resolved once at construction: retention
 	// only prunes backups this host owns.
 	hostname string
@@ -320,8 +328,9 @@ func (c *CloudStorage) DetectFilesystem(ctx context.Context) (info *FilesystemIn
 	logging.DebugStep(c.logger, "cloud detect filesystem", "checking rclone availability")
 	if !c.hasRclone() {
 		// The consequence is not repeated here: initializeCloudStorage
-		// (cmd/proxsave/backup_storage.go) closes this path with the grouped
-		// "Path Cloud: disabled (...)" SKIP, beside the other locations.
+		// (cmd/proxsave/backup_storage.go) closes this path with the
+		// "✗ Cloud storage: not initialized" outcome and the "Path Cloud: disabled"
+		// SKIP, beside the other locations.
 		c.logger.Warning("Cloud Storage: setup - rclone not found in PATH")
 		c.logger.Warning("Cloud Storage: setup - install rclone to enable cloud backups")
 		return nil, &StorageError{
@@ -416,6 +425,8 @@ type remoteCheckError struct {
 	kind remoteErrorKind
 	msg  string
 	err  error
+	// short is the cause a fact line prints: rclone's last line, or the timeout.
+	short string
 }
 
 func (e *remoteCheckError) Error() string {
@@ -468,9 +479,10 @@ func (c *CloudStorage) checkRemoteAccessible(ctx context.Context) error {
 		// If the context timed out, wrap as timeout error
 		if timeoutCtx.Err() == context.DeadlineExceeded {
 			return &remoteCheckError{
-				kind: remoteErrorTimeout,
-				msg:  fmt.Sprintf("connection timeout (%ds) - remote did not respond in time", timeoutSeconds),
-				err:  err,
+				kind:  remoteErrorTimeout,
+				msg:   fmt.Sprintf("connection timeout (%ds) - remote did not respond in time", timeoutSeconds),
+				err:   err,
+				short: fmt.Sprintf("timed out after %ds", timeoutSeconds),
 			}
 		}
 
@@ -485,9 +497,10 @@ func (c *CloudStorage) checkRemoteAccessible(ctx context.Context) error {
 				}
 				if errors.Is(err, context.DeadlineExceeded) {
 					return &remoteCheckError{
-						kind: remoteErrorTimeout,
-						msg:  fmt.Sprintf("connection timeout (%ds) - remote did not respond in time", timeoutSeconds),
-						err:  err,
+						kind:  remoteErrorTimeout,
+						msg:   fmt.Sprintf("connection timeout (%ds) - remote did not respond in time", timeoutSeconds),
+						err:   err,
+						short: fmt.Sprintf("timed out after %ds", timeoutSeconds),
 					}
 				}
 				return err
@@ -657,9 +670,10 @@ func classifyRemoteError(stage, target string, err error, output []byte) error {
 	}
 
 	return &remoteCheckError{
-		kind: kind,
-		msg:  msg,
-		err:  err,
+		kind:  kind,
+		msg:   msg,
+		err:   err,
+		short: rcloneCause(string(output), err),
 	}
 }
 
@@ -736,6 +750,10 @@ func (c *CloudStorage) Store(ctx context.Context, backupFile string, metadata *t
 		return err
 	}
 
+	issues := &storeIssueRecorder{}
+	c.storeIssues, c.activeStore = issues, issues
+	defer func() { c.activeStore = nil }()
+
 	// Verify source file exists. Bound the stat with FS_IO_TIMEOUT: this runs
 	// before uploadCtx/rclone, so a dead/stale BACKUP_PATH mount must not wedge
 	// Store in an uninterruptible (D-state) syscall here.
@@ -745,7 +763,8 @@ func (c *CloudStorage) Store(ctx context.Context, backupFile string, metadata *t
 		// here is as likely to be a timeout as a missing file, and the error names
 		// the path either way. Calling it "not found" told the operator the archive
 		// was gone when the mount was simply not answering.
-		c.logger.Warning("Cloud Storage: upload - failed to read the backup: %v", err)
+		c.logger.Debug("Cloud Storage: upload - failed to read the backup: %v", err)
+		c.logger.Info("  Source file not accessible: %s", safefs.SystemErrorText(err))
 		return &StorageError{
 			Location:    LocationCloud,
 			Operation:   "store",
@@ -772,7 +791,9 @@ func (c *CloudStorage) Store(ctx context.Context, backupFile string, metadata *t
 				// primaryFile stays on the raw archive, so the upload below carries the
 				// standalone file. Saying only that the stat failed left the operator to
 				// work that out from the next line's filename.
-				c.logger.Warning("Cloud Storage: upload - bundle unreadable, sending the standalone archive: %v", err)
+				c.logger.Debug("Cloud Storage: upload - bundle unreadable, sending the standalone archive: %v", err)
+				c.logger.Info("  Bundle unreadable: %s", safefs.SystemErrorText(err))
+				issues.add(StoreIssueBundleNotSent)
 			}
 		}
 	}
@@ -781,7 +802,7 @@ func (c *CloudStorage) Store(ctx context.Context, backupFile string, metadata *t
 	remoteFile := c.remotePathFor(filename)
 	logging.DebugStep(c.logger, "cloud store", "source size=%s remote=%s", utils.FormatBytes(primaryStat.Size()), c.remoteLabel())
 
-	c.logger.Info("Uploading backup to cloud storage: %s (%s) -> %s (timeout: %ds)",
+	c.logger.Debug("Uploading backup to cloud storage: %s (%s) -> %s (timeout: %ds)",
 		filename,
 		utils.FormatBytes(primaryStat.Size()),
 		c.remoteLabel(),
@@ -822,7 +843,9 @@ func (c *CloudStorage) Store(ctx context.Context, backupFile string, metadata *t
 					// The error names the file and says it timed out, so the line says
 					// neither again. "skipping" is the whole point: the sidecar does not
 					// go up.
-					c.logger.Warning("Cloud Storage: upload - skipping sidecar: %v", err)
+					c.logger.Debug("Cloud Storage: upload - skipping sidecar: %v", err)
+					c.logger.Info("  Sidecar skipped: %s unreadable after %s", filepath.Base(srcFile), statTimeout(err, c.fsIoTimeout()))
+					issues.add(StoreIssueSidecarNotSaved)
 				}
 				continue // Skip if missing or unreachable
 			}
@@ -843,15 +866,16 @@ func (c *CloudStorage) Store(ctx context.Context, backupFile string, metadata *t
 		if primaryFailed {
 			op = "upload"
 			target = "primary backup"
-			// This line ends on the remote label, whose trailing colon belongs to the
-			// rclone name ("remote:"), so it has to come FIRST: last, it reads as a
-			// sentence cut off mid-way.
-			c.logger.Warning("Cloud Storage: upload - backup not saved to %s", c.remoteLabel())
+			c.logger.Debug("Cloud Storage: upload - backup not saved to %s", c.remoteLabel())
 		}
-		// Both open "Cloud Storage: upload - " so splitCategoryAndExample groups them
-		// under that operation instead of under the backend: the notification lists one
-		// entry per fault, not one per backend.
-		c.logger.Warning("Cloud Storage: upload - failed to send the %s: %v", target, err)
+		// The fact line carries the short cause; the caller closes the block with the
+		// outcome, and the full chain stays in DEBUG.
+		c.logger.Debug("Cloud Storage: upload - failed to send the %s: %v", target, err)
+		if primaryFailed {
+			c.logger.Info("  Upload failed: %s", uploadPrimaryCause(err))
+		} else {
+			c.logger.Info("  Sidecar failed: %s", uploadFailureFact(err))
+		}
 		return &StorageError{
 			Location:     LocationCloud,
 			Operation:    op,
@@ -863,7 +887,7 @@ func (c *CloudStorage) Store(ctx context.Context, backupFile string, metadata *t
 		}
 	}
 
-	c.logger.Info("Cloud storage: upload and verification completed for %s", filename)
+	c.logger.Debug("Cloud storage: upload and verification completed for %s", filename)
 	c.logger.Debug("✓ Cloud Storage: File uploaded")
 
 	if count := c.countBackups(ctx); count >= 0 {
@@ -873,6 +897,40 @@ func (c *CloudStorage) Store(ctx context.Context, backupFile string, metadata *t
 	}
 
 	return nil
+}
+
+// statTimeout is the duration a timed-out stat waited, for the fact line: the one the
+// error carries, the configured bound otherwise.
+func statTimeout(err error, fallback time.Duration) time.Duration {
+	var te *safefs.TimeoutError
+	if errors.As(err, &te) && te != nil && te.Timeout > 0 {
+		return te.Timeout
+	}
+	return fallback
+}
+
+// uploadPrimaryCause is the short cause of the failed primary upload. The file is not
+// repeated: the block is about that one archive.
+func uploadPrimaryCause(err error) string {
+	var taskErr *uploadTaskError
+	if errors.As(err, &taskErr) && taskErr != nil {
+		return ErrorCause(taskErr.err)
+	}
+	return ErrorCause(err)
+}
+
+// uploadFailureFact renders a failed upload task as "<file>: <short cause>".
+func uploadFailureFact(err error) string {
+	var taskErr *uploadTaskError
+	if errors.As(err, &taskErr) && taskErr != nil {
+		return taskErr.file + ": " + ErrorCause(taskErr.err)
+	}
+	return ErrorCause(err)
+}
+
+// LastStoreIssues implements StoreReporter.
+func (c *CloudStorage) LastStoreIssues() []StoreIssue {
+	return c.storeIssues.list()
 }
 
 // sidecarStatWarrantsWarning reports whether a Stat error on an associated (sidecar) file
@@ -1085,8 +1143,19 @@ func (c *CloudStorage) uploadTasksParallel(ctx context.Context, tasks []uploadTa
 }
 
 func (c *CloudStorage) wrapUploadError(localPath string, err error) error {
-	return fmt.Errorf("%s: %w", filepath.Base(localPath), err)
+	return &uploadTaskError{file: filepath.Base(localPath), err: err}
 }
+
+// uploadTaskError is a failed upload task: the file it was sending and why. Its text
+// is "<file>: <cause>", what wrapUploadError has always returned.
+type uploadTaskError struct {
+	file string
+	err  error
+}
+
+func (e *uploadTaskError) Error() string { return e.file + ": " + e.err.Error() }
+
+func (e *uploadTaskError) Unwrap() error { return e.err }
 
 // UploadToRemotePath uploads an arbitrary file to the provided remote path using
 // the same retry and verification logic used for backups.
@@ -1171,7 +1240,11 @@ func (c *CloudStorage) rcloneCopy(ctx context.Context, localFile, remoteFile str
 		if ctx.Err() == context.DeadlineExceeded {
 			return fmt.Errorf("rclone operation timeout")
 		}
-		return fmt.Errorf("rclone copy failed: %w: %s", err, strings.TrimSpace(string(truncateRcloneOutput(output))))
+		return &rcloneCommandError{
+			msg:   fmt.Sprintf("rclone copy failed: %v: %s", err, strings.TrimSpace(string(truncateRcloneOutput(output)))),
+			short: rcloneCause(string(output), err),
+			err:   err,
+		}
 	}
 
 	return nil
@@ -1275,6 +1348,18 @@ func (c *CloudStorage) verifyRemoteChecksum(ctx context.Context, localFile, remo
 		// mount), so surface it at Warning: it must not be silently swallowed, and
 		// the run's exit code should reflect that the requested checksum could not
 		// actually run.
+		if recorder := c.activeStore; recorder != nil {
+			// Inside Store: a fact line, and the caller closes the block with
+			// "backup saved, checksum not verified". The full chain stays in DEBUG.
+			c.logger.Debug("Cloud Storage: verify - could not hash local %s, object kept on size-only verification: %v", filename, err)
+			if errors.Is(err, safefs.ErrTimeout) {
+				c.logger.Info("  Checksum failed: local file unreadable after %s", statTimeout(err, c.fsIoTimeout()))
+			} else {
+				c.logger.Info("  Checksum failed: %s", safefs.SystemErrorText(err))
+			}
+			recorder.add(StoreIssueChecksumNotVerified)
+			return true, nil
+		}
 		if errors.Is(err, safefs.ErrTimeout) {
 			c.logger.Warning("Cloud Storage: verify - hashing local %s stalled (dead/stale mount?), object kept on size-only verification, full checksum NOT performed, check the backup mount", filename)
 			return true, nil
@@ -1490,7 +1575,7 @@ func (c *CloudStorage) List(ctx context.Context) (backups []*types.BackupMetadat
 			Location:    LocationCloud,
 			Operation:   "list",
 			Path:        c.remoteLabel(),
-			Err:         fmt.Errorf("rclone lsl failed: %w", err),
+			Err:         &rcloneCommandError{msg: fmt.Sprintf("rclone lsl failed: %v", err), short: rcloneCause(string(output), err), err: err},
 			IsCritical:  false,
 			Recoverable: true,
 		}
@@ -1754,7 +1839,8 @@ func (c *CloudStorage) deleteBackupInternal(ctx context.Context, backupFile stri
 			// rel, not filepath.Base(f): f is an rclone remote path ("remote:name"),
 			// which holds no slash, so Base returns it whole.
 			detail := rcloneFailureDetail(msg, err)
-			c.logger.Warning("Cloud Storage: retention - failed to delete %s: %s", rel, detail)
+			c.logger.Debug("Cloud Storage: retention - failed to delete %s: %s", rel, detail)
+			logDeleteFailure(c.logger, rel, rcloneCause(msg, err))
 			// rel for the same reason as the line above: Base is a no-op on a remote
 			// path, and the summary would name the same file differently from the
 			// per-file line it sits under.
@@ -1835,7 +1921,9 @@ func (c *CloudStorage) deleteAssociatedLog(ctx context.Context, backupFile strin
 		// Carrying the exec error alone left rclone's reason on a Debug line a
 		// default install never prints; rcloneFailureDetail keeps the reason first.
 		detail := rcloneFailureDetail(msg, err)
-		c.logger.Warning("Cloud Storage: logs - failed to delete %s: %s", cloudPath, detail)
+		c.logger.Debug("Cloud Storage: logs - failed to delete %s: %s", cloudPath, detail)
+		c.logger.Info("  Log not deleted: %s: %s", logName, rcloneCause(msg, err))
+		c.retTally.logsNotDeleted++
 		return false
 	}
 
@@ -1943,7 +2031,7 @@ func (c *CloudStorage) ApplyRetention(ctx context.Context, config RetentionConfi
 	// Reset together: the flag describes this struct, so leaving it set here made
 	// the value report a COMPLETED pass beside counts this pass had just zeroed,
 	// which is the one-struct-two-ages state the reset exists to prevent.
-	c.lastRet, c.lastRetCompleted = RetentionSummary{}, false
+	c.lastRet, c.lastRetCompleted, c.retTally = RetentionSummary{}, false, retentionTally{}
 	owned, scoped := 0, false
 	defer func() {
 		c.scopeOwned, c.scopeValid, c.lastRetCompleted = owned-deleted, scoped, err == nil
@@ -1959,6 +2047,7 @@ func (c *CloudStorage) ApplyRetention(ctx context.Context, config RetentionConfi
 	backups, err := c.List(ctx)
 	if err != nil {
 		c.logger.Debug("Cloud storage - failed to list backups for retention: %v", err)
+		c.logger.Info("  List failed: %s", ErrorCause(err))
 		return 0, &StorageError{
 			Location:    LocationCloud,
 			Operation:   "apply_retention",
@@ -1999,9 +2088,7 @@ func (c *CloudStorage) ApplyRetention(ctx context.Context, config RetentionConfi
 // applyGFSRetention applies GFS (Grandfather-Father-Son) retention policy
 func (c *CloudStorage) applyGFSRetention(ctx context.Context, backups []*types.BackupMetadata, config RetentionConfig) (int, error) {
 	eligible, inert := partitionRetentionEligible(backups)
-	for _, in := range inert {
-		c.logger.Warning("Cloud Storage: retention - ignored %s (%s)", in.Backup.BackupFile, in.Reason)
-	}
+	c.retTally.skipped = logRetentionSkipped(c.logger, "Cloud Storage", inert)
 	backups = eligible
 
 	config = EffectiveGFSRetentionConfig(config)
@@ -2047,9 +2134,7 @@ func (c *CloudStorage) applySimpleRetention(ctx context.Context, backups []*type
 	}
 
 	eligible, inert := partitionRetentionEligible(backups)
-	for _, in := range inert {
-		c.logger.Warning("Cloud Storage: retention - ignored %s (%s)", in.Backup.BackupFile, in.Reason)
-	}
+	c.retTally.skipped = logRetentionSkipped(c.logger, "Cloud Storage", inert)
 	backups = eligible
 
 	totalBackups := len(backups)
@@ -2060,10 +2145,9 @@ func (c *CloudStorage) applySimpleRetention(ctx context.Context, backups []*type
 
 	// Calculate how many to delete
 	toDelete := totalBackups - maxBackups
-	c.logger.Info("Applying simple retention policy: %d backups found, limit is %d, deleting %d oldest",
+	c.logger.Debug("Simple retention -> current: %d, limit: %d, to_delete: %d",
 		totalBackups, maxBackups, toDelete)
-	c.logger.Info("Simple retention -> current: %d, limit: %d, to_delete: %d",
-		totalBackups, maxBackups, toDelete)
+	logRetentionScale(c.logger, totalBackups, maxBackups)
 
 	// Collect oldest backups (already sorted newest first)
 	oldBackups := backups[maxBackups:]
@@ -2076,6 +2160,7 @@ func (c *CloudStorage) applySimpleRetention(ctx context.Context, backups []*type
 func (c *CloudStorage) deleteBatched(ctx context.Context, backups []*types.BackupMetadata, totalBackups int) (int, error) {
 	deleted := 0
 	logsDeleted := 0
+	c.retTally.planned = len(backups)
 	batchSize := c.config.CloudBatchSize
 	batchPause := time.Duration(c.config.CloudBatchPause) * time.Second
 	initialLogs := c.countLogFiles(ctx)
@@ -2093,13 +2178,15 @@ func (c *CloudStorage) deleteBatched(ctx context.Context, backups []*types.Backu
 		if err != nil {
 			if !errors.Is(err, errBackupSidecarDeleteOnly) {
 				// The backup archive itself is still present; do not count it.
-				c.logger.Warning("Cloud Storage: retention - left %s in place: %v", backup.BackupFile, err)
+				c.logger.Debug("Cloud Storage: retention - left %s in place: %v", backup.BackupFile, err)
+				c.retTally.notDeleted++
 				continue
 			}
 			// The archive is gone, only sidecars remained: count it as deleted but
 			// warn about the leftover associated files. The cause says which of the
 			// two happened, so the line only names the backup.
-			c.logger.Warning("Cloud Storage: retention - left files behind from %s: %v", backup.BackupFile, err)
+			c.logger.Debug("Cloud Storage: retention - left files behind from %s: %v", backup.BackupFile, err)
+			c.retTally.leftBehind++
 		}
 
 		deleted++
@@ -2149,6 +2236,7 @@ func (c *CloudStorage) deleteBatched(ctx context.Context, backups []*types.Backu
 func (c *CloudStorage) LastRetentionSummary() RetentionSummary {
 	s := c.lastRet
 	s.ScopeValid, s.Owned, s.PassCompleted = c.scopeValid, c.scopeOwned, c.lastRetCompleted
+	c.retTally.apply(&s)
 	return s
 }
 

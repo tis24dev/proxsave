@@ -86,7 +86,8 @@ func TestDispatchLogFileSecondaryCopyTimeout(t *testing.T) {
 	src := writeSrcLog(t)
 	runDispatchWithWatchdog(t, o, src)
 
-	if !strings.Contains(buf.String(), "timed out") {
+	if !strings.Contains(buf.String(), "INFO       Copy failed: timed out after 1s\n") ||
+		!strings.Contains(buf.String(), "WARNING  ⚠ Log not copied to secondary\n") {
 		t.Fatalf("expected a timeout warning, got:\n%s", buf.String())
 	}
 	if _, err := os.Stat(filepath.Join(secondary, "backup.log")); !os.IsNotExist(err) {
@@ -107,7 +108,8 @@ func TestDispatchLogFileSecondaryMkdirTimeout(t *testing.T) {
 	src := writeSrcLog(t)
 	runDispatchWithWatchdog(t, o, src)
 
-	if !strings.Contains(buf.String(), "creating") || !strings.Contains(buf.String(), "timed out") {
+	if !strings.Contains(buf.String(), "INFO       Directory not created: timed out after 1s\n") ||
+		!strings.Contains(buf.String(), "WARNING  ⚠ Log not copied to secondary\n") {
 		t.Fatalf("expected a mkdir-timeout warning, got:\n%s", buf.String())
 	}
 }
@@ -125,10 +127,11 @@ func TestDispatchLogFileCloudSourceProbeTimeout(t *testing.T) {
 	src := writeSrcLog(t)
 	runDispatchWithWatchdog(t, o, src)
 
-	if !strings.Contains(buf.String(), "unreachable") {
+	if !strings.Contains(buf.String(), "INFO       Source log not accessible: timed out after 1s\n") ||
+		!strings.Contains(buf.String(), "WARNING  ⚠ Log not copied to cloud\n") {
 		t.Fatalf("expected a cloud source-probe timeout warning, got:\n%s", buf.String())
 	}
-	if strings.Contains(buf.String(), "Failed to copy log to cloud") {
+	if strings.Contains(buf.String(), "Copy failed") {
 		t.Fatalf("cloud upload must not be attempted after a source-probe timeout:\n%s", buf.String())
 	}
 }
@@ -167,7 +170,7 @@ func TestDispatchLogFileCloudUploadDetachesFromCancelledRunCtx(t *testing.T) {
 	if uploadCtxErr != nil {
 		t.Fatalf("cloud upload received a cancelled context (%v); it must run on a context detached from the run ctx so the log still ships after Ctrl+C", uploadCtxErr)
 	}
-	if !strings.Contains(buf.String(), "Log copied to cloud") {
+	if !strings.Contains(buf.String(), "INFO     ✓ Log copied to cloud\n") {
 		t.Fatalf("expected a success log for the dispatched cloud upload; got:\n%s", buf.String())
 	}
 }
@@ -192,7 +195,8 @@ func TestDispatchLogFileHealthyBoundedCopies(t *testing.T) {
 	if string(data) != "logdata" {
 		t.Fatalf("content mismatch: %q", string(data))
 	}
-	if strings.Contains(buf.String(), "timed out") || strings.Contains(buf.String(), "Failed") {
+	if strings.Contains(buf.String(), "timed out") || strings.Contains(buf.String(), "failed") ||
+		strings.Contains(buf.String(), "Log not copied") || !strings.Contains(buf.String(), "✓ Log copied to secondary\n") {
 		t.Fatalf("healthy bounded copy must not warn:\n%s", buf.String())
 	}
 }

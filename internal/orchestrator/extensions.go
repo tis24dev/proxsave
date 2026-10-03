@@ -16,6 +16,7 @@ import (
 	"github.com/tis24dev/proxsave/internal/safefs"
 	"github.com/tis24dev/proxsave/internal/storage"
 	"github.com/tis24dev/proxsave/internal/types"
+	"github.com/tis24dev/proxsave/internal/ui/theme"
 )
 
 // fsIoTimeout converts the configured FS_IO_TIMEOUT into a per-operation safefs
@@ -152,7 +153,7 @@ func (o *Orchestrator) dispatchNotifications(ctx context.Context, stats *BackupS
 		o.logger.Debug("notifications dispatch: run outcome=%s warnings=%d errors=%d", outcome, stats.WarningCount, stats.ErrorCount)
 	}
 	if notify.NotifyOnAllows(policy, outcome) {
-		o.logger.Info("Notifications: sending")
+		o.logger.Info("Notifications: sending...")
 	} else {
 		o.logger.Info("Notifications: skipped")
 	}
@@ -453,16 +454,8 @@ func (o *Orchestrator) dispatchNotificationsAndLogs(ctx context.Context, stats *
 		return
 	}
 
-	// Log explicit SKIP lines for disabled storage tiers so that
-	// Local / Secondary / Cloud all appear grouped with storage operations.
-	if o.logger != nil && stats != nil {
-		if !stats.SecondaryEnabled {
-			o.logger.Skip("Secondary Storage: disabled")
-		}
-		if !stats.CloudEnabled {
-			o.logger.Skip("Cloud Storage: disabled")
-		}
-	}
+	// The SKIP lines of the disabled storage tiers close step [6]
+	// (logDisabledStorageTargets), grouped with the storage operations.
 
 	// Phase 2: Notifications (non-critical - failures don't abort backup)
 	// Notification errors are logged but never propagated
@@ -553,23 +546,34 @@ func (o *Orchestrator) dispatchLogFile(ctx context.Context, logFilePath string) 
 	if o.cfg.SecondaryEnabled && o.cfg.SecondaryLogPath != "" {
 		secondaryLogPath := filepath.Join(o.cfg.SecondaryLogPath, logFileName)
 		o.logger.Debug("Copying log to secondary: %s", secondaryLogPath)
+		o.logger.Info("  Secondary: %s", secondaryLogPath)
 
+		// Each failure is one fact line and the outcome; the full error and the path
+		// it names stay in DEBUG.
 		_, mkErr := safefs.Run(context.Background(), "logmkdir", o.cfg.SecondaryLogPath, timeout, func() (struct{}, error) {
 			return struct{}{}, fs.MkdirAll(o.cfg.SecondaryLogPath, 0755)
 		})
 		switch {
 		case mkErr != nil && errors.Is(mkErr, safefs.ErrTimeout):
-			o.logger.Warning("Skipping secondary log copy: creating %s timed out after %s (dead/stale mount?)", o.cfg.SecondaryLogPath, timeout)
+			o.logger.Debug("Secondary log copy: creating %s timed out after %s (dead/stale mount?): %v", o.cfg.SecondaryLogPath, timeout, mkErr)
+			o.logger.Info("  Directory not created: timed out after %s", timeout)
+			o.logger.Warning("%s Log not copied to secondary", theme.SymbolWarning)
 		case mkErr != nil:
-			o.logger.Warning("Failed to create secondary log directory: %v", mkErr)
+			o.logger.Debug("Secondary log copy: failed to create %s: %v", o.cfg.SecondaryLogPath, mkErr)
+			o.logger.Info("  Directory not created: %s", safefs.SystemErrorText(mkErr))
+			o.logger.Warning("%s Log not copied to secondary", theme.SymbolWarning)
 		default:
 			switch err := boundedCopyFile(context.Background(), fs, logFilePath, secondaryLogPath, timeout); {
 			case err == nil:
-				o.logger.Info("✓ Log copied to secondary: %s", secondaryLogPath)
+				o.logger.Info("%s Log copied to secondary", theme.SymbolSuccess)
 			case errors.Is(err, safefs.ErrTimeout):
-				o.logger.Warning("Skipping secondary log copy: copy to %s timed out after %s (dead/stale mount?)", secondaryLogPath, timeout)
+				o.logger.Debug("Secondary log copy: copy to %s timed out after %s (dead/stale mount?): %v", secondaryLogPath, timeout, err)
+				o.logger.Info("  Copy failed: timed out after %s", timeout)
+				o.logger.Warning("%s Log not copied to secondary", theme.SymbolWarning)
 			default:
-				o.logger.Warning("Failed to copy log to secondary: %v", err)
+				o.logger.Debug("Secondary log copy: failed to copy to %s: %v", secondaryLogPath, err)
+				o.logger.Info("  Copy failed: %s", safefs.SystemErrorText(err))
+				o.logger.Warning("%s Log not copied to secondary", theme.SymbolWarning)
 			}
 		}
 	}
@@ -581,6 +585,7 @@ func (o *Orchestrator) dispatchLogFile(ctx context.Context, logFilePath string) 
 	if o.cfg.CloudEnabled {
 		if cloudBase := strings.TrimSpace(o.cfg.CloudLogPath); cloudBase != "" {
 			destination := buildCloudLogDestination(cloudBase, logFileName, o.cfg.CloudRemote)
+			o.logger.Info("  Cloud: %s", destination)
 
 			_, probeErr := safefs.Run(context.Background(), "logstat", logFilePath, timeout, func() (struct{}, error) {
 				_, e := fs.Stat(logFilePath)
@@ -588,7 +593,9 @@ func (o *Orchestrator) dispatchLogFile(ctx context.Context, logFilePath string) 
 			})
 			switch {
 			case probeErr != nil && errors.Is(probeErr, safefs.ErrTimeout):
-				o.logger.Warning("Skipping cloud log copy: source log %s unreachable after %s (dead/stale mount?)", logFilePath, timeout)
+				o.logger.Debug("Cloud log copy: source log %s unreachable after %s (dead/stale mount?): %v", logFilePath, timeout, probeErr)
+				o.logger.Info("  Source log not accessible: timed out after %s", timeout)
+				o.logger.Warning("%s Log not copied to cloud", theme.SymbolWarning)
 			case probeErr != nil:
 				o.logger.Warning("Skipping cloud log copy: cannot stat source log %s: %v", logFilePath, probeErr)
 			default:
@@ -602,9 +609,11 @@ func (o *Orchestrator) dispatchLogFile(ctx context.Context, logFilePath string) 
 					upload = o.copyLogToCloudFn
 				}
 				if err := upload(context.Background(), logFilePath, destination); err != nil {
-					o.logger.Warning("Failed to copy log to cloud: %v", err)
+					o.logger.Debug("Cloud log copy: failed to upload to %s: %v", destination, err)
+					o.logger.Info("  Copy failed: %s", storage.ErrorCause(err))
+					o.logger.Warning("%s Log not copied to cloud", theme.SymbolWarning)
 				} else {
-					o.logger.Info("✓ Log copied to cloud: %s", destination)
+					o.logger.Info("%s Log copied to cloud", theme.SymbolSuccess)
 				}
 			}
 		}

@@ -99,7 +99,7 @@ func NewWebhookNotifier(webhookConfig *config.WebhookConfig, logger *logging.Log
 	}
 	logger.Debug("HTTP client created with %ds timeout", timeout)
 
-	logger.Info("✅ WebhookNotifier initialized successfully with %d endpoint(s)", len(webhookConfig.Endpoints))
+	logger.Debug("webhook init: endpoints=%d", len(webhookConfig.Endpoints))
 
 	notifier.client = client
 	return notifier, nil
@@ -186,7 +186,7 @@ func (w *WebhookNotifier) Send(ctx context.Context, data *NotificationData) (*No
 			failureCount++
 			lastErr = err
 		} else {
-			w.logger.Info("✅ Endpoint '%s' succeeded", endpoint.Name)
+			w.logger.Debug("webhook %s: endpoint succeeded", endpoint.Name)
 			successCount++
 		}
 	}
@@ -425,7 +425,7 @@ func (w *WebhookNotifier) sendToEndpoint(ctx context.Context, endpoint config.We
 		switch {
 		case resp.StatusCode >= 200 && resp.StatusCode < 300:
 			// Success
-			w.logger.Info("✅ Webhook '%s' sent successfully: HTTP %d in %dms",
+			w.logger.Debug("webhook %s: sent http=%d elapsed=%dms",
 				endpoint.Name, resp.StatusCode, requestDuration.Milliseconds())
 			return nil
 

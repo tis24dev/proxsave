@@ -310,8 +310,8 @@ func TestStorageAdapterSync_NonCriticalStoreErrorFinalizesErrorAndContinues(t *t
 
 // TestStorageAdapterSync_SidecarOnlyFailureHeadline pins F08-08: when the backend reports a
 // non-critical store error whose primary archive WAS saved (StorageError.PrimarySaved), the
-// adapter must NOT log "Backup was not saved" (the primary is safe); it logs a sidecar-specific
-// line instead.
+// adapter must NOT log "backup not saved" (the primary is safe); it logs the sidecar-specific
+// outcome instead.
 func TestStorageAdapterSync_SidecarOnlyFailureHeadline(t *testing.T) {
 	var buf bytes.Buffer
 	logger := logging.New(types.LogLevelDebug, false)
@@ -343,10 +343,10 @@ func TestStorageAdapterSync_SidecarOnlyFailureHeadline(t *testing.T) {
 	}
 
 	out := buf.String()
-	if strings.Contains(out, "Backup was not saved") {
+	if strings.Contains(out, "backup not saved") {
 		t.Fatalf("must NOT claim the backup was not saved when the primary is saved:\n%s", out)
 	}
-	if !strings.Contains(out, "sidecar") {
+	if !strings.Contains(out, "WARNING  ⚠ cloud: backup saved, sidecar file not saved\n") {
 		t.Fatalf("expected a sidecar-specific warning, got:\n%s", out)
 	}
 }
@@ -380,8 +380,8 @@ func TestStorageAdapterSync_NonCriticalStoreErrorHeadlineWhenPrimaryFailed(t *te
 	if err := adapter.Sync(context.Background(), stats); err != nil {
 		t.Fatalf("Sync returned error: %v", err)
 	}
-	if out := buf.String(); !strings.Contains(out, "Backup was not saved") {
-		t.Fatalf("primary-failed store error must keep the 'Backup was not saved' headline, got:\n%s", out)
+	if out := buf.String(); !strings.Contains(out, "WARNING  ✗ cloud: backup not saved\n") {
+		t.Fatalf("primary-failed store error must keep the 'backup not saved' outcome, got:\n%s", out)
 	}
 }
 

@@ -146,7 +146,10 @@ type RetentionSummary struct {
 	// full. Owned is the field that answers "how many are there", and ScopeValid is
 	// the field that says whether Owned is worth anything.
 	//
-	// What false means: no pass has run, or the last one bailed. The counts are then
+	// What false means: no pass has run, or the last one bailed.
+	//
+	// The outcome counts below (Planned ... LogsNotDeleted) follow the same rule: they
+	// describe this pass and are zero before it ran. The counts are then
 	// the zero value even if the pass deleted archives before it failed, because
 	// ApplyRetention clears them on entry and only fills them once the delete loop
 	// finishes.
@@ -170,6 +173,18 @@ type RetentionSummary struct {
 	// numbers describe a finished pass, and whoever ran the pass already knows which
 	// of the two it is, because it is holding the error.
 	PassCompleted bool
+
+	// Planned is how many archives this pass selected for deletion. BackupsDeleted is
+	// how many of them are gone; the difference is NotDeleted.
+	Planned int
+	// NotDeleted counts the selected archives that are still in place.
+	NotDeleted int
+	// LeftBehind counts the deleted archives whose associated files stayed behind.
+	LeftBehind int
+	// Skipped counts the archives retention could not date and left alone.
+	Skipped int
+	// LogsNotDeleted counts the associated logs whose removal failed.
+	LogsNotDeleted int
 }
 
 // RetentionReporter can be implemented by storage backends that expose details

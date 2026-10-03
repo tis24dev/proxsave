@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -256,8 +257,9 @@ func TestFormatStorageInitSummary(t *testing.T) {
 	if simpleWarn {
 		t.Fatalf("a summary built with stats must not be a warning: %s", simple)
 	}
-	if !bytes.Contains([]byte(simple), []byte("Policy: simple")) {
-		t.Fatalf("expected simple policy label, got: %s", simple)
+	wantSimple := "  Backups: 2\n  Retention policy: simple (keep 7 newest)\n✓ Local: initialized"
+	if simple != wantSimple {
+		t.Fatalf("simple summary = %q, want %q", simple, wantSimple)
 	}
 
 	cfgWarn := &config.Config{
@@ -289,6 +291,18 @@ func TestFormatStorageInitSummary(t *testing.T) {
 	summary, _ := formatStorageInitSummary("Local", cfgGFS, storage.LocationPrimary, stats, backups)
 	if !bytes.Contains([]byte(summary), []byte("Kept (est.):")) {
 		t.Fatalf("expected GFS summary to include retention estimates, got: %s", summary)
+	}
+	// GFS lists the tiers under the count, with no policy line, and closes on the outcome.
+	if !strings.HasPrefix(summary, "  Backups: 2\n  Daily: ") || !strings.HasSuffix(summary, "\n✓ Local: initialized") {
+		t.Fatalf("expected GFS summary to open on the count and close on the outcome, got: %q", summary)
+	}
+	if strings.Contains(summary, "Total:") || strings.Contains(summary, "Retention policy:") {
+		t.Fatalf("GFS summary must replace Total: with Backups: and carry no policy line, got: %q", summary)
+	}
+
+	empty, _ := formatStorageInitSummary("Local", cfgGFS, storage.LocationPrimary, &storage.StorageStats{TotalBackups: 0}, nil)
+	if want := "  Backups: 0\n  Daily: 0/1, Weekly: 0/1, Monthly: 0/0, Yearly: 0/-1\n✓ Local: initialized"; empty != want {
+		t.Fatalf("empty GFS summary = %q, want %q", empty, want)
 	}
 	if !bytes.Contains([]byte(summary), []byte("Daily: 1/1")) {
 		t.Fatalf("expected GFS summary to normalize daily tier, got: %s", summary)

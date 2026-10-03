@@ -46,6 +46,10 @@ type SecondaryStorage struct {
 	// See the note on LocalStorage.lastRetCompleted: no count in lastRet can say
 	// whether a pass ran at all, so the answer is published beside them.
 	lastRetCompleted bool
+	// retTally counts what the last retention pass could not do (see LocalStorage).
+	retTally retentionTally
+	// storeIssues records what the last Store left undone around the backup.
+	storeIssues *storeIssueRecorder
 }
 
 // NewSecondaryStorage creates a new secondary storage instance.
@@ -139,6 +143,9 @@ func (s *SecondaryStorage) Store(ctx context.Context, backupFile string, metadat
 		return err
 	}
 
+	issues := &storeIssueRecorder{}
+	s.storeIssues = issues
+
 	bundleEnabled := s.config != nil && s.config.BundleAssociatedFiles
 	sourceFile := backupFile
 	if bundleEnabled {
@@ -149,7 +156,8 @@ func (s *SecondaryStorage) Store(ctx context.Context, backupFile string, metadat
 	if _, err := safefs.Stat(ctx, sourceFile, fsIoTimeout(s.config)); err != nil {
 		// Bounded against a dead/stale mount: see the twin in cloud.go. A failure is
 		// as likely to be a timeout as a missing file, and the error names the path.
-		s.logger.Warning("Secondary Storage: copy - failed to read the backup: %v", err)
+		s.logger.Debug("Secondary Storage: copy - failed to read the backup: %v", err)
+		s.logger.Info("  Source file not accessible: %s", safefs.SystemErrorText(err))
 		return &StorageError{
 			Location:    LocationSecondary,
 			Operation:   "store",
@@ -163,7 +171,8 @@ func (s *SecondaryStorage) Store(ctx context.Context, backupFile string, metadat
 	// Ensure destination directory exists (bounded against a dead/stale mount).
 	if err := safefs.MkdirAll(ctx, s.basePath, 0700, fsIoTimeout(s.config)); err != nil {
 		s.logger.Debug("Secondary storage: failed to create destination folder %s", s.basePath)
-		s.logger.Warning("Secondary Storage: copy - failed to create the destination directory %s: %v", s.basePath, err)
+		s.logger.Debug("Secondary Storage: copy - failed to create the destination directory %s: %v", s.basePath, err)
+		s.logger.Info("  Copy failed: %s", safefs.SystemErrorText(err))
 		return &StorageError{
 			Location:    LocationSecondary,
 			Operation:   "store",
@@ -181,8 +190,8 @@ func (s *SecondaryStorage) Store(ctx context.Context, backupFile string, metadat
 	s.logger.Debug("Copying backup to secondary storage: %s -> %s", filepath.Base(sourceFile), s.basePath)
 
 	if err := s.copyFile(ctx, sourceFile, destFile); err != nil {
-		s.logger.Warning("Secondary Storage: copy - failed for %s: %v", filepath.Base(sourceFile), err)
-		s.logger.Warning("Secondary Storage: copy - backup not saved to %s", s.basePath)
+		s.logger.Debug("Secondary Storage: copy - failed for %s: %v", filepath.Base(sourceFile), err)
+		s.logger.Info("  Copy failed: %s", safefs.SystemErrorText(err))
 		return &StorageError{
 			Location:    LocationSecondary,
 			Operation:   "store",
@@ -209,14 +218,16 @@ func (s *SecondaryStorage) Store(ctx context.Context, backupFile string, metadat
 
 			destAssocFile := filepath.Join(s.basePath, filepath.Base(srcFile))
 			if err := s.copyFile(ctx, srcFile, destAssocFile); err != nil {
-				s.logger.Warning("Secondary Storage: copy - failed for an associated file: %v", err)
+				s.logger.Debug("Secondary Storage: copy - failed for an associated file: %v", err)
+				s.logger.Info("  Sidecar failed: %s: %s", filepath.Base(srcFile), safefs.SystemErrorText(err))
+				issues.add(StoreIssueSidecarNotSaved)
 				failedAssoc = append(failedAssoc, filepath.Base(srcFile))
 				// Continue with other files
 			}
 		}
 
 		if len(failedAssoc) > 0 {
-			s.logger.Warning("Secondary Storage: copy - %d associated file(s) failed: %s",
+			s.logger.Debug("Secondary Storage: copy - %d associated file(s) failed: %s",
 				len(failedAssoc), strings.Join(failedAssoc, ", "))
 		}
 	}
@@ -241,6 +252,11 @@ func (s *SecondaryStorage) Store(ctx context.Context, backupFile string, metadat
 }
 
 // countBackups lists current backups on secondary storage for logging/diagnostic purposes.
+// LastStoreIssues implements StoreReporter.
+func (s *SecondaryStorage) LastStoreIssues() []StoreIssue {
+	return s.storeIssues.list()
+}
+
 func (s *SecondaryStorage) countBackups(ctx context.Context) int {
 	backups, err := s.List(ctx)
 	if err != nil {
@@ -592,7 +608,8 @@ func (s *SecondaryStorage) deleteBackupInternal(ctx context.Context, backupFile 
 				s.logger.Debug("Secondary storage: file already removed %s", f)
 				continue
 			}
-			s.logger.Warning("Secondary Storage: retention - %v", err)
+			s.logger.Debug("Secondary Storage: retention - %v", err)
+			logDeleteFailure(s.logger, f, safefs.SystemErrorText(err))
 			failedFiles = append(failedFiles, f)
 			if !isBackupSidecar(f) {
 				dataFailed = true
@@ -639,6 +656,8 @@ func (s *SecondaryStorage) deleteAssociatedLog(ctx context.Context, backupFile s
 	if err := safefs.Remove(ctx, fullPath, fsIoTimeout(s.config)); err != nil {
 		if !os.IsNotExist(err) {
 			s.logger.Debug("Secondary logs: failed to delete %s: %v", logName, err)
+			s.logger.Info("  Log not deleted: %s: %s", logName, safefs.SystemErrorText(err))
+			s.retTally.logsNotDeleted++
 		}
 		return false
 	}
@@ -686,7 +705,7 @@ func (s *SecondaryStorage) ApplyRetention(ctx context.Context, config RetentionC
 	// Reset together: the flag describes this struct, so leaving it set here made
 	// the value report a COMPLETED pass beside counts this pass had just zeroed,
 	// which is the one-struct-two-ages state the reset exists to prevent.
-	s.lastRet, s.lastRetCompleted = RetentionSummary{}, false
+	s.lastRet, s.lastRetCompleted, s.retTally = RetentionSummary{}, false, retentionTally{}
 	owned, scoped := 0, false
 	defer func() {
 		s.scopeOwned, s.scopeValid, s.lastRetCompleted = owned-deleted, scoped, err == nil
@@ -700,7 +719,8 @@ func (s *SecondaryStorage) ApplyRetention(ctx context.Context, config RetentionC
 	s.logger.Debug("Secondary storage: listing backups for retention policy '%s'", config.Policy)
 	backups, err := s.List(ctx)
 	if err != nil {
-		s.logger.Warning("Secondary Storage: retention - could not list the backups: %v", err)
+		s.logger.Debug("Secondary Storage: retention - could not list the backups: %v", err)
+		s.logger.Info("  List failed: %s", ErrorCause(err))
 		return 0, &StorageError{
 			Location:    LocationSecondary,
 			Operation:   "apply_retention",
@@ -767,9 +787,7 @@ func (s *SecondaryStorage) resolveRetentionOwners(ctx context.Context, backups [
 // applyGFSRetention applies GFS (Grandfather-Father-Son) retention policy
 func (s *SecondaryStorage) applyGFSRetention(ctx context.Context, backups []*types.BackupMetadata, config RetentionConfig) (int, error) {
 	eligible, inert := partitionRetentionEligible(backups)
-	for _, in := range inert {
-		s.logger.Warning("Secondary Storage: retention - ignored %s (%s)", in.Backup.BackupFile, in.Reason)
-	}
+	s.retTally.skipped = logRetentionSkipped(s.logger, "Secondary Storage", inert)
 	backups = eligible
 
 	config = EffectiveGFSRetentionConfig(config)
@@ -790,6 +808,7 @@ func (s *SecondaryStorage) applyGFSRetention(ctx context.Context, backups []*typ
 		stats[CategoryMonthly], config.Monthly,
 		stats[CategoryYearly], config.Yearly,
 		stats[CategoryDelete])
+	s.retTally.planned = stats[CategoryDelete]
 
 	// Delete backups marked for deletion
 	deleted := 0
@@ -809,12 +828,14 @@ func (s *SecondaryStorage) applyGFSRetention(ctx context.Context, backups []*typ
 		logDeleted, err := s.deleteBackupInternal(ctx, backup.BackupFile)
 		if err != nil {
 			if !errors.Is(err, errBackupSidecarDeleteOnly) {
-				s.logger.Warning("Secondary Storage: retention - left %s in place: %v", filepath.Base(backup.BackupFile), err)
+				s.logger.Debug("Secondary Storage: retention - left %s in place: %v", filepath.Base(backup.BackupFile), err)
+				s.retTally.notDeleted++
 				continue
 			}
-			// Archive removed, only sidecar(s) failed: count as deleted but warn. The
-			// cause says which of the two happened, so the line only names the backup.
-			s.logger.Warning("Secondary Storage: retention - left files behind from %s: %v", filepath.Base(backup.BackupFile), err)
+			// Archive removed, only sidecar(s) failed: count as deleted. The fact line
+			// naming the leftover was printed by deleteBackupInternal.
+			s.logger.Debug("Secondary Storage: retention - left files behind from %s: %v", filepath.Base(backup.BackupFile), err)
+			s.retTally.leftBehind++
 		}
 
 		deleted++
@@ -860,9 +881,7 @@ func (s *SecondaryStorage) applySimpleRetention(ctx context.Context, backups []*
 	}
 
 	eligible, inert := partitionRetentionEligible(backups)
-	for _, in := range inert {
-		s.logger.Warning("Secondary Storage: retention - ignored %s (%s)", in.Backup.BackupFile, in.Reason)
-	}
+	s.retTally.skipped = logRetentionSkipped(s.logger, "Secondary Storage", inert)
 	backups = eligible
 
 	totalBackups := len(backups)
@@ -873,10 +892,10 @@ func (s *SecondaryStorage) applySimpleRetention(ctx context.Context, backups []*
 
 	// Calculate how many to delete
 	toDelete := totalBackups - maxBackups
-	s.logger.Info("Applying simple retention policy: %d backups found, limit is %d, deleting %d oldest",
+	s.logger.Debug("Simple retention -> current: %d, limit: %d, to_delete: %d",
 		totalBackups, maxBackups, toDelete)
-	s.logger.Info("Simple retention -> current: %d, limit: %d, to_delete: %d",
-		totalBackups, maxBackups, toDelete)
+	logRetentionScale(s.logger, totalBackups, maxBackups)
+	s.retTally.planned = toDelete
 
 	// Delete oldest backups (already sorted newest first)
 	initialLogs := s.countLogFiles(ctx)
@@ -895,12 +914,14 @@ func (s *SecondaryStorage) applySimpleRetention(ctx context.Context, backups []*
 		logDeleted, err := s.deleteBackupInternal(ctx, backup.BackupFile)
 		if err != nil {
 			if !errors.Is(err, errBackupSidecarDeleteOnly) {
-				s.logger.Warning("Secondary Storage: retention - left %s in place: %v", filepath.Base(backup.BackupFile), err)
+				s.logger.Debug("Secondary Storage: retention - left %s in place: %v", filepath.Base(backup.BackupFile), err)
+				s.retTally.notDeleted++
 				continue
 			}
-			// Archive removed, only sidecar(s) failed: count as deleted but warn. The
-			// cause says which of the two happened, so the line only names the backup.
-			s.logger.Warning("Secondary Storage: retention - left files behind from %s: %v", filepath.Base(backup.BackupFile), err)
+			// Archive removed, only sidecar(s) failed: count as deleted. The fact line
+			// naming the leftover was printed by deleteBackupInternal.
+			s.logger.Debug("Secondary Storage: retention - left files behind from %s: %v", filepath.Base(backup.BackupFile), err)
+			s.retTally.leftBehind++
 		}
 
 		deleted++
@@ -948,6 +969,7 @@ func (s *SecondaryStorage) VerifyUpload(ctx context.Context, localFile, remoteFi
 func (s *SecondaryStorage) LastRetentionSummary() RetentionSummary {
 	summary := s.lastRet
 	summary.ScopeValid, summary.Owned, summary.PassCompleted = s.scopeValid, s.scopeOwned, s.lastRetCompleted
+	s.retTally.apply(&summary)
 	return summary
 }
 

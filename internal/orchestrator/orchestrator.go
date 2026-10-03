@@ -304,18 +304,28 @@ func (o *Orchestrator) logGlobalRetentionPolicy() {
 	if o.cfg.IsGFSRetentionEnabled() {
 		rc := storage.NewRetentionConfigFromConfig(o.cfg, storage.LocationPrimary)
 		rc = storage.NormalizeGFSRetentionConfig(o.logger, "All Storage", rc)
-		o.logger.Info("  Policy: GFS (daily=%d, weekly=%d, monthly=%d, yearly=%d)",
+		o.logger.Info("  Retention policy: GFS (daily=%d, weekly=%d, monthly=%d, yearly=%d)",
 			rc.Daily, rc.Weekly, rc.Monthly, rc.Yearly)
 		return
 	}
 
-	// Simple (count-based) retention: may vary per path, summarize compactly
+	// Simple (count-based) retention: may vary per path, summarize compactly. Only the
+	// destinations this run writes to are listed: a disabled one (or one the storage
+	// initialization disabled) has no retention to apply.
 	local := o.cfg.LocalRetentionDays
-	secondary := o.cfg.SecondaryRetentionDays
-	cloud := o.cfg.CloudRetentionDays
+	secondary, cloud := 0, 0
+	if o.cfg.SecondaryEnabled {
+		secondary = o.cfg.SecondaryRetentionDays
+	}
+	if o.cfg.CloudEnabled {
+		cloud = o.cfg.CloudRetentionDays
+	}
+	o.logger.Debug("Retention policy: local=%d secondary=%d (enabled=%v) cloud=%d (enabled=%v)",
+		o.cfg.LocalRetentionDays, o.cfg.SecondaryRetentionDays, o.cfg.SecondaryEnabled,
+		o.cfg.CloudRetentionDays, o.cfg.CloudEnabled)
 
 	if local == 0 && secondary == 0 && cloud == 0 {
-		o.logger.Info("  Policy: simple (disabled)")
+		o.logger.Info("  Retention policy: simple (disabled)")
 		return
 	}
 
@@ -330,7 +340,7 @@ func (o *Orchestrator) logGlobalRetentionPolicy() {
 		parts = append(parts, fmt.Sprintf("cloud=%d", cloud))
 	}
 
-	o.logger.Info("  Policy: simple (%s)", strings.Join(parts, ", "))
+	o.logger.Info("  Retention policy: simple (%s)", strings.Join(parts, ", "))
 }
 
 func (o *Orchestrator) SetForceNewAgeRecipient(force bool) {

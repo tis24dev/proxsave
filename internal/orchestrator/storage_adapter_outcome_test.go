@@ -1,0 +1,239 @@
+package orchestrator
+
+import (
+	"bytes"
+	"context"
+	"errors"
+	"strings"
+	"testing"
+
+	"github.com/tis24dev/proxsave/internal/config"
+	"github.com/tis24dev/proxsave/internal/logging"
+	"github.com/tis24dev/proxsave/internal/storage"
+	"github.com/tis24dev/proxsave/internal/types"
+)
+
+// outcomeReportingBackend is a fake backend that reports what its last Store left
+// undone and what its last retention pass could not do, as the real backends do.
+type outcomeReportingBackend struct {
+	*fakeStorageBackend
+	issues  []storage.StoreIssue
+	summary storage.RetentionSummary
+}
+
+func (b *outcomeReportingBackend) LastStoreIssues() []storage.StoreIssue { return b.issues }
+
+func (b *outcomeReportingBackend) LastRetentionSummary() storage.RetentionSummary {
+	return b.summary
+}
+
+func newOutcomeBackend(location storage.BackupLocation, critical bool) *outcomeReportingBackend {
+	return &outcomeReportingBackend{fakeStorageBackend: &fakeStorageBackend{
+		name:     string(location),
+		location: location,
+		enabled:  true,
+		critical: critical,
+		detectFilesystemFn: func(context.Context) (*storage.FilesystemInfo, error) {
+			return &storage.FilesystemInfo{Type: storage.FilesystemExt4}, nil
+		},
+		getStatsFn: func(context.Context) (*storage.StorageStats, error) {
+			return &storage.StorageStats{TotalBackups: 1}, nil
+		},
+	}}
+}
+
+func syncOutcome(t *testing.T, backend storage.Storage) (string, *BackupStats, error) {
+	t.Helper()
+	logger := logging.New(types.LogLevelInfo, false)
+	buf := &bytes.Buffer{}
+	logger.SetOutput(buf)
+	cfg := &config.Config{LocalRetentionDays: 2, SecondaryRetentionDays: 2, CloudRetentionDays: 2}
+	stats := sampleAdapterStats()
+	err := NewStorageAdapter(backend, logger, cfg).Sync(context.Background(), stats)
+	return buf.String(), stats, err
+}
+
+func requireLines(t *testing.T, out string, want ...string) {
+	t.Helper()
+	last := -1
+	for _, w := range want {
+		idx := strings.Index(out, w+"\n")
+		if idx < 0 {
+			t.Fatalf("missing line %q in:\n%s", w, out)
+		}
+		if idx < last {
+			t.Fatalf("line %q is out of order in:\n%s", w, out)
+		}
+		last = idx
+	}
+}
+
+func TestStoreIssuesCloseTheBlockWithTheirOwnOutcome(t *testing.T) {
+	backend := newOutcomeBackend(storage.LocationCloud, false)
+	backend.issues = []storage.StoreIssue{storage.StoreIssueBundleNotSent, storage.StoreIssueSidecarNotSaved, storage.StoreIssueChecksumNotVerified}
+
+	out, stats, err := syncOutcome(t, backend)
+	if err != nil {
+		t.Fatalf("Sync: %v", err)
+	}
+	requireLines(t, out,
+		"STEP     cloud",
+		"INFO     Storing backup...",
+		"WARNING  ⚠ cloud: backup saved, bundle not sent",
+		"WARNING  ⚠ cloud: backup saved, sidecar file not saved",
+		"WARNING  ⚠ cloud: backup saved, checksum not verified",
+		"INFO     Applying retention policy...",
+	)
+	if strings.Contains(out, "✓ cloud: backup saved") {
+		t.Fatalf("a store with issues must not also close green:\n%s", out)
+	}
+	// The backup is there: the issues are WARNING lines, the status does not move.
+	if stats.CloudStatus != "ok" {
+		t.Fatalf("CloudStatus = %q, want ok", stats.CloudStatus)
+	}
+}
+
+func TestPrimaryBlockSetsPermissions(t *testing.T) {
+	backend := newOutcomeBackend(storage.LocationPrimary, true)
+	out, _, err := syncOutcome(t, backend)
+	if err != nil {
+		t.Fatalf("Sync: %v", err)
+	}
+	requireLines(t, out,
+		"STEP     primary",
+		"INFO     Setting backup permissions...",
+		"INFO     ✓ primary: permissions set",
+		"INFO     Applying retention policy...",
+	)
+	if strings.Contains(out, "Storing backup...") || strings.Contains(out, "backup saved") {
+		t.Fatalf("the Primary stores nothing at step [6]:\n%s", out)
+	}
+
+	backend.issues = []storage.StoreIssue{storage.StoreIssuePermissionsNotSet}
+	out, stats, err := syncOutcome(t, backend)
+	if err != nil {
+		t.Fatalf("Sync: %v", err)
+	}
+	requireLines(t, out, "INFO     Setting backup permissions...", "WARNING  ⚠ primary: permissions not set")
+	if strings.Contains(out, "permissions set\n") {
+		t.Fatalf("failed permissions must not also close green:\n%s", out)
+	}
+	if stats.LocalStatus != "ok" {
+		t.Fatalf("LocalStatus = %q, want ok: the run continues", stats.LocalStatus)
+	}
+}
+
+func TestPrimaryBackupNotAccessibleIsTheOnlyErrorLine(t *testing.T) {
+	backend := newOutcomeBackend(storage.LocationPrimary, true)
+	backend.storeFn = func(context.Context, string, *types.BackupMetadata) error {
+		return &storage.StorageError{Location: storage.LocationPrimary, Operation: "store", Path: "/tmp/archive.tar",
+			Err: errors.New("backup file could not be read: permission denied"), IsCritical: true}
+	}
+	out, _, err := syncOutcome(t, backend)
+	if err == nil {
+		t.Fatalf("a critical store failure must stop the run")
+	}
+	if !OutcomeLogged(err) {
+		t.Fatalf("the error must say its outcome line is already on screen: %v", err)
+	}
+	requireLines(t, out, "INFO     Setting backup permissions...", "ERROR    ✗ primary: backup not accessible")
+	if strings.Count(out, "ERROR") != 1 {
+		t.Fatalf("want exactly one ERROR line:\n%s", out)
+	}
+
+	// Any other critical failure keeps today's report by the caller.
+	backend.storeFn = func(context.Context, string, *types.BackupMetadata) error { return context.DeadlineExceeded }
+	out, _, err = syncOutcome(t, backend)
+	if err == nil || OutcomeLogged(err) {
+		t.Fatalf("a non-store failure must not claim a logged outcome: %v", err)
+	}
+	if strings.Contains(out, "backup not accessible") {
+		t.Fatalf("a non-store failure must not print the not-accessible outcome:\n%s", out)
+	}
+}
+
+func TestRetentionOutcomesAreAutonomous(t *testing.T) {
+	cases := []struct {
+		name    string
+		summary storage.RetentionSummary
+		want    []string
+		absent  []string
+	}{
+		{
+			name:    "nothing to delete",
+			summary: storage.RetentionSummary{PassCompleted: true},
+			want:    []string{"INFO     ✓ Nothing to delete"},
+			absent:  []string{"Backups deleted", "Logs deleted"},
+		},
+		{
+			name:    "deleted with logs",
+			summary: storage.RetentionSummary{Planned: 2, BackupsDeleted: 2, LogsDeleted: 2},
+			want:    []string{"INFO     ✓ Backups deleted: 2", "INFO     ✓ Logs deleted: 2"},
+			absent:  []string{"Nothing to delete"},
+		},
+		{
+			name:    "a backup not deleted",
+			summary: storage.RetentionSummary{Planned: 3, BackupsDeleted: 2, NotDeleted: 1, LogsDeleted: 2},
+			want:    []string{"WARNING  ⚠ Backups deleted: 2 of 3", "INFO     ✓ Logs deleted: 2"},
+		},
+		{
+			name:    "files left behind",
+			summary: storage.RetentionSummary{Planned: 2, BackupsDeleted: 2, LeftBehind: 1},
+			want:    []string{"WARNING  ⚠ Backups deleted: 2, files left behind"},
+			absent:  []string{"Logs deleted"},
+		},
+		{
+			name:    "skipped backups",
+			summary: storage.RetentionSummary{Planned: 1, BackupsDeleted: 1, Skipped: 2, LogsDeleted: 1},
+			want:    []string{"WARNING  ⚠ Backups deleted: 1, 2 skipped", "INFO     ✓ Logs deleted: 1"},
+		},
+		{
+			name:    "skipped with nothing to delete",
+			summary: storage.RetentionSummary{Skipped: 1},
+			want:    []string{"WARNING  ⚠ Backups deleted: 0, 1 skipped"},
+			absent:  []string{"Nothing to delete"},
+		},
+		{
+			name:    "a log not deleted",
+			summary: storage.RetentionSummary{Planned: 2, BackupsDeleted: 2, LogsDeleted: 1, LogsNotDeleted: 1},
+			want:    []string{"INFO     ✓ Backups deleted: 2", "WARNING  ⚠ Logs deleted: 1 of 2"},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			backend := newOutcomeBackend(storage.LocationSecondary, false)
+			backend.summary = tc.summary
+			backend.applyRetentionFn = func(context.Context, storage.RetentionConfig) (int, error) {
+				return tc.summary.BackupsDeleted, nil
+			}
+			out, stats, err := syncOutcome(t, backend)
+			if err != nil {
+				t.Fatalf("Sync: %v", err)
+			}
+			requireLines(t, out, append([]string{"INFO     Applying retention policy..."}, tc.want...)...)
+			for _, a := range tc.absent {
+				if strings.Contains(out, a) {
+					t.Fatalf("unexpected %q in:\n%s", a, out)
+				}
+			}
+			// The outcomes are lines, not a status: a retention pass that ran keeps "ok".
+			if stats.SecondaryStatus != "ok" {
+				t.Fatalf("SecondaryStatus = %q, want ok", stats.SecondaryStatus)
+			}
+		})
+	}
+}
+
+func TestStepSixCountsOnlyTheCopies(t *testing.T) {
+	o := &Orchestrator{}
+	for _, loc := range []storage.BackupLocation{storage.LocationPrimary, storage.LocationSecondary, storage.LocationCloud} {
+		o.storageTargets = append(o.storageTargets, NewStorageAdapter(newOutcomeBackend(loc, loc == storage.LocationPrimary), nil, &config.Config{}))
+	}
+	if got := o.storageCopyTargetCount(); got != 2 {
+		t.Fatalf("copies = %d, want 2: the Primary is not a copy", got)
+	}
+	o.storageTargets = o.storageTargets[:1]
+	if got := o.storageCopyTargetCount(); got != 0 {
+		t.Fatalf("copies with the Primary only = %d, want 0", got)
+	}
+}

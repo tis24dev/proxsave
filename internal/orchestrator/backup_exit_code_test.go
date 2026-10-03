@@ -278,14 +278,17 @@ func TestBackupExitCodeOnCleanPVEHost(t *testing.T) {
 			wantExit: types.ExitSuccess.Int(), wantWarnings: 0,
 			wantLocal: "ok", wantSecondary: "ok", wantCloud: "ok",
 		},
+		// One WARNING per failed copy: the "✗ <Name>: backup not saved" outcome. The
+		// store error and the closing "operations completed with errors" line used to
+		// repeat it twice more; the exit code is the same either way.
 		{
 			name: "secondary_failed", failSecond: true,
-			wantExit: types.ExitGenericError.Int(), wantWarnings: 3,
+			wantExit: types.ExitGenericError.Int(), wantWarnings: 1,
 			wantLocal: "ok", wantSecondary: "error", wantCloud: "ok",
 		},
 		{
 			name: "cloud_failed", failCloud: true,
-			wantExit: types.ExitGenericError.Int(), wantWarnings: 3,
+			wantExit: types.ExitGenericError.Int(), wantWarnings: 1,
 			wantLocal: "ok", wantSecondary: "ok", wantCloud: "error",
 		},
 		{

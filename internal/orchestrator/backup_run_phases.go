@@ -161,8 +161,15 @@ func (o *Orchestrator) finalizeFailedBackupStats(run *backupRunContext, runErr e
 	// the log after that line is written and overwrites this count, so it is never
 	// counted twice. Without one nothing re-reads, and this count is what they show.
 	// A canceled run is reported with a WARNING, not an ERROR, so it adds nothing;
-	// the test is the caller's own (ctx.Err() == context.Canceled).
-	if run.ctx == nil || run.ctx.Err() != context.Canceled {
+	// the test is the caller's own (ctx.Err() == context.Canceled). Neither does a
+	// failure whose ERROR outcome the storage step already wrote ("✗ Local Storage:
+	// backup not accessible"): that line is in the log parsed above, and the caller
+	// writes its own report of it at DEBUG (OutcomeLogged).
+	switch {
+	case run.ctx != nil && run.ctx.Err() == context.Canceled:
+	case OutcomeLogged(runErr):
+		o.logger.Debug("Stopping error already reported by its outcome line; ErrorCount=%d", stats.ErrorCount)
+	default:
 		stats.ErrorCount++
 	}
 	stats.ExitCode = backupFailureExitCode(runErr)
@@ -479,6 +486,10 @@ func (o *Orchestrator) finalizeDryRunIssueStats(stats *BackupStats) {
 }
 
 func (o *Orchestrator) dispatchBackupArtifacts(run *backupRunContext) error {
+	// The disabled destinations close step [6] with their SKIP line, after the
+	// enabled ones, in every branch below: the dry run included.
+	defer o.logDisabledStorageTargets(run.stats)
+
 	if len(o.storageTargets) == 0 {
 		fmt.Println()
 		o.logStep(6, "No storage targets registered - skipping")
@@ -487,7 +498,11 @@ func (o *Orchestrator) dispatchBackupArtifacts(run *backupRunContext) error {
 		o.logStep(6, "Storage dispatch skipped (dry run mode)")
 	} else {
 		fmt.Println()
-		o.logStep(6, "Dispatching archive to %d storage target(s)", len(o.storageTargets))
+		// The count is the copies: the Primary already holds the archive, step [6]
+		// only sets its permissions and applies its retention.
+		copies := o.storageCopyTargetCount()
+		o.logger.Debug("Storage targets registered: %d, copies: %d", len(o.storageTargets), copies)
+		o.logStep(6, "Dispatching archive to %d storage target(s)", copies)
 		o.logGlobalRetentionPolicy()
 	}
 
@@ -497,4 +512,38 @@ func (o *Orchestrator) dispatchBackupArtifacts(run *backupRunContext) error {
 
 	o.logger.Debug("Dispatching archive to %d storage targets", len(o.storageTargets))
 	return o.syncStorageTargets(run.ctx, run.stats)
+}
+
+// storageCopyTarget is implemented by a storage target that can say whether it
+// receives a copy of the archive (an enabled destination other than the Primary).
+type storageCopyTarget interface {
+	receivesCopy() bool
+}
+
+// storageCopyTargetCount counts the registered targets that receive a copy. A target
+// that cannot say is counted: only the Primary is excluded, and it is a StorageAdapter.
+func (o *Orchestrator) storageCopyTargetCount() int {
+	copies := 0
+	for _, target := range o.storageTargets {
+		if c, ok := target.(storageCopyTarget); ok && !c.receivesCopy() {
+			continue
+		}
+		copies++
+	}
+	return copies
+}
+
+// logDisabledStorageTargets prints the SKIP line of each disabled destination at the
+// end of step [6].
+func (o *Orchestrator) logDisabledStorageTargets(stats *BackupStats) {
+	if o == nil || o.logger == nil || stats == nil {
+		return
+	}
+	o.logger.Debug("Disabled storage targets: secondary=%v cloud=%v", !stats.SecondaryEnabled, !stats.CloudEnabled)
+	if !stats.SecondaryEnabled {
+		o.logger.Skip("Secondary Storage: disabled")
+	}
+	if !stats.CloudEnabled {
+		o.logger.Skip("Cloud Storage: disabled")
+	}
 }

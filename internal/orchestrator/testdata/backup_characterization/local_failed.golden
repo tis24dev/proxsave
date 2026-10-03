@@ -181,14 +181,21 @@ charhost-backup-20260102-030405.tar.bundle.tar:
 [<TIME>] DEBUG    Bundle ready: charhost-backup-20260102-030405.tar.bundle.tar
 [<TIME>] INFO     ✓ Archive created and verified
 
-[<TIME>] STEP     [6] Dispatching archive to 3 storage target(s)
-[<TIME>] INFO       Policy: simple (local=7, secondary=14, cloud=30)
+[<TIME>] DEBUG    Storage targets registered: 3, copies: 2
+[<TIME>] STEP     [6] Dispatching archive to 2 storage target(s)
+[<TIME>] DEBUG    Retention policy: local=7 secondary=14 (enabled=true) cloud=30 (enabled=true)
+[<TIME>] INFO       Retention policy: simple (local=7, secondary=14, cloud=30)
 [<TIME>] DEBUG    Dispatching archive to 3 storage targets
 [<TIME>] DEBUG    Starting Local Storage operations...
-[<TIME>] STEP     Local Storage: Storing backup
+[<TIME>] STEP     Local Storage
+[<TIME>] INFO     Setting backup permissions...
+[<TIME>] DEBUG    primary storage store operation failed for <ROOT>/backup: injected failure
+[<TIME>] ERROR    ✗ Local Storage: backup not accessible
+[<TIME>] DEBUG    Disabled storage targets: secondary=false cloud=false
 [<TIME>] DEBUG    Removed temporary workspace <ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM>
 [<TIME>] DEBUG    Parsing log file for error/warning counts after failure: <ROOT>/log/backup-charhost-20260102-030405.log
-[<TIME>] DEBUG    Found 0 errors and 3 warnings in log file (failure path)
+[<TIME>] DEBUG    Found 1 errors and 3 warnings in log file (failure path)
+[<TIME>] DEBUG    Stopping error already reported by its outcome line; ErrorCount=1
 [<TIME>] DEBUG    Local Storage: run failed before this location's statistics were read; reporting the startup figures (backups=8, owned=0, scoped=false)
 [<TIME>] DEBUG    Secondary Storage: run failed before this location's statistics were read; reporting the startup figures (backups=5, owned=0, scoped=false)
 [<TIME>] DEBUG    Cloud Storage (rclone): run failed before this location's statistics were read; reporting the startup figures (backups=4, owned=0, scoped=false)
@@ -341,14 +348,21 @@ charhost-backup-20260102-030405.tar.bundle.tar:
 [<TIME>] DEBUG    Removed raw tar/checksum/metadata after bundling
 [<TIME>] DEBUG    Bundle ready: charhost-backup-20260102-030405.tar.bundle.tar
 [<TIME>] INFO     ✓ Archive created and verified
-[<TIME>] STEP     [6] Dispatching archive to 3 storage target(s)
-[<TIME>] INFO       Policy: simple (local=7, secondary=14, cloud=30)
+[<TIME>] DEBUG    Storage targets registered: 3, copies: 2
+[<TIME>] STEP     [6] Dispatching archive to 2 storage target(s)
+[<TIME>] DEBUG    Retention policy: local=7 secondary=14 (enabled=true) cloud=30 (enabled=true)
+[<TIME>] INFO       Retention policy: simple (local=7, secondary=14, cloud=30)
 [<TIME>] DEBUG    Dispatching archive to 3 storage targets
 [<TIME>] DEBUG    Starting Local Storage operations...
-[<TIME>] STEP     Local Storage: Storing backup
+[<TIME>] STEP     Local Storage
+[<TIME>] INFO     Setting backup permissions...
+[<TIME>] DEBUG    primary storage store operation failed for <ROOT>/backup: injected failure
+[<TIME>] ERROR    ✗ Local Storage: backup not accessible
+[<TIME>] DEBUG    Disabled storage targets: secondary=false cloud=false
 [<TIME>] DEBUG    Removed temporary workspace <ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM>
 [<TIME>] DEBUG    Parsing log file for error/warning counts after failure: <ROOT>/log/backup-charhost-20260102-030405.log
-[<TIME>] DEBUG    Found 0 errors and 3 warnings in log file (failure path)
+[<TIME>] DEBUG    Found 1 errors and 3 warnings in log file (failure path)
+[<TIME>] DEBUG    Stopping error already reported by its outcome line; ErrorCount=1
 [<TIME>] DEBUG    Local Storage: run failed before this location's statistics were read; reporting the startup figures (backups=8, owned=0, scoped=false)
 [<TIME>] DEBUG    Secondary Storage: run failed before this location's statistics were read; reporting the startup figures (backups=5, owned=0, scoped=false)
 [<TIME>] DEBUG    Cloud Storage (rclone): run failed before this location's statistics were read; reporting the startup figures (backups=4, owned=0, scoped=false)

@@ -69,6 +69,18 @@ func ResolveBackupOwner(userName, groupName string) (int, int, error) {
 // resolvable: that user and group and backup.SharedArtifactFilePerm. Anything else
 // keeps the default; the permissions pass at startup already warns about an empty or
 // unresolvable name.
+// backupFileOwnershipLabel is what backupFileOwnership applies, as a fact line shows
+// it: the mode in octal and the owner and group by name ("0600", "root", "root" by
+// default, BACKUP_USER and BACKUP_GROUP when SET_BACKUP_PERMISSIONS resolves them).
+func backupFileOwnershipLabel(cfg *config.Config, logger *logging.Logger) (mode, owner, group string) {
+	uid, gid, perm := backupFileOwnership(cfg, logger)
+	owner, group = "root", "root"
+	if (uid != 0 || gid != 0) && cfg != nil {
+		owner, group = strings.TrimSpace(cfg.BackupUser), strings.TrimSpace(cfg.BackupGroup)
+	}
+	return fmt.Sprintf("%04o", perm.Perm()), owner, group
+}
+
 func backupFileOwnership(cfg *config.Config, logger *logging.Logger) (int, int, os.FileMode) {
 	if cfg == nil || !cfg.SetBackupPermissions {
 		return 0, 0, backup.ArtifactFilePerm

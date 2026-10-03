@@ -182,12 +182,13 @@ charhost-backup-20260102-030405.tar.bundle.tar:
 
 [<TIME>] STEP     [6] No storage targets registered - skipping
 [<TIME>] DEBUG    Dispatching archive to 0 storage targets
+[<TIME>] DEBUG    Disabled storage targets: secondary=false cloud=false
 
 [<TIME>] STEP     [7] Notifications - dispatching channels
 [<TIME>] DEBUG    notifications dispatch: no init decision requested=always fallback=always
 [<TIME>] INFO     ✓ Notification filter: applied
 [<TIME>] DEBUG    notifications dispatch: run outcome=warning warnings=3 errors=0
-[<TIME>] INFO     Notifications: sending
+[<TIME>] INFO     Notifications: sending...
 [<TIME>] SKIP     Email: disabled
 [<TIME>] SKIP     Telegram: disabled
 [<TIME>] SKIP     Gotify: disabled
@@ -199,9 +200,11 @@ charhost-backup-20260102-030405.tar.bundle.tar:
 [<TIME>] DEBUG    Log file closed successfully
 [<TIME>] INFO     Dispatching log file: backup-charhost-20260102-030405.log
 [<TIME>] DEBUG    Copying log to secondary: <ROOT>/secondary-log/backup-charhost-20260102-030405.log
-[<TIME>] INFO     ✓ Log copied to secondary: <ROOT>/secondary-log/backup-charhost-20260102-030405.log
+[<TIME>] INFO       Secondary: <ROOT>/secondary-log/backup-charhost-20260102-030405.log
+[<TIME>] INFO     ✓ Log copied to secondary
+[<TIME>] INFO       Cloud: charremote:<ROOT>/cloud-log/backup-charhost-20260102-030405.log
 [<TIME>] DEBUG    Copying log to cloud: charremote:<ROOT>/cloud-log/backup-charhost-20260102-030405.log
-[<TIME>] INFO     ✓ Log copied to cloud: charremote:<ROOT>/cloud-log/backup-charhost-20260102-030405.log
+[<TIME>] INFO     ✓ Log copied to cloud
 
 [<TIME>] DEBUG    Go backup completed in 0.0s
 [<TIME>] DEBUG    Removed temporary workspace <ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM>
@@ -356,11 +359,12 @@ charhost-backup-20260102-030405.tar.bundle.tar:
 [<TIME>] INFO     ✓ Archive created and verified
 [<TIME>] STEP     [6] No storage targets registered - skipping
 [<TIME>] DEBUG    Dispatching archive to 0 storage targets
+[<TIME>] DEBUG    Disabled storage targets: secondary=false cloud=false
 [<TIME>] STEP     [7] Notifications - dispatching channels
 [<TIME>] DEBUG    notifications dispatch: no init decision requested=always fallback=always
 [<TIME>] INFO     ✓ Notification filter: applied
 [<TIME>] DEBUG    notifications dispatch: run outcome=warning warnings=3 errors=0
-[<TIME>] INFO     Notifications: sending
+[<TIME>] INFO     Notifications: sending...
 [<TIME>] SKIP     Email: disabled
 [<TIME>] SKIP     Telegram: disabled
 [<TIME>] SKIP     Gotify: disabled

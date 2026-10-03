@@ -196,49 +196,63 @@ charhost-backup-20260102-030405.tar.age.bundle.tar:
 [<TIME>] DEBUG    Bundle ready: charhost-backup-20260102-030405.tar.age.bundle.tar
 [<TIME>] INFO     ✓ Archive created and verified
 
-[<TIME>] STEP     [6] Dispatching archive to 3 storage target(s)
-[<TIME>] INFO       Policy: simple (local=7, secondary=14, cloud=30)
+[<TIME>] DEBUG    Storage targets registered: 3, copies: 2
+[<TIME>] STEP     [6] Dispatching archive to 2 storage target(s)
+[<TIME>] DEBUG    Retention policy: local=7 secondary=14 (enabled=true) cloud=30 (enabled=true)
+[<TIME>] INFO       Retention policy: simple (local=7, secondary=14, cloud=30)
 [<TIME>] DEBUG    Dispatching archive to 3 storage targets
 [<TIME>] DEBUG    Starting Local Storage operations...
-[<TIME>] STEP     Local Storage: Storing backup
-[<TIME>] INFO     ✓ Local Storage: Backup stored successfully
-[<TIME>] INFO     Local Storage: Applying retention policy...
+[<TIME>] STEP     Local Storage
+[<TIME>] INFO     Setting backup permissions...
+[<TIME>] DEBUG    Local Storage: store issues=[]
+[<TIME>] INFO     ✓ Local Storage: permissions set
+[<TIME>] INFO     Applying retention policy...
 [<TIME>] DEBUG      Policy: simple (keep 7 newest)
 [<TIME>] DEBUG    Local Storage: Current backups detected: 0
-[<TIME>] INFO     ✓ Local Storage: Deleted 1 old backups (logs deleted: 1)
+[<TIME>] DEBUG    Local Storage: retention outcome planned=1 deleted=1 not_deleted=0 left_behind=0 skipped=0 logs_deleted=1 logs_not_deleted=0
+[<TIME>] INFO     ✓ Backups deleted: 1
+[<TIME>] INFO     ✓ Logs deleted: 1
 [<TIME>] INFO     Local Storage statistics:
 [<TIME>] INFO       Total backups: 8
 [<TIME>] INFO       Total size: 8.0 MiB
-[<TIME>] INFO       Filesystem: ext4
-[<TIME>] INFO     ✓ Local Storage operations completed
+[<TIME>] DEBUG    Local Storage: filesystem ext4
+[<TIME>] DEBUG    Local Storage operations completed (errors=false warnings=false)
 [<TIME>] DEBUG    Starting Secondary Storage operations...
-[<TIME>] STEP     Secondary Storage: Storing backup
-[<TIME>] INFO     ✓ Secondary Storage: Backup stored successfully
-[<TIME>] INFO     Secondary Storage: Applying retention policy...
+[<TIME>] STEP     Secondary Storage
+[<TIME>] INFO     Storing backup...
+[<TIME>] DEBUG    Secondary Storage: store issues=[]
+[<TIME>] INFO     ✓ Secondary Storage: backup saved
+[<TIME>] INFO     Applying retention policy...
 [<TIME>] DEBUG      Policy: simple (keep 14 newest)
 [<TIME>] DEBUG    Secondary Storage: Current backups detected: 0
+[<TIME>] DEBUG    Secondary Storage: retention outcome planned=0 deleted=0 not_deleted=0 left_behind=0 skipped=0 logs_deleted=0 logs_not_deleted=0
+[<TIME>] INFO     ✓ Nothing to delete
 [<TIME>] INFO     Secondary Storage statistics:
 [<TIME>] INFO       Total backups: 5
 [<TIME>] INFO       Total size: 5.0 MiB
-[<TIME>] INFO       Filesystem: nfs4
-[<TIME>] INFO     ✓ Secondary Storage operations completed
+[<TIME>] DEBUG    Secondary Storage: filesystem nfs4
+[<TIME>] DEBUG    Secondary Storage operations completed (errors=false warnings=false)
 [<TIME>] DEBUG    Starting Cloud Storage (rclone) operations...
-[<TIME>] STEP     Cloud Storage (rclone): Storing backup
-[<TIME>] INFO     ✓ Cloud Storage (rclone): Backup stored successfully
-[<TIME>] INFO     Cloud Storage (rclone): Applying retention policy...
+[<TIME>] STEP     Cloud Storage (rclone)
+[<TIME>] INFO     Storing backup...
+[<TIME>] DEBUG    Cloud Storage (rclone): store issues=[]
+[<TIME>] INFO     ✓ Cloud Storage (rclone): backup saved
+[<TIME>] INFO     Applying retention policy...
 [<TIME>] DEBUG      Policy: simple (keep 30 newest)
-[<TIME>] INFO     ✓ Cloud Storage (rclone): Deleted 2 old backups
+[<TIME>] DEBUG    Cloud Storage (rclone): retention outcome planned=2 deleted=2 not_deleted=0 left_behind=0 skipped=0 logs_deleted=0 logs_not_deleted=0
+[<TIME>] INFO     ✓ Backups deleted: 2
 [<TIME>] INFO     Cloud Storage (rclone) statistics:
 [<TIME>] INFO       Total backups: 4
 [<TIME>] INFO       Total size: 4.0 MiB
-[<TIME>] INFO       Filesystem: rclone-charremote
-[<TIME>] INFO     ✓ Cloud Storage (rclone) operations completed
+[<TIME>] DEBUG    Cloud Storage (rclone): filesystem rclone-charremote
+[<TIME>] DEBUG    Cloud Storage (rclone) operations completed (errors=false warnings=false)
+[<TIME>] DEBUG    Disabled storage targets: secondary=false cloud=false
 
 [<TIME>] STEP     [7] Notifications - dispatching channels
 [<TIME>] DEBUG    notifications dispatch: no init decision requested=always fallback=always
 [<TIME>] INFO     ✓ Notification filter: applied
 [<TIME>] DEBUG    notifications dispatch: run outcome=warning warnings=3 errors=0
-[<TIME>] INFO     Notifications: sending
+[<TIME>] INFO     Notifications: sending...
 [<TIME>] SKIP     Email: disabled
 [<TIME>] SKIP     Telegram: disabled
 [<TIME>] SKIP     Gotify: disabled
@@ -250,9 +264,11 @@ charhost-backup-20260102-030405.tar.age.bundle.tar:
 [<TIME>] DEBUG    Log file closed successfully
 [<TIME>] INFO     Dispatching log file: backup-charhost-20260102-030405.log
 [<TIME>] DEBUG    Copying log to secondary: <ROOT>/secondary-log/backup-charhost-20260102-030405.log
-[<TIME>] INFO     ✓ Log copied to secondary: <ROOT>/secondary-log/backup-charhost-20260102-030405.log
+[<TIME>] INFO       Secondary: <ROOT>/secondary-log/backup-charhost-20260102-030405.log
+[<TIME>] INFO     ✓ Log copied to secondary
+[<TIME>] INFO       Cloud: charremote:<ROOT>/cloud-log/backup-charhost-20260102-030405.log
 [<TIME>] DEBUG    Copying log to cloud: charremote:<ROOT>/cloud-log/backup-charhost-20260102-030405.log
-[<TIME>] INFO     ✓ Log copied to cloud: charremote:<ROOT>/cloud-log/backup-charhost-20260102-030405.log
+[<TIME>] INFO     ✓ Log copied to cloud
 
 [<TIME>] DEBUG    Go backup completed in 0.0s
 [<TIME>] DEBUG    Removed temporary workspace <ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM>
@@ -404,48 +420,62 @@ charhost-backup-20260102-030405.tar.age.bundle.tar:
 [<TIME>] DEBUG    Removed raw tar/checksum/metadata after bundling
 [<TIME>] DEBUG    Bundle ready: charhost-backup-20260102-030405.tar.age.bundle.tar
 [<TIME>] INFO     ✓ Archive created and verified
-[<TIME>] STEP     [6] Dispatching archive to 3 storage target(s)
-[<TIME>] INFO       Policy: simple (local=7, secondary=14, cloud=30)
+[<TIME>] DEBUG    Storage targets registered: 3, copies: 2
+[<TIME>] STEP     [6] Dispatching archive to 2 storage target(s)
+[<TIME>] DEBUG    Retention policy: local=7 secondary=14 (enabled=true) cloud=30 (enabled=true)
+[<TIME>] INFO       Retention policy: simple (local=7, secondary=14, cloud=30)
 [<TIME>] DEBUG    Dispatching archive to 3 storage targets
 [<TIME>] DEBUG    Starting Local Storage operations...
-[<TIME>] STEP     Local Storage: Storing backup
-[<TIME>] INFO     ✓ Local Storage: Backup stored successfully
-[<TIME>] INFO     Local Storage: Applying retention policy...
+[<TIME>] STEP     Local Storage
+[<TIME>] INFO     Setting backup permissions...
+[<TIME>] DEBUG    Local Storage: store issues=[]
+[<TIME>] INFO     ✓ Local Storage: permissions set
+[<TIME>] INFO     Applying retention policy...
 [<TIME>] DEBUG      Policy: simple (keep 7 newest)
 [<TIME>] DEBUG    Local Storage: Current backups detected: 0
-[<TIME>] INFO     ✓ Local Storage: Deleted 1 old backups (logs deleted: 1)
+[<TIME>] DEBUG    Local Storage: retention outcome planned=1 deleted=1 not_deleted=0 left_behind=0 skipped=0 logs_deleted=1 logs_not_deleted=0
+[<TIME>] INFO     ✓ Backups deleted: 1
+[<TIME>] INFO     ✓ Logs deleted: 1
 [<TIME>] INFO     Local Storage statistics:
 [<TIME>] INFO       Total backups: 8
 [<TIME>] INFO       Total size: 8.0 MiB
-[<TIME>] INFO       Filesystem: ext4
-[<TIME>] INFO     ✓ Local Storage operations completed
+[<TIME>] DEBUG    Local Storage: filesystem ext4
+[<TIME>] DEBUG    Local Storage operations completed (errors=false warnings=false)
 [<TIME>] DEBUG    Starting Secondary Storage operations...
-[<TIME>] STEP     Secondary Storage: Storing backup
-[<TIME>] INFO     ✓ Secondary Storage: Backup stored successfully
-[<TIME>] INFO     Secondary Storage: Applying retention policy...
+[<TIME>] STEP     Secondary Storage
+[<TIME>] INFO     Storing backup...
+[<TIME>] DEBUG    Secondary Storage: store issues=[]
+[<TIME>] INFO     ✓ Secondary Storage: backup saved
+[<TIME>] INFO     Applying retention policy...
 [<TIME>] DEBUG      Policy: simple (keep 14 newest)
 [<TIME>] DEBUG    Secondary Storage: Current backups detected: 0
+[<TIME>] DEBUG    Secondary Storage: retention outcome planned=0 deleted=0 not_deleted=0 left_behind=0 skipped=0 logs_deleted=0 logs_not_deleted=0
+[<TIME>] INFO     ✓ Nothing to delete
 [<TIME>] INFO     Secondary Storage statistics:
 [<TIME>] INFO       Total backups: 5
 [<TIME>] INFO       Total size: 5.0 MiB
-[<TIME>] INFO       Filesystem: nfs4
-[<TIME>] INFO     ✓ Secondary Storage operations completed
+[<TIME>] DEBUG    Secondary Storage: filesystem nfs4
+[<TIME>] DEBUG    Secondary Storage operations completed (errors=false warnings=false)
 [<TIME>] DEBUG    Starting Cloud Storage (rclone) operations...
-[<TIME>] STEP     Cloud Storage (rclone): Storing backup
-[<TIME>] INFO     ✓ Cloud Storage (rclone): Backup stored successfully
-[<TIME>] INFO     Cloud Storage (rclone): Applying retention policy...
+[<TIME>] STEP     Cloud Storage (rclone)
+[<TIME>] INFO     Storing backup...
+[<TIME>] DEBUG    Cloud Storage (rclone): store issues=[]
+[<TIME>] INFO     ✓ Cloud Storage (rclone): backup saved
+[<TIME>] INFO     Applying retention policy...
 [<TIME>] DEBUG      Policy: simple (keep 30 newest)
-[<TIME>] INFO     ✓ Cloud Storage (rclone): Deleted 2 old backups
+[<TIME>] DEBUG    Cloud Storage (rclone): retention outcome planned=2 deleted=2 not_deleted=0 left_behind=0 skipped=0 logs_deleted=0 logs_not_deleted=0
+[<TIME>] INFO     ✓ Backups deleted: 2
 [<TIME>] INFO     Cloud Storage (rclone) statistics:
 [<TIME>] INFO       Total backups: 4
 [<TIME>] INFO       Total size: 4.0 MiB
-[<TIME>] INFO       Filesystem: rclone-charremote
-[<TIME>] INFO     ✓ Cloud Storage (rclone) operations completed
+[<TIME>] DEBUG    Cloud Storage (rclone): filesystem rclone-charremote
+[<TIME>] DEBUG    Cloud Storage (rclone) operations completed (errors=false warnings=false)
+[<TIME>] DEBUG    Disabled storage targets: secondary=false cloud=false
 [<TIME>] STEP     [7] Notifications - dispatching channels
 [<TIME>] DEBUG    notifications dispatch: no init decision requested=always fallback=always
 [<TIME>] INFO     ✓ Notification filter: applied
 [<TIME>] DEBUG    notifications dispatch: run outcome=warning warnings=3 errors=0
-[<TIME>] INFO     Notifications: sending
+[<TIME>] INFO     Notifications: sending...
 [<TIME>] SKIP     Email: disabled
 [<TIME>] SKIP     Telegram: disabled
 [<TIME>] SKIP     Gotify: disabled

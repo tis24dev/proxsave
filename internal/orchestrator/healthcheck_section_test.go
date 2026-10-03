@@ -18,10 +18,11 @@ import (
 var hcNow = time.Unix(1_700_000_000, 0)
 
 // checkGlyph / warnGlyph mirror the exact glyphs the sibling notification lines use
-// (notification_adapter.go logTelegramOutcome): a plain check mark and a warning sign.
+// (notification_adapter.go logTelegramOutcome): a plain check mark and a plain warning
+// sign, without the emoji variation selector the section used to append ("⚠️").
 const (
 	checkGlyph = "✓"
-	warnGlyph  = "⚠️"
+	warnGlyph  = "⚠ "
 )
 
 // newHCTestChannel builds a HealthchecksChannel with NIL seams
@@ -209,10 +210,11 @@ func TestHealthchecksSectionTransmitFailed(t *testing.T) {
 		t.Fatalf("status=%q want transmit-failed", stats.HealthcheckStatus)
 	}
 	out := buf.String()
-	if !strings.Contains(out, warnGlyph) || !strings.Contains(out, "not transmitted") {
+	if !strings.Contains(out, "WARNING  ⚠ Healthchecks: last outcome not transmitted\n") {
 		t.Fatalf("want warning glyph + failed line, out=%q", out)
 	}
-	if !strings.Contains(out, "connection refused") {
+	// The cause is a fact line before the outcome, not appended to it.
+	if !strings.Contains(out, "INFO       Transmission: healthcheck finish: connection refused\n") {
 		t.Fatalf("want the redacted err text, out=%q", out)
 	}
 	if strings.Contains(out, checkGlyph) {
@@ -248,10 +250,11 @@ func TestHealthchecksSectionUnreachable(t *testing.T) {
 		t.Fatalf("status=%q want unreachable", stats.HealthcheckStatus)
 	}
 	out := buf.String()
-	if !strings.Contains(out, warnGlyph) || !strings.Contains(out, "monitor unreachable") {
+	if !strings.Contains(out, "WARNING  ⚠ Healthchecks: monitor unreachable\n") {
 		t.Fatalf("want warning glyph + unreachable line, out=%q", out)
 	}
-	if !strings.Contains(out, "connection refused") {
+	// The cause is a fact line before the outcome, not appended to it.
+	if !strings.Contains(out, "INFO       Monitor: healthcheck alive: connection refused\n") {
 		t.Fatalf("want the redacted err text surfaced, out=%q", out)
 	}
 	if strings.Contains(out, checkGlyph) {

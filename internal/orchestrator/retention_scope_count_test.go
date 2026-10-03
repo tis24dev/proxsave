@@ -141,7 +141,7 @@ func (s *deletingScopeReportingStub) ApplyRetention(context.Context, storage.Ret
 // BackupsDeleted at zero is a backend that scoped the pass without counting its own
 // removals, and the raw return value is then the only number there is. Reporting the
 // zero instead would tell an operator nothing was removed on the very run that removed
-// something. The second is the log suffix, which is the only place deleted LOGS are
+// something. The second is the logs outcome, which is the only place deleted LOGS are
 // ever surfaced: without it a retention pass that pruned logs reports as if it had not.
 func TestSyncReportsRetentionsOwnCountsWhenItDeleted(t *testing.T) {
 	backend := &deletingScopeReportingStub{
@@ -171,10 +171,10 @@ func TestSyncReportsRetentionsOwnCountsWhenItDeleted(t *testing.T) {
 		t.Fatalf("LocalBackups = %d, want 5: deleting something must not cost the scoped count", stats.LocalBackups)
 	}
 	line := buf.String()
-	if !strings.Contains(line, "Deleted 3 old backups") {
+	if !strings.Contains(line, "INFO     ✓ Backups deleted: 3\n") {
 		t.Fatalf("log = %q, want the raw deleted count 3: the summary left BackupsDeleted at zero, and reporting that would say nothing was removed on a run that removed three", line)
 	}
-	if !strings.Contains(line, "(logs deleted: 2)") {
-		t.Fatalf("log = %q, want the logs-deleted suffix: it is the only place a pruned log is ever reported", line)
+	if !strings.Contains(line, "INFO     ✓ Logs deleted: 2\n") {
+		t.Fatalf("log = %q, want the logs-deleted outcome: it is the only place a pruned log is ever reported", line)
 	}
 }
