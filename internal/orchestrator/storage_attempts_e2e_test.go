@@ -6,7 +6,9 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/tis24dev/proxsave/internal/config"
 	"github.com/tis24dev/proxsave/internal/logging"
@@ -15,15 +17,26 @@ import (
 )
 
 // fakeRcloneOnPath puts an executable "rclone" running script first on PATH, so the
-// real CloudStorage runs it through safeexec. The retry backoff is the real one
-// (2s, 4s, ...), so these cases keep the attempts few.
-func fakeRcloneOnPath(t *testing.T, script string) {
+// real CloudStorage runs it through safeexec. The retry backoff still runs between the
+// attempts, with each wait recorded and returned at once (storage.SetCloudRetryWaitForTest)
+// instead of sleeping 2s, 4s, ...
+func fakeRcloneOnPath(t *testing.T, script string) *[]time.Duration {
 	t.Helper()
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "rclone"), []byte(script), 0o755); err != nil {
 		t.Fatalf("write fake rclone: %v", err)
 	}
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	var mu sync.Mutex
+	waits := &[]time.Duration{}
+	restore := storage.SetCloudRetryWaitForTest(func(ctx context.Context, d time.Duration) error {
+		mu.Lock()
+		*waits = append(*waits, d)
+		mu.Unlock()
+		return ctx.Err()
+	})
+	t.Cleanup(restore)
+	return waits
 }
 
 // visibleLines are the lines an operator sees (no DEBUG), without timestamps.
@@ -108,7 +121,7 @@ const failingCopytoScript = "#!/bin/sh\n" +
 // RCLONE_RETRIES > 1 and every attempt failed: the attempt lines, then the outcome,
 // with no "  Upload failed" line repeating the cause.
 func TestCloudBlockEveryAttemptFailed(t *testing.T) {
-	fakeRcloneOnPath(t, failingCopytoScript)
+	waits := fakeRcloneOnPath(t, failingCopytoScript)
 	cfg := &config.Config{CloudEnabled: true, CloudRemote: "remote:backup", RcloneRetries: 2}
 	got := syncRealBackend(t, cfg, newRealCloud(t, cfg), cloudFS, writeArchive(t))
 	requireExactLines(t, got,
@@ -116,6 +129,27 @@ func TestCloudBlockEveryAttemptFailed(t *testing.T) {
 		"INFO     Storing backup...",
 		"INFO       Attempt 1/2 failed: Failed to copyto: read-only file system",
 		"INFO       Attempt 2/2 failed: Failed to copyto: read-only file system",
+		"WARNING  ✗ Cloud Storage (rclone): backup not saved",
+	)
+	// The backoff ran between the two attempts, with the real schedule's first step.
+	if len(*waits) != 1 || (*waits)[0] != 2*time.Second {
+		t.Fatalf("backoff waits = %v, want [2s]", *waits)
+	}
+}
+
+// The copy went through and its verification failed: "  Verification failed" with the
+// error, not "  Upload failed"; the outcome is unchanged.
+func TestCloudBlockVerificationFailed(t *testing.T) {
+	fakeRcloneOnPath(t, "#!/bin/sh\n"+
+		"case \"$1\" in\n"+
+		"lsl) case \"$2\" in *.tar.zst) echo '        5 2026-10-03 10:00:00.000000000 host-backup-20261003-100000.tar.zst';; esac;;\n"+
+		"esac\nexit 0\n")
+	cfg := &config.Config{CloudEnabled: true, CloudRemote: "remote:backup", RcloneRetries: 2}
+	got := syncRealBackend(t, cfg, newRealCloud(t, cfg), cloudFS, writeArchive(t))
+	requireExactLines(t, got,
+		"STEP     Cloud Storage (rclone)",
+		"INFO     Storing backup...",
+		"INFO       Verification failed: size mismatch: local=7 remote=5",
 		"WARNING  ✗ Cloud Storage (rclone): backup not saved",
 	)
 }
@@ -157,13 +191,16 @@ func TestCloudBlockAttemptFailedThenSaved(t *testing.T) {
 // the attempt lines do not name the sidecar, and the "  Sidecar failed" fact repeats
 // the cause after them.
 func TestCloudBlockSidecarFailedWithThreeAttempts(t *testing.T) {
-	fakeRcloneOnPath(t, "#!/bin/sh\n"+
+	waits := fakeRcloneOnPath(t, "#!/bin/sh\n"+
 		"case \"$1\" in\n"+
 		"copyto) case \"$2\" in *.sha256) echo '2026/10/03 10:00:00 Failed to copyto: permission denied' >&2; exit 1;; esac; exit 0;;\n"+
 		"lsl) case \"$2\" in *.tar.zst) echo '        7 2026-10-03 10:00:00.000000000 host-backup-20261003-100000.tar.zst';; esac; exit 0;;\n"+
 		"esac\nexit 0\n")
 	cfg := &config.Config{CloudEnabled: true, CloudRemote: "remote:backup", RcloneRetries: 3}
 	got := syncRealBackend(t, cfg, newRealCloud(t, cfg), cloudFS, writeArchive(t, ".sha256"))
+	if len(*waits) != 2 || (*waits)[0] != 2*time.Second || (*waits)[1] != 4*time.Second {
+		t.Fatalf("backoff waits = %v, want [2s 4s]", *waits)
+	}
 	requireExactLines(t, got,
 		"STEP     Cloud Storage (rclone)",
 		"INFO     Storing backup...",

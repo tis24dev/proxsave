@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"os"
@@ -8,6 +9,9 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+
+	"github.com/tis24dev/proxsave/internal/logging"
+	"github.com/tis24dev/proxsave/internal/types"
 )
 
 func TestFilesystemDetectorTestOwnershipSupportRejectsNonDirectory(t *testing.T) {
@@ -393,5 +397,35 @@ func TestLastMountEntryWinsOverAutofsPlaceholder(t *testing.T) {
 
 	if _, _, ok := lastMountEntryFor(nas, "/mnt/other"); ok {
 		t.Fatal("an absent mount point must not match")
+	}
+}
+
+// The detector's ownership findings are DEBUG: the storage blocks print the
+// "  Filesystem:" and "  Permissions:" facts themselves.
+func TestFilesystemDetectorOwnershipFindingsAreDebug(t *testing.T) {
+	for _, tc := range []struct {
+		fsType   FilesystemType
+		probeOK  bool
+		wantLine string
+	}{
+		{FilesystemNFS, true, "DEBUG    Network filesystem nfs supports Unix ownership\n"},
+		{FilesystemNFS4, false, "DEBUG    Network filesystem nfs4 does NOT support Unix ownership\n"},
+		{FilesystemCIFS, false, "DEBUG    Filesystem cifs is incompatible with Unix ownership - will skip chown/chmod\n"},
+	} {
+		logger := logging.New(types.LogLevelDebug, false)
+		buf := &bytes.Buffer{}
+		logger.SetOutput(buf)
+		dir := t.TempDir()
+		detector := NewFilesystemDetector(logger)
+		detector.mountPointLookup = func(string) (string, error) { return dir, nil }
+		detector.filesystemTypeLookup = func(context.Context, string) (FilesystemType, string, error) { return tc.fsType, "dev", nil }
+		detector.ownershipSupportTest = func(context.Context, string) bool { return tc.probeOK }
+		if _, err := detector.DetectFilesystem(context.Background(), dir); err != nil {
+			t.Fatalf("DetectFilesystem(%s): %v", tc.fsType, err)
+		}
+		out := stripTimes(buf.String())
+		if !strings.Contains(out, tc.wantLine) || strings.Contains(out, "INFO") {
+			t.Fatalf("%s: want %q at DEBUG and no INFO line:\n%s", tc.fsType, tc.wantLine, out)
+		}
 	}
 }

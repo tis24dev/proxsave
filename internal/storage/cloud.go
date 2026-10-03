@@ -243,6 +243,35 @@ func remoteBaseName(ref string) string {
 	return path.Base(trimmed)
 }
 
+// cloudRetryWait is the backoff wait every new CloudStorage starts with. It is a seam
+// so a test in another package, which builds the backend through NewCloudStorage, can
+// make the retries immediate (SetCloudRetryWaitForTest).
+var (
+	cloudRetryWaitMu sync.RWMutex
+	cloudRetryWait   = waitForRetryContext
+)
+
+func currentCloudRetryWait() func(context.Context, time.Duration) error {
+	cloudRetryWaitMu.RLock()
+	defer cloudRetryWaitMu.RUnlock()
+	return cloudRetryWait
+}
+
+// SetCloudRetryWaitForTest replaces the backoff wait of the CloudStorage instances
+// created after it and returns a restore function. Test seam only, like
+// safefs.SetOsStatForTest.
+func SetCloudRetryWaitForTest(fn func(context.Context, time.Duration) error) (restore func()) {
+	cloudRetryWaitMu.Lock()
+	prev := cloudRetryWait
+	cloudRetryWait = fn
+	cloudRetryWaitMu.Unlock()
+	return func() {
+		cloudRetryWaitMu.Lock()
+		cloudRetryWait = prev
+		cloudRetryWaitMu.Unlock()
+	}
+}
+
 // Bound exponential retry delays so large attempt counts stay safe and predictable.
 func cloudRetryBackoff(attempt int) time.Duration {
 	if attempt <= 0 {
@@ -349,7 +378,7 @@ func NewCloudStorage(cfg *config.Config, logger *logging.Logger, writtenHostname
 		verifyDownload: cfg.CloudVerifyDownload,
 		execCommand:    defaultExecCommand,
 		lookPath:       exec.LookPath,
-		waitForRetry:   waitForRetryContext,
+		waitForRetry:   currentCloudRetryWait(),
 		sleep:          time.Sleep,
 	}, nil
 }
@@ -932,7 +961,11 @@ func (c *CloudStorage) Store(ctx context.Context, backupFile string, metadata *t
 		// The fact line carries the short cause; the caller closes the block with the
 		// outcome, and the full chain stays in DEBUG.
 		c.logger.Debug("Cloud Storage: upload - failed to send the %s: %v", target, err)
+		var verifyErr *verificationError
 		switch {
+		case primaryFailed && errors.As(err, &verifyErr):
+			// The copy went through; what failed is the check of it.
+			c.logger.Info("  Verification failed: %s", ErrorCause(verifyErr.err))
 		case primaryFailed && AttemptsReported(err):
 			// The attempt lines above carry the cause; the outcome follows them directly.
 		case primaryFailed:
@@ -1028,9 +1061,20 @@ func (c *CloudStorage) uploadWithRetry(ctx context.Context, localFile, remoteFil
 	}
 
 	attemptsMade := 0
+	// reported marks a failure that comes after at least one "  Attempt <i>/<n>
+	// failed" fact: every attempt failed, the operation timeout ended them, or the run
+	// was cancelled during the backoff. The caller then prints no cause of its own.
+	reported := func(err error) error {
+		if retries > 1 && attemptsMade > 0 {
+			c.logger.Debug("Cloud Storage: upload - %d of %d attempts ran and failed for %s: %v",
+				attemptsMade, retries, filepath.Base(localFile), err)
+			return &attemptsReportedError{err: err}
+		}
+		return err
+	}
 	for attempt := 1; attempt <= retries; attempt++ {
 		if err := ctx.Err(); err != nil {
-			return err
+			return reported(err)
 		}
 
 		if attempt > 1 {
@@ -1081,7 +1125,7 @@ func (c *CloudStorage) uploadWithRetry(ctx context.Context, localFile, remoteFil
 			waitTime := cloudRetryBackoff(attempt)
 			c.logger.Debug("Waiting %v before retry...", waitTime)
 			if err := c.callWaitForRetry(ctx, waitTime); err != nil {
-				return err
+				return reported(err)
 			}
 		}
 	}
@@ -1096,17 +1140,12 @@ func (c *CloudStorage) uploadWithRetry(ctx context.Context, localFile, remoteFil
 			attemptsMade,
 			lastErr)
 	}
-	if retries > 1 && attemptsMade == retries {
-		// Every attempt ran and failed, and each one is already an "  Attempt <i>/<n>
-		// failed" fact: the caller prints no cause of its own after them.
-		c.logger.Debug("Cloud Storage: upload - all %d attempts failed for %s", retries, filepath.Base(localFile))
-		return &attemptsReportedError{err: failed}
-	}
-	return failed
+	return reported(failed)
 }
 
-// attemptsReportedError is an upload whose every attempt failed and was printed as an
-// "  Attempt <i>/<n> failed" fact. Its text is the error it wraps, unchanged.
+// attemptsReportedError is an upload whose attempts that ran all failed and were each
+// printed as an "  Attempt <i>/<n> failed" fact. Its text is the error it wraps,
+// unchanged.
 type attemptsReportedError struct {
 	err error
 }
@@ -1116,10 +1155,11 @@ func (e *attemptsReportedError) Error() string { return e.err.Error() }
 func (e *attemptsReportedError) Unwrap() error { return e.err }
 
 // AttemptsReported reports whether err is an upload whose failed attempts are already
-// on screen, one "  Attempt <i>/<n> failed" fact each (RCLONE_RETRIES > 1, all of them
-// failed). The caller then closes the block with its outcome and no "failed" fact: the
-// cause is on the attempt lines. With a single attempt there is no attempt line, and
-// the caller's fact carries the cause.
+// on screen, one "  Attempt <i>/<n> failed" fact each (RCLONE_RETRIES > 1): all of them
+// failed, or the operation timeout or a cancelled run ended them early. The caller then
+// closes the block with its outcome and no "failed" fact: the cause is on the attempt
+// lines. With a single attempt there is no attempt line, and the caller's fact carries
+// the cause.
 func AttemptsReported(err error) bool {
 	var reported *attemptsReportedError
 	return errors.As(err, &reported)
@@ -1191,11 +1231,22 @@ func (c *CloudStorage) runUploadTask(parentCtx context.Context, task uploadTask)
 		if err == nil {
 			err = fmt.Errorf("verification failed")
 		}
-		return err
+		return &verificationError{err: err}
 	}
 
 	return nil
 }
+
+// verificationError is a copy that succeeded and whose verification failed (size or
+// checksum mismatch, verify error). Its text is the error it wraps, unchanged; the
+// primary upload shows it as "  Verification failed: <cause>".
+type verificationError struct {
+	err error
+}
+
+func (e *verificationError) Error() string { return e.err.Error() }
+
+func (e *verificationError) Unwrap() error { return e.err }
 
 func (c *CloudStorage) uploadTasksSequential(ctx context.Context, tasks []uploadTask) (bool, error) {
 	for _, task := range tasks {
