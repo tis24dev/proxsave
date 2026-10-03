@@ -135,23 +135,29 @@ func TestPrometheusExporterStatusMapping(t *testing.T) {
 	}
 }
 
-func TestPrometheusExporterBackupsTotalPBS(t *testing.T) {
-	const head = "# HELP proxmox_backup_backups_total Number of backups per location\n" +
-		"# TYPE proxmox_backup_backups_total gauge\n" +
-		"proxmox_backup_backups_total{location=\"local\"} 5\n" +
-		"proxmox_backup_backups_total{location=\"secondary\"} 3\n" +
-		"proxmox_backup_backups_total{location=\"cloud\"} 1\n"
-	const next = "# HELP proxmox_backup_info"
+func TestPrometheusExporterBackupsTotalLocations(t *testing.T) {
+	const (
+		head = "# HELP proxmox_backup_backups_total Number of backups per location\n" +
+			"# TYPE proxmox_backup_backups_total gauge\n" +
+			"proxmox_backup_backups_total{location=\"local\"} 5\n"
+		sec   = "proxmox_backup_backups_total{location=\"secondary\"} 3\n"
+		cloud = "proxmox_backup_backups_total{location=\"cloud\"} 1\n"
+		next  = "# HELP proxmox_backup_info"
+	)
 
 	for _, tc := range []struct {
-		name    string
-		enabled bool
-		backups int
-		want    string
+		name            string
+		sec, cloud, pbs bool
+		pbsBackups      int
+		want            string
+		wantLines       int
 	}{
-		{"enabled with count", true, 7, head + "proxmox_backup_backups_total{location=\"pbs\"} 7\n" + next},
-		{"enabled unknown", true, 0, head + "proxmox_backup_backups_total{location=\"pbs\"} 0\n" + next},
-		{"disabled", false, 7, head + next},
+		{"all on, pbs with count", true, true, true, 7, head + sec + cloud + "proxmox_backup_backups_total{location=\"pbs\"} 7\n" + next, 4},
+		{"pbs on, unknown", true, true, true, 0, head + sec + cloud + "proxmox_backup_backups_total{location=\"pbs\"} 0\n" + next, 4},
+		{"pbs off", true, true, false, 7, head + sec + cloud + next, 3},
+		{"secondary only", true, false, false, 0, head + sec + next, 2},
+		{"cloud only", false, true, false, 0, head + cloud + next, 2},
+		{"all off, local only", false, false, false, 7, head + next, 1},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			dir := t.TempDir()
@@ -161,8 +167,10 @@ func TestPrometheusExporterBackupsTotalPBS(t *testing.T) {
 				LocalBackups: 5,
 				SecBackups:   3,
 				CloudBackups: 1,
-				PBSEnabled:   tc.enabled,
-				PBSBackups:   tc.backups,
+				SecEnabled:   tc.sec,
+				CloudEnabled: tc.cloud,
+				PBSEnabled:   tc.pbs,
+				PBSBackups:   tc.pbsBackups,
 			}
 			if err := exporter.Export(m); err != nil {
 				t.Fatalf("Export() error = %v", err)
@@ -175,8 +183,8 @@ func TestPrometheusExporterBackupsTotalPBS(t *testing.T) {
 			if !strings.Contains(content, tc.want) {
 				t.Fatalf("backups_total block mismatch, want\n%s\ngot\n%s", tc.want, content)
 			}
-			if got := strings.Count(content, "location=\"pbs\""); got != map[bool]int{true: 1, false: 0}[tc.enabled] {
-				t.Fatalf("pbs lines = %d, enabled=%v\n%s", got, tc.enabled, content)
+			if got := strings.Count(content, "proxmox_backup_backups_total{location="); got != tc.wantLines {
+				t.Fatalf("location lines = %d, want %d\n%s", got, tc.wantLines, content)
 			}
 		})
 	}

@@ -47,6 +47,10 @@ func (o *Orchestrator) exportPrometheusBackupMetrics(stats *BackupStats) {
 	if m == nil {
 		return
 	}
+	// Secondary and cloud lines follow the run's configuration, which already has a
+	// destination whose initialization failed switched off for this run.
+	m.SecEnabled = o.cfg.SecondaryEnabled
+	m.CloudEnabled = o.cfg.CloudEnabled
 	// The PBS line follows PBS_TARGET_ENABLED, not the PBS outcome: an early error has
 	// no outcome and still reports 0, as does a PBS block that never got a count.
 	if o.cfg.PBSTargetEnabled {

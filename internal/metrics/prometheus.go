@@ -36,6 +36,10 @@ type BackupMetrics struct {
 	FilesCollected int
 	FilesFailed    int
 
+	// SecEnabled and CloudEnabled are the run's SECONDARY_ENABLED and CLOUD_ENABLED:
+	// only an active destination gets its location line (local is always printed).
+	SecEnabled   bool
+	CloudEnabled bool
 	// PBSEnabled is PBS_TARGET_ENABLED: only then the textfile carries the
 	// location="pbs" line, with PBSBackups (this host's snapshots, 0 when unknown).
 	PBSEnabled bool
@@ -268,11 +272,15 @@ func (pe *PrometheusExporter) Export(m *BackupMetrics) (err error) {
 	if err := writef("proxmox_backup_backups_total{location=\"local\"} %d\n", m.LocalBackups); err != nil {
 		return err
 	}
-	if err := writef("proxmox_backup_backups_total{location=\"secondary\"} %d\n", m.SecBackups); err != nil {
-		return err
+	if m.SecEnabled {
+		if err := writef("proxmox_backup_backups_total{location=\"secondary\"} %d\n", m.SecBackups); err != nil {
+			return err
+		}
 	}
-	if err := writef("proxmox_backup_backups_total{location=\"cloud\"} %d\n", m.CloudBackups); err != nil {
-		return err
+	if m.CloudEnabled {
+		if err := writef("proxmox_backup_backups_total{location=\"cloud\"} %d\n", m.CloudBackups); err != nil {
+			return err
+		}
 	}
 	if m.PBSEnabled {
 		if err := writef("proxmox_backup_backups_total{location=\"pbs\"} %d\n", m.PBSBackups); err != nil {

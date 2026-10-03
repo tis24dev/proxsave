@@ -258,6 +258,10 @@ var notes = []Note{
 		Lines: []string{
 			"CLOUD_REMOTE accepts an absolute directory (for example a mounted share) as the cloud destination",
 			"New PBS destination: each backup is also uploaded to a PBS storage of this PVE host (PBS_TARGET_ENABLED)",
+			"Prometheus metrics: proxmox_backup_backups_total lists only the destinations that are on, PBS included",
+		},
+		Actions: []string{
+			"Dashboards or alerts on the secondary or cloud series see no data while that destination is off",
 		},
 	},
 }
