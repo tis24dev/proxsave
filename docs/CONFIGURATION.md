@@ -1523,7 +1523,7 @@ METRICS_PATH=${BASE_DIR}/metrics   # Empty = /var/lib/prometheus/node-exporter
 - Backup duration and start/end timestamps
 - Archive size and raw bytes collected
 - Files collected/failed and success/failure status
-- Storage usage counters per location (local/secondary/cloud)
+- Backup counts per location (local always; secondary, cloud and pbs only while that destination is on)
 
 **Integration**: Point Prometheus node_exporter to `METRICS_PATH`.
 
