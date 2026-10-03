@@ -863,14 +863,14 @@ This mode uses `/usr/sbin/sendmail`, so your node must have a working local MTA 
 
 ---
 
-#### Warning: `... storage may fail due to insufficient space`
+#### Warning: `⚠ <Destination> disk space: insufficient, copy may fail`
 
-**Cause**: a non-critical destination (secondary or cloud) is below its required free space, so the run warns and carries on. The primary destination is critical instead: if it is short of space the run stops with a disk-space error rather than warning.
+**Cause**: a non-critical destination (secondary or cloud) is below its required free space, so the run warns and carries on. The lines above the warning show `Available:`, `Required:` and, in the check after the collection, the `Rule:` that set the requirement. The primary destination is critical instead: if it is short of space the run stops with a disk-space error rather than warning.
 
 **Solution**:
 ```bash
 # The required space is max(MIN_DISK_SPACE_<TIER>_GB, estimated size x SAFETY_FACTOR),
-# so the MIN_DISK_SPACE_* keys are a FLOOR, not a warning threshold. Raising one makes
+# so the MIN_DISK_SPACE_* variables are a FLOOR, not a warning threshold. Raising one makes
 # the check stricter. The template ships 1 GB for the primary tier.
 nano configs/backup.env
 MIN_DISK_SPACE_SECONDARY_GB=1

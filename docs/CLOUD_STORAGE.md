@@ -438,7 +438,7 @@ RETENTION_YEARLY=3
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `CLOUD_ENABLED` | `false` | Enable cloud storage |
-| `CLOUD_REMOTE` | _(empty)_ | rclone remote **name** from `rclone config` (legacy `remote:path` still supported). **Required** when `CLOUD_ENABLED=true`: leaving it empty is a hard configuration error, and the run aborts with exit `2` before anything is backed up, locally included. Set both keys together, or neither. |
+| `CLOUD_REMOTE` | _(empty)_ | rclone remote **name** from `rclone config` (legacy `remote:path` still supported), or an absolute local directory such as a mounted share (`/mnt/cloud`). **Required** when `CLOUD_ENABLED=true`: leaving it empty is a hard configuration error, and the run aborts with exit `2` before anything is backed up, locally included. Set both keys together, or neither. |
 | `CLOUD_REMOTE_PATH` | _(empty)_ | Folder path/prefix inside the remote (e.g., `/proxsave/backup`) |
 | `CLOUD_LOG_PATH` | _(empty)_ | Optional log folder (recommended: path-only on the same remote; use `otherremote:/path` only when using a different remote) |
 | `CLOUD_UPLOAD_MODE` | `parallel` | `parallel` or `sequential`. Inert under the default bundle layout: there is only one file to upload, so nothing runs concurrently either way |
@@ -521,6 +521,12 @@ path inside the remote, and uses that consistently for:
   - Restore/decrypt cloud scanning applies `RCLONE_TIMEOUT_CONNECTION` per rclone command (the timer resets on each `lsf`/manifest read).
 
 You can choose the style you prefer; they are equivalent from the tool's point of view.
+
+3. **Local directory (an absolute path, for example a mounted share)**  
+   - `CLOUD_REMOTE=/mnt/cloud`  
+   - `CLOUD_REMOTE_PATH=server1` *(optional)*  
+   → backups in: `/mnt/cloud/server1`; with `CLOUD_LOG_PATH=/proxsave/log` the logs go to `/mnt/cloud/proxsave/log`.  
+   The copy still goes through rclone. ProxSave creates the directory when it is missing (not in a dry run) and gives the backups the same owner and mode as on the secondary path.
 
 **When to use CLOUD_REMOTE_PATH**:
 - Organizing multiple servers' backups: `server1/`, `server2/`
@@ -668,8 +674,8 @@ make build
 ./build/proxsave --backup --dry-run
 
 # Check output:
-# ✓ "Cloud remote gdrive:pbs-backups is accessible"
-# ✓ "✓ Cloud storage initialized (present N backups)"
+# ✓ "  Accessible" under "Checking cloud remote accessibility..."
+# ✓ "✓ Cloud storage: initialized"
 #
 # A dry run returns before the storage phase, so there is no upload line to look for.
 # You will see "Storage dispatch skipped (dry run mode)" instead. Reaching the two

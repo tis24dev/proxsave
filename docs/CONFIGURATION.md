@@ -909,6 +909,7 @@ CLOUD_ENABLED=false                # true | false
 
 # rclone remote (recommended: remote NAME + path via CLOUD_REMOTE_PATH)
 CLOUD_REMOTE=GoogleDrive                   # remote name from `rclone config`
+# CLOUD_REMOTE can also be an absolute local directory (/mnt/cloud): see CLOUD_STORAGE.md
 CLOUD_REMOTE_PATH=/proxsave/backup         # folder path inside the remote
 
 # Cloud log path (optional)
