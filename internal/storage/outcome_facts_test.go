@@ -153,3 +153,175 @@ func TestLocalStorePrintsAppliedPermissions(t *testing.T) {
 		t.Fatalf("missing the not-accessible fact:\n%s", buf.String())
 	}
 }
+
+func newCloudWithCapturedLog(t *testing.T, cfg *config.Config, exec func(context.Context, string, ...string) ([]byte, error)) (*CloudStorage, *bytes.Buffer) {
+	t.Helper()
+	logger, buf := newCapturedLogger()
+	cs, err := NewCloudStorage(cfg, logger, "")
+	if err != nil {
+		t.Fatalf("NewCloudStorage: %v", err)
+	}
+	cs.lookPath = func(string) (string, error) { return "/usr/bin/rclone", nil }
+	cs.execCommand = exec
+	cs.waitForRetry = func(context.Context, time.Duration) error { return nil }
+	return cs, buf
+}
+
+// The accessibility check opens its own line and puts what it found under it.
+func TestCloudCheckPrintsWhatItFound(t *testing.T) {
+	cfg := &config.Config{CloudEnabled: true, CloudRemote: "remote:backup", RcloneTimeoutConnection: 30}
+
+	cs, buf := newCloudWithCapturedLog(t, cfg, func(context.Context, string, ...string) ([]byte, error) { return nil, nil })
+	if _, err := cs.DetectFilesystem(context.Background()); err != nil {
+		t.Fatalf("DetectFilesystem: %v", err)
+	}
+	out := buf.String()
+	check := strings.Index(out, "INFO     Checking cloud remote accessibility...\n")
+	found := strings.Index(out, "INFO       Accessible\n")
+	if check < 0 || found < check || strings.Contains(out, "is accessible") || strings.Contains(out, "timeout: max") {
+		t.Fatalf("want the check line, then \"  Accessible\", and no remote/timeout on screen:\n%s", out)
+	}
+
+	cs, buf = newCloudWithCapturedLog(t, cfg, func(context.Context, string, ...string) ([]byte, error) {
+		return []byte("2026/10/02 23:57:36 Failed to create file system for \"remote:\": didn't find section in config file\n"), errors.New("exit status 1")
+	})
+	if _, err := cs.DetectFilesystem(context.Background()); err == nil {
+		t.Fatalf("DetectFilesystem must fail on a remote missing from the config")
+	}
+	if want := "INFO       Failed to create file system for \"remote:\": didn't find section in config file\n"; !strings.Contains(buf.String(), want) {
+		t.Fatalf("missing %q in:\n%s", want, buf.String())
+	}
+	if strings.Contains(buf.String(), "WARNING") {
+		t.Fatalf("the check writes facts; the outcome is the caller's:\n%s", buf.String())
+	}
+
+	cs, buf = newCloudWithCapturedLog(t, cfg, nil)
+	cs.lookPath = func(string) (string, error) { return "", errors.New("not found") }
+	if _, err := cs.DetectFilesystem(context.Background()); err == nil {
+		t.Fatalf("DetectFilesystem must fail without rclone")
+	}
+	if !strings.Contains(stripTimes(buf.String()), "INFO     Checking cloud remote accessibility...\nINFO       rclone: not found in PATH\n") ||
+		strings.Contains(buf.String(), "WARNING") {
+		t.Fatalf("want the check line, then the rclone fact:\n%s", buf.String())
+	}
+}
+
+func stripTimes(out string) string {
+	lines := strings.Split(out, "\n")
+	for i, line := range lines {
+		if _, rest, ok := strings.Cut(line, "] "); ok {
+			lines[i] = rest
+		}
+	}
+	return strings.Join(lines, "\n")
+}
+
+// A failed attempt followed by a successful one is a fact, never a WARNING: the
+// backup is saved, and only the outcome line speaks of it.
+func TestCloudUploadAttemptsAreFacts(t *testing.T) {
+	cfg := &config.Config{CloudEnabled: true, CloudRemote: "remote:backup", RcloneRetries: 2}
+	calls := 0
+	cs, buf := newCloudWithCapturedLog(t, cfg, func(context.Context, string, ...string) ([]byte, error) {
+		calls++
+		if calls == 1 {
+			return []byte("2026/10/02 23:57:06 Failed to copyto: open /x: read-only file system\n"), errors.New("exit status 1")
+		}
+		return nil, nil
+	})
+	if err := cs.uploadWithRetry(context.Background(), "/tmp/a.tar", "remote:backup/a.tar"); err != nil {
+		t.Fatalf("uploadWithRetry: %v", err)
+	}
+	out := buf.String()
+	if !strings.Contains(out, "INFO       Attempt 1/2 failed: Failed to copyto: open /x: read-only file system\n") {
+		t.Fatalf("missing the attempt fact:\n%s", out)
+	}
+	if strings.Contains(out, "WARNING") || strings.Contains(out, "Upload retry attempt") {
+		t.Fatalf("a retried attempt must not warn:\n%s", out)
+	}
+}
+
+// A missing log folder is a fact under the retention header, and every log the pass
+// then cannot delete counts toward "Logs deleted: 0 of <K>".
+func TestCloudMissingLogFolderIsAFactAndCounts(t *testing.T) {
+	cfg := &config.Config{CloudEnabled: true, CloudRemote: "remote:backup", CloudLogPath: "remote:logs"}
+	cs, buf := newCloudWithCapturedLog(t, cfg, nil)
+	cs.markCloudLogPathMissing("remote:logs", "directory not found")
+	if !strings.Contains(buf.String(), "INFO       Log folder not found: remote:logs\n") || strings.Contains(buf.String(), "WARNING") {
+		t.Fatalf("want the fact and no WARNING:\n%s", buf.String())
+	}
+	if cs.deleteAssociatedLog(context.Background(), "host-backup-20260101-000000.tar.zst") {
+		t.Fatalf("a log under a missing folder cannot be deleted")
+	}
+	if got := cs.LastRetentionSummary().LogsNotDeleted; got != 1 {
+		t.Fatalf("LogsNotDeleted = %d, want 1", got)
+	}
+}
+
+// A Local archive without its .metadata is listed from its file name; List records it
+// for the retention fact and writes no WARNING of its own.
+func TestLocalListRecordsArchivesWithoutMetadata(t *testing.T) {
+	dir := t.TempDir()
+	logger, buf := newCapturedLogger()
+	local, err := NewLocalStorage(&config.Config{BackupPath: dir}, logger, "")
+	if err != nil {
+		t.Fatalf("NewLocalStorage: %v", err)
+	}
+	name := "host-backup-20260101-000000.tar.zst"
+	if err := os.WriteFile(filepath.Join(dir, name), []byte("x"), 0o600); err != nil {
+		t.Fatalf("write archive: %v", err)
+	}
+	if _, err := local.List(context.Background()); err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if strings.Contains(buf.String(), "WARNING") {
+		t.Fatalf("List must not warn:\n%s", buf.String())
+	}
+	if len(local.lastNoMetadata) != 1 || local.lastNoMetadata[0] != name {
+		t.Fatalf("lastNoMetadata = %v, want [%s]", local.lastNoMetadata, name)
+	}
+	if n := logListingNoMetadata(logger, local.lastNoMetadata); n != 1 {
+		t.Fatalf("logListingNoMetadata = %d, want 1", n)
+	}
+	if !strings.Contains(buf.String(), "INFO       No metadata, name used: "+name+"\n") {
+		t.Fatalf("missing the retention fact:\n%s", buf.String())
+	}
+}
+
+// A secondary directory that cannot be created is a DirectoryError the storage
+// initialization turns into "  Directory not created"; the backend writes no WARNING.
+func TestSecondaryDirectoryNotCreatedIsTyped(t *testing.T) {
+	blocker := filepath.Join(t.TempDir(), "file")
+	if err := os.WriteFile(blocker, []byte("x"), 0o600); err != nil {
+		t.Fatalf("write blocker: %v", err)
+	}
+	logger, buf := newCapturedLogger()
+	s, err := NewSecondaryStorage(&config.Config{SecondaryPath: filepath.Join(blocker, "sub")}, logger, "")
+	if err != nil {
+		t.Fatalf("NewSecondaryStorage: %v", err)
+	}
+	_, err = s.DetectFilesystem(context.Background())
+	var dirErr *DirectoryError
+	if !errors.As(err, &dirErr) {
+		t.Fatalf("DetectFilesystem error = %v, want a DirectoryError", err)
+	}
+	if got := safefs.SystemErrorText(dirErr.Err); got != "not a directory" {
+		t.Fatalf("cause = %q, want not a directory", got)
+	}
+	if strings.Contains(buf.String(), "WARNING") {
+		t.Fatalf("the backend must not warn:\n%s", buf.String())
+	}
+}
+
+func TestCloudCheckTimeoutIsAFact(t *testing.T) {
+	cfg := &config.Config{CloudEnabled: true, CloudRemote: "remote:backup", RcloneTimeoutConnection: 1}
+	cs, buf := newCloudWithCapturedLog(t, cfg, func(ctx context.Context, _ string, _ ...string) ([]byte, error) {
+		<-ctx.Done()
+		return nil, errors.New("signal: killed")
+	})
+	if _, err := cs.DetectFilesystem(context.Background()); err == nil {
+		t.Fatalf("DetectFilesystem must fail on a remote that never answers")
+	}
+	if !strings.Contains(buf.String(), "INFO       Timed out after 1s\n") {
+		t.Fatalf("missing the timeout fact:\n%s", buf.String())
+	}
+}

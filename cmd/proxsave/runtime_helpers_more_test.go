@@ -120,7 +120,9 @@ func TestDetectFilesystemInfo(t *testing.T) {
 		}
 	})
 
-	t.Run("non-critical error returns nil", func(t *testing.T) {
+	// The caller decides what a failed detection means for its destination (a
+	// secondary directory that cannot be created disables it), so the error reaches it.
+	t.Run("non-critical error is returned for the caller to decide", func(t *testing.T) {
 		buf.Reset()
 		backend := &fakeStorageBackend{
 			name:     "secondary",
@@ -130,8 +132,8 @@ func TestDetectFilesystemInfo(t *testing.T) {
 			fsErr:    errors.New("detect failed"),
 		}
 		info, err := detectFilesystemInfo(ctx, backend, "/data", logger)
-		if err != nil || info != nil {
-			t.Fatalf("detectFilesystemInfo() = (%v,%v), want (nil,nil)", info, err)
+		if err == nil || err.Error() != "detect failed" || info != nil {
+			t.Fatalf("detectFilesystemInfo() = (%v,%v), want (nil,detect failed)", info, err)
 		}
 		if out := buf.String(); out == "" || !bytes.Contains([]byte(out), []byte("filesystem detection failed")) {
 			t.Fatalf("expected debug log about filesystem detection failure, got: %s", out)
@@ -165,14 +167,16 @@ func TestDetectFilesystemInfo(t *testing.T) {
 		}
 	})
 
-	t.Run("no-ownership logs differ by location", func(t *testing.T) {
+	// The detection itself only logs the ownership consequence at DEBUG; the visible
+	// fact ("  Permissions: skipped, no ownership") is logStorageFilesystem's.
+	t.Run("no-ownership is debug evidence at detection", func(t *testing.T) {
 		tests := []struct {
 			name     string
 			location storage.BackupLocation
 			want     string
 		}{
-			{"cloud uses debug", storage.LocationCloud, "does not support ownership changes (cloud remote)"},
-			{"local uses info", storage.LocationPrimary, "does not support ownership changes; chown/chmod will be skipped"},
+			{"cloud", storage.LocationCloud, "DEBUG    /data [fuse] does not support ownership changes; chown/chmod will be skipped"},
+			{"local", storage.LocationPrimary, "DEBUG    /data [fuse] does not support ownership changes; chown/chmod will be skipped"},
 		}
 
 		for _, tt := range tests {
@@ -191,8 +195,8 @@ func TestDetectFilesystemInfo(t *testing.T) {
 				if err != nil || info == nil {
 					t.Fatalf("detectFilesystemInfo() = (%v,%v), want (info,nil)", info, err)
 				}
-				if out := buf.String(); !bytes.Contains([]byte(out), []byte(tt.want)) {
-					t.Fatalf("expected log %q, got: %s", tt.want, out)
+				if out := buf.String(); !bytes.Contains([]byte(out), []byte(tt.want)) || bytes.Contains([]byte(out), []byte("INFO")) {
+					t.Fatalf("expected only the debug log %q, got: %s", tt.want, out)
 				}
 			})
 		}
@@ -257,9 +261,14 @@ func TestFormatStorageInitSummary(t *testing.T) {
 	if simpleWarn {
 		t.Fatalf("a summary built with stats must not be a warning: %s", simple)
 	}
-	wantSimple := "  Backups: 2\n  Retention policy: simple (keep 7 newest)\n✓ Local: initialized"
+	// The policy is configuration: it opens the block under the path
+	// (formatRetentionPolicyLine), so the summary closes on the count and the outcome.
+	wantSimple := "  Backups: 2\n✓ Local: initialized"
 	if simple != wantSimple {
 		t.Fatalf("simple summary = %q, want %q", simple, wantSimple)
+	}
+	if got, want := formatRetentionPolicyLine(cfgSimple, storage.LocationPrimary), "  Retention policy: simple (keep 7 newest)"; got != want {
+		t.Fatalf("policy line = %q, want %q", got, want)
 	}
 
 	cfgWarn := &config.Config{
@@ -270,8 +279,12 @@ func TestFormatStorageInitSummary(t *testing.T) {
 	if !warnFlag {
 		t.Fatalf("a summary built without stats must be a warning: %s", warnSimple)
 	}
-	if !bytes.Contains([]byte(warnSimple), []byte("⚠ Local initialized with warnings")) {
-		t.Fatalf("expected warning summary, got: %s", warnSimple)
+	if want := "  Backups: unknown, statistics unavailable\n⚠ Local: initialized, statistics unavailable"; warnSimple != want {
+		t.Fatalf("summary without stats = %q, want %q", warnSimple, want)
+	}
+	// A problem found earlier in the block joins the same outcome.
+	if got, _ := formatStorageInitSummary("Local", cfgWarn, storage.LocationPrimary, nil, nil, "filesystem unknown"); !strings.HasSuffix(got, "\n⚠ Local: initialized, filesystem unknown, statistics unavailable") {
+		t.Fatalf("summary with a problem = %q", got)
 	}
 
 	cfgGFS := &config.Config{
@@ -292,12 +305,16 @@ func TestFormatStorageInitSummary(t *testing.T) {
 	if !bytes.Contains([]byte(summary), []byte("Kept (est.):")) {
 		t.Fatalf("expected GFS summary to include retention estimates, got: %s", summary)
 	}
-	// GFS lists the tiers under the count, with no policy line, and closes on the outcome.
+	// GFS lists the tiers under the count and closes on the outcome; its policy line
+	// is the configuration fact above.
 	if !strings.HasPrefix(summary, "  Backups: 2\n  Daily: ") || !strings.HasSuffix(summary, "\n✓ Local: initialized") {
 		t.Fatalf("expected GFS summary to open on the count and close on the outcome, got: %q", summary)
 	}
 	if strings.Contains(summary, "Total:") || strings.Contains(summary, "Retention policy:") {
 		t.Fatalf("GFS summary must replace Total: with Backups: and carry no policy line, got: %q", summary)
+	}
+	if got, want := formatRetentionPolicyLine(cfgGFS, storage.LocationPrimary), "  Retention policy: GFS (daily=1, weekly=1, monthly=0, yearly=-1)"; got != want {
+		t.Fatalf("GFS policy line = %q, want %q", got, want)
 	}
 
 	empty, _ := formatStorageInitSummary("Local", cfgGFS, storage.LocationPrimary, &storage.StorageStats{TotalBackups: 0}, nil)

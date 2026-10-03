@@ -3,6 +3,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -63,13 +64,14 @@ func initializePrimaryStorage(opts backupModeOptions) (storage.Storage, *storage
 	if err != nil {
 		return nil, nil, "Failed to initialize local storage", err
 	}
+	logStoragePath("Primary", cfg.BackupPath, cfg, storage.LocationPrimary)
 	localFS, err := detectFilesystemInfo(opts.ctx, localBackend, cfg.BackupPath, logger)
 	if err != nil {
 		return nil, nil, "Failed to prepare primary storage", err
 	}
 
 	logging.DebugStep(logger, "storage init", "primary filesystem=%s", formatDetailedFilesystemLabel(cfg.BackupPath, localFS))
-	logStoragePath("Primary", cfg.BackupPath, localFS)
+	logStorageFilesystem(localFS, nil)
 	return localBackend, localFS, "", nil
 }
 
@@ -91,6 +93,12 @@ func registerPrimaryStorage(opts backupModeOptions, orch *orchestrator.Orchestra
 	logStorageInitSummary(formatStorageInitSummary("Local storage", cfg, storage.LocationPrimary, localStats, localBackups))
 }
 
+// detectionFailureReporter is implemented by a backend whose DetectFilesystem can fall
+// back to an unknown filesystem and keep the copy going (SecondaryStorage).
+type detectionFailureReporter interface {
+	DetectionFailure() error
+}
+
 func initializeSecondaryStorage(opts backupModeOptions, orch *orchestrator.Orchestrator, checker *checks.Checker) *storage.FilesystemInfo {
 	cfg := opts.cfg
 	logger := opts.logger
@@ -100,25 +108,38 @@ func initializeSecondaryStorage(opts backupModeOptions, orch *orchestrator.Orche
 	}
 
 	logging.DebugStep(logger, "storage init", "secondary backend")
+	logStoragePath("Secondary", cfg.SecondaryPath, cfg, storage.LocationSecondary)
 	secondaryBackend, err := storage.NewSecondaryStorage(cfg, logger, opts.hostname)
 	if err != nil {
 		// The destination cannot be used for this run: it is disabled exactly like an
 		// unreachable cloud, so the later steps (disk space, [6], log copy) skip it
 		// instead of failing on it one by one.
 		logging.DebugStep(logger, "storage init", "secondary unavailable, disabling: %v", err)
-		path := cfg.SecondaryPath
-		cfg.SecondaryEnabled = false
-		cfg.SecondaryLogPath = ""
-		if checker != nil {
-			checker.DisableSecondary()
-		}
-		logStorageNotInitialized("Secondary", "Secondary storage", path, "Secondary storage", safefs.SystemErrorText(err))
+		disableSecondaryForRun(cfg, checker)
+		logStorageNotInitialized("Secondary", "Secondary storage", "Secondary storage: "+safefs.SystemErrorText(err))
 		return nil
 	}
 
-	secondaryFS, _ := detectFilesystemInfo(opts.ctx, secondaryBackend, cfg.SecondaryPath, logger)
-	logging.DebugStep(logger, "storage init", "secondary filesystem=%s", formatDetailedFilesystemLabel(cfg.SecondaryPath, secondaryFS))
-	logStoragePath("Secondary", cfg.SecondaryPath, secondaryFS)
+	secondaryFS, detectErr := detectFilesystemInfo(opts.ctx, secondaryBackend, cfg.SecondaryPath, logger)
+	var dirErr *storage.DirectoryError
+	if errors.As(detectErr, &dirErr) {
+		// The backup directory cannot be created: nothing can be copied there.
+		logging.DebugStep(logger, "storage init", "secondary directory not created, disabling: %v", detectErr)
+		disableSecondaryForRun(cfg, checker)
+		logStorageNotInitialized("Secondary", "Secondary storage", "  Directory not created: "+safefs.SystemErrorText(dirErr.Err))
+		return nil
+	}
+	if detectErr == nil {
+		var backend storage.Storage = secondaryBackend
+		if reporter, ok := backend.(detectionFailureReporter); ok {
+			detectErr = reporter.DetectionFailure()
+		}
+	}
+	logging.DebugStep(logger, "storage init", "secondary filesystem=%s detect_err=%v", formatDetailedFilesystemLabel(cfg.SecondaryPath, secondaryFS), detectErr)
+	var problems []string
+	if problem := logStorageFilesystem(secondaryFS, detectErr); problem != "" {
+		problems = append(problems, problem)
+	}
 	secondaryStats := fetchStorageStats(opts.ctx, secondaryBackend, logger, "Secondary storage")
 	secondaryBackups := fetchBackupList(opts.ctx, secondaryBackend)
 	logging.DebugStep(logger, "storage init", "secondary stats=%v backups=%d", secondaryStats != nil, len(secondaryBackups))
@@ -129,7 +150,7 @@ func initializeSecondaryStorage(opts backupModeOptions, orch *orchestrator.Orche
 	logging.DebugStep(logger, "storage init", "secondary owned=%d known=%v", secondaryOwned, secondaryOwnedKnown)
 	secondaryAdapter.SetInitialOwnedBackups(secondaryOwned, secondaryOwnedKnown)
 	orch.RegisterStorageTarget(secondaryAdapter)
-	logStorageInitSummary(formatStorageInitSummary("Secondary storage", cfg, storage.LocationSecondary, secondaryStats, secondaryBackups))
+	logStorageInitSummary(formatStorageInitSummary("Secondary storage", cfg, storage.LocationSecondary, secondaryStats, secondaryBackups, problems...))
 	return secondaryFS
 }
 
@@ -142,33 +163,29 @@ func initializeCloudStorage(opts backupModeOptions, orch *orchestrator.Orchestra
 	}
 
 	logging.DebugStep(logger, "storage init", "cloud backend")
+	logStoragePath("Cloud", cfg.CloudRemote, cfg, storage.LocationCloud)
 	cloudBackend, err := storage.NewCloudStorage(cfg, logger, opts.hostname)
 	if err != nil {
 		logging.DebugStep(logger, "storage init", "cloud backend unavailable, disabling: %v", err)
-		remote := cfg.CloudRemote
 		disableCloudForRun(cfg, checker)
-		logStorageNotInitialized("Cloud", "Cloud storage", remote, "Cloud storage", safefs.SystemErrorText(err))
+		logStorageNotInitialized("Cloud", "Cloud storage", "Cloud storage: "+safefs.SystemErrorText(err))
 		return nil
 	}
 
+	// DetectFilesystem prints "Checking cloud remote accessibility..." and, under it,
+	// what the check found ("  Accessible", "  Timed out after 30s", ...).
 	cloudFS, err := detectFilesystemInfo(opts.ctx, cloudBackend, cfg.CloudRemote, logger)
 	if cloudFS == nil {
-		// The remote did not answer: the block shows the path, the filesystem nobody
-		// could detect, rclone's own last line as the cause, then the "✗" outcome and
-		// the SKIP. The full error chain stays in DEBUG.
-		cause := "filesystem detection unavailable"
-		if err != nil {
-			cause = storage.ErrorCause(err)
-		}
+		// The remote did not answer: the fact is already under the check, the block
+		// closes with the "✗" outcome and the SKIP. The full chain stays in DEBUG.
 		logging.DebugStep(logger, "storage init", "cloud unavailable, disabling: %v", err)
-		remote := cfg.CloudRemote
 		disableCloudForRun(cfg, checker)
-		logStorageNotInitialized("Cloud", "Cloud storage", remote, "Cloud remote", cause)
+		logStorageNotInitialized("Cloud", "Cloud storage", "")
 		return nil
 	}
 
 	logging.DebugStep(logger, "storage init", "cloud filesystem=%s", formatDetailedFilesystemLabel(cfg.CloudRemote, cloudFS))
-	logStoragePath("Cloud", cfg.CloudRemote, cloudFS)
+	logStorageFilesystem(cloudFS, nil)
 	cloudStats := fetchStorageStats(opts.ctx, cloudBackend, logger, "Cloud storage")
 	cloudBackups := fetchBackupList(opts.ctx, cloudBackend)
 	logging.DebugStep(logger, "storage init", "cloud stats=%v backups=%d", cloudStats != nil, len(cloudBackups))
@@ -181,6 +198,16 @@ func initializeCloudStorage(opts backupModeOptions, orch *orchestrator.Orchestra
 	orch.RegisterStorageTarget(cloudAdapter)
 	logStorageInitSummary(formatStorageInitSummary("Cloud storage", cfg, storage.LocationCloud, cloudStats, cloudBackups))
 	return cloudFS
+}
+
+// disableSecondaryForRun turns the secondary destination off for the rest of the run:
+// no copy at [6], no log copy, no disk-space check.
+func disableSecondaryForRun(cfg *config.Config, checker *checks.Checker) {
+	cfg.SecondaryEnabled = false
+	cfg.SecondaryLogPath = ""
+	if checker != nil {
+		checker.DisableSecondary()
+	}
 }
 
 // disableCloudForRun turns the cloud destination off for the rest of the run: no

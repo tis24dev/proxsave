@@ -89,8 +89,11 @@ type CloudStorage struct {
 	// activeStore is the same recorder while a Store runs and nil otherwise, so the
 	// verify path reports into it only for the backup and keeps its own warnings
 	// when UploadToRemotePath sends a log.
-	storeIssues    *storeIssueRecorder
-	activeStore    *storeIssueRecorder
+	storeIssues *storeIssueRecorder
+	activeStore *storeIssueRecorder
+	// writeTestOnly is set when the last accessibility check reached the remote by
+	// the write test alone, because listing it is not permitted.
+	writeTestOnly  bool
 	remoteFilesMu  sync.RWMutex
 	remoteFiles    map[string]struct{}
 	logPathMu      sync.Mutex
@@ -324,15 +327,18 @@ func (c *CloudStorage) IsCritical() bool {
 func (c *CloudStorage) DetectFilesystem(ctx context.Context) (info *FilesystemInfo, err error) {
 	done := logging.DebugStart(c.logger, "cloud detect filesystem", "remote=%s", c.remoteLabel())
 	defer func() { done(err) }()
+	// The check opens its own line under "Path Cloud"; what it finds is the fact
+	// under it. The consequence is not repeated here: initializeCloudStorage
+	// (cmd/proxsave/backup_storage.go) closes a failed check with the
+	// "✗ Cloud storage: not initialized" outcome and the "Path Cloud: disabled" SKIP.
+	c.logger.Debug("Cloud remote check: remote=%s timeout=%ds", c.remoteLabel(), c.config.RcloneTimeoutConnection)
+	c.logger.Info("Checking cloud remote accessibility...")
+	c.writeTestOnly = false
+
 	// Check if rclone is available
 	logging.DebugStep(c.logger, "cloud detect filesystem", "checking rclone availability")
 	if !c.hasRclone() {
-		// The consequence is not repeated here: initializeCloudStorage
-		// (cmd/proxsave/backup_storage.go) closes this path with the
-		// "✗ Cloud storage: not initialized" outcome and the "Path Cloud: disabled"
-		// SKIP, beside the other locations.
-		c.logger.Warning("Cloud Storage: setup - rclone not found in PATH")
-		c.logger.Warning("Cloud Storage: setup - install rclone to enable cloud backups")
+		c.logger.Info("  rclone: not found in PATH")
 		return nil, &StorageError{
 			Location:    LocationCloud,
 			Operation:   "detect_filesystem",
@@ -345,10 +351,6 @@ func (c *CloudStorage) DetectFilesystem(ctx context.Context) (info *FilesystemIn
 
 	// Check if remote is configured and accessible
 	// Use CONNECTION timeout for this check (short timeout)
-	c.logger.Info("Checking cloud remote accessibility: %s (timeout: max %ds)",
-		c.remoteLabel(),
-		c.config.RcloneTimeoutConnection)
-
 	logging.DebugStep(c.logger, "cloud detect filesystem", "checking remote accessibility")
 	if err := c.checkRemoteAccessible(ctx); err != nil {
 		var rcErr *remoteCheckError
@@ -376,6 +378,7 @@ func (c *CloudStorage) DetectFilesystem(ctx context.Context) (info *FilesystemIn
 			c.logger.Debug("HINT: Check your rclone configuration with: rclone config show %s", c.remote)
 		}
 		c.logger.Debug("Cloud backup will be skipped")
+		c.logger.Info("  %s", capitalizeFirst(ErrorCause(err)))
 
 		return nil, &StorageError{
 			Location:    LocationCloud,
@@ -387,7 +390,12 @@ func (c *CloudStorage) DetectFilesystem(ctx context.Context) (info *FilesystemIn
 		}
 	}
 
-	c.logger.Info("Cloud remote %s is accessible", c.remoteLabel())
+	c.logger.Debug("Cloud remote %s is accessible (write test only=%v)", c.remoteLabel(), c.writeTestOnly)
+	if c.writeTestOnly {
+		c.logger.Info("  Accessible by write test only, listing not permitted")
+	} else {
+		c.logger.Info("  Accessible")
+	}
 	logging.DebugStep(c.logger, "cloud detect filesystem", "remote accessible")
 
 	// Return minimal filesystem info (cloud doesn't have a real filesystem type)
@@ -557,7 +565,8 @@ func (c *CloudStorage) checkRemoteOnce(ctx context.Context) error {
 	c.logger.Debug("List check failed with permission issue, attempting write test fallback...")
 	writeErr := c.tryWriteTest(ctx)
 	if writeErr == nil {
-		c.logger.Warning("Cloud Storage: listing - remote reachable by write test only, list permissions unavailable")
+		c.logger.Debug("Cloud Storage: listing - remote reachable by write test only, list permissions unavailable")
+		c.writeTestOnly = true
 		c.logger.Debug("HINT: Consider setting CLOUD_WRITE_HEALTHCHECK=true for faster connectivity checks")
 		return nil // Success via fallback
 	}
@@ -970,7 +979,7 @@ func (c *CloudStorage) uploadWithRetry(ctx context.Context, localFile, remoteFil
 		}
 
 		if attempt > 1 {
-			c.logger.Info("Upload retry attempt %d/%d for %s",
+			c.logger.Debug("Upload retry attempt %d/%d for %s",
 				attempt,
 				retries,
 				filepath.Base(localFile))
@@ -985,16 +994,26 @@ func (c *CloudStorage) uploadWithRetry(ctx context.Context, localFile, remoteFil
 		lastErr = err
 
 		// Check if error is due to timeout
+		// A failed attempt is a fact under "Storing backup..." (or the log copy), never
+		// a WARNING: an attempt that fails and the next one that succeeds leave the
+		// backup saved, and the outcome line says so. With a single attempt the
+		// "Upload failed" fact already carries the cause.
 		if ctx.Err() == context.DeadlineExceeded {
-			c.logger.Warning("Cloud Storage: upload - attempt %d/%d failed, operation timeout (%ds exceeded)",
+			c.logger.Debug("Cloud Storage: upload - attempt %d/%d failed, operation timeout (%ds exceeded): %v",
 				attempt,
 				retries,
-				c.config.RcloneTimeoutOperation)
+				c.config.RcloneTimeoutOperation, err)
+			if retries > 1 {
+				c.logger.Info("  Attempt %d/%d failed: timed out after %ds", attempt, retries, c.config.RcloneTimeoutOperation)
+			}
 		} else {
-			c.logger.Warning("Cloud Storage: upload - attempt %d/%d failed: %v",
+			c.logger.Debug("Cloud Storage: upload - attempt %d/%d failed: %v",
 				attempt,
 				retries,
 				err)
+			if retries > 1 {
+				c.logger.Info("  Attempt %d/%d failed: %s", attempt, retries, ErrorCause(err))
+			}
 		}
 
 		// Don't retry if we've run out of time
@@ -1160,6 +1179,12 @@ func (e *uploadTaskError) Unwrap() error { return e.err }
 // UploadToRemotePath uploads an arbitrary file to the provided remote path using
 // the same retry and verification logic used for backups.
 func (c *CloudStorage) UploadToRemotePath(ctx context.Context, localFile, remoteFile string, verify bool) error {
+	// Like Store, the verify path reports a checksum it could not compute as a fact
+	// and an issue (LastStoreIssues) instead of a WARNING of its own: the log copy at
+	// step [8] closes with "Log copied to cloud, checksum not verified".
+	issues := &storeIssueRecorder{}
+	c.storeIssues, c.activeStore = issues, issues
+	defer func() { c.activeStore = nil }()
 	// Copy and verify each get an INDEPENDENT RcloneTimeoutOperation budget derived
 	// from the run ctx (cancel-only, no deadline: the cloud log dispatch passes it), so
 	// a stalled rclone or dead mount cannot hang shutdown AND a slow copy cannot starve
@@ -1898,6 +1923,7 @@ func (c *CloudStorage) deleteAssociatedLog(ctx context.Context, backupFile strin
 
 	if c.isCloudLogPathUnavailable() {
 		c.logger.Debug("Cloud logs: skipping delete for %s (log path unavailable)", cloudPath)
+		c.retTally.logsNotDeleted++
 		return false
 	}
 
@@ -2334,6 +2360,9 @@ func (c *CloudStorage) isCloudLogPathUnavailable() bool {
 }
 
 func (c *CloudStorage) markCloudLogPathMissing(base, msg string) {
+	// Reached only from countLogFiles, at the start of a retention pass: the fact
+	// sits under "Applying retention policy...", and every log the pass then cannot
+	// delete counts toward "Logs deleted: 0 of <K>".
 	c.logPathMu.Lock()
 	alreadyMissing := c.logPathMissing
 	if !alreadyMissing {
@@ -2350,7 +2379,8 @@ func (c *CloudStorage) markCloudLogPathMissing(base, msg string) {
 	if message := strings.TrimSpace(msg); message != "" {
 		c.logger.Debug("Cloud logs: rclone reported %q for %s", message, base)
 	}
-	c.logger.Warning("Cloud Storage: logs - %s does not exist, skipping the cleanup", base)
+	c.logger.Debug("Cloud Storage: logs - %s does not exist, skipping the cleanup", base)
+	c.logger.Info("  Log folder not found: %s", base)
 }
 
 func (c *CloudStorage) markCloudLogPathAvailable() {

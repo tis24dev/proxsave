@@ -418,7 +418,7 @@ func (d *FilesystemDetector) SetPermissions(ctx context.Context, path string, ui
 	}); err != nil {
 		// On compatible filesystem, this is a warning (not an error)
 		if fsInfo != nil && !fsInfo.Type.ShouldAutoExclude() {
-			d.logger.Warning("Failed to set ownership for %s (filesystem %s): %v", path, fsInfo.Type, err)
+			d.logger.Debug("Failed to set ownership for %s (filesystem %s): %v", path, fsInfo.Type, err)
 		}
 		// Don't return error - continue with chmod
 	}
@@ -427,7 +427,7 @@ func (d *FilesystemDetector) SetPermissions(ctx context.Context, path string, ui
 	if err := safefs.Chmod(ctx, path, mode, d.ioTimeout); err != nil {
 		// On compatible filesystem, this is a warning (not an error)
 		if fsInfo != nil && !fsInfo.Type.ShouldAutoExclude() {
-			d.logger.Warning("Failed to set permissions for %s (filesystem %s): %v", path, fsInfo.Type, err)
+			d.logger.Debug("Failed to set permissions for %s (filesystem %s): %v", path, fsInfo.Type, err)
 		}
 		return err
 	}

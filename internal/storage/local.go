@@ -57,6 +57,9 @@ type LocalStorage struct {
 	retTally retentionTally
 	// storeIssues records what the last Store left undone around the backup.
 	storeIssues *storeIssueRecorder
+	// lastNoMetadata names the archives the last List described from their file name
+	// alone; retention prints them as facts.
+	lastNoMetadata []string
 }
 
 // NewLocalStorage creates a new local storage instance.
@@ -211,6 +214,7 @@ func (l *LocalStorage) countBackups(ctx context.Context) int {
 func (l *LocalStorage) List(ctx context.Context) (backups []*types.BackupMetadata, err error) {
 	done := logging.DebugStart(l.logger, "local list", "path=%s", l.basePath)
 	defer func() { done(err) }()
+	l.lastNoMetadata = nil
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -279,7 +283,8 @@ func (l *LocalStorage) List(ctx context.Context) (backups []*types.BackupMetadat
 		// Parse metadata if available
 		metadata, err := l.loadMetadata(ctx, match)
 		if err != nil {
-			l.logger.Warning("Local Storage: listing - .metadata missing for %s, using the filename metadata", filepath.Base(match))
+			l.logger.Debug("Local Storage: listing - .metadata missing for %s, using the filename metadata: %v", filepath.Base(match), err)
+			l.lastNoMetadata = append(l.lastNoMetadata, filepath.Base(match))
 			// Create minimal metadata from filename
 			metadata = &types.BackupMetadata{
 				BackupFile: match,
@@ -560,14 +565,21 @@ func (l *LocalStorage) ApplyRetention(ctx context.Context, config RetentionConfi
 	l.logger.Debug("Local storage: listing backups for retention policy '%s'", config.Policy)
 	backups, err := l.List(ctx)
 	if err != nil {
+		// Not critical: a backup that could not be deleted is one backup too many,
+		// never a backup lost. The run continues and the caller closes the block with
+		// "Retention not applied".
+		l.logger.Debug("Local storage: retention - could not list the backups: %v", err)
+		l.logger.Info("  List failed: %s", ErrorCause(err))
 		return 0, &StorageError{
-			Location:   LocationPrimary,
-			Operation:  "apply_retention",
-			Path:       l.basePath,
-			Err:        err,
-			IsCritical: true,
+			Location:    LocationPrimary,
+			Operation:   "apply_retention",
+			Path:        l.basePath,
+			Err:         err,
+			IsCritical:  false,
+			Recoverable: true,
 		}
 	}
+	l.retTally.noMetadata = logListingNoMetadata(l.logger, l.lastNoMetadata)
 
 	// Drop anything this host does not own before counting or deleting: the
 	// "*-backup-*" glob that produced this list matches every hostname, and the list

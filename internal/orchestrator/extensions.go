@@ -546,7 +546,7 @@ func (o *Orchestrator) dispatchLogFile(ctx context.Context, logFilePath string) 
 	if o.cfg.SecondaryEnabled && o.cfg.SecondaryLogPath != "" {
 		secondaryLogPath := filepath.Join(o.cfg.SecondaryLogPath, logFileName)
 		o.logger.Debug("Copying log to secondary: %s", secondaryLogPath)
-		o.logger.Info("  Secondary: %s", secondaryLogPath)
+		o.logger.Info("Secondary: %s", secondaryLogPath)
 
 		// Each failure is one fact line and the outcome; the full error and the path
 		// it names stay in DEBUG.
@@ -585,7 +585,7 @@ func (o *Orchestrator) dispatchLogFile(ctx context.Context, logFilePath string) 
 	if o.cfg.CloudEnabled {
 		if cloudBase := strings.TrimSpace(o.cfg.CloudLogPath); cloudBase != "" {
 			destination := buildCloudLogDestination(cloudBase, logFileName, o.cfg.CloudRemote)
-			o.logger.Info("  Cloud: %s", destination)
+			o.logger.Info("Cloud: %s", destination)
 
 			_, probeErr := safefs.Run(context.Background(), "logstat", logFilePath, timeout, func() (struct{}, error) {
 				_, e := fs.Stat(logFilePath)
@@ -597,7 +597,9 @@ func (o *Orchestrator) dispatchLogFile(ctx context.Context, logFilePath string) 
 				o.logger.Info("  Source log not accessible: timed out after %s", timeout)
 				o.logger.Warning("%s Log not copied to cloud", theme.SymbolWarning)
 			case probeErr != nil:
-				o.logger.Warning("Skipping cloud log copy: cannot stat source log %s: %v", logFilePath, probeErr)
+				o.logger.Debug("Cloud log copy: cannot stat source log %s: %v", logFilePath, probeErr)
+				o.logger.Info("  Source log not accessible: %s", safefs.SystemErrorText(probeErr))
+				o.logger.Warning("%s Log not copied to cloud", theme.SymbolWarning)
 			default:
 				o.logger.Debug("Copying log to cloud: %s", destination)
 				// Detach the upload from the (possibly cancelled) run ctx: like the
@@ -608,11 +610,15 @@ func (o *Orchestrator) dispatchLogFile(ctx context.Context, logFilePath string) 
 				if o.copyLogToCloudFn != nil {
 					upload = o.copyLogToCloudFn
 				}
-				if err := upload(context.Background(), logFilePath, destination); err != nil {
+				switch err := upload(context.Background(), logFilePath, destination); {
+				case errors.Is(err, errLogChecksumNotVerified):
+					o.logger.Debug("Cloud log copy: %s uploaded, verified by size only", destination)
+					o.logger.Warning("%s Log copied to cloud, checksum not verified", theme.SymbolWarning)
+				case err != nil:
 					o.logger.Debug("Cloud log copy: failed to upload to %s: %v", destination, err)
 					o.logger.Info("  Copy failed: %s", storage.ErrorCause(err))
 					o.logger.Warning("%s Log not copied to cloud", theme.SymbolWarning)
-				} else {
+				default:
 					o.logger.Info("%s Log copied to cloud", theme.SymbolSuccess)
 				}
 			}
@@ -665,8 +671,21 @@ func (o *Orchestrator) copyLogToCloud(ctx context.Context, sourcePath, destPath 
 		return fmt.Errorf("failed to initialize cloud storage: %w", err)
 	}
 
-	return client.UploadToRemotePath(ctx, sourcePath, destPath, true)
+	if err := client.UploadToRemotePath(ctx, sourcePath, destPath, true); err != nil {
+		return err
+	}
+	for _, issue := range client.LastStoreIssues() {
+		if issue == storage.StoreIssueChecksumNotVerified {
+			return errLogChecksumNotVerified
+		}
+	}
+	return nil
 }
+
+// errLogChecksumNotVerified is a log that reached the cloud verified by size only: the
+// verify path printed the "  Checksum failed" fact, and dispatchLogFile closes the copy
+// with "Log copied to cloud, checksum not verified" instead of a failure.
+var errLogChecksumNotVerified = errors.New("log copied, checksum not verified")
 
 func buildCloudLogDestination(basePath, fileName, cloudRemote string) string {
 	// Normalize path using cloudRemote if basePath doesn't contain ":"

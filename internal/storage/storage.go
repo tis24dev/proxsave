@@ -183,6 +183,10 @@ type RetentionSummary struct {
 	LeftBehind int
 	// Skipped counts the archives retention could not date and left alone.
 	Skipped int
+	// NotListed counts the archives the listing could not read, so retention never saw them.
+	NotListed int
+	// NoMetadata counts the archives retention described from their file name alone.
+	NoMetadata int
 	// LogsNotDeleted counts the associated logs whose removal failed.
 	LogsNotDeleted int
 }

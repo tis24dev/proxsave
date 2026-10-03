@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/tis24dev/proxsave/internal/logging"
 	"github.com/tis24dev/proxsave/internal/safefs"
@@ -91,6 +93,16 @@ func ErrorCause(err error) string {
 	return safefs.SystemErrorText(err)
 }
 
+// capitalizeFirst upper-cases the first letter of a cause that opens its own fact
+// line ("  Timed out after 30s").
+func capitalizeFirst(s string) string {
+	if s == "" {
+		return s
+	}
+	r, size := utf8.DecodeRuneInString(s)
+	return string(unicode.ToUpper(r)) + s[size:]
+}
+
 // rcloneCause is the short cause of a failed rclone command: its last line, unless the
 // exec error says more than "exit status N". That "more" is the SIGKILL shape
 // (defaultExecCommand sets cmd.WaitDelay): the output is then whatever rclone printed
@@ -143,6 +155,8 @@ type retentionTally struct {
 	notDeleted     int
 	leftBehind     int
 	skipped        int
+	notListed      int
+	noMetadata     int
 	logsNotDeleted int
 }
 
@@ -151,8 +165,47 @@ func (t retentionTally) apply(s *RetentionSummary) {
 	s.NotDeleted = t.notDeleted
 	s.LeftBehind = t.leftBehind
 	s.Skipped = t.skipped
+	s.NotListed = t.notListed
+	s.NoMetadata = t.noMetadata
 	s.LogsNotDeleted = t.logsNotDeleted
 }
+
+// listingGap is what the last listing could not see: how many archives were left out
+// and the cause they share. Retention prints it as a fact; the other readers of the
+// listing (statistics, the post-copy count) only log it at DEBUG.
+type listingGap struct {
+	count int
+	cause string
+}
+
+// logListingGap prints the fact for the archives the listing left out, before the
+// scale of the pass, and returns how many there were.
+func logListingGap(logger *logging.Logger, gap listingGap) int {
+	if gap.count <= 0 {
+		return 0
+	}
+	logger.Info("  Not listed: %d backups, %s", gap.count, gap.cause)
+	return gap.count
+}
+
+// logListingNoMetadata prints one fact per archive the listing could only describe
+// from its file name, and returns how many there were.
+func logListingNoMetadata(logger *logging.Logger, names []string) int {
+	for _, name := range names {
+		logger.Info("  No metadata, name used: %s", name)
+	}
+	return len(names)
+}
+
+// DirectoryError is a destination directory that could not be created. The storage
+// initialization shows it as "  Directory not created: <cause>".
+type DirectoryError struct {
+	Err error
+}
+
+func (e *DirectoryError) Error() string { return "failed to create directory: " + e.Err.Error() }
+
+func (e *DirectoryError) Unwrap() error { return e.Err }
 
 // logRetentionSkipped prints one fact line per archive retention could not date and
 // left alone, and returns how many there were.

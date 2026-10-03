@@ -200,9 +200,9 @@ charhost-backup-20260102-030405.tar.bundle.tar:
 [<TIME>] DEBUG    Log file closed successfully
 [<TIME>] INFO     Dispatching log file: backup-charhost-20260102-030405.log
 [<TIME>] DEBUG    Copying log to secondary: <ROOT>/secondary-log/backup-charhost-20260102-030405.log
-[<TIME>] INFO       Secondary: <ROOT>/secondary-log/backup-charhost-20260102-030405.log
+[<TIME>] INFO     Secondary: <ROOT>/secondary-log/backup-charhost-20260102-030405.log
 [<TIME>] INFO     ✓ Log copied to secondary
-[<TIME>] INFO       Cloud: charremote:<ROOT>/cloud-log/backup-charhost-20260102-030405.log
+[<TIME>] INFO     Cloud: charremote:<ROOT>/cloud-log/backup-charhost-20260102-030405.log
 [<TIME>] DEBUG    Copying log to cloud: charremote:<ROOT>/cloud-log/backup-charhost-20260102-030405.log
 [<TIME>] INFO     ✓ Log copied to cloud
 

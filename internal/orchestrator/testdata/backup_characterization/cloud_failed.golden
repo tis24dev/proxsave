@@ -210,7 +210,7 @@ charhost-backup-20260102-030405.tar.bundle.tar:
 [<TIME>] INFO     Applying retention policy...
 [<TIME>] DEBUG      Policy: simple (keep 7 newest)
 [<TIME>] DEBUG    Local Storage: Current backups detected: 0
-[<TIME>] DEBUG    Local Storage: retention outcome planned=1 deleted=1 not_deleted=0 left_behind=0 skipped=0 logs_deleted=1 logs_not_deleted=0
+[<TIME>] DEBUG    Local Storage: retention outcome planned=1 deleted=1 not_deleted=0 left_behind=0 not_listed=0 skipped=0 no_metadata=0 logs_deleted=1 logs_not_deleted=0
 [<TIME>] INFO     ✓ Backups deleted: 1
 [<TIME>] INFO     ✓ Logs deleted: 1
 [<TIME>] INFO     Local Storage statistics:
@@ -226,7 +226,7 @@ charhost-backup-20260102-030405.tar.bundle.tar:
 [<TIME>] INFO     Applying retention policy...
 [<TIME>] DEBUG      Policy: simple (keep 14 newest)
 [<TIME>] DEBUG    Secondary Storage: Current backups detected: 0
-[<TIME>] DEBUG    Secondary Storage: retention outcome planned=0 deleted=0 not_deleted=0 left_behind=0 skipped=0 logs_deleted=0 logs_not_deleted=0
+[<TIME>] DEBUG    Secondary Storage: retention outcome planned=0 deleted=0 not_deleted=0 left_behind=0 not_listed=0 skipped=0 no_metadata=0 logs_deleted=0 logs_not_deleted=0
 [<TIME>] INFO     ✓ Nothing to delete
 [<TIME>] INFO     Secondary Storage statistics:
 [<TIME>] INFO       Total backups: 5
@@ -240,7 +240,7 @@ charhost-backup-20260102-030405.tar.bundle.tar:
 [<TIME>] WARNING  ✗ Cloud Storage (rclone): backup not saved
 [<TIME>] INFO     Applying retention policy...
 [<TIME>] DEBUG      Policy: simple (keep 30 newest)
-[<TIME>] DEBUG    Cloud Storage (rclone): retention outcome planned=2 deleted=2 not_deleted=0 left_behind=0 skipped=0 logs_deleted=0 logs_not_deleted=0
+[<TIME>] DEBUG    Cloud Storage (rclone): retention outcome planned=2 deleted=2 not_deleted=0 left_behind=0 not_listed=0 skipped=0 no_metadata=0 logs_deleted=0 logs_not_deleted=0
 [<TIME>] INFO     ✓ Backups deleted: 2
 [<TIME>] INFO     Cloud Storage (rclone) statistics:
 [<TIME>] INFO       Total backups: 4
@@ -265,9 +265,9 @@ charhost-backup-20260102-030405.tar.bundle.tar:
 [<TIME>] DEBUG    Log file closed successfully
 [<TIME>] INFO     Dispatching log file: backup-charhost-20260102-030405.log
 [<TIME>] DEBUG    Copying log to secondary: <ROOT>/secondary-log/backup-charhost-20260102-030405.log
-[<TIME>] INFO       Secondary: <ROOT>/secondary-log/backup-charhost-20260102-030405.log
+[<TIME>] INFO     Secondary: <ROOT>/secondary-log/backup-charhost-20260102-030405.log
 [<TIME>] INFO     ✓ Log copied to secondary
-[<TIME>] INFO       Cloud: charremote:<ROOT>/cloud-log/backup-charhost-20260102-030405.log
+[<TIME>] INFO     Cloud: charremote:<ROOT>/cloud-log/backup-charhost-20260102-030405.log
 [<TIME>] DEBUG    Copying log to cloud: charremote:<ROOT>/cloud-log/backup-charhost-20260102-030405.log
 [<TIME>] INFO     ✓ Log copied to cloud
 
@@ -435,7 +435,7 @@ charhost-backup-20260102-030405.tar.bundle.tar:
 [<TIME>] INFO     Applying retention policy...
 [<TIME>] DEBUG      Policy: simple (keep 7 newest)
 [<TIME>] DEBUG    Local Storage: Current backups detected: 0
-[<TIME>] DEBUG    Local Storage: retention outcome planned=1 deleted=1 not_deleted=0 left_behind=0 skipped=0 logs_deleted=1 logs_not_deleted=0
+[<TIME>] DEBUG    Local Storage: retention outcome planned=1 deleted=1 not_deleted=0 left_behind=0 not_listed=0 skipped=0 no_metadata=0 logs_deleted=1 logs_not_deleted=0
 [<TIME>] INFO     ✓ Backups deleted: 1
 [<TIME>] INFO     ✓ Logs deleted: 1
 [<TIME>] INFO     Local Storage statistics:
@@ -451,7 +451,7 @@ charhost-backup-20260102-030405.tar.bundle.tar:
 [<TIME>] INFO     Applying retention policy...
 [<TIME>] DEBUG      Policy: simple (keep 14 newest)
 [<TIME>] DEBUG    Secondary Storage: Current backups detected: 0
-[<TIME>] DEBUG    Secondary Storage: retention outcome planned=0 deleted=0 not_deleted=0 left_behind=0 skipped=0 logs_deleted=0 logs_not_deleted=0
+[<TIME>] DEBUG    Secondary Storage: retention outcome planned=0 deleted=0 not_deleted=0 left_behind=0 not_listed=0 skipped=0 no_metadata=0 logs_deleted=0 logs_not_deleted=0
 [<TIME>] INFO     ✓ Nothing to delete
 [<TIME>] INFO     Secondary Storage statistics:
 [<TIME>] INFO       Total backups: 5
@@ -465,7 +465,7 @@ charhost-backup-20260102-030405.tar.bundle.tar:
 [<TIME>] WARNING  ✗ Cloud Storage (rclone): backup not saved
 [<TIME>] INFO     Applying retention policy...
 [<TIME>] DEBUG      Policy: simple (keep 30 newest)
-[<TIME>] DEBUG    Cloud Storage (rclone): retention outcome planned=2 deleted=2 not_deleted=0 left_behind=0 skipped=0 logs_deleted=0 logs_not_deleted=0
+[<TIME>] DEBUG    Cloud Storage (rclone): retention outcome planned=2 deleted=2 not_deleted=0 left_behind=0 not_listed=0 skipped=0 no_metadata=0 logs_deleted=0 logs_not_deleted=0
 [<TIME>] INFO     ✓ Backups deleted: 2
 [<TIME>] INFO     Cloud Storage (rclone) statistics:
 [<TIME>] INFO       Total backups: 4

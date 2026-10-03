@@ -50,6 +50,10 @@ type SecondaryStorage struct {
 	retTally retentionTally
 	// storeIssues records what the last Store left undone around the backup.
 	storeIssues *storeIssueRecorder
+	// lastListGap is what the last List could not see; retention prints it as a fact.
+	lastListGap listingGap
+	// detectErr is why the last DetectFilesystem fell back to an unknown filesystem.
+	detectErr error
 }
 
 // NewSecondaryStorage creates a new secondary storage instance.
@@ -101,15 +105,16 @@ func (s *SecondaryStorage) DetectFilesystem(ctx context.Context) (info *Filesyst
 	done := logging.DebugStart(s.logger, "secondary detect filesystem", "path=%s", s.basePath)
 	defer func() { done(err) }()
 	// Ensure directory exists (bounded: secondary is typically an NFS/CIFS mount).
+	s.detectErr = nil
 	if err := safefs.MkdirAll(ctx, s.basePath, 0700, fsIoTimeout(s.config)); err != nil {
-		// Non-critical error - log warning and return
-		s.logger.Warning("Secondary Storage: setup - cannot create the backup directory %s: %v", s.basePath, err)
-		s.logger.Warning("Secondary Storage: setup - backup will be skipped")
+		// Non-critical: the storage initialization prints "  Directory not created"
+		// and disables the destination for the run.
+		s.logger.Debug("Secondary Storage: setup - cannot create the backup directory %s: %v", s.basePath, err)
 		return nil, &StorageError{
 			Location:    LocationSecondary,
 			Operation:   "detect_filesystem",
 			Path:        s.basePath,
-			Err:         fmt.Errorf("failed to create directory: %w", err),
+			Err:         &DirectoryError{Err: err},
 			IsCritical:  false,
 			Recoverable: true,
 		}
@@ -117,9 +122,11 @@ func (s *SecondaryStorage) DetectFilesystem(ctx context.Context) (info *Filesyst
 
 	fsInfo, err := s.fsDetector.DetectFilesystem(ctx, s.basePath)
 	if err != nil {
-		// Non-critical error - log warning
-		s.logger.Warning("Secondary Storage: setup - failed to detect the filesystem type: %v", err)
-		s.logger.Warning("Secondary Storage: permissions - copying anyway, ownership and permission hardening will not be applied")
+		// Non-critical: the copy still runs, without ownership and permission
+		// hardening. The storage initialization prints the cause and the outcome
+		// (DetectionFailure).
+		s.logger.Debug("Secondary Storage: setup - failed to detect the filesystem type, copying without permission hardening: %v", err)
+		s.detectErr = err
 		// Create minimal fsInfo with unknown type
 		fsInfo = &FilesystemInfo{
 			Path:              s.basePath,
@@ -172,7 +179,7 @@ func (s *SecondaryStorage) Store(ctx context.Context, backupFile string, metadat
 	if err := safefs.MkdirAll(ctx, s.basePath, 0700, fsIoTimeout(s.config)); err != nil {
 		s.logger.Debug("Secondary storage: failed to create destination folder %s", s.basePath)
 		s.logger.Debug("Secondary Storage: copy - failed to create the destination directory %s: %v", s.basePath, err)
-		s.logger.Info("  Copy failed: %s", safefs.SystemErrorText(err))
+		s.logger.Info("  Copy failed: mkdir %s", safefs.SystemErrorText(err))
 		return &StorageError{
 			Location:    LocationSecondary,
 			Operation:   "store",
@@ -235,8 +242,10 @@ func (s *SecondaryStorage) Store(ctx context.Context, backupFile string, metadat
 	// Set owner and mode on every copied file of the backup set (best effort)
 	if s.fsInfo != nil && s.fsInfo.SupportsOwnership {
 		setBackupSetPermissions(ctx, s.config, s.logger, s.fsDetector, s.fsInfo, destFile, func(path string, err error) {
-			s.logger.Warning("Secondary Storage: permissions - failed to set them on %s: %v",
+			s.logger.Debug("Secondary Storage: permissions - failed to set them on %s: %v",
 				filepath.Base(path), err)
+			s.logger.Info("  Permissions failed: %s: %s", filepath.Base(path), safefs.SystemErrorText(err))
+			issues.add(StoreIssuePermissionsNotSet)
 		})
 	}
 
@@ -255,6 +264,12 @@ func (s *SecondaryStorage) Store(ctx context.Context, backupFile string, metadat
 // LastStoreIssues implements StoreReporter.
 func (s *SecondaryStorage) LastStoreIssues() []StoreIssue {
 	return s.storeIssues.list()
+}
+
+// DetectionFailure is why the last DetectFilesystem fell back to an unknown
+// filesystem, nil when it did not.
+func (s *SecondaryStorage) DetectionFailure() error {
+	return s.detectErr
 }
 
 func (s *SecondaryStorage) countBackups(ctx context.Context) int {
@@ -396,6 +411,7 @@ func (s *SecondaryStorage) copyFile(ctx context.Context, src, dest string) (err 
 func (s *SecondaryStorage) List(ctx context.Context) (backups []*types.BackupMetadata, err error) {
 	done := logging.DebugStart(s.logger, "secondary list", "path=%s", s.basePath)
 	defer func() { done(err) }()
+	s.lastListGap = listingGap{}
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -414,7 +430,7 @@ func (s *SecondaryStorage) List(ctx context.Context) (backups []*types.BackupMet
 			return filepath.Glob(pattern)
 		})
 		if err != nil {
-			s.logger.Warning("Secondary Storage: listing - failed: %v", err)
+			s.logger.Debug("Secondary Storage: listing - failed: %v", err)
 			return nil, &StorageError{
 				Location:    LocationSecondary,
 				Operation:   "list",
@@ -457,8 +473,9 @@ func (s *SecondaryStorage) List(ctx context.Context) (backups []*types.BackupMet
 	// reported once after the loop.
 	vanished := 0
 	// unreadable holds one already-rendered entry per archive the listing lost, each
-	// carrying its own cause, so no archive ever borrows another's.
-	var unreadable []string
+	// carrying its own cause, so no archive ever borrows another's. unreadableCause is
+	// the bare cause of each, for the retention fact, which names the first.
+	var unreadable, unreadableCause []string
 
 	// Filter and parse backup files
 	for _, match := range matches {
@@ -497,6 +514,7 @@ func (s *SecondaryStorage) List(ctx context.Context) (backups []*types.BackupMet
 				continue
 			}
 			unreadable = append(unreadable, fmt.Sprintf("%s: %s", listingFailureCause(err), filepath.Base(match)))
+			unreadableCause = append(unreadableCause, listingFailureCause(err))
 			continue
 		}
 
@@ -531,8 +549,9 @@ func (s *SecondaryStorage) List(ctx context.Context) (backups []*types.BackupMet
 					return nil, statErr
 				}
 				located = false
-				s.logger.Warning("Secondary Storage: listing - location stopped answering, %d archive(s) not listed: %v",
+				s.logger.Debug("Secondary Storage: listing - location stopped answering, %d archive(s) not listed: %v",
 					skipped, statErr)
+				s.lastListGap = listingGap{count: skipped, cause: listingFailureCause(statErr)}
 			}
 		}
 		// The WARNING carries the datum - the count and the consequence - and stands
@@ -546,8 +565,9 @@ func (s *SecondaryStorage) List(ctx context.Context) (backups []*types.BackupMet
 			for _, entry := range unreadable {
 				s.logger.Debug("Secondary Storage: listing incomplete - %s", entry)
 			}
-			s.logger.Warning("Secondary Storage: listing incomplete, %d archive(s) could not be read - retention and the stats run on the rest.",
+			s.logger.Debug("Secondary Storage: listing incomplete, %d archive(s) could not be read - retention and the stats run on the rest.",
 				len(unreadable))
+			s.lastListGap = listingGap{count: len(unreadable), cause: unreadableCause[0]}
 		}
 	}
 
@@ -730,6 +750,7 @@ func (s *SecondaryStorage) ApplyRetention(ctx context.Context, config RetentionC
 			Recoverable: true,
 		}
 	}
+	s.retTally.notListed = logListingGap(s.logger, s.lastListGap)
 
 	// Attribute each candidate to its owning host, then drop anything this host does
 	// not own before counting or deleting. This matters most here: a shared NAS mount
@@ -982,7 +1003,7 @@ func (s *SecondaryStorage) GetStats(ctx context.Context) (stats *StorageStats, e
 		// List has already named the fault on every path that reaches it through the
 		// glob; what this adds is that the location's figures are gone with it. On the
 		// abandoned path (ctx checked at :382, before the glob) this is the only line.
-		s.logger.Warning("Secondary Storage: stats - unavailable: %v", err)
+		s.logger.Debug("Secondary Storage: stats - unavailable: %v", err)
 		return nil, err
 	}
 

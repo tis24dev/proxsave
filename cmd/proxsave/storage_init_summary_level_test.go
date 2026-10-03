@@ -3,6 +3,9 @@ package main
 import (
 	"bytes"
 	"context"
+	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -145,7 +148,7 @@ func TestCloudUnavailableHeadlineIsAWarning(t *testing.T) {
 		switch {
 		case strings.Contains(line, "✗ Cloud storage: not initialized"):
 			outcome = i
-		case strings.Contains(line, "Cloud remote: rclone command not found in PATH"):
+		case strings.Contains(line, "INFO       rclone: not found in PATH"):
 			cause = i
 		case strings.Contains(line, "Path Cloud: disabled"):
 			skip = i
@@ -168,9 +171,20 @@ func TestCloudUnavailableHeadlineIsAWarning(t *testing.T) {
 	if skip < outcome || levelColumnOf(lines[skip]) != "SKIP" {
 		t.Fatalf("the SKIP line is missing or precedes the outcome:\n%s", out)
 	}
-	for _, want := range []string{"Path Cloud: remote", "  Filesystem: unknown (detection unavailable)"} {
-		if !strings.Contains(out, want) {
-			t.Fatalf("the cloud-unavailable block lost %q:\n%s", want, out)
+	// The path is read first, then checked: the path and its configuration open the
+	// block, the check follows with what it found under it. No filesystem line: the
+	// check never reached one.
+	requireOrder(t, out,
+		"INFO     Path Cloud: remote\n",
+		"INFO       Retention policy: simple (keep 0 newest)\n",
+		"INFO     Checking cloud remote accessibility...\n",
+		"INFO       rclone: not found in PATH\n",
+		"WARNING  ✗ Cloud storage: not initialized\n",
+		"SKIP     Path Cloud: disabled\n",
+	)
+	for _, gone := range []string{"Filesystem:", "install rclone", "setup - rclone"} {
+		if strings.Contains(out, gone) {
+			t.Fatalf("the cloud-unavailable block still carries %q:\n%s", gone, out)
 		}
 	}
 	if cfg.CloudEnabled || cfg.CloudLogPath != "" {
@@ -187,7 +201,93 @@ func TestGFSSummaryWithoutStatsIsAWarningToo(t *testing.T) {
 	if !warn {
 		t.Fatalf("a GFS summary built without stats must report warn=true, got false: %s", summary)
 	}
-	if !strings.Contains(summary, "GFS retention") {
-		t.Fatalf("expected the GFS branch, got: %s", summary)
+	// Without stats there are no tiers to count: the GFS block carries the unknown
+	// count and the outcome; its policy is the configuration line above.
+	if want := "  Backups: unknown, statistics unavailable\n⚠ Local storage: initialized, statistics unavailable"; summary != want {
+		t.Fatalf("GFS summary without stats = %q, want %q", summary, want)
+	}
+	if got := formatRetentionPolicyLine(cfg, storage.LocationPrimary); got != "  Retention policy: GFS (daily=2, weekly=1, monthly=0, yearly=0)" {
+		t.Fatalf("GFS policy line = %q", got)
+	}
+}
+
+// requireOrder fails unless every want appears in out, in that order.
+func requireOrder(t *testing.T, out string, want ...string) {
+	t.Helper()
+	last := -1
+	for _, w := range want {
+		idx := strings.Index(out, w)
+		if idx < 0 || idx < last {
+			t.Fatalf("%q is missing or out of order in:\n%s", w, out)
+		}
+		last = idx
+	}
+}
+
+// The filesystem facts: a filesystem without ownership says the permissions are
+// skipped (the Primary and the Secondary; a cloud remote never takes ownership), and a
+// detection that failed says so and makes the outcome name it.
+func TestStorageFilesystemFacts(t *testing.T) {
+	render := func(info *storage.FilesystemInfo, detectErr error) (string, string) {
+		logger := logging.New(types.LogLevelInfo, false)
+		buf := &bytes.Buffer{}
+		logger.SetOutput(buf)
+		prev := logging.GetDefaultLogger()
+		t.Cleanup(func() { logging.SetDefaultLogger(prev) })
+		logging.SetDefaultLogger(logger)
+		problem := logStorageFilesystem(info, detectErr)
+		return buf.String(), problem
+	}
+
+	out, problem := render(&storage.FilesystemInfo{Type: storage.FilesystemFAT32, MountPoint: "/mnt/usb"}, nil)
+	requireOrder(t, out, "INFO       Filesystem: vfat (no ownership) [mount: /mnt/usb]\n", "INFO       Permissions: skipped, no ownership\n")
+	if problem != "" {
+		t.Fatalf("no ownership is not a problem for the outcome, got %q", problem)
+	}
+
+	out, _ = render(&storage.FilesystemInfo{Type: "rclone-remote", IsNetworkFS: true, MountPoint: "remote:", Device: "cloud"}, nil)
+	if strings.Contains(out, "Permissions:") {
+		t.Fatalf("a cloud remote has no permissions line:\n%s", out)
+	}
+
+	out, problem = render(&storage.FilesystemInfo{Type: storage.FilesystemUnknown}, errors.New("statfs failed"))
+	requireOrder(t, out, "INFO       Filesystem: unknown, detection failed: statfs failed\n", "INFO       Permissions: skipped, filesystem unknown\n")
+	if problem != "filesystem unknown" {
+		t.Fatalf("problem = %q, want filesystem unknown", problem)
+	}
+}
+
+// A secondary directory that cannot be created closes the block like an unreachable
+// cloud: the path and its configuration, the cause, "✗ ... not initialized", the SKIP,
+// and the destination is off for the run.
+func TestSecondaryDirectoryNotCreatedDisablesIt(t *testing.T) {
+	blocker := filepath.Join(t.TempDir(), "file")
+	if err := os.WriteFile(blocker, []byte("x"), 0o600); err != nil {
+		t.Fatalf("write blocker: %v", err)
+	}
+	logger := logging.New(types.LogLevelInfo, false)
+	buf := &bytes.Buffer{}
+	logger.SetOutput(buf)
+	prev := logging.GetDefaultLogger()
+	t.Cleanup(func() { logging.SetDefaultLogger(prev) })
+	logging.SetDefaultLogger(logger)
+
+	path := filepath.Join(blocker, "secondary")
+	cfg := &config.Config{SecondaryEnabled: true, SecondaryPath: path, SecondaryLogPath: "/logs", SecondaryRetentionDays: 5}
+	initializeSecondaryStorage(backupModeOptions{ctx: context.Background(), cfg: cfg, logger: logger, hostname: "node"}, nil, nil)
+
+	out := buf.String()
+	requireOrder(t, out,
+		"INFO     Path Secondary: "+path+"\n",
+		"INFO       Retention policy: simple (keep 5 newest)\n",
+		"INFO       Directory not created: not a directory\n",
+		"WARNING  ✗ Secondary storage: not initialized\n",
+		"SKIP     Path Secondary: disabled\n",
+	)
+	if strings.Contains(out, "Filesystem:") || strings.Count(out, "WARNING") != 1 {
+		t.Fatalf("one outcome, no filesystem line:\n%s", out)
+	}
+	if cfg.SecondaryEnabled || cfg.SecondaryLogPath != "" {
+		t.Fatalf("the secondary must be off for the run: enabled=%v logPath=%q", cfg.SecondaryEnabled, cfg.SecondaryLogPath)
 	}
 }
