@@ -650,8 +650,14 @@ func (s *SecondaryStorage) deleteBackupInternal(ctx context.Context, backupFile 
 		}
 	}
 
-	// Best-effort: delete associated secondary log file for this backup
-	logDeleted := s.deleteAssociatedLog(ctx, backupFile)
+	// Best-effort: delete the associated log, but only once the backup's data file is
+	// gone. A backup that could not be deleted keeps its log.
+	logDeleted := false
+	if !dataFailed {
+		logDeleted = s.deleteAssociatedLog(ctx, backupFile)
+	} else {
+		s.logger.Debug("Secondary storage: keeping the log of %s, the backup was not deleted", filepath.Base(backupFile))
+	}
 
 	if len(failedFiles) > 0 {
 		if !dataFailed {

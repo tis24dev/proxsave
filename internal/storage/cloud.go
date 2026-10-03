@@ -2232,8 +2232,13 @@ func (c *CloudStorage) deleteBackupInternal(ctx context.Context, backupFile stri
 		c.removeRemoteSnapshotEntry(rel)
 	}
 
-	// Best-effort: delete associated cloud log file for this backup
-	logDeleted = c.deleteAssociatedLog(ctx, backupFile)
+	// Best-effort: delete the associated log, but only once the backup's data file is
+	// gone. A backup that could not be deleted keeps its log.
+	if !dataFailed {
+		logDeleted = c.deleteAssociatedLog(ctx, backupFile)
+	} else {
+		c.logger.Debug("Cloud storage: keeping the log of %s, the backup was not deleted", filepath.Base(backupFile))
+	}
 
 	if len(failedFiles) > 0 {
 		if !dataFailed {

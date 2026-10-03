@@ -456,8 +456,14 @@ func (l *LocalStorage) deleteBackupInternal(ctx context.Context, backupFile stri
 		}
 	}
 
-	// Best-effort: delete associated local log file for this backup
-	logDeleted := l.deleteAssociatedLog(ctx, backupFile)
+	// Best-effort: delete the associated log, but only once the backup's data file is
+	// gone. A backup that could not be deleted keeps its log.
+	logDeleted := false
+	if !dataFailed {
+		logDeleted = l.deleteAssociatedLog(ctx, backupFile)
+	} else {
+		l.logger.Debug("Local storage: keeping the log of %s, the backup was not deleted", filepath.Base(backupFile))
+	}
 
 	if len(failedFiles) > 0 {
 		if !dataFailed {
