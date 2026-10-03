@@ -10,7 +10,7 @@ import (
 
 // CountOwnedBackups answers, for a listing taken OUTSIDE a retention pass, the
 // question RetentionSummary.Owned answers after one: how many of these archives
-// this host is answerable for at the backend's location (discussion #292). It
+// this host owns at the backend's location (discussion #292). It
 // exists for a run that fails before its copies: retention never runs there, so
 // the startup listing is the only one there is, and printing its unscoped length
 // against this host's limit is the "40/7" the scoped count was introduced to end.
@@ -18,9 +18,7 @@ import (
 // It runs the attribution ApplyRetention runs, in the same order: the manifest
 // owner lookup on the backends whose List leaves it out (secondary and cloud, one
 // "rclone cat" per archive on the cloud, under the same management budget), then
-// scopeRetentionToHost, then the two populations Owned adds back, archives nobody
-// can name and archives carrying this host's short name under another spelling. It
-// does NONE of applyRetentionHostScope's reporting. That function prints facts
+// scopeRetentionToHost. It does NONE of applyRetentionHostScope's reporting. That function prints facts
 // under "Applying retention policy...", and a count taken at startup, outside any
 // retention block, must add no line. Nothing here logs above Debug.
 //
@@ -133,12 +131,11 @@ func ownedStorageStats(backups []*types.BackupMetadata, id retentionIdentity) *S
 	return stats
 }
 
-// ownedBackupCount is the arithmetic ApplyRetention publishes as Owned before its
-// deletions: the archives scoped to this host plus the two out-of-scope populations
-// applyRetentionHostScope returns as unmanaged. It is kept apart from that function
+// ownedBackupCount is the number ApplyRetention publishes as Owned before its
+// deletions: the archives scoped to this host. It is kept apart from that function
 // because that one also reports, and TestOwnedBackupCountMatchesRetentionScope pins
 // the two to the same answer.
 func ownedBackupCount(backups []*types.BackupMetadata, id retentionIdentity) int {
-	owned, foreign := scopeRetentionToHost(backups, id)
-	return len(owned) + retentionUnattributable(foreign) + retentionSpellingMismatches(foreign, id)
+	owned, _ := scopeRetentionToHost(backups, id)
+	return len(owned)
 }

@@ -795,9 +795,8 @@ func (s *SecondaryStorage) ApplyRetention(ctx context.Context, config RetentionC
 
 	// The shared NAS mount is the documented secondary layout, so this is the
 	// location where the unscoped count was most often somebody else's
-	// (discussion #292). See LocalStorage.ApplyRetention for why the archives no
-	// host manages are added back rather than dropped.
-	owned, scoped = len(backups)+scope.unmanaged, true
+	// (discussion #292). Only this host's own backups are counted.
+	owned, scoped = len(backups), true
 
 	if len(backups) == 0 {
 		s.logger.Debug("Secondary storage: no backups to apply retention")

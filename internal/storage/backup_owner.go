@@ -58,11 +58,10 @@ type retentionIdentity struct {
 
 // shortLabel is the one first label this host reports under: the first label of the
 // name the kernel gives, normalised. Aliases are deliberately NOT folded in. It is the
-// key retentionSpellingMismatches counts under: an archive whose first label is this
+// key the not-rotated fact is reported under: an archive whose first label is this
 // one, under a spelling this host does not answer to and without this host's server
-// identity, is reported as not rotated. Widening the key would widen what is reported
-// as this host's unmanaged work, which is a published number (RetentionSummary.Owned),
-// and it would put another machine's archives into it.
+// identity, is named as not rotated. Widening the key would put another machine's
+// archives into that report.
 func (id retentionIdentity) shortLabel() string {
 	return hostShortLabel(types.NormalizeHostname(id.hostname))
 }
@@ -248,9 +247,8 @@ func hostShortLabel(host string) string {
 }
 
 // archiveSharesLocalShortLabel reports whether an archive is attributed to a host
-// whose first label is this host's own first label. It is the membership test of the
-// population reported as not rotated, and ownedBackupCount and applyRetentionHostScope
-// both count with it, so the two numbers agree by construction.
+// whose first label is this host's own first label, under a spelling this host does
+// not answer to. It is the membership test of the population reported as not rotated.
 //
 // The empty local label is refused rather than compared. hostShortLabel("") is "", so
 // a machine that cannot name itself would otherwise match every unattributable entry
@@ -267,24 +265,6 @@ func archiveSharesLocalShortLabel(meta *types.BackupMetadata, id retentionIdenti
 	return hostShortLabel(types.NormalizeHostname(backupOwnerHost(meta))) == local
 }
 
-// retentionSpellingMismatches counts entries that look like this host's own work
-// under a different spelling of its name: the owner shares the local short label
-// without being one of the names this machine answers to, and the archive does not
-// carry this host's server identity (one that does is adopted, so it is never in the
-// foreign set). They are usually archives written while "hostname -f" resolved and it
-// no longer does, so they have stopped rotating. They are reported, never claimed BY
-// NAME: from here a name alone cannot tell them from a second machine with the same
-// short name, and claiming them on the name would delete that machine's backups.
-func retentionSpellingMismatches(foreign []*types.BackupMetadata, id retentionIdentity) int {
-	count := 0
-	for _, b := range foreign {
-		if archiveSharesLocalShortLabel(b, id) {
-			count++
-		}
-	}
-	return count
-}
-
 // retentionUnattributable counts the out-of-scope entries that name no writer at
 // all, usually pre-Go "proxmox-backup-*" archives with no readable manifest beside
 // them. It is keyed on ATTRIBUTABILITY rather than on the legacy prefix, because
@@ -297,8 +277,8 @@ func retentionSpellingMismatches(foreign []*types.BackupMetadata, id retentionId
 // name is a fixed backlog fact that no future run will change, and since no host will
 // ever prune it, counting it as a run issue would promote every affected run to exit 1
 // for ever through applyIssueExitCode (internal/orchestrator/extensions.go), which is
-// the symptom discussion #292 reported rather than a report of it. It is counted here
-// because RetentionSummary.Owned adds it back.
+// the symptom discussion #292 reported rather than a report of it. It is counted for
+// the DEBUG line that names the case.
 func retentionUnattributable(foreign []*types.BackupMetadata) int {
 	count := 0
 	for _, b := range foreign {
@@ -487,15 +467,9 @@ var errRetentionHostnameNotResolved = errors.New("the local hostname is not reso
 
 // retentionScope is what applyRetentionHostScope hands back to a retention pass.
 type retentionScope struct {
-	// owned are the backups this host rotates.
+	// owned are the backups this host rotates: owned by name or adopted by server
+	// identity. Their count is RetentionSummary.Owned.
 	owned []*types.BackupMetadata
-	// unmanaged is how many out-of-scope backups are PRESENT BUT MANAGED BY NOBODY:
-	// the unattributable ones plus the ones named under this host's short name in a
-	// spelling it does not answer to. A count of owned archives alone is a false
-	// all-clear on the two populations that grow without bound, so RetentionSummary.Owned
-	// adds them back (discussion #292). Archives carrying another machine's name are
-	// NOT counted: they are that machine's to prune.
-	unmanaged int
 	// notRotated are the backups named under this host's short name in a spelling it
 	// does not answer to, one entry per name, in the order the names were first met.
 	// Retention leaves them alone and the pass outcome says so.
@@ -570,9 +544,6 @@ func applyRetentionHostScope(location string, id retentionIdentity, backups []*t
 	owned, foreign := scopeRetentionToHost(backups, id)
 	logger.Debug("%s: retention answers to %s (server identity %s)", location, strings.Join(append([]string{id.hostname}, id.aliases...), ", "), retentionServerIDLabel(id.serverID))
 
-	// Adoption only ever MOVES an entry out of foreign and into owned, so the
-	// unmanaged count below shrinks by exactly what was adopted, which is the correct
-	// report: those archives are managed again.
 	if adopted := retentionAdopted(owned, id); len(adopted) > 0 {
 		for _, b := range adopted {
 			logger.Debug("%s: retention - adopted %s (owner=%q, server identity %s)", location, b.BackupFile, backupOwnerHost(b), retentionServerIDLabel(archiveServerID(b)))
@@ -602,8 +573,6 @@ func applyRetentionHostScope(location string, id retentionIdentity, backups []*t
 		logger.Debug("%s: retention - %d backup(s) left alone because nothing names the host that wrote them, usually pre-Go \"proxmox-backup-*\" archives with no readable manifest beside them: no host can claim them and no host will ever delete them", location, unattributable)
 	}
 
-	// The same predicate retentionSpellingMismatches counts with, so the unmanaged
-	// count below and ownedBackupCount agree by construction.
 	var mismatched []*types.BackupMetadata
 	for _, b := range foreign {
 		if archiveSharesLocalShortLabel(b, id) {
@@ -618,7 +587,7 @@ func applyRetentionHostScope(location string, id retentionIdentity, backups []*t
 		}
 	}
 
-	return retentionScope{owned: owned, unmanaged: unattributable + len(mismatched), notRotated: notRotated}, nil
+	return retentionScope{owned: owned, notRotated: notRotated}, nil
 }
 
 // logRetentionServerIdentity records, once per backend construction, whether this

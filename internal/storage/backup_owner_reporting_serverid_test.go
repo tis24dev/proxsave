@@ -13,10 +13,8 @@ import (
 // on any of them, so a WARNING here would hold a healthy, fully-managed location red
 // for ever.
 //
-// It also pins the SECOND RETURN, which feeds the notification's "managed by nobody"
-// count, and the not-rotated set the outcome line reads. Adoption moves entries out of
-// the foreign set, so both must drop by exactly the number adopted: those archives are
-// managed again.
+// It also pins the not-rotated set the outcome line reads: adoption moves entries out
+// of the foreign set, so they are no longer reported as not rotated.
 func TestAdoptedArchivesAreReportedAtInfoAndLeaveTheWarningCountAlone(t *testing.T) {
 	backups := []*types.BackupMetadata{
 		{BackupFile: "pve-backup-20250103-100000.tar.zst", Hostname: "pve", ServerID: ourServerID},
@@ -31,8 +29,8 @@ func TestAdoptedArchivesAreReportedAtInfoAndLeaveTheWarningCountAlone(t *testing
 	if err != nil {
 		t.Fatalf("applyRetentionHostScope: %v", err)
 	}
-	if len(base.owned) != 1 || base.unmanaged != 2 {
-		t.Fatalf("baseline scoped %d entries with %d unmanaged, want 1 and 2; the fixture no longer describes the case it is meant to", len(base.owned), base.unmanaged)
+	if len(base.owned) != 1 || len(base.notRotated) != 1 || base.notRotated[0].count != 2 {
+		t.Fatalf("baseline scoped %d entries, not rotated %+v; want 1 and 2 under one name: the fixture no longer describes the case it is meant to", len(base.owned), base.notRotated)
 	}
 	if level := baseLogger.levelOf("  Named pve.home.arpa, not rotated: 2 backups"); level != "INFO" {
 		t.Fatalf("baseline not-rotated fact emitted at %q, want INFO. Lines: %+v", level, baseLogger.lines)
@@ -46,9 +44,6 @@ func TestAdoptedArchivesAreReportedAtInfoAndLeaveTheWarningCountAlone(t *testing
 
 	if len(scope.owned) != 3 {
 		t.Fatalf("scoped %d of 3 entries; every archive here carries this host's own identity", len(scope.owned))
-	}
-	if scope.unmanaged != base.unmanaged-2 {
-		t.Errorf("the managed-by-nobody count is %d, want %d (the baseline %d less the 2 adopted). Adoption moves entries into the owned set, so the count must drop by exactly what it adopted", scope.unmanaged, base.unmanaged-2, base.unmanaged)
 	}
 	if len(scope.notRotated) != 0 {
 		t.Errorf("not rotated = %+v, want none: the adopted archives rotate", scope.notRotated)
@@ -80,13 +75,10 @@ func TestDivergentIdentitiesAreReportedAtInfoAndStillPruned(t *testing.T) {
 	}
 
 	logger := &levelRecordingLogger{}
-	scoped, unmanaged := scopeListing(t, "Local storage", hostWithIdentity("pve", ourServerID), backups, logger)
+	scoped := scopeListing(t, "Local storage", hostWithIdentity("pve", ourServerID), backups, logger)
 
 	if len(scoped) != 2 {
 		t.Fatalf("scoped %d of 2 entries; an archive naming a name this host answers to must stay owned however its identity compares, or a host that regenerated its identity file strands its own work for ever", len(scoped))
-	}
-	if unmanaged != 0 {
-		t.Errorf("managed-by-nobody = %d, want 0: both archives are this host's own", unmanaged)
 	}
 	if level := logger.levelOf("  Other server identity: 1 backups owned by name, still rotated"); level == "" {
 		t.Errorf("nothing reported the identity divergence. Retention is pruning an archive that says it came from somewhere else, and that is worth saying once. Lines: %+v", logger.lines)
@@ -102,7 +94,7 @@ func TestDivergentIdentitiesAreReportedAtInfoAndStillPruned(t *testing.T) {
 // the same server identity is the same server, even under a competing spelling of this
 // host's short name. Read without an identity the second site is not rotated and named
 // as such; read with this host's identity it is adopted, reported as adopted, and
-// leaves the not-rotated set and the managed-by-nobody count.
+// leaves the not-rotated set.
 func TestASecondSiteCarryingOurIdentityIsAdopted(t *testing.T) {
 	backups := []*types.BackupMetadata{
 		{BackupFile: "pve.home.arpa-backup-20250103-100000.tar.zst", Hostname: "pve.home.arpa", ServerID: ourServerID},
@@ -114,8 +106,8 @@ func TestASecondSiteCarryingOurIdentityIsAdopted(t *testing.T) {
 	if err != nil {
 		t.Fatalf("applyRetentionHostScope: %v", err)
 	}
-	if len(base.owned) != 1 || base.unmanaged != 1 || len(base.notRotated) != 1 {
-		t.Fatalf("baseline scoped %d, unmanaged %d, not rotated %+v; want 1, 1 and one name: the fixture no longer describes the case", len(base.owned), base.unmanaged, base.notRotated)
+	if len(base.owned) != 1 || len(base.notRotated) != 1 {
+		t.Fatalf("baseline scoped %d, not rotated %+v; want 1 and one name: the fixture no longer describes the case", len(base.owned), base.notRotated)
 	}
 	if level := baseLogger.levelOf("  Named pve.siteb.example, not rotated: 1 backups"); level != "INFO" {
 		t.Errorf("baseline not-rotated fact emitted at %q, want INFO. Lines: %+v", level, baseLogger.lines)
@@ -129,8 +121,8 @@ func TestASecondSiteCarryingOurIdentityIsAdopted(t *testing.T) {
 	if len(scope.owned) != 2 {
 		t.Fatalf("scoped %d of 2 entries; both carry this host's own server identity", len(scope.owned))
 	}
-	if scope.unmanaged != 0 || len(scope.notRotated) != 0 {
-		t.Errorf("unmanaged %d, not rotated %+v; want 0 and none: the second site is adopted", scope.unmanaged, scope.notRotated)
+	if len(scope.notRotated) != 0 {
+		t.Errorf("not rotated %+v; want none: the second site is adopted", scope.notRotated)
 	}
 	if level := logger.levelOf("  Adopted: 1 backups named pve.siteb.example, same server identity"); level != "INFO" {
 		t.Errorf("the adoption fact was emitted at %q, want INFO. Lines: %+v", level, logger.lines)
@@ -158,13 +150,10 @@ func TestUnattributableArchivesStayInvisibleWhenIdentitiesArePresent(t *testing.
 	}
 
 	logger := &levelRecordingLogger{}
-	scoped, unmanaged := scopeListing(t, "Local storage", hostWithIdentity("pve", ourServerID), backups, logger)
+	scoped := scopeListing(t, "Local storage", hostWithIdentity("pve", ourServerID), backups, logger)
 
 	if len(scoped) != 1 || scoped[0] != backups[0] {
 		t.Fatalf("scoped %d entries (%+v), want exactly the archive this host can name. An identity with no hostname beside it must claim nothing", len(scoped), scoped)
-	}
-	if unmanaged != 1 {
-		t.Errorf("managed-by-nobody = %d, want 1: the pre-Go archive is present and no host will ever prune it", unmanaged)
 	}
 	if level := logger.levelOf("no host will ever delete them"); level != "DEBUG" {
 		t.Errorf("the unclaimed-archive line was emitted at %q, want DEBUG only", level)

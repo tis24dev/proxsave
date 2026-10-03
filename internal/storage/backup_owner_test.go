@@ -26,15 +26,15 @@ func hostOnly(hostname string, written ...string) retentionIdentity {
 }
 
 // scopeListing runs applyRetentionHostScope for a host that can name itself and
-// returns the two values most tests read: the owned set and the managed-by-nobody
-// count. The host that cannot name itself has its own test, which reads the error.
-func scopeListing(t *testing.T, location string, id retentionIdentity, backups []*types.BackupMetadata, logger retentionScopeLogger) ([]*types.BackupMetadata, int) {
+// returns the owned set, which is what most tests read. The host that cannot name
+// itself has its own test, which reads the error.
+func scopeListing(t *testing.T, location string, id retentionIdentity, backups []*types.BackupMetadata, logger retentionScopeLogger) []*types.BackupMetadata {
 	t.Helper()
 	scope, err := applyRetentionHostScope(location, id, backups, logger)
 	if err != nil {
 		t.Fatalf("applyRetentionHostScope: %v", err)
 	}
-	return scope.owned, scope.unmanaged
+	return scope.owned
 }
 
 func TestBackupOwnerHost(t *testing.T) {
@@ -215,22 +215,33 @@ func TestRetentionHostAliases(t *testing.T) {
 	}
 }
 
-// TestRetentionSpellingMismatchesCountsLikelySelf pins the reporting helper behind
-// the not-rotated fact. It never decides ownership: it only counts the out-of-scope
+// TestTheShortLabelPredicateCountsLikelySelf pins the membership test behind the
+// not-rotated fact. It never decides ownership: it only selects the out-of-scope
 // archives carrying this host's short name under a spelling this run cannot confirm.
-func TestRetentionSpellingMismatchesCountsLikelySelf(t *testing.T) {
+func TestTheShortLabelPredicateCountsLikelySelf(t *testing.T) {
 	foreign := []*types.BackupMetadata{
 		{Hostname: "pve.siteb.example", BackupFile: "pve.siteb.example-backup-20250102-100000.tar.zst"},
 		{Hostname: "pbs.home.arpa", BackupFile: "pbs.home.arpa-backup-20250102-100000.tar.zst"},
 		nil,
 	}
 
-	if got := retentionSpellingMismatches(foreign, hostOnly("pve")); got != 1 {
+	if got := sharingLocalShortLabel(foreign, hostOnly("pve")); got != 1 {
 		t.Fatalf("mismatches = %d, want 1", got)
 	}
-	if got := retentionSpellingMismatches(foreign, hostOnly("")); got != 0 {
+	if got := sharingLocalShortLabel(foreign, hostOnly("")); got != 0 {
 		t.Fatalf("mismatches = %d, want 0 when this machine cannot name itself", got)
 	}
+}
+
+// sharingLocalShortLabel counts the entries archiveSharesLocalShortLabel admits.
+func sharingLocalShortLabel(backups []*types.BackupMetadata, id retentionIdentity) int {
+	n := 0
+	for _, b := range backups {
+		if archiveSharesLocalShortLabel(b, id) {
+			n++
+		}
+	}
+	return n
 }
 
 // TestApplyRetentionHostScopeDeletesNothingWhenThisMachineCannotNameItself pins the
@@ -482,15 +493,13 @@ func TestApplyRetentionDoesNotDeleteOtherHostsBackups(t *testing.T) {
 }
 
 // TestTheShortLabelPredicateRefusesAHostThatCannotNameItself pins the empty-label
-// guard inside archiveSharesLocalShortLabel, which decides the not-rotated population
-// for both ownedBackupCount and applyRetentionHostScope. Dropping it is compile clean.
+// guard inside archiveSharesLocalShortLabel, which decides the not-rotated population.
+// Dropping it is compile clean.
 //
 // hostShortLabel("") is "", and an unattributable archive has no owner and therefore
 // no label either, so without the guard a machine that cannot name itself matches
-// every pre-Go "proxmox-backup-*" file in the location at once. Those entries are
-// already counted as unattributable, and the two counts are added, so each of them
-// would be added TWICE to the number RetentionSummary.Owned publishes and the
-// notification would report more archives than the directory holds.
+// every pre-Go "proxmox-backup-*" file in the location at once, and each of them
+// would be reported as not rotated under an empty name.
 //
 // A bare "." is not a decorative case: it survives the TrimSpace guard in
 // applyRetentionHostScope and only collapses to the empty string inside
@@ -508,8 +517,8 @@ func TestTheShortLabelPredicateRefusesAHostThatCannotNameItself(t *testing.T) {
 		if archiveSharesLocalShortLabel(unattributable, id) {
 			t.Errorf("host %q claims an archive nobody can name shares its short label. Both labels are empty, and equal emptiness is not a shared name", hostname)
 		}
-		if n := retentionSpellingMismatches(listing, id); n != 0 {
-			t.Errorf("host %q reports %d spelling mismatch(es), want 0. It cannot name itself, so nothing can share its name; counting the unattributable entry here adds it a second time to the managed-by-nobody total that RetentionSummary.Owned publishes", hostname, n)
+		if n := sharingLocalShortLabel(listing, id); n != 0 {
+			t.Errorf("host %q reports %d spelling mismatch(es), want 0. It cannot name itself, so nothing can share its name; counting the unattributable entry here reports it as not rotated under an empty name", hostname, n)
 		}
 	}
 }

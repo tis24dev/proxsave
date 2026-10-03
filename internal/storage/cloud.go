@@ -2485,9 +2485,8 @@ func (c *CloudStorage) ApplyRetention(ctx context.Context, config RetentionConfi
 	// Taken here rather than from a second listing: the attribution above costs one
 	// rclone cat per archive, and cloud_retention_owner.go records that List stays
 	// deliberately cheap for exactly that reason. Recomputing this count elsewhere
-	// would mean paying it again. See LocalStorage.ApplyRetention for why the
-	// archives no host manages are added back rather than dropped.
-	owned, scoped = len(backups)+scope.unmanaged, true
+	// would mean paying it again. Only this host's own backups are counted.
+	owned, scoped = len(backups), true
 
 	if len(backups) == 0 {
 		c.logger.Debug("Cloud storage: no backups to apply retention")

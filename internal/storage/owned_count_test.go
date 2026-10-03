@@ -15,7 +15,8 @@ import (
 
 // TestOwnedBackupCountMatchesRetentionScope pins ownedBackupCount to the number
 // ApplyRetention publishes as Owned before it deletes anything: the scoped slice
-// applyRetentionHostScope returns plus its unmanaged tally. The two are separate
+// applyRetentionHostScope returns, and nothing else (no archive nothing names, no
+// archive under another spelling of this host's name). The two are separate
 // functions only because the retention one also reports, so every population the
 // scope rule distinguishes is in the fixture.
 func TestOwnedBackupCountMatchesRetentionScope(t *testing.T) {
@@ -31,10 +32,13 @@ func TestOwnedBackupCountMatchesRetentionScope(t *testing.T) {
 		nil,
 	}
 
-	scoped, unmanaged := scopeListing(t, "Test storage", id, listing, nil)
-	want := len(scoped) + unmanaged
+	scoped := scopeListing(t, "Test storage", id, listing, nil)
+	want := len(scoped)
 	if got := ownedBackupCount(listing, id); got != want {
-		t.Fatalf("ownedBackupCount = %d, retention scope publishes %d (scoped %d + unmanaged %d): the startup count would mean something else than the count a successful run prints", got, want, len(scoped), unmanaged)
+		t.Fatalf("ownedBackupCount = %d, retention scope publishes %d: the startup count would mean something else than the count a successful run prints", got, want)
+	}
+	if want != 3 {
+		t.Fatalf("owned = %d, want 3: pve.home.arpa by alias, pve by filename token, pve.lost.example by server identity", want)
 	}
 	if want == len(listing)-1 {
 		t.Fatalf("fixture owns every entry (%d), so it cannot tell a scoped count from an unscoped one", want)

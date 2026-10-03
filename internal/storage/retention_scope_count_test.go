@@ -207,20 +207,12 @@ func seedNamed(t *testing.T, dir, name string, when time.Time, manifestHost stri
 	}
 }
 
-// TestReportedCountCoversArchivesNoHostManages is the regression pin for the whole
-// point of the second return of applyRetentionHostScope.
-//
-// A count of archives retention will actually prune is a FALSE ALL-CLEAR on the two
-// populations that grow without bound, and both are documented failure modes:
-// docs/TROUBLESHOOTING.md cause 2 (this machine's own work written under a name it
-// stopped resolving) and cause 3 (pre-Go archives nothing can attribute). Neither
-// will ever be pruned by anyone, so if this number leaves them out, the one figure
-// an operator watches says "within the limit" while the directory fills.
-//
-// Archives carrying a DIFFERENT machine's name are excluded, and that exclusion is
-// the fix this file exists for. The two rules pull in opposite directions on
-// purpose, and the four rows below are the four ways they interact.
-func TestReportedCountCoversArchivesNoHostManages(t *testing.T) {
+// TestReportedCountIsOnlyThisHostsBackups pins the one number a destination shows:
+// the retention summary (the notification's "N/limit") and the statistics both count
+// only the archives this host owns, by name or by server identity. Archives nothing
+// names, archives under a spelling this host no longer resolves and another machine's
+// archives are left out of both, and the four rows below are the four populations.
+func TestReportedCountIsOnlyThisHostsBackups(t *testing.T) {
 	day := func(n int) time.Time { return time.Date(2025, 1, n, 10, 0, 0, 0, time.UTC) }
 
 	cases := []struct {
@@ -231,11 +223,9 @@ func TestReportedCountCoversArchivesNoHostManages(t *testing.T) {
 			file     string
 			manifest string
 		}
-		wantReported int
-		// wantStats is what GetStats counts: only the archives this host owns, by
-		// name or by server identity.
-		wantStats int
-		why       string
+		// want is what both the retention summary and GetStats count.
+		want int
+		why  string
 	}{
 		{
 			name: "pre-Go archives nobody can attribute still count",
@@ -247,8 +237,8 @@ func TestReportedCountCoversArchivesNoHostManages(t *testing.T) {
 				{"proxmox-backup-20250102-100000.tar.zst", ""},
 				{"proxmox-backup-20250103-100000.tar.zst", ""},
 			},
-			wantReported: 3, wantStats: 0,
-			why: "reporting 0 here tells an operator holding three restorable archives that the location is empty",
+			want: 0,
+			why:  "nothing names a writer, so none of them is this host's",
 		},
 		{
 			name: "the ordinary upgrade: legacy backlog beside new archives",
@@ -260,8 +250,8 @@ func TestReportedCountCoversArchivesNoHostManages(t *testing.T) {
 				{"proxmox-backup-20250102-100000.tar.zst", ""},
 				{"pve-backup-20250103-100000.tar.zst", "pve"},
 			},
-			wantReported: 3, wantStats: 1,
-			why: "reporting 1 of 3 says 'within the limit' while the two legacy archives grow for ever",
+			want: 1,
+			why:  "only the archive naming this host is this host's",
 		},
 		{
 			name: "this host's own work under a spelling it no longer resolves",
@@ -273,8 +263,8 @@ func TestReportedCountCoversArchivesNoHostManages(t *testing.T) {
 				{"pve.home.arpa-backup-20250101-100000.tar.zst", "pve.home.arpa"},
 				{"pve.home.arpa-backup-20250102-100000.tar.zst", "pve.home.arpa"},
 			},
-			wantReported: 2, wantStats: 0,
-			why: "these are this machine's own archives and they have stopped rotating; hiding them removes the only signal that says so",
+			want: 0,
+			why:  "a spelling this host does not answer to, with no server identity, is not this host's; the not-rotated fact reports them",
 		},
 		{
 			name: "a second machine's archives are not this host's to report",
@@ -286,8 +276,8 @@ func TestReportedCountCoversArchivesNoHostManages(t *testing.T) {
 				{"nas.siteb.example-backup-20250101-100000.tar.zst", "nas.siteb.example"},
 				{"nas.siteb.example-backup-20250102-100000.tar.zst", "nas.siteb.example"},
 			},
-			wantReported: 1, wantStats: 1,
-			why: "counting the other machine's two archives against this host's limit is the 40/7 the fix removed",
+			want: 1,
+			why:  "counting the other machine's two archives against this host's limit is the 40/7 the fix removed",
 		},
 	}
 
@@ -316,16 +306,16 @@ func TestReportedCountCoversArchivesNoHostManages(t *testing.T) {
 			if !summary.ScopeValid {
 				t.Fatal("no ownership scope published, so the reporter falls back to the unscoped listing")
 			}
-			if summary.Owned != tc.wantReported {
-				t.Fatalf("reported %d, want %d: %s", summary.Owned, tc.wantReported, tc.why)
+			if summary.Owned != tc.want {
+				t.Fatalf("reported %d, want %d: %s", summary.Owned, tc.want, tc.why)
 			}
 
 			stats, err := l.GetStats(context.Background())
 			if err != nil {
 				t.Fatalf("GetStats: %v", err)
 			}
-			if stats.TotalBackups != tc.wantStats || stats.ListedBackups != len(tc.seeds) {
-				t.Fatalf("GetStats() = %d backups of %d listed, want %d of %d: the statistics count only the archives this host owns", stats.TotalBackups, stats.ListedBackups, tc.wantStats, len(tc.seeds))
+			if stats.TotalBackups != tc.want || stats.ListedBackups != len(tc.seeds) {
+				t.Fatalf("GetStats() = %d backups of %d listed, want %d of %d: the statistics count only the archives this host owns", stats.TotalBackups, stats.ListedBackups, tc.want, len(tc.seeds))
 			}
 		})
 	}

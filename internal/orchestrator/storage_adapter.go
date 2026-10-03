@@ -490,9 +490,9 @@ func (s *StorageAdapter) applyStorageStats(storageStats *storage.StorageStats, r
 	}
 	s.statsApplied = true
 
-	// storageStats.TotalBackups counts only the archives this host owns (by name or
-	// by server identity). Prefer the count retention itself arrived at, which also
-	// adds back the archives no host manages (discussion #292). -1 means retention did
+	// storageStats.TotalBackups and the count retention arrived at are the same rule,
+	// only the archives this host owns (by name or by server identity). Retention's
+	// is preferred because it is net of what the pass deleted. -1 means retention did
 	// not run or failed, and the statistics count is then the number there is.
 	backupCount := storageStats.TotalBackups
 	if scopedBackups >= 0 {

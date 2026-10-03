@@ -196,7 +196,7 @@ func TestUnclaimedLegacyArchivesAreReportedWithoutRaisingTheRunSeverity(t *testi
 	}
 
 	logger := &levelRecordingLogger{}
-	scoped, _ := scopeListing(t, "Local storage", hostOnly("hostA"), backups, logger)
+	scoped := scopeListing(t, "Local storage", hostOnly("hostA"), backups, logger)
 
 	if len(scoped) != 1 || scoped[0] != backups[0] {
 		t.Fatalf("scoped %d entries (%+v), want exactly the archive this host can name", len(scoped), scoped)
@@ -220,13 +220,10 @@ func TestForeignHostArchivesAreNotReported(t *testing.T) {
 	}
 
 	logger := &levelRecordingLogger{}
-	scoped, unmanaged := scopeListing(t, "Local storage", hostOnly("hostA"), backups, logger)
+	scoped := scopeListing(t, "Local storage", hostOnly("hostA"), backups, logger)
 
 	if len(scoped) != 1 || scoped[0] != backups[0] {
 		t.Fatalf("scoped %d entries (%+v), want exactly this host's own archive", len(scoped), scoped)
-	}
-	if unmanaged != 0 {
-		t.Errorf("managed-by-nobody = %d, want 0: another host's archive is that host's to rotate", unmanaged)
 	}
 	if level := logger.levelOf("retention out of scope: hostB-backup-20250102-100000.tar.zst"); level != "DEBUG" {
 		t.Errorf("the other host's archive was written at %q, want DEBUG. Lines: %+v", level, logger.lines)

@@ -612,16 +612,13 @@ func (l *LocalStorage) ApplyRetention(ctx context.Context, config RetentionConfi
 	// used to record nothing at all, so the healthy run was exactly the one where the
 	// notification fell back to counting every host's archives (discussion #292).
 	//
-	// unmanaged is added, not discarded. Those archives are on this disk and no host
-	// will ever prune them, so leaving them out reports an all-clear on a directory
-	// that is growing: an upgraded host with twenty pre-Go archives beside two new
-	// ones would read "2/7" while storing twenty-two. Archives belonging to a named
-	// other machine are excluded, which is what scoping is for.
+	// Only this host's own backups are counted (owned by name or adopted by server
+	// identity), the same number the statistics print for this location.
 	//
 	// Left invalid when the host cannot name itself: the pass returned above, so
 	// publishing 0 would print "0/7" beside a directory holding forty archives, which
 	// is a worse lie than the one being fixed.
-	owned, scoped = len(backups)+scope.unmanaged, true
+	owned, scoped = len(backups), true
 
 	if len(backups) == 0 {
 		l.logger.Debug("Local storage: no backups to apply retention")

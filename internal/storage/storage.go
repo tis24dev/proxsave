@@ -117,20 +117,12 @@ type RetentionSummary struct {
 	// than the unscoped total it replaces, so a consumer falls back to that total
 	// unless this is set.
 	ScopeValid bool
-	// Owned is how many archives at this location this host is answerable for, taken
-	// after applyRetentionHostScope and net of whatever the pass then deleted. It is
-	// the only number that may be printed next to a retention limit. GetStats counts
-	// every archive at the location, so on a path shared with another ProxSave host
-	// it counts that host's too, which is how the summary came to read "40/7" on a
-	// machine that owns five (discussion #292).
-	//
-	// "Answerable for" is wider than "will prune", and deliberately so. It adds the
-	// archives no host manages at all: pre-Go "proxmox-backup-*" files that name
-	// nobody, and this machine's own work written under a spelling of its name it can
-	// no longer resolve. Those grow without bound and nothing else counts them, so
-	// leaving them out turns the one number an operator watches into a false
-	// all-clear. Archives carrying another machine's name are excluded, because that
-	// machine prunes them and reports them.
+	// Owned is how many archives at this location this host owns, by the rule
+	// retention prunes by (owned by name or adopted by server identity), taken after
+	// applyRetentionHostScope and net of whatever the pass then deleted. Other hosts'
+	// archives, archives nothing names and archives under another spelling of this
+	// host's name are not counted. It is the same number the statistics print for
+	// the location (StorageStats.TotalBackups), so one destination shows one count.
 	Owned int
 
 	// PassCompleted reports whether a retention pass RAN AND RETURNED WITHOUT ERROR.
