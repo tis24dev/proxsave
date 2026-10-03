@@ -197,3 +197,50 @@ func TestCloudLocalDirectoryNotCreatedBlock(t *testing.T) {
 		t.Fatalf("the cloud must be off for the run: enabled=%v logPath=%q", cfg.CloudEnabled, cfg.CloudLogPath)
 	}
 }
+
+// Dry run, missing destination directory: the Secondary and the local cloud form do
+// not create it; the block closes like a directory that cannot be created, and the
+// destination is off for the run. Checked on a real temp dir.
+func TestDryRunMissingDestinationBlocks(t *testing.T) {
+	base := t.TempDir()
+	secondary := filepath.Join(base, "secondary")
+	cfg := &config.Config{DryRun: true, SecondaryEnabled: true, SecondaryPath: secondary, SecondaryLogPath: "/logs", SecondaryRetentionDays: 5}
+	got := captureStorageInit(t, func(logger *logging.Logger) {
+		initializeSecondaryStorage(backupModeOptions{ctx: context.Background(), cfg: cfg, logger: logger, hostname: "node", dryRun: true}, nil, nil)
+	})
+	requireBlock(t, got,
+		"INFO     Path Secondary: "+secondary,
+		"INFO       Retention policy: simple (keep 5 newest)",
+		"INFO       Directory: missing, not created in dry run",
+		"WARNING  ✗ Secondary storage: not initialized",
+		"SKIP     Path Secondary: disabled",
+	)
+	if cfg.SecondaryEnabled || cfg.SecondaryLogPath != "" {
+		t.Fatalf("the secondary must be off for the run: enabled=%v logPath=%q", cfg.SecondaryEnabled, cfg.SecondaryLogPath)
+	}
+
+	record := filepath.Join(t.TempDir(), "argv")
+	fakeRcloneOnPath(t, "#!/bin/sh\necho \"$*\" >> "+record+"\nexit 0\n")
+	cloud := filepath.Join(base, "cloud")
+	cfg = &config.Config{DryRun: true, CloudEnabled: true, CloudRemote: cloud, CloudLogPath: "/logs", CloudRetentionDays: 4}
+	got = captureStorageInit(t, func(logger *logging.Logger) {
+		initializeCloudStorage(backupModeOptions{ctx: context.Background(), cfg: cfg, logger: logger, hostname: "node", dryRun: true}, nil, nil)
+	})
+	requireBlock(t, got,
+		"INFO     Path Cloud: "+cloud,
+		"INFO       Retention policy: simple (keep 4 newest)",
+		"INFO     Checking cloud remote accessibility...",
+		"INFO       Directory: missing, not created in dry run",
+		"WARNING  ✗ Cloud storage: not initialized",
+		"SKIP     Path Cloud: disabled",
+	)
+	if cfg.CloudEnabled || cfg.CloudLogPath != "" {
+		t.Fatalf("the cloud must be off for the run: enabled=%v logPath=%q", cfg.CloudEnabled, cfg.CloudLogPath)
+	}
+	if entries, err := os.ReadDir(base); err != nil || len(entries) != 0 {
+		t.Fatalf("a dry run must create no directory, found %v (%v)", entries, err)
+	}
+	if _, err := os.Stat(record); !os.IsNotExist(err) {
+		t.Fatalf("rclone must not run for a missing directory in a dry run")
+	}
+}

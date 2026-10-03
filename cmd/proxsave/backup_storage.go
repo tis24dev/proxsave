@@ -121,6 +121,14 @@ func initializeSecondaryStorage(opts backupModeOptions, orch *orchestrator.Orche
 	}
 
 	secondaryFS, detectErr := detectFilesystemInfo(opts.ctx, secondaryBackend, cfg.SecondaryPath, logger)
+	var missingErr *storage.DirectoryMissingError
+	if errors.As(detectErr, &missingErr) {
+		// A dry run creates no destination directory: nothing can be copied there.
+		logging.DebugStep(logger, "storage init", "secondary directory missing in dry run, disabling: %v", detectErr)
+		disableSecondaryForRun(cfg, checker)
+		logStorageNotInitialized("Secondary", "Secondary storage", "  Directory: missing, not created in dry run")
+		return nil
+	}
 	var dirErr *storage.DirectoryError
 	if errors.As(detectErr, &dirErr) {
 		// The backup directory cannot be created: nothing can be copied there.

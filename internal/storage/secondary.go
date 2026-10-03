@@ -75,7 +75,7 @@ func NewSecondaryStorage(cfg *config.Config, logger *logging.Logger, writtenHost
 		hostAliases: retentionHostAliases(host, []string{writtenHostname}),
 		serverID:    serverID,
 		basePath:    cfg.SecondaryPath,
-		fsDetector:  NewFilesystemDetector(logger, WithIOTimeout(fsIoTimeout(cfg))),
+		fsDetector:  NewFilesystemDetector(logger, WithIOTimeout(fsIoTimeout(cfg)), WithDryRun(cfg.DryRun)),
 	}, nil
 }
 
@@ -105,7 +105,18 @@ func (s *SecondaryStorage) DetectFilesystem(ctx context.Context) (info *Filesyst
 	done := logging.DebugStart(s.logger, "secondary detect filesystem", "path=%s", s.basePath)
 	defer func() { done(err) }()
 	// Ensure directory exists (bounded: secondary is typically an NFS/CIFS mount).
+	// A dry run creates no destination directory: a missing one stops here.
 	s.detectErr = nil
+	if dryRunMissingDirectory(ctx, s.logger, s.config, s.basePath) {
+		return nil, &StorageError{
+			Location:    LocationSecondary,
+			Operation:   "detect_filesystem",
+			Path:        s.basePath,
+			Err:         &DirectoryMissingError{Path: s.basePath},
+			IsCritical:  false,
+			Recoverable: true,
+		}
+	}
 	if err := safefs.MkdirAll(ctx, s.basePath, 0700, fsIoTimeout(s.config)); err != nil {
 		// Non-critical: the storage initialization prints "  Directory not created"
 		// and disables the destination for the run.

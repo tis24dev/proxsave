@@ -1,13 +1,16 @@
 package storage
 
 import (
+	"context"
 	"errors"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
 	"unicode"
 	"unicode/utf8"
 
+	"github.com/tis24dev/proxsave/internal/config"
 	"github.com/tis24dev/proxsave/internal/logging"
 	"github.com/tis24dev/proxsave/internal/safefs"
 )
@@ -241,6 +244,32 @@ type DirectoryError struct {
 func (e *DirectoryError) Error() string { return "failed to create directory: " + e.Err.Error() }
 
 func (e *DirectoryError) Unwrap() error { return e.Err }
+
+// DirectoryMissingError is a destination directory a dry run found missing and did not
+// create (a dry run creates no destination directory). The storage initialization
+// shows it as "  Directory: missing, not created in dry run".
+type DirectoryMissingError struct {
+	Path string
+}
+
+func (e *DirectoryMissingError) Error() string {
+	return "directory missing, not created in dry run: " + e.Path
+}
+
+// dryRunMissingDirectory reports whether a dry run must stop at dir: it does not
+// exist, and a dry run does not create it. An existing directory, or one the stat
+// cannot answer for, goes on as in a real run, where MkdirAll creates nothing.
+func dryRunMissingDirectory(ctx context.Context, logger *logging.Logger, cfg *config.Config, dir string) bool {
+	if cfg == nil || !cfg.DryRun {
+		return false
+	}
+	_, err := safefs.Stat(ctx, dir, fsIoTimeout(cfg))
+	if err == nil || !errors.Is(err, os.ErrNotExist) {
+		return false
+	}
+	logger.Debug("DRY RUN: %s is missing and is not created: %v", dir, err)
+	return true
+}
 
 // logRetentionSkipped prints one fact line per archive retention could not date and
 // left alone, and returns how many there were.

@@ -81,7 +81,7 @@ func NewLocalStorage(cfg *config.Config, logger *logging.Logger, writtenHostname
 		hostAliases: retentionHostAliases(host, []string{writtenHostname}),
 		serverID:    serverID,
 		basePath:    cfg.BackupPath,
-		fsDetector:  NewFilesystemDetector(logger, WithIOTimeout(fsIoTimeout(cfg))),
+		fsDetector:  NewFilesystemDetector(logger, WithIOTimeout(fsIoTimeout(cfg)), WithDryRun(cfg.DryRun)),
 	}, nil
 }
 

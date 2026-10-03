@@ -172,7 +172,7 @@ func (c *CloudStorage) remotePathFor(name string) string {
 func (c *CloudStorage) localFilesystemInfo(ctx context.Context) *FilesystemInfo {
 	detector := c.fsDetector
 	if detector == nil {
-		detector = NewFilesystemDetector(c.logger, WithIOTimeout(c.fsIoTimeout()))
+		detector = NewFilesystemDetector(c.logger, WithIOTimeout(c.fsIoTimeout()), WithDryRun(c.config != nil && c.config.DryRun))
 	}
 	c.detectErr = nil
 	info, err := detector.DetectFilesystem(ctx, c.localDir)
@@ -212,7 +212,7 @@ func (c *CloudStorage) setLocalPermissions(ctx context.Context, destFile string,
 	}
 	detector := c.fsDetector
 	if detector == nil {
-		detector = NewFilesystemDetector(c.logger, WithIOTimeout(c.fsIoTimeout()))
+		detector = NewFilesystemDetector(c.logger, WithIOTimeout(c.fsIoTimeout()), WithDryRun(c.config != nil && c.config.DryRun))
 	}
 	setBackupSetPermissions(ctx, c.config, c.logger, detector, c.localFS, destFile, func(path string, err error) {
 		c.logger.Debug("Cloud Storage: permissions - failed to set them on %s: %v", filepath.Base(path), err)
@@ -398,7 +398,7 @@ func NewCloudStorage(cfg *config.Config, logger *logging.Logger, writtenHostname
 		}
 		localRoot = root
 		localDir, _ = LocalCloudRemoteDir(rawRemote, cfg.CloudRemotePath)
-		fsDetector = NewFilesystemDetector(logger, WithIOTimeout(fsIoTimeout(cfg)))
+		fsDetector = NewFilesystemDetector(logger, WithIOTimeout(fsIoTimeout(cfg)), WithDryRun(cfg.DryRun))
 	} else {
 		var basePath string
 		remoteName, basePath = splitRemoteRef(rawRemote)
@@ -492,6 +492,20 @@ func (c *CloudStorage) DetectFilesystem(ctx context.Context) (info *FilesystemIn
 			Operation:   "detect_filesystem",
 			Path:        c.remoteLabel(),
 			Err:         fmt.Errorf("rclone command not found in PATH"),
+			IsCritical:  false,
+			Recoverable: true,
+		}
+	}
+
+	// A dry run creates no destination directory: a local one that is missing stops
+	// here, like the Secondary's.
+	if c.localDir != "" && dryRunMissingDirectory(ctx, c.logger, c.config, c.localDir) {
+		c.logger.Info("  Directory: missing, not created in dry run")
+		return nil, &StorageError{
+			Location:    LocationCloud,
+			Operation:   "detect_filesystem",
+			Path:        c.localDir,
+			Err:         &DirectoryMissingError{Path: c.localDir},
 			IsCritical:  false,
 			Recoverable: true,
 		}
