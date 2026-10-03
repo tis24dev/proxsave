@@ -486,3 +486,83 @@ func TestDispatchLogFileCloudLocalLogPermissionsFailed(t *testing.T) {
 		t.Fatalf("log directory mode = %v (%v), want 0755", st.Mode().Perm(), err)
 	}
 }
+
+// Dry run, step [8]: the log stays in LOG_PATH. Each enabled destination names where
+// the copy would go, then SKIP; nothing is written there (no SECONDARY_LOG_PATH mkdir,
+// no rclone), checked on real temp dirs and on the rclone argv.
+func TestDispatchLogFileDryRunCopiesNothing(t *testing.T) {
+	record := filepath.Join(t.TempDir(), "argv")
+	fakeRcloneOnPath(t, "#!/bin/sh\necho \"$*\" >> "+record+"\nexit 0\n")
+	var buf bytes.Buffer
+	logger := logging.New(types.LogLevelInfo, false)
+	logger.SetOutput(&buf)
+	base := t.TempDir()
+	secondaryLog := filepath.Join(base, "secondary-log")
+	cloudRoot := filepath.Join(base, "cloud")
+	cfg := &config.Config{SecondaryEnabled: true, SecondaryLogPath: secondaryLog,
+		CloudEnabled: true, CloudRemote: cloudRoot, CloudLogPath: "../outside", FsIoTimeoutSeconds: 30}
+	o := &Orchestrator{logger: logger, cfg: cfg, dryRun: true}
+	src := writeSrcLog(t)
+	if err := o.dispatchLogFile(context.Background(), src); err != nil {
+		t.Fatalf("dispatchLogFile: %v", err)
+	}
+	name := filepath.Base(src)
+	requireExactLines(t, visibleLines(buf.String()),
+		"INFO     Dispatching log file: "+name,
+		"INFO     Secondary: "+filepath.Join(secondaryLog, name),
+		"SKIP     Log copy: dry run mode",
+		"INFO     Cloud: "+filepath.Join(base, "outside", name),
+		"SKIP     Log copy: dry run mode",
+	)
+	if entries, err := os.ReadDir(base); err != nil || len(entries) != 0 {
+		t.Fatalf("a dry run writes nothing on the destinations, found %v (%v)", entries, err)
+	}
+	if _, err := os.Stat(record); !os.IsNotExist(err) {
+		t.Fatalf("rclone must not run in a dry run")
+	}
+	if _, err := os.Stat(src); err != nil {
+		t.Fatalf("the log stays in LOG_PATH: %v", err)
+	}
+
+	// Only the enabled destinations.
+	buf.Reset()
+	o.cfg = &config.Config{SecondaryEnabled: false, CloudEnabled: false}
+	if err := o.dispatchLogFile(context.Background(), src); err != nil {
+		t.Fatalf("dispatchLogFile: %v", err)
+	}
+	requireExactLines(t, visibleLines(buf.String()), "INFO     Dispatching log file: "+name)
+}
+
+// The whole dry-run block of step [8], through FinalizeAfterRun as the backup run
+// calls it.
+func TestFinalizeAfterRunDryRunLogBlock(t *testing.T) {
+	var buf bytes.Buffer
+	logger := logging.New(types.LogLevelInfo, false)
+	logger.SetOutput(&buf)
+	logPath := filepath.Join(t.TempDir(), "backup-node-20261003-100000.log")
+	if err := logger.OpenLogFile(logPath); err != nil {
+		t.Fatalf("OpenLogFile: %v", err)
+	}
+	secondaryLog := filepath.Join(t.TempDir(), "secondary-log")
+	cfg := &config.Config{SecondaryEnabled: true, SecondaryLogPath: secondaryLog, CloudEnabled: true, CloudRemote: "remote", CloudLogPath: "/logs", FsIoTimeoutSeconds: 30}
+	o := New(logger, true)
+	o.SetConfig(cfg)
+	o.copyLogToCloudFn = func(context.Context, string, string) error {
+		t.Fatal("a dry run copies no log to the cloud")
+		return nil
+	}
+	o.FinalizeAfterRun(context.Background(), &BackupStats{})
+	name := filepath.Base(logPath)
+	requireExactLines(t, visibleLines(buf.String()),
+		"STEP     [8] Log file management",
+		"INFO     Closing log file: "+logPath,
+		"INFO     Dispatching log file: "+name,
+		"INFO     Secondary: "+filepath.Join(secondaryLog, name),
+		"SKIP     Log copy: dry run mode",
+		"INFO     Cloud: remote:/logs/"+name,
+		"SKIP     Log copy: dry run mode",
+	)
+	if _, err := os.Stat(secondaryLog); !os.IsNotExist(err) {
+		t.Fatalf("no SECONDARY_LOG_PATH mkdir in a dry run (stat err=%v)", err)
+	}
+}

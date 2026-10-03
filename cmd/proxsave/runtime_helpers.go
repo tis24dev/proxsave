@@ -561,6 +561,19 @@ func formatStorageInitSummary(name string, cfg *config.Config, location storage.
 	return result, false
 }
 
+// formatNotCheckedInitSummary closes the block of a cloud remote a dry run could not
+// check (listing not permitted, write test skipped): the facts formatStorageInitSummary
+// prints ("  Backups: ..."), then the outcome "⚠ <Name>: initialized, not checked" in
+// place of its own. The outcome is always a WARNING.
+func formatNotCheckedInitSummary(name string, cfg *config.Config, location storage.BackupLocation, stats *storage.StorageStats, backups []*types.BackupMetadata) (string, bool) {
+	summary, _ := formatStorageInitSummary(name, cfg, location, stats, backups)
+	facts := ""
+	if i := strings.LastIndex(summary, "\n"); i >= 0 {
+		facts = summary[:i+1]
+	}
+	return facts + fmt.Sprintf("%s %s: initialized, not checked", theme.SymbolWarning, name), true
+}
+
 // logStorageInitSummary prints a storage-init summary. warn selects the level of the
 // OUTCOME - the last non-empty line - and nothing else: the fact lines above it are
 // always Info, except the GFS estimate, which stays at Debug so it never reaches the

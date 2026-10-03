@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/tis24dev/proxsave/internal/config"
 	"github.com/tis24dev/proxsave/internal/logging"
@@ -135,5 +136,73 @@ func TestDryRunCreatesNoDestinationDirectory(t *testing.T) {
 	}
 	if st, err := os.Stat(primary); err != nil || !st.IsDir() {
 		t.Fatalf("the Primary keeps creating BACKUP_PATH in a dry run: %v", err)
+	}
+}
+
+// Dry run, cloud with a real remote: read-only. Only lsf runs (no mkdir, no write
+// test, even with CLOUD_WRITE_HEALTHCHECK=true); a missing backup directory is
+// "  Directory: missing, not created in dry run"; a listing that is not permitted
+// leaves the remote not checked.
+func TestDryRunCloudRemoteIsReadOnly(t *testing.T) {
+	missingDir := []byte("2026/10/03 10:00:00 ERROR : backups/host1: error listing: directory not found\n")
+	denied := []byte("2026/10/03 10:00:00 ERROR : : error listing: 403 Forbidden: access denied\n")
+	for _, tc := range []struct {
+		name       string
+		writeCheck bool
+		respond    func(args []string) ([]byte, error)
+		wantErr    bool
+		wantArgv   []string
+		wantFact   string
+		notChecked bool
+	}{
+		{"existing directory", false, nil, false,
+			[]string{"lsf remote: --max-depth 1", "lsf remote:backups/host1 --max-depth 1"}, "INFO       Accessible", false},
+		{"write health check ignored", true, nil, false,
+			[]string{"lsf remote: --max-depth 1", "lsf remote:backups/host1 --max-depth 1"}, "INFO       Accessible", false},
+		{"missing directory", false, func(args []string) ([]byte, error) {
+			if args[0] == "lsf" && args[1] == "remote:backups/host1" {
+				return missingDir, errors.New("exit status 3")
+			}
+			return nil, nil
+		}, true, nil, "INFO       Directory: missing, not created in dry run", false},
+		{"listing not permitted", true, func(args []string) ([]byte, error) {
+			if args[0] == "lsf" {
+				return denied, errors.New("exit status 1")
+			}
+			return nil, nil
+		}, false, []string{"lsf remote: --max-depth 1"}, "INFO       Listing not permitted, write test skipped in dry run", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rec := &argvRecorder{respond: tc.respond}
+			logger, buf := newCapturedLogger()
+			cs, err := NewCloudStorage(&config.Config{DryRun: true, CloudEnabled: true, CloudRemote: "remote:backups", CloudRemotePath: "host1",
+				CloudWriteHealthCheck: tc.writeCheck, RcloneTimeoutConnection: 30}, logger, "")
+			if err != nil {
+				t.Fatalf("NewCloudStorage: %v", err)
+			}
+			cs.lookPath = func(string) (string, error) { return "/usr/bin/rclone", nil }
+			cs.execCommand = rec.exec
+			cs.waitForRetry = func(context.Context, time.Duration) error { return nil }
+			_, err = cs.DetectFilesystem(context.Background())
+			var missingErr *DirectoryMissingError
+			if tc.wantErr != (err != nil) || (tc.wantErr && !errors.As(err, &missingErr)) {
+				t.Fatalf("DetectFilesystem = %v, wantErr=%v (a DirectoryMissingError)", err, tc.wantErr)
+			}
+			for _, line := range rec.argv() {
+				if !strings.HasPrefix(line, "lsf ") {
+					t.Fatalf("a dry run runs only lsf on the remote, got %q (all: %v)", line, rec.argv())
+				}
+			}
+			if tc.wantArgv != nil {
+				requireArgv(t, rec.argv(), tc.wantArgv...)
+			}
+			got := visibleOf(buf.String())
+			if len(got) != 2 || got[1] != tc.wantFact {
+				t.Fatalf("visible lines =\n%s\nwant the check line and %q", strings.Join(got, "\n"), tc.wantFact)
+			}
+			if cs.NotCheckedInDryRun() != tc.notChecked {
+				t.Fatalf("NotCheckedInDryRun = %v, want %v", cs.NotCheckedInDryRun(), tc.notChecked)
+			}
+		})
 	}
 }

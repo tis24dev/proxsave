@@ -219,8 +219,21 @@ func initializeCloudStorage(opts backupModeOptions, orch *orchestrator.Orchestra
 	logging.DebugStep(logger, "storage init", "cloud owned=%d known=%v", cloudOwned, cloudOwnedKnown)
 	cloudAdapter.SetInitialOwnedBackups(cloudOwned, cloudOwnedKnown)
 	orch.RegisterStorageTarget(cloudAdapter)
+	var checked storage.Storage = cloudBackend
+	if reporter, ok := checked.(dryRunCheckReporter); ok && reporter.NotCheckedInDryRun() {
+		// A dry run could check this remote only by writing to it: it is used, not checked.
+		logging.DebugStep(logger, "storage init", "cloud not checked in dry run (listing not permitted)")
+		logStorageInitSummary(formatNotCheckedInitSummary("Cloud storage", cfg, storage.LocationCloud, cloudStats, cloudBackups))
+		return cloudFS
+	}
 	logStorageInitSummary(formatStorageInitSummary("Cloud storage", cfg, storage.LocationCloud, cloudStats, cloudBackups, problems...))
 	return cloudFS
+}
+
+// dryRunCheckReporter is implemented by a backend whose accessibility check a dry run
+// can leave undone (CloudStorage: listing not permitted, write test skipped).
+type dryRunCheckReporter interface {
+	NotCheckedInDryRun() bool
 }
 
 // disableSecondaryForRun turns the secondary destination off for the rest of the run:

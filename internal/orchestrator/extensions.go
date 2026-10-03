@@ -533,6 +533,26 @@ func (o *Orchestrator) dispatchLogFile(ctx context.Context, logFilePath string) 
 	logFileName := filepath.Base(logFilePath)
 	o.logger.Info("Dispatching log file: %s", logFileName)
 
+	if o.dryRun {
+		// A dry run writes nothing on the destinations: the log stays closed in
+		// LOG_PATH. Each enabled destination names where the copy would go, then SKIP.
+		if o.cfg.SecondaryEnabled && o.cfg.SecondaryLogPath != "" {
+			destination := filepath.Join(o.cfg.SecondaryLogPath, logFileName)
+			o.logger.Info("Secondary: %s", destination)
+			o.logger.Debug("Log copy: dry run, %s not copied to %s (no directory created)", logFilePath, destination)
+			o.logger.Skip("Log copy: dry run mode")
+		}
+		if o.cfg.CloudEnabled {
+			if cloudBase := strings.TrimSpace(o.cfg.CloudLogPath); cloudBase != "" {
+				destination := buildCloudLogDestination(cloudBase, logFileName, o.cfg.CloudRemote)
+				o.logger.Info("Cloud: %s", destination)
+				o.logger.Debug("Log copy: dry run, %s not copied to %s", logFilePath, destination)
+				o.logger.Skip("Log copy: dry run mode")
+			}
+		}
+		return nil
+	}
+
 	// All log-dispatch FS ops are bounded by FS_IO_TIMEOUT so a dead/stale mount on
 	// the source (LOG_PATH), the secondary destination (SecondaryLogPath), or the
 	// cloud local source cannot wedge the finalize in an uninterruptible (D-state)

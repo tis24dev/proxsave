@@ -244,3 +244,59 @@ func TestDryRunMissingDestinationBlocks(t *testing.T) {
 		t.Fatalf("rclone must not run for a missing directory in a dry run")
 	}
 }
+
+// Dry run, cloud with a real remote: only lsf reaches rclone. A missing backup
+// directory closes the block like a directory that cannot be created; a remote that
+// only a write test could check is initialized, not checked.
+func TestDryRunCloudRemoteBlocks(t *testing.T) {
+	t.Cleanup(storage.SetCloudRetryWaitForTest(func(ctx context.Context, _ time.Duration) error { return ctx.Err() }))
+	for _, tc := range []struct {
+		name, script string
+		want         []string
+		enabled      bool
+	}{
+		{"missing directory",
+			"case \"$1\" in\nlsf) if [ \"$2\" = remote:backups/host1 ]; then echo '2026/10/03 10:00:00 ERROR : backups/host1: error listing: directory not found' >&2; exit 3; fi;;\nesac\nexit 0\n",
+			[]string{
+				"INFO     Path Cloud: remote:backups",
+				"INFO       Retention policy: simple (keep 4 newest)",
+				"INFO     Checking cloud remote accessibility...",
+				"INFO       Directory: missing, not created in dry run",
+				"WARNING  ✗ Cloud storage: not initialized",
+				"SKIP     Path Cloud: disabled",
+			}, false},
+		{"listing not permitted",
+			"case \"$1\" in\nlsf|lsl) echo '2026/10/03 10:00:00 ERROR : : error listing: 403 Forbidden: access denied' >&2; exit 1;;\nesac\nexit 0\n",
+			[]string{
+				"INFO     Path Cloud: remote:backups",
+				"INFO       Retention policy: simple (keep 4 newest)",
+				"INFO     Checking cloud remote accessibility...",
+				"INFO       Listing not permitted, write test skipped in dry run",
+				"INFO       Backups: unknown, statistics unavailable",
+				"WARNING  ⚠ Cloud storage: initialized, not checked",
+			}, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			record := filepath.Join(t.TempDir(), "argv")
+			fakeRcloneOnPath(t, "#!/bin/sh\necho \"$*\" >> "+record+"\n"+tc.script)
+			cfg := &config.Config{DryRun: true, CloudEnabled: true, CloudRemote: "remote:backups", CloudRemotePath: "host1",
+				CloudWriteHealthCheck: true, CloudLogPath: "/logs", CloudRetentionDays: 4, RcloneTimeoutConnection: 30}
+			got := captureStorageInit(t, func(logger *logging.Logger) {
+				initializeCloudStorage(backupModeOptions{ctx: context.Background(), cfg: cfg, logger: logger, hostname: "node", dryRun: true}, orchestrator.New(logger, true), nil)
+			})
+			requireBlock(t, got, tc.want...)
+			if cfg.CloudEnabled != tc.enabled {
+				t.Fatalf("cloud enabled = %v, want %v", cfg.CloudEnabled, tc.enabled)
+			}
+			data, err := os.ReadFile(record)
+			if err != nil {
+				t.Fatalf("read the fake rclone record: %v", err)
+			}
+			for _, line := range strings.Split(strings.TrimSpace(string(data)), "\n") {
+				if !strings.HasPrefix(line, "lsf ") && !strings.HasPrefix(line, "lsl ") {
+					t.Fatalf("a dry run only reads the remote, got %q", line)
+				}
+			}
+		})
+	}
+}

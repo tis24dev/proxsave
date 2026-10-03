@@ -125,6 +125,9 @@ type CloudStorage struct {
 	// way the Secondary sets them, when localFS supports ownership.
 	localFS   *FilesystemInfo
 	detectErr error
+	// notChecked is set when a dry run found the listing not permitted and skipped the
+	// write test that would have checked the remote (a dry run writes nothing there).
+	notChecked bool
 }
 
 func (c *CloudStorage) remoteLabel() string {
@@ -235,6 +238,13 @@ func (c *CloudStorage) SetLocalLogMode(ctx context.Context, logFile string) (app
 // unknown filesystem, nil when it did not (and always nil for the remote form).
 func (c *CloudStorage) DetectionFailure() error {
 	return c.detectErr
+}
+
+// NotCheckedInDryRun reports whether the last accessibility check was a dry run that
+// found the listing not permitted and skipped the write test: the remote is used, not
+// checked.
+func (c *CloudStorage) NotCheckedInDryRun() bool {
+	return c.notChecked
 }
 
 // setLocalPermissions gives the files of the backup set rclone copied into a local
@@ -521,6 +531,7 @@ func (c *CloudStorage) DetectFilesystem(ctx context.Context) (info *FilesystemIn
 	c.logger.Debug("Cloud remote check: remote=%s timeout=%ds", c.remoteLabel(), c.config.RcloneTimeoutConnection)
 	c.logger.Info("Checking cloud remote accessibility...")
 	c.writeTestOnly = false
+	c.notChecked = false
 
 	// Check if rclone is available
 	logging.DebugStep(c.logger, "cloud detect filesystem", "checking rclone availability")
@@ -595,7 +606,14 @@ func (c *CloudStorage) DetectFilesystem(ctx context.Context) (info *FilesystemIn
 			c.logger.Debug("HINT: Check your rclone configuration with: rclone config show %s", c.remote)
 		}
 		c.logger.Debug("Cloud backup will be skipped")
-		c.logger.Info("  %s", capitalizeFirst(ErrorCause(err)))
+		// A dry run found the backup directory missing and created nothing; a check that
+		// timed out stays a timeout.
+		var missingErr *DirectoryMissingError
+		if errors.As(err, &missingErr) && (rcErr == nil || rcErr.kind != remoteErrorTimeout) {
+			c.logger.Info("  Directory: missing, not created in dry run")
+		} else {
+			c.logger.Info("  %s", capitalizeFirst(ErrorCause(err)))
+		}
 
 		return nil, &StorageError{
 			Location:    LocationCloud,
@@ -608,9 +626,12 @@ func (c *CloudStorage) DetectFilesystem(ctx context.Context) (info *FilesystemIn
 	}
 
 	c.logger.Debug("Cloud remote %s is accessible (write test only=%v)", c.remoteLabel(), c.writeTestOnly)
-	if c.writeTestOnly {
+	switch {
+	case c.notChecked:
+		c.logger.Info("  Listing not permitted, write test skipped in dry run")
+	case c.writeTestOnly:
 		c.logger.Info("  Accessible by write test only, listing not permitted")
-	} else {
+	default:
 		c.logger.Info("  Accessible")
 	}
 	logging.DebugStep(c.logger, "cloud detect filesystem", "remote accessible")
@@ -760,10 +781,17 @@ func (c *CloudStorage) checkRemoteOnce(ctx context.Context) error {
 
 	remoteBase := c.remoteBase()
 
+	// A dry run is read-only on the remote: it always checks by listing, and never
+	// writes there (no mkdir, no write test).
+	dryRun := c.config.DryRun
+
 	// If user explicitly enabled write healthcheck, skip list check entirely
-	if c.config.CloudWriteHealthCheck {
+	if c.config.CloudWriteHealthCheck && !dryRun {
 		c.logger.Debug("CLOUD_WRITE_HEALTHCHECK=true, using write test only")
 		return c.tryWriteTest(ctx)
+	}
+	if c.config.CloudWriteHealthCheck {
+		c.logger.Debug("DRY RUN: CLOUD_WRITE_HEALTHCHECK=true ignored, checking by listing (no write test)")
 	}
 
 	// PHASE 1: Try list-based check (default, faster)
@@ -776,6 +804,13 @@ func (c *CloudStorage) checkRemoteOnce(ctx context.Context) error {
 	var rcErr *remoteCheckError
 	if !errors.As(listErr, &rcErr) {
 		return listErr // Unknown error type, can't fallback
+	}
+
+	if dryRun && rcErr.kind == remoteErrorAuth && !strings.Contains(rcErr.msg, "write check") {
+		// Only a write test could check this remote, and a dry run writes nothing.
+		c.logger.Debug("DRY RUN: listing not permitted, write test skipped: %v", rcErr)
+		c.notChecked = true
+		return nil
 	}
 
 	if !c.shouldFallbackToWriteTest(rcErr, ctx) {
@@ -812,8 +847,9 @@ func (c *CloudStorage) tryListCheck(ctx context.Context, remoteRoot, remoteBase 
 	// Step 2: check specific path (remote:path) if configured
 	if remoteBase != remoteRoot {
 		// Ensure backup path exists (mkdir is idempotent). A local directory was
-		// already created by DetectFilesystem (ensureLocalDir).
-		if c.localDir == "" {
+		// already created by DetectFilesystem (ensureLocalDir); a dry run creates
+		// nothing on the remote.
+		if c.localDir == "" && !c.config.DryRun {
 			argsMkdir := c.buildRcloneArgs("mkdir")
 			argsMkdir = append(argsMkdir, remoteBase)
 			c.logger.Debug("Running (remote path ensure): %s", strings.Join(argsMkdir, " "))
@@ -831,7 +867,14 @@ func (c *CloudStorage) tryListCheck(ctx context.Context, remoteRoot, remoteBase 
 
 		output, err = c.exec(ctx, argsPath[0], argsPath[1:]...)
 		if err != nil {
-			return classifyRemoteError("path", remoteBase, err, output)
+			checkErr := classifyRemoteError("path", remoteBase, err, output)
+			var rcErr *remoteCheckError
+			if c.config.DryRun && c.localDir == "" && errors.As(checkErr, &rcErr) && rcErr.kind == remoteErrorPath {
+				// The backup directory does not exist and a dry run does not create it.
+				c.logger.Debug("DRY RUN: %s is missing and is not created: %v", remoteBase, checkErr)
+				return &DirectoryMissingError{Path: remoteBase}
+			}
+			return checkErr
 		}
 	}
 
