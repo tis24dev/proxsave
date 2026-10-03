@@ -661,13 +661,15 @@ func TestCheckDiskSpace_NotCheckedAndRuleBlocks(t *testing.T) {
 
 	out.Reset()
 	checker.config.MinDiskSecondaryGB = 999999.0
-	if result := checker.CheckDiskSpaceForEstimate(2); !result.Passed {
+	// A tiny estimate keeps the Primary requirement at its 0.001 GB minimum, so the
+	// Primary passes whatever this machine has free; only the Secondary fails.
+	if result := checker.CheckDiskSpaceForEstimate(0.0005); !result.Passed {
 		t.Fatalf("CheckDiskSpaceForEstimate = %+v, want a pass", result)
 	}
 	log = out.String()
 	for _, want := range []string{
 		"INFO       Required: 999999.00 GB\n",
-		"INFO       Rule: larger of 999999.00 GB minimum and 2.00 GB collected x 1.5\n",
+		"INFO       Rule: larger of 999999.00 GB minimum and 0.00 GB collected x 1.5\n",
 		"WARNING  ⚠ Secondary disk space: insufficient, copy may fail\n",
 		"WARNING  ⚠ Cloud disk space: not checked\n",
 	} {
