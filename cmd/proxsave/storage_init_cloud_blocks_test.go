@@ -111,19 +111,26 @@ func TestCloudBackendNotCreatedBlock(t *testing.T) {
 	}
 }
 
-// CLOUD_REMOTE as an absolute local directory: the backend accepts it, and the
-// accessibility check runs rclone on the plain path (its local backend), with no
-// "<name>:" prefix. The block is the reachable cloud block.
+// CLOUD_REMOTE as an absolute local directory: the backend accepts it, normalized
+// (the "Path Cloud:" line keeps the value as configured), creates the backup
+// directory with rclone mkdir, and runs rclone on plain paths (its local backend), with
+// no "<name>:" prefix. The block is the reachable cloud block, and the storage summary
+// shows the directory's real filesystem type.
 func TestCloudLocalDirectoryIsInitialized(t *testing.T) {
 	record := filepath.Join(t.TempDir(), "argv")
-	fakeRcloneOnPath(t, "#!/bin/sh\necho \"$*\" >> "+record+"\nexit 0\n")
-	cfg := &config.Config{CloudEnabled: true, CloudRemote: "/mnt/cloud", CloudRemotePath: "host1", CloudRetentionDays: 4}
+	// mkdir does what rclone's local backend does: it creates the directory, parents
+	// included, so the filesystem detection finds it.
+	fakeRcloneOnPath(t, "#!/bin/sh\necho \"$*\" >> "+record+"\n"+
+		"if [ \"$1\" = mkdir ]; then mkdir -p \"$2\" || exit 1; fi\nexit 0\n")
+	root := filepath.Join(t.TempDir(), "cloud")
+	configured := root + "//"
+	cfg := &config.Config{CloudEnabled: true, CloudRemote: configured, CloudRemotePath: "host1", CloudRetentionDays: 4}
 	var cloudFS *storage.FilesystemInfo
 	got := captureStorageInit(t, func(logger *logging.Logger) {
 		cloudFS = initializeCloudStorage(backupModeOptions{ctx: context.Background(), cfg: cfg, logger: logger, hostname: "node"}, orchestrator.New(logger, false), nil)
 	})
 	requireBlock(t, got,
-		"INFO     Path Cloud: /mnt/cloud",
+		"INFO     Path Cloud: "+configured,
 		"INFO       Retention policy: simple (keep 4 newest)",
 		"INFO     Checking cloud remote accessibility...",
 		"INFO       Accessible",
@@ -138,7 +145,8 @@ func TestCloudLocalDirectoryIsInitialized(t *testing.T) {
 		t.Fatalf("read the fake rclone record: %v", err)
 	}
 	argv := strings.Split(strings.TrimSpace(string(data)), "\n")
-	want := []string{"lsf /mnt/cloud --max-depth 1", "mkdir /mnt/cloud/host1", "lsf /mnt/cloud/host1 --max-depth 1"}
+	base := root + "/host1"
+	want := []string{"mkdir " + base, "lsf " + root + " --max-depth 1", "lsf " + base + " --max-depth 1"}
 	if len(argv) < len(want) || strings.Join(argv[:len(want)], "\n") != strings.Join(want, "\n") {
 		t.Fatalf("rclone argv =\n%s\nwant it to open with\n%s", strings.Join(argv, "\n"), strings.Join(want, "\n"))
 	}
@@ -147,8 +155,15 @@ func TestCloudLocalDirectoryIsInitialized(t *testing.T) {
 			t.Fatalf("a local directory must reach rclone without a remote prefix: %q", line)
 		}
 	}
-	// The storage summary line names the rclone backend "local".
-	if label := formatStorageLabel(cfg.CloudRemote, cloudFS); label != "/mnt/cloud [rclone-local]" {
-		t.Fatalf("storage label = %q", label)
+	if st, err := os.Stat(base); err != nil || !st.IsDir() {
+		t.Fatalf("the backup directory %s was not created: %v", base, err)
+	}
+	// The storage summary shows the type the Primary and the Secondary would see.
+	detected, err := storage.NewFilesystemDetector(logging.New(types.LogLevelInfo, false)).DetectFilesystem(context.Background(), base)
+	if err != nil {
+		t.Fatalf("detect %s: %v", base, err)
+	}
+	if label, want := formatStorageLabel(cfg.CloudRemote, cloudFS), configured+" ["+string(detected.Type)+"]"; label != want || strings.Contains(label, "rclone") {
+		t.Fatalf("storage label = %q, want %q", label, want)
 	}
 }

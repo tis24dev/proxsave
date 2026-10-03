@@ -1,7 +1,9 @@
 package storage
 
 import (
+	"bytes"
 	"context"
+	"os"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -10,6 +12,8 @@ import (
 	"time"
 
 	"github.com/tis24dev/proxsave/internal/config"
+	"github.com/tis24dev/proxsave/internal/logging"
+	"github.com/tis24dev/proxsave/internal/types"
 )
 
 // cloudForm is one way of writing CLOUD_REMOTE, with the rclone references the backend
@@ -22,6 +26,8 @@ type cloudForm struct {
 	base       string // the backup directory
 	logDir     string // where CLOUD_LOG_PATH=/proxsave/log resolves
 }
+
+func (f cloudForm) local() bool { return !strings.Contains(f.remote, ":") }
 
 // The local form (an absolute CLOUD_REMOTE without a colon) builds plain paths, which
 // rclone's local backend takes as is; the remote form is unchanged.
@@ -101,13 +107,31 @@ func TestCloudLocalFormAccessibilityCheck(t *testing.T) {
 			if err != nil {
 				t.Fatalf("DetectFilesystem: %v", err)
 			}
-			want := []string{"lsf " + form.root + " --max-depth 1"}
-			if form.base != form.root {
-				want = append(want, "mkdir "+form.base, "lsf "+form.base+" --max-depth 1")
+			// The local form creates the backup directory first (rclone mkdir, parents
+			// included), then lists; the remote form lists the root, then creates and
+			// lists the path under it.
+			var want []string
+			if form.local() {
+				want = append(want, "mkdir "+form.base, "lsf "+form.root+" --max-depth 1")
+				if form.base != form.root {
+					want = append(want, "lsf "+form.base+" --max-depth 1")
+				}
+			} else {
+				want = append(want, "lsf "+form.root+" --max-depth 1")
+				if form.base != form.root {
+					want = append(want, "mkdir "+form.base, "lsf "+form.base+" --max-depth 1")
+				}
 			}
 			requireArgv(t, rec.argv(), want...)
-			if info.Path != form.base || info.MountPoint != form.base {
-				t.Fatalf("filesystem info = %+v, want path and mount %s", info, form.base)
+			// The local form carries the type the filesystem detection finds (unknown
+			// where the directory does not exist), never an rclone label; the remote
+			// form keeps the rclone label (TestCloudLocalFormDetectsTheRealFilesystem).
+			if form.local() {
+				if info.Path != form.base || strings.HasPrefix(string(info.Type), "rclone-") {
+					t.Fatalf("filesystem info = %+v, want path %s and a detected type", info, form.base)
+				}
+			} else if info.Path != form.base || info.MountPoint != form.base || info.Type != "rclone-remote" {
+				t.Fatalf("filesystem info = %+v, want path and mount %s, type rclone-remote", info, form.base)
 			}
 		})
 	}
@@ -122,6 +146,12 @@ func TestCloudLocalFormWriteTest(t *testing.T) {
 				t.Fatalf("DetectFilesystem: %v", err)
 			}
 			got := rec.argv()
+			if form.local() {
+				if len(got) == 0 || got[0] != "mkdir "+form.base {
+					t.Fatalf("rclone argv = %v, want the mkdir of %s first", got, form.base)
+				}
+				got = got[1:]
+			}
 			if len(got) != 2 {
 				t.Fatalf("rclone argv = %v, want the touch and the deletefile", got)
 			}
@@ -280,13 +310,29 @@ func TestCloudLocalFormLegacyLogPathStaysAsIs(t *testing.T) {
 	}
 }
 
+// The local form is normalized with filepath.Clean, never refused for its shape.
+func TestCloudLocalFormIsNormalized(t *testing.T) {
+	for _, tc := range []struct{ remote, remotePath, root, dir string }{
+		{"/mnt/cloud/", "", "/mnt/cloud", "/mnt/cloud"},
+		{"/mnt//cloud", "host1", "/mnt/cloud", "/mnt/cloud/host1"},
+		{"/mnt/../cloud", "", "/cloud", "/cloud"},
+		{"  /mnt/cloud/./x/..  ", "/host1/", "/mnt/cloud", "/mnt/cloud/host1"},
+	} {
+		cs, err := NewCloudStorage(&config.Config{CloudEnabled: true, CloudRemote: tc.remote, CloudRemotePath: tc.remotePath}, newTestLogger(), "")
+		if err != nil {
+			t.Fatalf("NewCloudStorage(%q, %q): %v", tc.remote, tc.remotePath, err)
+		}
+		if cs.localRoot != tc.root || cs.localDir != tc.dir || cs.remoteLabel() != tc.dir {
+			t.Fatalf("NewCloudStorage(%q, %q) root=%q dir=%q label=%q, want root %q dir %q",
+				tc.remote, tc.remotePath, cs.localRoot, cs.localDir, cs.remoteLabel(), tc.root, tc.dir)
+		}
+	}
+}
+
 func TestCloudLocalFormValidation(t *testing.T) {
 	for _, tc := range []struct {
 		remote, remotePath, want string
 	}{
-		{"/mnt/../cloud", "", "invalid CLOUD_REMOTE: local directory must not contain '..'"},
-		{"/mnt/cloud/", "", "invalid CLOUD_REMOTE: local directory is not a clean path"},
-		{"/mnt//cloud", "", "invalid CLOUD_REMOTE: local directory is not a clean path"},
 		{"/mnt/cloud", "../escape", "CLOUD_REMOTE_PATH must not traverse outside the configured remote"},
 		// A colon makes it the remote form, whose name holds no separator: refused as
 		// before.
@@ -297,8 +343,16 @@ func TestCloudLocalFormValidation(t *testing.T) {
 			t.Fatalf("NewCloudStorage(%q, %q) error = %v, want %q", tc.remote, tc.remotePath, err, tc.want)
 		}
 	}
-	if err := validateLocalCloudRemote("-x"); err == nil {
-		t.Fatalf("a directory starting with '-' must be refused")
+	// What cannot be a local directory is still refused (unreachable through
+	// LocalCloudRemote, which only hands over absolute paths).
+	if err := validateLocalCloudRemote("-x"); err == nil || err.Error() != "local directory must not start with '-'" {
+		t.Fatalf("a directory starting with '-' must be refused, got %v", err)
+	}
+	if err := validateLocalCloudRemote("mnt/cloud"); err == nil || err.Error() != "local directory must be an absolute path" {
+		t.Fatalf("a relative directory must be refused, got %v", err)
+	}
+	if err := validateLocalCloudRemote("/mnt/cloud"); err != nil {
+		t.Fatalf("validateLocalCloudRemote(/mnt/cloud) = %v", err)
 	}
 }
 
@@ -340,5 +394,122 @@ func TestLocalCloudRemoteHelpers(t *testing.T) {
 	}
 	if got := remoteBaseName("/mnt/cloud/host1/a.tar"); got != "a.tar" {
 		t.Fatalf("remoteBaseName(local) = %q", got)
+	}
+}
+
+// CLOUD_REMOTE as a local directory: the storage summary gets the directory's real
+// filesystem, detected like the Primary's and the Secondary's (FilesystemDetector),
+// and the detection writes nothing visible (the network ownership probe lines are
+// DEBUG). A directory the detection cannot read leaves the type unknown.
+func TestCloudLocalFormDetectsTheRealFilesystem(t *testing.T) {
+	dir := t.TempDir()
+	logger := logging.New(types.LogLevelDebug, false)
+	buf := &bytes.Buffer{}
+	logger.SetOutput(buf)
+	cs, err := NewCloudStorage(&config.Config{CloudEnabled: true, CloudRemote: dir}, logger, "")
+	if err != nil {
+		t.Fatalf("NewCloudStorage: %v", err)
+	}
+	cs.lookPath = func(string) (string, error) { return "/usr/bin/rclone", nil }
+	cs.execCommand = func(context.Context, string, ...string) ([]byte, error) { return nil, nil }
+	cs.fsDetector.mountPointLookup = func(string) (string, error) { return dir, nil }
+	cs.fsDetector.filesystemTypeLookup = func(context.Context, string) (FilesystemType, string, error) {
+		return FilesystemNFS4, "nas:/export", nil
+	}
+	probed := false
+	cs.fsDetector.ownershipSupportTest = func(context.Context, string) bool { probed = true; return true }
+
+	info, err := cs.DetectFilesystem(context.Background())
+	if err != nil {
+		t.Fatalf("DetectFilesystem: %v", err)
+	}
+	if info.Type != FilesystemNFS4 || info.MountPoint != dir || !info.IsNetworkFS || !probed {
+		t.Fatalf("filesystem info = %+v (probed=%v), want the detected nfs4 mount with the ownership probe run", info, probed)
+	}
+	if got, want := strings.Join(visibleOf(buf.String()), "\n"), "INFO     Checking cloud remote accessibility...\nINFO       Accessible"; got != want {
+		t.Fatalf("visible lines =\n%s\nwant\n%s", got, want)
+	}
+	if !strings.Contains(stripTimes(buf.String()), "DEBUG    Network filesystem nfs4 supports Unix ownership\n") {
+		t.Fatalf("the ownership probe result belongs at DEBUG:\n%s", buf.String())
+	}
+
+	missing := filepath.Join(dir, "missing")
+	cs, err = NewCloudStorage(&config.Config{CloudEnabled: true, CloudRemote: missing}, newTestLogger(), "")
+	if err != nil {
+		t.Fatalf("NewCloudStorage: %v", err)
+	}
+	cs.lookPath = func(string) (string, error) { return "/usr/bin/rclone", nil }
+	cs.execCommand = func(context.Context, string, ...string) ([]byte, error) { return nil, nil }
+	if info, err := cs.DetectFilesystem(context.Background()); err != nil || info.Type != FilesystemUnknown || info.Path != missing {
+		t.Fatalf("DetectFilesystem of an unreadable directory = %+v, %v; want an unknown type", info, err)
+	}
+	if _, err := os.Stat(missing); !os.IsNotExist(err) {
+		t.Fatalf("the fake rclone mkdir must not have created %s", missing)
+	}
+}
+
+// A CLOUD_LOG_PATH that resolves outside the local CLOUD_REMOTE directory: the step [6]
+// cloud log cleanup does not run for it, prints nothing visible and counts nothing.
+func TestCloudLocalFormLogPathOutsideSkipsTheCleanup(t *testing.T) {
+	newest := "node-backup-20241112-100000.tar.zst"
+	oldest := "node-backup-20241110-100000.tar.zst"
+	listing := strings.Join([]string{
+		"100 2024-11-12 10:00:00 " + newest,
+		"120 2024-11-12 10:00:00 " + newest + ".sha256",
+		"100 2024-11-10 10:00:00 " + oldest,
+		"120 2024-11-10 10:00:00 " + oldest + ".sha256",
+	}, "\n")
+	rec := &argvRecorder{respond: func(args []string) ([]byte, error) {
+		switch args[0] {
+		case "lsl":
+			return []byte(listing), nil
+		case "cat":
+			return []byte(`{"hostname":"node"}`), nil
+		}
+		return nil, nil
+	}}
+	logger, buf := newCapturedLogger()
+	cs, err := NewCloudStorage(&config.Config{CloudEnabled: true, CloudRemote: "/mnt/cloud/", CloudLogPath: "../logs", CloudBatchSize: 10}, logger, "")
+	if err != nil {
+		t.Fatalf("NewCloudStorage: %v", err)
+	}
+	cs.execCommand = rec.exec
+	cs.sleep = func(time.Duration) {}
+	cs.hostname = "node"
+	if deleted, err := cs.ApplyRetention(context.Background(), RetentionConfig{Policy: "simple", MaxBackups: 1}); err != nil || deleted != 1 {
+		t.Fatalf("ApplyRetention = %d, %v; want 1 deleted", deleted, err)
+	}
+	for _, line := range rec.argv() {
+		if strings.Contains(line, "logs") {
+			t.Fatalf("the cleanup ran outside CLOUD_REMOTE: %q", line)
+		}
+	}
+	// The scale of the pass is the only fact: the skipped cleanup adds none.
+	if got, want := strings.Join(visibleOf(buf.String()), "\n"), "INFO       Backups: 2, limit: 1"; got != want {
+		t.Fatalf("visible lines =\n%s\nwant\n%s", got, want)
+	}
+	if s := cs.LastRetentionSummary(); s.LogsNotDeleted != 0 || s.LogsDeleted != 0 {
+		t.Fatalf("summary = %+v, want no log counted", s)
+	}
+}
+
+func TestLocalCloudLogOutside(t *testing.T) {
+	for _, tc := range []struct {
+		logPath, remote, root string
+		outside               bool
+	}{
+		{"/proxsave/log", "/mnt/cloud", "/mnt/cloud", false},
+		{"/", "/mnt/cloud", "/mnt/cloud", false}, // the CLOUD_REMOTE directory itself
+		{"../logs", "/mnt/cloud/", "/mnt/cloud", true},
+		{"/../../etc", "/mnt/cloud", "/mnt/cloud", true},
+		{"/x/../../cloud2", "/mnt/cloud", "/mnt/cloud", true},
+		{"../logs", "/", "/", false},
+		{"other:/logs", "/mnt/cloud", "", false}, // a full rclone reference: not checked
+		{"../logs", "gdrive", "", false},         // remote form: not checked
+	} {
+		root, outside := LocalCloudLogOutside(tc.logPath, tc.remote)
+		if root != tc.root || outside != tc.outside {
+			t.Fatalf("LocalCloudLogOutside(%q, %q) = %q, %v; want %q, %v", tc.logPath, tc.remote, root, outside, tc.root, tc.outside)
+		}
 	}
 }

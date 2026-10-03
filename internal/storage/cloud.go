@@ -117,6 +117,9 @@ type CloudStorage struct {
 	// reference is then a plain path, which rclone's local backend takes as is.
 	localRoot string
 	localDir  string
+	// fsDetector detects the filesystem of the local directory (local form only), for
+	// the storage summary; the uploads still go through rclone.
+	fsDetector *FilesystemDetector
 }
 
 func (c *CloudStorage) remoteLabel() string {
@@ -155,6 +158,24 @@ func (c *CloudStorage) remotePathFor(name string) string {
 		clean = path.Join(c.remotePrefix, clean)
 	}
 	return fmt.Sprintf("%s:%s", c.remote, clean)
+}
+
+// localFilesystemInfo detects the filesystem of a local CLOUD_REMOTE directory the
+// way the Primary and the Secondary do (FilesystemDetector), for the storage summary;
+// the uploads still go through rclone. A detection that fails leaves the type unknown,
+// DEBUG only.
+func (c *CloudStorage) localFilesystemInfo(ctx context.Context) *FilesystemInfo {
+	detector := c.fsDetector
+	if detector == nil {
+		detector = NewFilesystemDetector(c.logger, WithIOTimeout(c.fsIoTimeout()))
+	}
+	info, err := detector.DetectFilesystem(ctx, c.localDir)
+	if err != nil || info == nil {
+		c.logger.Debug("Cloud storage: filesystem detection failed for %s, type unknown: %v", c.localDir, err)
+		return &FilesystemInfo{Path: c.localDir, Type: FilesystemUnknown, MountPoint: c.localDir}
+	}
+	c.logger.Debug("Cloud storage: %s is on %s (mount %s)", c.localDir, info.Type, info.MountPoint)
+	return info
 }
 
 // backendLabel names the rclone backend in the filesystem type: the remote name, or
@@ -324,6 +345,7 @@ func NewCloudStorage(cfg *config.Config, logger *logging.Logger, writtenHostname
 	rawRemote := strings.TrimSpace(cfg.CloudRemote)
 	userPrefix := strings.Trim(strings.TrimSpace(cfg.CloudRemotePath), "/")
 	var remoteName, combinedPrefix, localRoot, localDir string
+	var fsDetector *FilesystemDetector
 	if root, ok := LocalCloudRemote(rawRemote); ok {
 		if err := validateLocalCloudRemote(root); err != nil {
 			return nil, fmt.Errorf("invalid CLOUD_REMOTE: %w", err)
@@ -333,6 +355,7 @@ func NewCloudStorage(cfg *config.Config, logger *logging.Logger, writtenHostname
 		}
 		localRoot = root
 		localDir, _ = LocalCloudRemoteDir(rawRemote, cfg.CloudRemotePath)
+		fsDetector = NewFilesystemDetector(logger, WithIOTimeout(fsIoTimeout(cfg)))
 	} else {
 		var basePath string
 		remoteName, basePath = splitRemoteRef(rawRemote)
@@ -371,6 +394,7 @@ func NewCloudStorage(cfg *config.Config, logger *logging.Logger, writtenHostname
 		remotePrefix:   combinedPrefix,
 		localRoot:      localRoot,
 		localDir:       localDir,
+		fsDetector:     fsDetector,
 		uploadMode:     mode,
 		parallelJobs:   parallelJobs,
 		parallelVerify: cfg.CloudParallelVerify,
@@ -478,6 +502,10 @@ func (c *CloudStorage) DetectFilesystem(ctx context.Context) (info *FilesystemIn
 		c.logger.Info("  Accessible")
 	}
 	logging.DebugStep(c.logger, "cloud detect filesystem", "remote accessible")
+
+	if c.localDir != "" {
+		return c.localFilesystemInfo(ctx), nil
+	}
 
 	// Return minimal filesystem info (cloud doesn't have a real filesystem type)
 	return &FilesystemInfo{
@@ -620,6 +648,17 @@ func (c *CloudStorage) checkRemoteOnce(ctx context.Context) error {
 
 	remoteBase := c.remoteBase()
 
+	// A local directory is created the way the Secondary's is: rclone mkdir (parents
+	// included) of the backup directory, before anything lists or writes there.
+	if c.localDir != "" {
+		argsMkdir := c.buildRcloneArgs("mkdir")
+		argsMkdir = append(argsMkdir, c.localDir)
+		c.logger.Debug("Running (local directory ensure): %s", strings.Join(argsMkdir, " "))
+		if output, err := c.exec(ctx, argsMkdir[0], argsMkdir[1:]...); err != nil {
+			return classifyRemoteError("path", c.localDir, err, output)
+		}
+	}
+
 	// If user explicitly enabled write healthcheck, skip list check entirely
 	if c.config.CloudWriteHealthCheck {
 		c.logger.Debug("CLOUD_WRITE_HEALTHCHECK=true, using write test only")
@@ -671,14 +710,17 @@ func (c *CloudStorage) tryListCheck(ctx context.Context, remoteRoot, remoteBase 
 
 	// Step 2: check specific path (remote:path) if configured
 	if remoteBase != remoteRoot {
-		// Ensure backup path exists (mkdir is idempotent)
-		argsMkdir := c.buildRcloneArgs("mkdir")
-		argsMkdir = append(argsMkdir, remoteBase)
-		c.logger.Debug("Running (remote path ensure): %s", strings.Join(argsMkdir, " "))
+		// Ensure backup path exists (mkdir is idempotent). A local directory was
+		// already created by checkRemoteOnce.
+		if c.localDir == "" {
+			argsMkdir := c.buildRcloneArgs("mkdir")
+			argsMkdir = append(argsMkdir, remoteBase)
+			c.logger.Debug("Running (remote path ensure): %s", strings.Join(argsMkdir, " "))
 
-		output, err = c.exec(ctx, argsMkdir[0], argsMkdir[1:]...)
-		if err != nil {
-			return classifyRemoteError("path", remoteBase, err, output)
+			output, err = c.exec(ctx, argsMkdir[0], argsMkdir[1:]...)
+			if err != nil {
+				return classifyRemoteError("path", remoteBase, err, output)
+			}
 		}
 
 		// Verify backup path accessibility with a listing
@@ -2044,6 +2086,11 @@ func (c *CloudStorage) deleteAssociatedLog(ctx context.Context, backupFile strin
 	if base == "" {
 		return false
 	}
+	if root, outside := LocalCloudLogOutside(base, c.localRoot); outside {
+		// Refused at step [8] as well: nothing is copied there, nothing is cleaned.
+		c.logger.Debug("Cloud logs: CLOUD_LOG_PATH %s resolves outside the CLOUD_REMOTE directory %s, log cleanup skipped", base, root)
+		return false
+	}
 	host, ts, ok := extractLogKeyFromBackup(backupFile)
 	if !ok {
 		return false
@@ -2099,6 +2146,10 @@ func (c *CloudStorage) countLogFiles(ctx context.Context) int {
 	defer cancel()
 	base := c.cloudLogBase(c.config.CloudLogPath)
 	if base == "" {
+		return 0
+	}
+	if root, outside := LocalCloudLogOutside(c.config.CloudLogPath, c.localRoot); outside {
+		c.logger.Debug("Cloud logs: %s is outside the CLOUD_REMOTE directory %s, log cleanup skipped", base, root)
 		return 0
 	}
 

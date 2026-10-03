@@ -304,3 +304,29 @@ func TestDispatchLogFileCloudLocalDirectory(t *testing.T) {
 		"lsl "+dest,
 	)
 }
+
+// Step [8], CLOUD_REMOTE a local directory and a CLOUD_LOG_PATH that resolves outside
+// it: refused before rclone runs. The "Cloud:" line names the resolved destination,
+// the fact names the cleaned CLOUD_REMOTE directory.
+func TestDispatchLogFileCloudLogPathOutside(t *testing.T) {
+	record := filepath.Join(t.TempDir(), "argv")
+	fakeRcloneOnPath(t, "#!/bin/sh\necho \"$*\" >> "+record+"\nexit 0\n")
+	var buf bytes.Buffer
+	logger := logging.New(types.LogLevelInfo, false)
+	logger.SetOutput(&buf)
+	cfg := &config.Config{CloudEnabled: true, CloudRemote: "/mnt/cloud/", CloudLogPath: "../logs", FsIoTimeoutSeconds: 30}
+	o := &Orchestrator{logger: logger, cfg: cfg}
+	src := writeSrcLog(t)
+	if err := o.dispatchLogFile(context.Background(), src); err != nil {
+		t.Fatalf("dispatchLogFile: %v", err)
+	}
+	requireExactLines(t, visibleLines(buf.String()),
+		"INFO     Dispatching log file: "+filepath.Base(src),
+		"INFO     Cloud: /mnt/logs/"+filepath.Base(src),
+		"INFO       CLOUD_LOG_PATH: outside /mnt/cloud",
+		"WARNING  ⚠ Log not copied to cloud",
+	)
+	if _, err := os.Stat(record); !os.IsNotExist(err) {
+		t.Fatalf("rclone must not run for a refused destination (record err=%v)", err)
+	}
+}
