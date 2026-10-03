@@ -112,8 +112,8 @@ type Config struct {
 	MinDiskPrimaryGB   float64
 	MinDiskSecondaryGB float64
 	MinDiskCloudGB     float64
-	// MinDiskPBSGB is the free space the PBS storage needs; 0 means no check (a negative
-	// value is read as 0). Unlike the siblings it is not raised to 10 GB when 0 or less.
+	// MinDiskPBSGB is the free space the PBS storage needs; like the siblings, 0 or less
+	// is read as 10 GB (sanitizeMinDisk).
 	MinDiskPBSGB float64
 	SafetyFactor float64
 	// SkipPermissionCheck feeds checks.CheckerConfig.SkipPermissionCheck, which drops the
@@ -661,11 +661,7 @@ func (c *Config) parseOptimizationSettings() {
 	c.MinDiskPrimaryGB = sanitizeMinDisk(c.getFloat("MIN_DISK_SPACE_PRIMARY_GB", 10.0))
 	c.MinDiskSecondaryGB = sanitizeMinDisk(c.getFloat("MIN_DISK_SPACE_SECONDARY_GB", c.MinDiskPrimaryGB))
 	c.MinDiskCloudGB = sanitizeMinDisk(c.getFloat("MIN_DISK_SPACE_CLOUD_GB", c.MinDiskPrimaryGB))
-	// PBS: 0 or less = no check, so no sanitizeMinDisk (which turns 0 into 10 GB).
-	c.MinDiskPBSGB = c.getFloat("MIN_DISK_SPACE_PBS_GB", c.MinDiskPrimaryGB)
-	if c.MinDiskPBSGB < 0 {
-		c.MinDiskPBSGB = 0
-	}
+	c.MinDiskPBSGB = sanitizeMinDisk(c.getFloat("MIN_DISK_SPACE_PBS_GB", c.MinDiskPrimaryGB))
 
 	// SKIP_PERMISSION_CHECK ships in the template and is listed in envOverrideKeys, so it
 	// was settable and readable while nothing carried it to the checker: the key looked

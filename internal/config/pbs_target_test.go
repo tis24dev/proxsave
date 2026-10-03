@@ -83,15 +83,14 @@ func TestPBSTargetExplicitValuesAreRead(t *testing.T) {
 	}
 }
 
-// 0 or less means no check for PBS, while a sibling's 0 is raised to 10 GB by
-// sanitizeMinDisk: the PBS value must not go through it.
-func TestPBSTargetMinDiskZeroOrLessIsNoCheck(t *testing.T) {
+// 0 or less is read as 10 GB, exactly like the siblings (sanitizeMinDisk).
+func TestPBSTargetMinDiskZeroOrLessIsTenGB(t *testing.T) {
 	for _, tc := range []struct {
 		value string
 		want  float64
 	}{
-		{"0", 0},
-		{"-5", 0},
+		{"0", 10},
+		{"-5", 10},
 	} {
 		cfg := loadEnvForTest(t, "mindisk.env", "MIN_DISK_SPACE_PBS_GB="+tc.value+"\n")
 		if cfg.MinDiskPBSGB != tc.want {
