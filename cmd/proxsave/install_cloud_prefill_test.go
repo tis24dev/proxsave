@@ -51,6 +51,7 @@ func TestFreshInstallDoesNotOfferTheTemplateCloudRemote(t *testing.T) {
 		"n",                    // encryption
 		"",                     // scheduler engine: default
 		"off",                  // healthchecks
+		"",                     // frequency: default
 		"",                     // run at: default
 	}, "\n") + "\n"
 
@@ -104,6 +105,7 @@ func TestEditStillOffersTheStoredCloudRemote(t *testing.T) {
 		"n", // encryption
 		"",  // scheduler engine
 		"off",
+		"", // frequency
 		"", // run at
 	}, "\n") + "\n"
 

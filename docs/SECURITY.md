@@ -213,7 +213,9 @@ but a group- or world-writable executable is flagged and, on auto-fix, narrowed 
 ever widening.
 
 **Permissions and ownership.** Sensitive files are enforced at `0600` (the config file,
-`identity/.server_identity`, the AGE recipient file, and every `secure_account/*.json`),
+`identity/.server_identity`, the AGE recipient file, every `secure_account/*.json`, and
+the PBS token files read as credentials when they exist: `secure_account/pbs_token`,
+`secure_account/pbs_api_token` and `/root/.pbs-token`),
 directories at `0700`/`0755`, all owned `root:root`. The exception is `BACKUP_PATH`,
 `LOG_PATH`, `SECONDARY_PATH` and `SECONDARY_LOG_PATH`: their owner **and** mode checks are
 skipped entirely when `SET_BACKUP_PERMISSIONS=true` (see below) or when the path sits on a

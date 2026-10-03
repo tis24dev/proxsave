@@ -17,18 +17,20 @@ import (
 // seedWhatsnewOnInstallSuccess seeds last_seen = version.String() at an
 // install-success boundary so a brand-new install never shows Screen 0 on its first
 // bare interactive launch (STATE-03). It is best-effort: it resolves the base via
-// detectedBaseDirOrFallback -- the SAME resolver the dashboard hook reads, so the
-// write-path can never diverge from the read-path (open question A1) -- seeds only a
-// non-empty base, and ignores any error so a seed failure never changes the install
-// exit code. version.String() is used (not the discarded install version param):
-// both yield the same value and version.String() is already normalized (strips a
-// leading v, applies the 0.0.0-dev fallback), avoiding a raw/empty seed (Pitfall 4).
-func seedWhatsnewOnInstallSuccess() {
+// detectedBaseDirOrFallback and LOG_PATH from the configuration the install just wrote
+// (configPath) -- the SAME resolvers the dashboard hook reads, so the write-path can
+// never diverge from the read-path (open question A1) -- seeds only a non-empty base,
+// writes nothing when that configuration cannot be read (LOG_PATH unknown), and ignores
+// any error so a seed failure never changes the install exit code. version.String() is
+// used (not the discarded install version param): both yield the same value and
+// version.String() is already normalized (strips a leading v, applies the 0.0.0-dev
+// fallback), avoiding a raw/empty seed (Pitfall 4).
+func seedWhatsnewOnInstallSuccess(configPath string) {
 	baseDir, _ := detectedBaseDirOrFallback()
 	if strings.TrimSpace(baseDir) == "" {
 		return
 	}
-	_ = whatsnewSaveSeen(baseDir, version.String())
+	_ = whatsnewSaveSeen(whatsnewLocation(configPath, baseDir), version.String())
 }
 
 type incompatibleMode struct {
@@ -376,7 +378,7 @@ func runNewInstallMode(ctx context.Context, args *cli.Args, bootstrap *logging.B
 	if sessionLogger != nil {
 		sessionLogger.Info("new-install completed successfully")
 	}
-	seedWhatsnewOnInstallSuccess()
+	seedWhatsnewOnInstallSuccess(args.ConfigPath)
 	return types.ExitSuccess.Int(), true
 }
 
@@ -410,7 +412,7 @@ func runInstallMode(ctx context.Context, args *cli.Args, bootstrap *logging.Boot
 	if sessionLogger != nil {
 		sessionLogger.Info("install completed successfully")
 	}
-	seedWhatsnewOnInstallSuccess()
+	seedWhatsnewOnInstallSuccess(args.ConfigPath)
 	return types.ExitSuccess.Int(), true
 }
 

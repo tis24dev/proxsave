@@ -14,7 +14,7 @@ func writeRawStatus(t *testing.T, base, raw string) {
 	t.Helper()
 	path := StatusPath(base)
 	if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
-		t.Fatalf("mkdir identity dir: %v", err)
+		t.Fatalf("mkdir daemon_state dir: %v", err)
 	}
 	if err := os.WriteFile(path, []byte(raw), 0o600); err != nil {
 		t.Fatalf("write raw status: %v", err)

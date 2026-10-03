@@ -10,6 +10,7 @@ import (
 	"github.com/tis24dev/proxsave/internal/cli"
 	"github.com/tis24dev/proxsave/internal/types"
 	"github.com/tis24dev/proxsave/internal/ui/shell"
+	"github.com/tis24dev/proxsave/internal/whatsnew"
 )
 
 // isErrNilCheck reports whether e is `<name> == nil`.
@@ -166,7 +167,10 @@ func TestShowWhatsnewScreenSkipsWhenNonInteractive(t *testing.T) {
 	origDecide := whatsnewDecide
 	dashboardIsInteractive = func() bool { return false }
 	called := false
-	whatsnewDecide = func(baseDir, current string) (bool, string, error) { called = true; return false, "", nil }
+	whatsnewDecide = func(loc whatsnew.Location, current string) (bool, string, error) {
+		called = true
+		return false, "", nil
+	}
 	t.Cleanup(func() {
 		dashboardIsInteractive = origInter
 		whatsnewDecide = origDecide
@@ -187,7 +191,10 @@ func TestShowWhatsnewScreenSkipsUnderDryRun(t *testing.T) {
 	origDecide := whatsnewDecide
 	dashboardIsInteractive = func() bool { return true }
 	called := false
-	whatsnewDecide = func(baseDir, current string) (bool, string, error) { called = true; return false, "", nil }
+	whatsnewDecide = func(loc whatsnew.Location, current string) (bool, string, error) {
+		called = true
+		return false, "", nil
+	}
 	t.Cleanup(func() {
 		dashboardIsInteractive = origInter
 		whatsnewDecide = origDecide
@@ -213,7 +220,7 @@ func TestShowWhatsnewScreenDelegatesWhenInteractive(t *testing.T) {
 	}
 	var gotVersion string
 	called := false
-	whatsnewDecide = func(baseDir, current string) (bool, string, error) {
+	whatsnewDecide = func(loc whatsnew.Location, current string) (bool, string, error) {
 		called = true
 		gotVersion = current
 		return false, "", nil // no-show: maybeShowWhatsnew returns before touching the session
@@ -249,7 +256,7 @@ func TestShowWhatsnewScreenSkipsSessionWhenNothingUnseen(t *testing.T) {
 		sessionBuilt = true
 		return shell.StartForTest(ctx, shell.Config{AppName: "ProxSave", Subtitle: "Dashboard"})
 	}
-	whatsnewDecide = func(baseDir, current string) (bool, string, error) { return false, "", nil }
+	whatsnewDecide = func(loc whatsnew.Location, current string) (bool, string, error) { return false, "", nil }
 	t.Cleanup(func() {
 		dashboardIsInteractive = origInter
 		testDashboardSession = origSess
@@ -278,7 +285,7 @@ func TestShowWhatsnewScreenBuildsSessionWhenUnseen(t *testing.T) {
 		sessionBuilt = true
 		return shell.StartForTest(ctx, shell.Config{AppName: "ProxSave", Subtitle: "Dashboard"})
 	}
-	whatsnewDecide = func(baseDir, current string) (bool, string, error) { return true, "NOTES-BODY", nil }
+	whatsnewDecide = func(loc whatsnew.Location, current string) (bool, string, error) { return true, "NOTES-BODY", nil }
 	gotBody := ""
 	whatsnewRun = func(ctx context.Context, session *shell.Session, body string) error {
 		if session == nil {
@@ -288,7 +295,7 @@ func TestShowWhatsnewScreenBuildsSessionWhenUnseen(t *testing.T) {
 		return nil
 	}
 	saved := false
-	whatsnewSaveSeen = func(baseDir, version string) error { saved = true; return nil }
+	whatsnewSaveSeen = func(loc whatsnew.Location, version string) error { saved = true; return nil }
 	t.Cleanup(func() {
 		dashboardIsInteractive = origInter
 		testDashboardSession = origSess
@@ -322,7 +329,10 @@ func TestRunShowWhatsnewMode(t *testing.T) {
 		return shell.StartForTest(ctx, shell.Config{AppName: "ProxSave", Subtitle: "Dashboard"})
 	}
 	decideCalls := 0
-	whatsnewDecide = func(baseDir, current string) (bool, string, error) { decideCalls++; return false, "", nil }
+	whatsnewDecide = func(loc whatsnew.Location, current string) (bool, string, error) {
+		decideCalls++
+		return false, "", nil
+	}
 	t.Cleanup(func() {
 		dashboardIsInteractive = origInter
 		testDashboardSession = origSess

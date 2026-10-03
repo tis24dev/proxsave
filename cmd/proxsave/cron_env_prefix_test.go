@@ -129,8 +129,8 @@ func TestAReinstallRemovesTheCommandBehindAnAssignmentAndLeavesTheOperatorsJobsA
 // The schedule adoption reads the same token, so a host whose only cron entry carries a
 // TZ prefix used to migrate to the daemon with no time to adopt.
 func TestTheSchedulerTimeIsAdoptedFromALineThatCarriesAnAssignment(t *testing.T) {
-	got, ok := schedulerTimeFromCronLines([]string{"30 3 * * * TZ=UTC /usr/local/bin/proxsave --backup"})
-	if !ok || got != "03:30" {
-		t.Errorf("schedulerTimeFromCronLines = (%q, %v), want (\"03:30\", true)", got, ok)
+	got := schedulerCadenceFromCronLines([]string{"30 3 * * * TZ=UTC /usr/local/bin/proxsave --backup"})
+	if !got.Found || got.Reason != "" || got.Cadence.Time != "03:30" {
+		t.Errorf("schedulerCadenceFromCronLines = %+v, want a daily cadence at 03:30", got)
 	}
 }

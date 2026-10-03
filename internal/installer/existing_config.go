@@ -3,9 +3,11 @@ package installer
 import (
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 
 	"github.com/tis24dev/proxsave/internal/config"
+	"github.com/tis24dev/proxsave/internal/cron"
 	"github.com/tis24dev/proxsave/internal/safefs"
 )
 
@@ -42,7 +44,7 @@ type ExistingConfigDecision struct {
 	// operator's current backup.env. Fresh installs and Overwrite start from the
 	// embedded template, so defaults (e.g. the scheduler engine) may be the
 	// recommended new values rather than the stored ones. It is also the single
-	// gate for adopting the crontab run time (see ApplySchedulerTimeSeed).
+	// gate for adopting the crontab schedule (see ApplyScheduleSeed).
 	FromExistingFile bool
 }
 
@@ -127,10 +129,31 @@ func BaseTemplateOrDefault(base string) string {
 	return base
 }
 
-// ApplySchedulerTimeSeed mirrors a run time adopted from the host's existing
-// proxsave cron line into the wizard's in-memory base, so the "Run at" prompt
-// offers the host's real time instead of the 02:00 template default. It writes
-// nothing to disk.
+// ScheduleVariables is the backup.env spelling of a cadence as an adoption writes it:
+// SCHEDULER_FREQUENCY, SCHEDULER_TIME and the day that frequency uses (SCHEDULER_WEEKDAY
+// for weekly, SCHEDULER_MONTHDAY for monthly). The day the cadence does not use is left
+// out, so an adoption never touches it, whatever value it holds: it cannot move the
+// backup, and it is the operator's. When it is absent the config merge adds it with the
+// template default.
+func ScheduleVariables(c cron.Cadence) map[string]string {
+	vars := map[string]string{
+		"SCHEDULER_FREQUENCY": string(c.Frequency),
+		"SCHEDULER_TIME":      c.Time,
+	}
+	switch c.Frequency {
+	case cron.FrequencyWeekly:
+		vars["SCHEDULER_WEEKDAY"] = cron.WeekdayName(c.Weekday)
+	case cron.FrequencyMonthly:
+		vars["SCHEDULER_MONTHDAY"] = strconv.Itoa(c.MonthDay)
+	}
+	return vars
+}
+
+// ApplyScheduleSeed mirrors a cadence adopted from the host's existing proxsave cron
+// line into the wizard's in-memory base, so the Frequency, Weekday, Day of month and
+// "Run at" fields offer the host's real schedule instead of the template defaults. It
+// sets the variables ScheduleVariables names and leaves the unused day alone. It
+// writes nothing to disk. A cadence with no frequency means nothing was adopted.
 //
 // The blank-base guard is load-bearing. Seeding a blank base produces
 // "\nSCHEDULER_TIME=HH:MM", which flips ApplyInstallData's editingExisting to
@@ -146,16 +169,32 @@ func BaseTemplateOrDefault(base string) string {
 // there is nothing in a whitespace-only file worth preserving.
 //
 // The cost is deliberate and small: with such a file, Edit no longer offers the
-// host's crontab run time as the "Run at" default, falling back to the template's.
-// Nothing then claims otherwise -- adoptCronRunTimeIntoBase logs its adoption note
-// only when the seed actually changed the base (it compares the two values), so a
-// discarded seed stays silent instead of promising a time it did not apply.
+// host's crontab schedule as the default, falling back to the template's. Nothing
+// then claims otherwise -- adoptCronRunTimeIntoBase logs its adoption block only
+// when the seed actually changed the base (it compares the two values), so a
+// discarded seed stays silent instead of promising a schedule it did not apply.
 //
 // A file that holds comments is NOT blank here, and must not be: that is content
 // the operator wrote, and Edit keeps treating it as the existing configuration.
-func ApplySchedulerTimeSeed(base, hhmm string) string {
-	if hhmm == "" || strings.TrimSpace(base) == "" {
+func ApplyScheduleSeed(base string, c cron.Cadence) string {
+	if c.Frequency == "" || strings.TrimSpace(base) == "" {
 		return base
 	}
-	return setEnvValue(base, "SCHEDULER_TIME", hhmm)
+	vars := ScheduleVariables(c)
+	for _, key := range []string{"SCHEDULER_FREQUENCY", "SCHEDULER_WEEKDAY", "SCHEDULER_MONTHDAY", "SCHEDULER_TIME"} {
+		if value, ok := vars[key]; ok {
+			base = setEnvValue(base, key, value)
+		}
+	}
+	return base
+}
+
+// EnvKeyPresent reports whether content assigns key on a line that is not a comment,
+// whatever the value, an empty one included. DeriveInstallWizardPrefill cannot tell: it
+// reads an absent variable and an empty one as the same "", and for the schedule the two
+// differ (an empty SCHEDULER_TIME is the 02:00 default the operator left in place, not a
+// variable nobody has written).
+func EnvKeyPresent(content, key string) bool {
+	_, ok := parseEnvTemplate(content)[strings.ToUpper(strings.TrimSpace(key))]
+	return ok
 }

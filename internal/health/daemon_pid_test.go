@@ -41,7 +41,7 @@ func TestReadDaemonPIDGarbage(t *testing.T) {
 		base := t.TempDir()
 		path := DaemonPIDPath(base)
 		if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
-			t.Fatalf("mkdir identity dir: %v", err)
+			t.Fatalf("mkdir daemon_state dir: %v", err)
 		}
 		if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
 			t.Fatalf("write pid file: %v", err)

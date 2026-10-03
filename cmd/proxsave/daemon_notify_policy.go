@@ -7,7 +7,9 @@ import (
 
 	"github.com/tis24dev/proxsave/internal/config"
 	"github.com/tis24dev/proxsave/internal/health"
+	"github.com/tis24dev/proxsave/internal/identity"
 	"github.com/tis24dev/proxsave/internal/logging"
+	"github.com/tis24dev/proxsave/internal/ui/theme"
 )
 
 // notifyPolicyRefreshWait bounds how long a scheduled run waits for the policy negotiation. It
@@ -74,6 +76,10 @@ const notifyPolicyResends = 2
 // taken from the re-read: every other setting stays the one read at daemon start. A slow or
 // unreachable relay costs the run at most notifyPolicyRefreshWait; the run then notifies every
 // outcome, as it does whenever the policy is unconfirmed.
+//
+// Journal (todo point 42): a policy already confirmed is one DEBUG line and no request; one that
+// is sent is the "Applying notify level..." block, applied or pending. With no relay secret on
+// disk the request is still attempted, as before, but with no block: that case has none.
 func (d *daemon) refreshNotifyPolicy(ctx context.Context) {
 	if d.cfg == nil || !d.cfg.HealthcheckEnabled || d.cfg.HealthcheckMode != config.HealthcheckModeCentralized {
 		return
@@ -86,26 +92,43 @@ func (d *daemon) refreshNotifyPolicy(ctx context.Context) {
 	d.mu.Lock()
 	d.notifyWant = &want
 	applied := d.notifyApplied != nil && d.notifyApplied.equal(want)
-	pollsBefore := d.notifyPolls
 	d.mu.Unlock()
+	logger := logging.GetDefaultLogger()
 	if applied {
+		logging.DebugStep(logger, "notify policy", "before run notify_on=%s channels=%s already confirmed, not sent",
+			want.notifyOn, want.channelList())
 		return
 	}
 
+	block := true
+	if secret, _ := identity.LoadNotifySecret(d.cfg.BaseDir); strings.TrimSpace(secret) == "" {
+		block = false
+		logging.DebugStep(logger, "notify policy", "before run notify_on=%s channels=%s, no relay secret on disk",
+			want.notifyOn, want.channelList())
+	}
+	if block {
+		logging.Info("Applying notify level...")
+		d.logNotifyPolicyRead(fresh.NotifyOn, want, d.cfg.ConfigPath)
+	}
+
+	// The poll runs on its own goroutine because it can reach the relay-secret flock, which
+	// honours no deadline. result is written before done is closed and read only after it is.
+	var result configPoll
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		if r := d.buildReporter(ctx); r != nil {
+		op := ""
+		if block {
+			op = "notify policy"
+		}
+		p := d.pollCentralized(ctx, op, "")
+		d.afterFailedPoll(p)
+		// Inside the block a failed poll is reported by its why line and its DEBUG evidence, not
+		// by the "centralized fetch failed" WARNING: the ping URLs were resolved at start.
+		if r := d.reporterFromPoll(p, block); r != nil {
 			d.setReporter(r)
 		}
-		d.mu.Lock()
-		reached := d.notifyPolls != pollsBefore
-		applied := d.notifyApplied != nil && d.notifyApplied.equal(want)
-		d.mu.Unlock()
-		if reached {
-			logging.Debug("daemon: notification policy sent notify_on=%s channels=%s applied=%t",
-				want.notifyOn, want.channelList(), applied)
-		}
+		result = p
 	}()
 	wait := notifyPolicyRefreshWait
 	if d.notifyRefreshWaitOverride > 0 {
@@ -113,9 +136,76 @@ func (d *daemon) refreshNotifyPolicy(ctx context.Context) {
 	}
 	timer := time.NewTimer(wait)
 	defer timer.Stop()
+	answered := false
 	select {
 	case <-done:
+		answered = true
 	case <-timer.C:
 	case <-ctx.Done():
 	}
+	if !block {
+		return
+	}
+	if !answered {
+		logging.DebugStep(logger, "notify policy", "no answer within %s", wait)
+		d.logNotifyLevelOutcome(fresh.NotifyOn, want, reachNone)
+		return
+	}
+	d.logNotifyPolicyAnswer(result)
+	d.logNotifyLevelOutcome(fresh.NotifyOn, want, result.answer())
+}
+
+// logNotifyPolicyRead is the DEBUG evidence of what the notify level block sends: NOTIFY_ON as
+// backup.env holds it (quoted, with the value requested instead, when it is not one the relay
+// knows) and the enabled channels.
+func (d *daemon) logNotifyPolicyRead(raw string, want notifyPolicy, source string) {
+	logger := logging.GetDefaultLogger()
+	if strings.TrimSpace(raw) != want.notifyOn {
+		logging.DebugStep(logger, "notify policy", "read notify_on=%q requested=%s channels=%s source=%s",
+			raw, want.notifyOn, want.channelList(), source)
+		return
+	}
+	logging.DebugStep(logger, "notify policy", "read notify_on=%s channels=%s source=%s",
+		want.notifyOn, want.channelList(), source)
+}
+
+// logNotifyPolicyAnswer is the DEBUG evidence of what the relay answered about the notify policy
+// on poll p: its ack, a missing one, or why there was no usable answer (the transport stages are
+// already logged by the poll itself).
+func (d *daemon) logNotifyPolicyAnswer(p configPoll) {
+	logger := logging.GetDefaultLogger()
+	switch {
+	case !p.sent:
+		logging.DebugStep(logger, "notify policy", "not sent error=%v", p.err)
+	case p.err != nil:
+		logging.DebugStep(logger, "notify policy", "failed %s", pollFailure(p))
+	case p.cfg.NotifyPolicy == nil:
+		logging.DebugStep(logger, "notify policy", "ack missing")
+	default:
+		ack := p.cfg.NotifyPolicy
+		channels := "none"
+		if len(ack.Channels) > 0 {
+			channels = strings.Join(ack.Channels, ",")
+		}
+		logging.DebugStep(logger, "notify policy", "ack notify_on=%s channels=%s mode=%s applied=%t",
+			ack.Requested, channels, ack.Mode, ack.Applied)
+	}
+}
+
+// logNotifyLevelOutcome ends the notify level block: the level, then applied when the relay has
+// confirmed want, else what is in effect meanwhile (every outcome notified), why, and pending.
+// A pending block is remembered with raw, the NOTIFY_ON it read, for logResolvedStartBlocks.
+func (d *daemon) logNotifyLevelOutcome(raw string, want notifyPolicy, answer pollReach) {
+	d.mu.Lock()
+	confirmed := d.notifyApplied != nil && d.notifyApplied.equal(want)
+	d.notifyBlockPending, d.notifyBlockRaw = !confirmed, raw
+	d.mu.Unlock()
+	logging.Info("  Notify level: %s", want.notifyOn)
+	if confirmed {
+		logging.Info("%s Notify level: applied", theme.SymbolSuccess)
+		return
+	}
+	logging.Info("  In effect: %s", config.NotifyOnAlways)
+	logging.Info("%s", answer.why())
+	logging.Info("%s Notify level: pending, no action needed", theme.SymbolWarning)
 }

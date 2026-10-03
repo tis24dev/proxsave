@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"io"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
@@ -59,7 +61,7 @@ func stubRelay(t *testing.T, st health.DeliveryStatus, err error) *int {
 	reads := 0
 	orig := FetchDeliveryStatus
 	t.Cleanup(func() { FetchDeliveryStatus = orig })
-	FetchDeliveryStatus = func(context.Context, *http.Client, string, string, string) (health.DeliveryStatus, error) {
+	FetchDeliveryStatus = func(context.Context, *http.Client, string, string, string, *logging.Logger, string) (health.DeliveryStatus, error) {
 		reads++
 		return st, err
 	}
@@ -121,7 +123,7 @@ func TestDecide(t *testing.T) {
 				t.Fatalf("decision = %+v after %d reads; want status %q effective %q reason %q, %d reads",
 					d, *reads, tc.status, tc.effective, tc.reason, tc.reads)
 			}
-			fallback := strings.Contains(buf.String(), "op: notification filter fallback=always reason="+tc.reason)
+			fallback := strings.Contains(buf.String(), "op: filter fallback=always reason="+tc.reason)
 			if fallback != (tc.reason != "") {
 				t.Fatalf("fallback DEBUG line present=%v; want %v:\n%s", fallback, tc.reason != "", buf.String())
 			}
@@ -145,5 +147,142 @@ func TestDecideValidity(t *testing.T) {
 	stubRelay(t, health.DeliveryStatus{}, errors.New("down"))
 	if d := Decide(context.Background(), cfg, nil, SectionInitialized, ""); d.ValidFor != Validity {
 		t.Fatalf("unavailable answer: ValidFor %v; want the local %v", d.ValidFor, Validity)
+	}
+}
+
+// The relay read gets the decision's logger and operation, so its transport stages land in the
+// run log under "notifications init" or "notifications dispatch".
+func TestDecideHandsItsLoggerAndOperationToTheRelayRead(t *testing.T) {
+	var gotLogger *logging.Logger
+	var gotOp string
+	orig := FetchDeliveryStatus
+	t.Cleanup(func() { FetchDeliveryStatus = orig })
+	FetchDeliveryStatus = func(_ context.Context, _ *http.Client, _, _, _ string, logger *logging.Logger, op string) (health.DeliveryStatus, error) {
+		gotLogger, gotOp = logger, op
+		return answer("ready", "warning", true, 0), nil
+	}
+	logger := logging.New(types.LogLevelDebug, false)
+	logger.SetOutput(&bytes.Buffer{})
+	cfg := &config.Config{BaseDir: t.TempDir(), HealthcheckEnabled: true, HealthcheckMode: config.HealthcheckModeCentralized,
+		NotifyOn: config.NotifyOnWarning, TelegramEnabled: true}
+
+	Decide(context.Background(), cfg, logger, SectionInitialized, "notifications dispatch")
+
+	if gotLogger != logger || gotOp != "notifications dispatch" {
+		t.Fatalf("relay read got logger %p op %q; want %p and %q", gotLogger, gotOp, logger, "notifications dispatch")
+	}
+}
+
+// The outcome closes the block: applied when the run applies the threshold it asked for, not
+// applied when it fell back. The symbol marks the outcome, never a value.
+func TestOutcome(t *testing.T) {
+	cases := []struct {
+		d    Decision
+		want string
+	}{
+		{Decision{Requested: "warning", Effective: "warning"}, "✓ Notification filter: applied"},
+		{Decision{Requested: "always", Effective: "always"}, "✓ Notification filter: applied"},
+		{Decision{Requested: "warning", Effective: "always"}, "⚠ Notification filter: not applied"},
+		{Decision{Requested: "failure", Effective: "always"}, "⚠ Notification filter: not applied"},
+	}
+	for _, tc := range cases {
+		if got := tc.d.Outcome(); got != tc.want {
+			t.Errorf("Outcome(%s -> %s) = %q; want %q", tc.d.Requested, tc.d.Effective, got, tc.want)
+		}
+		if got := tc.d.Applied(); got != (tc.d.Requested == tc.d.Effective) {
+			t.Errorf("Applied(%s -> %s) = %v", tc.d.Requested, tc.d.Effective, got)
+		}
+	}
+}
+
+// Decide names why the relay's answer could not be used, from what the real read returned: no
+// HTTP answer, a status other than 200, or a 200 that is not a usable status. A request that
+// could not be built, an answer that was used, and an error no kind matches name nothing.
+func TestDecideNamesWhyTheRelayAnswerWasUnavailable(t *testing.T) {
+	serve := func(t *testing.T, h http.HandlerFunc) string {
+		srv := httptest.NewServer(h)
+		t.Cleanup(srv.Close)
+		return srv.URL
+	}
+	answering := func(status int, body string) func(*testing.T) string {
+		return func(t *testing.T) string {
+			return serve(t, func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(status)
+				_, _ = io.WriteString(w, body)
+			})
+		}
+	}
+	cases := []struct {
+		name        string
+		host        func(*testing.T) string
+		stub        error // replaces the real read when set
+		reason      string
+		unavailable string
+		stage       string // the failed stage the read logged, when it failed in transport
+	}{
+		{name: "connection refused", host: func(t *testing.T) string {
+			srv := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+			srv.Close()
+			return srv.URL
+		}, reason: ReasonStatusUnavailable, unavailable: UnavailableUnreachable, stage: "connect"},
+		{name: "hung up without an answer", host: func(t *testing.T) string {
+			return serve(t, func(w http.ResponseWriter, _ *http.Request) {
+				if conn, _, err := w.(http.Hijacker).Hijack(); err == nil {
+					_ = conn.Close()
+				}
+			})
+		}, reason: ReasonStatusUnavailable, unavailable: UnavailableUnreachable, stage: "response"},
+		{name: "answer broke off", host: func(t *testing.T) string {
+			return serve(t, func(w http.ResponseWriter, _ *http.Request) {
+				conn, rw, err := w.(http.Hijacker).Hijack()
+				if err != nil {
+					return
+				}
+				defer conn.Close()
+				_, _ = rw.WriteString("HTTP/1.1 200 OK\r\nContent-Length: 100\r\n\r\nabc")
+				_ = rw.Flush()
+			})
+		}, reason: ReasonStatusUnavailable, unavailable: UnavailableUnreachable, stage: "response"},
+		{name: "http 503", host: answering(http.StatusServiceUnavailable, `{"error":"HC_DELIVERY_DISABLED"}`),
+			reason: ReasonStatusUnavailable, unavailable: UnavailableHTTPStatus},
+		{name: "http 404", host: answering(http.StatusNotFound, ``), reason: ReasonStatusUnavailable, unavailable: UnavailableHTTPStatus},
+		{name: "bad JSON", host: answering(http.StatusOK, `{"schema_version": 1, "state": `),
+			reason: ReasonStatusUnavailable, unavailable: UnavailableUnusable},
+		{name: "unknown schema", host: answering(http.StatusOK, `{"schema_version": 2, "state": "ready", "valid_for_seconds": 120}`),
+			reason: ReasonStatusUnavailable, unavailable: UnavailableUnusable},
+		{name: "unknown state", host: answering(http.StatusOK, `{"schema_version": 1, "state": "project_missing", "valid_for_seconds": 120}`),
+			reason: ReasonStatusUnavailable, unavailable: UnavailableUnusable},
+		{name: "expired evaluation", host: answering(http.StatusOK, `{"schema_version": 1, "state": "ready", "age_seconds": 120, "valid_for_seconds": 120}`),
+			reason: ReasonStatusUnavailable, unavailable: UnavailableUnusable},
+		{name: "request not built", host: func(*testing.T) string { return "http://[::1" },
+			reason: ReasonStatusUnavailable, unavailable: "", stage: "build"},
+		{name: "usable answer", host: answering(http.StatusOK, `{"schema_version": 1, "state": "degraded", "valid_for_seconds": 120}`),
+			reason: ReasonAlertsNotVerified, unavailable: ""},
+		{name: "error of no known kind", stub: errors.New("down"), reason: ReasonStatusUnavailable, unavailable: ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := &config.Config{BaseDir: t.TempDir(), HealthcheckEnabled: true, HealthcheckMode: config.HealthcheckModeCentralized,
+				NotifyOn: config.NotifyOnWarning, TelegramEnabled: true, ServerID: "123456789012"}
+			if tc.stub != nil {
+				stubRelay(t, health.DeliveryStatus{}, tc.stub)
+			} else {
+				cfg.ServerAPIHost = tc.host(t)
+			}
+
+			var buf bytes.Buffer
+			logger := logging.New(types.LogLevelDebug, false)
+			logger.SetOutput(&buf)
+
+			d := Decide(context.Background(), cfg, logger, SectionInitialized, "op")
+
+			if d.Reason != tc.reason || d.Unavailable != tc.unavailable {
+				t.Fatalf("decision = reason %q unavailable %q; want %q %q", d.Reason, d.Unavailable, tc.reason, tc.unavailable)
+			}
+			if failed := strings.Contains(buf.String(), "op: failed stage="); failed != (tc.stage != "") ||
+				(tc.stage != "" && !strings.Contains(buf.String(), "op: failed stage="+tc.stage+" ")) {
+				t.Fatalf("want failed stage %q in:\n%s", tc.stage, buf.String())
+			}
+		})
 	}
 }

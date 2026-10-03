@@ -38,4 +38,7 @@ warning     warnings and failures
 failure     failures only
 Notify level: always, warning, or failure [warning]: 
 --- Schedule ---
-Run at (daily, HH:MM) [02:00]: 
+daily       every day
+weekly      once a week, on the weekday asked next
+monthly     once a month, on the day of month asked next (1-28)
+Frequency: daily, weekly, or monthly [daily]: Run at (HH:MM) [02:00]: 

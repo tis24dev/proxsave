@@ -237,6 +237,22 @@ var notes = []Note{
 			"A hand edit of NOTIFY_ON applies from the next scheduled run; a run started by hand notifies every outcome until then",
 		},
 	},
+	{
+		Version: "0.41.0",
+		Lines: []string{
+			"Backups can run daily, weekly or monthly (SCHEDULER_FREQUENCY); ProxSave HC Server adapts the backup check to it",
+			"The daemon journal shows the backup schedule at start; an invalid SCHEDULER_* value warns and backups run daily",
+			"A new frequency applies once ProxSave HC Server confirms it; until then the daemon journal says pending",
+			"--daemon-status and the dashboard daemon screen show the backup schedule in effect and whether backup.env matches it",
+			"Install and upgrade adopt a weekly or monthly proxsave cron line, and warn about a cron line they cannot adopt",
+			"The run log says whether the NOTIFY_ON filter is applied and, when it is not, why",
+			"The daemon keeps its state in BASE_DIR/daemon_state; identity/ now holds only the server identity and keys",
+			"PBS token files are now security-checked: one not at 0600 root is fixed on the next run, which ends with a warning",
+		},
+		Actions: []string{
+			"A PBS token symlink whose target is not 0600 root blocks the backup while AUTO_FIX_PERMISSIONS=true",
+		},
+	},
 }
 
 // LookupNotes returns the notes for versions in the half-open range (from, to], ascending by

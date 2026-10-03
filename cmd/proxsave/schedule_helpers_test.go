@@ -5,7 +5,9 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/tis24dev/proxsave/internal/config"
 	cronutil "github.com/tis24dev/proxsave/internal/cron"
+	"github.com/tis24dev/proxsave/internal/installer"
 )
 
 func TestResolveCronScheduleFromEnv(t *testing.T) {
@@ -99,5 +101,37 @@ func TestCronTimeDefault(t *testing.T) {
 	}
 	if got := cronTimeDefault(true, "SCHEDULER_TIME=99:99\n"); got != cronutil.DefaultTime {
 		t.Fatalf("edit with invalid stored time = %q, want %q", got, cronutil.DefaultTime)
+	}
+}
+
+func TestCronScheduleFollowsTheCadence(t *testing.T) {
+	if got := installCronSchedule(&installer.InstallWizardData{CronTime: "03:30", ScheduleFrequency: "weekly", ScheduleWeekday: "fri"}); got != "30 03 * * 5" {
+		t.Fatalf("installCronSchedule weekly = %q", got)
+	}
+	if got := installCronSchedule(&installer.InstallWizardData{CronTime: "03:30"}); got != "30 03 * * *" {
+		t.Fatalf("installCronSchedule without frequency = %q; want the daily line", got)
+	}
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "backup.env")
+	if err := os.WriteFile(path, []byte("SCHEDULER_TIME=04:10\nSCHEDULER_FREQUENCY=monthly\nSCHEDULER_MONTHDAY=15\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got := keptCronScheduleFromConfig(path); got != "10 04 15 * *" {
+		t.Fatalf("keptCronScheduleFromConfig monthly = %q", got)
+	}
+	// A day the loader cannot use keeps the operator's time on a daily line.
+	if err := os.WriteFile(path, []byte("SCHEDULER_TIME=04:10\nSCHEDULER_FREQUENCY=monthly\nSCHEDULER_MONTHDAY=31\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got := keptCronScheduleFromConfig(path); got != "10 04 * * *" {
+		t.Fatalf("keptCronScheduleFromConfig invalid day = %q; want the daily line at 04:10", got)
+	}
+
+	if got := configCronSchedule(&config.Config{SchedulerTime: "01:05", SchedulerFrequency: "weekly", SchedulerWeekday: "sun"}); got != "05 01 * * 0" {
+		t.Fatalf("configCronSchedule weekly = %q", got)
+	}
+	if got := configCronSchedule(&config.Config{SchedulerTime: "01:05", SchedulerFrequency: "hourly"}); got != "05 01 * * *" {
+		t.Fatalf("configCronSchedule invalid frequency = %q; want the daily line", got)
 	}
 }

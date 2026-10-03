@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/tis24dev/proxsave/internal/cron"
 	"github.com/tis24dev/proxsave/internal/safeexec"
 	"github.com/tis24dev/proxsave/internal/types"
 	"github.com/tis24dev/proxsave/pkg/utils"
@@ -250,9 +251,12 @@ type Config struct {
 
 	// Scheduler engine (cron vs resident daemon). Defaults keep existing installs
 	// on cron; the install wizard and the --upgrade auto-migration are what set daemon.
-	SchedulerMode  string        // "cron" | "daemon"
-	SchedulerTime  string        // daily HH:MM ("Run at") used by daemon mode
-	MaxRunDuration time.Duration // daemon watchdog: hard timeout for one supervised backup
+	SchedulerMode      string        // "cron" | "daemon"
+	SchedulerFrequency string        // daily | weekly | monthly (raw; SchedulerCadence validates)
+	SchedulerWeekday   string        // mon ... sun, weekly only (raw)
+	SchedulerMonthDay  string        // 1-28, monthly only (raw)
+	SchedulerTime      string        // HH:MM ("Run at")
+	MaxRunDuration     time.Duration // daemon watchdog: hard timeout for one supervised backup
 
 	// Personal scripts (daemon only): optional operator-owned scripts started around a
 	// supervised run. Empty means disabled, which is the shipped state.
@@ -915,8 +919,17 @@ func IsValidNotifyOn(v string) bool {
 // wizard or the auto-migration flips SCHEDULER_MODE to daemon.
 func (c *Config) parseSchedulerSettings() {
 	c.SchedulerMode = normalizeSchedulerMode(c.getString("SCHEDULER_MODE", "cron"))
+	c.SchedulerFrequency = strings.TrimSpace(c.getString("SCHEDULER_FREQUENCY", string(cron.FrequencyDaily)))
+	c.SchedulerWeekday = strings.TrimSpace(c.getString("SCHEDULER_WEEKDAY", cron.WeekdayName(cron.DefaultWeekday)))
+	c.SchedulerMonthDay = strings.TrimSpace(c.getString("SCHEDULER_MONTHDAY", strconv.Itoa(cron.DefaultMonthDay)))
 	c.SchedulerTime = strings.TrimSpace(c.getString("SCHEDULER_TIME", "02:00"))
 	c.MaxRunDuration = c.getDuration("MAX_RUN_DURATION", 1*time.Hour)
+}
+
+// SchedulerCadence is when the backup runs, from the four SCHEDULER_* values. The raw fields
+// stay as read so a caller can report exactly what the file said when this returns an error.
+func (c *Config) SchedulerCadence() (cron.Cadence, error) {
+	return cron.ParseCadence(c.SchedulerFrequency, c.SchedulerWeekday, c.SchedulerMonthDay, c.SchedulerTime)
 }
 
 // parsePersonalScriptSettings reads the optional operator scripts started around a daemon
@@ -1884,20 +1897,23 @@ type WebhookAuth struct {
 	Secret string
 }
 
-// autoDetectPBSToken tries to read API token from secure_account directory
-func autoDetectPBSToken(secureAccountPath string) (token, secret string) {
+// PBSTokenFiles returns the files autoDetectPBSToken reads a PBS API token from, in the order it
+// tries them. The security check verifies the permissions of this same list, so a file read as a
+// credential is never left unchecked.
+func PBSTokenFiles(secureAccountPath string) []string {
 	if secureAccountPath == "" {
 		secureAccountPath = filepath.Join(defaultBaseDir(), "secure_account")
 	}
-
-	// Try multiple possible token file locations
-	tokenFiles := []string{
+	return []string{
 		filepath.Join(secureAccountPath, "pbs_token"),
 		filepath.Join(secureAccountPath, "pbs_api_token"),
 		"/root/.pbs-token", // Alternative location
 	}
+}
 
-	for _, tokenFile := range tokenFiles {
+// autoDetectPBSToken tries to read API token from secure_account directory
+func autoDetectPBSToken(secureAccountPath string) (token, secret string) {
+	for _, tokenFile := range PBSTokenFiles(secureAccountPath) {
 		if utils.FileExists(tokenFile) {
 			if data, err := os.ReadFile(tokenFile); err == nil {
 				lines := strings.Split(string(data), "\n")

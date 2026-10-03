@@ -309,6 +309,11 @@ func upgradeFinalizePhase(ctx context.Context, args *cli.Args, bootstrap *loggin
 		if cfgUpgradeErr != nil {
 			bootstrap.Warning("Upgrade: configuration upgrade failed: %v", cfgUpgradeErr)
 		}
+		// The notes come back from the child through the JSON and are logged here, before
+		// the footer that lists the configuration warnings.
+		if cfgUpgradeResult != nil {
+			logConfigUpgradeNotes(bootstrap, cfgUpgradeResult.Notes)
+		}
 	}
 	if sessionLogger != nil && cfgUpgradeResult != nil && len(cfgUpgradeResult.MissingKeys) > 0 {
 		sessionLogger.Info("Upgrade: configuration updated with %d missing key(s): %s", len(cfgUpgradeResult.MissingKeys), strings.Join(cfgUpgradeResult.MissingKeys, ", "))
@@ -1136,7 +1141,7 @@ func upgradeFooterBody(upgradeErr error, version, configPath, baseDir, telegramC
 	fmt.Println("  --backup           - Run a backup now (what bare proxsave does when non-interactive)")
 	fmt.Println("  --upgrade          - Update proxsave binary to latest release (also adds missing keys to backup.env)")
 	fmt.Println("  --install          - Re-run interactive installation/setup")
-	fmt.Println("  --new-install      - Wipe installation directory (keep build/env/identity) then run installer")
+	fmt.Println("  --new-install      - Wipe installation directory (keep build/daemon_state/env/guards/identity/restore) then run installer")
 	fmt.Println("  --upgrade-config   - Upgrade configuration file using the embedded template (run after installing a new binary)")
 	fmt.Println()
 

@@ -110,7 +110,7 @@ func TestLoadStatusEmptyFile(t *testing.T) {
 	base := t.TempDir()
 	path := StatusPath(base)
 	if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
-		t.Fatalf("mkdir identity dir: %v", err)
+		t.Fatalf("mkdir daemon_state dir: %v", err)
 	}
 	if err := os.WriteFile(path, nil, 0o600); err != nil {
 		t.Fatalf("write empty status file: %v", err)
@@ -131,7 +131,7 @@ func TestLoadStatusBadJSON(t *testing.T) {
 	base := t.TempDir()
 	path := StatusPath(base)
 	if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
-		t.Fatalf("mkdir identity dir: %v", err)
+		t.Fatalf("mkdir daemon_state dir: %v", err)
 	}
 	if err := os.WriteFile(path, []byte("{not json"), 0o600); err != nil {
 		t.Fatalf("write bad status file: %v", err)
@@ -211,14 +211,14 @@ func TestNoURLErrorClassifiedAsReason(t *testing.T) {
 // TestStatusPathShape pins the file location both siblings depend on.
 func TestStatusPathShape(t *testing.T) {
 	base := "/opt/proxsave"
-	want := filepath.Join(base, "identity", ".healthcheck_status.json")
+	want := filepath.Join(base, "daemon_state", ".healthcheck_status.json")
 	if got := StatusPath(base); got != want {
 		t.Fatalf("StatusPath = %q, want %q", got, want)
 	}
 }
 
 // TestAtomicWriteLeavesNoTmp: the write goes through a ".tmp" sibling that is
-// renamed into place, so the identity dir must hold only the final file
+// renamed into place, so the daemon_state dir must hold only the final file
 // afterwards (no leftover temp).
 func TestAtomicWriteLeavesNoTmp(t *testing.T) {
 	base := t.TempDir()
@@ -228,7 +228,7 @@ func TestAtomicWriteLeavesNoTmp(t *testing.T) {
 	dir := filepath.Dir(StatusPath(base))
 	entries, err := os.ReadDir(dir)
 	if err != nil {
-		t.Fatalf("read identity dir: %v", err)
+		t.Fatalf("read daemon_state dir: %v", err)
 	}
 	for _, e := range entries {
 		if filepath.Ext(e.Name()) == ".tmp" {

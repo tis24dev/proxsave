@@ -14,6 +14,7 @@ import (
 
 	"github.com/tis24dev/proxsave/internal/cli"
 	"github.com/tis24dev/proxsave/internal/config"
+	"github.com/tis24dev/proxsave/internal/cron"
 	"github.com/tis24dev/proxsave/internal/health"
 	"github.com/tis24dev/proxsave/internal/input"
 	"github.com/tis24dev/proxsave/internal/installer"
@@ -78,12 +79,12 @@ const whatsnewScreenTimeout = 10 * time.Minute
 // (context.DeadlineExceeded) or Esc (shell.ErrAborted) is a non-nil error and must leave
 // the flag untouched, so the write sits inside `if err == nil`, never in a
 // defer/teardown (SCRN-03, SCRN-04, Pitfall 9).
-func maybeShowWhatsnew(ctx context.Context, session *shell.Session, baseDir, toolVersion string) {
-	show, body := whatsnewResolve(baseDir, toolVersion)
+func maybeShowWhatsnew(ctx context.Context, session *shell.Session, loc whatsnew.Location, toolVersion string) {
+	show, body := whatsnewResolve(loc, toolVersion)
 	if !show {
 		return
 	}
-	whatsnewRender(ctx, session, baseDir, toolVersion, body)
+	whatsnewRender(ctx, session, loc, toolVersion, body)
 }
 
 // whatsnewResolve makes the Screen 0 SHOW/skip decision WITHOUT touching any TTY, so a
@@ -96,11 +97,16 @@ func maybeShowWhatsnew(ctx context.Context, session *shell.Session, baseDir, too
 // args.DryRun), so the self-heal write can never coexist with --dry-run. Callers MUST NOT
 // start a session unless this returns show=true: starting one only to Close it on a no-op
 // leaks the terminal's async capability-query responses (mode 2026/2027) into the shell.
-func whatsnewResolve(baseDir, toolVersion string) (show bool, body string) {
-	show, body, err := whatsnewDecide(baseDir, toolVersion)
+//
+// It is also where the dashboard and --show-whatsnew drop the identity/ copies of .daemon.pid
+// and .daemon_info.json the daemon wrote for the previous release's upgrade verification
+// (removeLegacyDaemonCopies), silently: the dashboard has no visible log.
+func whatsnewResolve(loc whatsnew.Location, toolVersion string) (show bool, body string) {
+	removeLegacyDaemonCopies(loc.BaseDir, nil)
+	show, body, err := whatsnewDecide(loc, toolVersion)
 	if err != nil {
 		if errors.Is(err, whatsnew.ErrStateParse) {
-			_ = whatsnewSaveSeen(baseDir, toolVersion)
+			_ = whatsnewSaveSeen(loc, toolVersion)
 		}
 		return false, ""
 	}
@@ -130,7 +136,7 @@ func whatsnewResolve(baseDir, toolVersion string) (show bool, body string) {
 // post-upgrade hand-off gates on whatsnewAfterUpgradeInteractive, and --dry-run
 // returns before rendering. An unattended run never reaches this function, so
 // reaching it means a person saw the screen.
-func whatsnewRender(ctx context.Context, session *shell.Session, baseDir, toolVersion, body string) {
+func whatsnewRender(ctx context.Context, session *shell.Session, loc whatsnew.Location, toolVersion, body string) {
 	wnCtx, cancel := context.WithTimeout(ctx, whatsnewScreenTimeout)
 	defer cancel()
 	err := whatsnewRun(wnCtx, session, body)
@@ -162,7 +168,7 @@ func whatsnewRender(ctx context.Context, session *shell.Session, baseDir, toolVe
 	if errors.Is(err, shell.ErrClosed) && !shell.IsUserInterrupt(err) {
 		return
 	}
-	_ = whatsnewSaveSeen(baseDir, toolVersion)
+	_ = whatsnewSaveSeen(loc, toolVersion)
 }
 
 // showWhatsnewScreen runs ONLY Screen 0 (what's new) and returns, without the dashboard
@@ -196,7 +202,12 @@ func showWhatsnewScreen(ctx context.Context, args *cli.Args, toolVersion string)
 	// which then leak into the parent shell as stray input ("2026: command not found"). So
 	// a not-unseen verdict (or a corrupt-flag self-heal) must never spin up a TTY at all.
 	baseDir, _ := detectedBaseDirOrFallback()
-	show, body := whatsnewResolve(baseDir, toolVersion)
+	configPath := ""
+	if args != nil {
+		configPath = args.ConfigPath
+	}
+	loc := whatsnewLocation(configPath, baseDir)
+	show, body := whatsnewResolve(loc, toolVersion)
 	if !show {
 		return
 	}
@@ -209,10 +220,6 @@ func showWhatsnewScreen(ctx context.Context, args *cli.Args, toolVersion string)
 		if strings.TrimSpace(buildSig) == "" {
 			buildSig = "n/a"
 		}
-		configPath := ""
-		if args != nil {
-			configPath = args.ConfigPath
-		}
 		session = shell.Start(ctx, shell.Config{
 			AppName:    "ProxSave",
 			Subtitle:   "Dashboard",
@@ -224,7 +231,7 @@ func showWhatsnewScreen(ctx context.Context, args *cli.Args, toolVersion string)
 	}
 	defer func() { _ = session.Close() }()
 
-	whatsnewRender(ctx, session, baseDir, toolVersion, body)
+	whatsnewRender(ctx, session, loc, toolVersion, body)
 }
 
 // dashboardBareInvocationCheck: only a completely bare `proxsave` (no flags
@@ -292,10 +299,10 @@ func maybeRunDashboard(ctx context.Context, args *cli.Args, bootstrap *logging.B
 	// bare-invocation check is needed here -- reaching this line already guarantees
 	// bare + interactive (the early return at the top of maybeRunDashboard), so
 	// Screen 0 stays bare-interactive-only (SCRN-02/05). The base is resolved via the
-	// same detectedBaseDirOrFallback the install seed uses, so write-path == read-path
-	// (open question A1).
+	// same detectedBaseDirOrFallback the install seed uses and LOG_PATH comes from the
+	// same configuration, so write-path == read-path (open question A1).
 	baseDir, _ := detectedBaseDirOrFallback()
-	maybeShowWhatsnew(ctx, session, baseDir, toolVersion)
+	maybeShowWhatsnew(ctx, session, whatsnewLocation(args.ConfigPath, baseDir), toolVersion)
 
 	for {
 		// Idle timeout: a pty-allocating wrapper (script, tmux, ssh -tt) that
@@ -424,8 +431,8 @@ const (
 func runDashboardInstallChoice(ctx context.Context, session *shell.Session) (menu.Action, bool) {
 	errBack := errors.New("install: back")
 	items := []components.SelectorItem[installChoice]{
-		{Label: "Edit install", Description: "re-run the interactive installation/setup (--install)", Value: installEdit},
-		{Label: "Wipe install", Description: "wipe the install directory (keep build/env/identity) then re-run the installer (--new-install)", Value: installWipe},
+		{Label: "Edit install", Description: "re-run the interactive installation/setup", Value: installEdit},
+		{Label: "Wipe install", Description: "wipe and re-install, keeping build/daemon_state/env/guards/identity/restore", Value: installWipe},
 		{Label: "Back", Description: "return to the dashboard menu", Value: installBack},
 	}
 	choice, err := shell.Ask(ctx, session, components.NewSelector(
@@ -1063,9 +1070,59 @@ func buildDaemonStatusPrompt(diagnostics daemonDiagnostics) string {
 		}
 	}
 	b.WriteString("\n")
+	b.WriteString(buildDashboardBackupSchedule(diagnostics.Schedule))
+	b.WriteString("\n")
 	b.WriteString(buildDashboardPersonalScriptComparison("Personal pre-run script", diagnostics.Runtime, diagnostics.ScriptComparisons.Pre))
 	b.WriteString("\n")
 	b.WriteString(buildDashboardPersonalScriptComparison("Personal post-run script", diagnostics.Runtime, diagnostics.ScriptComparisons.Post))
+	return b.String()
+}
+
+// buildDashboardBackupSchedule is the dashboard form of the backup schedule block (todo points
+// 30-31, part C): values in the normal colour with their detail in grey, IN SYNC green, OUT OF
+// SYNC and the unavailable states yellow, PENDING normal, NOT RUNNING and NOT APPLICABLE grey.
+func buildDashboardBackupSchedule(c scheduleComparison) string {
+	value := func(cad cron.Cadence) string {
+		keyword, detail := scheduleStatusValue(cad)
+		return theme.Text.Render(keyword) + theme.Subtle.Render(" ("+detail+")")
+	}
+	var b strings.Builder
+	b.WriteString(theme.Text.Render("Backup schedule:"))
+	b.WriteString("\n")
+	b.WriteString(theme.Text.Render("  Daemon now: "))
+	switch c.RunningState {
+	case scheduleSideNotRunning:
+		b.WriteString(theme.Subtle.Render("NOT RUNNING"))
+	case scheduleSideUnavailable:
+		b.WriteString(theme.WarningText.Render("UNAVAILABLE") + theme.Subtle.Render(" ("+components.SanitizeText(c.RunningReason)+")"))
+	default:
+		b.WriteString(value(c.Running))
+	}
+	b.WriteString("\n")
+	b.WriteString(theme.Text.Render("  Configuration: "))
+	switch c.CurrentState {
+	case scheduleSideInvalid:
+		b.WriteString(theme.WarningText.Render("INVALID") + theme.Subtle.Render(" ("+components.SanitizeText(c.CurrentReason)+")"))
+	case scheduleSideUnknown:
+		b.WriteString(theme.WarningText.Render("UNKNOWN") + theme.Subtle.Render(": "+components.SanitizeText(c.CurrentReason)))
+	default:
+		b.WriteString(value(c.Current))
+	}
+	b.WriteString("\n")
+	b.WriteString(theme.Text.Render("  Synchronization: "))
+	reason := components.SanitizeText(c.SyncReason)
+	switch c.Sync {
+	case scheduleInSync:
+		b.WriteString(theme.SuccessText.Render("IN SYNC"))
+	case scheduleOutOfSync:
+		b.WriteString(theme.WarningText.Render("OUT OF SYNC") + theme.Subtle.Render(" ("+reason+")"))
+	case schedulePending:
+		b.WriteString(theme.Text.Render("PENDING") + theme.Subtle.Render(" ("+reason+")"))
+	case scheduleSyncNotApplicable:
+		b.WriteString(theme.Subtle.Render("NOT APPLICABLE"))
+	default:
+		b.WriteString(theme.WarningText.Render("UNKNOWN") + theme.Subtle.Render(" ("+reason+")"))
+	}
 	return b.String()
 }
 

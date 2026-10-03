@@ -43,8 +43,9 @@ func buildNewInstallPlan(configPath string) (newInstallPlan, error) {
 func newInstallPreservedEntries() []string {
 	// guards and restore are host state, not part of the install: the mount guards a
 	// restore left behind (bind mounts still active until the next reboot) and the
-	// safety backup, rollback archives and logs of past restores.
-	preserved := []string{"env", "identity", "build", "guards", "restore"}
+	// safety backup, rollback archives and logs of past restores. daemon_state is the
+	// daemon's lock, pid and status files, which lived in identity/ before 0.41.0.
+	preserved := []string{"env", "identity", "daemon_state", "build", "guards", "restore"}
 	sort.Strings(preserved)
 	return preserved
 }

@@ -212,7 +212,7 @@ proxsave --install
 # Interactive installation wizard (CLI mode - for debugging)
 proxsave --install --cli
 
-# Clean reinstall: wipes the install dir except build/, env/, guards/, identity/ and restore/, then runs
+# Clean reinstall: wipes the install dir except build/, daemon_state/, env/, guards/, identity/ and restore/, then runs
 # the wizard. With stock paths that deletes local backup archives and configs/backup.env.
 proxsave --new-install
 
@@ -246,7 +246,7 @@ proxsave --install --cli
 4. Optionally enables firewall rules collection (`BACKUP_FIREWALL_RULES=false` by default)
 5. Optionally sets up notifications (Telegram, Email; Email asks for a delivery mode and defaults to `EMAIL_DELIVERY_METHOD=relay` with `EMAIL_FALLBACK_SENDMAIL=true`)
 6. Optionally configures encryption (AGE setup)
-7. Optionally selects a daily run time (HH:MM, default `02:00`). On fresh installs the scheduler defaults to the resident daemon; cron is offered as the alternative engine (see [INSTALL.md](INSTALL.md) and [DAEMON.md](DAEMON.md))
+7. Selects the schedule: the frequency (daily, weekly or monthly, default daily), the day it uses, and the run time (HH:MM, default `02:00`). On fresh installs the scheduler defaults to the resident daemon; cron is offered as the alternative engine (see [INSTALL.md](INSTALL.md) and [DAEMON.md](DAEMON.md))
 8. Optionally runs a post-install dry-run audit and offers to disable unused collectors (actionable hints like `set BACKUP_*=false to disable`)
 9. (If Telegram centralized mode is enabled and config + Server ID resolve successfully) Shows Server ID and offers pairing verification (retry/skip supported); otherwise install continues and logs why pairing was skipped
 10. Finalizes installation (symlinks, scheduler setup for the chosen engine, permission checks)
@@ -342,7 +342,7 @@ in the script) and always installs the latest **stable** release. See
 6. Extracts binary from tar.gz archive
 7. Atomically replaces current binary (write to .tmp, then rename)
 8. Updates the `proxsave` symlink in `/usr/local/bin/` (and removes the legacy `proxmox-backup` symlink if present)
-9. Upgrades the configuration file (adds any new keys from the template to `backup.env`, preserving your existing and custom values, after backing up the current file) and fixes file permissions. After a successful binary install, the resident daemon (`proxsave-daemon.service`) is installed only on a host that has never recorded a scheduler engine, i.e. one where this upgrade's config merge had to add `SCHEDULER_MODE`; any host that already carries the key keeps the engine it records. The daemon runs once daily at `SCHEDULER_TIME` (default `02:00`) and does not carry over your crontab schedule, so a hand-edited cron time or any non-daily cadence (hourly, weekly, several times a day) is dropped. Run `--daemon-remove` to stay on cron if you need a non-daily schedule.
+9. Upgrades the configuration file (adds any new keys from the template to `backup.env`, preserving your existing and custom values, after backing up the current file) and fixes file permissions. After a successful binary install, the resident daemon (`proxsave-daemon.service`) is installed only on a host that has never recorded a scheduler engine, i.e. one where this upgrade's config merge had to add `SCHEDULER_MODE`; any host that already carries the key keeps the engine it records. The daemon runs at the configured schedule (`SCHEDULER_FREQUENCY`: daily, weekly or monthly, at `SCHEDULER_TIME`, default daily at `02:00`). Where `backup.env` records no schedule yet, the upgrade takes it from the proxsave cron line when that line is daily, weekly or monthly; a cadence the daemon cannot express (hourly, several times a day, a day of the month 29-31) is not adopted and the upgrade warns. Run `--daemon-remove` to stay on cron if you need such a schedule.
 
 **Post-upgrade steps**:
 1. New config template keys are merged into `backup.env` automatically (existing and custom values preserved; previous file backed up)
@@ -367,7 +367,7 @@ See also: [upgrading configuration](#configuration-upgrade)
 | Flag | Description |
 |------|-------------|
 | `--install` | Interactive installation wizard. Dashboard: **Install > Edit install** |
-| `--new-install` | Wipe the install directory, keeping only `build/`, `env/`, `guards/`, `identity/` and `restore/`, then launch the wizard. With stock paths this deletes your local backup archives and `configs/backup.env`. Dashboard: **Install > Wipe install** |
+| `--new-install` | Wipe the install directory, keeping only `build/`, `daemon_state/`, `env/`, `guards/`, `identity/` and `restore/`, then launch the wizard. With stock paths this deletes your local backup archives and `configs/backup.env`. Dashboard: **Install > Wipe install** |
 | `--upgrade` | Download and install latest ProxSave binary from GitHub releases. Dashboard: **Upgrade > Check upgrade** |
 | `--upgrade-config` | Merge current config with latest template. Dashboard: **Upgrade > Check config**, whose `Apply` runs this |
 | `--upgrade-config-dry-run` | Preview config upgrade without changes. Dashboard: the check step of **Upgrade > Check config**, which runs it before offering `Apply` |
@@ -705,7 +705,7 @@ proxsave --restore
 # Re-run the install wizard against the current configuration
 proxsave --install
 
-# Full reset + installation (preserves build/env/guards/identity/restore)
+# Full reset + installation (preserves build/daemon_state/env/guards/identity/restore)
 proxsave --new-install
 
 # Upgrade binary to latest release
@@ -753,11 +753,11 @@ the daemon from the dashboard's **Daemon > Install** row, or with `--daemon-setu
 of this section is for the hosts that stay on cron because they need a cadence the daemon
 cannot express.
 
-> On fresh installs ProxSave schedules backups through the **resident daemon** (`proxsave-daemon.service`) by default; see [DAEMON.md](DAEMON.md). The daemon runs once daily, so every schedule below (hourly, every 6 hours, weekly, several times a day) requires the daemon-less **cron** engine. Do not add a cron entry while the daemon is active, or the backup runs twice.
+> On fresh installs ProxSave schedules backups through the **resident daemon** (`proxsave-daemon.service`) by default; see [DAEMON.md](DAEMON.md). The daemon runs daily, weekly or monthly, so a schedule below that it cannot express (hourly, every 6 hours, several times a day) requires the daemon-less **cron** engine. Do not add a cron entry while the daemon is active, or the backup runs twice.
 >
-> **ProxSave owns your crontab, so a hand-written schedule does not survive.** `--install`, `--new-install` and `--daemon-remove` each rewrite it: they delete **every** cron line whose command is named `proxsave` or `proxmox-backup`, not only the one they wrote themselves, and append a single daily entry at `SCHEDULER_TIME`. The deletion happens in both scheduler modes; whether the appended line stays depends on where the run ends. `--daemon-remove` ends on cron, so it keeps it. `--install` and `--new-install` write that line first and then, when the selected (or already configured) mode is `daemon`, drop it again while enabling the unit, so a daemon installation ends with no proxsave cron entry, unless the unit install itself fails and the host stays on cron with the line it just wrote. A custom cadence from this section is therefore silently downgraded to daily by a cron reinstall, and removed outright by a daemon one. `--upgrade` is the exception: it only repoints legacy paths and leaves the schedule alone.
+> **ProxSave owns your crontab, so a hand-written schedule does not survive.** `--install`, `--new-install` and `--daemon-remove` each rewrite it: they delete **every** cron line whose command is named `proxsave` or `proxmox-backup`, not only the one they wrote themselves, and append a single entry at the configured schedule (`SCHEDULER_FREQUENCY`, the day it uses and `SCHEDULER_TIME`). The deletion happens in both scheduler modes; whether the appended line stays depends on where the run ends. `--daemon-remove` ends on cron, so it keeps it. `--install` and `--new-install` write that line first and then, when the selected (or already configured) mode is `daemon`, drop it again while enabling the unit, so a daemon installation ends with no proxsave cron entry, unless the unit install itself fails and the host stays on cron with the line it just wrote. A custom cadence from this section is therefore silently replaced by the configured schedule on a cron reinstall, and removed outright by a daemon one. `--upgrade` is the exception: it only repoints legacy paths and leaves the schedule alone.
 >
-> The practical order is: run `proxsave --daemon-remove` first, which switches to cron, writes the daily line for you, and records `SCHEDULER_MODE=cron`, **then** edit that line to the cadence you want. Adding a second entry afterwards leaves two, and both will fire.
+> The practical order is: run `proxsave --daemon-remove` first, which switches to cron, writes the line for you, and records `SCHEDULER_MODE=cron`, **then** edit that line to the cadence you want. Adding a second entry afterwards leaves two, and both will fire.
 >
 > That record is also what makes the line survive. `--upgrade` installs the daemon only on a host that has never recorded a scheduler engine, i.e. one where the upgrade's own config merge had to add `SCHEDULER_MODE`. Any host whose `backup.env` already carries the key is left as it is, so a hand-edited cadence on a 0.30 or later install survives every upgrade. `--daemon-setup` still removes it, because there you asked for the daemon.
 
@@ -868,7 +868,7 @@ means the flag has no menu row.
 | `--log-level <level>` | `-l` | - | Set log level (debug\|info\|warning\|error\|critical) |
 | `--cli` | - | - | Force CLI mode instead of TUI (only for: --install, --new-install, --newkey, --decrypt, --restore) |
 | `--install` | - | Install > Edit install | Interactive installation wizard |
-| `--new-install` | - | Install > Wipe install | Wipe the install dir, keeping only `build/`, `env/`, `guards/`, `identity/` and `restore/`, then run the wizard. Deletes local backups and `configs/backup.env` with stock paths |
+| `--new-install` | - | Install > Wipe install | Wipe the install dir, keeping only `build/`, `daemon_state/`, `env/`, `guards/`, `identity/` and `restore/`, then run the wizard. Deletes local backups and `configs/backup.env` with stock paths |
 | `--upgrade` | - | Upgrade > Check upgrade | Download and install latest binary from GitHub releases. Executed by the OLD binary; from 0.36.0 on it hands the finalize to the new one |
 | `--upgrade-config` | - | Upgrade > Check config | Upgrade config from embedded template |
 | `--upgrade-config-dry-run` | - | Upgrade > Check config (check step) | Preview config upgrade |
@@ -914,7 +914,7 @@ proxsave --dry-run --log-level debug
 # Re-run the install wizard
 proxsave --install
 
-# Full reset (preserve build/env/guards/identity/restore) then setup
+# Full reset (preserve build/daemon_state/env/guards/identity/restore) then setup
 proxsave --new-install
 
 # Upgrade binary to latest version

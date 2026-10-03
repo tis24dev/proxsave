@@ -14,6 +14,7 @@ package notifyfilter
 
 import (
 	"context"
+	"errors"
 	"sort"
 	"strings"
 	"time"
@@ -22,6 +23,8 @@ import (
 	"github.com/tis24dev/proxsave/internal/health"
 	"github.com/tis24dev/proxsave/internal/identity"
 	"github.com/tis24dev/proxsave/internal/logging"
+	"github.com/tis24dev/proxsave/internal/serverbot"
+	"github.com/tis24dev/proxsave/internal/ui/theme"
 )
 
 // Healthchecks status words shown on the run's INFO line (maintainer-approved set).
@@ -53,6 +56,18 @@ const (
 	ReasonPolicyUnconfirmed    = "policy_unconfirmed"
 )
 
+// Why the relay's delivery status could not be used (Decision.Unavailable).
+const (
+	// UnavailableUnreachable: no HTTP answer, the call failed at the dns, connect, request or
+	// response stage.
+	UnavailableUnreachable = "unreachable"
+	// UnavailableHTTPStatus: the relay answered with an HTTP status other than 200.
+	UnavailableHTTPStatus = "http_status"
+	// UnavailableUnusable: the relay answered 200 with bad JSON, a schema or state outside the
+	// contract, or an evaluation it no longer vouches for.
+	UnavailableUnusable = "unusable_answer"
+)
+
 // Validity is how long a relay answer may be reused for the decision before dispatch, at most: the
 // relay's own validity (valid_for_seconds less age_seconds) can make it shorter.
 const Validity = 120 * time.Second
@@ -70,8 +85,24 @@ type Decision struct {
 	Status    string // Healthchecks status word
 	Effective string // the threshold applied
 	Reason    string // why Effective differs from Requested, "" when it does not
-	ReadAt    time.Time
-	ValidFor  time.Duration
+	// Unavailable is why the relay's delivery status could not be used (Unavailable*): "" when
+	// the relay was not asked, answered usably, or failed in a way none of them names.
+	Unavailable string
+	ReadAt      time.Time
+	ValidFor    time.Duration
+}
+
+// Applied reports whether the run applies the threshold it asked for.
+func (d Decision) Applied() bool { return d.Effective == d.Requested }
+
+// Outcome is the INFO line that closes a notification filter block, at initialization and
+// before dispatch. It is an INFO even when not applied: the run still notifies every outcome,
+// nothing needs the operator, and a WARNING would raise the run's exit code.
+func (d Decision) Outcome() string {
+	if d.Applied() {
+		return theme.SymbolSuccess + " Notification filter: applied"
+	}
+	return theme.SymbolWarning + " Notification filter: not applied"
 }
 
 // Negotiated is the NOTIFY_ON value the daemon sends to the relay and the run requests: the
@@ -145,7 +176,7 @@ func Decide(ctx context.Context, cfg *config.Config, logger *logging.Logger, sec
 		d.Status, d.Reason = StatusNotTransmitting, ReasonNotTransmitting
 	case cfg.HealthcheckMode == config.HealthcheckModeSelf:
 		d.Status = StatusSelf
-		logging.DebugStep(logger, op, "healthchecks mode=self notify_urls=%t", SelfNotifyChecksConfigured(cfg))
+		logging.DebugStep(logger, op, "self notify_urls=%t", SelfNotifyChecksConfigured(cfg))
 		if SelfNotifyChecksConfigured(cfg) {
 			d.Reason = ReasonSelfNotifyChecks
 		} else {
@@ -153,17 +184,17 @@ func Decide(ctx context.Context, cfg *config.Config, logger *logging.Logger, sec
 		}
 	default:
 		secret, _ := identity.LoadNotifySecret(cfg.BaseDir)
-		st, err := FetchDeliveryStatus(ctx, nil, cfg.ServerAPIHost, cfg.ServerID, secret)
+		st, err := FetchDeliveryStatus(ctx, nil, cfg.ServerAPIHost, cfg.ServerID, secret, logger, op)
 		d.ReadAt, d.ValidFor = Now(), Validity
 		if err != nil {
-			d.Status, d.Reason = StatusUnknown, ReasonStatusUnavailable
-			logging.DebugStep(logger, op, "healthchecks delivery unavailable: %v", err)
+			d.Status, d.Reason, d.Unavailable = StatusUnknown, ReasonStatusUnavailable, unavailable(err)
+			logging.DebugStep(logger, op, "delivery unavailable: %v", err)
 			break
 		}
 		d.Status = statusWord(st.State)
 		d.ValidFor = st.Remaining(Validity)
 		confirmed := st.PolicyConfirmed(d.Requested, EnabledChannels(cfg))
-		logging.DebugStep(logger, op, "healthchecks delivery state=%s alive_routes=%d/%d backup_routes=%d/%d policy_confirmed=%t reasons=%s",
+		logging.DebugStep(logger, op, "delivery state=%s alive_routes=%d/%d backup_routes=%d/%d policy_confirmed=%t reasons=%s",
 			st.State, st.Checks.Alive.VerifiedDownRoutes, st.Checks.Alive.ConfiguredDownRoutes,
 			st.Checks.Backup.VerifiedDownRoutes, st.Checks.Backup.ConfiguredDownRoutes, confirmed,
 			strings.Join(st.ReasonCodes, ","))
@@ -180,7 +211,29 @@ func Decide(ctx context.Context, cfg *config.Config, logger *logging.Logger, sec
 		d.Effective, d.Reason = config.NotifyOnAlways, ""
 	}
 	if d.Effective != d.Requested {
-		logging.DebugStep(logger, op, "notification filter fallback=%s reason=%s", d.Effective, d.Reason)
+		logging.DebugStep(logger, op, "filter fallback=%s reason=%s", d.Effective, d.Reason)
 	}
 	return d
+}
+
+// unavailable names why FetchDeliveryStatus gave no usable answer, from the error it returned: a
+// transport failure once the call was on its way (serverbot's "request" and "read" failures, the
+// dns, connect, request and response stages), an HTTP status other than 200, or a 200 answer
+// that is not a usable status. It is "" for any other error, such as a request that could not
+// be built.
+func unavailable(err error) string {
+	var te *serverbot.TransportError
+	var he *health.DeliveryHTTPStatusError
+	var ae *health.DeliveryAnswerError
+	switch {
+	case errors.As(err, &te):
+		if te.Op == "request" || te.Op == "read" {
+			return UnavailableUnreachable
+		}
+	case errors.As(err, &he):
+		return UnavailableHTTPStatus
+	case errors.As(err, &ae):
+		return UnavailableUnusable
+	}
+	return ""
 }

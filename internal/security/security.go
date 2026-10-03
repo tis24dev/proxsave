@@ -21,6 +21,7 @@ import (
 
 	"github.com/tis24dev/proxsave/internal/config"
 	"github.com/tis24dev/proxsave/internal/environment"
+	"github.com/tis24dev/proxsave/internal/health"
 	"github.com/tis24dev/proxsave/internal/logging"
 	"github.com/tis24dev/proxsave/internal/safeexec"
 	"github.com/tis24dev/proxsave/internal/safefs"
@@ -535,6 +536,9 @@ func (c *Checker) verifyConfigFile(ctx context.Context) {
 	c.ensureOwnershipAndPerm(ctx, c.configPath, info, 0o600, fmt.Sprintf("Config file %s", c.configPath))
 }
 
+// pbsTokenFilesFn is a seam so the tests never stat the real /root/.pbs-token.
+var pbsTokenFilesFn = config.PBSTokenFiles
+
 func (c *Checker) verifySensitiveFiles(ctx context.Context) {
 	files := []struct {
 		path        string
@@ -559,6 +563,20 @@ func (c *Checker) verifySensitiveFiles(ctx context.Context) {
 			path:        ageRecipientPath,
 			perm:        0o600,
 			description: "AGE recipient file",
+			optional:    true,
+		})
+	}
+
+	for _, path := range pbsTokenFilesFn(c.cfg.SecureAccount) {
+		files = append(files, struct {
+			path        string
+			perm        os.FileMode
+			description string
+			optional    bool
+		}{
+			path:        path,
+			perm:        0o600,
+			description: "PBS token file " + path,
 			optional:    true,
 		})
 	}
@@ -635,6 +653,7 @@ func (c *Checker) verifyDirectories(ctx context.Context) {
 		{c.cfg.SecureAccount, 0o700, false},
 		{filepath.Join(c.cfg.BaseDir, "identity"), 0o700, false},
 		{filepath.Join(c.cfg.BaseDir, "identity", "age"), 0o700, false},
+		{health.DaemonStateDir(c.cfg.BaseDir), health.DaemonStateDirPerm, false},
 	}
 
 	for _, dir := range dirs {

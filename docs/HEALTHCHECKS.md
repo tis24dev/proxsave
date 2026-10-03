@@ -154,8 +154,14 @@ notifications is already provisioned.
 Once provisioned, the daemon fetches its ping URLs from the server at startup and
 keeps them in memory only. While a URL is still unresolved it retries on each
 heartbeat; once resolved it reuses the same URLs until the service restarts, so a
-server-side change to them is picked up at the next restart. It warns once on a failed
-fetch and then keeps retrying quietly.
+server-side change to them is picked up at the next restart.
+
+The same request carries the backup schedule's frequency and `NOTIFY_ON`, and at startup the
+daemon journal reports each answer in its own block: `Applying backup schedule...`, then
+`Applying notify level...`, and, only when the request failed, `Applying healthchecks ping
+URLs...`, which ends in `WARNING ⚠ Healthchecks ping URLs: not available` when no URL is
+available at all. The heartbeat that later gets an answer prints those blocks again, applied,
+and the daemon keeps retrying quietly until then.
 
 An outage of the provisioning server therefore does not stop a daemon that is already
 reporting: the pings go to the monitoring host, not to the config API. What it does
@@ -174,6 +180,16 @@ errors never touch a working credential. Provisioning retries are throttled to o
 attempt every 15 minutes. If the server asks for a longer wait, the daemon honors it
 and adds a small per-host offset (up to a tenth of the requested wait, capped at five
 minutes) so a fleet coming back at once does not arrive in lockstep.
+
+### The backup check's period
+
+The server gives `proxsave-backup`, and the periodic notify checks used with
+`NOTIFY_ON=always`, a period equal to the backup schedule: 1 day for daily, 7 days for
+weekly, 31 days for monthly, each with a grace of 1 hour. The daemon sends
+`SCHEDULER_FREQUENCY` with the request above, and a new frequency applies only once the server
+confirms it has moved the checks; until then the daemon keeps the frequency it last had
+confirmed, so a weekly run is never late on a daily check. See
+[DAEMON.md](DAEMON.md#backup-schedule).
 
 ### Your monitoring portal
 
@@ -239,6 +255,10 @@ self config has no liveness signal at all. Either fill in an alive check, or set
 `HEALTHCHECK_ENABLED=false` and be honestly unmonitored. Blanking the URLs is not the way
 to switch monitoring off.
 
+The backup check's period is yours too. With a weekly or monthly `SCHEDULER_FREQUENCY`, give
+the check a matching period on your instance; the daemon journal reminds you at start with
+`Backup check: pinged weekly on your own server` (or `monthly`).
+
 Centralized mode has the matching rule with a different missing piece: a host with no
 Server ID, the identity generated at install time, warns `Healthchecks: no SERVER_ID`
 instead, at the same cost to the exit code. On a host whose configured engine is cron,
@@ -275,14 +295,16 @@ checks you actually want. The alive and backup pair alone is a perfectly reasona
 setup.
 
 Note that `HEALTHCHECK_ALIVE_URL` and `HEALTHCHECK_BACKUP_URL` do double duty: in self
-mode they are your own ping URLs, and in centralized mode they are the cache the server
-fills in for you. In centralized mode they are an optional fallback cache that nothing auto-fills, so leave them empty unless you deliberately want one.
+mode they are your own ping URLs. In centralized mode they are an optional fallback, used
+only when ProxSave HC Server cannot be reached, that nothing fills in, so leave them empty
+unless you deliberately want one.
 
 ## Where monitoring shows up
 
 **Install wizard.** The configuration form's `Healthchecks` field asks for the monitoring
 mode, immediately after `Scheduler engine`, followed by `Notify level` (see
-[Alert delivery and NOTIFY_ON](#alert-delivery-and-notify_on)) and `Run at (HH:MM)`. Its three answers
+[Alert delivery and NOTIFY_ON](#alert-delivery-and-notify_on)) and the schedule: `Frequency`,
+`Weekday`, `Day of month (1-28)` and `Run at (HH:MM)`. Its three answers
 are `Off`, `ProxSave HC Server` (centralized) and `Your own server` (self), and it is
 active only with the daemon engine selected: under cron it is inactive and monitoring is
 written off. A screen then verifies the connection. In centralized mode it also boxes
@@ -342,8 +364,11 @@ scheduled run has passed it on.
 and no `HEALTHCHECK_NOTIFY_*` variable is set: a notify check you run on a period would go
 DOWN on every run the filter kept quiet.
 
-**Where you see it.** The run log (`Healthchecks status` and `Notification filter` lines),
-and the `Notifications:` block of the Healthchecks check screen and of the install check:
+**Where you see it.** The run log's `Applying notification filter...` block (`Setting`,
+`Healthchecks status`, `Filter in effect`, then `✓ Notification filter: applied`, or
+`⚠ Notification filter: not applied` after the reason), the daemon journal's
+`Applying notify level...` block, at start and before a run that sends a changed level, and
+the `Notifications:` block of the Healthchecks check screen and of the install check:
 
 ```text
 Notifications:

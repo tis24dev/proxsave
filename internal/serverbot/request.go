@@ -22,6 +22,15 @@ type Request struct {
 	Body      any           // != nil -> json.Marshal + Content-Type: application/json
 	Timeout   time.Duration // per-request ctx cap; 0 -> 5s
 	MaxBytes  int64         // response read cap; 0 -> 8192
+	// LogOperation is the DEBUG operation the call's transport stages are logged under, e.g.
+	// "notifications init"; "" -> "serverbot". Only read when the Client has a logger.
+	LogOperation string
+	// LogPrefix starts the message of every DEBUG line of the call, followed by a space, e.g.
+	// "attempt=1/3" gives "schedule: attempt=1/3 dns ok addr=...". "" -> no prefix.
+	LogPrefix string
+	// LogURLDetail ends the url= line after a space: the caller's own facts about what this call
+	// sends, e.g. "frequency=weekly notify_on=warning". Never a secret. "" -> nothing added.
+	LogURLDetail string
 }
 
 // Response carries the RAW HTTP status and a clone of the response headers

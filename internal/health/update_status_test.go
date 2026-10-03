@@ -80,7 +80,7 @@ func TestLoadStatusToleratesOldFileWithoutUpdate(t *testing.T) {
 	base := t.TempDir()
 	path := StatusPath(base)
 	if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
-		t.Fatalf("mkdir identity: %v", err)
+		t.Fatalf("mkdir daemon_state: %v", err)
 	}
 	old := `{"mode":"centralized","heartbeat":{"ts":777,"ok":true}}`
 	if err := os.WriteFile(path, []byte(old), 0o600); err != nil {

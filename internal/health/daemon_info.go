@@ -5,8 +5,8 @@
 // VERSION/commit/start time for display and the restart-verify freshness gate; the "is the running
 // binary stale?" question is answered separately and hash-free via /proc/<pid>/exe (see
 // daemon_state.go), so no binary hash is recorded here. It is a sibling of the status/pid files in
-// the identity dir, written with the same atomic idiom (writeJSONAtomic) and read tolerantly (like
-// LoadStatus), and stays logging-free + stdlib-only like its siblings.
+// the daemon_state dir, written with the same atomic idiom (writeJSONAtomic) and read tolerantly
+// (like LoadStatus), and stays logging-free + stdlib-only like its siblings.
 
 package health
 
@@ -28,10 +28,21 @@ type DaemonInfo struct {
 	StartTS  int64  `json:"start_ts"`
 }
 
+// daemonInfoFileName is the info file's name, the same in daemon_state/ and in the identity/ copy
+// written for an older release (LegacyDaemonInfoPath).
+const daemonInfoFileName = ".daemon_info.json"
+
 // DaemonInfoPath returns the daemon-info file path, a sibling of the pid/status files in the
-// identity dir (same same-uid, non-immutable rationale as DaemonPIDPath).
+// daemon_state dir (same same-uid, non-immutable rationale as DaemonPIDPath).
 func DaemonInfoPath(baseDir string) string {
-	return filepath.Join(baseDir, "identity", ".daemon_info.json")
+	return filepath.Join(DaemonStateDir(baseDir), daemonInfoFileName)
+}
+
+// LegacyDaemonInfoPath returns identity/.daemon_info.json, where releases before 0.41.0 read the
+// record. The previous release drives an upgrade to this one and, after restarting the daemon,
+// polls this path for a fresh start time; nothing in this release reads it.
+func LegacyDaemonInfoPath(baseDir string) string {
+	return filepath.Join(LegacyIdentityDir(baseDir), daemonInfoFileName)
 }
 
 // WriteDaemonInfo writes info as indented JSON atomically (daemon side), reusing the shared
@@ -39,6 +50,12 @@ func DaemonInfoPath(baseDir string) string {
 // old or the new file, never a partial one, and no immutable +i attribute blocks the rewrite.
 func WriteDaemonInfo(baseDir string, info DaemonInfo) error {
 	return writeJSONAtomic(DaemonInfoPath(baseDir), info)
+}
+
+// WriteLegacyDaemonInfo writes the same record into identity/ (LegacyDaemonInfoPath), for the
+// previous release verifying the upgrade it just performed.
+func WriteLegacyDaemonInfo(baseDir string, info DaemonInfo) error {
+	return writeJSONAtomic(LegacyDaemonInfoPath(baseDir), info)
 }
 
 // ReadDaemonInfo reads the daemon-info file tolerantly, mirroring LoadStatus: a missing OR empty

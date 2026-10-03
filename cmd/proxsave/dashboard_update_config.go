@@ -92,7 +92,8 @@ func describeConfigPlan(r *config.UpgradeResult) string {
 	return b.String()
 }
 
-// describeConfigApply renders the real-run outcome explanation.
+// describeConfigApply renders the real-run outcome explanation. An adoption of the cron
+// schedule adds its details and outcome after the backup line (combination 6).
 func describeConfigApply(r *config.UpgradeResult) string {
 	if r == nil || !r.Changed {
 		return "The configuration already has every key from the template."
@@ -115,8 +116,25 @@ func describeConfigApply(r *config.UpgradeResult) string {
 	if r.BackupPath != "" {
 		msg += "\nBackup saved to " + r.BackupPath + "."
 	}
+	if lines := configApplyNoteLines(r.Notes); len(lines) > 0 {
+		msg += "\n" + strings.Join(lines, "\n")
+	}
 	if len(r.Warnings) > 0 {
 		msg += "\n" + strings.Join(r.Warnings, "\n")
 	}
 	return msg
+}
+
+// configApplyNoteLines is what the result screen shows of the Notes: the INFO details and
+// outcome of a block, never its header (the screen has its own title) and never the DEBUG
+// evidence, which belongs in a log.
+func configApplyNoteLines(notes []config.UpgradeNote) []string {
+	var out []string
+	for _, note := range notes {
+		if note.Level != config.UpgradeNoteInfo || note.Text == scheduleAdoptHeader {
+			continue
+		}
+		out = append(out, note.Text)
+	}
+	return out
 }

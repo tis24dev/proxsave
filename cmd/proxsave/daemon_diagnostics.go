@@ -80,6 +80,7 @@ type daemonDiagnostics struct {
 	Explanation       string
 	DaemonUID         daemonUIDDiagnostic
 	Runtime           daemonRuntimeDiagnostic
+	Schedule          scheduleComparison
 	ScriptComparisons personalScriptComparisons
 }
 
@@ -165,6 +166,7 @@ func collectDaemonDiagnostics(ctx context.Context, cfg *config.Config, cfgErr er
 		Explanation:       explanation,
 		DaemonUID:         daemonUID,
 		Runtime:           runtimeDiagnostic,
+		Schedule:          compareBackupSchedule(state, runtimeDiagnostic, cfg, cfgErr, baseDir),
 		ScriptComparisons: scripts,
 	}
 }
@@ -440,6 +442,7 @@ func logDaemonDiagnostics(logger *logging.Logger, diagnostics daemonDiagnostics)
 	} else if diagnostics.Runtime.Availability != daemonRuntimeNotApplicable {
 		logger.Warning("Running daemon personal-script state: UNAVAILABLE (%s)", daemonDiagnosticText(diagnostics.Runtime.Reason))
 	}
+	logBackupSchedule(logger, diagnostics.Schedule)
 	logPersonalScriptComparison(logger, "Personal pre-run script", diagnostics.Runtime, diagnostics.ScriptComparisons.Pre)
 	logPersonalScriptComparison(logger, "Personal post-run script", diagnostics.Runtime, diagnostics.ScriptComparisons.Post)
 	logging.DebugStep(logger, "daemon diagnostics", "daemon uid: value=%d source=%q fallback_reason=%q",
@@ -450,6 +453,46 @@ func logDaemonDiagnostics(logger *logging.Logger, diagnostics daemonDiagnostics)
 	logPersonalScriptEvidence(logger, "current config pre-run", diagnostics.ScriptComparisons.Pre.Current)
 	logPersonalScriptEvidence(logger, "running daemon post-run", diagnostics.ScriptComparisons.Post.Running)
 	logPersonalScriptEvidence(logger, "current config post-run", diagnostics.ScriptComparisons.Post.Current)
+}
+
+// logBackupSchedule is the CLI form of the backup schedule block (todo points 30-31, part C),
+// its DEBUG evidence first.
+func logBackupSchedule(logger *logging.Logger, c scheduleComparison) {
+	for _, line := range scheduleEvidence(c) {
+		logging.DebugStep(logger, "daemon diagnostics", "%s", daemonDiagnosticText(line))
+	}
+	logger.Info("Backup schedule:")
+	switch c.RunningState {
+	case scheduleSideNotRunning:
+		logger.Info("  Daemon now: NOT RUNNING")
+	case scheduleSideUnavailable:
+		logger.Warning("  Daemon now: UNAVAILABLE (%s)", daemonDiagnosticText(c.RunningReason))
+	default:
+		keyword, detail := scheduleStatusValue(c.Running)
+		logger.Info("  Daemon now: %s (%s)", keyword, detail)
+	}
+	switch c.CurrentState {
+	case scheduleSideInvalid:
+		logger.Warning("  Configuration: INVALID (%s)", daemonDiagnosticText(c.CurrentReason))
+	case scheduleSideUnknown:
+		logger.Warning("  Configuration: UNKNOWN: %s", daemonDiagnosticText(c.CurrentReason))
+	default:
+		keyword, detail := scheduleStatusValue(c.Current)
+		logger.Info("  Configuration: %s (%s)", keyword, detail)
+	}
+	reason := daemonDiagnosticText(c.SyncReason)
+	switch c.Sync {
+	case scheduleInSync:
+		logger.Info("  Synchronization: IN SYNC")
+	case scheduleOutOfSync:
+		logger.Warning("  Synchronization: OUT OF SYNC (%s)", reason)
+	case schedulePending:
+		logger.Info("  Synchronization: PENDING (%s)", reason)
+	case scheduleSyncNotApplicable:
+		logger.Info("  Synchronization: NOT APPLICABLE")
+	default:
+		logger.Warning("  Synchronization: UNKNOWN (%s)", reason)
+	}
 }
 
 func logPersonalScriptComparison(logger *logging.Logger, label string, runtime daemonRuntimeDiagnostic, comparison personalScriptComparison) {

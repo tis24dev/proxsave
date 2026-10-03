@@ -26,6 +26,7 @@ import (
 	"github.com/tis24dev/proxsave/internal/logging"
 	"github.com/tis24dev/proxsave/internal/notify"
 	"github.com/tis24dev/proxsave/internal/notifyfilter"
+	"github.com/tis24dev/proxsave/internal/serverbot"
 	"github.com/tis24dev/proxsave/internal/types"
 	"github.com/tis24dev/proxsave/internal/version"
 )
@@ -143,8 +144,56 @@ type daemon struct {
 	notifyWant    *notifyPolicy
 	notifyApplied *notifyPolicy
 	notifyPolls   uint64 // config polls that reached the relay; guarded by mu
+	// pollMu makes the daemon send one /api/healthcheck/config poll at a time (pollCentralized
+	// holds it across the request and its resends). The relay provisions under a per-server
+	// lock it does not wait on: a second poll that arrives while the first is provisioning
+	// gets the stale stored ack, so two polls at once (the heartbeat's schedule retry and the
+	// update check's re-resolve fire in phase) can leave the schedule unconfirmed. Serialized,
+	// the later poll finds nothing left to provision and gets a fresh ack.
+	//
+	// Lock order: it is taken after the relay secret is resolved, so it is never held while
+	// waiting on the relay-secret flock, and only mu is taken under it (a leaf). Its hold is
+	// bounded by the poll's own fetch timeout per request.
+	pollMu sync.Mutex
 	// notifyRefreshWaitOverride replaces notifyPolicyRefreshWait in tests.
 	notifyRefreshWaitOverride time.Duration
+	// confirmedCadence is the seam the relay negotiation of SCHEDULER_FREQUENCY plugs into
+	// (todo points 17-22 and 39-40): in centralized mode it returns the cadence in effect for
+	// the configured one, i.e. the one the ProxSave HC Server has confirmed. nil means nothing
+	// can be confirmed yet, and the cadence in effect is unconfirmedCadence (daily at
+	// SCHEDULER_TIME). Not consulted with healthchecks off or in self mode, which apply the
+	// configured cadence at once. Set at construction, never written after. Production leaves it
+	// nil: the cadence in effect then comes from scheduleLastConfirmed.
+	confirmedCadence func(configured cron.Cadence) cron.Cadence
+	// The backup schedule negotiation (daemon_schedule_negotiation.go), all guarded by mu.
+	// scheduleWant is the frequency every centralized config poll sends: the one backup.env
+	// configured at daemon start ("" before the start read it; the poll then reads d.cfg).
+	// scheduleConfigured is that whole cadence. scheduleLastConfirmed is the frequency the relay
+	// last confirmed, from .schedule_state.json or a confirmation since ("" none: daily).
+	// scheduleConfirmed says the relay confirmed scheduleWant in this process; until it does, a
+	// heartbeat retries.
+	scheduleWant          cron.Frequency
+	scheduleConfigured    cron.Cadence
+	scheduleLastConfirmed cron.Frequency
+	scheduleConfirmed     bool
+	// scheduleState is the image of .schedule_state.json this process last wrote (guarded by mu).
+	scheduleState health.ScheduleState
+	// scheduleChanged wakes scheduleLoop when a heartbeat confirmation changes the cadence in
+	// effect, so the wait in progress is re-armed on it. Made by the centralized start, before
+	// any loop exists, and never replaced; nil elsewhere (a nil channel never fires).
+	scheduleChanged chan struct{}
+	// scheduleAttemptGapOverride replaces scheduleAttemptGap in tests.
+	scheduleAttemptGapOverride time.Duration
+	// notifyBlockPending says the last "Applying notify level..." block ended pending, with
+	// notifyBlockRaw the NOTIFY_ON it read; pingURLsBlockOpen says the start's ping URLs block
+	// ended not refreshed or not available. A heartbeat poll the relay answers prints those
+	// blocks again once they are resolved (logResolvedStartBlocks). All guarded by mu.
+	notifyBlockPending bool
+	notifyBlockRaw     string
+	pingURLsBlockOpen  bool
+	// provisionReach is how far the last relay-secret provisioning attempt got with the relay:
+	// the why line of a start with no relay secret. Guarded by mu.
+	provisionReach pollReach
 	// aliveMu orders the TRANSMISSIONS to the service-alive check: one beat's ping+record, or
 	// the one abandon degrade, never both at once. A bare latch cannot do this. beat() reads
 	// it, then spends up to a full pingTimeout inside r.Heartbeat, so a beat that entered
@@ -189,7 +238,7 @@ type daemon struct {
 	// cannot be lifted is not a safety net, it is a false RED on the check that pages people --
 	// the exact mirror of the false green it exists to remove.
 	aliveDegraded atomic.Bool
-	// abandonMarkerOnDisk records that a marker file may be sitting in the identity dir -- this
+	// abandonMarkerOnDisk records that a marker file may be sitting in the daemon_state dir -- this
 	// process either read one at startup or could not tell (an unreadable marker is still a
 	// marker). It is what makes the removal in clearAbandonMarker unconditional on the degrade:
 	// a process that hit ReadAbandon's error branch never degrades, and must still delete the
@@ -231,7 +280,7 @@ type daemon struct {
 	// Lock order: innermost. Nothing is taken while it is held.
 	abandonMu sync.Mutex
 	// abandonMarkerWritten latches once THIS process has persisted a marker for a child of its
-	// OWN. From that instant the file in the identity dir describes the orphan the successor
+	// OWN. From that instant the file in the daemon_state dir describes the orphan the successor
 	// must inherit -- not the inherited one any clear path in this process is reasoning about
 	// -- so no clear may remove it. A latch rather than a comparison because there is nothing
 	// to compare: both markers live at the same path.
@@ -314,9 +363,16 @@ func runDaemon(rt *appRuntime) int {
 	health.SetCorruptStatusHook(func(quarantinedPath string) {
 		logging.Debug("daemon: healthcheck status file was corrupt, quarantined to %s and reset", quarantinedPath)
 	})
-	logging.Info("ProxSave daemon starting (run-at=%s max-run=%s healthcheck=%v mode=%s)",
-		d.cfg.SchedulerTime, d.maxRunDuration(), d.cfg.HealthcheckEnabled, d.cfg.HealthcheckMode)
+	d.logStart()
 	return d.run(rt.ctx)
+}
+
+// logStart is the daemon's first journal line: the state in INFO, what it was started with in
+// DEBUG before it (log-block rules: INFO is for the operator, details are evidence).
+func (d *daemon) logStart() {
+	logging.DebugStep(logging.GetDefaultLogger(), "daemon start", "run_at=%s max_run=%s healthcheck=%t mode=%s",
+		d.cfg.SchedulerTime, d.maxRunDuration(), d.cfg.HealthcheckEnabled, d.cfg.HealthcheckMode)
+	logging.Info("ProxSave daemon starting")
 }
 
 func (d *daemon) run(ctx context.Context) int {
@@ -338,6 +394,10 @@ func (d *daemon) run(ctx context.Context) int {
 	}
 	ownershipDone(nil)
 	defer releaseOwnership()
+
+	// Releases before 0.41.0 kept the daemon's files in identity/. Move them into daemon_state/
+	// before anything below reads one: the pid probe, the abandon marker, the status file.
+	movedFromIdentity := moveDaemonStateFromIdentity(d.cfg.BaseDir)
 
 	// The trusted-path gate for the operator scripts, once, before any tick can start
 	// one: a refused path is blanked here with a loud reason (validatePersonalScripts),
@@ -377,8 +437,20 @@ func (d *daemon) run(ctx context.Context) int {
 	// Record our PID so a STANDALONE backup run can find us to hand off its outcome, and clear it
 	// on shutdown. Best-effort: a pid-file hiccup must not stop the daemon. Published AFTER the
 	// SIGUSR1 handler above so the pid is never signallable while the default-terminate action holds.
+	//
+	// On the start that moved files out of identity/, the pid and the info record below are ALSO
+	// written there: the previous release drives an --upgrade to this one, restarts this daemon and
+	// then polls identity/ for 30 s to confirm the restart. Later starts write daemon_state/ only;
+	// this release's what's-new check removes the identity/ copies (removeLegacyDaemonCopies).
 	if err := health.WriteDaemonPID(d.cfg.BaseDir, os.Getpid()); err != nil {
 		logging.Debug("daemon: write pid file failed: %v", err)
+	}
+	if movedFromIdentity {
+		if err := health.WriteLegacyDaemonPID(d.cfg.BaseDir, os.Getpid()); err != nil {
+			logging.Debug("daemon state: write .daemon.pid to identity/ failed error=%v", err)
+		} else {
+			logging.Debug("daemon state: wrote .daemon.pid also to identity/ for the release that ran the upgrade")
+		}
 	}
 	// Alongside the bare pid (the SIGUSR1 handoff contract), record the daemon's IDENTITY -- the
 	// binary it booted from, version/commit, start time -- in the companion .daemon_info.json, so a
@@ -386,14 +458,22 @@ func (d *daemon) run(ctx context.Context) int {
 	// the running binary behind the file on disk?") is answered separately and hash-free via
 	// /proc/<pid>/exe (see daemon_state.go), so nothing is hashed here. Best-effort: a write hiccup is
 	// only Debug-logged and must not fail startup.
-	if err := health.WriteDaemonInfo(d.cfg.BaseDir, health.DaemonInfo{
+	info := health.DaemonInfo{
 		PID:      os.Getpid(),
 		ExecPath: d.execPath,
 		Version:  version.String(),
 		Commit:   version.Commit,
 		StartTS:  daemonStartTS,
-	}); err != nil {
+	}
+	if err := health.WriteDaemonInfo(d.cfg.BaseDir, info); err != nil {
 		logging.Debug("daemon: write daemon info failed: %v", err)
+	}
+	if movedFromIdentity {
+		if err := health.WriteLegacyDaemonInfo(d.cfg.BaseDir, info); err != nil {
+			logging.Debug("daemon state: write .daemon_info.json to identity/ failed error=%v", err)
+		} else {
+			logging.Debug("daemon state: wrote .daemon_info.json also to identity/ for the release that ran the upgrade")
+		}
 	}
 	d.publishDaemonRuntime(daemonStartTS, scriptDiagnostics)
 	defer d.removeDaemonFiles()
@@ -408,11 +488,20 @@ func (d *daemon) run(ctx context.Context) int {
 	// turns healthchecks on later.
 	d.loadAbandonMarker()
 
-	if d.cfg.HealthcheckEnabled {
+	// Self mode resolves its ping URLs here. A centralized daemon resolves them with the
+	// schedule negotiation below: its config poll is the schedule's first attempt.
+	if d.cfg.HealthcheckEnabled && !d.relayNegotiatesSchedule() {
 		if r := d.buildReporter(ctx); r != nil {
 			d.setReporter(r)
 		}
 	}
+
+	// The schedule block, once, before any background loop can log: the cadence the scheduler
+	// is about to run on, reported ahead of the heartbeat and update lines. A refused second
+	// instance returned above and prints none. In centralized mode it is followed by the notify
+	// level and, when the poll failed or could not be sent, the ping URLs blocks, all read from
+	// the same answers; the reporter is set from them.
+	d.logScheduleStart(ctx)
 
 	// loopCtx is how an ABANDONED run stops the background loops. They all return ONLY on
 	// their context being done, and on the abandon path the caller's context is still live --
@@ -583,29 +672,41 @@ func (d *daemon) processManualOutcome(ctx context.Context) {
 	}
 }
 
-// scheduleLoop waits for the next daily run time and supervises a backup, until the context
-// is cancelled. It returns true when a run had to ABANDON a child the kernel will not let us
-// reap: there is nothing useful to schedule behind such a child (it still holds the backup
-// lock, so tomorrow's run would only exit ExitBackupSkipped), so the loop unwinds and lets
-// run() exit for a systemd restart instead.
+// scheduleLoop waits for the next run of the cadence in effect and supervises a backup, until
+// the context is cancelled. run() reported that cadence before the first "next backup" line
+// (logScheduleStart); while a SCHEDULER_* value is invalid, the not-applied block is printed
+// again before every later one. It returns true when a run had to ABANDON a child the kernel
+// will not let us reap: there is nothing useful to schedule behind such a child (it still
+// holds the backup lock, so the next run would only exit ExitBackupSkipped), so the loop
+// unwinds and lets run() exit for a systemd restart instead.
+//
+// A heartbeat that gets the relay's confirmation of the schedule (retryScheduleOnHeartbeat)
+// wakes the wait through scheduleChanged: the loop then prints the next backup of the cadence
+// now in effect and waits on it. A wake left over from a confirmation that landed during a run
+// is dropped at the top of the loop, whose next line already reflects it.
 func (d *daemon) scheduleLoop(ctx context.Context) bool {
-	for {
-		next, err := cron.NextDaily(d.now(), d.cfg.SchedulerTime)
-		if err != nil {
-			logging.Error("daemon: invalid SCHEDULER_TIME %q (%v); using %s", d.cfg.SchedulerTime, err, cron.DefaultTime)
-			next, _ = cron.NextDaily(d.now(), cron.DefaultTime)
+	for first := true; ; first = false {
+		select {
+		case <-d.scheduleChanged:
+		default:
 		}
+		if !first {
+			d.logScheduleNotAppliedAgain()
+		}
+		next := d.nextScheduledRun(d.now())
 		wait := next.Sub(d.now())
 		if wait < 0 {
 			wait = 0
 		}
-		logging.Info("daemon: next backup at %s (in %s)", next.Format("2006-01-02 15:04"), wait.Round(time.Second))
+		logging.Info("daemon: next backup at %s (in %s)", next.Format("2006-01-02 15:04"), cron.WaitLabel(wait))
 
 		timer := time.NewTimer(wait)
 		select {
 		case <-ctx.Done():
 			timer.Stop()
 			return false
+		case <-d.scheduleChanged:
+			timer.Stop()
 		case <-timer.C:
 			if d.runOnce(ctx) {
 				return true
@@ -1097,7 +1198,7 @@ func (d *daemon) loadAbandonMarker() {
 	if err != nil {
 		// We could not read it, so we do not know whether an abandon happened: do NOT degrade on
 		// a guess. But a file we failed to read is still probably there, so remember that this
-		// process owes the identity dir a cleanup once a run proves the wedge is over -- see
+		// process owes the daemon_state dir a cleanup once a run proves the wedge is over -- see
 		// abandonMarkerOnDisk.
 		d.abandonMarkerOnDisk.Store(true)
 		logging.Debug("daemon: read abandoned-child marker failed: %v", err)
@@ -1334,7 +1435,7 @@ func procIsBackupChild(pid int) bool {
 // nothing at all otherwise.
 func (d *daemon) reviewAbandonDegrade() {
 	// Cheap pre-check for the abandon path: once the latch is closed this process is on its
-	// way out after abandoning a child of its OWN, and the marker in the identity dir is the
+	// way out after abandoning a child of its OWN, and the marker in the daemon_state dir is the
 	// fresh one abandonChild just wrote for the successor -- not the inherited one this review
 	// is about. This is an optimisation, NOT the barrier: the latch and this load are separate
 	// atomics, so a beat that read it a moment too early is still on its way to the clear. The
@@ -1371,7 +1472,7 @@ func (d *daemon) reviewAbandonDegrade() {
 //     deliberately reads as a real abandon (WriteAbandon does not fsync, and these hosts get
 //     hard-reset). There is nothing to probe, so the run's own evidence is all there is and
 //     only a code that proves the run REACHED the lock qualifies; see exitProvesLockWasTaken.
-//   - Nothing was degraded, but a file is still owed to the identity dir: one this process
+//   - Nothing was degraded, but a file is still owed to the daemon_state dir: one this process
 //     could not READ at startup (ReadAbandon's error branch), or one it deliberately KEPT
 //     because backups are administratively off. Neither is a free pass, and the SAME evidence
 //     rule applies. Both of those states are reached with a marker that may name a LIVE orphan
@@ -1764,12 +1865,29 @@ func (d *daemon) heartbeatLoop(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			d.beat(ctx)
+			d.beatTick(ctx)
 		}
 	}
 }
 
+// beatTick is one heartbeat after the first: while the relay has not confirmed the backup
+// schedule, its config poll is the schedule's retry (attempt=1/1), and that poll also
+// re-resolves the ping URLs, so the beat does not poll a second time.
+func (d *daemon) beatTick(ctx context.Context) {
+	if d.aliveSilenced.Load() {
+		return
+	}
+	polled := d.retryScheduleOnHeartbeat(ctx)
+	d.beatWith(ctx, polled)
+}
+
 func (d *daemon) beat(ctx context.Context) {
+	d.beatWith(ctx, false)
+}
+
+// beatWith is one heartbeat; polled says this tick already sent a config poll, which then
+// stands for the beat's own lazy re-resolve.
+func (d *daemon) beatWith(ctx context.Context, polled bool) {
 	// Silenced by an abandon in progress: the daemon is exiting and has already had the last
 	// word on this check. Drop the tick whole -- no ping, and no record either, so nothing
 	// here refreshes the liveness timestamp of a daemon that is dying.
@@ -1786,7 +1904,7 @@ func (d *daemon) beat(ctx context.Context) {
 	// this would let an unrelated process wedge runOnce, which is the exact failure mode this
 	// whole change removes. Only the transmission below needs the lock.
 	r := d.getReporter()
-	if (r == nil || !r.HasAliveURL()) && d.cfg.HealthcheckMode == config.HealthcheckModeCentralized {
+	if !polled && (r == nil || !r.HasAliveURL()) && d.cfg.HealthcheckMode == config.HealthcheckModeCentralized {
 		if nr := d.buildReporter(ctx); nr != nil && nr.HasAliveURL() {
 			d.setReporter(nr)
 			r = nr
@@ -1979,40 +2097,56 @@ func (d *daemon) buildReporter(ctx context.Context) *health.Reporter {
 	}
 
 	// centralized
-	alive, backup, checks, secretUsed, err := d.fetchCentralized(ctx)
-	if err != nil {
-		// A DEFINITIVE rejection means the on-disk relay secret is no longer usable:
-		//   ErrHCAuth   - the secret no longer matches the server's stored hash (a
-		//                 server DB restore/rollback, or a lost double-issuance race);
-		//   ErrHCParked - the server purged this host's row (its unused account was
-		//                 parked, design 11.2), so the token authenticates nothing.
-		// Both clear the secret so the next throttled maybeProvisionRelaySecret mints a
-		// fresh one (a parked host is re-admitted as a recreation) - restoring the
-		// self-heal. ONLY these two: a transient / unreachable / not-ready / unknown
-		// error must NOT churn a possibly-good secret. The clear is value-guarded under
-		// LockNotifySecret against the EXACT secret fetchCentralized used (secretUsed),
-		// so a concurrent hook that persisted+confirmed a fresh secret is never
-		// clobbered (which would strand the host).
-		if errors.Is(err, health.ErrHCAuth) || errors.Is(err, health.ErrHCParked) {
-			if cleared, rmErr := identity.RemoveNotifySecretIfMatches(d.cfg.BaseDir, secretUsed); rmErr != nil {
-				logging.Debug("daemon: clear rejected relay secret failed: %v", rmErr)
-			} else if cleared {
-				logging.Debug("daemon: relay secret rejected by server (auth/parked); cleared for re-provisioning")
-			} else {
-				logging.Debug("daemon: relay secret rejected by server (auth/parked) but on-disk secret changed concurrently; keeping it")
-			}
-		}
-		// The heartbeat loop retries this every interval; warn ONCE (so the
-		// operator sees healthchecks isn't working, e.g. Telegram not paired yet),
-		// then drop to Debug to avoid a recurring WARN every few minutes.
+	p := d.pollCentralized(ctx, "", "")
+	d.afterFailedPoll(p)
+	return d.reporterFromPoll(p, false)
+}
+
+// afterFailedPoll clears the relay secret a poll was refused with. A DEFINITIVE rejection means
+// the on-disk relay secret is no longer usable:
+//
+//	ErrHCAuth   - the secret no longer matches the server's stored hash (a
+//	              server DB restore/rollback, or a lost double-issuance race);
+//	ErrHCParked - the server purged this host's row (its unused account was
+//	              parked, design 11.2), so the token authenticates nothing.
+//
+// Both clear the secret so the next throttled maybeProvisionRelaySecret mints a fresh one (a
+// parked host is re-admitted as a recreation) - restoring the self-heal. ONLY these two: a
+// transient / unreachable / not-ready / unknown error must NOT churn a possibly-good secret.
+// The clear is value-guarded under LockNotifySecret against the EXACT secret the poll used, so
+// a concurrent hook that persisted+confirmed a fresh secret is never clobbered (which would
+// strand the host).
+func (d *daemon) afterFailedPoll(p configPoll) {
+	if p.err == nil || (!errors.Is(p.err, health.ErrHCAuth) && !errors.Is(p.err, health.ErrHCParked)) {
+		return
+	}
+	if cleared, rmErr := identity.RemoveNotifySecretIfMatches(d.cfg.BaseDir, p.secret); rmErr != nil {
+		logging.Debug("daemon: clear rejected relay secret failed: %v", rmErr)
+	} else if cleared {
+		logging.Debug("daemon: relay secret rejected by server (auth/parked); cleared for re-provisioning")
+	} else {
+		logging.Debug("daemon: relay secret rejected by server (auth/parked) but on-disk secret changed concurrently; keeping it")
+	}
+}
+
+// reporterFromPoll is the Reporter a centralized poll resolves: its URLs, or on a failed poll
+// the ones cached in backup.env. A failed poll warns ONCE (so the operator sees healthchecks
+// isn't working, e.g. Telegram not paired yet), then drops to Debug to avoid a recurring WARN
+// every few minutes; quiet records the failure as warned without the WARNING, for the start,
+// whose ping URLs block reports it instead.
+func (d *daemon) reporterFromPoll(p configPoll, quiet bool) *health.Reporter {
+	alive, backup, checks := p.cfg.AliveURL, p.cfg.BackupURL, p.cfg.Checks
+	if p.err != nil {
 		d.mu.Lock()
 		firstFail := !d.fetchWarned
 		d.fetchWarned = true
 		d.mu.Unlock()
-		if firstFail {
-			logging.Warning("daemon: healthcheck centralized fetch failed: %v", err)
-		} else {
-			logging.Debug("daemon: healthcheck centralized fetch failed: %v", err)
+		switch {
+		case quiet:
+		case firstFail:
+			logging.Warning("daemon: healthcheck centralized fetch failed: %v", p.err)
+		default:
+			logging.Debug("daemon: healthcheck centralized fetch failed: %v", p.err)
 		}
 		// Fall back to any URLs cached in backup.env so a transient server outage
 		// still lets us report.
@@ -2039,48 +2173,91 @@ func (d *daemon) registerReporterSecrets(alive, backup string, checks map[string
 	d.registerSecrets(secrets...)
 }
 
-// fetchCentralized asks the proxsave_server for this client's ping URLs, reusing
-// the same identity/secret as /api/notify. The optional updates URL rides in the additive
-// Checks map (absent on old servers -> "").
-func (d *daemon) fetchCentralized(ctx context.Context) (alive, backup string, checks map[string]string, secretUsed string, err error) {
+// errNoRelaySecret is a centralized poll that could not be sent: no relay secret on disk and
+// none provisioned.
+var errNoRelaySecret = errors.New("no relay secret on disk (centralized provisioning pending)")
+
+// configPoll is one centralized config poll: what it sent and what came back.
+type configPoll struct {
+	sent      bool // a request went out (a relay secret was available)
+	status    int  // the HTTP status of the answer; 0 when there was none
+	cfg       health.CentralizedConfig
+	err       error
+	secret    string         // the exact secret sent, the comparand of a rejected-secret clear
+	frequency cron.Frequency // the schedule frequency sent
+	notify    notifyPolicy   // the notify policy whose ack cfg carries
+}
+
+// relaySecret is the relay secret on disk or, when there is none yet, one from a THROTTLED,
+// Telegram-independent provisioning (hook b): the server issues the relay secret for a chat-less
+// known ServerID. "" when there is none; the caller degrades gracefully (buildReporter warns
+// once, the heartbeat loop retries, and beats still record no_url).
+func (d *daemon) relaySecret(ctx context.Context) string {
 	secret, _ := identity.LoadNotifySecret(d.cfg.BaseDir)
 	if strings.TrimSpace(secret) == "" {
-		// No relay secret yet. Attempt a THROTTLED, Telegram-independent provisioning (hook b):
-		// the server now issues the relay secret for a chat-less known ServerID. On success,
-		// continue with the fresh secret; otherwise degrade gracefully (buildReporter warns once,
-		// the heartbeat loop retries, and beats still record no_url).
 		secret = d.maybeProvisionRelaySecret(ctx)
 		if strings.TrimSpace(secret) == "" {
-			return "", "", nil, "", fmt.Errorf("no relay secret on disk (centralized provisioning pending)")
+			return ""
 		}
 	}
+	return secret
+}
+
+// pollCentralized asks the proxsave_server for this client's ping URLs, reusing the same
+// identity/secret as /api/notify. The optional updates URL rides in the additive Checks map
+// (absent on old servers -> ""). With op set, the transport stages are logged in DEBUG under
+// op, each message after prefix (health.PollLog); with op empty the poll logs nothing.
+func (d *daemon) pollCentralized(ctx context.Context, op, prefix string) configPoll {
+	return d.pollCentralizedTo(ctx, logging.GetDefaultLogger(), op, prefix)
+}
+
+// pollCentralizedTo is pollCentralized with the transport stages logged to logger.
+func (d *daemon) pollCentralizedTo(ctx context.Context, logger *logging.Logger, op, prefix string) configPoll {
+	secret := d.relaySecret(ctx)
+	if secret == "" {
+		return configPoll{err: errNoRelaySecret}
+	}
+	// One config poll at a time (pollMu), taken only now: relaySecret can wait on the
+	// relay-secret flock, and that wait must not hold back every other poll of the daemon.
+	d.pollMu.Lock()
+	defer d.pollMu.Unlock()
 	// Send the authoritative enabled-notification set so the server provisions one check per
 	// enabled channel (Fase 2C). Always non-nil in centralized mode (empty -> "none" sentinel).
 	// The notify threshold rides the same poll (contract 1), so the relay keeps the notify checks
 	// event-driven for warning/failure and periodic for always. An unrecognised NOTIFY_ON is
 	// negotiated as always: that is what the run does with it. Both come from backup.env as
 	// last read before a scheduled run (refreshNotifyPolicy), so a hand edit reaches the relay
-	// without a daemon restart.
+	// without a daemon restart. The schedule frequency rides every poll too: the relay puts the
+	// checks back to daily on a poll with channels and no frequency.
 	want := d.wantedNotifyPolicy()
-	// Return the exact secret sent to the server as secretUsed so buildReporter can
-	// value-guard an ErrHCAuth secret removal against precisely this comparand.
-	cfg, ferr := health.FetchCentralizedConfigWithPolicy(ctx, nil, d.cfg.ServerAPIHost, d.cfg.ServerID, secret, want.channels, want.notifyOn)
-	if ferr != nil {
-		return "", "", nil, secret, ferr
+	freq := d.wantedFrequency()
+	fetch := func(want notifyPolicy) (health.CentralizedConfig, int, error) {
+		plog := health.PollLog{}
+		if op != "" {
+			plog = health.PollLog{Logger: logger, Operation: op, Prefix: prefix,
+				URLDetail: fmt.Sprintf("frequency=%s notify_on=%s channels=%s", freq, want.notifyOn, want.channelList())}
+		}
+		return health.FetchCentralizedConfigPoll(ctx, nil, d.cfg.ServerAPIHost, d.cfg.ServerID, secret,
+			want.channels, want.notifyOn, string(freq), plog)
+	}
+	cfg, status, err := fetch(want)
+	p := configPoll{sent: true, status: status, cfg: cfg, err: err, secret: secret, frequency: freq, notify: want}
+	if err != nil {
+		return p
 	}
 	// A poll that sent a policy no longer wanted may have reached the relay after a newer one
 	// and put the old policy back there: send the wanted one again, so the relay's last word is
 	// always the policy wanted now. Every answer is recorded, the last resend's included: the
 	// ack is recorded before the bound is checked.
-	for i := 0; d.recordNotifyPolicyAck(want, cfg.NotifyPolicy) && i < notifyPolicyResends; i++ {
+	for i := 0; d.recordNotifyPolicyAck(want, p.cfg.NotifyPolicy) && i < notifyPolicyResends; i++ {
 		want = d.wantedNotifyPolicy()
-		next, err := health.FetchCentralizedConfigWithPolicy(ctx, nil, d.cfg.ServerAPIHost, d.cfg.ServerID, secret, want.channels, want.notifyOn)
-		if err != nil {
+		next, nextStatus, nextErr := fetch(want)
+		if nextErr != nil {
 			break
 		}
-		cfg = next
+		p.cfg, p.status, p.notify = next, nextStatus, want
 	}
-	return cfg.AliveURL, cfg.BackupURL, cfg.Checks, secret, nil
+	return p
 }
 
 const (
@@ -2122,36 +2299,54 @@ var provisionRelaySecretFn = notify.ProvisionRelaySecret
 func provisionRelaySecretAttempt(
 	ctx context.Context, cfg *config.Config, logger *logging.Logger,
 ) (string, time.Duration) {
+	secret, retryAfter, _ := provisionRelaySecretAttemptReach(ctx, cfg, logger)
+	return secret, retryAfter
+}
+
+// provisionRelaySecretAttemptReach is provisionRelaySecretAttempt that also says how far an
+// attempt that yielded no secret got with the relay: reachNone when no HTTP answer came (none
+// was asked for, or the request failed in transport), reachNotReady for every answer that gave
+// no secret (a 429, an unexpected status, a secret the relay already issued).
+func provisionRelaySecretAttemptReach(
+	ctx context.Context, cfg *config.Config, logger *logging.Logger,
+) (string, time.Duration, pollReach) {
 	if cfg == nil || !cfg.HealthcheckEnabled || cfg.HealthcheckMode != config.HealthcheckModeCentralized {
-		return "", 0
+		return "", 0, reachNone
 	}
 	baseDir := strings.TrimSpace(cfg.BaseDir)
 	if baseDir == "" {
-		return "", 0
+		return "", 0, reachNone
 	}
 	if s, _ := identity.LoadNotifySecret(baseDir); strings.TrimSpace(s) != "" {
-		return strings.TrimSpace(s), 0 // already provisioned; do not churn
+		return strings.TrimSpace(s), 0, reachAnswered // already provisioned; do not churn
 	}
 	serverID := strings.TrimSpace(cfg.ServerID)
 	if serverID == "" {
-		return "", 0
+		return "", 0, reachNone
 	}
 	if _, err := provisionRelaySecretFn(ctx, cfg.ServerAPIHost, serverID, baseDir, logger); err != nil {
 		var limited *notify.RelayProvisionRateLimitError
 		if errors.As(err, &limited) {
 			logging.Debug(
 				"daemon: relay-secret provisioning rate limited (server backoff honored)")
-			return "", limited.RetryAfter
+			return "", limited.RetryAfter, reachNotReady
 		}
 		logging.Debug("daemon: relay-secret provisioning attempt failed (will retry later): %v", err)
-		return "", 0
+		var te *serverbot.TransportError
+		if errors.As(err, &te) {
+			return "", 0, reachNone
+		}
+		return "", 0, reachNotReady
 	}
 	// Reload regardless of the provisioned flag: ProvisionRelaySecret returns false when it
 	// adopts a secret a concurrent provisioner persisted under the cross-process lock, so a
 	// usable secret may be on disk even then; LoadNotifySecret yields "" when there is
 	// genuinely none, degrading gracefully.
 	s, _ := identity.LoadNotifySecret(baseDir)
-	return strings.TrimSpace(s), 0
+	if strings.TrimSpace(s) == "" {
+		return "", 0, reachNotReady
+	}
+	return strings.TrimSpace(s), 0, reachAnswered
 }
 
 // provisionRelaySecretBestEffort keeps the one-shot setup callers' established
@@ -2178,7 +2373,10 @@ func (d *daemon) maybeProvisionRelaySecret(ctx context.Context) string {
 	d.provisionRetryAt = now.Add(daemonProvisionRetryInterval)
 	d.mu.Unlock()
 
-	secret, retryAfter := provisionRelaySecretAttempt(ctx, d.cfg, d.logger)
+	secret, retryAfter, reach := provisionRelaySecretAttemptReach(ctx, d.cfg, d.logger)
+	d.mu.Lock()
+	d.provisionReach = reach
+	d.mu.Unlock()
 	if retryAfter > daemonProvisionRetryInterval {
 		retryAt := d.now().Add(
 			retryAfter + daemonProvisionRetryJitter(d.cfg.ServerID, retryAfter))
@@ -2282,7 +2480,7 @@ func (d *daemon) buildBackupCmd(ctx context.Context, tail *tailBuffer, rid strin
 		cmd = exec.CommandContext(ctx, d.execPath, args...)
 	}
 	// Correlate the child's per-channel notify-results handoff with THIS run: the child
-	// writes <baseDir>/identity/.notify_results.json tagged with this rid, and the daemon
+	// writes <baseDir>/daemon_state/.notify_results.json tagged with this rid, and the daemon
 	// rejects any file whose rid does not match. Preserve the inherited environment (PATH,
 	// etc.) via os.Environ() so the child still finds its tools.
 	if rid != "" {

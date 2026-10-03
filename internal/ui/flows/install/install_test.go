@@ -154,9 +154,10 @@ func TestCollectWizardDataDeclineAll(t *testing.T) {
 
 	// Single aligned form: inactive dependent rows are skipped. Fresh install
 	// defaults to the daemon, so the Healthchecks and Notify level rows are active too:
-	// Enter through the 10 active rows reaches Continue; the final Enter submits.
+	// Enter through the 11 active rows (Frequency included; Weekday and Day of month are
+	// inactive on daily) reaches Continue; the final Enter submits.
 	d.waitScreen("Configuration")
-	for i := 0; i < 11; i++ {
+	for i := 0; i < 12; i++ {
 		d.keys("enter")
 	}
 
@@ -234,9 +235,9 @@ func TestCollectWizardDataPrefillNoOp(t *testing.T) {
 	}()
 
 	// Single aligned form, everything prefilled/active: Enter through all
-	// 13 rows plus the Continue button is the no-op edit.
+	// 14 rows (Frequency included) plus the Continue button is the no-op edit.
 	d.waitScreen("Configuration")
-	for i := 0; i < 14; i++ {
+	for i := 0; i < 15; i++ {
 		d.keys("enter")
 	}
 
@@ -293,10 +294,10 @@ func TestCollectWizardDataLeavesEmailFallbackToTheEngine(t *testing.T) {
 
 	resCh := collectWizardAsync(t, d, template)
 
-	// Same no-op-edit gesture as TestCollectWizardDataPrefillNoOp: 13 active rows
+	// Same no-op-edit gesture as TestCollectWizardDataPrefillNoOp: 14 active rows
 	// plus Continue. No form row is added or removed by leaving the field nil.
 	d.waitScreen("Configuration")
-	for i := 0; i < 14; i++ {
+	for i := 0; i < 15; i++ {
 		d.keys("enter")
 	}
 
@@ -344,9 +345,9 @@ func TestCollectWizardDataEditWithoutSchedulerModeDefaultsCron(t *testing.T) {
 		resCh <- result{data, err}
 	}()
 
-	// All toggles default off -> 8 active rows + Continue.
+	// All toggles default off -> 9 active rows (Frequency included) + Continue.
 	d.waitScreen("Configuration")
-	for i := 0; i < 9; i++ {
+	for i := 0; i < 10; i++ {
 		d.keys("enter")
 	}
 
@@ -783,10 +784,28 @@ func TestCollectWizardDataNotifyLevel(t *testing.T) {
 		d.waitScreen("Configuration")
 		d.keys("down down down down down down down down") // 8 downs -> Notify level row
 		d.keys("right")                                   // warning -> failure
-		d.keys("down down enter")                         // Run at, Continue, submit
+		d.keys("down down down enter")                    // Frequency, Run at, Continue, submit
 		res := <-resCh
 		if res.err != nil || res.data.NotifyOn != "failure" {
 			t.Fatalf("notify=%q err=%v, want failure", res.data.NotifyOn, res.err)
 		}
 	})
+}
+
+// Frequency and Weekday reach the wizard data; Day of month keeps its default while inactive.
+func TestCollectWizardDataScheduleWeekly(t *testing.T) {
+	d := newDriver(t)
+	resCh := collectWizardAsync(t, d, "")
+	d.waitScreen("Configuration")
+	d.keys("down down down down down down down down down") // 9 downs -> Frequency row
+	d.keys("right")                                        // daily -> weekly
+	d.keys("down right right right right")                 // Weekday: mon -> fri
+	d.keys("down down enter")                              // Run at, Continue, submit
+	res := <-resCh
+	if res.err != nil {
+		t.Fatalf("unexpected error: %v", res.err)
+	}
+	if res.data.ScheduleFrequency != "weekly" || res.data.ScheduleWeekday != "fri" || res.data.ScheduleMonthDay != "1" {
+		t.Fatalf("schedule = %q %q %q; want weekly fri 1", res.data.ScheduleFrequency, res.data.ScheduleWeekday, res.data.ScheduleMonthDay)
+	}
 }

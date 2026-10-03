@@ -108,18 +108,23 @@ alert you on a run that never happens; otherwise it notifies every outcome, what
 value. The conditions, and how the run checks them, are in
 [HEALTHCHECKS.md](HEALTHCHECKS.md#alert-delivery-and-notify_on).
 
-Every run states the setting and its decision in the notification block of its log:
+Every run states the setting and its decision in the notification block of its log, the
+outcome last:
 
 ```text
-INFO     Notification setting: NOTIFY_ON=warning
-INFO     Healthchecks status: ready
-INFO     Notification filter: warning
+INFO     Applying notification filter...
+INFO       Setting: warning
+INFO       Healthchecks status: ready
+INFO       Filter in effect: warning
+INFO     ✓ Notification filter: applied
 ```
 
-and again at dispatch, where a filtered channel is told apart from a switched-off one:
+When the monitor cannot be confirmed, the block ends with the reason and
+`⚠ Notification filter: not applied`, and `Filter in effect` reads `always`. The outcome is
+stated again at dispatch, where a filtered channel is told apart from a switched-off one:
 
 ```text
-INFO     Notification filter: warning
+INFO     ✓ Notification filter: applied
 INFO     Notifications: skipped
 SKIP     Email: filtered                                        # enabled, below the filter
 SKIP     Gotify: disabled                                       # GOTIFY_ENABLED=false

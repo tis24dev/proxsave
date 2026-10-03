@@ -9,7 +9,10 @@ import "github.com/tis24dev/proxsave/internal/logging"
 // context.Canceled / context.DeadlineExceeded); the original's raw string is NOT
 // redacted, so log the TransportError itself, never errors.Unwrap(it) directly.
 type TransportError struct {
-	Op       string // the failing stage: "encode" | "build" | "request" | "read"
+	Op string // the failing stage: "encode" | "build" | "request" | "read"
+	// Stage is the stage the DEBUG "failed stage=" line named: "encode" | "build" | "dns" |
+	// "connect" | "request" | "response"; "" when Do had no logger to trace a request failure.
+	Stage    string
 	redacted string // pre-redacted message (URL stripped, secret masked)
 	err      error  // original, for errors.Is / Unwrap only
 }

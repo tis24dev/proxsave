@@ -4,7 +4,7 @@
 // section to report REAL transmission (heartbeat / backup outcome) instead of a
 // cosmetic "active" derived from a secret merely being present on disk.
 //
-// Writes marshal into a unique private sibling confined beneath the identity
+// Writes marshal into a unique private sibling confined beneath the daemon_state
 // directory, then rename it over the destination so a reader never observes a torn
 // file. They deliberately do NOT reuse identity.PersistNotifySecret (that path sets
 // the immutable +i attribute, which would block every rewrite). This file stays
@@ -154,12 +154,12 @@ type UpdateRecord struct {
 	Latest    string     `json:"latest,omitempty"`
 }
 
-// StatusPath returns the shared status-file path under the identity directory,
-// which both the daemon process and the run process already agree on (same
-// convention as identity.NotifySecretPath). Kept a plain Join with no TrimSpace
-// so the daemon and the section always resolve the byte-identical path.
+// StatusPath returns the shared status-file path under the daemon_state directory,
+// which both the daemon process and the run process agree on. Kept a plain Join
+// with no TrimSpace so the daemon and the section always resolve the
+// byte-identical path.
 func StatusPath(baseDir string) string {
-	return filepath.Join(baseDir, "identity", ".healthcheck_status.json")
+	return filepath.Join(DaemonStateDir(baseDir), ".healthcheck_status.json")
 }
 
 // LoadStatus reads the status file tolerantly. A missing OR empty file is a
@@ -371,7 +371,8 @@ func writeStatus(baseDir string, st Status) error {
 
 var atomicJSONTempSequence atomic.Uint64
 
-// writeJSONAtomic writes v as indented JSON to path atomically. Every operation after
+// writeJSONAtomic writes v as indented JSON to path atomically. The parent is created
+// root-only (DaemonStateDirPerm) when missing. Every operation after
 // creating the parent is relative to an os.Root opened on that directory, so neither a
 // temporary-file symlink nor a concurrent directory rename can redirect the write outside
 // it. A process-local sequence and O_EXCL give concurrent writers separate temporary files;
@@ -379,7 +380,7 @@ var atomicJSONTempSequence atomic.Uint64
 // immutable +i attribute because that would block every rewrite.
 func writeJSONAtomic(path string, v any) error {
 	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0o750); err != nil {
+	if err := os.MkdirAll(dir, DaemonStateDirPerm); err != nil {
 		return fmt.Errorf("create dir %s: %w", dir, err)
 	}
 	root, err := os.OpenRoot(dir)

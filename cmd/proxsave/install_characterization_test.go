@@ -101,7 +101,7 @@ func TestInstallWizardCharacterization_FreshDeclineAll(t *testing.T) {
 	// toggle declined via bare Enter; default scheduler (daemon), default
 	// healthchecks mode (centralized, daemon-only prompt), default notify level
 	// (warning, asked only with a monitor), + run-at accepted.
-	run := runWizardCharacterization(t, "", strings.Repeat("\n", 10))
+	run := runWizardCharacterization(t, "", strings.Repeat("\n", 11))
 	if run.err != nil {
 		t.Fatalf("wizard error: %v", run.err)
 	}
@@ -131,6 +131,7 @@ func TestInstallWizardCharacterization_FreshEnableAll(t *testing.T) {
 		"",      // scheduler engine: default daemon
 		"self",  // healthchecks mode (daemon-only): self
 		"",      // notify level: default warning
+		"",      // frequency: default daily
 		"03:30", // run at
 	}, "\n") + "\n"
 	run := runWizardCharacterization(t, "", script)
@@ -152,7 +153,7 @@ func TestInstallWizardCharacterization_EditExistingNoOp(t *testing.T) {
 	// setting (including BOT_TELEGRAM_TYPE=personal and
 	// EMAIL_DELIVERY_METHOD=pmf, which the wizard must not reset).
 	existing := editedExistingConfig()
-	script := "2\n" + strings.Repeat("\n", 15)
+	script := "2\n" + strings.Repeat("\n", 16)
 	run := runWizardCharacterization(t, existing, script)
 	if run.err != nil {
 		t.Fatalf("wizard error: %v", run.err)

@@ -5,7 +5,7 @@
 // check DOWN instead of sending a success heartbeat that flips it green (and fires a
 // "recovered" alert) while the orphan still holds the backup lock and no backup can run.
 //
-// It is a sibling of the pid/status files in the identity dir, written with the same atomic
+// It is a sibling of the pid/status files in the daemon_state dir, written with the same atomic
 // rename idiom, and stays logging-free + stdlib-only like them.
 
 package health
@@ -42,18 +42,18 @@ type AbandonRecord struct {
 }
 
 // AbandonPath returns the abandoned-child marker path, a sibling of the status and pid files
-// in the identity dir (same convention as StatusPath / DaemonPIDPath).
+// in the daemon_state dir (same convention as StatusPath / DaemonPIDPath).
 func AbandonPath(baseDir string) string {
-	return filepath.Join(baseDir, "identity", ".daemon_abandoned.json")
+	return filepath.Join(DaemonStateDir(baseDir), ".daemon_abandoned.json")
 }
 
-// WriteAbandon persists the marker atomically: MkdirAll the identity dir, WriteFile a ".tmp"
+// WriteAbandon persists the marker atomically: MkdirAll the daemon_state dir, WriteFile a ".tmp"
 // sibling at 0o600, then Rename over the final path so a reader sees either the old or the
 // new file, never a partial one.
 func WriteAbandon(baseDir string, rec AbandonRecord) error {
 	path := AbandonPath(baseDir)
 	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0o750); err != nil {
+	if err := os.MkdirAll(dir, DaemonStateDirPerm); err != nil {
 		return fmt.Errorf("create dir %s: %w", dir, err)
 	}
 	data, err := json.MarshalIndent(rec, "", "  ")
