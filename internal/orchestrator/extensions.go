@@ -623,7 +623,16 @@ func (o *Orchestrator) dispatchLogFile(ctx context.Context, logFilePath string) 
 				if o.copyLogToCloudFn != nil {
 					upload = o.copyLogToCloudFn
 				}
+				var permErr *logPermissionsError
 				switch err := upload(context.Background(), logFilePath, destination); {
+				case errors.As(err, &permErr):
+					o.logger.Debug("Cloud log copy: %s uploaded, mode not set: %v", destination, permErr.err)
+					o.logger.Info("  Permissions failed: %s: %s", filepath.Base(destination), safefs.SystemErrorText(permErr.err))
+					if permErr.checksumNotVerified {
+						o.logger.Warning("%s Log copied to cloud, checksum not verified, permissions not set", theme.SymbolWarning)
+					} else {
+						o.logger.Warning("%s Log copied to cloud, permissions not set", theme.SymbolWarning)
+					}
 				case errors.Is(err, errLogChecksumNotVerified):
 					o.logger.Debug("Cloud log copy: %s uploaded, verified by size only", destination)
 					o.logger.Warning("%s Log copied to cloud, checksum not verified", theme.SymbolWarning)
@@ -703,23 +712,37 @@ func (o *Orchestrator) copyLogToCloud(ctx context.Context, sourcePath, destPath 
 	if err := client.UploadToRemotePath(ctx, sourcePath, destPath, true); err != nil {
 		return err
 	}
-	if _, local := storage.LocalCloudRemote(o.cfg.CloudRemote); local && filepath.IsAbs(destPath) {
-		// rclone writes the log 0644. In a local CLOUD_REMOTE directory it gets the mode
-		// the Secondary log copy creates (copyFile, 0640), owner unchanged; a mode that
-		// cannot be set is a failed copy there too.
-		o.logger.Debug("Cloud log copy: setting mode 0640 on %s", destPath)
-		if err := safefs.Chmod(ctx, destPath, 0o640, o.fsIoTimeout()); err != nil {
-			o.logger.Debug("Cloud log copy: cannot set the mode of %s: %v", destPath, err)
-			return err
-		}
-	}
+	checksumNotVerified := false
 	for _, issue := range client.LastStoreIssues() {
 		if issue == storage.StoreIssueChecksumNotVerified {
-			return errLogChecksumNotVerified
+			checksumNotVerified = true
 		}
+	}
+	// rclone writes the log 0644. In a local CLOUD_REMOTE directory it gets the mode the
+	// Secondary log copy creates (copyFile, 0640), owner unchanged, on a filesystem that
+	// takes ownership; the log is there either way.
+	if _, err := client.SetLocalLogMode(ctx, destPath); err != nil {
+		return &logPermissionsError{err: err, checksumNotVerified: checksumNotVerified}
+	}
+	if checksumNotVerified {
+		return errLogChecksumNotVerified
 	}
 	return nil
 }
+
+// logPermissionsError is a log that reached a local CLOUD_REMOTE directory whose mode
+// could not be set: dispatchLogFile prints "  Permissions failed: <log>: <cause>" and
+// closes the copy with "Log copied to cloud, permissions not set".
+type logPermissionsError struct {
+	err                 error
+	checksumNotVerified bool
+}
+
+func (e *logPermissionsError) Error() string {
+	return "log copied, permissions not set: " + e.err.Error()
+}
+
+func (e *logPermissionsError) Unwrap() error { return e.err }
 
 // errLogChecksumNotVerified is a log that reached the cloud verified by size only: the
 // verify path printed the "  Checksum failed" fact, and dispatchLogFile closes the copy

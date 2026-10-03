@@ -432,3 +432,57 @@ func TestCloudBlockLocalDirectoryPermissions(t *testing.T) {
 		"WARNING  ⚠ Cloud Storage (rclone): backup saved, permissions not set",
 	)
 }
+
+// Step [6], CLOUD_REMOTE a local directory that cannot be (re)created before the copy:
+// the Secondary's fact, then "✗ ... backup not saved".
+func TestCloudBlockLocalDirectoryNotCreated(t *testing.T) {
+	fakeRcloneOnPath(t, "#!/bin/sh\nexit 0\n")
+	blocker := filepath.Join(t.TempDir(), "file")
+	if err := os.WriteFile(blocker, []byte("x"), 0o600); err != nil {
+		t.Fatalf("write blocker: %v", err)
+	}
+	cfg := &config.Config{CloudEnabled: true, CloudRemote: filepath.Join(blocker, "cloud"), RcloneRetries: 1}
+	localFS := &storage.FilesystemInfo{Type: storage.FilesystemExt4, SupportsOwnership: true}
+	got := syncRealBackend(t, cfg, newRealCloud(t, cfg), localFS, writeArchive(t))
+	requireExactLines(t, got,
+		"STEP     Cloud Storage (rclone)",
+		"INFO     Storing backup...",
+		"INFO       Directory not created: not a directory",
+		"WARNING  ✗ Cloud Storage (rclone): backup not saved",
+	)
+}
+
+// Step [8], local directory: a log whose mode cannot be set is there anyway:
+// "  Permissions failed: <log>: <cause>" and "⚠ Log copied to cloud, permissions not set".
+func TestDispatchLogFileCloudLocalLogPermissionsFailed(t *testing.T) {
+	// copyto creates the directory but leaves no file, so the chmod after it fails.
+	fakeRcloneOnPath(t, "#!/bin/sh\n"+
+		"case \"$1\" in\n"+
+		"copyto) mkdir -p -m 0755 \"$(dirname \"$3\")\";;\n"+
+		"lsl) echo \"        7 2026-10-03 10:00:00.000000000 $(basename \"$2\")\";;\n"+
+		"esac\n")
+	root := filepath.Join(t.TempDir(), "cloud")
+	if detected, err := storage.NewFilesystemDetector(logging.New(types.LogLevelInfo, false)).DetectFilesystem(context.Background(), filepath.Dir(root)); err != nil || !detected.SupportsOwnership {
+		t.Skipf("the temporary directory's filesystem takes no ownership here (%v): the mode is not set at all", err)
+	}
+	var buf bytes.Buffer
+	logger := logging.New(types.LogLevelInfo, false)
+	logger.SetOutput(&buf)
+	cfg := &config.Config{CloudEnabled: true, CloudRemote: root, CloudLogPath: "/proxsave/log", RcloneRetries: 1, FsIoTimeoutSeconds: 30}
+	o := &Orchestrator{logger: logger, cfg: cfg}
+	src := writeSrcLog(t)
+	if err := o.dispatchLogFile(context.Background(), src); err != nil {
+		t.Fatalf("dispatchLogFile: %v", err)
+	}
+	dest := root + "/proxsave/log/" + filepath.Base(src)
+	requireExactLines(t, visibleLines(buf.String()),
+		"INFO     Dispatching log file: "+filepath.Base(src),
+		"INFO     Cloud: "+dest,
+		"INFO       Permissions failed: "+filepath.Base(src)+": no such file or directory",
+		"WARNING  ⚠ Log copied to cloud, permissions not set",
+	)
+	// The log directory rclone created keeps its 0755, like the Secondary log directory.
+	if st, err := os.Stat(filepath.Dir(dest)); err != nil || st.Mode().Perm() != 0o755 {
+		t.Fatalf("log directory mode = %v (%v), want 0755", st.Mode().Perm(), err)
+	}
+}

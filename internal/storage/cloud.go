@@ -192,6 +192,45 @@ func (c *CloudStorage) localFilesystemInfo(ctx context.Context) *FilesystemInfo 
 	return info
 }
 
+// ensureLocalDir creates the local CLOUD_REMOTE backup directory the way the Secondary
+// creates its own: MkdirAll 0700, parents included, bounded by FS_IO_TIMEOUT. A failure
+// is the fact "  Directory not created: <system error>" and a *DirectoryError.
+func (c *CloudStorage) ensureLocalDir(ctx context.Context) error {
+	c.logger.Debug("Cloud storage: ensuring the local directory %s (0700)", c.localDir)
+	if err := safefs.MkdirAll(ctx, c.localDir, 0o700, c.fsIoTimeout()); err != nil {
+		c.logger.Debug("Cloud Storage: setup - cannot create the local directory %s: %v", c.localDir, err)
+		c.logger.Info("  Directory not created: %s", safefs.SystemErrorText(err))
+		return &DirectoryError{Err: err}
+	}
+	return nil
+}
+
+// SetLocalLogMode gives a log rclone copied into a local CLOUD_REMOTE directory the mode
+// the Secondary log copy creates (0640, owner unchanged), on a filesystem that takes
+// ownership, like the backups: the filesystem of the log directory is detected first.
+// applied is false when there is nothing to set (the remote form, a remote destination,
+// a filesystem without ownership or one the detection cannot read).
+func (c *CloudStorage) SetLocalLogMode(ctx context.Context, logFile string) (applied bool, err error) {
+	if c == nil || c.localDir == "" || !filepath.IsAbs(logFile) {
+		return false, nil
+	}
+	detector := c.fsDetector
+	if detector == nil {
+		detector = NewFilesystemDetector(c.logger, WithIOTimeout(c.fsIoTimeout()), WithDryRun(c.config != nil && c.config.DryRun))
+	}
+	info, derr := detector.DetectFilesystem(ctx, filepath.Dir(logFile))
+	if derr != nil || info == nil || !info.SupportsOwnership {
+		c.logger.Debug("Cloud log copy: mode of %s left as written (ownership not supported or filesystem unknown: %v)", logFile, derr)
+		return false, nil
+	}
+	c.logger.Debug("Cloud log copy: setting mode 0640 on %s (%s)", logFile, info.Type)
+	if err := safefs.Chmod(ctx, logFile, 0o640, c.fsIoTimeout()); err != nil {
+		c.logger.Debug("Cloud log copy: cannot set the mode of %s: %v", logFile, err)
+		return false, err
+	}
+	return true, nil
+}
+
 // DetectionFailure is why the last detection of the local directory fell back to an
 // unknown filesystem, nil when it did not (and always nil for the remote form).
 func (c *CloudStorage) DetectionFailure() error {
@@ -511,6 +550,22 @@ func (c *CloudStorage) DetectFilesystem(ctx context.Context) (info *FilesystemIn
 		}
 	}
 
+	// A local directory is created the way the Secondary's is, once and before anything
+	// lists or writes there: MkdirAll 0700, parents included (rclone mkdir would make
+	// them 0755). A failure is not retried, like the Secondary's.
+	if c.localDir != "" {
+		if err := c.ensureLocalDir(ctx); err != nil {
+			return nil, &StorageError{
+				Location:    LocationCloud,
+				Operation:   "detect_filesystem",
+				Path:        c.localDir,
+				Err:         err,
+				IsCritical:  false,
+				Recoverable: true,
+			}
+		}
+	}
+
 	// Check if remote is configured and accessible
 	// Use CONNECTION timeout for this check (short timeout)
 	logging.DebugStep(c.logger, "cloud detect filesystem", "checking remote accessibility")
@@ -540,14 +595,7 @@ func (c *CloudStorage) DetectFilesystem(ctx context.Context) (info *FilesystemIn
 			c.logger.Debug("HINT: Check your rclone configuration with: rclone config show %s", c.remote)
 		}
 		c.logger.Debug("Cloud backup will be skipped")
-		// A local directory that could not be created is the Secondary's fact; a check
-		// that timed out while creating it stays a timeout.
-		var dirErr *DirectoryError
-		if errors.As(err, &dirErr) && (rcErr == nil || rcErr.kind != remoteErrorTimeout) {
-			c.logger.Info("  Directory not created: %s", ErrorCause(dirErr.Err))
-		} else {
-			c.logger.Info("  %s", capitalizeFirst(ErrorCause(err)))
-		}
+		c.logger.Info("  %s", capitalizeFirst(ErrorCause(err)))
 
 		return nil, &StorageError{
 			Location:    LocationCloud,
@@ -712,17 +760,6 @@ func (c *CloudStorage) checkRemoteOnce(ctx context.Context) error {
 
 	remoteBase := c.remoteBase()
 
-	// A local directory is created the way the Secondary's is, before anything lists
-	// or writes there: MkdirAll 0700, parents included (rclone mkdir would make them
-	// 0755).
-	if c.localDir != "" {
-		c.logger.Debug("Cloud storage: ensuring the local directory %s (0700)", c.localDir)
-		if err := safefs.MkdirAll(ctx, c.localDir, 0o700, c.fsIoTimeout()); err != nil {
-			c.logger.Debug("Cloud Storage: setup - cannot create the local directory %s: %v", c.localDir, err)
-			return &DirectoryError{Err: err}
-		}
-	}
-
 	// If user explicitly enabled write healthcheck, skip list check entirely
 	if c.config.CloudWriteHealthCheck {
 		c.logger.Debug("CLOUD_WRITE_HEALTHCHECK=true, using write test only")
@@ -775,7 +812,7 @@ func (c *CloudStorage) tryListCheck(ctx context.Context, remoteRoot, remoteBase 
 	// Step 2: check specific path (remote:path) if configured
 	if remoteBase != remoteRoot {
 		// Ensure backup path exists (mkdir is idempotent). A local directory was
-		// already created by checkRemoteOnce.
+		// already created by DetectFilesystem (ensureLocalDir).
 		if c.localDir == "" {
 			argsMkdir := c.buildRcloneArgs("mkdir")
 			argsMkdir = append(argsMkdir, remoteBase)
@@ -990,6 +1027,20 @@ func (c *CloudStorage) Store(ctx context.Context, backupFile string, metadata *t
 				c.logger.Debug("Cloud Storage: upload - bundle unreadable, sending the standalone archive: %v", err)
 				c.logger.Info("  Bundle unreadable: %s", safefs.SystemErrorText(err))
 				issues.add(StoreIssueBundleNotSent)
+			}
+		}
+	}
+
+	// Like the Secondary at step [6]: the local directory is (re)created before the copy.
+	if c.localDir != "" {
+		if err := c.ensureLocalDir(ctx); err != nil {
+			return &StorageError{
+				Location:    LocationCloud,
+				Operation:   "store",
+				Path:        c.localDir,
+				Err:         err,
+				IsCritical:  false,
+				Recoverable: true,
 			}
 		}
 	}
