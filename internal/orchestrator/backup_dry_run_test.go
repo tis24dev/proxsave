@@ -305,7 +305,7 @@ func TestRunGoBackupDryRunStepLines(t *testing.T) {
 		if step3 < 0 || step4 < 0 || step5 < 0 || step6 < 0 {
 			t.Fatalf("bundle=%v: missing a step line ([3]=%d [4]=%d [5]=%d [6]=%d):\n%s", bundle, step3, step4, step5, step6, out)
 		}
-		if !(step3 < archiveAt && archiveAt < step4 && step4 < step5 && step5 < step6) {
+		if step3 >= archiveAt || archiveAt >= step4 || step4 >= step5 || step5 >= step6 {
 			t.Fatalf("bundle=%v: wrong order ([3]=%d archive=%d [4]=%d [5]=%d [6]=%d):\n%s", bundle, step3, archiveAt, step4, step5, step6, out)
 		}
 
