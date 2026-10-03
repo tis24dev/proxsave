@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/tis24dev/proxsave/internal/block"
 	"github.com/tis24dev/proxsave/internal/checks"
 	"github.com/tis24dev/proxsave/internal/config"
 	"github.com/tis24dev/proxsave/internal/logging"
@@ -20,6 +21,9 @@ type backupStorageState struct {
 	localFS     *storage.FilesystemInfo
 	secondaryFS *storage.FilesystemInfo
 	cloudFS     *storage.FilesystemInfo
+	// pbs is the PBS block, registered initialized or not; nil when
+	// PBS_TARGET_ENABLED=false.
+	pbs *block.PBS
 }
 
 func initializeBackupStorage(opts backupModeOptions, orch *orchestrator.Orchestrator, checker *checks.Checker) (backupStorageState, *orchestrator.EarlyErrorState, int) {
@@ -46,6 +50,7 @@ func initializeBackupStorage(opts backupModeOptions, orch *orchestrator.Orchestr
 
 	state.secondaryFS = initializeSecondaryStorage(opts, orch, checker)
 	state.cloudFS = initializeCloudStorage(opts, orch, checker)
+	state.pbs = initializePBSTarget(opts, orch, checker)
 	storageDone(nil)
 
 	fmt.Println()

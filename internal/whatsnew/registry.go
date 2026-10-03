@@ -257,6 +257,7 @@ var notes = []Note{
 		Version: "0.42.0",
 		Lines: []string{
 			"CLOUD_REMOTE accepts an absolute directory (for example a mounted share) as the cloud destination",
+			"New PBS destination: each backup is also uploaded to a PBS storage of this PVE host (PBS_TARGET_ENABLED)",
 		},
 	},
 }

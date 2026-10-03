@@ -534,22 +534,7 @@ func formatStorageInitSummary(name string, cfg *config.Config, location storage.
 	} else {
 		result = fmt.Sprintf("  Backups: %d", stats.TotalBackups)
 		if retentionConfig.Policy == "gfs" {
-			if stats.TotalBackups > 0 && len(backups) > 0 {
-				classification := storage.ClassifyBackupsGFS(backups, retentionConfig)
-				gfsStats := storage.GetRetentionStats(classification)
-
-				kept := stats.TotalBackups - gfsStats[storage.CategoryDelete]
-
-				result += fmt.Sprintf("\n  Daily: %d/%d", gfsStats[storage.CategoryDaily], retentionConfig.Daily)
-				result += fmt.Sprintf("\n  Weekly: %d/%d", gfsStats[storage.CategoryWeekly], retentionConfig.Weekly)
-				result += fmt.Sprintf("\n  Monthly: %d/%d", gfsStats[storage.CategoryMonthly], retentionConfig.Monthly)
-				result += fmt.Sprintf("\n  Yearly: %d/%d", gfsStats[storage.CategoryYearly], retentionConfig.Yearly)
-				result += fmt.Sprintf("\n  Kept (est.): %d, To delete (est.): %d", kept, gfsStats[storage.CategoryDelete])
-			} else {
-				result += fmt.Sprintf("\n  Daily: 0/%d, Weekly: 0/%d, Monthly: 0/%d, Yearly: 0/%d",
-					retentionConfig.Daily, retentionConfig.Weekly,
-					retentionConfig.Monthly, retentionConfig.Yearly)
-			}
+			result += formatGFSTierLines(retentionConfig, stats.TotalBackups, backups)
 		}
 	}
 
@@ -559,6 +544,25 @@ func formatStorageInitSummary(name string, cfg *config.Config, location storage.
 	}
 	result += fmt.Sprintf("\n%s %s: initialized", theme.SymbolSuccess, name)
 	return result, false
+}
+
+// formatGFSTierLines are the GFS lines under "  Backups: <N>" of a storage-init block:
+// one per tier and the estimate (which logStorageInitSummary keeps at DEBUG), or the
+// single empty-tiers line when there is no backup. rc is the effective GFS policy.
+func formatGFSTierLines(rc storage.RetentionConfig, total int, backups []*types.BackupMetadata) string {
+	if total <= 0 || len(backups) == 0 {
+		return fmt.Sprintf("\n  Daily: 0/%d, Weekly: 0/%d, Monthly: 0/%d, Yearly: 0/%d",
+			rc.Daily, rc.Weekly, rc.Monthly, rc.Yearly)
+	}
+	classification := storage.ClassifyBackupsGFS(backups, rc)
+	gfsStats := storage.GetRetentionStats(classification)
+	kept := total - gfsStats[storage.CategoryDelete]
+	result := fmt.Sprintf("\n  Daily: %d/%d", gfsStats[storage.CategoryDaily], rc.Daily)
+	result += fmt.Sprintf("\n  Weekly: %d/%d", gfsStats[storage.CategoryWeekly], rc.Weekly)
+	result += fmt.Sprintf("\n  Monthly: %d/%d", gfsStats[storage.CategoryMonthly], rc.Monthly)
+	result += fmt.Sprintf("\n  Yearly: %d/%d", gfsStats[storage.CategoryYearly], rc.Yearly)
+	result += fmt.Sprintf("\n  Kept (est.): %d, To delete (est.): %d", kept, gfsStats[storage.CategoryDelete])
+	return result
 }
 
 // formatNotCheckedInitSummary closes the block of a cloud remote a dry run could not

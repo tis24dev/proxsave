@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/tis24dev/proxsave/internal/block"
 	"github.com/tis24dev/proxsave/internal/config"
 	"github.com/tis24dev/proxsave/internal/health"
 	"github.com/tis24dev/proxsave/internal/logging"
@@ -358,7 +359,7 @@ func initializeWebhookNotification(opts backupModeOptions, orch *orchestrator.Or
 
 func logBackupRuntimeSummary(cfg *config.Config, logger *logging.Logger, storageState backupStorageState) {
 	logBackupStorageSummary(cfg, storageState)
-	logBackupLogSummary(cfg)
+	logBackupLogSummary(cfg, storageState.pbs)
 	logBackupNotificationSummary(cfg, logger)
 }
 
@@ -375,10 +376,11 @@ func logBackupStorageSummary(cfg *config.Config, storageState backupStorageState
 	} else {
 		logging.Skip("  Cloud storage: disabled")
 	}
+	logPBSStorageSummary(cfg, storageState.pbs)
 	fmt.Println()
 }
 
-func logBackupLogSummary(cfg *config.Config) {
+func logBackupLogSummary(cfg *config.Config, pbs *block.PBS) {
 	logging.Info("Log configuration:")
 	logging.Info("  Primary: %s", cfg.LogPath)
 	if cfg.SecondaryEnabled {
@@ -399,6 +401,7 @@ func logBackupLogSummary(cfg *config.Config) {
 	} else {
 		logging.Skip("  Cloud: disabled")
 	}
+	logPBSLogSummary(cfg, pbs)
 	fmt.Println()
 }
 
