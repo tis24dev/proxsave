@@ -21,7 +21,17 @@ import (
 //
 // A bounded operation that timed out reads "timed out after <N>s", the phrase the fact
 // lines use for a dead or stale mount, in whole seconds (WholeSeconds).
+//
+// A wrapper that names the file itself carries the path too ("failed to create
+// temporary file in /mnt/x: ..."): every ": "-separated part that holds an absolute path
+// is dropped (dropPathParts), so
+//
+//	failed to create temporary file in /mnt/x: createtemp /mnt/x/.tmp-a: read-only file system  ->  read-only file system
 func SystemErrorText(err error) string {
+	return dropPathParts(systemErrorText(err))
+}
+
+func systemErrorText(err error) string {
 	if err == nil {
 		return ""
 	}
@@ -46,6 +56,35 @@ func SystemErrorText(err error) string {
 	}
 
 	return text
+}
+
+// dropPathParts removes the ": "-separated parts of a cause that hold an absolute path
+// (a field starting with "/"), keeping the order of the rest. When every part holds one,
+// the last part is kept: it is the closest to the system error.
+func dropPathParts(text string) string {
+	if text == "" {
+		return text
+	}
+	parts := strings.Split(text, ": ")
+	kept := make([]string, 0, len(parts))
+	for _, part := range parts {
+		if !holdsAbsolutePath(part) {
+			kept = append(kept, part)
+		}
+	}
+	if len(kept) == 0 {
+		return parts[len(parts)-1]
+	}
+	return strings.Join(kept, ": ")
+}
+
+func holdsAbsolutePath(part string) bool {
+	for _, field := range strings.Fields(part) {
+		if strings.HasPrefix(field, "/") {
+			return true
+		}
+	}
+	return false
 }
 
 // replaceCause swaps the path-carrying error's own text for its cause inside the full

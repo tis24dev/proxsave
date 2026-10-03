@@ -514,3 +514,32 @@ func TestSecondaryStoreDirectoryNotCreated(t *testing.T) {
 		t.Fatalf("visible lines = %q, want only the directory fact", out)
 	}
 }
+
+// Live test case 2: a destination the copy cannot write into. The fact carries the
+// system error without the path the wrapper names ("failed to create temporary file in
+// <dir>").
+func TestSecondaryCopyFailedFactCarriesNoPath(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root writes into a read-only directory; the failure needs an unprivileged run")
+	}
+	dest := t.TempDir()
+	if err := os.Chmod(dest, 0o500); err != nil {
+		t.Fatalf("chmod: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(dest, 0o700) })
+	archive := filepath.Join(t.TempDir(), "host-backup-20260101-000000.tar.zst")
+	if err := os.WriteFile(archive, []byte("x"), 0o600); err != nil {
+		t.Fatalf("write archive: %v", err)
+	}
+	logger, buf := newCapturedLogger()
+	s, err := NewSecondaryStorage(&config.Config{SecondaryEnabled: true, SecondaryPath: dest}, logger, "")
+	if err != nil {
+		t.Fatalf("NewSecondaryStorage: %v", err)
+	}
+	if err := s.Store(context.Background(), archive, &types.BackupMetadata{BackupFile: archive}); err == nil {
+		t.Fatalf("Store must fail when the destination cannot be written")
+	}
+	if got := stripTimes(buf.String()); got != "INFO       Copy failed: permission denied\n" {
+		t.Fatalf("visible lines = %q, want the system error alone", got)
+	}
+}
