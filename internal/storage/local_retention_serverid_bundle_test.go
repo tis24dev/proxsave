@@ -108,7 +108,7 @@ func TestLocalRetentionAdoptsBundledArchivesWrittenUnderALostFQDN(t *testing.T) 
 
 	with := run(t, ourServerID)
 	if want := []string{"pve.home.arpa-backup-20250103-100000.tar.zst" + bundleSuffix}; strings.Join(with.survivors, ",") != strings.Join(want, ",") {
-		t.Errorf("bundled archives left: %v, want %v. They carry this host's own server identity inside the bundle, they name a spelling this host lost, and this host answers to their short label and to no other spelling of it, so they are this machine's own work and must rotate again", with.survivors, want)
+		t.Errorf("bundled archives left: %v, want %v. They carry this host's own server identity inside the bundle, so they are this machine's own work and must rotate again", with.survivors, want)
 	}
 	if with.deleted != 2 {
 		t.Errorf("deleted = %d, want 2; the count feeds the run summary and the retention report", with.deleted)

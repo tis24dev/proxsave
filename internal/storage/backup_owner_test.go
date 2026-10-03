@@ -216,9 +216,8 @@ func TestRetentionHostAliases(t *testing.T) {
 }
 
 // TestRetentionSpellingMismatchesCountsLikelySelf pins the reporting helper behind
-// the second warning line. It never decides ownership: it only tells the operator
-// that some out-of-scope archives carry this host's short name under a spelling this
-// run cannot confirm, which is the one case the fix deliberately declines to solve.
+// the not-rotated fact. It never decides ownership: it only counts the out-of-scope
+// archives carrying this host's short name under a spelling this run cannot confirm.
 func TestRetentionSpellingMismatchesCountsLikelySelf(t *testing.T) {
 	foreign := []*types.BackupMetadata{
 		{Hostname: "pve.siteb.example", BackupFile: "pve.siteb.example-backup-20250102-100000.tar.zst"},
@@ -479,5 +478,38 @@ func TestApplyRetentionDoesNotDeleteOtherHostsBackups(t *testing.T) {
 	// its own limit of 1 and its older archive still has to go.
 	if !deletedOwn {
 		t.Errorf("retention deleted nothing of this host's own: %+v", calls)
+	}
+}
+
+// TestTheShortLabelPredicateRefusesAHostThatCannotNameItself pins the empty-label
+// guard inside archiveSharesLocalShortLabel, which decides the not-rotated population
+// for both ownedBackupCount and applyRetentionHostScope. Dropping it is compile clean.
+//
+// hostShortLabel("") is "", and an unattributable archive has no owner and therefore
+// no label either, so without the guard a machine that cannot name itself matches
+// every pre-Go "proxmox-backup-*" file in the location at once. Those entries are
+// already counted as unattributable, and the two counts are added, so each of them
+// would be added TWICE to the number RetentionSummary.Owned publishes and the
+// notification would report more archives than the directory holds.
+//
+// A bare "." is not a decorative case: it survives the TrimSpace guard in
+// applyRetentionHostScope and only collapses to the empty string inside
+// NormalizeHostname, so it is the shape that actually reaches this predicate with no
+// label to compare.
+func TestTheShortLabelPredicateRefusesAHostThatCannotNameItself(t *testing.T) {
+	unattributable := &types.BackupMetadata{BackupFile: "proxmox-backup-20250102-100000.tar.gz"}
+	listing := []*types.BackupMetadata{
+		unattributable,
+		{BackupFile: "pve.home.arpa-backup-20250102-100000.tar.zst", Hostname: "pve.home.arpa"},
+	}
+
+	for _, hostname := range []string{"", "   ", "."} {
+		id := hostWithIdentity(hostname, ourServerID)
+		if archiveSharesLocalShortLabel(unattributable, id) {
+			t.Errorf("host %q claims an archive nobody can name shares its short label. Both labels are empty, and equal emptiness is not a shared name", hostname)
+		}
+		if n := retentionSpellingMismatches(listing, id); n != 0 {
+			t.Errorf("host %q reports %d spelling mismatch(es), want 0. It cannot name itself, so nothing can share its name; counting the unattributable entry here adds it a second time to the managed-by-nobody total that RetentionSummary.Owned publishes", hostname, n)
+		}
 	}
 }

@@ -20,8 +20,9 @@ import (
 type serverIDSeed struct {
 	name string
 	when time.Time
-	// manifestHost empty seeds NO .metadata at all, so attribution falls through to
-	// the filename token, which is the degraded path the adoption rule must refuse.
+	// manifestHost and manifestID both empty seed NO .metadata at all. A manifest
+	// with an identity and no host is still written, and its archive is attributed
+	// by the filename token.
 	manifestHost string
 	manifestID   string
 }
@@ -43,12 +44,15 @@ func seedServerIDFixture(t *testing.T, dir string, seeds []serverIDSeed) []strin
 		if err := os.WriteFile(path+".sha256", []byte("h  archive\n"), 0o600); err != nil {
 			t.Fatalf("seed sidecar for %s: %v", seed.name, err)
 		}
-		if seed.manifestHost != "" {
+		if seed.manifestHost != "" || seed.manifestID != "" {
 			// created_at matches the mtime set below: loadMetadata takes the
 			// timestamp from the manifest and only falls back to ModTime when it is
 			// zero, so letting the two disagree would make the ordering depend on
 			// which source won.
-			manifest := fmt.Sprintf(`{"hostname":%q,"created_at":%q`, seed.manifestHost, seed.when.Format(time.RFC3339))
+			manifest := fmt.Sprintf(`{"created_at":%q`, seed.when.Format(time.RFC3339))
+			if seed.manifestHost != "" {
+				manifest += fmt.Sprintf(`,"hostname":%q`, seed.manifestHost)
+			}
 			if seed.manifestID != "" {
 				manifest += fmt.Sprintf(`,"server_id":%q`, seed.manifestID)
 			}
@@ -91,9 +95,8 @@ func lostFQDNSeeds(serverID string) []serverIDSeed {
 // at all, so this run has NO alias to match them with and before this change scoping
 // left nothing owned and the directory grew for ever.
 //
-// The archives carry this host's own server identity, this host answers to their short
-// label bare and to no other spelling of it, so they are this machine's own work under
-// a name it lost, and retention brings them back into rotation.
+// The archives carry this host's own server identity, and the same server identity is
+// the same server, so retention adopts them and they rotate again.
 //
 // It runs through NewLocalStorage and asserts on the filesystem rather than on the
 // struct, so it observes the whole chain: cfg.ServerID reaches the backend, the
@@ -182,49 +185,103 @@ func TestLocalRetentionLeavesTheSameFixtureAloneWithoutAServerIdentity(t *testin
 	}
 }
 
-// TestLocalRetentionRefusesASecondSiteCarryingOurServerIdentity is the data-loss
-// boundary end to end. This host still resolves its own FQDN, so it answers to two
-// spellings of the short label "pve", and the archives on the shared mount name a
-// THIRD spelling while carrying this host's identity.
+// TestLocalRetentionRotatesEveryArchiveCarryingOurServerIdentity is the rule end to
+// end, on real files: the same server identity is the same server, whatever name the
+// archive carries. Each case is a name the hostname rule alone refuses, and each is
+// run twice: with this host's identity the archives rotate and the run says they were
+// adopted; with another machine's identity nothing is deleted, exactly as before.
 //
-// That is exactly what a clone or a restored container looks like from here, and
-// inheriting the source machine's identity is expected, supported behaviour. Claiming
-// these archives would be a clone pruning the source machine's backups, so retention
-// refuses and names them as not rotated.
-func TestLocalRetentionRefusesASecondSiteCarryingOurServerIdentity(t *testing.T) {
+// The competing-spelling case is the clone: this host still resolves its own FQDN and
+// the archives name a third spelling of its short name. A clone with this host's
+// identity writing to the same location has its backups rotated by this host, which
+// was stated and accepted when the rule was decided.
+func TestLocalRetentionRotatesEveryArchiveCarryingOurServerIdentity(t *testing.T) {
 	original := retentionHostname
 	retentionHostname = func() (string, error) { return "pve", nil }
 	defer func() { retentionHostname = original }()
 
-	dir := t.TempDir()
-	paths := seedServerIDFixture(t, dir, []serverIDSeed{
-		{name: "pve.siteb.example-backup-20250103-100000.tar.zst", when: time.Date(2025, 1, 3, 10, 0, 0, 0, time.UTC), manifestHost: "pve.siteb.example", manifestID: ourServerID},
-		{name: "pve.siteb.example-backup-20250102-100000.tar.zst", when: time.Date(2025, 1, 2, 10, 0, 0, 0, time.UTC), manifestHost: "pve.siteb.example", manifestID: ourServerID},
-	})
-
-	logger, buf := newRecordingRetentionLogger()
-	// This host DOES still resolve its own qualified name, which is the competing
-	// spelling that disqualifies it from adopting a third one.
-	l, err := NewLocalStorage(&config.Config{BackupPath: dir, ServerID: ourServerID}, logger, "pve.home.arpa")
-	if err != nil {
-		t.Fatalf("NewLocalStorage: %v", err)
+	cases := []struct {
+		name string
+		// written is the name this run's writer stamps, the alias retention answers to.
+		written string
+		// file is the token the archive names carry; manifestHost what the manifest says.
+		file         string
+		manifestHost string
+		// adoptedName is the name the adoption fact prints.
+		adoptedName string
+		// notRotatedOtherwise is the fact printed with another machine's identity, ""
+		// when the archives are another host's by name and get no line.
+		notRotatedOtherwise string
+	}{
+		{name: "a competing spelling of our short name", written: "pve.home.arpa", file: "pve.siteb.example", manifestHost: "pve.siteb.example", adoptedName: "pve.siteb.example", notRotatedOtherwise: "  Named pve.siteb.example, not rotated: 3 backups"},
+		{name: "another short label", file: "nas.lan", manifestHost: "nas.lan", adoptedName: "nas.lan"},
+		{name: "a bare name", file: "srv", manifestHost: "srv", adoptedName: "srv"},
+		{name: "a manifest with no host", file: "pve.home.arpa", adoptedName: "pve.home.arpa", notRotatedOtherwise: "  Named pve.home.arpa, not rotated: 3 backups"},
 	}
 
-	deleted, err := l.ApplyRetention(context.Background(), RetentionConfig{Policy: "simple", MaxBackups: 1})
-	if err != nil {
-		t.Fatalf("ApplyRetention: %v", err)
-	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			seeds := func(serverID string) []serverIDSeed {
+				var out []serverIDSeed
+				for day := 3; day >= 1; day-- {
+					out = append(out, serverIDSeed{
+						name:         fmt.Sprintf("%s-backup-2025010%d-100000.tar.zst", tc.file, day),
+						when:         time.Date(2025, 1, day, 10, 0, 0, 0, time.UTC),
+						manifestHost: tc.manifestHost,
+						manifestID:   serverID,
+					})
+				}
+				return out
+			}
+			run := func(t *testing.T, archiveID string) (deleted int, survivors []string, log string, warnings int64) {
+				t.Helper()
+				dir := t.TempDir()
+				paths := seedServerIDFixture(t, dir, seeds(archiveID))
+				logger, buf := newRecordingRetentionLogger()
+				l, err := NewLocalStorage(&config.Config{BackupPath: dir, ServerID: ourServerID}, logger, tc.written)
+				if err != nil {
+					t.Fatalf("NewLocalStorage: %v", err)
+				}
+				deleted, err = l.ApplyRetention(context.Background(), RetentionConfig{Policy: "simple", MaxBackups: 1})
+				if err != nil {
+					t.Fatalf("ApplyRetention: %v", err)
+				}
+				for _, path := range paths {
+					if _, err := os.Stat(path); err == nil {
+						survivors = append(survivors, filepath.Base(path))
+					}
+				}
+				return deleted, survivors, buf.String(), logger.WarningCount()
+			}
 
-	for _, path := range paths {
-		if _, err := os.Stat(path); err != nil {
-			t.Errorf("retention deleted %s. This host answers to another spelling of that short name, so these archives may be a second machine, or a clone of this one that inherited the identity, and deleting them is unrecoverable (stat err=%v)", filepath.Base(path), err)
-		}
-	}
-	if deleted != 0 {
-		t.Errorf("deleted = %d, want 0", deleted)
-	}
-	if !strings.Contains(buf.String(), "  Named pve.siteb.example, not rotated: 2 backups") {
-		t.Errorf("nothing told the operator that the refused archives are not rotated. Log: %s", buf.String())
+			deleted, survivors, log, warnings := run(t, ourServerID)
+			if want := fmt.Sprintf("%s-backup-20250103-100000.tar.zst", tc.file); deleted != 2 || strings.Join(survivors, ",") != want {
+				t.Errorf("with this host's identity: deleted %d, left %v; want 2 deleted and only %s left. Same server identity, same server", deleted, survivors, want)
+			}
+			if want := "  Adopted: 3 backups named " + tc.adoptedName + ", same server identity"; !strings.Contains(log, want) {
+				t.Errorf("the adoption fact %q is missing. Log: %s", want, log)
+			}
+			if strings.Contains(log, "not rotated") {
+				t.Errorf("archives this host rotates were reported as not rotated. Log: %s", log)
+			}
+			if warnings != 0 {
+				t.Errorf("%d WARNING line(s) from a pass that manages every archive here. Log: %s", warnings, log)
+			}
+
+			deleted, survivors, log, _ = run(t, anotherServerID)
+			if deleted != 0 || len(survivors) != 3 {
+				t.Errorf("with another machine's identity: deleted %d, left %v; want nothing deleted, exactly as before the rule", deleted, survivors)
+			}
+			if strings.Contains(log, "Adopted:") {
+				t.Errorf("archives carrying another machine's identity were adopted. Log: %s", log)
+			}
+			if tc.notRotatedOtherwise != "" && !strings.Contains(log, tc.notRotatedOtherwise) {
+				t.Errorf("the not-rotated fact %q is missing. Log: %s", tc.notRotatedOtherwise, log)
+			}
+			if tc.notRotatedOtherwise == "" && strings.Contains(log, "not rotated") {
+				t.Errorf("another host's archives were reported. Log: %s", log)
+			}
+		})
 	}
 }
 
