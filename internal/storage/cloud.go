@@ -93,9 +93,15 @@ type CloudStorage struct {
 	activeStore *storeIssueRecorder
 	// writeTestOnly is set when the last accessibility check reached the remote by
 	// the write test alone, because listing it is not permitted.
-	writeTestOnly  bool
-	remoteFilesMu  sync.RWMutex
-	remoteFiles    map[string]struct{}
+	writeTestOnly bool
+	remoteFilesMu sync.RWMutex
+	remoteFiles   map[string]struct{}
+	// ownerCache holds, per archive, what its remote manifest says about its writer,
+	// so each manifest is read (one "rclone cat") at most once per run and reused by
+	// the init statistics, the init GFS listing, retention and the step [6]
+	// statistics. Entries for archives the run uploads or deletes are dropped.
+	ownerMu        sync.Mutex
+	ownerCache     map[string]remoteOwner
 	logPathMu      sync.Mutex
 	logPathMissing bool
 	// hostname is this machine's name, resolved once at construction: retention
@@ -1086,6 +1092,9 @@ func (c *CloudStorage) Store(ctx context.Context, backupFile string, metadata *t
 
 	filename := filepath.Base(primaryFile)
 	remoteFile := c.remotePathFor(filename)
+	// The run is about to write this archive and its manifest: what an earlier read
+	// cached about it is no longer the remote's.
+	c.forgetOwners(filename, filepath.Base(backupFile))
 	logging.DebugStep(c.logger, "cloud store", "source size=%s remote=%s", utils.FormatBytes(primaryStat.Size()), c.remoteLabel())
 
 	c.logger.Debug("Uploading backup to cloud storage: %s (%s) -> %s (timeout: %ds)",
@@ -2187,6 +2196,7 @@ func (c *CloudStorage) deleteBackupInternal(ctx context.Context, backupFile stri
 		}
 		relativeNames = append(relativeNames, name)
 	}
+	c.forgetOwners(append(relativeNames, filename)...)
 
 	failedFiles := make([]string, 0)
 	dataFailed := false // true if the backup data archive (not just a sidecar) failed to delete
