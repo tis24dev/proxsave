@@ -1011,6 +1011,29 @@ Automatic with `false`:
 
 ---
 
+## PBS Storage (Proxmox Backup Server)
+
+```bash
+# Each backup is also uploaded to a PBS storage defined in Proxmox VE
+# (/etc/pve/storage.cfg, type pbs), and the run log is attached to it.
+# Server, port, datastore, namespace, user, fingerprint, password and
+# encryption key are read from that storage at every run.
+# Proxmox VE hosts only. Snapshots go to the group host/proxsave-<hostname>.
+# The namespace must already exist.
+# Retention needs Datastore.Prune or Datastore.Modify on the datastore.
+PBS_TARGET_ENABLED=false     # true-false = enable/disable upload to the PBS storage
+PBS_TARGET_STORAGE=          # Proxmox VE storage ID of type pbs
+MAX_PBS_TARGET_BACKUPS=15    # snapshots kept by retention (0 = no retention)
+MIN_DISK_SPACE_PBS_GB=1      # free space required on the datastore
+```
+
+- `proxmox-backup-client` must be installed; nothing about PBS is stored in `backup.env`.
+- Retention keeps the newest `MAX_PBS_TARGET_BACKUPS` snapshots of the group (with `RETENTION_POLICY=gfs`, the same GFS rules as the other destinations). A failed upload deletes nothing.
+- When the storage has an encryption key, the snapshot and the log are encrypted with it. When it has none they are uploaded unencrypted, and step [7] says so (`Encryption: none, storage <id> has no key`).
+- ProxSave sets no timeout on the PBS client. Under cron nothing stops a hung upload; the daemon's `MAX_RUN_DURATION` watchdog does, so the daemon is the recommended scheduler with PBS.
+
+---
+
 ## Storage Comparison
 
 Quick comparison to help you choose the right storage configuration:
