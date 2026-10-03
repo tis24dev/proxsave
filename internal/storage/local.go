@@ -8,7 +8,6 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
-	"time"
 
 	"github.com/tis24dev/proxsave/internal/backup"
 	"github.com/tis24dev/proxsave/internal/config"
@@ -838,33 +837,13 @@ func (l *LocalStorage) GetStats(ctx context.Context) (stats *StorageStats, err e
 		return nil, err
 	}
 
-	stats = &StorageStats{
-		TotalBackups: len(backups),
-	}
+	// Only this host's backups are counted: the listing matches every hostname.
+	stats = ownedStorageStats(backups, retentionIdentity{hostname: l.hostname, aliases: l.hostAliases, serverID: l.serverID})
+	l.logger.Debug("Local storage: stats - %d of %d listed backups are this host's", stats.TotalBackups, stats.ListedBackups)
 
 	if l.fsInfo != nil {
 		stats.FilesystemType = l.fsInfo.Type
 	}
-
-	var totalSize int64
-	var oldest, newest *time.Time
-
-	for _, backup := range backups {
-		totalSize += backup.Size
-
-		if oldest == nil || backup.Timestamp.Before(*oldest) {
-			t := backup.Timestamp
-			oldest = &t
-		}
-		if newest == nil || backup.Timestamp.After(*newest) {
-			t := backup.Timestamp
-			newest = &t
-		}
-	}
-
-	stats.TotalSize = totalSize
-	stats.OldestBackup = oldest
-	stats.NewestBackup = newest
 
 	// Get available/total space using statfs (bounded against a dead/stale mount).
 	if stat, err := safefs.Statfs(ctx, l.basePath, fsIoTimeout(l.config)); err == nil {

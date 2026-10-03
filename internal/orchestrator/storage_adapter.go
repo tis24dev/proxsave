@@ -490,13 +490,10 @@ func (s *StorageAdapter) applyStorageStats(storageStats *storage.StorageStats, r
 	}
 	s.statsApplied = true
 
-	// storageStats.TotalBackups comes from a listing that matches every hostname, so
-	// on a location shared with another ProxSave host it counts that host's archives
-	// too, while retention only ever manages the ones this host owns. Rendered
-	// against this host's own limit it reads as a breach that is not happening
-	// (discussion #292). Prefer the count retention itself arrived at. -1 means
-	// retention did not run or failed, and the unscoped listing is then the only
-	// number there is: saying 0 on a location holding forty archives would be worse.
+	// storageStats.TotalBackups counts only the archives this host owns (by name or
+	// by server identity). Prefer the count retention itself arrived at, which also
+	// adds back the archives no host manages (discussion #292). -1 means retention did
+	// not run or failed, and the statistics count is then the number there is.
 	backupCount := storageStats.TotalBackups
 	if scopedBackups >= 0 {
 		backupCount = scopedBackups

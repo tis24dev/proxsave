@@ -1040,33 +1040,15 @@ func (s *SecondaryStorage) GetStats(ctx context.Context) (stats *StorageStats, e
 		return nil, err
 	}
 
-	stats = &StorageStats{
-		TotalBackups: len(backups),
-	}
+	// Only this host's backups are counted: the listing matches every hostname, and
+	// List reads no manifest, so the owners are looked up as retention looks them up.
+	s.resolveRetentionOwners(ctx, backups)
+	stats = ownedStorageStats(backups, retentionIdentity{hostname: s.hostname, aliases: s.hostAliases, serverID: s.serverID})
+	s.logger.Debug("Secondary Storage: stats - %d of %d listed backups are this host's", stats.TotalBackups, stats.ListedBackups)
 
 	if s.fsInfo != nil {
 		stats.FilesystemType = s.fsInfo.Type
 	}
-
-	var totalSize int64
-	var oldest, newest *time.Time
-
-	for _, backup := range backups {
-		totalSize += backup.Size
-
-		if oldest == nil || backup.Timestamp.Before(*oldest) {
-			t := backup.Timestamp
-			oldest = &t
-		}
-		if newest == nil || backup.Timestamp.After(*newest) {
-			t := backup.Timestamp
-			newest = &t
-		}
-	}
-
-	stats.TotalSize = totalSize
-	stats.OldestBackup = oldest
-	stats.NewestBackup = newest
 
 	// Get available/total space using statfs (bounded against a dead/stale mount).
 	if stat, err := safefs.Statfs(ctx, s.basePath, fsIoTimeout(s.config)); err == nil {

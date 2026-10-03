@@ -3,6 +3,7 @@ package storage
 import (
 	"context"
 	"strings"
+	"time"
 
 	"github.com/tis24dev/proxsave/internal/types"
 )
@@ -35,31 +36,59 @@ import (
 // The listing is not modified: the owner lookup writes Hostname and ServerID into
 // the entries it is given, so it runs on copies.
 func CountOwnedBackups(ctx context.Context, backend Storage, backups []*types.BackupMetadata) (owned int, ok bool) {
+	listing, id, ok := attributedListing(ctx, backend, backups)
+	if !ok {
+		return 0, false
+	}
+	return ownedBackupCount(listing, id), true
+}
+
+// OwnedBackups returns the archives of a listing taken outside a retention pass that
+// this host owns, by the rule retention prunes by: owned by name or adopted by server
+// identity. Other hosts' archives, archives nothing names and archives under another
+// spelling of this host's name are left out. It is what the storage-init GFS tiers are
+// classified from, so they count what Total backups counts.
+//
+// ok is false where CountOwnedBackups' is. The returned entries are copies.
+func OwnedBackups(ctx context.Context, backend Storage, backups []*types.BackupMetadata) ([]*types.BackupMetadata, bool) {
+	listing, id, ok := attributedListing(ctx, backend, backups)
+	if !ok {
+		return nil, false
+	}
+	owned, _ := scopeRetentionToHost(listing, id)
+	return owned, true
+}
+
+// attributedListing copies a listing and runs on the copies the owner lookup
+// ApplyRetention runs (manifest reads on the backends whose List leaves them out).
+// ok is false for a host that cannot name itself and for a backend this package does
+// not implement.
+func attributedListing(ctx context.Context, backend Storage, backups []*types.BackupMetadata) ([]*types.BackupMetadata, retentionIdentity, bool) {
 	var id retentionIdentity
 	resolve := func(context.Context, []*types.BackupMetadata) {}
 	switch b := backend.(type) {
 	case *LocalStorage:
 		if b == nil {
-			return 0, false
+			return nil, id, false
 		}
 		id = retentionIdentity{hostname: b.hostname, aliases: b.hostAliases, serverID: b.serverID}
 	case *SecondaryStorage:
 		if b == nil {
-			return 0, false
+			return nil, id, false
 		}
 		id = retentionIdentity{hostname: b.hostname, aliases: b.hostAliases, serverID: b.serverID}
 		resolve = b.resolveRetentionOwners
 	case *CloudStorage:
 		if b == nil {
-			return 0, false
+			return nil, id, false
 		}
 		id = retentionIdentity{hostname: b.hostname, aliases: b.hostAliases, serverID: b.serverID}
 		resolve = b.resolveRetentionOwners
 	default:
-		return 0, false
+		return nil, id, false
 	}
 	if strings.TrimSpace(id.hostname) == "" {
-		return 0, false
+		return nil, id, false
 	}
 
 	listing := make([]*types.BackupMetadata, 0, len(backups))
@@ -74,7 +103,34 @@ func CountOwnedBackups(ctx context.Context, backend Storage, backups []*types.Ba
 		ctx = context.Background()
 	}
 	resolve(ctx, listing)
-	return ownedBackupCount(listing, id), true
+	return listing, id, true
+}
+
+// ownedStorageStats builds a destination's statistics from its listing, counting ONLY
+// the archives this host owns, by the rule retention prunes by: owned by name or
+// adopted by server identity. Other hosts' archives and archives nothing names are
+// left out of the count, the size and the oldest/newest dates; ListedBackups keeps
+// the whole listing. The listing must already carry its owners (the caller resolves
+// them on the backends whose List does not). A host that cannot name itself owns
+// nothing here, as in retention.
+func ownedStorageStats(backups []*types.BackupMetadata, id retentionIdentity) *StorageStats {
+	owned, _ := scopeRetentionToHost(backups, id)
+	stats := &StorageStats{TotalBackups: len(owned), ListedBackups: len(backups)}
+	var oldest, newest *time.Time
+	for _, backup := range owned {
+		stats.TotalSize += backup.Size
+		if oldest == nil || backup.Timestamp.Before(*oldest) {
+			t := backup.Timestamp
+			oldest = &t
+		}
+		if newest == nil || backup.Timestamp.After(*newest) {
+			t := backup.Timestamp
+			newest = &t
+		}
+	}
+	stats.OldestBackup = oldest
+	stats.NewestBackup = newest
+	return stats
 }
 
 // ownedBackupCount is the arithmetic ApplyRetention publishes as Owned before its

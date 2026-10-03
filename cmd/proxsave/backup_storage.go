@@ -90,7 +90,7 @@ func registerPrimaryStorage(opts backupModeOptions, orch *orchestrator.Orchestra
 	logging.DebugStep(logger, "storage init", "primary owned=%d known=%v", localOwned, localOwnedKnown)
 	localAdapter.SetInitialOwnedBackups(localOwned, localOwnedKnown)
 	orch.RegisterStorageTarget(localAdapter)
-	logStorageInitSummary(formatStorageInitSummary("Local storage", cfg, storage.LocationPrimary, localStats, localBackups))
+	logStorageInitSummary(formatStorageInitSummary("Local storage", cfg, storage.LocationPrimary, localStats, startupOwnedListing(opts.ctx, localBackend, localBackups)))
 }
 
 // detectionFailureReporter is implemented by a backend whose DetectFilesystem can fall
@@ -158,7 +158,7 @@ func initializeSecondaryStorage(opts backupModeOptions, orch *orchestrator.Orche
 	logging.DebugStep(logger, "storage init", "secondary owned=%d known=%v", secondaryOwned, secondaryOwnedKnown)
 	secondaryAdapter.SetInitialOwnedBackups(secondaryOwned, secondaryOwnedKnown)
 	orch.RegisterStorageTarget(secondaryAdapter)
-	logStorageInitSummary(formatStorageInitSummary("Secondary storage", cfg, storage.LocationSecondary, secondaryStats, secondaryBackups, problems...))
+	logStorageInitSummary(formatStorageInitSummary("Secondary storage", cfg, storage.LocationSecondary, secondaryStats, startupOwnedListing(opts.ctx, secondaryBackend, secondaryBackups), problems...))
 	return secondaryFS
 }
 
@@ -219,14 +219,15 @@ func initializeCloudStorage(opts backupModeOptions, orch *orchestrator.Orchestra
 	logging.DebugStep(logger, "storage init", "cloud owned=%d known=%v", cloudOwned, cloudOwnedKnown)
 	cloudAdapter.SetInitialOwnedBackups(cloudOwned, cloudOwnedKnown)
 	orch.RegisterStorageTarget(cloudAdapter)
+	cloudOwnedBackups := startupOwnedListing(opts.ctx, cloudBackend, cloudBackups)
 	var checked storage.Storage = cloudBackend
 	if reporter, ok := checked.(dryRunCheckReporter); ok && reporter.NotCheckedInDryRun() {
 		// A dry run could check this remote only by writing to it: it is used, not checked.
 		logging.DebugStep(logger, "storage init", "cloud not checked in dry run (listing not permitted)")
-		logStorageInitSummary(formatNotCheckedInitSummary("Cloud storage", cfg, storage.LocationCloud, cloudStats, cloudBackups))
+		logStorageInitSummary(formatNotCheckedInitSummary("Cloud storage", cfg, storage.LocationCloud, cloudStats, cloudOwnedBackups))
 		return cloudFS
 	}
-	logStorageInitSummary(formatStorageInitSummary("Cloud storage", cfg, storage.LocationCloud, cloudStats, cloudBackups, problems...))
+	logStorageInitSummary(formatStorageInitSummary("Cloud storage", cfg, storage.LocationCloud, cloudStats, cloudOwnedBackups, problems...))
 	return cloudFS
 }
 
@@ -261,14 +262,25 @@ func disableCloudForRun(cfg *config.Config, checker *checks.Checker) {
 // reports it for the locations it never reached (StorageAdapter.applyInitialStats).
 //
 // known is false unless the two startup reads agree. GetStats lists the location
-// itself and counts that listing, while fetchBackupList returns nil on a failed
-// listing, which is also what an empty location returns: scoping that nil would
-// report "0 owned" beside a location GetStats saw full. A listing that changed
-// between the two reads is refused the same way, and the caller keeps the unscoped
-// total.
+// itself and records how many archives that listing held (ListedBackups), while
+// fetchBackupList returns nil on a failed listing, which is also what an empty
+// location returns: scoping that nil would report "0 owned" beside a location GetStats
+// saw full. A listing that changed between the two reads is refused the same way, and
+// the caller keeps the GetStats count.
 func startupOwnedBackups(ctx context.Context, backend storage.Storage, stats *storage.StorageStats, backups []*types.BackupMetadata) (int, bool) {
-	if backend == nil || stats == nil || len(backups) != stats.TotalBackups {
+	if backend == nil || stats == nil || len(backups) != stats.ListedBackups {
 		return 0, false
 	}
 	return storage.CountOwnedBackups(ctx, backend, backups)
+}
+
+// startupOwnedListing narrows the startup listing to this host's own backups, by the
+// rule retention prunes by, so the storage-init GFS tiers count what "  Backups: <N>"
+// counts. A backend this package cannot attribute keeps the listing as it is.
+func startupOwnedListing(ctx context.Context, backend storage.Storage, backups []*types.BackupMetadata) []*types.BackupMetadata {
+	owned, ok := storage.OwnedBackups(ctx, backend, backups)
+	if !ok {
+		return backups
+	}
+	return owned
 }

@@ -270,11 +270,22 @@ func TestCloudLocalFormRetentionAndStatistics(t *testing.T) {
 
 			rec = &argvRecorder{respond: rec.respond}
 			cs = newFormCloud(t, form, nil, rec)
+			cs.hostname = "node"
 			stats, err := cs.GetStats(context.Background())
 			if err != nil || stats.TotalBackups != 2 {
 				t.Fatalf("GetStats = %+v, %v; want 2 backups", stats, err)
 			}
-			requireArgv(t, rec.argv(), "lsl "+form.base+" --max-depth 1")
+			// The statistics read the manifests as retention does, to count only this
+			// host's backups.
+			got = rec.argv()
+			sort.Strings(got)
+			want = []string{
+				"cat " + form.base + "/" + newest + ".metadata",
+				"cat " + form.base + "/" + oldest + ".metadata",
+				"lsl " + form.base + " --max-depth 1",
+			}
+			sort.Strings(want)
+			requireArgv(t, got, want...)
 		})
 	}
 }

@@ -60,11 +60,8 @@ func seedSharedLocation(t *testing.T) string {
 // summary stayed at its zero value and the reporter fell back to counting every
 // host's archives (discussion #292).
 //
-// The pair of assertions is the whole point. GetStats must keep counting all five,
-// because TotalSize and the free-space figures beside it describe the location, and
-// the retention summary must report three, because that is what this host owns and
-// what its limit is compared against. Collapsing the two into one number in either
-// direction is the bug, in one direction or the other.
+// GetStats counts only this host's archives too (Total backups and Total size cover
+// only this host's backups), while ListedBackups keeps every archive the listing saw.
 func TestRetentionPublishesTheOwnedCountWhenNothingNeedsDeleting(t *testing.T) {
 	original := retentionHostname
 	retentionHostname = func() (string, error) { return "pve", nil }
@@ -96,8 +93,8 @@ func TestRetentionPublishesTheOwnedCountWhenNothingNeedsDeleting(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetStats: %v", err)
 	}
-	if stats.TotalBackups != 5 {
-		t.Fatalf("GetStats().TotalBackups = %d, want 5: this figure sits beside TotalSize and the free-space numbers, which describe the whole location, so it must keep counting every archive present", stats.TotalBackups)
+	if stats.TotalBackups != 3 || stats.ListedBackups != 5 {
+		t.Fatalf("GetStats() = %d backups of %d listed, want 3 of 5: the statistics count only this host's backups", stats.TotalBackups, stats.ListedBackups)
 	}
 }
 
@@ -235,8 +232,10 @@ func TestReportedCountCoversArchivesNoHostManages(t *testing.T) {
 			manifest string
 		}
 		wantReported int
-		wantOnDisk   int
-		why          string
+		// wantStats is what GetStats counts: only the archives this host owns, by
+		// name or by server identity.
+		wantStats int
+		why       string
 	}{
 		{
 			name: "pre-Go archives nobody can attribute still count",
@@ -248,7 +247,7 @@ func TestReportedCountCoversArchivesNoHostManages(t *testing.T) {
 				{"proxmox-backup-20250102-100000.tar.zst", ""},
 				{"proxmox-backup-20250103-100000.tar.zst", ""},
 			},
-			wantReported: 3, wantOnDisk: 3,
+			wantReported: 3, wantStats: 0,
 			why: "reporting 0 here tells an operator holding three restorable archives that the location is empty",
 		},
 		{
@@ -261,7 +260,7 @@ func TestReportedCountCoversArchivesNoHostManages(t *testing.T) {
 				{"proxmox-backup-20250102-100000.tar.zst", ""},
 				{"pve-backup-20250103-100000.tar.zst", "pve"},
 			},
-			wantReported: 3, wantOnDisk: 3,
+			wantReported: 3, wantStats: 1,
 			why: "reporting 1 of 3 says 'within the limit' while the two legacy archives grow for ever",
 		},
 		{
@@ -274,7 +273,7 @@ func TestReportedCountCoversArchivesNoHostManages(t *testing.T) {
 				{"pve.home.arpa-backup-20250101-100000.tar.zst", "pve.home.arpa"},
 				{"pve.home.arpa-backup-20250102-100000.tar.zst", "pve.home.arpa"},
 			},
-			wantReported: 2, wantOnDisk: 2,
+			wantReported: 2, wantStats: 0,
 			why: "these are this machine's own archives and they have stopped rotating; hiding them removes the only signal that says so",
 		},
 		{
@@ -287,7 +286,7 @@ func TestReportedCountCoversArchivesNoHostManages(t *testing.T) {
 				{"nas.siteb.example-backup-20250101-100000.tar.zst", "nas.siteb.example"},
 				{"nas.siteb.example-backup-20250102-100000.tar.zst", "nas.siteb.example"},
 			},
-			wantReported: 1, wantOnDisk: 3,
+			wantReported: 1, wantStats: 1,
 			why: "counting the other machine's two archives against this host's limit is the 40/7 the fix removed",
 		},
 	}
@@ -325,8 +324,8 @@ func TestReportedCountCoversArchivesNoHostManages(t *testing.T) {
 			if err != nil {
 				t.Fatalf("GetStats: %v", err)
 			}
-			if stats.TotalBackups != tc.wantOnDisk {
-				t.Fatalf("GetStats().TotalBackups = %d, want %d: that figure sits beside the free-space numbers and must keep describing the whole location", stats.TotalBackups, tc.wantOnDisk)
+			if stats.TotalBackups != tc.wantStats || stats.ListedBackups != len(tc.seeds) {
+				t.Fatalf("GetStats() = %d backups of %d listed, want %d of %d: the statistics count only the archives this host owns", stats.TotalBackups, stats.ListedBackups, tc.wantStats, len(tc.seeds))
 			}
 		})
 	}

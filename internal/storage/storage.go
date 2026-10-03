@@ -228,8 +228,12 @@ type RetentionReporter interface {
 
 // StorageStats contains statistics about a storage location
 type StorageStats struct {
-	TotalBackups   int
-	TotalSize      int64
+	// TotalBackups and TotalSize cover ONLY the archives this host owns, by the rule
+	// retention prunes by (ownedStorageStats). OldestBackup and NewestBackup too.
+	TotalBackups int
+	TotalSize    int64
+	// ListedBackups is every archive the listing returned, whoever owns it.
+	ListedBackups  int
 	OldestBackup   *time.Time
 	NewestBackup   *time.Time
 	AvailableSpace int64

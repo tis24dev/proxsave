@@ -2667,31 +2667,13 @@ func (c *CloudStorage) GetStats(ctx context.Context) (stats *StorageStats, err e
 		return nil, err
 	}
 
-	stats = &StorageStats{
-		TotalBackups:   len(backups),
-		FilesystemType: FilesystemType("rclone-" + c.backendLabel()),
-	}
-
-	var totalSize int64
-	var oldest, newest *time.Time
-
-	for _, backup := range backups {
-		totalSize += backup.Size
-
-		if oldest == nil || backup.Timestamp.Before(*oldest) {
-			t := backup.Timestamp
-			oldest = &t
-		}
-		if newest == nil || backup.Timestamp.After(*newest) {
-			t := backup.Timestamp
-			newest = &t
-		}
-	}
-
-	stats.TotalSize = totalSize
-	stats.OldestBackup = oldest
-	stats.NewestBackup = newest
-	logging.DebugStep(c.logger, "cloud stats", "backups=%d size=%s", stats.TotalBackups, utils.FormatBytes(stats.TotalSize))
+	// Only this host's backups are counted: the listing matches every hostname, and
+	// List reads no manifest, so the owners are looked up as retention looks them up
+	// (one rclone cat per archive, under the management budget).
+	c.resolveRetentionOwners(ctx, backups)
+	stats = ownedStorageStats(backups, retentionIdentity{hostname: c.hostname, aliases: c.hostAliases, serverID: c.serverID})
+	stats.FilesystemType = FilesystemType("rclone-" + c.backendLabel())
+	logging.DebugStep(c.logger, "cloud stats", "backups=%d of %d listed, size=%s", stats.TotalBackups, stats.ListedBackups, utils.FormatBytes(stats.TotalSize))
 
 	return stats, nil
 }
