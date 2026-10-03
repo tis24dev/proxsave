@@ -134,3 +134,50 @@ func TestPrometheusExporterStatusMapping(t *testing.T) {
 		})
 	}
 }
+
+func TestPrometheusExporterBackupsTotalPBS(t *testing.T) {
+	const head = "# HELP proxmox_backup_backups_total Number of backups per location\n" +
+		"# TYPE proxmox_backup_backups_total gauge\n" +
+		"proxmox_backup_backups_total{location=\"local\"} 5\n" +
+		"proxmox_backup_backups_total{location=\"secondary\"} 3\n" +
+		"proxmox_backup_backups_total{location=\"cloud\"} 1\n"
+	const next = "# HELP proxmox_backup_info"
+
+	for _, tc := range []struct {
+		name    string
+		enabled bool
+		backups int
+		want    string
+	}{
+		{"enabled with count", true, 7, head + "proxmox_backup_backups_total{location=\"pbs\"} 7\n" + next},
+		{"enabled unknown", true, 0, head + "proxmox_backup_backups_total{location=\"pbs\"} 0\n" + next},
+		{"disabled", false, 7, head + next},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			exporter := NewPrometheusExporter(dir, logging.New(types.LogLevelError, false))
+			m := &BackupMetrics{
+				Hostname:     "test-host",
+				LocalBackups: 5,
+				SecBackups:   3,
+				CloudBackups: 1,
+				PBSEnabled:   tc.enabled,
+				PBSBackups:   tc.backups,
+			}
+			if err := exporter.Export(m); err != nil {
+				t.Fatalf("Export() error = %v", err)
+			}
+			data, err := os.ReadFile(filepath.Join(dir, "proxmox_backup.prom"))
+			if err != nil {
+				t.Fatalf("read metrics file: %v", err)
+			}
+			content := string(data)
+			if !strings.Contains(content, tc.want) {
+				t.Fatalf("backups_total block mismatch, want\n%s\ngot\n%s", tc.want, content)
+			}
+			if got := strings.Count(content, "location=\"pbs\""); got != map[bool]int{true: 1, false: 0}[tc.enabled] {
+				t.Fatalf("pbs lines = %d, enabled=%v\n%s", got, tc.enabled, content)
+			}
+		})
+	}
+}

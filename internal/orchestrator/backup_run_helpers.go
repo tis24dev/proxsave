@@ -47,6 +47,14 @@ func (o *Orchestrator) exportPrometheusBackupMetrics(stats *BackupStats) {
 	if m == nil {
 		return
 	}
+	// The PBS line follows PBS_TARGET_ENABLED, not the PBS outcome: an early error has
+	// no outcome and still reports 0, as does a PBS block that never got a count.
+	if o.cfg.PBSTargetEnabled {
+		m.PBSEnabled = true
+		if r := stats.PBSTarget; r != nil && r.Backups > 0 {
+			m.PBSBackups = r.Backups
+		}
+	}
 
 	exporter := metrics.NewPrometheusExporter(o.cfg.MetricsPath, o.logger)
 	if err := exporter.Export(m); err != nil {
