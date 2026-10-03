@@ -507,6 +507,12 @@ func TestResolveCloudPath(t *testing.T) {
 		{"empty remote", "/logs", "", "/logs"},
 		{"spaces trimmed", "  /logs  ", "gdrive", "gdrive:/logs"},
 		{"spaces in remote", "/logs", "  gdrive  ", "gdrive:/logs"},
+
+		// CLOUD_REMOTE a local directory: the path lives inside it; a path with ":"
+		// stays as-is.
+		{"local remote", "/proxsave/log", "/mnt/cloud", "/mnt/cloud/proxsave/log"},
+		{"local remote no leading slash", "proxsave/log/", "/mnt/cloud", "/mnt/cloud/proxsave/log"},
+		{"local remote legacy path", "gdrive:/logs", "/mnt/cloud", "gdrive:/logs"},
 	}
 
 	for _, tt := range tests {
@@ -549,6 +555,11 @@ func TestBuildCloudLogDestination(t *testing.T) {
 		// Edge cases
 		{"empty remote new style", "/logs", "backup.log", "", "/logs/backup.log"},
 		{"empty all", "", "", "", ""},
+
+		// CLOUD_REMOTE a local directory
+		{"local remote", "/proxsave/log", "backup.log", "/mnt/cloud", "/mnt/cloud/proxsave/log/backup.log"},
+		{"local remote root", "/", "backup.log", "/mnt/cloud", "/mnt/cloud/backup.log"},
+		{"local remote legacy path", "gdrive:/logs", "backup.log", "/mnt/cloud", "gdrive:/logs/backup.log"},
 	}
 
 	for _, tt := range tests {

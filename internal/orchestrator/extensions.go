@@ -633,11 +633,15 @@ func (o *Orchestrator) dispatchLogFile(ctx context.Context, logFilePath string) 
 }
 
 // resolveCloudPath normalizes a cloud path by prepending the remote name if not present.
-// Supports both new style (/path) and legacy style (remote:/path).
+// Supports both new style (/path) and legacy style (remote:/path). When CLOUD_REMOTE is
+// a local directory, a path without ":" lives inside it (storage.LocalCloudLogDir).
 func resolveCloudPath(path, cloudRemote string) string {
 	path = strings.TrimSpace(path)
 	if path == "" {
 		return ""
+	}
+	if dir, ok := storage.LocalCloudLogDir(path, cloudRemote); ok {
+		return dir
 	}
 	// If it already contains ":", it's a legacy full path - use as-is
 	if strings.Contains(path, ":") {
@@ -658,11 +662,14 @@ func resolveCloudPath(path, cloudRemote string) string {
 
 // copyLogToCloud copies a log file to cloud storage using rclone
 func (o *Orchestrator) copyLogToCloud(ctx context.Context, sourcePath, destPath string) error {
-	// Normalize path using CLOUD_REMOTE if needed
-	destPath = resolveCloudPath(destPath, o.cfg.CloudRemote)
-
-	if !strings.Contains(destPath, ":") {
-		return fmt.Errorf("CLOUD_LOG_PATH requires CLOUD_REMOTE to be set: %s", destPath)
+	// Normalize path using CLOUD_REMOTE if needed. With CLOUD_REMOTE a local directory
+	// the destination dispatchLogFile hands over is already the full path inside it
+	// (buildCloudLogDestination): resolving it again would join the directory twice.
+	if _, local := storage.LocalCloudRemote(o.cfg.CloudRemote); !local {
+		destPath = resolveCloudPath(destPath, o.cfg.CloudRemote)
+		if !strings.Contains(destPath, ":") {
+			return fmt.Errorf("CLOUD_LOG_PATH requires CLOUD_REMOTE to be set: %s", destPath)
+		}
 	}
 
 	// No write-side hostname: this client only uploads a log file to an explicit

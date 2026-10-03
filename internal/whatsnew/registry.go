@@ -253,6 +253,12 @@ var notes = []Note{
 			"A PBS token symlink whose target is not 0600 root blocks the backup while AUTO_FIX_PERMISSIONS=true",
 		},
 	},
+	{
+		Version: "0.42.0",
+		Lines: []string{
+			"CLOUD_REMOTE accepts an absolute directory (for example a mounted share) as the cloud destination",
+		},
+	},
 }
 
 // LookupNotes returns the notes for versions in the half-open range (from, to], ascending by

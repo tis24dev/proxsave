@@ -111,9 +111,18 @@ type CloudStorage struct {
 	// location most likely to be shared, because the shipped CLOUD_REMOTE_PATH
 	// default is a root with no host component.
 	serverID string
+	// localRoot and localDir are set instead of remote and remotePrefix when
+	// CLOUD_REMOTE is a local directory (LocalCloudRemote): localRoot is CLOUD_REMOTE,
+	// localDir the backup directory under it, CLOUD_REMOTE_PATH joined. Every rclone
+	// reference is then a plain path, which rclone's local backend takes as is.
+	localRoot string
+	localDir  string
 }
 
 func (c *CloudStorage) remoteLabel() string {
+	if c.localDir != "" {
+		return c.localDir
+	}
 	if c.remotePrefix != "" {
 		return fmt.Sprintf("%s:%s", c.remote, c.remotePrefix)
 	}
@@ -124,7 +133,13 @@ func (c *CloudStorage) remoteBase() string {
 	return c.remoteLabel()
 }
 
+// remoteRoot is what the accessibility check lists first: the remote root
+// ("gdrive:"), or the CLOUD_REMOTE directory itself in the local form. The check lists
+// it and never creates it; only the backup directory under it gets an rclone mkdir.
 func (c *CloudStorage) remoteRoot() string {
+	if c.localRoot != "" {
+		return c.localRoot
+	}
 	return strings.TrimSpace(c.remote) + ":"
 }
 
@@ -133,10 +148,22 @@ func (c *CloudStorage) remotePathFor(name string) string {
 	if strings.HasPrefix(clean, "..") {
 		clean = filepath.Base(clean)
 	}
+	if c.localDir != "" {
+		return path.Join(c.localDir, clean)
+	}
 	if c.remotePrefix != "" {
 		clean = path.Join(c.remotePrefix, clean)
 	}
 	return fmt.Sprintf("%s:%s", c.remote, clean)
+}
+
+// backendLabel names the rclone backend in the filesystem type: the remote name, or
+// "local" (rclone's own name for that backend) when CLOUD_REMOTE is a directory.
+func (c *CloudStorage) backendLabel() string {
+	if c.localDir != "" {
+		return "local"
+	}
+	return c.remote
 }
 
 func (c *CloudStorage) buildRcloneArgs(subcommand string) []string {
@@ -183,6 +210,9 @@ func splitRemoteRef(ref string) (remoteName, relPath string) {
 }
 
 func remoteDirRef(ref string) string {
+	if isLocalRcloneRef(ref) {
+		return path.Dir(strings.TrimSpace(ref))
+	}
 	remoteName, relPath := splitRemoteRef(ref)
 	if relPath == "" {
 		return remoteName + ":"
@@ -195,6 +225,13 @@ func remoteDirRef(ref string) string {
 }
 
 func remoteBaseName(ref string) string {
+	if isLocalRcloneRef(ref) {
+		trimmed := strings.Trim(strings.TrimSpace(ref), "/")
+		if trimmed == "" {
+			return ""
+		}
+		return path.Base(trimmed)
+	}
 	_, relPath := splitRemoteRef(ref)
 	if relPath == "" {
 		return ""
@@ -253,23 +290,36 @@ func NewCloudStorage(cfg *config.Config, logger *logging.Logger, writtenHostname
 	//   - remote: rclone remote name (e.g. "gdrive")
 	//   - remotePrefix: full path inside the remote where backups live
 	//     (base path from CLOUD_REMOTE plus optional CLOUD_REMOTE_PATH)
+	//   - or, when CLOUD_REMOTE is a local directory (LocalCloudRemote), localRoot
+	//     and localDir: the directory and the backup directory under it
 	rawRemote := strings.TrimSpace(cfg.CloudRemote)
-	remoteName, basePath := splitRemoteRef(rawRemote)
-	remoteName = strings.TrimSpace(remoteName)
-	if err := safeexec.ValidateRcloneRemoteName(remoteName); err != nil {
-		return nil, fmt.Errorf("invalid CLOUD_REMOTE: %w", err)
-	}
-	basePath = strings.Trim(strings.TrimSpace(basePath), "/")
-	if err := safeexec.ValidateRemoteRelativePath(basePath, "CLOUD_REMOTE path"); err != nil {
-		return nil, err
-	}
-
 	userPrefix := strings.Trim(strings.TrimSpace(cfg.CloudRemotePath), "/")
-	if err := safeexec.ValidateRemoteRelativePath(userPrefix, "CLOUD_REMOTE_PATH"); err != nil {
-		return nil, err
+	var remoteName, combinedPrefix, localRoot, localDir string
+	if root, ok := LocalCloudRemote(rawRemote); ok {
+		if err := validateLocalCloudRemote(root); err != nil {
+			return nil, fmt.Errorf("invalid CLOUD_REMOTE: %w", err)
+		}
+		if err := safeexec.ValidateRemoteRelativePath(userPrefix, "CLOUD_REMOTE_PATH"); err != nil {
+			return nil, err
+		}
+		localRoot = root
+		localDir, _ = LocalCloudRemoteDir(rawRemote, cfg.CloudRemotePath)
+	} else {
+		var basePath string
+		remoteName, basePath = splitRemoteRef(rawRemote)
+		remoteName = strings.TrimSpace(remoteName)
+		if err := safeexec.ValidateRcloneRemoteName(remoteName); err != nil {
+			return nil, fmt.Errorf("invalid CLOUD_REMOTE: %w", err)
+		}
+		basePath = strings.Trim(strings.TrimSpace(basePath), "/")
+		if err := safeexec.ValidateRemoteRelativePath(basePath, "CLOUD_REMOTE path"); err != nil {
+			return nil, err
+		}
+		if err := safeexec.ValidateRemoteRelativePath(userPrefix, "CLOUD_REMOTE_PATH"); err != nil {
+			return nil, err
+		}
+		combinedPrefix = strings.Trim(path.Join(basePath, userPrefix), "/")
 	}
-
-	combinedPrefix := strings.Trim(path.Join(basePath, userPrefix), "/")
 
 	mode := strings.ToLower(strings.TrimSpace(cfg.CloudUploadMode))
 	if mode != cloudUploadModeParallel {
@@ -290,6 +340,8 @@ func NewCloudStorage(cfg *config.Config, logger *logging.Logger, writtenHostname
 		serverID:       serverID,
 		remote:         remoteName,
 		remotePrefix:   combinedPrefix,
+		localRoot:      localRoot,
+		localDir:       localDir,
 		uploadMode:     mode,
 		parallelJobs:   parallelJobs,
 		parallelVerify: cfg.CloudParallelVerify,
@@ -314,7 +366,7 @@ func (c *CloudStorage) Location() BackupLocation {
 
 // IsEnabled returns true if cloud storage is configured
 func (c *CloudStorage) IsEnabled() bool {
-	return c.config.CloudEnabled && c.remote != ""
+	return c.config.CloudEnabled && (c.remote != "" || c.localDir != "")
 }
 
 // IsCritical returns false because cloud storage is non-critical
@@ -401,7 +453,7 @@ func (c *CloudStorage) DetectFilesystem(ctx context.Context) (info *FilesystemIn
 	// Return minimal filesystem info (cloud doesn't have a real filesystem type)
 	return &FilesystemInfo{
 		Path:              c.remoteLabel(),
-		Type:              FilesystemType("rclone-" + c.remote),
+		Type:              FilesystemType("rclone-" + c.backendLabel()),
 		SupportsOwnership: false,
 		IsNetworkFS:       true,
 		MountPoint:        c.remoteLabel(),
@@ -2039,6 +2091,11 @@ func (c *CloudStorage) cloudLogBase(basePath string) string {
 	if base == "" {
 		return ""
 	}
+	if c != nil {
+		if dir, ok := LocalCloudLogDir(base, c.localRoot); ok {
+			return dir
+		}
+	}
 	if !strings.Contains(base, ":") && c != nil && strings.TrimSpace(c.remote) != "" {
 		base = strings.TrimSpace(c.remote) + ":" + base
 	}
@@ -2048,11 +2105,15 @@ func (c *CloudStorage) cloudLogBase(basePath string) string {
 
 // cloudLogPath builds the full cloud log path, mirroring buildCloudLogDestination logic.
 // Supports both new style (/path) and legacy style (remote:/path).
-// If basePath doesn't contain ":", uses c.remote as the remote name.
+// If basePath doesn't contain ":", uses c.remote as the remote name, or, when
+// CLOUD_REMOTE is a local directory, puts the path inside it (LocalCloudLogDir).
 func (c *CloudStorage) cloudLogPath(basePath, fileName string) string {
 	base := strings.TrimSpace(basePath)
 	if base == "" {
 		return ""
+	}
+	if dir, ok := LocalCloudLogDir(base, c.localRoot); ok {
+		return filepath.Join(dir, fileName)
 	}
 	// If basePath doesn't contain ":", prepend c.remote
 	if !strings.Contains(base, ":") && c.remote != "" {
@@ -2310,7 +2371,7 @@ func (c *CloudStorage) GetStats(ctx context.Context) (stats *StorageStats, err e
 
 	stats = &StorageStats{
 		TotalBackups:   len(backups),
-		FilesystemType: FilesystemType("rclone-" + c.remote),
+		FilesystemType: FilesystemType("rclone-" + c.backendLabel()),
 	}
 
 	var totalSize int64

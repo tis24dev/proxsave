@@ -231,3 +231,39 @@ func TestDispatchLogFileCloudAttempts(t *testing.T) {
 		requireExactLines(t, visibleLines(buf.String()), want...)
 	}
 }
+
+// Step [8] with CLOUD_REMOTE a local directory: the log goes INSIDE it
+// (CLOUD_LOG_PATH under CLOUD_REMOTE, CLOUD_REMOTE_PATH not involved), the "Cloud:"
+// line names that path, and rclone receives it without a "<name>:" prefix and
+// without the directory joined twice.
+func TestDispatchLogFileCloudLocalDirectory(t *testing.T) {
+	record := filepath.Join(t.TempDir(), "argv")
+	fakeRcloneOnPath(t, "#!/bin/sh\n"+
+		"echo \"$*\" >> "+record+"\n"+
+		"case \"$1\" in\n"+
+		"lsl) echo \"        7 2026-10-03 10:00:00.000000000 $(basename \"$2\")\";;\n"+
+		"esac\nexit 0\n")
+	var buf bytes.Buffer
+	logger := logging.New(types.LogLevelInfo, false)
+	logger.SetOutput(&buf)
+	cfg := &config.Config{CloudEnabled: true, CloudRemote: "/mnt/cloud", CloudRemotePath: "host1", CloudLogPath: "/proxsave/log", RcloneRetries: 1, FsIoTimeoutSeconds: 30}
+	o := &Orchestrator{logger: logger, cfg: cfg}
+	src := writeSrcLog(t)
+	if err := o.dispatchLogFile(context.Background(), src); err != nil {
+		t.Fatalf("dispatchLogFile: %v", err)
+	}
+	dest := "/mnt/cloud/proxsave/log/" + filepath.Base(src)
+	requireExactLines(t, visibleLines(buf.String()),
+		"INFO     Dispatching log file: "+filepath.Base(src),
+		"INFO     Cloud: "+dest,
+		"INFO     ✓ Log copied to cloud",
+	)
+	data, err := os.ReadFile(record)
+	if err != nil {
+		t.Fatalf("read the fake rclone record: %v", err)
+	}
+	requireExactLines(t, strings.Split(strings.TrimSpace(string(data)), "\n"),
+		"copyto "+src+" "+dest,
+		"lsl "+dest,
+	)
+}

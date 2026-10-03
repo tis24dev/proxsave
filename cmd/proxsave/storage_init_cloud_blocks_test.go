@@ -11,6 +11,7 @@ import (
 	"github.com/tis24dev/proxsave/internal/config"
 	"github.com/tis24dev/proxsave/internal/logging"
 	"github.com/tis24dev/proxsave/internal/orchestrator"
+	"github.com/tis24dev/proxsave/internal/storage"
 	"github.com/tis24dev/proxsave/internal/types"
 )
 
@@ -107,5 +108,47 @@ func TestCloudBackendNotCreatedBlock(t *testing.T) {
 	)
 	if cfg.CloudEnabled || cfg.CloudLogPath != "" {
 		t.Fatalf("the cloud must be off for the run: enabled=%v logPath=%q", cfg.CloudEnabled, cfg.CloudLogPath)
+	}
+}
+
+// CLOUD_REMOTE as an absolute local directory: the backend accepts it, and the
+// accessibility check runs rclone on the plain path (its local backend), with no
+// "<name>:" prefix. The block is the reachable cloud block.
+func TestCloudLocalDirectoryIsInitialized(t *testing.T) {
+	record := filepath.Join(t.TempDir(), "argv")
+	fakeRcloneOnPath(t, "#!/bin/sh\necho \"$*\" >> "+record+"\nexit 0\n")
+	cfg := &config.Config{CloudEnabled: true, CloudRemote: "/mnt/cloud", CloudRemotePath: "host1", CloudRetentionDays: 4}
+	var cloudFS *storage.FilesystemInfo
+	got := captureStorageInit(t, func(logger *logging.Logger) {
+		cloudFS = initializeCloudStorage(backupModeOptions{ctx: context.Background(), cfg: cfg, logger: logger, hostname: "node"}, orchestrator.New(logger, false), nil)
+	})
+	requireBlock(t, got,
+		"INFO     Path Cloud: /mnt/cloud",
+		"INFO       Retention policy: simple (keep 4 newest)",
+		"INFO     Checking cloud remote accessibility...",
+		"INFO       Accessible",
+		"INFO       Backups: 0",
+		"INFO     ✓ Cloud storage: initialized",
+	)
+	if !cfg.CloudEnabled {
+		t.Fatalf("the cloud must stay enabled")
+	}
+	data, err := os.ReadFile(record)
+	if err != nil {
+		t.Fatalf("read the fake rclone record: %v", err)
+	}
+	argv := strings.Split(strings.TrimSpace(string(data)), "\n")
+	want := []string{"lsf /mnt/cloud --max-depth 1", "mkdir /mnt/cloud/host1", "lsf /mnt/cloud/host1 --max-depth 1"}
+	if len(argv) < len(want) || strings.Join(argv[:len(want)], "\n") != strings.Join(want, "\n") {
+		t.Fatalf("rclone argv =\n%s\nwant it to open with\n%s", strings.Join(argv, "\n"), strings.Join(want, "\n"))
+	}
+	for _, line := range argv {
+		if strings.Contains(line, ":") {
+			t.Fatalf("a local directory must reach rclone without a remote prefix: %q", line)
+		}
+	}
+	// The storage summary line names the rclone backend "local".
+	if label := formatStorageLabel(cfg.CloudRemote, cloudFS); label != "/mnt/cloud [rclone-local]" {
+		t.Fatalf("storage label = %q", label)
 	}
 }
