@@ -185,8 +185,22 @@ func initializeCloudStorage(opts backupModeOptions, orch *orchestrator.Orchestra
 	}
 
 	// A remote has no filesystem of its own to show: what the backend reports stays in
-	// DEBUG, and the block goes on with what the check found ("  Accessible").
+	// DEBUG, and the block goes on with what the check found ("  Accessible"). A local
+	// directory has one, and the owner and mode of the copies depend on it: its facts
+	// are the Secondary's.
 	logging.DebugStep(logger, "storage init", "cloud filesystem=%s", formatDetailedFilesystemLabel(cfg.CloudRemote, cloudFS))
+	var problems []string
+	if _, local := storage.LocalCloudRemote(cfg.CloudRemote); local {
+		var detectErr error
+		var backend storage.Storage = cloudBackend
+		if reporter, ok := backend.(detectionFailureReporter); ok {
+			detectErr = reporter.DetectionFailure()
+		}
+		logging.DebugStep(logger, "storage init", "cloud local directory detect_err=%v", detectErr)
+		if problem := logStorageFilesystem(cloudFS, detectErr); problem != "" {
+			problems = append(problems, problem)
+		}
+	}
 	cloudStats := fetchStorageStats(opts.ctx, cloudBackend, logger, "Cloud storage")
 	cloudBackups := fetchBackupList(opts.ctx, cloudBackend)
 	logging.DebugStep(logger, "storage init", "cloud stats=%v backups=%d", cloudStats != nil, len(cloudBackups))
@@ -197,7 +211,7 @@ func initializeCloudStorage(opts backupModeOptions, orch *orchestrator.Orchestra
 	logging.DebugStep(logger, "storage init", "cloud owned=%d known=%v", cloudOwned, cloudOwnedKnown)
 	cloudAdapter.SetInitialOwnedBackups(cloudOwned, cloudOwnedKnown)
 	orch.RegisterStorageTarget(cloudAdapter)
-	logStorageInitSummary(formatStorageInitSummary("Cloud storage", cfg, storage.LocationCloud, cloudStats, cloudBackups))
+	logStorageInitSummary(formatStorageInitSummary("Cloud storage", cfg, storage.LocationCloud, cloudStats, cloudBackups, problems...))
 	return cloudFS
 }
 

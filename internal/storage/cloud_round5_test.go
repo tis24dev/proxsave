@@ -3,6 +3,7 @@ package storage
 import (
 	"context"
 	"errors"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -62,21 +63,22 @@ func TestCloudLogUploadVerificationFailure(t *testing.T) {
 }
 
 // A local CLOUD_REMOTE directory that cannot be created: "  Directory not created:
-// <cause>" under the check (the last rclone line), not the bare rclone line.
+// <cause>" under the check, the system error without the path (ProxSave creates the
+// directory itself, 0700, like the Secondary), not the bare cause.
 func TestCloudLocalDirectoryNotCreatedFact(t *testing.T) {
-	const cause = "Failed to mkdir: mkdir /mnt/cloud: permission denied"
-	cfg := &config.Config{CloudEnabled: true, CloudRemote: "/mnt/cloud", RcloneTimeoutConnection: 30}
-	cs, buf := newCloudWithCapturedLog(t, cfg, func(_ context.Context, _ string, args ...string) ([]byte, error) {
-		if args[0] == "mkdir" {
-			return []byte("2026/10/03 10:00:00 " + cause + "\n"), errors.New("exit status 1")
-		}
-		return nil, nil
-	})
+	blocker := filepath.Join(t.TempDir(), "file")
+	writeTestFile(t, blocker, "x")
+	cfg := &config.Config{CloudEnabled: true, CloudRemote: filepath.Join(blocker, "cloud"), RcloneTimeoutConnection: 30}
+	rec := &argvRecorder{}
+	cs, buf := newCloudWithCapturedLog(t, cfg, rec.exec)
 	if _, err := cs.DetectFilesystem(context.Background()); err == nil {
 		t.Fatalf("DetectFilesystem must fail when the directory cannot be created")
 	}
-	want := "INFO     Checking cloud remote accessibility...\nINFO       Directory not created: " + cause
+	want := "INFO     Checking cloud remote accessibility...\nINFO       Directory not created: not a directory"
 	if got := strings.Join(visibleOf(buf.String()), "\n"); got != want {
 		t.Fatalf("visible lines =\n%s\nwant\n%s", got, want)
+	}
+	if got := rec.argv(); len(got) != 0 {
+		t.Fatalf("rclone must not run when the directory is missing: %v", got)
 	}
 }

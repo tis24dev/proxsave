@@ -275,21 +275,24 @@ func TestDispatchLogFileCloudAttempts(t *testing.T) {
 // without the directory joined twice.
 func TestDispatchLogFileCloudLocalDirectory(t *testing.T) {
 	record := filepath.Join(t.TempDir(), "argv")
+	// copyto does what rclone's local backend does: parents 0755, the file 0644.
 	fakeRcloneOnPath(t, "#!/bin/sh\n"+
 		"echo \"$*\" >> "+record+"\n"+
 		"case \"$1\" in\n"+
+		"copyto) mkdir -p -m 0755 \"$(dirname \"$3\")\" && cp \"$2\" \"$3\" && chmod 0644 \"$3\";;\n"+
 		"lsl) echo \"        7 2026-10-03 10:00:00.000000000 $(basename \"$2\")\";;\n"+
-		"esac\nexit 0\n")
+		"esac\n")
 	var buf bytes.Buffer
 	logger := logging.New(types.LogLevelInfo, false)
 	logger.SetOutput(&buf)
-	cfg := &config.Config{CloudEnabled: true, CloudRemote: "/mnt/cloud", CloudRemotePath: "host1", CloudLogPath: "/proxsave/log", RcloneRetries: 1, FsIoTimeoutSeconds: 30}
+	root := filepath.Join(t.TempDir(), "cloud")
+	cfg := &config.Config{CloudEnabled: true, CloudRemote: root, CloudRemotePath: "host1", CloudLogPath: "/proxsave/log", RcloneRetries: 1, FsIoTimeoutSeconds: 30}
 	o := &Orchestrator{logger: logger, cfg: cfg}
 	src := writeSrcLog(t)
 	if err := o.dispatchLogFile(context.Background(), src); err != nil {
 		t.Fatalf("dispatchLogFile: %v", err)
 	}
-	dest := "/mnt/cloud/proxsave/log/" + filepath.Base(src)
+	dest := root + "/proxsave/log/" + filepath.Base(src)
 	requireExactLines(t, visibleLines(buf.String()),
 		"INFO     Dispatching log file: "+filepath.Base(src),
 		"INFO     Cloud: "+dest,
@@ -303,6 +306,10 @@ func TestDispatchLogFileCloudLocalDirectory(t *testing.T) {
 		"copyto "+src+" "+dest,
 		"lsl "+dest,
 	)
+	// The log gets the mode the Secondary log copy creates (0640), not rclone's 0644.
+	if st, err := os.Stat(dest); err != nil || st.Mode().Perm() != 0o640 {
+		t.Fatalf("log mode = %v (%v), want 0640 like the Secondary log copy", st.Mode().Perm(), err)
+	}
 }
 
 // Step [8], CLOUD_REMOTE a local directory and a CLOUD_LOG_PATH that resolves outside
@@ -391,4 +398,37 @@ func TestDispatchLogFileCloudLogPathOutsideKeepsTheProbe(t *testing.T) {
 	if !strings.Contains(buf.String(), "source log "+src+" not accessible either: stat "+src+": permission denied") {
 		t.Fatalf("the probe result must be in DEBUG:\n%s", buf.String())
 	}
+}
+
+// Step [6], CLOUD_REMOTE a local directory: owner and mode are set like the
+// Secondary's, and a chown that fails (unprivileged run) closes the block with the
+// Secondary's facts and the cloud outcome "backup saved, permissions not set".
+func TestCloudBlockLocalDirectoryPermissions(t *testing.T) {
+	fakeRcloneOnPath(t, "#!/bin/sh\n"+
+		"case \"$1\" in\n"+
+		"copyto) cp \"$2\" \"$3\" && chmod 0644 \"$3\";;\n"+
+		"lsl) if [ -f \"$2\" ]; then echo \"        7 2026-10-03 10:00:00.000000000 $(basename \"$2\")\"; fi;;\n"+
+		"esac\n")
+	root := filepath.Join(t.TempDir(), "cloud")
+	cfg := &config.Config{CloudEnabled: true, CloudRemote: root, RcloneRetries: 1}
+	archive := writeArchive(t)
+	got := syncRealBackend(t, cfg, newRealCloud(t, cfg), nil, archive)
+	name := filepath.Base(archive)
+	if detected, err := storage.NewFilesystemDetector(logging.New(types.LogLevelInfo, false)).DetectFilesystem(context.Background(), root); err != nil || !detected.SupportsOwnership {
+		t.Skipf("the temporary directory's filesystem takes no ownership here (%v): nothing is set, like on the Secondary", err)
+	}
+	if st, err := os.Stat(filepath.Join(root, name)); err != nil || st.Mode().Perm() != 0o600 {
+		t.Fatalf("archive mode = %v (%v), want 0600 like the Secondary", st.Mode().Perm(), err)
+	}
+	if os.Geteuid() == 0 {
+		if last := got[len(got)-1]; last != "INFO     ✓ Cloud Storage (rclone): backup saved" {
+			t.Fatalf("root: the block closes on the saved outcome, got:\n%s", strings.Join(got, "\n"))
+		}
+		return
+	}
+	tail := got[len(got)-2:]
+	requireExactLines(t, tail,
+		"INFO       Owner failed: "+name+": operation not permitted",
+		"WARNING  ⚠ Cloud Storage (rclone): backup saved, permissions not set",
+	)
 }

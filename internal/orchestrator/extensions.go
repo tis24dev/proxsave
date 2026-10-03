@@ -703,6 +703,16 @@ func (o *Orchestrator) copyLogToCloud(ctx context.Context, sourcePath, destPath 
 	if err := client.UploadToRemotePath(ctx, sourcePath, destPath, true); err != nil {
 		return err
 	}
+	if _, local := storage.LocalCloudRemote(o.cfg.CloudRemote); local && filepath.IsAbs(destPath) {
+		// rclone writes the log 0644. In a local CLOUD_REMOTE directory it gets the mode
+		// the Secondary log copy creates (copyFile, 0640), owner unchanged; a mode that
+		// cannot be set is a failed copy there too.
+		o.logger.Debug("Cloud log copy: setting mode 0640 on %s", destPath)
+		if err := safefs.Chmod(ctx, destPath, 0o640, o.fsIoTimeout()); err != nil {
+			o.logger.Debug("Cloud log copy: cannot set the mode of %s: %v", destPath, err)
+			return err
+		}
+	}
 	for _, issue := range client.LastStoreIssues() {
 		if issue == storage.StoreIssueChecksumNotVerified {
 			return errLogChecksumNotVerified

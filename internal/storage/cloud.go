@@ -120,6 +120,11 @@ type CloudStorage struct {
 	// fsDetector detects the filesystem of the local directory (local form only), for
 	// the storage summary; the uploads still go through rclone.
 	fsDetector *FilesystemDetector
+	// localFS is what the detection found for the local directory, and detectErr why
+	// it fell back to an unknown filesystem. Owner and mode are set on the copies the
+	// way the Secondary sets them, when localFS supports ownership.
+	localFS   *FilesystemInfo
+	detectErr error
 }
 
 func (c *CloudStorage) remoteLabel() string {
@@ -137,8 +142,8 @@ func (c *CloudStorage) remoteBase() string {
 }
 
 // remoteRoot is what the accessibility check lists first: the remote root
-// ("gdrive:"), or the CLOUD_REMOTE directory itself in the local form. The check lists
-// it and never creates it; only the backup directory under it gets an rclone mkdir.
+// ("gdrive:"), or the CLOUD_REMOTE directory itself in the local form, created with
+// the backup directory under it before the check lists anything.
 func (c *CloudStorage) remoteRoot() string {
 	if c.localRoot != "" {
 		return c.localRoot
@@ -169,13 +174,51 @@ func (c *CloudStorage) localFilesystemInfo(ctx context.Context) *FilesystemInfo 
 	if detector == nil {
 		detector = NewFilesystemDetector(c.logger, WithIOTimeout(c.fsIoTimeout()))
 	}
+	c.detectErr = nil
 	info, err := detector.DetectFilesystem(ctx, c.localDir)
 	if err != nil || info == nil {
+		// Like the Secondary: the copy still runs, without owner and mode. The storage
+		// initialization prints the cause and the outcome (DetectionFailure).
 		c.logger.Debug("Cloud storage: filesystem detection failed for %s, type unknown: %v", c.localDir, err)
-		return &FilesystemInfo{Path: c.localDir, Type: FilesystemUnknown, MountPoint: c.localDir}
+		if err == nil {
+			err = fmt.Errorf("filesystem detection returned nothing")
+		}
+		c.detectErr = err
+		info = &FilesystemInfo{Path: c.localDir, Type: FilesystemUnknown, MountPoint: c.localDir}
+	} else {
+		c.logger.Debug("Cloud storage: %s is on %s (mount %s, ownership=%v)", c.localDir, info.Type, info.MountPoint, info.SupportsOwnership)
 	}
-	c.logger.Debug("Cloud storage: %s is on %s (mount %s)", c.localDir, info.Type, info.MountPoint)
+	c.localFS = info
 	return info
+}
+
+// DetectionFailure is why the last detection of the local directory fell back to an
+// unknown filesystem, nil when it did not (and always nil for the remote form).
+func (c *CloudStorage) DetectionFailure() error {
+	return c.detectErr
+}
+
+// setLocalPermissions gives the files of the backup set rclone copied into a local
+// CLOUD_REMOTE directory the owner and mode the Secondary gives its copies
+// (setBackupSetPermissions: 0600 root:root, or 0640 BACKUP_USER:BACKUP_GROUP with
+// SET_BACKUP_PERMISSIONS). rclone writes them 0644. Nothing happens for the remote
+// form, or on a filesystem without ownership.
+func (c *CloudStorage) setLocalPermissions(ctx context.Context, destFile string, issues *storeIssueRecorder) {
+	if c.localDir == "" || c.localFS == nil || !c.localFS.SupportsOwnership {
+		if c.localDir != "" {
+			c.logger.Debug("Cloud Storage: permissions - skipped for %s (filesystem without ownership)", filepath.Base(destFile))
+		}
+		return
+	}
+	detector := c.fsDetector
+	if detector == nil {
+		detector = NewFilesystemDetector(c.logger, WithIOTimeout(c.fsIoTimeout()))
+	}
+	setBackupSetPermissions(ctx, c.config, c.logger, detector, c.localFS, destFile, func(path string, err error) {
+		c.logger.Debug("Cloud Storage: permissions - failed to set them on %s: %v", filepath.Base(path), err)
+		logPermissionsFailure(c.logger, path, err)
+		issues.add(StoreIssuePermissionsNotSet)
+	})
 }
 
 // backendLabel names the rclone backend in the filesystem type: the remote name, or
@@ -655,14 +698,14 @@ func (c *CloudStorage) checkRemoteOnce(ctx context.Context) error {
 
 	remoteBase := c.remoteBase()
 
-	// A local directory is created the way the Secondary's is: rclone mkdir (parents
-	// included) of the backup directory, before anything lists or writes there.
+	// A local directory is created the way the Secondary's is, before anything lists
+	// or writes there: MkdirAll 0700, parents included (rclone mkdir would make them
+	// 0755).
 	if c.localDir != "" {
-		argsMkdir := c.buildRcloneArgs("mkdir")
-		argsMkdir = append(argsMkdir, c.localDir)
-		c.logger.Debug("Running (local directory ensure): %s", strings.Join(argsMkdir, " "))
-		if output, err := c.exec(ctx, argsMkdir[0], argsMkdir[1:]...); err != nil {
-			return &DirectoryError{Err: classifyRemoteError("path", c.localDir, err, output)}
+		c.logger.Debug("Cloud storage: ensuring the local directory %s (0700)", c.localDir)
+		if err := safefs.MkdirAll(ctx, c.localDir, 0o700, c.fsIoTimeout()); err != nil {
+			c.logger.Debug("Cloud Storage: setup - cannot create the local directory %s: %v", c.localDir, err)
+			return &DirectoryError{Err: err}
 		}
 	}
 
@@ -1022,6 +1065,12 @@ func (c *CloudStorage) Store(ctx context.Context, backupFile string, metadata *t
 		default:
 			c.logger.Info("  Sidecar failed: %s", uploadFailureFact(err))
 		}
+		if !primaryFailed && c.localDir != "" {
+			// The archive is in the local directory: like the Secondary, the sidecar
+			// failure comes first, then owner and mode of what was copied.
+			issues.add(StoreIssueSidecarNotSaved)
+			c.setLocalPermissions(ctx, remoteFile, issues)
+		}
 		return &StorageError{
 			Location:     LocationCloud,
 			Operation:    op,
@@ -1035,6 +1084,7 @@ func (c *CloudStorage) Store(ctx context.Context, backupFile string, metadata *t
 
 	c.logger.Debug("Cloud storage: upload and verification completed for %s", filename)
 	c.logger.Debug("✓ Cloud Storage: File uploaded")
+	c.setLocalPermissions(ctx, remoteFile, issues)
 
 	if count := c.countBackups(ctx); count >= 0 {
 		c.logger.Debug("Cloud storage: current backups detected after upload: %d", count)

@@ -3,7 +3,10 @@ package storage
 import (
 	"bytes"
 	"context"
+	"errors"
+	"fmt"
 	"os"
+	"os/user"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -29,13 +32,18 @@ type cloudForm struct {
 
 func (f cloudForm) local() bool { return !strings.Contains(f.remote, ":") }
 
-// The local form (an absolute CLOUD_REMOTE without a colon) builds plain paths, which
-// rclone's local backend takes as is; the remote form is unchanged.
-var cloudForms = []cloudForm{
-	{name: "local", remote: "/mnt/cloud", root: "/mnt/cloud", base: "/mnt/cloud", logDir: "/mnt/cloud/proxsave/log"},
-	{name: "local with CLOUD_REMOTE_PATH", remote: "/mnt/cloud", remotePath: "host1", root: "/mnt/cloud", base: "/mnt/cloud/host1", logDir: "/mnt/cloud/proxsave/log"},
-	{name: "remote", remote: "remote:backups", root: "remote:", base: "remote:backups", logDir: "remote:/proxsave/log"},
-	{name: "remote with CLOUD_REMOTE_PATH", remote: "remote:backups", remotePath: "host1", root: "remote:", base: "remote:backups/host1", logDir: "remote:/proxsave/log"},
+// cloudFormsFor lists the ways of writing CLOUD_REMOTE. The local form (an absolute
+// CLOUD_REMOTE without a colon) builds plain paths, which rclone's local backend takes
+// as is, under a real temporary directory, because ProxSave creates it; the remote
+// form is unchanged.
+func cloudFormsFor(t *testing.T) []cloudForm {
+	root := filepath.Join(t.TempDir(), "cloud")
+	return []cloudForm{
+		{name: "local", remote: root, root: root, base: root, logDir: root + "/proxsave/log"},
+		{name: "local with CLOUD_REMOTE_PATH", remote: root, remotePath: "host1", root: root, base: root + "/host1", logDir: root + "/proxsave/log"},
+		{name: "remote", remote: "remote:backups", root: "remote:", base: "remote:backups", logDir: "remote:/proxsave/log"},
+		{name: "remote with CLOUD_REMOTE_PATH", remote: "remote:backups", remotePath: "host1", root: "remote:", base: "remote:backups/host1", logDir: "remote:/proxsave/log"},
+	}
 }
 
 // argvRecorder records every rclone argv and answers each one with respond.
@@ -99,7 +107,7 @@ func newFormCloud(t *testing.T, form cloudForm, mutate func(*config.Config), rec
 }
 
 func TestCloudLocalFormAccessibilityCheck(t *testing.T) {
-	for _, form := range cloudForms {
+	for _, form := range cloudFormsFor(t) {
 		t.Run(form.name, func(t *testing.T) {
 			rec := &argvRecorder{}
 			cs := newFormCloud(t, form, nil, rec)
@@ -107,14 +115,19 @@ func TestCloudLocalFormAccessibilityCheck(t *testing.T) {
 			if err != nil {
 				t.Fatalf("DetectFilesystem: %v", err)
 			}
-			// The local form creates the backup directory first (rclone mkdir, parents
-			// included), then lists; the remote form lists the root, then creates and
-			// lists the path under it.
+			// The local form creates the backup directory first, like the Secondary
+			// (MkdirAll 0700, parents included, no rclone), then lists; the remote form
+			// lists the root, then creates and lists the path under it.
 			var want []string
 			if form.local() {
-				want = append(want, "mkdir "+form.base, "lsf "+form.root+" --max-depth 1")
+				want = append(want, "lsf "+form.root+" --max-depth 1")
 				if form.base != form.root {
 					want = append(want, "lsf "+form.base+" --max-depth 1")
+				}
+				for _, dir := range []string{form.root, form.base} {
+					if st, err := os.Stat(dir); err != nil || !st.IsDir() || st.Mode().Perm() != 0o700 {
+						t.Fatalf("%s must be created 0700: %v %v", dir, st, err)
+					}
 				}
 			} else {
 				want = append(want, "lsf "+form.root+" --max-depth 1")
@@ -138,7 +151,7 @@ func TestCloudLocalFormAccessibilityCheck(t *testing.T) {
 }
 
 func TestCloudLocalFormWriteTest(t *testing.T) {
-	for _, form := range cloudForms {
+	for _, form := range cloudFormsFor(t) {
 		t.Run(form.name, func(t *testing.T) {
 			rec := &argvRecorder{}
 			cs := newFormCloud(t, form, func(c *config.Config) { c.CloudWriteHealthCheck = true }, rec)
@@ -147,10 +160,9 @@ func TestCloudLocalFormWriteTest(t *testing.T) {
 			}
 			got := rec.argv()
 			if form.local() {
-				if len(got) == 0 || got[0] != "mkdir "+form.base {
-					t.Fatalf("rclone argv = %v, want the mkdir of %s first", got, form.base)
+				if st, err := os.Stat(form.base); err != nil || !st.IsDir() {
+					t.Fatalf("the local directory %s must exist before the write test: %v", form.base, err)
 				}
-				got = got[1:]
 			}
 			if len(got) != 2 {
 				t.Fatalf("rclone argv = %v, want the touch and the deletefile", got)
@@ -172,7 +184,7 @@ func TestCloudLocalFormUploadAndVerification(t *testing.T) {
 	writeTestFile(t, archive, "archive")
 	sizeLine := []byte("        7 2026-10-03 10:00:00.000000000 " + name + "\n")
 
-	for _, form := range cloudForms {
+	for _, form := range cloudFormsFor(t) {
 		t.Run(form.name, func(t *testing.T) {
 			remoteFile := form.base + "/" + name
 			rec := &argvRecorder{respond: func(args []string) ([]byte, error) {
@@ -222,7 +234,7 @@ func TestCloudLocalFormRetentionAndStatistics(t *testing.T) {
 		"120 2024-11-10 10:00:00 " + oldest + ".sha256",
 	}, "\n")
 
-	for _, form := range cloudForms {
+	for _, form := range cloudFormsFor(t) {
 		t.Run(form.name, func(t *testing.T) {
 			rec := &argvRecorder{respond: func(args []string) ([]byte, error) {
 				switch args[0] {
@@ -272,7 +284,7 @@ func TestCloudLocalFormRetentionAndStatistics(t *testing.T) {
 func TestCloudLocalFormLogUpload(t *testing.T) {
 	src := filepath.Join(t.TempDir(), "backup-node-20261003-100000.log")
 	writeTestFile(t, src, "logdata")
-	for _, form := range cloudForms {
+	for _, form := range cloudFormsFor(t) {
 		t.Run(form.name, func(t *testing.T) {
 			rec := &argvRecorder{}
 			cs := newFormCloud(t, form, nil, rec)
@@ -301,7 +313,7 @@ func TestCloudLocalFormLogUpload(t *testing.T) {
 // local form too.
 func TestCloudLocalFormLegacyLogPathStaysAsIs(t *testing.T) {
 	rec := &argvRecorder{}
-	cs := newFormCloud(t, cloudForms[0], func(c *config.Config) { c.CloudLogPath = "other:/logs" }, rec)
+	cs := newFormCloud(t, cloudFormsFor(t)[0], func(c *config.Config) { c.CloudLogPath = "other:/logs" }, rec)
 	if got := cs.cloudLogPath(cs.config.CloudLogPath, "x.log"); got != "other:/logs/x.log" {
 		t.Fatalf("cloudLogPath = %q, want other:/logs/x.log", got)
 	}
@@ -433,18 +445,26 @@ func TestCloudLocalFormDetectsTheRealFilesystem(t *testing.T) {
 		t.Fatalf("the ownership probe result belongs at DEBUG:\n%s", buf.String())
 	}
 
-	missing := filepath.Join(dir, "missing")
-	cs, err = NewCloudStorage(&config.Config{CloudEnabled: true, CloudRemote: missing}, newTestLogger(), "")
+	if cs.DetectionFailure() != nil || cs.localFS != info {
+		t.Fatalf("a detection that worked records its result and no failure: %v", cs.DetectionFailure())
+	}
+
+	// A filesystem the detection cannot read: the type is unknown, and the failure is
+	// reported for the storage initialization (the Secondary's shape).
+	cs, err = NewCloudStorage(&config.Config{CloudEnabled: true, CloudRemote: filepath.Join(dir, "sub")}, newTestLogger(), "")
 	if err != nil {
 		t.Fatalf("NewCloudStorage: %v", err)
 	}
 	cs.lookPath = func(string) (string, error) { return "/usr/bin/rclone", nil }
 	cs.execCommand = func(context.Context, string, ...string) ([]byte, error) { return nil, nil }
-	if info, err := cs.DetectFilesystem(context.Background()); err != nil || info.Type != FilesystemUnknown || info.Path != missing {
-		t.Fatalf("DetectFilesystem of an unreadable directory = %+v, %v; want an unknown type", info, err)
+	cs.fsDetector.filesystemTypeLookup = func(context.Context, string) (FilesystemType, string, error) {
+		return FilesystemUnknown, "", errors.New("statfs failed")
 	}
-	if _, err := os.Stat(missing); !os.IsNotExist(err) {
-		t.Fatalf("the fake rclone mkdir must not have created %s", missing)
+	if info, err := cs.DetectFilesystem(context.Background()); err != nil || info.Type != FilesystemUnknown || info.SupportsOwnership {
+		t.Fatalf("DetectFilesystem of an unreadable filesystem = %+v, %v; want an unknown type without ownership", info, err)
+	}
+	if err := cs.DetectionFailure(); err == nil || !strings.Contains(err.Error(), "statfs failed") {
+		t.Fatalf("DetectionFailure = %v, want the detection error", err)
 	}
 }
 
@@ -511,5 +531,164 @@ func TestLocalCloudLogOutside(t *testing.T) {
 		if root != tc.root || outside != tc.outside {
 			t.Fatalf("LocalCloudLogOutside(%q, %q) = %q, %v; want %q, %v", tc.logPath, tc.remote, root, outside, tc.root, tc.outside)
 		}
+	}
+}
+
+// rcloneLocalCopy answers like rclone's local backend: copyto writes the destination
+// 0644 (whatever the source mode), lsl reports the size of the local file.
+func rcloneLocalCopy(failSuffix string) func(context.Context, string, ...string) ([]byte, error) {
+	return func(_ context.Context, _ string, args ...string) ([]byte, error) {
+		switch args[0] {
+		case "copyto":
+			src, dst := args[len(args)-2], args[len(args)-1]
+			if failSuffix != "" && strings.HasSuffix(src, failSuffix) {
+				return []byte("2026/10/03 10:00:00 Failed to copyto: permission denied\n"), errors.New("exit status 1")
+			}
+			data, err := os.ReadFile(src)
+			if err != nil {
+				return nil, err
+			}
+			if err := os.WriteFile(dst, data, 0o644); err != nil {
+				return nil, err
+			}
+			return nil, os.Chmod(dst, 0o644)
+		case "lsl":
+			if st, err := os.Stat(args[1]); err == nil && !st.IsDir() {
+				return []byte(fmt.Sprintf("%9d 2026-10-03 10:00:00.000000000 %s\n", st.Size(), filepath.Base(args[1]))), nil
+			}
+		}
+		return nil, nil
+	}
+}
+
+func newLocalFormStore(t *testing.T, failSuffix string, supportsOwnership bool) (*CloudStorage, *bytes.Buffer, string, string) {
+	t.Helper()
+	srcDir := t.TempDir()
+	archive := filepath.Join(srcDir, "node-backup-20261003-100000.tar.zst")
+	for _, f := range []string{archive, archive + ".sha256", archive + ".metadata"} {
+		if err := os.WriteFile(f, []byte("archive"), 0o600); err != nil {
+			t.Fatalf("write %s: %v", f, err)
+		}
+	}
+	root := filepath.Join(t.TempDir(), "cloud")
+	if err := os.MkdirAll(root, 0o700); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	logger, buf := newCapturedLogger()
+	cs, err := NewCloudStorage(&config.Config{CloudEnabled: true, CloudRemote: root, RcloneRetries: 1}, logger, "")
+	if err != nil {
+		t.Fatalf("NewCloudStorage: %v", err)
+	}
+	cs.execCommand = rcloneLocalCopy(failSuffix)
+	cs.localFS = &FilesystemInfo{Path: root, Type: FilesystemExt4, SupportsOwnership: supportsOwnership}
+	return cs, buf, archive, root
+}
+
+// The local form sets owner and mode on what rclone copied, exactly like the
+// Secondary (0600 root:root by default): rclone writes 0644.
+func TestCloudLocalFormSetsSecondaryPermissions(t *testing.T) {
+	cs, buf, archive, root := newLocalFormStore(t, "", true)
+	if err := cs.Store(context.Background(), archive, nil); err != nil {
+		t.Fatalf("Store: %v", err)
+	}
+	for _, name := range []string{filepath.Base(archive), filepath.Base(archive) + ".sha256", filepath.Base(archive) + ".metadata"} {
+		st, err := os.Stat(filepath.Join(root, name))
+		if err != nil || st.Mode().Perm() != 0o600 {
+			t.Fatalf("%s mode = %v (%v), want 0600 like the Secondary", name, st.Mode().Perm(), err)
+		}
+	}
+	out := stripTimes(buf.String())
+	if os.Geteuid() == 0 {
+		if got := visibleOf(buf.String()); len(got) != 0 {
+			t.Fatalf("a clean store prints no fact, got:\n%s", strings.Join(got, "\n"))
+		}
+		return
+	}
+	// Unprivileged: chown to root fails, like on the Secondary, one fact per file.
+	if !strings.Contains(out, "INFO       Owner failed: "+filepath.Base(archive)+": operation not permitted\n") {
+		t.Fatalf("missing the Owner failed fact:\n%s", out)
+	}
+	if issues := cs.LastStoreIssues(); len(issues) != 1 || issues[0] != StoreIssuePermissionsNotSet {
+		t.Fatalf("LastStoreIssues = %v, want permissions not set", issues)
+	}
+}
+
+// A sidecar that did not go up: its fact first, then the permissions of what was
+// copied, and the issues in that order for the one outcome.
+func TestCloudLocalFormSidecarFailureThenPermissions(t *testing.T) {
+	cs, buf, archive, root := newLocalFormStore(t, ".sha256", true)
+	err := cs.Store(context.Background(), archive, nil)
+	var se *StorageError
+	if !errors.As(err, &se) || !se.PrimarySaved {
+		t.Fatalf("Store = %v, want the primary saved and a sidecar failure", err)
+	}
+	if st, err := os.Stat(filepath.Join(root, filepath.Base(archive))); err != nil || st.Mode().Perm() != 0o600 {
+		t.Fatalf("the archive must get 0600 even with a sidecar failure: %v %v", st, err)
+	}
+	got := visibleOf(buf.String())
+	if len(got) == 0 || got[0] != "INFO       Sidecar failed: "+filepath.Base(archive)+".sha256: Failed to copyto: permission denied" {
+		t.Fatalf("the sidecar fact must come first:\n%s", strings.Join(got, "\n"))
+	}
+	issues := cs.LastStoreIssues()
+	if len(issues) == 0 || issues[0] != StoreIssueSidecarNotSaved {
+		t.Fatalf("LastStoreIssues = %v, want the sidecar first", issues)
+	}
+	if os.Geteuid() != 0 && (len(issues) != 2 || issues[1] != StoreIssuePermissionsNotSet || len(got) < 2 || !strings.HasPrefix(got[1], "INFO       Owner failed: ")) {
+		t.Fatalf("unprivileged: want the Owner failed facts after the sidecar and both issues, got %v:\n%s", issues, strings.Join(got, "\n"))
+	}
+}
+
+// On a filesystem without ownership the Secondary sets nothing, and neither does the
+// local form; the remote form never does.
+func TestCloudLocalFormNoOwnershipSetsNothing(t *testing.T) {
+	cs, buf, archive, root := newLocalFormStore(t, "", false)
+	if err := cs.Store(context.Background(), archive, nil); err != nil {
+		t.Fatalf("Store: %v", err)
+	}
+	if st, err := os.Stat(filepath.Join(root, filepath.Base(archive))); err != nil || st.Mode().Perm() != 0o644 {
+		t.Fatalf("mode = %v (%v), want rclone's 0644 left alone", st.Mode().Perm(), err)
+	}
+	if got := visibleOf(buf.String()); len(got) != 0 || len(cs.LastStoreIssues()) != 0 {
+		t.Fatalf("no ownership: nothing to print or record, got %v %v", got, cs.LastStoreIssues())
+	}
+
+	rec := &argvRecorder{respond: func(args []string) ([]byte, error) {
+		if args[0] == "lsl" {
+			return []byte("        7 2026-10-03 10:00:00.000000000 " + filepath.Base(archive) + "\n"), nil
+		}
+		return nil, nil
+	}}
+	remote := newFormCloud(t, cloudFormsFor(t)[2], nil, rec)
+	remote.localFS = &FilesystemInfo{SupportsOwnership: true}
+	if err := remote.Store(context.Background(), archive, nil); err != nil {
+		t.Fatalf("remote Store: %v", err)
+	}
+	if issues := remote.LastStoreIssues(); len(issues) != 0 {
+		t.Fatalf("the remote form sets no permissions: %v", issues)
+	}
+}
+
+// SET_BACKUP_PERMISSIONS with BACKUP_USER/BACKUP_GROUP: 0640 and that owner, the
+// Secondary's rule (here the test's own user, so the chown succeeds unprivileged).
+func TestCloudLocalFormSharedPermissions(t *testing.T) {
+	u, err := user.Current()
+	if err != nil {
+		t.Skipf("current user: %v", err)
+	}
+	g, err := user.LookupGroupId(u.Gid)
+	if err != nil {
+		t.Skipf("current group: %v", err)
+	}
+	cs, buf, archive, root := newLocalFormStore(t, "", true)
+	cs.config.SetBackupPermissions, cs.config.BackupUser, cs.config.BackupGroup = true, u.Username, g.Name
+	if err := cs.Store(context.Background(), archive, nil); err != nil {
+		t.Fatalf("Store: %v", err)
+	}
+	st, err := os.Stat(filepath.Join(root, filepath.Base(archive)))
+	if err != nil || st.Mode().Perm() != 0o640 {
+		t.Fatalf("mode = %v (%v), want 0640", st.Mode().Perm(), err)
+	}
+	if got := visibleOf(buf.String()); len(got) != 0 || len(cs.LastStoreIssues()) != 0 {
+		t.Fatalf("a clean store prints and records nothing, got %v %v", got, cs.LastStoreIssues())
 	}
 }

@@ -114,30 +114,36 @@ func TestCloudBackendNotCreatedBlock(t *testing.T) {
 
 // CLOUD_REMOTE as an absolute local directory: the backend accepts it, normalized
 // (the "Path Cloud:" line keeps the value as configured), creates the backup
-// directory with rclone mkdir, and runs rclone on plain paths (its local backend), with
-// no "<name>:" prefix. The block is the reachable cloud block, and the storage summary
-// shows the directory's real filesystem type.
+// directory 0700 like the Secondary, and runs rclone on plain paths (its local
+// backend), with no "<name>:" prefix. The block carries the Secondary's filesystem
+// facts, and the storage summary shows the directory's real filesystem type.
 func TestCloudLocalDirectoryIsInitialized(t *testing.T) {
 	record := filepath.Join(t.TempDir(), "argv")
-	// mkdir does what rclone's local backend does: it creates the directory, parents
-	// included, so the filesystem detection finds it.
-	fakeRcloneOnPath(t, "#!/bin/sh\necho \"$*\" >> "+record+"\n"+
-		"if [ \"$1\" = mkdir ]; then mkdir -p \"$2\" || exit 1; fi\nexit 0\n")
+	fakeRcloneOnPath(t, "#!/bin/sh\necho \"$*\" >> "+record+"\nexit 0\n")
 	root := filepath.Join(t.TempDir(), "cloud")
 	configured := root + "//"
+	base := root + "/host1"
 	cfg := &config.Config{CloudEnabled: true, CloudRemote: configured, CloudRemotePath: "host1", CloudRetentionDays: 4}
 	var cloudFS *storage.FilesystemInfo
 	got := captureStorageInit(t, func(logger *logging.Logger) {
 		cloudFS = initializeCloudStorage(backupModeOptions{ctx: context.Background(), cfg: cfg, logger: logger, hostname: "node"}, orchestrator.New(logger, false), nil)
 	})
-	requireBlock(t, got,
-		"INFO     Path Cloud: "+configured,
+	detected, err := storage.NewFilesystemDetector(logging.New(types.LogLevelInfo, false)).DetectFilesystem(context.Background(), base)
+	if err != nil {
+		t.Fatalf("detect %s: %v", base, err)
+	}
+	want := []string{
+		"INFO     Path Cloud: " + configured,
 		"INFO       Retention policy: simple (keep 4 newest)",
 		"INFO     Checking cloud remote accessibility...",
 		"INFO       Accessible",
-		"INFO       Backups: 0",
-		"INFO     ✓ Cloud storage: initialized",
-	)
+		"INFO       Filesystem: " + formatFilesystemDetail(detected),
+	}
+	if !detected.SupportsOwnership {
+		want = append(want, "INFO       Permissions: skipped, no ownership")
+	}
+	want = append(want, "INFO       Backups: 0", "INFO     ✓ Cloud storage: initialized")
+	requireBlock(t, got, want...)
 	if !cfg.CloudEnabled {
 		t.Fatalf("the cloud must stay enabled")
 	}
@@ -146,23 +152,19 @@ func TestCloudLocalDirectoryIsInitialized(t *testing.T) {
 		t.Fatalf("read the fake rclone record: %v", err)
 	}
 	argv := strings.Split(strings.TrimSpace(string(data)), "\n")
-	base := root + "/host1"
-	want := []string{"mkdir " + base, "lsf " + root + " --max-depth 1", "lsf " + base + " --max-depth 1"}
-	if len(argv) < len(want) || strings.Join(argv[:len(want)], "\n") != strings.Join(want, "\n") {
-		t.Fatalf("rclone argv =\n%s\nwant it to open with\n%s", strings.Join(argv, "\n"), strings.Join(want, "\n"))
+	wantArgv := []string{"lsf " + root + " --max-depth 1", "lsf " + base + " --max-depth 1"}
+	if len(argv) < len(wantArgv) || strings.Join(argv[:len(wantArgv)], "\n") != strings.Join(wantArgv, "\n") {
+		t.Fatalf("rclone argv =\n%s\nwant it to open with\n%s", strings.Join(argv, "\n"), strings.Join(wantArgv, "\n"))
 	}
 	for _, line := range argv {
-		if strings.Contains(line, ":") {
-			t.Fatalf("a local directory must reach rclone without a remote prefix: %q", line)
+		if strings.Contains(line, ":") || strings.HasPrefix(line, "mkdir") {
+			t.Fatalf("a local directory reaches rclone without a remote prefix and is created by ProxSave: %q", line)
 		}
 	}
-	if st, err := os.Stat(base); err != nil || !st.IsDir() {
-		t.Fatalf("the backup directory %s was not created: %v", base, err)
-	}
-	// The storage summary shows the type the Primary and the Secondary would see.
-	detected, err := storage.NewFilesystemDetector(logging.New(types.LogLevelInfo, false)).DetectFilesystem(context.Background(), base)
-	if err != nil {
-		t.Fatalf("detect %s: %v", base, err)
+	for _, dir := range []string{root, base} {
+		if st, err := os.Stat(dir); err != nil || !st.IsDir() || st.Mode().Perm() != 0o700 {
+			t.Fatalf("%s must be created 0700 like the Secondary: %v %v", dir, st, err)
+		}
 	}
 	if label, want := formatStorageLabel(cfg.CloudRemote, cloudFS), configured+" ["+string(detected.Type)+"]"; label != want || strings.Contains(label, "rclone") {
 		t.Fatalf("storage label = %q, want %q", label, want)
@@ -172,17 +174,22 @@ func TestCloudLocalDirectoryIsInitialized(t *testing.T) {
 // A local CLOUD_REMOTE directory that cannot be created: the Secondary's fact under
 // the check, then the outcome and the SKIP, and the cloud is off for the run.
 func TestCloudLocalDirectoryNotCreatedBlock(t *testing.T) {
-	fakeRcloneOnPath(t, "#!/bin/sh\nif [ \"$1\" = mkdir ]; then echo '2026/10/03 10:00:00 Failed to mkdir: mkdir /mnt/cloud: permission denied' >&2; exit 1; fi\nexit 0\n")
+	fakeRcloneOnPath(t, "#!/bin/sh\nexit 0\n")
 	t.Cleanup(storage.SetCloudRetryWaitForTest(func(ctx context.Context, _ time.Duration) error { return ctx.Err() }))
-	cfg := &config.Config{CloudEnabled: true, CloudRemote: "/mnt/cloud", CloudLogPath: "/logs", CloudRetentionDays: 4}
+	blocker := filepath.Join(t.TempDir(), "file")
+	if err := os.WriteFile(blocker, []byte("x"), 0o600); err != nil {
+		t.Fatalf("write blocker: %v", err)
+	}
+	remote := filepath.Join(blocker, "cloud")
+	cfg := &config.Config{CloudEnabled: true, CloudRemote: remote, CloudLogPath: "/logs", CloudRetentionDays: 4}
 	got := captureStorageInit(t, func(logger *logging.Logger) {
 		initializeCloudStorage(backupModeOptions{ctx: context.Background(), cfg: cfg, logger: logger, hostname: "node"}, nil, nil)
 	})
 	requireBlock(t, got,
-		"INFO     Path Cloud: /mnt/cloud",
+		"INFO     Path Cloud: "+remote,
 		"INFO       Retention policy: simple (keep 4 newest)",
 		"INFO     Checking cloud remote accessibility...",
-		"INFO       Directory not created: Failed to mkdir: mkdir /mnt/cloud: permission denied",
+		"INFO       Directory not created: not a directory",
 		"WARNING  ✗ Cloud storage: not initialized",
 		"SKIP     Path Cloud: disabled",
 	)
