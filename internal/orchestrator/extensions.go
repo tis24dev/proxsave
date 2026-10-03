@@ -533,26 +533,6 @@ func (o *Orchestrator) dispatchLogFile(ctx context.Context, logFilePath string) 
 	logFileName := filepath.Base(logFilePath)
 	o.logger.Info("Dispatching log file: %s", logFileName)
 
-	if o.dryRun {
-		// A dry run writes nothing on the destinations: the log stays closed in
-		// LOG_PATH. Each enabled destination names where the copy would go, then SKIP.
-		if o.cfg.SecondaryEnabled && o.cfg.SecondaryLogPath != "" {
-			destination := filepath.Join(o.cfg.SecondaryLogPath, logFileName)
-			o.logger.Info("Secondary: %s", destination)
-			o.logger.Debug("Log copy: dry run, %s not copied to %s (no directory created)", logFilePath, destination)
-			o.logger.Skip("Log copy: dry run mode")
-		}
-		if o.cfg.CloudEnabled {
-			if cloudBase := strings.TrimSpace(o.cfg.CloudLogPath); cloudBase != "" {
-				destination := buildCloudLogDestination(cloudBase, logFileName, o.cfg.CloudRemote)
-				o.logger.Info("Cloud: %s", destination)
-				o.logger.Debug("Log copy: dry run, %s not copied to %s", logFilePath, destination)
-				o.logger.Skip("Log copy: dry run mode")
-			}
-		}
-		return nil
-	}
-
 	// All log-dispatch FS ops are bounded by FS_IO_TIMEOUT so a dead/stale mount on
 	// the source (LOG_PATH), the secondary destination (SecondaryLogPath), or the
 	// cloud local source cannot wedge the finalize in an uninterruptible (D-state)
@@ -569,11 +549,18 @@ func (o *Orchestrator) dispatchLogFile(ctx context.Context, logFilePath string) 
 		o.logger.Info("Secondary: %s", secondaryLogPath)
 
 		// Each failure is one fact line and the outcome; the full error and the path
-		// it names stay in DEBUG.
-		_, mkErr := safefs.Run(context.Background(), "logmkdir", o.cfg.SecondaryLogPath, timeout, func() (struct{}, error) {
-			return struct{}{}, fs.MkdirAll(o.cfg.SecondaryLogPath, 0755)
-		})
+		// it names stay in DEBUG. A dry run writes nothing: the Secondary copy has no
+		// check that only reads, so it goes straight to the SKIP (no directory created).
+		var mkErr error
+		if !o.dryRun {
+			_, mkErr = safefs.Run(context.Background(), "logmkdir", o.cfg.SecondaryLogPath, timeout, func() (struct{}, error) {
+				return struct{}{}, fs.MkdirAll(o.cfg.SecondaryLogPath, 0755)
+			})
+		}
 		switch {
+		case o.dryRun:
+			o.logger.Debug("Log copy: dry run, %s not copied to %s (no directory created)", logFilePath, secondaryLogPath)
+			o.logger.Skip("Log copy: dry run mode")
 		case mkErr != nil && errors.Is(mkErr, safefs.ErrTimeout):
 			o.logger.Debug("Secondary log copy: creating %s timed out after %s (dead/stale mount?): %v", o.cfg.SecondaryLogPath, timeout, mkErr)
 			o.logger.Info("  Directory not created: timed out after %s", safefs.WholeSeconds(timeout))
@@ -633,6 +620,10 @@ func (o *Orchestrator) dispatchLogFile(ctx context.Context, logFilePath string) 
 				o.logger.Debug("Cloud log copy: cannot stat source log %s: %v", logFilePath, probeErr)
 				o.logger.Info("  Source log not accessible: %s", safefs.SystemErrorText(probeErr))
 				o.logger.Warning("%s Log not copied to cloud", theme.SymbolWarning)
+			case o.dryRun:
+				// Every check above only reads; the copy is what a dry run leaves out.
+				o.logger.Debug("Log copy: dry run, %s not copied to %s", logFilePath, destination)
+				o.logger.Skip("Log copy: dry run mode")
 			default:
 				o.logger.Debug("Copying log to cloud: %s", destination)
 				// Detach the upload from the (possibly cancelled) run ctx: like the
@@ -741,11 +732,22 @@ func (o *Orchestrator) copyLogToCloud(ctx context.Context, sourcePath, destPath 
 	// rclone writes the log 0644. In a local CLOUD_REMOTE directory it gets the mode the
 	// Secondary log copy creates (copyFile, 0640), owner unchanged, on a filesystem that
 	// takes ownership; the log is there either way.
-	if _, err := client.SetLocalLogMode(ctx, destPath); err != nil {
+	if _, err := client.SetLocalLogMode(ctx, destPath, o.cloudFilesystemInfo()); err != nil {
 		return &logPermissionsError{err: err, checksumNotVerified: checksumNotVerified}
 	}
 	if checksumNotVerified {
 		return errLogChecksumNotVerified
+	}
+	return nil
+}
+
+// cloudFilesystemInfo is what the storage initialization detected for the cloud
+// destination (the registered cloud target's filesystem), nil without one.
+func (o *Orchestrator) cloudFilesystemInfo() *storage.FilesystemInfo {
+	for _, target := range o.storageTargets {
+		if adapter, ok := target.(*StorageAdapter); ok && adapter.backend != nil && adapter.backend.Location() == storage.LocationCloud {
+			return adapter.fsInfo
+		}
 	}
 	return nil
 }

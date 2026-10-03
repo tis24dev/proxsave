@@ -288,6 +288,7 @@ func TestDispatchLogFileCloudLocalDirectory(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "cloud")
 	cfg := &config.Config{CloudEnabled: true, CloudRemote: root, CloudRemotePath: "host1", CloudLogPath: "/proxsave/log", RcloneRetries: 1, FsIoTimeoutSeconds: 30}
 	o := &Orchestrator{logger: logger, cfg: cfg}
+	registerCloudInitFS(o, &storage.FilesystemInfo{Type: storage.FilesystemExt4, SupportsOwnership: true})
 	src := writeSrcLog(t)
 	if err := o.dispatchLogFile(context.Background(), src); err != nil {
 		t.Fatalf("dispatchLogFile: %v", err)
@@ -462,14 +463,12 @@ func TestDispatchLogFileCloudLocalLogPermissionsFailed(t *testing.T) {
 		"lsl) echo \"        7 2026-10-03 10:00:00.000000000 $(basename \"$2\")\";;\n"+
 		"esac\n")
 	root := filepath.Join(t.TempDir(), "cloud")
-	if detected, err := storage.NewFilesystemDetector(logging.New(types.LogLevelInfo, false)).DetectFilesystem(context.Background(), filepath.Dir(root)); err != nil || !detected.SupportsOwnership {
-		t.Skipf("the temporary directory's filesystem takes no ownership here (%v): the mode is not set at all", err)
-	}
 	var buf bytes.Buffer
 	logger := logging.New(types.LogLevelInfo, false)
 	logger.SetOutput(&buf)
 	cfg := &config.Config{CloudEnabled: true, CloudRemote: root, CloudLogPath: "/proxsave/log", RcloneRetries: 1, FsIoTimeoutSeconds: 30}
 	o := &Orchestrator{logger: logger, cfg: cfg}
+	registerCloudInitFS(o, &storage.FilesystemInfo{Type: storage.FilesystemExt4, SupportsOwnership: true})
 	src := writeSrcLog(t)
 	if err := o.dispatchLogFile(context.Background(), src); err != nil {
 		t.Fatalf("dispatchLogFile: %v", err)
@@ -488,45 +487,74 @@ func TestDispatchLogFileCloudLocalLogPermissionsFailed(t *testing.T) {
 }
 
 // Dry run, step [8]: the log stays in LOG_PATH. Each enabled destination names where
-// the copy would go, then SKIP; nothing is written there (no SECONDARY_LOG_PATH mkdir,
-// no rclone), checked on real temp dirs and on the rclone argv.
+// the copy would go, runs the checks the real run makes that only read (cloud:
+// CLOUD_LOG_PATH outside the local directory, source log readable) with their facts
+// and outcomes, and otherwise ends on the SKIP. Nothing is written there (no
+// SECONDARY_LOG_PATH mkdir, no rclone), checked on real temp dirs and on the argv.
 func TestDispatchLogFileDryRunCopiesNothing(t *testing.T) {
 	record := filepath.Join(t.TempDir(), "argv")
 	fakeRcloneOnPath(t, "#!/bin/sh\necho \"$*\" >> "+record+"\nexit 0\n")
-	var buf bytes.Buffer
-	logger := logging.New(types.LogLevelInfo, false)
-	logger.SetOutput(&buf)
-	base := t.TempDir()
-	secondaryLog := filepath.Join(base, "secondary-log")
-	cloudRoot := filepath.Join(base, "cloud")
-	cfg := &config.Config{SecondaryEnabled: true, SecondaryLogPath: secondaryLog,
-		CloudEnabled: true, CloudRemote: cloudRoot, CloudLogPath: "../outside", FsIoTimeoutSeconds: 30}
-	o := &Orchestrator{logger: logger, cfg: cfg, dryRun: true}
 	src := writeSrcLog(t)
-	if err := o.dispatchLogFile(context.Background(), src); err != nil {
-		t.Fatalf("dispatchLogFile: %v", err)
-	}
 	name := filepath.Base(src)
-	requireExactLines(t, visibleLines(buf.String()),
-		"INFO     Dispatching log file: "+name,
-		"INFO     Secondary: "+filepath.Join(secondaryLog, name),
-		"SKIP     Log copy: dry run mode",
-		"INFO     Cloud: "+filepath.Join(base, "outside", name),
-		"SKIP     Log copy: dry run mode",
-	)
-	if entries, err := os.ReadDir(base); err != nil || len(entries) != 0 {
-		t.Fatalf("a dry run writes nothing on the destinations, found %v (%v)", entries, err)
-	}
-	if _, err := os.Stat(record); !os.IsNotExist(err) {
-		t.Fatalf("rclone must not run in a dry run")
-	}
-	if _, err := os.Stat(src); err != nil {
-		t.Fatalf("the log stays in LOG_PATH: %v", err)
+	for _, tc := range []struct {
+		name    string
+		logPath string
+		fs      FS
+		cloud   []string
+	}{
+		{"checks pass", "/proxsave/log", nil, []string{
+			"INFO     Cloud: <ROOT>/cloud/proxsave/log/" + name,
+			"SKIP     Log copy: dry run mode",
+		}},
+		{"outside", "../outside", nil, []string{
+			"INFO     Cloud: <ROOT>/outside/" + name,
+			"INFO       CLOUD_LOG_PATH: outside <ROOT>/cloud",
+			"WARNING  ⚠ Log not copied to cloud",
+		}},
+		{"source unreadable", "/proxsave/log", logStatDeniedFS{}, []string{
+			"INFO     Cloud: <ROOT>/cloud/proxsave/log/" + name,
+			"INFO       Source log not accessible: permission denied",
+			"WARNING  ⚠ Log not copied to cloud",
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var buf bytes.Buffer
+			logger := logging.New(types.LogLevelInfo, false)
+			logger.SetOutput(&buf)
+			base := t.TempDir()
+			secondaryLog := filepath.Join(base, "secondary-log")
+			cfg := &config.Config{SecondaryEnabled: true, SecondaryLogPath: secondaryLog,
+				CloudEnabled: true, CloudRemote: filepath.Join(base, "cloud"), CloudLogPath: tc.logPath, FsIoTimeoutSeconds: 30}
+			o := &Orchestrator{logger: logger, cfg: cfg, dryRun: true, fs: tc.fs}
+			if err := o.dispatchLogFile(context.Background(), src); err != nil {
+				t.Fatalf("dispatchLogFile: %v", err)
+			}
+			want := []string{
+				"INFO     Dispatching log file: " + name,
+				"INFO     Secondary: " + filepath.Join(secondaryLog, name),
+				"SKIP     Log copy: dry run mode",
+			}
+			for _, line := range tc.cloud {
+				want = append(want, strings.ReplaceAll(line, "<ROOT>", base))
+			}
+			requireExactLines(t, visibleLines(buf.String()), want...)
+			if entries, err := os.ReadDir(base); err != nil || len(entries) != 0 {
+				t.Fatalf("a dry run writes nothing on the destinations, found %v (%v)", entries, err)
+			}
+			if _, err := os.Stat(record); !os.IsNotExist(err) {
+				t.Fatalf("rclone must not run in a dry run")
+			}
+			if _, err := os.Stat(src); err != nil {
+				t.Fatalf("the log stays in LOG_PATH: %v", err)
+			}
+		})
 	}
 
 	// Only the enabled destinations.
-	buf.Reset()
-	o.cfg = &config.Config{SecondaryEnabled: false, CloudEnabled: false}
+	var buf bytes.Buffer
+	logger := logging.New(types.LogLevelInfo, false)
+	logger.SetOutput(&buf)
+	o := &Orchestrator{logger: logger, cfg: &config.Config{}, dryRun: true}
 	if err := o.dispatchLogFile(context.Background(), src); err != nil {
 		t.Fatalf("dispatchLogFile: %v", err)
 	}
@@ -564,5 +592,59 @@ func TestFinalizeAfterRunDryRunLogBlock(t *testing.T) {
 	)
 	if _, err := os.Stat(secondaryLog); !os.IsNotExist(err) {
 		t.Fatalf("no SECONDARY_LOG_PATH mkdir in a dry run (stat err=%v)", err)
+	}
+}
+
+// registerCloudInitFS registers a cloud target carrying the filesystem the storage
+// initialization detected, the one step [8] reuses for the log mode.
+func registerCloudInitFS(o *Orchestrator, info *storage.FilesystemInfo) {
+	adapter := NewStorageAdapter(&fakeStorageBackend{name: "Cloud Storage (rclone)", location: storage.LocationCloud, enabled: true}, o.logger, o.cfg)
+	adapter.SetFilesystemInfo(info)
+	o.RegisterStorageTarget(adapter)
+}
+
+// Step [8], local directory: the log mode follows the detection made at storage init.
+// A filesystem without ownership, or no cloud target detected, leaves rclone's 0644.
+func TestDispatchLogFileCloudLocalLogModeReusesInitDetection(t *testing.T) {
+	script := "#!/bin/sh\n" +
+		"case \"$1\" in\n" +
+		"copyto) mkdir -p -m 0755 \"$(dirname \"$3\")\" && cp \"$2\" \"$3\" && chmod 0644 \"$3\";;\n" +
+		"lsl) echo \"        7 2026-10-03 10:00:00.000000000 $(basename \"$2\")\";;\n" +
+		"esac\n"
+	for _, tc := range []struct {
+		name string
+		info *storage.FilesystemInfo
+		mode os.FileMode
+	}{
+		{"ownership", &storage.FilesystemInfo{Type: storage.FilesystemExt4, SupportsOwnership: true}, 0o640},
+		{"no ownership", &storage.FilesystemInfo{Type: storage.FilesystemFAT32}, 0o644},
+		{"no cloud target", nil, 0o644},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fakeRcloneOnPath(t, script)
+			var buf bytes.Buffer
+			logger := logging.New(types.LogLevelInfo, false)
+			logger.SetOutput(&buf)
+			root := filepath.Join(t.TempDir(), "cloud")
+			cfg := &config.Config{CloudEnabled: true, CloudRemote: root, CloudLogPath: "/proxsave/log", RcloneRetries: 1, FsIoTimeoutSeconds: 30}
+			o := &Orchestrator{logger: logger, cfg: cfg}
+			if tc.info != nil {
+				registerCloudInitFS(o, tc.info)
+			}
+			src := writeSrcLog(t)
+			if err := o.dispatchLogFile(context.Background(), src); err != nil {
+				t.Fatalf("dispatchLogFile: %v", err)
+			}
+			dest := root + "/proxsave/log/" + filepath.Base(src)
+			if st, err := os.Stat(dest); err != nil || st.Mode().Perm() != tc.mode {
+				t.Fatalf("log mode = %v (%v), want %v", st.Mode().Perm(), err, tc.mode)
+			}
+			if entries, _ := os.ReadDir(filepath.Dir(dest)); len(entries) != 1 {
+				t.Fatalf("no ownership probe in the log directory: %v", entries)
+			}
+			if !strings.Contains(buf.String(), "✓ Log copied to cloud\n") {
+				t.Fatalf("the log is copied:\n%s", buf.String())
+			}
+		})
 	}
 }

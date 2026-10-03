@@ -210,23 +210,19 @@ func (c *CloudStorage) ensureLocalDir(ctx context.Context) error {
 
 // SetLocalLogMode gives a log rclone copied into a local CLOUD_REMOTE directory the mode
 // the Secondary log copy creates (0640, owner unchanged), on a filesystem that takes
-// ownership, like the backups: the filesystem of the log directory is detected first.
+// ownership, like the backups. fsInfo is what the storage initialization detected for
+// the CLOUD_REMOTE directory: it is reused, nothing is detected (or probed) again here.
 // applied is false when there is nothing to set (the remote form, a remote destination,
-// a filesystem without ownership or one the detection cannot read).
-func (c *CloudStorage) SetLocalLogMode(ctx context.Context, logFile string) (applied bool, err error) {
+// no detection, or a filesystem without ownership).
+func (c *CloudStorage) SetLocalLogMode(ctx context.Context, logFile string, fsInfo *FilesystemInfo) (applied bool, err error) {
 	if c == nil || c.localDir == "" || !filepath.IsAbs(logFile) {
 		return false, nil
 	}
-	detector := c.fsDetector
-	if detector == nil {
-		detector = NewFilesystemDetector(c.logger, WithIOTimeout(c.fsIoTimeout()), WithDryRun(c.config != nil && c.config.DryRun))
-	}
-	info, derr := detector.DetectFilesystem(ctx, filepath.Dir(logFile))
-	if derr != nil || info == nil || !info.SupportsOwnership {
-		c.logger.Debug("Cloud log copy: mode of %s left as written (ownership not supported or filesystem unknown: %v)", logFile, derr)
+	if fsInfo == nil || !fsInfo.SupportsOwnership {
+		c.logger.Debug("Cloud log copy: mode of %s left as written (ownership not supported or filesystem unknown at storage init: %+v)", logFile, fsInfo)
 		return false, nil
 	}
-	c.logger.Debug("Cloud log copy: setting mode 0640 on %s (%s)", logFile, info.Type)
+	c.logger.Debug("Cloud log copy: setting mode 0640 on %s (%s, detected at storage init)", logFile, fsInfo.Type)
 	if err := safefs.Chmod(ctx, logFile, 0o640, c.fsIoTimeout()); err != nil {
 		c.logger.Debug("Cloud log copy: cannot set the mode of %s: %v", logFile, err)
 		return false, err

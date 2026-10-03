@@ -76,7 +76,8 @@ func TestCloudLocalStoreRecreatesTheDirectory(t *testing.T) {
 }
 
 // The log copied into a local directory gets 0640 only on a filesystem that takes
-// ownership (as for the backups); elsewhere its mode is left as written.
+// ownership (as for the backups), judged on the detection made at storage init: no
+// second detection, no ownership probe in the log directory.
 func TestCloudSetLocalLogModeFollowsOwnership(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "cloud")
 	logDir := filepath.Join(dir, "proxsave", "log")
@@ -85,12 +86,14 @@ func TestCloudSetLocalLogModeFollowsOwnership(t *testing.T) {
 	}
 	logFile := filepath.Join(logDir, "backup-node-20261003-100000.log")
 	for _, tc := range []struct {
-		fsType  FilesystemType
+		name    string
+		fsInfo  *FilesystemInfo
 		applied bool
 		mode    os.FileMode
 	}{
-		{FilesystemExt4, true, 0o640},
-		{FilesystemFAT32, false, 0o644},
+		{"ownership", &FilesystemInfo{Type: FilesystemExt4, SupportsOwnership: true}, true, 0o640},
+		{"no ownership", &FilesystemInfo{Type: FilesystemFAT32}, false, 0o644},
+		{"no detection", nil, false, 0o644},
 	} {
 		if err := os.WriteFile(logFile, []byte("log"), 0o644); err != nil {
 			t.Fatalf("write: %v", err)
@@ -102,24 +105,30 @@ func TestCloudSetLocalLogModeFollowsOwnership(t *testing.T) {
 		if err != nil {
 			t.Fatalf("NewCloudStorage: %v", err)
 		}
-		cs.fsDetector.mountPointLookup = func(string) (string, error) { return dir, nil }
-		fsType := tc.fsType
-		cs.fsDetector.filesystemTypeLookup = func(context.Context, string) (FilesystemType, string, error) { return fsType, "dev", nil }
-		applied, err := cs.SetLocalLogMode(context.Background(), logFile)
+		detections := 0
+		cs.fsDetector.mountPointLookup = func(string) (string, error) { detections++; return dir, nil }
+		cs.fsDetector.ownershipSupportTest = func(context.Context, string) bool { detections++; return true }
+		applied, err := cs.SetLocalLogMode(context.Background(), logFile, tc.fsInfo)
 		st, _ := os.Stat(logFile)
 		if err != nil || applied != tc.applied || st.Mode().Perm() != tc.mode {
-			t.Fatalf("%s: applied=%v err=%v mode=%v, want applied=%v mode=%v", tc.fsType, applied, err, st.Mode().Perm(), tc.applied, tc.mode)
+			t.Fatalf("%s: applied=%v err=%v mode=%v, want applied=%v mode=%v", tc.name, applied, err, st.Mode().Perm(), tc.applied, tc.mode)
+		}
+		if detections != 0 {
+			t.Fatalf("%s: the init detection is reused, got %d new detection calls", tc.name, detections)
+		}
+		entries, _ := os.ReadDir(logDir)
+		if len(entries) != 1 {
+			t.Fatalf("%s: only the log in its directory, got %v", tc.name, entries)
 		}
 	}
 
 	cs, _ := NewCloudStorage(&config.Config{CloudEnabled: true, CloudRemote: dir}, newTestLogger(), "")
-	cs.fsDetector.mountPointLookup = func(string) (string, error) { return dir, nil }
-	cs.fsDetector.filesystemTypeLookup = func(context.Context, string) (FilesystemType, string, error) { return FilesystemExt4, "dev", nil }
-	if _, err := cs.SetLocalLogMode(context.Background(), filepath.Join(logDir, "missing.log")); err == nil {
+	ext4 := &FilesystemInfo{Type: FilesystemExt4, SupportsOwnership: true}
+	if _, err := cs.SetLocalLogMode(context.Background(), filepath.Join(logDir, "missing.log"), ext4); err == nil {
 		t.Fatalf("a mode that cannot be set must be returned")
 	}
 	remote, _ := NewCloudStorage(&config.Config{CloudEnabled: true, CloudRemote: "remote:x"}, newTestLogger(), "")
-	if applied, err := remote.SetLocalLogMode(context.Background(), logFile); applied || err != nil {
+	if applied, err := remote.SetLocalLogMode(context.Background(), logFile, ext4); applied || err != nil {
 		t.Fatalf("the remote form sets nothing: %v %v", applied, err)
 	}
 }
