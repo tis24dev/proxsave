@@ -330,3 +330,65 @@ func TestDispatchLogFileCloudLogPathOutside(t *testing.T) {
 		t.Fatalf("rclone must not run for a refused destination (record err=%v)", err)
 	}
 }
+
+// Step [8] cloud log copy, RCLONE_RETRIES = 1: an operation timeout is
+// "  Copy failed: timed out after <N>s", and a verification that failed after a good
+// copy is "  Verification failed: <error>"; the outcome stays "⚠ Log not copied".
+func TestDispatchLogFileCloudTimeoutAndVerification(t *testing.T) {
+	for _, tc := range []struct {
+		name, script, fact string
+		timeout            int
+	}{
+		{"timeout", "#!/bin/sh\ncase \"$1\" in\ncopyto) exec sleep 10;;\nesac\nexit 0\n",
+			"INFO       Copy failed: timed out after 1s", 1},
+		{"verification", "#!/bin/sh\ncase \"$1\" in\nlsl) echo \"        5 2026-10-03 10:00:00.000000000 $(basename \"$2\")\";;\nesac\nexit 0\n",
+			"INFO       Verification failed: size mismatch: local=7 remote=5", 30},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fakeRcloneOnPath(t, tc.script)
+			var buf bytes.Buffer
+			logger := logging.New(types.LogLevelInfo, false)
+			logger.SetOutput(&buf)
+			cfg := &config.Config{CloudEnabled: true, CloudLogPath: "/logs", CloudRemote: "remote", RcloneRetries: 1,
+				RcloneTimeoutOperation: tc.timeout, FsIoTimeoutSeconds: 30}
+			o := &Orchestrator{logger: logger, cfg: cfg}
+			src := writeSrcLog(t)
+			if err := o.dispatchLogFile(context.Background(), src); err != nil {
+				t.Fatalf("dispatchLogFile: %v", err)
+			}
+			requireExactLines(t, visibleLines(buf.String()),
+				"INFO     Dispatching log file: "+filepath.Base(src),
+				"INFO     Cloud: remote:/logs/"+filepath.Base(src),
+				tc.fact,
+				"WARNING  ⚠ Log not copied to cloud",
+			)
+		})
+	}
+}
+
+// CLOUD_LOG_PATH outside the local CLOUD_REMOTE AND the local log unreadable: on
+// screen only the refusal, but the source probe still runs and its result is DEBUG.
+func TestDispatchLogFileCloudLogPathOutsideKeepsTheProbe(t *testing.T) {
+	var buf bytes.Buffer
+	logger := logging.New(types.LogLevelDebug, false)
+	logger.SetOutput(&buf)
+	cfg := &config.Config{CloudEnabled: true, CloudRemote: "/mnt/cloud", CloudLogPath: "../logs", FsIoTimeoutSeconds: 30}
+	o := &Orchestrator{logger: logger, cfg: cfg, fs: logStatDeniedFS{}}
+	o.copyLogToCloudFn = func(context.Context, string, string) error {
+		t.Fatal("the upload must not run for a refused destination")
+		return nil
+	}
+	src := writeSrcLog(t)
+	if err := o.dispatchLogFile(context.Background(), src); err != nil {
+		t.Fatalf("dispatchLogFile: %v", err)
+	}
+	requireExactLines(t, visibleLines(buf.String()),
+		"INFO     Dispatching log file: "+filepath.Base(src),
+		"INFO     Cloud: /mnt/logs/"+filepath.Base(src),
+		"INFO       CLOUD_LOG_PATH: outside /mnt/cloud",
+		"WARNING  ⚠ Log not copied to cloud",
+	)
+	if !strings.Contains(buf.String(), "source log "+src+" not accessible either: stat "+src+": permission denied") {
+		t.Fatalf("the probe result must be in DEBUG:\n%s", buf.String())
+	}
+}

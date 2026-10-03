@@ -483,7 +483,14 @@ func (c *CloudStorage) DetectFilesystem(ctx context.Context) (info *FilesystemIn
 			c.logger.Debug("HINT: Check your rclone configuration with: rclone config show %s", c.remote)
 		}
 		c.logger.Debug("Cloud backup will be skipped")
-		c.logger.Info("  %s", capitalizeFirst(ErrorCause(err)))
+		// A local directory that could not be created is the Secondary's fact; a check
+		// that timed out while creating it stays a timeout.
+		var dirErr *DirectoryError
+		if errors.As(err, &dirErr) && (rcErr == nil || rcErr.kind != remoteErrorTimeout) {
+			c.logger.Info("  Directory not created: %s", ErrorCause(dirErr.Err))
+		} else {
+			c.logger.Info("  %s", capitalizeFirst(ErrorCause(err)))
+		}
 
 		return nil, &StorageError{
 			Location:    LocationCloud,
@@ -655,7 +662,7 @@ func (c *CloudStorage) checkRemoteOnce(ctx context.Context) error {
 		argsMkdir = append(argsMkdir, c.localDir)
 		c.logger.Debug("Running (local directory ensure): %s", strings.Join(argsMkdir, " "))
 		if output, err := c.exec(ctx, argsMkdir[0], argsMkdir[1:]...); err != nil {
-			return classifyRemoteError("path", c.localDir, err, output)
+			return &DirectoryError{Err: classifyRemoteError("path", c.localDir, err, output)}
 		}
 	}
 
@@ -1174,9 +1181,18 @@ func (c *CloudStorage) uploadWithRetry(ctx context.Context, localFile, remoteFil
 
 	var failed error
 	if ctx.Err() == context.DeadlineExceeded {
-		failed = fmt.Errorf("upload failed: operation timeout (%ds exceeded) after %d attempts",
-			c.config.RcloneTimeoutOperation,
-			attemptsMade)
+		// The text is what the error has always said; the fact line shows the short
+		// cause ("  Upload failed: timed out after 300s", "  Copy failed: ...").
+		short := "timed out"
+		if c.config.RcloneTimeoutOperation > 0 {
+			short = fmt.Sprintf("timed out after %ds", c.config.RcloneTimeoutOperation)
+		}
+		failed = &rcloneCommandError{
+			msg: fmt.Sprintf("upload failed: operation timeout (%ds exceeded) after %d attempts",
+				c.config.RcloneTimeoutOperation,
+				attemptsMade),
+			short: short,
+		}
 	} else {
 		failed = fmt.Errorf("upload failed after %d attempts: %w",
 			attemptsMade,
@@ -1290,6 +1306,13 @@ func (e *verificationError) Error() string { return e.err.Error() }
 
 func (e *verificationError) Unwrap() error { return e.err }
 
+// VerificationFailed reports whether err is a copy that succeeded and whose
+// verification failed: the caller shows "  Verification failed: <cause>".
+func VerificationFailed(err error) bool {
+	var verifyErr *verificationError
+	return errors.As(err, &verifyErr)
+}
+
 func (c *CloudStorage) uploadTasksSequential(ctx context.Context, tasks []uploadTask) (bool, error) {
 	for _, task := range tasks {
 		if err := c.runUploadTask(ctx, task); err != nil {
@@ -1388,7 +1411,7 @@ func (c *CloudStorage) UploadToRemotePath(ctx context.Context, localFile, remote
 		if err == nil {
 			err = fmt.Errorf("verification failed")
 		}
-		return err
+		return &verificationError{err: err}
 	}
 	return nil
 }

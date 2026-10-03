@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/tis24dev/proxsave/internal/config"
 	"github.com/tis24dev/proxsave/internal/logging"
@@ -165,5 +166,27 @@ func TestCloudLocalDirectoryIsInitialized(t *testing.T) {
 	}
 	if label, want := formatStorageLabel(cfg.CloudRemote, cloudFS), configured+" ["+string(detected.Type)+"]"; label != want || strings.Contains(label, "rclone") {
 		t.Fatalf("storage label = %q, want %q", label, want)
+	}
+}
+
+// A local CLOUD_REMOTE directory that cannot be created: the Secondary's fact under
+// the check, then the outcome and the SKIP, and the cloud is off for the run.
+func TestCloudLocalDirectoryNotCreatedBlock(t *testing.T) {
+	fakeRcloneOnPath(t, "#!/bin/sh\nif [ \"$1\" = mkdir ]; then echo '2026/10/03 10:00:00 Failed to mkdir: mkdir /mnt/cloud: permission denied' >&2; exit 1; fi\nexit 0\n")
+	t.Cleanup(storage.SetCloudRetryWaitForTest(func(ctx context.Context, _ time.Duration) error { return ctx.Err() }))
+	cfg := &config.Config{CloudEnabled: true, CloudRemote: "/mnt/cloud", CloudLogPath: "/logs", CloudRetentionDays: 4}
+	got := captureStorageInit(t, func(logger *logging.Logger) {
+		initializeCloudStorage(backupModeOptions{ctx: context.Background(), cfg: cfg, logger: logger, hostname: "node"}, nil, nil)
+	})
+	requireBlock(t, got,
+		"INFO     Path Cloud: /mnt/cloud",
+		"INFO       Retention policy: simple (keep 4 newest)",
+		"INFO     Checking cloud remote accessibility...",
+		"INFO       Directory not created: Failed to mkdir: mkdir /mnt/cloud: permission denied",
+		"WARNING  ✗ Cloud storage: not initialized",
+		"SKIP     Path Cloud: disabled",
+	)
+	if cfg.CloudEnabled || cfg.CloudLogPath != "" {
+		t.Fatalf("the cloud must be off for the run: enabled=%v logPath=%q", cfg.CloudEnabled, cfg.CloudLogPath)
 	}
 }

@@ -589,17 +589,20 @@ func (o *Orchestrator) dispatchLogFile(ctx context.Context, logFilePath string) 
 
 			// With CLOUD_REMOTE a local directory, a CLOUD_LOG_PATH that resolves
 			// outside it is refused: nothing is copied there.
+			// The source probe still runs: its result stays in DEBUG beside the refusal.
 			cloudRoot, outside := storage.LocalCloudLogOutside(cloudBase, o.cfg.CloudRemote)
-			var probeErr error
-			if !outside {
-				_, probeErr = safefs.Run(context.Background(), "logstat", logFilePath, timeout, func() (struct{}, error) {
-					_, e := fs.Stat(logFilePath)
-					return struct{}{}, e
-				})
-			}
+			_, probeErr := safefs.Run(context.Background(), "logstat", logFilePath, timeout, func() (struct{}, error) {
+				_, e := fs.Stat(logFilePath)
+				return struct{}{}, e
+			})
 			switch {
 			case outside:
 				o.logger.Debug("Cloud log copy: CLOUD_LOG_PATH %s resolves to %s, outside the CLOUD_REMOTE directory %s", cloudBase, destination, cloudRoot)
+				if probeErr != nil {
+					o.logger.Debug("Cloud log copy: source log %s not accessible either: %v", logFilePath, probeErr)
+				} else {
+					o.logger.Debug("Cloud log copy: source log %s is readable", logFilePath)
+				}
 				o.logger.Info("  CLOUD_LOG_PATH: outside %s", cloudRoot)
 				o.logger.Warning("%s Log not copied to cloud", theme.SymbolWarning)
 			case probeErr != nil && errors.Is(probeErr, safefs.ErrTimeout):
@@ -626,9 +629,14 @@ func (o *Orchestrator) dispatchLogFile(ctx context.Context, logFilePath string) 
 					o.logger.Warning("%s Log copied to cloud, checksum not verified", theme.SymbolWarning)
 				case err != nil:
 					o.logger.Debug("Cloud log copy: failed to upload to %s: %v", destination, err)
-					// With several attempts, each one is already a fact with its cause
-					// ("  Attempt <i>/<n> failed: ..."): the outcome follows them.
-					if !storage.AttemptsReported(err) {
+					switch {
+					case storage.AttemptsReported(err):
+						// With several attempts, each one is already a fact with its
+						// cause ("  Attempt <i>/<n> failed: ..."): the outcome follows.
+					case storage.VerificationFailed(err):
+						// The copy went through; what failed is the check of it.
+						o.logger.Info("  Verification failed: %s", storage.ErrorCause(err))
+					default:
 						o.logger.Info("  Copy failed: %s", storage.ErrorCause(err))
 					}
 					o.logger.Warning("%s Log not copied to cloud", theme.SymbolWarning)
