@@ -249,7 +249,9 @@ charhost-backup-20260102-030405.tar.bundle.tar:
 [<TIME>] DEBUG    Cloud Storage (rclone) operations completed (errors=true warnings=false)
 [<TIME>] DEBUG    Disabled storage targets: secondary=false cloud=false
 
-[<TIME>] STEP     [7] Notifications - dispatching channels
+[<TIME>] SKIP     PBS Storage: disabled
+
+[<TIME>] STEP     [8] Notifications - dispatching channels
 [<TIME>] DEBUG    notifications dispatch: no init decision requested=always fallback=always
 [<TIME>] INFO     ✓ Notification filter: applied
 [<TIME>] DEBUG    notifications dispatch: run outcome=warning warnings=4 errors=0
@@ -260,7 +262,7 @@ charhost-backup-20260102-030405.tar.bundle.tar:
 [<TIME>] SKIP     Webhook: disabled
 [<TIME>] SKIP     Healthchecks: disabled
 
-[<TIME>] STEP     [8] Log file management
+[<TIME>] STEP     [9] Log file management
 [<TIME>] INFO     Closing log file: <ROOT>/log/backup-charhost-20260102-030405.log
 [<TIME>] DEBUG    Log file closed successfully
 [<TIME>] INFO     Dispatching log file: backup-charhost-20260102-030405.log
@@ -473,7 +475,8 @@ charhost-backup-20260102-030405.tar.bundle.tar:
 [<TIME>] DEBUG    Cloud Storage (rclone): filesystem rclone-charremote
 [<TIME>] DEBUG    Cloud Storage (rclone) operations completed (errors=true warnings=false)
 [<TIME>] DEBUG    Disabled storage targets: secondary=false cloud=false
-[<TIME>] STEP     [7] Notifications - dispatching channels
+[<TIME>] SKIP     PBS Storage: disabled
+[<TIME>] STEP     [8] Notifications - dispatching channels
 [<TIME>] DEBUG    notifications dispatch: no init decision requested=always fallback=always
 [<TIME>] INFO     ✓ Notification filter: applied
 [<TIME>] DEBUG    notifications dispatch: run outcome=warning warnings=4 errors=0
@@ -483,7 +486,7 @@ charhost-backup-20260102-030405.tar.bundle.tar:
 [<TIME>] SKIP     Gotify: disabled
 [<TIME>] SKIP     Webhook: disabled
 [<TIME>] SKIP     Healthchecks: disabled
-[<TIME>] STEP     [8] Log file management
+[<TIME>] STEP     [9] Log file management
 [<TIME>] INFO     Closing log file: <ROOT>/log/backup-charhost-20260102-030405.log
 
 ===== BackupStats returned by RunGoBackup =====

@@ -1,11 +1,12 @@
 
 ===== result =====
-error: <nil>
-exit code (as cmd/proxsave computes it): 1
+error: BackupError phase=storage code=5
+message: storage phase failed: storage target failed: Local Storage store operation failed (CRITICAL): primary storage store operation failed for <ROOT>/backup: injected failure
+exit code (as cmd/proxsave computes it): 5
 
 ===== calls to the fakes, in order =====
-notify Characterization
-cloud log upload dest=charremote:<ROOT>/cloud-log/backup-charhost-20260102-030405.log
+local Store file=charhost-backup-20260102-030405.tar.bundle.tar
+local Store metadata file=charhost-backup-20260102-030405.tar.bundle.tar timestamp=2026-01-02T03:04:05Z size=20480 checksum=set type=unknown compression=none version=""
 
 ===== files per location after the run =====
 [backup path (local)]
@@ -17,9 +18,9 @@ cloud log upload dest=charremote:<ROOT>/cloud-log/backup-charhost-20260102-03040
 [log path]
   backup-charhost-20260102-030405.log mode=0600 size=<SIZE>
 [secondary log path]
-  backup-charhost-20260102-030405.log mode=0640 size=<SIZE> (same bytes as the reference location)
+  (does not exist)
 [cloud log path]
-  backup-charhost-20260102-030405.log mode=0640 size=<SIZE> (same bytes as the reference location)
+  (empty)
 [workspace root]
   (empty)
 
@@ -180,37 +181,25 @@ charhost-backup-20260102-030405.tar.bundle.tar:
 [<TIME>] DEBUG    Bundle ready: charhost-backup-20260102-030405.tar.bundle.tar
 [<TIME>] INFO     ✓ Archive created and verified
 
-[<TIME>] STEP     [6] No storage targets registered - skipping
-[<TIME>] DEBUG    Dispatching archive to 0 storage targets
+[<TIME>] DEBUG    Storage targets registered: 3, copies: 2
+[<TIME>] STEP     [6] Dispatching archive to 2 storage target(s)
+[<TIME>] DEBUG    Retention policy: local=7 secondary=14 (enabled=true) cloud=30 (enabled=true)
+[<TIME>] INFO       Retention policy: simple (local=7, secondary=14, cloud=30)
+[<TIME>] DEBUG    Dispatching archive to 3 storage targets
+[<TIME>] DEBUG    Starting Local Storage operations...
+[<TIME>] STEP     Local Storage
+[<TIME>] INFO     Setting backup permissions...
+[<TIME>] DEBUG    primary storage store operation failed for <ROOT>/backup: injected failure
+[<TIME>] ERROR    ✗ Local Storage: backup not accessible
 [<TIME>] DEBUG    Disabled storage targets: secondary=false cloud=false
-
-[<TIME>] SKIP     PBS Storage: disabled
-
-[<TIME>] STEP     [8] Notifications - dispatching channels
-[<TIME>] DEBUG    notifications dispatch: no init decision requested=always fallback=always
-[<TIME>] INFO     ✓ Notification filter: applied
-[<TIME>] DEBUG    notifications dispatch: run outcome=warning warnings=3 errors=0
-[<TIME>] INFO     Notifications: sending...
-[<TIME>] SKIP     Email: disabled
-[<TIME>] SKIP     Telegram: disabled
-[<TIME>] SKIP     Gotify: disabled
-[<TIME>] SKIP     Webhook: disabled
-[<TIME>] SKIP     Healthchecks: disabled
-
-[<TIME>] STEP     [9] Log file management
-[<TIME>] INFO     Closing log file: <ROOT>/log/backup-charhost-20260102-030405.log
-[<TIME>] DEBUG    Log file closed successfully
-[<TIME>] INFO     Dispatching log file: backup-charhost-20260102-030405.log
-[<TIME>] DEBUG    Copying log to secondary: <ROOT>/secondary-log/backup-charhost-20260102-030405.log
-[<TIME>] INFO     Secondary: <ROOT>/secondary-log/backup-charhost-20260102-030405.log
-[<TIME>] INFO     ✓ Log copied to secondary
-[<TIME>] INFO     Cloud: charremote:<ROOT>/cloud-log/backup-charhost-20260102-030405.log
-[<TIME>] DEBUG    Copying log to cloud: charremote:<ROOT>/cloud-log/backup-charhost-20260102-030405.log
-[<TIME>] INFO     ✓ Log copied to cloud
-
-[<TIME>] DEBUG    Go backup completed in 0.0s
 [<TIME>] DEBUG    Removed temporary workspace <ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM>
-[<TIME>] DEBUG    End backup run (ok, duration=<DURATION>)
+[<TIME>] DEBUG    Parsing log file for error/warning counts after failure: <ROOT>/log/backup-charhost-20260102-030405.log
+[<TIME>] DEBUG    Found 1 errors and 3 warnings in log file (failure path)
+[<TIME>] DEBUG    Stopping error already reported by its outcome line; ErrorCount=1
+[<TIME>] DEBUG    Local Storage: run failed before this location's statistics were read; reporting the startup figures (backups=8, owned=0, scoped=false)
+[<TIME>] DEBUG    Secondary Storage: run failed before this location's statistics were read; reporting the startup figures (backups=5, owned=0, scoped=false)
+[<TIME>] DEBUG    Cloud Storage (rclone): run failed before this location's statistics were read; reporting the startup figures (backups=4, owned=0, scoped=false)
+[<TIME>] DEBUG    End backup run (error=storage phase failed: storage target failed: Local Storage store operation failed (CRITICAL): primary storage store operation failed for <ROOT>/backup: injected failure, duration=<DURATION>)
 
 ===== stderr =====
 
@@ -359,22 +348,30 @@ charhost-backup-20260102-030405.tar.bundle.tar:
 [<TIME>] DEBUG    Removed raw tar/checksum/metadata after bundling
 [<TIME>] DEBUG    Bundle ready: charhost-backup-20260102-030405.tar.bundle.tar
 [<TIME>] INFO     ✓ Archive created and verified
-[<TIME>] STEP     [6] No storage targets registered - skipping
-[<TIME>] DEBUG    Dispatching archive to 0 storage targets
+[<TIME>] DEBUG    Storage targets registered: 3, copies: 2
+[<TIME>] STEP     [6] Dispatching archive to 2 storage target(s)
+[<TIME>] DEBUG    Retention policy: local=7 secondary=14 (enabled=true) cloud=30 (enabled=true)
+[<TIME>] INFO       Retention policy: simple (local=7, secondary=14, cloud=30)
+[<TIME>] DEBUG    Dispatching archive to 3 storage targets
+[<TIME>] DEBUG    Starting Local Storage operations...
+[<TIME>] STEP     Local Storage
+[<TIME>] INFO     Setting backup permissions...
+[<TIME>] DEBUG    primary storage store operation failed for <ROOT>/backup: injected failure
+[<TIME>] ERROR    ✗ Local Storage: backup not accessible
 [<TIME>] DEBUG    Disabled storage targets: secondary=false cloud=false
-[<TIME>] SKIP     PBS Storage: disabled
-[<TIME>] STEP     [8] Notifications - dispatching channels
-[<TIME>] DEBUG    notifications dispatch: no init decision requested=always fallback=always
-[<TIME>] INFO     ✓ Notification filter: applied
-[<TIME>] DEBUG    notifications dispatch: run outcome=warning warnings=3 errors=0
-[<TIME>] INFO     Notifications: sending...
-[<TIME>] SKIP     Email: disabled
-[<TIME>] SKIP     Telegram: disabled
-[<TIME>] SKIP     Gotify: disabled
-[<TIME>] SKIP     Webhook: disabled
-[<TIME>] SKIP     Healthchecks: disabled
-[<TIME>] STEP     [9] Log file management
-[<TIME>] INFO     Closing log file: <ROOT>/log/backup-charhost-20260102-030405.log
+[<TIME>] DEBUG    Removed temporary workspace <ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM>
+[<TIME>] DEBUG    Parsing log file for error/warning counts after failure: <ROOT>/log/backup-charhost-20260102-030405.log
+[<TIME>] DEBUG    Found 1 errors and 3 warnings in log file (failure path)
+[<TIME>] DEBUG    Stopping error already reported by its outcome line; ErrorCount=1
+[<TIME>] DEBUG    Local Storage: run failed before this location's statistics were read; reporting the startup figures (backups=8, owned=0, scoped=false)
+[<TIME>] DEBUG    Secondary Storage: run failed before this location's statistics were read; reporting the startup figures (backups=5, owned=0, scoped=false)
+[<TIME>] DEBUG    Cloud Storage (rclone): run failed before this location's statistics were read; reporting the startup figures (backups=4, owned=0, scoped=false)
+[<TIME>] DEBUG    End backup run (error=storage phase failed: storage target failed: Local Storage store operation failed (CRITICAL): primary storage store operation failed for <ROOT>/backup: injected failure, duration=<DURATION>)
+
+===== proxmox-backup-client calls, in order (startup check included) =====
+version --repository charpbs@pbs!pve@192.0.2.10:charstore --output-format json
+status --repository charpbs@pbs!pve@192.0.2.10:charstore --output-format json
+snapshot list --ns charns --repository charpbs@pbs!pve@192.0.2.10:charstore --output-format json
 
 ===== BackupStats returned by RunGoBackup =====
 {
@@ -415,7 +412,7 @@ charhost-backup-20260102-030405.tar.bundle.tar:
   "LocalPath": "<ROOT>/backup",
   "SecondaryPath": "<ROOT>/secondary",
   "CloudPath": "charremote",
-  "LocalStatus": "",
+  "LocalStatus": "error",
   "LocalStatusSummary": "",
   "SecondaryStatus": "skipped",
   "CloudStatus": "skipped",
@@ -425,44 +422,57 @@ charhost-backup-20260102-030405.tar.bundle.tar:
   "FilesIncluded": 1,
   "FilesMissing": 0,
   "SecondaryEnabled": true,
-  "LocalBackups": 0,
-  "LocalFreeSpace": 0,
-  "LocalUsedSpace": 0,
-  "LocalTotalSpace": 0,
-  "SecondaryBackups": 0,
-  "SecondaryFreeSpace": 0,
-  "SecondaryUsedSpace": 0,
-  "SecondaryTotalSpace": 0,
+  "LocalBackups": 8,
+  "LocalFreeSpace": 107374182400,
+  "LocalUsedSpace": 53687091200,
+  "LocalTotalSpace": 161061273600,
+  "SecondaryBackups": 5,
+  "SecondaryFreeSpace": 214748364800,
+  "SecondaryUsedSpace": 322122547200,
+  "SecondaryTotalSpace": 536870912000,
   "CloudEnabled": true,
-  "CloudBackups": 0,
+  "CloudBackups": 4,
   "MaxLocalBackups": 0,
   "MaxSecondaryBackups": 0,
   "MaxCloudBackups": 0,
-  "LocalRetentionPolicy": "",
+  "LocalRetentionPolicy": "simple",
   "LocalGFSDaily": 0,
   "LocalGFSWeekly": 0,
   "LocalGFSMonthly": 0,
   "LocalGFSYearly": 0,
-  "SecondaryRetentionPolicy": "",
+  "SecondaryRetentionPolicy": "simple",
   "SecondaryGFSDaily": 0,
   "SecondaryGFSWeekly": 0,
   "SecondaryGFSMonthly": 0,
   "SecondaryGFSYearly": 0,
-  "CloudRetentionPolicy": "",
+  "CloudRetentionPolicy": "simple",
   "CloudGFSDaily": 0,
   "CloudGFSWeekly": 0,
   "CloudGFSMonthly": 0,
   "CloudGFSYearly": 0,
-  "ErrorCount": 0,
+  "PBSTarget": {
+    "Name": "PBS Storage",
+    "Status": "skipped",
+    "Location": "",
+    "Snapshot": "",
+    "Backups": -1,
+    "MaxBackups": 5,
+    "RetentionPolicy": "simple",
+    "Deleted": 0,
+    "FreeBytes": 0,
+    "UsedBytes": 0,
+    "TotalBytes": 0
+  },
+  "ErrorCount": 1,
   "WarningCount": 3,
   "NotifyCount": 0,
   "LogFilePath": "<ROOT>/log/backup-charhost-20260102-030405.log",
   "LogCategories": null,
-  "ExitCode": 1,
-  "Failed": false,
+  "ExitCode": 5,
+  "Failed": true,
   "ScriptVersion": "",
   "TelegramStatus": "disabled",
-  "EmailStatus": "disabled",
+  "EmailStatus": "unknown",
   "NotifyResults": null,
   "HealthcheckLink": "",
   "HealthcheckStatus": "",
@@ -474,118 +484,4 @@ charhost-backup-20260102-030405.tar.bundle.tar:
 }
 
 ===== BackupStats as seen by the notification channel =====
-calls: 1
-{
-  "Hostname": "charhost",
-  "ProxmoxType": "unknown",
-  "IncompleteTargets": [],
-  "ProxmoxTargets": null,
-  "ProxmoxVersion": "unknown",
-  "PVEVersion": "",
-  "PBSVersion": "",
-  "BundleCreated": true,
-  "Timestamp": "2026-01-02T03:04:05Z",
-  "Version": "",
-  "StartTime": "2026-01-02T03:04:05Z",
-  "EndTime": "2026-01-02T03:04:05Z",
-  "FilesCollected": 1,
-  "FilesFailed": 1,
-  "FilesNotFound": 0,
-  "DirsCreated": 1,
-  "BytesCollected": "<MASKED>",
-  "ArchiveSize": 20480,
-  "UncompressedSize": "<MASKED>",
-  "CompressedSize": 20480,
-  "Duration": 0,
-  "ArchivePath": "<ROOT>/backup/charhost-backup-20260102-030405.tar.bundle.tar",
-  "RequestedCompression": "none",
-  "RequestedCompressionMode": "standard",
-  "Compression": "none",
-  "CompressionLevel": 0,
-  "CompressionMode": "standard",
-  "CompressionThreads": 0,
-  "CompressionRatio": "<MASKED>",
-  "CompressionRatioPercent": "<MASKED>",
-  "CompressionSavingsPercent": 0,
-  "ReportPath": "",
-  "ManifestPath": "",
-  "Checksum": "<SHA256>",
-  "LocalPath": "<ROOT>/backup",
-  "SecondaryPath": "<ROOT>/secondary",
-  "CloudPath": "charremote",
-  "LocalStatus": "",
-  "LocalStatusSummary": "",
-  "SecondaryStatus": "skipped",
-  "CloudStatus": "skipped",
-  "ServerID": "",
-  "ServerMAC": "",
-  "ClusterMode": "",
-  "FilesIncluded": 1,
-  "FilesMissing": 0,
-  "SecondaryEnabled": true,
-  "LocalBackups": 0,
-  "LocalFreeSpace": 0,
-  "LocalUsedSpace": 0,
-  "LocalTotalSpace": 0,
-  "SecondaryBackups": 0,
-  "SecondaryFreeSpace": 0,
-  "SecondaryUsedSpace": 0,
-  "SecondaryTotalSpace": 0,
-  "CloudEnabled": true,
-  "CloudBackups": 0,
-  "MaxLocalBackups": 0,
-  "MaxSecondaryBackups": 0,
-  "MaxCloudBackups": 0,
-  "LocalRetentionPolicy": "",
-  "LocalGFSDaily": 0,
-  "LocalGFSWeekly": 0,
-  "LocalGFSMonthly": 0,
-  "LocalGFSYearly": 0,
-  "SecondaryRetentionPolicy": "",
-  "SecondaryGFSDaily": 0,
-  "SecondaryGFSWeekly": 0,
-  "SecondaryGFSMonthly": 0,
-  "SecondaryGFSYearly": 0,
-  "CloudRetentionPolicy": "",
-  "CloudGFSDaily": 0,
-  "CloudGFSWeekly": 0,
-  "CloudGFSMonthly": 0,
-  "CloudGFSYearly": 0,
-  "ErrorCount": 0,
-  "WarningCount": 3,
-  "NotifyCount": 0,
-  "LogFilePath": "<ROOT>/log/backup-charhost-20260102-030405.log",
-  "LogCategories": [
-    {
-      "label": "Collection: recipe system aborted at brick \"system_core_runtime\"",
-      "type": "WARNING",
-      "count": 1,
-      "example": "36 later bricks never ran, their targets are missing from this backup"
-    },
-    {
-      "label": "System info collection had warnings: failed to get OS release (critical): critical command `cat <ROOT>...",
-      "type": "WARNING",
-      "count": 1,
-      "example": "System info collection had warnings: failed to get OS release (critical): critical command `cat <ROOT>..."
-    },
-    {
-      "label": "Unknown Proxmox type, collecting generic system info only",
-      "type": "WARNING",
-      "count": 1,
-      "example": "Unknown Proxmox type, collecting generic system info only"
-    }
-  ],
-  "ExitCode": 1,
-  "Failed": false,
-  "ScriptVersion": "",
-  "TelegramStatus": "disabled",
-  "EmailStatus": "disabled",
-  "NotifyResults": null,
-  "HealthcheckLink": "",
-  "HealthcheckStatus": "",
-  "HealthcheckPortalURL": "",
-  "HealthcheckPortalLogin": "",
-  "NewVersionAvailable": false,
-  "CurrentVersion": "",
-  "LatestVersion": ""
-}
+(channel not called)

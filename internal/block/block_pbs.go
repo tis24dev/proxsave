@@ -210,6 +210,8 @@ type PBS struct {
 	versions    Versions
 	initialized bool
 	status      datastoreStatus
+	// logger receives the DEBUG evidence: the startup logger, then the run's.
+	logger *logging.Logger
 	// snapshot is this run's snapshot, once the server listed it after the upload.
 	snapshot string
 }
@@ -226,7 +228,7 @@ func InitPBS(ctx context.Context, opts PBSOptions) (*PBS, InitReport) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	p := &PBS{opts: opts}
+	p := &PBS{opts: opts, logger: opts.Logger}
 	log := opts.Logger
 	var report InitReport
 
@@ -303,16 +305,16 @@ func (p *PBS) checkKey(ctx context.Context) *Fact {
 	result := p.client.Run(ctx, "key", "show", p.target.Keyfile, "--output-format", "json")
 	p.debugCall("pbs init key show", result)
 	if result.Err != nil {
-		debugf(p.opts.Logger, "pbs init: key show failed, keyfile passed as it is: %v", result.Err)
+		debugf(p.logger, "pbs init: key show failed, keyfile passed as it is: %v", result.Err)
 		return nil
 	}
 	fact, err := EvaluateKeyShow(result.Stdout, p.target.EncryptionKey)
 	if err != nil {
-		debugf(p.opts.Logger, "pbs init: key show output unreadable, keyfile passed as it is: %v", err)
+		debugf(p.logger, "pbs init: key show output unreadable, keyfile passed as it is: %v", err)
 		return nil
 	}
 	if fact != nil {
-		debugf(p.opts.Logger, "pbs init: encryption key check failed: %s (%v)", fact.Line(), fact.Err)
+		debugf(p.logger, "pbs init: encryption key check failed: %s (%v)", fact.Line(), fact.Err)
 	}
 	return fact
 }
@@ -365,6 +367,9 @@ func (p *PBS) Execute(in Input) Result {
 		MaxBackups:      p.opts.Retention.MaxBackups,
 		RetentionPolicy: p.opts.Retention.Policy,
 	}
+	if in.Logger != nil {
+		p.logger = in.Logger
+	}
 	if in.DryRun {
 		return result
 	}
@@ -372,10 +377,10 @@ func (p *PBS) Execute(in Input) Result {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	log := in.Logger
-	if log == nil {
-		log = p.opts.Logger
+	if p.logger == nil {
+		p.logger = logging.GetDefaultLogger()
 	}
+	log := p.logger
 
 	log.Info("%s", p.RetentionPolicyLine())
 	log.Info("Storing backup...")
@@ -469,7 +474,7 @@ func (p *PBS) uploadArgs(treeDir string) []string {
 	if p.versions.Client.SupportsChangeDetectionMode() {
 		args = append(args, "--change-detection-mode", "metadata")
 	} else {
-		debugf(p.opts.Logger, "pbs: client %s rejects --change-detection-mode, upload without it", p.versions.Client)
+		debugf(p.logger, "pbs: client %s rejects --change-detection-mode, upload without it", p.versions.Client)
 	}
 	args = append(args, "--chunk-size", pbsChunkSize)
 	return append(args, p.cryptArgs()...)
@@ -510,7 +515,7 @@ func (p *PBS) findUploadedSnapshot(ctx context.Context, upload ClientResult, sta
 				named = at.Unix()
 			}
 		}
-		debugf(p.opts.Logger, "pbs: client started snapshot %s (time %d)", name, named)
+		debugf(p.logger, "pbs: client started snapshot %s (time %d)", name, named)
 	}
 	snapshots, cause := p.listGroup(ctx, "pbs snapshot list after upload")
 	if cause != nil {
@@ -529,7 +534,7 @@ func (p *PBS) findUploadedSnapshot(ctx context.Context, upload ClientResult, sta
 		}
 	}
 	if found == nil {
-		debugf(p.opts.Logger, "pbs: no snapshot of %s matches the upload (named=%d start=%d listed=%d)", p.group(), named, start.Unix(), len(snapshots))
+		debugf(p.logger, "pbs: no snapshot of %s matches the upload (named=%d start=%d listed=%d)", p.group(), named, start.Unix(), len(snapshots))
 		return Snapshot{}, &ServerCause{Text: "snapshot not found after upload"}
 	}
 	return *found, nil
@@ -734,7 +739,7 @@ func (p *PBS) listSnapshots(ctx context.Context, label string, args []string) ([
 	}
 	var all []Snapshot
 	if err := json.Unmarshal(result.Stdout, &all); err != nil {
-		debugf(p.opts.Logger, "%s: output unreadable: %v", label, err)
+		debugf(p.logger, "%s: output unreadable: %v", label, err)
 		return nil, &ServerCause{Text: "unrecognized PBS client error"}
 	}
 	own := make([]Snapshot, 0, len(all))
@@ -743,7 +748,7 @@ func (p *PBS) listSnapshots(ctx context.Context, label string, args []string) ([
 			own = append(own, s)
 		}
 	}
-	debugf(p.opts.Logger, "%s: %d snapshots listed, %d of group %s", label, len(all), len(own), p.group())
+	debugf(p.logger, "%s: %d snapshots listed, %d of group %s", label, len(all), len(own), p.group())
 	return own, nil
 }
 
@@ -756,7 +761,7 @@ func (p *PBS) readStatus(ctx context.Context, label string) (datastoreStatus, *S
 	}
 	var status datastoreStatus
 	if err := json.Unmarshal(result.Stdout, &status); err != nil {
-		debugf(p.opts.Logger, "%s: output unreadable: %v", label, err)
+		debugf(p.logger, "%s: output unreadable: %v", label, err)
 		return datastoreStatus{}, &ServerCause{Text: "unrecognized PBS client error"}
 	}
 	return status, nil
@@ -764,7 +769,7 @@ func (p *PBS) readStatus(ctx context.Context, label string) (datastoreStatus, *S
 
 func (p *PBS) cause(result ClientResult) *ServerCause {
 	cause := classifyClientError(result, p.target.Namespace)
-	debugf(p.opts.Logger, "pbs: cause %q", cause.Text)
+	debugf(p.logger, "pbs: cause %q", cause.Text)
 	return &cause
 }
 
@@ -775,10 +780,13 @@ func (p *PBS) logCause(log *logging.Logger, cause *ServerCause) {
 	}
 }
 
+// debugOutputLimit is the largest output debugCall writes line by line.
+const debugOutputLimit = 4096
+
 // debugCall writes a client call to DEBUG: argv (no secret ever travels there), exit
 // code, duration and every line of output.
 func (p *PBS) debugCall(label string, result ClientResult) {
-	log := p.opts.Logger
+	log := p.logger
 	if log == nil {
 		return
 	}
@@ -788,6 +796,11 @@ func (p *PBS) debugCall(label string, result ClientResult) {
 		name string
 		data []byte
 	}{{"stdout", result.Stdout}, {"stderr", result.Stderr}} {
+		if len(stream.data) > debugOutputLimit {
+			// A snapshot list of a busy namespace: its count is logged by the caller.
+			log.Debug("%s %s: %d bytes, not shown", label, stream.name, len(stream.data))
+			continue
+		}
 		for _, line := range strings.Split(strings.TrimRight(string(stream.data), "\n"), "\n") {
 			if strings.TrimSpace(line) != "" {
 				log.Debug("%s %s: %s", label, stream.name, strings.TrimRight(line, " "))

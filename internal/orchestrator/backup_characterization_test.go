@@ -19,6 +19,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/tis24dev/proxsave/internal/block"
 	"github.com/tis24dev/proxsave/internal/config"
 	"github.com/tis24dev/proxsave/internal/environment"
 	"github.com/tis24dev/proxsave/internal/health"
@@ -259,6 +260,10 @@ type backupCharCase struct {
 	// fakeBinaries are shell scripts placed first in PATH under their name. The name must
 	// be one safeexec allows, since the archiver runs every external tool through it.
 	fakeBinaries map[string]string
+	// pbs enables the PBS storage with the real block against a fake
+	// proxmox-backup-client answering as the scenario says: "ok", "upload_failed",
+	// "prune_denied", "not_initialized". Empty = PBS_TARGET_ENABLED=false.
+	pbs string
 }
 
 type backupCharDirs struct {
@@ -393,6 +398,10 @@ func runBackupCharacterization(t *testing.T, tc backupCharCase) string {
 	if tc.encrypt {
 		cfg.AgeRecipients = []string{testAgeRecipient}
 	}
+	var pbsBlock *block.PBS
+	if tc.pbs != "" {
+		pbsBlock = setupBackupCharPBS(t, dirs, cfg, tc.pbs)
+	}
 
 	registry, err := NewTempDirRegistry(logger, filepath.Join(dirs.registry, "temp-dirs.json"))
 	if err != nil {
@@ -454,6 +463,10 @@ func runBackupCharacterization(t *testing.T, tc backupCharCase) string {
 			adapter.SetInitialStats(&initial)
 			orch.RegisterStorageTarget(adapter)
 		}
+	}
+
+	if pbsBlock != nil {
+		orch.RegisterBackupBlock(pbsBlock)
 	}
 
 	channel := &backupCharChannel{rec: rec}
@@ -610,6 +623,11 @@ func renderBackupCharacterization(t *testing.T, dirs backupCharDirs, res backupC
 	section("run log file")
 	b.WriteString(maskBackupChar(dirs, res.logFile))
 
+	if data, err := os.ReadFile(filepath.Join(dirs.root, backupCharPBSCalls)); err == nil {
+		section("proxmox-backup-client calls, in order (startup check included)")
+		b.WriteString(maskBackupChar(dirs, string(data)))
+	}
+
 	section("BackupStats returned by RunGoBackup")
 	if res.stats == nil {
 		b.WriteString("<nil>\n")
@@ -740,6 +758,12 @@ func TestBackupCharacterization(t *testing.T) {
 		{name: "age_encryption", encrypt: true},
 		{name: "verification_failed", fakeBinaries: map[string]string{"tar": backupCharFakeTarFailing}},
 		{name: "compression_failed", compression: types.CompressionXZ, fakeBinaries: map[string]string{"xz": backupCharFakeXZFailing}},
+		{name: "pbs_ok", pbs: "ok"},
+		{name: "pbs_upload_failed", pbs: "upload_failed"},
+		{name: "pbs_prune_denied", pbs: "prune_denied"},
+		{name: "pbs_not_initialized", pbs: "not_initialized"},
+		{name: "pbs_dry_run", pbs: "ok", dryRun: true},
+		{name: "local_failed_pbs_enabled", pbs: "ok", failLocal: true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

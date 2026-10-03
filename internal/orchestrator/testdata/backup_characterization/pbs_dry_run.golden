@@ -172,7 +172,8 @@ exit code (as cmd/proxsave computes it): 1
 [<TIME>] STEP     [6] Storage dispatch skipped (dry run mode)
 [<TIME>] DEBUG    Disabled storage targets: secondary=false cloud=false
 
-[<TIME>] SKIP     PBS Storage: disabled
+[<TIME>] STEP     [7] PBS Storage dispatch skipped (dry run mode)
+[<TIME>] DEBUG    PBS Storage: status=skipped snapshot="" backups=-1 deleted=0
 
 [<TIME>] DEBUG    Go backup completed in 0.0s
 [<TIME>] DEBUG    Removed temporary workspace <ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM>
@@ -321,10 +322,16 @@ exit code (as cmd/proxsave computes it): 1
 [<TIME>] DEBUG    Aggregated exit code based on log analysis: 1
 [<TIME>] STEP     [6] Storage dispatch skipped (dry run mode)
 [<TIME>] DEBUG    Disabled storage targets: secondary=false cloud=false
-[<TIME>] SKIP     PBS Storage: disabled
+[<TIME>] STEP     [7] PBS Storage dispatch skipped (dry run mode)
+[<TIME>] DEBUG    PBS Storage: status=skipped snapshot="" backups=-1 deleted=0
 [<TIME>] DEBUG    Go backup completed in 0.0s
 [<TIME>] DEBUG    Removed temporary workspace <ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM>
 [<TIME>] DEBUG    End backup run (ok, duration=<DURATION>)
+
+===== proxmox-backup-client calls, in order (startup check included) =====
+version --repository charpbs@pbs!pve@192.0.2.10:charstore --output-format json
+status --repository charpbs@pbs!pve@192.0.2.10:charstore --output-format json
+snapshot list --ns charns --repository charpbs@pbs!pve@192.0.2.10:charstore --output-format json
 
 ===== BackupStats returned by RunGoBackup =====
 {
@@ -403,6 +410,19 @@ exit code (as cmd/proxsave computes it): 1
   "CloudGFSWeekly": 0,
   "CloudGFSMonthly": 0,
   "CloudGFSYearly": 0,
+  "PBSTarget": {
+    "Name": "PBS Storage",
+    "Status": "skipped",
+    "Location": "charpbs@pbs!pve@192.0.2.10:charstore",
+    "Snapshot": "",
+    "Backups": -1,
+    "MaxBackups": 5,
+    "RetentionPolicy": "simple",
+    "Deleted": 0,
+    "FreeBytes": 0,
+    "UsedBytes": 0,
+    "TotalBytes": 0
+  },
   "ErrorCount": 0,
   "WarningCount": 1,
   "NotifyCount": 0,

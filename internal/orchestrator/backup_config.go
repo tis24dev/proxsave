@@ -6,6 +6,7 @@ import (
 
 	"filippo.io/age"
 	"github.com/tis24dev/proxsave/internal/backup"
+	"github.com/tis24dev/proxsave/internal/block"
 	"github.com/tis24dev/proxsave/internal/config"
 	"github.com/tis24dev/proxsave/internal/environment"
 	"github.com/tis24dev/proxsave/internal/types"
@@ -113,6 +114,19 @@ func InitializeBackupStats(
 		stats.CloudStatus = "skipped"
 	} else {
 		stats.CloudStatus = "disabled"
+	}
+
+	// The PBS block writes its own outcome at step [7]; until then nothing was uploaded.
+	// Without PBS the field stays nil and out of the serialized stats.
+	if cfg != nil && cfg.PBSTargetEnabled {
+		rc := block.PBSRetentionFromConfig(cfg)
+		stats.PBSTarget = &block.Result{
+			Name:            block.PBSName,
+			Status:          block.StatusSkipped,
+			Backups:         -1,
+			MaxBackups:      rc.MaxBackups,
+			RetentionPolicy: rc.Policy,
+		}
 	}
 
 	return stats

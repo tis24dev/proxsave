@@ -14,6 +14,7 @@ import (
 
 	"filippo.io/age"
 	"github.com/tis24dev/proxsave/internal/backup"
+	"github.com/tis24dev/proxsave/internal/block"
 	"github.com/tis24dev/proxsave/internal/checks"
 	"github.com/tis24dev/proxsave/internal/config"
 	"github.com/tis24dev/proxsave/internal/environment"
@@ -145,6 +146,10 @@ type BackupStats struct {
 	CloudGFSMonthly          int
 	CloudGFSYearly           int
 
+	// PBSTarget is the outcome of the PBS storage block (step [7]). It is nil when
+	// PBS_TARGET_ENABLED=false, so a run without PBS serializes exactly as before.
+	PBSTarget *block.Result `json:",omitempty"`
+
 	// Error/warning counts
 	ErrorCount   int
 	WarningCount int
@@ -226,6 +231,7 @@ type Orchestrator struct {
 	optimizationCfg    backup.OptimizationConfig
 
 	storageTargets       []StorageTarget
+	backupBlocks         []block.Backup
 	notificationChannels []NotificationChannel
 	tempRegistry         *TempDirRegistry
 
@@ -623,9 +629,9 @@ func (o *Orchestrator) RunGoBackup(ctx context.Context, envInfo *environment.Env
 	if err := o.collectBackupData(run, workspace); err != nil {
 		return stats, err
 	}
-	blocks := []blockBackup{&blockPath{o: o}}
-	for _, block := range blocks {
-		if err := block.execute(run, workspace); err != nil {
+	blocks := append([]blockBackup{&blockPath{o: o}}, o.destinationBlocks()...)
+	for _, b := range blocks {
+		if err := b.execute(run, workspace); err != nil {
 			return stats, err
 		}
 	}

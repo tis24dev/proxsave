@@ -238,7 +238,9 @@ cloud log upload dest=charremote:<ROOT>/cloud-log/backup-charhost-20260102-03040
 [<TIME>] DEBUG    Cloud Storage (rclone) operations completed (errors=false warnings=false)
 [<TIME>] DEBUG    Disabled storage targets: secondary=false cloud=false
 
-[<TIME>] STEP     [7] Notifications - dispatching channels
+[<TIME>] SKIP     PBS Storage: disabled
+
+[<TIME>] STEP     [8] Notifications - dispatching channels
 [<TIME>] DEBUG    notifications dispatch: no init decision requested=always fallback=always
 [<TIME>] INFO     ✓ Notification filter: applied
 [<TIME>] DEBUG    notifications dispatch: run outcome=warning warnings=3 errors=0
@@ -249,7 +251,7 @@ cloud log upload dest=charremote:<ROOT>/cloud-log/backup-charhost-20260102-03040
 [<TIME>] SKIP     Webhook: disabled
 [<TIME>] SKIP     Healthchecks: disabled
 
-[<TIME>] STEP     [8] Log file management
+[<TIME>] STEP     [9] Log file management
 [<TIME>] INFO     Closing log file: <ROOT>/log/backup-charhost-20260102-030405.log
 [<TIME>] DEBUG    Log file closed successfully
 [<TIME>] INFO     Dispatching log file: backup-charhost-20260102-030405.log
@@ -451,7 +453,8 @@ cloud log upload dest=charremote:<ROOT>/cloud-log/backup-charhost-20260102-03040
 [<TIME>] DEBUG    Cloud Storage (rclone): filesystem rclone-charremote
 [<TIME>] DEBUG    Cloud Storage (rclone) operations completed (errors=false warnings=false)
 [<TIME>] DEBUG    Disabled storage targets: secondary=false cloud=false
-[<TIME>] STEP     [7] Notifications - dispatching channels
+[<TIME>] SKIP     PBS Storage: disabled
+[<TIME>] STEP     [8] Notifications - dispatching channels
 [<TIME>] DEBUG    notifications dispatch: no init decision requested=always fallback=always
 [<TIME>] INFO     ✓ Notification filter: applied
 [<TIME>] DEBUG    notifications dispatch: run outcome=warning warnings=3 errors=0
@@ -461,7 +464,7 @@ cloud log upload dest=charremote:<ROOT>/cloud-log/backup-charhost-20260102-03040
 [<TIME>] SKIP     Gotify: disabled
 [<TIME>] SKIP     Webhook: disabled
 [<TIME>] SKIP     Healthchecks: disabled
-[<TIME>] STEP     [8] Log file management
+[<TIME>] STEP     [9] Log file management
 [<TIME>] INFO     Closing log file: <ROOT>/log/backup-charhost-20260102-030405.log
 
 ===== BackupStats returned by RunGoBackup =====

@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/tis24dev/proxsave/internal/block"
 	"github.com/tis24dev/proxsave/internal/config"
 	"github.com/tis24dev/proxsave/internal/health"
 	"github.com/tis24dev/proxsave/internal/notify"
@@ -64,6 +65,15 @@ func (o *Orchestrator) RegisterStorageTarget(target StorageTarget) {
 		return
 	}
 	o.storageTargets = append(o.storageTargets, target)
+}
+
+// RegisterBackupBlock adds a destination block (the PBS storage) to run as a step of
+// its own after the path block. A block is never critical: it cannot stop the run.
+func (o *Orchestrator) RegisterBackupBlock(b block.Backup) {
+	if b == nil {
+		return
+	}
+	o.backupBlocks = append(o.backupBlocks, b)
 }
 
 // RegisterNotificationChannel adds a notification channel to run after the backup.
@@ -460,7 +470,7 @@ func (o *Orchestrator) dispatchNotificationsAndLogs(ctx context.Context, stats *
 	// Phase 2: Notifications (non-critical - failures don't abort backup)
 	// Notification errors are logged but never propagated
 	fmt.Println()
-	o.logStep(7, "Notifications - dispatching channels")
+	o.logStep(8, "Notifications - dispatching channels")
 	o.startNotificationGroup(ctx, stats)
 }
 
@@ -509,7 +519,7 @@ func (o *Orchestrator) FinalizeAndCloseLog(ctx context.Context) {
 	}
 
 	fmt.Println()
-	o.logStep(8, "Log file management")
+	o.logStep(9, "Log file management")
 	o.logger.Info("Closing log file: %s", logFilePath)
 	if err := o.logger.CloseLogFile(); err != nil {
 		o.logger.Warning("Failed to close log file: %v", err)
@@ -667,7 +677,49 @@ func (o *Orchestrator) dispatchLogFile(ctx context.Context, logFilePath string) 
 		}
 	}
 
+	o.dispatchLogToBlocks(logFilePath)
 	return nil
+}
+
+// blockLogUploader is a destination block that attaches the run log to what it saved
+// in this run (the PBS storage: snapshot upload-log).
+type blockLogUploader interface {
+	Snapshot() string
+	UploadLog(ctx context.Context, logPath string) *block.ServerCause
+}
+
+// dispatchLogToBlocks copies the log to the snapshot each destination block saved in
+// this run. Like the other copies it runs on a background context: the log must still
+// ship after a Ctrl+C; the client bounds its own calls (10 s to connect, 120 s for an
+// answer).
+func (o *Orchestrator) dispatchLogToBlocks(logFilePath string) {
+	for _, b := range o.backupBlocks {
+		uploader, ok := b.(blockLogUploader)
+		if !ok {
+			continue
+		}
+		snapshot := uploader.Snapshot()
+		if snapshot == "" {
+			o.logger.Debug("PBS log copy: no snapshot saved in this run (dry_run=%v)", o.dryRun)
+			o.logger.Info("PBS: no snapshot in this run")
+			if o.dryRun {
+				o.logger.Skip("Log copy: dry run mode")
+			} else {
+				o.logger.Info("%s Log not copied to PBS", theme.SymbolWarning)
+			}
+			continue
+		}
+		o.logger.Info("PBS: %s", snapshot)
+		if cause := uploader.UploadLog(context.Background(), logFilePath); cause != nil {
+			o.logger.Debug("PBS log copy: upload of %s to %s failed: %s", logFilePath, snapshot, cause.Text)
+			for _, line := range cause.Facts() {
+				o.logger.Info("%s", line)
+			}
+			o.logger.Warning("%s Log not copied to PBS", theme.SymbolWarning)
+			continue
+		}
+		o.logger.Info("%s Log copied to PBS", theme.SymbolSuccess)
+	}
 }
 
 // resolveCloudPath normalizes a cloud path by prepending the remote name if not present.

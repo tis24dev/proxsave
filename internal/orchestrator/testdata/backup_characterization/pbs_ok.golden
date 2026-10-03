@@ -4,6 +4,23 @@ error: <nil>
 exit code (as cmd/proxsave computes it): 1
 
 ===== calls to the fakes, in order =====
+local Store file=charhost-backup-20260102-030405.tar.bundle.tar
+local Store metadata file=charhost-backup-20260102-030405.tar.bundle.tar timestamp=2026-01-02T03:04:05Z size=20480 checksum=set type=unknown compression=none version=""
+local List
+local ApplyRetention policy=simple max=7
+local LastRetentionSummary
+local GetStats
+secondary Store file=charhost-backup-20260102-030405.tar.bundle.tar
+secondary Store metadata file=charhost-backup-20260102-030405.tar.bundle.tar timestamp=2026-01-02T03:04:05Z size=20480 checksum=set type=unknown compression=none version=""
+secondary List
+secondary ApplyRetention policy=simple max=14
+secondary LastRetentionSummary
+secondary GetStats
+cloud Store file=charhost-backup-20260102-030405.tar.bundle.tar
+cloud Store metadata file=charhost-backup-20260102-030405.tar.bundle.tar timestamp=2026-01-02T03:04:05Z size=20480 checksum=set type=unknown compression=none version=""
+cloud ApplyRetention policy=simple max=30
+cloud LastRetentionSummary
+cloud GetStats
 notify Characterization
 cloud log upload dest=charremote:<ROOT>/cloud-log/backup-charhost-20260102-030405.log
 
@@ -11,9 +28,9 @@ cloud log upload dest=charremote:<ROOT>/cloud-log/backup-charhost-20260102-03040
 [backup path (local)]
   charhost-backup-20260102-030405.tar.bundle.tar mode=0600 size=20480
 [secondary path]
-  (empty)
+  charhost-backup-20260102-030405.tar.bundle.tar mode=0640 size=20480 (same bytes as the reference location)
 [cloud path]
-  (empty)
+  charhost-backup-20260102-030405.tar.bundle.tar mode=0640 size=20480 (same bytes as the reference location)
 [log path]
   backup-charhost-20260102-030405.log mode=0600 size=<SIZE>
 [secondary log path]
@@ -180,11 +197,85 @@ charhost-backup-20260102-030405.tar.bundle.tar:
 [<TIME>] DEBUG    Bundle ready: charhost-backup-20260102-030405.tar.bundle.tar
 [<TIME>] INFO     ✓ Archive created and verified
 
-[<TIME>] STEP     [6] No storage targets registered - skipping
-[<TIME>] DEBUG    Dispatching archive to 0 storage targets
+[<TIME>] DEBUG    Storage targets registered: 3, copies: 2
+[<TIME>] STEP     [6] Dispatching archive to 2 storage target(s)
+[<TIME>] DEBUG    Retention policy: local=7 secondary=14 (enabled=true) cloud=30 (enabled=true)
+[<TIME>] INFO       Retention policy: simple (local=7, secondary=14, cloud=30)
+[<TIME>] DEBUG    Dispatching archive to 3 storage targets
+[<TIME>] DEBUG    Starting Local Storage operations...
+[<TIME>] STEP     Local Storage
+[<TIME>] INFO     Setting backup permissions...
+[<TIME>] DEBUG    Local Storage: store issues=[]
+[<TIME>] INFO     ✓ Local Storage: permissions set
+[<TIME>] INFO     Applying retention policy...
+[<TIME>] DEBUG      Policy: simple (keep 7 newest)
+[<TIME>] DEBUG    Local Storage: Current backups detected: 0
+[<TIME>] DEBUG    Local Storage: retention outcome planned=1 deleted=1 not_deleted=0 left_behind=0 not_listed=0 skipped=0 no_metadata=0 logs_deleted=1 logs_not_deleted=0
+[<TIME>] INFO     ✓ Backups deleted: 1
+[<TIME>] INFO     ✓ Logs deleted: 1
+[<TIME>] INFO     Local Storage statistics:
+[<TIME>] INFO       Total backups: 8
+[<TIME>] INFO       Total size: 8.0 MiB
+[<TIME>] DEBUG    Local Storage: filesystem ext4
+[<TIME>] DEBUG    Local Storage operations completed (errors=false warnings=false)
+[<TIME>] DEBUG    Starting Secondary Storage operations...
+[<TIME>] STEP     Secondary Storage
+[<TIME>] INFO     Storing backup...
+[<TIME>] DEBUG    Secondary Storage: store issues=[]
+[<TIME>] INFO     ✓ Secondary Storage: backup saved
+[<TIME>] INFO     Applying retention policy...
+[<TIME>] DEBUG      Policy: simple (keep 14 newest)
+[<TIME>] DEBUG    Secondary Storage: Current backups detected: 0
+[<TIME>] DEBUG    Secondary Storage: retention outcome planned=0 deleted=0 not_deleted=0 left_behind=0 not_listed=0 skipped=0 no_metadata=0 logs_deleted=0 logs_not_deleted=0
+[<TIME>] INFO     ✓ Nothing to delete
+[<TIME>] INFO     Secondary Storage statistics:
+[<TIME>] INFO       Total backups: 5
+[<TIME>] INFO       Total size: 5.0 MiB
+[<TIME>] DEBUG    Secondary Storage: filesystem nfs4
+[<TIME>] DEBUG    Secondary Storage operations completed (errors=false warnings=false)
+[<TIME>] DEBUG    Starting Cloud Storage (rclone) operations...
+[<TIME>] STEP     Cloud Storage (rclone)
+[<TIME>] INFO     Storing backup...
+[<TIME>] DEBUG    Cloud Storage (rclone): store issues=[]
+[<TIME>] INFO     ✓ Cloud Storage (rclone): backup saved
+[<TIME>] INFO     Applying retention policy...
+[<TIME>] DEBUG      Policy: simple (keep 30 newest)
+[<TIME>] DEBUG    Cloud Storage (rclone): retention outcome planned=2 deleted=2 not_deleted=0 left_behind=0 not_listed=0 skipped=0 no_metadata=0 logs_deleted=0 logs_not_deleted=0
+[<TIME>] INFO     ✓ Backups deleted: 2
+[<TIME>] INFO     Cloud Storage (rclone) statistics:
+[<TIME>] INFO       Total backups: 4
+[<TIME>] INFO       Total size: 4.0 MiB
+[<TIME>] DEBUG    Cloud Storage (rclone): filesystem rclone-charremote
+[<TIME>] DEBUG    Cloud Storage (rclone) operations completed (errors=false warnings=false)
 [<TIME>] DEBUG    Disabled storage targets: secondary=false cloud=false
 
-[<TIME>] SKIP     PBS Storage: disabled
+[<TIME>] STEP     [7] PBS Storage - dispatching archive
+[<TIME>] INFO       Retention policy: simple (pbs=5)
+[<TIME>] INFO     Storing backup...
+[<TIME>] DEBUG    pbs: 0 .pxarexclude files in the collected tree
+[<TIME>] DEBUG    pbs backup: proxmox-backup-client backup proxsave.pxar:<ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM> --repository charpbs@pbs!pve@192.0.2.10:charstore --ns charns --backup-type host --backup-id proxsave-charhost --change-detection-mode metadata --chunk-size 64 --crypt-mode none rc=0 duration=<DURATION> err=<nil>
+[<TIME>] DEBUG    pbs backup stderr: Starting backup: [charns]:host/proxsave-charhost/2026-01-02T03:04:30Z
+[<TIME>] DEBUG    pbs backup stderr: proxsave.ppxar: had to backup 402 B of 3.067 MiB
+[<TIME>] DEBUG    pbs: client started snapshot host/proxsave-charhost/2026-01-02T03:04:30Z (time 1767323070)
+[<TIME>] DEBUG    pbs snapshot list after upload: proxmox-backup-client snapshot list host/proxsave-charhost --ns charns --repository charpbs@pbs!pve@192.0.2.10:charstore --output-format json rc=0 duration=<DURATION> err=<nil>
+[<TIME>] DEBUG    pbs snapshot list after upload stdout: [{"backup-id":"proxsave-charhost","backup-time":1767236670,"backup-type":"host","files":[{"crypt-mode":"none","filename":"proxsave.mpxar.didx","size":100},{"crypt-mode":"none","filename":"proxsave.ppxar.didx","size":100}],"owner":"charpbs@pbs!pve","protected":false,"size":200},{"backup-id":"proxsave-charhost","backup-time":1767323070,"backup-type":"host","files":[{"crypt-mode":"none","filename":"proxsave.mpxar.didx","size":100},{"crypt-mode":"none","filename":"proxsave.ppxar.didx","size":100}],"owner":"charpbs@pbs!pve","protected":false,"size":200}]
+[<TIME>] DEBUG    pbs snapshot list after upload: 2 snapshots listed, 2 of group host/proxsave-charhost
+[<TIME>] INFO       Snapshot: host/proxsave-charhost/2026-01-02T03:04:30Z
+[<TIME>] INFO     ✓ PBS Storage: backup saved
+[<TIME>] INFO     Applying retention policy...
+[<TIME>] DEBUG      Policy: simple (keep 5 newest)
+[<TIME>] DEBUG    pbs prune: proxmox-backup-client prune host/proxsave-charhost --ns charns --repository charpbs@pbs!pve@192.0.2.10:charstore --keep-last 5 --output-format json rc=0 duration=<DURATION> err=<nil>
+[<TIME>] DEBUG    pbs prune stdout: [{"backup-time":1766718270,"keep":false},{"backup-time":1767323070,"keep":true}]
+[<TIME>] DEBUG    pbs: prune listed 2 snapshots, removed 1
+[<TIME>] INFO     ✓ Backups deleted: 1
+[<TIME>] DEBUG    pbs snapshot list for statistics: proxmox-backup-client snapshot list host/proxsave-charhost --ns charns --repository charpbs@pbs!pve@192.0.2.10:charstore --output-format json rc=0 duration=<DURATION> err=<nil>
+[<TIME>] DEBUG    pbs snapshot list for statistics stdout: [{"backup-id":"proxsave-charhost","backup-time":1767236670,"backup-type":"host","files":[{"crypt-mode":"none","filename":"proxsave.mpxar.didx","size":100},{"crypt-mode":"none","filename":"proxsave.ppxar.didx","size":100}],"owner":"charpbs@pbs!pve","protected":false,"size":200},{"backup-id":"proxsave-charhost","backup-time":1767323070,"backup-type":"host","files":[{"crypt-mode":"none","filename":"proxsave.mpxar.didx","size":100},{"crypt-mode":"none","filename":"proxsave.ppxar.didx","size":100}],"owner":"charpbs@pbs!pve","protected":false,"size":200}]
+[<TIME>] DEBUG    pbs snapshot list for statistics: 2 snapshots listed, 2 of group host/proxsave-charhost
+[<TIME>] INFO     PBS Storage statistics:
+[<TIME>] INFO       Total backups: 2
+[<TIME>] DEBUG    pbs status: proxmox-backup-client status --repository charpbs@pbs!pve@192.0.2.10:charstore --output-format json rc=0 duration=<DURATION> err=<nil>
+[<TIME>] DEBUG    pbs status stdout: {"avail":8186691584,"backend-type":"filesystem","total":30080253952,"used":20560846848}
+[<TIME>] DEBUG    PBS Storage: status=ok snapshot="host/proxsave-charhost/2026-01-02T03:04:30Z" backups=2 deleted=1
 
 [<TIME>] STEP     [8] Notifications - dispatching channels
 [<TIME>] DEBUG    notifications dispatch: no init decision requested=always fallback=always
@@ -207,6 +298,12 @@ charhost-backup-20260102-030405.tar.bundle.tar:
 [<TIME>] INFO     Cloud: charremote:<ROOT>/cloud-log/backup-charhost-20260102-030405.log
 [<TIME>] DEBUG    Copying log to cloud: charremote:<ROOT>/cloud-log/backup-charhost-20260102-030405.log
 [<TIME>] INFO     ✓ Log copied to cloud
+[<TIME>] INFO     PBS: host/proxsave-charhost/2026-01-02T03:04:30Z
+[<TIME>] DEBUG    pbs snapshot upload-log: proxmox-backup-client snapshot upload-log host/proxsave-charhost/2026-01-02T03:04:30Z <ROOT>/log/backup-charhost-20260102-030405.log --ns charns --repository charpbs@pbs!pve@192.0.2.10:charstore --crypt-mode none rc=0 duration=<DURATION> err=<nil>
+[<TIME>] DEBUG    pbs snapshot upload-log stdout: Result: {
+[<TIME>] DEBUG    pbs snapshot upload-log stdout:   "data": null
+[<TIME>] DEBUG    pbs snapshot upload-log stdout: }
+[<TIME>] INFO     ✓ Log copied to PBS
 
 [<TIME>] DEBUG    Go backup completed in 0.0s
 [<TIME>] DEBUG    Removed temporary workspace <ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM>
@@ -359,10 +456,84 @@ charhost-backup-20260102-030405.tar.bundle.tar:
 [<TIME>] DEBUG    Removed raw tar/checksum/metadata after bundling
 [<TIME>] DEBUG    Bundle ready: charhost-backup-20260102-030405.tar.bundle.tar
 [<TIME>] INFO     ✓ Archive created and verified
-[<TIME>] STEP     [6] No storage targets registered - skipping
-[<TIME>] DEBUG    Dispatching archive to 0 storage targets
+[<TIME>] DEBUG    Storage targets registered: 3, copies: 2
+[<TIME>] STEP     [6] Dispatching archive to 2 storage target(s)
+[<TIME>] DEBUG    Retention policy: local=7 secondary=14 (enabled=true) cloud=30 (enabled=true)
+[<TIME>] INFO       Retention policy: simple (local=7, secondary=14, cloud=30)
+[<TIME>] DEBUG    Dispatching archive to 3 storage targets
+[<TIME>] DEBUG    Starting Local Storage operations...
+[<TIME>] STEP     Local Storage
+[<TIME>] INFO     Setting backup permissions...
+[<TIME>] DEBUG    Local Storage: store issues=[]
+[<TIME>] INFO     ✓ Local Storage: permissions set
+[<TIME>] INFO     Applying retention policy...
+[<TIME>] DEBUG      Policy: simple (keep 7 newest)
+[<TIME>] DEBUG    Local Storage: Current backups detected: 0
+[<TIME>] DEBUG    Local Storage: retention outcome planned=1 deleted=1 not_deleted=0 left_behind=0 not_listed=0 skipped=0 no_metadata=0 logs_deleted=1 logs_not_deleted=0
+[<TIME>] INFO     ✓ Backups deleted: 1
+[<TIME>] INFO     ✓ Logs deleted: 1
+[<TIME>] INFO     Local Storage statistics:
+[<TIME>] INFO       Total backups: 8
+[<TIME>] INFO       Total size: 8.0 MiB
+[<TIME>] DEBUG    Local Storage: filesystem ext4
+[<TIME>] DEBUG    Local Storage operations completed (errors=false warnings=false)
+[<TIME>] DEBUG    Starting Secondary Storage operations...
+[<TIME>] STEP     Secondary Storage
+[<TIME>] INFO     Storing backup...
+[<TIME>] DEBUG    Secondary Storage: store issues=[]
+[<TIME>] INFO     ✓ Secondary Storage: backup saved
+[<TIME>] INFO     Applying retention policy...
+[<TIME>] DEBUG      Policy: simple (keep 14 newest)
+[<TIME>] DEBUG    Secondary Storage: Current backups detected: 0
+[<TIME>] DEBUG    Secondary Storage: retention outcome planned=0 deleted=0 not_deleted=0 left_behind=0 not_listed=0 skipped=0 no_metadata=0 logs_deleted=0 logs_not_deleted=0
+[<TIME>] INFO     ✓ Nothing to delete
+[<TIME>] INFO     Secondary Storage statistics:
+[<TIME>] INFO       Total backups: 5
+[<TIME>] INFO       Total size: 5.0 MiB
+[<TIME>] DEBUG    Secondary Storage: filesystem nfs4
+[<TIME>] DEBUG    Secondary Storage operations completed (errors=false warnings=false)
+[<TIME>] DEBUG    Starting Cloud Storage (rclone) operations...
+[<TIME>] STEP     Cloud Storage (rclone)
+[<TIME>] INFO     Storing backup...
+[<TIME>] DEBUG    Cloud Storage (rclone): store issues=[]
+[<TIME>] INFO     ✓ Cloud Storage (rclone): backup saved
+[<TIME>] INFO     Applying retention policy...
+[<TIME>] DEBUG      Policy: simple (keep 30 newest)
+[<TIME>] DEBUG    Cloud Storage (rclone): retention outcome planned=2 deleted=2 not_deleted=0 left_behind=0 not_listed=0 skipped=0 no_metadata=0 logs_deleted=0 logs_not_deleted=0
+[<TIME>] INFO     ✓ Backups deleted: 2
+[<TIME>] INFO     Cloud Storage (rclone) statistics:
+[<TIME>] INFO       Total backups: 4
+[<TIME>] INFO       Total size: 4.0 MiB
+[<TIME>] DEBUG    Cloud Storage (rclone): filesystem rclone-charremote
+[<TIME>] DEBUG    Cloud Storage (rclone) operations completed (errors=false warnings=false)
 [<TIME>] DEBUG    Disabled storage targets: secondary=false cloud=false
-[<TIME>] SKIP     PBS Storage: disabled
+[<TIME>] STEP     [7] PBS Storage - dispatching archive
+[<TIME>] INFO       Retention policy: simple (pbs=5)
+[<TIME>] INFO     Storing backup...
+[<TIME>] DEBUG    pbs: 0 .pxarexclude files in the collected tree
+[<TIME>] DEBUG    pbs backup: proxmox-backup-client backup proxsave.pxar:<ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM> --repository charpbs@pbs!pve@192.0.2.10:charstore --ns charns --backup-type host --backup-id proxsave-charhost --change-detection-mode metadata --chunk-size 64 --crypt-mode none rc=0 duration=<DURATION> err=<nil>
+[<TIME>] DEBUG    pbs backup stderr: Starting backup: [charns]:host/proxsave-charhost/2026-01-02T03:04:30Z
+[<TIME>] DEBUG    pbs backup stderr: proxsave.ppxar: had to backup 402 B of 3.067 MiB
+[<TIME>] DEBUG    pbs: client started snapshot host/proxsave-charhost/2026-01-02T03:04:30Z (time 1767323070)
+[<TIME>] DEBUG    pbs snapshot list after upload: proxmox-backup-client snapshot list host/proxsave-charhost --ns charns --repository charpbs@pbs!pve@192.0.2.10:charstore --output-format json rc=0 duration=<DURATION> err=<nil>
+[<TIME>] DEBUG    pbs snapshot list after upload stdout: [{"backup-id":"proxsave-charhost","backup-time":1767236670,"backup-type":"host","files":[{"crypt-mode":"none","filename":"proxsave.mpxar.didx","size":100},{"crypt-mode":"none","filename":"proxsave.ppxar.didx","size":100}],"owner":"charpbs@pbs!pve","protected":false,"size":200},{"backup-id":"proxsave-charhost","backup-time":1767323070,"backup-type":"host","files":[{"crypt-mode":"none","filename":"proxsave.mpxar.didx","size":100},{"crypt-mode":"none","filename":"proxsave.ppxar.didx","size":100}],"owner":"charpbs@pbs!pve","protected":false,"size":200}]
+[<TIME>] DEBUG    pbs snapshot list after upload: 2 snapshots listed, 2 of group host/proxsave-charhost
+[<TIME>] INFO       Snapshot: host/proxsave-charhost/2026-01-02T03:04:30Z
+[<TIME>] INFO     ✓ PBS Storage: backup saved
+[<TIME>] INFO     Applying retention policy...
+[<TIME>] DEBUG      Policy: simple (keep 5 newest)
+[<TIME>] DEBUG    pbs prune: proxmox-backup-client prune host/proxsave-charhost --ns charns --repository charpbs@pbs!pve@192.0.2.10:charstore --keep-last 5 --output-format json rc=0 duration=<DURATION> err=<nil>
+[<TIME>] DEBUG    pbs prune stdout: [{"backup-time":1766718270,"keep":false},{"backup-time":1767323070,"keep":true}]
+[<TIME>] DEBUG    pbs: prune listed 2 snapshots, removed 1
+[<TIME>] INFO     ✓ Backups deleted: 1
+[<TIME>] DEBUG    pbs snapshot list for statistics: proxmox-backup-client snapshot list host/proxsave-charhost --ns charns --repository charpbs@pbs!pve@192.0.2.10:charstore --output-format json rc=0 duration=<DURATION> err=<nil>
+[<TIME>] DEBUG    pbs snapshot list for statistics stdout: [{"backup-id":"proxsave-charhost","backup-time":1767236670,"backup-type":"host","files":[{"crypt-mode":"none","filename":"proxsave.mpxar.didx","size":100},{"crypt-mode":"none","filename":"proxsave.ppxar.didx","size":100}],"owner":"charpbs@pbs!pve","protected":false,"size":200},{"backup-id":"proxsave-charhost","backup-time":1767323070,"backup-type":"host","files":[{"crypt-mode":"none","filename":"proxsave.mpxar.didx","size":100},{"crypt-mode":"none","filename":"proxsave.ppxar.didx","size":100}],"owner":"charpbs@pbs!pve","protected":false,"size":200}]
+[<TIME>] DEBUG    pbs snapshot list for statistics: 2 snapshots listed, 2 of group host/proxsave-charhost
+[<TIME>] INFO     PBS Storage statistics:
+[<TIME>] INFO       Total backups: 2
+[<TIME>] DEBUG    pbs status: proxmox-backup-client status --repository charpbs@pbs!pve@192.0.2.10:charstore --output-format json rc=0 duration=<DURATION> err=<nil>
+[<TIME>] DEBUG    pbs status stdout: {"avail":8186691584,"backend-type":"filesystem","total":30080253952,"used":20560846848}
+[<TIME>] DEBUG    PBS Storage: status=ok snapshot="host/proxsave-charhost/2026-01-02T03:04:30Z" backups=2 deleted=1
 [<TIME>] STEP     [8] Notifications - dispatching channels
 [<TIME>] DEBUG    notifications dispatch: no init decision requested=always fallback=always
 [<TIME>] INFO     ✓ Notification filter: applied
@@ -375,6 +546,17 @@ charhost-backup-20260102-030405.tar.bundle.tar:
 [<TIME>] SKIP     Healthchecks: disabled
 [<TIME>] STEP     [9] Log file management
 [<TIME>] INFO     Closing log file: <ROOT>/log/backup-charhost-20260102-030405.log
+
+===== proxmox-backup-client calls, in order (startup check included) =====
+version --repository charpbs@pbs!pve@192.0.2.10:charstore --output-format json
+status --repository charpbs@pbs!pve@192.0.2.10:charstore --output-format json
+snapshot list --ns charns --repository charpbs@pbs!pve@192.0.2.10:charstore --output-format json
+backup proxsave.pxar:<ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM> --repository charpbs@pbs!pve@192.0.2.10:charstore --ns charns --backup-type host --backup-id proxsave-charhost --change-detection-mode metadata --chunk-size 64 --crypt-mode none
+snapshot list host/proxsave-charhost --ns charns --repository charpbs@pbs!pve@192.0.2.10:charstore --output-format json
+prune host/proxsave-charhost --ns charns --repository charpbs@pbs!pve@192.0.2.10:charstore --keep-last 5 --output-format json
+snapshot list host/proxsave-charhost --ns charns --repository charpbs@pbs!pve@192.0.2.10:charstore --output-format json
+status --repository charpbs@pbs!pve@192.0.2.10:charstore --output-format json
+snapshot upload-log host/proxsave-charhost/2026-01-02T03:04:30Z <ROOT>/log/backup-charhost-20260102-030405.log --ns charns --repository charpbs@pbs!pve@192.0.2.10:charstore --crypt-mode none
 
 ===== BackupStats returned by RunGoBackup =====
 {
@@ -415,44 +597,57 @@ charhost-backup-20260102-030405.tar.bundle.tar:
   "LocalPath": "<ROOT>/backup",
   "SecondaryPath": "<ROOT>/secondary",
   "CloudPath": "charremote",
-  "LocalStatus": "",
+  "LocalStatus": "ok",
   "LocalStatusSummary": "",
-  "SecondaryStatus": "skipped",
-  "CloudStatus": "skipped",
+  "SecondaryStatus": "ok",
+  "CloudStatus": "ok",
   "ServerID": "",
   "ServerMAC": "",
   "ClusterMode": "",
   "FilesIncluded": 1,
   "FilesMissing": 0,
   "SecondaryEnabled": true,
-  "LocalBackups": 0,
-  "LocalFreeSpace": 0,
-  "LocalUsedSpace": 0,
-  "LocalTotalSpace": 0,
-  "SecondaryBackups": 0,
-  "SecondaryFreeSpace": 0,
-  "SecondaryUsedSpace": 0,
-  "SecondaryTotalSpace": 0,
+  "LocalBackups": 7,
+  "LocalFreeSpace": 107374182400,
+  "LocalUsedSpace": 53687091200,
+  "LocalTotalSpace": 161061273600,
+  "SecondaryBackups": 3,
+  "SecondaryFreeSpace": 214748364800,
+  "SecondaryUsedSpace": 322122547200,
+  "SecondaryTotalSpace": 536870912000,
   "CloudEnabled": true,
-  "CloudBackups": 0,
+  "CloudBackups": 4,
   "MaxLocalBackups": 0,
   "MaxSecondaryBackups": 0,
   "MaxCloudBackups": 0,
-  "LocalRetentionPolicy": "",
+  "LocalRetentionPolicy": "simple",
   "LocalGFSDaily": 0,
   "LocalGFSWeekly": 0,
   "LocalGFSMonthly": 0,
   "LocalGFSYearly": 0,
-  "SecondaryRetentionPolicy": "",
+  "SecondaryRetentionPolicy": "simple",
   "SecondaryGFSDaily": 0,
   "SecondaryGFSWeekly": 0,
   "SecondaryGFSMonthly": 0,
   "SecondaryGFSYearly": 0,
-  "CloudRetentionPolicy": "",
+  "CloudRetentionPolicy": "simple",
   "CloudGFSDaily": 0,
   "CloudGFSWeekly": 0,
   "CloudGFSMonthly": 0,
   "CloudGFSYearly": 0,
+  "PBSTarget": {
+    "Name": "PBS Storage",
+    "Status": "ok",
+    "Location": "charpbs@pbs!pve@192.0.2.10:charstore",
+    "Snapshot": "host/proxsave-charhost/2026-01-02T03:04:30Z",
+    "Backups": 2,
+    "MaxBackups": 5,
+    "RetentionPolicy": "simple",
+    "Deleted": 1,
+    "FreeBytes": 8186691584,
+    "UsedBytes": 20560846848,
+    "TotalBytes": 30080253952
+  },
   "ErrorCount": 0,
   "WarningCount": 3,
   "NotifyCount": 0,
@@ -513,44 +708,57 @@ calls: 1
   "LocalPath": "<ROOT>/backup",
   "SecondaryPath": "<ROOT>/secondary",
   "CloudPath": "charremote",
-  "LocalStatus": "",
+  "LocalStatus": "ok",
   "LocalStatusSummary": "",
-  "SecondaryStatus": "skipped",
-  "CloudStatus": "skipped",
+  "SecondaryStatus": "ok",
+  "CloudStatus": "ok",
   "ServerID": "",
   "ServerMAC": "",
   "ClusterMode": "",
   "FilesIncluded": 1,
   "FilesMissing": 0,
   "SecondaryEnabled": true,
-  "LocalBackups": 0,
-  "LocalFreeSpace": 0,
-  "LocalUsedSpace": 0,
-  "LocalTotalSpace": 0,
-  "SecondaryBackups": 0,
-  "SecondaryFreeSpace": 0,
-  "SecondaryUsedSpace": 0,
-  "SecondaryTotalSpace": 0,
+  "LocalBackups": 7,
+  "LocalFreeSpace": 107374182400,
+  "LocalUsedSpace": 53687091200,
+  "LocalTotalSpace": 161061273600,
+  "SecondaryBackups": 3,
+  "SecondaryFreeSpace": 214748364800,
+  "SecondaryUsedSpace": 322122547200,
+  "SecondaryTotalSpace": 536870912000,
   "CloudEnabled": true,
-  "CloudBackups": 0,
+  "CloudBackups": 4,
   "MaxLocalBackups": 0,
   "MaxSecondaryBackups": 0,
   "MaxCloudBackups": 0,
-  "LocalRetentionPolicy": "",
+  "LocalRetentionPolicy": "simple",
   "LocalGFSDaily": 0,
   "LocalGFSWeekly": 0,
   "LocalGFSMonthly": 0,
   "LocalGFSYearly": 0,
-  "SecondaryRetentionPolicy": "",
+  "SecondaryRetentionPolicy": "simple",
   "SecondaryGFSDaily": 0,
   "SecondaryGFSWeekly": 0,
   "SecondaryGFSMonthly": 0,
   "SecondaryGFSYearly": 0,
-  "CloudRetentionPolicy": "",
+  "CloudRetentionPolicy": "simple",
   "CloudGFSDaily": 0,
   "CloudGFSWeekly": 0,
   "CloudGFSMonthly": 0,
   "CloudGFSYearly": 0,
+  "PBSTarget": {
+    "Name": "PBS Storage",
+    "Status": "ok",
+    "Location": "charpbs@pbs!pve@192.0.2.10:charstore",
+    "Snapshot": "host/proxsave-charhost/2026-01-02T03:04:30Z",
+    "Backups": 2,
+    "MaxBackups": 5,
+    "RetentionPolicy": "simple",
+    "Deleted": 1,
+    "FreeBytes": 8186691584,
+    "UsedBytes": 20560846848,
+    "TotalBytes": 30080253952
+  },
   "ErrorCount": 0,
   "WarningCount": 3,
   "NotifyCount": 0,

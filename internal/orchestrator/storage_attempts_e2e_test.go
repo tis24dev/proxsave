@@ -582,7 +582,7 @@ func TestFinalizeAfterRunDryRunLogBlock(t *testing.T) {
 	o.FinalizeAfterRun(context.Background(), &BackupStats{})
 	name := filepath.Base(logPath)
 	requireExactLines(t, visibleLines(buf.String()),
-		"STEP     [8] Log file management",
+		"STEP     [9] Log file management",
 		"INFO     Closing log file: "+logPath,
 		"INFO     Dispatching log file: "+name,
 		"INFO     Secondary: "+filepath.Join(secondaryLog, name),
