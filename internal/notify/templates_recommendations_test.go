@@ -35,5 +35,10 @@ func TestEmailHTMLRecommendationsIncludePBS(t *testing.T) {
 		if html := BuildEmailHTML(d); strings.Contains(html, "System Recommendations") {
 			t.Fatalf("enabled=%v percent=%v: no section expected:\n%s", d.PBSEnabled, d.PBSUsagePercent, html)
 		}
+		// The section opened by Local carries no PBS line for them either.
+		d.LocalUsagePercent = 90.1
+		if html := BuildEmailHTML(d); !strings.Contains(html, line("Local", "90.1%")) || strings.Contains(html, "PBS storage is") {
+			t.Fatalf("enabled=%v percent=%v with Local above 85%%: Local line only:\n%s", d.PBSEnabled, d.PBSUsagePercent, html)
+		}
 	}
 }
