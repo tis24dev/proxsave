@@ -174,7 +174,7 @@ func BuildEmailHTML(data *NotificationData) string {
 	html.WriteString("                <div class=\"backup-location\">\n")
 	html.WriteString("                    <h3>Secondary Storage</h3>\n")
 	html.WriteString("                    <div class=\"count-block\">\n")
-	fmt.Fprintf(&html, "                        <span class=\"emoji\">%s</span> %s backups\n", secondaryEmoji, secondaryStatusSummary)
+	html.WriteString(htmlCountBlock(data.SecondaryEnabled, secondaryEmoji, secondaryStatusSummary))
 	html.WriteString("                    </div>\n")
 	if data.SecondaryEnabled && data.SecondaryFree != "" && data.SecondaryFree != "N/A" {
 		barColor := "normal"
@@ -198,7 +198,7 @@ func BuildEmailHTML(data *NotificationData) string {
 	html.WriteString("                <div class=\"backup-location\">\n")
 	html.WriteString("                    <h3>Cloud Storage</h3>\n")
 	html.WriteString("                    <div class=\"count-block\">\n")
-	fmt.Fprintf(&html, "                        <span class=\"emoji\">%s</span> %s backups\n", cloudEmoji, cloudStatusSummary)
+	html.WriteString(htmlCountBlock(data.CloudEnabled, cloudEmoji, cloudStatusSummary))
 	html.WriteString("                    </div>\n")
 	html.WriteString("                </div>\n")
 
@@ -207,7 +207,7 @@ func BuildEmailHTML(data *NotificationData) string {
 	html.WriteString("                <div class=\"backup-location\">\n")
 	html.WriteString("                    <h3>PBS Storage</h3>\n")
 	html.WriteString("                    <div class=\"count-block\">\n")
-	fmt.Fprintf(&html, "                        <span class=\"emoji\">%s</span> %s backups\n", pbsEmoji, pbsStatusSummary)
+	html.WriteString(htmlCountBlock(data.PBSEnabled, pbsEmoji, pbsStatusSummary))
 	html.WriteString("                    </div>\n")
 	if data.PBSEnabled && data.PBSFree != "" && data.PBSFree != "N/A" {
 		barColor := "normal"
@@ -320,6 +320,16 @@ func BuildEmailHTML(data *NotificationData) string {
 	html.WriteString("</body>\n</html>")
 
 	return html.String()
+}
+
+// htmlCountBlock is the count line of a copy destination's box: "<emoji> <N>/<M>
+// backups" when it is configured (in the run, or on and failed at startup), "➖
+// disabled" when it is switched off.
+func htmlCountBlock(enabled bool, emoji, summary string) string {
+	if !enabled {
+		return fmt.Sprintf("                        <span class=\"emoji\">%s</span> disabled\n", escapeHTML(GetStorageEmoji("disabled")))
+	}
+	return fmt.Sprintf("                        <span class=\"emoji\">%s</span> %s backups\n", emoji, summary)
 }
 
 // buildInfoTableRow builds a row of the Backup Details table.
