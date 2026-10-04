@@ -676,7 +676,7 @@ COMPRESSION_LEVEL=3
 
 Related lines, no action needed:
 
-- `  Adopted: <N> backups named <name>, same server identity`: archives named for another host that record this host's server identity. They rotate with the others. A clone of this machine that kept its server identity and writes to the same location has its archives rotated here too.
+- `  Adopted: <N> backups named <name>, same server identity`: archives named for another host that record this host's server identity. They rotate with the others. A clone of this machine that kept its server identity and writes to the same location has its archives rotated here too. While that clone is still writing, the run also warns `⚠ Server identity shared with <name>` (next section).
 - `  Other server identity: <N> backups owned by name, still rotated`: archives with this host's name and a different server identity (reinstalling ProxSave or restoring `BASE_DIR` from elsewhere mints a new one). They rotate as before.
 - Archives of other hosts, and pre-Go archives that name no host, are not reported and are never deleted. A run with `--log-level debug` lists them on `retention out of scope` lines.
 
@@ -756,6 +756,14 @@ grep -E "not rotated|Backups: [0-9]+, limit|Backups deleted" \
 No `not rotated` line is left, and the run reports `  Backups: N, limit: M` and `✓ Backups deleted: K` with a `K` that matches what you expect.
 
 ---
+
+#### Warning: `⚠ Server identity shared with <name>`
+
+**Symptoms**: under `Applying retention policy...` the run prints `  Adopted: <N> backups named <name>, same server identity` and `  Still writing here: <name>`, then the warning above, right after the backups outcome. The run ends with exit code 1 and the warning is listed in the notifications.
+
+**Cause**: archives named `<name>` record this host's server identity, and at least one of them is newer than this host's previous backup at that location, so a second machine with this host's server identity is still backing up there. This happens with a clone that kept the identity: a copied disk, a restored or templated container, an `/etc/machine-id` carried over. Both machines rotate the same set of archives against their own limit: the location keeps about `MAX_LOCAL_BACKUPS` / `MAX_SECONDARY_BACKUPS` / `MAX_CLOUD_BACKUPS` archives for the two together, and each machine deletes the other's oldest ones.
+
+**What ProxSave does**: rotation is unchanged. A renamed host does not trigger the warning: its archives under the old name are all older than its first archive under the new name.
 
 ### 6. Email Notification Issues
 
