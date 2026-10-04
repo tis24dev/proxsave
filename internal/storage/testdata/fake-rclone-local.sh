@@ -58,7 +58,7 @@ ls)
 	done
 	;;
 copyto)
-	if ! mkdir -p "$(dirname "$p2")" || ! cp "$p1" "$p2"; then
+	if ! mkdir -p "$(dirname "$p2")" || ! cp -p "$p1" "$p2"; then
 		fail "Failed to copy: $p1"
 	fi
 	;;

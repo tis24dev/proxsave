@@ -115,6 +115,13 @@ func runCloudFlow(t *testing.T, notice bool) (cloudFlowResult, string) {
 	writeTestFile(t, archive, strings.Repeat("archive data ", 4096))
 	writeTestFile(t, archive+".metadata", `{"hostname":"node"}`)
 	writeTestFile(t, archive+".sha256", "0000  "+name+"\n")
+	// The run's files carry fixed times: copyto keeps them, and the two runs list them.
+	runTime := time.Date(2026, 10, 4, 2, 0, 0, 0, time.UTC)
+	for _, f := range []string{archive, archive + ".metadata", archive + ".sha256"} {
+		if err := os.Chtimes(f, runTime, runTime); err != nil {
+			t.Fatalf("chtimes %s: %v", f, err)
+		}
+	}
 
 	res.StoreErr = errText(cs.Store(ctx, archive, &types.BackupMetadata{BackupFile: archive}))
 	res.StoreIssues = cs.LastStoreIssues()
@@ -145,6 +152,9 @@ func runCloudFlow(t *testing.T, notice bool) (cloudFlowResult, string) {
 
 	logFile := filepath.Join(local, "backup-node-20261004-020000.log")
 	writeTestFile(t, logFile, "this run's log")
+	if err := os.Chtimes(logFile, runTime, runTime); err != nil {
+		t.Fatalf("chtimes %s: %v", logFile, err)
+	}
 	res.LogUploadErr = errText(cs.UploadToRemotePath(ctx, logFile, cs.cloudLogPath(cfg.CloudLogPath, filepath.Base(logFile)), true))
 	res.LogIssues = cs.LastStoreIssues()
 
@@ -213,5 +223,88 @@ func TestCloudFlowIgnoresRcloneStderrNotice(t *testing.T) {
 	}
 	if !strings.Contains(debug, "wrote to stderr while succeeding (not read as data): NOTICE: Config file") {
 		t.Fatalf("the NOTICE is not kept in DEBUG:\n%s", debug)
+	}
+}
+
+// Nothing rclone writes on stderr is ever data, whatever it holds: here stderr carries,
+// before the real answer, a line in the very format of the command's own output naming
+// a phantom object (a size, a hash, a backup, a manifest, a log). Every parsing call
+// site reads the real answer only.
+func TestCloudStderrIsNeverData(t *testing.T) {
+	name := "node-backup-20261004-020000.tar.zst"
+	local := filepath.Join(t.TempDir(), name)
+	writeTestFile(t, local, "archive")
+	realHash := sha256Hex("archive")
+	answers := map[string]rcloneOutput{
+		"lsl " + "remote:backups/" + name: {
+			stdout: []byte("        7 2026-10-04 02:00:00.000000000 " + name + "\n"),
+			stderr: []byte("        1 2026-10-04 02:00:00.000000000 " + name + "\n"),
+		},
+		"ls remote:backups": {
+			stdout: []byte("        7 " + name + "\n"),
+			stderr: []byte("        1 " + name + "\n"),
+		},
+		"hashsum sha256 remote:backups/" + name: {
+			stdout: []byte(realHash + "  " + name + "\n"),
+			stderr: []byte(strings.Repeat("a", 64) + "  " + name + "\n"),
+		},
+		"lsl remote:backups --max-depth 1": {
+			stdout: []byte("        7 2026-10-04 02:00:00.000000000 " + name + "\n"),
+			stderr: []byte("        9 2026-01-01 02:00:00.000000000 node-backup-20260101-020000.tar.zst\n"),
+		},
+		"cat remote:backups/" + name + ".metadata": {
+			stdout: []byte(`{"hostname":"node"}`),
+			stderr: []byte("HOSTNAME=other\n"),
+		},
+		"lsf remote:/proxsave/log --files-only": {
+			stdout: []byte("backup-node-20261004-020000.log\n"),
+			stderr: []byte("backup-node-20260101-020000.log\n"),
+		},
+	}
+	newCloud := func(t *testing.T, mutate func(*config.Config)) *CloudStorage {
+		t.Helper()
+		cfg := &config.Config{CloudEnabled: true, CloudRemote: "remote:backups", CloudLogPath: "/proxsave/log", CloudBatchSize: 10}
+		if mutate != nil {
+			mutate(cfg)
+		}
+		cs, err := NewCloudStorage(cfg, newTestLogger(), "node")
+		if err != nil {
+			t.Fatalf("NewCloudStorage: %v", err)
+		}
+		cs.hostname = "node"
+		cs.lookPath = func(string) (string, error) { return "/usr/bin/rclone", nil }
+		cs.waitForRetry = func(context.Context, time.Duration) error { return nil }
+		cs.sleep = func(time.Duration) {}
+		cs.runCommand = func(_ context.Context, _ string, args ...string) (rcloneOutput, error) {
+			out, ok := answers[strings.Join(args, " ")]
+			if !ok {
+				return rcloneOutput{}, fmt.Errorf("unexpected rclone %s", strings.Join(args, " "))
+			}
+			return out, nil
+		}
+		return cs
+	}
+	ctx := context.Background()
+
+	if ok, err := newCloud(t, nil).VerifyUpload(ctx, local, "remote:backups/"+name); !ok || err != nil {
+		t.Fatalf("size check (lsl): %v %v", ok, err)
+	}
+	alt := newCloud(t, func(c *config.Config) { c.RcloneVerifyMethod = "alternative" })
+	if ok, err := alt.VerifyUpload(ctx, local, "remote:backups/"+name); !ok || err != nil {
+		t.Fatalf("size check (ls): %v %v", ok, err)
+	}
+	sum := newCloud(t, func(c *config.Config) { c.CloudVerifyChecksum = true })
+	if ok, err := sum.VerifyUpload(ctx, local, "remote:backups/"+name); !ok || err != nil {
+		t.Fatalf("checksum (hashsum): %v %v", ok, err)
+	}
+	backups, err := newCloud(t, nil).List(ctx)
+	if err != nil || len(backups) != 1 || backups[0].BackupFile != name || backups[0].Size != 7 {
+		t.Fatalf("listing (lsl): %+v %v", backups, err)
+	}
+	if host, _ := newCloud(t, nil).remoteManifestOwner(ctx, name); host != "node" {
+		t.Fatalf("manifest (cat): host %q, want node", host)
+	}
+	if count := newCloud(t, nil).countLogFiles(ctx); count != 1 {
+		t.Fatalf("log count (lsf): %d, want 1", count)
 	}
 }
