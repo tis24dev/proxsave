@@ -154,6 +154,13 @@ func notifyGoldenCases() []notifyGoldenCase {
 			wantExit:               types.ExitGenericError.Int(),
 		},
 		{
+			// A warning with no error anywhere: the only case where the email's status
+			// sidebar takes the warning colour.
+			name:                   "02b_secondary_retention_failed",
+			failSecondaryRetention: true,
+			wantExit:               types.ExitGenericError.Int(),
+		},
+		{
 			// The workspace cannot be created: RunGoBackup returns a plain error, so the
 			// exit code is ExitBackupError (backupFailureExitCode) and step [6] never runs.
 			name: "03_stopped_before_storage",
