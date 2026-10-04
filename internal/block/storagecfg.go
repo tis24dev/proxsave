@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/tis24dev/proxsave/internal/logging"
+	"github.com/tis24dev/proxsave/internal/safefs"
 )
 
 // FactKind names one configuration fact that keeps the PBS storage from being
@@ -146,7 +147,7 @@ func ResolvePBSTarget(in ResolveInput) (PBSTarget, *Fact) {
 	}
 
 	cfgPath := filepath.Join(in.PVEConfigPath, "storage.cfg")
-	data, err := os.ReadFile(cfgPath)
+	data, err := safefs.ReadFileUnderRoot(cfgPath)
 	if err != nil {
 		return PBSTarget{}, &Fact{Kind: FactStorageNotFound, Label: cfgPath, Text: in.StorageID + " not found", Err: err}
 	}
@@ -210,10 +211,12 @@ func findStorageSection(sections []StorageSection, id string) (StorageSection, b
 }
 
 // readPasswordFile reads a PVE .pw file and removes only the final newline PVE writes.
+// The read error is wrapped with the full path, since the confined read names the
+// file alone.
 func readPasswordFile(path string) (string, error) {
-	data, err := os.ReadFile(path)
+	data, err := safefs.ReadFileUnderRoot(path)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("read %s: %w", path, err)
 	}
 	password := strings.TrimSuffix(string(data), "\n")
 	if password == "" {

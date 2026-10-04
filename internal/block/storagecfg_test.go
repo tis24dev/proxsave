@@ -2,6 +2,8 @@ package block
 
 import (
 	"bytes"
+	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -268,6 +270,112 @@ func TestResolvePBSTargetFacts(t *testing.T) {
 			}
 		})
 	}
+}
+
+// storage.cfg and the .pw file are read confined to their directory: a relative symlink
+// that stays inside it is followed, one pointing outside is refused like a missing file,
+// and the error of the .pw read names the full path for the DEBUG line.
+func TestResolvePBSTargetConfinedReads(t *testing.T) {
+	const id = "proxsave-probe"
+	in := func(dir string) ResolveInput {
+		return ResolveInput{PVEConfigPath: dir, StorageID: id, Hostname: testHostname, IsPVEHost: true}
+	}
+	pwPath := func(dir string) string { return filepath.Join(dir, "priv", "storage", id+".pw") }
+	symlink := func(t *testing.T, target, link string) {
+		t.Helper()
+		if err := os.Remove(link); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			t.Fatalf("remove %s: %v", link, err)
+		}
+		if err := os.Symlink(target, link); err != nil {
+			t.Fatalf("symlink %s -> %s: %v", link, target, err)
+		}
+	}
+	// moveAside renames path to path+".real" and leaves at path a relative symlink to it.
+	moveAside := func(t *testing.T, path string) {
+		t.Helper()
+		if err := os.Rename(path, path+".real"); err != nil {
+			t.Fatalf("rename %s: %v", path, err)
+		}
+		symlink(t, filepath.Base(path)+".real", path)
+	}
+	// outsideCopy writes body to a file outside the PVE tree and returns its path.
+	outsideCopy := func(t *testing.T, name, body string) string {
+		t.Helper()
+		path := filepath.Join(t.TempDir(), name)
+		if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+			t.Fatalf("write %s: %v", path, err)
+		}
+		return path
+	}
+
+	t.Run("relative symlinks inside the directory are followed", func(t *testing.T) {
+		dir := newPVEConfigDir(t, map[string]string{id + ".pw": testSecret + "\n"})
+		moveAside(t, filepath.Join(dir, "storage.cfg"))
+		moveAside(t, pwPath(dir))
+		target, fact := ResolvePBSTarget(in(dir))
+		if fact != nil {
+			t.Fatalf("unexpected fact %q (%v)", fact.Line(), fact.Err)
+		}
+		if target.Password != testSecret || target.Datastore != id {
+			t.Fatalf("Password/Datastore = %q/%q", target.Password, target.Datastore)
+		}
+	})
+
+	t.Run("storage.cfg pointing outside the directory", func(t *testing.T) {
+		dir := newPVEConfigDir(t, map[string]string{id + ".pw": testSecret + "\n"})
+		cfg, err := os.ReadFile(filepath.Join(dir, "storage.cfg"))
+		if err != nil {
+			t.Fatalf("read storage.cfg: %v", err)
+		}
+		symlink(t, outsideCopy(t, "storage.cfg", string(cfg)), filepath.Join(dir, "storage.cfg"))
+		target, fact := ResolvePBSTarget(in(dir))
+		if fact == nil {
+			t.Fatalf("no fact, target %+v", target)
+		}
+		if want := filepath.Join(dir, "storage.cfg") + ": " + id + " not found"; fact.Kind != FactStorageNotFound || fact.Line() != want {
+			t.Fatalf("Kind/Line() = %q/%q, want %q/%q", fact.Kind, fact.Line(), FactStorageNotFound, want)
+		}
+		if fact.Err == nil {
+			t.Fatal("the fact carries no error for the DEBUG line")
+		}
+	})
+
+	t.Run("password file pointing outside the directory", func(t *testing.T) {
+		dir := newPVEConfigDir(t, nil)
+		symlink(t, outsideCopy(t, id+".pw", testSecret+"\n"), pwPath(dir))
+		target, fact := ResolvePBSTarget(in(dir))
+		if fact == nil {
+			t.Fatalf("no fact, target %+v", target)
+		}
+		if fact.Kind != FactPasswordMissing || fact.Line() != "Password file: missing or empty" {
+			t.Fatalf("Kind/Line() = %q/%q", fact.Kind, fact.Line())
+		}
+		if fact.Err == nil || !strings.Contains(fact.Err.Error(), pwPath(dir)) {
+			t.Fatalf("Err = %v, want the full path %s", fact.Err, pwPath(dir))
+		}
+		if target.Password != "" {
+			t.Error("a target with a fact carries the password")
+		}
+	})
+
+	t.Run("missing files keep not-exist and the full path", func(t *testing.T) {
+		dir := newPVEConfigDir(t, nil)
+		_, fact := ResolvePBSTarget(in(dir))
+		if fact == nil || fact.Kind != FactPasswordMissing {
+			t.Fatalf("fact = %+v, want %q", fact, FactPasswordMissing)
+		}
+		if !errors.Is(fact.Err, fs.ErrNotExist) || !strings.Contains(fact.Err.Error(), pwPath(dir)) {
+			t.Fatalf("Err = %v, want not-exist naming %s", fact.Err, pwPath(dir))
+		}
+
+		if err := os.Remove(filepath.Join(dir, "storage.cfg")); err != nil {
+			t.Fatalf("remove storage.cfg: %v", err)
+		}
+		_, fact = ResolvePBSTarget(in(dir))
+		if fact == nil || fact.Kind != FactStorageNotFound || !errors.Is(fact.Err, fs.ErrNotExist) {
+			t.Fatalf("fact = %+v, want %q with not-exist", fact, FactStorageNotFound)
+		}
+	})
 }
 
 func TestBuildRepository(t *testing.T) {
