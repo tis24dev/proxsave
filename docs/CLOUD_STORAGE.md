@@ -482,7 +482,9 @@ ProxSave supports both "new style" (path-only) and "legacy style" (`remote:path`
 
 **Recommended:**
 - `CLOUD_REMOTE` should be just the **remote name** (no `:`), e.g. `nextcloud` or `GoogleDrive`.
-- `CLOUD_REMOTE_PATH` should be a **path inside the remote** (no remote prefix). Use **no trailing slash**. A leading `/` is accepted.
+- `CLOUD_REMOTE_PATH` should be a **path inside the remote** (no remote prefix). Use **no trailing slash**. A leading `/` is accepted
+  and dropped: the path is always relative to the remote's root, which for an `sftp` remote is the login user's home directory.
+  For a folder on this host, set `CLOUD_REMOTE` to its absolute path instead (for example `CLOUD_REMOTE=/mnt/backup`).
 - `CLOUD_LOG_PATH` should be a **folder path** for logs. When logs are stored on the **same remote**, prefer **path-only** here too (no remote prefix). Use `otherremote:/path` only if logs must go to a different remote than `CLOUD_REMOTE`.
 
 **Examples (same remote):**
