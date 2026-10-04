@@ -282,3 +282,24 @@ BBBBB22222    15100 Sun Oct  4 14:22:38  root@pve.example.lan
 		}
 	}
 }
+
+// Lines of the queue ID without a status are "not logged yet", like no line at all.
+func TestLogQueueStatusDebug(t *testing.T) {
+	for _, tc := range []struct{ status, want string }{
+		{"", "mail log: queue_id=Q1 status not logged yet"},
+		{"unknown", "mail log: queue_id=Q1 status not logged yet"},
+		{"bounced", "mail log: queue_id=Q1 status=bounced line=the line"},
+	} {
+		var out bytes.Buffer
+		logger := logging.New(types.LogLevelDebug, false)
+		logger.SetOutput(&out)
+		notifier, err := NewEmailNotifier(EmailConfig{Enabled: true, DeliveryMethod: EmailDeliverySendmail}, types.ProxmoxVE, logger)
+		if err != nil {
+			t.Fatalf("NewEmailNotifier() error=%v", err)
+		}
+		notifier.logQueueStatusDebug("Q1", tc.status, "the line")
+		if !strings.Contains(out.String(), tc.want) {
+			t.Fatalf("status %q: got\n%s\nwant %q", tc.status, out.String(), tc.want)
+		}
+	}
+}
