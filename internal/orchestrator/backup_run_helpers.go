@@ -47,10 +47,19 @@ func (o *Orchestrator) exportPrometheusBackupMetrics(stats *BackupStats) {
 	if m == nil {
 		return
 	}
-	// Secondary and cloud lines follow the run's configuration, which already has a
-	// destination whose initialization failed switched off for this run.
+	// Secondary and cloud lines follow backup.env. A destination that is on there and
+	// failed at startup is switched off for the run with a count never read (-1): its
+	// line stays, at 0, like PBS below.
 	m.SecEnabled = o.cfg.SecondaryEnabled
+	if o.cfg.SecondaryStartupFailed {
+		m.SecEnabled = true
+		m.SecBackups = 0
+	}
 	m.CloudEnabled = o.cfg.CloudEnabled
+	if o.cfg.CloudStartupFailed {
+		m.CloudEnabled = true
+		m.CloudBackups = 0
+	}
 	// The PBS line follows PBS_TARGET_ENABLED, not the PBS outcome: an early error has
 	// no outcome and still reports 0, as does a PBS block that never got a count.
 	if o.cfg.PBSTargetEnabled {

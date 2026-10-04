@@ -50,8 +50,7 @@ func TestExportPrometheusBackupMetricsPBSLine(t *testing.T) {
 	}
 }
 
-// The secondary and cloud lines follow the run's configuration (SECONDARY_ENABLED,
-// CLOUD_ENABLED, after a failed initialization switched one off); local is always there.
+// The secondary and cloud lines follow SECONDARY_ENABLED and CLOUD_ENABLED; local is always there.
 func TestExportPrometheusBackupMetricsSecondaryCloudLines(t *testing.T) {
 	const (
 		local = `proxmox_backup_backups_total{location="local"} 4`
@@ -81,19 +80,58 @@ func TestExportPrometheusBackupMetricsSecondaryCloudLines(t *testing.T) {
 	}
 }
 
+// A secondary or cloud that is on in backup.env and failed at startup keeps its line at 0,
+// like PBS: its count was never read (-1) and the run switched it off.
+func TestExportPrometheusBackupMetricsStartupFailedLines(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		cfg        config.Config
+		sec, cloud string // the line, "" = none
+	}{
+		{"secondary failed at startup", config.Config{SecondaryStartupFailed: true, CloudEnabled: true},
+			`proxmox_backup_backups_total{location="secondary"} 0`, `proxmox_backup_backups_total{location="cloud"} 1`},
+		{"cloud failed at startup", config.Config{SecondaryEnabled: true, CloudStartupFailed: true},
+			`proxmox_backup_backups_total{location="secondary"} 2`, `proxmox_backup_backups_total{location="cloud"} 0`},
+		{"both failed at startup", config.Config{SecondaryStartupFailed: true, CloudStartupFailed: true},
+			`proxmox_backup_backups_total{location="secondary"} 0`, `proxmox_backup_backups_total{location="cloud"} 0`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := tc.cfg
+			stats := &BackupStats{Hostname: "test-host", LocalBackups: 4, SecondaryBackups: 2, CloudBackups: 1}
+			if cfg.SecondaryStartupFailed {
+				stats.SecondaryBackups = -1
+			}
+			if cfg.CloudStartupFailed {
+				stats.CloudBackups = -1
+			}
+			content := exportPrometheusStatsForTest(t, &cfg, stats)
+			for loc, want := range map[string]string{"secondary": tc.sec, "cloud": tc.cloud} {
+				if got := strings.Count(content, `location="`+loc+`"`); got != 1 || !strings.Contains(content, want+"\n") {
+					t.Fatalf("want one %q, got %d %s lines\n%s", want, got, loc, content)
+				}
+			}
+		})
+	}
+}
+
 func exportPrometheusForTest(t *testing.T, cfg *config.Config, target *block.Result) string {
 	t.Helper()
-	dir := t.TempDir()
-	cfg.MetricsEnabled = true
-	cfg.MetricsPath = dir
-	o := &Orchestrator{logger: logging.New(types.LogLevelError, false), cfg: cfg}
-	o.exportPrometheusBackupMetrics(&BackupStats{
+	return exportPrometheusStatsForTest(t, cfg, &BackupStats{
 		Hostname:         "test-host",
 		LocalBackups:     4,
 		SecondaryBackups: 2,
 		CloudBackups:     1,
 		PBSTarget:        target,
 	})
+}
+
+func exportPrometheusStatsForTest(t *testing.T, cfg *config.Config, stats *BackupStats) string {
+	t.Helper()
+	dir := t.TempDir()
+	cfg.MetricsEnabled = true
+	cfg.MetricsPath = dir
+	o := &Orchestrator{logger: logging.New(types.LogLevelError, false), cfg: cfg}
+	o.exportPrometheusBackupMetrics(stats)
 	data, err := os.ReadFile(filepath.Join(dir, "proxmox_backup.prom"))
 	if err != nil {
 		t.Fatalf("read metrics file: %v", err)

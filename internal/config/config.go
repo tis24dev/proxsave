@@ -159,8 +159,8 @@ type Config struct {
 	// SecondaryStartupFailed and CloudStartupFailed are set by the run, never read from
 	// or written to backup.env: the destination is on in backup.env and could not be
 	// initialized at startup. The run switches it off (SecondaryEnabled / CloudEnabled
-	// false: no copy at [6], no log copy, no disk-space check, no metrics line), and its
-	// outcome is an error, not a destination switched off.
+	// false: no copy at [6], no log copy, no disk-space check), and its outcome is an
+	// error, not a destination switched off. Its metrics line stays, at 0.
 	SecondaryStartupFailed bool
 	CloudStartupFailed     bool
 

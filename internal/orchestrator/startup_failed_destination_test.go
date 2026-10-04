@@ -115,7 +115,7 @@ func TestStartupFailedNotificationData(t *testing.T) {
 }
 
 // A destination failed at startup stays out of the run exactly as before: the step [6]
-// SKIP lines, no log copy, no metrics line.
+// SKIP lines, no log copy. Its metrics line stays, at 0, like PBS.
 func TestStartupFailedDestinationsStayOutOfTheRun(t *testing.T) {
 	cfg := startupFailedConfig(t)
 	stats := startupFailedStats(cfg)
@@ -154,9 +154,10 @@ func TestStartupFailedDestinationsStayOutOfTheRun(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read metrics: %v", err)
 	}
-	for _, line := range []string{`location="secondary"`, `location="cloud"`} {
-		if strings.Contains(string(content), line) {
-			t.Fatalf("metrics line %s written for a destination failed at startup:\n%s", line, content)
+	for _, loc := range []string{"secondary", "cloud"} {
+		want := `proxmox_backup_backups_total{location="` + loc + `"} 0` + "\n"
+		if strings.Count(string(content), `location="`+loc+`"`) != 1 || !strings.Contains(string(content), want) {
+			t.Fatalf("want one %q for a destination failed at startup:\n%s", want, content)
 		}
 	}
 }
