@@ -1,0 +1,33 @@
+⚠️ PVE BACKUP REPORT - WARNING
+Hostname: pve-golden
+Date: 2026-10-04 02:00:00
+
+BACKUP STATUS:
+  Local:     15/15 backups (412.00 GB free)
+  Secondary: 15/15 backups (1.80 TB free)
+
+BACKUP DETAILS:
+  Backup File: /opt/proxsave/backup/pve-golden-backup-20261004-020000.tar.xz.bundle.tar
+  Size: 21.0 MiB
+  Included Files: 1832
+  Missing Files: 0
+  Duration: 2m 14s
+  Compression: xz (level 9, ratio 88.20%)
+
+ISSUES:
+  Errors: 0
+  Warnings: 7
+  Total Issues: 7
+  Log: /opt/proxsave/log/backup-pve-golden-20261004-020000.log
+
+ISSUE DETAILS:
+  - [WARNING] Disabling network-dependent features for this run (count: 1)
+  - [WARNING] Network connectivity unavailable for: Telegram centralized registration, Email relay delivery, Gotify notifications, ... (count: 1)
+  - [WARNING] WARNING: Disabling cloud storage (rclone) due to missing network connectivity (count: 1)
+  - [WARNING] WARNING: Disabling Gotify notifications due to missing network connectivity (count: 1)
+  - [WARNING] WARNING: Disabling Telegram notifications due to missing network connectivity (count: 1)
+  - [WARNING] WARNING: Disabling Webhook notifications due to missing network connectivity (count: 1)
+  - [WARNING] WARNING: Network unavailable; switching Email delivery to sendmail for this run (count: 1)
+
+Exit Code: 1
+Script Version: 0.41.0

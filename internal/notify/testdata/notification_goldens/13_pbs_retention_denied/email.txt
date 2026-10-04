@@ -1,0 +1,28 @@
+⚠️ PVE BACKUP REPORT - WARNING
+Hostname: pve-golden
+Date: 2026-10-04 02:00:00
+
+BACKUP STATUS:
+  Local:     15/15 backups (412.00 GB free)
+  Secondary: 15/15 backups (1.80 TB free)
+  Cloud:     15/15 backups
+
+BACKUP DETAILS:
+  Backup File: /opt/proxsave/backup/pve-golden-backup-20261004-020000.tar.xz.bundle.tar
+  Size: 21.0 MiB
+  Included Files: 1832
+  Missing Files: 0
+  Duration: 2m 14s
+  Compression: xz (level 9, ratio 88.20%)
+
+ISSUES:
+  Errors: 0
+  Warnings: 1
+  Total Issues: 1
+  Log: /opt/proxsave/log/backup-pve-golden-20261004-020000.log
+
+ISSUE DETAILS:
+  - [WARNING] ⚠ Retention not applied (count: 1)
+
+Exit Code: 1
+Script Version: 0.41.0

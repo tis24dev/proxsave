@@ -1,0 +1,70 @@
+{
+  "embeds": [
+    {
+      "color": 15158332,
+      "description": "Backup completed with status: **failure** on pve-golden",
+      "fields": [
+        {
+          "inline": true,
+          "name": "Hostname",
+          "value": "pve-golden"
+        },
+        {
+          "inline": true,
+          "name": "Status",
+          "value": "❌ failure"
+        },
+        {
+          "inline": true,
+          "name": "Date",
+          "value": "2026-10-04 02:00:00"
+        },
+        {
+          "inline": true,
+          "name": "Duration",
+          "value": "2m 14s"
+        },
+        {
+          "inline": true,
+          "name": "Size",
+          "value": "0 B"
+        },
+        {
+          "inline": true,
+          "name": "Compression",
+          "value": "xz (0.00%)"
+        },
+        {
+          "inline": true,
+          "name": "Local Storage",
+          "value": "❌ 15/15"
+        },
+        {
+          "inline": true,
+          "name": "Secondary Storage",
+          "value": "➖ 15/15"
+        },
+        {
+          "inline": true,
+          "name": "Cloud Storage",
+          "value": "➖ 15/15"
+        },
+        {
+          "inline": false,
+          "name": "Issues",
+          "value": "Errors: 1, Warnings: 0"
+        },
+        {
+          "inline": false,
+          "name": "Top Issues",
+          "value": "```\n[ERROR] Backup orchestration failed: failed to create temporary directory: mkdirtemp /tmp/proxsave/proxsave-pve-golden-202610... (count: 1)\n```"
+        }
+      ],
+      "footer": {
+        "text": "Proxmox Backup Script v0.41.0 • Exit Code: 4"
+      },
+      "timestamp": "2026-10-04T02:00:00Z",
+      "title": "❌ PVE Backup Report"
+    }
+  ]
+}

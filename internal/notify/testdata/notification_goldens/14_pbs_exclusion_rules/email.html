@@ -1,0 +1,278 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>PVE Backup Report</title>
+    <style>
+        body {
+            font-family: 'Segoe UI', Arial, sans-serif;
+            margin: 0;
+            padding: 0;
+            color: #333;
+            background-color: #f5f5f5;
+        }
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+            background-color: #fff;
+            border-radius: 8px;
+            overflow: hidden;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        .header {
+            color: white;
+            padding: 20px 30px;
+        }
+        .header h1 {
+            margin: 0;
+            font-weight: 500;
+            font-size: 24px;
+        }
+        .header p {
+            margin: 10px 0 0 0;
+            opacity: 0.9;
+            font-size: 16px;
+        }
+        .content {
+            padding: 30px;
+        }
+        .section {
+            margin-bottom: 30px;
+        }
+        .section:last-child {
+            margin-bottom: 0;
+        }
+        .section h2 {
+            font-size: 18px;
+            font-weight: 500;
+            margin-top: 0;
+            margin-bottom: 15px;
+            padding-bottom: 10px;
+            border-bottom: 1px solid #eee;
+            color: #444;
+        }
+        .info-table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-bottom: 10px;
+        }
+        .info-table td {
+            padding: 10px;
+            border-bottom: 1px solid #eee;
+            vertical-align: top;
+        }
+        .info-table tr:last-child td {
+            border-bottom: none;
+        }
+        .info-table td:first-child {
+            font-weight: 500;
+            width: 35%;
+            color: #555;
+        }
+        .footer {
+            background-color: #f8f8f8;
+            padding: 15px 30px;
+            text-align: center;
+            font-size: 13px;
+            color: #777;
+            border-top: 1px solid #eee;
+        }
+        .backup-status {
+            background-color: #f9f9f9;
+            border-radius: 8px;
+            padding: 20px;
+            margin-bottom: 30px;
+            border-left: 4px solid;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.05);
+        }
+        .backup-location {
+            margin-bottom: 15px;
+            padding-bottom: 15px;
+            border-bottom: 1px solid #eee;
+        }
+        .backup-location:last-child {
+            margin-bottom: 0;
+            padding-bottom: 0;
+            border-bottom: none;
+        }
+        .backup-location h3 {
+            margin-top: 0;
+            margin-bottom: 10px;
+            font-size: 16px;
+            font-weight: 500;
+            color: #444;
+        }
+        .storage-info {
+            display: flex;
+            align-items: center;
+            margin-top: 8px;
+            font-size: 14px;
+            color: #666;
+        }
+        .storage-info .space-bar {
+            flex-grow: 1;
+            height: 8px;
+            margin: 0 10px;
+            background-color: #eee;
+            border-radius: 4px;
+            overflow: hidden;
+            position: relative;
+        }
+        .storage-info .space-used {
+            position: absolute;
+            height: 100%;
+            background-color: #4CAF50;
+            border-radius: 4px;
+        }
+        .storage-info .space-used.warning {
+            background-color: #FF9800;
+        }
+        .storage-info .space-used.critical {
+            background-color: #F44336;
+        }
+        .count-block {
+            font-size: 16px;
+            font-weight: 500;
+            margin-bottom: 5px;
+        }
+        .count-block .emoji {
+            font-size: 18px;
+            margin-right: 5px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header" style="background-color: #FF9800;">
+            <h1>PVE Backup Report - WARNING</h1>
+            <p>pve-golden - 2026-10-04 02:00:00</p>
+        </div>
+        <div class="content">
+            <div class="backup-status" style="border-left-color: #4CAF50;">
+                <div class="backup-location">
+                    <h3>Local Storage</h3>
+                    <div class="count-block">
+                        <span class="emoji">✅</span> 15/15 backups
+                    </div>
+                    <div class="storage-info">
+                        <span>54.00 GB</span>
+                        <div class="space-bar">
+                            <div class="space-used normal" style="width: 11.6%;"></div>
+                        </div>
+                        <span>412.00 GB free (11.6% used)</span>
+                    </div>
+                </div>
+                
+                <div class="backup-location">
+                    <h3>Secondary Storage</h3>
+                    <div class="count-block">
+                        <span class="emoji">✅</span> 15/15 backups
+                    </div>
+                    <div class="storage-info">
+                        <span>1.84 TB</span>
+                        <div class="space-bar">
+                            <div class="space-used normal" style="width: 50.5%;"></div>
+                        </div>
+                        <span>1.80 TB free (50.5% used)</span>
+                    </div>
+                </div>
+                
+                <div class="backup-location">
+                    <h3>Cloud Storage</h3>
+                    <div class="count-block">
+                        <span class="emoji">✅</span> 15/15 backups
+                    </div>
+                </div>
+            </div>
+            
+            <div class="section">
+                <h2>Backup Details</h2>
+                <table class="info-table">
+                    <tr>
+                        <td>Backup File</td>
+                        <td>/opt/proxsave/backup/pve-golden-backup-20261004-020000.tar.xz.bundle.tar</td>
+                    </tr>
+                    <tr>
+                        <td>File Size</td>
+                        <td>21.0 MiB</td>
+                    </tr>
+                    <tr>
+                        <td>Included Files</td>
+                        <td>1832</td>
+                    </tr>
+                    <tr>
+                        <td>Missing Files</td>
+                        <td>0</td>
+                    </tr>
+                    <tr>
+                        <td>Duration</td>
+                        <td>2m 14s</td>
+                    </tr>
+                    <tr>
+                        <td>Compression Ratio</td>
+                        <td>88.20%</td>
+                    </tr>
+                    <tr>
+                        <td>Compression Type</td>
+                        <td>xz (level: 9)</td>
+                    </tr>
+                    <tr>
+                        <td>Backup Mode</td>
+                        <td>ultra</td>
+                    </tr>
+                    <tr>
+                        <td>Server MAC Address</td>
+                        <td>bc:24:11:5e:3a:01</td>
+                    </tr>
+                    <tr>
+                        <td>Server ID</td>
+                        <td>7302915846102738</td>
+                    </tr>
+                    <tr>
+                        <td>Telegram Status</td>
+                        <td>centralized</td>
+                    </tr>
+                    <tr>
+                        <td>Local Path</td>
+                        <td>/opt/proxsave/backup</td>
+                    </tr>
+                    <tr>
+                        <td>Secondary Path</td>
+                        <td>/mnt/nas-backup</td>
+                    </tr>
+                    <tr>
+                        <td>Cloud Storage</td>
+                        <td>gdrive:proxsave/backup</td>
+                    </tr>
+                </table>
+            </div>
+            
+            <div class="section">
+                <h2>Error and Warning Summary</h2>
+                <div style="padding:15px; background-color:#F5F5F5; border-radius:6px; margin-bottom:15px; border-left:4px solid #FF9800;">
+                    <p><strong>Total Issues:</strong> 1</p>
+                    <p><strong>Errors:</strong> 0</p>
+                    <p><strong>Warnings:</strong> 1</p>
+                </div>
+                <table class="info-table">
+                    <tr>
+                        <th style="text-align:left; padding:10px; background-color:#f2f2f2;">Problem</th>
+                        <th style="text-align:left; padding:10px; background-color:#f2f2f2;">Type</th>
+                        <th style="text-align:left; padding:10px; background-color:#f2f2f2;">Count</th>
+                    </tr>
+                    <tr>
+                        <td>⚠ PBS Storage: backup saved, exclusion rules applied</td>
+                        <td>WARNING</td>
+                        <td>1</td>
+                    </tr>
+                </table>
+                <p style="font-size:13px; color:#666; margin-top:10px;">Full log available at: /opt/proxsave/log/backup-pve-golden-20261004-020000.log</p>
+            </div>
+        </div>
+        <div class="footer">
+            <p>This is an automated message from the Proxmox Backup Script.</p>
+            <p>Generated on 2026-10-04 02:00:00 by backup script v0.41.0</p>
+        </div>
+    </div>
+</body>
+</html>

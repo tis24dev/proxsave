@@ -1,0 +1,99 @@
+{
+  "to": "admin@example.com",
+  "subject": "⚠️ PVE Backup on pve-golden - 2026-10-04 02:00",
+  "report": {
+    "backup": {
+      "cloud": {
+        "count": 15,
+        "emoji": "✅",
+        "status": "15/15"
+      },
+      "primary": {
+        "count": 15,
+        "emoji": "✅",
+        "status": "15/15"
+      },
+      "secondary": {
+        "count": 15,
+        "emoji": "✅",
+        "status": "15/15"
+      }
+    },
+    "backup_date": "2026-10-04 02:00:00",
+    "emojis": {
+      "cloud": "✅",
+      "email": "❓",
+      "primary": "✅",
+      "secondary": "✅"
+    },
+    "exit_code": 1,
+    "hostname": "pve-golden",
+    "log_summary": {
+      "categories": [
+        {
+          "label": "✗ PBS Storage: backup not saved",
+          "type": "WARNING",
+          "count": 1,
+          "example": "✗ PBS Storage: backup not saved"
+        },
+        {
+          "label": "✗ PBS storage: not initialized",
+          "type": "WARNING",
+          "count": 1,
+          "example": "✗ PBS storage: not initialized"
+        }
+      ],
+      "color": "#ffc107",
+      "errors": 0,
+      "has_categories": true,
+      "has_entries": true,
+      "log_file": "/opt/proxsave/log/backup-pve-golden-20261004-020000.log",
+      "total": 2,
+      "warnings": 2
+    },
+    "metrics": {
+      "backup_duration": "2m 14s",
+      "backup_file_name": "pve-golden-backup-20261004-020000.tar.xz.bundle.tar",
+      "backup_size": "21.0 MiB",
+      "compression_level": "9",
+      "compression_mode": "ultra",
+      "compression_ratio": "88.20",
+      "compression_type": "xz",
+      "file_missing": 0,
+      "files_included": 1832
+    },
+    "paths": {
+      "cloud": "gdrive:proxsave/backup",
+      "cloud_display": "gdrive:proxsave/backup",
+      "has_cloud": true,
+      "has_secondary": true,
+      "local": "/opt/proxsave/backup",
+      "secondary": "/mnt/nas-backup"
+    },
+    "proxmox_type": "pve",
+    "script_version": "0.41.0",
+    "server_id": "7302915846102738",
+    "server_mac": "bc:24:11:5e:3a:01",
+    "status": "warning",
+    "status_color": "#FF9800",
+    "status_message": "Backup completed with warnings",
+    "storage": {
+      "local": {
+        "free": "412.00 GB",
+        "percent": "11.6%",
+        "percent_num": 11.587982832618025,
+        "space": "412.00 GB",
+        "used": "54.00 GB"
+      },
+      "secondary": {
+        "free": "1.80 TB",
+        "percent": "50.5%",
+        "percent_num": 50.536768652710684,
+        "space": "1.80 TB",
+        "used": "1.84 TB"
+      }
+    }
+  },
+  "t": "<SEND TIME, UNIX SECONDS>",
+  "server_mac": "bc:24:11:5e:3a:01"
+}

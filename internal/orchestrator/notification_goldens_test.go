@@ -85,14 +85,25 @@ type notifyGoldenCase struct {
 	// The step [6] fakes: the Secondary retention fails, the Cloud copy fails.
 	failSecondaryRetention bool
 	failCloudStore         bool
+	// The step [6] fakes save the archive and not one of its sidecar files: the
+	// Secondary copy of a sidecar fails, the Cloud upload of a sidecar fails.
+	secondarySidecarNotSaved bool
+	cloudSidecarNotSaved     bool
 	// runErr stops the run before step [6], with the error RunGoBackup returns.
 	runErr error
 	// pbs is the result the PBS block writes at step [7] (PBS_TARGET_ENABLED=true).
 	pbs *block.Result
+	// pbsServer runs the real PBS block, at startup and at step [7], against this server.
+	pbsServer *notifyGoldenPBS
 	// update is an available update: what checkForUpdates logs and the orchestrator copies.
 	update bool
+	// offline is a run without network: checkForUpdates could not ask for the latest
+	// version, so the stats carry none.
+	offline bool
 	// emailFallback makes the Email channel report a delivery through the fallback.
 	emailFallback bool
+	// emailMethod is the delivery method the Email channel reports; empty = the relay.
+	emailMethod string
 	// early is an initialization failure: DispatchEarlyErrorNotification, no run.
 	early    *EarlyErrorState
 	wantExit int
@@ -112,6 +123,7 @@ func notifyGoldenConfig() *config.Config {
 		MaxLocalBackups:        15,
 		MaxSecondaryBackups:    15,
 		MaxCloudBackups:        15,
+		MaxPBSTargetBackups:    15,
 		SecondaryEnabled:       true,
 		SecondaryPath:          "/mnt/nas-backup",
 		CloudEnabled:           true,
@@ -272,6 +284,128 @@ func notifyGoldenCases() []notifyGoldenCase {
 			},
 			wantExit: types.ExitGenericError.Int(),
 		},
+		{
+			// The archive reached the cloud remote, one sidecar upload did not.
+			name:                 "10_cloud_sidecar_upload_failed",
+			cloudSidecarNotSaved: true,
+			wantExit:             types.ExitGenericError.Int(),
+		},
+		{
+			// The archive was copied to the secondary path, one sidecar copy failed.
+			name:                     "11_secondary_sidecar_not_copied",
+			secondarySidecarNotSaved: true,
+			wantExit:                 types.ExitGenericError.Int(),
+		},
+		{
+			// PBS_TARGET_ENABLED=true, the server refuses the connection at startup: the
+			// block stays registered and step [7] reports the backup not saved.
+			name:      "12_pbs_not_initialized",
+			configure: notifyGoldenPBSConfigure,
+			pbsServer: &notifyGoldenPBS{answers: map[string]notifyGoldenPBSAnswer{
+				"version": {rc: 255, stderr: "Error: client error (Connect)\n" +
+					"Caused by: error connecting to https://192.0.2.10:8007/ - tcp connect error: Connection refused (os error 111)\n"},
+			}},
+			wantExit: types.ExitGenericError.Int(),
+		},
+		{
+			// The backup is saved, the prune is refused: no retention at all.
+			name:      "13_pbs_retention_denied",
+			configure: notifyGoldenPBSConfigure,
+			pbsServer: &notifyGoldenPBS{answers: map[string]notifyGoldenPBSAnswer{
+				"prune": {rc: 255, stderr: "Error: permission check failed - missing Datastore.Modify|Datastore.Prune on /datastore/offsite\n"},
+			}},
+			wantExit: types.ExitGenericError.Int(),
+		},
+		{
+			// The collected tree holds a .pxarexclude: the backup is saved with its rules.
+			name:      "14_pbs_exclusion_rules",
+			configure: notifyGoldenPBSConfigure,
+			pbsServer: &notifyGoldenPBS{treeFiles: []string{"etc/ssh/.pxarexclude"}},
+			wantExit:  types.ExitGenericError.Int(),
+		},
+		{
+			// GFS: the snapshot the policy drops is protected, so it is kept.
+			name: "15_pbs_gfs_protected_kept",
+			configure: func(cfg *config.Config) {
+				notifyGoldenPBSConfigure(cfg)
+				notifyGoldenPBSRetentionGFS(cfg)
+			},
+			pbsServer: &notifyGoldenPBS{snapshots: []notifyGoldenPBSSnapshot{
+				{at: notifyGoldenPBSRunSnapshotTime},
+				{at: notifyGoldenPBSRunSnapshotTime.AddDate(0, 0, -30), protected: true},
+			}},
+			wantExit: types.ExitGenericError.Int(),
+		},
+		{
+			// PBS initialized at startup, the run stops before step [6] (and [7]), as in
+			// 03_stopped_before_storage.
+			name:      "16_pbs_stopped_before_step7",
+			configure: notifyGoldenPBSConfigure,
+			pbsServer: &notifyGoldenPBS{},
+			runErr: fmt.Errorf("failed to create temporary directory: %w", &fs.PathError{
+				Op:   "mkdirtemp",
+				Path: workspaceRoot + "/proxsave-" + notifyGoldenHost + "-" + notifyGoldenStart.Format("20060102-150405") + "-*",
+				Err:  syscall.ENOSPC,
+			}),
+			wantExit: types.ExitBackupError.Int(),
+		},
+		{
+			// PBS_TARGET_ENABLED=false with PBS_TARGET_STORAGE still set, next to the
+			// Secondary and the Cloud.
+			name: "17_pbs_off_secondary_cloud_on",
+			configure: func(cfg *config.Config) {
+				cfg.PBSTargetEnabled = false
+				cfg.PBSTargetStorage = notifyGoldenPBSStorage
+			},
+			wantExit: types.ExitSuccess.Int(),
+		},
+		{
+			// cmd/proxsave validateFutureFeatures: CLOUD_ENABLED=true with CLOUD_REMOTE
+			// empty switches the cloud off for the run. It runs before the run logger
+			// exists, so its WARNING goes to the process-start default logger and never
+			// reaches the run log. (The configuration parser already rejects an empty
+			// CLOUD_REMOTE with CLOUD_ENABLED=true, so backup.env cannot get here.)
+			name: "18_cloud_remote_empty",
+			configure: func(cfg *config.Config) {
+				cfg.CloudRemote = ""
+			},
+			startup: func(logger *logging.Logger, cfg *config.Config) {
+				bootLogger := logging.New(types.LogLevelDebug, false)
+				bootLogger.SetOutput(io.Discard)
+				bootLogger.Warning("Cloud backup enabled but CLOUD_REMOTE is empty, disabling cloud storage for this run")
+				cfg.CloudEnabled = false
+				cfg.CloudRemote = ""
+				cfg.CloudLogPath = ""
+			},
+			wantExit: types.ExitSuccess.Int(),
+		},
+		{
+			// cmd/proxsave runNetworkPreflight with no outbound connectivity: every
+			// network feature is switched off for the run (disableNetworkFeaturesForRun),
+			// the email goes through sendmail. The bootstrap WARNING lines are flushed
+			// into the run log.
+			name:    "19_cloud_off_no_network",
+			offline: true,
+			startup: func(logger *logging.Logger, cfg *config.Config) {
+				logger.Warning("Network connectivity unavailable for: %s. %s",
+					"Telegram centralized registration, Email relay delivery, Gotify notifications, Webhooks, Cloud storage (rclone)",
+					"no outbound connectivity (checked 2 endpoints)")
+				logger.Warning("Disabling network-dependent features for this run")
+				logger.Warning("WARNING: Disabling cloud storage (rclone) due to missing network connectivity")
+				cfg.CloudEnabled = false
+				cfg.CloudLogPath = ""
+				logger.Warning("WARNING: Disabling Telegram notifications due to missing network connectivity")
+				cfg.TelegramEnabled = false
+				logger.Warning("WARNING: Network unavailable; switching Email delivery to sendmail for this run")
+				cfg.EmailDeliveryMethod = "sendmail"
+				logger.Warning("WARNING: Disabling Gotify notifications due to missing network connectivity")
+				cfg.GotifyEnabled = false
+				logger.Warning("WARNING: Disabling Webhook notifications due to missing network connectivity")
+				cfg.WebhookEnabled = false
+			},
+			emailMethod: "email-sendmail",
+			wantExit:    types.ExitGenericError.Int(),
+		},
 	}
 }
 
@@ -318,7 +452,11 @@ func (p notifyGoldenHostPinned) Notify(ctx context.Context, stats *BackupStats) 
 // notifyGoldenNotifiers returns the channels cmd/proxsave registers: only the enabled
 // ones (initializeBackupNotifications skips a disabled channel).
 func notifyGoldenNotifiers(cfg *config.Config, tc notifyGoldenCase) []*notifyGoldenNotifier {
-	email := notify.NotificationResult{Success: true, Method: "email-relay"}
+	emailMethod := "email-relay"
+	if tc.emailMethod != "" {
+		emailMethod = tc.emailMethod
+	}
+	email := notify.NotificationResult{Success: true, Method: emailMethod}
 	if tc.emailFallback {
 		email = notify.NotificationResult{Success: true, UsedFallback: true, Method: "email-sendmail",
 			Error: errors.New("bad request (HTTP 400): bad request")}
@@ -426,6 +564,11 @@ func runNotifyGoldenCase(t *testing.T, tc notifyGoldenCase) map[string][]byte {
 	if tc.startup != nil {
 		tc.startup(logger, cfg)
 	}
+	var pveDir, pbsTree string
+	if tc.pbsServer != nil {
+		pveDir = tc.pbsServer.install(t)
+		pbsTree = tc.pbsServer.tree(t)
+	}
 
 	o := &Orchestrator{
 		logger:               logger,
@@ -438,9 +581,12 @@ func runNotifyGoldenCase(t *testing.T, tc notifyGoldenCase) map[string][]byte {
 		notificationChannels: make([]NotificationChannel, 0),
 	}
 	o.SetEnvironmentInfo(notifyGoldenEnv())
+	ctx := context.Background()
+	if tc.pbsServer != nil {
+		notifyGoldenInitPBS(t, ctx, logger, cfg, o, pveDir)
+	}
 
 	notifiers := notifyGoldenNotifiers(cfg, tc)
-	ctx := context.Background()
 	files := map[string][]byte{}
 	var stats *BackupStats
 	outcome := notifyGoldenOutcome{LogFile: notifyGoldenLogFile}
@@ -469,6 +615,9 @@ func runNotifyGoldenCase(t *testing.T, tc notifyGoldenCase) map[string][]byte {
 			stats.NewVersionAvailable = true
 			stats.LatestVersion = notifyGoldenLatestVersion
 		}
+		if tc.offline {
+			stats.LatestVersion = ""
+		}
 
 		backendClock := &backupCharClock{now: notifyGoldenStart}
 		rec := &backupCharRecorder{}
@@ -477,7 +626,14 @@ func runNotifyGoldenCase(t *testing.T, tc notifyGoldenCase) map[string][]byte {
 			b.clock = backendClock
 			info := b.fsInfo
 			initial := b.stats
-			adapter := NewStorageAdapter(b, logger, cfg)
+			var backend storage.Storage = b
+			switch {
+			case tc.secondarySidecarNotSaved && b.location == storage.LocationSecondary:
+				backend = &notifyGoldenSidecarBackend{backupCharBackend: b, issues: []storage.StoreIssue{storage.StoreIssueSidecarNotSaved}}
+			case tc.cloudSidecarNotSaved && b.location == storage.LocationCloud:
+				backend = &notifyGoldenSidecarBackend{backupCharBackend: b, primarySaved: true}
+			}
+			adapter := NewStorageAdapter(backend, logger, cfg)
 			adapter.SetFilesystemInfo(&info)
 			adapter.SetInitialStats(&initial)
 			adapter.SetInitialOwnedBackups(b.summary.Owned, true)
@@ -496,6 +652,9 @@ func runNotifyGoldenCase(t *testing.T, tc notifyGoldenCase) map[string][]byte {
 			if tc.pbs != nil {
 				result := *tc.pbs
 				stats.PBSTarget = &result
+			}
+			if tc.pbsServer != nil {
+				notifyGoldenRunPBSStep(t, ctx, o, stats, pbsTree)
 			}
 		}
 
