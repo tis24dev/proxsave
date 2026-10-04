@@ -342,7 +342,8 @@ func notifyGoldenCases() []notifyGoldenCase {
 			// 03_stopped_before_storage.
 			name:      "16_pbs_stopped_before_step7",
 			configure: notifyGoldenPBSConfigure,
-			pbsServer: &notifyGoldenPBS{},
+			// The startup check lists the group as it is before this run's upload.
+			pbsServer: &notifyGoldenPBS{snapshots: notifyGoldenPBSOlderSnapshots()},
 			runErr: fmt.Errorf("failed to create temporary directory: %w", &fs.PathError{
 				Op:   "mkdirtemp",
 				Path: workspaceRoot + "/proxsave-" + notifyGoldenHost + "-" + notifyGoldenStart.Format("20060102-150405") + "-*",
