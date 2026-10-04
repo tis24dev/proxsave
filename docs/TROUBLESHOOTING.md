@@ -763,7 +763,7 @@ No `not rotated` line is left, and the run reports `  Backups: N, limit: M` and 
 
 **Cause**: archives named `<name>` record this host's server identity, and at least one of them is newer than this host's previous backup at that location, so a second machine with this host's server identity is still backing up there. This happens with a clone that kept the identity: a copied disk, a restored or templated container, an `/etc/machine-id` carried over. Both machines rotate the same set of archives against their own limit: the location keeps about `MAX_LOCAL_BACKUPS` / `MAX_SECONDARY_BACKUPS` / `MAX_CLOUD_BACKUPS` archives for the two together, and each machine deletes the other's oldest ones.
 
-**What ProxSave does**: rotation is unchanged. A renamed host does not trigger the warning: its archives under the old name are all older than its first archive under the new name.
+**What ProxSave does**: rotation is unchanged. A renamed host does not trigger the warning: its archives under the old name are all older than its first archive under the new name. A host renamed back to a name it used before warns once, on its first run under that name, at each location that still keeps backups under that name: the archives it wrote under the other name are newer than its last backup under this one. The next run does not warn.
 
 ### 6. Email Notification Issues
 
