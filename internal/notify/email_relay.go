@@ -29,7 +29,7 @@ type CloudRelayConfig struct {
 	RetryDelay  int // seconds
 }
 
-// Default cloud relay configuration (hardcoded for compatibility with Bash script).
+// Default cloud relay configuration, compiled in: no backup.env variable overrides it.
 //
 // WorkerToken and HMACSecret are a SHARED, PUBLIC anti-abuse credential for the
 // open-source relay client: the same value ships in every distributed binary and
@@ -363,7 +363,7 @@ func isQuotaLimit(detail string) bool {
 // The relay worker builds the email from this shape: a key added or changed
 // here also needs the worker's template.
 func buildReportData(data *NotificationData) map[string]interface{} {
-	// Build nested structure matching Bash format exactly
+	// Nested structure read by the relay worker's template.
 	report := map[string]interface{}{
 		// Top-level fields
 		"status":         data.Status.String(),

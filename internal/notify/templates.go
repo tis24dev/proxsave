@@ -6,7 +6,7 @@ import (
 	"strings"
 )
 
-// BuildEmailSubject builds the email subject line matching Bash output
+// BuildEmailSubject builds the email subject line.
 func BuildEmailSubject(data *NotificationData) string {
 	statusEmoji := GetStatusEmoji(data.Status)
 
@@ -75,7 +75,7 @@ func BuildEmailPlainText(data *NotificationData) string {
 	return body.String()
 }
 
-// BuildEmailHTML builds an HTML email body matching Bash template exactly
+// BuildEmailHTML builds the HTML email body; the relay worker renders the same email from buildReportData.
 func BuildEmailHTML(data *NotificationData) string {
 	// Determine status color
 	statusColor := getStatusColor(data.Status)
@@ -322,7 +322,7 @@ func BuildEmailHTML(data *NotificationData) string {
 	return html.String()
 }
 
-// buildInfoTableRow builds a table row for the info table (Bash style)
+// buildInfoTableRow builds a row of the Backup Details table.
 func buildInfoTableRow(label, value string) string {
 	return fmt.Sprintf("                    <tr>\n                        <td>%s</td>\n                        <td>%s</td>\n                    </tr>\n", escapeHTML(label), escapeHTML(value))
 }
@@ -352,7 +352,7 @@ func getStatusColor(status NotificationStatus) string {
 	}
 }
 
-// getEmbeddedCSS returns the embedded CSS for email HTML (Bash style)
+// getEmbeddedCSS returns the CSS embedded in the HTML email.
 func getEmbeddedCSS() string {
 	return `        body {
             font-family: 'Segoe UI', Arial, sans-serif;
