@@ -123,11 +123,9 @@ func TestASecondWriterWithOurIdentityWarnsTheRun(t *testing.T) {
 		"INFO     Applying retention policy...",
 		"INFO       Adopted: 1 backups named hostb.example.test, same server identity",
 		"INFO       Still writing here: hostb.example.test",
-		"WARNING  ⚠ Backups deleted: 0, server identity shared with hostb.example.test",
+		"INFO     ✓ Nothing to delete",
+		"WARNING  ⚠ Server identity shared with hostb.example.test",
 	)
-	if strings.Contains(out, "Nothing to delete") {
-		t.Errorf("the pass closed with \"Nothing to delete\" beside a shared server identity:\n%s", out)
-	}
 	if n := strings.Count(out, "WARNING "); n != 1 {
 		t.Errorf("%d WARNING lines, want only the retention outcome:\n%s", n, out)
 	}
@@ -153,7 +151,7 @@ func TestARenamedHostDoesNotWarnTheRun(t *testing.T) {
 		"INFO       Adopted: 1 backups named hostold.example.test, same server identity",
 		"INFO     ✓ Nothing to delete",
 	)
-	if strings.Contains(out, "Still writing here") || strings.Contains(out, "server identity shared") {
+	if strings.Contains(out, "Still writing here") || strings.Contains(out, "Server identity shared") {
 		t.Errorf("a rename was reported as a second writer:\n%s", out)
 	}
 	if exitCode != types.ExitSuccess.Int() {
@@ -173,7 +171,7 @@ func TestTheFirstOwnBackupDoesNotWarnTheRun(t *testing.T) {
 
 	out, exitCode := syncRealSecondary(t, dir, runHostname, thisRun)
 	requireLines(t, out, "INFO       Adopted: 1 backups named hostb.example.test, same server identity")
-	if strings.Contains(out, "Still writing here") || strings.Contains(out, "server identity shared") {
+	if strings.Contains(out, "Still writing here") || strings.Contains(out, "Server identity shared") {
 		t.Errorf("the first own backup here was reported as a second writer:\n%s", out)
 	}
 	if exitCode != types.ExitSuccess.Int() {

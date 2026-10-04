@@ -364,28 +364,27 @@ func TestRetentionOutcomesAreAutonomous(t *testing.T) {
 		},
 		{
 			name:    "server identity shared",
-			summary: storage.RetentionSummary{Planned: 1, BackupsDeleted: 1, SharedIdentityNames: "pve2", LogsDeleted: 1},
-			want:    []string{"WARNING  ⚠ Backups deleted: 1, server identity shared with pve2", "INFO     ✓ Logs deleted: 1"},
-		},
-		{
-			name:    "server identity shared with nothing to delete",
-			summary: storage.RetentionSummary{SharedIdentityNames: "pve2 and pve3"},
-			want:    []string{"WARNING  ⚠ Backups deleted: 0, server identity shared with pve2 and pve3"},
+			summary: storage.RetentionSummary{Planned: 2, BackupsDeleted: 2, SharedIdentityNames: "clone1", LogsDeleted: 2},
+			want:    []string{"INFO     ✓ Backups deleted: 2", "WARNING  ⚠ Server identity shared with clone1", "INFO     ✓ Logs deleted: 2"},
 			absent:  []string{"Nothing to delete"},
 		},
 		{
-			// Last in the precedence: the archives were rotated, so a backup not
-			// deleted says more about this pass.
+			name:    "server identity shared with nothing to delete",
+			summary: storage.RetentionSummary{SharedIdentityNames: "clone1 and clone2"},
+			want:    []string{"INFO     ✓ Nothing to delete", "WARNING  ⚠ Server identity shared with clone1 and clone2"},
+			absent:  []string{"Backups deleted"},
+		},
+		{
+			// The backups line keeps its own precedence; the shared identity is a
+			// line of its own after it, before the logs line.
 			name:    "server identity shared beside a backup not deleted",
-			summary: storage.RetentionSummary{Planned: 3, BackupsDeleted: 2, NotDeleted: 1, SharedIdentityNames: "pve2"},
-			want:    []string{"WARNING  ⚠ Backups deleted: 2 of 3"},
-			absent:  []string{"server identity shared"},
+			summary: storage.RetentionSummary{Planned: 3, BackupsDeleted: 2, NotDeleted: 1, SharedIdentityNames: "clone1", LogsDeleted: 1, LogsNotDeleted: 1},
+			want:    []string{"WARNING  ⚠ Backups deleted: 2 of 3", "WARNING  ⚠ Server identity shared with clone1", "WARNING  ⚠ Logs deleted: 1 of 2"},
 		},
 		{
 			name:    "server identity shared beside backups not rotated",
-			summary: storage.RetentionSummary{NotRotated: 1, NotRotatedNames: "pve.lan", SharedIdentityNames: "pve2"},
-			want:    []string{"WARNING  ⚠ Backups deleted: 0, 1 named pve.lan not rotated"},
-			absent:  []string{"server identity shared"},
+			summary: storage.RetentionSummary{NotRotated: 1, NotRotatedNames: "pve.lan", SharedIdentityNames: "clone1"},
+			want:    []string{"WARNING  ⚠ Backups deleted: 0, 1 named pve.lan not rotated", "WARNING  ⚠ Server identity shared with clone1"},
 		},
 		{
 			name:    "a log not deleted",
@@ -405,6 +404,9 @@ func TestRetentionOutcomesAreAutonomous(t *testing.T) {
 				t.Fatalf("Sync: %v", err)
 			}
 			requireLines(t, out, append([]string{"INFO     Applying retention policy..."}, tc.want...)...)
+			if strings.Contains(out, ", server identity shared") {
+				t.Fatalf("the shared identity rode on the backups line instead of its own:\n%s", out)
+			}
 			for _, a := range tc.absent {
 				if strings.Contains(out, a) {
 					t.Fatalf("unexpected %q in:\n%s", a, out)

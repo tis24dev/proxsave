@@ -372,9 +372,10 @@ func (s *StorageAdapter) logStoreIssues(name string, issues []storage.StoreIssue
 	s.logger.Warning("%s %s: %s", theme.SymbolWarning, name, strings.Join(parts, ", "))
 }
 
-// logRetentionOutcome prints the two autonomous outcomes of a retention pass that ran:
-// what happened to the backups and what happened to their logs. Each has its own
-// symbol, because one can succeed while the other does not.
+// logRetentionOutcome prints the autonomous outcomes of a retention pass that ran:
+// what happened to the backups and what happened to their logs, with a shared server
+// identity, when there is one, on a line of its own between the two. Each has its own
+// symbol, because one can succeed while another does not.
 func (s *StorageAdapter) logRetentionOutcome(summary storage.RetentionSummary, deleted int) {
 	backupsDeleted := summary.BackupsDeleted
 	if backupsDeleted == 0 {
@@ -396,8 +397,9 @@ func (s *StorageAdapter) logRetentionOutcome(summary storage.RetentionSummary, d
 		s.logger.Debug("%s: retention outcome shared_identity=%s", s.backend.Name(), summary.SharedIdentityNames)
 	}
 
-	if planned == 0 && summary.Skipped == 0 && summary.NotListed == 0 && summary.NoMetadata == 0 && summary.NotRotated == 0 && summary.SharedIdentityNames == "" && logsPlanned == 0 {
+	if planned == 0 && summary.Skipped == 0 && summary.NotListed == 0 && summary.NoMetadata == 0 && summary.NotRotated == 0 && logsPlanned == 0 {
 		s.logger.Info("%s Nothing to delete", theme.SymbolSuccess)
+		s.logSharedIdentityOutcome(summary)
 		return
 	}
 
@@ -414,13 +416,10 @@ func (s *StorageAdapter) logRetentionOutcome(summary storage.RetentionSummary, d
 		s.logger.Warning("%s Backups deleted: %d, %d without metadata", theme.SymbolWarning, backupsDeleted, summary.NoMetadata)
 	case summary.NotRotated > 0:
 		s.logger.Warning("%s Backups deleted: %d, %d named %s not rotated", theme.SymbolWarning, backupsDeleted, summary.NotRotated, summary.NotRotatedNames)
-	case summary.SharedIdentityNames != "":
-		// Last: the archives were rotated, so every other outcome says more about
-		// this pass. The "  Still writing here:" fact above is printed regardless.
-		s.logger.Warning("%s Backups deleted: %d, server identity shared with %s", theme.SymbolWarning, backupsDeleted, summary.SharedIdentityNames)
 	default:
 		s.logger.Info("%s Backups deleted: %d", theme.SymbolSuccess, backupsDeleted)
 	}
+	s.logSharedIdentityOutcome(summary)
 
 	switch {
 	case summary.LogsNotDeleted > 0:
@@ -428,6 +427,17 @@ func (s *StorageAdapter) logRetentionOutcome(summary storage.RetentionSummary, d
 	case logsDeleted > 0:
 		s.logger.Info("%s Logs deleted: %d", theme.SymbolSuccess, logsDeleted)
 	}
+}
+
+// logSharedIdentityOutcome prints the shared server identity as an outcome of its own,
+// after the backups outcome and before the logs outcome, whatever the backups outcome
+// is: it is not about this pass's deletions, which the backups line reports as if it
+// were absent, but about a second host writing here under this host's identity.
+func (s *StorageAdapter) logSharedIdentityOutcome(summary storage.RetentionSummary) {
+	if summary.SharedIdentityNames == "" {
+		return
+	}
+	s.logger.Warning("%s Server identity shared with %s", theme.SymbolWarning, summary.SharedIdentityNames)
 }
 
 // outcomeLoggedError marks a storage failure whose outcome line ("✗ Local Storage:
