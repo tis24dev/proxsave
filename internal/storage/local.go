@@ -39,6 +39,10 @@ type LocalStorage struct {
 	fsDetector *FilesystemDetector
 	fsInfo     *FilesystemInfo
 	lastRet    RetentionSummary
+	// thisRunArchive is the base name of the archive the last Store was handed: the
+	// archive this run created, which retention must not take for this host's
+	// previous backup here (retentionSharedIdentity). "" until a Store runs.
+	thisRunArchive string
 	// scopeOwned and scopeValid sit beside lastRet rather than inside it because
 	// lastRet is assigned as a whole struct literal on four separate delete paths.
 	// A field added to that struct would be silently zeroed by any of them, which is
@@ -139,6 +143,7 @@ func (l *LocalStorage) DetectFilesystem(ctx context.Context) (info *FilesystemIn
 func (l *LocalStorage) Store(ctx context.Context, backupFile string, metadata *types.BackupMetadata) (err error) {
 	done := logging.DebugStart(l.logger, "local store", "file=%s", filepath.Base(backupFile))
 	defer func() { done(err) }()
+	l.thisRunArchive = filepath.Base(backupFile)
 	l.logger.Debug("Local storage: preparing to store %s", filepath.Base(backupFile))
 	// Check context
 	if err := ctx.Err(); err != nil {
@@ -589,7 +594,7 @@ func (l *LocalStorage) ApplyRetention(ctx context.Context, config RetentionConfi
 	// Drop anything this host does not own before counting or deleting: the
 	// "*-backup-*" glob that produced this list matches every hostname, and the list
 	// also carries other spellings of this host's own name.
-	scope, err := applyRetentionHostScope("Local storage", retentionIdentity{hostname: l.hostname, aliases: l.hostAliases, serverID: l.serverID}, backups, l.logger)
+	scope, err := applyRetentionHostScope("Local storage", retentionIdentity{hostname: l.hostname, aliases: l.hostAliases, serverID: l.serverID, thisRunArchive: l.thisRunArchive}, backups, l.logger)
 	if err != nil {
 		// This machine cannot name itself, so no backup can be attributed to it: the
 		// pass does not start and the caller closes the block with "Retention not
@@ -605,6 +610,7 @@ func (l *LocalStorage) ApplyRetention(ctx context.Context, config RetentionConfi
 	}
 	backups = scope.owned
 	l.retTally.notRotated = scope.notRotated
+	l.retTally.sharedWith = scope.sharedWith
 
 	// This is the only frame that knows the number: the listing above matches every
 	// hostname, and GetStats reruns that same unscoped listing for its own count. The

@@ -168,6 +168,7 @@ type retentionTally struct {
 	noMetadata     int
 	logsNotDeleted int
 	notRotated     []retentionNameCount
+	sharedWith     []string
 }
 
 func (t retentionTally) apply(s *RetentionSummary) {
@@ -185,6 +186,7 @@ func (t retentionTally) apply(s *RetentionSummary) {
 		names = append(names, g.name)
 	}
 	s.NotRotatedNames = joinNames(names)
+	s.SharedIdentityNames = joinNames(t.sharedWith)
 }
 
 // joinNames renders a list of names for one line: "a", "a and b", "a, b and c".

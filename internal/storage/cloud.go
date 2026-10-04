@@ -121,6 +121,9 @@ type CloudStorage struct {
 	// location most likely to be shared, because the shipped CLOUD_REMOTE_PATH
 	// default is a root with no host component.
 	serverID string
+	// thisRunArchive is the base name of the archive the last Store was handed. See
+	// LocalStorage.thisRunArchive.
+	thisRunArchive string
 	// localRoot and localDir are set instead of remote and remotePrefix when
 	// CLOUD_REMOTE is a local directory (LocalCloudRemote): localRoot is CLOUD_REMOTE,
 	// localDir the backup directory under it, CLOUD_REMOTE_PATH joined. Every rclone
@@ -1025,6 +1028,7 @@ func cleanRcloneOutput(output string) string {
 func (c *CloudStorage) Store(ctx context.Context, backupFile string, metadata *types.BackupMetadata) (err error) {
 	done := logging.DebugStart(c.logger, "cloud store", "file=%s", filepath.Base(backupFile))
 	defer func() { done(err) }()
+	c.thisRunArchive = filepath.Base(backupFile)
 	c.logger.Debug("Cloud storage: preparing to upload %s", filepath.Base(backupFile))
 	// Check context
 	if err := ctx.Err(); err != nil {
@@ -2482,7 +2486,7 @@ func (c *CloudStorage) ApplyRetention(ctx context.Context, config RetentionConfi
 	// and drop everything this host does not own, BEFORE anything is counted toward
 	// the keep limit or selected for deletion.
 	c.resolveRetentionOwners(ctx, backups)
-	scope, err := applyRetentionHostScope("Cloud storage", retentionIdentity{hostname: c.hostname, aliases: c.hostAliases, serverID: c.serverID}, backups, c.logger)
+	scope, err := applyRetentionHostScope("Cloud storage", retentionIdentity{hostname: c.hostname, aliases: c.hostAliases, serverID: c.serverID, thisRunArchive: c.thisRunArchive}, backups, c.logger)
 	if err != nil {
 		// See LocalStorage.ApplyRetention: a host that cannot name itself does not
 		// start the pass.
@@ -2497,6 +2501,7 @@ func (c *CloudStorage) ApplyRetention(ctx context.Context, config RetentionConfi
 	}
 	backups = scope.owned
 	c.retTally.notRotated = scope.notRotated
+	c.retTally.sharedWith = scope.sharedWith
 
 	// Taken here rather than from a second listing: the attribution above costs one
 	// rclone cat per archive, and cloud_retention_owner.go records that List stays

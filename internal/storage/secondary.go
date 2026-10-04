@@ -39,6 +39,9 @@ type SecondaryStorage struct {
 	fsDetector *FilesystemDetector
 	fsInfo     *FilesystemInfo
 	lastRet    RetentionSummary
+	// thisRunArchive is the base name of the archive the last Store was handed. See
+	// LocalStorage.thisRunArchive.
+	thisRunArchive string
 	// See the note on LocalStorage.scopeOwned: kept outside lastRet because that
 	// struct is replaced wholesale on the delete paths.
 	scopeOwned int
@@ -154,6 +157,7 @@ func (s *SecondaryStorage) DetectFilesystem(ctx context.Context) (info *Filesyst
 func (s *SecondaryStorage) Store(ctx context.Context, backupFile string, metadata *types.BackupMetadata) (err error) {
 	done := logging.DebugStart(s.logger, "secondary store", "file=%s", filepath.Base(backupFile))
 	defer func() { done(err) }()
+	s.thisRunArchive = filepath.Base(backupFile)
 	s.logger.Debug("Secondary storage: preparing to store %s", filepath.Base(backupFile))
 	// Check context
 	if err := ctx.Err(); err != nil {
@@ -777,7 +781,7 @@ func (s *SecondaryStorage) ApplyRetention(ctx context.Context, config RetentionC
 	// same directory, and the "*-backup-*" glob that produced this list matches every
 	// hostname.
 	s.resolveRetentionOwners(ctx, backups)
-	scope, err := applyRetentionHostScope("Secondary storage", retentionIdentity{hostname: s.hostname, aliases: s.hostAliases, serverID: s.serverID}, backups, s.logger)
+	scope, err := applyRetentionHostScope("Secondary storage", retentionIdentity{hostname: s.hostname, aliases: s.hostAliases, serverID: s.serverID, thisRunArchive: s.thisRunArchive}, backups, s.logger)
 	if err != nil {
 		// See LocalStorage.ApplyRetention: a host that cannot name itself does not
 		// start the pass.
@@ -792,6 +796,7 @@ func (s *SecondaryStorage) ApplyRetention(ctx context.Context, config RetentionC
 	}
 	backups = scope.owned
 	s.retTally.notRotated = scope.notRotated
+	s.retTally.sharedWith = scope.sharedWith
 
 	// The shared NAS mount is the documented secondary layout, so this is the
 	// location where the unscoped count was most often somebody else's

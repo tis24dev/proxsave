@@ -392,8 +392,11 @@ func (s *StorageAdapter) logRetentionOutcome(summary storage.RetentionSummary, d
 	if summary.NotRotated > 0 {
 		s.logger.Debug("%s: retention outcome not_rotated=%d names=%s", s.backend.Name(), summary.NotRotated, summary.NotRotatedNames)
 	}
+	if summary.SharedIdentityNames != "" {
+		s.logger.Debug("%s: retention outcome shared_identity=%s", s.backend.Name(), summary.SharedIdentityNames)
+	}
 
-	if planned == 0 && summary.Skipped == 0 && summary.NotListed == 0 && summary.NoMetadata == 0 && summary.NotRotated == 0 && logsPlanned == 0 {
+	if planned == 0 && summary.Skipped == 0 && summary.NotListed == 0 && summary.NoMetadata == 0 && summary.NotRotated == 0 && summary.SharedIdentityNames == "" && logsPlanned == 0 {
 		s.logger.Info("%s Nothing to delete", theme.SymbolSuccess)
 		return
 	}
@@ -411,6 +414,10 @@ func (s *StorageAdapter) logRetentionOutcome(summary storage.RetentionSummary, d
 		s.logger.Warning("%s Backups deleted: %d, %d without metadata", theme.SymbolWarning, backupsDeleted, summary.NoMetadata)
 	case summary.NotRotated > 0:
 		s.logger.Warning("%s Backups deleted: %d, %d named %s not rotated", theme.SymbolWarning, backupsDeleted, summary.NotRotated, summary.NotRotatedNames)
+	case summary.SharedIdentityNames != "":
+		// Last: the archives were rotated, so every other outcome says more about
+		// this pass. The "  Still writing here:" fact above is printed regardless.
+		s.logger.Warning("%s Backups deleted: %d, server identity shared with %s", theme.SymbolWarning, backupsDeleted, summary.SharedIdentityNames)
 	default:
 		s.logger.Info("%s Backups deleted: %d", theme.SymbolSuccess, backupsDeleted)
 	}

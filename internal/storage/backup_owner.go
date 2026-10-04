@@ -35,7 +35,8 @@ func resolveRetentionHostname() string {
 
 // retentionIdentity is everything a retention pass knows about the machine running
 // it: the name the kernel reports, the other names this run's writer stamped into
-// the archives it produced, and this host's own server identity.
+// the archives it produced, this host's own server identity, and which archive at
+// the location this run produced.
 //
 // It is a struct rather than three parameters for a reason that is not cosmetic. The
 // functions taking it used to end in "aliases ...string", so adding a plain
@@ -54,6 +55,11 @@ type retentionIdentity struct {
 	// not know it. "" disables the adoption arm entirely: a host that cannot name
 	// its own identity may not borrow somebody else's.
 	serverID string
+	// thisRunArchive is the base name of the archive this run handed to Store at this
+	// location, "" when no Store ran in this process. Ownership never reads it. It is
+	// the one archive retentionSharedIdentity must not take for this host's PREVIOUS
+	// backup: this run's archive is always newer than whatever another writer left.
+	thisRunArchive string
 }
 
 // shortLabel is the one first label this host reports under: the first label of the
@@ -474,6 +480,11 @@ type retentionScope struct {
 	// does not answer to, one entry per name, in the order the names were first met.
 	// Retention leaves them alone and the pass outcome says so.
 	notRotated []retentionNameCount
+	// sharedWith are the names under which a second machine carrying this host's
+	// server identity is still writing here (retentionSharedIdentity), in the order
+	// the names were first met. Those archives are adopted and rotate as this host's
+	// own; the pass outcome says the identity is shared.
+	sharedWith []string
 }
 
 // retentionNameCount is how many backups of one group carry one name.
@@ -522,6 +533,10 @@ func countByName(backups []*types.BackupMetadata) []retentionNameCount {
 //
 //   - "  Adopted: <N> backups named <name>, same server identity", one per name: archives
 //     this host owns only because they carry its own server identity.
+//   - "  Still writing here: <names>": the adopted names under which an archive is newer
+//     than this host's previous own backup here, so a second machine with the same
+//     server identity is still writing (retentionSharedIdentity). They are returned in
+//     sharedWith and the caller's outcome line names them.
 //   - "  Other server identity: <N> backups owned by name, still rotated": archives this
 //     host owns by name whose recorded identity is another one. The name decides, so
 //     they rotate.
@@ -544,6 +559,7 @@ func applyRetentionHostScope(location string, id retentionIdentity, backups []*t
 	owned, foreign := scopeRetentionToHost(backups, id)
 	logger.Debug("%s: retention answers to %s (server identity %s)", location, strings.Join(append([]string{id.hostname}, id.aliases...), ", "), retentionServerIDLabel(id.serverID))
 
+	var sharedWith []string
 	if adopted := retentionAdopted(owned, id); len(adopted) > 0 {
 		for _, b := range adopted {
 			logger.Debug("%s: retention - adopted %s (owner=%q, server identity %s)", location, b.BackupFile, backupOwnerHost(b), retentionServerIDLabel(archiveServerID(b)))
@@ -551,6 +567,9 @@ func applyRetentionHostScope(location string, id retentionIdentity, backups []*t
 		logger.Debug("%s: retention - %d backup(s) carry this host's own server identity under a name this host does not answer to: the same server identity is the same server, so they rotate with this host's own", location, len(adopted))
 		for _, g := range countByName(adopted) {
 			logger.Info("  Adopted: %d backups named %s, same server identity", g.count, g.name)
+		}
+		if sharedWith = retentionSharedIdentity(location, owned, adopted, id, logger); len(sharedWith) > 0 {
+			logger.Info("  Still writing here: %s", joinNames(sharedWith))
 		}
 	}
 
@@ -587,7 +606,93 @@ func applyRetentionHostScope(location string, id retentionIdentity, backups []*t
 		}
 	}
 
-	return retentionScope{owned: owned, notRotated: notRotated}, nil
+	return retentionScope{owned: owned, notRotated: notRotated, sharedWith: sharedWith}, nil
+}
+
+// retentionSharedIdentity returns the adopted names under which a second machine
+// carrying this host's server identity is still writing here: a clone that kept the
+// identity (a copied disk, a restored container, a template). Adoption rotates those
+// archives as this host's own either way, against this host's limit; this only finds
+// the names so the pass can say so.
+//
+// A name is returned when its newest adopted archive is newer than this host's
+// PREVIOUS own backup here: the most recent archive this host owns by name, other than
+// the one this run created. A rename never qualifies, because every archive under the
+// old name predates the first one under the new name and therefore the previous own
+// backup. With no previous own backup here, a rename and a clone cannot be told apart
+// yet and nothing is returned. Archives with no date are left out on both sides,
+// since they cannot be ordered, and so is this run's own archive.
+func retentionSharedIdentity(location string, owned, adopted []*types.BackupMetadata, id retentionIdentity, logger retentionScopeLogger) []string {
+	thisRun := retentionArchiveKey(id.thisRunArchive)
+	isThisRun := func(b *types.BackupMetadata) bool {
+		return thisRun != "" && retentionArchiveKey(b.BackupFile) == thisRun
+	}
+	isAdopted := make(map[*types.BackupMetadata]bool, len(adopted))
+	for _, b := range adopted {
+		isAdopted[b] = true
+	}
+
+	var previous time.Time
+	for _, b := range owned {
+		if b == nil || isAdopted[b] || isThisRun(b) || b.Timestamp.IsZero() {
+			continue
+		}
+		if b.Timestamp.After(previous) {
+			previous = b.Timestamp
+		}
+	}
+	if previous.IsZero() {
+		logger.Debug("%s: retention shared identity: previous_own=none (this run's archive=%q); with no earlier backup of this host here, a second writer cannot be told apart from a rename, so nothing is reported", location, id.thisRunArchive)
+		return nil
+	}
+
+	type newestByName struct {
+		name   string
+		newest time.Time
+	}
+	var groups []newestByName
+	for _, b := range adopted {
+		if b == nil || isThisRun(b) || b.Timestamp.IsZero() {
+			continue
+		}
+		name := types.NormalizeHostname(backupOwnerHost(b))
+		if name == "" {
+			continue
+		}
+		found := false
+		for i := range groups {
+			if groups[i].name == name {
+				if b.Timestamp.After(groups[i].newest) {
+					groups[i].newest = b.Timestamp
+				}
+				found = true
+				break
+			}
+		}
+		if !found {
+			groups = append(groups, newestByName{name: name, newest: b.Timestamp})
+		}
+	}
+
+	var shared []string
+	for _, g := range groups {
+		logger.Debug("%s: retention shared identity: name=%s newest=%s previous_own=%s", location, g.name, g.newest.Format(time.RFC3339), previous.Format(time.RFC3339))
+		if g.newest.After(previous) {
+			shared = append(shared, g.name)
+		}
+	}
+	return shared
+}
+
+// retentionArchiveKey is the name an archive is matched by against this run's own:
+// its base name without the bundle suffix, because a destination may list the bundle
+// of the archive Store was handed ("<archive>.bundle.tar") or the archive itself.
+func retentionArchiveKey(file string) string {
+	file = strings.TrimSpace(file)
+	if file == "" {
+		return ""
+	}
+	return strings.TrimSuffix(filepath.Base(file), bundleSuffix)
 }
 
 // logRetentionServerIdentity records, once per backend construction, whether this

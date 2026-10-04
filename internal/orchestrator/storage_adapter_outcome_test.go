@@ -363,6 +363,31 @@ func TestRetentionOutcomesAreAutonomous(t *testing.T) {
 			absent:  []string{"not rotated"},
 		},
 		{
+			name:    "server identity shared",
+			summary: storage.RetentionSummary{Planned: 1, BackupsDeleted: 1, SharedIdentityNames: "pve2", LogsDeleted: 1},
+			want:    []string{"WARNING  ⚠ Backups deleted: 1, server identity shared with pve2", "INFO     ✓ Logs deleted: 1"},
+		},
+		{
+			name:    "server identity shared with nothing to delete",
+			summary: storage.RetentionSummary{SharedIdentityNames: "pve2 and pve3"},
+			want:    []string{"WARNING  ⚠ Backups deleted: 0, server identity shared with pve2 and pve3"},
+			absent:  []string{"Nothing to delete"},
+		},
+		{
+			// Last in the precedence: the archives were rotated, so a backup not
+			// deleted says more about this pass.
+			name:    "server identity shared beside a backup not deleted",
+			summary: storage.RetentionSummary{Planned: 3, BackupsDeleted: 2, NotDeleted: 1, SharedIdentityNames: "pve2"},
+			want:    []string{"WARNING  ⚠ Backups deleted: 2 of 3"},
+			absent:  []string{"server identity shared"},
+		},
+		{
+			name:    "server identity shared beside backups not rotated",
+			summary: storage.RetentionSummary{NotRotated: 1, NotRotatedNames: "pve.lan", SharedIdentityNames: "pve2"},
+			want:    []string{"WARNING  ⚠ Backups deleted: 0, 1 named pve.lan not rotated"},
+			absent:  []string{"server identity shared"},
+		},
+		{
 			name:    "a log not deleted",
 			summary: storage.RetentionSummary{Planned: 2, BackupsDeleted: 2, LogsDeleted: 1, LogsNotDeleted: 1},
 			want:    []string{"INFO     ✓ Backups deleted: 2", "WARNING  ⚠ Logs deleted: 1 of 2"},

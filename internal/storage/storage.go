@@ -189,6 +189,11 @@ type RetentionSummary struct {
 	// joined for the outcome line: "a", "a and b", "a, b and c". A string rather than
 	// a slice so the summary stays comparable.
 	NotRotatedNames string
+	// SharedIdentityNames are the names under which a second machine carrying this
+	// host's server identity is still writing here: an adopted archive under that name
+	// is newer than this host's previous own backup (retentionSharedIdentity). Joined
+	// like NotRotatedNames, "" when there is none. Those archives were rotated.
+	SharedIdentityNames string
 }
 
 // RetentionReporter can be implemented by storage backends that expose details
