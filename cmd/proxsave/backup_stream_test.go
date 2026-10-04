@@ -63,14 +63,11 @@ func TestBuildBackupOutcomePromptSuccess(t *testing.T) {
 	if !strings.Contains(out, "Files: 42 collected - 0 missing") || !strings.Contains(out, "(3 failed)") {
 		t.Fatalf("missing files line:\n%s", out)
 	}
-	// PARTE ALTA dropped Size / Duration / Archive / Local: Size/Duration/Archive
-	// now live only in the stats block below, Local is removed entirely. Secondary
-	// stays; a disabled Cloud is skipped.
-	if !strings.Contains(out, "Secondary: warning") {
-		t.Fatalf("missing secondary status line:\n%s", out)
-	}
-	if strings.Contains(out, "Local:") {
-		t.Fatalf("the Local status line must be removed:\n%s", out)
+	// PARTE ALTA dropped Size / Duration / Archive: they live only in the stats block
+	// below. The storage lines open with Local, always, then Secondary; a disabled
+	// Cloud is skipped.
+	if !strings.Contains(out, "Local: ok\nSecondary: warning") {
+		t.Fatalf("missing Local and Secondary status lines, in this order:\n%s", out)
 	}
 	if strings.Contains(out, "Cloud:") {
 		t.Fatalf("disabled cloud must be skipped:\n%s", out)
@@ -248,8 +245,8 @@ func TestBuildBackupOutcomePromptWarning(t *testing.T) {
 	if strings.Contains(out, "Backup failed") {
 		t.Fatalf("exit 1 must NOT read as failed (that is the fix #4 flip):\n%s", out)
 	}
-	if strings.Contains(out, "Local:") {
-		t.Fatalf("the Local status line must be removed:\n%s", out)
+	if !strings.Contains(out, "Local: error") {
+		t.Fatalf("missing the Local status line:\n%s", out)
 	}
 }
 
@@ -318,8 +315,8 @@ func TestBuildBackupOutcomePromptFailure(t *testing.T) {
 	if strings.Contains(out, "Backup completed") {
 		t.Fatalf("a failed run must NOT read as completed:\n%s", out)
 	}
-	if strings.Contains(out, "Local:") {
-		t.Fatalf("the Local status line must be removed:\n%s", out)
+	if !strings.Contains(out, "Local: error") {
+		t.Fatalf("missing the Local status line:\n%s", out)
 	}
 }
 

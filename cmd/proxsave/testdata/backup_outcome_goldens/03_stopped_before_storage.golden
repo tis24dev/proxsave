@@ -8,6 +8,7 @@
 {fg Light #C8C8C8}Compression used: xz (level 9, mode ultra){/}
 {fg Light #C8C8C8}Duration: 2.2m{/}
 {fg Light #C8C8C8}Archive path: {/}
+{fg Light #C8C8C8}Local: {/}{bold fg Red #EF4444}error{/}
 {fg Light #C8C8C8}Secondary: {/}{fg Gray #808080}skipped{/}
 {fg Light #C8C8C8}Cloud: {/}{fg Gray #808080}skipped{/}
 {fg Light #C8C8C8}Server ID Telegram: 7302915846102738{/}

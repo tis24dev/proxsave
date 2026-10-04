@@ -68,6 +68,10 @@
         {
           "text": "*Cloud Storage:*\n✅ 15/15",
           "type": "mrkdwn"
+        },
+        {
+          "text": "*PBS Storage:*\n✅ 12/15",
+          "type": "mrkdwn"
         }
       ],
       "type": "section"

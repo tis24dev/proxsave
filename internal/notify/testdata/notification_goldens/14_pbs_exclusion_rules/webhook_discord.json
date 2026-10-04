@@ -50,6 +50,11 @@
           "value": "✅ 15/15"
         },
         {
+          "inline": true,
+          "name": "PBS Storage",
+          "value": "✅ 12/15"
+        },
+        {
           "inline": false,
           "name": "Issues",
           "value": "Errors: 0, Warnings: 1"

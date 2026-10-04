@@ -53,6 +53,16 @@
       "status_summary": "15/15",
       "used": "54.00 GB"
     },
+    "pbs": {
+      "count": 12,
+      "emoji": "⚠️",
+      "free": "1.18 TB",
+      "percent": "32.3%",
+      "percent_num": 32.32662192393736,
+      "status": "warning",
+      "status_summary": "12/15",
+      "used": "578.00 GB"
+    },
     "secondary": {
       "count": 15,
       "emoji": "✅",

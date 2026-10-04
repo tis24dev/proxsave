@@ -8,6 +8,11 @@
         "emoji": "✅",
         "status": "15/15"
       },
+      "pbs": {
+        "count": 12,
+        "emoji": "✅",
+        "status": "12/15"
+      },
       "primary": {
         "count": 15,
         "emoji": "✅",
@@ -23,6 +28,7 @@
     "emojis": {
       "cloud": "✅",
       "email": "❓",
+      "pbs": "✅",
       "primary": "✅",
       "secondary": "✅"
     },
@@ -53,8 +59,10 @@
       "cloud": "gdrive:proxsave/backup",
       "cloud_display": "gdrive:proxsave/backup",
       "has_cloud": true,
+      "has_pbs": true,
       "has_secondary": true,
       "local": "/opt/proxsave/backup",
+      "pbs": "pbs-offsite",
       "secondary": "/mnt/nas-backup"
     },
     "proxmox_type": "pve",
@@ -71,6 +79,13 @@
         "percent_num": 11.587982832618025,
         "space": "412.00 GB",
         "used": "54.00 GB"
+      },
+      "pbs": {
+        "free": "1.18 TB",
+        "percent": "32.3%",
+        "percent_num": 32.32662192393736,
+        "space": "1.18 TB",
+        "used": "578.00 GB"
       },
       "secondary": {
         "free": "1.80 TB",

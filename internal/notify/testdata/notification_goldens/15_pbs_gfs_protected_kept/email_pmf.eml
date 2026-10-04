@@ -16,6 +16,7 @@ BACKUP STATUS:<CR>
   Local:     15/- backups (412.00 GB free)<CR>
   Secondary: 15/- backups (1.80 TB free)<CR>
   Cloud:     15/- backups<CR>
+  PBS:       2/- backups (1.18 TB free)<CR>
 <CR>
 BACKUP DETAILS:<CR>
   Backup File: /opt/proxsave/backup/pve-golden-backup-20261004-020000.tar.x=<CR>
@@ -231,6 +232,21 @@ Content-Transfer-Encoding: quoted-printable
                         <span class=3D"emoji">=E2=9C=85</span> 15/- backups<CR>
                     </div><CR>
                 </div><CR>
+               =20<CR>
+                <div class=3D"backup-location"><CR>
+                    <h3>PBS Storage</h3><CR>
+                    <div class=3D"count-block"><CR>
+                        <span class=3D"emoji">=E2=9C=85</span> 2/- backups<CR>
+                    </div><CR>
+                    <div class=3D"storage-info"><CR>
+                        <span>578.00 GB</span><CR>
+                        <div class=3D"space-bar"><CR>
+                            <div class=3D"space-used normal" style=3D"width=<CR>
+: 32.3%;"></div><CR>
+                        </div><CR>
+                        <span>1.18 TB free (32.3% used)</span><CR>
+                    </div><CR>
+                </div><CR>
             </div><CR>
            =20<CR>
             <div class=3D"section"><CR>
@@ -292,6 +308,10 @@ Content-Transfer-Encoding: quoted-printable
                     <tr><CR>
                         <td>Cloud Storage</td><CR>
                         <td>gdrive:proxsave/backup</td><CR>
+                    </tr><CR>
+                    <tr><CR>
+                        <td>PBS Storage</td><CR>
+                        <td>pbs-offsite</td><CR>
                     </tr><CR>
                 </table><CR>
             </div><CR>

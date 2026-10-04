@@ -5,6 +5,7 @@ ProxSave - v0.41.0
 ✅ Local      (15/15 backups)
 ✅ Secondary  (15/15 backups)
 ✅ Cloud      (15/15 backups)
+❌ PBS        (?/15 backups)
 ✅ Email
 
 📁 Included files: 1832

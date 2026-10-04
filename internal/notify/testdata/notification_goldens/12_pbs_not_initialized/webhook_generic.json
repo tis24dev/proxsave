@@ -59,6 +59,16 @@
       "status_summary": "15/15",
       "used": "54.00 GB"
     },
+    "pbs": {
+      "count": null,
+      "emoji": "❌",
+      "free": null,
+      "percent": null,
+      "percent_num": null,
+      "status": "error",
+      "status_summary": "?/15",
+      "used": null
+    },
     "secondary": {
       "count": 15,
       "emoji": "✅",

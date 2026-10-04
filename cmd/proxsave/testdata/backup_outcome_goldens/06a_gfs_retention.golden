@@ -9,6 +9,7 @@
 {fg Light #C8C8C8}Duration: 2.2m{/}
 {fg Light #C8C8C8}Bundle path: /opt/proxsave/backup/pve-golden-backup-20261004-020000.tar.xz.bundle.tar{/}
 {fg Light #C8C8C8}Bundle contents: archive + checksum + metadata{/}
+{fg Light #C8C8C8}Local: {/}{fg Green #22C55E}ok{/}
 {fg Light #C8C8C8}Secondary: {/}{fg Green #22C55E}ok{/}
 {fg Light #C8C8C8}Cloud: {/}{fg Green #22C55E}ok{/}
 {fg Light #C8C8C8}Server ID Telegram: 7302915846102738{/}

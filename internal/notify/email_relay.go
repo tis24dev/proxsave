@@ -381,6 +381,7 @@ func buildReportData(data *NotificationData) map[string]interface{} {
 			"primary":   GetStorageEmoji(data.LocalStatus),
 			"secondary": GetStorageEmoji(data.SecondaryStatus),
 			"cloud":     GetStorageEmoji(data.CloudStatus),
+			"pbs":       GetStorageEmoji(data.PBSStatus),
 			"email":     GetStorageEmoji(data.EmailStatus),
 		},
 
@@ -400,6 +401,11 @@ func buildReportData(data *NotificationData) map[string]interface{} {
 				"status": data.CloudStatusSummary,
 				"emoji":  GetStorageEmoji(data.CloudStatus),
 				"count":  countValue(data.CloudCount),
+			},
+			"pbs": map[string]interface{}{
+				"status": data.PBSStatusSummary,
+				"emoji":  GetStorageEmoji(data.PBSStatus),
+				"count":  countValue(data.PBSCount),
 			},
 		},
 
@@ -437,8 +443,10 @@ func buildReportData(data *NotificationData) map[string]interface{} {
 			"secondary":     data.SecondaryPath,
 			"cloud":         data.CloudPath,
 			"cloud_display": formatCloudPathDisplay(data.CloudPath),
+			"pbs":           data.PBSStorageID,
 			"has_secondary": data.SecondaryEnabled,
 			"has_cloud":     data.CloudEnabled,
+			"has_pbs":       data.PBSEnabled,
 		},
 
 		// Exit code at top level
@@ -446,7 +454,7 @@ func buildReportData(data *NotificationData) map[string]interface{} {
 	}
 }
 
-// buildStorageData builds the storage section matching Bash format
+// buildStorageData builds the storage section: local, and secondary and pbs when on
 func buildStorageData(data *NotificationData) map[string]interface{} {
 	storage := map[string]interface{}{
 		"local": map[string]interface{}{
@@ -466,6 +474,17 @@ func buildStorageData(data *NotificationData) map[string]interface{} {
 			"free":        spaceValue(data.SecondaryFree, data.SecondaryFree),
 			"percent":     spaceValue(data.SecondaryFree, data.SecondaryPercent),
 			"percent_num": spaceValue(data.SecondaryFree, data.SecondaryUsagePercent),
+		}
+	}
+
+	// PBS, when on, with the same keys
+	if data.PBSEnabled {
+		storage["pbs"] = map[string]interface{}{
+			"space":       spaceValue(data.PBSFree, data.PBSFree), // Total space shown as free space
+			"used":        spaceValue(data.PBSFree, data.PBSUsed),
+			"free":        spaceValue(data.PBSFree, data.PBSFree),
+			"percent":     spaceValue(data.PBSFree, data.PBSPercent),
+			"percent_num": spaceValue(data.PBSFree, data.PBSUsagePercent),
 		}
 	}
 

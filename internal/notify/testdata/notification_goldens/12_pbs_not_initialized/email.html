@@ -148,7 +148,7 @@
             <p>pve-golden - 2026-10-04 02:00:00</p>
         </div>
         <div class="content">
-            <div class="backup-status" style="border-left-color: #4CAF50;">
+            <div class="backup-status" style="border-left-color: #F44336;">
                 <div class="backup-location">
                     <h3>Local Storage</h3>
                     <div class="count-block">
@@ -181,6 +181,13 @@
                     <h3>Cloud Storage</h3>
                     <div class="count-block">
                         <span class="emoji">✅</span> 15/15 backups
+                    </div>
+                </div>
+                
+                <div class="backup-location">
+                    <h3>PBS Storage</h3>
+                    <div class="count-block">
+                        <span class="emoji">❌</span> ?/15 backups
                     </div>
                 </div>
             </div>
@@ -243,6 +250,10 @@
                     <tr>
                         <td>Cloud Storage</td>
                         <td>gdrive:proxsave/backup</td>
+                    </tr>
+                    <tr>
+                        <td>PBS Storage</td>
+                        <td>pbs-offsite</td>
                     </tr>
                 </table>
             </div>

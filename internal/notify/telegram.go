@@ -547,6 +547,13 @@ func (t *TelegramNotifier) buildMessage(data *NotificationData) string {
 		msg.WriteString("➖ Cloud      (disabled)\n")
 	}
 
+	if data.PBSEnabled {
+		pbsEmoji := GetStorageEmoji(data.PBSStatus)
+		fmt.Fprintf(&msg, "%s PBS        (%s backups)\n", pbsEmoji, data.PBSStatusSummary)
+	} else {
+		msg.WriteString("➖ PBS        (disabled)\n")
+	}
+
 	// Email status
 	emailEmoji := GetStorageEmoji(data.EmailStatus)
 	fmt.Fprintf(&msg, "%s Email\n\n", emailEmoji)
@@ -563,6 +570,9 @@ func (t *TelegramNotifier) buildMessage(data *NotificationData) string {
 	fmt.Fprintf(&msg, "🔹 Local: %s\n", data.LocalFree)
 	if data.SecondaryEnabled && data.SecondaryFree != "" {
 		fmt.Fprintf(&msg, "🔹 Secondary: %s\n", data.SecondaryFree)
+	}
+	if data.PBSEnabled && data.PBSFree != "" {
+		fmt.Fprintf(&msg, "🔹 PBS: %s\n", data.PBSFree)
 	}
 	msg.WriteString("\n")
 

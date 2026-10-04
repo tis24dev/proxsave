@@ -120,17 +120,7 @@ func (n *NotificationAdapter) convertBackupStatsToNotificationData(stats *Backup
 	}
 
 	// Determine storage statuses
-	localStatus := strings.TrimSpace(stats.LocalStatus)
-	if localStatus == "" {
-		switch notify.StatusFromExitCode(stats.ExitCode) {
-		case notify.StatusSuccess:
-			localStatus = "ok"
-		case notify.StatusWarning:
-			localStatus = "warning"
-		default:
-			localStatus = "error"
-		}
-	}
+	localStatus := EffectiveLocalStatus(stats)
 
 	secondaryStatus := strings.TrimSpace(stats.SecondaryStatus)
 	if secondaryStatus == "" {
@@ -314,6 +304,26 @@ func (n *NotificationAdapter) convertBackupStatsToNotificationData(stats *Backup
 		NewVersionAvailable: stats.NewVersionAvailable,
 		CurrentVersion:      stats.CurrentVersion,
 		LatestVersion:       stats.LatestVersion,
+	}
+}
+
+// EffectiveLocalStatus is the Local status the notifications and the dashboard outcome
+// show: the one step [6] wrote or, for a run that never reached it, the one the exit
+// code gives (0 ok, 1 warning, anything else error).
+func EffectiveLocalStatus(stats *BackupStats) string {
+	if stats == nil {
+		return ""
+	}
+	if status := strings.TrimSpace(stats.LocalStatus); status != "" {
+		return status
+	}
+	switch notify.StatusFromExitCode(stats.ExitCode) {
+	case notify.StatusSuccess:
+		return "ok"
+	case notify.StatusWarning:
+		return "warning"
+	default:
+		return "error"
 	}
 }
 

@@ -8,6 +8,11 @@
         "emoji": "✅",
         "status": "15/15"
       },
+      "pbs": {
+        "count": 0,
+        "emoji": "➖",
+        "status": "0/15"
+      },
       "primary": {
         "count": 15,
         "emoji": "✅",
@@ -23,6 +28,7 @@
     "emojis": {
       "cloud": "✅",
       "email": "❓",
+      "pbs": "➖",
       "primary": "✅",
       "secondary": "✅"
     },
@@ -60,8 +66,10 @@
       "cloud": "gdrive:proxsave/backup",
       "cloud_display": "gdrive:proxsave/backup",
       "has_cloud": true,
+      "has_pbs": false,
       "has_secondary": true,
       "local": "/opt/proxsave/backup",
+      "pbs": "",
       "secondary": "/mnt/nas-backup"
     },
     "proxmox_type": "pve",

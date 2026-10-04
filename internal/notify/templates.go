@@ -33,6 +33,9 @@ func BuildEmailPlainText(data *NotificationData) string {
 	if data.CloudEnabled {
 		fmt.Fprintf(&body, "  Cloud:     %s backups\n", data.CloudStatusSummary)
 	}
+	if data.PBSEnabled {
+		fmt.Fprintf(&body, "  PBS:       %s backups (%s free)\n", data.PBSStatusSummary, freeText(data.PBSFree))
+	}
 	body.WriteString("\n")
 
 	body.WriteString("BACKUP DETAILS:\n")
@@ -92,13 +95,18 @@ func BuildEmailHTML(data *NotificationData) string {
 	secondaryPercent := escapeHTML(data.SecondaryPercent)
 	cloudEmoji := escapeHTML(GetStorageEmoji(data.CloudStatus))
 	cloudStatusSummary := escapeHTML(data.CloudStatusSummary)
+	pbsEmoji := escapeHTML(GetStorageEmoji(data.PBSStatus))
+	pbsStatusSummary := escapeHTML(data.PBSStatusSummary)
+	pbsUsed := escapeHTML(data.PBSUsed)
+	pbsFree := escapeHTML(data.PBSFree)
+	pbsPercent := escapeHTML(data.PBSPercent)
 	scriptVersion := escapeHTML(data.ScriptVersion)
 
 	// Determine backup paths sidebar color
 	backupPathsColor := "#4CAF50" // Green by default
-	if data.LocalStatus == "error" || data.SecondaryStatus == "error" || data.CloudStatus == "error" {
+	if data.LocalStatus == "error" || data.SecondaryStatus == "error" || data.CloudStatus == "error" || data.PBSStatus == "error" {
 		backupPathsColor = "#F44336" // Red
-	} else if data.LocalStatus == "warning" || data.SecondaryStatus == "warning" || data.CloudStatus == "warning" {
+	} else if data.LocalStatus == "warning" || data.SecondaryStatus == "warning" || data.CloudStatus == "warning" || data.PBSStatus == "warning" {
 		backupPathsColor = "#FF9800" // Orange
 	}
 
@@ -194,6 +202,30 @@ func BuildEmailHTML(data *NotificationData) string {
 	html.WriteString("                    </div>\n")
 	html.WriteString("                </div>\n")
 
+	// PBS Storage
+	html.WriteString("                \n")
+	html.WriteString("                <div class=\"backup-location\">\n")
+	html.WriteString("                    <h3>PBS Storage</h3>\n")
+	html.WriteString("                    <div class=\"count-block\">\n")
+	fmt.Fprintf(&html, "                        <span class=\"emoji\">%s</span> %s backups\n", pbsEmoji, pbsStatusSummary)
+	html.WriteString("                    </div>\n")
+	if data.PBSEnabled && data.PBSFree != "" && data.PBSFree != "N/A" {
+		barColor := "normal"
+		if data.PBSUsagePercent > 85 {
+			barColor = "critical"
+		} else if data.PBSUsagePercent > 70 {
+			barColor = "warning"
+		}
+		html.WriteString("                    <div class=\"storage-info\">\n")
+		fmt.Fprintf(&html, "                        <span>%s</span>\n", pbsUsed)
+		html.WriteString("                        <div class=\"space-bar\">\n")
+		fmt.Fprintf(&html, "                            <div class=\"space-used %s\" style=\"width: %.1f%%;\"></div>\n", barColor, data.PBSUsagePercent)
+		html.WriteString("                        </div>\n")
+		fmt.Fprintf(&html, "                        <span>%s free (%s used)</span>\n", pbsFree, pbsPercent)
+		html.WriteString("                    </div>\n")
+	}
+	html.WriteString("                </div>\n")
+
 	html.WriteString("            </div>\n")
 
 	// Backup Details Section
@@ -218,6 +250,9 @@ func BuildEmailHTML(data *NotificationData) string {
 	}
 	if data.CloudEnabled && data.CloudPath != "" {
 		html.WriteString(buildInfoTableRow("Cloud Storage", data.CloudPath))
+	}
+	if data.PBSEnabled && data.PBSStorageID != "" {
+		html.WriteString(buildInfoTableRow("PBS Storage", data.PBSStorageID))
 	}
 	html.WriteString("                </table>\n")
 	html.WriteString("            </div>\n")
