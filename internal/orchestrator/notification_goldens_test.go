@@ -304,8 +304,7 @@ func notifyGoldenCases() []notifyGoldenCase {
 			name:      "12_pbs_not_initialized",
 			configure: notifyGoldenPBSConfigure,
 			pbsServer: &notifyGoldenPBS{answers: map[string]notifyGoldenPBSAnswer{
-				"version": {rc: 255, stderr: "Error: client error (Connect)\n" +
-					"Caused by: error connecting to https://192.0.2.10:8007/ - tcp connect error: Connection refused (os error 111)\n"},
+				"version": {rc: 255, stderr: notifyGoldenPBSConnectionRefused},
 			}},
 			wantExit: types.ExitGenericError.Int(),
 		},
@@ -409,6 +408,53 @@ func notifyGoldenCases() []notifyGoldenCase {
 			},
 			emailMethod: "email-sendmail",
 			wantExit:    types.ExitGenericError.Int(),
+		},
+		{
+			// PBS initialized at startup (11 snapshots of this host), the server gone at
+			// step [7]: the upload is refused and so is the statistics listing after it.
+			name:      "20_pbs_upload_failed_server_gone",
+			configure: notifyGoldenPBSConfigure,
+			pbsServer: &notifyGoldenPBS{
+				snapshots: notifyGoldenPBSOlderSnapshots(),
+				answers: map[string]notifyGoldenPBSAnswer{
+					"backup":          {rc: 255, stderr: notifyGoldenPBSConnectionRefused},
+					"snapshot-list.2": {rc: 255, stderr: notifyGoldenPBSConnectionRefused},
+				},
+			},
+			wantExit: types.ExitGenericError.Int(),
+		},
+		{
+			// The upload is refused (group owned by another user), the server still
+			// answers the statistics listing at step [7].
+			name:      "21_pbs_upload_refused",
+			configure: notifyGoldenPBSConfigure,
+			pbsServer: &notifyGoldenPBS{
+				snapshots: notifyGoldenPBSOlderSnapshots(),
+				answers: map[string]notifyGoldenPBSAnswer{
+					"backup": {rc: 255, stderr: "Error: backup owner check failed (backup@pbs!proxsave != backup@pbs!other)\n"},
+				},
+			},
+			wantExit: types.ExitGenericError.Int(),
+		},
+		{
+			// The backup is saved on a datastore 89.5% used.
+			name:      "22_pbs_above_85_percent",
+			configure: notifyGoldenPBSConfigure,
+			pbsServer: &notifyGoldenPBS{avail: 188 << 30, used: 1600 << 30, total: 1788 << 30},
+			wantExit:  types.ExitSuccess.Int(),
+		},
+		{
+			// The datastore answers at startup (its space is read), the namespace of the
+			// storage does not exist: not initialized.
+			name:      "23_pbs_not_initialized_namespace_missing",
+			configure: notifyGoldenPBSConfigure,
+			pbsServer: &notifyGoldenPBS{
+				namespace: notifyGoldenHost,
+				answers: map[string]notifyGoldenPBSAnswer{
+					"snapshot-list": {rc: 255, stderr: "Error: ENOENT: No such file or directory\n"},
+				},
+			},
+			wantExit: types.ExitGenericError.Int(),
 		},
 	}
 }

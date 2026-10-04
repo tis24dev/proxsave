@@ -28,15 +28,11 @@ const (
 	notifyGoldenPBSRepository = "backup@pbs!proxsave@192.0.2.10:offsite"
 	notifyGoldenPBSFakeClient = "../block/testdata/fake-proxmox-backup-client.sh"
 	notifyGoldenPBSClientName = "proxmox-backup-client"
-	// notifyGoldenPBSStorageCfg is the PVE storage.cfg section of the PBS storage, in the
-	// form PVE writes it (internal/block/testdata/pve/storage.cfg).
-	notifyGoldenPBSStorageCfg = "pbs: " + notifyGoldenPBSStorage + "\n" +
-		"\tdatastore offsite\n" +
-		"\tserver 192.0.2.10\n" +
-		"\tcontent backup\n" +
-		"\tfingerprint 3e:41:9a:07:c2:5d:88:16:f0:2b:6c:d4:91:ae:57:03:bb:68:1f:e9:24:7a:c5:30:0d:96:4f:e2:b8:15:73:ca\n" +
-		"\tusername backup@pbs!proxsave\n"
-	notifyGoldenPBSPassword = "6f0c2d9e-41b7-4a8e-9c35-d27e80b1f4a6"
+	notifyGoldenPBSPassword   = "6f0c2d9e-41b7-4a8e-9c35-d27e80b1f4a6"
+	// notifyGoldenPBSConnectionRefused is the client's answer when the server port is
+	// closed (measured on pve-test, internal/block/client_test.go), for this server.
+	notifyGoldenPBSConnectionRefused = "Error: client error (Connect)\n" +
+		"Caused by: error connecting to https://192.0.2.10:8007/ - tcp connect error: Connection refused (os error 111)\n"
 )
 
 // notifyGoldenPBSRunSnapshotTime is the backup-time of this run's snapshot, after the
@@ -60,12 +56,51 @@ type notifyGoldenPBSSnapshot struct {
 // 4.2.5, the datastore space, this host's snapshots, an upload that names the run
 // snapshot, a prune that keeps everything), with the answers the case overrides.
 type notifyGoldenPBS struct {
-	// answers overrides the healthy answer per subcommand key ("version", "prune", ...).
+	// answers overrides the healthy answer per subcommand key ("version", "prune", ...);
+	// "<key>.<n>" answers only the n-th call of that key (fake client <key>.<n>.rc).
 	answers map[string]notifyGoldenPBSAnswer
 	// snapshots is this host's group; nil = the run snapshot and 11 older daily ones.
 	snapshots []notifyGoldenPBSSnapshot
 	// treeFiles are files of the collected tree besides etc/hostname.
 	treeFiles []string
+	// namespace is the storage's namespace; empty = the datastore root.
+	namespace string
+	// status is the datastore space the server reports (bytes); zero = 1210 GiB free,
+	// 578 GiB used of 1788 GiB.
+	avail, used, total uint64
+}
+
+// storageCfg is the PVE storage.cfg section of the PBS storage, in the form PVE writes
+// it (internal/block/testdata/pve/storage.cfg).
+func (p *notifyGoldenPBS) storageCfg() string {
+	cfg := "pbs: " + notifyGoldenPBSStorage + "\n" +
+		"\tdatastore offsite\n" +
+		"\tserver 192.0.2.10\n" +
+		"\tcontent backup\n" +
+		"\tfingerprint 3e:41:9a:07:c2:5d:88:16:f0:2b:6c:d4:91:ae:57:03:bb:68:1f:e9:24:7a:c5:30:0d:96:4f:e2:b8:15:73:ca\n"
+	if p.namespace != "" {
+		cfg += "\tnamespace " + p.namespace + "\n"
+	}
+	return cfg + "\tusername backup@pbs!proxsave\n"
+}
+
+// statusJSON is the answer of "status --output-format json".
+func (p *notifyGoldenPBS) statusJSON() string {
+	avail, used, total := p.avail, p.used, p.total
+	if total == 0 {
+		avail, used, total = uint64(1210)<<30, uint64(578)<<30, uint64(1788)<<30
+	}
+	return fmt.Sprintf(`{"avail":%d,"backend-type":"filesystem","total":%d,"used":%d}`+"\n", avail, total, used)
+}
+
+// notifyGoldenPBSOlderSnapshots are 11 daily snapshots of this host before the run, the
+// group as it stands when the run's upload never lands.
+func notifyGoldenPBSOlderSnapshots() []notifyGoldenPBSSnapshot {
+	var snapshots []notifyGoldenPBSSnapshot
+	for day := 1; day <= 11; day++ {
+		snapshots = append(snapshots, notifyGoldenPBSSnapshot{at: notifyGoldenPBSRunSnapshotTime.AddDate(0, 0, -day)})
+	}
+	return snapshots
 }
 
 func (p *notifyGoldenPBS) groupSnapshots() []notifyGoldenPBSSnapshot {
@@ -120,7 +155,7 @@ func (p *notifyGoldenPBS) install(t *testing.T) string {
 	write(bin, notifyGoldenPBSClientName, string(script), 0o755)
 	answers := map[string]notifyGoldenPBSAnswer{
 		"version":       {stdout: `{"client":{"release":"5","version":"4.2"},"server":{"release":"5","version":"4.2"}}` + "\n"},
-		"status":        {stdout: fmt.Sprintf(`{"avail":%d,"backend-type":"filesystem","total":%d,"used":%d}`+"\n", uint64(1210)<<30, uint64(1788)<<30, uint64(578)<<30)},
+		"status":        {stdout: p.statusJSON()},
 		"snapshot-list": {stdout: p.snapshotListJSON()},
 		"backup": {stderr: "Starting backup: [offsite]:host/proxsave-" + notifyGoldenHost + "/" +
 			notifyGoldenPBSRunSnapshotTime.UTC().Format("2006-01-02T15:04:05Z") + "    \n"},
@@ -141,7 +176,7 @@ func (p *notifyGoldenPBS) install(t *testing.T) string {
 	if err := os.MkdirAll(privDir, 0o700); err != nil {
 		t.Fatalf("mkdir priv/storage: %v", err)
 	}
-	write(pveDir, "storage.cfg", notifyGoldenPBSStorageCfg, 0o640)
+	write(pveDir, "storage.cfg", p.storageCfg(), 0o640)
 	write(privDir, notifyGoldenPBSStorage+".pw", notifyGoldenPBSPassword+"\n", 0o600)
 	return pveDir
 }

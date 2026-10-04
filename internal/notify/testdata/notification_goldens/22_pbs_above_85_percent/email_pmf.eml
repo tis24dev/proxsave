@@ -1,0 +1,343 @@
+To: admin@example.com
+From: no-reply@proxmox.tis24.it
+Subject: =?UTF-8?B?4pyFIFBWRSBCYWNrdXAgb24gcHZlLWdvbGRlbiAtIDIwMjYtMTAtMDQgMDI6MDA=?=
+MIME-Version: 1.0
+Content-Type: multipart/alternative; boundary="boundary42"
+
+--boundary42
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: quoted-printable
+
+=E2=9C=85 PVE BACKUP REPORT - SUCCESS<CR>
+Hostname: pve-golden<CR>
+Date: 2026-10-04 02:00:00<CR>
+<CR>
+BACKUP STATUS:<CR>
+  Local:     15/15 backups (412.00 GB free)<CR>
+  Secondary: 15/15 backups (1.80 TB free)<CR>
+  Cloud:     15/15 backups<CR>
+  PBS:       12/15 backups (188.00 GB free)<CR>
+<CR>
+BACKUP DETAILS:<CR>
+  Backup File: /opt/proxsave/backup/pve-golden-backup-20261004-020000.tar.x=<CR>
+z.bundle.tar<CR>
+  Size: 21.0 MiB<CR>
+  Included Files: 1832<CR>
+  Missing Files: 0<CR>
+  Duration: 2m 14s<CR>
+  Compression: xz (level 9, ratio 88.20%)<CR>
+<CR>
+ISSUES:<CR>
+  Errors: 0<CR>
+  Warnings: 0<CR>
+  Total Issues: 0<CR>
+  Log: /opt/proxsave/log/backup-pve-golden-20261004-020000.log<CR>
+<CR>
+Exit Code: 0<CR>
+Script Version: 0.41.0<CR>
+
+
+--boundary42
+Content-Type: text/html; charset=UTF-8
+Content-Transfer-Encoding: quoted-printable
+
+<!DOCTYPE html><CR>
+<html><CR>
+<head><CR>
+    <meta charset=3D"UTF-8"><CR>
+    <title>PVE Backup Report</title><CR>
+    <style><CR>
+        body {<CR>
+            font-family: 'Segoe UI', Arial, sans-serif;<CR>
+            margin: 0;<CR>
+            padding: 0;<CR>
+            color: #333;<CR>
+            background-color: #f5f5f5;<CR>
+        }<CR>
+        .container {<CR>
+            max-width: 800px;<CR>
+            margin: 0 auto;<CR>
+            background-color: #fff;<CR>
+            border-radius: 8px;<CR>
+            overflow: hidden;<CR>
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);<CR>
+        }<CR>
+        .header {<CR>
+            color: white;<CR>
+            padding: 20px 30px;<CR>
+        }<CR>
+        .header h1 {<CR>
+            margin: 0;<CR>
+            font-weight: 500;<CR>
+            font-size: 24px;<CR>
+        }<CR>
+        .header p {<CR>
+            margin: 10px 0 0 0;<CR>
+            opacity: 0.9;<CR>
+            font-size: 16px;<CR>
+        }<CR>
+        .content {<CR>
+            padding: 30px;<CR>
+        }<CR>
+        .section {<CR>
+            margin-bottom: 30px;<CR>
+        }<CR>
+        .section:last-child {<CR>
+            margin-bottom: 0;<CR>
+        }<CR>
+        .section h2 {<CR>
+            font-size: 18px;<CR>
+            font-weight: 500;<CR>
+            margin-top: 0;<CR>
+            margin-bottom: 15px;<CR>
+            padding-bottom: 10px;<CR>
+            border-bottom: 1px solid #eee;<CR>
+            color: #444;<CR>
+        }<CR>
+        .info-table {<CR>
+            width: 100%;<CR>
+            border-collapse: collapse;<CR>
+            margin-bottom: 10px;<CR>
+        }<CR>
+        .info-table td {<CR>
+            padding: 10px;<CR>
+            border-bottom: 1px solid #eee;<CR>
+            vertical-align: top;<CR>
+        }<CR>
+        .info-table tr:last-child td {<CR>
+            border-bottom: none;<CR>
+        }<CR>
+        .info-table td:first-child {<CR>
+            font-weight: 500;<CR>
+            width: 35%;<CR>
+            color: #555;<CR>
+        }<CR>
+        .footer {<CR>
+            background-color: #f8f8f8;<CR>
+            padding: 15px 30px;<CR>
+            text-align: center;<CR>
+            font-size: 13px;<CR>
+            color: #777;<CR>
+            border-top: 1px solid #eee;<CR>
+        }<CR>
+        .backup-status {<CR>
+            background-color: #f9f9f9;<CR>
+            border-radius: 8px;<CR>
+            padding: 20px;<CR>
+            margin-bottom: 30px;<CR>
+            border-left: 4px solid;<CR>
+            box-shadow: 0 2px 5px rgba(0,0,0,0.05);<CR>
+        }<CR>
+        .backup-location {<CR>
+            margin-bottom: 15px;<CR>
+            padding-bottom: 15px;<CR>
+            border-bottom: 1px solid #eee;<CR>
+        }<CR>
+        .backup-location:last-child {<CR>
+            margin-bottom: 0;<CR>
+            padding-bottom: 0;<CR>
+            border-bottom: none;<CR>
+        }<CR>
+        .backup-location h3 {<CR>
+            margin-top: 0;<CR>
+            margin-bottom: 10px;<CR>
+            font-size: 16px;<CR>
+            font-weight: 500;<CR>
+            color: #444;<CR>
+        }<CR>
+        .storage-info {<CR>
+            display: flex;<CR>
+            align-items: center;<CR>
+            margin-top: 8px;<CR>
+            font-size: 14px;<CR>
+            color: #666;<CR>
+        }<CR>
+        .storage-info .space-bar {<CR>
+            flex-grow: 1;<CR>
+            height: 8px;<CR>
+            margin: 0 10px;<CR>
+            background-color: #eee;<CR>
+            border-radius: 4px;<CR>
+            overflow: hidden;<CR>
+            position: relative;<CR>
+        }<CR>
+        .storage-info .space-used {<CR>
+            position: absolute;<CR>
+            height: 100%;<CR>
+            background-color: #4CAF50;<CR>
+            border-radius: 4px;<CR>
+        }<CR>
+        .storage-info .space-used.warning {<CR>
+            background-color: #FF9800;<CR>
+        }<CR>
+        .storage-info .space-used.critical {<CR>
+            background-color: #F44336;<CR>
+        }<CR>
+        .count-block {<CR>
+            font-size: 16px;<CR>
+            font-weight: 500;<CR>
+            margin-bottom: 5px;<CR>
+        }<CR>
+        .count-block .emoji {<CR>
+            font-size: 18px;<CR>
+            margin-right: 5px;<CR>
+        }<CR>
+    </style><CR>
+</head><CR>
+<body><CR>
+    <div class=3D"container"><CR>
+        <div class=3D"header" style=3D"background-color: #4CAF50;"><CR>
+            <h1>PVE Backup Report - SUCCESS</h1><CR>
+            <p>pve-golden - 2026-10-04 02:00:00</p><CR>
+        </div><CR>
+        <div class=3D"content"><CR>
+            <div class=3D"backup-status" style=3D"border-left-color: #4CAF5=<CR>
+0;"><CR>
+                <div class=3D"backup-location"><CR>
+                    <h3>Local Storage</h3><CR>
+                    <div class=3D"count-block"><CR>
+                        <span class=3D"emoji">=E2=9C=85</span> 15/15 backup=<CR>
+s<CR>
+                    </div><CR>
+                    <div class=3D"storage-info"><CR>
+                        <span>54.00 GB</span><CR>
+                        <div class=3D"space-bar"><CR>
+                            <div class=3D"space-used normal" style=3D"width=<CR>
+: 11.6%;"></div><CR>
+                        </div><CR>
+                        <span>412.00 GB free (11.6% used)</span><CR>
+                    </div><CR>
+                </div><CR>
+               =20<CR>
+                <div class=3D"backup-location"><CR>
+                    <h3>Secondary Storage</h3><CR>
+                    <div class=3D"count-block"><CR>
+                        <span class=3D"emoji">=E2=9C=85</span> 15/15 backup=<CR>
+s<CR>
+                    </div><CR>
+                    <div class=3D"storage-info"><CR>
+                        <span>1.84 TB</span><CR>
+                        <div class=3D"space-bar"><CR>
+                            <div class=3D"space-used normal" style=3D"width=<CR>
+: 50.5%;"></div><CR>
+                        </div><CR>
+                        <span>1.80 TB free (50.5% used)</span><CR>
+                    </div><CR>
+                </div><CR>
+               =20<CR>
+                <div class=3D"backup-location"><CR>
+                    <h3>Cloud Storage</h3><CR>
+                    <div class=3D"count-block"><CR>
+                        <span class=3D"emoji">=E2=9C=85</span> 15/15 backup=<CR>
+s<CR>
+                    </div><CR>
+                </div><CR>
+               =20<CR>
+                <div class=3D"backup-location"><CR>
+                    <h3>PBS Storage</h3><CR>
+                    <div class=3D"count-block"><CR>
+                        <span class=3D"emoji">=E2=9C=85</span> 12/15 backup=<CR>
+s<CR>
+                    </div><CR>
+                    <div class=3D"storage-info"><CR>
+                        <span>1.56 TB</span><CR>
+                        <div class=3D"space-bar"><CR>
+                            <div class=3D"space-used critical" style=3D"wid=<CR>
+th: 89.5%;"></div><CR>
+                        </div><CR>
+                        <span>188.00 GB free (89.5% used)</span><CR>
+                    </div><CR>
+                </div><CR>
+            </div><CR>
+           =20<CR>
+            <div class=3D"section"><CR>
+                <h2>Backup Details</h2><CR>
+                <table class=3D"info-table"><CR>
+                    <tr><CR>
+                        <td>Backup File</td><CR>
+                        <td>/opt/proxsave/backup/pve-golden-backup-20261004=<CR>
+-020000.tar.xz.bundle.tar</td><CR>
+                    </tr><CR>
+                    <tr><CR>
+                        <td>File Size</td><CR>
+                        <td>21.0 MiB</td><CR>
+                    </tr><CR>
+                    <tr><CR>
+                        <td>Included Files</td><CR>
+                        <td>1832</td><CR>
+                    </tr><CR>
+                    <tr><CR>
+                        <td>Missing Files</td><CR>
+                        <td>0</td><CR>
+                    </tr><CR>
+                    <tr><CR>
+                        <td>Duration</td><CR>
+                        <td>2m 14s</td><CR>
+                    </tr><CR>
+                    <tr><CR>
+                        <td>Compression Ratio</td><CR>
+                        <td>88.20%</td><CR>
+                    </tr><CR>
+                    <tr><CR>
+                        <td>Compression Type</td><CR>
+                        <td>xz (level: 9)</td><CR>
+                    </tr><CR>
+                    <tr><CR>
+                        <td>Backup Mode</td><CR>
+                        <td>ultra</td><CR>
+                    </tr><CR>
+                    <tr><CR>
+                        <td>Server MAC Address</td><CR>
+                        <td>bc:24:11:5e:3a:01</td><CR>
+                    </tr><CR>
+                    <tr><CR>
+                        <td>Server ID</td><CR>
+                        <td>7302915846102738</td><CR>
+                    </tr><CR>
+                    <tr><CR>
+                        <td>Telegram Status</td><CR>
+                        <td>centralized</td><CR>
+                    </tr><CR>
+                    <tr><CR>
+                        <td>Local Path</td><CR>
+                        <td>/opt/proxsave/backup</td><CR>
+                    </tr><CR>
+                    <tr><CR>
+                        <td>Secondary Path</td><CR>
+                        <td>/mnt/nas-backup</td><CR>
+                    </tr><CR>
+                    <tr><CR>
+                        <td>Cloud Storage</td><CR>
+                        <td>gdrive:proxsave/backup</td><CR>
+                    </tr><CR>
+                    <tr><CR>
+                        <td>PBS Storage</td><CR>
+                        <td>pbs-offsite</td><CR>
+                    </tr><CR>
+                </table><CR>
+            </div><CR>
+           =20<CR>
+            <div class=3D"section"><CR>
+                <h2>Error and Warning Summary</h2><CR>
+                <div style=3D"padding:15px; background-color:#F5F5F5; borde=<CR>
+r-radius:6px; margin-bottom:15px; border-left:4px solid #4CAF50;"><CR>
+                    <p><strong>Total Issues:</strong> 0</p><CR>
+                    <p><strong>Errors:</strong> 0</p><CR>
+                    <p><strong>Warnings:</strong> 0</p><CR>
+                </div><CR>
+                <p style=3D"font-size:13px; color:#666; margin-top:10px;">F=<CR>
+ull log available at: /opt/proxsave/log/backup-pve-golden-20261004-020000.l=<CR>
+og</p><CR>
+            </div><CR>
+        </div><CR>
+        <div class=3D"footer"><CR>
+            <p>This is an automated message from the Proxmox Backup Script.=<CR>
+</p><CR>
+            <p>Generated on 2026-10-04 02:00:00 by backup script v0.41.0</p=<CR>
+><CR>
+        </div><CR>
+    </div><CR>
+</body><CR>
+</html>
+
+--boundary42--
