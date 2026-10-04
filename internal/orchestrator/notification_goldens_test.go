@@ -457,6 +457,41 @@ func notifyGoldenCases() []notifyGoldenCase {
 			},
 			wantExit: types.ExitGenericError.Int(),
 		},
+		{
+			// Shaped like the pve-test run of 2026-10-04 (22 warnings): its warning lines
+			// as they were logged, and the cloud copy not saved at step [6].
+			name:           "24_pve_test_warnings_cloud_not_saved",
+			update:         true,
+			failCloudStore: true,
+			startup: func(logger *logging.Logger, cfg *config.Config) {
+				logger.Warning("Cloud storage enabled but CLOUD_LOG_PATH is empty - cloud log copy and cleanup will be disabled for this run")
+				logger.Warning("New ProxSave version %s (current %s): run 'proxsave --upgrade' to install.", notifyGoldenLatestVersion, notifyGoldenVersion)
+				logger.Warning("%s Cloud log directory not configured (cloud storage enabled)", theme.SymbolError)
+				for _, line := range []string{
+					"Corosync configuration: not configured. If unused, set BACKUP_CLUSTER_CONFIG=false to disable.",
+					"Corosync authkey: not configured. If unused, set BACKUP_CLUSTER_CONFIG=false to disable.",
+					"Node configuration: not configured. If unused, set BACKUP_PBS_NODE_CONFIG=false to disable.",
+					"ACME plugins: not configured. If unused, set BACKUP_PBS_ACME_PLUGINS=false to disable.",
+					"External metric servers: not configured. If unused, set BACKUP_PBS_METRIC_SERVERS=false to disable.",
+					"Traffic control rules: not configured. If unused, set BACKUP_PBS_TRAFFIC_CONTROL=false to disable.",
+					"Notifications configuration: not configured. If unused, set BACKUP_PBS_NOTIFICATIONS=false to disable.",
+					"Notifications secrets: not configured. If unused, set BACKUP_PBS_NOTIFICATIONS_PRIV=false to disable.",
+					"Remote configuration: not configured. If unused, set BACKUP_REMOTE_CONFIGS=false to disable.",
+					"Sync jobs: not configured. If unused, set BACKUP_SYNC_JOBS=false to disable.",
+					"Verification jobs: not configured. If unused, set BACKUP_VERIFICATION_JOBS=false to disable.",
+					"Tape configuration: not configured. If unused, set BACKUP_TAPE_CONFIGS=false to disable.",
+					"Tape jobs: not configured. If unused, set BACKUP_TAPE_CONFIGS=false to disable.",
+					"Media pool configuration: not configured. If unused, set BACKUP_TAPE_CONFIGS=false to disable.",
+					"Tape encryption keys: not configured. If unused, set BACKUP_TAPE_CONFIGS=false to disable.",
+					"Network configuration: not configured. If unused, set BACKUP_PBS_NETWORK_CONFIG=false to disable.",
+					"Prune schedules: not configured. If unused, set BACKUP_PRUNE_SCHEDULES=false to disable.",
+				} {
+					logger.Warning("  %s", line)
+				}
+				logger.Warning("Skipping ZFS collection: not detected. Set BACKUP_ZFS_CONFIG=false to disable.")
+			},
+			wantExit: types.ExitGenericError.Int(),
+		},
 	}
 }
 
