@@ -1,0 +1,29 @@
+2026-10-04T14:23:44+02:00 pve postfix/pickup[438221]: 1D5074D35E: uid=0 from=<root>
+2026-10-04T14:23:44+02:00 pve postfix/cleanup[445657]: 1D5074D35E: message-id=<20261004122344.1D5074D35E@pve.example.lan>
+2026-10-04T14:23:44+02:00 pve postfix/qmgr[1524]: 1D5074D35E: from=<root@pve.example.lan>, size=15153, nrcpt=1 (queue active)
+2026-10-04T14:23:44+02:00 pve postfix/smtp[445673]: 1D5074D35E: to=<admin@example.com>, relay=mx.example.com[192.0.2.25]:25, delay=0.31, delays=0.01/0/0.14/0.16, dsn=5.0.0, status=bounced (host mx.example.com[192.0.2.25] said: 550-Verification failed for <root@pve.example.lan> 550-The mail server does not recognize root@pve.example.lan as a valid sender. 550 Sender verify failed (in reply to RCPT TO command))
+2026-10-04T14:23:44+02:00 pve postfix/cleanup[445676]: 724794D360: message-id=<20261004122344.724794D360@pve.example.lan>
+2026-10-04T14:23:44+02:00 pve postfix/bounce[445675]: 1D5074D35E: sender non-delivery notification: 724794D360
+2026-10-04T14:23:44+02:00 pve postfix/qmgr[1524]: 724794D360: from=<>, size=17641, nrcpt=1 (queue active)
+2026-10-04T14:23:44+02:00 pve postfix/cleanup[445657]: 746204D35A: message-id=<20261004122344.746204D35A@pve.example.lan>
+2026-10-04T14:23:44+02:00 pve postfix/bounce[445662]: 1D5074D35E: sender delivery status notification: 746204D35A
+2026-10-04T14:23:44+02:00 pve postfix/qmgr[1524]: 746204D35A: from=<>, size=2770, nrcpt=1 (queue active)
+2026-10-04T14:23:44+02:00 pve postfix/qmgr[1524]: 1D5074D35E: removed
+2026-10-04T14:23:44+02:00 pve postfix/pickup[438221]: 7E1704D361: uid=65534 from=<root>
+2026-10-04T14:23:44+02:00 pve postfix/local[445664]: 724794D360: to=<root@pve.example.lan>, relay=local, delay=0.05, delays=0.01/0/0/0.04, dsn=2.0.0, status=sent (delivered to command: /usr/libexec/proxmox-mail-forward)
+2026-10-04T14:23:44+02:00 pve postfix/cleanup[445676]: 7E1704D361: message-id=<20261004122344.746204D35A@pve.example.lan>
+2026-10-04T14:23:44+02:00 pve postfix/qmgr[1524]: 724794D360: removed
+2026-10-04T14:23:44+02:00 pve postfix/local[445665]: 746204D35A: to=<root@pve.example.lan>, relay=local, delay=0.05, delays=0.01/0/0/0.04, dsn=2.0.0, status=sent (delivered to command: /usr/libexec/proxmox-mail-forward)
+2026-10-04T14:23:44+02:00 pve postfix/qmgr[1524]: 746204D35A: removed
+2026-10-04T14:23:44+02:00 pve postfix/qmgr[1524]: 7E1704D361: from=<root@pve.example.lan>, size=2997, nrcpt=1 (queue active)
+2026-10-04T14:23:44+02:00 pve postfix/pickup[438221]: 7F8984D35A: uid=65534 from=<root>
+2026-10-04T14:23:44+02:00 pve postfix/cleanup[445657]: 7F8984D35A: message-id=<20261004122344.724794D360@pve.example.lan>
+2026-10-04T14:23:44+02:00 pve postfix/qmgr[1524]: 7F8984D35A: from=<root@pve.example.lan>, size=17868, nrcpt=1 (queue active)
+2026-10-04T14:23:44+02:00 pve postfix/smtp[445673]: 7F8984D35A: to=<admin@example.com>, relay=mx.example.com[192.0.2.25]:25, delay=0.27, delays=0.01/0/0.13/0.12, dsn=5.0.0, status=bounced (host mx.example.com[192.0.2.25] said: 550-Verification failed for <root@pve.example.lan> 550-The mail server does not recognize root@pve.example.lan as a valid sender. 550 Sender verify failed (in reply to RCPT TO command))
+2026-10-04T14:23:44+02:00 pve postfix/qmgr[1524]: 7F8984D35A: removed
+2026-10-04T14:23:44+02:00 pve postfix/cleanup[445676]: C7BC74D35F: message-id=<20261004122344.C7BC74D35F@pve.example.lan>
+2026-10-04T14:23:44+02:00 pve postfix/cleanup[445676]: C7BC74D35F: removed (canceled)
+2026-10-04T14:23:44+02:00 pve postfix/smtp[445659]: 7E1704D361: to=<admin@example.com>, relay=mx.example.com[192.0.2.25]:25, delay=0.39, delays=0.01/0/0.13/0.25, dsn=5.0.0, status=bounced (host mx.example.com[192.0.2.25] said: 550-Verification failed for <root@pve.example.lan> 550-The mail server does not recognize root@pve.example.lan as a valid sender. 550 Sender verify failed (in reply to RCPT TO command))
+2026-10-04T14:23:44+02:00 pve postfix/qmgr[1524]: 7E1704D361: removed
+2026-10-04T14:23:44+02:00 pve postfix/cleanup[445657]: E64714D35E: message-id=<20261004122344.E64714D35E@pve.example.lan>
+2026-10-04T14:23:44+02:00 pve postfix/cleanup[445657]: E64714D35E: removed (canceled)

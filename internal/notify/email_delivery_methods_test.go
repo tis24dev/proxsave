@@ -495,7 +495,7 @@ func TestEmailNotifierBuildEmailMessage_AttachesLogWhenConfigured(t *testing.T) 
 	data := createTestNotificationData()
 	data.LogFilePath = logPath
 
-	emailMessage, toHeader := notifier.buildEmailMessage("admin@example.com", "subject", "<b>html</b>", "text", data)
+	emailMessage, toHeader, _ := notifier.buildEmailMessage("admin@example.com", "subject", "<b>html</b>", "text", data)
 	if toHeader != "admin@example.com" {
 		t.Fatalf("toHeader=%q want %q", toHeader, "admin@example.com")
 	}
@@ -527,7 +527,7 @@ func TestEmailNotifierBuildEmailMessage_FallsBackWhenLogUnreadable(t *testing.T)
 	data := createTestNotificationData()
 	data.LogFilePath = filepath.Join(t.TempDir(), "missing.log")
 
-	emailMessage, _ := notifier.buildEmailMessage("admin@example.com", "subject", "<b>html</b>", "text", data)
+	emailMessage, _, _ := notifier.buildEmailMessage("admin@example.com", "subject", "<b>html</b>", "text", data)
 	if !strings.Contains(emailMessage, "Content-Type: multipart/alternative") {
 		t.Fatalf("expected multipart/alternative fallback, got:\n%s", emailMessage)
 	}
@@ -546,7 +546,7 @@ func TestEmailNotifierBuildEmailMessage_EncodesUTF8BodiesAsSevenBitSafe(t *testi
 		t.Fatalf("NewEmailNotifier() error = %v", err)
 	}
 
-	emailMessage, _ := notifier.buildEmailMessage(
+	emailMessage, _, _ := notifier.buildEmailMessage(
 		"admin@example.com",
 		"✅ PVE Backup à",
 		"<p>Backup complete ✅ with warnings: è full</p>",
@@ -583,7 +583,7 @@ func TestEmailNotifierBuildEmailMessageSanitizesAddressHeaders(t *testing.T) {
 		t.Fatalf("NewEmailNotifier() error = %v", err)
 	}
 
-	emailMessage, toHeader := notifier.buildEmailMessage(
+	emailMessage, toHeader, _ := notifier.buildEmailMessage(
 		"admin@example.com\r\nCc: injected@example.com",
 		"subject",
 		"<b>html</b>",

@@ -959,86 +959,41 @@ func (e *EmailNotifier) checkRelayHostConfigured(ctx context.Context) (bool, str
 
 // checkMailQueue checks the mail queue status
 func (e *EmailNotifier) checkMailQueue(ctx context.Context) (int, error) {
-	// Try mailq command (works for both Postfix and Sendmail)
+	count, _, err := e.checkMailQueueFor(ctx, "")
+	return count, err
+}
+
+// checkMailQueueFor runs mailq (it works for both Postfix and Sendmail) and returns the
+// count of queued messages and the entries with a line naming the recipient.
+func (e *EmailNotifier) checkMailQueueFor(ctx context.Context, recipient string) (int, []mailQueueEntry, error) {
 	mailqPath, err := findMailqPath()
 	if err != nil {
-		return 0, err
+		return 0, nil, err
 	}
 
 	cmd, err := commandForMailTool(ctx, mailqPath)
 	if err != nil {
-		return 0, err
+		return 0, nil, err
 	}
 	output, err := cmd.Output()
 	if err != nil {
-		return 0, fmt.Errorf("mailq failed: %w", err)
+		return 0, nil, fmt.Errorf("mailq failed: %w", err)
 	}
 
-	// Parse output to count queued messages
 	outputStr := string(output)
 	if strings.Contains(outputStr, "Mail queue is empty") {
 		e.logger.Debug("Mail queue is empty")
-		return 0, nil
+		return 0, nil, nil
 	}
 
-	// Count lines that look like queue entries
-	lines := strings.Split(outputStr, "\n")
-	queueCount := 0
-	for _, line := range lines {
-		// Basic heuristic: lines with queue IDs (hex strings) and @ symbols
-		if len(line) > 10 && strings.Contains(line, "@") {
-			// Skip header and footer lines
-			if !strings.Contains(line, "Mail queue") && !strings.Contains(line, "Total requests") {
-				queueCount++
-			}
-		}
-	}
-
+	// Count lines that look like queue entries (lines with an @, header and footer left
+	// out), and collect the entries for the recipient.
+	queueCount, entries := parseMailQueue(outputStr, recipient)
 	if queueCount > 0 {
 		e.logger.Debug("Found %d message(s) in mail queue", queueCount)
 	}
 
-	return queueCount, nil
-}
-
-// detectQueueEntry scans the mail queue for a recipient and returns the latest queue ID.
-func (e *EmailNotifier) detectQueueEntry(ctx context.Context, recipient string) (string, string, error) {
-	mailqPath, err := findMailqPath()
-	if err != nil {
-		return "", "", err
-	}
-
-	cmd, err := commandForMailTool(ctx, mailqPath)
-	if err != nil {
-		return "", "", err
-	}
-	output, err := cmd.Output()
-	if err != nil {
-		return "", "", fmt.Errorf("mailq failed: %w", err)
-	}
-
-	lines := strings.Split(string(output), "\n")
-	lowerRecipient := strings.ToLower(strings.TrimSpace(recipient))
-	var currentID string
-
-	for _, line := range lines {
-		trimmed := strings.TrimSpace(line)
-		if trimmed == "" {
-			continue
-		}
-
-		fields := strings.Fields(trimmed)
-		if len(fields) > 0 && mailQueueIDLineRegex.MatchString(fields[0]) {
-			currentID = strings.TrimSuffix(strings.TrimSuffix(fields[0], "*"), "!")
-			continue
-		}
-
-		if currentID != "" && lowerRecipient != "" && strings.Contains(strings.ToLower(trimmed), lowerRecipient) {
-			return currentID, trimmed, nil
-		}
-	}
-
-	return "", "", nil
+	return queueCount, entries, nil
 }
 
 // tailMailLog reads the last maxLines from the first available mail log file.
@@ -1132,10 +1087,10 @@ func extractQueueID(outputs ...string) string {
 }
 
 // inspectMailLogStatus looks for a delivery status line for the given queue ID. Only
-// the lines of that message are read: postfix and sendmail open each with "<ID>:". A
-// line that only mentions the ID (another message's "notification: <ID>", a forwarded
-// notice's message-id) is not one of them. With no such line it reports nothing: the
-// status of another message is never reported as this one's.
+// the lines of that message are read (mailLogLineNamesQueueID): a line that only
+// mentions the ID (another message's "notification: <ID>", a forwarded notice's
+// message-id) is not one of them. With no such line it reports nothing: the status of
+// another message is never reported as this one's.
 func (e *EmailNotifier) inspectMailLogStatus(ctx context.Context, queueID string) (status, matchedLine, logPath string) {
 	lines, logPath := e.tailMailLog(ctx, 80)
 	if len(lines) == 0 || logPath == "" || strings.TrimSpace(queueID) == "" {
@@ -1154,23 +1109,8 @@ func (e *EmailNotifier) inspectMailLogStatus(ctx context.Context, queueID string
 		if line == "" {
 			continue
 		}
-		lower := strings.ToLower(line)
-		switch {
-		case strings.Contains(lower, "status=sent"):
-			return "sent", line, logPath
-		case strings.Contains(lower, "status=deferred"):
-			return "deferred", line, logPath
-		case strings.Contains(lower, "status=bounced"), strings.Contains(lower, "status=softbounce"):
-			return "bounced", line, logPath
-		case strings.Contains(lower, "status=expired"):
-			return "expired", line, logPath
-		case strings.Contains(lower, "status=rejected") || strings.Contains(lower, "rejected "):
-			return "rejected", line, logPath
-		case strings.Contains(lower, "connection refused"),
-			strings.Contains(lower, "host not found"),
-			strings.Contains(lower, "no route to host"),
-			strings.Contains(lower, "timeout"):
-			return "error", line, logPath
+		if status := mailLogLineStatus(line, queueID); status != "" {
+			return status, line, logPath
 		}
 	}
 
@@ -1182,17 +1122,6 @@ func (e *EmailNotifier) inspectMailLogStatus(ctx context.Context, queueID string
 	}
 
 	return "", "", logPath
-}
-
-// mailLogLineNamesQueueID reports whether the line is one of queueID's: one of its
-// fields is the ID followed by the colon postfix and sendmail put after it.
-func mailLogLineNamesQueueID(line, queueID string) bool {
-	for _, field := range strings.Fields(line) {
-		if field == queueID+":" {
-			return true
-		}
-	}
-	return false
 }
 
 // logMailLogStatus writes a human-readable summary based on inspectMailLogStatus results.
@@ -1318,7 +1247,10 @@ func sanitizeHeaderValue(value string) string {
 	return strings.TrimSpace(value)
 }
 
-func (e *EmailNotifier) buildEmailMessage(recipient, subject, htmlBody, textBody string, data *NotificationData) (emailMessage, toHeader string) {
+// buildEmailMessage builds the MIME message sendmail and proxmox-mail-forward receive,
+// with a Message-ID of its own (newMessageID): the mail log is searched for it to find
+// this email's queue ID.
+func (e *EmailNotifier) buildEmailMessage(recipient, subject, htmlBody, textBody string, data *NotificationData) (emailMessage, toHeader, messageID string) {
 	e.logger.Debug("=== Building email message ===")
 
 	// Encode subject in Base64 for proper UTF-8 handling
@@ -1334,8 +1266,11 @@ func (e *EmailNotifier) buildEmailMessage(recipient, subject, htmlBody, textBody
 	if fromHeader == "" {
 		fromHeader = "no-reply@proxmox.tis24.it"
 	}
+	messageID = newMessageID(fromHeader)
+	e.logger.Debug("email message-id: <%s>", messageID)
 	fmt.Fprintf(&email, "To: %s\n", toHeader)
 	fmt.Fprintf(&email, "From: %s\n", fromHeader)
+	fmt.Fprintf(&email, "Message-ID: <%s>\n", messageID)
 	fmt.Fprintf(&email, "Subject: =?UTF-8?B?%s?=\n", encodedSubject)
 	email.WriteString("MIME-Version: 1.0\n")
 
@@ -1433,7 +1368,7 @@ func (e *EmailNotifier) buildEmailMessage(recipient, subject, htmlBody, textBody
 	}
 
 	e.logger.Debug("Email message built (%d bytes)", email.Len())
-	return email.String(), toHeader
+	return email.String(), toHeader, messageID
 }
 
 func (e *EmailNotifier) sendViaPMF(ctx context.Context, recipient, subject, htmlBody, textBody string, data *NotificationData) (backend, backendPath string, err error) {
@@ -1451,7 +1386,7 @@ func (e *EmailNotifier) sendViaPMF(ctx context.Context, recipient, subject, html
 	}
 	e.logger.Debug("✓ Proxmox mail forwarder found at %s", pmfPath)
 
-	emailMessage, toHeader := e.buildEmailMessage(recipient, subject, htmlBody, textBody, data)
+	emailMessage, toHeader, _ := e.buildEmailMessage(recipient, subject, htmlBody, textBody, data)
 
 	e.logger.Debug("=== Sending email via proxmox-mail-forward ===")
 	e.logger.Debug("proxmox-mail-forward routing is handled by Proxmox Notifications; To=%q is only a mail header", toHeader)
@@ -1538,9 +1473,15 @@ func (e *EmailNotifier) sendViaSendmail(ctx context.Context, recipient, subject,
 		e.logger.Warning("  Sendmail may queue emails but not deliver them")
 	}
 
-	// Check current mail queue
-	if queueCount, err := e.checkMailQueue(ctx); err == nil {
+	// Check current mail queue; its entries for the recipient are left out when this
+	// email's queue entry is looked for after sending.
+	var queuedBefore map[string]bool
+	if queueCount, entries, err := e.checkMailQueueFor(ctx, recipient); err == nil {
 		initialQueueCount = queueCount
+		queuedBefore = make(map[string]bool, len(entries))
+		for _, entry := range entries {
+			queuedBefore[entry.id] = true
+		}
 		if queueCount > 0 {
 			e.logger.Warning("⚠ %d message(s) currently in mail queue (previous emails may be stuck)", queueCount)
 			if queueCount > 10 {
@@ -1553,7 +1494,7 @@ func (e *EmailNotifier) sendViaSendmail(ctx context.Context, recipient, subject,
 		e.logger.Debug("Could not inspect mail queue before sending: %v", err)
 	}
 
-	emailMessage, _ := e.buildEmailMessage(recipient, subject, htmlBody, textBody, data)
+	emailMessage, _, messageID := e.buildEmailMessage(recipient, subject, htmlBody, textBody, data)
 
 	// ========================================================================
 	// SEND EMAIL WITH VERBOSE OUTPUT
@@ -1685,26 +1626,20 @@ func (e *EmailNotifier) sendViaSendmail(ctx context.Context, recipient, subject,
 		}
 	}
 
+	// This email's queue ID: the one sendmail returned, else the one the mail log gives
+	// its Message-ID, else, while the mail log has no line of it yet, the one new mail
+	// queue entry for the recipient. Never another message's.
+	if queueID == "" {
+		if found, readable := e.findQueueIDByMessageID(ctx, messageID); found != "" {
+			queueID = found
+		} else if readable {
+			queueID = e.newQueueEntryFor(ctx, recipient, queuedBefore)
+		}
+	}
 	if queueID != "" {
 		status, matchedLine, logPath := e.inspectMailLogStatus(ctx, queueID)
+		e.logQueueStatusDebug(queueID, status, matchedLine)
 		e.logMailLogStatus(queueID, status, matchedLine, logPath)
-	} else {
-		e.logger.Debug("Sendmail did not report a queue ID; attempting to detect from mail queue output")
-		if detectedID, queueLine, err := e.detectQueueEntry(ctx, recipient); err == nil {
-			if detectedID != "" {
-				queueID = detectedID
-				e.logger.Info("Detected queue ID %s for %s by inspecting mail queue output", queueID, recipient)
-				if queueLine != "" && e.logger.GetLevel() >= types.LogLevelDebug {
-					e.logger.Debug("Mail queue entry: %s", queueLine)
-				}
-				status, matchedLine, logPath := e.inspectMailLogStatus(ctx, queueID)
-				e.logMailLogStatus(queueID, status, matchedLine, logPath)
-			} else {
-				e.logger.Debug("No matching mail queue entry found for %s immediately after sending", recipient)
-			}
-		} else {
-			e.logger.Debug("Unable to inspect mail queue entries for %s: %v", recipient, err)
-		}
 	}
 
 	e.logger.Debug("✅ Email handed off to sendmail successfully")

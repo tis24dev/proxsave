@@ -373,9 +373,17 @@ func renderNotifyGoldenCase(t *testing.T, inputDir string) map[string][]byte {
 	return files
 }
 
+// notifyGoldenMessageID stands for the random part of the Message-ID ProxSave gives
+// every email it builds (newMessageID); the domain is still taken from the From address.
+const notifyGoldenMessageID = "proxsave-00000000000000000000000000000000"
+
 // TestNotificationChannelGoldens renders every channel of every case and compares the
 // whole output with its golden file.
 func TestNotificationChannelGoldens(t *testing.T) {
+	origMessageID := newMessageID
+	newMessageID = func(from string) string { return notifyGoldenMessageID + "@" + messageIDDomain(from) }
+	t.Cleanup(func() { newMessageID = origMessageID })
+
 	entries, err := os.ReadDir(notifyGoldenInputDir)
 	if err != nil {
 		t.Fatalf("read inputs %s (run the orchestrator goldens first): %v", notifyGoldenInputDir, err)
