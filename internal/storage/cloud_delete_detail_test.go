@@ -12,7 +12,7 @@ import (
 	"github.com/tis24dev/proxsave/internal/types"
 )
 
-// A SIGKILLed rclone (cmd.WaitDelay in defaultExecCommand kills the process on
+// A SIGKILLed rclone (cmd.WaitDelay in defaultRunCommand kills the process on
 // context cancellation) returns whatever it printed so far - typically a NOTICE -
 // plus an exec error of "signal: killed". The delete warning used to print only the
 // captured output, so the NOTICE was presented as the failure cause and the kill

@@ -17,7 +17,7 @@ import (
 )
 
 // fakeRcloneOnPath puts an executable "rclone" running script first on PATH, so
-// the real CloudStorage (defaultExecCommand, safeexec) runs it.
+// the real CloudStorage (defaultRunCommand, safeexec) runs it.
 func fakeRcloneOnPath(t *testing.T, script string) {
 	t.Helper()
 	dir := t.TempDir()

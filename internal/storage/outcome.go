@@ -114,7 +114,7 @@ func capitalizeFirst(s string) string {
 
 // rcloneCause is the short cause of a failed rclone command: its last line, unless the
 // exec error says more than "exit status N". That "more" is the SIGKILL shape
-// (defaultExecCommand sets cmd.WaitDelay): the output is then whatever rclone printed
+// (defaultRunCommand sets cmd.WaitDelay): the output is then whatever rclone printed
 // before the kill, typically a NOTICE, and presenting it as the cause would hide the
 // kill. The exec error alone is the cause there; the full output stays in DEBUG.
 func rcloneCause(output string, err error) string {

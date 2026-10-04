@@ -173,7 +173,7 @@ func (c *CloudStorage) remoteManifestOwner(ctx context.Context, filename string)
 		// JSON form is how a shared remote root ended up with one host deleting
 		// another host's pre-Go archive together with the KEY=VALUE sidecar that
 		// named its owner.
-		if host, id := backup.OwnerFromManifestBytes(out); host != "" {
+		if host, id := backup.OwnerFromManifestBytes(out.stdout); host != "" {
 			return host, id
 		}
 		c.logger.Debug("Cloud storage: manifest %s%s names no host", rel, suffix)

@@ -192,8 +192,8 @@ func TestCloudStorageMarkCloudLogPathAvailableClearsMissing(t *testing.T) {
 	}
 }
 
-func TestDefaultExecCommandReturnsErrorForMissingCommand(t *testing.T) {
-	_, err := defaultExecCommand(context.Background(), "proxsave-command-does-not-exist")
+func TestDefaultRunCommandReturnsErrorForMissingCommand(t *testing.T) {
+	_, err := defaultRunCommand(context.Background(), "proxsave-command-does-not-exist")
 	if err == nil {
 		t.Fatalf("expected error for missing command")
 	}

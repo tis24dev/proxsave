@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -23,12 +24,12 @@ import (
 	"github.com/tis24dev/proxsave/pkg/utils"
 )
 
-// cloudExecWaitDelay bounds how long defaultExecCommand waits, after ctx
+// cloudExecWaitDelay bounds how long defaultRunCommand waits, after ctx
 // cancellation/deadline, for a SIGKILLed rclone to be reaped and its stdout/stderr
 // pipes to drain before they are force-closed and Wait is released with
 // exec.ErrWaitDelay. It is the reaping half of the WithTimeout+WaitDelay pair: a
 // rclone interruptibly stalled on the network (or one whose child holds the pipe
-// open) would otherwise block CombinedOutput's Wait forever. A var (not const) so
+// open) would otherwise block Run's Wait forever. A var (not const) so
 // tests can shrink it; 3s mirrors orchestrator.defaultCommandWaitDelay.
 var cloudExecWaitDelay = 3 * time.Second
 
@@ -71,11 +72,14 @@ type CloudStorage struct {
 	parallelVerify bool
 	verifyChecksum bool
 	verifyDownload bool
-	execCommand    func(ctx context.Context, name string, args ...string) ([]byte, error)
-	lookPath       func(string) (string, error)
-	waitForRetry   func(context.Context, time.Duration) error
-	sleep          func(time.Duration)
-	lastRet        RetentionSummary
+	// runCommand runs one rclone call (defaultRunCommand); execCommand, when set,
+	// replaces it with a test fake that answers on one stream, read as stdout.
+	runCommand   func(ctx context.Context, name string, args ...string) (rcloneOutput, error)
+	execCommand  func(ctx context.Context, name string, args ...string) ([]byte, error)
+	lookPath     func(string) (string, error)
+	waitForRetry func(context.Context, time.Duration) error
+	sleep        func(time.Duration)
+	lastRet      RetentionSummary
 	// See the note on LocalStorage.scopeOwned: kept outside lastRet because that
 	// struct is replaced wholesale on the delete paths.
 	scopeOwned int
@@ -494,7 +498,7 @@ func NewCloudStorage(cfg *config.Config, logger *logging.Logger, writtenHostname
 		parallelVerify: cfg.CloudParallelVerify,
 		verifyChecksum: cfg.CloudVerifyChecksum,
 		verifyDownload: cfg.CloudVerifyDownload,
-		execCommand:    defaultExecCommand,
+		runCommand:     defaultRunCommand,
 		lookPath:       exec.LookPath,
 		waitForRetry:   currentCloudRetryWait(),
 		sleep:          time.Sleep,
@@ -843,7 +847,7 @@ func (c *CloudStorage) tryListCheck(ctx context.Context, remoteRoot, remoteBase 
 
 	output, err := c.exec(ctx, argsRoot[0], argsRoot[1:]...)
 	if err != nil {
-		return classifyRemoteError("remote", remoteRoot, err, output)
+		return classifyRemoteError("remote", remoteRoot, err, output.transcript())
 	}
 
 	// Step 2: check specific path (remote:path) if configured
@@ -858,7 +862,7 @@ func (c *CloudStorage) tryListCheck(ctx context.Context, remoteRoot, remoteBase 
 
 			output, err = c.exec(ctx, argsMkdir[0], argsMkdir[1:]...)
 			if err != nil {
-				return classifyRemoteError("path", remoteBase, err, output)
+				return classifyRemoteError("path", remoteBase, err, output.transcript())
 			}
 		}
 
@@ -869,7 +873,7 @@ func (c *CloudStorage) tryListCheck(ctx context.Context, remoteRoot, remoteBase 
 
 		output, err = c.exec(ctx, argsPath[0], argsPath[1:]...)
 		if err != nil {
-			checkErr := classifyRemoteError("path", remoteBase, err, output)
+			checkErr := classifyRemoteError("path", remoteBase, err, output.transcript())
 			var rcErr *remoteCheckError
 			if c.config.DryRun && c.localDir == "" && errors.As(checkErr, &rcErr) && rcErr.kind == remoteErrorPath {
 				// The backup directory does not exist and a dry run does not create it.
@@ -894,7 +898,7 @@ func (c *CloudStorage) tryWriteTest(ctx context.Context) error {
 	c.logger.Debug("Running (remote write test): %s", strings.Join(argsTouch, " "))
 	output, err := c.exec(ctx, argsTouch[0], argsTouch[1:]...)
 	if err != nil {
-		return classifyRemoteError("write", testRemote, err, output)
+		return classifyRemoteError("write", testRemote, err, output.transcript())
 	}
 
 	// Try to delete the test file (cleanup)
@@ -1583,8 +1587,8 @@ func (c *CloudStorage) UploadToRemotePath(ctx context.Context, localFile, remote
 // single file (subcommand, configured flags, source and destination). proxsave
 // rclone runs are always headless (daemon/cron, no TTY), so --progress/--stats
 // are deliberately omitted: they yield nothing useful and accumulate stats
-// output in memory over multi-hour uploads that then bloats error messages
-// captured via CombinedOutput.
+// output in memory over multi-hour uploads that then bloats the error messages
+// built from the captured output.
 func (c *CloudStorage) buildRcloneUploadArgs(localFile, remoteFile string) []string {
 	args := c.buildRcloneArgs("copyto")
 
@@ -1627,9 +1631,10 @@ func (c *CloudStorage) rcloneCopy(ctx context.Context, localFile, remoteFile str
 		if ctx.Err() == context.DeadlineExceeded {
 			return fmt.Errorf("rclone operation timeout")
 		}
+		transcript := output.transcript()
 		return &rcloneCommandError{
-			msg:   fmt.Sprintf("rclone copy failed: %v: %s", err, strings.TrimSpace(string(truncateRcloneOutput(output)))),
-			short: rcloneCause(string(output), err),
+			msg:   fmt.Sprintf("rclone copy failed: %v: %s", err, strings.TrimSpace(string(truncateRcloneOutput(transcript)))),
+			short: rcloneCause(string(transcript), err),
 			err:   err,
 		}
 	}
@@ -1790,17 +1795,18 @@ func (c *CloudStorage) remoteSHA256(ctx context.Context, remoteFile string, down
 		// transport error. Require the word "hash" so genuine transport/auth
 		// failures (e.g. "tls: unsupported protocol version", "operation not
 		// supported in this region") stay fatal instead of silently downgrading.
-		msg := strings.ToLower(strings.TrimSpace(string(output)))
+		transcript := strings.TrimSpace(string(output.transcript()))
+		msg := strings.ToLower(transcript)
 		if strings.Contains(msg, "hash") && (strings.Contains(msg, "not supported") || strings.Contains(msg, "unsupported")) {
 			return "", false, nil
 		}
-		return "", false, fmt.Errorf("rclone hashsum failed: %w: %s", err, strings.TrimSpace(string(output)))
+		return "", false, fmt.Errorf("rclone hashsum failed: %w: %s", err, transcript)
 	}
 
-	// Output format: "<hex-hash><spaces><path>", one line per object. A blank
-	// hash field (backend cannot hash) yields a single field and is skipped.
+	// Output format: "<hex-hash><spaces><path>", one line per object, on stdout. A
+	// blank hash field (backend cannot hash) yields a single field and is skipped.
 	want := remoteBaseName(remoteFile)
-	for _, line := range strings.Split(string(output), "\n") {
+	for _, line := range strings.Split(string(output.stdout), "\n") {
 		line = strings.TrimSpace(line)
 		fields := strings.Fields(line)
 		if len(fields) < 2 {
@@ -1841,8 +1847,8 @@ func (c *CloudStorage) verifyPrimary(ctx context.Context, remoteFile string, exp
 		return c.verifyAlternative(ctx, remoteFile, expectedSize, filename)
 	}
 
-	// Parse lsl output: size filename
-	outputStr := strings.TrimSpace(string(output))
+	// Parse lsl output (stdout): size filename
+	outputStr := strings.TrimSpace(string(output.stdout))
 	if outputStr == "" {
 		return false, fmt.Errorf("empty lsl output - file may not exist")
 	}
@@ -1879,11 +1885,11 @@ func (c *CloudStorage) verifyAlternative(ctx context.Context, remoteFile string,
 	output, err := c.exec(ctx, args[0], args[1:]...)
 
 	if err != nil {
-		return false, fmt.Errorf("rclone ls failed: %w: %s", err, strings.TrimSpace(string(output)))
+		return false, fmt.Errorf("rclone ls failed: %w: %s", err, strings.TrimSpace(string(output.transcript())))
 	}
 
-	// Search for filename in output
-	lines := strings.Split(string(output), "\n")
+	// Search for filename in the listing (stdout)
+	lines := strings.Split(string(output.stdout), "\n")
 	for _, line := range lines {
 		line = strings.TrimSpace(line)
 		if line == "" {
@@ -1962,13 +1968,13 @@ func (c *CloudStorage) List(ctx context.Context) (backups []*types.BackupMetadat
 			Location:    LocationCloud,
 			Operation:   "list",
 			Path:        c.remoteLabel(),
-			Err:         &rcloneCommandError{msg: fmt.Sprintf("rclone lsl failed: %v", err), short: rcloneCause(string(output), err), err: err},
+			Err:         &rcloneCommandError{msg: fmt.Sprintf("rclone lsl failed: %v", err), short: rcloneCause(string(output.transcript()), err), err: err},
 			IsCritical:  false,
 			Recoverable: true,
 		}
 	}
 
-	entries := parseLslEntries(string(output))
+	entries := parseLslEntries(string(output.stdout))
 	snapshot := buildSnapshot(entries)
 	c.setRemoteSnapshot(snapshot)
 
@@ -2130,8 +2136,8 @@ func (c *CloudStorage) Delete(ctx context.Context, backupFile string) error {
 // rcloneFailureDetail merges rclone's own output with the exec error for a failed
 // rclone call. rclone's stderr names the object and the reason, so it leads; the
 // exec error is appended only when it says more than "exit status N". That "more"
-// is the SIGKILL shape: defaultExecCommand sets cmd.WaitDelay, so a cancelled or
-// stalled call gets its process killed and CombinedOutput returns whatever rclone
+// is the SIGKILL shape: defaultRunCommand sets cmd.WaitDelay, so a cancelled or
+// stalled call gets its process killed and defaultRunCommand returns whatever rclone
 // printed so far - typically a NOTICE - plus "signal: killed". Printing the output
 // alone presented that NOTICE as the failure cause and left the kill on no line.
 func rcloneFailureDetail(msg string, err error) string {
@@ -2218,7 +2224,7 @@ func (c *CloudStorage) deleteBackupInternal(ctx context.Context, backupFile stri
 		output, err := c.exec(ctx, args[0], args[1:]...)
 
 		if err != nil {
-			msg := strings.TrimSpace(string(output))
+			msg := strings.TrimSpace(string(output.transcript()))
 			if isRcloneObjectNotFound(msg) {
 				c.logger.Debug("Cloud storage: file already removed %s (%s)", filepath.Base(f), msg)
 				c.removeRemoteSnapshotEntry(rel)
@@ -2312,7 +2318,7 @@ func (c *CloudStorage) deleteAssociatedLog(ctx context.Context, backupFile strin
 	c.logger.Debug("Cloud logs: deleting log %s", cloudPath)
 	output, err := c.exec(ctx, args[0], args[1:]...)
 	if err != nil {
-		msg := strings.TrimSpace(string(output))
+		msg := strings.TrimSpace(string(output.transcript()))
 		if isRcloneObjectNotFound(msg) || isRcloneObjectNotFound(err.Error()) {
 			c.logger.Debug("Cloud logs: log already removed %s (%s)", cloudPath, msg)
 			return false
@@ -2353,7 +2359,7 @@ func (c *CloudStorage) countLogFiles(ctx context.Context) int {
 	args = append(args, base, "--files-only")
 	output, err := c.exec(ctx, args[0], args[1:]...)
 	if err != nil {
-		msg := strings.TrimSpace(string(output))
+		msg := strings.TrimSpace(string(output.transcript()))
 		if isRcloneObjectNotFound(msg) || isRcloneObjectNotFound(err.Error()) {
 			c.markCloudLogPathMissing(base, msg)
 			return -1
@@ -2367,7 +2373,7 @@ func (c *CloudStorage) countLogFiles(ctx context.Context) int {
 	c.markCloudLogPathAvailable()
 
 	count := 0
-	lines := strings.Split(string(output), "\n")
+	lines := strings.Split(string(output.stdout), "\n")
 	for _, line := range lines {
 		name := strings.TrimSpace(line)
 		if name == "" || strings.HasSuffix(name, "/") {
@@ -2792,17 +2798,65 @@ func (c *CloudStorage) boundManagementCtx(ctx context.Context) (context.Context,
 	return context.WithTimeout(ctx, c.managementTimeout())
 }
 
-func (c *CloudStorage) exec(ctx context.Context, name string, args ...string) ([]byte, error) {
+// rcloneOutput is what one rclone call printed, the two streams kept apart. stdout is
+// the data the callers parse (listings, sizes, hashes, file contents); stderr is
+// rclone's own messages, NOTICE and ERROR lines, which are never data: a "NOTICE: Config
+// file ... not found" printed before a listing was read as its first size or filename
+// when the two were merged.
+type rcloneOutput struct {
+	stdout []byte
+	stderr []byte
+}
+
+// transcript is everything rclone printed, stdout then stderr: the text a failed call
+// is classified and reported with. rclone writes the reason on stderr and closes a
+// failed command with it, so it stays the last line.
+func (o rcloneOutput) transcript() []byte {
+	if len(o.stderr) == 0 {
+		return o.stdout
+	}
+	if len(o.stdout) == 0 {
+		return o.stderr
+	}
+	text := make([]byte, 0, len(o.stdout)+1+len(o.stderr))
+	text = append(text, o.stdout...)
+	if o.stdout[len(o.stdout)-1] != '\n' {
+		text = append(text, '\n')
+	}
+	return append(text, o.stderr...)
+}
+
+func (c *CloudStorage) exec(ctx context.Context, name string, args ...string) (rcloneOutput, error) {
 	if name != "rclone" {
-		return nil, fmt.Errorf("cloud storage may only execute rclone, got %q", name)
+		return rcloneOutput{}, fmt.Errorf("cloud storage may only execute rclone, got %q", name)
 	}
 	if err := validateRcloneArgs(args); err != nil {
-		return nil, err
+		return rcloneOutput{}, err
 	}
-	if c.execCommand != nil {
-		return c.execCommand(ctx, name, args...)
+	var (
+		out rcloneOutput
+		err error
+	)
+	switch {
+	case c.execCommand != nil:
+		var stdout []byte
+		stdout, err = c.execCommand(ctx, name, args...)
+		out = rcloneOutput{stdout: stdout}
+	case c.runCommand != nil:
+		out, err = c.runCommand(ctx, name, args...)
+	default:
+		out, err = defaultRunCommand(ctx, name, args...)
 	}
-	return defaultExecCommand(ctx, name, args...)
+	if err == nil && c.logger != nil {
+		if notice := strings.TrimSpace(string(out.stderr)); notice != "" {
+			subcommand := ""
+			if len(args) > 0 {
+				subcommand = args[0]
+			}
+			c.logger.Debug("rclone %s wrote to stderr while succeeding (not read as data): %s", subcommand, stripRcloneTimestamps(notice))
+		}
+	}
+	return out, err
 }
 
 func (c *CloudStorage) callWaitForRetry(ctx context.Context, d time.Duration) error {
@@ -2812,20 +2866,24 @@ func (c *CloudStorage) callWaitForRetry(ctx context.Context, d time.Duration) er
 	return nil
 }
 
-func defaultExecCommand(ctx context.Context, name string, args ...string) ([]byte, error) {
+func defaultRunCommand(ctx context.Context, name string, args ...string) (rcloneOutput, error) {
 	cmd, err := safeexec.CommandContext(ctx, name, args...)
 	if err != nil {
-		return nil, err
+		return rcloneOutput{}, err
 	}
 	// Once ctx is cancelled/expired the process is SIGKILLed; WaitDelay then bounds
 	// how long Wait blocks for it to be reaped / for orphaned pipes to drain before
 	// they are force-closed. Unlike osCommandRunner.Run (deps.go) we deliberately do
 	// NOT swallow exec.ErrWaitDelay to nil: a WaitDelay-killed rclone is an INCOMPLETE
 	// upload/op, and rcloneCopy/uploadWithRetry/verify rely on a non-nil error to
-	// retry or fail rather than record a phantom success. CombinedOutput already
-	// returns ErrWaitDelay as a non-nil error, so we propagate it unchanged.
+	// retry or fail rather than record a phantom success. Run returns ErrWaitDelay as a
+	// non-nil error, so we propagate it unchanged.
 	cmd.WaitDelay = cloudExecWaitDelay
-	return cmd.CombinedOutput()
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	err = cmd.Run()
+	return rcloneOutput{stdout: stdout.Bytes(), stderr: stderr.Bytes()}, err
 }
 
 func normalizeRemoteRelativePath(name string) string {
