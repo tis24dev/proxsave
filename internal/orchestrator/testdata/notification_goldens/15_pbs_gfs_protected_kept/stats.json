@@ -78,7 +78,7 @@
   "CloudGFSYearly": 0,
   "PBSTarget": {
     "Name": "PBS Storage",
-    "Status": "warning",
+    "Status": "ok",
     "Location": "backup@pbs!proxsave@192.0.2.10:offsite",
     "Snapshot": "host/proxsave-pve-golden/2026-10-04T02:02:20Z",
     "Backups": 2,

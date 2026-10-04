@@ -439,7 +439,8 @@ func TestExecuteGFSRetentionForgetsWhatTheEngineDrops(t *testing.T) {
 		), "")
 	})
 	result := h.execute(t, newTree(t))
-	if result.Status != StatusWarning || result.Deleted != 1 {
+	// The backup is saved and the retention applied, protected snapshot kept: ok.
+	if result.Status != StatusOK || result.Deleted != 1 {
 		t.Fatalf("result = %+v\n%s", result, h.output.String())
 	}
 	olderName := Snapshot{BackupType: "host", BackupID: testBackupID, BackupTime: older}.Name()
@@ -456,6 +457,46 @@ func TestExecuteGFSRetentionForgetsWhatTheEngineDrops(t *testing.T) {
 		"INFO Kept, protected: " + oldName,
 		"WARNING ⚠ Backups deleted: 1, 1 protected kept",
 	})
+}
+
+// A GFS retention the server stops after some snapshots went was applied, in part: the
+// backup is saved, the status ok, the WARNING line says how many of how many. Stopped on
+// the first snapshot, nothing went: "Retention not applied", warning.
+func TestExecuteGFSRetentionRefusedPartlyOrWhole(t *testing.T) {
+	gfs := storage.RetentionConfig{Policy: "gfs", Daily: 1}
+	snapshots := snapshotListJSON(
+		snapshotJSON(testBackupID, testRunTime, "none", false),
+		snapshotJSON(testBackupID, testRunTime-30*86400, "none", false),
+		snapshotJSON(testBackupID, testRunTime-60*86400, "none", false),
+	)
+	for _, tc := range []struct {
+		name       string
+		failedCall int
+		status     string
+		deleted    int
+		outcome    string
+	}{
+		{"partly", 2, StatusOK, 1, "WARNING ⚠ Backups deleted: 1 of 2"},
+		{"whole", 1, StatusWarning, 0, "WARNING ⚠ Retention not applied"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newPBSHarness(t, "proxsave-probe", nil, gfs, func(h *pbsHarness) {
+				h.fake.respond(t, "snapshot-list", 0, snapshots, "")
+				h.fake.respondNth(t, "snapshot-forget", tc.failedCall, 255, "", measuredStderr["prune denied"])
+			})
+			result := h.execute(t, newTree(t))
+			if result.Status != tc.status || result.Deleted != tc.deleted {
+				t.Fatalf("result = %+v, want status %s deleted %d\n%s", result, tc.status, tc.deleted, h.output.String())
+			}
+			if len(h.argvOf(t, "snapshot-forget")) != tc.failedCall {
+				t.Fatalf("forget calls = %d, want %d (stopped at the refusal)", len(h.argvOf(t, "snapshot-forget")), tc.failedCall)
+			}
+			visible := strings.Join(h.visible(), "\n")
+			if !strings.Contains(visible, "INFO PBS server: permission check failed\n") || !strings.Contains(visible, tc.outcome+"\n") {
+				t.Fatalf("visible lines:\n%s\nwant the cause and %q", visible, tc.outcome)
+			}
+		})
+	}
 }
 
 func TestExecuteNotInitializedAndDryRun(t *testing.T) {
@@ -486,7 +527,8 @@ func TestExecuteFactsUnderStoring(t *testing.T) {
 	h := newPBSHarness(t, "proxsave-probe", nil, simpleRetention(15), nil)
 	h.p.opts.EncryptArchive = true
 	result := h.execute(t, newTree(t, ".pxarexclude", "etc/ssh/.pxarexclude"))
-	if result.Status != StatusWarning {
+	// The backup is saved: the exclusion rules are a WARNING line, the status is ok.
+	if result.Status != StatusOK {
 		t.Fatalf("result = %+v", result)
 	}
 	wantLines(t, h.visible()[:7], []string{

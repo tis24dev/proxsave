@@ -441,17 +441,19 @@ func (p *PBS) Execute(in Input) Result {
 		return result
 	}
 
+	// The status says what happened to the backup: saved is ok, also with exclusion rules
+	// applied (a WARNING line about what it holds). Only a retention that removed
+	// nothing it was meant to makes it a warning.
 	result.Status = StatusOK
 	if len(excludes) > 0 {
 		log.Warning("%s %s: backup saved, exclusion rules applied", theme.SymbolWarning, PBSName)
-		result.Status = StatusWarning
 	} else {
 		log.Info("%s %s: backup saved", theme.SymbolSuccess, PBSName)
 	}
 
-	deleted, retentionOK := p.applyRetention(ctx, log)
+	deleted, retentionApplied := p.applyRetention(ctx, log)
 	result.Deleted = deleted
-	if !retentionOK {
+	if !retentionApplied {
 		result.Status = StatusWarning
 	}
 	p.logStatistics(ctx, log, &result)
@@ -563,7 +565,9 @@ func archiveCryptMode(s Snapshot, expected string) string {
 }
 
 // applyRetention runs the retention of this storage and prints its lines. It returns
-// the snapshots deleted and false when the retention was not (fully) applied.
+// the snapshots deleted and false when no retention was applied at all ("Retention not
+// applied"); a retention that kept protected snapshots or stopped after deleting some
+// was applied.
 func (p *PBS) applyRetention(ctx context.Context, log *logging.Logger) (int, bool) {
 	rc := p.opts.Retention
 	if rc.Policy == "gfs" {
@@ -605,7 +609,8 @@ func (p *PBS) applyRetention(ctx context.Context, log *logging.Logger) (int, boo
 
 // applyGFSRetention decides with ProxSave's own GFS engine, on this host's snapshots,
 // which ones go, and has the server remove them one by one (snapshot forget). A
-// protected snapshot is kept and the retention goes on; any other refusal stops it.
+// protected snapshot is kept and the retention goes on; any other refusal stops it. It
+// reports the retention applied unless nothing was removed because of a refusal.
 func (p *PBS) applyGFSRetention(ctx context.Context, log *logging.Logger, rc storage.RetentionConfig) (int, bool) {
 	log.Info("Applying GFS retention policy...")
 	log.Debug("  Policy: GFS (daily=%d, weekly=%d, monthly=%d, yearly=%d)", rc.Daily, rc.Weekly, rc.Monthly, rc.Yearly)
@@ -664,13 +669,13 @@ func (p *PBS) applyGFSRetention(ctx context.Context, log *logging.Logger, rc sto
 		p.logCause(log, failure)
 		if deleted == 0 {
 			log.Warning("%s Retention not applied", theme.SymbolWarning)
-		} else {
-			log.Warning("%s Backups deleted: %d of %d", theme.SymbolWarning, deleted, len(doomed)-protected)
+			return 0, false
 		}
-		return deleted, false
+		log.Warning("%s Backups deleted: %d of %d", theme.SymbolWarning, deleted, len(doomed)-protected)
+		return deleted, true
 	case protected > 0:
 		log.Warning("%s Backups deleted: %d, %d protected kept", theme.SymbolWarning, deleted, protected)
-		return deleted, false
+		return deleted, true
 	}
 	logDeleted(log, deleted)
 	return deleted, true

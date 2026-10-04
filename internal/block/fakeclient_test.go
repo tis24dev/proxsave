@@ -53,6 +53,13 @@ func (f *fakeClient) respond(t *testing.T, key string, rc int, stdout, stderr st
 	f.write(t, key+".stderr", stderr)
 }
 
+// respondNth makes only the n-th call (from 1) of the subcommand key answer with rc,
+// stdout and stderr; the other calls keep the answer of respond.
+func (f *fakeClient) respondNth(t *testing.T, key string, n, rc int, stdout, stderr string) {
+	t.Helper()
+	f.respond(t, key+"."+strconv.Itoa(n), rc, stdout, stderr)
+}
+
 // hang makes the subcommand key sleep for seconds after its output.
 func (f *fakeClient) hang(t *testing.T, key string, seconds int) {
 	t.Helper()
