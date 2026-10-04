@@ -179,7 +179,10 @@ func TestInspectMailLogStatus_Variants(t *testing.T) {
 		{name: "rejected", queueID: "QREJ", want: "rejected"},
 		{name: "error", queueID: "QERR", want: "error"},
 		{name: "unknown", queueID: "QUNK", want: "unknown"},
-		{name: "filter fallback uses whole log", queueID: "MISSING", want: "sent"},
+		// No line names the queue ID: nothing, never another message's status.
+		{name: "no line for the queue ID", queueID: "MISSING", want: ""},
+		// "QSEN" is a prefix of a field, not a field.
+		{name: "a prefix is not the queue ID", queueID: "QSEN", want: ""},
 	}
 
 	for _, tt := range tests {
@@ -192,8 +195,8 @@ func TestInspectMailLogStatus_Variants(t *testing.T) {
 			if usedPath != logFile {
 				t.Fatalf("logPath=%q want %q", usedPath, logFile)
 			}
-			if strings.TrimSpace(matched) == "" {
-				t.Fatalf("expected matched line to be non-empty")
+			if (strings.TrimSpace(matched) == "") != (tt.want == "") {
+				t.Fatalf("matched=%q for status %q", matched, tt.want)
 			}
 		})
 	}
@@ -261,20 +264,29 @@ func TestLogMailLogStatus_EmitsDetailsWhenNotDebug(t *testing.T) {
 		}
 	})
 
-	t.Run("pending status when status empty", func(t *testing.T) {
-		var buf bytes.Buffer
-		logger := logging.New(types.LogLevelInfo, false)
-		logger.SetOutput(&buf)
+	t.Run("no entry for the queue ID is DEBUG only", func(t *testing.T) {
+		for _, level := range []types.LogLevel{types.LogLevelInfo, types.LogLevelDebug} {
+			var buf bytes.Buffer
+			logger := logging.New(level, false)
+			logger.SetOutput(&buf)
 
-		notifier, err := NewEmailNotifier(EmailConfig{Enabled: true, DeliveryMethod: EmailDeliverySendmail}, types.ProxmoxBS, logger)
-		if err != nil {
-			t.Fatalf("NewEmailNotifier() error=%v", err)
-		}
+			notifier, err := NewEmailNotifier(EmailConfig{Enabled: true, DeliveryMethod: EmailDeliverySendmail}, types.ProxmoxBS, logger)
+			if err != nil {
+				t.Fatalf("NewEmailNotifier() error=%v", err)
+			}
 
-		notifier.logMailLogStatus("ABC123", "", "", "/var/log/mail.log")
-		out := buf.String()
-		if !strings.Contains(out, "delivery status pending") {
-			t.Fatalf("expected pending status message, got:\n%s", out)
+			notifier.logMailLogStatus("ABC123", "", "", "/var/log/mail.log")
+			out := buf.String()
+			switch level {
+			case types.LogLevelInfo:
+				if out != "" {
+					t.Fatalf("nothing expected above DEBUG, got:\n%s", out)
+				}
+			default:
+				if !strings.Contains(out, "DEBUG") || !strings.Contains(out, "delivery status pending") {
+					t.Fatalf("expected the pending line at DEBUG, got:\n%s", out)
+				}
+			}
 		}
 	})
 
@@ -311,4 +323,47 @@ func TestLogMailLogStatus_EmitsDetailsWhenNotDebug(t *testing.T) {
 			t.Fatalf("expected log entry output for unknown status, got:\n%s", out)
 		}
 	})
+}
+
+// The mail log of the pve-test live run (2026-10-04, journalctl), with the
+// recipient, the host name and the MX replaced by stand-ins. ProxSave's message
+// 8D8944D348 bounced; postfix sent two notices to root, which proxmox-mail-forward
+// resubmitted to the same recipient. 444804D348 is the queue ID the run detected, in
+// no line of the log: it used to get the status=sent of notice 29C324D347.
+func TestInspectMailLogStatusOnTheLiveMailLog(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join("testdata", "mail_log", "pve-test-case2.log"))
+	if err != nil {
+		t.Fatalf("read fixture: %v", err)
+	}
+	logFile := filepath.Join(t.TempDir(), "mail.log")
+	if err := os.WriteFile(logFile, raw, 0o600); err != nil {
+		t.Fatalf("write log file: %v", err)
+	}
+	origPaths := mailLogPaths
+	t.Cleanup(func() { mailLogPaths = origPaths })
+	mailLogPaths = []string{logFile}
+	toolDir := t.TempDir()
+	writeCmd(t, toolDir, "tail", "#!/bin/sh\nset -eu\ncat \"$3\"\n")
+	t.Setenv("PATH", toolDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	logger := logging.New(types.LogLevelDebug, false)
+	logger.SetOutput(io.Discard)
+	notifier, err := NewEmailNotifier(EmailConfig{Enabled: true, DeliveryMethod: EmailDeliverySendmail}, types.ProxmoxVE, logger)
+	if err != nil {
+		t.Fatalf("NewEmailNotifier() error=%v", err)
+	}
+	for _, tc := range []struct {
+		queueID, status, line string
+	}{
+		{"444804D348", "", ""},
+		{"8D8944D348", "bounced", "postfix/smtp[445659]: 8D8944D348: to=<admin@example.com>"},
+		// The notice's own lines, not 8D8944D348's "notification: 256914D34B" nor the
+		// forwarded copy's message-id.
+		{"256914D34B", "sent", "postfix/local[445664]: 256914D34B: to=<root@pve.example.lan>"},
+	} {
+		status, matched, _ := notifier.inspectMailLogStatus(context.Background(), tc.queueID)
+		if status != tc.status || !strings.Contains(matched, tc.line) {
+			t.Fatalf("%s: status=%q matched=%q, want %q in a line containing %q", tc.queueID, status, matched, tc.status, tc.line)
+		}
+	}
 }

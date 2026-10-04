@@ -1131,23 +1131,21 @@ func extractQueueID(outputs ...string) string {
 	return ""
 }
 
-// inspectMailLogStatus looks for a delivery status line for the given queue ID.
+// inspectMailLogStatus looks for a delivery status line for the given queue ID. Only
+// the lines of that message are read: postfix and sendmail open each with "<ID>:". A
+// line that only mentions the ID (another message's "notification: <ID>", a forwarded
+// notice's message-id) is not one of them. With no such line it reports nothing: the
+// status of another message is never reported as this one's.
 func (e *EmailNotifier) inspectMailLogStatus(ctx context.Context, queueID string) (status, matchedLine, logPath string) {
 	lines, logPath := e.tailMailLog(ctx, 80)
-	if len(lines) == 0 || logPath == "" {
+	if len(lines) == 0 || logPath == "" || strings.TrimSpace(queueID) == "" {
 		return "", "", logPath
 	}
 
-	relevant := lines
-	if queueID != "" {
-		filtered := make([]string, 0, len(lines))
-		for _, line := range lines {
-			if strings.Contains(line, queueID) {
-				filtered = append(filtered, line)
-			}
-		}
-		if len(filtered) > 0 {
-			relevant = filtered
+	relevant := make([]string, 0, len(lines))
+	for _, line := range lines {
+		if mailLogLineNamesQueueID(line, queueID) {
+			relevant = append(relevant, line)
 		}
 	}
 
@@ -1186,6 +1184,17 @@ func (e *EmailNotifier) inspectMailLogStatus(ctx context.Context, queueID string
 	return "", "", logPath
 }
 
+// mailLogLineNamesQueueID reports whether the line is one of queueID's: one of its
+// fields is the ID followed by the colon postfix and sendmail put after it.
+func mailLogLineNamesQueueID(line, queueID string) bool {
+	for _, field := range strings.Fields(line) {
+		if field == queueID+":" {
+			return true
+		}
+	}
+	return false
+}
+
 // logMailLogStatus writes a human-readable summary based on inspectMailLogStatus results.
 func (e *EmailNotifier) logMailLogStatus(queueID, status, matchedLine, logPath string) {
 	if queueID == "" && status == "" {
@@ -1214,8 +1223,10 @@ func (e *EmailNotifier) logMailLogStatus(queueID, status, matchedLine, logPath s
 		e.logger.Debug("Mail log (%s) has entries for queue ID %s, but status is inconclusive", logPath, displayID)
 	default:
 		if status == "" {
+			// Nothing in the log names this message: inconclusive, like an entry without
+			// a status, so DEBUG only.
 			if queueID != "" && logPath != "" {
-				e.logger.Info("Mail log (%s) has no recent entries for queue ID %s (delivery status pending)", logPath, displayID)
+				e.logger.Debug("Mail log (%s) has no recent entries for queue ID %s (delivery status pending)", logPath, displayID)
 			}
 			return
 		}
