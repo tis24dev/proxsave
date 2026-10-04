@@ -714,7 +714,7 @@ func (e *EmailNotifier) detectRecipientViaUserCfg(cfgPath string, targetUserID s
 		}
 
 		// Expected format (PVE/PBS): user:<userid>:<enable>:<expire>:<firstname>:<lastname>:<email>:...
-		// Example: user:root@pam:1:0:::info@tis24.it::
+		// Example: user:root@pam:1:0:::admin@example.com::
 		if !strings.HasPrefix(line, "user:") {
 			continue
 		}

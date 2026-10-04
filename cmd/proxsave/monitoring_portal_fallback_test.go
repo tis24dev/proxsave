@@ -18,7 +18,7 @@ func TestLogMonitoringPortalFallback(t *testing.T) {
 		portalWording = "Healthchecks Portal:"
 		loginWording  = "Healthchecks Login:"
 		portal        = "https://hc.proxsave.dev/accounts/login/"
-		login         = "1414274709917575@proxsave.dev"
+		login         = "5917204836150297@proxsave.dev"
 	)
 
 	t.Run("portal and identity are shown when no link was minted", func(t *testing.T) {
