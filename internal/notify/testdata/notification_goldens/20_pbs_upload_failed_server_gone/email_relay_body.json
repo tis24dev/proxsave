@@ -53,6 +53,7 @@
     },
     "metrics": {
       "backup_duration": "2m 14s",
+      "backup_file": "/opt/proxsave/backup/pve-golden-backup-20261004-020000.tar.xz.bundle.tar",
       "backup_file_name": "pve-golden-backup-20261004-020000.tar.xz.bundle.tar",
       "backup_size": "21.0 MiB",
       "compression_level": "9",
@@ -60,7 +61,8 @@
       "compression_ratio": "88.20",
       "compression_type": "xz",
       "file_missing": 0,
-      "files_included": 1832
+      "files_included": 1832,
+      "telegram_status": "centralized"
     },
     "paths": {
       "cloud": "gdrive:proxsave/backup",

@@ -47,6 +47,7 @@
     },
     "metrics": {
       "backup_duration": "2m 14s",
+      "backup_file": "",
       "backup_file_name": "",
       "backup_size": "0 B",
       "compression_level": "9",
@@ -54,7 +55,8 @@
       "compression_ratio": "0.00",
       "compression_type": "xz",
       "file_missing": 0,
-      "files_included": 0
+      "files_included": 0,
+      "telegram_status": "centralized"
     },
     "paths": {
       "cloud": "gdrive:proxsave/backup",

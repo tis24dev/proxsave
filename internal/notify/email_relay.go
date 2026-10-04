@@ -409,6 +409,8 @@ func buildReportData(data *NotificationData) map[string]interface{} {
 		// Nested metrics object
 		"metrics": map[string]interface{}{
 			"backup_file_name":  data.BackupFileName,
+			"backup_file":       data.BackupFile,                // the HTML email's "Backup File" row
+			"telegram_status":   valueOrNA(data.TelegramStatus), // the HTML email's "Telegram Status" row
 			"files_included":    data.FilesIncluded,
 			"file_missing":      data.FilesMissing, // Fixed: was "files_missing"
 			"backup_duration":   FormatDuration(data.BackupDuration),

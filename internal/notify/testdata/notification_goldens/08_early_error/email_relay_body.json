@@ -40,6 +40,7 @@
     },
     "metrics": {
       "backup_duration": "\u003c 1s",
+      "backup_file": "",
       "backup_file_name": "",
       "backup_size": "0 B",
       "compression_level": "0",
@@ -47,7 +48,8 @@
       "compression_ratio": "0.00",
       "compression_type": "",
       "file_missing": 0,
-      "files_included": 0
+      "files_included": 0,
+      "telegram_status": "N/A"
     },
     "paths": {
       "cloud": "",
