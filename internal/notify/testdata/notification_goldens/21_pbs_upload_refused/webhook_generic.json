@@ -56,12 +56,12 @@
     "pbs": {
       "count": 11,
       "emoji": "❌",
-      "free": null,
-      "percent": null,
-      "percent_num": null,
+      "free": "1.18 TB",
+      "percent": "32.3%",
+      "percent_num": 32.32662192393736,
       "status": "error",
       "status_summary": "11/15",
-      "used": null
+      "used": "578.00 GB"
     },
     "secondary": {
       "count": 15,

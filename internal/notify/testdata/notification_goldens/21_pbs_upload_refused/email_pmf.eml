@@ -16,7 +16,7 @@ BACKUP STATUS:<CR>
   Local:     15/15 backups (412.00 GB free)<CR>
   Secondary: 15/15 backups (1.80 TB free)<CR>
   Cloud:     15/15 backups<CR>
-  PBS:       11/15 backups (? free)<CR>
+  PBS:       11/15 backups (1.18 TB free)<CR>
 <CR>
 BACKUP DETAILS:<CR>
   Backup File: /opt/proxsave/backup/pve-golden-backup-20261004-020000.tar.x=<CR>
@@ -241,6 +241,14 @@ s<CR>
                     <div class=3D"count-block"><CR>
                         <span class=3D"emoji">=E2=9D=8C</span> 11/15 backup=<CR>
 s<CR>
+                    </div><CR>
+                    <div class=3D"storage-info"><CR>
+                        <span>578.00 GB</span><CR>
+                        <div class=3D"space-bar"><CR>
+                            <div class=3D"space-used normal" style=3D"width=<CR>
+: 32.3%;"></div><CR>
+                        </div><CR>
+                        <span>1.18 TB free (32.3% used)</span><CR>
                     </div><CR>
                 </div><CR>
             </div><CR>

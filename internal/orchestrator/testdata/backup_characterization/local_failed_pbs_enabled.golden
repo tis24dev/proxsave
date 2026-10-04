@@ -455,13 +455,13 @@ snapshot list --ns charns --repository charpbs@pbs!pve@192.0.2.10:charstore --ou
     "Status": "skipped",
     "Location": "",
     "Snapshot": "",
-    "Backups": -1,
+    "Backups": 2,
     "MaxBackups": 5,
     "RetentionPolicy": "simple",
     "Deleted": 0,
-    "FreeBytes": 0,
-    "UsedBytes": 0,
-    "TotalBytes": 0
+    "FreeBytes": 8186691584,
+    "UsedBytes": 20560846848,
+    "TotalBytes": 30080253952
   },
   "PBSTargetStorage": "charpbs",
   "MaxPBSTargetBackups": 5,

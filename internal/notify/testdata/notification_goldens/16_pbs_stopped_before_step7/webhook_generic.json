@@ -54,14 +54,14 @@
       "used": "54.00 GB"
     },
     "pbs": {
-      "count": null,
+      "count": 11,
       "emoji": "➖",
-      "free": null,
-      "percent": null,
-      "percent_num": null,
+      "free": "1.18 TB",
+      "percent": "32.3%",
+      "percent_num": 32.32662192393736,
       "status": "skipped",
-      "status_summary": "?/15",
-      "used": null
+      "status_summary": "11/15",
+      "used": "578.00 GB"
     },
     "secondary": {
       "count": 15,

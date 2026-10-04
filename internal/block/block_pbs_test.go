@@ -590,3 +590,97 @@ func TestRootNamespaceHasNoNsFlag(t *testing.T) {
 		}
 	}
 }
+
+// A step [7] that does not save the backup reports, for every figure it did not read
+// itself, what the startup check read: this host's snapshots and the datastore space.
+// The statistics count of step [7] wins when the server gave it. A storage that was not
+// initialized read neither, even when the datastore space came back before the check
+// failed; a saved backup whose statistics read failed keeps the count unread; the
+// disk-space check does not move the startup figures.
+func TestExecuteFailurePathsReportStartupFigures(t *testing.T) {
+	const avail, used, total = uint64(8186691584), uint64(20560846848), uint64(30080253952)
+	older := snapshotListJSON(snapshotJSON(testBackupID, testRunTime-86400, "none", false), snapshotJSON(testBackupID, testRunTime-2*86400, "none", false))
+	for _, tc := range []struct {
+		name        string
+		mutate      func(t *testing.T, h *pbsHarness)
+		status      string
+		backups     int
+		withSpace   bool
+		diskCheckGB bool
+	}{
+		{"upload refused, statistics read", func(t *testing.T, h *pbsHarness) {
+			h.fake.respond(t, "snapshot-list", 0, older, "")
+			h.fake.respond(t, "backup", 255, "", measuredStderr["owner"])
+		}, StatusError, 2, true, false},
+		{"server gone after startup", func(t *testing.T, h *pbsHarness) {
+			h.fake.respond(t, "snapshot-list", 0, older, "")
+			h.fake.respond(t, "backup", 255, "", measuredStderr["connection refused"])
+			h.fake.respondNth(t, "snapshot-list", 2, 255, "", measuredStderr["connection refused"])
+			h.fake.respondNth(t, "status", 2, 0, `{"avail":1,"backend-type":"filesystem","total":3,"used":2}`+"\n", "")
+		}, StatusError, 2, true, true},
+		{"backup not usable", func(t *testing.T, h *pbsHarness) {
+			h.fake.respond(t, "snapshot-list", 0, snapshotListJSON(snapshotJSON(testBackupID, testRunTime, "encrypt", false)), "")
+		}, StatusError, 1, true, false},
+		{"not initialized, version refused", func(t *testing.T, h *pbsHarness) {
+			h.fake.respond(t, "version", 255, "", measuredStderr["connection refused"])
+		}, StatusError, -1, false, false},
+		{"not initialized, space read before the namespace check failed", func(t *testing.T, h *pbsHarness) {
+			h.fake.respond(t, "snapshot-list", 255, "", measuredStderr["namespace"])
+		}, StatusError, -1, false, false},
+		{"saved, statistics read failed", func(t *testing.T, h *pbsHarness) {
+			h.fake.respondNth(t, "snapshot-list", 3, 255, "", measuredStderr["connection refused"])
+		}, StatusOK, -1, true, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newPBSHarness(t, "proxsave-probe", nil, simpleRetention(0), func(h *pbsHarness) { tc.mutate(t, h) })
+			if tc.diskCheckGB {
+				// The disk-space check reads the space again, other figures: the outcome
+				// keeps those of the startup check.
+				if _, cause := h.p.AvailableGB(context.Background()); cause != nil {
+					t.Fatalf("disk-space read: %+v", cause)
+				}
+			}
+			result := h.execute(t, newTree(t))
+			if result.Status != tc.status || result.Backups != tc.backups {
+				t.Fatalf("result = %+v, want status %s backups %d\n%s", result, tc.status, tc.backups, h.output.String())
+			}
+			gotSpace := result.FreeBytes == avail && result.UsedBytes == used && result.TotalBytes == total
+			noSpace := result.FreeBytes == 0 && result.UsedBytes == 0 && result.TotalBytes == 0
+			if (tc.withSpace && !gotSpace) || (!tc.withSpace && !noSpace) {
+				t.Fatalf("space free=%d used=%d total=%d, want read=%v", result.FreeBytes, result.UsedBytes, result.TotalBytes, tc.withSpace)
+			}
+		})
+	}
+}
+
+// A run stopped before step [7] (the result InitializeBackupStats wrote) gets the
+// startup figures; one the block already described keeps its own.
+func TestApplyStartupFigures(t *testing.T) {
+	h := newPBSHarness(t, "proxsave-probe", nil, simpleRetention(15), nil)
+	skipped := Result{Status: StatusSkipped, Backups: -1}
+	h.p.ApplyStartupFigures(&skipped)
+	if skipped.Status != StatusSkipped || skipped.Backups != 2 || skipped.FreeBytes != 8186691584 || skipped.TotalBytes != 30080253952 {
+		t.Fatalf("skipped result = %+v", skipped)
+	}
+	described := Result{Status: StatusOK, Backups: 7, FreeBytes: 1, UsedBytes: 2, TotalBytes: 3}
+	h.p.ApplyStartupFigures(&described)
+	if described.Backups != 7 || described.FreeBytes != 1 || described.UsedBytes != 2 || described.TotalBytes != 3 {
+		t.Fatalf("described result = %+v", described)
+	}
+	var none *PBS
+	none.ApplyStartupFigures(&skipped)
+
+	// Not initialized, the datastore space read before the namespace check failed: a run
+	// stopped before step [7] keeps both figures unread.
+	h = newPBSHarness(t, "proxsave-probe", nil, simpleRetention(15), func(h *pbsHarness) {
+		h.fake.respond(t, "snapshot-list", 255, "", measuredStderr["namespace"])
+	})
+	if h.report.Initialized() || h.p.status.Total == 0 {
+		t.Fatalf("want a storage not initialized with its space read: report=%+v status=%+v", h.report, h.p.status)
+	}
+	unread := Result{Status: StatusSkipped, Backups: -1}
+	h.p.ApplyStartupFigures(&unread)
+	if unread.Backups != -1 || unread.FreeBytes != 0 || unread.UsedBytes != 0 || unread.TotalBytes != 0 {
+		t.Fatalf("not initialized result = %+v, want nothing read", unread)
+	}
+}

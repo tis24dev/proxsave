@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/tis24dev/proxsave/internal/backup"
+	"github.com/tis24dev/proxsave/internal/block"
 	"github.com/tis24dev/proxsave/internal/environment"
 	"github.com/tis24dev/proxsave/internal/types"
 )
@@ -183,6 +184,21 @@ func (o *Orchestrator) finalizeFailedBackupStats(run *backupRunContext, runErr e
 			filler.applyInitialStats(stats)
 		}
 	}
+	// The PBS block too: a run stopped before step [7] reports what its startup check
+	// read. A block that ran never gets here, step [7] does not fail the run.
+	if stats.PBSTarget != nil {
+		for _, b := range o.backupBlocks {
+			if filler, ok := b.(startupResultFiller); ok {
+				filler.ApplyStartupFigures(stats.PBSTarget)
+			}
+		}
+	}
+}
+
+// startupResultFiller is a destination block that can describe its destination as the
+// startup check found it (block.PBS).
+type startupResultFiller interface {
+	ApplyStartupFigures(r *block.Result)
 }
 
 func (o *Orchestrator) prepareBackupWorkspace(run *backupRunContext, workspace *backupWorkspace) error {

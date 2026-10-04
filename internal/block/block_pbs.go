@@ -210,6 +210,11 @@ type PBS struct {
 	versions    Versions
 	initialized bool
 	status      datastoreStatus
+	// startupBackups and startupStatus are this host's snapshots and the datastore space
+	// the startup check read, for an outcome that has no figures of its own (Execute's
+	// failure paths, a run stopped before step [7]). Set only once initialized.
+	startupBackups int
+	startupStatus  datastoreStatus
 	// logger receives the DEBUG evidence: the startup logger, then the run's.
 	logger *logging.Logger
 	// snapshot is this run's snapshot, once the server listed it after the upload.
@@ -294,6 +299,8 @@ func InitPBS(ctx context.Context, opts PBSOptions) (*PBS, InitReport) {
 	}
 	report.Backups = snapshots
 	p.initialized = true
+	p.startupBackups = len(snapshots)
+	p.startupStatus = status
 	debugf(log, "pbs init: initialized, own snapshots=%d avail=%d used=%d total=%d", len(snapshots), status.Avail, status.Used, status.Total)
 	return p, report
 }
@@ -343,6 +350,23 @@ func (p *PBS) RetentionPolicyLine() string {
 		return "  Retention policy: simple (disabled)"
 	}
 	return fmt.Sprintf("  Retention policy: simple (pbs=%d)", rc.MaxBackups)
+}
+
+// ApplyStartupFigures writes into r what the startup check read, for every figure r has
+// not read itself: this host's snapshot count (Backups -1) and the datastore space (no
+// total). A storage that was not initialized read neither, and r keeps them unread. It
+// serves Execute's failure paths and a run stopped before step [7], the way a sibling
+// destination reports its startup figures (StorageAdapter.applyInitialStats).
+func (p *PBS) ApplyStartupFigures(r *Result) {
+	if p == nil || r == nil || !p.initialized {
+		return
+	}
+	if r.Backups < 0 {
+		r.Backups = p.startupBackups
+	}
+	if r.TotalBytes == 0 {
+		r.FreeBytes, r.UsedBytes, r.TotalBytes = p.startupStatus.Avail, p.startupStatus.Used, p.startupStatus.Total
+	}
 }
 
 // AvailableGB asks the server, now, the free space of the filesystem that holds the
@@ -408,6 +432,7 @@ func (p *PBS) Execute(in Input) Result {
 		log.Warning("%s %s: backup not saved", theme.SymbolError, PBSName)
 		log.Skip("Retention: backup not saved")
 		p.logStatistics(ctx, log, &result)
+		p.ApplyStartupFigures(&result)
 		result.Status = StatusError
 		return result
 	}
@@ -418,6 +443,7 @@ func (p *PBS) Execute(in Input) Result {
 		log.Warning("%s %s: backup not saved", theme.SymbolError, PBSName)
 		log.Skip("Retention: backup not saved")
 		p.logStatistics(ctx, log, &result)
+		p.ApplyStartupFigures(&result)
 		result.Status = StatusError
 		return result
 	}
@@ -436,6 +462,7 @@ func (p *PBS) Execute(in Input) Result {
 		log.Warning("%s %s: backup not usable", theme.SymbolError, PBSName)
 		log.Skip("Retention: backup not usable")
 		p.logStatistics(ctx, log, &result)
+		p.ApplyStartupFigures(&result)
 		result.Status = StatusError
 		return result
 	}

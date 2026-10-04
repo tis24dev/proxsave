@@ -81,13 +81,13 @@
     "Status": "skipped",
     "Location": "",
     "Snapshot": "",
-    "Backups": -1,
+    "Backups": 11,
     "MaxBackups": 15,
     "RetentionPolicy": "simple",
     "Deleted": 0,
-    "FreeBytes": 0,
-    "UsedBytes": 0,
-    "TotalBytes": 0
+    "FreeBytes": 1299227607040,
+    "UsedBytes": 620622774272,
+    "TotalBytes": 1919850381312
   },
   "PBSTargetStorage": "pbs-offsite",
   "MaxPBSTargetBackups": 15,

@@ -6,7 +6,7 @@ BACKUP STATUS:
   Local:     15/15 backups (412.00 GB free)
   Secondary: 15/15 backups (1.80 TB free)
   Cloud:     15/15 backups
-  PBS:       ?/15 backups (? free)
+  PBS:       11/15 backups (1.18 TB free)
 
 BACKUP DETAILS:
   Backup File: /opt/proxsave/backup/pve-golden-backup-20261004-020000.tar.xz.bundle.tar

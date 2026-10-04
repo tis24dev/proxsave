@@ -88,11 +88,11 @@
         "used": "54.00 GB"
       },
       "pbs": {
-        "free": null,
-        "percent": null,
-        "percent_num": null,
-        "space": null,
-        "used": null
+        "free": "1.18 TB",
+        "percent": "32.3%",
+        "percent_num": 32.32662192393736,
+        "space": "1.18 TB",
+        "used": "578.00 GB"
       },
       "secondary": {
         "free": "1.80 TB",
