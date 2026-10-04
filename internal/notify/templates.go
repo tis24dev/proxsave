@@ -291,7 +291,7 @@ func BuildEmailHTML(data *NotificationData) string {
 	html.WriteString("            </div>\n")
 
 	// System Recommendations Section
-	if data.LocalUsagePercent > 85 || (data.SecondaryEnabled && data.SecondaryUsagePercent > 85) {
+	if data.LocalUsagePercent > 85 || (data.SecondaryEnabled && data.SecondaryUsagePercent > 85) || (data.PBSEnabled && data.PBSUsagePercent > 85) {
 		html.WriteString("            \n")
 		html.WriteString("            <div class=\"section\">\n")
 		html.WriteString("                <h2>System Recommendations</h2>\n")
@@ -301,6 +301,9 @@ func BuildEmailHTML(data *NotificationData) string {
 		}
 		if data.SecondaryEnabled && data.SecondaryUsagePercent > 85 {
 			fmt.Fprintf(&html, "                    <p>⚠️ <strong>Secondary storage is %.1f%% full.</strong> Consider cleaning old backups or expanding storage capacity.</p>\n", data.SecondaryUsagePercent)
+		}
+		if data.PBSEnabled && data.PBSUsagePercent > 85 {
+			fmt.Fprintf(&html, "                    <p>⚠️ <strong>PBS storage is %.1f%% full.</strong> Consider cleaning old backups or expanding storage capacity.</p>\n", data.PBSUsagePercent)
 		}
 		html.WriteString("                </div>\n")
 		html.WriteString("            </div>\n")

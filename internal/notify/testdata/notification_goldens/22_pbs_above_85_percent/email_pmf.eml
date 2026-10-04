@@ -329,6 +329,15 @@ r-radius:6px; margin-bottom:15px; border-left:4px solid #4CAF50;"><CR>
 ull log available at: /opt/proxsave/log/backup-pve-golden-20261004-020000.l=<CR>
 og</p><CR>
             </div><CR>
+           =20<CR>
+            <div class=3D"section"><CR>
+                <h2>System Recommendations</h2><CR>
+                <div style=3D"padding:15px; background-color:#FFF3E0; borde=<CR>
+r-radius:6px; border-left:4px solid #FF9800;"><CR>
+                    <p>=E2=9A=A0=EF=B8=8F <strong>PBS storage is 89.5% full=<CR>
+.</strong> Consider cleaning old backups or expanding storage capacity.</p><CR>
+                </div><CR>
+            </div><CR>
         </div><CR>
         <div class=3D"footer"><CR>
             <p>This is an automated message from the Proxmox Backup Script.=<CR>
