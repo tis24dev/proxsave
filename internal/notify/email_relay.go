@@ -137,7 +137,7 @@ func sendViaCloudRelay(
 				return ctxErr
 			}
 			lastErr = fmt.Errorf("request failed: %w", err)
-			logger.Warning("Cloud relay request failed (attempt %d/%d): %v", attempt+1, config.MaxRetries+1, err)
+			logger.Warning("Cloud relay: request failed, attempt %d/%d: %v", attempt+1, config.MaxRetries+1, err)
 			continue
 		}
 
@@ -230,13 +230,13 @@ func sendViaCloudRelay(
 
 		case 500, 502, 503, 504:
 			// Server errors - retry
-			logger.Warning("Cloud relay: server error (HTTP %d), will retry", resp.StatusCode)
+			logger.Warning("Cloud relay: server error (HTTP %d), attempt %d/%d", resp.StatusCode, attempt+1, config.MaxRetries+1)
 			lastErr = fmt.Errorf("server error (HTTP %d): %s", resp.StatusCode, string(body))
 			continue
 
 		default:
 			// Unexpected status - retry
-			logger.Warning("Cloud relay: unexpected status (HTTP %d): %s", resp.StatusCode, string(body))
+			logger.Warning("Cloud relay: unexpected status (HTTP %d), attempt %d/%d: %s", resp.StatusCode, attempt+1, config.MaxRetries+1, string(body))
 			lastErr = fmt.Errorf("unexpected status (HTTP %d): %s", resp.StatusCode, string(body))
 			continue
 		}
@@ -359,9 +359,9 @@ func isQuotaLimit(detail string) bool {
 	return false
 }
 
-// buildReportData builds the structured report data for cloud relay
-// This must match the Bash script's collect_email_report_data() output exactly
-// to ensure HMAC signature validation passes
+// buildReportData builds the structured report data for cloud relay.
+// The relay worker builds the email from this shape: a key added or changed
+// here also needs the worker's template.
 func buildReportData(data *NotificationData) map[string]interface{} {
 	// Build nested structure matching Bash format exactly
 	return map[string]interface{}{

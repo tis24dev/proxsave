@@ -322,3 +322,56 @@ func TestSendViaCloudRelay_StopsRetryingWhenContextCanceled(t *testing.T) {
 		t.Fatalf("expected 1 attempt after cancellation, got %d", got)
 	}
 }
+
+// Every retry line of the relay names the attempt it reports, the last one included
+// (it used to say "will retry" there too).
+func TestSendViaCloudRelay_RetryLinesNameTheAttempt(t *testing.T) {
+	send := func(t *testing.T, url string, maxRetries int) string {
+		t.Helper()
+		logger := logging.New(types.LogLevelDebug, false)
+		var buf strings.Builder
+		logger.SetOutput(&buf)
+		_ = sendViaCloudRelay(context.Background(), CloudRelayConfig{
+			WorkerURL: url, WorkerToken: "token", HMACSecret: "secret", Timeout: 5, MaxRetries: maxRetries, RetryDelay: 0,
+		}, EmailRelayPayload{To: "dest@test.invalid", Subject: "subject", Report: map[string]interface{}{"ok": true},
+			Timestamp: time.Now().Unix(), ServerMAC: "00:11:22:33:44:55", ScriptVersion: "0.0.1", ServerID: "server-id"}, logger)
+		var warnings []string
+		for _, line := range strings.Split(buf.String(), "\n") {
+			if _, rest, ok := strings.Cut(line, "WARNING"); ok {
+				warnings = append(warnings, strings.TrimSpace(rest))
+			}
+		}
+		return strings.Join(warnings, "\n")
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}))
+	defer server.Close()
+	if got, want := send(t, server.URL, 2), "Cloud relay: server error (HTTP 503), attempt 1/3\n"+
+		"Cloud relay: server error (HTTP 503), attempt 2/3\n"+
+		"Cloud relay: server error (HTTP 503), attempt 3/3"; got != want {
+		t.Fatalf("server error lines:\n%s\nwant\n%s", got, want)
+	}
+
+	var calls int32
+	teapot := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if atomic.AddInt32(&calls, 1) == 1 {
+			w.WriteHeader(http.StatusTeapot)
+			_, _ = w.Write([]byte("nope"))
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer teapot.Close()
+	if got, want := send(t, teapot.URL, 1), "Cloud relay: unexpected status (HTTP 418), attempt 1/2: nope"; got != want {
+		t.Fatalf("unexpected status line:\n%s\nwant\n%s", got, want)
+	}
+
+	closed := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	url := closed.URL
+	closed.Close()
+	if got := send(t, url, 0); !strings.HasPrefix(got, "Cloud relay: request failed, attempt 1/1: ") || strings.Contains(got, "\n") {
+		t.Fatalf("request failed line: %q", got)
+	}
+}

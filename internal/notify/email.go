@@ -353,9 +353,9 @@ func (e *EmailNotifier) Send(ctx context.Context, data *NotificationData) (*Noti
 
 	// Success (either primary or fallback)
 	if result.UsedFallback {
-		// Fallback succeeded after relay failure. The adapter emits the single
-		// "sent via fallback" WARNING for the channel; keep this at Debug so it is
-		// not double-reported.
+		// Fallback succeeded after the primary method failed. That failure already
+		// printed its own WARNING and the adapter adds the channel's "sent via
+		// fallback" one; this line stays at Debug so neither is printed twice.
 		e.logger.Debug("Email: sent via fallback after primary delivery failure")
 	}
 
