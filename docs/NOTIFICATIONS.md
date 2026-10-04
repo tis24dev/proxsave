@@ -414,9 +414,9 @@ method with no relay fallback. `pmf` is not an alternative. When `proxmox-mail-f
 fails and a non-root recipient is configured, ProxSave tries the shared relay **first** and
 only then sendmail, and no configuration key disables that hop.
 
-The JSON report body (`buildReportData`) must byte-match the legacy Bash
-`collect_email_report_data()` output, otherwise the worker's HMAC signature check
-fails. Changing the report shape breaks relay auth.
+The worker builds the email from the JSON report (`buildReportData`): a key added or
+changed there also needs the worker's template, or the email sent through the relay
+will not show it.
 
 ## Gotify
 
