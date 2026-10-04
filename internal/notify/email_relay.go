@@ -364,7 +364,7 @@ func isQuotaLimit(detail string) bool {
 // here also needs the worker's template.
 func buildReportData(data *NotificationData) map[string]interface{} {
 	// Build nested structure matching Bash format exactly
-	return map[string]interface{}{
+	report := map[string]interface{}{
 		// Top-level fields
 		"status":         data.Status.String(),
 		"status_message": data.StatusMessage,
@@ -381,7 +381,6 @@ func buildReportData(data *NotificationData) map[string]interface{} {
 			"primary":   GetStorageEmoji(data.LocalStatus),
 			"secondary": GetStorageEmoji(data.SecondaryStatus),
 			"cloud":     GetStorageEmoji(data.CloudStatus),
-			"pbs":       GetStorageEmoji(data.PBSStatus),
 			"email":     GetStorageEmoji(data.EmailStatus),
 		},
 
@@ -401,11 +400,6 @@ func buildReportData(data *NotificationData) map[string]interface{} {
 				"status": data.CloudStatusSummary,
 				"emoji":  GetStorageEmoji(data.CloudStatus),
 				"count":  countValue(data.CloudCount),
-			},
-			"pbs": map[string]interface{}{
-				"status": data.PBSStatusSummary,
-				"emoji":  GetStorageEmoji(data.PBSStatus),
-				"count":  countValue(data.PBSCount),
 			},
 		},
 
@@ -443,14 +437,37 @@ func buildReportData(data *NotificationData) map[string]interface{} {
 			"secondary":     data.SecondaryPath,
 			"cloud":         data.CloudPath,
 			"cloud_display": formatCloudPathDisplay(data.CloudPath),
-			"pbs":           data.PBSStorageID,
 			"has_secondary": data.SecondaryEnabled,
 			"has_cloud":     data.CloudEnabled,
-			"has_pbs":       data.PBSEnabled,
 		},
 
 		// Exit code at top level
 		"exit_code": data.ExitCode,
+	}
+	addPBSReportData(report, data)
+	return report
+}
+
+// addPBSReportData adds the PBS keys (emojis.pbs, backup.pbs, paths.pbs,
+// paths.has_pbs; storage.pbs is buildStorageData's) only when PBS is on: with PBS
+// off the report keeps the shape it had before the PBS destination existed.
+func addPBSReportData(report map[string]interface{}, data *NotificationData) {
+	if !data.PBSEnabled {
+		return
+	}
+	if emojis, ok := report["emojis"].(map[string]interface{}); ok {
+		emojis["pbs"] = GetStorageEmoji(data.PBSStatus)
+	}
+	if backup, ok := report["backup"].(map[string]interface{}); ok {
+		backup["pbs"] = map[string]interface{}{
+			"status": data.PBSStatusSummary,
+			"emoji":  GetStorageEmoji(data.PBSStatus),
+			"count":  countValue(data.PBSCount),
+		}
+	}
+	if paths, ok := report["paths"].(map[string]interface{}); ok {
+		paths["pbs"] = data.PBSStorageID
+		paths["has_pbs"] = true
 	}
 }
 

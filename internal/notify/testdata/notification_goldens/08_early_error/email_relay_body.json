@@ -8,11 +8,6 @@
         "emoji": "➖",
         "status": "0/?"
       },
-      "pbs": {
-        "count": 0,
-        "emoji": "➖",
-        "status": "0/?"
-      },
       "primary": {
         "count": 0,
         "emoji": "❌",
@@ -28,7 +23,6 @@
     "emojis": {
       "cloud": "➖",
       "email": "➖",
-      "pbs": "➖",
       "primary": "❌",
       "secondary": "➖"
     },
@@ -59,10 +53,8 @@
       "cloud": "",
       "cloud_display": "Not configured",
       "has_cloud": false,
-      "has_pbs": false,
       "has_secondary": false,
       "local": "",
-      "pbs": "",
       "secondary": ""
     },
     "proxmox_type": "pve",
