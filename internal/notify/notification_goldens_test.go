@@ -142,9 +142,19 @@ func renderNotifyGoldenTelegram(data *NotificationData) []byte {
 	return []byte((&TelegramNotifier{}).buildMessage(data))
 }
 
+// notifyGoldenCRToken stands for one carriage-return byte (0x0D) in the MIME golden. The
+// message mixes LF line ends (headers, boundaries) with CRLF ones (the quoted-printable
+// bodies), and a raw CR in a checked-in file would be rewritten by an autocrlf checkout.
+// The golden therefore holds no CR byte: every CR is written as this token, left in place
+// (so "<CR>" sits right before the LF it precedes). Replacing each token with 0x0D gives
+// back the exact bytes handed over; the message is checked to hold no literal token, so
+// the substitution cannot be ambiguous.
+const notifyGoldenCRToken = "<CR>"
+
 // renderNotifyGoldenPMF sends the email through EMAIL_DELIVERY_METHOD=pmf to a fake
 // proxmox-mail-forward that stores its standard input, and returns those bytes: the MIME
-// message exactly as handed over (sendmail receives the same buildEmailMessage output).
+// message exactly as handed over (sendmail receives the same buildEmailMessage output),
+// with every CR written as notifyGoldenCRToken.
 func renderNotifyGoldenPMF(t *testing.T, data *NotificationData) []byte {
 	t.Helper()
 	capturePath := filepath.Join(t.TempDir(), "pmf_stdin.eml")
@@ -171,7 +181,10 @@ func renderNotifyGoldenPMF(t *testing.T, data *NotificationData) []byte {
 		t.Fatalf("read pmf capture: %v", err)
 	}
 	checkNotifyGoldenMIME(t, got, BuildEmailPlainText(data), BuildEmailHTML(data))
-	return got
+	if bytes.Contains(got, []byte(notifyGoldenCRToken)) {
+		t.Fatalf("the MIME message holds a literal %q: the CR token would be ambiguous", notifyGoldenCRToken)
+	}
+	return bytes.ReplaceAll(got, []byte("\r"), []byte(notifyGoldenCRToken))
 }
 
 // checkNotifyGoldenMIME decodes the message and checks that it carries, in this order,
