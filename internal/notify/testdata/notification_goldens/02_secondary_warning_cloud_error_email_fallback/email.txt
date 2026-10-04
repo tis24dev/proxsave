@@ -22,8 +22,8 @@ ISSUES:
   Log: /opt/proxsave/log/backup-pve-golden-20261004-020000.log
 
 ISSUE DETAILS:
-  - [WARNING] ⚠ Retention not applied (count: 1)
   - [WARNING] ✗ Cloud Storage (rclone): backup not saved (count: 1)
+  - [WARNING] ⚠ Retention not applied (count: 1)
 
 Exit Code: 1
 Script Version: 0.41.0

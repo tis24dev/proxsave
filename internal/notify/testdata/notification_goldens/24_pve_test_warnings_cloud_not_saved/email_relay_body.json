@@ -31,6 +31,18 @@
     "log_summary": {
       "categories": [
         {
+          "label": "✗ Cloud log directory not configured (cloud storage enabled)",
+          "type": "WARNING",
+          "count": 1,
+          "example": "✗ Cloud log directory not configured (cloud storage enabled)"
+        },
+        {
+          "label": "✗ Cloud Storage (rclone): backup not saved",
+          "type": "WARNING",
+          "count": 1,
+          "example": "✗ Cloud Storage (rclone): backup not saved"
+        },
+        {
           "label": "ACME plugins: not configured. If unused, set BACKUP_PBS_ACME_PLUGINS=false to disable.",
           "type": "WARNING",
           "count": 1,
@@ -89,6 +101,66 @@
           "type": "WARNING",
           "count": 1,
           "example": "Notifications configuration: not configured. If unused, set BACKUP_PBS_NOTIFICATIONS=false to disable."
+        },
+        {
+          "label": "Notifications secrets: not configured. If unused, set BACKUP_PBS_NOTIFICATIONS_PRIV=false to disable.",
+          "type": "WARNING",
+          "count": 1,
+          "example": "Notifications secrets: not configured. If unused, set BACKUP_PBS_NOTIFICATIONS_PRIV=false to disable."
+        },
+        {
+          "label": "Prune schedules: not configured. If unused, set BACKUP_PRUNE_SCHEDULES=false to disable.",
+          "type": "WARNING",
+          "count": 1,
+          "example": "Prune schedules: not configured. If unused, set BACKUP_PRUNE_SCHEDULES=false to disable."
+        },
+        {
+          "label": "Remote configuration: not configured. If unused, set BACKUP_REMOTE_CONFIGS=false to disable.",
+          "type": "WARNING",
+          "count": 1,
+          "example": "Remote configuration: not configured. If unused, set BACKUP_REMOTE_CONFIGS=false to disable."
+        },
+        {
+          "label": "Skipping ZFS collection: not detected. Set BACKUP_ZFS_CONFIG=false to disable.",
+          "type": "WARNING",
+          "count": 1,
+          "example": "Skipping ZFS collection: not detected. Set BACKUP_ZFS_CONFIG=false to disable."
+        },
+        {
+          "label": "Sync jobs: not configured. If unused, set BACKUP_SYNC_JOBS=false to disable.",
+          "type": "WARNING",
+          "count": 1,
+          "example": "Sync jobs: not configured. If unused, set BACKUP_SYNC_JOBS=false to disable."
+        },
+        {
+          "label": "Tape configuration: not configured. If unused, set BACKUP_TAPE_CONFIGS=false to disable.",
+          "type": "WARNING",
+          "count": 1,
+          "example": "Tape configuration: not configured. If unused, set BACKUP_TAPE_CONFIGS=false to disable."
+        },
+        {
+          "label": "Tape encryption keys: not configured. If unused, set BACKUP_TAPE_CONFIGS=false to disable.",
+          "type": "WARNING",
+          "count": 1,
+          "example": "Tape encryption keys: not configured. If unused, set BACKUP_TAPE_CONFIGS=false to disable."
+        },
+        {
+          "label": "Tape jobs: not configured. If unused, set BACKUP_TAPE_CONFIGS=false to disable.",
+          "type": "WARNING",
+          "count": 1,
+          "example": "Tape jobs: not configured. If unused, set BACKUP_TAPE_CONFIGS=false to disable."
+        },
+        {
+          "label": "Traffic control rules: not configured. If unused, set BACKUP_PBS_TRAFFIC_CONTROL=false to disable.",
+          "type": "WARNING",
+          "count": 1,
+          "example": "Traffic control rules: not configured. If unused, set BACKUP_PBS_TRAFFIC_CONTROL=false to disable."
+        },
+        {
+          "label": "Verification jobs: not configured. If unused, set BACKUP_VERIFICATION_JOBS=false to disable.",
+          "type": "WARNING",
+          "count": 1,
+          "example": "Verification jobs: not configured. If unused, set BACKUP_VERIFICATION_JOBS=false to disable."
         }
       ],
       "color": "#ffc107",

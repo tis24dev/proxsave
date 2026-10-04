@@ -24,14 +24,14 @@
   "log_categories": [
     {
       "count": 1,
-      "example": "⚠ Retention not applied",
-      "label": "⚠ Retention not applied",
+      "example": "✗ Cloud Storage (rclone): backup not saved",
+      "label": "✗ Cloud Storage (rclone): backup not saved",
       "type": "WARNING"
     },
     {
       "count": 1,
-      "example": "✗ Cloud Storage (rclone): backup not saved",
-      "label": "✗ Cloud Storage (rclone): backup not saved",
+      "example": "⚠ Retention not applied",
+      "label": "⚠ Retention not applied",
       "type": "WARNING"
     }
   ],

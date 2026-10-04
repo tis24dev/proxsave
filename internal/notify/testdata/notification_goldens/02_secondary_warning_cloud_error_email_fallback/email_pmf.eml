@@ -34,8 +34,8 @@ ISSUES:<CR>
   Log: /opt/proxsave/log/backup-pve-golden-20261004-020000.log<CR>
 <CR>
 ISSUE DETAILS:<CR>
-  - [WARNING] =E2=9A=A0 Retention not applied (count: 1)<CR>
   - [WARNING] =E2=9C=97 Cloud Storage (rclone): backup not saved (count: 1)<CR>
+  - [WARNING] =E2=9A=A0 Retention not applied (count: 1)<CR>
 <CR>
 Exit Code: 1<CR>
 Script Version: 0.41.0<CR>
@@ -326,13 +326,13 @@ und-color:#f2f2f2;">Type</th><CR>
 und-color:#f2f2f2;">Count</th><CR>
                     </tr><CR>
                     <tr><CR>
-                        <td>=E2=9A=A0 Retention not applied</td><CR>
+                        <td>=E2=9C=97 Cloud Storage (rclone): backup not sa=<CR>
+ved</td><CR>
                         <td>WARNING</td><CR>
                         <td>1</td><CR>
                     </tr><CR>
                     <tr><CR>
-                        <td>=E2=9C=97 Cloud Storage (rclone): backup not sa=<CR>
-ved</td><CR>
+                        <td>=E2=9A=A0 Retention not applied</td><CR>
                         <td>WARNING</td><CR>
                         <td>1</td><CR>
                     </tr><CR>

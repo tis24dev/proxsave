@@ -670,6 +670,12 @@ calls: 1
   "LogFilePath": "<ROOT>/log/backup-charhost-20260102-030405.log",
   "LogCategories": [
     {
+      "label": "✗ Secondary Storage: backup not saved",
+      "type": "WARNING",
+      "count": 1,
+      "example": "✗ Secondary Storage: backup not saved"
+    },
+    {
       "label": "Collection: recipe system aborted at brick \"system_core_runtime\"",
       "type": "WARNING",
       "count": 1,
@@ -686,12 +692,6 @@ calls: 1
       "type": "WARNING",
       "count": 1,
       "example": "Unknown Proxmox type, collecting generic system info only"
-    },
-    {
-      "label": "✗ Secondary Storage: backup not saved",
-      "type": "WARNING",
-      "count": 1,
-      "example": "✗ Secondary Storage: backup not saved"
     }
   ],
   "ExitCode": 1,

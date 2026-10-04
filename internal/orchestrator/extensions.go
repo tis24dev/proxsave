@@ -334,11 +334,9 @@ func (o *Orchestrator) refreshLogIssuesFromFile(stats *BackupStats, includeCateg
 		return
 	}
 
-	categoryLimit := 0
-	if includeCategories {
-		categoryLimit = 10
-	}
-	categories, errorCount, warningCount, notifyCount := ParseLogCounts(stats.LogFilePath, categoryLimit)
+	// No cap: the notifications list every problem; the chat webhooks keep their own
+	// short list (webhook_payloads.go).
+	categories, errorCount, warningCount, notifyCount := ParseLogCounts(stats.LogFilePath, 0)
 	stats.ErrorCount = errorCount
 	stats.WarningCount = warningCount
 	stats.NotifyCount = notifyCount

@@ -77,7 +77,7 @@
     },
     {
       "text": {
-        "text": "*Errors:* 0 | *Warnings:* 2\n\n*Top Issues:*\n• [WARNING] ⚠ Retention not applied (×1)\n• [WARNING] ✗ Cloud Storage (rclone): backup not saved (×1)\n",
+        "text": "*Errors:* 0 | *Warnings:* 2\n\n*Top Issues:*\n• [WARNING] ✗ Cloud Storage (rclone): backup not saved (×1)\n• [WARNING] ⚠ Retention not applied (×1)\n",
         "type": "mrkdwn"
       },
       "type": "section"

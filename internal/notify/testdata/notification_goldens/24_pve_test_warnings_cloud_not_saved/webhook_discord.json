@@ -62,7 +62,7 @@
         {
           "inline": false,
           "name": "Top Issues",
-          "value": "```\n[WARNING] ACME plugins: not configured. If unused, set BACKUP_PBS_ACME_PLUGINS=false to disable. (count: 1)\n[WARNING] Cloud storage enabled but CLOUD_LOG_PATH is empty (count: 1)\n[WARNING] Corosync authkey: not configured. If unused, set BACKUP_CLUSTER_CONFIG=false to disable. (count: 1)\n[WARNING] Corosync configuration: not configured. If unused, set BACKUP_CLUSTER_CONFIG=false to disable. (count: 1)\n[WARNING] External metric servers: not configured. If unused, set BACKUP_PBS_METRIC_SERVERS=false to disable. (count: 1)\n... and 5 more\n```"
+          "value": "```\n[WARNING] ✗ Cloud log directory not configured (cloud storage enabled) (count: 1)\n[WARNING] ✗ Cloud Storage (rclone): backup not saved (count: 1)\n[WARNING] ACME plugins: not configured. If unused, set BACKUP_PBS_ACME_PLUGINS=false to disable. (count: 1)\n[WARNING] Cloud storage enabled but CLOUD_LOG_PATH is empty (count: 1)\n[WARNING] Corosync authkey: not configured. If unused, set BACKUP_CLUSTER_CONFIG=false to disable. (count: 1)\n... and 17 more\n```"
         }
       ],
       "footer": {

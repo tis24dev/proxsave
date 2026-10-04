@@ -34,6 +34,9 @@ ISSUES:<CR>
   Log: /opt/proxsave/log/backup-pve-golden-20261004-020000.log<CR>
 <CR>
 ISSUE DETAILS:<CR>
+  - [WARNING] =E2=9C=97 Cloud log directory not configured (cloud storage e=<CR>
+nabled) (count: 1)<CR>
+  - [WARNING] =E2=9C=97 Cloud Storage (rclone): backup not saved (count: 1)<CR>
   - [WARNING] ACME plugins: not configured. If unused, set BACKUP_PBS_ACME_=<CR>
 PLUGINS=3Dfalse to disable. (count: 1)<CR>
   - [WARNING] Cloud storage enabled but CLOUD_LOG_PATH is empty (count: 1)<CR>
@@ -53,6 +56,26 @@ PBS_NETWORK_CONFIG=3Dfalse to disable. (count: 1)<CR>
 _NODE_CONFIG=3Dfalse to disable. (count: 1)<CR>
   - [WARNING] Notifications configuration: not configured. If unused, set B=<CR>
 ACKUP_PBS_NOTIFICATIONS=3Dfalse to disable. (count: 1)<CR>
+  - [WARNING] Notifications secrets: not configured. If unused, set BACKUP_=<CR>
+PBS_NOTIFICATIONS_PRIV=3Dfalse to disable. (count: 1)<CR>
+  - [WARNING] Prune schedules: not configured. If unused, set BACKUP_PRUNE_=<CR>
+SCHEDULES=3Dfalse to disable. (count: 1)<CR>
+  - [WARNING] Remote configuration: not configured. If unused, set BACKUP_R=<CR>
+EMOTE_CONFIGS=3Dfalse to disable. (count: 1)<CR>
+  - [WARNING] Skipping ZFS collection: not detected. Set BACKUP_ZFS_CONFIG=<CR>
+=3Dfalse to disable. (count: 1)<CR>
+  - [WARNING] Sync jobs: not configured. If unused, set BACKUP_SYNC_JOBS=3D=<CR>
+false to disable. (count: 1)<CR>
+  - [WARNING] Tape configuration: not configured. If unused, set BACKUP_TAP=<CR>
+E_CONFIGS=3Dfalse to disable. (count: 1)<CR>
+  - [WARNING] Tape encryption keys: not configured. If unused, set BACKUP_T=<CR>
+APE_CONFIGS=3Dfalse to disable. (count: 1)<CR>
+  - [WARNING] Tape jobs: not configured. If unused, set BACKUP_TAPE_CONFIGS=<CR>
+=3Dfalse to disable. (count: 1)<CR>
+  - [WARNING] Traffic control rules: not configured. If unused, set BACKUP_=<CR>
+PBS_TRAFFIC_CONTROL=3Dfalse to disable. (count: 1)<CR>
+  - [WARNING] Verification jobs: not configured. If unused, set BACKUP_VERI=<CR>
+FICATION_JOBS=3Dfalse to disable. (count: 1)<CR>
 <CR>
 Exit Code: 1<CR>
 Script Version: 0.41.0<CR>
@@ -343,6 +366,18 @@ und-color:#f2f2f2;">Type</th><CR>
 und-color:#f2f2f2;">Count</th><CR>
                     </tr><CR>
                     <tr><CR>
+                        <td>=E2=9C=97 Cloud log directory not configured (c=<CR>
+loud storage enabled)</td><CR>
+                        <td>WARNING</td><CR>
+                        <td>1</td><CR>
+                    </tr><CR>
+                    <tr><CR>
+                        <td>=E2=9C=97 Cloud Storage (rclone): backup not sa=<CR>
+ved</td><CR>
+                        <td>WARNING</td><CR>
+                        <td>1</td><CR>
+                    </tr><CR>
+                    <tr><CR>
                         <td>ACME plugins: not configured. If unused, set BA=<CR>
 CKUP_PBS_ACME_PLUGINS=3Dfalse to disable.</td><CR>
                         <td>WARNING</td><CR>
@@ -399,6 +434,66 @@ set BACKUP_PBS_NODE_CONFIG=3Dfalse to disable.</td><CR>
                     <tr><CR>
                         <td>Notifications configuration: not configured. If=<CR>
  unused, set BACKUP_PBS_NOTIFICATIONS=3Dfalse to disable.</td><CR>
+                        <td>WARNING</td><CR>
+                        <td>1</td><CR>
+                    </tr><CR>
+                    <tr><CR>
+                        <td>Notifications secrets: not configured. If unuse=<CR>
+d, set BACKUP_PBS_NOTIFICATIONS_PRIV=3Dfalse to disable.</td><CR>
+                        <td>WARNING</td><CR>
+                        <td>1</td><CR>
+                    </tr><CR>
+                    <tr><CR>
+                        <td>Prune schedules: not configured. If unused, set=<CR>
+ BACKUP_PRUNE_SCHEDULES=3Dfalse to disable.</td><CR>
+                        <td>WARNING</td><CR>
+                        <td>1</td><CR>
+                    </tr><CR>
+                    <tr><CR>
+                        <td>Remote configuration: not configured. If unused=<CR>
+, set BACKUP_REMOTE_CONFIGS=3Dfalse to disable.</td><CR>
+                        <td>WARNING</td><CR>
+                        <td>1</td><CR>
+                    </tr><CR>
+                    <tr><CR>
+                        <td>Skipping ZFS collection: not detected. Set BACK=<CR>
+UP_ZFS_CONFIG=3Dfalse to disable.</td><CR>
+                        <td>WARNING</td><CR>
+                        <td>1</td><CR>
+                    </tr><CR>
+                    <tr><CR>
+                        <td>Sync jobs: not configured. If unused, set BACKU=<CR>
+P_SYNC_JOBS=3Dfalse to disable.</td><CR>
+                        <td>WARNING</td><CR>
+                        <td>1</td><CR>
+                    </tr><CR>
+                    <tr><CR>
+                        <td>Tape configuration: not configured. If unused, =<CR>
+set BACKUP_TAPE_CONFIGS=3Dfalse to disable.</td><CR>
+                        <td>WARNING</td><CR>
+                        <td>1</td><CR>
+                    </tr><CR>
+                    <tr><CR>
+                        <td>Tape encryption keys: not configured. If unused=<CR>
+, set BACKUP_TAPE_CONFIGS=3Dfalse to disable.</td><CR>
+                        <td>WARNING</td><CR>
+                        <td>1</td><CR>
+                    </tr><CR>
+                    <tr><CR>
+                        <td>Tape jobs: not configured. If unused, set BACKU=<CR>
+P_TAPE_CONFIGS=3Dfalse to disable.</td><CR>
+                        <td>WARNING</td><CR>
+                        <td>1</td><CR>
+                    </tr><CR>
+                    <tr><CR>
+                        <td>Traffic control rules: not configured. If unuse=<CR>
+d, set BACKUP_PBS_TRAFFIC_CONTROL=3Dfalse to disable.</td><CR>
+                        <td>WARNING</td><CR>
+                        <td>1</td><CR>
+                    </tr><CR>
+                    <tr><CR>
+                        <td>Verification jobs: not configured. If unused, s=<CR>
+et BACKUP_VERIFICATION_JOBS=3Dfalse to disable.</td><CR>
                         <td>WARNING</td><CR>
                         <td>1</td><CR>
                     </tr><CR>

@@ -74,7 +74,7 @@
             "type": "FactSet"
           },
           {
-            "text": "**Top Issues:**\n\n• [WARNING] ⚠ Retention not applied (×1)\n\n• [WARNING] ✗ Cloud Storage (rclone): backup not saved (×1)\n\n",
+            "text": "**Top Issues:**\n\n• [WARNING] ✗ Cloud Storage (rclone): backup not saved (×1)\n\n• [WARNING] ⚠ Retention not applied (×1)\n\n",
             "type": "TextBlock",
             "wrap": true
           }

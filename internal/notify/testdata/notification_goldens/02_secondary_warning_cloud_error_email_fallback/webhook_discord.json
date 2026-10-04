@@ -57,7 +57,7 @@
         {
           "inline": false,
           "name": "Top Issues",
-          "value": "```\n[WARNING] ⚠ Retention not applied (count: 1)\n[WARNING] ✗ Cloud Storage (rclone): backup not saved (count: 1)\n```"
+          "value": "```\n[WARNING] ✗ Cloud Storage (rclone): backup not saved (count: 1)\n[WARNING] ⚠ Retention not applied (count: 1)\n```"
         }
       ],
       "footer": {

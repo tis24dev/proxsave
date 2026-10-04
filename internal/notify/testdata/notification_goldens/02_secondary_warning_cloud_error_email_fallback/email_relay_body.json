@@ -31,16 +31,16 @@
     "log_summary": {
       "categories": [
         {
-          "label": "⚠ Retention not applied",
-          "type": "WARNING",
-          "count": 1,
-          "example": "⚠ Retention not applied"
-        },
-        {
           "label": "✗ Cloud Storage (rclone): backup not saved",
           "type": "WARNING",
           "count": 1,
           "example": "✗ Cloud Storage (rclone): backup not saved"
+        },
+        {
+          "label": "⚠ Retention not applied",
+          "type": "WARNING",
+          "count": 1,
+          "example": "⚠ Retention not applied"
         }
       ],
       "color": "#ffc107",
