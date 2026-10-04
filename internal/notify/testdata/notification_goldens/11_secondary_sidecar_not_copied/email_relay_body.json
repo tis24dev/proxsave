@@ -15,7 +15,7 @@
       },
       "secondary": {
         "count": 15,
-        "emoji": "✅",
+        "emoji": "⚠️",
         "status": "15/15"
       }
     },
@@ -24,7 +24,7 @@
       "cloud": "✅",
       "email": "❓",
       "primary": "✅",
-      "secondary": "✅"
+      "secondary": "⚠️"
     },
     "exit_code": 1,
     "hostname": "pve-golden",

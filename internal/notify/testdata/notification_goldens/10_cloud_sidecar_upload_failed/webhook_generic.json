@@ -39,8 +39,8 @@
   "storage": {
     "cloud": {
       "count": 15,
-      "emoji": "❌",
-      "status": "error",
+      "emoji": "⚠️",
+      "status": "warning",
       "status_summary": "15/15"
     },
     "local": {

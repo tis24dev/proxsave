@@ -28,7 +28,7 @@ func BuildEmailPlainText(data *NotificationData) string {
 	body.WriteString("BACKUP STATUS:\n")
 	fmt.Fprintf(&body, "  Local:     %s backups (%s free)\n", data.LocalStatusSummary, data.LocalFree)
 	if data.SecondaryEnabled {
-		fmt.Fprintf(&body, "  Secondary: %s backups (%s free)\n", data.SecondaryStatusSummary, data.SecondaryFree)
+		fmt.Fprintf(&body, "  Secondary: %s backups (%s free)\n", data.SecondaryStatusSummary, freeText(data.SecondaryFree))
 	}
 	if data.CloudEnabled {
 		fmt.Fprintf(&body, "  Cloud:     %s backups\n", data.CloudStatusSummary)

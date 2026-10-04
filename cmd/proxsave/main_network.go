@@ -93,6 +93,7 @@ func webhookNetworkEnabled(cfg *config.Config) bool { return cfg.WebhookEnabled 
 func disableCloudNetworkFeature(cfg *config.Config, warn networkWarningFunc) {
 	warn("WARNING: Disabling cloud storage (rclone) due to missing network connectivity")
 	cfg.CloudEnabled = false
+	cfg.CloudStartupFailed = true
 	cfg.CloudLogPath = ""
 }
 

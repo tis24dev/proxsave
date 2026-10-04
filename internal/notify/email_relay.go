@@ -389,17 +389,17 @@ func buildReportData(data *NotificationData) map[string]interface{} {
 			"primary": map[string]interface{}{
 				"status": data.LocalStatusSummary,
 				"emoji":  GetStorageEmoji(data.LocalStatus),
-				"count":  data.LocalCount,
+				"count":  countValue(data.LocalCount),
 			},
 			"secondary": map[string]interface{}{
 				"status": data.SecondaryStatusSummary,
 				"emoji":  GetStorageEmoji(data.SecondaryStatus),
-				"count":  data.SecondaryCount,
+				"count":  countValue(data.SecondaryCount),
 			},
 			"cloud": map[string]interface{}{
 				"status": data.CloudStatusSummary,
 				"emoji":  GetStorageEmoji(data.CloudStatus),
-				"count":  data.CloudCount,
+				"count":  countValue(data.CloudCount),
 			},
 		},
 
@@ -461,11 +461,11 @@ func buildStorageData(data *NotificationData) map[string]interface{} {
 	// Only add secondary if enabled
 	if data.SecondaryEnabled {
 		storage["secondary"] = map[string]interface{}{
-			"space":       data.SecondaryFree, // Total space shown as free space
-			"used":        data.SecondaryUsed,
-			"free":        data.SecondaryFree,
-			"percent":     data.SecondaryPercent,
-			"percent_num": data.SecondaryUsagePercent,
+			"space":       spaceValue(data.SecondaryFree, data.SecondaryFree), // Total space shown as free space
+			"used":        spaceValue(data.SecondaryFree, data.SecondaryUsed),
+			"free":        spaceValue(data.SecondaryFree, data.SecondaryFree),
+			"percent":     spaceValue(data.SecondaryFree, data.SecondaryPercent),
+			"percent_num": spaceValue(data.SecondaryFree, data.SecondaryUsagePercent),
 		}
 	}
 

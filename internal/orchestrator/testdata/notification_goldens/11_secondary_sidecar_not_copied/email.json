@@ -34,7 +34,7 @@
   "LocalGFSYearly": 0,
   "LocalBackups": 15,
   "SecondaryEnabled": true,
-  "SecondaryStatus": "ok",
+  "SecondaryStatus": "warning",
   "SecondaryStatusSummary": "15/15",
   "SecondaryCount": 15,
   "SecondaryFree": "1.80 TB",

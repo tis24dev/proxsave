@@ -4,6 +4,8 @@ Date: 2026-10-04 02:00:00
 
 BACKUP STATUS:
   Local:     15/15 backups (412.00 GB free)
+  Secondary: ?/15 backups (? free)
+  Cloud:     ?/15 backups
 
 BACKUP DETAILS:
   Backup File: /opt/proxsave/backup/pve-golden-backup-20261004-020000.tar.xz.bundle.tar

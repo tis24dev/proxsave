@@ -250,6 +250,34 @@ func GetStorageEmoji(status string) string {
 	}
 }
 
+// A destination value that was never read (a destination that failed at startup, a PBS
+// block that got no count or no datastore space) reaches the channels as a negative count
+// and an empty free space. The text channels print "?" for it, the JSON payloads null.
+
+// countValue is a backup count in a JSON payload: null when it was never read.
+func countValue(count int) interface{} {
+	if count < 0 {
+		return nil
+	}
+	return count
+}
+
+// freeText is a free space in a text body: "?" when it was never read.
+func freeText(free string) string {
+	if free == "" {
+		return "?"
+	}
+	return free
+}
+
+// spaceValue is a space figure in a JSON payload: null when the space was never read.
+func spaceValue(free string, value interface{}) interface{} {
+	if free == "" {
+		return nil
+	}
+	return value
+}
+
 // FormatDuration formats a duration in human-readable format (e.g., "2h 15m 30s")
 func FormatDuration(d time.Duration) string {
 	if d < time.Second {

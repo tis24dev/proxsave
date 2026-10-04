@@ -40,7 +40,7 @@
   "CloudPath": "gdrive:proxsave/backup",
   "LocalStatus": "ok",
   "LocalStatusSummary": "",
-  "SecondaryStatus": "ok",
+  "SecondaryStatus": "warning",
   "CloudStatus": "ok",
   "ServerID": "7302915846102738",
   "ServerMAC": "bc:24:11:5e:3a:01",

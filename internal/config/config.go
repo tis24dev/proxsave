@@ -156,6 +156,14 @@ type Config struct {
 	// at the cost of full egress. Default false.
 	CloudVerifyDownload bool
 
+	// SecondaryStartupFailed and CloudStartupFailed are set by the run, never read from
+	// or written to backup.env: the destination is on in backup.env and could not be
+	// initialized at startup. The run switches it off (SecondaryEnabled / CloudEnabled
+	// false: no copy at [6], no log copy, no disk-space check, no metrics line), and its
+	// outcome is an error, not a destination switched off.
+	SecondaryStartupFailed bool
+	CloudStartupFailed     bool
+
 	// PBS storage: every backup is also uploaded to the PBS storage PBSTargetStorage
 	// defined in <PVE_CONFIG_PATH>/storage.cfg. Distinct from PBSRepository/PBSPassword/
 	// PBSFingerprint, which the collector uses on a PBS host.

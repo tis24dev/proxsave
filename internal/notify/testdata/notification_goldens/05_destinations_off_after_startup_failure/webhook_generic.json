@@ -43,6 +43,12 @@
   "status_emoji": "⚠️",
   "status_message": "Backup completed with warnings",
   "storage": {
+    "cloud": {
+      "count": null,
+      "emoji": "❌",
+      "status": "error",
+      "status_summary": "?/15"
+    },
     "local": {
       "count": 15,
       "emoji": "✅",
@@ -52,6 +58,16 @@
       "status": "ok",
       "status_summary": "15/15",
       "used": "54.00 GB"
+    },
+    "secondary": {
+      "count": null,
+      "emoji": "❌",
+      "free": null,
+      "percent": null,
+      "percent_num": null,
+      "status": "error",
+      "status_summary": "?/15",
+      "used": null
     }
   },
   "timestamp": 1791079200,

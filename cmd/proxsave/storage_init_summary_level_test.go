@@ -320,7 +320,8 @@ func TestSecondaryDirectoryNotCreatedDisablesIt(t *testing.T) {
 	if strings.Contains(out, "Filesystem:") || strings.Count(out, "WARNING") != 1 {
 		t.Fatalf("one outcome, no filesystem line:\n%s", out)
 	}
-	if cfg.SecondaryEnabled || cfg.SecondaryLogPath != "" {
-		t.Fatalf("the secondary must be off for the run: enabled=%v logPath=%q", cfg.SecondaryEnabled, cfg.SecondaryLogPath)
+	if cfg.SecondaryEnabled || cfg.SecondaryLogPath != "" || !cfg.SecondaryStartupFailed {
+		t.Fatalf("the secondary must be off for the run and recorded as failed at startup: enabled=%v logPath=%q startupFailed=%v",
+			cfg.SecondaryEnabled, cfg.SecondaryLogPath, cfg.SecondaryStartupFailed)
 	}
 }

@@ -50,7 +50,7 @@
   "SecondaryGFSYearly": 0,
   "SecondaryBackups": 15,
   "CloudEnabled": true,
-  "CloudStatus": "error",
+  "CloudStatus": "warning",
   "CloudStatusSummary": "15/15",
   "CloudCount": 15,
   "CloudRetentionPolicy": "simple",

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/tis24dev/proxsave/internal/config"
@@ -202,16 +203,23 @@ func (s *StorageAdapter) Sync(ctx context.Context, stats *BackupStats) error {
 		// backup was not saved (that reads as data loss when the archive is safe, F08-08).
 		// se != nil guards the typed-nil shape: errors.As matches a nil
 		// *StorageError in the chain and leaves the target nil (PR #303 review).
+		// The status follows the backup: saved with a sidecar file missing is a
+		// warning, not saved is an error.
 		var se *storage.StorageError
 		if errors.As(err, &se) && se != nil && se.PrimarySaved {
 			s.logStoreIssues(name, append(s.lastStoreIssues(), storage.StoreIssueSidecarNotSaved))
+			hasWarnings = true
 		} else {
 			s.logger.Warning("%s %s: backup not saved", theme.SymbolError, name)
+			hasErrors = true
 		}
-		hasErrors = true
 		// Don't return error - continue with retention
 	} else {
 		s.logStoreOutcome(name, primary, setsPermissions)
+		if slices.Contains(s.lastStoreIssues(), storage.StoreIssueSidecarNotSaved) {
+			// The backup is saved, one of its sidecar files is not.
+			hasWarnings = true
+		}
 	}
 
 	// Step 4: Apply retention policy
@@ -317,8 +325,8 @@ func (s *StorageAdapter) lastStoreIssues() []storage.StoreIssue {
 
 // logStoreOutcome closes a Store that returned no error: the "✓" line, or ONE "⚠" line
 // listing everything the backend reported left undone around the backup, in the order
-// it happened. These are WARNING lines without a status change: the backup is at the
-// destination.
+// it happened. These are WARNING lines; the backup is at the destination, so only a
+// sidecar file not saved there changes its status (warning, set by Sync).
 func (s *StorageAdapter) logStoreOutcome(name string, primary, setsPermissions bool) {
 	issues := s.lastStoreIssues()
 	s.logger.Debug("%s: store issues=%v", name, issues)

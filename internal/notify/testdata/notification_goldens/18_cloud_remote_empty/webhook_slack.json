@@ -64,6 +64,10 @@
         {
           "text": "*Secondary Storage:*\n✅ 15/15",
           "type": "mrkdwn"
+        },
+        {
+          "text": "*Cloud Storage:*\n❌ ?/15",
+          "type": "mrkdwn"
         }
       ],
       "type": "section"

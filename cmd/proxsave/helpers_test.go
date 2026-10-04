@@ -528,6 +528,9 @@ func TestValidateFutureFeatures_CloudDisabledWhenNoRemote(t *testing.T) {
 	if cfg.CloudRemote != "" || cfg.CloudLogPath != "" {
 		t.Errorf("cloud fields should be cleared; remote=%q logPath=%q", cfg.CloudRemote, cfg.CloudLogPath)
 	}
+	if !cfg.CloudStartupFailed {
+		t.Error("a cloud on in backup.env and switched off at startup must be recorded as failed at startup")
+	}
 }
 
 func TestValidateFutureFeatures_ValidConfig(t *testing.T) {
@@ -771,6 +774,9 @@ func TestDisableNetworkFeaturesForRun(t *testing.T) {
 	if cfg.CloudEnabled {
 		t.Error("CloudEnabled should be disabled")
 	}
+	if !cfg.CloudStartupFailed {
+		t.Error("the cloud switched off for missing network must be recorded as failed at startup")
+	}
 
 	// Email relay should switch to local sendmail fallback when enabled.
 	if !cfg.EmailEnabled || cfg.EmailDeliveryMethod != "sendmail" {
@@ -795,6 +801,9 @@ func TestDisableNetworkFeaturesForRun_PreservesLocal(t *testing.T) {
 	}
 	if !cfg.SecondaryEnabled {
 		t.Error("Local secondary storage should remain enabled")
+	}
+	if cfg.SecondaryStartupFailed || cfg.CloudStartupFailed {
+		t.Errorf("nothing failed at startup: secondary=%v cloud=%v", cfg.SecondaryStartupFailed, cfg.CloudStartupFailed)
 	}
 }
 

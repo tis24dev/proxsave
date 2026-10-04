@@ -129,6 +129,13 @@ type BackupStats struct {
 	MaxSecondaryBackups int
 	MaxCloudBackups     int
 
+	// SecondaryStartupFailed and CloudStartupFailed: the destination is on in backup.env
+	// and could not be initialized at startup (config.Config, same names). It stays out of
+	// the run (SecondaryEnabled / CloudEnabled false), its status is "error" and its count
+	// was never read (-1). The notifications report it configured, in error.
+	SecondaryStartupFailed bool `json:",omitempty"`
+	CloudStartupFailed     bool `json:",omitempty"`
+
 	// Retention policy info (for notifications)
 	LocalRetentionPolicy     string
 	LocalGFSDaily            int

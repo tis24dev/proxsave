@@ -5,7 +5,7 @@
     "backup": {
       "cloud": {
         "count": 15,
-        "emoji": "❌",
+        "emoji": "⚠️",
         "status": "15/15"
       },
       "primary": {
@@ -21,7 +21,7 @@
     },
     "backup_date": "2026-10-04 02:00:00",
     "emojis": {
-      "cloud": "❌",
+      "cloud": "⚠️",
       "email": "❓",
       "primary": "✅",
       "secondary": "✅"

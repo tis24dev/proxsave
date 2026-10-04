@@ -4,9 +4,9 @@
   "report": {
     "backup": {
       "cloud": {
-        "count": 0,
-        "emoji": "➖",
-        "status": "0/15"
+        "count": null,
+        "emoji": "❌",
+        "status": "?/15"
       },
       "primary": {
         "count": 15,
@@ -21,7 +21,7 @@
     },
     "backup_date": "2026-10-04 02:00:00",
     "emojis": {
-      "cloud": "➖",
+      "cloud": "❌",
       "email": "❓",
       "primary": "✅",
       "secondary": "✅"
@@ -52,7 +52,7 @@
     "paths": {
       "cloud": "",
       "cloud_display": "Not configured",
-      "has_cloud": false,
+      "has_cloud": true,
       "has_secondary": true,
       "local": "/opt/proxsave/backup",
       "secondary": "/mnt/nas-backup"

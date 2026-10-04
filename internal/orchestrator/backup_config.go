@@ -9,6 +9,7 @@ import (
 	"github.com/tis24dev/proxsave/internal/block"
 	"github.com/tis24dev/proxsave/internal/config"
 	"github.com/tis24dev/proxsave/internal/environment"
+	"github.com/tis24dev/proxsave/internal/storage"
 	"github.com/tis24dev/proxsave/internal/types"
 )
 
@@ -89,6 +90,8 @@ func InitializeBackupStats(
 	if cfg != nil {
 		stats.SecondaryEnabled = cfg.SecondaryEnabled
 		stats.CloudEnabled = cfg.CloudEnabled
+		stats.SecondaryStartupFailed = cfg.SecondaryStartupFailed && !cfg.SecondaryEnabled
+		stats.CloudStartupFailed = cfg.CloudStartupFailed && !cfg.CloudEnabled
 		stats.SecondaryPath = cfg.SecondaryPath
 		stats.CloudPath = cfg.CloudRemote
 		stats.MaxLocalBackups = cfg.MaxLocalBackups
@@ -104,15 +107,37 @@ func InitializeBackupStats(
 	// it starts, then error or warning as they happen). A run that fails before the
 	// copies, or whose critical local store fails first, never reaches Sync for them,
 	// and the "ok" this used to start from reached every channel as a copy that worked.
-	if stats.SecondaryEnabled {
+	//
+	// A copy that is on in backup.env and failed at startup is out of the run, and
+	// nothing was saved there: "error", with a count never read (-1) and the retention
+	// form of the configuration, so its summary reads "?/<M>", "?/-" or "?/?".
+	switch {
+	case stats.SecondaryEnabled:
 		stats.SecondaryStatus = "skipped"
-	} else {
+	case stats.SecondaryStartupFailed:
+		stats.SecondaryStatus = "error"
+		stats.SecondaryBackups = -1
+		rc := configuredRetention(cfg, storage.LocationSecondary)
+		stats.SecondaryRetentionPolicy = rc.Policy
+		if rc.Policy == "gfs" {
+			stats.SecondaryGFSDaily, stats.SecondaryGFSWeekly, stats.SecondaryGFSMonthly, stats.SecondaryGFSYearly = rc.Daily, rc.Weekly, rc.Monthly, rc.Yearly
+		}
+	default:
 		stats.SecondaryStatus = "disabled"
 	}
 
-	if stats.CloudEnabled {
+	switch {
+	case stats.CloudEnabled:
 		stats.CloudStatus = "skipped"
-	} else {
+	case stats.CloudStartupFailed:
+		stats.CloudStatus = "error"
+		stats.CloudBackups = -1
+		rc := configuredRetention(cfg, storage.LocationCloud)
+		stats.CloudRetentionPolicy = rc.Policy
+		if rc.Policy == "gfs" {
+			stats.CloudGFSDaily, stats.CloudGFSWeekly, stats.CloudGFSMonthly, stats.CloudGFSYearly = rc.Daily, rc.Weekly, rc.Monthly, rc.Yearly
+		}
+	default:
 		stats.CloudStatus = "disabled"
 	}
 
@@ -130,6 +155,17 @@ func InitializeBackupStats(
 	}
 
 	return stats
+}
+
+// configuredRetention is the retention a location has in the configuration, with the
+// GFS tiers as the retention pass would apply them (EffectiveGFSRetentionConfig, the
+// silent half of NormalizeGFSRetentionConfig).
+func configuredRetention(cfg *config.Config, location storage.BackupLocation) storage.RetentionConfig {
+	rc := storage.NewRetentionConfigFromConfig(cfg, location)
+	if rc.Policy == "gfs" {
+		rc = storage.EffectiveGFSRetentionConfig(rc)
+	}
+	return rc
 }
 
 func describeTelegramStatus(cfg *config.Config) string {

@@ -91,7 +91,20 @@ func TestStoreIssuesCloseTheBlockWithTheirOwnOutcome(t *testing.T) {
 	if strings.Contains(out, "✓ cloud: backup saved") || strings.Count(out, "WARNING") != 1 {
 		t.Fatalf("a store with issues must close on exactly one warning line:\n%s", out)
 	}
-	// The backup is there: the issues are WARNING lines, the status does not move.
+	// The backup is there with a sidecar file missing: warning.
+	if stats.CloudStatus != "warning" {
+		t.Fatalf("CloudStatus = %q, want warning (sidecar file not saved)", stats.CloudStatus)
+	}
+
+	// Without the sidecar the issues are WARNING lines around a saved backup and the
+	// status does not move.
+	backend = newOutcomeBackend(storage.LocationCloud, false)
+	backend.issues = []storage.StoreIssue{storage.StoreIssueBundleNotSent, storage.StoreIssueChecksumNotVerified, storage.StoreIssuePermissionsNotSet}
+	out, stats, err = syncOutcome(t, backend)
+	if err != nil {
+		t.Fatalf("Sync: %v", err)
+	}
+	requireLines(t, out, "WARNING  ⚠ cloud: backup saved, bundle not sent, checksum not verified, permissions not set")
 	if stats.CloudStatus != "ok" {
 		t.Fatalf("CloudStatus = %q, want ok", stats.CloudStatus)
 	}
@@ -110,17 +123,47 @@ func TestStoreIssuesAndSidecarErrorShareOneOutcome(t *testing.T) {
 		t.Fatalf("Sync: %v", err)
 	}
 	requireLines(t, out, "WARNING  ⚠ cloud: backup saved, bundle not sent, sidecar file not saved")
-	if stats.CloudStatus != "error" {
-		t.Fatalf("CloudStatus = %q, want error (unchanged for a failed sidecar upload)", stats.CloudStatus)
+	if stats.CloudStatus != "warning" {
+		t.Fatalf("CloudStatus = %q, want warning (the backup is saved, a sidecar upload failed)", stats.CloudStatus)
 	}
 
 	secondary := newOutcomeBackend(storage.LocationSecondary, false)
 	secondary.issues = []storage.StoreIssue{storage.StoreIssuePermissionsNotSet}
-	out, _, err = syncOutcome(t, secondary)
+	out, stats, err = syncOutcome(t, secondary)
 	if err != nil {
 		t.Fatalf("Sync: %v", err)
 	}
 	requireLines(t, out, "INFO     Storing backup...", "WARNING  ⚠ secondary: backup saved, permissions not set")
+	if stats.SecondaryStatus != "ok" {
+		t.Fatalf("SecondaryStatus = %q, want ok (permissions only)", stats.SecondaryStatus)
+	}
+
+	// The Secondary copy of a sidecar fails: Store returns nil, the sidecar is in the
+	// issues, the status is warning.
+	secondary = newOutcomeBackend(storage.LocationSecondary, false)
+	secondary.issues = []storage.StoreIssue{storage.StoreIssueSidecarNotSaved}
+	out, stats, err = syncOutcome(t, secondary)
+	if err != nil {
+		t.Fatalf("Sync: %v", err)
+	}
+	requireLines(t, out, "WARNING  ⚠ secondary: backup saved, sidecar file not saved")
+	if stats.SecondaryStatus != "warning" {
+		t.Fatalf("SecondaryStatus = %q, want warning (sidecar file not saved)", stats.SecondaryStatus)
+	}
+
+	// The backup itself not saved stays an error.
+	failed := newOutcomeBackend(storage.LocationCloud, false)
+	failed.storeFn = func(context.Context, string, *types.BackupMetadata) error {
+		return &storage.StorageError{Location: storage.LocationCloud, Operation: "upload", Err: errors.New("archive")}
+	}
+	out, stats, err = syncOutcome(t, failed)
+	if err != nil {
+		t.Fatalf("Sync: %v", err)
+	}
+	requireLines(t, out, "WARNING  ✗ cloud: backup not saved")
+	if stats.CloudStatus != "error" {
+		t.Fatalf("CloudStatus = %q, want error (backup not saved)", stats.CloudStatus)
+	}
 }
 
 func TestPrimaryWithoutOwnershipSkipsPermissions(t *testing.T) {

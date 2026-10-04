@@ -29,6 +29,12 @@
   "status_emoji": "✅",
   "status_message": "Backup completed successfully",
   "storage": {
+    "cloud": {
+      "count": null,
+      "emoji": "❌",
+      "status": "error",
+      "status_summary": "?/15"
+    },
     "local": {
       "count": 15,
       "emoji": "✅",

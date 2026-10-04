@@ -3,6 +3,7 @@ package orchestrator
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -242,7 +243,8 @@ func (n *NotificationAdapter) convertBackupStatsToNotificationData(stats *Backup
 		LocalGFSYearly:       stats.LocalGFSYearly,
 		LocalBackups:         stats.LocalBackups,
 
-		SecondaryEnabled:       stats.SecondaryEnabled,
+		// Configured: in the run, or on in backup.env and failed at startup.
+		SecondaryEnabled:       stats.SecondaryEnabled || stats.SecondaryStartupFailed,
 		SecondaryStatus:        secondaryStatus,
 		SecondaryStatusSummary: secondaryStatusSummary,
 		SecondaryCount:         stats.SecondaryBackups,
@@ -261,7 +263,7 @@ func (n *NotificationAdapter) convertBackupStatsToNotificationData(stats *Backup
 		SecondaryGFSYearly:       stats.SecondaryGFSYearly,
 		SecondaryBackups:         stats.SecondaryBackups,
 
-		CloudEnabled:       stats.CloudEnabled,
+		CloudEnabled:       stats.CloudEnabled || stats.CloudStartupFailed,
 		CloudStatus:        cloudStatus,
 		CloudStatusSummary: cloudStatusSummary,
 		CloudCount:         stats.CloudBackups,
@@ -353,19 +355,23 @@ func formatPercentString(percent float64) string {
 }
 
 func formatBackupStatusSummary(policy string, count, max int) string {
+	// A count never read (negative: a destination that failed at startup, a PBS block
+	// that got no count) is "?" in every form.
+	backups := strconv.Itoa(count)
+	if count < 0 {
+		backups = "?"
+	}
+
 	// GFS mode: show X/- (no fixed limit)
 	if policy == "gfs" {
-		return fmt.Sprintf("%d/-", count)
+		return backups + "/-"
 	}
 
 	// Simple mode: show X/Y or X/?
 	if max <= 0 {
-		if count <= 0 {
-			return "0/?"
-		}
-		return fmt.Sprintf("%d/?", count)
+		return backups + "/?"
 	}
-	return fmt.Sprintf("%d/%d", count, max)
+	return fmt.Sprintf("%s/%d", backups, max)
 }
 
 func (n *NotificationAdapter) recordNotifierStatus(stats *BackupStats, result *notify.NotificationResult) {

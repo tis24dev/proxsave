@@ -40,6 +40,16 @@
           "value": "✅ 15/15"
         },
         {
+          "inline": true,
+          "name": "Secondary Storage",
+          "value": "❌ ?/15"
+        },
+        {
+          "inline": true,
+          "name": "Cloud Storage",
+          "value": "❌ ?/15"
+        },
+        {
           "inline": false,
           "name": "Issues",
           "value": "Errors: 0, Warnings: 2"

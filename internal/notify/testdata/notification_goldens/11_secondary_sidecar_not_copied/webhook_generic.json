@@ -55,11 +55,11 @@
     },
     "secondary": {
       "count": 15,
-      "emoji": "✅",
+      "emoji": "⚠️",
       "free": "1.80 TB",
       "percent": "50.5%",
       "percent_num": 50.536768652710684,
-      "status": "ok",
+      "status": "warning",
       "status_summary": "15/15",
       "used": "1.84 TB"
     }

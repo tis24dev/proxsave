@@ -243,9 +243,11 @@ type dryRunCheckReporter interface {
 }
 
 // disableSecondaryForRun turns the secondary destination off for the rest of the run:
-// no copy at [6], no log copy, no disk-space check.
+// no copy at [6], no log copy, no disk-space check. It is on in backup.env and failed
+// at startup, which the run's outcome reports as an error (SecondaryStartupFailed).
 func disableSecondaryForRun(cfg *config.Config, checker *checks.Checker) {
 	cfg.SecondaryEnabled = false
+	cfg.SecondaryStartupFailed = true
 	cfg.SecondaryLogPath = ""
 	if checker != nil {
 		checker.DisableSecondary()
@@ -253,9 +255,11 @@ func disableSecondaryForRun(cfg *config.Config, checker *checks.Checker) {
 }
 
 // disableCloudForRun turns the cloud destination off for the rest of the run: no
-// upload at [6], no log copy, no disk-space check.
+// upload at [6], no log copy, no disk-space check. It is on in backup.env and failed
+// at startup, which the run's outcome reports as an error (CloudStartupFailed).
 func disableCloudForRun(cfg *config.Config, checker *checks.Checker) {
 	cfg.CloudEnabled = false
+	cfg.CloudStartupFailed = true
 	cfg.CloudLogPath = ""
 	if checker != nil {
 		checker.DisableCloud()

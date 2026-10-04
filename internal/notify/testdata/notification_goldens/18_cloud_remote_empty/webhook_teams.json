@@ -55,6 +55,10 @@
                 "value": "✅ 15/15"
               },
               {
+                "title": "Cloud Storage",
+                "value": "❌ ?/15"
+              },
+              {
                 "title": "Errors",
                 "value": "0"
               },

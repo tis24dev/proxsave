@@ -107,8 +107,9 @@ func TestCloudBackendNotCreatedBlock(t *testing.T) {
 		"WARNING  ✗ Cloud storage: not initialized",
 		"SKIP     Path Cloud: disabled",
 	)
-	if cfg.CloudEnabled || cfg.CloudLogPath != "" {
-		t.Fatalf("the cloud must be off for the run: enabled=%v logPath=%q", cfg.CloudEnabled, cfg.CloudLogPath)
+	if cfg.CloudEnabled || cfg.CloudLogPath != "" || !cfg.CloudStartupFailed {
+		t.Fatalf("the cloud must be off for the run and recorded as failed at startup: enabled=%v logPath=%q startupFailed=%v",
+			cfg.CloudEnabled, cfg.CloudLogPath, cfg.CloudStartupFailed)
 	}
 }
 
@@ -144,8 +145,8 @@ func TestCloudLocalDirectoryIsInitialized(t *testing.T) {
 	}
 	want = append(want, "INFO       Backups: 0", "INFO     ✓ Cloud storage: initialized")
 	requireBlock(t, got, want...)
-	if !cfg.CloudEnabled {
-		t.Fatalf("the cloud must stay enabled")
+	if !cfg.CloudEnabled || cfg.CloudStartupFailed {
+		t.Fatalf("the cloud must stay enabled: enabled=%v startupFailed=%v", cfg.CloudEnabled, cfg.CloudStartupFailed)
 	}
 	data, err := os.ReadFile(record)
 	if err != nil {
@@ -193,8 +194,9 @@ func TestCloudLocalDirectoryNotCreatedBlock(t *testing.T) {
 		"WARNING  ✗ Cloud storage: not initialized",
 		"SKIP     Path Cloud: disabled",
 	)
-	if cfg.CloudEnabled || cfg.CloudLogPath != "" {
-		t.Fatalf("the cloud must be off for the run: enabled=%v logPath=%q", cfg.CloudEnabled, cfg.CloudLogPath)
+	if cfg.CloudEnabled || cfg.CloudLogPath != "" || !cfg.CloudStartupFailed {
+		t.Fatalf("the cloud must be off for the run and recorded as failed at startup: enabled=%v logPath=%q startupFailed=%v",
+			cfg.CloudEnabled, cfg.CloudLogPath, cfg.CloudStartupFailed)
 	}
 }
 
@@ -215,8 +217,9 @@ func TestDryRunMissingDestinationBlocks(t *testing.T) {
 		"WARNING  ✗ Secondary storage: not initialized",
 		"SKIP     Path Secondary: disabled",
 	)
-	if cfg.SecondaryEnabled || cfg.SecondaryLogPath != "" {
-		t.Fatalf("the secondary must be off for the run: enabled=%v logPath=%q", cfg.SecondaryEnabled, cfg.SecondaryLogPath)
+	if cfg.SecondaryEnabled || cfg.SecondaryLogPath != "" || !cfg.SecondaryStartupFailed {
+		t.Fatalf("the secondary must be off for the run and recorded as failed at startup: enabled=%v logPath=%q startupFailed=%v",
+			cfg.SecondaryEnabled, cfg.SecondaryLogPath, cfg.SecondaryStartupFailed)
 	}
 
 	record := filepath.Join(t.TempDir(), "argv")
@@ -234,8 +237,9 @@ func TestDryRunMissingDestinationBlocks(t *testing.T) {
 		"WARNING  ✗ Cloud storage: not initialized",
 		"SKIP     Path Cloud: disabled",
 	)
-	if cfg.CloudEnabled || cfg.CloudLogPath != "" {
-		t.Fatalf("the cloud must be off for the run: enabled=%v logPath=%q", cfg.CloudEnabled, cfg.CloudLogPath)
+	if cfg.CloudEnabled || cfg.CloudLogPath != "" || !cfg.CloudStartupFailed {
+		t.Fatalf("the cloud must be off for the run and recorded as failed at startup: enabled=%v logPath=%q startupFailed=%v",
+			cfg.CloudEnabled, cfg.CloudLogPath, cfg.CloudStartupFailed)
 	}
 	if entries, err := os.ReadDir(base); err != nil || len(entries) != 0 {
 		t.Fatalf("a dry run must create no directory, found %v (%v)", entries, err)

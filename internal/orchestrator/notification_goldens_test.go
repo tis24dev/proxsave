@@ -196,14 +196,16 @@ func notifyGoldenCases() []notifyGoldenCase {
 		},
 		{
 			// cmd/proxsave/backup_storage.go: the secondary directory cannot be created and
-			// the cloud remote does not answer. Both are switched off for the run
-			// (disableSecondaryForRun, disableCloudForRun), so the run sees them as off.
+			// the cloud remote does not answer. Both are switched off for the run and
+			// recorded as failed at startup (disableSecondaryForRun, disableCloudForRun).
 			name: "05_destinations_off_after_startup_failure",
 			startup: func(logger *logging.Logger, cfg *config.Config) {
 				cfg.SecondaryEnabled = false
+				cfg.SecondaryStartupFailed = true
 				cfg.SecondaryLogPath = ""
 				notifyGoldenLogStorageNotInitialized(logger, "Secondary", "Secondary storage", "  Directory not created: "+safefs.SystemErrorText(syscall.EACCES))
 				cfg.CloudEnabled = false
+				cfg.CloudStartupFailed = true
 				cfg.CloudLogPath = ""
 				notifyGoldenLogStorageNotInitialized(logger, "Cloud", "Cloud storage", "")
 			},
@@ -374,6 +376,7 @@ func notifyGoldenCases() []notifyGoldenCase {
 				bootLogger.SetOutput(io.Discard)
 				bootLogger.Warning("Cloud backup enabled but CLOUD_REMOTE is empty, disabling cloud storage for this run")
 				cfg.CloudEnabled = false
+				cfg.CloudStartupFailed = true
 				cfg.CloudRemote = ""
 				cfg.CloudLogPath = ""
 			},
@@ -393,6 +396,7 @@ func notifyGoldenCases() []notifyGoldenCase {
 				logger.Warning("Disabling network-dependent features for this run")
 				logger.Warning("WARNING: Disabling cloud storage (rclone) due to missing network connectivity")
 				cfg.CloudEnabled = false
+				cfg.CloudStartupFailed = true
 				cfg.CloudLogPath = ""
 				logger.Warning("WARNING: Disabling Telegram notifications due to missing network connectivity")
 				cfg.TelegramEnabled = false

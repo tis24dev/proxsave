@@ -41,7 +41,7 @@
   "LocalStatus": "ok",
   "LocalStatusSummary": "",
   "SecondaryStatus": "ok",
-  "CloudStatus": "error",
+  "CloudStatus": "warning",
   "ServerID": "7302915846102738",
   "ServerMAC": "bc:24:11:5e:3a:01",
   "ClusterMode": "standalone",

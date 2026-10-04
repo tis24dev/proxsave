@@ -511,7 +511,7 @@ func buildGenericPayload(data *NotificationData, logger *logging.Logger) (map[st
 				"status":         data.LocalStatus,
 				"status_summary": data.LocalStatusSummary,
 				"emoji":          GetStorageEmoji(data.LocalStatus),
-				"count":          data.LocalCount,
+				"count":          countValue(data.LocalCount),
 				"free":           data.LocalFree,
 				"used":           data.LocalUsed,
 				"percent":        data.LocalPercent,
@@ -538,11 +538,11 @@ func buildGenericPayload(data *NotificationData, logger *logging.Logger) (map[st
 			"status":         data.SecondaryStatus,
 			"status_summary": data.SecondaryStatusSummary,
 			"emoji":          GetStorageEmoji(data.SecondaryStatus),
-			"count":          data.SecondaryCount,
-			"free":           data.SecondaryFree,
-			"used":           data.SecondaryUsed,
-			"percent":        data.SecondaryPercent,
-			"percent_num":    data.SecondaryUsagePercent,
+			"count":          countValue(data.SecondaryCount),
+			"free":           spaceValue(data.SecondaryFree, data.SecondaryFree),
+			"used":           spaceValue(data.SecondaryFree, data.SecondaryUsed),
+			"percent":        spaceValue(data.SecondaryFree, data.SecondaryPercent),
+			"percent_num":    spaceValue(data.SecondaryFree, data.SecondaryUsagePercent),
 		}
 		logger.Debug("Secondary storage added to generic payload")
 	}
@@ -553,7 +553,7 @@ func buildGenericPayload(data *NotificationData, logger *logging.Logger) (map[st
 			"status":         data.CloudStatus,
 			"status_summary": data.CloudStatusSummary,
 			"emoji":          GetStorageEmoji(data.CloudStatus),
-			"count":          data.CloudCount,
+			"count":          countValue(data.CloudCount),
 		}
 		logger.Debug("Cloud storage added to generic payload")
 	}

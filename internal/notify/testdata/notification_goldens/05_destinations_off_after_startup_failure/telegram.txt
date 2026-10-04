@@ -3,8 +3,8 @@ ProxSave - v0.41.0
 ⚠️ Backup pve - pve-golden
 
 ✅ Local      (15/15 backups)
-➖ Secondary  (disabled)
-➖ Cloud      (disabled)
+❌ Secondary  (?/15 backups)
+❌ Cloud      (?/15 backups)
 ✅ Email
 
 📁 Included files: 1832
