@@ -146,6 +146,7 @@ func TestInspectMailLogStatus_Variants(t *testing.T) {
 		"postfix/smtp[2]: QERR: connection refused",
 		"postfix/smtp[2]: QUNK: some other line",
 		"postfix/smtp[2]: status=sent (no queue id here)",
+		"postfix/bounce[3]: QSENT: sender non-delivery notification: QNOTE",
 	}, "\n") + "\n"
 	if err := os.WriteFile(logFile, []byte(content), 0o600); err != nil {
 		t.Fatalf("write log file: %v", err)
@@ -183,6 +184,8 @@ func TestInspectMailLogStatus_Variants(t *testing.T) {
 		{name: "no line for the queue ID", queueID: "MISSING", want: ""},
 		// "QSEN" is a prefix of a field, not a field.
 		{name: "a prefix is not the queue ID", queueID: "QSEN", want: ""},
+		// QNOTE is only mentioned in a line of QSENT.
+		{name: "a mention is not the message's line", queueID: "QNOTE", want: ""},
 	}
 
 	for _, tt := range tests {
