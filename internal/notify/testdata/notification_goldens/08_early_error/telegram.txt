@@ -1,0 +1,18 @@
+ProxSave - v0.41.0
+
+❌ Backup pve - pve-golden
+
+❌ Local      (0/? backups)
+➖ Secondary  (disabled)
+➖ Cloud      (disabled)
+✅ Email
+
+📁 Included files: 0
+
+💾 Available space:
+🔹 Local: 0 B
+
+📅 Backup date: 2026-10-04 02:00
+⏱️ Duration: < 1s
+
+🔢 Exit code: 5

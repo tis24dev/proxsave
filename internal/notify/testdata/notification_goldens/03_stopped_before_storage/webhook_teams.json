@@ -1,0 +1,90 @@
+{
+  "attachments": [
+    {
+      "content": {
+        "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
+        "body": [
+          {
+            "size": "large",
+            "text": "❌ PVE Backup Report",
+            "type": "TextBlock",
+            "weight": "bolder"
+          },
+          {
+            "style": "default",
+            "text": "Backup completed with status: **failure** on pve-golden",
+            "type": "TextBlock",
+            "wrap": true
+          },
+          {
+            "facts": [
+              {
+                "title": "Hostname",
+                "value": "pve-golden"
+              },
+              {
+                "title": "Status",
+                "value": "❌ failure"
+              },
+              {
+                "title": "Date",
+                "value": "2026-10-04 02:00:00"
+              },
+              {
+                "title": "Duration",
+                "value": "2m 14s"
+              },
+              {
+                "title": "Size",
+                "value": "0 B"
+              },
+              {
+                "title": "Compression",
+                "value": "xz (level 9, ratio 0.00%)"
+              },
+              {
+                "title": "Files Included",
+                "value": "0"
+              },
+              {
+                "title": "Local Storage",
+                "value": "❌ 15/15"
+              },
+              {
+                "title": "Secondary Storage",
+                "value": "➖ 15/15"
+              },
+              {
+                "title": "Cloud Storage",
+                "value": "➖ 15/15"
+              },
+              {
+                "title": "Errors",
+                "value": "1"
+              },
+              {
+                "title": "Warnings",
+                "value": "0"
+              },
+              {
+                "title": "Exit Code",
+                "value": "4"
+              }
+            ],
+            "type": "FactSet"
+          },
+          {
+            "text": "**Top Issues:**\n\n• [ERROR] Backup orchestration failed: failed to create temporary directory: mkdirtemp /tmp/proxsave/proxsave-pve-golden-202610... (×1)\n\n",
+            "type": "TextBlock",
+            "wrap": true
+          }
+        ],
+        "type": "AdaptiveCard",
+        "version": "1.5"
+      },
+      "contentType": "application/vnd.microsoft.card.adaptive"
+    }
+  ],
+  "themeColor": "FF0000",
+  "type": "message"
+}

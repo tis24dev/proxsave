@@ -1,0 +1,28 @@
+❌ PVE BACKUP REPORT - FAILURE
+Hostname: pve-golden
+Date: 2026-10-04 02:00:00
+
+BACKUP STATUS:
+  Local:     15/15 backups (412.00 GB free)
+  Secondary: 15/15 backups (1.80 TB free)
+  Cloud:     15/15 backups
+
+BACKUP DETAILS:
+  Backup File: 
+  Size: 0 B
+  Included Files: 0
+  Missing Files: 0
+  Duration: 2m 14s
+  Compression: xz (level 9, ratio 0.00%)
+
+ISSUES:
+  Errors: 1
+  Warnings: 0
+  Total Issues: 1
+  Log: /opt/proxsave/log/backup-pve-golden-20261004-020000.log
+
+ISSUE DETAILS:
+  - [ERROR] Backup orchestration failed: failed to create temporary directory: mkdirtemp /tmp/proxsave/proxsave-pve-golden-202610... (count: 1)
+
+Exit Code: 4
+Script Version: 0.41.0

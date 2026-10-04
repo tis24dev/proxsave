@@ -1,0 +1,23 @@
+❌ PVE BACKUP REPORT - FAILURE
+Hostname: pve-golden
+Date: 2026-10-04 02:00:00
+
+BACKUP STATUS:
+  Local:     0/? backups (0 B free)
+
+BACKUP DETAILS:
+  Backup File: 
+  Size: 0 B
+  Included Files: 0
+  Missing Files: 0
+  Duration: < 1s
+  Compression:  (level 0, ratio 0.00%)
+
+ISSUES:
+  Errors: 1
+  Warnings: 0
+  Total Issues: 1
+  Log: /opt/proxsave/log/backup-pve-golden-20261004-020000.log
+
+Exit Code: 5
+Script Version: 0.41.0

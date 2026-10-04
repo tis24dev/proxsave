@@ -1,0 +1,7 @@
+{
+  "message": "Status: Backup completed successfully\nDuration: 2m 14s\nSize: 21.0 MiB\nErrors: 0 | Warnings: 0",
+  "priority": 0,
+  "title": "✅ Proxmox Backup: pve-golden",
+  "token": "golden-pushover-app-token",
+  "user": "golden-pushover-user-key"
+}

@@ -1,0 +1,18 @@
+ProxSave - v0.41.0
+
+⚠️ Backup pve - pve-golden
+
+✅ Local      (15/15 backups)
+➖ Secondary  (disabled)
+➖ Cloud      (disabled)
+✅ Email
+
+📁 Included files: 1832
+
+💾 Available space:
+🔹 Local: 412.00 GB
+
+📅 Backup date: 2026-10-04 02:00
+⏱️ Duration: 2m 14s
+
+🔢 Exit code: 1

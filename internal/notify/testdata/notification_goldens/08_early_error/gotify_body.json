@@ -1,0 +1,5 @@
+{
+  "title": "❌ PVE Backup on pve-golden - 2026-10-04 02:00",
+  "message": "❌ PVE BACKUP REPORT - FAILURE\nHostname: pve-golden\nDate: 2026-10-04 02:00:00\n\nBACKUP STATUS:\n  Local:     0/? backups (0 B free)\n\nBACKUP DETAILS:\n  Backup File: \n  Size: 0 B\n  Included Files: 0\n  Missing Files: 0\n  Duration: \u003c 1s\n  Compression:  (level 0, ratio 0.00%)\n\nISSUES:\n  Errors: 1\n  Warnings: 0\n  Total Issues: 1\n  Log: /opt/proxsave/log/backup-pve-golden-20261004-020000.log\n\nExit Code: 5\nScript Version: 0.41.0\n",
+  "priority": 8
+}

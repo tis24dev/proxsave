@@ -1,0 +1,74 @@
+{
+  "backup": {
+    "duration_human": "2m 14s",
+    "duration_seconds": 134,
+    "file_name": "",
+    "files_included": 0,
+    "files_missing": 0,
+    "size_bytes": 0,
+    "size_human": "0 B"
+  },
+  "compression": {
+    "level": 9,
+    "mode": "ultra",
+    "ratio": 0,
+    "type": "xz"
+  },
+  "exit_code": 4,
+  "hostname": "pve-golden",
+  "issues": {
+    "errors": 1,
+    "total": 1,
+    "warnings": 0
+  },
+  "log_categories": [
+    {
+      "count": 1,
+      "example": "Backup orchestration failed: failed to create temporary directory: mkdirtemp /tmp/proxsave/proxsave-pve-golden-202610...",
+      "label": "Backup orchestration failed: failed to create temporary directory: mkdirtemp /tmp/proxsave/proxsave-pve-golden-202610...",
+      "type": "ERROR"
+    }
+  ],
+  "proxmox_type": "pve",
+  "script_version": "0.41.0",
+  "server_id": "7302915846102738",
+  "server_mac": "bc:24:11:5e:3a:01",
+  "status": "failure",
+  "status_emoji": "❌",
+  "status_message": "Backup failed",
+  "storage": {
+    "cloud": {
+      "count": 15,
+      "emoji": "➖",
+      "status": "skipped",
+      "status_summary": "15/15"
+    },
+    "local": {
+      "count": 15,
+      "emoji": "❌",
+      "free": "412.00 GB",
+      "percent": "11.6%",
+      "percent_num": 11.587982832618025,
+      "status": "error",
+      "status_summary": "15/15",
+      "used": "54.00 GB"
+    },
+    "secondary": {
+      "count": 15,
+      "emoji": "➖",
+      "free": "1.80 TB",
+      "percent": "50.5%",
+      "percent_num": 50.536768652710684,
+      "status": "skipped",
+      "status_summary": "15/15",
+      "used": "1.84 TB"
+    }
+  },
+  "timestamp": 1791079200,
+  "timestamp_iso": "2026-10-04T02:00:00Z",
+  "update": {
+    "current_version": "0.41.0",
+    "latest_version": "0.41.0",
+    "new_version_available": false
+  }
+}

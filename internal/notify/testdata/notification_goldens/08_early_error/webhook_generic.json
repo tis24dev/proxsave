@@ -1,0 +1,50 @@
+{
+  "backup": {
+    "duration_human": "\u003c 1s",
+    "duration_seconds": 0,
+    "file_name": "",
+    "files_included": 0,
+    "files_missing": 0,
+    "size_bytes": 0,
+    "size_human": "0 B"
+  },
+  "compression": {
+    "level": 0,
+    "mode": "",
+    "ratio": 0,
+    "type": ""
+  },
+  "exit_code": 5,
+  "hostname": "pve-golden",
+  "issues": {
+    "errors": 1,
+    "total": 1,
+    "warnings": 0
+  },
+  "proxmox_type": "pve",
+  "script_version": "0.41.0",
+  "server_id": "7302915846102738",
+  "server_mac": "bc:24:11:5e:3a:01",
+  "status": "failure",
+  "status_emoji": "❌",
+  "status_message": "Backup failed",
+  "storage": {
+    "local": {
+      "count": 0,
+      "emoji": "❌",
+      "free": "0 B",
+      "percent": "0%",
+      "percent_num": 0,
+      "status": "error",
+      "status_summary": "0/?",
+      "used": "0 B"
+    }
+  },
+  "timestamp": 1791079200,
+  "timestamp_iso": "2026-10-04T02:00:00Z",
+  "update": {
+    "current_version": "",
+    "latest_version": "",
+    "new_version_available": false
+  }
+}

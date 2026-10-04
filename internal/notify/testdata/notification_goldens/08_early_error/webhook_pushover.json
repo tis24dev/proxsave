@@ -1,0 +1,7 @@
+{
+  "message": "Status: Backup failed\nDuration: \u003c 1s\nSize: 0 B\nErrors: 1 | Warnings: 0",
+  "priority": 0,
+  "title": "❌ Proxmox Backup: pve-golden",
+  "token": "golden-pushover-app-token",
+  "user": "golden-pushover-user-key"
+}
