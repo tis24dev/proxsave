@@ -89,6 +89,8 @@
     "UsedBytes": 0,
     "TotalBytes": 0
   },
+  "PBSTargetStorage": "pbs-offsite",
+  "MaxPBSTargetBackups": 15,
   "ErrorCount": 1,
   "WarningCount": 0,
   "NotifyCount": 0,

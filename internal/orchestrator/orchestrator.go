@@ -156,6 +156,10 @@ type BackupStats struct {
 	// PBSTarget is the outcome of the PBS storage block (step [7]). It is nil when
 	// PBS_TARGET_ENABLED=false, so a run without PBS serializes exactly as before.
 	PBSTarget *block.Result `json:",omitempty"`
+	// PBSTargetStorage and MaxPBSTargetBackups are PBS_TARGET_STORAGE and
+	// MAX_PBS_TARGET_BACKUPS, also with PBS off, as SecondaryPath and MaxSecondaryBackups.
+	PBSTargetStorage    string `json:",omitempty"`
+	MaxPBSTargetBackups int    `json:",omitempty"`
 
 	// Error/warning counts
 	ErrorCount   int

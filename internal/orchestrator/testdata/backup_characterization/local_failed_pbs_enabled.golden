@@ -463,6 +463,8 @@ snapshot list --ns charns --repository charpbs@pbs!pve@192.0.2.10:charstore --ou
     "UsedBytes": 0,
     "TotalBytes": 0
   },
+  "PBSTargetStorage": "charpbs",
+  "MaxPBSTargetBackups": 5,
   "ErrorCount": 1,
   "WarningCount": 3,
   "NotifyCount": 0,

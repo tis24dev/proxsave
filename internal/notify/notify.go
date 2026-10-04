@@ -150,6 +150,26 @@ type NotificationData struct {
 	CloudGFSYearly       int
 	CloudBackups         int
 
+	// PBS storage (PBS_TARGET_ENABLED): the outcome of the PBS block at step [7]. A
+	// count never read is -1 (summary "?/<M>"), a datastore space never read is empty.
+	PBSEnabled       bool
+	PBSStatus        string
+	PBSStatusSummary string
+	PBSCount         int
+	PBSFree          string
+	PBSUsed          string
+	PBSPercent       string
+	PBSSpaceBytes    uint64
+	PBSUsagePercent  float64
+
+	// PBS retention info
+	PBSRetentionPolicy string
+	PBSRetentionLimit  int // MAX_PBS_TARGET_BACKUPS (simple mode)
+	PBSGFSDaily        int
+	PBSGFSWeekly       int
+	PBSGFSMonthly      int
+	PBSGFSYearly       int
+
 	// Email notification status (for Telegram messages)
 	EmailStatus    string
 	TelegramStatus string
@@ -158,6 +178,7 @@ type NotificationData struct {
 	LocalPath     string
 	SecondaryPath string
 	CloudPath     string
+	PBSStorageID  string // PBS_TARGET_STORAGE
 
 	// Error/Warning summary
 	ErrorCount    int

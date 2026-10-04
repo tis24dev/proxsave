@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/tis24dev/proxsave/internal/logging"
+	"github.com/tis24dev/proxsave/internal/storage"
 )
 
 // Outcome vocabulary of Result.Status, the same words SecondaryStatus and CloudStatus use.
@@ -41,10 +42,28 @@ type Result struct {
 	Backups         int    // own snapshots after retention; -1 = unknown
 	MaxBackups      int    // simple policy limit, for "N/M"
 	RetentionPolicy string // simple | gfs
-	Deleted         int    // snapshots removed by this run's retention
-	FreeBytes       uint64 // datastore filesystem, from `status`
-	UsedBytes       uint64
-	TotalBytes      uint64
+	// GFS tiers of a gfs RetentionPolicy, as the retention pass applies them
+	// (storage.EffectiveGFSRetentionConfig); zero for simple.
+	GFSDaily   int    `json:",omitempty"`
+	GFSWeekly  int    `json:",omitempty"`
+	GFSMonthly int    `json:",omitempty"`
+	GFSYearly  int    `json:",omitempty"`
+	Deleted    int    // snapshots removed by this run's retention
+	FreeBytes  uint64 // datastore filesystem, from `status`
+	UsedBytes  uint64
+	TotalBytes uint64
+}
+
+// SetRetention writes the retention of the destination into the result: the policy,
+// the simple limit and, for GFS, the tiers the retention pass applies.
+func (r *Result) SetRetention(rc storage.RetentionConfig) {
+	r.RetentionPolicy = rc.Policy
+	r.MaxBackups = rc.MaxBackups
+	r.GFSDaily, r.GFSWeekly, r.GFSMonthly, r.GFSYearly = 0, 0, 0, 0
+	if rc.Policy == "gfs" {
+		effective := storage.EffectiveGFSRetentionConfig(rc)
+		r.GFSDaily, r.GFSWeekly, r.GFSMonthly, r.GFSYearly = effective.Daily, effective.Weekly, effective.Monthly, effective.Yearly
+	}
 }
 
 // Backup is a non-critical destination block: it never aborts the run.

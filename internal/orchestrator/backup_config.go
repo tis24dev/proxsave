@@ -97,6 +97,8 @@ func InitializeBackupStats(
 		stats.MaxLocalBackups = cfg.MaxLocalBackups
 		stats.MaxSecondaryBackups = cfg.MaxSecondaryBackups
 		stats.MaxCloudBackups = cfg.MaxCloudBackups
+		stats.PBSTargetStorage = cfg.PBSTargetStorage
+		stats.MaxPBSTargetBackups = cfg.MaxPBSTargetBackups
 		if stats.LocalPath == "" {
 			stats.LocalPath = cfg.BackupPath
 		}
@@ -144,14 +146,12 @@ func InitializeBackupStats(
 	// The PBS block writes its own outcome at step [7]; until then nothing was uploaded.
 	// Without PBS the field stays nil and out of the serialized stats.
 	if cfg != nil && cfg.PBSTargetEnabled {
-		rc := block.PBSRetentionFromConfig(cfg)
 		stats.PBSTarget = &block.Result{
-			Name:            block.PBSName,
-			Status:          block.StatusSkipped,
-			Backups:         -1,
-			MaxBackups:      rc.MaxBackups,
-			RetentionPolicy: rc.Policy,
+			Name:    block.PBSName,
+			Status:  block.StatusSkipped,
+			Backups: -1,
 		}
+		stats.PBSTarget.SetRetention(block.PBSRetentionFromConfig(cfg))
 	}
 
 	return stats

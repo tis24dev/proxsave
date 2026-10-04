@@ -360,13 +360,12 @@ func (p *PBS) AvailableGB(ctx context.Context) (float64, *ServerCause) {
 // prints nothing: its header is the whole step.
 func (p *PBS) Execute(in Input) Result {
 	result := Result{
-		Name:            PBSName,
-		Status:          StatusSkipped,
-		Location:        p.target.Repository,
-		Backups:         -1,
-		MaxBackups:      p.opts.Retention.MaxBackups,
-		RetentionPolicy: p.opts.Retention.Policy,
+		Name:     PBSName,
+		Status:   StatusSkipped,
+		Location: p.target.Repository,
+		Backups:  -1,
 	}
+	result.SetRetention(p.opts.Retention)
 	if in.Logger != nil {
 		p.logger = in.Logger
 	}

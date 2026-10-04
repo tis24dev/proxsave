@@ -76,6 +76,8 @@
   "CloudGFSWeekly": 0,
   "CloudGFSMonthly": 0,
   "CloudGFSYearly": 0,
+  "PBSTargetStorage": "pbs-offsite",
+  "MaxPBSTargetBackups": 15,
   "ErrorCount": 0,
   "WarningCount": 0,
   "NotifyCount": 0,

@@ -599,6 +599,8 @@ version --repository charpbs@pbs!pve@192.0.2.10:charstore --output-format json
     "UsedBytes": 0,
     "TotalBytes": 0
   },
+  "PBSTargetStorage": "charpbs",
+  "MaxPBSTargetBackups": 5,
   "ErrorCount": 0,
   "WarningCount": 4,
   "NotifyCount": 0,
@@ -710,6 +712,8 @@ calls: 1
     "UsedBytes": 0,
     "TotalBytes": 0
   },
+  "PBSTargetStorage": "charpbs",
+  "MaxPBSTargetBackups": 5,
   "ErrorCount": 0,
   "WarningCount": 4,
   "NotifyCount": 0,

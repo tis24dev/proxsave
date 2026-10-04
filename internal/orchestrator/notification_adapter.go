@@ -185,6 +185,8 @@ func (n *NotificationAdapter) convertBackupStatsToNotificationData(stats *Backup
 		secondaryPercent = formatPercentString(calculateUsagePercent(stats.SecondaryUsedSpace, stats.SecondaryTotalSpace))
 	}
 
+	pbs := convertPBSTarget(stats)
+
 	// Issue counts and categories are snapshotted immediately before the
 	// notification group starts, so all notifiers see the same pre-notification
 	// totals. Re-parsing the log here per-notifier would over-count warnings
@@ -277,12 +279,30 @@ func (n *NotificationAdapter) convertBackupStatsToNotificationData(stats *Backup
 		CloudGFSYearly:       stats.CloudGFSYearly,
 		CloudBackups:         stats.CloudBackups,
 
+		PBSEnabled:       pbs.enabled,
+		PBSStatus:        pbs.status,
+		PBSStatusSummary: pbs.summary,
+		PBSCount:         pbs.count,
+		PBSFree:          pbs.free,
+		PBSUsed:          pbs.used,
+		PBSPercent:       pbs.percent,
+		PBSSpaceBytes:    pbs.spaceBytes,
+		PBSUsagePercent:  pbs.usagePercent,
+
+		PBSRetentionPolicy: pbs.policy,
+		PBSRetentionLimit:  stats.MaxPBSTargetBackups,
+		PBSGFSDaily:        pbs.gfsDaily,
+		PBSGFSWeekly:       pbs.gfsWeekly,
+		PBSGFSMonthly:      pbs.gfsMonthly,
+		PBSGFSYearly:       pbs.gfsYearly,
+
 		EmailStatus:    emailStatus,
 		TelegramStatus: telegramStatus,
 
 		LocalPath:     stats.LocalPath,
 		SecondaryPath: stats.SecondaryPath,
 		CloudPath:     stats.CloudPath,
+		PBSStorageID:  stats.PBSTargetStorage,
 
 		ErrorCount:    errorCount,
 		WarningCount:  warningCount,
@@ -295,6 +315,50 @@ func (n *NotificationAdapter) convertBackupStatsToNotificationData(stats *Backup
 		CurrentVersion:      stats.CurrentVersion,
 		LatestVersion:       stats.LatestVersion,
 	}
+}
+
+// pbsNotification is the PBS part of the NotificationData.
+type pbsNotification struct {
+	enabled                                    bool
+	status, summary, policy                    string
+	count                                      int
+	free, used, percent                        string
+	spaceBytes                                 uint64
+	usagePercent                               float64
+	gfsDaily, gfsWeekly, gfsMonthly, gfsYearly int
+}
+
+// convertPBSTarget reads the outcome of the PBS block. PBS off (no outcome) is
+// "disabled" with the summary of a destination switched off, "0/<MAX_PBS_TARGET_BACKUPS>".
+// A count the block never got stays -1, so the summary reads "?/<M>"; a datastore space
+// it never read (no total) has no value.
+func convertPBSTarget(stats *BackupStats) pbsNotification {
+	r := stats.PBSTarget
+	if r == nil {
+		return pbsNotification{
+			status:  "disabled",
+			summary: formatBackupStatusSummary("", 0, stats.MaxPBSTargetBackups),
+		}
+	}
+	pbs := pbsNotification{
+		enabled:    true,
+		status:     strings.TrimSpace(r.Status),
+		summary:    formatBackupStatusSummary(r.RetentionPolicy, r.Backups, r.MaxBackups),
+		policy:     r.RetentionPolicy,
+		count:      r.Backups,
+		gfsDaily:   r.GFSDaily,
+		gfsWeekly:  r.GFSWeekly,
+		gfsMonthly: r.GFSMonthly,
+		gfsYearly:  r.GFSYearly,
+	}
+	if r.TotalBytes > 0 {
+		pbs.free = formatBytesHR(r.FreeBytes)
+		pbs.used = formatBytesHR(r.UsedBytes)
+		pbs.usagePercent = calculateUsagePercent(r.UsedBytes, r.TotalBytes)
+		pbs.percent = formatPercentString(pbs.usagePercent)
+		pbs.spaceBytes = r.FreeBytes
+	}
+	return pbs
 }
 
 // formatBytesHR formats bytes in human-readable format (using uint64)

@@ -648,6 +648,8 @@ snapshot upload-log host/proxsave-charhost/2026-01-02T03:04:30Z <ROOT>/log/backu
     "UsedBytes": 20560846848,
     "TotalBytes": 30080253952
   },
+  "PBSTargetStorage": "charpbs",
+  "MaxPBSTargetBackups": 5,
   "ErrorCount": 0,
   "WarningCount": 3,
   "NotifyCount": 0,
@@ -759,6 +761,8 @@ calls: 1
     "UsedBytes": 20560846848,
     "TotalBytes": 30080253952
   },
+  "PBSTargetStorage": "charpbs",
+  "MaxPBSTargetBackups": 5,
   "ErrorCount": 0,
   "WarningCount": 3,
   "NotifyCount": 0,

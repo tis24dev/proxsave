@@ -76,6 +76,7 @@
   "CloudGFSWeekly": 0,
   "CloudGFSMonthly": 0,
   "CloudGFSYearly": 0,
+  "MaxPBSTargetBackups": 15,
   "ErrorCount": 1,
   "WarningCount": 0,
   "NotifyCount": 0,
