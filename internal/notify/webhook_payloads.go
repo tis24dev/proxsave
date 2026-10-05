@@ -143,7 +143,7 @@ func buildDiscordPayload(data *NotificationData, logger *logging.Logger) (map[st
 		"color":       color,
 		"fields":      fields,
 		"footer": map[string]interface{}{
-			"text": fmt.Sprintf("Proxmox Backup Script v%s • Exit Code: %d", data.ScriptVersion, data.ExitCode),
+			"text": fmt.Sprintf("ProxSave v%s • Exit Code: %d", data.ScriptVersion, data.ExitCode),
 		},
 		"timestamp": data.BackupDate.Format("2006-01-02T15:04:05Z07:00"),
 	}
@@ -333,7 +333,7 @@ func buildSlackPayload(data *NotificationData, logger *logging.Logger) (map[stri
 		"elements": []interface{}{
 			map[string]interface{}{
 				"type": "mrkdwn",
-				"text": fmt.Sprintf("Proxmox Backup Script v%s", data.ScriptVersion),
+				"text": fmt.Sprintf("ProxSave v%s", data.ScriptVersion),
 			},
 		},
 	})

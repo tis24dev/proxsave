@@ -34,7 +34,7 @@ ISSUES:<CR>
   Log: /opt/proxsave/log/backup-pve-golden-20261004-020000.log<CR>
 <CR>
 Exit Code: 0<CR>
-Script Version: 0.41.0<CR>
+ProxSave - v0.41.0<CR>
 
 
 --boundary42
@@ -315,10 +315,8 @@ og</p><CR>
             </div><CR>
         </div><CR>
         <div class=3D"footer"><CR>
-            <p>This is an automated message from the Proxmox Backup Script.=<CR>
-</p><CR>
-            <p>Generated on 2026-10-04 02:00:00 by backup script v0.41.0</p=<CR>
-><CR>
+            <p>This is an automated message from ProxSave.</p><CR>
+            <p>Generated on 2026-10-04 02:00:00 by ProxSave v0.41.0</p><CR>
         </div><CR>
     </div><CR>
 </body><CR>

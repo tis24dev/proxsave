@@ -20,4 +20,4 @@ ISSUES:
   Log: /opt/proxsave/log/backup-pve-golden-20261004-020000.log
 
 Exit Code: 5
-Script Version: 0.41.0
+ProxSave - v0.41.0

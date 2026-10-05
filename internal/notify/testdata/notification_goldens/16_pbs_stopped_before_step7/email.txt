@@ -26,4 +26,4 @@ ISSUE DETAILS:
   - [ERROR] Backup orchestration failed: failed to create temporary directory: mkdirtemp /tmp/proxsave/proxsave-pve-golden-202610... (count: 1)
 
 Exit Code: 4
-Script Version: 0.41.0
+ProxSave - v0.41.0

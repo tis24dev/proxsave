@@ -26,4 +26,4 @@ ISSUE DETAILS:
   - [WARNING] ⚠ Retention not applied (count: 1)
 
 Exit Code: 1
-Script Version: 0.41.0
+ProxSave - v0.41.0

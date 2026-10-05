@@ -70,7 +70,7 @@ func BuildEmailPlainText(data *NotificationData) string {
 	}
 
 	fmt.Fprintf(&body, "Exit Code: %d\n", data.ExitCode)
-	fmt.Fprintf(&body, "Script Version: %s\n", data.ScriptVersion)
+	fmt.Fprintf(&body, "ProxSave - v%s\n", data.ScriptVersion)
 
 	return body.String()
 }
@@ -312,8 +312,8 @@ func BuildEmailHTML(data *NotificationData) string {
 	// Footer
 	html.WriteString("        </div>\n")
 	html.WriteString("        <div class=\"footer\">\n")
-	html.WriteString("            <p>This is an automated message from the Proxmox Backup Script.</p>\n")
-	fmt.Fprintf(&html, "            <p>Generated on %s by backup script v%s</p>\n", backupDate, scriptVersion)
+	html.WriteString("            <p>This is an automated message from ProxSave.</p>\n")
+	fmt.Fprintf(&html, "            <p>Generated on %s by ProxSave v%s</p>\n", backupDate, scriptVersion)
 	html.WriteString("        </div>\n")
 
 	html.WriteString("    </div>\n")

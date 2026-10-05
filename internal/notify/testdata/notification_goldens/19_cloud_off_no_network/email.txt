@@ -31,4 +31,4 @@ ISSUE DETAILS:
   - [WARNING] WARNING: Network unavailable; switching Email delivery to sendmail for this run (count: 1)
 
 Exit Code: 1
-Script Version: 0.41.0
+ProxSave - v0.41.0

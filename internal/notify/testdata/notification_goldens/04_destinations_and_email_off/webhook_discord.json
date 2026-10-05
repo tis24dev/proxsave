@@ -46,7 +46,7 @@
         }
       ],
       "footer": {
-        "text": "Proxmox Backup Script v0.41.0 • Exit Code: 0"
+        "text": "ProxSave v0.41.0 • Exit Code: 0"
       },
       "timestamp": "2026-10-04T02:00:00Z",
       "title": "✅ PVE Backup Report"

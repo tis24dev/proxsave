@@ -46,4 +46,4 @@ ISSUE DETAILS:
   - [WARNING] Verification jobs: not configured. If unused, set BACKUP_VERIFICATION_JOBS=false to disable. (count: 1)
 
 Exit Code: 1
-Script Version: 0.41.0
+ProxSave - v0.41.0

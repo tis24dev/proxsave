@@ -25,4 +25,4 @@ ISSUE DETAILS:
   - [WARNING] New ProxSave version 0.42.0 (current 0.41.0): run 'proxsave --upgrade' to install. (count: 1)
 
 Exit Code: 1
-Script Version: 0.41.0
+ProxSave - v0.41.0
