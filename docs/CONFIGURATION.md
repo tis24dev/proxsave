@@ -338,7 +338,10 @@ The daemon can push to an external [healthchecks](https://healthchecks.io/) moni
 `ProxSave HC Server` (centralized) and `Your own server` (self). It is active only when the
 scheduler engine is the daemon, because the daemon is the only thing that pings. Choosing
 `Your own server` leads to a follow-up screen for the ping URLs: the alive and backup URLs
-are required there, the updates and per-channel ones optional. Whatever is configured,
+are required there, the updates URL and the four notification delivery check URLs optional.
+Those four are checks on your own healthchecks instance that watch each channel's delivery,
+not the channels' own addresses: see
+[Notification delivery checks](HEALTHCHECKS.md#notification-delivery-checks). Whatever is configured,
 `Diagnostic Checks` -> `Healthchecks` verifies it and shows the portal details without
 running a backup. The keys are:
 
@@ -356,13 +359,16 @@ HEALTHCHECK_SEND_LOG=true
 HEALTHCHECK_ALIVE_URL=
 HEALTHCHECK_BACKUP_URL=
 
-# Self mode
-HEALTHCHECK_PING_ENDPOINT=https://hc-ping.com
-HEALTHCHECK_PING_KEY=
-HEALTHCHECK_ALIVE_ID=
-HEALTHCHECK_BACKUP_ID=
-HEALTHCHECK_UPDATES_URL=
+# Self mode only: checks on your own healthchecks instance. No effect in centralized mode.
+HEALTHCHECK_PING_ENDPOINT=https://hc-ping.com   # base for the *_ID form
+HEALTHCHECK_PING_KEY=                           # optional, inserted between base and id
+HEALTHCHECK_ALIVE_ID=                           # service-alive check, used when HEALTHCHECK_ALIVE_URL is empty
+HEALTHCHECK_BACKUP_ID=                          # backup-outcome check, used when HEALTHCHECK_BACKUP_URL is empty
+HEALTHCHECK_UPDATES_URL=                        # updates check, optional: /1 when a newer release exists
 HEALTHCHECK_UPDATES_ID=
+# Notification delivery checks, optional: each watches whether one channel delivered.
+# Not the channel settings (Gotify is GOTIFY_SERVER_URL and GOTIFY_TOKEN). Any of them
+# set keeps every run notified whatever NOTIFY_ON says.
 HEALTHCHECK_NOTIFY_EMAIL_URL=
 HEALTHCHECK_NOTIFY_EMAIL_ID=
 HEALTHCHECK_NOTIFY_TELEGRAM_URL=
@@ -372,6 +378,11 @@ HEALTHCHECK_NOTIFY_GOTIFY_ID=
 HEALTHCHECK_NOTIFY_WEBHOOK_URL=
 HEALTHCHECK_NOTIFY_WEBHOOK_ID=
 ```
+
+A full `*_URL` wins over the matching `*_ID`; an id resolves to
+`<endpoint>/<key>/<id>` with a ping key, `<endpoint>/<id>` without. Which checks to create
+on your instance, and with which period, is in
+[Setting it up](HEALTHCHECKS.md#setting-it-up).
 
 `HEALTHCHECK_ENABLED` is the only switch. `HEALTHCHECK_MODE` selects *how* the ping URLs are
 obtained, and the loader recognizes exactly one value, `self`; anything else, `off`
@@ -1289,7 +1300,8 @@ outcome otherwise:
 - the daemon transmitting
 - centralized mode: an alert channel on the portal that has already delivered a DOWN
 - centralized mode: the server applying this `NOTIFY_ON`
-- self mode: no `HEALTHCHECK_NOTIFY_*` variable set
+- self mode: no `HEALTHCHECK_NOTIFY_*` variable set (see
+  [Notification delivery checks](HEALTHCHECKS.md#notification-delivery-checks))
 
 The run log and the Healthchecks check screens show which filter applies now; details in
 [HEALTHCHECKS.md](HEALTHCHECKS.md#alert-delivery-and-notify_on).

@@ -3,10 +3,10 @@ package install
 import (
 	"context"
 	"fmt"
-	"os"
 	"strings"
 
 	"github.com/tis24dev/proxsave/internal/installer"
+	"github.com/tis24dev/proxsave/internal/safefs"
 	"github.com/tis24dev/proxsave/internal/ui/components"
 	"github.com/tis24dev/proxsave/internal/ui/shell"
 )
@@ -21,7 +21,7 @@ import (
 // cancels the install (mirrors CollectWizardData); ENABLED/MODE are owned by the
 // wizard's ApplyInstallData and are not touched here.
 func RunHealthcheckSelfParams(ctx context.Context, session *shell.Session, baseDir, configPath string) error {
-	contentBytes, err := os.ReadFile(configPath) // #nosec G304 -- admin-supplied config path
+	contentBytes, err := safefs.ReadFileUnderRoot(configPath)
 	if err != nil {
 		return fmt.Errorf("read configuration for healthcheck parameters: %w", err)
 	}
@@ -50,29 +50,29 @@ func RunHealthcheckSelfParams(ctx context.Context, session *shell.Session, baseD
 		Validate:    installer.ValidateOptionalHealthcheckPingURL,
 	}
 	notifyEmail := &components.FormField{
-		Label:       "Notify email URL",
-		Description: "HEALTHCHECK_NOTIFY_EMAIL_URL (optional): the email-notification ping URL.",
+		Label:       "Email delivery ping URL",
+		Description: "HEALTHCHECK_NOTIFY_EMAIL_URL (optional): ping URL of your check that watches email delivery. Not an email setting: those are the EMAIL_* variables.",
 		Kind:        components.FieldText,
 		Text:        prefill.NotifyEmailURL,
 		Validate:    installer.ValidateOptionalHealthcheckPingURL,
 	}
 	notifyTelegram := &components.FormField{
-		Label:       "Notify Telegram URL",
-		Description: "HEALTHCHECK_NOTIFY_TELEGRAM_URL (optional): the Telegram-notification ping URL.",
+		Label:       "Telegram delivery ping URL",
+		Description: "HEALTHCHECK_NOTIFY_TELEGRAM_URL (optional): ping URL of your check that watches Telegram delivery. Not a Telegram setting: those are the TELEGRAM_* variables.",
 		Kind:        components.FieldText,
 		Text:        prefill.NotifyTelegramURL,
 		Validate:    installer.ValidateOptionalHealthcheckPingURL,
 	}
 	notifyGotify := &components.FormField{
-		Label:       "Notify Gotify URL",
-		Description: "HEALTHCHECK_NOTIFY_GOTIFY_URL (optional): the Gotify-notification ping URL.",
+		Label:       "Gotify delivery ping URL",
+		Description: "HEALTHCHECK_NOTIFY_GOTIFY_URL (optional): ping URL of your check that watches Gotify delivery. Not the Gotify server: that is GOTIFY_SERVER_URL.",
 		Kind:        components.FieldText,
 		Text:        prefill.NotifyGotifyURL,
 		Validate:    installer.ValidateOptionalHealthcheckPingURL,
 	}
 	notifyWebhook := &components.FormField{
-		Label:       "Notify webhook URL",
-		Description: "HEALTHCHECK_NOTIFY_WEBHOOK_URL (optional): the webhook-notification ping URL.",
+		Label:       "Webhook delivery ping URL",
+		Description: "HEALTHCHECK_NOTIFY_WEBHOOK_URL (optional): ping URL of your check that watches webhook delivery. Not a webhook endpoint: those are the WEBHOOK_* variables.",
 		Kind:        components.FieldText,
 		Text:        prefill.NotifyWebhookURL,
 		Validate:    installer.ValidateOptionalHealthcheckPingURL,

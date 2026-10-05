@@ -72,6 +72,13 @@ There are two independent layers, and it helps to keep them apart:
   This is the "is my monitoring actually working" layer. See
   [HEALTHCHECKS.md](HEALTHCHECKS.md).
 
+In centralized mode the server creates the per-channel checks. In self mode you create
+them on your own healthchecks instance and give their ping URLs in
+`HEALTHCHECK_NOTIFY_<CHANNEL>_URL` or `_ID`. Those variables only watch a channel: they
+are not its settings and send no message. A channel is configured only by the variables of
+its own section below (Gotify with `GOTIFY_SERVER_URL` and `GOTIFY_TOKEN`). See
+[Notification delivery checks](HEALTHCHECKS.md#notification-delivery-checks).
+
 Tier 2 requires the daemon. It is the only process that pings, so a host still on the
 cron scheduler raises no `notify-*` sensor at all, however the keys are set, and a run
 you start yourself (from the dashboard, or `proxsave --backup` by hand) leaves them
