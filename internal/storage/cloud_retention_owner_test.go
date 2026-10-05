@@ -2,8 +2,12 @@ package storage
 
 import (
 	"context"
+	"fmt"
+	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/tis24dev/proxsave/internal/config"
 	"github.com/tis24dev/proxsave/internal/types"
@@ -239,6 +243,9 @@ func TestApplyRetentionLeavesSameShortNameForeignFQDNAlone(t *testing.T) {
 			t.Fatalf("retention deleted another machine's backup: %+v", calls)
 		}
 	}
+	if summary := cs.LastRetentionSummary(); summary.NotRotated != 2 || summary.NotRotatedNames != "pve.siteb.example" {
+		t.Errorf("cloud summary not rotated = %d %q, want 2 \"pve.siteb.example\": they carry this host's short name, and the outcome line reads them", summary.NotRotated, summary.NotRotatedNames)
+	}
 }
 
 // TestResolveRetentionOwnersBoundsItsContext pins the timeout floor on retention's
@@ -268,5 +275,117 @@ func TestResolveRetentionOwnersBoundsItsContext(t *testing.T) {
 
 	if deadlines != len(list) {
 		t.Fatalf("%d of %d manifest reads ran with a deadline; a deadline-less run ctx must be floored so a wedged rclone cat cannot hang retention forever", deadlines, len(list))
+	}
+}
+
+// TestCloudReadsEachManifestOncePerRun walks a run's reads on one CloudStorage: the
+// init statistics, the init counts (CountOwnedBackups and OwnedBackups), retention
+// and the step [6] statistics. Each archive's manifest is read once, by the first of
+// them, and the archive retention deletes is dropped from the cache.
+func TestCloudReadsEachManifestOncePerRun(t *testing.T) {
+	original := retentionHostname
+	retentionHostname = func() (string, error) { return "pve", nil }
+	defer func() { retentionHostname = original }()
+
+	cs, err := NewCloudStorage(&config.Config{CloudEnabled: true, CloudRemote: "gdrive"}, newTestLogger(), "pve")
+	if err != nil {
+		t.Fatalf("NewCloudStorage: %v", err)
+	}
+	cs.sleep = func(time.Duration) {}
+	archives := []string{
+		"pve-backup-20250103-100000.tar.zst",
+		"pve-backup-20250102-100000.tar.zst",
+		"other-backup-20250101-100000.tar.zst",
+	}
+	var mu sync.Mutex
+	deleted := map[string]bool{}
+	cats := map[string]int{}
+	cs.execCommand = func(ctx context.Context, name string, args ...string) ([]byte, error) {
+		mu.Lock()
+		defer mu.Unlock()
+		path := args[len(args)-1]
+		switch args[0] {
+		case "lsl":
+			var lines []string
+			for i, a := range archives {
+				if deleted[a] {
+					continue
+				}
+				day := fmt.Sprintf("2025-01-0%d 10:00:00.000000000", 3-i)
+				lines = append(lines, "100 "+day+" "+a, "10 "+day+" "+a+".sha256")
+			}
+			return []byte(strings.Join(lines, "\n")), nil
+		case "cat":
+			cats[path]++
+			if strings.Contains(path, "other-backup") {
+				return []byte(`{"hostname":"other"}`), nil
+			}
+			return []byte(`{"hostname":"pve"}`), nil
+		case "deletefile", "delete":
+			deleted[strings.TrimPrefix(path, "gdrive:")] = true
+		}
+		return nil, nil
+	}
+
+	ctx := context.Background()
+	if stats, err := cs.GetStats(ctx); err != nil || stats.TotalBackups != 2 {
+		t.Fatalf("init GetStats = %+v, %v; want 2 of this host's", stats, err)
+	}
+	listing, err := cs.List(ctx)
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if owned, ok := CountOwnedBackups(ctx, cs, listing); !ok || owned != 2 {
+		t.Fatalf("CountOwnedBackups = %d, %v; want 2", owned, ok)
+	}
+	if owned, ok := OwnedBackups(ctx, cs, listing); !ok || len(owned) != 2 {
+		t.Fatalf("OwnedBackups = %d, %v; want 2", len(owned), ok)
+	}
+	if n, err := cs.ApplyRetention(ctx, RetentionConfig{Policy: "simple", MaxBackups: 1}); err != nil || n != 1 {
+		t.Fatalf("ApplyRetention = %d, %v; want 1 deleted", n, err)
+	}
+	if stats, err := cs.GetStats(ctx); err != nil || stats.TotalBackups != 1 {
+		t.Fatalf("step [6] GetStats = %+v, %v; want 1 of this host's", stats, err)
+	}
+
+	total := 0
+	for path, n := range cats {
+		total += n
+		if n != 1 {
+			t.Errorf("manifest %s read %d times in one run, want 1", path, n)
+		}
+	}
+	if total != len(archives) {
+		t.Errorf("rclone cat calls = %d, want %d (one per archive): %v", total, len(archives), cats)
+	}
+	if _, _, ok := cs.cachedOwner("pve-backup-20250102-100000.tar.zst"); ok {
+		t.Error("the archive retention deleted is still in the manifest cache")
+	}
+}
+
+// TestCloudStoreDropsTheCachedManifestOfTheUploadedArchive pins the other
+// invalidation: an archive the run uploads gets a new manifest, so what an earlier read
+// cached about that name is dropped.
+func TestCloudStoreDropsTheCachedManifestOfTheUploadedArchive(t *testing.T) {
+	tmpDir := t.TempDir()
+	backupFile := filepath.Join(tmpDir, "pve-backup-20250104-100000.tar.zst")
+	writeTestFile(t, backupFile, "primary")
+	writeTestFile(t, backupFile+".sha256", "sum")
+
+	cs := newCloudStorageForTest(&config.Config{CloudEnabled: true, CloudRemote: "remote", RcloneRetries: 1, RcloneTimeoutOperation: 10})
+	cs.sleep = func(time.Duration) {}
+	cs.execCommand = func(ctx context.Context, name string, args ...string) ([]byte, error) {
+		if args[0] == "lsl" {
+			return []byte("7 2025-01-04 10:00:00 pve-backup-20250104-100000.tar.zst"), nil
+		}
+		return nil, nil
+	}
+	cs.storeOwner("pve-backup-20250104-100000.tar.zst", "stale", "")
+
+	if err := cs.Store(context.Background(), backupFile, nil); err != nil {
+		t.Fatalf("Store: %v", err)
+	}
+	if _, _, ok := cs.cachedOwner("pve-backup-20250104-100000.tar.zst"); ok {
+		t.Error("the uploaded archive kept its cached manifest answer")
 	}
 }

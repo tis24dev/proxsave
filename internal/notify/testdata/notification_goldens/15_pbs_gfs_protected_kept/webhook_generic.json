@@ -1,0 +1,84 @@
+{
+  "backup": {
+    "duration_human": "2m 14s",
+    "duration_seconds": 134,
+    "file_name": "pve-golden-backup-20261004-020000.tar.xz.bundle.tar",
+    "files_included": 1832,
+    "files_missing": 0,
+    "size_bytes": 22020096,
+    "size_human": "21.0 MiB"
+  },
+  "compression": {
+    "level": 9,
+    "mode": "ultra",
+    "ratio": 88.20224719101124,
+    "type": "xz"
+  },
+  "exit_code": 1,
+  "hostname": "pve-golden",
+  "issues": {
+    "errors": 0,
+    "total": 1,
+    "warnings": 1
+  },
+  "log_categories": [
+    {
+      "count": 1,
+      "example": "⚠ Backups deleted: 0, 1 protected kept",
+      "label": "⚠ Backups deleted: 0, 1 protected kept",
+      "type": "WARNING"
+    }
+  ],
+  "proxmox_type": "pve",
+  "script_version": "0.41.0",
+  "server_id": "7302915846102738",
+  "server_mac": "bc:24:11:5e:3a:01",
+  "status": "warning",
+  "status_emoji": "⚠️",
+  "status_message": "Backup completed with warnings",
+  "storage": {
+    "cloud": {
+      "count": 15,
+      "emoji": "✅",
+      "status": "ok",
+      "status_summary": "15/-"
+    },
+    "local": {
+      "count": 15,
+      "emoji": "✅",
+      "free": "412.00 GB",
+      "percent": "11.6%",
+      "percent_num": 11.587982832618025,
+      "status": "ok",
+      "status_summary": "15/-",
+      "used": "54.00 GB"
+    },
+    "pbs": {
+      "count": 2,
+      "emoji": "✅",
+      "free": "1.18 TB",
+      "percent": "32.3%",
+      "percent_num": 32.32662192393736,
+      "status": "ok",
+      "status_summary": "2/-",
+      "used": "578.00 GB"
+    },
+    "secondary": {
+      "count": 15,
+      "emoji": "✅",
+      "free": "1.80 TB",
+      "percent": "50.5%",
+      "percent_num": 50.536768652710684,
+      "status": "ok",
+      "status_summary": "15/-",
+      "used": "1.84 TB"
+    }
+  },
+  "timestamp": 1791079200,
+  "timestamp_iso": "2026-10-04T02:00:00Z",
+  "update": {
+    "current_version": "0.41.0",
+    "latest_version": "0.41.0",
+    "new_version_available": false
+  }
+}

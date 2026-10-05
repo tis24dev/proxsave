@@ -13,13 +13,15 @@ import (
 	"github.com/tis24dev/proxsave/internal/types"
 )
 
-// The tier closing line is the log's last word on a storage backend, and until now
-// nothing pinned it: the branch read only hasWarnings, so a run whose Store FAILED
-// (status "error" in the notification, "Backup was not saved" two lines above)
-// still closed green with "✓ ... operations completed" at INFO whenever retention
-// then ran clean - exactly the shape of a secondary/cloud mount that dies mid-copy.
-// The closing line must follow the worst thing the adapter saw, not the best.
-func adapterClosingLine(t *testing.T, storeErr, retentionErr error) string {
+// A failed Store used to close green: the branch read only hasWarnings, so a run whose
+// Store FAILED (status "error" in the notification) still closed with "✓ ... operations
+// completed" at INFO whenever retention then ran clean - exactly the shape of a
+// secondary/cloud mount that dies mid-copy. The closing line is gone now: each outcome
+// is printed where it happened, the store's under "Storing backup..." and retention's
+// under "Applying retention policy...". These tests pin that every outcome follows
+// what the adapter saw, that the status still follows the worst of them, and that no
+// summary line comes back to contradict them.
+func adapterSyncLog(t *testing.T, storeErr, retentionErr error) (string, *BackupStats) {
 	t.Helper()
 	logger := logging.New(types.LogLevelDebug, false)
 	buf := &bytes.Buffer{}
@@ -42,16 +44,29 @@ func adapterClosingLine(t *testing.T, storeErr, retentionErr error) string {
 		},
 	}
 	adapter := NewStorageAdapter(backend, logger, &config.Config{SecondaryRetentionDays: 2})
-	if err := adapter.Sync(context.Background(), sampleAdapterStats()); err != nil {
+	stats := sampleAdapterStats()
+	if err := adapter.Sync(context.Background(), stats); err != nil {
 		t.Fatalf("Sync returned error: %v", err)
 	}
 
-	for _, line := range strings.Split(strings.TrimRight(buf.String(), "\n"), "\n") {
-		if strings.Contains(line, "operations completed") {
+	out := buf.String()
+	for _, line := range strings.Split(strings.TrimRight(out, "\n"), "\n") {
+		if strings.Contains(line, "operations completed") && closeLevelOf(t, line) != "DEBUG" {
+			t.Fatalf("a closing summary line came back above DEBUG:\n%s", line)
+		}
+	}
+	return out, stats
+}
+
+// lineWith returns the first rendered line containing want, or fails.
+func lineWith(t *testing.T, out, want string) string {
+	t.Helper()
+	for _, line := range strings.Split(strings.TrimRight(out, "\n"), "\n") {
+		if strings.Contains(line, want) {
 			return line
 		}
 	}
-	t.Fatalf("no closing line rendered:\n%s", buf.String())
+	t.Fatalf("no line with %q rendered:\n%s", want, out)
 	return ""
 }
 
@@ -64,30 +79,42 @@ func closeLevelOf(t *testing.T, line string) string {
 	return strings.Fields(rest)[0]
 }
 
-func TestClosingLineAfterFailedStoreSaysErrorsAtWarning(t *testing.T) {
-	line := adapterClosingLine(t, errors.New("store fail"), nil)
-	if !strings.Contains(line, "✗ secondary operations completed with errors") {
-		t.Fatalf("a failed store still closes green; the log's last word contradicts the notification's \"error\":\n%s", line)
-	}
+func TestFailedStoreOutcomeSaysNotSavedAtWarning(t *testing.T) {
+	out, stats := adapterSyncLog(t, errors.New("store fail"), nil)
+	line := lineWith(t, out, "✗ secondary: backup not saved")
 	if got := closeLevelOf(t, line); got != "WARNING" {
-		t.Fatalf("closing line level = %s, want WARNING (store failure stays warning-weight, exit contract unchanged):\n%s", got, line)
+		t.Fatalf("store outcome level = %s, want WARNING (store failure stays warning-weight, exit contract unchanged):\n%s", got, line)
+	}
+	if strings.Contains(out, "✓ secondary: backup saved") {
+		t.Fatalf("a failed store still reports a saved backup:\n%s", out)
+	}
+	if stats.SecondaryStatus != "error" {
+		t.Fatalf("SecondaryStatus = %q, want error", stats.SecondaryStatus)
 	}
 }
 
-func TestClosingLineErrorsOutrankWarnings(t *testing.T) {
-	line := adapterClosingLine(t, errors.New("store fail"), errors.New("retention fail"))
-	if !strings.Contains(line, "completed with errors") {
-		t.Fatalf("with both flags set the closing line must report the worse one:\n%s", line)
+func TestStoreErrorsOutrankRetentionWarningsInTheStatus(t *testing.T) {
+	out, stats := adapterSyncLog(t, errors.New("store fail"), errors.New("retention fail"))
+	lineWith(t, out, "✗ secondary: backup not saved")
+	if got := closeLevelOf(t, lineWith(t, out, "⚠ Retention not applied")); got != "WARNING" {
+		t.Fatalf("retention outcome level = %s, want WARNING", got)
+	}
+	if stats.SecondaryStatus != "error" {
+		t.Fatalf("with both failures the status must report the worse one, got %q", stats.SecondaryStatus)
 	}
 }
 
-func TestClosingLineArmsStillRender(t *testing.T) {
-	warn := adapterClosingLine(t, nil, errors.New("retention fail"))
-	if !strings.Contains(warn, "✗ secondary operations completed with warnings") || closeLevelOf(t, warn) != "WARNING" {
-		t.Fatalf("warnings arm changed:\n%s", warn)
+func TestStoreAndRetentionOutcomeArmsStillRender(t *testing.T) {
+	warnOut, warnStats := adapterSyncLog(t, nil, errors.New("retention fail"))
+	if closeLevelOf(t, lineWith(t, warnOut, "✓ secondary: backup saved")) != "INFO" ||
+		closeLevelOf(t, lineWith(t, warnOut, "⚠ Retention not applied")) != "WARNING" ||
+		warnStats.SecondaryStatus != "warning" {
+		t.Fatalf("warnings arm changed (status %q):\n%s", warnStats.SecondaryStatus, warnOut)
 	}
-	ok := adapterClosingLine(t, nil, nil)
-	if !strings.Contains(ok, "✓ secondary operations completed") || closeLevelOf(t, ok) != "INFO" {
-		t.Fatalf("clean arm changed:\n%s", ok)
+	okOut, okStats := adapterSyncLog(t, nil, nil)
+	if closeLevelOf(t, lineWith(t, okOut, "✓ secondary: backup saved")) != "INFO" ||
+		closeLevelOf(t, lineWith(t, okOut, "✓ Nothing to delete")) != "INFO" ||
+		okStats.SecondaryStatus != "ok" {
+		t.Fatalf("clean arm changed (status %q):\n%s", okStats.SecondaryStatus, okOut)
 	}
 }

@@ -6,7 +6,7 @@ import (
 	"strings"
 )
 
-// BuildEmailSubject builds the email subject line matching Bash output
+// BuildEmailSubject builds the email subject line.
 func BuildEmailSubject(data *NotificationData) string {
 	statusEmoji := GetStatusEmoji(data.Status)
 
@@ -28,10 +28,13 @@ func BuildEmailPlainText(data *NotificationData) string {
 	body.WriteString("BACKUP STATUS:\n")
 	fmt.Fprintf(&body, "  Local:     %s backups (%s free)\n", data.LocalStatusSummary, data.LocalFree)
 	if data.SecondaryEnabled {
-		fmt.Fprintf(&body, "  Secondary: %s backups (%s free)\n", data.SecondaryStatusSummary, data.SecondaryFree)
+		fmt.Fprintf(&body, "  Secondary: %s backups (%s free)\n", data.SecondaryStatusSummary, freeText(data.SecondaryFree))
 	}
 	if data.CloudEnabled {
 		fmt.Fprintf(&body, "  Cloud:     %s backups\n", data.CloudStatusSummary)
+	}
+	if data.PBSEnabled {
+		fmt.Fprintf(&body, "  PBS:       %s backups (%s free)\n", data.PBSStatusSummary, freeText(data.PBSFree))
 	}
 	body.WriteString("\n")
 
@@ -67,12 +70,12 @@ func BuildEmailPlainText(data *NotificationData) string {
 	}
 
 	fmt.Fprintf(&body, "Exit Code: %d\n", data.ExitCode)
-	fmt.Fprintf(&body, "Script Version: %s\n", data.ScriptVersion)
+	fmt.Fprintf(&body, "ProxSave - v%s\n", data.ScriptVersion)
 
 	return body.String()
 }
 
-// BuildEmailHTML builds an HTML email body matching Bash template exactly
+// BuildEmailHTML builds the HTML email body; the relay worker renders the same email from buildReportData.
 func BuildEmailHTML(data *NotificationData) string {
 	// Determine status color
 	statusColor := getStatusColor(data.Status)
@@ -92,13 +95,18 @@ func BuildEmailHTML(data *NotificationData) string {
 	secondaryPercent := escapeHTML(data.SecondaryPercent)
 	cloudEmoji := escapeHTML(GetStorageEmoji(data.CloudStatus))
 	cloudStatusSummary := escapeHTML(data.CloudStatusSummary)
+	pbsEmoji := escapeHTML(GetStorageEmoji(data.PBSStatus))
+	pbsStatusSummary := escapeHTML(data.PBSStatusSummary)
+	pbsUsed := escapeHTML(data.PBSUsed)
+	pbsFree := escapeHTML(data.PBSFree)
+	pbsPercent := escapeHTML(data.PBSPercent)
 	scriptVersion := escapeHTML(data.ScriptVersion)
 
 	// Determine backup paths sidebar color
 	backupPathsColor := "#4CAF50" // Green by default
-	if data.LocalStatus == "error" || data.SecondaryStatus == "error" || data.CloudStatus == "error" {
+	if data.LocalStatus == "error" || data.SecondaryStatus == "error" || data.CloudStatus == "error" || data.PBSStatus == "error" {
 		backupPathsColor = "#F44336" // Red
-	} else if data.LocalStatus == "warning" || data.SecondaryStatus == "warning" || data.CloudStatus == "warning" {
+	} else if data.LocalStatus == "warning" || data.SecondaryStatus == "warning" || data.CloudStatus == "warning" || data.PBSStatus == "warning" {
 		backupPathsColor = "#FF9800" // Orange
 	}
 
@@ -166,7 +174,7 @@ func BuildEmailHTML(data *NotificationData) string {
 	html.WriteString("                <div class=\"backup-location\">\n")
 	html.WriteString("                    <h3>Secondary Storage</h3>\n")
 	html.WriteString("                    <div class=\"count-block\">\n")
-	fmt.Fprintf(&html, "                        <span class=\"emoji\">%s</span> %s backups\n", secondaryEmoji, secondaryStatusSummary)
+	html.WriteString(htmlCountBlock(data.SecondaryEnabled, secondaryEmoji, secondaryStatusSummary))
 	html.WriteString("                    </div>\n")
 	if data.SecondaryEnabled && data.SecondaryFree != "" && data.SecondaryFree != "N/A" {
 		barColor := "normal"
@@ -190,8 +198,32 @@ func BuildEmailHTML(data *NotificationData) string {
 	html.WriteString("                <div class=\"backup-location\">\n")
 	html.WriteString("                    <h3>Cloud Storage</h3>\n")
 	html.WriteString("                    <div class=\"count-block\">\n")
-	fmt.Fprintf(&html, "                        <span class=\"emoji\">%s</span> %s backups\n", cloudEmoji, cloudStatusSummary)
+	html.WriteString(htmlCountBlock(data.CloudEnabled, cloudEmoji, cloudStatusSummary))
 	html.WriteString("                    </div>\n")
+	html.WriteString("                </div>\n")
+
+	// PBS Storage
+	html.WriteString("                \n")
+	html.WriteString("                <div class=\"backup-location\">\n")
+	html.WriteString("                    <h3>PBS Storage</h3>\n")
+	html.WriteString("                    <div class=\"count-block\">\n")
+	html.WriteString(htmlCountBlock(data.PBSEnabled, pbsEmoji, pbsStatusSummary))
+	html.WriteString("                    </div>\n")
+	if data.PBSEnabled && data.PBSFree != "" && data.PBSFree != "N/A" {
+		barColor := "normal"
+		if data.PBSUsagePercent > 85 {
+			barColor = "critical"
+		} else if data.PBSUsagePercent > 70 {
+			barColor = "warning"
+		}
+		html.WriteString("                    <div class=\"storage-info\">\n")
+		fmt.Fprintf(&html, "                        <span>%s</span>\n", pbsUsed)
+		html.WriteString("                        <div class=\"space-bar\">\n")
+		fmt.Fprintf(&html, "                            <div class=\"space-used %s\" style=\"width: %.1f%%;\"></div>\n", barColor, data.PBSUsagePercent)
+		html.WriteString("                        </div>\n")
+		fmt.Fprintf(&html, "                        <span>%s free (%s used)</span>\n", pbsFree, pbsPercent)
+		html.WriteString("                    </div>\n")
+	}
 	html.WriteString("                </div>\n")
 
 	html.WriteString("            </div>\n")
@@ -218,6 +250,9 @@ func BuildEmailHTML(data *NotificationData) string {
 	}
 	if data.CloudEnabled && data.CloudPath != "" {
 		html.WriteString(buildInfoTableRow("Cloud Storage", data.CloudPath))
+	}
+	if data.PBSEnabled && data.PBSStorageID != "" {
+		html.WriteString(buildInfoTableRow("PBS Storage", data.PBSStorageID))
 	}
 	html.WriteString("                </table>\n")
 	html.WriteString("            </div>\n")
@@ -256,7 +291,7 @@ func BuildEmailHTML(data *NotificationData) string {
 	html.WriteString("            </div>\n")
 
 	// System Recommendations Section
-	if data.LocalUsagePercent > 85 || (data.SecondaryEnabled && data.SecondaryUsagePercent > 85) {
+	if data.LocalUsagePercent > 85 || (data.SecondaryEnabled && data.SecondaryUsagePercent > 85) || (data.PBSEnabled && data.PBSUsagePercent > 85) {
 		html.WriteString("            \n")
 		html.WriteString("            <div class=\"section\">\n")
 		html.WriteString("                <h2>System Recommendations</h2>\n")
@@ -267,6 +302,9 @@ func BuildEmailHTML(data *NotificationData) string {
 		if data.SecondaryEnabled && data.SecondaryUsagePercent > 85 {
 			fmt.Fprintf(&html, "                    <p>⚠️ <strong>Secondary storage is %.1f%% full.</strong> Consider cleaning old backups or expanding storage capacity.</p>\n", data.SecondaryUsagePercent)
 		}
+		if data.PBSEnabled && data.PBSUsagePercent > 85 {
+			fmt.Fprintf(&html, "                    <p>⚠️ <strong>PBS storage is %.1f%% full.</strong> Consider cleaning old backups or expanding storage capacity.</p>\n", data.PBSUsagePercent)
+		}
 		html.WriteString("                </div>\n")
 		html.WriteString("            </div>\n")
 	}
@@ -274,8 +312,8 @@ func BuildEmailHTML(data *NotificationData) string {
 	// Footer
 	html.WriteString("        </div>\n")
 	html.WriteString("        <div class=\"footer\">\n")
-	html.WriteString("            <p>This is an automated message from the Proxmox Backup Script.</p>\n")
-	fmt.Fprintf(&html, "            <p>Generated on %s by backup script v%s</p>\n", backupDate, scriptVersion)
+	html.WriteString("            <p>This is an automated message from ProxSave.</p>\n")
+	fmt.Fprintf(&html, "            <p>Generated on %s by ProxSave v%s</p>\n", backupDate, scriptVersion)
 	html.WriteString("        </div>\n")
 
 	html.WriteString("    </div>\n")
@@ -284,7 +322,17 @@ func BuildEmailHTML(data *NotificationData) string {
 	return html.String()
 }
 
-// buildInfoTableRow builds a table row for the info table (Bash style)
+// htmlCountBlock is the count line of a copy destination's box: "<emoji> <N>/<M>
+// backups" when it is configured (in the run, or on and failed at startup), "➖
+// disabled" when it is switched off.
+func htmlCountBlock(enabled bool, emoji, summary string) string {
+	if !enabled {
+		return fmt.Sprintf("                        <span class=\"emoji\">%s</span> disabled\n", escapeHTML(GetStorageEmoji("disabled")))
+	}
+	return fmt.Sprintf("                        <span class=\"emoji\">%s</span> %s backups\n", emoji, summary)
+}
+
+// buildInfoTableRow builds a row of the Backup Details table.
 func buildInfoTableRow(label, value string) string {
 	return fmt.Sprintf("                    <tr>\n                        <td>%s</td>\n                        <td>%s</td>\n                    </tr>\n", escapeHTML(label), escapeHTML(value))
 }
@@ -314,7 +362,7 @@ func getStatusColor(status NotificationStatus) string {
 	}
 }
 
-// getEmbeddedCSS returns the embedded CSS for email HTML (Bash style)
+// getEmbeddedCSS returns the CSS embedded in the HTML email.
 func getEmbeddedCSS() string {
 	return `        body {
             font-family: 'Segoe UI', Arial, sans-serif;

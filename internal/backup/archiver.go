@@ -556,7 +556,7 @@ func (a *Archiver) createGzipArchive(ctx context.Context, sourceDir, outputPath 
 	a.logger.Debug("Creating gzip archive with level %d (mode %s)", a.compressionLevel, a.CompressionMode())
 
 	// Create output file
-	outFile, err := createBackupOutputFile(outputPath)
+	outFile, err := createArchiveOutputFile(outputPath)
 	if err != nil {
 		return fmt.Errorf("failed to create output file: %w", err)
 	}
@@ -598,7 +598,7 @@ func (a *Archiver) createTarArchive(ctx context.Context, sourceDir, outputPath s
 	a.logger.Debug("Creating uncompressed tar archive")
 
 	// Create output file
-	outFile, err := createBackupOutputFile(outputPath)
+	outFile, err := createArchiveOutputFile(outputPath)
 	if err != nil {
 		return fmt.Errorf("failed to create output file: %w", err)
 	}
@@ -669,7 +669,7 @@ func (a *Archiver) createXZArchive(ctx context.Context, sourceDir, outputPath st
 	if err != nil {
 		return err
 	}
-	outFile, err := createBackupOutputFile(outputPath)
+	outFile, err := createArchiveOutputFile(outputPath)
 	if err != nil {
 		return fmt.Errorf("failed to create output file: %w", err)
 	}
@@ -731,7 +731,7 @@ func (a *Archiver) createZstdArchive(ctx context.Context, sourceDir, outputPath 
 	if err != nil {
 		return err
 	}
-	outFile, err := createBackupOutputFile(outputPath)
+	outFile, err := createArchiveOutputFile(outputPath)
 	if err != nil {
 		return fmt.Errorf("failed to create output file: %w", err)
 	}
@@ -809,11 +809,26 @@ func drainTarWriterAfterCompressorStartFailure(pw *io.PipeWriter, errChan <-chan
 	<-errChan
 }
 
-// createBackupOutputFile creates a backup output/content file with the project's
-// standard backup permission (defaultOptimizedFilePerm, 0o640). Backups are
-// intentionally group-readable so a backup-operator group can read them; the
-// containing directory restricts world access. Centralised here so the single
-// deliberate permission decision is documented in one place.
+// createArchiveOutputFile creates the archive file of a backup run with
+// ArtifactFilePerm (0o600): like every file of a backup set, the archive is
+// readable by root only. Group read is never decided here; it is granted later, and
+// only when SET_BACKUP_PERMISSIONS=true asks for it (see ArtifactFilePerm).
+func createArchiveOutputFile(outputPath string) (*os.File, error) {
+	// Contain the variable output path within its directory via os.Root so it
+	// cannot escape (gosec G304). The returned file is an independent descriptor
+	// and stays valid after the Root is closed.
+	root, err := os.OpenRoot(filepath.Dir(outputPath))
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = root.Close() }()
+	return root.OpenFile(filepath.Base(outputPath), os.O_CREATE|os.O_WRONLY|os.O_TRUNC, ArtifactFilePerm)
+}
+
+// createBackupOutputFile creates a content file the collector writes into the
+// staging tree of a run (defaultOptimizedFilePerm, 0o640), which is also the mode
+// the file is recorded with inside the archive. It is never used for the archive
+// itself: that is createArchiveOutputFile's job.
 func createBackupOutputFile(outputPath string) (*os.File, error) {
 	// Contain the variable output path within its directory via os.Root so it
 	// cannot escape (gosec G304); the path is the admin-configured backup
@@ -824,12 +839,11 @@ func createBackupOutputFile(outputPath string) (*os.File, error) {
 		return nil, err
 	}
 	defer func() { _ = root.Close() }()
-	// #nosec G302 -- 0o640 group-read is the deliberate backup-file convention (defaultOptimizedFilePerm); operators read backups and the parent dir gates world access.
 	return root.OpenFile(filepath.Base(outputPath), os.O_CREATE|os.O_WRONLY|os.O_TRUNC, defaultOptimizedFilePerm)
 }
 
 func (a *Archiver) pipeTarThroughCommand(ctx context.Context, sourceDir, outputPath string, cmd *exec.Cmd, algo string) (err error) {
-	outFile, err := createBackupOutputFile(outputPath)
+	outFile, err := createArchiveOutputFile(outputPath)
 	if err != nil {
 		return fmt.Errorf("failed to create output file: %w", err)
 	}

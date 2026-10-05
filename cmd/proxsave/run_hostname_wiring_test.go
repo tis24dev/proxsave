@@ -611,8 +611,8 @@ func TestBootstrapRuntimeNamesEveryRunItHandsBack(t *testing.T) {
 // used to go wrong in quiet.
 //
 // Every other consumer already fails loudly. An empty written name reaches the three
-// storage constructors as "no alias", and applyRetentionHostScope then warns twice
-// per backend on any host whose archives carry an FQDN. Only the writer papered over
+// storage constructors as "no alias", and on any host whose archives carry an FQDN
+// retention then reports them as not rotated on every backend. Only the writer papered over
 // the drop by resolving the name a second time, which is what let the archives keep
 // looking right while retention stopped recognising them (discussion #292).
 func TestRunHostnameOrReportReportsADroppedPlumb(t *testing.T) {

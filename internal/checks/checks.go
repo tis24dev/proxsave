@@ -15,6 +15,7 @@ import (
 
 	"github.com/tis24dev/proxsave/internal/logging"
 	"github.com/tis24dev/proxsave/internal/safefs"
+	"github.com/tis24dev/proxsave/internal/ui/theme"
 )
 
 // createTestFile is a small indirection over os.Create used by permission
@@ -51,6 +52,63 @@ type Checker struct {
 	lockAcquired bool
 	// lockPath records the exact path of the lock file this checker created.
 	lockPath string
+
+	// pbs is the PBS storage in the two disk-space checks; nil when it is disabled.
+	pbs *pbsDiskSpace
+}
+
+// pbsDiskSpace is the PBS storage as the disk-space checks see it: its free space is
+// asked to the server at the moment of each check. available is nil when the storage
+// was not initialized at startup: it is left out of both checks.
+type pbsDiskSpace struct {
+	storage   string
+	minGB     float64
+	available func() (float64, string)
+}
+
+// SetPBS adds the PBS storage to the two disk-space checks. available returns the free
+// space of the datastore's filesystem in GB, or the short cause of the server when it
+// could not be read; nil means the storage was not initialized at startup.
+func (c *Checker) SetPBS(storage string, minGB float64, available func() (float64, string)) {
+	if c == nil {
+		return
+	}
+	c.pbs = &pbsDiskSpace{storage: storage, minGB: minGB, available: available}
+}
+
+// checkPBSDiskSpace is the PBS entry of a disk-space check: the server is asked now.
+// required is what this check needs; rule, when set, explains how it was computed. It
+// returns whether the block ended with a warning.
+func (c *Checker) checkPBSDiskSpace(required float64, rule string) bool {
+	p := c.pbs
+	if p == nil || p.minGB <= 0 {
+		return false
+	}
+	if p.available == nil {
+		c.logger.Debug("pbs disk space: skipped, storage not initialized")
+		return false
+	}
+	c.logger.Debug("Checking disk space on PBS: storage %s", p.storage)
+	availableGB, cause := p.available()
+	if cause != "" {
+		c.logger.Debug("PBS disk space check failed (storage %s): %s", p.storage, cause)
+		c.logger.Info("PBS disk space: %s", p.storage)
+		c.logger.Info("  PBS server: %s", cause)
+		c.logger.Warning("%s PBS disk space: not checked", theme.SymbolWarning)
+		return true
+	}
+	c.logger.Debug("PBS: %.2f GB available, %.2f GB required", availableGB, required)
+	if availableGB >= required {
+		return false
+	}
+	c.logger.Info("PBS disk space: %s", p.storage)
+	c.logger.Info("  Available: %.2f GB", availableGB)
+	c.logger.Info("  Required: %.2f GB", required)
+	if rule != "" {
+		c.logger.Info("  Rule: %s", rule)
+	}
+	c.logger.Warning("%s PBS disk space: insufficient, upload may fail", theme.SymbolWarning)
+	return true
 }
 
 // DisableCloud globally disables cloud-related checks for this checker.
@@ -62,6 +120,16 @@ func (c *Checker) DisableCloud() {
 	}
 	c.config.CloudEnabled = false
 	c.config.CloudPath = ""
+}
+
+// DisableSecondary is DisableCloud for the secondary destination: the storage
+// initialization could not create its backend, so the run treats it as disabled.
+func (c *Checker) DisableSecondary() {
+	if c == nil || c.config == nil {
+		return
+	}
+	c.config.SecondaryEnabled = false
+	c.config.SecondaryPath = ""
 }
 
 // CheckerConfig holds configuration for pre-backup checks
@@ -206,35 +274,72 @@ func (c *Checker) CheckDiskSpace() CheckResult {
 		{"Cloud", c.config.CloudPath, c.config.CloudEnabled, c.config.MinDiskCloudGB, false},
 	}
 
-	hasWarnings := false
+	var warned []string
 
 	for _, entry := range paths {
 		if !entry.enabled || entry.path == "" || entry.min <= 0 {
 			continue
 		}
 		c.logger.Debug("Checking disk space on %s: %s", entry.label, entry.path)
-		if err := c.checkSingleDisk(entry.label, entry.path, entry.min); err != nil {
-			if entry.critical {
+		if entry.critical {
+			if err := c.checkSingleDisk(entry.label, entry.path, entry.min); err != nil {
 				result.Error = err
 				result.Message = err.Error()
 				c.logger.Error("%s", result.Message)
 				return result
 			}
-
-			c.logger.Warning("%s disk space check failed (non-blocking): %v", entry.label, err)
-			c.logger.Warning("Backup will continue, but %s storage may not be updated", entry.label)
-			hasWarnings = true
+			continue
 		}
+
+		// A copy destination below its threshold does not stop the backup: the block
+		// says where, how much there is and how much is needed, then the outcome.
+		availableGB, err := c.diskSpaceGB(entry.path)
+		if err != nil {
+			c.logDiskNotChecked(entry.label, entry.path, err)
+			warned = append(warned, entry.label)
+			continue
+		}
+		c.logger.Debug("%s: %.2f GB available, %.2f GB required", entry.label, availableGB, entry.min)
+		if availableGB < entry.min {
+			c.logDiskInsufficient(entry.label, entry.path, availableGB, entry.min, "")
+			warned = append(warned, entry.label)
+		}
+	}
+	if c.pbs != nil && c.checkPBSDiskSpace(c.pbs.minGB, "") {
+		warned = append(warned, "PBS")
 	}
 
 	result.Passed = true
-	if hasWarnings {
-		result.Message = "Primary disk space OK (warnings on secondary/cloud destinations)"
+	if len(warned) > 0 {
+		c.logger.Debug("Disk space: primary OK, warnings on %s", strings.Join(warned, ", "))
+		c.logger.Info("Disk space warnings: %s", strings.Join(warned, ", "))
+		result.Message = "Primary disk space OK"
 	} else {
 		result.Message = "Sufficient disk space on all configured destinations"
 	}
 	c.logger.Debug("%s", result.Message)
 	return result
+}
+
+// logDiskInsufficient prints the block of a copy destination below its threshold. rule,
+// when set, explains how the requirement was computed.
+func (c *Checker) logDiskInsufficient(label, path string, availableGB, requiredGB float64, rule string) {
+	c.logger.Info("%s disk space: %s", label, path)
+	c.logger.Info("  Available: %.2f GB", availableGB)
+	c.logger.Info("  Required: %.2f GB", requiredGB)
+	if rule != "" {
+		c.logger.Info("  Rule: %s", rule)
+	}
+	c.logger.Warning("%s %s disk space: insufficient, copy may fail", theme.SymbolWarning, label)
+}
+
+// logDiskNotChecked prints the block of a copy destination whose free space could not
+// be read (statfs failed or timed out on a dead mount). The full error stays in DEBUG.
+func (c *Checker) logDiskNotChecked(label, path string, err error) {
+	c.logger.Debug("%s disk space check failed (%s): %v", label, path, err)
+	c.logger.Info("%s disk space: %s", label, path)
+	c.logger.Info("  Mount: %s", safefs.SystemErrorText(err))
+	c.logger.Warning("%s %s disk space: not checked", theme.SymbolWarning, label)
 }
 
 type lockFileMetadata struct {
@@ -891,7 +996,7 @@ func (c *Checker) CheckDiskSpaceForEstimate(estimatedSizeGB float64) CheckResult
 				return result
 			}
 
-			c.logger.Warning("%s (non-blocking)", errMsg)
+			c.logDiskNotChecked(entry.label, entry.path, err)
 			hasWarnings = true
 			continue
 		}
@@ -905,8 +1010,16 @@ func (c *Checker) CheckDiskSpaceForEstimate(estimatedSizeGB float64) CheckResult
 				return result
 			}
 
-			c.logger.Warning("%s (non-blocking)", msg)
-			c.logger.Warning("%s storage may fail due to insufficient space", entry.label)
+			c.logger.Debug("%s (non-blocking)", msg)
+			rule := fmt.Sprintf("larger of %.2f GB minimum and %.2f GB collected x %.1f", entry.min, estimatedSizeGB, c.config.SafetyFactor)
+			c.logDiskInsufficient(entry.label, entry.path, availableGB, requiredGB, rule)
+			hasWarnings = true
+		}
+	}
+	if p := c.pbs; p != nil {
+		requiredGB := math.Max(p.minGB, estimatedSizeGB*c.config.SafetyFactor)
+		rule := fmt.Sprintf("larger of %.2f GB minimum and %.2f GB collected x %.1f", p.minGB, estimatedSizeGB, c.config.SafetyFactor)
+		if c.checkPBSDiskSpace(requiredGB, rule) {
 			hasWarnings = true
 		}
 	}

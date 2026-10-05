@@ -1,0 +1,7 @@
+POST /send
+Authorization: Bearer v1_public_20251024
+Content-Type: application/json
+User-Agent: proxsave/0.41.0
+X-Script-Version: 0.41.0
+X-Server-Mac: bc:24:11:5e:3a:01
+X-Signature: <HMAC-SHA256 of the body as sent, verified>

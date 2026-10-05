@@ -64,8 +64,13 @@ func TestInitializeRunProfiling_WritesOffLogPath(t *testing.T) {
 		t.Fatal("profiling should be enabled (cpuProfileFile is nil)")
 	}
 	wantDir := filepath.Join(base, "proxsave")
-	if cpus, _ := filepath.Glob(filepath.Join(wantDir, "cpu-*.pprof")); len(cpus) != 1 {
+	cpus, _ := filepath.Glob(filepath.Join(wantDir, "cpu-*.pprof"))
+	if len(cpus) != 1 {
 		t.Fatalf("want 1 cpu profile under %s, got %v", wantDir, cpus)
+	}
+	// The exact path reaches the orchestrator, whose cleanup must skip it (N4).
+	if rt.cpuProfilePath != cpus[0] {
+		t.Fatalf("cpuProfilePath = %q; want the created profile %q", rt.cpuProfilePath, cpus[0])
 	}
 	if dir := filepath.Dir(rt.heapProfilePath); dir != wantDir {
 		t.Fatalf("heapProfilePath dir = %s; want %s", dir, wantDir)

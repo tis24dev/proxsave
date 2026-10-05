@@ -1,0 +1,10 @@
+2026-10-04T15:03:35+02:00 pve postfix/pickup[454664]: 2A91F4D329: uid=0 from=<root>
+2026-10-04T15:03:35+02:00 pve postfix/cleanup[454727]: 2A91F4D329: message-id=<20261004130335.2A91F4D329@pve.example.lan>
+2026-10-04T15:03:35+02:00 pve postfix/qmgr[454668]: 2A91F4D329: from=<no-reply@proxmox.tis24.it>, size=15564, nrcpt=1 (queue active)
+2026-10-04T15:03:35+02:00 pve postfix/smtp[454732]: 2A91F4D329: to=<admin@example.com>, relay=mx.example.com[192.0.2.25]:25, delay=0.51, delays=0.01/0/0.16/0.35, dsn=2.0.0, status=sent (250 OK id=1xDLsO-0000000H07u-2WCt)
+2026-10-04T15:03:35+02:00 pve postfix/cleanup[454727]: ABAE04D32A: message-id=<20261004130335.ABAE04D32A@pve.example.lan>
+2026-10-04T15:03:35+02:00 pve postfix/bounce[455532]: 2A91F4D329: sender delivery status notification: ABAE04D32A
+2026-10-04T15:03:35+02:00 pve postfix/qmgr[454668]: ABAE04D32A: from=<>, size=2338, nrcpt=1 (queue active)
+2026-10-04T15:03:35+02:00 pve postfix/qmgr[454668]: 2A91F4D329: removed
+2026-10-04T15:03:36+02:00 pve postfix/smtp[454732]: ABAE04D32A: to=<no-reply@proxmox.tis24.it>, relay=mx.example.com[192.0.2.25]:25, delay=0.54, delays=0/0/0.17/0.37, dsn=2.0.0, status=sent (250 OK id=1xDLsP-0000000H08c-0pN4)
+2026-10-04T15:03:36+02:00 pve postfix/qmgr[454668]: ABAE04D32A: removed

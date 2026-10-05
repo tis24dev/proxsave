@@ -29,7 +29,7 @@ type CloudRelayConfig struct {
 	RetryDelay  int // seconds
 }
 
-// Default cloud relay configuration (hardcoded for compatibility with Bash script).
+// Default cloud relay configuration, compiled in: no backup.env variable overrides it.
 //
 // WorkerToken and HMACSecret are a SHARED, PUBLIC anti-abuse credential for the
 // open-source relay client: the same value ships in every distributed binary and
@@ -137,7 +137,7 @@ func sendViaCloudRelay(
 				return ctxErr
 			}
 			lastErr = fmt.Errorf("request failed: %w", err)
-			logger.Warning("Cloud relay request failed (attempt %d/%d): %v", attempt+1, config.MaxRetries+1, err)
+			logger.Warning("Cloud relay: request failed, attempt %d/%d: %v", attempt+1, config.MaxRetries+1, err)
 			continue
 		}
 
@@ -230,13 +230,13 @@ func sendViaCloudRelay(
 
 		case 500, 502, 503, 504:
 			// Server errors - retry
-			logger.Warning("Cloud relay: server error (HTTP %d), will retry", resp.StatusCode)
+			logger.Warning("Cloud relay: server error (HTTP %d), attempt %d/%d", resp.StatusCode, attempt+1, config.MaxRetries+1)
 			lastErr = fmt.Errorf("server error (HTTP %d): %s", resp.StatusCode, string(body))
 			continue
 
 		default:
 			// Unexpected status - retry
-			logger.Warning("Cloud relay: unexpected status (HTTP %d): %s", resp.StatusCode, string(body))
+			logger.Warning("Cloud relay: unexpected status (HTTP %d), attempt %d/%d: %s", resp.StatusCode, attempt+1, config.MaxRetries+1, string(body))
 			lastErr = fmt.Errorf("unexpected status (HTTP %d): %s", resp.StatusCode, string(body))
 			continue
 		}
@@ -359,12 +359,12 @@ func isQuotaLimit(detail string) bool {
 	return false
 }
 
-// buildReportData builds the structured report data for cloud relay
-// This must match the Bash script's collect_email_report_data() output exactly
-// to ensure HMAC signature validation passes
+// buildReportData builds the structured report data for cloud relay.
+// The relay worker builds the email from this shape: a key added or changed
+// here also needs the worker's template.
 func buildReportData(data *NotificationData) map[string]interface{} {
-	// Build nested structure matching Bash format exactly
-	return map[string]interface{}{
+	// Nested structure read by the relay worker's template.
+	report := map[string]interface{}{
 		// Top-level fields
 		"status":         data.Status.String(),
 		"status_message": data.StatusMessage,
@@ -389,17 +389,17 @@ func buildReportData(data *NotificationData) map[string]interface{} {
 			"primary": map[string]interface{}{
 				"status": data.LocalStatusSummary,
 				"emoji":  GetStorageEmoji(data.LocalStatus),
-				"count":  data.LocalCount,
+				"count":  countValue(data.LocalCount),
 			},
 			"secondary": map[string]interface{}{
 				"status": data.SecondaryStatusSummary,
 				"emoji":  GetStorageEmoji(data.SecondaryStatus),
-				"count":  data.SecondaryCount,
+				"count":  countValue(data.SecondaryCount),
 			},
 			"cloud": map[string]interface{}{
 				"status": data.CloudStatusSummary,
 				"emoji":  GetStorageEmoji(data.CloudStatus),
-				"count":  data.CloudCount,
+				"count":  countValue(data.CloudCount),
 			},
 		},
 
@@ -409,6 +409,8 @@ func buildReportData(data *NotificationData) map[string]interface{} {
 		// Nested metrics object
 		"metrics": map[string]interface{}{
 			"backup_file_name":  data.BackupFileName,
+			"backup_file":       data.BackupFile,                // the HTML email's "Backup File" row
+			"telegram_status":   valueOrNA(data.TelegramStatus), // the HTML email's "Telegram Status" row
 			"files_included":    data.FilesIncluded,
 			"file_missing":      data.FilesMissing, // Fixed: was "files_missing"
 			"backup_duration":   FormatDuration(data.BackupDuration),
@@ -444,9 +446,34 @@ func buildReportData(data *NotificationData) map[string]interface{} {
 		// Exit code at top level
 		"exit_code": data.ExitCode,
 	}
+	addPBSReportData(report, data)
+	return report
 }
 
-// buildStorageData builds the storage section matching Bash format
+// addPBSReportData adds the PBS keys (emojis.pbs, backup.pbs, paths.pbs,
+// paths.has_pbs; storage.pbs is buildStorageData's) only when PBS is on: with PBS
+// off the report keeps the shape it had before the PBS destination existed.
+func addPBSReportData(report map[string]interface{}, data *NotificationData) {
+	if !data.PBSEnabled {
+		return
+	}
+	if emojis, ok := report["emojis"].(map[string]interface{}); ok {
+		emojis["pbs"] = GetStorageEmoji(data.PBSStatus)
+	}
+	if backup, ok := report["backup"].(map[string]interface{}); ok {
+		backup["pbs"] = map[string]interface{}{
+			"status": data.PBSStatusSummary,
+			"emoji":  GetStorageEmoji(data.PBSStatus),
+			"count":  countValue(data.PBSCount),
+		}
+	}
+	if paths, ok := report["paths"].(map[string]interface{}); ok {
+		paths["pbs"] = data.PBSStorageID
+		paths["has_pbs"] = true
+	}
+}
+
+// buildStorageData builds the storage section: local, and secondary and pbs when on
 func buildStorageData(data *NotificationData) map[string]interface{} {
 	storage := map[string]interface{}{
 		"local": map[string]interface{}{
@@ -461,11 +488,22 @@ func buildStorageData(data *NotificationData) map[string]interface{} {
 	// Only add secondary if enabled
 	if data.SecondaryEnabled {
 		storage["secondary"] = map[string]interface{}{
-			"space":       data.SecondaryFree, // Total space shown as free space
-			"used":        data.SecondaryUsed,
-			"free":        data.SecondaryFree,
-			"percent":     data.SecondaryPercent,
-			"percent_num": data.SecondaryUsagePercent,
+			"space":       spaceValue(data.SecondaryFree, data.SecondaryFree), // Total space shown as free space
+			"used":        spaceValue(data.SecondaryFree, data.SecondaryUsed),
+			"free":        spaceValue(data.SecondaryFree, data.SecondaryFree),
+			"percent":     spaceValue(data.SecondaryFree, data.SecondaryPercent),
+			"percent_num": spaceValue(data.SecondaryFree, data.SecondaryUsagePercent),
+		}
+	}
+
+	// PBS, when on, with the same keys
+	if data.PBSEnabled {
+		storage["pbs"] = map[string]interface{}{
+			"space":       spaceValue(data.PBSFree, data.PBSFree), // Total space shown as free space
+			"used":        spaceValue(data.PBSFree, data.PBSUsed),
+			"free":        spaceValue(data.PBSFree, data.PBSFree),
+			"percent":     spaceValue(data.PBSFree, data.PBSPercent),
+			"percent_num": spaceValue(data.PBSFree, data.PBSUsagePercent),
 		}
 	}
 

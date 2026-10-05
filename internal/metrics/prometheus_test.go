@@ -134,3 +134,58 @@ func TestPrometheusExporterStatusMapping(t *testing.T) {
 		})
 	}
 }
+
+func TestPrometheusExporterBackupsTotalLocations(t *testing.T) {
+	const (
+		head = "# HELP proxmox_backup_backups_total Number of backups per location\n" +
+			"# TYPE proxmox_backup_backups_total gauge\n" +
+			"proxmox_backup_backups_total{location=\"local\"} 5\n"
+		sec   = "proxmox_backup_backups_total{location=\"secondary\"} 3\n"
+		cloud = "proxmox_backup_backups_total{location=\"cloud\"} 1\n"
+		next  = "# HELP proxmox_backup_info"
+	)
+
+	for _, tc := range []struct {
+		name            string
+		sec, cloud, pbs bool
+		pbsBackups      int
+		want            string
+		wantLines       int
+	}{
+		{"all on, pbs with count", true, true, true, 7, head + sec + cloud + "proxmox_backup_backups_total{location=\"pbs\"} 7\n" + next, 4},
+		{"pbs on, unknown", true, true, true, 0, head + sec + cloud + "proxmox_backup_backups_total{location=\"pbs\"} 0\n" + next, 4},
+		{"pbs off", true, true, false, 7, head + sec + cloud + next, 3},
+		{"secondary only", true, false, false, 0, head + sec + next, 2},
+		{"cloud only", false, true, false, 0, head + cloud + next, 2},
+		{"all off, local only", false, false, false, 7, head + next, 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			exporter := NewPrometheusExporter(dir, logging.New(types.LogLevelError, false))
+			m := &BackupMetrics{
+				Hostname:     "test-host",
+				LocalBackups: 5,
+				SecBackups:   3,
+				CloudBackups: 1,
+				SecEnabled:   tc.sec,
+				CloudEnabled: tc.cloud,
+				PBSEnabled:   tc.pbs,
+				PBSBackups:   tc.pbsBackups,
+			}
+			if err := exporter.Export(m); err != nil {
+				t.Fatalf("Export() error = %v", err)
+			}
+			data, err := os.ReadFile(filepath.Join(dir, "proxmox_backup.prom"))
+			if err != nil {
+				t.Fatalf("read metrics file: %v", err)
+			}
+			content := string(data)
+			if !strings.Contains(content, tc.want) {
+				t.Fatalf("backups_total block mismatch, want\n%s\ngot\n%s", tc.want, content)
+			}
+			if got := strings.Count(content, "proxmox_backup_backups_total{location="); got != tc.wantLines {
+				t.Fatalf("location lines = %d, want %d\n%s", got, tc.wantLines, content)
+			}
+		})
+	}
+}

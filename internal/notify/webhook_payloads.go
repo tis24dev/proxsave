@@ -107,6 +107,15 @@ func buildDiscordPayload(data *NotificationData, logger *logging.Logger) (map[st
 		})
 	}
 
+	if data.PBSEnabled {
+		pbsStorage := fmt.Sprintf("%s %s", GetStorageEmoji(data.PBSStatus), data.PBSStatusSummary)
+		fields = append(fields, map[string]interface{}{
+			"name":   "PBS Storage",
+			"value":  pbsStorage,
+			"inline": true,
+		})
+	}
+
 	// Issues summary
 	issuesSummary := fmt.Sprintf("Errors: %d, Warnings: %d", data.ErrorCount, data.WarningCount)
 	fields = append(fields, map[string]interface{}{
@@ -134,7 +143,7 @@ func buildDiscordPayload(data *NotificationData, logger *logging.Logger) (map[st
 		"color":       color,
 		"fields":      fields,
 		"footer": map[string]interface{}{
-			"text": fmt.Sprintf("Proxmox Backup Script v%s • Exit Code: %d", data.ScriptVersion, data.ExitCode),
+			"text": fmt.Sprintf("ProxSave v%s • Exit Code: %d", data.ScriptVersion, data.ExitCode),
 		},
 		"timestamp": data.BackupDate.Format("2006-01-02T15:04:05Z07:00"),
 	}
@@ -267,6 +276,13 @@ func buildSlackPayload(data *NotificationData, logger *logging.Logger) (map[stri
 		})
 	}
 
+	if data.PBSEnabled {
+		storageFields = append(storageFields, map[string]interface{}{
+			"type": "mrkdwn",
+			"text": fmt.Sprintf("*PBS Storage:*\n%s %s", GetStorageEmoji(data.PBSStatus), data.PBSStatusSummary),
+		})
+	}
+
 	blocks = append(blocks, map[string]interface{}{
 		"type":   "section",
 		"fields": storageFields,
@@ -317,7 +333,7 @@ func buildSlackPayload(data *NotificationData, logger *logging.Logger) (map[stri
 		"elements": []interface{}{
 			map[string]interface{}{
 				"type": "mrkdwn",
-				"text": fmt.Sprintf("Proxmox Backup Script v%s", data.ScriptVersion),
+				"text": fmt.Sprintf("ProxSave v%s", data.ScriptVersion),
 			},
 		},
 	})
@@ -377,6 +393,13 @@ func buildTeamsPayload(data *NotificationData, logger *logging.Logger) (map[stri
 		facts = append(facts, map[string]interface{}{
 			"title": "Cloud Storage",
 			"value": fmt.Sprintf("%s %s", GetStorageEmoji(data.CloudStatus), data.CloudStatusSummary),
+		})
+	}
+
+	if data.PBSEnabled {
+		facts = append(facts, map[string]interface{}{
+			"title": "PBS Storage",
+			"value": fmt.Sprintf("%s %s", GetStorageEmoji(data.PBSStatus), data.PBSStatusSummary),
 		})
 	}
 
@@ -511,7 +534,7 @@ func buildGenericPayload(data *NotificationData, logger *logging.Logger) (map[st
 				"status":         data.LocalStatus,
 				"status_summary": data.LocalStatusSummary,
 				"emoji":          GetStorageEmoji(data.LocalStatus),
-				"count":          data.LocalCount,
+				"count":          countValue(data.LocalCount),
 				"free":           data.LocalFree,
 				"used":           data.LocalUsed,
 				"percent":        data.LocalPercent,
@@ -538,11 +561,11 @@ func buildGenericPayload(data *NotificationData, logger *logging.Logger) (map[st
 			"status":         data.SecondaryStatus,
 			"status_summary": data.SecondaryStatusSummary,
 			"emoji":          GetStorageEmoji(data.SecondaryStatus),
-			"count":          data.SecondaryCount,
-			"free":           data.SecondaryFree,
-			"used":           data.SecondaryUsed,
-			"percent":        data.SecondaryPercent,
-			"percent_num":    data.SecondaryUsagePercent,
+			"count":          countValue(data.SecondaryCount),
+			"free":           spaceValue(data.SecondaryFree, data.SecondaryFree),
+			"used":           spaceValue(data.SecondaryFree, data.SecondaryUsed),
+			"percent":        spaceValue(data.SecondaryFree, data.SecondaryPercent),
+			"percent_num":    spaceValue(data.SecondaryFree, data.SecondaryUsagePercent),
 		}
 		logger.Debug("Secondary storage added to generic payload")
 	}
@@ -553,9 +576,24 @@ func buildGenericPayload(data *NotificationData, logger *logging.Logger) (map[st
 			"status":         data.CloudStatus,
 			"status_summary": data.CloudStatusSummary,
 			"emoji":          GetStorageEmoji(data.CloudStatus),
-			"count":          data.CloudCount,
+			"count":          countValue(data.CloudCount),
 		}
 		logger.Debug("Cloud storage added to generic payload")
+	}
+
+	// Add PBS storage if enabled, with the keys of secondary
+	if data.PBSEnabled {
+		storage["pbs"] = map[string]interface{}{
+			"status":         data.PBSStatus,
+			"status_summary": data.PBSStatusSummary,
+			"emoji":          GetStorageEmoji(data.PBSStatus),
+			"count":          countValue(data.PBSCount),
+			"free":           spaceValue(data.PBSFree, data.PBSFree),
+			"used":           spaceValue(data.PBSFree, data.PBSUsed),
+			"percent":        spaceValue(data.PBSFree, data.PBSPercent),
+			"percent_num":    spaceValue(data.PBSFree, data.PBSUsagePercent),
+		}
+		logger.Debug("PBS storage added to generic payload")
 	}
 
 	// Add log categories if present

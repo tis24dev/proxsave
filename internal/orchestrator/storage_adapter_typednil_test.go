@@ -39,7 +39,7 @@ func TestStoreErrorCarryingATypedNilStorageErrorDoesNotPanic(t *testing.T) {
 	if err := adapter.Sync(context.Background(), stats); err != nil {
 		t.Fatalf("Sync returned error: %v; want nil for a non-critical backend", err)
 	}
-	if out := buf.String(); !strings.Contains(out, "Backup was not saved to secondary") {
+	if out := buf.String(); !strings.Contains(out, "WARNING  ✗ secondary: backup not saved\n") {
 		t.Fatalf("the nil StorageError must fall into the generic not-saved arm:\n%s", out)
 	}
 }

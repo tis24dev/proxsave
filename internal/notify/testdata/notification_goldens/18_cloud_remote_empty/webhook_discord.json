@@ -1,0 +1,65 @@
+{
+  "embeds": [
+    {
+      "color": 3066993,
+      "description": "Backup completed with status: **success** on pve-golden",
+      "fields": [
+        {
+          "inline": true,
+          "name": "Hostname",
+          "value": "pve-golden"
+        },
+        {
+          "inline": true,
+          "name": "Status",
+          "value": "✅ success"
+        },
+        {
+          "inline": true,
+          "name": "Date",
+          "value": "2026-10-04 02:00:00"
+        },
+        {
+          "inline": true,
+          "name": "Duration",
+          "value": "2m 14s"
+        },
+        {
+          "inline": true,
+          "name": "Size",
+          "value": "21.0 MiB"
+        },
+        {
+          "inline": true,
+          "name": "Compression",
+          "value": "xz (88.20%)"
+        },
+        {
+          "inline": true,
+          "name": "Local Storage",
+          "value": "✅ 15/15"
+        },
+        {
+          "inline": true,
+          "name": "Secondary Storage",
+          "value": "✅ 15/15"
+        },
+        {
+          "inline": true,
+          "name": "Cloud Storage",
+          "value": "❌ ?/15"
+        },
+        {
+          "inline": false,
+          "name": "Issues",
+          "value": "Errors: 0, Warnings: 0"
+        }
+      ],
+      "footer": {
+        "text": "ProxSave v0.41.0 • Exit Code: 0"
+      },
+      "timestamp": "2026-10-04T02:00:00Z",
+      "title": "✅ PVE Backup Report"
+    }
+  ]
+}

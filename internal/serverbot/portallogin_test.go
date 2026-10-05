@@ -13,7 +13,7 @@ func TestSanitizePortalLogin(t *testing.T) {
 		raw  string
 		want string
 	}{
-		{"provisioned identity", "1414274709917575@proxsave.dev", "1414274709917575@proxsave.dev"},
+		{"provisioned identity", "5917204836150297@proxsave.dev", "5917204836150297@proxsave.dev"},
 		{"surrounding whitespace is trimmed", "  ops@example.com\n", "ops@example.com"},
 		{"plus addressing survives", "ops+hc@example.com", "ops+hc@example.com"},
 		{"no scheme required", "not-an-url", "not-an-url"},

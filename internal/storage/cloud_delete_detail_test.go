@@ -12,11 +12,15 @@ import (
 	"github.com/tis24dev/proxsave/internal/types"
 )
 
-// A SIGKILLed rclone (cmd.WaitDelay in defaultExecCommand kills the process on
+// A SIGKILLed rclone (cmd.WaitDelay in defaultRunCommand kills the process on
 // context cancellation) returns whatever it printed so far - typically a NOTICE -
 // plus an exec error of "signal: killed". The delete warning used to print only the
 // captured output, so the NOTICE was presented as the failure cause and the kill
 // appeared on no line at any level.
+//
+// The visible line is now the fact under "Applying retention policy...": it names the
+// kill as the cause and nothing else. The full detail, rclone's output included, is
+// the DEBUG line beside it.
 func TestKilledRcloneDeleteNamesTheKill(t *testing.T) {
 	l := logging.New(types.LogLevelDebug, false)
 	buf := &bytes.Buffer{}
@@ -33,26 +37,39 @@ func TestKilledRcloneDeleteNamesTheKill(t *testing.T) {
 
 	_ = c.Delete(context.Background(), "gdrive:proxsave/backup/pve01-backup-20260825-020000.tar.zst")
 
-	var warned string
+	var fact, detail string
 	for _, ln := range strings.Split(buf.String(), "\n") {
-		if strings.Contains(ln, "failed to delete") && strings.Contains(ln, "WARNING") {
-			warned = ln
-			break
+		if fact == "" && strings.Contains(ln, "INFO       Not deleted: pve01-backup-20260825-020000.tar.zst: ") {
+			fact = ln
+		}
+		if detail == "" && strings.Contains(ln, "failed to delete") && strings.Contains(ln, "DEBUG") {
+			detail = ln
 		}
 	}
-	if warned == "" {
-		t.Fatalf("no delete warning at all:\n%s", buf.String())
+	if fact == "" {
+		t.Fatalf("no delete fact line at all:\n%s", buf.String())
 	}
-	if !strings.Contains(warned, "signal: killed") {
-		t.Fatalf("the kill is on no line: the NOTICE is presented as the cause:\n%s", warned)
+	if !strings.HasSuffix(fact, ": signal: killed") {
+		t.Fatalf("the fact line does not name the kill as the cause:\n%s", fact)
 	}
-	if !strings.Contains(warned, "NOTICE") {
-		t.Fatalf("rclone's own output was dropped from the line:\n%s", warned)
+	if strings.Contains(fact, "NOTICE") {
+		t.Fatalf("the NOTICE is presented as the cause:\n%s", fact)
+	}
+	if detail == "" {
+		t.Fatalf("no delete detail line at all:\n%s", buf.String())
+	}
+	if !strings.Contains(detail, "signal: killed") {
+		t.Fatalf("the kill is on no detail line:\n%s", detail)
+	}
+	if !strings.Contains(detail, "NOTICE") {
+		t.Fatalf("rclone's own output was dropped from the detail line:\n%s", detail)
 	}
 	// The console line already carries the timestamp in its own column; rclone's
 	// leading "2026/09/02 01:00:00" inside the message says it twice.
-	if strings.Contains(warned, "01:00:00") {
-		t.Fatalf("rclone's own timestamp survived inside the message body:\n%s", warned)
+	for _, ln := range []string{fact, detail} {
+		if strings.Contains(ln, "01:00:00") {
+			t.Fatalf("rclone's own timestamp survived inside the message body:\n%s", ln)
+		}
 	}
 }
 
@@ -74,12 +91,15 @@ func TestExitStatusDeleteKeepsTheSingleCause(t *testing.T) {
 	_ = c.Delete(context.Background(), "gdrive:proxsave/backup/pve01-backup-20260825-020000.tar.zst")
 
 	for _, ln := range strings.Split(buf.String(), "\n") {
-		if strings.Contains(ln, "failed to delete") && strings.Contains(ln, "WARNING") {
+		if strings.Contains(ln, "INFO       Not deleted: ") {
 			if strings.Contains(ln, "exit status") {
 				t.Fatalf("exit status N carries no information and came back:\n%s", ln)
+			}
+			if !strings.HasSuffix(ln, ": ERROR : insufficientFilePermissions") {
+				t.Fatalf("the fact line does not carry rclone's cause:\n%s", ln)
 			}
 			return
 		}
 	}
-	t.Fatalf("no delete warning at all:\n%s", buf.String())
+	t.Fatalf("no delete fact line at all:\n%s", buf.String())
 }

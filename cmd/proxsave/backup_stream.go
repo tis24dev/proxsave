@@ -236,13 +236,20 @@ func buildBackupOutcomePrompt(res backupModeResult) string {
 		b.WriteString("\n")
 		appendBackupStatsBlock(&b, st)
 
-		// Secondary/Cloud storage status, only when they carry a meaningful
+		// Storage status: Local always and first, with the status the notifications
+		// show; then Secondary, Cloud and PBS only when they carry a meaningful
 		// (non-disabled) status, so a single-destination run stays terse.
+		appendBackupStatusLine(&b, "Local", orchestrator.EffectiveLocalStatus(st))
 		if s := strings.TrimSpace(st.SecondaryStatus); s != "" && s != "disabled" {
 			appendBackupStatusLine(&b, "Secondary", st.SecondaryStatus)
 		}
 		if s := strings.TrimSpace(st.CloudStatus); s != "" && s != "disabled" {
 			appendBackupStatusLine(&b, "Cloud", st.CloudStatus)
+		}
+		if r := st.PBSTarget; r != nil {
+			if s := strings.TrimSpace(r.Status); s != "" && s != "disabled" {
+				appendBackupStatusLine(&b, "PBS", r.Status)
+			}
 		}
 
 		// Centralized-mode identity: the Telegram/relay pairing id and the sanitized

@@ -20,9 +20,11 @@ import (
 	"github.com/tis24dev/proxsave/internal/logging"
 	"github.com/tis24dev/proxsave/internal/orchestrator"
 	"github.com/tis24dev/proxsave/internal/safeexec"
+	"github.com/tis24dev/proxsave/internal/safefs"
 	"github.com/tis24dev/proxsave/internal/serverbot"
 	"github.com/tis24dev/proxsave/internal/storage"
 	"github.com/tis24dev/proxsave/internal/types"
+	"github.com/tis24dev/proxsave/internal/ui/theme"
 	"github.com/tis24dev/proxsave/pkg/utils"
 )
 
@@ -349,6 +351,7 @@ func validateFutureFeatures(cfg *config.Config) error {
 	if cfg.CloudEnabled && cfg.CloudRemote == "" {
 		logging.Warning("Cloud backup enabled but CLOUD_REMOTE is empty, disabling cloud storage for this run")
 		cfg.CloudEnabled = false
+		cfg.CloudStartupFailed = true
 		cfg.CloudRemote = ""
 		cfg.CloudLogPath = ""
 	}
@@ -363,6 +366,10 @@ func validateFutureFeatures(cfg *config.Config) error {
 	return nil
 }
 
+// detectFilesystemInfo runs the backend's filesystem detection and returns its error
+// as is: the caller decides what a failure means for that destination (fatal for the
+// Primary, "not initialized" for an unreachable cloud or a secondary directory that
+// cannot be created). The ownership consequence is printed by logStorageFilesystem.
 func detectFilesystemInfo(ctx context.Context, backend storage.Storage, path string, logger *logging.Logger) (*storage.FilesystemInfo, error) {
 	if backend == nil || !backend.IsEnabled() {
 		return nil, nil
@@ -370,22 +377,12 @@ func detectFilesystemInfo(ctx context.Context, backend storage.Storage, path str
 
 	fsInfo, err := backend.DetectFilesystem(ctx)
 	if err != nil {
-		if backend.IsCritical() {
-			return nil, err
-		}
 		logger.Debug("%s filesystem detection failed: %v", backend.Name(), err)
-		if backend.Location() == storage.LocationCloud {
-			return nil, err
-		}
-		return nil, nil
+		return nil, err
 	}
 
 	if !fsInfo.SupportsOwnership {
-		if backend != nil && backend.Location() == storage.LocationCloud {
-			logger.Debug("%s [%s] does not support ownership changes (cloud remote); chown/chmod already disabled", path, fsInfo.Type)
-		} else {
-			logger.Info("%s [%s] does not support ownership changes; chown/chmod will be skipped", path, fsInfo.Type)
-		}
+		logger.Debug("%s [%s] does not support ownership changes; chown/chmod will be skipped", path, fsInfo.Type)
 	}
 
 	return fsInfo, nil
@@ -404,8 +401,14 @@ func formatDetailedFilesystemLabel(path string, info *storage.FilesystemInfo) st
 	if cleanPath == "" {
 		return "disabled"
 	}
+	return fmt.Sprintf("%s -> Filesystem: %s", cleanPath, formatFilesystemDetail(info))
+}
+
+// formatFilesystemDetail is the value of the "  Filesystem:" fact line under a storage
+// path: the type, whether it takes ownership, [network] when it is one, and the mount.
+func formatFilesystemDetail(info *storage.FilesystemInfo) string {
 	if info == nil {
-		return fmt.Sprintf("%s -> Filesystem: unknown (detection unavailable)", cleanPath)
+		return "unknown (detection unavailable)"
 	}
 
 	ownership := "no ownership"
@@ -423,13 +426,70 @@ func formatDetailedFilesystemLabel(path string, info *storage.FilesystemInfo) st
 		mount = "unknown"
 	}
 
-	return fmt.Sprintf("%s -> Filesystem: %s (%s)%s [mount: %s]",
-		cleanPath,
-		info.Type,
-		ownership,
-		network,
-		mount,
-	)
+	return fmt.Sprintf("%s (%s)%s [mount: %s]", info.Type, ownership, network, mount)
+}
+
+// logStoragePath opens a storage-init block: the path line, then the configuration
+// under it. "The path is read first, then checked": what the run finds there follows.
+// A GFS policy has no configuration line: its tiers are the facts the block closes on
+// (formatStorageInitSummary), and the configured limits stay in DEBUG.
+func logStoragePath(label, path string, cfg *config.Config, location storage.BackupLocation) {
+	cleanPath := strings.TrimSpace(path)
+	if cleanPath == "" {
+		logging.Info("Path %s: disabled", label)
+		return
+	}
+	logging.Info("Path %s: %s", label, cleanPath)
+	if rc := storage.NewRetentionConfigFromConfig(cfg, location); rc.Policy == "gfs" {
+		rc = storage.EffectiveGFSRetentionConfig(rc)
+		logging.Debug("storage init: %s retention policy=gfs daily=%d weekly=%d monthly=%d yearly=%d",
+			strings.ToLower(label), rc.Daily, rc.Weekly, rc.Monthly, rc.Yearly)
+	}
+	if line := formatRetentionPolicyLine(cfg, location); line != "" {
+		logging.Info("%s", line)
+	}
+}
+
+// formatRetentionPolicyLine is the configuration fact of a storage-init block, in the
+// words step [6] uses for the same policy. It is empty for GFS, which prints none.
+func formatRetentionPolicyLine(cfg *config.Config, location storage.BackupLocation) string {
+	rc := storage.NewRetentionConfigFromConfig(cfg, location)
+	if rc.Policy == "gfs" {
+		return ""
+	}
+	return fmt.Sprintf("  Retention policy: simple (keep %d newest)", rc.MaxBackups)
+}
+
+// logStorageFilesystem prints what the detection found, and returns the problem the
+// outcome has to name ("filesystem unknown") or "". detectErr is why the detection
+// fell back to an unknown filesystem.
+func logStorageFilesystem(info *storage.FilesystemInfo, detectErr error) string {
+	if info == nil || detectErr != nil {
+		cause := "unavailable"
+		if detectErr != nil {
+			cause = safefs.SystemErrorText(detectErr)
+		}
+		logging.Debug("storage init: filesystem detection failed: %v", detectErr)
+		logging.Info("  Filesystem: unknown, detection failed: %s", cause)
+		logging.Info("  Permissions: skipped, filesystem unknown")
+		return "filesystem unknown"
+	}
+	logging.Info("  Filesystem: %s", formatFilesystemDetail(info))
+	if !info.SupportsOwnership && info.Device != "cloud" {
+		logging.Info("  Permissions: skipped, no ownership")
+	}
+	return ""
+}
+
+// logStorageNotInitialized closes the block of a destination the run cannot use: the
+// cause when the caller has one to print, the "✗" outcome and the SKIP. causeLine is
+// printed as is ("  Directory not created: ...", "  Invalid CLOUD_REMOTE: ...").
+func logStorageNotInitialized(label, name, causeLine string) {
+	if causeLine != "" {
+		logging.Info("%s", causeLine)
+	}
+	logging.Warning("%s %s: not initialized", theme.SymbolError, name)
+	logging.Skip("Path %s: disabled", label)
 }
 
 func fetchStorageStats(ctx context.Context, backend storage.Storage, logger *logging.Logger, label string) *storage.StorageStats {
@@ -444,60 +504,83 @@ func fetchStorageStats(ctx context.Context, backend storage.Storage, logger *log
 	return stats
 }
 
-// formatStorageInitSummary builds the storage-init headline and its detail lines, and
-// returns whether that headline is a WARNING. The level used to travel inside the
-// string as a leading "⚠" that logStorageInitSummary read back with strings.HasPrefix,
-// which made a glyph that reads as decoration load-bearing: deleting it downgraded the
-// line to INFO in silence, dropping it from warningCount and from the exit-code
-// promotion in applyIssueExitCode. It is a value now, and the string carries no
-// severity of its own. The glyph STAYS on the line -
-// it is part of how this screen reads - but nothing downstream depends on it.
-func formatStorageInitSummary(name string, cfg *config.Config, location storage.BackupLocation, stats *storage.StorageStats, backups []*types.BackupMetadata) (string, bool) {
+// formatStorageInitSummary builds the lines that close a storage-init block, below the
+// path, the configuration and the filesystem lines, and returns whether its OUTCOME -
+// the last line - is a WARNING. The level used to travel inside the string as a
+// leading "⚠" that logStorageInitSummary read back with strings.HasPrefix, which made a
+// glyph that reads as decoration load-bearing: deleting it downgraded the line to INFO
+// in silence, dropping it from warningCount and from the exit-code promotion in
+// applyIssueExitCode. It is a value now, and the string carries no severity of its
+// own. The glyph STAYS on the line - it is part of how this screen reads - but nothing
+// downstream depends on it.
+//
+// With stats the block closes on the count and the outcome:
+//
+//	  Backups: 3
+//	✓ Secondary storage: initialized
+//
+// GFS lists the tiers under the count. Without stats the count is unknown and the
+// outcome is "⚠ <Name>: initialized, statistics unavailable"; problems the caller
+// found earlier in the block ("filesystem unknown") join the same outcome.
+func formatStorageInitSummary(name string, cfg *config.Config, location storage.BackupLocation, stats *storage.StorageStats, backups []*types.BackupMetadata, problems ...string) (string, bool) {
 	retentionConfig := storage.NewRetentionConfigFromConfig(cfg, location)
 	if retentionConfig.Policy == "gfs" {
 		retentionConfig = storage.EffectiveGFSRetentionConfig(retentionConfig)
 	}
 
+	var result string
 	if stats == nil {
-		reason := "unable to gather stats"
+		result = "  Backups: unknown, statistics unavailable"
+		problems = append(problems, "statistics unavailable")
+	} else {
+		result = fmt.Sprintf("  Backups: %d", stats.TotalBackups)
 		if retentionConfig.Policy == "gfs" {
-			return fmt.Sprintf("⚠ %s initialized with warnings (%s; GFS retention: daily=%d, weekly=%d, monthly=%d, yearly=%d)",
-				name, reason, retentionConfig.Daily, retentionConfig.Weekly,
-				retentionConfig.Monthly, retentionConfig.Yearly), true
+			result += formatGFSTierLines(retentionConfig, stats.TotalBackups, backups)
 		}
-		return fmt.Sprintf("⚠ %s initialized with warnings (%s; retention %s)", name, reason, formatBackupNoun(retentionConfig.MaxBackups)), true
 	}
 
-	if retentionConfig.Policy == "gfs" {
-		result := fmt.Sprintf("✓ %s initialized (present %s)", name, formatBackupNoun(stats.TotalBackups))
-		if stats.TotalBackups > 0 && backups != nil && len(backups) > 0 {
-			classification := storage.ClassifyBackupsGFS(backups, retentionConfig)
-			gfsStats := storage.GetRetentionStats(classification)
-
-			total := stats.TotalBackups
-			kept := total - gfsStats[storage.CategoryDelete]
-
-			result += fmt.Sprintf("\n  Total: %d/-", total)
-			result += fmt.Sprintf("\n  Daily: %d/%d", gfsStats[storage.CategoryDaily], retentionConfig.Daily)
-			result += fmt.Sprintf("\n  Weekly: %d/%d", gfsStats[storage.CategoryWeekly], retentionConfig.Weekly)
-			result += fmt.Sprintf("\n  Monthly: %d/%d", gfsStats[storage.CategoryMonthly], retentionConfig.Monthly)
-			result += fmt.Sprintf("\n  Yearly: %d/%d", gfsStats[storage.CategoryYearly], retentionConfig.Yearly)
-			result += fmt.Sprintf("\n  Kept (est.): %d, To delete (est.): %d", kept, gfsStats[storage.CategoryDelete])
-		} else {
-			result += fmt.Sprintf("\n  Daily: 0/%d, Weekly: 0/%d, Monthly: 0/%d, Yearly: 0/%d",
-				retentionConfig.Daily, retentionConfig.Weekly,
-				retentionConfig.Monthly, retentionConfig.Yearly)
-		}
-		return result, false
+	if len(problems) > 0 {
+		result += fmt.Sprintf("\n%s %s: initialized, %s", theme.SymbolWarning, name, strings.Join(problems, ", "))
+		return result, true
 	}
-
-	result := fmt.Sprintf("✓ %s initialized (present %s)", name, formatBackupNoun(stats.TotalBackups))
-	result += fmt.Sprintf("\n  Policy: simple (keep %d newest)", retentionConfig.MaxBackups)
+	result += fmt.Sprintf("\n%s %s: initialized", theme.SymbolSuccess, name)
 	return result, false
 }
 
+// formatGFSTierLines are the GFS lines under "  Backups: <N>" of a storage-init block:
+// one per tier and the estimate (which logStorageInitSummary keeps at DEBUG), or the
+// single empty-tiers line when there is no backup. rc is the effective GFS policy.
+func formatGFSTierLines(rc storage.RetentionConfig, total int, backups []*types.BackupMetadata) string {
+	if total <= 0 || len(backups) == 0 {
+		return fmt.Sprintf("\n  Daily: 0/%d, Weekly: 0/%d, Monthly: 0/%d, Yearly: 0/%d",
+			rc.Daily, rc.Weekly, rc.Monthly, rc.Yearly)
+	}
+	classification := storage.ClassifyBackupsGFS(backups, rc)
+	gfsStats := storage.GetRetentionStats(classification)
+	kept := total - gfsStats[storage.CategoryDelete]
+	result := fmt.Sprintf("\n  Daily: %d/%d", gfsStats[storage.CategoryDaily], rc.Daily)
+	result += fmt.Sprintf("\n  Weekly: %d/%d", gfsStats[storage.CategoryWeekly], rc.Weekly)
+	result += fmt.Sprintf("\n  Monthly: %d/%d", gfsStats[storage.CategoryMonthly], rc.Monthly)
+	result += fmt.Sprintf("\n  Yearly: %d/%d", gfsStats[storage.CategoryYearly], rc.Yearly)
+	result += fmt.Sprintf("\n  Kept (est.): %d, To delete (est.): %d", kept, gfsStats[storage.CategoryDelete])
+	return result
+}
+
+// formatNotCheckedInitSummary closes the block of a cloud remote a dry run could not
+// check (listing not permitted, write test skipped): the facts formatStorageInitSummary
+// prints ("  Backups: ..."), then the outcome "⚠ <Name>: initialized, not checked" in
+// place of its own. The outcome is always a WARNING.
+func formatNotCheckedInitSummary(name string, cfg *config.Config, location storage.BackupLocation, stats *storage.StorageStats, backups []*types.BackupMetadata) (string, bool) {
+	summary, _ := formatStorageInitSummary(name, cfg, location, stats, backups)
+	facts := ""
+	if i := strings.LastIndex(summary, "\n"); i >= 0 {
+		facts = summary[:i+1]
+	}
+	return facts + fmt.Sprintf("%s %s: initialized, not checked", theme.SymbolWarning, name), true
+}
+
 // logStorageInitSummary prints a storage-init summary. warn selects the level of the
-// HEADLINE - the first non-empty line - and nothing else: the detail lines below it are
+// OUTCOME - the last non-empty line - and nothing else: the fact lines above it are
 // always Info, except the GFS estimate, which stays at Debug so it never reaches the
 // run footer. See formatStorageInitSummary for why the level is a parameter and not a
 // glyph read back out of the text.
@@ -505,22 +588,19 @@ func logStorageInitSummary(summary string, warn bool) {
 	if summary == "" {
 		return
 	}
-	headline := true
+	lines := make([]string, 0, 8)
 	for _, line := range strings.Split(summary, "\n") {
-		trimmed := strings.TrimSpace(line)
-		if trimmed == "" {
-			continue
+		if strings.TrimSpace(line) != "" {
+			lines = append(lines, line)
 		}
-		if headline {
-			headline = false
-			if warn {
-				logging.Warning("%s", line)
-				continue
-			}
-		}
-		if strings.Contains(trimmed, "Kept (est.):") {
+	}
+	for i, line := range lines {
+		switch {
+		case strings.Contains(line, "Kept (est.):"):
 			logging.Debug("%s", line)
-		} else {
+		case i == len(lines)-1 && warn:
+			logging.Warning("%s", line)
+		default:
 			logging.Info("%s", line)
 		}
 	}
@@ -1376,6 +1456,26 @@ func ensureDirectoryExists(logger *logging.Logger, name, path string) {
 		return
 	}
 	logger.Info("%s created: %s", name, dirPath)
+}
+
+// reportDirectoryDryRun is ensureDirectoryExists for a dry run, which creates no
+// destination directory: a missing directory is reported with the line the checks use
+// ("[DRY RUN] Would create directory: <path>") and left missing.
+func reportDirectoryDryRun(logger *logging.Logger, name, path string) {
+	if logger == nil {
+		return
+	}
+	dirPath := strings.TrimSpace(path)
+	if dirPath == "" {
+		return
+	}
+	if utils.DirExists(dirPath) {
+		logger.Info("✓ %s exists: %s", name, dirPath)
+		return
+	}
+	logger.Warning("✗ %s not found: %s", name, dirPath)
+	logger.Debug("DRY RUN: %s %s is missing and is not created", name, dirPath)
+	logger.Info("[DRY RUN] Would create directory: %s", dirPath)
 }
 
 func isLocalPath(path string) bool {

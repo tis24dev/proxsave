@@ -108,12 +108,12 @@ func TestLocalRetentionAdoptsBundledArchivesWrittenUnderALostFQDN(t *testing.T) 
 
 	with := run(t, ourServerID)
 	if want := []string{"pve.home.arpa-backup-20250103-100000.tar.zst" + bundleSuffix}; strings.Join(with.survivors, ",") != strings.Join(want, ",") {
-		t.Errorf("bundled archives left: %v, want %v. They carry this host's own server identity inside the bundle, they name a spelling this host lost, and this host answers to their short label and to no other spelling of it, so they are this machine's own work and must rotate again", with.survivors, want)
+		t.Errorf("bundled archives left: %v, want %v. They carry this host's own server identity inside the bundle, so they are this machine's own work and must rotate again", with.survivors, want)
 	}
 	if with.deleted != 2 {
 		t.Errorf("deleted = %d, want 2; the count feeds the run summary and the retention report", with.deleted)
 	}
-	if !strings.Contains(with.log, "back into rotation") {
+	if !strings.Contains(with.log, "  Adopted: 3 backups named pve.home.arpa, same server identity") {
 		t.Errorf("nothing said the bundles had been brought back. The recovery is invisible to the operator otherwise. Log: %s", with.log)
 	}
 	if with.warnings != 0 {
@@ -124,7 +124,7 @@ func TestLocalRetentionAdoptsBundledArchivesWrittenUnderALostFQDN(t *testing.T) 
 	if len(without.survivors) != 3 || without.deleted != 0 {
 		t.Errorf("without an identity inside the bundles, retention deleted %d and left %v. Every bundle written before this change records no identity, and from here they are indistinguishable from a second machine's work, so they must be classified exactly as they were before the field existed", without.deleted, without.survivors)
 	}
-	if !strings.Contains(without.log, "different spelling") {
-		t.Errorf("the pre-existing spelling-mismatch warning stopped firing for a population nothing has claimed. The operator's only signal that rotation has stopped is that line. Log: %s", without.log)
+	if !strings.Contains(without.log, "  Named pve.home.arpa, not rotated: 3 backups") {
+		t.Errorf("the not-rotated fact stopped firing for a population nothing has claimed. The operator's only signal that rotation has stopped is that line. Log: %s", without.log)
 	}
 }

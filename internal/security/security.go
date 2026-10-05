@@ -252,6 +252,9 @@ func (c *Checker) buildDependencyList() []dependencyEntry {
 	if c.cfg.CloudEnabled && strings.TrimSpace(c.cfg.CloudRemote) != "" {
 		deps = append(deps, c.binaryDependency("rclone", []string{"rclone"}, false, "cloud storage uploads enabled"))
 	}
+	if c.cfg.PBSTargetEnabled {
+		deps = append(deps, c.binaryDependency("proxmox-backup-client", []string{"proxmox-backup-client"}, false, "PBS storage uploads enabled"))
+	}
 
 	if c.cfg.EmailEnabled {
 		emailMethod := config.NormalizeEmailDeliveryMethod(c.cfg.EmailDeliveryMethod)

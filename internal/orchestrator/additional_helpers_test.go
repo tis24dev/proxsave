@@ -133,7 +133,7 @@ func TestLogGlobalRetentionPolicySimpleAndGFS(t *testing.T) {
 	}
 	o := &Orchestrator{logger: logger, cfg: cfgGFS}
 	o.logGlobalRetentionPolicy()
-	if !strings.Contains(buf.String(), "Policy: GFS") {
+	if !strings.Contains(buf.String(), "INFO       Retention policy: GFS (daily=1, weekly=2, monthly=3, yearly=4)\n") {
 		t.Fatalf("expected GFS policy log, got: %s", buf.String())
 	}
 
@@ -144,11 +144,29 @@ func TestLogGlobalRetentionPolicySimpleAndGFS(t *testing.T) {
 		LocalRetentionDays:     7,
 		SecondaryRetentionDays: 14,
 		CloudRetentionDays:     30,
+		SecondaryEnabled:       true,
+		CloudEnabled:           true,
 	}
 	o.cfg = cfgSimple
 	o.logGlobalRetentionPolicy()
-	if !strings.Contains(buf.String(), "Policy: simple") {
+	if !strings.Contains(buf.String(), "INFO       Retention policy: simple (local=7, secondary=14, cloud=30)\n") {
 		t.Fatalf("expected simple policy log, got: %s", buf.String())
+	}
+
+	// Only the enabled destinations are listed: a disabled one has no retention to apply.
+	buf.Reset()
+	cfgSimple.SecondaryEnabled = false
+	cfgSimple.CloudEnabled = false
+	o.logGlobalRetentionPolicy()
+	if !strings.Contains(buf.String(), "INFO       Retention policy: simple (local=7)\n") {
+		t.Fatalf("expected the disabled destinations left out of the policy line, got: %s", buf.String())
+	}
+
+	buf.Reset()
+	cfgSimple.LocalRetentionDays = 0
+	o.logGlobalRetentionPolicy()
+	if !strings.Contains(buf.String(), "INFO       Retention policy: simple (disabled)\n") {
+		t.Fatalf("expected the disabled policy line when no enabled destination has a limit, got: %s", buf.String())
 	}
 }
 
@@ -758,7 +776,7 @@ func TestDispatchNotificationsUsesNameMappingNotRegistrationOrder(t *testing.T) 
 	}
 }
 
-func TestDispatchPostBackupSnapshotsIssuesImmediatelyBeforeNotifications(t *testing.T) {
+func TestFinalizeAfterRunSnapshotsIssuesImmediatelyBeforeNotifications(t *testing.T) {
 	logger := logging.New(types.LogLevelInfo, false)
 	var buf bytes.Buffer
 	logger.SetOutput(&buf)
@@ -798,9 +816,10 @@ func TestDispatchPostBackupSnapshotsIssuesImmediatelyBeforeNotifications(t *test
 		TelegramStatus:   "unknown",
 	}
 
-	if err := o.dispatchPostBackup(context.Background(), stats); err != nil {
-		t.Fatalf("dispatchPostBackup returned error: %v", err)
+	if err := o.syncStorageTargets(context.Background(), stats); err != nil {
+		t.Fatalf("syncStorageTargets returned error: %v", err)
 	}
+	o.FinalizeAfterRun(context.Background(), stats)
 
 	if !email.called || !telegram.called {
 		t.Fatalf("expected both notifiers to be called (email=%v telegram=%v)", email.called, telegram.called)
@@ -1741,7 +1760,14 @@ func TestDispatchNotificationsAndLogsSkipsWithNoLog(t *testing.T) {
 	stats := &BackupStats{SecondaryEnabled: false, CloudEnabled: false}
 	orch.dispatchNotificationsAndLogs(context.Background(), stats)
 
-	if !strings.Contains(buf.String(), "Secondary Storage: disabled") || !strings.Contains(buf.String(), "Cloud Storage: disabled") {
+	// The SKIP lines of the disabled storage tiers close step [6] now, not step [7].
+	if strings.Contains(buf.String(), "Storage: disabled") {
+		t.Fatalf("the storage SKIP lines must not be printed by the notification phase, got: %s", buf.String())
+	}
+
+	buf.Reset()
+	orch.logDisabledStorageTargets(stats)
+	if !strings.Contains(buf.String(), "SKIP     Secondary Storage: disabled\n") || !strings.Contains(buf.String(), "SKIP     Cloud Storage: disabled\n") {
 		t.Fatalf("expected skip logs for disabled storage, got: %s", buf.String())
 	}
 }

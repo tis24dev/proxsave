@@ -101,7 +101,7 @@ func TestUnclaimedLegacyArchivesLeaveACleanRunAtExitZero(t *testing.T) {
 	}
 	applyIssueExitCode(stats)
 
-	runLog, err := os.ReadFile(logPath) //nolint:gosec // the path is this test's own t.TempDir()
+	runLog, err := os.ReadFile(logPath)
 	if err != nil {
 		t.Fatalf("read run log: %v", err)
 	}
@@ -118,7 +118,86 @@ func TestUnclaimedLegacyArchivesLeaveACleanRunAtExitZero(t *testing.T) {
 	if _, err := os.Stat(paths[1]); !os.IsNotExist(err) {
 		t.Errorf("this host's own surplus archive survived; a clean exit must not come from retention being switched off (stat err=%v)", err)
 	}
-	if !strings.Contains(string(runLog), "no host will ever delete them") {
-		t.Errorf("the run log never named the archives retention left alone, so an operator has no way to learn why they stopped rotating. Log:\n%s", runLog)
+	if strings.Contains(string(runLog), "no host will ever delete them") {
+		t.Errorf("the run log carries a visible line about archives nothing names; they are written at DEBUG only. Log:\n%s", runLog)
+	}
+}
+
+// TestOtherHostsArchivesLeaveACleanRunAtExitZero pins that another host's backups on
+// the same location are not reported: no line, no WARNING, no effect on the exit code.
+// They are that host's to rotate. This host's own surplus is still pruned and theirs is
+// left alone.
+func TestOtherHostsArchivesLeaveACleanRunAtExitZero(t *testing.T) {
+	const runHostname = "hosta.example.test"
+
+	backupDir := t.TempDir()
+	seeds := []struct {
+		name string
+		host string
+		when time.Time
+	}{
+		{name: "hostb.example.test-backup-20250101-100000.tar.zst", host: "hostb.example.test", when: time.Date(2025, 1, 1, 10, 0, 0, 0, time.UTC)},
+		{name: runHostname + "-backup-20250102-100000.tar.zst", host: runHostname, when: time.Date(2025, 1, 2, 10, 0, 0, 0, time.UTC)},
+		{name: runHostname + "-backup-20250103-100000.tar.zst", host: runHostname, when: time.Date(2025, 1, 3, 10, 0, 0, 0, time.UTC)},
+	}
+	paths := make([]string, len(seeds))
+	for i, seed := range seeds {
+		paths[i] = filepath.Join(backupDir, seed.name)
+		for suffix, content := range map[string]string{
+			"":          "archive",
+			".sha256":   "h  archive\n",
+			".metadata": "HOSTNAME=" + seed.host + "\n",
+		} {
+			if err := os.WriteFile(paths[i]+suffix, []byte(content), 0o600); err != nil {
+				t.Fatalf("seed %s%s: %v", seed.name, suffix, err)
+			}
+		}
+		if err := os.Chtimes(paths[i], seed.when, seed.when); err != nil {
+			t.Fatalf("chtimes %s: %v", seed.name, err)
+		}
+	}
+
+	logPath := filepath.Join(t.TempDir(), "run.log")
+	logger := logging.New(types.LogLevelInfo, false)
+	logger.SetOutput(io.Discard)
+	if err := logger.OpenLogFile(logPath); err != nil {
+		t.Fatalf("OpenLogFile: %v", err)
+	}
+	local, err := storage.NewLocalStorage(&config.Config{BackupPath: backupDir}, logger, runHostname)
+	if err != nil {
+		t.Fatalf("NewLocalStorage: %v", err)
+	}
+	if _, err := local.ApplyRetention(context.Background(), storage.RetentionConfig{Policy: "simple", MaxBackups: 1}); err != nil {
+		t.Fatalf("ApplyRetention: %v", err)
+	}
+	if err := logger.CloseLogFile(); err != nil {
+		t.Fatalf("CloseLogFile: %v", err)
+	}
+
+	categories, errorCount, warningCount, notifyCount := ParseLogCounts(logPath, 10)
+	stats := &BackupStats{
+		ExitCode:      types.ExitSuccess.Int(),
+		ErrorCount:    errorCount,
+		WarningCount:  warningCount,
+		NotifyCount:   notifyCount,
+		LogCategories: categories,
+	}
+	applyIssueExitCode(stats)
+
+	if warningCount != 0 || stats.ExitCode != types.ExitSuccess.Int() {
+		t.Errorf("another host's backups produced %d warning(s) and exit code %d, want 0 and %d: %+v", warningCount, stats.ExitCode, types.ExitSuccess.Int(), categories)
+	}
+	if _, err := os.Stat(paths[0]); err != nil {
+		t.Errorf("retention deleted another host's backup: %v", err)
+	}
+	if _, err := os.Stat(paths[1]); !os.IsNotExist(err) {
+		t.Errorf("this host's own surplus archive survived (stat err=%v)", err)
+	}
+	runLog, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatalf("read run log: %v", err)
+	}
+	if strings.Contains(string(runLog), "hostb.example.test") {
+		t.Errorf("the run log names another host's backups; they are never reported. Log:\n%s", runLog)
 	}
 }

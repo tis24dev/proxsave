@@ -1,0 +1,94 @@
+{
+  "attachments": [
+    {
+      "content": {
+        "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
+        "body": [
+          {
+            "size": "large",
+            "text": "⚠️ PVE Backup Report",
+            "type": "TextBlock",
+            "weight": "bolder"
+          },
+          {
+            "style": "default",
+            "text": "Backup completed with status: **warning** on pve-golden",
+            "type": "TextBlock",
+            "wrap": true
+          },
+          {
+            "facts": [
+              {
+                "title": "Hostname",
+                "value": "pve-golden"
+              },
+              {
+                "title": "Status",
+                "value": "⚠️ warning"
+              },
+              {
+                "title": "Date",
+                "value": "2026-10-04 02:00:00"
+              },
+              {
+                "title": "Duration",
+                "value": "2m 14s"
+              },
+              {
+                "title": "Size",
+                "value": "21.0 MiB"
+              },
+              {
+                "title": "Compression",
+                "value": "xz (level 9, ratio 88.20%)"
+              },
+              {
+                "title": "Files Included",
+                "value": "1832"
+              },
+              {
+                "title": "Local Storage",
+                "value": "✅ 15/15"
+              },
+              {
+                "title": "Secondary Storage",
+                "value": "✅ 15/15"
+              },
+              {
+                "title": "Cloud Storage",
+                "value": "✅ 15/15"
+              },
+              {
+                "title": "Errors",
+                "value": "0"
+              },
+              {
+                "title": "Warnings",
+                "value": "1"
+              },
+              {
+                "title": "Exit Code",
+                "value": "1"
+              },
+              {
+                "title": "Update",
+                "value": "New version available: 0.42.0 (current: 0.41.0)"
+              }
+            ],
+            "type": "FactSet"
+          },
+          {
+            "text": "**Top Issues:**\n\n• [WARNING] New ProxSave version 0.42.0 (current 0.41.0): run 'proxsave --upgrade' to install. (×1)\n\n",
+            "type": "TextBlock",
+            "wrap": true
+          }
+        ],
+        "type": "AdaptiveCard",
+        "version": "1.5"
+      },
+      "contentType": "application/vnd.microsoft.card.adaptive"
+    }
+  ],
+  "themeColor": "FFA500",
+  "type": "message"
+}

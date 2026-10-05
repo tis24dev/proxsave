@@ -42,9 +42,9 @@ func TestUploadToRemotePathBoundsDeadlessCtx(t *testing.T) {
 	}
 }
 
-// Item 2: defaultExecCommand must set WaitDelay and return exec.ErrWaitDelay as an
+// Item 2: defaultRunCommand must set WaitDelay and return exec.ErrWaitDelay as an
 // ERROR (not swallow it to nil like osCommandRunner).
-func TestDefaultExecCommandWaitDelayReturnsError(t *testing.T) {
+func TestDefaultRunCommandWaitDelayReturnsError(t *testing.T) {
 	old := cloudExecWaitDelay
 	cloudExecWaitDelay = 100 * time.Millisecond
 	t.Cleanup(func() { cloudExecWaitDelay = old })
@@ -54,8 +54,8 @@ func TestDefaultExecCommandWaitDelayReturnsError(t *testing.T) {
 
 	start := time.Now()
 	// sh exits immediately; the backgrounded sleep inherits stdout and holds the
-	// pipe open, forcing CombinedOutput's Wait past WaitDelay -> ErrWaitDelay.
-	_, err := defaultExecCommand(ctx, "sh", "-c", "sleep 30 & exit 0")
+	// pipe open, forcing Run's Wait past WaitDelay -> ErrWaitDelay.
+	_, err := defaultRunCommand(ctx, "sh", "-c", "sleep 30 & exit 0")
 	if !errors.Is(err, exec.ErrWaitDelay) {
 		t.Fatalf("want exec.ErrWaitDelay, got %v", err)
 	}
@@ -64,10 +64,39 @@ func TestDefaultExecCommandWaitDelayReturnsError(t *testing.T) {
 	}
 }
 
-func TestDefaultExecCommandHappyPath(t *testing.T) {
-	out, err := defaultExecCommand(context.Background(), "echo", "ok")
-	if err != nil || strings.TrimSpace(string(out)) != "ok" {
+func TestDefaultRunCommandHappyPath(t *testing.T) {
+	out, err := defaultRunCommand(context.Background(), "echo", "ok")
+	if err != nil || strings.TrimSpace(string(out.stdout)) != "ok" || len(out.stderr) != 0 {
 		t.Fatalf("echo: out=%q err=%v", out, err)
+	}
+}
+
+// The two streams stay apart: what rclone writes on stderr is never in the data the
+// callers parse, and the transcript a failure is reported with keeps both, stdout
+// first, so rclone's closing reason stays the last line.
+func TestDefaultRunCommandKeepsTheStreamsApart(t *testing.T) {
+	out, err := defaultRunCommand(context.Background(), "sh", "-c", "echo notice >&2; echo data; echo reason >&2; exit 3")
+	if err == nil {
+		t.Fatal("want the exit status")
+	}
+	if string(out.stdout) != "data\n" || string(out.stderr) != "notice\nreason\n" {
+		t.Fatalf("stdout=%q stderr=%q", out.stdout, out.stderr)
+	}
+	if got := string(out.transcript()); got != "data\nnotice\nreason\n" {
+		t.Fatalf("transcript=%q", got)
+	}
+	for _, tc := range []struct {
+		out  rcloneOutput
+		want string
+	}{
+		{rcloneOutput{}, ""},
+		{rcloneOutput{stdout: []byte("a")}, "a"},
+		{rcloneOutput{stderr: []byte("b")}, "b"},
+		{rcloneOutput{stdout: []byte("a"), stderr: []byte("b")}, "a\nb"},
+	} {
+		if got := string(tc.out.transcript()); got != tc.want {
+			t.Fatalf("transcript(%q, %q) = %q, want %q", tc.out.stdout, tc.out.stderr, got, tc.want)
+		}
 	}
 }
 

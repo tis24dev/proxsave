@@ -112,7 +112,10 @@ type Config struct {
 	MinDiskPrimaryGB   float64
 	MinDiskSecondaryGB float64
 	MinDiskCloudGB     float64
-	SafetyFactor       float64
+	// MinDiskPBSGB is the free space the PBS storage needs; like the siblings, 0 or less
+	// is read as 10 GB (sanitizeMinDisk).
+	MinDiskPBSGB float64
+	SafetyFactor float64
 	// SkipPermissionCheck feeds checks.CheckerConfig.SkipPermissionCheck, which drops the
 	// ownership/mode verification of the backup and log directories from the pre-backup
 	// checks. Test-only, as the template says: a host that skips it can write archives
@@ -153,6 +156,20 @@ type Config struct {
 	// at the cost of full egress. Default false.
 	CloudVerifyDownload bool
 
+	// SecondaryStartupFailed and CloudStartupFailed are set by the run, never read from
+	// or written to backup.env: the destination is on in backup.env and could not be
+	// initialized at startup. The run switches it off (SecondaryEnabled / CloudEnabled
+	// false: no copy at [6], no log copy, no disk-space check), and its outcome is an
+	// error, not a destination switched off. Its metrics line stays, at 0.
+	SecondaryStartupFailed bool
+	CloudStartupFailed     bool
+
+	// PBS storage: every backup is also uploaded to the PBS storage PBSTargetStorage
+	// defined in <PVE_CONFIG_PATH>/storage.cfg. Distinct from PBSRepository/PBSPassword/
+	// PBSFingerprint, which the collector uses on a PBS host.
+	PBSTargetEnabled bool
+	PBSTargetStorage string
+
 	// Rclone settings with comprehensible timeout names
 	// RcloneTimeoutConnection: timeout for checking if remote is accessible (default: 30s)
 	// RcloneTimeoutOperation: timeout for full upload/download operations (default: 300s)
@@ -171,6 +188,9 @@ type Config struct {
 	MaxLocalBackups        int
 	MaxSecondaryBackups    int
 	MaxCloudBackups        int
+	// MaxPBSTargetBackups is the simple retention of the PBS storage: 0 = no prune;
+	// a negative value is a configuration error (validatePBSTargetSettings).
+	MaxPBSTargetBackups int
 
 	// Retention policy selector ("simple" or "gfs")
 	RetentionPolicy string
@@ -444,11 +464,12 @@ var envOverrideKeys = []string{
 	"CLOUD_ENABLED", "CLOUD_REMOTE", "CLOUD_REMOTE_PATH", "CLOUD_LOG_PATH",
 	"CLOUD_UPLOAD_MODE", "CLOUD_PARALLEL_MAX_JOBS", "CLOUD_PARALLEL_VERIFICATION",
 	"CLOUD_WRITE_HEALTHCHECK",
+	"PBS_TARGET_ENABLED", "PBS_TARGET_STORAGE",
 	"RCLONE_TIMEOUT_CONNECTION", "RCLONE_TIMEOUT_OPERATION",
 	"RCLONE_BANDWIDTH_LIMIT", "RCLONE_TRANSFERS", "RCLONE_RETRIES", "RCLONE_VERIFY_METHOD",
 	"RCLONE_FLAGS",
 	"CLOUD_BATCH_SIZE", "CLOUD_BATCH_PAUSE",
-	"MAX_LOCAL_BACKUPS", "MAX_SECONDARY_BACKUPS", "MAX_CLOUD_BACKUPS",
+	"MAX_LOCAL_BACKUPS", "MAX_SECONDARY_BACKUPS", "MAX_CLOUD_BACKUPS", "MAX_PBS_TARGET_BACKUPS",
 	"RETENTION_DAILY", "RETENTION_WEEKLY", "RETENTION_MONTHLY", "RETENTION_YEARLY",
 	"BUNDLE_ASSOCIATED_FILES", "ENCRYPT_ARCHIVE", "AGE_RECIPIENT", "AGE_RECIPIENT_FILE",
 	"NOTIFY_ON",
@@ -465,6 +486,7 @@ var envOverrideKeys = []string{
 	"CHECK_OPEN_PORTS", "SUSPICIOUS_PORTS", "PORT_WHITELIST",
 	"SUSPICIOUS_PROCESSES", "SAFE_BRACKET_PROCESSES", "SAFE_KERNEL_PROCESSES", "SAFE_PROCESSES",
 	"MIN_DISK_SPACE_PRIMARY_GB", "MIN_DISK_SPACE_SECONDARY_GB", "MIN_DISK_SPACE_CLOUD_GB",
+	"MIN_DISK_SPACE_PBS_GB",
 	"DISABLE_NETWORK_PREFLIGHT", "BACKUP_EXCLUDE_PATTERNS",
 	"SKIP_PERMISSION_CHECK", "BACKUP_CONFIG_FILE",
 	"BACKUP_USER", "BACKUP_GROUP", "SET_BACKUP_PERMISSIONS",
@@ -508,7 +530,23 @@ func (c *Config) parse() error {
 	if err := c.validateCloudSettings(); err != nil {
 		return err
 	}
+	if err := c.validatePBSTargetSettings(); err != nil {
+		return err
+	}
 	c.autoDetectPBSAuth()
+	return nil
+}
+
+// validatePBSTargetSettings rejects what no run could use: an enabled PBS storage without
+// a storage ID, and a negative retention. Whether the storage exists in storage.cfg, and
+// its type, are checked at startup, not here.
+func (c *Config) validatePBSTargetSettings() error {
+	if c.PBSTargetEnabled && c.PBSTargetStorage == "" {
+		return fmt.Errorf("PBS_TARGET_STORAGE is required when PBS_TARGET_ENABLED=true")
+	}
+	if c.MaxPBSTargetBackups < 0 {
+		return fmt.Errorf("MAX_PBS_TARGET_BACKUPS must not be negative (got %d)", c.MaxPBSTargetBackups)
+	}
 	return nil
 }
 
@@ -631,6 +669,7 @@ func (c *Config) parseOptimizationSettings() {
 	c.MinDiskPrimaryGB = sanitizeMinDisk(c.getFloat("MIN_DISK_SPACE_PRIMARY_GB", 10.0))
 	c.MinDiskSecondaryGB = sanitizeMinDisk(c.getFloat("MIN_DISK_SPACE_SECONDARY_GB", c.MinDiskPrimaryGB))
 	c.MinDiskCloudGB = sanitizeMinDisk(c.getFloat("MIN_DISK_SPACE_CLOUD_GB", c.MinDiskPrimaryGB))
+	c.MinDiskPBSGB = sanitizeMinDisk(c.getFloat("MIN_DISK_SPACE_PBS_GB", c.MinDiskPrimaryGB))
 
 	// SKIP_PERMISSION_CHECK ships in the template and is listed in envOverrideKeys, so it
 	// was settable and readable while nothing carried it to the checker: the key looked
@@ -753,6 +792,9 @@ func (c *Config) parseStorageSettings() {
 	c.CloudVerifyChecksum = c.getBool("CLOUD_VERIFY_CHECKSUM", true)
 	c.CloudVerifyDownload = c.getBool("CLOUD_VERIFY_DOWNLOAD", false)
 
+	c.PBSTargetEnabled = c.getBool("PBS_TARGET_ENABLED", false)
+	c.PBSTargetStorage = strings.TrimSpace(c.getString("PBS_TARGET_STORAGE", ""))
+
 	c.RcloneTimeoutConnection = c.getIntWithFallback([]string{"RCLONE_TIMEOUT_CONNECTION", "CLOUD_CONNECTIVITY_TIMEOUT"}, 30)
 	c.RcloneTimeoutOperation = c.getInt("RCLONE_TIMEOUT_OPERATION", 300)
 	c.RcloneBandwidthLimit = c.getString("RCLONE_BANDWIDTH_LIMIT", "")
@@ -774,6 +816,7 @@ func (c *Config) parseRetentionSettings() {
 	c.MaxLocalBackups = c.LocalRetentionDays
 	c.MaxSecondaryBackups = c.SecondaryRetentionDays
 	c.MaxCloudBackups = c.CloudRetentionDays
+	c.MaxPBSTargetBackups = c.getInt("MAX_PBS_TARGET_BACKUPS", 15)
 
 	c.RetentionDaily = c.getInt("RETENTION_DAILY", 0)
 	c.RetentionWeekly = c.getInt("RETENTION_WEEKLY", 0)

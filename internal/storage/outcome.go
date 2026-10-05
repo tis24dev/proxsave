@@ -1,0 +1,324 @@
+package storage
+
+import (
+	"context"
+	"errors"
+	"os"
+	"path/filepath"
+	"strings"
+	"sync"
+	"unicode"
+	"unicode/utf8"
+
+	"github.com/tis24dev/proxsave/internal/config"
+	"github.com/tis24dev/proxsave/internal/logging"
+	"github.com/tis24dev/proxsave/internal/safefs"
+)
+
+// StoreIssue is something that went wrong AROUND a backup that Store did save: the
+// archive reached the destination, a piece beside it did not. Store reports these
+// without an error, because the backup is there; the caller prints one "⚠ <Name>:
+// ..." outcome per issue, after the fact lines the backend printed while storing.
+type StoreIssue int
+
+const (
+	// StoreIssueSidecarNotSaved: an associated file did not reach the destination.
+	StoreIssueSidecarNotSaved StoreIssue = iota + 1
+	// StoreIssueBundleNotSent: the bundle was unreadable, the standalone archive went instead.
+	StoreIssueBundleNotSent
+	// StoreIssueChecksumNotVerified: the upload was verified by size only.
+	StoreIssueChecksumNotVerified
+	// StoreIssuePermissionsNotSet: owner and mode could not be applied to the backup set.
+	StoreIssuePermissionsNotSet
+)
+
+// StoreReporter is implemented by backends that can say what the last Store left
+// undone around a saved backup. The slice is in the order the issues happened, holds
+// each issue once, and is empty after a clean Store or a Store that returned an error.
+type StoreReporter interface {
+	LastStoreIssues() []StoreIssue
+}
+
+// storeIssueRecorder collects the issues of ONE Store call. It is safe for the
+// parallel upload workers that verify sidecars concurrently.
+type storeIssueRecorder struct {
+	mu     sync.Mutex
+	issues []StoreIssue
+}
+
+func (r *storeIssueRecorder) add(issue StoreIssue) {
+	if r == nil {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, existing := range r.issues {
+		if existing == issue {
+			return
+		}
+	}
+	r.issues = append(r.issues, issue)
+}
+
+func (r *storeIssueRecorder) list() []StoreIssue {
+	if r == nil {
+		return nil
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]StoreIssue(nil), r.issues...)
+}
+
+// ErrorCause is the short cause a fact line prints for a storage error: the last line
+// rclone wrote, without its timestamp, when the error carries rclone output, and the
+// code's own wording plus the system error without the path otherwise
+// (safefs.SystemErrorText). The StorageError frame is dropped first: it repeats the
+// location and the path the block already shows.
+func ErrorCause(err error) string {
+	if err == nil {
+		return ""
+	}
+	for {
+		se, ok := err.(*StorageError)
+		if !ok || se == nil || se.Err == nil {
+			break
+		}
+		err = se.Err
+	}
+	var rcErr *remoteCheckError
+	if errors.As(err, &rcErr) && rcErr != nil && rcErr.short != "" {
+		return rcErr.short
+	}
+	var cmdErr *rcloneCommandError
+	if errors.As(err, &cmdErr) && cmdErr != nil && cmdErr.short != "" {
+		return cmdErr.short
+	}
+	return safefs.SystemErrorText(err)
+}
+
+// CapitalizedCause is ErrorCause for a fact line that opens with the cause itself,
+// without a label: the first letter upper-cased ("  Invalid CLOUD_REMOTE: ...").
+func CapitalizedCause(err error) string {
+	return capitalizeFirst(ErrorCause(err))
+}
+
+// capitalizeFirst upper-cases the first letter of a cause that opens its own fact
+// line ("  Timed out after 30s").
+func capitalizeFirst(s string) string {
+	if s == "" {
+		return s
+	}
+	r, size := utf8.DecodeRuneInString(s)
+	return string(unicode.ToUpper(r)) + s[size:]
+}
+
+// rcloneCause is the short cause of a failed rclone command: its last line, unless the
+// exec error says more than "exit status N". That "more" is the SIGKILL shape
+// (defaultRunCommand sets cmd.WaitDelay): the output is then whatever rclone printed
+// before the kill, typically a NOTICE, and presenting it as the cause would hide the
+// kill. The exec error alone is the cause there; the full output stays in DEBUG.
+func rcloneCause(output string, err error) string {
+	if err != nil && !strings.HasPrefix(err.Error(), "exit status ") {
+		return safefs.SystemErrorText(err)
+	}
+	if short := rcloneShortCause(output); short != "" {
+		return short
+	}
+	if err != nil {
+		return safefs.SystemErrorText(err)
+	}
+	return ""
+}
+
+// rcloneShortCause returns the last non-empty line of rclone's output without the
+// "YYYY/MM/DD HH:MM:SS " prefix: rclone closes every failed command with a summary
+// line that carries the cause ("Failed to copyto: ...: read-only file system").
+func rcloneShortCause(output string) string {
+	lines := strings.Split(strings.TrimSpace(output), "\n")
+	for i := len(lines) - 1; i >= 0; i-- {
+		line := strings.TrimSpace(rcloneTimestampPrefix.ReplaceAllString(lines[i], ""))
+		if line != "" {
+			return line
+		}
+	}
+	return ""
+}
+
+// rcloneCommandError is a failed rclone command: the message the callers have always
+// returned, plus the short cause a fact line shows.
+type rcloneCommandError struct {
+	msg   string
+	short string
+	err   error
+}
+
+func (e *rcloneCommandError) Error() string { return e.msg }
+
+func (e *rcloneCommandError) Unwrap() error { return e.err }
+
+// retentionTally counts what one retention pass could not do, for the outcome lines
+// the caller prints under "Applying retention policy...". It is reset with lastRet at
+// the start of every pass and copied into the RetentionSummary.
+type retentionTally struct {
+	planned        int
+	notDeleted     int
+	leftBehind     int
+	skipped        int
+	notListed      int
+	noMetadata     int
+	logsNotDeleted int
+	notRotated     []retentionNameCount
+	sharedWith     []string
+}
+
+func (t retentionTally) apply(s *RetentionSummary) {
+	s.Planned = t.planned
+	s.NotDeleted = t.notDeleted
+	s.LeftBehind = t.leftBehind
+	s.Skipped = t.skipped
+	s.NotListed = t.notListed
+	s.NoMetadata = t.noMetadata
+	s.LogsNotDeleted = t.logsNotDeleted
+	s.NotRotated = 0
+	names := make([]string, 0, len(t.notRotated))
+	for _, g := range t.notRotated {
+		s.NotRotated += g.count
+		names = append(names, g.name)
+	}
+	s.NotRotatedNames = joinNames(names)
+	s.SharedIdentityNames = joinNames(t.sharedWith)
+}
+
+// joinNames renders a list of names for one line: "a", "a and b", "a, b and c".
+func joinNames(names []string) string {
+	if len(names) <= 1 {
+		return strings.Join(names, "")
+	}
+	return strings.Join(names[:len(names)-1], ", ") + " and " + names[len(names)-1]
+}
+
+// listingGap is what the last listing could not see: the archives it left out, counted
+// per distinct cause in the order the causes were first met. Retention prints one fact
+// per cause; the other readers of the listing (statistics, the post-copy count) only
+// log it at DEBUG.
+type listingGap struct {
+	causes []listingGapCause
+}
+
+// listingGapCause is how many archives the listing left out for one cause.
+type listingGapCause struct {
+	count int
+	cause string
+}
+
+// add counts one more archive left out for cause, under the line of that cause.
+func (g *listingGap) add(cause string, n int) {
+	if n <= 0 {
+		return
+	}
+	for i := range g.causes {
+		if g.causes[i].cause == cause {
+			g.causes[i].count += n
+			return
+		}
+	}
+	g.causes = append(g.causes, listingGapCause{count: n, cause: cause})
+}
+
+// total is how many archives the listing left out, all causes together.
+func (g listingGap) total() int {
+	n := 0
+	for _, c := range g.causes {
+		n += c.count
+	}
+	return n
+}
+
+// logListingGap prints one fact per cause for the archives the listing left out,
+// before the scale of the pass, and returns how many there were in all. The listing
+// already wrote each archive and its cause at DEBUG.
+func logListingGap(logger *logging.Logger, gap listingGap) int {
+	for _, c := range gap.causes {
+		logger.Info("  Not listed: %d backups, %s", c.count, c.cause)
+	}
+	return gap.total()
+}
+
+// logListingNoMetadata prints one fact per archive the listing could only describe
+// from its file name, and returns how many there were.
+func logListingNoMetadata(logger *logging.Logger, names []string) int {
+	for _, name := range names {
+		logger.Info("  No metadata, name used: %s", name)
+	}
+	return len(names)
+}
+
+// DirectoryError is a destination directory that could not be created. The storage
+// initialization shows it as "  Directory not created: <cause>".
+type DirectoryError struct {
+	Err error
+}
+
+func (e *DirectoryError) Error() string { return "failed to create directory: " + e.Err.Error() }
+
+func (e *DirectoryError) Unwrap() error { return e.Err }
+
+// DirectoryMissingError is a destination directory a dry run found missing and did not
+// create (a dry run creates no destination directory). The storage initialization
+// shows it as "  Directory: missing, not created in dry run".
+type DirectoryMissingError struct {
+	Path string
+}
+
+func (e *DirectoryMissingError) Error() string {
+	return "directory missing, not created in dry run: " + e.Path
+}
+
+// dryRunMissingDirectory reports whether a dry run must stop at dir: it does not
+// exist, and a dry run does not create it. An existing directory, or one the stat
+// cannot answer for, goes on as in a real run, where MkdirAll creates nothing.
+func dryRunMissingDirectory(ctx context.Context, logger *logging.Logger, cfg *config.Config, dir string) bool {
+	if cfg == nil || !cfg.DryRun {
+		return false
+	}
+	_, err := safefs.Stat(ctx, dir, fsIoTimeout(cfg))
+	if err == nil || !errors.Is(err, os.ErrNotExist) {
+		return false
+	}
+	logger.Debug("DRY RUN: %s is missing and is not created: %v", dir, err)
+	return true
+}
+
+// logRetentionSkipped prints one fact line per archive retention could not date and
+// left alone, and returns how many there were.
+func logRetentionSkipped(logger *logging.Logger, location string, inert []retentionInert) int {
+	for _, in := range inert {
+		if in.Backup == nil {
+			continue
+		}
+		name := filepath.Base(in.Backup.BackupFile)
+		logger.Debug("%s: retention - ignored %s (%s)", location, in.Backup.BackupFile, in.Reason)
+		switch in.Reason {
+		case retentionInertNoManifest:
+			logger.Info("  Skipped, no manifest: %s", name)
+		default:
+			logger.Info("  Skipped, no reliable date: %s", name)
+		}
+	}
+	return len(inert)
+}
+
+// logRetentionScale prints the fact that opens a simple-retention deletion.
+func logRetentionScale(logger *logging.Logger, total, limit int) {
+	logger.Info("  Backups: %d, limit: %d", total, limit)
+}
+
+// logDeleteFailure prints the fact for one file a retention delete could not remove:
+// the archive itself is "Not deleted", a file beside it is "Left behind".
+func logDeleteFailure(logger *logging.Logger, file, cause string) {
+	if isBackupSidecar(file) {
+		logger.Info("  Left behind: %s: %s", filepath.Base(file), cause)
+		return
+	}
+	logger.Info("  Not deleted: %s: %s", filepath.Base(file), cause)
+}

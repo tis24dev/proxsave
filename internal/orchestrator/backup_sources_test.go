@@ -110,6 +110,19 @@ func TestBuildCloudRemotePathVariants(t *testing.T) {
 			t.Fatalf("buildCloudRemotePath() = %q; want %q", got, want)
 		}
 	})
+
+	// The same directory the cloud backend writes to (storage.LocalCloudRemoteDir).
+	t.Run("absolute mount path, slashes and spaces around the prefix", func(t *testing.T) {
+		for _, tc := range []struct{ remote, prefix, want string }{
+			{"/mnt/cloud/backups", "", "/mnt/cloud/backups"},
+			{"/mnt/cloud/backups/", "", "/mnt/cloud/backups"},
+			{" /mnt/cloud ", " /server1/ ", "/mnt/cloud/server1"},
+		} {
+			if got := buildCloudRemotePath(tc.remote, tc.prefix); got != tc.want {
+				t.Fatalf("buildCloudRemotePath(%q, %q) = %q; want %q", tc.remote, tc.prefix, got, tc.want)
+			}
+		}
+	})
 }
 
 func TestBuildDecryptPathOptions_CloudVariants(t *testing.T) {

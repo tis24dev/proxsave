@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/tis24dev/proxsave/internal/backup"
 	"github.com/tis24dev/proxsave/internal/config"
 	"github.com/tis24dev/proxsave/internal/logging"
 	"github.com/tis24dev/proxsave/internal/safefs"
@@ -142,8 +143,11 @@ func resolveUserGroupIDs(userName, groupName string) (int, int, error) {
 }
 
 // applyDirOwnershipRecursive walks a directory tree and applies chown to all
-// entries, and a conservative chmod (0750) on directories only. This matches
-// the intent of the Bash version but avoids touching unrelated system paths.
+// entries, a conservative chmod (0750) on directories, and chmod 0640
+// (backup.SharedArtifactFilePerm) on the files of a backup set
+// (storage.IsBackupSetFile), so BACKUP_GROUP can read the backups earlier runs
+// left. Every other file keeps its mode. This matches the intent of the Bash
+// version but avoids touching unrelated system paths.
 //
 // The walk uses safefs.WalkBounded so the directory reads themselves are bounded
 // by FS_IO_TIMEOUT (filepath.WalkDir's internal readdir/lstat would otherwise
@@ -151,7 +155,7 @@ func resolveUserGroupIDs(userName, groupName string) (int, int, error) {
 // it mutates nothing, matching the read-only dry-run security preflight.
 func applyDirOwnershipRecursive(ctx context.Context, root string, uid, gid int, timeout time.Duration, dryRun bool, logger *logging.Logger) error {
 	if dryRun {
-		logger.Info("DRY RUN: would recursively set ownership %d:%d and 0750 directory perms on %s", uid, gid, root)
+		logger.Info("DRY RUN: would recursively set ownership %d:%d, 0750 directory perms and 0640 backup file perms on %s", uid, gid, root)
 		return nil
 	}
 
@@ -192,6 +196,17 @@ func applyOwnershipWalkEntry(ctx context.Context, path string, d fs.DirEntry, wa
 		// directory non-traversable. Routing the chmod through safefs.Lchmod (variable
 		// mode) both bounds the call and structurally avoids the G302 finding.
 		if err := safefs.Lchmod(ctx, path, 0o750, timeout); err != nil {
+			logger.Debug("chmod failed on %s: %v", path, err)
+		}
+		return nil
+	}
+
+	// A file of a backup set is opened to the backup group, which is what
+	// SET_BACKUP_PERMISSIONS asks for; every other file (logs included) keeps its
+	// mode. d.Type() carries no type bits only for a regular file, so a symlink
+	// is never chmod-ed here.
+	if d != nil && d.Type().IsRegular() && storage.IsBackupSetFile(d.Name()) {
+		if err := safefs.Lchmod(ctx, path, backup.SharedArtifactFilePerm, timeout); err != nil {
 			logger.Debug("chmod failed on %s: %v", path, err)
 		}
 	}

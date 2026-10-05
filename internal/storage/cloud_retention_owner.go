@@ -13,10 +13,11 @@ import (
 // remote manifest so cloud retention can attribute a backup the same way the local
 // and secondary locations do.
 //
-// List() deliberately does NOT do this: it is also the cheap path behind the run
-// counter and the stats screen, and attributing costs one `rclone cat` per archive.
-// Retention is the only caller that must know WHO owns a backup before deleting it,
-// so the cost is paid here and only here.
+// List() deliberately does NOT do this: attributing costs one `rclone cat` per
+// archive. Every caller that must know WHO owns a backup (retention, the statistics,
+// the startup counts) comes here, and each manifest is read at most once per run:
+// the answer is kept in ownerCache and reused, and dropped for the archives the run
+// uploads or deletes.
 //
 // Every failure leaves Hostname empty. backupOwnerHost then falls back to the host
 // token the filename carries ("<host>-backup-<timestamp>"), so an archive whose
@@ -31,6 +32,10 @@ func (c *CloudStorage) resolveRetentionOwners(ctx context.Context, backups []*ty
 		// resolve, skipping on one of them would leave the identity empty and
 		// silently disable the mechanism on this backend. See the secondary twin.
 		if b == nil {
+			continue
+		}
+		if hostname, serverID, ok := c.cachedOwner(b.BackupFile); ok {
+			fillOwner(b, hostname, serverID)
 			continue
 		}
 		pending = append(pending, b)
@@ -77,15 +82,58 @@ func (c *CloudStorage) resolveRetentionOwners(ctx context.Context, backups []*ty
 				return
 			}
 			hostname, serverID := c.remoteManifestOwner(ctx, b.BackupFile)
-			if strings.TrimSpace(b.Hostname) == "" {
-				b.Hostname = hostname
+			// A read cut short by the management budget is not an answer: it is not
+			// kept, so a later caller reads the manifest again.
+			if ctx.Err() == nil {
+				c.storeOwner(b.BackupFile, hostname, serverID)
 			}
-			if strings.TrimSpace(b.ServerID) == "" {
-				b.ServerID = serverID
-			}
+			fillOwner(b, hostname, serverID)
 		}()
 	}
 	wg.Wait()
+}
+
+// remoteOwner is what one archive's remote manifest says about its writer.
+type remoteOwner struct {
+	hostname string
+	serverID string
+}
+
+// fillOwner writes the owner into an entry, only where nothing was resolved yet.
+func fillOwner(b *types.BackupMetadata, hostname, serverID string) {
+	if strings.TrimSpace(b.Hostname) == "" {
+		b.Hostname = hostname
+	}
+	if strings.TrimSpace(b.ServerID) == "" {
+		b.ServerID = serverID
+	}
+}
+
+// cachedOwner returns what an earlier read of this archive's manifest found.
+func (c *CloudStorage) cachedOwner(backupFile string) (hostname, serverID string, ok bool) {
+	c.ownerMu.Lock()
+	defer c.ownerMu.Unlock()
+	owner, ok := c.ownerCache[strings.TrimSpace(backupFile)]
+	return owner.hostname, owner.serverID, ok
+}
+
+// storeOwner keeps what this archive's manifest says, for the rest of the run.
+func (c *CloudStorage) storeOwner(backupFile, hostname, serverID string) {
+	c.ownerMu.Lock()
+	defer c.ownerMu.Unlock()
+	if c.ownerCache == nil {
+		c.ownerCache = make(map[string]remoteOwner)
+	}
+	c.ownerCache[strings.TrimSpace(backupFile)] = remoteOwner{hostname: hostname, serverID: serverID}
+}
+
+// forgetOwners drops the cached manifest answers of archives the run is changing.
+func (c *CloudStorage) forgetOwners(backupFiles ...string) {
+	c.ownerMu.Lock()
+	defer c.ownerMu.Unlock()
+	for _, name := range backupFiles {
+		delete(c.ownerCache, strings.TrimSpace(name))
+	}
 }
 
 // remoteManifestSuffixes are the sidecar names an archive's manifest can carry,
@@ -125,7 +173,7 @@ func (c *CloudStorage) remoteManifestOwner(ctx context.Context, filename string)
 		// JSON form is how a shared remote root ended up with one host deleting
 		// another host's pre-Go archive together with the KEY=VALUE sidecar that
 		// named its owner.
-		if host, id := backup.OwnerFromManifestBytes(out); host != "" {
+		if host, id := backup.OwnerFromManifestBytes(out.stdout); host != "" {
 			return host, id
 		}
 		c.logger.Debug("Cloud storage: manifest %s%s names no host", rel, suffix)

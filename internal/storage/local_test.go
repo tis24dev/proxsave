@@ -445,9 +445,14 @@ func TestLocalStorage_GetStats(t *testing.T) {
 		}
 		wantTotalSize += int64(len(f.data))
 	}
+	// Another host's archive in the same directory: listed, not counted.
+	if err := os.WriteFile(filepath.Join(tempDir, "other-backup-20240101-030303.tar.zst"), []byte("ddddddd"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 
 	cfg := &config.Config{BackupPath: tempDir}
 	storage, _ := NewLocalStorage(cfg, logger, "")
+	storage.hostname = "node"
 	storage.fsInfo = &FilesystemInfo{Type: FilesystemExt4}
 
 	ctx := context.Background()
@@ -461,8 +466,8 @@ func TestLocalStorage_GetStats(t *testing.T) {
 		t.Fatal("GetStats returned nil stats")
 	}
 
-	if stats.TotalBackups != len(files) {
-		t.Fatalf("TotalBackups = %d, want %d", stats.TotalBackups, len(files))
+	if stats.TotalBackups != len(files) || stats.ListedBackups != len(files)+1 {
+		t.Fatalf("TotalBackups = %d of %d listed, want %d of %d: only this host's backups are counted", stats.TotalBackups, stats.ListedBackups, len(files), len(files)+1)
 	}
 	if stats.TotalSize != wantTotalSize {
 		t.Fatalf("TotalSize = %d, want %d", stats.TotalSize, wantTotalSize)

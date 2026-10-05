@@ -86,7 +86,8 @@ func TestDispatchLogFileSecondaryCopyTimeout(t *testing.T) {
 	src := writeSrcLog(t)
 	runDispatchWithWatchdog(t, o, src)
 
-	if !strings.Contains(buf.String(), "timed out") {
+	if !strings.Contains(buf.String(), "INFO       Copy failed: timed out after 1s\n") ||
+		!strings.Contains(buf.String(), "WARNING  ⚠ Log not copied to secondary\n") {
 		t.Fatalf("expected a timeout warning, got:\n%s", buf.String())
 	}
 	if _, err := os.Stat(filepath.Join(secondary, "backup.log")); !os.IsNotExist(err) {
@@ -107,7 +108,8 @@ func TestDispatchLogFileSecondaryMkdirTimeout(t *testing.T) {
 	src := writeSrcLog(t)
 	runDispatchWithWatchdog(t, o, src)
 
-	if !strings.Contains(buf.String(), "creating") || !strings.Contains(buf.String(), "timed out") {
+	if !strings.Contains(buf.String(), "INFO       Directory not created: timed out after 1s\n") ||
+		!strings.Contains(buf.String(), "WARNING  ⚠ Log not copied to secondary\n") {
 		t.Fatalf("expected a mkdir-timeout warning, got:\n%s", buf.String())
 	}
 }
@@ -125,10 +127,11 @@ func TestDispatchLogFileCloudSourceProbeTimeout(t *testing.T) {
 	src := writeSrcLog(t)
 	runDispatchWithWatchdog(t, o, src)
 
-	if !strings.Contains(buf.String(), "unreachable") {
+	if !strings.Contains(buf.String(), "INFO       Source log not accessible: timed out after 1s\n") ||
+		!strings.Contains(buf.String(), "WARNING  ⚠ Log not copied to cloud\n") {
 		t.Fatalf("expected a cloud source-probe timeout warning, got:\n%s", buf.String())
 	}
-	if strings.Contains(buf.String(), "Failed to copy log to cloud") {
+	if strings.Contains(buf.String(), "Copy failed") {
 		t.Fatalf("cloud upload must not be attempted after a source-probe timeout:\n%s", buf.String())
 	}
 }
@@ -167,7 +170,7 @@ func TestDispatchLogFileCloudUploadDetachesFromCancelledRunCtx(t *testing.T) {
 	if uploadCtxErr != nil {
 		t.Fatalf("cloud upload received a cancelled context (%v); it must run on a context detached from the run ctx so the log still ships after Ctrl+C", uploadCtxErr)
 	}
-	if !strings.Contains(buf.String(), "Log copied to cloud") {
+	if !strings.Contains(buf.String(), "INFO     ✓ Log copied to cloud\n") {
 		t.Fatalf("expected a success log for the dispatched cloud upload; got:\n%s", buf.String())
 	}
 }
@@ -192,7 +195,68 @@ func TestDispatchLogFileHealthyBoundedCopies(t *testing.T) {
 	if string(data) != "logdata" {
 		t.Fatalf("content mismatch: %q", string(data))
 	}
-	if strings.Contains(buf.String(), "timed out") || strings.Contains(buf.String(), "Failed") {
+	if strings.Contains(buf.String(), "timed out") || strings.Contains(buf.String(), "failed") ||
+		strings.Contains(buf.String(), "Log not copied") || !strings.Contains(buf.String(), "✓ Log copied to secondary\n") {
 		t.Fatalf("healthy bounded copy must not warn:\n%s", buf.String())
+	}
+}
+
+// Step [8] layout: each copy opens with its destination at the left, the facts sit
+// under it, and the outcome closes it. A log that reached the cloud verified by size
+// only closes with its own warning, not a failure.
+func TestDispatchLogFileCopyBlocksAndChecksumOutcome(t *testing.T) {
+	var buf bytes.Buffer
+	logger := logging.New(types.LogLevelInfo, false)
+	logger.SetOutput(&buf)
+	secondaryDir := t.TempDir()
+	cfg := &config.Config{SecondaryEnabled: true, SecondaryLogPath: secondaryDir, CloudEnabled: true, CloudLogPath: "/logs", CloudRemote: "remote", FsIoTimeoutSeconds: 30}
+	o := &Orchestrator{logger: logger, cfg: cfg}
+	o.copyLogToCloudFn = func(context.Context, string, string) error { return errLogChecksumNotVerified }
+
+	src := writeSrcLog(t)
+	if err := o.dispatchLogFile(context.Background(), src); err != nil {
+		t.Fatalf("dispatchLogFile: %v", err)
+	}
+	out := buf.String()
+	name := filepath.Base(src)
+	for _, want := range []string{
+		"INFO     Secondary: " + filepath.Join(secondaryDir, name) + "\n",
+		"INFO     ✓ Log copied to secondary\n",
+		"INFO     Cloud: remote:/logs/" + name + "\n",
+		"WARNING  ⚠ Log copied to cloud, checksum not verified\n",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("missing %q in:\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, "Log not copied") || strings.Contains(out, "✓ Log copied to cloud") {
+		t.Fatalf("a size-only verified log is neither a failure nor a clean copy:\n%s", out)
+	}
+}
+
+type logStatDeniedFS struct{ osFS }
+
+func (logStatDeniedFS) Stat(p string) (os.FileInfo, error) {
+	return nil, &os.PathError{Op: "stat", Path: p, Err: os.ErrPermission}
+}
+
+func TestDispatchLogFileCloudSourceStatError(t *testing.T) {
+	var buf bytes.Buffer
+	logger := logging.New(types.LogLevelInfo, false)
+	logger.SetOutput(&buf)
+	cfg := &config.Config{CloudEnabled: true, CloudLogPath: "/logs", CloudRemote: "remote", FsIoTimeoutSeconds: 30}
+	o := &Orchestrator{logger: logger, cfg: cfg, fs: logStatDeniedFS{}}
+	o.copyLogToCloudFn = func(context.Context, string, string) error {
+		t.Fatal("the upload must not be attempted when the source log cannot be read")
+		return nil
+	}
+	if err := o.dispatchLogFile(context.Background(), writeSrcLog(t)); err != nil {
+		t.Fatalf("dispatchLogFile: %v", err)
+	}
+	out := buf.String()
+	for _, want := range []string{"INFO       Source log not accessible: permission denied\n", "WARNING  ⚠ Log not copied to cloud\n"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("missing %q in:\n%s", want, out)
+		}
 	}
 }

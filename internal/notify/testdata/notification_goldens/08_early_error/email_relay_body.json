@@ -1,0 +1,81 @@
+{
+  "to": "admin@example.com",
+  "subject": "❌ PVE Backup on pve-golden - 2026-10-04 02:00",
+  "report": {
+    "backup": {
+      "cloud": {
+        "count": 0,
+        "emoji": "➖",
+        "status": "0/?"
+      },
+      "primary": {
+        "count": 0,
+        "emoji": "❌",
+        "status": "0/?"
+      },
+      "secondary": {
+        "count": 0,
+        "emoji": "➖",
+        "status": "0/?"
+      }
+    },
+    "backup_date": "2026-10-04 02:00:00",
+    "emojis": {
+      "cloud": "➖",
+      "email": "➖",
+      "primary": "❌",
+      "secondary": "➖"
+    },
+    "exit_code": 5,
+    "hostname": "pve-golden",
+    "log_summary": {
+      "categories": null,
+      "color": "#dc3545",
+      "errors": 1,
+      "has_categories": false,
+      "has_entries": true,
+      "log_file": "/opt/proxsave/log/backup-pve-golden-20261004-020000.log",
+      "total": 1,
+      "warnings": 0
+    },
+    "metrics": {
+      "backup_duration": "\u003c 1s",
+      "backup_file": "",
+      "backup_file_name": "",
+      "backup_size": "0 B",
+      "compression_level": "0",
+      "compression_mode": "",
+      "compression_ratio": "0.00",
+      "compression_type": "",
+      "file_missing": 0,
+      "files_included": 0,
+      "telegram_status": "N/A"
+    },
+    "paths": {
+      "cloud": "",
+      "cloud_display": "Not configured",
+      "has_cloud": false,
+      "has_secondary": false,
+      "local": "",
+      "secondary": ""
+    },
+    "proxmox_type": "pve",
+    "script_version": "0.41.0",
+    "server_id": "7302915846102738",
+    "server_mac": "bc:24:11:5e:3a:01",
+    "status": "failure",
+    "status_color": "#F44336",
+    "status_message": "Backup failed",
+    "storage": {
+      "local": {
+        "free": "0 B",
+        "percent": "0%",
+        "percent_num": 0,
+        "space": "0 B",
+        "used": "0 B"
+      }
+    }
+  },
+  "t": "<SEND TIME, UNIX SECONDS>",
+  "server_mac": "bc:24:11:5e:3a:01"
+}

@@ -68,15 +68,12 @@ DEF456!  4321 Mon Jan  1 00:00:01 sender2@example.com
                                          ops@example.com
 `, 0)
 
-	queueID, line, err := notifier.detectQueueEntry(context.Background(), "admin@example.com")
+	count, entries, err := notifier.checkMailQueueFor(context.Background(), "admin@example.com")
 	if err != nil {
-		t.Fatalf("detectQueueEntry() error=%v", err)
+		t.Fatalf("checkMailQueueFor() error=%v", err)
 	}
-	if queueID != "ABC123" {
-		t.Fatalf("queueID=%q want %q", queueID, "ABC123")
-	}
-	if line == "" {
-		t.Fatalf("expected a matched line for recipient")
+	if count != 4 || len(entries) != 1 || entries[0].id != "ABC123" || entries[0].line != "admin@example.com" {
+		t.Fatalf("checkMailQueueFor() = %d, %+v; want 4 and ABC123 for admin@example.com", count, entries)
 	}
 }
 
@@ -89,12 +86,12 @@ func TestEmailNotifierDetectQueueEntryNotFound(t *testing.T) {
 
 	mockCmdEnv(t, "mailq", "Mail queue is empty", 0)
 
-	queueID, line, err := notifier.detectQueueEntry(context.Background(), "admin@example.com")
+	count, entries, err := notifier.checkMailQueueFor(context.Background(), "admin@example.com")
 	if err != nil {
-		t.Fatalf("detectQueueEntry() error=%v", err)
+		t.Fatalf("checkMailQueueFor() error=%v", err)
 	}
-	if queueID != "" || line != "" {
-		t.Fatalf("detectQueueEntry()=(%q,%q) want empty", queueID, line)
+	if count != 0 || len(entries) != 0 {
+		t.Fatalf("checkMailQueueFor() = %d, %+v; want empty", count, entries)
 	}
 }
 

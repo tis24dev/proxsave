@@ -17,6 +17,7 @@ import (
 	"github.com/tis24dev/proxsave/internal/config"
 	"github.com/tis24dev/proxsave/internal/logging"
 	"github.com/tis24dev/proxsave/internal/safeexec"
+	"github.com/tis24dev/proxsave/internal/storage"
 )
 
 // decryptPathOption describes a logical backup source (local, secondary, cloud)
@@ -692,14 +693,10 @@ func buildCloudRemotePath(cloudRemote, cloudRemotePath string) string {
 		return ""
 	}
 
-	// If CLOUD_REMOTE is an absolute filesystem path (mount point),
-	// treat it as a local directory and combine using filepath.Join.
-	if filepath.IsAbs(base) && !strings.Contains(base, ":") {
-		prefix := strings.Trim(strings.TrimSpace(cloudRemotePath), "/")
-		if prefix == "" {
-			return filepath.Clean(base)
-		}
-		return filepath.Join(base, prefix)
+	// If CLOUD_REMOTE is an absolute filesystem path (mount point), treat it as a
+	// local directory, with the rule the cloud backend uses (storage.LocalCloudRemoteDir).
+	if dir, ok := storage.LocalCloudRemoteDir(base, cloudRemotePath); ok {
+		return dir
 	}
 
 	parts := strings.SplitN(base, ":", 2)

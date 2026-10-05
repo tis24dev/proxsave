@@ -14,6 +14,7 @@ import (
 
 	"filippo.io/age"
 	"github.com/tis24dev/proxsave/internal/backup"
+	"github.com/tis24dev/proxsave/internal/block"
 	"github.com/tis24dev/proxsave/internal/checks"
 	"github.com/tis24dev/proxsave/internal/config"
 	"github.com/tis24dev/proxsave/internal/environment"
@@ -128,6 +129,13 @@ type BackupStats struct {
 	MaxSecondaryBackups int
 	MaxCloudBackups     int
 
+	// SecondaryStartupFailed and CloudStartupFailed: the destination is on in backup.env
+	// and could not be initialized at startup (config.Config, same names). It stays out of
+	// the run (SecondaryEnabled / CloudEnabled false), its status is "error" and its count
+	// was never read (-1). The notifications report it configured, in error.
+	SecondaryStartupFailed bool `json:",omitempty"`
+	CloudStartupFailed     bool `json:",omitempty"`
+
 	// Retention policy info (for notifications)
 	LocalRetentionPolicy     string
 	LocalGFSDaily            int
@@ -144,6 +152,14 @@ type BackupStats struct {
 	CloudGFSWeekly           int
 	CloudGFSMonthly          int
 	CloudGFSYearly           int
+
+	// PBSTarget is the outcome of the PBS storage block (step [7]). It is nil when
+	// PBS_TARGET_ENABLED=false, so a run without PBS serializes exactly as before.
+	PBSTarget *block.Result `json:",omitempty"`
+	// PBSTargetStorage and MaxPBSTargetBackups are PBS_TARGET_STORAGE and
+	// MAX_PBS_TARGET_BACKUPS, also with PBS off, as SecondaryPath and MaxSecondaryBackups.
+	PBSTargetStorage    string `json:",omitempty"`
+	MaxPBSTargetBackups int    `json:",omitempty"`
 
 	// Error/warning counts
 	ErrorCount   int
@@ -226,8 +242,13 @@ type Orchestrator struct {
 	optimizationCfg    backup.OptimizationConfig
 
 	storageTargets       []StorageTarget
+	backupBlocks         []block.Backup
 	notificationChannels []NotificationChannel
 	tempRegistry         *TempDirRegistry
+
+	// runProfilePaths are this run's own pprof files (cleaned paths), which the
+	// cleanup of previous executions must leave in place.
+	runProfilePaths map[string]struct{}
 
 	// Identity
 	serverID  string
@@ -300,18 +321,28 @@ func (o *Orchestrator) logGlobalRetentionPolicy() {
 	if o.cfg.IsGFSRetentionEnabled() {
 		rc := storage.NewRetentionConfigFromConfig(o.cfg, storage.LocationPrimary)
 		rc = storage.NormalizeGFSRetentionConfig(o.logger, "All Storage", rc)
-		o.logger.Info("  Policy: GFS (daily=%d, weekly=%d, monthly=%d, yearly=%d)",
+		o.logger.Info("  Retention policy: GFS (daily=%d, weekly=%d, monthly=%d, yearly=%d)",
 			rc.Daily, rc.Weekly, rc.Monthly, rc.Yearly)
 		return
 	}
 
-	// Simple (count-based) retention: may vary per path, summarize compactly
+	// Simple (count-based) retention: may vary per path, summarize compactly. Only the
+	// destinations this run writes to are listed: a disabled one (or one the storage
+	// initialization disabled) has no retention to apply.
 	local := o.cfg.LocalRetentionDays
-	secondary := o.cfg.SecondaryRetentionDays
-	cloud := o.cfg.CloudRetentionDays
+	secondary, cloud := 0, 0
+	if o.cfg.SecondaryEnabled {
+		secondary = o.cfg.SecondaryRetentionDays
+	}
+	if o.cfg.CloudEnabled {
+		cloud = o.cfg.CloudRetentionDays
+	}
+	o.logger.Debug("Retention policy: local=%d secondary=%d (enabled=%v) cloud=%d (enabled=%v)",
+		o.cfg.LocalRetentionDays, o.cfg.SecondaryRetentionDays, o.cfg.SecondaryEnabled,
+		o.cfg.CloudRetentionDays, o.cfg.CloudEnabled)
 
 	if local == 0 && secondary == 0 && cloud == 0 {
-		o.logger.Info("  Policy: simple (disabled)")
+		o.logger.Info("  Retention policy: simple (disabled)")
 		return
 	}
 
@@ -326,7 +357,7 @@ func (o *Orchestrator) logGlobalRetentionPolicy() {
 		parts = append(parts, fmt.Sprintf("cloud=%d", cloud))
 	}
 
-	o.logger.Info("  Policy: simple (%s)", strings.Join(parts, ", "))
+	o.logger.Info("  Retention policy: simple (%s)", strings.Join(parts, ", "))
 }
 
 func (o *Orchestrator) SetForceNewAgeRecipient(force bool) {
@@ -355,6 +386,37 @@ func (o *Orchestrator) SetEnvironmentInfo(info *environment.EnvironmentInfo) {
 // SetStartTime injects the timestamp to reuse across logs/backups.
 func (o *Orchestrator) SetStartTime(t time.Time) {
 	o.startTime = t
+}
+
+// SetRunProfilePaths names the pprof files this run writes (empty paths are
+// ignored). The cleanup of previous executions skips exactly these paths, so the
+// current run's profiles stay until the next run.
+func (o *Orchestrator) SetRunProfilePaths(paths ...string) {
+	o.runProfilePaths = nil
+	for _, p := range paths {
+		if p == "" {
+			continue
+		}
+		if o.runProfilePaths == nil {
+			o.runProfilePaths = make(map[string]struct{}, len(paths))
+		}
+		o.runProfilePaths[filepath.Clean(p)] = struct{}{}
+	}
+}
+
+// withoutRunProfiles drops this run's own profiles from a list of cleanup candidates.
+func (o *Orchestrator) withoutRunProfiles(paths []string) []string {
+	if len(o.runProfilePaths) == 0 {
+		return paths
+	}
+	kept := make([]string, 0, len(paths))
+	for _, p := range paths {
+		if _, own := o.runProfilePaths[filepath.Clean(p)]; own {
+			continue
+		}
+		kept = append(kept, p)
+	}
+	return kept
 }
 
 func (o *Orchestrator) now() time.Time {
@@ -578,19 +640,17 @@ func (o *Orchestrator) RunGoBackup(ctx context.Context, envInfo *environment.Env
 	if err := o.collectBackupData(run, workspace); err != nil {
 		return stats, err
 	}
-	artifacts, err := o.createBackupArchive(run, workspace)
-	if err != nil {
-		return stats, err
+	blocks := append([]blockBackup{&blockPath{o: o}}, o.destinationBlocks()...)
+	for _, b := range blocks {
+		if err := b.execute(run, workspace); err != nil {
+			return stats, err
+		}
 	}
-	if err := o.verifyAndWriteBackupArtifacts(run, workspace, artifacts); err != nil {
-		return stats, err
-	}
-	if err := o.bundleBackupArtifacts(run, workspace, artifacts); err != nil {
-		return stats, err
-	}
-	o.finalizeBackupStats(run)
-	if err := o.dispatchBackupArtifacts(run); err != nil {
-		return stats, err
+
+	// Phase 2 + 3: Notifications and log management (non-critical).
+	// Skipped in dry run, like the storage dispatch.
+	if !o.dryRun {
+		o.FinalizeAfterRun(run.ctx, run.stats)
 	}
 
 	fmt.Println()
@@ -866,12 +926,13 @@ func (o *Orchestrator) SaveStatsReport(stats *BackupStats) (err error) {
 
 	timestampStr := stats.Timestamp.Format("20060102-150405")
 	reportPath := filepath.Join(o.logPath, fmt.Sprintf("backup-stats-%s.json", timestampStr))
-	stats.ReportPath = reportPath
 
 	if o.dryRun {
+		// ReportPath stays empty: nothing is written, so the caller must not claim a saved report.
 		o.logger.Info("[DRY RUN] Would write stats report: %s", reportPath)
 		return nil
 	}
+	stats.ReportPath = reportPath
 
 	if err := fs.MkdirAll(o.logPath, 0755); err != nil {
 		return fmt.Errorf("create log directory: %w", err)
@@ -971,6 +1032,7 @@ func (o *Orchestrator) SaveStatsReport(stats *BackupStats) (err error) {
 
 // cleanupPreviousExecutionArtifacts performs unified cleanup of old JSON stats, pprof files,
 // and orphaned temp directories. Returns the TempDirRegistry for use by the caller.
+// In dry run it removes nothing: it counts what a real run would remove and reports that.
 func (o *Orchestrator) cleanupPreviousExecutionArtifacts(ctx context.Context) *TempDirRegistry {
 	fs := o.filesystem()
 	timeout := o.fsIoTimeout()
@@ -1023,6 +1085,9 @@ func (o *Orchestrator) cleanupPreviousExecutionArtifacts(ctx context.Context) *T
 	if matches, err := filepath.Glob(filepath.Join("/tmp", "proxsave", "heap-*.pprof")); err == nil {
 		heapProfiles = matches
 	}
+	// This run's own profiles are not from a previous execution.
+	cpuProfiles = o.withoutRunProfiles(cpuProfiles)
+	heapProfiles = o.withoutRunProfiles(heapProfiles)
 
 	// Get temp directory registry
 	registry := o.ensureTempRegistry()
@@ -1042,6 +1107,11 @@ func (o *Orchestrator) cleanupPreviousExecutionArtifacts(ctx context.Context) *T
 
 		for _, file := range statsFiles {
 			filename := filepath.Base(file)
+			if o.dryRun {
+				o.logger.Debug("[DRY RUN] Would remove stats file %s", filename)
+				removedFiles++
+				continue
+			}
 			if err := boundedRemove(file); err != nil {
 				o.logger.Debug("Failed to remove file %s: %v", filename, err)
 				failedFiles++
@@ -1062,6 +1132,11 @@ func (o *Orchestrator) cleanupPreviousExecutionArtifacts(ctx context.Context) *T
 
 		for _, file := range cpuProfiles {
 			filename := filepath.Base(file)
+			if o.dryRun {
+				o.logger.Debug("[DRY RUN] Would remove CPU profile %s", filename)
+				removedFiles++
+				continue
+			}
 			if err := boundedRemove(file); err != nil {
 				o.logger.Debug("Failed to remove CPU profile %s: %v", filename, err)
 				failedFiles++
@@ -1082,6 +1157,11 @@ func (o *Orchestrator) cleanupPreviousExecutionArtifacts(ctx context.Context) *T
 
 		for _, file := range heapProfiles {
 			filename := filepath.Base(file)
+			if o.dryRun {
+				o.logger.Debug("[DRY RUN] Would remove heap profile %s", filename)
+				removedFiles++
+				continue
+			}
 			if err := boundedRemove(file); err != nil {
 				o.logger.Debug("Failed to remove heap profile %s: %v", filename, err)
 				failedFiles++
@@ -1100,8 +1180,13 @@ func (o *Orchestrator) cleanupPreviousExecutionArtifacts(ctx context.Context) *T
 		}
 		o.logger.Debug("Checking for orphaned temp directories older than %s", tempDirCleanupAge)
 
-		// CleanupOrphaned now returns the count of directories removed
-		count, err := registry.CleanupOrphaned(tempDirCleanupAge)
+		// CleanupOrphaned returns the count of directories removed; CountOrphaned
+		// returns the count it would remove, touching none of them (dry run).
+		sweep := registry.CleanupOrphaned
+		if o.dryRun {
+			sweep = registry.CountOrphaned
+		}
+		count, err := sweep(tempDirCleanupAge)
 		if err != nil {
 			o.logger.Debug("Temp dir cleanup skipped: %v", err)
 		} else {
@@ -1111,7 +1196,11 @@ func (o *Orchestrator) cleanupPreviousExecutionArtifacts(ctx context.Context) *T
 
 	// Final summary - only show if cleanup was actually performed
 	if cleanupStarted {
-		if removedFiles > 0 || removedDirs > 0 {
+		if o.dryRun {
+			if removedFiles > 0 || removedDirs > 0 {
+				o.logger.Info("[DRY RUN] Would remove %d item(s) from previous executions (%d file(s), %d dir(s))", removedFiles+removedDirs, removedFiles, removedDirs)
+			}
+		} else if removedFiles > 0 || removedDirs > 0 {
 			totalRemoved := removedFiles + removedDirs
 			if failedFiles > 0 {
 				o.logger.Info("Cleanup of previous execution files completed with errors (%d item(s) removed: %d file(s), %d dir(s); %d failed)", totalRemoved, removedFiles, removedDirs, failedFiles)
@@ -1255,7 +1344,14 @@ func applyCollectorOverrides(cc *backup.CollectorConfig, cfg *config.Config) {
 	cc.PBSPassword = cfg.PBSPassword
 	cc.PBSFingerprint = cfg.PBSFingerprint
 }
-func copyFile(fs FS, src, dest string) (err error) {
+func copyFile(fs FS, src, dest string) error {
+	return copyFileWithPerm(fs, src, dest, 0o640)
+}
+
+// copyFileWithPerm is copyFile with the mode a newly created dest gets (an existing
+// dest keeps its own). The backup run uses it for the files of a backup set, which
+// are created with backup.ArtifactFilePerm rather than copyFile's 0640.
+func copyFileWithPerm(fs FS, src, dest string, perm os.FileMode) (err error) {
 	if fs == nil {
 		fs = osFS{}
 	}
@@ -1265,7 +1361,7 @@ func copyFile(fs FS, src, dest string) (err error) {
 	}
 	defer closeIntoErr(&err, in, "close source file")
 
-	out, err := fs.OpenFile(dest, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0640)
+	out, err := fs.OpenFile(dest, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, perm)
 	if err != nil {
 		return err
 	}

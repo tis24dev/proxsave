@@ -102,6 +102,7 @@ func TestSecondaryRetentionAdoptsArchivesWrittenUnderALostFQDN(t *testing.T) {
 	type outcome struct {
 		deleted   int
 		survivors []string
+		summary   RetentionSummary
 	}
 
 	run := func(t *testing.T, manifestID string) outcome {
@@ -138,7 +139,7 @@ func TestSecondaryRetentionAdoptsArchivesWrittenUnderALostFQDN(t *testing.T) {
 				survivors = append(survivors, filepath.Base(path))
 			}
 		}
-		return outcome{deleted: deleted, survivors: survivors}
+		return outcome{deleted: deleted, survivors: survivors, summary: s.LastRetentionSummary()}
 	}
 
 	with := run(t, ourServerID)
@@ -156,5 +157,11 @@ func TestSecondaryRetentionAdoptsArchivesWrittenUnderALostFQDN(t *testing.T) {
 	without := run(t, "")
 	if without.deleted != 0 || len(without.survivors) != 4 {
 		t.Errorf("without an identity in the manifests, retention deleted %d and left %v, want 0 deleted and all four left. Every archive written before this change records no identity, and from a host that cannot resolve the name they carry they are indistinguishable from a second machine's work", without.deleted, without.survivors)
+	}
+	if without.summary.NotRotated != 3 || without.summary.NotRotatedNames != "pve.home.arpa" {
+		t.Errorf("secondary summary not rotated = %d %q, want 3 \"pve.home.arpa\": the outcome line reads them", without.summary.NotRotated, without.summary.NotRotatedNames)
+	}
+	if with.summary.NotRotated != 0 {
+		t.Errorf("secondary summary not rotated = %d with the identity, want 0: those archives rotate", with.summary.NotRotated)
 	}
 }

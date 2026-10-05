@@ -86,7 +86,7 @@ func (h *HealthchecksChannel) reportingOnly() {}
 // Errors are never returned as fatal: it always returns nil, and every failure degrades
 // to a quiet Info -- it must not break a successful backup over a cosmetic section.
 func (h *HealthchecksChannel) Notify(ctx context.Context, stats *BackupStats) error {
-	h.info("%s: starting", healthchecksSectionName)
+	h.info("%s: starting...", healthchecksSectionName)
 	if h.cfg == nil {
 		return nil
 	}
@@ -104,7 +104,7 @@ func (h *HealthchecksChannel) Notify(ctx context.Context, stats *BackupStats) er
 		secret, _ = h.loadSecret(h.cfg.BaseDir)
 	}
 	if secret == "" {
-		h.warn("⚠️ %s: not configured", healthchecksSectionName)
+		h.warn("⚠ %s: not configured", healthchecksSectionName)
 		setHealthcheckStatus(stats, "not-configured")
 		return nil
 	}
@@ -192,7 +192,7 @@ func (h *HealthchecksChannel) renderTransmissionStatus(ctx context.Context, stat
 			// unknown. The raw error (may carry the file path) stays debug-only.
 			h.debug("%s: status read failed (%v)", healthchecksSectionName, err)
 			if !presence.Probed {
-				h.warn("⚠️ %s: status file unreadable", healthchecksSectionName)
+				h.warn("⚠ %s: status file unreadable", healthchecksSectionName)
 				setHealthcheckStatus(stats, "status-unreadable")
 				return
 			}
@@ -223,28 +223,30 @@ func (h *HealthchecksChannel) renderTransmissionState(d health.Diagnosis, stats 
 	// instruction or a parenthetical explanation. d.Err is already Reporter-redacted.
 	switch d.State {
 	case health.TxNotInstalled:
-		h.warn("⚠️ %s: daemon not installed", healthchecksSectionName)
+		h.warn("⚠ %s: daemon not installed", healthchecksSectionName)
 		setHealthcheckStatus(stats, "not-installed")
 	case health.TxNotActive:
-		h.warn("⚠️ %s: daemon not running", healthchecksSectionName)
+		h.warn("⚠ %s: daemon not running", healthchecksSectionName)
 		setHealthcheckStatus(stats, "not-active")
 	case health.TxRunningNoReport:
-		h.warn("⚠️ %s: daemon running, not reporting", healthchecksSectionName)
+		h.warn("⚠ %s: daemon running, not reporting", healthchecksSectionName)
 		setHealthcheckStatus(stats, "running-not-reporting")
 	case health.TxNoHeartbeat:
-		h.warn("⚠️ %s: daemon not running", healthchecksSectionName)
+		h.warn("⚠ %s: daemon not running", healthchecksSectionName)
 		setHealthcheckStatus(stats, "daemon-down")
 	case health.TxStale:
-		h.warn("⚠️ %s: daemon stale (last beat %s)", healthchecksSectionName, health.HumanizeAge(d.HbAge))
+		h.warn("⚠ %s: daemon stale (last beat %s)", healthchecksSectionName, health.HumanizeAge(d.HbAge))
 		setHealthcheckStatus(stats, "stale")
 	case health.TxNotProvisioned:
-		h.warn("⚠️ %s: not provisioned (no ping URL)", healthchecksSectionName)
+		h.warn("⚠ %s: not provisioned (no ping URL)", healthchecksSectionName)
 		setHealthcheckStatus(stats, "not-provisioned")
 	case health.TxUnreachable:
-		h.warn("⚠️ %s: monitor unreachable: %s", healthchecksSectionName, orNA(d.Err))
+		h.info("  Monitor: %s", orNA(d.Err))
+		h.warn("⚠ %s: monitor unreachable", healthchecksSectionName)
 		setHealthcheckStatus(stats, "unreachable")
 	case health.TxTransmitFailed:
-		h.warn("⚠️ %s: last outcome not transmitted: %s", healthchecksSectionName, orNA(d.Err))
+		h.info("  Transmission: %s", orNA(d.Err))
+		h.warn("⚠ %s: last outcome not transmitted", healthchecksSectionName)
 		setHealthcheckStatus(stats, "transmit-failed")
 	default: // health.TxTransmitting - the ONLY success glyph
 		h.info("✓ %s: transmitting (last beat %s)", healthchecksSectionName, health.HumanizeAge(d.HbAge))

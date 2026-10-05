@@ -1,0 +1,77 @@
+{
+  "attachments": [
+    {
+      "content": {
+        "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
+        "body": [
+          {
+            "size": "large",
+            "text": "❌ PVE Backup Report",
+            "type": "TextBlock",
+            "weight": "bolder"
+          },
+          {
+            "style": "default",
+            "text": "Backup completed with status: **failure** on pve-golden",
+            "type": "TextBlock",
+            "wrap": true
+          },
+          {
+            "facts": [
+              {
+                "title": "Hostname",
+                "value": "pve-golden"
+              },
+              {
+                "title": "Status",
+                "value": "❌ failure"
+              },
+              {
+                "title": "Date",
+                "value": "2026-10-04 02:00:00"
+              },
+              {
+                "title": "Duration",
+                "value": "\u003c 1s"
+              },
+              {
+                "title": "Size",
+                "value": "0 B"
+              },
+              {
+                "title": "Compression",
+                "value": " (level 0, ratio 0.00%)"
+              },
+              {
+                "title": "Files Included",
+                "value": "0"
+              },
+              {
+                "title": "Local Storage",
+                "value": "❌ 0/?"
+              },
+              {
+                "title": "Errors",
+                "value": "1"
+              },
+              {
+                "title": "Warnings",
+                "value": "0"
+              },
+              {
+                "title": "Exit Code",
+                "value": "5"
+              }
+            ],
+            "type": "FactSet"
+          }
+        ],
+        "type": "AdaptiveCard",
+        "version": "1.5"
+      },
+      "contentType": "application/vnd.microsoft.card.adaptive"
+    }
+  ],
+  "themeColor": "FF0000",
+  "type": "message"
+}

@@ -295,15 +295,19 @@ a key added by a newer release appears with its default instead of staying absen
 | `CHECK_OPEN_PORTS` | `false` | run the suspicious-port check (needs `CHECK_NETWORK_SECURITY` too) |
 | `SUSPICIOUS_PORTS` | built-in list | ports the suspicious-port check flags; read by that check only |
 | `PORT_WHITELIST` | _(empty)_ | `program:port` pairs exempted from the suspicious-port warning |
-| `SET_BACKUP_PERMISSIONS` | `false` | when true, the run chowns the backup/log dirs to `BACKUP_USER:BACKUP_GROUP`, and the preflight then skips their owner **and mode** checks |
+| `SET_BACKUP_PERMISSIONS` | `false` | when true, the run chowns the backup/log dirs to `BACKUP_USER:BACKUP_GROUP`, opens the backup files to that group (`0640`), and the preflight then skips the dirs' owner **and mode** checks |
 
 `SET_BACKUP_PERMISSIONS` is not a passive opt-out. When it is true, every run walks
 `BACKUP_PATH`, `LOG_PATH`, `SECONDARY_PATH` and `SECONDARY_LOG_PATH` **recursively, before
-the preflight**, sets every entry to `BACKUP_USER:BACKUP_GROUP`, and sets directories to
-`0750`; files keep their mode. `--install` and `--upgrade` never reach that pre-preflight
-pass, because they are dispatched before the runtime is built; the finalization pass at the
-end of each is the only one they run, and it forces the mutation: it hardcodes
-`dryRun=false`, so `DRY_RUN=true` does not hold the recursive chown back there.
+the preflight**, sets every entry to `BACKUP_USER:BACKUP_GROUP`, sets directories to
+`0750` and the files of a backup set (the archive or bundle and its `.sha256`, `.metadata`
+and `.manifest.json`) to `0640`; every other file, logs included, keeps its mode. The
+storage step of the same run then gives the backup it has just written on `BACKUP_PATH`
+and `SECONDARY_PATH` the same owner and `0640`, so the group can read the current run's
+backup, not only the ones earlier runs left. `--install` and `--upgrade` never reach that
+pre-preflight pass, because they are dispatched before the runtime is built; the
+finalization pass at the end of each is the only one they run, and it forces the mutation:
+it hardcodes `dryRun=false`, so `DRY_RUN=true` does not hold the recursive chown back there.
 
 The preflight skip is keyed on the **flag alone**, not on the chown having succeeded:
 whenever `SET_BACKUP_PERMISSIONS=true`, those four paths are skipped entirely, the mode
@@ -316,6 +320,19 @@ That last case is the common one on a `SECONDARY_PATH` whose mount is not up yet
 preflight then creates the directory itself at `0755` `root:root` and skips it, so the run
 ends with a root-owned directory and no warning. In each of these cases the ownership stays
 as it was **and** the check that would have flagged it is off.
+
+**Backup file modes.** Every file of a backup set on `BACKUP_PATH` and `SECONDARY_PATH`
+(the archive or bundle, `.sha256`, `.metadata`, `.manifest.json`) is created `0600` and
+stored `root:root` `0600`: only root can read a backup. Group read is opt-in: it takes
+`SET_BACKUP_PERMISSIONS=true` with both `BACKUP_USER` and `BACKUP_GROUP` set and resolvable,
+and then those files are `0640` owned by `BACKUP_USER:BACKUP_GROUP`. Turning
+`SET_BACKUP_PERMISSIONS` off later does not narrow the files already at `0640`: they stay
+as they are until retention removes them, while new backups are `0600` `root:root` again.
+On a filesystem without Unix ownership (CIFS/SMB, NTFS, FAT, FUSE) no owner or mode is
+applied after creation, so the mount options decide. The preflight never checks the files
+inside these directories, so neither mode raises a warning or an `AUTO_FIX_PERMISSIONS`
+change. Cloud copies are outside all of this: their mode is whatever the rclone backend
+gives them.
 
 Ownership is applied with `lchown`, so a symlink is never followed out of the backup tree,
 and no failure aborts the run. Only the per-path failures warn (an empty or unresolvable

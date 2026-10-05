@@ -1,0 +1,463 @@
+
+===== result =====
+error: <nil>
+exit code (as cmd/proxsave computes it): 1
+
+===== calls to the fakes, in order =====
+
+===== files per location after the run =====
+[backup path (local)]
+  (empty)
+[secondary path]
+  (empty)
+[cloud path]
+  (empty)
+[log path]
+  backup-charhost-20260102-030405.log mode=0600 size=<SIZE>
+[secondary log path]
+  (does not exist)
+[cloud log path]
+  (empty)
+[workspace root]
+  (empty)
+
+===== bundle members =====
+(no bundle)
+
+===== stdout (console) =====
+[<TIME>] DEBUG    Start backup run: type=unknown hostname=charhost
+[<TIME>] INFO     Starting backup orchestration for unknown
+[<TIME>] DEBUG    Starting cleanup of previous execution files...
+[<TIME>] DEBUG    Checking for orphaned temp directories older than 24h0m0s
+
+[<TIME>] STEP     [1] Initializing backup statistics and temporary workspace
+[<TIME>] DEBUG    Creating temporary directory for collection output
+[<TIME>] DEBUG    Using temporary directory: <ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM>
+
+[<TIME>] STEP     [2] Collection of configuration files and optimizations
+[<TIME>] INFO     Collecting configuration files...
+[<TIME>] DEBUG    Collector dry-run=true excludePatterns=0
+[<TIME>] DEBUG    Starting collector run (type=unknown)
+[<TIME>] INFO     Starting backup collection for unknown
+[<TIME>] DEBUG    Collector dry-run=true tempDir=<ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM>
+[<TIME>] WARNING  Unknown Proxmox type, collecting generic system info only
+[<TIME>] DEBUG    Skipping hypervisor-specific collection because type is unknown
+[<TIME>] DEBUG    Collecting baseline system information (network/system files, commands, hardware data)
+[<TIME>] INFO     Collecting system information
+[<TIME>] DEBUG    Preparing filesystem context for system collection (tempDir=<ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM>)
+[<TIME>] DEBUG    System PATH verified for command execution
+[<TIME>] DEBUG    Collecting hostname/hosts information
+[<TIME>] DEBUG    Collecting Hostname: <ROOT>/sysroot/etc/hostname -> <ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM>/etc/hostname
+[<TIME>] DEBUG    Hostname not found: <ROOT>/sysroot/etc/hostname (skipping)
+[<TIME>] DEBUG    Collecting Hosts file: <ROOT>/sysroot/etc/hosts -> <ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM>/etc/hosts
+[<TIME>] DEBUG    Hosts file not found: <ROOT>/sysroot/etc/hosts (skipping)
+[<TIME>] DEBUG    Collecting DNS resolver configuration
+[<TIME>] DEBUG    Collecting DNS resolver: <ROOT>/sysroot/etc/resolv.conf -> <ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM>/etc/resolv.conf
+[<TIME>] DEBUG    DNS resolver not found: <ROOT>/sysroot/etc/resolv.conf (skipping)
+[<TIME>] DEBUG    Collecting timezone configuration
+[<TIME>] DEBUG    Collecting Timezone configuration: <ROOT>/sysroot/etc/timezone -> <ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM>/etc/timezone
+[<TIME>] DEBUG    Timezone configuration not found: <ROOT>/sysroot/etc/timezone (skipping)
+[<TIME>] DEBUG    Collecting directory logrotate configuration: <ROOT>/sysroot/etc/logrotate.d -> <ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM>/etc/logrotate.d
+[<TIME>] DEBUG    logrotate configuration not found: <ROOT>/sysroot/etc/logrotate.d (skipping)
+[<TIME>] DEBUG    Collecting filesystem table: <ROOT>/sysroot/etc/fstab -> <ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM>/etc/fstab
+[<TIME>] DEBUG    filesystem table not found: <ROOT>/sysroot/etc/fstab (skipping)
+[<TIME>] DEBUG    Collecting crypttab: <ROOT>/sysroot/etc/crypttab -> <ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM>/etc/crypttab
+[<TIME>] DEBUG    crypttab not found: <ROOT>/sysroot/etc/crypttab (skipping)
+[<TIME>] DEBUG    Collecting directory iSCSI configuration: <ROOT>/sysroot/etc/iscsi -> <ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM>/etc/iscsi
+[<TIME>] DEBUG    iSCSI configuration not found: <ROOT>/sysroot/etc/iscsi (skipping)
+[<TIME>] DEBUG    Collecting directory iSCSI runtime state: <ROOT>/sysroot/var/lib/iscsi -> <ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM>/var/lib/iscsi
+[<TIME>] DEBUG    iSCSI runtime state not found: <ROOT>/sysroot/var/lib/iscsi (skipping)
+[<TIME>] DEBUG    Collecting directory multipath configuration: <ROOT>/sysroot/etc/multipath -> <ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM>/etc/multipath
+[<TIME>] DEBUG    multipath configuration not found: <ROOT>/sysroot/etc/multipath (skipping)
+[<TIME>] DEBUG    Collecting multipath.conf: <ROOT>/sysroot/etc/multipath.conf -> <ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM>/etc/multipath.conf
+[<TIME>] DEBUG    multipath.conf not found: <ROOT>/sysroot/etc/multipath.conf (skipping)
+[<TIME>] DEBUG    Collecting directory mdadm configuration: <ROOT>/sysroot/etc/mdadm -> <ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM>/etc/mdadm
+[<TIME>] DEBUG    mdadm configuration not found: <ROOT>/sysroot/etc/mdadm (skipping)
+[<TIME>] DEBUG    Collecting directory LVM metadata backups: <ROOT>/sysroot/etc/lvm/backup -> <ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM>/etc/lvm/backup
+[<TIME>] DEBUG    LVM metadata backups not found: <ROOT>/sysroot/etc/lvm/backup (skipping)
+[<TIME>] DEBUG    Collecting directory LVM metadata archives: <ROOT>/sysroot/etc/lvm/archive -> <ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM>/etc/lvm/archive
+[<TIME>] DEBUG    LVM metadata archives not found: <ROOT>/sysroot/etc/lvm/archive (skipping)
+[<TIME>] DEBUG    Collecting autofs config: <ROOT>/sysroot/etc/auto.master -> <ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM>/etc/auto.master
+[<TIME>] DEBUG    autofs config not found: <ROOT>/sysroot/etc/auto.master (skipping)
+[<TIME>] DEBUG    Collecting autofs config: <ROOT>/sysroot/etc/autofs.conf -> <ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM>/etc/autofs.conf
+[<TIME>] DEBUG    autofs config not found: <ROOT>/sysroot/etc/autofs.conf (skipping)
+[<TIME>] DEBUG    Collecting directory autofs drop-in configs: <ROOT>/sysroot/etc/auto.master.d -> <ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM>/etc/auto.master.d
+[<TIME>] DEBUG    autofs drop-in configs not found: <ROOT>/sysroot/etc/auto.master.d (skipping)
+[<TIME>] DEBUG    Collecting directory DHCP leases (runtime snapshot): <ROOT>/sysroot/var/lib/dhcp -> <ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM>/var/lib/proxsave-info/runtime/var/lib/dhcp
+[<TIME>] DEBUG    DHCP leases (runtime snapshot) not found: <ROOT>/sysroot/var/lib/dhcp (skipping)
+[<TIME>] DEBUG    Collecting directory NetworkManager leases (runtime snapshot): <ROOT>/sysroot/var/lib/NetworkManager -> <ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM>/var/lib/proxsave-info/runtime/var/lib/NetworkManager
+[<TIME>] DEBUG    NetworkManager leases (runtime snapshot) not found: <ROOT>/sysroot/var/lib/NetworkManager (skipping)
+[<TIME>] DEBUG    Collecting directory systemd-networkd leases (runtime snapshot): <ROOT>/sysroot/run/systemd/netif/leases -> <ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM>/var/lib/proxsave-info/runtime/run/systemd/netif/leases
+[<TIME>] DEBUG    systemd-networkd leases (runtime snapshot) not found: <ROOT>/sysroot/run/systemd/netif/leases (skipping)
+[<TIME>] DEBUG    [DRY RUN] Would create directory: <ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM>/var/lib/proxsave-info/commands/system
+[<TIME>] DEBUG    [DRY RUN] Would execute command: cat <ROOT>/sysroot/etc/os-release > <ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM>/var/lib/proxsave-info/commands/system/os_release.txt
+[<TIME>] DEBUG    [DRY RUN] Would execute command: uname -a > <ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM>/var/lib/proxsave-info/commands/system/uname.txt
+[<TIME>] DEBUG    Collecting Hostname via command: hostname -f > <ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM>/var/lib/proxsave-info/commands/system/hostname.txt
+[<TIME>] DEBUG    [DRY RUN] Would execute command: hostname -f > <ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM>/var/lib/proxsave-info/commands/system/hostname.txt
+[<TIME>] DEBUG    [DRY RUN] Would execute command: ip addr show > <ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM>/var/lib/proxsave-info/commands/system/ip_addr.txt
+[<TIME>] DEBUG    [DRY RUN] Would execute command: ip -j addr show > <ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM>/var/lib/proxsave-info/commands/system/ip_addr.json
+[<TIME>] DEBUG    [DRY RUN] Would execute command: ip rule show > <ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM>/var/lib/proxsave-info/commands/system/ip_rule.txt
+[<TIME>] DEBUG    [DRY RUN] Would execute command: ip -j rule show > <ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM>/var/lib/proxsave-info/commands/system/ip_rule.json
+[<TIME>] DEBUG    [DRY RUN] Would execute command: ip route show > <ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM>/var/lib/proxsave-info/commands/system/ip_route.txt
+[<TIME>] DEBUG    [DRY RUN] Would execute command: ip -j route show > <ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM>/var/lib/proxsave-info/commands/system/ip_route.json
+[<TIME>] DEBUG    [DRY RUN] Would execute command: ip -4 route show table all > <ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM>/var/lib/proxsave-info/commands/system/ip_route_all_v4.txt
+[<TIME>] DEBUG    [DRY RUN] Would execute command: ip -6 route show table all > <ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM>/var/lib/proxsave-info/commands/system/ip_route_all_v6.txt
+[<TIME>] DEBUG    [DRY RUN] Would execute command: ip -s link > <ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM>/var/lib/proxsave-info/commands/system/ip_link.txt
+[<TIME>] DEBUG    [DRY RUN] Would execute command: ip -j link > <ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM>/var/lib/proxsave-info/commands/system/ip_link.json
+[<TIME>] DEBUG    Collecting Neighbor table via command: ip neigh show > <ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM>/var/lib/proxsave-info/commands/system/ip_neigh.txt
+[<TIME>] DEBUG    [DRY RUN] Would execute command: ip neigh show > <ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM>/var/lib/proxsave-info/commands/system/ip_neigh.txt
+[<TIME>] DEBUG    Collecting Neighbor table (IPv6) via command: ip -6 neigh show > <ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM>/var/lib/proxsave-info/commands/system/ip6_neigh.txt
+[<TIME>] DEBUG    [DRY RUN] Would execute command: ip -6 neigh show > <ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM>/var/lib/proxsave-info/commands/system/ip6_neigh.txt
+[<TIME>] DEBUG    [DRY RUN] Would execute command: bridge -d link show > <ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM>/var/lib/proxsave-info/commands/system/bridge_link.txt
+[<TIME>] DEBUG    [DRY RUN] Would execute command: bridge vlan show > <ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM>/var/lib/proxsave-info/commands/system/bridge_vlan.txt
+[<TIME>] DEBUG    [DRY RUN] Would execute command: bridge fdb show > <ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM>/var/lib/proxsave-info/commands/system/bridge_fdb.txt
+[<TIME>] DEBUG    [DRY RUN] Would execute command: bridge mdb show > <ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM>/var/lib/proxsave-info/commands/system/bridge_mdb.txt
+[<TIME>] DEBUG    Network inventory skipped: unable to read <ROOT>/sysroot/sys/class/net: open <ROOT>/sysroot/sys/class/net: no such file or directory
+[<TIME>] DEBUG    No bonding interfaces found
+[<TIME>] DEBUG    Collecting DNS configuration via command: cat <ROOT>/sysroot/etc/resolv.conf > <ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM>/var/lib/proxsave-info/commands/system/resolv_conf.txt
+[<TIME>] DEBUG    [DRY RUN] Would execute command: cat <ROOT>/sysroot/etc/resolv.conf > <ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM>/var/lib/proxsave-info/commands/system/resolv_conf.txt
+[<TIME>] DEBUG    [DRY RUN] Would execute command: df -h > <ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM>/var/lib/proxsave-info/commands/system/df.txt
+[<TIME>] DEBUG    Collecting Mounted filesystems via command: mount > <ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM>/var/lib/proxsave-info/commands/system/mount.txt
+[<TIME>] DEBUG    [DRY RUN] Would execute command: mount > <ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM>/var/lib/proxsave-info/commands/system/mount.txt
+[<TIME>] DEBUG    [DRY RUN] Would execute command: lsblk -f > <ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM>/var/lib/proxsave-info/commands/system/lsblk.txt
+[<TIME>] DEBUG    [DRY RUN] Would execute command: lsblk -J -O > <ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM>/var/lib/proxsave-info/commands/system/lsblk_json.json
+[<TIME>] DEBUG    [DRY RUN] Would execute command: blkid > <ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM>/var/lib/proxsave-info/commands/system/blkid.txt
+[<TIME>] DEBUG    [DRY RUN] Would execute command: free -h > <ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM>/var/lib/proxsave-info/commands/system/free.txt
+[<TIME>] DEBUG    [DRY RUN] Would execute command: lscpu > <ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM>/var/lib/proxsave-info/commands/system/lscpu.txt
+[<TIME>] DEBUG    [DRY RUN] Would execute command: lspci -v > <ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM>/var/lib/proxsave-info/commands/system/lspci.txt
+[<TIME>] DEBUG    Collecting USB devices via command: lsusb > <ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM>/var/lib/proxsave-info/commands/system/lsusb.txt
+[<TIME>] DEBUG    [DRY RUN] Would execute command: lsusb > <ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM>/var/lib/proxsave-info/commands/system/lsusb.txt
+[<TIME>] DEBUG    Collecting LVM physical volumes via command: pvs > <ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM>/var/lib/proxsave-info/commands/system/lvm_pvs.txt
+[<TIME>] DEBUG    [DRY RUN] Would execute command: pvs > <ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM>/var/lib/proxsave-info/commands/system/lvm_pvs.txt
+[<TIME>] DEBUG    Collecting LVM volume groups via command: vgs > <ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM>/var/lib/proxsave-info/commands/system/lvm_vgs.txt
+[<TIME>] DEBUG    [DRY RUN] Would execute command: vgs > <ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM>/var/lib/proxsave-info/commands/system/lvm_vgs.txt
+[<TIME>] DEBUG    Collecting LVM logical volumes via command: lvs > <ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM>/var/lib/proxsave-info/commands/system/lvm_lvs.txt
+[<TIME>] DEBUG    [DRY RUN] Would execute command: lvs > <ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM>/var/lib/proxsave-info/commands/system/lvm_lvs.txt
+[<TIME>] DEBUG    [DRY RUN] Would write report file: <ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM>/var/lib/proxsave-info/commands/system/network_report.txt (<SIZE> bytes)
+[<TIME>] DEBUG    Collecting kernel information (uname/modules)
+[<TIME>] DEBUG    Collecting kernel information into <ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM>/var/lib/proxsave-info/commands/system
+[<TIME>] DEBUG    Collecting Kernel command line via command: cat <ROOT>/sysroot/proc/cmdline > <ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM>/var/lib/proxsave-info/commands/system/kernel_cmdline.txt
+[<TIME>] DEBUG    [DRY RUN] Would execute command: cat <ROOT>/sysroot/proc/cmdline > <ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM>/var/lib/proxsave-info/commands/system/kernel_cmdline.txt
+[<TIME>] DEBUG    Collecting Kernel version details via command: cat <ROOT>/sysroot/proc/version > <ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM>/var/lib/proxsave-info/commands/system/kernel_version.txt
+[<TIME>] DEBUG    [DRY RUN] Would execute command: cat <ROOT>/sysroot/proc/version > <ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM>/var/lib/proxsave-info/commands/system/kernel_version.txt
+[<TIME>] DEBUG    Kernel information snapshot completed
+[<TIME>] DEBUG    Kernel information collected successfully
+[<TIME>] DEBUG    Collecting hardware inventory (CPU/memory/devices)
+[<TIME>] DEBUG    Collecting hardware inventory into <ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM>/var/lib/proxsave-info/commands/system
+[<TIME>] DEBUG    Skipping Hardware DMI information: dmidecode requires root privileges (euid=<EUID>)
+[<TIME>] DEBUG    Skipping Hardware sensors: hardware sensor sysfs not detected
+[<TIME>] DEBUG    Hardware information snapshot completed
+[<TIME>] DEBUG    Hardware inventory collected successfully
+[<TIME>] DEBUG    Collecting user home directories under /home
+[<TIME>] DEBUG    Collecting home directories under /home
+[<TIME>] DEBUG    User home directories collected successfully
+[<TIME>] INFO     System information collection completed
+[<TIME>] DEBUG    Baseline system information collected successfully
+[<TIME>] DEBUG    Collection completed: 0 files, 0 failed, 0 dirs created
+[<TIME>] DEBUG    [DRY RUN] Would write report file: <ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM>/manifest.json (<SIZE> bytes)
+[<TIME>] INFO     Collection completed: 0 files (0 B), 0 failed, 0 dirs created
+[<TIME>] DEBUG    Skipping optimization step (all features disabled)
+
+[<TIME>] STEP     [3] Creation of compressed archive
+[<TIME>] INFO     Creating compressed archive...
+[<TIME>] DEBUG    Archiver configuration: type=none level=0 mode=standard threads=0
+[<TIME>] DEBUG    Resolving compression (requested=none level=0 mode=standard)
+[<TIME>] DEBUG    Compression resolved to none (level 0, threads 0)
+[<TIME>] DEBUG    Resolving compression (requested=none level=0 mode=standard)
+[<TIME>] DEBUG    Compression resolved to none (level 0, threads 0)
+[<TIME>] INFO     Creating compressed archive with none (level 0, mode standard, threads auto)
+[<TIME>] DEBUG    Creating archive: <ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM> -> <ROOT>/backup/charhost-backup-20260102-030405.tar (compression: none)
+[<TIME>] INFO     [DRY RUN] Would create archive: <ROOT>/backup/charhost-backup-20260102-030405.tar
+
+[<TIME>] STEP     [4] Verification skipped (dry run mode)
+
+[<TIME>] STEP     [5] Bundling skipped (dry run mode)
+[<TIME>] DEBUG    Parsing log file for error/warning counts: <ROOT>/log/backup-charhost-20260102-030405.log
+[<TIME>] DEBUG    Found 0 errors and 1 warnings in log file
+[<TIME>] DEBUG    Aggregated exit code based on log analysis: 1
+
+[<TIME>] STEP     [6] Storage dispatch skipped (dry run mode)
+[<TIME>] DEBUG    Disabled storage targets: secondary=false cloud=false
+
+[<TIME>] STEP     [7] PBS Storage dispatch skipped (dry run mode)
+[<TIME>] DEBUG    PBS Storage: status=skipped snapshot="" backups=-1 deleted=0
+
+[<TIME>] DEBUG    Go backup completed in 0.0s
+[<TIME>] DEBUG    Removed temporary workspace <ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM>
+[<TIME>] DEBUG    End backup run (ok, duration=<DURATION>)
+
+===== stderr =====
+
+===== run log file =====
+[<TIME>] DEBUG    Start backup run: type=unknown hostname=charhost
+[<TIME>] INFO     Starting backup orchestration for unknown
+[<TIME>] DEBUG    Starting cleanup of previous execution files...
+[<TIME>] DEBUG    Checking for orphaned temp directories older than 24h0m0s
+[<TIME>] STEP     [1] Initializing backup statistics and temporary workspace
+[<TIME>] DEBUG    Creating temporary directory for collection output
+[<TIME>] DEBUG    Using temporary directory: <ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM>
+[<TIME>] STEP     [2] Collection of configuration files and optimizations
+[<TIME>] INFO     Collecting configuration files...
+[<TIME>] DEBUG    Collector dry-run=true excludePatterns=0
+[<TIME>] DEBUG    Starting collector run (type=unknown)
+[<TIME>] INFO     Starting backup collection for unknown
+[<TIME>] DEBUG    Collector dry-run=true tempDir=<ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM>
+[<TIME>] WARNING  Unknown Proxmox type, collecting generic system info only
+[<TIME>] DEBUG    Skipping hypervisor-specific collection because type is unknown
+[<TIME>] DEBUG    Collecting baseline system information (network/system files, commands, hardware data)
+[<TIME>] INFO     Collecting system information
+[<TIME>] DEBUG    Preparing filesystem context for system collection (tempDir=<ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM>)
+[<TIME>] DEBUG    System PATH verified for command execution
+[<TIME>] DEBUG    Collecting hostname/hosts information
+[<TIME>] DEBUG    Collecting Hostname: <ROOT>/sysroot/etc/hostname -> <ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM>/etc/hostname
+[<TIME>] DEBUG    Hostname not found: <ROOT>/sysroot/etc/hostname (skipping)
+[<TIME>] DEBUG    Collecting Hosts file: <ROOT>/sysroot/etc/hosts -> <ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM>/etc/hosts
+[<TIME>] DEBUG    Hosts file not found: <ROOT>/sysroot/etc/hosts (skipping)
+[<TIME>] DEBUG    Collecting DNS resolver configuration
+[<TIME>] DEBUG    Collecting DNS resolver: <ROOT>/sysroot/etc/resolv.conf -> <ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM>/etc/resolv.conf
+[<TIME>] DEBUG    DNS resolver not found: <ROOT>/sysroot/etc/resolv.conf (skipping)
+[<TIME>] DEBUG    Collecting timezone configuration
+[<TIME>] DEBUG    Collecting Timezone configuration: <ROOT>/sysroot/etc/timezone -> <ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM>/etc/timezone
+[<TIME>] DEBUG    Timezone configuration not found: <ROOT>/sysroot/etc/timezone (skipping)
+[<TIME>] DEBUG    Collecting directory logrotate configuration: <ROOT>/sysroot/etc/logrotate.d -> <ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM>/etc/logrotate.d
+[<TIME>] DEBUG    logrotate configuration not found: <ROOT>/sysroot/etc/logrotate.d (skipping)
+[<TIME>] DEBUG    Collecting filesystem table: <ROOT>/sysroot/etc/fstab -> <ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM>/etc/fstab
+[<TIME>] DEBUG    filesystem table not found: <ROOT>/sysroot/etc/fstab (skipping)
+[<TIME>] DEBUG    Collecting crypttab: <ROOT>/sysroot/etc/crypttab -> <ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM>/etc/crypttab
+[<TIME>] DEBUG    crypttab not found: <ROOT>/sysroot/etc/crypttab (skipping)
+[<TIME>] DEBUG    Collecting directory iSCSI configuration: <ROOT>/sysroot/etc/iscsi -> <ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM>/etc/iscsi
+[<TIME>] DEBUG    iSCSI configuration not found: <ROOT>/sysroot/etc/iscsi (skipping)
+[<TIME>] DEBUG    Collecting directory iSCSI runtime state: <ROOT>/sysroot/var/lib/iscsi -> <ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM>/var/lib/iscsi
+[<TIME>] DEBUG    iSCSI runtime state not found: <ROOT>/sysroot/var/lib/iscsi (skipping)
+[<TIME>] DEBUG    Collecting directory multipath configuration: <ROOT>/sysroot/etc/multipath -> <ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM>/etc/multipath
+[<TIME>] DEBUG    multipath configuration not found: <ROOT>/sysroot/etc/multipath (skipping)
+[<TIME>] DEBUG    Collecting multipath.conf: <ROOT>/sysroot/etc/multipath.conf -> <ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM>/etc/multipath.conf
+[<TIME>] DEBUG    multipath.conf not found: <ROOT>/sysroot/etc/multipath.conf (skipping)
+[<TIME>] DEBUG    Collecting directory mdadm configuration: <ROOT>/sysroot/etc/mdadm -> <ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM>/etc/mdadm
+[<TIME>] DEBUG    mdadm configuration not found: <ROOT>/sysroot/etc/mdadm (skipping)
+[<TIME>] DEBUG    Collecting directory LVM metadata backups: <ROOT>/sysroot/etc/lvm/backup -> <ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM>/etc/lvm/backup
+[<TIME>] DEBUG    LVM metadata backups not found: <ROOT>/sysroot/etc/lvm/backup (skipping)
+[<TIME>] DEBUG    Collecting directory LVM metadata archives: <ROOT>/sysroot/etc/lvm/archive -> <ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM>/etc/lvm/archive
+[<TIME>] DEBUG    LVM metadata archives not found: <ROOT>/sysroot/etc/lvm/archive (skipping)
+[<TIME>] DEBUG    Collecting autofs config: <ROOT>/sysroot/etc/auto.master -> <ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM>/etc/auto.master
+[<TIME>] DEBUG    autofs config not found: <ROOT>/sysroot/etc/auto.master (skipping)
+[<TIME>] DEBUG    Collecting autofs config: <ROOT>/sysroot/etc/autofs.conf -> <ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM>/etc/autofs.conf
+[<TIME>] DEBUG    autofs config not found: <ROOT>/sysroot/etc/autofs.conf (skipping)
+[<TIME>] DEBUG    Collecting directory autofs drop-in configs: <ROOT>/sysroot/etc/auto.master.d -> <ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM>/etc/auto.master.d
+[<TIME>] DEBUG    autofs drop-in configs not found: <ROOT>/sysroot/etc/auto.master.d (skipping)
+[<TIME>] DEBUG    Collecting directory DHCP leases (runtime snapshot): <ROOT>/sysroot/var/lib/dhcp -> <ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM>/var/lib/proxsave-info/runtime/var/lib/dhcp
+[<TIME>] DEBUG    DHCP leases (runtime snapshot) not found: <ROOT>/sysroot/var/lib/dhcp (skipping)
+[<TIME>] DEBUG    Collecting directory NetworkManager leases (runtime snapshot): <ROOT>/sysroot/var/lib/NetworkManager -> <ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM>/var/lib/proxsave-info/runtime/var/lib/NetworkManager
+[<TIME>] DEBUG    NetworkManager leases (runtime snapshot) not found: <ROOT>/sysroot/var/lib/NetworkManager (skipping)
+[<TIME>] DEBUG    Collecting directory systemd-networkd leases (runtime snapshot): <ROOT>/sysroot/run/systemd/netif/leases -> <ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM>/var/lib/proxsave-info/runtime/run/systemd/netif/leases
+[<TIME>] DEBUG    systemd-networkd leases (runtime snapshot) not found: <ROOT>/sysroot/run/systemd/netif/leases (skipping)
+[<TIME>] DEBUG    [DRY RUN] Would create directory: <ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM>/var/lib/proxsave-info/commands/system
+[<TIME>] DEBUG    [DRY RUN] Would execute command: cat <ROOT>/sysroot/etc/os-release > <ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM>/var/lib/proxsave-info/commands/system/os_release.txt
+[<TIME>] DEBUG    [DRY RUN] Would execute command: uname -a > <ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM>/var/lib/proxsave-info/commands/system/uname.txt
+[<TIME>] DEBUG    Collecting Hostname via command: hostname -f > <ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM>/var/lib/proxsave-info/commands/system/hostname.txt
+[<TIME>] DEBUG    [DRY RUN] Would execute command: hostname -f > <ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM>/var/lib/proxsave-info/commands/system/hostname.txt
+[<TIME>] DEBUG    [DRY RUN] Would execute command: ip addr show > <ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM>/var/lib/proxsave-info/commands/system/ip_addr.txt
+[<TIME>] DEBUG    [DRY RUN] Would execute command: ip -j addr show > <ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM>/var/lib/proxsave-info/commands/system/ip_addr.json
+[<TIME>] DEBUG    [DRY RUN] Would execute command: ip rule show > <ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM>/var/lib/proxsave-info/commands/system/ip_rule.txt
+[<TIME>] DEBUG    [DRY RUN] Would execute command: ip -j rule show > <ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM>/var/lib/proxsave-info/commands/system/ip_rule.json
+[<TIME>] DEBUG    [DRY RUN] Would execute command: ip route show > <ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM>/var/lib/proxsave-info/commands/system/ip_route.txt
+[<TIME>] DEBUG    [DRY RUN] Would execute command: ip -j route show > <ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM>/var/lib/proxsave-info/commands/system/ip_route.json
+[<TIME>] DEBUG    [DRY RUN] Would execute command: ip -4 route show table all > <ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM>/var/lib/proxsave-info/commands/system/ip_route_all_v4.txt
+[<TIME>] DEBUG    [DRY RUN] Would execute command: ip -6 route show table all > <ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM>/var/lib/proxsave-info/commands/system/ip_route_all_v6.txt
+[<TIME>] DEBUG    [DRY RUN] Would execute command: ip -s link > <ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM>/var/lib/proxsave-info/commands/system/ip_link.txt
+[<TIME>] DEBUG    [DRY RUN] Would execute command: ip -j link > <ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM>/var/lib/proxsave-info/commands/system/ip_link.json
+[<TIME>] DEBUG    Collecting Neighbor table via command: ip neigh show > <ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM>/var/lib/proxsave-info/commands/system/ip_neigh.txt
+[<TIME>] DEBUG    [DRY RUN] Would execute command: ip neigh show > <ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM>/var/lib/proxsave-info/commands/system/ip_neigh.txt
+[<TIME>] DEBUG    Collecting Neighbor table (IPv6) via command: ip -6 neigh show > <ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM>/var/lib/proxsave-info/commands/system/ip6_neigh.txt
+[<TIME>] DEBUG    [DRY RUN] Would execute command: ip -6 neigh show > <ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM>/var/lib/proxsave-info/commands/system/ip6_neigh.txt
+[<TIME>] DEBUG    [DRY RUN] Would execute command: bridge -d link show > <ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM>/var/lib/proxsave-info/commands/system/bridge_link.txt
+[<TIME>] DEBUG    [DRY RUN] Would execute command: bridge vlan show > <ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM>/var/lib/proxsave-info/commands/system/bridge_vlan.txt
+[<TIME>] DEBUG    [DRY RUN] Would execute command: bridge fdb show > <ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM>/var/lib/proxsave-info/commands/system/bridge_fdb.txt
+[<TIME>] DEBUG    [DRY RUN] Would execute command: bridge mdb show > <ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM>/var/lib/proxsave-info/commands/system/bridge_mdb.txt
+[<TIME>] DEBUG    Network inventory skipped: unable to read <ROOT>/sysroot/sys/class/net: open <ROOT>/sysroot/sys/class/net: no such file or directory
+[<TIME>] DEBUG    No bonding interfaces found
+[<TIME>] DEBUG    Collecting DNS configuration via command: cat <ROOT>/sysroot/etc/resolv.conf > <ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM>/var/lib/proxsave-info/commands/system/resolv_conf.txt
+[<TIME>] DEBUG    [DRY RUN] Would execute command: cat <ROOT>/sysroot/etc/resolv.conf > <ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM>/var/lib/proxsave-info/commands/system/resolv_conf.txt
+[<TIME>] DEBUG    [DRY RUN] Would execute command: df -h > <ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM>/var/lib/proxsave-info/commands/system/df.txt
+[<TIME>] DEBUG    Collecting Mounted filesystems via command: mount > <ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM>/var/lib/proxsave-info/commands/system/mount.txt
+[<TIME>] DEBUG    [DRY RUN] Would execute command: mount > <ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM>/var/lib/proxsave-info/commands/system/mount.txt
+[<TIME>] DEBUG    [DRY RUN] Would execute command: lsblk -f > <ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM>/var/lib/proxsave-info/commands/system/lsblk.txt
+[<TIME>] DEBUG    [DRY RUN] Would execute command: lsblk -J -O > <ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM>/var/lib/proxsave-info/commands/system/lsblk_json.json
+[<TIME>] DEBUG    [DRY RUN] Would execute command: blkid > <ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM>/var/lib/proxsave-info/commands/system/blkid.txt
+[<TIME>] DEBUG    [DRY RUN] Would execute command: free -h > <ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM>/var/lib/proxsave-info/commands/system/free.txt
+[<TIME>] DEBUG    [DRY RUN] Would execute command: lscpu > <ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM>/var/lib/proxsave-info/commands/system/lscpu.txt
+[<TIME>] DEBUG    [DRY RUN] Would execute command: lspci -v > <ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM>/var/lib/proxsave-info/commands/system/lspci.txt
+[<TIME>] DEBUG    Collecting USB devices via command: lsusb > <ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM>/var/lib/proxsave-info/commands/system/lsusb.txt
+[<TIME>] DEBUG    [DRY RUN] Would execute command: lsusb > <ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM>/var/lib/proxsave-info/commands/system/lsusb.txt
+[<TIME>] DEBUG    Collecting LVM physical volumes via command: pvs > <ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM>/var/lib/proxsave-info/commands/system/lvm_pvs.txt
+[<TIME>] DEBUG    [DRY RUN] Would execute command: pvs > <ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM>/var/lib/proxsave-info/commands/system/lvm_pvs.txt
+[<TIME>] DEBUG    Collecting LVM volume groups via command: vgs > <ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM>/var/lib/proxsave-info/commands/system/lvm_vgs.txt
+[<TIME>] DEBUG    [DRY RUN] Would execute command: vgs > <ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM>/var/lib/proxsave-info/commands/system/lvm_vgs.txt
+[<TIME>] DEBUG    Collecting LVM logical volumes via command: lvs > <ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM>/var/lib/proxsave-info/commands/system/lvm_lvs.txt
+[<TIME>] DEBUG    [DRY RUN] Would execute command: lvs > <ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM>/var/lib/proxsave-info/commands/system/lvm_lvs.txt
+[<TIME>] DEBUG    [DRY RUN] Would write report file: <ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM>/var/lib/proxsave-info/commands/system/network_report.txt (<SIZE> bytes)
+[<TIME>] DEBUG    Collecting kernel information (uname/modules)
+[<TIME>] DEBUG    Collecting kernel information into <ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM>/var/lib/proxsave-info/commands/system
+[<TIME>] DEBUG    Collecting Kernel command line via command: cat <ROOT>/sysroot/proc/cmdline > <ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM>/var/lib/proxsave-info/commands/system/kernel_cmdline.txt
+[<TIME>] DEBUG    [DRY RUN] Would execute command: cat <ROOT>/sysroot/proc/cmdline > <ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM>/var/lib/proxsave-info/commands/system/kernel_cmdline.txt
+[<TIME>] DEBUG    Collecting Kernel version details via command: cat <ROOT>/sysroot/proc/version > <ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM>/var/lib/proxsave-info/commands/system/kernel_version.txt
+[<TIME>] DEBUG    [DRY RUN] Would execute command: cat <ROOT>/sysroot/proc/version > <ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM>/var/lib/proxsave-info/commands/system/kernel_version.txt
+[<TIME>] DEBUG    Kernel information snapshot completed
+[<TIME>] DEBUG    Kernel information collected successfully
+[<TIME>] DEBUG    Collecting hardware inventory (CPU/memory/devices)
+[<TIME>] DEBUG    Collecting hardware inventory into <ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM>/var/lib/proxsave-info/commands/system
+[<TIME>] DEBUG    Skipping Hardware DMI information: dmidecode requires root privileges (euid=<EUID>)
+[<TIME>] DEBUG    Skipping Hardware sensors: hardware sensor sysfs not detected
+[<TIME>] DEBUG    Hardware information snapshot completed
+[<TIME>] DEBUG    Hardware inventory collected successfully
+[<TIME>] DEBUG    Collecting user home directories under /home
+[<TIME>] DEBUG    Collecting home directories under /home
+[<TIME>] DEBUG    User home directories collected successfully
+[<TIME>] INFO     System information collection completed
+[<TIME>] DEBUG    Baseline system information collected successfully
+[<TIME>] DEBUG    Collection completed: 0 files, 0 failed, 0 dirs created
+[<TIME>] DEBUG    [DRY RUN] Would write report file: <ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM>/manifest.json (<SIZE> bytes)
+[<TIME>] INFO     Collection completed: 0 files (0 B), 0 failed, 0 dirs created
+[<TIME>] DEBUG    Skipping optimization step (all features disabled)
+[<TIME>] STEP     [3] Creation of compressed archive
+[<TIME>] INFO     Creating compressed archive...
+[<TIME>] DEBUG    Archiver configuration: type=none level=0 mode=standard threads=0
+[<TIME>] DEBUG    Resolving compression (requested=none level=0 mode=standard)
+[<TIME>] DEBUG    Compression resolved to none (level 0, threads 0)
+[<TIME>] DEBUG    Resolving compression (requested=none level=0 mode=standard)
+[<TIME>] DEBUG    Compression resolved to none (level 0, threads 0)
+[<TIME>] INFO     Creating compressed archive with none (level 0, mode standard, threads auto)
+[<TIME>] DEBUG    Creating archive: <ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM> -> <ROOT>/backup/charhost-backup-20260102-030405.tar (compression: none)
+[<TIME>] INFO     [DRY RUN] Would create archive: <ROOT>/backup/charhost-backup-20260102-030405.tar
+[<TIME>] STEP     [4] Verification skipped (dry run mode)
+[<TIME>] STEP     [5] Bundling skipped (dry run mode)
+[<TIME>] DEBUG    Parsing log file for error/warning counts: <ROOT>/log/backup-charhost-20260102-030405.log
+[<TIME>] DEBUG    Found 0 errors and 1 warnings in log file
+[<TIME>] DEBUG    Aggregated exit code based on log analysis: 1
+[<TIME>] STEP     [6] Storage dispatch skipped (dry run mode)
+[<TIME>] DEBUG    Disabled storage targets: secondary=false cloud=false
+[<TIME>] STEP     [7] PBS Storage dispatch skipped (dry run mode)
+[<TIME>] DEBUG    PBS Storage: status=skipped snapshot="" backups=-1 deleted=0
+[<TIME>] DEBUG    Go backup completed in 0.0s
+[<TIME>] DEBUG    Removed temporary workspace <ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM>
+[<TIME>] DEBUG    End backup run (ok, duration=<DURATION>)
+
+===== proxmox-backup-client calls, in order (startup check included) =====
+version --repository charpbs@pbs!pve@192.0.2.10:charstore --output-format json
+status --repository charpbs@pbs!pve@192.0.2.10:charstore --output-format json
+snapshot list --ns charns --repository charpbs@pbs!pve@192.0.2.10:charstore --output-format json
+
+===== BackupStats returned by RunGoBackup =====
+{
+  "Hostname": "charhost",
+  "ProxmoxType": "unknown",
+  "IncompleteTargets": [],
+  "ProxmoxTargets": null,
+  "ProxmoxVersion": "unknown",
+  "PVEVersion": "",
+  "PBSVersion": "",
+  "BundleCreated": false,
+  "Timestamp": "2026-01-02T03:04:05Z",
+  "Version": "",
+  "StartTime": "2026-01-02T03:04:05Z",
+  "EndTime": "2026-01-02T03:04:05Z",
+  "FilesCollected": 0,
+  "FilesFailed": 0,
+  "FilesNotFound": 0,
+  "DirsCreated": 0,
+  "BytesCollected": "<MASKED>",
+  "ArchiveSize": 0,
+  "UncompressedSize": "<MASKED>",
+  "CompressedSize": 0,
+  "Duration": 0,
+  "ArchivePath": "<ROOT>/backup/charhost-backup-20260102-030405.tar",
+  "RequestedCompression": "none",
+  "RequestedCompressionMode": "standard",
+  "Compression": "none",
+  "CompressionLevel": 0,
+  "CompressionMode": "standard",
+  "CompressionThreads": 0,
+  "CompressionRatio": "<MASKED>",
+  "CompressionRatioPercent": "<MASKED>",
+  "CompressionSavingsPercent": 0,
+  "ReportPath": "",
+  "ManifestPath": "",
+  "Checksum": "",
+  "LocalPath": "<ROOT>/backup",
+  "SecondaryPath": "<ROOT>/secondary",
+  "CloudPath": "charremote",
+  "LocalStatus": "",
+  "LocalStatusSummary": "",
+  "SecondaryStatus": "skipped",
+  "CloudStatus": "skipped",
+  "ServerID": "",
+  "ServerMAC": "",
+  "ClusterMode": "",
+  "FilesIncluded": 0,
+  "FilesMissing": 0,
+  "SecondaryEnabled": true,
+  "LocalBackups": 0,
+  "LocalFreeSpace": 0,
+  "LocalUsedSpace": 0,
+  "LocalTotalSpace": 0,
+  "SecondaryBackups": 0,
+  "SecondaryFreeSpace": 0,
+  "SecondaryUsedSpace": 0,
+  "SecondaryTotalSpace": 0,
+  "CloudEnabled": true,
+  "CloudBackups": 0,
+  "MaxLocalBackups": 0,
+  "MaxSecondaryBackups": 0,
+  "MaxCloudBackups": 0,
+  "LocalRetentionPolicy": "",
+  "LocalGFSDaily": 0,
+  "LocalGFSWeekly": 0,
+  "LocalGFSMonthly": 0,
+  "LocalGFSYearly": 0,
+  "SecondaryRetentionPolicy": "",
+  "SecondaryGFSDaily": 0,
+  "SecondaryGFSWeekly": 0,
+  "SecondaryGFSMonthly": 0,
+  "SecondaryGFSYearly": 0,
+  "CloudRetentionPolicy": "",
+  "CloudGFSDaily": 0,
+  "CloudGFSWeekly": 0,
+  "CloudGFSMonthly": 0,
+  "CloudGFSYearly": 0,
+  "PBSTarget": {
+    "Name": "PBS Storage",
+    "Status": "skipped",
+    "Location": "charpbs@pbs!pve@192.0.2.10:charstore",
+    "Snapshot": "",
+    "Backups": -1,
+    "MaxBackups": 5,
+    "RetentionPolicy": "simple",
+    "Deleted": 0,
+    "FreeBytes": 0,
+    "UsedBytes": 0,
+    "TotalBytes": 0
+  },
+  "PBSTargetStorage": "charpbs",
+  "MaxPBSTargetBackups": 5,
+  "ErrorCount": 0,
+  "WarningCount": 1,
+  "NotifyCount": 0,
+  "LogFilePath": "<ROOT>/log/backup-charhost-20260102-030405.log",
+  "LogCategories": null,
+  "ExitCode": 1,
+  "Failed": false,
+  "ScriptVersion": "",
+  "TelegramStatus": "disabled",
+  "EmailStatus": "unknown",
+  "NotifyResults": null,
+  "HealthcheckLink": "",
+  "HealthcheckStatus": "",
+  "HealthcheckPortalURL": "",
+  "HealthcheckPortalLogin": "",
+  "NewVersionAvailable": false,
+  "CurrentVersion": "",
+  "LatestVersion": ""
+}
+
+===== BackupStats as seen by the notification channel =====
+(channel not called)

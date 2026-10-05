@@ -3,11 +3,13 @@ package orchestrator
 import (
 	"bufio"
 	"os"
+	"sort"
 	"strings"
 
 	"github.com/tis24dev/proxsave/internal/logging"
 	"github.com/tis24dev/proxsave/internal/notify"
 	"github.com/tis24dev/proxsave/internal/safefs"
+	"github.com/tis24dev/proxsave/internal/ui/theme"
 )
 
 // notifyErrorToken is the level token the notify-scoped logger writes for a
@@ -93,7 +95,7 @@ func ParseLogCounts(logPath string, categoryLimit int) (categories []notify.LogC
 		list = append(list, *cat)
 	}
 
-	// Sort by type (ERROR before WARNING), then by count (descending), then by label
+	// Sort by type (ERROR before WARNING), symbol, count (descending), then label
 	sortLogCategories(list)
 
 	if categoryLimit > 0 && len(list) > categoryLimit {
@@ -102,38 +104,45 @@ func ParseLogCounts(logPath string, categoryLimit int) (categories []notify.LogC
 	return list, errorCount, warningCount, notifyCount
 }
 
-// sortLogCategories sorts log categories by priority
+// sortLogCategories sorts log categories by priority: ERROR before WARNING; within a
+// type the labels that open with ✗ (theme.SymbolError), then those that open with ⚠
+// (theme.SymbolWarning, the ⚠️ form included), then all the others; then by count,
+// descending; then by label, ascending and CASE-INSENSITIVELY. A raw byte compare put
+// every lowercase-initial label below every uppercase one (39 production warnings begin
+// lowercase against 645 uppercase), and without the symbol rank a "✗ ... backup not
+// saved" sorted after every plain label, at the bottom of a long list.
 func sortLogCategories(list []notify.LogCategory) {
-	// Simple bubble sort - good enough for small lists (typically < 20 items)
-	n := len(list)
-	for i := 0; i < n-1; i++ {
-		for j := 0; j < n-i-1; j++ {
-			// Compare by type (ERROR before WARNING)
-			if list[j].Type != list[j+1].Type {
-				// "ERROR" < "WARNING" lexicographically, so swap if j is WARNING
-				if list[j].Type > list[j+1].Type { // "WARNING" > "ERROR", swap to put ERROR first
-					list[j], list[j+1] = list[j+1], list[j]
-				}
-				continue
-			}
-			// Same type, compare by count (descending)
-			if list[j].Count != list[j+1].Count {
-				if list[j].Count < list[j+1].Count {
-					list[j], list[j+1] = list[j+1], list[j]
-				}
-				continue
-			}
-			// Same count, compare by label (ascending), CASE-INSENSITIVELY. A raw byte
-			// compare puts every lowercase-initial label below every uppercase one, and
-			// refreshLogIssuesFromFile (extensions.go) keeps only the first 10: a warning
-			// whose message happens to start lowercase was therefore dropped from the
-			// notification before any warning that started uppercase, whatever it said.
-			// 39 production warnings begin lowercase against 645 uppercase, so this was
-			// never about one line.
-			if strings.ToLower(list[j].Label) > strings.ToLower(list[j+1].Label) {
-				list[j], list[j+1] = list[j+1], list[j]
-			}
+	sort.SliceStable(list, func(i, j int) bool {
+		a, b := list[i], list[j]
+		if a.Type != b.Type {
+			// "ERROR" < "WARNING" lexicographically.
+			return a.Type < b.Type
 		}
+		if ra, rb := logCategorySymbolRank(a.Label), logCategorySymbolRank(b.Label); ra != rb {
+			return ra < rb
+		}
+		if a.Count != b.Count {
+			return a.Count > b.Count
+		}
+		if la, lb := strings.ToLower(a.Label), strings.ToLower(b.Label); la != lb {
+			return la < lb
+		}
+		return a.Label < b.Label
+	})
+}
+
+// logCategorySymbolRank is 0 for a label that opens with the error symbol, 1 for one
+// that opens with the warning symbol (with or without its variation selector), 2 for
+// any other.
+func logCategorySymbolRank(label string) int {
+	label = strings.TrimSpace(label)
+	switch {
+	case strings.HasPrefix(label, theme.SymbolError):
+		return 0
+	case strings.HasPrefix(label, theme.SymbolWarning):
+		return 1
+	default:
+		return 2
 	}
 }
 

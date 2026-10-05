@@ -1,0 +1,95 @@
+{
+  "blocks": [
+    {
+      "text": {
+        "text": "❌ PVE Backup Report",
+        "type": "plain_text"
+      },
+      "type": "header"
+    },
+    {
+      "fields": [
+        {
+          "text": "*Hostname:*\npve-golden",
+          "type": "mrkdwn"
+        },
+        {
+          "text": "*Status:*\n❌ failure",
+          "type": "mrkdwn"
+        },
+        {
+          "text": "*Date:*\n2026-10-04 02:00:00",
+          "type": "mrkdwn"
+        },
+        {
+          "text": "*Duration:*\n2m 14s",
+          "type": "mrkdwn"
+        }
+      ],
+      "type": "section"
+    },
+    {
+      "type": "divider"
+    },
+    {
+      "fields": [
+        {
+          "text": "*Size:*\n0 B",
+          "type": "mrkdwn"
+        },
+        {
+          "text": "*Compression:*\nxz (0.00%)",
+          "type": "mrkdwn"
+        },
+        {
+          "text": "*Files:*\n0 included",
+          "type": "mrkdwn"
+        },
+        {
+          "text": "*Exit Code:*\n4",
+          "type": "mrkdwn"
+        }
+      ],
+      "type": "section"
+    },
+    {
+      "type": "divider"
+    },
+    {
+      "fields": [
+        {
+          "text": "*Local Storage:*\n❌ 15/15",
+          "type": "mrkdwn"
+        },
+        {
+          "text": "*Secondary Storage:*\n➖ 15/15",
+          "type": "mrkdwn"
+        },
+        {
+          "text": "*Cloud Storage:*\n➖ 15/15",
+          "type": "mrkdwn"
+        }
+      ],
+      "type": "section"
+    },
+    {
+      "type": "divider"
+    },
+    {
+      "text": {
+        "text": "*Errors:* 1 | *Warnings:* 0\n\n*Top Issues:*\n• [ERROR] Backup orchestration failed: failed to create temporary directory: mkdirtemp /tmp/proxsave/proxsave-pve-golden-202610... (×1)\n",
+        "type": "mrkdwn"
+      },
+      "type": "section"
+    },
+    {
+      "elements": [
+        {
+          "text": "ProxSave v0.41.0",
+          "type": "mrkdwn"
+        }
+      ],
+      "type": "context"
+    }
+  ]
+}

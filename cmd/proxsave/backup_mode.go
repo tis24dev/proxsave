@@ -29,6 +29,7 @@ type backupModeOptions struct {
 	toolVersion      string
 	dryRun           bool
 	startTime        time.Time
+	cpuProfilePath   string
 	heapProfilePath  string
 	serverIDValue    string
 	serverMACValue   string
@@ -168,6 +169,7 @@ func configureBackupOrchestrator(opts backupModeOptions, orch *orchestrator.Orch
 	orch.SetIdentity(opts.serverIDValue, opts.serverMACValue)
 	orch.SetEnvironmentInfo(opts.envInfo)
 	orch.SetStartTime(opts.startTime)
+	orch.SetRunProfilePaths(opts.cpuProfilePath, opts.heapProfilePath)
 	if opts.updateInfo != nil {
 		orch.SetUpdateInfo(opts.updateInfo.NewVersion, opts.updateInfo.Current, opts.updateInfo.Latest)
 	}
@@ -250,9 +252,13 @@ func verifyBackupDirectories(cfg *config.Config, logger *logging.Logger) {
 	checkDir("Log directory", cfg.LogPath)
 	if cfg.SecondaryEnabled {
 		secondaryLogPath := strings.TrimSpace(cfg.SecondaryLogPath)
-		if secondaryLogPath != "" {
+		switch {
+		case secondaryLogPath != "" && cfg.DryRun:
+			// A dry run creates no destination directory: a missing one is reported.
+			reportDirectoryDryRun(logger, "Secondary log directory", secondaryLogPath)
+		case secondaryLogPath != "":
 			checkDir("Secondary log directory", secondaryLogPath)
-		} else {
+		default:
 			logging.Warning("✗ Secondary log directory not configured (secondary storage enabled)")
 		}
 	}

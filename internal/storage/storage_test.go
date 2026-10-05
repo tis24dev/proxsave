@@ -1638,6 +1638,7 @@ func TestSecondaryStorageGetStatsIncludesFilesystemInfo(t *testing.T) {
 
 	// Simulate DetectFilesystem having already populated fsInfo.
 	storage.fsInfo = &FilesystemInfo{Type: FilesystemExt4}
+	storage.hostname = "node-stats"
 
 	ts1 := time.Date(2024, 1, 1, 10, 0, 0, 0, time.UTC)
 	ts2 := time.Date(2024, 1, 2, 10, 0, 0, 0, time.UTC)

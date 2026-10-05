@@ -8,6 +8,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"syscall"
 	"testing"
@@ -107,6 +108,11 @@ func TestAnAbandonedListingReturnsTheErrorInsteadOfOneWarningPerArchive(t *testi
 // One unreadable mount is one fault. The run must report it once with a count,
 // not once per archive: List runs at least three times per backend per run, so a
 // per-entry line multiplies by the number of archives and again by the callers.
+//
+// Since 2026-10-03 (maintainer's call) List itself writes no WARNING: it records the
+// gap, and the retention pass prints it once as the fact "  Not listed: <N> backups,
+// <cause>" under "Applying retention policy...", closed by "⚠ Backups deleted: <K>,
+// <N> not listed". The other readers of the listing keep it at DEBUG.
 func TestUnreadableArchivesAreReportedOnceNotOncePerArchive(t *testing.T) {
 	dir := t.TempDir()
 	seedArchives(t, dir, 1)
@@ -126,17 +132,22 @@ func TestUnreadableArchivesAreReportedOnceNotOncePerArchive(t *testing.T) {
 		t.Fatalf("List returned %d backups; want the 1 readable archive", len(got))
 	}
 	out := buf.String()
-	if n := countWarningLines(out); n != 1 {
-		t.Fatalf("5 unreadable archives wrote %d WARNING lines, want exactly 1:\n%s", n, out)
+	if n := countWarningLines(out); n != 0 {
+		t.Fatalf("5 unreadable archives wrote %d WARNING lines from List, want 0:\n%s", n, out)
 	}
-	// The single WARNING has to stand on its own, because DEBUG_LEVEL=warning hides
-	// the DEBUG lines below it: the count and the consequence both live there.
-	warned := warningText(out)
-	if !strings.Contains(warned, "5 archive(s) could not be read") {
-		t.Fatalf("the warning does not carry the count of unreadable archives:\n%s", out)
+	// The gap is recorded once, with the count and the shared cause, and the retention
+	// fact renders it on one line.
+	if want := []listingGapCause{{count: 5, cause: "too many levels of symbolic links"}}; !reflect.DeepEqual(s.lastListGap.causes, want) {
+		t.Fatalf("listing gap = %+v, want 5 archives with the symlink-loop cause", s.lastListGap)
 	}
-	if !strings.Contains(warned, "retention and the stats run on the rest") {
-		t.Fatalf("the warning lost its consequence:\n%s", out)
+	factBuf := &bytes.Buffer{}
+	factLogger := logging.New(types.LogLevelInfo, false)
+	factLogger.SetOutput(factBuf)
+	if n := logListingGap(factLogger, s.lastListGap); n != 5 {
+		t.Fatalf("logListingGap returned %d, want 5", n)
+	}
+	if want := "INFO       Not listed: 5 backups, too many levels of symbolic links\n"; !strings.HasSuffix(factBuf.String(), want) {
+		t.Fatalf("the retention fact = %q, want it to end with %q", factBuf.String(), want)
 	}
 	// The names live at DEBUG, one line per archive, each with its own cause.
 	if n := len(itemLines(warningText(out))); n != 0 {
@@ -184,8 +195,29 @@ func TestArchivesThatFailedForDifferentReasonsEachCarryTheirOwn(t *testing.T) {
 		t.Fatalf("List: %v", err)
 	}
 	out := buf.String()
-	if n := countWarningLines(out); n != 1 {
-		t.Fatalf("wrote %d WARNING lines, want exactly 1:\n%s", n, out)
+	if n := countWarningLines(out); n != 0 {
+		t.Fatalf("wrote %d WARNING lines from List, want 0:\n%s", n, out)
+	}
+	// One count per distinct cause, in the order the causes were first met; the
+	// retention facts print one line each and the outcome keeps the total.
+	want0 := []listingGapCause{
+		{count: 1, cause: "too many levels of symbolic links"},
+		{count: 1, cause: "input/output error"},
+	}
+	if !reflect.DeepEqual(s.lastListGap.causes, want0) {
+		t.Fatalf("listing gap = %+v, want one entry per cause in first-seen order", s.lastListGap)
+	}
+	factBuf := &bytes.Buffer{}
+	factLogger := logging.New(types.LogLevelInfo, false)
+	factLogger.SetOutput(factBuf)
+	if n := logListingGap(factLogger, s.lastListGap); n != 2 {
+		t.Fatalf("logListingGap returned %d, want the total 2", n)
+	}
+	facts := factBuf.String()
+	first := strings.Index(facts, "INFO       Not listed: 1 backups, too many levels of symbolic links\n")
+	second := strings.Index(facts, "INFO       Not listed: 1 backups, input/output error\n")
+	if first < 0 || second < 0 || second < first || strings.Count(facts, "Not listed:") != 2 {
+		t.Fatalf("the retention facts = %q, want one line per cause in first-seen order", facts)
 	}
 	items := itemLines(out)
 	if len(items) != 2 {
@@ -223,15 +255,22 @@ func TestAVanishedLocationIsNamedInsteadOfReturningNothingInSilence(t *testing.T
 		t.Fatalf("List returned %d backups; want 0", len(got))
 	}
 	out := buf.String()
-	if n := countWarningLines(out); n != 1 {
-		t.Fatalf("a vanished location wrote %d WARNING lines, want exactly 1:\n%s", n, out)
+	if n := countWarningLines(out); n != 0 {
+		t.Fatalf("a vanished location wrote %d WARNING lines from List, want 0:\n%s", n, out)
 	}
-	warned := warningText(out)
-	if !strings.Contains(warned, dir) {
-		t.Fatalf("the warning does not name the location %s:\n%s", dir, out)
+	// Not silent: the gap is recorded for the retention fact, and the DEBUG line
+	// names the location and the count.
+	if want := []listingGapCause{{count: 4, cause: "no such file or directory"}}; !reflect.DeepEqual(s.lastListGap.causes, want) {
+		t.Fatalf("listing gap = %+v, want 4 archives not listed, no such file or directory", s.lastListGap)
 	}
-	if !strings.Contains(warned, "4 archive(s)") {
-		t.Fatalf("the warning does not carry the count of archives left unlisted:\n%s", out)
+	var detail string
+	for _, line := range strings.Split(out, "\n") {
+		if strings.Contains(line, "DEBUG") && strings.Contains(line, "location stopped answering") {
+			detail = line
+		}
+	}
+	if !strings.Contains(detail, dir) || !strings.Contains(detail, "4 archive(s)") {
+		t.Fatalf("the DEBUG detail does not name the location %s and the count:\n%s", dir, out)
 	}
 }
 

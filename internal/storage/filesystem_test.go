@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"os"
@@ -8,6 +9,9 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+
+	"github.com/tis24dev/proxsave/internal/logging"
+	"github.com/tis24dev/proxsave/internal/types"
 )
 
 func TestFilesystemDetectorTestOwnershipSupportRejectsNonDirectory(t *testing.T) {
@@ -276,6 +280,38 @@ func TestFilesystemDetectorSetPermissions_ReturnsErrorWhenChmodFails(t *testing.
 	if !errors.Is(err, os.ErrNotExist) && !strings.Contains(err.Error(), "no such file") {
 		t.Fatalf("unexpected error: %v", err)
 	}
+	// The chown ran first and failed too: both operations travel, neither is dropped.
+	var pe *PermissionsError
+	if !errors.As(err, &pe) || pe.Owner == nil || pe.Mode == nil {
+		t.Fatalf("error = %#v, want a *PermissionsError carrying the chown and the chmod failures", err)
+	}
+}
+
+// A chown that fails is returned too, not only logged at DEBUG, and the chmod still
+// runs after it.
+func TestFilesystemDetectorSetPermissions_ReturnsTheChownFailure(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root can chown to any owner; the failure needs an unprivileged run")
+	}
+	detector := NewFilesystemDetector(newTestLogger())
+	path := filepath.Join(t.TempDir(), "file.txt")
+	if err := os.WriteFile(path, []byte("x"), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	info := &FilesystemInfo{Type: FilesystemExt4, SupportsOwnership: true}
+
+	err := detector.SetPermissions(context.Background(), path, 0, 0, 0o600, info)
+	var pe *PermissionsError
+	if !errors.As(err, &pe) || pe.Owner == nil || pe.Mode != nil {
+		t.Fatalf("error = %#v, want a *PermissionsError with the chown failure only", err)
+	}
+	if !errors.Is(err, os.ErrPermission) {
+		t.Fatalf("error = %v, want it to unwrap to the chown's permission error", err)
+	}
+	st, statErr := os.Stat(path)
+	if statErr != nil || st.Mode().Perm() != 0o600 {
+		t.Fatalf("the chmod must still run after a failed chown: mode=%v err=%v", st.Mode().Perm(), statErr)
+	}
 }
 
 func TestFilesystemDetectorSetPermissions_SucceedsForExistingFile(t *testing.T) {
@@ -361,5 +397,35 @@ func TestLastMountEntryWinsOverAutofsPlaceholder(t *testing.T) {
 
 	if _, _, ok := lastMountEntryFor(nas, "/mnt/other"); ok {
 		t.Fatal("an absent mount point must not match")
+	}
+}
+
+// The detector's ownership findings are DEBUG: the storage blocks print the
+// "  Filesystem:" and "  Permissions:" facts themselves.
+func TestFilesystemDetectorOwnershipFindingsAreDebug(t *testing.T) {
+	for _, tc := range []struct {
+		fsType   FilesystemType
+		probeOK  bool
+		wantLine string
+	}{
+		{FilesystemNFS, true, "DEBUG    Network filesystem nfs supports Unix ownership\n"},
+		{FilesystemNFS4, false, "DEBUG    Network filesystem nfs4 does NOT support Unix ownership\n"},
+		{FilesystemCIFS, false, "DEBUG    Filesystem cifs is incompatible with Unix ownership - will skip chown/chmod\n"},
+	} {
+		logger := logging.New(types.LogLevelDebug, false)
+		buf := &bytes.Buffer{}
+		logger.SetOutput(buf)
+		dir := t.TempDir()
+		detector := NewFilesystemDetector(logger)
+		detector.mountPointLookup = func(string) (string, error) { return dir, nil }
+		detector.filesystemTypeLookup = func(context.Context, string) (FilesystemType, string, error) { return tc.fsType, "dev", nil }
+		detector.ownershipSupportTest = func(context.Context, string) bool { return tc.probeOK }
+		if _, err := detector.DetectFilesystem(context.Background(), dir); err != nil {
+			t.Fatalf("DetectFilesystem(%s): %v", tc.fsType, err)
+		}
+		out := stripTimes(buf.String())
+		if !strings.Contains(out, tc.wantLine) || strings.Contains(out, "INFO") {
+			t.Fatalf("%s: want %q at DEBUG and no INFO line:\n%s", tc.fsType, tc.wantLine, out)
+		}
 	}
 }

@@ -555,9 +555,16 @@ When `SET_BACKUP_PERMISSIONS=true`, the system applies Bash-compatible ownership
 - Does NOT touch binary files, config files, or system paths
 
 **Permissions (chmod)**:
-- Applies mode `0750` (rwxr-x---) to directories only
-- Files keep their existing permissions (unchanged)
-- Conservative and safe approach
+- Applies mode `0750` (rwxr-x---) to directories
+- Applies mode `0640` (rw-r-----) to the files of a backup set: the archive or bundle and its `.sha256`, `.metadata` and `.manifest.json`
+- Every other file (logs included) keeps its existing permissions
+- The backup written by the current run gets `BACKUP_USER:BACKUP_GROUP` and `0640` on `BACKUP_PATH` and `SECONDARY_PATH` as soon as it is stored, not at the next run
+
+**Without it** (`SET_BACKUP_PERMISSIONS=false`, the default): every file of a backup set is `0600` owned by `root:root`, so only root can read the backups.
+
+**Turning it off later**: files already at `0640` stay as they are until retention removes them; new backups are `0600` `root:root` again.
+
+**Cloud storage** is not covered: the mode of a cloud copy is whatever the rclone backend gives it.
 
 **Requirements**:
 - Both `BACKUP_USER` and `BACKUP_GROUP` must be set
@@ -587,7 +594,8 @@ BACKUP_USER=backup
 BACKUP_GROUP=backup
 SET_BACKUP_PERMISSIONS=true
 
-# Result: All backup/log directories owned by backup:backup with mode 0750
+# Result: backup/log directories owned by backup:backup with mode 0750,
+#         backup files owned by backup:backup with mode 0640
 ```
 
 ---
@@ -901,6 +909,7 @@ CLOUD_ENABLED=false                # true | false
 
 # rclone remote (recommended: remote NAME + path via CLOUD_REMOTE_PATH)
 CLOUD_REMOTE=GoogleDrive                   # remote name from `rclone config`
+# CLOUD_REMOTE can also be an absolute local directory (/mnt/cloud): see CLOUD_STORAGE.md
 CLOUD_REMOTE_PATH=/proxsave/backup         # folder path inside the remote
 
 # Cloud log path (optional)
@@ -999,6 +1008,29 @@ Automatic with `false`:
 |------|-------------|
 | `sequential` | Upload files one at a time (lower memory, predictable) |
 | `parallel` | Upload main file sequentially, then associated files (.sha256, .metadata, .bundle) in parallel (faster, uses more memory) |
+
+---
+
+## PBS Storage (Proxmox Backup Server)
+
+```bash
+# Each backup is also uploaded to a PBS storage defined in Proxmox VE
+# (/etc/pve/storage.cfg, type pbs), and the run log is attached to it.
+# Server, port, datastore, namespace, user, fingerprint, password and
+# encryption key are read from that storage at every run.
+# Proxmox VE hosts only. Snapshots go to the group host/proxsave-<hostname>.
+# The namespace must already exist.
+# Retention needs Datastore.Prune or Datastore.Modify on the datastore.
+PBS_TARGET_ENABLED=false     # true-false = enable/disable upload to the PBS storage
+PBS_TARGET_STORAGE=          # Proxmox VE storage ID of type pbs
+MAX_PBS_TARGET_BACKUPS=15    # snapshots kept by retention (0 = no retention)
+MIN_DISK_SPACE_PBS_GB=1      # free space required on the datastore
+```
+
+- `proxmox-backup-client` must be installed; nothing about PBS is stored in `backup.env`.
+- Retention keeps the newest `MAX_PBS_TARGET_BACKUPS` snapshots of the group (with `RETENTION_POLICY=gfs`, the same GFS rules as the other destinations). A failed upload deletes nothing.
+- When the storage has an encryption key, the snapshot and the log are encrypted with it. When it has none they are uploaded unencrypted, and step [7] says so (`Encryption: none, storage <id> has no key`).
+- ProxSave sets no timeout on the PBS client. Under cron nothing stops a hung upload; the daemon's `MAX_RUN_DURATION` watchdog does, so the daemon is the recommended scheduler with PBS.
 
 ---
 
@@ -1491,7 +1523,7 @@ METRICS_PATH=${BASE_DIR}/metrics   # Empty = /var/lib/prometheus/node-exporter
 - Backup duration and start/end timestamps
 - Archive size and raw bytes collected
 - Files collected/failed and success/failure status
-- Storage usage counters per location (local/secondary/cloud)
+- Backup counts per location (local always; secondary, cloud and pbs only while that destination is on)
 
 **Integration**: Point Prometheus node_exporter to `METRICS_PATH`.
 

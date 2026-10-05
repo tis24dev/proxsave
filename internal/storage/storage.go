@@ -117,20 +117,12 @@ type RetentionSummary struct {
 	// than the unscoped total it replaces, so a consumer falls back to that total
 	// unless this is set.
 	ScopeValid bool
-	// Owned is how many archives at this location this host is answerable for, taken
-	// after applyRetentionHostScope and net of whatever the pass then deleted. It is
-	// the only number that may be printed next to a retention limit. GetStats counts
-	// every archive at the location, so on a path shared with another ProxSave host
-	// it counts that host's too, which is how the summary came to read "40/7" on a
-	// machine that owns five (discussion #292).
-	//
-	// "Answerable for" is wider than "will prune", and deliberately so. It adds the
-	// archives no host manages at all: pre-Go "proxmox-backup-*" files that name
-	// nobody, and this machine's own work written under a spelling of its name it can
-	// no longer resolve. Those grow without bound and nothing else counts them, so
-	// leaving them out turns the one number an operator watches into a false
-	// all-clear. Archives carrying another machine's name are excluded, because that
-	// machine prunes them and reports them.
+	// Owned is how many archives at this location this host owns, by the rule
+	// retention prunes by (owned by name or adopted by server identity), taken after
+	// applyRetentionHostScope and net of whatever the pass then deleted. Other hosts'
+	// archives, archives nothing names and archives under another spelling of this
+	// host's name are not counted. It is the same number the statistics print for
+	// the location (StorageStats.TotalBackups), so one destination shows one count.
 	Owned int
 
 	// PassCompleted reports whether a retention pass RAN AND RETURNED WITHOUT ERROR.
@@ -146,7 +138,10 @@ type RetentionSummary struct {
 	// full. Owned is the field that answers "how many are there", and ScopeValid is
 	// the field that says whether Owned is worth anything.
 	//
-	// What false means: no pass has run, or the last one bailed. The counts are then
+	// What false means: no pass has run, or the last one bailed.
+	//
+	// The outcome counts below (Planned ... LogsNotDeleted) follow the same rule: they
+	// describe this pass and are zero before it ran. The counts are then
 	// the zero value even if the pass deleted archives before it failed, because
 	// ApplyRetention clears them on entry and only fills them once the delete loop
 	// finishes.
@@ -160,16 +155,45 @@ type RetentionSummary struct {
 	// cannot: a healthy pass that finds everything within the limit publishes zeros,
 	// which is byte for byte what a backend that has never run reports. ScopeValid
 	// cannot either, and reusing it would be wrong rather than merely imprecise. It
-	// answers "did the scope account for the listing", so it is deliberately false
-	// after a real pass on a host that cannot name itself (applyRetentionHostScope
-	// returns nothing owned there and warns), and a caller reading it as "a pass
-	// ran" would mis-report exactly that machine.
+	// answers "did the scope account for the listing", so it stays true on a pass
+	// that scoped the listing and then failed (a context cancelled during the
+	// deletions), and a caller reading it as "a pass completed" would mis-report
+	// exactly that pass. A host that cannot name itself publishes both false: its
+	// pass does not start (applyRetentionHostScope returns an error there).
 	//
 	// False deliberately does NOT separate "no pass has run" from "the last pass
 	// failed". The only question a reader of this struct can act on is whether the
 	// numbers describe a finished pass, and whoever ran the pass already knows which
 	// of the two it is, because it is holding the error.
 	PassCompleted bool
+
+	// Planned is how many archives this pass selected for deletion. BackupsDeleted is
+	// how many of them are gone; the difference is NotDeleted.
+	Planned int
+	// NotDeleted counts the selected archives that are still in place.
+	NotDeleted int
+	// LeftBehind counts the deleted archives whose associated files stayed behind.
+	LeftBehind int
+	// Skipped counts the archives retention could not date and left alone.
+	Skipped int
+	// NotListed counts the archives the listing could not read, so retention never saw them.
+	NotListed int
+	// NoMetadata counts the archives retention described from their file name alone.
+	NoMetadata int
+	// LogsNotDeleted counts the associated logs whose removal failed.
+	LogsNotDeleted int
+	// NotRotated counts the archives named under this host's short name in a spelling
+	// it does not answer to, which retention left alone.
+	NotRotated int
+	// NotRotatedNames are the names those archives carry, in the order first met,
+	// joined for the outcome line: "a", "a and b", "a, b and c". A string rather than
+	// a slice so the summary stays comparable.
+	NotRotatedNames string
+	// SharedIdentityNames are the names under which a second machine carrying this
+	// host's server identity is still writing here: an adopted archive under that name
+	// is newer than this host's previous own backup (retentionSharedIdentity). Joined
+	// like NotRotatedNames, "" when there is none. Those archives were rotated.
+	SharedIdentityNames string
 }
 
 // RetentionReporter can be implemented by storage backends that expose details
@@ -192,7 +216,7 @@ type RetentionSummary struct {
 // calling the two concurrently on ONE backend is a data race. Nothing does today:
 // StorageAdapter.Sync (internal/orchestrator/storage_adapter.go) is the only
 // caller, it reads the summary a few lines below its own ApplyRetention call on the
-// same goroutine, and dispatchPostBackup runs the adapters one after another, each
+// same goroutine, and syncStorageTargets runs the adapters one after another, each
 // over a backend of its own. An implementation that means to be read from another
 // goroutine has to provide its own synchronisation.
 type RetentionReporter interface {
@@ -201,8 +225,12 @@ type RetentionReporter interface {
 
 // StorageStats contains statistics about a storage location
 type StorageStats struct {
-	TotalBackups   int
-	TotalSize      int64
+	// TotalBackups and TotalSize cover ONLY the archives this host owns, by the rule
+	// retention prunes by (ownedStorageStats). OldestBackup and NewestBackup too.
+	TotalBackups int
+	TotalSize    int64
+	// ListedBackups is every archive the listing returned, whoever owns it.
+	ListedBackups  int
 	OldestBackup   *time.Time
 	NewestBackup   *time.Time
 	AvailableSpace int64

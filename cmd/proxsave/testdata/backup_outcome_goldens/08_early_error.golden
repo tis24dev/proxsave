@@ -1,0 +1,2 @@
+{bold fg Red #EF4444}✗ Backup failed{/}
+{fg Light #C8C8C8}Log: /opt/proxsave/log/backup-pve-golden-20261004-020000.log{/}

@@ -19,6 +19,12 @@ type retentionInert struct {
 	Reason string
 }
 
+// The two reasons an entry is inert; logRetentionSkipped picks the fact line by them.
+const (
+	retentionInertNoManifest  = "no manifest/checksum"
+	retentionInertNoTimestamp = "no reliable timestamp"
+)
+
 // partitionRetentionEligible splits backups into those eligible for retention
 // classification (a verified backup) and inert entries retention must neither
 // keep as a slot nor delete. Fail-safe: an unverifiable entry is never counted
@@ -29,11 +35,11 @@ func partitionRetentionEligible(backups []*types.BackupMetadata) (eligible []*ty
 			continue
 		}
 		if !b.Verified {
-			inert = append(inert, retentionInert{Backup: b, Reason: "no manifest/checksum"})
+			inert = append(inert, retentionInert{Backup: b, Reason: retentionInertNoManifest})
 			continue
 		}
 		if b.Timestamp.IsZero() {
-			inert = append(inert, retentionInert{Backup: b, Reason: "no reliable timestamp"})
+			inert = append(inert, retentionInert{Backup: b, Reason: retentionInertNoTimestamp})
 			continue
 		}
 		eligible = append(eligible, b)

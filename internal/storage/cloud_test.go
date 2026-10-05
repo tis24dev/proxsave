@@ -192,8 +192,8 @@ func TestCloudStorageMarkCloudLogPathAvailableClearsMissing(t *testing.T) {
 	}
 }
 
-func TestDefaultExecCommandReturnsErrorForMissingCommand(t *testing.T) {
-	_, err := defaultExecCommand(context.Background(), "proxsave-command-does-not-exist")
+func TestDefaultRunCommandReturnsErrorForMissingCommand(t *testing.T) {
+	_, err := defaultRunCommand(context.Background(), "proxsave-command-does-not-exist")
 	if err == nil {
 		t.Fatalf("expected error for missing command")
 	}
@@ -1329,27 +1329,34 @@ func TestCloudStorageGetStatsSummarizesList(t *testing.T) {
 		CloudRemote:  "remote",
 	}
 	cs := newCloudStorageForTest(cfg)
-	queue := &commandQueue{
-		t: t,
-		queue: []queuedResponse{
-			{
-				name: "rclone",
-				args: []string{"lsl", "remote:", "--max-depth", "1"},
-				out: strings.TrimSpace(`
+	cs.hostname = "host"
+	// The manifests are read as retention reads them; another host's archive is
+	// listed and not counted.
+	lslCalls := 0
+	cs.execCommand = func(ctx context.Context, name string, args ...string) ([]byte, error) {
+		switch args[0] {
+		case "lsl":
+			lslCalls++
+			return []byte(strings.TrimSpace(`
 10 2025-06-01 10:00:00 host-backup-20250601.tar.zst
+7 2025-05-31 09:00:00 other-backup-20250531.tar.zst
 5 2025-05-30 08:00:00 host-backup-20250530.tar.zst
-`),
-			},
-		},
+`)), nil
+		case "cat":
+			if strings.Contains(args[len(args)-1], "other-backup") {
+				return []byte(`{"hostname":"other"}`), nil
+			}
+			return []byte(`{"hostname":"host"}`), nil
+		}
+		return nil, nil
 	}
-	cs.execCommand = queue.exec
 
 	stats, err := cs.GetStats(context.Background())
 	if err != nil {
 		t.Fatalf("GetStats() error = %v", err)
 	}
-	if stats.TotalBackups != 2 {
-		t.Fatalf("TotalBackups = %d, want 2", stats.TotalBackups)
+	if stats.TotalBackups != 2 || stats.ListedBackups != 3 {
+		t.Fatalf("TotalBackups = %d of %d listed, want 2 of 3: only this host's backups are counted", stats.TotalBackups, stats.ListedBackups)
 	}
 	if stats.TotalSize != 15 {
 		t.Fatalf("TotalSize = %d, want 15", stats.TotalSize)
@@ -1366,8 +1373,8 @@ func TestCloudStorageGetStatsSummarizesList(t *testing.T) {
 	if stats.OldestBackup == nil || !stats.OldestBackup.Equal(oldest) {
 		t.Fatalf("OldestBackup = %v, want %v", stats.OldestBackup, oldest)
 	}
-	if len(queue.calls) != 1 {
-		t.Fatalf("expected a single lsl call, got %d", len(queue.calls))
+	if lslCalls != 1 {
+		t.Fatalf("expected a single lsl call, got %d", lslCalls)
 	}
 }
 

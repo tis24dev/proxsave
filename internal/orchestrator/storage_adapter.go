@@ -4,11 +4,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
+	"strings"
 
 	"github.com/tis24dev/proxsave/internal/config"
 	"github.com/tis24dev/proxsave/internal/logging"
 	"github.com/tis24dev/proxsave/internal/storage"
 	"github.com/tis24dev/proxsave/internal/types"
+	"github.com/tis24dev/proxsave/internal/ui/theme"
 )
 
 // StorageAdapter adapts a storage.Storage backend to the StorageTarget interface
@@ -18,6 +21,15 @@ type StorageAdapter struct {
 	config       *config.Config // Main configuration for retention policy
 	fsInfo       *storage.FilesystemInfo
 	initialStats *storage.StorageStats
+	// initialOwned is how many archives this host owned at the location when the
+	// run started, with the meaning RetentionSummary.Owned has (discussion #292).
+	// It is only worth anything while initialOwnedKnown is set.
+	initialOwned      int
+	initialOwnedKnown bool
+	// statsApplied records that this location's figures reached the run's
+	// BackupStats. applyInitialStats reads it: a location Sync already described
+	// keeps what Sync wrote.
+	statsApplied bool
 }
 
 // NewStorageAdapter creates a new storage adapter
@@ -39,6 +51,60 @@ func (s *StorageAdapter) SetFilesystemInfo(info *storage.FilesystemInfo) {
 // SetInitialStats caches storage stats gathered during initialization.
 func (s *StorageAdapter) SetInitialStats(stats *storage.StorageStats) {
 	s.initialStats = stats
+}
+
+// SetInitialOwnedBackups caches the number of archives this host owned at the
+// location when the run started (storage.CountOwnedBackups over the startup
+// listing). known=false keeps the unscoped total, the same fallback Sync uses when
+// retention did not produce a scoped count.
+func (s *StorageAdapter) SetInitialOwnedBackups(owned int, known bool) {
+	s.initialOwned, s.initialOwnedKnown = owned, known
+}
+
+// startupStatsFiller is implemented by storage targets that can describe their
+// location as it stood when the run started.
+type startupStatsFiller interface {
+	applyInitialStats(stats *BackupStats)
+}
+
+// applyInitialStats writes the figures read at startup for a location this run
+// never described: a failed run reaches the notifications without Sync having run
+// for it, or with Sync stopped before its statistics step (a critical local store
+// failure returns there), and the zero values left behind used to read as an empty
+// location ("0/7 backups", "0 B free") while it held real archives.
+//
+// The fields and their meaning are the ones Sync writes on a successful run:
+// the count is the scoped one under the same condition Sync uses it (a retention
+// limit is configured and the host could name itself), otherwise the unscoped
+// total; the free/used/total space comes from the same GetStats; the retention
+// policy and GFS tiers are rebuilt from the same configuration, through
+// EffectiveGFSRetentionConfig, the silent half of NormalizeGFSRetentionConfig.
+// What differs is the moment: these figures are from before the run, and on a
+// location the run never reached that is also what it holds now.
+//
+// Callers reach it only on the failure path (finalizeFailedBackupStats). A
+// successful run keeps exactly what Sync wrote, including a location whose
+// statistics read failed.
+func (s *StorageAdapter) applyInitialStats(stats *BackupStats) {
+	if s == nil || stats == nil || s.statsApplied || s.initialStats == nil || s.backend == nil || s.config == nil {
+		return
+	}
+	if !s.backend.IsEnabled() {
+		return
+	}
+	retentionConfig := storage.NewRetentionConfigFromConfig(s.config, s.backend.Location())
+	if retentionConfig.Policy == "gfs" {
+		retentionConfig = storage.EffectiveGFSRetentionConfig(retentionConfig)
+	}
+	scopedBackups := -1
+	if s.initialOwnedKnown && (retentionConfig.MaxBackups > 0 || retentionConfig.Policy == "gfs") {
+		scopedBackups = s.initialOwned
+	}
+	if s.logger != nil {
+		s.logger.Debug("%s: run failed before this location's statistics were read; reporting the startup figures (backups=%d, owned=%d, scoped=%v)",
+			s.backend.Name(), s.initialStats.TotalBackups, s.initialOwned, scopedBackups >= 0)
+	}
+	s.applyStorageStats(s.initialStats, retentionConfig, scopedBackups, stats)
 }
 
 // Sync implements the StorageTarget interface
@@ -68,15 +134,20 @@ func (s *StorageAdapter) Sync(ctx context.Context, stats *BackupStats) error {
 	// is deliberately unreachable from this package, so a copy here would be a second
 	// answer to "whose archive is this" (discussion #292).
 	scopedBackups := -1
+	// The block opens with the destination name, before anything is done there.
+	name := s.backend.Name()
+	s.logger.Step("%s", name)
 	if fsInfo == nil {
 		fsInfo, err = s.backend.DetectFilesystem(ctx)
 		if err != nil {
 			if s.backend.IsCritical() {
 				s.setStorageStatus(stats, "error")
-				return fmt.Errorf("%s filesystem detection failed (CRITICAL): %w", s.backend.Name(), err)
+				return fmt.Errorf("%s filesystem detection failed (CRITICAL): %w", name, err)
 			}
-			s.logger.Warning("%s", storageFailureText(err, s.backend.Name(), "filesystem detection failed"))
-			s.logger.Warning("%s operations will be skipped", s.backend.Name())
+			// Nothing else runs at this destination: the backup did not reach it.
+			s.logger.Debug("%s; %s operations will be skipped", storageFailureText(err, name, "filesystem detection failed"), name)
+			s.logger.Info("  Filesystem detection failed: %s", storage.ErrorCause(err))
+			s.logger.Warning("%s %s: backup not saved", theme.SymbolError, name)
 			s.setStorageStatus(stats, "error")
 			return nil
 		}
@@ -94,98 +165,121 @@ func (s *StorageAdapter) Sync(ctx context.Context, stats *BackupStats) error {
 		Version:     stats.Version,
 	}
 
-	// Step 3: Store backup
-	s.logger.Step("%s: Storing backup", s.backend.Name())
+	// Step 3: Store backup. The block opens with the destination name; the action
+	// line says what this step does there: the Primary already holds the archive
+	// (written at [3], bundled at [5]), so its Store only checks the file and sets
+	// owner and mode, while the other destinations receive a copy.
+	primary := s.backend.Location() == storage.LocationPrimary
+	setsPermissions := s.setsBackupPermissions()
+	if primary {
+		if setsPermissions {
+			s.logger.Info("Setting backup permissions...")
+		} else {
+			fsType := storage.FilesystemUnknown
+			if fsInfo != nil {
+				fsType = fsInfo.Type
+			}
+			s.logger.Debug("%s: filesystem %s does not support ownership, chown/chmod skipped", name, fsType)
+			s.logger.Skip("Permissions: %s does not support ownership", fsType)
+		}
+	} else {
+		s.logger.Info("Storing backup...")
+	}
 	if err := s.backend.Store(ctx, stats.ArchivePath, metadata); err != nil {
-		// Check if error is critical
+		// The backend printed the fact line with the short cause; the full chain
+		// stays here, in DEBUG.
+		s.logger.Debug("%s", storageFailureText(err, name, "store operation failed"))
 		if s.backend.IsCritical() {
 			s.setStorageStatus(stats, "error")
-			return fmt.Errorf("%s store operation failed (CRITICAL): %w", s.backend.Name(), err)
+			var se *storage.StorageError
+			if primary && errors.As(err, &se) && se != nil && se.Operation == "store" {
+				s.logger.Error("%s %s: backup not accessible", theme.SymbolError, name)
+				return fmt.Errorf("%s store operation failed (CRITICAL): %w", name, &outcomeLoggedError{err: err})
+			}
+			return fmt.Errorf("%s store operation failed (CRITICAL): %w", name, err)
 		}
 
-		// Non-critical error - log warning and continue
-		s.logger.Warning("%s", storageFailureText(err, s.backend.Name(), "store operation failed"))
 		// When the PRIMARY archive was saved and only a sidecar failed, do NOT claim the whole
 		// backup was not saved (that reads as data loss when the archive is safe, F08-08).
 		// se != nil guards the typed-nil shape: errors.As matches a nil
 		// *StorageError in the chain and leaves the target nil (PR #303 review).
+		// The status follows the backup: saved with a sidecar file missing is a
+		// warning, not saved is an error.
 		var se *storage.StorageError
 		if errors.As(err, &se) && se != nil && se.PrimarySaved {
-			s.logger.Warning("%s: primary backup saved, but a sidecar file was not uploaded", s.backend.Name())
+			s.logStoreIssues(name, append(s.lastStoreIssues(), storage.StoreIssueSidecarNotSaved))
+			hasWarnings = true
 		} else {
-			s.logger.Warning("Backup was not saved to %s", s.backend.Name())
+			s.logger.Warning("%s %s: backup not saved", theme.SymbolError, name)
+			hasErrors = true
 		}
-		hasErrors = true
 		// Don't return error - continue with retention
 	} else {
-		s.logger.Info("✓ %s: Backup stored successfully", s.backend.Name())
+		s.logStoreOutcome(name, primary, setsPermissions)
+		if slices.Contains(s.lastStoreIssues(), storage.StoreIssueSidecarNotSaved) {
+			// The backup is saved, one of its sidecar files is not.
+			hasWarnings = true
+		}
 	}
 
 	// Step 4: Apply retention policy
 	retentionConfig := storage.NewRetentionConfigFromConfig(s.config, s.backend.Location())
 	if retentionConfig.Policy == "gfs" {
 		// Enforce GFS-specific rules (e.g. minimum DAILY=1) once per backend.
-		retentionConfig = storage.NormalizeGFSRetentionConfig(s.logger, s.backend.Name(), retentionConfig)
+		retentionConfig = storage.NormalizeGFSRetentionConfig(s.logger, name, retentionConfig)
 	}
 	if retentionConfig.MaxBackups > 0 || retentionConfig.Policy == "gfs" {
 		if retentionConfig.Policy == "gfs" {
-			s.logger.Info("%s: Applying GFS retention policy...", s.backend.Name())
+			s.logger.Info("Applying GFS retention policy...")
 		} else {
-			s.logger.Info("%s: Applying retention policy...", s.backend.Name())
+			s.logger.Info("Applying retention policy...")
 		}
 		s.logRetentionPolicyDetails(retentionConfig)
 
 		s.logCurrentBackupCount()
 		deleted, err := s.backend.ApplyRetention(ctx, retentionConfig)
 		if err != nil {
-			// Check if error is critical
-			if s.backend.IsCritical() {
-				s.setStorageStatus(stats, "error")
-				return fmt.Errorf("%s retention failed (CRITICAL): %w", s.backend.Name(), err)
-			}
-
-			// Non-critical error - log warning and continue
-			s.logger.Warning("%s", storageFailureText(err, s.backend.Name(), "retention failed"))
+			// Never critical, on the Primary either: a backup retention could not
+			// delete is one backup too many, never a backup lost, so the run goes on.
+			// The backend printed the fact line when the listing failed; the full
+			// chain stays in DEBUG.
+			s.logger.Debug("%s", storageFailureText(err, name, "retention failed"))
+			s.logger.Warning("%s Retention not applied", theme.SymbolWarning)
 			hasWarnings = true
 		} else {
 			// Read on every successful pass, not only when something was deleted. The
 			// steady state, nothing to delete, is the common healthy run, and it was
 			// exactly the one where the owned count used to be thrown away and the
 			// summary fell back to counting every host's archives (discussion #292).
+			summary := storage.RetentionSummary{BackupsDeleted: deleted}
 			if reporter, ok := s.backend.(storage.RetentionReporter); ok {
-				summary := reporter.LastRetentionSummary()
+				summary = reporter.LastRetentionSummary()
 				if summary.ScopeValid {
 					scopedBackups = summary.Owned
 				}
-				if deleted > 0 {
-					backupsDeleted := summary.BackupsDeleted
-					if backupsDeleted == 0 {
-						backupsDeleted = deleted
-					}
-					logSuffix := ""
-					if summary.LogsDeleted > 0 {
-						logSuffix = fmt.Sprintf(" (logs deleted: %d)", summary.LogsDeleted)
-					}
-					s.logger.Info("✓ %s: Deleted %d old backups%s", s.backend.Name(), backupsDeleted, logSuffix)
-				}
-			} else if deleted > 0 {
-				s.logger.Info("✓ %s: Deleted %d old backups", s.backend.Name(), deleted)
 			}
+			s.logRetentionOutcome(summary, deleted)
 		}
 	}
 
-	// Step 5: Get and log statistics
+	// Step 5: Get and log statistics. The filesystem is not repeated here: the
+	// storage initialization already showed it.
 	storageStats, err := s.backend.GetStats(ctx)
 	if err != nil {
-		s.logger.Debug("%s: Failed to get statistics: %v", s.backend.Name(), err)
+		// A WARNING without a status change: the backup and the retention outcome
+		// above stand; only the figures are missing.
+		s.logger.Debug("%s: Failed to get statistics: %v", name, err)
+		s.logger.Info("%s statistics:", name)
+		s.logger.Info("  Read failed: %s", storage.ErrorCause(err))
+		s.logger.Warning("%s Statistics unavailable", theme.SymbolWarning)
 	} else {
-		s.logger.Info("%s statistics:", s.backend.Name())
+		s.logger.Info("%s statistics:", name)
 		s.logger.Info("  Total backups: %d", storageStats.TotalBackups)
 		if storageStats.TotalSize > 0 {
 			s.logger.Info("  Total size: %s", formatBytes(storageStats.TotalSize))
 		}
 		if fsInfo != nil {
-			s.logger.Info("  Filesystem: %s", fsInfo.Type)
+			s.logger.Debug("%s: filesystem %s", name, fsInfo.Type)
 		}
 
 		if stats != nil {
@@ -193,21 +287,175 @@ func (s *StorageAdapter) Sync(ctx context.Context, stats *BackupStats) error {
 		}
 	}
 
-	// The closing line follows the WORST thing the adapter saw, mirroring
-	// finalizeStorageStatus below: a failed store used to close green whenever
-	// retention then ran clean, so the log's last word contradicted the
-	// notification's "error". Still WARNING-level: the store failure itself is
-	// logged as recoverable and the exit contract stays warning-weight.
-	switch {
-	case hasErrors:
-		s.logger.Warning("✗ %s operations completed with errors", s.backend.Name())
-	case hasWarnings:
-		s.logger.Warning("✗ %s operations completed with warnings", s.backend.Name())
-	default:
-		s.logger.Info("✓ %s operations completed", s.backend.Name())
-	}
+	// No closing line: each outcome is printed where it happened (the store under
+	// its action line, retention under "Applying retention policy..."), so a
+	// summary at the bottom would only repeat the worst of them.
+	s.logger.Debug("%s operations completed (errors=%v warnings=%v)", name, hasErrors, hasWarnings)
 	s.finalizeStorageStatus(stats, hasErrors, hasWarnings)
 	return nil
+}
+
+// receivesCopy implements storageCopyTarget: every enabled destination but the Primary
+// receives a copy of the archive at step [6].
+func (s *StorageAdapter) receivesCopy() bool {
+	return s != nil && s.backend != nil && s.backend.IsEnabled() && s.backend.Location() != storage.LocationPrimary
+}
+
+// backupPermissionSetter is implemented by a backend whose Store may skip setting owner
+// and mode (LocalStorage on a filesystem without ownership support).
+type backupPermissionSetter interface {
+	SetsBackupPermissions() bool
+}
+
+func (s *StorageAdapter) setsBackupPermissions() bool {
+	if p, ok := s.backend.(backupPermissionSetter); ok {
+		return p.SetsBackupPermissions()
+	}
+	return true
+}
+
+// lastStoreIssues is what the backend reports its last Store left undone around the
+// backup, nil for a backend that cannot say.
+func (s *StorageAdapter) lastStoreIssues() []storage.StoreIssue {
+	if reporter, ok := s.backend.(storage.StoreReporter); ok {
+		return reporter.LastStoreIssues()
+	}
+	return nil
+}
+
+// logStoreOutcome closes a Store that returned no error: the "✓" line, or ONE "⚠" line
+// listing everything the backend reported left undone around the backup, in the order
+// it happened. These are WARNING lines; the backup is at the destination, so only a
+// sidecar file not saved there changes its status (warning, set by Sync).
+func (s *StorageAdapter) logStoreOutcome(name string, primary, setsPermissions bool) {
+	issues := s.lastStoreIssues()
+	s.logger.Debug("%s: store issues=%v", name, issues)
+	if primary {
+		for _, issue := range issues {
+			if issue == storage.StoreIssuePermissionsNotSet {
+				s.logger.Warning("%s %s: permissions not set", theme.SymbolWarning, name)
+				return
+			}
+		}
+		if setsPermissions {
+			s.logger.Info("%s %s: permissions set", theme.SymbolSuccess, name)
+		}
+		return
+	}
+	if len(issues) == 0 {
+		s.logger.Info("%s %s: backup saved", theme.SymbolSuccess, name)
+		return
+	}
+	s.logStoreIssues(name, issues)
+}
+
+// logStoreIssues prints the single "⚠ <Name>: backup saved, <issue>, <issue>" outcome.
+func (s *StorageAdapter) logStoreIssues(name string, issues []storage.StoreIssue) {
+	parts := []string{"backup saved"}
+	seen := make(map[storage.StoreIssue]bool, len(issues))
+	for _, issue := range issues {
+		if seen[issue] {
+			continue
+		}
+		seen[issue] = true
+		switch issue {
+		case storage.StoreIssueSidecarNotSaved:
+			parts = append(parts, "sidecar file not saved")
+		case storage.StoreIssueBundleNotSent:
+			parts = append(parts, "bundle not sent")
+		case storage.StoreIssueChecksumNotVerified:
+			parts = append(parts, "checksum not verified")
+		case storage.StoreIssuePermissionsNotSet:
+			parts = append(parts, "permissions not set")
+		}
+	}
+	s.logger.Warning("%s %s: %s", theme.SymbolWarning, name, strings.Join(parts, ", "))
+}
+
+// logRetentionOutcome prints the autonomous outcomes of a retention pass that ran:
+// what happened to the backups and what happened to their logs, with a shared server
+// identity, when there is one, on a line of its own between the two. Each has its own
+// symbol, because one can succeed while another does not.
+func (s *StorageAdapter) logRetentionOutcome(summary storage.RetentionSummary, deleted int) {
+	backupsDeleted := summary.BackupsDeleted
+	if backupsDeleted == 0 {
+		backupsDeleted = deleted
+	}
+	planned := summary.Planned
+	if minimum := backupsDeleted + summary.NotDeleted; planned < minimum {
+		planned = minimum
+	}
+	logsDeleted := summary.LogsDeleted
+	logsPlanned := logsDeleted + summary.LogsNotDeleted
+	s.logger.Debug("%s: retention outcome planned=%d deleted=%d not_deleted=%d left_behind=%d not_listed=%d skipped=%d no_metadata=%d logs_deleted=%d logs_not_deleted=%d",
+		s.backend.Name(), planned, backupsDeleted, summary.NotDeleted, summary.LeftBehind, summary.NotListed,
+		summary.Skipped, summary.NoMetadata, logsDeleted, summary.LogsNotDeleted)
+	if summary.NotRotated > 0 {
+		s.logger.Debug("%s: retention outcome not_rotated=%d names=%s", s.backend.Name(), summary.NotRotated, summary.NotRotatedNames)
+	}
+	if summary.SharedIdentityNames != "" {
+		s.logger.Debug("%s: retention outcome shared_identity=%s", s.backend.Name(), summary.SharedIdentityNames)
+	}
+
+	if planned == 0 && summary.Skipped == 0 && summary.NotListed == 0 && summary.NoMetadata == 0 && summary.NotRotated == 0 && logsPlanned == 0 {
+		s.logger.Info("%s Nothing to delete", theme.SymbolSuccess)
+		s.logSharedIdentityOutcome(summary)
+		return
+	}
+
+	switch {
+	case summary.NotDeleted > 0:
+		s.logger.Warning("%s Backups deleted: %d of %d", theme.SymbolWarning, backupsDeleted, planned)
+	case summary.LeftBehind > 0:
+		s.logger.Warning("%s Backups deleted: %d, files left behind", theme.SymbolWarning, backupsDeleted)
+	case summary.NotListed > 0:
+		s.logger.Warning("%s Backups deleted: %d, %d not listed", theme.SymbolWarning, backupsDeleted, summary.NotListed)
+	case summary.Skipped > 0:
+		s.logger.Warning("%s Backups deleted: %d, %d skipped", theme.SymbolWarning, backupsDeleted, summary.Skipped)
+	case summary.NoMetadata > 0:
+		s.logger.Warning("%s Backups deleted: %d, %d without metadata", theme.SymbolWarning, backupsDeleted, summary.NoMetadata)
+	case summary.NotRotated > 0:
+		s.logger.Warning("%s Backups deleted: %d, %d named %s not rotated", theme.SymbolWarning, backupsDeleted, summary.NotRotated, summary.NotRotatedNames)
+	default:
+		s.logger.Info("%s Backups deleted: %d", theme.SymbolSuccess, backupsDeleted)
+	}
+	s.logSharedIdentityOutcome(summary)
+
+	switch {
+	case summary.LogsNotDeleted > 0:
+		s.logger.Warning("%s Logs deleted: %d of %d", theme.SymbolWarning, logsDeleted, logsPlanned)
+	case logsDeleted > 0:
+		s.logger.Info("%s Logs deleted: %d", theme.SymbolSuccess, logsDeleted)
+	}
+}
+
+// logSharedIdentityOutcome prints the shared server identity as an outcome of its own,
+// after the backups outcome and before the logs outcome, whatever the backups outcome
+// is: it is not about this pass's deletions, which the backups line reports as if it
+// were absent, but about a second host writing here under this host's identity.
+func (s *StorageAdapter) logSharedIdentityOutcome(summary storage.RetentionSummary) {
+	if summary.SharedIdentityNames == "" {
+		return
+	}
+	s.logger.Warning("%s Server identity shared with %s", theme.SymbolWarning, summary.SharedIdentityNames)
+}
+
+// outcomeLoggedError marks a storage failure whose outcome line ("✗ Local Storage:
+// backup not accessible") is already on screen, so the caller that ends the run does
+// not print the same failure a second time. Its text is the wrapped error's.
+type outcomeLoggedError struct {
+	err error
+}
+
+func (e *outcomeLoggedError) Error() string { return e.err.Error() }
+
+func (e *outcomeLoggedError) Unwrap() error { return e.err }
+
+// OutcomeLogged reports whether err carries a storage failure whose outcome line the
+// storage step already printed.
+func OutcomeLogged(err error) bool {
+	var logged *outcomeLoggedError
+	return errors.As(err, &logged)
 }
 
 func (s *StorageAdapter) logCurrentBackupCount() {
@@ -265,14 +513,12 @@ func (s *StorageAdapter) applyStorageStats(storageStats *storage.StorageStats, r
 	if storageStats == nil || stats == nil {
 		return
 	}
+	s.statsApplied = true
 
-	// storageStats.TotalBackups comes from a listing that matches every hostname, so
-	// on a location shared with another ProxSave host it counts that host's archives
-	// too, while retention only ever manages the ones this host owns. Rendered
-	// against this host's own limit it reads as a breach that is not happening
-	// (discussion #292). Prefer the count retention itself arrived at. -1 means
-	// retention did not run or failed, and the unscoped listing is then the only
-	// number there is: saying 0 on a location holding forty archives would be worse.
+	// storageStats.TotalBackups and the count retention arrived at are the same rule,
+	// only the archives this host owns (by name or by server identity). Retention's
+	// is preferred because it is net of what the pass deleted. -1 means retention did
+	// not run or failed, and the statistics count is then the number there is.
 	backupCount := storageStats.TotalBackups
 	if scopedBackups >= 0 {
 		backupCount = scopedBackups

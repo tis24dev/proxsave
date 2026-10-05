@@ -47,6 +47,27 @@ func (o *Orchestrator) exportPrometheusBackupMetrics(stats *BackupStats) {
 	if m == nil {
 		return
 	}
+	// Secondary and cloud lines follow backup.env. A destination that is on there and
+	// failed at startup is switched off for the run with a count never read (-1): its
+	// line stays, at 0, like PBS below.
+	m.SecEnabled = o.cfg.SecondaryEnabled
+	if o.cfg.SecondaryStartupFailed {
+		m.SecEnabled = true
+		m.SecBackups = 0
+	}
+	m.CloudEnabled = o.cfg.CloudEnabled
+	if o.cfg.CloudStartupFailed {
+		m.CloudEnabled = true
+		m.CloudBackups = 0
+	}
+	// The PBS line follows PBS_TARGET_ENABLED, not the PBS outcome: an early error has
+	// no outcome and still reports 0, as does a PBS block that never got a count.
+	if o.cfg.PBSTargetEnabled {
+		m.PBSEnabled = true
+		if r := stats.PBSTarget; r != nil && r.Backups > 0 {
+			m.PBSBackups = r.Backups
+		}
+	}
 
 	exporter := metrics.NewPrometheusExporter(o.cfg.MetricsPath, o.logger)
 	if err := exporter.Export(m); err != nil {
@@ -239,6 +260,21 @@ func discardPartialArchive(fs FS, partialPath string) {
 	_ = fs.RemoveAll(partialPath)
 }
 
+// clearDiscardedArchiveStats forgets what the stats recorded about a partial
+// archive that was then discarded: its final name, its size and the figures
+// derived from it, and its checksum. No file ever existed under that name, so the
+// notifications, the dashboard and the metrics must report the run the way they
+// report a run whose archive was never created (a compression failure).
+func clearDiscardedArchiveStats(stats *BackupStats) {
+	stats.ArchivePath = ""
+	stats.ArchiveSize = 0
+	stats.CompressedSize = 0
+	stats.CompressionRatio = 0
+	stats.CompressionRatioPercent = 0
+	stats.CompressionSavingsPercent = 0
+	stats.Checksum = ""
+}
+
 func backupArchiveCreationError(err error) error {
 	phase := "archive"
 	code := types.ExitArchiveError
@@ -250,10 +286,9 @@ func backupArchiveCreationError(err error) error {
 	return &BackupError{Phase: phase, Err: err, Code: code}
 }
 
-func (o *Orchestrator) skipDryRunArtifactVerification(stats *BackupStats, artifacts *backupArtifacts) error {
+func (o *Orchestrator) skipDryRunArtifactVerification(stats *BackupStats) error {
 	fmt.Println()
 	o.logStep(4, "Verification skipped (dry run mode)")
-	o.logger.Info("[DRY RUN] Would create archive: %s", artifacts.archivePath)
 	stats.EndTime = o.now()
 	return nil
 }
@@ -289,7 +324,7 @@ func (o *Orchestrator) generateArchiveChecksum(ctx context.Context, archivePath 
 
 func (o *Orchestrator) writeArchiveChecksum(workspace *backupWorkspace, artifacts *backupArtifacts, checksum string) error {
 	checksumContent := fmt.Sprintf("%s  %s\n", checksum, filepath.Base(artifacts.archivePath))
-	if err := workspace.fs.WriteFile(artifacts.checksumPath, []byte(checksumContent), 0o640); err != nil {
+	if err := workspace.fs.WriteFile(artifacts.checksumPath, []byte(checksumContent), backup.ArtifactFilePerm); err != nil {
 		return fmt.Errorf("write checksum file %s: %w", artifacts.checksumPath, err)
 	}
 	o.logger.Debug("Checksum file written to %s", artifacts.checksumPath)
@@ -368,7 +403,8 @@ func (o *Orchestrator) archiveEncryptionMode() string {
 
 func (o *Orchestrator) writeLegacyMetadataAlias(workspace *backupWorkspace, artifacts *backupArtifacts) {
 	metadataAlias := artifacts.archivePath + ".metadata"
-	if err := copyFile(workspace.fs, artifacts.manifestPath, metadataAlias); err != nil {
+	// Byte-identical to the manifest, so it gets the manifest's mode, not copyFile's.
+	if err := copyFileWithPerm(workspace.fs, artifacts.manifestPath, metadataAlias, backup.ArtifactFilePerm); err != nil {
 		o.logger.Warning("Failed to write legacy metadata file %s: %v", metadataAlias, err)
 	} else {
 		o.logger.Debug("Legacy metadata file written to %s", metadataAlias)

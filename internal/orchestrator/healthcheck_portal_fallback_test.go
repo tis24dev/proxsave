@@ -11,7 +11,7 @@ import (
 
 const (
 	hcPortalURL   = "https://hc.proxsave.dev/accounts/login/"
-	hcPortalLogin = "1414274709917575@proxsave.dev"
+	hcPortalLogin = "5917204836150297@proxsave.dev"
 )
 
 func boolPtr(v bool) *bool { return &v }

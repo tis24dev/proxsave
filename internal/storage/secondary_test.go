@@ -761,14 +761,20 @@ func TestSecondaryStorage_GetStats_UsesListAndComputesSizes(t *testing.T) {
 	if err := os.Chtimes(b2, ts2, ts2); err != nil {
 		t.Fatalf("Chtimes: %v", err)
 	}
+	// Another host's archive on the same secondary: listed, not counted.
+	other := filepath.Join(backupDir, fmt.Sprintf("other-backup-%s.tar.zst", ts2.Format("20060102-150405")))
+	if err := os.WriteFile(other, []byte("other-host"), 0o600); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
 
+	storage.hostname = "node"
 	storage.fsInfo = &FilesystemInfo{Type: FilesystemExt4}
 	stats, err := storage.GetStats(context.Background())
 	if err != nil {
 		t.Fatalf("GetStats error: %v", err)
 	}
-	if stats.TotalBackups != 2 {
-		t.Fatalf("TotalBackups=%d want %d", stats.TotalBackups, 2)
+	if stats.TotalBackups != 2 || stats.ListedBackups != 3 {
+		t.Fatalf("TotalBackups=%d of %d listed, want 2 of 3: only this host's backups are counted", stats.TotalBackups, stats.ListedBackups)
 	}
 	if stats.TotalSize != int64(len("one")+len("two-two")) {
 		t.Fatalf("TotalSize=%d want %d", stats.TotalSize, len("one")+len("two-two"))

@@ -1,0 +1,710 @@
+
+===== result =====
+error: <nil>
+exit code (as cmd/proxsave computes it): 1
+
+===== calls to the fakes, in order =====
+local Store file=charhost-backup-20260102-030405.tar.bundle.tar
+local Store metadata file=charhost-backup-20260102-030405.tar.bundle.tar timestamp=2026-01-02T03:04:05Z size=20480 checksum=set type=unknown compression=none version=""
+local List
+local ApplyRetention policy=simple max=7
+local LastRetentionSummary
+local GetStats
+secondary Store file=charhost-backup-20260102-030405.tar.bundle.tar
+secondary Store metadata file=charhost-backup-20260102-030405.tar.bundle.tar timestamp=2026-01-02T03:04:05Z size=20480 checksum=set type=unknown compression=none version=""
+secondary List
+secondary ApplyRetention policy=simple max=14
+secondary LastRetentionSummary
+secondary GetStats
+cloud Store file=charhost-backup-20260102-030405.tar.bundle.tar
+cloud Store metadata file=charhost-backup-20260102-030405.tar.bundle.tar timestamp=2026-01-02T03:04:05Z size=20480 checksum=set type=unknown compression=none version=""
+cloud ApplyRetention policy=simple max=30
+cloud LastRetentionSummary
+cloud GetStats
+notify Characterization
+cloud log upload dest=charremote:<ROOT>/cloud-log/backup-charhost-20260102-030405.log
+
+===== files per location after the run =====
+[backup path (local)]
+  charhost-backup-20260102-030405.tar.bundle.tar mode=0600 size=20480
+[secondary path]
+  (empty)
+[cloud path]
+  charhost-backup-20260102-030405.tar.bundle.tar mode=0640 size=20480 (same bytes as the reference location)
+[log path]
+  backup-charhost-20260102-030405.log mode=0600 size=<SIZE>
+[secondary log path]
+  backup-charhost-20260102-030405.log mode=0640 size=<SIZE> (same bytes as the reference location)
+[cloud log path]
+  backup-charhost-20260102-030405.log mode=0640 size=<SIZE> (same bytes as the reference location)
+[workspace root]
+  (empty)
+
+===== bundle members =====
+charhost-backup-20260102-030405.tar.bundle.tar:
+  charhost-backup-20260102-030405.tar.metadata size=658 mode=600 type=0
+  charhost-backup-20260102-030405.tar.sha256 size=102 mode=600 type=0
+  charhost-backup-20260102-030405.tar size=16384 mode=600 type=0
+
+===== stdout (console) =====
+[<TIME>] DEBUG    Start backup run: type=unknown hostname=charhost
+[<TIME>] INFO     Starting backup orchestration for unknown
+[<TIME>] DEBUG    Starting cleanup of previous execution files...
+[<TIME>] DEBUG    Checking for orphaned temp directories older than 24h0m0s
+
+[<TIME>] STEP     [1] Initializing backup statistics and temporary workspace
+[<TIME>] DEBUG    Creating temporary directory for collection output
+[<TIME>] DEBUG    Using temporary directory: <ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM>
+
+[<TIME>] STEP     [2] Collection of configuration files and optimizations
+[<TIME>] INFO     Collecting configuration files...
+[<TIME>] DEBUG    Collector dry-run=false excludePatterns=0
+[<TIME>] DEBUG    Starting collector run (type=unknown)
+[<TIME>] INFO     Starting backup collection for unknown
+[<TIME>] DEBUG    Collector dry-run=false tempDir=<ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM>
+[<TIME>] WARNING  Unknown Proxmox type, collecting generic system info only
+[<TIME>] DEBUG    Skipping hypervisor-specific collection because type is unknown
+[<TIME>] DEBUG    Collecting baseline system information (network/system files, commands, hardware data)
+[<TIME>] INFO     Collecting system information
+[<TIME>] DEBUG    Preparing filesystem context for system collection (tempDir=<ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM>)
+[<TIME>] DEBUG    System PATH verified for command execution
+[<TIME>] DEBUG    Collecting hostname/hosts information
+[<TIME>] DEBUG    Collecting Hostname: <ROOT>/sysroot/etc/hostname -> <ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM>/etc/hostname
+[<TIME>] DEBUG    Hostname not found: <ROOT>/sysroot/etc/hostname (skipping)
+[<TIME>] DEBUG    Collecting Hosts file: <ROOT>/sysroot/etc/hosts -> <ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM>/etc/hosts
+[<TIME>] DEBUG    Hosts file not found: <ROOT>/sysroot/etc/hosts (skipping)
+[<TIME>] DEBUG    Collecting DNS resolver configuration
+[<TIME>] DEBUG    Collecting DNS resolver: <ROOT>/sysroot/etc/resolv.conf -> <ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM>/etc/resolv.conf
+[<TIME>] DEBUG    DNS resolver not found: <ROOT>/sysroot/etc/resolv.conf (skipping)
+[<TIME>] DEBUG    Collecting timezone configuration
+[<TIME>] DEBUG    Collecting Timezone configuration: <ROOT>/sysroot/etc/timezone -> <ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM>/etc/timezone
+[<TIME>] DEBUG    Timezone configuration not found: <ROOT>/sysroot/etc/timezone (skipping)
+[<TIME>] DEBUG    Collecting directory logrotate configuration: <ROOT>/sysroot/etc/logrotate.d -> <ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM>/etc/logrotate.d
+[<TIME>] DEBUG    logrotate configuration not found: <ROOT>/sysroot/etc/logrotate.d (skipping)
+[<TIME>] DEBUG    Collecting filesystem table: <ROOT>/sysroot/etc/fstab -> <ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM>/etc/fstab
+[<TIME>] DEBUG    filesystem table not found: <ROOT>/sysroot/etc/fstab (skipping)
+[<TIME>] DEBUG    Collecting crypttab: <ROOT>/sysroot/etc/crypttab -> <ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM>/etc/crypttab
+[<TIME>] DEBUG    crypttab not found: <ROOT>/sysroot/etc/crypttab (skipping)
+[<TIME>] DEBUG    Collecting directory iSCSI configuration: <ROOT>/sysroot/etc/iscsi -> <ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM>/etc/iscsi
+[<TIME>] DEBUG    iSCSI configuration not found: <ROOT>/sysroot/etc/iscsi (skipping)
+[<TIME>] DEBUG    Collecting directory iSCSI runtime state: <ROOT>/sysroot/var/lib/iscsi -> <ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM>/var/lib/iscsi
+[<TIME>] DEBUG    iSCSI runtime state not found: <ROOT>/sysroot/var/lib/iscsi (skipping)
+[<TIME>] DEBUG    Collecting directory multipath configuration: <ROOT>/sysroot/etc/multipath -> <ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM>/etc/multipath
+[<TIME>] DEBUG    multipath configuration not found: <ROOT>/sysroot/etc/multipath (skipping)
+[<TIME>] DEBUG    Collecting multipath.conf: <ROOT>/sysroot/etc/multipath.conf -> <ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM>/etc/multipath.conf
+[<TIME>] DEBUG    multipath.conf not found: <ROOT>/sysroot/etc/multipath.conf (skipping)
+[<TIME>] DEBUG    Collecting directory mdadm configuration: <ROOT>/sysroot/etc/mdadm -> <ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM>/etc/mdadm
+[<TIME>] DEBUG    mdadm configuration not found: <ROOT>/sysroot/etc/mdadm (skipping)
+[<TIME>] DEBUG    Collecting directory LVM metadata backups: <ROOT>/sysroot/etc/lvm/backup -> <ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM>/etc/lvm/backup
+[<TIME>] DEBUG    LVM metadata backups not found: <ROOT>/sysroot/etc/lvm/backup (skipping)
+[<TIME>] DEBUG    Collecting directory LVM metadata archives: <ROOT>/sysroot/etc/lvm/archive -> <ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM>/etc/lvm/archive
+[<TIME>] DEBUG    LVM metadata archives not found: <ROOT>/sysroot/etc/lvm/archive (skipping)
+[<TIME>] DEBUG    Collecting autofs config: <ROOT>/sysroot/etc/auto.master -> <ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM>/etc/auto.master
+[<TIME>] DEBUG    autofs config not found: <ROOT>/sysroot/etc/auto.master (skipping)
+[<TIME>] DEBUG    Collecting autofs config: <ROOT>/sysroot/etc/autofs.conf -> <ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM>/etc/autofs.conf
+[<TIME>] DEBUG    autofs config not found: <ROOT>/sysroot/etc/autofs.conf (skipping)
+[<TIME>] DEBUG    Collecting directory autofs drop-in configs: <ROOT>/sysroot/etc/auto.master.d -> <ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM>/etc/auto.master.d
+[<TIME>] DEBUG    autofs drop-in configs not found: <ROOT>/sysroot/etc/auto.master.d (skipping)
+[<TIME>] DEBUG    Collecting directory DHCP leases (runtime snapshot): <ROOT>/sysroot/var/lib/dhcp -> <ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM>/var/lib/proxsave-info/runtime/var/lib/dhcp
+[<TIME>] DEBUG    DHCP leases (runtime snapshot) not found: <ROOT>/sysroot/var/lib/dhcp (skipping)
+[<TIME>] DEBUG    Collecting directory NetworkManager leases (runtime snapshot): <ROOT>/sysroot/var/lib/NetworkManager -> <ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM>/var/lib/proxsave-info/runtime/var/lib/NetworkManager
+[<TIME>] DEBUG    NetworkManager leases (runtime snapshot) not found: <ROOT>/sysroot/var/lib/NetworkManager (skipping)
+[<TIME>] DEBUG    Collecting directory systemd-networkd leases (runtime snapshot): <ROOT>/sysroot/run/systemd/netif/leases -> <ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM>/var/lib/proxsave-info/runtime/run/systemd/netif/leases
+[<TIME>] DEBUG    systemd-networkd leases (runtime snapshot) not found: <ROOT>/sysroot/run/systemd/netif/leases (skipping)
+[<TIME>] DEBUG    Collection: recipe system - brick "system_network_runtime_addr" never ran
+[<TIME>] DEBUG    Collection: recipe system - brick "system_network_runtime_rules" never ran
+[<TIME>] DEBUG    Collection: recipe system - brick "system_network_runtime_routes" never ran
+[<TIME>] DEBUG    Collection: recipe system - brick "system_network_runtime_links" never ran
+[<TIME>] DEBUG    Collection: recipe system - brick "system_network_runtime_neighbors" never ran
+[<TIME>] DEBUG    Collection: recipe system - brick "system_network_runtime_bridges" never ran
+[<TIME>] DEBUG    Collection: recipe system - brick "system_network_runtime_inventory" never ran
+[<TIME>] DEBUG    Collection: recipe system - brick "system_network_runtime_bonding" never ran
+[<TIME>] DEBUG    Collection: recipe system - brick "system_network_runtime_dns" never ran
+[<TIME>] DEBUG    Collection: recipe system - brick "system_storage_runtime_mounts" never ran
+[<TIME>] DEBUG    Collection: recipe system - brick "system_storage_runtime_block_devices" never ran
+[<TIME>] DEBUG    Collection: recipe system - brick "system_compute_runtime_memory_cpu" never ran
+[<TIME>] DEBUG    Collection: recipe system - brick "system_compute_runtime_bus_inventory" never ran
+[<TIME>] DEBUG    Collection: recipe system - brick "system_services_runtime" never ran
+[<TIME>] DEBUG    Collection: recipe system - brick "system_packages_runtime_installed" never ran
+[<TIME>] DEBUG    Collection: recipe system - brick "system_packages_runtime_apt_policy" never ran
+[<TIME>] DEBUG    Collection: recipe system - brick "system_firewall_runtime_iptables" never ran
+[<TIME>] DEBUG    Collection: recipe system - brick "system_firewall_runtime_ip6tables" never ran
+[<TIME>] DEBUG    Collection: recipe system - brick "system_firewall_runtime_nftables" never ran
+[<TIME>] DEBUG    Collection: recipe system - brick "system_firewall_runtime_ufw" never ran
+[<TIME>] DEBUG    Collection: recipe system - brick "system_firewall_runtime_firewalld" never ran
+[<TIME>] DEBUG    Collection: recipe system - brick "system_kernel_modules_runtime" never ran
+[<TIME>] DEBUG    Collection: recipe system - brick "system_sysctl_runtime" never ran
+[<TIME>] DEBUG    Collection: recipe system - brick "system_zfs_runtime" never ran
+[<TIME>] DEBUG    Collection: recipe system - brick "system_lvm_runtime" never ran
+[<TIME>] DEBUG    Collection: recipe system - brick "system_network_report" never ran
+[<TIME>] DEBUG    Collection: recipe system - brick "system_kernel" never ran
+[<TIME>] DEBUG    Collection: recipe system - brick "system_hardware" never ran
+[<TIME>] DEBUG    Collection: recipe system - brick "system_critical_files" never ran
+[<TIME>] DEBUG    Collection: recipe system - brick "system_config_file" never ran
+[<TIME>] DEBUG    Collection: recipe system - brick "system_custom_paths" never ran
+[<TIME>] DEBUG    Collection: recipe system - brick "system_script_dirs" never ran
+[<TIME>] DEBUG    Collection: recipe system - brick "system_script_repo" never ran
+[<TIME>] DEBUG    Collection: recipe system - brick "system_ssh_keys" never ran
+[<TIME>] DEBUG    Collection: recipe system - brick "system_root_home" never ran
+[<TIME>] DEBUG    Collection: recipe system - brick "system_user_homes" never ran
+[<TIME>] WARNING  Collection: recipe system aborted at brick "system_core_runtime" - 36 later bricks never ran, their targets are missing from this backup
+[<TIME>] WARNING  System info collection had warnings: failed to get OS release (critical): critical command `cat <ROOT>/sysroot/etc/os-release` failed for OS release: exit status 1 (output: cat: <ROOT>/sysroot/etc/os-release: No such file or directory)
+[<TIME>] DEBUG    Baseline system information collected successfully
+[<TIME>] DEBUG    Collection completed: 0 files, 1 failed, 1 dirs created
+[<TIME>] DEBUG    Successfully wrote report file: <ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM>/manifest.json
+[<TIME>] INFO     Collection completed: 1 files (1.5 KiB), 1 failed, 1 dirs created
+[<TIME>] DEBUG    Skipping optimization step (all features disabled)
+
+[<TIME>] STEP     [3] Creation of compressed archive
+[<TIME>] INFO     Creating compressed archive...
+[<TIME>] DEBUG    Archiver configuration: type=none level=0 mode=standard threads=0
+[<TIME>] DEBUG    Resolving compression (requested=none level=0 mode=standard)
+[<TIME>] DEBUG    Compression resolved to none (level 0, threads 0)
+[<TIME>] DEBUG    Resolving compression (requested=none level=0 mode=standard)
+[<TIME>] DEBUG    Compression resolved to none (level 0, threads 0)
+[<TIME>] INFO     Creating compressed archive with none (level 0, mode standard, threads auto)
+[<TIME>] DEBUG    Creating archive: <ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM> -> <ROOT>/backup/charhost-backup-20260102-030405.tar.partial (compression: none)
+[<TIME>] DEBUG    Creating uncompressed tar archive
+[<TIME>] DEBUG    Added file to archive: .proxsave-marker
+[<TIME>] DEBUG    Added file to archive: manifest.json
+[<TIME>] DEBUG    Added file to archive: var/lib/proxsave-info/backup_metadata.txt
+
+[<TIME>] STEP     [4] Verification of archive and metadata generation
+[<TIME>] DEBUG    Archive created: <ROOT>/backup/charhost-backup-20260102-030405.tar (16.0 KiB)
+[<TIME>] DEBUG    Verifying archive: <ROOT>/backup/charhost-backup-20260102-030405.tar.partial
+[<TIME>] DEBUG    Archive size: 16384 bytes
+[<TIME>] DEBUG    Testing uncompressed tar integrity
+[<TIME>] DEBUG    Archive entry-count reconciliation passed (wrote 8, listed 8)
+[<TIME>] DEBUG    Archive verification passed: Tar structure is valid
+[<TIME>] DEBUG    Generating SHA256 checksum for: <ROOT>/backup/charhost-backup-20260102-030405.tar.partial
+[<TIME>] DEBUG    Generated checksum: <SHA256>
+[<TIME>] DEBUG    Checksum file written to <ROOT>/backup/charhost-backup-20260102-030405.tar.sha256
+[<TIME>] DEBUG    Creating manifest file: <ROOT>/backup/charhost-backup-20260102-030405.tar.manifest.json
+[<TIME>] DEBUG    Manifest created successfully
+[<TIME>] DEBUG    Legacy metadata file written to <ROOT>/backup/charhost-backup-20260102-030405.tar.metadata
+
+[<TIME>] STEP     [5] Bundling of archive, checksum and metadata
+[<TIME>] DEBUG    Bundling enabled: creating bundle from charhost-backup-20260102-030405.tar
+[<TIME>] DEBUG    Start bundle create: archive=<ROOT>/backup/charhost-backup-20260102-030405.tar
+[<TIME>] DEBUG    Creating bundle with native Go tar: <ROOT>/backup/charhost-backup-20260102-030405.tar.bundle.tar (files: [charhost-backup-20260102-030405.tar.metadata charhost-backup-20260102-030405.tar.sha256 charhost-backup-20260102-030405.tar])
+[<TIME>] DEBUG    Bundle created successfully: <ROOT>/backup/charhost-backup-20260102-030405.tar.bundle.tar
+[<TIME>] DEBUG    End bundle create (ok, duration=<DURATION>)
+[<TIME>] DEBUG    Removed raw artifact: charhost-backup-20260102-030405.tar
+[<TIME>] DEBUG    Removed raw artifact: charhost-backup-20260102-030405.tar.sha256
+[<TIME>] DEBUG    Removed raw artifact: charhost-backup-20260102-030405.tar.metadata
+[<TIME>] DEBUG    Removed raw artifact: charhost-backup-20260102-030405.tar.manifest.json
+[<TIME>] DEBUG    Removed raw tar/checksum/metadata after bundling
+[<TIME>] DEBUG    Bundle ready: charhost-backup-20260102-030405.tar.bundle.tar
+[<TIME>] INFO     ✓ Archive created and verified
+
+[<TIME>] DEBUG    Storage targets registered: 3, copies: 2
+[<TIME>] STEP     [6] Dispatching archive to 2 storage target(s)
+[<TIME>] DEBUG    Retention policy: local=7 secondary=14 (enabled=true) cloud=30 (enabled=true)
+[<TIME>] INFO       Retention policy: simple (local=7, secondary=14, cloud=30)
+[<TIME>] DEBUG    Dispatching archive to 3 storage targets
+[<TIME>] DEBUG    Starting Local Storage operations...
+[<TIME>] STEP     Local Storage
+[<TIME>] INFO     Setting backup permissions...
+[<TIME>] DEBUG    Local Storage: store issues=[]
+[<TIME>] INFO     ✓ Local Storage: permissions set
+[<TIME>] INFO     Applying retention policy...
+[<TIME>] DEBUG      Policy: simple (keep 7 newest)
+[<TIME>] DEBUG    Local Storage: Current backups detected: 0
+[<TIME>] DEBUG    Local Storage: retention outcome planned=1 deleted=1 not_deleted=0 left_behind=0 not_listed=0 skipped=0 no_metadata=0 logs_deleted=1 logs_not_deleted=0
+[<TIME>] INFO     ✓ Backups deleted: 1
+[<TIME>] INFO     ✓ Logs deleted: 1
+[<TIME>] INFO     Local Storage statistics:
+[<TIME>] INFO       Total backups: 8
+[<TIME>] INFO       Total size: 8.0 MiB
+[<TIME>] DEBUG    Local Storage: filesystem ext4
+[<TIME>] DEBUG    Local Storage operations completed (errors=false warnings=false)
+[<TIME>] DEBUG    Starting Secondary Storage operations...
+[<TIME>] STEP     Secondary Storage
+[<TIME>] INFO     Storing backup...
+[<TIME>] DEBUG    secondary storage store operation failed for <ROOT>/secondary (recoverable): injected failure
+[<TIME>] WARNING  ✗ Secondary Storage: backup not saved
+[<TIME>] INFO     Applying retention policy...
+[<TIME>] DEBUG      Policy: simple (keep 14 newest)
+[<TIME>] DEBUG    Secondary Storage: Current backups detected: 0
+[<TIME>] DEBUG    Secondary Storage: retention outcome planned=0 deleted=0 not_deleted=0 left_behind=0 not_listed=0 skipped=0 no_metadata=0 logs_deleted=0 logs_not_deleted=0
+[<TIME>] INFO     ✓ Nothing to delete
+[<TIME>] INFO     Secondary Storage statistics:
+[<TIME>] INFO       Total backups: 5
+[<TIME>] INFO       Total size: 5.0 MiB
+[<TIME>] DEBUG    Secondary Storage: filesystem nfs4
+[<TIME>] DEBUG    Secondary Storage operations completed (errors=true warnings=false)
+[<TIME>] DEBUG    Starting Cloud Storage (rclone) operations...
+[<TIME>] STEP     Cloud Storage (rclone)
+[<TIME>] INFO     Storing backup...
+[<TIME>] DEBUG    Cloud Storage (rclone): store issues=[]
+[<TIME>] INFO     ✓ Cloud Storage (rclone): backup saved
+[<TIME>] INFO     Applying retention policy...
+[<TIME>] DEBUG      Policy: simple (keep 30 newest)
+[<TIME>] DEBUG    Cloud Storage (rclone): retention outcome planned=2 deleted=2 not_deleted=0 left_behind=0 not_listed=0 skipped=0 no_metadata=0 logs_deleted=0 logs_not_deleted=0
+[<TIME>] INFO     ✓ Backups deleted: 2
+[<TIME>] INFO     Cloud Storage (rclone) statistics:
+[<TIME>] INFO       Total backups: 4
+[<TIME>] INFO       Total size: 4.0 MiB
+[<TIME>] DEBUG    Cloud Storage (rclone): filesystem rclone-charremote
+[<TIME>] DEBUG    Cloud Storage (rclone) operations completed (errors=false warnings=false)
+[<TIME>] DEBUG    Disabled storage targets: secondary=false cloud=false
+
+[<TIME>] SKIP     PBS Storage: disabled
+
+[<TIME>] STEP     [8] Notifications - dispatching channels
+[<TIME>] DEBUG    notifications dispatch: no init decision requested=always fallback=always
+[<TIME>] INFO     ✓ Notification filter: applied
+[<TIME>] DEBUG    notifications dispatch: run outcome=warning warnings=4 errors=0
+[<TIME>] INFO     Notifications: sending...
+[<TIME>] SKIP     Email: disabled
+[<TIME>] SKIP     Telegram: disabled
+[<TIME>] SKIP     Gotify: disabled
+[<TIME>] SKIP     Webhook: disabled
+[<TIME>] SKIP     Healthchecks: disabled
+
+[<TIME>] STEP     [9] Log file management
+[<TIME>] INFO     Closing log file: <ROOT>/log/backup-charhost-20260102-030405.log
+[<TIME>] DEBUG    Log file closed successfully
+[<TIME>] INFO     Dispatching log file: backup-charhost-20260102-030405.log
+[<TIME>] DEBUG    Copying log to secondary: <ROOT>/secondary-log/backup-charhost-20260102-030405.log
+[<TIME>] INFO     Secondary: <ROOT>/secondary-log/backup-charhost-20260102-030405.log
+[<TIME>] INFO     ✓ Log copied to secondary
+[<TIME>] INFO     Cloud: charremote:<ROOT>/cloud-log/backup-charhost-20260102-030405.log
+[<TIME>] DEBUG    Copying log to cloud: charremote:<ROOT>/cloud-log/backup-charhost-20260102-030405.log
+[<TIME>] INFO     ✓ Log copied to cloud
+
+[<TIME>] DEBUG    Go backup completed in 0.0s
+[<TIME>] DEBUG    Removed temporary workspace <ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM>
+[<TIME>] DEBUG    End backup run (ok, duration=<DURATION>)
+
+===== stderr =====
+
+===== run log file =====
+[<TIME>] DEBUG    Start backup run: type=unknown hostname=charhost
+[<TIME>] INFO     Starting backup orchestration for unknown
+[<TIME>] DEBUG    Starting cleanup of previous execution files...
+[<TIME>] DEBUG    Checking for orphaned temp directories older than 24h0m0s
+[<TIME>] STEP     [1] Initializing backup statistics and temporary workspace
+[<TIME>] DEBUG    Creating temporary directory for collection output
+[<TIME>] DEBUG    Using temporary directory: <ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM>
+[<TIME>] STEP     [2] Collection of configuration files and optimizations
+[<TIME>] INFO     Collecting configuration files...
+[<TIME>] DEBUG    Collector dry-run=false excludePatterns=0
+[<TIME>] DEBUG    Starting collector run (type=unknown)
+[<TIME>] INFO     Starting backup collection for unknown
+[<TIME>] DEBUG    Collector dry-run=false tempDir=<ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM>
+[<TIME>] WARNING  Unknown Proxmox type, collecting generic system info only
+[<TIME>] DEBUG    Skipping hypervisor-specific collection because type is unknown
+[<TIME>] DEBUG    Collecting baseline system information (network/system files, commands, hardware data)
+[<TIME>] INFO     Collecting system information
+[<TIME>] DEBUG    Preparing filesystem context for system collection (tempDir=<ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM>)
+[<TIME>] DEBUG    System PATH verified for command execution
+[<TIME>] DEBUG    Collecting hostname/hosts information
+[<TIME>] DEBUG    Collecting Hostname: <ROOT>/sysroot/etc/hostname -> <ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM>/etc/hostname
+[<TIME>] DEBUG    Hostname not found: <ROOT>/sysroot/etc/hostname (skipping)
+[<TIME>] DEBUG    Collecting Hosts file: <ROOT>/sysroot/etc/hosts -> <ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM>/etc/hosts
+[<TIME>] DEBUG    Hosts file not found: <ROOT>/sysroot/etc/hosts (skipping)
+[<TIME>] DEBUG    Collecting DNS resolver configuration
+[<TIME>] DEBUG    Collecting DNS resolver: <ROOT>/sysroot/etc/resolv.conf -> <ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM>/etc/resolv.conf
+[<TIME>] DEBUG    DNS resolver not found: <ROOT>/sysroot/etc/resolv.conf (skipping)
+[<TIME>] DEBUG    Collecting timezone configuration
+[<TIME>] DEBUG    Collecting Timezone configuration: <ROOT>/sysroot/etc/timezone -> <ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM>/etc/timezone
+[<TIME>] DEBUG    Timezone configuration not found: <ROOT>/sysroot/etc/timezone (skipping)
+[<TIME>] DEBUG    Collecting directory logrotate configuration: <ROOT>/sysroot/etc/logrotate.d -> <ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM>/etc/logrotate.d
+[<TIME>] DEBUG    logrotate configuration not found: <ROOT>/sysroot/etc/logrotate.d (skipping)
+[<TIME>] DEBUG    Collecting filesystem table: <ROOT>/sysroot/etc/fstab -> <ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM>/etc/fstab
+[<TIME>] DEBUG    filesystem table not found: <ROOT>/sysroot/etc/fstab (skipping)
+[<TIME>] DEBUG    Collecting crypttab: <ROOT>/sysroot/etc/crypttab -> <ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM>/etc/crypttab
+[<TIME>] DEBUG    crypttab not found: <ROOT>/sysroot/etc/crypttab (skipping)
+[<TIME>] DEBUG    Collecting directory iSCSI configuration: <ROOT>/sysroot/etc/iscsi -> <ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM>/etc/iscsi
+[<TIME>] DEBUG    iSCSI configuration not found: <ROOT>/sysroot/etc/iscsi (skipping)
+[<TIME>] DEBUG    Collecting directory iSCSI runtime state: <ROOT>/sysroot/var/lib/iscsi -> <ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM>/var/lib/iscsi
+[<TIME>] DEBUG    iSCSI runtime state not found: <ROOT>/sysroot/var/lib/iscsi (skipping)
+[<TIME>] DEBUG    Collecting directory multipath configuration: <ROOT>/sysroot/etc/multipath -> <ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM>/etc/multipath
+[<TIME>] DEBUG    multipath configuration not found: <ROOT>/sysroot/etc/multipath (skipping)
+[<TIME>] DEBUG    Collecting multipath.conf: <ROOT>/sysroot/etc/multipath.conf -> <ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM>/etc/multipath.conf
+[<TIME>] DEBUG    multipath.conf not found: <ROOT>/sysroot/etc/multipath.conf (skipping)
+[<TIME>] DEBUG    Collecting directory mdadm configuration: <ROOT>/sysroot/etc/mdadm -> <ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM>/etc/mdadm
+[<TIME>] DEBUG    mdadm configuration not found: <ROOT>/sysroot/etc/mdadm (skipping)
+[<TIME>] DEBUG    Collecting directory LVM metadata backups: <ROOT>/sysroot/etc/lvm/backup -> <ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM>/etc/lvm/backup
+[<TIME>] DEBUG    LVM metadata backups not found: <ROOT>/sysroot/etc/lvm/backup (skipping)
+[<TIME>] DEBUG    Collecting directory LVM metadata archives: <ROOT>/sysroot/etc/lvm/archive -> <ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM>/etc/lvm/archive
+[<TIME>] DEBUG    LVM metadata archives not found: <ROOT>/sysroot/etc/lvm/archive (skipping)
+[<TIME>] DEBUG    Collecting autofs config: <ROOT>/sysroot/etc/auto.master -> <ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM>/etc/auto.master
+[<TIME>] DEBUG    autofs config not found: <ROOT>/sysroot/etc/auto.master (skipping)
+[<TIME>] DEBUG    Collecting autofs config: <ROOT>/sysroot/etc/autofs.conf -> <ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM>/etc/autofs.conf
+[<TIME>] DEBUG    autofs config not found: <ROOT>/sysroot/etc/autofs.conf (skipping)
+[<TIME>] DEBUG    Collecting directory autofs drop-in configs: <ROOT>/sysroot/etc/auto.master.d -> <ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM>/etc/auto.master.d
+[<TIME>] DEBUG    autofs drop-in configs not found: <ROOT>/sysroot/etc/auto.master.d (skipping)
+[<TIME>] DEBUG    Collecting directory DHCP leases (runtime snapshot): <ROOT>/sysroot/var/lib/dhcp -> <ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM>/var/lib/proxsave-info/runtime/var/lib/dhcp
+[<TIME>] DEBUG    DHCP leases (runtime snapshot) not found: <ROOT>/sysroot/var/lib/dhcp (skipping)
+[<TIME>] DEBUG    Collecting directory NetworkManager leases (runtime snapshot): <ROOT>/sysroot/var/lib/NetworkManager -> <ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM>/var/lib/proxsave-info/runtime/var/lib/NetworkManager
+[<TIME>] DEBUG    NetworkManager leases (runtime snapshot) not found: <ROOT>/sysroot/var/lib/NetworkManager (skipping)
+[<TIME>] DEBUG    Collecting directory systemd-networkd leases (runtime snapshot): <ROOT>/sysroot/run/systemd/netif/leases -> <ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM>/var/lib/proxsave-info/runtime/run/systemd/netif/leases
+[<TIME>] DEBUG    systemd-networkd leases (runtime snapshot) not found: <ROOT>/sysroot/run/systemd/netif/leases (skipping)
+[<TIME>] DEBUG    Collection: recipe system - brick "system_network_runtime_addr" never ran
+[<TIME>] DEBUG    Collection: recipe system - brick "system_network_runtime_rules" never ran
+[<TIME>] DEBUG    Collection: recipe system - brick "system_network_runtime_routes" never ran
+[<TIME>] DEBUG    Collection: recipe system - brick "system_network_runtime_links" never ran
+[<TIME>] DEBUG    Collection: recipe system - brick "system_network_runtime_neighbors" never ran
+[<TIME>] DEBUG    Collection: recipe system - brick "system_network_runtime_bridges" never ran
+[<TIME>] DEBUG    Collection: recipe system - brick "system_network_runtime_inventory" never ran
+[<TIME>] DEBUG    Collection: recipe system - brick "system_network_runtime_bonding" never ran
+[<TIME>] DEBUG    Collection: recipe system - brick "system_network_runtime_dns" never ran
+[<TIME>] DEBUG    Collection: recipe system - brick "system_storage_runtime_mounts" never ran
+[<TIME>] DEBUG    Collection: recipe system - brick "system_storage_runtime_block_devices" never ran
+[<TIME>] DEBUG    Collection: recipe system - brick "system_compute_runtime_memory_cpu" never ran
+[<TIME>] DEBUG    Collection: recipe system - brick "system_compute_runtime_bus_inventory" never ran
+[<TIME>] DEBUG    Collection: recipe system - brick "system_services_runtime" never ran
+[<TIME>] DEBUG    Collection: recipe system - brick "system_packages_runtime_installed" never ran
+[<TIME>] DEBUG    Collection: recipe system - brick "system_packages_runtime_apt_policy" never ran
+[<TIME>] DEBUG    Collection: recipe system - brick "system_firewall_runtime_iptables" never ran
+[<TIME>] DEBUG    Collection: recipe system - brick "system_firewall_runtime_ip6tables" never ran
+[<TIME>] DEBUG    Collection: recipe system - brick "system_firewall_runtime_nftables" never ran
+[<TIME>] DEBUG    Collection: recipe system - brick "system_firewall_runtime_ufw" never ran
+[<TIME>] DEBUG    Collection: recipe system - brick "system_firewall_runtime_firewalld" never ran
+[<TIME>] DEBUG    Collection: recipe system - brick "system_kernel_modules_runtime" never ran
+[<TIME>] DEBUG    Collection: recipe system - brick "system_sysctl_runtime" never ran
+[<TIME>] DEBUG    Collection: recipe system - brick "system_zfs_runtime" never ran
+[<TIME>] DEBUG    Collection: recipe system - brick "system_lvm_runtime" never ran
+[<TIME>] DEBUG    Collection: recipe system - brick "system_network_report" never ran
+[<TIME>] DEBUG    Collection: recipe system - brick "system_kernel" never ran
+[<TIME>] DEBUG    Collection: recipe system - brick "system_hardware" never ran
+[<TIME>] DEBUG    Collection: recipe system - brick "system_critical_files" never ran
+[<TIME>] DEBUG    Collection: recipe system - brick "system_config_file" never ran
+[<TIME>] DEBUG    Collection: recipe system - brick "system_custom_paths" never ran
+[<TIME>] DEBUG    Collection: recipe system - brick "system_script_dirs" never ran
+[<TIME>] DEBUG    Collection: recipe system - brick "system_script_repo" never ran
+[<TIME>] DEBUG    Collection: recipe system - brick "system_ssh_keys" never ran
+[<TIME>] DEBUG    Collection: recipe system - brick "system_root_home" never ran
+[<TIME>] DEBUG    Collection: recipe system - brick "system_user_homes" never ran
+[<TIME>] WARNING  Collection: recipe system aborted at brick "system_core_runtime" - 36 later bricks never ran, their targets are missing from this backup
+[<TIME>] WARNING  System info collection had warnings: failed to get OS release (critical): critical command `cat <ROOT>/sysroot/etc/os-release` failed for OS release: exit status 1 (output: cat: <ROOT>/sysroot/etc/os-release: No such file or directory)
+[<TIME>] DEBUG    Baseline system information collected successfully
+[<TIME>] DEBUG    Collection completed: 0 files, 1 failed, 1 dirs created
+[<TIME>] DEBUG    Successfully wrote report file: <ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM>/manifest.json
+[<TIME>] INFO     Collection completed: 1 files (1.5 KiB), 1 failed, 1 dirs created
+[<TIME>] DEBUG    Skipping optimization step (all features disabled)
+[<TIME>] STEP     [3] Creation of compressed archive
+[<TIME>] INFO     Creating compressed archive...
+[<TIME>] DEBUG    Archiver configuration: type=none level=0 mode=standard threads=0
+[<TIME>] DEBUG    Resolving compression (requested=none level=0 mode=standard)
+[<TIME>] DEBUG    Compression resolved to none (level 0, threads 0)
+[<TIME>] DEBUG    Resolving compression (requested=none level=0 mode=standard)
+[<TIME>] DEBUG    Compression resolved to none (level 0, threads 0)
+[<TIME>] INFO     Creating compressed archive with none (level 0, mode standard, threads auto)
+[<TIME>] DEBUG    Creating archive: <ROOT>/workspace/proxsave-charhost-20260102-030405-<RANDOM> -> <ROOT>/backup/charhost-backup-20260102-030405.tar.partial (compression: none)
+[<TIME>] DEBUG    Creating uncompressed tar archive
+[<TIME>] DEBUG    Added file to archive: .proxsave-marker
+[<TIME>] DEBUG    Added file to archive: manifest.json
+[<TIME>] DEBUG    Added file to archive: var/lib/proxsave-info/backup_metadata.txt
+[<TIME>] STEP     [4] Verification of archive and metadata generation
+[<TIME>] DEBUG    Archive created: <ROOT>/backup/charhost-backup-20260102-030405.tar (16.0 KiB)
+[<TIME>] DEBUG    Verifying archive: <ROOT>/backup/charhost-backup-20260102-030405.tar.partial
+[<TIME>] DEBUG    Archive size: 16384 bytes
+[<TIME>] DEBUG    Testing uncompressed tar integrity
+[<TIME>] DEBUG    Archive entry-count reconciliation passed (wrote 8, listed 8)
+[<TIME>] DEBUG    Archive verification passed: Tar structure is valid
+[<TIME>] DEBUG    Generating SHA256 checksum for: <ROOT>/backup/charhost-backup-20260102-030405.tar.partial
+[<TIME>] DEBUG    Generated checksum: <SHA256>
+[<TIME>] DEBUG    Checksum file written to <ROOT>/backup/charhost-backup-20260102-030405.tar.sha256
+[<TIME>] DEBUG    Creating manifest file: <ROOT>/backup/charhost-backup-20260102-030405.tar.manifest.json
+[<TIME>] DEBUG    Manifest created successfully
+[<TIME>] DEBUG    Legacy metadata file written to <ROOT>/backup/charhost-backup-20260102-030405.tar.metadata
+[<TIME>] STEP     [5] Bundling of archive, checksum and metadata
+[<TIME>] DEBUG    Bundling enabled: creating bundle from charhost-backup-20260102-030405.tar
+[<TIME>] DEBUG    Start bundle create: archive=<ROOT>/backup/charhost-backup-20260102-030405.tar
+[<TIME>] DEBUG    Creating bundle with native Go tar: <ROOT>/backup/charhost-backup-20260102-030405.tar.bundle.tar (files: [charhost-backup-20260102-030405.tar.metadata charhost-backup-20260102-030405.tar.sha256 charhost-backup-20260102-030405.tar])
+[<TIME>] DEBUG    Bundle created successfully: <ROOT>/backup/charhost-backup-20260102-030405.tar.bundle.tar
+[<TIME>] DEBUG    End bundle create (ok, duration=<DURATION>)
+[<TIME>] DEBUG    Removed raw artifact: charhost-backup-20260102-030405.tar
+[<TIME>] DEBUG    Removed raw artifact: charhost-backup-20260102-030405.tar.sha256
+[<TIME>] DEBUG    Removed raw artifact: charhost-backup-20260102-030405.tar.metadata
+[<TIME>] DEBUG    Removed raw artifact: charhost-backup-20260102-030405.tar.manifest.json
+[<TIME>] DEBUG    Removed raw tar/checksum/metadata after bundling
+[<TIME>] DEBUG    Bundle ready: charhost-backup-20260102-030405.tar.bundle.tar
+[<TIME>] INFO     ✓ Archive created and verified
+[<TIME>] DEBUG    Storage targets registered: 3, copies: 2
+[<TIME>] STEP     [6] Dispatching archive to 2 storage target(s)
+[<TIME>] DEBUG    Retention policy: local=7 secondary=14 (enabled=true) cloud=30 (enabled=true)
+[<TIME>] INFO       Retention policy: simple (local=7, secondary=14, cloud=30)
+[<TIME>] DEBUG    Dispatching archive to 3 storage targets
+[<TIME>] DEBUG    Starting Local Storage operations...
+[<TIME>] STEP     Local Storage
+[<TIME>] INFO     Setting backup permissions...
+[<TIME>] DEBUG    Local Storage: store issues=[]
+[<TIME>] INFO     ✓ Local Storage: permissions set
+[<TIME>] INFO     Applying retention policy...
+[<TIME>] DEBUG      Policy: simple (keep 7 newest)
+[<TIME>] DEBUG    Local Storage: Current backups detected: 0
+[<TIME>] DEBUG    Local Storage: retention outcome planned=1 deleted=1 not_deleted=0 left_behind=0 not_listed=0 skipped=0 no_metadata=0 logs_deleted=1 logs_not_deleted=0
+[<TIME>] INFO     ✓ Backups deleted: 1
+[<TIME>] INFO     ✓ Logs deleted: 1
+[<TIME>] INFO     Local Storage statistics:
+[<TIME>] INFO       Total backups: 8
+[<TIME>] INFO       Total size: 8.0 MiB
+[<TIME>] DEBUG    Local Storage: filesystem ext4
+[<TIME>] DEBUG    Local Storage operations completed (errors=false warnings=false)
+[<TIME>] DEBUG    Starting Secondary Storage operations...
+[<TIME>] STEP     Secondary Storage
+[<TIME>] INFO     Storing backup...
+[<TIME>] DEBUG    secondary storage store operation failed for <ROOT>/secondary (recoverable): injected failure
+[<TIME>] WARNING  ✗ Secondary Storage: backup not saved
+[<TIME>] INFO     Applying retention policy...
+[<TIME>] DEBUG      Policy: simple (keep 14 newest)
+[<TIME>] DEBUG    Secondary Storage: Current backups detected: 0
+[<TIME>] DEBUG    Secondary Storage: retention outcome planned=0 deleted=0 not_deleted=0 left_behind=0 not_listed=0 skipped=0 no_metadata=0 logs_deleted=0 logs_not_deleted=0
+[<TIME>] INFO     ✓ Nothing to delete
+[<TIME>] INFO     Secondary Storage statistics:
+[<TIME>] INFO       Total backups: 5
+[<TIME>] INFO       Total size: 5.0 MiB
+[<TIME>] DEBUG    Secondary Storage: filesystem nfs4
+[<TIME>] DEBUG    Secondary Storage operations completed (errors=true warnings=false)
+[<TIME>] DEBUG    Starting Cloud Storage (rclone) operations...
+[<TIME>] STEP     Cloud Storage (rclone)
+[<TIME>] INFO     Storing backup...
+[<TIME>] DEBUG    Cloud Storage (rclone): store issues=[]
+[<TIME>] INFO     ✓ Cloud Storage (rclone): backup saved
+[<TIME>] INFO     Applying retention policy...
+[<TIME>] DEBUG      Policy: simple (keep 30 newest)
+[<TIME>] DEBUG    Cloud Storage (rclone): retention outcome planned=2 deleted=2 not_deleted=0 left_behind=0 not_listed=0 skipped=0 no_metadata=0 logs_deleted=0 logs_not_deleted=0
+[<TIME>] INFO     ✓ Backups deleted: 2
+[<TIME>] INFO     Cloud Storage (rclone) statistics:
+[<TIME>] INFO       Total backups: 4
+[<TIME>] INFO       Total size: 4.0 MiB
+[<TIME>] DEBUG    Cloud Storage (rclone): filesystem rclone-charremote
+[<TIME>] DEBUG    Cloud Storage (rclone) operations completed (errors=false warnings=false)
+[<TIME>] DEBUG    Disabled storage targets: secondary=false cloud=false
+[<TIME>] SKIP     PBS Storage: disabled
+[<TIME>] STEP     [8] Notifications - dispatching channels
+[<TIME>] DEBUG    notifications dispatch: no init decision requested=always fallback=always
+[<TIME>] INFO     ✓ Notification filter: applied
+[<TIME>] DEBUG    notifications dispatch: run outcome=warning warnings=4 errors=0
+[<TIME>] INFO     Notifications: sending...
+[<TIME>] SKIP     Email: disabled
+[<TIME>] SKIP     Telegram: disabled
+[<TIME>] SKIP     Gotify: disabled
+[<TIME>] SKIP     Webhook: disabled
+[<TIME>] SKIP     Healthchecks: disabled
+[<TIME>] STEP     [9] Log file management
+[<TIME>] INFO     Closing log file: <ROOT>/log/backup-charhost-20260102-030405.log
+
+===== BackupStats returned by RunGoBackup =====
+{
+  "Hostname": "charhost",
+  "ProxmoxType": "unknown",
+  "IncompleteTargets": [],
+  "ProxmoxTargets": null,
+  "ProxmoxVersion": "unknown",
+  "PVEVersion": "",
+  "PBSVersion": "",
+  "BundleCreated": true,
+  "Timestamp": "2026-01-02T03:04:05Z",
+  "Version": "",
+  "StartTime": "2026-01-02T03:04:05Z",
+  "EndTime": "2026-01-02T03:04:05Z",
+  "FilesCollected": 1,
+  "FilesFailed": 1,
+  "FilesNotFound": 0,
+  "DirsCreated": 1,
+  "BytesCollected": "<MASKED>",
+  "ArchiveSize": 20480,
+  "UncompressedSize": "<MASKED>",
+  "CompressedSize": 20480,
+  "Duration": 0,
+  "ArchivePath": "<ROOT>/backup/charhost-backup-20260102-030405.tar.bundle.tar",
+  "RequestedCompression": "none",
+  "RequestedCompressionMode": "standard",
+  "Compression": "none",
+  "CompressionLevel": 0,
+  "CompressionMode": "standard",
+  "CompressionThreads": 0,
+  "CompressionRatio": "<MASKED>",
+  "CompressionRatioPercent": "<MASKED>",
+  "CompressionSavingsPercent": 0,
+  "ReportPath": "",
+  "ManifestPath": "",
+  "Checksum": "<SHA256>",
+  "LocalPath": "<ROOT>/backup",
+  "SecondaryPath": "<ROOT>/secondary",
+  "CloudPath": "charremote",
+  "LocalStatus": "ok",
+  "LocalStatusSummary": "",
+  "SecondaryStatus": "error",
+  "CloudStatus": "ok",
+  "ServerID": "",
+  "ServerMAC": "",
+  "ClusterMode": "",
+  "FilesIncluded": 1,
+  "FilesMissing": 0,
+  "SecondaryEnabled": true,
+  "LocalBackups": 7,
+  "LocalFreeSpace": 107374182400,
+  "LocalUsedSpace": 53687091200,
+  "LocalTotalSpace": 161061273600,
+  "SecondaryBackups": 3,
+  "SecondaryFreeSpace": 214748364800,
+  "SecondaryUsedSpace": 322122547200,
+  "SecondaryTotalSpace": 536870912000,
+  "CloudEnabled": true,
+  "CloudBackups": 4,
+  "MaxLocalBackups": 0,
+  "MaxSecondaryBackups": 0,
+  "MaxCloudBackups": 0,
+  "LocalRetentionPolicy": "simple",
+  "LocalGFSDaily": 0,
+  "LocalGFSWeekly": 0,
+  "LocalGFSMonthly": 0,
+  "LocalGFSYearly": 0,
+  "SecondaryRetentionPolicy": "simple",
+  "SecondaryGFSDaily": 0,
+  "SecondaryGFSWeekly": 0,
+  "SecondaryGFSMonthly": 0,
+  "SecondaryGFSYearly": 0,
+  "CloudRetentionPolicy": "simple",
+  "CloudGFSDaily": 0,
+  "CloudGFSWeekly": 0,
+  "CloudGFSMonthly": 0,
+  "CloudGFSYearly": 0,
+  "ErrorCount": 0,
+  "WarningCount": 4,
+  "NotifyCount": 0,
+  "LogFilePath": "<ROOT>/log/backup-charhost-20260102-030405.log",
+  "LogCategories": null,
+  "ExitCode": 1,
+  "Failed": false,
+  "ScriptVersion": "",
+  "TelegramStatus": "disabled",
+  "EmailStatus": "disabled",
+  "NotifyResults": null,
+  "HealthcheckLink": "",
+  "HealthcheckStatus": "",
+  "HealthcheckPortalURL": "",
+  "HealthcheckPortalLogin": "",
+  "NewVersionAvailable": false,
+  "CurrentVersion": "",
+  "LatestVersion": ""
+}
+
+===== BackupStats as seen by the notification channel =====
+calls: 1
+{
+  "Hostname": "charhost",
+  "ProxmoxType": "unknown",
+  "IncompleteTargets": [],
+  "ProxmoxTargets": null,
+  "ProxmoxVersion": "unknown",
+  "PVEVersion": "",
+  "PBSVersion": "",
+  "BundleCreated": true,
+  "Timestamp": "2026-01-02T03:04:05Z",
+  "Version": "",
+  "StartTime": "2026-01-02T03:04:05Z",
+  "EndTime": "2026-01-02T03:04:05Z",
+  "FilesCollected": 1,
+  "FilesFailed": 1,
+  "FilesNotFound": 0,
+  "DirsCreated": 1,
+  "BytesCollected": "<MASKED>",
+  "ArchiveSize": 20480,
+  "UncompressedSize": "<MASKED>",
+  "CompressedSize": 20480,
+  "Duration": 0,
+  "ArchivePath": "<ROOT>/backup/charhost-backup-20260102-030405.tar.bundle.tar",
+  "RequestedCompression": "none",
+  "RequestedCompressionMode": "standard",
+  "Compression": "none",
+  "CompressionLevel": 0,
+  "CompressionMode": "standard",
+  "CompressionThreads": 0,
+  "CompressionRatio": "<MASKED>",
+  "CompressionRatioPercent": "<MASKED>",
+  "CompressionSavingsPercent": 0,
+  "ReportPath": "",
+  "ManifestPath": "",
+  "Checksum": "<SHA256>",
+  "LocalPath": "<ROOT>/backup",
+  "SecondaryPath": "<ROOT>/secondary",
+  "CloudPath": "charremote",
+  "LocalStatus": "ok",
+  "LocalStatusSummary": "",
+  "SecondaryStatus": "error",
+  "CloudStatus": "ok",
+  "ServerID": "",
+  "ServerMAC": "",
+  "ClusterMode": "",
+  "FilesIncluded": 1,
+  "FilesMissing": 0,
+  "SecondaryEnabled": true,
+  "LocalBackups": 7,
+  "LocalFreeSpace": 107374182400,
+  "LocalUsedSpace": 53687091200,
+  "LocalTotalSpace": 161061273600,
+  "SecondaryBackups": 3,
+  "SecondaryFreeSpace": 214748364800,
+  "SecondaryUsedSpace": 322122547200,
+  "SecondaryTotalSpace": 536870912000,
+  "CloudEnabled": true,
+  "CloudBackups": 4,
+  "MaxLocalBackups": 0,
+  "MaxSecondaryBackups": 0,
+  "MaxCloudBackups": 0,
+  "LocalRetentionPolicy": "simple",
+  "LocalGFSDaily": 0,
+  "LocalGFSWeekly": 0,
+  "LocalGFSMonthly": 0,
+  "LocalGFSYearly": 0,
+  "SecondaryRetentionPolicy": "simple",
+  "SecondaryGFSDaily": 0,
+  "SecondaryGFSWeekly": 0,
+  "SecondaryGFSMonthly": 0,
+  "SecondaryGFSYearly": 0,
+  "CloudRetentionPolicy": "simple",
+  "CloudGFSDaily": 0,
+  "CloudGFSWeekly": 0,
+  "CloudGFSMonthly": 0,
+  "CloudGFSYearly": 0,
+  "ErrorCount": 0,
+  "WarningCount": 4,
+  "NotifyCount": 0,
+  "LogFilePath": "<ROOT>/log/backup-charhost-20260102-030405.log",
+  "LogCategories": [
+    {
+      "label": "✗ Secondary Storage: backup not saved",
+      "type": "WARNING",
+      "count": 1,
+      "example": "✗ Secondary Storage: backup not saved"
+    },
+    {
+      "label": "Collection: recipe system aborted at brick \"system_core_runtime\"",
+      "type": "WARNING",
+      "count": 1,
+      "example": "36 later bricks never ran, their targets are missing from this backup"
+    },
+    {
+      "label": "System info collection had warnings: failed to get OS release (critical): critical command `cat <ROOT>...",
+      "type": "WARNING",
+      "count": 1,
+      "example": "System info collection had warnings: failed to get OS release (critical): critical command `cat <ROOT>..."
+    },
+    {
+      "label": "Unknown Proxmox type, collecting generic system info only",
+      "type": "WARNING",
+      "count": 1,
+      "example": "Unknown Proxmox type, collecting generic system info only"
+    }
+  ],
+  "ExitCode": 1,
+  "Failed": false,
+  "ScriptVersion": "",
+  "TelegramStatus": "disabled",
+  "EmailStatus": "disabled",
+  "NotifyResults": null,
+  "HealthcheckLink": "",
+  "HealthcheckStatus": "",
+  "HealthcheckPortalURL": "",
+  "HealthcheckPortalLogin": "",
+  "NewVersionAvailable": false,
+  "CurrentVersion": "",
+  "LatestVersion": ""
+}

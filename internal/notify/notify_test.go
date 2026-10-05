@@ -145,6 +145,8 @@ func TestBuildEmailHTMLEscapesHeaderStorageAndFooterValues(t *testing.T) {
 	data.SecondaryUsed = `<b>secondary used</b>`
 	data.SecondaryFree = `<i>secondary free</i>`
 	data.SecondaryPercent = `<u>secondary percent</u>`
+	// A configured cloud: a switched-off one shows "disabled" instead of its summary.
+	data.CloudEnabled = true
 	data.CloudStatusSummary = `<script>cloud()</script>`
 	data.ScriptVersion = `<script>version()</script>`
 

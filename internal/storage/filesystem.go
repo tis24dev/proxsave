@@ -131,16 +131,16 @@ func (d *FilesystemDetector) DetectFilesystem(ctx context.Context, path string) 
 			supportsOwnership := testFn(ctx, path)
 			info.SupportsOwnership = supportsOwnership
 			if supportsOwnership {
-				d.logger.Info("Network filesystem %s supports Unix ownership", fsType)
+				d.logger.Debug("Network filesystem %s supports Unix ownership", fsType)
 			} else {
-				d.logger.Info("Network filesystem %s does NOT support Unix ownership", fsType)
+				d.logger.Debug("Network filesystem %s does NOT support Unix ownership", fsType)
 			}
 		}
 	}
 
 	// Auto-exclude incompatible filesystems
 	if fsType.ShouldAutoExclude() {
-		d.logger.Info("Filesystem %s is incompatible with Unix ownership - will skip chown/chmod", fsType)
+		d.logger.Debug("Filesystem %s is incompatible with Unix ownership - will skip chown/chmod", fsType)
 	}
 
 	return info, nil
@@ -404,7 +404,39 @@ func unescapeOctal(s string) string {
 	return result.String()
 }
 
-// SetPermissions sets file permissions and ownership, respecting filesystem capabilities
+// PermissionsError is what SetPermissions could not apply to one file: the owner
+// (chown), the mode (chmod), or both. A nil field is an operation that succeeded. The
+// storage blocks print one fact per failed operation, in the order they run
+// ("  Owner failed: ...", then "  Permissions failed: ...").
+type PermissionsError struct {
+	Owner error
+	Mode  error
+}
+
+func (e *PermissionsError) Error() string {
+	var parts []string
+	for _, err := range []error{e.Owner, e.Mode} {
+		if err != nil {
+			parts = append(parts, err.Error())
+		}
+	}
+	return strings.Join(parts, "; ")
+}
+
+func (e *PermissionsError) Unwrap() []error {
+	var errs []error
+	for _, err := range []error{e.Owner, e.Mode} {
+		if err != nil {
+			errs = append(errs, err)
+		}
+	}
+	return errs
+}
+
+// SetPermissions sets file permissions and ownership, respecting filesystem
+// capabilities. A failed chown no longer stops the chmod, and neither is dropped: the
+// result is a *PermissionsError carrying each operation that failed, nil when both
+// succeeded.
 func (d *FilesystemDetector) SetPermissions(ctx context.Context, path string, uid, gid int, mode os.FileMode, fsInfo *FilesystemInfo) error {
 	// If filesystem doesn't support ownership, skip
 	if fsInfo != nil && !fsInfo.SupportsOwnership {
@@ -412,25 +444,33 @@ func (d *FilesystemDetector) SetPermissions(ctx context.Context, path string, ui
 		return nil
 	}
 
+	var failed PermissionsError
+
 	// Try to set ownership (bounded against a dead/stale mount).
 	if _, err := safefs.Run(ctx, "setperm-chown", path, d.ioTimeout, func() (struct{}, error) {
 		return struct{}{}, os.Chown(path, uid, gid)
 	}); err != nil {
-		// On compatible filesystem, this is a warning (not an error)
-		if fsInfo != nil && !fsInfo.Type.ShouldAutoExclude() {
-			d.logger.Warning("Failed to set ownership for %s (filesystem %s): %v", path, fsInfo.Type, err)
-		}
-		// Don't return error - continue with chmod
+		d.logger.Debug("Failed to set ownership for %s (filesystem %s): %v", path, fsTypeLabel(fsInfo), err)
+		// Continue with chmod: the mode is worth setting even when the owner is not.
+		failed.Owner = err
 	}
 
 	// Try to set permissions (bounded against a dead/stale mount).
 	if err := safefs.Chmod(ctx, path, mode, d.ioTimeout); err != nil {
-		// On compatible filesystem, this is a warning (not an error)
-		if fsInfo != nil && !fsInfo.Type.ShouldAutoExclude() {
-			d.logger.Warning("Failed to set permissions for %s (filesystem %s): %v", path, fsInfo.Type, err)
-		}
-		return err
+		d.logger.Debug("Failed to set permissions for %s (filesystem %s): %v", path, fsTypeLabel(fsInfo), err)
+		failed.Mode = err
 	}
 
-	return nil
+	if failed.Owner == nil && failed.Mode == nil {
+		return nil
+	}
+	return &failed
+}
+
+// fsTypeLabel is the filesystem type a DEBUG line names, "unknown" without a detection.
+func fsTypeLabel(fsInfo *FilesystemInfo) string {
+	if fsInfo == nil || fsInfo.Type == "" {
+		return "unknown"
+	}
+	return string(fsInfo.Type)
 }

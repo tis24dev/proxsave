@@ -4,11 +4,11 @@ import (
 	"archive/tar"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"time"
 
@@ -35,7 +35,8 @@ func resolveRetentionHostname() string {
 
 // retentionIdentity is everything a retention pass knows about the machine running
 // it: the name the kernel reports, the other names this run's writer stamped into
-// the archives it produced, and this host's own server identity.
+// the archives it produced, this host's own server identity, and which archive at
+// the location this run produced.
 //
 // It is a struct rather than three parameters for a reason that is not cosmetic. The
 // functions taking it used to end in "aliases ...string", so adding a plain
@@ -54,47 +55,19 @@ type retentionIdentity struct {
 	// not know it. "" disables the adoption arm entirely: a host that cannot name
 	// its own identity may not borrow somebody else's.
 	serverID string
-}
-
-// names returns every spelling this machine answers to, the kernel name first.
-//
-// Clause e of the adoption rule reads the whole set, because a host that still
-// resolves its FQDN answers to two spellings of one short label and that fact is
-// exactly what disqualifies it from adopting a third. The containment clause d does
-// NOT: it reads the kernel name alone, through shortLabel below. The two ask
-// different questions on purpose, and an earlier version that let clause d read this
-// set is the defect shortLabel's own comment describes.
-func (id retentionIdentity) names() []string {
-	out := make([]string, 0, len(id.aliases)+1)
-	if key := types.NormalizeHostname(id.hostname); key != "" {
-		out = append(out, key)
-	}
-	for _, alias := range id.aliases {
-		if key := types.NormalizeHostname(alias); key != "" && key != unresolvedHostname {
-			out = append(out, key)
-		}
-	}
-	return out
+	// thisRunArchive is the base name of the archive this run handed to Store at this
+	// location, "" when no Store ran in this process. Ownership never reads it. It is
+	// the one archive retentionSharedIdentity must not take for this host's PREVIOUS
+	// backup: this run's archive is always newer than whatever another writer left.
+	thisRunArchive string
 }
 
 // shortLabel is the one first label this host reports under: the first label of the
-// name the kernel gives, normalised. Aliases are deliberately NOT folded in.
-//
-// The reason is not that an alias could never be the lost spelling. It could: a host
-// whose "hostname -f" answered "nas.example.com" a year ago and answers "nas" today
-// has real work stranded under a label that is an alias's, not the kernel name's.
-// The reason is narrower and it is about what retention is allowed to do rather than
-// about what is true. This is the key retentionSpellingMismatches counts under, and
-// adoption may only ever claim from inside the population retention already reports
-// as possibly its own. Sharing the key is what makes that a property of the code.
-// Widening the key would widen what is reported as this host's unmanaged work, which
-// is a published number (RetentionSummary.Owned), and it would put another machine's
-// archives into it.
-//
-// So an archive under an alias's label carrying this host's identity is left alone
-// and reported as contended. That is the fail-closed side of the trade, and it is the
-// side to be on: not rotating an archive grows a directory, and deleting one that
-// turns out to be another machine's cannot be undone.
+// name the kernel gives, normalised. Aliases are deliberately NOT folded in. It is the
+// key the not-rotated fact is reported under: an archive whose first label is this
+// one, under a spelling this host does not answer to and without this host's server
+// identity, is named as not rotated. Widening the key would put another machine's
+// archives into that report.
 func (id retentionIdentity) shortLabel() string {
 	return hostShortLabel(types.NormalizeHostname(id.hostname))
 }
@@ -140,15 +113,16 @@ func (id retentionIdentity) shortLabel() string {
 // what discussion #292 reports. Ownership is therefore a property of the ARCHIVE
 // alone and never of the location it sits in, which is why no question about the
 // location has to be answered here and why a networked BACKUP_PATH needs no case of
-// its own. An archive nobody can name is left alone by every host and reported, which
-// applyRetentionHostScope does.
+// its own. An archive nobody can name is left alone by every host, and
+// applyRetentionHostScope writes it at DEBUG.
 //
 // Two mechanisms run side by side here, and the second never replaces the first.
-// Everything above is the hostname rule, and it decides every archive that exists
-// today: no archive written before this field existed carries a server identity, and
-// a pre-Go "proxmox-backup-*" name carries neither. The identity is an ADDITIONAL
-// and strictly narrower signal, available only on archives written from this version
-// on, and archiveAdoptedByServerID states the whole of what it may do.
+// Everything above is the hostname rule, and it decides every archive that carries no
+// server identity: every archive written before that field existed, and every pre-Go
+// "proxmox-backup-*" name. The identity is an ADDITIONAL signal, available only on
+// archives written from that version on, and archiveAdoptedByServerID states the whole
+// of what it may do: the same server identity is the same server, whatever name the
+// archive carries.
 func backupBelongsToHost(meta *types.BackupMetadata, id retentionIdentity) bool {
 	if meta == nil {
 		return false
@@ -167,8 +141,8 @@ func backupBelongsToHost(meta *types.BackupMetadata, id retentionIdentity) bool 
 	// identity file keeps rotating its own archives instead of stranding them for
 	// ever at WARNING, which is the very symptom discussion #292 reports.
 	//
-	// The adoption arm is the other half: it can only ever add, and only inside the
-	// narrow population archiveAdoptedByServerID admits.
+	// The adoption arm is the other half: it can only ever add, and only archives
+	// carrying this host's own server identity.
 	return hostOwnsName(owner, id.hostname, id.aliases...) || archiveAdoptedByServerID(meta, id)
 }
 
@@ -182,127 +156,19 @@ func archiveServerID(meta *types.BackupMetadata) string {
 	return types.NormalizeServerID(meta.ServerID)
 }
 
-// hostAnswersOnlyToBareLabel reports whether the ONLY spelling of label this machine
-// answers to is the bare label itself. It is the clause that keeps the adoption arm
-// from reaching another machine.
-//
-// A host that still resolves its own qualified name holds a competing spelling of
-// its short label, so an archive naming a THIRD spelling of that label is a second
-// machine, or a clone in another domain, and not this host under a name it lost. A
-// host that has lost qualified resolution holds only the bare label, which is
-// precisely the degraded state discussion #292 describes. That difference is the
-// only evidence inside this process that separates "me, degraded" from "somebody
-// else with the same short name", and it is why the two-site fixture in
-// backup_owner_test.go stays green once identities exist.
-func hostAnswersOnlyToBareLabel(label string, id retentionIdentity) bool {
-	if label == "" {
-		return false
-	}
-	for _, name := range id.names() {
-		if hostShortLabel(name) == label && name != label {
-			return false
-		}
-	}
-	return true
-}
-
 // archiveAdoptedByServerID reports whether an archive this host does not answer to BY
-// NAME may nonetheless be claimed because it carries this host's own server identity.
-// It is the whole of the discussion #292 fix and it is deliberately narrow: every one
-// of the clauses below must hold, and any one of them failing leaves the archive
-// classified exactly as it is today.
+// NAME is nonetheless this host's because it records this host's own server identity.
+// The rule is that the same server identity is the same server, whatever name the
+// archive carries: another short label, a bare name, a competing spelling of this
+// host's own name, or a name that came only from the filename token. It follows, and
+// was stated and accepted when the rule was decided, that a clone carrying the same
+// identity and writing to the same location has its backups rotated by this host too.
 //
-// The identity may only CONFIRM a claim the hostname already makes ambiguously. It
-// may never CREATE one (clause a refuses a name that came from the filename, and
-// backupOwnerHost returning "" is refused by the caller before this is reached), and
-// it may never REMOVE one (this function is only ever OR-ed after the hostname arm).
-//
-// Containment is clause d, and it is a shared call rather than an argument. Clause d
-// IS archiveSharesLocalShortLabel, the same predicate retentionSpellingMismatches
-// counts with, so "everything adoption can claim is already inside the population
-// retention reports" holds by construction: one function decides both sets, and an
-// edit to it cannot move one without moving the other. Adoption can never reach an
-// archive attributed to another first label, and never an archive nobody can name,
-// because that one predicate refuses both.
-//
-// It has to be the shared call and not an equivalent expression. An earlier version
-// argued containment from a weaker clause, "the archive's short label is a name this
-// machine answers to", on the reasoning that the kernel name is one of those names.
-// That is a non sequitur: being IN the name set does not make a label EQUAL to the
-// kernel name's label, and on a host holding an alias with a different first label
-// the two populations came apart, letting adoption claim an archive every printed
-// line called another machine's. See clause d for the exact shape.
+// The identity may never act alone and it may never REMOVE a claim: an archive nothing
+// names stays nobody's, and this function is only ever OR-ed after the hostname arm.
+// retentionAdoptionRefusal is the rule clause by clause; this is its yes/no answer.
 func archiveAdoptedByServerID(meta *types.BackupMetadata, id retentionIdentity) bool {
-	if meta == nil {
-		return false
-	}
-
-	// a. The name must have come from the MANIFEST. The "<host>-backup-<ts>" token a
-	// filename carries is the degraded attribution path, and a file can be renamed by
-	// anyone with write access to a shared location; it must not gain the power to
-	// pull an identity match along with it.
-	archiveHost := types.NormalizeHostname(strings.TrimSpace(meta.Hostname))
-	if archiveHost == "" {
-		return false
-	}
-
-	// b. Two VALIDATED identities, equal as bytes. Absent on either side means
-	// "cannot compare" and stops here, which is every archive written before this
-	// field existed and every host that does not know its own identity.
-	local := types.NormalizeServerID(id.serverID)
-	if local == "" {
-		return false
-	}
-	if archiveServerID(meta) != local {
-		return false
-	}
-
-	// c. The archive must name a QUALIFIED host. The case being repaired is a machine
-	// that stamped its FQDN and can now resolve only the short name; an archive naming
-	// a bare label this host does not answer to is a different machine's, whatever it
-	// carries.
-	dot := strings.IndexByte(archiveHost, '.')
-	if dot <= 0 || dot == len(archiveHost)-1 {
-		return false
-	}
-
-	// d. The archive's first label must be THIS HOST'S OWN first label, the one
-	// id.shortLabel names. It is the containment clause, and it is deliberately the
-	// same call retentionSpellingMismatches makes for its own line: adoption may only
-	// ever claim from inside the population retention already reports.
-	//
-	// It used to read hostOwnsName(label, id.hostname, id.aliases...), which asked
-	// whether the archive's label was ANY name this machine answers to. That is a
-	// weaker question than the reporting side asks, and the two came apart on a host
-	// carrying an alias with a different first label: /etc/hostname says "pve" while
-	// /etc/hosts says "127.0.1.1 nas pve", so "hostname -f" returns "nas", the alias
-	// set is {nas}, and an archive naming "nas.lan" satisfied the old clause without
-	// ever having been reported as a spelling of "pve". That archive was CONTENDED,
-	// another machine's as far as every line this file prints is concerned, refused by
-	// retention and reported at WARNING. Adoption must not be able to reach it.
-	//
-	// backupOwnerHost inside the shared predicate resolves to exactly the value clause
-	// a validated: a. has already established that meta.Hostname is non-blank, and
-	// backupOwnerHost prefers that field whole, falling through to the filename token
-	// only when it is blank. So the label this clause tests and the label clause e goes
-	// on to use are the same string, and the filename token can no more enter here than
-	// it can enter clause a. That depends on a. running FIRST; do not reorder them.
-	if !archiveSharesLocalShortLabel(meta, id) {
-		return false
-	}
-	label := hostShortLabel(archiveHost)
-
-	// e. And it must answer to NO OTHER spelling of that label. See
-	// hostAnswersOnlyToBareLabel: this is the clause that refuses a second machine or
-	// a clone sitting in another domain.
-	if !hostAnswersOnlyToBareLabel(label, id) {
-		return false
-	}
-
-	// f. And, finally, the archive's own name is not one this host answers to. Rule 2
-	// already ran in backupBelongsToHost, so this is guaranteed; it is restated so the
-	// clause set reads as a closed predicate that can be checked on its own.
-	return !hostOwnsName(archiveHost, id.hostname, id.aliases...)
+	return retentionAdoptionRefusal(meta, id) == refusalNone
 }
 
 // unresolvedHostname is what the writer stamps into an archive when the machine
@@ -387,19 +253,8 @@ func hostShortLabel(host string) string {
 }
 
 // archiveSharesLocalShortLabel reports whether an archive is attributed to a host
-// whose first label is this host's own first label. It is the single membership test
-// of the population this file both REPORTS and may ADOPT from, and it exists as one
-// function called from two places rather than as two expressions that happen to
-// agree.
-//
-// That is the whole mechanism behind the containment archiveAdoptedByServerID relies
-// on. Written twice, "adoption only ever claims inside what retention already
-// reports" is a comment, and comments do not fail. Written once and called from both
-// sides it is the code, and the subset relation survives any edit to it: adoption
-// passes through this predicate AND through clauses a, b, c, e and f, so widening
-// this predicate can only ever widen the reported population by at least as much as
-// the adoptable one. The two cannot come apart again without the shared call being
-// deliberately unpicked.
+// whose first label is this host's own first label, under a spelling this host does
+// not answer to. It is the membership test of the population reported as not rotated.
 //
 // The empty local label is refused rather than compared. hostShortLabel("") is "", so
 // a machine that cannot name itself would otherwise match every unattributable entry
@@ -416,26 +271,6 @@ func archiveSharesLocalShortLabel(meta *types.BackupMetadata, id retentionIdenti
 	return hostShortLabel(types.NormalizeHostname(backupOwnerHost(meta))) == local
 }
 
-// retentionSpellingMismatches counts entries that look like this host's own work
-// under a different spelling of its name: the owner shares the local short label
-// without being one of the names this machine answers to. They are usually archives
-// written while "hostname -f" resolved and it no longer does, so they have stopped
-// rotating. They are reported, never claimed BY NAME: from here a name alone cannot
-// tell them from a second machine with the same short name, and claiming them on the
-// name would delete that machine's backups. A server identity can claim one, and
-// archiveAdoptedByServerID may only ever do so from inside this very population,
-// which is why the membership test below is a shared call and not a local
-// expression.
-func retentionSpellingMismatches(foreign []*types.BackupMetadata, id retentionIdentity) int {
-	count := 0
-	for _, b := range foreign {
-		if archiveSharesLocalShortLabel(b, id) {
-			count++
-		}
-	}
-	return count
-}
-
 // retentionUnattributable counts the out-of-scope entries that name no writer at
 // all, usually pre-Go "proxmox-backup-*" archives with no readable manifest beside
 // them. It is keyed on ATTRIBUTABILITY rather than on the legacy prefix, because
@@ -443,14 +278,13 @@ func retentionSpellingMismatches(foreign []*types.BackupMetadata, id retentionId
 // property itself, and a "*-backup-*" name whose timestamp does not parse deserves
 // the same treatment for the same reason.
 //
-// The two kinds of out-of-scope entry are reported separately because they differ in
-// kind, not only in degree. An archive attributed to another machine is CONTENTION:
-// it is live information about what retention will and will not prune here, and it
-// belongs in the run status. An archive nobody can name is a fixed backlog fact that
-// no future run will change, and since no host will ever prune it, counting it as a
-// run issue would promote every affected run to exit 1 for ever through
-// applyIssueExitCode (internal/orchestrator/extensions.go), which is the symptom
-// discussion #292 reported rather than a report of it.
+// Neither kind of out-of-scope entry gets a visible line. An archive attributed to
+// another machine is that machine's to prune and its to report. An archive nobody can
+// name is a fixed backlog fact that no future run will change, and since no host will
+// ever prune it, counting it as a run issue would promote every affected run to exit 1
+// for ever through applyIssueExitCode (internal/orchestrator/extensions.go), which is
+// the symptom discussion #292 reported rather than a report of it. It is counted for
+// the DEBUG line that names the case.
 func retentionUnattributable(foreign []*types.BackupMetadata) int {
 	count := 0
 	for _, b := range foreign {
@@ -515,109 +349,94 @@ func scopeRetentionToHost(backups []*types.BackupMetadata, id retentionIdentity)
 	return owned, foreign
 }
 
-// retentionAdopted counts the owned entries that are owned ONLY because they carry
-// this host's own server identity: without it they would have been reported as
-// spelling mismatches and left to grow. It is recomputed over the owned set rather
-// than tallied inside the split so the split stays the one plain statement of the
-// rule, and the cost is one predicate per owned archive.
-func retentionAdopted(owned []*types.BackupMetadata, id retentionIdentity) int {
-	count := 0
+// retentionAdopted returns the owned entries that are owned ONLY because they carry
+// this host's own server identity: without it they would have been left alone and
+// left to grow. It is recomputed over the owned set rather than tallied inside the
+// split so the split stays the one plain statement of the rule, and the cost is one
+// predicate per owned archive.
+func retentionAdopted(owned []*types.BackupMetadata, id retentionIdentity) []*types.BackupMetadata {
+	var adopted []*types.BackupMetadata
 	for _, b := range owned {
 		if archiveAdoptedByServerID(b, id) {
-			count++
+			adopted = append(adopted, b)
 		}
 	}
-	return count
+	return adopted
 }
 
-// retentionIdentityDivergences counts the owned entries this host claims BY NAME
+// retentionIdentityDivergences returns the owned entries this host claims BY NAME
 // whose recorded identity is a valid one and is not this host's. They are still
-// owned and still pruned: the name is what decides, and it always was. The count
-// exists because the two causes are worth telling apart on the operator's side, and
-// because silently pruning an archive that says it came from somewhere else is a
-// fact worth stating once per pass.
-func retentionIdentityDivergences(owned []*types.BackupMetadata, id retentionIdentity) int {
+// owned and still pruned: the name is what decides, and it always was. They are
+// reported because silently pruning an archive that says it came from somewhere else
+// is a fact worth stating once per pass.
+func retentionIdentityDivergences(owned []*types.BackupMetadata, id retentionIdentity) []*types.BackupMetadata {
 	local := types.NormalizeServerID(id.serverID)
 	if local == "" {
-		return 0
+		return nil
 	}
-	count := 0
+	var divergent []*types.BackupMetadata
 	for _, b := range owned {
 		if b == nil {
 			continue
 		}
 		if archived := archiveServerID(b); archived != "" && archived != local {
-			count++
+			divergent = append(divergent, b)
 		}
 	}
-	return count
+	return divergent
 }
 
-// retentionRefusal names WHICH adoption clause refused an archive. It exists so that
-// the per-entry Debug line and every summary line are read off ONE answer per
-// archive instead of each re-asserting a cause of its own.
-//
-// That is not tidiness, it is the defect. The twin-keyed summary clause used to state
-// a single reason, clause e, over a population counted with no reference to any clause
-// at all, so on a renamed host (kernel name "pve", "hostname -f" answering "nas") it
-// told the operator that this machine "still answers to another spelling of that short
-// name" about archives clause d had refused for the opposite reason: this host answers
-// to no other spelling of "nas" at all, the label simply is not the one it reports
-// under. A cause the code can only state by naming a value it computed cannot drift
-// from the cause that fired.
+// retentionRefusal names WHICH adoption clause refused an archive. The per-entry DEBUG
+// line reads it, so a debug log says why an out-of-scope archive was not adopted.
 type retentionRefusal int
 
 const (
-	// refusalNone means every clause passed. It is unreachable for an OUT OF SCOPE
-	// entry: clause f is the last one, and an archive that passes it is owned by the
-	// hostname rule, so it never reaches the foreign set to be reported on.
+	// refusalNone means every clause passed: the archive is adopted.
 	refusalNone retentionRefusal = iota
 	// refusalNoEntry is the nil guard. scopeRetentionToHost drops nil entries, so it
-	// cannot reach the summary lines either; it exists so the chain is total.
+	// cannot reach the DEBUG line; it exists so the chain is total.
 	refusalNoEntry
+	// refusalNoLocalHostname is a property of the HOST: a machine that cannot name
+	// itself attributes nothing, so it adopts nothing either.
+	refusalNoLocalHostname
 	// refusalNoLocalIdentity is a property of the HOST, not of the archive: this
 	// machine does not know its own identity, so the adoption arm is off for
 	// everything in the listing at once.
 	refusalNoLocalIdentity
-	refusalNoManifestHost    // clause a: the name came from the filename, or nowhere
-	refusalNoArchiveIdentity // clause b: the archive records no readable identity
-	refusalOtherIdentity     // clause b: the archive records somebody else's identity
-	refusalUnqualifiedName   // clause c: the archive names a bare label
-	refusalOtherShortLabel   // clause d: not the first label this host reports under
-	refusalCompetingSpelling // clause e: this host answers to another spelling of it
+	refusalNoHostName        // nothing names the host that wrote the archive
+	refusalNoArchiveIdentity // the archive records no readable identity
+	refusalOtherIdentity     // the archive records somebody else's identity
+	refusalOwnedByName       // the archive is this host's by name: nothing to adopt
 )
 
-// retentionAdoptionRefusal walks the adoption clauses in the order
-// archiveAdoptedByServerID walks them and returns the FIRST one that refused, or
-// refusalNone when none did.
+// retentionAdoptionRefusal is the adoption rule, clause by clause, and returns the
+// FIRST clause that refused, or refusalNone when the archive is adopted.
 //
-// It is the reporting side's single source of cause, and it mirrors the predicate
-// rather than sharing a body with it on purpose: archiveAdoptedByServerID must stay a
-// plain readable statement of the rule that a reviewer can check clause by clause,
-// and a bool is what every ownership caller needs. The mirror is held by
-// TestRefusalReasonAgreesWithTheAdoptionPredicate, which walks the same space the
-// containment property walks and fails the moment the two orders come apart.
-//
-// The local-identity check comes before clause a because it is the only whole-host
-// refusal in the set: an operator reading "no manifest named the host" about every
-// entry in a location would go looking at the archives, when the fact to fix is that
-// this machine cannot read its own identity file.
+// The local checks come first because they refuse every archive in the listing at
+// once: an operator reading "the archive records no identity" about every entry would
+// go looking at the archives, when the fact to fix is this machine's own.
 func retentionAdoptionRefusal(meta *types.BackupMetadata, id retentionIdentity) retentionRefusal {
 	if meta == nil {
 		return refusalNoEntry
+	}
+	if strings.TrimSpace(id.hostname) == "" {
+		return refusalNoLocalHostname
 	}
 	local := types.NormalizeServerID(id.serverID)
 	if local == "" {
 		return refusalNoLocalIdentity
 	}
-	// Normalised, not merely trimmed, so this agrees with clause a on the degenerate
-	// names NormalizeHostname collapses. A manifest hostname of "." is refused by
-	// clause a and used to be reported as "an unqualified host", which named a clause
-	// that never ran.
-	archiveHost := types.NormalizeHostname(strings.TrimSpace(meta.Hostname))
-	if archiveHost == "" {
-		return refusalNoManifestHost
+	// Something has to name the writer, the manifest or the filename token. An
+	// identity is not a name, so an archive nothing names stays nobody's whatever it
+	// carries, exactly as one with no identity at all. Normalised, so a degenerate
+	// manifest name such as "." names nobody here either, and the fact line, which
+	// prints the normalised name, never has an empty one to print.
+	owner := types.NormalizeHostname(backupOwnerHost(meta))
+	if owner == "" {
+		return refusalNoHostName
 	}
+	// Two VALIDATED identities, equal as bytes. Absent on either side means "cannot
+	// compare", which is every archive written before the field existed.
 	archived := archiveServerID(meta)
 	if archived == "" {
 		return refusalNoArchiveIdentity
@@ -625,237 +444,255 @@ func retentionAdoptionRefusal(meta *types.BackupMetadata, id retentionIdentity) 
 	if archived != local {
 		return refusalOtherIdentity
 	}
-	if dot := strings.IndexByte(archiveHost, '.'); dot <= 0 || dot == len(archiveHost)-1 {
-		return refusalUnqualifiedName
-	}
-	if !archiveSharesLocalShortLabel(meta, id) {
-		return refusalOtherShortLabel
-	}
-	if !hostAnswersOnlyToBareLabel(hostShortLabel(archiveHost), id) {
-		return refusalCompetingSpelling
+	// An archive this host answers to by name is owned by the hostname arm already;
+	// it is not counted as adopted.
+	if hostOwnsName(owner, id.hostname, id.aliases...) {
+		return refusalOwnedByName
 	}
 	return refusalNone
 }
 
-// archiveCarriesLocalServerID reports whether an archive records THIS host's own
-// server identity. It is the twin-keyed test on its own, kept separate from the
-// refusal chain because clause a runs BEFORE the identities are compared: an archive
-// whose manifest names no host is refused at clause a whatever it carries, and it is
-// still an archive holding this machine's identity that the operator has to be told
-// about.
-func archiveCarriesLocalServerID(meta *types.BackupMetadata, id retentionIdentity) bool {
-	local := types.NormalizeServerID(id.serverID)
-	if local == "" {
-		return false
-	}
-	return archiveServerID(meta) == local
-}
-
-// retentionTwinKeyedByRefusal groups the OUT OF SCOPE entries that carry this host's
-// own server identity by the clause that actually refused each one.
-//
-// The grouping IS the fix. One count over the whole foreign set cannot be reported
-// truthfully, because those entries were refused for different reasons and sit in
-// different reported populations: a clause e refusal is always a spelling mismatch
-// (clause d passed, and clause d IS the predicate the mismatch line counts with), a
-// clause d refusal never is, and a clause a refusal may be either or may be
-// unattributable. Counting them together and appending the total to the spelling
-// mismatch warning produced a number larger than the population it claimed to be part
-// of, under a cause that had not fired.
-//
-// A group is a slice rather than a count so the line reporting it can also name the
-// spelling those archives were written under, which is the one thing an operator
-// needs in order to recognise them.
-func retentionTwinKeyedByRefusal(foreign []*types.BackupMetadata, id retentionIdentity) map[retentionRefusal][]*types.BackupMetadata {
-	if types.NormalizeServerID(id.serverID) == "" {
-		return nil
-	}
-	grouped := make(map[retentionRefusal][]*types.BackupMetadata)
-	for _, b := range foreign {
-		if b == nil || !archiveCarriesLocalServerID(b, id) {
-			continue
-		}
-		reason := retentionAdoptionRefusal(b, id)
-		grouped[reason] = append(grouped[reason], b)
-	}
-	return grouped
-}
-
-// retentionScopeLogger is the subset of the logger the scope reporting needs.
+// retentionScopeLogger is the subset of the logger the scope reporting needs. It has
+// no Warning: the scope prints facts under "Applying retention policy..." and the
+// outcome lines that follow them are the caller's.
 type retentionScopeLogger interface {
-	Warning(format string, args ...interface{})
 	Info(format string, args ...interface{})
 	Debug(format string, args ...interface{})
 }
 
-// applyRetentionHostScope narrows a listing to this host's own backups and reports
-// what it declined to consider. The out-of-scope set is partitioned in two, and the
-// severity splits with it, because the run's exit code is derived from its WARNING
-// lines (ParseLogCounts feeds applyIssueExitCode).
-//
-// CONTENDED entries carry an owner this host does not answer to: another machine
-// writes here. That changes what retention prunes, it can change from run to run,
-// and it reaches the run status at WARNING exactly as it always has. The
-// spelling-mismatch line refines that same population: an archive written under a
-// spelling of this host's own name that this run cannot confirm ("hostname -f"
-// resolved then and does not now) is left alone rather than claimed on a guess.
-//
-// UNATTRIBUTABLE entries name no writer at all. They are reported on their own line
-// at INFO and are deliberately kept out of the warning count: no host will ever
-// claim them, so the report is a standing backlog notice rather than something that
-// went wrong on this run, and counting it would hold every affected run at exit 1
-// permanently. The line still names the case, the count and the one action, so the
-// operator is told rather than left with silence.
-//
-// The second return is how many out-of-scope entries are PRESENT BUT MANAGED BY
-// NOBODY: the unattributable ones plus the spelling mismatches. It exists because a
-// count of owned archives alone is a false all-clear on the two populations that
-// grow without bound. An upgraded host whose directory holds twenty pre-Go
-// "proxmox-backup-*" archives beside two new ones owns two and stores twenty-two,
-// and no host will ever prune the twenty; a host that stopped resolving its own FQDN
-// owns none of its own work and stores all of it. Both are the growth failure
-// docs/TROUBLESHOOTING.md documents, and reporting only the owned count hides
-// exactly the case the operator needs to see (discussion #292).
-//
-// Genuinely foreign entries, those carrying another machine's name, are NOT counted:
-// they are that machine's to prune and its to report. That is the whole point of
-// scoping, and the split between the two is the short-label test
-// retentionSpellingMismatches already performs for its own warning line.
-//
-// FIVE INFO lines report what the server identity did, and every one of them is INFO
-// on purpose. Two are about archives this host KEPT: the ones adopted back into
-// rotation, which is a recovery and not a problem, and the ones this host owns by name
-// whose recorded identity is somebody else's, which is information about the location
-// rather than a fault of this run. Three are about archives carrying this host's own
-// identity that retention REFUSED, one line per refusing clause.
-//
-// None of the five may be a WARNING. Every WARNING line is counted by ParseLogCounts
-// and pins the run at exit 1 through applyIssueExitCode, permanently for a condition
-// no future run clears, which is the symptom discussion #292 reported rather than a
-// report of it. The refused archives are not thereby unwarned: an attributable one is
-// already inside the contended WARNING, so these lines add the EXPLANATION to a
-// warning the operator already has.
-//
-// The twin-keyed set is reported per refusing clause rather than as one number,
-// because its members were refused for different reasons and sit in different reported
-// populations. Only the clause e group stays as an appended clause on the EXISTING
-// mismatch warning, and only because it is the one group provably inside the
-// population that warning names: clause e is reached only after clause d passed, and
-// clause d is the predicate the mismatch count is computed with.
-func applyRetentionHostScope(location string, id retentionIdentity, backups []*types.BackupMetadata, logger retentionScopeLogger) ([]*types.BackupMetadata, int) {
-	if strings.TrimSpace(id.hostname) == "" {
-		if logger != nil {
-			logger.Warning("%s: the local hostname is unknown; retention will not delete anything this run", location)
+// discardScopeLogger is the logger a caller passing nil gets.
+type discardScopeLogger struct{}
+
+func (discardScopeLogger) Info(string, ...interface{})  {}
+func (discardScopeLogger) Debug(string, ...interface{}) {}
+
+// errRetentionHostnameNotResolved is what a retention pass returns when this machine
+// cannot name itself: no backup can be attributed to it, so the pass does not start
+// and nothing is deleted. The caller closes the block with "Retention not applied".
+var errRetentionHostnameNotResolved = errors.New("the local hostname is not resolved")
+
+// retentionScope is what applyRetentionHostScope hands back to a retention pass.
+type retentionScope struct {
+	// owned are the backups this host rotates: owned by name or adopted by server
+	// identity. Their count is RetentionSummary.Owned.
+	owned []*types.BackupMetadata
+	// notRotated are the backups named under this host's short name in a spelling it
+	// does not answer to, one entry per name, in the order the names were first met.
+	// Retention leaves them alone and the pass outcome says so.
+	notRotated []retentionNameCount
+	// sharedWith are the names under which a second machine carrying this host's
+	// server identity is still writing here (retentionSharedIdentity), in the order
+	// the names were first met. Those archives are adopted and rotate as this host's
+	// own; the pass outcome says the identity is shared.
+	sharedWith []string
+}
+
+// retentionNameCount is how many backups of one group carry one name.
+type retentionNameCount struct {
+	name  string
+	count int
+}
+
+// countByName groups backups by the name they are attributed to (backupOwnerHost,
+// normalised), in the order the names are first met. A backup no name attributes is
+// skipped: every caller passes a group whose members all carry one.
+func countByName(backups []*types.BackupMetadata) []retentionNameCount {
+	var out []retentionNameCount
+	for _, b := range backups {
+		if b == nil {
+			continue
 		}
-		return nil, 0
+		name := types.NormalizeHostname(backupOwnerHost(b))
+		if name == "" {
+			continue
+		}
+		found := false
+		for i := range out {
+			if out[i].name == name {
+				out[i].count++
+				found = true
+				break
+			}
+		}
+		if !found {
+			out = append(out, retentionNameCount{name: name, count: 1})
+		}
+	}
+	return out
+}
+
+// applyRetentionHostScope narrows a listing to this host's own backups and prints, as
+// facts under "Applying retention policy...", what changes what retention sees. Every
+// fact is preceded by DEBUG lines naming the archives it is about.
+//
+// A host that cannot name itself attributes nothing: the scope prints
+// "  Hostname: not resolved" and returns errRetentionHostnameNotResolved, and the
+// caller returns it so the block closes with "Retention not applied".
+//
+// The facts, in this order:
+//
+//   - "  Adopted: <N> backups named <name>, same server identity", one per name: archives
+//     this host owns only because they carry its own server identity.
+//   - "  Still writing here: <names>": the adopted names under which an archive is newer
+//     than this host's previous own backup here, so a second machine with the same
+//     server identity is still writing (retentionSharedIdentity). They are returned in
+//     sharedWith and the caller's outcome line names them.
+//   - "  Other server identity: <N> backups owned by name, still rotated": archives this
+//     host owns by name whose recorded identity is another one. The name decides, so
+//     they rotate.
+//   - "  Named <name>, not rotated: <N> backups", one per name: archives carrying this
+//     host's short name in a spelling it does not answer to. They are returned in
+//     notRotated and the caller's outcome line counts them.
+//
+// Backups of other hosts are not reported (they are that host's to rotate), and nor are
+// backups nothing names: both are left alone and only written at DEBUG.
+func applyRetentionHostScope(location string, id retentionIdentity, backups []*types.BackupMetadata, logger retentionScopeLogger) (retentionScope, error) {
+	if logger == nil {
+		logger = discardScopeLogger{}
+	}
+	if strings.TrimSpace(id.hostname) == "" {
+		logger.Debug("%s: retention - the local hostname could not be read, so no backup can be attributed to this host and nothing is deleted", location)
+		logger.Info("  Hostname: not resolved")
+		return retentionScope{}, errRetentionHostnameNotResolved
 	}
 
-	hostname := id.hostname
 	owned, foreign := scopeRetentionToHost(backups, id)
+	logger.Debug("%s: retention answers to %s (server identity %s)", location, strings.Join(append([]string{id.hostname}, id.aliases...), ", "), retentionServerIDLabel(id.serverID))
+
+	var sharedWith []string
+	if adopted := retentionAdopted(owned, id); len(adopted) > 0 {
+		for _, b := range adopted {
+			logger.Debug("%s: retention - adopted %s (owner=%q, server identity %s)", location, b.BackupFile, backupOwnerHost(b), retentionServerIDLabel(archiveServerID(b)))
+		}
+		logger.Debug("%s: retention - %d backup(s) carry this host's own server identity under a name this host does not answer to: the same server identity is the same server, so they rotate with this host's own", location, len(adopted))
+		for _, g := range countByName(adopted) {
+			logger.Info("  Adopted: %d backups named %s, same server identity", g.count, g.name)
+		}
+		if sharedWith = retentionSharedIdentity(location, owned, adopted, id, logger); len(sharedWith) > 0 {
+			logger.Info("  Still writing here: %s", joinNames(sharedWith))
+		}
+	}
+
+	if divergent := retentionIdentityDivergences(owned, id); len(divergent) > 0 {
+		for _, b := range divergent {
+			logger.Debug("%s: retention - %s is owned by name (owner=%q) and records server identity %s, this host's is %s", location, b.BackupFile, backupOwnerHost(b), retentionServerIDLabel(archiveServerID(b)), retentionServerIDLabel(id.serverID))
+		}
+		logger.Debug("%s: retention - either a second machine has written under this host's name, or this host's identity file was regenerated or restored from a different installation; the name decides ownership, so they still rotate", location)
+		logger.Info("  Other server identity: %d backups owned by name, still rotated", len(divergent))
+	}
+
+	// Every out-of-scope entry, at DEBUG only: the backups of other hosts are theirs to
+	// rotate and are never reported.
+	for _, b := range foreign {
+		logger.Debug("%s: retention out of scope: %s (owner=%q, manifest hostname=%q, server identity %s, %s)", location, b.BackupFile, backupOwnerHost(b), b.Hostname, retentionServerIDLabel(archiveServerID(b)), adoptionRefusal(b, id))
+	}
+
 	unattributable := retentionUnattributable(foreign)
-	mismatched := retentionSpellingMismatches(foreign, id)
-	// Adoption only ever MOVES an entry out of foreign and into owned, so both counts
-	// above, and the second return built from them, keep the arithmetic they always
-	// had. The number they produce shrinks by exactly what was adopted, which is the
-	// correct report: those archives are managed again.
-	adopted := retentionAdopted(owned, id)
-	divergent := retentionIdentityDivergences(owned, id)
-	if adopted > 0 && logger != nil {
-		logger.Info("%s: retention brought %d backup(s) back into rotation. They name %s, which this host no longer resolves, but they carry this host's own server identity and this host answers to %q and to no other spelling of it, so they are this machine's own work under a name it lost. Adoption reaches nothing outside that one short name: every other archive is decided by its name alone, whatever identity it carries.", location, adopted, retentionAdoptedSpelling(owned, id), id.shortLabel())
+	if unattributable > 0 {
+		logger.Debug("%s: retention - %d backup(s) left alone because nothing names the host that wrote them, usually pre-Go \"proxmox-backup-*\" archives with no readable manifest beside them: no host can claim them and no host will ever delete them", location, unattributable)
 	}
-	if divergent > 0 && logger != nil {
-		logger.Info("%s: %d backup(s) this host owns by name record a different server identity. Either a second machine has written under this host's name, or this host's own identity file was regenerated or restored from a different installation. Retention still treats them as this host's own, because the name is what decides ownership and always has, so nothing stops rotating over this.", location, divergent)
-	}
-	if len(foreign) > 0 && logger != nil {
-		// Every out-of-scope entry carrying this host's own identity, grouped by the
-		// clause that refused it. The groups are disjoint by construction, because
-		// retentionAdoptionRefusal returns exactly one answer per archive, and each
-		// line below reports one group under the cause that group actually hit.
-		twinKeyed := retentionTwinKeyedByRefusal(foreign, id)
-		if contended := len(foreign) - unattributable; contended > 0 {
-			logger.Warning("%s: retention ignored %d backup(s) that do not belong to %s", location, contended, hostname)
+
+	var mismatched []*types.BackupMetadata
+	for _, b := range foreign {
+		if archiveSharesLocalShortLabel(b, id) {
+			mismatched = append(mismatched, b)
 		}
-		// Left outside the contended branch on purpose, and it is still safe to say
-		// "N of those": an entry with no owner has no short label either
-		// (hostShortLabel("") is "", while the local label is guaranteed non-empty by
-		// the empty-label guard in archiveSharesLocalShortLabel), so this can only ever
-		// count contended entries, and a non-zero count therefore means the line
-		// above it was printed.
-		if n := mismatched; n > 0 {
-			// One clause is appended rather than a second line emitted, and it stays
-			// on this WARNING rather than becoming one of its own. A new WARNING line
-			// is a new way to hold a run at exit 1 permanently through ParseLogCounts
-			// and applyIssueExitCode, and this population is one no future run will
-			// ever prune, so it must not be one.
-			//
-			// It counts the clause e group ALONE, and that is what makes "N of them"
-			// true. Clause e is only ever reached after clause d passed, clause d IS
-			// archiveSharesLocalShortLabel, and mismatched counts the foreign entries
-			// satisfying exactly that predicate, so this group is a subset of the
-			// population the sentence in front of it names and the number can never
-			// exceed n. Every other twin-keyed group was refused for a different
-			// reason, sits outside this population and gets its own line below. The
-			// version that counted the whole foreign set here printed "4 of them"
-			// under "1 of those", and blamed clause d and clause a refusals on a
-			// clause e this host had never reached.
-			competing := ""
-			if group := twinKeyed[refusalCompetingSpelling]; len(group) > 0 {
-				competing = fmt.Sprintf(" %d of them also carry this host's own server identity, which on its own is not enough: this host still answers to another spelling of that short name, so from here they are indistinguishable from a second machine, or a clone of this one, that inherited the same identity. Retention leaves them alone for that reason.", len(group))
+	}
+	notRotated := countByName(mismatched)
+	if len(mismatched) > 0 {
+		logger.Debug("%s: retention - %d backup(s) carry this host's short name %q under a spelling this host does not answer to, and not this host's server identity. If they are this machine's own work, this host no longer resolves the name they were written under (usually what \"hostname -f\" returns, which is what the writer stamps); if they belong to a second machine with the same short name, this is expected. Retention leaves them alone either way", location, len(mismatched), id.shortLabel())
+		for _, g := range notRotated {
+			logger.Info("  Named %s, not rotated: %d backups", g.name, g.count)
+		}
+	}
+
+	return retentionScope{owned: owned, notRotated: notRotated, sharedWith: sharedWith}, nil
+}
+
+// retentionSharedIdentity returns the adopted names under which a second machine
+// carrying this host's server identity is still writing here: a clone that kept the
+// identity (a copied disk, a restored container, a template). Adoption rotates those
+// archives as this host's own either way, against this host's limit; this only finds
+// the names so the pass can say so.
+//
+// A name is returned when its newest adopted archive is newer than this host's
+// PREVIOUS own backup here: the most recent archive this host owns by name, other than
+// the one this run created. A rename never qualifies, because every archive under the
+// old name predates the first one under the new name and therefore the previous own
+// backup. With no previous own backup here, a rename and a clone cannot be told apart
+// yet and nothing is returned. Archives with no date are left out on both sides,
+// since they cannot be ordered, and so is this run's own archive.
+func retentionSharedIdentity(location string, owned, adopted []*types.BackupMetadata, id retentionIdentity, logger retentionScopeLogger) []string {
+	thisRun := retentionArchiveKey(id.thisRunArchive)
+	isThisRun := func(b *types.BackupMetadata) bool {
+		return thisRun != "" && retentionArchiveKey(b.BackupFile) == thisRun
+	}
+	isAdopted := make(map[*types.BackupMetadata]bool, len(adopted))
+	for _, b := range adopted {
+		isAdopted[b] = true
+	}
+
+	var previous time.Time
+	for _, b := range owned {
+		if b == nil || isAdopted[b] || isThisRun(b) || b.Timestamp.IsZero() {
+			continue
+		}
+		if b.Timestamp.After(previous) {
+			previous = b.Timestamp
+		}
+	}
+	if previous.IsZero() {
+		logger.Debug("%s: retention shared identity: previous_own=none (this run's archive=%q); with no earlier backup of this host here, a second writer cannot be told apart from a rename, so nothing is reported", location, id.thisRunArchive)
+		return nil
+	}
+
+	type newestByName struct {
+		name   string
+		newest time.Time
+	}
+	var groups []newestByName
+	for _, b := range adopted {
+		if b == nil || isThisRun(b) || b.Timestamp.IsZero() {
+			continue
+		}
+		name := types.NormalizeHostname(backupOwnerHost(b))
+		if name == "" {
+			continue
+		}
+		found := false
+		for i := range groups {
+			if groups[i].name == name {
+				if b.Timestamp.After(groups[i].newest) {
+					groups[i].newest = b.Timestamp
+				}
+				found = true
+				break
 			}
-			logger.Warning("%s: %d of those carry this host's short name under a different spelling. If they are this machine's own work, this host no longer resolves the name they were written under (usually what \"hostname -f\" returns, which is what the writer stamps) and they have stopped rotating; if they belong to a second machine with the same short name, this is expected and nothing needs doing. Retention leaves them alone either way rather than guess.%s", location, n, competing)
 		}
-		// The remaining twin-keyed groups, reported at INFO, one line per cause.
-		//
-		// INFO because the alternative moves an exit code. Every WARNING is counted by
-		// ParseLogCounts and promotes an otherwise clean run to exit 1 through
-		// applyIssueExitCode, permanently, since no future run prunes any of these
-		// archives, and that permanent red is the symptom discussion #292 reported.
-		// Nothing goes unwarned either way: an attributable entry is already inside the
-		// contended WARNING above, so these lines add the EXPLANATION to a warning the
-		// operator already has, exactly as the clause on the mismatch line does.
-		//
-		// Separate lines because each names one cause for one population and the next
-		// move differs by cause. Folding them together is what produced a count larger
-		// than the population it claimed to be part of, under a cause that had not
-		// fired.
-		//
-		// The clause c group is split before it is reported. retentionAdoptionRefusal
-		// tests clause c before clause d, mirroring the predicate, so a BARE name that
-		// is also a foreign label lands under clause c while the fact the operator
-		// needs is clause d's: it is not this host's label at all. A domain-less LAN is
-		// the ordinary way to reach that, so the split is not an edge case.
-		otherLabel := append([]*types.BackupMetadata(nil), twinKeyed[refusalOtherShortLabel]...)
-		var bareOwnLabel []*types.BackupMetadata
-		for _, b := range twinKeyed[refusalUnqualifiedName] {
-			if archiveSharesLocalShortLabel(b, id) {
-				bareOwnLabel = append(bareOwnLabel, b)
-				continue
-			}
-			otherLabel = append(otherLabel, b)
-		}
-		if len(otherLabel) > 0 {
-			logger.Info("%s: %d backup(s) retention left alone carry this host's own server identity but are named %s, and the first label this host reports under is %q. Retention deletes on the NAME, and an identity may only ever confirm a name this host already shares, so an archive labelled for a different host is left alone whatever it carries: that is what stops this machine pruning a clone's, a restored template's or a renamed neighbour's archives. If this machine wrote any of them under a name it has since stopped reporting, giving that name back is what returns them to rotation; otherwise move them aside by hand.", location, len(otherLabel), retentionSpellingList(otherLabel), id.shortLabel())
-		}
-		if len(bareOwnLabel) > 0 {
-			logger.Info("%s: %d backup(s) retention left alone carry this host's own server identity and share its short name, but are named %s, a bare name with no domain that this host does not answer to. The only case an identity repairs is a QUALIFIED name this host has stopped resolving, and a bare name has no lost domain to repair, so nothing here separates this machine's own work from a second machine handed this identity by a clone, a restore or a disk image. Move them aside by hand if they are yours; retention will not touch them.", location, len(bareOwnLabel), retentionSpellingList(bareOwnLabel))
-		}
-		if group := twinKeyed[refusalNoManifestHost]; len(group) > 0 {
-			// Correction on the wording: this group is keyed on the MANIFEST naming no
-			// host, which is not the same as nothing naming a writer. backupOwnerHost
-			// falls back to the filename token, so a member here can be attributed, be
-			// inside the contended warning, and even be counted as a spelling mismatch.
-			// Saying "no writer named anywhere" would contradict the line above it.
-			logger.Info("%s: %d backup(s) retention left alone carry this host's own server identity, but the manifest beside them names no host. An identity is not a name and may never act alone, so it has nothing to confirm and cannot be spent. The token in the file name may still attribute them for the name rule, but a name anyone with write access to this location can change is not evidence an identity is allowed to lean on. Check whether anything else writes here, then delete them by hand once you no longer need them.", location, len(group))
-		}
-		if unattributable > 0 {
-			logger.Info("%s: retention left %d backup(s) alone because nothing names the host that wrote them, usually pre-Go \"proxmox-backup-*\" archives with no readable manifest beside them: that name carries no host token, so no host can claim them and no host will ever delete them. Delete them by hand once you no longer need them, and check first whether this location is shared, because an archive nobody can name may still be another machine's. Run with --log-level debug to see which files they are.", location, unattributable)
-		}
-		logger.Debug("%s: retention answers to %s (server identity %s)", location, strings.Join(append([]string{hostname}, id.aliases...), ", "), retentionServerIDLabel(id.serverID))
-		for _, b := range foreign {
-			logger.Debug("%s: retention out of scope: %s (owner=%q, manifest hostname=%q, server identity %s, %s)", location, b.BackupFile, backupOwnerHost(b), b.Hostname, retentionServerIDLabel(archiveServerID(b)), adoptionRefusal(b, id))
+		if !found {
+			groups = append(groups, newestByName{name: name, newest: b.Timestamp})
 		}
 	}
-	return owned, unattributable + mismatched
+
+	var shared []string
+	for _, g := range groups {
+		logger.Debug("%s: retention shared identity: name=%s newest=%s previous_own=%s", location, g.name, g.newest.Format(time.RFC3339), previous.Format(time.RFC3339))
+		if g.newest.After(previous) {
+			shared = append(shared, g.name)
+		}
+	}
+	return shared
+}
+
+// retentionArchiveKey is the name an archive is matched by against this run's own:
+// its base name without the bundle suffix, because a destination may list the bundle
+// of the archive Store was handed ("<archive>.bundle.tar") or the archive itself.
+func retentionArchiveKey(file string) string {
+	file = strings.TrimSpace(file)
+	if file == "" {
+		return ""
+	}
+	return strings.TrimSuffix(filepath.Base(file), bundleSuffix)
 }
 
 // logRetentionServerIdentity records, once per backend construction, whether this
@@ -882,88 +719,24 @@ func retentionServerIDLabel(serverID string) string {
 	return "unknown"
 }
 
-// retentionAdoptedSpelling returns the name the adopted archives were written under,
-// for the INFO line. The adopted set shares one short label by construction (clause
-// d), but not necessarily one full spelling, so a second spelling is reported as
-// "and others" rather than silently dropped.
-func retentionAdoptedSpelling(owned []*types.BackupMetadata, id retentionIdentity) string {
-	adopted := make([]*types.BackupMetadata, 0, len(owned))
-	for _, b := range owned {
-		if archiveAdoptedByServerID(b, id) {
-			adopted = append(adopted, b)
-		}
-	}
-	return retentionSpellingList(adopted)
-}
-
-// retentionSpellingList renders the manifest hostname(s) a group of archives was
-// written under, ready to drop straight into a log line.
-//
-// It returns an ALREADY QUOTED string and its format verb is therefore %s, not %q,
-// and that is the point rather than a detail. A group is keyed on the clause that
-// refused it, not on a name, so it can hold archives from several unrelated machines
-// that happen to share this host's identity: two restored clones on one NAS is the
-// ordinary way to get there. Rendering that as one string inside one pair of quotes
-// printed "backup01.lan and others" where the sentence promised a hostname, and an
-// operator who greps for that finds nothing.
-//
-// Two names are named. Beyond that the count carries the rest, because the line is a
-// summary and the per-file Debug lines are where the full list lives.
-func retentionSpellingList(entries []*types.BackupMetadata) string {
-	var names []string
-	seen := make(map[string]struct{}, len(entries))
-	for _, b := range entries {
-		if b == nil {
-			continue
-		}
-		name := types.NormalizeHostname(strings.TrimSpace(b.Hostname))
-		if name == "" {
-			continue
-		}
-		if _, dup := seen[name]; dup {
-			continue
-		}
-		seen[name] = struct{}{}
-		names = append(names, name)
-	}
-	switch len(names) {
-	case 0:
-		return "(no manifest hostname)"
-	case 1:
-		return strconv.Quote(names[0])
-	case 2:
-		return strconv.Quote(names[0]) + " and " + strconv.Quote(names[1])
-	default:
-		return fmt.Sprintf("%s, %s and %d others", strconv.Quote(names[0]), strconv.Quote(names[1]), len(names)-2)
-	}
-}
-
 // adoptionRefusal names, for the per-entry Debug line, which adoption clause refused
-// an out-of-scope archive. It exists so an operator reading a debug log can tell
-// "this archive carries no identity" from "this host holds a competing spelling of
-// its own name", which are the same silence otherwise.
+// an out-of-scope archive.
 func adoptionRefusal(meta *types.BackupMetadata, id retentionIdentity) string {
 	switch retentionAdoptionRefusal(meta, id) {
 	case refusalNoEntry:
 		return "no entry"
+	case refusalNoLocalHostname:
+		return "this host cannot name itself, so no archive can be adopted"
 	case refusalNoLocalIdentity:
 		return "this host does not know its own server identity, so no archive can be adopted"
-	case refusalNoManifestHost:
-		return "no manifest named the host, so the server identity may not act"
+	case refusalNoHostName:
+		return "nothing names the host that wrote it, so the server identity may not act"
 	case refusalNoArchiveIdentity:
 		return "the archive records no readable server identity"
 	case refusalOtherIdentity:
 		return "the archive records another machine's server identity"
-	case refusalUnqualifiedName:
-		return "the archive names an unqualified host, which is not the lost-FQDN case"
-	case refusalOtherShortLabel:
-		// Names the key rather than denying a name. On the rename-artefact host the
-		// Debug line above this one lists "nas" among the names retention answers to,
-		// so saying "this host does not answer to that short name" of a "nas.lan"
-		// archive would contradict it on the very host this text exists to explain.
-		return fmt.Sprintf("the archive's short name is not the first label this host reports under (%s)", id.shortLabel())
-	case refusalCompetingSpelling:
-		return "this host answers to another spelling of that short name, so this could be a second machine"
+	case refusalOwnedByName:
+		return "this host owns it by name"
 	default:
 		return "no clause refused it"
 	}

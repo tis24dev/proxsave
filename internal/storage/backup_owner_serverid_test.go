@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/tis24dev/proxsave/internal/types"
@@ -26,18 +27,15 @@ func hostWithIdentity(hostname, serverID string, written ...string) retentionIde
 	return retentionIdentity{hostname: hostname, aliases: written, serverID: serverID}
 }
 
-// TestArchiveAdoptedByServerID walks every cell of the ownership rule's truth table.
-// The rule is a total function over a small tuple - the archive's manifest hostname,
-// the archive's identity, this host's names and this host's identity - so the table
-// IS the specification, and a cell nobody wrote down is a cell nobody decided.
+// TestArchiveAdoptedByServerID walks the ownership rule's truth table. The rule is a
+// total function over a small tuple - the archive's names, the archive's identity,
+// this host's names and this host's identity - so the table IS the specification.
 //
-// The row that matters most is "a second site sharing our short name is refused even
-// with our identity". It is the cell that dies the moment clause e is weakened into a
-// short-label fold, and it is what keeps the pinned data-loss boundary in
-// backup_owner_test.go intact now that identities exist. On a stock Proxmox node
-// os.Hostname returns the kernel SHORT name while the writer stamps the FQDN, which is
-// the whole premise of discussion #292, so a rule that only compares the archive's
-// name against the local name degenerates to exactly that fold.
+// The rule: the same server identity is the same server, whatever name the archive
+// carries. The rows that changed when that rule was decided are the ones naming
+// another short label, a bare name, a competing spelling and a filename-only name:
+// each was refused before and is adopted now. A clone with this host's identity on the
+// same location is therefore rotated by this host, which was stated and accepted.
 func TestArchiveAdoptedByServerID(t *testing.T) {
 	tests := []struct {
 		name string
@@ -52,8 +50,7 @@ func TestArchiveAdoptedByServerID(t *testing.T) {
 	}{
 		{
 			// DISCUSSION #292. This host stamped its FQDN into the archives and can
-			// now resolve only the kernel short name, so it has no alias at all. The
-			// identity is the only thing left that says the archive is its own work.
+			// now resolve only the kernel short name, so it has no alias at all.
 			name:    "an archive naming a spelling this host lost is adopted on its own identity",
 			meta:    &types.BackupMetadata{BackupFile: "pve.home.arpa-backup-20250102-100000.tar.zst", Hostname: "pve.home.arpa", ServerID: ourServerID},
 			id:      hostWithIdentity("pve", ourServerID),
@@ -68,54 +65,36 @@ func TestArchiveAdoptedByServerID(t *testing.T) {
 			owned:   true,
 		},
 		{
-			// THE DATA-LOSS BOUNDARY, with identities. This host still resolves its
-			// own FQDN, so it holds a competing spelling of the short label "pve".
-			// An archive naming a THIRD spelling is a second machine, or a clone in
-			// another domain that inherited this identity, and inheriting an identity
-			// is expected behaviour. Refusing here is what stops the clone pruning
-			// the source machine's archives on a shared location.
-			name:    "a second site sharing our short name is refused even with our identity",
+			// This host still resolves its own FQDN, so it holds a competing spelling
+			// of the short label "pve". Same identity, same server.
+			name:    "a competing spelling of our short name carrying our identity is adopted",
 			meta:    &types.BackupMetadata{BackupFile: "pve.siteb.example-backup-20250102-100000.tar.zst", Hostname: "pve.siteb.example", ServerID: ourServerID},
 			id:      hostWithIdentity("pve", ourServerID, "pve.home.arpa"),
-			adopted: false,
-			owned:   false,
+			adopted: true,
+			owned:   true,
 		},
 		{
-			// A clone that was renamed outright. Its identity is ours, its short
-			// label is not, and clause d refuses on the label alone.
-			name:    "an archive whose short name this host does not answer to is refused",
+			// A renamed host, or a clone that was renamed outright.
+			name:    "an archive under another short label carrying our identity is adopted",
 			meta:    &types.BackupMetadata{BackupFile: "pve.home.arpa-backup-20250102-100000.tar.zst", Hostname: "pve.home.arpa", ServerID: ourServerID},
 			id:      hostWithIdentity("pve-clone", ourServerID),
-			adopted: false,
-			owned:   false,
+			adopted: true,
+			owned:   true,
 		},
 		{
-			// The case being repaired is a LOST QUALIFICATION. A bare name this host
-			// does not answer to is simply another machine, whatever it carries.
-			name:    "an unqualified archive name is refused",
+			name:    "a bare name carrying our identity is adopted",
 			meta:    &types.BackupMetadata{BackupFile: "srv-backup-20250102-100000.tar.zst", Hostname: "srv", ServerID: ourServerID},
 			id:      hostWithIdentity("pve", ourServerID),
-			adopted: false,
-			owned:   false,
+			adopted: true,
+			owned:   true,
 		},
 		{
-			// A trailing dot is a root dot, which NormalizeHostname strips, so this
-			// reaches clause c as the bare label it really is.
-			name:    "a name that is only a label and a dot is refused",
-			meta:    &types.BackupMetadata{BackupFile: "srv-backup-20250102-100000.tar.zst", Hostname: "srv.", ServerID: ourServerID},
-			id:      hostWithIdentity("pve", ourServerID),
-			adopted: false,
-			owned:   false,
-		},
-		{
-			// The filename token is the DEGRADED attribution path, and a file on a
-			// shared location can be renamed by anyone who can write there. It must
-			// not gain the power to pull an identity match along with it.
-			name:    "a name that came only from the filename token is refused",
+			// The manifest names no host, the filename token does.
+			name:    "a name that came only from the filename token is adopted on our identity",
 			meta:    &types.BackupMetadata{BackupFile: "pve.home.arpa-backup-20250102-100000.tar.zst", ServerID: ourServerID},
 			id:      hostWithIdentity("pve", ourServerID),
-			adopted: false,
-			owned:   false,
+			adopted: true,
+			owned:   true,
 		},
 		{
 			name:    "an archive recording no identity keeps exactly its pre-change answer",
@@ -166,6 +145,14 @@ func TestArchiveAdoptedByServerID(t *testing.T) {
 			owned:   true,
 		},
 		{
+			// Owned by the hostname arm, so it is not counted as adopted.
+			name:    "an archive this host owns by name and identity is owned, not adopted",
+			meta:    &types.BackupMetadata{BackupFile: "pve-backup-20250102-100000.tar.zst", Hostname: "pve", ServerID: ourServerID},
+			id:      hostWithIdentity("pve", ourServerID),
+			adopted: false,
+			owned:   true,
+		},
+		{
 			// THE IDENTITY NEVER ACTS ALONE. A pre-Go archive names no host anywhere,
 			// so nothing may claim it, and an identity is not a name.
 			name:    "an unattributable legacy archive is claimed by nobody, identity or not",
@@ -176,9 +163,7 @@ func TestArchiveAdoptedByServerID(t *testing.T) {
 		},
 		{
 			// A machine that cannot name itself deletes nothing, and the identity
-			// does not change that. It is refused twice over: the blank-hostname
-			// guard in backupBelongsToHost runs before anything else, and clause d
-			// has no name to match the archive's short label against either.
+			// does not change that.
 			name:    "a host that cannot name itself adopts nothing",
 			meta:    &types.BackupMetadata{BackupFile: "pve.home.arpa-backup-20250102-100000.tar.zst", Hostname: "pve.home.arpa", ServerID: ourServerID},
 			id:      hostWithIdentity("", ourServerID),
@@ -206,7 +191,7 @@ func TestArchiveAdoptedByServerID(t *testing.T) {
 	}
 }
 
-// TestAdoptionNeedsTwoEqualValidatedIdentities states clause b as a property over the
+// TestAdoptionNeedsTwoEqualValidatedIdentities states the identity clause as a property over the
 // whole identity space rather than as the handful of rows the table above can hold:
 // whatever the names say, adoption is impossible unless BOTH sides carry a validated
 // identity and the two are the same string.
@@ -228,7 +213,7 @@ func TestAdoptionNeedsTwoEqualValidatedIdentities(t *testing.T) {
 			id := hostWithIdentity("pve", localID)
 
 			// Every other clause holds on this fixture, so the answer is decided by
-			// clause b alone and the property reads as a biconditional.
+			// the identity clause alone and the property reads as a biconditional.
 			comparable := types.NormalizeServerID(archiveID) != "" && types.NormalizeServerID(archiveID) == types.NormalizeServerID(localID)
 			if got := archiveAdoptedByServerID(meta, id); got != comparable {
 				t.Errorf("archive identity %q against local identity %q: adopted = %v, want %v. Adoption is only ever a confirmation of two validated, equal identities; anything else must fall back to the hostname rule alone", archiveID, localID, got, comparable)
@@ -237,33 +222,105 @@ func TestAdoptionNeedsTwoEqualValidatedIdentities(t *testing.T) {
 	}
 }
 
-// TestAdoptedArchivesAreASubsetOfTheReportedSpellingMismatches is the containment
-// proof as an executable check. Clause d forces the archive's short label to be a name
-// this host answers to, and the kernel name is one of those names, so anything adopted
-// must already have shared this host's short label - which is exactly the population
-// retentionSpellingMismatches counts and reports today.
+// identitySpaceHosts, identitySpaceIDs and identitySpaceIdentities are the space the
+// properties below walk: degenerate names NormalizeHostname collapses, this host's own
+// spellings, other labels, rename artefacts, and the host shapes that adopt nothing.
+var identitySpaceHosts = []string{
+	"", "   ", ".", "pve", "pve.", "pve.home.arpa", "pve.siteb.example",
+	"nas", "nas.lan", "backup01.lan", "other", "unknown", "unknown.lan",
+}
+
+var identitySpaceIDs = []string{ourServerID, anotherServerID, "", "123456789012345"}
+
+func identitySpaceIdentities() []retentionIdentity {
+	return []retentionIdentity{
+		hostWithIdentity("pve", ourServerID),
+		hostWithIdentity("pve", ourServerID, "pve.home.arpa"),
+		hostWithIdentity("pve.home.arpa", ourServerID),
+		{hostname: "pve", aliases: retentionHostAliases("pve", []string{"nas"}), serverID: ourServerID},
+		hostOnly("pve"),
+		hostOnly("pve", "pve.home.arpa"),
+		hostWithIdentity("", ourServerID),
+	}
+}
+
+// TestAnArchiveWithoutOurIdentityKeepsTheHostnameRuleAnswer is the half of the rule
+// that must not move: an archive recording no identity, a malformed one, or another
+// machine's, and every archive read by a host that does not know its own identity, is
+// classified exactly as the hostname rule alone classifies it.
+func TestAnArchiveWithoutOurIdentityKeepsTheHostnameRuleAnswer(t *testing.T) {
+	for _, archiveHost := range identitySpaceHosts {
+		for _, archiveID := range identitySpaceIDs {
+			for _, id := range identitySpaceIdentities() {
+				local := types.NormalizeServerID(id.serverID)
+				if local != "" && types.NormalizeServerID(archiveID) == local {
+					continue
+				}
+				for _, file := range []string{"backup01.lan-backup-20250102-100000.tar.zst", "proxmox-backup-20250102-100000.tar.gz"} {
+					meta := &types.BackupMetadata{BackupFile: file, Hostname: archiveHost, ServerID: archiveID}
+					nameOnly := retentionIdentity{hostname: id.hostname, aliases: id.aliases}
+					if got, want := backupBelongsToHost(meta, id), backupBelongsToHost(meta, nameOnly); got != want {
+						t.Errorf("archive %q (%s, identity %q) read by host %q (aliases %v, identity %q): owned = %v, the hostname rule alone says %v", archiveHost, file, archiveID, id.hostname, id.aliases, id.serverID, got, want)
+					}
+				}
+			}
+		}
+	}
+}
+
+// TestAnArchiveWithOurIdentityAndANameIsAlwaysOurs is the half that changed: on a host
+// that can name itself and knows its identity, an archive carrying that identity and
+// any name at all, from the manifest or the filename token, is this host's.
+func TestAnArchiveWithOurIdentityAndANameIsAlwaysOurs(t *testing.T) {
+	for _, archiveHost := range identitySpaceHosts {
+		for _, id := range identitySpaceIdentities() {
+			if strings.TrimSpace(id.hostname) == "" || types.NormalizeServerID(id.serverID) == "" {
+				continue
+			}
+			for _, file := range []string{"backup01.lan-backup-20250102-100000.tar.zst", "proxmox-backup-20250102-100000.tar.gz"} {
+				meta := &types.BackupMetadata{BackupFile: file, Hostname: archiveHost, ServerID: ourServerID}
+				named := types.NormalizeHostname(backupOwnerHost(meta)) != ""
+				if got := backupBelongsToHost(meta, id); got != named {
+					t.Errorf("archive %q (%s) with this host's identity, read by host %q (aliases %v): owned = %v, want %v (named=%v)", archiveHost, file, id.hostname, id.aliases, got, named, named)
+				}
+			}
+		}
+	}
+}
+
+// TestAdoptionRefusalNamesTheClauseThatFired pins the per-entry DEBUG prose to the
+// clause chain. It is the operator's only per-file explanation in a debug log.
 //
-// It bounds the blast radius of the whole change without reading the rest of the diff:
-// adoption can never reach an archive attributed to another label, and never one
-// nobody can name.
-func TestAdoptedArchivesAreASubsetOfTheReportedSpellingMismatches(t *testing.T) {
-	id := hostWithIdentity("pve", ourServerID)
-	candidates := []*types.BackupMetadata{
-		{BackupFile: "pve.home.arpa-backup-20250105-100000.tar.zst", Hostname: "pve.home.arpa", ServerID: ourServerID},
-		{BackupFile: "pve.siteb.example-backup-20250104-100000.tar.zst", Hostname: "pve.siteb.example", ServerID: ourServerID},
-		{BackupFile: "pbs.home.arpa-backup-20250103-100000.tar.zst", Hostname: "pbs.home.arpa", ServerID: ourServerID},
-		{BackupFile: "proxmox-backup-20250102-100000.tar.gz", ServerID: ourServerID},
-		{BackupFile: "other-backup-20250101-100000.tar.zst", Hostname: "other", ServerID: ourServerID},
+// The degenerate row is the point of the table. A manifest hostname of "." survives
+// TrimSpace and only collapses inside NormalizeHostname, so it must fall through to
+// the filename token exactly as an empty one does.
+func TestAdoptionRefusalNamesTheClauseThatFired(t *testing.T) {
+	tests := []struct {
+		name   string
+		meta   *types.BackupMetadata
+		id     retentionIdentity
+		reason retentionRefusal
+		says   string
+	}{
+		{name: "no entry at all", meta: nil, id: hostWithIdentity("pve", ourServerID), reason: refusalNoEntry, says: "no entry"},
+		{name: "this host cannot name itself", meta: &types.BackupMetadata{Hostname: "pve.home.arpa", ServerID: ourServerID}, id: hostWithIdentity("", ourServerID), reason: refusalNoLocalHostname, says: "cannot name itself"},
+		{name: "this host does not know its own identity", meta: &types.BackupMetadata{Hostname: "pve.home.arpa", ServerID: ourServerID}, id: hostOnly("pve"), reason: refusalNoLocalIdentity, says: "does not know its own server identity"},
+		{name: "nothing names the host", meta: &types.BackupMetadata{BackupFile: "proxmox-backup-20250102-100000.tar.gz", ServerID: ourServerID}, id: hostWithIdentity("pve", ourServerID), reason: refusalNoHostName, says: "nothing names the host"},
+		{name: "a manifest of a bare dot names no host either", meta: &types.BackupMetadata{BackupFile: "proxmox-backup-20250102-100000.tar.gz", Hostname: ".", ServerID: ourServerID}, id: hostWithIdentity("pve", ourServerID), reason: refusalNoHostName, says: "nothing names the host"},
+		{name: "the archive records no identity", meta: &types.BackupMetadata{Hostname: "pve.home.arpa"}, id: hostWithIdentity("pve", ourServerID), reason: refusalNoArchiveIdentity, says: "no readable server identity"},
+		{name: "the archive records somebody else's identity", meta: &types.BackupMetadata{Hostname: "pve.home.arpa", ServerID: anotherServerID}, id: hostWithIdentity("pve", ourServerID), reason: refusalOtherIdentity, says: "another machine's server identity"},
+		{name: "this host owns it by name", meta: &types.BackupMetadata{Hostname: "pve", ServerID: ourServerID}, id: hostWithIdentity("pve", ourServerID), reason: refusalOwnedByName, says: "owns it by name"},
+		{name: "nothing refused it", meta: &types.BackupMetadata{Hostname: "pve.home.arpa", ServerID: ourServerID}, id: hostWithIdentity("pve", ourServerID), reason: refusalNone, says: "no clause refused it"},
 	}
 
-	for _, meta := range candidates {
-		if !archiveAdoptedByServerID(meta, id) {
-			continue
-		}
-		// The mismatch helper is fed this one entry as though it were foreign, which
-		// is what it would have been without the identity.
-		if n := retentionSpellingMismatches([]*types.BackupMetadata{meta}, id); n != 1 {
-			t.Errorf("%s was adopted but is not in the population retentionSpellingMismatches already reports. Adoption must only ever widen inside that set, or it has reached an archive no existing warning ever mentioned", meta.BackupFile)
-		}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := retentionAdoptionRefusal(tt.meta, tt.id); got != tt.reason {
+				t.Errorf("retentionAdoptionRefusal = %v, want %v", got, tt.reason)
+			}
+			if got := adoptionRefusal(tt.meta, tt.id); !strings.Contains(got, tt.says) {
+				t.Errorf("the Debug line says %q, which does not name the clause that fired (%q)", got, tt.says)
+			}
+		})
 	}
 }

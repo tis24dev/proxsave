@@ -1,0 +1,17 @@
+{fg Yellow #EAB308}⚠ Backup completed with warnings{/}
+
+{fg Light #C8C8C8}Files: 1832 collected - 0 missing{/}
+{fg Light #C8C8C8}Directories created: 214{/}
+{fg Light #C8C8C8}Data collected: 178.0 MiB{/}
+{fg Light #C8C8C8}Archive size: 21.0 MiB{/}
+{fg Light #C8C8C8}Compression ratio: 88.2%{/}
+{fg Light #C8C8C8}Compression used: xz (level 9, mode ultra){/}
+{fg Light #C8C8C8}Duration: 2.2m{/}
+{fg Light #C8C8C8}Bundle path: /opt/proxsave/backup/pve-golden-backup-20261004-020000.tar.xz.bundle.tar{/}
+{fg Light #C8C8C8}Bundle contents: archive + checksum + metadata{/}
+{fg Light #C8C8C8}Local: {/}{fg Green #22C55E}ok{/}
+{fg Light #C8C8C8}Secondary: {/}{fg Green #22C55E}ok{/}
+{fg Light #C8C8C8}Cloud: {/}{fg Green #22C55E}ok{/}
+{fg Light #C8C8C8}PBS: {/}{fg Yellow #EAB308}warning{/}
+{fg Light #C8C8C8}Server ID Telegram: 7302915846102738{/}
+{fg Light #C8C8C8}Log: /opt/proxsave/log/backup-pve-golden-20261004-020000.log{/}

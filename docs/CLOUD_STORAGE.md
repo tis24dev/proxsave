@@ -438,7 +438,7 @@ RETENTION_YEARLY=3
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `CLOUD_ENABLED` | `false` | Enable cloud storage |
-| `CLOUD_REMOTE` | _(empty)_ | rclone remote **name** from `rclone config` (legacy `remote:path` still supported). **Required** when `CLOUD_ENABLED=true`: leaving it empty is a hard configuration error, and the run aborts with exit `2` before anything is backed up, locally included. Set both keys together, or neither. |
+| `CLOUD_REMOTE` | _(empty)_ | rclone remote **name** from `rclone config` (legacy `remote:path` still supported), or an absolute local directory such as a mounted share (`/mnt/cloud`). **Required** when `CLOUD_ENABLED=true`: leaving it empty is a hard configuration error, and the run aborts with exit `2` before anything is backed up, locally included. Set both keys together, or neither. |
 | `CLOUD_REMOTE_PATH` | _(empty)_ | Folder path/prefix inside the remote (e.g., `/proxsave/backup`) |
 | `CLOUD_LOG_PATH` | _(empty)_ | Optional log folder (recommended: path-only on the same remote; use `otherremote:/path` only when using a different remote) |
 | `CLOUD_UPLOAD_MODE` | `parallel` | `parallel` or `sequential`. Inert under the default bundle layout: there is only one file to upload, so nothing runs concurrently either way |
@@ -482,7 +482,9 @@ ProxSave supports both "new style" (path-only) and "legacy style" (`remote:path`
 
 **Recommended:**
 - `CLOUD_REMOTE` should be just the **remote name** (no `:`), e.g. `nextcloud` or `GoogleDrive`.
-- `CLOUD_REMOTE_PATH` should be a **path inside the remote** (no remote prefix). Use **no trailing slash**. A leading `/` is accepted.
+- `CLOUD_REMOTE_PATH` should be a **path inside the remote** (no remote prefix). Use **no trailing slash**. A leading `/` is accepted
+  and dropped: the path is always relative to the remote's root, which for an `sftp` remote is the login user's home directory.
+  For a folder on this host, set `CLOUD_REMOTE` to its absolute path instead (for example `CLOUD_REMOTE=/mnt/backup`).
 - `CLOUD_LOG_PATH` should be a **folder path** for logs. When logs are stored on the **same remote**, prefer **path-only** here too (no remote prefix). Use `otherremote:/path` only if logs must go to a different remote than `CLOUD_REMOTE`.
 
 **Examples (same remote):**
@@ -522,12 +524,18 @@ path inside the remote, and uses that consistently for:
 
 You can choose the style you prefer; they are equivalent from the tool's point of view.
 
+3. **Local directory (an absolute path, for example a mounted share)**  
+   - `CLOUD_REMOTE=/mnt/cloud`  
+   - `CLOUD_REMOTE_PATH=server1` *(optional)*  
+   → backups in: `/mnt/cloud/server1`; with `CLOUD_LOG_PATH=/proxsave/log` the logs go to `/mnt/cloud/proxsave/log`.  
+   The copy still goes through rclone. ProxSave creates the directory when it is missing (not in a dry run) and gives the backups the same owner and mode as on the secondary path.
+
 **When to use CLOUD_REMOTE_PATH**:
 - Organizing multiple servers' backups: `server1/`, `server2/`
 - Separating environments: `production/`, `staging/`
 - Version control: `v1/`, `v2/`
 
-> **Give every host its own prefix.** Retention lists the remote **recursively**, with no depth limit, then keeps only the archives this host owns. The owner is the hostname recorded in the manifest, or the host token the filename carries (`<host>-backup-<timestamp>`) when no manifest can be read. A host answers to the name the kernel reports and to the name it stamps into its own archives (`hostname -f`, so usually the FQDN), and to nothing else: `pve.siteA.example` and `pve.siteB.example` stay two machines, and so do `pve` and `pve.siteB.example` on a host whose FQDN does not resolve. Archives left out of scope are never deleted. Ones that name another host are reported at WARNING; ones that name nobody, which is a pre-Go `proxmox-backup-*` archive with no readable manifest beside it, are reported at INFO, because no run will ever change that and it is a backlog to clear by hand rather than a fault. If `hostname -f` stops resolving the way it did when the archives were written, retention says so and stops rotating them rather than guess. A per-host prefix is still worth having on its own merits: smaller listings, counts in the log that match what you expect, and restore menus that show only this host's backups. Leave `CLOUD_REMOTE_PATH` empty only when the remote, or the sub-path in `CLOUD_REMOTE`, belongs to this host alone.
+> **Give every host its own prefix.** Retention lists the remote **recursively**, with no depth limit, then keeps only the archives this host owns. The owner is the hostname recorded in the manifest, or the host token the filename carries (`<host>-backup-<timestamp>`) when no manifest can be read. A host answers to the name the kernel reports and to the name it stamps into its own archives (`hostname -f`, so usually the FQDN), and to nothing else: `pve.siteA.example` and `pve.siteB.example` stay two machines, and so do `pve` and `pve.siteB.example` on a host whose FQDN does not resolve, unless the archives record this host's server identity: then they are this host's whatever name they carry. Archives left out of scope are never deleted and are not reported (a run with `--log-level debug` lists them). If `hostname -f` stops resolving the way it did when the archives were written, archives without this host's server identity stop rotating and the run says so (`  Named <name>, not rotated: <N> backups`). A per-host prefix is still worth having on its own merits: smaller listings, counts in the log that match what you expect, and restore menus that show only this host's backups. Leave `CLOUD_REMOTE_PATH` empty only when the remote, or the sub-path in `CLOUD_REMOTE`, belongs to this host alone.
 
 ---
 
@@ -668,8 +676,8 @@ make build
 ./build/proxsave --backup --dry-run
 
 # Check output:
-# ✓ "Cloud remote gdrive:pbs-backups is accessible"
-# ✓ "✓ Cloud storage initialized (present N backups)"
+# ✓ "  Accessible" under "Checking cloud remote accessibility..."
+# ✓ "✓ Cloud storage: initialized"
 #
 # A dry run returns before the storage phase, so there is no upload line to look for.
 # You will see "Storage dispatch skipped (dry run mode)" instead. Reaching the two

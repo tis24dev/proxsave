@@ -253,6 +253,17 @@ var notes = []Note{
 			"A PBS token symlink whose target is not 0600 root blocks the backup while AUTO_FIX_PERMISSIONS=true",
 		},
 	},
+	{
+		Version: "0.42.0",
+		Lines: []string{
+			"New PBS destination: each backup is also uploaded to a PBS storage of this PVE host (PBS_TARGET_ENABLED)",
+			"Prometheus metrics: proxmox_backup_backups_total lists only the destinations that are on, PBS included",
+			"CLOUD_REMOTE accepts an absolute directory (for example a mounted share) as the cloud destination",
+		},
+		Actions: []string{
+			"Dashboards or alerts on the secondary or cloud series see no data while that destination is off",
+		},
+	},
 }
 
 // LookupNotes returns the notes for versions in the half-open range (from, to], ascending by

@@ -8,7 +8,6 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
-	"time"
 
 	"github.com/tis24dev/proxsave/internal/backup"
 	"github.com/tis24dev/proxsave/internal/config"
@@ -40,6 +39,10 @@ type LocalStorage struct {
 	fsDetector *FilesystemDetector
 	fsInfo     *FilesystemInfo
 	lastRet    RetentionSummary
+	// thisRunArchive is the base name of the archive the last Store was handed: the
+	// archive this run created, which retention must not take for this host's
+	// previous backup here (retentionSharedIdentity). "" until a Store runs.
+	thisRunArchive string
 	// scopeOwned and scopeValid sit beside lastRet rather than inside it because
 	// lastRet is assigned as a whole struct literal on four separate delete paths.
 	// A field added to that struct would be silently zeroed by any of them, which is
@@ -52,6 +55,14 @@ type LocalStorage struct {
 	// reason scopeValid does, and it is published from the same deferred closure, so
 	// it can never describe a different pass from the numbers beside it.
 	lastRetCompleted bool
+	// retTally counts what the last retention pass could not do. It sits beside lastRet
+	// for the reason scopeOwned does, and is reset with it.
+	retTally retentionTally
+	// storeIssues records what the last Store left undone around the backup.
+	storeIssues *storeIssueRecorder
+	// lastNoMetadata names the archives the last List described from their file name
+	// alone; retention prints them as facts.
+	lastNoMetadata []string
 }
 
 // NewLocalStorage creates a new local storage instance.
@@ -73,7 +84,7 @@ func NewLocalStorage(cfg *config.Config, logger *logging.Logger, writtenHostname
 		hostAliases: retentionHostAliases(host, []string{writtenHostname}),
 		serverID:    serverID,
 		basePath:    cfg.BackupPath,
-		fsDetector:  NewFilesystemDetector(logger, WithIOTimeout(fsIoTimeout(cfg))),
+		fsDetector:  NewFilesystemDetector(logger, WithIOTimeout(fsIoTimeout(cfg)), WithDryRun(cfg.DryRun)),
 	}, nil
 }
 
@@ -132,6 +143,7 @@ func (l *LocalStorage) DetectFilesystem(ctx context.Context) (info *FilesystemIn
 func (l *LocalStorage) Store(ctx context.Context, backupFile string, metadata *types.BackupMetadata) (err error) {
 	done := logging.DebugStart(l.logger, "local store", "file=%s", filepath.Base(backupFile))
 	defer func() { done(err) }()
+	l.thisRunArchive = filepath.Base(backupFile)
 	l.logger.Debug("Local storage: preparing to store %s", filepath.Base(backupFile))
 	// Check context
 	if err := ctx.Err(); err != nil {
@@ -139,12 +151,16 @@ func (l *LocalStorage) Store(ctx context.Context, backupFile string, metadata *t
 		return err
 	}
 
+	issues := &storeIssueRecorder{}
+	l.storeIssues = issues
+
 	// Verify file exists (bounded against a dead/stale mount).
 	if _, err := safefs.Stat(ctx, backupFile, fsIoTimeout(l.config)); err != nil {
-		// Bounded against a dead/stale mount: see the twin in cloud.go. This backend
-		// is critical and logs nothing here, so the wording that travels is the
-		// error's; it must not claim "not found" over a stat that timed out.
-		l.logger.Debug("Local storage: source file %s could not be read", backupFile)
+		// Bounded against a dead/stale mount: see the twin in cloud.go. The fact says
+		// what the stat returned without the path; the caller closes the block with
+		// the outcome, and the error that travels keeps the full chain.
+		l.logger.Debug("Local storage: source file %s could not be read: %v", backupFile, err)
+		l.logger.Info("  Backup file not accessible: %s", safefs.SystemErrorText(err))
 		return &StorageError{
 			Location:   LocationPrimary,
 			Operation:  "store",
@@ -154,12 +170,17 @@ func (l *LocalStorage) Store(ctx context.Context, backupFile string, metadata *t
 		}
 	}
 
-	// Set proper permissions on the backup file
+	// Set owner and mode on every file of the backup set (not critical on failure).
 	l.logger.Debug("Local storage: setting ownership/permissions on %s", filepath.Base(backupFile))
-	if err := l.fsDetector.SetPermissions(ctx, backupFile, 0, 0, 0600, l.fsInfo); err != nil {
-		l.logger.Warning("Local Storage: permissions - failed to set them on %s: %v", backupFile, err)
-		// Not critical - continue
+	if l.SetsBackupPermissions() {
+		mode, owner, group := backupFileOwnershipLabel(l.config, l.logger)
+		l.logger.Info("  Permissions: %s %s:%s", mode, owner, group)
 	}
+	setBackupSetPermissions(ctx, l.config, l.logger, l.fsDetector, l.fsInfo, backupFile, func(path string, err error) {
+		l.logger.Debug("Local Storage: permissions - failed to set them on %s: %v", path, err)
+		logPermissionsFailure(l.logger, path, err)
+		issues.add(StoreIssuePermissionsNotSet)
+	})
 
 	l.logger.Debug("Backup stored successfully in local storage: %s", backupFile)
 
@@ -170,6 +191,18 @@ func (l *LocalStorage) Store(ctx context.Context, backupFile string, metadata *t
 	}
 
 	return nil
+}
+
+// SetsBackupPermissions reports whether Store applies owner and mode to the backup
+// set: it does not on a filesystem without ownership support, where
+// FilesystemDetector.SetPermissions skips chown and chmod.
+func (l *LocalStorage) SetsBackupPermissions() bool {
+	return l.fsInfo == nil || l.fsInfo.SupportsOwnership
+}
+
+// LastStoreIssues implements StoreReporter.
+func (l *LocalStorage) LastStoreIssues() []StoreIssue {
+	return l.storeIssues.list()
 }
 
 func (l *LocalStorage) countBackups(ctx context.Context) int {
@@ -185,6 +218,7 @@ func (l *LocalStorage) countBackups(ctx context.Context) int {
 func (l *LocalStorage) List(ctx context.Context) (backups []*types.BackupMetadata, err error) {
 	done := logging.DebugStart(l.logger, "local list", "path=%s", l.basePath)
 	defer func() { done(err) }()
+	l.lastNoMetadata = nil
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -253,7 +287,8 @@ func (l *LocalStorage) List(ctx context.Context) (backups []*types.BackupMetadat
 		// Parse metadata if available
 		metadata, err := l.loadMetadata(ctx, match)
 		if err != nil {
-			l.logger.Warning("Local Storage: listing - .metadata missing for %s, using the filename metadata", filepath.Base(match))
+			l.logger.Debug("Local Storage: listing - .metadata missing for %s, using the filename metadata: %v", filepath.Base(match), err)
+			l.lastNoMetadata = append(l.lastNoMetadata, filepath.Base(match))
 			// Create minimal metadata from filename
 			metadata = &types.BackupMetadata{
 				BackupFile: match,
@@ -416,7 +451,8 @@ func (l *LocalStorage) deleteBackupInternal(ctx context.Context, backupFile stri
 				l.logger.Debug("Local storage: file already removed %s", f)
 				continue
 			}
-			l.logger.Warning("Local Storage: retention - failed to remove %s: %v", f, err)
+			l.logger.Debug("Local Storage: retention - failed to remove %s: %v", f, err)
+			logDeleteFailure(l.logger, f, safefs.SystemErrorText(err))
 			failedFiles = append(failedFiles, f)
 			if !isBackupSidecar(f) {
 				dataFailed = true
@@ -424,8 +460,14 @@ func (l *LocalStorage) deleteBackupInternal(ctx context.Context, backupFile stri
 		}
 	}
 
-	// Best-effort: delete associated local log file for this backup
-	logDeleted := l.deleteAssociatedLog(ctx, backupFile)
+	// Best-effort: delete the associated log, but only once the backup's data file is
+	// gone. A backup that could not be deleted keeps its log.
+	logDeleted := false
+	if !dataFailed {
+		logDeleted = l.deleteAssociatedLog(ctx, backupFile)
+	} else {
+		l.logger.Debug("Local storage: keeping the log of %s, the backup was not deleted", filepath.Base(backupFile))
+	}
 
 	if len(failedFiles) > 0 {
 		if !dataFailed {
@@ -462,6 +504,8 @@ func (l *LocalStorage) deleteAssociatedLog(ctx context.Context, backupFile strin
 	if err := safefs.Remove(ctx, fullPath, fsIoTimeout(l.config)); err != nil {
 		if !os.IsNotExist(err) {
 			l.logger.Debug("Local logs: failed to delete %s: %v", logName, err)
+			l.logger.Info("  Log not deleted: %s: %s", logName, safefs.SystemErrorText(err))
+			l.retTally.logsNotDeleted++
 		}
 		return false
 	}
@@ -517,7 +561,7 @@ func (l *LocalStorage) ApplyRetention(ctx context.Context, config RetentionConfi
 	// Reset together: the flag describes this struct, so leaving it set here made
 	// the value report a COMPLETED pass beside counts this pass had just zeroed,
 	// which is the one-struct-two-ages state the reset exists to prevent.
-	l.lastRet, l.lastRetCompleted = RetentionSummary{}, false
+	l.lastRet, l.lastRetCompleted, l.retTally = RetentionSummary{}, false, retentionTally{}
 	owned, scoped := 0, false
 	defer func() {
 		l.scopeOwned, l.scopeValid, l.lastRetCompleted = owned-deleted, scoped, err == nil
@@ -531,19 +575,42 @@ func (l *LocalStorage) ApplyRetention(ctx context.Context, config RetentionConfi
 	l.logger.Debug("Local storage: listing backups for retention policy '%s'", config.Policy)
 	backups, err := l.List(ctx)
 	if err != nil {
+		// Not critical: a backup that could not be deleted is one backup too many,
+		// never a backup lost. The run continues and the caller closes the block with
+		// "Retention not applied".
+		l.logger.Debug("Local storage: retention - could not list the backups: %v", err)
+		l.logger.Info("  List failed: %s", ErrorCause(err))
 		return 0, &StorageError{
-			Location:   LocationPrimary,
-			Operation:  "apply_retention",
-			Path:       l.basePath,
-			Err:        err,
-			IsCritical: true,
+			Location:    LocationPrimary,
+			Operation:   "apply_retention",
+			Path:        l.basePath,
+			Err:         err,
+			IsCritical:  false,
+			Recoverable: true,
 		}
 	}
+	l.retTally.noMetadata = logListingNoMetadata(l.logger, l.lastNoMetadata)
 
 	// Drop anything this host does not own before counting or deleting: the
 	// "*-backup-*" glob that produced this list matches every hostname, and the list
 	// also carries other spellings of this host's own name.
-	backups, unmanaged := applyRetentionHostScope("Local storage", retentionIdentity{hostname: l.hostname, aliases: l.hostAliases, serverID: l.serverID}, backups, l.logger)
+	scope, err := applyRetentionHostScope("Local storage", retentionIdentity{hostname: l.hostname, aliases: l.hostAliases, serverID: l.serverID, thisRunArchive: l.thisRunArchive}, backups, l.logger)
+	if err != nil {
+		// This machine cannot name itself, so no backup can be attributed to it: the
+		// pass does not start and the caller closes the block with "Retention not
+		// applied". The fact line was printed by applyRetentionHostScope.
+		return 0, &StorageError{
+			Location:    LocationPrimary,
+			Operation:   "apply_retention",
+			Path:        l.basePath,
+			Err:         err,
+			IsCritical:  false,
+			Recoverable: true,
+		}
+	}
+	backups = scope.owned
+	l.retTally.notRotated = scope.notRotated
+	l.retTally.sharedWith = scope.sharedWith
 
 	// This is the only frame that knows the number: the listing above matches every
 	// hostname, and GetStats reruns that same unscoped listing for its own count. The
@@ -551,16 +618,13 @@ func (l *LocalStorage) ApplyRetention(ctx context.Context, config RetentionConfi
 	// used to record nothing at all, so the healthy run was exactly the one where the
 	// notification fell back to counting every host's archives (discussion #292).
 	//
-	// unmanaged is added, not discarded. Those archives are on this disk and no host
-	// will ever prune them, so leaving them out reports an all-clear on a directory
-	// that is growing: an upgraded host with twenty pre-Go archives beside two new
-	// ones would read "2/7" while storing twenty-two. Archives belonging to a named
-	// other machine are excluded, which is what scoping is for.
+	// Only this host's own backups are counted (owned by name or adopted by server
+	// identity), the same number the statistics print for this location.
 	//
-	// Left invalid when the host cannot name itself: applyRetentionHostScope returns
-	// nil there and warns, so publishing 0 would print "0/7" beside a directory
-	// holding forty archives, which is a worse lie than the one being fixed.
-	owned, scoped = len(backups)+unmanaged, strings.TrimSpace(l.hostname) != ""
+	// Left invalid when the host cannot name itself: the pass returned above, so
+	// publishing 0 would print "0/7" beside a directory holding forty archives, which
+	// is a worse lie than the one being fixed.
+	owned, scoped = len(backups), true
 
 	if len(backups) == 0 {
 		l.logger.Debug("Local storage: no backups to apply retention")
@@ -577,9 +641,7 @@ func (l *LocalStorage) ApplyRetention(ctx context.Context, config RetentionConfi
 // applyGFSRetention applies GFS (Grandfather-Father-Son) retention policy
 func (l *LocalStorage) applyGFSRetention(ctx context.Context, backups []*types.BackupMetadata, config RetentionConfig) (int, error) {
 	eligible, inert := partitionRetentionEligible(backups)
-	for _, in := range inert {
-		l.logger.Warning("Local Storage: retention - ignored %s (%s)", in.Backup.BackupFile, in.Reason)
-	}
+	l.retTally.skipped = logRetentionSkipped(l.logger, "Local Storage", inert)
 	backups = eligible
 
 	config = EffectiveGFSRetentionConfig(config)
@@ -602,6 +664,7 @@ func (l *LocalStorage) applyGFSRetention(ctx context.Context, backups []*types.B
 		stats[CategoryYearly], config.Yearly,
 		kept,
 		stats[CategoryDelete])
+	l.retTally.planned = stats[CategoryDelete]
 
 	// Delete backups marked for deletion
 	deleted := 0
@@ -621,11 +684,14 @@ func (l *LocalStorage) applyGFSRetention(ctx context.Context, backups []*types.B
 		logDeleted, err := l.deleteBackupInternal(ctx, backup.BackupFile)
 		if err != nil {
 			if !errors.Is(err, errBackupSidecarDeleteOnly) {
-				l.logger.Warning("Local Storage: retention - failed to delete %s: %v", backup.BackupFile, err)
+				l.logger.Debug("Local Storage: retention - failed to delete %s: %v", backup.BackupFile, err)
+				l.retTally.notDeleted++
 				continue
 			}
-			// Archive removed, only sidecar(s) failed: count as deleted but warn.
-			l.logger.Warning("Local Storage: retention - %s removed but the sidecar cleanup failed: %v", backup.BackupFile, err)
+			// Archive removed, only sidecar(s) failed: count as deleted; the fact
+			// line naming the leftover was printed by deleteBackupInternal.
+			l.logger.Debug("Local Storage: retention - %s removed but the sidecar cleanup failed: %v", backup.BackupFile, err)
+			l.retTally.leftBehind++
 		}
 
 		deleted++
@@ -671,9 +737,7 @@ func (l *LocalStorage) applySimpleRetention(ctx context.Context, backups []*type
 	}
 
 	eligible, inert := partitionRetentionEligible(backups)
-	for _, in := range inert {
-		l.logger.Warning("Local Storage: retention - ignored %s (%s)", in.Backup.BackupFile, in.Reason)
-	}
+	l.retTally.skipped = logRetentionSkipped(l.logger, "Local Storage", inert)
 	backups = eligible
 
 	totalBackups := len(backups)
@@ -684,10 +748,10 @@ func (l *LocalStorage) applySimpleRetention(ctx context.Context, backups []*type
 
 	// Calculate how many to delete
 	toDelete := totalBackups - maxBackups
-	l.logger.Info("Applying simple retention policy: %d backups found, limit is %d, deleting %d oldest",
+	l.logger.Debug("Simple retention -> current: %d, limit: %d, to_delete: %d",
 		totalBackups, maxBackups, toDelete)
-	l.logger.Info("Simple retention -> current: %d, limit: %d, to_delete: %d",
-		totalBackups, maxBackups, toDelete)
+	logRetentionScale(l.logger, totalBackups, maxBackups)
+	l.retTally.planned = toDelete
 
 	// Delete oldest backups (already sorted newest first)
 	initialLogs := l.countLogFiles(ctx)
@@ -706,11 +770,14 @@ func (l *LocalStorage) applySimpleRetention(ctx context.Context, backups []*type
 		logDeleted, err := l.deleteBackupInternal(ctx, backup.BackupFile)
 		if err != nil {
 			if !errors.Is(err, errBackupSidecarDeleteOnly) {
-				l.logger.Warning("Local Storage: retention - failed to delete %s: %v", backup.BackupFile, err)
+				l.logger.Debug("Local Storage: retention - failed to delete %s: %v", backup.BackupFile, err)
+				l.retTally.notDeleted++
 				continue
 			}
-			// Archive removed, only sidecar(s) failed: count as deleted but warn.
-			l.logger.Warning("Local Storage: retention - %s removed but the sidecar cleanup failed: %v", backup.BackupFile, err)
+			// Archive removed, only sidecar(s) failed: count as deleted; the fact
+			// line naming the leftover was printed by deleteBackupInternal.
+			l.logger.Debug("Local Storage: retention - %s removed but the sidecar cleanup failed: %v", backup.BackupFile, err)
+			l.retTally.leftBehind++
 		}
 
 		deleted++
@@ -755,6 +822,7 @@ func (l *LocalStorage) applySimpleRetention(ctx context.Context, backups []*type
 func (l *LocalStorage) LastRetentionSummary() RetentionSummary {
 	s := l.lastRet
 	s.ScopeValid, s.Owned, s.PassCompleted = l.scopeValid, l.scopeOwned, l.lastRetCompleted
+	l.retTally.apply(&s)
 	return s
 }
 
@@ -772,33 +840,13 @@ func (l *LocalStorage) GetStats(ctx context.Context) (stats *StorageStats, err e
 		return nil, err
 	}
 
-	stats = &StorageStats{
-		TotalBackups: len(backups),
-	}
+	// Only this host's backups are counted: the listing matches every hostname.
+	stats = ownedStorageStats(backups, retentionIdentity{hostname: l.hostname, aliases: l.hostAliases, serverID: l.serverID})
+	l.logger.Debug("Local storage: stats - %d of %d listed backups are this host's", stats.TotalBackups, stats.ListedBackups)
 
 	if l.fsInfo != nil {
 		stats.FilesystemType = l.fsInfo.Type
 	}
-
-	var totalSize int64
-	var oldest, newest *time.Time
-
-	for _, backup := range backups {
-		totalSize += backup.Size
-
-		if oldest == nil || backup.Timestamp.Before(*oldest) {
-			t := backup.Timestamp
-			oldest = &t
-		}
-		if newest == nil || backup.Timestamp.After(*newest) {
-			t := backup.Timestamp
-			newest = &t
-		}
-	}
-
-	stats.TotalSize = totalSize
-	stats.OldestBackup = oldest
-	stats.NewestBackup = newest
 
 	// Get available/total space using statfs (bounded against a dead/stale mount).
 	if stat, err := safefs.Statfs(ctx, l.basePath, fsIoTimeout(l.config)); err == nil {

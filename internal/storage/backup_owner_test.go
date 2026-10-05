@@ -1,13 +1,12 @@
 package storage
 
 import (
-	"bytes"
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
 	"github.com/tis24dev/proxsave/internal/config"
-	"github.com/tis24dev/proxsave/internal/logging"
 	"github.com/tis24dev/proxsave/internal/types"
 )
 
@@ -24,6 +23,18 @@ import (
 // "unknown" sentinel among them) still reach the code that refuses it.
 func hostOnly(hostname string, written ...string) retentionIdentity {
 	return retentionIdentity{hostname: hostname, aliases: written}
+}
+
+// scopeListing runs applyRetentionHostScope for a host that can name itself and
+// returns the owned set, which is what most tests read. The host that cannot name
+// itself has its own test, which reads the error.
+func scopeListing(t *testing.T, location string, id retentionIdentity, backups []*types.BackupMetadata, logger retentionScopeLogger) []*types.BackupMetadata {
+	t.Helper()
+	scope, err := applyRetentionHostScope(location, id, backups, logger)
+	if err != nil {
+		t.Fatalf("applyRetentionHostScope: %v", err)
+	}
+	return scope.owned
 }
 
 func TestBackupOwnerHost(t *testing.T) {
@@ -204,23 +215,33 @@ func TestRetentionHostAliases(t *testing.T) {
 	}
 }
 
-// TestRetentionSpellingMismatchesCountsLikelySelf pins the reporting helper behind
-// the second warning line. It never decides ownership: it only tells the operator
-// that some out-of-scope archives carry this host's short name under a spelling this
-// run cannot confirm, which is the one case the fix deliberately declines to solve.
-func TestRetentionSpellingMismatchesCountsLikelySelf(t *testing.T) {
+// TestTheShortLabelPredicateCountsLikelySelf pins the membership test behind the
+// not-rotated fact. It never decides ownership: it only selects the out-of-scope
+// archives carrying this host's short name under a spelling this run cannot confirm.
+func TestTheShortLabelPredicateCountsLikelySelf(t *testing.T) {
 	foreign := []*types.BackupMetadata{
 		{Hostname: "pve.siteb.example", BackupFile: "pve.siteb.example-backup-20250102-100000.tar.zst"},
 		{Hostname: "pbs.home.arpa", BackupFile: "pbs.home.arpa-backup-20250102-100000.tar.zst"},
 		nil,
 	}
 
-	if got := retentionSpellingMismatches(foreign, hostOnly("pve")); got != 1 {
+	if got := sharingLocalShortLabel(foreign, hostOnly("pve")); got != 1 {
 		t.Fatalf("mismatches = %d, want 1", got)
 	}
-	if got := retentionSpellingMismatches(foreign, hostOnly("")); got != 0 {
+	if got := sharingLocalShortLabel(foreign, hostOnly("")); got != 0 {
 		t.Fatalf("mismatches = %d, want 0 when this machine cannot name itself", got)
 	}
+}
+
+// sharingLocalShortLabel counts the entries archiveSharesLocalShortLabel admits.
+func sharingLocalShortLabel(backups []*types.BackupMetadata, id retentionIdentity) int {
+	n := 0
+	for _, b := range backups {
+		if archiveSharesLocalShortLabel(b, id) {
+			n++
+		}
+	}
+	return n
 }
 
 // TestApplyRetentionHostScopeDeletesNothingWhenThisMachineCannotNameItself pins the
@@ -232,13 +253,12 @@ func TestRetentionSpellingMismatchesCountsLikelySelf(t *testing.T) {
 // NAS several hosts write into, so "scope by nothing" means "prune everything in
 // the listing, including theirs".
 //
-// It asserts the warning as well as the empty result, and both halves are load
-// bearing. Returning the listing instead of nil is caught by the length; deleting
-// the guard outright is NOT, because backupBelongsToHost already refuses a blank
-// hostname, so scoping still yields nothing. What that mutation really removes is
-// this warning, which is the operator's only signal that retention is off for the
-// run. Rewording the message therefore turns this test red on purpose: read it as
-// a prompt to check who else quotes the wording, not as a retention bug.
+// It asserts the error and the fact line as well as the empty result, and all three
+// are load bearing. Returning the listing instead of nothing is caught by the length;
+// deleting the guard outright is NOT, because backupBelongsToHost already refuses a
+// blank hostname, so scoping still yields nothing. What that mutation really removes
+// is the error, which is what makes the caller close the block with "Retention not
+// applied", and the fact line, which is the operator's only signal of why.
 //
 // Both entries carry a non-empty Hostname on purpose: they are attributable, so the
 // only reason they are out of scope is the blank local name.
@@ -248,17 +268,20 @@ func TestApplyRetentionHostScopeDeletesNothingWhenThisMachineCannotNameItself(t 
 		{BackupFile: "other-backup-20250101-100000.tar.zst", Hostname: "other"},
 	}
 
-	logger := logging.New(types.LogLevelDebug, false)
-	var buf bytes.Buffer
-	logger.SetOutput(&buf)
+	logger := &levelRecordingLogger{}
+	scope, err := applyRetentionHostScope("Local storage", hostOnly(""), backups, logger)
 
-	scoped, _ := applyRetentionHostScope("Local storage", hostOnly(""), backups, logger)
-
-	if len(scoped) != 0 {
-		t.Errorf("scoped %d of %d entries; a machine that cannot name itself must delete nothing, not everything: on a shared location these are another machine's backups", len(scoped), len(backups))
+	if len(scope.owned) != 0 {
+		t.Errorf("scoped %d of %d entries; a machine that cannot name itself must delete nothing, not everything: on a shared location these are another machine's backups", len(scope.owned), len(backups))
 	}
-	if !strings.Contains(buf.String(), "the local hostname is unknown") {
-		t.Errorf("the blank-hostname guard printed no warning; retention silently doing nothing is indistinguishable from retention working. Got: %s", buf.String())
+	if !errors.Is(err, errRetentionHostnameNotResolved) {
+		t.Errorf("err = %v, want errRetentionHostnameNotResolved: without it the caller closes the block as a pass that ran, and retention silently doing nothing is indistinguishable from retention working", err)
+	}
+	if level := logger.levelOf("Hostname: not resolved"); level != "INFO" {
+		t.Errorf("the hostname fact was emitted at %q, want INFO. Lines: %+v", level, logger.lines)
+	}
+	if n := logger.countAtLevel("WARNING"); n != 0 {
+		t.Errorf("%d WARNING line(s) from the scope; the outcome \"Retention not applied\" is the caller's: %q", n, logger.messagesAtLevel("WARNING"))
 	}
 }
 
@@ -466,5 +489,36 @@ func TestApplyRetentionDoesNotDeleteOtherHostsBackups(t *testing.T) {
 	// its own limit of 1 and its older archive still has to go.
 	if !deletedOwn {
 		t.Errorf("retention deleted nothing of this host's own: %+v", calls)
+	}
+}
+
+// TestTheShortLabelPredicateRefusesAHostThatCannotNameItself pins the empty-label
+// guard inside archiveSharesLocalShortLabel, which decides the not-rotated population.
+// Dropping it is compile clean.
+//
+// hostShortLabel("") is "", and an unattributable archive has no owner and therefore
+// no label either, so without the guard a machine that cannot name itself matches
+// every pre-Go "proxmox-backup-*" file in the location at once, and each of them
+// would be reported as not rotated under an empty name.
+//
+// A bare "." is not a decorative case: it survives the TrimSpace guard in
+// applyRetentionHostScope and only collapses to the empty string inside
+// NormalizeHostname, so it is the shape that actually reaches this predicate with no
+// label to compare.
+func TestTheShortLabelPredicateRefusesAHostThatCannotNameItself(t *testing.T) {
+	unattributable := &types.BackupMetadata{BackupFile: "proxmox-backup-20250102-100000.tar.gz"}
+	listing := []*types.BackupMetadata{
+		unattributable,
+		{BackupFile: "pve.home.arpa-backup-20250102-100000.tar.zst", Hostname: "pve.home.arpa"},
+	}
+
+	for _, hostname := range []string{"", "   ", "."} {
+		id := hostWithIdentity(hostname, ourServerID)
+		if archiveSharesLocalShortLabel(unattributable, id) {
+			t.Errorf("host %q claims an archive nobody can name shares its short label. Both labels are empty, and equal emptiness is not a shared name", hostname)
+		}
+		if n := sharingLocalShortLabel(listing, id); n != 0 {
+			t.Errorf("host %q reports %d spelling mismatch(es), want 0. It cannot name itself, so nothing can share its name; counting the unattributable entry here reports it as not rotated under an empty name", hostname, n)
+		}
 	}
 }

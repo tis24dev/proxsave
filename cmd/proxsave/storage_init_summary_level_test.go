@@ -3,6 +3,9 @@ package main
 import (
 	"bytes"
 	"context"
+	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -92,17 +95,18 @@ func TestStorageInitSummaryLevelComesFromTheFlagNotTheText(t *testing.T) {
 	}
 }
 
-func TestStorageInitSummaryDetailLinesStayBelowTheHeadline(t *testing.T) {
-	// A GFS summary is a headline plus indented detail. Only the headline takes the
-	// warn level; the estimate line stays at Debug so it never reaches the footer.
-	summary := "Local storage initialized (present 2 backups)\n  Daily: 1/1\n  Kept (est.): 1, To delete (est.): 1"
+func TestStorageInitSummaryOnlyTheOutcomeTakesTheWarnLevel(t *testing.T) {
+	// A GFS summary is indented fact lines closed by the outcome. Only the outcome, the
+	// last line, takes the warn level; the estimate line stays at Debug so it never
+	// reaches the footer, wherever it sits.
+	summary := "  Backups: 2\n  Daily: 1/1\n  Kept (est.): 1, To delete (est.): 1\nLocal storage: initialized"
 	out := renderInitSummary(t, summary, true)
 
 	var levels []string
 	for _, line := range strings.Split(strings.TrimRight(out, "\n"), "\n") {
 		levels = append(levels, levelColumnOf(line))
 	}
-	want := []string{"WARNING", "INFO", "DEBUG"}
+	want := []string{"INFO", "INFO", "DEBUG", "WARNING"}
 	if len(levels) != len(want) {
 		t.Fatalf("rendered %d lines, want %d:\n%s", len(levels), len(want), out)
 	}
@@ -113,10 +117,10 @@ func TestStorageInitSummaryDetailLinesStayBelowTheHeadline(t *testing.T) {
 	}
 }
 
-// The cloud-disabled path builds its own headline instead of borrowing
-// formatStorageInitSummary, so its level is a literal true at the call site and nothing
-// else pins it. A mutation flipping it to false left every test green, which means the
-// line could silently become INFO and leave warningCount.
+// The cloud-disabled path builds its own block instead of borrowing
+// formatStorageInitSummary, so the level of its outcome is fixed at the call site and
+// nothing else pins it. A mutation turning it into Info left every test green, which
+// means the line could silently become INFO and leave warningCount.
 //
 // The path is reached through a real DetectFilesystem, which looks rclone up on
 // PATH. Pointing PATH at an empty directory forces the not-found arm on every
@@ -138,26 +142,53 @@ func TestCloudUnavailableHeadlineIsAWarning(t *testing.T) {
 	}, nil, nil)
 
 	out := buf.String()
-	var headline string
-	for _, line := range strings.Split(out, "\n") {
-		if strings.Contains(line, "Cloud storage initialized with warnings") {
-			headline = line
+	lines := strings.Split(strings.TrimRight(out, "\n"), "\n")
+	outcome, cause, skip := -1, -1, -1
+	for i, line := range lines {
+		switch {
+		case strings.Contains(line, "✗ Cloud storage: not initialized"):
+			outcome = i
+		case strings.Contains(line, "INFO       rclone: not found in PATH"):
+			cause = i
+		case strings.Contains(line, "Path Cloud: disabled"):
+			skip = i
 		}
 	}
-	if headline == "" {
-		t.Fatalf("the disabled path wrote no headline at all:\n%s", out)
+	if outcome < 0 {
+		t.Fatalf("the disabled path wrote no outcome at all:\n%s", out)
 	}
-	if got := levelColumnOf(headline); got != "WARNING" {
-		t.Fatalf("the cloud-unavailable headline rendered at %s, so it never reaches warningCount:\n%s", got, headline)
+	if got := levelColumnOf(lines[outcome]); got != "WARNING" {
+		t.Fatalf("the cloud-unavailable outcome rendered at %s, so it never reaches warningCount:\n%s", got, lines[outcome])
 	}
-	// The headline this path borrows carries the ⚠ and the retention figure; both
-	// vanished once when this call stopped borrowing it, and the maintainer reverted
-	// that. The glyph is content here, not the level: the level is pinned above.
-	if !strings.Contains(headline, "⚠") || !strings.Contains(headline, "retention") {
-		t.Fatalf("the cloud-unavailable headline lost its ⚠ or its retention figure:\n%s", headline)
+	// The cause is a fact line BEFORE the outcome, never appended to it, and the SKIP
+	// closes the block after it.
+	if cause < 0 || cause > outcome {
+		t.Fatalf("the cause line is missing or follows the outcome:\n%s", out)
 	}
-	if !strings.Contains(headline, "; filesystem detection") {
-		t.Fatalf("the cloud-unavailable headline no longer appends the cause:\n%s", headline)
+	if got := levelColumnOf(lines[cause]); got != "INFO" {
+		t.Fatalf("the cause line rendered at %s, want INFO:\n%s", got, lines[cause])
+	}
+	if skip < outcome || levelColumnOf(lines[skip]) != "SKIP" {
+		t.Fatalf("the SKIP line is missing or precedes the outcome:\n%s", out)
+	}
+	// The path is read first, then checked: the path and its configuration open the
+	// block, the check follows with what it found under it. No filesystem line: the
+	// check never reached one.
+	requireOrder(t, out,
+		"INFO     Path Cloud: remote\n",
+		"INFO       Retention policy: simple (keep 0 newest)\n",
+		"INFO     Checking cloud remote accessibility...\n",
+		"INFO       rclone: not found in PATH\n",
+		"WARNING  ✗ Cloud storage: not initialized\n",
+		"SKIP     Path Cloud: disabled\n",
+	)
+	for _, gone := range []string{"Filesystem:", "install rclone", "setup - rclone"} {
+		if strings.Contains(out, gone) {
+			t.Fatalf("the cloud-unavailable block still carries %q:\n%s", gone, out)
+		}
+	}
+	if cfg.CloudEnabled || cfg.CloudLogPath != "" {
+		t.Fatalf("the unavailable cloud must be disabled for the run: enabled=%v logPath=%q", cfg.CloudEnabled, cfg.CloudLogPath)
 	}
 }
 
@@ -170,7 +201,127 @@ func TestGFSSummaryWithoutStatsIsAWarningToo(t *testing.T) {
 	if !warn {
 		t.Fatalf("a GFS summary built without stats must report warn=true, got false: %s", summary)
 	}
-	if !strings.Contains(summary, "GFS retention") {
-		t.Fatalf("expected the GFS branch, got: %s", summary)
+	// Without stats there are no tiers to count: the GFS block carries the unknown
+	// count and the outcome, and no policy line anywhere (the limits are in DEBUG).
+	if want := "  Backups: unknown, statistics unavailable\n⚠ Local storage: initialized, statistics unavailable"; summary != want {
+		t.Fatalf("GFS summary without stats = %q, want %q", summary, want)
+	}
+	if got := formatRetentionPolicyLine(cfg, storage.LocationPrimary); got != "" {
+		t.Fatalf("GFS policy line = %q, want none", got)
+	}
+}
+
+// A GFS block opens on the path alone: no "  Retention policy:" line at INFO, the
+// configured limits at DEBUG. The simple policy keeps its line under the path.
+func TestStoragePathGFSPolicyGoesToDebug(t *testing.T) {
+	render := func(cfg *config.Config) string {
+		logger := logging.New(types.LogLevelDebug, false)
+		buf := &bytes.Buffer{}
+		logger.SetOutput(buf)
+		prev := logging.GetDefaultLogger()
+		t.Cleanup(func() { logging.SetDefaultLogger(prev) })
+		logging.SetDefaultLogger(logger)
+		logStoragePath("Primary", "/backup", cfg, storage.LocationPrimary)
+		return buf.String()
+	}
+
+	out := render(&config.Config{RetentionPolicy: "gfs", RetentionDaily: 2, RetentionWeekly: 1})
+	if strings.Contains(out, "Retention policy:") {
+		t.Fatalf("a GFS block must carry no policy line:\n%s", out)
+	}
+	requireOrder(t, out,
+		"INFO     Path Primary: /backup\n",
+		"DEBUG    storage init: primary retention policy=gfs daily=2 weekly=1 monthly=0 yearly=0\n",
+	)
+
+	out = render(&config.Config{RetentionPolicy: "simple", LocalRetentionDays: 7})
+	requireOrder(t, out,
+		"INFO     Path Primary: /backup\n",
+		"INFO       Retention policy: simple (keep 7 newest)\n",
+	)
+	if strings.Contains(out, "retention policy=gfs") {
+		t.Fatalf("a simple block has no GFS debug line:\n%s", out)
+	}
+}
+
+// requireOrder fails unless every want appears in out, in that order.
+func requireOrder(t *testing.T, out string, want ...string) {
+	t.Helper()
+	last := -1
+	for _, w := range want {
+		idx := strings.Index(out, w)
+		if idx < 0 || idx < last {
+			t.Fatalf("%q is missing or out of order in:\n%s", w, out)
+		}
+		last = idx
+	}
+}
+
+// The filesystem facts: a filesystem without ownership says the permissions are
+// skipped (the Primary and the Secondary; a cloud remote never takes ownership), and a
+// detection that failed says so and makes the outcome name it.
+func TestStorageFilesystemFacts(t *testing.T) {
+	render := func(info *storage.FilesystemInfo, detectErr error) (string, string) {
+		logger := logging.New(types.LogLevelInfo, false)
+		buf := &bytes.Buffer{}
+		logger.SetOutput(buf)
+		prev := logging.GetDefaultLogger()
+		t.Cleanup(func() { logging.SetDefaultLogger(prev) })
+		logging.SetDefaultLogger(logger)
+		problem := logStorageFilesystem(info, detectErr)
+		return buf.String(), problem
+	}
+
+	out, problem := render(&storage.FilesystemInfo{Type: storage.FilesystemFAT32, MountPoint: "/mnt/usb"}, nil)
+	requireOrder(t, out, "INFO       Filesystem: vfat (no ownership) [mount: /mnt/usb]\n", "INFO       Permissions: skipped, no ownership\n")
+	if problem != "" {
+		t.Fatalf("no ownership is not a problem for the outcome, got %q", problem)
+	}
+
+	out, _ = render(&storage.FilesystemInfo{Type: "rclone-remote", IsNetworkFS: true, MountPoint: "remote:", Device: "cloud"}, nil)
+	if strings.Contains(out, "Permissions:") {
+		t.Fatalf("a cloud remote has no permissions line:\n%s", out)
+	}
+
+	out, problem = render(&storage.FilesystemInfo{Type: storage.FilesystemUnknown}, errors.New("statfs failed"))
+	requireOrder(t, out, "INFO       Filesystem: unknown, detection failed: statfs failed\n", "INFO       Permissions: skipped, filesystem unknown\n")
+	if problem != "filesystem unknown" {
+		t.Fatalf("problem = %q, want filesystem unknown", problem)
+	}
+}
+
+// A secondary directory that cannot be created closes the block like an unreachable
+// cloud: the path and its configuration, the cause, "✗ ... not initialized", the SKIP,
+// and the destination is off for the run.
+func TestSecondaryDirectoryNotCreatedDisablesIt(t *testing.T) {
+	blocker := filepath.Join(t.TempDir(), "file")
+	if err := os.WriteFile(blocker, []byte("x"), 0o600); err != nil {
+		t.Fatalf("write blocker: %v", err)
+	}
+	logger := logging.New(types.LogLevelInfo, false)
+	buf := &bytes.Buffer{}
+	logger.SetOutput(buf)
+	prev := logging.GetDefaultLogger()
+	t.Cleanup(func() { logging.SetDefaultLogger(prev) })
+	logging.SetDefaultLogger(logger)
+
+	path := filepath.Join(blocker, "secondary")
+	cfg := &config.Config{SecondaryEnabled: true, SecondaryPath: path, SecondaryLogPath: "/logs", SecondaryRetentionDays: 5}
+	initializeSecondaryStorage(backupModeOptions{ctx: context.Background(), cfg: cfg, logger: logger, hostname: "node"}, nil, nil)
+
+	out := buf.String()
+	requireOrder(t, out,
+		"INFO     Path Secondary: "+path+"\n",
+		"INFO       Retention policy: simple (keep 5 newest)\n",
+		"INFO       Directory not created: not a directory\n",
+		"WARNING  ✗ Secondary storage: not initialized\n",
+		"SKIP     Path Secondary: disabled\n",
+	)
+	if strings.Contains(out, "Filesystem:") || strings.Count(out, "WARNING") != 1 {
+		t.Fatalf("one outcome, no filesystem line:\n%s", out)
+	}
+	if cfg.SecondaryEnabled || cfg.SecondaryLogPath != "" || !cfg.SecondaryStartupFailed {
+		t.Fatalf("the secondary must be off for the run and recorded as failed at startup: enabled=%v logPath=%q startupFailed=%v",
+			cfg.SecondaryEnabled, cfg.SecondaryLogPath, cfg.SecondaryStartupFailed)
 	}
 }

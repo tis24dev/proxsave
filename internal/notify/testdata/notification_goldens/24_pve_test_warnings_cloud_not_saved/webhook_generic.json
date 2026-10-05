@@ -1,0 +1,200 @@
+{
+  "backup": {
+    "duration_human": "2m 14s",
+    "duration_seconds": 134,
+    "file_name": "pve-golden-backup-20261004-020000.tar.xz.bundle.tar",
+    "files_included": 1832,
+    "files_missing": 0,
+    "size_bytes": 22020096,
+    "size_human": "21.0 MiB"
+  },
+  "compression": {
+    "level": 9,
+    "mode": "ultra",
+    "ratio": 88.20224719101124,
+    "type": "xz"
+  },
+  "exit_code": 1,
+  "hostname": "pve-golden",
+  "issues": {
+    "errors": 0,
+    "total": 22,
+    "warnings": 22
+  },
+  "log_categories": [
+    {
+      "count": 1,
+      "example": "✗ Cloud log directory not configured (cloud storage enabled)",
+      "label": "✗ Cloud log directory not configured (cloud storage enabled)",
+      "type": "WARNING"
+    },
+    {
+      "count": 1,
+      "example": "✗ Cloud Storage (rclone): backup not saved",
+      "label": "✗ Cloud Storage (rclone): backup not saved",
+      "type": "WARNING"
+    },
+    {
+      "count": 1,
+      "example": "ACME plugins: not configured. If unused, set BACKUP_PBS_ACME_PLUGINS=false to disable.",
+      "label": "ACME plugins: not configured. If unused, set BACKUP_PBS_ACME_PLUGINS=false to disable.",
+      "type": "WARNING"
+    },
+    {
+      "count": 1,
+      "example": "cloud log copy and cleanup will be disabled for this run",
+      "label": "Cloud storage enabled but CLOUD_LOG_PATH is empty",
+      "type": "WARNING"
+    },
+    {
+      "count": 1,
+      "example": "Corosync authkey: not configured. If unused, set BACKUP_CLUSTER_CONFIG=false to disable.",
+      "label": "Corosync authkey: not configured. If unused, set BACKUP_CLUSTER_CONFIG=false to disable.",
+      "type": "WARNING"
+    },
+    {
+      "count": 1,
+      "example": "Corosync configuration: not configured. If unused, set BACKUP_CLUSTER_CONFIG=false to disable.",
+      "label": "Corosync configuration: not configured. If unused, set BACKUP_CLUSTER_CONFIG=false to disable.",
+      "type": "WARNING"
+    },
+    {
+      "count": 1,
+      "example": "External metric servers: not configured. If unused, set BACKUP_PBS_METRIC_SERVERS=false to disable.",
+      "label": "External metric servers: not configured. If unused, set BACKUP_PBS_METRIC_SERVERS=false to disable.",
+      "type": "WARNING"
+    },
+    {
+      "count": 1,
+      "example": "Media pool configuration: not configured. If unused, set BACKUP_TAPE_CONFIGS=false to disable.",
+      "label": "Media pool configuration: not configured. If unused, set BACKUP_TAPE_CONFIGS=false to disable.",
+      "type": "WARNING"
+    },
+    {
+      "count": 1,
+      "example": "Network configuration: not configured. If unused, set BACKUP_PBS_NETWORK_CONFIG=false to disable.",
+      "label": "Network configuration: not configured. If unused, set BACKUP_PBS_NETWORK_CONFIG=false to disable.",
+      "type": "WARNING"
+    },
+    {
+      "count": 1,
+      "example": "New ProxSave version 0.42.0 (current 0.41.0): run 'proxsave --upgrade' to install.",
+      "label": "New ProxSave version 0.42.0 (current 0.41.0): run 'proxsave --upgrade' to install.",
+      "type": "WARNING"
+    },
+    {
+      "count": 1,
+      "example": "Node configuration: not configured. If unused, set BACKUP_PBS_NODE_CONFIG=false to disable.",
+      "label": "Node configuration: not configured. If unused, set BACKUP_PBS_NODE_CONFIG=false to disable.",
+      "type": "WARNING"
+    },
+    {
+      "count": 1,
+      "example": "Notifications configuration: not configured. If unused, set BACKUP_PBS_NOTIFICATIONS=false to disable.",
+      "label": "Notifications configuration: not configured. If unused, set BACKUP_PBS_NOTIFICATIONS=false to disable.",
+      "type": "WARNING"
+    },
+    {
+      "count": 1,
+      "example": "Notifications secrets: not configured. If unused, set BACKUP_PBS_NOTIFICATIONS_PRIV=false to disable.",
+      "label": "Notifications secrets: not configured. If unused, set BACKUP_PBS_NOTIFICATIONS_PRIV=false to disable.",
+      "type": "WARNING"
+    },
+    {
+      "count": 1,
+      "example": "Prune schedules: not configured. If unused, set BACKUP_PRUNE_SCHEDULES=false to disable.",
+      "label": "Prune schedules: not configured. If unused, set BACKUP_PRUNE_SCHEDULES=false to disable.",
+      "type": "WARNING"
+    },
+    {
+      "count": 1,
+      "example": "Remote configuration: not configured. If unused, set BACKUP_REMOTE_CONFIGS=false to disable.",
+      "label": "Remote configuration: not configured. If unused, set BACKUP_REMOTE_CONFIGS=false to disable.",
+      "type": "WARNING"
+    },
+    {
+      "count": 1,
+      "example": "Skipping ZFS collection: not detected. Set BACKUP_ZFS_CONFIG=false to disable.",
+      "label": "Skipping ZFS collection: not detected. Set BACKUP_ZFS_CONFIG=false to disable.",
+      "type": "WARNING"
+    },
+    {
+      "count": 1,
+      "example": "Sync jobs: not configured. If unused, set BACKUP_SYNC_JOBS=false to disable.",
+      "label": "Sync jobs: not configured. If unused, set BACKUP_SYNC_JOBS=false to disable.",
+      "type": "WARNING"
+    },
+    {
+      "count": 1,
+      "example": "Tape configuration: not configured. If unused, set BACKUP_TAPE_CONFIGS=false to disable.",
+      "label": "Tape configuration: not configured. If unused, set BACKUP_TAPE_CONFIGS=false to disable.",
+      "type": "WARNING"
+    },
+    {
+      "count": 1,
+      "example": "Tape encryption keys: not configured. If unused, set BACKUP_TAPE_CONFIGS=false to disable.",
+      "label": "Tape encryption keys: not configured. If unused, set BACKUP_TAPE_CONFIGS=false to disable.",
+      "type": "WARNING"
+    },
+    {
+      "count": 1,
+      "example": "Tape jobs: not configured. If unused, set BACKUP_TAPE_CONFIGS=false to disable.",
+      "label": "Tape jobs: not configured. If unused, set BACKUP_TAPE_CONFIGS=false to disable.",
+      "type": "WARNING"
+    },
+    {
+      "count": 1,
+      "example": "Traffic control rules: not configured. If unused, set BACKUP_PBS_TRAFFIC_CONTROL=false to disable.",
+      "label": "Traffic control rules: not configured. If unused, set BACKUP_PBS_TRAFFIC_CONTROL=false to disable.",
+      "type": "WARNING"
+    },
+    {
+      "count": 1,
+      "example": "Verification jobs: not configured. If unused, set BACKUP_VERIFICATION_JOBS=false to disable.",
+      "label": "Verification jobs: not configured. If unused, set BACKUP_VERIFICATION_JOBS=false to disable.",
+      "type": "WARNING"
+    }
+  ],
+  "proxmox_type": "pve",
+  "script_version": "0.41.0",
+  "server_id": "7302915846102738",
+  "server_mac": "bc:24:11:5e:3a:01",
+  "status": "warning",
+  "status_emoji": "⚠️",
+  "status_message": "Backup completed with warnings",
+  "storage": {
+    "cloud": {
+      "count": 15,
+      "emoji": "❌",
+      "status": "error",
+      "status_summary": "15/15"
+    },
+    "local": {
+      "count": 15,
+      "emoji": "✅",
+      "free": "412.00 GB",
+      "percent": "11.6%",
+      "percent_num": 11.587982832618025,
+      "status": "ok",
+      "status_summary": "15/15",
+      "used": "54.00 GB"
+    },
+    "secondary": {
+      "count": 15,
+      "emoji": "✅",
+      "free": "1.80 TB",
+      "percent": "50.5%",
+      "percent_num": 50.536768652710684,
+      "status": "ok",
+      "status_summary": "15/15",
+      "used": "1.84 TB"
+    }
+  },
+  "timestamp": 1791079200,
+  "timestamp_iso": "2026-10-04T02:00:00Z",
+  "update": {
+    "current_version": "0.41.0",
+    "latest_version": "0.42.0",
+    "new_version_available": true
+  }
+}

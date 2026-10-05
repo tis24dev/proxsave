@@ -455,6 +455,7 @@ func initializeRunProfiling(rt *appRuntime) {
 		return
 	}
 	rt.cpuProfileFile = f
+	rt.cpuProfilePath = cpuProfilePath
 	logging.Info("CPU profiling enabled: %s", cpuProfilePath)
 	rt.heapProfilePath = filepath.Join(profileDir, fmt.Sprintf("heap-%s-%s.pprof", rt.hostname, rt.timestampStr))
 }

@@ -180,6 +180,7 @@ func dispatchBackupMode(rt *appRuntime) modeResult {
 		toolVersion:      rt.toolVersion,
 		dryRun:           rt.dryRun,
 		startTime:        rt.startTime,
+		cpuProfilePath:   rt.cpuProfilePath,
 		heapProfilePath:  rt.heapProfilePath,
 		serverIDValue:    rt.serverIDValue,
 		serverMACValue:   rt.serverMACValue,
