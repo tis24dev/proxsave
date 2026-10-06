@@ -1315,19 +1315,19 @@ func runHealthcheckSelfParamsCLI(ctx context.Context, reader *bufio.Reader, base
 	if err != nil {
 		return skipOptionalInstallStepOnAbort(ctx, bootstrap, "Healthcheck parameters", err)
 	}
-	notifyEmail, err := promptHealthcheckOptionalURL(ctx, reader, "Notify email ping URL (HEALTHCHECK_NOTIFY_EMAIL_URL, optional): ", prefill.NotifyEmailURL)
+	notifyEmail, err := promptHealthcheckOptionalURL(ctx, reader, "Email delivery check ping URL (HEALTHCHECK_NOTIFY_EMAIL_URL, optional): ", prefill.NotifyEmailURL)
 	if err != nil {
 		return skipOptionalInstallStepOnAbort(ctx, bootstrap, "Healthcheck parameters", err)
 	}
-	notifyTelegram, err := promptHealthcheckOptionalURL(ctx, reader, "Notify Telegram ping URL (HEALTHCHECK_NOTIFY_TELEGRAM_URL, optional): ", prefill.NotifyTelegramURL)
+	notifyTelegram, err := promptHealthcheckOptionalURL(ctx, reader, "Telegram delivery check ping URL (HEALTHCHECK_NOTIFY_TELEGRAM_URL, optional): ", prefill.NotifyTelegramURL)
 	if err != nil {
 		return skipOptionalInstallStepOnAbort(ctx, bootstrap, "Healthcheck parameters", err)
 	}
-	notifyGotify, err := promptHealthcheckOptionalURL(ctx, reader, "Notify Gotify ping URL (HEALTHCHECK_NOTIFY_GOTIFY_URL, optional): ", prefill.NotifyGotifyURL)
+	notifyGotify, err := promptHealthcheckOptionalURL(ctx, reader, "Gotify delivery check ping URL (HEALTHCHECK_NOTIFY_GOTIFY_URL, optional): ", prefill.NotifyGotifyURL)
 	if err != nil {
 		return skipOptionalInstallStepOnAbort(ctx, bootstrap, "Healthcheck parameters", err)
 	}
-	notifyWebhook, err := promptHealthcheckOptionalURL(ctx, reader, "Notify webhook ping URL (HEALTHCHECK_NOTIFY_WEBHOOK_URL, optional): ", prefill.NotifyWebhookURL)
+	notifyWebhook, err := promptHealthcheckOptionalURL(ctx, reader, "Webhook delivery check ping URL (HEALTHCHECK_NOTIFY_WEBHOOK_URL, optional): ", prefill.NotifyWebhookURL)
 	if err != nil {
 		return skipOptionalInstallStepOnAbort(ctx, bootstrap, "Healthcheck parameters", err)
 	}

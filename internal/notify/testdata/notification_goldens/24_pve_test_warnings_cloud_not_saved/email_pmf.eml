@@ -50,8 +50,7 @@ P_PBS_METRIC_SERVERS=3Dfalse to disable. (count: 1)<CR>
 UP_TAPE_CONFIGS=3Dfalse to disable. (count: 1)<CR>
   - [WARNING] Network configuration: not configured. If unused, set BACKUP_=<CR>
 PBS_NETWORK_CONFIG=3Dfalse to disable. (count: 1)<CR>
-  - [WARNING] New ProxSave version 0.42.0 (current 0.41.0): run 'proxsave -=<CR>
--upgrade' to install. (count: 1)<CR>
+  - [WARNING] New ProxSave version 0.42.0 (current 0.41.0). (count: 1)<CR>
   - [WARNING] Node configuration: not configured. If unused, set BACKUP_PBS=<CR>
 _NODE_CONFIG=3Dfalse to disable. (count: 1)<CR>
   - [WARNING] Notifications configuration: not configured. If unused, set B=<CR>
@@ -420,8 +419,8 @@ d, set BACKUP_PBS_NETWORK_CONFIG=3Dfalse to disable.</td><CR>
                         <td>1</td><CR>
                     </tr><CR>
                     <tr><CR>
-                        <td>New ProxSave version 0.42.0 (current 0.41.0): r=<CR>
-un &#39;proxsave --upgrade&#39; to install.</td><CR>
+                        <td>New ProxSave version 0.42.0 (current 0.41.0).</=<CR>
+td><CR>
                         <td>WARNING</td><CR>
                         <td>1</td><CR>
                     </tr><CR>

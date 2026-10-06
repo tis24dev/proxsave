@@ -8,7 +8,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/tis24dev/proxsave/internal/config"
 	"github.com/tis24dev/proxsave/internal/logging"
+	"github.com/tis24dev/proxsave/internal/orchestrator"
 )
 
 // UpdateInfo holds information about the version check result.
@@ -24,6 +26,9 @@ type UpdateInfo struct {
 	// the GitHub release body). It is remote-controlled text: consumers that render it
 	// MUST sanitize it. Empty when the block is absent or the release could not be read.
 	Notes string
+	// NoticeLogged is set by logUpdateAvailable when it wrote the notice to the run log as a
+	// WARNING. False on a host whose daemon reports updates to healthchecks.
+	NoticeLogged bool
 }
 
 const (
@@ -46,12 +51,10 @@ func extractReleaseNotes(body string) string {
 	return strings.TrimSpace(rest)
 }
 
-// checkForUpdates performs a best-effort check against the latest GitHub release.
-//   - If the latest version cannot be determined or the current version is already up to date,
-//     only a DEBUG log entry is written (no user-facing output).
-//   - If a newer version is available, a WARNING is logged suggesting the --upgrade command.
-//     Additionally, a populated *UpdateInfo is returned so that callers can propagate
-//     structured information into notifications/metrics.
+// checkForUpdates performs a best-effort check against the latest GitHub release. It only
+// writes DEBUG entries: telling the operator is logUpdateAvailable's job, because whether the
+// finding is a WARNING of the run depends on who else reports it. A populated *UpdateInfo is
+// returned so that callers can propagate structured information into notifications/metrics.
 func checkForUpdates(ctx context.Context, logger *logging.Logger, currentVersion string) *UpdateInfo {
 	if logger == nil {
 		return nil
@@ -106,7 +109,6 @@ func checkForUpdates(ctx context.Context, logger *logging.Logger, currentVersion
 	}
 
 	logger.Debug("Update check completed: latest=%s current=%s (new version available)", latestVersion, currentVersion)
-	logger.Warning("New ProxSave version %s (current %s): run 'proxsave --upgrade' to install.", latestVersion, currentVersion)
 
 	return &UpdateInfo{
 		NewVersion: true,
@@ -115,6 +117,44 @@ func checkForUpdates(ctx context.Context, logger *logging.Logger, currentVersion
 		Tag:        latestTag,
 		Notes:      notes,
 	}
+}
+
+// logUpdateAvailable tells the operator about a newer release found by checkForUpdates. A
+// WARNING is counted into the run's exit code, and the daemon hands that exit code to the
+// healthchecks backup check, which then went down for an available update alone (issue #334).
+// So where the daemon already reports the finding to the healthchecks updates check, the run
+// keeps it at DEBUG; everywhere else it stays a WARNING and NoticeLogged records it, so the
+// notifications list the notice once either way (from the parsed log, or added by the
+// orchestrator when the log does not carry it).
+func logUpdateAvailable(logger *logging.Logger, cfg *config.Config, info *UpdateInfo) {
+	if logger == nil || info == nil || !info.NewVersion {
+		return
+	}
+	if daemonReportsUpdates(cfg) {
+		logger.Debug("Update notice: new version %s left to the daemon's healthchecks updates check (SCHEDULER_MODE=daemon, HEALTHCHECK_ENABLED=true, HEALTHCHECK_MODE=%s), not a warning of this run",
+			info.Latest, cfg.HealthcheckMode)
+		return
+	}
+	logger.Warning("%s", orchestrator.UpdateNoticeMessage(info.Latest, info.Current))
+	info.NoticeLogged = true
+}
+
+// daemonReportsUpdates reports whether this host's daemon sends the update finding to a
+// healthchecks updates check: the daemon schedules the backups, healthchecks is enabled, and
+// the updates check can be resolved. In centralized mode the ProxSave HC Server provisions it
+// for every host; in self mode it exists only when HEALTHCHECK_UPDATES_URL or
+// HEALTHCHECK_UPDATES_ID is set (the daemon resolves it the same way, daemon.selfURLs).
+func daemonReportsUpdates(cfg *config.Config) bool {
+	if cfg == nil || cfg.SchedulerMode != "daemon" || !cfg.HealthcheckEnabled {
+		return false
+	}
+	switch cfg.HealthcheckMode {
+	case config.HealthcheckModeCentralized:
+		return true
+	case config.HealthcheckModeSelf:
+		return cfg.HealthcheckSelfPingURL(cfg.HealthcheckUpdatesURL, cfg.HealthcheckUpdatesID) != ""
+	}
+	return false
 }
 
 // isNewerVersion returns true if latest is strictly newer than current.

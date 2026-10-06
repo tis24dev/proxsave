@@ -206,6 +206,10 @@ type BackupStats struct {
 	NewVersionAvailable bool
 	CurrentVersion      string
 	LatestVersion       string
+	// UpdateNoticeLogged is true when the run wrote the update notice to its log as a WARNING,
+	// so the parsed issue list already carries it. When false the notifications add the entry
+	// themselves (notification_adapter.go), never counting it into the exit code.
+	UpdateNoticeLogged bool
 }
 
 // Orchestrator coordinates the backup process using Go components
@@ -260,6 +264,7 @@ type Orchestrator struct {
 	versionUpdateAvailable bool
 	updateCurrentVersion   string
 	updateLatestVersion    string
+	updateNoticeLogged     bool
 
 	// Unprivileged container context (computed once by CLI and injected into collectors).
 	unprivilegedContainerDetector func() (bool, string)
@@ -310,6 +315,22 @@ func (o *Orchestrator) SetUpdateInfo(newVersion bool, current, latest string) {
 	o.versionUpdateAvailable = newVersion
 	o.updateCurrentVersion = strings.TrimSpace(current)
 	o.updateLatestVersion = strings.TrimSpace(latest)
+}
+
+// SetUpdateNoticeLogged records whether the CLI layer wrote the update notice to the run log as
+// a WARNING. It decides whether the notifications must add the notice to their issue list.
+func (o *Orchestrator) SetUpdateNoticeLogged(logged bool) {
+	if o == nil {
+		return
+	}
+	o.updateNoticeLogged = logged
+}
+
+// UpdateNoticeMessage is the operator-facing text of an available update. The run logs it as a
+// WARNING where no daemon reports updates to healthchecks, and the notifications list the same
+// text where the run kept it out of the log, so both read alike.
+func UpdateNoticeMessage(latest, current string) string {
+	return fmt.Sprintf("New ProxSave version %s (current %s).", latest, current)
 }
 
 func (o *Orchestrator) logGlobalRetentionPolicy() {

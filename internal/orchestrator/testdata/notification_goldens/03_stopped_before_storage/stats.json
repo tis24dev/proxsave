@@ -106,5 +106,6 @@
   "HealthcheckPortalLogin": "",
   "NewVersionAvailable": false,
   "CurrentVersion": "0.41.0",
-  "LatestVersion": "0.41.0"
+  "LatestVersion": "0.41.0",
+  "UpdateNoticeLogged": false
 }

@@ -358,7 +358,7 @@ Final install steps still run:
 
 #### Backup monitoring wizard (TUI)
 
-When the daemon engine is selected with monitoring on, the installer opens a **Backup monitoring (healthchecks)** screen after the config has been written. Self mode gets a parameters screen first, where you paste the full ping URL of each check (alive and backup required, updates and the four per-channel URLs optional); those go into `backup.env`. The verification screen itself writes nothing.
+When the daemon engine is selected with monitoring on, the installer opens a **Backup monitoring (healthchecks)** screen after the config has been written. Self mode gets a parameters screen first, where you paste the full ping URL of each check (alive and backup required; updates and the four notification delivery check URLs optional, which are checks on your own server that watch each channel, not the channels' own addresses: see [HEALTHCHECKS.md](HEALTHCHECKS.md#notification-delivery-checks)); those go into `backup.env`. The verification screen itself writes nothing.
 
 **What you see:**
 - A short explanation of what gets reported

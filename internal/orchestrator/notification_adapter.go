@@ -184,6 +184,11 @@ func (n *NotificationAdapter) convertBackupStatsToNotificationData(stats *Backup
 	errorCount := stats.ErrorCount
 	warningCount := stats.WarningCount
 	logCategories := append([]notify.LogCategory(nil), stats.LogCategories...)
+	if cat, ok := unloggedUpdateNotice(stats); ok {
+		logCategories = append(logCategories, cat)
+		sortLogCategories(logCategories)
+		warningCount++
+	}
 	totalIssues := errorCount + warningCount
 
 	// Extract filename from full path for email display
@@ -305,6 +310,19 @@ func (n *NotificationAdapter) convertBackupStatsToNotificationData(stats *Backup
 		CurrentVersion:      stats.CurrentVersion,
 		LatestVersion:       stats.LatestVersion,
 	}
+}
+
+// unloggedUpdateNotice returns the issue-list entry of an available update the run did not log.
+// A host whose daemon reports updates to healthchecks keeps the notice out of the run log, so it
+// does not raise the exit code the daemon hands to the backup check (issue #334); the
+// notifications still list it, built the way the log parser builds a logged WARNING. Where the
+// run did log it, the parsed categories already carry it and ok is false.
+func unloggedUpdateNotice(stats *BackupStats) (notify.LogCategory, bool) {
+	if stats == nil || !stats.NewVersionAvailable || stats.UpdateNoticeLogged || strings.TrimSpace(stats.LatestVersion) == "" {
+		return notify.LogCategory{}, false
+	}
+	label, example := splitCategoryAndExample(UpdateNoticeMessage(stats.LatestVersion, stats.CurrentVersion))
+	return notify.LogCategory{Label: label, Type: "WARNING", Count: 1, Example: example}, true
 }
 
 // EffectiveLocalStatus is the Local status the notifications and the dashboard outcome

@@ -561,7 +561,8 @@ cloud log upload dest=charremote:<ROOT>/cloud-log/backup-charhost-20260102-03040
   "HealthcheckPortalLogin": "",
   "NewVersionAvailable": false,
   "CurrentVersion": "",
-  "LatestVersion": ""
+  "LatestVersion": "",
+  "UpdateNoticeLogged": false
 }
 
 ===== BackupStats as seen by the notification channel =====
@@ -678,5 +679,6 @@ calls: 1
   "HealthcheckPortalLogin": "",
   "NewVersionAvailable": false,
   "CurrentVersion": "",
-  "LatestVersion": ""
+  "LatestVersion": "",
+  "UpdateNoticeLogged": false
 }

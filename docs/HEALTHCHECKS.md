@@ -35,8 +35,10 @@ that did not happen. The **Healthchecks** section is not a notification channel 
 
 ## What gets monitored
 
-The daemon reports four families of checks, each shown on the monitor as a
-`proxsave-*` check.
+The daemon reports four families of checks. In centralized mode the server creates them
+and they appear on the monitor as the `proxsave-*` checks below. In self mode you create
+them on your own instance, under any name you like, and give the daemon their ping URLs:
+see [Self mode](#self-mode-your-own-healthchecks).
 
 | Check | When it pings | What it covers |
 |-------|---------------|----------------|
@@ -79,9 +81,11 @@ The exact wire behavior, in case you are reading the monitor's event log:
   there is no previous verdict to re-affirm.
 - The per-channel checks are driven by what the backup actually attempted, recorded per
   run, and not by cached configuration. A channel you turn off does not leave a stale
-  down check behind. There is one check per enabled channel among email, telegram,
-  gotify, and webhook. In centralized mode the daemon tells the server which channels
-  are enabled, so it provisions exactly those.
+  down check behind. In centralized mode there is one check per enabled channel among
+  email, telegram, gotify, and webhook: the daemon tells the server which channels are
+  enabled, so it provisions exactly those. In self mode a channel has a check only when
+  you set its `HEALTHCHECK_NOTIFY_<CHANNEL>_URL` or `_ID`: see
+  [Notification delivery checks](#notification-delivery-checks).
 - Ping URLs embed the check identifier, which is a low-capability secret. ProxSave
   registers them with the log masker and strips them out of transport errors, so a
   failed ping logs the reason and never the URL.
@@ -265,14 +269,36 @@ instead, at the same cost to the exit code. On a host whose configured engine is
 either reason arrives with `(cron mode: only the resident daemon transmits)` appended,
 because there nothing would have transmitted even with the key filled in.
 
+### Setting it up
+
+1. On your healthchecks instance, create one check for each row of the table below that
+   you want. Each check has its own ping URL.
+2. Give each check the period of its row, and attach your alert channels to it on your
+   instance: that is what tells you when a check goes down.
+3. Give the daemon each ping URL, in the install form or in `backup.env` (both below).
+4. Run `Diagnostic Checks` > `Healthchecks` from the dashboard. It pings your alive check
+   to confirm this host reaches your instance.
+
+| Check | Needed | Variable | When the daemon pings it | Period on your instance |
+|-------|--------|----------|--------------------------|-------------------------|
+| service alive | always: the run warns without it | `HEALTHCHECK_ALIVE_URL` or `_ID` | at daemon start, then every `HEALTHCHECK_HEARTBEAT_INTERVAL` (5 minutes by default) | `HEALTHCHECK_HEARTBEAT_INTERVAL` |
+| backup outcome | required by the install form | `HEALTHCHECK_BACKUP_URL` or `_ID` | each scheduled run: `/start` at launch, then the exit code, or `/fail` on a hang | the time between scheduled runs: 1 day for daily, 7 days for weekly, 31 days for monthly, with a grace of at least `MAX_RUN_DURATION` (1 hour by default), so a long run is not reported down while it is still running |
+| updates | optional | `HEALTHCHECK_UPDATES_URL` or `_ID` | at daemon start, then every `HEALTHCHECK_UPDATE_INTERVAL` (5 minutes by default): `/0` when up to date, `/1` when a newer release exists | `HEALTHCHECK_UPDATE_INTERVAL` |
+| one per notification channel | optional | `HEALTHCHECK_NOTIFY_<CHANNEL>_URL` or `_ID` | after each scheduled run in which that channel sent: see [Notification delivery checks](#notification-delivery-checks) | the time between scheduled runs, as for the backup check |
+
+The alive and backup pair alone is a perfectly reasonable setup.
+
 ### During install
 
 Choosing `Your own server` on the monitoring step opens a form that collects the full
 ping URL of each check, for example `https://hc-ping.com/<uuid>`. The alive and backup
-URLs are required; the updates URL and the four per-channel notification URLs are
-optional. Whatever you leave empty simply is not reported. A verification screen then
-pings your alive URL to confirm it is reachable from this host, using a state-neutral
-ping that does not leave a spurious success or failure on your check.
+URLs are required; the updates URL and the four notification delivery check URLs are
+optional. Those four are the ping URLs of checks on your instance that watch each
+channel's delivery, not the channels' own addresses: see
+[Notification delivery checks](#notification-delivery-checks). Whatever you leave empty
+simply is not reported. A verification screen then pings your alive URL to confirm it is
+reachable from this host, using a state-neutral ping that does not leave a spurious
+success or failure on your check.
 
 ### In backup.env
 
@@ -280,24 +306,60 @@ You can also configure it by hand. Each check accepts either a full URL or an
 identifier that gets assembled onto a shared endpoint:
 
 ```bash
-HEALTHCHECK_PING_ENDPOINT=https://hc-ping.com   # base for the *_ID form
+HEALTHCHECK_ENABLED=true
+HEALTHCHECK_MODE=self
+HEALTHCHECK_PING_ENDPOINT=https://hc-ping.com   # base for the *_ID form; your own address if you self-host
 HEALTHCHECK_PING_KEY=                           # optional, inserted between base and id
-HEALTHCHECK_ALIVE_ID=
+HEALTHCHECK_ALIVE_URL=                          # service-alive check: full ping URL...
+HEALTHCHECK_ALIVE_ID=                           # ...or its UUID or slug
+HEALTHCHECK_BACKUP_URL=                         # backup-outcome check
 HEALTHCHECK_BACKUP_ID=
+HEALTHCHECK_UPDATES_URL=                        # updates check, optional
+HEALTHCHECK_UPDATES_ID=
+HEALTHCHECK_NOTIFY_EMAIL_URL=                   # notification delivery checks, optional:
+HEALTHCHECK_NOTIFY_EMAIL_ID=                    # checks on your instance, not the channel settings
+HEALTHCHECK_NOTIFY_TELEGRAM_URL=
+HEALTHCHECK_NOTIFY_TELEGRAM_ID=
+HEALTHCHECK_NOTIFY_GOTIFY_URL=
+HEALTHCHECK_NOTIFY_GOTIFY_ID=
+HEALTHCHECK_NOTIFY_WEBHOOK_URL=
+HEALTHCHECK_NOTIFY_WEBHOOK_ID=
 ```
 
 A full `*_URL` always wins over the matching `*_ID`. With a ping key set, an id
 resolves to `<endpoint>/<key>/<id>`; without one, to `<endpoint>/<id>`.
 
-Self mode covers all four families: `*_ALIVE_*`, `*_BACKUP_*`, `*_UPDATES_*`, and
-`*_NOTIFY_<CHANNEL>_*` for email, telegram, gotify, and webhook. Configure only the
-checks you actually want. The alive and backup pair alone is a perfectly reasonable
-setup.
+Apart from `HEALTHCHECK_ENABLED` and `HEALTHCHECK_MODE`, none of these variables has any
+effect in centralized mode, with one exception: `HEALTHCHECK_ALIVE_URL` and
+`HEALTHCHECK_BACKUP_URL` do double duty. In self mode they are
+your own ping URLs. In centralized mode they are an optional fallback, used only when
+ProxSave HC Server cannot be reached, that nothing fills in, so leave them empty unless you
+deliberately want one.
 
-Note that `HEALTHCHECK_ALIVE_URL` and `HEALTHCHECK_BACKUP_URL` do double duty: in self
-mode they are your own ping URLs. In centralized mode they are an optional fallback, used
-only when ProxSave HC Server cannot be reached, that nothing fills in, so leave them empty
-unless you deliberately want one.
+### Notification delivery checks
+
+`HEALTHCHECK_NOTIFY_EMAIL_*`, `HEALTHCHECK_NOTIFY_TELEGRAM_*`, `HEALTHCHECK_NOTIFY_GOTIFY_*`
+and `HEALTHCHECK_NOTIFY_WEBHOOK_*` each point to a check on your healthchecks instance
+that watches whether one notification channel delivered. They are not that channel's
+settings, and they send no message. The channels themselves are configured with their own
+variables, described in [NOTIFICATIONS.md](NOTIFICATIONS.md): Gotify, for instance, with
+`GOTIFY_SERVER_URL` and `GOTIFY_TOKEN`. A Gotify server address in
+`HEALTHCHECK_NOTIFY_GOTIFY_URL`, or a Gotify token in `HEALTHCHECK_NOTIFY_GOTIFY_ID`,
+configures neither Gotify nor a working check.
+
+After each scheduled run, the daemon pings the check of every channel that sent in that
+run: `/0` when the channel delivered cleanly, `/1` when it reported a warning or an error.
+A channel that is switched off is not pinged, and no channel is pinged after a run you
+start yourself.
+
+Setting any of these variables keeps `NOTIFY_ON` at `always`: every run is notified,
+whatever the setting says. A delivery check on your instance expects a ping after every
+scheduled run, and a run the filter kept quiet would turn it down. To let `NOTIFY_ON=warning`
+or `failure` apply in self mode, leave all eight empty. See
+[Alert delivery and NOTIFY_ON](#alert-delivery-and-notify_on).
+
+In centralized mode these variables have no effect: the server creates the
+`proxsave-notify-<channel>` checks itself.
 
 ## Where monitoring shows up
 
@@ -362,7 +424,8 @@ scheduled run has passed it on.
 
 **Self mode.** The filter applies when both ping URLs are valid, the daemon is transmitting
 and no `HEALTHCHECK_NOTIFY_*` variable is set: a notify check you run on a period would go
-DOWN on every run the filter kept quiet.
+DOWN on every run the filter kept quiet. See
+[Notification delivery checks](#notification-delivery-checks).
 
 **Where you see it.** The run log's `Applying notification filter...` block (`Setting`,
 `Healthchecks status`, `Filter in effect`, then `✓ Notification filter: applied`, or
@@ -505,13 +568,15 @@ HEALTHCHECK_SEND_LOG=true      # attach a log tail on a failed or hung supervise
 HEALTHCHECK_ALIVE_URL=
 HEALTHCHECK_BACKUP_URL=
 
-# Self mode
-HEALTHCHECK_PING_ENDPOINT=https://hc-ping.com
-HEALTHCHECK_PING_KEY=
-HEALTHCHECK_ALIVE_ID=
-HEALTHCHECK_BACKUP_ID=
-HEALTHCHECK_UPDATES_URL=
+# Self mode only: checks on your own healthchecks instance (see Self mode above).
+HEALTHCHECK_PING_ENDPOINT=https://hc-ping.com   # base for the *_ID form
+HEALTHCHECK_PING_KEY=                           # optional, inserted between base and id
+HEALTHCHECK_ALIVE_ID=                           # service-alive check, used when HEALTHCHECK_ALIVE_URL is empty
+HEALTHCHECK_BACKUP_ID=                          # backup-outcome check, used when HEALTHCHECK_BACKUP_URL is empty
+HEALTHCHECK_UPDATES_URL=                        # updates check, optional: /1 when a newer release exists
 HEALTHCHECK_UPDATES_ID=
+# Notification delivery checks, optional. Not the channel settings; any of them set
+# keeps every run notified whatever NOTIFY_ON says.
 HEALTHCHECK_NOTIFY_EMAIL_URL=
 HEALTHCHECK_NOTIFY_EMAIL_ID=
 HEALTHCHECK_NOTIFY_TELEGRAM_URL=
@@ -527,4 +592,5 @@ positive duration.
 
 See [DAEMON.md](DAEMON.md) for the daemon itself, [CONFIGURATION.md](CONFIGURATION.md)
 for the full `backup.env` reference, and [NOTIFICATIONS.md](NOTIFICATIONS.md) for how
-the per-channel checks relate to the delivery channels.
+the per-channel checks relate to the delivery channels. In self mode, the per-channel
+checks are the [notification delivery checks](#notification-delivery-checks).

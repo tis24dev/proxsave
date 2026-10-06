@@ -482,7 +482,8 @@ snapshot list --ns charns --repository charpbs@pbs!pve@192.0.2.10:charstore --ou
   "HealthcheckPortalLogin": "",
   "NewVersionAvailable": false,
   "CurrentVersion": "",
-  "LatestVersion": ""
+  "LatestVersion": "",
+  "UpdateNoticeLogged": false
 }
 
 ===== BackupStats as seen by the notification channel =====

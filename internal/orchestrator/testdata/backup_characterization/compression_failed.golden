@@ -378,7 +378,8 @@ exit code (as cmd/proxsave computes it): 11
   "HealthcheckPortalLogin": "",
   "NewVersionAvailable": false,
   "CurrentVersion": "",
-  "LatestVersion": ""
+  "LatestVersion": "",
+  "UpdateNoticeLogged": false
 }
 
 ===== BackupStats as seen by the notification channel =====

@@ -2020,7 +2020,7 @@ func (d *daemon) updateTick(ctx context.Context) {
 	d.mu.Unlock()
 	switch {
 	case firstAvail:
-		logging.Warning("daemon: a newer ProxSave version is available (%s); run 'proxsave --upgrade' to install", orUnknownVersion(latest))
+		logging.Warning("daemon: a newer ProxSave version is available (%s)", orUnknownVersion(latest))
 	case available:
 		logging.Debug("daemon: update still available (%s)", orUnknownVersion(latest))
 	default:

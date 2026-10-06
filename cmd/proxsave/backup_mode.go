@@ -172,6 +172,7 @@ func configureBackupOrchestrator(opts backupModeOptions, orch *orchestrator.Orch
 	orch.SetRunProfilePaths(opts.cpuProfilePath, opts.heapProfilePath)
 	if opts.updateInfo != nil {
 		orch.SetUpdateInfo(opts.updateInfo.NewVersion, opts.updateInfo.Current, opts.updateInfo.Latest)
+		orch.SetUpdateNoticeLogged(opts.updateInfo.NoticeLogged)
 	}
 
 	orch.SetBackupConfig(
