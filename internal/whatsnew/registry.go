@@ -264,6 +264,12 @@ var notes = []Note{
 			"Dashboards or alerts on the secondary or cloud series see no data while that destination is off",
 		},
 	},
+	{
+		Version: "0.42.1",
+		Lines: []string{
+			"With the daemon and healthchecks on, an available update no longer marks the backup down: the updates check reports it",
+		},
+	},
 }
 
 // LookupNotes returns the notes for versions in the half-open range (from, to], ascending by
