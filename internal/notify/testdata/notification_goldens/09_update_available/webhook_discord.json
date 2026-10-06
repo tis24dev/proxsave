@@ -62,7 +62,7 @@
         {
           "inline": false,
           "name": "Top Issues",
-          "value": "```\n[WARNING] New ProxSave version 0.42.0 (current 0.41.0): run 'proxsave --upgrade' to install. (count: 1)\n```"
+          "value": "```\n[WARNING] New ProxSave version 0.42.0 (current 0.41.0). (count: 1)\n```"
         }
       ],
       "footer": {

@@ -642,7 +642,8 @@ snapshot list host/proxsave-charhost --ns charns --repository charpbs@pbs!pve@19
   "HealthcheckPortalLogin": "",
   "NewVersionAvailable": false,
   "CurrentVersion": "",
-  "LatestVersion": ""
+  "LatestVersion": "",
+  "UpdateNoticeLogged": false
 }
 
 ===== BackupStats as seen by the notification channel =====
@@ -780,5 +781,6 @@ calls: 1
   "HealthcheckPortalLogin": "",
   "NewVersionAvailable": false,
   "CurrentVersion": "",
-  "LatestVersion": ""
+  "LatestVersion": "",
+  "UpdateNoticeLogged": false
 }

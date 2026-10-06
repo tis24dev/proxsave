@@ -34,8 +34,7 @@ ISSUES:<CR>
   Log: /opt/proxsave/log/backup-pve-golden-20261004-020000.log<CR>
 <CR>
 ISSUE DETAILS:<CR>
-  - [WARNING] New ProxSave version 0.42.0 (current 0.41.0): run 'proxsave -=<CR>
--upgrade' to install. (count: 1)<CR>
+  - [WARNING] New ProxSave version 0.42.0 (current 0.41.0). (count: 1)<CR>
 <CR>
 Exit Code: 1<CR>
 ProxSave - v0.41.0<CR>
@@ -326,8 +325,8 @@ und-color:#f2f2f2;">Type</th><CR>
 und-color:#f2f2f2;">Count</th><CR>
                     </tr><CR>
                     <tr><CR>
-                        <td>New ProxSave version 0.42.0 (current 0.41.0): r=<CR>
-un &#39;proxsave --upgrade&#39; to install.</td><CR>
+                        <td>New ProxSave version 0.42.0 (current 0.41.0).</=<CR>
+td><CR>
                         <td>WARNING</td><CR>
                         <td>1</td><CR>
                     </tr><CR>

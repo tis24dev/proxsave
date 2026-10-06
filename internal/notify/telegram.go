@@ -593,7 +593,6 @@ func (t *TelegramNotifier) buildMessage(data *NotificationData) string {
 		} else {
 			fmt.Fprintf(&msg, "New version: %s\n", data.LatestVersion)
 		}
-		msg.WriteString("Run 'proxsave --upgrade'\n")
 	}
 
 	return msg.String()

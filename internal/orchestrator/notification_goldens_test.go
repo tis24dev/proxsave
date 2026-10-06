@@ -97,6 +97,9 @@ type notifyGoldenCase struct {
 	pbsServer *notifyGoldenPBS
 	// update is an available update: what checkForUpdates logs and the orchestrator copies.
 	update bool
+	// updateKeptOutOfLog is a host whose daemon reports updates to healthchecks: the run logs
+	// no WARNING for the update (issue #334), the notifications list it themselves.
+	updateKeptOutOfLog bool
 	// offline is a run without network: checkForUpdates could not ask for the latest
 	// version, so the stats carry none.
 	offline bool
@@ -280,11 +283,19 @@ func notifyGoldenCases() []notifyGoldenCase {
 			name:   "09_update_available",
 			update: true,
 			startup: func(logger *logging.Logger, cfg *config.Config) {
-				// What checkForUpdates (cmd/proxsave/main_update.go) logs once the run log
+				// What logUpdateAvailable (cmd/proxsave/main_update.go) logs once the run log
 				// is open.
-				logger.Warning("New ProxSave version %s (current %s): run 'proxsave --upgrade' to install.", notifyGoldenLatestVersion, notifyGoldenVersion)
+				logger.Warning("%s", UpdateNoticeMessage(notifyGoldenLatestVersion, notifyGoldenVersion))
 			},
 			wantExit: types.ExitGenericError.Int(),
+		},
+		{
+			// The same update on a host whose daemon reports it to the healthchecks updates
+			// check: the run logs no WARNING, exits 0, and the notifications still list it.
+			name:               "09b_update_available_daemon_healthchecks",
+			update:             true,
+			updateKeptOutOfLog: true,
+			wantExit:           types.ExitSuccess.Int(),
 		},
 		{
 			// The archive reached the cloud remote, one sidecar upload did not.
@@ -465,7 +476,7 @@ func notifyGoldenCases() []notifyGoldenCase {
 			failCloudStore: true,
 			startup: func(logger *logging.Logger, cfg *config.Config) {
 				logger.Warning("Cloud storage enabled but CLOUD_LOG_PATH is empty - cloud log copy and cleanup will be disabled for this run")
-				logger.Warning("New ProxSave version %s (current %s): run 'proxsave --upgrade' to install.", notifyGoldenLatestVersion, notifyGoldenVersion)
+				logger.Warning("%s", UpdateNoticeMessage(notifyGoldenLatestVersion, notifyGoldenVersion))
 				logger.Warning("%s Cloud log directory not configured (cloud storage enabled)", theme.SymbolError)
 				for _, line := range []string{
 					"Corosync configuration: not configured. If unused, set BACKUP_CLUSTER_CONFIG=false to disable.",
@@ -700,6 +711,7 @@ func runNotifyGoldenCase(t *testing.T, tc notifyGoldenCase) map[string][]byte {
 		if tc.update {
 			stats.NewVersionAvailable = true
 			stats.LatestVersion = notifyGoldenLatestVersion
+			stats.UpdateNoticeLogged = !tc.updateKeptOutOfLog
 		}
 		if tc.offline {
 			stats.LatestVersion = ""

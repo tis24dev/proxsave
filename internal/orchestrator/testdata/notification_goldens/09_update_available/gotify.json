@@ -87,10 +87,10 @@
   "TotalIssues": 1,
   "LogCategories": [
     {
-      "label": "New ProxSave version 0.42.0 (current 0.41.0): run 'proxsave --upgrade' to install.",
+      "label": "New ProxSave version 0.42.0 (current 0.41.0).",
       "type": "WARNING",
       "count": 1,
-      "example": "New ProxSave version 0.42.0 (current 0.41.0): run 'proxsave --upgrade' to install."
+      "example": "New ProxSave version 0.42.0 (current 0.41.0)."
     }
   ],
   "ScriptVersion": "0.41.0",

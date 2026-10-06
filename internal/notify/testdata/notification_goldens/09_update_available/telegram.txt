@@ -21,4 +21,3 @@ ProxSave - v0.41.0
 
 ⬆️ Update available
 New version: 0.42.0 (current: 0.41.0)
-Run 'proxsave --upgrade'

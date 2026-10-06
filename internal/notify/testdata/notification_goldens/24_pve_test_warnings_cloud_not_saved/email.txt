@@ -31,7 +31,7 @@ ISSUE DETAILS:
   - [WARNING] External metric servers: not configured. If unused, set BACKUP_PBS_METRIC_SERVERS=false to disable. (count: 1)
   - [WARNING] Media pool configuration: not configured. If unused, set BACKUP_TAPE_CONFIGS=false to disable. (count: 1)
   - [WARNING] Network configuration: not configured. If unused, set BACKUP_PBS_NETWORK_CONFIG=false to disable. (count: 1)
-  - [WARNING] New ProxSave version 0.42.0 (current 0.41.0): run 'proxsave --upgrade' to install. (count: 1)
+  - [WARNING] New ProxSave version 0.42.0 (current 0.41.0). (count: 1)
   - [WARNING] Node configuration: not configured. If unused, set BACKUP_PBS_NODE_CONFIG=false to disable. (count: 1)
   - [WARNING] Notifications configuration: not configured. If unused, set BACKUP_PBS_NOTIFICATIONS=false to disable. (count: 1)
   - [WARNING] Notifications secrets: not configured. If unused, set BACKUP_PBS_NOTIFICATIONS_PRIV=false to disable. (count: 1)

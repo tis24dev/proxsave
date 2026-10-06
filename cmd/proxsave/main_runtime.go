@@ -243,6 +243,7 @@ func bootstrapRuntime(ctx context.Context, args *cli.Args, bootstrap *logging.Bo
 	initializeRunLogFile(rt)
 	bootstrap.Flush(rt.logger)
 	rt.updateInfo = checkForUpdates(ctx, rt.logger, toolVersion)
+	logUpdateAvailable(rt.logger, rt.cfg, rt.updateInfo)
 	// The seen-flag lives in LOG_PATH, taken from this run's configuration like the dashboard
 	// Screen 0 and the install seed take it from theirs, and every operation on it is bounded by
 	// FS_IO_TIMEOUT. The base (the old identity/ location the first read moves the flag from)

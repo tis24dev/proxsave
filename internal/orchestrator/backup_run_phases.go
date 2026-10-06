@@ -98,6 +98,7 @@ func (o *Orchestrator) initBackupRun(run *backupRunContext) *BackupStats {
 		run.stats.NewVersionAvailable = o.versionUpdateAvailable
 		run.stats.CurrentVersion = o.updateCurrentVersion
 		run.stats.LatestVersion = o.updateLatestVersion
+		run.stats.UpdateNoticeLogged = o.updateNoticeLogged
 	}
 	return run.stats
 }

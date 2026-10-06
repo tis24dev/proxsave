@@ -98,5 +98,6 @@
   "HealthcheckPortalLogin": "",
   "NewVersionAvailable": false,
   "CurrentVersion": "",
-  "LatestVersion": ""
+  "LatestVersion": "",
+  "UpdateNoticeLogged": false
 }

@@ -667,7 +667,8 @@ snapshot upload-log host/proxsave-charhost/2026-01-02T03:04:30Z <ROOT>/log/backu
   "HealthcheckPortalLogin": "",
   "NewVersionAvailable": false,
   "CurrentVersion": "",
-  "LatestVersion": ""
+  "LatestVersion": "",
+  "UpdateNoticeLogged": false
 }
 
 ===== BackupStats as seen by the notification channel =====
@@ -799,5 +800,6 @@ calls: 1
   "HealthcheckPortalLogin": "",
   "NewVersionAvailable": false,
   "CurrentVersion": "",
-  "LatestVersion": ""
+  "LatestVersion": "",
+  "UpdateNoticeLogged": false
 }

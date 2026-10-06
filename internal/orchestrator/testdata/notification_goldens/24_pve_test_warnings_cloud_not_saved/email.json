@@ -141,10 +141,10 @@
       "example": "Network configuration: not configured. If unused, set BACKUP_PBS_NETWORK_CONFIG=false to disable."
     },
     {
-      "label": "New ProxSave version 0.42.0 (current 0.41.0): run 'proxsave --upgrade' to install.",
+      "label": "New ProxSave version 0.42.0 (current 0.41.0).",
       "type": "WARNING",
       "count": 1,
-      "example": "New ProxSave version 0.42.0 (current 0.41.0): run 'proxsave --upgrade' to install."
+      "example": "New ProxSave version 0.42.0 (current 0.41.0)."
     },
     {
       "label": "Node configuration: not configured. If unused, set BACKUP_PBS_NODE_CONFIG=false to disable.",
