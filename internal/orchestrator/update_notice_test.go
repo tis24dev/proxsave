@@ -1,8 +1,10 @@
 package orchestrator
 
 import (
+	"context"
 	"testing"
 
+	"github.com/tis24dev/proxsave/internal/config"
 	"github.com/tis24dev/proxsave/internal/logging"
 	"github.com/tis24dev/proxsave/internal/notify"
 	"github.com/tis24dev/proxsave/internal/types"
@@ -71,13 +73,20 @@ func TestNotificationsListAnUnloggedUpdateNotice(t *testing.T) {
 	})
 }
 
-// SetUpdateNoticeLogged carries the run's answer into the stats the notifications read.
+// SetUpdateNoticeLogged carries the run's answer into the stats the notifications read. It goes
+// through the real initBackupRun: that copy is the only one in production, and without it a
+// notice the run already logged is added a second time to every notification's issue list.
 func TestInitBackupRunCarriesUpdateNoticeLogged(t *testing.T) {
-	orch := &Orchestrator{}
-	orch.SetUpdateInfo(true, "0.41.0", "0.42.0")
-	orch.SetUpdateNoticeLogged(true)
-	if !orch.updateNoticeLogged {
-		t.Fatal("SetUpdateNoticeLogged(true) did not record the answer")
+	for _, logged := range []bool{true, false} {
+		o := &Orchestrator{logger: logging.New(types.LogLevelError, false), cfg: &config.Config{}}
+		o.SetUpdateInfo(true, "0.41.0", "0.42.0")
+		o.SetUpdateNoticeLogged(logged)
+
+		stats := o.initBackupRun(o.newBackupRunContext(context.Background(), nil, "pve.home.arpa"))
+
+		if stats.UpdateNoticeLogged != logged {
+			t.Fatalf("SetUpdateNoticeLogged(%v) reached the run's stats as %v", logged, stats.UpdateNoticeLogged)
+		}
 	}
 	var nilOrch *Orchestrator
 	nilOrch.SetUpdateNoticeLogged(true) // must not panic

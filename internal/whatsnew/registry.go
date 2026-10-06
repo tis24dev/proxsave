@@ -267,7 +267,7 @@ var notes = []Note{
 	{
 		Version: "0.42.1",
 		Lines: []string{
-			"With the daemon and healthchecks on, an available update no longer marks the backup down: the updates check reports it",
+			"With the daemon and a healthchecks updates check, an available update no longer marks the backup down",
 		},
 	},
 }
