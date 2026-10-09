@@ -6,7 +6,7 @@ binaries, plus third-party source included directly in the tree.
 
 ---
 
-## charm.land/bubbles/v2 v2.1.1
+## charm.land/bubbles/v2 v2.2.1
 
 **License:** MIT
 
@@ -38,7 +38,7 @@ SOFTWARE.
 
 ---
 
-## charm.land/bubbletea/v2 v2.0.8
+## charm.land/bubbletea/v2 v2.0.9
 
 **License:** MIT
 
@@ -70,7 +70,7 @@ SOFTWARE.
 
 ---
 
-## charm.land/lipgloss/v2 v2.0.5
+## charm.land/lipgloss/v2 v2.0.6
 
 **License:** MIT
 
@@ -102,7 +102,7 @@ SOFTWARE.
 
 ---
 
-## filippo.io/age v1.3.1
+## filippo.io/age v1.3.2
 
 **License:** BSD-3-Clause
 
@@ -142,7 +142,7 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 ---
 
-## filippo.io/edwards25519 v1.1.1
+## filippo.io/edwards25519 v1.2.0
 
 **License:** BSD-3-Clause
 
@@ -218,6 +218,36 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 ---
 
+## github.com/Masterminds/semver/v3 v3.5.0
+
+**License:** MIT
+
+**Source:** https://github.com/Masterminds/semver
+
+```
+Copyright (C) 2014-2019, Matt Butcher and Matt Farina
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+THE SOFTWARE.
+```
+
+---
+
 ## github.com/atotto/clipboard v0.1.4
 
 **License:** BSD-3-Clause
@@ -288,7 +318,7 @@ SOFTWARE.
 
 ---
 
-## github.com/charmbracelet/ultraviolet v0.0.0-20260703014108-f5a850f9c2b7
+## github.com/charmbracelet/ultraviolet v0.0.0-20260811164956-006e29f97886
 
 **License:** MIT
 
@@ -320,7 +350,7 @@ SOFTWARE.
 
 ---
 
-## github.com/charmbracelet/x/ansi v0.11.7
+## github.com/charmbracelet/x/ansi v0.11.8
 
 **License:** MIT
 
@@ -512,7 +542,7 @@ SOFTWARE.
 
 ---
 
-## github.com/lucasb-eyer/go-colorful v1.4.0
+## github.com/lucasb-eyer/go-colorful v1.4.1
 
 **License:** MIT
 
@@ -530,7 +560,7 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 
 ---
 
-## github.com/mattn/go-runewidth v0.0.24
+## github.com/mattn/go-runewidth v0.0.27
 
 **License:** MIT
 
@@ -658,7 +688,7 @@ SOFTWARE.
 
 ---
 
-## golang.org/x/crypto v0.53.0
+## golang.org/x/crypto v0.57.0
 
 **License:** BSD-3-Clause
 
@@ -696,7 +726,7 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 ---
 
-## golang.org/x/sync v0.21.0
+## golang.org/x/sync v0.23.0
 
 **License:** BSD-3-Clause
 
@@ -734,7 +764,7 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 ---
 
-## golang.org/x/sys v0.46.0
+## golang.org/x/sys v0.48.0
 
 **License:** BSD-3-Clause
 
@@ -772,7 +802,7 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 ---
 
-## golang.org/x/term v0.44.0
+## golang.org/x/term v0.46.0
 
 **License:** BSD-3-Clause
 
@@ -810,7 +840,7 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 ---
 
-## golang.org/x/text v0.38.0
+## golang.org/x/text v0.42.0
 
 **License:** BSD-3-Clause
 
