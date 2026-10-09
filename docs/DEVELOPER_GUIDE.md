@@ -27,7 +27,7 @@ Proxsave is built with modern Go practices, emphasizing:
 - **Testability**: Unit tests, integration tests, mocking
 
 **Technology stack**:
-- **Language**: Go 1.26.8 or later (the floor `go.mod` sets and `goRuntimeMinVersion` enforces at startup)
+- **Language**: Go 1.26.9 or later (the floor `go.mod` sets and `goRuntimeMinVersion` enforces at startup)
 - **Dependencies**: See `go.mod` for complete list
 - **Build system**: Makefile + Go modules
 - **Compression**: gzip, bzip2, xz, lzma, zstd
@@ -41,7 +41,7 @@ Proxsave is built with modern Go practices, emphasizing:
 ### Prerequisites
 
 ```bash
-# Go 1.26.8 or later
+# Go 1.26.9 or later
 go version
 
 # Build tools
