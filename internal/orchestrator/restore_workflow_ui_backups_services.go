@@ -237,7 +237,12 @@ func (w *restoreUIWorkflowRun) restartPBSServicesCleanup() func() {
 			w.logger.Warning("Failed to restart PBS services after restore: %v", err)
 			return
 		}
-		if err := maybeVerifyAndRepairPBSNotificationsAfterRestore(restartCtx, w.logger, w.plan, w.stageRoot, w.cfg.DryRun); err != nil {
+		// Also reached on an abort during staging: the restart stays, the repair from
+		// a partial stage does not.
+		if w.skipForIncompleteStage("PBS notifications verification/repair") {
+			return
+		}
+		if err := verifyAndRepairPBSNotificationsFunc(restartCtx, w.logger, w.plan, w.stageRoot, w.cfg.DryRun); err != nil {
 			w.logger.Warning("PBS notifications verification/repair: %v", err)
 		}
 	}

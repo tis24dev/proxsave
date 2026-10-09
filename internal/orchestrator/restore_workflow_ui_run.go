@@ -42,6 +42,9 @@ type restoreUIWorkflowRun struct {
 	exportRoot                  string
 	needsClusterRestore         bool
 	clusterServicesStopped      bool
+	// stageIncomplete is set when the staged extraction did not complete. The stage
+	// is removed at once (discardIncompleteStage) and no step applies anything staged.
+	stageIncomplete bool
 	// clusterServicesRestarted is set once the PVE services stopped for a cluster
 	// RECOVERY have been started again, so the deferred cleanup does not repeat it.
 	clusterServicesRestarted bool
