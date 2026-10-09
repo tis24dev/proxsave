@@ -1547,6 +1547,10 @@ Exactly one collector variable is on the dashboard's configuration form:
 `BACKUP_FIREWALL_RULES`, as the **Backup firewall rules** toggle. Every other variable in
 this section is edited here.
 
+Collector toggles control specific collection paths. The same information may also
+be present in a database or another selected path. Review the exclusions below and
+inspect a real backup before relying on a toggle to exclude sensitive data.
+
 ### PVE-Specific
 
 ```bash
@@ -1590,7 +1594,7 @@ BACKUP_VM_CONFIGS=true             # VM/CT config files
 
 **Note (PVE snapshot behavior)**: ProxSave snapshots `PVE_CONFIG_PATH` for completeness. When a PVE feature is disabled, proxsave also excludes its well-known files from that snapshot to avoid "still included via full directory copy" surprises (e.g. `qemu-server/` + `lxc/` for `BACKUP_VM_CONFIGS=false`, `firewall/` + `host.fw` for `BACKUP_PVE_FIREWALL=false`, `user.cfg`/`domains.cfg` plus the credential files `priv/shadow.cfg`/`priv/token.cfg`/`priv/tfa.cfg` for `BACKUP_PVE_ACL=false` (ACLs are stored in `user.cfg` on PVE), `jobs.cfg` + `vzdump.cron` for `BACKUP_PVE_JOBS=false`, `corosync.conf` (and `config.db` capture) for `BACKUP_CLUSTER_CONFIG=false`).
 
-> **Security note**: `/etc/pve` is a pmxcfs mount backed by the cluster database `config.db`. Setting `BACKUP_PVE_ACL=false` removes the flat `priv/*` credential files from the snapshot, but the same secrets remain inside `config.db` (captured when `BACKUP_CLUSTER_CONFIG=true`). To exclude PVE access-control secrets from the backup entirely, set both `BACKUP_PVE_ACL=false` and `BACKUP_CLUSTER_CONFIG=false`. ProxSave logs a WARNING during backup when this combination leaves secrets in `config.db`.
+> **Security note**: `/etc/pve` is a pmxcfs mount backed by the cluster database `config.db`. Setting `BACKUP_PVE_ACL=false` removes the flat `priv/*` credential files from the snapshot, but the same secrets remain inside `config.db` while `BACKUP_CLUSTER_CONFIG=true`. ProxSave logs a WARNING for this combination. Excluding both sources requires disabling both collectors, which also removes the cluster database recovery source. Review that tradeoff and any custom paths that could collect another copy of the same data.
 
 ### PBS-Specific
 
@@ -1813,6 +1817,10 @@ BACKUP_BLACKLIST="
 ```
 
 **Format**: Bash-style heredoc, one path per line, `#` for comments.
+
+Collecting a custom path does not automatically make it a restore category. FULL
+restore selects recognized categories present in the archive; additional files may
+require manual extraction and review. See [Restore Modes](RESTORE_GUIDE.md#restore-modes).
 
 **Note (boot files)**: a custom path that brings in `/etc/default/grub`, `/etc/default/grub.d/`, `/etc/kernel/cmdline` or `/etc/kernel/proxmox-boot-uuids` is collected, but a restore never writes those files to the system: they name the backed-up host's root device, pool and ESPs, and go to the export directory with `proxsave_info`. The `boot` restore category carries the kernel parameters instead.
 

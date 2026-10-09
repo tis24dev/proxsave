@@ -39,7 +39,7 @@ Proxsave uses the **[age](https://age-encryption.org/)** format (via `filippo.io
 |---------|-------------|
 | **Encryption algorithm** | ChaCha20-Poly1305 (AEAD) with X25519 key exchange |
 | **Key types** | Passphrase or X25519 key pair. SSH public keys (`ssh-ed25519` / `ssh-rsa`) are accepted as recipients but ProxSave cannot decrypt with the matching SSH private key: see the warning below |
-| **Multiple recipients** | Single backup can be decrypted with any configured recipient |
+| **Multiple recipients** | A backup can be decrypted with any private identity matching one of its recipients |
 | **Interactive setup** | Dashboard **Maintenance** > **New key**, the same flow as `--newkey`; the install wizard runs it too when you turn `Backup encryption (AGE)` on, and so does the first encrypted run with no recipients configured |
 | **Streaming mode** | Encrypts during backup creation, so there is no temporary plaintext **archive**. The staging tree under `/tmp/proxsave` is plaintext |
 | **Security** | Passphrases read with `term.ReadPassword`, buffers zeroed after use |
@@ -217,7 +217,10 @@ proxsave --decrypt
 
 ## Configure Recipients
 
-Recipients are public keys or passphrases that can decrypt backups. A backup encrypted for **N recipients** can be decrypted by **any of the N private keys/passphrases**.
+Recipients identify the public keys used to encrypt an archive. Any matching private
+identity can decrypt an archive encrypted for multiple recipients. ProxSave's
+passphrase setup derives an X25519 identity and recipient using the installation's
+salt; a public recipient alone cannot decrypt a backup.
 
 ### Static Configuration
 
@@ -411,6 +414,13 @@ a headless host (add `--cli` for text-mode prompts):
 proxsave --decrypt
 ```
 
+Keep the original bundle or the encrypted archive with its matching manifest and
+checksum. Current passphrase backups need the salt recorded in that manifest to
+recreate the identity on another host. Repeating setup with the same passphrase and
+a new salt produces a different identity. A matching private identity can instead
+decrypt the archive with the appropriate age tool; keep it separately if you use
+that recovery method.
+
 **High-level flow**:
 1. Select backup source (primary/secondary/cloud)
 2. Select an encrypted backup
@@ -481,7 +491,7 @@ proxsave --restore
 
 **Decryption options during restore**:
 - **Key or passphrase**: Prompted interactively when needed
-- **Multiple recipients**: Any X25519 recipient that matches the archive can decrypt it. An SSH recipient cannot be used here; see the warning in the recipients section
+- **Multiple recipients**: Any matching X25519 private identity can decrypt the archive. The built-in workflow does not accept SSH private keys; see the warning in the recipients section
 
 ### Detailed Restore Documentation
 

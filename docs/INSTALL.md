@@ -90,8 +90,9 @@ that flag's code, so nothing behaves differently from the command line. The `Dia
 | Send a support report to the maintainer | `Support` | `--support` |
 
 The dashboard opens only when standard input and standard output are both real terminals and `TERM` is
-set and is not `dumb`. Anywhere else (cron, a pipe, `ssh` without a TTY, a serial console) `proxsave`
-runs the backup, and the flags in this guide are how you drive it. Full screen-by-screen detail is in
+set and is not `dumb`. If these checks fail (for example, cron, a pipe, `ssh` without a TTY or a
+console with `TERM=dumb`), bare `proxsave` runs the backup. The flags in this guide select the
+operation explicitly. Full screen-by-screen detail is in
 [DASHBOARD.md](DASHBOARD.md).
 
 ### First Backup Workflow
@@ -102,7 +103,7 @@ banner. That is the recommended first run.
 The command-line equivalents, for a headless host or a script:
 
 ```bash
-# Dry-run test (no actual changes)
+# Simulate a backup without creating or uploading archives; diagnostic logs are still written
 proxsave --dry-run
 
 # Real backup, without the dashboard

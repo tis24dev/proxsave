@@ -59,10 +59,13 @@ proxsave --restore --cli
 Use the flag when the dashboard is not available or not wanted:
 
 - a broken or freshly reinstalled host where you want to skip straight to the workflow
-- a serial or `dumb` terminal, or `ssh` without a TTY (the workflow falls back to the
-  text prompts automatically, exactly as `--cli` would)
+- a console with `TERM` unset or set to `dumb`, or `ssh` without a TTY (the workflow
+  falls back to text prompts automatically, exactly as `--cli` would)
 - a rescue shell or a console session with a limited terminal
 - a restore that needs a non-default `--config` path, since any flag skips the menu
+
+A serial console can open the TUI when it meets the terminal checks above. Text
+prompts still require answers; `--cli` does not make the restore unattended.
 
 ### The steps, either way
 
