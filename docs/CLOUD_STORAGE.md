@@ -113,8 +113,9 @@ rclone copyto 'gdrive:proxsave/node1/backup/EXACT-BACKUP.bundle.tar' "$RECOVERY_
 
 Make the downloaded copy available through the configured primary or secondary archive
 path before selecting it in the dashboard. Do not copy a fully extracted configuration
-tree over `/`; that bypasses restore safeguards. Provider archive tiers that require
-rehydration must be made readable through the provider before this workflow can fetch them.
+tree over `/`; that bypasses restore safeguards. For provider archive tiers that require
+retrieval, follow [cold-storage recovery](#recover-archives-from-cold-object-storage)
+before selecting the backup.
 
 ### If cloud storage fails
 
@@ -126,6 +127,81 @@ For diagnostic backup logging see [troubleshooting](TROUBLESHOOTING.md#diagnose-
 the debug invocation starts a backup and bypasses the dashboard.
 
 <!-- site-region: cloud-backups:end -->
+
+<!-- site-region: cold-storage-recovery:start -->
+
+## Recover archives from cold object storage
+
+Use this procedure when a cloud lifecycle rule has moved a ProxSave backup into an
+archive tier that cannot be read immediately. Retrieving an archived object makes
+the backup readable; restoring host configuration is a separate step in ProxSave.
+
+ProxSave uses rclone to inspect and download cloud backups. It does not initiate the
+provider's archive retrieval request. A backup can appear in a remote listing while
+its contents are still unavailable, so listing the filename is not a recovery test.
+
+### Identify the complete recovery copy
+
+Find the exact backup for the host and recovery point you need. With default bundling,
+retain the complete `.bundle.tar` object. With bundling disabled, retain the archive
+and its matching `.manifest.json`, `.metadata` and `.sha256` files where present.
+Keep their original names and do not mix files from different runs.
+
+Recover access to the provider account and the configured rclone remote independently
+of the failed host. For encrypted backups, keep the matching private identity or
+original passphrase available. Passphrase recovery also needs the salt in the backup
+manifest; creating a new recipient cannot decrypt an old archive. See
+[recovery keys](ENCRYPTION.md#choose-recovery-material-you-can-retain).
+
+### Make the objects readable at the provider
+
+For Amazon S3 Glacier Flexible Retrieval or Deep Archive, select the required objects
+in the S3 console and request retrieval. Choose an availability period long enough
+to download and check the complete backup. Wait for completion and check the expiry
+date of the temporary copy. S3 Intelligent-Tiering archive tiers return retrieved
+objects to the Frequent Access tier instead. Retrieval options, time and charges
+depend on the storage class; follow the current
+[AWS archived-object recovery instructions](https://docs.aws.amazon.com/AmazonS3/latest/userguide/restoring-objects.html).
+
+If sidecars were archived separately, make those objects readable too. For another
+provider, follow its documented retrieval process. Advanced rclone users can consult
+the [S3 backend retrieval reference](https://rclone.org/s3/#restore); these provider
+operations run outside the ProxSave dashboard.
+
+### Restore through the dashboard
+
+1. Prepare a compatible recovery host using the [installation guide](INSTALL.md#fast-install)
+   and the [cloud remote setup](#prepare-the-remote). Keep enough local space for the
+   downloaded backup, decryption and extracted configuration.
+2. Configure the remote and the directory containing the retrieved backup. Run
+   `proxsave` without arguments on an interactive terminal, choose **Tools** >
+   **Restore**, then select the cloud source and the exact backup.
+3. Let ProxSave inspect the backup and verify integrity. Supply the matching recovery
+   secret when requested, select the required categories and review the restore plan.
+   Follow the [host restore procedure](RESTORE_GUIDE.md#restore-a-host) before applying
+   changes. Retrieving an object at the provider does not establish target compatibility.
+4. Inspect the restore result and test the affected services. A completed download
+   alone does not prove that host configuration was restored successfully.
+
+If you first download a local recovery copy, keep the complete bundle or matching
+archive and sidecars together, then place them in a configured primary or secondary
+archive path. Select that source in the dashboard. Preserve the original recovery
+material until verification is complete; do not unpack configuration directly over `/`.
+
+### If the backup cannot be selected or downloaded
+
+Check the retrieval status and expiry at the provider, read permissions, the configured
+remote path and whether every required object is accessible. ProxSave reads metadata
+while discovering cloud backups, so an unreadable bundle or sidecar can prevent a
+backup from being offered for selection. Discovery lists the selected directory,
+not all nested directories.
+
+Inspect the reported discovery or download error before starting another retrieval.
+Use the [diagnostic guide](TROUBLESHOOTING.md#diagnose-backup-and-restore-failures) for
+logging and support evidence. Keep the recovered copy readable for long enough to
+complete a recovery test on an isolated host.
+
+<!-- site-region: cold-storage-recovery:end -->
 
 ## Implementation appendix
 

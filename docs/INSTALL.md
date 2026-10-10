@@ -58,6 +58,10 @@ An upgrade needs an existing readable configuration, access to GitHub releases, 
 
 Keep an independent copy of your configuration and required backup archives before maintenance. Binary replacement and configuration merging are separate operations, and neither converts historical backup formats.
 
+For an installation from the historical Bash version, follow [legacy migration](#legacy-migration) before choosing an upgrade route. Updating the current configuration template does not translate old Bash settings automatically.
+
+A wipe reinstall is a separate operation that deletes files under the installation directory, including default backup and log paths. Keep independent recovery copies and review the [installation choices](#fast-install) before using it.
+
 ### Upgrade from the dashboard
 
 1. Run `proxsave` on an interactive terminal and choose **Upgrade > Check upgrade**.

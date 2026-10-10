@@ -184,6 +184,20 @@
       ]
     },
     {
+      "id": "restoring-from-glacier",
+      "slug": "restoring-from-glacier",
+      "title": "Recover archives from cold object storage",
+      "excerpt": "Retrieve archived cloud backup objects, preserve the complete recovery copy and restore host configuration through the dashboard",
+      "verified": false,
+      "evidence": "Cold-storage recovery reviewed against current cloud discovery, rclone download and restore preparation code, plus AWS and rclone provider documentation. Inspect the preview at the publishing revision and record review evidence before publication.",
+      "sources": [
+        {
+          "path": "docs/CLOUD_STORAGE.md",
+          "region": "cold-storage-recovery"
+        }
+      ]
+    },
+    {
       "id": "encryption-with-age",
       "slug": "encryption-with-age",
       "title": "Encrypt backups with AGE",

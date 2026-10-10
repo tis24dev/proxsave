@@ -53,6 +53,7 @@ After installation, open an interactive terminal and run `proxsave` without argu
 | Understand what a restore mode includes | [Restore modes](RESTORE_GUIDE.md#choose-restore-modes-and-categories) |
 | Recover cluster configuration | [Cluster recovery](CLUSTER_RECOVERY.md#recover-a-proxmox-cluster) |
 | Recover boot and passthrough settings | [IOMMU, VFIO and passthrough](RESTORE_GUIDE.md#restore-iommu-vfio-and-passthrough-settings) |
+| Retrieve archived cloud backups before restoring | [Cold-storage recovery](CLOUD_STORAGE.md#recover-archives-from-cold-object-storage) |
 
 ### Reference and help
 
