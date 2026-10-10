@@ -4,6 +4,7 @@ Advanced disaster recovery procedures for Proxmox VE cluster database restoratio
 
 ## Table of Contents
 
+- [Choose a cluster recovery procedure](#recover-a-proxmox-cluster)
 - [Overview](#overview)
 - [Starting a restore](#starting-a-restore)
 - [Understanding PVE Cluster Architecture](#understanding-pve-cluster-architecture)
@@ -20,6 +21,54 @@ Advanced disaster recovery procedures for Proxmox VE cluster database restoratio
 - [Emergency Recovery Procedures](#emergency-recovery-procedures)
 
 ---
+
+<!-- site-region: cluster-recovery:start -->
+
+## Recover a Proxmox cluster
+
+Start by deciding whether the target is standalone, an isolated surviving member, a fresh replacement joining a healthy cluster, or the first node of a complete rebuild. Those are different recovery states. Configuration restoration does not recover VM/CT disks, shared storage data or PBS chunks, and a service starting does not prove correct membership or quorum.
+
+### Establish the recovery boundary
+
+Keep console or IPMI access, recover the complete backup and decryption credentials independently, and record the expected hostname, node membership and network/storage layout. Confirm which peers are alive before any destructive database operation. Isolate the intended recovery target and account for HA workloads and fencing. Never rename a live member, remove yourself with `pvecm delnode`, delete the pmxcfs tree or use a blind expected-votes override to make a restore proceed.
+
+Run `proxsave` without arguments as root on an interactive console and choose **Tools > Restore**. The workflow verifies the archive, decrypts if needed, lists available categories and asks for scope. Direct entry for consoles where the dashboard cannot render is documented in [CLI reference](CLI_REFERENCE.md#restore-from-backup); it remains interactive.
+
+### Choose the complete scenario before applying
+
+| Situation | Canonical procedure | Boundary |
+| --- | --- | --- |
+| Failed standalone PVE host | [Single-Node Recovery](#scenario-1-single-node-recovery) | Confirm that the destination is truly standalone; an isolated member is not the same state. |
+| Entire cluster lost | [Complete Cluster Rebuild](#scenario-2-complete-cluster-rebuild) | Recover the first isolated node deliberately, then rebuild membership through the reviewed joining procedure. Do not restore an independent database on each joined node. |
+| Healthy peers remain and one node failed | [Multi-Node Cluster with Failed Master](#scenario-3-multi-node-cluster-with-failed-master) | Use a clean replacement and the healthy cluster's current configuration. Optional ProxSave restore is Custom and excludes `pve_cluster`; node-local network changes need console review. |
+| New hardware | [Migration to New Hardware](#scenario-4-migration-to-new-hardware) | Choose standalone, isolated-member or clean-join recovery before selecting scope. Validate disk identity, mounts and device assignments on the destination. |
+| Different destination hostname | [Hostname Changed](#scenario-5-hostname-changed) | Do not rename a live member. On a fresh or isolated destination, review SAFE exported-node selection and live guest ownership. |
+
+Each linked runbook contains its prerequisites, external Proxmox steps, dashboard choices and verification. Follow it as a complete procedure rather than combining commands from different scenarios. The [pre-recovery checklist](#pre-recovery-checklist) is required preparation; official membership procedures remain external Proxmox operations.
+
+### SAFE and RECOVERY are separate from scope
+
+The mandatory cluster-mode selector appears when a selected `pve_cluster` payload is present. Full and Storage can reach it; Custom reaches it only with that category selected. System base does not select it. Full includes export-only categories, while Storage and System base exclude them. Include `pve_config_export` when you need backed-up guest definitions for SAFE application.
+
+SAFE does not replace the archived `config.db` or stop the PVE cluster services. Confirmed storage, datacenter, pool, mapping and guest applies nevertheless change live state, sometimes across the cluster. Guest confirmation concerns the eligible batch from the chosen exported source node, not an individual selection for every VM. Source-node selection does not transfer ownership: cluster-wide guest inventory must be readable and unambiguous, and VMIDs owned by another node or with another guest type are skipped. A file fallback for an existing guest needs a recognized API schema refusal and verified stopped status; other API errors do not authorize it. Without `pvesh`, SAFE applies are skipped. Review [full SAFE behavior](#cluster-restore-modes-safe-vs-recovery) before accepting these changes.
+
+RECOVERY overwrites `/var/lib/pve-cluster/` while pmxcfs is stopped. Use it only on an offline or isolated destination under the chosen runbook. A quorate cluster with more than one online node is refused before services stop or files are written. Unreadable quorum or node counts allow continuation only when corosync is confirmed inactive or failed; active, starting or unreadable corosync is refused. A node without either corosync configuration path is treated as standalone. Passing a software guard does not replace verifying the scenario and peer isolation.
+
+### Service and partial-failure safeguards
+
+RECOVERY stops HA first: `pve-ha-lrm`, then `pve-ha-crm`, before cluster/API services. The LRM receives one graceful stop and up to 180 seconds; it is never signalled to force progress because that can leave its watchdog armed and fence the host. If it cannot stop, the restore aborts and cancels the queued stop. Do not kill it manually to bypass this safeguard.
+
+The workflow unmounts `/etc/pve`, extracts the database, then restarts cluster/API services before later restore stages. An unmount failure is a warning, not proof that the database is safe. Individual `/etc/pve` applies are skipped in RECOVERY because the database owns those areas; confirmed SAFE paths are separate live write paths. Restart warnings must be investigated, and HA must not be brought back while pmxcfs is unavailable.
+
+Normal extraction, fstab merge and SAFE operations can change the host before later staged apply. An incomplete sensitive stage is discarded and its consumers are skipped; this is not a whole-restore transaction. Network/firewall/HA/access-control live applies have their own 180-second COMMIT rollback decisions. The fstab countdown expires to No even when matching root/swap makes Yes the Enter-key default. Read the logs and establish the actual applied scope before retrying.
+
+### Verify and handle failures
+
+Use [Post-Recovery Verification](#post-recovery-verification) to check service health, mounted pmxcfs, actual membership and quorum, cluster communication, storage, UI/API access and workload definitions. Confirm backing mounts and VM disks before starting workloads. Mount guards can make offline storage read-only; a failed bind guard is warning-only, and a real mount only shadows an existing guard. Use **Recovery > Cleanup guards** after storage is correctly available and inspect any remaining/pending legacy flags.
+
+Keep the printed logs and persistent `<BASE_DIR>/restore/TIMESTAMP/` safety artifacts until the result is verified. They do not undo every API operation. Never blindly extract a safety archive over a live database: follow [manual rollback prerequisites](RESTORE_GUIDE.md#manual-rollback-prerequisites), including isolation, graceful HA shutdown and correct `config.db` recovery permissions. For refused guards or incomplete recovery, use [Common Issues and Solutions](#common-issues-and-solutions), the applicable runbook's failure handling, and [Prepare a support request](TROUBLESHOOTING.md#prepare-a-support-request).
+
+<!-- site-region: cluster-recovery:end -->
 
 ## Overview
 
@@ -43,29 +92,7 @@ This guide covers **advanced cluster database recovery** using proxsave's restor
 
 ## Starting a restore
 
-Every procedure in this guide is driven from ProxSave's restore workflow. There are two
-ways to open it and they run the same code:
-
-- **The dashboard, `Restore`.** Run `proxsave` with no arguments on a terminal and pick
-  `Restore` from the menu. This is the normal way to use ProxSave, including for the
-  recoveries below, whenever the node still gives you a usable console.
-- **`proxsave --restore`.** The flag path: a headless host, a terminal whose `TERM` is
-  unset or `dumb`, a scripted or piped run, and any case where the menu cannot render.
-  The dashboard opens only on a **completely bare** `proxsave`, so any flag, `--config`
-  included, suppresses it; a restore that has to carry another flag is necessarily a
-  flag invocation.
-
-Both open the same workflow. On an interactive terminal you get the graphical (TUI)
-screens; `--cli`, and any non-interactive invocation, gives the plain text prompts. The
-menus quoted throughout this guide are that text rendering, because it is the one that
-pastes into a document. The questions, the choices and their consequences are identical
-in the TUI, where each menu is a selector.
-
-The other ProxSave commands used below have the same shape: `Backup` in the dashboard is
-`proxsave --backup`, `Decrypt` is `proxsave --decrypt`, and `Recovery > Cleanup guards`
-is `proxsave --cleanup-guards`. See [DASHBOARD.md](DASHBOARD.md) for the menu as a whole.
-
----
+Run `proxsave` without arguments as root on an interactive console, then choose **Tools > Restore**. The prompts below are the text representation of the same restore choices shown as TUI selectors. Both interfaces require operator answers. If the dashboard cannot render or you need a different configuration file, consult [CLI reference](CLI_REFERENCE.md) for direct entry and terminal options.
 
 ## Understanding PVE Cluster Architecture
 
@@ -132,7 +159,7 @@ Communication Layer:
 **/etc/pve**:
 - **NOT** a real directory (it's a FUSE mount)
 - View into config.db
-- You cannot write files into it directly (writes go to the FUSE layer). ProxSave either applies the exported files through the API (SAFE) or restores config.db while pmxcfs is stopped (RECOVERY). See [Cluster restore modes](#cluster-restore-modes-safe-vs-recovery).
+- Writes through mounted pmxcfs are persisted in config.db and replicated. ProxSave blocks blind archive extraction there and uses confirmed API/pmxcfs applies (SAFE) or database replacement with services stopped (RECOVERY). See [Cluster restore modes](#cluster-restore-modes-safe-vs-recovery).
 - Repopulated from config.db when pmxcfs restarts (the RECOVERY path)
 
 **Corosync**:
@@ -142,14 +169,14 @@ Communication Layer:
 
 ### Why /etc/pve needs special handling
 
-You cannot simply copy files into `/etc/pve`. It is a FUSE view of config.db, so a `cp` into it writes to the FUSE layer and is lost when pmxcfs restarts:
+A write through mounted pmxcfs updates persistent cluster configuration. A copy into
+an underlying directory while pmxcfs is unmounted does not update that database.
+Confusing these two states can overwrite live configuration or leave files hidden
+under the mount. See the [pmxcfs documentation](https://pve.proxmox.com/pve-docs/pmxcfs-plain.html).
 
-```bash
-# This does NOT persist:
-cp backup/etc/pve/storage.cfg /etc/pve/storage.cfg
-```
-
-ProxSave handles this in one of two ways, and it makes you choose which at restore time: it either applies the exported configuration to a running cluster through the Proxmox API (SAFE), or it restores the whole config.db while pmxcfs is stopped (RECOVERY). The next section is the one that matters most.
+ProxSave exports `/etc/pve` entries for review. SAFE offers confirmed configuration
+applies against the running cluster; RECOVERY replaces the archived database only
+after the required service shutdown. Choose the mode according to the cluster state.
 
 ---
 
@@ -171,17 +198,17 @@ Choice:
 
 In the TUI it is a selector titled `Cluster restore mode` with `SAFE`, `RECOVERY`, and `Exit` items carrying the same text. `Exit` (or Esc) aborts the whole restore.
 
-### SAFE (the non-destructive choice)
+### SAFE (configuration apply)
 
-SAFE never writes config.db, never stops `pve-cluster`/`pvedaemon`/`pveproxy`/`pvestatd`, and never unmounts `/etc/pve`. It extracts the cluster files to an export directory and re-applies them to the RUNNING cluster through `pvesh`/`pveum`:
+SAFE does not replace config.db with the archived database, does not stop `pve-cluster`/`pvedaemon`/`pveproxy`/`pvestatd`, and does not unmount `/etc/pve`. It extracts the cluster files to an export directory and re-applies them to the RUNNING cluster through `pvesh`/`pveum`:
 
 - storage definitions from storage.cfg (`pvesh create /storage`, falling back to `pvesh set /storage/<id>` for definitions that already exist);
 - datacenter options (datacenter.cfg written into pmxcfs, which replicates cluster-wide; the API has no whole-file endpoint);
 - resource pools (`pveum pool add/modify` for definitions, then membership, with an optional allow-move guard when a pool lists guests);
 - PCI, USB, and directory resource mappings;
-- VM and CT configs: before any guest mutation, SAFE loads the cluster-wide inventory with `pvesh get /cluster/resources --type vm --output-format=json`. An unavailable, malformed, incomplete, or ambiguous inventory fails the whole selected guest batch closed. A VMID owned by another node, or present with a different guest type, is reported and skipped; SAFE never moves it. Existing guests on the current node are updated with `pvesh set` under `/nodes/<node>/qemu|lxc/<vmid>/config` (minus create-only keys); if that fails, the staged conf is written into pmxcfs only after `status/current` explicitly reports `stopped`. A VMID absent cluster-wide is registered on the current node by writing the conf into pmxcfs (config only - disks are not part of a config restore).
+- VM and CT configs: before any guest mutation, SAFE loads the cluster-wide inventory with `pvesh get /cluster/resources --type vm --output-format=json`. An unavailable, malformed, incomplete, or ambiguous inventory fails the whole selected guest batch closed. A VMID owned by another node, or present with a different guest type, is reported and skipped; SAFE never moves it. Existing guests on the current node are updated with `pvesh set` under `/nodes/<node>/qemu|lxc/<vmid>/config` (minus create-only keys); a recognized schema refusal allows file fallback only after `status/current` explicitly reports `stopped`. Other API errors do not qualify. With a running or unverified guest after a schema refusal, ProxSave may retry the API with refused keys removed. A VMID absent cluster-wide is registered on the current node by writing the conf into pmxcfs (config only - disks are not part of a config restore).
 
-Use SAFE when the node or cluster is up and you want to merge the backed-up configuration back in without touching the live database. SAFE needs `pvesh` on PATH; without it, it logs a skip and applies nothing.
+Use SAFE for confirmed applies without replacing the whole database. These operations still change live state, sometimes cluster-wide. Guest confirmation covers the eligible batch from the selected source node, not individual guests. SAFE needs `pvesh` on PATH; without it, it logs a skip and applies nothing.
 
 If the backup's VM/CT configs are stored under a node name that does not match the current host (a hostname change), SAFE handles it for you: it warns, and either auto-selects the single exported node or asks which exported node to import the guest configs from. The chosen configs are applied to the current node. You do not need to copy `/etc/pve/nodes/...` by hand.
 
@@ -225,12 +252,9 @@ Older versions of this guide showed the "stopping PVE services / unmounting /etc
 
 ### Offline storage: mount guards
 
-If a datastore or storage mountpoint is offline during a restore (its device is not mounted, so the path resolves to the root filesystem), ProxSave bind-mounts a read-only guard over it from `<BASE_DIR>/guards` (`/opt/proxsave/guards` by default), so the restore cannot write onto the root disk and be shadowed later when the real storage mounts. The guard is a runtime bind mount: it disappears when the real storage mounts on top, and it is gone after a reboot. Current versions no longer set a persistent `chattr +i` flag. To clear leftover guards once storage is back online:
+If a datastore or storage mountpoint is offline during a restore (its device is not mounted, so the path resolves to the root filesystem), ProxSave bind-mounts a read-only guard over it from `<BASE_DIR>/guards` (`/opt/proxsave/guards` by default), so the restore cannot write onto the root disk and be shadowed later when the real storage mounts. The guard is a runtime bind mount: it is shadowed when the real storage mounts on top, and it is gone after a reboot. Current versions no longer set a persistent `chattr +i` flag. To clear leftover guards once storage is back online:
 
-```bash
-proxsave --cleanup-guards            # remove leftover guards
-proxsave --cleanup-guards --dry-run  # preview only
-```
+Choose **Recovery > Cleanup guards** in the dashboard. See [CLI reference](CLI_REFERENCE.md) for direct entry.
 
 In the dashboard the same operation is `Recovery > Cleanup guards`: a read-only check
 first (green when there is nothing to clean, yellow with a count when guards are
@@ -242,6 +266,10 @@ present), then `Apply` for the real removal.
 
 If your restore scope includes the network category (FULL, SYSTEM BASE, or a CUSTOM selection, not STORAGE), ProxSave remaps interface names by hardware identity and applies the config with an armed auto-rollback: it arms a 180-second timer, reloads networking, and reverts automatically unless you confirm with `COMMIT` in time. Run that step from the local console or IPMI, not over SSH, since it can change the active IP. The firewall, HA, and access-control applies use the same armed 180-second rollback.
 
+### Incomplete stages and apply warnings
+
+Sensitive configuration is applied only from a complete stage. If stage extraction fails, ProxSave discards it and skips staged consumers, including network installation, firewall, HA and notification repair. Normal file extraction, fstab changes and SAFE operations may already have changed the host. This guard does not make the whole restore transactional. Read the session log and verify each applied category before retrying or rolling back.
+
 ### The safety backup
 
 Before overwriting anything, ProxSave writes a safety backup of the current configuration to `<BASE_DIR>/restore/<YYYYMMDD_HHMMSS>/restore_backup_<YYYYMMDD_HHMMSS>.tar.gz` (`/opt/proxsave/restore/...` by default) and keeps it, outside `/tmp` so that it survives the reboot the restore recommends. At the end it prints where it is:
@@ -251,7 +279,7 @@ Safety backup preserved at: /opt/proxsave/restore/20251120_143052/restore_backup
 Safety backup - kept until removed, ProxSave never deletes it
 ```
 
-If any staged step fails, the run ends with `Restore completed with warnings.` rather than aborting, and this safety backup is your rollback.
+If any staged step fails, the run ends with `Restore completed with warnings.` rather than aborting, and the safety backup preserves selected pre-restore files. It is not a complete reversal of API operations. Follow [manual rollback prerequisites](RESTORE_GUIDE.md#manual-rollback-prerequisites) before using it; never extract it blindly over a live cluster database.
 
 ---
 
@@ -384,14 +412,14 @@ echo "3. pvecm status to verify" >> /root/ROLLBACK.txt
 - Node failed, needs cluster database restored
 - No other nodes to coordinate with
 
-### Complexity: ★☆☆☆☆ (Low)
+### Complexity: Low
 
 ### Prerequisites
 
-- ✅ Backup available with `pve_cluster` category
-- ✅ Root access to node
-- ✅ Network connectivity working
-- ✅ Hostname matches backup (or willing to change it)
+- Backup available with `pve_cluster` category
+- Root access to node
+- Network connectivity working
+- Hostname matches backup (or willing to change it)
 
 ### Procedure
 
@@ -414,16 +442,9 @@ pvecm status
 
 Open the dashboard and choose `Restore`:
 
-```bash
-proxsave
-```
+Choose **Tools > Restore** in the dashboard. See [CLI reference](CLI_REFERENCE.md) for direct entry.
 
-On a headless or console-only node, or when the menu cannot render, call the workflow
-directly. Either form works from any directory:
-
-```bash
-proxsave --restore
-```
+For direct entry when the dashboard cannot render, see [CLI reference](CLI_REFERENCE.md).
 
 #### Step 3: Interactive Selection
 
@@ -435,7 +456,7 @@ Select backup source:
   [1] Primary backup path
 Select: 1
 
-Available backups:
+- backups:
   [1] backup-pve01-20251120-143052.bundle.tar
 Select: 1
 
@@ -496,7 +517,7 @@ Safety backup - kept until removed, ProxSave never deletes it
 
 ProxSave stops `pve-ha-lrm`, `pve-ha-crm`, `pve-cluster`, `pvedaemon`, `pveproxy`, `pvestatd`, unmounts `/etc/pve`, extracts `/var/lib/pve-cluster/` (config.db), then restarts `pve-cluster`, `pvedaemon`, `pveproxy`, `pvestatd`, `pve-ha-crm`, `pve-ha-lrm` before the remaining steps of the restore. It does not print a per-service checkmark line for each one. No `/etc/pve` files are written directly: config.db owns them, so `/etc/pve` is repopulated from the restored database a moment after pmxcfs remounts, not by the file-extraction phase.
 
-Had you chosen SAFE, this step would instead apply what the selected categories actually exported, through `pvesh` on the running cluster, with no service stop and no config.db write. Note what STORAGE mode does not carry: the VM/CT configs live in `pve_config_export`, which is export-only and is stripped from STORAGE, so none are applied. `storage.cfg` and `datacenter.cfg` belong to `storage_pve` and are still applied through `pvesh`, as are pools and resource mappings. Use FULL, or CUSTOM including `pve_config_export`, when you want the guest configs applied.
+Had you chosen SAFE, this step would instead apply what the selected categories actually exported, through `pvesh` on the running cluster, without stopping PVE services or replacing config.db. Note what STORAGE mode does not carry: the VM/CT configs live in `pve_config_export`, which is export-only and is stripped from STORAGE, so none are applied. `storage.cfg` and `datacenter.cfg` belong to `storage_pve` and are still applied through `pvesh`, as are pools and resource mappings. Use FULL, or CUSTOM including `pve_config_export`, when you want the guest configs applied.
 
 #### Step 5: Verification
 
@@ -514,7 +535,8 @@ ls -la /etc/pve/
 
 # 3. Check cluster status
 pvecm status
-# Expected: Single node cluster, quorate
+# A standalone installation may have no corosync.conf and no cluster status.
+# For an actual one-member cluster, check its configured votes and quorum.
 
 # 4. Verify storage accessible
 pvesm status
@@ -551,12 +573,12 @@ cat /etc/pve/vzdump.cron
 
 ### Success Criteria
 
-✅ All services running
-✅ `/etc/pve` mounted and populated
-✅ `pvecm status` shows healthy single-node cluster
-✅ Storage accessible
-✅ Web interface working
-✅ VM/CT configs visible
+- All services running
+- `/etc/pve` mounted and populated
+- `pvecm status` shows healthy single-node cluster
+- Storage accessible
+- Web interface working
+- VM/CT configs visible
 
 ---
 
@@ -568,15 +590,15 @@ cat /etc/pve/vzdump.cron
 - Need to rebuild entire cluster from backup
 - Want to restore cluster configuration
 
-### Complexity: ★★★★☆ (High)
+### Complexity: High
 
 ### Prerequisites
 
-- ✅ Complete backup of one cluster node
-- ✅ Fresh PVE installed on all nodes (or clean nodes)
-- ✅ Nodes have correct hostnames
-- ✅ Network connectivity between nodes
-- ✅ Time synchronization working (NTP)
+- Complete backup of one cluster node
+- Fresh PVE installed on all nodes (or clean nodes)
+- Nodes have correct hostnames
+- Network connectivity between nodes
+- Time synchronization working (NTP)
 
 ### Procedure
 
@@ -592,9 +614,9 @@ hostname
 # reboot
 
 # 2. Run restore (STORAGE or FULL mode)
-#    Dashboard: run bare `proxsave` and pick Restore. The flag below is the
-#    headless/console equivalent.
-proxsave --restore
+#    Run bare proxsave and choose Tools > Restore in the dashboard.
+#    Direct entry options are in CLI_REFERENCE.md.
+# Dashboard action: Tools > Restore
 # Select: [2] STORAGE only
 # At the cluster prompt choose RECOVERY: the primary is offline, so this
 # restores the full config.db. SAFE would apply configs via the API without
@@ -602,7 +624,7 @@ proxsave --restore
 
 # 3. Verify primary node working
 pvecm status
-# Should show single-node cluster
+# Restored membership can still list the old peers; quorum is not automatic.
 
 # 4. Check corosync configuration
 cat /etc/pve/corosync.conf
@@ -611,56 +633,18 @@ cat /etc/pve/corosync.conf
 
 #### Phase 2: Clean Corosync Configuration
 
-**On PRIMARY NODE**:
+A database from a multi-node cluster retains its membership. Recovering it on one
+host does not establish quorum or turn it into a standalone installation.
 
-```bash
-# 1. Edit corosync.conf to remove dead nodes
-vi /etc/pve/corosync.conf
+Keep all former members powered off or isolated from both cluster communication and
+shared workloads. Inspect `pvecm status`, the restored `corosync.conf`, node IDs and
+expected votes. If membership changes or temporary quorum recovery are necessary,
+follow the [official Proxmox node-removal and quorum procedure](https://pve.proxmox.com/pve-docs/pvecm-plain.html)
+for that version and state. Reducing expected votes is not a general fix for a
+network partition and must not allow competing members to write independently.
 
-# Example before:
-# nodelist {
-#   node {
-#     name: pve01
-#     nodeid: 1
-#     quorum_votes: 1
-#     ring0_addr: 192.168.1.101
-#   }
-#   node {
-#     name: pve02   ← Dead node
-#     nodeid: 2
-#     quorum_votes: 1
-#     ring0_addr: 192.168.1.102
-#   }
-# }
-
-# Example after (if rebuilding fresh):
-# nodelist {
-#   node {
-#     name: pve01
-#     nodeid: 1
-#     quorum_votes: 1
-#     ring0_addr: 192.168.1.101
-#   }
-# }
-
-# 2. Update expected votes for single node
-# Update quorum section:
-# quorum {
-#   provider: corosync_votequorum
-#   expected_votes: 1   ← Change to 1
-# }
-
-# 3. Restart corosync and cluster
-systemctl restart corosync
-systemctl restart pve-cluster pvedaemon pveproxy
-
-# 4. Set expected votes
-pvecm expected 1
-
-# 5. Verify primary healthy
-pvecm status
-# Should show: Quorate, 1 node
-```
+Proceed only after one authoritative cluster state is established and verified.
+Do not delete the mounted `/etc/pve` tree to reset a node.
 
 #### Phase 3: Add Secondary Nodes
 
@@ -669,7 +653,7 @@ pvecm status
 ```bash
 # 1. Ensure fresh PVE installation
 # - No existing cluster membership
-# - No data in /etc/pve or /var/lib/pve-cluster/
+# - No existing guests; preserve the fresh installation's own pmxcfs files
 
 # 2. Set correct hostname
 hostnamectl set-hostname pve02  # Or pve03, etc.
@@ -772,13 +756,13 @@ pct config 200
 
 ### Success Criteria
 
-✅ All nodes show in `pvecm nodes`
-✅ Cluster is quorate
-✅ Corosync communication working
-✅ Storage accessible on all nodes
-✅ `/etc/pve` syncing across nodes (test by editing file)
-✅ Web interface accessible on all nodes
-✅ VMs/CTs can be migrated between nodes
+- All nodes show in `pvecm nodes`
+- Cluster is quorate
+- Corosync communication working
+- Storage accessible on all nodes
+- `/etc/pve` syncing across nodes (test by editing file)
+- Web interface accessible on all nodes
+- VMs/CTs can be migrated between nodes
 
 ---
 
@@ -791,20 +775,20 @@ pct config 200
 - Other nodes still operational
 - Need to restore failed node
 
-### Complexity: ★★★☆☆ (Medium)
+### Complexity: Medium
 
 ### Prerequisites
 
-- ✅ Other cluster nodes still running
-- ✅ Cluster has quorum without failed node
-- ✅ Backup of failed node available
-- ✅ Fresh PVE installed on replacement hardware
+- Other cluster nodes still running
+- Cluster has quorum without failed node
+- Backup of failed node available
+- Fresh PVE installed on replacement hardware
 
 ### Procedure
 
 #### Step 1: Remove Dead Node from Cluster
 
-**On ANY WORKING NODE**:
+**On a surviving, quorate node**, after the failed node is powered off and prevented from rejoining:
 
 ```bash
 # 1. Check current cluster state
@@ -819,8 +803,8 @@ pvecm delnode pve02
 pvecm nodes
 # Dead node should not appear
 
-# 4. Update expected votes if needed
-pvecm expected <new-number-of-nodes>
+# 4. Verify the surviving cluster still has its intended quorum
+pvecm status
 ```
 
 #### Step 2: Prepare Replacement Node
@@ -873,23 +857,9 @@ pvesm status
 
 **On REPLACEMENT NODE** (optional - if you need node-specific configs):
 
-```bash
-# Use CUSTOM mode to restore only specific categories
-# (Dashboard: Restore; the flag is the headless equivalent.)
-proxsave --restore
+Run `proxsave` without arguments and choose **Tools > Restore**, then choose **Custom**. Leave **PVE Cluster Configuration** (`pve_cluster`) unselected. Consider only the node-local categories required for this replacement, such as network, SSL, SSH and system services, and inspect every selected path. Review and apply network changes from a local console or IPMI; they can replace the active address and disconnect SSH.
 
-# Select: [4] CUSTOM selection
-# Toggle:
-#   - [ ] PVE Cluster Configuration  ← DO NOT select (already from cluster)
-#   - [X] Network Configuration      ← Select if needed
-#   - [X] SSH Configuration           ← Select if needed
-#   - [X] Custom Scripts              ← Select if needed
-#   - [X] ZFS Configuration           ← Select if node had ZFS
-
-# Type "RESTORE" to proceed
-```
-
-**Important**: Never run a RECOVERY cluster restore on a node that is still in the cluster; it overwrites config.db and can corrupt the cluster. On a member of a quorate cluster with other nodes online, ProxSave refuses RECOVERY (`Cluster RECOVERY refused - quorate cluster, N nodes online: ...`). The conservative choice is to leave `PVE Cluster Configuration` unselected here. If you do select it, ProxSave prompts SAFE vs RECOVERY, and on a live member SAFE is the only correct answer (it applies configs via the API and never writes config.db).
+**Important**: Never run a RECOVERY cluster restore on a node that is still in the cluster; it overwrites config.db and can corrupt the cluster. On a member of a quorate cluster with other nodes online, ProxSave refuses RECOVERY (`Cluster RECOVERY refused - quorate cluster, N nodes online: ...`). The conservative choice is to leave `PVE Cluster Configuration` unselected here. If you do select it, ProxSave prompts SAFE vs RECOVERY, and on a live member SAFE is the applicable mode (its confirmed API applies change live configuration without replacing config.db).
 
 #### Step 6: Migrate VMs/CTs to Replacement Node
 
@@ -907,30 +877,19 @@ pct migrate <ctid> pve02-new --restart
 
 #### Step 7: Cleanup
 
-**On REPLACEMENT NODE** (after verification):
-
-```bash
-# If you want to rename node back to original name
-# (Only if all VMs/CTs migrated off):
-
-# 1. Leave cluster
-pvecm delnode pve02-new
-
-# 2. Change hostname
-hostnamectl set-hostname pve02
-reboot
-
-# 3. Re-join cluster
-pvecm add <working-node-ip>
-```
+Keep the replacement's chosen hostname after it has joined. Renaming a joined node
+is not a `delnode`/rename/rejoin shortcut. Choose its final name before installation
+and joining. If replacement under another name is required later, move or back up
+its workloads, power it off, and remove it from a surviving cluster member using
+the [official procedure](https://pve.proxmox.com/pve-docs/pvecm-plain.html).
 
 ### Success Criteria
 
-✅ Replacement node shows in `pvecm nodes`
-✅ Cluster is quorate
-✅ Storage accessible on replacement node
-✅ Can migrate VMs/CTs to/from replacement node
-✅ No errors in `journalctl -u corosync`
+- Replacement node shows in `pvecm nodes`
+- Cluster is quorate
+- Storage accessible on replacement node
+- Can migrate VMs/CTs to/from replacement node
+- No errors in `journalctl -u corosync`
 
 ---
 
@@ -942,14 +901,14 @@ pvecm add <working-node-ip>
 - Want to preserve cluster configuration
 - Clean installation on new hardware
 
-### Complexity: ★★★☆☆ (Medium)
+### Complexity: Medium
 
 ### Prerequisites
 
-- ✅ Backup from old hardware
-- ✅ New hardware with PVE installed
-- ✅ Network connectivity configured
-- ✅ Old hardware shut down (to avoid conflicts)
+- Backup from old hardware
+- New hardware with PVE installed
+- Network connectivity configured
+- Old hardware shut down (to avoid conflicts)
 
 ### Procedure
 
@@ -960,7 +919,7 @@ pvecm add <working-node-ip>
 ```bash
 # 1. Create fresh backup
 #    Dashboard equivalent: run bare `proxsave` and pick Backup.
-proxsave --backup
+# Dashboard action: Backup
 
 # 2. Document configuration
 pvecm status > /root/old-cluster-status.txt
@@ -993,6 +952,13 @@ reboot
 
 #### Step 2: Restore on New Hardware
 
+Choose the recovery route first. If a multi-node cluster survives, use
+[Scenario 3](#scenario-3-multi-node-cluster-with-failed-master): join a clean
+replacement and restore node-local settings. Shutting down the old hardware alone
+does not isolate the replacement from the other live members. The RECOVERY example
+below applies only to a standalone recovery or an explicitly isolated full-cluster
+recovery; do not use it before joining a surviving cluster.
+
 ```bash
 # 1. Copy proxsave tool to new hardware
 # scp -r /opt/proxsave root@new-hardware:/opt/
@@ -1001,13 +967,13 @@ reboot
 mkdir -p /opt/proxsave/backup
 mv /root/*.bundle.tar /opt/proxsave/backup/
 
-# 3. Run restore (dashboard: bare `proxsave` -> Restore; the flag is the
-#    headless equivalent on a freshly installed node)
-proxsave --restore
+# 3. Run bare proxsave and choose Tools > Restore in the dashboard.
+#    Direct entry options are in CLI_REFERENCE.md.
+# Dashboard action: Tools > Restore
 
 # Select: [2] STORAGE only (or FULL)
-# At the cluster prompt choose RECOVERY: the old hardware is shut down, so
-# this node is offline/isolated and RECOVERY restores the full config.db.
+# Choose RECOVERY only for the isolated recovery route described above.
+# Do not restore an old cluster database before joining a surviving cluster.
 # Type "RESTORE" to confirm
 ```
 
@@ -1022,8 +988,8 @@ ls -la /etc/pve/
 
 # 3. Check cluster status
 pvecm status
-# Expected: Single-node cluster (if standalone)
-# Or: Part of multi-node cluster (if rejoining)
+# A standalone host need not have Corosync cluster status.
+# A restored cluster member retains the backed-up membership; verify quorum separately.
 
 # 4. Verify storage
 pvesm status
@@ -1068,15 +1034,14 @@ systemctl enable zfs-import@<new-name>.service
 
 #### Step 5: Rejoin Cluster (if multi-node)
 
-**If node was part of multi-node cluster**:
+A node with a restored cluster database or guest definitions is not a clean joining
+node. Joining replaces `/etc/pve` with the surviving cluster's configuration, and
+Proxmox requires no existing guests on the joining host.
 
-```bash
-# On other nodes: Remove old node first
-pvecm delnode <old-hostname>
-
-# On new hardware: Join cluster
-pvecm add <existing-node-ip>
-```
+If the cluster survives, follow Scenario 3 from a fresh installation. If you are
+rebuilding the entire cluster, follow Scenario 2 and join fresh secondary nodes only
+after the authoritative recovered node is ready. Preserve any recovered guest data
+before changing routes; do not erase local configuration as a shortcut.
 
 #### Step 6: Restore VM/CT Disk Images
 
@@ -1095,12 +1060,12 @@ zfs send old-pool/vm-100-disk-0 | zfs recv new-pool/vm-100-disk-0
 
 ### Success Criteria
 
-✅ Services running on new hardware
-✅ Cluster configuration restored
-✅ Storage accessible (with path adjustments)
-✅ Network connectivity working
-✅ Web interface accessible
-✅ Can create/manage VMs/CTs
+- Services running on new hardware
+- Cluster configuration restored
+- Storage accessible (with path adjustments)
+- Network connectivity working
+- Web interface accessible
+- Can create/manage VMs/CTs
 
 ---
 
@@ -1112,11 +1077,11 @@ zfs send old-pool/vm-100-disk-0 | zfs recv new-pool/vm-100-disk-0
 - Backup from `pve01`, restoring to `pve02`
 - May cause cluster conflicts
 
-### Complexity: ★★☆☆☆ (Medium)
+### Complexity: Medium
 
 ### Option A: Change Hostname to Match Backup
 
-**Recommended if**: You want exact restoration
+**Recommended if**: You are preparing a fresh, isolated replacement before it joins any cluster. Set its hostname and `/etc/hosts` before whole-database recovery; do not rename a live cluster member this way.
 
 ```bash
 # 1. Change hostname before restore
@@ -1130,111 +1095,53 @@ vi /etc/hosts
 reboot
 
 # 4. Run restore normally (dashboard: bare `proxsave` -> Restore)
-proxsave --restore
+# Dashboard action: Tools > Restore
 ```
 
 ### Option B: Update Configuration After Restore
 
-**Recommended if**: You want to keep new hostname
+Use the new name from installation onward. Prefer SAFE with FULL, or CUSTOM including
+`pve_config_export`, to review the exported node and apply eligible guest settings
+without importing the old cluster membership.
 
 #### Step 1: Restore with Mismatched Hostname
 
-```bash
-# Run restore (works despite the hostname mismatch)
-# Dashboard: bare `proxsave` -> Restore; the flag is the headless equivalent.
-proxsave --restore
-
-# Select: [2] STORAGE only
-# At the cluster prompt choose RECOVERY: this restores the backup's config.db,
-# which still references the OLD hostname. You fix those references in the
-# steps below.
-#
-# SAFE is NOT a shortcut here. In STORAGE mode the selected categories carry no
-# guest configs at all (pve_config_export is export-only and STORAGE strips
-# export-only categories), so SAFE would redirect the cluster database to the
-# export directory, apply no VM/CT config, and never run the node-name mismatch
-# handling. The API-apply path with the node-name handling needs FULL, or CUSTOM
-# with pve_config_export selected.
-```
+Open **Tools > Restore** in the dashboard, select the configuration scope and choose SAFE when the
+cluster payload is included. The workflow can ask which exported node to use when
+the current hostname differs. STORAGE alone excludes the export-only guest payload.
 
 #### Step 2: Fix Corosync Configuration
 
-```bash
-# 1. Edit corosync.conf
-vi /etc/pve/corosync.conf
-
-# Find nodelist section:
-# nodelist {
-#   node {
-#     name: pve01      ← Change this
-#     nodeid: 1
-#     quorum_votes: 1
-#     ring0_addr: 192.168.1.101
-#   }
-# }
-
-# Update to new hostname:
-# nodelist {
-#   node {
-#     name: pve02      ← New hostname
-#     nodeid: 1
-#     quorum_votes: 1
-#     ring0_addr: 192.168.1.101  ← Update IP if needed
-#   }
-# }
-
-# 2. Restart services
-systemctl restart corosync
-systemctl restart pve-cluster pvedaemon pveproxy
-```
+Do not turn a database restore into a rename by editing a node's name in place.
+For a surviving cluster, join a clean replacement with its final name and use the
+cluster's membership. For isolated recovery, review the version-specific Proxmox
+membership procedure before bringing any old peers back.
 
 #### Step 3: Update Node Directory
 
-```bash
-# 1. Check /etc/pve/nodes/
-ls -la /etc/pve/nodes/
-# Will show old hostname directory
-
-# 2. The cluster filesystem auto-creates the new hostname directory, but a
-# RECOVERY restore put the guest configs under the OLD node name.
-
-# 3. Copy the node-specific configs to the new node directory.
-# (Had you used SAFE instead, ProxSave would have re-created the VM/CT configs
-# on the current node automatically and this copy would not be needed.)
-cp -r /etc/pve/nodes/pve01/* /etc/pve/nodes/pve02/
-
-# 4. Verify new directory
-ls -la /etc/pve/nodes/pve02/
-```
+Inspect `/etc/pve/nodes/` and the cluster-wide guest inventory. SAFE skips VMIDs owned
+by another node; it does not move them. Do not recursively copy an old node's entire
+directory to the new name. Use the Proxmox guest migration/recovery procedure for
+existing VMIDs, and review any manual single-guest change with its disks and ownership.
 
 #### Step 4: Update Certificates
 
-```bash
-# Regenerate certificates for new hostname
-pvecm updatecerts
-
-# Restart services
-systemctl restart pvedaemon pveproxy
-```
+Verify `/etc/hostname`, `/etc/hosts`, DNS and the intended management address. Apply
+the appropriate Proxmox certificate procedure after the final node identity is
+established. WebAuthn users may need re-enrollment if the UI origin changes.
 
 #### Step 5: Remove Old Node References
 
-```bash
-# If single-node cluster, remove old node:
-pvecm delnode pve01
-
-# Verify
-pvecm nodes
-# Should show only new hostname
-```
+Remove an obsolete node only from a surviving cluster member after its workloads
+are accounted for and the old machine cannot reconnect. Follow the
+[official cluster procedure](https://pve.proxmox.com/pve-docs/pvecm-plain.html).
 
 ### Success Criteria
 
-✅ `pvecm status` shows new hostname
-✅ Corosync.conf references new hostname
-✅ Certificates match new hostname
-✅ `/etc/pve/nodes/<new-hostname>/` exists
-✅ Web interface accessible
+- The running hostname and management certificates match the intended identity
+- Guest VMIDs have the intended single owner and their storage is available
+- Cluster members agree on membership and quorum; a standalone host has no unintended cluster membership
+- The web interface works and restore logs contain no unexplained skipped applies
 
 ---
 
@@ -1315,11 +1222,10 @@ ls -la /etc/pve/
 pvesm status
 # Expected: All storage "active"
 
-# Check storage paths exist
-for storage in $(pvesm status | awk 'NR>1 {print $1}'); do
-    echo "Checking $storage:"
-    pvesm path $storage
-done
+# Inspect configured storage definitions and their paths
+pvesh get /storage --output-format json
+# For an actual volume ID, pvesm path resolves its filesystem path:
+# pvesm path 'local:iso/example.iso'
 
 # Verify ZFS pools (if applicable)
 zpool status
@@ -1451,48 +1357,48 @@ echo
 
 # 1. Services
 echo "1. Checking services..."
-systemctl is-active pve-cluster >/dev/null 2>&1 && echo "  ✓ pve-cluster running" || echo "  ✗ pve-cluster FAILED"
-systemctl is-active pvedaemon >/dev/null 2>&1 && echo "  ✓ pvedaemon running" || echo "  ✗ pvedaemon FAILED"
-systemctl is-active pveproxy >/dev/null 2>&1 && echo "  ✓ pveproxy running" || echo "  ✗ pveproxy FAILED"
+systemctl is-active pve-cluster >/dev/null 2>&1 && echo "  Yes pve-cluster running" || echo "  No pve-cluster FAILED"
+systemctl is-active pvedaemon >/dev/null 2>&1 && echo "  Yes pvedaemon running" || echo "  No pvedaemon FAILED"
+systemctl is-active pveproxy >/dev/null 2>&1 && echo "  Yes pveproxy running" || echo "  No pveproxy FAILED"
 echo
 
 # 2. Cluster Status
 echo "2. Checking cluster..."
 if pvecm status | grep -q "Quorate.*Yes"; then
-    echo "  ✓ Cluster is quorate"
+    echo "  Yes Cluster is quorate"
 else
-    echo "  ✗ Cluster NOT quorate"
+    echo "  No Cluster NOT quorate"
 fi
 echo
 
 # 3. Filesystem
 echo "3. Checking /etc/pve..."
 if mount | grep -q "/etc/pve type fuse.pmxcfs"; then
-    echo "  ✓ /etc/pve mounted"
+    echo "  Yes /etc/pve mounted"
 else
-    echo "  ✗ /etc/pve NOT mounted"
+    echo "  No /etc/pve NOT mounted"
 fi
 echo
 
 # 4. Storage
 echo "4. Checking storage..."
 if pvesm status >/dev/null 2>&1; then
-    echo "  ✓ Storage accessible"
+    echo "  Yes Storage accessible"
     INACTIVE=$(pvesm status | grep -c "inactive" || true)
     if [ "$INACTIVE" -gt 0 ]; then
-        echo "  ⚠ $INACTIVE storage(s) inactive"
+        echo "  Warning: $INACTIVE storage(s) inactive"
     fi
 else
-    echo "  ✗ Storage check FAILED"
+    echo "  No Storage check FAILED"
 fi
 echo
 
 # 5. API
 echo "5. Checking API..."
 if pvesh get /version >/dev/null 2>&1; then
-    echo "  ✓ API responding"
+    echo "  Yes API responding"
 else
-    echo "  ✗ API NOT responding"
+    echo "  No API NOT responding"
 fi
 echo
 
@@ -1500,9 +1406,9 @@ echo
 echo "=== Summary ==="
 FAILED=$(systemctl --failed --no-legend | wc -l)
 if [ "$FAILED" -eq 0 ]; then
-    echo "  ✓ No failed services"
+    echo "  Yes No failed services"
 else
-    echo "  ✗ $FAILED failed service(s)"
+    echo "  No $FAILED failed service(s)"
     systemctl --failed --no-legend
 fi
 
@@ -1537,29 +1443,22 @@ journalctl -xe -u pve-cluster
 **Common Causes & Solutions**:
 
 **1. config.db corrupted**:
-```bash
-# Rollback to safety backup
-systemctl stop pve-cluster
-# TIMESTAMP: the directory of the restore to undo, from its "Safety backup preserved at:" line
-tar -xzf /opt/proxsave/restore/TIMESTAMP/restore_backup_*.tar.gz -C /
-systemctl start pve-cluster
-```
+
+Use the [manual rollback prerequisites](RESTORE_GUIDE.md#manual-rollback-prerequisites)
+for the exact restore session. Do not extract a safety archive while pmxcfs is
+running, and account for HA before stopping the cluster filesystem.
 
 **2. /etc/pve still mounted**:
-```bash
-umount -f /etc/pve
-systemctl restart pve-cluster
-```
+
+Inspect `findmnt /etc/pve` and the service log. Confirm the HA-aware shutdown before
+unmounting; do not force-unmount a live cluster as a generic repair.
 
 **3. Permissions wrong**:
 
-ProxSave preserves each restored file's owner and mode from the backup archive, so it does not hardcode these. The following is manual Proxmox advice for the case where the ownership on `/var/lib/pve-cluster` is wrong for some other reason:
-
-```bash
-chown -R root:www-data /var/lib/pve-cluster
-chmod 0640 /var/lib/pve-cluster/config.db
-systemctl restart pve-cluster
-```
+ProxSave preserves backed-up ownership and modes. For a manual database recovery,
+follow the [official pmxcfs procedure](https://pve.proxmox.com/pve-docs/pmxcfs-plain.html),
+which requires `config.db` mode `0600`. Check that specific file and its expected
+owner; do not recursively assign `/var/lib/pve-cluster` to `root:www-data`.
 
 ---
 
@@ -1571,24 +1470,14 @@ pvecm status
 # Output: "not quorate"
 ```
 
-**For Single-Node Cluster**:
-```bash
-pvecm expected 1
-pvecm status
-# Should now show "quorate"
-```
+Check the intended membership, online members, Corosync links and qdevice state
+before changing votes. A standalone host and a one-member Corosync cluster are
+different configurations. Loss of quorum during a partition protects shared state.
 
-**For Multi-Node Cluster**:
-```bash
-# Check how many nodes are online
-pvecm nodes
-
-# Set expected votes to number of online nodes
-pvecm expected <number-of-online-nodes>
-
-# Example: 3-node cluster, 2 nodes online:
-pvecm expected 2
-```
+Do not set expected votes to the number of nodes you can currently see. Temporary
+quorum overrides belong only to a documented recovery with the other writers
+excluded. Follow the [official Proxmox quorum procedure](https://pve.proxmox.com/pve-docs/pvecm-plain.html)
+and verify consistent membership before reconnecting recovered nodes.
 
 ---
 
@@ -1609,11 +1498,13 @@ corosync-quorumtool -l
 # Should show all nodes with votes
 ```
 
-**2. Restart cluster services**:
+**2. Inspect service logs**:
 ```bash
-systemctl restart corosync
-systemctl restart pve-cluster
+journalctl -u corosync -u pve-cluster --since "30 minutes ago"
 ```
+
+A restart is not a substitute for resolving quorum or connectivity. If stopping
+pmxcfs is necessary, follow the HA-aware shutdown prerequisites first.
 
 **3. Check network connectivity**:
 ```bash
@@ -1627,16 +1518,11 @@ iptables -L -n | grep -E "(5404|5405)"
 # Corosync ports should not be blocked
 ```
 
-**4. Force config sync**:
-```bash
-# On working node:
-systemctl restart pve-cluster
+**4. Do not force synchronization by deleting a lock**:
 
-# On problem node:
-systemctl stop pve-cluster
-rm -f /var/lib/pve-cluster/.pmxcfs.lockfile
-systemctl start pve-cluster
-```
+Check the service and quorum errors first. Removing `.pmxcfs.lockfile` does not
+establish which cluster state is authoritative. Use the supported Proxmox recovery
+procedure for the diagnosed failure.
 
 ---
 
@@ -1732,100 +1618,29 @@ curl -k https://localhost:8006
 
 **Situation**: Everything broken, cluster services won't start, /etc/pve won't mount
 
-#### Nuclear Option 1: Force Restore from Safety Backup
+#### Option 1: Review the Safety Backup
 
-```bash
-# 1. Stop everything
-systemctl stop pve-cluster pvedaemon pveproxy pvestatd
-killall pmxcfs 2>/dev/null
+Start with the exact archive and logs from the failed restore. Follow the
+[manual rollback prerequisites](RESTORE_GUIDE.md#manual-rollback-prerequisites),
+including graceful HA shutdown before taking pmxcfs down. The safety archive is a
+file-level recovery aid, not a complete undo of cluster-wide API operations.
 
-# 2. Force unmount /etc/pve
-umount -f /etc/pve 2>/dev/null
-fusermount -uz /etc/pve 2>/dev/null
+#### Option 2: Recover config.db from a Verified Backup
 
-# 3. Restore from safety backup
-# TIMESTAMP: the directory of the restore to undo, from its "Safety backup preserved at:" line
-tar -xzf /opt/proxsave/restore/TIMESTAMP/restore_backup_*.tar.gz -C /
+Prefer ProxSave's RECOVERY workflow on an isolated replacement. If a manual database
+recovery is necessary, verify and decrypt the complete backup first, unwrap its
+bundle, and select the actual inner archive by name. Do this in a private working
+directory before touching the live database. Use the
+[official pmxcfs recovery procedure](https://pve.proxmox.com/pve-docs/pmxcfs-plain.html)
+with the correct hostname, stopped services, unmounted `/etc/pve` and database mode
+`0600`. Do not bypass a failed HA shutdown with `killall` or a forced unmount.
 
-# 4. Restart services
-systemctl start pve-cluster
-sleep 5
-systemctl start pvedaemon pveproxy pvestatd
+#### Option 3: Reinstall and Apply Selected Configuration
 
-# 5. Verify
-pvecm status
-```
-
-#### Nuclear Option 2: Manual config.db Restoration
-
-```bash
-# 1. Stop and disable services
-systemctl stop pve-cluster pvedaemon pveproxy pvestatd
-systemctl disable pve-cluster
-
-# 2. Force unmount
-umount -f /etc/pve 2>/dev/null
-
-# 3. Backup current (broken) config
-mv /var/lib/pve-cluster /var/lib/pve-cluster.broken
-
-# 4. Manually extract config.db from backup.
-#    The bundle is an UNCOMPRESSED tar holding the inner archive and its sidecars under
-#    basename-only names, so it has no ./var/... paths of its own: unwrap it first.
-mkdir -p /tmp/psrecover /var/lib/pve-cluster
-tar -xf /path/to/backup.bundle.tar -C /tmp/psrecover
-ls /tmp/psrecover        # <host>-backup-<ts>.<ext> (plus .age if encrypted), .metadata, .sha256
-
-#    <ext> follows the compression actually used, not the configured one: .tar.xz (default),
-#    .tar.gz (gzip/pigz, and the fallback whenever the requested tool is missing), .tar.bz2,
-#    .tar.lzma, .tar.zst, or plain .tar for COMPRESSION_TYPE=none. Take the name from ls:
-ARCHIVE=$(ls /tmp/psrecover/*-backup-* | grep -Ev '\.(metadata|sha256)$' | head -1)
-
-#    If the archive ends in .age, decrypt it first (dashboard: Decrypt):
-#      proxsave --decrypt
-#    or, with the age CLI:
-#      age -d -i /path/to/key.txt -o "${ARCHIVE%.age}" "$ARCHIVE" && ARCHIVE="${ARCHIVE%.age}"
-
-#    Then pull the cluster database out of the inner archive.
-#    Entries are stored with a leading ./ so there are four components to strip, and
-#    -xf lets tar auto-detect the compression whatever COMPRESSION_TYPE was.
-tar -xf "$ARCHIVE" --strip-components=4 \
-    -C /var/lib/pve-cluster \
-    ./var/lib/pve-cluster/
-
-# 5. Fix permissions
-chown -R root:www-data /var/lib/pve-cluster
-chmod 0640 /var/lib/pve-cluster/config.db
-
-# 6. Re-enable and start
-systemctl enable pve-cluster
-systemctl start pve-cluster
-sleep 5
-systemctl start pvedaemon pveproxy pvestatd
-```
-
-#### Nuclear Option 3: Fresh Start with Config Import
-
-```bash
-# 1. Backup everything
-tar -czf /root/emergency-backup-$(date +%s).tar.gz \
-    /etc/pve/ /var/lib/pve-cluster/ 2>/dev/null || true
-
-# 2. Remove cluster completely
-pvecm delnode $(hostname)  # If multi-node
-apt remove --purge proxmox-ve pve-cluster pvedaemon pveproxy
-
-# 3. Reinstall cluster components
-apt install proxmox-ve
-
-# 4. Restore selective configs manually
-# Use export-only /etc/pve contents from backup
-# Copy configs one by one after reviewing
-
-# 5. Recreate cluster (if multi-node)
-pvecm create <cluster-name>  # On first node
-pvecm add <first-node-ip>     # On other nodes
-```
+When the installation cannot be repaired, preserve guest data and the available
+configuration evidence, then install Proxmox afresh. Select the surviving-cluster
+or full-rebuild scenario before importing configuration. Purging the Proxmox
+packages on a broken live node is not a documented substitute for that process.
 
 ---
 
@@ -1840,31 +1655,18 @@ pvecm add <first-node-ip>     # On other nodes
 
 **Resolution**:
 
-```bash
-# On ALL nodes:
-
-# 1. Stop cluster communication
-systemctl stop corosync pve-cluster
-
-# 2. Choose ONE node as "source of truth" (primary)
-
-# On PRIMARY node:
-# 3. Start services
-systemctl start corosync pve-cluster
-pvecm expected 1
-
-# On SECONDARY nodes:
-# 4. Remove old cluster data
-rm -rf /etc/pve /etc/corosync
-rm -rf /var/lib/pve-cluster/*
-
-# 5. Rejoin cluster
-pvecm add <primary-node-ip>
-
-# 6. Verify all nodes synced
-pvecm status  # On all nodes
-# Should show consistent state
-```
+1. Use console access to establish the workload and storage state of every partition.
+   Prevent competing nodes from running or writing the same guests.
+2. Keep conflicting members isolated and preserve their configuration evidence.
+   Choose an authoritative state based on the recovery plan, not merely the first
+   node that starts.
+3. Follow the [official Proxmox cluster recovery procedure](https://pve.proxmox.com/pve-docs/pvecm-plain.html)
+   for membership and quorum. Stopping pmxcfs also requires the HA precautions in
+   [manual rollback prerequisites](RESTORE_GUIDE.md#manual-rollback-prerequisites).
+4. Recover the authoritative node, then reintroduce clean replacement nodes using
+   the prerequisites in Scenario 2. Never delete a mounted `/etc/pve` tree to force
+   a join, and do not lower quorum independently on competing partitions.
+5. Verify agreed membership, guest ownership, storage and HA before restoring service.
 
 ---
 
@@ -1876,7 +1678,7 @@ pvecm status  # On all nodes
 # Cluster Status
 pvecm status              # Overall cluster status
 pvecm nodes               # List cluster nodes
-pvecm expected <N>        # Set expected votes
+# Quorum overrides require the reviewed recovery procedure above
 
 # Corosync
 corosync-cfgtool -s       # Corosync status
@@ -1884,19 +1686,18 @@ corosync-quorumtool -s    # Quorum status
 corosync-quorumtool -l    # Quorum list
 
 # Services
-systemctl restart pve-cluster pvedaemon pveproxy
 systemctl status pve-cluster
 journalctl -u pve-cluster --since "1 hour ago"
 
 # Filesystem
 mount | grep pve          # Check /etc/pve mount
 ls -la /etc/pve/          # List cluster configs
-umount -f /etc/pve        # Force unmount
+findmnt /etc/pve          # Inspect the mount without changing it
 
 # Storage
 pvesm status              # Storage status
 pvesm scan zfs            # Scan ZFS pools
-pvesm scan nfs <server>   # Scan NFS exports
+pvesm scan nfs nfs.example.com  # Replace with your NFS server
 
 # HA
 ha-manager status         # HA service status
@@ -1942,12 +1743,12 @@ journalctl -u corosync              # Corosync logs
 ## Final Notes
 
 **Remember**:
-- ✅ Always test recovery procedures on non-production systems first
-- ✅ Keep multiple backup copies in different locations
-- ✅ Document your specific cluster setup and customizations
-- ✅ Verify backups regularly (don't wait for disaster)
-- ✅ Practice recovery scenarios at least annually
-- ✅ Keep this guide accessible (print or offline copy)
+- Always test recovery procedures on non-production systems first
+- Keep multiple backup copies in different locations
+- Document your specific cluster setup and customizations
+- Verify backups regularly (don't wait for disaster)
+- Practice recovery scenarios at least annually
+- Keep this guide accessible (print or offline copy)
 
 **When in Doubt**:
 1. Stop and document current state

@@ -1,10 +1,12 @@
 # Dashboard
 
-The dashboard is how you use ProxSave. Run `proxsave` with no arguments on a terminal and it opens: installing, editing the configuration, upgrading, enabling or checking the daemon, running a backup, restoring, and opening a support report are all one keypress away. It is a launcher: where a choice has a matching command-line flag, picking it runs that flag's code, so nothing you do here behaves differently from the CLI. A few rows have no flag at all and exist only here, and the table below marks them.
+Run `proxsave` without arguments on an interactive terminal to open the dashboard. It provides backup, restore, decryption, configuration, maintenance, diagnostics, scheduling and support actions. Menu choices use the same underlying operation code as explicit commands, with dashboard-specific presentation and confirmation screens.
 
 The flags stay fully supported, and [CLI_REFERENCE.md](CLI_REFERENCE.md) documents all of them. Reach for them when there is no terminal to open the dashboard on: headless hosts, cron entries, provisioning scripts, remote automation, and recovery when the TUI cannot run.
 
-This guide covers when the dashboard appears, the menu, what each entry does, and which flag each entry maps to. For the architecture behind it (the Charm/bubbletea stack, the Session, the Ask bridge, testing), see [DASHBOARD_TUI.md](DASHBOARD_TUI.md).
+This guide covers invocation rules, navigation and result screens. For the architecture behind it (the Charm/bubbletea stack, the Session, the Ask bridge, testing), see [DASHBOARD_TUI.md](DASHBOARD_TUI.md).
+
+<!-- site-region: using-proxsave:start -->
 
 ## When the dashboard opens
 
@@ -13,7 +15,7 @@ The dashboard opens only when both of these are true:
 - You ran `proxsave` completely bare, with no flags at all. Any flag, even `--config`, skips it.
 - Standard input and standard output are both real terminals, and `TERM` is set and is not `dumb`.
 
-If either is false, `proxsave` runs the backup exactly as it always has. That covers cron, systemd timers, pipes, `ssh` without a TTY, and serial or dumb terminals. The gate is deliberately strict: when in doubt, ProxSave runs the backup and never surprises you with a menu.
+If either is false, the dashboard is skipped. Explicit action flags select their operation; without an action flag, the normal backup path runs. A bare invocation from cron, a systemd timer, a pipe, `ssh` without a TTY, or a terminal with an unset or `dumb` TERM therefore starts a backup. An interactive serial console can open the dashboard if it satisfies the same terminal checks.
 
 The reverse is also a guarantee: a failed or abandoned dashboard never falls through into a backup. If you press Esc or Ctrl+C at the menu, or the screen cannot render, ProxSave exits without doing anything and says so on stderr:
 
@@ -21,7 +23,7 @@ The reverse is also a guarantee: a failed or abandoned dashboard never falls thr
 Dashboard unavailable: exiting without action. Use proxsave --backup to run a backup non-interactively.
 ```
 
-To run a backup without the menu (from a script, or just deliberately), use `proxsave --backup`.
+For explicit headless operation, use the [CLI reference](CLI_REFERENCE.md#basic-operations).
 
 ### Idle timeout
 
@@ -43,38 +45,27 @@ Until the notes are acknowledged, every automated run logs one warning:
 ProxSave <version> has unseen release notes. Open proxsave to view the new features.
 ```
 
-That warning is what an unattended host uses to tell you the dashboard is worth opening. If you upgraded a host you never sit at, `proxsave --show-whatsnew` displays the same screen once and clears the warning. Development builds never show the screen and never warn.
+That warning is what an unattended host uses to tell you the dashboard is worth opening. For unattended hosts, see [release-note acknowledgement](CLI_REFERENCE.md#binary-upgrade). Development builds never show the screen and never warn.
 
 ## Menu entries and their flags
 
-Where an entry has a flag, picking it runs that flag's code: some entries set the flag internally and fall through to the identical flow, the rest call the same function inside the live dashboard session. The rows marked "none, dashboard only" have no flag and exist only here.
+The flag mapping is maintained in the [CLI reference](CLI_REFERENCE.md#all-flags). Navigate the dashboard by the task names below; diagnostic checks and Daemon Restart are dashboard-only actions.
 
-| Menu path | What it does | CLI equivalent |
-|-----------|--------------|----------------|
-| Backup | Runs a backup with the current configuration, streamed on screen | `--backup` |
-| Restore | Restores a backup onto this system | `--restore` |
-| Decrypt | Converts an encrypted backup into a plaintext bundle | `--decrypt` |
-| New key | Creates a new AGE encryption key | `--newkey` (alias `--age-newkey`) |
-| Install > Edit install | Re-runs the installer against the current configuration | `--install` |
-| Install > Wipe install | Resets the install directory, then re-runs the installer | `--new-install` |
-| Upgrade > Check upgrade | Checks for a newer release and installs it | `--upgrade` |
-| Upgrade > Check config | Adds new template variables to `backup.env` | `--upgrade-config` (its read-only step is `--upgrade-config-dry-run`) |
-| Telegram | Verifies the Telegram relay pairing | none, dashboard only |
-| Healthchecks | Verifies backup monitoring and shows the portal details | none, dashboard only |
-| Post-install | Re-runs the post-install audit | none, dashboard only (it runs `proxsave --dry-run` internally) |
-| Daemon > Install | Switches the scheduler from cron to the resident daemon | `--daemon-setup` |
-| Daemon > Disable | Reverts the scheduler to cron | `--daemon-remove` |
-| Daemon > Restart | Restarts the resident daemon and verifies it came back | none, dashboard only |
-| Daemon > Status | Shows the daemon service and scheduler state | `--daemon-status` |
-| Cleanup guards | Removes leftover restore mount guards | `--cleanup-guards` (preview with `--dry-run`) |
-| Support | Runs a support backup and emails the debug log to the maintainer | `--support` |
-| What's new | Shown once per release before the menu | `--show-whatsnew` |
+| Task | Menu route | Complete procedure |
+|---|---|---|
+| Create a backup | Backup | [First backup](BACKUP_GUIDE.md#run-and-verify-your-first-backup) |
+| Restore selected host configuration | Tools > Restore | [Restore guide](RESTORE_GUIDE.md) |
+| Produce a plaintext bundle | Tools > Decrypt | [Decryption](ENCRYPTION.md#decrypting-backups) |
+| Set up public AGE recipients | Maintenance > New key | [Encryption](ENCRYPTION.md) |
+| Edit or reinstall | Maintenance > Install > Edit install / Wipe install | [Installation](INSTALL.md#fast-install) |
+| Update executable or merge settings | Maintenance > Upgrade > Check upgrade / Check config | [Upgrade](INSTALL.md#upgrading-proxsave-binary) |
+| Check Telegram or monitoring | Diagnostic Checks > Telegram / Healthchecks | [Notifications](NOTIFICATIONS.md), [monitoring](HEALTHCHECKS.md) |
+| Review optional collectors | Diagnostic Checks > Post-install > Check | [Configuration](CONFIGURATION.md#editing-the-configuration-from-the-dashboard) |
+| Manage the scheduler | Daemon | [Scheduling](DAEMON.md) |
+| Remove restore guards | Recovery > Cleanup guards | [Guard screen](#recovery-cleanup-guards) |
+| Send a diagnostic run log | Recovery > Support | [Support consent](#support) |
 
-Going the other way, `--config`, `--dry-run`, `--log-level` and `--cli` are run modifiers with no menu row, and `--daemon` is what `proxsave-daemon.service` executes rather than something you type.
-
-Compatibility rules are re-checked after the menu, so a menu choice can never reach a state the flags would reject.
-
-Backup, Support and the binary upgrade keep the menu's frame alive and stream their run inside it (see [Backup](#backup)). The diagnostic, daemon and recovery actions run in place and return you to the menu. Everything else hands off to its flow.
+Backup, Support and binary upgrade stream their output inside the dashboard frame. Other choices open a check screen or hand off to their interactive workflow. Operation compatibility is checked after selection too.
 
 ## Reading the screens: the Status vocabulary
 
@@ -82,15 +73,15 @@ Every result screen speaks one small vocabulary, so a color and a symbol always 
 
 | Look | Meaning |
 |------|---------|
-| Green `✓` | Ok. The thing succeeded or is in the expected state. |
-| Red `✗` | Error. Something failed. |
-| Yellow `⚠` | Warning. Needs attention, usually retryable or a "here is what to do next". |
+| Green success | Ok. The thing succeeded or is in the expected state. |
+| Red error | Error. Something failed. |
+| Yellow warning | Warning. Needs attention, usually retryable or a "here is what to do next". |
 | Yellow, no symbol | A neutral, pre-check state. You see this before you run a check, shown as `NOT CHECKED`. |
 
 Two keywords are worth calling out because they look similar but are not the same level:
 
 - `NOT CHECKED` is the neutral, no-symbol state: a check that has not run yet.
-- `NOT CONFIGURED` is a yellow `⚠` warning: the feature is not enabled on this host, so there is nothing to check.
+- `NOT CONFIGURED` is a yellow warning: the feature is not enabled on this host, so there is nothing to check.
 
 ## The menu
 
@@ -139,69 +130,41 @@ Navigate with the arrow keys (or `j`/`k`), `/` filters the list, Enter selects, 
 
 ## Backup
 
-Backup is the one screen that keeps the frame and streams the run inside it. Your `[timestamp] LEVEL message` log lines flow, in color, into a scrollable panel on screen instead of scrolling past in raw text. The same blank-line spacing between sections that you see on the CLI is preserved.
+Backup keeps the dashboard frame and streams the run inside it. Your `[timestamp] LEVEL message` log lines flow, in color, into a scrollable panel on screen instead of scrolling past in raw text. The same blank-line spacing between sections that you see on the CLI is preserved.
 
 While it runs:
 
 - Arrow keys, PgUp/PgDn, Home/End, and the mouse wheel scroll within the panel. Scrolling up stops the auto-follow so the newest line does not yank you back down; press End (or scroll back to the bottom) to follow again.
-- `c` copies the whole log to the clipboard (the original lines, not the wrapped-on-screen rows), handy for a support request.
+- `c` copies the retained original lines to the clipboard, not the wrapped-on-screen rows. The panel retains up to 5,000 lines; use the saved run log for the complete output.
 - Esc requests cancellation of the run.
 
 When the run finishes, the panel shows the outcome block and waits. Press Enter or Space to return. A non-fatal problem reads as a yellow "completed with warnings", not a red failure; the exit code is identical to a plain CLI run.
 
-The outcome block is the only recap a dashboard backup gets, because the engine skips its own logged recap on this path. It carries the banner, the backup statistics, the secondary and cloud destination status when they are in use, the Telegram Server ID and the healthchecks portal link or address in centralized mode, the path of the run log, and finally a warnings/errors recap (the first 10 issue lines, with a "... and N more (scroll up to review)" note when there were more). The full list stays scrollable in the panel above.
+The outcome block is the only recap a dashboard backup gets, because the engine skips its own logged recap on this path. It carries the banner, the backup statistics, the secondary and cloud destination status when they are in use, the Telegram Server ID and the healthchecks portal link or address in centralized mode, the path of the run log, and finally a warnings/errors recap (the first 10 issue lines, with a "... and N more (scroll up to review)" note when there were more). Retained lines remain scrollable in the panel; the saved log contains the complete record.
 
-A backup started any other way (cron, `--backup`, the daemon) runs plainly with no panel.
+Scheduled and explicit headless backups run without the dashboard panel.
 
 ## Restore and Decrypt
 
-Restore and Decrypt hand off to their normal flows, rendered in the TUI. They are the same workflows as `proxsave --restore` and `proxsave --decrypt`; only the interface differs. Add `--cli` on the command line if you want the plain text prompts instead.
+These choices open the interactive backup selector and the corresponding workflow. Read the [restore guide](RESTORE_GUIDE.md) or [decryption procedure](ENCRYPTION.md#decrypting-backups) before proceeding. Restore category selection and the final overwrite guard are separate confirmations; the overwrite guard defaults to Cancel. Esc or `q` in the plan pager aborts rather than accepting it.
 
-A few things you will meet in the restore flow:
-
-- You pick categories from a checkbox list (at least one). Esc goes back to the mode selection, it does not cancel the whole restore.
-- Confirmation is two stages. First a `RESTORE` button (which holds the default focus), then a destructive `Overwrite and restore` guard whose default is `Cancel` and which has no single-key `y`/`n` shortcut, so a reflex keypress cannot trigger it.
-- For a cluster backup you are asked to choose `SAFE` (export cluster files only, does not write the cluster database) or `RECOVERY` (restore the full cluster database, only when the cluster is offline or isolated), or exit.
-- The restore plan is shown in a scrollable pager. Esc or `q` there aborts; it never counts as acceptance.
-
-Full detail lives in [RESTORE_GUIDE.md](RESTORE_GUIDE.md), and cluster specifics in [CLUSTER_RECOVERY.md](CLUSTER_RECOVERY.md).
+For cluster archives, SAFE and RECOVERY are separate strategy choices. SAFE can offer live API changes after exporting cluster material; it does not replace the cluster database. RECOVERY requires the offline or isolated conditions in the [cluster recovery guide](CLUSTER_RECOVERY.md). Do not infer that SAFE leaves the entire live host unchanged.
 
 ## New key
 
-New key runs the AGE encryption setup, the same as `proxsave --newkey`. See [ENCRYPTION.md](ENCRYPTION.md).
+Opens public AGE recipient setup. Follow the [encryption guide](ENCRYPTION.md) for recipient choices and independent private-key recovery. Generating a recipient is not a verification that you can decrypt a backup.
 
 ## Install
 
-The single `Install` row opens a small chooser:
-
-- `Edit install` re-runs the installer against your current configuration (`--install`).
-- `Wipe install` resets the installation directory, preserving `build`, `daemon_state`, `env`, `guards`, `identity` and `restore`, then runs the installer (`--new-install`). With stock paths, this deletes local backup archives and `configs/backup.env`. It asks you to confirm the destructive wipe first.
-- `Back` returns to the menu.
-
-See [INSTALL.md](INSTALL.md).
+Choose **Edit install** to reopen the installer, **Wipe install** for a destructive reset, or **Back**. Wipe preserves only `build`, `daemon_state`, `env`, `guards`, `identity` and `restore`; stock local archives, logs and configuration are deleted. Copy and verify required data independently before confirming. See [installation and reinstall](INSTALL.md#reinstall-safely).
 
 ## Upgrade
 
-The `Upgrade` row opens a chooser showing your current version, with two entries:
-
-- `Check upgrade` looks for a newer release. It runs the check the moment you open it. If you are current it shows green `NO UPGRADE (<version>)`. If a newer release exists it shows yellow with the version, the release URL and notes, and a `Run upgrade` button. A failed check shows yellow `CHECK FAILED`.
-- `Check config` compares your `backup.env` against the shipped template. This is the two-step check-and-apply described under [Cleanup guards](#recovery-cleanup-guards); it lists the variables it would add and only offers Apply when there is something to add. A backup of the file is saved before the merge. It is the same operation as `proxsave --upgrade-config`.
-
-When you run the binary upgrade from here, its log streams into the same contained panel that Backup uses; press Enter when it finishes. On success the daemon, if it is active, is restarted once and verified, and then the dashboard relaunches itself from the freshly installed binary, so the session you continue in is the new version. If the daemon is not active there is nothing to restart and the screen tells you the new binary is on disk.
-
-Binary upgrade details are in [CLI_REFERENCE.md](CLI_REFERENCE.md#binary-upgrade).
+Choose **Check upgrade** to check releases automatically, then review the offered version and notes before **Run upgrade**. **Check config** previews the template merge and offers Apply when changes are available. Review its added and retired keys before applying. See [upgrade and configuration effects](INSTALL.md#upgrading-proxsave-binary) for daemon restart, verification and failure handling.
 
 ### Which binary drives the upgrade
 
-`Run upgrade` here is `proxsave --upgrade`, and that command is executed by the binary already installed on the host. The release check, the download, the signature verification and the binary swap are all the OLD release's code. So a fix to the upgrade flow itself only helps the upgrade AFTER the one that installs it: a host coming from an older release cannot benefit from migration logic shipped in the new one. (Since 0.36.0 the post-install finalize phase is handed to the freshly installed binary, but only when the binary doing the upgrading is new enough to know how to hand it over.)
-
-The externally fetched installer avoids that entirely: it downloads and swaps the binary itself, then runs the NEW binary to finalize.
-
-```bash
-bash -c "$(curl -fsSL https://raw.githubusercontent.com/tis24dev/proxsave/main/install.sh)" -- --upgrade
-```
-
-Use that route when an upgrade misbehaves, or when the release notes say the upgrade path itself changed. The in-place upgrade, from here or from `proxsave --upgrade`, is the convenient one for routine releases.
+Release discovery and verification use the currently installed binary. Finalization can use the new binary when the old release supports delegation. The [two upgrade paths](INSTALL.md#the-two-upgrade-paths) explain this boundary and the external installer fallback.
 
 ## Diagnostic Checks
 
@@ -252,13 +215,13 @@ Monitoring only transmits under the resident daemon: it is the only thing that p
 
 ### Post-install
 
-Re-runs the post-install audit. Unlike the other checks it waits for you to press `Check`. It runs `proxsave --dry-run` (this can take a minute), then offers a checkbox list of unused or optional collectors you can turn off, each with a detail pane. What you select is written as `KEY=false` into `backup.env`. If nothing is unused it says `NO UNUSED COMPONENTS`; if you select nothing it says `NO CHANGES` and writes nothing. Any error here is non-fatal.
+Re-runs the post-install audit. Unlike the other checks it waits for you to press `Check`. It runs a diagnostic simulation that writes logs but does not create or upload a backup archive (this can take a minute), then offers a checkbox list of unused or optional collectors you can turn off, each with a detail pane. What you select is written as `KEY=false` into `backup.env`. If nothing is unused it says `NO UNUSED COMPONENTS`; if you select nothing it says `NO CHANGES` and writes nothing. Any error here is non-fatal.
 
 ## Daemon
 
-The resident daemon (`proxsave-daemon.service`) is the normal scheduler and the only thing that transmits healthcheck pings. Cron is the legacy path, kept for schedules the daemon cannot express. The daemon operations here are the graphical equivalent of the `--daemon-*` flags, and the menu only shows the ones that apply to your current scheduler (see [the menu](#the-menu)).
+The resident daemon (`proxsave-daemon.service`) is the normal scheduler and the only thing that transmits healthcheck pings. Cron is the legacy path, kept for schedules the daemon cannot express. The menu only shows the ones that apply to your current scheduler (see [the menu](#the-menu)).
 
-- `Status` computes a combined verdict and shows it: whether the service is installed and active, the scheduler mode, the running version, whether the on-disk binary matches the running process, and the readiness of any personal pre/post scripts. It runs automatically when opened; `Re-check` re-computes it so a restart done elsewhere shows up. A fresh heartbeat reads green `RUNNING`; a replaced binary while active reads yellow `BEHIND - RESTART NEEDED`. All problem states today are yellow warnings. It is the same verdict `proxsave --daemon-status` prints, ALL-CAPS here and in lower case on the command line.
+- `Status` computes a combined verdict and shows it: whether the service is installed and active, the scheduler mode, the running version, whether the on-disk binary matches the running process, and the readiness of any personal pre/post scripts. It runs automatically when opened; `Re-check` re-computes it so a restart done elsewhere shows up. A fresh heartbeat reads green `RUNNING`; a replaced binary while active reads yellow `BEHIND - RESTART NEEDED`. All problem states today are yellow warnings.
 - `Install` installs and enables the service and removes the cron entry. The result screen states what the cron removal actually did. If the crontab could not be verified it reads yellow `INSTALLED - NO CRON ENTRY REMOVED`, and if another schedule that also runs backups is still present it reads yellow `INSTALLED - DUPLICATE SCHEDULE` and tells you to clean up your crons, because the host would otherwise back up twice.
 - `Disable` reverts to the cron scheduler and stops future upgrades from reinstalling the daemon. If a backup is in progress it reports yellow `DEFERRED - BACKUP RUNNING` rather than tearing the service out from under it.
 - `Restart` restarts the service and verifies it came back aligned. It first waits for any in-progress backup to finish, because a restart would kill a daemon-supervised backup. If the wait times out it reports yellow `DEFERRED - BACKUP RUNNING`; if the restart happened but could not be confirmed it reports yellow `RESTARTED, NOT CONFIRMED` and points you at `Status`. There is no flag for this one: it exists only here.
@@ -272,7 +235,7 @@ During some restores ProxSave places a read-only guard over a datastore mountpoi
 1. A read-only check. If there is nothing to clean it shows green `CLEAN` and offers only `Re-check` and `Back`, never Apply. If it finds guards it shows yellow `FOUND` with a count.
 2. Apply runs the real cleanup. If everything is removed it shows green `DONE`. If anything is left behind (or the state cannot be re-read) it shows yellow `PENDING` with guidance to unmount the datastore and run it again once the storage is offline.
 
-The command-line equivalent is `proxsave --cleanup-guards`; see [CLI_REFERENCE.md](CLI_REFERENCE.md#cleanup-mount-guards-optional).
+Headless cleanup and exit-code interpretation are in the [CLI reference](CLI_REFERENCE.md#cleanup-mount-guards-optional).
 
 ## Support
 
@@ -280,7 +243,7 @@ Support collects a little context, then runs a backup in debug mode and emails t
 
 The note tells you the run is in debug mode, that the full log is emailed to the maintainer at the end of the run, that anything personal or sensitive in it will be shared, and that it may contain personal data such as this server's MAC address. Below it are four rows: your GitHub nickname, the GitHub issue number (`#1234`), and two acknowledgement toggles that both have to be set to Yes before Continue is accepted, one for consent to send the log and one confirming the GitHub issue is already open. Untouched toggles read No, so nothing is armed by walking away from the form. The maintainer's email address is never shown.
 
-On confirm it runs like Backup, streaming the debug run in the frame. Cancel or Esc returns to the menu. The command-line equivalent is `proxsave --support`, which asks the same questions on stdin.
+On confirm it runs like Backup, streaming the debug run in the frame. Cancel or Esc returns to the menu. After initial consent, the log is sent automatically when the run ends; there is no final review screen. See [support preparation](TROUBLESHOOTING.md) to prepare a log for review before sharing.
 
 ## Keyboard and mouse
 
@@ -292,3 +255,5 @@ On confirm it runs like Backup, streaming the debug run in the frame. Cancel or 
 ## Exiting and timeouts
 
 You leave the dashboard by choosing `Exit`, pressing Esc or Ctrl+C at the menu, or letting the 10-minute idle timeout fire. All of these exit cleanly without running anything.
+
+<!-- site-region: using-proxsave:end -->

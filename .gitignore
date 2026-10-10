@@ -10,6 +10,10 @@
 # Superpowers design and planning artifacts — local-only, never version-controlled
 /docs/superpowers/
 
+# Local program analysis and rendered diagrams
+/docs/PROGRAM_MAP.md
+/docs/diagrams/program-map/
+
 # Build artifacts — compiled binary (root build) and Makefile output dir
 /proxsave
 /build/

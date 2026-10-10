@@ -1,55 +1,122 @@
 # Backup monitoring (healthchecks)
 
-ProxSave reports every backup outcome, plus a liveness heartbeat, to an external
-[healthchecks](https://healthchecks.io/) monitor. The monitor alarms on **silence**, so
-the failures ProxSave cannot report itself are still caught: a crash before the
-notification phase, an OOM kill, a run wedged on a dead mount, a host that never came
-back from a reboot.
+<!-- site-region: monitor-backups:start -->
 
-Monitoring is driven by the resident daemon, which is the only thing that pings and is
-also the default scheduler. A host still on the cron scheduler reports nothing, no matter
-how the keys below are set. See [DAEMON.md](DAEMON.md) for the scheduler engines, and for
-switching between them from the dashboard or with the `--daemon-*` flags.
+## Configure and verify backup monitoring
 
-There is exactly one off switch, `HEALTHCHECK_ENABLED`. Set it to `false` and this host
-sends nothing anywhere; everything else on this page decides **where** the pings go, never
-whether they are sent. See [Turning monitoring off](#turning-monitoring-off).
+Monitoring detects missing runs as well as reported failures. The resident daemon sends
+liveness, backup outcome, update and notification-delivery signals to an external
+Healthchecks service. The service alerts on silence, which can reveal a dead host,
+a crashed backup or a job that never started. Backup notifications alone cannot do that.
 
-## Why silence is the signal
+### Enable a monitored daemon
 
-A "notify me when a backup fails" setup is blind to the worst failures, because a
-process that panics, hangs, or never starts cannot send you anything. Every channel in
-[NOTIFICATIONS.md](NOTIFICATIONS.md) has that blind spot by construction.
+Run `proxsave` without arguments on an interactive terminal, then choose
+**Maintenance** > **Install** > **Edit install**. Select the daemon under
+`Scheduler engine`, then choose `Healthchecks`: centralized monitoring, your own server
+or Off. The field is inactive for cron because only the resident daemon transmits.
 
-The daemon closes it by pushing to something outside this host. Each check has an
-expected cadence on the monitor side. Miss it and the check goes down and your alerts
-fire, whether ProxSave was able to say anything or not.
+For an existing cron installation, **Daemon** > **Install** switches engines and
+enables monitoring. Review its cron warnings to avoid duplicate schedules; see
+[scheduling](DAEMON.md#schedule-and-supervise-backups). Installing or reinstalling the
+daemon enables monitoring even if it was previously disabled. Later upgrades preserve
+an explicitly disabled value.
 
-This is also what makes [`NOTIFY_ON`](CONFIGURATION.md#which-runs-get-notified-notify_on)
-safe to use. Silencing the message for clean runs drops a *report you were already getting
-another way*; it drops no check, because the per-run message was never what caught a run
-that did not happen. The **Healthchecks** section is not a notification channel and
-`NOTIFY_ON` never filters it, so a run nobody was told about still pings. And a run applies
-`NOTIFY_ON` below `always` only when this monitor is confirmed to alert you: see
-[Alert delivery and NOTIFY_ON](#alert-delivery-and-notify_on).
+The actual transmission switch is `HEALTHCHECK_ENABLED`. Setting it to `false` in the
+active `configs/backup.env` silences monitoring while allowing daemon scheduling.
+`HEALTHCHECK_MODE=off` alone does not silence anything: runtime treats every mode value
+except `self` as centralized. Disabling the daemon through **Daemon** > **Disable**
+also disables monitoring and restores cron.
 
-## What gets monitored
+### Choose centralized monitoring
 
-The daemon reports four families of checks. In centralized mode the server creates them
-and they appear on the monitor as the `proxsave-*` checks below. In self mode you create
-them on your own instance, under any name you like, and give the daemon their ping URLs:
-see [Self mode](#self-mode-your-own-healthchecks).
+Centralized mode provisions the host's checks using its Server ID and relay credential.
+You do not need to paste an API key. After setup choose **Diagnostic Checks** >
+**Healthchecks** and read the monitor's state and portal details.
 
-| Check | When it pings | What it covers |
-|-------|---------------|----------------|
-| `proxsave-alive` | immediately at daemon start, then every `HEALTHCHECK_HEARTBEAT_INTERVAL` | the daemon and the host are up. Stops when either dies, and the monitor alarms on the silence. It is also pinged `/fail` on purpose, with the reason in the body, while a backup child abandoned in uninterruptible sleep is outstanding -- see [DAEMON.md](DAEMON.md#caveat-uninterruptible-sleep-d-state) |
-| `proxsave-backup` | per run: `/start` at launch, then the run's exit code, or `/fail` on a hang | whether the backup ran and how it ended |
-| `proxsave-updates` | immediately at daemon start, then every `HEALTHCHECK_UPDATE_INTERVAL` | `/0` when up to date, `/1` when a newer release exists, so the check goes down and tells you to upgrade |
-| `proxsave-notify-<channel>` | after each daemon-supervised run, one per channel the backup attempted | whether that notification channel actually delivered |
+Before you have a portal password the screen provides a single-use login link, valid
+for about an hour. Open it and set a password. Configure alert channels in the portal,
+then trigger a test alert through the monitoring service and confirm it arrives.
+Opening the link without setting a password does not complete onboarding. If it expires,
+reopen the dashboard check for a fresh link. Once a password exists, the screen shows
+the portal address and email login identity instead of issuing another magic link.
 
-A run you start yourself, from the dashboard's **Backup** row or by hand, leaves the
-per-channel checks untouched. Only `proxsave-backup` picks up a standalone run, through
-the handoff described below.
+A local successful check only proves communication with the monitor. Until alert delivery
+is configured and confirmed, a check going down may not reach you. Missing Server ID
+or unresolved monitoring URLs means reporting is incomplete. Provisioning outages can
+prevent a newly started daemon from resolving its URLs; an already running daemon can
+continue using resolved URLs. See [centralized provisioning](#centralized-the-proxsave-monitoring-server)
+for retry and fallback behavior.
+
+### Use your own Healthchecks service
+
+Create checks and attach alert channels on your instance before configuring ProxSave.
+Use a full ping URL such as `https://hc-ping.com/<uuid>` for each check. The setup form
+requires alive and backup URLs; updates and per-channel delivery checks are optional.
+
+| Check | Expected activity | Suggested period |
+| --- | --- | --- |
+| Service alive | At daemon startup, then every heartbeat | Heartbeat interval, default 5 minutes |
+| Backup outcome | Start and completion, or timeout failure | Backup frequency, with grace covering maximum run duration |
+| Updates | Periodic release check | Update interval, default 5 minutes |
+| Channel delivery | After supervised runs that attempted that channel | Backup frequency, subject to your notification filter |
+
+For weekly or monthly backups, set the external backup check period accordingly.
+Unlike centralized mode, ProxSave does not change your service's periods or alert rules.
+Give long backups enough grace, normally at least `MAX_RUN_DURATION`, so a run still
+working is not reported overdue prematurely.
+
+Advanced self-mode settings are hand edits. Set `HEALTHCHECK_ENABLED=true` and
+`HEALTHCHECK_MODE=self`, then supply full `HEALTHCHECK_*_URL` values or IDs with the
+shared ping endpoint. See the [complete key list](#configuration-keys) for endpoint,
+interval, optional log-tail and notification-check settings. Ping URLs are credentials;
+keep them private.
+
+An alive check is mandatory when self monitoring is enabled. Leaving both its URL and
+ID empty warns, disables reporting and makes an otherwise clean run exit with a warning.
+Blanking URLs does not switch monitoring off. Either configure a real alive check or
+set `HEALTHCHECK_ENABLED=false`.
+
+### Verify real coverage
+
+1. Choose **Diagnostic Checks** > **Healthchecks**. Review transmission, daemon and
+   alert-delivery status; resolve missing service, identity, URL or credential errors.
+2. Confirm the alive check receives recurring events on the external service.
+3. Confirm the next scheduled backup has a start and outcome event. Verify its actual
+   saved backup independently; a green monitoring check is not archive validation.
+4. Confirm your external alert channel receives a deliberate test alert. Keep
+   `NOTIFY_ON=always` until this route is working.
+5. If you use channel delivery checks, inspect them after a scheduled run. Their URLs
+   watch channel delivery; they are not Telegram, email, Gotify or webhook settings.
+
+`NOTIFY_ON` filters backup messages, not monitoring. Restricting messages below `always`
+is applied only when monitoring is confirmed to alert you. Missing alert confirmation
+can therefore leave every run notified despite a lower configured threshold.
+
+### Interpret silence and failure
+
+Only the daemon sends pings. A standalone dashboard backup can hand off its result to a
+live daemon, but does not update per-channel scheduled delivery checks. A stale handoff
+is discarded; without a live daemon no ping is sent. A skipped scheduled child can leave
+a start with no finish. Disabling backups leaves the backup check silent while the
+alive check continues.
+
+A timeout is reported as failure; nonzero exit outcomes are not green. Optional failed-run
+log tails may disclose sensitive context to the monitoring service, so choose
+`HEALTHCHECK_SEND_LOG` deliberately. Standalone handoffs carry only the exit result.
+
+For a missing portal link, first resolve the monitoring error and identity state, then
+reopen **Healthchecks**. For a missing daemon unit while configuration still says daemon,
+use the repair instructions in [CLI_REFERENCE.md](CLI_REFERENCE.md); the dashboard's
+Install action is offered only when the recorded engine is cron. Do not invent a green
+state by manually pinging a check whose real backup did not run.
+
+Read [check-screen troubleshooting](#what-the-check-screen-tells-you) for every displayed
+verdict and [ping details](#ping-details) for event protocol semantics.
+
+<!-- site-region: monitor-backups:end -->
+
+## Implementation appendix
 
 ### Ping details
 
@@ -89,6 +156,30 @@ The exact wire behavior, in case you are reading the monitor's event log:
 - Ping URLs embed the check identifier, which is a low-capability secret. ProxSave
   registers them with the log masker and strips them out of transport errors, so a
   failed ping logs the reason and never the URL.
+
+
+
+## Detailed reference
+
+The task above is the operator procedure. The following material preserves detailed behavior, limits and implementation context.
+
+## What gets monitored
+
+The daemon reports four families of checks. In centralized mode the server creates them
+and they appear on the monitor as the `proxsave-*` checks below. In self mode you create
+them on your own instance, under any name you like, and give the daemon their ping URLs:
+see [Self mode](#self-mode-your-own-healthchecks).
+
+| Check | When it pings | What it covers |
+|-------|---------------|----------------|
+| `proxsave-alive` | immediately at daemon start, then every `HEALTHCHECK_HEARTBEAT_INTERVAL` | the daemon and the host are up. Stops when either dies, and the monitor alarms on the silence. It is also pinged `/fail` on purpose, with the reason in the body, while a backup child abandoned in uninterruptible sleep is outstanding -- see [DAEMON.md](DAEMON.md#caveat-uninterruptible-sleep-d-state) |
+| `proxsave-backup` | per run: `/start` at launch, then the run's exit code, or `/fail` on a hang | whether the backup ran and how it ended |
+| `proxsave-updates` | immediately at daemon start, then every `HEALTHCHECK_UPDATE_INTERVAL` | `/0` when up to date, `/1` when a newer release exists, so the check goes down and tells you to upgrade |
+| `proxsave-notify-<channel>` | after each daemon-supervised run, one per channel the backup attempted | whether that notification channel actually delivered |
+
+A run you start yourself, from the dashboard's **Backup** row or by hand, leaves the
+per-channel checks untouched. Only `proxsave-backup` picks up a standalone run, through
+the handoff described below.
 
 ### When the daemon has no backup to report
 
@@ -163,7 +254,7 @@ server-side change to them is picked up at the next restart.
 The same request carries the backup schedule's frequency and `NOTIFY_ON`, and at startup the
 daemon journal reports each answer in its own block: `Applying backup schedule...`, then
 `Applying notify level...`, and, only when the request failed, `Applying healthchecks ping
-URLs...`, which ends in `WARNING ⚠ Healthchecks ping URLs: not available` when no URL is
+URLs...`, which ends in `WARNING Warning Healthchecks ping URLs: not available` when no URL is
 available at all. The heartbeat that later gets an answer prints those blocks again, applied,
 and the daemon keeps retrying quietly until then.
 
@@ -271,34 +362,7 @@ because there nothing would have transmitted even with the key filled in.
 
 ### Setting it up
 
-1. On your healthchecks instance, create one check for each row of the table below that
-   you want. Each check has its own ping URL.
-2. Give each check the period of its row, and attach your alert channels to it on your
-   instance: that is what tells you when a check goes down.
-3. Give the daemon each ping URL, in the install form or in `backup.env` (both below).
-4. Run `Diagnostic Checks` > `Healthchecks` from the dashboard. It pings your alive check
-   to confirm this host reaches your instance.
-
-| Check | Needed | Variable | When the daemon pings it | Period on your instance |
-|-------|--------|----------|--------------------------|-------------------------|
-| service alive | always: the run warns without it | `HEALTHCHECK_ALIVE_URL` or `_ID` | at daemon start, then every `HEALTHCHECK_HEARTBEAT_INTERVAL` (5 minutes by default) | `HEALTHCHECK_HEARTBEAT_INTERVAL` |
-| backup outcome | required by the install form | `HEALTHCHECK_BACKUP_URL` or `_ID` | each scheduled run: `/start` at launch, then the exit code, or `/fail` on a hang | the time between scheduled runs: 1 day for daily, 7 days for weekly, 31 days for monthly, with a grace of at least `MAX_RUN_DURATION` (1 hour by default), so a long run is not reported down while it is still running |
-| updates | optional | `HEALTHCHECK_UPDATES_URL` or `_ID` | at daemon start, then every `HEALTHCHECK_UPDATE_INTERVAL` (5 minutes by default): `/0` when up to date, `/1` when a newer release exists | `HEALTHCHECK_UPDATE_INTERVAL` |
-| one per notification channel | optional | `HEALTHCHECK_NOTIFY_<CHANNEL>_URL` or `_ID` | after each scheduled run in which that channel sent: see [Notification delivery checks](#notification-delivery-checks) | the time between scheduled runs, as for the backup check |
-
-The alive and backup pair alone is a perfectly reasonable setup.
-
-### During install
-
-Choosing `Your own server` on the monitoring step opens a form that collects the full
-ping URL of each check, for example `https://hc-ping.com/<uuid>`. The alive and backup
-URLs are required; the updates URL and the four notification delivery check URLs are
-optional. Those four are the ping URLs of checks on your instance that watch each
-channel's delivery, not the channels' own addresses: see
-[Notification delivery checks](#notification-delivery-checks). Whatever you leave empty
-simply is not reported. A verification screen then pings your alive URL to confirm it is
-reachable from this host, using a state-neutral ping that does not leave a spurious
-success or failure on your check.
+The operator setup and verification sequence is in [Configure and verify backup monitoring](#configure-and-verify-backup-monitoring). Full URL and ID forms are documented below.
 
 ### In backup.env
 
@@ -361,41 +425,6 @@ or `failure` apply in self mode, leave all eight empty. See
 In centralized mode these variables have no effect: the server creates the
 `proxsave-notify-<channel>` checks itself.
 
-## Where monitoring shows up
-
-**Install wizard.** The configuration form's `Healthchecks` field asks for the monitoring
-mode, immediately after `Scheduler engine`, followed by `Notify level` (see
-[Alert delivery and NOTIFY_ON](#alert-delivery-and-notify_on)) and the schedule: `Frequency`,
-`Weekday`, `Day of month (1-28)` and `Run at (HH:MM)`. Its three answers
-are `Off`, `ProxSave HC Server` (centralized) and `Your own server` (self), and it is
-active only with the daemon engine selected: under cron it is inactive and monitoring is
-written off. A screen then verifies the connection. In centralized mode it also boxes
-the portal: a fresh login link, or the portal address plus your sign-in identity once you
-have a password. `--cli` installs ask the same question, again only on the daemon engine,
-and show the same information as plain text.
-
-**Dashboard.** This is the everyday route to both halves of monitoring. **Install** >
-**Edit install** re-runs the wizard above against the existing configuration, which is
-where the monitoring mode is changed; the **Daemon** group is where the engine that
-transmits it is installed or disabled ([DAEMON.md](DAEMON.md#operating)).
-
-`Healthchecks`, under **Diagnostic Checks**, runs on entry and reports the
-real operational state, not just one-shot reachability. In centralized mode it boxes
-the portal, in whichever of the two states applies. Under the verdict, a `Sensors:`
-list gives one colored line per monitored check with its state and the age of its last
-ping. That list is centralized only: the self-mode check is a plain reachability probe
-and reads no daemon state, so it has no rows to show.
-
-**End of a backup run.** The run prints a `Healthchecks` line reporting whether the
-daemon is actually transmitting. This section sends nothing itself: the daemon is the
-only pinger, and it records every ping outcome to disk, so the run reads that record
-and reports what was really sent. A missing record reads as "nothing transmitted yet",
-which is honest for a first run or a stopped daemon, and never as a false success.
-
-**`proxsave --daemon-status`.** A scriptable verdict on the daemon itself, covered in
-[DAEMON.md](DAEMON.md). The dashboard's **Daemon** > **Status** shows the same verdict
-without the exit code.
-
 ## Alert delivery and NOTIFY_ON
 
 A monitor that alerts nobody is not a monitor. Before a run lets `NOTIFY_ON=warning` or
@@ -428,8 +457,8 @@ DOWN on every run the filter kept quiet. See
 [Notification delivery checks](#notification-delivery-checks).
 
 **Where you see it.** The run log's `Applying notification filter...` block (`Setting`,
-`Healthchecks status`, `Filter in effect`, then `✓ Notification filter: applied`, or
-`⚠ Notification filter: not applied` after the reason), the daemon journal's
+`Healthchecks status`, `Filter in effect`, then `Notification filter: applied`, or
+`Warning Notification filter: not applied` after the reason), the daemon journal's
 `Applying notify level...` block, at start and before a run that sends a changed level, and
 the `Notifications:` block of the Healthchecks check screen and of the install check:
 
@@ -456,7 +485,7 @@ fully healthy centralized state; in self mode it is `REACHABLE`.
 | `PROVISIONING` | the credential or the server-side setup is not ready yet | check again shortly; if it persists, this host cannot reach the monitoring server |
 | `UNREACHABLE` | the monitor did not answer from this host | check outbound connectivity and DNS |
 | `UNCONFIRMED` | provisioned, but reachability could not be confirmed | run the check again |
-| `NOT INSTALLED` | the monitor is reachable but the daemon service is not installed | `proxsave --daemon-setup`. The dashboard's **Daemon > Install** row does the same thing, but it is offered only while `SCHEDULER_MODE` still reads `cron`: a host recorded as `daemon` whose unit went missing is shown Disable, Restart and Status instead, so use the flag there |
+| `NOT INSTALLED` | the monitor is reachable but the daemon service is not installed | Use **Daemon** > **Install** when the recorded engine is cron. If configuration records daemon but the unit is missing, use the repair entry point in [CLI_REFERENCE.md](CLI_REFERENCE.md); the dashboard offers Disable, Restart and Status in that state. |
 | `NOT RUNNING` | the service is installed and stopped, or never wrote a heartbeat | `systemctl start proxsave-daemon.service` |
 | `RUNNING, NOT REPORTING` | the process is up but has written no heartbeat yet | usually a stale build; restart the service |
 | `STALE` | the last heartbeat is older than twice the heartbeat interval, and the interval is floored at one minute first, so the smallest stale window is two minutes | the daemon is stopped or wedged; check `journalctl -u proxsave-daemon.service`. On a systemd host you will normally see `RUNNING, NOT REPORTING` instead: an active unit with a stale heartbeat is reclassified, so `STALE` surfaces only when systemd could not be asked |
@@ -594,3 +623,13 @@ See [DAEMON.md](DAEMON.md) for the daemon itself, [CONFIGURATION.md](CONFIGURATI
 for the full `backup.env` reference, and [NOTIFICATIONS.md](NOTIFICATIONS.md) for how
 the per-channel checks relate to the delivery channels. In self mode, the per-channel
 checks are the [notification delivery checks](#notification-delivery-checks).
+
+## Earlier guide entry points
+
+## Where monitoring shows up
+
+See the complete [operator procedure](#configure-and-verify-backup-monitoring). Detailed settings and implementation material remain in the reference sections above.
+
+## Why silence is the signal
+
+See the complete [operator procedure](#configure-and-verify-backup-monitoring). Detailed settings and implementation material remain in the reference sections above.

@@ -4,12 +4,13 @@ Complete guide for restoring Proxmox VE, Proxmox Backup Server, and dual-role
 PVE+PBS backups using the interactive restore workflow.
 
 Restore is a **dashboard** action: run `proxsave` with no arguments on a terminal and
-pick **Tools > Restore**. The `--restore` flag runs the same workflow directly, and
-stays fully documented here as the path for headless hosts, rescue shells and any
-situation where the dashboard cannot open.
+pick **Tools > Restore**. Direct restore entry and terminal options for rescue shells and headless hosts are documented in [CLI reference](CLI_REFERENCE.md).
 
 ## Table of Contents
 
+- [Choose restore modes and categories](#choose-restore-modes-and-categories)
+- [Restore a host](#restore-a-host)
+- [Restore IOMMU, VFIO and passthrough settings](#restore-iommu-vfio-and-passthrough-settings)
 - [Quick Start](#quick-start)
 - [Overview](#overview)
 - [Category System](#category-system)
@@ -43,29 +44,11 @@ full menu is documented in [DASHBOARD.md](DASHBOARD.md).
 
 The dashboard opens only when the invocation is **completely bare** (any flag, even
 `--config`, skips it) and stdin and stdout are both real terminals with `TERM` set and
-not `dumb`. That is why a restore driven from cron, from a pipe, or over `ssh` without a
-TTY has to use the flag below.
+not `dumb`. Direct entry and terminal requirements are in [CLI reference](CLI_REFERENCE.md#restore-from-backup).
 
 ### Emergency, headless and recovery path: `--restore`
 
-```bash
-# Same workflow, entered directly (launches the TUI by default)
-proxsave --restore
-
-# Force the classic text prompts instead of the TUI
-proxsave --restore --cli
-```
-
-Use the flag when the dashboard is not available or not wanted:
-
-- a broken or freshly reinstalled host where you want to skip straight to the workflow
-- a console with `TERM` unset or set to `dumb`, or `ssh` without a TTY (the workflow
-  falls back to text prompts automatically, exactly as `--cli` would)
-- a rescue shell or a console session with a limited terminal
-- a restore that needs a non-default `--config` path, since any flag skips the menu
-
-A serial console can open the TUI when it meets the terminal checks above. Text
-prompts still require answers; `--cli` does not make the restore unattended.
+If the dashboard cannot open, use the interactive restore entry and terminal options in [CLI reference](CLI_REFERENCE.md). A text prompt still needs operator answers; it is not unattended recovery.
 
 ### The steps, either way
 
@@ -85,16 +68,118 @@ prompts still require answers; `--cli` does not make the restore unattended.
 - **Sufficient disk space**: For decryption and safety backups
 - **Service availability**: Target system services must be accessible
 - **Network isolation**: For cluster restores, node should be isolated
-- **A real terminal**: For the dashboard. Without one, use `proxsave --restore`
+- **A real terminal**: For the dashboard. Without one, use the [direct restore entry](CLI_REFERENCE.md#restore-from-backup), which still requires answers
 
 ---
+
+
+
+
+
+<!-- site-region: restore-selection:start -->
+
+## Choose restore modes and categories
+
+Choose a restore scope before accepting any overwrite. ProxSave restores host configuration from a complete backup set or bundle. It does not restore VM/CT disks, PBS chunks, partitions or filesystem contents outside the backed-up paths, and it does not format disks or import ZFS pools. Recover workload data through its own backup system.
+
+### Prepare the selection
+
+Run `proxsave` without arguments as root on an interactive console and choose **Tools > Restore**. Select the source location, choose the complete backup and supply its AGE key or passphrase if encrypted. Keep the archive and required sidecars together; if a cloud scan is empty, check the selected directory because scanning is non-recursive. ProxSave verifies the stored archive before decryption and analyzes which categories actually contain files. A missing key cannot be replaced by generating a new one.
+
+Restore compares the backup's roles with the destination: PVE, PBS, dual or unknown. Matching roles permit their categories. A partial match filters live restores to shared roles; incompatible product configuration is exported for review. An unknown role produces a warning, and a disjoint known role needs explicit override. Review that warning instead of assuming an override makes the configuration compatible.
+
+### Choose a mode
+
+| Mode | Selection and limits |
+| --- | --- |
+| Full | All available compatible categories, including export-only material. Sensitive categories still use staged apply; Full does not write every archived file directly to the host. |
+| Storage | The available role-specific storage, jobs and common mount/storage categories. On PVE it can include `pve_cluster`; on PBS it includes datastore and maintenance configuration. Export-only categories are excluded. |
+| System base | Network, SSL, SSH, services and filesystem configuration. SSH covers `/root/.ssh/` and `/etc/ssh/`; `/home/` keys require `user_data`. This mode excludes `boot`, `pve_cluster` and export-only categories. |
+| Custom | The available categories you explicitly select, including export-only categories when required. Use this for a limited node-local restore or a selected sensitive apply. |
+
+Preset membership, exact category paths and role-specific differences are in [Restore Modes](#restore-modes) and the [Category System reference](#category-system). A category absent from the archive cannot be selected.
+
+### Understand where changes go
+
+Normal categories write their selected system paths. Export-only categories write a separate timestamped export directory for inspection. Staged categories first extract sensitive configuration into a private stage, then their own apply steps validate and install it through the relevant API or file workflow. Individual file replacement does not make the whole restore a transaction.
+
+The category reference covers all 33 categories. For selection, these are the important boundaries:
+
+| Area | Categories and decision |
+| --- | --- |
+| PVE database and guest exports | `pve_cluster` controls database handling; `pve_config_export` supplies exported `/etc/pve` configuration, including guest definitions when backed up. Full includes the export; Storage and System base do not. |
+| PVE live configuration | `storage_pve`, `pve_jobs`, `pve_notifications`, `pve_access_control`, `pve_firewall`, `pve_ha`, `pve_sdn` have category-specific apply paths. `corosync` and `ceph` require a reviewed cluster/storage scenario. |
+| PBS exports and integrations | `pbs_config` is export-only. `pbs_host`, `datastore_pbs`, `maintenance_pbs`, `pbs_jobs`, `pbs_remotes`, `pbs_notifications`, `pbs_access_control`, `pbs_tape` cover distinct host, datastore, job, credential and tape settings. Datastore definitions do not recover chunks. |
+| Host identity and access | `network`, `ssl`, `ssh`, `accounts`, `user_data` can alter access or identity. Account databases merge while retaining current root/system accounts; validated `/etc/sudoers` is replaced, and `/etc/sudoers.d` is excluded. Access-control categories perform their own 1:1 apply and root@pam safeguard. |
+| Mounts and drivers | `filesystem`, `storage_stack`, `zfs`, `services`, `boot` require destination disk, mount and hardware review. Boot parameters merge into the destination configuration; old boot files are exported. |
+| Scripts and diagnostics | `scripts`, `crontabs`, `proxsave_info` cover custom tools, scheduled tasks and export-only diagnostics. Inspect any restored automation before enabling it. |
+
+### Separate cluster mode from category mode
+
+When selected PVE cluster data is present, choose SAFE or RECOVERY after the scope. SAFE avoids replacing the archived database but confirmed API and pmxcfs applies mutate live configuration, potentially cluster-wide. RECOVERY overwrites the cluster database and requires an offline or isolated target. It refuses a quorate cluster with more than one online node; unreadable quorum permits continuation only when corosync is confirmed inactive or failed. Use [Recover a Proxmox cluster](CLUSTER_RECOVERY.md#recover-a-proxmox-cluster) before making this decision.
+
+### Review before accepting
+
+Check the plan's selected categories, file paths, destination roles and warnings. For guest configuration through SAFE, confirm that the exported source node and eligible batch are the ones you intend. Cluster-wide inventory must be readable and unambiguous; guests owned elsewhere or with another type are skipped, never moved. A stopped-guest file fallback requires a recognized API schema refusal, not any API error.
+
+Proceed to [Restore a host](#restore-a-host) only when those choices are correct. Both the RESTORE gate and overwrite confirmation are required. If the stage later fails, its consumers are skipped, but preceding normal extraction, fstab changes or SAFE operations may already have changed the host. Cancel before confirmation when the plan or compatibility warning is unclear. Direct entry and terminal options are in [CLI reference](CLI_REFERENCE.md#restore-from-backup).
+
+<!-- site-region: restore-selection:end -->
+
+<!-- site-region: restore-host:start -->
+
+## Restore a host
+
+This procedure restores selected Proxmox and operating-system configuration after a reinstall or configuration failure. It does not restore workload disks or PBS backup chunks. Use a compatible destination and a tested backup; reserve space for a decrypted working archive, export material and persistent safety artifacts.
+
+### Prerequisites
+
+- Keep root access through a local console or IPMI. Network, firewall, HA and access-control changes can disconnect SSH or alter running workloads.
+- Install the appropriate PVE/PBS role and confirm the destination hostname, networking and storage plan. For cluster membership, hostname changes or database replacement, use the matching [cluster scenario](CLUSTER_RECOVERY.md#recover-a-proxmox-cluster) first. Never rename a live member as a recovery shortcut.
+- Retrieve the complete archive or bundle and recover its AGE key or passphrase independently. Verify that the destination can read the backup source. Do not rely on restoring credentials that are needed to retrieve or decrypt that same backup.
+- Identify which data disks, shares or ZFS pools are already mounted/imported and which are offline. ProxSave neither formats disks nor imports pools. Have a separate recovery plan for VM disks and PBS chunks.
+
+### Run and review
+
+1. Run `proxsave` without arguments as root on the console and choose **Tools > Restore**. For a console where the dashboard cannot open, follow [CLI restore entry](CLI_REFERENCE.md#restore-from-backup); text prompts still require answers.
+2. Select the source and complete backup. For cloud storage, choose the directory containing the backup, because discovery is non-recursive. Supply the AGE key or passphrase if prompted. Stop on a failed integrity check or missing credential.
+3. Choose the scope using [Choose restore modes and categories](#choose-restore-modes-and-categories). On a live replacement cluster member, use Custom and keep `pve_cluster` unselected; do not accept Full as a substitute for a deliberately limited plan.
+4. If cluster payload is selected, decide SAFE or RECOVERY with the canonical cluster runbook. SAFE changes confirmed live configuration; RECOVERY manages database replacement only after its quorum and isolation guards. Do not proceed after a refused guard.
+5. Review all categories, paths and warnings, then accept the RESTORE gate and separate overwrite confirmation. A successful safety backup is the preferred prerequisite for continuing. If creating it fails, cancel and correct space/permissions rather than assuming the restore can undo later changes.
+
+### Follow the apply decisions
+
+ProxSave extracts normal categories, exports protected categories and applies staged sensitive configuration. A failed or incomplete stage is discarded and its consumers are skipped, including later network installation, firewall, HA and notification repair. This does not undo changes from earlier normal extraction, filesystem merge or SAFE apply. Read the resulting per-category warnings before retrying.
+
+The smart fstab merge proposes safe data/network mounts instead of copying the old file wholesale. Destination UUID/label references and available inventory influence device remapping. The prompt has a 90-second countdown that always answers No at expiry. A matching root/swap can make Yes the Enter-key default; it does not make the timeout accept the merge. Review each proposed mount. Details are in [Smart fstab Merge](#5-smart-etcfstab-merge-optional).
+
+Network files may be installed even if the optional live reload is skipped. A confirmed live network apply arms a 180-second rollback and needs COMMIT before the timer expires. Firewall, HA and access-control applies have their own rollback gates. Keep console access, test connectivity and inspect what each gate actually controls; these timers do not reverse every earlier restore operation. See [Network Safe Apply](#4-network-safe-apply-optional).
+
+During cluster RECOVERY, HA services stop before pmxcfs and PVE API services. The LRM receives a graceful stop and up to 180 seconds; it must never be killed to force progress because its watchdog can fence the host. PVE services restart after database extraction, before remaining restore steps. Verify quorum separately from service startup. PBS restart and staged configuration checks have their own warnings; successful extraction alone is not proof of a healthy service.
+
+Mount-backed PVE storage and PBS datastores can receive temporary read-only bind guards when the backing filesystem is offline and the path resolves to `/`. A failed guard is warning-only and leaves that path unguarded. A real mount shadows a guard; it does not remove it. Bring the correct storage online and use **Recovery > Cleanup guards**, which checks first and offers Apply only when guards are found. Legacy immutable flags can remain pending while a real mount masks their directory. Do not create a datastore layout on the root disk merely to silence an unavailable-storage warning.
+
+For boot or driver restoration, use [Restore IOMMU, VFIO and passthrough settings](#restore-iommu-vfio-and-passthrough-settings). The old host's boot files are never blindly copied over the destination boot configuration. Inspect boot rebuild warnings before rebooting.
+
+### Verify before returning to service
+
+Read the printed session and detailed restore logs, including extraction counts, stage failures and skipped applies. Retain `<BASE_DIR>/restore/TIMESTAMP/` safety/rollback artifacts, normally under `/opt/proxsave/restore/`, until recovery is verified. Temporary working stages are cleaned on normal exit; the persistent safety directory is retained.
+
+Verify relevant PVE/PBS services, the mounted configuration, actual cluster membership/quorum, storage paths and the product UI/API. Check that each storage path resolves to its expected backing filesystem. Confirm SSH/network/firewall access and user permissions, then compare job schedules and notifications. Start guests only after their configuration, device assignments and disks are correct; restored definitions do not prove those resources exist.
+
+If the result reports warnings, establish which operations succeeded before repeating anything. Use [diagnose backup and restore failures](TROUBLESHOOTING.md#diagnose-backup-and-restore-failures) for logs and triage, and the [cluster verification procedure](CLUSTER_RECOVERY.md#post-recovery-verification) when applicable. Exported guest handling and application methods remain in [VM/CT Configuration Restore](#vmct-configuration-restore).
+
+### Roll back only the reviewed scope
+
+The safety archive preserves selected pre-restore files, not a complete inverse of API changes. Never extract it blindly over a running cluster database. Follow [manual rollback prerequisites](#manual-rollback-prerequisites), including verified isolation, graceful HA shutdown, pmxcfs handling and file ownership/mode requirements. Network, firewall, HA and access control have separate rollback files and scope. If those prerequisites cannot be established, stop and prepare a reviewed [support request](TROUBLESHOOTING.md#prepare-a-support-request).
+
+<!-- site-region: restore-host:end -->
 
 ## Overview
 
 Restore is an **interactive, category-based restoration system** that allows selective
 or full restoration of Proxmox configuration files from backup archives. It is reached
-from the dashboard (**Tools > Restore**) or, on a host where the dashboard cannot open,
-with `proxsave --restore`. Both entry points run the same workflow.
+from the dashboard (**Tools > Restore**). For consoles where the dashboard cannot open, use the direct-entry instructions in [CLI reference](CLI_REFERENCE.md#restore-from-backup).
 
 ### How to Use the Restore Docs
 
@@ -107,18 +192,7 @@ The restore documentation is split on purpose:
 
 ### Interactive UI: TUI by default, `--cli` for text prompts
 
-The restore and decrypt workflows run a **Charm TUI** by default, whether they were
-started from the dashboard or from `proxsave --restore` / `proxsave --decrypt`: a
-selector for the restore mode, a multi-select list for CUSTOM categories, and labeled
-confirmation buttons. Add **`--cli`** to force the classic text prompts and numbered
-menus instead (`--cli` works with `--install`, `--new-install`, `--newkey`,
-`--decrypt`, and `--restore`). Both paths run the same restore engine and ask the same
-questions. A `--restore` run that has no interactive terminal uses the text prompts
-automatically, without `--cli`.
-
-The numbered-menu and text transcripts throughout this guide show the `--cli`
-experience because it is the clearest to read on the page; in the default TUI the same
-steps appear as a selector, a multi-select, and buttons.
+Restore uses selectors, multi-select category lists and confirmation screens. Transcripts in the detailed examples show the equivalent text prompts. Both interfaces require operator answers. Direct entry and text-mode options are in [CLI reference](CLI_REFERENCE.md#restore-from-backup).
 
 ### Key Features
 
@@ -192,7 +266,7 @@ PVE + 13 Common) and a **PBS host sees 22** (9 PBS + 13 Common); a `dual` host s
 Each category is handled in one of three ways:
 
 - **Normal**: extracted directly to `/` (system paths) after safety backup
-- **Staged**: extracted to `/tmp/proxsave/restore-stage-*` and then applied in a controlled way (file copy/validation or API apply: `pvesh`/`pveum` on PVE, `proxmox-backup-manager` on PBS); when staged files are written to system paths, ProxSave applies them **atomically** and enforces the final permissions/ownership (including for any created parent directories; not left to `umask`)
+- **Staged**: extracted to `/tmp/proxsave/restore-stage-*` and then applied in a controlled way (file copy/validation or API apply: `pvesh`/`pveum` on PVE, `proxmox-backup-manager` on PBS); when staged files are written to system paths, ProxSave uses **individual file replacement** (not a transaction across categories or API updates) and enforces the final permissions/ownership (including for any created parent directories; not left to `umask`)
 - **Export-only**: extracted to an export directory for manual review (never written to system paths)
 
 ### PVE-Specific Categories (11 categories)
@@ -201,13 +275,13 @@ Each category is handled in one of three ways:
 |----------|------|-------------|-------|
 | `pve_config_export` | PVE Config Export | **Export-only** copy of /etc/pve (never written to system) | `./etc/pve/` |
 | `pve_cluster` | PVE Cluster Configuration | Cluster configuration and database | `./var/lib/pve-cluster/` |
-| `storage_pve` | PVE Storage Configuration | **Staged** storage definitions (applied via API) + VZDump config | `./etc/pve/storage.cfg`<br>`./etc/pve/datacenter.cfg`<br>`./etc/vzdump.conf` |
-| `pve_jobs` | PVE Backup Jobs | **Staged** scheduled backup jobs (applied via API) | `./etc/pve/jobs.cfg`<br>`./etc/pve/vzdump.cron` |
-| `pve_notifications` | PVE Notifications | **Staged** notification targets and matchers (applied via API) | `./etc/pve/notifications.cfg`<br>`./etc/pve/priv/notifications.cfg` |
-| `pve_access_control` | PVE Access Control | **Staged** access control + secrets restored 1:1 via pmxcfs file apply (root@pam safety rail) | `./etc/pve/user.cfg`<br>`./etc/pve/domains.cfg` (when present)<br>`./etc/pve/priv/shadow.cfg`<br>`./etc/pve/priv/token.cfg`<br>`./etc/pve/priv/tfa.cfg` |
-| `pve_firewall` | PVE Firewall | **Staged** firewall rules and node host firewall (pmxcfs file apply + rollback timer) | `./etc/pve/firewall/`<br>`./etc/pve/nodes/*/host.fw` |
-| `pve_ha` | PVE High Availability (HA) | **Staged** HA resources/groups/rules (pmxcfs file apply + rollback timer) | `./etc/pve/ha/resources.cfg`<br>`./etc/pve/ha/groups.cfg`<br>`./etc/pve/ha/rules.cfg` |
-| `pve_sdn` | PVE SDN | **Staged** SDN definitions (pmxcfs file apply; definitions only) | `./etc/pve/sdn/`<br>`./etc/pve/sdn.cfg` |
+| `storage_pve` | PVE Storage Configuration | **Staged** storage definitions (applied via API) + VZDump config | `./etc/pve/storage.cfg`; `./etc/pve/datacenter.cfg`; `./etc/vzdump.conf` |
+| `pve_jobs` | PVE Backup Jobs | **Staged** scheduled backup jobs (applied via API) | `./etc/pve/jobs.cfg`; `./etc/pve/vzdump.cron` |
+| `pve_notifications` | PVE Notifications | **Staged** notification targets and matchers (applied via API) | `./etc/pve/notifications.cfg`; `./etc/pve/priv/notifications.cfg` |
+| `pve_access_control` | PVE Access Control | **Staged** access control + secrets restored 1:1 via pmxcfs file apply (root@pam safety rail) | `./etc/pve/user.cfg`; `./etc/pve/domains.cfg` (when present); `./etc/pve/priv/shadow.cfg`; `./etc/pve/priv/token.cfg`; `./etc/pve/priv/tfa.cfg` |
+| `pve_firewall` | PVE Firewall | **Staged** firewall rules and node host firewall (pmxcfs file apply + rollback timer) | `./etc/pve/firewall/`; `./etc/pve/nodes/*/host.fw` |
+| `pve_ha` | PVE High Availability (HA) | **Staged** HA resources/groups/rules (pmxcfs file apply + rollback timer) | `./etc/pve/ha/resources.cfg`; `./etc/pve/ha/groups.cfg`; `./etc/pve/ha/rules.cfg` |
+| `pve_sdn` | PVE SDN | **Staged** SDN definitions (pmxcfs file apply; definitions only) | `./etc/pve/sdn/`; `./etc/pve/sdn.cfg` |
 | `corosync` | Corosync Configuration | Cluster communication settings | `./etc/corosync/` |
 | `ceph` | Ceph Configuration | Ceph storage cluster config | `./etc/ceph/` |
 
@@ -222,32 +296,32 @@ API apply is automatic for supported PBS staged categories, and file-based fallb
 | Category | Name | Description | Paths |
 |----------|------|-------------|-------|
 | `pbs_config` | PBS Config Export | **Export-only** copy of /etc/proxmox-backup (never written to system) | `./etc/proxmox-backup/` |
-| `pbs_host` | PBS Host & Integrations | **Staged** node settings, ACME, proxy, metric servers and traffic control (API/file apply) | `./etc/proxmox-backup/node.cfg`<br>`./etc/proxmox-backup/proxy.cfg`<br>`./etc/proxmox-backup/acme/accounts/`<br>`./etc/proxmox-backup/acme/plugins.cfg`<br>`./etc/proxmox-backup/metricserver.cfg`<br>`./etc/proxmox-backup/traffic-control.cfg`<br>`./var/lib/proxsave-info/commands/pbs/node_config.json`<br>`./var/lib/proxsave-info/commands/pbs/acme_accounts.json`<br>`./var/lib/proxsave-info/commands/pbs/acme_plugins.json`<br>`./var/lib/proxsave-info/commands/pbs/acme_account_*_info.json`<br>`./var/lib/proxsave-info/commands/pbs/acme_plugin_*_config.json`<br>`./var/lib/proxsave-info/commands/pbs/traffic_control.json` |
-| `datastore_pbs` | PBS Datastore Configuration | **Staged** datastore definitions (incl. S3 endpoints) (API/file apply) | `./etc/proxmox-backup/datastore.cfg`<br>`./etc/proxmox-backup/s3.cfg`<br>`./var/lib/proxsave-info/commands/pbs/datastore_list.json`<br>`./var/lib/proxsave-info/commands/pbs/datastore_*_status.json`<br>`./var/lib/proxsave-info/commands/pbs/s3_endpoints.json`<br>`./var/lib/proxsave-info/commands/pbs/s3_endpoint_*_buckets.json`<br>`./var/lib/proxsave-info/commands/pbs/pbs_datastore_inventory.json`<br>Note: `PBS_DATASTORE_PATH` override scan roots are inventory context only and are not recreated as datastore definitions during restore. |
+| `pbs_host` | PBS Host & Integrations | **Staged** node settings, ACME, proxy, metric servers and traffic control (API/file apply) | `./etc/proxmox-backup/node.cfg`; `./etc/proxmox-backup/proxy.cfg`; `./etc/proxmox-backup/acme/accounts/`; `./etc/proxmox-backup/acme/plugins.cfg`; `./etc/proxmox-backup/metricserver.cfg`; `./etc/proxmox-backup/traffic-control.cfg`; `./var/lib/proxsave-info/commands/pbs/node_config.json`; `./var/lib/proxsave-info/commands/pbs/acme_accounts.json`; `./var/lib/proxsave-info/commands/pbs/acme_plugins.json`; `./var/lib/proxsave-info/commands/pbs/acme_account_*_info.json`; `./var/lib/proxsave-info/commands/pbs/acme_plugin_*_config.json`; `./var/lib/proxsave-info/commands/pbs/traffic_control.json` |
+| `datastore_pbs` | PBS Datastore Configuration | **Staged** datastore definitions (incl. S3 endpoints) (API/file apply) | `./etc/proxmox-backup/datastore.cfg`; `./etc/proxmox-backup/s3.cfg`; `./var/lib/proxsave-info/commands/pbs/datastore_list.json`; `./var/lib/proxsave-info/commands/pbs/datastore_*_status.json`; `./var/lib/proxsave-info/commands/pbs/s3_endpoints.json`; `./var/lib/proxsave-info/commands/pbs/s3_endpoint_*_buckets.json`; `./var/lib/proxsave-info/commands/pbs/pbs_datastore_inventory.json`; Note: `PBS_DATASTORE_PATH` override scan roots are inventory context only and are not recreated as datastore definitions during restore. |
 | `maintenance_pbs` | PBS Maintenance | Maintenance settings | `./etc/proxmox-backup/maintenance.cfg` |
-| `pbs_jobs` | PBS Jobs | **Staged** sync/verify/prune jobs (API/file apply) | `./etc/proxmox-backup/sync.cfg`<br>`./etc/proxmox-backup/verification.cfg`<br>`./etc/proxmox-backup/prune.cfg`<br>`./var/lib/proxsave-info/commands/pbs/sync_jobs.json`<br>`./var/lib/proxsave-info/commands/pbs/verification_jobs.json`<br>`./var/lib/proxsave-info/commands/pbs/prune_jobs.json`<br>`./var/lib/proxsave-info/commands/pbs/gc_jobs.json` |
-| `pbs_remotes` | PBS Remotes | **Staged** remotes for sync/verify (may include credentials) (API/file apply) | `./etc/proxmox-backup/remote.cfg`<br>`./var/lib/proxsave-info/commands/pbs/remote_list.json` |
-| `pbs_notifications` | PBS Notifications | **Staged** notification targets and matchers (API/file apply) | `./etc/proxmox-backup/notifications.cfg`<br>`./etc/proxmox-backup/notifications-priv.cfg`<br>`./var/lib/proxsave-info/commands/pbs/notification_targets.json`<br>`./var/lib/proxsave-info/commands/pbs/notification_matchers.json`<br>`./var/lib/proxsave-info/commands/pbs/notification_endpoints_*.json`<br>Note: restore rebuilds targets and matchers from the two `.cfg` files only. The `notification_*.json` listings are captured as context and are never read back during restore. |
-| `pbs_access_control` | PBS Access Control | **Staged** access control + secrets restored 1:1 (root@pam safety rail) | `./etc/proxmox-backup/user.cfg`<br>`./etc/proxmox-backup/domains.cfg`<br>`./etc/proxmox-backup/acl.cfg`<br>`./etc/proxmox-backup/token.cfg`<br>`./etc/proxmox-backup/shadow.json`<br>`./etc/proxmox-backup/token.shadow`<br>`./etc/proxmox-backup/tfa.json`<br>`./var/lib/proxsave-info/commands/pbs/user_list.json`<br>`./var/lib/proxsave-info/commands/pbs/realms_ldap.json`<br>`./var/lib/proxsave-info/commands/pbs/realms_ad.json`<br>`./var/lib/proxsave-info/commands/pbs/realms_openid.json`<br>`./var/lib/proxsave-info/commands/pbs/acl_list.json` |
-| `pbs_tape` | PBS Tape Backup | **Staged** tape config, jobs and encryption keys | `./etc/proxmox-backup/tape.cfg`<br>`./etc/proxmox-backup/tape-job.cfg`<br>`./etc/proxmox-backup/media-pool.cfg`<br>`./etc/proxmox-backup/tape-encryption-keys.json`<br>`./var/lib/proxsave-info/commands/pbs/tape_drives.json`<br>`./var/lib/proxsave-info/commands/pbs/tape_changers.json`<br>`./var/lib/proxsave-info/commands/pbs/tape_pools.json` |
+| `pbs_jobs` | PBS Jobs | **Staged** sync/verify/prune jobs (API/file apply) | `./etc/proxmox-backup/sync.cfg`; `./etc/proxmox-backup/verification.cfg`; `./etc/proxmox-backup/prune.cfg`; `./var/lib/proxsave-info/commands/pbs/sync_jobs.json`; `./var/lib/proxsave-info/commands/pbs/verification_jobs.json`; `./var/lib/proxsave-info/commands/pbs/prune_jobs.json`; `./var/lib/proxsave-info/commands/pbs/gc_jobs.json` |
+| `pbs_remotes` | PBS Remotes | **Staged** remotes for sync/verify (may include credentials) (API/file apply) | `./etc/proxmox-backup/remote.cfg`; `./var/lib/proxsave-info/commands/pbs/remote_list.json` |
+| `pbs_notifications` | PBS Notifications | **Staged** notification targets and matchers (API/file apply) | `./etc/proxmox-backup/notifications.cfg`; `./etc/proxmox-backup/notifications-priv.cfg`; `./var/lib/proxsave-info/commands/pbs/notification_targets.json`; `./var/lib/proxsave-info/commands/pbs/notification_matchers.json`; `./var/lib/proxsave-info/commands/pbs/notification_endpoints_*.json`; Note: restore rebuilds targets and matchers from the two `.cfg` files only. The `notification_*.json` listings are captured as context and are never read back during restore. |
+| `pbs_access_control` | PBS Access Control | **Staged** access control + secrets restored 1:1 (root@pam safety rail) | `./etc/proxmox-backup/user.cfg`; `./etc/proxmox-backup/domains.cfg`; `./etc/proxmox-backup/acl.cfg`; `./etc/proxmox-backup/token.cfg`; `./etc/proxmox-backup/shadow.json`; `./etc/proxmox-backup/token.shadow`; `./etc/proxmox-backup/tfa.json`; `./var/lib/proxsave-info/commands/pbs/user_list.json`; `./var/lib/proxsave-info/commands/pbs/realms_ldap.json`; `./var/lib/proxsave-info/commands/pbs/realms_ad.json`; `./var/lib/proxsave-info/commands/pbs/realms_openid.json`; `./var/lib/proxsave-info/commands/pbs/acl_list.json` |
+| `pbs_tape` | PBS Tape Backup | **Staged** tape config, jobs and encryption keys | `./etc/proxmox-backup/tape.cfg`; `./etc/proxmox-backup/tape-job.cfg`; `./etc/proxmox-backup/media-pool.cfg`; `./etc/proxmox-backup/tape-encryption-keys.json`; `./var/lib/proxsave-info/commands/pbs/tape_drives.json`; `./var/lib/proxsave-info/commands/pbs/tape_changers.json`; `./var/lib/proxsave-info/commands/pbs/tape_pools.json` |
 
 ### Common Categories (13 categories)
 
 | Category | Name | Description | Paths |
 |----------|------|-------------|-------|
 | `filesystem` | Filesystem Configuration | Mount points and filesystems (/etc/fstab) - WARNING: Critical for boot | `./etc/fstab` |
-| `storage_stack` | Storage Stack (Mounts/Targets) | Storage stack configuration used by mounts (iSCSI/LVM/MDADM/multipath/autofs/crypttab) | `./etc/crypttab`<br>`./etc/iscsi/`<br>`./var/lib/iscsi/`<br>`./etc/multipath/`<br>`./etc/multipath.conf`<br>`./etc/mdadm/`<br>`./etc/lvm/backup/`<br>`./etc/lvm/archive/`<br>`./etc/autofs.conf`<br>`./etc/auto.master`<br>`./etc/auto.master.d/`<br>`./etc/auto.*`<br>`./etc/keys/`<br>`./etc/luks-keys/`<br>`./etc/cryptsetup-keys.d/` |
-| `network` | Network Configuration | Network interfaces and routing | `./etc/network/`<br>`./etc/netplan/`<br>`./etc/systemd/network/`<br>`./etc/NetworkManager/system-connections/`<br>`./etc/hosts`<br>`./etc/hostname`<br>`./etc/resolv.conf`<br>`./etc/cloud/cloud.cfg.d/99-disable-network-config.cfg`<br>`./etc/dnsmasq.d/lxc-vmbr1.conf` |
-| `ssl` | SSL Certificates | SSL/TLS certificates and keys | `./etc/ssl/`<br>`./etc/proxmox-backup/proxy.pem`<br>`./etc/proxmox-backup/proxy.key`<br>`./etc/proxmox-backup/ssl/` |
-| `ssh` | SSH Configuration | SSH keys and authorized_keys | `./root/.ssh/`<br>`./etc/ssh/` |
-| `scripts` | Custom Scripts | User scripts and tools | `./usr/local/bin/`<br>`./usr/local/sbin/` |
-| `crontabs` | Scheduled Tasks | Cron jobs and systemd timers | `./etc/cron.d/`<br>`./etc/crontab`<br>`./var/spool/cron/` |
-| `services` | System Services | Systemd service configs and related system settings. `/etc/modprobe.d/zfs.conf` is **not written** when this host has its own and it differs: the PVE installer sets `zfs_arc_max` there to 10% of the RAM it found, so the old machine's limit would cap the ARC on more RAM or take memory from the guests on less. A warning gives both values and the backup's copy goes to the export directory. A host without a `zfs.conf` gets the backup's | `./etc/systemd/system/`<br>`./etc/default/`<br>`./etc/udev/rules.d/`<br>`./etc/apt/`<br>`./etc/logrotate.d/`<br>`./etc/timezone`<br>`./etc/sysctl.conf`<br>`./etc/sysctl.d/`<br>`./etc/modprobe.d/`<br>`./etc/modules`<br>`./etc/iptables/`<br>`./etc/nftables.conf`<br>`./etc/nftables.d/` |
-| `accounts` | System Accounts & Auth (WARNING) | Local system accounts and sudo policy, applied with a **safe merge** for `passwd`/`group`/`shadow`/`gshadow` that preserves the current host root and system accounts. `/etc/sudoers` is **replaced wholesale** with the backed-up file once `visudo -c` passes, so sudo rules added since the backup are lost; `/etc/sudoers.d` is not part of the category | `./etc/passwd`<br>`./etc/group`<br>`./etc/shadow`<br>`./etc/gshadow`<br>`./etc/sudoers` |
-| `user_data` | User Data (Home Directories) | Root and user home directories (/root and /home) | `./root/`<br>`./home/` |
-| `zfs` | ZFS Configuration | ZFS pool cache and configs. `/etc/hostid` is **not written** when this host has ZFS pools imported under a different hostid, or when its pools cannot be listed: a pool records the hostid it was imported under, and an initramfs rebuilt with another one refuses to import it (for a root pool, the host stops at boot). A warning gives both values. With no pool imported it is written, so pools on disks moved from the old host import under their own hostid. The same rule keeps this host's `/etc/zfs/zpool.cache` and `/etc/zfs/zfs-list.cache/`: another host's cache makes `zfs-import-cache.service` fail at boot and leaves this host's data pools out (PVE brings back a pool that is a `zfspool` storage; a PBS datastore or a manually mounted pool stays out) | `./etc/zfs/`<br>`./etc/hostid` |
-| `boot` | Boot Configuration (Kernel Command Line) | Kernel parameters of the backed-up host (IOMMU, VFIO, ...) **merged** into this host's boot configuration, then initramfs and bootloader rebuilt; see [Kernel Command Line Merge](#11-kernel-command-line-merge-boot-category). Not in BASE or STORAGE | `./var/lib/proxsave-info/commands/system/kernel_cmdline.txt` (the source)<br>`./etc/default/grub`, `./etc/kernel/cmdline` (the live files the merge may write, listed so the safety backup covers them) |
-| `proxsave_info` | ProxSave Diagnostics (Export Only) | **Export-only** ProxSave command outputs and inventory reports, and the backed-up host's boot files (GRUB, kernel command line, ESP list) (never written to system) | `./var/lib/proxsave-info/`<br>`./manifest.json`<br>`./etc/default/grub`<br>`./etc/default/grub.d/`<br>`./etc/kernel/cmdline`<br>`./etc/kernel/proxmox-boot-uuids` |
+| `storage_stack` | Storage Stack (Mounts/Targets) | Storage stack configuration used by mounts (iSCSI/LVM/MDADM/multipath/autofs/crypttab) | `./etc/crypttab`; `./etc/iscsi/`; `./var/lib/iscsi/`; `./etc/multipath/`; `./etc/multipath.conf`; `./etc/mdadm/`; `./etc/lvm/backup/`; `./etc/lvm/archive/`; `./etc/autofs.conf`; `./etc/auto.master`; `./etc/auto.master.d/`; `./etc/auto.*`; `./etc/keys/`; `./etc/luks-keys/`; `./etc/cryptsetup-keys.d/` |
+| `network` | Network Configuration | Network interfaces and routing | `./etc/network/`; `./etc/netplan/`; `./etc/systemd/network/`; `./etc/NetworkManager/system-connections/`; `./etc/hosts`; `./etc/hostname`; `./etc/resolv.conf`; `./etc/cloud/cloud.cfg.d/99-disable-network-config.cfg`; `./etc/dnsmasq.d/lxc-vmbr1.conf` |
+| `ssl` | SSL Certificates | SSL/TLS certificates and keys | `./etc/ssl/`; `./etc/proxmox-backup/proxy.pem`; `./etc/proxmox-backup/proxy.key`; `./etc/proxmox-backup/ssl/` |
+| `ssh` | SSH Configuration | SSH keys and authorized_keys | `./root/.ssh/`; `./etc/ssh/` |
+| `scripts` | Custom Scripts | User scripts and tools | `./usr/local/bin/`; `./usr/local/sbin/` |
+| `crontabs` | Scheduled Tasks | Cron jobs and systemd timers | `./etc/cron.d/`; `./etc/crontab`; `./var/spool/cron/`; `./etc/cron.daily/`; `./etc/cron.hourly/`; `./etc/cron.weekly/`; `./etc/cron.monthly/` |
+| `services` | System Services | Systemd service configs and related system settings. `/etc/modprobe.d/zfs.conf` is **not written** when this host has its own and it differs: the PVE installer sets `zfs_arc_max` there to 10% of the RAM it found, so the old machine's limit would cap the ARC on more RAM or take memory from the guests on less. A warning gives both values and the backup's copy goes to the export directory. A host without a `zfs.conf` gets the backup's | `./etc/systemd/system/`; `./etc/default/`; `./etc/udev/rules.d/`; `./etc/apt/`; `./etc/logrotate.d/`; `./etc/timezone`; `./etc/sysctl.conf`; `./etc/sysctl.d/`; `./etc/modprobe.d/`; `./etc/modules`; `./etc/iptables/`; `./etc/nftables.conf`; `./etc/nftables.d/` |
+| `accounts` | System Accounts & Auth (WARNING) | Local system accounts and sudo policy, applied with a **safe merge** for `passwd`/`group`/`shadow`/`gshadow` that preserves the current host root and system accounts. `/etc/sudoers` is **replaced wholesale** with the backed-up file once `visudo -c` passes, so sudo rules added since the backup are lost; `/etc/sudoers.d` is not part of the category | `./etc/passwd`; `./etc/group`; `./etc/shadow`; `./etc/gshadow`; `./etc/sudoers` |
+| `user_data` | User Data (Home Directories) | Root and user home directories (/root and /home) | `./root/`; `./home/` |
+| `zfs` | ZFS Configuration | ZFS pool cache and configs. `/etc/hostid` is **not written** when this host has ZFS pools imported under a different hostid, or when its pools cannot be listed: a pool records the hostid it was imported under, and an initramfs rebuilt with another one refuses to import it (for a root pool, the host stops at boot). A warning gives both values. With no pool imported it is written, so pools on disks moved from the old host import under their own hostid. The same rule keeps this host's `/etc/zfs/zpool.cache` and `/etc/zfs/zfs-list.cache/`: another host's cache makes `zfs-import-cache.service` fail at boot and leaves this host's data pools out (PVE brings back a pool that is a `zfspool` storage; a PBS datastore or a manually mounted pool stays out) | `./etc/zfs/`; `./etc/hostid` |
+| `boot` | Boot Configuration (Kernel Command Line) | Kernel parameters of the backed-up host (IOMMU, VFIO, ...) **merged** into this host's boot configuration, then initramfs and bootloader rebuilt; see [Kernel Command Line Merge](#11-kernel-command-line-merge-boot-category). Not in BASE or STORAGE | `./var/lib/proxsave-info/commands/system/kernel_cmdline.txt` (the source); `./etc/default/grub`, `./etc/kernel/cmdline` (the live files the merge may write, listed so the safety backup covers them) |
+| `proxsave_info` | ProxSave Diagnostics (Export Only) | **Export-only** ProxSave command outputs and inventory reports, and the backed-up host's boot files (GRUB, kernel command line, ESP list) (never written to system) | `./var/lib/proxsave-info/`; `./manifest.json`; `./etc/default/grub`; `./etc/default/grub.d/`; `./etc/kernel/cmdline`; `./etc/kernel/proxmox-boot-uuids` |
 
 ### Category Availability
 
@@ -382,7 +456,7 @@ Select restore mode:
 **Categories Included**:
 - `network` - Network interfaces, hostname, routing
 - `ssl` - SSL/TLS certificates
-- `ssh` - SSH daemon configuration (`/etc/ssh`) and SSH keys (root/home users)
+- `ssh` - SSH daemon configuration (`/etc/ssh`) and root SSH keys (`/root/.ssh/`); keys under `/home/` require the separate `user_data` category
 - `services` - Systemd service configs and udev rules
 - `filesystem` - /etc/fstab (Smart merge prompt)
 
@@ -406,7 +480,7 @@ Select restore mode:
 
 **Interactive Menu**:
 ```text
-Available categories:
+- categories:
   [1] [ ] PVE Cluster Configuration
       Proxmox VE cluster configuration and database
   [2] [ ] Network Configuration
@@ -431,6 +505,8 @@ Your selection: c      # Continue to restore plan
 ```
 
 ---
+
+
 
 ## Complete Workflow
 
@@ -490,9 +566,9 @@ Phase 7: Restore Plan & Confirmation
   └─ User types "RESTORE" to confirm
 
 Phase 8: Safety Backup
-  ├─ Create /tmp backup of files to be overwritten
+  ├─ Create persistent <BASE_DIR>/restore/TIMESTAMP/ safety backup
   ├─ Preserve permissions, ownership, timestamps
-  └─ Display rollback command
+  └─ Display retained safety archive; follow manual rollback prerequisites
 
 Phase 9: Service Management (PVE Cluster Restore)
   ├─ Detect if pve_cluster category selected (RECOVERY mode)
@@ -554,7 +630,7 @@ Select the backup source:
 than from its filename:
 
 ```text
-Available backups:
+- backups:
   [1] 2025-11-20 14:30:52 • Host pve01 • ENCRYPTED • Tool v1.2.0 • PVE v8.2.4 (standalone)
   [2] 2025-11-19 02:00:15 • Host pve01 • ENCRYPTED • Tool v1.2.0 • PVE v8.2.4 (standalone)
   [0] Exit
@@ -586,12 +662,12 @@ Checksum verified successfully.
 ```text
 Current system type: Proxmox Virtual Environment (PVE)
 Backup system type: Proxmox Virtual Environment (PVE)
-✓ Systems are compatible
+Yes Systems are compatible
 ```
 
 **Partial-compatibility warning**:
 ```text
-⚠ WARNING: Partial compatibility detected
+Warning: WARNING: Partial compatibility detected
 
 Current system: Proxmox Virtual Environment (PVE)
 Backup source: Proxmox VE + Proxmox Backup Server (DUAL)
@@ -603,7 +679,7 @@ ProxSave will continue with the categories compatible with the current host:
 
 **Incompatibility warning**:
 ```text
-⚠ WARNING: Potential incompatibility detected!
+Warning: WARNING: Potential incompatibility detected!
 
 Current system: Proxmox Backup Server (PBS)
 Backup source: Proxmox Virtual Environment (PVE)
@@ -695,7 +771,7 @@ Categories to restore:
   • /etc/zfs/
   • /etc/hostid
 
-⚠ WARNING:
+Warning: WARNING:
   • Existing files at these locations will be OVERWRITTEN
   • A safety backup will be created before restoration
   • Services may need to be restarted after restoration
@@ -834,510 +910,67 @@ Storage directories recreated successfully.
 
 ## PVE Restore: Standalone vs Cluster
 
-The restore workflow behaves differently based on whether the backup originated from a **standalone PVE node** or a **cluster member**. This is critical for understanding what happens during restore.
+Use [cluster decisions and recovery scenarios](CLUSTER_RECOVERY.md#cluster-restore-modes-safe-vs-recovery). SAFE applies live configuration; RECOVERY replaces the database only on an offline or isolated target.
 
 ### Detection
 
-The prompt is decided by the **payload**, not by the manifest: it appears whenever the archive carries anything under the `pve_cluster` category (`/var/lib/pve-cluster/`) and that category is part of the restore. The manifest's `ClusterMode` field is only used to log a warning when the two disagree.
-
-That matters because a standalone PVE backup normally does carry that payload: `config.db` is collected whenever `BACKUP_CLUSTER_CONFIG` is on, which is the default, and the PVE info files are written under `var/lib/pve-cluster/info` on every PVE run. So **expect the SAFE/RECOVERY prompt on a standalone PVE restore too**.
+See the [cluster recovery procedure](CLUSTER_RECOVERY.md#cluster-restore-modes-safe-vs-recovery).
 
 ### Behavior Comparison
 
-| Scenario | SAFE/RECOVERY Prompt | Restore Behavior |
-|----------|----------------------|------------------|
-| **No `pve_cluster` payload, or category not selected** | NOT shown | Nothing cluster-related is restored |
-| **Payload present, SAFE** | Shown, choice 1 | Export only, no `config.db` write, `pvesh` API apply |
-| **Payload present, RECOVERY** | Shown, choice 2 | Database restored directly |
+See the [cluster recovery procedure](CLUSTER_RECOVERY.md#cluster-restore-modes-safe-vs-recovery).
 
 ### Standalone Restore
 
-On a standalone node the prompt still appears, and the answer that does what you want is **RECOVERY**: it writes `config.db` back. There is no split-brain risk to protect against on a single node.
-
-SAFE never writes `config.db`: it exports the cluster database and reapplies the rest of the selected categories through `pvesh`. If you are rebuilding a node whose pmxcfs is empty or broken, that is not what you want, so answer RECOVERY. On a standalone node that is already running, where you only want the backed-up configuration merged back in, SAFE is still the safer answer.
-
-With RECOVERY selected:
-
-1. **Direct database restore** - `/var/lib/pve-cluster/config.db` is overwritten
-2. **Automatic service management** - PVE services are stopped, database restored, services restarted
-3. **No isolation required** - Single node has no split-brain risk
-
-```text
-Detected system type: Proxmox Virtual Environment (PVE)
-
-Cluster payload detected. Choose how to restore the cluster database:
-  [1] SAFE  [2] RECOVERY
-> 2
-
-Preparing system for cluster database restore: stopping PVE services...
-Stopping pve-ha-lrm, pve-ha-crm, pve-cluster, pvedaemon, pveproxy, pvestatd...
-Unmounting /etc/pve...
-Extracting /var/lib/pve-cluster/config.db...
-Restarting PVE services (pve-cluster, pvedaemon, pveproxy, pvestatd, pve-ha-crm, pve-ha-lrm)...
-```
+See the [cluster recovery procedure](CLUSTER_RECOVERY.md#cluster-restore-modes-safe-vs-recovery).
 
 ### Cluster Restore - SAFE Mode
 
-When restoring from a **cluster backup** and selecting **SAFE mode** (option 1):
-
-1. **Files are EXPORTED only** - NOT written to system paths
-2. **Database is NOT modified** - Current cluster state preserved
-3. **pvesh API apply** - User can selectively apply configurations:
-   - VM/CT configs applied one by one
-   - Storage definitions applied individually
-   - Datacenter config applied if desired
-4. **Non-destructive** - Safe for active clusters
-
-```text
-Cluster backup detected. Choose how to restore:
-  [1] SAFE: Export cluster files only (apply via API)  ← SELECTED
-  [2] RECOVERY: Full database restore
-
-Exporting 1 export-only category(ies) to: /opt/proxsave/proxmox-config-export-*/
-
-SAFE cluster restore: applying configs (node=pve01)
-Found 5 VM/CT configs for node pve01
-Apply all VM/CT configs via pvesh? (y/N): y
-Applied VM/CT config 100 (webserver)
-Applied VM/CT config 101 (database)
-...
-```
+See the [cluster recovery procedure](CLUSTER_RECOVERY.md#cluster-restore-modes-safe-vs-recovery).
 
 ### Cluster Restore - RECOVERY Mode
 
-When restoring from a **cluster backup** and selecting **RECOVERY mode** (option 2):
-
-1. **Direct database restore** - The selected `pve_cluster` payload, including `config.db`, is restored
-2. **WARNING displayed** - User must confirm node isolation
-3. **Split-brain risk** - CRITICAL to isolate node before proceeding
-4. **Quorum probe** - A node that is a member of a quorate cluster with more than 1 node online is refused before anything is stopped or written: its cluster would replace the restored `config.db` as soon as `pve-cluster` starts again (see [Phase 6](#phase-6-cluster-restore-mode-pve-backups-carrying-pve_cluster))
-
-```text
-Cluster backup detected. Choose how to restore:
-  [1] SAFE: Export cluster files only
-  [2] RECOVERY: Full database restore  ← SELECTED
-
-WARNING: Selected RECOVERY cluster restore
-Ensure other nodes are ISOLATED before proceeding!
-
-Preparing system for cluster database restore...
-[Same flow as Standalone]
-```
-
-On a node that is still quorate with its peers, the run stops at this point instead:
-
-```text
-Cluster RECOVERY refused - quorate cluster, 3 nodes online: its copy would replace the restored config.db
-```
+See the [cluster recovery procedure](CLUSTER_RECOVERY.md#cluster-restore-modes-safe-vs-recovery).
 
 ### When to Use Each Mode
 
-| Use Case | Recommended Mode |
-|----------|------------------|
-| Recovering a single standalone node | RECOVERY (the prompt still appears) |
-| Recovering specific VM configs from cluster backup | Cluster SAFE |
-| Recovering storage definitions from cluster backup | Cluster SAFE |
-| Full disaster recovery, cluster destroyed | Cluster RECOVERY |
-| Single surviving node after cluster failure | Cluster RECOVERY + isolate first |
-
----
+See the [cluster recovery procedure](CLUSTER_RECOVERY.md#cluster-restore-modes-safe-vs-recovery).
 
 ## Cluster Database Restore
 
-Restoring the PVE cluster database (`/var/lib/pve-cluster/config.db`) requires special handling due to the cluster filesystem architecture.
+See the [cluster recovery procedure](CLUSTER_RECOVERY.md#cluster-restore-modes-safe-vs-recovery).
 
 ### Understanding PVE Cluster Filesystem
 
-**Architecture**:
-```text
-pmxcfs (daemon)
-    ↓
-reads/writes config.db (/var/lib/pve-cluster/config.db)
-    ↓
-presents as FUSE mount (/etc/pve)
-    ↓
-syncs via corosync (cluster communication)
-```
-
-**Critical Files**:
-- `/var/lib/pve-cluster/config.db` - SQLite database (actual storage)
-- `/etc/pve/` - FUSE mount (view into database)
-
-**Why Special Handling Needed**:
-- Cannot write to `/etc/pve` directly (it's a FUSE mount)
-- Must stop pmxcfs to safely replace config.db
-- Must ensure cluster synchronization after restore
+See the [cluster recovery procedure](CLUSTER_RECOVERY.md#cluster-restore-modes-safe-vs-recovery).
 
 ### Cluster Restore Modes: SAFE vs RECOVERY
 
-When the analyzed archive contains the `pve_cluster` payload and that category is selected, the restore workflow presents two options. The manifest's `ClusterMode` is used only to warn when its claim disagrees with the payload:
-
-```text
-Cluster backup detected. Choose how to restore the cluster database:
-  [1] SAFE: Do NOT write /var/lib/pve-cluster/config.db. Export cluster files only (manual/apply via API).
-  [2] RECOVERY: Restore full cluster database (/var/lib/pve-cluster). Use only when cluster is offline/isolated.
-  [0] Exit
-```
-
-#### Option 1: SAFE Mode (Recommended for Active Clusters)
-
-**What it does**:
-- Does **NOT** write to `/var/lib/pve-cluster/config.db`
-- Redirects the `pve_cluster` category into an export directory for review
-- Offers to apply configurations via `pvesh` API (non-destructive)
-- Preserves your current running cluster state
-
-> SAFE only redirects `pve_cluster`, whose paths are `./var/lib/pve-cluster/`. The `pvesh` apply below reads `/etc/pve/nodes/...`, `storage.cfg` and `datacenter.cfg` from the export, and those arrive only with the `pve_config_export` category. FULL includes it, CUSTOM includes it if you tick it, and **STORAGE and SYSTEM BASE strip it**, so in those modes the apply reports "No VM/CT configs found" and "No storage.cfg found in export" and does nothing.
-
-**When to use**:
-- Cluster is still operational
-- You want to selectively restore specific VMs or storage definitions
-- You're recovering individual configurations, not the entire cluster
-- You want to review changes before applying them
-
-**Post-restore actions (SAFE mode)**:
-After export, the workflow offers interactive options to apply configurations via `pvesh`:
-1. **VM/CT configs**: Scans exported configs (under `/etc/pve/nodes/<node>/...`) and first loads the cluster-wide guest inventory. Existing guests on the current node are applied via `pvesh set /nodes/<node>/qemu|lxc/<vmid>/config` (create-only keys such as `meta`/`ostemplate` are stripped; if the set fails, the exported conf is written into pmxcfs only when `status/current` explicitly reports `stopped`). A VMID absent cluster-wide is registered by writing its conf; a VMID owned by another node or present as the other guest type is skipped without mutation. An unavailable or invalid inventory stops the entire guest batch before mutation.
-   - If the target node hostname differs from the hostname stored in the backup (common after hardware migration / reinstall), ProxSave detects the mismatch and prompts you to select the exported node directory to import from (instead of silently reporting "No VM/CT configs found").
-2. **Storage configuration**: applies each `storage.cfg` block via `pvesh create /storage --storage=<id> --type=<type> ...`, falling back to `pvesh set /storage/<id>` when the definition already exists (as `local` always does)
-3. **Datacenter configuration**: writes `datacenter.cfg` into pmxcfs (`/etc/pve`), which replicates it cluster-wide - the API has no whole-file endpoint for it
-
-Each action prompts for confirmation before execution.
-
-#### Option 2: RECOVERY Mode (Full Cluster Restore)
-
-**What it does**:
-- Probes the quorum with `pvecm status` and refuses a quorate cluster with more than 1 node online
-- Stops the HA services (pve-ha-lrm, pve-ha-crm), then the PVE cluster services (pve-cluster, pvedaemon, pveproxy, pvestatd)
-- Unmounts `/etc/pve` FUSE filesystem
-- Writes directly to `/var/lib/pve-cluster/config.db`
-- Restarts the services with the restored configuration right after that write, before the later restore steps
-- Avoids restoring files under `/etc/pve/*` while pmxcfs is stopped/unmounted (to prevent "shadowed" writes on the underlying disk). Those files are expected to come from the restored `config.db`.
-
-**When to use**:
-- Complete disaster recovery
-- Cluster is completely offline or destroyed
-- Node is isolated from other cluster members
-- You have no working cluster to preserve
-
-**CRITICAL WARNING**:
-- Using RECOVERY mode on a node that is still part of an active cluster can cause split-brain
-- Always isolate the node first (stop corosync, disconnect network)
-- Other nodes may need to be removed and rejoined after restore
+See the [cluster recovery procedure](CLUSTER_RECOVERY.md#cluster-restore-modes-safe-vs-recovery).
 
 ### Prerequisites
 
-**CRITICAL: Before starting restore**:
-
-1. **Isolate Node** (for multi-node clusters):
-   ```bash
-   # Stop cluster communication
-   systemctl stop corosync
-
-   # Or disconnect from cluster network
-   # ip link set <cluster-interface> down
-   ```
-
-2. **Verify Node Isolation**:
-   ```bash
-   pvecm nodes
-   # Should show only this node or error
-   ```
-
-3. **Document Current State**:
-   ```bash
-   pvecm status > /root/cluster-state-before-restore.txt
-   pvesm status > /root/storage-state-before-restore.txt
-   ```
-
-4. **Backup Current State** (in addition to automatic safety backup):
-   ```bash
-   tar -czf /root/manual-cluster-backup.tar.gz /var/lib/pve-cluster/
-   ```
+See the [cluster recovery procedure](CLUSTER_RECOVERY.md#pre-recovery-checklist).
 
 ### Automatic Service Management
 
-When restoring the `pve_cluster` category, the workflow automatically:
-
-**Stops services** (in order):
-```text
-1. pve-ha-lrm   → Freezes HA resources, closes the watchdog cleanly (no-block stop, up to 180 s, never killed)
-2. pve-ha-crm   → Releases the CRM lock; the master moves to another node
-3. pve-cluster  → Stops pmxcfs, unmounts /etc/pve
-4. pvedaemon    → Stops API daemon
-5. pveproxy     → Stops web interface
-6. pvestatd     → Stops statistics collection
-```
-
-The HA services go first because `pve-ha-lrm` left running while pmxcfs is down lets its watchdog expire after 60 seconds, and the node is hard-reset (fenced) in the middle of the restore.
-
-**Unmounts filesystem**:
-```bash
-umount /etc/pve
-```
-
-**Restores files**:
-- Extracts `/var/lib/pve-cluster/` directory
-- Includes config.db and all related files
-- Preserves permissions and ownership
-
-**Restarts services** (in order), right after the cluster database is written and before the later steps (network apply, boot rebuild); if the restore fails before that point, when the run ends:
-```text
-1. pve-cluster  → Starts pmxcfs, reads restored config.db, remounts /etc/pve
-2. pvedaemon    → Reads cluster config from /etc/pve
-3. pveproxy     → Connects to pvedaemon
-4. pvestatd     → Resumes statistics
-5. pve-ha-crm   → Rejoins the CRM election
-6. pve-ha-lrm   → Resumes the HA resources it froze
-```
-
-Because the services are already running when the network is applied, the post-apply network health check runs its PVE checks (`pvecm status`, ports, services) in RECOVERY as in any other restore.
+See the [cluster recovery procedure](CLUSTER_RECOVERY.md#cluster-restore-modes-safe-vs-recovery).
 
 ### Service Stop/Restart Flow
 
-```text
-┌─────────────────────────────────────────────────┐
-│  CLUSTER DATABASE RESTORE SEQUENCE              │
-└─────────────────────────────────────────────────┘
-
-Before Restore:
-  ┌─────────────┐
-  │ pve-cluster │ ─┐
-  │  (running)  │  │
-  └─────────────┘  │
-  ┌─────────────┐  │  All services
-  │ pvedaemon   │ ─┤  running
-  └─────────────┘  │  /etc/pve mounted
-  ┌─────────────┐  │
-  │ pveproxy    │ ─┤
-  └─────────────┘  │
-  ┌─────────────┐  │
-  │ pvestatd    │ ─┘
-  └─────────────┘
-
-Stop Phase:
-  systemctl stop --no-block pve-ha-lrm ← Wait up to 180 s, never killed;
-                                         watchdog closed, HA resources frozen
-  systemctl stop pve-ha-crm
-  systemctl stop pve-cluster  ← /etc/pve unmounted
-  systemctl stop pvedaemon
-  systemctl stop pveproxy
-  systemctl stop pvestatd
-  umount /etc/pve (if needed)
-
-Restore Phase:
-  Extract: /var/lib/pve-cluster/config.db
-  Extract: /var/lib/pve-cluster/* (all files)
-
-Restart Phase (right after the extraction):
-  systemctl start pve-cluster ← Reads restored config.db
-                               ← Remounts /etc/pve
-  systemctl start pvedaemon   ← Reads /etc/pve config
-  systemctl start pveproxy
-  systemctl start pvestatd
-  systemctl start pve-ha-crm
-  systemctl start pve-ha-lrm
-
-Later steps (network apply, boot rebuild) run with the services up.
-
-After Restore:
-  ┌─────────────┐
-  │ pve-cluster │ ─┐
-  │  (running)  │  │
-  └─────────────┘  │
-  ┌─────────────┐  │  All services
-  │ pvedaemon   │ ─┤  restarted
-  └─────────────┘  │  /etc/pve remounted
-  ┌─────────────┐  │  with RESTORED config
-  │ pveproxy    │ ─┤
-  └─────────────┘  │
-  ┌─────────────┐  │
-  │ pvestatd    │ ─┘
-  └─────────────┘
-```
+See the [cluster recovery procedure](CLUSTER_RECOVERY.md#cluster-restore-modes-safe-vs-recovery).
 
 ### Post-Restore Verification
 
-**Immediate Checks**:
-
-1. **Verify Services Running**:
-   ```bash
-   systemctl status pve-cluster pvedaemon pveproxy pvestatd
-   ```
-   All should show: `active (running)`
-
-2. **Verify /etc/pve Mounted**:
-   ```bash
-   mount | grep pve
-   # Output: /etc/pve type fuse.pmxcfs (rw,nosuid,nodev,relatime,user_id=0,group_id=0)
-
-   ls -la /etc/pve/
-   # Should show: storage.cfg, datacenter.cfg, user.cfg, etc.
-   ```
-
-3. **Verify Cluster Status**:
-   ```bash
-   pvecm status
-   ```
-   Expected output:
-   ```text
-   Cluster information
-   -------------------
-   Name:             pve-cluster
-   Config Version:   X
-   Transport:        knet
-   Secure auth:      on
-
-   Quorum information
-   ------------------
-   Date:             ...
-   Quorum provider:  corosync_votequorum
-   Nodes:            1  # For single-node
-   Expected votes:   1
-   Total votes:      1
-   Quorum:           1
-   Flags:            Quorate
-   ```
-
-4. **Verify API Access**:
-   ```bash
-   pvesh get /version
-   # Should return PVE version info without errors
-
-   pvesh get /cluster/resources
-   # Should list cluster resources
-   ```
-
-5. **Verify Storage Configuration**:
-   ```bash
-   pvesm status
-   # Should list all storage as 'active'
-   ```
-
-6. **Check Logs for Errors**:
-   ```bash
-   journalctl -u pve-cluster --since "5 minutes ago"
-   journalctl -u pvedaemon --since "5 minutes ago"
-   # Should show clean startup, no errors
-   ```
+See the [cluster recovery procedure](CLUSTER_RECOVERY.md#post-recovery-verification).
 
 ### Multi-Node Cluster Considerations
 
-**IMPORTANT**: Restoring config.db on one node of a multi-node cluster can cause cluster desynchronization.
-
-**Recommended Approaches**:
-
-The sequences below write `proxsave --restore` because they are meant to be followed
-command by command on a console. On a node whose terminal can still render the menu,
-run `proxsave` bare and pick **Tools > Restore** at that step instead; it is the same
-workflow.
-
-**Option 1: Standalone Node Restore (Safest)**
-```bash
-# Before restore: Remove node from cluster
-pvecm delnode <this-node-name>
-
-# Perform restore
-proxsave --restore
-
-# After restore: Rejoin cluster (if applicable)
-# Or accept this node as new standalone cluster
-```
-
-**Option 2: Full Cluster Rebuild**
-```bash
-# On ALL nodes: Stop cluster communication
-systemctl stop corosync
-
-# On PRIMARY node: Perform restore
-proxsave --restore
-
-# On PRIMARY node: Restart corosync
-systemctl start corosync
-
-# On OTHER nodes: Remove old cluster data and rejoin
-rm -rf /etc/pve /var/lib/pve-cluster/*
-pvecm add <primary-node-ip>
-```
-
-**Option 3: Isolated Node Recovery**
-```bash
-# Isolate node from cluster network
-# (Disconnect network cable or firewall rules)
-
-# Perform restore on isolated node
-proxsave --restore
-
-# Test recovered configuration
-# Verify all services working
-
-# Decide: Keep standalone OR rejoin cluster
-```
+See the [cluster recovery procedure](CLUSTER_RECOVERY.md#pre-recovery-checklist).
 
 ### Common Issues and Solutions
 
-**Issue: Services fail to start after restore**
-
-```bash
-# Check detailed logs
-journalctl -xe -u pve-cluster
-
-# Common causes:
-# - config.db corruption
-# - Hostname mismatch
-# - Certificate issues
-
-# Solution: Restore from safety backup
-# TIMESTAMP: the directory of the restore to undo, from its "Safety backup preserved at:" line
-tar -xzf /opt/proxsave/restore/TIMESTAMP/restore_backup_*.tar.gz -C /
-systemctl restart pve-cluster pvedaemon pveproxy pvestatd
-```
-
-**Issue: /etc/pve not mounting**
-
-```bash
-# Check if pmxcfs is running
-systemctl status pve-cluster
-
-# Try manual unmount and restart
-umount -f /etc/pve
-systemctl restart pve-cluster
-
-# Check logs
-journalctl -u pve-cluster --since "1 hour ago"
-```
-
-**Issue: Cluster shows wrong nodes**
-
-```bash
-# Edit corosync configuration
-vi /etc/pve/corosync.conf
-# Remove references to dead/wrong nodes
-
-# Update cluster
-pvecm updatecerts
-pvecm delnode <wrong-node-name>
-
-# Restart services
-systemctl restart corosync pve-cluster
-```
-
-**Issue: Hostname changed since backup**
-
-```bash
-# Option 1: Change hostname to match backup
-hostnamectl set-hostname <original-hostname>
-reboot
-
-# Option 2: Update cluster config for new hostname
-# Edit /etc/pve/corosync.conf
-# Change old hostname to new hostname
-# Regenerate certificates
-pvecm updatecerts
-systemctl restart pve-cluster
-```
-
----
+See the [cluster recovery procedure](CLUSTER_RECOVERY.md#common-issues-and-solutions).
 
 ## Export-Only Categories
 
@@ -1365,17 +998,17 @@ Certain paths are too sensitive to restore directly and are extracted to a separ
     ↑
     Backend: /var/lib/pve-cluster/config.db
 
-Writing directly to /etc/pve:
-  ✗ Bypasses cluster synchronization
-  ✗ Conflicts with FUSE filesystem
-  ✗ May corrupt cluster state
-  ✗ Changes don't persist (only in RAM)
+Writes through mounted /etc/pve:
+  Persist in config.db and replicate within the cluster
+  Can change live storage, guest and access configuration
+  Need review before replacing existing settings
 ```
 
 **Code Protection**:
 ```text
-Hard guard in code prevents ANY write to /etc/pve when restoring to /
-(see internal/orchestrator/restore.go:880-884)
+The archive extraction guard skips direct writes under /etc/pve when restoring to /
+(see internal/orchestrator/restore_archive_entries.go)
+Confirmed API and pmxcfs applies use separate paths
 ```
 
 ### Export-Only Category: pbs_config
@@ -1489,7 +1122,7 @@ Pass 3: Staged Categories
 
 **Selection**:
 ```text
-Available categories:
+- categories:
   [1] [ ] PVE Config Export
       Export-only copy of /etc/pve (never written to system paths)
       ↑ Clear description warns user
@@ -1514,8 +1147,8 @@ Custom selection:
   [X] PVE Config Export         ← Exports /etc/pve/ for reference
 
 Result:
-  1. config.db restored → New cluster configuration active
-  2. /etc/pve/ exported → Old configuration available for comparison
+  1. config.db restored -> New cluster configuration active
+  2. /etc/pve/ exported -> Old configuration available for comparison
   3. User can review differences and selectively copy needed files
 ```
 
@@ -1556,7 +1189,8 @@ For each VM/CT config found in the export:
 - Skips a VMID already owned by another node; SAFE does not move guests between nodes
 - Skips a VMID whose live type (`qemu` or `lxc`) differs from the staged config type
 - Updates a matching guest on the current node with `pvesh set /nodes/<node>/<type>/<vmid>/config --<key>=<value> ...`, excluding create-only keys
-- If that API update fails, writes the staged conf into pmxcfs only after the JSON status probe explicitly reports `stopped`; command errors, malformed status, `running`, and unknown states all skip the fallback
+- A recognized API schema refusal permits file fallback only if `status/current` explicitly reports `stopped`; other API failures do not qualify
+- For a schema refusal with a running or unverified guest, ProxSave may retry the API update with refused keys removed; it does not write the staged file
 - Registers a VMID that is absent cluster-wide by writing the staged conf into pmxcfs on the current node
 - Reports success/failure for each VM/CT
 
@@ -1655,11 +1289,11 @@ complete.** Check every definition the run named, with `pvesh get /storage/<id>
 --output-format=json` against the `storage.cfg` in the export, and set by hand anything that
 differs.
 
-**Benefits of pvesh Apply**:
-- Non-destructive: works with running cluster
-- Selective: apply only what you need
-- Auditable: each action logged
-- Reversible: changes can be undone via GUI/API
+**Scope of pvesh Apply**:
+- Applies confirmed configuration groups without wholesale database replacement
+- Updates live state and can affect the entire cluster
+- Logs individual results, including skips and partial failures
+- Does not provide an automatic transaction rollback for every API change
 
 ---
 
@@ -1691,7 +1325,7 @@ These configurations are included in every backup and can be restored using **th
 
 ### Method 1: pvesh SAFE Apply (Recommended)
 
-**Best for**: Active clusters where you want to restore specific VMs without touching the cluster database.
+**Best for**: Applying an eligible guest configuration batch on an active cluster without replacing its whole database. For a single guest, decline the batch and follow the reviewed manual procedure.
 
 **How it works**:
 1. During restore, select **Cluster SAFE mode**
@@ -1699,20 +1333,17 @@ These configurations are included in every backup and can be restored using **th
 3. Interactive prompt asks: "Apply all VM/CT configs via pvesh?"
 4. Each config applied via Proxmox API: `pvesh set /nodes/<node>/qemu/<vmid>/config`
 
-**Advantages**:
-✅ Non-destructive (cluster database untouched)
-✅ Works with running cluster
-✅ Selective application (can skip specific VMs)
-✅ Auditable and reversible
-✅ No service interruption required
+**Behavior**:
+- Uses the running cluster and avoids a full database replacement
+- Confirms all eligible guest configurations from the selected source node as one batch
+- Checks cluster-wide VMID ownership and guest type before mutation
+- Changes live configuration; review per-guest results and the possible effect on workloads
 
 **Step-by-Step Procedure**:
 
 1. **Open the restore workflow**: run `proxsave` bare and pick **Tools > Restore** in
-   the dashboard. On a host without a usable terminal, enter it directly:
-   ```bash
-   proxsave --restore
-   ```
+   the dashboard. Direct entry options are in [CLI reference](CLI_REFERENCE.md):
+   Choose **Tools > Restore** in the dashboard; direct entry is in [CLI reference](CLI_REFERENCE.md).
 
 2. **Select backup and decrypt** (standard workflow)
 
@@ -1793,16 +1424,15 @@ https://your-pve:8006
 4. Manually copy desired configs to `/etc/pve/`
 
 **Advantages**:
-✅ Full control over what gets restored
-✅ Review before applying
-✅ Compare with current configs
-✅ Extract individual values without full restore
+- Full control over what gets restored
+- Review before applying
+- Compare with current configs
+- Extract individual values without full restore
 
 **Step-by-Step Procedure**:
 
 1. **Open the restore workflow and select the pve_config_export category**: run
-   `proxsave` bare and pick **Tools > Restore**, or enter it directly with
-   `proxsave --restore` on a host without a usable terminal. Then select `CUSTOM`
+   `proxsave` without arguments and pick **Tools > Restore**. For direct entry when the dashboard cannot render, see [CLI reference](CLI_REFERENCE.md#restore-from-backup). Then select `CUSTOM`
    mode and enable the `PVE Config Export` category.
 
 2. **Locate exported files**:
@@ -1908,18 +1538,18 @@ grep "^scsi\|^virtio\|^ide\|^sata" qemu-server/100.conf
 
 ```text
 Are you restoring to an active multi-node cluster?
-├─ YES → Use Method 1: pvesh SAFE Apply
-│        (Non-destructive, no downtime)
+├─ YES -> Use Method 1: pvesh SAFE Apply
+│        (Confirmed batch changes to live configuration)
 │
-└─ NO → Is this a complete disaster recovery?
-    ├─ YES → Use Method 3: Full Cluster Database Restore
+└─ NO -> Is this a complete disaster recovery?
+    ├─ YES -> Use Method 3: Full Cluster Database Restore
     │        (Restores everything at once)
     │
-    └─ NO → Do you need to restore all VMs?
-        ├─ YES → Use Method 1: pvesh SAFE Apply
+    └─ NO -> Do you need to restore all VMs?
+        ├─ YES -> Use Method 1: pvesh SAFE Apply
         │        (Faster than manual copy)
         │
-        └─ NO → Use Method 2: Manual Copy
+        └─ NO -> Use Method 2: Manual Copy
                  (Review before applying)
 ```
 
@@ -1957,18 +1587,18 @@ Are you restoring to an active multi-node cluster?
 **Configuration vs. Data**:
 ```text
 What ProxSave Backs Up:
-✅ VM/CT configuration files (*.conf)
-✅ Cluster settings
-✅ Storage definitions
-✅ User/permissions
-✅ Network configuration
-✅ Backup job definitions
+- VM/CT configuration files (*.conf)
+- Cluster settings
+- Storage definitions
+- User/permissions
+- Network configuration
+- Backup job definitions
 
 What ProxSave Does NOT Back Up:
-❌ VM/CT disk images (*.qcow2, *.raw, etc.)
-❌ Running VM memory state
-❌ Application data inside VMs
-❌ Storage pool data
+Not available VM/CT disk images (*.qcow2, *.raw, etc.)
+Not available Running VM memory state
+Not available Application data inside VMs
+Not available Storage pool data
 ```
 
 **Best Practice Recommendation**:
@@ -1995,10 +1625,10 @@ Multiple layers of protection prevent data loss and corruption during restore.
 - Full directory structures
 - Preserved permissions, ownership, timestamps
 
-**Rollback Command**:
-```bash
-tar -xzf /opt/proxsave/restore/20251120_143052/restore_backup_20251120_143118.tar.gz -C /
-```
+**Rollback**: inspect the exact session archive and follow the
+[manual rollback prerequisites](#manual-rollback-prerequisites). A generic
+`tar -xzf ... -C /` command does not handle live services, pmxcfs or HA, and does not
+undo every API change made later in the workflow.
 
 **If Safety Backup Fails**:
 ```text
@@ -2040,7 +1670,7 @@ Current auto-skip prompts:
 - **PVE firewall apply**
 - **PVE HA apply**
 
-On timeout every one of them resolves to the **non-applying** answer, so an unattended restore leaves fstab, network, access control, firewall and HA staged on disk but not applied.
+On timeout these prompts answer **No** to the requested operation. This does not undo earlier phases. In particular, skipping live network reload can still leave validated network files installed for the next restart; see [Network Safe Apply](#4-network-safe-apply-optional).
 
 That is worth separating from the Enter-key default, which the countdown does not follow. The fstab prompt defaults to **Yes** when the backup root, and swap where comparable, match the current system, so pressing Enter applies the merge. Letting the countdown run out still answers No. In other words the fstab merge is never applied unattended, however well the systems match.
 
@@ -2092,7 +1722,7 @@ This protects SSH/GUI access during network changes.
 - Diagnostics are saved under `/opt/proxsave/restore/<timestamp>/network_apply_*` (snapshots `before.txt` / `after.txt` / `after_rollback.txt` when relevant, `health_before.txt` / `health_after.txt`, `preflight.txt`, `plan.txt`, and `ifquery_*`)
 
 **NIC name repair**:
-- If physical NIC names changed after reinstall (e.g. `eno1` → `enp3s0`), ProxSave attempts an automatic mapping using backup network inventory (permanent MAC / MAC / PCI path / udev IDs like `ID_PATH`, `ID_NET_NAME_PATH`, `ID_NET_NAME_SLOT`, `ID_SERIAL`)
+- If physical NIC names changed after reinstall (e.g. `eno1` -> `enp3s0`), ProxSave attempts an automatic mapping using backup network inventory (permanent MAC / MAC / PCI path / udev IDs like `ID_PATH`, `ID_NET_NAME_PATH`, `ID_NET_NAME_SLOT`, `ID_SERIAL`)
 - When a safe mapping is found, `/etc/network/interfaces` and `/etc/network/interfaces.d/*` are rewritten before applying the network config
 - If you skip live network apply, ProxSave may still install the staged config to disk (no reload) after safe NIC repair + preflight; if validation fails, it rolls back and keeps the staged copy.
 - If a mapping would overwrite an interface name that already exists on the current system, ProxSave prompts before applying it (conflict-safe)
@@ -2191,7 +1821,7 @@ If the restore includes filesystem configuration (notably `/etc/fstab`), ProxSav
 
 **Safety behavior**:
 - The user is prompted before any change is written.
-- The prompt includes a **90-second** countdown; if you do not answer in time, ProxSave uses a safe default (**Skip** unless root/swap match, in which case the default is **Yes**).
+- The **90-second** countdown always answers **No** when it expires. A matching root/swap can make **Yes** the Enter-key default, but never the timeout answer.
 
 ### 6. Hard Guards
 
@@ -2208,25 +1838,25 @@ if cleanDestRoot == "/" && strings.HasPrefix(target, "/etc/pve") {
     return nil
 }
 ```
-- Absolute prevention of `/etc/pve` corruption
+- Blocks direct archive extraction into `/etc/pve`; confirmed API and pmxcfs applies remain separate write paths
 
 **PBS Datastore Mount Guards**:
 - When restoring PBS datastore definitions, ProxSave can apply a temporary read-only bind-mount guard on mount roots that currently resolve to the root filesystem. If the bind mount cannot be created, it logs a warning and proceeds unguarded (no persistent `chattr +i` flag is set).
 - Purpose: prevent accidental writes to `/` if a datastore mountpoint is missing/offline at restore time (PBS will show the datastore as unavailable until storage is mounted).
-- Optional cleanup: dashboard **Recovery > Cleanup guards**, or `proxsave --cleanup-guards` (use `--dry-run` to preview) on a headless host. See **Clearing mount guards after the storage is back** below.
+- Optional cleanup: dashboard **Recovery > Cleanup guards**. Its first screen is a read-only check before Apply. See **Clearing mount guards after the storage is back** below.
 
 **PVE Storage Mount Guards**:
 - When restoring PVE storage definitions (from `storage.cfg`), ProxSave applies the same "restore even if offline" strategy for mount-backed storage:
   - Network storages (`nfs`, `cifs`, `cephfs`, `glusterfs`) use mountpoints under `/mnt/pve/<storageid>`. ProxSave attempts `pvesm activate <storageid>`; if the mountpoint still resolves to the root filesystem, it applies a temporary read-only bind-mount guard (or, if the bind mount cannot be created, logs a warning and proceeds unguarded).
   - `dir` storages are guarded only when their `path` lives under a mountpoint restored via `/etc/fstab` (to avoid guarding local root filesystem paths).
 - Purpose: prevent PVE from writing into `/mnt/pve/...` (or other mount roots) when the backing storage is offline at restore time.
-- Optional cleanup: dashboard **Recovery > Cleanup guards**, or `proxsave --cleanup-guards` (use `--dry-run` to preview) on a headless host. See **Clearing mount guards after the storage is back** below.
+- Optional cleanup: dashboard **Recovery > Cleanup guards**. Its first screen is a read-only check before Apply. See **Clearing mount guards after the storage is back** below.
 
 **Clearing mount guards after the storage is back**:
-- The normal route is the dashboard: run `proxsave` bare and pick **Recovery > Cleanup guards**. It is a two-step screen, a read-only check first (which offers Apply only when it actually finds guards), then the cleanup itself, reporting `DONE` or `PENDING`. `proxsave --cleanup-guards` (preview with `--dry-run`) is the same operation from the command line, for a headless host or a script.
+- The normal route is the dashboard: run `proxsave` bare and pick **Recovery > Cleanup guards**. It is a two-step screen, a read-only check first (which offers Apply only when it actually finds guards), then the cleanup itself, reporting `DONE` or `PENDING`. For direct cleanup entry and preview flags, see [CLI reference](CLI_REFERENCE.md).
 - Bringing the storage online again is enough to *use* it: a real mount stacks on top of a bind-mount guard automatically. The guard is not deleted, only shadowed; a reboot or a cleanup run removes the bind-mount leftover. A **legacy** `chattr +i` flag (set by older versions when a bind mount failed) leaves the directory immutable across reboots until it is cleared.
 - The cleanup unmounts bind-mount guards **and** clears any **legacy** `chattr +i` immutable flags, but only on mountpoints that are **not currently mounted** (clearing a live mount would touch the wrong inode); it prints a summary of what was cleared vs left pending. The guard directory is kept until nothing is pending.
-- To clear a legacy flag while the storage is mounted: unmount it, run `--cleanup-guards` again (or `chattr -i <mountpoint>`), then remount.
+- To clear a legacy flag while the storage is mounted: unmount it, choose **Recovery > Cleanup guards** again (or `chattr -i <mountpoint>`), then remount.
 - If you deleted the guard directory (`<BASE_DIR>/guards`, or `/var/lib/proxsave/guards` from an older version) manually and a mountpoint is still read-only, ProxSave has no record left to clear: check `lsattr -d <mountpoint>` and run `chattr -i <mountpoint>` while the storage is unmounted.
 
 ### 7. Service Management Fail-Fast
@@ -2293,7 +1923,7 @@ grep -E "Failed to extract|Refusing hardlink" /opt/proxsave/restore/20251120_143
 Verifying SHA256 checksum...
 Expected: a1b2c3...
 Actual:   a1b2c3...
-✓ Checksum verified successfully.
+Yes Checksum verified successfully.
 ```
 
 ### 10. Deferred Service Restart
@@ -2301,42 +1931,14 @@ Actual:   a1b2c3...
 **Go defer pattern** ensures services restart even if restore fails:
 
 ```text
-Services stopped → Defer restart scheduled → Restore → (Failure) → Deferred restart executes
+Services stopped -> Defer restart scheduled -> Restore -> (Failure) -> Deferred restart executes
 ```
 
 **Prevents**: System left with services stopped after failed restore
 
 ### 11. Kernel Command Line Merge (`boot` category)
 
-A restore usually runs on a new machine, whose root device, pool name and ESPs differ from the backed-up host. The `boot` category therefore never writes the old host's boot files: GRUB settings (`/etc/default/grub`, `/etc/default/grub.d/`), `/etc/kernel/cmdline` and `/etc/kernel/proxmox-boot-uuids` are kept in the archive under `var/lib/proxsave-info/boot/` and only reach the export directory. None of these files is written to the live system, in any mode, including the full-restore fallback, not even when `CUSTOM_BACKUP_PATHS` names `/etc/default` or `/etc/kernel` and the archive also holds them at their natural paths: those copies go to the export directory with `proxsave_info`. The rest of `/etc/default` is restored by `services` as before.
-
-**Source**: the backed-up host's effective kernel command line (`/proc/cmdline` at backup time), stored in `var/lib/proxsave-info/commands/system/kernel_cmdline.txt` by every backup.
-
-**Merge rule**:
-- Every parameter is carried except those that describe the backed-up host itself, and anything after `--` (arguments for init):
-  - its root device and boot image: `root=`, `boot=`, `ro`, `rw`, `BOOT_IMAGE=`, `initrd=`;
-  - how its root was mounted and where it resumed from: `rootflags=`, `rootfstype=`, `resume=`, `resume_offset=`. A `rootflags=` or `rootfstype=` of another filesystem makes this host's root mount fail, and the boot stops in the initramfs shell;
-  - what was sized on its RAM or laid out on its memory map: `zfs.zfs_arc_max=` and `zfs.zfs_arc_min=` (the restore keeps this host's ARC limit), `hugepages=`, `hugepagesz=`, `default_hugepagesz=`, `sysctl.vm.nr_hugepages=`, `hugetlb_cma=`, `cma=`, `kernelcore=`, `movablecore=`, `mem=` and `memmap=` (a `memmap=` of another machine's firmware map can stop the boot);
-  - `crashkernel=`: the kdump reservation. On GRUB hosts `kdump-tools` writes it through its own drop-in, sized for this host's RAM; without `kdump-tools` it only takes memory.
-- A parameter this host already has is not added again. When both hosts set the same parameter with different values, this host's value stays (the kernel treats `-` and `_` in parameter names as the same character, so `vfio-pci.ids` and `vfio_pci.ids` are one parameter).
-
-**Where the parameters are written** (Proxmox VE admin guide, *Host Bootloader*, *Editing the Kernel Commandline*):
-
-| This host | File written | Rebuild |
-|-----------|--------------|---------|
-| GRUB, no `/etc/kernel/proxmox-boot-uuids`; `/etc/default/grub`, `/boot/grub/grub.cfg` and `update-grub` present | the value of `GRUB_CMDLINE_LINUX_DEFAULT` in `/etc/default/grub`, the rest of the file untouched | `update-initramfs -u -k all`, then `update-grub` |
-| `proxmox-boot-tool status` reports every ESP as `uefi` (systemd-boot); `/etc/kernel/cmdline` is one line with `root=` | `/etc/kernel/cmdline` | `update-initramfs -u -k all`, then `proxmox-boot-tool refresh` |
-| `proxmox-boot-tool status` reports every ESP as `grub` | the value of `GRUB_CMDLINE_LINUX_DEFAULT` in `/etc/default/grub` | `update-initramfs -u -k all`, then `proxmox-boot-tool refresh` |
-
-Anything else is not recognized with certainty, and nothing is written: the ESPs disagree, `proxmox-boot-tool status` fails, `GRUB_CMDLINE_LINUX_DEFAULT` is not one plain assignment of a literal value, or a file in `/etc/default/grub.d/` sets it too. The restore logs a warning with the reason and the parameters the backup carries.
-
-**Rebuild**: runs once, at the end of the restore, when the merge changed a file or the restore wrote under `/etc/modprobe.d`, `/etc/modules`, `/etc/hostid` or `/etc/zfs`, which the initramfs copies. On a bootloader not recognized with certainty only `update-initramfs` runs, and the bootloader is left as it is. A failed command is a warning with the command and its error; the next command still runs and the restore goes on.
-
-**Safety backup**: the pre-restore `/etc/default/grub` and `/etc/kernel/cmdline` are in the safety backup, like every other file the restore may write.
-
-**Log**: every step is in the restore log, on lines starting with `Boot configuration -`: the backed-up command line, the bootloader found, the parameters added (or not carried because this host sets them differently), and each command run.
-
----
+See [Restore IOMMU, VFIO and passthrough settings](#restore-iommu-vfio-and-passthrough-settings) for the procedure, merge rules and bootloader limits.
 
 ## Troubleshooting
 
@@ -2348,16 +1950,13 @@ Anything else is not recognized with certainty, and nothing is written: the ESPs
 
 **Solution**: become root first, then open the dashboard and pick **Tools > Restore**:
 ```bash
-sudo proxsave
+# Dashboard action: Tools > Restore
 # Or
 su -
-proxsave
+# Dashboard action: Tools > Restore
 ```
 
-On a headless host, the same applies to the flag:
-```bash
-sudo proxsave --restore
-```
+Root privileges are also required for direct restore entry; see [CLI reference](CLI_REFERENCE.md).
 
 ---
 
@@ -2425,7 +2024,7 @@ passphrase used for `<backup name>`. Enter 0 to exit." Under `--cli` it is the s
 line `Enter decryption key or passphrase for <backup name> (0 = exit):`.
 
 If the secret is genuinely lost, the backup cannot be decrypted. Creating a new key
-(dashboard **Maintenance > New key**, or `proxsave --newkey`) only changes what future
+(dashboard **Maintenance > New key**, or **Maintenance > New key** in the dashboard) only changes what future
 backups are encrypted with.
 
 ---
@@ -2465,51 +2064,16 @@ apt install --reinstall pve-cluster
 
 **Issue: "Services failed to restart after restore"**
 
-**Cause**: config.db corruption or configuration error
-
-**Solution**:
-```bash
-# Check service status
-systemctl status pve-cluster
-journalctl -xe -u pve-cluster
-
-# Restore from safety backup
-# TIMESTAMP: the directory of the restore to undo, from its "Safety backup preserved at:" line
-tar -xzf /opt/proxsave/restore/TIMESTAMP/restore_backup_*.tar.gz -C /
-
-# Restart services (the HA services last, once pve-cluster is up)
-systemctl restart pve-cluster pvedaemon pveproxy pvestatd
-systemctl start pve-ha-crm pve-ha-lrm
-
-# If still failing, check logs
-journalctl -u pve-cluster --since "10 minutes ago"
-```
-
----
+Inspect `systemctl status pve-cluster` and `journalctl -u pve-cluster` for the actual
+failure. For a database rollback, follow the
+[manual rollback prerequisites](#manual-rollback-prerequisites).
 
 **Issue: "/etc/pve not mounting after restore"**
 
-**Cause**: pmxcfs unable to mount FUSE filesystem
-
-**Solution**:
-```bash
-# Check if already mounted
-mount | grep pve
-
-# Force unmount
-umount -f /etc/pve
-
-# Restart pve-cluster
-systemctl restart pve-cluster
-
-# Check logs
-journalctl -u pve-cluster | tail -50
-
-# If config.db corrupted, restore safety backup
-# TIMESTAMP: the directory of the restore to undo, from its "Safety backup preserved at:" line
-tar -xzf /opt/proxsave/restore/TIMESTAMP/restore_backup_*.tar.gz -C /
-systemctl restart pve-cluster
-```
+Check the mount and service state before attempting a repair. A database error and
+a still-mounted filesystem are different problems. Do not force-unmount pmxcfs or
+extract a safety archive onto `/` while the database is in use. The same
+[rollback prerequisites](#manual-rollback-prerequisites) apply.
 
 ---
 
@@ -2517,59 +2081,23 @@ systemctl restart pve-cluster
 
 **Issue: "Cluster shows wrong nodes after restore"**
 
-**Cause**: Restored old cluster configuration
-
-**Solution**:
-```bash
-# Option 1: Remove wrong nodes
-pvecm delnode <wrong-node-name>
-
-# Option 2: Edit corosync.conf
-vi /etc/pve/corosync.conf
-# Remove references to dead nodes
-# Update node list
-
-pvecm updatecerts
-systemctl restart corosync pve-cluster
-```
-
----
+Inspect the recovered membership and identify the authoritative cluster. Remove
+obsolete members only from a surviving node after the old machines and workloads
+are accounted for. Follow [Cluster Recovery](CLUSTER_RECOVERY.md); do not edit node
+lists and restart pmxcfs without the HA and isolation prerequisites.
 
 **Issue: "Lost quorum after restore"**
 
-**Cause**: Single-node cluster with wrong expected votes
-
-**Solution**:
-```bash
-# Set expected votes to 1
-pvecm expected 1
-
-# Verify quorum
-pvecm status
-
-# Make permanent (edit corosync.conf)
-vi /etc/pve/corosync.conf
-# Update expected_votes in quorum section
-```
-
----
+A recovered multi-node database can still expect its former peers. Check membership,
+Corosync links and qdevice state. Do not lower votes to match the nodes currently
+visible during a partition. Use the [Lost Quorum procedure](CLUSTER_RECOVERY.md#issue-lost-quorum)
+to select the appropriate recovery path.
 
 **Issue: "Hostname mismatch in cluster config"**
 
-**Cause**: Restored backup from different hostname
-
-**Solution**:
-```bash
-# Option 1: Change hostname to match
-hostnamectl set-hostname <original-hostname>
-reboot
-
-# Option 2: Update cluster config
-vi /etc/pve/corosync.conf
-# Change old hostname to new hostname
-pvecm updatecerts
-systemctl restart corosync pve-cluster
-```
+See [Hostname Changed](CLUSTER_RECOVERY.md#scenario-5-hostname-changed). Prepare the
+final hostname before joining, or select the reviewed SAFE apply route; renaming a
+live member and copying its node directory is not a generic recovery procedure.
 
 ---
 
@@ -2650,8 +2178,7 @@ ls -ld /mnt/datastore /mnt/datastore/<DatastoreName> 2>/dev/null
 namei -l /mnt/datastore/<DatastoreName> 2>/dev/null || true
 
 # If you need to remove ProxSave mount guards (optional / troubleshooting, run as root):
-proxsave --cleanup-guards --dry-run
-proxsave --cleanup-guards
+# Dashboard action: Recovery > Cleanup guards
 
 # Common fix (adjust to your datastore path)
 chown backup:backup /mnt/datastore && chmod 750 /mnt/datastore
@@ -2776,9 +2303,9 @@ role-specific configurations. ProxSave now evaluates compatibility by
 **role overlap**:
 
 - `pve` ↔ `pbs`: only common categories are sensible
-- `dual` → `pve`: PVE + Common can be restored
-- `dual` → `pbs`: PBS + Common can be restored
-- `pve` or `pbs` → `dual`: the matching role + Common can be restored
+- `dual` -> `pve`: PVE + Common can be restored
+- `dual` -> `pbs`: PBS + Common can be restored
+- `pve` or `pbs` -> `dual`: the matching role + Common can be restored
 
 When overlap exists, ProxSave continues with warnings and automatically filters
 the selected categories to the roles supported by the current host.
@@ -2821,9 +2348,9 @@ A: Yes, with considerations:
 **Q: What if I cancel during restore?**
 
 A: Depends on when:
-- **Before extraction**: No changes made, completely safe
-- **During extraction**: Partial restore, use safety backup to rollback
-- **After extraction**: Restore completed, services may be in mixed state
+- **Before final confirmation**: No restore payload has been applied
+- **After service preparation or during extraction**: Cleanup attempts to restore service state; files may already have changed
+- **After extraction**: Later applies may still be pending or partial; inspect the session log before deciding what to recover
 
 Use Ctrl+C carefully - wait for current file to finish.
 
@@ -2833,22 +2360,34 @@ Use Ctrl+C carefully - wait for current file to finish.
 
 **Q: How do I rollback a failed restore?**
 
-A: Use the safety backup:
-```bash
-# Stop services (if cluster restore)
-systemctl stop pve-cluster pvedaemon pveproxy pvestatd
+A: Start with the exact safety archive and log from that restore session. Its scope
+is the files captured before the selected restore; it is not a full host snapshot
+or a reversal of every API operation.
 
-# Extract safety backup
-# TIMESTAMP: the directory of the restore to undo, from its "Safety backup preserved at:" line
-tar -xzf /opt/proxsave/restore/TIMESTAMP/restore_backup_*.tar.gz -C /
+#### Manual rollback prerequisites
 
-# Restart services
-systemctl restart pve-cluster pvedaemon pveproxy pvestatd
+1. Use an out-of-band console and establish which node and backup are authoritative.
+   For cluster database recovery, isolate obsolete peers and account for guests and
+   shared storage before proceeding.
+2. Inspect the exact safety archive from the session's `Safety backup preserved at:`
+   line. List its contents with `tar -tzf /exact/path/to/restore_backup_TIMESTAMP.tar.gz`.
+   Do not combine archives with a wildcard or extract the whole tree onto `/`.
+3. If restoring `config.db`, gracefully stop `pve-ha-lrm`, then `pve-ha-crm`, before
+   `pve-cluster` and the other PVE services. Verify successful shutdown and that
+   `/etc/pve` is unmounted. Do not kill the HA LRM to force progress: that can trigger
+   watchdog fencing. Stop if these conditions cannot be established.
+4. Restore only the reviewed files needed for this failure. For `config.db`, follow
+   the [official pmxcfs recovery procedure](https://pve.proxmox.com/pve-docs/pmxcfs-plain.html),
+   including database mode `0600`, the correct hostname and `/etc/hosts`. ProxSave's
+   normal RECOVERY workflow manages the service sequence when using a complete
+   ProxSave backup; a safety tarball alone is not that complete backup format.
+5. Restart `pve-cluster` and verify the mounted configuration, then restore the API
+   services. Bring HA back only after the cluster and workload state are safe.
+   Review networking, firewall and access-control changes separately using the
+   session's logs and their own rollback files.
 
-# Verify
-pvecm status
-pvesm status
-```
+For normal recovery from a complete backup, prefer **Tools > Restore** in the dashboard and the
+applicable [cluster scenario](CLUSTER_RECOVERY.md).
 
 ---
 
@@ -2857,25 +2396,24 @@ pvesm status
 A: Yes, two approaches:
 
 **Approach 1: Test on separate system**
-```bash
-# Copy backup to test system
-# Run restore on test system
-# Validate configuration
-# Apply learnings to production restore
-```
+
 
 **Approach 2: Decrypt-only mode**
 
-Dashboard **Tools > Decrypt**, or the flag on a headless host:
+The output is an uncompressed `.decrypted.bundle.tar` holding the inner archive and
+sidecars. Unwrap it into a private inspection directory, then inspect the named
+inner archive using its actual compression format. Follow
+[Decrypting Backups](ENCRYPTION.md#decrypting-backups); the outer bundle does not
+contain host paths directly. Decryption writes plaintext output but does not apply
+host configuration.
+
+Choose **Tools > Decrypt** in the dashboard to prepare a plaintext bundle for inspection:
 ```bash
 # Decrypt without restoring
-proxsave --decrypt
+# Dashboard action: Tools > Decrypt
 
-# Manually inspect decrypted files
-tar -tzf /path/to/decrypted.tar.gz | less
-
-# Review specific files
-tar -xzf /path/to/decrypted.tar.gz ./etc/pve/storage.cfg -O | less
+# Inspect the outer, uncompressed bundle at the path printed by ProxSave
+tar -tf /path/to/backup.decrypted.bundle.tar
 ```
 
 ---
@@ -2914,61 +2452,13 @@ A: **Risky and NOT recommended** without precautions:
 
 **Q: How do I restore cluster database on new hardware?**
 
-A: Full procedure:
-
-```bash
-# 1. Install Proxmox VE on new hardware
-# 2. Configure same hostname as backup
-hostnamectl set-hostname <original-hostname>
-
-# 3. Run restore: "proxsave" bare, then Tools > Restore in the dashboard,
-#    or the flag below on a console that cannot render it
-proxsave --restore
-# Select: STORAGE mode or Custom (include pve_cluster)
-
-# 4. Verify services
-systemctl status pve-cluster pvedaemon pveproxy
-pvecm status
-
-# 5. Verify storage
-pvesm status
-
-# 6. Manually recreate any missing storage paths
-# 7. Import ZFS pools if needed
-zpool import <pool-name>
-
-# 8. Access web interface and verify
-https://<server-ip>:8006
-```
+A: Follow [Migration to New Hardware](CLUSTER_RECOVERY.md#scenario-4-migration-to-new-hardware), including the standalone, isolated-member or clean-join decision before selecting SAFE or RECOVERY. VM disks and datastore content need their own recovery.
 
 ---
 
 **Q: What if backup hostname doesn't match current hostname?**
 
-A: Two options:
-
-**Option 1: Change hostname to match (easiest)**
-```bash
-hostnamectl set-hostname <backup-hostname>
-reboot
-# Then run restore
-```
-
-**Option 2: Update cluster config after restore**
-```bash
-# Restore as normal (hostname will mismatch)
-proxsave --restore
-
-# Update corosync configuration
-vi /etc/pve/corosync.conf
-# Change old hostname to new hostname
-
-# Regenerate certificates
-pvecm updatecerts
-
-# Restart services
-systemctl restart corosync pve-cluster pvedaemon pveproxy
-```
+A: Follow [Hostname Changed](CLUSTER_RECOVERY.md#scenario-5-hostname-changed). Never rename a live cluster member or edit corosync as a shortcut. On a fresh or isolated destination, SAFE can select an exported source node for guest configuration without moving live cluster ownership.
 
 ---
 
@@ -2976,12 +2466,11 @@ systemctl restart corosync pve-cluster pvedaemon pveproxy
 
 **Q: Why can't I restore /etc/pve directly?**
 
-A: `/etc/pve` is a **FUSE mount** managed by pmxcfs daemon:
-- Writing directly bypasses cluster synchronization
-- Changes don't persist (only in RAM)
-- Can corrupt cluster state
-
-**Correct approach**: Restore `/var/lib/pve-cluster/config.db` (the database backend)
+A: `/etc/pve` is the filesystem interface to pmxcfs. Writes through the mounted
+filesystem persist in `config.db` and replicate within the cluster. ProxSave blocks
+blind archive extraction there because it can overwrite live cluster configuration.
+Use confirmed SAFE applies for selected configuration groups, a reviewed manual
+single-file change, or RECOVERY for whole-database replacement on an isolated host.
 
 ---
 
@@ -3009,11 +2498,7 @@ cp /opt/proxsave/proxmox-config-export-*/etc/pve/qemu-server/100.conf \
 A: **Three methods available**:
 
 **Method 1: pvesh SAFE Apply (Recommended)**
-```bash
-# During restore, select Cluster SAFE mode
-# Answer "yes" when prompted: "Apply all VM/CT configs via pvesh?"
-# Configs applied automatically via API
-```
+
 
 **Method 2: Manual Copy**
 ```bash
@@ -3036,14 +2521,11 @@ See [VM/CT Configuration Restore](#vmct-configuration-restore) for detailed proc
 
 A: Not directly. Categories are the smallest granularity.
 
-**Workaround**: decrypt the backup to a plaintext bundle (dashboard **Tools > Decrypt**,
-or `proxsave --decrypt`), then take the file out of it yourself:
-```bash
-proxsave --decrypt
-
-# Manually extract specific files
-tar -xzf /path/to/decrypted.tar.gz ./specific/file/path
-```
+**Workaround**: use dashboard **Tools > Decrypt** or **Tools > Decrypt** in the dashboard, then
+unwrap the resulting `.decrypted.bundle.tar` into a private directory. Select the
+inner archive by its printed name and inspect or extract the desired entry there,
+using the matching decompressor. See [Decrypting Backups](ENCRYPTION.md#decrypting-backups).
+Review any extracted configuration before copying it to a live path.
 
 ---
 
@@ -3051,7 +2533,7 @@ tar -xzf /path/to/decrypted.tar.gz ./specific/file/path
 
 A: Yes:
 - **Extraction**: ProxSave preserves UID/GID, mode bits and timestamps (mtime/atime) for extracted entries.
-- **Staged categories**: files are extracted under `/tmp/proxsave/restore-stage-*` and then applied to system paths using atomic replace; ProxSave explicitly applies mode bits (not left to `umask`) and preserves/derives ownership/group to match expected system defaults (important on PBS, where `proxmox-backup-proxy` runs as `backup`; ProxSave also repairs common `root:root` group regressions by inheriting the destination parent directory's group). On supported filesystems, staged writes also `fsync()` the temporary file and the destination directory to reduce the risk of incomplete writes after a crash/power loss.
+- **Staged categories**: files are extracted under `/tmp/proxsave/restore-stage-*` and then applied to system paths using individual file replacement, not a transaction across categories or API updates; ProxSave explicitly applies mode bits (not left to `umask`) and preserves/derives ownership/group to match expected system defaults (important on PBS, where `proxmox-backup-proxy` runs as `backup`; ProxSave also repairs common `root:root` group regressions by inheriting the destination parent directory's group). On supported filesystems, staged writes also `fsync()` the temporary file and the destination directory to reduce the risk of incomplete writes after a crash/power loss.
 - **ctime**: Cannot be set (kernel-managed).
 
 ---
@@ -3144,6 +2626,51 @@ rm -r /opt/proxsave/restore/TIMESTAMP
 
 ---
 
+<!-- site-region: restore-passthrough:start -->
+
+## Restore IOMMU, VFIO and passthrough settings
+
+Use this procedure after a reinstall or hardware change when recovering host passthrough configuration. Firmware IOMMU support, device IDs, PCI addresses, IOMMU groups and guest disk availability must be checked on the destination. ProxSave does not configure firmware or prove that an old passthrough assignment is safe on new hardware.
+
+1. Keep console or IPMI access and a verified backup with the boot inventory and system service files. Leave affected guests stopped while reviewing device assignments.
+2. Run `proxsave` without arguments as root and choose **Tools > Restore**. Select the backup and decrypt it if required.
+3. Choose **Custom** and select `boot` and `services` when available. The services category also includes systemd, package, sysctl and firewall-related files; inspect the full plan before accepting it. Select `pve_config_export` if you need exported guest configuration for comparison. FULL includes export-only categories; STORAGE and SYSTEM BASE do not.
+4. Review the plan and both overwrite confirmations. The boot merge keeps destination-specific root and memory settings as described below. `/etc/modprobe.d/` and `/etc/modules` are system-service files, so old driver bindings and blacklists still need review on different hardware.
+5. Inspect the restore log for `Boot configuration -` messages and any rebuild warning. Compare exported boot files and guest device references with the destination. A skipped bootloader merge requires a manual edit following the destination's Proxmox bootloader procedure, not copying the old file wholesale.
+6. Reboot only after checking the resulting settings and retaining recovery access. Verify the effective `/proc/cmdline`, IOMMU groups and device driver bindings before applying guest passthrough assignments and starting guests individually. Missing IOMMU groups, incorrect binding, a bootloader warning or an unavailable guest disk means recovery is incomplete.
+
+A restore usually runs on a new machine, whose root device, pool name and ESPs differ from the backed-up host. The `boot` category therefore never writes the old host's boot files: GRUB settings (`/etc/default/grub`, `/etc/default/grub.d/`), `/etc/kernel/cmdline` and `/etc/kernel/proxmox-boot-uuids` are kept in the archive under `var/lib/proxsave-info/boot/` and only reach the export directory. None of these files is written to the live system, in any mode, including the full-restore fallback, not even when `CUSTOM_BACKUP_PATHS` names `/etc/default` or `/etc/kernel` and the archive also holds them at their natural paths: those copies go to the export directory with `proxsave_info`. The rest of `/etc/default` is restored by `services` as before.
+
+**Source**: the backed-up host's effective kernel command line (`/proc/cmdline` at backup time), stored in `var/lib/proxsave-info/commands/system/kernel_cmdline.txt` by every backup.
+
+**Merge rule**:
+- Every parameter is carried except those that describe the backed-up host itself, and anything after `--` (arguments for init):
+  - its root device and boot image: `root=`, `boot=`, `ro`, `rw`, `BOOT_IMAGE=`, `initrd=`;
+  - how its root was mounted and where it resumed from: `rootflags=`, `rootfstype=`, `resume=`, `resume_offset=`. A `rootflags=` or `rootfstype=` of another filesystem makes this host's root mount fail, and the boot stops in the initramfs shell;
+  - what was sized on its RAM or laid out on its memory map: `zfs.zfs_arc_max=` and `zfs.zfs_arc_min=` (the restore keeps this host's ARC limit), `hugepages=`, `hugepagesz=`, `default_hugepagesz=`, `sysctl.vm.nr_hugepages=`, `hugetlb_cma=`, `cma=`, `kernelcore=`, `movablecore=`, `mem=` and `memmap=` (a `memmap=` of another machine's firmware map can stop the boot);
+  - `crashkernel=`: the kdump reservation. On GRUB hosts `kdump-tools` writes it through its own drop-in, sized for this host's RAM; without `kdump-tools` it only takes memory.
+- A parameter this host already has is not added again. When both hosts set the same parameter with different values, this host's value stays (the kernel treats `-` and `_` in parameter names as the same character, so `vfio-pci.ids` and `vfio_pci.ids` are one parameter).
+
+**Where the parameters are written** (Proxmox VE admin guide, *Host Bootloader*, *Editing the Kernel Commandline*):
+
+| This host | File written | Rebuild |
+|-----------|--------------|---------|
+| GRUB, no `/etc/kernel/proxmox-boot-uuids`; `/etc/default/grub`, `/boot/grub/grub.cfg` and `update-grub` present | the value of `GRUB_CMDLINE_LINUX_DEFAULT` in `/etc/default/grub`, the rest of the file untouched | `update-initramfs -u -k all`, then `update-grub` |
+| `proxmox-boot-tool status` reports every ESP as `uefi` (systemd-boot); `/etc/kernel/cmdline` is one line with `root=` | `/etc/kernel/cmdline` | `update-initramfs -u -k all`, then `proxmox-boot-tool refresh` |
+| `proxmox-boot-tool status` reports every ESP as `grub` | the value of `GRUB_CMDLINE_LINUX_DEFAULT` in `/etc/default/grub` | `update-initramfs -u -k all`, then `proxmox-boot-tool refresh` |
+
+Anything else is not recognized with certainty, and nothing is written: the ESPs disagree, `proxmox-boot-tool status` fails, `GRUB_CMDLINE_LINUX_DEFAULT` is not one plain assignment of a literal value, or a file in `/etc/default/grub.d/` sets it too. The restore logs a warning with the reason and the parameters the backup carries.
+
+**Rebuild**: runs once, at the end of the restore, when the merge changed a file or the restore wrote under `/etc/modprobe.d`, `/etc/modules`, `/etc/hostid` or `/etc/zfs`, which the initramfs copies. On a bootloader not recognized with certainty only `update-initramfs` runs, and the bootloader is left as it is. A failed command is a warning with the command and its error; the next command still runs and the restore goes on.
+
+**Safety backup**: the pre-restore `/etc/default/grub` and `/etc/kernel/cmdline` are in the safety backup, like every other file the restore may write.
+
+**Log**: every step is in the restore log, on lines starting with `Boot configuration -`: the backed-up command line, the bootloader found, the parameters added (or not carried because this host sets them differently), and each command run.
+
+For VM/CT configuration application, use [VM/CT Configuration Restore](#vmct-configuration-restore); for failures, use [diagnose failures](TROUBLESHOOTING.md#diagnose-backup-and-restore-failures). CLI entry options are in [CLI reference](CLI_REFERENCE.md).
+
+<!-- site-region: restore-passthrough:end -->
+
 ## Additional Resources
 
 **Related Documentation**:
@@ -3168,13 +2695,13 @@ rm -r /opt/proxsave/restore/TIMESTAMP
 
 The restore workflow provides a **safe, interactive, and flexible** system for recovering Proxmox configurations:
 
-✅ **Category-based** granular control
-✅ **4 restore modes** for common scenarios
-✅ **Safety backups** before any changes
-✅ **Cluster-aware** service management
-✅ **Export-only protection** for sensitive paths
-✅ **Comprehensive logging** for audit trails
-✅ **Multiple abort points** for user control
+- **Category-based** granular control
+- **4 restore modes** for common scenarios
+- **Safety backups** before any changes
+- **Cluster-aware** service management
+- **Export-only protection** for sensitive paths
+- **Comprehensive logging** for audit trails
+- **Multiple abort points** for user control
 
 **Remember**:
 - Start from the dashboard: `proxsave` with no arguments, then **Tools > Restore**

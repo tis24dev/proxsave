@@ -1,0 +1,383 @@
+{
+  "schema": 1,
+  "pages": [
+    {
+      "id": "introduction",
+      "slug": "introduction",
+      "title": "Proxmox host configuration backup",
+      "excerpt": "Understand which Proxmox VE, PBS and Linux host settings ProxSave collects, and which data needs a separate backup",
+      "verified": false,
+      "evidence": "Documentation reorganized against source commit 9e93a6768f4666e7a35b603dfd98c5396b25f612. Inspect the preview at the publishing commit and record the completed behavioral review before enabling publication.",
+      "sources": [
+        {
+          "path": "docs/BACKUP_GUIDE.md",
+          "region": "backup-scope"
+        }
+      ]
+    },
+    {
+      "id": "installation",
+      "slug": "installation",
+      "title": "Install ProxSave",
+      "excerpt": "Install ProxSave and open the dashboard to configure your first backup",
+      "verified": false,
+      "evidence": "Documentation reorganized against source commit 9e93a6768f4666e7a35b603dfd98c5396b25f612. Inspect the preview at the publishing commit and record the completed behavioral review before enabling publication.",
+      "sources": [
+        {
+          "path": "docs/INSTALL.md",
+          "region": "install-proxsave"
+        }
+      ]
+    },
+    {
+      "id": "quick-start",
+      "slug": "quick-start",
+      "title": "Run and verify your first backup",
+      "excerpt": "Run a backup from the dashboard, inspect every destination and prepare a recovery test",
+      "verified": false,
+      "evidence": "Documentation reorganized against source commit 9e93a6768f4666e7a35b603dfd98c5396b25f612. Inspect the preview at the publishing commit and record the completed behavioral review before enabling publication.",
+      "sources": [
+        {
+          "path": "docs/BACKUP_GUIDE.md",
+          "region": "first-backup"
+        }
+      ]
+    },
+    {
+      "id": "manual-install-from-source",
+      "slug": "manual-install-from-source",
+      "title": "Build and install from source",
+      "excerpt": "Build ProxSave with the required Go toolchain and complete installation",
+      "verified": false,
+      "evidence": "Documentation reorganized against source commit 9e93a6768f4666e7a35b603dfd98c5396b25f612. Inspect the preview at the publishing commit and record the completed behavioral review before enabling publication.",
+      "sources": [
+        {
+          "path": "docs/INSTALL.md",
+          "region": "install-from-source"
+        }
+      ]
+    },
+    {
+      "id": "upgrade",
+      "slug": "upgrade",
+      "title": "Upgrade ProxSave",
+      "excerpt": "Update an existing installation, review configuration changes and check the running scheduler",
+      "verified": false,
+      "evidence": "Documentation reorganized against source commit 9e93a6768f4666e7a35b603dfd98c5396b25f612. Inspect the preview at the publishing commit and record the completed behavioral review before enabling publication.",
+      "sources": [
+        {
+          "path": "docs/INSTALL.md",
+          "region": "upgrade-proxsave"
+        }
+      ]
+    },
+    {
+      "id": "manual-migration",
+      "slug": "manual-migration",
+      "title": "Migrate from the Bash version",
+      "excerpt": "Move from a historical Bash installation by reviewing settings, backup compatibility and scheduler ownership",
+      "verified": false,
+      "evidence": "Documentation reorganized against source commit 9e93a6768f4666e7a35b603dfd98c5396b25f612. Inspect the preview at the publishing commit and record the completed behavioral review before enabling publication.",
+      "sources": [
+        {
+          "path": "docs/INSTALL.md",
+          "region": "legacy-migration"
+        }
+      ]
+    },
+    {
+      "id": "usage-modes",
+      "slug": "usage-modes",
+      "title": "Use the ProxSave dashboard",
+      "excerpt": "Use the dashboard menus for backups, recovery, maintenance and diagnostic checks",
+      "verified": false,
+      "evidence": "Documentation reorganized against source commit 9e93a6768f4666e7a35b603dfd98c5396b25f612. Inspect the preview at the publishing commit and record the completed behavioral review before enabling publication.",
+      "sources": [
+        {
+          "path": "docs/DASHBOARD.md",
+          "region": "using-proxsave"
+        }
+      ]
+    },
+    {
+      "id": "workflow-overview",
+      "slug": "workflow-overview",
+      "title": "How a ProxSave backup works",
+      "excerpt": "Follow collection, archive preparation, storage delivery and reporting through a backup run",
+      "verified": false,
+      "evidence": "Documentation reorganized against source commit 9e93a6768f4666e7a35b603dfd98c5396b25f612. Inspect the preview at the publishing commit and record the completed behavioral review before enabling publication.",
+      "sources": [
+        {
+          "path": "docs/BACKUP_GUIDE.md",
+          "region": "backup-workflow"
+        }
+      ]
+    },
+    {
+      "id": "customize-settings",
+      "slug": "customize-settings",
+      "title": "Choose what to back up",
+      "excerpt": "Choose collectors and custom paths, review exclusions and check the resulting backup",
+      "verified": false,
+      "evidence": "Documentation reorganized against source commit 9e93a6768f4666e7a35b603dfd98c5396b25f612. Inspect the preview at the publishing commit and record the completed behavioral review before enabling publication.",
+      "sources": [
+        {
+          "path": "docs/BACKUP_GUIDE.md",
+          "region": "backup-selection"
+        }
+      ]
+    },
+    {
+      "id": "storage-backends",
+      "slug": "storage-backends",
+      "title": "Choose backup destinations",
+      "excerpt": "Choose local, mounted secondary, rclone or native PBS storage and understand their recovery paths",
+      "verified": false,
+      "evidence": "Documentation reorganized against source commit 9e93a6768f4666e7a35b603dfd98c5396b25f612. Inspect the preview at the publishing commit and record the completed behavioral review before enabling publication.",
+      "sources": [
+        {
+          "path": "docs/STORAGE.md",
+          "region": "backup-destinations"
+        }
+      ]
+    },
+    {
+      "id": "backup-tiers",
+      "slug": "backup-tiers",
+      "title": "Configure backup retention",
+      "excerpt": "Configure simple or generation-based retention and check how it applies to each destination",
+      "verified": false,
+      "evidence": "Documentation reorganized against source commit 9e93a6768f4666e7a35b603dfd98c5396b25f612. Inspect the preview at the publishing commit and record the completed behavioral review before enabling publication.",
+      "sources": [
+        {
+          "path": "docs/STORAGE.md",
+          "region": "backup-retention"
+        }
+      ]
+    },
+    {
+      "id": "native-pbs-backups",
+      "slug": "native-pbs-backups",
+      "title": "Back up host configurations to PBS",
+      "excerpt": "Save collected host configuration to a PVE-configured PBS storage and understand its keys and recovery path",
+      "verified": false,
+      "evidence": "Documentation reorganized against source commit 9e93a6768f4666e7a35b603dfd98c5396b25f612. Inspect the preview at the publishing commit and record the completed behavioral review before enabling publication.",
+      "sources": [
+        {
+          "path": "docs/STORAGE.md",
+          "region": "native-pbs-backups"
+        }
+      ]
+    },
+    {
+      "id": "cloud-storage-rclone",
+      "slug": "cloud-storage-rclone",
+      "title": "Configure cloud backups with rclone",
+      "excerpt": "Configure the executing account's rclone remote, select the destination path and verify backup copies",
+      "verified": false,
+      "evidence": "Documentation reorganized against source commit 9e93a6768f4666e7a35b603dfd98c5396b25f612. Inspect the preview at the publishing commit and record the completed behavioral review before enabling publication.",
+      "sources": [
+        {
+          "path": "docs/CLOUD_STORAGE.md",
+          "region": "cloud-backups"
+        }
+      ]
+    },
+    {
+      "id": "encryption-with-age",
+      "slug": "encryption-with-age",
+      "title": "Encrypt backups with AGE",
+      "excerpt": "Configure AGE recipients, protect recovery material and understand plaintext collection staging",
+      "verified": false,
+      "evidence": "Documentation reorganized against source commit 9e93a6768f4666e7a35b603dfd98c5396b25f612. Inspect the preview at the publishing commit and record the completed behavioral review before enabling publication.",
+      "sources": [
+        {
+          "path": "docs/ENCRYPTION.md",
+          "region": "encrypt-backups"
+        }
+      ]
+    },
+    {
+      "id": "decryption",
+      "slug": "decryption",
+      "title": "Decrypt a backup bundle",
+      "excerpt": "Use the dashboard to convert an encrypted backup bundle into a plaintext bundle",
+      "verified": false,
+      "evidence": "Documentation reorganized against source commit 9e93a6768f4666e7a35b603dfd98c5396b25f612. Inspect the preview at the publishing commit and record the completed behavioral review before enabling publication.",
+      "sources": [
+        {
+          "path": "docs/ENCRYPTION.md",
+          "region": "decrypt-backups"
+        }
+      ]
+    },
+    {
+      "id": "binary-security",
+      "slug": "binary-security",
+      "title": "Verify a ProxSave release",
+      "excerpt": "Verify release signatures, checksums and optional build attestations",
+      "verified": false,
+      "evidence": "Documentation reorganized against source commit 9e93a6768f4666e7a35b603dfd98c5396b25f612. Inspect the preview at the publishing commit and record the completed behavioral review before enabling publication.",
+      "sources": [
+        {
+          "path": "docs/PROVENANCE_VERIFICATION.md",
+          "region": "verify-release"
+        }
+      ]
+    },
+    {
+      "id": "automation-and-scheduling",
+      "slug": "automation-and-scheduling",
+      "title": "Schedule and supervise backups",
+      "excerpt": "Manage the resident daemon, configure a schedule and inspect supervision through the dashboard",
+      "verified": false,
+      "evidence": "Documentation reorganized against source commit 9e93a6768f4666e7a35b603dfd98c5396b25f612. Inspect the preview at the publishing commit and record the completed behavioral review before enabling publication.",
+      "sources": [
+        {
+          "path": "docs/DAEMON.md",
+          "region": "schedule-backups"
+        }
+      ]
+    },
+    {
+      "id": "monitoring-and-healthchecks",
+      "slug": "monitoring-and-healthchecks",
+      "title": "Monitor missed and failed backups",
+      "excerpt": "Configure healthchecks to detect missing or failed backup runs and verify alert delivery",
+      "verified": false,
+      "evidence": "Documentation reorganized against source commit 9e93a6768f4666e7a35b603dfd98c5396b25f612. Inspect the preview at the publishing commit and record the completed behavioral review before enabling publication.",
+      "sources": [
+        {
+          "path": "docs/HEALTHCHECKS.md",
+          "region": "monitor-backups"
+        }
+      ]
+    },
+    {
+      "id": "notifications",
+      "slug": "notifications",
+      "title": "Configure backup notifications",
+      "excerpt": "Configure notification channels and distinguish message delivery from the backup result",
+      "verified": false,
+      "evidence": "Documentation reorganized against source commit 9e93a6768f4666e7a35b603dfd98c5396b25f612. Inspect the preview at the publishing commit and record the completed behavioral review before enabling publication.",
+      "sources": [
+        {
+          "path": "docs/NOTIFICATIONS.md",
+          "region": "backup-notifications"
+        }
+      ]
+    },
+    {
+      "id": "restore-modes",
+      "slug": "restore-modes",
+      "title": "Choose restore modes and categories",
+      "excerpt": "Choose available restore categories and understand direct, staged and export handling",
+      "verified": false,
+      "evidence": "Documentation reorganized against source commit 9e93a6768f4666e7a35b603dfd98c5396b25f612. Inspect the preview at the publishing commit and record the completed behavioral review before enabling publication.",
+      "sources": [
+        {
+          "path": "docs/RESTORE_GUIDE.md",
+          "region": "restore-selection"
+        }
+      ]
+    },
+    {
+      "id": "restore-playbooks",
+      "slug": "restore-playbooks",
+      "title": "Restore a host configuration",
+      "excerpt": "Prepare a compatible target and restore host configuration through the dashboard",
+      "verified": false,
+      "evidence": "Documentation reorganized against source commit 9e93a6768f4666e7a35b603dfd98c5396b25f612. Inspect the preview at the publishing commit and record the completed behavioral review before enabling publication.",
+      "sources": [
+        {
+          "path": "docs/RESTORE_GUIDE.md",
+          "region": "restore-host"
+        }
+      ]
+    },
+    {
+      "id": "cluster-restore-disaster",
+      "slug": "cluster-restore-disaster",
+      "title": "Recover Proxmox cluster configuration",
+      "excerpt": "Choose a cluster recovery procedure with the required isolation, quorum checks and result verification",
+      "verified": false,
+      "evidence": "Documentation reorganized against source commit 9e93a6768f4666e7a35b603dfd98c5396b25f612. Inspect the preview at the publishing commit and record the completed behavioral review before enabling publication.",
+      "sources": [
+        {
+          "path": "docs/CLUSTER_RECOVERY.md",
+          "region": "cluster-recovery"
+        }
+      ]
+    },
+    {
+      "id": "iommu-vfio-and-passthrough",
+      "slug": "iommu-vfio-and-passthrough",
+      "title": "Restore IOMMU, VFIO and passthrough settings",
+      "excerpt": "Recover boot parameters and passthrough settings while reviewing target hardware and resource mappings",
+      "verified": false,
+      "evidence": "Documentation reorganized against source commit 9e93a6768f4666e7a35b603dfd98c5396b25f612. Inspect the preview at the publishing commit and record the completed behavioral review before enabling publication.",
+      "sources": [
+        {
+          "path": "docs/RESTORE_GUIDE.md",
+          "region": "restore-passthrough"
+        }
+      ]
+    },
+    {
+      "id": "global-settings",
+      "slug": "global-settings",
+      "title": "Configure ProxSave",
+      "excerpt": "Edit the settings available in the dashboard and locate the complete configuration reference",
+      "verified": false,
+      "evidence": "Documentation reorganized against source commit 9e93a6768f4666e7a35b603dfd98c5396b25f612. Inspect the preview at the publishing commit and record the completed behavioral review before enabling publication.",
+      "sources": [
+        {
+          "path": "docs/CONFIGURATION.md",
+          "region": "configure-proxsave"
+        }
+      ]
+    },
+    {
+      "id": "cli-reference",
+      "slug": "cli-reference",
+      "title": "ProxSave command-line reference",
+      "excerpt": "Look up flags, argument combinations and exit behavior for automation and headless use",
+      "verified": false,
+      "evidence": "Documentation reorganized against source commit 9e93a6768f4666e7a35b603dfd98c5396b25f612. Inspect the preview at the publishing commit and record the completed behavioral review before enabling publication.",
+      "sources": [
+        {
+          "path": "docs/CLI_REFERENCE.md",
+          "region": "cli-reference"
+        }
+      ]
+    },
+    {
+      "id": "common-errors",
+      "slug": "common-errors",
+      "title": "Diagnose backup and restore failures",
+      "excerpt": "Find the failed stage, inspect logs and use debug logging with a clear understanding of its effects",
+      "verified": false,
+      "evidence": "Documentation reorganized against source commit 9e93a6768f4666e7a35b603dfd98c5396b25f612. Inspect the preview at the publishing commit and record the completed behavioral review before enabling publication.",
+      "sources": [
+        {
+          "path": "docs/TROUBLESHOOTING.md",
+          "region": "diagnose-failures"
+        }
+      ]
+    },
+    {
+      "id": "how-to-request-support-2",
+      "slug": "how-to-request-support-2",
+      "title": "Request support",
+      "excerpt": "Collect useful diagnostic evidence and understand consent before sending a support log",
+      "verified": false,
+      "evidence": "Documentation reorganized against source commit 9e93a6768f4666e7a35b603dfd98c5396b25f612. Inspect the preview at the publishing commit and record the completed behavioral review before enabling publication.",
+      "sources": [
+        {
+          "path": "docs/TROUBLESHOOTING.md",
+          "region": "request-support"
+        }
+      ]
+    }
+  ]
+}

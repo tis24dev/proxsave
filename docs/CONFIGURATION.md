@@ -1,6 +1,6 @@
 # Configuration Reference
 
-Complete reference for all 200+ configuration variables in `configs/backup.env`.
+Reference for configuration keys, accepted values, defaults and constraints in `configs/backup.env`. Template examples and compiled fallbacks are distinguished where they differ.
 
 Most installs never need to open this file. Run `proxsave` with no arguments on a terminal
 and the dashboard's configuration form covers the settings a typical host changes; the
@@ -38,6 +38,8 @@ ask about, and for hosts with no terminal.
 - [Custom Paths & Blacklist](#custom-paths--blacklist)
 
 ---
+
+<!-- site-region: configure-proxsave:start -->
 
 ## Editing the configuration from the dashboard
 
@@ -88,7 +90,7 @@ Four other dashboard rows change configuration or configuration-adjacent state:
 
 | Dashboard row | What it does |
 |---|---|
-| `Maintenance` -> `Upgrade` -> `Check config` | merges variables the shipped template has and your file lacks (`--upgrade-config`), after showing you the list |
+| `Maintenance` -> `Upgrade` -> `Check config` | reviews and applies the embedded template merge, including added and retired keys |
 | `Maintenance` -> `New key` | generates the AGE recipient that `AGE_RECIPIENT_FILE` points at |
 | `Daemon` -> `Install` / `Disable` | switches `SCHEDULER_MODE` between `daemon` and `cron`, and turns `HEALTHCHECK_ENABLED` on and back off with it |
 | `Diagnostic Checks` -> `Telegram` / `Healthchecks` | verifies what the notification and monitoring variables above actually do, without running a backup |
@@ -105,18 +107,22 @@ plain text, not shell (see [Personal scripts](#personal-scripts-daemon) for what
 ## Configuration File Location
 
 **Default**: `configs/backup.env`, resolved under the detected install directory (`BASE_DIR`), so typically `/opt/proxsave/configs/backup.env`.
-**Custom**: specify with `--config`. An absolute path is used as-is; a relative path is joined onto the install directory, not the current working directory.
-
-```bash
-# Use custom config file
-proxsave --config /path/to/my-backup.env
-```
-
-`--config` is an automation flag: passing it, like passing any flag, skips the dashboard,
-so a run with a custom configuration file is always a non-interactive one. Use it for a
-second profile (a snapshot or fixture run, for example) rather than for everyday editing.
+**Custom profiles**: use the configuration flag described in the [CLI reference](CLI_REFERENCE.md#run-backup). An absolute path is used as-is; a relative path resolves against the installation directory. Passing this flag bypasses the dashboard and selects the normal backup path unless another operation is explicitly selected. Interactive prompts may still occur in operations that require them.
 
 ---
+
+
+### Verify a configuration change
+
+Save an independent copy before manual editing. The file is parsed as data, not executed as shell: do not source it to test it. Ordinary duplicate assignments use the last value; the four list/recipient keys named in the integrity reference concatenate. Environment overrides apply only to the fixed allowlist, and `BASE_DIR` is detected from the executable. See the [environment reference](CLI_REFERENCE.md#environment-variables) before relying on a per-run override.
+
+Open **Post-install > Check** to review diagnostics and optional collectors. This simulation writes logs but does not create or upload archives. Review warnings and then follow the [first backup verification](BACKUP_GUIDE.md#run-and-verify-your-first-backup) using **Backup**. A check can reveal configuration problems; it does not verify recoverability.
+
+If loading fails, the dashboard opens before configuration is loaded, so **Install > Edit install** remains available. Keep configuration in a regular file: template merges replace a symlink rather than writing through to its target. Review the [upgrade effects](INSTALL.md#what-gets-updated) before applying Check config.
+
+The remaining sections are the complete key reference. Use [storage](STORAGE.md), [cloud setup](CLOUD_STORAGE.md), [encryption](ENCRYPTION.md), [scheduling](DAEMON.md) and [notifications](NOTIFICATIONS.md) for operational procedures.
+
+<!-- site-region: configure-proxsave:end -->
 
 ## Configuration integrity check
 
@@ -129,7 +135,7 @@ DEBUG    Configuration integrity: file=/opt/proxsave/configs/backup.env lines=47
 DEBUG    Configuration integrity: template assigns 182 variables and documents 33 more as commented examples
 DEBUG    Configuration integrity: variables that may repeat without discarding: AGE_RECIPIENT, BACKUP_BLACKLIST, BACKUP_EXCLUDE_PATTERNS, CUSTOM_BACKUP_PATHS
 DEBUG    Configuration integrity: 0 duplicated, 0 absent, 0 unknown, 0 legacy (duration=3.1ms)
-INFO     ✓ Configuration file ok
+INFO     Configuration file ok
 ```
 
 It reports four things, one line each, and their levels differ because the facts differ:
@@ -147,7 +153,7 @@ WARNING    HEALTHCHECK_UPDATES_ID is absent and falls back to its default
 WARNING    LOCAL_BACKUP_PATH is the legacy name for BACKUP_PATH and both are set; LOCAL_BACKUP_PATH wins and BACKUP_PATH has no effect
 INFO       RCLONE_REMOTE is the legacy name for CLOUD_REMOTE and is still read; rename it to CLOUD_REMOTE when convenient
 INFO       PERSONAL_SCRIPTS_PRERUN is not a known variable and is ignored
-WARNING  ⚠ Configuration file: 1 duplicated, 1 absent, 1 unknown, 2 legacy
+WARNING  Configuration file: 1 duplicated, 1 absent, 1 unknown, 2 legacy
 ```
 
 ### Duplicated: the one that loses data
@@ -189,11 +195,11 @@ binary with an older template and never sees this finding. Seeing it means the b
 
 Fix it from the dashboard with `Maintenance` -> `Upgrade` -> `Check config`: the check lists
 the variables it would add and only offers `Apply` when there is something to add, and the
-apply takes a backup it can roll back to. The same two steps from a script are
-`--upgrade-config-dry-run` (shows what it would add) and `--upgrade-config` (adds it).
+apply takes a backup it can roll back to. For automation, use the separate
+[configuration upgrade reference](CLI_REFERENCE.md#configuration-upgrade).
 
-A missing variable falls back to its default, so nothing you wrote is lost and the backup itself
-is unaffected. The finding is still a `WARNING`, and like every other warning it promotes the run
+A missing variable uses the parser's fallback for that setting. Review the default and
+the proposed merge before relying on the resulting behavior. The finding is still a `WARNING`, and like every other warning it promotes the run
 to exit 1: a host that upgraded the binary without merging its `backup.env` exits 1 on every run,
 and the Healthchecks backup check goes down with it, until the merge is run. Merge the
 file, either way, or expect that state until you do.
@@ -224,7 +230,7 @@ COLORIZE_STEP_LOGS=true            # true | false (requires USE_COLOR=true)
 # Debug level
 DEBUG_LEVEL=standard               # standard | advanced | extreme
 
-# Dry-run mode (test without changes)
+# Diagnostic simulation: writes logs, skips archive creation and upload
 # A restore is refused while this is true: it cannot run without modifying the system
 DRY_RUN=false                      # true | false
 
@@ -315,18 +321,19 @@ own environment, and a name neither defines is replaced by nothing, silently. `$
 a `$` at the end of the value, or one before a character that is neither a letter, a digit, an
 underscore nor one of those, survives. Rename the script rather than fighting the expansion.
 
-These scripts belong to you. ProxSave starts them and reports nothing about them: their output
-is discarded, their exit code is ignored, they never fail a backup or change its exit code, and
-they appear in no log, notification, ping or metric. Each is killed after 10 minutes, on every
-path but the abandoned-child unwind described in [DAEMON.md](DAEMON.md). They run
-only under the daemon, never under a manual `proxsave --backup` or a cron-mode run.
+These scripts run only under the daemon, never under a manual `proxsave --backup` or
+a cron-mode run. Their output is discarded and their exit status does not change the
+backup result. The normal wait is limited to 10 minutes; shutdown and abandoned-child
+handling have different wait and cleanup rules. See [Personal scripts](DAEMON.md#personal-scripts-around-a-run).
 
-The one line ProxSave will ever log about them is a refusal at daemon start: the path must not
-traverse a symlink, it and every directory above it must belong to root (or the user the
-daemon runs as), the script must not be writable by group or others, and a group- or
-other-writable directory must carry the sticky bit. A path that fails is disabled for that
-daemon with a `WARNING` naming the variable, the path and the reason (see
-[SECURITY.md](SECURITY.md)).
+At startup, each path is classified as not configured, ready, ready with warning, or
+refused. The script must be a regular executable owned by root or the daemon UID and
+must not be writable by group or others. Symlinked paths and loosely writable
+non-sticky directories are refused. A safely permissioned ancestor owned by another
+UID can be accepted with a trust warning, since that owner can replace descendants.
+The execution-time gate checks the opened script again before each launch. Startup
+advisories and refusals, and execution-time refusals, are recorded in the daemon log;
+see [DAEMON.md](DAEMON.md) for the full policy and diagnostic commands.
 
 ---
 
@@ -518,8 +525,8 @@ SET_BACKUP_PERMISSIONS=false                    # true = apply chown/chmod on ba
 - Checks for suspicious open ports
 - Scans for suspicious processes
 - Validates file hashes to detect tampering
-- **If `CONTINUE_ON_SECURITY_ISSUES=false`**: Backup aborts on any issue
-- **If `CONTINUE_ON_SECURITY_ISSUES=true`**: Issues logged as warnings, backup continues
+- **If `CONTINUE_ON_SECURITY_ISSUES=false`**: Security errors abort the backup; warning-only results do not
+- **If `CONTINUE_ON_SECURITY_ISSUES=true`**: Findings are logged and the run continues despite security errors; later backup phases can still fail
 
 #### Process List Merge Behavior
 
@@ -768,7 +775,7 @@ PREFILTER_MAX_FILE_SIZE_MB=8       # Skip prefilter for files >8MB
 
 ### What These Do
 
-- **Deduplication**: Detects duplicate data blocks (reduces storage)
+- **Deduplication**: Finds identical whole files within the collected tree and replaces duplicates with links before archiving; this is not block deduplication across backup runs
 - **Prefilter**: Applies safe, semantic-preserving normalization to small text/JSON files to improve compression (e.g. removes CR from CRLF line endings and minifies JSON). It does **not** reorder, de-indent, or strip structured configuration files, and it avoids touching Proxmox/PBS structured config paths (e.g. `etc/pve/**`, `etc/proxmox-backup/**`).
 
 ### Prefilter (`ENABLE_PREFILTER`): details and risks
@@ -882,16 +889,16 @@ sudo mount -t cifs //192.168.0.10/backup /mnt/nas-backup -o credentials=/root/.s
 
 **2. Then configure SECONDARY_PATH**:
 ```bash
-SECONDARY_PATH=/mnt/nas-backup  # ✓ Correct - uses mounted path
+SECONDARY_PATH=/mnt/nas-backup  # Correct - uses mounted path
 SECONDARY_LOG_PATH=/mnt/nas-logs  # Optional
 ```
 
 ### What NOT to Do
 
 ```bash
-SECONDARY_PATH=192.168.0.10/backup       # ✗ WRONG - network address
-SECONDARY_PATH=//server/share            # ✗ WRONG - UNC path
-SECONDARY_PATH=\\192.168.0.10\backup    # ✗ WRONG - Windows path
+SECONDARY_PATH=192.168.0.10/backup       # WRONG - network address
+SECONDARY_PATH=//server/share            # WRONG - UNC path
+SECONDARY_PATH=\\192.168.0.10\backup    # WRONG - Windows path
 ```
 
 **For direct network access without mounting:** Use `CLOUD_REMOTE` with rclone instead (see [Cloud Storage](#cloud-storage-rclone) section).
@@ -985,10 +992,10 @@ CLOUD_LOG_PATH=B+K/BACKUP/marcellus/logs
 ### When Auto-Fallback Helps
 
 Automatic with `false`:
-- ✅ **Cloudflare R2** with restricted API tokens (no list permissions)
-- ✅ **S3-compatible providers** with minimal token permissions
-- ✅ **Backblaze B2**, **Wasabi** write-only tokens
-- ✅ **First-time setup** with uncertain token permissions
+- **Cloudflare R2** with restricted API tokens (no list permissions)
+- **S3-compatible providers** with minimal token permissions
+- **Backblaze B2**, **Wasabi** write-only tokens
+- **First-time setup** with uncertain token permissions
 
 ### When to Set CLOUD_WRITE_HEALTHCHECK=true
 
@@ -1038,7 +1045,7 @@ MAX_PBS_TARGET_BACKUPS=15    # snapshots kept by retention (0 = no retention)
 MIN_DISK_SPACE_PBS_GB=1      # free space required on the datastore
 ```
 
-- `proxmox-backup-client` must be installed; nothing about PBS is stored in `backup.env`.
+- `proxmox-backup-client` must be installed. Target selection and retention settings are stored in `backup.env`; connection details and credentials are reused from the selected PVE storage.
 - Retention keeps the newest `MAX_PBS_TARGET_BACKUPS` snapshots of the group (with `RETENTION_POLICY=gfs`, the same GFS rules as the other destinations). A failed upload deletes nothing.
 - When the storage has an encryption key, the snapshot and the log are encrypted with it. When it has none they are uploaded unencrypted, and step [7] says so (`Encryption: none, storage <id> has no key`).
 - ProxSave sets no timeout on the PBS client. Under cron nothing stops a hung upload; the daemon's `MAX_RUN_DURATION` watchdog does, so the daemon is the recommended scheduler with PBS.
@@ -1047,27 +1054,11 @@ MIN_DISK_SPACE_PBS_GB=1      # free space required on the datastore
 
 ## Storage Comparison
 
-Quick comparison to help you choose the right storage configuration:
-
-| Feature | SECONDARY_PATH | CLOUD_REMOTE (rclone) |
-|---------|----------------|----------------------|
-| **Path Type** | Filesystem-mounted paths only | Network addresses via rclone |
-| **Valid Examples** | `/mnt/nas-backup`<br>`/media/usb-drive`<br>`/backup/secondary` | `CLOUD_REMOTE=GoogleDrive` + `CLOUD_REMOTE_PATH=/backups`<br>`CLOUD_REMOTE=b2` + `CLOUD_REMOTE_PATH=/pbs-prod`<br>`CLOUD_REMOTE=minio` + `CLOUD_REMOTE_PATH=/pbs` |
-| **Invalid Examples** | ❌ `192.168.0.10/folder`<br>❌ `//server/share`<br>❌ `\\192.168.0.10\backup` | N/A (handles network directly) |
-| **Network Storage** | Must mount first via NFS/CIFS/SMB | Direct access via rclone config |
-| **Setup Complexity** | Simple (native Go copy) | Moderate (requires rclone config) |
-| **Dependencies** | None | Requires rclone installed |
-| **Speed** | Fast (local filesystem I/O) | Depends on network/cloud |
-| **Use Case** | - Local USB drives<br>- Pre-mounted NAS shares<br>- Additional local disks | - Cloud storage (GDrive, S3, B2)<br>- LAN servers (MinIO, S3)<br>- Remote storage without mounting |
-| **Failure Behavior** | Non-critical (warns, continues) | Non-critical (warns, continues) |
-| **Setup Example** | `sudo mount 192.168.0.10:/share /mnt/nas`<br>`SECONDARY_PATH=/mnt/nas` | `rclone config` (create "minio" remote)<br>`CLOUD_REMOTE=minio` + `CLOUD_REMOTE_PATH=/backups` |
+Destination selection and mounting procedures are maintained in the [storage guide](STORAGE.md). Secondary storage uses an existing local filesystem path; cloud storage uses an rclone remote and does not require a filesystem mount.
 
 ### Decision Guide
 
-- **Use SECONDARY_PATH if**: You have local storage (USB drive) OR willing to mount network shares to filesystem
-- **Use CLOUD_REMOTE if**: You want direct network access (no mounting) OR using cloud providers OR using S3-compatible storage
-
-**See** [docs/CLOUD_STORAGE.md](CLOUD_STORAGE.md) **for complete rclone setup guide.**
+Use the [destination guide](STORAGE.md) for local disks, NAS mounts and native PBS. Use the [cloud guide](CLOUD_STORAGE.md) for remote credentials and accessible archive retrieval.
 
 ---
 
@@ -1204,23 +1195,15 @@ Set the tiers in the same edit as the policy.
 
 ### Benefits
 
-- Better historical coverage than simple count
-- Automatic time distribution
-- ISO 8601 week numbering (standard)
-- Efficient storage (fewer total backups)
+Operational retention planning and verification are maintained in the [storage guide](STORAGE.md). The key definitions and GFS deletion constraints above remain authoritative here.
 
 ### Example Output
 
-```text
-GFS classification -> daily: 7/7, weekly: 4/4, monthly: 12/12, yearly: 2/3, to_delete: 15
-Deleting old backup: pbs-backup-20220115-120000.tar.xz (created: 2022-01-15 12:00:00)
-Cloud storage retention applied: deleted 15 backups (logs deleted: 15), 26 backups remaining
-```
+Read the retention classification and deletion messages in the saved run log, then verify the remaining archive set on every enabled destination.
 
 ### Storage Comparison
 
-- **Simple**: `MAX_CLOUD_BACKUPS=1095` for 3 years daily = 1095 backups
-- **GFS**: `DAILY=7, WEEKLY=4, MONTHLY=12, YEARLY=3` = ~26 backups (97% storage reduction!)
+A GFS tier selects distinct archives after higher-priority tiers; the sum of configured tier counts is not a guaranteed archive total. See [retention planning](STORAGE.md).
 
 ---
 
@@ -1258,7 +1241,7 @@ AGE_RECIPIENT_FILE=${BASE_DIR}/identity/age/recipient.txt
 ### Encryption
 
 - Uses AGE (age-encryption.org)
-- Streaming encryption (no plaintext on disk)
+- Streaming encryption avoids a plaintext archive on disk; collected files are staged in plaintext before archiving, as described in [Plaintext staging](ENCRYPTION.md#plaintext-staging)
 - Supports multiple recipients
 - Passphrase or key-based
 
@@ -1816,7 +1799,7 @@ BACKUP_BLACKLIST="
 "
 ```
 
-**Format**: Bash-style heredoc, one path per line, `#` for comments.
+**Format**: A double-quoted multiline value, one path per line, with `#` comment lines. This is ProxSave configuration syntax, not a shell heredoc.
 
 Collecting a custom path does not automatically make it a restore category. FULL
 restore selects recognized categories present in the archive; additional files may

@@ -1,43 +1,82 @@
-# Proxsave Documentation Index
+# ProxSave documentation
 
-This directory contains the authoritative project documentation.
+These guides describe host configuration backup and recovery for Proxmox VE and Proxmox Backup Server
 
-Start with [DASHBOARD.md](DASHBOARD.md). The interactive dashboard, which opens when you run
-`proxsave` with no arguments on a terminal, is the primary way to operate ProxSave: backup,
-restore, configuration, upgrade, daemon management and the diagnostic checks all live there.
-The command-line flags in [CLI_REFERENCE.md](CLI_REFERENCE.md) cover the automation, headless
-and recovery routes.
-
-The repository root `README.md` stays a short overview. Use the documents
-below for the current operational and technical behavior.
+After installation, open an interactive terminal and run `proxsave` without arguments to use the dashboard. The operator guides follow its menus. Command-line options for automation and headless use are kept in the [CLI reference](CLI_REFERENCE.md)
 
 ## User Guides
 
-- [DASHBOARD.md](DASHBOARD.md): the interactive dashboard, screen by screen (start here)
-- [INSTALL.md](INSTALL.md): installation, reinstall, and upgrade flows
-- [CONFIGURATION.md](CONFIGURATION.md): complete `backup.env` reference, and which settings the dashboard form covers
-- [DAEMON.md](DAEMON.md): the resident daemon, the scheduler a new install gets, its watchdog and the engines
-- [HEALTHCHECKS.md](HEALTHCHECKS.md): backup monitoring under the daemon, the monitoring portal, and self-hosted setups
-- [RESTORE_GUIDE.md](RESTORE_GUIDE.md): full restore guide and category behavior
-- [NOTIFICATIONS.md](NOTIFICATIONS.md): notification channels and the centralized bot relay
-- [EXAMPLES.md](EXAMPLES.md): ready-to-use configuration examples
-- [CLI_REFERENCE.md](CLI_REFERENCE.md): flags for automation, headless hosts, cron jobs and recovery
-- [TROUBLESHOOTING.md](TROUBLESHOOTING.md): operational diagnostics and fixes
+### Start and maintain
+
+| Task | Guide |
+| --- | --- |
+| Understand what is protected | [Backup scope](BACKUP_GUIDE.md#what-proxsave-backs-up) |
+| Install ProxSave | [Installation](INSTALL.md#fast-install) |
+| Make and verify the first backup | [First backup](BACKUP_GUIDE.md#run-and-verify-your-first-backup) |
+| Navigate the application | [Dashboard](DASHBOARD.md) |
+| Update an existing installation | [Upgrade](INSTALL.md#upgrading-proxsave-binary) |
+| Build from source | [Manual installation](INSTALL.md#manual-installation) |
+
+### Backup and storage
+
+| Task | Guide |
+| --- | --- |
+| Choose files and collectors | [Collection policy](BACKUP_GUIDE.md#choose-what-to-collect) |
+| Understand the run stages | [Backup workflow](BACKUP_GUIDE.md#how-a-backup-runs) |
+| Choose local, NAS, cloud or PBS storage | [Destinations](STORAGE.md#choose-and-verify-backup-destinations) |
+| Configure retention | [Retention policy](STORAGE.md#set-backup-retention) |
+| Save a host backup directly to PBS | [Native PBS backups](STORAGE.md#create-native-pbs-backups) |
+| Configure rclone and remote paths | [Cloud storage](CLOUD_STORAGE.md) |
+| Combine features for a particular host | [Practical examples](EXAMPLES.md) |
+
+### Encryption and trust
+
+| Task | Guide |
+| --- | --- |
+| Encrypt archives and retain recovery keys | [Encryption](ENCRYPTION.md) |
+| Decrypt a bundle | [Decryption](ENCRYPTION.md#decrypting-backups) |
+| Verify release signatures and attestations | [Release verification](PROVENANCE_VERIFICATION.md) |
+
+### Scheduling and alerts
+
+| Task | Guide |
+| --- | --- |
+| Schedule and supervise backup runs | [Resident daemon](DAEMON.md) |
+| Detect missed or failed backups | [Healthchecks monitoring](HEALTHCHECKS.md) |
+| Configure result messages | [Notifications](NOTIFICATIONS.md) |
+
+### Restore and recovery
+
+| Task | Guide |
+| --- | --- |
+| Plan and perform a host configuration restore | [Restore workflow](RESTORE_GUIDE.md#restore-a-host) |
+| Understand what a restore mode includes | [Restore modes](RESTORE_GUIDE.md#choose-restore-modes-and-categories) |
+| Recover cluster configuration | [Cluster recovery](CLUSTER_RECOVERY.md#recover-a-proxmox-cluster) |
+| Recover boot and passthrough settings | [IOMMU, VFIO and passthrough](RESTORE_GUIDE.md#restore-iommu-vfio-and-passthrough-settings) |
+
+### Reference and help
+
+| Task | Guide |
+| --- | --- |
+| Look up settings and defaults | [Configuration reference](CONFIGURATION.md) |
+| Automate operations | [CLI reference](CLI_REFERENCE.md) |
+| Diagnose failures and collect debug logs | [Troubleshooting](TROUBLESHOOTING.md#diagnose-backup-and-restore-failures) |
+| Prepare a support request | [Getting help](TROUBLESHOOTING.md#prepare-a-support-request) |
 
 ## Architecture & Developer Docs
 
-- [DEVELOPER_GUIDE.md](DEVELOPER_GUIDE.md): contributor setup and development workflow
-- [COLLECTOR_ARCHITECTURE.md](COLLECTOR_ARCHITECTURE.md): collector recipes, bricks, and `dual`
-- [DASHBOARD_TUI.md](DASHBOARD_TUI.md): internals of the dashboard and every graphical flow, components, and screen contracts
-- [RESTORE_TECHNICAL.md](RESTORE_TECHNICAL.md): restore internals and orchestration details
-- [RESTORE_DIAGRAMS.md](RESTORE_DIAGRAMS.md): visual restore workflow diagrams
-- [SECURITY.md](SECURITY.md): execution model, preflight checks, and secret handling
-- [TEST_STRATEGY.md](TEST_STRATEGY.md): test conventions and coverage policy
+These references explain implementation and contribution work. Operator procedures live in the task guides above
+
+- [Developer guide](DEVELOPER_GUIDE.md): build, test and contributor workflow
+- [Collector architecture](COLLECTOR_ARCHITECTURE.md): role-specific recipes and shared collection
+- [Dashboard architecture](DASHBOARD_TUI.md): screens, sessions and workflow integration
+- [Restore internals](RESTORE_TECHNICAL.md): orchestration, category handling and diagrams
+- [Security model](SECURITY.md): execution boundaries, preflight checks and secret handling
+- [Test strategy](TEST_STRATEGY.md): testing conventions and UI-driver coverage
+- [Release process](RELEASE-PROCESS.md): branches, review and release engineering
 
 ## Supporting References
 
-- [CLOUD_STORAGE.md](CLOUD_STORAGE.md): cloud/rclone behavior
-- [ENCRYPTION.md](ENCRYPTION.md): archive encryption and decrypt/restore flow
-- [PROVENANCE_VERIFICATION.md](PROVENANCE_VERIFICATION.md): release signature and SLSA attestation verification
-- [CLUSTER_RECOVERY.md](CLUSTER_RECOVERY.md): PVE cluster disaster recovery
-- [RELEASE-PROCESS.md](RELEASE-PROCESS.md): release engineering notes
+[Restore diagram links](RESTORE_DIAGRAMS.md) remain available for existing references. Diagrams are maintained beside the corresponding explanations in the restore technical guide
+
+The [website source map](publishing/site-map.json) identifies the task sections intended for GH Sync. Editorial review and preview checks are required before publishing a changed mapping; the file is not a record that an import has happened

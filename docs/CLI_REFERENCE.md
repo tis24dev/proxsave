@@ -1,83 +1,8 @@
 # Command-Line Reference
 
-Complete reference for all ProxSave command-line options and flags.
+Use the [dashboard](DASHBOARD.md#when-the-dashboard-opens) for normal interactive operation. This reference covers explicit operations, automation, interface fallback and diagnostic invocations.
 
-**This page is the automation surface, not the everyday one.** On a normal host you drive
-ProxSave from the interactive dashboard: run `proxsave` with no arguments on a terminal and
-it opens, with installing, configuring, upgrading, running a backup, restoring, the daemon
-and the support report all a keypress away. See [DASHBOARD.md](DASHBOARD.md). Reach for the
-flags below when there is no terminal to open the dashboard on: headless hosts, cron entries,
-provisioning scripts, remote automation, and recovery when the TUI cannot run.
-
-## Table of Contents
-
-- [Dashboard first, flags for automation](#dashboard-first-flags-for-automation)
-- [Overview](#overview)
-- [Interface Modes](#interface-modes)
-- [Basic Operations](#basic-operations)
-- [Installation & Setup](#installation--setup)
-- [Encryption & Decryption](#encryption--decryption)
-- [Restore Operations](#restore-operations)
-- [Logging](#logging)
-- [Support & Diagnostics](#support--diagnostics)
-- [Command Examples](#command-examples)
-- [Scheduling with Cron](#scheduling-with-cron)
-- [Related Documentation](#related-documentation)
-- [Quick Reference](#quick-reference)
-- [Environment Variables](#environment-variables)
-- [Exit Codes](#exit-codes)
-
----
-
-## Dashboard first, flags for automation
-
-`proxsave` with **no arguments at all**, on an interactive terminal, opens the dashboard.
-That is the route to use, and the route to give an operator, unless something prevents it.
-
-The gate is narrow, and knowing why matters as soon as you script ProxSave:
-
-- **No arguments at all.** A single flag is enough to skip the dashboard, including a
-  harmless one: `proxsave -c /etc/proxsave/prod.env` runs a backup with that config, it does
-  not open the menu.
-- **A real terminal.** stdin and stdout must both be TTYs, and `TERM` must be set and not
-  `dumb`. cron, systemd, pipes and `ssh` without a pty all fail this and run the backup
-  directly, which is exactly what a scheduler wants.
-
-Most flags on this page have a dashboard row that runs the same code: some rows set the flag
-internally and fall through to the identical flow, the rest call the same function in-session.
-
-| Dashboard menu path | Flag |
-|---------------------|------|
-| Backup | `--backup` |
-| Restore | `--restore` |
-| Decrypt | `--decrypt` |
-| New key | `--newkey` |
-| Install > Edit install | `--install` |
-| Install > Wipe install | `--new-install` |
-| Upgrade > Check upgrade | `--upgrade` |
-| Upgrade > Check config | `--upgrade-config` (its read-only check step is `--upgrade-config-dry-run`) |
-| Daemon > Install | `--daemon-setup` |
-| Daemon > Disable | `--daemon-remove` |
-| Daemon > Status | `--daemon-status` |
-| Cleanup guards | `--cleanup-guards` |
-| Support | `--support` |
-| (opens by itself once per release) | `--show-whatsnew` |
-
-Four dashboard rows have no flag at all. **Telegram**, **Healthchecks** and **Post-install**
-are diagnostic check screens that exist only inside the dashboard, and **Daemon > Restart**
-restarts the running service without changing the scheduler engine, which no flag does.
-Going the other way, `--config`, `--dry-run`, `--log-level` and `--cli`
-are run modifiers with no menu row, and `--daemon` is what `proxsave-daemon.service`
-executes, never something you type.
-
-**Scheduling**: on a fresh install the resident daemon (`proxsave-daemon.service`) is the
-scheduler, and it is the only thing that transmits healthcheck pings; a backup started by
-hand or from the dashboard hands its outcome to the daemon to report. Cron is the
-legacy/opt-out engine, kept for the schedules the daemon cannot express. See
-[DAEMON.md](DAEMON.md), [HEALTHCHECKS.md](HEALTHCHECKS.md) and
-[Scheduling with Cron](#scheduling-with-cron) below.
-
----
+<!-- site-region: cli-reference:start -->
 
 ## Overview
 
@@ -145,713 +70,6 @@ proxsave --install --cli
 
 ---
 
-## Basic Operations
-
-### Run Backup
-
-An operator at a terminal runs a backup from the dashboard's **Backup** row. The forms below
-are for cron entries, scripts and headless hosts.
-
-```bash
-# Run the backup now (explicit; always skips the interactive dashboard)
-proxsave --backup
-
-# Bare invocation: runs the backup when non-interactive (cron, pipe, systemd),
-# opens the interactive dashboard on an interactive terminal
-proxsave
-
-# Use custom config file. NOTE: passing any flag, this one included, suppresses the
-# dashboard, so on a terminal these run the backup instead of opening the menu.
-proxsave --config /path/to/config.env
-proxsave -c /path/to/config.env
-
-# Dry-run mode (test without changes)
-proxsave --dry-run
-proxsave -n
-
-# Show version
-proxsave --version
-proxsave -v
-
-# Show help
-proxsave --help
-proxsave -h
-```
-
-### Flag Reference
-
-| Flag | Short | Description |
-|------|-------|-------------|
-| `--config <path>` | `-c` | Path to configuration file (default `configs/backup.env`, resolved under the install dir, e.g. `/opt/proxsave/configs/backup.env`). An absolute path is used as-is; a relative path is joined onto the install dir, not the current directory. |
-| `--dry-run` | `-n` | Simulate a backup without creating or uploading backup archives. Diagnostic logs are still written; this does not preview a restore. Refused with `--upgrade` and `--upgrade-finalize`: neither has ever honoured it, so the combination is an error rather than a silent full upgrade. Refused with `--daemon`, `--daemon-setup` and `--daemon-remove` for the same reason. Refused with `--restore`, and a restore is refused while `DRY_RUN=true` too: a restore cannot run without modifying the system |
-| `--version` | `-v` | Display version information |
-| `--help` | `-h` | Show help message |
-| `--backup` | | Run the backup now and skip the interactive dashboard. This is the default behavior when proxsave runs non-interactively (cron, pipe, systemd). Dashboard: **Backup**. |
-| `--daemon` | | Run as the resident backup daemon (schedules + supervises runs, reports to healthchecks). Invoked by `proxsave-daemon.service`; not run by hand, and it has no dashboard row for that reason. See [docs/DAEMON.md](DAEMON.md) and [docs/HEALTHCHECKS.md](HEALTHCHECKS.md). |
-| `--daemon-setup` | | Switch this install to daemon mode: install+enable the service and remove the cron entry. Dashboard: **Daemon > Install** (shown while the host is on cron). |
-| `--daemon-remove` | | Revert to the cron scheduler, disable the service, and block future upgrades from reinstalling the daemon. Dashboard: **Daemon > Disable** (shown while the daemon is installed). |
-| `--daemon-status` | | Read-only daemon status (scheduler/service state, version/alignment, and personal pre/post script readiness) and exit. `--log-level debug` adds daemon-UID and path-component evidence without executing scripts. Exit code remains based only on daemon health: `0` when running and aligned, non-zero otherwise. Dashboard: **Daemon > Status** (same screen, no exit code). |
-| `--show-whatsnew` | | Show the release-notes screen once and exit, then mark it seen. `--upgrade` calls it for you on an interactive terminal, but not under `--upgrade y`; run it by hand after an unattended upgrade to stop the "unseen release notes" warning. Dashboard: opens by itself before the first menu, once per release. |
-
----
-
-## Installation & Setup
-
-### Installation Wizard
-
-The very first install is the one thing the dashboard cannot do, since there is no binary to
-open it with: bootstrap with the installer one-liner in [INSTALL.md](INSTALL.md). Everything
-after that is a dashboard row: **Install > Edit install** re-runs the wizard, **Install >
-Wipe install** resets first. The flags below are the same two flows for headless hosts and
-provisioning scripts.
-
-```bash
-# Interactive installation wizard (TUI mode - default)
-proxsave --install
-
-# Interactive installation wizard (CLI mode - for debugging)
-proxsave --install --cli
-
-# Clean reinstall: wipes the install dir except build/, daemon_state/, env/, guards/, identity/ and restore/, then runs
-# the wizard. With stock paths that deletes local backup archives and configs/backup.env.
-proxsave --new-install
-
-# Clean reinstall with CLI mode
-proxsave --new-install --cli
-```
-
-**Interface modes**:
-```bash
-# TUI mode (default) - terminal interface
-proxsave --install
-
-# CLI mode - text prompts (for debugging)
-proxsave --install --cli
-```
-
-**Use `--cli` when**: TUI rendering issues occur or advanced debugging is needed.
-
-**Existing configuration**:
-- If the configuration file already exists, **both TUI and CLI** now offer the same choices:
-  - **Overwrite** (start from embedded template)
-  - **Edit existing** (use current file as base and pre-fill wizard fields)
-  - **Keep existing & continue** (leave file untouched and skip configuration wizard)
-  - **Cancel** (abort installation)
-- In **Keep existing & continue** mode, config-dependent post-steps are skipped (encryption setup, post-install audit, Telegram pairing), while finalization steps still run (docs install, symlink and scheduler finalization, permissions normalization).
-
-**Wizard workflow**:
-1. Generates/updates the configuration file (`configs/backup.env` by default)
-2. Optionally configures secondary storage (`SECONDARY_PATH` required if enabled; `SECONDARY_LOG_PATH` optional; invalid secondary paths are re-prompted/rejected; disabling secondary storage clears both saved secondary paths)
-3. Optionally configures cloud storage (rclone)
-4. Optionally enables firewall rules collection (`BACKUP_FIREWALL_RULES=false` by default)
-5. Optionally sets up notifications (Telegram, Email; Email asks for a delivery mode and defaults to `EMAIL_DELIVERY_METHOD=relay` with `EMAIL_FALLBACK_SENDMAIL=true`)
-6. Optionally configures encryption (AGE setup)
-7. Selects the schedule: the frequency (daily, weekly or monthly, default daily), the day it uses, and the run time (HH:MM, default `02:00`). On fresh installs the scheduler defaults to the resident daemon; cron is offered as the alternative engine (see [INSTALL.md](INSTALL.md) and [DAEMON.md](DAEMON.md))
-8. Optionally runs a post-install dry-run audit and offers to disable unused collectors (actionable hints like `set BACKUP_*=false to disable`)
-9. (If Telegram centralized mode is enabled and config + Server ID resolve successfully) Shows Server ID and offers pairing verification (retry/skip supported); otherwise install continues and logs why pairing was skipped
-10. Finalizes installation (symlinks, scheduler setup for the chosen engine, permission checks)
-
-**Install log**: The installer writes a session log under `/tmp/proxsave/install-*.log` (includes audit results and Telegram pairing outcome).
-
-### Configuration Upgrade
-
-Dashboard: **Upgrade > Check config** runs the read-only plan below, lists the variables it
-would add, and only offers `Apply` when there is something to add. Both steps call the same
-functions as the two flags here.
-
-```bash
-# Upgrade configuration file from embedded template
-proxsave --upgrade-config
-
-# Preview configuration upgrade (dry-run)
-proxsave --upgrade-config-dry-run
-```
-
-**`--upgrade-config` use case**: After installing a new binary version, this command merges your current configuration with the latest embedded template, preserving your values while adding new options.
-
-**Upgrade process**:
-1. Reads current `configs/backup.env`
-2. Extracts embedded template from binary
-3. Merges your values with new template
-4. Backs up old config (`backup.env.backup.YYYYMMDD_HHMMSS`, next to the config file)
-5. Writes updated configuration
-6. Reports added keys, preserved values, and any merge warnings
-
-**Nothing is ever removed from your configuration.** Keys you set that are not in the
-template (including keys that differ from a template key only by upper/lower case) are
-preserved in place with their original value and casing, and are reported as such. The
-upgrade only adds keys the template has and your config lacks.
-
-If the merged configuration fails validation, the backup from step 4 is restored
-automatically and the command reports the error, so a failed upgrade leaves your
-configuration as it was.
-
-> **Keep `backup.env` a regular file.** The config upgrade (`--upgrade`, `--upgrade-config`) writes the new configuration atomically (temp file + rename), so if `configs/backup.env` is a **symlink** it is replaced by a regular file and the symlink target is left unchanged. For a centrally managed configuration, deploy a regular `backup.env` (for example copied or templated by your config-management tool) instead of symlinking it.
-
-### Binary Upgrade
-
-At a terminal, upgrade from the dashboard: **Upgrade > Check upgrade** runs the same
-`--upgrade` code in-session, showing the available version and the release notes before you
-commit to it. The flag forms below are for unattended upgrades and headless hosts.
-
-```bash
-# Upgrade binary to latest version
-proxsave --upgrade
-
-# Non-interactive upgrade (auto-confirm)
-proxsave --upgrade y
-
-# Full upgrade including configuration
-proxsave --upgrade
-proxsave --upgrade-config
-```
-
-**`--upgrade` use case**: Update ProxSave binary to the latest version from GitHub releases while preserving your configuration and backup data. The upgrade process is safe and atomic, with checksum verification and automatic permission fixes.
-
-**Which binary executes the upgrade.** `proxsave --upgrade` is run by the binary you already
-have. It is the old binary that fetches the release list, downloads the archive, verifies the
-signature and checksum, and replaces itself, and that cannot move: a freshly downloaded
-binary is untrusted until the installed one has verified it, so it can never be the party
-that verifies itself. A fix to the download-and-verify half therefore only takes effect on
-the upgrade *after* the one that ships it. From 0.36.0 on, the rest of the upgrade (the
-config merge, docs and symlinks, the scheduler reconciliation, permissions, the footer) is
-handed to the binary that was just installed via the internal `--upgrade-finalize`, so that
-half is already the new release's code; the decision to hand it over lives in the old binary,
-so a host coming from a release older than 0.36.0 still finalizes with the old code.
-
-The externally fetched installer is the way around it. It downloads and verifies the release
-itself, swaps the new binary in, and only then runs it with `--upgrade --localfile`, so
-everything after the download is the new release's code:
-
-```bash
-bash -c "$(curl -fsSL https://raw.githubusercontent.com/tis24dev/proxsave/main/install.sh)" -- --upgrade
-```
-
-Use it when the built-in upgrade cannot help itself: the release notes say the upgrade or
-migration logic changed, you are coming from a release older than 0.36.0, or a built-in
-upgrade failed part-way. It installs into `/opt/proxsave` unconditionally (the path is fixed
-in the script) and always installs the latest **stable** release. See
-[INSTALL.md](INSTALL.md) for the full comparison.
-
-**Upgrade workflow**:
-1. Validates configuration file exists
-2. Queries GitHub API for latest release version
-3. Downloads binary archive, SHA256SUMS and SHA256SUMS.sig from GitHub
-4. Creates temporary directory for download
-5. Verifies authenticity first (the `SHA256SUMS.sig` ECDSA signature against the release key pinned in the binary), then archive integrity against that authenticated `SHA256SUMS`. Both are mandatory: an unsigned or mismatched release aborts the upgrade, there is no checksum-only fallback
-6. Extracts binary from tar.gz archive
-7. Atomically replaces current binary (write to .tmp, then rename)
-8. Updates the `proxsave` symlink in `/usr/local/bin/` (and removes the legacy `proxmox-backup` symlink if present)
-9. Upgrades the configuration file (adds any new keys from the template to `backup.env`, preserving your existing and custom values, after backing up the current file) and fixes file permissions. After a successful binary install, the resident daemon (`proxsave-daemon.service`) is installed only on a host that has never recorded a scheduler engine, i.e. one where this upgrade's config merge had to add `SCHEDULER_MODE`; any host that already carries the key keeps the engine it records. The daemon runs at the configured schedule (`SCHEDULER_FREQUENCY`: daily, weekly or monthly, at `SCHEDULER_TIME`, default daily at `02:00`). Where `backup.env` records no schedule yet, the upgrade takes it from the proxsave cron line when that line is daily, weekly or monthly; a cadence the daemon cannot express (hourly, several times a day, a day of the month 29-31) is not adopted and the upgrade warns. Run `--daemon-remove` to stay on cron if you need such a schedule.
-
-**Post-upgrade steps**:
-1. New config template keys are merged into `backup.env` automatically (existing and custom values preserved; previous file backed up)
-2. Run `--upgrade-config` only to re-run that merge without upgrading the binary
-3. Test functionality with dry-run: `proxsave --dry-run`
-4. Verify backups continue to work as expected
-5. Check the scheduler: `proxsave --daemon-status` for daemon installs, or `crontab -l` on cron installs
-
-**Important notes**:
-- **Internet required**: Must be able to reach GitHub releases
-- **Configuration kept current**: `--upgrade` merges new template keys into `backup.env`, preserving your existing and custom values and backing up the previous file first; it never changes or removes values you set
-- **Platform support**: Linux only (amd64)
-- **Incompatible flags**: Cannot use with `--install` or `--new-install`
-- **Automatic maintenance**: Symlinks and permissions are updated automatically. The daemon is installed only on a host that has never recorded a scheduler engine; re-run `--install` to change the run time or engine
-- **Safe replacement**: Old binary is replaced atomically (no backup created)
-- **Standalone config upgrade**: `--upgrade` already merges new template keys; use `--upgrade-config` to run that merge without upgrading the binary
-
-See also: [upgrading configuration](#configuration-upgrade)
-
-### Flag Reference
-
-| Flag | Description |
-|------|-------------|
-| `--install` | Interactive installation wizard. Dashboard: **Install > Edit install** |
-| `--new-install` | Wipe the install directory, keeping only `build/`, `daemon_state/`, `env/`, `guards/`, `identity/` and `restore/`, then launch the wizard. With stock paths this deletes your local backup archives and `configs/backup.env`. Dashboard: **Install > Wipe install** |
-| `--upgrade` | Download and install latest ProxSave binary from GitHub releases. Dashboard: **Upgrade > Check upgrade** |
-| `--upgrade-config` | Merge current config with latest template. Dashboard: **Upgrade > Check config**, whose `Apply` runs this |
-| `--upgrade-config-dry-run` | Preview config upgrade without changes. Dashboard: the check step of **Upgrade > Check config**, which runs it before offering `Apply` |
-
-`--upgrade` and `install.sh` drive a second ProxSave process with six more flags
-(`--localfile`, `--upgrade-config-json` and the four `--upgrade-finalize*` ones). They are
-documented once, under [Internal Flags](#internal-flags).
-
----
-
-## Encryption & Decryption
-
-### Generate Encryption Keys
-
-Dashboard: **New key** runs this same flow.
-
-```bash
-# Generate new AGE encryption key (TUI mode - default)
-proxsave --newkey
-proxsave --age-newkey  # Alias
-
-# Generate new AGE encryption key (CLI mode - for debugging)
-proxsave --newkey --cli
-```
-
-**Interface modes**:
-```bash
-# TUI mode (default) - terminal interface
-proxsave --newkey
-
-# CLI mode - text prompts (for debugging or when TUI rendering is unavailable)
-proxsave --newkey --cli
-```
-
-**Use `--cli` when**: TUI rendering issues occur or advanced debugging is needed.
-
-**`--newkey` workflow**:
-1. Uses the configured `AGE_RECIPIENT_FILE` when present; otherwise falls back to `${BASE_DIR}/identity/age/recipient.txt`
-2. Prompts for one of:
-   - **Existing public recipient**: paste an `age1...` recipient
-   - **Passphrase-derived**: enter a passphrase (proxsave derives the recipient; the passphrase is **not stored**)
-   - **Private key-derived**: paste an `AGE-SECRET-KEY-...` key (not stored; proxsave stores only the derived public recipient)
-3. Writes/overwrites the recipient file after confirmation
-
-**Note**: Both CLI and TUI `--newkey` flows support adding multiple recipients and de-duplicate repeated entries before saving.
-
-**For complete encryption guide**, see: **[Encryption Guide](ENCRYPTION.md)**
-
-### Decrypt Backup
-
-Dashboard: **Decrypt** runs this same flow.
-
-```bash
-# Decrypt existing backup archive (TUI mode - default)
-proxsave --decrypt
-
-# Decrypt existing backup archive (CLI mode - for debugging)
-proxsave --decrypt --cli
-```
-
-**Interface modes**:
-```bash
-# TUI mode (default) - terminal interface
-proxsave --decrypt
-
-# CLI mode - text prompts (for debugging)
-proxsave --decrypt --cli
-```
-
-**Use `--cli` when**: TUI rendering issues occur or advanced debugging is needed.
-
-**`--decrypt` workflow**:
-1. Scans configured storage locations (local/secondary/cloud)
-2. Lists available backups with metadata
-3. Prompts for destination folder (default `./decrypt`)
-4. Requests passphrase or AGE private key (`AGE-SECRET-KEY-...`)
-5. Decrypts backup to temporary location
-6. Creates a decrypted bundle and moves it to the destination directory
-
-**Output**: Decrypted bundle (e.g., `pve01-backup-20240115-023000.tar.xz.decrypted.bundle.tar`)
-
-### Flag Reference
-
-| Flag | Alias | Description |
-|------|-------|-------------|
-| `--newkey` | `--age-newkey` | Generate new AGE encryption key. Dashboard: **New key** |
-| `--decrypt` | - | Decrypt existing backup archive. Dashboard: **Decrypt** |
-
----
-
-## Restore Operations
-
-### Restore from Backup
-
-Dashboard: **Restore** runs this same workflow. The flag is what you use on a host recovered
-far enough to run the binary but not to paint a TUI, or when the restore is driven from a
-script.
-
-```bash
-# Restore data from backup to system (TUI mode - default)
-proxsave --restore
-
-# Restore data from backup to system (CLI mode - for debugging)
-proxsave --restore --cli
-```
-
-**Interface modes**:
-```bash
-# TUI mode (default) - terminal interface
-proxsave --restore
-
-# CLI mode - text prompts (for debugging)
-proxsave --restore --cli
-```
-
-**Use `--cli` when**: TUI rendering issues occur or advanced debugging is needed.
-**Note**: CLI and TUI run the same workflow logic; `--cli` only changes the interface (prompts/progress rendering), not the restore/decrypt behavior.
-
-**`--restore` workflow** (16 phases):
-1. Scans configured storage locations (local/secondary/cloud)
-2. Lists available backups with metadata (encrypted or unencrypted)
-3. If encrypted, prompts for decryption key/passphrase and decrypts
-4. Detects the current host role (`pve`, `pbs`, `dual`, or `unknown`)
-5. Validates compatibility using capability overlap and backup targets
-   - exact match: proceed normally
-   - partial match: continue with warning, then filter categories automatically
-   - no overlap: warn strongly before continuing
-6. Analyzes backup categories
-7. Presents restore mode selection:
-   - **Full Restore**: all compatible categories
-   - **Storage Restore**: storage/datastore-focused categories
-   - **Base System Restore**: network, SSH, system files
-   - **Custom Restore**: select specific categories
-8. For cluster backups: prompts for **SAFE** (export+API) or **RECOVERY** (full restore) mode
-9. Shows detailed restore plan with selected categories
-10. Requires confirmation: type `RESTORE` to proceed
-11. Creates safety backup of existing files
-12. Stops services if needed (PVE: pve-cluster, pvedaemon, pveproxy, pvestatd; PBS: proxmox-backup-proxy, proxmox-backup)
-13. Extracts selected categories to system root (`/`)
-14. Exports export-only categories to separate directory
-15. For SAFE cluster mode: offers to apply configs via `pvesh` API
-16. Recreates storage/datastore directories, checks ZFS pools, restarts services, and displays completion summary
-
-**Compatibility model**:
-- `dual` backups persist explicit targets (`pve`, `pbs`)
-- restoring a `dual` backup to a single-role host is allowed
-- ProxSave restores only categories compatible with the current host role; on a
-  single-role host the categories of the other role are extracted to the export
-  directory instead, in every restore mode
-- `common` categories remain available across roles
-
-**WARNING**: Restore operations overwrite files in-place. **Always test in a VM or snapshot your system first!**
-
-**For complete restore workflows**, see:
-- **[Restore Guide](RESTORE_GUIDE.md)** - Complete user guide with all restore modes
-- **[Restore Technical](RESTORE_TECHNICAL.md)** - Technical implementation details
-- **[Cluster Recovery](CLUSTER_RECOVERY.md)** - Disaster recovery procedures
-
-### Flag Reference
-
-| Flag | Description |
-|------|-------------|
-| `--restore` | Run interactive restore workflow (select bundle, decrypt if needed, apply to system). Dashboard: **Restore** |
-| `--cleanup-guards` | Cleanup ProxSave mount guards under `<BASE_DIR>/guards`, and those older versions left in `/var/lib/proxsave/guards` (useful after restores with offline mountpoints; use with `--dry-run` to preview). Dashboard: **Cleanup guards**, which previews first and only then offers `Apply` |
-
----
-
-### Cleanup Mount Guards (Optional)
-
-During some restores (notably PBS datastores and PVE network storages on mountpoints under `/mnt`), ProxSave may apply a **read-only bind-mount guard** over a mountpoint to prevent accidental writes to `/` when the underlying storage is offline/not mounted yet. If the bind mount cannot be created, ProxSave logs a warning and proceeds unguarded, and no longer sets a persistent `chattr +i` immutable flag (older versions did; that flag survived reboots and could silently re-block the mountpoint when the storage was later unmounted).
-
-`--cleanup-guards` unmounts bind-mount guards **and** clears any **legacy** `chattr +i` immutable flags left by older versions. For safety it only acts on mountpoints that are **not currently mounted** (a real mount on top shadows the guard; clearing it then would touch the wrong inode), prints a summary (unmounted / hidden-remaining / immutable-cleared / immutable-pending), and keeps the guard directory until nothing is pending.
-
-Dashboard: **Cleanup guards** does both steps in one screen, running the read-only check
-first and offering `Apply` only when guards are found. It calls the same routine as the flag.
-
-```bash
-# Preview (no changes)
-proxsave --cleanup-guards --dry-run --log-level debug
-
-# Apply cleanup (requires root)
-proxsave --cleanup-guards
-```
-
-Notes:
-- Bringing the storage back online is enough to *use* it again (a real mount stacks on top of the guard automatically); `--cleanup-guards` just removes the leftover guard. A bind-mount guard also clears on reboot. A legacy `chattr +i` flag does **not** clear on reboot; it persists until cleared.
-- To clear a legacy flag while the storage is mounted: unmount it, run `--cleanup-guards` again (or `chattr -i <mountpoint>`), then remount.
-- If you deleted the guard directory (`<BASE_DIR>/guards`, or `/var/lib/proxsave/guards` from an older version) manually and a mountpoint is still read-only, ProxSave has no record left: check `lsattr -d <mountpoint>` and run `chattr -i <mountpoint>` while the storage is unmounted.
-
-## Logging
-
-### Set Log Level
-
-```bash
-# Set log level
-proxsave --log-level debug
-proxsave -l info    # debug|info|warning|error|critical
-```
-
-**Log level descriptions**:
-
-| Level | Description | Use Case |
-|-------|-------------|----------|
-| `debug` | Verbose logging with detailed operations | Troubleshooting, development |
-| `info` | Standard operational logging | Normal production use |
-| `warning` | Warnings and errors only | Minimal logging |
-| `error` | Errors only | Critical issues only |
-| `critical` | Critical failures only | Emergency mode |
-
-**Log output**:
-- **Console**: Colored output (if `USE_COLOR=true`)
-- **File**: `LOG_PATH/backup-$(hostname)-YYYYMMDD-HHMMSS.log`
-
-The level threshold mutes the **console only** for warnings and above: a warning or
-error raised below the chosen level is still counted (footer, exit code) and still
-written to the log file, so the artifact shipped with notifications keeps the
-evidence. Levels below warning are filtered everywhere, as before.
-
-**`--log-level` vs `DEBUG_LEVEL`**:
-- `DEBUG_LEVEL` (config) sets the base log level: `standard` resolves to `info`, `advanced` and `extreme` both resolve to `debug`. Default is `info`.
-- `--log-level` (CLI flag) overrides `DEBUG_LEVEL` for that run.
-- `--support` forces `debug`, overriding both.
-
-### Log Labels (PHASE/STEP/SKIP)
-
-Some log lines use a label to make the output easier to scan:
-
-| Label | Level | Meaning |
-|-------|-------|---------|
-| `PHASE` | `info` | High-level workflow phase marker |
-| `STEP` | `info` | A notable step within a phase |
-| `SKIP` | `info` | Optional item intentionally skipped or not applicable |
-
-**Common `SKIP` examples**:
-- A feature is disabled by configuration.
-- A non-critical CLI tool is not installed.
-- Running in an **unprivileged container/rootless** environment where low-level inventory commands are expected to fail (for example `dmidecode` or `blkid`). In this case, ProxSave still attempts the collection, but logs a `SKIP` (not a `WARNING`) when the failure matches known "missing privileges" patterns.
-  - For `blkid`, the skip reason also includes a restore hint: `/etc/fstab` remap may be limited.
-
-### Flag Reference
-
-| Flag | Short | Description |
-|------|-------|-------------|
-| `--log-level <level>` | `-l` | Set log level: debug\|info\|warning\|error\|critical |
-
----
-
-## Support & Diagnostics
-
-### Support Mode
-
-Dashboard: **Support** collects the consent and the GitHub metadata in a form and then runs
-the same support backup, streamed in the frame. The flag is the headless equivalent, which
-asks for the same two answers on stdin.
-
-```bash
-# Run in support mode: force DEBUG logging and send log to developer
-proxsave --support
-```
-
-**Support mode workflow**:
-1. Displays consent notice about log sharing
-2. Requests GitHub username
-3. Requests GitHub issue number
-4. Runs backup with **forced DEBUG logging** (overrides config)
-5. Collects complete log file
-6. Emails the log to the maintainer address baked into the build, with the GitHub username and issue number in the subject
-7. Returns log file path for user review
-
-**Requirements**:
-- Existing GitHub issue for tracking
-- A build with the maintainer recipient compiled in (`EMAIL_SUPPORT`). The recipient is injected at build time, not hardcoded; a build without it (for example a local dev build) skips the email and logs a warning.
-- Working local mail delivery on the node (`/usr/sbin/sendmail` via Postfix/Exim/Sendmail). Support mode always hands the email to the local MTA; it does not use the notification relay.
-
-**Privacy considerations**:
-- Logs may contain sensitive information (paths, hostnames, file names)
-- Credentials and keys are **never logged**
-- Review log file before submitting if concerned
-
-**When to use**:
-- Persistent errors that need developer investigation
-- Complex configuration issues
-- Unexpected behavior requiring detailed diagnostics
-
-### Flag Reference
-
-| Flag | Description |
-|------|-------------|
-| `--support` | Run in support mode (force DEBUG logging and email log to developer). Available for the standard backup run and `--restore`. Dashboard: **Support** |
-
-### Diagnostics with no flag
-
-Three checks exist only inside the dashboard and have no command-line equivalent:
-**Telegram** (verify the relay pairing), **Healthchecks** (verify monitoring and show the
-portal details) and **Post-install** (re-run the post-install audit). If you need them on a
-headless host, open the dashboard over an interactive SSH session; there is no flag that
-runs them. `--daemon-status` is the one diagnostic that does have a flag, and it is the one
-built to be read by a script.
-
----
-
-## Command Examples
-
-These are the scripted forms. Most of them are a dashboard row at a terminal; see
-[Dashboard first, flags for automation](#dashboard-first-flags-for-automation) for the
-mapping.
-
-### Standard Operations
-
-```bash
-# Run a backup now (bare `proxsave` opens the dashboard on a TTY)
-proxsave --backup
-
-# Dry-run with debug logging
-proxsave --dry-run --log-level debug
-
-# Use custom config
-proxsave -c /etc/proxmox-backup/prod.env
-
-# Generate encryption keys
-proxsave --newkey
-
-# Decrypt specific backup
-proxsave --decrypt
-# ... follow interactive prompts ...
-
-# Full restore (DANGEROUS - test in VM first!)
-proxsave --restore
-# ... type RESTORE to confirm ...
-```
-
-### Installation & Setup
-
-```bash
-# Re-run the install wizard against the current configuration
-proxsave --install
-
-# Full reset + installation (preserves build/daemon_state/env/guards/identity/restore)
-proxsave --new-install
-
-# Upgrade binary to latest release
-proxsave --upgrade
-
-# Upgrade configuration after binary update
-proxsave --upgrade-config
-
-# Preview upgrade changes
-proxsave --upgrade-config-dry-run
-
-# Full upgrade workflow (binary + config)
-proxsave --upgrade
-proxsave --upgrade-config
-proxsave --dry-run  # Verify everything works
-```
-
-### Troubleshooting
-
-```bash
-# Test configuration without running backup
-proxsave --dry-run
-
-# Debug mode with extreme verbosity
-DEBUG_LEVEL=extreme proxsave --log-level debug
-
-# Test encryption setup
-proxsave --newkey
-
-# Verify backup integrity
-proxsave --decrypt --log-level debug
-
-# Support mode for developer assistance
-proxsave --support
-```
-
----
-
-## Scheduling with Cron
-
-**Cron is the opt-out engine, not the recommended one.** The resident daemon is what a fresh
-install schedules with, and it is the only thing that transmits healthcheck pings: on a cron
-host, monitoring stays silent (see [HEALTHCHECKS.md](HEALTHCHECKS.md)). Put a host back on
-the daemon from the dashboard's **Daemon > Install** row, or with `--daemon-setup`. The rest
-of this section is for the hosts that stay on cron because they need a cadence the daemon
-cannot express.
-
-> On fresh installs ProxSave schedules backups through the **resident daemon** (`proxsave-daemon.service`) by default; see [DAEMON.md](DAEMON.md). The daemon runs daily, weekly or monthly, so a schedule below that it cannot express (hourly, every 6 hours, several times a day) requires the daemon-less **cron** engine. Do not add a cron entry while the daemon is active, or the backup runs twice.
->
-> **ProxSave owns your crontab, so a hand-written schedule does not survive.** `--install`, `--new-install` and `--daemon-remove` each rewrite it: they delete **every** cron line whose command is named `proxsave` or `proxmox-backup`, not only the one they wrote themselves, and append a single entry at the configured schedule (`SCHEDULER_FREQUENCY`, the day it uses and `SCHEDULER_TIME`). The deletion happens in both scheduler modes; whether the appended line stays depends on where the run ends. `--daemon-remove` ends on cron, so it keeps it. `--install` and `--new-install` write that line first and then, when the selected (or already configured) mode is `daemon`, drop it again while enabling the unit, so a daemon installation ends with no proxsave cron entry, unless the unit install itself fails and the host stays on cron with the line it just wrote. A custom cadence from this section is therefore silently replaced by the configured schedule on a cron reinstall, and removed outright by a daemon one. `--upgrade` is the exception: it only repoints legacy paths and leaves the schedule alone.
->
-> The practical order is: run `proxsave --daemon-remove` first, which switches to cron, writes the line for you, and records `SCHEDULER_MODE=cron`, **then** edit that line to the cadence you want. Adding a second entry afterwards leaves two, and both will fire.
->
-> That record is also what makes the line survive. `--upgrade` installs the daemon only on a host that has never recorded a scheduler engine, i.e. one where the upgrade's own config merge had to add `SCHEDULER_MODE`. Any host whose `backup.env` already carries the key is left as it is, so a hand-edited cadence on a 0.30 or later install survives every upgrade. `--daemon-setup` still removes it, because there you asked for the daemon.
-
-### Cron Setup
-
-Write the entry the way ProxSave writes its own, `<schedule> /usr/local/bin/proxsave
---backup`: every install and upgrade repoints that symlink at the current binary, and
-`--backup` pins the non-interactive behaviour, so the run can never land on the dashboard
-even if something in the chain allocates a pty.
-
-```bash
-# Edit crontab
-crontab -e
-
-# Daily backup at 2 AM
-0 2 * * * /usr/local/bin/proxsave --backup >> /var/log/pbs-backup.log 2>&1
-
-# Hourly backup
-0 * * * * /usr/local/bin/proxsave --backup
-
-# Weekly backup (Sunday 3 AM)
-0 3 * * 0 /usr/local/bin/proxsave --backup
-```
-
-### Cron Cadences
-
-| Frequency | Cron Expression | Use Case |
-|-----------|----------------|----------|
-| **Hourly** | `0 * * * *` | High-change environments, critical systems |
-| **Every 6 hours** | `0 */6 * * *` | Moderate-change environments |
-| **Daily (2 AM)** | `0 2 * * *` | Standard production; this is the one cadence the daemon already covers, so prefer the daemon for it |
-| **Daily (off-hours)** | `0 22 * * *` | After business hours |
-| **Weekly** | `0 3 * * 0` | Low-change environments, archival |
-
-### Advanced Cron Patterns
-
-```bash
-# Weekday backups only (Mon-Fri, 2 AM)
-0 2 * * 1-5 /usr/local/bin/proxsave --backup
-
-# Multiple daily backups (8 AM, 2 PM, 10 PM)
-0 8,14,22 * * * /usr/local/bin/proxsave --backup
-
-# First day of month (monthly report)
-0 3 1 * * /usr/local/bin/proxsave --backup --log-level info
-
-# With custom config
-0 2 * * * /usr/local/bin/proxsave --backup -c /etc/pbs-prod.env
-```
-
-### Logging Best Practices
-
-```bash
-# Separate cron log file
-0 2 * * * /usr/local/bin/proxsave --backup >> /var/log/pbs-cron.log 2>&1
-
-# Rotate logs (logrotate config)
-# /etc/logrotate.d/proxsave
-/var/log/pbs-cron.log {
-    daily
-    rotate 7
-    compress
-    missingok
-    notifempty
-}
-```
-
----
-
-## Related Documentation
-
-### The everyday interface
-- **[Dashboard](DASHBOARD.md)** - The interactive menu these flags mirror
-- **[Resident daemon](DAEMON.md)** - The default scheduler, and how to move a host on or off it
-- **[Installation](INSTALL.md)** - Bootstrap install and the two upgrade paths
-
-### Configuration
-- **[Configuration Guide](CONFIGURATION.md)** - Complete variable reference
-
-### Operations
-- **[Encryption Guide](ENCRYPTION.md)** - AGE encryption setup and usage
-- **[Restore Guide](RESTORE_GUIDE.md)** - Complete restore workflows
-- **[Cloud Storage Guide](CLOUD_STORAGE.md)** - rclone integration
-
-### Reference
-- **[Examples](EXAMPLES.md)** - Real-world usage examples
-- **[Troubleshooting](TROUBLESHOOTING.md)** - Common issues and solutions
-- **[Developer Guide](DEVELOPER_GUIDE.md)** - Contributing and development
-
-### Main Documentation
-- **[README](../README.md)** - Project overview and quick start
-
----
-
 ## Quick Reference
 
 ### All Flags
@@ -899,51 +117,196 @@ and for reading a debug log; do not put them in a script of your own.
 | `--upgrade-finalize-skip-whatsnew` | `--upgrade-finalize` | Do not open the release-notes screen. `--upgrade` forwards it when nobody is there to close it (`--upgrade y`) or when the dashboard owns the presentation |
 | `--upgrade-finalize-skip-daemon-restart` | `--upgrade-finalize` | Do not restart the resident daemon, because the caller restarts it itself. `--upgrade` forwards this when the dashboard is driving, since the suppression lives in a package variable a child process cannot see. Without it the daemon is restarted twice |
 
-### Common Command Patterns
+## Basic Operations
 
-For scripts, cron and headless hosts. At a terminal, `proxsave` with no arguments opens the
-dashboard and every pattern here except the modifiers is a row on it.
+### Run Backup
 
 ```bash
-# Run a backup now (bare `proxsave` opens the dashboard on a TTY)
 proxsave --backup
-
-# Test before running
+proxsave --backup --config /path/to/backup.env
 proxsave --dry-run --log-level debug
-
-# Re-run the install wizard
-proxsave --install
-
-# Full reset (preserve build/daemon_state/env/guards/identity/restore) then setup
-proxsave --new-install
-
-# Upgrade binary to latest version
-proxsave --upgrade
-
-# After binary upgrade, optionally update config
-proxsave --upgrade-config
-
-# Use CLI mode instead of TUI (for debugging)
-proxsave --install --cli
-proxsave --new-install --cli
-proxsave --newkey --cli
-proxsave --decrypt --cli
-proxsave --restore --cli
-
-# Encryption workflow
-proxsave --newkey          # Generate keys
-proxsave --backup          # Run encrypted backup
-proxsave --decrypt         # Decrypt when needed
-
-# Restore workflow (test in VM first!)
-proxsave --restore
-
-# Troubleshooting
-proxsave --dry-run --log-level debug
-proxsave --support
 ```
 
+A relative configuration path is resolved against the installation directory, not the current directory. Any argument bypasses the dashboard. Bare invocation without interactive terminal eligibility also runs the normal backup path.
+
+Dry-run writes diagnostic logs but skips archive creation and upload; it is not a restore preview. `DRY_RUN=true` also refuses restore. See [backup verification](BACKUP_GUIDE.md#run-and-verify-your-first-backup) for the complete operational checks.
+
+## Installation & Setup
+
+### Installation Wizard
+
+```bash
+proxsave --install
+proxsave --install --cli
+```
+
+Use [installation](INSTALL.md#fast-install) for bootstrap and wizard behavior. `--new-install` is a destructive reset, preserving only `build`, `daemon_state`, `env`, `guards`, `identity` and `restore`. With stock paths it deletes local archives, logs and `configs/backup.env`. Copy and verify required files independently before invoking it; it is not a migration command.
+
+### Configuration Upgrade
+
+```bash
+proxsave --upgrade-config-dry-run
+proxsave --upgrade-config
+```
+
+The first invocation reports the merge plan without writing configuration. The second applies it. Supported and custom values are preserved, missing keys are added, and retired keys are removed. Validation failure restores the timestamped config backup. Atomic replacement replaces a symlink itself rather than updating its target. See [merge effects](INSTALL.md#what-gets-updated) for the complete pruning list and scheduler boundaries.
+
+### Binary Upgrade
+
+```bash
+proxsave --upgrade
+proxsave --upgrade y
+```
+
+Appending `y` auto-confirms and suppresses interactive release notes. The currently installed binary discovers, downloads, verifies and replaces the release; versions from 0.36.0 delegate finalization to the new binary. Configuration merging is included. See [upgrade procedure](INSTALL.md#upgrading-proxsave-binary) for permissions, failure handling, daemon alignment and the external installer fallback. After an unattended upgrade, `proxsave --show-whatsnew` acknowledges unseen notes.
+
+## Encryption & Decryption
+
+### Generate AGE Key
+
+```bash
+proxsave --newkey
+proxsave --age-newkey
+proxsave --newkey --cli
+```
+
+These invoke the same recipient setup. They support existing recipients, passphrase derivation or deriving the public recipient from a private key, and multiple recipients with deduplication. The setup stores public recipients, not the passphrase or supplied private key. See [encryption setup](ENCRYPTION.md).
+
+### Decrypt Backup
+
+```bash
+proxsave --decrypt
+proxsave --decrypt --cli
+```
+
+This interactive selector uses configured local, secondary or cloud sources. Its output is a plaintext bundle, not necessarily the inner compressed archive. Inspect the outer bundle before choosing an inner archive. See [decryption](ENCRYPTION.md#decrypting-backups) for the complete procedure and plaintext handling.
+
+## Restore Operations
+
+### Restore from Backup
+
+```bash
+proxsave --restore
+proxsave --restore --cli
+```
+
+Both run the same interactive restore logic. The flag does not imply unattended confirmation. Restore overwrites selected system files and has no dry-run mode; test on a disposable host and review the plan before confirming. Mode, category compatibility, export-only behavior and cluster SAFE/RECOVERY are separate choices. Use the [restore guide](RESTORE_GUIDE.md) and [cluster recovery guide](CLUSTER_RECOVERY.md) for their prerequisites and scoped safety rules.
+
+### Cleanup Mount Guards (Optional)
+
+```bash
+proxsave --cleanup-guards --dry-run --log-level debug
+proxsave --cleanup-guards
+```
+
+Preview first; applying cleanup requires root. Cleanup removes recorded bind-mount guards and legacy immutable flags only where the actual storage is not mounted. A live storage mount can hide the guard; unmount it safely and retry. Exit `17` means guards remain or the remaining count could not be confirmed. A bind guard clears on reboot, while a legacy immutable flag persists. See [restore guidance](RESTORE_GUIDE.md) before changing storage mount state.
+
+## Logging
+
+### Set Log Level
+
+`proxsave --log-level debug` bypasses the dashboard and runs the normal backup path with debug logging, subject to configuration and runtime checks. It does not open a debug dashboard. Add `--dry-run` when you need diagnostic simulation rather than a real backup.
+
+```bash
+# Set log level
+proxsave --log-level debug
+proxsave -l info    # debug|info|warning|error|critical
+```
+
+**Log level descriptions**:
+
+| Level | Description | Use Case |
+|-------|-------------|----------|
+| `debug` | Verbose logging with detailed operations | Troubleshooting, development |
+| `info` | Standard operational logging | Normal production use |
+| `warning` | Warnings and errors only | Minimal logging |
+| `error` | Errors only | Critical issues only |
+| `critical` | Critical failures only | Emergency mode |
+
+**Log output**:
+- **Console**: Colored output (if `USE_COLOR=true`)
+- **File**: `LOG_PATH/backup-<resolved-hostname>-YYYYMMDD-HHMMSS.log`
+
+The level threshold mutes the **console only** for warnings and above: a warning or
+error raised below the chosen level is still counted (footer, exit code) and still
+written to the log file, so the artifact shipped with notifications keeps the
+evidence. Levels below warning are filtered everywhere, as before.
+
+**`--log-level` vs `DEBUG_LEVEL`**:
+- `DEBUG_LEVEL` (config) sets the base log level: `standard` resolves to `info`, `advanced` and `extreme` both resolve to `debug`. Default is `info`.
+- `--log-level` (CLI flag) overrides `DEBUG_LEVEL` for that run.
+- `--support` forces `debug`, overriding both.
+
+### Log Labels (PHASE/STEP/SKIP)
+
+Some log lines use a label to make the output easier to scan:
+
+| Label | Level | Meaning |
+|-------|-------|---------|
+| `PHASE` | `info` | High-level workflow phase marker |
+| `STEP` | `info` | A notable step within a phase |
+| `SKIP` | `info` | Optional item intentionally skipped or not applicable |
+
+**Common `SKIP` examples**:
+- A feature is disabled by configuration.
+- A non-critical CLI tool is not installed.
+- Running in an **unprivileged container/rootless** environment where low-level inventory commands are expected to fail (for example `dmidecode` or `blkid`). In this case, ProxSave still attempts the collection, but logs a `SKIP` (not a `WARNING`) when the failure matches known "missing privileges" patterns.
+  - For `blkid`, the skip reason also includes a restore hint: `/etc/fstab` remap may be limited.
+
+### Flag Reference
+
+The complete flag table is maintained under [All Flags](#all-flags).
+
 ---
+
+## Support & Diagnostics
+
+```bash
+proxsave --support
+proxsave --restore --support
+proxsave --daemon-status --log-level debug
+```
+
+Support mode forces debug logging and asks for the GitHub nickname, existing issue number and consent. Once consent is given, it sends the run log automatically at completion; there is no final review screen. A compiled maintainer recipient and working local sendmail are required. It does not use the normal notification relay. Registered secrets are redacted, but arbitrary diagnostics can still contain sensitive information. To review before sharing, use debug logging without support mode and submit only the reviewed log. See [support preparation](TROUBLESHOOTING.md).
+
+### Diagnostics with no flag
+
+Telegram pairing, Healthchecks verification and Post-install checks are dashboard screens. Daemon Restart also has no dedicated flag; the external service command is `systemctl restart proxsave-daemon.service`. Daemon status inspects personal-script readiness without executing scripts. Debug adds UID and path evidence; its exit verdict remains daemon health and binary alignment.
+
+## Command Examples
+
+```bash
+# Explicit backup with a separate profile
+proxsave --backup -c /etc/proxsave/production.env
+
+# Diagnostic simulation, still writes logs
+proxsave --dry-run -l debug
+
+# Normal backup path with debug output, bypasses the dashboard
+proxsave --log-level debug
+
+# Read-only daemon status
+proxsave --daemon-status
+```
+
+### Separate collection profile on a disposable host
+
+A fixture or mounted-root profile is not a sandbox. `SYSTEM_ROOT_PREFIX` affects collection only and is not an environment override. Use the separate configuration and isolation prerequisites in [the disposable-host example](EXAMPLES.md#example-9-test-in-a-chrootfixture): independent backup/log/lock paths and disabled external destinations and notifications. Run only on a disposable compatible host.
+
+```bash
+proxsave -c /opt/proxsave/configs/snapshot.env --dry-run --log-level debug
+proxsave -c /opt/proxsave/configs/snapshot.env --backup
+```
+
+Review the diagnostic log before the second invocation. Both bypass the dashboard; the second creates a real backup under that profile. Neither redirects upgrade, restore, security checks or service management into the fixture root.
+
+## Scheduling with Cron
+
+Scheduler installation, ownership and custom-cadence rules are maintained in the [scheduler guide](DAEMON.md). Do not add cron backups while the daemon is active. The explicit command used in an external schedule is `/usr/local/bin/proxsave --backup`; install/reinstall and daemon removal can replace recognized ProxSave cron entries with the configured schedule. Review ownership before editing a custom cadence.
+
+## Related Documentation
+
+Use [configuration](CONFIGURATION.md#editing-the-configuration-from-the-dashboard) for key definitions, [dashboard navigation](DASHBOARD.md#the-menu) for interactive actions and [troubleshooting](TROUBLESHOOTING.md) for failure diagnosis.
 
 ## Environment Variables
 
@@ -964,7 +327,7 @@ proxsave -c /etc/pbs/prod.env
 
 # Dry-run mode: overridden via this environment variable
 # (a restore is refused while DRY_RUN is true, from the environment or from backup.env)
-DRY_RUN=true proxsave
+DRY_RUN=true proxsave --backup
 
 # BASE_DIR is not an override; it is detected from the installed executable.
 # BASE_DIR in the environment or backup.env is deprecated and ignored.
@@ -976,8 +339,10 @@ DRY_RUN=true proxsave
 DEBUG_LEVEL=extreme proxsave --log-level debug
 
 # Disable colors
-USE_COLOR=false proxsave
+USE_COLOR=false proxsave --backup
 ```
+
+The examples use an explicit operation because environment assignments alone do not suppress the dashboard.
 
 **Priority**: for a key on the allowlist, environment variable > configuration file > default. One exception: if the file still carries the **legacy alias** of that key (see Legacy key names in [CONFIGURATION.md](CONFIGURATION.md)), the legacy line in the file wins over the environment, because the allowlist only carries the canonical name. For every other key the environment is not consulted at all. `BASE_DIR` is always runtime-detected and is not overridable from either place.
 
@@ -1027,3 +392,5 @@ same hosts. Filter on the code, not on the log level.
 **Note**: Cloud storage is non-critical. A cloud upload failure does **not** abort the
 run with a storage error (`5`): the local backup is kept, but the failure is recorded as a
 warning, so the run finishes with a non-zero exit code (`1`, generic error), not `0`.
+
+<!-- site-region: cli-reference:end -->

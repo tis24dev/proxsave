@@ -26,6 +26,61 @@ and decision flow details.
 
 ### Entry Points
 
+### Diagram: Compatibility Validation
+
+```mermaid
+flowchart TD
+    Start([Backup Prepared]) --> DetectCurrent[Detect Current System]
+    DetectCurrent --> CheckSystem{PVE indicators?<br/>PBS indicators?}
+
+    CheckSystem -->|PVE only| CurrentPVE[Current: PVE]
+    CheckSystem -->|PBS only| CurrentPBS[Current: PBS]
+    CheckSystem -->|Both| CurrentDual[Current: DUAL]
+    CheckSystem -->|Neither| CurrentUnknown[Current: Unknown]
+
+    CurrentPVE --> ReadManifest
+    CurrentPBS --> ReadManifest
+    CurrentDual --> ReadManifest
+    CurrentUnknown --> ReadManifest[Read Backup Manifest]
+
+    ReadManifest --> CheckBackupType{manifest.ProxmoxTargets<br/>or ProxmoxType<br/>or hostname pattern}
+    CheckBackupType -->|pve| BackupPVE[Backup: PVE]
+    CheckBackupType -->|pbs| BackupPBS[Backup: PBS]
+    CheckBackupType -->|dual| BackupDual[Backup: DUAL]
+    CheckBackupType -->|Unknown| BackupUnknown[Backup: Unknown]
+
+    BackupPVE --> Compare
+    BackupPBS --> Compare
+    BackupDual --> Compare
+    BackupUnknown --> Compare[Compare Capability Sets]
+
+    Compare --> SharedRole{Any shared role?}
+    SharedRole -->|Yes| ExactMatch{Same role set?}
+    ExactMatch -->|Yes| Compatible([Full Compatibility])
+    ExactMatch -->|No| Partial[Partial Compatibility]
+    Partial --> Filter["Warn user and filter to<br/>supported categories"]
+    Filter --> ProceedAnyway([Proceed with Warning])
+
+    SharedRole -->|No| CheckUnknown{Either side unknown?}
+    CheckUnknown -->|Yes| WarnUnknown["Warn: compatibility<br/>cannot be fully verified"]
+    WarnUnknown --> Proceed([Proceed])
+    CheckUnknown -->|No| Incompatible["No overlapping role"]
+
+    Incompatible --> DisplayWarning["Display Warning:<br/>backup and host roles differ"]
+    DisplayWarning --> AskOverride{Type 'yes'<br/>to continue?}
+
+    AskOverride -->|No| Abort([Abort])
+    AskOverride -->|Yes| ProceedAnyway
+
+    Compatible --> Proceed
+
+    style Start fill:#87CEEB
+    style Proceed fill:#90EE90
+    style ProceedAnyway fill:#FFD700
+    style Abort fill:#FFB6C1
+```
+
+
 The restore workflow has one engine and two ways in. Both set the same field and run
 the same dispatch, so nothing behaves differently between them.
 
@@ -149,10 +204,10 @@ Service Management (if cluster)
   └─ Unmount /etc/pve
   ↓
 File Extraction (three tiers)
-  ├─ Normal categories → /
+  ├─ Normal categories -> /
   ├─ (RECOVERY) Restart PVE and HA services once config.db is written
-  ├─ Export categories → export dir (read-only)
-  ├─ Staged categories → stage dir, then applied
+  ├─ Export categories -> export dir (read-only)
+  ├─ Staged categories -> stage dir, then applied
   └─ Log all operations
   ↓
 Post-Restore Tasks
@@ -252,10 +307,10 @@ While the TUI session owns the terminal, console log output is swapped to `io.Di
 screen.
 
 **Key Sections** (the workflow body lives in `restore_workflow_ui_run.go`, driven by
-`run()` → `runSelectiveRestore()`; each step below names the implementing function(s)
+`run()` -> `runSelectiveRestore()`; each step below names the implementing function(s)
 instead of line numbers, which drift on every edit):
 
-1. **Preparation** (`prepareBundleAndPlan()` → `prepareBundle()`, `detectTargetSystem()` /
+1. **Preparation** (`prepareBundleAndPlan()` -> `prepareBundle()`, `detectTargetSystem()` /
    `DetectCurrentSystem()`, `analyzeArchive()` / `AnalyzeRestoreArchive()`,
    `confirmCompatibility()` / `ValidateCompatibility()`):
    - Decrypt backup if needed
@@ -263,7 +318,7 @@ instead of line numbers, which drift on every edit):
    - Validate compatibility
    - Analyze categories
 
-2. **Mode & Category Selection + Plan build** (`selectRestorePlan()` →
+2. **Mode & Category Selection + Plan build** (`selectRestorePlan()` ->
    `selectModeAndCategories()` / `GetCategoriesForMode()`, then `PlanRestore()` in
    `restore_plan.go` which splits the selection via `splitRestoreCategories()` in `staging.go`):
    - User selects restore mode (Full/Storage/Base/Custom)
@@ -272,9 +327,9 @@ instead of line numbers, which drift on every edit):
      single-role host the other role's categories go to export
      (`redirectOtherProductCategoriesToExport()` in `restore_plan.go`)
 
-3. **PBS Behavior + Cluster SAFE/RECOVERY Prompt** (`configurePlanForRuntime()` →
-   `selectPBSRestoreBehavior()` and `selectClusterRestoreMode()` → `applyClusterRestoreChoice()`
-   in `restore_workflow_ui_plan.go`; SAFE redirect via `RestorePlan.ApplyClusterSafeMode()` →
+3. **PBS Behavior + Cluster SAFE/RECOVERY Prompt** (`configurePlanForRuntime()` ->
+   `selectPBSRestoreBehavior()` and `selectClusterRestoreMode()` -> `applyClusterRestoreChoice()`
+   in `restore_workflow_ui_plan.go`; SAFE redirect via `RestorePlan.ApplyClusterSafeMode()` ->
    `redirectClusterCategoryToExport()` in `restore_archive.go`):
    - Detect cluster payload in backup (`plan.ClusterBackup && plan.NeedsClusterRestore`)
    - Prompt user: SAFE (export+API) vs RECOVERY (full restore)
@@ -289,12 +344,12 @@ instead of line numbers, which drift on every edit):
    - User confirms (or aborts) before any data is written
 
 5. **Safety Backup** (`createRollbackBackups()` in `restore_workflow_ui_backups_services.go`
-   → `CreateSafetyBackup()` in `backup_safety.go`):
+   -> `CreateSafetyBackup()` in `backup_safety.go`):
    - Backup files to be overwritten
    - Handle backup failures
 
-6. **PVE Service Management** (`prepareRestoreServices()` → `preparePVEClusterRestore()`
-   in `restore_workflow_ui_backups_services.go` → `stopPVEClusterServices()` /
+6. **PVE Service Management** (`prepareRestoreServices()` -> `preparePVEClusterRestore()`
+   in `restore_workflow_ui_backups_services.go` -> `stopPVEClusterServices()` /
    `unmountEtcPVE()` / `startPVEClusterServices()` in `restore_services.go`):
    - Detect cluster restore need (RECOVERY mode)
    - Stop HA services, then PVE services: pve-ha-lrm, pve-ha-crm, pve-cluster, pvedaemon,
@@ -306,28 +361,28 @@ instead of line numbers, which drift on every edit):
      restarts them only when the run ends before that point
 
 7. **PBS Service Management** (`preparePBSServices()` in
-   `restore_workflow_ui_backups_services.go` → `stopPBSServices()` / `startPBSServices()`
+   `restore_workflow_ui_backups_services.go` -> `stopPBSServices()` / `startPBSServices()`
    in `restore_services.go`):
    - Detect PBS-specific category restore need
    - Stop PBS services: proxmox-backup-proxy, proxmox-backup
    - Prompt to continue if stop fails
    - Defer restart
 
-8. **File Extraction** (`prepareAndRestoreSelectedPayloads()` → `extractNormalCategories()` /
+8. **File Extraction** (`prepareAndRestoreSelectedPayloads()` -> `extractNormalCategories()` /
    `exportCategories()` in `restore_workflow_ui_extract.go`; engine `extractSelectiveArchive()`
-   in `restore_archive.go` → `extractArchiveNative()` in `restore_archive_extract.go`):
+   in `restore_archive.go` -> `extractArchiveNative()` in `restore_archive_extract.go`):
    - Extract normal categories to /
    - Extract export categories to timestamped directory
    - Handle extraction errors
 
-9. **pvesh SAFE Apply** (`runClusterSafeApply()` in `restore_workflow_ui_extract.go` →
+9. **pvesh SAFE Apply** (`runClusterSafeApply()` in `restore_workflow_ui_extract.go` ->
    `runSafeClusterApplyWithUI()` in `restore_workflow_ui_cluster_apply.go`, which drives
    `safeClusterApplyUIFlow.run()`; the standalone `runSafeClusterApply()` in
    `restore_cluster_apply.go` is the CLI wrapper, not used by this workflow):
    - If SAFE cluster mode selected
    - Apply VM/CT configs, storage.cfg, datacenter.cfg via API
 
-10. **Post-Restore** (`runPostRestoreApplyWorkflows()` in `restore_workflow_ui_run.go` →
+10. **Post-Restore** (`runPostRestoreApplyWorkflows()` in `restore_workflow_ui_run.go` ->
     `recreateStorageDirectories()` / `applyNetworkConfig()` / `applyFirewallConfig()` /
     `applyHAConfig()`; then `applyBootConfiguration()`, `logRestoreCompletion()` and
     `checkZFSPoolsAfterRestore()`):
@@ -392,8 +447,8 @@ type Category struct {
 
 **SSH Category Coverage**
 
-- `./etc/ssh/` → sshd configuration, host keys, authorized_keys
-- `./root/.ssh/` → root private/public keys and known_hosts
+- `./etc/ssh/` -> sshd configuration, host keys, authorized_keys
+- `./root/.ssh/` -> root private/public keys and known_hosts
   (these are the paths matched by the `ssh` category during restore)
 
 ### File: internal/orchestrator/selective.go
@@ -431,6 +486,38 @@ type Category struct {
 
 ### File: internal/orchestrator/decrypt.go
 
+### Diagram: Decryption Workflow
+
+```mermaid
+flowchart TD
+    Start([Backup selected]) --> Stage[Unwrap bundle or stage complete raw set]
+    Stage --> Verify[Verify checksum of the stored archive before decryption]
+    Verify --> Integrity{Integrity available and valid?}
+    Integrity -->|No| Abort([Abort])
+    Integrity -->|Yes| CheckEnc{Encryption mode?}
+    CheckEnc -->|none| Plain[Use staged plaintext archive]
+    CheckEnc -->|age| Secret[Prompt for AGE key or passphrase]
+    Secret -->|Cancel| Abort
+    Secret --> Decrypt[Decrypt into private work directory]
+    Decrypt --> Result{Succeeded?}
+    Result -->|No| Retry{Retry?}
+    Retry -->|Yes| Secret
+    Retry -->|No| Abort
+    Result -->|Yes| Hash[Calculate plaintext checksum and update working manifest]
+    Plain --> Hash
+    Hash --> Ready([Prepared archive ready])
+    Ready --> Consumer{Workflow?}
+    Consumer -->|Restore| Restore[Analyze and restore selected categories]
+    Consumer -->|Decrypt only| Bundle[Write uncompressed .decrypted.bundle.tar with inner archive and sidecars]
+    Restore --> Cleanup[Remove temporary work directory on normal exit]
+    Bundle --> Cleanup
+
+    style Start fill:#87CEEB
+    style Abort fill:#FFB6C1
+    style Ready fill:#90EE90
+```
+
+
 **Purpose**: Handle backup decryption
 
 **Key Functions**:
@@ -462,6 +549,59 @@ type Category struct {
 ---
 
 ## Execution Flow
+
+### Diagram: Complete Restore Workflow
+
+This overview shows the normal path. Cancellation and fatal errors unwind through
+the registered cleanup; the summary does not imply every selected operation was
+applied. See the technical guide for the per-step error handling.
+
+```mermaid
+flowchart TD
+    Start(["Dashboard: Tools > Restore<br/>or proxsave --restore"]) --> Select[Select a complete backup set]
+    Select --> Verify[Stage artifacts and verify stored archive integrity]
+    Verify --> Integrity{Valid?}
+    Integrity -->|No| Abort([Abort])
+    Integrity -->|Yes| Encrypted{Encrypted?}
+    Encrypted -->|Yes| Decrypt[Decrypt with AGE]
+    Encrypted -->|No| Compat
+    Decrypt --> Compat[Detect roles and validate compatibility]
+    Compat --> Scope[Select available categories and restore mode]
+    Scope --> Cluster["If cluster payload selected:<br/>choose SAFE or RECOVERY"]
+    Cluster --> Guards["RECOVERY guards:<br/>quorum and isolation checks"]
+    Guards --> Allowed{Can proceed?}
+    Allowed -->|No| Abort
+    Allowed -->|Yes| Plan[Review restore plan]
+    Plan --> Confirm{Both confirmations accepted?}
+    Confirm -->|No| Abort
+    Confirm -->|Yes| Safety[Create safety backup]
+    Safety --> SafetyOK{Created?}
+    SafetyOK -->|No| Continue{Continue without safety backup?}
+    Continue -->|No| Abort
+    Continue -->|Yes| Services
+    SafetyOK -->|Yes| Services["Prepare services when needed:<br/>RECOVERY stops HA before PVE services"]
+    Services --> Normal[Extract normal categories with host-specific guards]
+    Normal --> Restart[Restart stopped PVE services after extraction]
+    Restart --> Fstab[Offer smart fstab merge]
+    Fstab --> Export[Extract export-only categories]
+    Export --> SafeApply[Offer applicable SAFE configuration applies]
+    SafeApply --> Stage[Extract selected sensitive categories strictly]
+    Stage --> StageOK{Stage complete?}
+    StageOK -->|No| Discard[Discard stage and mark its consumers to skip]
+    StageOK -->|Yes| Apply[Apply staged categories]
+    Apply --> Post
+    Discard --> Post["Post-restore tasks and optional live applies:<br/>network, storage directories, DNS, firewall, HA<br/>skip consumers of an incomplete stage"]
+    Post --> Boot[Merge boot settings and rebuild when selected]
+    Boot --> Summary[Report completed, partial or skipped operations]
+    Summary --> Cleanup[Deferred service cleanup and stage removal]
+    Cleanup --> End([Review results and verify host])
+
+    style Start fill:#90EE90
+    style End fill:#90EE90
+    style Abort fill:#FFB6C1
+    style Discard fill:#FFD700
+```
+
 
 ### Detailed Phase Breakdown
 
@@ -495,7 +635,7 @@ err := orchestrator.RunRestoreWorkflowTUI(rt.ctx, rt.cfg, rt.logger, rt.toolVers
 
 #### Phase 2: Backup Preparation
 
-**File**: `internal/orchestrator/restore_workflow_ui_plan.go` → `prepareBundle()`
+**File**: `internal/orchestrator/restore_workflow_ui_plan.go` -> `prepareBundle()`
 
 ```go
 candidate, prepared, err := prepareRestoreBundleFunc(ctx, cfg, logger, version, ui)
@@ -546,7 +686,7 @@ type preparedBundle struct {
 
 #### Phase 3: System Detection & Compatibility
 
-**File**: `internal/orchestrator/restore_workflow_ui_plan.go` → `detectTargetSystem()`, `confirmCompatibility()`
+**File**: `internal/orchestrator/restore_workflow_ui_plan.go` -> `detectTargetSystem()`, `confirmCompatibility()`
 
 This section is the technical source of truth for restore compatibility.
 User-facing examples and warning text live in
@@ -630,7 +770,7 @@ the analysis-failure fallback, where export means skipped.
 
 #### Phase 4: Category Analysis
 
-**File**: `internal/orchestrator/restore_workflow_ui_plan.go` → `analyzeArchive()`
+**File**: `internal/orchestrator/restore_workflow_ui_plan.go` -> `analyzeArchive()`
 
 ```go
 availableCategories, err := AnalyzeBackupCategories(
@@ -716,7 +856,7 @@ func PathMatchesCategory(filePath string, category Category) bool {
 
 #### Phase 5: Category Selection
 
-**File**: `internal/orchestrator/restore_workflow_ui_plan.go` → `selectRestorePlan()`
+**File**: `internal/orchestrator/restore_workflow_ui_plan.go` -> `selectRestorePlan()`
 
 ```go
 // Pick the mode and the categories (GetCategoriesForMode for FULL/STORAGE/BASE,
@@ -792,7 +932,7 @@ The TUI front-end renders the same list as a multi-select
 
 #### Phase 6: Safety Backup
 
-**File**: `internal/orchestrator/restore_workflow_ui_backups_services.go` → `createSafetyBackup()`
+**File**: `internal/orchestrator/restore_workflow_ui_backups_services.go` -> `createSafetyBackup()`
 
 ```go
 var safetyBackup *SafetyBackupResult
@@ -873,7 +1013,7 @@ func CreateSafetyBackup(
 
 #### Phase 7: Service Management (Cluster Restore Only)
 
-**File**: `internal/orchestrator/restore_workflow_ui_backups_services.go` → `preparePVEClusterRestore()`
+**File**: `internal/orchestrator/restore_workflow_ui_backups_services.go` -> `preparePVEClusterRestore()`
 
 ```go
 needsClusterRestore := systemType == SystemTypePVE &&
@@ -903,7 +1043,7 @@ if needsClusterRestore {
 }
 ```
 
-**Stop Services** (`internal/orchestrator/restore_services.go` → `stopPVEClusterServices()`):
+**Stop Services** (`internal/orchestrator/restore_services.go` -> `stopPVEClusterServices()`):
 ```go
 func stopPVEClusterServices(ctx context.Context, logger *logging.Logger) error {
     commands := [][]string{
@@ -923,7 +1063,7 @@ func stopPVEClusterServices(ctx context.Context, logger *logging.Logger) error {
 }
 ```
 
-**Start Services** (`internal/orchestrator/restore_services.go` → `startPVEClusterServices()`):
+**Start Services** (`internal/orchestrator/restore_services.go` -> `startPVEClusterServices()`):
 ```go
 func startPVEClusterServices(ctx context.Context, logger *logging.Logger) error {
     commands := [][]string{
@@ -943,7 +1083,7 @@ func startPVEClusterServices(ctx context.Context, logger *logging.Logger) error 
 }
 ```
 
-**Unmount** (`internal/orchestrator/restore_services.go` → `unmountEtcPVE()`):
+**Unmount** (`internal/orchestrator/restore_services.go` -> `unmountEtcPVE()`):
 ```go
 func unmountEtcPVE(ctx context.Context, logger *logging.Logger) error {
     cmd := exec.CommandContext(ctx, "umount", "/etc/pve")
@@ -997,8 +1137,9 @@ stageAndApplySensitiveCategories(...)  // tier 2 -> stage dir, then Phase 10
 
 Staged categories are extracted **strictly**:
 `extractSelectiveArchiveStrict(..., failOnPartial=true)`. If any entry fails, the whole
-staged apply is skipped and the live system is left untouched (BH-002), so a partial tree
-is never applied to sensitive config. The plain (non-staged) tiers use
+staged apply is skipped and the incomplete stage is discarded (BH-002), so consumers
+cannot apply that partial tree. Earlier normal extraction, fstab merge and SAFE
+apply may already have changed the live system; this is not a whole-restore rollback. The plain (non-staged) tiers use
 `extractSelectiveArchive`, a thin wrapper over `extractSelectiveArchiveStrict(..., false)`
 that creates the detailed log in the restore's own directory (`RestoreRunDir()`,
 `<BASE_DIR>/restore/<ts>`) and calls `extractArchiveNative`.
@@ -1060,6 +1201,66 @@ and anything under `var/lib/proxmox-backup/lock/`.
 
 ## Category System
 
+### Diagram: Category Decision Tree
+
+```mermaid
+flowchart TD
+    Start([Select Restore Mode]) --> Mode{Which Mode?}
+
+    Mode -->|1. FULL| Full[FULL Mode]
+    Mode -->|2. STORAGE| Storage[STORAGE Mode]
+    Mode -->|3. BASE| Base[BASE Mode]
+    Mode -->|4. CUSTOM| Custom[CUSTOM Mode]
+
+    Full --> SystemFull{System Type?}
+    SystemFull -->|PVE| PVEFull[PVE Categories:<br/>- pve_cluster<br/>- storage_pve<br/>- pve_jobs<br/>- pve_notifications<br/>- pve_access_control<br/>- pve_firewall<br/>- pve_ha<br/>- pve_sdn<br/>- corosync<br/>- ceph<br/>+ Common]
+    SystemFull -->|PBS| PBSFull[PBS Categories:<br/>- pbs_host<br/>- datastore_pbs<br/>- maintenance_pbs<br/>- pbs_jobs<br/>- pbs_remotes<br/>- pbs_notifications<br/>- pbs_access_control<br/>- pbs_tape<br/>+ Common]
+    SystemFull -->|DUAL| DualFull[Dual Categories:<br/>- PVE categories<br/>- PBS categories<br/>- Common categories]
+    SystemFull -->|Unknown| CommonFull[Common Only:<br/>- filesystem<br/>- storage_stack<br/>- network<br/>- ssl<br/>- ssh<br/>- scripts<br/>- crontabs<br/>- services<br/>- accounts<br/>- user_data<br/>- zfs<br/>- boot<br/>- proxsave_info]
+
+    Storage --> SystemStorage{System Type?}
+    SystemStorage -->|PVE| PVEStorage[- pve_cluster<br/>- storage_pve<br/>- pve_jobs<br/>- filesystem<br/>- storage_stack<br/>- zfs]
+    SystemStorage -->|PBS| PBSStorage[- datastore_pbs<br/>- maintenance_pbs<br/>- pbs_jobs<br/>- pbs_remotes<br/>- filesystem<br/>- storage_stack<br/>- zfs]
+    SystemStorage -->|DUAL| DualStorage[- PVE storage categories<br/>- PBS storage categories<br/>- filesystem<br/>- storage_stack<br/>- zfs]
+
+    Base --> BaseCats[- network<br/>- ssl<br/>- ssh<br/>- services<br/>- filesystem]
+
+    Custom --> CheckboxMenu[Interactive Menu]
+    CheckboxMenu --> ToggleLoop{Toggle Categories}
+    ToggleLoop -->|Number| Toggle[Toggle Category]
+    Toggle --> ToggleLoop
+    ToggleLoop -->|'a'| SelectAll[Select All]
+    SelectAll --> ToggleLoop
+    ToggleLoop -->|'n'| DeselectAll[Deselect All]
+    DeselectAll --> ToggleLoop
+    ToggleLoop -->|'c'| CustomSelected[User Selection]
+    ToggleLoop -->|'0'| Cancel([Cancel])
+
+    PVEFull --> KeepFull[Include all available categories, including export-only]
+    PBSFull --> KeepFull
+    DualFull --> KeepFull
+    CommonFull --> KeepFull
+    PVEStorage --> FilterExport[Filter Export-Only]
+    PBSStorage --> FilterExport
+    DualStorage --> FilterExport
+    BaseCats --> FilterExport
+    CustomSelected --> NoFilter[Include Export if Selected]
+
+    KeepFull --> Split[Split: Normal, Export-only and Staged]
+    FilterExport --> Split
+    NoFilter --> Split
+    Split --> Result([Selected Categories])
+
+    style Start fill:#90EE90
+    style Result fill:#90EE90
+    style Cancel fill:#FFB6C1
+    style Custom fill:#87CEEB
+    style CheckboxMenu fill:#87CEEB
+```
+
+**Note (PBS)**: ProxSave applies supported PBS staged categories via `proxmox-backup-manager` by default. In **Clean 1:1** mode it may fall back to writing staged `*.cfg` files back to `/etc/proxmox-backup` when API apply is unavailable or fails.
+
+
 ### Category Definition Structure
 
 ```go
@@ -1076,6 +1277,43 @@ type Category struct {
 
 ### Category Types
 
+### Diagram: Category Type Filter
+
+```mermaid
+flowchart TD
+    Start([All Categories]) --> CheckSystem{System Type?}
+
+    CheckSystem -->|PVE| FilterPVE[Filter Categories]
+    CheckSystem -->|PBS| FilterPBS[Filter Categories]
+    CheckSystem -->|DUAL| FilterDual[Filter Categories]
+    CheckSystem -->|Unknown| FilterCommon[Filter Categories]
+
+    FilterPVE --> IncludePVE["Include:<br/>- CategoryTypePVE<br/>- CategoryTypeCommon"]
+    FilterPBS --> IncludePBS["Include:<br/>- CategoryTypePBS<br/>- CategoryTypeCommon"]
+    FilterDual --> IncludeDual["Include:<br/>- CategoryTypePVE<br/>- CategoryTypePBS<br/>- CategoryTypeCommon"]
+    FilterCommon --> IncludeOnlyCommon["Include:<br/>- CategoryTypeCommon only"]
+
+    IncludePVE --> CheckMode{Restore Mode?}
+    IncludePBS --> CheckMode
+    IncludeDual --> CheckMode
+    IncludeOnlyCommon --> CheckMode
+
+    CheckMode -->|Storage/Base| RemoveExport[Remove ExportOnly = true]
+    CheckMode -->|Full| KeepAll[Keep available export-only categories]
+    CheckMode -->|Custom| KeepChosen[Keep selected export-only categories]
+
+    RemoveExport --> Available{In Archive?}
+    KeepAll --> Available
+    KeepChosen --> Available
+
+    Available --> CheckAvailable[Check IsAvailable]
+    CheckAvailable --> Result([Final Category List])
+
+    style Start fill:#87CEEB
+    style Result fill:#90EE90
+```
+
+
 ```go
 const (
     CategoryTypePVE    CategoryType = "pve"    // PVE-specific
@@ -1085,6 +1323,50 @@ const (
 ```
 
 ### Path Matching Algorithm
+
+### Diagram: Path Matching Algorithm
+
+```mermaid
+flowchart TD
+    Start([Archive Entry]) --> GetName[Get Entry Name]
+    GetName --> Normalize{Starts with ./ ?}
+    Normalize -->|No| AddPrefix["Prepend './'"]
+    Normalize -->|Yes| LoopCats[For Each Category]
+    AddPrefix --> LoopCats
+
+    LoopCats --> LoopPaths[For Each Category Path]
+    LoopPaths --> CheckExact{Exact Match?}
+    CheckExact -->|Yes| Match([MATCH])
+    CheckExact -->|No| CheckDir{Path Ends with / ?}
+
+    CheckDir -->|No| NextPath[Next Path]
+    CheckDir -->|Yes| CheckPrefix{Entry Starts with Path?}
+    CheckPrefix -->|Yes| Match
+    CheckPrefix -->|No| CheckParent{Entry == Path without / ?}
+    CheckParent -->|Yes| Match
+    CheckParent -->|No| NextPath
+
+    NextPath --> MorePaths{More Paths?}
+    MorePaths -->|Yes| LoopPaths
+    MorePaths -->|No| NextCat[Next Category]
+    NextCat --> MoreCats{More Categories?}
+    MoreCats -->|Yes| LoopCats
+    MoreCats -->|No| NoMatch([NO MATCH])
+
+    style Start fill:#87CEEB
+    style Match fill:#90EE90
+    style NoMatch fill:#FFB6C1
+```
+
+**Examples**:
+
+| Archive Entry | Category Path | Result |
+|--------------|---------------|--------|
+| `./etc/network/interfaces` | `./etc/network/` | Available Prefix match |
+| `./etc/hostname` | `./etc/network/` | Not available No match |
+| `etc/hostname` | `./etc/hostname` | Available After normalize |
+| `./var/lib/pve-cluster/config.db` | `./var/lib/pve-cluster/` | Available Prefix match |
+
 
 **File**: `internal/orchestrator/categories.go` (`PathMatchesCategory()`)
 
@@ -1174,6 +1456,99 @@ func GetStorageModeCategories(systemType string) []Category {
 
 ## Service Management
 
+### Diagram: Service Management Flow
+
+```mermaid
+sequenceDiagram
+    participant User
+    participant Restore
+    participant Services
+    participant FS as Filesystem
+    participant DB as config.db
+
+    User->>Restore: Start restore with pve_cluster, choose RECOVERY
+    Restore->>Services: pvecm status (only with corosync.conf present)
+    alt Quorate with more than one node online
+        break Recovery refused
+            Restore-->>User: Abort before service stop or extraction
+        end
+    else Quorum or node count unreadable
+        Restore->>Services: Read corosync service state
+        alt Corosync inactive or failed
+            Services-->>Restore: Recovery guard passes
+        else Corosync running or state unknown
+            break Recovery refused
+                Restore-->>User: Establish isolation and stopped Corosync first
+            end
+        end
+    else Not quorate or verified one-node quorum
+        Restore->>Restore: Recovery guard passes
+    end
+    Restore->>Restore: Detect needsClusterRestore = true
+
+    Note over Restore,Services: Service Stop Phase
+    Restore->>Services: systemctl stop --no-block pve-ha-lrm (wait up to 180 s, never killed)
+    Services-->>Restore: Stopped (HA resources frozen, watchdog closed)
+    Restore->>Services: systemctl stop pve-ha-crm
+    Services-->>Restore: Stopped (CRM lock released)
+    Restore->>Services: systemctl stop pve-cluster
+    Services->>FS: Unmount /etc/pve (FUSE)
+    Services->>DB: Close file handles
+    Services-->>Restore: Stopped
+
+    Restore->>Services: systemctl stop pvedaemon
+    Services-->>Restore: Stopped
+    Restore->>Services: systemctl stop pveproxy
+    Services-->>Restore: Stopped
+    Restore->>Services: systemctl stop pvestatd
+    Services-->>Restore: Stopped
+
+    Note over Restore,FS: Unmount Phase
+    Restore->>FS: umount /etc/pve
+    FS-->>Restore: Unmounted (or already unmounted)
+
+    Note over Restore: Arm fallback restart (defer), used only if the run ends before the restart below
+
+    Note over Restore,DB: Restore Phase
+    Restore->>DB: Extract /var/lib/pve-cluster/
+    Restore->>DB: Extract config.db
+    DB-->>Restore: Files restored
+
+    Note over Restore,Services: Restart right after the extraction
+    Restore->>Services: systemctl start pve-cluster
+    Services->>DB: Open config.db
+    Services->>FS: Mount /etc/pve (FUSE)
+    Services-->>Restore: Started
+
+    Restore->>Services: systemctl start pvedaemon
+    Services->>FS: Read /etc/pve config
+    Services-->>Restore: Started
+
+    Restore->>Services: systemctl start pveproxy
+    Services-->>Restore: Started
+
+    Restore->>Services: systemctl start pvestatd
+    Services-->>Restore: Started
+
+    Restore->>Services: systemctl start pve-ha-crm
+    Services-->>Restore: Started
+    Restore->>Services: systemctl start pve-ha-lrm
+    Services-->>Restore: Started (HA resources resumed)
+
+    Note over Restore,Services: Later steps (network apply with PVE health checks, boot rebuild)
+
+    Restore-->>User: Restore Complete
+
+    Note over User,Services: Verification Phase
+    User->>Services: pvecm status
+    Services->>DB: Query cluster state
+    Services-->>User: Report actual membership and quorum for review
+    User->>FS: ls /etc/pve/
+    FS->>DB: Query via pmxcfs
+    FS-->>User: Config files visible
+```
+
+
 ### Lifecycle Management Pattern
 
 **Go defer pattern** ensures cleanup even on errors:
@@ -1217,8 +1592,8 @@ pvestatd
 pve-ha-crm, pve-ha-lrm
     (need /etc/pve; pve-ha-lrm holds the node's watchdog open)
 
-Stop order:  pve-ha-lrm → pve-ha-crm → pve-cluster → pvedaemon → pveproxy → pvestatd
-Start order: pve-cluster → pvedaemon → pveproxy → pvestatd → pve-ha-crm → pve-ha-lrm
+Stop order:  pve-ha-lrm -> pve-ha-crm -> pve-cluster -> pvedaemon -> pveproxy -> pvestatd
+Start order: pve-cluster -> pvedaemon -> pveproxy -> pvestatd -> pve-ha-crm -> pve-ha-lrm
 ```
 
 The HA services are stopped first because a running `pve-ha-lrm` fences the node
@@ -1252,8 +1627,8 @@ proxmox-backup-proxy
 proxmox-backup
     (provides backup/restore operations)
 
-Stop order:  proxmox-backup-proxy → proxmox-backup
-Start order: proxmox-backup → proxmox-backup-proxy
+Stop order:  proxmox-backup-proxy -> proxmox-backup
+Start order: proxmox-backup -> proxmox-backup-proxy
 ```
 
 **PBS Service Management Code**:
@@ -1291,6 +1666,62 @@ func shouldStopPBSServices(categories []Category) bool {
 
 ### Error Handling Philosophy
 
+### Diagram: Error Handling Flow
+
+```mermaid
+flowchart TD
+    Start([Operation]) --> Operation{Operation Type}
+
+    Operation -->|User Action| UserAbort{User Cancels?}
+    UserAbort -->|Yes| ReturnAbort[Return ErrRestoreAborted]
+    UserAbort -->|No| Continue[Continue]
+
+    Operation -->|Service Stop| ServiceStop[Stop Service]
+    ServiceStop --> StopResult{Success?}
+    StopResult -->|No| FailFast[FAIL-FAST: Abort Restore]
+    StopResult -->|Yes| Continue
+
+    Operation -->|Safety Backup| CreateBackup[Create Safety Backup]
+    CreateBackup --> BackupResult{Success?}
+    BackupResult -->|No| AskUser{Ask User Continue?}
+    AskUser -->|No| ReturnAbort
+    AskUser -->|Yes| Continue
+    BackupResult -->|Yes| Continue
+
+    Operation -->|File Extract| ExtractFile[Extract File]
+    ExtractFile --> ExtractResult{Success?}
+    ExtractResult -->|No| LogWarning[Log Warning, Increment Failed]
+    ExtractResult -->|Yes| Continue
+    LogWarning --> ContinueLoop[Continue to Next File]
+
+    Operation -->|Service Restart| RestartService[Restart Service - Deferred]
+    RestartService --> RestartResult{Success?}
+    RestartResult -->|No| WarnOnly[Log Warning Only]
+    RestartResult -->|Yes| Continue
+    WarnOnly --> ContinueFinal[Continue Anyway]
+
+    Operation -->|Unmount| UnmountFS[Unmount /etc/pve]
+    UnmountFS --> UnmountResult{Success?}
+    UnmountResult -->|No| WarnContinue[Log Warning, Continue]
+    UnmountResult -->|Yes| Continue
+    WarnContinue --> Continue
+
+    FailFast --> Abort([Abort Restore])
+    ReturnAbort --> Abort
+    Continue --> Success([Success])
+    ContinueLoop --> Success
+    ContinueFinal --> Success
+
+    style Start fill:#87CEEB
+    style Success fill:#90EE90
+    style Abort fill:#FFB6C1
+    style FailFast fill:#FF6347
+    style LogWarning fill:#FFD700
+    style WarnOnly fill:#FFD700
+    style WarnContinue fill:#FFD700
+```
+
+
 **Stop Phase**: **FAIL-FAST**
 ```go
 if err := stopPVEClusterServices(ctx, logger); err != nil {
@@ -1313,6 +1744,95 @@ defer func() {
 ---
 
 ## Cluster SAFE/RECOVERY Mode
+
+### Diagram: Cluster Database Restore Sequence
+
+```mermaid
+stateDiagram-v2
+    [*] --> Running: Initial State
+
+    state Running {
+        [*] --> ServicesActive
+        ServicesActive: pve-cluster active
+        ServicesActive: pvedaemon active
+        ServicesActive: pveproxy active
+        ServicesActive: /etc/pve mounted
+    }
+
+    Running --> Stopping: User initiates restore
+
+    state Stopping {
+        [*] --> StopLRM
+        StopLRM: systemctl stop --no-block pve-ha-lrm (up to 180 s, never killed)
+        StopLRM --> StopCRM
+        StopCRM: systemctl stop pve-ha-crm
+        StopCRM --> StopCluster
+        StopCluster: systemctl stop pve-cluster
+        StopCluster --> StopDaemon
+        StopDaemon: systemctl stop pvedaemon
+        StopDaemon --> StopProxy
+        StopProxy: systemctl stop pveproxy
+        StopProxy --> StopStatd
+        StopStatd: systemctl stop pvestatd
+        StopStatd --> UnmountPVE
+        UnmountPVE: umount /etc/pve
+        UnmountPVE --> [*]
+    }
+
+    Stopping --> Stopped: All services stopped
+
+    state Stopped {
+        [*] --> ServicesStopped
+        ServicesStopped: All services inactive
+        ServicesStopped: /etc/pve unmounted
+        ServicesStopped: config.db not in use
+    }
+
+    Stopped --> Restoring: Extract files
+
+    state Restoring {
+        [*] --> ExtractDB
+        ExtractDB: Extract /var/lib/pve-cluster/
+        ExtractDB --> WriteFiles
+        WriteFiles: Write config.db
+        WriteFiles: Write supporting files
+        WriteFiles --> [*]
+    }
+
+    Restoring --> Restarting: Files restored
+
+    state Restarting {
+        [*] --> StartCluster
+        StartCluster: systemctl start pve-cluster
+        StartCluster --> ReadDB
+        ReadDB: pmxcfs reads config.db
+        ReadDB --> MountPVE
+        MountPVE: Mount /etc/pve (FUSE)
+        MountPVE --> StartDaemon
+        StartDaemon: systemctl start pvedaemon
+        StartDaemon --> StartProxy
+        StartProxy: systemctl start pveproxy
+        StartProxy --> StartStatd
+        StartStatd: systemctl start pvestatd
+        StartStatd --> StartCRM
+        StartCRM: systemctl start pve-ha-crm
+        StartCRM --> StartLRM
+        StartLRM: systemctl start pve-ha-lrm
+        StartLRM --> [*]
+    }
+
+    Restarting --> Restored: Services restarted right after the extraction
+
+    state Restored {
+        [*] --> ServicesRestored
+        ServicesRestored: All services active
+        ServicesRestored: /etc/pve mounted with RESTORED config
+        ServicesRestored: Membership and quorum verify separately
+    }
+
+    Restored --> [*]: Database phase complete, continue remaining restore steps
+```
+
 
 ### Standalone vs Cluster Detection
 
@@ -1342,8 +1862,9 @@ if plan.ClusterBackup && plan.NeedsClusterRestore {
 | Archive analysis failed and full-restore fallback is used | No | Intentionally skipped |
 
 A standalone PVE backup commonly contains `pve_cluster` data, so it normally gets
-the same choice. SAFE moves that category to export-only and leaves
-`/var/lib/pve-cluster/config.db` untouched. RECOVERY keeps it in the normal
+the same choice. SAFE moves that category to export-only instead of replacing
+`/var/lib/pve-cluster/config.db`; later confirmed applies can change live database
+contents through Proxmox interfaces. RECOVERY keeps it in the normal
 restore set, stops the HA services and the PVE cluster services, unmounts `/etc/pve`,
 restores the database, then restarts the services right after that extraction, before
 the later steps (network apply, boot rebuild). Staged `/etc/pve` applies are skipped in
@@ -1407,10 +1928,10 @@ After extraction in SAFE mode, `runSafeClusterApply()` offers API-based restorat
 - `scanVMConfigs()`: Scans `<export>/etc/pve/nodes/<node>/qemu-server/` and `lxc/`
 - `loadPVEGuestInventory()`: Loads and strictly validates the cluster-wide `qemu`/`lxc` ownership map from `/cluster/resources`
 - `applyVMConfigs()`: Classifies every VMID before mutation; skips remote/type-mismatched guests, updates matching local guests through `pvesh`, and registers cluster-wide-absent guests through pmxcfs
-- `applyStorageCfg()`: Parses storage.cfg blocks and applies via `pvesh set /cluster/storage/<id>`
+- `applyStorageCfg()`: Parses storage.cfg blocks, creates definitions through `/storage`, and updates existing ones through `/storage/<id>`
 - `runPvesh()`: Executes pvesh commands with logging
 
-Guest apply is fail-closed. The inventory is loaded once before the loop; any command, JSON validation, incomplete-record, or duplicate-VMID error marks the selected guest entries failed without mutating them. A failed API update may fall back to the staged pmxcfs file only when a JSON `status/current` response explicitly says `stopped`.
+Guest apply is fail-closed. The inventory is loaded once before the loop; any command, JSON validation, incomplete-record, or duplicate-VMID error marks the selected guest entries failed without mutating them. File fallback requires both a recognized API schema refusal and a JSON `status/current` response explicitly saying `stopped`. Other API errors do not qualify. After a schema refusal, a running or unverified guest may instead receive an API retry with refused keys removed.
 
 **Flow**:
 ```go
@@ -1442,9 +1963,65 @@ func runSafeClusterApply(ctx context.Context, reader *bufio.Reader, exportRoot s
 
 ## Extraction Engine
 
+### Diagram: Three-Tier Extraction
+
+`splitRestoreCategories` divides the selected categories into three tiers. Normal
+categories go straight to `/`, export-only categories go to a read-only export
+directory, and staged (sensitive) categories are extracted strictly into a stage
+directory and then applied (Phase 10). If any staged entry fails, the staged apply is
+skipped and the incomplete stage is discarded (BH-002). Normal extraction, fstab
+merge and SAFE apply may already have changed the host; this guard only prevents
+consumers from applying an incomplete staged payload.
+
+```mermaid
+flowchart LR
+    subgraph Input
+        Archive[backup archive]
+    end
+
+    subgraph "Tier 1: Normal categories"
+        Filter1{Matches a<br/>Normal category?}
+        Extract1[Extract to /]
+    end
+
+    subgraph "Tier 2: Export-only categories"
+        Filter2{Matches an<br/>Export-only category?}
+        Extract2[Extract to<br/>Export Dir, read-only]
+    end
+
+    subgraph "Tier 3: Staged (sensitive) categories"
+        Filter3{Matches a<br/>Staged category?}
+        Stage3[Extract to<br/>stage dir, strict]
+        Apply3[Staged apply<br/>PBS/PVE/SDN/ACL/accounts/notify]
+    end
+
+    subgraph Output
+        SystemRoot[System Root /<br/>- /var/lib/pve-cluster/ in RECOVERY<br/>- other normal categories]
+        ExportDir[Export Directory<br/>BASE_DIR/proxmox-config-export-TIMESTAMP/<br/>- etc/pve/storage.cfg<br/>- etc.]
+        Live[Per-category live applies<br/>only from a complete stage - BH-002]
+    end
+
+    Archive --> Filter1
+    Filter1 -->|Yes| Extract1 --> SystemRoot
+
+    Archive --> Filter2
+    Filter2 -->|Yes| Extract2 --> ExportDir
+
+    Archive --> Filter3
+    Filter3 -->|Yes| Stage3 --> StageOK{Complete?}
+    StageOK -->|Yes| Apply3 --> Live
+    StageOK -->|No| Discard[Discard incomplete stage and skip its consumers]
+
+    style Archive fill:#87CEEB
+    style SystemRoot fill:#90EE90
+    style ExportDir fill:#FFD700
+    style Live fill:#FFA500
+```
+
+
 ### Archive Format Support
 
-**Decompression** (`internal/orchestrator/restore_decompression.go` → `createDecompressionReader()`):
+**Decompression** (`internal/orchestrator/restore_decompression.go` -> `createDecompressionReader()`):
 
 ```go
 func createDecompressionReader(ctx context.Context, file *os.File, archivePath string) (io.ReadCloser, error) {
@@ -1477,7 +2054,7 @@ func createDecompressionReader(ctx context.Context, file *os.File, archivePath s
 
 ### Selective Extraction Logic
 
-**File**: `internal/orchestrator/restore_archive_extract.go` → `extractArchiveNative()`
+**File**: `internal/orchestrator/restore_archive_extract.go` -> `extractArchiveNative()`
 
 ```go
 func extractArchiveNative(ctx context.Context, opts restoreArchiveOptions) error {
@@ -1630,9 +2207,54 @@ corrupt backup) is left as a symlink and does not block cleanup.
 
 ## Safety Mechanisms
 
+### Diagram: Safety Backup Process
+
+The diagram includes the generic extraction command printed by the current code.
+It is not safe to run blindly on a live host, especially for `config.db`. Follow
+[manual rollback prerequisites](RESTORE_GUIDE.md#manual-rollback-prerequisites)
+before using a safety archive. It does not undo every API operation.
+
+```mermaid
+flowchart TD
+    Start([Categories Selected]) --> CreatePath[Create /opt/proxsave/restore/TIMESTAMP/]
+    CreatePath --> CreateArchive[Create restore_backup_TIMESTAMP.tar.gz]
+    CreateArchive --> LoopCats[For Each Category]
+
+    LoopCats --> LoopPaths[For Each Path in Category]
+    LoopPaths --> BuildFull["Build Full Path:<br/>/ + path"]
+    BuildFull --> CheckExists{Path Exists?}
+
+    CheckExists -->|No| NextPath[Next Path]
+    CheckExists -->|Yes| CheckType{Type?}
+
+    CheckType -->|File| BackupFile[Add File to TAR]
+    CheckType -->|Directory| WalkDir[Walk Directory Recursively]
+
+    WalkDir --> BackupTree[Add All Files/Dirs to TAR]
+    BackupTree --> NextPath
+    BackupFile --> NextPath
+
+    NextPath --> MorePaths{More Paths?}
+    MorePaths -->|Yes| LoopPaths
+    MorePaths -->|No| NextCat[Next Category]
+
+    NextCat --> MoreCats{More Categories?}
+    MoreCats -->|Yes| LoopCats
+    MoreCats -->|No| CloseTar[Close TAR Archive]
+
+    CloseTar --> Success([Safety Backup Created])
+    Success --> DisplayPath["Display:<br/>/opt/proxsave/restore/TIMESTAMP/restore_backup_TIMESTAMP.tar.gz"]
+    DisplayPath --> Rollback["Show Rollback Command:<br/>tar -xzf backup.tar.gz -C /"]
+
+    style Start fill:#87CEEB
+    style Success fill:#90EE90
+    style DisplayPath fill:#FFD700
+```
+
+
 ### 1. Path Traversal Prevention
 
-**Security Check** (`internal/orchestrator/restore_archive_paths.go` → `sanitizeRestoreEntryTargetWithFS()`):
+**Security Check** (`internal/orchestrator/restore_archive_paths.go` -> `sanitizeRestoreEntryTargetWithFS()`):
 
 ```go
 // Simplified illustration of the containment check. The real implementation is
@@ -1665,7 +2287,7 @@ func targetWithinRoot(target string, destRoot string) bool {
 
 ### 2. /etc/pve Hard Guard
 
-**Absolute Block** (`internal/orchestrator/restore_archive_entries.go` → `shouldSkipRestoreEntryTarget()`):
+**Absolute Block** (`internal/orchestrator/restore_archive_entries.go` -> `shouldSkipRestoreEntryTarget()`):
 
 ```go
 // only when restoring to the real system root
@@ -1720,6 +2342,116 @@ When restoring to the real system root (`/`), ProxSave avoids blindly overwritin
 
 ### 4. PBS Datastore Mount Guards (Offline Storage)
 
+### Diagram: PBS Datastore Mount Guards
+
+When restoring PBS configuration, a datastore's backing mount may be **offline**
+(not yet mounted). Without protection, restoring the datastore layout, or PBS
+starting afterwards, would write into the empty mount-point directory on the
+**root filesystem**, filling `/` and creating a "ghost" datastore. The mount
+guard blocks that path until the real storage is back.
+
+```mermaid
+flowchart TD
+    Start([Apply PBS datastore guards<br/>Clean 1:1 restore]) --> Each{For each staged<br/>datastore mount target}
+    Each --> Valid{In fstab + valid target?}
+    Valid -->|No| Skip[Leave unguarded]
+    Valid -->|Yes| Root{Mount-point dir on the ROOT<br/>filesystem? i.e. real mount offline}
+    Root -->|No, real mount present| NoOp[No-op]
+    Root -->|Yes| Try{Real storage mounts now?}
+    Try -->|Yes| NoOp
+    Try -->|No| Bind[Bind-mount empty read-only guard dir<br/>RO + nodev + nosuid + noexec]
+    Bind -->|success| Guarded[Path guarded:<br/>writes cannot land on root FS]
+    Bind -->|bind unavailable| Warn[Warn-only: log that the mountpoint<br/>is unguarded; no persistent flag set]
+
+    style Start fill:#87CEEB
+    style Guarded fill:#90EE90
+    style NoOp fill:#90EE90
+    style Warn fill:#FFD700
+    style Skip fill:#FFB6C1
+```
+
+**Auto-restore (shadowing)**: when the real datastore mount comes back online it
+stacks **on top of** the guard (overlay), so the datastore is usable again, but
+the guard is only **shadowed**, not removed.
+
+**Warn-only fallback**: if the read-only bind mount cannot be created, ProxSave logs
+a warning and proceeds **without** a persistent guard. Older versions set a
+`chattr +i` immutable flag here; it survived reboots and could silently re-block the
+mountpoint once the storage was later unmounted, so it was removed.
+
+**Cleanup** (dashboard **Recovery > Cleanup guards**, or `proxsave --cleanup-guards`
+on a headless host):
+- bind-mount guards are unmounted (they also disappear on reboot);
+- **legacy** `chattr +i` immutable flags (from older versions) are cleared, but
+  **skipped while the target is masked by a real mount** (clearing would touch the
+  mounted filesystem);
+- a summary line reports unmounted / hidden-remaining / immutable-cleared /
+  immutable-pending.
+
+Code: `internal/orchestrator/mount_guard.go` (`guardMountPoint` ->
+`bindReadOnlyGuard`), `mount_guard_apply.go`
+(`maybeApplyPBSDatastoreMountGuards` -> `protectOfflineTarget`), and
+`guards_cleanup.go` (`CleanupMountGuards`).
+
+
+### Diagram: Storage Directory Recreation
+
+```mermaid
+flowchart TD
+    Start([Post-Restore]) --> CheckSystem{System Type?}
+
+    CheckSystem -->|PVE| CheckPVECat{storage_pve<br/>Restored?}
+    CheckSystem -->|PBS| CheckPBSCat{datastore_pbs<br/>Restored?}
+    CheckSystem -->|Unknown| Skip([Skip])
+
+    CheckPVECat -->|No| Skip
+    CheckPVECat -->|Yes| ParsePVE[Parse /etc/pve/storage.cfg]
+
+    CheckPBSCat -->|No| Skip
+    CheckPBSCat -->|Yes| ParsePBS[Parse /etc/proxmox-backup/datastore.cfg]
+
+    ParsePVE --> LoopPVE[For Each Storage]
+    LoopPVE --> CheckPVEMount{"Unmounted ZFS/<br/>dedicated mount?<br/>(resolves to rootfs)"}
+
+    CheckPVEMount -->|Yes| WarnPVEMount["Warn: Don't create<br/>(mount disk / import pool first)"]
+    CheckPVEMount -->|No| CheckPVEType{Storage Type?}
+
+    CheckPVEType -->|dir| CreateDirStruct["Create:<br/>- dump/<br/>- images/<br/>- template/<br/>- snippets/<br/>- private/"]
+    CheckPVEType -->|nfs/cifs| CreateNFSStruct["Create:<br/>- dump/<br/>- images/<br/>- template/"]
+    CheckPVEType -->|Other| NextPVE[Next Storage]
+
+    CreateDirStruct --> NextPVE
+    CreateNFSStruct --> NextPVE
+    WarnPVEMount --> NextPVE
+    NextPVE --> MorePVE{More Storage?}
+    MorePVE -->|Yes| LoopPVE
+    MorePVE -->|No| Done([Done])
+
+    ParsePBS --> LoopPBS[For Each Datastore]
+    LoopPBS --> CheckZFSMount{Likely ZFS Mount?}
+
+    CheckZFSMount -->|Yes| WarnZFS["Warn: Don't create<br/>(would block mount)"]
+    CheckZFSMount -->|No| CreatePBSStruct["Create:<br/>- .chunks/ directory<br/>- .lock regular file"]
+
+    WarnZFS --> LogOwner["Log: Should be<br/>backup:backup"]
+    CreatePBSStruct --> LogOwner
+    LogOwner --> NextPBS[Next Datastore]
+
+    NextPBS --> MorePBS{More Datastores?}
+    MorePBS -->|Yes| LoopPBS
+    MorePBS -->|No| CheckZFSCat{zfs Category<br/>Restored?}
+
+    CheckZFSCat -->|Yes| WarnZFSImport["Info: ZFS pools<br/>importable, not imported"]
+    CheckZFSCat -->|No| Done
+    WarnZFSImport --> DisplayCmds["Display:<br/>zpool import<br/>zpool import pool-name"]
+    DisplayCmds --> Done
+
+    style Start fill:#87CEEB
+    style Done fill:#90EE90
+    style Skip fill:#D3D3D3
+```
+
+
 For PBS datastores whose paths live under typical mount roots (for example `/mnt/...`), ProxSave aims for a "restore even if offline" behavior:
 
 - PBS datastore definitions are applied even when the underlying storage is offline/not mounted, so PBS shows them as **unavailable** rather than silently dropping them.
@@ -1746,7 +2478,7 @@ This prevents accidental writes into the root filesystem when storage is offline
 
 ### 5. Root Privilege Check
 
-**Pre-Extraction Check** (`internal/orchestrator/restore_archive.go` → `extractPlainArchive()`, `extractSelectiveArchiveStrict()`):
+**Pre-Extraction Check** (`internal/orchestrator/restore_archive.go` -> `extractPlainArchive()`, `extractSelectiveArchiveStrict()`):
 
 ```go
 // For system-path restoration on the REAL filesystem only
@@ -1772,7 +2504,7 @@ if checksumFile exists {
         return fmt.Errorf("checksum mismatch")
     }
 
-    logger.Info("✓ Checksum verified successfully")
+    logger.Info("Yes Checksum verified successfully")
 } else if manifest.SHA256 != "" {
     // Use manifest checksum
     actualChecksum := calculateSHA256(archivePath)
@@ -2051,7 +2783,7 @@ func (h *NetworkConfigHook) PreRestore(ctx context.Context, categories []Categor
     for _, cat := range categories {
         if cat.ID == "network" {
             // Warn about network disruption
-            fmt.Println("⚠ WARNING: Network configuration will be changed")
+            fmt.Println("Warning: WARNING: Network configuration will be changed")
             fmt.Println("   You may lose connection during restore")
             return askConfirmation()
         }
@@ -2197,28 +2929,23 @@ func TestPathMatchesCategory(t *testing.T) {
 ### Integration Tests
 
 **Full Restore Workflow**:
-```bash
-#!/bin/bash
-# Test full restore workflow. Both commands are flag invocations on purpose: a
-# script has no TTY, so the dashboard never opens and the CLI front-end is used.
 
-# 1. Create test backup
-proxsave --backup
+Run destructive integration checks only on a disposable PVE/PBS installation with
+console access and no production cluster or shared-storage membership.
 
-# 2. Modify system files
-echo "test" > /etc/hostname
+1. Record the host identity, service state and representative configuration contents.
+2. Create a test backup and record its exact artifact names and encryption setup.
+3. Change only the test fixture settings chosen for the scenario.
+4. Run `proxsave --restore --cli` interactively, review the selected backup and scope,
+   and answer the actual prompts. The prompt sequence depends on the payload,
+   encryption, platform, cluster mode and confirmation stages; a fixed list of
+   piped answers is not a valid general driver.
+5. Compare the restored configuration with the recorded baseline and inspect the
+   detailed restore log for skipped or partially applied items.
+6. Revert or destroy the test installation before another scenario.
 
-# 3. Run restore (with test responses)
-echo -e "1\n1\n1\nRESTORE\n" | proxsave --restore
-
-# 4. Verify restoration
-if grep -q "original-hostname" /etc/hostname; then
-    echo "✓ Restore successful"
-else
-    echo "✗ Restore failed"
-    exit 1
-fi
-```
+Use the repository's mocked workflow tests for repeatable checks without modifying
+a real `/etc`; see [Test Strategy](TEST_STRATEGY.md).
 
 ### Mocking External Dependencies
 

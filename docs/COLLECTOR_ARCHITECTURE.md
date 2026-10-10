@@ -1,5 +1,7 @@
 # Collector Architecture
 
+For operator-facing coverage and collection settings, use the [backup guide](BACKUP_GUIDE.md#what-proxsave-backs-up). This document describes how collectors are implemented
+
 This document describes the current backup collector design after the refactor to
 recipes and fine-grained bricks.
 

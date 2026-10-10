@@ -1,5 +1,7 @@
 # Security
 
+For operational instructions, use [encryption](ENCRYPTION.md), [release verification](PROVENANCE_VERIFICATION.md) and [support preparation](TROUBLESHOOTING.md#getting-help). This reference explains the implementation boundaries behind those procedures
+
 This document describes the ProxSave runtime security model: the trust boundary,
 how external commands are executed, the preflight checks, and the layers that keep
 secrets and untrusted data from doing harm. For the notification and relay security
@@ -265,13 +267,14 @@ aborts the run rather than letting it proceed on an unverified binary or config.
 The bound is per syscall and it does not cover the whole preflight. Once the executable is
 open, the fstat on it and the SHA256 read of the entire binary are raw unbounded calls, and
 inside the private-key scan the directory walk is bounded but the per-file open and read
-are not. A mount that goes stale inside one of those windows still wedges the preflight, and
-**the daemon watchdog does not save you there**. A child that merely overruns
-`MAX_RUN_DURATION` gets `SIGTERM`, then `SIGKILL` after a 30s grace, and is reported as a
-hang. A child stuck in uninterruptible sleep is not reported at all: the daemon reports only
-after the child is reaped, and a D-state process is never reaped, so the daemon blocks in the
-same wedge and stops scheduling. Only the monitor's silence on the missing finish ping
-catches that case (see [DAEMON.md](DAEMON.md)). The daemon also supervises `--backup`
+are not. A mount that goes stale inside one of those windows can still wedge the preflight.
+For a supervised child, the daemon applies `MAX_RUN_DURATION`, sends `SIGTERM`, then
+`SIGKILL` after the grace period, and bounds the final reap wait. If the child still cannot
+be reaped, the daemon reports abandonment, persists the orphan's identity and exits for
+systemd to restart it. The restarted daemon retains the degraded monitoring state while
+that orphan remains. This reports the outage; it cannot repair the mount or kill a task
+stuck in kernel I/O. See the [D-state caveat](DAEMON.md#caveat-uninterruptible-sleep-d-state)
+for the timeout sequence and recovery conditions. The daemon supervises `--backup`
 children only, so a restore, a manual run, or a dashboard **Backup** has no watchdog at all
 (the dashboard backup is not a daemon child: it runs in the same process as the menu, which
 keeps its session open and hands it to the run).
