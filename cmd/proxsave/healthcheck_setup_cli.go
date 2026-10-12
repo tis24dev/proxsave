@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/tis24dev/proxsave/internal/installer"
 	"github.com/tis24dev/proxsave/internal/logging"
 	"github.com/tis24dev/proxsave/internal/orchestrator"
 )
@@ -41,7 +42,18 @@ func logHealthcheckSetupBootstrapOutcome(bootstrap *logging.BootstrapLogger, sta
 // (mirrors runTelegramSetupCLI): a short guide, the portal magic-link, and a
 // non-blocking connection check with retry/skip. Only renders when the daemon
 // engine with centralized monitoring was chosen and the identity/secret exist.
-func runHealthcheckSetupCLI(ctx context.Context, reader *bufio.Reader, baseDir, configPath string, bootstrap *logging.BootstrapLogger) error {
+func runHealthcheckSetupCLI(ctx context.Context, reader *bufio.Reader, baseDir, configPath string, bootstrap *logging.BootstrapLogger, options ...installer.HealthcheckSetupOptions) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if len(options) > 0 && options[0].BeforeBootstrap != nil {
+		if err := options[0].BeforeBootstrap(ctx); err != nil {
+			return err
+		}
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	state, err := healthcheckSetupBuildBootstrap(ctx, configPath, baseDir)
 	if err != nil {
 		logBootstrapWarning(bootstrap, "Healthcheck setup bootstrap failed (non-blocking): %v", err)

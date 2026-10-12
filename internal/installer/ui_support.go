@@ -1,6 +1,7 @@
 package installer
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -46,6 +47,12 @@ type TelegramSetupResult struct {
 	LastStatusError   string
 
 	SkippedVerification bool
+}
+
+// HealthcheckSetupOptions supplies install-only preparation before monitoring bootstrap.
+// Omit it for diagnostics. Callers may supply zero or one options value.
+type HealthcheckSetupOptions struct {
+	BeforeBootstrap func(context.Context) error
 }
 
 // HealthcheckSetupResult reports the outcome of the interactive healthchecks

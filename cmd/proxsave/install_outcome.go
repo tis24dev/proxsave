@@ -23,7 +23,7 @@ import (
 // The whole string is caller-pre-styled and passed verbatim to the inline stream screen,
 // mirroring how WithSelectorPromptStyled accepts an already-rendered prompt. It never
 // renders the CLI footer, which stays the persistent scrollback record after Close.
-func buildInstallOutcomePrompt(rv RestartVerifyResult, verified bool, permStatus, permMessage string) string {
+func buildInstallOutcomePrompt(rv RestartVerifyResult, verified bool, permStatus, permMessage string, runtime ...installRuntimeResult) string {
 	var b strings.Builder
 
 	title, level := installBanner(nil)
@@ -35,6 +35,9 @@ func buildInstallOutcomePrompt(rv RestartVerifyResult, verified bool, permStatus
 		// Same verdict the install's log line shows (NOT classifyRestartVerify, whose
 		// success arm needs the Restarted flag the poll-only verify never sets).
 		level, keyword := installVerifyVerdict(rv)
+		if len(runtime) > 0 {
+			level, keyword, _ = installRuntimeVerdict(runtime[0])
+		}
 		b.WriteString(renderDaemonStatusLevel(level, keyword))
 	} else {
 		// No daemon verify ran (cron scheduler, install-daemon failure, or an
