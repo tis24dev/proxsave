@@ -9,6 +9,70 @@ import (
 	"time"
 )
 
+// A standalone host must not need Corosync quorum to pass recovery checks. A
+// configured cluster with one member still needs its quorum checked, including
+// when it is the sole survivor of a larger cluster and has lost quorum.
+func TestRecoveryHealthDistinguishesStandaloneAndOneMemberCluster(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		configured bool
+		expected   int
+		quorate    bool
+		want       networkHealthSeverity
+	}{
+		{name: "standalone", want: networkHealthOK},
+		{name: "one_member_cluster", configured: true, expected: 1, quorate: true, want: networkHealthOK},
+		{name: "one_survivor_without_quorum", configured: true, expected: 3, want: networkHealthWarn},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			originalFS, originalCmd := restoreFS, restoreCmd
+			t.Cleanup(func() { restoreFS, restoreCmd = originalFS, originalCmd })
+			fs := NewFakeFS()
+			t.Cleanup(func() { _ = os.RemoveAll(fs.Root) })
+			restoreFS = fs
+			runner := &fakeCommandRunner{
+				outputs: map[string][]byte{
+					"mountpoint -q /etc/pve":          {},
+					"systemctl is-active pve-cluster": []byte("active\n"),
+					"systemctl is-active corosync":    []byte("inactive\n"),
+					"pvecm status":                    []byte("Corosync configuration does not exist\n"),
+				},
+				errs: map[string]error{
+					"pvecm status":                 errors.New("exit status 2"),
+					"systemctl is-active corosync": errors.New("exit status 3"),
+				},
+			}
+			if tc.configured {
+				if err := fs.WriteFile("/etc/pve/corosync.conf", []byte("nodelist {}\n"), 0o640); err != nil {
+					t.Fatal(err)
+				}
+				runner.outputs["pvecm status"] = []byte(pvecmStatusOutput(1, tc.expected, tc.quorate))
+				runner.outputs["systemctl is-active corosync"] = []byte("active\n")
+				delete(runner.errs, "pvecm status")
+				delete(runner.errs, "systemctl is-active corosync")
+			}
+			restoreCmd = runner
+			report := &networkHealthReport{}
+			runCorosyncClusterHealthChecks(context.Background(), 50*time.Millisecond, nil, report)
+			if report.Severity != tc.want {
+				t.Fatalf("health=%v; want %v\n%s", report.Severity, tc.want, report.Details())
+			}
+			var checkedMount, checkedQuorum bool
+			for _, check := range report.Checks {
+				switch check.Name {
+				case "PMXCFS":
+					checkedMount = true
+				case "Cluster quorum":
+					checkedQuorum = true
+				}
+			}
+			if !checkedMount || checkedQuorum != tc.configured {
+				t.Errorf("mount checked=%t quorum checked=%t; want true, %t\n%s", checkedMount, checkedQuorum, tc.configured, report.Details())
+			}
+		})
+	}
+}
+
 func TestRunNetworkHealthChecksIncludesCorosyncQuorumOK(t *testing.T) {
 	origCmd := restoreCmd
 	origFS := restoreFS

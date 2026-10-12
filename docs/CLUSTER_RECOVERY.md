@@ -433,10 +433,14 @@ hostname
 # 2. Check PVE installed
 dpkg -l | grep proxmox-ve
 
-# 3. Verify no cluster membership
+# 3. Inspect current cluster status
 pvecm status
-# Expected: "cluster not ready - no quorum?" or similar
+# A standalone host without corosync.conf has no Corosync cluster status.
+# "No quorum" alone does not prove that the host is standalone.
 ```
+
+Confirm that the host was standalone before the failure. If `/etc/pve` is not
+mounted, a missing `corosync.conf` does not establish that it had no cluster configuration.
 
 #### Step 2: Run Restore Workflow
 
@@ -575,7 +579,8 @@ cat /etc/pve/vzdump.cron
 
 - All services running
 - `/etc/pve` mounted and populated
-- `pvecm status` shows healthy single-node cluster
+- Standalone host: recovered configuration visible under `/etc/pve`; no Corosync status required
+- Configured one-member cluster: `pvecm status` shows the expected membership and quorum
 - Storage accessible
 - Web interface working
 - VM/CT configs visible
