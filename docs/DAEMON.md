@@ -17,6 +17,10 @@ Review `Scheduler engine`, `Healthchecks`, `Notify level`, `Frequency` and `Run 
 Weekly schedules also have `Weekday`; monthly schedules have `Day of month`, limited
 to 1 through 28. The default schedule is daily at 02:00 in the host's local time.
 
+With the daemon selected, **Install** > **Edit install** prepares the service before
+the installation's monitoring check, installing it if missing. This path preserves
+the monitoring choice saved by the wizard.
+
 For an installed host, the **Daemon** group offers actions according to the configured
 engine:
 
@@ -76,6 +80,12 @@ After switching engines or changing the schedule, check **Daemon** > **Status** 
 running, reporting and aligned daemon. Then check the next scheduled backup's saved
 artifacts and the external monitor's event history. Status does not start a backup,
 execute personal scripts or prove that the next backup will succeed.
+
+An installation can defer restarting an existing daemon when a backup is running or
+the backup lock cannot be established safely. If the installer reports
+`configuration not applied; manual restart required`, let any backup finish and
+resolve any reported configuration error. Then choose **Daemon** > **Restart** and
+check **Daemon** > **Status** to verify that the new configuration is active.
 
 **Restart** waits up to four minutes for a supervised backup, then verifies a fresh,
 aligned daemon. An upgrade also attempts restart and verification; a deferred or failed

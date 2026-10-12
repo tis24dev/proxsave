@@ -155,7 +155,7 @@ In **Keep existing & continue** mode, config-dependent post-steps are skipped:
 
 Final install steps still run:
 - Support docs installation
-- Symlink and scheduler finalization (installs the daemon service or the cron entry for the chosen engine)
+- Symlink and scheduler finalization (completes setup for the chosen engine)
 - Permission normalization
 
 **Wizard prompts:**
@@ -179,7 +179,9 @@ Final install steps still run:
 
 ### Scheduling and the daemon
 
-The selected scheduler is finalized during installation. The resident daemon is the default and is required for Healthchecks transmissions. Cron is an opt-out for schedules the daemon cannot express. Review [scheduling](DAEMON.md) and [monitoring](HEALTHCHECKS.md) for their complete setup and verification procedures.
+With the daemon selected, both the CLI and dashboard installers prepare the service before monitoring verification, installing it if missing. Finalization reuses that preparation without repeating service activation. With **Keep existing & continue**, monitoring verification is skipped and preparation runs during finalization. Cron setup remains a final installation step.
+
+The resident daemon is the default and is required for Healthchecks transmissions. Cron is an opt-out for schedules the daemon cannot express. Review [scheduling](DAEMON.md) and [monitoring](HEALTHCHECKS.md) for their complete setup and verification procedures, including what to do if the installer requires a manual restart.
 
 `BASE_DIR` is detected from the executable. An active `BASE_DIR` assignment is ignored and removed by configuration upgrades. On architectures without published releases, continue maintaining your source build: the binary upgrade downloads Linux amd64 rather than compiling your source.
 

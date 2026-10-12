@@ -83,6 +83,8 @@ ProxSave chooses collectors for the detected PVE, PBS or combined host role, the
 
 Start in **Maintenance > Install > Edit install** for settings exposed by the configuration form. Other collection keys must be edited in the active `backup.env` file using the [configuration reference](CONFIGURATION.md#collector-options). Do not assume that every key has a dashboard control
 
+The pmxcfs database `config.db` is collected on every PVE host, including standalone hosts, independently of `BACKUP_CLUSTER_CONFIG`. That flag controls Corosync and cluster-specific collection. To exclude the database and its sidecars, add `config.db*` to `BACKUP_EXCLUDE_PATTERNS`; this also removes the database recovery artifact.
+
 Review related settings together. For example, disabling a dedicated credential or VM configuration collector does not guarantee that the same information is absent from a larger database or directory snapshot. PVE's `config.db` can still contain access-control secrets when the separate ACL files are excluded
 
 Use encryption and appropriate access controls for archives that contain credentials. Read [encryption](ENCRYPTION.md#encrypt-backups-and-preserve-recovery-keys) before collecting material you do not want stored in plaintext at the destinations

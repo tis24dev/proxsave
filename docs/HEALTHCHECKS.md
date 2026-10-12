@@ -16,11 +16,15 @@ Run `proxsave` without arguments on an interactive terminal, then choose
 `Scheduler engine`, then choose `Healthchecks`: centralized monitoring, your own server
 or Off. The field is inactive for cron because only the resident daemon transmits.
 
+During installation, ProxSave prepares the selected daemon before checking monitoring,
+installing its service if missing. The separate **Diagnostic Checks** > **Healthchecks**
+screen does not install or restart services.
+
 For an existing cron installation, **Daemon** > **Install** switches engines and
 enables monitoring. Review its cron warnings to avoid duplicate schedules; see
-[scheduling](DAEMON.md#schedule-and-supervise-backups). Installing or reinstalling the
-daemon enables monitoring even if it was previously disabled. Later upgrades preserve
-an explicitly disabled value.
+[scheduling](DAEMON.md#schedule-and-supervise-backups). This action enables monitoring
+even if it was previously disabled. **Install** > **Edit install** preserves the
+wizard's monitoring choice. Later upgrades preserve an explicitly disabled value.
 
 The actual transmission switch is `HEALTHCHECK_ENABLED`. Setting it to `false` in the
 active `configs/backup.env` silences monitoring while allowing daemon scheduling.
@@ -107,9 +111,12 @@ log tails may disclose sensitive context to the monitoring service, so choose
 
 For a missing portal link, first resolve the monitoring error and identity state, then
 reopen **Healthchecks**. For a missing daemon unit while configuration still says daemon,
-use the repair instructions in [CLI_REFERENCE.md](CLI_REFERENCE.md); the dashboard's
-Install action is offered only when the recorded engine is cron. Do not invent a green
-state by manually pinging a check whose real backup did not run.
+use **Maintenance** > **Install** > **Edit install** and continue with the daemon
+selected. Review the installation result, then reopen **Diagnostic Checks** >
+**Healthchecks**. The separate **Daemon** > **Install** action is available only when
+the recorded engine is cron; command-line repair is described in
+[CLI_REFERENCE.md](CLI_REFERENCE.md). Do not invent a green state by manually pinging
+a check whose real backup did not run.
 
 Read [check-screen troubleshooting](#what-the-check-screen-tells-you) for every displayed
 verdict and [ping details](#ping-details) for event protocol semantics.
@@ -485,7 +492,7 @@ fully healthy centralized state; in self mode it is `REACHABLE`.
 | `PROVISIONING` | the credential or the server-side setup is not ready yet | check again shortly; if it persists, this host cannot reach the monitoring server |
 | `UNREACHABLE` | the monitor did not answer from this host | check outbound connectivity and DNS |
 | `UNCONFIRMED` | provisioned, but reachability could not be confirmed | run the check again |
-| `NOT INSTALLED` | the monitor is reachable but the daemon service is not installed | Use **Daemon** > **Install** when the recorded engine is cron. If configuration records daemon but the unit is missing, use the repair entry point in [CLI_REFERENCE.md](CLI_REFERENCE.md); the dashboard offers Disable, Restart and Status in that state. |
+| `NOT INSTALLED` | the monitor is reachable but the daemon service is not installed | For cron, use **Daemon** > **Install**. If already configured for daemon, use **Install** > **Edit install**. Review installation errors before checking again. |
 | `NOT RUNNING` | the service is installed and stopped, or never wrote a heartbeat | `systemctl start proxsave-daemon.service` |
 | `RUNNING, NOT REPORTING` | the process is up but has written no heartbeat yet | usually a stale build; restart the service |
 | `STALE` | the last heartbeat is older than twice the heartbeat interval, and the interval is floored at one minute first, so the smallest stale window is two minutes | the daemon is stopped or wedged; check `journalctl -u proxsave-daemon.service`. On a systemd host you will normally see `RUNNING, NOT REPORTING` instead: an active unit with a stale heartbeat is reclassified, so `STALE` surfaces only when systemd could not be asked |
