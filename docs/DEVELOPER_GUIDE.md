@@ -19,15 +19,10 @@ Guide for contributing to Proxsave, including development setup, coding guidelin
 
 ## Overview
 
-Proxsave is built with modern Go practices, emphasizing:
-
-- **Performance**: Compiled binary, concurrent operations
-- **Reliability**: Comprehensive error handling, safe defaults
-- **Maintainability**: Clean architecture, modular design
-- **Testability**: Unit tests, integration tests, mocking
+This guide covers the implementation and contributor workflow. For the operator view of collection, archives and destinations, read [How a backup runs](BACKUP_GUIDE.md#how-a-backup-runs). For routine operations, use the [dashboard guide](DASHBOARD.md)
 
 **Technology stack**:
-- **Language**: Go 1.26.8 or later (the floor `go.mod` sets and `goRuntimeMinVersion` enforces at startup)
+- **Language**: Go 1.26.9 or later (the floor `go.mod` sets and `goRuntimeMinVersion` enforces at startup)
 - **Dependencies**: See `go.mod` for complete list
 - **Build system**: Makefile + Go modules
 - **Compression**: gzip, bzip2, xz, lzma, zstd
@@ -41,7 +36,7 @@ Proxsave is built with modern Go practices, emphasizing:
 ### Prerequisites
 
 ```bash
-# Go 1.26.8 or later
+# Go 1.26.9 or later
 go version
 
 # Build tools
@@ -199,7 +194,7 @@ go build -ldflags="-s -w" -o build/proxsave ./cmd/proxsave
 
 # With version info
 VERSION=$(git describe --tags --always)
-go build -ldflags="-s -w -X main.version=${VERSION}" -o build/proxsave ./cmd/proxsave
+go build -ldflags="-s -w -X github.com/tis24dev/proxsave/internal/version.Version=${VERSION}" -o build/proxsave ./cmd/proxsave
 ```
 
 ### Run Without Building

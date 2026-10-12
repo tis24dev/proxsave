@@ -101,7 +101,7 @@ func Parse() *Args {
 		"Log level (shorthand)")
 
 	flag.BoolVar(&args.DryRun, "dry-run", false,
-		"Perform a dry run without making actual changes")
+		"Simulate a backup without creating or uploading archives; diagnostic logs may still be written")
 	flag.BoolVar(&args.DryRun, "n", false,
 		"Perform a dry run (shorthand)")
 

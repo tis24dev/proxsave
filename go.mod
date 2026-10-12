@@ -1,6 +1,6 @@
 module github.com/tis24dev/proxsave
 
-go 1.26.8
+go 1.26.9
 
 require (
 	charm.land/bubbles/v2 v2.2.1

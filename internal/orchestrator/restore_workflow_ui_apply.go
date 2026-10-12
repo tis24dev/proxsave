@@ -9,6 +9,14 @@ import (
 	"github.com/tis24dev/proxsave/internal/logging"
 )
 
+// The post-restore steps reach these staged-config consumers through variables so
+// tests can see what each one is handed without running it against the live system.
+var (
+	installNetworkConfigFromStageFunc   = maybeInstallNetworkConfigFromStage
+	applyNetworkConfigWithUIFunc        = maybeApplyNetworkConfigWithUI
+	verifyAndRepairPBSNotificationsFunc = maybeVerifyAndRepairPBSNotificationsAfterRestore
+)
+
 func (w *restoreUIWorkflowRun) applyAccessControlFromStage() error {
 	return maybeApplyAccessControlWithUI(w.ctx, w.ui, w.logger, w.plan, w.safetyBackup, w.accessControlRollbackBackup, w.stageRoot, w.cfg.DryRun)
 }
@@ -30,15 +38,21 @@ func (w *restoreUIWorkflowRun) verifyPBSNotificationsAfterRestore() {
 	if !w.plan.SystemType.SupportsPBS() || !w.plan.HasCategoryID("pbs_notifications") || w.pbsServicesStopped {
 		return
 	}
-	if err := maybeVerifyAndRepairPBSNotificationsAfterRestore(w.ctx, w.logger, w.plan, w.stageRoot, w.cfg.DryRun); err != nil {
+	if w.skipForIncompleteStage("PBS notifications verification/repair") {
+		return
+	}
+	if err := verifyAndRepairPBSNotificationsFunc(w.ctx, w.logger, w.plan, w.stageRoot, w.cfg.DryRun); err != nil {
 		w.restoreHadWarnings = true
 		w.logger.Warning("PBS notifications verification/repair: %v", err)
 	}
 }
 
 func (w *restoreUIWorkflowRun) installNetworkConfigFromStage() error {
+	if w.skipForIncompleteStage("Network staged install") {
+		return nil
+	}
 	w.stageRootForNetworkApply = w.stageRoot
-	installed, err := maybeInstallNetworkConfigFromStage(w.ctx, w.logger, w.plan, w.stageRoot, w.prepared.ArchivePath, w.networkRollbackBackup, w.cfg.DryRun)
+	installed, err := installNetworkConfigFromStageFunc(w.ctx, w.logger, w.plan, w.stageRoot, w.prepared.ArchivePath, w.networkRollbackBackup, w.cfg.DryRun)
 	if err != nil {
 		if restoreAbortOrInput(err) {
 			return err
@@ -88,8 +102,13 @@ func (w *restoreUIWorkflowRun) repairDNSAfterRestore() error {
 }
 
 func (w *restoreUIWorkflowRun) applyNetworkConfig() error {
+	// Without a stage this step would offer the network files already in /etc, which
+	// the restore never wrote, as "a restored network configuration".
+	if w.skipForIncompleteStage("Network apply") {
+		return nil
+	}
 	w.logger.Info("")
-	err := maybeApplyNetworkConfigWithUI(w.ctx, w.ui, w.logger, networkConfigUIApplyRequest{
+	err := applyNetworkConfigWithUIFunc(w.ctx, w.ui, w.logger, networkConfigUIApplyRequest{
 		plan:                  w.plan,
 		safetyBackup:          w.safetyBackup,
 		networkRollbackBackup: w.networkRollbackBackup,
@@ -155,6 +174,9 @@ func (w *restoreUIWorkflowRun) logNetworkRollbackState(armed bool, observedIP, o
 }
 
 func (w *restoreUIWorkflowRun) applyFirewallConfig() error {
+	if w.skipForIncompleteStage("PVE firewall apply") {
+		return nil
+	}
 	w.logger.Info("")
 	err := maybeApplyPVEFirewallWithUI(w.ctx, w.ui, w.logger, w.plan, w.safetyBackup, w.firewallRollbackBackup, w.stageRoot, w.cfg.DryRun)
 	if err == nil {
@@ -187,6 +209,9 @@ func firewallRollbackSummary(err error) (bool, time.Time, string) {
 }
 
 func (w *restoreUIWorkflowRun) applyHAConfig() error {
+	if w.skipForIncompleteStage("PVE HA apply") {
+		return nil
+	}
 	w.logger.Info("")
 	err := maybeApplyPVEHAWithUI(w.ctx, w.ui, w.logger, w.plan, w.safetyBackup, w.haRollbackBackup, w.stageRoot, w.cfg.DryRun)
 	if err == nil {

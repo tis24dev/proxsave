@@ -9,7 +9,7 @@ import "strings"
 var postInstallComponentDescriptions = map[string]string{
 	"BACKUP_APT_SOURCES":            "APT repository sources (/etc/apt/sources.list and sources.list.d). Lets you restore your package repositories. Rarely worth disabling.",
 	"BACKUP_CEPH_CONFIG":            "Ceph cluster configuration (/etc/ceph): keyrings and ceph.conf. Only relevant on hyper-converged nodes running Ceph; disable on nodes without Ceph.",
-	"BACKUP_CLUSTER_CONFIG":         "Proxmox cluster configuration (corosync + the pmxcfs /etc/pve tree). Only meaningful on clustered nodes; disable on a standalone host.",
+	"BACKUP_CLUSTER_CONFIG":         "Corosync and cluster data. config.db and the base /etc/pve snapshot are backed up independently.",
 	"BACKUP_CRITICAL_FILES":         "A curated set of critical system files (fstab, hosts, resolv.conf and similar). Generally keep enabled.",
 	"BACKUP_CRON_JOBS":              "System cron jobs (/etc/crontab, /etc/cron.* and per-user crontabs). Disable if this node has no custom cron jobs.",
 	"BACKUP_DATASTORE_CONFIGS":      "Proxmox Backup Server datastore definitions (datastore.cfg). PBS-only; disable on a PVE host.",

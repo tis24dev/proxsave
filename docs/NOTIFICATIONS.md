@@ -1,46 +1,271 @@
-# Notifications and the centralized bot relay
+# Backup notifications
 
-ProxSave reports the outcome of every backup run over a small set of channels:
-**Email**, **Telegram**, **Gotify**, and **Webhooks**. On top of those it runs a
-separate monitoring layer that turns each channel's outcome into an external
-dead-man sensor. This document explains how the channels work, the centralized
-Telegram relay (where the bot token stays on the host), the two-response delivery
-model, the portal magic-link, and the log-redaction rules that keep secrets out of
-the logs.
+<!-- site-region: backup-notifications:start -->
 
-For the full list of `backup.env` keys see [CONFIGURATION.md](CONFIGURATION.md).
-For the per-channel healthchecks sensors, the monitoring portal, and what each state
-means see [HEALTHCHECKS.md](HEALTHCHECKS.md); for the daemon that pings them see
-[DAEMON.md](DAEMON.md).
+## Set up backup notifications
 
-## Setting the channels up
+ProxSave reports backup outcomes through Email, Telegram, Gotify and Webhooks.
+Notifications are separate from missing-run monitoring: a dead host or a backup that
+never starts cannot send its own failure message. Use
+[external monitoring](HEALTHCHECKS.md#configure-and-verify-backup-monitoring) for those cases.
 
-The everyday route is the dashboard: run `proxsave` with no arguments on a TTY and it
-opens. **Install** > **Edit install** re-runs the install wizard against the existing
-configuration, and its fields cover the switches this document depends on: `Telegram
-notifications`, `Email notifications` with its `Email delivery mode`, `Scheduler engine`
-and `Healthchecks`. The **Diagnostic Checks** group then verifies what the wizard wrote:
-**Telegram** runs the relay pairing screen and re-checks the registration, **Healthchecks**
-shows the monitoring state and the portal details.
+A delivery failure does not undo a saved backup. Sending, retries and relay polling are
+awaited and can extend the run. A notification error can promote an otherwise clean
+run to a warning exit outcome, so inspect storage and notification results separately.
 
-Two of those fields are coupled. `Healthchecks` is only selectable when `Scheduler engine`
-is the daemon, because the daemon is the only process that pings; with cron the field is
-dimmed and monitoring is written off: the wizard writes `HEALTHCHECK_ENABLED=false` and
-`HEALTHCHECK_MODE=off`, and only the first of the two turns anything off (see
-[HEALTHCHECKS.md](HEALTHCHECKS.md#turning-monitoring-off)).
-Tier 2 below therefore exists only on a host the daemon schedules.
+### Configure the channels
 
-Everything the wizard does not ask about is a hand edit of `backup.env`: the email
-recipient, Gotify, webhooks, the Telegram delivery-confirmation keys, the Gotify
-priorities. See [CONFIGURATION.md](CONFIGURATION.md).
+Run `proxsave` without arguments on an interactive terminal and choose
+**Maintenance** > **Install** > **Edit install**. The wizard offers `Telegram notifications`,
+`Email notifications` and `Email delivery mode`, alongside scheduler and monitoring
+choices. It does not configure every channel field. Edit the active `configs/backup.env`
+for email recipients, Gotify, webhook endpoints and advanced Telegram settings.
+Keep tokens, passwords and endpoint credentials private.
 
-`--install` and `--new-install` reach the same wizard without going through the dashboard,
-for headless hosts, scripts, and recovery. They still draw the TUI; add `--cli` for
-text-mode prompts when the terminal cannot render it. See [DASHBOARD.md](DASHBOARD.md).
+Use **Diagnostic Checks** > **Telegram** for pairing and registration checks.
+Use **Diagnostic Checks** > **Healthchecks** for monitoring state and portal details.
+There is no separate dashboard send-test action for every notification channel;
+verify actual delivery through a backup.
+
+### Choose Email delivery
+
+| Method | Delivery route | Possible fallback |
+| --- | --- | --- |
+| relay | Shared cloud relay | sendmail when enabled |
+| pmf | Proxmox mail-forward | relay, then sendmail |
+| sendmail | Local sendmail queue | None |
+
+Set `EMAIL_ENABLED=true`, choose `EMAIL_DELIVERY_METHOD` and review `EMAIL_RECIPIENT`.
+An empty recipient triggers detection of the `root@pam` email configured in PVE or PBS.
+Relay and sendmail require a valid recipient. The pmf route uses Proxmox Notifications
+and only warns about a missing or malformed address because its routing is external.
+
+Relay blocks root recipients. With sendmail fallback enabled it bypasses relay for
+such an address; otherwise it fails. For pmf the relay fallback is skipped for an
+empty or root recipient. Queue acceptance from sendmail or pmf is not proof of inbox
+delivery, and an accepted relay request is not an end-to-end delivery receipt.
+
+The shared relay cannot be redirected through a private-worker configuration key.
+If reports must avoid that relay, use `sendmail`: pmf can fall back through the shared
+relay for a non-root recipient. See [Email](#email) for recipient detection, sender
+handling and the detailed fallback rules.
+
+### Choose Telegram delivery
+
+Set `TELEGRAM_ENABLED=true` and choose the configured personal or centralized mode.
+Personal mode sends directly with your bot token and chat ID. Centralized mode uses
+the ProxSave relay and host identity; complete pairing through **Diagnostic Checks** >
+**Telegram**. See [Telegram modes](#telegram-personal-vs-centralized) for credential
+boundaries and registration requirements.
+
+In centralized mode, relay acceptance and Telegram confirmation are distinct outcomes.
+An accepted message can be queued or not yet confirmed. The optional delivery poll
+uses the notification ID and has bounded timeouts. Do not equate `accepted` with a
+message visible in chat. Inspect the actual message and, on daemon-supervised runs,
+the delivery sensor. The detailed reference explains
+[all relay outcomes](#the-two-response-delivery-model), including undelivered messages
+that keep a Tier 1 accepted result but mark the Tier 2 delivery sensor down.
+
+### Configure Gotify or Webhooks
+
+Gotify requires `GOTIFY_ENABLED=true`, `GOTIFY_SERVER_URL` and `GOTIFY_TOKEN`. Its
+success, warning and failure priorities default to 2, 5 and 8. Check the application
+receives the message and token permissions allow sending.
+
+Webhooks require `WEBHOOK_ENABLED=true` and `WEBHOOK_ENDPOINTS`, with a named block
+of `WEBHOOK_<NAME>_` fields for each endpoint. Supported formats are generic, Discord,
+Slack, Teams and Pushover. Review each endpoint's URL, method, authentication and custom
+headers in the [Webhooks reference](#webhooks). It includes retry limits and protected
+headers; not every failed HTTP status is retried.
+
+All endpoints are attempted, but the channel reports success when at least one succeeds.
+Verify each destination you rely on rather than only the aggregate result. Pushover
+requires POST, carries its app token and user key in the body and supports priorities
+from -2 to 1; emergency priority 2 is unsupported.
+
+### Decide which outcomes send a message
+
+`NOTIFY_ON` applies a shared threshold across enabled channels. Start with `always`
+while proving delivery. Lower thresholds depend on confirmed external alert delivery:
+monitoring is what catches silent failures when clean-run messages are suppressed.
+Read [notification filtering](#which-runs-get-notified-notify_on) for supported values,
+comparison and override behavior. Enabling notification check URLs does not enable the
+corresponding channel.
+
+### Verify delivery and diagnose failures
+
+1. Save configuration, complete Telegram pairing when applicable, then choose
+   **Backup** in the dashboard.
+2. Read each channel's result and confirm the actual inbox, chat, Gotify application
+   or webhook destination received the message.
+3. On a daemon host check the delivery sensors after the next scheduled run through
+   **Diagnostic Checks** > **Healthchecks** and the monitoring portal. A standalone
+   dashboard backup leaves these per-channel checks untouched.
+4. Resolve queue or relay errors before reducing notification frequency. Recheck
+   credentials, address, endpoint permissions and destination-side spam or routing rules.
+
+Centralized monitoring creates sensors for enabled channels. In self mode you create
+checks and set their `HEALTHCHECK_NOTIFY_<CHANNEL>_URL` or ID. These settings watch
+transmission outcomes and do not send messages. The daemon is the only pinger; cron
+cannot provide this layer.
+
+Secret masking limits accidental log disclosure but is not a reason to share raw
+configuration or payloads. Review diagnostic material before sending it. For specific
+failure messages see [Troubleshooting](#troubleshooting); command equivalents belong in
+[CLI_REFERENCE.md](CLI_REFERENCE.md).
+
+<!-- site-region: backup-notifications:end -->
+
+## Implementation appendix
+
+### The per-channel handoff file
+
+The backup child writes its per-channel outcomes to
+`<BASE_DIR>/daemon_state/.notify_results.json` (atomic write, mode `0600`), and the
+resident daemon (the only process that pings the monitor) reads it after the child
+exits. Two guards keep it honest:
+
+- The write is **gated on `PROXSAVE_RUN_ID`**, which only the daemon sets on its
+  child. A run that is not the daemon's child writes no file and leaves nothing stale:
+  that covers a dashboard **Backup**, which runs in the same process as the menu, and a
+  bare `proxsave --backup` by hand.
+- The daemon **rejects any file whose run id is not the run it supervised**, and an
+  empty result set is written as an empty object so the daemon can tell "child ran,
+  nothing to report" from "child crashed" (missing file).
+
+The pings are driven by the channel set **in the file**, not by the daemon's cached
+config, so a channel toggled off between runs never flaps a stale DOWN. The
+Healthchecks section is a reporting surface, not a delivery channel, so it never
+gets a `notify-*` result of its own.
+
+## TOFU secret provisioning
+
+The per-server relay secret is provisioned trust-on-first-use:
+
+1. **Fetch.** The client calls `GET /api/get-chat-id?server_id=<id>` with no
+   `X-Server-Auth` (there is no secret yet). It sends `X-Proxsave-Provision: 1` only
+   when a persist target exists (`BaseDir` set), so a run with nowhere to store a
+   secret never churns one on the server.
+2. **Adopt and persist.** If the `200` response carries a `notify_secret`, the client
+   registers it with the logger for scrubbing, then persists it to
+   `<BASE_DIR>/identity/.notify_secret` (mode `0600`, then `chattr +i`, the same
+   immutable mechanism used for the server identity file). Adoption **overwrites** any
+   existing secret rather than skipping: a `200` carrying a secret means the server
+   wants this one adopted, so a re-issued secret is never stranded.
+3. **Confirm.** The client POSTs `/api/confirm-secret` with `{server_id}` and the new
+   secret in `X-Server-Auth`, which tells the server to stop re-issuing it. This step
+   is best-effort and non-fatal.
+4. **Relay.** The same run then relays through `/api/notify` with the fresh secret.
+
+The persisted secret matches `^[0-9a-z]+(-[0-9a-z]+)*$` (for example
+`3h64-dyi8-q3d6-wcm5`) and is format-validated on **both write and read**.
+`LoadNotifySecret` returns an empty string for an absent, empty, or malformed file
+(junk is never fed into the auth header) and reads under `os.Root` confinement.
+
+`get-chat-id` status codes: `200` success; `403` first contact or the bot has not been
+started; `409` missing registration; `422` invalid `SERVER_ID`; `426` "Upgrade
+ProxSave to v0.28.0 or later to complete pairing".
+
+### Stale-secret recovery
+
+If `/api/notify` answers `401` or `403` (a rotated or stale secret), the notifier
+drops the in-memory secret, reprovisions once through the fetch path, and relays that
+run once (or falls back to the legacy token path). It never loops. Like every other
+notification failure, this is non-critical and never touches the backup.
+
+### The shared cloud relay worker
+
+The `relay` method POSTs to a hardcoded Cloudflare Worker
+(`https://relay-tis24.weathered-hill-5216.workers.dev/send`) with these headers:
+`Authorization: Bearer <WorkerToken>`, `X-Signature` (HMAC-SHA256 of the JSON
+payload), `X-Script-Version`, `X-Server-MAC`, and a `proxsave/<version>` user agent.
+
+The `WorkerToken` (`v1_public_20251024`) and the HMAC secret are a **shared public
+anti-abuse credential, not a confidential secret**: the same values ship in every
+distributed binary and are published in the repository, so they cannot be kept secret
+on the client. They only gate the free shared worker, whose real protection is
+server-side rate limiting keyed on `server_mac` / `server_id`. Both sites carry a
+`#nosec G101` documenting this. See
+[SECURITY.md](SECURITY.md#hardcoded-relay-credential-g101).
+
+The worker URL, token and HMAC secret are **compiled-in constants with no configuration
+key behind them**. `CLOUDFLARE_WORKER_URL`, `CLOUDFLARE_WORKER_TOKEN` and
+`CLOUDFLARE_HMAC_SECRET` are not read from `backup.env` or the environment: adding them
+produces no error, no log line and no change, and mail keeps going through the shared
+worker. Pointing the relay at a private worker is not supported today. To keep reports
+off a third-party relay entirely, use `EMAIL_DELIVERY_METHOD=sendmail`: it is the only
+method with no relay fallback. `pmf` is not an alternative. When `proxmox-mail-forward`
+fails and a non-root recipient is configured, ProxSave tries the shared relay **first** and
+only then sendmail, and no configuration key disables that hop.
+
+The worker builds the email from the JSON report (`buildReportData`): a key added or
+changed there also needs the worker's template, or the email sent through the relay
+will not show it.
+
+## Developer notes
+
+### The `serverbot` transport
+
+`internal/serverbot` provides the host-to-bot-server transport for relay and control
+requests. Centralized Telegram messages are delivered through the bot server;
+personal-bot messages use Telegram directly. The daemon sends Healthchecks pings
+directly to the resolved monitoring URL, including self-hosted endpoints.
+The bot-server transport has these contracts:
+
+- It is a **leaf**: it owns headers, a per-request timeout (default 5 s), a bounded
+  response read (default 8192 bytes), and transport-error redaction, and nothing else.
+  It carries no endpoint paths, query keys, DTOs, or HTTP-status semantics; those live
+  in the callers (`notify`, `health`). A Makefile guard (`check-serverbot-leaf`)
+  fails the build if it imports `internal/health`, `internal/notify`,
+  `internal/orchestrator`, `internal/config`, or `internal/identity` (the packages
+  that would create an import cycle and drag endpoint vocabulary back into the
+  transport); the intended contract is `internal/logging`, `internal/version`, and
+  the standard library only.
+- **An HTTP status is never an error.** `Client.Do` returns `(Response, nil)` for any
+  completed exchange, including non-2xx; the caller inspects `Response.Status`. An
+  error comes back only on an encode, build, dial, or read failure, and it is a
+  pre-redacted `*TransportError`. `AuthRejected(status)` is a helper for the shared
+  `401`/`403` concept, not an error path.
+- The `serverID` and secret are **per-request**, not on the client. One stateless
+  client serves the no-secret `get-chat-id` call, the authenticated `notify` call, and
+  the `confirm-secret` call. Headers are stamped conditionally: `X-Proxsave-Version`
+  always, `X-Server-Auth` only when a secret is present, `X-Proxsave-Provision: 1` only
+  when provisioning, `X-Notify-Id` only when set.
+- It must never be pointed at `api.telegram.org` or the `hc.proxsave.dev` monitor.
+
+### Adding a notifier
+
+A channel is anything that implements `notify.Notifier`
+(`Name`, `IsEnabled`, `Send`, `IsCritical`). To add one:
+
+1. Implement the interface. `IsCritical()` **must** return `false`, and `Send` should
+   return a `*NotificationResult` with `Success=false` on failure rather than a
+   non-nil error where possible; a notification must never abort the backup.
+2. Register secrets (`RegisterSecret`) for any token or URL that could appear in a log
+   or an error before you make the first request.
+3. Wire it in `initializeBackupNotifications` (skip with a `disabled` log line when its
+   `*_ENABLED` flag is off) and add it to the fixed `dispatchNotifications` entries,
+   keeping Healthchecks last.
+4. The adapter records the per-channel severity into `.notify_results.json` for you, so
+   the daemon can raise a `proxsave-notify-<name>` sensor without further work.
+5. The `NOTIFY_ON` gate in the entries loop picks the new channel up automatically. Give it
+   a `reportingOnly()` method **only** if it sends nothing outward, the way the Healthchecks
+   section does; a channel that reaches the operator belongs under the threshold. The
+   exemption is claimed by that marker and never by the channel's name, so a display name
+   cannot grant it by accident. Note that an exempt entry is also responsible for its own
+   `.notify_results.json` story, since the gate is what records `filtered` for the others.
+
+
+
+## Detailed reference
+
+The task above is the operator procedure. The following material preserves detailed behavior, limits and implementation context.
 
 ## The one invariant: notifications never abort the backup
 
-A notification is always best-effort. No channel can fail, delay, or block a backup:
+A notification is best-effort: delivery failure does not undo the completed archive.
+Sending and relay polling are awaited, so retries and timeouts can delay run completion.
+The backup result and notification result remain distinct:
 
 - Every notifier reports `IsCritical() == false`. The interface comment is explicit:
   "notifications never abort backup" (`internal/notify/notify.go`).
@@ -82,7 +307,7 @@ its own section below (Gotify with `GOTIFY_SERVER_URL` and `GOTIFY_TOKEN`). See
 Tier 2 requires the daemon. It is the only process that pings, so a host still on the
 cron scheduler raises no `notify-*` sensor at all, however the keys are set, and a run
 you start yourself (from the dashboard, or `proxsave --backup` by hand) leaves them
-untouched even under the daemon: see the handoff file below.
+untouched even under the daemon: see the [handoff implementation](#the-per-channel-handoff-file).
 
 The two tiers are decoupled on purpose. A Telegram message the relay accepted but
 Telegram did not deliver keeps the run green (Tier 1 success), yet drives the
@@ -123,15 +348,15 @@ INFO     Applying notification filter...
 INFO       Setting: warning
 INFO       Healthchecks status: ready
 INFO       Filter in effect: warning
-INFO     ✓ Notification filter: applied
+INFO     Notification filter: applied
 ```
 
 When the monitor cannot be confirmed, the block ends with the reason and
-`⚠ Notification filter: not applied`, and `Filter in effect` reads `always`. The outcome is
+`Warning Notification filter: not applied`, and `Filter in effect` reads `always`. The outcome is
 stated again at dispatch, where a filtered channel is told apart from a switched-off one:
 
 ```text
-INFO     ✓ Notification filter: applied
+INFO     Notification filter: applied
 INFO     Notifications: skipped
 SKIP     Email: filtered                                        # enabled, below the filter
 SKIP     Gotify: disabled                                       # GOTIFY_ENABLED=false
@@ -157,26 +382,6 @@ These boundaries are what keep the filter from losing information rather than ju
   `status=warning`. Suppression is a delivery decision, nothing more.
 - **An early error is always notified.** A run that fails before its notification setup
   never reaches the filter.
-
-### The per-channel handoff file
-
-The backup child writes its per-channel outcomes to
-`<BASE_DIR>/identity/.notify_results.json` (atomic write, mode `0600`), and the
-resident daemon (the only process that pings the monitor) reads it after the child
-exits. Two guards keep it honest:
-
-- The write is **gated on `PROXSAVE_RUN_ID`**, which only the daemon sets on its
-  child. A run that is not the daemon's child writes no file and leaves nothing stale:
-  that covers a dashboard **Backup**, which runs in the same process as the menu, and a
-  bare `proxsave --backup` by hand.
-- The daemon **rejects any file whose run id is not the run it supervised**, and an
-  empty result set is written as an empty object so the daemon can tell "child ran,
-  nothing to report" from "child crashed" (missing file).
-
-The pings are driven by the channel set **in the file**, not by the daemon's cached
-config, so a channel toggled off between runs never flaps a stale DOWN. The
-Healthchecks section is a reporting surface, not a delivery channel, so it never
-gets a `notify-*` result of its own.
 
 ## Telegram: personal vs centralized
 
@@ -204,41 +409,6 @@ itself, so the bot token never leaves the host.** The legacy direct
 
 This is the security keystone of centralized mode: the client stores a low-capability
 per-server secret, not the bot token.
-
-## TOFU secret provisioning
-
-The per-server relay secret is provisioned trust-on-first-use:
-
-1. **Fetch.** The client calls `GET /api/get-chat-id?server_id=<id>` with no
-   `X-Server-Auth` (there is no secret yet). It sends `X-Proxsave-Provision: 1` only
-   when a persist target exists (`BaseDir` set), so a run with nowhere to store a
-   secret never churns one on the server.
-2. **Adopt and persist.** If the `200` response carries a `notify_secret`, the client
-   registers it with the logger for scrubbing, then persists it to
-   `<BASE_DIR>/identity/.notify_secret` (mode `0600`, then `chattr +i`, the same
-   immutable mechanism used for the server identity file). Adoption **overwrites** any
-   existing secret rather than skipping: a `200` carrying a secret means the server
-   wants this one adopted, so a re-issued secret is never stranded.
-3. **Confirm.** The client POSTs `/api/confirm-secret` with `{server_id}` and the new
-   secret in `X-Server-Auth`, which tells the server to stop re-issuing it. This step
-   is best-effort and non-fatal.
-4. **Relay.** The same run then relays through `/api/notify` with the fresh secret.
-
-The persisted secret matches `^[0-9a-z]+(-[0-9a-z]+)*$` (for example
-`3h64-dyi8-q3d6-wcm5`) and is format-validated on **both write and read**.
-`LoadNotifySecret` returns an empty string for an absent, empty, or malformed file
-(junk is never fed into the auth header) and reads under `os.Root` confinement.
-
-`get-chat-id` status codes: `200` success; `403` first contact or the bot has not been
-started; `409` missing registration; `422` invalid `SERVER_ID`; `426` "Upgrade
-ProxSave to v0.28.0 or later to complete pairing".
-
-### Stale-secret recovery
-
-If `/api/notify` answers `401` or `403` (a rotated or stale secret), the notifier
-drops the in-memory secret, reprovisions once through the fetch path, and relays that
-run once (or falls back to the legacy token path). It never loops. Like every other
-notification failure, this is non-critical and never touches the backup.
 
 ## The two-response delivery model
 
@@ -293,8 +463,8 @@ distinct from `pending`) and no poll runs.
 Telegram prints **two lines**. The first is server acceptance, the second is delivery:
 
 ```text
-✓ Telegram: sent to ProxSave server (in 240ms)
-✓ Telegram: delivered to Telegram
+Telegram: sent to ProxSave server (in 240ms)
+Telegram: delivered to Telegram
 ```
 
 The first-line latency is acceptance-only (from `relay_accept_duration`), so it
@@ -303,14 +473,14 @@ from the delivery state:
 
 | State | Second line | Level |
 |-------|-------------|-------|
-| `delivered` | `✓ Telegram: delivered to Telegram` | info |
-| `failed` | `❌ Telegram: not delivered (<reason>)` | warning |
-| `pending` | `⚠️ Telegram: accepted; delivery in progress (auto-retry)` | warning |
+| `delivered` | `Telegram: delivered to Telegram` | info |
+| `failed` | `Telegram: not delivered (<reason>)` | warning |
+| `pending` | `Warning Telegram: accepted; delivery in progress (auto-retry)` | warning |
 | `unconfirmed` | (quiet, confirmation disabled) | debug |
-| `unknown` | `⚠️ Telegram: accepted; delivery not confirmed` | warning |
+| `unknown` | `Warning Telegram: accepted; delivery not confirmed` | warning |
 
 If acceptance itself failed, the first line reads
-`❌ Telegram: could not send to ProxSave server`. The failure `<reason>` on the
+`Telegram: could not send to ProxSave server`. The failure `<reason>` on the
 `failed` line is translated for humans: `bot blocked by the user` (`http_403`),
 `invalid chat` (`http_400` / `http_404`), `message too long` (`http_413`),
 `Telegram unreachable too long (expired)` and `too many failed attempts` (the
@@ -396,34 +566,13 @@ bypasses relay and goes straight to sendmail; without a fallback it hard-fails w
 (HTTP `200` from the worker); sendmail and pmf explicitly warn that exit code `0`
 means "accepted to queue, not necessarily delivered".
 
-### The shared cloud relay worker
+### Keep email reports off the shared relay
 
-The `relay` method POSTs to a hardcoded Cloudflare Worker
-(`https://relay-tis24.weathered-hill-5216.workers.dev/send`) with these headers:
-`Authorization: Bearer <WorkerToken>`, `X-Signature` (HMAC-SHA256 of the JSON
-payload), `X-Script-Version`, `X-Server-MAC`, and a `proxsave/<version>` user agent.
-
-The `WorkerToken` (`v1_public_20251024`) and the HMAC secret are a **shared public
-anti-abuse credential, not a confidential secret**: the same values ship in every
-distributed binary and are published in the repository, so they cannot be kept secret
-on the client. They only gate the free shared worker, whose real protection is
-server-side rate limiting keyed on `server_mac` / `server_id`. Both sites carry a
-`#nosec G101` documenting this. See
-[SECURITY.md](SECURITY.md#hardcoded-relay-credential-g101).
-
-The worker URL, token and HMAC secret are **compiled-in constants with no configuration
-key behind them**. `CLOUDFLARE_WORKER_URL`, `CLOUDFLARE_WORKER_TOKEN` and
-`CLOUDFLARE_HMAC_SECRET` are not read from `backup.env` or the environment: adding them
-produces no error, no log line and no change, and mail keeps going through the shared
-worker. Pointing the relay at a private worker is not supported today. To keep reports
-off a third-party relay entirely, use `EMAIL_DELIVERY_METHOD=sendmail`: it is the only
-method with no relay fallback. `pmf` is not an alternative. When `proxmox-mail-forward`
-fails and a non-root recipient is configured, ProxSave tries the shared relay **first** and
-only then sendmail, and no configuration key disables that hop.
-
-The worker builds the email from the JSON report (`buildReportData`): a key added or
-changed there also needs the worker's template, or the email sent through the relay
-will not show it.
+The relay endpoint and its client credentials are compiled into ProxSave; there is no
+supported private-worker override. To avoid sending email reports to the shared relay,
+use `EMAIL_DELIVERY_METHOD=sendmail`. The `pmf` mode can fall back to the shared relay
+before sendmail when a non-root recipient is configured. `CLOUDFLARE_WORKER_URL`,
+`CLOUDFLARE_WORKER_TOKEN` and `CLOUDFLARE_HMAC_SECRET` do not change this behavior.
 
 ## Gotify
 
@@ -501,57 +650,6 @@ is safe to log as-is. Debug logging in the transport is body-free and secret-fre
 runes for console safety but is **not** secret-redacted, so a caller must wrap it with
 `RedactSecrets` when the per-request secret could appear in the body.
 
-## Developer notes
-
-### The `serverbot` transport
-
-`internal/serverbot` is the single host-to-bot-server transport, and the **only**
-thing on the host that talks to `bot.proxsave.dev`. Telegram and Healthchecks
-delivery happen beyond the bot-server, not from the host directly. Key contracts:
-
-- It is a **leaf**: it owns headers, a per-request timeout (default 5 s), a bounded
-  response read (default 8192 bytes), and transport-error redaction, and nothing else.
-  It carries no endpoint paths, query keys, DTOs, or HTTP-status semantics; those live
-  in the callers (`notify`, `health`). A Makefile guard (`check-serverbot-leaf`)
-  fails the build if it imports `internal/health`, `internal/notify`,
-  `internal/orchestrator`, `internal/config`, or `internal/identity` (the packages
-  that would create an import cycle and drag endpoint vocabulary back into the
-  transport); the intended contract is `internal/logging`, `internal/version`, and
-  the standard library only.
-- **An HTTP status is never an error.** `Client.Do` returns `(Response, nil)` for any
-  completed exchange, including non-2xx; the caller inspects `Response.Status`. An
-  error comes back only on an encode, build, dial, or read failure, and it is a
-  pre-redacted `*TransportError`. `AuthRejected(status)` is a helper for the shared
-  `401`/`403` concept, not an error path.
-- The `serverID` and secret are **per-request**, not on the client. One stateless
-  client serves the no-secret `get-chat-id` call, the authenticated `notify` call, and
-  the `confirm-secret` call. Headers are stamped conditionally: `X-Proxsave-Version`
-  always, `X-Server-Auth` only when a secret is present, `X-Proxsave-Provision: 1` only
-  when provisioning, `X-Notify-Id` only when set.
-- It must never be pointed at `api.telegram.org` or the `hc.proxsave.dev` monitor.
-
-### Adding a notifier
-
-A channel is anything that implements `notify.Notifier`
-(`Name`, `IsEnabled`, `Send`, `IsCritical`). To add one:
-
-1. Implement the interface. `IsCritical()` **must** return `false`, and `Send` should
-   return a `*NotificationResult` with `Success=false` on failure rather than a
-   non-nil error where possible; a notification must never abort the backup.
-2. Register secrets (`RegisterSecret`) for any token or URL that could appear in a log
-   or an error before you make the first request.
-3. Wire it in `initializeBackupNotifications` (skip with a `disabled` log line when its
-   `*_ENABLED` flag is off) and add it to the fixed `dispatchNotifications` entries,
-   keeping Healthchecks last.
-4. The adapter records the per-channel severity into `.notify_results.json` for you, so
-   the daemon can raise a `proxsave-notify-<name>` sensor without further work.
-5. The `NOTIFY_ON` gate in the entries loop picks the new channel up automatically. Give it
-   a `reportingOnly()` method **only** if it sends nothing outward, the way the Healthchecks
-   section does; a channel that reaches the operator belongs under the threshold. The
-   exemption is claimed by that marker and never by the channel's name, so a display name
-   cannot grant it by accident. Note that an exempt entry is also responsible for its own
-   `.notify_results.json` story, since the gate is what records `filtered` for the others.
-
 ## Troubleshooting
 
 | Symptom | Likely cause | Where to look |
@@ -572,3 +670,13 @@ See [CONFIGURATION.md](CONFIGURATION.md) for every key, [DAEMON.md](DAEMON.md) f
 monitoring sensors, and [DASHBOARD.md](DASHBOARD.md) for the dashboard screens that
 pair Telegram and show the monitoring state. [INSTALL.md](INSTALL.md) covers the same
 pairing step inside the installer.
+
+## Earlier guide entry points
+
+## Setting the channels up
+
+See the complete [operator procedure](#set-up-backup-notifications). Detailed settings and implementation material remain in the reference sections above.
+
+## Verify notification delivery
+
+See the complete [operator procedure](#set-up-backup-notifications). Detailed settings and implementation material remain in the reference sections above.

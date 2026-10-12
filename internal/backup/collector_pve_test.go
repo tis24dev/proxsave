@@ -52,7 +52,7 @@ func TestIsClusteredPVEFallbackToPvecm(t *testing.T) {
 	}
 }
 
-func TestIsClusteredPVEMissingCorosyncConfigIsStandalone(t *testing.T) {
+func TestIsClusteredPVEMissingCorosyncConfigNeedsRuntimeEvidence(t *testing.T) {
 	collector := newPVECollectorWithDeps(t, CollectorDeps{
 		LookPath: func(cmd string) (string, error) {
 			switch cmd {
@@ -82,8 +82,8 @@ func TestIsClusteredPVEMissingCorosyncConfigIsStandalone(t *testing.T) {
 	}
 
 	clustered, err := collector.isClusteredPVE(context.Background())
-	if err != nil {
-		t.Fatalf("isClusteredPVE returned error: %v", err)
+	if err == nil {
+		t.Fatal("missing Corosync configuration without runtime evidence must remain unknown")
 	}
 	if clustered {
 		t.Fatal("expected clustered=false when pvecm reports missing corosync config")
@@ -843,8 +843,8 @@ func TestCollectPVEDirectoriesExcludesDisabledPVEConfigFiles(t *testing.T) {
 	}
 
 	destDB := collector.targetPathFor(filepath.Join(clusterPath, "config.db"))
-	if _, err := os.Stat(destDB); err == nil {
-		t.Fatalf("expected config.db excluded when BACKUP_CLUSTER_CONFIG=false")
+	if _, err := os.Stat(destDB); err != nil {
+		t.Fatalf("core config.db must be captured when BACKUP_CLUSTER_CONFIG=false: %v", err)
 	}
 }
 

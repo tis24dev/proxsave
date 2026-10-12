@@ -53,9 +53,9 @@ func runInstall(ctx context.Context, configPath string, bootstrap *logging.Boots
 	done := logging.DebugStartBootstrap(bootstrap, "install workflow (cli)", "config=%s base=%s", configPath, baseDir)
 	defer func() { done(err) }()
 
-	// Entrypoint cleanup + recreation is deferred to runPostInstallSymlinksAndCron
-	// (success path only), so an aborted/non-interactive install never leaves the
-	// host without a working proxsave/proxmox-backup command.
+	// Entrypoint changes belong to runtime preparation after the configuration
+	// and optional setup writes have completed. A rejected configuration wizard
+	// never changes the executable entrypoints.
 	execInfo := getExecInfo()
 
 	if bootstrap != nil {
@@ -108,6 +108,7 @@ func runInstall(ctx context.Context, configPath string, bootstrap *logging.Boots
 	}
 
 	// Optional post-install audit: run a dry-run and offer to disable unused collectors.
+	runtimePreparation := newInstallRuntimePreparation(configPath, baseDir, execInfo, bootstrap)
 	if !configResult.SkipConfigWizard {
 		logging.DebugStepBootstrap(bootstrap, "install workflow (cli)", "post-install audit")
 		if err := runPostInstallAuditCLI(ctx, reader, execInfo.ExecPath, configPath, bootstrap); err != nil {
@@ -136,7 +137,7 @@ func runInstall(ctx context.Context, configPath string, bootstrap *logging.Boots
 		// (self) verify the pasted alive URL is reachable. Only renders when eligible
 		// (re-reads the written config), non-blocking.
 		logging.DebugStepBootstrap(bootstrap, "install workflow (cli)", "healthcheck setup")
-		if err := runHealthcheckSetupCLI(ctx, reader, baseDir, configPath, bootstrap); err != nil {
+		if err := runHealthcheckSetupCLI(ctx, reader, baseDir, configPath, bootstrap, installer.HealthcheckSetupOptions{BeforeBootstrap: runtimePreparation.Prepare}); err != nil {
 			return err
 		}
 	}
@@ -150,17 +151,13 @@ func runInstall(ctx context.Context, configPath string, bootstrap *logging.Boots
 	}
 
 	logging.DebugStepBootstrap(bootstrap, "install workflow (cli)", "finalizing symlinks and cron")
-	runPostInstallSymlinksAndCron(
-		ctx,
-		baseDir,
-		execInfo,
-		bootstrap,
-		buildInstallCronSchedule(configResult.SkipConfigWizard, configResult.CronSchedule, configPath),
-	)
-	// Reconcile the scheduler engine (daemon unit vs cron entry) as a mutually
-	// exclusive choice, INCLUDING the keep-existing path (SchedulerMode empty ->
-	// read from the kept config), so a re-install never leaves both active.
-	reconcileSchedulerAfterInstall(ctx, configResult.SchedulerMode, configPath, execInfo, bootstrap)
+	runtimePreparation.cronSchedule = buildInstallCronSchedule(configResult.SkipConfigWizard, configResult.CronSchedule, configPath)
+	if err := runtimePreparation.Finalize(ctx); err != nil {
+		if ctx.Err() != nil {
+			return wrapInstallError(errInteractiveAborted)
+		}
+		return err
+	}
 
 	logging.DebugStepBootstrap(bootstrap, "install workflow (cli)", "detecting telegram identity")
 	telegramCode = detectTelegramCodeWithContext(ctx, baseDir)
@@ -763,21 +760,9 @@ func runPostInstallSymlinksAndCron(ctx context.Context, baseDir string, execInfo
 	done := logging.DebugStartBootstrap(bootstrap, "post-install setup", "base=%s", baseDir)
 	defer func() { done(nil) }()
 
-	// Remove stale proxsave/proxmox-backup *symlinks* (PATH, /usr/local/bin,
-	// /usr/bin) that do not point to this Go binary, then recreate clean ones. Real
-	// (non-symlink) files are left in place so a package-managed /usr/bin binary is
-	// never deleted. This runs here — immediately before recreation and only on the
-	// success path — so an aborted or non-interactive install can never leave the
-	// host without a working entrypoint.
-	logging.DebugStepBootstrap(bootstrap, "post-install setup", "cleaning legacy entrypoints")
-	cleanupGlobalProxmoxBackupEntrypoints(execInfo.ExecPath, bootstrap)
-
-	// Ensure proxsave/proxmox-backup entrypoints point to this Go binary, if not already customized.
-	if bootstrap != nil {
-		bootstrap.Info("Ensuring the 'proxsave' command points to the Go binary")
+	if err := runPostInstallEntrypoints(ctx, execInfo, bootstrap); err != nil {
+		return
 	}
-	logging.DebugStepBootstrap(bootstrap, "post-install setup", "ensuring go symlink")
-	ensureGoSymlink(execInfo.ExecPath, bootstrap)
 
 	// Ensure a cron entry for the Go binary: preserve an entry that already
 	// targets it, drop outdated proxsave/proxmox-backup binary entries, and if
@@ -787,6 +772,32 @@ func runPostInstallSymlinksAndCron(ctx context.Context, baseDir string, execInfo
 	}
 	logging.DebugStepBootstrap(bootstrap, "post-install setup", "migrating cron entries")
 	migrateLegacyCronEntries(ctx, baseDir, execInfo.ExecPath, bootstrap, cronSchedule)
+}
+
+// runPostInstallEntrypoints is shared by the early daemon and late cron paths.
+func runPostInstallEntrypoints(ctx context.Context, execInfo ExecInfo, bootstrap *logging.BootstrapLogger) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	// Remove stale proxsave/proxmox-backup *symlinks* (PATH, /usr/local/bin,
+	// /usr/bin) that do not point to this Go binary, then recreate clean ones. Real
+	// (non-symlink) files are left in place so a package-managed /usr/bin binary is
+	// never deleted. Recreation follows in this explicit installation phase;
+	// callers verify the executable before allowing daemon activation.
+	logging.DebugStepBootstrap(bootstrap, "post-install setup", "cleaning legacy entrypoints")
+	cleanupGlobalProxmoxBackupEntrypoints(execInfo.ExecPath, bootstrap)
+
+	// Ensure proxsave/proxmox-backup entrypoints point to this Go binary, if not already customized.
+	if bootstrap != nil {
+		bootstrap.Info("Ensuring the 'proxsave' command points to the Go binary")
+	}
+	logging.DebugStepBootstrap(bootstrap, "post-install setup", "ensuring go symlink")
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	ensureGoSymlink(execInfo.ExecPath, bootstrap)
+
+	return ctx.Err()
 }
 
 func detectTelegramCodeWithContext(ctx context.Context, baseDir string) string {

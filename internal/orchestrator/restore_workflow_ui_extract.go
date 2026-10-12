@@ -256,7 +256,6 @@ func (w *restoreUIWorkflowRun) stageAndApplySensitiveCategories() error {
 		return err
 	}
 	if !success {
-		w.logger.Warning("Skipping apply due to staged extraction errors")
 		return nil
 	}
 	return w.applyStagedCategories()
@@ -267,23 +266,54 @@ func (w *restoreUIWorkflowRun) extractStagedCategories() (bool, error) {
 	w.logger.Info("")
 	w.logger.Info("Staging %d sensitive category(ies) to: %s", len(w.plan.StagedCategories), w.stageRoot)
 	if err := restoreFS.MkdirAll(w.stageRoot, 0o700); err != nil {
-		return false, fmt.Errorf("failed to create staging directory %s: %w", w.stageRoot, err)
+		err = fmt.Errorf("failed to create staging directory %s: %w", w.stageRoot, err)
+		w.discardIncompleteStage("")
+		return false, err
 	}
 
 	// failOnPartial=true: a staged extraction with any failed entry must NOT be
 	// applied to the live system; otherwise an incomplete tree of sensitive config
-	// (PVE/PBS/network/secrets) could be applied (BH-002). On error the apply is
-	// skipped (handleStageExtractError -> return false), so the system is left
-	// untouched rather than partially mutated.
+	// (PVE/PBS/network/secrets) could be applied (BH-002). The extraction carries on
+	// past a failed entry, so the stage then holds every other file: it is discarded
+	// here, before the batch and every later step that would read it.
 	stageLog, err := extractSelectiveArchiveStrict(w.ctx, w.prepared.ArchivePath, w.stageRoot, w.plan.StagedCategories, RestoreModeCustom, w.logger, true)
 	if err != nil {
-		if err := w.handleStageExtractError(err); err != nil {
-			return false, err
-		}
-		return false, nil
+		err = w.handleStageExtractError(err)
+		w.discardIncompleteStage(stageLog)
+		return false, err
 	}
 	w.stageLogPath = stageLog
 	return true, nil
+}
+
+// discardIncompleteStage handles a staged extraction that did not complete, on an
+// error and on an abort alike. Nothing staged may reach the live system then: not the
+// batch, and not the steps after it that read the stage on their own (network install
+// and apply, firewall, HA, the PBS notifications repair in the services cleanup, which
+// runs even on an abort). Those steps check stageIncomplete; the stage itself is
+// removed at once, since the files that did land hold secrets in the clear.
+func (w *restoreUIWorkflowRun) discardIncompleteStage(stageLog string) {
+	w.stageIncomplete = true
+	w.removeStage()
+	w.stageRoot = ""
+	ids := make([]string, 0, len(w.plan.StagedCategories))
+	for _, cat := range w.plan.StagedCategories {
+		ids = append(ids, cat.ID)
+	}
+	w.logger.Warning("Staged categories - not applied, the staged extraction did not complete: %s", strings.Join(ids, ", "))
+	if stageLog != "" {
+		w.logger.Info("Staging detailed log: %s", stageLog)
+	}
+}
+
+// skipForIncompleteStage reports whether a step that applies staged configuration
+// must not run because the staged extraction did not complete.
+func (w *restoreUIWorkflowRun) skipForIncompleteStage(step string) bool {
+	if !w.stageIncomplete {
+		return false
+	}
+	logging.DebugStep(w.logger, "restore", "%s skipped: the staged extraction did not complete", step)
+	return true
 }
 
 // removeStage deletes the staging tree once nothing reads it any more. It holds the

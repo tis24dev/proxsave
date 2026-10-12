@@ -332,21 +332,6 @@ func installVerifyVerdict(rv RestartVerifyResult) (orchestrator.HealthcheckSetup
 	}
 }
 
-// installVerifyContext resolves the base dir + heartbeat interval for a post-install
-// daemon verify from the just-written config (best-effort; ok=false when unreadable).
-func installVerifyContext(configPath string) (baseDir string, interval time.Duration, ok bool) {
-	detected, _ := detectedBaseDirOrFallback()
-	cfg, err := config.LoadConfigWithBaseDir(configPath, detected)
-	if err != nil || cfg == nil {
-		return "", 0, false
-	}
-	baseDir = detected
-	if strings.TrimSpace(cfg.BaseDir) != "" {
-		baseDir = cfg.BaseDir
-	}
-	return baseDir, cfg.HealthcheckHeartbeatInterval, true
-}
-
 // Seams so a test can drive the daemon setup/teardown paths - applyCronMode's
 // ordering, what the cron removal reports, and whether the --upgrade retrofit
 // migrated at all - without touching the real crontab or the systemd unit.
@@ -756,65 +741,105 @@ func setBackupEnvKeys(configPath string, kv map[string]string) error {
 	return installer.WriteConfigFileAtomic(configPath, configPath+".daemon.tmp", content)
 }
 
-// reconcileSchedulerAfterInstall makes the scheduler engine a MUTUALLY EXCLUSIVE
-// choice after an install/reinstall (which always (re)writes the cron line). It
-// takes the mode the wizard picked; when empty (keep-existing / skipped wizard)
-// it reads the mode from the just-written config. daemon -> install the unit and
-// drop the cron line; cron -> tear down any leftover daemon unit so a re-install
-// of a previously-daemon host can never end up double-scheduled (cron + unit).
-//
-// It returns the daemon restart-verify result and verified=true ONLY in the
-// daemon branch that actually ran verifyDaemonAlignedBestEffort; every other
-// path (install failed, verify context unreadable, or cron mode) returns a
-// zero result with verified=false. The existing statement call sites discard
-// both returns; only the TUI finalization captures them to render the outcome.
-func reconcileSchedulerAfterInstall(ctx context.Context, wizardMode, configPath string, execInfo ExecInfo, bootstrap *logging.BootstrapLogger) (rv RestartVerifyResult, verified bool) {
-	mode := strings.ToLower(strings.TrimSpace(wizardMode))
-	if mode != "cron" && mode != "daemon" {
-		mode = readConfiguredSchedulerMode(configPath)
+// reconcileSchedulerAfterInstall applies only incomplete daemon phases for one
+// explicit install. Service application, protected restart and cron handover
+// remain separate: partial failure never becomes permission to run a second scheduler.
+func reconcileSchedulerAfterInstall(ctx context.Context, p *installRuntimePreparation) installRuntimeResult {
+	if ctx.Err() != nil {
+		return p.result
 	}
-
-	if mode == "daemon" {
-		if err := installDaemonService(ctx, daemonExecPath, configPath, bootstrap); err != nil {
-			logging.Warning("Failed to enable the daemon service (staying on cron): %v", err)
-			return RestartVerifyResult{}, false
-		}
-		cronOutcome, err := removeCanonicalCronEntry(ctx, cronCorrectPaths(execInfo.ExecPath), bootstrap)
+	if !p.result.UnitAttempted {
+		_, presence, err := p.ops.inspect(ctx)
 		if err != nil {
+			p.result.Err = err
+			return p.result
+		}
+		initial := p.ops.snapshot(ctx, p.cfg)
+		if !presence.Probed && !initial.ProcessAlive {
+			p.result.Err = errors.New("daemon service state could not be determined")
+			return p.result
+		}
+		p.needsRestart = initial.ProcessAlive || presence.Active
+		p.initialState = initial.State
+		if !p.result.EntrypointVerified {
+			if ctx.Err() != nil {
+				return p.result
+			}
+			err := p.ops.entrypoints(ctx)
+			if verifyErr := verifyInstallExecutable(p.canonicalPath, p.execInfo.ExecPath); verifyErr != nil {
+				p.result.Err = errors.Join(err, verifyErr)
+				return p.result
+			}
+			p.result.EntrypointVerified = true
+			if err != nil {
+				p.result.Err = err
+				return p.result
+			}
+		}
+		if ctx.Err() != nil {
+			return p.result
+		}
+		p.result.Err = nil
+		p.result.UnitAttempted = true
+		err = p.ops.install(ctx)
+		p.result.UnitApplied = err == nil
+		if err != nil {
+			p.result.Err = err
+			logging.Warning("Failed to enable the daemon service: %v", err)
+			p.applicationErrorLogged = true
+			// enable --now may have enabled the unit or started a process before error.
+			// Retain the attempt; never reinstall solely because its result is an error.
+			p.result.Verification = p.ops.snapshot(ctx, p.cfg)
+			p.result.Verified = true
+			p.result.ActivationConfirmed = p.result.Verification.ProcessAlive || p.result.Verification.State.Active
+			return p.result
+		}
+	}
+	if !p.result.UnitApplied || ctx.Err() != nil {
+		return p.result
+	}
+	if p.needsRestart && !p.result.RestartAttempted {
+		lock, known := p.restartLock()
+		if ctx.Err() != nil {
+			return p.result
+		}
+		p.result.RestartAttempted = true
+		p.result.Restart = p.ops.restart(ctx, p.cfg.BaseDir, lock, known, p.cfg.HealthcheckHeartbeatInterval)
+		if p.result.Restart.Err != nil {
+			p.result.Err = p.result.Restart.Err
+		}
+		p.result.Verification = p.result.Restart
+		p.result.Verified = true
+	} else if !p.result.Verified {
+		logging.Info("Verifying daemon alignment...")
+		p.result.Verification = p.ops.verify(ctx, p.cfg)
+		p.result.Verified = true
+	}
+	if ctx.Err() != nil {
+		return p.result
+	}
+	current := p.ops.snapshot(ctx, p.cfg)
+	_, presence, err := p.ops.inspect(ctx)
+	// A remembered successful activation is not current permission to remove cron.
+	active := current.ProcessAlive || current.State.Active || (err == nil && presence.Probed && presence.Active)
+	p.result.ActivationConfirmed = p.result.ActivationConfirmed || active
+	if active && !p.result.CronRemoval.Verified {
+		if ctx.Err() != nil {
+			return p.result
+		}
+		outcome, err := p.ops.removeCron(ctx)
+		p.result.CronRemoval = outcome
+		if err != nil {
+			p.result.Err = errors.Join(p.result.Err, err)
 			logging.Warning("daemon: failed to remove the cron entry (the per-run lock mitigates double execution): %v", err)
 		}
-		// This reconcile installs the daemon just like applyDaemonMode does, and it calls the
-		// removal DIRECTLY rather than through applyDaemonMode, so it needs the #298 wrapper
-		// warning of its own: an install/reinstall that picked daemon mode on a wrapper host
-		// would otherwise end double-scheduled and silent.
-		_ = warnIndirectProxsaveCronOnDaemonInstall(ctx, bootstrap)
-		// `enable --now` does NOT restart an ALREADY-running daemon, so a reinstall/reconfigure
-		// (or a rebuilt binary) would leave it on the OLD inode. Restart so the running process is
-		// the freshly installed binary before we report alignment.
-		if err := restartDaemonService(ctx); err != nil {
-			logging.Debug("daemon: restart to load the installed binary failed: %v", err)
+		if ctx.Err() != nil {
+			return p.result
 		}
-		logging.Info("Daemon mode enabled: %s is active. %s", daemonUnitName, cronRemovalClause(cronOutcome))
-		// Report the daemon's real state (aligned / behind / not running), best-effort
-		// (a verify miss is only logged, never fails the install).
-		if baseDir, interval, ok := installVerifyContext(configPath); ok {
-			return verifyDaemonAlignedBestEffort(ctx, baseDir, interval), true
-		}
-		return RestartVerifyResult{}, false
+		p.result.CronRemoval.UnmanagedSchedules = p.ops.warnCron(ctx)
+		logging.Info("Daemon mode enabled: %s is active. %s", daemonUnitName, cronRemovalClause(p.result.CronRemoval))
 	}
-
-	// cron mode: a previously-installed daemon unit would double-schedule with the
-	// cron line just written, so remove it. Gate on the unit FILE existing (not just
-	// is-active) so an enabled-but-currently-stopped unit is also torn down, and a
-	// host that never had a daemon skips the systemctl calls entirely.
-	if daemonUnitInstalled() {
-		if err := removeDaemonService(ctx, bootstrap); err != nil {
-			logging.Warning("daemon: a previous daemon unit could not be removed (possible double execution): %v", err)
-		} else {
-			logging.Info("Removed the previous daemon service; this host now uses the cron scheduler.")
-		}
-	}
-	return RestartVerifyResult{}, false
+	return p.result
 }
 
 // readConfiguredSchedulerMode returns "daemon" or "cron" from an existing

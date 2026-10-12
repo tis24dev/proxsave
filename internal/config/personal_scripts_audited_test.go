@@ -3,9 +3,38 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 )
+
+// Load the hook settings an operator copies from the daemon guide through the
+// real parser. A documented but unsupported key must not silently leave both
+// daemon hooks unconfigured.
+func TestDocumentedPersonalScriptKeysConfigureHooks(t *testing.T) {
+	body, err := os.ReadFile("../../docs/DAEMON.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	keys := regexp.MustCompile(`\bPERSONAL_SCRIPT_[A-Z_]+\b`).FindAllString(string(body), -1)
+	if len(keys) == 0 {
+		t.Fatal("daemon guide has no personal-script settings to exercise")
+	}
+	seen := make(map[string]bool)
+	for _, key := range keys {
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		t.Run(key, func(t *testing.T) {
+			const script = "/opt/ops/documented-hook.sh"
+			cfg := loadEnvForTest(t, "backup.env", key+"="+script+"\n")
+			if cfg.PersonalScriptPreRun != script && cfg.PersonalScriptPostRun != script {
+				t.Fatalf("documented setting %s configures neither daemon hook", key)
+			}
+		})
+	}
+}
 
 // personalScriptWarning is the note the maintainer froze, byte for byte. It is deliberately
 // alarming and it is not to be reworded here or in the template without his explicit yes.

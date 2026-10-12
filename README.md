@@ -1,202 +1,152 @@
-<div align="center">
+# ProxSave: Proxmox VE and PBS Host Backup and Disaster Recovery
 
-# ProxSave
-Proxmox PBS & PVE System Files Backup
+[![Latest release](https://img.shields.io/github/v/release/tis24dev/proxsave)](https://github.com/tis24dev/proxsave/releases/latest)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Go](https://img.shields.io/badge/Go-1.25+-success.svg?logo=go)](https://go.dev/)
-[![codecov](https://codecov.io/gh/tis24dev/proxsave/branch/dev/graph/badge.svg)](https://codecov.io/gh/tis24dev/proxsave)
-[![Go Lint](https://github.com/tis24dev/proxsave/actions/workflows/lint.yml/badge.svg?branch=dev)](https://github.com/tis24dev/proxsave/actions/workflows/lint.yml)
-[![GoSec](https://img.shields.io/github/actions/workflow/status/tis24dev/proxsave/security-ultimate.yml?label=GoSec&logo=go)](https://github.com/tis24dev/proxsave/actions/workflows/security-ultimate.yml)
-[![CodeQL](https://img.shields.io/github/actions/workflow/status/tis24dev/proxsave/codeql.yml?label=CodeQL&logo=github)](https://github.com/tis24dev/proxsave/actions/workflows/codeql.yml)
-[![Dependabot](https://img.shields.io/badge/Dependabot-enabled-success?logo=dependabot)](https://github.com/tis24dev/proxsave/network/updates)
-[![Proxmox](https://img.shields.io/badge/Proxmox-PVE%20%7C%20PBS-E57000.svg)](https://www.proxmox.com/)
-[![rclone](https://img.shields.io/badge/rclone-1.60+-136C9E.svg)](https://rclone.org/)
-[![💖 Sponsor](https://img.shields.io/badge/Sponsor-GitHub%20Sponsors-pink?logo=github)](https://github.com/sponsors/tis24dev)
-[![☕ Buy Me a Coffee](https://img.shields.io/badge/Buy%20Me%20a%20Coffee-tis24dev-yellow?logo=buymeacoffee)](https://github.com/sponsors/tis24dev)
-[![💸 Donate](https://img.shields.io/badge/Donate-PayPal-blue?logo=paypal)](https://paypal.me/DNoventa)
-</div>
+ProxSave is a free, open-source tool for **online backups of host configuration** on **Proxmox Virtual Environment (PVE)** and **Proxmox Backup Server (PBS)**. It supports configuration restore and disaster recovery after a server failure, a Proxmox reinstall or a move to new hardware.
 
-## About the Project
+Configuration backups run **without shutting down the host, virtual machines or LXC containers**. The host and its workloads remain online during collection.
 
-ProxSave is a project created by enthusiasts, with the aim of simplifying recovery in critical moments.
+Backups can be kept locally, copied to a mounted NAS or another disk, uploaded to cloud storage, and **saved directly to a Proxmox Backup Server storage already configured in PVE**. Scheduled backups, encryption, retention policies, selective restore and external monitoring are included.
 
-Restoring a PVE or PBS server after a disaster (or even just a migration) is always a process that requires skill, time, and patience, **ProxSave** allows you to save your entire environment and restore it at any time, allowing you to prepare the new installation to accommodate your personal data with as few manual changes as possible.
+ProxSave is written in Go and released under the [MIT license](./LICENSE). It is an independent project, with no affiliation to Proxmox and no paid feature tier.
 
-**ProxSave** allows you to save and restore, integrating advanced features: automatic backups, multi-path saves, intelligent retention, encryption of backups, integrated Telegram and email notifications (cloud relay or Proxmox Notifications), and compatibility with webhooks, Gotify, and Prometheus.
+[Website: proxsave.dev](https://proxsave.dev) · [Documentation](./docs/README.md) · [Releases](https://github.com/tis24dev/proxsave/releases) · [Report an issue](https://github.com/tis24dev/proxsave/issues)
 
-For more information, take a look at our landing page at [proxsave.dev](https://proxsave.dev).
+## Why back up the Proxmox host?
+
+A working recovery plan needs both your workloads and the configuration of the server that runs them. After a fresh installation, there may be network bridges, storage definitions, users, permissions, firewall rules and backup jobs to recreate before your environment is usable again.
+
+ProxSave keeps that host configuration available for recovery. Typical uses include:
+
+- Recovering a Proxmox VE node after a boot disk or hardware failure.
+- Rebuilding the configuration of a Proxmox Backup Server.
+- Preparing for a reinstall or migration to replacement hardware.
+- Restoring selected settings after an unwanted configuration change.
+- Preserving the configuration of standalone nodes, cluster members and hosts running both PVE and PBS.
+
+ProxSave complements **PBS and vzdump backups of virtual machines and containers**. It captures VM and LXC configuration, but does not create backups of their running disks or filesystems. It can also collect existing PVE backup files when enabled; those files still need to be created by your normal guest backup jobs. PBS datastore contents need their own protection as well.
+
+## What ProxSave backs up
+
+ProxSave detects the host's PVE and PBS roles and collects the relevant configuration alongside common Linux system settings. On a host running both products, it collects both roles in one backup run. An optional host-backup mode also supports collection from a host filesystem mounted read-only inside a suitably configured LXC appliance.
+
+| Area | Configurable backup coverage |
+| --- | --- |
+| **Proxmox VE** | VM and LXC configuration, storage and datacenter settings, backup jobs, replication settings, users and permissions, firewall rules, HA and SDN configuration, PCI/USB resource mappings, Corosync and the cluster database (`/var/lib/pve-cluster/config.db`). |
+| **Proxmox Backup Server** | Datastore definitions, S3 endpoint settings, remotes, sync, prune and verification jobs, users and access control, notifications, node settings, ACME configuration and tape configuration, including tape encryption keys. |
+| **Networking** | Interface configuration, bridges, bonds, hostname and DNS settings, with network inventory and runtime reports for recovery. |
+| **Storage and filesystems** | Mount configuration, ZFS configuration and pool inventory, LVM metadata, iSCSI, multipath, software RAID, encrypted-volume settings and automount configuration. |
+| **System and access** | SSH configuration and keys, TLS certificates, system accounts, service definitions, cron jobs, package sources, kernel settings and boot parameters. |
+| **Personal files and scripts** | Local scripts, root and user home directories, and additional paths you choose to include, with exclusions to control the backup's scope. |
+| **Recovery information** | Hardware and package inventories, command outputs, storage reports and backup metadata that help explain how the original host was configured. |
+
+Coverage depends on the host's role, available files and enabled collectors. Some captured information is provided for reference or manual review rather than applied automatically during restore.
+
+## Backup destinations
+
+A backup run creates a local archive. It can also save secondary and cloud copies and create a separate native PBS snapshot, so you can keep recovery material outside the host being protected.
+
+| Destination | What it provides |
+| --- | --- |
+| **Local storage** | A ProxSave archive on a local filesystem path. |
+| **Secondary storage** | Another archive copy on a mounted filesystem, such as an NFS or SMB share, NAS, external drive or second disk. |
+| **Cloud and remote storage** | Archive copies through rclone, including S3-compatible storage, Backblaze B2, Google Drive, OneDrive and other supported backends. |
+| **Proxmox Backup Server** | A native host snapshot of the collected files, sent directly to a PBS storage configured in Proxmox VE. |
+
+### Native Proxmox Backup Server integration
+
+Native PBS uploads require a PVE host, an enabled PBS storage in `/etc/pve/storage.cfg` and `proxmox-backup-client`. ProxSave reads that storage's connection details, datastore, namespace, credentials and encryption key from the PVE configuration and sends the collected file tree directly to PBS. The configured namespace, if used, must already exist.
+
+These are native PBS file backups, with [PBS deduplication and incremental transfer of chunks](https://pbs.proxmox.com/docs/technical-overview.html). Each host has its own `host/proxsave-<hostname>` backup group containing a `proxsave.pxar` file archive. ProxSave checks that the uploaded snapshot exists and has the expected encryption mode, manages retention for that group and attaches the run log to the snapshot.
+
+PBS encryption follows the key configured on the selected PVE storage. It is separate from the age encryption used for ProxSave archive copies. A storage without an encryption key receives unencrypted snapshots.
+
+Recovery from native PBS snapshots uses PBS tools. ProxSave's built-in restore selector currently discovers its archive backups in local, secondary and rclone storage.
+
+[PBS storage reference](./docs/CONFIGURATION.md#pbs-storage-proxmox-backup-server) · [Cloud storage](./docs/CLOUD_STORAGE.md)
+
+## Restore and disaster recovery
+
+ProxSave provides an interactive restore workflow with four choices: **full configuration**, **storage**, **base system** or **custom categories**. You can recover a broad set of settings or focus on a specific area, such as networking, storage definitions or backup jobs.
+
+The workflow checks the backup's compatibility with the target host, presents a restore plan and creates safety copies of the configuration being replaced. Relevant PVE and PBS settings are staged and applied through the appropriate APIs or controlled file updates. Categories belonging to a product the target host does not run are exported for review.
+
+For PVE clusters, **SAFE** mode preserves the running cluster database while recovering supported configuration; **RECOVERY** mode handles cluster database restoration. Network recovery includes interface-name repair, connectivity checks and a rollback timer. Staged PVE firewall, HA and access-control changes also have rollback protection.
+
+Recovery logs, exports and safety backups remain available for later review.
+
+ProxSave restores configuration onto an installed system. Restoring network or cluster settings may interrupt service, and boot changes require a reboot. VM disks, container filesystems, application state and installed packages remain part of your wider disaster recovery plan.
+
+[Restore guide](./docs/RESTORE_GUIDE.md) · [Proxmox cluster recovery](./docs/CLUSTER_RECOVERY.md)
+
+### IOMMU, VFIO and passthrough configuration
+
+Backups preserve the configuration used for **PCI passthrough, GPU passthrough and USB passthrough**: guest device assignments, PVE resource mappings, IOMMU/VFIO kernel parameters, module options and driver blacklists. Coverage follows the enabled collectors.
+
+When the relevant restore categories are selected, ProxSave restores `/etc/modules` and `/etc/modprobe.d/` automatically. The boot category merges saved kernel parameters into a recognized GRUB or systemd-boot configuration, preserves existing target values, and rebuilds the initramfs and bootloader when required. The source host's boot files and disk identifiers remain available for reference.
+
+In PVE SAFE mode, the workflow can apply saved PCI/USB resource mappings through the Proxmox API before guest configurations, after confirmation.
+
+On different hardware, PCI addresses, device IDs, USB paths and cluster node names may need manual changes. Firmware IOMMU settings, device isolation and hardware compatibility must be checked on the target host. ProxSave does not automatically adapt passthrough assignments to replacement devices.
+
+[Boot parameter restore](./docs/RESTORE_GUIDE.md#11-kernel-command-line-merge-boot-category) · [PVE resource mapping restore](./docs/RESTORE_GUIDE.md#pvesh-safe-apply-cluster-safe-mode)
+
+## Automatic backups and monitoring
+
+The resident daemon schedules daily, weekly or monthly backups and supervises each run with a duration limit to detect hangs. Cron remains available as an alternative scheduler.
+
+Retention can keep the newest backups or use **Grandfather-Father-Son (GFS)** rules for daily, weekly, monthly and yearly recovery points. Local, secondary, cloud and native PBS destinations support retention. Archive compression is configurable, including gzip, Zstandard and xz.
+
+Backup reports can be delivered through **Telegram, email, Gotify and webhooks**. Email supports a relay, local sendmail or Proxmox Notifications integration. Notification failures are recorded separately from failures to create the backup.
+
+With the daemon, external healthchecks monitoring can detect a missing backup, an unavailable host or a hung run even when the host cannot send a notification. It also tracks daemon liveness, release updates and notification-channel outcomes. You can use the ProxSave monitoring service or your own healthchecks instance. Prometheus metrics are available through the node_exporter textfile collector.
+
+The interactive terminal dashboard brings backup, restore, configuration, diagnostics, upgrades and daemon management together. Command-line options support headless hosts and automation, and custom scripts can run before and after a backup.
+
+[Scheduling](./docs/DAEMON.md) · [Monitoring](./docs/HEALTHCHECKS.md) · [Notifications](./docs/NOTIFICATIONS.md)
+
+## Encryption and integrity
+
+ProxSave archive backups can use **age encryption** with passphrase or key-based recipients. Compression and encryption are streamed during archive creation. SHA-256 checksums, archive verification and backup manifests support integrity checks and describe the host and roles a backup came from.
+
+The installer verifies the release signature and checksum before installing the binary. Release provenance attestations are also available for independent verification.
+
+Host backups can contain credentials and private keys. Encryption covers the saved archive; collected files are temporarily staged in plaintext on the host. The security and encryption guides explain the storage, permissions and recovery-key considerations.
+
+[Encryption](./docs/ENCRYPTION.md) · [Security](./docs/SECURITY.md) · [Release verification](./docs/PROVENANCE_VERIFICATION.md)
 
 ## Installation
+
+Run the official installer as root on your Proxmox VE or PBS host (Linux x86-64):
 
 ```bash
 bash -c "$(curl -fsSL https://raw.githubusercontent.com/tis24dev/proxsave/main/install.sh)"
 ```
 
-or: if you need a fully clean reinstall use: (preserves `build/`, `daemon_state/`, `env/`, `guards/`, `identity/`, and `restore/`)
-```bash
-bash -c "$(curl -fsSL https://raw.githubusercontent.com/tis24dev/proxsave/main/install.sh)" _ --new-install
-```
-You can find the installation script source [here](./install.sh).
+The installer downloads and verifies the latest release, installs the binary and opens the interactive setup. You can [read the installer source](./install.sh) before running it.
 
-The installer ends in the interactive setup, which writes your `configs/backup.env`. Everything after that is done from the dashboard: run `proxsave` on the host and it opens.
+After installation, run `proxsave` to open the interactive dashboard.
 
-🔒 The installer and `proxsave --upgrade` verify each release's signature before installing, for releases that publish `SHA256SUMS.sig`, so only authentic, untampered builds ever run ([details](./docs/PROVENANCE_VERIFICATION.md#release-signature-sha256sumssig)).
+See the [installation guide](./docs/INSTALL.md) for requirements, alternative installation methods, reinstalling and upgrading.
 
-> [!NOTE]
-> Please refer to the [docs](./docs/INSTALL.md) for more information about the installation.
+## Documentation
 
-## The Dashboard
+| Topic | Guide |
+| --- | --- |
+| All user and technical documentation | [Documentation index](./docs/README.md) |
+| Dashboard and everyday operation | [Dashboard guide](./docs/DASHBOARD.md) |
+| Backup settings, destinations and collectors | [Configuration reference](./docs/CONFIGURATION.md) |
+| Recovery workflows and cluster procedures | [Restore guide](./docs/RESTORE_GUIDE.md) and [cluster recovery](./docs/CLUSTER_RECOVERY.md) |
+| Backup scheduling and healthchecks | [Daemon](./docs/DAEMON.md) and [monitoring](./docs/HEALTHCHECKS.md) |
+| Automation and practical configurations | [CLI reference](./docs/CLI_REFERENCE.md) and [examples](./docs/EXAMPLES.md) |
+| Diagnosing problems | [Troubleshooting](./docs/TROUBLESHOOTING.md) |
+| Architecture and development | [Collector architecture](./docs/COLLECTOR_ARCHITECTURE.md) and [developer guide](./docs/DEVELOPER_GUIDE.md) |
 
-`proxsave`, run with no arguments on a terminal, opens the interactive dashboard. This is the normal way to use ProxSave: backing up, restoring, editing the configuration, upgrading, running the diagnostic checks and managing the daemon are all reachable there, and every entry that has a matching command-line flag runs that flag's code. The three `Diagnostic Checks` entries and `Daemon` > `Restart` have no flag and exist only in the dashboard.
+## Community and support
 
-```bash
-proxsave
-```
+Bug reports, recovery feedback and contributions help improve ProxSave. For support, use [GitHub Issues](https://github.com/tis24dev/proxsave/issues) or contact the maintainer on [Telegram](https://t.me/tis24dev). The documentation covers diagnostics and the built-in support report.
 
-| Group | Entry | What it does |
-|-------|-------|--------------|
-| Backup | `Backup` | starts a backup with the current configuration, streamed inside the dashboard |
-| Tools | `Restore` | restores a backup onto this system |
-| Tools | `Decrypt` | converts an encrypted backup into a plaintext bundle |
-| Maintenance | `New key` | creates a new AGE encryption key |
-| Maintenance | `Install` | `Edit install` re-runs the interactive setup (this is how you change the configuration); `Wipe install` resets the install directory first, keeping `build/`, `daemon_state/`, `env/`, `guards/`, `identity/` and `restore/` |
-| Maintenance | `Upgrade` | `Check upgrade` updates the binary to a newer release, merging new template variables into `backup.env` as part of the same run; `Check config` runs that merge on its own |
-| Diagnostic Checks | `Telegram`, `Healthchecks`, `Post-install` | verify the Telegram relay pairing, show the monitoring portal details, re-run the post-install audit |
-| Daemon | `Install`, `Disable`, `Restart`, `Status` | switch the scheduler to the resident daemon or back to cron, restart it, show its state. The group is context aware: `Install` appears on a cron install, `Disable` and `Restart` when the daemon is the active scheduler, `Status` always |
-| Recovery | `Cleanup guards` | removes leftover restore mount guards |
-| Recovery | `Support` | runs a support backup and emails the debug log to the maintainer |
+Thanks to [@NukeThemTillTheyGlow](https://github.com/NukeThemTillTheyGlow) and [@marc6901](https://github.com/marc6901) for release testing and feedback, and to everyone who reports problems or contributes fixes.
 
-The dashboard opens only when `proxsave` is invoked completely bare (any flag, even `--config`, skips it) and stdin and stdout are both real terminals with `TERM` set to something other than `dumb`. Everything else, cron included, runs the backup directly, and a dashboard that is abandoned or that fails to render exits without doing anything instead of falling through into a backup.
-
-Screen by screen: [DASHBOARD.md](./docs/DASHBOARD.md).
-
-## Scheduling
-
-The setup offers two scheduler engines and a fresh installation defaults to the **resident daemon** (`proxsave-daemon.service`): it runs the backup itself daily, weekly or monthly (`SCHEDULER_FREQUENCY`) at `SCHEDULER_TIME`, supervises it under the `MAX_RUN_DURATION` hang watchdog, and reports liveness and outcome to healthchecks monitoring. Monitoring only transmits under the daemon, which is the sole pinger; choosing cron turns it off.
-
-System cron is the legacy engine and stays fully supported: `SCHEDULER_MODE=cron` keeps the crontab entry instead. Once the variable is recorded in `backup.env`, an upgrade leaves the engine as it stands and never switches it.
-
-Switch between the two from the dashboard's Daemon group, or with `--daemon-setup` / `--daemon-remove` on a headless host.
-
-Details: [DAEMON.md](./docs/DAEMON.md) and [HEALTHCHECKS.md](./docs/HEALTHCHECKS.md).
-
-## Upgrading
-
-From the dashboard: `Upgrade` > `Check upgrade` downloads and installs a newer release, and the `backup.env` merge is part of that run. `Check config` runs that merge on its own, for when the binary is already current.
-
-Headless, the same upgrade is `proxsave --upgrade` (append `y` to auto-confirm).
-
-### External Upgrade
-An in-place `proxsave --upgrade` is started by the binary already installed, so the release check, the download, the signature and checksum verification and the install itself are all executed by the OLD code. From 0.36.0 on, the installed binary hands the post-install finalize (the configuration merge, the docs and symlink refresh, the daemon migration and restart) to the freshly installed release, so that half runs the new code; a binary older than that finalizes with its own code, and a fix shipped in the new release cannot help that upgrade.
-
-To run the whole upgrade with the new code, fetch the installer instead:
-
-```bash
-bash -c "$(curl -fsSL https://raw.githubusercontent.com/tis24dev/proxsave/main/install.sh)" -- --upgrade
-```
-
-It downloads, verifies and installs the release itself, then calls the new binary with `--upgrade --localfile` to finalize.
-
-## Command Line
-
-The flags stay fully supported, for headless hosts, cron jobs, scripts and recovery when the dashboard cannot run. They are the automation route, not the everyday one.
-
-| Flag | What it does |
-|------|--------------|
-| `--backup` | runs the backup now, skipping the dashboard. A non-interactive invocation does this anyway |
-| `--restore` | runs the restore workflow (select bundle, optionally decrypt, apply to system) |
-| `--decrypt` | converts encrypted bundles into plaintext bundles |
-| `--newkey`, `--age-newkey` | resets the AGE recipients and runs the interactive key setup |
-| `--support` | forces debug logging and emails the log to the maintainer. Available for a standard backup run and for `--restore` |
-| `--install` | runs the interactive installer (generate or edit `backup.env`) |
-| `--new-install` | resets the installation directory, preserving `build/`, `daemon_state/`, `env/`, `guards/`, `identity/` and `restore/`, then runs the installer |
-| `--upgrade [y]` | downloads and installs the latest release, then upgrades `backup.env`. `y` auto-confirms |
-| `--localfile` | with `--upgrade`: skip the release check and download and finalize against the binary already on disk |
-| `--upgrade-config` | adds missing variables to `backup.env` from the embedded template, preserving existing and custom ones |
-| `--upgrade-config-dry-run` | plans that merge without writing, reporting missing and custom variables |
-| `--daemon` | runs as the resident daemon. This is what `proxsave-daemon.service` starts |
-| `--daemon-setup` | switches this install to daemon mode: installs and enables the service, removes the cron entry |
-| `--daemon-remove` | reverts to cron and prevents future upgrades from reinstalling the daemon |
-| `--daemon-status` | prints scheduler mode, service state, running version and binary alignment |
-| `--cleanup-guards` | removes leftover guard bind mounts and directories. Combine with `--dry-run` to preview |
-| `--show-whatsnew` | shows the release notes screen once and exits |
-| `-c`, `--config <path>` | configuration file to use (default `configs/backup.env` under the install directory) |
-| `-l`, `--log-level <level>` | `debug`, `info`, `warning`, `error` or `critical` |
-| `-n`, `--dry-run` | runs without making actual changes |
-| `--cli` | uses plain CLI prompts instead of the TUI, for `--install`, `--new-install`, `--newkey`, `--decrypt` and `--restore` |
-| `-v`, `--version` | shows version and build information |
-| `-h`, `--help` | shows the help message |
-
-A few more flags exist (`--upgrade-config-json`, `--upgrade-finalize` and its companions) purely as internal plumbing for `--upgrade`; they are not meant to be run by hand.
-
-Full reference: [CLI_REFERENCE.md](./docs/CLI_REFERENCE.md).
-
-## Guide
-
-You can find the guide files for the various functions [here](./docs/README.md).
-
-## Support
-
-Every report or issue is important to us. There are various channels you can use to report a problem.
-
-The fastest report is the dashboard's `Support` entry, under Recovery: it runs a backup with debug logging and emails that log to the maintainer. On a headless host, `proxsave --support` does the same.
-
-It is important that you provide as much information as possible with each report.
-You will often find these details listed. They are important, so please do not forget to include them:
-
-
-```bash
-example
-===========================================
-  Version: 0.11.2
-  Build Signature: 60d0d998f* (2025-12-02T14:46:14+01:00) hash=eeb72ef6b8b6ad89
-===========================================
-```
-
-Every run prints that block in its header. The dashboard shows the version in its own header and the build signature in its footer; `proxsave --version` prints the version with the build commit and date.
-
-<a href="https://github.com/tis24dev/proxsave/issues" target="_blank" rel="noopener noreferrer"><img src="https://img.shields.io/badge/GitHub-Issues-orange?logo=github" style="height:25px;"/></a>
-<a href="https://t.me/tis24dev" target="_blank" rel="noopener noreferrer"><img src="https://img.shields.io/badge/Telegram-@tis24dev-red?logo=telegram" style="height:25px;"/></a>
-
-## Donations
-To stay completely free and open-source, with no feature behind the paywall and evolve the project, we need your help. If you like ProxSave, please consider donating to help us fund the project's future development.
-
-<a href="https://github.com/sponsors/tis24dev" target="_blank" rel="noopener noreferrer"><img src="https://img.shields.io/badge/Sponsor-GitHub%20Sponsors-pink?logo=github" style="height:25px;"/></a>
-<a href="https://github.com/sponsors/tis24dev" target="_blank" rel="noopener noreferrer"><img src="https://img.shields.io/badge/Buy%20Me%20a%20Coffee-tis24dev-yellow?logo=buymeacoffee" style="height:25px;"/></a>
-
-Thank you so much!
-
-## Recognitions
-<a href="https://www.xda-developers.com/i-use-this-free-tool-with-proxmox-backup-server/" target="_blank" rel="noopener noreferrer"><img src="https://img.shields.io/badge/XDA%20Developers-Article-blue?logo=android" style="height:25px;"/></a>
-
-## Release Testing & Feedback
-A special thanks to the community members who help by testing releases and reporting issues. 💙
-
-<table align="left">
-  <tr>
-    <td align="center" width="160">
-      <a href="https://github.com/NukeThemTillTheyGlow">
-        <img src="https://github.com/NukeThemTillTheyGlow.png?size=96" width="56" alt="@NukeThemTillTheyGlow" />
-      </a>
-      <br />
-      <a href="https://github.com/NukeThemTillTheyGlow"><sub><b>@NukeThemTillTheyGlow</b></sub></a>
-      <br />
-      <sub>release testing</sub>
-    </td>
-    <td align="center" width="160">
-      <a href="https://github.com/marc6901">
-        <img src="https://github.com/marc6901.png?size=96" width="56" alt="@marc6901" />
-      </a>
-      <br />
-      <a href="https://github.com/marc6901"><sub><b>@marc6901</b></sub></a>
-      <br />
-      <sub>release testing</sub>
-    </td>
-  </tr>
-</table>
-
-<br clear="all" />
-
-## Repo Activity
-![Alt](https://repobeats.axiom.co/api/embed/d9565d6d1ed8222a5da5fedf25c18a9c8beab382.svg "Repobeats analytics image")
+To contribute, read [CONTRIBUTING.md](./CONTRIBUTING.md). To help fund development, you can [sponsor the project](https://github.com/sponsors/tis24dev) or [donate through PayPal](https://paypal.me/DNoventa).

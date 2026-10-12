@@ -38,7 +38,7 @@ const (
 // status removes Check, Esc skips unless already verified. Renders only when the
 // daemon engine with centralized monitoring was chosen and the identity/secret
 // exist (decided by BuildHealthcheckSetupBootstrap re-reading the written config).
-func RunHealthcheckSetup(ctx context.Context, session *shell.Session, baseDir, configPath string, backToMenu bool) (installer.HealthcheckSetupResult, error) {
+func RunHealthcheckSetup(ctx context.Context, session *shell.Session, baseDir, configPath string, backToMenu bool, options ...installer.HealthcheckSetupOptions) (installer.HealthcheckSetupResult, error) {
 	// BuildHealthcheckSetupBootstrap can run an up-to-10s relay-secret provisioning handshake
 	// (hook c) when this centralized host has a resolved ServerID but no secret on disk yet.
 	// Run it under the SAME spinner the connection check uses so the screen shows progress
@@ -46,6 +46,22 @@ func RunHealthcheckSetup(ctx context.Context, session *shell.Session, baseDir, c
 	var state orchestrator.HealthcheckSetupBootstrap
 	var bootErr error
 	if runErr := components.RunTask(ctx, session, "Checking monitoring setup", "Reading configuration...", func(taskCtx context.Context, report func(string)) error {
+		select {
+		case <-session.Done():
+			return shell.ErrClosed
+		default:
+		}
+		if err := taskCtx.Err(); err != nil {
+			return err
+		}
+		if len(options) > 0 && options[0].BeforeBootstrap != nil {
+			if err := options[0].BeforeBootstrap(taskCtx); err != nil {
+				return err
+			}
+		}
+		if err := taskCtx.Err(); err != nil {
+			return err
+		}
 		state, bootErr = healthcheckBuildBootstrap(taskCtx, configPath, baseDir)
 		return nil
 	}); runErr != nil {

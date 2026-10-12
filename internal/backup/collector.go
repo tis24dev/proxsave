@@ -56,6 +56,9 @@ type Collector struct {
 
 	// clusteredPVE records whether cluster mode was detected during PVE collection.
 	clusteredPVE bool
+	// standalonePVE is set only after consistent, healthy standalone observations.
+	// Both topology fields are false when detection is uncertain.
+	standalonePVE bool
 	// pveRuntimeSkipLogged records that the PVE runtime commands skip under
 	// SYSTEM_ROOT_PREFIX has been logged, so the run carries it once.
 	pveRuntimeSkipLogged bool

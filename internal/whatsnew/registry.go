@@ -43,11 +43,14 @@ type Note struct {
 // flag finalizes to the same key as the final, so IsUnseen is false when the final lands and
 // everyone who came through a beta misses the notes for good.
 //
-// Lines: ONLY genuinely new user features, or concrete changes to how the user uses the
-// tool. State the capability from the user's point of view, not the technical detail (e.g.
+// Lines: ONLY genuinely new user features. State the capability from the user's point of
+// view, not the technical detail (e.g.
 // "backup monitoring is new", not "monitoring decoupled from Telegram"). One change per line,
 // 1 to 8 terse bullets. NOT: this what's-new screen itself or other meta, internal refactors
 // or security hardening, UX polish, or anything that already existed in an earlier release.
+// Individual fixes and refinements do not get their own lines. When a release has no new
+// features, use exactly one line: "This release includes a collection of fixes and corrections."
+// If a new feature is added before release, replace that generic line with the feature notes.
 //
 // Actions: only a REAL step the user must take. "On by default" does NOT mean nothing to do:
 // if a default-on feature still needs configuring, that configuration goes here. Always point
@@ -268,6 +271,12 @@ var notes = []Note{
 		Version: "0.42.1",
 		Lines: []string{
 			"With the daemon and a healthchecks updates check, an available update no longer marks the backup down",
+		},
+	},
+	{
+		Version: "0.43.0",
+		Lines: []string{
+			"This release includes a collection of fixes and corrections.",
 		},
 	},
 }

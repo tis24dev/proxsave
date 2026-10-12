@@ -1,14 +1,91 @@
-# Provenance Attestation Verification
+# Verify release authenticity
+
+<!-- site-region: verify-release:start -->
+
+## Verify a ProxSave release
+
+ProxSave's installer and upgrade workflow verify a signed checksum file using a public
+key pinned in the tool. A missing or invalid signature stops the operation; the selected
+archive must also match its authenticated checksum. Build attestations provide an
+additional, optional check of artifact identity and recorded provenance.
+
+### Install or upgrade through the verified workflow
+
+For a first installation, use the script in [Install ProxSave](INSTALL.md#fast-install).
+It performs signature and checksum verification before installing the release. Keep a
+trusted existing copy or recovery route available if you are upgrading a working host.
+
+For an existing installation:
+
+1. Run `proxsave` without arguments on an interactive terminal.
+2. Choose **Maintenance** > **Upgrade** > **Check upgrade**. This opens the release
+   check and displays the available version and release notes; it does not install it.
+3. Inspect the result. When an update is available, choose **Run upgrade** to download,
+   verify and install it. A failed signature or checksum is a reason to stop.
+4. Read the final result, including configuration merging and daemon restart status.
+   Choose **Daemon** > **Status** to check the running binary when using the resident
+   daemon. A deferred or failed restart can leave the old process running.
+
+The adjacent **Check config** action reviews missing configuration variables and offers
+an explicit apply step. It is separate from checking for a new binary. See
+[configuration upgrades](CONFIGURATION.md#editing-the-configuration-from-the-dashboard) for details.
+
+The installed binary drives an in-place upgrade, including its verification. Only the
+post-install finalize phase can be delegated to the new binary when both releases
+support it. A fix to upgrade code in the new release cannot change the old binary that
+is currently downloading it. If release instructions require the externally fetched
+installer, follow [Which binary runs the upgrade](#which-binary-runs-the-upgrade).
+
+### Verify a downloaded artifact with GitHub CLI
+
+This optional check is useful before manually installing an artifact. Install `gh`
+using the [prerequisites](#prerequisites), obtain the intended release asset, then set
+the exact tag and filename:
+
+```bash
+TAG=vX.Y.Z
+VER=${TAG#v}
+ASSET="proxsave_${VER}_linux_amd64"
+gh attestation verify "$ASSET" \
+  --repo tis24dev/proxsave \
+  --signer-workflow tis24dev/proxsave/.github/workflows/release.yml \
+  --source-ref "refs/tags/${TAG}" \
+  --deny-self-hosted-runners
+```
+
+Require a successful verifier exit status. This policy checks the artifact digest,
+repository, release workflow, source reference and runner type. To require an independently
+trusted commit, add the source-digest policy described in [What gets verified](#what-gets-verified).
+The [manual signature procedure](#verify-a-download-manually) contains the pinned key and
+signed-checksum commands. [Verification methods](#verification-methods) also covers archives,
+JSON results and offline verification with previously obtained trust material.
+
+Successful verification connects the artifact to the selected identity and recorded build.
+It does not establish that the source, dependencies or workflow are safe or uncompromised.
+The signed checksum and attestation serve different verification policies; keep those
+limits in mind when evaluating a release.
+
+### Respond to a failed check
+
+Do not run the unverified binary or disable verification to finish the upgrade. Confirm
+the tag, asset name and download completeness, then follow the matching
+[verification error](#troubleshooting). Retry a clean download when appropriate. If the
+failure remains, preserve the error and request support without replacing the working
+installation. Verification of a release is separate from checking that a backup or
+restore succeeds on your host.
+
+<!-- site-region: verify-release:end -->
 
 ## Introduction
 
-Every Proxsave release binary includes cryptographically signed provenance attestations that prove:
-- The binary was built from this repository
-- The binary was built using GitHub Actions
-- The binary has not been tampered with after the build
-- The build process is traceable and verifiable
+The release workflow creates signed build-provenance attestations for its binary,
+archive and SBOM assets. Verification checks the artifact digest and signing identity
+against the policy you request. The recorded provenance identifies the source and
+build workflow; it does not prove that their contents are safe or uncompromised.
 
-Attestations use the SLSA (Supply-chain Levels for Software Artifacts) standard and are registered in an immutable public transparency log (Sigstore).
+Public-repository attestations use Sigstore and a public transparency log. See
+[GitHub's explanation of artifact attestations](https://docs.github.com/en/actions/concepts/security/artifact-attestations)
+for their guarantees and limits.
 
 Proxsave publishes a single build target, `linux/amd64`. The release assets for a tag `vX.Y.Z` are:
 
@@ -57,7 +134,11 @@ sha256sum --ignore-missing -c SHA256SUMS
 
 ### How an operator gets a verified release
 
-The everyday upgrade route is the dashboard: run `proxsave` with no arguments on a TTY, then **Upgrade** > **Check upgrade**. It runs the same `--upgrade` code in-session, so the signature and checksum check described above is the same one, not a second path. `--upgrade` on its own is the headless equivalent, for scripts and for hosts with no terminal; append `y` to auto-confirm. Both also merge new configuration keys and, on a host where the resident daemon is actually running, restart it onto the new binary, which downloading a file by hand does not: a replaced binary leaves the running daemon on the old code until the service is restarted (see [DAEMON.md](DAEMON.md)). A host on the cron scheduler has no resident daemon, so there is nothing to restart there.
+Follow [Verify a ProxSave release](#verify-a-proxsave-release) for the dashboard
+procedure. **Check upgrade** checks availability; **Run upgrade** installs the release.
+**Check config** is the separate action for reviewing and merging configuration keys.
+The signature and checksum verification uses the same implementation as direct upgrade.
+Command equivalents are in [CLI_REFERENCE.md](CLI_REFERENCE.md).
 
 ### Which binary runs the upgrade
 
@@ -73,11 +154,14 @@ See [SECURITY.md](SECURITY.md#threat-model) for the same split stated against th
 
 ## Why attestations matter
 
-Provenance attestations protect against:
-- **Supply chain attacks**: verifies that the binary comes from the official repository
-- **Tampering**: guarantees that no one has modified the binary after the build
-- **Compromises**: proves that the binary was built in a trusted environment (GitHub Actions)
-- **Unauthorized builds**: confirms that only maintainers can create releases
+A successful verification establishes that the artifact matches the attested digest
+and satisfies the selected identity policy. Provenance also records source and build
+information that can be checked against an independently trusted release.
+
+It does not establish that only maintainers can publish releases, or rule out malicious
+source, dependencies or a compromised build workflow. Inspect the selected policy in
+[What gets verified](#what-gets-verified); repository identity alone is less restrictive
+than also requiring the expected workflow, source reference and commit.
 
 ## Prerequisites
 
@@ -139,7 +223,8 @@ cd ~/downloads
 wget "https://github.com/tis24dev/proxsave/releases/download/${TAG}/${ASSET}"
 wget "https://github.com/tis24dev/proxsave/releases/download/${TAG}/${ASSET}.tar.gz"
 
-gh attestation verify proxsave_${VER}_linux_amd64* --repo tis24dev/proxsave
+gh attestation verify "${ASSET}" --repo tis24dev/proxsave &&
+  gh attestation verify "${ASSET}.tar.gz" --repo tis24dev/proxsave
 ```
 
 ### Method 3: verification with JSON output
@@ -152,53 +237,48 @@ gh attestation verify "${ASSET}" \
   --format json | jq
 ```
 
-**JSON output** (example):
-```json
-{
-  "verificationResult": {
-    "verifiedTimestamps": [
-      { "timestamp": "2025-06-20T10:30:45Z", "source": "Rekor" }
-    ],
-    "statement": {
-      "_type": "https://in-toto.io/Statement/v1",
-      "subject": [
-        {
-          "name": "proxsave_0.29.0_linux_amd64",
-          "digest": { "sha256": "abc123..." }
-        }
-      ],
-      "predicateType": "https://slsa.dev/provenance/v1",
-      "predicate": {
-        "buildDefinition": {
-          "buildType": "https://slsa.dev/provenance/github/actions/v1",
-          "externalParameters": {
-            "workflow": {
-              "ref": "refs/tags/v0.29.0",
-              "repository": "https://github.com/tis24dev/proxsave"
-            }
-          }
-        }
-      }
-    }
-  }
-}
+Successful `--format json` output is an array, with one entry per verified
+attestation. Each entry contains `attestation` and `verificationResult`. For example,
+extract the attested subjects with:
+
+```bash
+set -o pipefail
+gh attestation verify "${ASSET}" --repo tis24dev/proxsave --format json \
+  | jq 'map(.verificationResult.statement.subject)'
 ```
+
+Keep the verifier's exit status when automating this check; formatted JSON alone
+is not a substitute for a successful verification.
 
 ### Method 4: offline verification (with downloaded bundle)
 
-Useful for air-gapped environments or for archiving attestations.
+Prepare the artifact, attestation and trust material on a connected Linux host:
 
 ```bash
-# Download the attestation as a bundle
-gh attestation download "${ASSET}" \
-  --repo tis24dev/proxsave \
-  --output attestation.jsonl
+# The artifact must already be present
+gh attestation download "${ASSET}" --repo tis24dev/proxsave
+gh attestation trusted-root > trusted_root.jsonl
 
-# Verify offline using the bundle
+# Linux download filenames are derived from the artifact digest
+DIGEST=$(sha256sum "${ASSET}" | cut -d' ' -f1)
+BUNDLE="sha256:${DIGEST}.jsonl"
+test -s "$BUNDLE" && test -s trusted_root.jsonl
+```
+
+Transfer those three files through your trusted channel. On the offline host, set
+`ASSET` to the transferred artifact, recompute `DIGEST` and `BUNDLE` as above, then run:
+
+```bash
 gh attestation verify "${ASSET}" \
-  --bundle attestation.jsonl \
+  --bundle "$BUNDLE" \
+  --custom-trusted-root trusted_root.jsonl \
   --repo tis24dev/proxsave
 ```
+
+The trust-root file must come from the trusted preparation step, not from an
+untrusted source alongside a suspect binary. The commands and filename convention
+are documented by [GitHub CLI download](https://cli.github.com/manual/gh_attestation_download)
+and [trusted-root](https://cli.github.com/manual/gh_attestation_trusted-root).
 
 ## A complete verify-and-install example (Linux)
 
@@ -227,28 +307,40 @@ sudo mv "${ASSET}" /usr/local/bin/proxsave
 proxsave --version
 ```
 
-The recipe above is the manual path, for an air-gapped host or an audit. For a first install the recommended path is the install script, which performs the `SHA256SUMS.sig` signature check automatically:
+The recipe above is a connected, manual installation with repository-scoped attestation verification. Offline verification needs the files prepared in Method 4. For a first install the recommended path is the install script, which performs the `SHA256SUMS.sig` signature check automatically:
 
 ```bash
 bash -c "$(curl -fsSL https://raw.githubusercontent.com/tis24dev/proxsave/main/install.sh)"
 ```
 
-On a host that already runs ProxSave, upgrade from the dashboard (**Upgrade** > **Check upgrade**) rather than downloading a binary by hand; see [How an operator gets a verified release](#how-an-operator-gets-a-verified-release).
+On a host that already runs ProxSave, use **Maintenance** > **Upgrade** > **Check upgrade**, inspect the result and select **Run upgrade** when available; see [How an operator gets a verified release](#how-an-operator-gets-a-verified-release).
 
 ## What gets verified
 
-When you run `gh attestation verify`, the following checks are performed:
+The examples using only `--repo` check artifact integrity and repository identity.
+They do not pin a particular release workflow, expected commit or runner type.
 
-| Verification | Description |
-|--------------|-------------|
-| Source repository | Confirms the build comes from `github.com/tis24dev/proxsave` |
-| Commit SHA | Verifies the exact commit used for the build |
-| Workflow | Checks that `.github/workflows/release.yml` was used |
-| Build environment | Confirms the build occurred on a GitHub-hosted runner |
-| SHA256 integrity | Recomputes the file hash and compares it with the attested one |
-| Cryptographic signature | Verifies the OIDC/Sigstore signature on the attestation |
-| Rekor timestamp | Checks the immutable record in the transparency log |
-| SLSA compliance | Verifies the attestation complies with the SLSA v1 standard |
+| Check | Policy in the examples above |
+|-------|------------------------------|
+| Artifact digest | Must match the attested subject |
+| Repository identity | Must match `tis24dev/proxsave` |
+| Signature and trust | Validated by the verifier using its trusted roots and signed attestation material |
+| Predicate type | Defaults to SLSA provenance v1; this is not a general SLSA certification |
+| Commit, workflow and runner | Reported provenance must be distinguished from an explicitly required policy |
+
+To require the release workflow, the chosen source tag and a GitHub-hosted runner:
+
+```bash
+gh attestation verify "${ASSET}" \
+  --repo tis24dev/proxsave \
+  --signer-workflow tis24dev/proxsave/.github/workflows/release.yml \
+  --source-ref "refs/tags/${TAG}" \
+  --deny-self-hosted-runners
+```
+
+To pin an independently trusted commit, also pass `--source-digest` with that commit
+SHA. For offline use, add Method 4's bundle and trust-root arguments. See the
+[GitHub CLI verification policy](https://cli.github.com/manual/gh_attestation_verify).
 
 ## Troubleshooting
 
@@ -256,7 +348,7 @@ The variables `TAG`, `VER`, and `ASSET` below are the ones defined in [Verificat
 
 ### Error: "no attestations found"
 
-**Cause**: the release does not include attestations (a release created before this feature).
+**Cause**: no matching attestation was found for this artifact and policy. Check the selected asset and release; older releases may predate attestations.
 
 **Solution**:
 ```bash
@@ -293,9 +385,12 @@ ls -lh "${ASSET}"
 rm -f "${ASSET}"
 wget "https://github.com/tis24dev/proxsave/releases/download/${TAG}/${ASSET}"
 
-# Optional: cross-check against the signed checksums
+# Optional: authenticate the checksum file before checking the artifact
+# Save the pinned public key from this guide as proxsave_pub.pem first
 wget "https://github.com/tis24dev/proxsave/releases/download/${TAG}/SHA256SUMS"
-sha256sum --ignore-missing -c SHA256SUMS
+wget "https://github.com/tis24dev/proxsave/releases/download/${TAG}/SHA256SUMS.sig"
+openssl dgst -sha256 -verify proxsave_pub.pem -signature SHA256SUMS.sig SHA256SUMS &&
+  sha256sum --ignore-missing -c SHA256SUMS
 ```
 
 ### Error: "HTTP 401: Bad credentials"
@@ -324,7 +419,7 @@ Attestations are based on:
 2. **Sigstore/Rekor**: a public transparency log that records all attestations
 3. **SLSA framework**: an industry standard for provenance metadata
 
-**What this means**: you must trust GitHub as the root of trust for the attestations. If GitHub is compromised, attestations could be forged. The pinned-key `SHA256SUMS.sig` signature is an independent check that does not rely on GitHub as a signer.
+The verification depends on its trusted identity and certificate roots, as well as trust in the selected source and build workflow. The pinned-key `SHA256SUMS.sig` signature uses a separate signing key. Both checks still depend on the release workflow and protection of its credentials; neither proves the program is free of vulnerabilities.
 
 ### Transparency log (Rekor)
 

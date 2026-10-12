@@ -16,6 +16,7 @@ import (
 	"github.com/tis24dev/proxsave/internal/environment"
 	"github.com/tis24dev/proxsave/internal/health"
 	"github.com/tis24dev/proxsave/internal/logging"
+	"github.com/tis24dev/proxsave/internal/notify"
 	"github.com/tis24dev/proxsave/internal/storage"
 	"github.com/tis24dev/proxsave/internal/types"
 )
@@ -128,7 +129,7 @@ type backupExitCodeResult struct {
 // runBackupExitCodeCase drives Orchestrator.RunGoBackup the way runBackupCharacterization
 // does, with the same configuration and fakes, on the clean PVE host instead of an
 // unknown one.
-func runBackupExitCodeCase(t *testing.T, tc backupExitCodeCase) backupExitCodeResult {
+func runBackupExitCodeCase(t *testing.T, tc backupExitCodeCase, configure ...func(*Orchestrator)) backupExitCodeResult {
 	t.Helper()
 
 	origUmask := syscall.Umask(0o022)
@@ -170,6 +171,10 @@ func runBackupExitCodeCase(t *testing.T, tc backupExitCodeCase) backupExitCodeRe
 		CloudLogPath:           dirs.cloudLog,
 		FsIoTimeoutSeconds:     30,
 		SystemRootPrefix:       dirs.sysroot,
+		// This minimal host intentionally omits PVE credentials and their
+		// backing database. Exclude the database explicitly so the baseline
+		// stays warning-free while storage failures still determine the exit.
+		ExcludePatterns: []string{"config.db*"},
 	}
 
 	registry, err := NewTempDirRegistry(logger, filepath.Join(dirs.registry, "temp-dirs.json"))
@@ -179,7 +184,7 @@ func runBackupExitCodeCase(t *testing.T, tc backupExitCodeCase) backupExitCodeRe
 
 	orch := New(logger, false)
 	orch.clock = clock
-	orch.SetBackupConfig(dirs.backup, dirs.log, types.CompressionNone, 0, 0, "standard", nil)
+	orch.SetBackupConfig(dirs.backup, dirs.log, types.CompressionNone, 0, 0, "standard", cfg.ExcludePatterns)
 	orch.SetConfig(cfg)
 	orch.SetTempDirRegistry(registry)
 	orch.copyLogToCloudFn = func(ctx context.Context, sourcePath, destPath string) error {
@@ -228,6 +233,9 @@ func runBackupExitCodeCase(t *testing.T, tc backupExitCodeCase) backupExitCodeRe
 		orch.RegisterStorageTarget(adapter)
 	}
 	orch.RegisterNotificationChannel(&backupCharChannel{rec: rec})
+	for _, setup := range configure {
+		setup(orch)
+	}
 
 	res := backupExitCodeResult{logPath: logPath}
 	captureBackupCharOutput(t, logger, func() {
@@ -235,6 +243,57 @@ func runBackupExitCodeCase(t *testing.T, tc backupExitCodeCase) backupExitCodeRe
 			&environment.EnvironmentInfo{Type: types.ProxmoxVE, Version: "unknown"}, backupCharHost)
 	})
 	return res
+}
+
+// Exercise the complete backup and its deferred exit-code finalization, not just
+// the parser or metrics helper. Delivery failures occur after a clean archive was
+// saved and must survive the notification boundary even when metrics are off.
+func TestBackupNotificationOutcomePreservesArchive(t *testing.T) {
+	for _, metricsEnabled := range []bool{false, true} {
+		for _, tc := range []struct {
+			name         string
+			result       *notify.NotificationResult
+			err          error
+			wantExit     int
+			wantWarnings int
+			wantNotify   int
+			wantResult   string
+		}{
+			{name: "sent", result: &notify.NotificationResult{Success: true}, wantResult: "ok"},
+			{name: "send_error", err: errors.New("connection refused"), wantExit: 1, wantNotify: 1, wantResult: "error"},
+			{name: "delivery_rejected", result: &notify.NotificationResult{Success: false}, wantExit: 1, wantWarnings: 1, wantResult: "error"},
+		} {
+			t.Run(fmt.Sprintf("metrics_%t/%s", metricsEnabled, tc.name), func(t *testing.T) {
+				delivery := &stubNotifier{name: "TestDelivery", enabled: true, result: tc.result, err: tc.err}
+				res := runBackupExitCodeCase(t, backupExitCodeCase{}, func(orch *Orchestrator) {
+					orch.cfg.MetricsEnabled = metricsEnabled
+					orch.cfg.MetricsPath = filepath.Join(t.TempDir(), "backup.prom")
+					orch.RegisterNotificationChannel(NewNotificationAdapter(delivery, orch.logger))
+				})
+				if res.err != nil || res.stats == nil {
+					t.Fatalf("backup failed: stats=%v, err=%v", res.stats, res.err)
+				}
+				stats := res.stats
+				if stats.ExitCode != tc.wantExit || stats.NotifyCount != tc.wantNotify || stats.WarningCount != tc.wantWarnings {
+					t.Errorf("exit=%d notify=%d warnings=%d; want %d, %d, %d\n%s",
+						stats.ExitCode, stats.NotifyCount, stats.WarningCount, tc.wantExit, tc.wantNotify, tc.wantWarnings,
+						backupExitIssueLines(res.logPath))
+				}
+				if stats.ErrorCount != 0 || stats.Failed {
+					t.Errorf("notification outcome marked the backup failed: errors=%d failed=%t", stats.ErrorCount, stats.Failed)
+				}
+				if stats.NotifyResults[delivery.Name()] != tc.wantResult {
+					t.Errorf("delivery outcome=%q; want %q", stats.NotifyResults[delivery.Name()], tc.wantResult)
+				}
+				if stats.LocalStatus != "ok" || stats.SecondaryStatus != "ok" || stats.CloudStatus != "ok" {
+					t.Errorf("notification changed saved destinations: local=%q secondary=%q cloud=%q", stats.LocalStatus, stats.SecondaryStatus, stats.CloudStatus)
+				}
+				if info, err := os.Stat(stats.ArchivePath); err != nil || !info.Mode().IsRegular() || info.Size() == 0 {
+					t.Errorf("completed archive is missing or empty: %s (%v)", stats.ArchivePath, err)
+				}
+			})
+		}
+	}
 }
 
 // backupExitCodeAsCmd is the exit code cmd/proxsave/backup_execution.go turns the run
