@@ -43,6 +43,8 @@ One consequence is worth stating plainly: once a `vX.Y.Z` tag exists it cannot b
 
 After an upgrade the dashboard opens on Screen 0 to show what changed. Its copy lives in the `notes` slice in `internal/whatsnew/registry.go`, one entry per FINAL release. The authoring rules (what belongs in `Lines`, what belongs in `Actions`, the fixed section headers) are documented in that file, above the slice.
 
+List only new user features, without individual fixes or refinements. When a release has no new features, its only `Lines` entry is `This release includes a collection of fixes and corrections.` If a new feature is added before release, replace that generic line with the feature notes. The release still needs its own registry entry and passes the same release-notes guard.
+
 Write the entry BEFORE the first tag of a line, beta included, not in the final's release PR. Notes are keyed to the final version and the seen-flag is compared on FINALIZED versions, so `0.31.0-beta1` and `0.31.0` are the same line. A beta released without the entry renders the empty state and still records the line as seen, which suppresses Screen 0 when the final lands: the users who tested the betas are exactly the ones who never see that release's notes.
 
 The gate enforces this. `TestReleaseNotesPresent` finalizes the requested tag, so `pr-v0.31.0-beta1` demands the `0.31.0` entry just as `pr-v0.31.0` does.

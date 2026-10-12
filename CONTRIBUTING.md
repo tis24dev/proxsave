@@ -26,24 +26,33 @@ deceptive characters.
 
 ## Release notes: written with the change, not at release time
 
-Every commit that changes what an operator can observe adds its line to the
+Every commit that implements a new user feature adds its line to the
 current unreleased entry in `internal/whatsnew/registry.go`, in that same
-commit. What a change meant to the person running ProxSave is known while it is
+commit. What a feature means to the person running ProxSave is known while it is
 being made and reconstructed badly weeks later, so batching the notes to
 release time is how entries go missing.
+
+Individual fixes and refinements do not get their own lines, even when the
+operator can see the change. When a release has no new features, use exactly
+one `Lines` entry:
+
+`This release includes a collection of fixes and corrections.`
+
+If a new feature is added before release, replace that generic line with the
+feature notes.
 
 The current unreleased entry is the last one in `notes`: the version above the
 newest git tag. When the newest tag already covers that entry, append a new one
 for the next version.
 
-- `Lines` are what changed, from the operator's side. Screen 0 caps them at
+- `Lines` describe new features from the operator's side, with the single
+  generic line above for releases without new features. Screen 0 caps them at
   **8**. When the eight are full, do not quietly drop one to make room: say so,
   and let the maintainer decide what gives way.
 - `Actions` are what the operator has to do about it, and are not capped.
 - Every string is ASCII only (no em-dash, en-dash or emoji), 120 characters or
   fewer, and free of placeholder text.
-- A change with nothing an operator can observe (a refactor, a test, a comment)
-  gets no line. Say it got none rather than inventing one.
+- A fix, a refinement, a refactor, a test or a comment gets no individual line.
 
 `TestRegistryWellFormed` enforces the mechanical rules on every PR, so run
 `go test ./internal/whatsnew/` before you commit.
