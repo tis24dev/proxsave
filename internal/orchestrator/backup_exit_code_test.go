@@ -170,6 +170,10 @@ func runBackupExitCodeCase(t *testing.T, tc backupExitCodeCase) backupExitCodeRe
 		CloudLogPath:           dirs.cloudLog,
 		FsIoTimeoutSeconds:     30,
 		SystemRootPrefix:       dirs.sysroot,
+		// This minimal host intentionally omits PVE credentials and their
+		// backing database. Exclude the database explicitly so the baseline
+		// stays warning-free while storage failures still determine the exit.
+		ExcludePatterns: []string{"config.db*"},
 	}
 
 	registry, err := NewTempDirRegistry(logger, filepath.Join(dirs.registry, "temp-dirs.json"))
@@ -179,7 +183,7 @@ func runBackupExitCodeCase(t *testing.T, tc backupExitCodeCase) backupExitCodeRe
 
 	orch := New(logger, false)
 	orch.clock = clock
-	orch.SetBackupConfig(dirs.backup, dirs.log, types.CompressionNone, 0, 0, "standard", nil)
+	orch.SetBackupConfig(dirs.backup, dirs.log, types.CompressionNone, 0, 0, "standard", cfg.ExcludePatterns)
 	orch.SetConfig(cfg)
 	orch.SetTempDirRegistry(registry)
 	orch.copyLogToCloudFn = func(ctx context.Context, sourcePath, destPath string) error {

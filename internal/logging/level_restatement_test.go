@@ -350,6 +350,12 @@ var bracketedLevelTokens = map[string]string{
 // contradicts its column instead of repeating it, which is worse, not better.
 // The second return names the level the words spell, for the report.
 func restatementKind(level, literal string) (kind, wordLevel string) {
+	// The approved four-space Error field supplies a system cause beneath an
+	// INFO summary (or DEBUG cleanup detail). Match its exact format and levels:
+	// ordinary severity openings, casing variants and other fields stay guarded.
+	if (level == "INFO" || level == "DEBUG") && literal == "    Error: %s" {
+		return "", ""
+	}
 	lower := strings.ToLower(strings.TrimSpace(literal))
 	for lvl, prefixes := range restatedWordPrefixes {
 		for _, prefix := range prefixes {

@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"os"
+
+	"github.com/tis24dev/proxsave/internal/safefs"
 )
 
 func newPVERecipe() recipe {
@@ -50,14 +52,33 @@ func newPVEValidationBricks() []collectionBrick {
 				}
 				c.logger.Debug("%s detected, continuing with PVE collection", pveConfigPath)
 
+				c.standalonePVE = false
 				clustered := false
 				if isClustered, err := c.isClusteredPVE(ctx); err != nil {
 					if ctx.Err() != nil {
 						return err
 					}
-					c.logger.Debug("Cluster detection failed, assuming standalone node: %v", err)
+					fact, detail := c.logger.Debug, c.logger.Debug
+					if c.config.BackupClusterConfig {
+						fact, detail = c.logger.Warning, c.logger.Info
+					}
+					var diagnostic *pveClusterDetectionError
+					if errors.As(err, &diagnostic) {
+						fact("PVE cluster detection: %s", diagnostic.reason)
+						if diagnostic.cause != nil {
+							detail("    Error: %s", safefs.SystemErrorText(diagnostic.cause))
+						}
+						if diagnostic.detail != "" {
+							detail("    %s", diagnostic.detail)
+						}
+					} else {
+						fact("PVE cluster detection: %s", safefs.SystemErrorText(errors.Unwrap(err)))
+					}
+					fact("PVE cluster detection: state unknown")
+					c.logger.Debug("Cluster detection inconclusive; preserving cluster-file warnings: %v", err)
 				} else {
 					clustered = isClustered
+					c.standalonePVE = !isClustered
 					c.logger.Debug("Cluster detection completed: clustered=%v", clustered)
 				}
 
@@ -80,7 +101,7 @@ func newPVESnapshotBricks() []collectionBrick {
 		},
 		{
 			ID:          brickPVEClusterSnapshot,
-			Description: "Collect cluster-specific PVE snapshot",
+			Description: "Collect PVE database and cluster-specific snapshot",
 			Run: func(ctx context.Context, state *collectionState) error {
 				return state.collector.collectPVEClusterSnapshot(ctx, state.pve.clustered)
 			},

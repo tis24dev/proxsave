@@ -74,7 +74,7 @@ func TestConfigDBDryRunDoesNotWriteOrInvokeSQLite(t *testing.T) {
 	if stats.BytesCollected != 0 {
 		t.Fatalf("BytesCollected = %d, want 0 in dry-run", stats.BytesCollected)
 	}
-	if !strings.Contains(buf.String(), "[DRY RUN] Would capture PVE cluster database via sqlite3 .backup") {
+	if !strings.Contains(buf.String(), "[DRY RUN] Would capture PVE configuration database via sqlite3 .backup") {
 		t.Fatalf("missing dry-run SQLite capture diagnostic:\n%s", buf.String())
 	}
 }
@@ -105,9 +105,16 @@ func TestConfigDBCaptureGoesThroughSQLiteBackup(t *testing.T) {
 		t.Fatalf("config.db was not captured via sqlite3 (ran %q %v):\n%s", gotName, gotArgs, buf.String())
 	}
 	src := filepath.Join(clusterDir, "config.db")
-	wantArgs := fmt.Sprintf("-cmd|.timeout 5000|%s|.backup \"%s\"", src, c.targetPathFor(src))
-	if strings.Join(gotArgs, "|") != wantArgs {
-		t.Fatalf("sqlite3 argv drifted:\n got %q\nwant %q", strings.Join(gotArgs, "|"), wantArgs)
+	wantPrefix := fmt.Sprintf("-readonly|-cmd|.timeout 5000|%s|.backup ", src)
+	if !strings.HasPrefix(strings.Join(gotArgs, "|"), wantPrefix) {
+		t.Fatalf("sqlite3 source must be read-only with a busy timeout: %v", gotArgs)
+	}
+	snapshotPath := strings.TrimSuffix(strings.TrimPrefix(gotArgs[len(gotArgs)-1], `.backup "`), `"`)
+	if filepath.Dir(snapshotPath) != filepath.Dir(c.targetPathFor(src)) || snapshotPath == c.targetPathFor(src) {
+		t.Fatalf("snapshot must use separate staging in the final directory: %s", snapshotPath)
+	}
+	if _, err := os.Stat(snapshotPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("snapshot temporary file survived publication: %v", err)
 	}
 	captured, err := os.ReadFile(c.targetPathFor(src))
 	if err != nil {
@@ -144,12 +151,12 @@ func TestConfigDBRawFallbackIsLoud(t *testing.T) {
 	out := buf.String()
 	var warned bool
 	for _, l := range strings.Split(out, "\n") {
-		if strings.Contains(l, "] WARNING") && strings.Contains(l, "raw copy") {
+		if strings.Contains(l, "] WARNING") && strings.Contains(l, "sqlite snapshot failed") {
 			warned = true
 		}
 	}
 	if !warned {
-		t.Fatalf("the raw fallback must WARN that the capture can be torn and misses WAL data:\n%s", out)
+		t.Fatalf("the raw fallback must warn about the failed snapshot and explain the risk:\n%s", out)
 	}
 }
 

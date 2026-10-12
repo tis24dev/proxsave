@@ -727,8 +727,8 @@ func TestIsClusteredPVE(t *testing.T) {
 		}
 
 		clustered, err := collector.isClusteredPVE(context.Background())
-		if err != nil {
-			t.Fatalf("isClusteredPVE error: %v", err)
+		if err == nil {
+			t.Fatal("multiple node directories without configuration/runtime proof must remain unknown")
 		}
 		if clustered {
 			t.Error("isClusteredPVE() should return false when only multiple node directories exist without corosync config")

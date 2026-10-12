@@ -66,6 +66,7 @@ type CollectorDeps struct {
 	RunCommandWithEnv           func(context.Context, []string, string, ...string) ([]byte, error)
 	RunCommand                  func(context.Context, string, ...string) ([]byte, error)
 	Stat                        func(string) (os.FileInfo, error)
+	ReadFile                    func(string) ([]byte, error)
 	DetectUnprivilegedContainer func() (bool, string)
 }
 

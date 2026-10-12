@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"fmt"
 	"os"
 	"strings"
 	"testing"
@@ -234,6 +235,17 @@ func TestTheDebugBlockExplainsEveryDecisionItMade(t *testing.T) {
 		"EMAIL_ENABLE=true\n" +
 		"PERSONAL_SCRIPTS_PRERUN=/tmp/x\n" +
 		"CUSTOM_BACKUP_PATHS=\"\n/etc/a\n\"\n"
+	// Derive positions from this input fixture, not the audit under test or
+	// hardcoded template offsets that change when explanatory comments grow.
+	var customPathLines []int
+	for index, line := range strings.Split(body, "\n") {
+		if strings.HasPrefix(line, "CUSTOM_BACKUP_PATHS=") {
+			customPathLines = append(customPathLines, index+1)
+		}
+	}
+	if len(customPathLines) != 2 {
+		t.Fatalf("expected two input assignments, got %v", customPathLines)
+	}
 	path := t.TempDir() + "/backup.env"
 	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
 		t.Fatalf("write config: %v", err)
@@ -255,7 +267,7 @@ func TestTheDebugBlockExplainsEveryDecisionItMade(t *testing.T) {
 		// why the one that was NOT accepted failed every rule
 		"PERSONAL_SCRIPTS_PRERUN is assigned in the file and matched no rule: not assigned in the template, not documented there, not a webhook endpoint field, not a legacy alias",
 		// which write form won, since the two resolve in opposite ways
-		"CUSTOM_BACKUP_PATHS assigned on lines 442, 530; line 530 wins (block form: it replaces everything before it)",
+		fmt.Sprintf("CUSTOM_BACKUP_PATHS assigned on lines %d, %d; line %d wins (block form: it replaces everything before it)", customPathLines[0], customPathLines[1], customPathLines[1]),
 		// the template's own two halves, so the counts above can be reconstructed
 		"template assigns 190 variables and documents",
 	} {

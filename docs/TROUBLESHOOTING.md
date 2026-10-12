@@ -532,7 +532,7 @@ BACKUP_CLUSTER_CONFIG=false
 BACKUP_ROOT_HOME=false
 ```
 
-> Note: `BACKUP_CLUSTER_CONFIG=false` also skips cluster runtime collection (`pvecm status`, `pvecm nodes`, HA status), which helps avoid non-critical cluster warnings on standalone nodes.
+> Note: `BACKUP_CLUSTER_CONFIG=false` skips Corosync configuration and cluster-specific data/runtime collection (`pvecm status`, `pvecm nodes`, HA status). The pmxcfs database `config.db` is collected independently, including on standalone hosts. Missing Corosync files do not warn on a confirmed standalone host. To exclude the database and its sidecars explicitly, add `config.db*` to `BACKUP_EXCLUDE_PATTERNS`; this removes the database recovery artifact.
 
 ---
 
