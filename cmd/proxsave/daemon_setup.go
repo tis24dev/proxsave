@@ -332,21 +332,6 @@ func installVerifyVerdict(rv RestartVerifyResult) (orchestrator.HealthcheckSetup
 	}
 }
 
-// installVerifyContext resolves the base dir + heartbeat interval for a post-install
-// daemon verify from the just-written config (best-effort; ok=false when unreadable).
-func installVerifyContext(configPath string) (baseDir string, interval time.Duration, ok bool) {
-	detected, _ := detectedBaseDirOrFallback()
-	cfg, err := config.LoadConfigWithBaseDir(configPath, detected)
-	if err != nil || cfg == nil {
-		return "", 0, false
-	}
-	baseDir = detected
-	if strings.TrimSpace(cfg.BaseDir) != "" {
-		baseDir = cfg.BaseDir
-	}
-	return baseDir, cfg.HealthcheckHeartbeatInterval, true
-}
-
 // Seams so a test can drive the daemon setup/teardown paths - applyCronMode's
 // ordering, what the cron removal reports, and whether the --upgrade retrofit
 // migrated at all - without touching the real crontab or the systemd unit.

@@ -215,7 +215,8 @@ func TestPVEConfigDBFallbackDiagnosticBlocks(t *testing.T) {
 			c.config.BackupClusterConfig = false
 			src := filepath.Join(sourceDir, "config.db")
 			var want []string
-			if failure == "non_regular" {
+			switch failure {
+			case "non_regular":
 				if err := os.Remove(src); err != nil {
 					t.Fatal(err)
 				}
@@ -223,7 +224,7 @@ func TestPVEConfigDBFallbackDiagnosticBlocks(t *testing.T) {
 					t.Fatal(err)
 				}
 				want = append(want, "WARNING|PVE configuration database: not a regular file "+src)
-			} else if failure == "stale_sidecar" {
+			case "stale_sidecar":
 				sidecar := c.targetPathFor(src) + "-wal"
 				mustCoreWrite(t, filepath.Join(sidecar, "keep"), "obstruct cleanup")
 				want = append(want, "WARNING|PVE configuration database: cannot remove config.db-wal", "DEBUG|    Path: "+sidecar, "DEBUG|    Error: directory not empty")
