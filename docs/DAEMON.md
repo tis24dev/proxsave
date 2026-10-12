@@ -109,7 +109,7 @@ Advanced settings are hand edits of `configs/backup.env`. `MAX_RUN_DURATION` bou
 supervised run. A timed-out child receives SIGTERM and then SIGKILL after a 30-second
 grace. Review a timeout as a failed or hung run, not a completed backup.
 
-`PERSONAL_SCRIPT_BEFORE` and `PERSONAL_SCRIPT_AFTER` run only around daemon-supervised
+`PERSONAL_SCRIPT_PRE_RUN` and `PERSONAL_SCRIPT_POST_RUN` run only around daemon-supervised
 backups. Read the [personal-script policy](#personal-scripts-around-a-run) before using
 them: ownership, permissions, mount policy and startup trust decisions matter. Status
 shows the running snapshot separately from what a restart would load. A script refused
