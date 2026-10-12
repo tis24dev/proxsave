@@ -1393,8 +1393,12 @@ A backup that finishes with warnings (no errors) is promoted from `0` to exit `1
 (generic error) before the notification phase; a run that raised errors becomes `4`
 (backup error) when its code is still `0`/`1`, otherwise it keeps its more specific code.
 
-Because the count is taken before the notification phase, only warnings logged up to that point
-change the code. Two warnings that turn an otherwise clean backup into an exit `1` are the monitoring
+The log is read again after notification dispatch. Warnings and `NOTIFY-ERR` messages logged
+while sending can also promote an otherwise clean backup from `0` to `1`, even with
+`METRICS_ENABLED=false`. A notification failure does not invalidate the saved backup or,
+by itself, produce exit `4`.
+
+Other warnings that turn an otherwise clean backup into an exit `1` include the monitoring
 init warning (see [A clean backup exits `1` and the log carries a `Healthchecks:` warning](#a-clean-backup-exits-1-and-the-log-carries-a-healthchecks-warning))
 and the unseen release notes after an upgrade (see [Every backup reports warnings and the monitor went red right after an upgrade](#every-backup-reports-warnings-and-the-monitor-went-red-right-after-an-upgrade)).
 
