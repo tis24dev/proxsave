@@ -75,8 +75,8 @@ func initializeEmailNotification(opts backupModeOptions, orch *orchestrator.Orch
 		From:             cfg.EmailFrom,
 		CloudRelayConfig: notify.CloudRelayConfig{
 			WorkerURL:   cfg.CloudflareWorkerURL,
-			WorkerToken: cfg.CloudflareWorkerToken,
-			HMACSecret:  cfg.CloudflareHMACSecret,
+			WorkerToken: notify.DefaultCloudRelayConfig.WorkerToken,
+			HMACSecret:  notify.DefaultCloudRelayConfig.HMACSecret,
 			Timeout:     cfg.WorkerTimeout,
 			MaxRetries:  cfg.WorkerMaxRetries,
 			RetryDelay:  cfg.WorkerRetryDelay,

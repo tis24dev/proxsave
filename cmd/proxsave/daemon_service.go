@@ -178,9 +178,16 @@ func writeUnitFileAtomic(path string, data []byte, perm os.FileMode) error {
 
 // fsyncDir best-effort flushes a directory entry so a rename survives a crash.
 func fsyncDir(dir string) {
-	// #nosec G304 -- dir is filepath.Dir of the fixed daemonUnitPath (the systemd
-	// unit directory), never user input; opened read-only only to fsync the dir entry.
-	d, err := os.Open(dir)
+	// The directory is opened as an os.Root and then by "." inside it: nothing is
+	// opened by a path built from a variable, so this is structurally free of gosec
+	// G304 without a #nosec, like readFileUnderRoot (identity.go). Read-only, only to
+	// fsync the directory entry.
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		return
+	}
+	defer func() { _ = root.Close() }()
+	d, err := root.Open(".")
 	if err != nil {
 		return
 	}

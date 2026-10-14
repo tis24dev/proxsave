@@ -116,8 +116,15 @@ func datastoreContainsUnexpectedEntries(datastorePath string) (unexpected bool, 
 	if err := validateRecreationPath(datastorePath); err != nil {
 		return false, err
 	}
-	// #nosec G304 -- datastorePath validated just above by validateRecreationPath (absolute, no "..", not a system-critical dir).
-	f, err := os.Open(datastorePath)
+	// Opened as an os.Root and then by "." inside it, so no path built from a variable
+	// reaches open (gosec G304, without a #nosec); validateRecreationPath above still
+	// decides which directory that is.
+	root, err := os.OpenRoot(datastorePath)
+	if err != nil {
+		return false, err
+	}
+	defer closeIntoErr(&err, root, "close datastore root")
+	f, err := root.Open(".")
 	if err != nil {
 		return false, err
 	}
@@ -157,8 +164,13 @@ func dirHasAnyEntry(path string) (hasEntry bool, err error) {
 	if err := validateRecreationPath(path); err != nil {
 		return false, err
 	}
-	// #nosec G304 -- path validated just above by validateRecreationPath (absolute, no "..", not a system-critical dir).
-	f, err := os.Open(path)
+	// See datastoreContainsUnexpectedEntries: os.Root, then ".".
+	root, err := os.OpenRoot(path)
+	if err != nil {
+		return false, err
+	}
+	defer closeIntoErr(&err, root, "close directory root")
+	f, err := root.Open(".")
 	if err != nil {
 		return false, err
 	}
