@@ -178,3 +178,80 @@ func TestVerifyBackupDirectoriesDisablesASecondaryThatIsTheLocalOne(t *testing.T
 		})
 	}
 }
+
+// A cloud that is a local directory gets the same check: its backup or log directory
+// may be neither the local one nor the secondary's while that is on. It is switched off,
+// not failed; a cloud on a remote is never compared.
+func TestVerifyBackupDirectoriesDisablesACloudThatIsALocalOne(t *testing.T) {
+	cases := map[string]struct {
+		cloudRemote, cloudLog func(root string) string
+		secondary             bool
+		wantLines             []string
+	}{
+		"cloud directory is the backup directory": {
+			cloudRemote: func(root string) string { return filepath.Join(root, "backup") },
+			cloudLog:    func(root string) string { return "/cloud-log" },
+			wantLines:   []string{"WARNING  ✗ Cloud directory same as Backup directory (cloud storage disabled)"},
+		},
+		"cloud log directory is the log directory": {
+			cloudRemote: func(root string) string { return filepath.Join(root, "cloud") },
+			cloudLog:    func(root string) string { return "../log" },
+			wantLines:   []string{"WARNING  ✗ Cloud log directory same as Log directory (cloud storage disabled)"},
+		},
+		"cloud log directory is the secondary log directory": {
+			cloudRemote: func(root string) string { return filepath.Join(root, "cloud") },
+			cloudLog:    func(root string) string { return "../secondary-log" },
+			secondary:   true,
+			wantLines:   []string{"WARNING  ✗ Cloud log directory same as Secondary log directory (cloud storage disabled)"},
+		},
+		"separate directories": {
+			cloudRemote: func(root string) string { return filepath.Join(root, "cloud") },
+			cloudLog:    func(root string) string { return "/cloud-log" },
+			secondary:   true,
+		},
+		"cloud on a remote": {
+			cloudRemote: func(root string) string { return "gdrive" },
+			cloudLog:    func(root string) string { return "/log" },
+		},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			root := t.TempDir()
+			for _, dir := range []string{"backup", "log", "secondary", "secondary-log", "cloud"} {
+				if err := os.MkdirAll(filepath.Join(root, dir), 0o755); err != nil {
+					t.Fatal(err)
+				}
+			}
+			cfg := &config.Config{BackupPath: filepath.Join(root, "backup"), LogPath: filepath.Join(root, "log"),
+				LockPath: filepath.Join(root, "lock"), CloudEnabled: true,
+				CloudRemote: tc.cloudRemote(root), CloudLogPath: tc.cloudLog(root)}
+			if tc.secondary {
+				cfg.SecondaryEnabled = true
+				cfg.SecondaryPath = filepath.Join(root, "secondary")
+				cfg.SecondaryLogPath = filepath.Join(root, "secondary-log")
+			}
+			logger := logging.New(types.LogLevelInfo, false)
+			buf := &bytes.Buffer{}
+			logger.SetOutput(buf)
+			prev := logging.GetDefaultLogger()
+			logging.SetDefaultLogger(logger)
+			verifyBackupDirectories(cfg, logger)
+			logging.SetDefaultLogger(prev)
+
+			out := buf.String()
+			for _, line := range tc.wantLines {
+				if !strings.Contains(out, line) {
+					t.Fatalf("missing %q in:\n%s", line, out)
+				}
+			}
+			disabled := len(tc.wantLines) > 0
+			if cfg.CloudEnabled == disabled || cfg.CloudStartupFailed {
+				t.Fatalf("CloudEnabled=%v CloudStartupFailed=%v, want disabled=%v and not failed:\n%s",
+					cfg.CloudEnabled, cfg.CloudStartupFailed, disabled, out)
+			}
+			if !disabled && strings.Contains(out, "Cloud directory same") {
+				t.Fatalf("a separate cloud was reported:\n%s", out)
+			}
+		})
+	}
+}

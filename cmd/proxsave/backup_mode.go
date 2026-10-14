@@ -17,6 +17,7 @@ import (
 	"github.com/tis24dev/proxsave/internal/logging"
 	"github.com/tis24dev/proxsave/internal/orchestrator"
 	"github.com/tis24dev/proxsave/internal/safefs"
+	"github.com/tis24dev/proxsave/internal/storage"
 	"github.com/tis24dev/proxsave/internal/support"
 	"github.com/tis24dev/proxsave/internal/types"
 )
@@ -267,6 +268,7 @@ func verifyBackupDirectories(cfg *config.Config, logger *logging.Logger) {
 			logging.Warning("✗ Secondary log directory not configured (secondary storage enabled)")
 		}
 	}
+	disableCloudSharingLocalDirectories(cfg, logger)
 	if cfg.CloudEnabled {
 		logCloudLogDirectory(cfg)
 	}
@@ -295,6 +297,42 @@ func disableSecondarySharingLocalDirectories(cfg *config.Config, logger *logging
 	if sameData || sameLog {
 		cfg.SecondaryEnabled = false
 		cfg.SecondaryLogPath = ""
+	}
+}
+
+// disableCloudSharingLocalDirectories is disableSecondarySharingLocalDirectories for a
+// cloud that is a local directory (CLOUD_REMOTE a path): its backup or log directory
+// must be neither the local one nor, while the secondary is on, the secondary's. A
+// cloud on a remote has no folder here to compare.
+func disableCloudSharingLocalDirectories(cfg *config.Config, logger *logging.Logger) {
+	if !cfg.CloudEnabled {
+		return
+	}
+	dataDir, local := storage.LocalCloudRemoteDir(cfg.CloudRemote, cfg.CloudRemotePath)
+	if !local {
+		return
+	}
+	logDir, _ := storage.LocalCloudLogDir(cfg.CloudLogPath, cfg.CloudRemote)
+	timeout := fsIoTimeoutDuration(cfg)
+	var lines []string
+	if sameDirectory(logger, "cloud directory", dataDir, cfg.BackupPath, timeout) {
+		lines = append(lines, "✗ Cloud directory same as Backup directory (cloud storage disabled)")
+	}
+	if cfg.SecondaryEnabled && sameDirectory(logger, "cloud directory", dataDir, cfg.SecondaryPath, timeout) {
+		lines = append(lines, "✗ Cloud directory same as Secondary directory (cloud storage disabled)")
+	}
+	if sameDirectory(logger, "cloud log directory", logDir, cfg.LogPath, timeout) {
+		lines = append(lines, "✗ Cloud log directory same as Log directory (cloud storage disabled)")
+	}
+	if cfg.SecondaryEnabled && sameDirectory(logger, "cloud log directory", logDir, cfg.SecondaryLogPath, timeout) {
+		lines = append(lines, "✗ Cloud log directory same as Secondary log directory (cloud storage disabled)")
+	}
+	for _, line := range lines {
+		logging.Warning("%s", line)
+	}
+	if len(lines) > 0 {
+		cfg.CloudEnabled = false
+		cfg.CloudLogPath = ""
 	}
 }
 
