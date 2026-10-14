@@ -26,6 +26,7 @@ import (
 	"github.com/tis24dev/proxsave/internal/logging"
 	"github.com/tis24dev/proxsave/internal/notify"
 	"github.com/tis24dev/proxsave/internal/notifyfilter"
+	"github.com/tis24dev/proxsave/internal/safeexec"
 	"github.com/tis24dev/proxsave/internal/serverbot"
 	"github.com/tis24dev/proxsave/internal/types"
 	"github.com/tis24dev/proxsave/internal/version"
@@ -802,12 +803,20 @@ func (d *daemon) runOnce(parentCtx context.Context) bool {
 	if d.cfg.HealthcheckSendLog {
 		tail = &tailBuffer{max: logTailBytes}
 	}
-	cmd := d.buildBackupCmd(runCtx, tail, rid)
-	cmd.Cancel = func() error { return cmd.Process.Signal(syscall.SIGTERM) }
-	cmd.WaitDelay = d.killGrace()
+	cmd, buildErr := d.buildBackupCmd(runCtx, tail, rid)
 
 	logging.Info("daemon: launching backup (rid=%s timeout=%s)", rid, d.maxRunDuration())
-	reaped, runErr := d.superviseChild(runCtx, cmd)
+	var reaped bool
+	var runErr error
+	if buildErr != nil {
+		// Refused before any process exists (the trusted-path check in buildBackupCmd):
+		// the same outcome as a cmd.Start failure, reaped with no child and no pid to leak.
+		reaped, runErr = true, buildErr
+	} else {
+		cmd.Cancel = func() error { return cmd.Process.Signal(syscall.SIGTERM) }
+		cmd.WaitDelay = d.killGrace()
+		reaped, runErr = d.superviseChild(runCtx, cmd)
+	}
 
 	// Read the captured tail ONCE, before branching: the abandon path wants it too. tailBuffer
 	// is mutex-guarded, so this is well defined even in the pathological case where an
@@ -2471,7 +2480,14 @@ func (d *daemon) registerSecrets(urls ...string) {
 // buildBackupCmd builds the supervised child: `proxsave --backup [--config ...]`.
 // When tail is non-nil the child's combined output is mirrored into it (bounded)
 // while still streaming to os.Std* (journald).
-func (d *daemon) buildBackupCmd(ctx context.Context, tail *tailBuffer, rid string) *exec.Cmd {
+//
+// The child is this binary on disk, started through safeexec.TrustedCommandContext:
+// the path must be absolute, a regular executable file and not world-writable, or no
+// child is built and the error is the run's. The on-disk file rather than the running
+// image (/proc/self/exe) on purpose: after an upgrade whose daemon restart was deferred,
+// the scheduled backups already run the new release. The WaitDelay it sets is replaced
+// by the caller's kill grace (runOnce).
+func (d *daemon) buildBackupCmd(ctx context.Context, tail *tailBuffer, rid string) (*exec.Cmd, error) {
 	var cmd *exec.Cmd
 	if d.newBackupCmd != nil {
 		cmd = d.newBackupCmd(ctx)
@@ -2480,10 +2496,11 @@ func (d *daemon) buildBackupCmd(ctx context.Context, tail *tailBuffer, rid strin
 		if strings.TrimSpace(d.configPath) != "" {
 			args = append(args, "--config", d.configPath)
 		}
-		// #nosec G204 -- execPath is the running proxsave binary (os.Executable), args
-		// are fixed literals; not user-controlled. safeexec's allowlist is for external
-		// tools, not for re-executing self.
-		cmd = exec.CommandContext(ctx, d.execPath, args...)
+		trusted, err := safeexec.TrustedCommandContext(ctx, d.execPath, args...)
+		if err != nil {
+			return nil, err
+		}
+		cmd = trusted
 	}
 	// Correlate the child's per-channel notify-results handoff with THIS run: the child
 	// writes <baseDir>/daemon_state/.notify_results.json tagged with this rid, and the daemon
@@ -2507,7 +2524,7 @@ func (d *daemon) buildBackupCmd(ctx context.Context, tail *tailBuffer, rid strin
 			cmd.Stderr = os.Stderr
 		}
 	}
-	return cmd
+	return cmd, nil
 }
 
 // reportNotifyOutcomes pings one healthchecks check per notification channel the CHILD
