@@ -226,6 +226,7 @@ proxsave -l info    # debug|info|warning|error|critical
 **Log output**:
 - **Console**: Colored output (if `USE_COLOR=true`)
 - **File**: `LOG_PATH/backup-<resolved-hostname>-YYYYMMDD-HHMMSS.log`
+- **Daemon file**: `DAEMON_LOG_PATH/daemon-<resolved-hostname>-YYYYMMDD-HHMMSS.log`, for the daemon and `--daemon-setup`, `--daemon-remove`, `--daemon-status`
 
 The level threshold mutes the **console only** for warnings and above: a warning or
 error raised below the chosen level is still counted (footer, exit code) and still

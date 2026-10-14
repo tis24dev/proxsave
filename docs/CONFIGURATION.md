@@ -668,11 +668,24 @@ BACKUP_PATH=${BASE_DIR}/backup
 
 # Primary log storage
 LOG_PATH=${BASE_DIR}/log
+
+# Daemon log storage
+DAEMON_LOG_PATH=${LOG_PATH}/daemon
 ```
 
 `LOG_PATH` also holds `.whatsnew_seen.json`, the release notes ProxSave has already shown. It is
 read and written within `FS_IO_TIMEOUT`, so a log directory on a dead mount only means no notes
 are shown; pointing `LOG_PATH` elsewhere shows every release's notes once more.
+
+`DAEMON_LOG_PATH` holds the logs of the daemon and of `--daemon-setup`,
+`--daemon-remove` and `--daemon-status`, named `daemon-<host>-<timestamp>.log`.
+Each daemon start keeps its own log and the two before it. Absent or empty
+means `${LOG_PATH}/daemon`; set it to `${LOG_PATH}` to keep them beside the
+run logs.
+
+Retention deletes a run log together with its archive. A run log with no
+archive (a dry run, a failed run) is deleted once it is older than the oldest
+backup kept at that destination.
 
 **Path resolution**: `${BASE_DIR}` expands automatically from the installed `proxsave` executable path. Scalar string values also support `$VAR` / `${VAR}` expansion (config keys first, then environment variables), but `BASE_DIR` itself is not configurable from `backup.env` or the parent environment.
 

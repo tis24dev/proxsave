@@ -697,11 +697,13 @@ func (s *SecondaryStorage) deleteAssociatedLog(ctx context.Context, backupFile s
 	// Bounded against a dead/stale mount: on a cancelled/expired ctx safefs
 	// returns immediately without running the remove (best-effort cleanup).
 	if err := safefs.Remove(ctx, fullPath, fsIoTimeout(s.config)); err != nil {
-		if !os.IsNotExist(err) {
-			s.logger.Debug("Secondary logs: failed to delete %s: %v", logName, err)
-			s.logger.Info("  Log not deleted: %s: %s", logName, safefs.SystemErrorText(err))
-			s.retTally.logsNotDeleted++
+		if os.IsNotExist(err) {
+			s.logger.Debug("Secondary logs: log not found %s", logName)
+			return false
 		}
+		s.logger.Debug("Secondary logs: failed to delete %s: %v", logName, err)
+		s.logger.Info("  Log not deleted: %s: %s", logName, safefs.SystemErrorText(err))
+		s.retTally.logsNotDeleted++
 		return false
 	}
 
@@ -810,9 +812,39 @@ func (s *SecondaryStorage) ApplyRetention(ctx context.Context, config RetentionC
 
 	// Apply appropriate retention policy
 	if config.Policy == "gfs" {
-		return s.applyGFSRetention(ctx, backups, config)
+		deleted, err = s.applyGFSRetention(ctx, backups, config)
+	} else {
+		deleted, err = s.applySimpleRetention(ctx, backups, config.MaxBackups)
 	}
-	return s.applySimpleRetention(ctx, backups, config.MaxBackups)
+	if err != nil {
+		return deleted, err
+	}
+	s.pruneOrphanLogs(ctx, backups)
+	return deleted, nil
+}
+
+// pruneOrphanLogs runs the orphan-log pass (log_orphans.go) on SECONDARY_LOG_PATH
+// once the archives are rotated, and folds what it did into this pass's summary.
+func (s *SecondaryStorage) pruneOrphanLogs(ctx context.Context, backups []*types.BackupMetadata) {
+	logPath := strings.TrimSpace(s.config.SecondaryLogPath)
+	if logPath == "" {
+		return
+	}
+	s.retTally.hasLogPath = true
+	timeout := fsIoTimeout(s.config)
+	res := pruneOrphanLogs(ctx, s.logger, orphanLogTarget{
+		op:       "secondary orphan logs",
+		where:    logPath,
+		hostname: s.hostname,
+		aliases:  s.hostAliases,
+		list: func(ctx context.Context) ([]string, error) {
+			return listLogFolder(ctx, "secondary-log-list", logPath, timeout)
+		},
+		remove: func(ctx context.Context, name string) error {
+			return safefs.Remove(ctx, filepath.Join(logPath, name), timeout)
+		},
+	}, backups, s.retTally.removed)
+	mergeOrphanLogs(&s.lastRet, &s.retTally, res)
 }
 
 // resolveRetentionOwners fills in each candidate's Hostname and ServerID from its
@@ -897,6 +929,7 @@ func (s *SecondaryStorage) applyGFSRetention(ctx context.Context, backups []*typ
 		}
 
 		deleted++
+		s.retTally.removed = append(s.retTally.removed, backup.BackupFile)
 		if logDeleted {
 			logsDeleted++
 		}
@@ -983,6 +1016,7 @@ func (s *SecondaryStorage) applySimpleRetention(ctx context.Context, backups []*
 		}
 
 		deleted++
+		s.retTally.removed = append(s.retTally.removed, backup.BackupFile)
 		if logDeleted {
 			logsDeleted++
 		}

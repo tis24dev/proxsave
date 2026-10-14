@@ -180,8 +180,17 @@ type RetentionSummary struct {
 	NotListed int
 	// NoMetadata counts the archives retention described from their file name alone.
 	NoMetadata int
-	// LogsNotDeleted counts the associated logs whose removal failed.
+	// LogsNotDeleted counts the logs whose removal failed: the logs of the deleted
+	// archives and the logs no archive answers to (pruneOrphanLogs).
 	LogsNotDeleted int
+	// HasLogPath says this destination keeps logs: its log folder is configured, so the
+	// outcome reports how many logs went even when the answer is 0.
+	HasLogPath bool
+	// LogsNotListed says the log folder could not be listed, so the logs no archive
+	// answers to were not checked. LogsNotListedCause is the short cause for the fact
+	// line ("timed out after 30s").
+	LogsNotListed      bool
+	LogsNotListedCause string
 	// NotRotated counts the archives named under this host's short name in a spelling
 	// it does not answer to, which retention left alone.
 	NotRotated int

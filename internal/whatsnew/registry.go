@@ -279,6 +279,12 @@ var notes = []Note{
 			"This release includes a collection of fixes and corrections.",
 		},
 	},
+	{
+		Version: "0.44.0",
+		Lines: []string{
+			"The daemon writes its log to its own folder, DAEMON_LOG_PATH (default: inside LOG_PATH), keeping the last 3.",
+		},
+	},
 }
 
 // LookupNotes returns the notes for versions in the half-open range (from, to], ascending by

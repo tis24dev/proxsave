@@ -130,6 +130,7 @@ type Config struct {
 	// Paths
 	BackupPath       string
 	LogPath          string
+	DaemonLogPath    string
 	SecondaryLogPath string
 	CloudLogPath     string
 	LockPath         string
@@ -758,6 +759,13 @@ func (c *Config) parseSecuritySettings() {
 func (c *Config) parsePathSettings() {
 	c.BackupPath = c.getStringWithFallback([]string{"LOCAL_BACKUP_PATH", "BACKUP_PATH"}, filepath.Join(c.BaseDir, "backup"))
 	c.LogPath = c.getStringWithFallback([]string{"LOCAL_LOG_PATH", "LOG_PATH"}, filepath.Join(c.BaseDir, "log"))
+	// The daemon's own log and those of its admin commands (daemon-*.log), kept apart
+	// from the run logs. Absent or empty means the default, a folder inside LOG_PATH:
+	// whoever wants them with the run logs sets it to ${LOG_PATH}.
+	c.DaemonLogPath = strings.TrimSpace(c.getString("DAEMON_LOG_PATH", ""))
+	if c.DaemonLogPath == "" {
+		c.DaemonLogPath = filepath.Join(c.LogPath, "daemon")
+	}
 	c.SecondaryLogPath = c.getString("SECONDARY_LOG_PATH", "")
 	c.CloudLogPath = c.getString("CLOUD_LOG_PATH", "")
 	c.LockPath = c.getString("LOCK_PATH", filepath.Join(c.BaseDir, "lock"))

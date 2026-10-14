@@ -391,6 +391,35 @@ func TestRetentionOutcomesAreAutonomous(t *testing.T) {
 			summary: storage.RetentionSummary{Planned: 2, BackupsDeleted: 2, LogsDeleted: 1, LogsNotDeleted: 1},
 			want:    []string{"INFO     ✓ Backups deleted: 2", "WARNING  ⚠ Logs deleted: 1 of 2"},
 		},
+		{
+			// Discussion #336: a destination that keeps logs says how many went, 0 included.
+			name:    "logs kept here, none deleted",
+			summary: storage.RetentionSummary{Planned: 1, BackupsDeleted: 1, HasLogPath: true},
+			want:    []string{"INFO     ✓ Backups deleted: 1", "INFO     ✓ Logs deleted: 0"},
+		},
+		{
+			name:    "logs kept here, nothing to delete",
+			summary: storage.RetentionSummary{PassCompleted: true, HasLogPath: true},
+			want:    []string{"INFO     ✓ Nothing to delete"},
+			absent:  []string{"Logs deleted"},
+		},
+		{
+			name:    "orphan logs deleted with nothing else to delete",
+			summary: storage.RetentionSummary{HasLogPath: true, LogsDeleted: 3},
+			want:    []string{"INFO     ✓ Backups deleted: 0", "INFO     ✓ Logs deleted: 3"},
+			absent:  []string{"Nothing to delete"},
+		},
+		{
+			name:    "log folder not listed",
+			summary: storage.RetentionSummary{Planned: 1, BackupsDeleted: 1, LogsDeleted: 1, HasLogPath: true, LogsNotListed: true, LogsNotListedCause: "timed out after 30s"},
+			want:    []string{"INFO     ✓ Backups deleted: 1", "INFO       Logs not listed: timed out after 30s", "WARNING  ⚠ Logs deleted: 1, folder not listed"},
+		},
+		{
+			name:    "log folder not listed with nothing to delete",
+			summary: storage.RetentionSummary{HasLogPath: true, LogsNotListed: true, LogsNotListedCause: "permission denied"},
+			want:    []string{"INFO     ✓ Backups deleted: 0", "INFO       Logs not listed: permission denied", "WARNING  ⚠ Logs deleted: 0, folder not listed"},
+			absent:  []string{"Nothing to delete"},
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

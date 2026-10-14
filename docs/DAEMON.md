@@ -98,6 +98,9 @@ System service logs can be read outside the dashboard:
 journalctl -u proxsave-daemon.service
 ```
 
+The daemon also writes its log to `DAEMON_LOG_PATH` (default
+`/opt/proxsave/log/daemon`); each start keeps its own log and the two before it.
+
 A dashboard **Backup** run is standalone. It can hand its outcome to a live daemon,
 but it does not exercise scheduled personal scripts or update scheduled per-channel
 notification sensors. With `BACKUP_ENABLED=false`, scheduled backups are skipped and

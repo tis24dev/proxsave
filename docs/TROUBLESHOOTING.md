@@ -117,7 +117,7 @@ CLI equivalents and automation options are in [CLI reference](CLI_REFERENCE.md).
 **Before troubleshooting**:
 1. Check you're running the latest version: the dashboard's `Maintenance` > `Upgrade` > `Check upgrade`
 2. Try dry-run mode first: `proxsave --dry-run --log-level debug`
-3. Review the newest log in `LOG_PATH` (default `/opt/proxsave/log`; use your own directory if `LOG_PATH` or `LOCAL_LOG_PATH` is set in `configs/backup.env`). The filename carries the FQDN, so glob the directory rather than guessing: `ls -t /opt/proxsave/log/backup-*.log | head -1`
+3. Review the newest log in `LOG_PATH` (default `/opt/proxsave/log`; use your own directory if `LOG_PATH` or `LOCAL_LOG_PATH` is set in `configs/backup.env`). The filename carries the FQDN, so glob the directory rather than guessing: `ls -t /opt/proxsave/log/backup-*.log | head -1`. The daemon's own logs are in `DAEMON_LOG_PATH` (default `/opt/proxsave/log/daemon`): `ls -t /opt/proxsave/log/daemon/daemon-*.log | head -1`
 
 ---
 

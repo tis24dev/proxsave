@@ -414,6 +414,12 @@ func (d *daemon) run(ctx context.Context) int {
 		return types.ExitBackupSkipped.Int()
 	}
 
+	// Only the daemon that owns this host rotates its logs: a refused second instance
+	// returned above, before it could touch the running daemon's.
+	if logger := d.logger; logger != nil {
+		rotateDaemonLogs(ctx, logger, logger.GetLogFilePath(), fsIoTimeoutDuration(d.cfg))
+	}
+
 	// CRITICAL: install the SIGUSR1 handler BEFORE publishing the pidfile below. Go's DEFAULT action
 	// for SIGUSR1 is to TERMINATE the process, and the pidfile is exactly what a standalone backup
 	// run uses to discover us and send SIGUSR1 to hand off its outcome. If the pid became

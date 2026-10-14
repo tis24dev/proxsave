@@ -387,9 +387,12 @@ func (s *StorageAdapter) logRetentionOutcome(summary storage.RetentionSummary, d
 	}
 	logsDeleted := summary.LogsDeleted
 	logsPlanned := logsDeleted + summary.LogsNotDeleted
-	s.logger.Debug("%s: retention outcome planned=%d deleted=%d not_deleted=%d left_behind=%d not_listed=%d skipped=%d no_metadata=%d logs_deleted=%d logs_not_deleted=%d",
+	s.logger.Debug("%s: retention outcome planned=%d deleted=%d not_deleted=%d left_behind=%d not_listed=%d skipped=%d no_metadata=%d logs_deleted=%d logs_not_deleted=%d has_log_path=%t logs_not_listed=%t",
 		s.backend.Name(), planned, backupsDeleted, summary.NotDeleted, summary.LeftBehind, summary.NotListed,
-		summary.Skipped, summary.NoMetadata, logsDeleted, summary.LogsNotDeleted)
+		summary.Skipped, summary.NoMetadata, logsDeleted, summary.LogsNotDeleted, summary.HasLogPath, summary.LogsNotListed)
+	if summary.LogsNotListed {
+		s.logger.Debug("%s: retention outcome logs_not_listed_cause=%q", s.backend.Name(), summary.LogsNotListedCause)
+	}
 	if summary.NotRotated > 0 {
 		s.logger.Debug("%s: retention outcome not_rotated=%d names=%s", s.backend.Name(), summary.NotRotated, summary.NotRotatedNames)
 	}
@@ -397,7 +400,7 @@ func (s *StorageAdapter) logRetentionOutcome(summary storage.RetentionSummary, d
 		s.logger.Debug("%s: retention outcome shared_identity=%s", s.backend.Name(), summary.SharedIdentityNames)
 	}
 
-	if planned == 0 && summary.Skipped == 0 && summary.NotListed == 0 && summary.NoMetadata == 0 && summary.NotRotated == 0 && logsPlanned == 0 {
+	if planned == 0 && summary.Skipped == 0 && summary.NotListed == 0 && summary.NoMetadata == 0 && summary.NotRotated == 0 && logsPlanned == 0 && !summary.LogsNotListed {
 		s.logger.Info("%s Nothing to delete", theme.SymbolSuccess)
 		s.logSharedIdentityOutcome(summary)
 		return
@@ -421,10 +424,16 @@ func (s *StorageAdapter) logRetentionOutcome(summary storage.RetentionSummary, d
 	}
 	s.logSharedIdentityOutcome(summary)
 
+	// The logs outcome: the logs of the deleted archives and the logs no archive
+	// answers to (discussion #336). A destination that keeps logs reports the count
+	// even when it is 0; one without a log folder has no logs line at all.
 	switch {
+	case summary.LogsNotListed:
+		s.logger.Info("  Logs not listed: %s", summary.LogsNotListedCause)
+		s.logger.Warning("%s Logs deleted: %d, folder not listed", theme.SymbolWarning, logsDeleted)
 	case summary.LogsNotDeleted > 0:
 		s.logger.Warning("%s Logs deleted: %d of %d", theme.SymbolWarning, logsDeleted, logsPlanned)
-	case logsDeleted > 0:
+	case logsDeleted > 0 || summary.HasLogPath:
 		s.logger.Info("%s Logs deleted: %d", theme.SymbolSuccess, logsDeleted)
 	}
 }

@@ -269,7 +269,7 @@ func TestTheDebugBlockExplainsEveryDecisionItMade(t *testing.T) {
 		// which write form won, since the two resolve in opposite ways
 		fmt.Sprintf("CUSTOM_BACKUP_PATHS assigned on lines %d, %d; line %d wins (block form: it replaces everything before it)", customPathLines[0], customPathLines[1], customPathLines[1]),
 		// the template's own two halves, so the counts above can be reconstructed
-		"template assigns 190 variables and documents",
+		"template assigns 191 variables and documents",
 	} {
 		if !strings.Contains(logged, want) {
 			t.Fatalf("missing %q in:\n%s", want, logged)
