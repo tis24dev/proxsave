@@ -150,11 +150,7 @@ func TestRotateDaemonLogsKeepsALogHeldOpen(t *testing.T) {
 			t.Fatalf("write: %v", err)
 		}
 	}
-	setup, err := os.OpenFile(filepath.Join(dir, names[0]), os.O_WRONLY|os.O_APPEND, 0)
-	if err != nil {
-		t.Fatalf("open: %v", err)
-	}
-	defer setup.Close()
+	holdOpenForTest(t, filepath.Join(dir, names[0]))
 
 	logger, _ := newDaemonLogTestLogger()
 	rotateDaemonLogs(context.Background(), logger, filepath.Join(dir, names[3]), time.Second)

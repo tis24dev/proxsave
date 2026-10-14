@@ -433,3 +433,37 @@ func TestCloudOrphanPassIgnoresAnEarlierMissingFolder(t *testing.T) {
 		}
 	}
 }
+
+// A log another process holds open survives both the orphan pass and the deletion that
+// goes with its archive; the others go as before.
+func TestLocalRetentionKeepsALogHeldOpen(t *testing.T) {
+	backupDir, logDir := t.TempDir(), t.TempDir()
+	writeSidecarBackup(t, backupDir, "20261003-020000")
+	writeSidecarBackup(t, backupDir, "20261004-020000")
+	logs := []string{
+		"backup-node-20261001-090000.log", // orphan, held open: kept
+		"backup-node-20261002-090000.log", // orphan: deleted
+		"backup-node-20261003-020000.log", // its archive is rotated, held open: kept
+		"backup-node-20261004-020000.log", // with its kept archive
+	}
+	for _, name := range logs {
+		writeTestFile(t, filepath.Join(logDir, name), "log")
+	}
+	holdOpenForTest(t, filepath.Join(logDir, logs[0]), filepath.Join(logDir, logs[2]))
+
+	local, err := NewLocalStorage(&config.Config{BackupPath: backupDir, LogPath: logDir}, newTestLogger(), "")
+	if err != nil {
+		t.Fatalf("NewLocalStorage: %v", err)
+	}
+	local.hostname = "node"
+	if _, err := local.ApplyRetention(context.Background(), RetentionConfig{Policy: "simple", MaxBackups: 1}); err != nil {
+		t.Fatalf("ApplyRetention: %v", err)
+	}
+	for i, name := range logs {
+		_, statErr := os.Stat(filepath.Join(logDir, name))
+		wantGone := i == 1
+		if wantGone != os.IsNotExist(statErr) {
+			t.Errorf("%s: gone=%v, stat=%v", name, wantGone, statErr)
+		}
+	}
+}
