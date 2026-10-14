@@ -3,7 +3,9 @@ package main
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -13,6 +15,7 @@ import (
 	"github.com/tis24dev/proxsave/internal/cli"
 	"github.com/tis24dev/proxsave/internal/config"
 	"github.com/tis24dev/proxsave/internal/logging"
+	"github.com/tis24dev/proxsave/internal/safefs"
 	"github.com/tis24dev/proxsave/internal/types"
 )
 
@@ -196,5 +199,46 @@ func TestRotateDaemonLogsWithoutALogFile(t *testing.T) {
 	rotateDaemonLogs(context.Background(), logger, "", time.Second)
 	if !strings.Contains(buf.String(), "daemon log rotation: skipped reason=no_log_file") {
 		t.Fatalf("missing the skip evidence:\n%s", buf.String())
+	}
+}
+
+// On the real process table, as root the way the daemon runs: a log a separate
+// process keeps open (a --daemon-setup still writing) survives the rotation, while an
+// expired log nobody holds goes.
+func TestRotateDaemonLogsKeepsALogHeldByAnotherProcess(t *testing.T) {
+	if os.Geteuid() != 0 {
+		t.Skip("reading every process's descriptors needs root")
+	}
+	t.Cleanup(safefs.SetProcRootForTest("/proc"))
+	dir := t.TempDir()
+	names := []string{"daemon-node-20261001-000000.log", "daemon-node-20261002-000000.log", "daemon-node-20261003-000000.log", "daemon-node-20261004-000000.log", "daemon-node-20261005-000000.log"}
+	for _, name := range names {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte("log"), 0o600); err != nil {
+			t.Fatalf("write: %v", err)
+		}
+	}
+	held := filepath.Join(dir, names[0])
+	writer := exec.Command("sh", "-c", `exec 3>>"$1"; sleep 60`, "sh", held)
+	if err := writer.Start(); err != nil {
+		t.Fatalf("start writer: %v", err)
+	}
+	t.Cleanup(func() { _ = writer.Process.Kill(); _ = writer.Wait() })
+	fd := fmt.Sprintf("/proc/%d/fd/3", writer.Process.Pid)
+	for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(20 * time.Millisecond) {
+		if target, err := os.Readlink(fd); err == nil && target == held {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the writer never opened %s", held)
+		}
+	}
+
+	logger, _ := newDaemonLogTestLogger()
+	rotateDaemonLogs(context.Background(), logger, filepath.Join(dir, names[4]), time.Second)
+	if _, err := os.Stat(held); err != nil {
+		t.Fatalf("the log held open by another process was deleted: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, names[1])); !os.IsNotExist(err) {
+		t.Fatalf("the expired log nobody holds is still there: %v", err)
 	}
 }
