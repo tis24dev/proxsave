@@ -188,6 +188,7 @@ func TestRunNewInstallCLIUsesCLIConfirmOnly(t *testing.T) {
 	}
 
 	newInstallEnsureInteractiveStdin = func() error { return nil }
+	asRootForNewInstall(t)
 
 	cliConfirmCalled := false
 	newInstallConfirmCLI = func(ctx context.Context, reader *bufio.Reader, plan newInstallPlan) (bool, error) {
@@ -251,6 +252,7 @@ func TestRunNewInstallCancelSkipsReset(t *testing.T) {
 	}
 
 	newInstallEnsureInteractiveStdin = func() error { return nil }
+	asRootForNewInstall(t)
 	newInstallConfirmCLI = func(ctx context.Context, reader *bufio.Reader, plan newInstallPlan) (bool, error) {
 		return false, nil
 	}
@@ -292,6 +294,7 @@ func TestRunNewInstallTUIPassesContextToConfirm(t *testing.T) {
 	ctx := t.Context()
 
 	newInstallEnsureInteractiveStdin = func() error { return nil }
+	asRootForNewInstall(t)
 	newInstallConfirmCLI = func(ctx context.Context, reader *bufio.Reader, plan newInstallPlan) (bool, error) {
 		t.Fatalf("CLI confirmation must not be called in TUI mode")
 		return false, nil
@@ -344,6 +347,7 @@ func TestRunNewInstallTUIUsesTUIConfirmAndRunInstallTUI(t *testing.T) {
 
 	ctx := t.Context()
 	newInstallEnsureInteractiveStdin = func() error { return nil }
+	asRootForNewInstall(t)
 	newInstallConfirmCLI = func(ctx context.Context, reader *bufio.Reader, plan newInstallPlan) (bool, error) {
 		t.Fatalf("CLI confirmation must not be called in TUI mode")
 		return false, nil
@@ -395,5 +399,40 @@ func TestRunNewInstallTUIUsesTUIConfirmAndRunInstallTUI(t *testing.T) {
 	}
 	if _, err := os.Stat(stalePath); !os.IsNotExist(err) {
 		t.Fatalf("expected stale marker to be removed by reset, got err=%v", err)
+	}
+}
+
+// asRootForNewInstall lets a test run the reset, which refuses anyone but root.
+func asRootForNewInstall(t *testing.T) {
+	t.Helper()
+	saved := newInstallGeteuid
+	newInstallGeteuid = func() int { return 0 }
+	t.Cleanup(func() { newInstallGeteuid = saved })
+}
+
+// Anyone but root is refused before the reset asks or touches anything.
+func TestRunNewInstallRefusesNonRoot(t *testing.T) {
+	saved := newInstallGeteuid
+	newInstallGeteuid = func() int { return 1000 }
+	t.Cleanup(func() { newInstallGeteuid = saved })
+	savedEnsure := newInstallEnsureInteractiveStdin
+	newInstallEnsureInteractiveStdin = func() error {
+		t.Fatal("the reset went on to ask for input as non-root")
+		return nil
+	}
+	t.Cleanup(func() { newInstallEnsureInteractiveStdin = savedEnsure })
+
+	baseDir := t.TempDir()
+	forceDetectedBaseDirForTest(t, baseDir)
+	marker := filepath.Join(baseDir, "keep.txt")
+	if err := os.WriteFile(marker, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	err := runNewInstall(context.Background(), filepath.Join(baseDir, "env", "backup.env"), nil, true)
+	if err == nil || err.Error() != "Installation reset requires root privileges" {
+		t.Fatalf("err = %v, want the root refusal", err)
+	}
+	if _, statErr := os.Stat(marker); statErr != nil {
+		t.Fatalf("the tree was touched: %v", statErr)
 	}
 }

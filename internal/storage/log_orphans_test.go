@@ -326,3 +326,110 @@ func TestCloudRetentionDeletesExpiredOrphanLogs(t *testing.T) {
 		}
 	}
 }
+
+// The log this run is writing is never deleted, even when the clock set back makes
+// it read as older than the oldest backup kept; nor is a log another process holds
+// open.
+func TestPruneOrphanLogsKeepsOwnAndOpenLogs(t *testing.T) {
+	backups := orphanBackups("node-backup-20261005-000000.tar.zst")
+	f := &fakeOrphanTarget{names: []string{
+		"backup-node-20261001-000000.log", // this run's log, named by a clock set back
+		"backup-node-20261002-000000.log", // a daemon-setup still writing
+		"backup-node-20261003-000000.log", // expired
+	}}
+	target := f.target()
+	target.own = "backup-node-20261001-000000.log"
+	target.heldOpen = func(context.Context) (map[string]bool, error) {
+		return map[string]bool{"backup-node-20261001-000000.log": true, "backup-node-20261002-000000.log": true}, nil
+	}
+	res := pruneOrphanLogs(context.Background(), newTestLogger(), target, backups, nil)
+	if !reflect.DeepEqual(f.removed, []string{"backup-node-20261003-000000.log"}) || res.deleted != 1 {
+		t.Fatalf("removed=%v res=%+v; want only the expired log", f.removed, res)
+	}
+}
+
+// A folder whose open logs cannot be read has none deleted.
+func TestPruneOrphanLogsDeletesNothingWhenOpenLogsAreUnknown(t *testing.T) {
+	f := &fakeOrphanTarget{names: []string{"backup-node-20261001-000000.log"}}
+	target := f.target()
+	target.heldOpen = func(context.Context) (map[string]bool, error) { return nil, errors.New("no /proc") }
+	res := pruneOrphanLogs(context.Background(), newTestLogger(), target, orphanBackups("node-backup-20261005-000000.tar.zst"), nil)
+	if len(f.removed) != 0 || res.deleted != 0 || res.notDeleted != 0 {
+		t.Fatalf("removed=%v res=%+v; want nothing removed", f.removed, res)
+	}
+}
+
+// A pass cancelled between two removals says so, and the retention that ran it fails
+// the way the archive deletion does instead of reporting a completed pass.
+func TestPruneOrphanLogsCancelledReportsStopped(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	f := &fakeOrphanTarget{names: []string{"backup-node-20261001-000000.log", "backup-node-20261002-000000.log"}}
+	target := f.target()
+	remove := target.remove
+	target.remove = func(ctx context.Context, name string) error {
+		err := remove(ctx, name)
+		cancel()
+		return err
+	}
+	res := pruneOrphanLogs(ctx, newTestLogger(), target, orphanBackups("node-backup-20261005-000000.tar.zst"), nil)
+	if !errors.Is(res.stopped, context.Canceled) || res.deleted != 1 {
+		t.Fatalf("res=%+v; want one deleted and the pass stopped", res)
+	}
+}
+
+// The run log open in LOG_PATH survives the orphan pass even when its name reads as old.
+func TestLocalRetentionKeepsTheRunLog(t *testing.T) {
+	backupDir, logDir := t.TempDir(), t.TempDir()
+	writeSidecarBackup(t, backupDir, "20261005-020000")
+	writeTestFile(t, filepath.Join(logDir, "backup-node-20261001-090000.log"), "log")
+
+	logger := newTestLogger()
+	ownLog := filepath.Join(logDir, "backup-node-20261002-090000.log")
+	if err := logger.OpenLogFile(ownLog); err != nil {
+		t.Fatalf("open run log: %v", err)
+	}
+	defer logger.CloseLogFile()
+
+	local, err := NewLocalStorage(&config.Config{BackupPath: backupDir, LogPath: logDir}, logger, "")
+	if err != nil {
+		t.Fatalf("NewLocalStorage: %v", err)
+	}
+	local.hostname = "node"
+	if _, err := local.ApplyRetention(context.Background(), RetentionConfig{Policy: "simple", MaxBackups: 3}); err != nil {
+		t.Fatalf("ApplyRetention: %v", err)
+	}
+	if _, err := os.Stat(ownLog); err != nil {
+		t.Fatalf("the run's own log was deleted: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(logDir, "backup-node-20261001-090000.log")); !os.IsNotExist(err) {
+		t.Fatalf("the expired orphan is still there: %v", err)
+	}
+}
+
+// The cloud orphan pass reads the folder itself: a folder an earlier pass found
+// missing does not keep it switched off once the folder is back.
+func TestCloudOrphanPassIgnoresAnEarlierMissingFolder(t *testing.T) {
+	listing := "100 2024-11-12 10:00:00 node-backup-20241112-100000.tar.zst"
+	for _, form := range cloudFormsFor(t) {
+		rec := &argvRecorder{respond: func(args []string) ([]byte, error) {
+			switch args[0] {
+			case "lsl":
+				return []byte(listing), nil
+			case "cat":
+				return []byte(`{"hostname":"node"}`), nil
+			case "lsf":
+				return []byte("backup-node-20241101-090000.log\n"), nil
+			}
+			return nil, nil
+		}}
+		cs := newFormCloud(t, form, nil, rec)
+		cs.hostname = "node"
+		cs.markCloudLogPathMissing("earlier", "directory not found")
+		if _, err := cs.ApplyRetention(context.Background(), RetentionConfig{Policy: "simple", MaxBackups: 2}); err != nil {
+			t.Fatalf("%s: ApplyRetention: %v", form.name, err)
+		}
+		if s := cs.LastRetentionSummary(); s.LogsDeleted != 1 {
+			t.Fatalf("%s: summary=%+v; want the orphan deleted", form.name, s)
+		}
+	}
+}

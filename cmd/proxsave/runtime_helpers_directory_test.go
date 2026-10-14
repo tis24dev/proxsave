@@ -112,3 +112,69 @@ func TestVerifyBackupDirectoriesDryRunLeavesTheSecondaryLogDirectory(t *testing.
 		}
 	}
 }
+
+// A secondary whose backup or log directory is the local one, by path or through a
+// link, is reported and switched off for the run, without failing it; a separate one
+// is left alone.
+func TestVerifyBackupDirectoriesDisablesASecondaryThatIsTheLocalOne(t *testing.T) {
+	cases := map[string]struct {
+		secondary, secondaryLog func(root, backup, log string) string
+		wantLines               []string
+	}{
+		"backup directory by path": {
+			secondary:    func(root, backup, log string) string { return backup + "/" },
+			secondaryLog: func(root, backup, log string) string { return filepath.Join(root, "secondary-log") },
+			wantLines:    []string{"WARNING  ✗ Secondary directory same as Backup directory (secondary storage disabled)"},
+		},
+		"log directory through a link": {
+			secondary: func(root, backup, log string) string { return filepath.Join(root, "secondary") },
+			secondaryLog: func(root, backup, log string) string {
+				link := filepath.Join(root, "log-link")
+				if err := os.Symlink(log, link); err != nil {
+					t.Fatal(err)
+				}
+				return link
+			},
+			wantLines: []string{"WARNING  ✗ Secondary log directory same as Log directory (secondary storage disabled)"},
+		},
+		"separate directories": {
+			secondary:    func(root, backup, log string) string { return filepath.Join(root, "secondary") },
+			secondaryLog: func(root, backup, log string) string { return filepath.Join(root, "secondary-log") },
+		},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			root := t.TempDir()
+			backup, logDir := filepath.Join(root, "backup"), filepath.Join(root, "log")
+			for _, dir := range []string{backup, logDir} {
+				if err := os.MkdirAll(dir, 0o755); err != nil {
+					t.Fatal(err)
+				}
+			}
+			cfg := &config.Config{BackupPath: backup, LogPath: logDir, LockPath: filepath.Join(root, "lock"),
+				SecondaryEnabled: true, SecondaryPath: tc.secondary(root, backup, logDir), SecondaryLogPath: tc.secondaryLog(root, backup, logDir)}
+			logger := logging.New(types.LogLevelInfo, false)
+			buf := &bytes.Buffer{}
+			logger.SetOutput(buf)
+			prev := logging.GetDefaultLogger()
+			logging.SetDefaultLogger(logger)
+			verifyBackupDirectories(cfg, logger)
+			logging.SetDefaultLogger(prev)
+
+			out := buf.String()
+			for _, line := range tc.wantLines {
+				if !strings.Contains(out, line) {
+					t.Fatalf("missing %q in:\n%s", line, out)
+				}
+			}
+			disabled := len(tc.wantLines) > 0
+			if cfg.SecondaryEnabled == disabled || cfg.SecondaryStartupFailed {
+				t.Fatalf("SecondaryEnabled=%v SecondaryStartupFailed=%v, want disabled=%v and not failed:\n%s",
+					cfg.SecondaryEnabled, cfg.SecondaryStartupFailed, disabled, out)
+			}
+			if disabled && strings.Contains(out, "Secondary log directory exists") {
+				t.Fatalf("a disabled secondary still had its log directory checked:\n%s", out)
+			}
+		})
+	}
+}

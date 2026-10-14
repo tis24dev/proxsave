@@ -127,6 +127,40 @@ func TestRotateDaemonLogsNeverDeletesTheCurrentLog(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(dir, current)); err != nil {
 		t.Fatalf("the current log went: %v", err)
 	}
+	// It counts toward the three: the two newest others stay, the oldest goes.
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("read dir: %v", err)
+	}
+	if len(entries) != daemonLogsKept {
+		t.Fatalf("%d logs left, want %d", len(entries), daemonLogsKept)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "daemon-node-20261001-000000.log")); !os.IsNotExist(err) {
+		t.Fatalf("the oldest other log is still there: %v", err)
+	}
+}
+
+// A log some process still holds open, such as the one of the --daemon-setup that
+// started this daemon, is not deleted even when it falls outside the three.
+func TestRotateDaemonLogsKeepsALogHeldOpen(t *testing.T) {
+	dir := t.TempDir()
+	names := []string{"daemon-node-20261001-000000.log", "daemon-node-20261002-000000.log", "daemon-node-20261003-000000.log", "daemon-node-20261004-000000.log"}
+	for _, name := range names {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte("log"), 0o600); err != nil {
+			t.Fatalf("write: %v", err)
+		}
+	}
+	setup, err := os.OpenFile(filepath.Join(dir, names[0]), os.O_WRONLY|os.O_APPEND, 0)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer setup.Close()
+
+	logger, _ := newDaemonLogTestLogger()
+	rotateDaemonLogs(context.Background(), logger, filepath.Join(dir, names[3]), time.Second)
+	if _, err := os.Stat(filepath.Join(dir, names[0])); err != nil {
+		t.Fatalf("the log held open was deleted: %v", err)
+	}
 }
 
 // A log it cannot delete: the fact line, then the outcome, both INFO.

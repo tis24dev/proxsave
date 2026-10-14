@@ -428,3 +428,38 @@ func TestIsOneEditApart(t *testing.T) {
 		}
 	}
 }
+
+// A ".." after a symbolic link names, for the kernel, the file next to the link's
+// target, which is the file the loader reads. The audit has to read that one too, not
+// the file the path names when cleaned as text.
+func TestAuditReadsTheFileTheLoaderReadsThroughALink(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "real", "sub"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(root, "a"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(root, "real", "sub"), filepath.Join(root, "a", "link")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "a", "backup.env"), []byte("COMPRESSION_TYPE=xz\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "real", "backup.env"), []byte("COMPRESSION_TYPE=xz\nCOMPRESSION_TYPE=zstd\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	path := filepath.Join(root, "a", "link") + "/../backup.env"
+	raw, err := parseEnvFile(path)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	report, err := AuditConfigFile(path)
+	if err != nil {
+		t.Fatalf("audit: %v", err)
+	}
+	if raw["COMPRESSION_TYPE"] != "zstd" || len(report.Duplicated) != 1 {
+		t.Fatalf("loader read %q, audit found %d duplicated: they read different files", raw["COMPRESSION_TYPE"], len(report.Duplicated))
+	}
+}

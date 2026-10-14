@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io/fs"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -45,6 +46,14 @@ type orphanLogTarget struct {
 	// was already gone; any other error is a failed removal, whose ErrorCause is the
 	// fact line.
 	remove func(ctx context.Context, name string) error
+	// own is the name of the log this run is writing when it sits in this folder, ""
+	// otherwise. It is never deleted, whatever its name says: with the clock set back
+	// it can read as older than the oldest backup kept.
+	own string
+	// heldOpen, when set, names the logs in the folder some process still holds open
+	// (safefs.HeldOpenIn). None of them is deleted; a folder whose open logs cannot be
+	// read has none deleted. Nil for a folder no process writes into (the cloud).
+	heldOpen func(ctx context.Context) (map[string]bool, error)
 }
 
 // orphanLogResult is what one orphan-log pass did.
@@ -54,6 +63,10 @@ type orphanLogResult struct {
 	// notListed is the listing error when the folder could not be read: the orphans
 	// were not checked.
 	notListed error
+	// stopped is the context's error when the pass was cancelled before it finished:
+	// the caller returns it, as the archive deletion does, so the pass is reported as
+	// not applied rather than as complete.
+	stopped error
 }
 
 // runLogKey splits a run log name, backup-<host>-<YYYYMMDD-HHMMSS>.log, into the host
@@ -117,6 +130,10 @@ func pruneOrphanLogs(ctx context.Context, logger *logging.Logger, t orphanLogTar
 	names, err := t.list(ctx)
 	if err != nil {
 		logging.DebugStep(logger, t.op, "failed stage=list path=%s error=%v", t.where, err)
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			res.stopped = ctxErr
+			return res
+		}
 		res.notListed = err
 		return res
 	}
@@ -134,6 +151,10 @@ func pruneOrphanLogs(ctx context.Context, logger *logging.Logger, t orphanLogTar
 		case withArchive[ts]:
 			matched++
 		case handled[ts]:
+		case name == t.own:
+			orphans++
+			keep = append(keep, name)
+			logging.DebugStep(logger, t.op, "kept %s reason=own_log", name)
 		case ts >= oldestKept:
 			orphans++
 			keep = append(keep, name)
@@ -144,13 +165,32 @@ func pruneOrphanLogs(ctx context.Context, logger *logging.Logger, t orphanLogTar
 	}
 	logging.DebugStep(logger, t.op, "listed=%d with_archive=%d orphans=%d oldest_kept=%s", listed, matched, orphans, oldestKept)
 	for _, name := range keep {
-		logging.DebugStep(logger, t.op, "kept %s reason=newer_than_oldest_kept", name)
+		if name != t.own {
+			logging.DebugStep(logger, t.op, "kept %s reason=newer_than_oldest_kept", name)
+		}
+	}
+
+	var open map[string]bool
+	if t.heldOpen != nil && len(expired) > 0 {
+		open, err = t.heldOpen(ctx)
+		if err != nil {
+			logging.DebugStep(logger, t.op, "skipped stage=open_check path=%s error=%v", t.where, err)
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				res.stopped = ctxErr
+			}
+			return res
+		}
 	}
 
 	for _, name := range expired {
 		if err := ctx.Err(); err != nil {
 			logging.DebugStep(logger, t.op, "stopped error=%v", err)
+			res.stopped = err
 			break
+		}
+		if open[name] {
+			logging.DebugStep(logger, t.op, "kept %s reason=held_open", name)
+			continue
 		}
 		err := t.remove(ctx, name)
 		switch {
@@ -167,6 +207,40 @@ func pruneOrphanLogs(ctx context.Context, logger *logging.Logger, t orphanLogTar
 	}
 	logging.DebugStep(logger, t.op, "result deleted=%d not_deleted=%d kept=%d", res.deleted, res.notDeleted, len(keep))
 	return res
+}
+
+// ownLogIn is the name of the log logger is writing when it sits in dir, "" otherwise:
+// the one log in that folder this process knows to be open without asking.
+func ownLogIn(logger *logging.Logger, dir string) string {
+	if logger == nil {
+		return ""
+	}
+	current := logger.GetLogFilePath()
+	if current == "" || filepath.Clean(filepath.Dir(current)) != filepath.Clean(dir) {
+		return ""
+	}
+	return filepath.Base(current)
+}
+
+// keptOpenLog reports whether the log name in dir must stay although its archive is
+// being deleted: it is the log this run is writing, some process still holds it open,
+// or the open logs could not be read, in which case none is deleted. The reason is
+// DEBUG evidence; nothing is asked of the operator.
+func keptOpenLog(ctx context.Context, logger *logging.Logger, op, dir, name string, timeout time.Duration) bool {
+	if name == ownLogIn(logger, dir) {
+		logging.DebugStep(logger, op, "kept %s reason=own_log", name)
+		return true
+	}
+	open, err := safefs.HeldOpenIn(ctx, dir, timeout)
+	if err != nil {
+		logging.DebugStep(logger, op, "kept %s reason=open_check_failed error=%v", name, err)
+		return true
+	}
+	if open[name] {
+		logging.DebugStep(logger, op, "kept %s reason=held_open", name)
+		return true
+	}
+	return false
 }
 
 // listLogFolder returns the file names in a local log folder, bounded against a dead

@@ -5,6 +5,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -14,6 +16,7 @@ import (
 	"github.com/tis24dev/proxsave/internal/environment"
 	"github.com/tis24dev/proxsave/internal/logging"
 	"github.com/tis24dev/proxsave/internal/orchestrator"
+	"github.com/tis24dev/proxsave/internal/safefs"
 	"github.com/tis24dev/proxsave/internal/support"
 	"github.com/tis24dev/proxsave/internal/types"
 )
@@ -251,6 +254,7 @@ func verifyBackupDirectories(cfg *config.Config, logger *logging.Logger) {
 
 	checkDir("Backup directory", cfg.BackupPath)
 	checkDir("Log directory", cfg.LogPath)
+	disableSecondarySharingLocalDirectories(cfg, logger)
 	if cfg.SecondaryEnabled {
 		secondaryLogPath := strings.TrimSpace(cfg.SecondaryLogPath)
 		switch {
@@ -267,6 +271,50 @@ func verifyBackupDirectories(cfg *config.Config, logger *logging.Logger) {
 		logCloudLogDirectory(cfg)
 	}
 	checkDir("Lock directory", cfg.LockPath)
+}
+
+// disableSecondarySharingLocalDirectories turns the secondary destination off for this
+// run when its backup or log directory IS the local one, by path or as the same folder
+// reached through a link or a mount. A secondary that is the primary copies every file
+// onto itself (the run log ends up empty) and rotates the same archives twice, so it is
+// a configuration error, not a second copy. It is reported and switched off, not failed:
+// the backup itself still runs, and the step [6] and log copy skip the secondary.
+func disableSecondarySharingLocalDirectories(cfg *config.Config, logger *logging.Logger) {
+	if !cfg.SecondaryEnabled {
+		return
+	}
+	timeout := fsIoTimeoutDuration(cfg)
+	sameData := sameDirectory(logger, "secondary directory", cfg.SecondaryPath, cfg.BackupPath, timeout)
+	sameLog := sameDirectory(logger, "secondary log directory", cfg.SecondaryLogPath, cfg.LogPath, timeout)
+	if sameData {
+		logging.Warning("✗ Secondary directory same as Backup directory (secondary storage disabled)")
+	}
+	if sameLog {
+		logging.Warning("✗ Secondary log directory same as Log directory (secondary storage disabled)")
+	}
+	if sameData || sameLog {
+		cfg.SecondaryEnabled = false
+		cfg.SecondaryLogPath = ""
+	}
+}
+
+// sameDirectory reports whether two configured directories are one: the same path once
+// cleaned, or two paths to the same folder (a link, a bind mount). A folder that cannot
+// be read yet, such as one not created, is compared by path only.
+func sameDirectory(logger *logging.Logger, what, a, b string, timeout time.Duration) bool {
+	a, b = strings.TrimSpace(a), strings.TrimSpace(b)
+	if a == "" || b == "" {
+		return false
+	}
+	if filepath.Clean(a) == filepath.Clean(b) {
+		logging.DebugStep(logger, "directory check", "%s=%s same=true by=path", what, a)
+		return true
+	}
+	infoA, errA := safefs.Stat(context.Background(), a, timeout)
+	infoB, errB := safefs.Stat(context.Background(), b, timeout)
+	same := errA == nil && errB == nil && os.SameFile(infoA, infoB)
+	logging.DebugStep(logger, "directory check", "%s=%s other=%s same=%v by=file stat_err=%v/%v", what, a, b, same, errA, errB)
+	return same
 }
 
 func logCloudLogDirectory(cfg *config.Config) {

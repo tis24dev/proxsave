@@ -2524,31 +2524,32 @@ func (c *CloudStorage) ApplyRetention(ctx context.Context, config RetentionConfi
 	if err != nil {
 		return deleted, err
 	}
-	c.pruneOrphanLogs(ctx, backups)
+	if err := c.pruneOrphanLogs(ctx, backups); err != nil {
+		return deleted, err
+	}
 	return deleted, nil
 }
 
 // pruneOrphanLogs runs the orphan-log pass (log_orphans.go) on CLOUD_LOG_PATH once
 // the archives are rotated, and folds what it did into this pass's summary. A
 // CLOUD_LOG_PATH outside the CLOUD_REMOTE directory gets no copy and no cleanup
-// (deleteAssociatedLog), so it keeps no logs this pass could report on.
-func (c *CloudStorage) pruneOrphanLogs(ctx context.Context, backups []*types.BackupMetadata) {
+// (deleteAssociatedLog), so it keeps no logs this pass could report on. It decides on
+// its own listing, which reads a missing folder as one with no log, rather than on
+// the folder state countLogFiles keeps for the deletions that go with each archive.
+// Every log in the cloud folder is a copy made at the end of a run, so none is held
+// open and no open-file check applies.
+func (c *CloudStorage) pruneOrphanLogs(ctx context.Context, backups []*types.BackupMetadata) error {
 	if c.config == nil {
-		return
+		return nil
 	}
 	base := c.cloudLogBase(c.config.CloudLogPath)
 	if base == "" {
-		return
+		return nil
 	}
 	if _, outside := LocalCloudLogOutside(c.config.CloudLogPath, c.localRoot); outside {
-		return
+		return nil
 	}
 	c.retTally.hasLogPath = true
-	if c.isCloudLogPathUnavailable() {
-		// countLogFiles found the folder missing earlier in this pass and said so.
-		logging.DebugStep(c.logger, "cloud orphan logs", "skipped path=%s reason=log_path_missing", base)
-		return
-	}
 	res := pruneOrphanLogs(ctx, c.logger, orphanLogTarget{
 		op:       "cloud orphan logs",
 		where:    base,
@@ -2560,6 +2561,7 @@ func (c *CloudStorage) pruneOrphanLogs(ctx context.Context, backups []*types.Bac
 		remove: c.deleteLogObject,
 	}, backups, c.retTally.removed)
 	mergeOrphanLogs(&c.lastRet, &c.retTally, res)
+	return res.stopped
 }
 
 // listLogNames returns the file names in the cloud log folder. A folder rclone reports

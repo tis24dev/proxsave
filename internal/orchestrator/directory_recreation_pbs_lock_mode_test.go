@@ -3,6 +3,7 @@ package orchestrator
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -23,7 +24,9 @@ func TestCreatePBSDatastoreLockFile(t *testing.T) {
 	if err := createPBSDatastoreLockFile(lock); err == nil {
 		t.Fatalf("a second create over the existing lock must fail")
 	}
-	if err := createPBSDatastoreLockFile("/etc/proxsave-test/.lock"); err == nil {
-		t.Fatalf("a lock in a system-critical directory must be refused")
+	// The directory does not exist, so any error would do here: the refusal has to be
+	// the path validation's, or the test passes with the validation gone.
+	if err := createPBSDatastoreLockFile("/etc/proxsave-test/.lock"); err == nil || !strings.Contains(err.Error(), "unsafe datastore lock path") {
+		t.Fatalf("a lock in a system-critical directory must be refused by the path validation, got %v", err)
 	}
 }

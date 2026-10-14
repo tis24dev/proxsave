@@ -23,6 +23,7 @@ import (
 )
 
 var (
+	newInstallGeteuid                = os.Geteuid
 	newInstallEnsureInteractiveStdin = ensureInteractiveStdin
 	newInstallConfirmCLI             = confirmNewInstallCLI
 	newInstallConfirmTUI             = confirmNewInstallCharm
@@ -322,9 +323,27 @@ func runPostInstallAuditCLI(ctx context.Context, reader *bufio.Reader, execPath,
 	return nil
 }
 
+// newInstallNotRootError is the reset of the installation refused to anyone but root.
+// Its text is the sentence the operator reads, printed as is by both --new-install and
+// the dashboard's Wipe install.
+type newInstallNotRootError struct{}
+
+func (newInstallNotRootError) Error() string { return "Installation reset requires root privileges" }
+
+var errNewInstallNotRoot error = newInstallNotRootError{}
+
 func runNewInstall(ctx context.Context, configPath string, bootstrap *logging.BootstrapLogger, useCLI bool) (err error) {
 	done := logging.DebugStartBootstrap(bootstrap, "new-install workflow", "config=%s", configPath)
 	defer func() { done(err) }()
+
+	// The reset removes the install tree, which root owns: as anyone else it can stop
+	// half way through, with part of the tree already gone. Refused before anything is
+	// asked or touched.
+	euid := newInstallGeteuid()
+	logging.DebugStepBootstrap(bootstrap, "new-install workflow", "euid=%d", euid)
+	if euid != 0 {
+		return errNewInstallNotRoot
+	}
 
 	logging.DebugStepBootstrap(bootstrap, "new-install workflow", "ensuring interactive stdin")
 	if err := newInstallEnsureInteractiveStdin(); err != nil {

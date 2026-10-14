@@ -498,6 +498,9 @@ func (l *LocalStorage) deleteAssociatedLog(ctx context.Context, backupFile strin
 
 	logName := fmt.Sprintf("backup-%s-%s.log", host, ts)
 	fullPath := filepath.Join(logPath, logName)
+	if keptOpenLog(ctx, l.logger, "Local logs", logPath, logName, fsIoTimeout(l.config)) {
+		return false
+	}
 
 	// Bounded against a dead/stale mount: on a cancelled/expired ctx safefs
 	// returns immediately without running the remove (best-effort cleanup).
@@ -642,20 +645,26 @@ func (l *LocalStorage) ApplyRetention(ctx context.Context, config RetentionConfi
 	if err != nil {
 		return deleted, err
 	}
-	l.pruneOrphanLogs(ctx, backups)
+	if err := l.pruneOrphanLogs(ctx, backups); err != nil {
+		return deleted, err
+	}
 	return deleted, nil
 }
 
 // pruneOrphanLogs runs the orphan-log pass (log_orphans.go) on LOG_PATH once the
 // archives are rotated, and folds what it did into this pass's summary.
-func (l *LocalStorage) pruneOrphanLogs(ctx context.Context, backups []*types.BackupMetadata) {
+func (l *LocalStorage) pruneOrphanLogs(ctx context.Context, backups []*types.BackupMetadata) error {
 	logPath := strings.TrimSpace(l.config.LogPath)
 	if logPath == "" {
-		return
+		return nil
 	}
 	l.retTally.hasLogPath = true
 	timeout := fsIoTimeout(l.config)
 	res := pruneOrphanLogs(ctx, l.logger, orphanLogTarget{
+		own: ownLogIn(l.logger, logPath),
+		heldOpen: func(ctx context.Context) (map[string]bool, error) {
+			return safefs.HeldOpenIn(ctx, logPath, timeout)
+		},
 		op:       "local orphan logs",
 		where:    logPath,
 		hostname: l.hostname,
@@ -668,6 +677,7 @@ func (l *LocalStorage) pruneOrphanLogs(ctx context.Context, backups []*types.Bac
 		},
 	}, backups, l.retTally.removed)
 	mergeOrphanLogs(&l.lastRet, &l.retTally, res)
+	return res.stopped
 }
 
 // applyGFSRetention applies GFS (Grandfather-Father-Son) retention policy

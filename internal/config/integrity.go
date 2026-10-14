@@ -167,9 +167,15 @@ func (r *ConfigIntegrityReport) HasIssues() bool {
 // Nothing here rejects a configuration or changes which value wins. Last-wins stays
 // the loader's rule; the audit only stops it from being silent.
 func AuditConfigFile(path string) (*ConfigIntegrityReport, error) {
-	// The operator's configuration path, cleaned as gosec G304 expects: the file
-	// parseEnvFile opens, unless the path climbs ".." through a symbolic link.
-	file, err := os.Open(filepath.Clean(path))
+	// The operator's configuration path, resolved through its symbolic links the way
+	// the kernel does when parseEnvFile opens it, so a ".." after a link names the same
+	// file here as there. Resolved, it is also a clean path, which is what gosec G304
+	// asks of a file opened from a variable.
+	resolved, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		return nil, fmt.Errorf("cannot open config file: %w", err)
+	}
+	file, err := os.Open(resolved)
 	if err != nil {
 		return nil, fmt.Errorf("cannot open config file: %w", err)
 	}

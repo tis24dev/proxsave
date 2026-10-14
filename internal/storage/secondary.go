@@ -693,6 +693,9 @@ func (s *SecondaryStorage) deleteAssociatedLog(ctx context.Context, backupFile s
 
 	logName := fmt.Sprintf("backup-%s-%s.log", host, ts)
 	fullPath := filepath.Join(logPath, logName)
+	if keptOpenLog(ctx, s.logger, "Secondary logs", logPath, logName, fsIoTimeout(s.config)) {
+		return false
+	}
 
 	// Bounded against a dead/stale mount: on a cancelled/expired ctx safefs
 	// returns immediately without running the remove (best-effort cleanup).
@@ -819,20 +822,26 @@ func (s *SecondaryStorage) ApplyRetention(ctx context.Context, config RetentionC
 	if err != nil {
 		return deleted, err
 	}
-	s.pruneOrphanLogs(ctx, backups)
+	if err := s.pruneOrphanLogs(ctx, backups); err != nil {
+		return deleted, err
+	}
 	return deleted, nil
 }
 
 // pruneOrphanLogs runs the orphan-log pass (log_orphans.go) on SECONDARY_LOG_PATH
 // once the archives are rotated, and folds what it did into this pass's summary.
-func (s *SecondaryStorage) pruneOrphanLogs(ctx context.Context, backups []*types.BackupMetadata) {
+func (s *SecondaryStorage) pruneOrphanLogs(ctx context.Context, backups []*types.BackupMetadata) error {
 	logPath := strings.TrimSpace(s.config.SecondaryLogPath)
 	if logPath == "" {
-		return
+		return nil
 	}
 	s.retTally.hasLogPath = true
 	timeout := fsIoTimeout(s.config)
 	res := pruneOrphanLogs(ctx, s.logger, orphanLogTarget{
+		own: ownLogIn(s.logger, logPath),
+		heldOpen: func(ctx context.Context) (map[string]bool, error) {
+			return safefs.HeldOpenIn(ctx, logPath, timeout)
+		},
 		op:       "secondary orphan logs",
 		where:    logPath,
 		hostname: s.hostname,
@@ -845,6 +854,7 @@ func (s *SecondaryStorage) pruneOrphanLogs(ctx context.Context, backups []*types
 		},
 	}, backups, s.retTally.removed)
 	mergeOrphanLogs(&s.lastRet, &s.retTally, res)
+	return res.stopped
 }
 
 // resolveRetentionOwners fills in each candidate's Hostname and ServerID from its

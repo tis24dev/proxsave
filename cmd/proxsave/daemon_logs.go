@@ -46,13 +46,16 @@ func daemonLogKey(name string) (host, ts string, ok bool) {
 	return rest[:len(rest)-tsLen-1], ts, true
 }
 
-// rotateDaemonLogs keeps the newest daemonLogsKept daemon logs of this host in the
-// folder of current, the log this daemon start opened, and deletes the older ones. A
-// new log is born at every start of the process (reboot, upgrade, restart) and nothing
-// else ever removes one (discussion #336). Only the logs carrying current's host are
-// looked at, so a folder shared by several hosts keeps each host's own three, and
-// current itself is never deleted. The evidence is DEBUG; a log it cannot delete gets
-// its fact line and the outcome, INFO because nothing is asked of the operator.
+// rotateDaemonLogs keeps daemonLogsKept daemon logs of this host in the folder of
+// current, the log this daemon start opened: current itself and the newest others, and
+// deletes the older ones. A new log is born at every start of the process (reboot,
+// upgrade, restart) and nothing else ever removes one (discussion #336). Only the logs
+// carrying current's host are looked at, so a folder shared by several hosts keeps
+// each host's own three. current counts toward the three wherever its name sorts, so a
+// clock set back cannot leave a fourth. No log a process still holds open is deleted,
+// such as the one of the --daemon-setup that started this daemon; when the open logs
+// cannot be read, none is. The evidence is DEBUG; a log it cannot delete gets its fact
+// line and the outcome, INFO because nothing is asked of the operator.
 func rotateDaemonLogs(ctx context.Context, logger *logging.Logger, current string, timeout time.Duration) {
 	const op = "daemon log rotation"
 	if current == "" {
@@ -87,26 +90,39 @@ func rotateDaemonLogs(ctx context.Context, logger *logging.Logger, current strin
 		return
 	}
 
-	var own []string
+	var others []string
+	listed := 0
 	for _, name := range names {
 		if h, _, ok := daemonLogKey(name); ok && strings.EqualFold(h, host) {
-			own = append(own, name)
-		}
-	}
-	// Same host and a fixed-width timestamp: the name order is the time order.
-	sort.Sort(sort.Reverse(sort.StringSlice(own)))
-	var expired []string
-	if len(own) > daemonLogsKept {
-		for _, name := range own[daemonLogsKept:] {
+			listed++
 			if name != currentName {
-				expired = append(expired, name)
+				others = append(others, name)
 			}
 		}
 	}
-	logging.DebugStep(logger, op, "listed=%d delete=%d", len(own), len(expired))
+	// Same host and a fixed-width timestamp: the name order is the time order.
+	sort.Sort(sort.Reverse(sort.StringSlice(others)))
+	var expired []string
+	if len(others) > daemonLogsKept-1 {
+		expired = others[daemonLogsKept-1:]
+	}
+	logging.DebugStep(logger, op, "listed=%d delete=%d", listed, len(expired))
+	if len(expired) == 0 {
+		return
+	}
+
+	open, err := safefs.HeldOpenIn(ctx, dir, timeout)
+	if err != nil {
+		logging.DebugStep(logger, op, "skipped stage=open_check path=%s error=%v", dir, err)
+		return
+	}
 
 	failed := 0
 	for _, name := range expired {
+		if open[name] {
+			logging.DebugStep(logger, op, "kept %s reason=held_open", name)
+			continue
+		}
 		err := safefs.Remove(ctx, filepath.Join(dir, name), timeout)
 		switch {
 		case err == nil:
