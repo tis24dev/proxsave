@@ -34,12 +34,23 @@ func SetProcRootForTest(root string) (restore func()) {
 // be read may hold a log open, so an answer that left it out is not an answer.
 func HeldOpenIn(ctx context.Context, dir string, timeout time.Duration) (map[string]bool, error) {
 	return Run(ctx, "held-open", dir, timeout, func() (map[string]bool, error) {
-		folders := make(map[string]bool, 2)
-		if abs, err := filepath.Abs(dir); err == nil {
-			folders[filepath.Clean(abs)] = true
+		// The folder is matched in both its forms, as written and resolved, because the
+		// kernel reports the resolved one. A folder that cannot be resolved could not be
+		// matched, so that fails the scan too; only a folder that does not exist answers
+		// at once, since it holds no log to protect.
+		abs, err := filepath.Abs(dir)
+		if err != nil {
+			return nil, err
 		}
-		if resolved, err := filepath.EvalSymlinks(dir); err == nil {
+		folders := map[string]bool{filepath.Clean(abs): true}
+		resolved, err := filepath.EvalSymlinks(dir)
+		switch {
+		case err == nil:
 			folders[filepath.Clean(resolved)] = true
+		case errors.Is(err, fs.ErrNotExist):
+			return map[string]bool{}, nil
+		default:
+			return nil, err
 		}
 		procs, err := os.ReadDir(procRoot)
 		if err != nil {

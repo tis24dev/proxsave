@@ -126,3 +126,25 @@ func TestHeldOpenInOnTheRealProcessTable(t *testing.T) {
 		t.Fatalf("held=%v err=%v, want open.log", held, err)
 	}
 }
+
+// A folder that cannot be resolved could not be matched against the links: the scan
+// fails rather than answer that nothing is held. A folder that does not exist holds
+// nothing, and says so.
+func TestHeldOpenInResolvingTheFolder(t *testing.T) {
+	fakeProc(t, 4242)
+	base := t.TempDir()
+	loopA, loopB := filepath.Join(base, "a"), filepath.Join(base, "b")
+	if err := os.Symlink(loopB, loopA); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(loopA, loopB); err != nil {
+		t.Fatal(err)
+	}
+	if held, err := HeldOpenIn(context.Background(), loopA, 5*time.Second); err == nil {
+		t.Fatalf("held=%v and no error for a folder that cannot be resolved", held)
+	}
+	held, err := HeldOpenIn(context.Background(), filepath.Join(base, "missing"), 5*time.Second)
+	if err != nil || len(held) != 0 {
+		t.Fatalf("held=%v err=%v for a missing folder, want nothing and no error", held, err)
+	}
+}
