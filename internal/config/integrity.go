@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"fmt"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 
@@ -244,7 +245,9 @@ func (r *ConfigIntegrityReport) HasIssues() bool {
 // Nothing here rejects a configuration or changes which value wins. Last-wins stays
 // the loader's rule; the audit only stops it from being silent.
 func AuditConfigFile(path string) (*ConfigIntegrityReport, error) {
-	file, err := os.Open(path) // #nosec G304 - operator-supplied configuration path, same one parseEnvFile opens
+	// The operator's configuration path, cleaned as gosec G304 expects: the file
+	// parseEnvFile opens, unless the path climbs ".." through a symbolic link.
+	file, err := os.Open(filepath.Clean(path))
 	if err != nil {
 		return nil, fmt.Errorf("cannot open config file: %w", err)
 	}
