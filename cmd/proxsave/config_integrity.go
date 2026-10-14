@@ -108,14 +108,6 @@ func renderConfigIntegrityReport(bootstrap *logging.BootstrapLogger, report *con
 		bootstrap.Debug("Configuration integrity: %s is assigned in the file and matched no rule: %s",
 			name, config.UnknownRuleTrace())
 	}
-	for _, legacy := range report.Legacy {
-		consulted := legacy.Canonical
-		if legacy.Wins {
-			consulted = legacy.Name
-		}
-		bootstrap.Debug("Configuration integrity: %s is a legacy alias for %s; the loader consults %s first, canonical also assigned=%v",
-			legacy.Name, legacy.Canonical, consulted, legacy.CanonicalAlsoSet)
-	}
 
 	for _, duplicated := range report.Duplicated {
 		bootstrap.Warning("%s%s", integrityFindingIndent, duplicatedVariableSentence(duplicated))
@@ -139,25 +131,9 @@ func renderConfigIntegrityReport(bootstrap *logging.BootstrapLogger, report *con
 		}
 		bootstrap.Info("%s%s is not a known variable and is ignored", integrityFindingIndent, name)
 	}
-	for _, legacy := range report.Legacy {
-		// Two facts, two levels. Both names set means one of the two lines has no effect
-		// at all, which is the duplicate's harm under another shape and earns a WARNING.
-		// The legacy name on its own works, so it is an INFO naming where to move to.
-		if !legacy.CanonicalAlsoSet {
-			bootstrap.Info("%s%s is the legacy name for %s and is still read; rename it to %s when convenient",
-				integrityFindingIndent, legacy.Name, legacy.Canonical, legacy.Canonical)
-			continue
-		}
-		winner, ignored := legacy.Canonical, legacy.Name
-		if legacy.Wins {
-			winner, ignored = legacy.Name, legacy.Canonical
-		}
-		bootstrap.Warning("%s%s is the legacy name for %s and both are set; %s wins and %s has no effect",
-			integrityFindingIndent, legacy.Name, legacy.Canonical, winner, ignored)
-	}
 
-	bootstrap.Debug("Configuration integrity: %d duplicated, %d absent, %d unknown, %d legacy (duration=%s)",
-		len(report.Duplicated), len(report.Absent), len(report.Unknown), len(report.Legacy),
+	bootstrap.Debug("Configuration integrity: %d duplicated, %d absent, %d unknown (duration=%s)",
+		len(report.Duplicated), len(report.Absent), len(report.Unknown),
 		elapsed.Round(100*time.Microsecond))
 	if report.HasIssues() {
 		bootstrap.Warning("⚠ Configuration file: %s", integrityVerdictCounts(report))
@@ -209,11 +185,8 @@ func integrityVerdictCounts(report *config.ConfigIntegrityReport) string {
 	if n := len(report.NearMiss); n > 0 {
 		parts = append(parts, fmt.Sprintf("%d possible typo", n))
 	}
-	if n := len(report.Legacy); n > 0 {
-		parts = append(parts, fmt.Sprintf("%d legacy", n))
-	}
 	if len(parts) == 0 {
-		return "no duplicated, absent, unknown or legacy variable"
+		return "no duplicated, absent or unknown variable"
 	}
 	return strings.Join(parts, ", ")
 }

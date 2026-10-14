@@ -65,7 +65,7 @@ LOG_PATH=/test/log
 LOCK_PATH=/test/lock
 SECONDARY_ENABLED=true
 SECONDARY_PATH=/test/secondary
-LOCAL_RETENTION_DAYS=7
+MAX_LOCAL_BACKUPS=7
 TELEGRAM_ENABLED=false
 METRICS_ENABLED=true
 BACKUP_PVE_JOBS=false
@@ -625,7 +625,9 @@ func TestConfigDefaults(t *testing.T) {
 	}
 }
 
-func TestLoadConfigNotificationLegacyEnableAliases(t *testing.T) {
+// The variable names of the Bash version are no longer read: the configuration upgrade
+// renames them, and a line left under an old name has no effect.
+func TestLoadConfigIgnoresLegacyNotificationNames(t *testing.T) {
 	tmpDir := t.TempDir()
 	configPath := filepath.Join(tmpDir, "legacy_notifications.env")
 
@@ -645,17 +647,60 @@ WEBHOOK_ENABLE=true
 		t.Fatalf("LoadConfig() error = %v", err)
 	}
 
-	if !cfg.TelegramEnabled {
-		t.Error("Expected TelegramEnabled to be true via TELEGRAM_ENABLE")
+	if cfg.TelegramEnabled || cfg.EmailEnabled || cfg.GotifyEnabled || cfg.WebhookEnabled {
+		t.Errorf("a legacy name enabled a channel: telegram=%v email=%v gotify=%v webhook=%v",
+			cfg.TelegramEnabled, cfg.EmailEnabled, cfg.GotifyEnabled, cfg.WebhookEnabled)
 	}
-	if !cfg.EmailEnabled {
-		t.Error("Expected EmailEnabled to be true via EMAIL_ENABLE")
+}
+
+// Every variable name of the Bash version is ignored, the seven the loader used to
+// consult before the current name included.
+func TestLoadConfigIgnoresEveryLegacyName(t *testing.T) {
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "legacy_all.env")
+
+	content := `LOCAL_BACKUP_PATH=/legacy/backup
+BACKUP_PATH=/current/backup
+LOCAL_LOG_PATH=/legacy/log
+ENABLE_SECONDARY_BACKUP=true
+SECONDARY_BACKUP_PATH=/legacy/secondary
+ENABLE_CLOUD_BACKUP=true
+RCLONE_REMOTE=legacyremote
+PROMETHEUS_ENABLED=true
+EMAIL_ENABLED=true
+EMAIL_FALLBACK_PMF=false
+FULL_SECURITY_CHECK=false
+CLOUD_CONNECTIVITY_TIMEOUT=99
+LOCAL_RETENTION_DAYS=99
+AGE_RECIPIENTS=age1legacy
+`
+	if err := os.WriteFile(configPath, []byte(content), 0o600); err != nil {
+		t.Fatalf("Failed to create test config: %v", err)
 	}
-	if !cfg.GotifyEnabled {
-		t.Error("Expected GotifyEnabled to be true via GOTIFY_ENABLE")
+	setBaseDirEnv(t, "/legacy/all/base")
+
+	cfg, err := LoadConfig(configPath)
+	if err != nil {
+		t.Fatalf("LoadConfig() error = %v", err)
 	}
-	if !cfg.WebhookEnabled {
-		t.Error("Expected WebhookEnabled to be true via WEBHOOK_ENABLE")
+	if cfg.BackupPath != "/current/backup" {
+		t.Errorf("BackupPath = %q; want the current name's /current/backup", cfg.BackupPath)
+	}
+	if cfg.LogPath != filepath.Join(cfg.BaseDir, "log") {
+		t.Errorf("LogPath = %q; want the default", cfg.LogPath)
+	}
+	if cfg.SecondaryEnabled || cfg.SecondaryPath != "" || cfg.CloudEnabled || cfg.CloudRemote != "" || cfg.MetricsEnabled {
+		t.Errorf("a legacy name was read: secondary=%v %q cloud=%v %q metrics=%v",
+			cfg.SecondaryEnabled, cfg.SecondaryPath, cfg.CloudEnabled, cfg.CloudRemote, cfg.MetricsEnabled)
+	}
+	if !cfg.EmailFallbackSendmail || !cfg.SecurityCheckEnabled {
+		t.Errorf("a legacy name was read: sendmail fallback=%v security check=%v", cfg.EmailFallbackSendmail, cfg.SecurityCheckEnabled)
+	}
+	if cfg.RcloneTimeoutConnection != 30 || cfg.LocalRetentionDays != 7 {
+		t.Errorf("a legacy name was read: rclone timeout=%d local retention=%d", cfg.RcloneTimeoutConnection, cfg.LocalRetentionDays)
+	}
+	if len(cfg.AgeRecipients) != 0 {
+		t.Errorf("AgeRecipients = %v; AGE_RECIPIENTS must not be read", cfg.AgeRecipients)
 	}
 }
 
@@ -706,7 +751,6 @@ func TestLoadConfigEmailDeliveryAliasesAndFallbackSendmail(t *testing.T) {
 	content := `EMAIL_ENABLED=true
 EMAIL_DELIVERY_METHOD=proxmox-notifications
 EMAIL_FALLBACK_SENDMAIL=false
-EMAIL_FALLBACK_PMF=true
 `
 	if err := os.WriteFile(configPath, []byte(content), 0o600); err != nil {
 		t.Fatalf("Failed to create test config: %v", err)
@@ -723,7 +767,7 @@ EMAIL_FALLBACK_PMF=true
 		t.Fatalf("EmailDeliveryMethod=%q, want pmf", cfg.EmailDeliveryMethod)
 	}
 	if cfg.EmailFallbackSendmail {
-		t.Fatalf("EMAIL_FALLBACK_SENDMAIL should take precedence over transitional EMAIL_FALLBACK_PMF")
+		t.Fatalf("EmailFallbackSendmail = true; want the false EMAIL_FALLBACK_SENDMAIL sets")
 	}
 }
 
@@ -747,7 +791,8 @@ func TestNormalizeEmailDeliveryMethod(t *testing.T) {
 	}
 }
 
-func TestLoadEnvOverridesNotificationLegacyEnableAliases(t *testing.T) {
+// The environment no longer accepts the legacy notification names either.
+func TestLoadEnvOverridesIgnoreLegacyNotificationNames(t *testing.T) {
 	tmpDir := t.TempDir()
 	configPath := filepath.Join(tmpDir, "legacy_notification_env_override.env")
 
@@ -777,17 +822,9 @@ BOT_TELEGRAM_TYPE=centralized
 		t.Fatalf("LoadConfig() error = %v", err)
 	}
 
-	if !cfg.TelegramEnabled {
-		t.Error("Expected TelegramEnabled to be true via TELEGRAM_ENABLE env override")
-	}
-	if !cfg.EmailEnabled {
-		t.Error("Expected EmailEnabled to be true via EMAIL_ENABLE env override")
-	}
-	if !cfg.GotifyEnabled {
-		t.Error("Expected GotifyEnabled to be true via GOTIFY_ENABLE env override")
-	}
-	if !cfg.WebhookEnabled {
-		t.Error("Expected WebhookEnabled to be true via WEBHOOK_ENABLE env override")
+	if cfg.TelegramEnabled || cfg.EmailEnabled || cfg.GotifyEnabled || cfg.WebhookEnabled {
+		t.Errorf("a legacy environment name enabled a channel: telegram=%v email=%v gotify=%v webhook=%v",
+			cfg.TelegramEnabled, cfg.EmailEnabled, cfg.GotifyEnabled, cfg.WebhookEnabled)
 	}
 	if cfg.TelegramBotType != "personal" {
 		t.Errorf("TelegramBotType = %q; want personal from env override", cfg.TelegramBotType)
@@ -1100,41 +1137,35 @@ WEBHOOK_TIMEOUT=30
 	}
 }
 
-func TestConfigFallbackHelpers(t *testing.T) {
+func TestConfigSingleNameHelpers(t *testing.T) {
 	cfg := &Config{
 		raw: map[string]string{
 			"STR_PRIMARY": "value1",
 			"STR_EMPTY":   "",
-			"BOOL_YES":    "true",
-			"INT_NUM":     "42",
 			"SLICE_MULTI": "a, b; c\n\"d\"",
+			"SLICE_EMPTY": " ,; ",
 		},
 	}
 
-	if got := cfg.getStringWithFallback([]string{"MISSING", "STR_PRIMARY"}, "def"); got != "value1" {
-		t.Fatalf("getStringWithFallback primary = %q; want value1", got)
+	if got := cfg.getNonEmptyString("STR_PRIMARY", "def"); got != "value1" {
+		t.Fatalf("getNonEmptyString = %q; want value1", got)
 	}
-	if got := cfg.getStringWithFallback([]string{"STR_EMPTY", "MISSING"}, "fallback"); got != "fallback" {
-		t.Fatalf("getStringWithFallback empty = %q; want fallback", got)
+	if got := cfg.getNonEmptyString("STR_EMPTY", "fallback"); got != "fallback" {
+		t.Fatalf("getNonEmptyString empty = %q; want fallback", got)
 	}
-
-	if got := cfg.getBoolWithFallback([]string{"MISSING", "BOOL_YES"}, false); !got {
-		t.Fatalf("getBoolWithFallback = false; want true")
-	}
-	if got := cfg.getBoolWithFallback([]string{"MISSING"}, true); !got {
-		t.Fatalf("getBoolWithFallback default = false; want true")
+	if got := cfg.getNonEmptyString("MISSING", "fallback"); got != "fallback" {
+		t.Fatalf("getNonEmptyString missing = %q; want fallback", got)
 	}
 
-	if got := cfg.getIntWithFallback([]string{"MISSING", "INT_NUM"}, 7); got != 42 {
-		t.Fatalf("getIntWithFallback = %d; want 42", got)
-	}
-	if got := cfg.getIntWithFallback([]string{"MISSING"}, 7); got != 7 {
-		t.Fatalf("getIntWithFallback default = %d; want 7", got)
-	}
-
-	slice := cfg.getStringSliceWithFallback([]string{"SLICE_MULTI"}, nil)
+	slice := cfg.getPatternList("SLICE_MULTI", nil)
 	if len(slice) != 4 || slice[0] != "a" || slice[1] != "b" || slice[2] != "c" || slice[3] != "d" {
-		t.Fatalf("getStringSliceWithFallback = %#v; want [a b c d]", slice)
+		t.Fatalf("getPatternList = %#v; want [a b c d]", slice)
+	}
+	if got := cfg.getPatternList("SLICE_EMPTY", []string{"def"}); len(got) != 1 || got[0] != "def" {
+		t.Fatalf("getPatternList with no item = %#v; want the default", got)
+	}
+	if got := cfg.getPatternList("MISSING", nil); got != nil {
+		t.Fatalf("getPatternList missing = %#v; want nil", got)
 	}
 }
 

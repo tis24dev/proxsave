@@ -283,6 +283,10 @@ var notes = []Note{
 		Version: "0.44.0",
 		Lines: []string{
 			"The daemon writes its log to its own folder, DAEMON_LOG_PATH (default: inside LOG_PATH), keeping the last 3.",
+			"Legacy variable names from the Bash version of ProxSave are no longer read.",
+		},
+		Actions: []string{
+			"If backup.env still uses a legacy variable name, rename it to the current one.",
 		},
 	},
 }

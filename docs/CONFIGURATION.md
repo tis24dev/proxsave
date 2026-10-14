@@ -54,8 +54,8 @@ opens before the configuration is loaded, so this route also works on a host who
 An `Edit existing` pass is not byte-for-byte identical, though, and two of its
 normalizations are worth knowing: it removes any `BASE_DIR`, `CRON_SCHEDULE`, `CRON_HOUR`
 and `CRON_MINUTE` lines, which are derived at runtime and deprecated in the file (see
-[Storage Paths](#storage-paths)), and with email enabled it drops the transitional
-`EMAIL_FALLBACK_PMF` after carrying its value onto `EMAIL_FALLBACK_SENDMAIL`.
+[Storage Paths](#storage-paths)), and it renames any variable still written under a
+name of the Bash version to its current name, keeping the value in effect.
 
 The form has eighteen fields and writes exactly the variables below. Everything else in
 this reference is hand-edited.
@@ -134,26 +134,23 @@ INFO     Configuration integrity check:
 DEBUG    Configuration integrity: file=/opt/proxsave/configs/backup.env lines=475 assignments=182 distinct=182 template=182
 DEBUG    Configuration integrity: template assigns 182 variables and documents 33 more as commented examples
 DEBUG    Configuration integrity: variables that may repeat without discarding: AGE_RECIPIENT, BACKUP_BLACKLIST, BACKUP_EXCLUDE_PATTERNS, CUSTOM_BACKUP_PATHS
-DEBUG    Configuration integrity: 0 duplicated, 0 absent, 0 unknown, 0 legacy (duration=3.1ms)
+DEBUG    Configuration integrity: 0 duplicated, 0 absent, 0 unknown (duration=3.1ms)
 INFO     Configuration file ok
 ```
 
-It reports four things, one line each, and their levels differ because the facts differ:
+It reports three things, one line each, and their levels differ because the facts differ:
 
 | Finding | Level | Meaning |
 |---------|-------|---------|
 | duplicated | `WARNING` | the variable is assigned more than once, so a value you wrote is discarded |
 | absent | `WARNING` | the binary carries the variable in its embedded template, the file does not |
 | unknown | `INFO` | the file assigns a variable the binary does not read at all: a misspelling |
-| legacy | `WARNING` or `INFO` | the file uses a [legacy name](#legacy-key-names). `WARNING` when the canonical name is set too, because then one of the two lines has no effect; `INFO` when the legacy name is the only one |
 
 ```text
 WARNING    PERSONAL_SCRIPT_PRE_RUN is set twice; line 456 wins and the value on line 120 is discarded
 WARNING    HEALTHCHECK_UPDATES_ID is absent and falls back to its default
-WARNING    LOCAL_BACKUP_PATH is the legacy name for BACKUP_PATH and both are set; LOCAL_BACKUP_PATH wins and BACKUP_PATH has no effect
-INFO       RCLONE_REMOTE is the legacy name for CLOUD_REMOTE and is still read; rename it to CLOUD_REMOTE when convenient
 INFO       PERSONAL_SCRIPTS_PRERUN is not a known variable and is ignored
-WARNING  Configuration file: 1 duplicated, 1 absent, 1 unknown, 2 legacy
+WARNING  Configuration file: 1 duplicated, 1 absent, 1 unknown
 ```
 
 ### Duplicated: the one that loses data
@@ -688,24 +685,6 @@ archive (a dry run, a failed run) is deleted once it is older than the oldest
 backup kept at that destination.
 
 **Path resolution**: `${BASE_DIR}` expands automatically from the installed `proxsave` executable path. Scalar string values also support `$VAR` / `${VAR}` expansion (config keys first, then environment variables), but `BASE_DIR` itself is not configurable from `backup.env` or the parent environment.
-
-### Legacy key names
-
-Seven keys have a legacy alias from the Bash-era configuration, and **the legacy name wins when both are present**:
-
-| Legacy name (wins) | Canonical name |
-|---|---|
-| `LOCAL_BACKUP_PATH` | `BACKUP_PATH` |
-| `LOCAL_LOG_PATH` | `LOG_PATH` |
-| `ENABLE_SECONDARY_BACKUP` | `SECONDARY_ENABLED` |
-| `SECONDARY_BACKUP_PATH` | `SECONDARY_PATH` |
-| `ENABLE_CLOUD_BACKUP` | `CLOUD_ENABLED` |
-| `RCLONE_REMOTE` | `CLOUD_REMOTE` |
-| `PROMETHEUS_ENABLED` | `METRICS_ENABLED` |
-
-These seven are the ones where the legacy name is checked first. Every other pair goes the other way round: the canonical name is consulted first, so the legacy name on its own still works and setting both leaves the legacy line with no effect. Those pairs are not listed here because there are many of them and they are not the dangerous direction, but the [configuration integrity check](#configuration-integrity-check) names each one it finds in your file, whichever way it goes.
-
-This matters after `--upgrade-config`, which keeps unknown keys in a "Custom keys" section while also adding the template's canonical line, and does not prune any of these. A config inherited from an older install can end up with both, and editing the canonical one then has no effect: the backups keep landing wherever the legacy key points. Grep your `backup.env` for the left column and delete those lines once you have moved the value across, or read them off the [configuration integrity check](#configuration-integrity-check), which lists every one of them by name and says which of the two the loader consults first. Setting both is the case worth acting on, and the check raises a `WARNING` for it: one of the two lines has no effect, and it is not always the one you would guess. These seven are the pairs where the LEGACY name is consulted first; every other alias goes the other way, so there the canonical name wins and the legacy line is the one being ignored. The check states the direction per variable rather than leaving you to remember which list a name belongs to. Two more cloud pairs are listed in [CLOUD_STORAGE.md](CLOUD_STORAGE.md), where the canonical name wins instead, so check that table rather than assuming.
 
 ---
 
@@ -1384,8 +1363,7 @@ TELEGRAM_CONFIRM_INTERVAL_SECONDS=1
 **From the dashboard**: the form's **Email notifications** toggle writes `EMAIL_ENABLED`,
 and **Email delivery mode** writes `EMAIL_DELIVERY_METHOD` (the three options map to
 `relay`, `sendmail` and `pmf`). Neither field asks about `EMAIL_FALLBACK_SENDMAIL`: an
-existing value is preserved byte for byte, a legacy `EMAIL_FALLBACK_PMF` is migrated onto
-the current spelling, and only a file carrying neither gets `true` seeded. The recipient
+existing value is preserved byte for byte, and only a file without it gets `true` seeded. The recipient
 and From address are edited here.
 
 ```bash
@@ -1407,7 +1385,7 @@ EMAIL_RECIPIENT=                   # e.g., "admin@example.com"
 EMAIL_FROM=no-reply@proxmox.tis24.it
 ```
 
-If `EMAIL_ENABLED` is omitted, the default remains `false`. The legacy alias `EMAIL_ENABLE` is still accepted during migration and runtime loading.
+If `EMAIL_ENABLED` is omitted, the default remains `false`.
 
 **Which delivery mode should I choose?**
 
@@ -1421,7 +1399,7 @@ The value `pmf` may also be written as `proxmox`, `proxmox-notifications`, or `p
 
 **Notes**:
 - Allowed values for `EMAIL_DELIVERY_METHOD` are: `pmf`, `relay`, `sendmail` (invalid values will skip Email with a warning).
-- `EMAIL_FALLBACK_SENDMAIL=true` controls local `/usr/sbin/sendmail` failover. `EMAIL_FALLBACK_PMF` is accepted only as a transitional alias from older templates.
+- `EMAIL_FALLBACK_SENDMAIL=true` controls local `/usr/sbin/sendmail` failover.
 - `relay` requires a real mailbox recipient and blocks `root@` recipients; set `EMAIL_RECIPIENT` to a non-root mailbox if needed.
 - Default install behavior is `relay -> sendmail`.
 - If you manually set `EMAIL_DELIVERY_METHOD=pmf`, fallback order is `pmf -> relay -> sendmail` when `EMAIL_FALLBACK_SENDMAIL=true`.

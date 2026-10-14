@@ -46,6 +46,10 @@ type ExistingConfigDecision struct {
 	// recommended new values rather than the stored ones. It is also the single
 	// gate for adopting the crontab schedule (see ApplyScheduleSeed).
 	FromExistingFile bool
+	// Legacy are the variables of the Bash version Edit found in the file and carried
+	// over to their current names in BaseTemplate (config.MigrateLegacyVariables), so
+	// the wizard and the file it writes see the current names only.
+	Legacy []config.LegacyChange
 }
 
 // ExistingConfigPresent is the stat pre-check both front-ends run before asking
@@ -88,11 +92,13 @@ func ResolveExistingConfigDecision(action ExistingConfigAction, configPath strin
 		if err != nil {
 			return ExistingConfigDecision{}, fmt.Errorf("read existing configuration: %w", err)
 		}
+		base, legacy := config.MigrateLegacyVariables(string(content))
 		return ExistingConfigDecision{
-			BaseTemplate:     string(content),
+			BaseTemplate:     base,
 			SkipConfigWizard: false,
 			AbortInstall:     false,
 			FromExistingFile: true,
+			Legacy:           legacy,
 		}, nil
 	case ExistingConfigKeepContinue:
 		return ExistingConfigDecision{

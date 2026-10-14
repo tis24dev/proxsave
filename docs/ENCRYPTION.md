@@ -27,9 +27,9 @@ Inline recipients and file recipients are merged and deduplicated, so an old inl
 recipient can remain authorized after you replace the file.
 
 The normal recipient file is `${BASE_DIR}/identity/age/recipient.txt`. It contains
-public recipients, not private recovery keys. `AGE_RECIPIENTS` is a fallback alias used
-only when `AGE_RECIPIENT` is empty. See [recipient configuration](#configure-recipients)
-for supported formats, separators and permissions.
+public recipients, not private recovery keys. See
+[recipient configuration](#configure-recipients) for supported formats, separators and
+permissions.
 
 ### Choose recovery material you can retain
 
@@ -234,7 +234,6 @@ ENCRYPT_ARCHIVE=true                       # Master switch
 AGE_RECIPIENT_FILE=${BASE_DIR}/identity/age/recipient.txt   # Public recipients (recommended)
 
 # Optional: inline recipients (merged with file; supports comma/semicolon/pipe/newline)
-# AGE_RECIPIENTS (plural) is accepted as a fallback alias, used only when AGE_RECIPIENT is empty
 AGE_RECIPIENT=age1abc123...,age1def456...
 ```
 
@@ -469,7 +468,7 @@ is also rejected outright.
 
 **Notes**:
 - Proxsave stores **no private key and no passphrase**. Besides the recipients it does store the passphrase salt, a deliberately public value, in `identity/age/passphrase.salt` and as the `# passphrase-salt:` line inside the recipient file. Keep private keys and passphrases offline.
-- `AGE_RECIPIENT` (inline) and `AGE_RECIPIENT_FILE` are **merged and de-duplicated**. `AGE_RECIPIENTS` (plural) is accepted as a fallback alias for `AGE_RECIPIENT`, used only when `AGE_RECIPIENT` is empty.
+- `AGE_RECIPIENT` (inline) and `AGE_RECIPIENT_FILE` are **merged and de-duplicated**.
 - Both TUI and CLI setup flows support multiple recipients and de-duplicate repeated entries before saving.
 
 ---
@@ -497,7 +496,7 @@ Rotating encryption keys periodically improves security (recommended annually or
 
 4. After retention deletes older backups, remove the old recipient line from that same file.
 
-5. If the old recipient was **also** set inline, remove it from `AGE_RECIPIENT` (or `AGE_RECIPIENTS`) and from the environment. Otherwise deleting the file line changes nothing: the inline value is merged back on the next backup.
+5. If the old recipient was **also** set inline, remove it from `AGE_RECIPIENT` and from the environment. Otherwise deleting the file line changes nothing: the inline value is merged back on the next backup.
 
 **Important**:
 - Keep old private keys until you are sure all old backups are expired (or safely archived).
@@ -515,11 +514,9 @@ To really drop a compromised recipient, clear all of these:
 1. **`AGE_RECIPIENT` in `configs/backup.env`.** This key accumulates: every `AGE_RECIPIENT=`
    line in the file is kept, and each line may hold several recipients separated by comma,
    semicolon, pipe or newline. Remove or empty all of them.
-2. **`AGE_RECIPIENTS`** (plural) in the same file. It is read only when `AGE_RECIPIENT`
-   yields nothing, so emptying `AGE_RECIPIENT` silently hands control to it.
-3. **The `AGE_RECIPIENT` and `AGE_RECIPIENT_FILE` environment variables**, if a systemd
+2. **The `AGE_RECIPIENT` and `AGE_RECIPIENT_FILE` environment variables**, if a systemd
    unit, cron wrapper or shell profile sets them. Environment values override the file.
-4. **The recipient file itself**, which `--newkey` rewrites. That is the path in
+3. **The recipient file itself**, which `--newkey` rewrites. That is the path in
    `AGE_RECIPIENT_FILE`, which is only `${BASE_DIR}/identity/age/recipient.txt` when the key
    is empty.
 

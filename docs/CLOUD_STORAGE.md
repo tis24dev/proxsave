@@ -843,21 +843,6 @@ CLOUD_BATCH_PAUSE=1
 | `RCLONE_FLAGS` | _(empty)_ | Extra global rclone flags, split on whitespace and injected verbatim into **every backup-path** rclone command (right after the subcommand). The restore and decrypt cloud scan builds its rclone calls separately and does **not** receive them: see [How ProxSave invokes rclone](#how-proxsave-invokes-rclone). No shell quoting or validation, so keep each flag a single token (e.g. `--fast-list --checkers 8`). |
 | `BUNDLE_ASSOCIATED_FILES` | `true` | Bundle the archive and its sidecars into one `.bundle.tar` before upload (the default cloud layout). Set `false` to upload the raw archive plus separate sidecars. See [Cloud layout](#cloud-layout-bundle-vs-raw). |
 
-**Legacy env-var aliases.** For backward compatibility ProxSave also accepts these
-older names. **When both are present the winner is not consistent**, so never leave
-both in the file:
-
-| Canonical | Legacy alias | Which wins if both are set |
-|---|---|---|
-| `CLOUD_ENABLED` | `ENABLE_CLOUD_BACKUP` | the legacy key, even with an empty value |
-| `CLOUD_REMOTE` | `RCLONE_REMOTE` | the legacy key |
-| `MAX_CLOUD_BACKUPS` | `CLOUD_RETENTION_DAYS` | the canonical key |
-| `RCLONE_TIMEOUT_CONNECTION` | `CLOUD_CONNECTIVITY_TIMEOUT` | the canonical key |
-
-So adding `CLOUD_REMOTE=NewRemote` to a config that still carries
-`RCLONE_REMOTE=OldRemote` keeps uploading to `OldRemote`. Prefer the canonical names in
-new configs, and delete the legacy line rather than leaving it alongside.
-
 For complete configuration reference, see: **[Configuration Guide](CONFIGURATION.md)**
 
 ### Recommended Remote Path Formats (Important)

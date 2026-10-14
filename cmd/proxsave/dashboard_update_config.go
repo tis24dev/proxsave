@@ -78,6 +78,9 @@ func describeConfigPlan(r *config.UpgradeResult) string {
 
 	var b strings.Builder
 	fmt.Fprintf(&b, "Found %s.", summary)
+	for _, line := range legacyPlanLines(r.Legacy) {
+		b.WriteString("\n" + line)
+	}
 	if len(r.MissingKeys) > 0 {
 		b.WriteString("\nKeys to add:")
 		for i, k := range r.MissingKeys {

@@ -151,6 +151,7 @@ func runInstallTUI(ctx context.Context, configPath string, bootstrap *logging.Bo
 		// mirrored value to prefill "Run at"; without it the wizard would offer the
 		// 02:00 default instead of the host's real run time. Keep existing has no
 		// wizard to carry it, so its write stays deferred to the commit point.
+		logLegacyInstallChanges(bootstrap, "install workflow (tui)", decision.Legacy)
 		baseTemplate = adoptCronRunTimeIntoBase(ctx, decision, configPath, bootstrap)
 	default:
 		logging.DebugStepBootstrap(bootstrap, "install workflow (tui)", "using embedded template")

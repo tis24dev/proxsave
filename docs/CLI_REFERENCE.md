@@ -345,7 +345,7 @@ USE_COLOR=false proxsave --backup
 
 The examples use an explicit operation because environment assignments alone do not suppress the dashboard.
 
-**Priority**: for a key on the allowlist, environment variable > configuration file > default. One exception: if the file still carries the **legacy alias** of that key (see Legacy key names in [CONFIGURATION.md](CONFIGURATION.md)), the legacy line in the file wins over the environment, because the allowlist only carries the canonical name. For every other key the environment is not consulted at all. `BASE_DIR` is always runtime-detected and is not overridable from either place.
+**Priority**: for a key on the allowlist, environment variable > configuration file > default. For every other key the environment is not consulted at all. `BASE_DIR` is always runtime-detected and is not overridable from either place.
 
 ---
 

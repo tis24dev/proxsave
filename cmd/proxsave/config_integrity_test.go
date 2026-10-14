@@ -62,7 +62,7 @@ func TestIntegrityFindingsCarryTheAgreedLevels(t *testing.T) {
 // emitted BEFORE it: the audit knows the numbers before it renders them.
 func TestIntegrityDebugCountsPrecedeTheVerdict(t *testing.T) {
 	logged := renderIntegrityBlock(t, integrityReportWithFindings())
-	counts := strings.Index(logged, "Configuration integrity: 1 duplicated, 2 absent, 1 unknown, 0 legacy (duration=")
+	counts := strings.Index(logged, "Configuration integrity: 1 duplicated, 2 absent, 1 unknown (duration=")
 	verdict := strings.Index(logged, "⚠ Configuration file: 1 duplicated, 2 absent, 1 unknown")
 	if counts < 0 || verdict < 0 {
 		t.Fatalf("expected both the DEBUG counts and the verdict:\n%s", logged)
@@ -232,7 +232,6 @@ func TestTheDebugBlockExplainsEveryDecisionItMade(t *testing.T) {
 		"WEBHOOK_ENDPOINTS=mine\n" +
 		"WEBHOOK_MINE_URL=https://example.invalid/hook\n" +
 		"SAFE_PROCESSES=\"ffmpeg\"\n" +
-		"EMAIL_ENABLE=true\n" +
 		"PERSONAL_SCRIPTS_PRERUN=/tmp/x\n" +
 		"CUSTOM_BACKUP_PATHS=\"\n/etc/a\n\"\n"
 	// Derive positions from this input fixture, not the audit under test or
@@ -260,12 +259,8 @@ func TestTheDebugBlockExplainsEveryDecisionItMade(t *testing.T) {
 		// why each variable outside the template's active assignments was accepted
 		"SAFE_PROCESSES is read although the template does not assign it: documented there as a commented example",
 		"WEBHOOK_MINE_URL is read although the template does not assign it: per-endpoint webhook variable, WEBHOOK_<name>_<field>",
-		// A legacy alias is no longer explained as "read although the template does not
-		// assign it": it has its own category, and its own line says which of the two
-		// names the loader consults first.
-		"EMAIL_ENABLE is a legacy alias for EMAIL_ENABLED; the loader consults EMAIL_ENABLED first, canonical also assigned=true",
 		// why the one that was NOT accepted failed every rule
-		"PERSONAL_SCRIPTS_PRERUN is assigned in the file and matched no rule: not assigned in the template, not documented there, not a webhook endpoint field, not a legacy alias",
+		"PERSONAL_SCRIPTS_PRERUN is assigned in the file and matched no rule: not assigned in the template, not documented there, not a webhook endpoint field",
 		// which write form won, since the two resolve in opposite ways
 		fmt.Sprintf("CUSTOM_BACKUP_PATHS assigned on lines %d, %d; line %d wins (block form: it replaces everything before it)", customPathLines[0], customPathLines[1], customPathLines[1]),
 		// the template's own two halves, so the counts above can be reconstructed
@@ -274,45 +269,5 @@ func TestTheDebugBlockExplainsEveryDecisionItMade(t *testing.T) {
 		if !strings.Contains(logged, want) {
 			t.Fatalf("missing %q in:\n%s", want, logged)
 		}
-	}
-}
-
-// The legacy category has two levels because it describes two different facts. Both
-// names set means one of them has no effect at all, which is the same harm as a
-// duplicate and earns a WARNING. The legacy name alone works, so it is an INFO that
-// names the canonical one to move to.
-func TestALegacyAliasIsWarnedAboutOnlyWhenItSilencesTheCanonicalName(t *testing.T) {
-	logged := renderIntegrityBlock(t, &config.ConfigIntegrityReport{
-		Path: "/opt/proxsave/configs/backup.env",
-		Legacy: []config.LegacyVariable{
-			{Name: "LOCAL_BACKUP_PATH", Canonical: "BACKUP_PATH", Wins: true, CanonicalAlsoSet: true},
-			{Name: "EMAIL_ENABLE", Canonical: "EMAIL_ENABLED", CanonicalAlsoSet: true},
-			{Name: "RCLONE_REMOTE", Canonical: "CLOUD_REMOTE", Wins: true},
-		},
-	})
-	for _, want := range []string{
-		"WARNING    LOCAL_BACKUP_PATH is the legacy name for BACKUP_PATH and both are set; LOCAL_BACKUP_PATH wins and BACKUP_PATH has no effect",
-		"WARNING    EMAIL_ENABLE is the legacy name for EMAIL_ENABLED and both are set; EMAIL_ENABLED wins and EMAIL_ENABLE has no effect",
-		"INFO       RCLONE_REMOTE is the legacy name for CLOUD_REMOTE and is still read; rename it to CLOUD_REMOTE when convenient",
-		"WARNING  ⚠ Configuration file: 3 legacy",
-	} {
-		if !strings.Contains(logged, want) {
-			t.Fatalf("missing %q in:\n%s", want, logged)
-		}
-	}
-}
-
-// A legacy name that works on its own must not turn the verdict red: nothing the
-// operator wrote is being ignored, so it is the same shape as an unknown variable.
-func TestALegacyAliasAloneKeepsTheVerdictGreen(t *testing.T) {
-	logged := renderIntegrityBlock(t, &config.ConfigIntegrityReport{
-		Path:   "/opt/proxsave/configs/backup.env",
-		Legacy: []config.LegacyVariable{{Name: "RCLONE_REMOTE", Canonical: "CLOUD_REMOTE", Wins: true}},
-	})
-	if !strings.Contains(logged, "INFO     ✓ Configuration file ok (1 legacy)") {
-		t.Fatalf("expected a green verdict naming the legacy count:\n%s", logged)
-	}
-	if strings.Contains(logged, "WARNING") {
-		t.Fatalf("a legacy name that is the only one set must not raise a WARNING:\n%s", logged)
 	}
 }

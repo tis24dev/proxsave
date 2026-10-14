@@ -19,16 +19,11 @@ import (
 )
 
 const (
-	telegramEnabledKey        = "TELEGRAM_ENABLED"
-	telegramEnableLegacyKey   = "TELEGRAM_ENABLE"
-	emailEnabledKey           = "EMAIL_ENABLED"
-	emailEnableLegacyKey      = "EMAIL_ENABLE"
-	emailFallbackSendmailKey  = "EMAIL_FALLBACK_SENDMAIL"
-	emailFallbackPMFLegacyKey = "EMAIL_FALLBACK_PMF"
-	gotifyEnabledKey          = "GOTIFY_ENABLED"
-	gotifyEnableLegacyKey     = "GOTIFY_ENABLE"
-	webhookEnabledKey         = "WEBHOOK_ENABLED"
-	webhookEnableLegacyKey    = "WEBHOOK_ENABLE"
+	telegramEnabledKey       = "TELEGRAM_ENABLED"
+	emailEnabledKey          = "EMAIL_ENABLED"
+	emailFallbackSendmailKey = "EMAIL_FALLBACK_SENDMAIL"
+	gotifyEnabledKey         = "GOTIFY_ENABLED"
+	webhookEnabledKey        = "WEBHOOK_ENABLED"
 )
 
 var (
@@ -42,13 +37,6 @@ var (
 	blockValueKeys = map[string]bool{
 		"CUSTOM_BACKUP_PATHS": true,
 		"BACKUP_BLACKLIST":    true,
-	}
-
-	legacyNotificationEnableAliases = map[string]string{
-		telegramEnableLegacyKey: telegramEnabledKey,
-		emailEnableLegacyKey:    emailEnabledKey,
-		gotifyEnableLegacyKey:   gotifyEnabledKey,
-		webhookEnableLegacyKey:  webhookEnabledKey,
 	}
 
 	pbsFingerprintCertPaths = []string{
@@ -473,12 +461,12 @@ var envOverrideKeys = []string{
 	"RETENTION_DAILY", "RETENTION_WEEKLY", "RETENTION_MONTHLY", "RETENTION_YEARLY",
 	"BUNDLE_ASSOCIATED_FILES", "ENCRYPT_ARCHIVE", "AGE_RECIPIENT", "AGE_RECIPIENT_FILE",
 	"NOTIFY_ON",
-	"TELEGRAM_ENABLE", "TELEGRAM_ENABLED", "BOT_TELEGRAM_TYPE", "TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID",
-	"EMAIL_ENABLE", "EMAIL_ENABLED", "EMAIL_DELIVERY_METHOD", "EMAIL_FALLBACK_PMF", "EMAIL_FALLBACK_SENDMAIL",
+	"TELEGRAM_ENABLED", "BOT_TELEGRAM_TYPE", "TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID",
+	"EMAIL_ENABLED", "EMAIL_DELIVERY_METHOD", "EMAIL_FALLBACK_SENDMAIL",
 	"EMAIL_RECIPIENT", "EMAIL_FROM",
-	"GOTIFY_ENABLE", "GOTIFY_ENABLED", "GOTIFY_SERVER_URL", "GOTIFY_TOKEN",
+	"GOTIFY_ENABLED", "GOTIFY_SERVER_URL", "GOTIFY_TOKEN",
 	"GOTIFY_PRIORITY_SUCCESS", "GOTIFY_PRIORITY_WARNING", "GOTIFY_PRIORITY_FAILURE",
-	"WEBHOOK_ENABLE", "WEBHOOK_ENABLED", "WEBHOOK_ENDPOINTS", "WEBHOOK_FORMAT", "WEBHOOK_TIMEOUT",
+	"WEBHOOK_ENABLED", "WEBHOOK_ENDPOINTS", "WEBHOOK_FORMAT", "WEBHOOK_TIMEOUT",
 	"WEBHOOK_MAX_RETRIES", "WEBHOOK_RETRY_DELAY",
 	"METRICS_ENABLED", "METRICS_PATH",
 	"SECURITY_CHECK_ENABLED", "AUTO_UPDATE_HASHES", "AUTO_FIX_PERMISSIONS",
@@ -497,18 +485,12 @@ var envOverrideKeys = []string{
 func (c *Config) loadEnvOverrides() {
 	for _, key := range envOverrideKeys {
 		if envValue := os.Getenv(key); envValue != "" {
-			upperKey := strings.ToUpper(key)
-			if canonicalKey, ok := legacyNotificationEnableAliases[upperKey]; ok {
-				c.raw[canonicalKey] = envValue
-				continue
-			}
-			c.raw[upperKey] = envValue
+			c.raw[strings.ToUpper(key)] = envValue
 		}
 	}
 }
 
 // parse interprets raw configuration values.
-// It supports both legacy and new backup.env formats.
 func (c *Config) parse() error {
 	c.parseGeneralSettings()
 	c.parseCompressionSettings()
@@ -691,7 +673,7 @@ func (c *Config) parseSecuritySettings() {
 	}
 	_ = os.Setenv("BASE_DIR", c.BaseDir)
 
-	c.SecurityCheckEnabled = c.getBoolWithFallback([]string{"SECURITY_CHECK_ENABLED", "FULL_SECURITY_CHECK"}, true)
+	c.SecurityCheckEnabled = c.getBool("SECURITY_CHECK_ENABLED", true)
 	c.AutoUpdateHashes = c.getBool("AUTO_UPDATE_HASHES", true)
 	// Default true to match the shipped template (backup.env) and the install flow.
 	c.AutoFixPermissions = c.getBool("AUTO_FIX_PERMISSIONS", true)
@@ -750,14 +732,11 @@ func (c *Config) parseSecuritySettings() {
 	c.EncryptArchive = c.getBool("ENCRYPT_ARCHIVE", false)
 	c.AgeRecipientFile = strings.TrimSpace(c.getString("AGE_RECIPIENT_FILE", ""))
 	c.AgeRecipients = c.getStringSlice("AGE_RECIPIENT", nil)
-	if len(c.AgeRecipients) == 0 {
-		c.AgeRecipients = c.getStringSlice("AGE_RECIPIENTS", nil)
-	}
 }
 
 func (c *Config) parsePathSettings() {
-	c.BackupPath = c.getStringWithFallback([]string{"LOCAL_BACKUP_PATH", "BACKUP_PATH"}, filepath.Join(c.BaseDir, "backup"))
-	c.LogPath = c.getStringWithFallback([]string{"LOCAL_LOG_PATH", "LOG_PATH"}, filepath.Join(c.BaseDir, "log"))
+	c.BackupPath = c.getNonEmptyString("BACKUP_PATH", filepath.Join(c.BaseDir, "backup"))
+	c.LogPath = c.getNonEmptyString("LOG_PATH", filepath.Join(c.BaseDir, "log"))
 	// The daemon's own log and those of its admin commands (daemon-*.log), kept apart
 	// from the run logs. Absent or empty means the default, a folder inside LOG_PATH:
 	// whoever wants them with the run logs sets it to ${LOG_PATH}.
@@ -772,11 +751,11 @@ func (c *Config) parsePathSettings() {
 }
 
 func (c *Config) parseStorageSettings() {
-	c.SecondaryEnabled = c.getBoolWithFallback([]string{"ENABLE_SECONDARY_BACKUP", "SECONDARY_ENABLED"}, false)
-	c.SecondaryPath = c.getStringWithFallback([]string{"SECONDARY_BACKUP_PATH", "SECONDARY_PATH"}, "")
+	c.SecondaryEnabled = c.getBool("SECONDARY_ENABLED", false)
+	c.SecondaryPath = c.getNonEmptyString("SECONDARY_PATH", "")
 
-	c.CloudEnabled = c.getBoolWithFallback([]string{"ENABLE_CLOUD_BACKUP", "CLOUD_ENABLED"}, false)
-	c.CloudRemote = c.getStringWithFallback([]string{"RCLONE_REMOTE", "CLOUD_REMOTE"}, "")
+	c.CloudEnabled = c.getBool("CLOUD_ENABLED", false)
+	c.CloudRemote = c.getNonEmptyString("CLOUD_REMOTE", "")
 	c.CloudRemotePath = strings.Trim(strings.TrimSpace(c.getString("CLOUD_REMOTE_PATH", "")), "/")
 	// Default to "parallel" to match the shipped template and the documentation
 	// ("Default: parallel" with CLOUD_PARALLEL_MAX_JOBS=2). Unset or blank uses
@@ -802,7 +781,7 @@ func (c *Config) parseStorageSettings() {
 	c.PBSTargetEnabled = c.getBool("PBS_TARGET_ENABLED", false)
 	c.PBSTargetStorage = strings.TrimSpace(c.getString("PBS_TARGET_STORAGE", ""))
 
-	c.RcloneTimeoutConnection = c.getIntWithFallback([]string{"RCLONE_TIMEOUT_CONNECTION", "CLOUD_CONNECTIVITY_TIMEOUT"}, 30)
+	c.RcloneTimeoutConnection = c.getInt("RCLONE_TIMEOUT_CONNECTION", 30)
 	c.RcloneTimeoutOperation = c.getInt("RCLONE_TIMEOUT_OPERATION", 300)
 	c.RcloneBandwidthLimit = c.getString("RCLONE_BANDWIDTH_LIMIT", "")
 	c.RcloneTransfers = c.getInt("RCLONE_TRANSFERS", 4)
@@ -817,9 +796,9 @@ func (c *Config) parseStorageSettings() {
 }
 
 func (c *Config) parseRetentionSettings() {
-	c.LocalRetentionDays = c.getIntWithFallback([]string{"MAX_LOCAL_BACKUPS", "LOCAL_RETENTION_DAYS"}, 7)
-	c.SecondaryRetentionDays = c.getIntWithFallback([]string{"MAX_SECONDARY_BACKUPS", "SECONDARY_RETENTION_DAYS"}, 14)
-	c.CloudRetentionDays = c.getIntWithFallback([]string{"MAX_CLOUD_BACKUPS", "CLOUD_RETENTION_DAYS"}, 30)
+	c.LocalRetentionDays = c.getInt("MAX_LOCAL_BACKUPS", 7)
+	c.SecondaryRetentionDays = c.getInt("MAX_SECONDARY_BACKUPS", 14)
+	c.CloudRetentionDays = c.getInt("MAX_CLOUD_BACKUPS", 30)
 	c.MaxLocalBackups = c.LocalRetentionDays
 	c.MaxSecondaryBackups = c.SecondaryRetentionDays
 	c.MaxCloudBackups = c.CloudRetentionDays
@@ -864,7 +843,7 @@ func (c *Config) parseNotificationSettings() {
 	}
 	c.NotifyOn = NormalizeNotifyOn(c.getString("NOTIFY_ON", NotifyOnWarning))
 
-	c.TelegramEnabled = c.getBoolWithLegacyAlias(telegramEnabledKey, telegramEnableLegacyKey, false)
+	c.TelegramEnabled = c.getBool(telegramEnabledKey, false)
 	c.TelegramBotType = c.getString("BOT_TELEGRAM_TYPE", "centralized")
 	c.TelegramBotToken = c.getString("TELEGRAM_BOT_TOKEN", "")
 	c.TelegramChatID = c.getString("TELEGRAM_CHAT_ID", "")
@@ -875,13 +854,13 @@ func (c *Config) parseNotificationSettings() {
 	c.TelegramConfirmTimeoutS = c.getInt("TELEGRAM_CONFIRM_TIMEOUT_SECONDS", 10)
 	c.TelegramConfirmIntervalS = c.getInt("TELEGRAM_CONFIRM_INTERVAL_SECONDS", 1)
 
-	c.EmailEnabled = c.getBoolWithLegacyAlias(emailEnabledKey, emailEnableLegacyKey, false)
+	c.EmailEnabled = c.getBool(emailEnabledKey, false)
 	c.EmailDeliveryMethod = NormalizeEmailDeliveryMethod(c.getString("EMAIL_DELIVERY_METHOD", "relay"))
-	c.EmailFallbackSendmail = c.getBoolWithFallback([]string{emailFallbackSendmailKey, emailFallbackPMFLegacyKey}, true)
+	c.EmailFallbackSendmail = c.getBool(emailFallbackSendmailKey, true)
 	c.EmailRecipient = c.getString("EMAIL_RECIPIENT", "")
 	c.EmailFrom = c.getString("EMAIL_FROM", "no-reply@proxmox.tis24.it")
 
-	c.GotifyEnabled = c.getBoolWithLegacyAlias(gotifyEnabledKey, gotifyEnableLegacyKey, false)
+	c.GotifyEnabled = c.getBool(gotifyEnabledKey, false)
 	c.GotifyServerURL = strings.TrimSpace(c.getString("GOTIFY_SERVER_URL", ""))
 	c.GotifyToken = strings.TrimSpace(c.getString("GOTIFY_TOKEN", ""))
 	c.GotifyPrioritySuccess = c.ensurePositiveInt("GOTIFY_PRIORITY_SUCCESS", 2)
@@ -893,7 +872,7 @@ func (c *Config) parseNotificationSettings() {
 	c.WorkerMaxRetries = 2
 	c.WorkerRetryDelay = 2
 
-	c.WebhookEnabled = c.getBoolWithLegacyAlias(webhookEnabledKey, webhookEnableLegacyKey, false)
+	c.WebhookEnabled = c.getBool(webhookEnabledKey, false)
 	c.WebhookDefaultFormat = c.getString("WEBHOOK_FORMAT", "generic")
 	c.WebhookTimeout = c.getInt("WEBHOOK_TIMEOUT", 30)
 	c.WebhookMaxRetries = c.getInt("WEBHOOK_MAX_RETRIES", 3)
@@ -909,8 +888,8 @@ func (c *Config) parseNotificationSettings() {
 		c.WebhookEndpointNames = []string{}
 	}
 
-	c.MetricsEnabled = c.getBoolWithFallback([]string{"PROMETHEUS_ENABLED", "METRICS_ENABLED"}, false)
-	rawMetricsPath := strings.TrimSpace(c.getStringWithFallback([]string{"METRICS_PATH", "PROMETHEUS_TEXTFILE_DIR"}, ""))
+	c.MetricsEnabled = c.getBool("METRICS_ENABLED", false)
+	rawMetricsPath := strings.TrimSpace(c.getNonEmptyString("METRICS_PATH", ""))
 	if rawMetricsPath == "" {
 		c.MetricsPath = "/var/lib/prometheus/node-exporter"
 	} else {
@@ -1104,11 +1083,11 @@ func (c *Config) parsePBSSettings() {
 	c.BackupPBSNotifications = c.getBool("BACKUP_PBS_NOTIFICATIONS", true)
 	c.BackupPBSNotificationsPriv = c.getBool("BACKUP_PBS_NOTIFICATIONS_PRIV", c.BackupPBSNotifications)
 	c.BackupUserConfigs = c.getBool("BACKUP_USER_CONFIGS", true)
-	c.BackupRemoteConfigs = c.getBoolWithFallback([]string{"BACKUP_REMOTE_CONFIGS", "BACKUP_REMOTE_CFG"}, true)
+	c.BackupRemoteConfigs = c.getBool("BACKUP_REMOTE_CONFIGS", true)
 	c.BackupSyncJobs = c.getBool("BACKUP_SYNC_JOBS", true)
 	c.BackupVerificationJobs = c.getBool("BACKUP_VERIFICATION_JOBS", true)
 	c.BackupTapeConfigs = c.getBool("BACKUP_TAPE_CONFIGS", true)
-	networkFallback := c.getBoolWithFallback([]string{"BACKUP_NETWORK_CONFIGS", "BACKUP_NETWORK_CONFIG"}, true)
+	networkFallback := c.getBool("BACKUP_NETWORK_CONFIGS", true)
 	c.BackupPBSNetworkConfig = c.getBool("BACKUP_PBS_NETWORK_CONFIG", networkFallback)
 	c.BackupPruneSchedules = c.getBool("BACKUP_PRUNE_SCHEDULES", true)
 	// Default false to match the shipped template. It used to compile to true while the
@@ -1117,16 +1096,16 @@ func (c *Config) parsePBSSettings() {
 	// the key had it ON and walked every PBS datastore. Nobody chose the second
 	// behaviour -- it fell out of the mismatch -- and the expensive side is the wrong
 	// side for a value nobody set.
-	c.BackupPxarFiles = c.getBoolWithFallback([]string{"PXAR_SCAN_ENABLE", "BACKUP_PXAR_FILES"}, false)
+	c.BackupPxarFiles = c.getBool("PXAR_SCAN_ENABLE", false)
 	c.PxarDatastoreConcurrency = c.getInt("PXAR_SCAN_DS_CONCURRENCY", 3)
-	c.PxarFileIncludePatterns = normalizeList(c.getStringSliceWithFallback([]string{"PXAR_FILE_INCLUDE_PATTERN", "PXAR_INCLUDE_PATTERN"}, nil))
+	c.PxarFileIncludePatterns = normalizeList(c.getPatternList("PXAR_FILE_INCLUDE_PATTERN", nil))
 	c.PxarFileExcludePatterns = normalizeList(c.getStringSlice("PXAR_FILE_EXCLUDE_PATTERN", nil))
 }
 
 func (c *Config) parseSystemSettings() {
-	c.BackupNetworkConfigs = c.getBoolWithFallback([]string{"BACKUP_NETWORK_CONFIGS", "BACKUP_NETWORK_CONFIG"}, true)
+	c.BackupNetworkConfigs = c.getBool("BACKUP_NETWORK_CONFIGS", true)
 	c.BackupAptSources = c.getBool("BACKUP_APT_SOURCES", true)
-	c.BackupCronJobs = c.getBoolWithFallback([]string{"BACKUP_CRON_JOBS", "BACKUP_CRONTABS"}, true)
+	c.BackupCronJobs = c.getBool("BACKUP_CRON_JOBS", true)
 	c.BackupSystemdServices = c.getBool("BACKUP_SYSTEMD_SERVICES", true)
 	c.BackupSSLCerts = c.getBool("BACKUP_SSL_CERTS", true)
 	c.BackupSysctlConfig = c.getBool("BACKUP_SYSCTL_CONFIG", true)
@@ -1396,67 +1375,38 @@ func (c *Config) expandConfigVars(s string) string {
 	return newConfigVarExpander(c.raw, c.BaseDir).expand(s)
 }
 
-func (c *Config) getStringWithFallback(keys []string, defaultValue string) string {
-	for _, key := range keys {
-		upperKey := strings.ToUpper(key)
-		if val, ok := c.raw[upperKey]; ok && val != "" {
-			return c.expandConfigVars(val)
-		}
+// getNonEmptyString is getString for a setting that falls back to its default when it
+// is assigned an empty value too, not only when it is absent.
+func (c *Config) getNonEmptyString(key, defaultValue string) string {
+	if val, ok := c.raw[strings.ToUpper(key)]; ok && val != "" {
+		return c.expandConfigVars(val)
 	}
 	return defaultValue
 }
 
-func (c *Config) getBoolWithFallback(keys []string, defaultValue bool) bool {
-	for _, key := range keys {
-		if val, ok := c.raw[key]; ok {
-			return utils.ParseBool(val)
+// getPatternList splits a list of patterns on , ; : | and newlines, unquoting each
+// item. An absent value, or one with no item in it, is the default.
+func (c *Config) getPatternList(key string, defaultValue []string) []string {
+	val, ok := c.raw[key]
+	if !ok {
+		return defaultValue
+	}
+	parts := strings.FieldsFunc(strings.TrimSpace(val), func(r rune) bool {
+		switch r {
+		case ',', ';', ':', '|', '\n':
+			return true
+		default:
+			return false
+		}
+	})
+	var result []string
+	for _, part := range parts {
+		if trimmed := strings.TrimSpace(part); trimmed != "" {
+			result = append(result, strings.Trim(trimmed, `"'`))
 		}
 	}
-	return defaultValue
-}
-
-func (c *Config) getBoolWithLegacyAlias(key, legacyKey string, defaultValue bool) bool {
-	return c.getBoolWithFallback([]string{key, legacyKey}, defaultValue)
-}
-
-func (c *Config) getIntWithFallback(keys []string, defaultValue int) int {
-	for _, key := range keys {
-		if val, ok := c.raw[key]; ok {
-			if intVal, err := strconv.Atoi(val); err == nil {
-				return intVal
-			}
-		}
-	}
-	return defaultValue
-}
-
-func (c *Config) getStringSliceWithFallback(keys []string, defaultValue []string) []string {
-	for _, key := range keys {
-		if val, ok := c.raw[key]; ok {
-			val = strings.TrimSpace(val)
-			if val != "" {
-				parts := strings.FieldsFunc(val, func(r rune) bool {
-					switch r {
-					case ',', ';', ':', '|', '\n':
-						return true
-					default:
-						return false
-					}
-				})
-
-				var result []string
-				for _, part := range parts {
-					if trimmed := strings.TrimSpace(part); trimmed != "" {
-						trimmed = strings.Trim(trimmed, `"'`)
-						result = append(result, trimmed)
-					}
-				}
-
-				if len(result) > 0 {
-					return result
-				}
-			}
-		}
+	if len(result) > 0 {
+		return result
 	}
 	return defaultValue
 }

@@ -55,6 +55,11 @@ type UpgradeResult struct {
 	// CaseConflictKeys are keys that differ only by case from template keys.
 	// They are preserved in-place with their original casing.
 	CaseConflictKeys []string
+	// Legacy are the variables written under a name of the Bash version, which the
+	// loader no longer reads: each was renamed to its current name or, when it had no
+	// effect, dropped. A binary built before the field existed decodes a result carrying
+	// it and ignores it; the lines the operator sees travel in Notes.
+	Legacy []LegacyChange
 	// Warnings includes non-fatal parsing or merge issues detected while upgrading.
 	Warnings []string
 	// Notes are lines the caller logs, in order and at their level, BEFORE Warnings:
@@ -190,6 +195,11 @@ func computeConfigUpgrade(configPath string) (*UpgradeResult, string, []byte, er
 
 	normalizedOriginal := strings.ReplaceAll(string(originalContent), "\r\n", "\n")
 	originalLines := strings.Split(normalizedOriginal, "\n")
+
+	// 0. Carry the variables of the Bash version over to their current names before
+	// anything else reads the file, so the merge below sees the current name in place
+	// and does not add it again from the template.
+	originalLines, result.Legacy = migrateLegacyLines(originalLines)
 
 	// 1. Collect user values: for each KEY we store all VALUE entries in order.
 	userValues, userKeyOrder, caseMap, caseConflicts, warnings, userRanges, err := parseEnvValues(originalLines)
@@ -377,8 +387,8 @@ func computeConfigUpgrade(configPath string) (*UpgradeResult, string, []byte, er
 		}
 	}
 
-	// If nothing is missing, pruned or refreshed, do not rewrite the file.
-	if len(missingKeys) == 0 && prunedLineCount == 0 && refreshedComments == 0 {
+	// If nothing is missing, pruned, refreshed or renamed, do not rewrite the file.
+	if len(missingKeys) == 0 && prunedLineCount == 0 && refreshedComments == 0 && len(result.Legacy) == 0 {
 		result.Changed = false
 		result.Warnings = warnings
 		result.MissingKeys = missingKeys
