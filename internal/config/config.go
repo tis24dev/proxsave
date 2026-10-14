@@ -739,8 +739,16 @@ func (c *Config) parsePathSettings() {
 	c.LogPath = c.getNonEmptyString("LOG_PATH", filepath.Join(c.BaseDir, "log"))
 	// The daemon's own log and those of its admin commands (daemon-*.log), kept apart
 	// from the run logs. Absent or empty means the default, a folder inside LOG_PATH:
-	// whoever wants them with the run logs sets it to ${LOG_PATH}.
-	c.DaemonLogPath = strings.TrimSpace(c.getString("DAEMON_LOG_PATH", ""))
+	// whoever wants them with the run logs sets it to ${LOG_PATH}. ${LOG_PATH} in it is
+	// the log folder the run uses, not the line as written: a LOG_PATH left empty or
+	// deleted falls back to its default, and the template's ${LOG_PATH}/daemon would
+	// otherwise put the daemon logs in /daemon.
+	c.DaemonLogPath = ""
+	if raw := strings.TrimSpace(c.raw["DAEMON_LOG_PATH"]); raw != "" {
+		expander := newConfigVarExpander(c.raw, c.BaseDir)
+		expander.cache["LOG_PATH"] = c.LogPath
+		c.DaemonLogPath = strings.TrimSpace(expander.expand(raw))
+	}
 	if c.DaemonLogPath == "" {
 		c.DaemonLogPath = filepath.Join(c.LogPath, "daemon")
 	}
