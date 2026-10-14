@@ -849,16 +849,10 @@ func resetInstallBaseDirWithContext(ctx context.Context, baseDir string, bootstr
 		if err := clearImmutableAttributesWithContext(ctx, target, bootstrap); err != nil {
 			return err
 		}
-		// Best-effort: ensure write permission before removal
-		if entry.IsDir() {
-			// 0700 is the minimum that lets the owner traverse and delete the
-			// directory's contents in the os.RemoveAll below: a directory needs the
-			// execute bit, so gosec G302's file-oriented <=0600 ceiling does not apply.
-			// Owner-only (group and others have no access), and the mode is transient -
-			// the directory is removed on the very next line.
-			// #nosec G302 -- transient 0700 on a directory about to be removed; owner-only.
-			_ = os.Chmod(target, 0o700)
-		} else {
+		// Best-effort: ensure write permission before removal. Directories are left as
+		// they are: root removes them whatever their mode, and only a run that is not
+		// root would need a chmod there.
+		if !entry.IsDir() {
 			_ = os.Chmod(target, 0o600)
 		}
 		if err := os.RemoveAll(target); err != nil {

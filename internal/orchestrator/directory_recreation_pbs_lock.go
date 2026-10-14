@@ -79,14 +79,21 @@ func removeOrRenamePBSDatastoreLockDirectory(lockPath string, logger *logging.Lo
 }
 
 func createPBSDatastoreLockFile(lockPath string) error {
-	if err := validateRecreationPath(filepath.Dir(lockPath)); err != nil {
+	dir := filepath.Dir(lockPath)
+	if err := validateRecreationPath(dir); err != nil {
 		return fmt.Errorf("unsafe datastore lock path: %w", err)
 	}
-	// 0640 on purpose: the lock lives in the PBS datastore and is chowned to the
-	// datastore owner (setDatastoreOwnership); group-read keeps it consistent with
-	// the datastore's access model. The file is empty, so it exposes nothing.
-	// #nosec G302 G304 -- 0o640 group-read matches the chowned PBS datastore lock convention (lock file is empty); the lock directory is validated above by validateRecreationPath.
-	file, err := os.OpenFile(lockPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o640)
+	// 0600: both callers chown the lock to the datastore owner right after
+	// (setDatastoreOwnership), the user PBS takes it as, and nobody else reads it; the
+	// .lock PBS 3.4.9 creates is an empty file owned backup:backup. Created by base name
+	// inside its validated directory opened as an os.Root, so no path built from a
+	// variable reaches open (gosec G304) and the mode is within G302, without a #nosec.
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		return fmt.Errorf("create %s: %w", lockPath, err)
+	}
+	defer func() { _ = root.Close() }()
+	file, err := root.OpenFile(filepath.Base(lockPath), os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
 	if err != nil {
 		return fmt.Errorf("create %s: %w", lockPath, err)
 	}
