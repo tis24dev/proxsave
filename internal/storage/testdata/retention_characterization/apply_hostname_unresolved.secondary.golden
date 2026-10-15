@@ -1,0 +1,7 @@
+DEBUG    Start secondary retention: policy=simple max=1
+DEBUG    Secondary storage: listing backups for retention policy 'simple'
+DEBUG    Start secondary list: path=<ROOT>/backups
+DEBUG    End secondary list (ok, duration=<D>)
+DEBUG    Secondary storage: retention - the local hostname could not be read, so no backup can be attributed to this host and nothing is deleted
+INFO       Hostname: not resolved
+DEBUG    End secondary retention (error=secondary storage apply_retention operation failed for <ROOT>/backups (recoverable): the local hostname is not resolved, duration=<D>)

@@ -1,0 +1,17 @@
+--- nil receiver ---
+--- no config ---
+--- log folder variable not set ---
+--- name without a run key ---
+--- the log this run writes ---
+DEBUG    Local logs: kept backup-pve-20240620-120000.log reason=own_log
+--- absent ---
+DEBUG    Local logs: log not found backup-pve-20240401-120000.log
+--- present ---
+DEBUG    Local logs: deleted log file backup-pve-20240610-120000.log
+--- removal fails ---
+DEBUG    Local logs: failed to delete backup-pve-20240601-120000.log: remove <ROOT>/logs/backup-pve-20240601-120000.log: directory not empty
+INFO       Log not deleted: backup-pve-20240601-120000.log: directory not empty
+--- held open by another process ---
+DEBUG    Local logs: kept backup-pve-20240501-120000.log reason=held_open
+--- open logs cannot be read ---
+DEBUG    Local logs: kept backup-pve-20240501-120000.log reason=open_check_failed error=open <ROOT>/proc-missing: no such file or directory

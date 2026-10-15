@@ -1,0 +1,42 @@
+DEBUG    Start local retention: policy=simple max=1
+DEBUG    Local storage: listing backups for retention policy 'simple'
+DEBUG    Start local list: path=<ROOT>/backups
+DEBUG    Local storage: processing candidate <ROOT>/backups/pve-backup-20240601-120000.tar.zst (BundleAssociatedFiles=false)
+DEBUG    Local storage: loadMetadata for <ROOT>/backups/pve-backup-20240601-120000.tar.zst (isBundle=false)
+DEBUG    Local storage: looking for sidecar metadata <ROOT>/backups/pve-backup-20240601-120000.tar.zst.metadata
+DEBUG    Local storage: processing candidate <ROOT>/backups/pve-backup-20240610-120000.tar.zst (BundleAssociatedFiles=false)
+DEBUG    Local storage: loadMetadata for <ROOT>/backups/pve-backup-20240610-120000.tar.zst (isBundle=false)
+DEBUG    Local storage: looking for sidecar metadata <ROOT>/backups/pve-backup-20240610-120000.tar.zst.metadata
+DEBUG    Local storage: processing candidate <ROOT>/backups/pve-backup-20240620-120000.tar.zst (BundleAssociatedFiles=false)
+DEBUG    Local storage: loadMetadata for <ROOT>/backups/pve-backup-20240620-120000.tar.zst (isBundle=false)
+DEBUG    Local storage: looking for sidecar metadata <ROOT>/backups/pve-backup-20240620-120000.tar.zst.metadata
+DEBUG    End local list (ok, duration=<D>)
+DEBUG    Local storage: retention answers to pve (server identity unknown)
+DEBUG    Simple retention -> current: 3, limit: 1, to_delete: 2
+INFO       Backups: 3, limit: 1
+DEBUG    Deleting old backup: pve-backup-20240601-120000.tar.zst (created: 2024-06-01 12:00:00)
+DEBUG    Local storage: deleting backup pve-backup-20240601-120000.tar.zst
+DEBUG    Local storage: removing file <ROOT>/backups/pve-backup-20240601-120000.tar.zst.bundle.tar
+DEBUG    Local storage: file already removed <ROOT>/backups/pve-backup-20240601-120000.tar.zst.bundle.tar
+DEBUG    Local storage: removing file <ROOT>/backups/pve-backup-20240601-120000.tar.zst
+DEBUG    Local storage: removing file <ROOT>/backups/pve-backup-20240601-120000.tar.zst.sha256
+DEBUG    Local storage: removing file <ROOT>/backups/pve-backup-20240601-120000.tar.zst.manifest.json
+DEBUG    Local storage: file already removed <ROOT>/backups/pve-backup-20240601-120000.tar.zst.manifest.json
+DEBUG    Local storage: removing file <ROOT>/backups/pve-backup-20240601-120000.tar.zst.metadata
+DEBUG    Local storage: removing file <ROOT>/backups/pve-backup-20240601-120000.tar.zst.metadata.sha256
+DEBUG    Local storage: file already removed <ROOT>/backups/pve-backup-20240601-120000.tar.zst.metadata.sha256
+DEBUG    Local storage: deleted backup and associated files: pve-backup-20240601-120000.tar.zst
+DEBUG    Deleting old backup: pve-backup-20240610-120000.tar.zst (created: 2024-06-10 12:00:00)
+DEBUG    Local storage: deleting backup pve-backup-20240610-120000.tar.zst
+DEBUG    Local storage: removing file <ROOT>/backups/pve-backup-20240610-120000.tar.zst.bundle.tar
+DEBUG    Local storage: file already removed <ROOT>/backups/pve-backup-20240610-120000.tar.zst.bundle.tar
+DEBUG    Local storage: removing file <ROOT>/backups/pve-backup-20240610-120000.tar.zst
+DEBUG    Local storage: removing file <ROOT>/backups/pve-backup-20240610-120000.tar.zst.sha256
+DEBUG    Local storage: removing file <ROOT>/backups/pve-backup-20240610-120000.tar.zst.manifest.json
+DEBUG    Local storage: file already removed <ROOT>/backups/pve-backup-20240610-120000.tar.zst.manifest.json
+DEBUG    Local storage: removing file <ROOT>/backups/pve-backup-20240610-120000.tar.zst.metadata
+DEBUG    Local storage: removing file <ROOT>/backups/pve-backup-20240610-120000.tar.zst.metadata.sha256
+DEBUG    Local storage: file already removed <ROOT>/backups/pve-backup-20240610-120000.tar.zst.metadata.sha256
+DEBUG    Local storage: deleted backup and associated files: pve-backup-20240610-120000.tar.zst
+DEBUG    Local storage retention applied: deleted 2 backups (logs deleted: 0), 1 backups remaining (0 logs remaining)
+DEBUG    End local retention (ok, duration=<D>)

@@ -1,0 +1,7 @@
+--- nil receiver ---
+--- no config ---
+--- log folder variable not set ---
+--- log folder missing ---
+--- log folder ---
+--- log folder the glob cannot parse ---
+DEBUG    Local logs: failed to count log files: syntax error in pattern

@@ -1,0 +1,11 @@
+DEBUG    Start local delete: file=<ROOT>/backups/pve-backup-20240620-120000.tar.zst
+DEBUG    Local storage: deleting backup pve-backup-20240620-120000.tar.zst
+DEBUG    Local storage: removing file <ROOT>/backups/pve-backup-20240620-120000.tar.zst.bundle.tar
+DEBUG    Local storage: removing file <ROOT>/backups/pve-backup-20240620-120000.tar.zst
+DEBUG    Local storage: removing file <ROOT>/backups/pve-backup-20240620-120000.tar.zst.sha256
+DEBUG    Local storage: removing file <ROOT>/backups/pve-backup-20240620-120000.tar.zst.manifest.json
+DEBUG    Local storage: removing file <ROOT>/backups/pve-backup-20240620-120000.tar.zst.metadata
+DEBUG    Local storage: removing file <ROOT>/backups/pve-backup-20240620-120000.tar.zst.metadata.sha256
+DEBUG    Local logs: deleted log file backup-pve-20240620-120000.log
+DEBUG    Local storage: deleted backup and associated files: pve-backup-20240620-120000.tar.zst
+DEBUG    End local delete (ok, duration=<D>)

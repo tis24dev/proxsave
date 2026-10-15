@@ -1,0 +1,8 @@
+DEBUG    Start secondary retention: policy=simple max=1
+DEBUG    Secondary storage: listing backups for retention policy 'simple'
+DEBUG    Start secondary list: path=<ROOT>/backups[
+DEBUG    Secondary Storage: listing - failed: syntax error in pattern
+DEBUG    End secondary list (error=secondary storage list operation failed for <ROOT>/backups[ (recoverable): syntax error in pattern, duration=<D>)
+DEBUG    Secondary Storage: retention - could not list the backups: secondary storage list operation failed for <ROOT>/backups[ (recoverable): syntax error in pattern
+INFO       List failed: syntax error in pattern
+DEBUG    End secondary retention (error=secondary storage apply_retention operation failed for <ROOT>/backups[ (recoverable): list: syntax error in pattern, duration=<D>)

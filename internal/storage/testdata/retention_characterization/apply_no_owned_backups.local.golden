@@ -1,0 +1,11 @@
+DEBUG    Start local retention: policy=simple max=1
+DEBUG    Local storage: listing backups for retention policy 'simple'
+DEBUG    Start local list: path=<ROOT>/backups
+DEBUG    Local storage: processing candidate <ROOT>/backups/other-backup-20240620-120000.tar.zst (BundleAssociatedFiles=false)
+DEBUG    Local storage: loadMetadata for <ROOT>/backups/other-backup-20240620-120000.tar.zst (isBundle=false)
+DEBUG    Local storage: looking for sidecar metadata <ROOT>/backups/other-backup-20240620-120000.tar.zst.metadata
+DEBUG    End local list (ok, duration=<D>)
+DEBUG    Local storage: retention answers to pve (server identity unknown)
+DEBUG    Local storage: retention out of scope: <ROOT>/backups/other-backup-20240620-120000.tar.zst (owner="other", manifest hostname="other", server identity unknown, this host does not know its own server identity, so no archive can be adopted)
+DEBUG    Local storage: no backups to apply retention
+DEBUG    End local retention (ok, duration=<D>)

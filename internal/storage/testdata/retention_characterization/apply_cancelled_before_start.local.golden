@@ -1,0 +1,2 @@
+DEBUG    Start local retention: policy=simple max=1
+DEBUG    End local retention (error=context canceled, duration=<D>)

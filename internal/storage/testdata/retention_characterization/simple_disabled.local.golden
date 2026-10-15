@@ -1,0 +1,20 @@
+DEBUG    Start local retention: policy=simple max=0
+DEBUG    Local storage: listing backups for retention policy 'simple'
+DEBUG    Start local list: path=<ROOT>/backups
+DEBUG    Local storage: processing candidate <ROOT>/backups/pve-backup-20240601-120000.tar.zst (BundleAssociatedFiles=false)
+DEBUG    Local storage: loadMetadata for <ROOT>/backups/pve-backup-20240601-120000.tar.zst (isBundle=false)
+DEBUG    Local storage: looking for sidecar metadata <ROOT>/backups/pve-backup-20240601-120000.tar.zst.metadata
+DEBUG    Local storage: processing candidate <ROOT>/backups/pve-backup-20240619-120000.tar.zst (BundleAssociatedFiles=false)
+DEBUG    Local storage: loadMetadata for <ROOT>/backups/pve-backup-20240619-120000.tar.zst (isBundle=false)
+DEBUG    Local storage: looking for sidecar metadata <ROOT>/backups/pve-backup-20240619-120000.tar.zst.metadata
+DEBUG    Local storage: processing candidate <ROOT>/backups/pve-backup-20240620-120000.tar.zst (BundleAssociatedFiles=false)
+DEBUG    Local storage: loadMetadata for <ROOT>/backups/pve-backup-20240620-120000.tar.zst (isBundle=false)
+DEBUG    Local storage: looking for sidecar metadata <ROOT>/backups/pve-backup-20240620-120000.tar.zst.metadata
+DEBUG    End local list (ok, duration=<D>)
+DEBUG    Local storage: retention answers to pve (server identity unknown)
+DEBUG    Retention disabled for local storage (maxBackups = 0)
+DEBUG    local orphan logs: scan path=<ROOT>/logs pattern=backup-*.log
+DEBUG    local orphan logs: listed=3 with_archive=2 orphans=1 oldest_kept=20240601-120000
+DEBUG    local orphan logs: deleted backup-pve-20240101-120000.log
+DEBUG    local orphan logs: result deleted=1 not_deleted=0 kept=0
+DEBUG    End local retention (ok, duration=<D>)

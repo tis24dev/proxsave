@@ -1,0 +1,39 @@
+DEBUG    Start secondary retention: policy=simple max=1
+DEBUG    Secondary storage: listing backups for retention policy 'simple'
+DEBUG    Start secondary list: path=<ROOT>/backups
+DEBUG    End secondary list (ok, duration=<D>)
+DEBUG    Secondary storage: retention answers to pve (server identity unknown)
+DEBUG    Simple retention -> current: 3, limit: 1, to_delete: 2
+INFO       Backups: 3, limit: 1
+DEBUG    Secondary logs: failed to count log files: syntax error in pattern
+DEBUG    Deleting old backup: pve-backup-20240601-120000.tar.zst (created: 2024-06-01 12:00:00)
+DEBUG    Deleting secondary backup: <ROOT>/backups/pve-backup-20240601-120000.tar.zst
+DEBUG    Removing file: <ROOT>/backups/pve-backup-20240601-120000.tar.zst.bundle.tar
+DEBUG    Secondary storage: file already removed <ROOT>/backups/pve-backup-20240601-120000.tar.zst.bundle.tar
+DEBUG    Removing file: <ROOT>/backups/pve-backup-20240601-120000.tar.zst
+DEBUG    Removing file: <ROOT>/backups/pve-backup-20240601-120000.tar.zst.sha256
+DEBUG    Removing file: <ROOT>/backups/pve-backup-20240601-120000.tar.zst.manifest.json
+DEBUG    Secondary storage: file already removed <ROOT>/backups/pve-backup-20240601-120000.tar.zst.manifest.json
+DEBUG    Removing file: <ROOT>/backups/pve-backup-20240601-120000.tar.zst.metadata
+DEBUG    Removing file: <ROOT>/backups/pve-backup-20240601-120000.tar.zst.metadata.sha256
+DEBUG    Secondary storage: file already removed <ROOT>/backups/pve-backup-20240601-120000.tar.zst.metadata.sha256
+DEBUG    Secondary logs: deleted log file backup-pve-20240601-120000.log
+DEBUG    Deleted secondary backup: pve-backup-20240601-120000.tar.zst
+DEBUG    Deleting old backup: pve-backup-20240610-120000.tar.zst (created: 2024-06-10 12:00:00)
+DEBUG    Deleting secondary backup: <ROOT>/backups/pve-backup-20240610-120000.tar.zst
+DEBUG    Removing file: <ROOT>/backups/pve-backup-20240610-120000.tar.zst.bundle.tar
+DEBUG    Secondary storage: file already removed <ROOT>/backups/pve-backup-20240610-120000.tar.zst.bundle.tar
+DEBUG    Removing file: <ROOT>/backups/pve-backup-20240610-120000.tar.zst
+DEBUG    Removing file: <ROOT>/backups/pve-backup-20240610-120000.tar.zst.sha256
+DEBUG    Removing file: <ROOT>/backups/pve-backup-20240610-120000.tar.zst.manifest.json
+DEBUG    Secondary storage: file already removed <ROOT>/backups/pve-backup-20240610-120000.tar.zst.manifest.json
+DEBUG    Removing file: <ROOT>/backups/pve-backup-20240610-120000.tar.zst.metadata
+DEBUG    Removing file: <ROOT>/backups/pve-backup-20240610-120000.tar.zst.metadata.sha256
+DEBUG    Secondary storage: file already removed <ROOT>/backups/pve-backup-20240610-120000.tar.zst.metadata.sha256
+DEBUG    Secondary logs: deleted log file backup-pve-20240610-120000.log
+DEBUG    Deleted secondary backup: pve-backup-20240610-120000.tar.zst
+DEBUG    Secondary storage retention applied: deleted 2 backups (logs deleted: 2), 1 backups remaining
+DEBUG    secondary orphan logs: scan path=<ROOT>/logs[ pattern=backup-*.log
+DEBUG    secondary orphan logs: listed=1 with_archive=1 orphans=0 oldest_kept=20240620-120000
+DEBUG    secondary orphan logs: result deleted=0 not_deleted=0 kept=0
+DEBUG    End secondary retention (ok, duration=<D>)

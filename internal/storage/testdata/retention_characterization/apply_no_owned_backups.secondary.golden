@@ -1,0 +1,8 @@
+DEBUG    Start secondary retention: policy=simple max=1
+DEBUG    Secondary storage: listing backups for retention policy 'simple'
+DEBUG    Start secondary list: path=<ROOT>/backups
+DEBUG    End secondary list (ok, duration=<D>)
+DEBUG    Secondary storage: retention answers to pve (server identity unknown)
+DEBUG    Secondary storage: retention out of scope: <ROOT>/backups/other-backup-20240620-120000.tar.zst (owner="other", manifest hostname="other", server identity unknown, this host does not know its own server identity, so no archive can be adopted)
+DEBUG    Secondary storage: no backups to apply retention
+DEBUG    End secondary retention (ok, duration=<D>)

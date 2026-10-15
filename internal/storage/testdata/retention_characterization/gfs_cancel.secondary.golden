@@ -1,0 +1,23 @@
+DEBUG    Start secondary retention: policy=gfs max=0
+DEBUG    Secondary storage: listing backups for retention policy 'gfs'
+DEBUG    Start secondary list: path=<ROOT>/backups
+DEBUG    End secondary list (ok, duration=<D>)
+DEBUG    Secondary storage: retention answers to pve (server identity unknown)
+DEBUG    Applying GFS retention policy (daily=1, weekly=0, monthly=0, yearly=1)
+DEBUG    GFS classification -> daily: 1/1, weekly: 0/0, monthly: 0/0, yearly: 1/1, to_delete: 3
+DEBUG    Deleting old backup: pve-backup-<TS1>.tar.zst (created: <DATE1>)
+DEBUG    Deleting secondary backup: <ROOT>/backups/pve-backup-<TS1>.tar.zst
+DEBUG    Removing file: <ROOT>/backups/pve-backup-<TS1>.tar.zst.bundle.tar
+DEBUG    Secondary storage: file already removed <ROOT>/backups/pve-backup-<TS1>.tar.zst.bundle.tar
+DEBUG    Removing file: <ROOT>/backups/pve-backup-<TS1>.tar.zst
+DEBUG    Removing file: <ROOT>/backups/pve-backup-<TS1>.tar.zst.sha256
+DEBUG    Removing file: <ROOT>/backups/pve-backup-<TS1>.tar.zst.manifest.json
+DEBUG    Secondary storage: file already removed <ROOT>/backups/pve-backup-<TS1>.tar.zst.manifest.json
+DEBUG    Removing file: <ROOT>/backups/pve-backup-<TS1>.tar.zst.metadata
+DEBUG    Removing file: <ROOT>/backups/pve-backup-<TS1>.tar.zst.metadata.sha256
+DEBUG    Secondary storage: file already removed <ROOT>/backups/pve-backup-<TS1>.tar.zst.metadata.sha256
+DEBUG    Secondary logs: deleted log file backup-pve-<TS1>.log
+DEBUG    Deleted secondary backup: pve-backup-<TS1>.tar.zst
+DEBUG    Deleting old backup: pve-backup-<TS2>.tar.zst (created: <DATE2>)
+DEBUG    Secondary Storage: retention - left pve-backup-<TS2>.tar.zst in place: context canceled
+DEBUG    End secondary retention (error=context canceled, duration=<D>)

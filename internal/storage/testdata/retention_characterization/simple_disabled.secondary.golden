@@ -1,0 +1,11 @@
+DEBUG    Start secondary retention: policy=simple max=0
+DEBUG    Secondary storage: listing backups for retention policy 'simple'
+DEBUG    Start secondary list: path=<ROOT>/backups
+DEBUG    End secondary list (ok, duration=<D>)
+DEBUG    Secondary storage: retention answers to pve (server identity unknown)
+DEBUG    Retention disabled for secondary storage (maxBackups = 0)
+DEBUG    secondary orphan logs: scan path=<ROOT>/logs pattern=backup-*.log
+DEBUG    secondary orphan logs: listed=3 with_archive=2 orphans=1 oldest_kept=20240601-120000
+DEBUG    secondary orphan logs: deleted backup-pve-20240101-120000.log
+DEBUG    secondary orphan logs: result deleted=1 not_deleted=0 kept=0
+DEBUG    End secondary retention (ok, duration=<D>)
