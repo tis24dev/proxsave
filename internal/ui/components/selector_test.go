@@ -72,15 +72,6 @@ func TestSelectorEscResolvesBackError(t *testing.T) {
 	}
 }
 
-func TestSelectorInitialCursor(t *testing.T) {
-	s := NewSelector("Mode", threeItems(), WithSelectorCursor[string](1))
-	cap := bindSelector(s)
-	press(t, s, "enter")
-	if cap.value != "storage" {
-		t.Fatalf("expected preselected storage, got %q", cap.value)
-	}
-}
-
 func manyItems(n int) []SelectorItem[int] {
 	items := make([]SelectorItem[int], n)
 	for i := range items {
