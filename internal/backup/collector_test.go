@@ -32,6 +32,26 @@ func (fi testFileInfo) ModTime() time.Time { return fi.modTime }
 func (fi testFileInfo) IsDir() bool        { return fi.isDir }
 func (fi testFileInfo) Sys() any           { return fi.sys }
 
+// NewCollector creates a new backup collector
+func NewCollector(logger *logging.Logger, config *CollectorConfig, tempDir string, proxType types.ProxmoxType, dryRun bool) *Collector {
+	return NewCollectorWithDeps(logger, config, tempDir, proxType, dryRun, defaultCollectorDeps())
+}
+
+// defaultCollectorDeps leaves the command hooks nil on purpose. The Collector already
+// falls back to the package-level runners when a hook is unset, so nil here means the
+// split-stream runner is used by default while a caller that overrides only RunCommand
+// (or RunCommandWithEnv) still has its override honoured.
+func defaultCollectorDeps() CollectorDeps {
+	return CollectorDeps{
+		LookPath: func(name string) (string, error) {
+			return execLookPath(name)
+		},
+		Stat: func(path string) (os.FileInfo, error) {
+			return statFunc(path)
+		},
+	}
+}
+
 func TestNewCollector(t *testing.T) {
 	logger := logging.New(types.LogLevelInfo, false)
 	config := GetDefaultCollectorConfig()

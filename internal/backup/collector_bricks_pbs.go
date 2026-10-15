@@ -94,22 +94,6 @@ func newPBSRecipe() recipe {
 	return recipe{Name: "pbs", Bricks: bricks}
 }
 
-func newPBSCommandsRecipe() recipe {
-	return recipe{Name: "pbs-commands", Bricks: newPBSRuntimeBricks()}
-}
-
-func newPBSDatastoreInventoryRecipe() recipe {
-	return recipe{Name: "pbs-inventory", Bricks: newPBSInventoryBricks()}
-}
-
-func newPBSDatastoreConfigRecipe() recipe {
-	return recipe{Name: "pbs-datastore-config", Bricks: newPBSDatastoreConfigBricks()}
-}
-
-func newPBSPXARRecipe() recipe {
-	return recipe{Name: "pbs-pxar", Bricks: newPBSPXARBricks()}
-}
-
 func newPBSUserConfigRecipe() recipe {
 	return recipe{
 		Name: "pbs-user-config",

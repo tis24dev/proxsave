@@ -389,6 +389,13 @@ func TestHasTapeSupportHasDrives(t *testing.T) {
 	}
 }
 
+// collectDatastoreNamespaces collects namespace information for a datastore
+// using CLI first, then filesystem fallback.
+func (c *Collector) collectDatastoreNamespaces(ctx context.Context, ds pbsDatastore, datastoreDir string) error {
+	_, err := c.collectDatastoreNamespacesSnapshot(ctx, ds, datastoreDir)
+	return err
+}
+
 func TestCollectDatastoreNamespacesSuccess(t *testing.T) {
 	stubListNamespaces(t, func(_ context.Context, name, path string, _ time.Duration) ([]pbs.Namespace, bool, error) {
 		if name != "store1" || path != "/fake" {

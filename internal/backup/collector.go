@@ -374,12 +374,7 @@ func (c *CollectorConfig) normalizeCommandTimeouts() {
 	}
 }
 
-// NewCollector creates a new backup collector
-func NewCollector(logger *logging.Logger, config *CollectorConfig, tempDir string, proxType types.ProxmoxType, dryRun bool) *Collector {
-	return NewCollectorWithDeps(logger, config, tempDir, proxType, dryRun, defaultCollectorDeps())
-}
-
-// NewCollectorWithDeps creates a collector with explicit dependency overrides (for testing).
+// NewCollectorWithDeps creates a collector with explicit dependency overrides.
 func NewCollectorWithDeps(logger *logging.Logger, config *CollectorConfig, tempDir string, proxType types.ProxmoxType, dryRun bool, deps CollectorDeps) *Collector {
 	return &Collector{
 		logger:   logger,

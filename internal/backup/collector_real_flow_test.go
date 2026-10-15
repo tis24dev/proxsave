@@ -18,6 +18,22 @@ func runRecipeForTest(t *testing.T, ctx context.Context, collector *Collector, r
 	return state
 }
 
+func newPBSCommandsRecipe() recipe {
+	return recipe{Name: "pbs-commands", Bricks: newPBSRuntimeBricks()}
+}
+
+func newPBSDatastoreInventoryRecipe() recipe {
+	return recipe{Name: "pbs-inventory", Bricks: newPBSInventoryBricks()}
+}
+
+func newPBSDatastoreConfigRecipe() recipe {
+	return recipe{Name: "pbs-datastore-config", Bricks: newPBSDatastoreConfigBricks()}
+}
+
+func newPBSPXARRecipe() recipe {
+	return recipe{Name: "pbs-pxar", Bricks: newPBSPXARBricks()}
+}
+
 func runSelectedBricksForTest(t *testing.T, ctx context.Context, collector *Collector, r recipe, seed func(*collectionState), ids ...BrickID) *collectionState {
 	t.Helper()
 

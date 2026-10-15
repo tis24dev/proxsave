@@ -69,18 +69,3 @@ type CollectorDeps struct {
 	ReadFile                    func(string) ([]byte, error)
 	DetectUnprivilegedContainer func() (bool, string)
 }
-
-// defaultCollectorDeps leaves the command hooks nil on purpose. The Collector already
-// falls back to the package-level runners when a hook is unset, so nil here means the
-// split-stream runner is used by default while a caller that overrides only RunCommand
-// (or RunCommandWithEnv) still has its override honoured.
-func defaultCollectorDeps() CollectorDeps {
-	return CollectorDeps{
-		LookPath: func(name string) (string, error) {
-			return execLookPath(name)
-		},
-		Stat: func(path string) (os.FileInfo, error) {
-			return statFunc(path)
-		},
-	}
-}

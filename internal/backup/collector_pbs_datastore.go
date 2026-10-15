@@ -376,13 +376,6 @@ func (c *Collector) collectPBSDatastoreNamespaces(ctx context.Context, state *pb
 	return nil
 }
 
-// collectDatastoreNamespaces collects namespace information for a datastore
-// using CLI first, then filesystem fallback.
-func (c *Collector) collectDatastoreNamespaces(ctx context.Context, ds pbsDatastore, datastoreDir string) error {
-	_, err := c.collectDatastoreNamespacesSnapshot(ctx, ds, datastoreDir)
-	return err
-}
-
 func (c *Collector) collectDatastoreNamespacesSnapshot(ctx context.Context, ds pbsDatastore, datastoreDir string) ([]pbs.Namespace, error) {
 	c.logger.Debug("Collecting namespaces for datastore %s (path: %s)", ds.Name, ds.Path)
 	// Write location is deterministic; if excluded, skip the whole operation.

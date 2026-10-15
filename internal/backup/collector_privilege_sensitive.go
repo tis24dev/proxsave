@@ -83,7 +83,3 @@ func privilegeSensitiveFailureMatch(command string, exitCode int, outputText str
 		return privilegeSensitiveMatch{}
 	}
 }
-
-func privilegeSensitiveFailureReason(command string, exitCode int, outputText string) string {
-	return privilegeSensitiveFailureMatch(command, exitCode, outputText).Reason
-}
