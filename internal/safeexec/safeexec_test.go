@@ -7,7 +7,6 @@ import (
 	"path/filepath"
 	"reflect"
 	"sort"
-	"strings"
 	"testing"
 )
 
@@ -56,36 +55,6 @@ func TestCommandContextAllowsSQLiteSnapshot(t *testing.T) {
 	want := append([]string{"sqlite3"}, args...)
 	if got := cmd.Args; !reflect.DeepEqual(got, want) {
 		t.Fatalf("CommandContext(sqlite3) args = %q, want %q", got, want)
-	}
-}
-
-func TestCommandWrappers(t *testing.T) {
-	ctx := context.Background()
-
-	out, err := Output(ctx, "echo", "safeexec-output")
-	if err != nil {
-		t.Fatalf("Output valid command error: %v", err)
-	}
-	if got := strings.TrimSpace(string(out)); got != "safeexec-output" {
-		t.Fatalf("Output()=%q; want %q", got, "safeexec-output")
-	}
-
-	combined, err := CombinedOutput(ctx, "echo", "safeexec-combined")
-	if err != nil {
-		t.Fatalf("CombinedOutput valid command error: %v", err)
-	}
-	if got := strings.TrimSpace(string(combined)); got != "safeexec-combined" {
-		t.Fatalf("CombinedOutput()=%q; want %q", got, "safeexec-combined")
-	}
-
-	if _, err := Output(ctx, "false"); err == nil {
-		t.Fatalf("Output(false) expected exit error")
-	}
-	if _, err := Output(ctx, "not-allowed-command"); !errors.Is(err, ErrCommandNotAllowed) {
-		t.Fatalf("Output disallowed command error = %v, want ErrCommandNotAllowed", err)
-	}
-	if _, err := CombinedOutput(ctx, "not-allowed-command"); !errors.Is(err, ErrCommandNotAllowed) {
-		t.Fatalf("CombinedOutput disallowed command error = %v, want ErrCommandNotAllowed", err)
 	}
 }
 

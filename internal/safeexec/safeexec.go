@@ -287,24 +287,6 @@ func CommandContext(ctx context.Context, name string, args ...string) (*exec.Cmd
 	return nil, fmt.Errorf("%w: %q", ErrCommandNotAllowed, name)
 }
 
-// CombinedOutput runs an allowed command and returns its combined stdout/stderr.
-func CombinedOutput(ctx context.Context, name string, args ...string) ([]byte, error) {
-	cmd, err := CommandContext(ctx, name, args...)
-	if err != nil {
-		return nil, err
-	}
-	return cmd.CombinedOutput()
-}
-
-// Output runs an allowed command and returns stdout.
-func Output(ctx context.Context, name string, args ...string) ([]byte, error) {
-	cmd, err := CommandContext(ctx, name, args...)
-	if err != nil {
-		return nil, err
-	}
-	return cmd.Output()
-}
-
 // CommandWaitDelay is the reaping half of the WithTimeout plus WaitDelay pair, and
 // without it a context deadline bounds the PROCESS but not the PIPE.
 //

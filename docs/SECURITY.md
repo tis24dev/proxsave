@@ -140,7 +140,7 @@ on a command line (see **Generated rollback scripts** below).
   to be an exact key in a static, package-level allowlist (76 literal command names
   today). Each entry builds `exec.CommandContext(ctx, "<literal>")` with the binary name
   hard-coded and appends the caller's arguments as argv, with no metacharacter
-  interpretation. `CombinedOutput` and `Output` wrap the same gate.
+  interpretation.
 - **Name validation.** Before the allowlist lookup, a name that is empty, has leading or
   trailing whitespace, or contains a path separator (`/` or `\`) is rejected with
   `command not allowed` (`ErrCommandNotAllowed`). A name not in the allowlist is rejected
