@@ -226,6 +226,7 @@ proxsave -l info    # debug|info|warning|error|critical
 **Log output**:
 - **Console**: Colored output (if `USE_COLOR=true`)
 - **File**: `LOG_PATH/backup-<resolved-hostname>-YYYYMMDD-HHMMSS.log`
+- **Daemon file**: `DAEMON_LOG_PATH/daemon-<resolved-hostname>-YYYYMMDD-HHMMSS.log`, for the daemon and `--daemon-setup`, `--daemon-remove`, `--daemon-status`
 
 The level threshold mutes the **console only** for warnings and above: a warning or
 error raised below the chosen level is still counted (footer, exit code) and still
@@ -344,7 +345,7 @@ USE_COLOR=false proxsave --backup
 
 The examples use an explicit operation because environment assignments alone do not suppress the dashboard.
 
-**Priority**: for a key on the allowlist, environment variable > configuration file > default. One exception: if the file still carries the **legacy alias** of that key (see Legacy key names in [CONFIGURATION.md](CONFIGURATION.md)), the legacy line in the file wins over the environment, because the allowlist only carries the canonical name. For every other key the environment is not consulted at all. `BASE_DIR` is always runtime-detected and is not overridable from either place.
+**Priority**: for a key on the allowlist, environment variable > configuration file > default. For every other key the environment is not consulted at all. `BASE_DIR` is always runtime-detected and is not overridable from either place.
 
 ---
 

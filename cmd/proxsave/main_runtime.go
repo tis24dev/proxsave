@@ -392,6 +392,18 @@ func initializeRestoreSessionLogger(rt *appRuntime, fallback *logging.Logger) *l
 	return restoreLogger
 }
 
+// runLogLocation is the folder and name prefix of this run's log. The resident daemon
+// and its admin commands write daemon-<host>-<ts>.log into DAEMON_LOG_PATH: they never
+// produce an archive, so in LOG_PATH their logs had nothing to be rotated with
+// (discussion #336), and the daemon keeps its own last three (rotateDaemonLogs). Every
+// other run writes backup-<host>-<ts>.log into LOG_PATH, rotated with its archive.
+func runLogLocation(args *cli.Args, cfg *config.Config) (dir, prefix string) {
+	if args != nil && (args.Daemon || args.DaemonSetup || args.DaemonRemove || args.DaemonStatus) {
+		return cfg.DaemonLogPath, daemonLogPrefix
+	}
+	return cfg.LogPath, "backup"
+}
+
 func initializeRunLogFile(rt *appRuntime) {
 	rt.hostname = resolveHostname()
 	rt.startTime = rt.deps.now()
@@ -400,12 +412,13 @@ func initializeRunLogFile(rt *appRuntime) {
 		return
 	}
 
-	logFileName := fmt.Sprintf("backup-%s-%s.log", rt.hostname, rt.timestampStr)
-	logFilePath := filepath.Join(rt.cfg.LogPath, logFileName)
+	logDir, logPrefix := runLogLocation(rt.args, rt.cfg)
+	logFileName := fmt.Sprintf("%s-%s-%s.log", logPrefix, rt.hostname, rt.timestampStr)
+	logFilePath := filepath.Join(logDir, logFileName)
 	// Bounded so a dead/stale LOG_PATH mount cannot wedge the run here, before the
 	// security preflight even starts, in an uninterruptible syscall.
-	if err := safefs.MkdirAll(rt.ctx, rt.cfg.LogPath, defaultDirPerm, fsIoTimeoutDuration(rt.cfg)); err != nil {
-		logging.Warning("Failed to create log directory %s: %v", rt.cfg.LogPath, err)
+	if err := safefs.MkdirAll(rt.ctx, logDir, defaultDirPerm, fsIoTimeoutDuration(rt.cfg)); err != nil {
+		logging.Warning("Failed to create log directory %s: %v", logDir, err)
 		return
 	}
 	// Bound the log-file open/write/close on the run logger so a dead/stale LOG_PATH

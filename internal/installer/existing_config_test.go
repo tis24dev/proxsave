@@ -255,3 +255,25 @@ func TestBaseTemplateOrDefault(t *testing.T) {
 		t.Fatalf("a non-empty base must pass through unchanged, got %q", got)
 	}
 }
+
+// Edit hands the wizard the file with the variable names of the Bash version already
+// carried over to the current ones, so the prefill and the file it writes agree with
+// the loader. EMAIL_FALLBACK_PMF=no is the value the old loader read, as off.
+func TestResolveExistingConfigDecisionEditRenamesLegacyVariables(t *testing.T) {
+	cfg := writeExistingConfig(t, "ENABLE_CLOUD_BACKUP=true\nRCLONE_REMOTE=myremote\nEMAIL_FALLBACK_PMF=no\n")
+	decision, err := ResolveExistingConfigDecision(ExistingConfigEdit, cfg)
+	if err != nil {
+		t.Fatalf("edit decision error: %v", err)
+	}
+	want := "CLOUD_ENABLED=true\nCLOUD_REMOTE=myremote\nEMAIL_FALLBACK_SENDMAIL=no\n"
+	if decision.BaseTemplate != want {
+		t.Fatalf("base = %q, want %q", decision.BaseTemplate, want)
+	}
+	if len(decision.Legacy) != 3 {
+		t.Fatalf("Legacy = %+v, want the three renames", decision.Legacy)
+	}
+	prefill := DeriveInstallWizardPrefill(decision.BaseTemplate)
+	if !prefill.CloudEnabled || prefill.CloudRemote != "myremote" {
+		t.Fatalf("prefill cloud = %v %q, want the operator's values", prefill.CloudEnabled, prefill.CloudRemote)
+	}
+}

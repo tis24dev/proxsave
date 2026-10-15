@@ -498,15 +498,20 @@ func (l *LocalStorage) deleteAssociatedLog(ctx context.Context, backupFile strin
 
 	logName := fmt.Sprintf("backup-%s-%s.log", host, ts)
 	fullPath := filepath.Join(logPath, logName)
+	if keptOpenLog(ctx, l.logger, "Local logs", logPath, logName, fsIoTimeout(l.config)) {
+		return false
+	}
 
 	// Bounded against a dead/stale mount: on a cancelled/expired ctx safefs
 	// returns immediately without running the remove (best-effort cleanup).
 	if err := safefs.Remove(ctx, fullPath, fsIoTimeout(l.config)); err != nil {
-		if !os.IsNotExist(err) {
-			l.logger.Debug("Local logs: failed to delete %s: %v", logName, err)
-			l.logger.Info("  Log not deleted: %s: %s", logName, safefs.SystemErrorText(err))
-			l.retTally.logsNotDeleted++
+		if os.IsNotExist(err) {
+			l.logger.Debug("Local logs: log not found %s", logName)
+			return false
 		}
+		l.logger.Debug("Local logs: failed to delete %s: %v", logName, err)
+		l.logger.Info("  Log not deleted: %s: %s", logName, safefs.SystemErrorText(err))
+		l.retTally.logsNotDeleted++
 		return false
 	}
 
@@ -633,9 +638,46 @@ func (l *LocalStorage) ApplyRetention(ctx context.Context, config RetentionConfi
 
 	// Apply appropriate retention policy
 	if config.Policy == "gfs" {
-		return l.applyGFSRetention(ctx, backups, config)
+		deleted, err = l.applyGFSRetention(ctx, backups, config)
+	} else {
+		deleted, err = l.applySimpleRetention(ctx, backups, config.MaxBackups)
 	}
-	return l.applySimpleRetention(ctx, backups, config.MaxBackups)
+	if err != nil {
+		return deleted, err
+	}
+	if err := l.pruneOrphanLogs(ctx, backups); err != nil {
+		return deleted, err
+	}
+	return deleted, nil
+}
+
+// pruneOrphanLogs runs the orphan-log pass (log_orphans.go) on LOG_PATH once the
+// archives are rotated, and folds what it did into this pass's summary.
+func (l *LocalStorage) pruneOrphanLogs(ctx context.Context, backups []*types.BackupMetadata) error {
+	logPath := strings.TrimSpace(l.config.LogPath)
+	if logPath == "" {
+		return nil
+	}
+	l.retTally.hasLogPath = true
+	timeout := fsIoTimeout(l.config)
+	res := pruneOrphanLogs(ctx, l.logger, orphanLogTarget{
+		own: ownLogIn(l.logger, logPath),
+		heldOpen: func(ctx context.Context) (map[string]bool, error) {
+			return safefs.HeldOpenIn(ctx, logPath, timeout)
+		},
+		op:       "local orphan logs",
+		where:    logPath,
+		hostname: l.hostname,
+		aliases:  l.hostAliases,
+		list: func(ctx context.Context) ([]string, error) {
+			return listLogFolder(ctx, "local-log-list", logPath, timeout)
+		},
+		remove: func(ctx context.Context, name string) error {
+			return safefs.Remove(ctx, filepath.Join(logPath, name), timeout)
+		},
+	}, backups, l.retTally.removed)
+	mergeOrphanLogs(&l.lastRet, &l.retTally, res)
+	return res.stopped
 }
 
 // applyGFSRetention applies GFS (Grandfather-Father-Son) retention policy
@@ -695,6 +737,7 @@ func (l *LocalStorage) applyGFSRetention(ctx context.Context, backups []*types.B
 		}
 
 		deleted++
+		l.retTally.removed = append(l.retTally.removed, backup.BackupFile)
 		if logDeleted {
 			logsDeleted++
 		}
@@ -781,6 +824,7 @@ func (l *LocalStorage) applySimpleRetention(ctx context.Context, backups []*type
 		}
 
 		deleted++
+		l.retTally.removed = append(l.retTally.removed, backup.BackupFile)
 		if logDeleted {
 			logsDeleted++
 		}

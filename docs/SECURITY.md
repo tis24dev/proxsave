@@ -288,7 +288,7 @@ a key added by a newer release appears with its default instead of staying absen
 
 | Key | Default | Effect |
 |-----|---------|--------|
-| `SECURITY_CHECK_ENABLED` | `true` | run the preflight (legacy alias `FULL_SECURITY_CHECK`) |
+| `SECURITY_CHECK_ENABLED` | `true` | run the preflight |
 | `AUTO_FIX_PERMISSIONS` | `true` | auto-correct mode/owner (never on a symlink) |
 | `AUTO_UPDATE_HASHES` | `true` | create/refresh the `<exe>.md5` integrity hash |
 | `CONTINUE_ON_SECURITY_ISSUES` | `false` | if false, a security error aborts the run |

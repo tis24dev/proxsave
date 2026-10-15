@@ -112,3 +112,146 @@ func TestVerifyBackupDirectoriesDryRunLeavesTheSecondaryLogDirectory(t *testing.
 		}
 	}
 }
+
+// A secondary whose backup or log directory is the local one, by path or through a
+// link, is reported and switched off for the run, without failing it; a separate one
+// is left alone.
+func TestVerifyBackupDirectoriesDisablesASecondaryThatIsTheLocalOne(t *testing.T) {
+	cases := map[string]struct {
+		secondary, secondaryLog func(root, backup, log string) string
+		wantLines               []string
+	}{
+		"backup directory by path": {
+			secondary:    func(root, backup, log string) string { return backup + "/" },
+			secondaryLog: func(root, backup, log string) string { return filepath.Join(root, "secondary-log") },
+			wantLines:    []string{"WARNING  ✗ Secondary directory same as Backup directory (secondary storage disabled)"},
+		},
+		"log directory through a link": {
+			secondary: func(root, backup, log string) string { return filepath.Join(root, "secondary") },
+			secondaryLog: func(root, backup, log string) string {
+				link := filepath.Join(root, "log-link")
+				if err := os.Symlink(log, link); err != nil {
+					t.Fatal(err)
+				}
+				return link
+			},
+			wantLines: []string{"WARNING  ✗ Secondary log directory same as Log directory (secondary storage disabled)"},
+		},
+		"separate directories": {
+			secondary:    func(root, backup, log string) string { return filepath.Join(root, "secondary") },
+			secondaryLog: func(root, backup, log string) string { return filepath.Join(root, "secondary-log") },
+		},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			root := t.TempDir()
+			backup, logDir := filepath.Join(root, "backup"), filepath.Join(root, "log")
+			for _, dir := range []string{backup, logDir} {
+				if err := os.MkdirAll(dir, 0o755); err != nil {
+					t.Fatal(err)
+				}
+			}
+			cfg := &config.Config{BackupPath: backup, LogPath: logDir, LockPath: filepath.Join(root, "lock"),
+				SecondaryEnabled: true, SecondaryPath: tc.secondary(root, backup, logDir), SecondaryLogPath: tc.secondaryLog(root, backup, logDir)}
+			logger := logging.New(types.LogLevelInfo, false)
+			buf := &bytes.Buffer{}
+			logger.SetOutput(buf)
+			prev := logging.GetDefaultLogger()
+			logging.SetDefaultLogger(logger)
+			verifyBackupDirectories(cfg, logger)
+			logging.SetDefaultLogger(prev)
+
+			out := buf.String()
+			for _, line := range tc.wantLines {
+				if !strings.Contains(out, line) {
+					t.Fatalf("missing %q in:\n%s", line, out)
+				}
+			}
+			disabled := len(tc.wantLines) > 0
+			if cfg.SecondaryEnabled == disabled || cfg.SecondaryStartupFailed {
+				t.Fatalf("SecondaryEnabled=%v SecondaryStartupFailed=%v, want disabled=%v and not failed:\n%s",
+					cfg.SecondaryEnabled, cfg.SecondaryStartupFailed, disabled, out)
+			}
+			if disabled && strings.Contains(out, "Secondary log directory exists") {
+				t.Fatalf("a disabled secondary still had its log directory checked:\n%s", out)
+			}
+		})
+	}
+}
+
+// A cloud that is a local directory gets the same check: its backup or log directory
+// may be neither the local one nor the secondary's while that is on. It is switched off,
+// not failed; a cloud on a remote is never compared.
+func TestVerifyBackupDirectoriesDisablesACloudThatIsALocalOne(t *testing.T) {
+	cases := map[string]struct {
+		cloudRemote, cloudLog func(root string) string
+		secondary             bool
+		wantLines             []string
+	}{
+		"cloud directory is the backup directory": {
+			cloudRemote: func(root string) string { return filepath.Join(root, "backup") },
+			cloudLog:    func(root string) string { return "/cloud-log" },
+			wantLines:   []string{"WARNING  ✗ Cloud directory same as Backup directory (cloud storage disabled)"},
+		},
+		"cloud log directory is the log directory": {
+			cloudRemote: func(root string) string { return filepath.Join(root, "cloud") },
+			cloudLog:    func(root string) string { return "../log" },
+			wantLines:   []string{"WARNING  ✗ Cloud log directory same as Log directory (cloud storage disabled)"},
+		},
+		"cloud log directory is the secondary log directory": {
+			cloudRemote: func(root string) string { return filepath.Join(root, "cloud") },
+			cloudLog:    func(root string) string { return "../secondary-log" },
+			secondary:   true,
+			wantLines:   []string{"WARNING  ✗ Cloud log directory same as Secondary log directory (cloud storage disabled)"},
+		},
+		"separate directories": {
+			cloudRemote: func(root string) string { return filepath.Join(root, "cloud") },
+			cloudLog:    func(root string) string { return "/cloud-log" },
+			secondary:   true,
+		},
+		"cloud on a remote": {
+			cloudRemote: func(root string) string { return "gdrive" },
+			cloudLog:    func(root string) string { return "/log" },
+		},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			root := t.TempDir()
+			for _, dir := range []string{"backup", "log", "secondary", "secondary-log", "cloud"} {
+				if err := os.MkdirAll(filepath.Join(root, dir), 0o755); err != nil {
+					t.Fatal(err)
+				}
+			}
+			cfg := &config.Config{BackupPath: filepath.Join(root, "backup"), LogPath: filepath.Join(root, "log"),
+				LockPath: filepath.Join(root, "lock"), CloudEnabled: true,
+				CloudRemote: tc.cloudRemote(root), CloudLogPath: tc.cloudLog(root)}
+			if tc.secondary {
+				cfg.SecondaryEnabled = true
+				cfg.SecondaryPath = filepath.Join(root, "secondary")
+				cfg.SecondaryLogPath = filepath.Join(root, "secondary-log")
+			}
+			logger := logging.New(types.LogLevelInfo, false)
+			buf := &bytes.Buffer{}
+			logger.SetOutput(buf)
+			prev := logging.GetDefaultLogger()
+			logging.SetDefaultLogger(logger)
+			verifyBackupDirectories(cfg, logger)
+			logging.SetDefaultLogger(prev)
+
+			out := buf.String()
+			for _, line := range tc.wantLines {
+				if !strings.Contains(out, line) {
+					t.Fatalf("missing %q in:\n%s", line, out)
+				}
+			}
+			disabled := len(tc.wantLines) > 0
+			if cfg.CloudEnabled == disabled || cfg.CloudStartupFailed {
+				t.Fatalf("CloudEnabled=%v CloudStartupFailed=%v, want disabled=%v and not failed:\n%s",
+					cfg.CloudEnabled, cfg.CloudStartupFailed, disabled, out)
+			}
+			if !disabled && strings.Contains(out, "Cloud directory same") {
+				t.Fatalf("a separate cloud was reported:\n%s", out)
+			}
+		})
+	}
+}

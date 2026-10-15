@@ -893,6 +893,33 @@ func TestExtractLogKeyFromBackup(t *testing.T) {
 			backupFile: "node-backup-20240102-03040.tar.zst",
 			wantOK:     false,
 		},
+		{
+			// The hostname carries a marker of its own: the key is after the last one.
+			name:       "hostname containing the marker",
+			backupFile: "pbs-backup-01-backup-20261014-120000.tar.zst",
+			wantHost:   "pbs-backup-01",
+			wantTS:     "20261014-120000",
+			wantOK:     true,
+		},
+		{
+			// Fifteen characters after the FIRST marker used to pass as a timestamp
+			// ("datacenter-rome"), and the orphan-log pass then read every log as older.
+			name:       "fifteen characters after an earlier marker",
+			backupFile: "srv-backup-datacenter-rome.example.com-backup-20261014-120000.tar.zst",
+			wantHost:   "srv-backup-datacenter-rome.example.com",
+			wantTS:     "20261014-120000",
+			wantOK:     true,
+		},
+		{
+			name:       "fifteen characters that are not a timestamp",
+			backupFile: "node-backup-datacenter-rome.tar.zst",
+			wantOK:     false,
+		},
+		{
+			name:       "timestamp followed by something other than an extension",
+			backupFile: "node-backup-20240102-030405x.tar.zst",
+			wantOK:     false,
+		},
 	}
 
 	for _, tt := range tests {

@@ -263,6 +263,8 @@ func TestCloudLocalFormRetentionAndStatistics(t *testing.T) {
 				"deletefile " + form.base + "/" + oldest + ".sha256",
 				"deletefile " + form.logDir + "/backup-node-20241110-100000.log",
 				"lsf " + form.logDir + " --files-only",
+				// The orphan-log pass lists the folder again once the archives are rotated.
+				"lsf " + form.logDir + " --files-only",
 				"lsl " + form.base + " --max-depth 1",
 			}
 			sort.Strings(want)

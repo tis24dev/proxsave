@@ -40,6 +40,7 @@ func applyConfigUpgrade(ctx context.Context, configPath, baseDir string) (*confi
 		return result, err
 	}
 	seed = seed.written(strings.TrimSpace(configPath))
+	result.Notes = append(result.Notes, legacyUpgradeNotes(result.Legacy)...)
 	result.Notes = append(result.Notes, seed.upgradeNotes()...)
 	if seed.Item != "" {
 		result.Warnings = append(result.Warnings, seed.Item)
@@ -106,12 +107,12 @@ func runUpgradeConfigMode(ctx context.Context, args *cli.Args, bootstrap *loggin
 	logConfigUpgradeWarnings(bootstrap, result.Warnings)
 	if !result.Changed {
 		bootstrap.Println("Configuration is already up to date with the embedded template; no changes were made.")
-		reportConfigFindingsTheMergeLeaves(bootstrap, args.ConfigPath)
+		reportConfigFindingsTheMergeLeaves(bootstrap, args.ConfigPath, result.Legacy)
 		return types.ExitSuccess.Int(), true
 	}
 
 	printConfigUpgradeApplyResult(bootstrap, result)
-	reportConfigFindingsTheMergeLeaves(bootstrap, args.ConfigPath)
+	reportConfigFindingsTheMergeLeaves(bootstrap, args.ConfigPath, result.Legacy)
 	return types.ExitSuccess.Int(), true
 }
 
@@ -127,17 +128,30 @@ func runUpgradeConfigMode(ctx context.Context, args *cli.Args, bootstrap *loggin
 //
 // This only reports. Removing the discarded lines is an edit to the operator's file
 // that the merge has never made, and it is not made here either.
-func reportConfigFindingsTheMergeLeaves(bootstrap *logging.BootstrapLogger, configPath string) {
+//
+// legacy are the variables the merge renames or drops itself. A dry run audits the file
+// before the merge, where they are still there, so they are left out of what it names.
+func reportConfigFindingsTheMergeLeaves(bootstrap *logging.BootstrapLogger, configPath string, legacy []config.LegacyChange) {
 	report, err := config.AuditConfigFile(configPath)
 	if err != nil {
 		logging.DebugStepBootstrap(bootstrap, "config upgrade", "audit after merge failed: %v", err)
 		return
 	}
+	handled := make(map[string]bool, len(legacy))
+	for _, change := range legacy {
+		handled[change.Name] = true
+	}
 	for _, duplicated := range report.Duplicated {
+		if handled[duplicated.Name] {
+			continue
+		}
 		bootstrap.Warning("- %s. The merge does not remove it: delete the discarded line(s) by hand.",
 			duplicatedVariableSentence(duplicated))
 	}
 	for _, candidate := range report.NearMiss {
+		if handled[candidate.Name] {
+			continue
+		}
 		bootstrap.Warning("- %s is not a variable ProxSave reads; did you mean %s? Nothing on that line is applied.",
 			candidate.Name, candidate.Suggestion)
 	}
@@ -162,17 +176,67 @@ func runUpgradeConfigDryMode(_ context.Context, args *cli.Args, bootstrap *loggi
 	logConfigUpgradeWarnings(bootstrap, result.Warnings)
 	if !result.Changed {
 		bootstrap.Println("Configuration is already up to date with the embedded template; no changes are required.")
-		reportConfigFindingsTheMergeLeaves(bootstrap, args.ConfigPath)
+		reportConfigFindingsTheMergeLeaves(bootstrap, args.ConfigPath, result.Legacy)
 		return types.ExitSuccess.Int(), true
 	}
 
 	printConfigUpgradeDryRunResult(bootstrap, result)
-	reportConfigFindingsTheMergeLeaves(bootstrap, args.ConfigPath)
+	reportConfigFindingsTheMergeLeaves(bootstrap, args.ConfigPath, result.Legacy)
 	return types.ExitSuccess.Int(), true
 }
 
 // logConfigUpgradeNotes logs an upgrade's Notes at their level, in order. The callers run it
 // BEFORE the warnings list, so a block that ends in an outcome is read before the list.
+// legacyUpgradeNotes are the lines of the variables the merge carried over from the
+// names of the Bash version: the DEBUG evidence of each, then one INFO line for the
+// renamed ones and one for the ones dropped because they had no effect.
+func legacyUpgradeNotes(changes []config.LegacyChange) []config.UpgradeNote {
+	var notes []config.UpgradeNote
+	var renamed, removed []string
+	for _, change := range changes {
+		action := "removed"
+		if change.Renamed {
+			action = "renamed"
+			renamed = append(renamed, change.Name+" to "+change.Current)
+		} else {
+			removed = append(removed, change.Name)
+		}
+		notes = append(notes, config.UpgradeNote{Level: config.UpgradeNoteDebug,
+			Text: fmt.Sprintf("config upgrade: legacy %s current=%s lines=%s action=%s",
+				change.Name, change.Current, joinLineNumbers(change.Lines), action)})
+	}
+	if len(renamed) > 0 {
+		notes = append(notes, config.UpgradeNote{Level: config.UpgradeNoteInfo,
+			Text: fmt.Sprintf("Renamed %d legacy variable(s): %s", len(renamed), strings.Join(renamed, ", "))})
+	}
+	if len(removed) > 0 {
+		notes = append(notes, config.UpgradeNote{Level: config.UpgradeNoteInfo,
+			Text: fmt.Sprintf("Removed %d legacy variable(s) with no effect: %s", len(removed), strings.Join(removed, ", "))})
+	}
+	return notes
+}
+
+// legacyPlanLines are what a dry run, or the dashboard check, says the merge would do
+// with the variables written under a name of the Bash version.
+func legacyPlanLines(changes []config.LegacyChange) []string {
+	var renamed, removed []string
+	for _, change := range changes {
+		if change.Renamed {
+			renamed = append(renamed, change.Name+" to "+change.Current)
+		} else {
+			removed = append(removed, change.Name)
+		}
+	}
+	var lines []string
+	if len(renamed) > 0 {
+		lines = append(lines, fmt.Sprintf("Legacy variables that would be renamed (%d): %s", len(renamed), strings.Join(renamed, ", ")))
+	}
+	if len(removed) > 0 {
+		lines = append(lines, fmt.Sprintf("Legacy variables that would be removed (%d): %s", len(removed), strings.Join(removed, ", ")))
+	}
+	return lines
+}
+
 func logConfigUpgradeNotes(bootstrap *logging.BootstrapLogger, notes []config.UpgradeNote) {
 	for _, note := range notes {
 		if note.Level == config.UpgradeNoteDebug {
@@ -194,6 +258,9 @@ func logConfigUpgradeWarnings(bootstrap *logging.BootstrapLogger, warnings []str
 }
 
 func printConfigUpgradeDryRunResult(bootstrap *logging.BootstrapLogger, result *config.UpgradeResult) {
+	for _, line := range legacyPlanLines(result.Legacy) {
+		bootstrap.Println(line)
+	}
 	if len(result.MissingKeys) > 0 {
 		bootstrap.Printf("Missing keys that would be added from the template (%d): %s",
 			len(result.MissingKeys), strings.Join(result.MissingKeys, ", "))

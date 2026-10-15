@@ -169,6 +169,13 @@ type retentionTally struct {
 	logsNotDeleted int
 	notRotated     []retentionNameCount
 	sharedWith     []string
+	// removed are the archives this pass deleted (BackupFile), so the orphan-log pass
+	// can tell the archives still in place from the ones whose logs it already handled.
+	removed []string
+	// hasLogPath and logsNotListed are set by the orphan-log pass: see
+	// RetentionSummary.HasLogPath and LogsNotListed.
+	hasLogPath    bool
+	logsNotListed error
 }
 
 func (t retentionTally) apply(s *RetentionSummary) {
@@ -179,6 +186,9 @@ func (t retentionTally) apply(s *RetentionSummary) {
 	s.NotListed = t.notListed
 	s.NoMetadata = t.noMetadata
 	s.LogsNotDeleted = t.logsNotDeleted
+	s.HasLogPath = t.hasLogPath
+	s.LogsNotListed = t.logsNotListed != nil
+	s.LogsNotListedCause = ErrorCause(t.logsNotListed)
 	s.NotRotated = 0
 	names := make([]string, 0, len(t.notRotated))
 	for _, g := range t.notRotated {

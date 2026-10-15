@@ -297,9 +297,7 @@ func ApplyInstallData(baseTemplate string, data *InstallWizardData) (string, err
 		//	explicit answer        -> write it (the seam a future prompt plugs into)
 		//	EMAIL_FALLBACK_SENDMAIL
 		//	  present at all       -> PRESERVE it, byte for byte
-		//	only the legacy
-		//	  EMAIL_FALLBACK_PMF   -> migrate its value onto the current spelling
-		//	neither key present    -> seed true (a blank Edit; the shipped template
+		//	not present            -> seed true (a blank Edit; the shipped template
 		//	                          already carries the key, so a fresh install and
 		//	                          an Overwrite both take the preserve arm)
 		//
@@ -308,26 +306,13 @@ func ApplyInstallData(baseTemplate string, data *InstallWizardData) (string, err
 		// EMAIL_FALLBACK_SENDMAIL=false back to true and silently re-opened a delivery
 		// route the operator had closed.
 		//
-		// Every arm of this switch drops the transitional key, so a config that carried
-		// both spellings leaves with one. That is safe because the arms read
-		// existingValues, parsed from the UNTOUCHED baseTemplate, so the migrate arm
-		// still has the value after the line is gone from template. It is not lossless
-		// in general -- on the migrate arm the alias IS the key the loader was reading
-		// -- which is exactly why that arm copies the value across before it is lost.
-		// The drop stays INSIDE the email-enabled branch on purpose: the email-off
-		// branch writes no EMAIL_FALLBACK_SENDMAIL, so removing the alias there would
-		// flip a PMF-only config to the loader's true default.
-		//
 		// PRESENCE in existingValues, not emptiness of the value, is what selects the
 		// arm. The two are different: parseEnvTemplate records a bare "KEY=" line as a
-		// present, empty value, and the loader reads that as FALSE
-		// (getBoolWithFallback stops at the first key it finds; utils.ParseBool("") is
-		// false). Keying off the value instead treated "KEY=" as "nothing stored" and
+		// present, empty value, and the loader reads that as FALSE (utils.ParseBool("")
+		// is false). Keying off the value instead treated "KEY=" as "nothing stored" and
 		// seeded true over it -- the same silent re-open this switch exists to prevent,
 		// just spelled with an empty value instead of "false".
 		_, sendmailStored := existingValues["EMAIL_FALLBACK_SENDMAIL"]
-		legacyRaw, legacyStored := existingValues["EMAIL_FALLBACK_PMF"]
-		template = unsetEnvValue(template, "EMAIL_FALLBACK_PMF")
 		switch {
 		case data.EmailFallbackSendmail != nil:
 			template = setEnvValue(template, "EMAIL_FALLBACK_SENDMAIL", fmt.Sprintf("%t", *data.EmailFallbackSendmail))
@@ -335,8 +320,6 @@ func ApplyInstallData(baseTemplate string, data *InstallWizardData) (string, err
 			// PRESERVE: write nothing at all. Not even a canonicalising rewrite -- the
 			// operator's own spelling (quotes, an export prefix, yes/on/0) survives an
 			// edit verbatim, and utils.ParseBool and the loader accept all of them.
-		case legacyStored:
-			template = setEnvValue(template, "EMAIL_FALLBACK_SENDMAIL", fmt.Sprintf("%t", utils.ParseBool(legacyRaw)))
 		default:
 			template = setEnvValue(template, "EMAIL_FALLBACK_SENDMAIL", "true")
 		}
@@ -525,12 +508,12 @@ func DeriveInstallWizardPrefill(baseTemplate string) InstallWizardPrefill {
 	}
 	values := parseEnvTemplate(baseTemplate)
 
-	out.SecondaryEnabled = readTemplateBool(values, "SECONDARY_ENABLED", "ENABLE_SECONDARY_BACKUP")
-	out.SecondaryPath = readTemplateString(values, "SECONDARY_PATH", "SECONDARY_BACKUP_PATH")
+	out.SecondaryEnabled = readTemplateBool(values, "SECONDARY_ENABLED")
+	out.SecondaryPath = readTemplateString(values, "SECONDARY_PATH")
 	out.SecondaryLogPath = readTemplateString(values, "SECONDARY_LOG_PATH")
 
-	out.CloudEnabled = readTemplateBool(values, "CLOUD_ENABLED", "ENABLE_CLOUD_BACKUP")
-	out.CloudRemote = readTemplateString(values, "CLOUD_REMOTE", "RCLONE_REMOTE")
+	out.CloudEnabled = readTemplateBool(values, "CLOUD_ENABLED")
+	out.CloudRemote = readTemplateString(values, "CLOUD_REMOTE")
 	out.CloudLogPath = readTemplateString(values, "CLOUD_LOG_PATH")
 
 	out.FirewallEnabled = readTemplateBool(values, "BACKUP_FIREWALL_RULES")

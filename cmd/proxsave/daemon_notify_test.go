@@ -214,13 +214,19 @@ func TestBuildBackupCmdSetsRunIDEnv(t *testing.T) {
 	}, time.Hour)
 
 	// rid set -> PROXSAVE_RUN_ID=rid42 is appended.
-	cmd := d.buildBackupCmd(context.Background(), nil, "rid42")
+	cmd, err := d.buildBackupCmd(context.Background(), nil, "rid42")
+	if err != nil {
+		t.Fatalf("buildBackupCmd: %v", err)
+	}
 	if !envContains(cmd.Env, health.EnvRunID+"=rid42") {
 		t.Fatalf("cmd.Env must carry %s=rid42, got %v", health.EnvRunID, cmd.Env)
 	}
 
 	// rid empty -> no PROXSAVE_RUN_ID entry is added.
-	cmd = d.buildBackupCmd(context.Background(), nil, "")
+	cmd, err = d.buildBackupCmd(context.Background(), nil, "")
+	if err != nil {
+		t.Fatalf("buildBackupCmd: %v", err)
+	}
 	for _, e := range cmd.Env {
 		if strings.HasPrefix(e, health.EnvRunID+"=") {
 			t.Fatalf("empty rid must not add %s, got %q", health.EnvRunID, e)

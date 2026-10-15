@@ -324,8 +324,6 @@ func TestAVariableTheLoaderReadsIsNotReportedAsUnknown(t *testing.T) {
 		"a second commented example":        "SAFE_BRACKET_PROCESSES=\"[kworker]\"\n",
 		"per-endpoint webhook, templated":   "WEBHOOK_ENDPOINTS=pushover\nWEBHOOK_PUSHOVER_URL=https://example.invalid/hook\n",
 		"per-endpoint webhook, own name":    "WEBHOOK_ENDPOINTS=mine\nWEBHOOK_MINE_URL=https://example.invalid/hook\nWEBHOOK_MINE_AUTH_TOKEN=t\n",
-		"legacy notification alias":         "EMAIL_ENABLE=true\n",
-		"legacy fallback alias":             "EMAIL_FALLBACK_PMF=true\n",
 	}
 	for name, body := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -356,66 +354,16 @@ func joinStrings(values []string) string {
 	return strings.Join(values, ",")
 }
 
-// A legacy alias is neither unknown nor unremarkable. The loader reads it, and for
-// seven of them it reads it FIRST, so a canonical line written in the same file has no
-// effect at all: the backups keep landing wherever the legacy name points. Calling that
-// "not a known variable and is ignored" was false, and saying nothing hides the trap.
-func TestALegacyAliasGetsItsOwnCategory(t *testing.T) {
-	cases := map[string]struct {
-		body          string
-		wantName      string
-		wantCanonical string
-		wantWins      bool
-		wantBothSet   bool
-	}{
-		"legacy wins and both are set": {
-			body:          "LOCAL_BACKUP_PATH=/srv/legacy\nBACKUP_PATH=/srv/canonical\n",
-			wantName:      "LOCAL_BACKUP_PATH",
-			wantCanonical: "BACKUP_PATH",
-			wantWins:      true,
-			wantBothSet:   true,
-		},
-		"legacy wins and it is the only one": {
-			body:          "RCLONE_REMOTE=myremote\n",
-			wantName:      "RCLONE_REMOTE",
-			wantCanonical: "CLOUD_REMOTE",
-			wantWins:      true,
-		},
-		"canonical wins and both are set": {
-			body:          "EMAIL_ENABLE=true\nEMAIL_ENABLED=false\n",
-			wantName:      "EMAIL_ENABLE",
-			wantCanonical: "EMAIL_ENABLED",
-			wantBothSet:   true,
-		},
+// A variable name of the Bash version is no longer read, so the audit calls it what it
+// now is: a variable the binary ignores. The upgrade renames it; until then the operator
+// is told the line has no effect.
+func TestALegacyNameIsUnknown(t *testing.T) {
+	report, err := AuditConfigFile(writeEnvFile(t, DefaultEnvTemplate()+"LOCAL_BACKUP_PATH=/srv/legacy\nEMAIL_ENABLE=true\n"))
+	if err != nil {
+		t.Fatalf("audit: %v", err)
 	}
-	for name, tc := range cases {
-		t.Run(name, func(t *testing.T) {
-			report, err := AuditConfigFile(writeEnvFile(t, tc.body))
-			if err != nil {
-				t.Fatalf("audit: %v", err)
-			}
-			if containsString(report.Unknown, tc.wantName) {
-				t.Fatalf("%s is read by the loader, the audit still calls it unknown", tc.wantName)
-			}
-			var found *LegacyVariable
-			for i := range report.Legacy {
-				if report.Legacy[i].Name == tc.wantName {
-					found = &report.Legacy[i]
-				}
-			}
-			if found == nil {
-				t.Fatalf("%s is not in the legacy category: %+v", tc.wantName, report.Legacy)
-			}
-			if found.Canonical != tc.wantCanonical {
-				t.Fatalf("canonical %q, expected %q", found.Canonical, tc.wantCanonical)
-			}
-			if found.Wins != tc.wantWins {
-				t.Fatalf("Wins = %v, expected %v", found.Wins, tc.wantWins)
-			}
-			if found.CanonicalAlsoSet != tc.wantBothSet {
-				t.Fatalf("CanonicalAlsoSet = %v, expected %v", found.CanonicalAlsoSet, tc.wantBothSet)
-			}
-		})
+	if joinStrings(report.Unknown) != "LOCAL_BACKUP_PATH,EMAIL_ENABLE" {
+		t.Fatalf("unknown = %v, expected both legacy names", report.Unknown)
 	}
 }
 
@@ -478,5 +426,40 @@ func TestIsOneEditApart(t *testing.T) {
 		if got := isOneEditApart(tc.a, tc.b); got != tc.want {
 			t.Fatalf("isOneEditApart(%q, %q) = %v, want %v", tc.a, tc.b, got, tc.want)
 		}
+	}
+}
+
+// A ".." after a symbolic link names, for the kernel, the file next to the link's
+// target, which is the file the loader reads. The audit has to read that one too, not
+// the file the path names when cleaned as text.
+func TestAuditReadsTheFileTheLoaderReadsThroughALink(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "real", "sub"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(root, "a"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(root, "real", "sub"), filepath.Join(root, "a", "link")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "a", "backup.env"), []byte("COMPRESSION_TYPE=xz\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "real", "backup.env"), []byte("COMPRESSION_TYPE=xz\nCOMPRESSION_TYPE=zstd\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	path := filepath.Join(root, "a", "link") + "/../backup.env"
+	raw, err := parseEnvFile(path)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	report, err := AuditConfigFile(path)
+	if err != nil {
+		t.Fatalf("audit: %v", err)
+	}
+	if raw["COMPRESSION_TYPE"] != "zstd" || len(report.Duplicated) != 1 {
+		t.Fatalf("loader read %q, audit found %d duplicated: they read different files", raw["COMPRESSION_TYPE"], len(report.Duplicated))
 	}
 }

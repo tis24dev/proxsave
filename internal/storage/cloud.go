@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path"
@@ -2516,9 +2517,101 @@ func (c *CloudStorage) ApplyRetention(ctx context.Context, config RetentionConfi
 
 	// Apply appropriate retention policy
 	if config.Policy == "gfs" {
-		return c.applyGFSRetention(ctx, backups, config)
+		deleted, err = c.applyGFSRetention(ctx, backups, config)
+	} else {
+		deleted, err = c.applySimpleRetention(ctx, backups, config.MaxBackups)
 	}
-	return c.applySimpleRetention(ctx, backups, config.MaxBackups)
+	if err != nil {
+		return deleted, err
+	}
+	if err := c.pruneOrphanLogs(ctx, backups); err != nil {
+		return deleted, err
+	}
+	return deleted, nil
+}
+
+// pruneOrphanLogs runs the orphan-log pass (log_orphans.go) on CLOUD_LOG_PATH once
+// the archives are rotated, and folds what it did into this pass's summary. A
+// CLOUD_LOG_PATH outside the CLOUD_REMOTE directory gets no copy and no cleanup
+// (deleteAssociatedLog), so it keeps no logs this pass could report on. It decides on
+// its own listing, which reads a missing folder as one with no log, rather than on
+// the folder state countLogFiles keeps for the deletions that go with each archive.
+// Every log in the cloud folder is a copy made at the end of a run, so none is held
+// open and no open-file check applies.
+func (c *CloudStorage) pruneOrphanLogs(ctx context.Context, backups []*types.BackupMetadata) error {
+	if c.config == nil {
+		return nil
+	}
+	base := c.cloudLogBase(c.config.CloudLogPath)
+	if base == "" {
+		return nil
+	}
+	if _, outside := LocalCloudLogOutside(c.config.CloudLogPath, c.localRoot); outside {
+		return nil
+	}
+	c.retTally.hasLogPath = true
+	res := pruneOrphanLogs(ctx, c.logger, orphanLogTarget{
+		op:       "cloud orphan logs",
+		where:    base,
+		hostname: c.hostname,
+		aliases:  c.hostAliases,
+		list: func(ctx context.Context) ([]string, error) {
+			return c.listLogNames(ctx, base)
+		},
+		remove: c.deleteLogObject,
+	}, backups, c.retTally.removed)
+	mergeOrphanLogs(&c.lastRet, &c.retTally, res)
+	return res.stopped
+}
+
+// listLogNames returns the file names in the cloud log folder. A folder rclone reports
+// as not found holds no log: an empty list, not an error.
+func (c *CloudStorage) listLogNames(ctx context.Context, base string) ([]string, error) {
+	ctx, cancel := c.boundManagementCtx(ctx)
+	defer cancel()
+	args := c.buildRcloneArgs("lsf")
+	args = append(args, base, "--files-only")
+	output, err := c.exec(ctx, args[0], args[1:]...)
+	if err != nil {
+		msg := strings.TrimSpace(string(output.transcript()))
+		if isRcloneObjectNotFound(msg) || isRcloneObjectNotFound(err.Error()) {
+			c.logger.Debug("Cloud logs: %s not found, no log to list (%s)", base, msg)
+			return nil, nil
+		}
+		return nil, &rcloneCommandError{msg: rcloneFailureDetail(msg, err), short: rcloneCause(msg, err), err: err}
+	}
+	var names []string
+	for _, line := range strings.Split(string(output.stdout), "\n") {
+		name := strings.TrimSpace(line)
+		if name == "" || strings.HasSuffix(name, "/") {
+			continue
+		}
+		names = append(names, name)
+	}
+	return names, nil
+}
+
+// deleteLogObject deletes one log from the cloud log folder with the single-object
+// `deletefile` (see deleteAssociatedLog for why not `delete`). A log rclone reports
+// as not found answers fs.ErrNotExist.
+func (c *CloudStorage) deleteLogObject(ctx context.Context, name string) error {
+	ctx, cancel := c.boundManagementCtx(ctx)
+	defer cancel()
+	cloudPath := c.cloudLogPath(c.config.CloudLogPath, name)
+	if strings.TrimSpace(cloudPath) == "" {
+		return fs.ErrNotExist
+	}
+	args := c.buildRcloneArgs("deletefile")
+	args = append(args, cloudPath)
+	output, err := c.exec(ctx, args[0], args[1:]...)
+	if err != nil {
+		msg := strings.TrimSpace(string(output.transcript()))
+		if isRcloneObjectNotFound(msg) || isRcloneObjectNotFound(err.Error()) {
+			return fs.ErrNotExist
+		}
+		return &rcloneCommandError{msg: rcloneFailureDetail(msg, err), short: rcloneCause(msg, err), err: err}
+	}
+	return nil
 }
 
 // applyGFSRetention applies GFS (Grandfather-Father-Son) retention policy
@@ -2626,6 +2719,7 @@ func (c *CloudStorage) deleteBatched(ctx context.Context, backups []*types.Backu
 		}
 
 		deleted++
+		c.retTally.removed = append(c.retTally.removed, backup.BackupFile)
 		if logDeleted {
 			logsDeleted++
 		}

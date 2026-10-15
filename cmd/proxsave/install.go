@@ -23,6 +23,7 @@ import (
 )
 
 var (
+	newInstallGeteuid                = os.Geteuid
 	newInstallEnsureInteractiveStdin = ensureInteractiveStdin
 	newInstallConfirmCLI             = confirmNewInstallCLI
 	newInstallConfirmTUI             = confirmNewInstallCharm
@@ -322,9 +323,27 @@ func runPostInstallAuditCLI(ctx context.Context, reader *bufio.Reader, execPath,
 	return nil
 }
 
+// newInstallNotRootError is the reset of the installation refused to anyone but root.
+// Its text is the sentence the operator reads, printed as is by both --new-install and
+// the dashboard's Wipe install.
+type newInstallNotRootError struct{}
+
+func (newInstallNotRootError) Error() string { return "Installation reset requires root privileges" }
+
+var errNewInstallNotRoot error = newInstallNotRootError{}
+
 func runNewInstall(ctx context.Context, configPath string, bootstrap *logging.BootstrapLogger, useCLI bool) (err error) {
 	done := logging.DebugStartBootstrap(bootstrap, "new-install workflow", "config=%s", configPath)
 	defer func() { done(err) }()
+
+	// The reset removes the install tree, which root owns: as anyone else it can stop
+	// half way through, with part of the tree already gone. Refused before anything is
+	// asked or touched.
+	euid := newInstallGeteuid()
+	logging.DebugStepBootstrap(bootstrap, "new-install workflow", "euid=%d", euid)
+	if euid != 0 {
+		return errNewInstallNotRoot
+	}
 
 	logging.DebugStepBootstrap(bootstrap, "new-install workflow", "ensuring interactive stdin")
 	if err := newInstallEnsureInteractiveStdin(); err != nil {
@@ -546,10 +565,9 @@ func runConfigWizardCLI(ctx context.Context, reader *bufio.Reader, configPath, t
 // Prefixing is safe because the marker only flips editingExisting, which is
 // UNOBSERVABLE for a CLI payload: the blank base carries no BOT_TELEGRAM_TYPE (so the
 // key is seeded either way), the collector always supplies a non-empty
-// EmailDeliveryMethod, and the blank base carries neither EMAIL_FALLBACK_SENDMAIL nor
-// the transitional EMAIL_FALLBACK_PMF - parseEnvTemplate skips the marker as a
-// comment, so existingValues is empty with or without it and the engine seeds the same
-// default either way. Pinned by TestRunConfigWizardCLIBlankEditKeepsMinimalKeySet.
+// EmailDeliveryMethod, and the blank base carries no EMAIL_FALLBACK_SENDMAIL -
+// parseEnvTemplate skips the marker as a comment, so existingValues is empty with or
+// without it and the engine seeds the same default either way. Pinned by TestRunConfigWizardCLIBlankEditKeepsMinimalKeySet.
 const wizardBlankEditBaseMarker = "# proxsave install wizard: blank existing configuration\n"
 
 func applyInstallDataCLI(base installWizardBase, fromExisting bool, data *installer.InstallWizardData) (string, error) {
@@ -849,16 +867,10 @@ func resetInstallBaseDirWithContext(ctx context.Context, baseDir string, bootstr
 		if err := clearImmutableAttributesWithContext(ctx, target, bootstrap); err != nil {
 			return err
 		}
-		// Best-effort: ensure write permission before removal
-		if entry.IsDir() {
-			// 0700 is the minimum that lets the owner traverse and delete the
-			// directory's contents in the os.RemoveAll below: a directory needs the
-			// execute bit, so gosec G302's file-oriented <=0600 ceiling does not apply.
-			// Owner-only (group and others have no access), and the mode is transient -
-			// the directory is removed on the very next line.
-			// #nosec G302 -- transient 0700 on a directory about to be removed; owner-only.
-			_ = os.Chmod(target, 0o700)
-		} else {
+		// Best-effort: ensure write permission before removal. Directories are left as
+		// they are: root removes them whatever their mode, and only a run that is not
+		// root would need a chmod there.
+		if !entry.IsDir() {
 			_ = os.Chmod(target, 0o600)
 		}
 		if err := os.RemoveAll(target); err != nil {
@@ -882,6 +894,19 @@ func printInstallBanner(configPath string) {
 	fmt.Println("  Mode: Install Wizard")
 	fmt.Println("===========================================")
 	fmt.Printf("Configuration file: %s\n\n", configPath)
+}
+
+// logLegacyInstallChanges is the DEBUG evidence of the variables of the Bash version the
+// Edit path carried over to their current names before the wizard read the file.
+func logLegacyInstallChanges(bootstrap *logging.BootstrapLogger, operation string, changes []config.LegacyChange) {
+	for _, change := range changes {
+		action := "removed"
+		if change.Renamed {
+			action = "renamed"
+		}
+		logging.DebugStepBootstrap(bootstrap, operation, "legacy %s current=%s lines=%s action=%s",
+			change.Name, change.Current, joinLineNumbers(change.Lines), action)
+	}
 }
 
 // installWizardBase carries the two views of the wizard's starting template that
@@ -922,6 +947,7 @@ func prepareBaseTemplate(ctx context.Context, reader *bufio.Reader, configPath s
 	// "Run at" prompt. Cancelling anywhere later then leaves the host byte-identical,
 	// which a write at this point would not. Keep existing has no wizard to carry the
 	// value, so its write is deferred to the commit point in runInstall.
+	logLegacyInstallChanges(bootstrap, "install workflow", decision.Legacy)
 	decision.BaseTemplate = adoptCronRunTimeIntoBase(ctx, decision, configPath, bootstrap)
 	if decision.SkipConfigWizard {
 		fmt.Println("Existing configuration detected, keeping current backup.env and skipping configuration wizard.")
@@ -1066,8 +1092,8 @@ func promptFirewallRules(ctx context.Context, reader *bufio.Reader, prefill inst
 
 // promptNotifications asks the Telegram + email questions (including the delivery
 // method when email is enabled) and RETURNS the answers. The BOT_TELEGRAM_TYPE
-// seeding, the EMAIL_FALLBACK_PMF removal and the EMAIL_FALLBACK_SENDMAIL write
-// this used to perform inline are installer.ApplyInstallData's job.
+// seeding and the EMAIL_FALLBACK_SENDMAIL write this used to perform inline are
+// installer.ApplyInstallData's job.
 func promptNotifications(ctx context.Context, reader *bufio.Reader, prefill installer.InstallWizardPrefill) (bool, bool, string, error) {
 	fmt.Println("\n--- Telegram ---")
 	enableTelegram, err := confirmDefault(ctx, reader, "Enable Telegram notifications (centralized)?", prefill.TelegramEnabled)

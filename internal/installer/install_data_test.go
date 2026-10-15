@@ -290,14 +290,11 @@ func TestApplyInstallDataPreservesExistingEmailDeliveryMethod(t *testing.T) {
 	if !strings.Contains(result, "EMAIL_FALLBACK_SENDMAIL=false") {
 		t.Fatalf("expected existing sendmail fallback key to be preserved:\n%s", result)
 	}
-	if strings.Contains(result, "EMAIL_FALLBACK_PMF") {
-		t.Fatalf("expected transitional EMAIL_FALLBACK_PMF key to be removed:\n%s", result)
-	}
 }
 
-// TestApplyInstallDataEmailFallbackSendmail pins all four outcomes of the key that
-// gates the local /usr/sbin/sendmail delivery leg, plus the retirement of its
-// transitional EMAIL_FALLBACK_PMF spelling.
+// TestApplyInstallDataEmailFallbackSendmail pins the outcomes of the key that gates the
+// local /usr/sbin/sendmail delivery leg. Its old EMAIL_FALLBACK_PMF spelling never
+// reaches the engine: the Edit path renames it before (config.MigrateLegacyVariables).
 //
 // The load-bearing one is preserve: neither front-end asks the operator about this
 // key, so both send a nil pointer, and anything other than "keep what is stored" means
@@ -358,22 +355,6 @@ func TestApplyInstallDataEmailFallbackSendmail(t *testing.T) {
 		}
 	})
 
-	t.Run("a present but empty legacy key migrates as off", func(t *testing.T) {
-		// Same trap one spelling down. The loader reads this config as false, so the
-		// migration must carry that across rather than read the empty value as
-		// "nothing stored" and seed true.
-		result, err := ApplyInstallData("EMAIL_ENABLED=true\nEMAIL_FALLBACK_PMF=\n", emailOn())
-		if err != nil {
-			t.Fatalf("ApplyInstallData: %v", err)
-		}
-		if !strings.Contains(result, "EMAIL_FALLBACK_SENDMAIL=false") {
-			t.Fatalf("an empty legacy key means off and must migrate as off:\n%s", result)
-		}
-		if strings.Contains(result, "EMAIL_FALLBACK_PMF") {
-			t.Fatalf("the transitional key must be retired by the migration:\n%s", result)
-		}
-	})
-
 	t.Run("stored value is preserved verbatim", func(t *testing.T) {
 		// Non-canonical on purpose: an export prefix, quotes, a value ParseBool reads
 		// as false and an inline comment. All of it must survive an edit untouched.
@@ -403,38 +384,6 @@ func TestApplyInstallDataEmailFallbackSendmail(t *testing.T) {
 		}
 	})
 
-	t.Run("legacy pmf value is migrated", func(t *testing.T) {
-		// "no" rather than "false" so the migrated VALUE is pinned, not just its
-		// presence: writing a literal true here would destroy the operator's choice.
-		result, err := ApplyInstallData("EMAIL_ENABLED=true\nEMAIL_FALLBACK_PMF=no\n", emailOn())
-		if err != nil {
-			t.Fatalf("ApplyInstallData: %v", err)
-		}
-		if !strings.Contains(result, "EMAIL_FALLBACK_SENDMAIL=false") {
-			t.Fatalf("the legacy value must be migrated onto the current key:\n%s", result)
-		}
-		if strings.Contains(result, "EMAIL_FALLBACK_PMF") {
-			t.Fatalf("the transitional key must be retired by the migration:\n%s", result)
-		}
-	})
-
-	t.Run("stale pmf is dropped while the stored value is preserved", func(t *testing.T) {
-		// Both spellings present. config.getBoolWithFallback reads
-		// EMAIL_FALLBACK_SENDMAIL first, so the engine must agree on that precedence
-		// (preserve false, not adopt the alias's true) and must not leave the config
-		// carrying two sources of truth.
-		result, err := ApplyInstallData("EMAIL_ENABLED=true\nEMAIL_FALLBACK_SENDMAIL=false\nEMAIL_FALLBACK_PMF=true\n", emailOn())
-		if err != nil {
-			t.Fatalf("ApplyInstallData: %v", err)
-		}
-		if !strings.Contains(result, "EMAIL_FALLBACK_SENDMAIL=false") {
-			t.Fatalf("the stored key must win over the transitional alias:\n%s", result)
-		}
-		if strings.Contains(result, "EMAIL_FALLBACK_PMF") {
-			t.Fatalf("the transitional key must be dropped on the preserve path too:\n%s", result)
-		}
-	})
-
 	t.Run("explicit false overrides a stored true", func(t *testing.T) {
 		data := emailOn()
 		data.EmailFallbackSendmail = boolPtr(false)
@@ -461,18 +410,16 @@ func TestApplyInstallDataEmailFallbackSendmail(t *testing.T) {
 		}
 	})
 
-	t.Run("email disabled touches neither key", func(t *testing.T) {
-		// The scope line: with email off the engine writes no
-		// EMAIL_FALLBACK_SENDMAIL, so retiring the alias here would silently flip a
-		// PMF-only config to the loader's true default.
-		base := "EMAIL_ENABLED=true\nEMAIL_FALLBACK_SENDMAIL=false\nEMAIL_FALLBACK_PMF=true\n"
+	t.Run("email disabled leaves the stored key alone", func(t *testing.T) {
+		// The scope line: with email off the engine writes no EMAIL_FALLBACK_SENDMAIL.
+		base := "EMAIL_ENABLED=true\nEMAIL_FALLBACK_SENDMAIL=false\n"
 		data := &InstallWizardData{BaseDir: "/data", NotificationMode: "none"}
 		result, err := ApplyInstallData(base, data)
 		if err != nil {
 			t.Fatalf("ApplyInstallData: %v", err)
 		}
-		if !strings.Contains(result, "EMAIL_FALLBACK_SENDMAIL=false") || !strings.Contains(result, "EMAIL_FALLBACK_PMF=true") {
-			t.Fatalf("with email off both fallback keys must survive verbatim:\n%s", result)
+		if !strings.Contains(result, "EMAIL_FALLBACK_SENDMAIL=false") {
+			t.Fatalf("with email off the stored fallback key must survive verbatim:\n%s", result)
 		}
 	})
 }

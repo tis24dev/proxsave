@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"fmt"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 
@@ -32,69 +33,6 @@ type DuplicatedVariable struct {
 	// NOT "every line but the winner": an assignment that follows a block
 	// concatenates onto it and loses nothing, so it appears in Lines and not here.
 	Discarded []int
-}
-
-// LegacyVariable is one variable assigned under a name the loader still reads but no
-// longer documents, together with the canonical name it stands in for.
-//
-// Wins records which of the two the loader consults FIRST, which is the whole reason
-// this category exists rather than a single line saying "old name". For seven of them
-// the LEGACY name is consulted first, so editing the canonical line in the same file
-// changes nothing at all and the backups keep landing wherever the legacy name points.
-type LegacyVariable struct {
-	Name             string
-	Canonical        string
-	Wins             bool
-	CanonicalAlsoSet bool
-}
-
-// legacyAliases is every name the loader reads as a stand-in for a canonical one, with
-// the order the loader consults them in: whichever name a call site lists FIRST is the
-// one that wins, and that is what Wins records here.
-//
-// It is hand-written, and it was hand-written from only TWO of the four fallback
-// helpers - getStringWithFallback and getBoolWithFallback. getIntWithFallback,
-// getStringSliceWithFallback and half the getBoolWithFallback sites were never read,
-// so eleven names the loader honours were reported to the operator as "not a known
-// variable and is ignored". TestEveryFallbackNameIsRegisteredOrInTheTemplate now
-// derives the same list from config.go with go/ast and fails naming the call site, so
-// the twelfth cannot arrive in silence.
-var legacyAliases = map[string]LegacyVariable{
-	"LOCAL_BACKUP_PATH":       {Canonical: "BACKUP_PATH", Wins: true},
-	"LOCAL_LOG_PATH":          {Canonical: "LOG_PATH", Wins: true},
-	"ENABLE_SECONDARY_BACKUP": {Canonical: "SECONDARY_ENABLED", Wins: true},
-	"SECONDARY_BACKUP_PATH":   {Canonical: "SECONDARY_PATH", Wins: true},
-	"ENABLE_CLOUD_BACKUP":     {Canonical: "CLOUD_ENABLED", Wins: true},
-	"RCLONE_REMOTE":           {Canonical: "CLOUD_REMOTE", Wins: true},
-	"PROMETHEUS_ENABLED":      {Canonical: "METRICS_ENABLED", Wins: true},
-
-	// These five are read only when the canonical name is ABSENT, because
-	// getBoolWithLegacyAlias lists the canonical one first.
-	telegramEnableLegacyKey:   {Canonical: telegramEnabledKey},
-	emailEnableLegacyKey:      {Canonical: emailEnabledKey},
-	gotifyEnableLegacyKey:     {Canonical: gotifyEnabledKey},
-	webhookEnableLegacyKey:    {Canonical: webhookEnabledKey},
-	emailFallbackPMFLegacyKey: {Canonical: emailFallbackSendmailKey},
-
-	// The eleven from the helpers this table was never derived from. Every one of
-	// these call sites lists the canonical name first and the canonical name is the
-	// one the template assigns, so none of them wins.
-	"FULL_SECURITY_CHECK":        {Canonical: "SECURITY_CHECK_ENABLED"},
-	"CLOUD_CONNECTIVITY_TIMEOUT": {Canonical: "RCLONE_TIMEOUT_CONNECTION"},
-	"LOCAL_RETENTION_DAYS":       {Canonical: "MAX_LOCAL_BACKUPS"},
-	"SECONDARY_RETENTION_DAYS":   {Canonical: "MAX_SECONDARY_BACKUPS"},
-	"CLOUD_RETENTION_DAYS":       {Canonical: "MAX_CLOUD_BACKUPS"},
-	"PROMETHEUS_TEXTFILE_DIR":    {Canonical: "METRICS_PATH"},
-	"BACKUP_REMOTE_CFG":          {Canonical: "BACKUP_REMOTE_CONFIGS"},
-	"BACKUP_NETWORK_CONFIG":      {Canonical: "BACKUP_NETWORK_CONFIGS"},
-	"BACKUP_PXAR_FILES":          {Canonical: "PXAR_SCAN_ENABLE"},
-	"PXAR_INCLUDE_PATTERN":       {Canonical: "PXAR_FILE_INCLUDE_PATTERN"},
-	"BACKUP_CRONTABS":            {Canonical: "BACKUP_CRON_JOBS"},
-
-	// Read by hand rather than through a helper (config.go:690-693 falls back to
-	// AGE_RECIPIENTS only when AGE_RECIPIENT yielded nothing), so the AST test above
-	// cannot see it and it has to be kept here deliberately.
-	"AGE_RECIPIENTS": {Canonical: "AGE_RECIPIENT"},
 }
 
 // KnownVariable is one variable the loader reads although the embedded template does
@@ -126,7 +64,7 @@ const (
 
 // unknownRuleTrace is why a variable matched NO rule, spelled out rather than left as
 // the absence of a line: it names every gate that was tried, in the order they were.
-const unknownRuleTrace = "not assigned in the template, not documented there, not a webhook endpoint field, not a legacy alias"
+const unknownRuleTrace = "not assigned in the template, not documented there, not a webhook endpoint field"
 
 // UnknownRuleTrace is the operator-facing list of every gate a variable failed before
 // the audit called it unknown, exported so the renderer states the rules rather than
@@ -171,11 +109,6 @@ type ConfigIntegrityReport struct {
 	// assign it, with the rule that accepted it. This is the decision that used to be
 	// wrong, so it is the one an operator checking the block will be looking for.
 	KnownOutsideTemplate []KnownVariable
-	// Legacy names each variable written under a name the loader still reads but no
-	// longer documents. It is its own category because neither of the others fits: the
-	// loader DOES read it, so it is not unknown, and for seven of them it wins over the
-	// canonical name, so it is not harmless either.
-	Legacy []LegacyVariable
 	// NearMiss is the subset of Unknown that is one character away from a name the
 	// loader reads. Every entry is ALSO in Unknown: the classification does not change,
 	// only what the operator is told about it.
@@ -203,7 +136,7 @@ func (r *ConfigIntegrityReport) Clean() bool {
 	if r == nil {
 		return true
 	}
-	return len(r.Duplicated) == 0 && len(r.Absent) == 0 && len(r.Unknown) == 0 && len(r.Legacy) == 0
+	return len(r.Duplicated) == 0 && len(r.Absent) == 0 && len(r.Unknown) == 0
 }
 
 // HasIssues reports whether the audit found something that discards or omits an
@@ -220,17 +153,7 @@ func (r *ConfigIntegrityReport) HasIssues() bool {
 	// retired, and the file is otherwise sound. One character away from a real variable
 	// is a different fact - the line the operator wrote has no effect - which is the
 	// duplicate's harm under another shape and is graded the same way.
-	if len(r.NearMiss) > 0 {
-		return true
-	}
-	// A legacy name alone works and discards nothing. A legacy name WITH its canonical
-	// twin means one of the two lines has no effect, which is the duplicate's harm.
-	for _, legacy := range r.Legacy {
-		if legacy.CanonicalAlsoSet {
-			return true
-		}
-	}
-	return false
+	return len(r.NearMiss) > 0
 }
 
 // AuditConfigFile compares an env file against the embedded template.
@@ -244,7 +167,15 @@ func (r *ConfigIntegrityReport) HasIssues() bool {
 // Nothing here rejects a configuration or changes which value wins. Last-wins stays
 // the loader's rule; the audit only stops it from being silent.
 func AuditConfigFile(path string) (*ConfigIntegrityReport, error) {
-	file, err := os.Open(path) // #nosec G304 - operator-supplied configuration path, same one parseEnvFile opens
+	// The operator's configuration path, resolved through its symbolic links the way
+	// the kernel does when parseEnvFile opens it, so a ".." after a link names the same
+	// file here as there. Resolved, it is also a clean path, which is what gosec G304
+	// asks of a file opened from a variable.
+	resolved, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		return nil, fmt.Errorf("cannot open config file: %w", err)
+	}
+	file, err := os.Open(resolved)
 	if err != nil {
 		return nil, fmt.Errorf("cannot open config file: %w", err)
 	}
@@ -291,12 +222,6 @@ func AuditConfigFile(path string) (*ConfigIntegrityReport, error) {
 				Discarded:   discarded,
 				ByBlock:     at[replacingAssignment(name, at)].block,
 			})
-		}
-		if alias, ok := legacyAliases[name]; ok {
-			alias.Name = name
-			_, alias.CanonicalAlsoSet = fileScan.assignedAt[alias.Canonical]
-			report.Legacy = append(report.Legacy, alias)
-			continue
 		}
 		switch rule, known := templateKnows(name, templateScan.assignedAt, documented); {
 		case !known:
