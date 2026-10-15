@@ -1036,8 +1036,8 @@ func TestSchedulerTimeAdoptedFromSystemCron(t *testing.T) {
 		if len(refs) != 1 {
 			t.Fatalf("want the direct line, got %+v", refs)
 		}
-		if got := cron.ScheduleToTime(refs[0].Line); got != "05:00" {
-			t.Fatalf("the adopted time must be 05:00, got %q", got)
+		if got, err := cron.ParseSchedule(refs[0].Line); err != nil || got.Time != "05:00" {
+			t.Fatalf("the adopted time must be 05:00, got %+v (err %v)", got, err)
 		}
 	})
 
