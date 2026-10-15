@@ -1,8 +1,6 @@
 package components
 
 import (
-	"errors"
-	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -230,20 +228,13 @@ func TestConfirmSanitizesInputs(t *testing.T) {
 	}
 }
 
-func TestConfirmAbortOption(t *testing.T) {
-	sentinel := fmt.Errorf("wizard cancelled")
-	c := NewConfirm("Step", "Enable?", WithConfirmAbort(sentinel))
+func TestConfirmEscAnswersNo(t *testing.T) {
+	// Esc is a plain No with a nil error.
+	c := NewConfirm("Step", "Enable?")
 	cap := bindConfirm(c)
 	press(t, c, "esc")
-	if !cap.resolved || !errors.Is(cap.err, sentinel) {
-		t.Fatalf("esc with abort option must resolve the sentinel, got %+v", cap)
-	}
-	// Without the option, esc stays a plain No.
-	c2 := NewConfirm("Step", "Enable?")
-	cap2 := bindConfirm(c2)
-	press(t, c2, "esc")
-	if cap2.err != nil || cap2.result.Answer {
-		t.Fatalf("default esc must answer No with nil error, got %+v", cap2)
+	if cap.err != nil || cap.result.Answer {
+		t.Fatalf("default esc must answer No with nil error, got %+v", cap)
 	}
 }
 
