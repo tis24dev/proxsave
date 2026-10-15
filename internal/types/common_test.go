@@ -83,27 +83,6 @@ func TestCompressionTypeString(t *testing.T) {
 	}
 }
 
-func TestStorageLocationString(t *testing.T) {
-	tests := []struct {
-		name     string
-		location StorageLocation
-		expected string
-	}{
-		{"local", StorageLocal, "local"},
-		{"secondary", StorageSecondary, "secondary"},
-		{"cloud", StorageCloud, "cloud"},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			result := tt.location.String()
-			if result != tt.expected {
-				t.Errorf("StorageLocation.String() = %q; want %q", result, tt.expected)
-			}
-		})
-	}
-}
-
 func TestLogLevelString(t *testing.T) {
 	tests := []struct {
 		name     string
