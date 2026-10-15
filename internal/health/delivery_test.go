@@ -160,7 +160,7 @@ func TestNotifyPolicyAckConfirmsOnlyTheExactRequest(t *testing.T) {
 }
 
 // The contract-1 config poll carries the threshold and the channel set, and hands back the ack.
-func TestFetchCentralizedConfigWithPolicySendsTheContract(t *testing.T) {
+func TestFetchCentralizedConfigPollSendsTheContract(t *testing.T) {
 	var gotContract, gotNotifyOn, gotChannels string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		q := r.URL.Query()
@@ -170,9 +170,9 @@ func TestFetchCentralizedConfigWithPolicySendsTheContract(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	cfg, err := FetchCentralizedConfigWithPolicy(context.Background(), srv.Client(), srv.URL, "1", "s", []string{"email", "telegram"}, "failure")
+	cfg, _, err := FetchCentralizedConfigPoll(context.Background(), srv.Client(), srv.URL, "1", "s", []string{"email", "telegram"}, "failure", "", PollLog{})
 	if err != nil {
-		t.Fatalf("FetchCentralizedConfigWithPolicy: %v", err)
+		t.Fatalf("FetchCentralizedConfigPoll: %v", err)
 	}
 	if gotContract != "1" || gotNotifyOn != "failure" || gotChannels != "email,telegram" {
 		t.Fatalf("query hc_contract=%q notify_on=%q channels=%q", gotContract, gotNotifyOn, gotChannels)
@@ -182,8 +182,8 @@ func TestFetchCentralizedConfigWithPolicySendsTheContract(t *testing.T) {
 	}
 
 	// No channel enabled is sent as the explicit "none", never as an empty value a proxy could drop.
-	if _, err := FetchCentralizedConfigWithPolicy(context.Background(), srv.Client(), srv.URL, "1", "s", []string{}, "warning"); err != nil {
-		t.Fatalf("FetchCentralizedConfigWithPolicy: %v", err)
+	if _, _, err := FetchCentralizedConfigPoll(context.Background(), srv.Client(), srv.URL, "1", "s", []string{}, "warning", "", PollLog{}); err != nil {
+		t.Fatalf("FetchCentralizedConfigPoll: %v", err)
 	}
 	if gotChannels != "none" || gotNotifyOn != "warning" {
 		t.Fatalf("empty channel set sent as channels=%q notify_on=%q; want none, warning", gotChannels, gotNotifyOn)

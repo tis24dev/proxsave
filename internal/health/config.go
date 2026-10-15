@@ -41,7 +41,7 @@ type CentralizedConfig struct {
 	BackupURL   string `json:"backup_ping_url"`
 	ProjectCode string `json:"project_code"`
 	LoginURL    string `json:"login_url"`
-	// NotifyPolicy is the relay's ack of a contract-1 poll (FetchCentralizedConfigWithPolicy);
+	// NotifyPolicy is the relay's ack of a contract-1 poll (FetchCentralizedConfigPoll);
 	// nil on a legacy poll or an older relay.
 	NotifyPolicy *NotifyPolicyAck `json:"notify_policy,omitempty"`
 	// Schedule is the relay's ack of the backup schedule frequency a poll sent
@@ -110,16 +110,6 @@ type serverError struct {
 // never triggers the server-side mint.
 func FetchCentralizedConfig(ctx context.Context, client *http.Client, serverAPIHost, serverID, secret string, includeLogin bool) (CentralizedConfig, error) {
 	return fetchConfig(ctx, client, serverAPIHost, serverID, secret, includeLogin, nil)
-}
-
-// FetchCentralizedConfigWithChannels is the daemon-only variant that ALSO sends the
-// authoritative enabled-notification set as ?channels so the server provisions one check per
-// enabled channel. channels is the lowercased set (e.g. ["email","telegram"]); an EMPTY
-// (non-nil) slice sends the "none" sentinel (pause all). It is a separate function from
-// FetchCentralizedConfig so the install-wizard/Phase-7 callers structurally CANNOT send
-// ?channels (only the daemon owns the authoritative set).
-func FetchCentralizedConfigWithChannels(ctx context.Context, client *http.Client, serverAPIHost, serverID, secret string, includeLogin bool, channels []string) (CentralizedConfig, error) {
-	return fetchConfig(ctx, client, serverAPIHost, serverID, secret, includeLogin, channels)
 }
 
 func fetchConfig(ctx context.Context, client *http.Client, serverAPIHost, serverID, secret string, includeLogin bool, channels []string) (CentralizedConfig, error) {

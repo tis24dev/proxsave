@@ -154,12 +154,3 @@ func sameSet(a, b []string) bool {
 	sort.Strings(y)
 	return strings.Join(x, ",") == strings.Join(y, ",")
 }
-
-// FetchCentralizedConfigWithPolicy is the daemon's config poll for a contract-1 client: the
-// authoritative channel set plus the notify threshold, so the relay turns the notify checks
-// event-driven for warning/failure and periodic for always. notifyOn must already be one of
-// always, warning, failure: the caller maps an invalid value to always.
-func FetchCentralizedConfigWithPolicy(ctx context.Context, client *http.Client, serverAPIHost, serverID, secret string, channels []string, notifyOn string) (CentralizedConfig, error) {
-	return fetchConfigQuery(ctx, client, serverAPIHost, serverID, secret, false, channels,
-		url.Values{"hc_contract": {"1"}, "notify_on": {notifyOn}})
-}

@@ -28,7 +28,7 @@ func (a *ScheduleAck) Confirms(frequency string) bool {
 }
 
 // FetchCentralizedConfigPoll is the daemon's config poll with the backup schedule: the
-// contract-1 notify policy (FetchCentralizedConfigWithPolicy) plus ?frequency, so the relay
+// contract-1 notify policy (hc_contract, notify_on and the channel set) plus ?frequency, so the relay
 // gives the backup check and the periodic notify checks that period and acks it in Schedule. It
 // also returns the HTTP status of the answer (0 when there was none) and logs the transport
 // stages in DEBUG as plog says. An empty frequency is not sent.

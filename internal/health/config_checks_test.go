@@ -57,7 +57,7 @@ func TestFetchCentralizedConfigChecksDoNotRelaxCompleteness(t *testing.T) {
 }
 
 // TestFetchWithChannelsSendsQuery is the Fase-2C CLIENT contract for the ?channels
-// provisioning hint: FetchCentralizedConfigWithChannels sends the authoritative enabled set
+// provisioning hint: the daemon's FetchCentralizedConfigPoll sends the authoritative enabled set
 // (comma-joined), an EMPTY (non-nil) slice sends the "none" sentinel, and the plain
 // FetchCentralizedConfig sends NO channels key at all (install-wizard/Phase-7 callers can't
 // touch the authoritative set). It also proves the returned additive Checks map round-trips
@@ -71,9 +71,9 @@ func TestFetchWithChannelsSendsQuery(t *testing.T) {
 	defer srv.Close()
 
 	// A populated non-nil slice -> channels=email,telegram (comma-joined, order preserved).
-	cfg, err := FetchCentralizedConfigWithChannels(context.Background(), srv.Client(), srv.URL, "1", "s", false, []string{"email", "telegram"})
+	cfg, _, err := FetchCentralizedConfigPoll(context.Background(), srv.Client(), srv.URL, "1", "s", []string{"email", "telegram"}, "always", "", PollLog{})
 	if err != nil {
-		t.Fatalf("FetchCentralizedConfigWithChannels: %v", err)
+		t.Fatalf("FetchCentralizedConfigPoll: %v", err)
 	}
 	if got := gotQuery.Get("channels"); got != "email,telegram" {
 		t.Fatalf("channels = %q, want email,telegram", got)
@@ -87,8 +87,8 @@ func TestFetchWithChannelsSendsQuery(t *testing.T) {
 	}
 
 	// An EMPTY (non-nil) slice -> the explicit "none" sentinel (pause all), never empty value.
-	if _, err := FetchCentralizedConfigWithChannels(context.Background(), srv.Client(), srv.URL, "1", "s", false, []string{}); err != nil {
-		t.Fatalf("FetchCentralizedConfigWithChannels(empty): %v", err)
+	if _, _, err := FetchCentralizedConfigPoll(context.Background(), srv.Client(), srv.URL, "1", "s", []string{}, "always", "", PollLog{}); err != nil {
+		t.Fatalf("FetchCentralizedConfigPoll(empty): %v", err)
 	}
 	if got := gotQuery.Get("channels"); got != "none" {
 		t.Fatalf("empty non-nil slice channels = %q, want the none sentinel", got)
