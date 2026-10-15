@@ -75,7 +75,8 @@ type UpgradeResult struct {
 	Changed bool
 }
 
-// UpgradeConfigFile merges the user's configuration with the embedded template.
+// UpgradeConfigFileWithBaseDir merges the user's configuration with the
+// embedded template and validates the result against the detected base dir.
 //
 // Goals:
 //   - Ensure all keys present in the template exist in the user's config.
@@ -96,12 +97,6 @@ type UpgradeResult struct {
 //  3. Keys present in the user config but not in the template are appended
 //     to a "Custom keys" section at the bottom of the file.
 //  4. The original file is backed up before writing the new version.
-func UpgradeConfigFile(configPath string) (*UpgradeResult, error) {
-	return UpgradeConfigFileWithBaseDir(configPath, defaultBaseDir())
-}
-
-// UpgradeConfigFileWithBaseDir merges the user's configuration with the
-// embedded template and validates the result against the detected base dir.
 func UpgradeConfigFileWithBaseDir(configPath, baseDir string) (*UpgradeResult, error) {
 	result, newContent, originalContent, err := computeConfigUpgrade(configPath)
 	if err != nil {

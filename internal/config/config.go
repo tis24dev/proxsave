@@ -388,11 +388,6 @@ type Config struct {
 	detectedBaseDir      string
 }
 
-// LoadConfig reads the backup.env configuration file.
-func LoadConfig(configPath string) (*Config, error) {
-	return LoadConfigWithBaseDir(configPath, defaultBaseDir())
-}
-
 // LoadConfigWithBaseDir reads the backup.env configuration file and expands
 // ${BASE_DIR} using the caller-provided runtime base directory.
 func LoadConfigWithBaseDir(configPath, detectedBaseDir string) (*Config, error) {

@@ -13,11 +13,6 @@ func ValidateRequiredSecondaryPath(path string) error {
 	return validateSecondaryLocalPath(path, "SECONDARY_PATH", true)
 }
 
-// ValidateOptionalSecondaryPath validates SECONDARY_PATH when configured but not required.
-func ValidateOptionalSecondaryPath(path string) error {
-	return validateSecondaryLocalPath(path, "SECONDARY_PATH", false)
-}
-
 // ValidateOptionalSecondaryLogPath validates SECONDARY_LOG_PATH when provided.
 func ValidateOptionalSecondaryLogPath(path string) error {
 	return validateSecondaryLocalPath(path, "SECONDARY_LOG_PATH", false)
