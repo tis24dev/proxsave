@@ -89,7 +89,7 @@ func TestVerifySensitiveFilesPBSTokenAbsent(t *testing.T) {
 	checker := newChecker(t, &config.Config{BaseDir: t.TempDir(), SecureAccount: t.TempDir()})
 	checker.verifySensitiveFiles(context.Background())
 
-	if checker.result.TotalIssues() != 0 {
+	if len(checker.result.Issues) != 0 {
 		t.Fatalf("absent token files must raise nothing, got %+v", checker.result.Issues)
 	}
 }
