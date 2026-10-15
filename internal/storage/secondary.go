@@ -616,62 +616,7 @@ func (s *SecondaryStorage) Delete(ctx context.Context, backupFile string) (err e
 }
 
 func (s *SecondaryStorage) deleteBackupInternal(ctx context.Context, backupFile string) (bool, error) {
-	if err := ctx.Err(); err != nil {
-		return false, err
-	}
-
-	s.logger.Debug("Deleting secondary backup: %s", backupFile)
-
-	basePath, _ := trimBundleSuffix(backupFile)
-	// Always include the bundle path so an orphan .bundle.tar (created while
-	// bundling was enabled, then disabled) is cleaned up. Remove of an absent
-	// bundle is a no-op, so this is behavior-preserving when no bundle exists.
-	filesToDelete := buildBackupCandidatePaths(basePath, true)
-
-	// Delete all files; collect real removal failures (not "already gone") and
-	// track whether the data archive itself (not just a sidecar) failed, so the
-	// caller never counts a backup whose archive remains on disk as deleted
-	// (PS-BH-001), while a sidecar-only failure still counts (the archive IS gone).
-	timeout := fsIoTimeout(s.config)
-	var failedFiles []string
-	dataFailed := false
-	for _, f := range filesToDelete {
-		if f == "" {
-			continue
-		}
-		s.logger.Debug("Removing file: %s", f)
-		if err := safefs.Remove(ctx, f, timeout); err != nil {
-			if os.IsNotExist(err) {
-				s.logger.Debug("Secondary storage: file already removed %s", f)
-				continue
-			}
-			s.logger.Debug("Secondary Storage: retention - %v", err)
-			logDeleteFailure(s.logger, f, safefs.SystemErrorText(err))
-			failedFiles = append(failedFiles, f)
-			if !isBackupSidecar(f) {
-				dataFailed = true
-			}
-		}
-	}
-
-	// Best-effort: delete the associated log, but only once the backup's data file is
-	// gone. A backup that could not be deleted keeps its log.
-	logDeleted := false
-	if !dataFailed {
-		logDeleted = s.deleteAssociatedLog(ctx, backupFile)
-	} else {
-		s.logger.Debug("Secondary storage: keeping the log of %s, the backup was not deleted", filepath.Base(backupFile))
-	}
-
-	if len(failedFiles) > 0 {
-		if !dataFailed {
-			return logDeleted, fmt.Errorf("%w: %v", errBackupSidecarDeleteOnly, failedFiles)
-		}
-		return logDeleted, fmt.Errorf("failed to remove %d file(s): %v", len(failedFiles), failedFiles)
-	}
-
-	s.logger.Debug("Deleted secondary backup: %s", filepath.Base(backupFile))
-	return logDeleted, nil
+	return s.retention().deleteBackup(ctx, backupFile)
 }
 
 // deleteAssociatedLog attempts to remove the secondary log file corresponding to a backup.
@@ -680,58 +625,33 @@ func (s *SecondaryStorage) deleteAssociatedLog(ctx context.Context, backupFile s
 	if s == nil || s.config == nil {
 		return false
 	}
-
-	logPath := strings.TrimSpace(s.config.SecondaryLogPath)
-	if logPath == "" {
-		return false
-	}
-
-	host, ts, ok := extractLogKeyFromBackup(backupFile)
-	if !ok {
-		return false
-	}
-
-	logName := fmt.Sprintf("backup-%s-%s.log", host, ts)
-	fullPath := filepath.Join(logPath, logName)
-	if keptOpenLog(ctx, s.logger, "Secondary logs", logPath, logName, fsIoTimeout(s.config)) {
-		return false
-	}
-
-	// Bounded against a dead/stale mount: on a cancelled/expired ctx safefs
-	// returns immediately without running the remove (best-effort cleanup).
-	if err := safefs.Remove(ctx, fullPath, fsIoTimeout(s.config)); err != nil {
-		if os.IsNotExist(err) {
-			s.logger.Debug("Secondary logs: log not found %s", logName)
-			return false
-		}
-		s.logger.Debug("Secondary logs: failed to delete %s: %v", logName, err)
-		s.logger.Info("  Log not deleted: %s: %s", logName, safefs.SystemErrorText(err))
-		s.retTally.logsNotDeleted++
-		return false
-	}
-
-	s.logger.Debug("Secondary logs: deleted log file %s", logName)
-	return true
+	return s.retention().deleteAssociatedLog(ctx, backupFile)
 }
 
 func (s *SecondaryStorage) countLogFiles(ctx context.Context) int {
 	if s == nil || s.config == nil {
 		return -1
 	}
-	logPath := strings.TrimSpace(s.config.SecondaryLogPath)
-	if logPath == "" {
-		return 0
+	return s.retention().countLogFiles(ctx)
+}
+
+// retention is this destination as the retention code it shares with the other
+// folder-backed destination sees it (retention_fs.go): SECONDARY_LOG_PATH is its log folder.
+func (s *SecondaryStorage) retention() fsRetention {
+	ret := fsRetention{
+		logger:   s.logger,
+		config:   s.config,
+		basePath: s.basePath,
+		hostname: s.hostname,
+		aliases:  s.hostAliases,
+		tally:    &s.retTally,
+		lastRet:  &s.lastRet,
+		text:     secondaryRetentionText,
 	}
-	pattern := filepath.Join(logPath, "backup-*.log")
-	// Bounded against a dead/stale mount, consistent with the main backup glob.
-	matches, err := safefs.Run(ctx, "secondary-log-glob", s.basePath, fsIoTimeout(s.config), func() ([]string, error) {
-		return filepath.Glob(pattern)
-	})
-	if err != nil {
-		s.logger.Debug("Secondary logs: failed to count log files: %v", err)
-		return -1
+	if s.config != nil {
+		ret.logPath = s.config.SecondaryLogPath
 	}
-	return len(matches)
+	return ret
 }
 
 // ApplyRetention removes old backups according to retention policy
@@ -831,30 +751,7 @@ func (s *SecondaryStorage) ApplyRetention(ctx context.Context, config RetentionC
 // pruneOrphanLogs runs the orphan-log pass (log_orphans.go) on SECONDARY_LOG_PATH
 // once the archives are rotated, and folds what it did into this pass's summary.
 func (s *SecondaryStorage) pruneOrphanLogs(ctx context.Context, backups []*types.BackupMetadata) error {
-	logPath := strings.TrimSpace(s.config.SecondaryLogPath)
-	if logPath == "" {
-		return nil
-	}
-	s.retTally.hasLogPath = true
-	timeout := fsIoTimeout(s.config)
-	res := pruneOrphanLogs(ctx, s.logger, orphanLogTarget{
-		own: ownLogIn(s.logger, logPath),
-		heldOpen: func(ctx context.Context) (map[string]bool, error) {
-			return safefs.HeldOpenIn(ctx, logPath, timeout)
-		},
-		op:       "secondary orphan logs",
-		where:    logPath,
-		hostname: s.hostname,
-		aliases:  s.hostAliases,
-		list: func(ctx context.Context) ([]string, error) {
-			return listLogFolder(ctx, "secondary-log-list", logPath, timeout)
-		},
-		remove: func(ctx context.Context, name string) error {
-			return safefs.Remove(ctx, filepath.Join(logPath, name), timeout)
-		},
-	}, backups, s.retTally.removed)
-	mergeOrphanLogs(&s.lastRet, &s.retTally, res)
-	return res.stopped
+	return s.retention().pruneOrphanLogs(ctx, backups)
 }
 
 // resolveRetentionOwners fills in each candidate's Hostname and ServerID from its
@@ -886,179 +783,12 @@ func (s *SecondaryStorage) resolveRetentionOwners(ctx context.Context, backups [
 
 // applyGFSRetention applies GFS (Grandfather-Father-Son) retention policy
 func (s *SecondaryStorage) applyGFSRetention(ctx context.Context, backups []*types.BackupMetadata, config RetentionConfig) (int, error) {
-	eligible, inert := partitionRetentionEligible(backups)
-	s.retTally.skipped = logRetentionSkipped(s.logger, "Secondary Storage", inert)
-	backups = eligible
-
-	config = EffectiveGFSRetentionConfig(config)
-	s.logger.Debug("Applying GFS retention policy (daily=%d, weekly=%d, monthly=%d, yearly=%d)",
-		config.Daily, config.Weekly, config.Monthly, config.Yearly)
-
-	initialLogs := s.countLogFiles(ctx)
-	logsDeleted := 0
-
-	// Classify backups according to GFS scheme
-	classification := ClassifyBackupsGFS(backups, config)
-
-	// Get statistics
-	stats := GetRetentionStats(classification)
-	s.logger.Debug("GFS classification -> daily: %d/%d, weekly: %d/%d, monthly: %d/%d, yearly: %d/%d, to_delete: %d",
-		stats[CategoryDaily], config.Daily,
-		stats[CategoryWeekly], config.Weekly,
-		stats[CategoryMonthly], config.Monthly,
-		stats[CategoryYearly], config.Yearly,
-		stats[CategoryDelete])
-	s.retTally.planned = stats[CategoryDelete]
-
-	// Delete backups marked for deletion
-	deleted := 0
-	for backup, category := range classification {
-		if category != CategoryDelete {
-			continue
-		}
-
-		if err := ctx.Err(); err != nil {
-			return deleted, err
-		}
-
-		s.logger.Debug("Deleting old backup: %s (created: %s)",
-			filepath.Base(backup.BackupFile),
-			backup.Timestamp.Format("2006-01-02 15:04:05"))
-
-		logDeleted, err := s.deleteBackupInternal(ctx, backup.BackupFile)
-		if err != nil {
-			if !errors.Is(err, errBackupSidecarDeleteOnly) {
-				s.logger.Debug("Secondary Storage: retention - left %s in place: %v", filepath.Base(backup.BackupFile), err)
-				s.retTally.notDeleted++
-				continue
-			}
-			// Archive removed, only sidecar(s) failed: count as deleted. The fact line
-			// naming the leftover was printed by deleteBackupInternal.
-			s.logger.Debug("Secondary Storage: retention - left files behind from %s: %v", filepath.Base(backup.BackupFile), err)
-			s.retTally.leftBehind++
-		}
-
-		deleted++
-		s.retTally.removed = append(s.retTally.removed, backup.BackupFile)
-		if logDeleted {
-			logsDeleted++
-		}
-	}
-
-	remaining := len(backups) - deleted
-	if remaining < 0 {
-		remaining = 0
-	}
-
-	if logsRemaining, ok := computeRemaining(initialLogs, logsDeleted); ok {
-		s.logger.Debug("Secondary storage retention applied: deleted %d backups (logs deleted: %d), %d backups remaining (%d logs remaining)",
-			deleted, logsDeleted, remaining, logsRemaining)
-		s.lastRet = RetentionSummary{
-			BackupsDeleted:   deleted,
-			BackupsRemaining: remaining,
-			LogsDeleted:      logsDeleted,
-			LogsRemaining:    logsRemaining,
-			HasLogInfo:       true,
-		}
-	} else {
-		s.logger.Debug("Secondary storage retention applied: deleted %d backups (logs deleted: %d), %d backups remaining",
-			deleted, logsDeleted, remaining)
-		s.lastRet = RetentionSummary{
-			BackupsDeleted:   deleted,
-			BackupsRemaining: remaining,
-			LogsDeleted:      logsDeleted,
-			HasLogInfo:       false,
-		}
-	}
-
-	return deleted, nil
+	return s.retention().applyGFS(ctx, backups, config)
 }
 
 // applySimpleRetention applies simple count-based retention policy
 func (s *SecondaryStorage) applySimpleRetention(ctx context.Context, backups []*types.BackupMetadata, maxBackups int) (int, error) {
-	if maxBackups <= 0 {
-		s.logger.Debug("Retention disabled for secondary storage (maxBackups = %d)", maxBackups)
-		return 0, nil
-	}
-
-	eligible, inert := partitionRetentionEligible(backups)
-	s.retTally.skipped = logRetentionSkipped(s.logger, "Secondary Storage", inert)
-	backups = eligible
-
-	totalBackups := len(backups)
-	if totalBackups <= maxBackups {
-		s.logger.Debug("Secondary storage: %d backups (within retention limit of %d)", totalBackups, maxBackups)
-		return 0, nil
-	}
-
-	// Calculate how many to delete
-	toDelete := totalBackups - maxBackups
-	s.logger.Debug("Simple retention -> current: %d, limit: %d, to_delete: %d",
-		totalBackups, maxBackups, toDelete)
-	logRetentionScale(s.logger, totalBackups, maxBackups)
-	s.retTally.planned = toDelete
-
-	// Delete oldest backups (already sorted newest first)
-	initialLogs := s.countLogFiles(ctx)
-	logsDeleted := 0
-	deleted := 0
-	for i := totalBackups - 1; i >= maxBackups; i-- {
-		if err := ctx.Err(); err != nil {
-			return deleted, err
-		}
-
-		backup := backups[i]
-		s.logger.Debug("Deleting old backup: %s (created: %s)",
-			filepath.Base(backup.BackupFile),
-			backup.Timestamp.Format("2006-01-02 15:04:05"))
-
-		logDeleted, err := s.deleteBackupInternal(ctx, backup.BackupFile)
-		if err != nil {
-			if !errors.Is(err, errBackupSidecarDeleteOnly) {
-				s.logger.Debug("Secondary Storage: retention - left %s in place: %v", filepath.Base(backup.BackupFile), err)
-				s.retTally.notDeleted++
-				continue
-			}
-			// Archive removed, only sidecar(s) failed: count as deleted. The fact line
-			// naming the leftover was printed by deleteBackupInternal.
-			s.logger.Debug("Secondary Storage: retention - left files behind from %s: %v", filepath.Base(backup.BackupFile), err)
-			s.retTally.leftBehind++
-		}
-
-		deleted++
-		s.retTally.removed = append(s.retTally.removed, backup.BackupFile)
-		if logDeleted {
-			logsDeleted++
-		}
-	}
-
-	remaining := totalBackups - deleted
-	if remaining < 0 {
-		remaining = 0
-	}
-
-	if logsRemaining, ok := computeRemaining(initialLogs, logsDeleted); ok {
-		s.logger.Debug("Secondary storage retention applied: deleted %d backups (logs deleted: %d), %d backups remaining (%d logs remaining)",
-			deleted, logsDeleted, remaining, logsRemaining)
-		s.lastRet = RetentionSummary{
-			BackupsDeleted:   deleted,
-			BackupsRemaining: remaining,
-			LogsDeleted:      logsDeleted,
-			LogsRemaining:    logsRemaining,
-			HasLogInfo:       true,
-		}
-	} else {
-		s.logger.Debug("Secondary storage retention applied: deleted %d backups (logs deleted: %d), %d backups remaining",
-			deleted, logsDeleted, remaining)
-		s.lastRet = RetentionSummary{
-			BackupsDeleted:   deleted,
-			BackupsRemaining: remaining,
-			LogsDeleted:      logsDeleted,
-			HasLogInfo:       false,
-		}
-	}
-
-	return deleted, nil
+	return s.retention().applySimple(ctx, backups, maxBackups)
 }
 
 // VerifyUpload is not applicable for secondary storage
