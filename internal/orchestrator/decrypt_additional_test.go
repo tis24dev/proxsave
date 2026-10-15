@@ -3,7 +3,6 @@ package orchestrator
 import (
 	"bufio"
 	"context"
-	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -14,48 +13,9 @@ import (
 
 	"filippo.io/age"
 
-	"github.com/tis24dev/proxsave/internal/config"
 	"github.com/tis24dev/proxsave/internal/logging"
 	"github.com/tis24dev/proxsave/internal/types"
 )
-
-func TestPromptDestinationDir(t *testing.T) {
-	ctx := context.Background()
-
-	t.Run("defaults to ./decrypt when config missing", func(t *testing.T) {
-		reader := bufio.NewReader(strings.NewReader("\n"))
-		got, err := promptDestinationDir(ctx, reader, nil)
-		if err != nil {
-			t.Fatalf("promptDestinationDir error: %v", err)
-		}
-		if got != "decrypt" {
-			t.Fatalf("promptDestinationDir() = %q; want %q", got, "decrypt")
-		}
-	})
-
-	t.Run("defaults under config base dir", func(t *testing.T) {
-		reader := bufio.NewReader(strings.NewReader("\n"))
-		cfg := &config.Config{BaseDir: "/opt/proxsave"}
-		got, err := promptDestinationDir(ctx, reader, cfg)
-		if err != nil {
-			t.Fatalf("promptDestinationDir error: %v", err)
-		}
-		if got != "/opt/proxsave/decrypt" {
-			t.Fatalf("promptDestinationDir() = %q; want %q", got, "/opt/proxsave/decrypt")
-		}
-	})
-
-	t.Run("returns cleaned user input", func(t *testing.T) {
-		reader := bufio.NewReader(strings.NewReader(" ../out \n"))
-		got, err := promptDestinationDir(ctx, reader, nil)
-		if err != nil {
-			t.Fatalf("promptDestinationDir error: %v", err)
-		}
-		if got != "../out" {
-			t.Fatalf("promptDestinationDir() = %q; want %q", got, "../out")
-		}
-	})
-}
 
 func TestDownloadRcloneBackup(t *testing.T) {
 	if runtime.GOOS == "windows" {
@@ -108,53 +68,6 @@ func TestDownloadRcloneBackup(t *testing.T) {
 	cleanup()
 	if _, err := os.Stat(tmpPath); err == nil || !os.IsNotExist(err) {
 		t.Fatalf("expected downloaded temp file to be removed, stat err=%v", err)
-	}
-}
-
-func TestPrepareDecryptedBackup_SuccessPlain(t *testing.T) {
-	origFS := restoreFS
-	restoreFS = osFS{}
-	t.Cleanup(func() { restoreFS = origFS })
-
-	dir := t.TempDir()
-	writeRawBackup(t, dir, "backup.tar")
-
-	cfg := &config.Config{
-		BackupPath: dir,
-	}
-
-	logger := logging.New(types.LogLevelError, false)
-	logger.SetOutput(io.Discard)
-
-	reader := bufio.NewReader(strings.NewReader("1\n1\n"))
-	cand, prepared, err := prepareDecryptedBackup(context.Background(), reader, cfg, logger, "1.2.3", false)
-	if err != nil {
-		t.Fatalf("prepareDecryptedBackup error: %v", err)
-	}
-	if cand == nil || prepared == nil {
-		t.Fatalf("expected candidate and prepared bundle to be non-nil")
-	}
-	t.Cleanup(prepared.Cleanup)
-
-	if cand.Source != sourceRaw {
-		t.Fatalf("candidate Source=%v; want %v", cand.Source, sourceRaw)
-	}
-	if prepared.Manifest.EncryptionMode != "none" {
-		t.Fatalf("prepared manifest EncryptionMode=%q; want %q", prepared.Manifest.EncryptionMode, "none")
-	}
-	if prepared.Manifest.ScriptVersion != "1.2.3" {
-		t.Fatalf("prepared manifest ScriptVersion=%q; want %q", prepared.Manifest.ScriptVersion, "1.2.3")
-	}
-	if prepared.ArchivePath == "" {
-		t.Fatalf("prepared bundle ArchivePath is empty")
-	}
-	if _, err := os.Stat(prepared.ArchivePath); err != nil {
-		t.Fatalf("expected staged archive to exist, stat error: %v", err)
-	}
-
-	prepared.Cleanup()
-	if _, err := os.Stat(prepared.ArchivePath); err == nil || !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("expected staged archive to be removed by Cleanup, stat err=%v", err)
 	}
 }
 

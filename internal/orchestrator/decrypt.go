@@ -107,14 +107,6 @@ func RunDecryptWorkflow(ctx context.Context, cfg *config.Config, logger *logging
 	return RunDecryptWorkflowWithDeps(ctx, &deps, version)
 }
 
-func selectDecryptCandidate(ctx context.Context, reader *bufio.Reader, cfg *config.Config, logger *logging.Logger, requireEncrypted bool) (candidate *backupCandidate, err error) {
-	done := logging.DebugStart(logger, "select backup candidate", "requireEncrypted=%v", requireEncrypted)
-	defer func() { done(err) }()
-
-	ui := newCLIWorkflowUI(reader, logger)
-	return selectBackupCandidateWithUI(ctx, ui, cfg, logger, "Decrypt", requireEncrypted)
-}
-
 func promptPathSelection(ctx context.Context, reader *bufio.Reader, options []decryptPathOption) (decryptPathOption, error) {
 	for {
 		fmt.Println("\nSelect the backup source:")
@@ -442,25 +434,6 @@ func promptCandidateSelection(ctx context.Context, reader *bufio.Reader, candida
 	}
 }
 
-func promptDestinationDir(ctx context.Context, reader *bufio.Reader, cfg *config.Config) (string, error) {
-	defaultDir := "./decrypt"
-	if cfg != nil {
-		if base := strings.TrimSpace(cfg.BaseDir); base != "" {
-			defaultDir = filepath.Join(base, "decrypt")
-		}
-	}
-	fmt.Printf("\nEnter destination directory for decrypted bundle [press Enter to use %s]: ", defaultDir)
-	inputLine, err := input.ReadLineWithIdle(ctx, reader, cliIdleTimeout)
-	if err != nil {
-		return "", err
-	}
-	trimmed := strings.TrimSpace(inputLine)
-	if trimmed == "" {
-		trimmed = defaultDir
-	}
-	return filepath.Clean(trimmed), nil
-}
-
 // downloadRcloneBackup downloads a backup bundle from an rclone remote to a local temp file
 func downloadRcloneBackup(ctx context.Context, remotePath string, logger *logging.Logger) (tmpPath string, cleanup func(), err error) {
 	done := logging.DebugStart(logger, "download rclone backup", "remote=%s", remotePath)
@@ -518,27 +491,6 @@ func fsIoTimeoutFromConfig(cfg *config.Config) time.Duration {
 	return time.Duration(cfg.FsIoTimeoutSeconds) * time.Second
 }
 
-func preparePlainBundle(ctx context.Context, reader *bufio.Reader, cand *backupCandidate, version string, logger *logging.Logger, timeout time.Duration) (bundle *preparedBundle, err error) {
-	ui := newCLIWorkflowUI(reader, logger)
-	return preparePlainBundleWithUI(ctx, cand, version, logger, ui, timeout)
-}
-
-func prepareDecryptedBackup(ctx context.Context, reader *bufio.Reader, cfg *config.Config, logger *logging.Logger, version string, requireEncrypted bool) (candidate *backupCandidate, prepared *preparedBundle, err error) {
-	done := logging.DebugStart(logger, "prepare decrypted backup", "requireEncrypted=%v", requireEncrypted)
-	defer func() { done(err) }()
-	candidate, err = selectDecryptCandidate(ctx, reader, cfg, logger, requireEncrypted)
-	if err != nil {
-		return nil, nil, err
-	}
-
-	prepared, err = preparePlainBundle(ctx, reader, candidate, version, logger, fsIoTimeoutFromConfig(cfg))
-	if err != nil {
-		return nil, nil, err
-	}
-
-	return candidate, prepared, nil
-}
-
 // sanitizeBundleEntryName ensures the tar entry name cannot escape the working directory.
 func sanitizeBundleEntryName(name string) (string, error) {
 	trimmed := strings.TrimSpace(name)
@@ -561,10 +513,6 @@ func sanitizeBundleEntryName(name string) (string, error) {
 		return "", fmt.Errorf("invalid base name in archive entry %q", name)
 	}
 	return base, nil
-}
-
-func extractBundleToWorkdir(bundlePath, workDir string) (staged stagedFiles, err error) {
-	return extractBundleToWorkdirWithLogger(bundlePath, workDir, nil)
 }
 
 func extractBundleToWorkdirWithLogger(bundlePath, workDir string, logger *logging.Logger) (staged stagedFiles, err error) {
@@ -646,12 +594,6 @@ func extractBundleToWorkdirWithLogger(bundlePath, workDir string, logger *loggin
 	}
 	logging.DebugStep(logger, "extract bundle", "entries_extracted=%d", extracted)
 	return staged, nil
-}
-
-func copyRawArtifactsToWorkdir(ctx context.Context, cand *backupCandidate, workDir string) (staged stagedFiles, err error) {
-	// timeout 0 = unbounded (legacy); the bounded production path passes the
-	// configured FS_IO_TIMEOUT via copyRawArtifactsToWorkdirWithLogger.
-	return copyRawArtifactsToWorkdirWithLogger(ctx, cand, workDir, nil, 0)
 }
 
 func baseNameFromRemoteRef(ref string) string {
@@ -759,16 +701,6 @@ func copyRawArtifactsToWorkdirWithLogger(ctx context.Context, cand *backupCandid
 	}, nil
 }
 
-func decryptArchiveWithPrompts(ctx context.Context, reader *bufio.Reader, encryptedPath, outputPath string, logger *logging.Logger) error {
-	ui := newCLIWorkflowUI(reader, logger)
-	displayName := filepath.Base(encryptedPath)
-	return decryptArchiveWithSecretPrompt(ctx, encryptedPath, outputPath, displayName, ui.PromptDecryptSecret, nil)
-}
-
-func parseIdentityInput(input string) ([]age.Identity, error) {
-	return parseIdentityInputWithSalts(input, nil)
-}
-
 // parseIdentityInputWithSalts parses a private key directly, or treats the input
 // as a passphrase and derives the candidate identities. extraSalts carries the
 // per-installation salt read from the archive manifest so passphrase decryption
@@ -838,22 +770,6 @@ func formatTargets(manifest *backup.Manifest) string {
 	return "unknown target"
 }
 
-func formatTargetSummary(manifest *backup.Manifest) string {
-	targets := formatTargets(manifest)
-	version := strings.TrimSpace(manifest.ProxmoxVersion)
-	if version == "" {
-		version = "unknown"
-	}
-	if !strings.HasPrefix(strings.ToLower(version), "v") {
-		version = "v" + version
-	}
-	summary := fmt.Sprintf("%s %s", targets, version)
-	if cluster := formatClusterMode(manifest.ClusterMode); cluster != "" {
-		summary = fmt.Sprintf("%s (%s)", summary, cluster)
-	}
-	return summary
-}
-
 func statusFromManifest(manifest *backup.Manifest) string {
 	mode := strings.TrimSpace(manifest.EncryptionMode)
 	if strings.EqualFold(mode, "age") {
@@ -870,11 +786,6 @@ func moveFileSafe(src, dst string) error {
 		return err
 	}
 	return restoreFS.Remove(src)
-}
-
-func ensureWritablePath(ctx context.Context, reader *bufio.Reader, path, description string) (string, error) {
-	ui := newCLIWorkflowUI(reader, nil)
-	return ensureWritablePathWithUI(ctx, ui, path, description)
 }
 
 func formatClusterMode(value string) string {

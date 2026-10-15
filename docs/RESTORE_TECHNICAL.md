@@ -235,7 +235,7 @@ Completion Summary
 | `internal/orchestrator/categories.go` | Category definitions | `GetAllCategories()`, `PathMatchesCategory()` |
 | `internal/orchestrator/selective.go` | Category selection UI | `ShowRestoreModeMenuWithReader()`, `ShowCategorySelectionMenuWithReader()` |
 | `internal/orchestrator/restore_plan_render.go` | Shared restore-plan body (no chrome) | `buildRestorePlanText()` |
-| `internal/orchestrator/decrypt.go` | Decryption workflow | `prepareDecryptedBackup()` |
+| `internal/orchestrator/decrypt.go` | Decryption workflow | `RunDecryptWorkflow()`, `RunDecryptWorkflowWithDeps()` |
 | `internal/orchestrator/compatibility.go` | System validation | `ValidateCompatibility()` |
 | `internal/orchestrator/backup_safety.go` | Safety backups | `CreateSafetyBackup()` |
 | `internal/orchestrator/directory_recreation.go` | Storage setup | `RecreateDirectoriesFromConfig()` |
@@ -522,9 +522,9 @@ flowchart TD
 
 **Key Functions**:
 
-1. **`prepareDecryptedBackup()`** (`decrypt.go`):
+1. **`RunDecryptWorkflow()` / `RunDecryptWorkflowWithDeps()`** (`decrypt.go`):
    - Entry point for the CLI decryption workflow
-   - Delegates to selection and decryption
+   - Runs `runDecryptWorkflowWithUI()` (`decrypt_workflow_ui.go`) with the CLI UI, which delegates to selection and decryption
 
 2. **`prepareRestoreBundleWithUI()` / `selectBackupCandidateWithUI()`** (`restore_workflow_ui.go`, `decrypt_workflow_ui.go`):
    - Display configured paths
@@ -2656,7 +2656,7 @@ func RunRestoreWorkflow(ctx context.Context, ...) error {
 ```go
 func RunRestoreWorkflow(...) error {
     // Prepare backup
-    prepared, err := prepareDecryptedBackup(...)
+    _, prepared, err := prepareRestoreBundleWithUI(...)
     if err != nil {
         return err
     }

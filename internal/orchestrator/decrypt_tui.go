@@ -7,7 +7,6 @@ import (
 	"io"
 	"strings"
 
-	"github.com/tis24dev/proxsave/internal/backup"
 	"github.com/tis24dev/proxsave/internal/config"
 	"github.com/tis24dev/proxsave/internal/logging"
 	"github.com/tis24dev/proxsave/internal/ui/shell"
@@ -75,10 +74,6 @@ func RunDecryptWorkflowTUI(ctx context.Context, cfg *config.Config, logger *logg
 		return closeErr
 	}
 	return nil
-}
-
-func buildTargetInfo(manifest *backup.Manifest) string {
-	return fmt.Sprintf("Targets: %s", formatBackupCandidateTarget(manifest))
 }
 
 func normalizeProxmoxVersion(value string) string {

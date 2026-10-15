@@ -867,69 +867,6 @@ func TestFormatTargets(t *testing.T) {
 	}
 }
 
-func TestFormatTargetSummary(t *testing.T) {
-	tests := []struct {
-		name     string
-		manifest *backup.Manifest
-		want     string
-	}{
-		{
-			name: "full info with cluster",
-			manifest: &backup.Manifest{
-				ProxmoxTargets: []string{"pve"},
-				ProxmoxVersion: "8.0.4",
-				ClusterMode:    "cluster",
-			},
-			want: "pve v8.0.4 (cluster)",
-		},
-		{
-			name: "standalone mode",
-			manifest: &backup.Manifest{
-				ProxmoxTargets: []string{"pbs"},
-				ProxmoxVersion: "3.1.2",
-				ClusterMode:    "standalone",
-			},
-			want: "pbs v3.1.2 (standalone)",
-		},
-		{
-			name: "version with v prefix",
-			manifest: &backup.Manifest{
-				ProxmoxTargets: []string{"pve"},
-				ProxmoxVersion: "v8.0.4",
-				ClusterMode:    "",
-			},
-			want: "pve v8.0.4",
-		},
-		{
-			name: "unknown version",
-			manifest: &backup.Manifest{
-				ProxmoxTargets: []string{"pve"},
-				ProxmoxVersion: "",
-				ClusterMode:    "",
-			},
-			want: "pve vunknown",
-		},
-		{
-			name: "empty cluster mode ignored",
-			manifest: &backup.Manifest{
-				ProxmoxTargets: []string{"pbs"},
-				ProxmoxVersion: "3.0",
-				ClusterMode:    "",
-			},
-			want: "pbs v3.0",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := formatTargetSummary(tt.manifest)
-			if got != tt.want {
-				t.Errorf("formatTargetSummary() = %q; want %q", got, tt.want)
-			}
-		})
-	}
-}
-
 func TestStatusFromManifest(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -3542,24 +3479,6 @@ func TestCopyRawArtifactsToWorkdir_WithChecksum(t *testing.T) {
 	}
 }
 
-func TestPrepareDecryptedBackup_Error(t *testing.T) {
-	origFS := restoreFS
-	restoreFS = osFS{}
-	t.Cleanup(func() { restoreFS = origFS })
-
-	// Empty config with no backup paths
-	cfg := &config.Config{}
-
-	reader := bufio.NewReader(strings.NewReader("1\n")) // Select first option
-	logger := logging.New(types.LogLevelError, false)
-	logger.SetOutput(io.Discard)
-
-	_, _, err := prepareDecryptedBackup(context.Background(), reader, cfg, logger, "1.0.0", false)
-	if err == nil {
-		t.Fatal("expected error for empty config")
-	}
-}
-
 func TestSelectDecryptCandidate_SingleSource(t *testing.T) {
 	origFS := restoreFS
 	restoreFS = osFS{}
@@ -4695,4 +4614,42 @@ func TestInspectRcloneMetadataManifestIgnoresRcloneNoiseOnStderr(t *testing.T) {
 	if got.CompressionType != "zstd" || got.Hostname != "pve-test" {
 		t.Fatalf("manifest did not parse: %+v", got)
 	}
+}
+
+func selectDecryptCandidate(ctx context.Context, reader *bufio.Reader, cfg *config.Config, logger *logging.Logger, requireEncrypted bool) (candidate *backupCandidate, err error) {
+	done := logging.DebugStart(logger, "select backup candidate", "requireEncrypted=%v", requireEncrypted)
+	defer func() { done(err) }()
+
+	ui := newCLIWorkflowUI(reader, logger)
+	return selectBackupCandidateWithUI(ctx, ui, cfg, logger, "Decrypt", requireEncrypted)
+}
+
+func preparePlainBundle(ctx context.Context, reader *bufio.Reader, cand *backupCandidate, version string, logger *logging.Logger, timeout time.Duration) (bundle *preparedBundle, err error) {
+	ui := newCLIWorkflowUI(reader, logger)
+	return preparePlainBundleWithUI(ctx, cand, version, logger, ui, timeout)
+}
+
+func extractBundleToWorkdir(bundlePath, workDir string) (staged stagedFiles, err error) {
+	return extractBundleToWorkdirWithLogger(bundlePath, workDir, nil)
+}
+
+func copyRawArtifactsToWorkdir(ctx context.Context, cand *backupCandidate, workDir string) (staged stagedFiles, err error) {
+	// timeout 0 = unbounded (legacy); the bounded production path passes the
+	// configured FS_IO_TIMEOUT via copyRawArtifactsToWorkdirWithLogger.
+	return copyRawArtifactsToWorkdirWithLogger(ctx, cand, workDir, nil, 0)
+}
+
+func decryptArchiveWithPrompts(ctx context.Context, reader *bufio.Reader, encryptedPath, outputPath string, logger *logging.Logger) error {
+	ui := newCLIWorkflowUI(reader, logger)
+	displayName := filepath.Base(encryptedPath)
+	return decryptArchiveWithSecretPrompt(ctx, encryptedPath, outputPath, displayName, ui.PromptDecryptSecret, nil)
+}
+
+func parseIdentityInput(input string) ([]age.Identity, error) {
+	return parseIdentityInputWithSalts(input, nil)
+}
+
+func ensureWritablePath(ctx context.Context, reader *bufio.Reader, path, description string) (string, error) {
+	ui := newCLIWorkflowUI(reader, nil)
+	return ensureWritablePathWithUI(ctx, ui, path, description)
 }

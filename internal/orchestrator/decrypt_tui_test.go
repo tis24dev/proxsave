@@ -29,28 +29,6 @@ func TestNormalizeProxmoxVersion(t *testing.T) {
 	}
 }
 
-func TestBuildTargetInfo(t *testing.T) {
-	manifest := &backup.Manifest{
-		ProxmoxTargets: []string{"pbs", "node1"},
-		ProxmoxVersion: "8.0",
-		ClusterMode:    "cluster",
-		CreatedAt:      time.Now(),
-	}
-
-	got := buildTargetInfo(manifest)
-	want := "Targets: PBS+NODE1 v8.0 (cluster)"
-	if got != want {
-		t.Fatalf("buildTargetInfo()=%q, want %q", got, want)
-	}
-
-	manifest = &backup.Manifest{
-		ProxmoxType: "pbs",
-	}
-	if got := buildTargetInfo(manifest); got != "Targets: PBS" {
-		t.Fatalf("buildTargetInfo fallback=%q, want %q", got, "Targets: PBS")
-	}
-}
-
 func TestFilterEncryptedCandidates(t *testing.T) {
 	now := time.Now()
 	encrypted := &backupCandidate{Manifest: &backup.Manifest{EncryptionMode: "age", CreatedAt: now}}

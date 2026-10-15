@@ -1,6 +1,7 @@
 package orchestrator
 
 import (
+	"bufio"
 	"context"
 	"fmt"
 	"os"
@@ -187,4 +188,60 @@ func TestBackupExistingRecipientFileCreatesBackup(t *testing.T) {
 	if got := string(backup); got != "old" {
 		t.Fatalf("backup content=%q; want %q", got, "old")
 	}
+}
+
+// runAgeSetupWizard collects AGE recipients interactively.
+// Returns (fileRecipients, savedPath, error)
+func (o *Orchestrator) runAgeSetupWizard(ctx context.Context, candidatePath string) ([]string, string, error) {
+	if o == nil {
+		return nil, "", fmt.Errorf("orchestrator is required")
+	}
+
+	wizardCtx, wizardCancel := context.WithCancel(ctx)
+	defer wizardCancel()
+
+	recipients, result, err := o.runAgeSetupWorkflow(wizardCtx, candidatePath, newCLIAgeSetupUI(bufio.NewReader(os.Stdin), o.logger))
+	if err != nil {
+		return nil, "", err
+	}
+	savedPath := ""
+	if result != nil {
+		savedPath = result.RecipientPath
+	}
+	return recipients, savedPath, nil
+}
+
+func promptPrivateKeyRecipientAge(ctx context.Context) (string, error) {
+	secret, err := promptPrivateKeyValueAge(ctx)
+	if err != nil {
+		return "", err
+	}
+	defer resetString(&secret)
+
+	return ParseAgePrivateKeyRecipient(secret)
+}
+
+func writeRecipientFile(path string, recipients []string) error {
+	return writeRecipientFileWithDeps(osFS{}, realTimeProvider{}, path, recipients)
+}
+
+func backupExistingRecipientFile(path string) error {
+	_, err := backupExistingRecipientFileWithDeps(osFS{}, realTimeProvider{}, path)
+	return err
+}
+
+func deriveDeterministicRecipientFromPassphrase(passphrase string) (string, error) {
+	return deriveDeterministicRecipientFromPassphraseWithSalt(passphrase, recipientSaltV1)
+}
+
+func deriveCurve25519ScalarFromPassphrase(passphrase string) ([]byte, error) {
+	return deriveCurve25519ScalarFromPassphraseWithSalt(passphrase, recipientSaltV1)
+}
+
+func deriveDeterministicIdentityFromPassphrase(passphrase string) (age.Identity, error) {
+	return deriveDeterministicIdentityFromPassphraseWithSalt(passphrase, recipientSaltV1)
+}
+
+func deriveDeterministicIdentitiesFromPassphrase(passphrase string) ([]age.Identity, error) {
+	return deriveDeterministicIdentitiesFromPassphraseWithExtraSalts(passphrase, nil)
 }
