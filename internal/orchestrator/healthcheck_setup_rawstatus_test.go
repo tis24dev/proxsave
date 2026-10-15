@@ -20,7 +20,7 @@ func TestCheckHealthcheckConnectionPopulatesRawStatus(t *testing.T) {
 	// Seed a real status file (heartbeat + update) so the shared CheckDaemonState reads it:
 	// HaveStatus is content-based now, so RawStatus must carry the loaded snapshot.
 	base := t.TempDir()
-	if err := health.RecordPing(base, "self", health.KindHeartbeat, 1000, true, nil); err != nil {
+	if err := health.RecordOutcomePing(base, "self", health.KindHeartbeat, 1000, true, false, nil); err != nil {
 		t.Fatalf("seed heartbeat: %v", err)
 	}
 	if err := health.RecordUpdate(base, "self", 1000, true, "9.9.9", true, nil); err != nil {

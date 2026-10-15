@@ -344,7 +344,7 @@ type daemon struct {
 
 	// statusMu serializes writes to the shared healthcheck status file: the
 	// heartbeat loop and runOnce record ping outcomes concurrently, and
-	// health.RecordPing is a read-modify-write, so it needs its own lock. Kept
+	// health.RecordOutcomePing is a read-modify-write, so it needs its own lock. Kept
 	// separate from mu (which guards reporter/fetchWarned across buildReporter) so
 	// a status write never contends with reporter resolution.
 	statusMu sync.Mutex
@@ -1851,9 +1851,9 @@ func (d *daemon) reportBestEffortBounded(label string, failed bool, recordLimit 
 	}
 }
 
-// recordPing persists one real transmission outcome to the shared status file,
+// recordOutcomePing persists one real transmission outcome to the shared status file,
 // serialized by statusMu because the heartbeat loop and runOnce write it
-// concurrently and health.RecordPing is a read-modify-write. Best effort: a write
+// concurrently and health.RecordOutcomePing is a read-modify-write. Best effort: a write
 // error must not break the daemon, so it is only logged at debug. The ping error
 // text is already redacted by the Reporter, so this never leaks a URL or secret.
 func (d *daemon) recordOutcomePing(kind string, failed bool, pingErr error) {

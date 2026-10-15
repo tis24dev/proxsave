@@ -39,8 +39,8 @@ func TestDaemonStateWritersCreateTheDirRootOnly(t *testing.T) {
 		"WriteDaemonInfo":    func(base string) error { return WriteDaemonInfo(base, DaemonInfo{PID: 42}) },
 		"WriteDaemonRuntime": func(base string) error { return WriteDaemonRuntime(base, DaemonRuntimeState{PID: 42}) },
 		"WriteAbandon":       func(base string) error { return WriteAbandon(base, AbandonRecord{PID: 42}) },
-		"RecordPing": func(base string) error {
-			return RecordPing(base, "centralized", KindHeartbeat, 1, true, nil)
+		"RecordOutcomePing": func(base string) error {
+			return RecordOutcomePing(base, "centralized", KindHeartbeat, 1, true, false, nil)
 		},
 		"WriteNotifyResults": func(base string) error { return WriteNotifyResults(base, "rid", 1, map[string]string{"Email": "ok"}) },
 		"WriteManualOutcome": func(base string) error { return WriteManualOutcome(base, "rid", 1, 0) },

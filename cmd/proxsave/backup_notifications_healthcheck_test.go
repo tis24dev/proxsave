@@ -80,7 +80,7 @@ func TestInitializeHealthcheckSectionLines(t *testing.T) {
 		t.Helper()
 		base := t.TempDir()
 		if hasBeat {
-			if err := health.RecordPing(base, "centralized", health.KindHeartbeat, time.Now().Add(-hbAge).Unix(), true, nil); err != nil {
+			if err := health.RecordOutcomePing(base, "centralized", health.KindHeartbeat, time.Now().Add(-hbAge).Unix(), true, false, nil); err != nil {
 				t.Fatalf("seed heartbeat: %v", err)
 			}
 		}
@@ -237,7 +237,7 @@ func TestInitializeHealthcheckSectionCronModeKeepsLiveDaemon(t *testing.T) {
 	logging.SetDefaultLogger(def)
 
 	base := t.TempDir()
-	if err := health.RecordPing(base, "centralized", health.KindHeartbeat, time.Now().Add(-30*time.Second).Unix(), true, nil); err != nil {
+	if err := health.RecordOutcomePing(base, "centralized", health.KindHeartbeat, time.Now().Add(-30*time.Second).Unix(), true, false, nil); err != nil {
 		t.Fatalf("seed heartbeat: %v", err)
 	}
 	cfg := &config.Config{
