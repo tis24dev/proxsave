@@ -61,8 +61,8 @@ func TestGenerateChecksumErrorPaths(t *testing.T) {
 	logger := logging.New(types.LogLevelDebug, false)
 
 	t.Run("missing file", func(t *testing.T) {
-		if _, err := GenerateChecksum(context.Background(), logger, filepath.Join(t.TempDir(), "missing")); err == nil || !strings.Contains(err.Error(), "failed to open file") {
-			t.Fatalf("GenerateChecksum(missing) error = %v; want open failure", err)
+		if _, err := GenerateChecksumBounded(context.Background(), logger, filepath.Join(t.TempDir(), "missing"), 0); err == nil || !strings.Contains(err.Error(), "failed to open file") {
+			t.Fatalf("GenerateChecksumBounded(missing) error = %v; want open failure", err)
 		}
 	})
 
@@ -75,15 +75,15 @@ func TestGenerateChecksumErrorPaths(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
 		cancel()
 
-		if _, err := GenerateChecksum(ctx, logger, path); err == nil || err != context.Canceled {
-			t.Fatalf("GenerateChecksum(cancelled) error = %v; want %v", err, context.Canceled)
+		if _, err := GenerateChecksumBounded(ctx, logger, path, 0); err == nil || err != context.Canceled {
+			t.Fatalf("GenerateChecksumBounded(cancelled) error = %v; want %v", err, context.Canceled)
 		}
 	})
 
 	t.Run("read failure on directory", func(t *testing.T) {
 		dir := t.TempDir()
-		if _, err := GenerateChecksum(context.Background(), logger, dir); err == nil || !strings.Contains(err.Error(), "failed to read file") {
-			t.Fatalf("GenerateChecksum(directory) error = %v; want read failure", err)
+		if _, err := GenerateChecksumBounded(context.Background(), logger, dir, 0); err == nil || !strings.Contains(err.Error(), "failed to read file") {
+			t.Fatalf("GenerateChecksumBounded(directory) error = %v; want read failure", err)
 		}
 	})
 }
@@ -122,22 +122,22 @@ func TestCreateManifestAndVerifyChecksumErrorPaths(t *testing.T) {
 			t.Fatalf("write archive: %v", err)
 		}
 
-		ok, err := VerifyChecksum(context.Background(), logger, path, "bad")
+		ok, err := VerifyChecksumBounded(context.Background(), logger, path, "bad", 0)
 		if err == nil || ok {
-			t.Fatalf("VerifyChecksum(invalid expected) = (%v, %v); want error", ok, err)
+			t.Fatalf("VerifyChecksumBounded(invalid expected) = (%v, %v); want error", ok, err)
 		}
 		if !strings.Contains(err.Error(), "invalid expected checksum") {
-			t.Fatalf("VerifyChecksum(invalid expected) error = %v; want invalid expected checksum", err)
+			t.Fatalf("VerifyChecksumBounded(invalid expected) error = %v; want invalid expected checksum", err)
 		}
 	})
 
 	t.Run("verify checksum file open failure", func(t *testing.T) {
-		ok, err := VerifyChecksum(context.Background(), logger, filepath.Join(tmp, "missing.tar"), strings.Repeat("c", 64))
+		ok, err := VerifyChecksumBounded(context.Background(), logger, filepath.Join(tmp, "missing.tar"), strings.Repeat("c", 64), 0)
 		if err == nil || ok {
-			t.Fatalf("VerifyChecksum(missing file) = (%v, %v); want error", ok, err)
+			t.Fatalf("VerifyChecksumBounded(missing file) = (%v, %v); want error", ok, err)
 		}
 		if !strings.Contains(err.Error(), "failed to generate checksum") {
-			t.Fatalf("VerifyChecksum(missing file) error = %v; want checksum generation failure", err)
+			t.Fatalf("VerifyChecksumBounded(missing file) error = %v; want checksum generation failure", err)
 		}
 	})
 }

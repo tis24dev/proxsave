@@ -23,17 +23,17 @@ func TestGenerateAndVerifyChecksum(t *testing.T) {
 		t.Fatalf("failed to write test file: %v", err)
 	}
 
-	checksum, err := GenerateChecksum(ctx, logger, filePath)
+	checksum, err := GenerateChecksumBounded(ctx, logger, filePath, 0)
 	if err != nil {
-		t.Fatalf("GenerateChecksum failed: %v", err)
+		t.Fatalf("GenerateChecksumBounded failed: %v", err)
 	}
 	if checksum == "" {
 		t.Fatal("checksum should not be empty")
 	}
 
-	ok, err := VerifyChecksum(ctx, logger, filePath, checksum)
+	ok, err := VerifyChecksumBounded(ctx, logger, filePath, checksum, 0)
 	if err != nil {
-		t.Fatalf("VerifyChecksum failed: %v", err)
+		t.Fatalf("VerifyChecksumBounded failed: %v", err)
 	}
 	if !ok {
 		t.Fatal("expected checksum verification to succeed")
@@ -44,9 +44,9 @@ func TestGenerateAndVerifyChecksum(t *testing.T) {
 		t.Fatalf("failed to modify test file: %v", err)
 	}
 
-	ok, err = VerifyChecksum(ctx, logger, filePath, checksum)
+	ok, err = VerifyChecksumBounded(ctx, logger, filePath, checksum, 0)
 	if err != nil {
-		t.Fatalf("VerifyChecksum after modification failed: %v", err)
+		t.Fatalf("VerifyChecksumBounded after modification failed: %v", err)
 	}
 	if ok {
 		t.Fatal("expected checksum verification to fail after modification")
