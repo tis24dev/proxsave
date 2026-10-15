@@ -7,7 +7,7 @@ DEBUG    Secondary storage: retention out of scope: <ROOT>/backups/other-backup-
 DEBUG    Secondary Storage: retention - ignored <ROOT>/backups/pve-backup-20240301-120000.tar.zst (no manifest/checksum)
 INFO       Skipped, no manifest: pve-backup-20240301-120000.tar.zst
 DEBUG    Applying GFS retention policy (daily=2, weekly=2, monthly=2, yearly=2)
-DEBUG    GFS classification -> daily: 2/2, weekly: 2/2, monthly: 2/2, yearly: 2/2, to_delete: 3
+DEBUG    GFS classification -> daily: 2/2, weekly: 2/2, monthly: 2/2, yearly: 2/2, kept: 8, to_delete: 3
 DEBUG    Deleting old backup: pve-backup-20220110-120000.tar.zst (created: 2022-01-10 12:00:00)
 DEBUG    Deleting secondary backup: <ROOT>/backups/pve-backup-20220110-120000.tar.zst
 DEBUG    Removing file: <ROOT>/backups/pve-backup-20220110-120000.tar.zst.bundle.tar

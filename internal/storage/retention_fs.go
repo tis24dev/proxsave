@@ -69,9 +69,6 @@ type fsRetentionText struct {
 	removeFailed func(logger *logging.Logger, file string, err error)
 	notDeleted   func(logger *logging.Logger, backupFile string, err error)
 	leftBehind   func(logger *logging.Logger, backupFile string, err error)
-	// classificationShowsKept adds "kept: N" to the GFS classification line. Only the
-	// local destination writes it.
-	classificationShowsKept bool
 }
 
 var localRetentionText = fsRetentionText{
@@ -96,7 +93,6 @@ var localRetentionText = fsRetentionText{
 	leftBehind: func(logger *logging.Logger, backupFile string, err error) {
 		logger.Debug("Local Storage: retention - %s removed but the sidecar cleanup failed: %v", backupFile, err)
 	},
-	classificationShowsKept: true,
 }
 
 var secondaryRetentionText = fsRetentionText{
@@ -121,7 +117,6 @@ var secondaryRetentionText = fsRetentionText{
 	leftBehind: func(logger *logging.Logger, backupFile string, err error) {
 		logger.Debug("Secondary Storage: retention - left files behind from %s: %v", filepath.Base(backupFile), err)
 	},
-	classificationShowsKept: false,
 }
 
 // deleteBackup removes a backup file and its associated files.
@@ -291,22 +286,13 @@ func (r fsRetention) applyGFS(ctx context.Context, backups []*types.BackupMetada
 	// Get statistics
 	stats := GetRetentionStats(classification)
 	kept := len(backups) - stats[CategoryDelete]
-	if r.text.classificationShowsKept {
-		r.logger.Debug("GFS classification -> daily: %d/%d, weekly: %d/%d, monthly: %d/%d, yearly: %d/%d, kept: %d, to_delete: %d",
-			stats[CategoryDaily], config.Daily,
-			stats[CategoryWeekly], config.Weekly,
-			stats[CategoryMonthly], config.Monthly,
-			stats[CategoryYearly], config.Yearly,
-			kept,
-			stats[CategoryDelete])
-	} else {
-		r.logger.Debug("GFS classification -> daily: %d/%d, weekly: %d/%d, monthly: %d/%d, yearly: %d/%d, to_delete: %d",
-			stats[CategoryDaily], config.Daily,
-			stats[CategoryWeekly], config.Weekly,
-			stats[CategoryMonthly], config.Monthly,
-			stats[CategoryYearly], config.Yearly,
-			stats[CategoryDelete])
-	}
+	r.logger.Debug("GFS classification -> daily: %d/%d, weekly: %d/%d, monthly: %d/%d, yearly: %d/%d, kept: %d, to_delete: %d",
+		stats[CategoryDaily], config.Daily,
+		stats[CategoryWeekly], config.Weekly,
+		stats[CategoryMonthly], config.Monthly,
+		stats[CategoryYearly], config.Yearly,
+		kept,
+		stats[CategoryDelete])
 	r.tally.planned = stats[CategoryDelete]
 
 	// Delete backups marked for deletion

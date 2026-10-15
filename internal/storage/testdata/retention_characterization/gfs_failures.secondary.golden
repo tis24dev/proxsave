@@ -4,7 +4,7 @@ DEBUG    Start secondary list: path=<ROOT>/backups
 DEBUG    End secondary list (ok, duration=<D>)
 DEBUG    Secondary storage: retention answers to pve (server identity unknown)
 DEBUG    Applying GFS retention policy (daily=1, weekly=0, monthly=0, yearly=1)
-DEBUG    GFS classification -> daily: 1/1, weekly: 0/0, monthly: 0/0, yearly: 1/1, to_delete: 4
+DEBUG    GFS classification -> daily: 1/1, weekly: 0/0, monthly: 0/0, yearly: 1/1, kept: 2, to_delete: 4
 DEBUG    Deleting old backup: pve-backup-20240301-120000.tar.zst (created: 2024-03-01 12:00:00)
 DEBUG    Deleting secondary backup: <ROOT>/backups/pve-backup-20240301-120000.tar.zst
 DEBUG    Removing file: <ROOT>/backups/pve-backup-20240301-120000.tar.zst.bundle.tar
