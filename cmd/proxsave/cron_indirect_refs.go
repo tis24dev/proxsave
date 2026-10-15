@@ -1824,8 +1824,9 @@ func runPartsNameIsActive(name string) bool {
 type systemCronScan int
 
 const (
-	// scanIndirectOnly is the --upgrade refusal / daemon-install warning view: heuristics
-	// only, a canonical proxsave token excluded as "not indirect".
+	// scanIndirectOnly is the INDIRECT-only view of indirectProxsaveSystemCronRefs: heuristics
+	// only, a canonical proxsave token excluded as "not indirect". No daemon path reads it; its
+	// one consumer is the test that pins "matched a heuristic" against "is the proxsave binary".
 	scanIndirectOnly systemCronScan = iota
 	// scanAll adds the canonical token back, because under /etc nothing owns or removes it.
 	scanAll
