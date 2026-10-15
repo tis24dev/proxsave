@@ -324,38 +324,6 @@ func TestCheckTelegramRegistrationAndProvisionConfirmNonFatalOn403(t *testing.T)
 	}
 }
 
-// TestCheckTelegramRegistrationStatusCheckMasksSecretNoPersist guards the latent
-// body-preview leak through the unchanged wrapper: even the legacy status-only
-// path registers the secret with the logger (so it is masked) and never persists
-// it, sends NO provision-intent header, and never confirms.
-func TestCheckTelegramRegistrationStatusCheckMasksSecretNoPersist(t *testing.T) {
-	logger, buf := newProvisionTestLogger()
-	untouched := t.TempDir()
-
-	var capture provisionCapture
-	server := routingSecretServer(t, `{"chat_id":"123","notify_secret":"`+provisionTestSecret+`","status":200}`, http.StatusOK, &capture)
-	defer server.Close()
-
-	status := CheckTelegramRegistration(context.Background(), server.URL, "server-123", logger)
-
-	if status.Code != 200 {
-		t.Fatalf("status.Code = %d, want 200", status.Code)
-	}
-	if strings.Contains(buf.String(), provisionTestSecret) {
-		t.Fatalf("plaintext secret leaked into log output on the status-only path:\n%s", buf.String())
-	}
-	if loaded, _ := identity.LoadNotifySecret(untouched); loaded != "" {
-		t.Fatalf("status-only path must not persist anything, got %q", loaded)
-	}
-	// The bare status probe must not carry provision-intent and must not confirm.
-	if capture.provisionHeader != "" {
-		t.Fatalf("status probe sent X-Proxsave-Provision = %q, want empty", capture.provisionHeader)
-	}
-	if capture.confirmHits != 0 {
-		t.Fatalf("status probe must not confirm, got %d hits", capture.confirmHits)
-	}
-}
-
 // TestCheckTelegramRegistrationAndProvision426NoConfirm verifies a 426 upgrade
 // response short-circuits before any provisioning: the status is 426 with an
 // error, the provision outcome is NotApplicable, and confirm-secret is never hit.

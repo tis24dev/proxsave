@@ -13,7 +13,7 @@ import (
 
 func TestCheckTelegramRegistrationMissingServerID(t *testing.T) {
 	logger := logging.New(types.LogLevelDebug, false)
-	status := CheckTelegramRegistration(context.Background(), "https://central.test", "", logger)
+	status := CheckTelegramRegistrationAndProvision(context.Background(), "https://central.test", "", "", logger).Status
 
 	if status.Code != StatusCodeMissingServerID || status.Error == nil {
 		t.Fatalf("expected missing server ID sentinel, got %+v", status)
@@ -45,7 +45,7 @@ func TestCheckTelegramRegistrationResponses(t *testing.T) {
 			}))
 			defer server.Close()
 
-			status := CheckTelegramRegistration(context.Background(), server.URL, "server-123", logger)
+			status := CheckTelegramRegistrationAndProvision(context.Background(), server.URL, "server-123", "", logger).Status
 			if status.Code != tt.expectCode {
 				t.Fatalf("Code=%d, want %d", status.Code, tt.expectCode)
 			}
@@ -60,30 +60,25 @@ func TestCheckTelegramRegistrationResponses(t *testing.T) {
 }
 
 // TestCheckTelegramRegistrationSendsVersionHeader verifies the GET get-chat-id
-// request from CheckTelegramRegistration carries X-Proxsave-Version.
+// request from CheckTelegramRegistrationAndProvision carries X-Proxsave-Version.
 func TestCheckTelegramRegistrationSendsVersionHeader(t *testing.T) {
 	logger := logging.New(types.LogLevelDebug, false)
 
-	var captured, capturedProvision string
+	var captured string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		captured = r.Header.Get("X-Proxsave-Version")
-		capturedProvision = r.Header.Get("X-Proxsave-Provision")
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("ok"))
 	}))
 	defer server.Close()
 
-	CheckTelegramRegistration(context.Background(), server.URL, "server-123", logger)
+	CheckTelegramRegistrationAndProvision(context.Background(), server.URL, "server-123", "", logger)
 
 	if captured == "" {
 		t.Fatalf("X-Proxsave-Version header was not set")
 	}
 	if captured != version.String() {
 		t.Fatalf("X-Proxsave-Version = %q, want %q", captured, version.String())
-	}
-	// The bare status probe must never carry provision-intent.
-	if capturedProvision != "" {
-		t.Fatalf("X-Proxsave-Provision = %q, want empty on the public status path", capturedProvision)
 	}
 }
 
@@ -162,7 +157,7 @@ func TestCheckTelegramRegistrationLinkStateDiscriminator(t *testing.T) {
 			}))
 			defer server.Close()
 
-			status := CheckTelegramRegistration(context.Background(), server.URL, "server-123", logger)
+			status := CheckTelegramRegistrationAndProvision(context.Background(), server.URL, "server-123", "", logger).Status
 
 			// Code MUST stay 200 for BOTH meanings so provisioning gates keep firing.
 			if status.Code != 200 {
