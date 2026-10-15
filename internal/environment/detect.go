@@ -134,41 +134,6 @@ var (
 	rootPrefix string
 )
 
-// DetectProxmoxType detects whether the system is running Proxmox VE or Proxmox Backup Server
-func DetectProxmoxType() types.ProxmoxType {
-	info, _ := detectEnvironmentInfo()
-	return info.Type
-}
-
-// GetVersion returns the version string of the detected Proxmox system
-func GetVersion(pType types.ProxmoxType) (string, error) {
-	extendPath()
-
-	switch pType {
-	case types.ProxmoxVE:
-		if version, ok, _ := detectPVE(nil); ok && version != "" && version != "unknown" {
-			return version, nil
-		}
-		return "", fmt.Errorf("unable to determine Proxmox VE version")
-	case types.ProxmoxBS:
-		if version, ok, _ := detectPBS(nil); ok && version != "" && version != "unknown" {
-			return version, nil
-		}
-		return "", fmt.Errorf("unable to determine Proxmox Backup Server version")
-	case types.ProxmoxDual:
-		info, err := detectEnvironmentInfo()
-		if err != nil {
-			return "", err
-		}
-		if info.Type != types.ProxmoxDual || info.Version == "" || info.Version == "unknown" {
-			return "", fmt.Errorf("unable to determine dual Proxmox versions")
-		}
-		return info.Version, nil
-	default:
-		return "", fmt.Errorf("unknown proxmox type: %s", pType)
-	}
-}
-
 // EnvironmentInfo holds information about the current Proxmox environment
 type EnvironmentInfo struct {
 	Type       types.ProxmoxType
