@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -232,80 +233,38 @@ func ensurePBSServicesForAPI(ctx context.Context, logger *logging.Logger) error 
 	return nil
 }
 
-func applyPBSRemoteCfgViaAPI(ctx context.Context, logger *logging.Logger, stageRoot string, strict bool) error {
-	remoteRaw, present, err := readStageFileOptional(stageRoot, "etc/proxmox-backup/remote.cfg")
-	if err != nil {
-		return err
-	}
-	if !present {
-		return nil
-	}
-	sections, err := parseProxmoxNotificationSections(remoteRaw)
-	if err != nil {
-		return fmt.Errorf("parse staged remote.cfg: %w", err)
-	}
-
-	desired := make(map[string]proxmoxNotificationSection, len(sections))
-	for _, s := range sections {
-		name := strings.TrimSpace(s.Name)
-		if name == "" {
-			continue
-		}
-		desired[name] = s
-	}
-
-	var removeFailures []string
-	if strict {
-		out, err := runPBSManager(ctx, "remote", "list", "--output-format=json")
-		if err != nil {
-			return err
-		}
-		current, err := parsePBSListIDs(out, "id", "name")
-		if err != nil {
-			return fmt.Errorf("parse remote list: %w", err)
-		}
-		for _, id := range current {
-			if _, ok := desired[id]; ok {
-				continue
-			}
-			if _, err := runPBSManager(ctx, "remote", "remove", id); err != nil {
-				logger.Warning("PBS API apply: remote remove %s failed (continuing): %v", id, err)
-				removeFailures = append(removeFailures, id)
-			}
-		}
-	}
-
-	ids := make([]string, 0, len(desired))
-	for id := range desired {
-		ids = append(ids, id)
-	}
-	sort.Strings(ids)
-	for _, id := range ids {
-		s := desired[id]
-		flags := buildProxmoxManagerFlags(s.Entries)
-		createArgs := append([]string{"remote", "create", id}, flags...)
-		if _, err := runPBSManagerSensitive(ctx, createArgs, "--password"); err != nil {
-			updateArgs := append([]string{"remote", "update", id}, flags...)
-			if _, upErr := runPBSManagerSensitive(ctx, updateArgs, "--password"); upErr != nil {
-				return fmt.Errorf("remote %s: %v (create) / %v (update)", id, err, upErr)
-			}
-		}
-	}
-
-	return pbsCleanRemoveResult("remote", removeFailures)
+// pbsSectionCfg describes one PBS section-config file that is restored through
+// proxmox-backup-manager: the staged file, the command words in front of the verb
+// ("remote", "s3 endpoint", ...), the keys a list row is identified by (in the order
+// they are tried), and the flags whose value a failed create/update must not show.
+type pbsSectionCfg struct {
+	file        string
+	command     []string
+	listKeys    []string
+	secretFlags []string
 }
 
-func applyPBSS3CfgViaAPI(ctx context.Context, logger *logging.Logger, stageRoot string, strict bool) error {
-	s3Raw, present, err := readStageFileOptional(stageRoot, "etc/proxmox-backup/s3.cfg")
+// applyPBSSectionCfgViaAPI creates or updates every section of the staged cfg.file
+// through proxmox-backup-manager, in sorted order, falling back from create to
+// update. In strict (Clean 1:1) mode it first removes every listed object that the
+// staged file does not name; a remove that fails is logged, the apply continues,
+// and the result wraps errPBSCleanRemoveIncomplete.
+func applyPBSSectionCfgViaAPI(ctx context.Context, logger *logging.Logger, stageRoot string, strict bool, cfg pbsSectionCfg) error {
+	kind := strings.Join(cfg.command, " ")
+	commandArgs := func(rest ...string) []string {
+		return append(append([]string(nil), cfg.command...), rest...)
+	}
+
+	raw, present, err := readStageFileOptional(stageRoot, cfg.file)
 	if err != nil {
 		return err
 	}
 	if !present {
 		return nil
 	}
-	sections, err := parseProxmoxNotificationSections(s3Raw)
+	sections, err := parseProxmoxNotificationSections(raw)
 	if err != nil {
-		return fmt.Errorf("parse staged s3.cfg: %w", err)
+		return fmt.Errorf("parse staged %s: %w", filepath.Base(cfg.file), err)
 	}
 
 	desired := make(map[string]proxmoxNotificationSection, len(sections))
@@ -319,20 +278,20 @@ func applyPBSS3CfgViaAPI(ctx context.Context, logger *logging.Logger, stageRoot 
 
 	var removeFailures []string
 	if strict {
-		out, err := runPBSManager(ctx, "s3", "endpoint", "list", "--output-format=json")
+		out, err := runPBSManager(ctx, commandArgs("list", "--output-format=json")...)
 		if err != nil {
 			return err
 		}
-		current, err := parsePBSListIDs(out, "id", "name")
+		current, err := parsePBSListIDs(out, cfg.listKeys...)
 		if err != nil {
-			return fmt.Errorf("parse s3 endpoint list: %w", err)
+			return fmt.Errorf("parse %s list: %w", kind, err)
 		}
 		for _, id := range current {
 			if _, ok := desired[id]; ok {
 				continue
 			}
-			if _, err := runPBSManager(ctx, "s3", "endpoint", "remove", id); err != nil {
-				logger.Warning("PBS API apply: s3 endpoint remove %s failed (continuing): %v", id, err)
+			if _, err := runPBSManager(ctx, commandArgs("remove", id)...); err != nil {
+				logger.Warning("PBS API apply: %s remove %s failed (continuing): %v", kind, id, err)
 				removeFailures = append(removeFailures, id)
 			}
 		}
@@ -346,16 +305,34 @@ func applyPBSS3CfgViaAPI(ctx context.Context, logger *logging.Logger, stageRoot 
 	for _, id := range ids {
 		s := desired[id]
 		flags := buildProxmoxManagerFlags(s.Entries)
-		createArgs := append([]string{"s3", "endpoint", "create", id}, flags...)
-		if _, err := runPBSManagerSensitive(ctx, createArgs, "--access-key", "--secret-key"); err != nil {
-			updateArgs := append([]string{"s3", "endpoint", "update", id}, flags...)
-			if _, upErr := runPBSManagerSensitive(ctx, updateArgs, "--access-key", "--secret-key"); upErr != nil {
-				return fmt.Errorf("s3 endpoint %s: %v (create) / %v (update)", id, err, upErr)
+		createArgs := commandArgs(append([]string{"create", id}, flags...)...)
+		if _, err := runPBSManagerSensitive(ctx, createArgs, cfg.secretFlags...); err != nil {
+			updateArgs := commandArgs(append([]string{"update", id}, flags...)...)
+			if _, upErr := runPBSManagerSensitive(ctx, updateArgs, cfg.secretFlags...); upErr != nil {
+				return fmt.Errorf("%s %s: %v (create) / %v (update)", kind, id, err, upErr)
 			}
 		}
 	}
 
-	return pbsCleanRemoveResult("s3 endpoint", removeFailures)
+	return pbsCleanRemoveResult(kind, removeFailures)
+}
+
+func applyPBSRemoteCfgViaAPI(ctx context.Context, logger *logging.Logger, stageRoot string, strict bool) error {
+	return applyPBSSectionCfgViaAPI(ctx, logger, stageRoot, strict, pbsSectionCfg{
+		file:        "etc/proxmox-backup/remote.cfg",
+		command:     []string{"remote"},
+		listKeys:    []string{"id", "name"},
+		secretFlags: []string{"--password"},
+	})
+}
+
+func applyPBSS3CfgViaAPI(ctx context.Context, logger *logging.Logger, stageRoot string, strict bool) error {
+	return applyPBSSectionCfgViaAPI(ctx, logger, stageRoot, strict, pbsSectionCfg{
+		file:        "etc/proxmox-backup/s3.cfg",
+		command:     []string{"s3", "endpoint"},
+		listKeys:    []string{"id", "name"},
+		secretFlags: []string{"--access-key", "--secret-key"},
+	})
 }
 
 func applyPBSDatastoreCfgViaAPI(ctx context.Context, logger *logging.Logger, stageRoot string, strict bool) error {
@@ -494,255 +471,35 @@ func applyPBSDatastoreCfgViaAPI(ctx context.Context, logger *logging.Logger, sta
 }
 
 func applyPBSSyncCfgViaAPI(ctx context.Context, logger *logging.Logger, stageRoot string, strict bool) error {
-	raw, present, err := readStageFileOptional(stageRoot, "etc/proxmox-backup/sync.cfg")
-	if err != nil {
-		return err
-	}
-	if !present {
-		return nil
-	}
-	sections, err := parseProxmoxNotificationSections(raw)
-	if err != nil {
-		return fmt.Errorf("parse staged sync.cfg: %w", err)
-	}
-
-	desired := make(map[string]proxmoxNotificationSection, len(sections))
-	for _, s := range sections {
-		id := strings.TrimSpace(s.Name)
-		if id == "" {
-			continue
-		}
-		desired[id] = s
-	}
-
-	var removeFailures []string
-	if strict {
-		out, err := runPBSManager(ctx, "sync-job", "list", "--output-format=json")
-		if err != nil {
-			return err
-		}
-		current, err := parsePBSListIDs(out, "id", "name")
-		if err != nil {
-			return fmt.Errorf("parse sync-job list: %w", err)
-		}
-		for _, id := range current {
-			if _, ok := desired[id]; ok {
-				continue
-			}
-			if _, err := runPBSManager(ctx, "sync-job", "remove", id); err != nil {
-				logger.Warning("PBS API apply: sync-job remove %s failed (continuing): %v", id, err)
-				removeFailures = append(removeFailures, id)
-			}
-		}
-	}
-
-	ids := make([]string, 0, len(desired))
-	for id := range desired {
-		ids = append(ids, id)
-	}
-	sort.Strings(ids)
-	for _, id := range ids {
-		s := desired[id]
-		flags := buildProxmoxManagerFlags(s.Entries)
-		createArgs := append([]string{"sync-job", "create", id}, flags...)
-		if _, err := runPBSManager(ctx, createArgs...); err != nil {
-			updateArgs := append([]string{"sync-job", "update", id}, flags...)
-			if _, upErr := runPBSManager(ctx, updateArgs...); upErr != nil {
-				return fmt.Errorf("sync-job %s: %v (create) / %v (update)", id, err, upErr)
-			}
-		}
-	}
-
-	return pbsCleanRemoveResult("sync-job", removeFailures)
+	return applyPBSSectionCfgViaAPI(ctx, logger, stageRoot, strict, pbsSectionCfg{
+		file:     "etc/proxmox-backup/sync.cfg",
+		command:  []string{"sync-job"},
+		listKeys: []string{"id", "name"},
+	})
 }
 
 func applyPBSVerificationCfgViaAPI(ctx context.Context, logger *logging.Logger, stageRoot string, strict bool) error {
-	raw, present, err := readStageFileOptional(stageRoot, "etc/proxmox-backup/verification.cfg")
-	if err != nil {
-		return err
-	}
-	if !present {
-		return nil
-	}
-	sections, err := parseProxmoxNotificationSections(raw)
-	if err != nil {
-		return fmt.Errorf("parse staged verification.cfg: %w", err)
-	}
-
-	desired := make(map[string]proxmoxNotificationSection, len(sections))
-	for _, s := range sections {
-		id := strings.TrimSpace(s.Name)
-		if id == "" {
-			continue
-		}
-		desired[id] = s
-	}
-
-	var removeFailures []string
-	if strict {
-		out, err := runPBSManager(ctx, "verify-job", "list", "--output-format=json")
-		if err != nil {
-			return err
-		}
-		current, err := parsePBSListIDs(out, "id", "name")
-		if err != nil {
-			return fmt.Errorf("parse verify-job list: %w", err)
-		}
-		for _, id := range current {
-			if _, ok := desired[id]; ok {
-				continue
-			}
-			if _, err := runPBSManager(ctx, "verify-job", "remove", id); err != nil {
-				logger.Warning("PBS API apply: verify-job remove %s failed (continuing): %v", id, err)
-				removeFailures = append(removeFailures, id)
-			}
-		}
-	}
-
-	ids := make([]string, 0, len(desired))
-	for id := range desired {
-		ids = append(ids, id)
-	}
-	sort.Strings(ids)
-	for _, id := range ids {
-		s := desired[id]
-		flags := buildProxmoxManagerFlags(s.Entries)
-		createArgs := append([]string{"verify-job", "create", id}, flags...)
-		if _, err := runPBSManager(ctx, createArgs...); err != nil {
-			updateArgs := append([]string{"verify-job", "update", id}, flags...)
-			if _, upErr := runPBSManager(ctx, updateArgs...); upErr != nil {
-				return fmt.Errorf("verify-job %s: %v (create) / %v (update)", id, err, upErr)
-			}
-		}
-	}
-
-	return pbsCleanRemoveResult("verify-job", removeFailures)
+	return applyPBSSectionCfgViaAPI(ctx, logger, stageRoot, strict, pbsSectionCfg{
+		file:     "etc/proxmox-backup/verification.cfg",
+		command:  []string{"verify-job"},
+		listKeys: []string{"id", "name"},
+	})
 }
 
 func applyPBSPruneCfgViaAPI(ctx context.Context, logger *logging.Logger, stageRoot string, strict bool) error {
-	raw, present, err := readStageFileOptional(stageRoot, "etc/proxmox-backup/prune.cfg")
-	if err != nil {
-		return err
-	}
-	if !present {
-		return nil
-	}
-	sections, err := parseProxmoxNotificationSections(raw)
-	if err != nil {
-		return fmt.Errorf("parse staged prune.cfg: %w", err)
-	}
-
-	desired := make(map[string]proxmoxNotificationSection, len(sections))
-	for _, s := range sections {
-		id := strings.TrimSpace(s.Name)
-		if id == "" {
-			continue
-		}
-		desired[id] = s
-	}
-
-	var removeFailures []string
-	if strict {
-		out, err := runPBSManager(ctx, "prune-job", "list", "--output-format=json")
-		if err != nil {
-			return err
-		}
-		current, err := parsePBSListIDs(out, "id", "name")
-		if err != nil {
-			return fmt.Errorf("parse prune-job list: %w", err)
-		}
-		for _, id := range current {
-			if _, ok := desired[id]; ok {
-				continue
-			}
-			if _, err := runPBSManager(ctx, "prune-job", "remove", id); err != nil {
-				logger.Warning("PBS API apply: prune-job remove %s failed (continuing): %v", id, err)
-				removeFailures = append(removeFailures, id)
-			}
-		}
-	}
-
-	ids := make([]string, 0, len(desired))
-	for id := range desired {
-		ids = append(ids, id)
-	}
-	sort.Strings(ids)
-	for _, id := range ids {
-		s := desired[id]
-		flags := buildProxmoxManagerFlags(s.Entries)
-		createArgs := append([]string{"prune-job", "create", id}, flags...)
-		if _, err := runPBSManager(ctx, createArgs...); err != nil {
-			updateArgs := append([]string{"prune-job", "update", id}, flags...)
-			if _, upErr := runPBSManager(ctx, updateArgs...); upErr != nil {
-				return fmt.Errorf("prune-job %s: %v (create) / %v (update)", id, err, upErr)
-			}
-		}
-	}
-
-	return pbsCleanRemoveResult("prune-job", removeFailures)
+	return applyPBSSectionCfgViaAPI(ctx, logger, stageRoot, strict, pbsSectionCfg{
+		file:     "etc/proxmox-backup/prune.cfg",
+		command:  []string{"prune-job"},
+		listKeys: []string{"id", "name"},
+	})
 }
 
 func applyPBSTrafficControlCfgViaAPI(ctx context.Context, logger *logging.Logger, stageRoot string, strict bool) error {
-	raw, present, err := readStageFileOptional(stageRoot, "etc/proxmox-backup/traffic-control.cfg")
-	if err != nil {
-		return err
-	}
-	if !present {
-		return nil
-	}
-	sections, err := parseProxmoxNotificationSections(raw)
-	if err != nil {
-		return fmt.Errorf("parse staged traffic-control.cfg: %w", err)
-	}
-
-	desired := make(map[string]proxmoxNotificationSection, len(sections))
-	for _, s := range sections {
-		name := strings.TrimSpace(s.Name)
-		if name == "" {
-			continue
-		}
-		desired[name] = s
-	}
-
-	var removeFailures []string
-	if strict {
-		out, err := runPBSManager(ctx, "traffic-control", "list", "--output-format=json")
-		if err != nil {
-			return err
-		}
-		current, err := parsePBSListIDs(out, "name", "id")
-		if err != nil {
-			return fmt.Errorf("parse traffic-control list: %w", err)
-		}
-		for _, name := range current {
-			if _, ok := desired[name]; ok {
-				continue
-			}
-			if _, err := runPBSManager(ctx, "traffic-control", "remove", name); err != nil {
-				logger.Warning("PBS API apply: traffic-control remove %s failed (continuing): %v", name, err)
-				removeFailures = append(removeFailures, name)
-			}
-		}
-	}
-
-	names := make([]string, 0, len(desired))
-	for name := range desired {
-		names = append(names, name)
-	}
-	sort.Strings(names)
-	for _, name := range names {
-		s := desired[name]
-		flags := buildProxmoxManagerFlags(s.Entries)
-		createArgs := append([]string{"traffic-control", "create", name}, flags...)
-		if _, err := runPBSManager(ctx, createArgs...); err != nil {
-			updateArgs := append([]string{"traffic-control", "update", name}, flags...)
-			if _, upErr := runPBSManager(ctx, updateArgs...); upErr != nil {
-				return fmt.Errorf("traffic-control %s: %v (create) / %v (update)", name, err, upErr)
-			}
-		}
-	}
-
-	return pbsCleanRemoveResult("traffic-control", removeFailures)
+	return applyPBSSectionCfgViaAPI(ctx, logger, stageRoot, strict, pbsSectionCfg{
+		file:     "etc/proxmox-backup/traffic-control.cfg",
+		command:  []string{"traffic-control"},
+		listKeys: []string{"name", "id"},
+	})
 }
 
 func applyPBSNodeCfgViaAPI(ctx context.Context, stageRoot string) error {
