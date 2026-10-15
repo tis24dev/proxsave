@@ -619,22 +619,6 @@ func (s *SecondaryStorage) deleteBackupInternal(ctx context.Context, backupFile 
 	return s.retention().deleteBackup(ctx, backupFile)
 }
 
-// deleteAssociatedLog attempts to remove the secondary log file corresponding to a backup.
-// It is best-effort and never returns an error to the caller.
-func (s *SecondaryStorage) deleteAssociatedLog(ctx context.Context, backupFile string) bool {
-	if s == nil || s.config == nil {
-		return false
-	}
-	return s.retention().deleteAssociatedLog(ctx, backupFile)
-}
-
-func (s *SecondaryStorage) countLogFiles(ctx context.Context) int {
-	if s == nil || s.config == nil {
-		return -1
-	}
-	return s.retention().countLogFiles(ctx)
-}
-
 // retention is this destination as the retention code it shares with the other
 // folder-backed destination sees it (retention_fs.go): SECONDARY_LOG_PATH is its log folder.
 func (s *SecondaryStorage) retention() fsRetention {
