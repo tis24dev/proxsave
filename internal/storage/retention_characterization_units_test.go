@@ -296,3 +296,26 @@ func TestRetentionCharacterizationPruneOrphanLogs(t *testing.T) {
 		})
 	}
 }
+
+// A log count abandoned by a cancelled context answers -1, and its failure line names
+// the destination's own bounded operation (local-log-glob, secondary-log-glob): the
+// only place those operation names reach the log.
+func TestRetentionCharacterizationCountLogFilesCancelled(t *testing.T) {
+	for _, fl := range charFlavors {
+		t.Run(fl.name, func(t *testing.T) {
+			e := newCharEnv(t, "logs")
+			e.addLog(charHost, "2024-06-20", charLogFile)
+			logger, sink := newCharLogger()
+			backend := fl.build(t, e, logger)
+			before := e.snapshot()
+			sink.reset()
+			ctx, cancel := context.WithCancel(context.Background())
+			cancel()
+			if got := charPrivates(t, backend).countLogs(ctx); got != -1 {
+				t.Errorf("countLogFiles on a cancelled context = %d, want -1", got)
+			}
+			e.checkFiles(before, nil)
+			assertRetentionGolden(t, "count_log_files_cancelled."+fl.name, charNormalize(sink.text(), e.root))
+		})
+	}
+}
