@@ -143,13 +143,6 @@ func (c *Collector) depRunCommand(ctx context.Context, name string, args ...stri
 	return runCommand(ctx, name, args...)
 }
 
-func (c *Collector) depRunCommandWithEnv(ctx context.Context, extraEnv []string, name string, args ...string) ([]byte, error) {
-	if c.deps.RunCommandWithEnv != nil {
-		return c.deps.RunCommandWithEnv(ctx, extraEnv, name, args...)
-	}
-	return runCommandWithEnv(ctx, extraEnv, name, args...)
-}
-
 // depRunCommandCaptured runs a command with stdout and stderr kept apart. A Collector
 // wired only with the merged-output hooks falls back to them, reporting the merged text
 // as stdout and no stderr.
@@ -1650,10 +1643,6 @@ func (c *Collector) safeCmdOutputWithPBSAuthForDatastore(ctx context.Context, sp
 	c.logger.Debug("Successfully collected %s via PBS-authenticated command for datastore %s: %s", description, datastoreName, cmdString)
 
 	return nil
-}
-
-func summarizeCommandOutput(buf *bytes.Buffer) string {
-	return summarizeCommandOutputText(buf.String())
 }
 
 func summarizeCommandOutputText(text string) string {

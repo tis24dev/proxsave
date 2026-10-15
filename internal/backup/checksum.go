@@ -235,24 +235,6 @@ func LoadManifest(manifestPath string) (*Manifest, error) {
 	)
 }
 
-// HostnameFromManifestBytes returns the host a manifest payload names, reading both
-// forms the two pipelines produced: the JSON manifest the Go pipeline writes, and the
-// KEY=VALUE sidecar the pre-Go pipeline wrote. JSON wins whenever it parses, which is
-// the same key precedence LoadManifest applies.
-//
-// It is deliberately NOT LoadManifest itself. LoadManifest's legacy branch is gated
-// on a path ending in ".metadata" and on a stat-able archive sitting next to it, and
-// a caller holding only the payload bytes (the cloud path reads its manifests off the
-// remote with "rclone cat") has neither.
-//
-// "" means the payload names no host. Every caller must treat that as "cannot
-// attribute" and never as a match: on a shared location, claiming an archive whose
-// writer nothing can name means deleting another machine's backup.
-func HostnameFromManifestBytes(data []byte) string {
-	hostname, _ := OwnerFromManifestBytes(data)
-	return hostname
-}
-
 // OwnerFromManifestBytes returns both facts a manifest payload records about the
 // machine that wrote the archive: the host it names and the server identity it
 // carries. Both come from THE SAME payload, which is the point of returning them
@@ -260,11 +242,11 @@ func HostnameFromManifestBytes(data []byte) string {
 // a hostname taken from one sidecar and an identity taken from another would describe
 // a writer that never existed, and retention would be deciding a deletion on it.
 //
-// Format precedence is exactly HostnameFromManifestBytes's, which is exactly
-// LoadManifest's: JSON wins whenever it parses. The KEY=VALUE fallback can only ever
-// yield a hostname, because the pre-Go pipeline had no notion of a server identity
-// and never wrote such a key. Teaching parseLegacyMetadata one would invent a format
-// no archive on disk carries and could only ever fire on a hand-edited file.
+// Format precedence is exactly LoadManifest's: JSON wins whenever it parses. The
+// KEY=VALUE fallback can only ever yield a hostname, because the pre-Go pipeline had
+// no notion of a server identity and never wrote such a key. Teaching
+// parseLegacyMetadata one would invent a format no archive on disk carries and
+// could only ever fire on a hand-edited file.
 //
 // Either result may be "", independently, and "" always means "the payload does not
 // say". It is never a match.

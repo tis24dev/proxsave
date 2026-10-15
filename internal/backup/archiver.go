@@ -393,16 +393,6 @@ func (a *Archiver) writeTar(ctx context.Context, sourceDir string, w io.Writer) 
 	return err
 }
 
-// GetDefaultArchiverConfig returns default archiver configuration
-func GetDefaultArchiverConfig() *ArchiverConfig {
-	return &ArchiverConfig{
-		Compression:      types.CompressionXZ,
-		CompressionLevel: 6, // Balanced compression
-		CompressionMode:  "standard",
-		DryRun:           false,
-	}
-}
-
 func (a *Archiver) wrapEncryptionWriter(base io.Writer) (io.Writer, func() error, error) {
 	if !a.encryptArchive {
 		return base, func() error { return nil }, nil

@@ -22,7 +22,11 @@ import (
 
 func TestNewArchiver(t *testing.T) {
 	logger := logging.New(types.LogLevelInfo, false)
-	config := GetDefaultArchiverConfig()
+	config := &ArchiverConfig{
+		Compression:      types.CompressionXZ,
+		CompressionLevel: 6,
+		CompressionMode:  "standard",
+	}
 
 	archiver := NewArchiver(logger, config)
 
@@ -32,18 +36,6 @@ func TestNewArchiver(t *testing.T) {
 
 	if archiver.EffectiveCompression() != types.CompressionXZ {
 		t.Errorf("Expected compression XZ, got %s", archiver.EffectiveCompression())
-	}
-}
-
-func TestGetDefaultArchiverConfig(t *testing.T) {
-	config := GetDefaultArchiverConfig()
-
-	if config.Compression != types.CompressionXZ {
-		t.Errorf("Expected default compression XZ, got %s", config.Compression)
-	}
-
-	if config.CompressionLevel != 6 {
-		t.Errorf("Expected default compression level 6, got %d", config.CompressionLevel)
 	}
 }
 
