@@ -246,31 +246,6 @@ func TestFormatDuration_SubSecond(t *testing.T) {
 	}
 }
 
-func TestFormatBackupNoun(t *testing.T) {
-	tests := []struct {
-		n        int
-		expected string
-	}{
-		{0, "0 backups"},
-		{1, "1 backup"},
-		{2, "2 backups"},
-		{100, "100 backups"},
-	}
-
-	for _, tc := range tests {
-		result := formatBackupNoun(tc.n)
-		if result != tc.expected {
-			t.Errorf("formatBackupNoun(%d) = %q, want %q", tc.n, result, tc.expected)
-		}
-	}
-}
-
-func TestFormatBackupNoun_Negative(t *testing.T) {
-	if got := formatBackupNoun(-3); got != "-3 backups" {
-		t.Errorf("formatBackupNoun(-3) = %q, want -3 backups", got)
-	}
-}
-
 func TestTruncateHash(t *testing.T) {
 	tests := []struct {
 		hash     string

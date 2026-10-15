@@ -606,13 +606,6 @@ func logStorageInitSummary(summary string, warn bool) {
 	}
 }
 
-func formatBackupNoun(n int) string {
-	if n == 1 {
-		return "1 backup"
-	}
-	return fmt.Sprintf("%d backups", n)
-}
-
 // cleanupGlobalProxmoxBackupEntrypoints performs a best-effort cleanup of any existing
 // proxsave/proxmox-backup entrypoints on the system PATH, as well as the common global
 // locations /usr/local/bin and /usr/bin, mirroring what an operator would manually
