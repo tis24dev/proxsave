@@ -11,6 +11,10 @@ import (
 	"time"
 )
 
+func (l *operationLimiter) inflight() int {
+	return len(l.slots)
+}
+
 type stagedDeadlineContext struct {
 	deadline time.Time
 	done     <-chan struct{}
