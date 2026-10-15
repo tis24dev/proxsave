@@ -2,9 +2,47 @@ package bech32
 
 import (
 	"bytes"
+	"fmt"
 	"strings"
 	"testing"
 )
+
+func verifyChecksum(hrp string, data []byte) bool {
+	return polymod(append(hrpExpand(hrp), data...)) == 1
+}
+
+// Decode decodes a Bech32 string. If the string is uppercase, the HRP will be uppercase.
+func Decode(s string) (hrp string, data []byte, err error) {
+	if strings.ToLower(s) != s && strings.ToUpper(s) != s {
+		return "", nil, fmt.Errorf("mixed case")
+	}
+	pos := strings.LastIndex(s, "1")
+	if pos < 1 || pos+7 > len(s) {
+		return "", nil, fmt.Errorf("separator '1' at invalid position: pos=%d, len=%d", pos, len(s))
+	}
+	hrp = s[:pos]
+	for p, c := range hrp {
+		if c < 33 || c > 126 {
+			return "", nil, fmt.Errorf("invalid character human-readable part: s[%d]=%d", p, c)
+		}
+	}
+	s = strings.ToLower(s)
+	for p, c := range s[pos+1:] {
+		d := strings.IndexRune(charset, c)
+		if d == -1 {
+			return "", nil, fmt.Errorf("invalid character data part: s[%d]=%v", p, c)
+		}
+		data = append(data, byte(d&0x1f))
+	}
+	if !verifyChecksum(hrp, data) {
+		return "", nil, fmt.Errorf("invalid checksum")
+	}
+	data, err = convertBits(data[:len(data)-6], 5, 8, false)
+	if err != nil {
+		return "", nil, err
+	}
+	return hrp, data, nil
+}
 
 // Test vectors from BIP173 to make sure known-good strings decode correctly
 // and re-encode to the original value.
