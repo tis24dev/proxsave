@@ -184,8 +184,8 @@ func fetchConfigPoll(ctx context.Context, client *http.Client, serverAPIHost, se
 		logging.DebugStep(plog.Logger, plog.Operation, "%s", msg)
 	}
 
-	switch resp.Status {
-	case http.StatusOK:
+	switch {
+	case resp.Status == http.StatusOK:
 		var cfg CentralizedConfig
 		if err := resp.JSON(&cfg); err != nil {
 			return CentralizedConfig{}, resp.Status, fmt.Errorf("healthcheck config: bad JSON: %w", err)
@@ -194,16 +194,16 @@ func fetchConfigPoll(ctx context.Context, client *http.Client, serverAPIHost, se
 			return CentralizedConfig{}, resp.Status, fmt.Errorf("healthcheck config: incomplete response")
 		}
 		return cfg, resp.Status, nil
-	case http.StatusUnauthorized, http.StatusForbidden:
+	case serverbot.AuthRejected(resp.Status):
 		return CentralizedConfig{}, resp.Status, ErrHCAuth
-	case http.StatusNotFound:
+	case resp.Status == http.StatusNotFound:
 		return CentralizedConfig{}, resp.Status, ErrHCUnknown
-	case http.StatusGone:
+	case resp.Status == http.StatusGone:
 		// 410 SERVER_PARKED: the row was purged but this host still holds the old
 		// token. Treat like a definitive auth rejection so the daemon clears the
 		// stale secret and re-provisions (which re-admits the returning host).
 		return CentralizedConfig{}, resp.Status, ErrHCParked
-	case http.StatusServiceUnavailable:
+	case resp.Status == http.StatusServiceUnavailable:
 		// The server returns HC_DISABLED (feature off) or HC_NOT_READY (provisioning
 		// not done yet). Distinguish so the daemon logs the right thing.
 		var e serverError

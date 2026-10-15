@@ -415,8 +415,8 @@ func (t *TelegramNotifier) sendViaRelay(ctx context.Context, message, notifyID s
 		return 0, "", fmt.Errorf("relay request failed: %s", logging.RedactSecrets(err.Error(), t.config.NotifySecret))
 	}
 
-	switch resp.Status {
-	case 200, 202:
+	switch {
+	case resp.Status == 200 || resp.Status == 202:
 		// 200 = legacy synchronous relay (outbox kill-switch off) = already
 		// delivered. 202 = accepted onto the durable outbox; the real delivery
 		// outcome is learned via the status poll.
@@ -426,16 +426,16 @@ func (t *TelegramNotifier) sendViaRelay(ctx context.Context, message, notifyID s
 		// it RAW onto stats.HealthcheckLink; the backup epilogue is the sole display
 		// boundary (sanitized) - this path does not log it.
 		return resp.Status, t.showPortalLink(resp.Body), nil
-	case 401, 403:
+	case serverbot.AuthRejected(resp.Status):
 		return resp.Status, "", fmt.Errorf("%w (HTTP %d)", errRelayAuthRejected, resp.Status)
-	case 410:
+	case resp.Status == 410:
 		// SERVER_PARKED: the row was purged; the secret is dead until re-admission.
 		return resp.Status, "", fmt.Errorf("%w (HTTP 410)", errRelayParked)
-	case 404:
+	case resp.Status == 404:
 		return resp.Status, "", fmt.Errorf("server unknown (HTTP 404)")
-	case 409:
+	case resp.Status == 409:
 		return resp.Status, "", fmt.Errorf("registration missing (HTTP 409)")
-	case 413:
+	case resp.Status == 413:
 		return resp.Status, "", fmt.Errorf("message too long (HTTP 413)")
 	default:
 		return resp.Status, "", fmt.Errorf("relay returned status %d: %s",
