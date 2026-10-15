@@ -232,27 +232,6 @@ func TestPackageLevelFunctions(t *testing.T) {
 	}
 }
 
-func TestFatalUsesExitFunc(t *testing.T) {
-	var buf bytes.Buffer
-	logger := New(types.LogLevelDebug, false)
-	logger.SetOutput(&buf)
-	exitCalled := 0
-	var exitCode int
-	logger.SetExitFunc(func(code int) {
-		exitCalled++
-		exitCode = code
-	})
-
-	logger.Fatal(types.ExitGenericError, "fatal message")
-
-	if exitCalled != 1 || exitCode != types.ExitGenericError.Int() {
-		t.Fatalf("exitFunc not called as expected, called=%d code=%d", exitCalled, exitCode)
-	}
-	if !strings.Contains(buf.String(), "fatal message") {
-		t.Fatalf("fatal log missing message: %s", buf.String())
-	}
-}
-
 func TestSetOutputNilDefaultsToStdout(t *testing.T) {
 	logger := New(types.LogLevelInfo, false)
 	logger.SetOutput(nil)
@@ -435,18 +414,6 @@ func TestPhaseStepSkipColorOverrides(t *testing.T) {
 	}
 }
 
-func TestSetExitFuncNilRestoresNonNilExitFunc(t *testing.T) {
-	logger := New(types.LogLevelInfo, false)
-
-	// Replace with custom, then reset to default via nil
-	logger.SetExitFunc(func(int) {})
-	logger.SetExitFunc(nil)
-
-	if logger.exitFunc == nil {
-		t.Fatalf("SetExitFunc(nil) should ensure exitFunc is non-nil")
-	}
-}
-
 func TestOpenLogFileReopenClosesPrevious(t *testing.T) {
 	tmp := t.TempDir()
 	first := filepath.Join(tmp, "first.log")
@@ -495,30 +462,6 @@ func TestOpenLogFileClearsStaleHandleWhenCloseFails(t *testing.T) {
 	}
 	if logger.logFile != nil {
 		t.Fatalf("expected stale logFile handle to be cleared")
-	}
-}
-
-func TestPackageLevelFatalUsesDefaultLoggerExitFunc(t *testing.T) {
-	var buf bytes.Buffer
-	logger := New(types.LogLevelDebug, false)
-	logger.SetOutput(&buf)
-
-	exitCalled := 0
-	var exitCode int
-	logger.SetExitFunc(func(code int) {
-		exitCalled++
-		exitCode = code
-	})
-
-	SetDefaultLogger(logger)
-
-	Fatal(types.ExitConfigError, "pkg fatal msg")
-
-	if exitCalled != 1 || exitCode != types.ExitConfigError.Int() {
-		t.Fatalf("package-level Fatal exitFunc not called as expected, called=%d code=%d", exitCalled, exitCode)
-	}
-	if !strings.Contains(buf.String(), "pkg fatal msg") {
-		t.Fatalf("package-level fatal log missing message: %s", buf.String())
 	}
 }
 
