@@ -42,17 +42,17 @@ type clusterRecoveryRun struct {
 func runClusterRecoveryRestore(t *testing.T, opts clusterRecoveryOptions) clusterRecoveryRun {
 	t.Helper()
 	origRestoreFS, origRestoreCmd, origRestoreSystem := restoreFS, restoreCmd, restoreSystem
-	origRestoreTime, origCompatFS, origPrepare := restoreTime, compatFS, prepareRestoreBundleFunc
+	origRestoreTime, origPrepare := restoreTime, prepareRestoreBundleFunc
 	origSafetyFS, origSafetyNow := safetyFS, safetyNow
 	t.Cleanup(func() {
 		restoreFS, restoreCmd, restoreSystem = origRestoreFS, origRestoreCmd, origRestoreSystem
-		restoreTime, compatFS, prepareRestoreBundleFunc = origRestoreTime, origCompatFS, origPrepare
+		restoreTime, prepareRestoreBundleFunc = origRestoreTime, origPrepare
 		safetyFS, safetyNow = origSafetyFS, origSafetyNow
 	})
 
 	fakeFS := NewFakeFS()
 	t.Cleanup(func() { _ = os.RemoveAll(fakeFS.Root) })
-	restoreFS, compatFS, safetyFS = fakeFS, fakeFS, fakeFS
+	restoreFS, safetyFS = fakeFS, fakeFS
 	fakeNow := &FakeTime{Current: time.Date(2026, 9, 27, 10, 0, 0, 0, time.UTC)}
 	restoreTime, safetyNow = fakeNow, fakeNow.Now
 	restoreSystem = fakeSystemDetector{systemType: SystemTypePVE}

@@ -525,13 +525,6 @@ func repairNICNamesWithUI(ctx context.Context, ui nicRepairUI, logger *logging.L
 	return result
 }
 
-// maybeRepairNICNamesCLI runs the shared NIC-name repair through a CLI UI. It
-// remains a thin entry point for tests that drive the flow with a bufio.Reader;
-// production code calls repairNICNamesWithUI via cliWorkflowUI.RepairNICNames.
-func maybeRepairNICNamesCLI(ctx context.Context, reader *bufio.Reader, logger *logging.Logger, archivePath string) *nicRepairResult {
-	return repairNICNamesWithUI(ctx, newCLIWorkflowUI(reader, logger), logger, archivePath)
-}
-
 func applyNetworkConfig(ctx context.Context, logger *logging.Logger) error {
 	switch {
 	case commandAvailable("ifreload"):

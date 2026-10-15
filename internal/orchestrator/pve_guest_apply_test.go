@@ -687,3 +687,11 @@ func TestAnAllRefusedStorageIsJudgedAgainstTheLiveDefinition(t *testing.T) {
 		})
 	}
 }
+
+// guestConfDir maps a guest kind to its pmxcfs config directory.
+func guestConfDir(kind string) string {
+	if kind == "qemu" {
+		return "qemu-server"
+	}
+	return kind
+}

@@ -24,7 +24,6 @@ func TestFullRestoreFallbackKeepsSafetyInvariants(t *testing.T) {
 	origRestoreFS := restoreFS
 	origRestoreCmd := restoreCmd
 	origRestoreSystem := restoreSystem
-	origCompatFS := compatFS
 	origPrepare := prepareRestoreBundleFunc
 	origAnalyze := analyzeRestoreArchiveFunc
 	origSafetyFS := safetyFS
@@ -32,7 +31,6 @@ func TestFullRestoreFallbackKeepsSafetyInvariants(t *testing.T) {
 		restoreFS = origRestoreFS
 		restoreCmd = origRestoreCmd
 		restoreSystem = origRestoreSystem
-		compatFS = origCompatFS
 		prepareRestoreBundleFunc = origPrepare
 		analyzeRestoreArchiveFunc = origAnalyze
 		safetyFS = origSafetyFS
@@ -41,7 +39,6 @@ func TestFullRestoreFallbackKeepsSafetyInvariants(t *testing.T) {
 	fakeFS := NewFakeFS()
 	t.Cleanup(func() { _ = os.RemoveAll(fakeFS.Root) })
 	restoreFS = fakeFS
-	compatFS = fakeFS
 	safetyFS = fakeFS
 	restoreCmd = runOnlyRunner{}
 	restoreSystem = fakeSystemDetector{systemType: SystemTypePBS}
@@ -133,7 +130,6 @@ func TestFullRestoreFallbackNeverWritesClusterDB(t *testing.T) {
 	origRestoreFS := restoreFS
 	origRestoreCmd := restoreCmd
 	origRestoreSystem := restoreSystem
-	origCompatFS := compatFS
 	origPrepare := prepareRestoreBundleFunc
 	origAnalyze := analyzeRestoreArchiveFunc
 	origSafetyFS := safetyFS
@@ -141,7 +137,6 @@ func TestFullRestoreFallbackNeverWritesClusterDB(t *testing.T) {
 		restoreFS = origRestoreFS
 		restoreCmd = origRestoreCmd
 		restoreSystem = origRestoreSystem
-		compatFS = origCompatFS
 		prepareRestoreBundleFunc = origPrepare
 		analyzeRestoreArchiveFunc = origAnalyze
 		safetyFS = origSafetyFS
@@ -150,7 +145,6 @@ func TestFullRestoreFallbackNeverWritesClusterDB(t *testing.T) {
 	fakeFS := NewFakeFS()
 	t.Cleanup(func() { _ = os.RemoveAll(fakeFS.Root) })
 	restoreFS = fakeFS
-	compatFS = fakeFS
 	safetyFS = fakeFS
 	restoreCmd = runOnlyRunner{}
 	restoreSystem = fakeSystemDetector{systemType: SystemTypePVE}

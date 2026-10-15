@@ -77,14 +77,12 @@ func TestRunRestoreWorkflow_ClusterPromptUsesArchivePayloadNotManifest(t *testin
 	origRestoreFS := restoreFS
 	origRestoreCmd := restoreCmd
 	origRestoreSystem := restoreSystem
-	origCompatFS := compatFS
 	origPrepare := prepareRestoreBundleFunc
 	origSafetyFS := safetyFS
 	t.Cleanup(func() {
 		restoreFS = origRestoreFS
 		restoreCmd = origRestoreCmd
 		restoreSystem = origRestoreSystem
-		compatFS = origCompatFS
 		prepareRestoreBundleFunc = origPrepare
 		safetyFS = origSafetyFS
 	})
@@ -92,7 +90,6 @@ func TestRunRestoreWorkflow_ClusterPromptUsesArchivePayloadNotManifest(t *testin
 	fakeFS := NewFakeFS()
 	t.Cleanup(func() { _ = os.RemoveAll(fakeFS.Root) })
 	restoreFS = fakeFS
-	compatFS = fakeFS
 	safetyFS = fakeFS
 	restoreCmd = runOnlyRunner{}
 	restoreSystem = fakeSystemDetector{systemType: SystemTypePVE}
@@ -146,14 +143,12 @@ func TestRunRestoreWorkflow_CompatibilityUsesArchivePayloadNotManifest(t *testin
 	origRestoreFS := restoreFS
 	origRestoreCmd := restoreCmd
 	origRestoreSystem := restoreSystem
-	origCompatFS := compatFS
 	origPrepare := prepareRestoreBundleFunc
 	origSafetyFS := safetyFS
 	t.Cleanup(func() {
 		restoreFS = origRestoreFS
 		restoreCmd = origRestoreCmd
 		restoreSystem = origRestoreSystem
-		compatFS = origCompatFS
 		prepareRestoreBundleFunc = origPrepare
 		safetyFS = origSafetyFS
 	})
@@ -161,7 +156,6 @@ func TestRunRestoreWorkflow_CompatibilityUsesArchivePayloadNotManifest(t *testin
 	fakeFS := NewFakeFS()
 	t.Cleanup(func() { _ = os.RemoveAll(fakeFS.Root) })
 	restoreFS = fakeFS
-	compatFS = fakeFS
 	safetyFS = fakeFS
 	restoreCmd = runOnlyRunner{}
 	restoreSystem = fakeSystemDetector{systemType: SystemTypePVE}
@@ -215,7 +209,6 @@ func TestRunRestoreWorkflow_CompatibilityWarnsOnArchiveMismatchDespiteManifest(t
 	origRestoreFS := restoreFS
 	origRestoreCmd := restoreCmd
 	origRestoreSystem := restoreSystem
-	origCompatFS := compatFS
 	origPrepare := prepareRestoreBundleFunc
 	origAnalyze := analyzeRestoreArchiveFunc
 	origSafetyFS := safetyFS
@@ -223,7 +216,6 @@ func TestRunRestoreWorkflow_CompatibilityWarnsOnArchiveMismatchDespiteManifest(t
 		restoreFS = origRestoreFS
 		restoreCmd = origRestoreCmd
 		restoreSystem = origRestoreSystem
-		compatFS = origCompatFS
 		prepareRestoreBundleFunc = origPrepare
 		analyzeRestoreArchiveFunc = origAnalyze
 		safetyFS = origSafetyFS
@@ -232,7 +224,6 @@ func TestRunRestoreWorkflow_CompatibilityWarnsOnArchiveMismatchDespiteManifest(t
 	fakeFS := NewFakeFS()
 	t.Cleanup(func() { _ = os.RemoveAll(fakeFS.Root) })
 	restoreFS = fakeFS
-	compatFS = fakeFS
 	safetyFS = fakeFS
 	restoreCmd = runOnlyRunner{}
 	restoreSystem = fakeSystemDetector{systemType: SystemTypePVE}
@@ -289,7 +280,6 @@ func TestRunRestoreWorkflow_CompatibilityWarningStillRunsBeforeFullFallbackOnAna
 	origRestoreFS := restoreFS
 	origRestoreCmd := restoreCmd
 	origRestoreSystem := restoreSystem
-	origCompatFS := compatFS
 	origPrepare := prepareRestoreBundleFunc
 	origAnalyze := analyzeRestoreArchiveFunc
 	origSafetyFS := safetyFS
@@ -297,7 +287,6 @@ func TestRunRestoreWorkflow_CompatibilityWarningStillRunsBeforeFullFallbackOnAna
 		restoreFS = origRestoreFS
 		restoreCmd = origRestoreCmd
 		restoreSystem = origRestoreSystem
-		compatFS = origCompatFS
 		prepareRestoreBundleFunc = origPrepare
 		analyzeRestoreArchiveFunc = origAnalyze
 		safetyFS = origSafetyFS
@@ -306,7 +295,6 @@ func TestRunRestoreWorkflow_CompatibilityWarningStillRunsBeforeFullFallbackOnAna
 	fakeFS := NewFakeFS()
 	t.Cleanup(func() { _ = os.RemoveAll(fakeFS.Root) })
 	restoreFS = fakeFS
-	compatFS = fakeFS
 	safetyFS = fakeFS
 	restoreCmd = runOnlyRunner{}
 	restoreSystem = fakeSystemDetector{systemType: SystemTypePVE}

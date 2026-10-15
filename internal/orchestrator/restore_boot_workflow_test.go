@@ -70,17 +70,17 @@ var bootRestoreClock TimeProvider
 func runBootRestore(t *testing.T, live, archive, outputs map[string]string, errs map[string]error, mode RestoreMode, categoryIDs ...string) bootRestoreRun {
 	t.Helper()
 	origRestoreFS, origRestoreCmd, origRestoreSystem := restoreFS, restoreCmd, restoreSystem
-	origRestoreTime, origCompatFS, origPrepare := restoreTime, compatFS, prepareRestoreBundleFunc
+	origRestoreTime, origPrepare := restoreTime, prepareRestoreBundleFunc
 	origSafetyFS, origSafetyNow := safetyFS, safetyNow
 	t.Cleanup(func() {
 		restoreFS, restoreCmd, restoreSystem = origRestoreFS, origRestoreCmd, origRestoreSystem
-		restoreTime, compatFS, prepareRestoreBundleFunc = origRestoreTime, origCompatFS, origPrepare
+		restoreTime, prepareRestoreBundleFunc = origRestoreTime, origPrepare
 		safetyFS, safetyNow = origSafetyFS, origSafetyNow
 	})
 
 	fakeFS := NewFakeFS()
 	t.Cleanup(func() { _ = os.RemoveAll(fakeFS.Root) })
-	restoreFS, compatFS, safetyFS = fakeFS, fakeFS, fakeFS
+	restoreFS, safetyFS = fakeFS, fakeFS
 	fakeNow := &FakeTime{Current: time.Date(2026, 9, 27, 10, 0, 0, 0, time.UTC)}
 	restoreTime, safetyNow = fakeNow, fakeNow.Now
 	if bootRestoreClock != nil {
@@ -443,14 +443,14 @@ func TestBootRestoreRebuildFailureIsAWarning(t *testing.T) {
 // never those.
 func TestFullRestoreFallbackNeverWritesOldBootFiles(t *testing.T) {
 	origRestoreFS, origRestoreCmd, origRestoreSystem := restoreFS, restoreCmd, restoreSystem
-	origCompatFS, origPrepare, origAnalyze, origSafetyFS := compatFS, prepareRestoreBundleFunc, analyzeRestoreArchiveFunc, safetyFS
+	origPrepare, origAnalyze, origSafetyFS := prepareRestoreBundleFunc, analyzeRestoreArchiveFunc, safetyFS
 	t.Cleanup(func() {
 		restoreFS, restoreCmd, restoreSystem = origRestoreFS, origRestoreCmd, origRestoreSystem
-		compatFS, prepareRestoreBundleFunc, analyzeRestoreArchiveFunc, safetyFS = origCompatFS, origPrepare, origAnalyze, origSafetyFS
+		prepareRestoreBundleFunc, analyzeRestoreArchiveFunc, safetyFS = origPrepare, origAnalyze, origSafetyFS
 	})
 	fakeFS := NewFakeFS()
 	t.Cleanup(func() { _ = os.RemoveAll(fakeFS.Root) })
-	restoreFS, compatFS, safetyFS = fakeFS, fakeFS, fakeFS
+	restoreFS, safetyFS = fakeFS, fakeFS
 	restoreCmd = runOnlyRunner{}
 	restoreSystem = fakeSystemDetector{systemType: SystemTypePVE}
 	if err := fakeFS.AddFile("/etc/kernel/proxmox-boot-uuids", []byte("AAAA-1111\n")); err != nil {

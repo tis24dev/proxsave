@@ -191,24 +191,3 @@ func parseZpoolImportOutput(output string) []string {
 	}
 	return pools
 }
-
-func combinePoolNames(a, b []string) []string {
-	merged := make(map[string]struct{})
-	for _, pool := range a {
-		merged[pool] = struct{}{}
-	}
-	for _, pool := range b {
-		merged[pool] = struct{}{}
-	}
-
-	if len(merged) == 0 {
-		return nil
-	}
-
-	names := make([]string, 0, len(merged))
-	for pool := range merged {
-		names = append(names, pool)
-	}
-	sort.Strings(names)
-	return names
-}

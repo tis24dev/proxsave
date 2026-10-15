@@ -57,21 +57,12 @@ func writeMinimalTar(t *testing.T, dir string) string {
 }
 
 func TestRunRestoreWorkflow_CustomModeNoCategories_Succeeds(t *testing.T) {
-	origCompatFS := compatFS
 	origSystem := restoreSystem
 	origPrepare := prepareRestoreBundleFunc
 	t.Cleanup(func() {
-		compatFS = origCompatFS
 		restoreSystem = origSystem
 		prepareRestoreBundleFunc = origPrepare
 	})
-
-	fakeCompat := NewFakeFS()
-	t.Cleanup(func() { _ = os.RemoveAll(fakeCompat.Root) })
-	if err := fakeCompat.AddFile("/usr/bin/qm", []byte("x")); err != nil {
-		t.Fatalf("fake compat fs: %v", err)
-	}
-	compatFS = fakeCompat
 
 	restoreSystem = fakeSystemDetector{systemType: SystemTypePVE}
 
@@ -108,21 +99,12 @@ func TestRunRestoreWorkflow_CustomModeNoCategories_Succeeds(t *testing.T) {
 }
 
 func TestRunRestoreWorkflow_ConfirmFalseAborts(t *testing.T) {
-	origCompatFS := compatFS
 	origSystem := restoreSystem
 	origPrepare := prepareRestoreBundleFunc
 	t.Cleanup(func() {
-		compatFS = origCompatFS
 		restoreSystem = origSystem
 		prepareRestoreBundleFunc = origPrepare
 	})
-
-	fakeCompat := NewFakeFS()
-	t.Cleanup(func() { _ = os.RemoveAll(fakeCompat.Root) })
-	if err := fakeCompat.AddFile("/usr/bin/qm", []byte("x")); err != nil {
-		t.Fatalf("fake compat fs: %v", err)
-	}
-	compatFS = fakeCompat
 
 	restoreSystem = fakeSystemDetector{systemType: SystemTypePVE}
 

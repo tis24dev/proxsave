@@ -54,14 +54,14 @@ type roleFilterOutcome struct {
 func fullRestoreOfDualArchive(t *testing.T, host SystemType) roleFilterOutcome {
 	t.Helper()
 	origRestoreFS, origRestoreCmd, origRestoreSystem, origRestoreTime := restoreFS, restoreCmd, restoreSystem, restoreTime
-	origCompatFS, origPrepare, origSafetyFS, origSafetyNow := compatFS, prepareRestoreBundleFunc, safetyFS, safetyNow
+	origPrepare, origSafetyFS, origSafetyNow := prepareRestoreBundleFunc, safetyFS, safetyNow
 	t.Cleanup(func() {
 		restoreFS, restoreCmd, restoreSystem, restoreTime = origRestoreFS, origRestoreCmd, origRestoreSystem, origRestoreTime
-		compatFS, prepareRestoreBundleFunc, safetyFS, safetyNow = origCompatFS, origPrepare, origSafetyFS, origSafetyNow
+		prepareRestoreBundleFunc, safetyFS, safetyNow = origPrepare, origSafetyFS, origSafetyNow
 	})
 	fakeFS := NewFakeFS()
 	t.Cleanup(func() { _ = os.RemoveAll(fakeFS.Root) })
-	restoreFS, compatFS, safetyFS = fakeFS, fakeFS, fakeFS
+	restoreFS, safetyFS = fakeFS, fakeFS
 	fakeNow := &FakeTime{Current: time.Date(2020, 1, 2, 3, 4, 5, 0, time.UTC)}
 	restoreTime, safetyNow = fakeNow, fakeNow.Now
 
@@ -257,15 +257,15 @@ func TestPlanRestoreExportsTheOtherProductsCategories(t *testing.T) {
 // two holds afterwards ("<missing>" when absent).
 func fallbackRestoreOnHost(t *testing.T, host SystemType) (hosts, corosync, ceph string) {
 	t.Helper()
-	origRestoreFS, origRestoreCmd, origRestoreSystem, origCompatFS := restoreFS, restoreCmd, restoreSystem, compatFS
+	origRestoreFS, origRestoreCmd, origRestoreSystem := restoreFS, restoreCmd, restoreSystem
 	origPrepare, origAnalyze, origSafetyFS := prepareRestoreBundleFunc, analyzeRestoreArchiveFunc, safetyFS
 	t.Cleanup(func() {
-		restoreFS, restoreCmd, restoreSystem, compatFS = origRestoreFS, origRestoreCmd, origRestoreSystem, origCompatFS
+		restoreFS, restoreCmd, restoreSystem = origRestoreFS, origRestoreCmd, origRestoreSystem
 		prepareRestoreBundleFunc, analyzeRestoreArchiveFunc, safetyFS = origPrepare, origAnalyze, origSafetyFS
 	})
 	fakeFS := NewFakeFS()
 	t.Cleanup(func() { _ = os.RemoveAll(fakeFS.Root) })
-	restoreFS, compatFS, safetyFS = fakeFS, fakeFS, fakeFS
+	restoreFS, safetyFS = fakeFS, fakeFS
 	restoreCmd = runOnlyRunner{}
 	restoreSystem = fakeSystemDetector{systemType: host}
 

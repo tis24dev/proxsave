@@ -609,10 +609,6 @@ func (o *Orchestrator) collectorDeps() backup.CollectorDeps {
 	}
 }
 
-func (o *Orchestrator) describeTelegramConfig() string {
-	return describeTelegramStatus(o.cfg)
-}
-
 func (o *Orchestrator) ensureTempRegistry() *TempDirRegistry {
 	if o.tempRegistry != nil {
 		return o.tempRegistry

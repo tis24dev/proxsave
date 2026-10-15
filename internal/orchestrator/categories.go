@@ -482,69 +482,6 @@ func GetAllCategories() []Category {
 	}
 }
 
-// GetPVECategories returns only PVE-specific categories
-func GetPVECategories() []Category {
-	all := GetAllCategories()
-	var pve []Category
-	for _, cat := range all {
-		if cat.Type == CategoryTypePVE {
-			pve = append(pve, cat)
-		}
-	}
-	return pve
-}
-
-// GetPBSCategories returns only PBS-specific categories
-func GetPBSCategories() []Category {
-	all := GetAllCategories()
-	var pbs []Category
-	for _, cat := range all {
-		if cat.Type == CategoryTypePBS {
-			pbs = append(pbs, cat)
-		}
-	}
-	return pbs
-}
-
-// GetCommonCategories returns categories common to both PVE and PBS
-func GetCommonCategories() []Category {
-	all := GetAllCategories()
-	var common []Category
-	for _, cat := range all {
-		if cat.Type == CategoryTypeCommon {
-			common = append(common, cat)
-		}
-	}
-	return common
-}
-
-// GetCategoriesForSystem returns categories appropriate for the system type
-func GetCategoriesForSystem(systemType string) []Category {
-	all := GetAllCategories()
-	var categories []Category
-
-	switch systemType {
-	case "pve":
-		// PVE system: include PVE and common categories
-		for _, cat := range all {
-			if cat.Type == CategoryTypePVE || cat.Type == CategoryTypeCommon {
-				categories = append(categories, cat)
-			}
-		}
-	case "pbs":
-		// PBS system: include PBS and common categories
-		for _, cat := range all {
-			if cat.Type == CategoryTypePBS || cat.Type == CategoryTypeCommon {
-				categories = append(categories, cat)
-			}
-		}
-	case "dual":
-		categories = all
-	}
-
-	return categories
-}
-
 // PathMatchesCategory checks if a given file path matches any path in a category
 func PathMatchesCategory(filePath string, category Category) bool {
 	// Normalize the file path

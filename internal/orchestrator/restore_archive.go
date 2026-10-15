@@ -46,17 +46,6 @@ func shouldStopPBSServices(categories []Category) bool {
 	return false
 }
 
-func splitExportCategories(categories []Category) (normal []Category, export []Category) {
-	for _, cat := range categories {
-		if cat.ExportOnly {
-			export = append(export, cat)
-			continue
-		}
-		normal = append(normal, cat)
-	}
-	return normal, export
-}
-
 // redirectClusterCategoryToExport removes pve_cluster from normal categories and adds it to export-only list.
 func redirectClusterCategoryToExport(normal []Category, export []Category) ([]Category, []Category) {
 	filtered := make([]Category, 0, len(normal))

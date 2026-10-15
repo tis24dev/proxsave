@@ -9,10 +9,6 @@ import (
 	"strings"
 )
 
-func sanitizeRestoreEntryTarget(destRoot, entryName string) (string, string, error) {
-	return sanitizeRestoreEntryTargetWithFS(restoreFS, destRoot, entryName)
-}
-
 func sanitizeRestoreEntryTargetWithFS(fsys FS, destRoot, entryName string) (string, string, error) {
 	absDestRoot, err := resolveRestoreDestRoot(destRoot)
 	if err != nil {

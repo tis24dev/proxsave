@@ -31,7 +31,6 @@ func TestRunRestoreWorkflow_FstabPromptInputAborted_AbortsWorkflow(t *testing.T)
 	origRestoreCmd := restoreCmd
 	origRestoreSystem := restoreSystem
 	origRestoreTime := restoreTime
-	origCompatFS := compatFS
 	origPrepare := prepareRestoreBundleFunc
 	origSafetyFS := safetyFS
 	origSafetyNow := safetyNow
@@ -40,7 +39,6 @@ func TestRunRestoreWorkflow_FstabPromptInputAborted_AbortsWorkflow(t *testing.T)
 		restoreCmd = origRestoreCmd
 		restoreSystem = origRestoreSystem
 		restoreTime = origRestoreTime
-		compatFS = origCompatFS
 		prepareRestoreBundleFunc = origPrepare
 		safetyFS = origSafetyFS
 		safetyNow = origSafetyNow
@@ -49,7 +47,6 @@ func TestRunRestoreWorkflow_FstabPromptInputAborted_AbortsWorkflow(t *testing.T)
 	fakeFS := NewFakeFS()
 	t.Cleanup(func() { _ = os.RemoveAll(fakeFS.Root) })
 	restoreFS = fakeFS
-	compatFS = fakeFS
 	safetyFS = fakeFS
 
 	fakeNow := &FakeTime{Current: time.Date(2020, 1, 2, 3, 4, 5, 0, time.UTC)}

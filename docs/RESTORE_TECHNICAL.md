@@ -773,20 +773,19 @@ the analysis-failure fallback, where export means skipped.
 **File**: `internal/orchestrator/restore_workflow_ui_plan.go` -> `analyzeArchive()`
 
 ```go
-availableCategories, err := AnalyzeBackupCategories(
+availableCategories, decisionInfo, err := AnalyzeRestoreArchive(
     prepared.ArchivePath,
     logger,
 )
 ```
 
-**Implementation** (`AnalyzeBackupCategories()` in `selective.go`, a thin wrapper over
-`AnalyzeRestoreArchive()` in `restore_decision.go`):
+**Implementation** (`AnalyzeRestoreArchive()` in `restore_decision.go`):
 
 ```go
-func AnalyzeBackupCategories(
+func AnalyzeRestoreArchive(
     archivePath string,
     logger *logging.Logger,
-) ([]Category, error) {
+) ([]Category, *RestoreDecisionInfo, error) {
     // 1. Open archive with decompression
     file, _ := os.Open(archivePath)
     reader := createDecompressionReader(file, archivePath)
@@ -1922,7 +1921,7 @@ func redirectClusterCategoryToExport(normal []Category, export []Category) ([]Ca
 
 ### pvesh SAFE Apply
 
-After extraction in SAFE mode, `runSafeClusterApply()` offers API-based restoration (primarily VM/CT configs). When the user selects the `storage_pve` category, storage.cfg + datacenter.cfg are applied later via the staged restore pipeline and SAFE apply will skip prompting for them.
+After extraction in SAFE mode, `runSafeClusterApplyWithUI()` offers API-based restoration (primarily VM/CT configs). When the user selects the `storage_pve` category, storage.cfg + datacenter.cfg are applied later via the staged restore pipeline and SAFE apply will skip prompting for them.
 
 **Key Functions**:
 - `scanVMConfigs()`: Scans `<export>/etc/pve/nodes/<node>/qemu-server/` and `lxc/`
@@ -1935,7 +1934,7 @@ Guest apply is fail-closed. The inventory is loaded once before the loop; any co
 
 **Flow**:
 ```go
-func runSafeClusterApply(ctx context.Context, reader *bufio.Reader, exportRoot string, logger *logging.Logger) error {
+func runSafeClusterApplyWithUI(ctx context.Context, ui RestoreWorkflowUI, exportRoot string, logger *logging.Logger, plan *RestorePlan) error {
     // 1. Scan and apply VM/CT configs
     vmEntries, _ := scanVMConfigs(exportRoot, currentNode)
     if len(vmEntries) > 0 && promptYesNo("Apply all VM/CT configs via pvesh?") {
@@ -2855,7 +2854,7 @@ Space Complexity: O(n) for path list
 
 **Optimization**: Stop early if all categories found
 ```go
-func AnalyzeBackupCategories(...) ([]Category, error) {
+func AnalyzeRestoreArchive(...) ([]Category, *RestoreDecisionInfo, error) {
     allFound := false
     for {
         header, err := tarReader.Next()

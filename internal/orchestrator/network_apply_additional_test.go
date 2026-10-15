@@ -1871,3 +1871,10 @@ func TestRunCommandLogged_SuccessAndFailure(t *testing.T) {
 		t.Fatalf("err=%v want wrapped failure", err)
 	}
 }
+
+// maybeRepairNICNamesCLI runs the shared NIC-name repair through a CLI UI. It
+// remains a thin entry point for tests that drive the flow with a bufio.Reader;
+// production code calls repairNICNamesWithUI via cliWorkflowUI.RepairNICNames.
+func maybeRepairNICNamesCLI(ctx context.Context, reader *bufio.Reader, logger *logging.Logger, archivePath string) *nicRepairResult {
+	return repairNICNamesWithUI(ctx, newCLIWorkflowUI(reader, logger), logger, archivePath)
+}

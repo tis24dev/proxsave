@@ -148,14 +148,14 @@ func TestZFSRestoreKeepsHostidWhenPoolsCannotBeListed(t *testing.T) {
 // and zfs.conf.
 func TestFullRestoreFallbackKeepsZFSHostFilesWhenPoolsAreImported(t *testing.T) {
 	origRestoreFS, origRestoreCmd, origRestoreSystem := restoreFS, restoreCmd, restoreSystem
-	origCompatFS, origPrepare, origAnalyze, origSafetyFS := compatFS, prepareRestoreBundleFunc, analyzeRestoreArchiveFunc, safetyFS
+	origPrepare, origAnalyze, origSafetyFS := prepareRestoreBundleFunc, analyzeRestoreArchiveFunc, safetyFS
 	t.Cleanup(func() {
 		restoreFS, restoreCmd, restoreSystem = origRestoreFS, origRestoreCmd, origRestoreSystem
-		compatFS, prepareRestoreBundleFunc, analyzeRestoreArchiveFunc, safetyFS = origCompatFS, origPrepare, origAnalyze, origSafetyFS
+		prepareRestoreBundleFunc, analyzeRestoreArchiveFunc, safetyFS = origPrepare, origAnalyze, origSafetyFS
 	})
 	fakeFS := NewFakeFS()
 	t.Cleanup(func() { _ = os.RemoveAll(fakeFS.Root) })
-	restoreFS, compatFS, safetyFS = fakeFS, fakeFS, fakeFS
+	restoreFS, safetyFS = fakeFS, fakeFS
 	restoreCmd = &FakeCommandRunner{Outputs: map[string][]byte{
 		"which zpool":           []byte("/usr/sbin/zpool\n"),
 		"zpool list -H -o name": []byte("rpool\n"),

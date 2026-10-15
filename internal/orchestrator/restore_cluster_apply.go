@@ -18,16 +18,6 @@ import (
 	"github.com/tis24dev/proxsave/internal/ui/components"
 )
 
-// runSafeClusterApply applies selected cluster configs via pvesh without touching config.db.
-// It operates on files extracted to exportRoot (e.g. exportDestRoot).
-func runSafeClusterApply(ctx context.Context, reader *bufio.Reader, exportRoot string, logger *logging.Logger) (err error) {
-	if logger == nil {
-		logger = logging.GetDefaultLogger()
-	}
-	ui := newCLIWorkflowUI(reader, logger)
-	return runSafeClusterApplyWithUI(ctx, ui, exportRoot, logger, nil)
-}
-
 type vmEntry struct {
 	VMID string
 	Kind string // qemu | lxc
@@ -422,14 +412,6 @@ func liveStorageDefinition(ctx context.Context, id string) (map[string]string, e
 		values[key] = text
 	}
 	return values, nil
-}
-
-// guestConfDir maps a guest kind to its pmxcfs config directory.
-func guestConfDir(kind string) string {
-	if kind == "qemu" {
-		return "qemu-server"
-	}
-	return kind
 }
 
 // writeGuestConfToPmxcfs applies the staged conf byte-for-byte while PVE's
@@ -928,22 +910,6 @@ func shortHost(host string) string {
 		return host[:idx]
 	}
 	return host
-}
-
-func sanitizeID(id string) string {
-	var b strings.Builder
-	for _, r := range id {
-		if isSafeIDRune(r) {
-			b.WriteRune(r)
-		} else {
-			b.WriteRune('_')
-		}
-	}
-	return b.String()
-}
-
-func isSafeIDRune(r rune) bool {
-	return (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '-' || r == '_'
 }
 
 // promptClusterRestoreMode asks how to handle cluster database restore (safe export vs full recovery).

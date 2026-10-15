@@ -15,7 +15,6 @@ var restoreSystem SystemDetector = realSystemDetector{}
 func setRestoreDeps(fs FS, tp TimeProvider, p Prompter, cmd CommandRunner, sys SystemDetector) {
 	if fs != nil {
 		restoreFS = fs
-		compatFS = fs
 	}
 	if tp != nil {
 		restoreTime = tp

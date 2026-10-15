@@ -29,15 +29,15 @@ import (
 func setupRecoveryRestoreFixture(t *testing.T) (*FakeFS, *FakeCommandRunner, *fakeRestoreWorkflowUI) {
 	t.Helper()
 	origRestoreFS, origRestoreCmd, origRestoreSystem, origRestoreTime := restoreFS, restoreCmd, restoreSystem, restoreTime
-	origCompatFS, origPrepare, origSafetyFS, origSafetyNow := compatFS, prepareRestoreBundleFunc, safetyFS, safetyNow
+	origPrepare, origSafetyFS, origSafetyNow := prepareRestoreBundleFunc, safetyFS, safetyNow
 	t.Cleanup(func() {
 		restoreFS, restoreCmd, restoreSystem, restoreTime = origRestoreFS, origRestoreCmd, origRestoreSystem, origRestoreTime
-		compatFS, prepareRestoreBundleFunc, safetyFS, safetyNow = origCompatFS, origPrepare, origSafetyFS, origSafetyNow
+		prepareRestoreBundleFunc, safetyFS, safetyNow = origPrepare, origSafetyFS, origSafetyNow
 	})
 
 	fakeFS := NewFakeFS()
 	t.Cleanup(func() { _ = os.RemoveAll(fakeFS.Root) })
-	restoreFS, compatFS, safetyFS = fakeFS, fakeFS, fakeFS
+	restoreFS, safetyFS = fakeFS, fakeFS
 	fakeNow := &FakeTime{Current: time.Date(2020, 1, 2, 3, 4, 5, 0, time.UTC)}
 	restoreTime = fakeNow
 	safetyNow = fakeNow.Now
