@@ -113,38 +113,31 @@ func (b *LineBacklog) Lines() []string {
 	return append([]string(nil), b.lines...)
 }
 
-// CaptureConsole is the SINGLE place that wires the loggers to w so a full-screen
-// UI (or any phase that wants its own log lines) can stream them. It:
+// CaptureConsoleWithColor wires the loggers to w so a full-screen UI (or any
+// phase that wants its own log lines) can stream them. It:
 //
 //   - redirects the DEFAULT logger's console output to w (log files unaffected);
-//   - if bootstrap is non-nil, attaches a color-free mirror Logger (clean
+//   - if bootstrap is non-nil, attaches a COLORED mirror Logger (useColor=true,
 //     "[ts] LEVEL msg" prefix) writing to w so bootstrap lines flow to w too, and
 //     forces the bootstrap console-quiet so its own raw prints stay off the
 //     terminal.
+//
+// The mirror lines carry ANSI like the default logger already does. Pair it with
+// NewLineWriterRaw so the colors reach the streamed viewport panel (StreamTask).
+// The mirror is created at the bootstrap's OWN level, so the standard-run
+// debug-suppression contract holds.
 //
 // It returns restore(), which undoes ALL of the above: it restores the default
 // logger's previous output, detaches the bootstrap mirror (SetMirrorLogger(nil)),
 // and restores the bootstrap's prior console-quiet state. A nil bootstrap
 // captures only the default logger. restore() is idempotent-safe to call once;
 // call it via defer for panic safety.
-func CaptureConsole(bootstrap *BootstrapLogger, w io.Writer) (restore func()) {
-	return captureConsole(bootstrap, w, false)
-}
-
-// CaptureConsoleWithColor is the color-preserving sibling of CaptureConsole: it
-// wires the same default-logger + bootstrap-mirror plumbing, but the bootstrap
-// mirror is COLORED (useColor=true) so its "[ts] LEVEL msg" lines carry ANSI
-// like the default logger already does. Pair it with NewLineWriterRaw so the
-// colors reach the streamed viewport panel (StreamTask). The mirror is still created at the
-// bootstrap's OWN level, so the standard-run debug-suppression contract holds.
 func CaptureConsoleWithColor(bootstrap *BootstrapLogger, w io.Writer) (restore func()) {
 	return captureConsole(bootstrap, w, true)
 }
 
-// captureConsole is the shared body of CaptureConsole / CaptureConsoleWithColor.
-// mirrorColor selects whether the bootstrap mirror logger is colored; every
-// other behavior (default-logger SwapOutput, bootstrap console-quiet, the
-// idempotent-safe restore) is identical between the two.
+// captureConsole is the body of CaptureConsoleWithColor. mirrorColor selects
+// whether the bootstrap mirror logger is colored.
 func captureConsole(bootstrap *BootstrapLogger, w io.Writer, mirrorColor bool) (restore func()) {
 	def := GetDefaultLogger()
 	var prevDefault io.Writer
