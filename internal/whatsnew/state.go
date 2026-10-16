@@ -88,18 +88,6 @@ const logDirPerm os.FileMode = 0o755
 // timeout does not already cover.
 var fsCtx = context.Background()
 
-// corruptStateHook, if set, is invoked with the quarantine path whenever
-// loadStateForWrite discards an unparseable flag file. It lets a caller that owns
-// a logger emit a self-heal debug line WITHOUT this package importing a logger, so
-// whatsnew stays logger-free (the SetCorruptStatusHook pattern from
-// internal/health/status.go). Nil by default.
-var corruptStateHook func(quarantinedPath string)
-
-// SetCorruptStateHook registers the corrupt-file self-heal callback. Not safe to
-// call concurrently with the writers; call once at startup. Tests leave it nil (the
-// self-heal still happens, just silently).
-func SetCorruptStateHook(fn func(quarantinedPath string)) { corruptStateHook = fn }
-
 // StatePath returns the seen-flag path under LOG_PATH, resolved with a plain Join (no
 // TrimSpace) so the installer seed, the dashboard and the run nudge always agree on the
 // byte-identical path, exactly like health.StatusPath.
@@ -215,9 +203,6 @@ func loadStateForWrite(loc Location) (State, error) {
 		path := StatePath(loc.LogPath)
 		quarantine := path + ".corrupt"
 		_ = safefs.Rename(fsCtx, path, quarantine, loc.Timeout) // best-effort; a lost race just self-heals without a sidecar
-		if corruptStateHook != nil {
-			corruptStateHook(quarantine)
-		}
 		return State{}, nil
 	}
 	return st, err
