@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/tis24dev/proxsave/internal/config"
@@ -302,6 +303,16 @@ func (r fsRetention) applyGFS(ctx context.Context, backups []*types.BackupMetada
 		}
 		toDelete = append(toDelete, backup)
 	}
+	// Oldest first, as the simple policy deletes: a pass stopped halfway leaves the
+	// newest of them. The map hands them out in random order; the same timestamp is
+	// settled by file name.
+	sort.Slice(toDelete, func(i, j int) bool {
+		a, b := toDelete[i], toDelete[j]
+		if !a.Timestamp.Equal(b.Timestamp) {
+			return a.Timestamp.Before(b.Timestamp)
+		}
+		return a.BackupFile < b.BackupFile
+	})
 
 	return r.deleteBackups(ctx, toDelete, len(backups), initialLogs)
 }
