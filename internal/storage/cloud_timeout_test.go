@@ -181,7 +181,7 @@ func TestVerifyRemoteChecksumLocalHashTimeoutDegrades(t *testing.T) {
 		t.Skipf("mkfifo unsupported: %v", err)
 	}
 	t.Cleanup(func() {
-		// Unblock the abandoned GenerateChecksum os.Open(fifo) worker goroutine.
+		// Unblock the abandoned GenerateChecksumBounded os.Open(fifo) worker goroutine.
 		if w, e := os.OpenFile(fifo, os.O_WRONLY, 0); e == nil {
 			_ = w.Close()
 		}

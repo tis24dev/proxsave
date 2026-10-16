@@ -377,8 +377,7 @@ instead of line numbers, which drift on every edit):
 
 9. **pvesh SAFE Apply** (`runClusterSafeApply()` in `restore_workflow_ui_extract.go` ->
    `runSafeClusterApplyWithUI()` in `restore_workflow_ui_cluster_apply.go`, which drives
-   `safeClusterApplyUIFlow.run()`; the standalone `runSafeClusterApply()` in
-   `restore_cluster_apply.go` is the CLI wrapper, not used by this workflow):
+   `safeClusterApplyUIFlow.run()`):
    - If SAFE cluster mode selected
    - Apply VM/CT configs, storage.cfg, datacenter.cfg via API
 
@@ -786,41 +785,18 @@ func AnalyzeRestoreArchive(
     archivePath string,
     logger *logging.Logger,
 ) ([]Category, *RestoreDecisionInfo, error) {
-    // 1. Open archive with decompression
-    file, _ := os.Open(archivePath)
-    reader := createDecompressionReader(file, archivePath)
-    tarReader := tar.NewReader(reader)
-
-    // 2. Collect all entry names
-    var allPaths []string
-    for {
-        header, err := tarReader.Next()
-        if err == io.EOF {
-            break
-        }
-        allPaths = append(allPaths, header.Name)
+    // 1. Open the archive with decompression and read every entry once
+    //    (inspectRestoreArchiveContents -> collectRestoreArchiveFacts): entry
+    //    names plus the decision metadata; a read error is returned, not swallowed.
+    inspection, err := inspectRestoreArchiveContents(archivePath, logger)
+    if err != nil {
+        return nil, nil, err
     }
 
-    // 3. Check each category for matches
-    categories := GetAllCategories()
-    for i := range categories {
-        for _, path := range allPaths {
-            if PathMatchesCategory(path, categories[i]) {
-                categories[i].IsAvailable = true
-                break
-            }
-        }
-    }
-
-    // 4. Filter to available only
-    available := []Category{}
-    for _, cat := range categories {
-        if cat.IsAvailable {
-            available = append(available, cat)
-        }
-    }
-
-    return available, nil
+    // 2. inspection.AvailableCategories: the categories whose paths appear in
+    //    the archive; inspection.Decision: backup type, cluster payload,
+    //    hostname and the source of those facts.
+    return inspection.AvailableCategories, inspection.Decision, nil
 }
 ```
 

@@ -4441,7 +4441,7 @@ exit 0
 }
 
 // fakeStatThenRemoveFS removes the file after stat succeeds
-// This triggers GenerateChecksum error (lines 670-673 of decrypt.go)
+// This triggers the GenerateChecksumBounded error in decrypt_prepare_common.go
 // Needed because tests run as root where chmod 0o000 doesn't prevent reading
 type fakeStatThenRemoveFS struct {
 	osFS
@@ -4452,7 +4452,7 @@ func (f *fakeStatThenRemoveFS) Stat(path string) (os.FileInfo, error) {
 	if err != nil {
 		return nil, err
 	}
-	// After stat succeeds, remove the file so GenerateChecksum can't open it
+	// After stat succeeds, remove the file so GenerateChecksumBounded can't open it
 	if strings.Contains(path, "proxmox-decrypt") && strings.HasSuffix(path, ".tar.xz") {
 		_ = os.Remove(path)
 	}

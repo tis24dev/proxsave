@@ -124,7 +124,7 @@ func (f *fakeReporter) snapshot() fakeReporter {
 func newTestDaemon(t *testing.T, rep backupReporter, cmdFn func(ctx context.Context) *exec.Cmd, maxRun time.Duration) *daemon {
 	t.Helper()
 	return &daemon{
-		// A temp BaseDir keeps recordPing's status writes out of the source tree
+		// A temp BaseDir keeps recordOutcomePing's status writes out of the source tree
 		// (StatusPath("") would resolve to a cwd-relative identity/ dir).
 		cfg:          &config.Config{BaseDir: t.TempDir(), MaxRunDuration: maxRun, HealthcheckSendLog: false, BackupEnabled: true},
 		reporter:     rep,

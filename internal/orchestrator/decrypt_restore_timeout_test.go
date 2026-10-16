@@ -20,8 +20,8 @@ import (
 
 // verifyStagedArchiveIntegrity must thread FS_IO_TIMEOUT into the bounded checksum
 // verify: a staged archive on a wedged mount (a FIFO with no writer) must time out,
-// not hang. A regression that drops the timeout (reverts to the unbounded
-// VerifyChecksum wrapper, or passes 0) would hang here and trip the guard.
+// not hang. A regression that drops the timeout (an unbounded verify, or a
+// timeout of 0) would hang here and trip the guard.
 func TestVerifyStagedArchiveIntegrityThreadsTimeout(t *testing.T) {
 	dir := t.TempDir()
 	fifo := filepath.Join(dir, "archive.fifo")

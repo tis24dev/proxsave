@@ -886,7 +886,7 @@ func TestSystemCronProxsaveRefsSeesADirectProxsaveLine(t *testing.T) {
 	}
 
 	if indirect := indirectProxsaveSystemCronRefs(); len(indirect) != 0 {
-		t.Fatalf("the --upgrade refusal predicate must be unchanged by this: a direct line is not an INDIRECT reference, got %+v", indirect)
+		t.Fatalf("the INDIRECT-only view must be unchanged by this: a direct line is not an INDIRECT reference, got %+v", indirect)
 	}
 
 	// And the unrelated operator line in the system crontab stays unflagged under both

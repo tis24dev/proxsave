@@ -609,7 +609,7 @@ func (d *daemon) run(ctx context.Context) int {
 // handed off its outcome and woke the daemon with SIGUSR1. The daemon is the SOLE pinger: a
 // standalone run never builds a Reporter nor writes the status file; it drops a handoff file and
 // signals here. This runs the outcome through the SAME finish machinery a daemon-supervised run
-// uses -- finishPing (nil-guarded like beat) then recordPing under KindRunFinished, serialized by
+// uses -- finishPing (nil-guarded like beat) then recordOutcomePing under KindRunFinished, serialized by
 // statusMu -- so the backup-outcome check updates identically. A stale handoff (older than
 // manualOutcomeStaleWindow) is dropped WITHOUT pinging (never flip the check for a long-past run).
 // A nil/unresolved reporter records a no_url liveness trace (like beat's no-url path) instead of a
@@ -2066,7 +2066,7 @@ func (d *daemon) updateTick(ctx context.Context) {
 }
 
 // recordUpdate persists one update-report outcome to the shared status file, serialized by
-// statusMu (like recordPing) because the update loop and the heartbeat/run loops write the
+// statusMu (like recordOutcomePing) because the update loop and the heartbeat/run loops write the
 // same file concurrently and health.RecordUpdate is a read-modify-write. Best effort: a
 // write error must not break the daemon.
 func (d *daemon) recordUpdate(available bool, latest string, pingErr error) {
