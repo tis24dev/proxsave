@@ -622,7 +622,7 @@ var charGFS = RetentionConfig{Policy: "gfs", Daily: 1, Weekly: 0, Monthly: 0, Ye
 
 // charFailureBackups is the failure fixture shared by the GFS and the simple case:
 //   - 2024-06-20 kept;
-//   - 2024-06-01 its archive cannot be removed: Not deleted, its log stays;
+//   - 2024-06-01 its archive cannot be removed: Not deleted, its sidecars and its log stay;
 //   - 2024-05-01 its .sha256 cannot be removed: Left behind, counted deleted, its log goes;
 //   - 2024-04-01 its log cannot be removed: Log not deleted;
 //   - 2024-03-01 deleted, it has no log.
@@ -639,10 +639,8 @@ func charFailureBackups(e *charEnv, withYearly bool) {
 
 // charFailureGone is what the failure fixture loses.
 func charFailureGone() []string {
-	notDeleted := charArc("2024-06-01")
 	leftBehind := charArc("2024-05-01")
 	return charJoin(
-		[]string{notDeleted + ".sha256", notDeleted + ".metadata"},
 		[]string{leftBehind, leftBehind + ".metadata", charLogRel("logs", "2024-05-01")},
 		charSet("2024-04-01"),
 		charSet("2024-03-01"),

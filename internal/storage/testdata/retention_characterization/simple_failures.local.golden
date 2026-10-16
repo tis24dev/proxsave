@@ -69,12 +69,7 @@ DEBUG    Local storage: file already removed <ROOT>/backups/pve-backup-20240601-
 DEBUG    Local storage: removing file <ROOT>/backups/pve-backup-20240601-120000.tar.zst
 DEBUG    Local Storage: retention - failed to remove <ROOT>/backups/pve-backup-20240601-120000.tar.zst: remove <ROOT>/backups/pve-backup-20240601-120000.tar.zst: directory not empty
 INFO       Not deleted: pve-backup-20240601-120000.tar.zst: directory not empty
-DEBUG    Local storage: removing file <ROOT>/backups/pve-backup-20240601-120000.tar.zst.sha256
-DEBUG    Local storage: removing file <ROOT>/backups/pve-backup-20240601-120000.tar.zst.manifest.json
-DEBUG    Local storage: file already removed <ROOT>/backups/pve-backup-20240601-120000.tar.zst.manifest.json
-DEBUG    Local storage: removing file <ROOT>/backups/pve-backup-20240601-120000.tar.zst.metadata
-DEBUG    Local storage: removing file <ROOT>/backups/pve-backup-20240601-120000.tar.zst.metadata.sha256
-DEBUG    Local storage: file already removed <ROOT>/backups/pve-backup-20240601-120000.tar.zst.metadata.sha256
+DEBUG    Local storage: keeping the sidecars of pve-backup-20240601-120000.tar.zst, the backup was not deleted
 DEBUG    Local storage: keeping the log of pve-backup-20240601-120000.tar.zst, the backup was not deleted
 DEBUG    Local Storage: retention - failed to delete <ROOT>/backups/pve-backup-20240601-120000.tar.zst: failed to remove 1 file(s): [<ROOT>/backups/pve-backup-20240601-120000.tar.zst]
 DEBUG    Local storage retention applied: deleted 3 backups (logs deleted: 1), 2 backups remaining (3 logs remaining)

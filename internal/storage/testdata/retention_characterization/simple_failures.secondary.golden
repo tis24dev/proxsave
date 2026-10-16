@@ -54,12 +54,7 @@ DEBUG    Secondary storage: file already removed <ROOT>/backups/pve-backup-20240
 DEBUG    Removing file: <ROOT>/backups/pve-backup-20240601-120000.tar.zst
 DEBUG    Secondary Storage: retention - remove <ROOT>/backups/pve-backup-20240601-120000.tar.zst: directory not empty
 INFO       Not deleted: pve-backup-20240601-120000.tar.zst: directory not empty
-DEBUG    Removing file: <ROOT>/backups/pve-backup-20240601-120000.tar.zst.sha256
-DEBUG    Removing file: <ROOT>/backups/pve-backup-20240601-120000.tar.zst.manifest.json
-DEBUG    Secondary storage: file already removed <ROOT>/backups/pve-backup-20240601-120000.tar.zst.manifest.json
-DEBUG    Removing file: <ROOT>/backups/pve-backup-20240601-120000.tar.zst.metadata
-DEBUG    Removing file: <ROOT>/backups/pve-backup-20240601-120000.tar.zst.metadata.sha256
-DEBUG    Secondary storage: file already removed <ROOT>/backups/pve-backup-20240601-120000.tar.zst.metadata.sha256
+DEBUG    Secondary storage: keeping the sidecars of pve-backup-20240601-120000.tar.zst, the backup was not deleted
 DEBUG    Secondary storage: keeping the log of pve-backup-20240601-120000.tar.zst, the backup was not deleted
 DEBUG    Secondary Storage: retention - left pve-backup-20240601-120000.tar.zst in place: failed to remove 1 file(s): [<ROOT>/backups/pve-backup-20240601-120000.tar.zst]
 DEBUG    Secondary storage retention applied: deleted 3 backups (logs deleted: 1), 2 backups remaining (3 logs remaining)

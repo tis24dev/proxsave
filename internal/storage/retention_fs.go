@@ -134,29 +134,52 @@ func (r fsRetention) deleteBackup(ctx context.Context, backupFile string) (bool,
 	// bundle is a no-op, so this is behavior-preserving when no bundle exists.
 	filesToDelete := buildBackupCandidatePaths(basePath, true)
 
-	// Delete all files; collect real removal failures (not "already gone") and
-	// track whether the data archive itself (not just a sidecar) failed, so the
-	// caller never counts a backup whose archive remains on disk as deleted
-	// (PS-BH-001), while a sidecar-only failure still counts (the archive IS gone).
-	timeout := fsIoTimeout(r.config)
-	var failedFiles []string
-	dataFailed := false
+	// The data files (the archive, the bundle) go first, the sidecars after them.
+	// Real removal failures (not "already gone") are collected, and a failed data
+	// file stops the delete before any sidecar: the caller never counts a backup
+	// whose data remains on disk as deleted (PS-BH-001), and that backup keeps the
+	// .sha256 and .manifest.json the listing verifies it by, so it stays eligible
+	// and the next pass retries it instead of skipping it for "no manifest". A
+	// sidecar-only failure still counts as deleted (the data IS gone).
+	var dataFiles, sidecars []string
 	for _, f := range filesToDelete {
 		if f == "" {
 			continue
 		}
+		if isBackupSidecar(f) {
+			sidecars = append(sidecars, f)
+		} else {
+			dataFiles = append(dataFiles, f)
+		}
+	}
+	timeout := fsIoTimeout(r.config)
+	var failedFiles []string
+	remove := func(f string) bool {
 		r.logger.Debug(r.text.removing, f)
-		if err := safefs.Remove(ctx, f, timeout); err != nil {
-			if os.IsNotExist(err) {
-				r.logger.Debug("%s: file already removed %s", r.text.storage, f)
-				continue
-			}
-			r.text.removeFailed(r.logger, f, err)
-			logDeleteFailure(r.logger, f, safefs.SystemErrorText(err))
-			failedFiles = append(failedFiles, f)
-			if !isBackupSidecar(f) {
-				dataFailed = true
-			}
+		err := safefs.Remove(ctx, f, timeout)
+		if err == nil {
+			return true
+		}
+		if os.IsNotExist(err) {
+			r.logger.Debug("%s: file already removed %s", r.text.storage, f)
+			return true
+		}
+		r.text.removeFailed(r.logger, f, err)
+		logDeleteFailure(r.logger, f, safefs.SystemErrorText(err))
+		failedFiles = append(failedFiles, f)
+		return false
+	}
+	dataFailed := false
+	for _, f := range dataFiles {
+		if !remove(f) {
+			dataFailed = true
+		}
+	}
+	if dataFailed {
+		r.logger.Debug("%s: keeping the sidecars of %s, the backup was not deleted", r.text.storage, filepath.Base(backupFile))
+	} else {
+		for _, f := range sidecars {
+			remove(f)
 		}
 	}
 
