@@ -357,28 +357,6 @@ func TestCollectDatastoreConfigsCreatesDistinctNamespaceFilesForOverrideCollisio
 	}
 }
 
-func TestCollectUserConfigsSkipsInvalidUserListJSON(t *testing.T) {
-	tmp := t.TempDir()
-	collector := NewCollector(newTestLogger(), GetDefaultCollectorConfig(), tmp, types.ProxmoxBS, false)
-
-	commandsDir := filepath.Join(tmp, "var/lib/proxsave-info", "commands", "pbs")
-	usersDir := filepath.Join(tmp, "var/lib/proxsave-info", "pbs", "access-control")
-	if err := os.MkdirAll(commandsDir, 0o755); err != nil {
-		t.Fatalf("mkdir commands: %v", err)
-	}
-	if err := os.MkdirAll(usersDir, 0o755); err != nil {
-		t.Fatalf("mkdir users: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(commandsDir, "user_list.json"), []byte("{invalid"), 0o640); err != nil {
-		t.Fatalf("write user_list.json: %v", err)
-	}
-
-	runRecipeForTest(t, context.Background(), collector, newPBSUserConfigRecipe(), nil)
-	if _, err := os.Stat(filepath.Join(usersDir, "tokens.json")); err == nil {
-		t.Fatalf("tokens.json should not be created for invalid user list JSON")
-	}
-}
-
 func TestCollectPBSCommandsSkipsTapeDetailsWhenHasTapeSupportErrors(t *testing.T) {
 	cfg := GetDefaultCollectorConfig()
 	cfg.PBSConfigPath = t.TempDir()

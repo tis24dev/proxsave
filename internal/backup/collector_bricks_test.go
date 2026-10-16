@@ -208,7 +208,6 @@ func TestRealRecipesHaveCompleteUniqueBricks(t *testing.T) {
 		newPBSDatastoreInventoryRecipe(),
 		newPBSDatastoreConfigRecipe(),
 		newPBSPXARRecipe(),
-		newPBSUserConfigRecipe(),
 		newSystemRecipe(),
 	}
 

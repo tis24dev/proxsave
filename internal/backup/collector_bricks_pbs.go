@@ -94,61 +94,6 @@ func newPBSRecipe() recipe {
 	return recipe{Name: "pbs", Bricks: bricks}
 }
 
-func newPBSUserConfigRecipe() recipe {
-	return recipe{
-		Name: "pbs-user-config",
-		Bricks: []collectionBrick{
-			{
-				ID:          BrickID("pbs_access_load_user_ids_from_command_file"),
-				Description: "Load PBS user IDs from collected command snapshots",
-				Run: func(_ context.Context, state *collectionState) error {
-					userIDs, err := state.collector.loadPBSUserIDsFromCommandFile(state.collector.proxsaveCommandsDir("pbs"))
-					if err != nil {
-						if errors.Is(err, os.ErrNotExist) {
-							state.collector.logger.Debug("User list not available for token export: %v", err)
-							state.pbs.userIDs = nil
-							return nil
-						}
-						state.collector.logger.Warning("Failed to parse user list for token export: %v", err)
-						state.pbs.userIDs = nil
-						return nil
-					}
-					state.pbs.userIDs = userIDs
-					return nil
-				},
-			},
-			{
-				ID:          brickPBSRuntimeAccessUserTokens,
-				Description: "Collect PBS API token snapshots",
-				Run: func(ctx context.Context, state *collectionState) error {
-					if len(state.pbs.userIDs) == 0 {
-						return nil
-					}
-					usersDir, err := state.collector.ensurePBSAccessControlDir()
-					if err != nil {
-						return err
-					}
-					return state.collector.collectPBSAccessUserTokensRuntime(ctx, usersDir, state.pbs.userIDs)
-				},
-			},
-			{
-				ID:          brickPBSRuntimeAccessTokensAggregate,
-				Description: "Aggregate PBS API token snapshots",
-				Run: func(_ context.Context, state *collectionState) error {
-					if len(state.pbs.userIDs) == 0 {
-						return nil
-					}
-					usersDir, err := state.collector.ensurePBSAccessControlDir()
-					if err != nil {
-						return err
-					}
-					return state.collector.collectPBSAccessTokensAggregateRuntime(usersDir, state.pbs.userIDs)
-				},
-			},
-		},
-	}
-}
-
 func newPBSManifestBricks() []collectionBrick {
 	bricks := []collectionBrick{}
 	bricks = append(bricks, newPBSManifestDatastoreNodeBricks()...)

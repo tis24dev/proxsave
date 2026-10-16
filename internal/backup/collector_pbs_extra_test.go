@@ -139,24 +139,23 @@ func TestCollectDatastoreNamespacesSuccessAndError(t *testing.T) {
 
 func TestCollectUserTokensAggregates(t *testing.T) {
 	tmp := t.TempDir()
+	userList := []map[string]string{{"userid": "user@pam"}, {"userid": "second@pve"}}
+	data, _ := json.Marshal(userList)
 	c := NewCollectorWithDeps(newTestLogger(), GetDefaultCollectorConfig(), tmp, types.ProxmoxBS, false, CollectorDeps{
 		LookPath: func(string) (string, error) { return "/bin/echo", nil },
-		RunCommand: func(context.Context, string, ...string) ([]byte, error) {
+		RunCommand: func(_ context.Context, _ string, args ...string) ([]byte, error) {
+			if len(args) >= 2 && args[0] == "user" && args[1] == "list" {
+				return data, nil
+			}
 			return []byte(`{"token":"ok"}`), nil
 		},
 	})
 
-	commandsDir := filepath.Join(tmp, "var/lib/proxsave-info", "commands", "pbs")
-	if err := os.MkdirAll(commandsDir, 0o755); err != nil {
-		t.Fatalf("mkdir commands: %v", err)
-	}
-	userList := []map[string]string{{"userid": "user@pam"}, {"userid": "second@pve"}}
-	data, _ := json.Marshal(userList)
-	if err := os.WriteFile(filepath.Join(commandsDir, "user_list.json"), data, 0o640); err != nil {
-		t.Fatalf("write user list: %v", err)
-	}
-
-	runRecipeForTest(t, context.Background(), c, newPBSUserConfigRecipe(), nil)
+	runSelectedBricksForTest(t, context.Background(), c, newPBSCommandsRecipe(), nil,
+		brickPBSRuntimeAccessUsers,
+		brickPBSRuntimeAccessUserTokens,
+		brickPBSRuntimeAccessTokensAggregate,
+	)
 
 	aggPath := filepath.Join(tmp, "var/lib/proxsave-info", "pbs", "access-control", "tokens.json")
 	if _, err := os.Stat(aggPath); err != nil {

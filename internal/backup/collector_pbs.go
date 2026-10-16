@@ -817,15 +817,6 @@ func parsePBSStringFieldList(raw []byte, field string) ([]string, error) {
 	return uniqueSortedStrings(values), nil
 }
 
-func (c *Collector) loadPBSUserIDsFromCommandFile(commandsDir string) ([]string, error) {
-	userListPath := filepath.Join(commandsDir, "user_list.json")
-	data, err := os.ReadFile(userListPath)
-	if err != nil {
-		return nil, err
-	}
-	return parsePBSStringFieldList(data, "userid")
-}
-
 func (c *Collector) collectPBSUserTokensForIDs(ctx context.Context, usersDir string, userIDs []string) (map[string]json.RawMessage, error) {
 	aggregated := make(map[string]json.RawMessage)
 	for _, id := range uniqueSortedStrings(userIDs) {
