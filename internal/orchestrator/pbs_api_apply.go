@@ -481,13 +481,12 @@ func applyPBSDatastoreCfgViaAPI(ctx context.Context, logger *logging.Logger, sta
 			}
 		}
 	}
-	// keepCleanIncomplete keeps a refused remove reachable through errors.Is on an
-	// error that ends the apply early, without changing its text.
-	keepCleanIncomplete := func(err error) error {
-		if removeErr := pbsCleanRemoveResult("datastore", removeFailures); removeErr != nil {
-			return &pbsCleanIncompleteApplyError{err: err, remove: removeErr}
-		}
-		return err
+	// notApplied logs a datastore that could not be applied and records it; the
+	// apply goes on with the next one.
+	var applyFailures []string
+	notApplied := func(name string, err error) {
+		logger.Warning("PBS API apply: datastore %s failed (continuing): %v", name, err)
+		applyFailures = append(applyFailures, name)
 	}
 
 	names := make([]string, 0, len(desired))
@@ -507,7 +506,8 @@ func applyPBSDatastoreCfgViaAPI(ctx context.Context, logger *logging.Logger, sta
 			if currentPath != "" && strings.TrimSpace(currentPath) != strings.TrimSpace(path) {
 				if strict {
 					if _, err := runPBSManager(ctx, "datastore", "remove", name); err != nil {
-						return keepCleanIncomplete(fmt.Errorf("datastore %s: path mismatch (%s != %s) and remove failed: %w", name, currentPath, path, err))
+						notApplied(name, fmt.Errorf("path mismatch (%s != %s) and remove failed: %w", currentPath, path, err))
+						continue
 					}
 					createArgs := append([]string{"datastore", "create", name, path}, flags...)
 					if _, err := runPBSManager(ctx, createArgs...); err != nil {
@@ -516,9 +516,10 @@ func applyPBSDatastoreCfgViaAPI(ctx context.Context, logger *logging.Logger, sta
 						// (remove has no --destroy-data, so the chunks are still on disk).
 						rollbackArgs := append([]string{"datastore", "create", name, currentPath}, flags...)
 						if _, rbErr := runPBSManager(ctx, rollbackArgs...); rbErr != nil {
-							return keepCleanIncomplete(fmt.Errorf("datastore %s: path change to %s failed (%v) and rollback re-create at original path %s also failed (%v); the datastore is left removed, its data is still on disk and it must be re-created manually", name, path, err, currentPath, rbErr))
+							notApplied(name, fmt.Errorf("path change to %s failed (%v) and rollback re-create at original path %s also failed (%v); the datastore is left removed, its data is still on disk and it must be re-created manually", path, err, currentPath, rbErr))
+							continue
 						}
-						return keepCleanIncomplete(fmt.Errorf("datastore %s: path change to %s failed (%w); the datastore was restored to its original path %s", name, path, err, currentPath))
+						notApplied(name, fmt.Errorf("path change to %s failed (%w); the datastore was restored to its original path %s", path, err, currentPath))
 					}
 					continue
 				}
@@ -527,7 +528,7 @@ func applyPBSDatastoreCfgViaAPI(ctx context.Context, logger *logging.Logger, sta
 
 			updateArgs := append([]string{"datastore", "update", name}, flags...)
 			if _, err := runPBSManager(ctx, updateArgs...); err != nil {
-				return keepCleanIncomplete(fmt.Errorf("datastore %s: update failed: %w", name, err))
+				notApplied(name, fmt.Errorf("update failed: %w", err))
 			}
 			continue
 		}
@@ -536,11 +537,18 @@ func applyPBSDatastoreCfgViaAPI(ctx context.Context, logger *logging.Logger, sta
 		if _, err := runPBSManager(ctx, createArgs...); err != nil {
 			updateArgs := append([]string{"datastore", "update", name}, flags...)
 			if _, upErr := runPBSManager(ctx, updateArgs...); upErr != nil {
-				return keepCleanIncomplete(fmt.Errorf("datastore %s: %v (create) / %v (update)", name, err, upErr))
+				notApplied(name, fmt.Errorf("%v (create) / %v (update)", err, upErr))
 			}
 		}
 	}
 
+	if len(applyFailures) > 0 {
+		applyErr := fmt.Errorf("%d datastore object(s) not applied: [%s]", len(applyFailures), strings.Join(applyFailures, ", "))
+		if removeErr := pbsCleanRemoveResult("datastore", removeFailures); removeErr != nil {
+			return &pbsCleanIncompleteApplyError{err: applyErr, remove: removeErr}
+		}
+		return applyErr
+	}
 	return pbsCleanRemoveResult("datastore", removeFailures)
 }
 

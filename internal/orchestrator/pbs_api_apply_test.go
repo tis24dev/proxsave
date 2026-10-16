@@ -968,6 +968,8 @@ func TestApplyPBSDatastoreCfgViaAPI_StrictFullFlow(t *testing.T) {
 func TestApplyPBSDatastoreCfgViaAPI_StrictRecreatesOriginalOnCreateFail(t *testing.T) {
 	stageRoot, fs, runner := setupPBSAPIApplyTestDeps(t)
 	logger := logging.New(types.LogLevelDebug, false)
+	var logBuf bytes.Buffer
+	logger.SetOutput(&logBuf)
 
 	writeStageFile(t, fs, stageRoot, "etc/proxmox-backup/datastore.cfg",
 		"datastore: ds1\n    path /new1\n    comment c1\n", 0o640)
@@ -994,8 +996,11 @@ func TestApplyPBSDatastoreCfgViaAPI_StrictRecreatesOriginalOnCreateFail(t *testi
 	if !foundRollback {
 		t.Fatalf("expected a re-create at the original path /old1, calls=%v", runner.calls)
 	}
-	if !strings.Contains(err.Error(), "/old1") && !strings.Contains(strings.ToLower(err.Error()), "restored") && !strings.Contains(strings.ToLower(err.Error()), "original") {
-		t.Fatalf("error must report restoration to the original path, got: %v", err)
+	if err.Error() != "1 datastore object(s) not applied: [ds1]" {
+		t.Fatalf("expected the not-applied summary, got: %v", err)
+	}
+	if !strings.Contains(logBuf.String(), "the datastore was restored to its original path /old1") {
+		t.Fatalf("the warning must report restoration to the original path, log: %s", logBuf.String())
 	}
 }
 
@@ -1004,6 +1009,8 @@ func TestApplyPBSDatastoreCfgViaAPI_StrictRecreatesOriginalOnCreateFail(t *testi
 func TestApplyPBSDatastoreCfgViaAPI_StrictReportsBothCreateFailures(t *testing.T) {
 	stageRoot, fs, runner := setupPBSAPIApplyTestDeps(t)
 	logger := logging.New(types.LogLevelDebug, false)
+	var logBuf bytes.Buffer
+	logger.SetOutput(&logBuf)
 
 	writeStageFile(t, fs, stageRoot, "etc/proxmox-backup/datastore.cfg",
 		"datastore: ds1\n    path /new1\n    comment c1\n", 0o640)
@@ -1020,9 +1027,12 @@ func TestApplyPBSDatastoreCfgViaAPI_StrictReportsBothCreateFailures(t *testing.T
 	if err == nil {
 		t.Fatal("expected an error when both creates fail")
 	}
-	msg := err.Error()
-	if !strings.Contains(msg, "boom-new") || !strings.Contains(msg, "boom-old") {
-		t.Fatalf("error must report both create failures, got: %v", err)
+	if err.Error() != "1 datastore object(s) not applied: [ds1]" {
+		t.Fatalf("expected the not-applied summary, got: %v", err)
+	}
+	msg := logBuf.String()
+	if !strings.Contains(msg, "boom-new") || !strings.Contains(msg, "boom-old") || !strings.Contains(msg, "the datastore is left removed") {
+		t.Fatalf("the warning must report both create failures, log: %s", msg)
 	}
 }
 
@@ -1170,6 +1180,8 @@ func TestApplyPBSDatastoreCfgViaAPI_CurrentPathsFallbacksAndStrictRemoveWarn(t *
 func TestApplyPBSDatastoreCfgViaAPI_StrictPathMismatchRemoveFails(t *testing.T) {
 	stageRoot, fs, runner := setupPBSAPIApplyTestDeps(t)
 	logger := logging.New(types.LogLevelDebug, false)
+	var logBuf bytes.Buffer
+	logger.SetOutput(&logBuf)
 
 	writeStageFile(t, fs, stageRoot, "etc/proxmox-backup/datastore.cfg",
 		"datastore: ds1\n"+
@@ -1189,14 +1201,19 @@ func TestApplyPBSDatastoreCfgViaAPI_StrictPathMismatchRemoveFails(t *testing.T) 
 	if err == nil {
 		t.Fatalf("expected error")
 	}
-	if !strings.Contains(err.Error(), "path mismatch") || !strings.Contains(err.Error(), "remove failed") {
-		t.Fatalf("unexpected error: %s", err.Error())
+	if err.Error() != "1 datastore object(s) not applied: [ds1]" {
+		t.Fatalf("expected the not-applied summary, got: %v", err)
+	}
+	if !strings.Contains(logBuf.String(), "path mismatch") || !strings.Contains(logBuf.String(), "remove failed") {
+		t.Fatalf("unexpected warning, log: %s", logBuf.String())
 	}
 }
 
 func TestApplyPBSDatastoreCfgViaAPI_StrictPathMismatchRecreateFails(t *testing.T) {
 	stageRoot, fs, runner := setupPBSAPIApplyTestDeps(t)
 	logger := logging.New(types.LogLevelDebug, false)
+	var logBuf bytes.Buffer
+	logger.SetOutput(&logBuf)
 
 	writeStageFile(t, fs, stageRoot, "etc/proxmox-backup/datastore.cfg",
 		"datastore: ds1\n"+
@@ -1219,14 +1236,19 @@ func TestApplyPBSDatastoreCfgViaAPI_StrictPathMismatchRecreateFails(t *testing.T
 	// The create at the new path fails but the rollback re-create at the original
 	// path succeeds (only the /new create is stubbed to fail), so the datastore is
 	// restored rather than left deconfigured (P-09).
-	if !strings.Contains(err.Error(), "/old") && !strings.Contains(strings.ToLower(err.Error()), "restored") && !strings.Contains(strings.ToLower(err.Error()), "original") {
-		t.Fatalf("error must report restoration to the original path, got: %s", err.Error())
+	if err.Error() != "1 datastore object(s) not applied: [ds1]" {
+		t.Fatalf("expected the not-applied summary, got: %v", err)
+	}
+	if !strings.Contains(logBuf.String(), "the datastore was restored to its original path /old") {
+		t.Fatalf("the warning must report restoration to the original path, log: %s", logBuf.String())
 	}
 }
 
 func TestApplyPBSDatastoreCfgViaAPI_UpdateFails(t *testing.T) {
 	stageRoot, fs, runner := setupPBSAPIApplyTestDeps(t)
 	logger := logging.New(types.LogLevelDebug, false)
+	var logBuf bytes.Buffer
+	logger.SetOutput(&logBuf)
 
 	writeStageFile(t, fs, stageRoot, "etc/proxmox-backup/datastore.cfg",
 		"datastore: ds1\n"+
@@ -1243,14 +1265,19 @@ func TestApplyPBSDatastoreCfgViaAPI_UpdateFails(t *testing.T) {
 	}
 
 	err := applyPBSDatastoreCfgViaAPI(context.Background(), logger, stageRoot, false)
-	if err == nil || !strings.Contains(err.Error(), "update failed") {
-		t.Fatalf("expected update failed error, got: %v", err)
+	if err == nil || err.Error() != "1 datastore object(s) not applied: [ds1]" {
+		t.Fatalf("expected the not-applied summary, got: %v", err)
+	}
+	if !strings.Contains(logBuf.String(), "PBS API apply: datastore ds1 failed (continuing): update failed: ") {
+		t.Fatalf("expected the update failure in the warning, log: %s", logBuf.String())
 	}
 }
 
 func TestApplyPBSDatastoreCfgViaAPI_CreateAndUpdateFail(t *testing.T) {
 	stageRoot, fs, runner := setupPBSAPIApplyTestDeps(t)
 	logger := logging.New(types.LogLevelDebug, false)
+	var logBuf bytes.Buffer
+	logger.SetOutput(&logBuf)
 
 	writeStageFile(t, fs, stageRoot, "etc/proxmox-backup/datastore.cfg",
 		"datastore: ds1\n"+
@@ -1265,11 +1292,11 @@ func TestApplyPBSDatastoreCfgViaAPI_CreateAndUpdateFail(t *testing.T) {
 	}
 
 	err := applyPBSDatastoreCfgViaAPI(context.Background(), logger, stageRoot, false)
-	if err == nil {
-		t.Fatalf("expected error")
+	if err == nil || err.Error() != "1 datastore object(s) not applied: [ds1]" {
+		t.Fatalf("expected the not-applied summary, got: %v", err)
 	}
-	if !strings.Contains(err.Error(), "create failed") || !strings.Contains(err.Error(), "update failed") {
-		t.Fatalf("expected create/update errors, got: %s", err.Error())
+	if !strings.Contains(logBuf.String(), "create failed") || !strings.Contains(logBuf.String(), "update failed") {
+		t.Fatalf("expected create/update errors in the warning, log: %s", logBuf.String())
 	}
 }
 
