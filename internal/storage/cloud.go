@@ -2209,15 +2209,27 @@ func (c *CloudStorage) deleteBackupInternal(ctx context.Context, backupFile stri
 	}
 	c.forgetOwners(append(relativeNames, filename)...)
 
-	failedFiles := make([]string, 0)
-	dataFailed := false // true if the backup data archive (not just a sidecar) failed to delete
-
-	// Delete all files
+	// The data files (the archive, the bundle) go first, the sidecars after them. A
+	// data file that cannot be deleted stops the delete before any sidecar: that
+	// backup keeps the .sha256 and .manifest.json the listing verifies it by
+	// (remoteBackupHasCompletionSidecar), so it stays eligible and the next pass
+	// retries it instead of skipping it for "no manifest".
+	var dataNames, sidecarNames []string
 	for _, rel := range relativeNames {
+		if isBackupSidecar(rel) {
+			sidecarNames = append(sidecarNames, rel)
+		} else {
+			dataNames = append(dataNames, rel)
+		}
+	}
+
+	failedFiles := make([]string, 0)
+	// remove deletes one remote file and reports whether it is gone.
+	remove := func(rel string) bool {
 		exists, snapshotReady := c.remoteFileExists(rel)
 		if snapshotReady && !exists {
 			c.logger.Debug("Cloud storage: skipping delete for %s (not present on remote snapshot)", rel)
-			continue
+			return true
 		}
 
 		f := c.remotePathFor(rel)
@@ -2233,7 +2245,7 @@ func (c *CloudStorage) deleteBackupInternal(ctx context.Context, backupFile stri
 			if isRcloneObjectNotFound(msg) {
 				c.logger.Debug("Cloud storage: file already removed %s (%s)", filepath.Base(f), msg)
 				c.removeRemoteSnapshotEntry(rel)
-				continue
+				return true
 			}
 			// rel, not filepath.Base(f): f is an rclone remote path ("remote:name"),
 			// which holds no slash, so Base returns it whole.
@@ -2244,13 +2256,24 @@ func (c *CloudStorage) deleteBackupInternal(ctx context.Context, backupFile stri
 			// path, and the summary would name the same file differently from the
 			// per-file line it sits under.
 			failedFiles = append(failedFiles, rel)
-			if !isBackupSidecar(rel) {
-				dataFailed = true
-			}
-			// Continue with other files
-			continue
+			return false
 		}
 		c.removeRemoteSnapshotEntry(rel)
+		return true
+	}
+
+	dataFailed := false // true if the backup data archive (not just a sidecar) failed to delete
+	for _, rel := range dataNames {
+		if !remove(rel) {
+			dataFailed = true
+		}
+	}
+	if dataFailed {
+		c.logger.Debug("Cloud storage: keeping the sidecars of %s, the backup was not deleted", filepath.Base(backupFile))
+	} else {
+		for _, rel := range sidecarNames {
+			remove(rel)
+		}
 	}
 
 	// Best-effort: delete the associated log, but only once the backup's data file is
