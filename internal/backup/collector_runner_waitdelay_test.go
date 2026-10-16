@@ -49,7 +49,7 @@ func TestTheCollectorRunnerIsBoundedWhenAToolLeavesAChildHoldingStdout(t *testin
 	done := make(chan result, 1)
 	start := time.Now()
 	go func() {
-		out, _, err := runCommandCapturedWithEnv(context.Background(), nil, "which", "thing")
+		out, _, err := runCommandCapturedWithEnv(context.Background(), "which", "thing")
 		done <- result{out, err}
 	}()
 

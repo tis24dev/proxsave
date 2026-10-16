@@ -28,7 +28,7 @@ func newStderrNoiseCollector(t *testing.T, stdout, stderr string, runErr error) 
 		LookPath: func(name string) (string, error) {
 			return "/bin/" + name, nil
 		},
-		RunCommandCaptured: func(ctx context.Context, extraEnv []string, name string, args ...string) ([]byte, []byte, error) {
+		RunCommandCaptured: func(ctx context.Context, name string, args ...string) ([]byte, []byte, error) {
 			return []byte(stdout), []byte(stderr), runErr
 		},
 	}
@@ -94,7 +94,7 @@ func TestDatastoreEnumerationWarningCarriesStderr(t *testing.T) {
 		LookPath: func(name string) (string, error) {
 			return "/bin/" + name, nil
 		},
-		RunCommandCaptured: func(ctx context.Context, extraEnv []string, name string, args ...string) ([]byte, []byte, error) {
+		RunCommandCaptured: func(ctx context.Context, name string, args ...string) ([]byte, []byte, error) {
 			return nil, []byte("permission denied (run as root)\n"), errors.New("exit status 2")
 		},
 	}

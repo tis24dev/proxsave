@@ -482,7 +482,7 @@ func TestCollectSystemInfoWithCustomRootPrefix(t *testing.T) {
 	deps := defaultCollectorDeps()
 	deps.LookPath = func(string) (string, error) { return "/bin/true", nil }
 	deps.RunCommand = func(context.Context, string, ...string) ([]byte, error) { return []byte("stub"), nil }
-	deps.RunCommandWithEnv = func(context.Context, []string, string, ...string) ([]byte, error) { return []byte("stub"), nil }
+	deps.RunCommandWithEnv = func(context.Context, string, ...string) ([]byte, error) { return []byte("stub"), nil }
 
 	collector := NewCollectorWithDeps(logger, cfg, tempDir, types.ProxmoxUnknown, false, deps)
 

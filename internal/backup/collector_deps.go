@@ -16,7 +16,7 @@ var (
 	// carry stdout alone: tools like `proxmox-backup-manager disk list --output-format=json`
 	// write diagnostics to stderr (smartctl failures, for instance) while still emitting
 	// valid JSON on stdout, and merging the streams produces an unparsable file.
-	runCommandCapturedWithEnv = func(ctx context.Context, extraEnv []string, name string, args ...string) ([]byte, []byte, error) {
+	runCommandCapturedWithEnv = func(ctx context.Context, name string, args ...string) ([]byte, []byte, error) {
 		cmd, err := safeexec.CommandContext(ctx, name, args...)
 		if err != nil {
 			return nil, nil, err
@@ -28,9 +28,6 @@ var (
 		// Without it one collected tool that leaves a background child holding stdout
 		// stalls the whole collection phase for that child's lifetime.
 		safeexec.ApplyWaitDelay(cmd)
-		if len(extraEnv) > 0 {
-			cmd.Env = append(os.Environ(), extraEnv...)
-		}
 		var stdout, stderr bytes.Buffer
 		cmd.Stdout = &stdout
 		cmd.Stderr = &stderr
@@ -38,8 +35,8 @@ var (
 		return stdout.Bytes(), stderr.Bytes(), runErr
 	}
 
-	runCommandWithEnv = func(ctx context.Context, extraEnv []string, name string, args ...string) ([]byte, error) {
-		stdout, stderr, err := runCommandCapturedWithEnv(ctx, extraEnv, name, args...)
+	runCommandWithEnv = func(ctx context.Context, name string, args ...string) ([]byte, error) {
+		stdout, stderr, err := runCommandCapturedWithEnv(ctx, name, args...)
 		if len(stderr) == 0 {
 			return stdout, err
 		}
@@ -47,7 +44,7 @@ var (
 	}
 
 	runCommand = func(ctx context.Context, name string, args ...string) ([]byte, error) {
-		return runCommandWithEnv(ctx, nil, name, args...)
+		return runCommandWithEnv(ctx, name, args...)
 	}
 
 	statFunc = os.Stat
@@ -62,8 +59,8 @@ var (
 // pre-split behaviour).
 type CollectorDeps struct {
 	LookPath                    func(string) (string, error)
-	RunCommandCaptured          func(context.Context, []string, string, ...string) ([]byte, []byte, error)
-	RunCommandWithEnv           func(context.Context, []string, string, ...string) ([]byte, error)
+	RunCommandCaptured          func(context.Context, string, ...string) ([]byte, []byte, error)
+	RunCommandWithEnv           func(context.Context, string, ...string) ([]byte, error)
 	RunCommand                  func(context.Context, string, ...string) ([]byte, error)
 	Stat                        func(string) (os.FileInfo, error)
 	ReadFile                    func(string) ([]byte, error)

@@ -151,17 +151,17 @@ func (c *Collector) depRunCommand(ctx context.Context, name string, args ...stri
 // supplied a runner never wants a real command executed behind its back.
 func (c *Collector) depRunCommandCaptured(ctx context.Context, name string, args ...string) ([]byte, []byte, error) {
 	if c.deps.RunCommandCaptured != nil {
-		return c.deps.RunCommandCaptured(ctx, nil, name, args...)
+		return c.deps.RunCommandCaptured(ctx, name, args...)
 	}
 	if c.deps.RunCommand != nil {
 		out, err := c.deps.RunCommand(ctx, name, args...)
 		return out, nil, err
 	}
 	if c.deps.RunCommandWithEnv != nil {
-		out, err := c.deps.RunCommandWithEnv(ctx, nil, name, args...)
+		out, err := c.deps.RunCommandWithEnv(ctx, name, args...)
 		return out, nil, err
 	}
-	return runCommandCapturedWithEnv(ctx, nil, name, args...)
+	return runCommandCapturedWithEnv(ctx, name, args...)
 }
 
 type CommandSpec struct {
