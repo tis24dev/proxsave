@@ -278,7 +278,6 @@ func (r fsRetention) applyGFS(ctx context.Context, backups []*types.BackupMetada
 		config.Daily, config.Weekly, config.Monthly, config.Yearly)
 
 	initialLogs := r.countLogFiles(ctx)
-	logsDeleted := 0
 
 	// Classify backups according to GFS scheme
 	classification := ClassifyBackupsGFS(backups, config)
@@ -296,67 +295,15 @@ func (r fsRetention) applyGFS(ctx context.Context, backups []*types.BackupMetada
 	r.tally.planned = stats[CategoryDelete]
 
 	// Delete backups marked for deletion
-	deleted := 0
+	var toDelete []*types.BackupMetadata
 	for backup, category := range classification {
 		if category != CategoryDelete {
 			continue
 		}
-
-		if err := ctx.Err(); err != nil {
-			return deleted, err
-		}
-
-		r.logger.Debug("Deleting old backup: %s (created: %s)",
-			filepath.Base(backup.BackupFile),
-			backup.Timestamp.Format("2006-01-02 15:04:05"))
-
-		logDeleted, err := r.deleteBackup(ctx, backup.BackupFile)
-		if err != nil {
-			if !errors.Is(err, errBackupSidecarDeleteOnly) {
-				r.text.notDeleted(r.logger, backup.BackupFile, err)
-				r.tally.notDeleted++
-				continue
-			}
-			// Archive removed, only sidecar(s) failed: count as deleted; the fact
-			// line naming the leftover was printed by deleteBackup.
-			r.text.leftBehind(r.logger, backup.BackupFile, err)
-			r.tally.leftBehind++
-		}
-
-		deleted++
-		r.tally.removed = append(r.tally.removed, backup.BackupFile)
-		if logDeleted {
-			logsDeleted++
-		}
+		toDelete = append(toDelete, backup)
 	}
 
-	remaining := len(backups) - deleted
-	if remaining < 0 {
-		remaining = 0
-	}
-
-	if logsRemaining, ok := computeRemaining(initialLogs, logsDeleted); ok {
-		r.logger.Debug("%s retention applied: deleted %d backups (logs deleted: %d), %d backups remaining (%d logs remaining)",
-			r.text.storage, deleted, logsDeleted, remaining, logsRemaining)
-		*r.lastRet = RetentionSummary{
-			BackupsDeleted:   deleted,
-			BackupsRemaining: remaining,
-			LogsDeleted:      logsDeleted,
-			LogsRemaining:    logsRemaining,
-			HasLogInfo:       true,
-		}
-	} else {
-		r.logger.Debug("%s retention applied: deleted %d backups (logs deleted: %d), %d backups remaining",
-			r.text.storage, deleted, logsDeleted, remaining)
-		*r.lastRet = RetentionSummary{
-			BackupsDeleted:   deleted,
-			BackupsRemaining: remaining,
-			LogsDeleted:      logsDeleted,
-			HasLogInfo:       false,
-		}
-	}
-
-	return deleted, nil
+	return r.deleteBackups(ctx, toDelete, len(backups), initialLogs)
 }
 
 // applySimple applies simple count-based retention policy
@@ -385,14 +332,26 @@ func (r fsRetention) applySimple(ctx context.Context, backups []*types.BackupMet
 
 	// Delete oldest backups (already sorted newest first)
 	initialLogs := r.countLogFiles(ctx)
+	oldest := make([]*types.BackupMetadata, 0, toDelete)
+	for i := totalBackups - 1; i >= maxBackups; i-- {
+		oldest = append(oldest, backups[i])
+	}
+
+	return r.deleteBackups(ctx, oldest, totalBackups, initialLogs)
+}
+
+// deleteBackups deletes toDelete in the order given, out of the total backups the
+// policy looked at, and writes the pass's summary. initialLogs is the log count taken
+// before the policy ran (-1: unknown). A cancelled context stops it before the next
+// deletion, without a summary.
+func (r fsRetention) deleteBackups(ctx context.Context, toDelete []*types.BackupMetadata, total int, initialLogs int) (int, error) {
 	logsDeleted := 0
 	deleted := 0
-	for i := totalBackups - 1; i >= maxBackups; i-- {
+	for _, backup := range toDelete {
 		if err := ctx.Err(); err != nil {
 			return deleted, err
 		}
 
-		backup := backups[i]
 		r.logger.Debug("Deleting old backup: %s (created: %s)",
 			filepath.Base(backup.BackupFile),
 			backup.Timestamp.Format("2006-01-02 15:04:05"))
@@ -417,7 +376,7 @@ func (r fsRetention) applySimple(ctx context.Context, backups []*types.BackupMet
 		}
 	}
 
-	remaining := totalBackups - deleted
+	remaining := total - deleted
 	if remaining < 0 {
 		remaining = 0
 	}
