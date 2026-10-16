@@ -550,8 +550,8 @@ func pbsSectionCharScenarios(k pbsSectionCharKind) []pbsSectionCharScenario {
 			},
 		},
 		{
-			// A create/update failure is returned instead of the incomplete clean: the
-			// remove failure survives only as its Warning line.
+			// A create/update failure is returned with the create/update text only, and
+			// it still matches the incomplete clean left by the earlier remove failure.
 			name:   "strict-remove-fails-then-create-fails",
 			strict: true,
 			staged: pbsSectionCharStaged(k.section("bravo")),
@@ -562,7 +562,7 @@ func pbsSectionCharScenarios(k pbsSectionCharKind) []pbsSectionCharScenario {
 				updateFails,
 			},
 			check: func(t *testing.T, _ pbsSectionCharKind, run pbsSectionCharRun) {
-				pbsSectionCharWantIs(t, run.err, errPBSCleanRemoveIncomplete, false)
+				pbsSectionCharWantIs(t, run.err, errPBSCleanRemoveIncomplete, true)
 			},
 		},
 		{

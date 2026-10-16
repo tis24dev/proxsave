@@ -34,6 +34,19 @@ func pbsCleanRemoveResult(kind string, failures []string) error {
 	return fmt.Errorf("%s remove failed for %d object(s) [%s]: %w", kind, len(failures), strings.Join(failures, ", "), errPBSCleanRemoveIncomplete)
 }
 
+// pbsCleanIncompleteApplyError is an apply failure that ended a Clean (1:1) apply
+// after one or more stale objects could not be removed. Its text is the apply
+// failure alone; it also matches errPBSCleanRemoveIncomplete, so the caller does
+// not take the file-based fallback.
+type pbsCleanIncompleteApplyError struct {
+	err    error
+	remove error
+}
+
+func (e *pbsCleanIncompleteApplyError) Error() string { return e.err.Error() }
+
+func (e *pbsCleanIncompleteApplyError) Unwrap() []error { return []error{e.err, e.remove} }
+
 func normalizeProxmoxCfgKey(key string) string {
 	key = strings.ToLower(strings.TrimSpace(key))
 	key = strings.ReplaceAll(key, "_", "-")
@@ -287,7 +300,8 @@ func pbsSectionFlags(logger *logging.Logger, kind, id string, entries []proxmoxN
 // through proxmox-backup-manager, in sorted order, falling back from create to
 // update. In strict (Clean 1:1) mode it first removes every listed object that the
 // staged file does not name; a remove that fails is logged, the apply continues,
-// and the result wraps errPBSCleanRemoveIncomplete.
+// and the result wraps errPBSCleanRemoveIncomplete, also when a later create and
+// update both fail.
 func applyPBSSectionCfgViaAPI(ctx context.Context, logger *logging.Logger, stageRoot string, strict bool, cfg pbsSectionCfg) error {
 	kind := strings.Join(cfg.command, " ")
 	commandArgs := func(rest ...string) []string {
@@ -348,7 +362,11 @@ func applyPBSSectionCfgViaAPI(ctx context.Context, logger *logging.Logger, stage
 		if _, err := runPBSManagerSensitive(ctx, createArgs, cfg.secretFlags...); err != nil {
 			updateArgs := commandArgs(append([]string{"update", id}, flags...)...)
 			if _, upErr := runPBSManagerSensitive(ctx, updateArgs, cfg.secretFlags...); upErr != nil {
-				return fmt.Errorf("%s %s: %v (create) / %v (update)", kind, id, err, upErr)
+				applyErr := fmt.Errorf("%s %s: %v (create) / %v (update)", kind, id, err, upErr)
+				if removeErr := pbsCleanRemoveResult(kind, removeFailures); removeErr != nil {
+					return &pbsCleanIncompleteApplyError{err: applyErr, remove: removeErr}
+				}
+				return applyErr
 			}
 		}
 	}

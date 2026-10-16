@@ -507,8 +507,8 @@ commands:
   proxmox-backup-manager sync-job create bravo --store ds-bravo --remote origin --remote-store src --schedule hourly
   proxmox-backup-manager sync-job update bravo --store ds-bravo --remote origin --remote-store src --schedule hourly
 error: sync-job bravo: proxmox-backup-manager sync-job create bravo --store ds-bravo --remote origin --remote-store src --schedule hourly failed: injected create failure (create) / proxmox-backup-manager sync-job update bravo --store ds-bravo --remote origin --remote-store src --schedule hourly failed: injected update failure (update)
-error chain: *errors.errorString
-error is: (none)
+error chain: *orchestrator.pbsCleanIncompleteApplyError
+error is: errPBSCleanRemoveIncomplete
 log:
   [<TIME>] WARNING  PBS API apply: sync-job remove beta failed (continuing): proxmox-backup-manager sync-job remove beta failed: injected remove failure
 

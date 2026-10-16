@@ -480,8 +480,8 @@ commands:
   proxmox-backup-manager traffic-control create bravo --network 10.0.0.0/8 --rate-in 10MB --comment rule-bravo
   proxmox-backup-manager traffic-control update bravo --network 10.0.0.0/8 --rate-in 10MB --comment rule-bravo
 error: traffic-control bravo: proxmox-backup-manager traffic-control create bravo --network 10.0.0.0/8 --rate-in 10MB --comment rule-bravo failed: injected create failure (create) / proxmox-backup-manager traffic-control update bravo --network 10.0.0.0/8 --rate-in 10MB --comment rule-bravo failed: injected update failure (update)
-error chain: *errors.errorString
-error is: (none)
+error chain: *orchestrator.pbsCleanIncompleteApplyError
+error is: errPBSCleanRemoveIncomplete
 log:
   [<TIME>] WARNING  PBS API apply: traffic-control remove beta failed (continuing): proxmox-backup-manager traffic-control remove beta failed: injected remove failure
 

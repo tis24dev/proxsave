@@ -507,8 +507,8 @@ commands:
   proxmox-backup-manager remote create bravo --host bravo.pbs.example --auth-id sync@pbs --password Rm7pw-Qz4Xk9-remote-secret --fingerprint aa:bb:cc
   proxmox-backup-manager remote update bravo --host bravo.pbs.example --auth-id sync@pbs --password Rm7pw-Qz4Xk9-remote-secret --fingerprint aa:bb:cc
 error: remote bravo: proxmox-backup-manager remote create bravo --host bravo.pbs.example --auth-id sync@pbs --password <redacted> --fingerprint aa:bb:cc failed: injected create failure (create) / proxmox-backup-manager remote update bravo --host bravo.pbs.example --auth-id sync@pbs --password <redacted> --fingerprint aa:bb:cc failed: injected update failure (update)
-error chain: *errors.errorString
-error is: (none)
+error chain: *orchestrator.pbsCleanIncompleteApplyError
+error is: errPBSCleanRemoveIncomplete
 log:
   [<TIME>] WARNING  PBS API apply: remote remove beta failed (continuing): proxmox-backup-manager remote remove beta failed: injected remove failure
 

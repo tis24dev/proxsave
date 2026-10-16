@@ -1,13 +1,16 @@
 package orchestrator
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"os"
+	"slices"
 	"strings"
 	"testing"
 
 	"github.com/tis24dev/proxsave/internal/logging"
+	"github.com/tis24dev/proxsave/internal/types"
 )
 
 func TestMaybeApplyPBSConfigsFromStage_SkipsWhenNonRoot(t *testing.T) {
@@ -470,5 +473,88 @@ func TestMaybeApplyPBSConfigsFromStage_CleanRemoveIncomplete_SurfacesWithoutFall
 	// the live datastore.cfg is left untouched (the stale object stays).
 	if _, statErr := fakeFS.Stat("/etc/proxmox-backup/datastore.cfg"); statErr == nil {
 		t.Fatalf("file fallback must NOT rewrite /etc/proxmox-backup/datastore.cfg on a clean-remove failure")
+	}
+}
+
+// TestMaybeApplyPBSConfigsFromStage_CleanRemoveRefusedThenCreateFails_NoFallback
+// runs the real remote.cfg API apply in Clean (1:1) mode: PBS refuses to remove a
+// stale remote, then both create and update of the staged remote fail. The
+// refused remove must still reach the caller as a clean 1:1 incomplete item, and
+// the file-based fallback must NOT run (it would drop the remote PBS refused to
+// remove).
+func TestMaybeApplyPBSConfigsFromStage_CleanRemoveRefusedThenCreateFails_NoFallback(t *testing.T) {
+	origFS := restoreFS
+	origCmd := restoreCmd
+	origIsReal := pbsStagedApplyIsRealRestoreFSFn
+	origGeteuid := pbsStagedApplyGeteuidFn
+	origEnsure := pbsStagedApplyEnsurePBSServicesForAPIFn
+	t.Cleanup(func() {
+		restoreFS = origFS
+		restoreCmd = origCmd
+		pbsStagedApplyIsRealRestoreFSFn = origIsReal
+		pbsStagedApplyGeteuidFn = origGeteuid
+		pbsStagedApplyEnsurePBSServicesForAPIFn = origEnsure
+	})
+
+	fakeFS := NewFakeFS()
+	t.Cleanup(func() { _ = os.RemoveAll(fakeFS.Root) })
+	restoreFS = fakeFS
+
+	pbsStagedApplyIsRealRestoreFSFn = func(FS) bool { return true }
+	pbsStagedApplyGeteuidFn = func() int { return 0 }
+	pbsStagedApplyEnsurePBSServicesForAPIFn = func(context.Context, *logging.Logger) error { return nil }
+
+	const (
+		listCmd   = "proxmox-backup-manager remote list --output-format=json"
+		removeCmd = "proxmox-backup-manager remote remove probe-inuse"
+		createCmd = "proxmox-backup-manager remote create probe-bad --foo-bar baz"
+		updateCmd = "proxmox-backup-manager remote update probe-bad --foo-bar baz"
+	)
+	runner := &FakeCommandRunner{
+		Outputs: map[string][]byte{
+			listCmd: []byte(`[{"id":"probe-inuse","name":"probe-inuse"}]`),
+		},
+		Errors: map[string]error{
+			removeCmd: errors.New("remote is in use by sync job"),
+			createCmd: errors.New("schema does not allow additional properties"),
+			updateCmd: errors.New("schema does not allow additional properties"),
+		},
+	}
+	restoreCmd = runner
+
+	stageRoot := "/stage"
+	if err := fakeFS.WriteFile(stageRoot+"/etc/proxmox-backup/remote.cfg", []byte("remote: probe-bad\n\tfoo-bar baz\n"), 0o640); err != nil {
+		t.Fatalf("write staged remote.cfg: %v", err)
+	}
+
+	var logBuf bytes.Buffer
+	logger := logging.New(types.LogLevelDebug, false)
+	logger.SetOutput(&logBuf)
+
+	plan := &RestorePlan{
+		SystemType:         SystemTypePBS,
+		PBSRestoreBehavior: PBSRestoreBehaviorClean,
+		NormalCategories:   []Category{{ID: "pbs_remotes"}},
+	}
+
+	err := maybeApplyPBSConfigsFromStage(context.Background(), logger, plan, stageRoot, false)
+
+	// The scenario is only meaningful if the apply really reached the failed update.
+	for _, want := range []string{listCmd, removeCmd, createCmd, updateCmd} {
+		if !slices.Contains(runner.CallsList(), want) {
+			t.Fatalf("expected command %q, calls: %v", want, runner.CallsList())
+		}
+	}
+	if err == nil {
+		t.Fatalf("expected a summary error so the restore reports 'with warnings'")
+	}
+	if !strings.Contains(err.Error(), "remote.cfg (clean 1:1 incomplete)") {
+		t.Fatalf("expected the clean-1:1-incomplete item in the summary, got: %v", err)
+	}
+	if strings.Contains(logBuf.String(), "falling back to file-based") {
+		t.Fatalf("file fallback must NOT run on a refused clean remove, log:\n%s", logBuf.String())
+	}
+	if _, statErr := fakeFS.Stat("/etc/proxmox-backup/remote.cfg"); statErr == nil {
+		t.Fatalf("file fallback must NOT rewrite /etc/proxmox-backup/remote.cfg on a refused clean remove")
 	}
 }
