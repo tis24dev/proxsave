@@ -157,7 +157,7 @@ func (c *Collector) depRunCommandCaptured(ctx context.Context, name string, args
 		out, err := c.deps.RunCommand(ctx, name, args...)
 		return out, nil, err
 	}
-	return runCommandCapturedWithEnv(ctx, name, args...)
+	return runCommandCaptured(ctx, name, args...)
 }
 
 type CommandSpec struct {

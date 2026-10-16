@@ -14,7 +14,7 @@ import (
 // TestTheCollectorRunnerIsBoundedWhenAToolLeavesAChildHoldingStdout pins the drain
 // budget on the busiest command runner in the product.
 //
-// runCommandCapturedWithEnv executes every collected artifact's command, more per run
+// runCommandCaptured executes every collected artifact's command, more per run
 // than every other call site combined, and it captures into two in-memory buffers.
 // Without a budget, ONE collected tool that leaves a background child holding stdout
 // stalls the entire collection phase for that child's lifetime: the tool exits 0, so
@@ -49,7 +49,7 @@ func TestTheCollectorRunnerIsBoundedWhenAToolLeavesAChildHoldingStdout(t *testin
 	done := make(chan result, 1)
 	start := time.Now()
 	go func() {
-		out, _, err := runCommandCapturedWithEnv(context.Background(), "which", "thing")
+		out, _, err := runCommandCaptured(context.Background(), "which", "thing")
 		done <- result{out, err}
 	}()
 

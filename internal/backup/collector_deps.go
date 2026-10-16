@@ -12,11 +12,11 @@ import (
 var (
 	execLookPath = exec.LookPath
 
-	// runCommandCapturedWithEnv keeps stdout and stderr apart. Collected artifacts must
+	// runCommandCaptured keeps stdout and stderr apart. Collected artifacts must
 	// carry stdout alone: tools like `proxmox-backup-manager disk list --output-format=json`
 	// write diagnostics to stderr (smartctl failures, for instance) while still emitting
 	// valid JSON on stdout, and merging the streams produces an unparsable file.
-	runCommandCapturedWithEnv = func(ctx context.Context, name string, args ...string) ([]byte, []byte, error) {
+	runCommandCaptured = func(ctx context.Context, name string, args ...string) ([]byte, []byte, error) {
 		cmd, err := safeexec.CommandContext(ctx, name, args...)
 		if err != nil {
 			return nil, nil, err
@@ -35,16 +35,12 @@ var (
 		return stdout.Bytes(), stderr.Bytes(), runErr
 	}
 
-	runCommandWithEnv = func(ctx context.Context, name string, args ...string) ([]byte, error) {
-		stdout, stderr, err := runCommandCapturedWithEnv(ctx, name, args...)
+	runCommand = func(ctx context.Context, name string, args ...string) ([]byte, error) {
+		stdout, stderr, err := runCommandCaptured(ctx, name, args...)
 		if len(stderr) == 0 {
 			return stdout, err
 		}
 		return []byte(mergeCommandStreams(stdout, stderr)), err
-	}
-
-	runCommand = func(ctx context.Context, name string, args ...string) ([]byte, error) {
-		return runCommandWithEnv(ctx, name, args...)
 	}
 
 	statFunc = os.Stat
