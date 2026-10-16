@@ -1567,3 +1567,34 @@ func TestBackupFirewallRulesHonoursAnExplicitValue(t *testing.T) {
 		})
 	}
 }
+
+// A value the collection or cloud settings cannot use stops the load: parse returns the
+// error of the step that rejected it instead of carrying on with the remaining steps.
+func TestParseRejectsInvalidCollectionAndCloudSettings(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		content string
+		want    string
+	}{
+		{
+			name:    "unparsable PVE backup size",
+			content: "MAX_PVE_BACKUP_SIZE=abc\n",
+			want:    "invalid MAX_PVE_BACKUP_SIZE",
+		},
+		{
+			name:    "cloud remote starting with a dash",
+			content: "CLOUD_ENABLED=true\nCLOUD_REMOTE=-remote:backups\n",
+			want:    "CLOUD_REMOTE invalid",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := loadEnvErrForTest(t, "invalid.env", tc.content)
+			if err == nil {
+				t.Fatal("expected the configuration to be rejected")
+			}
+			if !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("error = %q, want substring %q", err.Error(), tc.want)
+			}
+		})
+	}
+}

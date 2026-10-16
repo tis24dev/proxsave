@@ -137,3 +137,39 @@ func TestLegacyRunCommandDepStillFeedsArtifact(t *testing.T) {
 		t.Fatalf("legacy dep output mismatch: %q", string(data))
 	}
 }
+
+// A Collector wired with only the merged-output RunCommandWithEnv hook is served by that
+// hook: the command is never handed to the real runner behind the caller's back.
+func TestLegacyRunCommandWithEnvDepStillFeedsArtifact(t *testing.T) {
+	called := false
+	deps := CollectorDeps{
+		LookPath: func(name string) (string, error) {
+			return "/bin/" + name, nil
+		},
+		RunCommandWithEnv: func(ctx context.Context, name string, args ...string) ([]byte, error) {
+			called = true
+			return []byte(diskListStdout), nil
+		},
+	}
+	collector := NewCollectorWithDeps(newTestLogger(), GetDefaultCollectorConfig(), t.TempDir(), types.ProxmoxBS, false, deps)
+	output := filepath.Join(collector.tempDir, "var/lib/proxsave-info", "commands", "pbs", "disk_list.json")
+
+	if err := collector.safeCmdOutput(context.Background(),
+		commandSpec("proxmox-backup-manager", "disk", "list", "--output-format=json"),
+		output,
+		"Disk list",
+		false); err != nil {
+		t.Fatalf("safeCmdOutput: %v", err)
+	}
+	if !called {
+		t.Fatal("the injected RunCommandWithEnv hook was bypassed")
+	}
+
+	data, err := os.ReadFile(output)
+	if err != nil {
+		t.Fatalf("read disk_list.json: %v", err)
+	}
+	if string(data) != diskListStdout {
+		t.Fatalf("legacy dep output mismatch: %q", string(data))
+	}
+}
