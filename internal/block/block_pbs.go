@@ -196,11 +196,6 @@ type InitReport struct {
 	Backups []Snapshot
 }
 
-// Initialized reports whether the storage can receive this run's upload.
-func (r InitReport) Initialized() bool {
-	return r.Contacted && r.Fact == nil && r.Cause == nil
-}
-
 // PBS is the PBS destination block. An instance that could not be initialized at
 // startup stays registered: its step [7] reports the backup not saved.
 type PBS struct {
