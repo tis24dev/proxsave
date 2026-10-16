@@ -133,12 +133,12 @@ func (b *LineBacklog) Lines() []string {
 // captures only the default logger. restore() is idempotent-safe to call once;
 // call it via defer for panic safety.
 func CaptureConsoleWithColor(bootstrap *BootstrapLogger, w io.Writer) (restore func()) {
-	return captureConsole(bootstrap, w, true)
+	return captureConsole(bootstrap, w)
 }
 
-// captureConsole is the body of CaptureConsoleWithColor. mirrorColor selects
-// whether the bootstrap mirror logger is colored.
-func captureConsole(bootstrap *BootstrapLogger, w io.Writer, mirrorColor bool) (restore func()) {
+// captureConsole is the body of CaptureConsoleWithColor; the bootstrap mirror
+// logger is colored.
+func captureConsole(bootstrap *BootstrapLogger, w io.Writer) (restore func()) {
 	def := GetDefaultLogger()
 	var prevDefault io.Writer
 	if def != nil {
@@ -156,7 +156,7 @@ func captureConsole(bootstrap *BootstrapLogger, w io.Writer, mirrorColor bool) (
 		// otherwise every bootstrap.Debug line (e.g. DebugStepBootstrap) would leak into
 		// the UI stream even on a standard run. A debug run (bootstrap SetLevel Debug)
 		// still streams debug - see the plan's "run finalization in debug" design task.
-		mirror := New(bootstrap.levelValue(), mirrorColor) // useColor per caller
+		mirror := New(bootstrap.levelValue(), true)
 		mirror.SetOutput(w)
 		bootstrap.SetMirrorLogger(mirror)
 		bootstrap.SetConsoleQuiet(true)
