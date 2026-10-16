@@ -66,6 +66,33 @@ func TestWriteRecipientFileWithDeps_NoRecipientsFails(t *testing.T) {
 	}
 }
 
+// The recipient file is written owner-only (0600) under a directory it creates, one
+// recipient per line.
+func TestWriteRecipientFileWithDeps_WritesOwnerOnlyFile(t *testing.T) {
+	tmp := t.TempDir()
+	path := filepath.Join(tmp, "identity", "age", "recipient.txt")
+
+	if err := writeRecipientFileWithDeps(osFS{}, realTimeProvider{}, path, []string{"age1alpha", "ssh-ed25519 AAA"}); err != nil {
+		t.Fatalf("writeRecipientFileWithDeps error: %v", err)
+	}
+
+	content, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read %s: %v", path, err)
+	}
+	if got, want := string(content), "age1alpha\nssh-ed25519 AAA\n"; got != want {
+		t.Fatalf("content=%q; want %q", got, want)
+	}
+
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat %s: %v", path, err)
+	}
+	if perm := info.Mode().Perm(); perm != 0o600 {
+		t.Fatalf("perm=%#o; want %#o", perm, 0o600)
+	}
+}
+
 func TestDefaultAgeRecipientFile(t *testing.T) {
 	if got := (&Orchestrator{}).defaultAgeRecipientFile(); got != "" {
 		t.Fatalf("got=%q; want empty", got)
