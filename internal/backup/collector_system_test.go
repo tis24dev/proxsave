@@ -2937,9 +2937,6 @@ func newTestCollectorWithDeps(t *testing.T, override CollectorDeps) *Collector {
 	if override.RunCommand != nil {
 		deps.RunCommand = override.RunCommand
 	}
-	if override.RunCommandWithEnv != nil {
-		deps.RunCommandWithEnv = override.RunCommandWithEnv
-	}
 	if override.Stat != nil {
 		deps.Stat = override.Stat
 	}

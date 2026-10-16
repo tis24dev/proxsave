@@ -138,15 +138,15 @@ func TestLegacyRunCommandDepStillFeedsArtifact(t *testing.T) {
 	}
 }
 
-// A Collector wired with only the merged-output RunCommandWithEnv hook is served by that
+// A Collector wired with only the merged-output RunCommand hook is served by that
 // hook: the command is never handed to the real runner behind the caller's back.
-func TestLegacyRunCommandWithEnvDepStillFeedsArtifact(t *testing.T) {
+func TestLegacyRunCommandDepIsNotBypassed(t *testing.T) {
 	called := false
 	deps := CollectorDeps{
 		LookPath: func(name string) (string, error) {
 			return "/bin/" + name, nil
 		},
-		RunCommandWithEnv: func(ctx context.Context, name string, args ...string) ([]byte, error) {
+		RunCommand: func(ctx context.Context, name string, args ...string) ([]byte, error) {
 			called = true
 			return []byte(diskListStdout), nil
 		},
@@ -162,7 +162,7 @@ func TestLegacyRunCommandWithEnvDepStillFeedsArtifact(t *testing.T) {
 		t.Fatalf("safeCmdOutput: %v", err)
 	}
 	if !called {
-		t.Fatal("the injected RunCommandWithEnv hook was bypassed")
+		t.Fatal("the injected RunCommand hook was bypassed")
 	}
 
 	data, err := os.ReadFile(output)

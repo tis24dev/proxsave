@@ -40,7 +40,7 @@ func NewCollector(logger *logging.Logger, config *CollectorConfig, tempDir strin
 // defaultCollectorDeps leaves the command hooks nil on purpose. The Collector already
 // falls back to the package-level runners when a hook is unset, so nil here means the
 // split-stream runner is used by default while a caller that overrides only RunCommand
-// (or RunCommandWithEnv) still has its override honoured.
+// still has its override honoured.
 func defaultCollectorDeps() CollectorDeps {
 	return CollectorDeps{
 		LookPath: func(name string) (string, error) {
@@ -482,7 +482,6 @@ func TestCollectSystemInfoWithCustomRootPrefix(t *testing.T) {
 	deps := defaultCollectorDeps()
 	deps.LookPath = func(string) (string, error) { return "/bin/true", nil }
 	deps.RunCommand = func(context.Context, string, ...string) ([]byte, error) { return []byte("stub"), nil }
-	deps.RunCommandWithEnv = func(context.Context, string, ...string) ([]byte, error) { return []byte("stub"), nil }
 
 	collector := NewCollectorWithDeps(logger, cfg, tempDir, types.ProxmoxUnknown, false, deps)
 

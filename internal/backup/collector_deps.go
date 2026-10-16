@@ -53,14 +53,12 @@ var (
 // CollectorDeps allows injecting external dependencies for the Collector.
 //
 // RunCommandCaptured returns stdout and stderr separately and is what the collection
-// paths use. RunCommand and RunCommandWithEnv return the two streams concatenated; they
-// remain for callers and tests that only care about the merged text, and a Collector
-// configured with just those keeps working (stderr is then folded into stdout, the
-// pre-split behaviour).
+// paths use. RunCommand returns the two streams concatenated; it remains for callers
+// and tests that only care about the merged text, and a Collector configured with just
+// that keeps working (stderr is then folded into stdout, the pre-split behaviour).
 type CollectorDeps struct {
 	LookPath                    func(string) (string, error)
 	RunCommandCaptured          func(context.Context, string, ...string) ([]byte, []byte, error)
-	RunCommandWithEnv           func(context.Context, string, ...string) ([]byte, error)
 	RunCommand                  func(context.Context, string, ...string) ([]byte, error)
 	Stat                        func(string) (os.FileInfo, error)
 	ReadFile                    func(string) ([]byte, error)

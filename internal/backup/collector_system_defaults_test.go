@@ -52,9 +52,6 @@ func collectDefaults(t *testing.T, root string, services, kernelModules bool, cu
 	c := NewCollectorWithDeps(logging.New(types.LogLevelError, false), cfg, tempDir, types.ProxmoxVE, false, CollectorDeps{
 		LookPath:   func(name string) (string, error) { return "/usr/bin/" + name, nil },
 		RunCommand: func(context.Context, string, ...string) ([]byte, error) { return []byte{}, nil },
-		RunCommandWithEnv: func(context.Context, string, ...string) ([]byte, error) {
-			return []byte{}, nil
-		},
 		RunCommandCaptured: func(context.Context, string, ...string) ([]byte, []byte, error) {
 			return []byte{}, nil, nil
 		},

@@ -144,7 +144,7 @@ func (c *Collector) depRunCommand(ctx context.Context, name string, args ...stri
 }
 
 // depRunCommandCaptured runs a command with stdout and stderr kept apart. A Collector
-// wired only with the merged-output hooks falls back to them, reporting the merged text
+// wired only with the merged-output hook falls back to it, reporting the merged text
 // as stdout and no stderr.
 //
 // Any injected hook wins over the package-level runner: a caller that
@@ -155,10 +155,6 @@ func (c *Collector) depRunCommandCaptured(ctx context.Context, name string, args
 	}
 	if c.deps.RunCommand != nil {
 		out, err := c.deps.RunCommand(ctx, name, args...)
-		return out, nil, err
-	}
-	if c.deps.RunCommandWithEnv != nil {
-		out, err := c.deps.RunCommandWithEnv(ctx, name, args...)
 		return out, nil, err
 	}
 	return runCommandCapturedWithEnv(ctx, name, args...)
