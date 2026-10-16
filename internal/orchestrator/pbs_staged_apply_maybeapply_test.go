@@ -716,3 +716,88 @@ func TestMaybeApplyPBSConfigsFromStage_CleanDatastoreRemoveRefusedThenApplyFails
 		})
 	}
 }
+
+// In Merge mode there is no file fallback, so an object of remote.cfg whose create and
+// update both fail must not stop the objects after it: alpha and charlie are applied,
+// bravo is reported, and the step summary names remote.cfg.
+func TestMaybeApplyPBSConfigsFromStage_MergeMode_RemoteObjectFailureKeepsApplyingTheRest(t *testing.T) {
+	origFS := restoreFS
+	origCmd := restoreCmd
+	origIsReal := pbsStagedApplyIsRealRestoreFSFn
+	origGeteuid := pbsStagedApplyGeteuidFn
+	origEnsure := pbsStagedApplyEnsurePBSServicesForAPIFn
+	origRemote := pbsStagedApplyRemoteCfgViaAPIFn
+	t.Cleanup(func() {
+		restoreFS = origFS
+		restoreCmd = origCmd
+		pbsStagedApplyIsRealRestoreFSFn = origIsReal
+		pbsStagedApplyGeteuidFn = origGeteuid
+		pbsStagedApplyEnsurePBSServicesForAPIFn = origEnsure
+		pbsStagedApplyRemoteCfgViaAPIFn = origRemote
+	})
+
+	fakeFS := NewFakeFS()
+	t.Cleanup(func() { _ = os.RemoveAll(fakeFS.Root) })
+	restoreFS = fakeFS
+
+	pbsStagedApplyIsRealRestoreFSFn = func(FS) bool { return true }
+	pbsStagedApplyGeteuidFn = func() int { return 0 }
+	pbsStagedApplyEnsurePBSServicesForAPIFn = func(context.Context, *logging.Logger) error { return nil }
+	pbsStagedApplyRemoteCfgViaAPIFn = applyPBSRemoteCfgViaAPI
+
+	runner := &pbsSectionCharRunner{rules: []pbsSectionCharRule{
+		{verb: "create", id: "bravo", err: errPBSSectionCharCreate},
+		{verb: "update", id: "bravo", err: errPBSSectionCharUpdate},
+	}}
+	restoreCmd = runner
+
+	stageRoot := "/stage"
+	var staged strings.Builder
+	for _, id := range []string{"alpha", "bravo", "charlie"} {
+		staged.WriteString("remote: " + id + "\n\thost " + id + ".pbs.example\n\tauth-id sync@pbs\n\tpassword " + pbsSectionCharRemotePasswordStaged + "\n\n")
+	}
+	if err := fakeFS.WriteFile(stageRoot+"/etc/proxmox-backup/remote.cfg", []byte(staged.String()), 0o640); err != nil {
+		t.Fatalf("write staged remote.cfg: %v", err)
+	}
+
+	var logBuf bytes.Buffer
+	logger := logging.New(types.LogLevelDebug, false)
+	logger.SetOutput(&logBuf)
+
+	plan := &RestorePlan{
+		SystemType:         SystemTypePBS,
+		PBSRestoreBehavior: PBSRestoreBehaviorMerge,
+		NormalCategories:   []Category{{ID: "pbs_remotes"}},
+	}
+	err := maybeApplyPBSConfigsFromStage(context.Background(), logger, plan, stageRoot, false)
+
+	if got := strings.Join(pbsSectionCharObjects(runner.calls, "create"), ","); got != "alpha,bravo,charlie" {
+		t.Fatalf("create objects = %s, want alpha,bravo,charlie", got)
+	}
+	if got := strings.Join(pbsSectionCharObjects(runner.calls, "update"), ","); got != "bravo" {
+		t.Fatalf("update objects = %s, want bravo", got)
+	}
+
+	redacted := func(verb string) string {
+		return "proxmox-backup-manager remote " + verb + " bravo --host bravo.pbs.example --auth-id sync@pbs --password <redacted> failed: injected " + verb + " failure"
+	}
+	for _, want := range []string{
+		"WARNING  PBS API apply: remote bravo failed (continuing): " + redacted("create") + " (create) / " + redacted("update") + " (update)\n",
+		"WARNING  PBS API apply: remote.cfg failed: 1 remote object(s) not applied: [bravo]\n",
+	} {
+		if !strings.Contains(logBuf.String(), want) {
+			t.Fatalf("expected log line %q, log:\n%s", want, logBuf.String())
+		}
+	}
+	for _, secret := range []string{pbsSectionCharRemotePassword, pbsSectionCharRemotePasswordStaged} {
+		if strings.Contains(logBuf.String(), secret) || (err != nil && strings.Contains(err.Error(), secret)) {
+			t.Fatalf("secret %q leaked, err: %v, log:\n%s", secret, err, logBuf.String())
+		}
+	}
+	if strings.Contains(logBuf.String(), "falling back to file-based") {
+		t.Fatalf("merge mode has no file fallback, log:\n%s", logBuf.String())
+	}
+	if err == nil || err.Error() != "1 PBS config item(s) failed to apply: remote.cfg" {
+		t.Fatalf("summary error = %v, want %q", err, "1 PBS config item(s) failed to apply: remote.cfg")
+	}
+}

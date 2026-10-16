@@ -285,11 +285,12 @@ commands:
   proxmox-backup-manager s3 endpoint create alpha --endpoint alpha.s3.example --region eu-central-1 --access-key AKx3-Wd8Lp2-s3-access --secret-key Sk5v-Hj6Tn1-s3-secret
   proxmox-backup-manager s3 endpoint create bravo --endpoint bravo.s3.example --region eu-central-1 --access-key AKx3-Wd8Lp2-s3-access --secret-key Sk5v-Hj6Tn1-s3-secret
   proxmox-backup-manager s3 endpoint update bravo --endpoint bravo.s3.example --region eu-central-1 --access-key AKx3-Wd8Lp2-s3-access --secret-key Sk5v-Hj6Tn1-s3-secret
-error: s3 endpoint bravo: proxmox-backup-manager s3 endpoint create bravo --endpoint bravo.s3.example --region eu-central-1 --access-key <redacted> --secret-key <redacted> failed: injected create failure (create) / proxmox-backup-manager s3 endpoint update bravo --endpoint bravo.s3.example --region eu-central-1 --access-key <redacted> --secret-key <redacted> failed: injected update failure (update)
+  proxmox-backup-manager s3 endpoint create charlie --endpoint charlie.s3.example --region eu-central-1 --access-key AKx3-Wd8Lp2-s3-access --secret-key Sk5v-Hj6Tn1-s3-secret
+error: 1 s3 endpoint object(s) not applied: [bravo]
 error chain: *errors.errorString
 error is: (none)
 log:
-  (none)
+  [<TIME>] WARNING  PBS API apply: s3 endpoint bravo failed (continuing): proxmox-backup-manager s3 endpoint create bravo --endpoint bravo.s3.example --region eu-central-1 --access-key <redacted> --secret-key <redacted> failed: injected create failure (create) / proxmox-backup-manager s3 endpoint update bravo --endpoint bravo.s3.example --region eu-central-1 --access-key <redacted> --secret-key <redacted> failed: injected update failure (update)
 
 ### strict-list-fails
 strict: true
@@ -506,11 +507,12 @@ commands:
   proxmox-backup-manager s3 endpoint remove beta
   proxmox-backup-manager s3 endpoint create bravo --endpoint bravo.s3.example --region eu-central-1 --access-key AKx3-Wd8Lp2-s3-access --secret-key Sk5v-Hj6Tn1-s3-secret
   proxmox-backup-manager s3 endpoint update bravo --endpoint bravo.s3.example --region eu-central-1 --access-key AKx3-Wd8Lp2-s3-access --secret-key Sk5v-Hj6Tn1-s3-secret
-error: s3 endpoint bravo: proxmox-backup-manager s3 endpoint create bravo --endpoint bravo.s3.example --region eu-central-1 --access-key <redacted> --secret-key <redacted> failed: injected create failure (create) / proxmox-backup-manager s3 endpoint update bravo --endpoint bravo.s3.example --region eu-central-1 --access-key <redacted> --secret-key <redacted> failed: injected update failure (update)
+error: 1 s3 endpoint object(s) not applied: [bravo]
 error chain: *orchestrator.pbsCleanIncompleteApplyError
 error is: errPBSCleanRemoveIncomplete
 log:
   [<TIME>] WARNING  PBS API apply: s3 endpoint remove beta failed (continuing): proxmox-backup-manager s3 endpoint remove beta failed: injected remove failure
+  [<TIME>] WARNING  PBS API apply: s3 endpoint bravo failed (continuing): proxmox-backup-manager s3 endpoint create bravo --endpoint bravo.s3.example --region eu-central-1 --access-key <redacted> --secret-key <redacted> failed: injected create failure (create) / proxmox-backup-manager s3 endpoint update bravo --endpoint bravo.s3.example --region eu-central-1 --access-key <redacted> --secret-key <redacted> failed: injected update failure (update)
 
 ### strict-list-key-order
 strict: true

@@ -269,11 +269,12 @@ commands:
   proxmox-backup-manager traffic-control create alpha --network 10.0.0.0/8 --rate-in 10MB --comment rule-alpha
   proxmox-backup-manager traffic-control create bravo --network 10.0.0.0/8 --rate-in 10MB --comment rule-bravo
   proxmox-backup-manager traffic-control update bravo --network 10.0.0.0/8 --rate-in 10MB --comment rule-bravo
-error: traffic-control bravo: proxmox-backup-manager traffic-control create bravo --network 10.0.0.0/8 --rate-in 10MB --comment rule-bravo failed: injected create failure (create) / proxmox-backup-manager traffic-control update bravo --network 10.0.0.0/8 --rate-in 10MB --comment rule-bravo failed: injected update failure (update)
+  proxmox-backup-manager traffic-control create charlie --network 10.0.0.0/8 --rate-in 10MB --comment rule-charlie
+error: 1 traffic-control object(s) not applied: [bravo]
 error chain: *errors.errorString
 error is: (none)
 log:
-  (none)
+  [<TIME>] WARNING  PBS API apply: traffic-control bravo failed (continuing): proxmox-backup-manager traffic-control create bravo --network 10.0.0.0/8 --rate-in 10MB --comment rule-bravo failed: injected create failure (create) / proxmox-backup-manager traffic-control update bravo --network 10.0.0.0/8 --rate-in 10MB --comment rule-bravo failed: injected update failure (update)
 
 ### strict-list-fails
 strict: true
@@ -479,11 +480,12 @@ commands:
   proxmox-backup-manager traffic-control remove beta
   proxmox-backup-manager traffic-control create bravo --network 10.0.0.0/8 --rate-in 10MB --comment rule-bravo
   proxmox-backup-manager traffic-control update bravo --network 10.0.0.0/8 --rate-in 10MB --comment rule-bravo
-error: traffic-control bravo: proxmox-backup-manager traffic-control create bravo --network 10.0.0.0/8 --rate-in 10MB --comment rule-bravo failed: injected create failure (create) / proxmox-backup-manager traffic-control update bravo --network 10.0.0.0/8 --rate-in 10MB --comment rule-bravo failed: injected update failure (update)
+error: 1 traffic-control object(s) not applied: [bravo]
 error chain: *orchestrator.pbsCleanIncompleteApplyError
 error is: errPBSCleanRemoveIncomplete
 log:
   [<TIME>] WARNING  PBS API apply: traffic-control remove beta failed (continuing): proxmox-backup-manager traffic-control remove beta failed: injected remove failure
+  [<TIME>] WARNING  PBS API apply: traffic-control bravo failed (continuing): proxmox-backup-manager traffic-control create bravo --network 10.0.0.0/8 --rate-in 10MB --comment rule-bravo failed: injected create failure (create) / proxmox-backup-manager traffic-control update bravo --network 10.0.0.0/8 --rate-in 10MB --comment rule-bravo failed: injected update failure (update)
 
 ### strict-list-key-order
 strict: true

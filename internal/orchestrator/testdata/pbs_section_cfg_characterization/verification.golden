@@ -269,11 +269,12 @@ commands:
   proxmox-backup-manager verify-job create alpha --store ds-alpha --schedule daily --ignore-verified true
   proxmox-backup-manager verify-job create bravo --store ds-bravo --schedule daily --ignore-verified true
   proxmox-backup-manager verify-job update bravo --store ds-bravo --schedule daily --ignore-verified true
-error: verify-job bravo: proxmox-backup-manager verify-job create bravo --store ds-bravo --schedule daily --ignore-verified true failed: injected create failure (create) / proxmox-backup-manager verify-job update bravo --store ds-bravo --schedule daily --ignore-verified true failed: injected update failure (update)
+  proxmox-backup-manager verify-job create charlie --store ds-charlie --schedule daily --ignore-verified true
+error: 1 verify-job object(s) not applied: [bravo]
 error chain: *errors.errorString
 error is: (none)
 log:
-  (none)
+  [<TIME>] WARNING  PBS API apply: verify-job bravo failed (continuing): proxmox-backup-manager verify-job create bravo --store ds-bravo --schedule daily --ignore-verified true failed: injected create failure (create) / proxmox-backup-manager verify-job update bravo --store ds-bravo --schedule daily --ignore-verified true failed: injected update failure (update)
 
 ### strict-list-fails
 strict: true
@@ -479,11 +480,12 @@ commands:
   proxmox-backup-manager verify-job remove beta
   proxmox-backup-manager verify-job create bravo --store ds-bravo --schedule daily --ignore-verified true
   proxmox-backup-manager verify-job update bravo --store ds-bravo --schedule daily --ignore-verified true
-error: verify-job bravo: proxmox-backup-manager verify-job create bravo --store ds-bravo --schedule daily --ignore-verified true failed: injected create failure (create) / proxmox-backup-manager verify-job update bravo --store ds-bravo --schedule daily --ignore-verified true failed: injected update failure (update)
+error: 1 verify-job object(s) not applied: [bravo]
 error chain: *orchestrator.pbsCleanIncompleteApplyError
 error is: errPBSCleanRemoveIncomplete
 log:
   [<TIME>] WARNING  PBS API apply: verify-job remove beta failed (continuing): proxmox-backup-manager verify-job remove beta failed: injected remove failure
+  [<TIME>] WARNING  PBS API apply: verify-job bravo failed (continuing): proxmox-backup-manager verify-job create bravo --store ds-bravo --schedule daily --ignore-verified true failed: injected create failure (create) / proxmox-backup-manager verify-job update bravo --store ds-bravo --schedule daily --ignore-verified true failed: injected update failure (update)
 
 ### strict-list-key-order
 strict: true

@@ -423,8 +423,6 @@ func TestPBSAPIApply_StrictListParseErrors(t *testing.T) {
 }
 
 func TestPBSAPIApply_CreateUpdateBothFailErrors(t *testing.T) {
-	logger := logging.New(types.LogLevelDebug, false)
-
 	tests := []struct {
 		name    string
 		relPath string
@@ -476,12 +474,18 @@ func TestPBSAPIApply_CreateUpdateBothFailErrors(t *testing.T) {
 				tt.create: errors.New("create failed"),
 				tt.update: errors.New("update failed"),
 			}
+			logger := logging.New(types.LogLevelDebug, false)
+			var logBuf bytes.Buffer
+			logger.SetOutput(&logBuf)
 			err := tt.apply(context.Background(), logger, stageRoot, false)
 			if err == nil {
 				t.Fatalf("expected error")
 			}
-			if !strings.Contains(err.Error(), "create failed") || !strings.Contains(err.Error(), "update failed") {
-				t.Fatalf("expected create/update errors, got: %s", err.Error())
+			if !strings.Contains(err.Error(), "object(s) not applied") {
+				t.Fatalf("expected the not-applied summary, got: %s", err.Error())
+			}
+			if !strings.Contains(logBuf.String(), "create failed") || !strings.Contains(logBuf.String(), "update failed") {
+				t.Fatalf("expected create/update errors in the warning, log: %s", logBuf.String())
 			}
 		})
 	}
@@ -669,6 +673,8 @@ func TestApplyPBSRemoteCfgViaAPI_CreateFailsThenUpdate(t *testing.T) {
 func TestApplyPBSRemoteCfgViaAPI_RedactsPasswordOnFailure(t *testing.T) {
 	stageRoot, fs, runner := setupPBSAPIApplyTestDeps(t)
 	logger := logging.New(types.LogLevelDebug, false)
+	var logBuf bytes.Buffer
+	logger.SetOutput(&logBuf)
 
 	writeStageFile(t, fs, stageRoot, "etc/proxmox-backup/remote.cfg",
 		"remote: r1\n"+
@@ -689,8 +695,11 @@ func TestApplyPBSRemoteCfgViaAPI_RedactsPasswordOnFailure(t *testing.T) {
 	if strings.Contains(err.Error(), "secret1") {
 		t.Fatalf("expected password to be redacted, got: %s", err.Error())
 	}
-	if !strings.Contains(err.Error(), "<redacted>") {
-		t.Fatalf("expected <redacted> in error, got: %s", err.Error())
+	if strings.Contains(logBuf.String(), "secret1") {
+		t.Fatalf("expected password to be redacted in the log, got: %s", logBuf.String())
+	}
+	if !strings.Contains(logBuf.String(), "<redacted>") {
+		t.Fatalf("expected <redacted> in the warning, log: %s", logBuf.String())
 	}
 }
 
@@ -758,8 +767,8 @@ func TestApplyPBSRemoteCfgViaAPI_DecodesBase64Password(t *testing.T) {
 				t.Fatalf("password form %q leaked into the log: %s", secret, logBuf.String())
 			}
 		}
-		if n := strings.Count(err.Error(), "--password <redacted>"); n != 2 {
-			t.Fatalf("expected --password <redacted> twice (create and update), got %d: %s", n, err.Error())
+		if n := strings.Count(logBuf.String(), "--password <redacted>"); n != 2 {
+			t.Fatalf("expected --password <redacted> twice (create and update) in the warning, got %d: %s", n, logBuf.String())
 		}
 	})
 
@@ -875,6 +884,8 @@ func TestApplyPBSS3CfgViaAPI_NoFileNoCalls(t *testing.T) {
 func TestApplyPBSS3CfgViaAPI_RedactsKeysOnFailure(t *testing.T) {
 	stageRoot, fs, runner := setupPBSAPIApplyTestDeps(t)
 	logger := logging.New(types.LogLevelDebug, false)
+	var logBuf bytes.Buffer
+	logger.SetOutput(&logBuf)
 
 	writeStageFile(t, fs, stageRoot, "etc/proxmox-backup/s3.cfg",
 		"s3: e1\n"+
@@ -896,8 +907,11 @@ func TestApplyPBSS3CfgViaAPI_RedactsKeysOnFailure(t *testing.T) {
 	if strings.Contains(err.Error(), "access1") || strings.Contains(err.Error(), "secret1") {
 		t.Fatalf("expected keys to be redacted, got: %s", err.Error())
 	}
-	if !strings.Contains(err.Error(), "<redacted>") {
-		t.Fatalf("expected <redacted> in error, got: %s", err.Error())
+	if strings.Contains(logBuf.String(), "access1") || strings.Contains(logBuf.String(), "secret1") {
+		t.Fatalf("expected keys to be redacted in the log, got: %s", logBuf.String())
+	}
+	if !strings.Contains(logBuf.String(), "<redacted>") {
+		t.Fatalf("expected <redacted> in the warning, log: %s", logBuf.String())
 	}
 }
 

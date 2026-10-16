@@ -438,23 +438,33 @@ func pbsSectionCharScenarios(k pbsSectionCharKind) []pbsSectionCharScenario {
 			rules:  []pbsSectionCharRule{createFails},
 		},
 		{
-			// The first object that fails both ways ends the apply: charlie is never tried.
+			// An object that fails both ways is logged and the apply goes on: charlie is
+			// still tried, and the error names bravo as not applied.
 			name:   "create-and-update-fail",
 			staged: threeSections,
 			rules:  []pbsSectionCharRule{createFails, updateFails},
 			check: func(t *testing.T, k pbsSectionCharKind, run pbsSectionCharRun) {
 				pbsSectionCharWantIs(t, run.err, errPBSSectionCharCreate, false)
 				pbsSectionCharWantIs(t, run.err, errPBSSectionCharUpdate, false)
-				text := pbsSectionCharErrText(run.err)
+				pbsSectionCharWantObjects(t, run, "create", "alpha", "bravo", "charlie")
+				var text string
+				for _, line := range run.log {
+					if strings.Contains(line, " bravo failed (continuing): ") {
+						text = line
+					}
+				}
+				if text == "" {
+					t.Fatalf("no per-object warning for bravo, log: %v", run.log)
+				}
 				for _, flag := range k.redactedFlags {
 					if n := strings.Count(text, flag+" <redacted>"); n != 2 {
-						t.Errorf("%q followed by <redacted> appears %d times in the error, want 2 (create and update): %s", flag, n, text)
+						t.Errorf("%q followed by <redacted> appears %d times in the warning, want 2 (create and update): %s", flag, n, text)
 					}
 				}
 				if len(k.redactedFlags) == 0 && strings.Contains(text, "<redacted>") {
-					t.Errorf("unexpected redaction in the error: %s", text)
+					t.Errorf("unexpected redaction in the warning: %s", text)
 				}
-				// The secrets did reach the runner, so their absence from the error is
+				// The secrets did reach the runner, so their absence from the warning is
 				// the redaction at work and not a case that never carried them.
 				for _, secret := range k.secrets {
 					found := false
@@ -550,8 +560,8 @@ func pbsSectionCharScenarios(k pbsSectionCharKind) []pbsSectionCharScenario {
 			},
 		},
 		{
-			// A create/update failure is returned with the create/update text only, and
-			// it still matches the incomplete clean left by the earlier remove failure.
+			// The error names the objects not applied only, and it still matches the
+			// incomplete clean left by the earlier remove failure.
 			name:   "strict-remove-fails-then-create-fails",
 			strict: true,
 			staged: pbsSectionCharStaged(k.section("bravo")),

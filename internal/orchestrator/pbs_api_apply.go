@@ -34,8 +34,8 @@ func pbsCleanRemoveResult(kind string, failures []string) error {
 	return fmt.Errorf("%s remove failed for %d object(s) [%s]: %w", kind, len(failures), strings.Join(failures, ", "), errPBSCleanRemoveIncomplete)
 }
 
-// pbsCleanIncompleteApplyError is an apply failure that ended a Clean (1:1) apply
-// after one or more stale objects could not be removed. Its text is the apply
+// pbsCleanIncompleteApplyError is an apply failure of a Clean (1:1) apply in which
+// one or more stale objects could not be removed. Its text is the apply
 // failure alone; it also matches errPBSCleanRemoveIncomplete, so the caller does
 // not take the file-based fallback.
 type pbsCleanIncompleteApplyError struct {
@@ -298,10 +298,11 @@ func pbsSectionFlags(logger *logging.Logger, kind, id string, entries []proxmoxN
 
 // applyPBSSectionCfgViaAPI creates or updates every section of the staged cfg.file
 // through proxmox-backup-manager, in sorted order, falling back from create to
-// update. In strict (Clean 1:1) mode it first removes every listed object that the
-// staged file does not name; a remove that fails is logged, the apply continues,
-// and the result wraps errPBSCleanRemoveIncomplete, also when a later create and
-// update both fail.
+// update. An object whose create and update both fail is logged and the apply
+// continues with the next one; the result then names every object not applied. In
+// strict (Clean 1:1) mode it first removes every listed object that the staged file
+// does not name; a remove that fails is logged, the apply continues, and the result
+// wraps errPBSCleanRemoveIncomplete, also when some objects were not applied.
 func applyPBSSectionCfgViaAPI(ctx context.Context, logger *logging.Logger, stageRoot string, strict bool, cfg pbsSectionCfg) error {
 	kind := strings.Join(cfg.command, " ")
 	commandArgs := func(rest ...string) []string {
@@ -355,6 +356,7 @@ func applyPBSSectionCfgViaAPI(ctx context.Context, logger *logging.Logger, stage
 		ids = append(ids, id)
 	}
 	sort.Strings(ids)
+	var applyFailures []string
 	for _, id := range ids {
 		s := desired[id]
 		flags := pbsSectionFlags(logger, kind, id, s.Entries, cfg.base64Values)
@@ -362,15 +364,19 @@ func applyPBSSectionCfgViaAPI(ctx context.Context, logger *logging.Logger, stage
 		if _, err := runPBSManagerSensitive(ctx, createArgs, cfg.secretFlags...); err != nil {
 			updateArgs := commandArgs(append([]string{"update", id}, flags...)...)
 			if _, upErr := runPBSManagerSensitive(ctx, updateArgs, cfg.secretFlags...); upErr != nil {
-				applyErr := fmt.Errorf("%s %s: %v (create) / %v (update)", kind, id, err, upErr)
-				if removeErr := pbsCleanRemoveResult(kind, removeFailures); removeErr != nil {
-					return &pbsCleanIncompleteApplyError{err: applyErr, remove: removeErr}
-				}
-				return applyErr
+				logger.Warning("PBS API apply: %s %s failed (continuing): %v (create) / %v (update)", kind, id, err, upErr)
+				applyFailures = append(applyFailures, id)
 			}
 		}
 	}
 
+	if len(applyFailures) > 0 {
+		applyErr := fmt.Errorf("%d %s object(s) not applied: [%s]", len(applyFailures), kind, strings.Join(applyFailures, ", "))
+		if removeErr := pbsCleanRemoveResult(kind, removeFailures); removeErr != nil {
+			return &pbsCleanIncompleteApplyError{err: applyErr, remove: removeErr}
+		}
+		return applyErr
+	}
 	return pbsCleanRemoveResult(kind, removeFailures)
 }
 

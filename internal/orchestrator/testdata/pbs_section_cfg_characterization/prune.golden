@@ -269,11 +269,12 @@ commands:
   proxmox-backup-manager prune-job create alpha --store ds-alpha --schedule daily --keep-last 3
   proxmox-backup-manager prune-job create bravo --store ds-bravo --schedule daily --keep-last 3
   proxmox-backup-manager prune-job update bravo --store ds-bravo --schedule daily --keep-last 3
-error: prune-job bravo: proxmox-backup-manager prune-job create bravo --store ds-bravo --schedule daily --keep-last 3 failed: injected create failure (create) / proxmox-backup-manager prune-job update bravo --store ds-bravo --schedule daily --keep-last 3 failed: injected update failure (update)
+  proxmox-backup-manager prune-job create charlie --store ds-charlie --schedule daily --keep-last 3
+error: 1 prune-job object(s) not applied: [bravo]
 error chain: *errors.errorString
 error is: (none)
 log:
-  (none)
+  [<TIME>] WARNING  PBS API apply: prune-job bravo failed (continuing): proxmox-backup-manager prune-job create bravo --store ds-bravo --schedule daily --keep-last 3 failed: injected create failure (create) / proxmox-backup-manager prune-job update bravo --store ds-bravo --schedule daily --keep-last 3 failed: injected update failure (update)
 
 ### strict-list-fails
 strict: true
@@ -479,11 +480,12 @@ commands:
   proxmox-backup-manager prune-job remove beta
   proxmox-backup-manager prune-job create bravo --store ds-bravo --schedule daily --keep-last 3
   proxmox-backup-manager prune-job update bravo --store ds-bravo --schedule daily --keep-last 3
-error: prune-job bravo: proxmox-backup-manager prune-job create bravo --store ds-bravo --schedule daily --keep-last 3 failed: injected create failure (create) / proxmox-backup-manager prune-job update bravo --store ds-bravo --schedule daily --keep-last 3 failed: injected update failure (update)
+error: 1 prune-job object(s) not applied: [bravo]
 error chain: *orchestrator.pbsCleanIncompleteApplyError
 error is: errPBSCleanRemoveIncomplete
 log:
   [<TIME>] WARNING  PBS API apply: prune-job remove beta failed (continuing): proxmox-backup-manager prune-job remove beta failed: injected remove failure
+  [<TIME>] WARNING  PBS API apply: prune-job bravo failed (continuing): proxmox-backup-manager prune-job create bravo --store ds-bravo --schedule daily --keep-last 3 failed: injected create failure (create) / proxmox-backup-manager prune-job update bravo --store ds-bravo --schedule daily --keep-last 3 failed: injected update failure (update)
 
 ### strict-list-key-order
 strict: true
