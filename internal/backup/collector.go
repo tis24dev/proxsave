@@ -147,30 +147,21 @@ func (c *Collector) depRunCommand(ctx context.Context, name string, args ...stri
 // wired only with the merged-output hooks falls back to them, reporting the merged text
 // as stdout and no stderr.
 //
-// Any injected hook wins over the package-level runner, extraEnv or not: a caller that
-// supplied a runner never wants a real command executed behind its back. RunCommand
-// cannot carry extraEnv, so a Collector wired with only that hook runs the command
-// without the extra environment; the fact is logged rather than worked around.
-func (c *Collector) depRunCommandCaptured(ctx context.Context, extraEnv []string, name string, args ...string) ([]byte, []byte, error) {
+// Any injected hook wins over the package-level runner: a caller that
+// supplied a runner never wants a real command executed behind its back.
+func (c *Collector) depRunCommandCaptured(ctx context.Context, name string, args ...string) ([]byte, []byte, error) {
 	if c.deps.RunCommandCaptured != nil {
-		return c.deps.RunCommandCaptured(ctx, extraEnv, name, args...)
+		return c.deps.RunCommandCaptured(ctx, nil, name, args...)
 	}
-	if len(extraEnv) == 0 && c.deps.RunCommand != nil {
+	if c.deps.RunCommand != nil {
 		out, err := c.deps.RunCommand(ctx, name, args...)
 		return out, nil, err
 	}
 	if c.deps.RunCommandWithEnv != nil {
-		out, err := c.deps.RunCommandWithEnv(ctx, extraEnv, name, args...)
+		out, err := c.deps.RunCommandWithEnv(ctx, nil, name, args...)
 		return out, nil, err
 	}
-	if c.deps.RunCommand != nil {
-		if c.logger != nil {
-			c.logger.Debug("Running %s through the RunCommand hook, which cannot carry %d extra environment variable(s)", name, len(extraEnv))
-		}
-		out, err := c.deps.RunCommand(ctx, name, args...)
-		return out, nil, err
-	}
-	return runCommandCapturedWithEnv(ctx, extraEnv, name, args...)
+	return runCommandCapturedWithEnv(ctx, nil, name, args...)
 }
 
 type CommandSpec struct {
@@ -1251,7 +1242,7 @@ func (c *Collector) runAndClassifyCommand(ctx context.Context, spec CommandSpec,
 		defer cancel()
 	}
 
-	out, stderr, err := c.depRunCommandCaptured(runCtx, nil, spec.Name, spec.Args...)
+	out, stderr, err := c.depRunCommandCaptured(runCtx, spec.Name, spec.Args...)
 	result.output = out
 	if err != nil {
 		// Failure handling reads both streams: exit reasons, privilege hints and the

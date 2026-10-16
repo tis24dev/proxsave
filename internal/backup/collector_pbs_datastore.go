@@ -789,7 +789,7 @@ func (c *Collector) getDatastoreList(ctx context.Context) ([]pbsDatastore, error
 	} else {
 		// stdout only: warnings printed on stderr would otherwise break the JSON parse
 		// below and silently drop the whole datastore list.
-		output, stderr, err := c.depRunCommandCaptured(ctx, nil, "proxmox-backup-manager", "datastore", "list", "--output-format=json")
+		output, stderr, err := c.depRunCommandCaptured(ctx, "proxmox-backup-manager", "datastore", "list", "--output-format=json")
 		if err != nil {
 			if ctxErr := ctx.Err(); ctxErr != nil {
 				return nil, ctxErr
