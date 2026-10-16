@@ -1,6 +1,7 @@
 package orchestrator
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"os"
@@ -690,6 +691,137 @@ func TestApplyPBSRemoteCfgViaAPI_RedactsPasswordOnFailure(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "<redacted>") {
 		t.Fatalf("expected <redacted> in error, got: %s", err.Error())
+	}
+}
+
+// PBS stores a remote's password in remote.cfg as standard base64 (measured on PBS
+// 4.2.8: `remote create --password dummyprobe` writes `password ZHVtbXlwcm9iZQ==`),
+// and create/update take the plain value: passing the stored value through would
+// store the base64 of the base64.
+func TestApplyPBSRemoteCfgViaAPI_DecodesBase64Password(t *testing.T) {
+	const (
+		plain   = "dummyprobe"
+		encoded = "ZHVtbXlwcm9iZQ=="
+	)
+
+	t.Run("create gets the decoded password", func(t *testing.T) {
+		stageRoot, fs, runner := setupPBSAPIApplyTestDeps(t)
+		logger := logging.New(types.LogLevelDebug, false)
+		var logBuf bytes.Buffer
+		logger.SetOutput(&logBuf)
+
+		writeStageFile(t, fs, stageRoot, "etc/proxmox-backup/remote.cfg",
+			"remote: r1\n"+
+				"    host pbs.example\n"+
+				"    password "+encoded+"\n",
+			0o640,
+		)
+
+		if err := applyPBSRemoteCfgViaAPI(context.Background(), logger, stageRoot, false); err != nil {
+			t.Fatalf("applyPBSRemoteCfgViaAPI error: %v", err)
+		}
+		want := []string{"proxmox-backup-manager remote create r1 --host pbs.example --password " + plain}
+		if !reflect.DeepEqual(runner.calls, want) {
+			t.Fatalf("calls=%v want %v", runner.calls, want)
+		}
+		if logBuf.Len() != 0 {
+			t.Fatalf("expected no log line for a valid base64 password, got: %s", logBuf.String())
+		}
+	})
+
+	t.Run("decoded password stays redacted", func(t *testing.T) {
+		stageRoot, fs, runner := setupPBSAPIApplyTestDeps(t)
+		logger := logging.New(types.LogLevelDebug, false)
+		var logBuf bytes.Buffer
+		logger.SetOutput(&logBuf)
+
+		writeStageFile(t, fs, stageRoot, "etc/proxmox-backup/remote.cfg",
+			"remote: r1\n"+
+				"    host pbs.example\n"+
+				"    password "+encoded+"\n",
+			0o640,
+		)
+		runner.errs = map[string]error{
+			"proxmox-backup-manager remote create r1 --host pbs.example --password " + plain: errors.New("create failed"),
+			"proxmox-backup-manager remote update r1 --host pbs.example --password " + plain: errors.New("update failed"),
+		}
+
+		err := applyPBSRemoteCfgViaAPI(context.Background(), logger, stageRoot, false)
+		if err == nil {
+			t.Fatalf("expected error")
+		}
+		for _, secret := range []string{plain, encoded} {
+			if strings.Contains(err.Error(), secret) {
+				t.Fatalf("password form %q leaked into the error: %s", secret, err.Error())
+			}
+			if strings.Contains(logBuf.String(), secret) {
+				t.Fatalf("password form %q leaked into the log: %s", secret, logBuf.String())
+			}
+		}
+		if n := strings.Count(err.Error(), "--password <redacted>"); n != 2 {
+			t.Fatalf("expected --password <redacted> twice (create and update), got %d: %s", n, err.Error())
+		}
+	})
+
+	t.Run("invalid base64 is passed verbatim with one debug line", func(t *testing.T) {
+		const verbatim = "not-base64-value"
+		stageRoot, fs, runner := setupPBSAPIApplyTestDeps(t)
+		logger := logging.New(types.LogLevelDebug, false)
+		var logBuf bytes.Buffer
+		logger.SetOutput(&logBuf)
+
+		writeStageFile(t, fs, stageRoot, "etc/proxmox-backup/remote.cfg",
+			"remote: r1\n"+
+				"    host pbs.example\n"+
+				"    password "+verbatim+"\n",
+			0o640,
+		)
+
+		if err := applyPBSRemoteCfgViaAPI(context.Background(), logger, stageRoot, false); err != nil {
+			t.Fatalf("applyPBSRemoteCfgViaAPI error: %v", err)
+		}
+		want := []string{"proxmox-backup-manager remote create r1 --host pbs.example --password " + verbatim}
+		if !reflect.DeepEqual(runner.calls, want) {
+			t.Fatalf("calls=%v want %v", runner.calls, want)
+		}
+		lines := strings.Split(strings.TrimRight(logBuf.String(), "\n"), "\n")
+		if len(lines) != 1 || !strings.Contains(lines[0], "DEBUG") || !strings.Contains(lines[0], "r1") || !strings.Contains(lines[0], "password") {
+			t.Fatalf("expected one DEBUG line naming r1 and password, got: %q", logBuf.String())
+		}
+		if strings.Contains(logBuf.String(), verbatim) {
+			t.Fatalf("the value leaked into the log: %s", logBuf.String())
+		}
+	})
+}
+
+// The staged base64 is trimmed, the decoded password is not: a password that begins or
+// ends with a space reaches --password with it, as one argument.
+func TestApplyPBSRemoteCfgViaAPI_KeepsSpacesOfDecodedPassword(t *testing.T) {
+	const (
+		plain   = " dummyprobe "
+		encoded = "IGR1bW15cHJvYmUg"
+	)
+	stageRoot, fs, _ := setupPBSAPIApplyTestDeps(t)
+	runner := &pbsSectionCharRunner{}
+	restoreCmd = runner
+	logger := logging.New(types.LogLevelDebug, false)
+
+	writeStageFile(t, fs, stageRoot, "etc/proxmox-backup/remote.cfg",
+		"remote: r1\n"+
+			"    host pbs.example\n"+
+			"    password   "+encoded+"  \n",
+		0o640,
+	)
+
+	if err := applyPBSRemoteCfgViaAPI(context.Background(), logger, stageRoot, false); err != nil {
+		t.Fatalf("applyPBSRemoteCfgViaAPI error: %v", err)
+	}
+	if len(runner.calls) != 1 {
+		t.Fatalf("expected one command, got %d: %+v", len(runner.calls), runner.calls)
+	}
+	want := []string{"remote", "create", "r1", "--host", "pbs.example", "--password", plain}
+	if got := runner.calls[0].args; !reflect.DeepEqual(got, want) {
+		t.Fatalf("args=%q want %q", got, want)
 	}
 }
 

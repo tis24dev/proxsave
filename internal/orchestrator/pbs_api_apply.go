@@ -2,6 +2,7 @@ package orchestrator
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -236,12 +237,50 @@ func ensurePBSServicesForAPI(ctx context.Context, logger *logging.Logger) error 
 // pbsSectionCfg describes one PBS section-config file that is restored through
 // proxmox-backup-manager: the staged file, the command words in front of the verb
 // ("remote", "s3 endpoint", ...), the keys a list row is identified by (in the order
-// they are tried), and the flags whose value a failed create/update must not show.
+// they are tried), the flags whose value a failed create/update must not show, and
+// the keys whose value the file stores base64-encoded while create/update take it
+// plain, so it is decoded before it becomes a flag.
 type pbsSectionCfg struct {
-	file        string
-	command     []string
-	listKeys    []string
-	secretFlags []string
+	file         string
+	command      []string
+	listKeys     []string
+	secretFlags  []string
+	base64Values []string
+}
+
+// pbsSectionFlags builds the create/update flags of one section with
+// buildProxmoxManagerFlags, entry by entry, and decodes from standard base64 the value
+// of every key named in base64Keys. The staged value is trimmed before it is decoded,
+// the decoded value is passed as it is, so a password that begins or ends with a space
+// keeps it. A value that is not valid base64 is passed as staged, and one DEBUG line
+// names the section and the key, never the value.
+func pbsSectionFlags(logger *logging.Logger, kind, id string, entries []proxmoxNotificationEntry, base64Keys []string) []string {
+	if len(base64Keys) == 0 {
+		return buildProxmoxManagerFlags(entries)
+	}
+	decode := make(map[string]struct{}, len(base64Keys))
+	for _, k := range base64Keys {
+		decode[normalizeProxmoxCfgKey(k)] = struct{}{}
+	}
+	args := make([]string, 0, len(entries)*2)
+	for _, kv := range entries {
+		// One entry gives one "--key value" pair, or nothing when the key is skipped.
+		flag := buildProxmoxManagerFlags([]proxmoxNotificationEntry{kv})
+		if len(flag) != 2 {
+			continue
+		}
+		key := strings.TrimPrefix(flag[0], "--")
+		if _, ok := decode[key]; ok {
+			decoded, err := base64.StdEncoding.DecodeString(flag[1])
+			if err != nil {
+				logger.Debug("PBS API apply: %s %s: %s is not valid base64, passing the staged value unchanged", kind, id, key)
+			} else {
+				flag[1] = string(decoded)
+			}
+		}
+		args = append(args, flag...)
+	}
+	return args
 }
 
 // applyPBSSectionCfgViaAPI creates or updates every section of the staged cfg.file
@@ -304,7 +343,7 @@ func applyPBSSectionCfgViaAPI(ctx context.Context, logger *logging.Logger, stage
 	sort.Strings(ids)
 	for _, id := range ids {
 		s := desired[id]
-		flags := buildProxmoxManagerFlags(s.Entries)
+		flags := pbsSectionFlags(logger, kind, id, s.Entries, cfg.base64Values)
 		createArgs := commandArgs(append([]string{"create", id}, flags...)...)
 		if _, err := runPBSManagerSensitive(ctx, createArgs, cfg.secretFlags...); err != nil {
 			updateArgs := commandArgs(append([]string{"update", id}, flags...)...)
@@ -323,6 +362,9 @@ func applyPBSRemoteCfgViaAPI(ctx context.Context, logger *logging.Logger, stageR
 		command:     []string{"remote"},
 		listKeys:    []string{"id", "name"},
 		secretFlags: []string{"--password"},
+		// PBS writes the password as standard base64 ("dummyprobe" is stored as
+		// "ZHVtbXlwcm9iZQ==") and base64-encodes whatever --password receives.
+		base64Values: []string{"password"},
 	})
 }
 

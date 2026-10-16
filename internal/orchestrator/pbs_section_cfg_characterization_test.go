@@ -48,9 +48,12 @@ const (
 
 	// Distinctive secret values: none of them is a substring of anything else the
 	// cases produce, so finding one in an error or a log line can only mean a leak.
-	pbsSectionCharRemotePassword = "Rm7pw-Qz4Xk9-remote-secret"
-	pbsSectionCharS3AccessKey    = "AKx3-Wd8Lp2-s3-access"
-	pbsSectionCharS3SecretKey    = "Sk5v-Hj6Tn1-s3-secret"
+	// remote.cfg stages the password base64-encoded, as PBS writes it, and the apply
+	// passes it decoded: both forms are secrets.
+	pbsSectionCharRemotePassword       = "Rm7pw-Qz4Xk9-remote-secret"
+	pbsSectionCharRemotePasswordStaged = "Um03cHctUXo0WGs5LXJlbW90ZS1zZWNyZXQ="
+	pbsSectionCharS3AccessKey          = "AKx3-Wd8Lp2-s3-access"
+	pbsSectionCharS3SecretKey          = "Sk5v-Hj6Tn1-s3-secret"
 )
 
 var (
@@ -86,8 +89,12 @@ type pbsSectionCharKind struct {
 	apply        func(context.Context, *logging.Logger, string, bool) error
 	body         func(name string) []string
 	listKeyFirst string
-	// secrets are values that must never reach a returned error or a log line.
+	// secrets are values that must reach the runner and never a returned error or a
+	// log line.
 	secrets []string
+	// stagedSecrets are the staged forms of secrets that the apply decodes: they must
+	// never reach a returned error or a log line either.
+	stagedSecrets []string
 	// redactedFlags are the flags whose value a failed create/update must show as
 	// <redacted>.
 	redactedFlags []string
@@ -103,12 +110,13 @@ var pbsSectionCharKinds = []pbsSectionCharKind{
 			return []string{
 				"host " + n + ".pbs.example",
 				"auth-id sync@pbs",
-				"password " + pbsSectionCharRemotePassword,
+				"password " + pbsSectionCharRemotePasswordStaged,
 				"fingerprint aa:bb:cc",
 			}
 		},
 		listKeyFirst:  "id",
 		secrets:       []string{pbsSectionCharRemotePassword},
+		stagedSecrets: []string{pbsSectionCharRemotePasswordStaged},
 		redactedFlags: []string{"--password"},
 	},
 	{
@@ -735,7 +743,7 @@ func checkPBSSectionCharInvariants(t *testing.T, k pbsSectionCharKind, run pbsSe
 		}
 	}
 	errText := pbsSectionCharErrText(run.err)
-	for _, secret := range k.secrets {
+	for _, secret := range append(append([]string(nil), k.secrets...), k.stagedSecrets...) {
 		if strings.Contains(errText, secret) {
 			t.Errorf("secret %q leaked into the returned error: %s", secret, errText)
 		}
