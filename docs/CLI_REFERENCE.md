@@ -313,7 +313,7 @@ Use [configuration](CONFIGURATION.md#editing-the-configuration-from-the-dashboar
 
 While most configuration is in `configs/backup.env`, some settings can also be set in the environment for a single run.
 
-**Only a fixed allowlist of keys is honoured.** ProxSave reads a hardcoded list of about a hundred `backup.env` names out of the environment; every other key in the shipped template, roughly half of them, is ignored. There is no warning and no log line when that happens: the run silently uses the value from the file. For anything else not on the list, the file is the only way to set it.
+**Only a fixed allowlist of keys is honoured.** ProxSave reads a hardcoded list of about a hundred `backup.env` names out of the environment; every other key in the shipped template, roughly half of them, is ignored. There is no warning and no log line when that happens: the run silently uses the value from the file. For anything not on the list, the file is the only way to set it.
 
 Two consequences worth knowing:
 

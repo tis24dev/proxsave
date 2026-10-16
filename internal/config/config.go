@@ -1696,9 +1696,7 @@ type WebhookAuth struct {
 	Secret string
 }
 
-// PBSTokenFiles returns the files autoDetectPBSToken reads a PBS API token from, in the order it
-// tries them. The security check verifies the permissions of this same list, so a file read as a
-// credential is never left unchecked.
+// PBSTokenFiles returns the PBS token files whose permissions the security check verifies, in this order.
 func PBSTokenFiles(secureAccountPath string) []string {
 	if secureAccountPath == "" {
 		secureAccountPath = filepath.Join(defaultBaseDir(), "secure_account")
