@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -444,6 +445,7 @@ func TestCollectPBSConfigsEndToEndWithStubs(t *testing.T) {
 	cfg.PBSConfigPath = pbsRoot
 	cfg.PxarDatastoreConcurrency = 2
 
+	var tokenCalls atomic.Int32
 	deps := CollectorDeps{
 		LookPath: func(name string) (string, error) { return "/bin/" + name, nil },
 		RunCommand: func(ctx context.Context, name string, args ...string) ([]byte, error) {
@@ -457,6 +459,7 @@ func TestCollectPBSConfigsEndToEndWithStubs(t *testing.T) {
 				return []byte(`[{"userid":"user@pam"},{"userid":"second@pve"}]`), nil
 			}
 			if len(args) >= 3 && args[0] == "user" && args[1] == "list-tokens" {
+				tokenCalls.Add(1)
 				return []byte(`{"token":"ok"}`), nil
 			}
 			return []byte(`{}`), nil
@@ -478,6 +481,11 @@ func TestCollectPBSConfigsEndToEndWithStubs(t *testing.T) {
 
 	if _, err := os.Stat(filepath.Join(collector.tempDir, "var/lib/proxsave-info", "pbs", "access-control", "tokens.json")); err != nil {
 		t.Fatalf("expected tokens.json to be aggregated: %v", err)
+	}
+	// The tokens are collected once per user on a PBS-only host: the runtime bricks of
+	// the PBS recipe do it, nothing runs them a second time.
+	if got := tokenCalls.Load(); got != 2 {
+		t.Fatalf("list-tokens ran %d times for 2 users, want 2 (once per user)", got)
 	}
 
 	pxarMeta := filepath.Join(collector.tempDir, "var/lib/proxsave-info", "pbs", "pxar", "metadata", "store", "metadata.json")
