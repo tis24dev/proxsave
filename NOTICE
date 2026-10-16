@@ -885,7 +885,8 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 **Original Source:** BIP173 Reference Implementation by Takatoshi Nakagawa
 **Modified by:** The age Authors
 
-This package is included in-tree at `pkg/bech32/bech32.go` with full license headers.
+This package is included in-tree at `pkg/bech32/bech32.go` and `pkg/bech32/bech32_test.go` (which holds
+the decoder, used only by the tests), both with full license headers.
 
 ```
 Copyright (c) 2017 Takatoshi Nakagawa
