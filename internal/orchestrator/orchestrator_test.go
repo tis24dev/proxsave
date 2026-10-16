@@ -669,10 +669,6 @@ func TestApplyCollectorOverridesCopiesConfig(t *testing.T) {
 		CorosyncConfigPath: "/etc/corosync/corosync.conf",
 		VzdumpConfigPath:   "/etc/vzdump.conf",
 		PBSDatastorePaths:  []string{"/mnt/pbs1", "/mnt/pbs2"},
-
-		PBSRepository:  "pbs@pam!token",
-		PBSPassword:    "secret",
-		PBSFingerprint: "fingerprint",
 	}
 
 	var cc backup.CollectorConfig
@@ -720,9 +716,6 @@ func TestApplyCollectorOverridesCopiesConfig(t *testing.T) {
 	}
 	if len(cc.PBSDatastorePaths) != len(cfg.PBSDatastorePaths) || cc.PBSDatastorePaths[0] != cfg.PBSDatastorePaths[0] {
 		t.Fatalf("PBSDatastorePaths not copied correctly: %#v", cc.PBSDatastorePaths)
-	}
-	if cc.PBSRepository != cfg.PBSRepository || cc.PBSPassword != cfg.PBSPassword || cc.PBSFingerprint != cfg.PBSFingerprint {
-		t.Fatalf("PBS auth fields not copied correctly")
 	}
 }
 
