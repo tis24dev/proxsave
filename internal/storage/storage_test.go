@@ -372,9 +372,10 @@ func TestLocalStorageApplyRetentionHasLogInfoFalseWhenLogGlobFails(t *testing.T)
 
 	dir := t.TempDir()
 	base := t.TempDir()
-	badLogDir := filepath.Join(base, "[invalid")
-	if err := os.MkdirAll(badLogDir, 0o700); err != nil {
-		t.Fatalf("mkdir: %v", err)
+	// A file where the log folder should be: the folder cannot be read.
+	badLogDir := filepath.Join(base, "not-a-dir")
+	if err := os.WriteFile(badLogDir, []byte("x"), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
 	}
 
 	cfg := &config.Config{
@@ -993,32 +994,34 @@ func TestLocalStorageCountLogFiles(t *testing.T) {
 	t.Run("counts files", func(t *testing.T) {
 		logDir := t.TempDir()
 		for i := 0; i < 2; i++ {
-			name := fmt.Sprintf("backup-node-%d.log", i)
+			name := fmt.Sprintf("backup-node-2024010%d-000000.log", i+1)
 			if err := os.WriteFile(filepath.Join(logDir, name), []byte("log"), 0o600); err != nil {
 				t.Fatalf("write log: %v", err)
 			}
 		}
 		local := &LocalStorage{
-			config: &config.Config{LogPath: logDir},
-			logger: newTestLogger(),
+			config:   &config.Config{LogPath: logDir},
+			hostname: "node",
+			logger:   newTestLogger(),
 		}
 		if local.countLogFiles(context.Background()) != 2 {
 			t.Fatalf("countLogFiles() = %d, want 2", local.countLogFiles(context.Background()))
 		}
 	})
 
-	t.Run("glob error", func(t *testing.T) {
+	t.Run("unreadable log folder", func(t *testing.T) {
 		base := t.TempDir()
-		badDir := filepath.Join(base, "[invalid")
-		if err := os.MkdirAll(badDir, 0o700); err != nil {
-			t.Fatalf("mkdir: %v", err)
+		// A file where the log folder should be: the folder cannot be read.
+		badDir := filepath.Join(base, "not-a-dir")
+		if err := os.WriteFile(badDir, []byte("x"), 0o600); err != nil {
+			t.Fatalf("write: %v", err)
 		}
 		local := &LocalStorage{
 			config: &config.Config{LogPath: badDir},
 			logger: newTestLogger(),
 		}
 		if local.countLogFiles(context.Background()) != -1 {
-			t.Fatalf("expected -1 for glob error")
+			t.Fatalf("expected -1 for an unreadable log folder")
 		}
 	})
 }
@@ -1254,32 +1257,34 @@ func TestSecondaryStorageCountLogFiles(t *testing.T) {
 	t.Run("counts files", func(t *testing.T) {
 		logDir := t.TempDir()
 		for i := 0; i < 3; i++ {
-			name := fmt.Sprintf("backup-node-%d.log", i)
+			name := fmt.Sprintf("backup-node-2024010%d-000000.log", i+1)
 			if err := os.WriteFile(filepath.Join(logDir, name), []byte("log"), 0o600); err != nil {
 				t.Fatalf("write log: %v", err)
 			}
 		}
 		storage := &SecondaryStorage{
-			config: &config.Config{SecondaryLogPath: logDir},
-			logger: newTestLogger(),
+			config:   &config.Config{SecondaryLogPath: logDir},
+			hostname: "node",
+			logger:   newTestLogger(),
 		}
 		if got := storage.countLogFiles(context.Background()); got != 3 {
 			t.Fatalf("countLogFiles() = %d, want 3", got)
 		}
 	})
 
-	t.Run("glob error", func(t *testing.T) {
+	t.Run("unreadable log folder", func(t *testing.T) {
 		base := t.TempDir()
-		badDir := filepath.Join(base, "[invalid")
-		if err := os.MkdirAll(badDir, 0o700); err != nil {
-			t.Fatalf("mkdir: %v", err)
+		// A file where the log folder should be: the folder cannot be read.
+		badDir := filepath.Join(base, "not-a-dir")
+		if err := os.WriteFile(badDir, []byte("x"), 0o600); err != nil {
+			t.Fatalf("write: %v", err)
 		}
 		storage := &SecondaryStorage{
 			config: &config.Config{SecondaryLogPath: badDir},
 			logger: newTestLogger(),
 		}
 		if got := storage.countLogFiles(context.Background()); got != -1 {
-			t.Fatalf("expected -1 for glob error, got %d", got)
+			t.Fatalf("expected -1 for an unreadable log folder, got %d", got)
 		}
 	})
 }

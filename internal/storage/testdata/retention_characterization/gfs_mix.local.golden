@@ -86,7 +86,7 @@ DEBUG    Local storage: removing file <ROOT>/backups/pve-backup-20240410-120000.
 DEBUG    Local storage: file already removed <ROOT>/backups/pve-backup-20240410-120000.tar.zst.metadata.sha256
 DEBUG    Local logs: deleted log file backup-pve-20240410-120000.log
 DEBUG    Local storage: deleted backup and associated files: pve-backup-20240410-120000.tar.zst
-DEBUG    Local storage retention applied: deleted 3 backups (logs deleted: 1), 8 backups remaining (9 logs remaining)
+DEBUG    Local storage retention applied: deleted 3 backups (logs deleted: 1), 8 backups remaining (8 logs remaining)
 DEBUG    local orphan logs: scan path=<ROOT>/logs pattern=backup-*.log
 DEBUG    local orphan logs: listed=8 with_archive=4 orphans=3 oldest_kept=20231201-120000
 DEBUG    local orphan logs: kept backup-pve-20240101-120000.log reason=newer_than_oldest_kept

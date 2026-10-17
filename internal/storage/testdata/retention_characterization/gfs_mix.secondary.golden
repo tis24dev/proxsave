@@ -47,7 +47,7 @@ DEBUG    Removing file: <ROOT>/backups/pve-backup-20240410-120000.tar.zst.metada
 DEBUG    Secondary storage: file already removed <ROOT>/backups/pve-backup-20240410-120000.tar.zst.metadata.sha256
 DEBUG    Secondary logs: deleted log file backup-pve-20240410-120000.log
 DEBUG    Deleted secondary backup: pve-backup-20240410-120000.tar.zst
-DEBUG    Secondary storage retention applied: deleted 3 backups (logs deleted: 1), 8 backups remaining (9 logs remaining)
+DEBUG    Secondary storage retention applied: deleted 3 backups (logs deleted: 1), 8 backups remaining (8 logs remaining)
 DEBUG    secondary orphan logs: scan path=<ROOT>/logs pattern=backup-*.log
 DEBUG    secondary orphan logs: listed=8 with_archive=4 orphans=3 oldest_kept=20231201-120000
 DEBUG    secondary orphan logs: kept backup-pve-20240101-120000.log reason=newer_than_oldest_kept

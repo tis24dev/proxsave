@@ -3,5 +3,6 @@
 --- log folder variable not set ---
 --- log folder missing ---
 --- log folder ---
---- log folder the glob cannot parse ---
-DEBUG    Secondary logs: failed to count log files: syntax error in pattern
+--- log folder with a glob metacharacter ---
+--- log folder that cannot be read ---
+DEBUG    Secondary logs: failed to count log files: open <ROOT>/not-a-dir: not a directory

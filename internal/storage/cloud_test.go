@@ -1025,6 +1025,7 @@ func TestCloudStorageCountLogFiles_NormalizesPathOnlyCloudLogPath(t *testing.T) 
 			},
 		},
 	}
+	cs.hostname = "host" // the log in the listing is this host's
 	cs.execCommand = queue.exec
 
 	if got := cs.countLogFiles(context.Background()); got != 1 {
@@ -1764,5 +1765,30 @@ func TestCloudCountLogFilesWithoutALogFolderIsNoCount(t *testing.T) {
 				t.Fatalf("no rclone call expected, got %v", queue.calls)
 			}
 		})
+	}
+}
+
+// The cloud log count counts this host's run logs only, like the orphan-log
+// pass: another host's log in a shared folder, or a file outside the
+// backup-<host>-<timestamp>.log form, is not one of this destination's logs.
+func TestCloudCountLogFilesCountsThisHostsRunLogsOnly(t *testing.T) {
+	cfg := &config.Config{CloudEnabled: true, CloudRemote: "remote", CloudLogPath: "remote:logs", RcloneRetries: 1}
+	cs := newCloudStorageForTest(cfg)
+	cs.hostname = "node"
+	queue := &commandQueue{
+		t: t,
+		queue: []queuedResponse{{
+			name: "rclone",
+			args: []string{"lsf", "remote:logs", "--files-only"},
+			out: "backup-node-20250101-010101.log\n" +
+				"backup-node-20250102-010101.log\n" +
+				"backup-other-20250101-010101.log\n" +
+				"backup-node-latest.log\n" +
+				"notes.txt\n",
+		}},
+	}
+	cs.execCommand = queue.exec
+	if got := cs.countLogFiles(context.Background()); got != 2 {
+		t.Fatalf("countLogFiles() = %d; want 2", got)
 	}
 }

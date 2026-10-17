@@ -57,7 +57,7 @@ INFO       Not deleted: pve-backup-20240601-120000.tar.zst: directory not empty
 DEBUG    Secondary storage: keeping the sidecars of pve-backup-20240601-120000.tar.zst, the backup was not deleted
 DEBUG    Secondary storage: keeping the log of pve-backup-20240601-120000.tar.zst, the backup was not deleted
 DEBUG    Secondary Storage: retention - left pve-backup-20240601-120000.tar.zst in place: failed to remove 1 file(s): [<ROOT>/backups/pve-backup-20240601-120000.tar.zst]
-DEBUG    Secondary storage retention applied: deleted 3 backups (logs deleted: 1), 3 backups remaining (3 logs remaining)
+DEBUG    Secondary storage retention applied: deleted 3 backups (logs deleted: 1), 3 backups remaining (2 logs remaining)
 DEBUG    secondary orphan logs: scan path=<ROOT>/logs pattern=backup-*.log
 DEBUG    secondary orphan logs: listed=2 with_archive=2 orphans=0 oldest_kept=20240601-120000
 DEBUG    secondary orphan logs: result deleted=0 not_deleted=0 kept=0

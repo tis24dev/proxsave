@@ -694,7 +694,7 @@ func charScenarios() []charScenario {
 					),
 					removed: []string{charArchiveName(charHost, "2024-04-10"), charArchiveName(charHost, "2023-11-01"), charArchiveName(charHost, "2022-01-10")},
 					summary: RetentionSummary{
-						BackupsDeleted: 3, BackupsRemaining: 8, LogsDeleted: 2, LogsRemaining: 8, HasLogInfo: true,
+						BackupsDeleted: 3, BackupsRemaining: 8, LogsDeleted: 2, LogsRemaining: 7, HasLogInfo: true,
 						ScopeValid: true, Owned: 9, PassCompleted: true,
 						Planned: 3, Skipped: 1, HasLogPath: true,
 					},
@@ -714,7 +714,7 @@ func charScenarios() []charScenario {
 					gone:    charFailureGone(),
 					removed: []string{charArchiveName(charHost, "2024-05-01"), charArchiveName(charHost, "2024-04-01"), charArchiveName(charHost, "2024-03-01")},
 					summary: RetentionSummary{
-						BackupsDeleted: 3, BackupsRemaining: 3, LogsDeleted: 1, LogsRemaining: 3, HasLogInfo: true,
+						BackupsDeleted: 3, BackupsRemaining: 3, LogsDeleted: 1, LogsRemaining: 2, HasLogInfo: true,
 						ScopeValid: true, Owned: 3, PassCompleted: true,
 						Planned: 4, NotDeleted: 1, LeftBehind: 1, LogsNotDeleted: 1, HasLogPath: true,
 					},
@@ -746,9 +746,9 @@ func charScenarios() []charScenario {
 			},
 		},
 		{
-			// GFS with a log folder whose name the log count's glob cannot parse: the
-			// count fails, the summary has no log info, the logs are still deleted.
-			name:   "gfs_log_count_unavailable",
+			// GFS with a log folder whose name holds a glob metacharacter: the log
+			// count reads the folder, so it is counted like any other.
+			name:   "gfs_log_dir_glob_chars",
 			logDir: "logs[",
 			policy: charGFS,
 			setup: func(e *charEnv) {
@@ -765,7 +765,7 @@ func charScenarios() []charScenario {
 					),
 					removed: []string{charArchiveName(charHost, "2024-05-01"), charArchiveName(charHost, "2024-04-01")},
 					summary: RetentionSummary{
-						BackupsDeleted: 2, BackupsRemaining: 2, LogsDeleted: 2, LogsRemaining: 0, HasLogInfo: false,
+						BackupsDeleted: 2, BackupsRemaining: 2, LogsDeleted: 2, LogsRemaining: 2, HasLogInfo: true,
 						ScopeValid: true, Owned: 2, PassCompleted: true, Planned: 2, HasLogPath: true,
 					},
 				}
@@ -868,7 +868,7 @@ func charScenarios() []charScenario {
 					gone:    charFailureGone(),
 					removed: []string{charArchiveName(charHost, "2024-05-01"), charArchiveName(charHost, "2024-04-01"), charArchiveName(charHost, "2024-03-01")},
 					summary: RetentionSummary{
-						BackupsDeleted: 3, BackupsRemaining: 2, LogsDeleted: 1, LogsRemaining: 3, HasLogInfo: true,
+						BackupsDeleted: 3, BackupsRemaining: 2, LogsDeleted: 1, LogsRemaining: 2, HasLogInfo: true,
 						ScopeValid: true, Owned: 2, PassCompleted: true,
 						Planned: 4, NotDeleted: 1, LeftBehind: 1, LogsNotDeleted: 1, HasLogPath: true,
 					},
@@ -898,8 +898,8 @@ func charScenarios() []charScenario {
 			},
 		},
 		{
-			// Simple with a log folder the log count's glob cannot parse.
-			name:   "simple_log_count_unavailable",
+			// Simple with a log folder whose name holds a glob metacharacter.
+			name:   "simple_log_dir_glob_chars",
 			logDir: "logs[",
 			policy: RetentionConfig{Policy: "simple", MaxBackups: 1},
 			setup: func(e *charEnv) {
@@ -916,7 +916,7 @@ func charScenarios() []charScenario {
 					),
 					removed: []string{charArchiveName(charHost, "2024-06-10"), charArchiveName(charHost, "2024-06-01")},
 					summary: RetentionSummary{
-						BackupsDeleted: 2, BackupsRemaining: 1, LogsDeleted: 2, HasLogInfo: false,
+						BackupsDeleted: 2, BackupsRemaining: 1, LogsDeleted: 2, LogsRemaining: 1, HasLogInfo: true,
 						ScopeValid: true, Owned: 1, PassCompleted: true, Planned: 2, HasLogPath: true,
 					},
 				}

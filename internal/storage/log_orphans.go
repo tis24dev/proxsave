@@ -264,6 +264,20 @@ func listLogFolder(ctx context.Context, op, dir string, timeout time.Duration) (
 	})
 }
 
+// countOwnRunLogs counts the run logs of this host among the names of a log folder,
+// with the filter of the orphan-log pass: a backup-<host>-<timestamp>.log whose host
+// this machine answers to. A shared log folder also holds other hosts' logs, which
+// are not this destination's logs remaining.
+func countOwnRunLogs(names []string, hostname string, aliases []string) int {
+	count := 0
+	for _, name := range names {
+		if host, _, ok := runLogKey(name); ok && hostOwnsName(host, hostname, aliases...) {
+			count++
+		}
+	}
+	return count
+}
+
 // mergeOrphanLogs folds an orphan-log pass into the pass's summary and tally: the
 // orphans it deleted are logs deleted, the ones it could not delete are logs not
 // deleted.

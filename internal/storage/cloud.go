@@ -2401,18 +2401,13 @@ func (c *CloudStorage) countLogFiles(ctx context.Context) int {
 	}
 	c.markCloudLogPathAvailable()
 
-	count := 0
-	lines := strings.Split(string(output.stdout), "\n")
-	for _, line := range lines {
-		name := strings.TrimSpace(line)
-		if name == "" || strings.HasSuffix(name, "/") {
-			continue
-		}
-		if strings.HasPrefix(name, "backup-") && strings.HasSuffix(name, ".log") {
-			count++
+	var names []string
+	for _, line := range strings.Split(string(output.stdout), "\n") {
+		if name := strings.TrimSpace(line); name != "" && !strings.HasSuffix(name, "/") {
+			names = append(names, name)
 		}
 	}
-	return count
+	return countOwnRunLogs(names, c.hostname, c.hostAliases)
 }
 
 func (c *CloudStorage) cloudLogBase(basePath string) string {

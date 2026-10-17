@@ -14,7 +14,6 @@ DEBUG    End local list (ok, duration=<D>)
 DEBUG    Local storage: retention answers to pve (server identity unknown)
 DEBUG    Simple retention -> current: 3, limit: 1, to_delete: 2
 INFO       Backups: 3, limit: 1
-DEBUG    Local logs: failed to count log files: syntax error in pattern
 DEBUG    Deleting old backup: pve-backup-20240601-120000.tar.zst (created: 2024-06-01 12:00:00)
 DEBUG    Local storage: deleting backup pve-backup-20240601-120000.tar.zst
 DEBUG    Local storage: removing file <ROOT>/backups/pve-backup-20240601-120000.tar.zst.bundle.tar
@@ -41,7 +40,7 @@ DEBUG    Local storage: removing file <ROOT>/backups/pve-backup-20240610-120000.
 DEBUG    Local storage: file already removed <ROOT>/backups/pve-backup-20240610-120000.tar.zst.metadata.sha256
 DEBUG    Local logs: deleted log file backup-pve-20240610-120000.log
 DEBUG    Local storage: deleted backup and associated files: pve-backup-20240610-120000.tar.zst
-DEBUG    Local storage retention applied: deleted 2 backups (logs deleted: 2), 1 backups remaining
+DEBUG    Local storage retention applied: deleted 2 backups (logs deleted: 2), 1 backups remaining (1 logs remaining)
 DEBUG    local orphan logs: scan path=<ROOT>/logs[ pattern=backup-*.log
 DEBUG    local orphan logs: listed=1 with_archive=1 orphans=0 oldest_kept=20240620-120000
 DEBUG    local orphan logs: result deleted=0 not_deleted=0 kept=0

@@ -54,13 +54,13 @@ func charPrivates(t *testing.T, b any) charPrivate {
 func charBare(flavor string, logger *logging.Logger, basePath, logDir, decoy string, withConfig bool) any {
 	switch flavor {
 	case "local":
-		l := &LocalStorage{logger: logger, basePath: basePath}
+		l := &LocalStorage{logger: logger, basePath: basePath, hostname: charHost}
 		if withConfig {
 			l.config = &config.Config{BackupPath: basePath, LogPath: logDir, SecondaryLogPath: decoy}
 		}
 		return l
 	default:
-		s := &SecondaryStorage{logger: logger, basePath: basePath}
+		s := &SecondaryStorage{logger: logger, basePath: basePath, hostname: charHost}
 		if withConfig {
 			s.config = &config.Config{SecondaryEnabled: true, SecondaryPath: basePath, SecondaryLogPath: logDir, LogPath: decoy}
 		}
@@ -191,8 +191,9 @@ func TestRetentionCharacterizationDeleteAssociatedLog(t *testing.T) {
 	}
 }
 
-// countLogFiles counts what the "backup-*.log" glob matches, directories and other
-// hosts' logs included, and answers -1 when it cannot count.
+// countLogFiles counts this host's run log files, as the orphan-log pass sees them:
+// not a directory, not another host's log, not a file outside the
+// backup-<host>-<timestamp>.log form. It answers -1 when it cannot count.
 func TestRetentionCharacterizationCountLogFiles(t *testing.T) {
 	for _, fl := range charFlavors {
 		t.Run(fl.name, func(t *testing.T) {
@@ -207,6 +208,9 @@ func TestRetentionCharacterizationCountLogFiles(t *testing.T) {
 				t.Fatalf("mkdir: %v", err)
 			}
 			writeTestFile(t, filepath.Join(badDir, charLogName(charHost, "2024-06-20")), "log")
+			// A log folder variable naming a file: the folder cannot be read.
+			notADir := filepath.Join(e.root, "not-a-dir")
+			writeTestFile(t, notADir, "x")
 			logger, sink := newCharLogger()
 			backend := fl.build(t, e, logger)
 			before := e.snapshot()
@@ -226,8 +230,9 @@ func TestRetentionCharacterizationCountLogFiles(t *testing.T) {
 				}, -1},
 				{"log folder variable not set", func() int { return bare("").countLogs(ctx) }, -1},
 				{"log folder missing", func() int { return bare(filepath.Join(e.root, "missing")).countLogs(ctx) }, 0},
-				{"log folder", func() int { return charPrivates(t, backend).countLogs(ctx) }, 3},
-				{"log folder the glob cannot parse", func() int { return bare(badDir).countLogs(ctx) }, -1},
+				{"log folder", func() int { return charPrivates(t, backend).countLogs(ctx) }, 1},
+				{"log folder with a glob metacharacter", func() int { return bare(badDir).countLogs(ctx) }, 1},
+				{"log folder that cannot be read", func() int { return bare(notADir).countLogs(ctx) }, -1},
 			}
 			for _, c := range cases {
 				sink.mark(c.label)

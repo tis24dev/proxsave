@@ -251,16 +251,14 @@ func (r fsRetention) countLogFiles(ctx context.Context) int {
 		// No log folder: there is no count of logs, not a count of zero.
 		return -1
 	}
-	pattern := filepath.Join(logPath, "backup-*.log")
-	// Bounded against a dead/stale mount, consistent with the main backup glob.
-	matches, err := safefs.Run(ctx, r.text.logGlobOp, r.basePath, fsIoTimeout(r.config), func() ([]string, error) {
-		return filepath.Glob(pattern)
-	})
+	// Bounded against a dead/stale mount, consistent with the main backup glob. The
+	// regular files only, like the orphan-log pass.
+	names, err := listLogFolder(ctx, r.text.logGlobOp, logPath, fsIoTimeout(r.config))
 	if err != nil {
 		r.logger.Debug("%s: failed to count log files: %v", r.text.logs, err)
 		return -1
 	}
-	return len(matches)
+	return countOwnRunLogs(names, r.hostname, r.aliases)
 }
 
 // pruneOrphanLogs runs the orphan-log pass (log_orphans.go) on the destination's log
