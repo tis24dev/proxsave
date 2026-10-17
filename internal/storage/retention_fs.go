@@ -391,6 +391,11 @@ func (r fsRetention) deleteBackups(ctx context.Context, toDelete []*types.Backup
 
 		logDeleted, err := r.deleteBackup(ctx, backup.BackupFile)
 		if err != nil {
+			if ctxErr := ctx.Err(); ctxErr != nil && errors.Is(err, ctxErr) {
+				// Cancelled before this backup was touched: stop as the check above
+				// does, without counting it as not deleted.
+				return deleted, ctxErr
+			}
 			if !errors.Is(err, errBackupSidecarDeleteOnly) {
 				r.text.notDeleted(r.logger, backup.BackupFile, err)
 				r.tally.notDeleted++

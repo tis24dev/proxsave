@@ -924,9 +924,9 @@ func charScenarios() []charScenario {
 		},
 		{
 			// Simple, cancelled while the second of three deletions starts: the first
-			// backup is gone with its log, the second is counted not deleted, the
-			// third is never reached, the pass returns context.Canceled and publishes
-			// no counts.
+			// backup is gone with its log, the pass stops before touching the second,
+			// which is not counted as not deleted, the third is never reached, the
+			// pass returns context.Canceled and publishes no counts.
 			name:     "simple_cancel",
 			logDir:   "logs",
 			policy:   RetentionConfig{Policy: "simple", MaxBackups: 1},
@@ -943,7 +943,7 @@ func charScenarios() []charScenario {
 					gone:    charJoin(charSet("2024-05-01"), []string{charLogRel("logs", "2024-05-01")}),
 					removed: []string{charArchiveName(charHost, "2024-05-01")},
 					summary: RetentionSummary{
-						ScopeValid: true, Owned: 3, PassCompleted: false, Planned: 3, NotDeleted: 1,
+						ScopeValid: true, Owned: 3, PassCompleted: false, Planned: 3,
 					},
 				}
 			},
@@ -1189,7 +1189,7 @@ func TestRetentionCharacterizationGFSCancel(t *testing.T) {
 			}
 			e.checkFiles(before, charJoin(charSet(order[0]), []string{charLogRel("logs", order[0])}))
 			checkRemoved(t, backend, []string{charArchiveName(charHost, order[0])})
-			want := RetentionSummary{ScopeValid: true, Owned: 4, PassCompleted: false, Planned: 3, NotDeleted: 1}
+			want := RetentionSummary{ScopeValid: true, Owned: 4, PassCompleted: false, Planned: 3}
 			if got := backend.LastRetentionSummary(); got != want {
 				t.Errorf("LastRetentionSummary\n got %+v\nwant %+v", got, want)
 			}
