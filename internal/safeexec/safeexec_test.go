@@ -67,6 +67,20 @@ func TestCommandContextAllowsThePBSInventoryCommands(t *testing.T) {
 	}
 }
 
+// The restore validates the staged /etc/sudoers with "visudo -c -f <file>"
+// (internal/orchestrator/restore_accounts.go). Missing from the allowlist, the
+// validation always failed and /etc/sudoers was never restored.
+func TestCommandContextAllowsVisudoCheck(t *testing.T) {
+	args := []string{"visudo", "-c", "-f", "/tmp/stage/etc/sudoers"}
+	cmd, err := CommandContext(context.Background(), args[0], args[1:]...)
+	if err != nil {
+		t.Fatalf("CommandContext(visudo) error = %v", err)
+	}
+	if got := cmd.Args; !reflect.DeepEqual(got, args) {
+		t.Fatalf("CommandContext(visudo) args = %q", got)
+	}
+}
+
 func TestCommandContextAllowsSQLiteSnapshot(t *testing.T) {
 	args := []string{
 		"-cmd",

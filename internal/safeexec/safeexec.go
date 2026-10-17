@@ -263,6 +263,9 @@ var allowedCommandFactories = map[string]commandFactory{
 	"vgs": func(ctx context.Context, args ...string) *exec.Cmd {
 		return withArgs(exec.CommandContext(ctx, "vgs"), args...)
 	},
+	"visudo": func(ctx context.Context, args ...string) *exec.Cmd {
+		return withArgs(exec.CommandContext(ctx, "visudo"), args...)
+	},
 	"which": func(ctx context.Context, args ...string) *exec.Cmd {
 		return withArgs(exec.CommandContext(ctx, "which"), args...)
 	},
