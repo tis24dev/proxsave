@@ -481,11 +481,12 @@ func TestPBSAPIApply_CreateUpdateBothFailErrors(t *testing.T) {
 			if err == nil {
 				t.Fatalf("expected error")
 			}
-			if !strings.Contains(err.Error(), "object(s) not applied") {
-				t.Fatalf("expected the not-applied summary, got: %s", err.Error())
+			var incomplete *pbsSectionRestoreIncompleteError
+			if !errors.As(err, &incomplete) || len(incomplete.notApplied) != 1 {
+				t.Fatalf("expected the block's not-applied error, got: %T %v", err, err)
 			}
-			if !strings.Contains(logBuf.String(), "create failed") || !strings.Contains(logBuf.String(), "update failed") {
-				t.Fatalf("expected create/update errors in the warning, log: %s", logBuf.String())
+			if !strings.Contains(logBuf.String(), `create failed error="create failed"`) || !strings.Contains(logBuf.String(), `update failed error="update failed"`) {
+				t.Fatalf("expected create/update errors in the DEBUG lines, log: %s", logBuf.String())
 			}
 		})
 	}
@@ -698,8 +699,10 @@ func TestApplyPBSRemoteCfgViaAPI_RedactsPasswordOnFailure(t *testing.T) {
 	if strings.Contains(logBuf.String(), "secret1") {
 		t.Fatalf("expected password to be redacted in the log, got: %s", logBuf.String())
 	}
-	if !strings.Contains(logBuf.String(), "<redacted>") {
-		t.Fatalf("expected <redacted> in the warning, log: %s", logBuf.String())
+	// The block logs what PBS answered, never the command line that carried the
+	// password; the redaction of that command line is tested on runPBSManagerRedacted.
+	if !strings.Contains(logBuf.String(), `remote=r1 create failed error="create failed"`) || strings.Contains(logBuf.String(), "--password") {
+		t.Fatalf("expected the refusal without the command line in the log: %s", logBuf.String())
 	}
 }
 
@@ -733,8 +736,8 @@ func TestApplyPBSRemoteCfgViaAPI_DecodesBase64Password(t *testing.T) {
 		if !reflect.DeepEqual(runner.calls, want) {
 			t.Fatalf("calls=%v want %v", runner.calls, want)
 		}
-		if logBuf.Len() != 0 {
-			t.Fatalf("expected no log line for a valid base64 password, got: %s", logBuf.String())
+		if strings.Contains(logBuf.String(), "base64") {
+			t.Fatalf("expected no base64 line for a valid base64 password, got: %s", logBuf.String())
 		}
 	})
 
@@ -767,8 +770,10 @@ func TestApplyPBSRemoteCfgViaAPI_DecodesBase64Password(t *testing.T) {
 				t.Fatalf("password form %q leaked into the log: %s", secret, logBuf.String())
 			}
 		}
-		if n := strings.Count(logBuf.String(), "--password <redacted>"); n != 2 {
-			t.Fatalf("expected --password <redacted> twice (create and update) in the warning, got %d: %s", n, logBuf.String())
+		// The block logs what PBS answered to create and update, never the command
+		// line that carried the password.
+		if !strings.Contains(logBuf.String(), `create failed error="create failed"`) || !strings.Contains(logBuf.String(), `update failed error="update failed"`) || strings.Contains(logBuf.String(), "--password") {
+			t.Fatalf("expected both refusals without the command line in the log: %s", logBuf.String())
 		}
 	})
 
@@ -793,7 +798,12 @@ func TestApplyPBSRemoteCfgViaAPI_DecodesBase64Password(t *testing.T) {
 		if !reflect.DeepEqual(runner.calls, want) {
 			t.Fatalf("calls=%v want %v", runner.calls, want)
 		}
-		lines := strings.Split(strings.TrimRight(logBuf.String(), "\n"), "\n")
+		var lines []string
+		for _, line := range strings.Split(strings.TrimRight(logBuf.String(), "\n"), "\n") {
+			if strings.Contains(line, "base64") {
+				lines = append(lines, line)
+			}
+		}
 		if len(lines) != 1 || !strings.Contains(lines[0], "DEBUG") || !strings.Contains(lines[0], "r1") || !strings.Contains(lines[0], "password") {
 			t.Fatalf("expected one DEBUG line naming r1 and password, got: %q", logBuf.String())
 		}
@@ -910,8 +920,10 @@ func TestApplyPBSS3CfgViaAPI_RedactsKeysOnFailure(t *testing.T) {
 	if strings.Contains(logBuf.String(), "access1") || strings.Contains(logBuf.String(), "secret1") {
 		t.Fatalf("expected keys to be redacted in the log, got: %s", logBuf.String())
 	}
-	if !strings.Contains(logBuf.String(), "<redacted>") {
-		t.Fatalf("expected <redacted> in the warning, log: %s", logBuf.String())
+	// The block logs what PBS answered, never the command line that carried the
+	// keys; the redaction of that command line is tested on runPBSManagerRedacted.
+	if !strings.Contains(logBuf.String(), `s3-endpoint=e1 create failed error="create failed"`) || strings.Contains(logBuf.String(), "--access-key") || strings.Contains(logBuf.String(), "--secret-key") {
+		t.Fatalf("expected the refusal without the command line in the log: %s", logBuf.String())
 	}
 }
 

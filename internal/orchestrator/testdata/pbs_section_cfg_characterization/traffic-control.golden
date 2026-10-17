@@ -12,7 +12,7 @@ commands:
   (none)
 error: (nil)
 log:
-  (none)
+  [<TIME>] DEBUG    PBS traffic control rule restore: staged=/stage/etc/proxmox-backup/traffic-control.cfg not in the backup action=skip
 
 ### absent-strict
 strict: true
@@ -25,7 +25,7 @@ commands:
   (none)
 error: (nil)
 log:
-  (none)
+  [<TIME>] DEBUG    PBS traffic control rule restore: staged=/stage/etc/proxmox-backup/traffic-control.cfg not in the backup action=skip
 
 ### read-error
 strict: true
@@ -63,7 +63,11 @@ commands:
   (none)
 error: (nil)
 log:
-  (none)
+  [<TIME>] INFO     Restoring PBS traffic control rules...
+  [<TIME>] DEBUG    PBS traffic control rule restore: mode=merge staged=/stage/etc/proxmox-backup/traffic-control.cfg
+  [<TIME>] DEBUG    PBS traffic control rule restore: backup traffic-control-rules=0 names=
+  [<TIME>] INFO       Traffic control rules to restore: 0
+  [<TIME>] SKIP     PBS traffic control configuration: nothing to restore
 
 ### empty-file-strict
 strict: true
@@ -82,7 +86,21 @@ commands:
   proxmox-backup-manager traffic-control remove old-b
 error: (nil)
 log:
-  (none)
+  [<TIME>] DEBUG    PBS traffic control rule restore: reading current traffic-control-rules cmd="proxmox-backup-manager traffic-control list --output-format=json"
+  [<TIME>] INFO     Restoring PBS traffic control rules...
+  [<TIME>] DEBUG    PBS traffic control rule restore: mode=clean staged=/stage/etc/proxmox-backup/traffic-control.cfg
+  [<TIME>] DEBUG    PBS traffic control rule restore: backup traffic-control-rules=0 names=
+  [<TIME>] INFO       Traffic control rules to restore: 0
+  [<TIME>] DEBUG    PBS traffic control rule restore: current traffic-control-rules=2 names=old-a,old-b
+  [<TIME>] DEBUG    PBS traffic control rule restore: traffic-control-rule=old-a not in backup action=remove
+  [<TIME>] DEBUG    PBS traffic control rule restore: traffic-control-rule=old-a removed
+  [<TIME>] INFO     Traffic control rule old-a is configured on this PBS but not present in the backup
+  [<TIME>] INFO     ✓ PBS traffic control rule old-a: removed
+  [<TIME>] DEBUG    PBS traffic control rule restore: traffic-control-rule=old-b not in backup action=remove
+  [<TIME>] DEBUG    PBS traffic control rule restore: traffic-control-rule=old-b removed
+  [<TIME>] INFO     Traffic control rule old-b is configured on this PBS but not present in the backup
+  [<TIME>] INFO     ✓ PBS traffic control rule old-b: removed
+  [<TIME>] INFO     ✓ PBS traffic control configuration: applied
 
 ### nameless-header
 strict: false
@@ -106,7 +124,14 @@ commands:
   proxmox-backup-manager traffic-control create alpha --network 10.0.0.0/8 --rate-in 10MB --comment rule-alpha --rule: "" --comment stray-body
 error: (nil)
 log:
-  (none)
+  [<TIME>] INFO     Restoring PBS traffic control rules...
+  [<TIME>] DEBUG    PBS traffic control rule restore: mode=merge staged=/stage/etc/proxmox-backup/traffic-control.cfg
+  [<TIME>] DEBUG    PBS traffic control rule restore: backup traffic-control-rules=1 names=alpha
+  [<TIME>] INFO       Traffic control rules to restore: 1
+  [<TIME>] INFO       Names: alpha
+  [<TIME>] DEBUG    PBS traffic control rule restore: traffic-control-rule=alpha created
+  [<TIME>] INFO     ✓ PBS traffic control rule alpha: applied
+  [<TIME>] INFO     ✓ PBS traffic control configuration: applied
 
 ### create-sorted
 strict: false
@@ -142,7 +167,20 @@ commands:
   proxmox-backup-manager traffic-control create delta --network 10.0.0.0/8 --rate-in 10MB --comment rule-delta
 error: (nil)
 log:
-  (none)
+  [<TIME>] INFO     Restoring PBS traffic control rules...
+  [<TIME>] DEBUG    PBS traffic control rule restore: mode=merge staged=/stage/etc/proxmox-backup/traffic-control.cfg
+  [<TIME>] DEBUG    PBS traffic control rule restore: backup traffic-control-rules=4 names=alpha,bravo,charlie,delta
+  [<TIME>] INFO       Traffic control rules to restore: 4
+  [<TIME>] INFO       Names: alpha, bravo, charlie, delta
+  [<TIME>] DEBUG    PBS traffic control rule restore: traffic-control-rule=alpha created
+  [<TIME>] INFO     ✓ PBS traffic control rule alpha: applied
+  [<TIME>] DEBUG    PBS traffic control rule restore: traffic-control-rule=bravo created
+  [<TIME>] INFO     ✓ PBS traffic control rule bravo: applied
+  [<TIME>] DEBUG    PBS traffic control rule restore: traffic-control-rule=charlie created
+  [<TIME>] INFO     ✓ PBS traffic control rule charlie: applied
+  [<TIME>] DEBUG    PBS traffic control rule restore: traffic-control-rule=delta created
+  [<TIME>] INFO     ✓ PBS traffic control rule delta: applied
+  [<TIME>] INFO     ✓ PBS traffic control configuration: applied
 
 ### flag-building
 strict: false
@@ -163,7 +201,14 @@ commands:
   proxmox-backup-manager traffic-control create alpha --network 10.0.0.0/8 --rate-in 10MB --comment rule-alpha --mixed-case-key "value  with  inner  spaces"
 error: (nil)
 log:
-  (none)
+  [<TIME>] INFO     Restoring PBS traffic control rules...
+  [<TIME>] DEBUG    PBS traffic control rule restore: mode=merge staged=/stage/etc/proxmox-backup/traffic-control.cfg
+  [<TIME>] DEBUG    PBS traffic control rule restore: backup traffic-control-rules=1 names=alpha
+  [<TIME>] INFO       Traffic control rules to restore: 1
+  [<TIME>] INFO       Names: alpha
+  [<TIME>] DEBUG    PBS traffic control rule restore: traffic-control-rule=alpha created
+  [<TIME>] INFO     ✓ PBS traffic control rule alpha: applied
+  [<TIME>] INFO     ✓ PBS traffic control configuration: applied
 
 ### duplicate-section
 strict: false
@@ -187,7 +232,14 @@ commands:
   proxmox-backup-manager traffic-control create alpha --network 10.0.0.0/8 --rate-in 10MB --comment rule-alpha --comment second-copy
 error: (nil)
 log:
-  (none)
+  [<TIME>] INFO     Restoring PBS traffic control rules...
+  [<TIME>] DEBUG    PBS traffic control rule restore: mode=merge staged=/stage/etc/proxmox-backup/traffic-control.cfg
+  [<TIME>] DEBUG    PBS traffic control rule restore: backup traffic-control-rules=1 names=alpha
+  [<TIME>] INFO       Traffic control rules to restore: 1
+  [<TIME>] INFO       Names: alpha
+  [<TIME>] DEBUG    PBS traffic control rule restore: traffic-control-rule=alpha created
+  [<TIME>] INFO     ✓ PBS traffic control rule alpha: applied
+  [<TIME>] INFO     ✓ PBS traffic control configuration: applied
 
 ### foreign-section-type
 strict: false
@@ -209,7 +261,16 @@ commands:
   proxmox-backup-manager traffic-control create zulu --comment from-elsewhere
 error: (nil)
 log:
-  (none)
+  [<TIME>] INFO     Restoring PBS traffic control rules...
+  [<TIME>] DEBUG    PBS traffic control rule restore: mode=merge staged=/stage/etc/proxmox-backup/traffic-control.cfg
+  [<TIME>] DEBUG    PBS traffic control rule restore: backup traffic-control-rules=2 names=alpha,zulu
+  [<TIME>] INFO       Traffic control rules to restore: 2
+  [<TIME>] INFO       Names: alpha, zulu
+  [<TIME>] DEBUG    PBS traffic control rule restore: traffic-control-rule=alpha created
+  [<TIME>] INFO     ✓ PBS traffic control rule alpha: applied
+  [<TIME>] DEBUG    PBS traffic control rule restore: traffic-control-rule=zulu created
+  [<TIME>] INFO     ✓ PBS traffic control rule zulu: applied
+  [<TIME>] INFO     ✓ PBS traffic control configuration: applied
 
 ### create-fails-update-ok
 strict: false
@@ -240,7 +301,19 @@ commands:
   proxmox-backup-manager traffic-control create charlie --network 10.0.0.0/8 --rate-in 10MB --comment rule-charlie
 error: (nil)
 log:
-  (none)
+  [<TIME>] INFO     Restoring PBS traffic control rules...
+  [<TIME>] DEBUG    PBS traffic control rule restore: mode=merge staged=/stage/etc/proxmox-backup/traffic-control.cfg
+  [<TIME>] DEBUG    PBS traffic control rule restore: backup traffic-control-rules=3 names=alpha,bravo,charlie
+  [<TIME>] INFO       Traffic control rules to restore: 3
+  [<TIME>] INFO       Names: alpha, bravo, charlie
+  [<TIME>] DEBUG    PBS traffic control rule restore: traffic-control-rule=alpha created
+  [<TIME>] INFO     ✓ PBS traffic control rule alpha: applied
+  [<TIME>] DEBUG    PBS traffic control rule restore: traffic-control-rule=bravo create failed error="injected create failure" action=update
+  [<TIME>] DEBUG    PBS traffic control rule restore: traffic-control-rule=bravo updated
+  [<TIME>] INFO     ✓ PBS traffic control rule bravo: applied
+  [<TIME>] DEBUG    PBS traffic control rule restore: traffic-control-rule=charlie created
+  [<TIME>] INFO     ✓ PBS traffic control rule charlie: applied
+  [<TIME>] INFO     ✓ PBS traffic control configuration: applied
 
 ### create-and-update-fail
 strict: false
@@ -270,11 +343,24 @@ commands:
   proxmox-backup-manager traffic-control create bravo --network 10.0.0.0/8 --rate-in 10MB --comment rule-bravo
   proxmox-backup-manager traffic-control update bravo --network 10.0.0.0/8 --rate-in 10MB --comment rule-bravo
   proxmox-backup-manager traffic-control create charlie --network 10.0.0.0/8 --rate-in 10MB --comment rule-charlie
-error: 1 traffic-control object(s) not applied: [bravo]
-error chain: *errors.errorString
+error: PBS traffic control configuration incomplete: 1 traffic control rule(s) not applied [bravo]
+error chain: *orchestrator.pbsSectionRestoreIncompleteError
 error is: (none)
 log:
-  [<TIME>] WARNING  PBS API apply: traffic-control bravo failed (continuing): proxmox-backup-manager traffic-control create bravo --network 10.0.0.0/8 --rate-in 10MB --comment rule-bravo failed: injected create failure (create) / proxmox-backup-manager traffic-control update bravo --network 10.0.0.0/8 --rate-in 10MB --comment rule-bravo failed: injected update failure (update)
+  [<TIME>] INFO     Restoring PBS traffic control rules...
+  [<TIME>] DEBUG    PBS traffic control rule restore: mode=merge staged=/stage/etc/proxmox-backup/traffic-control.cfg
+  [<TIME>] DEBUG    PBS traffic control rule restore: backup traffic-control-rules=3 names=alpha,bravo,charlie
+  [<TIME>] INFO       Traffic control rules to restore: 3
+  [<TIME>] INFO       Names: alpha, bravo, charlie
+  [<TIME>] DEBUG    PBS traffic control rule restore: traffic-control-rule=alpha created
+  [<TIME>] INFO     ✓ PBS traffic control rule alpha: applied
+  [<TIME>] DEBUG    PBS traffic control rule restore: traffic-control-rule=bravo create failed error="injected create failure" action=update
+  [<TIME>] DEBUG    PBS traffic control rule restore: traffic-control-rule=bravo update failed error="injected update failure"
+  [<TIME>] INFO     Traffic control rule bravo was rejected by PBS: "injected create failure"
+  [<TIME>] WARNING  ⚠ PBS traffic control rule bravo: not applied
+  [<TIME>] DEBUG    PBS traffic control rule restore: traffic-control-rule=charlie created
+  [<TIME>] INFO     ✓ PBS traffic control rule charlie: applied
+  [<TIME>] WARNING  ⚠ PBS traffic control configuration: partially applied
 
 ### strict-list-fails
 strict: true
@@ -294,7 +380,8 @@ error: proxmox-backup-manager traffic-control list --output-format=json failed: 
 error chain: *fmt.wrapError -> *errors.errorString
 error is: injected list failure
 log:
-  (none)
+  [<TIME>] DEBUG    PBS traffic control rule restore: reading current traffic-control-rules cmd="proxmox-backup-manager traffic-control list --output-format=json"
+  [<TIME>] DEBUG    PBS traffic control rule restore: traffic-control list failed error="injected list failure"
 
 ### strict-list-invalid-json
 strict: true
@@ -314,7 +401,8 @@ error: parse traffic-control list: invalid character 'o' in literal null (expect
 error chain: *fmt.wrapError -> *json.SyntaxError
 error is: (none)
 log:
-  (none)
+  [<TIME>] DEBUG    PBS traffic control rule restore: reading current traffic-control-rules cmd="proxmox-backup-manager traffic-control list --output-format=json"
+  [<TIME>] DEBUG    PBS traffic control rule restore: traffic-control list returned unparseable output error="invalid character 'o' in literal null (expecting 'u')"
 
 ### strict-list-row-without-id
 strict: true
@@ -334,7 +422,8 @@ error: parse traffic-control list: failed to parse PBS list row 1: none of [name
 error chain: *fmt.wrapError -> *errors.errorString
 error is: (none)
 log:
-  (none)
+  [<TIME>] DEBUG    PBS traffic control rule restore: reading current traffic-control-rules cmd="proxmox-backup-manager traffic-control list --output-format=json"
+  [<TIME>] DEBUG    PBS traffic control rule restore: traffic-control list returned unparseable output error="failed to parse PBS list row 1: none of [name id] present as non-empty string (available keys: [comment store])"
 
 ### strict-list-empty-output
 strict: true
@@ -353,7 +442,16 @@ commands:
   proxmox-backup-manager traffic-control create alpha --network 10.0.0.0/8 --rate-in 10MB --comment rule-alpha
 error: (nil)
 log:
-  (none)
+  [<TIME>] DEBUG    PBS traffic control rule restore: reading current traffic-control-rules cmd="proxmox-backup-manager traffic-control list --output-format=json"
+  [<TIME>] INFO     Restoring PBS traffic control rules...
+  [<TIME>] DEBUG    PBS traffic control rule restore: mode=clean staged=/stage/etc/proxmox-backup/traffic-control.cfg
+  [<TIME>] DEBUG    PBS traffic control rule restore: backup traffic-control-rules=1 names=alpha
+  [<TIME>] INFO       Traffic control rules to restore: 1
+  [<TIME>] INFO       Names: alpha
+  [<TIME>] DEBUG    PBS traffic control rule restore: current traffic-control-rules=0 names=
+  [<TIME>] DEBUG    PBS traffic control rule restore: traffic-control-rule=alpha created
+  [<TIME>] INFO     ✓ PBS traffic control rule alpha: applied
+  [<TIME>] INFO     ✓ PBS traffic control configuration: applied
 
 ### strict-prune-plain-array
 strict: true
@@ -380,7 +478,26 @@ commands:
   proxmox-backup-manager traffic-control create charlie --network 10.0.0.0/8 --rate-in 10MB --comment rule-charlie
 error: (nil)
 log:
-  (none)
+  [<TIME>] DEBUG    PBS traffic control rule restore: reading current traffic-control-rules cmd="proxmox-backup-manager traffic-control list --output-format=json"
+  [<TIME>] INFO     Restoring PBS traffic control rules...
+  [<TIME>] DEBUG    PBS traffic control rule restore: mode=clean staged=/stage/etc/proxmox-backup/traffic-control.cfg
+  [<TIME>] DEBUG    PBS traffic control rule restore: backup traffic-control-rules=2 names=alpha,charlie
+  [<TIME>] INFO       Traffic control rules to restore: 2
+  [<TIME>] INFO       Names: alpha, charlie
+  [<TIME>] DEBUG    PBS traffic control rule restore: current traffic-control-rules=3 names=alpha,beta,zeta
+  [<TIME>] DEBUG    PBS traffic control rule restore: traffic-control-rule=beta not in backup action=remove
+  [<TIME>] DEBUG    PBS traffic control rule restore: traffic-control-rule=beta removed
+  [<TIME>] INFO     Traffic control rule beta is configured on this PBS but not present in the backup
+  [<TIME>] INFO     ✓ PBS traffic control rule beta: removed
+  [<TIME>] DEBUG    PBS traffic control rule restore: traffic-control-rule=zeta not in backup action=remove
+  [<TIME>] DEBUG    PBS traffic control rule restore: traffic-control-rule=zeta removed
+  [<TIME>] INFO     Traffic control rule zeta is configured on this PBS but not present in the backup
+  [<TIME>] INFO     ✓ PBS traffic control rule zeta: removed
+  [<TIME>] DEBUG    PBS traffic control rule restore: traffic-control-rule=alpha created
+  [<TIME>] INFO     ✓ PBS traffic control rule alpha: applied
+  [<TIME>] DEBUG    PBS traffic control rule restore: traffic-control-rule=charlie created
+  [<TIME>] INFO     ✓ PBS traffic control rule charlie: applied
+  [<TIME>] INFO     ✓ PBS traffic control configuration: applied
 
 ### strict-prune-data-wrapper
 strict: true
@@ -407,7 +524,26 @@ commands:
   proxmox-backup-manager traffic-control create charlie --network 10.0.0.0/8 --rate-in 10MB --comment rule-charlie
 error: (nil)
 log:
-  (none)
+  [<TIME>] DEBUG    PBS traffic control rule restore: reading current traffic-control-rules cmd="proxmox-backup-manager traffic-control list --output-format=json"
+  [<TIME>] INFO     Restoring PBS traffic control rules...
+  [<TIME>] DEBUG    PBS traffic control rule restore: mode=clean staged=/stage/etc/proxmox-backup/traffic-control.cfg
+  [<TIME>] DEBUG    PBS traffic control rule restore: backup traffic-control-rules=2 names=alpha,charlie
+  [<TIME>] INFO       Traffic control rules to restore: 2
+  [<TIME>] INFO       Names: alpha, charlie
+  [<TIME>] DEBUG    PBS traffic control rule restore: current traffic-control-rules=3 names=alpha,beta,zeta
+  [<TIME>] DEBUG    PBS traffic control rule restore: traffic-control-rule=beta not in backup action=remove
+  [<TIME>] DEBUG    PBS traffic control rule restore: traffic-control-rule=beta removed
+  [<TIME>] INFO     Traffic control rule beta is configured on this PBS but not present in the backup
+  [<TIME>] INFO     ✓ PBS traffic control rule beta: removed
+  [<TIME>] DEBUG    PBS traffic control rule restore: traffic-control-rule=zeta not in backup action=remove
+  [<TIME>] DEBUG    PBS traffic control rule restore: traffic-control-rule=zeta removed
+  [<TIME>] INFO     Traffic control rule zeta is configured on this PBS but not present in the backup
+  [<TIME>] INFO     ✓ PBS traffic control rule zeta: removed
+  [<TIME>] DEBUG    PBS traffic control rule restore: traffic-control-rule=alpha created
+  [<TIME>] INFO     ✓ PBS traffic control rule alpha: applied
+  [<TIME>] DEBUG    PBS traffic control rule restore: traffic-control-rule=charlie created
+  [<TIME>] INFO     ✓ PBS traffic control rule charlie: applied
+  [<TIME>] INFO     ✓ PBS traffic control configuration: applied
 
 ### strict-remove-one-fails
 strict: true
@@ -427,11 +563,28 @@ commands:
   proxmox-backup-manager traffic-control remove beta
   proxmox-backup-manager traffic-control remove gamma
   proxmox-backup-manager traffic-control create alpha --network 10.0.0.0/8 --rate-in 10MB --comment rule-alpha
-error: traffic-control remove failed for 1 object(s) [beta]: PBS Clean 1:1 incomplete: stale object(s) could not be removed
-error chain: *fmt.wrapError -> *errors.errorString
+error: PBS traffic control configuration incomplete: 1 stale traffic control rule(s) not removed [beta]
+error chain: *orchestrator.pbsSectionRestoreIncompleteError -> *errors.errorString
 error is: errPBSCleanRemoveIncomplete
 log:
-  [<TIME>] WARNING  PBS API apply: traffic-control remove beta failed (continuing): proxmox-backup-manager traffic-control remove beta failed: injected remove failure
+  [<TIME>] DEBUG    PBS traffic control rule restore: reading current traffic-control-rules cmd="proxmox-backup-manager traffic-control list --output-format=json"
+  [<TIME>] INFO     Restoring PBS traffic control rules...
+  [<TIME>] DEBUG    PBS traffic control rule restore: mode=clean staged=/stage/etc/proxmox-backup/traffic-control.cfg
+  [<TIME>] DEBUG    PBS traffic control rule restore: backup traffic-control-rules=1 names=alpha
+  [<TIME>] INFO       Traffic control rules to restore: 1
+  [<TIME>] INFO       Names: alpha
+  [<TIME>] DEBUG    PBS traffic control rule restore: current traffic-control-rules=3 names=alpha,beta,gamma
+  [<TIME>] DEBUG    PBS traffic control rule restore: traffic-control-rule=beta not in backup action=remove
+  [<TIME>] DEBUG    PBS traffic control rule restore: traffic-control-rule=beta remove failed error="injected remove failure"
+  [<TIME>] INFO     Traffic control rule beta is configured on this PBS but not present in the backup
+  [<TIME>] WARNING  ⚠ PBS traffic control rule beta: not removed
+  [<TIME>] DEBUG    PBS traffic control rule restore: traffic-control-rule=gamma not in backup action=remove
+  [<TIME>] DEBUG    PBS traffic control rule restore: traffic-control-rule=gamma removed
+  [<TIME>] INFO     Traffic control rule gamma is configured on this PBS but not present in the backup
+  [<TIME>] INFO     ✓ PBS traffic control rule gamma: removed
+  [<TIME>] DEBUG    PBS traffic control rule restore: traffic-control-rule=alpha created
+  [<TIME>] INFO     ✓ PBS traffic control rule alpha: applied
+  [<TIME>] WARNING  ⚠ PBS traffic control configuration: partially applied
 
 ### strict-remove-two-fail
 strict: true
@@ -453,12 +606,32 @@ commands:
   proxmox-backup-manager traffic-control remove delta
   proxmox-backup-manager traffic-control remove gamma
   proxmox-backup-manager traffic-control create alpha --network 10.0.0.0/8 --rate-in 10MB --comment rule-alpha
-error: traffic-control remove failed for 2 object(s) [beta, delta]: PBS Clean 1:1 incomplete: stale object(s) could not be removed
-error chain: *fmt.wrapError -> *errors.errorString
+error: PBS traffic control configuration incomplete: 2 stale traffic control rule(s) not removed [beta, delta]
+error chain: *orchestrator.pbsSectionRestoreIncompleteError -> *errors.errorString
 error is: errPBSCleanRemoveIncomplete
 log:
-  [<TIME>] WARNING  PBS API apply: traffic-control remove beta failed (continuing): proxmox-backup-manager traffic-control remove beta failed: injected remove failure
-  [<TIME>] WARNING  PBS API apply: traffic-control remove delta failed (continuing): proxmox-backup-manager traffic-control remove delta failed: injected remove failure
+  [<TIME>] DEBUG    PBS traffic control rule restore: reading current traffic-control-rules cmd="proxmox-backup-manager traffic-control list --output-format=json"
+  [<TIME>] INFO     Restoring PBS traffic control rules...
+  [<TIME>] DEBUG    PBS traffic control rule restore: mode=clean staged=/stage/etc/proxmox-backup/traffic-control.cfg
+  [<TIME>] DEBUG    PBS traffic control rule restore: backup traffic-control-rules=1 names=alpha
+  [<TIME>] INFO       Traffic control rules to restore: 1
+  [<TIME>] INFO       Names: alpha
+  [<TIME>] DEBUG    PBS traffic control rule restore: current traffic-control-rules=4 names=alpha,beta,delta,gamma
+  [<TIME>] DEBUG    PBS traffic control rule restore: traffic-control-rule=beta not in backup action=remove
+  [<TIME>] DEBUG    PBS traffic control rule restore: traffic-control-rule=beta remove failed error="injected remove failure"
+  [<TIME>] INFO     Traffic control rule beta is configured on this PBS but not present in the backup
+  [<TIME>] WARNING  ⚠ PBS traffic control rule beta: not removed
+  [<TIME>] DEBUG    PBS traffic control rule restore: traffic-control-rule=delta not in backup action=remove
+  [<TIME>] DEBUG    PBS traffic control rule restore: traffic-control-rule=delta remove failed error="injected remove failure"
+  [<TIME>] INFO     Traffic control rule delta is configured on this PBS but not present in the backup
+  [<TIME>] WARNING  ⚠ PBS traffic control rule delta: not removed
+  [<TIME>] DEBUG    PBS traffic control rule restore: traffic-control-rule=gamma not in backup action=remove
+  [<TIME>] DEBUG    PBS traffic control rule restore: traffic-control-rule=gamma removed
+  [<TIME>] INFO     Traffic control rule gamma is configured on this PBS but not present in the backup
+  [<TIME>] INFO     ✓ PBS traffic control rule gamma: removed
+  [<TIME>] DEBUG    PBS traffic control rule restore: traffic-control-rule=alpha created
+  [<TIME>] INFO     ✓ PBS traffic control rule alpha: applied
+  [<TIME>] WARNING  ⚠ PBS traffic control configuration: partially applied
 
 ### strict-remove-fails-then-create-fails
 strict: true
@@ -480,12 +653,26 @@ commands:
   proxmox-backup-manager traffic-control remove beta
   proxmox-backup-manager traffic-control create bravo --network 10.0.0.0/8 --rate-in 10MB --comment rule-bravo
   proxmox-backup-manager traffic-control update bravo --network 10.0.0.0/8 --rate-in 10MB --comment rule-bravo
-error: 1 traffic-control object(s) not applied: [bravo]
-error chain: *orchestrator.pbsCleanIncompleteApplyError
+error: PBS traffic control configuration incomplete: 1 traffic control rule(s) not applied [bravo]; 1 stale traffic control rule(s) not removed [beta]
+error chain: *orchestrator.pbsSectionRestoreIncompleteError -> *errors.errorString
 error is: errPBSCleanRemoveIncomplete
 log:
-  [<TIME>] WARNING  PBS API apply: traffic-control remove beta failed (continuing): proxmox-backup-manager traffic-control remove beta failed: injected remove failure
-  [<TIME>] WARNING  PBS API apply: traffic-control bravo failed (continuing): proxmox-backup-manager traffic-control create bravo --network 10.0.0.0/8 --rate-in 10MB --comment rule-bravo failed: injected create failure (create) / proxmox-backup-manager traffic-control update bravo --network 10.0.0.0/8 --rate-in 10MB --comment rule-bravo failed: injected update failure (update)
+  [<TIME>] DEBUG    PBS traffic control rule restore: reading current traffic-control-rules cmd="proxmox-backup-manager traffic-control list --output-format=json"
+  [<TIME>] INFO     Restoring PBS traffic control rules...
+  [<TIME>] DEBUG    PBS traffic control rule restore: mode=clean staged=/stage/etc/proxmox-backup/traffic-control.cfg
+  [<TIME>] DEBUG    PBS traffic control rule restore: backup traffic-control-rules=1 names=bravo
+  [<TIME>] INFO       Traffic control rules to restore: 1
+  [<TIME>] INFO       Names: bravo
+  [<TIME>] DEBUG    PBS traffic control rule restore: current traffic-control-rules=2 names=beta,bravo
+  [<TIME>] DEBUG    PBS traffic control rule restore: traffic-control-rule=beta not in backup action=remove
+  [<TIME>] DEBUG    PBS traffic control rule restore: traffic-control-rule=beta remove failed error="injected remove failure"
+  [<TIME>] INFO     Traffic control rule beta is configured on this PBS but not present in the backup
+  [<TIME>] WARNING  ⚠ PBS traffic control rule beta: not removed
+  [<TIME>] DEBUG    PBS traffic control rule restore: traffic-control-rule=bravo create failed error="injected create failure" action=update
+  [<TIME>] DEBUG    PBS traffic control rule restore: traffic-control-rule=bravo update failed error="injected update failure"
+  [<TIME>] INFO     Traffic control rule bravo was rejected by PBS: "injected create failure"
+  [<TIME>] WARNING  ⚠ PBS traffic control rule bravo: not applied
+  [<TIME>] WARNING  ⚠ PBS traffic control configuration: not applied
 
 ### strict-list-key-order
 strict: true
@@ -511,4 +698,41 @@ commands:
   proxmox-backup-manager traffic-control create alpha --network 10.0.0.0/8 --rate-in 10MB --comment rule-alpha
 error: (nil)
 log:
-  (none)
+  [<TIME>] DEBUG    PBS traffic control rule restore: reading current traffic-control-rules cmd="proxmox-backup-manager traffic-control list --output-format=json"
+  [<TIME>] INFO     Restoring PBS traffic control rules...
+  [<TIME>] DEBUG    PBS traffic control rule restore: mode=clean staged=/stage/etc/proxmox-backup/traffic-control.cfg
+  [<TIME>] DEBUG    PBS traffic control rule restore: backup traffic-control-rules=1 names=alpha
+  [<TIME>] INFO       Traffic control rules to restore: 1
+  [<TIME>] INFO       Names: alpha
+  [<TIME>] DEBUG    PBS traffic control rule restore: current traffic-control-rules=8 names=alpha,blank-id,blank-name,name-x,numeric-id,numeric-name,only-id,only-name
+  [<TIME>] DEBUG    PBS traffic control rule restore: traffic-control-rule=blank-id not in backup action=remove
+  [<TIME>] DEBUG    PBS traffic control rule restore: traffic-control-rule=blank-id removed
+  [<TIME>] INFO     Traffic control rule blank-id is configured on this PBS but not present in the backup
+  [<TIME>] INFO     ✓ PBS traffic control rule blank-id: removed
+  [<TIME>] DEBUG    PBS traffic control rule restore: traffic-control-rule=blank-name not in backup action=remove
+  [<TIME>] DEBUG    PBS traffic control rule restore: traffic-control-rule=blank-name removed
+  [<TIME>] INFO     Traffic control rule blank-name is configured on this PBS but not present in the backup
+  [<TIME>] INFO     ✓ PBS traffic control rule blank-name: removed
+  [<TIME>] DEBUG    PBS traffic control rule restore: traffic-control-rule=name-x not in backup action=remove
+  [<TIME>] DEBUG    PBS traffic control rule restore: traffic-control-rule=name-x removed
+  [<TIME>] INFO     Traffic control rule name-x is configured on this PBS but not present in the backup
+  [<TIME>] INFO     ✓ PBS traffic control rule name-x: removed
+  [<TIME>] DEBUG    PBS traffic control rule restore: traffic-control-rule=numeric-id not in backup action=remove
+  [<TIME>] DEBUG    PBS traffic control rule restore: traffic-control-rule=numeric-id removed
+  [<TIME>] INFO     Traffic control rule numeric-id is configured on this PBS but not present in the backup
+  [<TIME>] INFO     ✓ PBS traffic control rule numeric-id: removed
+  [<TIME>] DEBUG    PBS traffic control rule restore: traffic-control-rule=numeric-name not in backup action=remove
+  [<TIME>] DEBUG    PBS traffic control rule restore: traffic-control-rule=numeric-name removed
+  [<TIME>] INFO     Traffic control rule numeric-name is configured on this PBS but not present in the backup
+  [<TIME>] INFO     ✓ PBS traffic control rule numeric-name: removed
+  [<TIME>] DEBUG    PBS traffic control rule restore: traffic-control-rule=only-id not in backup action=remove
+  [<TIME>] DEBUG    PBS traffic control rule restore: traffic-control-rule=only-id removed
+  [<TIME>] INFO     Traffic control rule only-id is configured on this PBS but not present in the backup
+  [<TIME>] INFO     ✓ PBS traffic control rule only-id: removed
+  [<TIME>] DEBUG    PBS traffic control rule restore: traffic-control-rule=only-name not in backup action=remove
+  [<TIME>] DEBUG    PBS traffic control rule restore: traffic-control-rule=only-name removed
+  [<TIME>] INFO     Traffic control rule only-name is configured on this PBS but not present in the backup
+  [<TIME>] INFO     ✓ PBS traffic control rule only-name: removed
+  [<TIME>] DEBUG    PBS traffic control rule restore: traffic-control-rule=alpha created
+  [<TIME>] INFO     ✓ PBS traffic control rule alpha: applied
+  [<TIME>] INFO     ✓ PBS traffic control configuration: applied

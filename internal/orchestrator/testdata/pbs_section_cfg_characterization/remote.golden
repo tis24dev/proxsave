@@ -12,7 +12,7 @@ commands:
   (none)
 error: (nil)
 log:
-  (none)
+  [<TIME>] DEBUG    PBS remote restore: staged=/stage/etc/proxmox-backup/remote.cfg not in the backup action=skip
 
 ### absent-strict
 strict: true
@@ -25,7 +25,7 @@ commands:
   (none)
 error: (nil)
 log:
-  (none)
+  [<TIME>] DEBUG    PBS remote restore: staged=/stage/etc/proxmox-backup/remote.cfg not in the backup action=skip
 
 ### read-error
 strict: true
@@ -64,7 +64,11 @@ commands:
   (none)
 error: (nil)
 log:
-  (none)
+  [<TIME>] INFO     Restoring PBS remotes...
+  [<TIME>] DEBUG    PBS remote restore: mode=merge staged=/stage/etc/proxmox-backup/remote.cfg
+  [<TIME>] DEBUG    PBS remote restore: backup remotes=0 names=
+  [<TIME>] INFO       Remotes to restore: 0
+  [<TIME>] SKIP     PBS remote configuration: nothing to restore
 
 ### empty-file-strict
 strict: true
@@ -83,7 +87,21 @@ commands:
   proxmox-backup-manager remote remove old-b
 error: (nil)
 log:
-  (none)
+  [<TIME>] DEBUG    PBS remote restore: reading current remotes cmd="proxmox-backup-manager remote list --output-format=json"
+  [<TIME>] INFO     Restoring PBS remotes...
+  [<TIME>] DEBUG    PBS remote restore: mode=clean staged=/stage/etc/proxmox-backup/remote.cfg
+  [<TIME>] DEBUG    PBS remote restore: backup remotes=0 names=
+  [<TIME>] INFO       Remotes to restore: 0
+  [<TIME>] DEBUG    PBS remote restore: current remotes=2 names=old-a,old-b
+  [<TIME>] DEBUG    PBS remote restore: remote=old-a not in backup action=remove
+  [<TIME>] DEBUG    PBS remote restore: remote=old-a removed
+  [<TIME>] INFO     Remote old-a is configured on this PBS but not present in the backup
+  [<TIME>] INFO     ✓ PBS remote old-a: removed
+  [<TIME>] DEBUG    PBS remote restore: remote=old-b not in backup action=remove
+  [<TIME>] DEBUG    PBS remote restore: remote=old-b removed
+  [<TIME>] INFO     Remote old-b is configured on this PBS but not present in the backup
+  [<TIME>] INFO     ✓ PBS remote old-b: removed
+  [<TIME>] INFO     ✓ PBS remote configuration: applied
 
 ### nameless-header
 strict: false
@@ -108,7 +126,14 @@ commands:
   proxmox-backup-manager remote create alpha --host alpha.pbs.example --auth-id sync@pbs --password Rm7pw-Qz4Xk9-remote-secret --fingerprint aa:bb:cc --remote: "" --comment stray-body
 error: (nil)
 log:
-  (none)
+  [<TIME>] INFO     Restoring PBS remotes...
+  [<TIME>] DEBUG    PBS remote restore: mode=merge staged=/stage/etc/proxmox-backup/remote.cfg
+  [<TIME>] DEBUG    PBS remote restore: backup remotes=1 names=alpha
+  [<TIME>] INFO       Remotes to restore: 1
+  [<TIME>] INFO       Names: alpha
+  [<TIME>] DEBUG    PBS remote restore: remote=alpha created
+  [<TIME>] INFO     ✓ PBS remote alpha: applied
+  [<TIME>] INFO     ✓ PBS remote configuration: applied
 
 ### create-sorted
 strict: false
@@ -148,7 +173,20 @@ commands:
   proxmox-backup-manager remote create delta --host delta.pbs.example --auth-id sync@pbs --password Rm7pw-Qz4Xk9-remote-secret --fingerprint aa:bb:cc
 error: (nil)
 log:
-  (none)
+  [<TIME>] INFO     Restoring PBS remotes...
+  [<TIME>] DEBUG    PBS remote restore: mode=merge staged=/stage/etc/proxmox-backup/remote.cfg
+  [<TIME>] DEBUG    PBS remote restore: backup remotes=4 names=alpha,bravo,charlie,delta
+  [<TIME>] INFO       Remotes to restore: 4
+  [<TIME>] INFO       Names: alpha, bravo, charlie, delta
+  [<TIME>] DEBUG    PBS remote restore: remote=alpha created
+  [<TIME>] INFO     ✓ PBS remote alpha: applied
+  [<TIME>] DEBUG    PBS remote restore: remote=bravo created
+  [<TIME>] INFO     ✓ PBS remote bravo: applied
+  [<TIME>] DEBUG    PBS remote restore: remote=charlie created
+  [<TIME>] INFO     ✓ PBS remote charlie: applied
+  [<TIME>] DEBUG    PBS remote restore: remote=delta created
+  [<TIME>] INFO     ✓ PBS remote delta: applied
+  [<TIME>] INFO     ✓ PBS remote configuration: applied
 
 ### flag-building
 strict: false
@@ -170,7 +208,14 @@ commands:
   proxmox-backup-manager remote create alpha --host alpha.pbs.example --auth-id sync@pbs --password Rm7pw-Qz4Xk9-remote-secret --fingerprint aa:bb:cc --mixed-case-key "value  with  inner  spaces"
 error: (nil)
 log:
-  (none)
+  [<TIME>] INFO     Restoring PBS remotes...
+  [<TIME>] DEBUG    PBS remote restore: mode=merge staged=/stage/etc/proxmox-backup/remote.cfg
+  [<TIME>] DEBUG    PBS remote restore: backup remotes=1 names=alpha
+  [<TIME>] INFO       Remotes to restore: 1
+  [<TIME>] INFO       Names: alpha
+  [<TIME>] DEBUG    PBS remote restore: remote=alpha created
+  [<TIME>] INFO     ✓ PBS remote alpha: applied
+  [<TIME>] INFO     ✓ PBS remote configuration: applied
 
 ### duplicate-section
 strict: false
@@ -196,7 +241,14 @@ commands:
   proxmox-backup-manager remote create alpha --host alpha.pbs.example --auth-id sync@pbs --password Rm7pw-Qz4Xk9-remote-secret --fingerprint aa:bb:cc --comment second-copy
 error: (nil)
 log:
-  (none)
+  [<TIME>] INFO     Restoring PBS remotes...
+  [<TIME>] DEBUG    PBS remote restore: mode=merge staged=/stage/etc/proxmox-backup/remote.cfg
+  [<TIME>] DEBUG    PBS remote restore: backup remotes=1 names=alpha
+  [<TIME>] INFO       Remotes to restore: 1
+  [<TIME>] INFO       Names: alpha
+  [<TIME>] DEBUG    PBS remote restore: remote=alpha created
+  [<TIME>] INFO     ✓ PBS remote alpha: applied
+  [<TIME>] INFO     ✓ PBS remote configuration: applied
 
 ### foreign-section-type
 strict: false
@@ -219,7 +271,16 @@ commands:
   proxmox-backup-manager remote create zulu --comment from-elsewhere
 error: (nil)
 log:
-  (none)
+  [<TIME>] INFO     Restoring PBS remotes...
+  [<TIME>] DEBUG    PBS remote restore: mode=merge staged=/stage/etc/proxmox-backup/remote.cfg
+  [<TIME>] DEBUG    PBS remote restore: backup remotes=2 names=alpha,zulu
+  [<TIME>] INFO       Remotes to restore: 2
+  [<TIME>] INFO       Names: alpha, zulu
+  [<TIME>] DEBUG    PBS remote restore: remote=alpha created
+  [<TIME>] INFO     ✓ PBS remote alpha: applied
+  [<TIME>] DEBUG    PBS remote restore: remote=zulu created
+  [<TIME>] INFO     ✓ PBS remote zulu: applied
+  [<TIME>] INFO     ✓ PBS remote configuration: applied
 
 ### create-fails-update-ok
 strict: false
@@ -253,7 +314,19 @@ commands:
   proxmox-backup-manager remote create charlie --host charlie.pbs.example --auth-id sync@pbs --password Rm7pw-Qz4Xk9-remote-secret --fingerprint aa:bb:cc
 error: (nil)
 log:
-  (none)
+  [<TIME>] INFO     Restoring PBS remotes...
+  [<TIME>] DEBUG    PBS remote restore: mode=merge staged=/stage/etc/proxmox-backup/remote.cfg
+  [<TIME>] DEBUG    PBS remote restore: backup remotes=3 names=alpha,bravo,charlie
+  [<TIME>] INFO       Remotes to restore: 3
+  [<TIME>] INFO       Names: alpha, bravo, charlie
+  [<TIME>] DEBUG    PBS remote restore: remote=alpha created
+  [<TIME>] INFO     ✓ PBS remote alpha: applied
+  [<TIME>] DEBUG    PBS remote restore: remote=bravo create failed error="injected create failure" action=update
+  [<TIME>] DEBUG    PBS remote restore: remote=bravo updated
+  [<TIME>] INFO     ✓ PBS remote bravo: applied
+  [<TIME>] DEBUG    PBS remote restore: remote=charlie created
+  [<TIME>] INFO     ✓ PBS remote charlie: applied
+  [<TIME>] INFO     ✓ PBS remote configuration: applied
 
 ### create-and-update-fail
 strict: false
@@ -286,11 +359,24 @@ commands:
   proxmox-backup-manager remote create bravo --host bravo.pbs.example --auth-id sync@pbs --password Rm7pw-Qz4Xk9-remote-secret --fingerprint aa:bb:cc
   proxmox-backup-manager remote update bravo --host bravo.pbs.example --auth-id sync@pbs --password Rm7pw-Qz4Xk9-remote-secret --fingerprint aa:bb:cc
   proxmox-backup-manager remote create charlie --host charlie.pbs.example --auth-id sync@pbs --password Rm7pw-Qz4Xk9-remote-secret --fingerprint aa:bb:cc
-error: 1 remote object(s) not applied: [bravo]
-error chain: *errors.errorString
+error: PBS remote configuration incomplete: 1 remote(s) not applied [bravo]
+error chain: *orchestrator.pbsSectionRestoreIncompleteError
 error is: (none)
 log:
-  [<TIME>] WARNING  PBS API apply: remote bravo failed (continuing): proxmox-backup-manager remote create bravo --host bravo.pbs.example --auth-id sync@pbs --password <redacted> --fingerprint aa:bb:cc failed: injected create failure (create) / proxmox-backup-manager remote update bravo --host bravo.pbs.example --auth-id sync@pbs --password <redacted> --fingerprint aa:bb:cc failed: injected update failure (update)
+  [<TIME>] INFO     Restoring PBS remotes...
+  [<TIME>] DEBUG    PBS remote restore: mode=merge staged=/stage/etc/proxmox-backup/remote.cfg
+  [<TIME>] DEBUG    PBS remote restore: backup remotes=3 names=alpha,bravo,charlie
+  [<TIME>] INFO       Remotes to restore: 3
+  [<TIME>] INFO       Names: alpha, bravo, charlie
+  [<TIME>] DEBUG    PBS remote restore: remote=alpha created
+  [<TIME>] INFO     ✓ PBS remote alpha: applied
+  [<TIME>] DEBUG    PBS remote restore: remote=bravo create failed error="injected create failure" action=update
+  [<TIME>] DEBUG    PBS remote restore: remote=bravo update failed error="injected update failure"
+  [<TIME>] INFO     Remote bravo was rejected by PBS: "injected create failure"
+  [<TIME>] WARNING  ⚠ PBS remote bravo: not applied
+  [<TIME>] DEBUG    PBS remote restore: remote=charlie created
+  [<TIME>] INFO     ✓ PBS remote charlie: applied
+  [<TIME>] WARNING  ⚠ PBS remote configuration: partially applied
 
 ### strict-list-fails
 strict: true
@@ -311,7 +397,8 @@ error: proxmox-backup-manager remote list --output-format=json failed: injected 
 error chain: *fmt.wrapError -> *errors.errorString
 error is: injected list failure
 log:
-  (none)
+  [<TIME>] DEBUG    PBS remote restore: reading current remotes cmd="proxmox-backup-manager remote list --output-format=json"
+  [<TIME>] DEBUG    PBS remote restore: remote list failed error="injected list failure"
 
 ### strict-list-invalid-json
 strict: true
@@ -332,7 +419,8 @@ error: parse remote list: invalid character 'o' in literal null (expecting 'u')
 error chain: *fmt.wrapError -> *json.SyntaxError
 error is: (none)
 log:
-  (none)
+  [<TIME>] DEBUG    PBS remote restore: reading current remotes cmd="proxmox-backup-manager remote list --output-format=json"
+  [<TIME>] DEBUG    PBS remote restore: remote list returned unparseable output error="invalid character 'o' in literal null (expecting 'u')"
 
 ### strict-list-row-without-id
 strict: true
@@ -353,7 +441,8 @@ error: parse remote list: failed to parse PBS list row 1: none of [id name] pres
 error chain: *fmt.wrapError -> *errors.errorString
 error is: (none)
 log:
-  (none)
+  [<TIME>] DEBUG    PBS remote restore: reading current remotes cmd="proxmox-backup-manager remote list --output-format=json"
+  [<TIME>] DEBUG    PBS remote restore: remote list returned unparseable output error="failed to parse PBS list row 1: none of [id name] present as non-empty string (available keys: [comment store])"
 
 ### strict-list-empty-output
 strict: true
@@ -373,7 +462,16 @@ commands:
   proxmox-backup-manager remote create alpha --host alpha.pbs.example --auth-id sync@pbs --password Rm7pw-Qz4Xk9-remote-secret --fingerprint aa:bb:cc
 error: (nil)
 log:
-  (none)
+  [<TIME>] DEBUG    PBS remote restore: reading current remotes cmd="proxmox-backup-manager remote list --output-format=json"
+  [<TIME>] INFO     Restoring PBS remotes...
+  [<TIME>] DEBUG    PBS remote restore: mode=clean staged=/stage/etc/proxmox-backup/remote.cfg
+  [<TIME>] DEBUG    PBS remote restore: backup remotes=1 names=alpha
+  [<TIME>] INFO       Remotes to restore: 1
+  [<TIME>] INFO       Names: alpha
+  [<TIME>] DEBUG    PBS remote restore: current remotes=0 names=
+  [<TIME>] DEBUG    PBS remote restore: remote=alpha created
+  [<TIME>] INFO     ✓ PBS remote alpha: applied
+  [<TIME>] INFO     ✓ PBS remote configuration: applied
 
 ### strict-prune-plain-array
 strict: true
@@ -402,7 +500,26 @@ commands:
   proxmox-backup-manager remote create charlie --host charlie.pbs.example --auth-id sync@pbs --password Rm7pw-Qz4Xk9-remote-secret --fingerprint aa:bb:cc
 error: (nil)
 log:
-  (none)
+  [<TIME>] DEBUG    PBS remote restore: reading current remotes cmd="proxmox-backup-manager remote list --output-format=json"
+  [<TIME>] INFO     Restoring PBS remotes...
+  [<TIME>] DEBUG    PBS remote restore: mode=clean staged=/stage/etc/proxmox-backup/remote.cfg
+  [<TIME>] DEBUG    PBS remote restore: backup remotes=2 names=alpha,charlie
+  [<TIME>] INFO       Remotes to restore: 2
+  [<TIME>] INFO       Names: alpha, charlie
+  [<TIME>] DEBUG    PBS remote restore: current remotes=3 names=alpha,beta,zeta
+  [<TIME>] DEBUG    PBS remote restore: remote=beta not in backup action=remove
+  [<TIME>] DEBUG    PBS remote restore: remote=beta removed
+  [<TIME>] INFO     Remote beta is configured on this PBS but not present in the backup
+  [<TIME>] INFO     ✓ PBS remote beta: removed
+  [<TIME>] DEBUG    PBS remote restore: remote=zeta not in backup action=remove
+  [<TIME>] DEBUG    PBS remote restore: remote=zeta removed
+  [<TIME>] INFO     Remote zeta is configured on this PBS but not present in the backup
+  [<TIME>] INFO     ✓ PBS remote zeta: removed
+  [<TIME>] DEBUG    PBS remote restore: remote=alpha created
+  [<TIME>] INFO     ✓ PBS remote alpha: applied
+  [<TIME>] DEBUG    PBS remote restore: remote=charlie created
+  [<TIME>] INFO     ✓ PBS remote charlie: applied
+  [<TIME>] INFO     ✓ PBS remote configuration: applied
 
 ### strict-prune-data-wrapper
 strict: true
@@ -431,7 +548,26 @@ commands:
   proxmox-backup-manager remote create charlie --host charlie.pbs.example --auth-id sync@pbs --password Rm7pw-Qz4Xk9-remote-secret --fingerprint aa:bb:cc
 error: (nil)
 log:
-  (none)
+  [<TIME>] DEBUG    PBS remote restore: reading current remotes cmd="proxmox-backup-manager remote list --output-format=json"
+  [<TIME>] INFO     Restoring PBS remotes...
+  [<TIME>] DEBUG    PBS remote restore: mode=clean staged=/stage/etc/proxmox-backup/remote.cfg
+  [<TIME>] DEBUG    PBS remote restore: backup remotes=2 names=alpha,charlie
+  [<TIME>] INFO       Remotes to restore: 2
+  [<TIME>] INFO       Names: alpha, charlie
+  [<TIME>] DEBUG    PBS remote restore: current remotes=3 names=alpha,beta,zeta
+  [<TIME>] DEBUG    PBS remote restore: remote=beta not in backup action=remove
+  [<TIME>] DEBUG    PBS remote restore: remote=beta removed
+  [<TIME>] INFO     Remote beta is configured on this PBS but not present in the backup
+  [<TIME>] INFO     ✓ PBS remote beta: removed
+  [<TIME>] DEBUG    PBS remote restore: remote=zeta not in backup action=remove
+  [<TIME>] DEBUG    PBS remote restore: remote=zeta removed
+  [<TIME>] INFO     Remote zeta is configured on this PBS but not present in the backup
+  [<TIME>] INFO     ✓ PBS remote zeta: removed
+  [<TIME>] DEBUG    PBS remote restore: remote=alpha created
+  [<TIME>] INFO     ✓ PBS remote alpha: applied
+  [<TIME>] DEBUG    PBS remote restore: remote=charlie created
+  [<TIME>] INFO     ✓ PBS remote charlie: applied
+  [<TIME>] INFO     ✓ PBS remote configuration: applied
 
 ### strict-remove-one-fails
 strict: true
@@ -452,11 +588,28 @@ commands:
   proxmox-backup-manager remote remove beta
   proxmox-backup-manager remote remove gamma
   proxmox-backup-manager remote create alpha --host alpha.pbs.example --auth-id sync@pbs --password Rm7pw-Qz4Xk9-remote-secret --fingerprint aa:bb:cc
-error: remote remove failed for 1 object(s) [beta]: PBS Clean 1:1 incomplete: stale object(s) could not be removed
-error chain: *fmt.wrapError -> *errors.errorString
+error: PBS remote configuration incomplete: 1 stale remote(s) not removed [beta]
+error chain: *orchestrator.pbsSectionRestoreIncompleteError -> *errors.errorString
 error is: errPBSCleanRemoveIncomplete
 log:
-  [<TIME>] WARNING  PBS API apply: remote remove beta failed (continuing): proxmox-backup-manager remote remove beta failed: injected remove failure
+  [<TIME>] DEBUG    PBS remote restore: reading current remotes cmd="proxmox-backup-manager remote list --output-format=json"
+  [<TIME>] INFO     Restoring PBS remotes...
+  [<TIME>] DEBUG    PBS remote restore: mode=clean staged=/stage/etc/proxmox-backup/remote.cfg
+  [<TIME>] DEBUG    PBS remote restore: backup remotes=1 names=alpha
+  [<TIME>] INFO       Remotes to restore: 1
+  [<TIME>] INFO       Names: alpha
+  [<TIME>] DEBUG    PBS remote restore: current remotes=3 names=alpha,beta,gamma
+  [<TIME>] DEBUG    PBS remote restore: remote=beta not in backup action=remove
+  [<TIME>] DEBUG    PBS remote restore: remote=beta remove failed error="injected remove failure"
+  [<TIME>] INFO     Remote beta is configured on this PBS but not present in the backup
+  [<TIME>] WARNING  ⚠ PBS remote beta: not removed
+  [<TIME>] DEBUG    PBS remote restore: remote=gamma not in backup action=remove
+  [<TIME>] DEBUG    PBS remote restore: remote=gamma removed
+  [<TIME>] INFO     Remote gamma is configured on this PBS but not present in the backup
+  [<TIME>] INFO     ✓ PBS remote gamma: removed
+  [<TIME>] DEBUG    PBS remote restore: remote=alpha created
+  [<TIME>] INFO     ✓ PBS remote alpha: applied
+  [<TIME>] WARNING  ⚠ PBS remote configuration: partially applied
 
 ### strict-remove-two-fail
 strict: true
@@ -479,12 +632,32 @@ commands:
   proxmox-backup-manager remote remove delta
   proxmox-backup-manager remote remove gamma
   proxmox-backup-manager remote create alpha --host alpha.pbs.example --auth-id sync@pbs --password Rm7pw-Qz4Xk9-remote-secret --fingerprint aa:bb:cc
-error: remote remove failed for 2 object(s) [beta, delta]: PBS Clean 1:1 incomplete: stale object(s) could not be removed
-error chain: *fmt.wrapError -> *errors.errorString
+error: PBS remote configuration incomplete: 2 stale remote(s) not removed [beta, delta]
+error chain: *orchestrator.pbsSectionRestoreIncompleteError -> *errors.errorString
 error is: errPBSCleanRemoveIncomplete
 log:
-  [<TIME>] WARNING  PBS API apply: remote remove beta failed (continuing): proxmox-backup-manager remote remove beta failed: injected remove failure
-  [<TIME>] WARNING  PBS API apply: remote remove delta failed (continuing): proxmox-backup-manager remote remove delta failed: injected remove failure
+  [<TIME>] DEBUG    PBS remote restore: reading current remotes cmd="proxmox-backup-manager remote list --output-format=json"
+  [<TIME>] INFO     Restoring PBS remotes...
+  [<TIME>] DEBUG    PBS remote restore: mode=clean staged=/stage/etc/proxmox-backup/remote.cfg
+  [<TIME>] DEBUG    PBS remote restore: backup remotes=1 names=alpha
+  [<TIME>] INFO       Remotes to restore: 1
+  [<TIME>] INFO       Names: alpha
+  [<TIME>] DEBUG    PBS remote restore: current remotes=4 names=alpha,beta,delta,gamma
+  [<TIME>] DEBUG    PBS remote restore: remote=beta not in backup action=remove
+  [<TIME>] DEBUG    PBS remote restore: remote=beta remove failed error="injected remove failure"
+  [<TIME>] INFO     Remote beta is configured on this PBS but not present in the backup
+  [<TIME>] WARNING  ⚠ PBS remote beta: not removed
+  [<TIME>] DEBUG    PBS remote restore: remote=delta not in backup action=remove
+  [<TIME>] DEBUG    PBS remote restore: remote=delta remove failed error="injected remove failure"
+  [<TIME>] INFO     Remote delta is configured on this PBS but not present in the backup
+  [<TIME>] WARNING  ⚠ PBS remote delta: not removed
+  [<TIME>] DEBUG    PBS remote restore: remote=gamma not in backup action=remove
+  [<TIME>] DEBUG    PBS remote restore: remote=gamma removed
+  [<TIME>] INFO     Remote gamma is configured on this PBS but not present in the backup
+  [<TIME>] INFO     ✓ PBS remote gamma: removed
+  [<TIME>] DEBUG    PBS remote restore: remote=alpha created
+  [<TIME>] INFO     ✓ PBS remote alpha: applied
+  [<TIME>] WARNING  ⚠ PBS remote configuration: partially applied
 
 ### strict-remove-fails-then-create-fails
 strict: true
@@ -507,12 +680,26 @@ commands:
   proxmox-backup-manager remote remove beta
   proxmox-backup-manager remote create bravo --host bravo.pbs.example --auth-id sync@pbs --password Rm7pw-Qz4Xk9-remote-secret --fingerprint aa:bb:cc
   proxmox-backup-manager remote update bravo --host bravo.pbs.example --auth-id sync@pbs --password Rm7pw-Qz4Xk9-remote-secret --fingerprint aa:bb:cc
-error: 1 remote object(s) not applied: [bravo]
-error chain: *orchestrator.pbsCleanIncompleteApplyError
+error: PBS remote configuration incomplete: 1 remote(s) not applied [bravo]; 1 stale remote(s) not removed [beta]
+error chain: *orchestrator.pbsSectionRestoreIncompleteError -> *errors.errorString
 error is: errPBSCleanRemoveIncomplete
 log:
-  [<TIME>] WARNING  PBS API apply: remote remove beta failed (continuing): proxmox-backup-manager remote remove beta failed: injected remove failure
-  [<TIME>] WARNING  PBS API apply: remote bravo failed (continuing): proxmox-backup-manager remote create bravo --host bravo.pbs.example --auth-id sync@pbs --password <redacted> --fingerprint aa:bb:cc failed: injected create failure (create) / proxmox-backup-manager remote update bravo --host bravo.pbs.example --auth-id sync@pbs --password <redacted> --fingerprint aa:bb:cc failed: injected update failure (update)
+  [<TIME>] DEBUG    PBS remote restore: reading current remotes cmd="proxmox-backup-manager remote list --output-format=json"
+  [<TIME>] INFO     Restoring PBS remotes...
+  [<TIME>] DEBUG    PBS remote restore: mode=clean staged=/stage/etc/proxmox-backup/remote.cfg
+  [<TIME>] DEBUG    PBS remote restore: backup remotes=1 names=bravo
+  [<TIME>] INFO       Remotes to restore: 1
+  [<TIME>] INFO       Names: bravo
+  [<TIME>] DEBUG    PBS remote restore: current remotes=2 names=beta,bravo
+  [<TIME>] DEBUG    PBS remote restore: remote=beta not in backup action=remove
+  [<TIME>] DEBUG    PBS remote restore: remote=beta remove failed error="injected remove failure"
+  [<TIME>] INFO     Remote beta is configured on this PBS but not present in the backup
+  [<TIME>] WARNING  ⚠ PBS remote beta: not removed
+  [<TIME>] DEBUG    PBS remote restore: remote=bravo create failed error="injected create failure" action=update
+  [<TIME>] DEBUG    PBS remote restore: remote=bravo update failed error="injected update failure"
+  [<TIME>] INFO     Remote bravo was rejected by PBS: "injected create failure"
+  [<TIME>] WARNING  ⚠ PBS remote bravo: not applied
+  [<TIME>] WARNING  ⚠ PBS remote configuration: not applied
 
 ### strict-list-key-order
 strict: true
@@ -539,4 +726,41 @@ commands:
   proxmox-backup-manager remote create alpha --host alpha.pbs.example --auth-id sync@pbs --password Rm7pw-Qz4Xk9-remote-secret --fingerprint aa:bb:cc
 error: (nil)
 log:
-  (none)
+  [<TIME>] DEBUG    PBS remote restore: reading current remotes cmd="proxmox-backup-manager remote list --output-format=json"
+  [<TIME>] INFO     Restoring PBS remotes...
+  [<TIME>] DEBUG    PBS remote restore: mode=clean staged=/stage/etc/proxmox-backup/remote.cfg
+  [<TIME>] DEBUG    PBS remote restore: backup remotes=1 names=alpha
+  [<TIME>] INFO       Remotes to restore: 1
+  [<TIME>] INFO       Names: alpha
+  [<TIME>] DEBUG    PBS remote restore: current remotes=8 names=alpha,blank-id,blank-name,id-x,numeric-id,numeric-name,only-id,only-name
+  [<TIME>] DEBUG    PBS remote restore: remote=blank-id not in backup action=remove
+  [<TIME>] DEBUG    PBS remote restore: remote=blank-id removed
+  [<TIME>] INFO     Remote blank-id is configured on this PBS but not present in the backup
+  [<TIME>] INFO     ✓ PBS remote blank-id: removed
+  [<TIME>] DEBUG    PBS remote restore: remote=blank-name not in backup action=remove
+  [<TIME>] DEBUG    PBS remote restore: remote=blank-name removed
+  [<TIME>] INFO     Remote blank-name is configured on this PBS but not present in the backup
+  [<TIME>] INFO     ✓ PBS remote blank-name: removed
+  [<TIME>] DEBUG    PBS remote restore: remote=id-x not in backup action=remove
+  [<TIME>] DEBUG    PBS remote restore: remote=id-x removed
+  [<TIME>] INFO     Remote id-x is configured on this PBS but not present in the backup
+  [<TIME>] INFO     ✓ PBS remote id-x: removed
+  [<TIME>] DEBUG    PBS remote restore: remote=numeric-id not in backup action=remove
+  [<TIME>] DEBUG    PBS remote restore: remote=numeric-id removed
+  [<TIME>] INFO     Remote numeric-id is configured on this PBS but not present in the backup
+  [<TIME>] INFO     ✓ PBS remote numeric-id: removed
+  [<TIME>] DEBUG    PBS remote restore: remote=numeric-name not in backup action=remove
+  [<TIME>] DEBUG    PBS remote restore: remote=numeric-name removed
+  [<TIME>] INFO     Remote numeric-name is configured on this PBS but not present in the backup
+  [<TIME>] INFO     ✓ PBS remote numeric-name: removed
+  [<TIME>] DEBUG    PBS remote restore: remote=only-id not in backup action=remove
+  [<TIME>] DEBUG    PBS remote restore: remote=only-id removed
+  [<TIME>] INFO     Remote only-id is configured on this PBS but not present in the backup
+  [<TIME>] INFO     ✓ PBS remote only-id: removed
+  [<TIME>] DEBUG    PBS remote restore: remote=only-name not in backup action=remove
+  [<TIME>] DEBUG    PBS remote restore: remote=only-name removed
+  [<TIME>] INFO     Remote only-name is configured on this PBS but not present in the backup
+  [<TIME>] INFO     ✓ PBS remote only-name: removed
+  [<TIME>] DEBUG    PBS remote restore: remote=alpha created
+  [<TIME>] INFO     ✓ PBS remote alpha: applied
+  [<TIME>] INFO     ✓ PBS remote configuration: applied

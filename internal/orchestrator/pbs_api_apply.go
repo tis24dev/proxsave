@@ -26,28 +26,6 @@ var pbsAPIApplyGeteuid = os.Geteuid
 // .cfg and drop the object, bypassing PBS's refusal, e.g. for an in-use object).
 var errPBSCleanRemoveIncomplete = errors.New("PBS Clean 1:1 incomplete: stale object(s) could not be removed")
 
-// pbsCleanRemoveResult returns nil when no clean-mode remove failed, otherwise an
-// error wrapping errPBSCleanRemoveIncomplete listing the objects left behind.
-func pbsCleanRemoveResult(kind string, failures []string) error {
-	if len(failures) == 0 {
-		return nil
-	}
-	return fmt.Errorf("%s remove failed for %d object(s) [%s]: %w", kind, len(failures), strings.Join(failures, ", "), errPBSCleanRemoveIncomplete)
-}
-
-// pbsCleanIncompleteApplyError is an apply failure of a Clean (1:1) apply in which
-// one or more stale objects could not be removed. Its text is the apply
-// failure alone; it also matches errPBSCleanRemoveIncomplete, so the caller does
-// not take the file-based fallback.
-type pbsCleanIncompleteApplyError struct {
-	err    error
-	remove error
-}
-
-func (e *pbsCleanIncompleteApplyError) Error() string { return e.err.Error() }
-
-func (e *pbsCleanIncompleteApplyError) Unwrap() []error { return []error{e.err, e.remove} }
-
 func normalizeProxmoxCfgKey(key string) string {
 	key = strings.ToLower(strings.TrimSpace(key))
 	key = strings.ReplaceAll(key, "_", "-")
@@ -251,16 +229,79 @@ func ensurePBSServicesForAPI(ctx context.Context, logger *logging.Logger) error 
 // pbsSectionCfg describes one PBS section-config file that is restored through
 // proxmox-backup-manager: the staged file, the command words in front of the verb
 // ("remote", "s3 endpoint", ...), the keys a list row is identified by (in the order
-// they are tried), the flags whose value a failed create/update must not show, and
-// the keys whose value the file stores base64-encoded while create/update take it
-// plain, so it is decoded before it becomes a flag.
+// they are tried), the flags whose value a failed create/update must not show, the
+// keys whose value the file stores base64-encoded while create/update take it
+// plain, so it is decoded before it becomes a flag, and the words its restore
+// block shows.
 type pbsSectionCfg struct {
 	file         string
 	command      []string
 	listKeys     []string
 	secretFlags  []string
 	base64Values []string
+	labels       pbsSectionLabels
 }
+
+// pbsSectionLabels are the words of the restore block of one section config, the
+// only part of the block that differs from one config to another.
+type pbsSectionLabels struct {
+	// plural opens the block: "Restoring PBS <plural>...".
+	plural string
+	// countNoun counts the objects of the backup: "  <countNoun> to restore: N".
+	countNoun string
+	// noun is the subject of the outcome of one object, "PBS <noun> <id>", and
+	// names the block in its DEBUG lines.
+	noun string
+	// eventNoun is the subject of the event of one object: "<eventNoun> <id> ...".
+	eventNoun string
+	// outcome is the subject of the outcome of the whole block.
+	outcome string
+}
+
+var (
+	pbsRemoteLabels = pbsSectionLabels{
+		plural:    "remotes",
+		countNoun: "Remotes",
+		noun:      "remote",
+		eventNoun: "Remote",
+		outcome:   "PBS remote configuration",
+	}
+	pbsS3EndpointLabels = pbsSectionLabels{
+		plural:    "S3 endpoints",
+		countNoun: "S3 endpoints",
+		noun:      "S3 endpoint",
+		eventNoun: "S3 endpoint",
+		outcome:   "PBS S3 endpoint configuration",
+	}
+	pbsSyncJobLabels = pbsSectionLabels{
+		plural:    "sync jobs",
+		countNoun: "Sync jobs",
+		noun:      "sync job",
+		eventNoun: "Sync job",
+		outcome:   "PBS sync job configuration",
+	}
+	pbsVerifyJobLabels = pbsSectionLabels{
+		plural:    "verify jobs",
+		countNoun: "Verify jobs",
+		noun:      "verify job",
+		eventNoun: "Verify job",
+		outcome:   "PBS verify job configuration",
+	}
+	pbsPruneJobLabels = pbsSectionLabels{
+		plural:    "prune jobs",
+		countNoun: "Prune jobs",
+		noun:      "prune job",
+		eventNoun: "Prune job",
+		outcome:   "PBS prune job configuration",
+	}
+	pbsTrafficControlLabels = pbsSectionLabels{
+		plural:    "traffic control rules",
+		countNoun: "Traffic control rules",
+		noun:      "traffic control rule",
+		eventNoun: "Traffic control rule",
+		outcome:   "PBS traffic control configuration",
+	}
+)
 
 // pbsSectionFlags builds the create/update flags of one section with
 // buildProxmoxManagerFlags, entry by entry, and decodes from standard base64 the value
@@ -297,24 +338,169 @@ func pbsSectionFlags(logger *logging.Logger, kind, id string, entries []proxmoxN
 	return args
 }
 
-// applyPBSSectionCfgViaAPI creates or updates every section of the staged cfg.file
-// through proxmox-backup-manager, in sorted order, falling back from create to
-// update. An object whose create and update both fail is logged and the apply
-// continues with the next one; the result then names every object not applied. In
-// strict (Clean 1:1) mode it first removes every listed object that the staged file
-// does not name; a remove that fails is logged, the apply continues, and the result
-// wraps errPBSCleanRemoveIncomplete, also when some objects were not applied.
-func applyPBSSectionCfgViaAPI(ctx context.Context, logger *logging.Logger, stageRoot string, strict bool, cfg pbsSectionCfg) error {
-	kind := strings.Join(cfg.command, " ")
-	commandArgs := func(rest ...string) []string {
-		return append(append([]string(nil), cfg.command...), rest...)
+// pbsSectionRestoreIncompleteError is a section-config apply in which one or more
+// objects were not applied, or in Clean (1:1) mode a stale object was not removed.
+// applyPBSSectionCfgViaAPI has already logged the outcome of every object and of
+// the whole block, so the caller does not log it again and does not run the
+// file-based fallback over outcomes it has already reported. When a stale object
+// was not removed it also matches errPBSCleanRemoveIncomplete.
+type pbsSectionRestoreIncompleteError struct {
+	labels     pbsSectionLabels
+	notApplied []string
+	notRemoved []string
+}
+
+func (e *pbsSectionRestoreIncompleteError) Error() string {
+	var parts []string
+	if len(e.notApplied) > 0 {
+		parts = append(parts, fmt.Sprintf("%d %s(s) not applied [%s]", len(e.notApplied), e.labels.noun, strings.Join(e.notApplied, ", ")))
 	}
+	if len(e.notRemoved) > 0 {
+		parts = append(parts, fmt.Sprintf("%d stale %s(s) not removed [%s]", len(e.notRemoved), e.labels.noun, strings.Join(e.notRemoved, ", ")))
+	}
+	return e.labels.outcome + " incomplete: " + strings.Join(parts, "; ")
+}
+
+func (e *pbsSectionRestoreIncompleteError) Unwrap() error {
+	if len(e.notRemoved) > 0 {
+		return errPBSCleanRemoveIncomplete
+	}
+	return nil
+}
+
+// pbsSectionRestore carries the state of one section-config apply: what it
+// attempted and what it could not do, for the per-object and block outcomes.
+type pbsSectionRestore struct {
+	ctx        context.Context
+	logger     *logging.Logger
+	cfg        pbsSectionCfg
+	attempted  int
+	notApplied []string
+	notRemoved []string
+}
+
+func (r *pbsSectionRestore) debug(format string, args ...any) {
+	r.logger.Debug("PBS "+r.cfg.labels.noun+" restore: "+format, args...)
+}
+
+// key names an object of the block in its DEBUG lines ("remote=r1"), keys counts
+// them ("backup remotes=2").
+func (r *pbsSectionRestore) key() string {
+	return strings.ReplaceAll(strings.ToLower(r.cfg.labels.noun), " ", "-")
+}
+
+func (r *pbsSectionRestore) keys() string { return r.key() + "s" }
+
+func (r *pbsSectionRestore) commandArgs(rest ...string) []string {
+	return append(append([]string(nil), r.cfg.command...), rest...)
+}
+
+func (r *pbsSectionRestore) applied(id string) {
+	r.logger.Info("%s PBS %s %s: applied", theme.SymbolSuccess, r.cfg.labels.noun, id)
+}
+
+// removeStale removes, in Clean (1:1) mode, an object configured on this PBS that
+// the backup does not have. It returns only a cancellation.
+func (r *pbsSectionRestore) removeStale(id string) error {
+	r.attempted++
+	r.debug("%s=%s not in backup action=remove", r.key(), id)
+	if _, err := runPBSManager(r.ctx, r.commandArgs("remove", id)...); err != nil {
+		if ctxErr := r.ctx.Err(); ctxErr != nil {
+			return ctxErr
+		}
+		r.debug("%s=%s remove failed error=%q", r.key(), id, pbsManagerErrorText(err))
+		r.logger.Info("%s %s is configured on this PBS but not present in the backup", r.cfg.labels.eventNoun, id)
+		r.logger.Warning("%s PBS %s %s: not removed", theme.SymbolWarning, r.cfg.labels.noun, id)
+		r.notRemoved = append(r.notRemoved, id)
+		return nil
+	}
+	r.debug("%s=%s removed", r.key(), id)
+	r.logger.Info("%s %s is configured on this PBS but not present in the backup", r.cfg.labels.eventNoun, id)
+	r.logger.Info("%s PBS %s %s: removed", theme.SymbolSuccess, r.cfg.labels.noun, id)
+	return nil
+}
+
+// apply restores one object of the backup: create, and when PBS refuses the
+// create (the object may already exist) update. It returns only a cancellation.
+func (r *pbsSectionRestore) apply(id string, s proxmoxNotificationSection) error {
+	r.attempted++
+	kind := strings.Join(r.cfg.command, " ")
+	flags := pbsSectionFlags(r.logger, kind, id, s.Entries, r.cfg.base64Values)
+	createArgs := r.commandArgs(append([]string{"create", id}, flags...)...)
+	if _, createErr := runPBSManagerSensitive(r.ctx, createArgs, r.cfg.secretFlags...); createErr != nil {
+		return r.update(id, flags, createErr)
+	}
+	r.debug("%s=%s created", r.key(), id)
+	r.applied(id)
+	return nil
+}
+
+// update applies the backup's object over the one PBS refused to create. When
+// PBS refuses the update too, the event carries the create's error.
+func (r *pbsSectionRestore) update(id string, flags []string, createErr error) error {
+	if ctxErr := r.ctx.Err(); ctxErr != nil {
+		return ctxErr
+	}
+	r.debug("%s=%s create failed error=%q action=update", r.key(), id, pbsManagerErrorText(createErr))
+	updateArgs := r.commandArgs(append([]string{"update", id}, flags...)...)
+	if _, err := runPBSManagerSensitive(r.ctx, updateArgs, r.cfg.secretFlags...); err != nil {
+		if ctxErr := r.ctx.Err(); ctxErr != nil {
+			return ctxErr
+		}
+		r.debug("%s=%s update failed error=%q", r.key(), id, pbsManagerErrorText(err))
+		r.logger.Info("%s %s was rejected by PBS: \"%s\"", r.cfg.labels.eventNoun, id, pbsManagerErrorLine(createErr))
+		r.logger.Warning("%s PBS %s %s: not applied", theme.SymbolWarning, r.cfg.labels.noun, id)
+		r.notApplied = append(r.notApplied, id)
+		return nil
+	}
+	r.debug("%s=%s updated", r.key(), id)
+	r.applied(id)
+	return nil
+}
+
+// outcome logs the outcome of the whole block and returns the error the caller
+// records the restore warning from.
+func (r *pbsSectionRestore) outcome() error {
+	if r.attempted == 0 {
+		r.logger.Skip("%s: nothing to restore", r.cfg.labels.outcome)
+		return nil
+	}
+	failures := len(r.notApplied) + len(r.notRemoved)
+	switch failures {
+	case 0:
+		r.logger.Info("%s %s: applied", theme.SymbolSuccess, r.cfg.labels.outcome)
+		return nil
+	case r.attempted:
+		r.logger.Warning("%s %s: not applied", theme.SymbolWarning, r.cfg.labels.outcome)
+	default:
+		r.logger.Warning("%s %s: partially applied", theme.SymbolWarning, r.cfg.labels.outcome)
+	}
+	return &pbsSectionRestoreIncompleteError{labels: r.cfg.labels, notApplied: r.notApplied, notRemoved: r.notRemoved}
+}
+
+// applyPBSSectionCfgViaAPI restores the staged cfg.file through
+// proxmox-backup-manager as one block: the objects of the backup, then in strict
+// (Clean 1:1) mode the removal of every object of this PBS that the backup does
+// not have, then every object of the backup in sorted order, created or, when PBS
+// refuses the create, updated. Each object gets its outcome line and the block
+// ends with its own. When an object was not applied or not removed, the result
+// is a pbsSectionRestoreIncompleteError, whose outcome is already logged.
+//
+// A staged file that cannot be read or parsed, and in Clean mode a list of this
+// PBS's objects that cannot be read, stop the apply before the block opens with a
+// plain error that the caller reports and falls back from. So does a
+// cancellation, at any point, with the cancellation itself.
+func applyPBSSectionCfgViaAPI(ctx context.Context, logger *logging.Logger, stageRoot string, strict bool, cfg pbsSectionCfg) error {
+	r := &pbsSectionRestore{ctx: ctx, logger: logger, cfg: cfg}
+	kind := strings.Join(cfg.command, " ")
+	stagedPath := filepath.Join(stageRoot, cfg.file)
 
 	raw, present, err := readStageFileOptional(stageRoot, cfg.file)
 	if err != nil {
 		return err
 	}
 	if !present {
+		r.debug("staged=%s not in the backup action=skip", stagedPath)
 		return nil
 	}
 	sections, err := parseProxmoxNotificationSections(raw)
@@ -330,17 +516,39 @@ func applyPBSSectionCfgViaAPI(ctx context.Context, logger *logging.Logger, stage
 		}
 		desired[id] = s
 	}
+	ids := pbsSortedNames(desired)
 
-	var removeFailures []string
+	// Clean mode reads this PBS's objects before the block opens: when they cannot
+	// be read, the caller reports it and falls back as before the block existed.
+	var current []string
 	if strict {
-		out, err := runPBSManager(ctx, commandArgs("list", "--output-format=json")...)
+		listArgs := r.commandArgs("list", "--output-format=json")
+		r.debug("reading current %s cmd=%q", r.keys(), "proxmox-backup-manager "+strings.Join(listArgs, " "))
+		out, err := runPBSManager(ctx, listArgs...)
 		if err != nil {
+			r.debug("%s list failed error=%q", kind, pbsManagerErrorText(err))
 			return err
 		}
-		current, err := parsePBSListIDs(out, cfg.listKeys...)
-		if err != nil {
+		if current, err = parsePBSListIDs(out, cfg.listKeys...); err != nil {
+			r.debug("%s list returned unparseable output error=%q", kind, err.Error())
 			return fmt.Errorf("parse %s list: %w", kind, err)
 		}
+	}
+
+	mode := "merge"
+	if strict {
+		mode = "clean"
+	}
+	logger.Info("Restoring PBS %s...", cfg.labels.plural)
+	r.debug("mode=%s staged=%s", mode, stagedPath)
+	r.debug("backup %s=%d names=%s", r.keys(), len(ids), strings.Join(ids, ","))
+	logger.Info("  %s to restore: %d", cfg.labels.countNoun, len(ids))
+	if len(ids) > 0 {
+		logger.Info("  Names: %s", strings.Join(ids, ", "))
+	}
+
+	if strict {
+		r.debug("current %s=%d names=%s", r.keys(), len(current), strings.Join(current, ","))
 		for _, id := range current {
 			if _, ok := desired[id]; ok {
 				continue
@@ -348,54 +556,23 @@ func applyPBSSectionCfgViaAPI(ctx context.Context, logger *logging.Logger, stage
 			if err := ctx.Err(); err != nil {
 				return err
 			}
-			if _, err := runPBSManager(ctx, commandArgs("remove", id)...); err != nil {
-				if ctxErr := ctx.Err(); ctxErr != nil {
-					return ctxErr
-				}
-				logger.Warning("PBS API apply: %s remove %s failed (continuing): %v", kind, id, err)
-				removeFailures = append(removeFailures, id)
+			if err := r.removeStale(id); err != nil {
+				return err
 			}
 		}
 	}
 
-	ids := make([]string, 0, len(desired))
-	for id := range desired {
-		ids = append(ids, id)
-	}
-	sort.Strings(ids)
-	var applyFailures []string
 	for _, id := range ids {
 		// A cancelled restore stops here with the cancellation, not with one
 		// "not applied" object per remaining id that hides it from the caller.
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		s := desired[id]
-		flags := pbsSectionFlags(logger, kind, id, s.Entries, cfg.base64Values)
-		createArgs := commandArgs(append([]string{"create", id}, flags...)...)
-		if _, err := runPBSManagerSensitive(ctx, createArgs, cfg.secretFlags...); err != nil {
-			if ctxErr := ctx.Err(); ctxErr != nil {
-				return ctxErr
-			}
-			updateArgs := commandArgs(append([]string{"update", id}, flags...)...)
-			if _, upErr := runPBSManagerSensitive(ctx, updateArgs, cfg.secretFlags...); upErr != nil {
-				if ctxErr := ctx.Err(); ctxErr != nil {
-					return ctxErr
-				}
-				logger.Warning("PBS API apply: %s %s failed (continuing): %v (create) / %v (update)", kind, id, err, upErr)
-				applyFailures = append(applyFailures, id)
-			}
+		if err := r.apply(id, desired[id]); err != nil {
+			return err
 		}
 	}
-
-	if len(applyFailures) > 0 {
-		applyErr := fmt.Errorf("%d %s object(s) not applied: [%s]", len(applyFailures), kind, strings.Join(applyFailures, ", "))
-		if removeErr := pbsCleanRemoveResult(kind, removeFailures); removeErr != nil {
-			return &pbsCleanIncompleteApplyError{err: applyErr, remove: removeErr}
-		}
-		return applyErr
-	}
-	return pbsCleanRemoveResult(kind, removeFailures)
+	return r.outcome()
 }
 
 func applyPBSRemoteCfgViaAPI(ctx context.Context, logger *logging.Logger, stageRoot string, strict bool) error {
@@ -407,6 +584,7 @@ func applyPBSRemoteCfgViaAPI(ctx context.Context, logger *logging.Logger, stageR
 		// PBS writes the password as standard base64 ("dummyprobe" is stored as
 		// "ZHVtbXlwcm9iZQ==") and base64-encodes whatever --password receives.
 		base64Values: []string{"password"},
+		labels:       pbsRemoteLabels,
 	})
 }
 
@@ -416,6 +594,7 @@ func applyPBSS3CfgViaAPI(ctx context.Context, logger *logging.Logger, stageRoot 
 		command:     []string{"s3", "endpoint"},
 		listKeys:    []string{"id", "name"},
 		secretFlags: []string{"--access-key", "--secret-key"},
+		labels:      pbsS3EndpointLabels,
 	})
 }
 
@@ -977,6 +1156,7 @@ func applyPBSSyncCfgViaAPI(ctx context.Context, logger *logging.Logger, stageRoo
 		file:     "etc/proxmox-backup/sync.cfg",
 		command:  []string{"sync-job"},
 		listKeys: []string{"id", "name"},
+		labels:   pbsSyncJobLabels,
 	})
 }
 
@@ -985,6 +1165,7 @@ func applyPBSVerificationCfgViaAPI(ctx context.Context, logger *logging.Logger, 
 		file:     "etc/proxmox-backup/verification.cfg",
 		command:  []string{"verify-job"},
 		listKeys: []string{"id", "name"},
+		labels:   pbsVerifyJobLabels,
 	})
 }
 
@@ -993,6 +1174,7 @@ func applyPBSPruneCfgViaAPI(ctx context.Context, logger *logging.Logger, stageRo
 		file:     "etc/proxmox-backup/prune.cfg",
 		command:  []string{"prune-job"},
 		listKeys: []string{"id", "name"},
+		labels:   pbsPruneJobLabels,
 	})
 }
 
@@ -1001,6 +1183,7 @@ func applyPBSTrafficControlCfgViaAPI(ctx context.Context, logger *logging.Logger
 		file:     "etc/proxmox-backup/traffic-control.cfg",
 		command:  []string{"traffic-control"},
 		listKeys: []string{"name", "id"},
+		labels:   pbsTrafficControlLabels,
 	})
 }
 

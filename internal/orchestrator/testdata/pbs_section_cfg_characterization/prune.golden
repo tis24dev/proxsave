@@ -12,7 +12,7 @@ commands:
   (none)
 error: (nil)
 log:
-  (none)
+  [<TIME>] DEBUG    PBS prune job restore: staged=/stage/etc/proxmox-backup/prune.cfg not in the backup action=skip
 
 ### absent-strict
 strict: true
@@ -25,7 +25,7 @@ commands:
   (none)
 error: (nil)
 log:
-  (none)
+  [<TIME>] DEBUG    PBS prune job restore: staged=/stage/etc/proxmox-backup/prune.cfg not in the backup action=skip
 
 ### read-error
 strict: true
@@ -63,7 +63,11 @@ commands:
   (none)
 error: (nil)
 log:
-  (none)
+  [<TIME>] INFO     Restoring PBS prune jobs...
+  [<TIME>] DEBUG    PBS prune job restore: mode=merge staged=/stage/etc/proxmox-backup/prune.cfg
+  [<TIME>] DEBUG    PBS prune job restore: backup prune-jobs=0 names=
+  [<TIME>] INFO       Prune jobs to restore: 0
+  [<TIME>] SKIP     PBS prune job configuration: nothing to restore
 
 ### empty-file-strict
 strict: true
@@ -82,7 +86,21 @@ commands:
   proxmox-backup-manager prune-job remove old-b
 error: (nil)
 log:
-  (none)
+  [<TIME>] DEBUG    PBS prune job restore: reading current prune-jobs cmd="proxmox-backup-manager prune-job list --output-format=json"
+  [<TIME>] INFO     Restoring PBS prune jobs...
+  [<TIME>] DEBUG    PBS prune job restore: mode=clean staged=/stage/etc/proxmox-backup/prune.cfg
+  [<TIME>] DEBUG    PBS prune job restore: backup prune-jobs=0 names=
+  [<TIME>] INFO       Prune jobs to restore: 0
+  [<TIME>] DEBUG    PBS prune job restore: current prune-jobs=2 names=old-a,old-b
+  [<TIME>] DEBUG    PBS prune job restore: prune-job=old-a not in backup action=remove
+  [<TIME>] DEBUG    PBS prune job restore: prune-job=old-a removed
+  [<TIME>] INFO     Prune job old-a is configured on this PBS but not present in the backup
+  [<TIME>] INFO     ✓ PBS prune job old-a: removed
+  [<TIME>] DEBUG    PBS prune job restore: prune-job=old-b not in backup action=remove
+  [<TIME>] DEBUG    PBS prune job restore: prune-job=old-b removed
+  [<TIME>] INFO     Prune job old-b is configured on this PBS but not present in the backup
+  [<TIME>] INFO     ✓ PBS prune job old-b: removed
+  [<TIME>] INFO     ✓ PBS prune job configuration: applied
 
 ### nameless-header
 strict: false
@@ -106,7 +124,14 @@ commands:
   proxmox-backup-manager prune-job create alpha --store ds-alpha --schedule daily --keep-last 3 --prune: "" --comment stray-body
 error: (nil)
 log:
-  (none)
+  [<TIME>] INFO     Restoring PBS prune jobs...
+  [<TIME>] DEBUG    PBS prune job restore: mode=merge staged=/stage/etc/proxmox-backup/prune.cfg
+  [<TIME>] DEBUG    PBS prune job restore: backup prune-jobs=1 names=alpha
+  [<TIME>] INFO       Prune jobs to restore: 1
+  [<TIME>] INFO       Names: alpha
+  [<TIME>] DEBUG    PBS prune job restore: prune-job=alpha created
+  [<TIME>] INFO     ✓ PBS prune job alpha: applied
+  [<TIME>] INFO     ✓ PBS prune job configuration: applied
 
 ### create-sorted
 strict: false
@@ -142,7 +167,20 @@ commands:
   proxmox-backup-manager prune-job create delta --store ds-delta --schedule daily --keep-last 3
 error: (nil)
 log:
-  (none)
+  [<TIME>] INFO     Restoring PBS prune jobs...
+  [<TIME>] DEBUG    PBS prune job restore: mode=merge staged=/stage/etc/proxmox-backup/prune.cfg
+  [<TIME>] DEBUG    PBS prune job restore: backup prune-jobs=4 names=alpha,bravo,charlie,delta
+  [<TIME>] INFO       Prune jobs to restore: 4
+  [<TIME>] INFO       Names: alpha, bravo, charlie, delta
+  [<TIME>] DEBUG    PBS prune job restore: prune-job=alpha created
+  [<TIME>] INFO     ✓ PBS prune job alpha: applied
+  [<TIME>] DEBUG    PBS prune job restore: prune-job=bravo created
+  [<TIME>] INFO     ✓ PBS prune job bravo: applied
+  [<TIME>] DEBUG    PBS prune job restore: prune-job=charlie created
+  [<TIME>] INFO     ✓ PBS prune job charlie: applied
+  [<TIME>] DEBUG    PBS prune job restore: prune-job=delta created
+  [<TIME>] INFO     ✓ PBS prune job delta: applied
+  [<TIME>] INFO     ✓ PBS prune job configuration: applied
 
 ### flag-building
 strict: false
@@ -163,7 +201,14 @@ commands:
   proxmox-backup-manager prune-job create alpha --store ds-alpha --schedule daily --keep-last 3 --mixed-case-key "value  with  inner  spaces"
 error: (nil)
 log:
-  (none)
+  [<TIME>] INFO     Restoring PBS prune jobs...
+  [<TIME>] DEBUG    PBS prune job restore: mode=merge staged=/stage/etc/proxmox-backup/prune.cfg
+  [<TIME>] DEBUG    PBS prune job restore: backup prune-jobs=1 names=alpha
+  [<TIME>] INFO       Prune jobs to restore: 1
+  [<TIME>] INFO       Names: alpha
+  [<TIME>] DEBUG    PBS prune job restore: prune-job=alpha created
+  [<TIME>] INFO     ✓ PBS prune job alpha: applied
+  [<TIME>] INFO     ✓ PBS prune job configuration: applied
 
 ### duplicate-section
 strict: false
@@ -187,7 +232,14 @@ commands:
   proxmox-backup-manager prune-job create alpha --store ds-alpha --schedule daily --keep-last 3 --comment second-copy
 error: (nil)
 log:
-  (none)
+  [<TIME>] INFO     Restoring PBS prune jobs...
+  [<TIME>] DEBUG    PBS prune job restore: mode=merge staged=/stage/etc/proxmox-backup/prune.cfg
+  [<TIME>] DEBUG    PBS prune job restore: backup prune-jobs=1 names=alpha
+  [<TIME>] INFO       Prune jobs to restore: 1
+  [<TIME>] INFO       Names: alpha
+  [<TIME>] DEBUG    PBS prune job restore: prune-job=alpha created
+  [<TIME>] INFO     ✓ PBS prune job alpha: applied
+  [<TIME>] INFO     ✓ PBS prune job configuration: applied
 
 ### foreign-section-type
 strict: false
@@ -209,7 +261,16 @@ commands:
   proxmox-backup-manager prune-job create zulu --comment from-elsewhere
 error: (nil)
 log:
-  (none)
+  [<TIME>] INFO     Restoring PBS prune jobs...
+  [<TIME>] DEBUG    PBS prune job restore: mode=merge staged=/stage/etc/proxmox-backup/prune.cfg
+  [<TIME>] DEBUG    PBS prune job restore: backup prune-jobs=2 names=alpha,zulu
+  [<TIME>] INFO       Prune jobs to restore: 2
+  [<TIME>] INFO       Names: alpha, zulu
+  [<TIME>] DEBUG    PBS prune job restore: prune-job=alpha created
+  [<TIME>] INFO     ✓ PBS prune job alpha: applied
+  [<TIME>] DEBUG    PBS prune job restore: prune-job=zulu created
+  [<TIME>] INFO     ✓ PBS prune job zulu: applied
+  [<TIME>] INFO     ✓ PBS prune job configuration: applied
 
 ### create-fails-update-ok
 strict: false
@@ -240,7 +301,19 @@ commands:
   proxmox-backup-manager prune-job create charlie --store ds-charlie --schedule daily --keep-last 3
 error: (nil)
 log:
-  (none)
+  [<TIME>] INFO     Restoring PBS prune jobs...
+  [<TIME>] DEBUG    PBS prune job restore: mode=merge staged=/stage/etc/proxmox-backup/prune.cfg
+  [<TIME>] DEBUG    PBS prune job restore: backup prune-jobs=3 names=alpha,bravo,charlie
+  [<TIME>] INFO       Prune jobs to restore: 3
+  [<TIME>] INFO       Names: alpha, bravo, charlie
+  [<TIME>] DEBUG    PBS prune job restore: prune-job=alpha created
+  [<TIME>] INFO     ✓ PBS prune job alpha: applied
+  [<TIME>] DEBUG    PBS prune job restore: prune-job=bravo create failed error="injected create failure" action=update
+  [<TIME>] DEBUG    PBS prune job restore: prune-job=bravo updated
+  [<TIME>] INFO     ✓ PBS prune job bravo: applied
+  [<TIME>] DEBUG    PBS prune job restore: prune-job=charlie created
+  [<TIME>] INFO     ✓ PBS prune job charlie: applied
+  [<TIME>] INFO     ✓ PBS prune job configuration: applied
 
 ### create-and-update-fail
 strict: false
@@ -270,11 +343,24 @@ commands:
   proxmox-backup-manager prune-job create bravo --store ds-bravo --schedule daily --keep-last 3
   proxmox-backup-manager prune-job update bravo --store ds-bravo --schedule daily --keep-last 3
   proxmox-backup-manager prune-job create charlie --store ds-charlie --schedule daily --keep-last 3
-error: 1 prune-job object(s) not applied: [bravo]
-error chain: *errors.errorString
+error: PBS prune job configuration incomplete: 1 prune job(s) not applied [bravo]
+error chain: *orchestrator.pbsSectionRestoreIncompleteError
 error is: (none)
 log:
-  [<TIME>] WARNING  PBS API apply: prune-job bravo failed (continuing): proxmox-backup-manager prune-job create bravo --store ds-bravo --schedule daily --keep-last 3 failed: injected create failure (create) / proxmox-backup-manager prune-job update bravo --store ds-bravo --schedule daily --keep-last 3 failed: injected update failure (update)
+  [<TIME>] INFO     Restoring PBS prune jobs...
+  [<TIME>] DEBUG    PBS prune job restore: mode=merge staged=/stage/etc/proxmox-backup/prune.cfg
+  [<TIME>] DEBUG    PBS prune job restore: backup prune-jobs=3 names=alpha,bravo,charlie
+  [<TIME>] INFO       Prune jobs to restore: 3
+  [<TIME>] INFO       Names: alpha, bravo, charlie
+  [<TIME>] DEBUG    PBS prune job restore: prune-job=alpha created
+  [<TIME>] INFO     ✓ PBS prune job alpha: applied
+  [<TIME>] DEBUG    PBS prune job restore: prune-job=bravo create failed error="injected create failure" action=update
+  [<TIME>] DEBUG    PBS prune job restore: prune-job=bravo update failed error="injected update failure"
+  [<TIME>] INFO     Prune job bravo was rejected by PBS: "injected create failure"
+  [<TIME>] WARNING  ⚠ PBS prune job bravo: not applied
+  [<TIME>] DEBUG    PBS prune job restore: prune-job=charlie created
+  [<TIME>] INFO     ✓ PBS prune job charlie: applied
+  [<TIME>] WARNING  ⚠ PBS prune job configuration: partially applied
 
 ### strict-list-fails
 strict: true
@@ -294,7 +380,8 @@ error: proxmox-backup-manager prune-job list --output-format=json failed: inject
 error chain: *fmt.wrapError -> *errors.errorString
 error is: injected list failure
 log:
-  (none)
+  [<TIME>] DEBUG    PBS prune job restore: reading current prune-jobs cmd="proxmox-backup-manager prune-job list --output-format=json"
+  [<TIME>] DEBUG    PBS prune job restore: prune-job list failed error="injected list failure"
 
 ### strict-list-invalid-json
 strict: true
@@ -314,7 +401,8 @@ error: parse prune-job list: invalid character 'o' in literal null (expecting 'u
 error chain: *fmt.wrapError -> *json.SyntaxError
 error is: (none)
 log:
-  (none)
+  [<TIME>] DEBUG    PBS prune job restore: reading current prune-jobs cmd="proxmox-backup-manager prune-job list --output-format=json"
+  [<TIME>] DEBUG    PBS prune job restore: prune-job list returned unparseable output error="invalid character 'o' in literal null (expecting 'u')"
 
 ### strict-list-row-without-id
 strict: true
@@ -334,7 +422,8 @@ error: parse prune-job list: failed to parse PBS list row 1: none of [id name] p
 error chain: *fmt.wrapError -> *errors.errorString
 error is: (none)
 log:
-  (none)
+  [<TIME>] DEBUG    PBS prune job restore: reading current prune-jobs cmd="proxmox-backup-manager prune-job list --output-format=json"
+  [<TIME>] DEBUG    PBS prune job restore: prune-job list returned unparseable output error="failed to parse PBS list row 1: none of [id name] present as non-empty string (available keys: [comment store])"
 
 ### strict-list-empty-output
 strict: true
@@ -353,7 +442,16 @@ commands:
   proxmox-backup-manager prune-job create alpha --store ds-alpha --schedule daily --keep-last 3
 error: (nil)
 log:
-  (none)
+  [<TIME>] DEBUG    PBS prune job restore: reading current prune-jobs cmd="proxmox-backup-manager prune-job list --output-format=json"
+  [<TIME>] INFO     Restoring PBS prune jobs...
+  [<TIME>] DEBUG    PBS prune job restore: mode=clean staged=/stage/etc/proxmox-backup/prune.cfg
+  [<TIME>] DEBUG    PBS prune job restore: backup prune-jobs=1 names=alpha
+  [<TIME>] INFO       Prune jobs to restore: 1
+  [<TIME>] INFO       Names: alpha
+  [<TIME>] DEBUG    PBS prune job restore: current prune-jobs=0 names=
+  [<TIME>] DEBUG    PBS prune job restore: prune-job=alpha created
+  [<TIME>] INFO     ✓ PBS prune job alpha: applied
+  [<TIME>] INFO     ✓ PBS prune job configuration: applied
 
 ### strict-prune-plain-array
 strict: true
@@ -380,7 +478,26 @@ commands:
   proxmox-backup-manager prune-job create charlie --store ds-charlie --schedule daily --keep-last 3
 error: (nil)
 log:
-  (none)
+  [<TIME>] DEBUG    PBS prune job restore: reading current prune-jobs cmd="proxmox-backup-manager prune-job list --output-format=json"
+  [<TIME>] INFO     Restoring PBS prune jobs...
+  [<TIME>] DEBUG    PBS prune job restore: mode=clean staged=/stage/etc/proxmox-backup/prune.cfg
+  [<TIME>] DEBUG    PBS prune job restore: backup prune-jobs=2 names=alpha,charlie
+  [<TIME>] INFO       Prune jobs to restore: 2
+  [<TIME>] INFO       Names: alpha, charlie
+  [<TIME>] DEBUG    PBS prune job restore: current prune-jobs=3 names=alpha,beta,zeta
+  [<TIME>] DEBUG    PBS prune job restore: prune-job=beta not in backup action=remove
+  [<TIME>] DEBUG    PBS prune job restore: prune-job=beta removed
+  [<TIME>] INFO     Prune job beta is configured on this PBS but not present in the backup
+  [<TIME>] INFO     ✓ PBS prune job beta: removed
+  [<TIME>] DEBUG    PBS prune job restore: prune-job=zeta not in backup action=remove
+  [<TIME>] DEBUG    PBS prune job restore: prune-job=zeta removed
+  [<TIME>] INFO     Prune job zeta is configured on this PBS but not present in the backup
+  [<TIME>] INFO     ✓ PBS prune job zeta: removed
+  [<TIME>] DEBUG    PBS prune job restore: prune-job=alpha created
+  [<TIME>] INFO     ✓ PBS prune job alpha: applied
+  [<TIME>] DEBUG    PBS prune job restore: prune-job=charlie created
+  [<TIME>] INFO     ✓ PBS prune job charlie: applied
+  [<TIME>] INFO     ✓ PBS prune job configuration: applied
 
 ### strict-prune-data-wrapper
 strict: true
@@ -407,7 +524,26 @@ commands:
   proxmox-backup-manager prune-job create charlie --store ds-charlie --schedule daily --keep-last 3
 error: (nil)
 log:
-  (none)
+  [<TIME>] DEBUG    PBS prune job restore: reading current prune-jobs cmd="proxmox-backup-manager prune-job list --output-format=json"
+  [<TIME>] INFO     Restoring PBS prune jobs...
+  [<TIME>] DEBUG    PBS prune job restore: mode=clean staged=/stage/etc/proxmox-backup/prune.cfg
+  [<TIME>] DEBUG    PBS prune job restore: backup prune-jobs=2 names=alpha,charlie
+  [<TIME>] INFO       Prune jobs to restore: 2
+  [<TIME>] INFO       Names: alpha, charlie
+  [<TIME>] DEBUG    PBS prune job restore: current prune-jobs=3 names=alpha,beta,zeta
+  [<TIME>] DEBUG    PBS prune job restore: prune-job=beta not in backup action=remove
+  [<TIME>] DEBUG    PBS prune job restore: prune-job=beta removed
+  [<TIME>] INFO     Prune job beta is configured on this PBS but not present in the backup
+  [<TIME>] INFO     ✓ PBS prune job beta: removed
+  [<TIME>] DEBUG    PBS prune job restore: prune-job=zeta not in backup action=remove
+  [<TIME>] DEBUG    PBS prune job restore: prune-job=zeta removed
+  [<TIME>] INFO     Prune job zeta is configured on this PBS but not present in the backup
+  [<TIME>] INFO     ✓ PBS prune job zeta: removed
+  [<TIME>] DEBUG    PBS prune job restore: prune-job=alpha created
+  [<TIME>] INFO     ✓ PBS prune job alpha: applied
+  [<TIME>] DEBUG    PBS prune job restore: prune-job=charlie created
+  [<TIME>] INFO     ✓ PBS prune job charlie: applied
+  [<TIME>] INFO     ✓ PBS prune job configuration: applied
 
 ### strict-remove-one-fails
 strict: true
@@ -427,11 +563,28 @@ commands:
   proxmox-backup-manager prune-job remove beta
   proxmox-backup-manager prune-job remove gamma
   proxmox-backup-manager prune-job create alpha --store ds-alpha --schedule daily --keep-last 3
-error: prune-job remove failed for 1 object(s) [beta]: PBS Clean 1:1 incomplete: stale object(s) could not be removed
-error chain: *fmt.wrapError -> *errors.errorString
+error: PBS prune job configuration incomplete: 1 stale prune job(s) not removed [beta]
+error chain: *orchestrator.pbsSectionRestoreIncompleteError -> *errors.errorString
 error is: errPBSCleanRemoveIncomplete
 log:
-  [<TIME>] WARNING  PBS API apply: prune-job remove beta failed (continuing): proxmox-backup-manager prune-job remove beta failed: injected remove failure
+  [<TIME>] DEBUG    PBS prune job restore: reading current prune-jobs cmd="proxmox-backup-manager prune-job list --output-format=json"
+  [<TIME>] INFO     Restoring PBS prune jobs...
+  [<TIME>] DEBUG    PBS prune job restore: mode=clean staged=/stage/etc/proxmox-backup/prune.cfg
+  [<TIME>] DEBUG    PBS prune job restore: backup prune-jobs=1 names=alpha
+  [<TIME>] INFO       Prune jobs to restore: 1
+  [<TIME>] INFO       Names: alpha
+  [<TIME>] DEBUG    PBS prune job restore: current prune-jobs=3 names=alpha,beta,gamma
+  [<TIME>] DEBUG    PBS prune job restore: prune-job=beta not in backup action=remove
+  [<TIME>] DEBUG    PBS prune job restore: prune-job=beta remove failed error="injected remove failure"
+  [<TIME>] INFO     Prune job beta is configured on this PBS but not present in the backup
+  [<TIME>] WARNING  ⚠ PBS prune job beta: not removed
+  [<TIME>] DEBUG    PBS prune job restore: prune-job=gamma not in backup action=remove
+  [<TIME>] DEBUG    PBS prune job restore: prune-job=gamma removed
+  [<TIME>] INFO     Prune job gamma is configured on this PBS but not present in the backup
+  [<TIME>] INFO     ✓ PBS prune job gamma: removed
+  [<TIME>] DEBUG    PBS prune job restore: prune-job=alpha created
+  [<TIME>] INFO     ✓ PBS prune job alpha: applied
+  [<TIME>] WARNING  ⚠ PBS prune job configuration: partially applied
 
 ### strict-remove-two-fail
 strict: true
@@ -453,12 +606,32 @@ commands:
   proxmox-backup-manager prune-job remove delta
   proxmox-backup-manager prune-job remove gamma
   proxmox-backup-manager prune-job create alpha --store ds-alpha --schedule daily --keep-last 3
-error: prune-job remove failed for 2 object(s) [beta, delta]: PBS Clean 1:1 incomplete: stale object(s) could not be removed
-error chain: *fmt.wrapError -> *errors.errorString
+error: PBS prune job configuration incomplete: 2 stale prune job(s) not removed [beta, delta]
+error chain: *orchestrator.pbsSectionRestoreIncompleteError -> *errors.errorString
 error is: errPBSCleanRemoveIncomplete
 log:
-  [<TIME>] WARNING  PBS API apply: prune-job remove beta failed (continuing): proxmox-backup-manager prune-job remove beta failed: injected remove failure
-  [<TIME>] WARNING  PBS API apply: prune-job remove delta failed (continuing): proxmox-backup-manager prune-job remove delta failed: injected remove failure
+  [<TIME>] DEBUG    PBS prune job restore: reading current prune-jobs cmd="proxmox-backup-manager prune-job list --output-format=json"
+  [<TIME>] INFO     Restoring PBS prune jobs...
+  [<TIME>] DEBUG    PBS prune job restore: mode=clean staged=/stage/etc/proxmox-backup/prune.cfg
+  [<TIME>] DEBUG    PBS prune job restore: backup prune-jobs=1 names=alpha
+  [<TIME>] INFO       Prune jobs to restore: 1
+  [<TIME>] INFO       Names: alpha
+  [<TIME>] DEBUG    PBS prune job restore: current prune-jobs=4 names=alpha,beta,delta,gamma
+  [<TIME>] DEBUG    PBS prune job restore: prune-job=beta not in backup action=remove
+  [<TIME>] DEBUG    PBS prune job restore: prune-job=beta remove failed error="injected remove failure"
+  [<TIME>] INFO     Prune job beta is configured on this PBS but not present in the backup
+  [<TIME>] WARNING  ⚠ PBS prune job beta: not removed
+  [<TIME>] DEBUG    PBS prune job restore: prune-job=delta not in backup action=remove
+  [<TIME>] DEBUG    PBS prune job restore: prune-job=delta remove failed error="injected remove failure"
+  [<TIME>] INFO     Prune job delta is configured on this PBS but not present in the backup
+  [<TIME>] WARNING  ⚠ PBS prune job delta: not removed
+  [<TIME>] DEBUG    PBS prune job restore: prune-job=gamma not in backup action=remove
+  [<TIME>] DEBUG    PBS prune job restore: prune-job=gamma removed
+  [<TIME>] INFO     Prune job gamma is configured on this PBS but not present in the backup
+  [<TIME>] INFO     ✓ PBS prune job gamma: removed
+  [<TIME>] DEBUG    PBS prune job restore: prune-job=alpha created
+  [<TIME>] INFO     ✓ PBS prune job alpha: applied
+  [<TIME>] WARNING  ⚠ PBS prune job configuration: partially applied
 
 ### strict-remove-fails-then-create-fails
 strict: true
@@ -480,12 +653,26 @@ commands:
   proxmox-backup-manager prune-job remove beta
   proxmox-backup-manager prune-job create bravo --store ds-bravo --schedule daily --keep-last 3
   proxmox-backup-manager prune-job update bravo --store ds-bravo --schedule daily --keep-last 3
-error: 1 prune-job object(s) not applied: [bravo]
-error chain: *orchestrator.pbsCleanIncompleteApplyError
+error: PBS prune job configuration incomplete: 1 prune job(s) not applied [bravo]; 1 stale prune job(s) not removed [beta]
+error chain: *orchestrator.pbsSectionRestoreIncompleteError -> *errors.errorString
 error is: errPBSCleanRemoveIncomplete
 log:
-  [<TIME>] WARNING  PBS API apply: prune-job remove beta failed (continuing): proxmox-backup-manager prune-job remove beta failed: injected remove failure
-  [<TIME>] WARNING  PBS API apply: prune-job bravo failed (continuing): proxmox-backup-manager prune-job create bravo --store ds-bravo --schedule daily --keep-last 3 failed: injected create failure (create) / proxmox-backup-manager prune-job update bravo --store ds-bravo --schedule daily --keep-last 3 failed: injected update failure (update)
+  [<TIME>] DEBUG    PBS prune job restore: reading current prune-jobs cmd="proxmox-backup-manager prune-job list --output-format=json"
+  [<TIME>] INFO     Restoring PBS prune jobs...
+  [<TIME>] DEBUG    PBS prune job restore: mode=clean staged=/stage/etc/proxmox-backup/prune.cfg
+  [<TIME>] DEBUG    PBS prune job restore: backup prune-jobs=1 names=bravo
+  [<TIME>] INFO       Prune jobs to restore: 1
+  [<TIME>] INFO       Names: bravo
+  [<TIME>] DEBUG    PBS prune job restore: current prune-jobs=2 names=beta,bravo
+  [<TIME>] DEBUG    PBS prune job restore: prune-job=beta not in backup action=remove
+  [<TIME>] DEBUG    PBS prune job restore: prune-job=beta remove failed error="injected remove failure"
+  [<TIME>] INFO     Prune job beta is configured on this PBS but not present in the backup
+  [<TIME>] WARNING  ⚠ PBS prune job beta: not removed
+  [<TIME>] DEBUG    PBS prune job restore: prune-job=bravo create failed error="injected create failure" action=update
+  [<TIME>] DEBUG    PBS prune job restore: prune-job=bravo update failed error="injected update failure"
+  [<TIME>] INFO     Prune job bravo was rejected by PBS: "injected create failure"
+  [<TIME>] WARNING  ⚠ PBS prune job bravo: not applied
+  [<TIME>] WARNING  ⚠ PBS prune job configuration: not applied
 
 ### strict-list-key-order
 strict: true
@@ -511,4 +698,41 @@ commands:
   proxmox-backup-manager prune-job create alpha --store ds-alpha --schedule daily --keep-last 3
 error: (nil)
 log:
-  (none)
+  [<TIME>] DEBUG    PBS prune job restore: reading current prune-jobs cmd="proxmox-backup-manager prune-job list --output-format=json"
+  [<TIME>] INFO     Restoring PBS prune jobs...
+  [<TIME>] DEBUG    PBS prune job restore: mode=clean staged=/stage/etc/proxmox-backup/prune.cfg
+  [<TIME>] DEBUG    PBS prune job restore: backup prune-jobs=1 names=alpha
+  [<TIME>] INFO       Prune jobs to restore: 1
+  [<TIME>] INFO       Names: alpha
+  [<TIME>] DEBUG    PBS prune job restore: current prune-jobs=8 names=alpha,blank-id,blank-name,id-x,numeric-id,numeric-name,only-id,only-name
+  [<TIME>] DEBUG    PBS prune job restore: prune-job=blank-id not in backup action=remove
+  [<TIME>] DEBUG    PBS prune job restore: prune-job=blank-id removed
+  [<TIME>] INFO     Prune job blank-id is configured on this PBS but not present in the backup
+  [<TIME>] INFO     ✓ PBS prune job blank-id: removed
+  [<TIME>] DEBUG    PBS prune job restore: prune-job=blank-name not in backup action=remove
+  [<TIME>] DEBUG    PBS prune job restore: prune-job=blank-name removed
+  [<TIME>] INFO     Prune job blank-name is configured on this PBS but not present in the backup
+  [<TIME>] INFO     ✓ PBS prune job blank-name: removed
+  [<TIME>] DEBUG    PBS prune job restore: prune-job=id-x not in backup action=remove
+  [<TIME>] DEBUG    PBS prune job restore: prune-job=id-x removed
+  [<TIME>] INFO     Prune job id-x is configured on this PBS but not present in the backup
+  [<TIME>] INFO     ✓ PBS prune job id-x: removed
+  [<TIME>] DEBUG    PBS prune job restore: prune-job=numeric-id not in backup action=remove
+  [<TIME>] DEBUG    PBS prune job restore: prune-job=numeric-id removed
+  [<TIME>] INFO     Prune job numeric-id is configured on this PBS but not present in the backup
+  [<TIME>] INFO     ✓ PBS prune job numeric-id: removed
+  [<TIME>] DEBUG    PBS prune job restore: prune-job=numeric-name not in backup action=remove
+  [<TIME>] DEBUG    PBS prune job restore: prune-job=numeric-name removed
+  [<TIME>] INFO     Prune job numeric-name is configured on this PBS but not present in the backup
+  [<TIME>] INFO     ✓ PBS prune job numeric-name: removed
+  [<TIME>] DEBUG    PBS prune job restore: prune-job=only-id not in backup action=remove
+  [<TIME>] DEBUG    PBS prune job restore: prune-job=only-id removed
+  [<TIME>] INFO     Prune job only-id is configured on this PBS but not present in the backup
+  [<TIME>] INFO     ✓ PBS prune job only-id: removed
+  [<TIME>] DEBUG    PBS prune job restore: prune-job=only-name not in backup action=remove
+  [<TIME>] DEBUG    PBS prune job restore: prune-job=only-name removed
+  [<TIME>] INFO     Prune job only-name is configured on this PBS but not present in the backup
+  [<TIME>] INFO     ✓ PBS prune job only-name: removed
+  [<TIME>] DEBUG    PBS prune job restore: prune-job=alpha created
+  [<TIME>] INFO     ✓ PBS prune job alpha: applied
+  [<TIME>] INFO     ✓ PBS prune job configuration: applied

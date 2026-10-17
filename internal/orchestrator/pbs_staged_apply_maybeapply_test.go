@@ -484,11 +484,15 @@ func TestMaybeApplyPBSConfigsFromStage_CleanRemoveRefusedThenCreateFails_NoFallb
 			t.Fatalf("expected command %q, calls: %v", want, runner.CallsList())
 		}
 	}
-	if err == nil {
-		t.Fatalf("expected a summary error so the restore reports 'with warnings'")
+	// The remote block logged the outcome of every remote and its own: the step
+	// returns it as already reported, still matching the incomplete Clean 1:1, so
+	// the restore reports 'with warnings' without a second line.
+	var logged *stageApplyOutcomeLoggedError
+	if !errors.As(err, &logged) || !errors.Is(err, errPBSCleanRemoveIncomplete) {
+		t.Fatalf("expected an outcome-logged error matching errPBSCleanRemoveIncomplete, got: %T %v", err, err)
 	}
-	if !strings.Contains(err.Error(), "remote.cfg (clean 1:1 incomplete)") {
-		t.Fatalf("expected the clean-1:1-incomplete item in the summary, got: %v", err)
+	if strings.Contains(logBuf.String(), "PBS API apply") || strings.Contains(logBuf.String(), "failed to apply") {
+		t.Fatalf("the caller must not repeat the block outcome, log:\n%s", logBuf.String())
 	}
 	if strings.Contains(logBuf.String(), "falling back to file-based") {
 		t.Fatalf("file fallback must NOT run on a refused clean remove, log:\n%s", logBuf.String())
@@ -753,7 +757,8 @@ func TestMaybeApplyPBSConfigsFromStage_DatastoreFailureKeepsApplyingTheRest(t *t
 
 // In Merge mode there is no file fallback, so an object of remote.cfg whose create and
 // update both fail must not stop the objects after it: alpha and charlie are applied,
-// bravo is reported, and the step summary names remote.cfg.
+// bravo is reported by the remote block, and the step returns the block's outcome as
+// already reported.
 func TestMaybeApplyPBSConfigsFromStage_MergeMode_RemoteObjectFailureKeepsApplyingTheRest(t *testing.T) {
 	origFS := restoreFS
 	origCmd := restoreCmd
@@ -812,12 +817,14 @@ func TestMaybeApplyPBSConfigsFromStage_MergeMode_RemoteObjectFailureKeepsApplyin
 		t.Fatalf("update objects = %s, want bravo", got)
 	}
 
-	redacted := func(verb string) string {
-		return "proxmox-backup-manager remote " + verb + " bravo --host bravo.pbs.example --auth-id sync@pbs --password <redacted> failed: injected " + verb + " failure"
-	}
 	for _, want := range []string{
-		"WARNING  PBS API apply: remote bravo failed (continuing): " + redacted("create") + " (create) / " + redacted("update") + " (update)\n",
-		"WARNING  PBS API apply: remote.cfg failed: 1 remote object(s) not applied: [bravo]\n",
+		"INFO     ✓ PBS remote alpha: applied\n",
+		`DEBUG    PBS remote restore: remote=bravo create failed error="injected create failure" action=update` + "\n",
+		`DEBUG    PBS remote restore: remote=bravo update failed error="injected update failure"` + "\n",
+		`INFO     Remote bravo was rejected by PBS: "injected create failure"` + "\n",
+		"WARNING  ⚠ PBS remote bravo: not applied\n",
+		"INFO     ✓ PBS remote charlie: applied\n",
+		"WARNING  ⚠ PBS remote configuration: partially applied\n",
 	} {
 		if !strings.Contains(logBuf.String(), want) {
 			t.Fatalf("expected log line %q, log:\n%s", want, logBuf.String())
@@ -831,7 +838,11 @@ func TestMaybeApplyPBSConfigsFromStage_MergeMode_RemoteObjectFailureKeepsApplyin
 	if strings.Contains(logBuf.String(), "falling back to file-based") {
 		t.Fatalf("merge mode has no file fallback, log:\n%s", logBuf.String())
 	}
-	if err == nil || err.Error() != "1 PBS config item(s) failed to apply: remote.cfg" {
-		t.Fatalf("summary error = %v, want %q", err, "1 PBS config item(s) failed to apply: remote.cfg")
+	if strings.Contains(logBuf.String(), "PBS API apply") || strings.Contains(logBuf.String(), "failed to apply") {
+		t.Fatalf("the caller must not repeat the block outcome, log:\n%s", logBuf.String())
+	}
+	var logged *stageApplyOutcomeLoggedError
+	if !errors.As(err, &logged) || err.Error() != "PBS remote configuration incomplete: 1 remote(s) not applied [bravo]" {
+		t.Fatalf("err = %T %v, want the remote block outcome as already reported", err, err)
 	}
 }

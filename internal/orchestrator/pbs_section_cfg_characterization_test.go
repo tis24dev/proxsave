@@ -29,9 +29,9 @@ import (
 // returned error (text, wrapping chain and sentinel identity) and every log line.
 //
 // On top of the goldens, each case checks what a golden cannot say on its own: that no
-// secret of remote.cfg or s3.cfg reaches an error or a log line, that the redaction
-// marker sits where the code puts it, that the caller's context reaches the runner, and
-// that the same input gives the same transcript on every run.
+// secret of remote.cfg or s3.cfg reaches an error or a log line, that a refused object
+// logs what PBS answered and never the command line, that the caller's context reaches
+// the runner, and that the same input gives the same transcript on every run.
 //
 // These goldens record what the code does TODAY, defects included. A golden that has to
 // change is a behaviour change and must be justified as one.
@@ -81,7 +81,7 @@ var (
 type pbsSectionCharCtxKey struct{}
 
 // pbsSectionCharKind is one of the six applies. relPath, sectionType and body are the
-// staged INPUT; listKeyFirst, secrets and redactedFlags are what the checks expect.
+// staged INPUT; listKeyFirst and secrets are what the checks expect.
 type pbsSectionCharKind struct {
 	key          string
 	relPath      string
@@ -95,9 +95,6 @@ type pbsSectionCharKind struct {
 	// stagedSecrets are the staged forms of secrets that the apply decodes: they must
 	// never reach a returned error or a log line either.
 	stagedSecrets []string
-	// redactedFlags are the flags whose value a failed create/update must show as
-	// <redacted>.
-	redactedFlags []string
 }
 
 var pbsSectionCharKinds = []pbsSectionCharKind{
@@ -117,7 +114,6 @@ var pbsSectionCharKinds = []pbsSectionCharKind{
 		listKeyFirst:  "id",
 		secrets:       []string{pbsSectionCharRemotePassword},
 		stagedSecrets: []string{pbsSectionCharRemotePasswordStaged},
-		redactedFlags: []string{"--password"},
 	},
 	{
 		key:         "s3",
@@ -132,9 +128,8 @@ var pbsSectionCharKinds = []pbsSectionCharKind{
 				"secret-key " + pbsSectionCharS3SecretKey,
 			}
 		},
-		listKeyFirst:  "id",
-		secrets:       []string{pbsSectionCharS3AccessKey, pbsSectionCharS3SecretKey},
-		redactedFlags: []string{"--access-key", "--secret-key"},
+		listKeyFirst: "id",
+		secrets:      []string{pbsSectionCharS3AccessKey, pbsSectionCharS3SecretKey},
 	},
 	{
 		key:         "sync",
@@ -447,25 +442,24 @@ func pbsSectionCharScenarios(k pbsSectionCharKind) []pbsSectionCharScenario {
 				pbsSectionCharWantIs(t, run.err, errPBSSectionCharCreate, false)
 				pbsSectionCharWantIs(t, run.err, errPBSSectionCharUpdate, false)
 				pbsSectionCharWantObjects(t, run, "create", "alpha", "bravo", "charlie")
-				var text string
+				// The block logs what PBS answered to the create and the update of
+				// bravo, never the command line that carried its flags.
+				var refusals []string
 				for _, line := range run.log {
-					if strings.Contains(line, " bravo failed (continuing): ") {
-						text = line
+					if strings.Contains(line, "=bravo create failed ") || strings.Contains(line, "=bravo update failed ") {
+						refusals = append(refusals, line)
 					}
 				}
-				if text == "" {
-					t.Fatalf("no per-object warning for bravo, log: %v", run.log)
+				if len(refusals) != 2 {
+					t.Fatalf("want the create and the update refusal of bravo, got %v, log: %v", refusals, run.log)
 				}
-				for _, flag := range k.redactedFlags {
-					if n := strings.Count(text, flag+" <redacted>"); n != 2 {
-						t.Errorf("%q followed by <redacted> appears %d times in the warning, want 2 (create and update): %s", flag, n, text)
+				for _, line := range refusals {
+					if !strings.Contains(line, "DEBUG") || strings.Contains(line, "proxmox-backup-manager") || strings.Contains(line, " --") {
+						t.Errorf("a refusal line must be DEBUG and carry no command line: %s", line)
 					}
 				}
-				if len(k.redactedFlags) == 0 && strings.Contains(text, "<redacted>") {
-					t.Errorf("unexpected redaction in the warning: %s", text)
-				}
-				// The secrets did reach the runner, so their absence from the warning is
-				// the redaction at work and not a case that never carried them.
+				// The secrets did reach the runner, so their absence from the log is not
+				// a case that never carried them.
 				for _, secret := range k.secrets {
 					found := false
 					for _, c := range run.calls {

@@ -128,6 +128,7 @@ func TestPBSDatastoreRestoreBlock_CleanScenario(t *testing.T) {
 
 	assertPBSBlockLog(t, log, []string{
 		"DEBUG    Start pbs staged apply: dryRun=false stage=/stage",
+		"DEBUG    PBS S3 endpoint restore: staged=/stage/etc/proxmox-backup/s3.cfg not in the backup action=skip",
 		"INFO     Restoring PBS datastore configuration...",
 		"DEBUG    PBS datastore restore: mode=clean staged=/stage/etc/proxmox-backup/datastore.cfg",
 		"DEBUG    PBS datastore restore: backup datastores=4 names=dsa,dsb,dsc,dsd",
@@ -194,6 +195,7 @@ func TestPBSDatastoreRestoreBlock_MergeCreateAndUpdateFail(t *testing.T) {
 
 	assertPBSBlockLog(t, log, []string{
 		"DEBUG    Start pbs staged apply: dryRun=false stage=/stage",
+		"DEBUG    PBS S3 endpoint restore: staged=/stage/etc/proxmox-backup/s3.cfg not in the backup action=skip",
 		"INFO     Restoring PBS datastore configuration...",
 		"DEBUG    PBS datastore restore: mode=merge staged=/stage/etc/proxmox-backup/datastore.cfg",
 		"DEBUG    PBS datastore restore: backup datastores=3 names=dsa,dsb,dsc",
