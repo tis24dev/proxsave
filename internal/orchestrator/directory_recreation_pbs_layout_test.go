@@ -83,3 +83,93 @@ func TestInitializePBSDatastoreDoesNotCreateAnIndexDirectory(t *testing.T) {
 		t.Fatalf(".chunks must be created, err=%v", err)
 	}
 }
+
+// pbsChunkStoreDirCountAtStart is the production value, read before init lowers
+// it: creating 65536 directories in every recreation test costs about 30s each.
+var pbsChunkStoreDirCountAtStart = pbsChunkStoreDirCount
+
+func init() { pbsChunkStoreDirCount = 16 }
+
+func TestPBSChunkStoreDirsAreTheOnesPBSCreates(t *testing.T) {
+	if pbsChunkStoreDirCountAtStart != 0x10000 {
+		t.Fatalf("pbsChunkStoreDirCount=%d; PBS creates 65536 hash directories", pbsChunkStoreDirCountAtStart)
+	}
+	if first, last := pbsChunkStoreDirName(0), pbsChunkStoreDirName(pbsChunkStoreDirCountAtStart-1); first != "0000" || last != "ffff" {
+		t.Fatalf("hash directory names %q..%q; PBS uses 0000..ffff", first, last)
+	}
+}
+
+func TestInitializePBSDatastoreCreatesTheChunkStoreHashDirectories(t *testing.T) {
+	base := filepath.Join(t.TempDir(), "datastore")
+	changed, err := initializePBSDatastore(base, "ds", newDirTestLogger())
+	if err != nil || !changed {
+		t.Fatalf("initializePBSDatastore changed=%v err=%v", changed, err)
+	}
+	entries, err := os.ReadDir(filepath.Join(base, ".chunks"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != pbsChunkStoreDirCount {
+		t.Fatalf(".chunks holds %d entries; want %d", len(entries), pbsChunkStoreDirCount)
+	}
+	for i, e := range entries {
+		info, err := e.Info()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if e.Name() != pbsChunkStoreDirName(i) || !e.IsDir() || info.Mode().Perm() != 0o750 {
+			t.Fatalf("entry %d: %s dir=%v mode=%o; want %s dir 0750", i, e.Name(), e.IsDir(), info.Mode().Perm(), pbsChunkStoreDirName(i))
+		}
+	}
+}
+
+// The scaffold earlier versions created, an empty .chunks, is completed: the
+// datastore holds no data, so the recreation runs and adds the hash directories.
+func TestCreatePBSDatastoreStructureCompletesAnEmptyChunkStore(t *testing.T) {
+	base := filepath.Join(t.TempDir(), "datastore")
+	for _, dir := range []string{".chunks", ".index"} {
+		if err := os.MkdirAll(filepath.Join(base, dir), 0o750); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(base, ".lock"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	changed, err := createPBSDatastoreStructure(base, "ds", newDirTestLogger())
+	if err != nil || !changed {
+		t.Fatalf("createPBSDatastoreStructure changed=%v err=%v", changed, err)
+	}
+	entries, err := os.ReadDir(filepath.Join(base, ".chunks"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != pbsChunkStoreDirCount {
+		t.Fatalf(".chunks holds %d entries; want %d", len(entries), pbsChunkStoreDirCount)
+	}
+}
+
+func TestEnsurePBSChunkStoreDirsKeepsExistingAndReportsAFailure(t *testing.T) {
+	base := filepath.Join(t.TempDir(), "datastore")
+	if err := os.MkdirAll(filepath.Join(base, ".chunks", pbsChunkStoreDirName(0)), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	changed, err := ensurePBSChunkStoreDirs(base, newDirTestLogger())
+	if err != nil || !changed {
+		t.Fatalf("ensurePBSChunkStoreDirs changed=%v err=%v", changed, err)
+	}
+	changed, err = ensurePBSChunkStoreDirs(base, newDirTestLogger())
+	if err != nil || changed {
+		t.Fatalf("second run changed=%v err=%v; want nothing to do", changed, err)
+	}
+
+	blocked := filepath.Join(t.TempDir(), "blocked")
+	if err := os.MkdirAll(blocked, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(blocked, ".chunks"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ensurePBSChunkStoreDirs(blocked, newDirTestLogger()); err == nil {
+		t.Fatal("a .chunks that is not a directory must fail")
+	}
+}

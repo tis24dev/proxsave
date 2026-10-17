@@ -189,13 +189,67 @@ func initializePBSDatastore(basePath, datastoreName string, logger *logging.Logg
 		return false, fmt.Errorf("create datastore subdirectories: %w", err)
 	}
 	applyPBSDatastoreOwnership(basePath, datastoreName, dirsToFix, logger)
+	chunkDirsChanged, err := ensurePBSChunkStoreDirs(basePath, logger)
+	if err != nil {
+		return false, fmt.Errorf("create chunk store directories: %w", err)
+	}
 
 	lockChanged, lockErr := ensurePBSDatastoreLockFile(basePath, logger)
 	if lockErr != nil {
 		logger.Warning("PBS datastore lock file: %v", lockErr)
 	}
 
-	return changed || subdirChanged || lockChanged, nil
+	return changed || subdirChanged || chunkDirsChanged || lockChanged, nil
+}
+
+// pbsChunkStoreDirTotal is the number of hash directories PBS creates in .chunks,
+// 0000 to ffff (ChunkStore::create): a chunk is written into the directory named
+// after the first 4 hex digits of its digest, and fails when that directory is
+// missing. pbsChunkStoreDirCount is how many ensurePBSChunkStoreDirs creates; only
+// tests lower it.
+const pbsChunkStoreDirTotal = 64 * 1024
+
+var pbsChunkStoreDirCount = pbsChunkStoreDirTotal
+
+func pbsChunkStoreDirName(i int) string {
+	return fmt.Sprintf("%04x", i)
+}
+
+// ensurePBSChunkStoreDirs creates the missing hash directories of .chunks, 0750
+// and owned by backup:backup like the ones PBS creates. Without them the
+// datastore is listed but every backup and garbage collection fails.
+func ensurePBSChunkStoreDirs(basePath string, logger *logging.Logger) (bool, error) {
+	chunkDir := filepath.Join(basePath, ".chunks")
+	uid, gid, chown := -1, -1, false
+	if os.Geteuid() == 0 {
+		var err error
+		if uid, gid, chown, err = lookupBackupOwnership(chunkDir, logger); err != nil {
+			return false, err
+		}
+	}
+	created := 0
+	for i := 0; i < pbsChunkStoreDirCount; i++ {
+		dir := filepath.Join(chunkDir, pbsChunkStoreDirName(i))
+		if err := os.Mkdir(dir, 0o750); err != nil {
+			if os.IsExist(err) {
+				continue
+			}
+			return created > 0, fmt.Errorf("create %s: %w", dir, err)
+		}
+		created++
+		if !chown {
+			continue
+		}
+		if err := os.Chown(dir, uid, gid); err != nil {
+			// One report for the whole chunk store, not one per directory.
+			chown = false
+			if err := handleDatastoreOwnershipError("ownership", dir, uid, gid, err, logger); err != nil {
+				return true, err
+			}
+		}
+	}
+	logger.Debug("PBS datastore chunk store: created %d of %d hash directories in %s (chown=%v)", created, pbsChunkStoreDirCount, chunkDir, chown)
+	return created > 0, nil
 }
 
 func ensurePBSDatastoreSubdirs(basePath string, dirsToFix []string) (bool, []string, error) {
