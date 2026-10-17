@@ -41,6 +41,32 @@ func TestCommandContextAllowlist(t *testing.T) {
 	}
 }
 
+// The commands the PBS datastore inventory runs, with its arguments
+// (internal/backup/collector_pbs_datastore_inventory.go). Missing from the
+// allowlist, each one was recorded as "command not allowed" in every backup and
+// its mount, device-mapper, RAID, multipath, iSCSI or NFS data never collected.
+func TestCommandContextAllowsThePBSInventoryCommands(t *testing.T) {
+	for _, args := range [][]string{
+		{"findmnt", "-J"},
+		{"findmnt", "-J", "-T", "/mnt/datastore"},
+		{"dmsetup", "ls", "--tree"},
+		{"mdadm", "--detail", "--scan"},
+		{"multipath", "-ll"},
+		{"iscsiadm", "-m", "session"},
+		{"iscsiadm", "-m", "node"},
+		{"iscsiadm", "-m", "iface"},
+		{"nfsstat", "-m"},
+	} {
+		cmd, err := CommandContext(context.Background(), args[0], args[1:]...)
+		if err != nil {
+			t.Fatalf("CommandContext(%q) error = %v", args, err)
+		}
+		if got := cmd.Args; !reflect.DeepEqual(got, args) {
+			t.Fatalf("CommandContext(%q) args = %q", args, got)
+		}
+	}
+}
+
 func TestCommandContextAllowsSQLiteSnapshot(t *testing.T) {
 	args := []string{
 		"-cmd",
