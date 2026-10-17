@@ -1,6 +1,7 @@
 package orchestrator
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"testing"
@@ -171,5 +172,41 @@ func TestEnsurePBSChunkStoreDirsKeepsExistingAndReportsAFailure(t *testing.T) {
 	}
 	if _, err := ensurePBSChunkStoreDirs(blocked, newDirTestLogger()); err == nil {
 		t.Fatal("a .chunks that is not a directory must fail")
+	}
+}
+
+// The file-based apply used when the PBS API is unavailable removes, with each
+// datastore it takes out of datastore.cfg, its jobs and acl.cfg entries too, also
+// when the staged file has no datastores and the target is removed.
+func TestApplyPBSDatastoreCfgFromStage_RemovesJobsAndACL(t *testing.T) {
+	for _, staged := range []string{"datastore: ds1\n\tpath /mnt/ds1\n", "# no datastores\n"} {
+		origFS := restoreFS
+		fakeFS := NewFakeFS()
+		restoreFS = fakeFS
+		write := func(path, content string) {
+			if err := fakeFS.WriteFile(path, []byte(content), 0o640); err != nil {
+				t.Fatal(err)
+			}
+		}
+		write("/stage/etc/proxmox-backup/datastore.cfg", staged)
+		write("/etc/proxmox-backup/datastore.cfg", "datastore: old\n\tpath /mnt/old\n\ndatastore: ds1\n\tpath /mnt/ds1\n")
+		write("/etc/proxmox-backup/prune.cfg", "prune: pj-old\n\tstore old\n\nprune: pj-ds1\n\tstore ds1\n")
+		write("/etc/proxmox-backup/acl.cfg", "acl:1:/datastore/old:tst@pbs:DatastoreReader\nacl:1:/datastore/ds1:tst@pbs:DatastoreReader\n")
+		logger := newDirTestLogger()
+		if err := applyPBSDatastoreCfgFromStage(context.Background(), logger, "/stage"); err != nil {
+			t.Fatalf("staged=%q: %v", staged, err)
+		}
+		wantPrune, wantACL := "prune: pj-ds1\n\tstore ds1\n", "acl:1:/datastore/ds1:tst@pbs:DatastoreReader\n"
+		if staged == "# no datastores\n" {
+			// Every datastore of this PBS is removed with the target file.
+			wantPrune, wantACL = "", ""
+		}
+		prune, _ := fakeFS.ReadFile("/etc/proxmox-backup/prune.cfg")
+		acl, _ := fakeFS.ReadFile("/etc/proxmox-backup/acl.cfg")
+		restoreFS = origFS
+		_ = os.RemoveAll(fakeFS.Root)
+		if string(prune) != wantPrune || string(acl) != wantACL {
+			t.Fatalf("staged=%q prune=%q acl=%q; want %q and %q", staged, prune, acl, wantPrune, wantACL)
+		}
 	}
 }

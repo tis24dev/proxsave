@@ -364,6 +364,9 @@ type pbsDatastoreFileResult struct {
 	current    []pbsDatastoreBlock
 	currentErr error
 	removed    []string
+	// cleanup is what was removed with each removed datastore: its jobs and its
+	// permissions, as PBS removes them with the datastore.
+	cleanup map[string]*pbsDatastoreCleanup
 	// fixed is the number of malformed lines normalized in the staged file.
 	fixed int
 	// invalidReason is set when the staged file looked invalid and the
@@ -518,7 +521,28 @@ func runPBSDatastoreCfgFile(stageRoot string) (res pbsDatastoreFileResult, err e
 			res.removed = append(res.removed, b.Name)
 		}
 	}
+	res.cleanup = removePBSDatastoreJobsAndACL(res.removed)
 	return res, nil
+}
+
+// logPBSDatastoreCleanupDebug logs, for the file-based apply used when the PBS
+// API is unavailable, the jobs and permissions removed with each datastore.
+func logPBSDatastoreCleanupDebug(logger *logging.Logger, res pbsDatastoreFileResult) {
+	for _, name := range res.removed {
+		c := res.cleanup[name]
+		if c == nil {
+			continue
+		}
+		for _, job := range c.jobs {
+			logging.DebugStep(logger, "pbs staged apply datastore.cfg", "Removed job %s of datastore %s from %s", job.id, name, job.file)
+		}
+		if c.acl > 0 {
+			logging.DebugStep(logger, "pbs staged apply datastore.cfg", "Removed %d acl entries of datastore %s from %s", c.acl, name, pbsACLCfgPath)
+		}
+		if c.err != nil {
+			logging.DebugStep(logger, "pbs staged apply datastore.cfg", "Jobs of datastore %s not all removed: %s: %v", name, c.errFile, c.err)
+		}
+	}
 }
 
 // removeTarget removes the target datastore.cfg for a staged file without
@@ -530,6 +554,7 @@ func (r *pbsDatastoreFileResult) removeTarget() error {
 	for _, b := range r.current {
 		r.removed = append(r.removed, b.Name)
 	}
+	r.cleanup = removePBSDatastoreJobsAndACL(r.removed)
 	return nil
 }
 
@@ -562,6 +587,7 @@ func applyPBSDatastoreCfgFromStage(ctx context.Context, logger *logging.Logger, 
 		return err
 	case res.emptied:
 		logging.DebugStep(logger, "pbs staged apply datastore.cfg", "Staged datastore.cfg has no datastore definitions (comments only=%v); removing target file, removed=%v", res.commentsOnly, res.removed)
+		logPBSDatastoreCleanupDebug(logger, res)
 		return err
 	}
 	if res.fixed > 0 {
@@ -602,6 +628,7 @@ func applyPBSDatastoreCfgFromStage(ctx context.Context, logger *logging.Logger, 
 		return err
 	}
 	logging.DebugStep(logger, "pbs staged apply datastore.cfg", "Removed datastore(s) not in the backup: %v", res.removed)
+	logPBSDatastoreCleanupDebug(logger, res)
 	logger.Info("PBS staged apply: datastore.cfg applied (%d datastore(s)); deferred=%d", res.written, res.deferredCount())
 	return nil
 }

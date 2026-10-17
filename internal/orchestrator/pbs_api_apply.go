@@ -722,12 +722,12 @@ func (r *pbsDatastoreRestore) fileFallback(event string, cause error) error {
 		return nil
 	case res.emptied:
 		r.debug("fallback staged file has no datastores comments_only=%v, target removed", res.commentsOnly)
-		r.fileRemoved(res.removed)
+		r.fileRemoved(res)
 		r.logger.Warning("%s PBS datastore configuration: applied from the backup file", theme.SymbolWarning)
 		return &pbsDatastoreRestoreNotAppliedError{err: cause}
 	}
 
-	r.fileRemoved(res.removed)
+	r.fileRemoved(res)
 	for _, it := range res.items {
 		path := filepath.Clean(strings.TrimSpace(it.path))
 		switch {
@@ -765,12 +765,29 @@ func (r *pbsDatastoreRestore) fileFallback(event string, cause error) error {
 }
 
 // fileRemoved logs the datastores of this PBS that the file fallback took out of
-// datastore.cfg because the backup does not have them.
-func (r *pbsDatastoreRestore) fileRemoved(names []string) {
-	for _, name := range names {
+// datastore.cfg because the backup does not have them, with the jobs and
+// permissions removed with them.
+func (r *pbsDatastoreRestore) fileRemoved(res pbsDatastoreFileResult) {
+	for _, name := range res.removed {
 		r.debug("datastore=%s not in backup action=drop from file", name)
+		c := res.cleanup[name]
+		if c == nil {
+			c = &pbsDatastoreCleanup{}
+		}
+		for _, job := range c.jobs {
+			r.debug("datastore=%s job=%s removed from %s", name, job.id, job.file)
+		}
+		if c.acl > 0 {
+			r.debug("datastore=%s acl entries removed=%d from %s", name, c.acl, pbsACLCfgPath)
+		}
 		r.logger.Info("Datastore %s is configured on this PBS but not present in the backup", name)
-		r.logger.Info("%s PBS datastore %s: removed", theme.SymbolSuccess, name)
+		if c.err != nil {
+			r.debug("datastore=%s jobs file=%s write failed error=%q", name, c.errFile, c.err.Error())
+			r.logger.Info("The jobs of datastore %s could not all be removed: \"%s\"", name, c.err.Error())
+			r.logger.Warning("%s PBS datastore %s: removed, some of its jobs are kept", theme.SymbolWarning, name)
+			continue
+		}
+		r.logger.Info("%s PBS datastore %s: removed with its jobs", theme.SymbolSuccess, name)
 	}
 }
 

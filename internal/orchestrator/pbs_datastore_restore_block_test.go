@@ -4,10 +4,12 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"regexp"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/tis24dev/proxsave/internal/logging"
 	"github.com/tis24dev/proxsave/internal/types"
@@ -428,9 +430,9 @@ func TestPBSDatastoreRestoreBlock_FallbackCurrentDatastores(t *testing.T) {
 				"INFO       Names: ds1",
 				"INFO     The datastores configured on this PBS could not be read",
 				"INFO     Datastore old is configured on this PBS but not present in the backup",
-				"INFO     ✓ PBS datastore old: removed",
+				"INFO     ✓ PBS datastore old: removed with its jobs",
 				"INFO     Datastore ds2 is configured on this PBS but not present in the backup",
-				"INFO     ✓ PBS datastore ds2: removed",
+				"INFO     ✓ PBS datastore ds2: removed with its jobs",
 				"INFO     Datastore ds1 path /mnt/ds1 is on the root filesystem",
 				"WARNING  ⚠ PBS datastore ds1: applied without its mount",
 				"WARNING  ⚠ PBS datastore configuration: applied from the backup file",
@@ -450,7 +452,7 @@ func TestPBSDatastoreRestoreBlock_FallbackCurrentDatastores(t *testing.T) {
 				"INFO       Names: ds1, ds2",
 				"INFO     The datastores configured on this PBS could not be read",
 				"INFO     Datastore old is configured on this PBS but not present in the backup",
-				"INFO     ✓ PBS datastore old: removed",
+				"INFO     ✓ PBS datastore old: removed with its jobs",
 				"INFO     Datastore ds1 path /mnt/ds1 is on the root filesystem",
 				"WARNING  ⚠ PBS datastore ds1: applied without its mount",
 				"INFO     Datastore ds2 is not safe to apply now, its definition is saved to <deferred>",
@@ -470,9 +472,9 @@ func TestPBSDatastoreRestoreBlock_FallbackCurrentDatastores(t *testing.T) {
 				"INFO       Datastores to restore: 0",
 				"INFO     The datastores configured on this PBS could not be read",
 				"INFO     Datastore old is configured on this PBS but not present in the backup",
-				"INFO     ✓ PBS datastore old: removed",
+				"INFO     ✓ PBS datastore old: removed with its jobs",
 				"INFO     Datastore ds2 is configured on this PBS but not present in the backup",
-				"INFO     ✓ PBS datastore ds2: removed",
+				"INFO     ✓ PBS datastore ds2: removed with its jobs",
 				"WARNING  ⚠ PBS datastore configuration: applied from the backup file",
 			),
 			wantDebug: []string{
@@ -486,9 +488,9 @@ func TestPBSDatastoreRestoreBlock_FallbackCurrentDatastores(t *testing.T) {
 				"INFO       Datastores to restore: 0",
 				"INFO     The datastores configured on this PBS could not be read",
 				"INFO     Datastore old is configured on this PBS but not present in the backup",
-				"INFO     ✓ PBS datastore old: removed",
+				"INFO     ✓ PBS datastore old: removed with its jobs",
 				"INFO     Datastore ds2 is configured on this PBS but not present in the backup",
-				"INFO     ✓ PBS datastore ds2: removed",
+				"INFO     ✓ PBS datastore ds2: removed with its jobs",
 				"WARNING  ⚠ PBS datastore configuration: applied from the backup file",
 			),
 			wantDebug: []string{
@@ -582,6 +584,145 @@ func TestApplyPBSDatastoreCfgFromStage_CurrentDatastores(t *testing.T) {
 				t.Fatalf("target datastore.cfg\n--- got ---\n%s\n--- want ---\n%s", data, tc.wantTarget)
 			}
 		})
+	}
+}
+
+// The file fallback removes with each datastore it takes out of datastore.cfg its
+// prune, verify, sync and tape jobs and its acl.cfg entries, as PBS does with
+// datastore remove; what refers to another datastore, or to a remote's datastore
+// through remote-store, stays byte for byte.
+func TestPBSDatastoreRestoreBlock_FallbackRemovesJobsAndACL(t *testing.T) {
+	files := map[string]string{
+		"/etc/proxmox-backup/prune.cfg": "prune: pj-old\n\tkeep-last 3\n\tschedule daily\n\tstore old\n\n" +
+			"prune: pj-ds1\n\tkeep-last 1\n\tschedule daily\n\tstore ds1\n",
+		"/etc/proxmox-backup/verification.cfg": "verification: vj-ds1\n\tschedule daily\n\tstore ds1\n\n" +
+			"verification: vj-old\n\tschedule daily\n\tstore old\n",
+		"/etc/proxmox-backup/sync.cfg": "sync: sj-pull\n\tremote rem1\n\tremote-store xyz\n\tschedule daily\n\tstore old\n\n" +
+			"sync: sj-push\n\tremote rem1\n\tremote-store xyz\n\tschedule daily\n\tstore old\n\tsync-direction push\n\n" +
+			"sync: sj-other\n\tremote rem1\n\tremote-store old\n\tschedule daily\n\tstore ds1\n",
+		"/etc/proxmox-backup/tape-job.cfg": "backup: tj1\n\tdrive drv1\n\tpool p1\n\tschedule daily\n\tstore old\n",
+		"/etc/proxmox-backup/acl.cfg": "acl:1:/datastore:tst@pbs:DatastoreAudit\n" +
+			"acl:1:/datastore/old:tst@pbs:DatastoreReader\n" +
+			"acl:1:/datastore/old/ns1:tst@pbs:DatastoreBackup\n" +
+			"acl:1:/datastore/old10:tst@pbs:DatastoreAudit\n" +
+			"acl:0:/datastore/ds1:tst@pbs:DatastoreAudit\n",
+	}
+	want := map[string]string{
+		"/etc/proxmox-backup/prune.cfg":        "prune: pj-ds1\n\tkeep-last 1\n\tschedule daily\n\tstore ds1\n",
+		"/etc/proxmox-backup/verification.cfg": "verification: vj-ds1\n\tschedule daily\n\tstore ds1\n",
+		"/etc/proxmox-backup/sync.cfg":         "sync: sj-other\n\tremote rem1\n\tremote-store old\n\tschedule daily\n\tstore ds1\n",
+		"/etc/proxmox-backup/tape-job.cfg":     "",
+		"/etc/proxmox-backup/acl.cfg": "acl:1:/datastore:tst@pbs:DatastoreAudit\n" +
+			"acl:1:/datastore/old10:tst@pbs:DatastoreAudit\n" +
+			"acl:0:/datastore/ds1:tst@pbs:DatastoreAudit\n",
+	}
+	runner := &FakeCommandRunner{Errors: map[string]error{
+		pbsDatastoreBlockListCmd: errors.New("exit status 255: Error: unable to open chunk store"),
+	}}
+	log, warned := runPBSDatastoreRestoreStep(t, PBSRestoreBehaviorClean, "datastore: ds1\n\tpath /mnt/ds1\n", runner, func(f *FakeFS) {
+		_ = f.WriteFile("/etc/proxmox-backup/datastore.cfg", []byte("datastore: old\n\tpath /mnt/old\n\ndatastore: ds1\n\tpath /mnt/ds1\n"), 0o640)
+		for path, content := range files {
+			if err := f.WriteFile(path, []byte(content), 0o640); err != nil {
+				t.Fatalf("write %s: %v", path, err)
+			}
+		}
+	})
+	t.Logf("full log:\n%s", strings.Join(pbsBlockLogLines(log), "\n"))
+	wantVisible := []string{
+		"INFO     Restoring PBS datastore configuration...",
+		"INFO       Datastores to restore: 1",
+		"INFO       Names: ds1",
+		"INFO     The datastores configured on this PBS could not be read",
+		"INFO     Datastore old is configured on this PBS but not present in the backup",
+		"INFO     ✓ PBS datastore old: removed with its jobs",
+		"INFO     Datastore ds1 path /mnt/ds1 is on the root filesystem",
+		"WARNING  ⚠ PBS datastore ds1: applied without its mount",
+		"WARNING  ⚠ PBS datastore configuration: applied from the backup file",
+	}
+	if got := pbsVisibleLines(log); strings.Join(got, "\n") != strings.Join(wantVisible, "\n") {
+		t.Fatalf("visible lines\n--- got ---\n%s\n--- want ---\n%s", strings.Join(got, "\n"), strings.Join(wantVisible, "\n"))
+	}
+	all := strings.Join(pbsBlockLogLines(log), "\n")
+	for _, line := range []string{
+		"DEBUG    PBS datastore restore: datastore=old job=prune:pj-old removed from /etc/proxmox-backup/prune.cfg",
+		"DEBUG    PBS datastore restore: datastore=old job=verification:vj-old removed from /etc/proxmox-backup/verification.cfg",
+		"DEBUG    PBS datastore restore: datastore=old job=sync:sj-pull removed from /etc/proxmox-backup/sync.cfg",
+		"DEBUG    PBS datastore restore: datastore=old job=sync:sj-push removed from /etc/proxmox-backup/sync.cfg",
+		"DEBUG    PBS datastore restore: datastore=old job=backup:tj1 removed from /etc/proxmox-backup/tape-job.cfg",
+		"DEBUG    PBS datastore restore: datastore=old acl entries removed=2 from /etc/proxmox-backup/acl.cfg",
+	} {
+		if !strings.Contains(all, line) {
+			t.Fatalf("missing DEBUG line %q", line)
+		}
+	}
+	if !warned {
+		t.Fatal("the restore must end with warnings")
+	}
+	for path, content := range want {
+		data, err := restoreFS.ReadFile(path)
+		if err != nil {
+			t.Fatalf("read %s: %v", path, err)
+		}
+		if string(data) != content {
+			t.Fatalf("%s\n--- got ---\n%s\n--- want ---\n%s", path, data, content)
+		}
+		info, err := restoreFS.Stat(path)
+		if err != nil || info.Mode().Perm() != 0o640 {
+			t.Fatalf("%s mode=%v err=%v; want 0640 kept", path, info.Mode().Perm(), err)
+		}
+	}
+}
+
+// A job file that cannot be written: the datastore is still removed from
+// datastore.cfg and its other jobs are removed, the event carries the error and
+// the outcome says some of its jobs are kept.
+func TestPBSDatastoreRestoreBlock_FallbackJobsNotAllRemoved(t *testing.T) {
+	origTime := restoreTime
+	t.Cleanup(func() { restoreTime = origTime })
+	fixed := time.Date(2026, 10, 17, 12, 0, 0, 0, time.UTC)
+	restoreTime = &FakeTime{Current: fixed}
+
+	runner := &FakeCommandRunner{Errors: map[string]error{
+		pbsDatastoreBlockListCmd: errors.New("exit status 255: Error: unable to open chunk store"),
+	}}
+	log, warned := runPBSDatastoreRestoreStep(t, PBSRestoreBehaviorClean, "datastore: ds1\n\tpath /mnt/ds1\n", runner, func(f *FakeFS) {
+		_ = f.WriteFile("/etc/proxmox-backup/datastore.cfg", []byte("datastore: old\n\tpath /mnt/old\n\ndatastore: ds1\n\tpath /mnt/ds1\n"), 0o640)
+		_ = f.WriteFile("/etc/proxmox-backup/prune.cfg", []byte("prune: pj-old\n\tstore old\n"), 0o640)
+		_ = f.WriteFile("/etc/proxmox-backup/verification.cfg", []byte("verification: vj-old\n\tstore old\n"), 0o640)
+		tmp := fmt.Sprintf("/etc/proxmox-backup/verification.cfg.proxsave.tmp.%d", fixed.UnixNano())
+		f.OpenFileErr[tmp] = errors.New("no space left on device")
+	})
+	t.Logf("full log:\n%s", strings.Join(pbsBlockLogLines(log), "\n"))
+	wantVisible := []string{
+		"INFO     Restoring PBS datastore configuration...",
+		"INFO       Datastores to restore: 1",
+		"INFO       Names: ds1",
+		"INFO     The datastores configured on this PBS could not be read",
+		"INFO     Datastore old is configured on this PBS but not present in the backup",
+		`INFO     The jobs of datastore old could not all be removed: "write /etc/proxmox-backup/verification.cfg: no space left on device"`,
+		"WARNING  ⚠ PBS datastore old: removed, some of its jobs are kept",
+		"INFO     Datastore ds1 path /mnt/ds1 is on the root filesystem",
+		"WARNING  ⚠ PBS datastore ds1: applied without its mount",
+		"WARNING  ⚠ PBS datastore configuration: applied from the backup file",
+	}
+	if got := pbsVisibleLines(log); strings.Join(got, "\n") != strings.Join(wantVisible, "\n") {
+		t.Fatalf("visible lines\n--- got ---\n%s\n--- want ---\n%s", strings.Join(got, "\n"), strings.Join(wantVisible, "\n"))
+	}
+	if !strings.Contains(strings.Join(pbsBlockLogLines(log), "\n"),
+		`DEBUG    PBS datastore restore: datastore=old jobs file=/etc/proxmox-backup/verification.cfg write failed error="write /etc/proxmox-backup/verification.cfg: no space left on device"`) {
+		t.Fatal("missing DEBUG line of the failed job file")
+	}
+	if !warned {
+		t.Fatal("the restore must end with warnings")
+	}
+	if data, _ := restoreFS.ReadFile("/etc/proxmox-backup/prune.cfg"); string(data) != "" {
+		t.Fatalf("prune.cfg must lose pj-old, got %q", data)
+	}
+	if data, _ := restoreFS.ReadFile("/etc/proxmox-backup/verification.cfg"); string(data) != "verification: vj-old\n\tstore old\n" {
+		t.Fatalf("verification.cfg must stay as it was, got %q", data)
+	}
+	if data, _ := restoreFS.ReadFile("/etc/proxmox-backup/datastore.cfg"); string(data) != "datastore: ds1\n\tpath /mnt/ds1\n" {
+		t.Fatalf("datastore.cfg must lose old, got %q", data)
 	}
 }
 
