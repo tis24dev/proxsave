@@ -690,6 +690,11 @@ func (r *pbsDatastoreRestore) fileFallback(event string, cause error) error {
 	if eventAfterRead {
 		r.logger.Info("%s", event)
 	}
+	if res.currentErr != nil {
+		r.debug("fallback current file=%s read failed error=%q", res.destPath, res.currentErr.Error())
+	} else {
+		r.debug("fallback current file=%s datastores=%d names=%s", res.destPath, len(res.current), pbsBlockNames(res.current))
+	}
 	if res.fixed > 0 {
 		r.debug("fallback normalized malformed lines=%d (properties must be indented)", res.fixed)
 	}
@@ -711,21 +716,26 @@ func (r *pbsDatastoreRestore) fileFallback(event string, cause error) error {
 		r.debug("fallback write failed error=%q", err.Error())
 		r.logger.Info("The datastore configuration could not be written to this PBS: \"%s\"", err.Error())
 		return r.configNotApplied(cause)
-	case res.missing || res.noBlocks:
+	case res.missing:
 		r.debug("fallback nothing to write")
 		r.logger.Skip("PBS datastore configuration: nothing to restore")
 		return nil
 	case res.emptied:
-		r.debug("fallback staged file empty, target removed")
+		r.debug("fallback staged file has no datastores comments_only=%v, target removed", res.commentsOnly)
+		r.fileRemoved(res.removed)
 		r.logger.Warning("%s PBS datastore configuration: applied from the backup file", theme.SymbolWarning)
 		return &pbsDatastoreRestoreNotAppliedError{err: cause}
 	}
 
+	r.fileRemoved(res.removed)
 	for _, it := range res.items {
 		path := filepath.Clean(strings.TrimSpace(it.path))
 		switch {
 		case it.deferReason != "":
 			r.debug("datastore=%s path=%s deferred reason=%q", it.name, path, it.deferReason)
+			if it.keptCurrent {
+				r.debug("datastore=%s kept current definition in file", it.name)
+			}
 			if res.deferredErr != nil {
 				r.debug("datastore=%s deferred definition not saved error=%q", it.name, res.deferredErr.Error())
 				r.logger.Info("Datastore %s is not safe to apply now, its definition could not be saved: \"%s\"", it.name, res.deferredErr.Error())
@@ -745,13 +755,31 @@ func (r *pbsDatastoreRestore) fileFallback(event string, cause error) error {
 			r.applied(it.name)
 		}
 	}
-	r.debug("fallback written datastores=%d deferred=%d", res.written, res.deferredCount())
+	r.debug("fallback written datastores=%d deferred=%d kept_current=%d", res.written, res.deferredCount(), res.keptCurrentCount())
 	if res.noSafe {
 		r.logger.Info("The backup has no datastore that is safe to apply, the current configuration is kept")
 		return r.configNotApplied(cause)
 	}
 	r.logger.Warning("%s PBS datastore configuration: applied from the backup file", theme.SymbolWarning)
 	return &pbsDatastoreRestoreNotAppliedError{err: cause}
+}
+
+// fileRemoved logs the datastores of this PBS that the file fallback took out of
+// datastore.cfg because the backup does not have them.
+func (r *pbsDatastoreRestore) fileRemoved(names []string) {
+	for _, name := range names {
+		r.debug("datastore=%s not in backup action=drop from file", name)
+		r.logger.Info("Datastore %s is configured on this PBS but not present in the backup", name)
+		r.logger.Info("%s PBS datastore %s: removed", theme.SymbolSuccess, name)
+	}
+}
+
+func pbsBlockNames(blocks []pbsDatastoreBlock) string {
+	names := make([]string, 0, len(blocks))
+	for _, b := range blocks {
+		names = append(names, b.Name)
+	}
+	return strings.Join(names, ",")
 }
 
 // readCurrent reads the datastores configured on this PBS, by name, with their

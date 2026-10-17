@@ -341,6 +341,9 @@ type pbsDatastoreFileItem struct {
 	// preflight is a problem found on the path of a datastore that has data; the
 	// definition is written anyway.
 	preflight string
+	// keptCurrent: the datastore is deferred and this PBS already has it, so its
+	// current definition is written back unchanged.
+	keptCurrent bool
 }
 
 // pbsDatastoreFileResult is what the file-based datastore.cfg apply found and did,
@@ -350,8 +353,17 @@ type pbsDatastoreFileResult struct {
 	destPath  string
 	// missing: no datastore.cfg in the staging directory, nothing done.
 	missing bool
-	// emptied: the staged datastore.cfg is empty, the target file was removed.
+	// emptied: the staged datastore.cfg has no datastore definitions (it is empty
+	// or holds only comments), the target file was removed.
 	emptied bool
+	// commentsOnly: the staged file that emptied the target holds only comments.
+	commentsOnly bool
+	// current holds the datastores of the target file before it was written,
+	// currentErr why they could not be read. removed are the datastores of this
+	// PBS that the write took out, set only once the write succeeded.
+	current    []pbsDatastoreBlock
+	currentErr error
+	removed    []string
 	// fixed is the number of malformed lines normalized in the staged file.
 	fixed int
 	// invalidReason is set when the staged file looked invalid and the
@@ -362,9 +374,7 @@ type pbsDatastoreFileResult struct {
 	// recoveryFailed is set when that rebuild failed; the current configuration
 	// is kept and nothing is written.
 	recoveryFailed string
-	// noBlocks: the staged file has no datastore definitions, nothing done.
-	noBlocks bool
-	items    []pbsDatastoreFileItem
+	items          []pbsDatastoreFileItem
 	// deferredPath is where the deferred definitions were saved, deferredErr why
 	// they could not be.
 	deferredPath string
@@ -380,6 +390,16 @@ func (r pbsDatastoreFileResult) deferredCount() int {
 	n := 0
 	for _, it := range r.items {
 		if it.deferReason != "" {
+			n++
+		}
+	}
+	return n
+}
+
+func (r pbsDatastoreFileResult) keptCurrentCount() int {
+	n := 0
+	for _, it := range r.items {
+		if it.keptCurrent {
 			n++
 		}
 	}
@@ -403,10 +423,12 @@ func runPBSDatastoreCfgFile(stageRoot string) (res pbsDatastoreFileResult, err e
 		return res, fmt.Errorf("read staged datastore.cfg: %w", err)
 	}
 
+	res.current, res.currentErr = readCurrentPBSDatastoreBlocks(res.destPath)
+
 	raw := string(data)
 	if strings.TrimSpace(raw) == "" {
 		res.emptied = true
-		return res, removeIfExists(res.destPath)
+		return res, res.removeTarget()
 	}
 
 	normalized, fixed := normalizePBSDatastoreCfgContent(raw)
@@ -417,8 +439,10 @@ func runPBSDatastoreCfgFile(stageRoot string) (res pbsDatastoreFileResult, err e
 		return res, err
 	}
 	if len(blocks) == 0 {
-		res.noBlocks = true
-		return res, nil
+		// Only comments: a backup without datastores, like an empty file.
+		res.emptied = true
+		res.commentsOnly = true
+		return res, res.removeTarget()
 	}
 
 	if reason := detectPBSDatastoreCfgDuplicateKeys(blocks); reason != "" {
@@ -445,8 +469,14 @@ func runPBSDatastoreCfgFile(stageRoot string) (res pbsDatastoreFileResult, err e
 		res.recoveredFrom = src
 	}
 
-	var applyBlocks, deferred []pbsDatastoreBlock
+	currentByName := make(map[string]pbsDatastoreBlock, len(res.current))
+	for _, b := range res.current {
+		currentByName[b.Name] = b
+	}
+	inBackup := make(map[string]bool, len(blocks))
+	var applyBlocks, deferred, keptCurrent []pbsDatastoreBlock
 	for _, b := range blocks {
+		inBackup[b.Name] = true
 		item := pbsDatastoreFileItem{name: b.Name, path: b.Path}
 		ok, reason, onRootFS, preflight := inspectPBSDatastoreBlock(b)
 		item.onRootFS, item.preflight = onRootFS, preflight
@@ -455,6 +485,10 @@ func runPBSDatastoreCfgFile(stageRoot string) (res pbsDatastoreFileResult, err e
 		} else {
 			item.deferReason = reason
 			deferred = append(deferred, b)
+			if cur, found := currentByName[b.Name]; found {
+				item.keptCurrent = true
+				keptCurrent = append(keptCurrent, cur)
+			}
 		}
 		res.items = append(res.items, item)
 	}
@@ -468,7 +502,7 @@ func runPBSDatastoreCfgFile(stageRoot string) (res pbsDatastoreFileResult, err e
 	}
 
 	var out strings.Builder
-	for i, b := range applyBlocks {
+	for i, b := range append(applyBlocks, keptCurrent...) {
 		if i > 0 {
 			out.WriteString("\n")
 		}
@@ -479,7 +513,38 @@ func runPBSDatastoreCfgFile(stageRoot string) (res pbsDatastoreFileResult, err e
 		return res, fmt.Errorf("write %s: %w", res.destPath, err)
 	}
 	res.written = len(applyBlocks)
+	for _, b := range res.current {
+		if !inBackup[b.Name] {
+			res.removed = append(res.removed, b.Name)
+		}
+	}
 	return res, nil
+}
+
+// removeTarget removes the target datastore.cfg for a staged file without
+// datastores; once it is gone every datastore of this PBS is removed.
+func (r *pbsDatastoreFileResult) removeTarget() error {
+	if err := removeIfExists(r.destPath); err != nil {
+		return err
+	}
+	for _, b := range r.current {
+		r.removed = append(r.removed, b.Name)
+	}
+	return nil
+}
+
+// readCurrentPBSDatastoreBlocks reads the datastores of the datastore.cfg on this
+// PBS; a missing file has none.
+func readCurrentPBSDatastoreBlocks(path string) ([]pbsDatastoreBlock, error) {
+	data, err := restoreFS.ReadFile(path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	normalized, _ := normalizePBSDatastoreCfgContent(string(data))
+	return parsePBSDatastoreCfgBlocks(normalized)
 }
 
 // applyPBSDatastoreCfgFromStage is the file-based datastore.cfg apply used when the
@@ -496,15 +561,11 @@ func applyPBSDatastoreCfgFromStage(ctx context.Context, logger *logging.Logger, 
 		logging.DebugStep(logger, "pbs staged apply datastore.cfg", "Skipped: datastore.cfg not present in staging directory")
 		return err
 	case res.emptied:
-		logging.DebugStep(logger, "pbs staged apply datastore.cfg", "Staged datastore.cfg is empty; removing target file to avoid PBS parse errors")
+		logging.DebugStep(logger, "pbs staged apply datastore.cfg", "Staged datastore.cfg has no datastore definitions (comments only=%v); removing target file, removed=%v", res.commentsOnly, res.removed)
 		return err
 	}
 	if res.fixed > 0 {
 		logger.Warning("PBS staged apply: datastore.cfg normalization fixed %d malformed line(s) (properties must be indented)", res.fixed)
-	}
-	if res.noBlocks {
-		logging.DebugStep(logger, "pbs staged apply datastore.cfg", "No datastore blocks detected; skipping apply")
-		return err
 	}
 	if res.invalidReason != "" {
 		logger.Warning("PBS staged apply: staged datastore.cfg looks invalid (%s); attempting recovery from pbs_datastore_inventory.json", res.invalidReason)
@@ -540,6 +601,7 @@ func applyPBSDatastoreCfgFromStage(ctx context.Context, logger *logging.Logger, 
 	if err != nil {
 		return err
 	}
+	logging.DebugStep(logger, "pbs staged apply datastore.cfg", "Removed datastore(s) not in the backup: %v", res.removed)
 	logger.Info("PBS staged apply: datastore.cfg applied (%d datastore(s)); deferred=%d", res.written, res.deferredCount())
 	return nil
 }

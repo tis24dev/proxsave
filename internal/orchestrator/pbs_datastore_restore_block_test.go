@@ -405,6 +405,186 @@ func TestPBSDatastoreRestoreBlock_FallbackWriteFailures(t *testing.T) {
 	}
 }
 
+// The file fallback in Clean mode names every datastore of this PBS it takes out
+// of datastore.cfg, keeps the current definition of a deferred datastore this PBS
+// already has, and treats a staged file with only comments like an empty one.
+func TestPBSDatastoreRestoreBlock_FallbackCurrentDatastores(t *testing.T) {
+	const current = "datastore: old\n\tpath /mnt/old\n\ndatastore: ds2\n\tpath /\n"
+	head := []string{
+		"INFO     Restoring PBS datastore configuration...",
+	}
+	cases := []struct {
+		name       string
+		staged     string
+		visible    []string
+		wantTarget string // "" means the target file must be gone
+		wantDebug  []string
+	}{
+		{
+			name:   "backup-without-old",
+			staged: "datastore: ds1\n\tpath /mnt/ds1\n",
+			visible: append(append([]string{}, head...),
+				"INFO       Datastores to restore: 1",
+				"INFO       Names: ds1",
+				"INFO     The datastores configured on this PBS could not be read",
+				"INFO     Datastore old is configured on this PBS but not present in the backup",
+				"INFO     ✓ PBS datastore old: removed",
+				"INFO     Datastore ds2 is configured on this PBS but not present in the backup",
+				"INFO     ✓ PBS datastore ds2: removed",
+				"INFO     Datastore ds1 path /mnt/ds1 is on the root filesystem",
+				"WARNING  ⚠ PBS datastore ds1: applied without its mount",
+				"WARNING  ⚠ PBS datastore configuration: applied from the backup file",
+			),
+			wantTarget: "datastore: ds1\n\tpath /mnt/ds1\n",
+			wantDebug: []string{
+				"DEBUG    PBS datastore restore: fallback current file=/etc/proxmox-backup/datastore.cfg datastores=2 names=old,ds2",
+				"DEBUG    PBS datastore restore: datastore=old not in backup action=drop from file",
+				"DEBUG    PBS datastore restore: fallback written datastores=1 deferred=0 kept_current=0",
+			},
+		},
+		{
+			name:   "deferred-datastore-this-pbs-has",
+			staged: "datastore: ds1\n\tpath /mnt/ds1\n\ndatastore: ds2\n\tpath /\n",
+			visible: append(append([]string{}, head...),
+				"INFO       Datastores to restore: 2",
+				"INFO       Names: ds1, ds2",
+				"INFO     The datastores configured on this PBS could not be read",
+				"INFO     Datastore old is configured on this PBS but not present in the backup",
+				"INFO     ✓ PBS datastore old: removed",
+				"INFO     Datastore ds1 path /mnt/ds1 is on the root filesystem",
+				"WARNING  ⚠ PBS datastore ds1: applied without its mount",
+				"INFO     Datastore ds2 is not safe to apply now, its definition is saved to <deferred>",
+				"WARNING  ⚠ PBS datastore ds2: not applied",
+				"WARNING  ⚠ PBS datastore configuration: applied from the backup file",
+			),
+			wantTarget: "datastore: ds1\n\tpath /mnt/ds1\n\ndatastore: ds2\n\tpath /\n",
+			wantDebug: []string{
+				"DEBUG    PBS datastore restore: datastore=ds2 kept current definition in file",
+				"DEBUG    PBS datastore restore: fallback written datastores=1 deferred=1 kept_current=1",
+			},
+		},
+		{
+			name:   "empty-backup-file",
+			staged: "",
+			visible: append(append([]string{}, head...),
+				"INFO       Datastores to restore: 0",
+				"INFO     The datastores configured on this PBS could not be read",
+				"INFO     Datastore old is configured on this PBS but not present in the backup",
+				"INFO     ✓ PBS datastore old: removed",
+				"INFO     Datastore ds2 is configured on this PBS but not present in the backup",
+				"INFO     ✓ PBS datastore ds2: removed",
+				"WARNING  ⚠ PBS datastore configuration: applied from the backup file",
+			),
+			wantDebug: []string{
+				"DEBUG    PBS datastore restore: fallback staged file has no datastores comments_only=false, target removed",
+			},
+		},
+		{
+			name:   "backup-file-with-only-comments",
+			staged: "# no datastores\n",
+			visible: append(append([]string{}, head...),
+				"INFO       Datastores to restore: 0",
+				"INFO     The datastores configured on this PBS could not be read",
+				"INFO     Datastore old is configured on this PBS but not present in the backup",
+				"INFO     ✓ PBS datastore old: removed",
+				"INFO     Datastore ds2 is configured on this PBS but not present in the backup",
+				"INFO     ✓ PBS datastore ds2: removed",
+				"WARNING  ⚠ PBS datastore configuration: applied from the backup file",
+			),
+			wantDebug: []string{
+				"DEBUG    PBS datastore restore: fallback staged file has no datastores comments_only=true, target removed",
+			},
+		},
+	}
+	deferredPath := regexp.MustCompile(`saved to \S+`)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			runner := &FakeCommandRunner{Errors: map[string]error{
+				pbsDatastoreBlockListCmd: errors.New("exit status 255: Error: unable to open chunk store"),
+			}}
+			log, warned := runPBSDatastoreRestoreStep(t, PBSRestoreBehaviorClean, tc.staged, runner, func(f *FakeFS) {
+				if err := f.WriteFile("/etc/proxmox-backup/datastore.cfg", []byte(current), 0o640); err != nil {
+					t.Fatalf("write current datastore.cfg: %v", err)
+				}
+			})
+			t.Logf("full log:\n%s", strings.Join(pbsBlockLogLines(log), "\n"))
+			var got []string
+			for _, line := range pbsVisibleLines(log) {
+				got = append(got, deferredPath.ReplaceAllString(line, "saved to <deferred>"))
+			}
+			if strings.Join(got, "\n") != strings.Join(tc.visible, "\n") {
+				t.Fatalf("visible lines\n--- got ---\n%s\n--- want ---\n%s", strings.Join(got, "\n"), strings.Join(tc.visible, "\n"))
+			}
+			all := strings.Join(pbsBlockLogLines(log), "\n")
+			for _, want := range tc.wantDebug {
+				if !strings.Contains(all, want) {
+					t.Fatalf("missing DEBUG line %q", want)
+				}
+			}
+			if !warned {
+				t.Fatal("the restore must end with warnings")
+			}
+			data, err := restoreFS.ReadFile("/etc/proxmox-backup/datastore.cfg")
+			switch {
+			case tc.wantTarget == "":
+				if !errors.Is(err, os.ErrNotExist) {
+					t.Fatalf("target datastore.cfg must be removed, read err=%v content=%q", err, data)
+				}
+			case err != nil:
+				t.Fatalf("read target datastore.cfg: %v", err)
+			case string(data) != tc.wantTarget:
+				t.Fatalf("target datastore.cfg\n--- got ---\n%s\n--- want ---\n%s", data, tc.wantTarget)
+			}
+		})
+	}
+}
+
+// The file-based apply used when the PBS API is unavailable shares the same
+// writer: a staged file with only comments removes the target like an empty one,
+// and a deferred datastore this PBS already has keeps its current definition.
+func TestApplyPBSDatastoreCfgFromStage_CurrentDatastores(t *testing.T) {
+	cases := []struct {
+		name       string
+		staged     string
+		wantTarget string // "" means the target file must be gone
+	}{
+		{name: "only-comments", staged: "# no datastores\n"},
+		{name: "deferred-kept", staged: "datastore: ds1\n\tpath /mnt/ds1\n\ndatastore: ds2\n\tpath /\n",
+			wantTarget: "datastore: ds1\n\tpath /mnt/ds1\n\ndatastore: ds2\n\tpath /old\n"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			origFS := restoreFS
+			t.Cleanup(func() { restoreFS = origFS })
+			fakeFS := NewFakeFS()
+			t.Cleanup(func() { _ = os.RemoveAll(fakeFS.Root) })
+			restoreFS = fakeFS
+			if err := fakeFS.WriteFile("/stage/etc/proxmox-backup/datastore.cfg", []byte(tc.staged), 0o640); err != nil {
+				t.Fatal(err)
+			}
+			if err := fakeFS.WriteFile("/etc/proxmox-backup/datastore.cfg", []byte("datastore: old\n\tpath /mnt/old\n\ndatastore: ds2\n\tpath /old\n"), 0o640); err != nil {
+				t.Fatal(err)
+			}
+			logger := logging.New(types.LogLevelDebug, false)
+			logger.SetOutput(&bytes.Buffer{})
+			if err := applyPBSDatastoreCfgFromStage(context.Background(), logger, "/stage"); err != nil {
+				t.Fatalf("applyPBSDatastoreCfgFromStage: %v", err)
+			}
+			data, err := fakeFS.ReadFile("/etc/proxmox-backup/datastore.cfg")
+			switch {
+			case tc.wantTarget == "":
+				if !errors.Is(err, os.ErrNotExist) {
+					t.Fatalf("target datastore.cfg must be removed, read err=%v content=%q", err, data)
+				}
+			case err != nil:
+				t.Fatalf("read target datastore.cfg: %v", err)
+			case string(data) != tc.wantTarget:
+				t.Fatalf("target datastore.cfg\n--- got ---\n%s\n--- want ---\n%s", data, tc.wantTarget)
+			}
+		})
+	}
+}
+
 // pbsVisibleLines returns the INFO, SKIP, WARNING and ERROR lines of a log, without
 // their timestamps: what the operator sees.
 func pbsVisibleLines(log string) []string {
