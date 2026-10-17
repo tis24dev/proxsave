@@ -115,3 +115,72 @@ func TestMaybeApplyPBSConfigsFromStage_SectionCancellationAbortsTheStep(t *testi
 		t.Fatal("the file-based fallback must not run after a cancellation")
 	}
 }
+
+// pbsStderrMeasured are refusals proxmox-backup-manager 4.2.8 printed on VM 201
+// (2026-10-17) for remote and s3 endpoint commands carrying a password or keys:
+// none of them repeats the value it was given.
+var pbsStderrMeasured = []string{
+	"exit status 255: Error: parameter verification failed - 'fingerprint': value does not match the regex pattern\n\nUsage: proxmox-backup-manager remote create <name> --auth-id <string> --host <string> --password <string> [OPTIONS]",
+	"exit status 255: Error: parameter verification failed - 'name': remote 'r1' already exists.",
+	"exit status 255: Error: parameter verification failed - 'endpoint': value does not match the regex pattern\n\nUsage: proxmox-backup-manager s3 endpoint create <id> --access-key <string> --endpoint <string> --secret-key <string> [OPTIONS]",
+}
+
+// A refused remote or s3 endpoint logs its warning without the secret it was
+// given, neither as passed on the command line nor as stored in the file.
+func TestApplyPBSSectionCfgViaAPI_RefusalWarningsCarryNoSecret(t *testing.T) {
+	const secret = "SECRETPROBE4711"
+	const secretB64 = "U0VDUkVUUFJPQkU0NzEx" // base64 of secret, as remote.cfg stores it
+	cases := []struct {
+		name  string
+		file  string
+		cfg   string
+		apply func(context.Context, *logging.Logger, string, bool) error
+		cmd   string
+	}{
+		{"remote", "remote.cfg", "remote: r1\n\thost 127.0.0.1\n\tauth-id root@pam\n\tpassword " + secretB64 + "\n", applyPBSRemoteCfgViaAPI, "proxmox-backup-manager remote"},
+		{"s3", "s3.cfg", "s3-endpoint: e1\n\tendpoint s3.example.com\n\taccess-key AK" + secret + "\n\tsecret-key SK" + secret + "\n", applyPBSS3CfgViaAPI, "proxmox-backup-manager s3 endpoint"},
+	}
+	for _, tc := range cases {
+		for i, stderr := range pbsStderrMeasured {
+			origFS, origCmd := restoreFS, restoreCmd
+			fakeFS := NewFakeFS()
+			restoreFS = fakeFS
+			_ = fakeFS.WriteFile("/stage/etc/proxmox-backup/"+tc.file, []byte(tc.cfg), 0o640)
+			runner := &FakeCommandRunner{Outputs: map[string][]byte{}, Errors: map[string]error{}}
+			runner.Outputs[tc.cmd+" list --output-format=json"] = []byte("[]")
+			restoreCmd = &refusingRunner{inner: runner, prefix: tc.cmd + " ", stderr: stderr}
+			var buf bytes.Buffer
+			logger := logging.New(types.LogLevelDebug, false)
+			logger.SetOutput(&buf)
+			err := tc.apply(context.Background(), logger, "/stage", true)
+			restoreFS, restoreCmd = origFS, origCmd
+			_ = os.RemoveAll(fakeFS.Root)
+			if err == nil {
+				t.Fatalf("%s/%d: the refusal must be reported", tc.name, i)
+			}
+			text := buf.String() + err.Error()
+			if !strings.Contains(buf.String(), "WARNING") {
+				t.Fatalf("%s/%d: expected the refusal warning, log:\n%s", tc.name, i, buf.String())
+			}
+			if strings.Contains(text, secret) || strings.Contains(text, secretB64) {
+				t.Fatalf("%s/%d: the secret leaked:\n%s", tc.name, i, text)
+			}
+		}
+	}
+}
+
+// refusingRunner answers the list from inner and refuses every create and update
+// with the given stderr, the way osCommandRunner reports a failed command.
+type refusingRunner struct {
+	inner  *FakeCommandRunner
+	prefix string
+	stderr string
+}
+
+func (r *refusingRunner) Run(ctx context.Context, name string, args ...string) ([]byte, error) {
+	call := strings.Join(append([]string{name}, args...), " ")
+	if strings.HasPrefix(call, r.prefix) && !strings.Contains(call, " list ") {
+		return nil, errors.New(r.stderr)
+	}
+	return r.inner.Run(ctx, name, args...)
+}
