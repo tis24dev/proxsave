@@ -41,5 +41,5 @@ DEBUG    Local storage: removing file <ROOT>/backups/pve-backup-20240501-120000.
 DEBUG    Local storage: removing file <ROOT>/backups/pve-backup-20240501-120000.tar.zst.metadata.sha256
 DEBUG    Local storage: file already removed <ROOT>/backups/pve-backup-20240501-120000.tar.zst.metadata.sha256
 DEBUG    Local storage: deleted backup and associated files: pve-backup-20240501-120000.tar.zst
-DEBUG    Local storage retention applied: deleted 2 backups (logs deleted: 0), 2 backups remaining (0 logs remaining)
+DEBUG    Local storage retention applied: deleted 2 backups (logs deleted: 0), 2 backups remaining
 DEBUG    End local retention (ok, duration=<D>)

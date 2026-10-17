@@ -985,8 +985,8 @@ func TestLocalStorageCountLogFiles(t *testing.T) {
 			config: &config.Config{},
 			logger: newTestLogger(),
 		}
-		if local.countLogFiles(context.Background()) != 0 {
-			t.Fatalf("empty log path should return 0")
+		if local.countLogFiles(context.Background()) != -1 {
+			t.Fatalf("empty log path should return -1 (no count)")
 		}
 	})
 
@@ -1246,8 +1246,8 @@ func TestSecondaryStorageCountLogFiles(t *testing.T) {
 			config: &config.Config{},
 			logger: newTestLogger(),
 		}
-		if storage.countLogFiles(context.Background()) != 0 {
-			t.Fatalf("empty path should return 0")
+		if storage.countLogFiles(context.Background()) != -1 {
+			t.Fatalf("empty path should return -1 (no count)")
 		}
 	})
 

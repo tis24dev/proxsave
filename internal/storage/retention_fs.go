@@ -248,7 +248,8 @@ func (r fsRetention) countLogFiles(ctx context.Context) int {
 	}
 	logPath := strings.TrimSpace(r.logPath)
 	if logPath == "" {
-		return 0
+		// No log folder: there is no count of logs, not a count of zero.
+		return -1
 	}
 	pattern := filepath.Join(logPath, "backup-*.log")
 	// Bounded against a dead/stale mount, consistent with the main backup glob.

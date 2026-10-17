@@ -739,7 +739,7 @@ func charScenarios() []charScenario {
 					gone:    charJoin(charSet("2024-05-01"), charSet("2024-04-01")),
 					removed: []string{charArchiveName(charHost, "2024-05-01"), charArchiveName(charHost, "2024-04-01")},
 					summary: RetentionSummary{
-						BackupsDeleted: 2, BackupsRemaining: 2, LogsDeleted: 0, LogsRemaining: 0, HasLogInfo: true,
+						BackupsDeleted: 2, BackupsRemaining: 2, LogsDeleted: 0, HasLogInfo: false,
 						ScopeValid: true, Owned: 2, PassCompleted: true, Planned: 2,
 					},
 				}
@@ -891,7 +891,7 @@ func charScenarios() []charScenario {
 					gone:    charJoin(charSet("2024-06-10"), charSet("2024-06-01")),
 					removed: []string{charArchiveName(charHost, "2024-06-10"), charArchiveName(charHost, "2024-06-01")},
 					summary: RetentionSummary{
-						BackupsDeleted: 2, BackupsRemaining: 1, LogsDeleted: 0, LogsRemaining: 0, HasLogInfo: true,
+						BackupsDeleted: 2, BackupsRemaining: 1, LogsDeleted: 0, HasLogInfo: false,
 						ScopeValid: true, Owned: 1, PassCompleted: true, Planned: 2,
 					},
 				}

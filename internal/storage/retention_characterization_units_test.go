@@ -224,7 +224,7 @@ func TestRetentionCharacterizationCountLogFiles(t *testing.T) {
 				{"no config", func() int {
 					return charPrivates(t, charBare(fl.name, logger, e.backups, e.logs, e.decoy, false)).countLogs(ctx)
 				}, -1},
-				{"log folder variable not set", func() int { return bare("").countLogs(ctx) }, 0},
+				{"log folder variable not set", func() int { return bare("").countLogs(ctx) }, -1},
 				{"log folder missing", func() int { return bare(filepath.Join(e.root, "missing")).countLogs(ctx) }, 0},
 				{"log folder", func() int { return charPrivates(t, backend).countLogs(ctx) }, 3},
 				{"log folder the glob cannot parse", func() int { return bare(badDir).countLogs(ctx) }, -1},

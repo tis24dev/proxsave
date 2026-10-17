@@ -29,5 +29,5 @@ DEBUG    Removing file: <ROOT>/backups/pve-backup-20240610-120000.tar.zst.metada
 DEBUG    Removing file: <ROOT>/backups/pve-backup-20240610-120000.tar.zst.metadata.sha256
 DEBUG    Secondary storage: file already removed <ROOT>/backups/pve-backup-20240610-120000.tar.zst.metadata.sha256
 DEBUG    Deleted secondary backup: pve-backup-20240610-120000.tar.zst
-DEBUG    Secondary storage retention applied: deleted 2 backups (logs deleted: 0), 1 backups remaining (0 logs remaining)
+DEBUG    Secondary storage retention applied: deleted 2 backups (logs deleted: 0), 1 backups remaining
 DEBUG    End secondary retention (ok, duration=<D>)
