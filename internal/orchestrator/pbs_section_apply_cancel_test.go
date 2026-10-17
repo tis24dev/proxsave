@@ -70,6 +70,38 @@ func TestApplyPBSSectionCfgViaAPI_StopsOnCancellation(t *testing.T) {
 	}
 }
 
+// A cancellation while the objects of this PBS are read in Clean mode stops the
+// apply with the cancellation: the block does not open and the staged file is not
+// written in place of the list that was never read.
+func TestApplyPBSSectionCfgViaAPI_CancelledListRunsNoFallback(t *testing.T) {
+	origFS, origCmd := restoreFS, restoreCmd
+	t.Cleanup(func() { restoreFS, restoreCmd = origFS, origCmd })
+	fakeFS := NewFakeFS()
+	t.Cleanup(func() { _ = os.RemoveAll(fakeFS.Root) })
+	restoreFS = fakeFS
+	if err := fakeFS.WriteFile("/stage/etc/proxmox-backup/remote.cfg", []byte("remote: r1\n\thost 10.0.0.10\n"), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	runner := &cancellingRunner{cancelOn: "proxmox-backup-manager remote list", cancel: cancel}
+	restoreCmd = runner
+
+	var buf bytes.Buffer
+	logger := logging.New(types.LogLevelDebug, false)
+	logger.SetOutput(&buf)
+	err := applyPBSRemoteCfgViaAPI(ctx, logger, "/stage", true)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("err = %v; want context.Canceled", err)
+	}
+	if strings.Contains(buf.String(), "WARNING") || strings.Contains(buf.String(), "INFO") {
+		t.Fatalf("no visible line expected on cancellation:\n%s", buf.String())
+	}
+	if _, statErr := fakeFS.Stat("/etc/proxmox-backup/remote.cfg"); statErr == nil {
+		t.Fatal("the file-based fallback must not run after a cancellation")
+	}
+}
+
 // The staged apply returns the cancellation of a section config at once: no
 // warning, no file-based fallback, and the restore step reads it as an abort.
 func TestMaybeApplyPBSConfigsFromStage_SectionCancellationAbortsTheStep(t *testing.T) {

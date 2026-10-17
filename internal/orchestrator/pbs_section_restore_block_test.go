@@ -30,7 +30,7 @@ const (
 // the full log (all levels), whether the restore was marked with warnings, and the
 // fake filesystem (to check what a fallback wrote). files maps a path under
 // /stage to its content.
-func runPBSSectionRestoreStep(t *testing.T, behavior PBSRestoreBehavior, categories []string, files map[string]string, runner *FakeCommandRunner) (string, bool, *FakeFS) {
+func runPBSSectionRestoreStep(t *testing.T, behavior PBSRestoreBehavior, categories []string, files map[string]string, runner *FakeCommandRunner, prepare ...func()) (string, bool, *FakeFS) {
 	t.Helper()
 	origFS, origCmd := restoreFS, restoreCmd
 	origIsReal, origGeteuid := pbsStagedApplyIsRealRestoreFSFn, pbsStagedApplyGeteuidFn
@@ -60,6 +60,9 @@ func runPBSSectionRestoreStep(t *testing.T, behavior PBSRestoreBehavior, categor
 	pbsStagedApplySyncCfgViaAPIFn = applyPBSSyncCfgViaAPI
 	pbsStagedApplyVerificationCfgViaAPIFn = applyPBSVerificationCfgViaAPI
 	pbsStagedApplyPruneCfgViaAPIFn = applyPBSPruneCfgViaAPI
+	for _, p := range prepare {
+		p()
+	}
 
 	for path, content := range files {
 		if content == pbsStagedUnreadable {
@@ -111,7 +114,7 @@ const (
 
 func assertNoSectionCallerLines(t *testing.T, log string) {
 	t.Helper()
-	for _, unwanted := range []string{"PBS API apply", "failed to apply", "falling back to file-based", "fallback"} {
+	for _, unwanted := range []string{"PBS API apply", "failed to apply", "falling back to file-based"} {
 		if strings.Contains(log, unwanted) {
 			t.Fatalf("unexpected %q in log:\n%s", unwanted, log)
 		}
@@ -507,55 +510,291 @@ func TestPBSSectionRestoreBlock_IncompleteErrorIdentity(t *testing.T) {
 	}
 }
 
-// The cases the block does not cover keep the lines they had before it: a staged
-// file absent (DEBUG only), a staged file that cannot be read, and in Clean mode a
-// list of this PBS's remotes that cannot be read. The last two open no block: the
-// caller warns and runs the file-based fallback, as before.
-func TestPBSSectionRestoreBlock_UncoveredCasesKeepTheirLines(t *testing.T) {
-	t.Run("absent", func(t *testing.T) {
-		runner := &FakeCommandRunner{}
-		log, warned, _ := runPBSSectionRestoreStep(t, PBSRestoreBehaviorClean, []string{"pbs_remotes"}, nil, runner)
-		assertPBSBlockLog(t, log, []string{
-			"DEBUG    Start pbs staged apply: dryRun=false stage=/stage",
-			"DEBUG    PBS remote restore: staged=/stage/etc/proxmox-backup/remote.cfg not in the backup action=skip",
-			"DEBUG    End pbs staged apply (ok, duration=<d>)",
-		})
-		if warned || len(runner.CallsList()) != 0 {
-			t.Fatalf("warned=%v calls=%v", warned, runner.CallsList())
-		}
+// A staged file absent from the backup is DEBUG only: no block, no command.
+func TestPBSSectionRestoreBlock_AbsentStagedFile(t *testing.T) {
+	runner := &FakeCommandRunner{}
+	log, warned, _ := runPBSSectionRestoreStep(t, PBSRestoreBehaviorClean, []string{"pbs_remotes"}, nil, runner)
+	assertPBSBlockLog(t, log, []string{
+		"DEBUG    Start pbs staged apply: dryRun=false stage=/stage",
+		"DEBUG    PBS remote restore: staged=/stage/etc/proxmox-backup/remote.cfg not in the backup action=skip",
+		"DEBUG    End pbs staged apply (ok, duration=<d>)",
 	})
-	t.Run("list-unreadable-clean", func(t *testing.T) {
-		runner := &FakeCommandRunner{Errors: map[string]error{pbsRemoteListCmd: errors.New("exit status 255: Error: unable to read remote.cfg")}}
-		log, warned, fakeFS := runPBSSectionRestoreStep(t, PBSRestoreBehaviorClean, []string{"pbs_remotes"}, map[string]string{"etc/proxmox-backup/remote.cfg": "remote: r1\n\thost 10.0.0.1\n"}, runner)
-		if got := pbsVisibleLines(log); strings.Join(got, "\n") != strings.Join([]string{
-			"WARNING  PBS API apply: remote.cfg failed: proxmox-backup-manager remote list --output-format=json failed: exit status 255: Error: unable to read remote.cfg",
-			"WARNING  PBS staged apply: falling back to file-based remote.cfg",
-		}, "\n") {
-			t.Fatalf("visible lines:\n%s\nfull log:\n%s", strings.Join(got, "\n"), log)
-		}
-		if !strings.Contains(log, `DEBUG    PBS remote restore: remote list failed error="exit status 255: Error: unable to read remote.cfg"`) {
-			t.Fatalf("missing the DEBUG evidence of the failed list:\n%s", log)
-		}
-		if warned {
-			t.Fatal("the fallback applied the file: no warning outcome")
-		}
-		if _, err := fakeFS.Stat("/etc/proxmox-backup/remote.cfg"); err != nil {
-			t.Fatalf("the file-based fallback must still run: %v", err)
-		}
-	})
-	t.Run("staged-unreadable", func(t *testing.T) {
-		runner := &FakeCommandRunner{}
-		log, warned, _ := runPBSSectionRestoreStep(t, PBSRestoreBehaviorMerge, []string{"pbs_remotes"}, map[string]string{"etc/proxmox-backup/remote.cfg": pbsStagedUnreadable}, runner)
-		got := pbsVisibleLines(log)
-		if len(got) != 2 || !strings.HasPrefix(got[0], "WARNING  PBS API apply: remote.cfg failed: read staged etc/proxmox-backup/remote.cfg: ") ||
-			got[1] != "WARNING  PBS staged config apply: 1 PBS config item(s) failed to apply: remote.cfg" {
-			t.Fatalf("visible lines:\n%s", strings.Join(got, "\n"))
-		}
-		if !warned {
-			t.Fatal("restore must end with warnings")
-		}
-	})
+	if warned || len(runner.CallsList()) != 0 {
+		t.Fatalf("warned=%v calls=%v", warned, runner.CallsList())
+	}
 }
+
+// pbsRemoteStagedReadErr is the error of reading the staged remote.cfg when a
+// directory stands where the file should be, as the block logs it.
+const pbsRemoteStagedReadErr = "read staged etc/proxmox-backup/remote.cfg: read <fakefs>/stage/etc/proxmox-backup/remote.cfg: is a directory"
+
+// A staged file that cannot be read ends the block as not applied, in Clean and
+// Merge alike: no command, no file-based fallback (it would read the same file),
+// and the caller adds nothing; the restore ends with warnings.
+func TestPBSSectionRestoreBlock_StagedUnreadable(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		behavior PBSRestoreBehavior
+		mode     string
+	}{
+		{"clean", PBSRestoreBehaviorClean, "clean"},
+		{"merge", PBSRestoreBehaviorMerge, "merge"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			runner := &FakeCommandRunner{}
+			log, warned, fakeFS := runPBSSectionRestoreStep(t, tc.behavior, []string{"pbs_remotes"}, map[string]string{"etc/proxmox-backup/remote.cfg": pbsStagedUnreadable}, runner)
+			assertPBSBlockLog(t, log, []string{
+				"DEBUG    Start pbs staged apply: dryRun=false stage=/stage",
+				"INFO     Restoring PBS remotes...",
+				"DEBUG    PBS remote restore: mode=" + tc.mode + " staged=/stage/etc/proxmox-backup/remote.cfg",
+				`DEBUG    PBS remote restore: staged=/stage/etc/proxmox-backup/remote.cfg read failed error="` + pbsRemoteStagedReadErr + `"`,
+				`INFO     The remote configuration in the backup could not be read: "` + pbsRemoteStagedReadErr + `"`,
+				"WARNING  ⚠ PBS remote configuration: not applied",
+				"DEBUG    End pbs staged apply (error=" + pbsRemoteStagedReadErr + ", duration=<d>)",
+				"DEBUG    PBS staged config apply: outcome already reported: " + pbsRemoteStagedReadErr,
+			})
+			if !warned {
+				t.Fatal("restore must end with warnings")
+			}
+			if calls := runner.CallsList(); len(calls) != 0 {
+				t.Fatalf("no command may run, calls: %v", calls)
+			}
+			assertNoSectionCallerLines(t, log)
+			if _, err := fakeFS.Stat("/etc/proxmox-backup/remote.cfg"); err == nil {
+				t.Fatal("no file-based fallback may run")
+			}
+		})
+	}
+}
+
+// pbsRemoteListUnparsable is what proxmox-backup-manager 4.2.8 answered on VM 201
+// (2026-10-17) to `remote list` with a remote.cfg it could not parse, in the shape
+// osCommandRunner.RunStdout returns it.
+const pbsRemoteListUnparsable = `exit status 255: Error: parsing "/etc/proxmox-backup/remote.cfg" failed: line 1 - syntax error (expected header)`
+
+// pbsFaultFS is the FakeFS with the read of readFail and the rename onto
+// renameFail failing, to break the current-file read or the commit of an atomic
+// write on their own.
+type pbsFaultFS struct {
+	*FakeFS
+	readFail   string
+	renameFail string
+}
+
+func (f *pbsFaultFS) ReadFile(path string) ([]byte, error) {
+	if path == f.readFail {
+		return nil, errors.New("injected read failure")
+	}
+	return f.FakeFS.ReadFile(path)
+}
+
+func (f *pbsFaultFS) Rename(oldpath, newpath string) error {
+	if newpath == f.renameFail {
+		return errors.New("injected rename failure")
+	}
+	return f.FakeFS.Rename(oldpath, newpath)
+}
+
+// Clean mode, the remotes configured on this PBS cannot be read: the block writes
+// the staged remote.cfg as it is (or removes the target for a staged file without
+// remotes), names every remote of the current file that the backup does not have,
+// and ends with "applied from the backup file"; when the write fails nothing is
+// named and the configuration is not applied. Either way the caller adds nothing
+// and the restore ends with warnings.
+func TestPBSSectionRestoreBlock_CurrentUnreadable(t *testing.T) {
+	const (
+		target    = "/etc/proxmox-backup/remote.cfg"
+		twoStaged = "remote: r1\n\thost 10.0.0.1\n\nremote: r2\n\thost 10.0.0.2\n"
+		current   = "remote: r1\n\thost 10.0.0.1\n\nremote: old\n\thost 10.0.0.9\n"
+		listErr   = "proxmox-backup-manager remote list --output-format=json failed: " + pbsRemoteListUnparsable
+		listDebug = "DEBUG    PBS remote restore: remote list failed error=\"exit status 255: Error: parsing \\\"/etc/proxmox-backup/remote.cfg\\\" failed: line 1 - syntax error (expected header)\""
+		reading   = `DEBUG    PBS remote restore: reading current remotes cmd="proxmox-backup-manager remote list --output-format=json"`
+		start     = "DEBUG    Start pbs staged apply: dryRun=false stage=/stage"
+		fallback  = "DEBUG    PBS remote restore: fallback=file target=/etc/proxmox-backup/remote.cfg source=/stage/etc/proxmox-backup/remote.cfg"
+		event     = "INFO     The remotes configured on this PBS could not be read"
+		applied   = "WARNING  ⚠ PBS remote configuration: applied from the backup file"
+	)
+	openTwo := []string{
+		"INFO     Restoring PBS remotes...",
+		"DEBUG    PBS remote restore: mode=clean staged=/stage/etc/proxmox-backup/remote.cfg",
+		"DEBUG    PBS remote restore: backup remotes=2 names=r1,r2",
+		"INFO       Remotes to restore: 2",
+		"INFO       Names: r1, r2",
+		event, fallback,
+	}
+	openNone := []string{
+		"INFO     Restoring PBS remotes...",
+		"DEBUG    PBS remote restore: mode=clean staged=/stage/etc/proxmox-backup/remote.cfg",
+		"DEBUG    PBS remote restore: backup remotes=0 names=",
+		"INFO       Remotes to restore: 0",
+		event, fallback,
+	}
+	helperOK := []string{
+		"DEBUG    Start pbs staged apply remote.cfg: stage=/stage",
+		"DEBUG    pbs staged apply file: Applied etc/proxmox-backup/remote.cfg -> /etc/proxmox-backup/remote.cfg",
+		"DEBUG    End pbs staged apply remote.cfg (ok, duration=<d>)",
+	}
+	dropOld := []string{
+		"DEBUG    PBS remote restore: remote=old not in backup action=drop from file",
+		"INFO     Remote old is configured on this PBS but not present in the backup",
+		"INFO     ✓ PBS remote old: removed",
+	}
+	dropR1 := []string{
+		"DEBUG    PBS remote restore: remote=r1 not in backup action=drop from file",
+		"INFO     Remote r1 is configured on this PBS but not present in the backup",
+		"INFO     ✓ PBS remote r1: removed",
+	}
+	tail := func(stepErr string) []string {
+		return []string{
+			"DEBUG    End pbs staged apply (error=" + stepErr + ", duration=<d>)",
+			"DEBUG    PBS staged config apply: outcome already reported: " + stepErr,
+		}
+	}
+	join := func(parts ...[]string) []string {
+		var out []string
+		for _, p := range parts {
+			out = append(out, p...)
+		}
+		return out
+	}
+	listFails := func() *FakeCommandRunner {
+		return &FakeCommandRunner{Errors: map[string]error{pbsRemoteListCmd: errors.New(pbsRemoteListUnparsable)}}
+	}
+	const renameErr = "write /etc/proxmox-backup/remote.cfg: injected rename failure"
+
+	cases := []struct {
+		name    string
+		staged  string
+		current *string
+		runner  *FakeCommandRunner
+		fault   *pbsFaultFS
+		want    []string
+		// wantTarget is the content of the target after the step; nil: absent.
+		wantTarget *string
+	}{
+		{
+			name: "non-empty-drops-one", staged: twoStaged, current: pbsStrPtr(current), runner: listFails(),
+			want: join([]string{start, reading, listDebug}, openTwo, []string{
+				"DEBUG    PBS remote restore: fallback current file remotes=2 names=old,r1",
+			}, helperOK, []string{"DEBUG    PBS remote restore: fallback written"}, dropOld, []string{applied}, tail(listErr)),
+			wantTarget: pbsStrPtr(strings.TrimSpace(twoStaged) + "\n"),
+		},
+		{
+			name: "list-unparseable-no-current-file", staged: twoStaged, runner: &FakeCommandRunner{Outputs: map[string][]byte{pbsRemoteListCmd: []byte("not json")}},
+			want: join([]string{start, reading,
+				`DEBUG    PBS remote restore: remote list returned unparseable output error="invalid character 'o' in literal null (expecting 'u')"`,
+			}, openTwo, []string{
+				"DEBUG    PBS remote restore: fallback current file remotes=0 names=",
+			}, helperOK, []string{"DEBUG    PBS remote restore: fallback written", applied},
+				tail("parse remote list: invalid character 'o' in literal null (expecting 'u')")),
+			wantTarget: pbsStrPtr(strings.TrimSpace(twoStaged) + "\n"),
+		},
+		{
+			name: "empty", staged: "", current: pbsStrPtr(current), runner: listFails(),
+			want: join([]string{start, reading, listDebug}, openNone, []string{
+				"DEBUG    PBS remote restore: fallback current file remotes=2 names=old,r1",
+				"DEBUG    PBS remote restore: fallback staged file has no remotes comments_only=false, target removed",
+			}, dropOld, dropR1, []string{applied}, tail(listErr)),
+		},
+		{
+			name: "comments-only", staged: "# no remotes\n", current: pbsStrPtr(current), runner: listFails(),
+			want: join([]string{start, reading, listDebug}, openNone, []string{
+				"DEBUG    PBS remote restore: fallback current file remotes=2 names=old,r1",
+				"DEBUG    PBS remote restore: fallback staged file has no remotes comments_only=true, target removed",
+			}, dropOld, dropR1, []string{applied}, tail(listErr)),
+		},
+		{
+			name: "current-file-unreadable-names-nothing", staged: twoStaged, current: pbsStrPtr(current), runner: listFails(),
+			fault: &pbsFaultFS{readFail: target},
+			want: join([]string{start, reading, listDebug}, openTwo, []string{
+				`DEBUG    PBS remote restore: fallback current file read failed error="injected read failure"`,
+			}, helperOK, []string{"DEBUG    PBS remote restore: fallback written", applied}, tail(listErr)),
+			wantTarget: nil, // the injected read failure hides the target; checked below
+		},
+		{
+			// "remote :r1" is a header for the section parser and not for the file
+			// write, which would skip the file: the block says it was not written.
+			name: "header-the-write-rejects", staged: "remote :r1\n\thost 10.0.0.1\n", current: pbsStrPtr(current), runner: listFails(),
+			want: join([]string{start, reading, listDebug}, []string{
+				"INFO     Restoring PBS remotes...",
+				"DEBUG    PBS remote restore: mode=clean staged=/stage/etc/proxmox-backup/remote.cfg",
+				"DEBUG    PBS remote restore: backup remotes=1 names=r1",
+				"INFO       Remotes to restore: 1",
+				"INFO       Names: r1",
+				event, fallback,
+				"DEBUG    PBS remote restore: fallback current file remotes=2 names=old,r1",
+				`DEBUG    PBS remote restore: fallback write failed error="etc/proxmox-backup/remote.cfg does not look like a valid PBS config file (missing section header)"`,
+				`INFO     The remote configuration could not be written to this PBS: "etc/proxmox-backup/remote.cfg does not look like a valid PBS config file (missing section header)"`,
+				"WARNING  ⚠ PBS remote configuration: not applied",
+			}, tail(listErr+"; file fallback: etc/proxmox-backup/remote.cfg does not look like a valid PBS config file (missing section header)")),
+			wantTarget: pbsStrPtr(current),
+		},
+		{
+			name: "write-fails-names-nothing", staged: twoStaged, current: pbsStrPtr(current), runner: listFails(),
+			fault: &pbsFaultFS{renameFail: target},
+			want: join([]string{start, reading, listDebug}, openTwo, []string{
+				"DEBUG    PBS remote restore: fallback current file remotes=2 names=old,r1",
+				"DEBUG    Start pbs staged apply remote.cfg: stage=/stage",
+				"DEBUG    End pbs staged apply remote.cfg (error=" + renameErr + ", duration=<d>)",
+				`DEBUG    PBS remote restore: fallback write failed error="` + renameErr + `"`,
+				`INFO     The remote configuration could not be written to this PBS: "` + renameErr + `"`,
+				"WARNING  ⚠ PBS remote configuration: not applied",
+			}, tail(listErr+"; file fallback: "+renameErr)),
+			wantTarget: pbsStrPtr(current),
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var prepare []func()
+			if tc.current != nil {
+				content := *tc.current
+				prepare = append(prepare, func() {
+					if err := restoreFS.WriteFile(target, []byte(content), 0o640); err != nil {
+						t.Fatal(err)
+					}
+				})
+			}
+			if tc.fault != nil {
+				fault := tc.fault
+				prepare = append(prepare, func() {
+					fault.FakeFS = restoreFS.(*FakeFS)
+					restoreFS = fault
+				})
+			}
+			log, warned, fakeFS := runPBSSectionRestoreStep(t, PBSRestoreBehaviorClean, []string{"pbs_remotes"}, map[string]string{"etc/proxmox-backup/remote.cfg": tc.staged}, tc.runner, prepare...)
+			assertPBSBlockLog(t, log, tc.want)
+			if !warned {
+				t.Fatal("restore must end with warnings")
+			}
+			if calls := tc.runner.CallsList(); strings.Join(calls, "\n") != pbsRemoteListCmd {
+				t.Fatalf("only the list may run, calls: %v", calls)
+			}
+			assertNoSectionCallerLines(t, log)
+			for _, unwanted := range []string{"WARNING  PBS staged apply:", "is empty; removing"} {
+				if strings.Contains(log, unwanted) {
+					t.Fatalf("the file helper's own line %q must not appear in the block:\n%s", unwanted, log)
+				}
+			}
+			got, err := fakeFS.ReadFile(target)
+			switch {
+			case tc.fault != nil && tc.fault.readFail != "":
+				if err != nil || string(got) != strings.TrimSpace(tc.staged)+"\n" {
+					t.Fatalf("target %q (err %v), want the staged file", got, err)
+				}
+			case tc.wantTarget == nil:
+				if err == nil {
+					t.Fatalf("the target must be removed, got %q", got)
+				}
+			default:
+				if err != nil || string(got) != *tc.wantTarget {
+					t.Fatalf("target %q (err %v), want %q", got, err, *tc.wantTarget)
+				}
+			}
+		})
+	}
+}
+
+func pbsStrPtr(s string) *string { return &s }
 
 // With other items in the same step: an item that fails keeps its summary line
 // and the section blocks are not repeated in it; two blocks whose outcomes are
@@ -568,13 +807,14 @@ func TestMaybeApplyPBSConfigsFromStage_SectionBlockOutcomeIsNotRepeated(t *testi
 	}
 
 	t.Run("with a failed item", func(t *testing.T) {
-		// s3.cfg cannot be read: an error the block does not cover, reported by the
-		// caller as before, and in Merge mode a failed item.
+		// The s3.cfg apply fails with a plain error, which the caller reports, and in
+		// Merge mode records as a failed item.
 		runner := &FakeCommandRunner{Errors: refused}
 		log, warned, _ := runPBSSectionRestoreStep(t, PBSRestoreBehaviorMerge, []string{"pbs_remotes", "datastore_pbs"}, map[string]string{
 			"etc/proxmox-backup/remote.cfg": r1,
-			"etc/proxmox-backup/s3.cfg":     pbsStagedUnreadable,
-		}, runner)
+		}, runner, func() {
+			pbsStagedApplyS3CfgViaAPIFn = func(context.Context, *logging.Logger, string, bool) error { return errors.New("forced s3 error") }
+		})
 		if !warned {
 			t.Fatal("restore must end with warnings")
 		}
@@ -679,6 +919,111 @@ func TestPBSSectionRestoreBlock_AlreadyExistsRejectionCarriesTheUpdateRefusal(t 
 			}
 			if !found {
 				t.Fatalf("no rejection event, log:\n%s", logBuf.String())
+			}
+		})
+	}
+}
+
+// One table over the six section configs for the two cases that stop before any
+// object: the staged file cannot be read (no command, not applied), and in Clean
+// mode this PBS's objects cannot be read (the staged file is written as it is, and
+// the object of the current file that the backup does not have is named as
+// removed). Each config uses its own words, and writes only its own file: the
+// three job configs are staged together and each writes one of them.
+func TestPBSSectionRestoreBlock_StoppedBlockPerKind(t *testing.T) {
+	files := []string{"remote.cfg", "s3.cfg", "sync.cfg", "verification.cfg", "prune.cfg", "traffic-control.cfg"}
+	for _, k := range []struct {
+		name, file, command                      string
+		opening, count, current, config, outcome string
+		event, subject                           string
+		apply                                    func(context.Context, *logging.Logger, string, bool) error
+	}{
+		{"remote", "remote.cfg", "remote", "Restoring PBS remotes...", "  Remotes to restore: 1", "The remotes configured on this PBS could not be read", "The remote configuration", "PBS remote configuration", "Remote", "PBS remote", applyPBSRemoteCfgViaAPI},
+		{"s3", "s3.cfg", "s3 endpoint", "Restoring PBS S3 endpoints...", "  S3 endpoints to restore: 1", "The S3 endpoints configured on this PBS could not be read", "The S3 endpoint configuration", "PBS S3 endpoint configuration", "S3 endpoint", "PBS S3 endpoint", applyPBSS3CfgViaAPI},
+		{"sync", "sync.cfg", "sync-job", "Restoring PBS sync jobs...", "  Sync jobs to restore: 1", "The sync jobs configured on this PBS could not be read", "The sync job configuration", "PBS sync job configuration", "Sync job", "PBS sync job", applyPBSSyncCfgViaAPI},
+		{"verification", "verification.cfg", "verify-job", "Restoring PBS verify jobs...", "  Verify jobs to restore: 1", "The verify jobs configured on this PBS could not be read", "The verify job configuration", "PBS verify job configuration", "Verify job", "PBS verify job", applyPBSVerificationCfgViaAPI},
+		{"prune", "prune.cfg", "prune-job", "Restoring PBS prune jobs...", "  Prune jobs to restore: 1", "The prune jobs configured on this PBS could not be read", "The prune job configuration", "PBS prune job configuration", "Prune job", "PBS prune job", applyPBSPruneCfgViaAPI},
+		{"traffic-control", "traffic-control.cfg", "traffic-control", "Restoring PBS traffic control rules...", "  Traffic control rules to restore: 1", "The traffic control rules configured on this PBS could not be read", "The traffic control configuration", "PBS traffic control configuration", "Traffic control rule", "PBS traffic control rule", applyPBSTrafficControlCfgViaAPI},
+	} {
+		t.Run(k.name+"/staged-unreadable", func(t *testing.T) {
+			stageRoot, fs, runner := setupPBSAPIApplyTestDeps(t)
+			if err := fs.MkdirAll(stageRoot+"/etc/proxmox-backup/"+k.file, 0o750); err != nil {
+				t.Fatal(err)
+			}
+			var logBuf bytes.Buffer
+			logger := logging.New(types.LogLevelDebug, false)
+			logger.SetOutput(&logBuf)
+
+			err := k.apply(context.Background(), logger, stageRoot, true)
+
+			readErr := "read staged etc/proxmox-backup/" + k.file + ": read <fakefs>/stage/etc/proxmox-backup/" + k.file + ": is a directory"
+			want := []string{
+				"INFO     " + k.opening,
+				"INFO     " + k.config + ` in the backup could not be read: "` + readErr + `"`,
+				"WARNING  ⚠ " + k.outcome + ": not applied",
+			}
+			if got := pbsVisibleLines(logBuf.String()); strings.Join(got, "\n") != strings.Join(want, "\n") {
+				t.Fatalf("visible lines\n--- got ---\n%s\n--- want ---\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
+			}
+			var stopped *pbsSectionRestoreStoppedError
+			if !errors.As(err, &stopped) || !pbsSectionOutcomeLogged(err) {
+				t.Fatalf("err=%T %v, want a pbsSectionRestoreStoppedError", err, err)
+			}
+			if len(runner.calls) != 0 {
+				t.Fatalf("no command may run, calls: %v", runner.calls)
+			}
+		})
+
+		t.Run(k.name+"/current-unreadable", func(t *testing.T) {
+			stageRoot, fs, runner := setupPBSAPIApplyTestDeps(t)
+			for _, f := range files {
+				writeStageFile(t, fs, stageRoot, "etc/proxmox-backup/"+f, "x: a1\n\tcomment from-"+f+"\n", 0o640)
+			}
+			// This PBS has a1 and old in its own file; the backup has a1 only.
+			if err := fs.WriteFile("/etc/proxmox-backup/"+k.file, []byte("x: a1\n\tcomment current\n\nx: old\n\tcomment current\n"), 0o640); err != nil {
+				t.Fatal(err)
+			}
+			cmd := "proxmox-backup-manager " + k.command
+			runner.errs = map[string]error{cmd + " list --output-format=json": errors.New(pbsRemoteListUnparsable)}
+			var logBuf bytes.Buffer
+			logger := logging.New(types.LogLevelDebug, false)
+			logger.SetOutput(&logBuf)
+
+			err := k.apply(context.Background(), logger, stageRoot, true)
+
+			want := []string{
+				"INFO     " + k.opening,
+				"INFO     " + k.count,
+				"INFO       Names: a1",
+				"INFO     " + k.current,
+				"INFO     " + k.event + " old is configured on this PBS but not present in the backup",
+				"INFO     ✓ " + k.subject + " old: removed",
+				"WARNING  ⚠ " + k.outcome + ": applied from the backup file",
+			}
+			if got := pbsVisibleLines(logBuf.String()); strings.Join(got, "\n") != strings.Join(want, "\n") {
+				t.Fatalf("visible lines\n--- got ---\n%s\n--- want ---\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
+			}
+			if !strings.Contains(logBuf.String(), "fallback=file target=/etc/proxmox-backup/"+k.file+" source=/stage/etc/proxmox-backup/"+k.file+"\n") {
+				t.Fatalf("missing the fallback DEBUG line, log:\n%s", logBuf.String())
+			}
+			var stopped *pbsSectionRestoreStoppedError
+			if !errors.As(err, &stopped) || !pbsSectionOutcomeLogged(err) {
+				t.Fatalf("err=%T %v, want a pbsSectionRestoreStoppedError", err, err)
+			}
+			if strings.Join(runner.calls, "\n") != cmd+" list --output-format=json" {
+				t.Fatalf("only the list may run, calls: %v", runner.calls)
+			}
+			for _, f := range files {
+				got, readErr := fs.ReadFile("/etc/proxmox-backup/" + f)
+				if f == k.file {
+					if readErr != nil || string(got) != "x: a1\n\tcomment from-"+f+"\n" {
+						t.Fatalf("%s written %q (err %v), want the staged file", f, got, readErr)
+					}
+					continue
+				}
+				if readErr == nil {
+					t.Fatalf("%s must not be written by the %s block, got %q", f, k.name, got)
+				}
 			}
 		})
 	}

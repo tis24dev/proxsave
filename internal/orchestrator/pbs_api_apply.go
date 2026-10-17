@@ -231,8 +231,9 @@ func ensurePBSServicesForAPI(ctx context.Context, logger *logging.Logger) error 
 // ("remote", "s3 endpoint", ...), the keys a list row is identified by (in the order
 // they are tried), the flags whose value a failed create/update must not show, the
 // keys whose value the file stores base64-encoded while create/update take it
-// plain, so it is decoded before it becomes a flag, and the words its restore
-// block shows.
+// plain, so it is decoded before it becomes a flag, the words its restore block
+// shows, and the apply that writes the staged file as it is when the API cannot
+// (nil: applyPBSConfigFileFromStage of file).
 type pbsSectionCfg struct {
 	file         string
 	command      []string
@@ -240,6 +241,15 @@ type pbsSectionCfg struct {
 	secretFlags  []string
 	base64Values []string
 	labels       pbsSectionLabels
+	fileFallback func(ctx context.Context, logger *logging.Logger, stageRoot string) error
+}
+
+// writeFromStage writes this config's staged file, and only that file, to this PBS.
+func (c pbsSectionCfg) writeFromStage(ctx context.Context, logger *logging.Logger, stageRoot string) error {
+	if c.fileFallback != nil {
+		return c.fileFallback(ctx, logger, stageRoot)
+	}
+	return applyPBSConfigFileFromStage(ctx, logger, stageRoot, c.file)
 }
 
 // pbsSectionLabels are the words of the restore block of one section config, the
@@ -368,6 +378,28 @@ func (e *pbsSectionRestoreIncompleteError) Unwrap() error {
 	return nil
 }
 
+// pbsSectionRestoreStoppedError is a section-config apply that stopped before any
+// object went through the API: the staged file could not be read, or in Clean
+// (1:1) mode the objects configured on this PBS could not be read and the block
+// wrote the staged file instead. The block has already logged its outcome, a ⚠
+// one, so the caller neither logs it again nor runs another fallback, and the
+// restore ends with warnings.
+type pbsSectionRestoreStoppedError struct {
+	err error
+}
+
+func (e *pbsSectionRestoreStoppedError) Error() string { return e.err.Error() }
+
+func (e *pbsSectionRestoreStoppedError) Unwrap() error { return e.err }
+
+// pbsSectionOutcomeLogged reports whether err is the result of a section block
+// that has already logged its outcome.
+func pbsSectionOutcomeLogged(err error) bool {
+	var incomplete *pbsSectionRestoreIncompleteError
+	var stopped *pbsSectionRestoreStoppedError
+	return errors.As(err, &incomplete) || errors.As(err, &stopped)
+}
+
 // pbsSectionRestore carries the state of one section-config apply: what it
 // attempted and what it could not do, for the per-object and block outcomes.
 type pbsSectionRestore struct {
@@ -470,6 +502,110 @@ func (r *pbsSectionRestore) update(id string, flags []string, createErr error) e
 	return nil
 }
 
+// configuration is the subject of the block's events about the whole
+// configuration: "The remote configuration".
+func (r *pbsSectionRestore) configuration() string {
+	return "The " + strings.TrimPrefix(r.cfg.labels.outcome, "PBS ")
+}
+
+// configNotApplied logs the outcome of a block that applied nothing.
+func (r *pbsSectionRestore) configNotApplied(cause error) error {
+	r.logger.Warning("%s %s: not applied", theme.SymbolWarning, r.cfg.labels.outcome)
+	return &pbsSectionRestoreStoppedError{err: cause}
+}
+
+// readCurrent reads the ids of the objects configured on this PBS, or the error
+// that kept them from being read.
+func (r *pbsSectionRestore) readCurrent() ([]string, error) {
+	kind := strings.Join(r.cfg.command, " ")
+	listArgs := r.commandArgs("list", "--output-format=json")
+	r.debug("reading current %s cmd=%q", r.keys(), "proxmox-backup-manager "+strings.Join(listArgs, " "))
+	out, err := runPBSManager(r.ctx, listArgs...)
+	if err != nil {
+		r.debug("%s list failed error=%q", kind, pbsManagerErrorText(err))
+		return nil, err
+	}
+	current, err := parsePBSListIDs(out, r.cfg.listKeys...)
+	if err != nil {
+		r.debug("%s list returned unparseable output error=%q", kind, err.Error())
+		return nil, fmt.Errorf("parse %s list: %w", kind, err)
+	}
+	return current, nil
+}
+
+// pbsSectionFileNames reads the objects of a section-config file on this PBS, by
+// name, sorted; a missing file has none.
+func pbsSectionFileNames(path string) ([]string, error) {
+	sections, err := readProxmoxConfigSectionsOptional(path)
+	if err != nil {
+		return nil, err
+	}
+	names := make(map[string]struct{}, len(sections))
+	for _, s := range sections {
+		if name := strings.TrimSpace(s.Name); name != "" {
+			names[name] = struct{}{}
+		}
+	}
+	return pbsSortedNames(names), nil
+}
+
+// fileFallback writes, in Clean (1:1) mode, the staged file of this config as it
+// is when the objects configured on this PBS could not be read, and logs the
+// outcome. raw is the staged file, ids the objects it names, cause the error that
+// kept the objects of this PBS from being read. A staged file without objects
+// (empty, or only comments) removes the target file, as the API path removes
+// every object. Once the file is written or removed, every object of the current
+// file that the backup does not have is named as removed.
+func (r *pbsSectionRestore) fileFallback(stageRoot, raw string, ids []string, cause error) error {
+	r.logger.Info("The %s configured on this PBS could not be read", r.cfg.labels.plural)
+	target := filepath.Join(string(os.PathSeparator), filepath.FromSlash(r.cfg.file))
+	r.debug("fallback=file target=%s source=%s", target, filepath.Join(stageRoot, r.cfg.file))
+	current, currentErr := pbsSectionFileNames(target)
+	if currentErr != nil {
+		r.debug("fallback current file read failed error=%q", currentErr.Error())
+	} else {
+		r.debug("fallback current file %s=%d names=%s", r.keys(), len(current), strings.Join(current, ","))
+	}
+
+	emptied := len(ids) == 0
+	var err error
+	switch {
+	case emptied:
+		err = removeIfExists(target)
+	case !pbsConfigHasHeader(raw):
+		// The write would skip a file without a header the parser still read
+		// objects from: say it was not written instead of applied.
+		err = fmt.Errorf("%s does not look like a valid PBS config file (missing section header)", r.cfg.file)
+	default:
+		err = r.cfg.writeFromStage(r.ctx, r.logger, stageRoot)
+	}
+	if err != nil {
+		r.debug("fallback write failed error=%q", err.Error())
+		r.logger.Info("%s could not be written to this PBS: \"%s\"", r.configuration(), err.Error())
+		return r.configNotApplied(fmt.Errorf("%w; file fallback: %w", cause, err))
+	}
+	if emptied {
+		r.debug("fallback staged file has no %s comments_only=%v, target removed", r.keys(), strings.TrimSpace(raw) != "")
+	} else {
+		r.debug("fallback written")
+	}
+
+	inBackup := make(map[string]struct{}, len(ids))
+	for _, id := range ids {
+		inBackup[id] = struct{}{}
+	}
+	for _, name := range current {
+		if _, ok := inBackup[name]; ok {
+			continue
+		}
+		r.debug("%s=%s not in backup action=drop from file", r.key(), name)
+		r.logger.Info("%s %s is configured on this PBS but not present in the backup", r.cfg.labels.eventNoun, name)
+		r.logger.Info("%s PBS %s %s: removed", theme.SymbolSuccess, r.cfg.labels.noun, name)
+	}
+	r.logger.Warning("%s %s: applied from the backup file", theme.SymbolWarning, r.cfg.labels.outcome)
+	return &pbsSectionRestoreStoppedError{err: cause}
+}
+
 // outcome logs the outcome of the whole block and returns the error the caller
 // records the restore warning from.
 func (r *pbsSectionRestore) outcome() error {
@@ -498,22 +634,30 @@ func (r *pbsSectionRestore) outcome() error {
 // ends with its own. When an object was not applied or not removed, the result
 // is a pbsSectionRestoreIncompleteError, whose outcome is already logged.
 //
-// A staged file that cannot be read or parsed, and in Clean mode a list of this
-// PBS's objects that cannot be read, stop the apply before the block opens with a
-// plain error that the caller reports and falls back from. So does a
-// cancellation, at any point, with the cancellation itself.
+// A staged file that cannot be read ends the block as not applied, in both modes.
+// In Clean mode, when the objects configured on this PBS cannot be read, the block
+// writes the staged file as it is instead. Both return a
+// pbsSectionRestoreStoppedError, whose outcome is already logged. A cancellation
+// stops the apply at any point with the cancellation itself.
 func applyPBSSectionCfgViaAPI(ctx context.Context, logger *logging.Logger, stageRoot string, strict bool, cfg pbsSectionCfg) error {
 	r := &pbsSectionRestore{ctx: ctx, logger: logger, cfg: cfg}
-	kind := strings.Join(cfg.command, " ")
 	stagedPath := filepath.Join(stageRoot, cfg.file)
+	mode := "merge"
+	if strict {
+		mode = "clean"
+	}
 
 	raw, present, err := readStageFileOptional(stageRoot, cfg.file)
-	if err != nil {
-		return err
-	}
-	if !present {
+	if err == nil && !present {
 		r.debug("staged=%s not in the backup action=skip", stagedPath)
 		return nil
+	}
+	if err != nil {
+		logger.Info("Restoring PBS %s...", cfg.labels.plural)
+		r.debug("mode=%s staged=%s", mode, stagedPath)
+		r.debug("staged=%s read failed error=%q", stagedPath, err.Error())
+		logger.Info("%s in the backup could not be read: \"%s\"", r.configuration(), err.Error())
+		return r.configNotApplied(err)
 	}
 	sections, err := parseProxmoxNotificationSections(raw)
 	if err != nil {
@@ -530,33 +674,26 @@ func applyPBSSectionCfgViaAPI(ctx context.Context, logger *logging.Logger, stage
 	}
 	ids := pbsSortedNames(desired)
 
-	// Clean mode reads this PBS's objects before the block opens: when they cannot
-	// be read, the caller reports it and falls back as before the block existed.
+	// Clean mode reads this PBS's objects before the block opens.
 	var current []string
+	var listErr error
 	if strict {
-		listArgs := r.commandArgs("list", "--output-format=json")
-		r.debug("reading current %s cmd=%q", r.keys(), "proxmox-backup-manager "+strings.Join(listArgs, " "))
-		out, err := runPBSManager(ctx, listArgs...)
-		if err != nil {
-			r.debug("%s list failed error=%q", kind, pbsManagerErrorText(err))
-			return err
-		}
-		if current, err = parsePBSListIDs(out, cfg.listKeys...); err != nil {
-			r.debug("%s list returned unparseable output error=%q", kind, err.Error())
-			return fmt.Errorf("parse %s list: %w", kind, err)
+		if current, listErr = r.readCurrent(); listErr != nil {
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return ctxErr
+			}
 		}
 	}
 
-	mode := "merge"
-	if strict {
-		mode = "clean"
-	}
 	logger.Info("Restoring PBS %s...", cfg.labels.plural)
 	r.debug("mode=%s staged=%s", mode, stagedPath)
 	r.debug("backup %s=%d names=%s", r.keys(), len(ids), strings.Join(ids, ","))
 	logger.Info("  %s to restore: %d", cfg.labels.countNoun, len(ids))
 	if len(ids) > 0 {
 		logger.Info("  Names: %s", strings.Join(ids, ", "))
+	}
+	if listErr != nil {
+		return r.fileFallback(stageRoot, raw, ids, listErr)
 	}
 
 	if strict {
@@ -597,16 +734,18 @@ func applyPBSRemoteCfgViaAPI(ctx context.Context, logger *logging.Logger, stageR
 		// "ZHVtbXlwcm9iZQ==") and base64-encodes whatever --password receives.
 		base64Values: []string{"password"},
 		labels:       pbsRemoteLabels,
+		fileFallback: applyPBSRemoteCfgFromStage,
 	})
 }
 
 func applyPBSS3CfgViaAPI(ctx context.Context, logger *logging.Logger, stageRoot string, strict bool) error {
 	return applyPBSSectionCfgViaAPI(ctx, logger, stageRoot, strict, pbsSectionCfg{
-		file:        "etc/proxmox-backup/s3.cfg",
-		command:     []string{"s3", "endpoint"},
-		listKeys:    []string{"id", "name"},
-		secretFlags: []string{"--access-key", "--secret-key"},
-		labels:      pbsS3EndpointLabels,
+		file:         "etc/proxmox-backup/s3.cfg",
+		command:      []string{"s3", "endpoint"},
+		listKeys:     []string{"id", "name"},
+		secretFlags:  []string{"--access-key", "--secret-key"},
+		labels:       pbsS3EndpointLabels,
+		fileFallback: applyPBSS3CfgFromStage,
 	})
 }
 

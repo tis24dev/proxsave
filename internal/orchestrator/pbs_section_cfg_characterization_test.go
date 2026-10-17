@@ -635,6 +635,8 @@ func runPBSSectionCharScenario(t *testing.T, k pbsSectionCharKind, sc pbsSection
 		if line == "" {
 			continue
 		}
+		// The file fallback of remote.cfg and s3.cfg logs its duration.
+		line = pbsLogDuration.ReplaceAllString(line, "duration=<d>)")
 		lines = append(lines, pbsSectionCharTimestampRe.ReplaceAllString(line, "[<TIME>]"))
 	}
 	return pbsSectionCharRun{calls: runner.calls, reads: fsys.reads, err: err, log: lines}

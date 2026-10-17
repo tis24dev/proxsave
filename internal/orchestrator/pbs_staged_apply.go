@@ -282,8 +282,7 @@ func pbsSectionApplyFailed(ctx context.Context, logger *logging.Logger, err erro
 		// Cancelled: no warning, no file fallback, the restore stops.
 		return ctxErr
 	}
-	var logged *pbsSectionRestoreIncompleteError
-	if errors.As(err, &logged) {
+	if pbsSectionOutcomeLogged(err) {
 		// The section block already logged the outcome of every object and its
 		// own: no line here, no file fallback over those outcomes, and the
 		// restore still ends with warnings.

@@ -43,10 +43,14 @@ reads:
 commands:
   (none)
 error: read staged etc/proxmox-backup/verification.cfg: injected read failure
-error chain: *fmt.wrapError -> *errors.errorString
+error chain: *orchestrator.pbsSectionRestoreStoppedError -> *fmt.wrapError -> *errors.errorString
 error is: injected read failure
 log:
-  (none)
+  [<TIME>] INFO     Restoring PBS verify jobs...
+  [<TIME>] DEBUG    PBS verify job restore: mode=clean staged=/stage/etc/proxmox-backup/verification.cfg
+  [<TIME>] DEBUG    PBS verify job restore: staged=/stage/etc/proxmox-backup/verification.cfg read failed error="read staged etc/proxmox-backup/verification.cfg: injected read failure"
+  [<TIME>] INFO     The verify job configuration in the backup could not be read: "read staged etc/proxmox-backup/verification.cfg: injected read failure"
+  [<TIME>] WARNING  ⚠ PBS verify job configuration: not applied
 
 ### empty-file
 strict: false
@@ -374,14 +378,27 @@ answers:
   list -> error "injected list failure"
 reads:
   /stage/etc/proxmox-backup/verification.cfg
+  /etc/proxmox-backup/verification.cfg
+  /stage/etc/proxmox-backup/verification.cfg
 commands:
   proxmox-backup-manager verify-job list --output-format=json
 error: proxmox-backup-manager verify-job list --output-format=json failed: injected list failure
-error chain: *fmt.wrapError -> *errors.errorString
+error chain: *orchestrator.pbsSectionRestoreStoppedError -> *fmt.wrapError -> *errors.errorString
 error is: injected list failure
 log:
   [<TIME>] DEBUG    PBS verify job restore: reading current verify-jobs cmd="proxmox-backup-manager verify-job list --output-format=json"
   [<TIME>] DEBUG    PBS verify job restore: verify-job list failed error="injected list failure"
+  [<TIME>] INFO     Restoring PBS verify jobs...
+  [<TIME>] DEBUG    PBS verify job restore: mode=clean staged=/stage/etc/proxmox-backup/verification.cfg
+  [<TIME>] DEBUG    PBS verify job restore: backup verify-jobs=1 names=alpha
+  [<TIME>] INFO       Verify jobs to restore: 1
+  [<TIME>] INFO       Names: alpha
+  [<TIME>] INFO     The verify jobs configured on this PBS could not be read
+  [<TIME>] DEBUG    PBS verify job restore: fallback=file target=/etc/proxmox-backup/verification.cfg source=/stage/etc/proxmox-backup/verification.cfg
+  [<TIME>] DEBUG    PBS verify job restore: fallback current file verify-jobs=0 names=
+  [<TIME>] DEBUG    pbs staged apply file: Applied etc/proxmox-backup/verification.cfg -> /etc/proxmox-backup/verification.cfg
+  [<TIME>] DEBUG    PBS verify job restore: fallback written
+  [<TIME>] WARNING  ⚠ PBS verify job configuration: applied from the backup file
 
 ### strict-list-invalid-json
 strict: true
@@ -395,14 +412,27 @@ answers:
   list -> output "not json"
 reads:
   /stage/etc/proxmox-backup/verification.cfg
+  /etc/proxmox-backup/verification.cfg
+  /stage/etc/proxmox-backup/verification.cfg
 commands:
   proxmox-backup-manager verify-job list --output-format=json
 error: parse verify-job list: invalid character 'o' in literal null (expecting 'u')
-error chain: *fmt.wrapError -> *json.SyntaxError
+error chain: *orchestrator.pbsSectionRestoreStoppedError -> *fmt.wrapError -> *json.SyntaxError
 error is: (none)
 log:
   [<TIME>] DEBUG    PBS verify job restore: reading current verify-jobs cmd="proxmox-backup-manager verify-job list --output-format=json"
   [<TIME>] DEBUG    PBS verify job restore: verify-job list returned unparseable output error="invalid character 'o' in literal null (expecting 'u')"
+  [<TIME>] INFO     Restoring PBS verify jobs...
+  [<TIME>] DEBUG    PBS verify job restore: mode=clean staged=/stage/etc/proxmox-backup/verification.cfg
+  [<TIME>] DEBUG    PBS verify job restore: backup verify-jobs=1 names=alpha
+  [<TIME>] INFO       Verify jobs to restore: 1
+  [<TIME>] INFO       Names: alpha
+  [<TIME>] INFO     The verify jobs configured on this PBS could not be read
+  [<TIME>] DEBUG    PBS verify job restore: fallback=file target=/etc/proxmox-backup/verification.cfg source=/stage/etc/proxmox-backup/verification.cfg
+  [<TIME>] DEBUG    PBS verify job restore: fallback current file verify-jobs=0 names=
+  [<TIME>] DEBUG    pbs staged apply file: Applied etc/proxmox-backup/verification.cfg -> /etc/proxmox-backup/verification.cfg
+  [<TIME>] DEBUG    PBS verify job restore: fallback written
+  [<TIME>] WARNING  ⚠ PBS verify job configuration: applied from the backup file
 
 ### strict-list-row-without-id
 strict: true
@@ -416,14 +446,27 @@ answers:
   list -> output "[{\"id\":\"alpha\",\"name\":\"alpha\"},{\"comment\":\"no id\",\"store\":\"ds\"}]"
 reads:
   /stage/etc/proxmox-backup/verification.cfg
+  /etc/proxmox-backup/verification.cfg
+  /stage/etc/proxmox-backup/verification.cfg
 commands:
   proxmox-backup-manager verify-job list --output-format=json
 error: parse verify-job list: failed to parse PBS list row 1: none of [id name] present as non-empty string (available keys: [comment store])
-error chain: *fmt.wrapError -> *errors.errorString
+error chain: *orchestrator.pbsSectionRestoreStoppedError -> *fmt.wrapError -> *errors.errorString
 error is: (none)
 log:
   [<TIME>] DEBUG    PBS verify job restore: reading current verify-jobs cmd="proxmox-backup-manager verify-job list --output-format=json"
   [<TIME>] DEBUG    PBS verify job restore: verify-job list returned unparseable output error="failed to parse PBS list row 1: none of [id name] present as non-empty string (available keys: [comment store])"
+  [<TIME>] INFO     Restoring PBS verify jobs...
+  [<TIME>] DEBUG    PBS verify job restore: mode=clean staged=/stage/etc/proxmox-backup/verification.cfg
+  [<TIME>] DEBUG    PBS verify job restore: backup verify-jobs=1 names=alpha
+  [<TIME>] INFO       Verify jobs to restore: 1
+  [<TIME>] INFO       Names: alpha
+  [<TIME>] INFO     The verify jobs configured on this PBS could not be read
+  [<TIME>] DEBUG    PBS verify job restore: fallback=file target=/etc/proxmox-backup/verification.cfg source=/stage/etc/proxmox-backup/verification.cfg
+  [<TIME>] DEBUG    PBS verify job restore: fallback current file verify-jobs=0 names=
+  [<TIME>] DEBUG    pbs staged apply file: Applied etc/proxmox-backup/verification.cfg -> /etc/proxmox-backup/verification.cfg
+  [<TIME>] DEBUG    PBS verify job restore: fallback written
+  [<TIME>] WARNING  ⚠ PBS verify job configuration: applied from the backup file
 
 ### strict-list-empty-output
 strict: true

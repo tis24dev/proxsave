@@ -44,10 +44,14 @@ reads:
 commands:
   (none)
 error: read staged etc/proxmox-backup/sync.cfg: injected read failure
-error chain: *fmt.wrapError -> *errors.errorString
+error chain: *orchestrator.pbsSectionRestoreStoppedError -> *fmt.wrapError -> *errors.errorString
 error is: injected read failure
 log:
-  (none)
+  [<TIME>] INFO     Restoring PBS sync jobs...
+  [<TIME>] DEBUG    PBS sync job restore: mode=clean staged=/stage/etc/proxmox-backup/sync.cfg
+  [<TIME>] DEBUG    PBS sync job restore: staged=/stage/etc/proxmox-backup/sync.cfg read failed error="read staged etc/proxmox-backup/sync.cfg: injected read failure"
+  [<TIME>] INFO     The sync job configuration in the backup could not be read: "read staged etc/proxmox-backup/sync.cfg: injected read failure"
+  [<TIME>] WARNING  ⚠ PBS sync job configuration: not applied
 
 ### empty-file
 strict: false
@@ -391,14 +395,27 @@ answers:
   list -> error "injected list failure"
 reads:
   /stage/etc/proxmox-backup/sync.cfg
+  /etc/proxmox-backup/sync.cfg
+  /stage/etc/proxmox-backup/sync.cfg
 commands:
   proxmox-backup-manager sync-job list --output-format=json
 error: proxmox-backup-manager sync-job list --output-format=json failed: injected list failure
-error chain: *fmt.wrapError -> *errors.errorString
+error chain: *orchestrator.pbsSectionRestoreStoppedError -> *fmt.wrapError -> *errors.errorString
 error is: injected list failure
 log:
   [<TIME>] DEBUG    PBS sync job restore: reading current sync-jobs cmd="proxmox-backup-manager sync-job list --output-format=json"
   [<TIME>] DEBUG    PBS sync job restore: sync-job list failed error="injected list failure"
+  [<TIME>] INFO     Restoring PBS sync jobs...
+  [<TIME>] DEBUG    PBS sync job restore: mode=clean staged=/stage/etc/proxmox-backup/sync.cfg
+  [<TIME>] DEBUG    PBS sync job restore: backup sync-jobs=1 names=alpha
+  [<TIME>] INFO       Sync jobs to restore: 1
+  [<TIME>] INFO       Names: alpha
+  [<TIME>] INFO     The sync jobs configured on this PBS could not be read
+  [<TIME>] DEBUG    PBS sync job restore: fallback=file target=/etc/proxmox-backup/sync.cfg source=/stage/etc/proxmox-backup/sync.cfg
+  [<TIME>] DEBUG    PBS sync job restore: fallback current file sync-jobs=0 names=
+  [<TIME>] DEBUG    pbs staged apply file: Applied etc/proxmox-backup/sync.cfg -> /etc/proxmox-backup/sync.cfg
+  [<TIME>] DEBUG    PBS sync job restore: fallback written
+  [<TIME>] WARNING  ⚠ PBS sync job configuration: applied from the backup file
 
 ### strict-list-invalid-json
 strict: true
@@ -413,14 +430,27 @@ answers:
   list -> output "not json"
 reads:
   /stage/etc/proxmox-backup/sync.cfg
+  /etc/proxmox-backup/sync.cfg
+  /stage/etc/proxmox-backup/sync.cfg
 commands:
   proxmox-backup-manager sync-job list --output-format=json
 error: parse sync-job list: invalid character 'o' in literal null (expecting 'u')
-error chain: *fmt.wrapError -> *json.SyntaxError
+error chain: *orchestrator.pbsSectionRestoreStoppedError -> *fmt.wrapError -> *json.SyntaxError
 error is: (none)
 log:
   [<TIME>] DEBUG    PBS sync job restore: reading current sync-jobs cmd="proxmox-backup-manager sync-job list --output-format=json"
   [<TIME>] DEBUG    PBS sync job restore: sync-job list returned unparseable output error="invalid character 'o' in literal null (expecting 'u')"
+  [<TIME>] INFO     Restoring PBS sync jobs...
+  [<TIME>] DEBUG    PBS sync job restore: mode=clean staged=/stage/etc/proxmox-backup/sync.cfg
+  [<TIME>] DEBUG    PBS sync job restore: backup sync-jobs=1 names=alpha
+  [<TIME>] INFO       Sync jobs to restore: 1
+  [<TIME>] INFO       Names: alpha
+  [<TIME>] INFO     The sync jobs configured on this PBS could not be read
+  [<TIME>] DEBUG    PBS sync job restore: fallback=file target=/etc/proxmox-backup/sync.cfg source=/stage/etc/proxmox-backup/sync.cfg
+  [<TIME>] DEBUG    PBS sync job restore: fallback current file sync-jobs=0 names=
+  [<TIME>] DEBUG    pbs staged apply file: Applied etc/proxmox-backup/sync.cfg -> /etc/proxmox-backup/sync.cfg
+  [<TIME>] DEBUG    PBS sync job restore: fallback written
+  [<TIME>] WARNING  ⚠ PBS sync job configuration: applied from the backup file
 
 ### strict-list-row-without-id
 strict: true
@@ -435,14 +465,27 @@ answers:
   list -> output "[{\"id\":\"alpha\",\"name\":\"alpha\"},{\"comment\":\"no id\",\"store\":\"ds\"}]"
 reads:
   /stage/etc/proxmox-backup/sync.cfg
+  /etc/proxmox-backup/sync.cfg
+  /stage/etc/proxmox-backup/sync.cfg
 commands:
   proxmox-backup-manager sync-job list --output-format=json
 error: parse sync-job list: failed to parse PBS list row 1: none of [id name] present as non-empty string (available keys: [comment store])
-error chain: *fmt.wrapError -> *errors.errorString
+error chain: *orchestrator.pbsSectionRestoreStoppedError -> *fmt.wrapError -> *errors.errorString
 error is: (none)
 log:
   [<TIME>] DEBUG    PBS sync job restore: reading current sync-jobs cmd="proxmox-backup-manager sync-job list --output-format=json"
   [<TIME>] DEBUG    PBS sync job restore: sync-job list returned unparseable output error="failed to parse PBS list row 1: none of [id name] present as non-empty string (available keys: [comment store])"
+  [<TIME>] INFO     Restoring PBS sync jobs...
+  [<TIME>] DEBUG    PBS sync job restore: mode=clean staged=/stage/etc/proxmox-backup/sync.cfg
+  [<TIME>] DEBUG    PBS sync job restore: backup sync-jobs=1 names=alpha
+  [<TIME>] INFO       Sync jobs to restore: 1
+  [<TIME>] INFO       Names: alpha
+  [<TIME>] INFO     The sync jobs configured on this PBS could not be read
+  [<TIME>] DEBUG    PBS sync job restore: fallback=file target=/etc/proxmox-backup/sync.cfg source=/stage/etc/proxmox-backup/sync.cfg
+  [<TIME>] DEBUG    PBS sync job restore: fallback current file sync-jobs=0 names=
+  [<TIME>] DEBUG    pbs staged apply file: Applied etc/proxmox-backup/sync.cfg -> /etc/proxmox-backup/sync.cfg
+  [<TIME>] DEBUG    PBS sync job restore: fallback written
+  [<TIME>] WARNING  ⚠ PBS sync job configuration: applied from the backup file
 
 ### strict-list-empty-output
 strict: true
