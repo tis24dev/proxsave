@@ -156,7 +156,9 @@ func shouldSkipExistingDatastoreData(preflight pbsDatastorePreflight, logger *lo
 	if warn := validatePBSDatastoreReadOnly(preflight.basePath); warn != "" {
 		logger.Warning("PBS datastore preflight: %s", warn)
 	}
-	logger.Info("PBS datastore preflight: datastore %s appears to contain data; skipping directory/permission changes to avoid risking datastore contents", preflight.datastoreName)
+	// has_data only means .chunks has entries, which every datastore PBS created
+	// has (its 65536 hash directories), with or without backups.
+	logger.Info("Datastore %s is already initialized, its directory is left as it is", preflight.datastoreName)
 	return true
 }
 

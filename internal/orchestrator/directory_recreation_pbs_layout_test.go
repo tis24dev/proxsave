@@ -1,10 +1,16 @@
 package orchestrator
 
 import (
+	"bytes"
 	"context"
 	"os"
 	"path/filepath"
+	"regexp"
+	"strings"
 	"testing"
+
+	"github.com/tis24dev/proxsave/internal/logging"
+	"github.com/tis24dev/proxsave/internal/types"
 )
 
 // pbsRealDatastoreLayout builds the root of a datastore the way PBS leaves it
@@ -208,5 +214,42 @@ func TestApplyPBSDatastoreCfgFromStage_RemovesJobsAndACL(t *testing.T) {
 		if string(prune) != wantPrune || string(acl) != wantACL {
 			t.Fatalf("staged=%q prune=%q acl=%q; want %q and %q", staged, prune, acl, wantPrune, wantACL)
 		}
+	}
+}
+
+// A datastore PBS already initialized, empty as PBS leaves it (.chunks with its
+// hash directories and .lock, no backups), is left as it is, and the visible line
+// says that, not that it holds data.
+func TestCreatePBSDatastoreStructureLeavesAnInitializedDatastore(t *testing.T) {
+	base := filepath.Join(t.TempDir(), "ds1")
+	for _, dir := range []string{".chunks/0000", ".chunks/ffff"} {
+		if err := os.MkdirAll(filepath.Join(base, dir), 0o750); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(base, ".lock"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var buf bytes.Buffer
+	logger := logging.New(types.LogLevelDebug, false)
+	logger.SetOutput(&buf)
+	changed, err := createPBSDatastoreStructure(base, "ds1", logger)
+	if err != nil || changed {
+		t.Fatalf("createPBSDatastoreStructure changed=%v err=%v; want left as it is", changed, err)
+	}
+	var visible []string
+	for _, line := range strings.Split(strings.TrimSpace(buf.String()), "\n") {
+		line = regexp.MustCompile(`^\[[^\]]*\] `).ReplaceAllString(line, "")
+		if !strings.HasPrefix(line, "DEBUG") {
+			visible = append(visible, line)
+		}
+	}
+	want := []string{"INFO     Datastore ds1 is already initialized, its directory is left as it is"}
+	if strings.Join(visible, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("visible lines\n--- got ---\n%s\n--- want ---\n%s", strings.Join(visible, "\n"), strings.Join(want, "\n"))
+	}
+	entries, err := os.ReadDir(filepath.Join(base, ".chunks"))
+	if err != nil || len(entries) != 2 {
+		t.Fatalf(".chunks entries=%d err=%v; nothing may be added", len(entries), err)
 	}
 }
