@@ -1,0 +1,10 @@
+DEBUG    Start pbs staged apply: dryRun=false stage=/stage
+WARNING  PBS API apply: verification jobs failed: forced API error
+WARNING  PBS staged apply: falling back to file-based job configs
+DEBUG    Start pbs staged apply jobs: stage=/stage
+DEBUG    pbs staged apply file: Skip etc/proxmox-backup/sync.cfg: not present in staging directory
+DEBUG    pbs staged apply file: Applied etc/proxmox-backup/verification.cfg -> /etc/proxmox-backup/verification.cfg
+DEBUG    pbs staged apply file: Skip etc/proxmox-backup/prune.cfg: not present in staging directory
+DEBUG    End pbs staged apply jobs (ok, duration=<d>)
+DEBUG    End pbs staged apply (ok, duration=<d>)
+returned: <nil>

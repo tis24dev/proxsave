@@ -1,0 +1,8 @@
+DEBUG    Start pbs staged apply: dryRun=false stage=/stage
+DEBUG    pbs staged apply acme accounts: Skip: etc/proxmox-backup/acme/accounts not present in staging directory
+DEBUG    pbs staged apply file: Skip etc/proxmox-backup/acme/plugins.cfg: not present in staging directory
+DEBUG    pbs staged apply file: Skip etc/proxmox-backup/metricserver.cfg: not present in staging directory
+DEBUG    pbs staged apply file: Skip etc/proxmox-backup/proxy.cfg: not present in staging directory
+WARNING  PBS API apply: traffic-control failed: x remove failed for 1 object(s) [old]: PBS Clean 1:1 incomplete: stale object(s) could not be removed
+DEBUG    End pbs staged apply (error=1 PBS config item(s) failed to apply: traffic-control.cfg (clean 1:1 incomplete), duration=<d>)
+returned: 1 PBS config item(s) failed to apply: traffic-control.cfg (clean 1:1 incomplete)

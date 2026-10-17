@@ -1,0 +1,10 @@
+DEBUG    Start pbs staged apply: dryRun=false stage=/stage
+DEBUG    pbs staged apply acme accounts: Skip: etc/proxmox-backup/acme/accounts not present in staging directory
+DEBUG    pbs staged apply file: Skip etc/proxmox-backup/acme/plugins.cfg: not present in staging directory
+DEBUG    pbs staged apply file: Skip etc/proxmox-backup/metricserver.cfg: not present in staging directory
+DEBUG    pbs staged apply file: Skip etc/proxmox-backup/proxy.cfg: not present in staging directory
+WARNING  PBS API apply: traffic-control failed: forced API error
+WARNING  PBS staged apply: falling back to file-based traffic-control.cfg
+DEBUG    pbs staged apply file: Applied etc/proxmox-backup/traffic-control.cfg -> /etc/proxmox-backup/traffic-control.cfg
+DEBUG    End pbs staged apply (ok, duration=<d>)
+returned: <nil>

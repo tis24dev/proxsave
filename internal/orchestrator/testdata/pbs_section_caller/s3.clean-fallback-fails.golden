@@ -1,0 +1,8 @@
+DEBUG    Start pbs staged apply: dryRun=false stage=/stage
+WARNING  PBS API apply: s3.cfg failed: forced API error
+WARNING  PBS staged apply: falling back to file-based s3.cfg
+DEBUG    Start pbs staged apply s3.cfg: stage=/stage
+DEBUG    End pbs staged apply s3.cfg (error=write /etc/proxmox-backup/s3.cfg: rename <fakefs>/etc/proxmox-backup/s3.cfg.proxsave.tmp.<n> <fakefs>/etc/proxmox-backup/s3.cfg: file exists, duration=<d>)
+WARNING  PBS staged apply: s3.cfg fallback: write /etc/proxmox-backup/s3.cfg: rename <fakefs>/etc/proxmox-backup/s3.cfg.proxsave.tmp.<n> <fakefs>/etc/proxmox-backup/s3.cfg: file exists
+DEBUG    End pbs staged apply (error=1 PBS config item(s) failed to apply: s3.cfg, duration=<d>)
+returned: 1 PBS config item(s) failed to apply: s3.cfg

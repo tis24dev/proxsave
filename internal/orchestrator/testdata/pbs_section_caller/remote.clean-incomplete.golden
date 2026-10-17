@@ -1,0 +1,4 @@
+DEBUG    Start pbs staged apply: dryRun=false stage=/stage
+WARNING  PBS API apply: remote.cfg failed: x remove failed for 1 object(s) [old]: PBS Clean 1:1 incomplete: stale object(s) could not be removed
+DEBUG    End pbs staged apply (error=1 PBS config item(s) failed to apply: remote.cfg (clean 1:1 incomplete), duration=<d>)
+returned: 1 PBS config item(s) failed to apply: remote.cfg (clean 1:1 incomplete)
