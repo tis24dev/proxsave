@@ -9,7 +9,10 @@ import (
 	"github.com/tis24dev/proxsave/internal/logging"
 )
 
-var pbsDatastoreSubdirs = []string{".chunks", ".index"}
+// pbsDatastoreSubdirs are the directories PBS creates in a datastore
+// (ChunkStore::create): only the chunk store. Index files live in the snapshot
+// directories, there is no .index directory.
+var pbsDatastoreSubdirs = []string{".chunks"}
 
 type pbsDatastorePreflight struct {
 	basePath        string
