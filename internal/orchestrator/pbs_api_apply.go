@@ -846,17 +846,17 @@ func pbsSortedNames[V any](m map[string]V) []string {
 	return keys
 }
 
-// applyPBSDatastoreCfgFileBlock is the datastore block when the PBS API is not
-// available, in Clean (1:1) mode: the datastores to restore, then datastore.cfg
-// written from the backup file by the same fallback, with the same lines. Like
-// the fallback it returns a pbsDatastoreRestoreNotAppliedError whenever its
-// outcome is a ⚠ one, already logged.
-func applyPBSDatastoreCfgFileBlock(ctx context.Context, logger *logging.Logger, stageRoot string) error {
+// applyPBSDatastoreCfgFileBlock is the datastore block written from the backup
+// file, in Clean (1:1) mode, when the PBS API cannot apply it: the datastores to
+// restore, the event, then datastore.cfg written by the same fallback, with the
+// same lines. Like the fallback it returns a pbsDatastoreRestoreNotAppliedError
+// whenever its outcome is a ⚠ one, already logged.
+func applyPBSDatastoreCfgFileBlock(ctx context.Context, logger *logging.Logger, stageRoot, event string, cause error) error {
 	r, _, _, done, err := beginPBSDatastoreRestore(ctx, logger, stageRoot, true)
 	if done {
 		return err
 	}
-	return r.fileFallback(pbsDatastoreEventAPIUnavailable, errors.New("PBS API unavailable"))
+	return r.fileFallback(event, cause)
 }
 
 // beginPBSDatastoreRestore opens the datastore block: it reads the staged

@@ -331,8 +331,12 @@ func TestMaybeApplyPBSConfigsFromStage_ApiErrorsTriggerFallbackOnlyInCleanMode(t
 			{ID: "pbs_jobs"},
 		},
 	}
-	if err := maybeApplyPBSConfigsFromStage(context.Background(), newTestLogger(), planClean, stageRoot, false); err != nil {
-		t.Fatalf("maybeApplyPBSConfigsFromStage clean: %v", err)
+	// The datastore API error is written from the backup file by the datastore
+	// block, whose ⚠ outcome is already logged: the restore ends with warnings.
+	cleanErr := maybeApplyPBSConfigsFromStage(context.Background(), newTestLogger(), planClean, stageRoot, false)
+	var cleanLogged *stageApplyOutcomeLoggedError
+	if !errors.As(cleanErr, &cleanLogged) {
+		t.Fatalf("maybeApplyPBSConfigsFromStage clean: %v; want the datastore block outcome already logged", cleanErr)
 	}
 
 	for _, path := range []string{

@@ -557,6 +557,14 @@ func TestWriteDeferredPBSDatastoreCfg_MultipleBlocksAddsSeparator(t *testing.T) 
 	}
 }
 
+// runPBSDatastoreCfgFileErr runs the datastore.cfg file writer shared by the
+// file fallback and returns only its error: these tests check what it writes;
+// the lines are checked by the datastore block tests.
+func runPBSDatastoreCfgFileErr(stageRoot string) error {
+	_, err := runPBSDatastoreCfgFile(stageRoot)
+	return err
+}
+
 func TestApplyPBSDatastoreCfgFromStage_SkipsMissingStagedFile(t *testing.T) {
 	origFS := restoreFS
 	t.Cleanup(func() { restoreFS = origFS })
@@ -565,8 +573,8 @@ func TestApplyPBSDatastoreCfgFromStage_SkipsMissingStagedFile(t *testing.T) {
 	t.Cleanup(func() { _ = os.RemoveAll(fakeFS.Root) })
 	restoreFS = fakeFS
 
-	if err := applyPBSDatastoreCfgFromStage(context.Background(), newTestLogger(), "/stage"); err != nil {
-		t.Fatalf("applyPBSDatastoreCfgFromStage: %v", err)
+	if err := runPBSDatastoreCfgFileErr("/stage"); err != nil {
+		t.Fatalf("runPBSDatastoreCfgFile: %v", err)
 	}
 	if _, err := fakeFS.Stat("/etc/proxmox-backup/datastore.cfg"); err == nil {
 		t.Fatalf("expected datastore.cfg not to be created")
@@ -588,8 +596,8 @@ func TestApplyPBSDatastoreCfgFromStage_RemovesTargetWhenStagedEmpty(t *testing.T
 		t.Fatalf("write staged datastore.cfg: %v", err)
 	}
 
-	if err := applyPBSDatastoreCfgFromStage(context.Background(), newTestLogger(), "/stage"); err != nil {
-		t.Fatalf("applyPBSDatastoreCfgFromStage: %v", err)
+	if err := runPBSDatastoreCfgFileErr("/stage"); err != nil {
+		t.Fatalf("runPBSDatastoreCfgFile: %v", err)
 	}
 	if _, err := fakeFS.Stat("/etc/proxmox-backup/datastore.cfg"); err == nil {
 		t.Fatalf("expected datastore.cfg removed")
@@ -628,8 +636,8 @@ func TestApplyPBSDatastoreCfgFromStage_DefersUnsafeAndAppliesSafe(t *testing.T) 
 		t.Fatalf("write staged datastore.cfg: %v", err)
 	}
 
-	if err := applyPBSDatastoreCfgFromStage(context.Background(), newTestLogger(), stageRoot); err != nil {
-		t.Fatalf("applyPBSDatastoreCfgFromStage: %v", err)
+	if err := runPBSDatastoreCfgFileErr(stageRoot); err != nil {
+		t.Fatalf("runPBSDatastoreCfgFile: %v", err)
 	}
 
 	out, err := fakeFS.ReadFile("/etc/proxmox-backup/datastore.cfg")
@@ -693,8 +701,8 @@ func TestApplyPBSDatastoreCfgFromStage_AllDeferredLeavesTargetUnchanged(t *testi
 		t.Fatalf("write staged datastore.cfg: %v", err)
 	}
 
-	if err := applyPBSDatastoreCfgFromStage(context.Background(), newTestLogger(), stageRoot); err != nil {
-		t.Fatalf("applyPBSDatastoreCfgFromStage: %v", err)
+	if err := runPBSDatastoreCfgFileErr(stageRoot); err != nil {
+		t.Fatalf("runPBSDatastoreCfgFile: %v", err)
 	}
 
 	got, err := fakeFS.ReadFile("/etc/proxmox-backup/datastore.cfg")
@@ -730,8 +738,8 @@ func TestApplyPBSDatastoreCfgFromStage_DuplicateKeysWithoutInventoryLeavesTarget
 		t.Fatalf("write staged datastore.cfg: %v", err)
 	}
 
-	if err := applyPBSDatastoreCfgFromStage(context.Background(), newTestLogger(), stageRoot); err != nil {
-		t.Fatalf("applyPBSDatastoreCfgFromStage: %v", err)
+	if err := runPBSDatastoreCfgFileErr(stageRoot); err != nil {
+		t.Fatalf("runPBSDatastoreCfgFile: %v", err)
 	}
 
 	got, err := fakeFS.ReadFile("/etc/proxmox-backup/datastore.cfg")
@@ -756,8 +764,8 @@ func TestApplyPBSDatastoreCfgFromStage_SkipsWhenNoBlocksDetected(t *testing.T) {
 		t.Fatalf("write staged datastore.cfg: %v", err)
 	}
 
-	if err := applyPBSDatastoreCfgFromStage(context.Background(), newTestLogger(), stageRoot); err != nil {
-		t.Fatalf("applyPBSDatastoreCfgFromStage: %v", err)
+	if err := runPBSDatastoreCfgFileErr(stageRoot); err != nil {
+		t.Fatalf("runPBSDatastoreCfgFile: %v", err)
 	}
 	if _, err := fakeFS.Stat("/etc/proxmox-backup/datastore.cfg"); err == nil {
 		t.Fatalf("expected datastore.cfg not to be created")
@@ -777,7 +785,7 @@ func TestApplyPBSDatastoreCfgFromStage_PropagatesReadError(t *testing.T) {
 		t.Fatalf("mkdir staged datastore.cfg dir: %v", err)
 	}
 
-	if err := applyPBSDatastoreCfgFromStage(context.Background(), newTestLogger(), stageRoot); err == nil {
+	if err := runPBSDatastoreCfgFileErr(stageRoot); err == nil {
 		t.Fatalf("expected error, got nil")
 	}
 }
@@ -817,8 +825,8 @@ func TestApplyPBSDatastoreCfgFromStage_ContinuesWhenDeferredWriteFails(t *testin
 	// Fail deferred file writes but still allow atomic apply.
 	fakeFS.WriteErr = errors.New("forced write error")
 
-	if err := applyPBSDatastoreCfgFromStage(context.Background(), newTestLogger(), stageRoot); err != nil {
-		t.Fatalf("applyPBSDatastoreCfgFromStage: %v", err)
+	if err := runPBSDatastoreCfgFileErr(stageRoot); err != nil {
+		t.Fatalf("runPBSDatastoreCfgFile: %v", err)
 	}
 
 	out, err := fakeFS.ReadFile("/etc/proxmox-backup/datastore.cfg")
@@ -864,7 +872,7 @@ func TestApplyPBSDatastoreCfgFromStage_ReturnsErrorOnAtomicWriteFailure(t *testi
 	tmp := fmt.Sprintf("%s.proxsave.tmp.%d", dest, nowRestore().UnixNano())
 	fakeFS.OpenFileErr[filepath.Clean(tmp)] = errors.New("forced OpenFile error")
 
-	if err := applyPBSDatastoreCfgFromStage(context.Background(), newTestLogger(), stageRoot); err == nil {
+	if err := runPBSDatastoreCfgFileErr(stageRoot); err == nil {
 		t.Fatalf("expected error, got nil")
 	}
 }

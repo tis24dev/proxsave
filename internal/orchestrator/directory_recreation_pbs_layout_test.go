@@ -2,7 +2,6 @@ package orchestrator
 
 import (
 	"bytes"
-	"context"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -181,10 +180,10 @@ func TestEnsurePBSChunkStoreDirsKeepsExistingAndReportsAFailure(t *testing.T) {
 	}
 }
 
-// The file-based apply used when the PBS API is unavailable removes, with each
-// datastore it takes out of datastore.cfg, its jobs and acl.cfg entries too, also
-// when the staged file has no datastores and the target is removed.
-func TestApplyPBSDatastoreCfgFromStage_RemovesJobsAndACL(t *testing.T) {
+// The datastore.cfg file writer removes, with each datastore it takes out of
+// datastore.cfg, its jobs and acl.cfg entries too, also when the staged file has
+// no datastores and the target is removed.
+func TestRunPBSDatastoreCfgFile_RemovesJobsAndACL(t *testing.T) {
 	for _, staged := range []string{"datastore: ds1\n\tpath /mnt/ds1\n", "# no datastores\n"} {
 		origFS := restoreFS
 		fakeFS := NewFakeFS()
@@ -198,8 +197,7 @@ func TestApplyPBSDatastoreCfgFromStage_RemovesJobsAndACL(t *testing.T) {
 		write("/etc/proxmox-backup/datastore.cfg", "datastore: old\n\tpath /mnt/old\n\ndatastore: ds1\n\tpath /mnt/ds1\n")
 		write("/etc/proxmox-backup/prune.cfg", "prune: pj-old\n\tstore old\n\nprune: pj-ds1\n\tstore ds1\n")
 		write("/etc/proxmox-backup/acl.cfg", "acl:1:/datastore/old:tst@pbs:DatastoreReader\nacl:1:/datastore/ds1:tst@pbs:DatastoreReader\n")
-		logger := newDirTestLogger()
-		if err := applyPBSDatastoreCfgFromStage(context.Background(), logger, "/stage"); err != nil {
+		if err := runPBSDatastoreCfgFileErr("/stage"); err != nil {
 			t.Fatalf("staged=%q: %v", staged, err)
 		}
 		wantPrune, wantACL := "prune: pj-ds1\n\tstore ds1\n", "acl:1:/datastore/ds1:tst@pbs:DatastoreReader\n"

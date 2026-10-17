@@ -541,10 +541,10 @@ func TestPBSDatastoreRestoreBlock_FallbackCurrentDatastores(t *testing.T) {
 	}
 }
 
-// The file-based apply used when the PBS API is unavailable shares the same
-// writer: a staged file with only comments removes the target like an empty one,
-// and a deferred datastore this PBS already has keeps its current definition.
-func TestApplyPBSDatastoreCfgFromStage_CurrentDatastores(t *testing.T) {
+// The datastore.cfg file writer: a staged file with only comments removes the
+// target like an empty one, and a deferred datastore this PBS already has keeps
+// its current definition.
+func TestRunPBSDatastoreCfgFile_CurrentDatastores(t *testing.T) {
 	cases := []struct {
 		name       string
 		staged     string
@@ -567,10 +567,8 @@ func TestApplyPBSDatastoreCfgFromStage_CurrentDatastores(t *testing.T) {
 			if err := fakeFS.WriteFile("/etc/proxmox-backup/datastore.cfg", []byte("datastore: old\n\tpath /mnt/old\n\ndatastore: ds2\n\tpath /old\n"), 0o640); err != nil {
 				t.Fatal(err)
 			}
-			logger := logging.New(types.LogLevelDebug, false)
-			logger.SetOutput(&bytes.Buffer{})
-			if err := applyPBSDatastoreCfgFromStage(context.Background(), logger, "/stage"); err != nil {
-				t.Fatalf("applyPBSDatastoreCfgFromStage: %v", err)
+			if err := runPBSDatastoreCfgFileErr("/stage"); err != nil {
+				t.Fatalf("runPBSDatastoreCfgFile: %v", err)
 			}
 			data, err := fakeFS.ReadFile("/etc/proxmox-backup/datastore.cfg")
 			switch {
@@ -842,6 +840,33 @@ func TestPBSDatastoreRestoreBlock_APIUnavailable(t *testing.T) {
 				t.Fatal("the caller must take the block outcome as already reported")
 			}
 		})
+	}
+}
+
+// An error the API datastore block does not return today reaches the caller's
+// default case: in Clean mode datastore.cfg is written from the backup file as
+// the same block, with the API error as its event.
+func TestPBSDatastoreRestoreBlock_UnexpectedAPIErrorWrittenAsTheFileBlock(t *testing.T) {
+	log, warned := runPBSDatastoreRestoreStep(t, PBSRestoreBehaviorClean, "datastore: ds1\n\tpath /mnt/ds1\n", &FakeCommandRunner{}, func(*FakeFS) {
+		pbsStagedApplyDatastoreCfgViaAPIFn = func(context.Context, *logging.Logger, string, bool) error {
+			return errors.New("unexpected datastore API error")
+		}
+	})
+	t.Logf("full log:\n%s", strings.Join(pbsBlockLogLines(log), "\n"))
+	want := []string{
+		"INFO     Restoring PBS datastore configuration...",
+		"INFO       Datastores to restore: 1",
+		"INFO       Names: ds1",
+		`INFO     The datastore configuration could not be applied through the PBS API: "unexpected datastore API error"`,
+		"INFO     Datastore ds1 path /mnt/ds1 is on the root filesystem",
+		"WARNING  ⚠ PBS datastore ds1: applied without its mount",
+		"WARNING  ⚠ PBS datastore configuration: applied from the backup file",
+	}
+	if got := pbsVisibleLines(log); strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("visible lines\n--- got ---\n%s\n--- want ---\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
+	}
+	if !warned {
+		t.Fatal("a ⚠ outcome must end the restore with warnings")
 	}
 }
 

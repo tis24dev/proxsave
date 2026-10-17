@@ -165,13 +165,16 @@ func maybeApplyPBSConfigsFromStage(ctx context.Context, logger *logging.Logger, 
 				case errors.Is(err, errPBSCleanRemoveIncomplete):
 					logger.Warning("PBS API apply: datastore.cfg failed: %v", err)
 					failedItems = append(failedItems, "datastore.cfg (clean 1:1 incomplete)")
+				case allowFileFallback:
+					// An error the block does not return today: write datastore.cfg
+					// from the backup file as the same block.
+					event := fmt.Sprintf("The datastore configuration could not be applied through the PBS API: \"%s\"", err.Error())
+					if ferr := applyPBSDatastoreCfgFileBlock(ctx, logger, stageRoot, event, err); ferr != nil {
+						datastoreOutcomeLogged = ferr
+					}
 				default:
 					logger.Warning("PBS API apply: datastore.cfg failed: %v", err)
-					if !pbsFallbackApplied(logger, "datastore.cfg", allowFileFallback, func() error {
-						return applyPBSDatastoreCfgFromStage(ctx, logger, stageRoot)
-					}) {
-						failedItems = append(failedItems, "datastore.cfg")
-					}
+					failedItems = append(failedItems, "datastore.cfg")
 				}
 			}
 		} else if allowFileFallback {
@@ -179,7 +182,7 @@ func maybeApplyPBSConfigsFromStage(ctx context.Context, logger *logging.Logger, 
 				logger.Warning("PBS staged apply: s3.cfg: %v", err)
 				failedItems = append(failedItems, "s3.cfg")
 			}
-			if err := applyPBSDatastoreCfgFileBlock(ctx, logger, stageRoot); err != nil {
+			if err := applyPBSDatastoreCfgFileBlock(ctx, logger, stageRoot, pbsDatastoreEventAPIUnavailable, errors.New("PBS API unavailable")); err != nil {
 				// The block logged the outcome of every datastore and its own.
 				datastoreOutcomeLogged = err
 			}
@@ -525,26 +528,6 @@ func runPBSDatastoreCfgFile(stageRoot string) (res pbsDatastoreFileResult, err e
 	return res, nil
 }
 
-// logPBSDatastoreCleanupDebug logs, for the file-based apply used when the PBS
-// API is unavailable, the jobs and permissions removed with each datastore.
-func logPBSDatastoreCleanupDebug(logger *logging.Logger, res pbsDatastoreFileResult) {
-	for _, name := range res.removed {
-		c := res.cleanup[name]
-		if c == nil {
-			continue
-		}
-		for _, job := range c.jobs {
-			logging.DebugStep(logger, "pbs staged apply datastore.cfg", "Removed job %s of datastore %s from %s", job.id, name, job.file)
-		}
-		if c.acl > 0 {
-			logging.DebugStep(logger, "pbs staged apply datastore.cfg", "Removed %d acl entries of datastore %s from %s", c.acl, name, pbsACLCfgPath)
-		}
-		if c.err != nil {
-			logging.DebugStep(logger, "pbs staged apply datastore.cfg", "Jobs of datastore %s not all removed: %s: %v", name, c.errFile, c.err)
-		}
-	}
-}
-
 // removeTarget removes the target datastore.cfg for a staged file without
 // datastores; once it is gone every datastore of this PBS is removed.
 func (r *pbsDatastoreFileResult) removeTarget() error {
@@ -570,67 +553,6 @@ func readCurrentPBSDatastoreBlocks(path string) ([]pbsDatastoreBlock, error) {
 	}
 	normalized, _ := normalizePBSDatastoreCfgContent(string(data))
 	return parsePBSDatastoreCfgBlocks(normalized)
-}
-
-// applyPBSDatastoreCfgFromStage is the file-based datastore.cfg apply used when the
-// PBS API is unavailable, with its own log lines.
-func applyPBSDatastoreCfgFromStage(ctx context.Context, logger *logging.Logger, stageRoot string) (err error) {
-	_ = ctx // reserved for future validation hooks
-
-	done := logging.DebugStart(logger, "pbs staged apply datastore.cfg", "stage=%s", stageRoot)
-	defer func() { done(err) }()
-
-	res, err := runPBSDatastoreCfgFile(stageRoot)
-	switch {
-	case res.missing:
-		logging.DebugStep(logger, "pbs staged apply datastore.cfg", "Skipped: datastore.cfg not present in staging directory")
-		return err
-	case res.emptied:
-		logging.DebugStep(logger, "pbs staged apply datastore.cfg", "Staged datastore.cfg has no datastore definitions (comments only=%v); removing target file, removed=%v", res.commentsOnly, res.removed)
-		logPBSDatastoreCleanupDebug(logger, res)
-		return err
-	}
-	if res.fixed > 0 {
-		logger.Warning("PBS staged apply: datastore.cfg normalization fixed %d malformed line(s) (properties must be indented)", res.fixed)
-	}
-	if res.invalidReason != "" {
-		logger.Warning("PBS staged apply: staged datastore.cfg looks invalid (%s); attempting recovery from pbs_datastore_inventory.json", res.invalidReason)
-		if res.recoveryFailed != "" {
-			logger.Warning("PBS staged apply: %s; leaving current configuration unchanged", res.recoveryFailed)
-			return err
-		}
-		if res.recoveredFixed > 0 {
-			logger.Warning("PBS staged apply: recovered datastore.cfg normalization fixed %d malformed line(s) (properties must be indented)", res.recoveredFixed)
-		}
-		logger.Info("PBS staged apply: datastore.cfg recovered from %s", res.recoveredFrom)
-	}
-	for _, it := range res.items {
-		if it.onRootFS {
-			logger.Warning("PBS staged apply: datastore %s path %s resolves to root filesystem (mount missing?), applying definition anyway", it.name, filepath.Clean(strings.TrimSpace(it.path)))
-		}
-		if it.preflight != "" {
-			logger.Warning("PBS datastore preflight: %s", it.preflight)
-		}
-		if it.deferReason != "" {
-			logging.DebugStep(logger, "pbs staged apply datastore.cfg", "Deferring datastore %s (path=%s): %s", it.name, it.path, it.deferReason)
-		}
-	}
-	if res.deferredErr != nil {
-		logger.Debug("Failed to write deferred datastore.cfg: %v", res.deferredErr)
-	} else if res.deferredPath != "" {
-		logger.Warning("PBS staged apply: deferred %d datastore definition(s); saved to %s", res.deferredCount(), res.deferredPath)
-	}
-	if res.noSafe {
-		logger.Warning("PBS staged apply: datastore.cfg contains no safe datastore definitions to apply; leaving current configuration unchanged")
-		return err
-	}
-	if err != nil {
-		return err
-	}
-	logging.DebugStep(logger, "pbs staged apply datastore.cfg", "Removed datastore(s) not in the backup: %v", res.removed)
-	logPBSDatastoreCleanupDebug(logger, res)
-	logger.Info("PBS staged apply: datastore.cfg applied (%d datastore(s)); deferred=%d", res.written, res.deferredCount())
-	return nil
 }
 
 type pbsDatastoreInventoryRestoreLite struct {
