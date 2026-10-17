@@ -845,16 +845,20 @@ func pbsSortedNames[V any](m map[string]V) []string {
 	return keys
 }
 
-func applyPBSDatastoreCfgViaAPI(ctx context.Context, logger *logging.Logger, stageRoot string, strict bool) error {
+// beginPBSDatastoreRestore opens the datastore block: it reads the staged
+// datastore.cfg and logs the datastores to restore. done is true when the block
+// has already ended, with err its result: nothing is staged, or the staged file
+// could not be read.
+func beginPBSDatastoreRestore(ctx context.Context, logger *logging.Logger, stageRoot string, strict bool) (r *pbsDatastoreRestore, desired map[string]proxmoxNotificationSection, names []string, done bool, err error) {
 	const stagedRel = "etc/proxmox-backup/datastore.cfg"
 	stagedPath := filepath.Join(stageRoot, stagedRel)
 	dsRaw, present, readErr := readStageFileOptional(stageRoot, stagedRel)
 	if readErr == nil && !present {
 		logger.Debug(pbsDatastoreRestoreDebug+"staged=%s not in the backup action=skip", stagedPath)
-		return nil
+		return nil, nil, nil, true, nil
 	}
 
-	r := &pbsDatastoreRestore{ctx: ctx, logger: logger, strict: strict, stageRoot: stageRoot}
+	r = &pbsDatastoreRestore{ctx: ctx, logger: logger, strict: strict, stageRoot: stageRoot}
 	mode := "merge"
 	if strict {
 		mode = "clean"
@@ -867,14 +871,14 @@ func applyPBSDatastoreCfgViaAPI(ctx context.Context, logger *logging.Logger, sta
 		var parseErr error
 		if sections, parseErr = parseProxmoxNotificationSections(dsRaw); parseErr != nil {
 			r.debug("staged=%s parse failed error=%q", stagedPath, parseErr.Error())
-			return r.stopped(pbsDatastoreEventBackupUnreadable, fmt.Errorf("parse staged datastore.cfg: %w", parseErr))
+			return r, nil, nil, true, r.stopped(pbsDatastoreEventBackupUnreadable, fmt.Errorf("parse staged datastore.cfg: %w", parseErr))
 		}
 	} else {
 		r.debug("staged=%s read failed error=%q", stagedPath, readErr.Error())
-		return r.stopped(pbsDatastoreEventBackupUnreadable, readErr)
+		return r, nil, nil, true, r.stopped(pbsDatastoreEventBackupUnreadable, readErr)
 	}
 
-	desired := make(map[string]proxmoxNotificationSection, len(sections))
+	desired = make(map[string]proxmoxNotificationSection, len(sections))
 	for _, s := range sections {
 		name := strings.TrimSpace(s.Name)
 		if name == "" {
@@ -882,11 +886,19 @@ func applyPBSDatastoreCfgViaAPI(ctx context.Context, logger *logging.Logger, sta
 		}
 		desired[name] = s
 	}
-	names := pbsSortedNames(desired)
+	names = pbsSortedNames(desired)
 	r.debug("backup datastores=%d names=%s", len(names), strings.Join(names, ","))
 	logger.Info("  Datastores to restore: %d", len(names))
 	if len(names) > 0 {
 		logger.Info("  Names: %s", strings.Join(names, ", "))
+	}
+	return r, desired, names, false, nil
+}
+
+func applyPBSDatastoreCfgViaAPI(ctx context.Context, logger *logging.Logger, stageRoot string, strict bool) error {
+	r, desired, names, done, err := beginPBSDatastoreRestore(ctx, logger, stageRoot, strict)
+	if done {
+		return err
 	}
 
 	currentPaths, listErr := r.readCurrent()
