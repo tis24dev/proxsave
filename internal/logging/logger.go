@@ -376,6 +376,19 @@ func (l *Logger) log(level types.LogLevel, format string, args ...interface{}) {
 }
 
 func (l *Logger) logWithLabel(level types.LogLevel, label string, colorOverride string, format string, args ...interface{}) {
+	l.emit(level, label, colorOverride, true, format, args...)
+}
+
+// logFileOnly records a line the console has already shown (a bootstrap line
+// printed before this logger existed): the same counters, issue capture, mirror
+// tap and file line as any other, without printing it on the console again.
+func (l *Logger) logFileOnly(level types.LogLevel, message string) {
+	l.emit(level, "", "", false, "%s", message)
+}
+
+// emit is the single write path of the logger. toConsole is false only for a line
+// the console already shows.
+func (l *Logger) emit(level types.LogLevel, label string, colorOverride string, toConsole bool, format string, args ...interface{}) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	// The threshold is a CONSOLE filter (maintainer call, 2026-09-02). It used to
@@ -460,8 +473,9 @@ func (l *Logger) logWithLabel(level types.LogLevel, label string, colorOverride 
 		l.issueLines = append(l.issueLines, issue)
 	}
 
-	// Write to stdout with colors - unless the console threshold mutes it.
-	if !consoleMuted {
+	// Write to stdout with colors - unless the console threshold mutes it, or the
+	// console already shows the line.
+	if !consoleMuted && toConsole {
 		_, _ = fmt.Fprint(l.output, outputStdout)
 	}
 

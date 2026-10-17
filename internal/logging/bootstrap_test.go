@@ -2,6 +2,8 @@ package logging
 
 import (
 	"bytes"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -29,16 +31,31 @@ func TestBootstrapLoggerRecordAndFlushDefaultLevel(t *testing.T) {
 	var buf bytes.Buffer
 	logger := New(types.LogLevelDebug, false)
 	logger.SetOutput(&buf)
+	logPath := filepath.Join(t.TempDir(), "run.log")
+	if err := logger.OpenLogFile(logPath); err != nil {
+		t.Fatal(err)
+	}
 
 	b.Flush(logger)
 
-	out := buf.String()
-	// Raw entries (Println/Printf) are only flushed to the log file,
-	// not to the main logger output, to avoid duplicating banners on stdout.
-	for _, msg := range []string{"info", "warn", "err"} {
-		if !strings.Contains(out, msg) {
-			t.Fatalf("output missing %s", msg)
+	// Every entry reaches the log file. The console already showed them when they
+	// were recorded, so the logger does not print them again; raw entries
+	// (Println/Printf) never go to the logger's console either.
+	_ = logger.CloseLogFile()
+	data, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, msg := range []string{"plain1", "plain-2", "info", "warn", "err"} {
+		if !strings.Contains(string(data), msg) {
+			t.Fatalf("log file missing %s:\n%s", msg, data)
 		}
+	}
+	if buf.Len() != 0 {
+		t.Fatalf("lines already on the console must not be printed again:\n%s", buf.String())
+	}
+	if logger.WarningCount() != 1 || !logger.HasErrors() {
+		t.Fatalf("flushed warning/error must still count: warnings=%d errors=%v", logger.WarningCount(), logger.HasErrors())
 	}
 
 	// Flush should be idempotent
@@ -59,14 +76,23 @@ func TestBootstrapLoggerLevelFiltering(t *testing.T) {
 	var buf bytes.Buffer
 	logger := New(types.LogLevelDebug, false)
 	logger.SetOutput(&buf)
+	logPath := filepath.Join(t.TempDir(), "run.log")
+	if err := logger.OpenLogFile(logPath); err != nil {
+		t.Fatal(err)
+	}
 
 	b.Flush(logger)
-	out := buf.String()
+	_ = logger.CloseLogFile()
+	data, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := string(data)
 	if strings.Contains(out, "info skipped") {
 		t.Fatalf("info should have been filtered out")
 	}
 	if !strings.Contains(out, "warn kept") || !strings.Contains(out, "err kept") {
-		t.Fatalf("expected warn and err to be emitted, got %s", out)
+		t.Fatalf("expected warn and err in the log file, got %s", out)
 	}
 }
 
