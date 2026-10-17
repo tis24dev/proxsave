@@ -613,6 +613,7 @@ func TestPBSSectionRestoreBlock_CurrentUnreadable(t *testing.T) {
 		fallback  = "DEBUG    PBS remote restore: fallback=file target=/etc/proxmox-backup/remote.cfg source=/stage/etc/proxmox-backup/remote.cfg"
 		event     = "INFO     The remotes configured on this PBS could not be read"
 		applied   = "WARNING  ⚠ PBS remote configuration: applied from the backup file"
+		syncNone  = "DEBUG    PBS remote restore: fallback current sync jobs=0 remotes_used="
 	)
 	openTwo := []string{
 		"INFO     Restoring PBS remotes...",
@@ -676,6 +677,7 @@ func TestPBSSectionRestoreBlock_CurrentUnreadable(t *testing.T) {
 			name: "non-empty-drops-one", staged: twoStaged, current: pbsStrPtr(current), runner: listFails(),
 			want: join([]string{start, reading, listDebug}, openTwo, []string{
 				"DEBUG    PBS remote restore: fallback current file remotes=2 names=old,r1",
+				syncNone,
 			}, helperOK, []string{"DEBUG    PBS remote restore: fallback written"}, dropOld, []string{applied}, tail(listErr)),
 			wantTarget: pbsStrPtr(strings.TrimSpace(twoStaged) + "\n"),
 		},
@@ -685,6 +687,7 @@ func TestPBSSectionRestoreBlock_CurrentUnreadable(t *testing.T) {
 				`DEBUG    PBS remote restore: remote list returned unparseable output error="invalid character 'o' in literal null (expecting 'u')"`,
 			}, openTwo, []string{
 				"DEBUG    PBS remote restore: fallback current file remotes=0 names=",
+				syncNone,
 			}, helperOK, []string{"DEBUG    PBS remote restore: fallback written", applied},
 				tail("parse remote list: invalid character 'o' in literal null (expecting 'u')")),
 			wantTarget: pbsStrPtr(strings.TrimSpace(twoStaged) + "\n"),
@@ -693,6 +696,7 @@ func TestPBSSectionRestoreBlock_CurrentUnreadable(t *testing.T) {
 			name: "empty", staged: "", current: pbsStrPtr(current), runner: listFails(),
 			want: join([]string{start, reading, listDebug}, openNone, []string{
 				"DEBUG    PBS remote restore: fallback current file remotes=2 names=old,r1",
+				syncNone,
 				"DEBUG    PBS remote restore: fallback staged file has no remotes comments_only=false, target removed",
 			}, dropOld, dropR1, []string{applied}, tail(listErr)),
 		},
@@ -700,6 +704,7 @@ func TestPBSSectionRestoreBlock_CurrentUnreadable(t *testing.T) {
 			name: "comments-only", staged: "# no remotes\n", current: pbsStrPtr(current), runner: listFails(),
 			want: join([]string{start, reading, listDebug}, openNone, []string{
 				"DEBUG    PBS remote restore: fallback current file remotes=2 names=old,r1",
+				syncNone,
 				"DEBUG    PBS remote restore: fallback staged file has no remotes comments_only=true, target removed",
 			}, dropOld, dropR1, []string{applied}, tail(listErr)),
 		},
@@ -708,6 +713,7 @@ func TestPBSSectionRestoreBlock_CurrentUnreadable(t *testing.T) {
 			fault: &pbsFaultFS{readFail: target},
 			want: join([]string{start, reading, listDebug}, openTwo, []string{
 				`DEBUG    PBS remote restore: fallback current file read failed error="injected read failure"`,
+				syncNone,
 			}, helperOK, []string{"DEBUG    PBS remote restore: fallback written", applied}, tail(listErr)),
 			wantTarget: nil, // the injected read failure hides the target; checked below
 		},
@@ -723,6 +729,7 @@ func TestPBSSectionRestoreBlock_CurrentUnreadable(t *testing.T) {
 				"INFO       Names: r1",
 				event, fallback,
 				"DEBUG    PBS remote restore: fallback current file remotes=2 names=old,r1",
+				syncNone,
 				`DEBUG    PBS remote restore: fallback write failed error="etc/proxmox-backup/remote.cfg does not look like a valid PBS config file (missing section header)"`,
 				`INFO     The remote configuration could not be written to this PBS: "etc/proxmox-backup/remote.cfg does not look like a valid PBS config file (missing section header)"`,
 				"WARNING  ⚠ PBS remote configuration: not applied",
@@ -734,6 +741,7 @@ func TestPBSSectionRestoreBlock_CurrentUnreadable(t *testing.T) {
 			fault: &pbsFaultFS{renameFail: target},
 			want: join([]string{start, reading, listDebug}, openTwo, []string{
 				"DEBUG    PBS remote restore: fallback current file remotes=2 names=old,r1",
+				syncNone,
 				"DEBUG    Start pbs staged apply remote.cfg: stage=/stage",
 				"DEBUG    End pbs staged apply remote.cfg (error=" + renameErr + ", duration=<d>)",
 				`DEBUG    PBS remote restore: fallback write failed error="` + renameErr + `"`,
@@ -1023,6 +1031,142 @@ func TestPBSSectionRestoreBlock_StoppedBlockPerKind(t *testing.T) {
 				}
 				if readErr == nil {
 					t.Fatalf("%s must not be written by the %s block, got %q", f, k.name, got)
+				}
+			}
+		})
+	}
+}
+
+// The remote.cfg file fallback behaves like PBS, which refuses to remove a remote
+// a sync job uses: such a remote of this PBS that the backup does not have keeps
+// its current section in the written file and is named as not removed. A remote
+// no job uses is removed as before; a sync.cfg that cannot be read keeps none.
+func TestPBSSectionRestoreBlock_FileFallbackKeepsARemoteASyncJobUses(t *testing.T) {
+	const (
+		target  = "/etc/proxmox-backup/remote.cfg"
+		syncCfg = "/etc/proxmox-backup/sync.cfg"
+		current = "remote: r1\n\thost 10.0.0.1\n\nremote: rtmp\n\thost 10.0.0.7\n\tauth-id sync@pbs\n\nremote: old\n\thost 10.0.0.9\n"
+		jobs    = "sync: sj-rtmp\n\tremote rtmp\n\tremote-store src\n\tstore ds1\n\nsync: sj-push\n\tremote rtmp\n\tremote-store dst\n\tstore ds1\n\tsync-direction push\n\nsync: sj-local\n\tremote-store ds2\n\tstore ds1\n"
+		staged  = "remote: r1\n\thost 10.0.0.1\n\nremote: r2\n\thost 10.0.0.2\n"
+		rtmp    = "remote: rtmp\n\thost 10.0.0.7\n\tauth-id sync@pbs"
+		listErr = "proxmox-backup-manager remote list --output-format=json failed: " + pbsRemoteListUnparsable
+	)
+	head := []string{
+		"DEBUG    Start pbs staged apply: dryRun=false stage=/stage",
+		`DEBUG    PBS remote restore: reading current remotes cmd="proxmox-backup-manager remote list --output-format=json"`,
+		"DEBUG    PBS remote restore: remote list failed error=\"exit status 255: Error: parsing \\\"/etc/proxmox-backup/remote.cfg\\\" failed: line 1 - syntax error (expected header)\"",
+		"INFO     Restoring PBS remotes...",
+		"DEBUG    PBS remote restore: mode=clean staged=/stage/etc/proxmox-backup/remote.cfg",
+	}
+	two := []string{
+		"DEBUG    PBS remote restore: backup remotes=2 names=r1,r2",
+		"INFO       Remotes to restore: 2",
+		"INFO       Names: r1, r2",
+	}
+	none := []string{
+		"DEBUG    PBS remote restore: backup remotes=0 names=",
+		"INFO       Remotes to restore: 0",
+	}
+	fallback := []string{
+		"INFO     The remotes configured on this PBS could not be read",
+		"DEBUG    PBS remote restore: fallback=file target=/etc/proxmox-backup/remote.cfg source=/stage/etc/proxmox-backup/remote.cfg",
+		"DEBUG    PBS remote restore: fallback current file remotes=3 names=old,r1,rtmp",
+	}
+	dropOld := []string{
+		"DEBUG    PBS remote restore: remote=old not in backup action=drop from file",
+		"INFO     Remote old is configured on this PBS but not present in the backup",
+		"INFO     ✓ PBS remote old: removed",
+	}
+	keepRtmp := []string{
+		"DEBUG    PBS remote restore: remote=rtmp not in backup used by sync jobs=sj-push,sj-rtmp action=keep",
+		"INFO     Remote rtmp is configured on this PBS but not present in the backup",
+		"WARNING  ⚠ PBS remote rtmp: not removed",
+	}
+	tail := []string{
+		"WARNING  ⚠ PBS remote configuration: applied from the backup file",
+		"DEBUG    End pbs staged apply (error=" + listErr + ", duration=<d>)",
+		"DEBUG    PBS staged config apply: outcome already reported: " + listErr,
+	}
+	join := func(parts ...[]string) []string {
+		var out []string
+		for _, p := range parts {
+			out = append(out, p...)
+		}
+		return out
+	}
+
+	cases := []struct {
+		name       string
+		staged     string
+		jobsFile   string // pbsStagedUnreadable: a directory stands there
+		want       []string
+		wantTarget string
+	}{
+		{
+			name: "non-empty-stage", staged: staged, jobsFile: jobs,
+			want: join(head, two, fallback, []string{
+				"DEBUG    PBS remote restore: fallback current sync jobs=3 remotes_used=rtmp",
+				"DEBUG    PBS remote restore: fallback written kept=rtmp",
+			}, dropOld, keepRtmp, tail),
+			wantTarget: strings.TrimSpace(staged) + "\n\n" + rtmp + "\n",
+		},
+		{
+			name: "empty-stage", staged: "", jobsFile: jobs,
+			want: join(head, none, fallback, []string{
+				"DEBUG    PBS remote restore: fallback current sync jobs=3 remotes_used=rtmp",
+				"DEBUG    PBS remote restore: fallback staged file has no remotes comments_only=false, target written kept=rtmp",
+			}, dropOld, []string{
+				"DEBUG    PBS remote restore: remote=r1 not in backup action=drop from file",
+				"INFO     Remote r1 is configured on this PBS but not present in the backup",
+				"INFO     ✓ PBS remote r1: removed",
+			}, keepRtmp, tail),
+			wantTarget: rtmp + "\n",
+		},
+		{
+			name: "sync-cfg-unreadable", staged: staged, jobsFile: pbsStagedUnreadable,
+			want: join(head, two, fallback, []string{
+				`DEBUG    PBS remote restore: fallback current sync jobs file=/etc/proxmox-backup/sync.cfg read failed error="read <fakefs>/etc/proxmox-backup/sync.cfg: is a directory"`,
+				"DEBUG    Start pbs staged apply remote.cfg: stage=/stage",
+				"DEBUG    pbs staged apply file: Applied etc/proxmox-backup/remote.cfg -> /etc/proxmox-backup/remote.cfg",
+				"DEBUG    End pbs staged apply remote.cfg (ok, duration=<d>)",
+				"DEBUG    PBS remote restore: fallback written",
+			}, dropOld, []string{
+				"DEBUG    PBS remote restore: remote=rtmp not in backup action=drop from file",
+				"INFO     Remote rtmp is configured on this PBS but not present in the backup",
+				"INFO     ✓ PBS remote rtmp: removed",
+			}, tail),
+			wantTarget: strings.TrimSpace(staged) + "\n",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			runner := &FakeCommandRunner{Errors: map[string]error{pbsRemoteListCmd: errors.New(pbsRemoteListUnparsable)}}
+			jobsFile := tc.jobsFile
+			prepare := func() {
+				if err := restoreFS.WriteFile(target, []byte(current), 0o640); err != nil {
+					t.Fatal(err)
+				}
+				if jobsFile == pbsStagedUnreadable {
+					if err := restoreFS.MkdirAll(syncCfg, 0o750); err != nil {
+						t.Fatal(err)
+					}
+					return
+				}
+				if err := restoreFS.WriteFile(syncCfg, []byte(jobsFile), 0o640); err != nil {
+					t.Fatal(err)
+				}
+			}
+			log, warned, fakeFS := runPBSSectionRestoreStep(t, PBSRestoreBehaviorClean, []string{"pbs_remotes"}, map[string]string{"etc/proxmox-backup/remote.cfg": tc.staged}, runner, prepare)
+			assertPBSBlockLog(t, log, tc.want)
+			if !warned {
+				t.Fatal("restore must end with warnings")
+			}
+			if got, err := fakeFS.ReadFile(target); err != nil || string(got) != tc.wantTarget {
+				t.Fatalf("remote.cfg %q (err %v), want %q", got, err, tc.wantTarget)
+			}
+			if jobsFile != pbsStagedUnreadable {
+				if got, err := fakeFS.ReadFile(syncCfg); err != nil || string(got) != jobsFile {
+					t.Fatalf("sync.cfg must stay as it is, got %q (err %v)", got, err)
 				}
 			}
 		})

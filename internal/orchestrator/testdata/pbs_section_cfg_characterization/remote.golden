@@ -396,6 +396,7 @@ answers:
 reads:
   /stage/etc/proxmox-backup/remote.cfg
   /etc/proxmox-backup/remote.cfg
+  /etc/proxmox-backup/sync.cfg
   /stage/etc/proxmox-backup/remote.cfg
 commands:
   proxmox-backup-manager remote list --output-format=json
@@ -413,6 +414,7 @@ log:
   [<TIME>] INFO     The remotes configured on this PBS could not be read
   [<TIME>] DEBUG    PBS remote restore: fallback=file target=/etc/proxmox-backup/remote.cfg source=/stage/etc/proxmox-backup/remote.cfg
   [<TIME>] DEBUG    PBS remote restore: fallback current file remotes=0 names=
+  [<TIME>] DEBUG    PBS remote restore: fallback current sync jobs=0 remotes_used=
   [<TIME>] DEBUG    Start pbs staged apply remote.cfg: stage=/stage
   [<TIME>] DEBUG    pbs staged apply file: Applied etc/proxmox-backup/remote.cfg -> /etc/proxmox-backup/remote.cfg
   [<TIME>] DEBUG    End pbs staged apply remote.cfg (ok, duration=<d>)
@@ -433,6 +435,7 @@ answers:
 reads:
   /stage/etc/proxmox-backup/remote.cfg
   /etc/proxmox-backup/remote.cfg
+  /etc/proxmox-backup/sync.cfg
   /stage/etc/proxmox-backup/remote.cfg
 commands:
   proxmox-backup-manager remote list --output-format=json
@@ -450,6 +453,7 @@ log:
   [<TIME>] INFO     The remotes configured on this PBS could not be read
   [<TIME>] DEBUG    PBS remote restore: fallback=file target=/etc/proxmox-backup/remote.cfg source=/stage/etc/proxmox-backup/remote.cfg
   [<TIME>] DEBUG    PBS remote restore: fallback current file remotes=0 names=
+  [<TIME>] DEBUG    PBS remote restore: fallback current sync jobs=0 remotes_used=
   [<TIME>] DEBUG    Start pbs staged apply remote.cfg: stage=/stage
   [<TIME>] DEBUG    pbs staged apply file: Applied etc/proxmox-backup/remote.cfg -> /etc/proxmox-backup/remote.cfg
   [<TIME>] DEBUG    End pbs staged apply remote.cfg (ok, duration=<d>)
@@ -470,6 +474,7 @@ answers:
 reads:
   /stage/etc/proxmox-backup/remote.cfg
   /etc/proxmox-backup/remote.cfg
+  /etc/proxmox-backup/sync.cfg
   /stage/etc/proxmox-backup/remote.cfg
 commands:
   proxmox-backup-manager remote list --output-format=json
@@ -487,6 +492,7 @@ log:
   [<TIME>] INFO     The remotes configured on this PBS could not be read
   [<TIME>] DEBUG    PBS remote restore: fallback=file target=/etc/proxmox-backup/remote.cfg source=/stage/etc/proxmox-backup/remote.cfg
   [<TIME>] DEBUG    PBS remote restore: fallback current file remotes=0 names=
+  [<TIME>] DEBUG    PBS remote restore: fallback current sync jobs=0 remotes_used=
   [<TIME>] DEBUG    Start pbs staged apply remote.cfg: stage=/stage
   [<TIME>] DEBUG    pbs staged apply file: Applied etc/proxmox-backup/remote.cfg -> /etc/proxmox-backup/remote.cfg
   [<TIME>] DEBUG    End pbs staged apply remote.cfg (ok, duration=<d>)

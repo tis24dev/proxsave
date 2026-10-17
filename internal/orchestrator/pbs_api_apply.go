@@ -242,6 +242,9 @@ type pbsSectionCfg struct {
 	base64Values []string
 	labels       pbsSectionLabels
 	fileFallback func(ctx context.Context, logger *logging.Logger, stageRoot string) error
+	// keepSyncJobRemotes: the file fallback keeps an object of this PBS that a
+	// sync job uses (remote.cfg), as PBS refuses to remove it.
+	keepSyncJobRemotes bool
 }
 
 // writeFromStage writes this config's staged file, and only that file, to this PBS.
@@ -549,13 +552,113 @@ func pbsSectionFileNames(path string) ([]string, error) {
 	return pbsSortedNames(names), nil
 }
 
+// pbsSyncCfgPath is the sync job configuration of this PBS.
+const pbsSyncCfgPath = "/etc/proxmox-backup/sync.cfg"
+
+// pbsSyncJobsByRemote reads the sync jobs of this PBS's sync.cfg and returns, for
+// each remote a job names (pull and push jobs both name one), the jobs that use
+// it, sorted; a missing file has no jobs.
+func pbsSyncJobsByRemote(path string) (byRemote map[string][]string, jobs int, err error) {
+	sections, err := readProxmoxConfigSectionsOptional(path)
+	if err != nil {
+		return nil, 0, err
+	}
+	byRemote = make(map[string][]string)
+	for _, s := range sections {
+		jobs++
+		for _, kv := range s.Entries {
+			if normalizeProxmoxCfgKey(kv.Key) != "remote" {
+				continue
+			}
+			if remote := strings.TrimSpace(kv.Value); remote != "" {
+				byRemote[remote] = append(byRemote[remote], strings.TrimSpace(s.Name))
+			}
+		}
+	}
+	for remote := range byRemote {
+		sort.Strings(byRemote[remote])
+	}
+	return byRemote, jobs, nil
+}
+
+// syncJobsByRemote is, for remote.cfg, the sync jobs of this PBS by the remote
+// they use: a remote a job uses is kept, as PBS refuses to remove it. A sync.cfg
+// that cannot be read is DEBUG only and keeps no remote. For any other config it
+// is nil.
+func (r *pbsSectionRestore) syncJobsByRemote() map[string][]string {
+	if !r.cfg.keepSyncJobRemotes {
+		return nil
+	}
+	byRemote, jobs, err := pbsSyncJobsByRemote(pbsSyncCfgPath)
+	if err != nil {
+		r.debug("fallback current sync jobs file=%s read failed error=%q", pbsSyncCfgPath, err.Error())
+		return nil
+	}
+	remotes := pbsSortedNames(byRemote)
+	r.debug("fallback current sync jobs=%d remotes_used=%s", jobs, strings.Join(remotes, ","))
+	return byRemote
+}
+
+// pbsSectionFileBlocks splits a section-config file into its sections, each with
+// its header and the lines under it, by the header rule of
+// parseProxmoxNotificationSections.
+func pbsSectionFileBlocks(content string) map[string][]string {
+	blocks := make(map[string][]string)
+	var name string
+	var lines []string
+	flush := func() {
+		if name != "" {
+			blocks[name] = append(blocks[name], strings.TrimRight(strings.Join(lines, "\n"), "\n \t"))
+		}
+		name, lines = "", nil
+	}
+	for _, line := range strings.Split(content, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if trimmed != "" && !strings.HasPrefix(trimmed, "#") {
+			if _, header, ok := parseProxmoxNotificationHeader(trimmed); ok {
+				flush()
+				name, lines = header, []string{line}
+				continue
+			}
+		}
+		if name != "" {
+			lines = append(lines, line)
+		}
+	}
+	flush()
+	return blocks
+}
+
+// writeWithKept writes the target from the staged file (none when emptied) and
+// the current sections of the kept objects, in that order.
+func (r *pbsSectionRestore) writeWithKept(target, raw string, emptied bool, kept []string) error {
+	data, err := restoreFS.ReadFile(target)
+	if err != nil {
+		return fmt.Errorf("read %s: %w", target, err)
+	}
+	blocks := pbsSectionFileBlocks(string(data))
+	var parts []string
+	if !emptied {
+		parts = append(parts, strings.TrimSpace(raw))
+	}
+	for _, name := range kept {
+		parts = append(parts, blocks[name]...)
+	}
+	if err := writeFileAtomic(target, []byte(strings.Join(parts, "\n\n")+"\n"), 0o640); err != nil {
+		return fmt.Errorf("write %s: %w", target, err)
+	}
+	return nil
+}
+
 // fileFallback writes, in Clean (1:1) mode, the staged file of this config as it
 // is when the objects configured on this PBS could not be read, and logs the
 // outcome. raw is the staged file, ids the objects it names, cause the error that
 // kept the objects of this PBS from being read. A staged file without objects
 // (empty, or only comments) removes the target file, as the API path removes
-// every object. Once the file is written or removed, every object of the current
-// file that the backup does not have is named as removed.
+// every object. In remote.cfg a remote of this PBS that the backup does not have
+// and a sync job uses keeps its current section, as PBS refuses to remove it.
+// Once the file is written or removed, every object of the current file that
+// the backup does not have is named as removed, or as not removed when kept.
 func (r *pbsSectionRestore) fileFallback(stageRoot, raw string, ids []string, cause error) error {
 	r.logger.Info("The %s configured on this PBS could not be read", r.cfg.labels.plural)
 	target := filepath.Join(string(os.PathSeparator), filepath.FromSlash(r.cfg.file))
@@ -567,15 +670,35 @@ func (r *pbsSectionRestore) fileFallback(stageRoot, raw string, ids []string, ca
 		r.debug("fallback current file %s=%d names=%s", r.keys(), len(current), strings.Join(current, ","))
 	}
 
+	// The objects of this PBS that the backup does not have; in remote.cfg those a
+	// sync job of this PBS uses stay, as PBS refuses to remove them.
+	inBackup := make(map[string]struct{}, len(ids))
+	for _, id := range ids {
+		inBackup[id] = struct{}{}
+	}
+	usedBy := r.syncJobsByRemote()
+	var stale, kept []string
+	for _, name := range current {
+		if _, ok := inBackup[name]; ok {
+			continue
+		}
+		stale = append(stale, name)
+		if len(usedBy[name]) > 0 {
+			kept = append(kept, name)
+		}
+	}
+
 	emptied := len(ids) == 0
 	var err error
 	switch {
-	case emptied:
-		err = removeIfExists(target)
-	case !pbsConfigHasHeader(raw):
+	case !emptied && !pbsConfigHasHeader(raw):
 		// The write would skip a file without a header the parser still read
 		// objects from: say it was not written instead of applied.
 		err = fmt.Errorf("%s does not look like a valid PBS config file (missing section header)", r.cfg.file)
+	case len(kept) > 0:
+		err = r.writeWithKept(target, raw, emptied, kept)
+	case emptied:
+		err = removeIfExists(target)
 	default:
 		err = r.cfg.writeFromStage(r.ctx, r.logger, stageRoot)
 	}
@@ -584,18 +707,22 @@ func (r *pbsSectionRestore) fileFallback(stageRoot, raw string, ids []string, ca
 		r.logger.Info("%s could not be written to this PBS: \"%s\"", r.configuration(), err.Error())
 		return r.configNotApplied(fmt.Errorf("%w; file fallback: %w", cause, err))
 	}
-	if emptied {
+	switch {
+	case emptied && len(kept) > 0:
+		r.debug("fallback staged file has no %s comments_only=%v, target written kept=%s", r.keys(), strings.TrimSpace(raw) != "", strings.Join(kept, ","))
+	case emptied:
 		r.debug("fallback staged file has no %s comments_only=%v, target removed", r.keys(), strings.TrimSpace(raw) != "")
-	} else {
+	case len(kept) > 0:
+		r.debug("fallback written kept=%s", strings.Join(kept, ","))
+	default:
 		r.debug("fallback written")
 	}
 
-	inBackup := make(map[string]struct{}, len(ids))
-	for _, id := range ids {
-		inBackup[id] = struct{}{}
-	}
-	for _, name := range current {
-		if _, ok := inBackup[name]; ok {
+	for _, name := range stale {
+		if jobs := usedBy[name]; len(jobs) > 0 {
+			r.debug("%s=%s not in backup used by sync jobs=%s action=keep", r.key(), name, strings.Join(jobs, ","))
+			r.logger.Info("%s %s is configured on this PBS but not present in the backup", r.cfg.labels.eventNoun, name)
+			r.logger.Warning("%s PBS %s %s: not removed", theme.SymbolWarning, r.cfg.labels.noun, name)
 			continue
 		}
 		r.debug("%s=%s not in backup action=drop from file", r.key(), name)
@@ -732,9 +859,10 @@ func applyPBSRemoteCfgViaAPI(ctx context.Context, logger *logging.Logger, stageR
 		secretFlags: []string{"--password"},
 		// PBS writes the password as standard base64 ("dummyprobe" is stored as
 		// "ZHVtbXlwcm9iZQ==") and base64-encodes whatever --password receives.
-		base64Values: []string{"password"},
-		labels:       pbsRemoteLabels,
-		fileFallback: applyPBSRemoteCfgFromStage,
+		base64Values:       []string{"password"},
+		labels:             pbsRemoteLabels,
+		fileFallback:       applyPBSRemoteCfgFromStage,
+		keepSyncJobRemotes: true,
 	})
 }
 
