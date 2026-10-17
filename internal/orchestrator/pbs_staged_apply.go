@@ -156,9 +156,6 @@ func maybeApplyPBSConfigsFromStage(ctx context.Context, logger *logging.Logger, 
 					// and its own: no line here, no file fallback over those outcomes,
 					// and the restore still ends with warnings.
 					datastoreOutcomeLogged = err
-				case errors.Is(err, errPBSCleanRemoveIncomplete):
-					logger.Warning("PBS API apply: datastore.cfg failed: %v", err)
-					failedItems = append(failedItems, "datastore.cfg (clean 1:1 incomplete)")
 				case allowFileFallback:
 					// An error the block does not return today: write datastore.cfg
 					// from the backup file as the same block.
