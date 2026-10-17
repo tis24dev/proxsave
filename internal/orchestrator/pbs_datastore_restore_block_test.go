@@ -726,6 +726,125 @@ func TestPBSDatastoreRestoreBlock_FallbackJobsNotAllRemoved(t *testing.T) {
 	}
 }
 
+// Clean mode with the PBS API not available: the file-based apply opens the same
+// datastore block and writes datastore.cfg through the same fallback, with the
+// same lines after its own event, and a ⚠ outcome ends the restore with warnings.
+func TestPBSDatastoreRestoreBlock_APIUnavailable(t *testing.T) {
+	const apiWarning = "WARNING  PBS API apply unavailable; falling back to file-based staged apply where possible: proxmox-backup-proxy did not start: exit status 1"
+	cases := []struct {
+		name    string
+		staged  string
+		prepare func(*FakeFS)
+		visible []string
+	}{
+		{
+			name:   "written-with-a-removed-and-a-deferred-datastore",
+			staged: "datastore: ds1\n\tpath /mnt/ds1\n\ndatastore: ds2\n\tpath /\n",
+			prepare: func(f *FakeFS) {
+				_ = f.WriteFile("/etc/proxmox-backup/datastore.cfg", []byte("datastore: old\n\tpath /mnt/old\n"), 0o640)
+				_ = f.WriteFile("/etc/proxmox-backup/prune.cfg", []byte("prune: pj-old\n\tstore old\n"), 0o640)
+			},
+			visible: []string{
+				apiWarning,
+				"INFO     Restoring PBS datastore configuration...",
+				"INFO       Datastores to restore: 2",
+				"INFO       Names: ds1, ds2",
+				"INFO     The PBS API is not available",
+				"INFO     Datastore old is configured on this PBS but not present in the backup",
+				"INFO     ✓ PBS datastore old: removed with its jobs",
+				"INFO     Datastore ds1 path /mnt/ds1 is on the root filesystem",
+				"WARNING  ⚠ PBS datastore ds1: applied without its mount",
+				"INFO     Datastore ds2 is not safe to apply now, its definition is saved to <deferred>",
+				"WARNING  ⚠ PBS datastore ds2: not applied",
+				"WARNING  ⚠ PBS datastore configuration: applied from the backup file",
+			},
+		},
+		{
+			name:   "empty-backup-file",
+			staged: "",
+			prepare: func(f *FakeFS) {
+				_ = f.WriteFile("/etc/proxmox-backup/datastore.cfg", []byte("datastore: old\n\tpath /mnt/old\n"), 0o640)
+			},
+			visible: []string{
+				apiWarning,
+				"INFO     Restoring PBS datastore configuration...",
+				"INFO       Datastores to restore: 0",
+				"INFO     The PBS API is not available",
+				"INFO     Datastore old is configured on this PBS but not present in the backup",
+				"INFO     ✓ PBS datastore old: removed with its jobs",
+				"WARNING  ⚠ PBS datastore configuration: applied from the backup file",
+			},
+		},
+		{
+			name:   "damaged-backup-file-not-rebuilt",
+			staged: "datastore: ds1\n\tpath /mnt/ds1\n\tpath /mnt/other\n",
+			visible: []string{
+				apiWarning,
+				"INFO     Restoring PBS datastore configuration...",
+				"INFO       Datastores to restore: 1",
+				"INFO       Names: ds1",
+				"INFO     The PBS API is not available",
+				"INFO     The datastore configuration in the backup is damaged and could not be rebuilt",
+				"WARNING  ⚠ PBS datastore configuration: not applied",
+			},
+		},
+		{
+			name:   "backup-file-unreadable",
+			staged: pbsStagedUnreadable,
+			visible: []string{
+				apiWarning,
+				"INFO     Restoring PBS datastore configuration...",
+				`INFO     The datastore configuration in the backup could not be read: "read staged datastore.cfg: read <fakefs>/stage/etc/proxmox-backup/datastore.cfg: is a directory"`,
+				"WARNING  ⚠ PBS datastore configuration: not applied",
+			},
+		},
+		{
+			name:   "datastore-cfg-not-written",
+			staged: "datastore: ds1\n\tpath /mnt/ds1\n",
+			prepare: func(f *FakeFS) {
+				_ = f.MkdirAll("/etc/proxmox-backup/datastore.cfg/x", 0o755)
+			},
+			visible: []string{
+				apiWarning,
+				"INFO     Restoring PBS datastore configuration...",
+				"INFO       Datastores to restore: 1",
+				"INFO       Names: ds1",
+				"INFO     The PBS API is not available",
+				`INFO     The datastore configuration could not be written to this PBS: "write /etc/proxmox-backup/datastore.cfg: rename <fakefs>/etc/proxmox-backup/datastore.cfg<tmp> <fakefs>/etc/proxmox-backup/datastore.cfg: file exists"`,
+				"WARNING  ⚠ PBS datastore configuration: not applied",
+			},
+		},
+	}
+	deferredPath := regexp.MustCompile(`saved to \S+`)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			log, warned := runPBSDatastoreRestoreStep(t, PBSRestoreBehaviorClean, tc.staged, &FakeCommandRunner{}, func(f *FakeFS) {
+				pbsStagedApplyEnsurePBSServicesForAPIFn = func(context.Context, *logging.Logger) error {
+					return errors.New("proxmox-backup-proxy did not start: exit status 1")
+				}
+				if tc.prepare != nil {
+					tc.prepare(f)
+				}
+			})
+			t.Logf("full log:\n%s", strings.Join(pbsBlockLogLines(log), "\n"))
+			var got []string
+			for _, line := range pbsVisibleLines(log) {
+				line = pbsLogAtomicTemp.ReplaceAllString(line, "<tmp>")
+				got = append(got, deferredPath.ReplaceAllString(line, "saved to <deferred>"))
+			}
+			if strings.Join(got, "\n") != strings.Join(tc.visible, "\n") {
+				t.Fatalf("visible lines\n--- got ---\n%s\n--- want ---\n%s", strings.Join(got, "\n"), strings.Join(tc.visible, "\n"))
+			}
+			if !warned {
+				t.Fatal("a ⚠ outcome must end the restore with warnings")
+			}
+			if !strings.Contains(strings.Join(pbsBlockLogLines(log), "\n"), "DEBUG    PBS staged config apply: outcome already reported: ") {
+				t.Fatal("the caller must take the block outcome as already reported")
+			}
+		})
+	}
+}
+
 // pbsVisibleLines returns the INFO, SKIP, WARNING and ERROR lines of a log, without
 // their timestamps: what the operator sees.
 func pbsVisibleLines(log string) []string {

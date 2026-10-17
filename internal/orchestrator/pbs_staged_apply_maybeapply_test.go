@@ -127,8 +127,12 @@ func TestMaybeApplyPBSConfigsFromStage_CleanMode_ApiUnavailableFallsBackToFiles(
 		},
 	}
 
-	if err := maybeApplyPBSConfigsFromStage(context.Background(), newTestLogger(), plan, stageRoot, false); err != nil {
-		t.Fatalf("maybeApplyPBSConfigsFromStage: %v", err)
+	// datastore.cfg is written by the datastore block from the backup file, whose
+	// outcome is a ⚠ one already logged: the restore ends with warnings.
+	err := maybeApplyPBSConfigsFromStage(context.Background(), newTestLogger(), plan, stageRoot, false)
+	var logged *stageApplyOutcomeLoggedError
+	if !errors.As(err, &logged) {
+		t.Fatalf("maybeApplyPBSConfigsFromStage: %v; want the datastore block outcome already logged", err)
 	}
 
 	for _, path := range []string{

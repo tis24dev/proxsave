@@ -179,9 +179,9 @@ func maybeApplyPBSConfigsFromStage(ctx context.Context, logger *logging.Logger, 
 				logger.Warning("PBS staged apply: s3.cfg: %v", err)
 				failedItems = append(failedItems, "s3.cfg")
 			}
-			if err := applyPBSDatastoreCfgFromStage(ctx, logger, stageRoot); err != nil {
-				logger.Warning("PBS staged apply: datastore.cfg: %v", err)
-				failedItems = append(failedItems, "datastore.cfg")
+			if err := applyPBSDatastoreCfgFileBlock(ctx, logger, stageRoot); err != nil {
+				// The block logged the outcome of every datastore and its own.
+				datastoreOutcomeLogged = err
 			}
 		} else {
 			logging.DebugStep(logger, "pbs staged apply", "Skipping datastore.cfg/s3.cfg: merge mode requires PBS API apply")

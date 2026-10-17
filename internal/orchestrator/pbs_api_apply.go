@@ -652,6 +652,7 @@ func (e *pbsDatastoreRestoreNotAppliedError) Unwrap() error { return e.err }
 const (
 	pbsDatastoreEventBackupUnreadable  = "The datastore configuration in the backup could not be read"
 	pbsDatastoreEventCurrentUnreadable = "The datastores configured on this PBS could not be read"
+	pbsDatastoreEventAPIUnavailable    = "The PBS API is not available"
 )
 
 // stopped logs a block that stopped before any datastore. In Clean (1:1) mode the
@@ -843,6 +844,19 @@ func pbsSortedNames[V any](m map[string]V) []string {
 	}
 	sort.Strings(keys)
 	return keys
+}
+
+// applyPBSDatastoreCfgFileBlock is the datastore block when the PBS API is not
+// available, in Clean (1:1) mode: the datastores to restore, then datastore.cfg
+// written from the backup file by the same fallback, with the same lines. Like
+// the fallback it returns a pbsDatastoreRestoreNotAppliedError whenever its
+// outcome is a ⚠ one, already logged.
+func applyPBSDatastoreCfgFileBlock(ctx context.Context, logger *logging.Logger, stageRoot string) error {
+	r, _, _, done, err := beginPBSDatastoreRestore(ctx, logger, stageRoot, true)
+	if done {
+		return err
+	}
+	return r.fileFallback(pbsDatastoreEventAPIUnavailable, errors.New("PBS API unavailable"))
 }
 
 // beginPBSDatastoreRestore opens the datastore block: it reads the staged
