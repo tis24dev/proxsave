@@ -105,17 +105,10 @@ func maybeApplyPBSConfigsFromStage(ctx context.Context, logger *logging.Logger, 
 
 		if apiAvailable {
 			if err := pbsStagedApplyTrafficControlCfgViaAPIFn(ctx, logger, stageRoot, strict); err != nil {
-				if ctxErr := ctx.Err(); ctxErr != nil {
-					// Cancelled: no warning, no file fallback, the restore stops.
-					return ctxErr
-				}
-				logger.Warning("PBS API apply: traffic-control failed: %v", err)
-				if errors.Is(err, errPBSCleanRemoveIncomplete) {
-					failedItems = append(failedItems, "traffic-control.cfg (clean 1:1 incomplete)")
-				} else if !pbsFallbackApplied(logger, "traffic-control.cfg", allowFileFallback, func() error {
+				if stop := pbsSectionApplyFailed(ctx, logger, err, pbsSectionFailure{label: "traffic-control", item: "traffic-control.cfg", fallbackLabel: "traffic-control.cfg"}, allowFileFallback, &failedItems, func() error {
 					return applyPBSConfigFileFromStage(ctx, logger, stageRoot, "etc/proxmox-backup/traffic-control.cfg")
-				}) {
-					failedItems = append(failedItems, "traffic-control.cfg")
+				}); stop != nil {
+					return stop
 				}
 			}
 			if err := pbsStagedApplyNodeCfgViaAPIFn(ctx, stageRoot); err != nil {
@@ -144,17 +137,10 @@ func maybeApplyPBSConfigsFromStage(ctx context.Context, logger *logging.Logger, 
 	if plan.HasCategoryID("datastore_pbs") {
 		if apiAvailable {
 			if err := pbsStagedApplyS3CfgViaAPIFn(ctx, logger, stageRoot, strict); err != nil {
-				if ctxErr := ctx.Err(); ctxErr != nil {
-					// Cancelled: no warning, no file fallback, the restore stops.
-					return ctxErr
-				}
-				logger.Warning("PBS API apply: s3.cfg failed: %v", err)
-				if errors.Is(err, errPBSCleanRemoveIncomplete) {
-					failedItems = append(failedItems, "s3.cfg (clean 1:1 incomplete)")
-				} else if !pbsFallbackApplied(logger, "s3.cfg", allowFileFallback, func() error {
+				if stop := pbsSectionApplyFailed(ctx, logger, err, pbsSectionFailure{label: "s3.cfg", item: "s3.cfg", fallbackLabel: "s3.cfg"}, allowFileFallback, &failedItems, func() error {
 					return applyPBSS3CfgFromStage(ctx, logger, stageRoot)
-				}) {
-					failedItems = append(failedItems, "s3.cfg")
+				}); stop != nil {
+					return stop
 				}
 			}
 			if err := pbsStagedApplyDatastoreCfgViaAPIFn(ctx, logger, stageRoot, strict); err != nil {
@@ -202,17 +188,10 @@ func maybeApplyPBSConfigsFromStage(ctx context.Context, logger *logging.Logger, 
 	if plan.HasCategoryID("pbs_remotes") {
 		if apiAvailable {
 			if err := pbsStagedApplyRemoteCfgViaAPIFn(ctx, logger, stageRoot, strict); err != nil {
-				if ctxErr := ctx.Err(); ctxErr != nil {
-					// Cancelled: no warning, no file fallback, the restore stops.
-					return ctxErr
-				}
-				logger.Warning("PBS API apply: remote.cfg failed: %v", err)
-				if errors.Is(err, errPBSCleanRemoveIncomplete) {
-					failedItems = append(failedItems, "remote.cfg (clean 1:1 incomplete)")
-				} else if !pbsFallbackApplied(logger, "remote.cfg", allowFileFallback, func() error {
+				if stop := pbsSectionApplyFailed(ctx, logger, err, pbsSectionFailure{label: "remote.cfg", item: "remote.cfg", fallbackLabel: "remote.cfg"}, allowFileFallback, &failedItems, func() error {
 					return applyPBSRemoteCfgFromStage(ctx, logger, stageRoot)
-				}) {
-					failedItems = append(failedItems, "remote.cfg")
+				}); stop != nil {
+					return stop
 				}
 			}
 		} else if allowFileFallback {
@@ -228,45 +207,24 @@ func maybeApplyPBSConfigsFromStage(ctx context.Context, logger *logging.Logger, 
 	if plan.HasCategoryID("pbs_jobs") {
 		if apiAvailable {
 			if err := pbsStagedApplySyncCfgViaAPIFn(ctx, logger, stageRoot, strict); err != nil {
-				if ctxErr := ctx.Err(); ctxErr != nil {
-					// Cancelled: no warning, no file fallback, the restore stops.
-					return ctxErr
-				}
-				logger.Warning("PBS API apply: sync jobs failed: %v", err)
-				if errors.Is(err, errPBSCleanRemoveIncomplete) {
-					failedItems = append(failedItems, "sync.cfg (clean 1:1 incomplete)")
-				} else if !pbsFallbackApplied(logger, "job configs", allowFileFallback, func() error {
+				if stop := pbsSectionApplyFailed(ctx, logger, err, pbsSectionFailure{label: "sync jobs", item: "sync.cfg", fallbackLabel: "job configs"}, allowFileFallback, &failedItems, func() error {
 					return applyPBSJobConfigsFromStage(ctx, logger, stageRoot)
-				}) {
-					failedItems = append(failedItems, "sync.cfg")
+				}); stop != nil {
+					return stop
 				}
 			}
 			if err := pbsStagedApplyVerificationCfgViaAPIFn(ctx, logger, stageRoot, strict); err != nil {
-				if ctxErr := ctx.Err(); ctxErr != nil {
-					// Cancelled: no warning, no file fallback, the restore stops.
-					return ctxErr
-				}
-				logger.Warning("PBS API apply: verification jobs failed: %v", err)
-				if errors.Is(err, errPBSCleanRemoveIncomplete) {
-					failedItems = append(failedItems, "verification.cfg (clean 1:1 incomplete)")
-				} else if !pbsFallbackApplied(logger, "job configs", allowFileFallback, func() error {
+				if stop := pbsSectionApplyFailed(ctx, logger, err, pbsSectionFailure{label: "verification jobs", item: "verification.cfg", fallbackLabel: "job configs"}, allowFileFallback, &failedItems, func() error {
 					return applyPBSJobConfigsFromStage(ctx, logger, stageRoot)
-				}) {
-					failedItems = append(failedItems, "verification.cfg")
+				}); stop != nil {
+					return stop
 				}
 			}
 			if err := pbsStagedApplyPruneCfgViaAPIFn(ctx, logger, stageRoot, strict); err != nil {
-				if ctxErr := ctx.Err(); ctxErr != nil {
-					// Cancelled: no warning, no file fallback, the restore stops.
-					return ctxErr
-				}
-				logger.Warning("PBS API apply: prune jobs failed: %v", err)
-				if errors.Is(err, errPBSCleanRemoveIncomplete) {
-					failedItems = append(failedItems, "prune.cfg (clean 1:1 incomplete)")
-				} else if !pbsFallbackApplied(logger, "job configs", allowFileFallback, func() error {
+				if stop := pbsSectionApplyFailed(ctx, logger, err, pbsSectionFailure{label: "prune jobs", item: "prune.cfg", fallbackLabel: "job configs"}, allowFileFallback, &failedItems, func() error {
 					return applyPBSJobConfigsFromStage(ctx, logger, stageRoot)
-				}) {
-					failedItems = append(failedItems, "prune.cfg")
+				}); stop != nil {
+					return stop
 				}
 			}
 		} else if allowFileFallback {
@@ -291,6 +249,35 @@ func maybeApplyPBSConfigsFromStage(ctx context.Context, logger *logging.Logger, 
 	}
 	if datastoreOutcomeLogged != nil {
 		return &stageApplyOutcomeLoggedError{err: datastoreOutcomeLogged}
+	}
+	return nil
+}
+
+// pbsSectionFailure names a section config in the handling of its failed API
+// apply: label in the warning, item in the failed items, fallbackLabel in the
+// fallback lines.
+type pbsSectionFailure struct {
+	label         string
+	item          string
+	fallbackLabel string
+}
+
+// pbsSectionApplyFailed handles the failed PBS API apply of a section config, the
+// same way for every config. A cancellation stops the staged apply: it is
+// returned, with no warning and no fallback. Otherwise the warning, then a Clean
+// 1:1 incomplete apply is recorded as such with no fallback over it, and any
+// other failure runs the file-based fallback; the item is recorded as failed
+// when nothing applied it.
+func pbsSectionApplyFailed(ctx context.Context, logger *logging.Logger, err error, f pbsSectionFailure, allowFileFallback bool, failedItems *[]string, fallback func() error) error {
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		// Cancelled: no warning, no file fallback, the restore stops.
+		return ctxErr
+	}
+	logger.Warning("PBS API apply: %s failed: %v", f.label, err)
+	if errors.Is(err, errPBSCleanRemoveIncomplete) {
+		*failedItems = append(*failedItems, f.item+" (clean 1:1 incomplete)")
+	} else if !pbsFallbackApplied(logger, f.fallbackLabel, allowFileFallback, fallback) {
+		*failedItems = append(*failedItems, f.item)
 	}
 	return nil
 }
