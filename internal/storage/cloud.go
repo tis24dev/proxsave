@@ -2724,6 +2724,11 @@ func (c *CloudStorage) deleteBatched(ctx context.Context, backups []*types.Backu
 
 		logDeleted, err := c.deleteBackupInternal(ctx, backup.BackupFile)
 		if err != nil {
+			if ctxErr := ctx.Err(); ctxErr != nil && err == ctxErr {
+				// Cancelled before this backup was touched: stop as the check above
+				// does, without counting it as not deleted.
+				return deleted, ctxErr
+			}
 			if !errors.Is(err, errBackupSidecarDeleteOnly) {
 				// The backup archive itself is still present; do not count it.
 				c.logger.Debug("Cloud Storage: retention - left %s in place: %v", backup.BackupFile, err)

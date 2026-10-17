@@ -1792,3 +1792,32 @@ func TestCloudCountLogFilesCountsThisHostsRunLogsOnly(t *testing.T) {
 		t.Fatalf("countLogFiles() = %d; want 2", got)
 	}
 }
+
+// A cancellation landing between the loop's context check and the one at the
+// start of deleteBackupInternal stops the pass like the loop's own check: the
+// backup it had not touched is not counted as not deleted, and nothing is run.
+func TestCloudDeleteBatchedStopsOnACancelBeforeTheDelete(t *testing.T) {
+	cfg := &config.Config{CloudEnabled: true, CloudRemote: "remote", RcloneRetries: 1}
+	cs := newCloudStorageForTest(cfg)
+	queue := &commandQueue{t: t}
+	cs.execCommand = queue.exec
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	logger, sink := newCharLogger()
+	sink.arm("Deleting old backup:", 1, cancel)
+	cs.logger = logger
+	backups := []*types.BackupMetadata{
+		{BackupFile: "node-backup-20240101-000000.tar.zst", Timestamp: time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)},
+		{BackupFile: "node-backup-20240102-000000.tar.zst", Timestamp: time.Date(2024, 1, 2, 0, 0, 0, 0, time.UTC)},
+	}
+	deleted, err := cs.deleteBatched(ctx, backups, 3)
+	if deleted != 0 || !errors.Is(err, context.Canceled) {
+		t.Fatalf("deleteBatched = %d, %v; want 0, context.Canceled", deleted, err)
+	}
+	if cs.retTally.notDeleted != 0 {
+		t.Fatalf("notDeleted = %d; the untouched backup must not be counted", cs.retTally.notDeleted)
+	}
+	if len(queue.calls) != 0 {
+		t.Fatalf("no rclone call expected, got %v", queue.calls)
+	}
+}
