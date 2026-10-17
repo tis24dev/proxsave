@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/tis24dev/proxsave/internal/logging"
+	"github.com/tis24dev/proxsave/internal/ui/theme"
 )
 
 var pbsAPIApplyGeteuid = os.Geteuid
@@ -401,17 +402,431 @@ func applyPBSS3CfgViaAPI(ctx context.Context, logger *logging.Logger, stageRoot 
 	})
 }
 
-func applyPBSDatastoreCfgViaAPI(ctx context.Context, logger *logging.Logger, stageRoot string, strict bool) error {
-	dsRaw, present, err := readStageFileOptional(stageRoot, "etc/proxmox-backup/datastore.cfg")
-	if err != nil {
-		return err
+// pbsDatastoreRestoreIncompleteError is a datastore.cfg apply in which one or more
+// datastores were not applied, or in Clean (1:1) mode a stale datastore was not
+// removed. applyPBSDatastoreCfgViaAPI has already logged the outcome of every
+// datastore and of the whole block, so the caller does not log it again and does
+// not run the file-based fallback over outcomes it has already reported. When a
+// stale datastore was not removed it also matches errPBSCleanRemoveIncomplete.
+type pbsDatastoreRestoreIncompleteError struct {
+	notApplied []string
+	notRemoved []string
+}
+
+func (e *pbsDatastoreRestoreIncompleteError) Error() string {
+	var parts []string
+	if len(e.notApplied) > 0 {
+		parts = append(parts, fmt.Sprintf("%d datastore(s) not applied [%s]", len(e.notApplied), strings.Join(e.notApplied, ", ")))
 	}
-	if !present {
+	if len(e.notRemoved) > 0 {
+		parts = append(parts, fmt.Sprintf("%d stale datastore(s) not removed [%s]", len(e.notRemoved), strings.Join(e.notRemoved, ", ")))
+	}
+	return "PBS datastore configuration incomplete: " + strings.Join(parts, "; ")
+}
+
+func (e *pbsDatastoreRestoreIncompleteError) Unwrap() error {
+	if len(e.notRemoved) > 0 {
+		return errPBSCleanRemoveIncomplete
+	}
+	return nil
+}
+
+// pbsDatastoreRestore carries the state of one datastore.cfg apply: what it
+// attempted and what it could not do, for the per-datastore and block outcomes.
+type pbsDatastoreRestore struct {
+	ctx        context.Context
+	logger     *logging.Logger
+	strict     bool
+	stageRoot  string
+	attempted  int
+	notApplied []string
+	notRemoved []string
+	// currentUnknown is set when the datastores configured on this PBS could not
+	// be read (Merge mode goes on with create/update).
+	currentUnknown bool
+}
+
+const pbsDatastoreRestoreDebug = "PBS datastore restore: "
+
+func (r *pbsDatastoreRestore) debug(format string, args ...any) {
+	r.logger.Debug(pbsDatastoreRestoreDebug+format, args...)
+}
+
+// pbsManagerErrorText is the failure of a proxmox-backup-manager call without the
+// command line runPBSManager puts in front of it, which the DEBUG line already names.
+func pbsManagerErrorText(err error) string {
+	if inner := errors.Unwrap(err); inner != nil {
+		return inner.Error()
+	}
+	return err.Error()
+}
+
+// pbsManagerErrorLine is the content of the "Error: " line proxmox-backup-manager
+// writes on a failure, without the usage text it may print after it. A failure
+// without such a line (the command could not run at all) gives the first line of
+// its text instead.
+func pbsManagerErrorLine(err error) string {
+	text := pbsManagerErrorText(err)
+	for _, line := range strings.Split(text, "\n") {
+		if idx := strings.Index(line, "Error: "); idx >= 0 {
+			return strings.TrimSpace(line[idx+len("Error: "):])
+		}
+	}
+	first, _, _ := strings.Cut(strings.TrimSpace(text), "\n")
+	return strings.TrimSpace(first)
+}
+
+func pbsDatastorePathOrNone(path string) string {
+	if strings.TrimSpace(path) == "" {
+		return "none"
+	}
+	return path
+}
+
+func (r *pbsDatastoreRestore) applied(name string) {
+	r.logger.Info("%s PBS datastore %s: applied", theme.SymbolSuccess, name)
+}
+
+func (r *pbsDatastoreRestore) failed(name, event string, args ...any) {
+	r.logger.Info(event, args...)
+	r.logger.Warning("%s PBS datastore %s: not applied", theme.SymbolWarning, name)
+	r.notApplied = append(r.notApplied, name)
+}
+
+// removeStale removes, in Clean (1:1) mode, a datastore configured on this PBS that
+// the backup does not have. PBS removes the jobs of the datastore with it.
+func (r *pbsDatastoreRestore) removeStale(name string) {
+	r.attempted++
+	r.debug("datastore=%s not in backup action=remove", name)
+	if _, err := runPBSManager(r.ctx, "datastore", "remove", name); err != nil {
+		r.debug("datastore=%s remove failed error=%q", name, pbsManagerErrorText(err))
+		r.logger.Info("Datastore %s is configured on this PBS but not present in the backup", name)
+		r.logger.Warning("%s PBS datastore %s: not removed", theme.SymbolWarning, name)
+		r.notRemoved = append(r.notRemoved, name)
+		return
+	}
+	r.debug("datastore=%s removed", name)
+	r.logger.Info("Datastore %s is configured on this PBS but not present in the backup", name)
+	r.logger.Info("%s PBS datastore %s: removed with its jobs", theme.SymbolSuccess, name)
+}
+
+// update applies the backup's options to a datastore that already exists on this
+// PBS, keeping its path. createErr is the refused create that led here, if any:
+// when the update is refused too, the event carries the create's error.
+func (r *pbsDatastoreRestore) update(name string, flags []string, keptPathEvent func(), createErr error) {
+	updateArgs := append([]string{"datastore", "update", name}, flags...)
+	if _, err := runPBSManager(r.ctx, updateArgs...); err != nil {
+		r.debug("datastore=%s update failed error=%q", name, pbsManagerErrorText(err))
+		rejected := err
+		if createErr != nil {
+			rejected = createErr
+		}
+		r.failed(name, "Datastore %s was rejected by PBS: \"%s\"", name, pbsManagerErrorLine(rejected))
+		return
+	}
+	r.debug("datastore=%s updated", name)
+	if keptPathEvent != nil {
+		keptPathEvent()
+	}
+	r.applied(name)
+}
+
+// create creates a datastore this PBS does not list; when PBS refuses the create
+// (it may exist after all, e.g. when the list could not be read) the datastore is
+// updated instead.
+func (r *pbsDatastoreRestore) create(name, path string, flags []string) {
+	createArgs := append([]string{"datastore", "create", name, path}, flags...)
+	if _, err := runPBSManager(r.ctx, createArgs...); err != nil {
+		r.debug("datastore=%s create failed error=%q action=update", name, pbsManagerErrorText(err))
+		r.update(name, flags, nil, err)
+		return
+	}
+	r.debug("datastore=%s created", name)
+	r.applied(name)
+}
+
+// move re-creates, in Clean (1:1) mode, a datastore whose path on this PBS differs
+// from the backup's: remove (without --destroy-data, so the chunks stay on disk),
+// then create at the backup's path. When that create fails the datastore is
+// re-created at its original path so it is not left deconfigured.
+func (r *pbsDatastoreRestore) move(name, currentPath, path string, flags []string) {
+	pathEvent := "Datastore %s is at %s on this PBS and at %s in the backup"
+	if _, err := runPBSManager(r.ctx, "datastore", "remove", name); err != nil {
+		r.debug("datastore=%s remove failed error=%q", name, pbsManagerErrorText(err))
+		r.failed(name, pathEvent, name, currentPath, path)
+		return
+	}
+	r.debug("datastore=%s removed", name)
+	createArgs := append([]string{"datastore", "create", name, path}, flags...)
+	if _, err := runPBSManager(r.ctx, createArgs...); err != nil {
+		r.debug("datastore=%s create failed path=%s error=%q action=rollback rollback_path=%s", name, path, pbsManagerErrorText(err), currentPath)
+		rollbackArgs := append([]string{"datastore", "create", name, currentPath}, flags...)
+		if _, rbErr := runPBSManager(r.ctx, rollbackArgs...); rbErr != nil {
+			r.debug("datastore=%s rollback failed path=%s error=%q", name, currentPath, pbsManagerErrorText(rbErr))
+			r.logger.Info(pathEvent, name, currentPath, path)
+			r.logger.Warning("%s PBS datastore %s: not configured, the data in %s is kept", theme.SymbolWarning, name, currentPath)
+			r.notApplied = append(r.notApplied, name)
+			return
+		}
+		r.debug("datastore=%s created path=%s (rollback)", name, currentPath)
+		r.failed(name, pathEvent, name, currentPath, path)
+		return
+	}
+	r.debug("datastore=%s created path=%s", name, path)
+	r.logger.Info("Datastore %s moved from %s to %s, the data in %s is not moved", name, currentPath, path, currentPath)
+	r.applied(name)
+}
+
+// apply restores one datastore of the backup.
+func (r *pbsDatastoreRestore) apply(name string, s proxmoxNotificationSection, currentPaths map[string]string) {
+	r.attempted++
+	path, entries, ok := popEntryValue(s.Entries, "path")
+	path = strings.TrimSpace(path)
+	if !ok || path == "" {
+		r.debug("datastore=%s backup_path=none action=skip", name)
+		r.failed(name, "Datastore %s has no path in the backup", name)
+		return
+	}
+	flags := buildProxmoxManagerFlags(entries)
+	currentPath, exists := currentPaths[name]
+	currentPath = strings.TrimSpace(currentPath)
+	if !exists {
+		unknown := "none"
+		if r.currentUnknown {
+			unknown = "unknown"
+		}
+		r.debug("datastore=%s backup_path=%s current_path=%s action=create", name, path, unknown)
+		r.create(name, path, flags)
+		return
+	}
+	if currentPath == "" || currentPath == path {
+		r.debug("datastore=%s backup_path=%s current_path=%s action=update", name, path, pbsDatastorePathOrNone(currentPath))
+		r.update(name, flags, nil, nil)
+		return
+	}
+	if r.strict {
+		r.debug("datastore=%s backup_path=%s current_path=%s path differs action=remove,create", name, path, currentPath)
+		r.move(name, currentPath, path, flags)
+		return
+	}
+	r.debug("datastore=%s backup_path=%s current_path=%s path differs action=update (merge keeps the current path)", name, path, currentPath)
+	r.update(name, flags, func() {
+		r.logger.Info("Datastore %s stays at %s, the backup has it at %s", name, currentPath, path)
+	}, nil)
+}
+
+// outcome logs the outcome of the whole block and returns the error the caller
+// records the restore warning from.
+func (r *pbsDatastoreRestore) outcome() error {
+	if r.attempted == 0 {
+		r.logger.Skip("PBS datastore configuration: nothing to restore")
 		return nil
 	}
-	sections, err := parseProxmoxNotificationSections(dsRaw)
+	failures := len(r.notApplied) + len(r.notRemoved)
+	switch failures {
+	case 0:
+		r.logger.Info("%s PBS datastore configuration: applied", theme.SymbolSuccess)
+		return nil
+	case r.attempted:
+		r.logger.Warning("%s PBS datastore configuration: not applied", theme.SymbolWarning)
+	default:
+		r.logger.Warning("%s PBS datastore configuration: partially applied", theme.SymbolWarning)
+	}
+	return &pbsDatastoreRestoreIncompleteError{notApplied: r.notApplied, notRemoved: r.notRemoved}
+}
+
+// pbsDatastoreRestoreNotAppliedError is a datastore.cfg apply that stopped before
+// any datastore through the API: the staged datastore.cfg could not be read, or in
+// Clean (1:1) mode the datastores configured on this PBS could not be read. In
+// Clean mode the block then wrote datastore.cfg from the backup file. The block
+// has already logged its outcome, a ⚠ one, so the caller neither logs it again nor
+// runs another fallback, and the restore ends with warnings.
+type pbsDatastoreRestoreNotAppliedError struct {
+	err error
+}
+
+func (e *pbsDatastoreRestoreNotAppliedError) Error() string { return e.err.Error() }
+
+func (e *pbsDatastoreRestoreNotAppliedError) Unwrap() error { return e.err }
+
+const (
+	pbsDatastoreEventBackupUnreadable  = "The datastore configuration in the backup could not be read"
+	pbsDatastoreEventCurrentUnreadable = "The datastores configured on this PBS could not be read"
+)
+
+// stopped logs a block that stopped before any datastore. In Clean (1:1) mode the
+// datastore.cfg of the backup is then written as a file, as before the block
+// existed; in Merge mode the configuration is not applied.
+func (r *pbsDatastoreRestore) stopped(event string, err error) error {
+	if r.strict {
+		return r.fileFallback(event, err)
+	}
+	r.logger.Info("%s", event)
+	return r.configNotApplied(err)
+}
+
+func (r *pbsDatastoreRestore) configNotApplied(err error) error {
+	r.logger.Warning("%s PBS datastore configuration: not applied", theme.SymbolWarning)
+	return &pbsDatastoreRestoreNotAppliedError{err: err}
+}
+
+// fileFallback writes /etc/proxmox-backup/datastore.cfg from the staged file and
+// logs, in the form of the block, what it wrote and the block outcome. event is
+// the block's own event; when the staged file cannot be read it carries the error.
+func (r *pbsDatastoreRestore) fileFallback(event string, cause error) error {
+	// The event of an unreadable backup file waits for the fallback's own read,
+	// so that it can carry the error; any other event comes first.
+	eventAfterRead := event == pbsDatastoreEventBackupUnreadable
+	if !eventAfterRead {
+		r.logger.Info("%s", event)
+	}
+	r.debug("fallback=file target=%s source=%s", "/etc/proxmox-backup/datastore.cfg", filepath.Join(r.stageRoot, "etc/proxmox-backup/datastore.cfg"))
+	res, err := runPBSDatastoreCfgFile(r.stageRoot)
+	if err != nil && res.readFailed {
+		r.debug("fallback read failed error=%q", err.Error())
+		r.logger.Info("%s: \"%s\"", pbsDatastoreEventBackupUnreadable, err.Error())
+		return r.configNotApplied(cause)
+	}
+	if eventAfterRead {
+		r.logger.Info("%s", event)
+	}
+	if res.fixed > 0 {
+		r.debug("fallback normalized malformed lines=%d (properties must be indented)", res.fixed)
+	}
+	if res.invalidReason != "" {
+		r.debug("fallback staged file invalid reason=%q action=rebuild source=pbs_datastore_inventory.json", res.invalidReason)
+		if res.recoveryFailed != "" {
+			r.debug("fallback rebuild failed error=%q", res.recoveryFailed)
+			r.logger.Info("The datastore configuration in the backup is damaged and could not be rebuilt")
+			return r.configNotApplied(cause)
+		}
+		if res.recoveredFixed > 0 {
+			r.debug("fallback rebuilt file normalized malformed lines=%d", res.recoveredFixed)
+		}
+		r.debug("fallback rebuilt from=%s", res.recoveredFrom)
+		r.logger.Info("The datastore configuration in the backup is damaged, it is rebuilt from the datastore inventory")
+	}
+	switch {
+	case err != nil:
+		r.debug("fallback write failed error=%q", err.Error())
+		r.logger.Info("The datastore configuration could not be written to this PBS: \"%s\"", err.Error())
+		return r.configNotApplied(cause)
+	case res.missing || res.noBlocks:
+		r.debug("fallback nothing to write")
+		r.logger.Skip("PBS datastore configuration: nothing to restore")
+		return nil
+	case res.emptied:
+		r.debug("fallback staged file empty, target removed")
+		r.logger.Warning("%s PBS datastore configuration: applied from the backup file", theme.SymbolWarning)
+		return &pbsDatastoreRestoreNotAppliedError{err: cause}
+	}
+
+	for _, it := range res.items {
+		path := filepath.Clean(strings.TrimSpace(it.path))
+		switch {
+		case it.deferReason != "":
+			r.debug("datastore=%s path=%s deferred reason=%q", it.name, path, it.deferReason)
+			if res.deferredErr != nil {
+				r.debug("datastore=%s deferred definition not saved error=%q", it.name, res.deferredErr.Error())
+				r.logger.Info("Datastore %s is not safe to apply now, its definition could not be saved: \"%s\"", it.name, res.deferredErr.Error())
+			} else {
+				r.logger.Info("Datastore %s is not safe to apply now, its definition is saved to %s", it.name, res.deferredPath)
+			}
+			r.logger.Warning("%s PBS datastore %s: not applied", theme.SymbolWarning, it.name)
+		case it.onRootFS:
+			r.debug("datastore=%s path=%s on root filesystem", it.name, path)
+			r.logger.Info("Datastore %s path %s is on the root filesystem", it.name, path)
+			r.logger.Warning("%s PBS datastore %s: applied without its mount", theme.SymbolWarning, it.name)
+		case it.preflight != "":
+			r.debug("datastore=%s preflight path=%s result=%s", it.name, path, it.preflight)
+			r.logger.Info("Datastore %s path %s: %s", it.name, path, it.preflight)
+			r.logger.Warning("%s PBS datastore %s: applied with a problem on its path", theme.SymbolWarning, it.name)
+		default:
+			r.applied(it.name)
+		}
+	}
+	r.debug("fallback written datastores=%d deferred=%d", res.written, res.deferredCount())
+	if res.noSafe {
+		r.logger.Info("The backup has no datastore that is safe to apply, the current configuration is kept")
+		return r.configNotApplied(cause)
+	}
+	r.logger.Warning("%s PBS datastore configuration: applied from the backup file", theme.SymbolWarning)
+	return &pbsDatastoreRestoreNotAppliedError{err: cause}
+}
+
+// readCurrent reads the datastores configured on this PBS, by name, with their
+// paths, or the error that kept them from being read.
+func (r *pbsDatastoreRestore) readCurrent() (currentPaths map[string]string, err error) {
+	type dsRow struct {
+		Name  string `json:"name"`
+		Store string `json:"store"`
+		ID    string `json:"id"`
+		Path  string `json:"path"`
+	}
+	r.debug("reading current datastores cmd=%q", "proxmox-backup-manager datastore list --output-format=json")
+	out, err := runPBSManager(r.ctx, "datastore", "list", "--output-format=json")
 	if err != nil {
-		return fmt.Errorf("parse staged datastore.cfg: %w", err)
+		r.debug("datastore list failed error=%q", pbsManagerErrorText(err))
+		return nil, fmt.Errorf("datastore list failed: %w", err)
+	}
+	var rows []dsRow
+	if err := json.Unmarshal(unwrapPBSJSONData(out), &rows); err != nil {
+		r.debug("datastore list returned unparseable JSON error=%q", err.Error())
+		return nil, fmt.Errorf("datastore list returned unparseable JSON: %w", err)
+	}
+	currentPaths = make(map[string]string, len(rows))
+	for _, row := range rows {
+		name := strings.TrimSpace(row.Name)
+		if name == "" {
+			name = strings.TrimSpace(row.Store)
+		}
+		if name == "" {
+			name = strings.TrimSpace(row.ID)
+		}
+		if name == "" {
+			continue
+		}
+		currentPaths[name] = strings.TrimSpace(row.Path)
+	}
+	return currentPaths, nil
+}
+
+func pbsSortedNames[V any](m map[string]V) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+func applyPBSDatastoreCfgViaAPI(ctx context.Context, logger *logging.Logger, stageRoot string, strict bool) error {
+	const stagedRel = "etc/proxmox-backup/datastore.cfg"
+	stagedPath := filepath.Join(stageRoot, stagedRel)
+	dsRaw, present, readErr := readStageFileOptional(stageRoot, stagedRel)
+	if readErr == nil && !present {
+		logger.Debug(pbsDatastoreRestoreDebug+"staged=%s not in the backup action=skip", stagedPath)
+		return nil
+	}
+
+	r := &pbsDatastoreRestore{ctx: ctx, logger: logger, strict: strict, stageRoot: stageRoot}
+	mode := "merge"
+	if strict {
+		mode = "clean"
+	}
+	logger.Info("Restoring PBS datastore configuration...")
+	r.debug("mode=%s staged=%s", mode, stagedPath)
+
+	var sections []proxmoxNotificationSection
+	if readErr == nil {
+		var parseErr error
+		if sections, parseErr = parseProxmoxNotificationSections(dsRaw); parseErr != nil {
+			r.debug("staged=%s parse failed error=%q", stagedPath, parseErr.Error())
+			return r.stopped(pbsDatastoreEventBackupUnreadable, fmt.Errorf("parse staged datastore.cfg: %w", parseErr))
+		}
+	} else {
+		r.debug("staged=%s read failed error=%q", stagedPath, readErr.Error())
+		return r.stopped(pbsDatastoreEventBackupUnreadable, readErr)
 	}
 
 	desired := make(map[string]proxmoxNotificationSection, len(sections))
@@ -422,134 +837,51 @@ func applyPBSDatastoreCfgViaAPI(ctx context.Context, logger *logging.Logger, sta
 		}
 		desired[name] = s
 	}
-
-	type dsRow struct {
-		Name  string `json:"name"`
-		Store string `json:"store"`
-		ID    string `json:"id"`
-		Path  string `json:"path"`
+	names := pbsSortedNames(desired)
+	r.debug("backup datastores=%d names=%s", len(names), strings.Join(names, ","))
+	logger.Info("  Datastores to restore: %d", len(names))
+	if len(names) > 0 {
+		logger.Info("  Names: %s", strings.Join(names, ", "))
 	}
-	currentPaths := make(map[string]string)
-	out, listErr := runPBSManager(ctx, "datastore", "list", "--output-format=json")
+
+	currentPaths, listErr := r.readCurrent()
 	if listErr != nil {
 		// The current PBS state is unknown. A strict Clean 1:1 restore cannot safely prune
-		// stale datastores without it, so fail closed rather than silently report an
-		// incomplete clean (P-08). Non-strict logs and continues: it never prunes anyway,
-		// and the create/update loop below self-heals an already-existing datastore.
+		// stale datastores without it, so it stops rather than report an incomplete
+		// clean (P-08). Merge never prunes, and create/update self-heals a datastore
+		// that exists after all.
 		if strict {
-			return fmt.Errorf("datastore list failed, cannot enforce Clean 1:1: %w", listErr)
+			return r.stopped(pbsDatastoreEventCurrentUnreadable, fmt.Errorf("%w, cannot enforce Clean 1:1", listErr))
 		}
-		logger.Warning("PBS API apply: datastore list failed (%v); create/update will proceed, stale datastores are not pruned", listErr)
-	} else {
-		var rows []dsRow
-		if err := json.Unmarshal(unwrapPBSJSONData(out), &rows); err != nil {
-			if strict {
-				return fmt.Errorf("datastore list returned unparseable JSON, cannot enforce Clean 1:1: %w", err)
-			}
-			logger.Warning("PBS API apply: datastore list JSON parse failed (%v); stale datastores are not pruned", err)
-		} else {
-			for _, row := range rows {
-				name := strings.TrimSpace(row.Name)
-				if name == "" {
-					name = strings.TrimSpace(row.Store)
-				}
-				if name == "" {
-					name = strings.TrimSpace(row.ID)
-				}
-				if name == "" {
-					continue
-				}
-				currentPaths[name] = strings.TrimSpace(row.Path)
-			}
-		}
+		logger.Info("%s", pbsDatastoreEventCurrentUnreadable)
+		r.currentUnknown = true
+		currentPaths = map[string]string{}
 	}
 
-	var removeFailures []string
-	if strict {
-		current := make([]string, 0, len(currentPaths))
-		for name := range currentPaths {
-			current = append(current, name)
-		}
-		sort.Strings(current)
+	current := pbsSortedNames(currentPaths)
+	if listErr == nil {
+		pairs := make([]string, 0, len(current)+1)
+		pairs = append(pairs, fmt.Sprintf("current datastores=%d", len(current)))
 		for _, name := range current {
-			if _, ok := desired[name]; ok {
-				continue
-			}
-			if _, err := runPBSManager(ctx, "datastore", "remove", name); err != nil {
-				logger.Warning("PBS API apply: datastore remove %s failed (continuing): %v", name, err)
-				removeFailures = append(removeFailures, name)
-			}
+			pairs = append(pairs, name+"="+pbsDatastorePathOrNone(currentPaths[name]))
 		}
+		r.debug("%s", strings.Join(pairs, " "))
 	}
-	// notApplied logs a datastore that could not be applied and records it; the
-	// apply goes on with the next one.
-	var applyFailures []string
-	notApplied := func(name string, err error) {
-		logger.Warning("PBS API apply: datastore %s failed (continuing): %v", name, err)
-		applyFailures = append(applyFailures, name)
+	for _, name := range current {
+		if _, ok := desired[name]; ok {
+			continue
+		}
+		if !strict {
+			r.debug("datastore=%s not in backup action=keep (merge)", name)
+			continue
+		}
+		r.removeStale(name)
 	}
 
-	names := make([]string, 0, len(desired))
-	for name := range desired {
-		names = append(names, name)
-	}
-	sort.Strings(names)
 	for _, name := range names {
-		s := desired[name]
-		path, entries, ok := popEntryValue(s.Entries, "path")
-		if !ok || strings.TrimSpace(path) == "" {
-			logger.Warning("PBS API apply: datastore %s missing path; skipping", name)
-			continue
-		}
-		flags := buildProxmoxManagerFlags(entries)
-		if currentPath, exists := currentPaths[name]; exists {
-			if currentPath != "" && strings.TrimSpace(currentPath) != strings.TrimSpace(path) {
-				if strict {
-					if _, err := runPBSManager(ctx, "datastore", "remove", name); err != nil {
-						notApplied(name, fmt.Errorf("path mismatch (%s != %s) and remove failed: %w", currentPath, path, err))
-						continue
-					}
-					createArgs := append([]string{"datastore", "create", name, path}, flags...)
-					if _, err := runPBSManager(ctx, createArgs...); err != nil {
-						// The datastore was removed but the create at the new path failed.
-						// Re-create it at its original path so it is not left deconfigured
-						// (remove has no --destroy-data, so the chunks are still on disk).
-						rollbackArgs := append([]string{"datastore", "create", name, currentPath}, flags...)
-						if _, rbErr := runPBSManager(ctx, rollbackArgs...); rbErr != nil {
-							notApplied(name, fmt.Errorf("path change to %s failed (%v) and rollback re-create at original path %s also failed (%v); the datastore is left removed, its data is still on disk and it must be re-created manually", path, err, currentPath, rbErr))
-							continue
-						}
-						notApplied(name, fmt.Errorf("path change to %s failed (%w); the datastore was restored to its original path %s", path, err, currentPath))
-					}
-					continue
-				}
-				logger.Warning("PBS API apply: datastore %s path mismatch (%s != %s); leaving path unchanged (use Clean 1:1 restore to enforce 1:1)", name, currentPath, path)
-			}
-
-			updateArgs := append([]string{"datastore", "update", name}, flags...)
-			if _, err := runPBSManager(ctx, updateArgs...); err != nil {
-				notApplied(name, fmt.Errorf("update failed: %w", err))
-			}
-			continue
-		}
-
-		createArgs := append([]string{"datastore", "create", name, path}, flags...)
-		if _, err := runPBSManager(ctx, createArgs...); err != nil {
-			updateArgs := append([]string{"datastore", "update", name}, flags...)
-			if _, upErr := runPBSManager(ctx, updateArgs...); upErr != nil {
-				notApplied(name, fmt.Errorf("%v (create) / %v (update)", err, upErr))
-			}
-		}
+		r.apply(name, desired[name], currentPaths)
 	}
-
-	if len(applyFailures) > 0 {
-		applyErr := fmt.Errorf("%d datastore object(s) not applied: [%s]", len(applyFailures), strings.Join(applyFailures, ", "))
-		if removeErr := pbsCleanRemoveResult("datastore", removeFailures); removeErr != nil {
-			return &pbsCleanIncompleteApplyError{err: applyErr, remove: removeErr}
-		}
-		return applyErr
-	}
-	return pbsCleanRemoveResult("datastore", removeFailures)
+	return r.outcome()
 }
 
 func applyPBSSyncCfgViaAPI(ctx context.Context, logger *logging.Logger, stageRoot string, strict bool) error {

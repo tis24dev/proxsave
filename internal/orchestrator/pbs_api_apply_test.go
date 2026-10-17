@@ -944,8 +944,11 @@ func TestApplyPBSDatastoreCfgViaAPI_StrictFullFlow(t *testing.T) {
 		"proxmox-backup-manager datastore create ds4 /p4 --comment c4": errors.New("already exists"),
 	}
 
-	if err := applyPBSDatastoreCfgViaAPI(context.Background(), logger, stageRoot, true); err != nil {
-		t.Fatalf("applyPBSDatastoreCfgViaAPI error: %v", err)
+	// ds2 has no path in the backup: it is the one datastore not applied.
+	err := applyPBSDatastoreCfgViaAPI(context.Background(), logger, stageRoot, true)
+	var incomplete *pbsDatastoreRestoreIncompleteError
+	if !errors.As(err, &incomplete) || len(incomplete.notApplied) != 1 || incomplete.notApplied[0] != "ds2" || len(incomplete.notRemoved) != 0 {
+		t.Fatalf("expected ds2 not applied, got: %v", err)
 	}
 
 	want := []string{
@@ -959,80 +962,6 @@ func TestApplyPBSDatastoreCfgViaAPI_StrictFullFlow(t *testing.T) {
 	}
 	if !reflect.DeepEqual(runner.calls, want) {
 		t.Fatalf("calls=%v want %v", runner.calls, want)
-	}
-}
-
-// P-09: when a strict path change removes a datastore and the create at the NEW
-// path fails, the datastore must be re-created at its ORIGINAL path so it is not
-// left deconfigured.
-func TestApplyPBSDatastoreCfgViaAPI_StrictRecreatesOriginalOnCreateFail(t *testing.T) {
-	stageRoot, fs, runner := setupPBSAPIApplyTestDeps(t)
-	logger := logging.New(types.LogLevelDebug, false)
-	var logBuf bytes.Buffer
-	logger.SetOutput(&logBuf)
-
-	writeStageFile(t, fs, stageRoot, "etc/proxmox-backup/datastore.cfg",
-		"datastore: ds1\n    path /new1\n    comment c1\n", 0o640)
-
-	runner.outputs = map[string][]byte{
-		"proxmox-backup-manager datastore list --output-format=json": []byte(`{"data":[{"name":"ds1","path":"/old1"}]}`),
-	}
-	// The create at the NEW path fails; the rollback create at the ORIGINAL path succeeds.
-	runner.errs = map[string]error{
-		"proxmox-backup-manager datastore create ds1 /new1 --comment c1": errors.New("boom"),
-	}
-
-	err := applyPBSDatastoreCfgViaAPI(context.Background(), logger, stageRoot, true)
-	if err == nil {
-		t.Fatal("expected an error reporting the failed path change")
-	}
-	// The datastore was re-created at its original path /old1.
-	foundRollback := false
-	for _, c := range runner.calls {
-		if c == "proxmox-backup-manager datastore create ds1 /old1 --comment c1" {
-			foundRollback = true
-		}
-	}
-	if !foundRollback {
-		t.Fatalf("expected a re-create at the original path /old1, calls=%v", runner.calls)
-	}
-	if err.Error() != "1 datastore object(s) not applied: [ds1]" {
-		t.Fatalf("expected the not-applied summary, got: %v", err)
-	}
-	if !strings.Contains(logBuf.String(), "the datastore was restored to its original path /old1") {
-		t.Fatalf("the warning must report restoration to the original path, log: %s", logBuf.String())
-	}
-}
-
-// If BOTH the new-path create and the original-path rollback create fail, the
-// error must report both and that the datastore is left removed.
-func TestApplyPBSDatastoreCfgViaAPI_StrictReportsBothCreateFailures(t *testing.T) {
-	stageRoot, fs, runner := setupPBSAPIApplyTestDeps(t)
-	logger := logging.New(types.LogLevelDebug, false)
-	var logBuf bytes.Buffer
-	logger.SetOutput(&logBuf)
-
-	writeStageFile(t, fs, stageRoot, "etc/proxmox-backup/datastore.cfg",
-		"datastore: ds1\n    path /new1\n    comment c1\n", 0o640)
-
-	runner.outputs = map[string][]byte{
-		"proxmox-backup-manager datastore list --output-format=json": []byte(`{"data":[{"name":"ds1","path":"/old1"}]}`),
-	}
-	runner.errs = map[string]error{
-		"proxmox-backup-manager datastore create ds1 /new1 --comment c1": errors.New("boom-new"),
-		"proxmox-backup-manager datastore create ds1 /old1 --comment c1": errors.New("boom-old"),
-	}
-
-	err := applyPBSDatastoreCfgViaAPI(context.Background(), logger, stageRoot, true)
-	if err == nil {
-		t.Fatal("expected an error when both creates fail")
-	}
-	if err.Error() != "1 datastore object(s) not applied: [ds1]" {
-		t.Fatalf("expected the not-applied summary, got: %v", err)
-	}
-	msg := logBuf.String()
-	if !strings.Contains(msg, "boom-new") || !strings.Contains(msg, "boom-old") || !strings.Contains(msg, "the datastore is left removed") {
-		t.Fatalf("the warning must report both create failures, log: %s", msg)
 	}
 }
 
@@ -1174,129 +1103,6 @@ func TestApplyPBSDatastoreCfgViaAPI_CurrentPathsFallbacksAndStrictRemoveWarn(t *
 	}
 	if !reflect.DeepEqual(runner.calls, want) {
 		t.Fatalf("calls=%v want %v", runner.calls, want)
-	}
-}
-
-func TestApplyPBSDatastoreCfgViaAPI_StrictPathMismatchRemoveFails(t *testing.T) {
-	stageRoot, fs, runner := setupPBSAPIApplyTestDeps(t)
-	logger := logging.New(types.LogLevelDebug, false)
-	var logBuf bytes.Buffer
-	logger.SetOutput(&logBuf)
-
-	writeStageFile(t, fs, stageRoot, "etc/proxmox-backup/datastore.cfg",
-		"datastore: ds1\n"+
-			"    path /new\n"+
-			"    comment c1\n",
-		0o640,
-	)
-
-	runner.outputs = map[string][]byte{
-		"proxmox-backup-manager datastore list --output-format=json": []byte(`{"data":[{"name":"ds1","path":"/old"}]}`),
-	}
-	runner.errs = map[string]error{
-		"proxmox-backup-manager datastore remove ds1": errors.New("cannot remove ds1"),
-	}
-
-	err := applyPBSDatastoreCfgViaAPI(context.Background(), logger, stageRoot, true)
-	if err == nil {
-		t.Fatalf("expected error")
-	}
-	if err.Error() != "1 datastore object(s) not applied: [ds1]" {
-		t.Fatalf("expected the not-applied summary, got: %v", err)
-	}
-	if !strings.Contains(logBuf.String(), "path mismatch") || !strings.Contains(logBuf.String(), "remove failed") {
-		t.Fatalf("unexpected warning, log: %s", logBuf.String())
-	}
-}
-
-func TestApplyPBSDatastoreCfgViaAPI_StrictPathMismatchRecreateFails(t *testing.T) {
-	stageRoot, fs, runner := setupPBSAPIApplyTestDeps(t)
-	logger := logging.New(types.LogLevelDebug, false)
-	var logBuf bytes.Buffer
-	logger.SetOutput(&logBuf)
-
-	writeStageFile(t, fs, stageRoot, "etc/proxmox-backup/datastore.cfg",
-		"datastore: ds1\n"+
-			"    path /new\n"+
-			"    comment c1\n",
-		0o640,
-	)
-
-	runner.outputs = map[string][]byte{
-		"proxmox-backup-manager datastore list --output-format=json": []byte(`{"data":[{"name":"ds1","path":"/old"}]}`),
-	}
-	runner.errs = map[string]error{
-		"proxmox-backup-manager datastore create ds1 /new --comment c1": errors.New("create failed"),
-	}
-
-	err := applyPBSDatastoreCfgViaAPI(context.Background(), logger, stageRoot, true)
-	if err == nil {
-		t.Fatalf("expected error")
-	}
-	// The create at the new path fails but the rollback re-create at the original
-	// path succeeds (only the /new create is stubbed to fail), so the datastore is
-	// restored rather than left deconfigured (P-09).
-	if err.Error() != "1 datastore object(s) not applied: [ds1]" {
-		t.Fatalf("expected the not-applied summary, got: %v", err)
-	}
-	if !strings.Contains(logBuf.String(), "the datastore was restored to its original path /old") {
-		t.Fatalf("the warning must report restoration to the original path, log: %s", logBuf.String())
-	}
-}
-
-func TestApplyPBSDatastoreCfgViaAPI_UpdateFails(t *testing.T) {
-	stageRoot, fs, runner := setupPBSAPIApplyTestDeps(t)
-	logger := logging.New(types.LogLevelDebug, false)
-	var logBuf bytes.Buffer
-	logger.SetOutput(&logBuf)
-
-	writeStageFile(t, fs, stageRoot, "etc/proxmox-backup/datastore.cfg",
-		"datastore: ds1\n"+
-			"    path /p1\n"+
-			"    comment c1\n",
-		0o640,
-	)
-
-	runner.outputs = map[string][]byte{
-		"proxmox-backup-manager datastore list --output-format=json": []byte(`{"data":[{"name":"ds1","path":"/p1"}]}`),
-	}
-	runner.errs = map[string]error{
-		"proxmox-backup-manager datastore update ds1 --comment c1": errors.New("update failed"),
-	}
-
-	err := applyPBSDatastoreCfgViaAPI(context.Background(), logger, stageRoot, false)
-	if err == nil || err.Error() != "1 datastore object(s) not applied: [ds1]" {
-		t.Fatalf("expected the not-applied summary, got: %v", err)
-	}
-	if !strings.Contains(logBuf.String(), "PBS API apply: datastore ds1 failed (continuing): update failed: ") {
-		t.Fatalf("expected the update failure in the warning, log: %s", logBuf.String())
-	}
-}
-
-func TestApplyPBSDatastoreCfgViaAPI_CreateAndUpdateFail(t *testing.T) {
-	stageRoot, fs, runner := setupPBSAPIApplyTestDeps(t)
-	logger := logging.New(types.LogLevelDebug, false)
-	var logBuf bytes.Buffer
-	logger.SetOutput(&logBuf)
-
-	writeStageFile(t, fs, stageRoot, "etc/proxmox-backup/datastore.cfg",
-		"datastore: ds1\n"+
-			"    path /p1\n"+
-			"    comment c1\n",
-		0o640,
-	)
-
-	runner.errs = map[string]error{
-		"proxmox-backup-manager datastore create ds1 /p1 --comment c1": errors.New("create failed"),
-		"proxmox-backup-manager datastore update ds1 --comment c1":     errors.New("update failed"),
-	}
-
-	err := applyPBSDatastoreCfgViaAPI(context.Background(), logger, stageRoot, false)
-	if err == nil || err.Error() != "1 datastore object(s) not applied: [ds1]" {
-		t.Fatalf("expected the not-applied summary, got: %v", err)
-	}
-	if !strings.Contains(logBuf.String(), "create failed") || !strings.Contains(logBuf.String(), "update failed") {
-		t.Fatalf("expected create/update errors in the warning, log: %s", logBuf.String())
 	}
 }
 

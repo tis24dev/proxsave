@@ -79,6 +79,10 @@ func maybeApplyPBSConfigsFromStage(ctx context.Context, logger *logging.Logger, 
 	// so the caller reports the restore "with warnings" instead of a clean
 	// success rather than silently swallowing failed applies (BH-003).
 	var failedItems []string
+	// datastoreOutcomeLogged is a datastore.cfg API apply that left datastores not
+	// applied or not removed, whose outcomes its block already logged. It is not
+	// in failedItems, so the step summary does not repeat it.
+	var datastoreOutcomeLogged error
 
 	if plan.HasCategoryID("pbs_host") {
 		// Always restore file-only configs (no stable API coverage yet).
@@ -146,13 +150,28 @@ func maybeApplyPBSConfigsFromStage(ctx context.Context, logger *logging.Logger, 
 				}
 			}
 			if err := pbsStagedApplyDatastoreCfgViaAPIFn(ctx, logger, stageRoot, strict); err != nil {
-				logger.Warning("PBS API apply: datastore.cfg failed: %v", err)
-				if errors.Is(err, errPBSCleanRemoveIncomplete) {
+				var incomplete *pbsDatastoreRestoreIncompleteError
+				var stopped *pbsDatastoreRestoreNotAppliedError
+				switch {
+				case errors.As(err, &stopped):
+					// The block stopped before any datastore through the API, ran the
+					// file-based fallback itself in Clean mode, and logged its outcome.
+					datastoreOutcomeLogged = err
+				case errors.As(err, &incomplete):
+					// The datastore block already logged the outcome of every datastore
+					// and its own: no line here, no file fallback over those outcomes,
+					// and the restore still ends with warnings.
+					datastoreOutcomeLogged = err
+				case errors.Is(err, errPBSCleanRemoveIncomplete):
+					logger.Warning("PBS API apply: datastore.cfg failed: %v", err)
 					failedItems = append(failedItems, "datastore.cfg (clean 1:1 incomplete)")
-				} else if !pbsFallbackApplied(logger, "datastore.cfg", allowFileFallback, func() error {
-					return applyPBSDatastoreCfgFromStage(ctx, logger, stageRoot)
-				}) {
-					failedItems = append(failedItems, "datastore.cfg")
+				default:
+					logger.Warning("PBS API apply: datastore.cfg failed: %v", err)
+					if !pbsFallbackApplied(logger, "datastore.cfg", allowFileFallback, func() error {
+						return applyPBSDatastoreCfgFromStage(ctx, logger, stageRoot)
+					}) {
+						failedItems = append(failedItems, "datastore.cfg")
+					}
 				}
 			}
 		} else if allowFileFallback {
@@ -243,6 +262,9 @@ func maybeApplyPBSConfigsFromStage(ctx context.Context, logger *logging.Logger, 
 	if len(failedItems) > 0 {
 		return fmt.Errorf("%d PBS config item(s) failed to apply: %s", len(failedItems), strings.Join(failedItems, ", "))
 	}
+	if datastoreOutcomeLogged != nil {
+		return &stageApplyOutcomeLoggedError{err: datastoreOutcomeLogged}
+	}
 	return nil
 }
 
@@ -305,91 +327,144 @@ type pbsDatastoreBlock struct {
 	Lines []string
 }
 
-func applyPBSDatastoreCfgFromStage(ctx context.Context, logger *logging.Logger, stageRoot string) (err error) {
-	_ = ctx // reserved for future validation hooks
+// pbsDatastoreFileItem is one datastore of the staged datastore.cfg as the
+// file-based apply judged it.
+type pbsDatastoreFileItem struct {
+	name string
+	path string
+	// deferReason is set when the datastore is not safe to apply now: its
+	// definition is saved aside instead of written.
+	deferReason string
+	// onRootFS: the path resolves to the root filesystem (its mount is missing?);
+	// the definition is written anyway.
+	onRootFS bool
+	// preflight is a problem found on the path of a datastore that has data; the
+	// definition is written anyway.
+	preflight string
+}
 
-	done := logging.DebugStart(logger, "pbs staged apply datastore.cfg", "stage=%s", stageRoot)
-	defer func() { done(err) }()
+// pbsDatastoreFileResult is what the file-based datastore.cfg apply found and did,
+// for the caller to log in its own form.
+type pbsDatastoreFileResult struct {
+	stagePath string
+	destPath  string
+	// missing: no datastore.cfg in the staging directory, nothing done.
+	missing bool
+	// emptied: the staged datastore.cfg is empty, the target file was removed.
+	emptied bool
+	// fixed is the number of malformed lines normalized in the staged file.
+	fixed int
+	// invalidReason is set when the staged file looked invalid and the
+	// configuration was rebuilt from pbs_datastore_inventory.json.
+	invalidReason  string
+	recoveredFrom  string
+	recoveredFixed int
+	// recoveryFailed is set when that rebuild failed; the current configuration
+	// is kept and nothing is written.
+	recoveryFailed string
+	// noBlocks: the staged file has no datastore definitions, nothing done.
+	noBlocks bool
+	items    []pbsDatastoreFileItem
+	// deferredPath is where the deferred definitions were saved, deferredErr why
+	// they could not be.
+	deferredPath string
+	deferredErr  error
+	// readFailed: the staged file could not be read or parsed.
+	readFailed bool
+	// noSafe: every definition was deferred, the current configuration is kept.
+	noSafe  bool
+	written int
+}
 
-	stagePath := filepath.Join(stageRoot, "etc/proxmox-backup/datastore.cfg")
-	data, err := restoreFS.ReadFile(stagePath)
+func (r pbsDatastoreFileResult) deferredCount() int {
+	n := 0
+	for _, it := range r.items {
+		if it.deferReason != "" {
+			n++
+		}
+	}
+	return n
+}
+
+// runPBSDatastoreCfgFile writes /etc/proxmox-backup/datastore.cfg from the staged
+// datastore.cfg, without logging: the datastores whose path is not safe to apply
+// now are saved aside, a staged file that looks invalid is rebuilt from the
+// datastore inventory.
+func runPBSDatastoreCfgFile(stageRoot string) (res pbsDatastoreFileResult, err error) {
+	res.stagePath = filepath.Join(stageRoot, "etc/proxmox-backup/datastore.cfg")
+	res.destPath = "/etc/proxmox-backup/datastore.cfg"
+	data, err := restoreFS.ReadFile(res.stagePath)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			logging.DebugStep(logger, "pbs staged apply datastore.cfg", "Skipped: datastore.cfg not present in staging directory")
-			return nil
+			res.missing = true
+			return res, nil
 		}
-		return fmt.Errorf("read staged datastore.cfg: %w", err)
+		res.readFailed = true
+		return res, fmt.Errorf("read staged datastore.cfg: %w", err)
 	}
 
 	raw := string(data)
 	if strings.TrimSpace(raw) == "" {
-		logging.DebugStep(logger, "pbs staged apply datastore.cfg", "Staged datastore.cfg is empty; removing target file to avoid PBS parse errors")
-		return removeIfExists("/etc/proxmox-backup/datastore.cfg")
+		res.emptied = true
+		return res, removeIfExists(res.destPath)
 	}
 
 	normalized, fixed := normalizePBSDatastoreCfgContent(raw)
-	if fixed > 0 {
-		logger.Warning("PBS staged apply: datastore.cfg normalization fixed %d malformed line(s) (properties must be indented)", fixed)
-	}
-
+	res.fixed = fixed
 	blocks, err := parsePBSDatastoreCfgBlocks(normalized)
 	if err != nil {
-		return err
+		res.readFailed = true
+		return res, err
 	}
 	if len(blocks) == 0 {
-		logging.DebugStep(logger, "pbs staged apply datastore.cfg", "No datastore blocks detected; skipping apply")
-		return nil
+		res.noBlocks = true
+		return res, nil
 	}
 
 	if reason := detectPBSDatastoreCfgDuplicateKeys(blocks); reason != "" {
-		logger.Warning("PBS staged apply: staged datastore.cfg looks invalid (%s); attempting recovery from pbs_datastore_inventory.json", reason)
-		if recovered, src, recErr := loadPBSDatastoreCfgFromInventory(stageRoot); recErr != nil {
-			logger.Warning("PBS staged apply: unable to recover datastore.cfg from inventory (%v); leaving current configuration unchanged", recErr)
-			return nil
-		} else if strings.TrimSpace(recovered) == "" {
-			logger.Warning("PBS staged apply: recovered datastore.cfg from %s is empty; leaving current configuration unchanged", src)
-			return nil
-		} else {
-			normalized, fixed = normalizePBSDatastoreCfgContent(recovered)
-			if fixed > 0 {
-				logger.Warning("PBS staged apply: recovered datastore.cfg normalization fixed %d malformed line(s) (properties must be indented)", fixed)
-			}
-			blocks, err = parsePBSDatastoreCfgBlocks(normalized)
-			if err != nil {
-				logger.Warning("PBS staged apply: recovered datastore.cfg from %s is still invalid (%v); leaving current configuration unchanged", src, err)
-				return nil
-			}
-			if reason := detectPBSDatastoreCfgDuplicateKeys(blocks); reason != "" {
-				logger.Warning("PBS staged apply: recovered datastore.cfg from %s still looks invalid (%s); leaving current configuration unchanged", src, reason)
-				return nil
-			}
-			logger.Info("PBS staged apply: datastore.cfg recovered from %s", src)
+		res.invalidReason = reason
+		recovered, src, recErr := loadPBSDatastoreCfgFromInventory(stageRoot)
+		switch {
+		case recErr != nil:
+			res.recoveryFailed = fmt.Sprintf("unable to recover datastore.cfg from inventory (%v)", recErr)
+			return res, nil
+		case strings.TrimSpace(recovered) == "":
+			res.recoveryFailed = fmt.Sprintf("recovered datastore.cfg from %s is empty", src)
+			return res, nil
 		}
+		normalized, res.recoveredFixed = normalizePBSDatastoreCfgContent(recovered)
+		blocks, err = parsePBSDatastoreCfgBlocks(normalized)
+		if err != nil {
+			res.recoveryFailed = fmt.Sprintf("recovered datastore.cfg from %s is still invalid (%v)", src, err)
+			return res, nil
+		}
+		if reason := detectPBSDatastoreCfgDuplicateKeys(blocks); reason != "" {
+			res.recoveryFailed = fmt.Sprintf("recovered datastore.cfg from %s still looks invalid (%s)", src, reason)
+			return res, nil
+		}
+		res.recoveredFrom = src
 	}
 
-	var applyBlocks []pbsDatastoreBlock
-	var deferred []pbsDatastoreBlock
+	var applyBlocks, deferred []pbsDatastoreBlock
 	for _, b := range blocks {
-		ok, reason := shouldApplyPBSDatastoreBlock(b, logger)
+		item := pbsDatastoreFileItem{name: b.Name, path: b.Path}
+		ok, reason, onRootFS, preflight := inspectPBSDatastoreBlock(b)
+		item.onRootFS, item.preflight = onRootFS, preflight
 		if ok {
 			applyBlocks = append(applyBlocks, b)
 		} else {
-			logging.DebugStep(logger, "pbs staged apply datastore.cfg", "Deferring datastore %s (path=%s): %s", b.Name, b.Path, reason)
+			item.deferReason = reason
 			deferred = append(deferred, b)
 		}
+		res.items = append(res.items, item)
 	}
 
 	if len(deferred) > 0 {
-		if path, err := writeDeferredPBSDatastoreCfg(deferred); err != nil {
-			logger.Debug("Failed to write deferred datastore.cfg: %v", err)
-		} else {
-			logger.Warning("PBS staged apply: deferred %d datastore definition(s); saved to %s", len(deferred), path)
-		}
+		res.deferredPath, res.deferredErr = writeDeferredPBSDatastoreCfg(deferred)
 	}
-
 	if len(applyBlocks) == 0 {
-		logger.Warning("PBS staged apply: datastore.cfg contains no safe datastore definitions to apply; leaving current configuration unchanged")
-		return nil
+		res.noSafe = true
+		return res, nil
 	}
 
 	var out strings.Builder
@@ -400,13 +475,72 @@ func applyPBSDatastoreCfgFromStage(ctx context.Context, logger *logging.Logger, 
 		out.WriteString(strings.TrimRight(strings.Join(b.Lines, "\n"), "\n"))
 		out.WriteString("\n")
 	}
-
-	destPath := "/etc/proxmox-backup/datastore.cfg"
-	if err := writeFileAtomic(destPath, []byte(out.String()), 0o640); err != nil {
-		return fmt.Errorf("write %s: %w", destPath, err)
+	if err := writeFileAtomic(res.destPath, []byte(out.String()), 0o640); err != nil {
+		return res, fmt.Errorf("write %s: %w", res.destPath, err)
 	}
+	res.written = len(applyBlocks)
+	return res, nil
+}
 
-	logger.Info("PBS staged apply: datastore.cfg applied (%d datastore(s)); deferred=%d", len(applyBlocks), len(deferred))
+// applyPBSDatastoreCfgFromStage is the file-based datastore.cfg apply used when the
+// PBS API is unavailable, with its own log lines.
+func applyPBSDatastoreCfgFromStage(ctx context.Context, logger *logging.Logger, stageRoot string) (err error) {
+	_ = ctx // reserved for future validation hooks
+
+	done := logging.DebugStart(logger, "pbs staged apply datastore.cfg", "stage=%s", stageRoot)
+	defer func() { done(err) }()
+
+	res, err := runPBSDatastoreCfgFile(stageRoot)
+	switch {
+	case res.missing:
+		logging.DebugStep(logger, "pbs staged apply datastore.cfg", "Skipped: datastore.cfg not present in staging directory")
+		return err
+	case res.emptied:
+		logging.DebugStep(logger, "pbs staged apply datastore.cfg", "Staged datastore.cfg is empty; removing target file to avoid PBS parse errors")
+		return err
+	}
+	if res.fixed > 0 {
+		logger.Warning("PBS staged apply: datastore.cfg normalization fixed %d malformed line(s) (properties must be indented)", res.fixed)
+	}
+	if res.noBlocks {
+		logging.DebugStep(logger, "pbs staged apply datastore.cfg", "No datastore blocks detected; skipping apply")
+		return err
+	}
+	if res.invalidReason != "" {
+		logger.Warning("PBS staged apply: staged datastore.cfg looks invalid (%s); attempting recovery from pbs_datastore_inventory.json", res.invalidReason)
+		if res.recoveryFailed != "" {
+			logger.Warning("PBS staged apply: %s; leaving current configuration unchanged", res.recoveryFailed)
+			return err
+		}
+		if res.recoveredFixed > 0 {
+			logger.Warning("PBS staged apply: recovered datastore.cfg normalization fixed %d malformed line(s) (properties must be indented)", res.recoveredFixed)
+		}
+		logger.Info("PBS staged apply: datastore.cfg recovered from %s", res.recoveredFrom)
+	}
+	for _, it := range res.items {
+		if it.onRootFS {
+			logger.Warning("PBS staged apply: datastore %s path %s resolves to root filesystem (mount missing?), applying definition anyway", it.name, filepath.Clean(strings.TrimSpace(it.path)))
+		}
+		if it.preflight != "" {
+			logger.Warning("PBS datastore preflight: %s", it.preflight)
+		}
+		if it.deferReason != "" {
+			logging.DebugStep(logger, "pbs staged apply datastore.cfg", "Deferring datastore %s (path=%s): %s", it.name, it.path, it.deferReason)
+		}
+	}
+	if res.deferredErr != nil {
+		logger.Debug("Failed to write deferred datastore.cfg: %v", res.deferredErr)
+	} else if res.deferredPath != "" {
+		logger.Warning("PBS staged apply: deferred %d datastore definition(s); saved to %s", res.deferredCount(), res.deferredPath)
+	}
+	if res.noSafe {
+		logger.Warning("PBS staged apply: datastore.cfg contains no safe datastore definitions to apply; leaving current configuration unchanged")
+		return err
+	}
+	if err != nil {
+		return err
+	}
+	logger.Info("PBS staged apply: datastore.cfg applied (%d datastore(s)); deferred=%d", res.written, res.deferredCount())
 	return nil
 }
 
@@ -559,45 +693,55 @@ func parsePBSDatastoreCfgBlocks(content string) ([]pbsDatastoreBlock, error) {
 }
 
 func shouldApplyPBSDatastoreBlock(block pbsDatastoreBlock, logger *logging.Logger) (bool, string) {
+	ok, reason, onRootFS, preflight := inspectPBSDatastoreBlock(block)
+	if logger != nil {
+		if onRootFS {
+			logger.Warning("PBS staged apply: datastore %s path %s resolves to root filesystem (mount missing?), applying definition anyway", block.Name, filepath.Clean(strings.TrimSpace(block.Path)))
+		}
+		if preflight != "" {
+			logger.Warning("PBS datastore preflight: %s", preflight)
+		}
+	}
+	return ok, reason
+}
+
+// inspectPBSDatastoreBlock decides whether a staged datastore definition is safe to
+// write now. onRootFS reports a path that resolves to the root filesystem (its mount
+// may be offline), preflight a problem found on the path of a datastore with data;
+// both are written anyway.
+func inspectPBSDatastoreBlock(block pbsDatastoreBlock) (ok bool, reason string, onRootFS bool, preflight string) {
 	path := filepath.Clean(strings.TrimSpace(block.Path))
 	if path == "" || path == "." || path == string(os.PathSeparator) {
-		return false, "invalid or missing datastore path"
+		return false, "invalid or missing datastore path", false, ""
 	}
 
 	hasData, dataErr := pbsDatastoreHasData(path)
 	if dataErr != nil {
-		return false, fmt.Sprintf("datastore path inspection failed: %v", dataErr)
+		return false, fmt.Sprintf("datastore path inspection failed: %v", dataErr), false, ""
 	}
 
-	onRootFS, _, devErr := isPathOnRootFilesystem(path)
+	rootFS, _, devErr := isPathOnRootFilesystem(path)
 	if devErr != nil {
-		return false, fmt.Sprintf("filesystem identity check failed: %v", devErr)
+		return false, fmt.Sprintf("filesystem identity check failed: %v", devErr), false, ""
 	}
-	if onRootFS && isSuspiciousDatastoreMountLocation(path) && !hasData {
-		// On fresh restores the mount backing this path may be offline/not mounted yet.
-		// We still apply the datastore definition 1:1 so PBS shows the datastore as unavailable
-		// rather than silently dropping it from datastore.cfg.
-		if logger != nil {
-			logger.Warning("PBS staged apply: datastore %s path %s resolves to root filesystem (mount missing?), applying definition anyway", block.Name, path)
-		}
-	}
+	// On fresh restores the mount backing this path may be offline/not mounted yet.
+	// The datastore definition is still applied 1:1 so PBS shows the datastore as
+	// unavailable rather than silently dropping it from datastore.cfg.
+	onRootFS = rootFS && isSuspiciousDatastoreMountLocation(path) && !hasData
 
 	if hasData {
-		if warn := validatePBSDatastoreReadOnly(path); warn != "" && logger != nil {
-			logger.Warning("PBS datastore preflight: %s", warn)
-		}
-		return true, ""
+		return true, "", onRootFS, validatePBSDatastoreReadOnly(path)
 	}
 
 	unexpected, err := pbsDatastoreHasUnexpectedEntries(path)
 	if err != nil {
-		return false, fmt.Sprintf("failed to inspect datastore directory: %v", err)
+		return false, fmt.Sprintf("failed to inspect datastore directory: %v", err), onRootFS, ""
 	}
 	if unexpected {
-		return false, "datastore directory is not empty (unexpected entries present)"
+		return false, "datastore directory is not empty (unexpected entries present)", onRootFS, ""
 	}
 
-	return true, ""
+	return true, "", onRootFS, ""
 }
 
 func writeDeferredPBSDatastoreCfg(blocks []pbsDatastoreBlock) (string, error) {

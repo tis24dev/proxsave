@@ -562,9 +562,9 @@ func TestMaybeApplyPBSConfigsFromStage_CleanRemoveRefusedThenCreateFails_NoFallb
 // TestMaybeApplyPBSConfigsFromStage_CleanDatastoreRemoveRefusedThenApplyFails_NoFallback
 // runs the real datastore.cfg API apply in Clean (1:1) mode: PBS refuses to remove a
 // stale datastore, then the staged datastore fails on each of the paths that leave it
-// not applied. The refused remove must still reach the caller as a clean 1:1
-// incomplete item, each failure keeps its text in its own warning, and the file-based
-// fallback must NOT run (it would drop the datastore PBS refused to remove).
+// not applied. Both reach the caller as outcomes the datastore block already logged,
+// so the restore ends with warnings, and the file-based fallback must NOT run (it
+// would drop the datastore PBS refused to remove).
 func TestMaybeApplyPBSConfigsFromStage_CleanDatastoreRemoveRefusedThenApplyFails_NoFallback(t *testing.T) {
 	const (
 		listCmd       = "proxmox-backup-manager datastore list --output-format=json"
@@ -583,11 +583,10 @@ func TestMaybeApplyPBSConfigsFromStage_CleanDatastoreRemoveRefusedThenApplyFails
 	errRollback := errors.New("rollback refused")
 
 	cases := []struct {
-		name    string
-		rows    func(newPath string) string
-		errs    func(newPath string) map[string]error
-		calls   func(newPath string) []string
-		wantErr func(newPath string) string
+		name  string
+		rows  func(newPath string) string
+		errs  func(newPath string) map[string]error
+		calls func(newPath string) []string
 	}{
 		{
 			name: "create-and-update-fail",
@@ -596,36 +595,24 @@ func TestMaybeApplyPBSConfigsFromStage_CleanDatastoreRemoveRefusedThenApplyFails
 				return map[string]error{createCmd(p): errCreate, updateCmd: errUpdate}
 			},
 			calls: func(p string) []string { return []string{createCmd(p), updateCmd} },
-			wantErr: func(p string) string {
-				return createCmd(p) + " failed: create refused (create) / " + updateCmd + " failed: update refused (update)"
-			},
 		},
 		{
 			name:  "update-fails",
 			rows:  func(p string) string { return "[" + staleRow + `,{"name":"ds1","path":"` + p + `"}]` },
 			errs:  func(string) map[string]error { return map[string]error{updateCmd: errUpdate} },
 			calls: func(string) []string { return []string{updateCmd} },
-			wantErr: func(string) string {
-				return "update failed: " + updateCmd + " failed: update refused"
-			},
 		},
 		{
 			name:  "path-mismatch-remove-fails",
 			rows:  func(string) string { return "[" + staleRow + "," + ds1OldPathRow + "]" },
 			errs:  func(string) map[string]error { return map[string]error{removeDS1: errRemoveDS1} },
 			calls: func(string) []string { return []string{removeDS1} },
-			wantErr: func(p string) string {
-				return "path mismatch (/old-ds1 != " + p + ") and remove failed: " + removeDS1 + " failed: remove refused"
-			},
 		},
 		{
 			name:  "path-change-create-fails-rollback-ok",
 			rows:  func(string) string { return "[" + staleRow + "," + ds1OldPathRow + "]" },
 			errs:  func(p string) map[string]error { return map[string]error{createCmd(p): errCreate} },
 			calls: func(p string) []string { return []string{removeDS1, createCmd(p), rollbackCmd} },
-			wantErr: func(p string) string {
-				return "path change to " + p + " failed (" + createCmd(p) + " failed: create refused); the datastore was restored to its original path /old-ds1"
-			},
 		},
 		{
 			name: "path-change-create-and-rollback-fail",
@@ -634,9 +621,6 @@ func TestMaybeApplyPBSConfigsFromStage_CleanDatastoreRemoveRefusedThenApplyFails
 				return map[string]error{createCmd(p): errCreate, rollbackCmd: errRollback}
 			},
 			calls: func(p string) []string { return []string{removeDS1, createCmd(p), rollbackCmd} },
-			wantErr: func(p string) string {
-				return "path change to " + p + " failed (" + createCmd(p) + " failed: create refused) and rollback re-create at original path /old-ds1 also failed (" + rollbackCmd + " failed: rollback refused); the datastore is left removed, its data is still on disk and it must be re-created manually"
-			},
 		},
 	}
 
@@ -697,19 +681,18 @@ func TestMaybeApplyPBSConfigsFromStage_CleanDatastoreRemoveRefusedThenApplyFails
 					t.Fatalf("expected command %q, calls: %v", want, runner.CallsList())
 				}
 			}
-			for _, wantLine := range []string{
-				"PBS API apply: datastore ds1 failed (continuing): " + tc.wantErr(newPath) + "\n",
-				"PBS API apply: datastore.cfg failed: 1 datastore object(s) not applied: [ds1]\n",
-			} {
-				if !strings.Contains(logBuf.String(), wantLine) {
-					t.Fatalf("expected the warning %q, log:\n%s", wantLine, logBuf.String())
+			var logged *stageApplyOutcomeLoggedError
+			if !errors.As(err, &logged) {
+				t.Fatalf("expected an outcome-logged error so the restore reports 'with warnings', got: %v", err)
+			}
+			var incomplete *pbsDatastoreRestoreIncompleteError
+			if !errors.As(err, &incomplete) || !slices.Equal(incomplete.notApplied, []string{"ds1"}) || !slices.Equal(incomplete.notRemoved, []string{"stale-ds"}) {
+				t.Fatalf("expected ds1 not applied and stale-ds not removed, got: %v", err)
+			}
+			for _, unwanted := range []string{"PBS API apply: datastore", "failed to apply"} {
+				if strings.Contains(logBuf.String(), unwanted) {
+					t.Fatalf("no line may follow the datastore block (%q), log:\n%s", unwanted, logBuf.String())
 				}
-			}
-			if err == nil {
-				t.Fatalf("expected a summary error so the restore reports 'with warnings'")
-			}
-			if !strings.Contains(err.Error(), "datastore.cfg (clean 1:1 incomplete)") {
-				t.Fatalf("expected the clean-1:1-incomplete item in the summary, got: %v", err)
 			}
 			if strings.Contains(logBuf.String(), "falling back to file-based") {
 				t.Fatalf("file fallback must NOT run on a refused clean remove, log:\n%s", logBuf.String())
@@ -722,9 +705,8 @@ func TestMaybeApplyPBSConfigsFromStage_CleanDatastoreRemoveRefusedThenApplyFails
 }
 
 // A datastore that cannot be applied must not stop the datastores after it: dsa and
-// dsc are applied, dsb is reported, and the step summary names datastore.cfg. Merge
-// mode has no file fallback; the Clean case refuses a stale remove so that the
-// fallback does not run there either.
+// dsc are applied, dsb is reported by its own outcome line, and nothing follows the
+// datastore block. Neither mode runs the file fallback over the block's outcomes.
 func TestMaybeApplyPBSConfigsFromStage_DatastoreFailureKeepsApplyingTheRest(t *testing.T) {
 	const (
 		listCmd     = "proxmox-backup-manager datastore list --output-format=json"
@@ -739,8 +721,6 @@ func TestMaybeApplyPBSConfigsFromStage_DatastoreFailureKeepsApplyingTheRest(t *t
 		behavior PBSRestoreBehavior
 		rows     string
 		errs     func(pb string) map[string]error
-		wantWarn func(pb string) string
-		summary  string
 	}{
 		{
 			name:     "merge-create-and-update-fail",
@@ -749,10 +729,6 @@ func TestMaybeApplyPBSConfigsFromStage_DatastoreFailureKeepsApplyingTheRest(t *t
 			errs: func(pb string) map[string]error {
 				return map[string]error{create("dsb", pb): errors.New("create refused"), updateDSB: errors.New("update refused")}
 			},
-			wantWarn: func(pb string) string {
-				return "PBS API apply: datastore dsb failed (continuing): " + create("dsb", pb) + " failed: create refused (create) / " + updateDSB + " failed: update refused (update)"
-			},
-			summary: "1 PBS config item(s) failed to apply: datastore.cfg",
 		},
 		{
 			name:     "clean-path-mismatch-remove-fails",
@@ -761,10 +737,6 @@ func TestMaybeApplyPBSConfigsFromStage_DatastoreFailureKeepsApplyingTheRest(t *t
 			errs: func(string) map[string]error {
 				return map[string]error{removeStale: errors.New("datastore is in use"), removeDSB: errors.New("remove refused")}
 			},
-			wantWarn: func(pb string) string {
-				return "PBS API apply: datastore dsb failed (continuing): path mismatch (/old-dsb != " + pb + ") and remove failed: " + removeDSB + " failed: remove refused"
-			},
-			summary: "1 PBS config item(s) failed to apply: datastore.cfg (clean 1:1 incomplete)",
 		},
 	}
 
@@ -824,19 +796,17 @@ func TestMaybeApplyPBSConfigsFromStage_DatastoreFailureKeepsApplyingTheRest(t *t
 					t.Fatalf("expected command %q, calls: %v", want, runner.CallsList())
 				}
 			}
-			for _, want := range []string{
-				"WARNING  " + tc.wantWarn(pb) + "\n",
-				"WARNING  PBS API apply: datastore.cfg failed: 1 datastore object(s) not applied: [dsb]\n",
-			} {
-				if !strings.Contains(logBuf.String(), want) {
-					t.Fatalf("expected log line %q, log:\n%s", want, logBuf.String())
+			if !strings.Contains(logBuf.String(), "WARNING  ⚠ PBS datastore dsb: not applied\n") {
+				t.Fatalf("expected the dsb outcome line, log:\n%s", logBuf.String())
+			}
+			for _, unwanted := range []string{"PBS API apply: datastore", "failed to apply", "falling back to file-based"} {
+				if strings.Contains(logBuf.String(), unwanted) {
+					t.Fatalf("no line may follow the datastore block (%q), log:\n%s", unwanted, logBuf.String())
 				}
 			}
-			if strings.Contains(logBuf.String(), "falling back to file-based") {
-				t.Fatalf("no file fallback may run here, log:\n%s", logBuf.String())
-			}
-			if err == nil || err.Error() != tc.summary {
-				t.Fatalf("summary error = %v, want %q", err, tc.summary)
+			var logged *stageApplyOutcomeLoggedError
+			if !errors.As(err, &logged) {
+				t.Fatalf("expected an outcome-logged error so the restore reports 'with warnings', got: %v", err)
 			}
 		})
 	}
