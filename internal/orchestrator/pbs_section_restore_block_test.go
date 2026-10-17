@@ -614,3 +614,72 @@ func TestMaybeApplyPBSConfigsFromStage_SectionBlockOutcomeIsNotRepeated(t *testi
 		assertNoSectionCallerLines(t, log)
 	})
 }
+
+// When PBS refuses the create only because the object already exists, the update
+// is the attempt that says why the object was not applied: its refusal is the one
+// the event carries. Every section config, through the shared block.
+func TestPBSSectionRestoreBlock_AlreadyExistsRejectionCarriesTheUpdateRefusal(t *testing.T) {
+	const event = `"parameter verification failed - 'fingerprint': value does not match the regex pattern"`
+
+	t.Run("remote through the step", func(t *testing.T) {
+		r1 := pbsRemoteSection("r1", "10.0.0.1", "secret-r1", pbsRemoteGoodFP)
+		runner := &FakeCommandRunner{Errors: map[string]error{
+			pbsRemoteCmd("create", "r1", "10.0.0.1", "secret-r1", pbsRemoteGoodFP): errors.New(pbsRemoteCreateExists),
+			pbsRemoteCmd("update", "r1", "10.0.0.1", "secret-r1", pbsRemoteGoodFP): errors.New(pbsRemoteUpdateBadFingerprint),
+		}}
+		log, warned, _ := runPBSSectionRestoreStep(t, PBSRestoreBehaviorMerge, []string{"pbs_remotes"}, map[string]string{"etc/proxmox-backup/remote.cfg": r1}, runner)
+		want := []string{
+			"INFO     Restoring PBS remotes...",
+			"INFO       Remotes to restore: 1",
+			"INFO       Names: r1",
+			"INFO     Remote r1 was rejected by PBS: " + event,
+			"WARNING  ⚠ PBS remote r1: not applied",
+			"WARNING  ⚠ PBS remote configuration: not applied",
+		}
+		if got := pbsVisibleLines(log); strings.Join(got, "\n") != strings.Join(want, "\n") {
+			t.Fatalf("visible lines\n--- got ---\n%s\n--- want ---\n%s\n--- full log ---\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"), log)
+		}
+		if !warned {
+			t.Fatal("restore must end with warnings")
+		}
+	})
+
+	for _, k := range []struct {
+		name, file, command, eventNoun string
+		apply                          func(context.Context, *logging.Logger, string, bool) error
+	}{
+		{"remote", "remote.cfg", "remote", "Remote", applyPBSRemoteCfgViaAPI},
+		{"s3", "s3.cfg", "s3 endpoint", "S3 endpoint", applyPBSS3CfgViaAPI},
+		{"sync", "sync.cfg", "sync-job", "Sync job", applyPBSSyncCfgViaAPI},
+		{"verification", "verification.cfg", "verify-job", "Verify job", applyPBSVerificationCfgViaAPI},
+		{"prune", "prune.cfg", "prune-job", "Prune job", applyPBSPruneCfgViaAPI},
+		{"traffic-control", "traffic-control.cfg", "traffic-control", "Traffic control rule", applyPBSTrafficControlCfgViaAPI},
+	} {
+		t.Run(k.name, func(t *testing.T) {
+			stageRoot, fs, runner := setupPBSAPIApplyTestDeps(t)
+			writeStageFile(t, fs, stageRoot, "etc/proxmox-backup/"+k.file, "x: a1\n\tcomment c\n", 0o640)
+			cmd := "proxmox-backup-manager " + k.command
+			runner.errs = map[string]error{
+				cmd + " create a1 --comment c": errors.New(pbsRemoteCreateExists),
+				cmd + " update a1 --comment c": errors.New(pbsRemoteUpdateBadFingerprint),
+			}
+			var logBuf bytes.Buffer
+			logger := logging.New(types.LogLevelDebug, false)
+			logger.SetOutput(&logBuf)
+			_ = k.apply(context.Background(), logger, stageRoot, false)
+			want := "INFO     " + k.eventNoun + " a1 was rejected by PBS: " + event
+			found := false
+			for _, line := range pbsVisibleLines(logBuf.String()) {
+				if strings.Contains(line, " was rejected by PBS: ") {
+					if line != want {
+						t.Fatalf("event %q, want %q", line, want)
+					}
+					found = true
+				}
+			}
+			if !found {
+				t.Fatalf("no rejection event, log:\n%s", logBuf.String())
+			}
+		})
+	}
+}

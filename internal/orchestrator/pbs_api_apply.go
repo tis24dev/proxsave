@@ -435,8 +435,16 @@ func (r *pbsSectionRestore) apply(id string, s proxmoxNotificationSection) error
 	return nil
 }
 
+// pbsSectionRefusedAsExisting reports whether PBS refused a create because the
+// object already exists ("... remote 'r1' already exists.").
+func pbsSectionRefusedAsExisting(err error) bool {
+	return strings.Contains(pbsManagerErrorLine(err), "already exists")
+}
+
 // update applies the backup's object over the one PBS refused to create. When
-// PBS refuses the update too, the event carries the create's error.
+// PBS refuses the update too, the event carries the create's error, unless the
+// create was refused only because the object already exists: then the update's
+// error is the reason the object was not applied.
 func (r *pbsSectionRestore) update(id string, flags []string, createErr error) error {
 	if ctxErr := r.ctx.Err(); ctxErr != nil {
 		return ctxErr
@@ -448,7 +456,11 @@ func (r *pbsSectionRestore) update(id string, flags []string, createErr error) e
 			return ctxErr
 		}
 		r.debug("%s=%s update failed error=%q", r.key(), id, pbsManagerErrorText(err))
-		r.logger.Info("%s %s was rejected by PBS: \"%s\"", r.cfg.labels.eventNoun, id, pbsManagerErrorLine(createErr))
+		rejected := createErr
+		if pbsSectionRefusedAsExisting(createErr) {
+			rejected = err
+		}
+		r.logger.Info("%s %s was rejected by PBS: \"%s\"", r.cfg.labels.eventNoun, id, pbsManagerErrorLine(rejected))
 		r.logger.Warning("%s PBS %s %s: not applied", theme.SymbolWarning, r.cfg.labels.noun, id)
 		r.notApplied = append(r.notApplied, id)
 		return nil
