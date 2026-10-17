@@ -2372,11 +2372,12 @@ func (c *CloudStorage) countLogFiles(ctx context.Context) int {
 	defer cancel()
 	base := c.cloudLogBase(c.config.CloudLogPath)
 	if base == "" {
-		return 0
+		// No log folder: there is no count of logs, not a count of zero.
+		return -1
 	}
 	if root, outside := LocalCloudLogOutside(c.config.CloudLogPath, c.localRoot); outside {
 		c.logger.Debug("Cloud logs: %s is outside the CLOUD_REMOTE directory %s, log cleanup skipped", base, root)
-		return 0
+		return -1
 	}
 
 	if c.isCloudLogPathUnavailable() {

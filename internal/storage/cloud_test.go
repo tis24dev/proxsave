@@ -1739,3 +1739,30 @@ func TestCloudStorageCheckFallbackWithRemotePath(t *testing.T) {
 		t.Fatalf("expected 5 rclone calls, got %d", len(queue.calls))
 	}
 }
+
+// A cloud destination without a log folder it can count, CLOUD_LOG_PATH empty or
+// a local log folder outside the CLOUD_REMOTE directory, has no count of logs,
+// not a count of zero: the retention summary then carries no logs remaining.
+func TestCloudCountLogFilesWithoutALogFolderIsNoCount(t *testing.T) {
+	remoteDir := t.TempDir()
+	cases := []struct {
+		name string
+		cfg  *config.Config
+	}{
+		{"no CLOUD_LOG_PATH", &config.Config{CloudEnabled: true, CloudRemote: "remote", RcloneRetries: 1}},
+		{"log folder outside CLOUD_REMOTE", &config.Config{CloudEnabled: true, CloudRemote: remoteDir, CloudLogPath: "../logs", RcloneRetries: 1}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cs := newCloudStorageForTest(tc.cfg)
+			queue := &commandQueue{t: t}
+			cs.execCommand = queue.exec
+			if got := cs.countLogFiles(context.Background()); got != -1 {
+				t.Fatalf("countLogFiles() = %d; want -1 (no count)", got)
+			}
+			if len(queue.calls) != 0 {
+				t.Fatalf("no rclone call expected, got %v", queue.calls)
+			}
+		})
+	}
+}
