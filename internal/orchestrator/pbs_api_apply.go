@@ -345,7 +345,13 @@ func applyPBSSectionCfgViaAPI(ctx context.Context, logger *logging.Logger, stage
 			if _, ok := desired[id]; ok {
 				continue
 			}
+			if err := ctx.Err(); err != nil {
+				return err
+			}
 			if _, err := runPBSManager(ctx, commandArgs("remove", id)...); err != nil {
+				if ctxErr := ctx.Err(); ctxErr != nil {
+					return ctxErr
+				}
 				logger.Warning("PBS API apply: %s remove %s failed (continuing): %v", kind, id, err)
 				removeFailures = append(removeFailures, id)
 			}
@@ -359,12 +365,23 @@ func applyPBSSectionCfgViaAPI(ctx context.Context, logger *logging.Logger, stage
 	sort.Strings(ids)
 	var applyFailures []string
 	for _, id := range ids {
+		// A cancelled restore stops here with the cancellation, not with one
+		// "not applied" object per remaining id that hides it from the caller.
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		s := desired[id]
 		flags := pbsSectionFlags(logger, kind, id, s.Entries, cfg.base64Values)
 		createArgs := commandArgs(append([]string{"create", id}, flags...)...)
 		if _, err := runPBSManagerSensitive(ctx, createArgs, cfg.secretFlags...); err != nil {
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return ctxErr
+			}
 			updateArgs := commandArgs(append([]string{"update", id}, flags...)...)
 			if _, upErr := runPBSManagerSensitive(ctx, updateArgs, cfg.secretFlags...); upErr != nil {
+				if ctxErr := ctx.Err(); ctxErr != nil {
+					return ctxErr
+				}
 				logger.Warning("PBS API apply: %s %s failed (continuing): %v (create) / %v (update)", kind, id, err, upErr)
 				applyFailures = append(applyFailures, id)
 			}
