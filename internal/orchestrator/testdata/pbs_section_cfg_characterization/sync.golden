@@ -632,8 +632,8 @@ commands:
   proxmox-backup-manager sync-job remove gamma
   proxmox-backup-manager sync-job create alpha --store ds-alpha --remote origin --remote-store src --schedule hourly
 error: PBS sync job configuration incomplete: 1 stale sync job(s) not removed [beta]
-error chain: *orchestrator.pbsSectionRestoreIncompleteError -> *errors.errorString
-error is: errPBSCleanRemoveIncomplete
+error chain: *orchestrator.pbsSectionRestoreIncompleteError
+error is: (none)
 log:
   [<TIME>] DEBUG    PBS sync job restore: reading current sync-jobs cmd="proxmox-backup-manager sync-job list --output-format=json"
   [<TIME>] INFO     Restoring PBS sync jobs...
@@ -676,8 +676,8 @@ commands:
   proxmox-backup-manager sync-job remove gamma
   proxmox-backup-manager sync-job create alpha --store ds-alpha --remote origin --remote-store src --schedule hourly
 error: PBS sync job configuration incomplete: 2 stale sync job(s) not removed [beta, delta]
-error chain: *orchestrator.pbsSectionRestoreIncompleteError -> *errors.errorString
-error is: errPBSCleanRemoveIncomplete
+error chain: *orchestrator.pbsSectionRestoreIncompleteError
+error is: (none)
 log:
   [<TIME>] DEBUG    PBS sync job restore: reading current sync-jobs cmd="proxmox-backup-manager sync-job list --output-format=json"
   [<TIME>] INFO     Restoring PBS sync jobs...
@@ -724,8 +724,8 @@ commands:
   proxmox-backup-manager sync-job create bravo --store ds-bravo --remote origin --remote-store src --schedule hourly
   proxmox-backup-manager sync-job update bravo --store ds-bravo --remote origin --remote-store src --schedule hourly
 error: PBS sync job configuration incomplete: 1 sync job(s) not applied [bravo]; 1 stale sync job(s) not removed [beta]
-error chain: *orchestrator.pbsSectionRestoreIncompleteError -> *errors.errorString
-error is: errPBSCleanRemoveIncomplete
+error chain: *orchestrator.pbsSectionRestoreIncompleteError
+error is: (none)
 log:
   [<TIME>] DEBUG    PBS sync job restore: reading current sync-jobs cmd="proxmox-backup-manager sync-job list --output-format=json"
   [<TIME>] INFO     Restoring PBS sync jobs...

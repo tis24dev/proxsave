@@ -607,8 +607,8 @@ commands:
   proxmox-backup-manager prune-job remove gamma
   proxmox-backup-manager prune-job create alpha --store ds-alpha --schedule daily --keep-last 3
 error: PBS prune job configuration incomplete: 1 stale prune job(s) not removed [beta]
-error chain: *orchestrator.pbsSectionRestoreIncompleteError -> *errors.errorString
-error is: errPBSCleanRemoveIncomplete
+error chain: *orchestrator.pbsSectionRestoreIncompleteError
+error is: (none)
 log:
   [<TIME>] DEBUG    PBS prune job restore: reading current prune-jobs cmd="proxmox-backup-manager prune-job list --output-format=json"
   [<TIME>] INFO     Restoring PBS prune jobs...
@@ -650,8 +650,8 @@ commands:
   proxmox-backup-manager prune-job remove gamma
   proxmox-backup-manager prune-job create alpha --store ds-alpha --schedule daily --keep-last 3
 error: PBS prune job configuration incomplete: 2 stale prune job(s) not removed [beta, delta]
-error chain: *orchestrator.pbsSectionRestoreIncompleteError -> *errors.errorString
-error is: errPBSCleanRemoveIncomplete
+error chain: *orchestrator.pbsSectionRestoreIncompleteError
+error is: (none)
 log:
   [<TIME>] DEBUG    PBS prune job restore: reading current prune-jobs cmd="proxmox-backup-manager prune-job list --output-format=json"
   [<TIME>] INFO     Restoring PBS prune jobs...
@@ -697,8 +697,8 @@ commands:
   proxmox-backup-manager prune-job create bravo --store ds-bravo --schedule daily --keep-last 3
   proxmox-backup-manager prune-job update bravo --store ds-bravo --schedule daily --keep-last 3
 error: PBS prune job configuration incomplete: 1 prune job(s) not applied [bravo]; 1 stale prune job(s) not removed [beta]
-error chain: *orchestrator.pbsSectionRestoreIncompleteError -> *errors.errorString
-error is: errPBSCleanRemoveIncomplete
+error chain: *orchestrator.pbsSectionRestoreIncompleteError
+error is: (none)
 log:
   [<TIME>] DEBUG    PBS prune job restore: reading current prune-jobs cmd="proxmox-backup-manager prune-job list --output-format=json"
   [<TIME>] INFO     Restoring PBS prune jobs...

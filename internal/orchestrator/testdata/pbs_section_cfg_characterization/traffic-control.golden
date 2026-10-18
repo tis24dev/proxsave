@@ -607,8 +607,8 @@ commands:
   proxmox-backup-manager traffic-control remove gamma
   proxmox-backup-manager traffic-control create alpha --network 10.0.0.0/8 --rate-in 10MB --comment rule-alpha
 error: PBS traffic control configuration incomplete: 1 stale traffic control rule(s) not removed [beta]
-error chain: *orchestrator.pbsSectionRestoreIncompleteError -> *errors.errorString
-error is: errPBSCleanRemoveIncomplete
+error chain: *orchestrator.pbsSectionRestoreIncompleteError
+error is: (none)
 log:
   [<TIME>] DEBUG    PBS traffic control rule restore: reading current traffic-control-rules cmd="proxmox-backup-manager traffic-control list --output-format=json"
   [<TIME>] INFO     Restoring PBS traffic control rules...
@@ -650,8 +650,8 @@ commands:
   proxmox-backup-manager traffic-control remove gamma
   proxmox-backup-manager traffic-control create alpha --network 10.0.0.0/8 --rate-in 10MB --comment rule-alpha
 error: PBS traffic control configuration incomplete: 2 stale traffic control rule(s) not removed [beta, delta]
-error chain: *orchestrator.pbsSectionRestoreIncompleteError -> *errors.errorString
-error is: errPBSCleanRemoveIncomplete
+error chain: *orchestrator.pbsSectionRestoreIncompleteError
+error is: (none)
 log:
   [<TIME>] DEBUG    PBS traffic control rule restore: reading current traffic-control-rules cmd="proxmox-backup-manager traffic-control list --output-format=json"
   [<TIME>] INFO     Restoring PBS traffic control rules...
@@ -697,8 +697,8 @@ commands:
   proxmox-backup-manager traffic-control create bravo --network 10.0.0.0/8 --rate-in 10MB --comment rule-bravo
   proxmox-backup-manager traffic-control update bravo --network 10.0.0.0/8 --rate-in 10MB --comment rule-bravo
 error: PBS traffic control configuration incomplete: 1 traffic control rule(s) not applied [bravo]; 1 stale traffic control rule(s) not removed [beta]
-error chain: *orchestrator.pbsSectionRestoreIncompleteError -> *errors.errorString
-error is: errPBSCleanRemoveIncomplete
+error chain: *orchestrator.pbsSectionRestoreIncompleteError
+error is: (none)
 log:
   [<TIME>] DEBUG    PBS traffic control rule restore: reading current traffic-control-rules cmd="proxmox-backup-manager traffic-control list --output-format=json"
   [<TIME>] INFO     Restoring PBS traffic control rules...

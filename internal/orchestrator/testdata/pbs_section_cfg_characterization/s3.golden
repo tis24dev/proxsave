@@ -638,8 +638,8 @@ commands:
   proxmox-backup-manager s3 endpoint remove gamma
   proxmox-backup-manager s3 endpoint create alpha --endpoint alpha.s3.example --region eu-central-1 --access-key AKx3-Wd8Lp2-s3-access --secret-key Sk5v-Hj6Tn1-s3-secret
 error: PBS S3 endpoint configuration incomplete: 1 stale S3 endpoint(s) not removed [beta]
-error chain: *orchestrator.pbsSectionRestoreIncompleteError -> *errors.errorString
-error is: errPBSCleanRemoveIncomplete
+error chain: *orchestrator.pbsSectionRestoreIncompleteError
+error is: (none)
 log:
   [<TIME>] DEBUG    PBS S3 endpoint restore: reading current s3-endpoints cmd="proxmox-backup-manager s3 endpoint list --output-format=json"
   [<TIME>] INFO     Restoring PBS S3 endpoints...
@@ -682,8 +682,8 @@ commands:
   proxmox-backup-manager s3 endpoint remove gamma
   proxmox-backup-manager s3 endpoint create alpha --endpoint alpha.s3.example --region eu-central-1 --access-key AKx3-Wd8Lp2-s3-access --secret-key Sk5v-Hj6Tn1-s3-secret
 error: PBS S3 endpoint configuration incomplete: 2 stale S3 endpoint(s) not removed [beta, delta]
-error chain: *orchestrator.pbsSectionRestoreIncompleteError -> *errors.errorString
-error is: errPBSCleanRemoveIncomplete
+error chain: *orchestrator.pbsSectionRestoreIncompleteError
+error is: (none)
 log:
   [<TIME>] DEBUG    PBS S3 endpoint restore: reading current s3-endpoints cmd="proxmox-backup-manager s3 endpoint list --output-format=json"
   [<TIME>] INFO     Restoring PBS S3 endpoints...
@@ -730,8 +730,8 @@ commands:
   proxmox-backup-manager s3 endpoint create bravo --endpoint bravo.s3.example --region eu-central-1 --access-key AKx3-Wd8Lp2-s3-access --secret-key Sk5v-Hj6Tn1-s3-secret
   proxmox-backup-manager s3 endpoint update bravo --endpoint bravo.s3.example --region eu-central-1 --access-key AKx3-Wd8Lp2-s3-access --secret-key Sk5v-Hj6Tn1-s3-secret
 error: PBS S3 endpoint configuration incomplete: 1 S3 endpoint(s) not applied [bravo]; 1 stale S3 endpoint(s) not removed [beta]
-error chain: *orchestrator.pbsSectionRestoreIncompleteError -> *errors.errorString
-error is: errPBSCleanRemoveIncomplete
+error chain: *orchestrator.pbsSectionRestoreIncompleteError
+error is: (none)
 log:
   [<TIME>] DEBUG    PBS S3 endpoint restore: reading current s3-endpoints cmd="proxmox-backup-manager s3 endpoint list --output-format=json"
   [<TIME>] INFO     Restoring PBS S3 endpoints...

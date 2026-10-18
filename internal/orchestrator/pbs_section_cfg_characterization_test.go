@@ -67,7 +67,6 @@ var (
 		name string
 		err  error
 	}{
-		{"errPBSCleanRemoveIncomplete", errPBSCleanRemoveIncomplete},
 		{"injected read failure", errPBSSectionCharRead},
 		{"injected list failure", errPBSSectionCharList},
 		{"injected create failure", errPBSSectionCharCreate},
@@ -338,6 +337,20 @@ func pbsSectionCharWantIs(t *testing.T, err error, target error, want bool) {
 	}
 }
 
+// pbsSectionCharWantNotRemoved checks that err is the block's incomplete error
+// naming exactly want as the stale objects it did not remove.
+func pbsSectionCharWantNotRemoved(t *testing.T, err error, want ...string) {
+	t.Helper()
+	var incomplete *pbsSectionRestoreIncompleteError
+	if !errors.As(err, &incomplete) {
+		t.Errorf("err = %T %v; want a pbsSectionRestoreIncompleteError", err, err)
+		return
+	}
+	if strings.Join(incomplete.notRemoved, ",") != strings.Join(want, ",") {
+		t.Errorf("not removed = %v, want %v", incomplete.notRemoved, want)
+	}
+}
+
 func pbsSectionCharWantObjects(t *testing.T, run pbsSectionCharRun, verb string, want ...string) {
 	t.Helper()
 	got := pbsSectionCharObjects(run.calls, verb)
@@ -533,7 +546,7 @@ func pbsSectionCharScenarios(k pbsSectionCharKind) []pbsSectionCharScenario {
 				{verb: "remove", id: "beta", err: errPBSSectionCharRemove},
 			},
 			check: func(t *testing.T, _ pbsSectionCharKind, run pbsSectionCharRun) {
-				pbsSectionCharWantIs(t, run.err, errPBSCleanRemoveIncomplete, true)
+				pbsSectionCharWantNotRemoved(t, run.err, "beta")
 				pbsSectionCharWantIs(t, run.err, errPBSSectionCharRemove, false)
 				pbsSectionCharWantObjects(t, run, "remove", "beta", "gamma")
 				pbsSectionCharWantObjects(t, run, "create", "alpha")
@@ -549,13 +562,13 @@ func pbsSectionCharScenarios(k pbsSectionCharKind) []pbsSectionCharScenario {
 				{verb: "remove", id: "delta", err: errPBSSectionCharRemove},
 			},
 			check: func(t *testing.T, _ pbsSectionCharKind, run pbsSectionCharRun) {
-				pbsSectionCharWantIs(t, run.err, errPBSCleanRemoveIncomplete, true)
+				pbsSectionCharWantNotRemoved(t, run.err, "beta", "delta")
 				pbsSectionCharWantObjects(t, run, "remove", "beta", "delta", "gamma")
 			},
 		},
 		{
-			// The error names the objects not applied only, and it still matches the
-			// incomplete clean left by the earlier remove failure.
+			// The error names the object not applied and the stale object the earlier
+			// remove failure left.
 			name:   "strict-remove-fails-then-create-fails",
 			strict: true,
 			staged: pbsSectionCharStaged(k.section("bravo")),
@@ -566,7 +579,7 @@ func pbsSectionCharScenarios(k pbsSectionCharKind) []pbsSectionCharScenario {
 				updateFails,
 			},
 			check: func(t *testing.T, _ pbsSectionCharKind, run pbsSectionCharRun) {
-				pbsSectionCharWantIs(t, run.err, errPBSCleanRemoveIncomplete, true)
+				pbsSectionCharWantNotRemoved(t, run.err, "beta")
 			},
 		},
 		{

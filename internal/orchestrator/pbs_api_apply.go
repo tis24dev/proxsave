@@ -18,14 +18,6 @@ import (
 
 var pbsAPIApplyGeteuid = os.Geteuid
 
-// errPBSCleanRemoveIncomplete marks a Clean (1:1) restore where one or more stale
-// objects absent from the backup could NOT be removed from PBS. The objects are
-// left in place (the conservative outcome, nothing destroyed), but the caller
-// must report the restore "with warnings" instead of a clean success, and must
-// NOT paper over it with the file-based fallback (which would force-rewrite the
-// .cfg and drop the object, bypassing PBS's refusal, e.g. for an in-use object).
-var errPBSCleanRemoveIncomplete = errors.New("PBS Clean 1:1 incomplete: stale object(s) could not be removed")
-
 func normalizeProxmoxCfgKey(key string) string {
 	key = strings.ToLower(strings.TrimSpace(key))
 	key = strings.ReplaceAll(key, "_", "-")
@@ -391,8 +383,8 @@ func pbsSectionFlags(logger *logging.Logger, kind, id string, entries []proxmoxN
 // objects were not applied, or in Clean (1:1) mode a stale object was not removed.
 // applyPBSSectionCfgViaAPI has already logged the outcome of every object and of
 // the whole block, so the caller does not log it again and does not run the
-// file-based fallback over outcomes it has already reported. When a stale object
-// was not removed it also matches errPBSCleanRemoveIncomplete.
+// file-based fallback over outcomes it has already reported (which would rewrite
+// the .cfg and drop a stale object PBS refused to remove, e.g. one in use).
 type pbsSectionRestoreIncompleteError struct {
 	labels     pbsSectionLabels
 	notApplied []string
@@ -408,13 +400,6 @@ func (e *pbsSectionRestoreIncompleteError) Error() string {
 		parts = append(parts, fmt.Sprintf("%d stale %s(s) not removed [%s]", len(e.notRemoved), e.labels.noun, strings.Join(e.notRemoved, ", ")))
 	}
 	return e.labels.outcome + " incomplete: " + strings.Join(parts, "; ")
-}
-
-func (e *pbsSectionRestoreIncompleteError) Unwrap() error {
-	if len(e.notRemoved) > 0 {
-		return errPBSCleanRemoveIncomplete
-	}
-	return nil
 }
 
 // pbsSectionRestoreStoppedError is a section-config apply that stopped before any
@@ -1089,8 +1074,7 @@ func applyPBSAcmePluginsCfgViaAPI(ctx context.Context, logger *logging.Logger, s
 // datastores were not applied, or in Clean (1:1) mode a stale datastore was not
 // removed. applyPBSDatastoreCfgViaAPI has already logged the outcome of every
 // datastore and of the whole block, so the caller does not log it again and does
-// not run the file-based fallback over outcomes it has already reported. When a
-// stale datastore was not removed it also matches errPBSCleanRemoveIncomplete.
+// not run the file-based fallback over outcomes it has already reported.
 type pbsDatastoreRestoreIncompleteError struct {
 	notApplied []string
 	notRemoved []string
@@ -1105,13 +1089,6 @@ func (e *pbsDatastoreRestoreIncompleteError) Error() string {
 		parts = append(parts, fmt.Sprintf("%d stale datastore(s) not removed [%s]", len(e.notRemoved), strings.Join(e.notRemoved, ", ")))
 	}
 	return "PBS datastore configuration incomplete: " + strings.Join(parts, "; ")
-}
-
-func (e *pbsDatastoreRestoreIncompleteError) Unwrap() error {
-	if len(e.notRemoved) > 0 {
-		return errPBSCleanRemoveIncomplete
-	}
-	return nil
 }
 
 // pbsDatastoreRestore carries the state of one datastore.cfg apply: what it

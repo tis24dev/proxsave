@@ -485,11 +485,12 @@ func TestMaybeApplyPBSConfigsFromStage_CleanRemoveRefusedThenCreateFails_NoFallb
 		}
 	}
 	// The remote block logged the outcome of every remote and its own: the step
-	// returns it as already reported, still matching the incomplete Clean 1:1, so
-	// the restore reports 'with warnings' without a second line.
+	// returns it as already reported, still naming the stale remote it did not
+	// remove, so the restore reports 'with warnings' without a second line.
 	var logged *stageApplyOutcomeLoggedError
-	if !errors.As(err, &logged) || !errors.Is(err, errPBSCleanRemoveIncomplete) {
-		t.Fatalf("expected an outcome-logged error matching errPBSCleanRemoveIncomplete, got: %T %v", err, err)
+	var incomplete *pbsSectionRestoreIncompleteError
+	if !errors.As(err, &logged) || !errors.As(err, &incomplete) || len(incomplete.notRemoved) == 0 {
+		t.Fatalf("expected an outcome-logged error with a stale remote not removed, got: %T %v", err, err)
 	}
 	if strings.Contains(logBuf.String(), "PBS API apply") || strings.Contains(logBuf.String(), "failed to apply") {
 		t.Fatalf("the caller must not repeat the block outcome, log:\n%s", logBuf.String())

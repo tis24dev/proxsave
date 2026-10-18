@@ -479,16 +479,16 @@ func TestPBSSectionRestoreBlock_LabelsPerKind(t *testing.T) {
 			if want := k.outcome + " incomplete: 1 " + k.notAppliedNoun + "(s) not applied [a2]"; err.Error() != want {
 				t.Fatalf("error %q, want %q", err.Error(), want)
 			}
-			if errors.Is(err, errPBSCleanRemoveIncomplete) {
-				t.Fatal("no stale object was left: the error must not match errPBSCleanRemoveIncomplete")
+			if len(incomplete.notRemoved) != 0 {
+				t.Fatalf("no stale object was left: not removed = %v", incomplete.notRemoved)
 			}
 		})
 	}
 }
 
-// A refused remove makes the block's error match errPBSCleanRemoveIncomplete, also
-// when every object of the backup was applied; a block with nothing refused
-// returns nil.
+// A refused remove makes the block's error the incomplete one naming the stale
+// object, also when every object of the backup was applied; a block with nothing
+// refused returns nil.
 func TestPBSSectionRestoreBlock_IncompleteErrorIdentity(t *testing.T) {
 	stageRoot, fs, runner := setupPBSAPIApplyTestDeps(t)
 	writeStageFile(t, fs, stageRoot, "etc/proxmox-backup/prune.cfg", "prune: p1\n\tstore ds1\n", 0o640)
@@ -499,8 +499,8 @@ func TestPBSSectionRestoreBlock_IncompleteErrorIdentity(t *testing.T) {
 
 	err := applyPBSPruneCfgViaAPI(context.Background(), logger, stageRoot, true)
 	var incomplete *pbsSectionRestoreIncompleteError
-	if !errors.As(err, &incomplete) || !errors.Is(err, errPBSCleanRemoveIncomplete) {
-		t.Fatalf("err=%T %v: want a pbsSectionRestoreIncompleteError matching errPBSCleanRemoveIncomplete", err, err)
+	if !errors.As(err, &incomplete) || strings.Join(incomplete.notRemoved, ",") != "old" {
+		t.Fatalf("err=%T %v: want a pbsSectionRestoreIncompleteError with old not removed", err, err)
 	}
 	if want := "PBS prune job configuration incomplete: 1 stale prune job(s) not removed [old]"; err.Error() != want {
 		t.Fatalf("error %q, want %q", err.Error(), want)

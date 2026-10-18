@@ -1108,9 +1108,6 @@ func TestApplyPBSDatastoreCfgViaAPI_BlockPaths(t *testing.T) {
 				strings.Join(incomplete.notRemoved, ",") != strings.Join(tc.notRemoved, ",") {
 				t.Fatalf("notApplied=%v notRemoved=%v, want %v %v", incomplete.notApplied, incomplete.notRemoved, tc.notApplied, tc.notRemoved)
 			}
-			if got, want := errors.Is(err, errPBSCleanRemoveIncomplete), len(tc.notRemoved) > 0; got != want {
-				t.Fatalf("errors.Is(errPBSCleanRemoveIncomplete)=%v want %v", got, want)
-			}
 		})
 	}
 }

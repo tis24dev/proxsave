@@ -644,8 +644,8 @@ commands:
   proxmox-backup-manager remote remove gamma
   proxmox-backup-manager remote create alpha --host alpha.pbs.example --auth-id sync@pbs --password Rm7pw-Qz4Xk9-remote-secret --fingerprint aa:bb:cc
 error: PBS remote configuration incomplete: 1 stale remote(s) not removed [beta]
-error chain: *orchestrator.pbsSectionRestoreIncompleteError -> *errors.errorString
-error is: errPBSCleanRemoveIncomplete
+error chain: *orchestrator.pbsSectionRestoreIncompleteError
+error is: (none)
 log:
   [<TIME>] DEBUG    PBS remote restore: reading current remotes cmd="proxmox-backup-manager remote list --output-format=json"
   [<TIME>] INFO     Restoring PBS remotes...
@@ -688,8 +688,8 @@ commands:
   proxmox-backup-manager remote remove gamma
   proxmox-backup-manager remote create alpha --host alpha.pbs.example --auth-id sync@pbs --password Rm7pw-Qz4Xk9-remote-secret --fingerprint aa:bb:cc
 error: PBS remote configuration incomplete: 2 stale remote(s) not removed [beta, delta]
-error chain: *orchestrator.pbsSectionRestoreIncompleteError -> *errors.errorString
-error is: errPBSCleanRemoveIncomplete
+error chain: *orchestrator.pbsSectionRestoreIncompleteError
+error is: (none)
 log:
   [<TIME>] DEBUG    PBS remote restore: reading current remotes cmd="proxmox-backup-manager remote list --output-format=json"
   [<TIME>] INFO     Restoring PBS remotes...
@@ -736,8 +736,8 @@ commands:
   proxmox-backup-manager remote create bravo --host bravo.pbs.example --auth-id sync@pbs --password Rm7pw-Qz4Xk9-remote-secret --fingerprint aa:bb:cc
   proxmox-backup-manager remote update bravo --host bravo.pbs.example --auth-id sync@pbs --password Rm7pw-Qz4Xk9-remote-secret --fingerprint aa:bb:cc
 error: PBS remote configuration incomplete: 1 remote(s) not applied [bravo]; 1 stale remote(s) not removed [beta]
-error chain: *orchestrator.pbsSectionRestoreIncompleteError -> *errors.errorString
-error is: errPBSCleanRemoveIncomplete
+error chain: *orchestrator.pbsSectionRestoreIncompleteError
+error is: (none)
 log:
   [<TIME>] DEBUG    PBS remote restore: reading current remotes cmd="proxmox-backup-manager remote list --output-format=json"
   [<TIME>] INFO     Restoring PBS remotes...
