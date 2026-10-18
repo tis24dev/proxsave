@@ -108,7 +108,7 @@ func runSectionCallerCase(t *testing.T, tg sectionCallerTarget, behavior PBSRest
 	for _, other := range sectionCallerTargets() {
 		*other.hook = func(context.Context, *logging.Logger, string, bool) error { return nil }
 	}
-	pbsStagedApplyNodeCfgViaAPIFn = func(context.Context, string) error { return nil }
+	pbsStagedApplyNodeCfgViaAPIFn = func(context.Context, string, []string) error { return nil }
 	pbsStagedApplyDatastoreCfgViaAPIFn = func(context.Context, *logging.Logger, string, bool) error { return nil }
 	*tg.hook = func(context.Context, *logging.Logger, string, bool) error { return apiErr }
 

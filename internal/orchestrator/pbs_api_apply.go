@@ -1715,7 +1715,17 @@ func pbsNodeUpdateFlags(raw string) (flags, keys []string) {
 	return flags, keys
 }
 
-func applyPBSNodeCfgViaAPI(ctx context.Context, stageRoot string) error {
+// pbsNodeDeletableKeys are the settings "node update --delete" takes (PBS 4.2.8).
+var pbsNodeDeletableKeys = map[string]bool{
+	"acme": true, "acmedomain0": true, "acmedomain1": true, "acmedomain2": true, "acmedomain3": true, "acmedomain4": true,
+	"http-proxy": true, "email-from": true, "ciphers-tls-1.3": true, "ciphers-tls-1.2": true, "default-lang": true,
+	"description": true, "task-log-max-days": true, "consent-text": true, "location": true,
+}
+
+// applyPBSNodeCfgViaAPI sets every setting of the staged node.cfg with one
+// "node update", which also deletes deleteKeys (settings of this PBS the backup
+// does not have, in a Clean restore).
+func applyPBSNodeCfgViaAPI(ctx context.Context, stageRoot string, deleteKeys []string) error {
 	raw, present, err := readStageFileOptional(stageRoot, "etc/proxmox-backup/node.cfg")
 	if err != nil {
 		return err
@@ -1726,6 +1736,9 @@ func applyPBSNodeCfgViaAPI(ctx context.Context, stageRoot string) error {
 	flags, _ := pbsNodeUpdateFlags(raw)
 	if len(flags) == 0 {
 		return nil
+	}
+	for _, key := range deleteKeys {
+		flags = append(flags, "--delete", key)
 	}
 	// node update applies to the local node: it sets every setting of the file.
 	args := append([]string{"node", "update"}, flags...)

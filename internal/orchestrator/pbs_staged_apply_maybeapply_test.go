@@ -264,7 +264,7 @@ func TestMaybeApplyPBSConfigsFromStage_ApiErrorsTriggerFallbackOnlyInCleanMode(t
 		strictSink(strict)
 		return errors.New("forced API error")
 	}
-	pbsStagedApplyNodeCfgViaAPIFn = func(context.Context, string) error { return errors.New("forced API error") }
+	pbsStagedApplyNodeCfgViaAPIFn = func(context.Context, string, []string) error { return errors.New("forced API error") }
 	pbsStagedApplyS3CfgViaAPIFn = func(_ context.Context, _ *logging.Logger, _ string, strict bool) error {
 		strictSink(strict)
 		return errors.New("forced API error")

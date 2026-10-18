@@ -246,7 +246,7 @@ func TestPBSAPIApply_ReadStageFileOptionalErrors(t *testing.T) {
 		if err := fs.AddDir(stageRoot + "/etc/proxmox-backup/node.cfg"); err != nil {
 			t.Fatalf("create staged dir: %v", err)
 		}
-		err := applyPBSNodeCfgViaAPI(context.Background(), stageRoot)
+		err := applyPBSNodeCfgViaAPI(context.Background(), stageRoot, nil)
 		if err == nil || !strings.Contains(err.Error(), "read staged") {
 			t.Fatalf("expected read staged error, got: %v", err)
 		}
@@ -1393,7 +1393,7 @@ func TestApplyPBSNodeCfgViaAPI_SetsEverySetting(t *testing.T) {
 	stageRoot, fs, runner := setupPBSAPIApplyTestDeps(t)
 	writeStageFile(t, fs, stageRoot, "etc/proxmox-backup/node.cfg", pbsNodeCfgMeasured, 0o640)
 
-	if err := applyPBSNodeCfgViaAPI(context.Background(), stageRoot); err != nil {
+	if err := applyPBSNodeCfgViaAPI(context.Background(), stageRoot, nil); err != nil {
 		t.Fatalf("applyPBSNodeCfgViaAPI error: %v", err)
 	}
 
@@ -1412,7 +1412,7 @@ func TestApplyPBSNodeCfgViaAPI_SetsEverySetting(t *testing.T) {
 func TestApplyPBSNodeCfgViaAPI_NoFileAndEmptyAndError(t *testing.T) {
 	t.Run("no-file", func(t *testing.T) {
 		stageRoot, _, runner := setupPBSAPIApplyTestDeps(t)
-		if err := applyPBSNodeCfgViaAPI(context.Background(), stageRoot); err != nil {
+		if err := applyPBSNodeCfgViaAPI(context.Background(), stageRoot, nil); err != nil {
 			t.Fatalf("applyPBSNodeCfgViaAPI error: %v", err)
 		}
 		if len(runner.calls) != 0 {
@@ -1423,7 +1423,7 @@ func TestApplyPBSNodeCfgViaAPI_NoFileAndEmptyAndError(t *testing.T) {
 	t.Run("empty", func(t *testing.T) {
 		stageRoot, fs, runner := setupPBSAPIApplyTestDeps(t)
 		writeStageFile(t, fs, stageRoot, "etc/proxmox-backup/node.cfg", "   \n\n", 0o640)
-		if err := applyPBSNodeCfgViaAPI(context.Background(), stageRoot); err != nil {
+		if err := applyPBSNodeCfgViaAPI(context.Background(), stageRoot, nil); err != nil {
 			t.Fatalf("applyPBSNodeCfgViaAPI error: %v", err)
 		}
 		if len(runner.calls) != 0 {
@@ -1434,7 +1434,7 @@ func TestApplyPBSNodeCfgViaAPI_NoFileAndEmptyAndError(t *testing.T) {
 	t.Run("description-only", func(t *testing.T) {
 		stageRoot, fs, runner := setupPBSAPIApplyTestDeps(t)
 		writeStageFile(t, fs, stageRoot, "etc/proxmox-backup/node.cfg", "#just a description\n", 0o640)
-		if err := applyPBSNodeCfgViaAPI(context.Background(), stageRoot); err != nil {
+		if err := applyPBSNodeCfgViaAPI(context.Background(), stageRoot, nil); err != nil {
 			t.Fatalf("applyPBSNodeCfgViaAPI error: %v", err)
 		}
 		if want := []string{"proxmox-backup-manager node update --description just a description"}; !reflect.DeepEqual(runner.calls, want) {
@@ -1448,7 +1448,7 @@ func TestApplyPBSNodeCfgViaAPI_NoFileAndEmptyAndError(t *testing.T) {
 		runner.errs = map[string]error{
 			"proxmox-backup-manager node update --http-proxy http://user:pw@proxy.example:3128": errors.New("boom"),
 		}
-		err := applyPBSNodeCfgViaAPI(context.Background(), stageRoot)
+		err := applyPBSNodeCfgViaAPI(context.Background(), stageRoot, nil)
 		if err == nil || strings.Contains(err.Error(), "user:pw") || !strings.Contains(err.Error(), "--http-proxy <redacted>") {
 			t.Fatalf("err = %v, want the refusal with --http-proxy redacted", err)
 		}

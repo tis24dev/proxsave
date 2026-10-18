@@ -29,6 +29,8 @@ func TestPBSNodeCfgBlock(t *testing.T) {
 		`DEBUG    PBS node restore: update failed error="exit status 255: Error: parameter verification failed - 'task-log-max-days': value must have a minimum value of 0 (got -5)\nUsage: proxmox-backup-manager node update [OPTIONS]"`,
 		`INFO     The node configuration was rejected by PBS: "parameter verification failed - 'task-log-max-days': value must have a minimum value of 0 (got -5)"`,
 	}
+	// Clean mode also reads this PBS's node.cfg, absent here.
+	refusalClean := append([]string{refusal[0], "DEBUG    PBS node restore: current keys="}, refusal[1:]...)
 	fallback := "DEBUG    PBS node restore: fallback=file target=/etc/proxmox-backup/node.cfg source=/stage/etc/proxmox-backup/node.cfg"
 	join := func(parts ...[]string) []string {
 		var out []string
@@ -51,7 +53,7 @@ func TestPBSNodeCfgBlock(t *testing.T) {
 		{name: "applied", behavior: PBSRestoreBehaviorMerge, staged: "email-from: pbs@example.com\n", runner: &FakeCommandRunner{},
 			want: []string{opening, mode("merge"), "DEBUG    PBS node restore: action=update keys=email-from", "DEBUG    PBS node restore: updated", "INFO     ✓ PBS node configuration: applied"}},
 		{name: "refused-clean", behavior: PBSRestoreBehaviorClean, staged: bad, runner: refuse,
-			want:   join([]string{opening, mode("clean")}, refusal, []string{fallback, "DEBUG    PBS node restore: fallback written", "WARNING  ⚠ PBS node configuration: applied from the backup file"}),
+			want:   join([]string{opening, mode("clean")}, refusalClean, []string{fallback, "DEBUG    PBS node restore: fallback written", "WARNING  ⚠ PBS node configuration: applied from the backup file"}),
 			warned: true, written: true},
 		{name: "refused-merge", behavior: PBSRestoreBehaviorMerge, staged: bad, runner: refuse,
 			want:   join([]string{opening, mode("merge")}, refusal, []string{"WARNING  ⚠ PBS node configuration: not applied"}),
@@ -64,7 +66,7 @@ func TestPBSNodeCfgBlock(t *testing.T) {
 				t.Fatal(err)
 			}
 		}},
-			want: join([]string{opening, mode("clean")}, refusal, []string{fallback,
+			want: join([]string{opening, mode("clean"), refusal[0], `DEBUG    PBS node restore: current file=/etc/proxmox-backup/node.cfg read failed error="read <fakefs>/etc/proxmox-backup/node.cfg: is a directory"`}, refusal[1:], []string{fallback,
 				`DEBUG    PBS node restore: fallback write failed error="write /etc/proxmox-backup/node.cfg: rename <fakefs>/etc/proxmox-backup/node.cfg.proxsave.tmp.<n> <fakefs>/etc/proxmox-backup/node.cfg: file exists"`,
 				`INFO     The node configuration could not be written to this PBS: "write /etc/proxmox-backup/node.cfg: rename <fakefs>/etc/proxmox-backup/node.cfg.proxsave.tmp.<n> <fakefs>/etc/proxmox-backup/node.cfg: file exists"`,
 				"WARNING  ⚠ PBS node configuration: not applied"}),
@@ -121,4 +123,49 @@ func TestPBSNodeCfgBlock(t *testing.T) {
 			t.Fatalf("the proxy credentials leaked:\n%s", log)
 		}
 	})
+}
+
+// A Clean restore deletes, in the same node update, the settings this PBS has and
+// the backup does not (key names at DEBUG, never values); Merge keeps them.
+func TestPBSNodeCfgBlock_CleanDeletesSettingsTheBackupLacks(t *testing.T) {
+	const current = "#old description\nemail-from: old@example.com\nhttp-proxy: http://user:pw@old.example:3128\ndefault-lang: de\nnot-a-setting: x\n"
+	for _, tc := range []struct {
+		name     string
+		behavior PBSRestoreBehavior
+		call     string
+		debug    []string
+	}{
+		{"clean", PBSRestoreBehaviorClean,
+			"proxmox-backup-manager node update --default-lang en --delete email-from --delete http-proxy --delete description",
+			[]string{
+				"DEBUG    PBS node restore: action=update keys=default-lang",
+				"DEBUG    PBS node restore: current keys=email-from,http-proxy,default-lang,not-a-setting,description",
+				"DEBUG    PBS node restore: action=delete keys=email-from,http-proxy,description",
+				"DEBUG    PBS node restore: updated",
+			}},
+		{"merge", PBSRestoreBehaviorMerge, "proxmox-backup-manager node update --default-lang en",
+			[]string{"DEBUG    PBS node restore: action=update keys=default-lang", "DEBUG    PBS node restore: updated"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			runner := &FakeCommandRunner{}
+			log, warned, _ := runPBSSectionRestoreStep(t, tc.behavior, []string{"pbs_host"}, map[string]string{"etc/proxmox-backup/node.cfg": "default-lang: en\n"}, runner, func() {
+				if err := restoreFS.WriteFile("/etc/proxmox-backup/node.cfg", []byte(current), 0o640); err != nil {
+					t.Fatal(err)
+				}
+			})
+			got := pbsBlockFrom(t, log, "INFO     Restoring PBS node configuration...", "PBS node configuration: ")
+			want := append(append([]string{"INFO     Restoring PBS node configuration...", "DEBUG    PBS node restore: mode=" + tc.name + " staged=/stage/etc/proxmox-backup/node.cfg"}, tc.debug...), "INFO     ✓ PBS node configuration: applied")
+			if strings.Join(got, "\n") != strings.Join(want, "\n") || warned {
+				t.Fatalf("warned=%v block\n--- got ---\n%s\n--- want ---\n%s", warned, strings.Join(got, "\n"), strings.Join(want, "\n"))
+			}
+			if calls := runner.CallsList(); strings.Join(calls, "\n") != tc.call {
+				t.Fatalf("calls %v, want %q", calls, tc.call)
+			}
+			for _, value := range []string{"old@example.com", "user:pw", "old description"} {
+				if strings.Contains(log, value) {
+					t.Fatalf("a value of this PBS's node.cfg reached the log: %q\n%s", value, log)
+				}
+			}
+		})
+	}
 }

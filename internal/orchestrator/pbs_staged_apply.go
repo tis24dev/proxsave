@@ -1213,6 +1213,35 @@ func applyPBSConfigFileBlock(logger *logging.Logger, stageRoot string, f pbsConf
 	return nil
 }
 
+// pbsNodeKeysToDelete reads this PBS's node.cfg and returns, for a Clean
+// restore, the settings it has that the backup (keys) does not, which
+// "node update --delete" takes. Only key names are logged, never values; a
+// node.cfg that cannot be read is DEBUG only and deletes nothing.
+func pbsNodeKeysToDelete(debug func(string, ...any), keys []string) []string {
+	target := filepath.Join(string(os.PathSeparator), filepath.FromSlash(pbsNodeCfgRel))
+	data, err := restoreFS.ReadFile(target)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		debug("current file=%s read failed error=%q", target, err.Error())
+		return nil
+	}
+	_, current := pbsNodeUpdateFlags(string(data))
+	debug("current keys=%s", strings.Join(current, ","))
+	inBackup := make(map[string]bool, len(keys))
+	for _, k := range keys {
+		inBackup[k] = true
+	}
+	var del []string
+	for _, k := range current {
+		if !inBackup[k] && pbsNodeDeletableKeys[k] {
+			del = append(del, k)
+		}
+	}
+	if len(del) > 0 {
+		debug("action=delete keys=%s", strings.Join(del, ","))
+	}
+	return del
+}
+
 const (
 	pbsNodeCfgRel       = "etc/proxmox-backup/node.cfg"
 	pbsNodeRestoreDebug = "PBS node restore: "
@@ -1260,7 +1289,11 @@ func applyPBSNodeCfgBlock(ctx context.Context, logger *logging.Logger, stageRoot
 	var cause error
 	if apiAvailable {
 		debug("action=update keys=%s", strings.Join(keys, ","))
-		updateErr := pbsStagedApplyNodeCfgViaAPIFn(ctx, stageRoot)
+		var deleteKeys []string
+		if strict {
+			deleteKeys = pbsNodeKeysToDelete(debug, keys)
+		}
+		updateErr := pbsStagedApplyNodeCfgViaAPIFn(ctx, stageRoot, deleteKeys)
 		if updateErr == nil {
 			debug("updated")
 			logger.Info("%s PBS node configuration: applied", theme.SymbolSuccess)
