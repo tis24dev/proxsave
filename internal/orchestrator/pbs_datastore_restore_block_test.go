@@ -1118,7 +1118,7 @@ func TestApplyPBSDatastoreCfgViaAPI_BlockPaths(t *testing.T) {
 // The block's outcome is the last visible line of the datastore.cfg apply: the
 // caller writes neither "PBS API apply: datastore.cfg failed" nor the step summary
 // for it, runs no file fallback over it, and still marks the restore with warnings.
-// Another item that fails in the same step keeps its summary line.
+// Another item that fails in the same step gets its own block outcome.
 func TestMaybeApplyPBSConfigsFromStage_DatastoreBlockOutcomeIsTheLastLine(t *testing.T) {
 	t.Run("datastore only", func(t *testing.T) {
 		runner := &FakeCommandRunner{
