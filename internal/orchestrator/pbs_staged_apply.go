@@ -743,24 +743,6 @@ func writeDeferredPBSDatastoreCfg(blocks []pbsDatastoreBlock) (string, error) {
 	return path, nil
 }
 
-func applyPBSJobConfigsFromStage(ctx context.Context, logger *logging.Logger, stageRoot string) (err error) {
-	done := logging.DebugStart(logger, "pbs staged apply jobs", "stage=%s", stageRoot)
-	defer func() { done(err) }()
-
-	paths := []string{
-		"etc/proxmox-backup/sync.cfg",
-		"etc/proxmox-backup/verification.cfg",
-		"etc/proxmox-backup/prune.cfg",
-	}
-
-	for _, rel := range paths {
-		if err := applyPBSConfigFileFromStage(ctx, logger, stageRoot, rel); err != nil {
-			logger.Warning("PBS staged apply: %s: %v", rel, err)
-		}
-	}
-	return nil
-}
-
 // pbsAcmeAccountsRelPath is the archive-relative directory holding the PBS ACME account
 // registrations: one JSON document per account. PBS has no acme/accounts.cfg (#313).
 const pbsAcmeAccountsRelPath = "etc/proxmox-backup/acme/accounts"
