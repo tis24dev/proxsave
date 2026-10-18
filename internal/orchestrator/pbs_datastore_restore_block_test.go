@@ -1141,6 +1141,8 @@ func TestMaybeApplyPBSConfigsFromStage_DatastoreBlockOutcomeIsTheLastLine(t *tes
 	})
 
 	t.Run("datastore and another item", func(t *testing.T) {
+		// The s3.cfg apply fails with an error the blocks do not return today: in
+		// Merge mode its block says the configuration was not applied.
 		origS3 := pbsStagedApplyS3CfgViaAPIFn
 		t.Cleanup(func() { pbsStagedApplyS3CfgViaAPIFn = origS3 })
 		pbsStagedApplyS3CfgViaAPIFn = func(context.Context, *logging.Logger, string, bool) error {
@@ -1153,15 +1155,21 @@ func TestMaybeApplyPBSConfigsFromStage_DatastoreBlockOutcomeIsTheLastLine(t *tes
 				"proxmox-backup-manager datastore update ds1":      errors.New("update refused"),
 			},
 		}
-		log, warned := runPBSDatastoreRestoreStep(t, PBSRestoreBehaviorMerge, "datastore: ds1\n\tpath /new\n", runner)
+		log, warned := runPBSDatastoreRestoreStep(t, PBSRestoreBehaviorMerge, "datastore: ds1\n\tpath /new\n", runner, func(f *FakeFS) {
+			_ = f.WriteFile("/stage/etc/proxmox-backup/s3.cfg", []byte("s3-endpoint: e1\n\tendpoint s3.example.com\n"), 0o640)
+		})
 		if !warned {
 			t.Fatal("restore must end with warnings")
 		}
-		if !strings.Contains(log, "WARNING  PBS staged config apply: 1 PBS config item(s) failed to apply: s3.cfg\n") {
-			t.Fatalf("the other item keeps its summary line, log:\n%s", log)
+		got := pbsVisibleLines(log)
+		if last := got[len(got)-1]; last != "WARNING  ⚠ PBS datastore configuration: not applied" {
+			t.Fatalf("the block outcome must be the last visible line, got %q\n%s", last, log)
 		}
-		if strings.Contains(log, "datastore.cfg failed") || strings.Contains(log, "s3.cfg, datastore.cfg") {
-			t.Fatalf("datastore.cfg must not be repeated after its block, log:\n%s", log)
+		if !strings.Contains(strings.Join(got, "\n"), "WARNING  ⚠ PBS S3 endpoint configuration: not applied") {
+			t.Fatalf("missing the s3 block outcome, log:\n%s", log)
+		}
+		if strings.Contains(log, "datastore.cfg failed") || strings.Contains(log, "failed to apply") {
+			t.Fatalf("no step summary and no repeated block, log:\n%s", log)
 		}
 	})
 }

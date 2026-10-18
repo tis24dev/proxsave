@@ -1,10 +1,15 @@
 DEBUG    Start pbs staged apply: dryRun=false stage=/stage
-WARNING  PBS API apply: verification jobs failed: forced API error
-WARNING  PBS staged apply: falling back to file-based job configs
-DEBUG    Start pbs staged apply jobs: stage=/stage
-DEBUG    pbs staged apply file: Skip etc/proxmox-backup/sync.cfg: not present in staging directory
-WARNING  PBS staged apply: etc/proxmox-backup/verification.cfg: write /etc/proxmox-backup/verification.cfg: rename <fakefs>/etc/proxmox-backup/verification.cfg.proxsave.tmp.<n> <fakefs>/etc/proxmox-backup/verification.cfg: file exists
-DEBUG    pbs staged apply file: Skip etc/proxmox-backup/prune.cfg: not present in staging directory
-DEBUG    End pbs staged apply jobs (ok, duration=<d>)
-DEBUG    End pbs staged apply (ok, duration=<d>)
-returned: <nil>
+INFO     Restoring PBS verify jobs...
+DEBUG    PBS verify job restore: mode=clean staged=/stage/etc/proxmox-backup/verification.cfg
+DEBUG    PBS verify job restore: backup verify-jobs=1 names=obj1
+INFO       Verify jobs to restore: 1
+INFO       Names: obj1
+DEBUG    PBS verify job restore: api apply failed error="forced API error"
+INFO     The verify job configuration could not be applied through the PBS API: "forced API error"
+DEBUG    PBS verify job restore: fallback=file target=/etc/proxmox-backup/verification.cfg source=/stage/etc/proxmox-backup/verification.cfg
+DEBUG    PBS verify job restore: fallback current file read failed error="read <fakefs>/etc/proxmox-backup/verification.cfg: is a directory"
+DEBUG    PBS verify job restore: fallback write failed error="write /etc/proxmox-backup/verification.cfg: rename <fakefs>/etc/proxmox-backup/verification.cfg.proxsave.tmp.<n> <fakefs>/etc/proxmox-backup/verification.cfg: file exists"
+INFO     The verify job configuration could not be written to this PBS: "write /etc/proxmox-backup/verification.cfg: rename <fakefs>/etc/proxmox-backup/verification.cfg.proxsave.tmp.<n> <fakefs>/etc/proxmox-backup/verification.cfg: file exists"
+WARNING  ⚠ PBS verify job configuration: not applied
+DEBUG    End pbs staged apply (error=forced API error; file fallback: write /etc/proxmox-backup/verification.cfg: rename <fakefs>/etc/proxmox-backup/verification.cfg.proxsave.tmp.<n> <fakefs>/etc/proxmox-backup/verification.cfg: file exists, duration=<d>)
+returned: forced API error; file fallback: write /etc/proxmox-backup/verification.cfg: rename <fakefs>/etc/proxmox-backup/verification.cfg.proxsave.tmp.<n> <fakefs>/etc/proxmox-backup/verification.cfg: file exists

@@ -42,8 +42,8 @@ var sectionCallerStamp = regexp.MustCompile(`^\[[^\]]*\] `)
 var sectionCallerDuration = regexp.MustCompile(`duration=[^)]*\)`)
 
 // The handling of a failed API apply of each section config by the staged apply:
-// the full log and the returned error, for a generic error with the fallback
-// applied, with the fallback failing, for a Clean 1:1 incomplete error, and in
+// the full log and the returned error, for an error the blocks do not return
+// today, with the file written from the backup, with that write failing, and in
 // Merge mode.
 func TestPBSSectionCallerCharacterization(t *testing.T) {
 	cases := []struct {
@@ -54,7 +54,6 @@ func TestPBSSectionCallerCharacterization(t *testing.T) {
 	}{
 		{"clean-fallback-applied", PBSRestoreBehaviorClean, errors.New("forced API error"), false},
 		{"clean-fallback-fails", PBSRestoreBehaviorClean, errors.New("forced API error"), true},
-		{"clean-incomplete", PBSRestoreBehaviorClean, fmt.Errorf("x remove failed for 1 object(s) [old]: %w", errPBSCleanRemoveIncomplete), false},
 		{"merge", PBSRestoreBehaviorMerge, errors.New("forced API error"), false},
 	}
 	for _, tg := range sectionCallerTargets() {
@@ -128,14 +127,15 @@ func runSectionCallerCase(t *testing.T, tg sectionCallerTarget, behavior PBSRest
 	plan := &RestorePlan{SystemType: SystemTypePBS, PBSRestoreBehavior: behavior, NormalCategories: []Category{{ID: tg.category}}}
 	err := maybeApplyPBSConfigsFromStage(context.Background(), logger, plan, "/stage", false)
 
-	var out strings.Builder
-	for _, line := range strings.Split(strings.TrimRight(buf.String(), "\n"), "\n") {
-		line = sectionCallerStamp.ReplaceAllString(line, "")
+	normalize := func(line string) string {
 		line = sectionCallerDuration.ReplaceAllString(line, "duration=<d>)")
 		line = strings.ReplaceAll(line, fakeFS.Root, "<fakefs>")
-		line = regexp.MustCompile(`proxsave\.tmp\.[0-9]+`).ReplaceAllString(line, "proxsave.tmp.<n>")
-		out.WriteString(line + "\n")
+		return regexp.MustCompile(`proxsave\.tmp\.[0-9]+`).ReplaceAllString(line, "proxsave.tmp.<n>")
 	}
-	fmt.Fprintf(&out, "returned: %v\n", err)
+	var out strings.Builder
+	for _, line := range strings.Split(strings.TrimRight(buf.String(), "\n"), "\n") {
+		out.WriteString(normalize(sectionCallerStamp.ReplaceAllString(line, "")) + "\n")
+	}
+	out.WriteString(normalize(fmt.Sprintf("returned: %v", err)) + "\n")
 	return out.String()
 }

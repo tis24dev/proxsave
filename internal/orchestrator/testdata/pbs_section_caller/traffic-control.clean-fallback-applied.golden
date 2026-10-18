@@ -3,9 +3,18 @@ DEBUG    PBS ACME accounts restore: staged=/stage/etc/proxmox-backup/acme/accoun
 DEBUG    PBS ACME plugin restore: staged=/stage/etc/proxmox-backup/acme/plugins.cfg not in the backup action=skip
 DEBUG    PBS metric server restore: staged=/stage/etc/proxmox-backup/metricserver.cfg not in the backup action=skip
 DEBUG    PBS proxy restore: staged=/stage/etc/proxmox-backup/proxy.cfg not in the backup action=skip
-WARNING  PBS API apply: traffic-control failed: forced API error
-WARNING  PBS staged apply: falling back to file-based traffic-control.cfg
+INFO     Restoring PBS traffic control rules...
+DEBUG    PBS traffic control rule restore: mode=clean staged=/stage/etc/proxmox-backup/traffic-control.cfg
+DEBUG    PBS traffic control rule restore: backup traffic-control-rules=1 names=obj1
+INFO       Traffic control rules to restore: 1
+INFO       Names: obj1
+DEBUG    PBS traffic control rule restore: api apply failed error="forced API error"
+INFO     The traffic control configuration could not be applied through the PBS API: "forced API error"
+DEBUG    PBS traffic control rule restore: fallback=file target=/etc/proxmox-backup/traffic-control.cfg source=/stage/etc/proxmox-backup/traffic-control.cfg
+DEBUG    PBS traffic control rule restore: fallback current file traffic-control-rules=0 names=
 DEBUG    pbs staged apply file: Applied etc/proxmox-backup/traffic-control.cfg -> /etc/proxmox-backup/traffic-control.cfg
+DEBUG    PBS traffic control rule restore: fallback written
+WARNING  ⚠ PBS traffic control configuration: applied from the backup file
 DEBUG    PBS node restore: staged=/stage/etc/proxmox-backup/node.cfg not in the backup action=skip
-DEBUG    End pbs staged apply (ok, duration=<d>)
-returned: <nil>
+DEBUG    End pbs staged apply (error=forced API error, duration=<d>)
+returned: forced API error

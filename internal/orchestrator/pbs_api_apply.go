@@ -862,7 +862,7 @@ func (r *pbsSectionRestore) outcome() error {
 // readStaged reads the staged file of this config and the objects it names, in
 // sorted order. done is true when the block has already ended, with err its
 // result: nothing is staged (DEBUG only), or the staged file could not be read
-// (the block is logged as not applied).
+// or parsed (the block is logged as not applied).
 func (r *pbsSectionRestore) readStaged(stageRoot, mode string) (raw string, desired map[string]proxmoxNotificationSection, ids []string, done bool, err error) {
 	stagedPath := filepath.Join(stageRoot, r.cfg.file)
 	raw, present, err := readStageFileOptional(stageRoot, r.cfg.file)
@@ -870,16 +870,18 @@ func (r *pbsSectionRestore) readStaged(stageRoot, mode string) (raw string, desi
 		r.debug("staged=%s not in the backup action=skip", stagedPath)
 		return "", nil, nil, true, nil
 	}
+	var sections []proxmoxNotificationSection
+	if err == nil {
+		if sections, err = parseProxmoxNotificationSections(raw); err != nil {
+			err = fmt.Errorf("parse staged %s: %w", filepath.Base(r.cfg.file), err)
+		}
+	}
 	if err != nil {
 		r.logger.Info("Restoring PBS %s...", r.cfg.labels.plural)
 		r.debug("mode=%s staged=%s", mode, stagedPath)
 		r.debug("staged=%s read failed error=%q", stagedPath, err.Error())
 		r.logger.Info("%s in the backup could not be read: \"%s\"", r.configuration(), err.Error())
 		return "", nil, nil, true, r.configNotApplied(err)
-	}
-	sections, err := parseProxmoxNotificationSections(raw)
-	if err != nil {
-		return "", nil, nil, true, fmt.Errorf("parse staged %s: %w", filepath.Base(r.cfg.file), err)
 	}
 	desired = make(map[string]proxmoxNotificationSection, len(sections))
 	for _, s := range sections {
@@ -924,6 +926,35 @@ func applyPBSSectionCfgFileBlock(ctx context.Context, logger *logging.Logger, st
 	}
 	r.open(stageRoot, mode, ids)
 	return r.fileFallback(stageRoot, raw, ids, event, cause)
+}
+
+// applyPBSSectionCfgAfterAPIError is the block of a section config whose PBS API
+// apply returned an error the block does not return today: the objects to
+// restore and the event carrying that error, then in strict (Clean 1:1) mode the
+// file written from the backup, as the file fallback, and in Merge mode the
+// configuration not applied. Its outcome is always already logged: the result is
+// nil when nothing is staged, otherwise a pbsSectionRestoreStoppedError.
+func applyPBSSectionCfgAfterAPIError(ctx context.Context, logger *logging.Logger, stageRoot string, strict bool, cfg pbsSectionCfg, apiErr error) error {
+	r := &pbsSectionRestore{ctx: ctx, logger: logger, cfg: cfg}
+	mode := "merge"
+	if strict {
+		mode = "clean"
+	}
+	raw, _, ids, done, err := r.readStaged(stageRoot, mode)
+	if done {
+		if err == nil {
+			r.debug("api apply failed error=%q, nothing staged action=skip", apiErr.Error())
+		}
+		return err
+	}
+	r.open(stageRoot, mode, ids)
+	r.debug("api apply failed error=%q", apiErr.Error())
+	event := fmt.Sprintf("%s could not be applied through the PBS API: \"%s\"", r.configuration(), apiErr.Error())
+	if strict {
+		return r.fileFallback(stageRoot, raw, ids, event, apiErr)
+	}
+	r.logger.Info("%s", event)
+	return r.configNotApplied(apiErr)
 }
 
 // applyPBSSectionCfgViaAPI restores the staged cfg.file through
@@ -1527,6 +1558,23 @@ func applyPBSDatastoreCfgFileBlock(ctx context.Context, logger *logging.Logger, 
 		return err
 	}
 	return r.fileFallback(event, cause)
+}
+
+// applyPBSDatastoreCfgAfterAPIError is the block of datastore.cfg when the API
+// block returned an error it does not return today: the datastores to restore and
+// the event carrying that error, then in strict (Clean 1:1) mode datastore.cfg
+// written from the backup file, and in Merge mode the configuration not applied.
+// Like the file block, its outcome is always already logged.
+func applyPBSDatastoreCfgAfterAPIError(ctx context.Context, logger *logging.Logger, stageRoot string, strict bool, apiErr error) error {
+	r, _, _, done, err := beginPBSDatastoreRestore(ctx, logger, stageRoot, strict)
+	if done {
+		if err == nil {
+			logger.Debug(pbsDatastoreRestoreDebug+"api apply failed error=%q, nothing staged action=skip", apiErr.Error())
+		}
+		return err
+	}
+	r.debug("api apply failed error=%q", apiErr.Error())
+	return r.stopped(fmt.Sprintf("The datastore configuration could not be applied through the PBS API: \"%s\"", apiErr.Error()), apiErr)
 }
 
 // beginPBSDatastoreRestore opens the datastore block: it reads the staged

@@ -1,8 +1,18 @@
 DEBUG    Start pbs staged apply: dryRun=false stage=/stage
-WARNING  PBS API apply: remote.cfg failed: forced API error
-WARNING  PBS staged apply: falling back to file-based remote.cfg
+INFO     Restoring PBS remotes...
+DEBUG    PBS remote restore: mode=clean staged=/stage/etc/proxmox-backup/remote.cfg
+DEBUG    PBS remote restore: backup remotes=1 names=obj1
+INFO       Remotes to restore: 1
+INFO       Names: obj1
+DEBUG    PBS remote restore: api apply failed error="forced API error"
+INFO     The remote configuration could not be applied through the PBS API: "forced API error"
+DEBUG    PBS remote restore: fallback=file target=/etc/proxmox-backup/remote.cfg source=/stage/etc/proxmox-backup/remote.cfg
+DEBUG    PBS remote restore: fallback current file remotes=0 names=
+DEBUG    PBS remote restore: fallback current sync jobs=0 remotes_used=
 DEBUG    Start pbs staged apply remote.cfg: stage=/stage
 DEBUG    pbs staged apply file: Applied etc/proxmox-backup/remote.cfg -> /etc/proxmox-backup/remote.cfg
 DEBUG    End pbs staged apply remote.cfg (ok, duration=<d>)
-DEBUG    End pbs staged apply (ok, duration=<d>)
-returned: <nil>
+DEBUG    PBS remote restore: fallback written
+WARNING  ⚠ PBS remote configuration: applied from the backup file
+DEBUG    End pbs staged apply (error=forced API error, duration=<d>)
+returned: forced API error

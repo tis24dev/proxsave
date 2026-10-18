@@ -1,10 +1,15 @@
 DEBUG    Start pbs staged apply: dryRun=false stage=/stage
-WARNING  PBS API apply: sync jobs failed: forced API error
-WARNING  PBS staged apply: falling back to file-based job configs
-DEBUG    Start pbs staged apply jobs: stage=/stage
-WARNING  PBS staged apply: etc/proxmox-backup/sync.cfg: write /etc/proxmox-backup/sync.cfg: rename <fakefs>/etc/proxmox-backup/sync.cfg.proxsave.tmp.<n> <fakefs>/etc/proxmox-backup/sync.cfg: file exists
-DEBUG    pbs staged apply file: Skip etc/proxmox-backup/verification.cfg: not present in staging directory
-DEBUG    pbs staged apply file: Skip etc/proxmox-backup/prune.cfg: not present in staging directory
-DEBUG    End pbs staged apply jobs (ok, duration=<d>)
-DEBUG    End pbs staged apply (ok, duration=<d>)
-returned: <nil>
+INFO     Restoring PBS sync jobs...
+DEBUG    PBS sync job restore: mode=clean staged=/stage/etc/proxmox-backup/sync.cfg
+DEBUG    PBS sync job restore: backup sync-jobs=1 names=obj1
+INFO       Sync jobs to restore: 1
+INFO       Names: obj1
+DEBUG    PBS sync job restore: api apply failed error="forced API error"
+INFO     The sync job configuration could not be applied through the PBS API: "forced API error"
+DEBUG    PBS sync job restore: fallback=file target=/etc/proxmox-backup/sync.cfg source=/stage/etc/proxmox-backup/sync.cfg
+DEBUG    PBS sync job restore: fallback current file read failed error="read <fakefs>/etc/proxmox-backup/sync.cfg: is a directory"
+DEBUG    PBS sync job restore: fallback write failed error="write /etc/proxmox-backup/sync.cfg: rename <fakefs>/etc/proxmox-backup/sync.cfg.proxsave.tmp.<n> <fakefs>/etc/proxmox-backup/sync.cfg: file exists"
+INFO     The sync job configuration could not be written to this PBS: "write /etc/proxmox-backup/sync.cfg: rename <fakefs>/etc/proxmox-backup/sync.cfg.proxsave.tmp.<n> <fakefs>/etc/proxmox-backup/sync.cfg: file exists"
+WARNING  ⚠ PBS sync job configuration: not applied
+DEBUG    End pbs staged apply (error=forced API error; file fallback: write /etc/proxmox-backup/sync.cfg: rename <fakefs>/etc/proxmox-backup/sync.cfg.proxsave.tmp.<n> <fakefs>/etc/proxmox-backup/sync.cfg: file exists, duration=<d>)
+returned: forced API error; file fallback: write /etc/proxmox-backup/sync.cfg: rename <fakefs>/etc/proxmox-backup/sync.cfg.proxsave.tmp.<n> <fakefs>/etc/proxmox-backup/sync.cfg: file exists

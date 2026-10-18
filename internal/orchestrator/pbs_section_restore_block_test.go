@@ -804,9 +804,10 @@ func TestPBSSectionRestoreBlock_CurrentUnreadable(t *testing.T) {
 
 func pbsStrPtr(s string) *string { return &s }
 
-// With other items in the same step: an item that fails keeps its summary line
-// and the section blocks are not repeated in it; two blocks whose outcomes are
-// logged both reach the DEBUG line of the step.
+// With other items in the same step: an item whose API apply returned an error
+// the blocks do not return today gets its own block, and the section blocks are
+// not repeated; two blocks whose outcomes are logged both reach the DEBUG line of
+// the step.
 func TestMaybeApplyPBSConfigsFromStage_SectionBlockOutcomeIsNotRepeated(t *testing.T) {
 	r1 := pbsRemoteSection("r1", "10.0.0.1", "secret-r1", pbsRemoteGoodFP)
 	refused := map[string]error{
@@ -814,27 +815,34 @@ func TestMaybeApplyPBSConfigsFromStage_SectionBlockOutcomeIsNotRepeated(t *testi
 		pbsRemoteCmd("update", "r1", "10.0.0.1", "secret-r1", pbsRemoteGoodFP): errors.New(pbsRemoteUpdateBadFingerprint),
 	}
 
-	t.Run("with a failed item", func(t *testing.T) {
-		// The s3.cfg apply fails with a plain error, which the caller reports, and in
-		// Merge mode records as a failed item.
+	t.Run("with an unexpected error", func(t *testing.T) {
+		// The s3.cfg apply fails with a plain error: in Merge mode its block says
+		// the configuration was not applied.
 		runner := &FakeCommandRunner{Errors: refused}
 		log, warned, _ := runPBSSectionRestoreStep(t, PBSRestoreBehaviorMerge, []string{"pbs_remotes", "datastore_pbs"}, map[string]string{
 			"etc/proxmox-backup/remote.cfg": r1,
+			"etc/proxmox-backup/s3.cfg":     "s3-endpoint: e1\n\tendpoint s3.example.com\n",
 		}, runner, func() {
 			pbsStagedApplyS3CfgViaAPIFn = func(context.Context, *logging.Logger, string, bool) error { return errors.New("forced s3 error") }
 		})
 		if !warned {
 			t.Fatal("restore must end with warnings")
 		}
-		got := pbsVisibleLines(log)
-		if last := got[len(got)-1]; last != "WARNING  PBS staged config apply: 1 PBS config item(s) failed to apply: s3.cfg" {
-			t.Fatalf("the other item keeps its summary line, got %q, log:\n%s", last, log)
+		got := strings.Join(pbsVisibleLines(log), "\n")
+		for _, want := range []string{
+			`INFO     The S3 endpoint configuration could not be applied through the PBS API: "forced s3 error"` + "\n" + "WARNING  ⚠ PBS S3 endpoint configuration: not applied",
+			"WARNING  ⚠ PBS remote configuration: not applied",
+		} {
+			if !strings.Contains(got, want) {
+				t.Fatalf("missing %q, visible lines:\n%s", want, got)
+			}
 		}
-		if strings.Contains(log, "remote.cfg failed") || strings.Contains(log, "s3.cfg, remote.cfg") {
-			t.Fatalf("remote.cfg must not be repeated after its block, log:\n%s", log)
+		if strings.Contains(log, "failed to apply") || strings.Contains(log, "remote.cfg failed") {
+			t.Fatalf("no step summary and no repeated block, log:\n%s", log)
 		}
-		if !strings.Contains(log, "WARNING  ⚠ PBS remote configuration: not applied\n") {
-			t.Fatalf("missing the remote block outcome, log:\n%s", log)
+		want := "DEBUG    PBS staged config apply: outcome already reported: forced s3 error; PBS remote configuration incomplete: 1 remote(s) not applied [r1]"
+		if lines := pbsBlockLogLines(log); lines[len(lines)-1] != want {
+			t.Fatalf("last line %q, want %q", lines[len(lines)-1], want)
 		}
 	})
 
