@@ -952,7 +952,7 @@ func TestApplyPBSJobConfigsFromStage_ContinuesOnApplyErrors(t *testing.T) {
 	}
 }
 
-func TestApplyPBSTapeConfigsFromStage_WritesConfigsAndSensitiveKeys(t *testing.T) {
+func TestPBSTapeFileBlocks_WriteConfigsAndSensitiveKeys(t *testing.T) {
 	origFS := restoreFS
 	t.Cleanup(func() { restoreFS = origFS })
 
@@ -974,8 +974,10 @@ func TestApplyPBSTapeConfigsFromStage_WritesConfigsAndSensitiveKeys(t *testing.T
 		t.Fatalf("write staged tape-encryption-keys.json: %v", err)
 	}
 
-	if err := applyPBSTapeConfigsFromStage(context.Background(), newTestLogger(), stageRoot); err != nil {
-		t.Fatalf("applyPBSTapeConfigsFromStage: %v", err)
+	for _, f := range pbsTapeFileBlocks {
+		if err := applyPBSConfigFileBlock(newTestLogger(), stageRoot, f); err != nil {
+			t.Fatalf("%s: %v", f.rel, err)
+		}
 	}
 
 	for _, name := range []string{"tape.cfg", "tape-job.cfg", "media-pool.cfg"} {
@@ -992,7 +994,7 @@ func TestApplyPBSTapeConfigsFromStage_WritesConfigsAndSensitiveKeys(t *testing.T
 	}
 }
 
-func TestApplyPBSTapeConfigsFromStage_ContinuesOnErrors(t *testing.T) {
+func TestPBSTapeFileBlocks_ContinueOnErrors(t *testing.T) {
 	origFS := restoreFS
 	t.Cleanup(func() { restoreFS = origFS })
 
@@ -1009,8 +1011,15 @@ func TestApplyPBSTapeConfigsFromStage_ContinuesOnErrors(t *testing.T) {
 		t.Fatalf("mkdir staged tape-encryption-keys.json dir: %v", err)
 	}
 
-	if err := applyPBSTapeConfigsFromStage(context.Background(), newTestLogger(), stageRoot); err != nil {
-		t.Fatalf("applyPBSTapeConfigsFromStage: %v", err)
+	// Every file gets its own block: a failure of one does not stop the others.
+	var failed []string
+	for _, f := range pbsTapeFileBlocks {
+		if err := applyPBSConfigFileBlock(newTestLogger(), stageRoot, f); err != nil {
+			failed = append(failed, f.rel)
+		}
+	}
+	if strings.Join(failed, ",") != "etc/proxmox-backup/tape.cfg,etc/proxmox-backup/tape-encryption-keys.json" {
+		t.Fatalf("failed blocks %v", failed)
 	}
 }
 

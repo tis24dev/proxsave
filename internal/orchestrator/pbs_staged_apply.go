@@ -233,9 +233,12 @@ func maybeApplyPBSConfigsFromStage(ctx context.Context, logger *logging.Logger, 
 	}
 
 	if plan.HasCategoryID("pbs_tape") {
-		if err := applyPBSTapeConfigsFromStage(ctx, logger, stageRoot); err != nil {
-			logger.Warning("PBS staged apply: tape configs: %v", err)
-			failedItems = append(failedItems, "tape configs")
+		// Tape is file-only: drives and changers need their device, and the keys
+		// are secret material. Each file is its own block.
+		for _, f := range pbsTapeFileBlocks {
+			if err := applyPBSConfigFileBlock(logger, stageRoot, f); err != nil {
+				outcomeLogged = append(outcomeLogged, err)
+			}
 		}
 	}
 
@@ -340,29 +343,6 @@ func applyPBSS3CfgFromStage(ctx context.Context, logger *logging.Logger, stageRo
 	defer func() { done(err) }()
 
 	return applyPBSConfigFileFromStage(ctx, logger, stageRoot, "etc/proxmox-backup/s3.cfg")
-}
-
-func applyPBSTapeConfigsFromStage(ctx context.Context, logger *logging.Logger, stageRoot string) (err error) {
-	done := logging.DebugStart(logger, "pbs staged apply tape configs", "stage=%s", stageRoot)
-	defer func() { done(err) }()
-
-	paths := []string{
-		"etc/proxmox-backup/tape.cfg",
-		"etc/proxmox-backup/tape-job.cfg",
-		"etc/proxmox-backup/media-pool.cfg",
-	}
-	for _, rel := range paths {
-		if err := applyPBSConfigFileFromStage(ctx, logger, stageRoot, rel); err != nil {
-			logger.Warning("PBS staged apply: %s: %v", rel, err)
-		}
-	}
-
-	// Tape encryption keys are JSON (no section headers) and should be applied as a sensitive file.
-	if err := applySensitiveFileFromStage(logger, stageRoot, "etc/proxmox-backup/tape-encryption-keys.json", "/etc/proxmox-backup/tape-encryption-keys.json", 0o600); err != nil {
-		logger.Warning("PBS staged apply: tape-encryption-keys.json: %v", err)
-	}
-
-	return nil
 }
 
 type pbsDatastoreBlock struct {
@@ -1133,6 +1113,11 @@ type pbsConfigFileBlock struct {
 	opening string
 	config  string // event subject: "The metric server configuration"
 	outcome string
+	// json: the file is JSON, not a section config: no section header or
+	// comment rule, only an empty file removes the target. perm is its mode
+	// (0 means 0640).
+	json bool
+	perm os.FileMode
 }
 
 var (
@@ -1142,6 +1127,22 @@ var (
 		opening: "Restoring PBS metric server configuration...",
 		config:  "The metric server configuration",
 		outcome: "PBS metric server configuration",
+	}
+	// pbsTapeFileBlocks are the tape files, written as staged (the drives and
+	// changers need their device, the keys are secret material).
+	pbsTapeFileBlocks = []pbsConfigFileBlock{
+		{rel: "etc/proxmox-backup/tape.cfg", debug: "PBS tape drives restore: ",
+			opening: "Restoring PBS tape drives and changers...", config: "The tape drives and changers", outcome: "PBS tape drives and changers"},
+		{rel: "etc/proxmox-backup/media-pool.cfg", debug: "PBS tape media pools restore: ",
+			opening: "Restoring PBS tape media pools...", config: "The tape media pools", outcome: "PBS tape media pools"},
+		{rel: "etc/proxmox-backup/tape-job.cfg", debug: "PBS tape backup jobs restore: ",
+			opening: "Restoring PBS tape backup jobs...", config: "The tape backup jobs", outcome: "PBS tape backup jobs"},
+		{rel: "etc/proxmox-backup/tape-encryption-keys.json", debug: "PBS tape encryption keys restore: ",
+			opening: "Restoring PBS tape encryption keys...", config: "The tape encryption keys", outcome: "PBS tape encryption keys",
+			json: true, perm: 0o600},
+		{rel: "etc/proxmox-backup/tape-encryption-key-config.json", debug: "PBS tape encryption key configuration restore: ",
+			opening: "Restoring PBS tape encryption key configuration...", config: "The tape encryption key configuration", outcome: "PBS tape encryption key configuration",
+			json: true, perm: 0o600},
 	}
 	pbsProxyFileBlock = pbsConfigFileBlock{
 		rel:     "etc/proxmox-backup/proxy.cfg",
@@ -1189,8 +1190,22 @@ func applyPBSConfigFileBlock(logger *logging.Logger, stageRoot string, f pbsConf
 		return notApplied(err)
 	}
 	trimmed := strings.TrimSpace(string(data))
+	perm := f.perm
+	if perm == 0 {
+		perm = 0o640
+	}
 	var writeErr error
 	switch {
+	case f.json && trimmed == "":
+		if writeErr = removeIfExists(destPath); writeErr == nil {
+			logger.Debug("%sstaged file is empty, target removed", f.debug)
+		}
+	case f.json:
+		if writeErr = writeFileAtomic(destPath, []byte(trimmed+"\n"), perm); writeErr != nil {
+			writeErr = fmt.Errorf("write %s: %w", destPath, writeErr)
+		} else {
+			logger.Debug("%swritten", f.debug)
+		}
 	case pbsConfigCommentsOnly(trimmed):
 		if writeErr = removeIfExists(destPath); writeErr == nil {
 			logger.Debug(f.debug+"staged file has no configuration comments_only=%v, target removed", trimmed != "")
@@ -1198,7 +1213,7 @@ func applyPBSConfigFileBlock(logger *logging.Logger, stageRoot string, f pbsConf
 	case !pbsConfigHasHeader(trimmed):
 		writeErr = fmt.Errorf("%s does not look like a valid PBS config file (missing section header)", f.rel)
 	default:
-		if writeErr = writeFileAtomic(destPath, []byte(trimmed+"\n"), 0o640); writeErr != nil {
+		if writeErr = writeFileAtomic(destPath, []byte(trimmed+"\n"), perm); writeErr != nil {
 			writeErr = fmt.Errorf("write %s: %w", destPath, writeErr)
 		} else {
 			logger.Debug("%swritten", f.debug)

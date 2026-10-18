@@ -753,13 +753,14 @@ func TestPBSPXARPrepareBrickBuildsPxarState(t *testing.T) {
 func TestPBSManifestAccessAndTapeBricksPopulateEntriesIndividually(t *testing.T) {
 	pbsRoot := t.TempDir()
 	for name := range map[string]string{
-		"user.cfg":                  "users",
-		"acl.cfg":                   "acl",
-		"domains.cfg":               "domains",
-		"tape.cfg":                  "tape",
-		"tape-job.cfg":              "jobs",
-		"media-pool.cfg":            "pool",
-		"tape-encryption-keys.json": "{}",
+		"user.cfg":                        "users",
+		"acl.cfg":                         "acl",
+		"domains.cfg":                     "domains",
+		"tape.cfg":                        "tape",
+		"tape-job.cfg":                    "jobs",
+		"media-pool.cfg":                  "pool",
+		"tape-encryption-keys.json":       "{}",
+		"tape-encryption-key-config.json": "{}",
 	} {
 		if err := os.WriteFile(filepath.Join(pbsRoot, name), []byte(name), 0o640); err != nil {
 			t.Fatalf("write %s: %v", name, err)
@@ -796,6 +797,7 @@ func TestPBSManifestAccessAndTapeBricksPopulateEntriesIndividually(t *testing.T)
 		"tape-job.cfg",
 		"media-pool.cfg",
 		"tape-encryption-keys.json",
+		"tape-encryption-key-config.json",
 	} {
 		entry, ok := collector.pbsManifest[key]
 		if !ok {

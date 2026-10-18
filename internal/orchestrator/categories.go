@@ -281,6 +281,7 @@ func GetAllCategories() []Category {
 				"./etc/proxmox-backup/tape-job.cfg",
 				"./etc/proxmox-backup/media-pool.cfg",
 				"./etc/proxmox-backup/tape-encryption-keys.json",
+				"./etc/proxmox-backup/tape-encryption-key-config.json",
 				"./var/lib/proxsave-info/commands/pbs/tape_drives.json",
 				"./var/lib/proxsave-info/commands/pbs/tape_changers.json",
 				"./var/lib/proxsave-info/commands/pbs/tape_pools.json",

@@ -167,7 +167,7 @@ func (c *Collector) collectPBSConfigSnapshot(ctx context.Context, root string) e
 		extraExclude = append(extraExclude, "verification.cfg")
 	}
 	if !c.config.BackupTapeConfigs {
-		extraExclude = append(extraExclude, "tape.cfg", "tape-job.cfg", "media-pool.cfg", "tape-encryption-keys.json")
+		extraExclude = append(extraExclude, "tape.cfg", "tape-job.cfg", "media-pool.cfg", "tape-encryption-keys.json", "tape-encryption-key-config.json")
 	}
 	if !c.config.BackupPBSNetworkConfig {
 		extraExclude = append(extraExclude, "network.cfg")
@@ -331,6 +331,7 @@ func (c *Collector) collectPBSManifestMediaPools(ctx context.Context, root strin
 
 func (c *Collector) collectPBSManifestTapeEncryptionKeys(ctx context.Context, root string) error {
 	c.setPBSManifestEntry(ctx, root, "tape-encryption-keys.json", "Tape encryption keys", c.config.BackupTapeConfigs, "BACKUP_TAPE_CONFIGS")
+	c.setPBSManifestEntry(ctx, root, "tape-encryption-key-config.json", "Tape encryption key configuration", c.config.BackupTapeConfigs, "BACKUP_TAPE_CONFIGS")
 	return nil
 }
 
