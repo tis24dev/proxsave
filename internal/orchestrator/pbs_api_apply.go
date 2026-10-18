@@ -245,6 +245,35 @@ type pbsSectionCfg struct {
 	// keepSyncJobRemotes: the file fallback keeps an object of this PBS that a
 	// sync job uses (remote.cfg), as PBS refuses to remove it.
 	keepSyncJobRemotes bool
+	// createVerb and updateVerb replace "create" and "update" ("add" and "set"
+	// for ACME plugins); createWithType puts the section type in front of the id
+	// on create.
+	createVerb     string
+	updateVerb     string
+	createWithType bool
+	// dataFileFlag is the flag whose value create takes as the path of a file
+	// holding it decoded from the staged base64, while update takes it as staged
+	// (ACME plugin --data).
+	dataFileFlag string
+	// builtin are the objects PBS provides itself: never applied, removed,
+	// counted or named.
+	builtin []string
+}
+
+func (c pbsSectionCfg) isBuiltin(id string) bool {
+	for _, b := range c.builtin {
+		if b == id {
+			return true
+		}
+	}
+	return false
+}
+
+func (c pbsSectionCfg) verb(verb, override string) string {
+	if override != "" {
+		return override
+	}
+	return verb
 }
 
 // writeFromStage writes this config's staged file, and only that file, to this PBS.
@@ -306,6 +335,13 @@ var (
 		noun:      "prune job",
 		eventNoun: "Prune job",
 		outcome:   "PBS prune job configuration",
+	}
+	pbsAcmePluginLabels = pbsSectionLabels{
+		plural:    "ACME plugins",
+		countNoun: "ACME plugins",
+		noun:      "ACME plugin",
+		eventNoun: "ACME plugin",
+		outcome:   "PBS ACME plugin configuration",
 	}
 	pbsTrafficControlLabels = pbsSectionLabels{
 		plural:    "traffic control rules",
@@ -455,14 +491,72 @@ func (r *pbsSectionRestore) removeStale(id string) error {
 	return nil
 }
 
+// pbsDecodeStoredBase64 decodes a value PBS stores base64-encoded, with or without
+// the padding: PBS 4.2.8 writes the ACME plugin data without it.
+func pbsDecodeStoredBase64(value string) ([]byte, error) {
+	if data, err := base64.StdEncoding.DecodeString(value); err == nil {
+		return data, nil
+	}
+	return base64.RawStdEncoding.DecodeString(strings.TrimRight(value, "="))
+}
+
+// dataFile returns the create flags of an object whose dataFileFlag value create
+// takes as a file: the staged base64 is decoded into a 0600 file in a 0700
+// directory made for the call, and the flag carries its path. cleanup removes
+// the directory; it is safe to call in every case. Neither the value nor the
+// decoded data is ever logged.
+func (r *pbsSectionRestore) dataFile(id string, flags []string) (out []string, cleanup func(), err error) {
+	cleanup = func() {}
+	if r.cfg.dataFileFlag == "" {
+		return flags, cleanup, nil
+	}
+	flag := "--" + r.cfg.dataFileFlag
+	out = append([]string(nil), flags...)
+	for i := 0; i+1 < len(out); i++ {
+		if out[i] != flag {
+			continue
+		}
+		data, decErr := pbsDecodeStoredBase64(out[i+1])
+		if decErr != nil {
+			r.debug("%s=%s %s is not valid base64, writing the staged value unchanged", r.key(), id, r.cfg.dataFileFlag)
+			data = []byte(out[i+1])
+		}
+		dir, mkErr := os.MkdirTemp("", "proxsave-pbs-data-")
+		if mkErr != nil {
+			return nil, cleanup, fmt.Errorf("create a directory for the %s data: %w", r.cfg.dataFileFlag, mkErr)
+		}
+		cleanup = func() { _ = os.RemoveAll(dir) }
+		path := filepath.Join(dir, "data")
+		if wErr := os.WriteFile(path, data, 0o600); wErr != nil {
+			return nil, cleanup, fmt.Errorf("write the %s data: %w", r.cfg.dataFileFlag, wErr)
+		}
+		out[i+1] = path
+		return out, cleanup, nil
+	}
+	return out, cleanup, nil
+}
+
 // apply restores one object of the backup: create, and when PBS refuses the
 // create (the object may already exist) update. It returns only a cancellation.
 func (r *pbsSectionRestore) apply(id string, s proxmoxNotificationSection) error {
 	r.attempted++
 	kind := strings.Join(r.cfg.command, " ")
 	flags := pbsSectionFlags(r.logger, kind, id, s.Entries, r.cfg.base64Values)
-	createArgs := r.commandArgs(append([]string{"create", id}, flags...)...)
-	if _, createErr := runPBSManagerSensitive(r.ctx, createArgs, r.cfg.secretFlags...); createErr != nil {
+	head := []string{r.cfg.verb("create", r.cfg.createVerb)}
+	if r.cfg.createWithType {
+		head = append(head, s.Type)
+	}
+	head = append(head, id)
+	createFlags, cleanup, prepErr := r.dataFile(id, flags)
+	var createErr error
+	if prepErr != nil {
+		createErr = prepErr
+	} else {
+		createArgs := r.commandArgs(append(head, createFlags...)...)
+		_, createErr = runPBSManagerSensitive(r.ctx, createArgs, r.cfg.secretFlags...)
+	}
+	cleanup()
+	if createErr != nil {
 		return r.update(id, flags, createErr)
 	}
 	r.debug("%s=%s created", r.key(), id)
@@ -485,7 +579,7 @@ func (r *pbsSectionRestore) update(id string, flags []string, createErr error) e
 		return ctxErr
 	}
 	r.debug("%s=%s create failed error=%q action=update", r.key(), id, pbsManagerErrorText(createErr))
-	updateArgs := r.commandArgs(append([]string{"update", id}, flags...)...)
+	updateArgs := r.commandArgs(append([]string{r.cfg.verb("update", r.cfg.updateVerb), id}, flags...)...)
 	if _, err := runPBSManagerSensitive(r.ctx, updateArgs, r.cfg.secretFlags...); err != nil {
 		if ctxErr := r.ctx.Err(); ctxErr != nil {
 			return ctxErr
@@ -517,6 +611,17 @@ func (r *pbsSectionRestore) configNotApplied(cause error) error {
 	return &pbsSectionRestoreStoppedError{err: cause}
 }
 
+// withoutBuiltin drops the objects PBS provides itself.
+func (r *pbsSectionRestore) withoutBuiltin(ids []string) []string {
+	out := make([]string, 0, len(ids))
+	for _, id := range ids {
+		if !r.cfg.isBuiltin(id) {
+			out = append(out, id)
+		}
+	}
+	return out
+}
+
 // readCurrent reads the ids of the objects configured on this PBS, or the error
 // that kept them from being read.
 func (r *pbsSectionRestore) readCurrent() ([]string, error) {
@@ -533,7 +638,7 @@ func (r *pbsSectionRestore) readCurrent() ([]string, error) {
 		r.debug("%s list returned unparseable output error=%q", kind, err.Error())
 		return nil, fmt.Errorf("parse %s list: %w", kind, err)
 	}
-	return current, nil
+	return r.withoutBuiltin(current), nil
 }
 
 // pbsSectionFileNames reads the objects of a section-config file on this PBS, by
@@ -664,6 +769,7 @@ func (r *pbsSectionRestore) fileFallback(stageRoot, raw string, ids []string, ev
 	target := filepath.Join(string(os.PathSeparator), filepath.FromSlash(r.cfg.file))
 	r.debug("fallback=file target=%s source=%s", target, filepath.Join(stageRoot, r.cfg.file))
 	current, currentErr := pbsSectionFileNames(target)
+	current = r.withoutBuiltin(current)
 	if currentErr != nil {
 		r.debug("fallback current file read failed error=%q", currentErr.Error())
 	} else {
@@ -781,6 +887,9 @@ func (r *pbsSectionRestore) readStaged(stageRoot, mode string) (raw string, desi
 		if id == "" {
 			continue
 		}
+		if r.cfg.isBuiltin(id) {
+			continue
+		}
 		desired[id] = s
 	}
 	return raw, desired, pbsSortedNames(desired), false, nil
@@ -798,17 +907,22 @@ func (r *pbsSectionRestore) open(stageRoot, mode string, ids []string) {
 }
 
 // applyPBSSectionCfgFileBlock is the block of a section config written from the
-// backup file, in Clean (1:1) mode, when the PBS API cannot apply it: the objects
+// backup file when the PBS API cannot apply it (Clean (1:1) mode, and Merge mode
+// for the ACME plugins, which were always written as a file): the objects
 // to restore, the event, then the file fallback of the API path, with the same
 // lines. Its outcome is always already logged: the result is nil when nothing is
 // staged, otherwise a pbsSectionRestoreStoppedError.
-func applyPBSSectionCfgFileBlock(ctx context.Context, logger *logging.Logger, stageRoot string, cfg pbsSectionCfg, event string, cause error) error {
+func applyPBSSectionCfgFileBlock(ctx context.Context, logger *logging.Logger, stageRoot string, strict bool, cfg pbsSectionCfg, event string, cause error) error {
 	r := &pbsSectionRestore{ctx: ctx, logger: logger, cfg: cfg}
-	raw, _, ids, done, err := r.readStaged(stageRoot, "clean")
+	mode := "merge"
+	if strict {
+		mode = "clean"
+	}
+	raw, _, ids, done, err := r.readStaged(stageRoot, mode)
 	if done {
 		return err
 	}
-	r.open(stageRoot, "clean", ids)
+	r.open(stageRoot, mode, ids)
 	return r.fileFallback(stageRoot, raw, ids, event, cause)
 }
 
@@ -914,6 +1028,30 @@ func pbsS3SectionCfg() pbsSectionCfg {
 
 func applyPBSS3CfgViaAPI(ctx context.Context, logger *logging.Logger, stageRoot string, strict bool) error {
 	return applyPBSSectionCfgViaAPI(ctx, logger, stageRoot, strict, pbsS3SectionCfg())
+}
+
+// pbsAcmePluginsSectionCfg is the section config of acme/plugins.cfg. PBS 4.2.8
+// creates a plugin with "acme plugin add <type> <id> --data <file>", the file
+// holding the plugin data decoded, and updates it with "acme plugin set <id>
+// --data <base64>", the form plugins.cfg stores. The standalone plugin is built
+// in: it cannot be added, set or removed.
+func pbsAcmePluginsSectionCfg() pbsSectionCfg {
+	return pbsSectionCfg{
+		file:           "etc/proxmox-backup/acme/plugins.cfg",
+		command:        []string{"acme", "plugin"},
+		listKeys:       []string{"plugin", "id"},
+		secretFlags:    []string{"--data"},
+		labels:         pbsAcmePluginLabels,
+		createVerb:     "add",
+		updateVerb:     "set",
+		createWithType: true,
+		dataFileFlag:   "data",
+		builtin:        []string{"standalone"},
+	}
+}
+
+func applyPBSAcmePluginsCfgViaAPI(ctx context.Context, logger *logging.Logger, stageRoot string, strict bool) error {
+	return applyPBSSectionCfgViaAPI(ctx, logger, stageRoot, strict, pbsAcmePluginsSectionCfg())
 }
 
 // pbsDatastoreRestoreIncompleteError is a datastore.cfg apply in which one or more

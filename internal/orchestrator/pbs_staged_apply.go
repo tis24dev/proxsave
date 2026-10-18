@@ -26,6 +26,7 @@ var (
 	pbsStagedApplySyncCfgViaAPIFn           = applyPBSSyncCfgViaAPI
 	pbsStagedApplyVerificationCfgViaAPIFn   = applyPBSVerificationCfgViaAPI
 	pbsStagedApplyPruneCfgViaAPIFn          = applyPBSPruneCfgViaAPI
+	pbsStagedApplyAcmePluginsCfgViaAPIFn    = applyPBSAcmePluginsCfgViaAPI
 )
 
 func maybeApplyPBSConfigsFromStage(ctx context.Context, logger *logging.Logger, plan *RestorePlan, stageRoot string, dryRun bool) (err error) {
@@ -93,8 +94,21 @@ func maybeApplyPBSConfigsFromStage(ctx context.Context, logger *logging.Logger, 
 			logger.Warning("PBS staged apply: %s: %v", pbsAcmeAccountsRelPath, err)
 			failedItems = append(failedItems, pbsAcmeAccountsRelPath)
 		}
+		// The ACME plugins go through the PBS API as a section config. Without the
+		// API they are written from the backup file in Merge mode too, as they
+		// always were.
+		if apiAvailable {
+			if err := pbsStagedApplyAcmePluginsCfgViaAPIFn(ctx, logger, stageRoot, strict); err != nil {
+				if stop := pbsSectionApplyFailed(ctx, logger, err, pbsSectionFailure{label: "acme plugins", item: "acme/plugins.cfg", fallbackLabel: "acme/plugins.cfg"}, allowFileFallback, &failedItems, &outcomeLogged, func() error {
+					return applyPBSConfigFileFromStage(ctx, logger, stageRoot, "etc/proxmox-backup/acme/plugins.cfg")
+				}); stop != nil {
+					return stop
+				}
+			}
+		} else {
+			pbsSectionFileBlock(ctx, logger, stageRoot, strict, pbsAcmePluginsSectionCfg(), &failedItems, &outcomeLogged)
+		}
 		for _, rel := range []string{
-			"etc/proxmox-backup/acme/plugins.cfg",
 			"etc/proxmox-backup/metricserver.cfg",
 			"etc/proxmox-backup/proxy.cfg",
 		} {
@@ -121,7 +135,7 @@ func maybeApplyPBSConfigsFromStage(ctx context.Context, logger *logging.Logger, 
 				}
 			}
 		} else if allowFileFallback {
-			pbsSectionFileBlock(ctx, logger, stageRoot, pbsTrafficControlSectionCfg(), &failedItems, &outcomeLogged)
+			pbsSectionFileBlock(ctx, logger, stageRoot, true, pbsTrafficControlSectionCfg(), &failedItems, &outcomeLogged)
 			if err := applyPBSConfigFileFromStage(ctx, logger, stageRoot, "etc/proxmox-backup/node.cfg"); err != nil {
 				logger.Warning("PBS staged apply: %s: %v", "etc/proxmox-backup/node.cfg", err)
 				failedItems = append(failedItems, "etc/proxmox-backup/node.cfg")
@@ -166,7 +180,7 @@ func maybeApplyPBSConfigsFromStage(ctx context.Context, logger *logging.Logger, 
 				}
 			}
 		} else if allowFileFallback {
-			pbsSectionFileBlock(ctx, logger, stageRoot, pbsS3SectionCfg(), &failedItems, &outcomeLogged)
+			pbsSectionFileBlock(ctx, logger, stageRoot, true, pbsS3SectionCfg(), &failedItems, &outcomeLogged)
 			if err := applyPBSDatastoreCfgFileBlock(ctx, logger, stageRoot, pbsDatastoreEventAPIUnavailable, errors.New("PBS API unavailable")); err != nil {
 				// The block logged the outcome of every datastore and its own.
 				outcomeLogged = append(outcomeLogged, err)
@@ -186,7 +200,7 @@ func maybeApplyPBSConfigsFromStage(ctx context.Context, logger *logging.Logger, 
 				}
 			}
 		} else if allowFileFallback {
-			pbsSectionFileBlock(ctx, logger, stageRoot, pbsRemoteSectionCfg(), &failedItems, &outcomeLogged)
+			pbsSectionFileBlock(ctx, logger, stageRoot, true, pbsRemoteSectionCfg(), &failedItems, &outcomeLogged)
 		} else {
 			logging.DebugStep(logger, "pbs staged apply", "Skipping remote.cfg: merge mode requires PBS API apply")
 		}
@@ -217,7 +231,7 @@ func maybeApplyPBSConfigsFromStage(ctx context.Context, logger *logging.Logger, 
 			}
 		} else if allowFileFallback {
 			for _, cfg := range []pbsSectionCfg{pbsSyncSectionCfg(), pbsVerificationSectionCfg(), pbsPruneSectionCfg()} {
-				pbsSectionFileBlock(ctx, logger, stageRoot, cfg, &failedItems, &outcomeLogged)
+				pbsSectionFileBlock(ctx, logger, stageRoot, true, cfg, &failedItems, &outcomeLogged)
 			}
 		} else {
 			logging.DebugStep(logger, "pbs staged apply", "Skipping sync/verification/prune configs: merge mode requires PBS API apply")
@@ -254,9 +268,9 @@ func joinPBSLoggedOutcomes(errs []error) error {
 // config from the backup file as its block, which names what it does and logs
 // its outcome: that result is recorded in outcomeLogged. Any other error (the
 // block does not return one today) is warned and recorded as failed, as before.
-func pbsSectionFileBlock(ctx context.Context, logger *logging.Logger, stageRoot string, cfg pbsSectionCfg, failedItems *[]string, outcomeLogged *[]error) {
+func pbsSectionFileBlock(ctx context.Context, logger *logging.Logger, stageRoot string, strict bool, cfg pbsSectionCfg, failedItems *[]string, outcomeLogged *[]error) {
 	cause := fmt.Errorf("%s: PBS API unavailable", filepath.Base(cfg.file))
-	err := applyPBSSectionCfgFileBlock(ctx, logger, stageRoot, cfg, pbsDatastoreEventAPIUnavailable, cause)
+	err := applyPBSSectionCfgFileBlock(ctx, logger, stageRoot, strict, cfg, pbsDatastoreEventAPIUnavailable, cause)
 	switch {
 	case err == nil:
 	case pbsSectionOutcomeLogged(err):
