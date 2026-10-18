@@ -137,6 +137,10 @@ func maybeApplyPBSConfigsFromStage(ctx context.Context, logger *logging.Logger, 
 				}
 			}
 			if err := pbsStagedApplyDatastoreCfgViaAPIFn(ctx, logger, stageRoot, strict); err != nil {
+				if ctxErr := ctx.Err(); ctxErr != nil {
+					// Cancelled: no line, no file fallback, the restore stops.
+					return ctxErr
+				}
 				var incomplete *pbsDatastoreRestoreIncompleteError
 				var stopped *pbsDatastoreRestoreNotAppliedError
 				switch {
@@ -153,9 +157,6 @@ func maybeApplyPBSConfigsFromStage(ctx context.Context, logger *logging.Logger, 
 					// An error the block does not return today: the block again, with
 					// that error as its event, written from the backup file in Clean
 					// mode and not applied in Merge mode.
-					if ctxErr := ctx.Err(); ctxErr != nil {
-						return ctxErr
-					}
 					if ferr := applyPBSDatastoreCfgAfterAPIError(ctx, logger, stageRoot, strict, err); ferr != nil {
 						outcomeLogged = append(outcomeLogged, ferr)
 					}

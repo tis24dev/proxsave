@@ -1195,98 +1195,123 @@ func (r *pbsDatastoreRestore) failed(name, event string, args ...any) {
 }
 
 // removeStale removes, in Clean (1:1) mode, a datastore configured on this PBS that
-// the backup does not have. PBS removes the jobs of the datastore with it.
-func (r *pbsDatastoreRestore) removeStale(name string) {
+// the backup does not have. PBS removes the jobs of the datastore with it. It
+// returns only a cancellation.
+func (r *pbsDatastoreRestore) removeStale(name string) error {
 	r.attempted++
 	r.debug("datastore=%s not in backup action=remove", name)
 	if _, err := runPBSManager(r.ctx, "datastore", "remove", name); err != nil {
+		if ctxErr := r.ctx.Err(); ctxErr != nil {
+			return ctxErr
+		}
 		r.debug("datastore=%s remove failed error=%q", name, pbsManagerErrorText(err))
 		r.logger.Info("Datastore %s is configured on this PBS but not present in the backup", name)
 		r.logger.Warning("%s PBS datastore %s: not removed", theme.SymbolWarning, name)
 		r.notRemoved = append(r.notRemoved, name)
-		return
+		return nil
 	}
 	r.debug("datastore=%s removed", name)
 	r.logger.Info("Datastore %s is configured on this PBS but not present in the backup", name)
 	r.logger.Info("%s PBS datastore %s: removed with its jobs", theme.SymbolSuccess, name)
+	return nil
 }
 
 // update applies the backup's options to a datastore that already exists on this
 // PBS, keeping its path. createErr is the refused create that led here, if any:
-// when the update is refused too, the event carries the create's error.
-func (r *pbsDatastoreRestore) update(name string, flags []string, keptPathEvent func(), createErr error) {
+// when the update is refused too, the event carries the create's error. It
+// returns only a cancellation.
+func (r *pbsDatastoreRestore) update(name string, flags []string, keptPathEvent func(), createErr error) error {
+	if ctxErr := r.ctx.Err(); ctxErr != nil {
+		return ctxErr
+	}
 	updateArgs := append([]string{"datastore", "update", name}, flags...)
 	if _, err := runPBSManager(r.ctx, updateArgs...); err != nil {
+		if ctxErr := r.ctx.Err(); ctxErr != nil {
+			return ctxErr
+		}
 		r.debug("datastore=%s update failed error=%q", name, pbsManagerErrorText(err))
 		rejected := err
 		if createErr != nil {
 			rejected = createErr
 		}
 		r.failed(name, "Datastore %s was rejected by PBS: \"%s\"", name, pbsManagerErrorLine(rejected))
-		return
+		return nil
 	}
 	r.debug("datastore=%s updated", name)
 	if keptPathEvent != nil {
 		keptPathEvent()
 	}
 	r.applied(name)
+	return nil
 }
 
 // create creates a datastore this PBS does not list; when PBS refuses the create
 // (it may exist after all, e.g. when the list could not be read) the datastore is
-// updated instead.
-func (r *pbsDatastoreRestore) create(name, path string, flags []string) {
+// updated instead. It returns only a cancellation.
+func (r *pbsDatastoreRestore) create(name, path string, flags []string) error {
 	createArgs := append([]string{"datastore", "create", name, path}, flags...)
 	if _, err := runPBSManager(r.ctx, createArgs...); err != nil {
+		if ctxErr := r.ctx.Err(); ctxErr != nil {
+			return ctxErr
+		}
 		r.debug("datastore=%s create failed error=%q action=update", name, pbsManagerErrorText(err))
-		r.update(name, flags, nil, err)
-		return
+		return r.update(name, flags, nil, err)
 	}
 	r.debug("datastore=%s created", name)
 	r.applied(name)
+	return nil
 }
 
 // move re-creates, in Clean (1:1) mode, a datastore whose path on this PBS differs
 // from the backup's: remove (without --destroy-data, so the chunks stay on disk),
 // then create at the backup's path. When that create fails the datastore is
-// re-created at its original path so it is not left deconfigured.
-func (r *pbsDatastoreRestore) move(name, currentPath, path string, flags []string) {
+// re-created at its original path so it is not left deconfigured, even when the
+// restore was cancelled meanwhile: the rollback runs without the cancellation,
+// and the move then returns it. It returns only a cancellation.
+func (r *pbsDatastoreRestore) move(name, currentPath, path string, flags []string) error {
 	pathEvent := "Datastore %s is at %s on this PBS and at %s in the backup"
 	if _, err := runPBSManager(r.ctx, "datastore", "remove", name); err != nil {
+		if ctxErr := r.ctx.Err(); ctxErr != nil {
+			return ctxErr
+		}
 		r.debug("datastore=%s remove failed error=%q", name, pbsManagerErrorText(err))
 		r.failed(name, pathEvent, name, currentPath, path)
-		return
+		return nil
 	}
 	r.debug("datastore=%s removed", name)
 	createArgs := append([]string{"datastore", "create", name, path}, flags...)
 	if _, err := runPBSManager(r.ctx, createArgs...); err != nil {
 		r.debug("datastore=%s create failed path=%s error=%q action=rollback rollback_path=%s", name, path, pbsManagerErrorText(err), currentPath)
 		rollbackArgs := append([]string{"datastore", "create", name, currentPath}, flags...)
-		if _, rbErr := runPBSManager(r.ctx, rollbackArgs...); rbErr != nil {
+		if _, rbErr := runPBSManager(context.WithoutCancel(r.ctx), rollbackArgs...); rbErr != nil {
 			r.debug("datastore=%s rollback failed path=%s error=%q", name, currentPath, pbsManagerErrorText(rbErr))
 			r.logger.Info(pathEvent, name, currentPath, path)
 			r.logger.Warning("%s PBS datastore %s: not configured, the data in %s is kept", theme.SymbolWarning, name, currentPath)
 			r.notApplied = append(r.notApplied, name)
-			return
+			return r.ctx.Err()
 		}
 		r.debug("datastore=%s created path=%s (rollback)", name, currentPath)
+		if ctxErr := r.ctx.Err(); ctxErr != nil {
+			return ctxErr
+		}
 		r.failed(name, pathEvent, name, currentPath, path)
-		return
+		return nil
 	}
 	r.debug("datastore=%s created path=%s", name, path)
 	r.logger.Info("Datastore %s moved from %s to %s, the data in %s is not moved", name, currentPath, path, currentPath)
 	r.applied(name)
+	return nil
 }
 
-// apply restores one datastore of the backup.
-func (r *pbsDatastoreRestore) apply(name string, s proxmoxNotificationSection, currentPaths map[string]string) {
+// apply restores one datastore of the backup. It returns only a cancellation.
+func (r *pbsDatastoreRestore) apply(name string, s proxmoxNotificationSection, currentPaths map[string]string) error {
 	r.attempted++
 	path, entries, ok := popEntryValue(s.Entries, "path")
 	path = strings.TrimSpace(path)
 	if !ok || path == "" {
 		r.debug("datastore=%s backup_path=none action=skip", name)
 		r.failed(name, "Datastore %s has no path in the backup", name)
-		return
+		return nil
 	}
 	flags := buildProxmoxManagerFlags(entries)
 	currentPath, exists := currentPaths[name]
@@ -1297,21 +1322,18 @@ func (r *pbsDatastoreRestore) apply(name string, s proxmoxNotificationSection, c
 			unknown = "unknown"
 		}
 		r.debug("datastore=%s backup_path=%s current_path=%s action=create", name, path, unknown)
-		r.create(name, path, flags)
-		return
+		return r.create(name, path, flags)
 	}
 	if currentPath == "" || currentPath == path {
 		r.debug("datastore=%s backup_path=%s current_path=%s action=update", name, path, pbsDatastorePathOrNone(currentPath))
-		r.update(name, flags, nil, nil)
-		return
+		return r.update(name, flags, nil, nil)
 	}
 	if r.strict {
 		r.debug("datastore=%s backup_path=%s current_path=%s path differs action=remove,create", name, path, currentPath)
-		r.move(name, currentPath, path, flags)
-		return
+		return r.move(name, currentPath, path, flags)
 	}
 	r.debug("datastore=%s backup_path=%s current_path=%s path differs action=update (merge keeps the current path)", name, path, currentPath)
-	r.update(name, flags, func() {
+	return r.update(name, flags, func() {
 		r.logger.Info("Datastore %s stays at %s, the backup has it at %s", name, currentPath, path)
 	}, nil)
 }
@@ -1627,6 +1649,9 @@ func beginPBSDatastoreRestore(ctx context.Context, logger *logging.Logger, stage
 	return r, desired, names, false, nil
 }
 
+// applyPBSDatastoreCfgViaAPI restores the staged datastore.cfg through
+// proxmox-backup-manager as one block. A cancellation stops it at any point with
+// the cancellation itself: no line for the datastores left, no file fallback.
 func applyPBSDatastoreCfgViaAPI(ctx context.Context, logger *logging.Logger, stageRoot string, strict bool) error {
 	r, desired, names, done, err := beginPBSDatastoreRestore(ctx, logger, stageRoot, strict)
 	if done {
@@ -1635,6 +1660,10 @@ func applyPBSDatastoreCfgViaAPI(ctx context.Context, logger *logging.Logger, sta
 
 	currentPaths, listErr := r.readCurrent()
 	if listErr != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			// Cancelled: no line, no file fallback, the restore stops.
+			return ctxErr
+		}
 		// The current PBS state is unknown. A strict Clean 1:1 restore cannot safely prune
 		// stale datastores without it, so it stops rather than report an incomplete
 		// clean (P-08). Merge never prunes, and create/update self-heals a datastore
@@ -1664,11 +1693,23 @@ func applyPBSDatastoreCfgViaAPI(ctx context.Context, logger *logging.Logger, sta
 			r.debug("datastore=%s not in backup action=keep (merge)", name)
 			continue
 		}
-		r.removeStale(name)
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if err := r.removeStale(name); err != nil {
+			return err
+		}
 	}
 
 	for _, name := range names {
-		r.apply(name, desired[name], currentPaths)
+		// A cancelled restore stops here with the cancellation, not with one
+		// "not applied" datastore per remaining name.
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if err := r.apply(name, desired[name], currentPaths); err != nil {
+			return err
+		}
 	}
 	return r.outcome()
 }
