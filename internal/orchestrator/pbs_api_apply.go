@@ -651,16 +651,16 @@ func (r *pbsSectionRestore) writeWithKept(target, raw string, emptied bool, kept
 }
 
 // fileFallback writes, in Clean (1:1) mode, the staged file of this config as it
-// is when the objects configured on this PBS could not be read, and logs the
-// outcome. raw is the staged file, ids the objects it names, cause the error that
-// kept the objects of this PBS from being read. A staged file without objects
+// is when the API cannot apply it, and logs the outcome. event says why, raw is
+// the staged file, ids the objects it names, cause the error that kept the API
+// from applying it. A staged file without objects
 // (empty, or only comments) removes the target file, as the API path removes
 // every object. In remote.cfg a remote of this PBS that the backup does not have
 // and a sync job uses keeps its current section, as PBS refuses to remove it.
 // Once the file is written or removed, every object of the current file that
 // the backup does not have is named as removed, or as not removed when kept.
-func (r *pbsSectionRestore) fileFallback(stageRoot, raw string, ids []string, cause error) error {
-	r.logger.Info("The %s configured on this PBS could not be read", r.cfg.labels.plural)
+func (r *pbsSectionRestore) fileFallback(stageRoot, raw string, ids []string, event string, cause error) error {
+	r.logger.Info("%s", event)
 	target := filepath.Join(string(os.PathSeparator), filepath.FromSlash(r.cfg.file))
 	r.debug("fallback=file target=%s source=%s", target, filepath.Join(stageRoot, r.cfg.file))
 	current, currentErr := pbsSectionFileNames(target)
@@ -753,6 +753,65 @@ func (r *pbsSectionRestore) outcome() error {
 	return &pbsSectionRestoreIncompleteError{labels: r.cfg.labels, notApplied: r.notApplied, notRemoved: r.notRemoved}
 }
 
+// readStaged reads the staged file of this config and the objects it names, in
+// sorted order. done is true when the block has already ended, with err its
+// result: nothing is staged (DEBUG only), or the staged file could not be read
+// (the block is logged as not applied).
+func (r *pbsSectionRestore) readStaged(stageRoot, mode string) (raw string, desired map[string]proxmoxNotificationSection, ids []string, done bool, err error) {
+	stagedPath := filepath.Join(stageRoot, r.cfg.file)
+	raw, present, err := readStageFileOptional(stageRoot, r.cfg.file)
+	if err == nil && !present {
+		r.debug("staged=%s not in the backup action=skip", stagedPath)
+		return "", nil, nil, true, nil
+	}
+	if err != nil {
+		r.logger.Info("Restoring PBS %s...", r.cfg.labels.plural)
+		r.debug("mode=%s staged=%s", mode, stagedPath)
+		r.debug("staged=%s read failed error=%q", stagedPath, err.Error())
+		r.logger.Info("%s in the backup could not be read: \"%s\"", r.configuration(), err.Error())
+		return "", nil, nil, true, r.configNotApplied(err)
+	}
+	sections, err := parseProxmoxNotificationSections(raw)
+	if err != nil {
+		return "", nil, nil, true, fmt.Errorf("parse staged %s: %w", filepath.Base(r.cfg.file), err)
+	}
+	desired = make(map[string]proxmoxNotificationSection, len(sections))
+	for _, s := range sections {
+		id := strings.TrimSpace(s.Name)
+		if id == "" {
+			continue
+		}
+		desired[id] = s
+	}
+	return raw, desired, pbsSortedNames(desired), false, nil
+}
+
+// open logs the opening of the block: the objects of the backup to restore.
+func (r *pbsSectionRestore) open(stageRoot, mode string, ids []string) {
+	r.logger.Info("Restoring PBS %s...", r.cfg.labels.plural)
+	r.debug("mode=%s staged=%s", mode, filepath.Join(stageRoot, r.cfg.file))
+	r.debug("backup %s=%d names=%s", r.keys(), len(ids), strings.Join(ids, ","))
+	r.logger.Info("  %s to restore: %d", r.cfg.labels.countNoun, len(ids))
+	if len(ids) > 0 {
+		r.logger.Info("  Names: %s", strings.Join(ids, ", "))
+	}
+}
+
+// applyPBSSectionCfgFileBlock is the block of a section config written from the
+// backup file, in Clean (1:1) mode, when the PBS API cannot apply it: the objects
+// to restore, the event, then the file fallback of the API path, with the same
+// lines. Its outcome is always already logged: the result is nil when nothing is
+// staged, otherwise a pbsSectionRestoreStoppedError.
+func applyPBSSectionCfgFileBlock(ctx context.Context, logger *logging.Logger, stageRoot string, cfg pbsSectionCfg, event string, cause error) error {
+	r := &pbsSectionRestore{ctx: ctx, logger: logger, cfg: cfg}
+	raw, _, ids, done, err := r.readStaged(stageRoot, "clean")
+	if done {
+		return err
+	}
+	r.open(stageRoot, "clean", ids)
+	return r.fileFallback(stageRoot, raw, ids, event, cause)
+}
+
 // applyPBSSectionCfgViaAPI restores the staged cfg.file through
 // proxmox-backup-manager as one block: the objects of the backup, then in strict
 // (Clean 1:1) mode the removal of every object of this PBS that the backup does
@@ -768,38 +827,14 @@ func (r *pbsSectionRestore) outcome() error {
 // stops the apply at any point with the cancellation itself.
 func applyPBSSectionCfgViaAPI(ctx context.Context, logger *logging.Logger, stageRoot string, strict bool, cfg pbsSectionCfg) error {
 	r := &pbsSectionRestore{ctx: ctx, logger: logger, cfg: cfg}
-	stagedPath := filepath.Join(stageRoot, cfg.file)
 	mode := "merge"
 	if strict {
 		mode = "clean"
 	}
-
-	raw, present, err := readStageFileOptional(stageRoot, cfg.file)
-	if err == nil && !present {
-		r.debug("staged=%s not in the backup action=skip", stagedPath)
-		return nil
+	raw, desired, ids, done, err := r.readStaged(stageRoot, mode)
+	if done {
+		return err
 	}
-	if err != nil {
-		logger.Info("Restoring PBS %s...", cfg.labels.plural)
-		r.debug("mode=%s staged=%s", mode, stagedPath)
-		r.debug("staged=%s read failed error=%q", stagedPath, err.Error())
-		logger.Info("%s in the backup could not be read: \"%s\"", r.configuration(), err.Error())
-		return r.configNotApplied(err)
-	}
-	sections, err := parseProxmoxNotificationSections(raw)
-	if err != nil {
-		return fmt.Errorf("parse staged %s: %w", filepath.Base(cfg.file), err)
-	}
-
-	desired := make(map[string]proxmoxNotificationSection, len(sections))
-	for _, s := range sections {
-		id := strings.TrimSpace(s.Name)
-		if id == "" {
-			continue
-		}
-		desired[id] = s
-	}
-	ids := pbsSortedNames(desired)
 
 	// Clean mode reads this PBS's objects before the block opens.
 	var current []string
@@ -812,15 +847,9 @@ func applyPBSSectionCfgViaAPI(ctx context.Context, logger *logging.Logger, stage
 		}
 	}
 
-	logger.Info("Restoring PBS %s...", cfg.labels.plural)
-	r.debug("mode=%s staged=%s", mode, stagedPath)
-	r.debug("backup %s=%d names=%s", r.keys(), len(ids), strings.Join(ids, ","))
-	logger.Info("  %s to restore: %d", cfg.labels.countNoun, len(ids))
-	if len(ids) > 0 {
-		logger.Info("  Names: %s", strings.Join(ids, ", "))
-	}
+	r.open(stageRoot, mode, ids)
 	if listErr != nil {
-		return r.fileFallback(stageRoot, raw, ids, listErr)
+		return r.fileFallback(stageRoot, raw, ids, fmt.Sprintf("The %s configured on this PBS could not be read", cfg.labels.plural), listErr)
 	}
 
 	if strict {
@@ -851,8 +880,9 @@ func applyPBSSectionCfgViaAPI(ctx context.Context, logger *logging.Logger, stage
 	return r.outcome()
 }
 
-func applyPBSRemoteCfgViaAPI(ctx context.Context, logger *logging.Logger, stageRoot string, strict bool) error {
-	return applyPBSSectionCfgViaAPI(ctx, logger, stageRoot, strict, pbsSectionCfg{
+// pbsRemoteSectionCfg is the section config of remote.cfg.
+func pbsRemoteSectionCfg() pbsSectionCfg {
+	return pbsSectionCfg{
 		file:        "etc/proxmox-backup/remote.cfg",
 		command:     []string{"remote"},
 		listKeys:    []string{"id", "name"},
@@ -863,18 +893,27 @@ func applyPBSRemoteCfgViaAPI(ctx context.Context, logger *logging.Logger, stageR
 		labels:             pbsRemoteLabels,
 		fileFallback:       applyPBSRemoteCfgFromStage,
 		keepSyncJobRemotes: true,
-	})
+	}
 }
 
-func applyPBSS3CfgViaAPI(ctx context.Context, logger *logging.Logger, stageRoot string, strict bool) error {
-	return applyPBSSectionCfgViaAPI(ctx, logger, stageRoot, strict, pbsSectionCfg{
+func applyPBSRemoteCfgViaAPI(ctx context.Context, logger *logging.Logger, stageRoot string, strict bool) error {
+	return applyPBSSectionCfgViaAPI(ctx, logger, stageRoot, strict, pbsRemoteSectionCfg())
+}
+
+// pbsS3SectionCfg is the section config of s3.cfg.
+func pbsS3SectionCfg() pbsSectionCfg {
+	return pbsSectionCfg{
 		file:         "etc/proxmox-backup/s3.cfg",
 		command:      []string{"s3", "endpoint"},
 		listKeys:     []string{"id", "name"},
 		secretFlags:  []string{"--access-key", "--secret-key"},
 		labels:       pbsS3EndpointLabels,
 		fileFallback: applyPBSS3CfgFromStage,
-	})
+	}
+}
+
+func applyPBSS3CfgViaAPI(ctx context.Context, logger *logging.Logger, stageRoot string, strict bool) error {
+	return applyPBSSectionCfgViaAPI(ctx, logger, stageRoot, strict, pbsS3SectionCfg())
 }
 
 // pbsDatastoreRestoreIncompleteError is a datastore.cfg apply in which one or more
@@ -1430,40 +1469,60 @@ func applyPBSDatastoreCfgViaAPI(ctx context.Context, logger *logging.Logger, sta
 	return r.outcome()
 }
 
-func applyPBSSyncCfgViaAPI(ctx context.Context, logger *logging.Logger, stageRoot string, strict bool) error {
-	return applyPBSSectionCfgViaAPI(ctx, logger, stageRoot, strict, pbsSectionCfg{
+// pbsSyncSectionCfg is the section config of sync.cfg.
+func pbsSyncSectionCfg() pbsSectionCfg {
+	return pbsSectionCfg{
 		file:     "etc/proxmox-backup/sync.cfg",
 		command:  []string{"sync-job"},
 		listKeys: []string{"id", "name"},
 		labels:   pbsSyncJobLabels,
-	})
+	}
 }
 
-func applyPBSVerificationCfgViaAPI(ctx context.Context, logger *logging.Logger, stageRoot string, strict bool) error {
-	return applyPBSSectionCfgViaAPI(ctx, logger, stageRoot, strict, pbsSectionCfg{
+func applyPBSSyncCfgViaAPI(ctx context.Context, logger *logging.Logger, stageRoot string, strict bool) error {
+	return applyPBSSectionCfgViaAPI(ctx, logger, stageRoot, strict, pbsSyncSectionCfg())
+}
+
+// pbsVerificationSectionCfg is the section config of verification.cfg.
+func pbsVerificationSectionCfg() pbsSectionCfg {
+	return pbsSectionCfg{
 		file:     "etc/proxmox-backup/verification.cfg",
 		command:  []string{"verify-job"},
 		listKeys: []string{"id", "name"},
 		labels:   pbsVerifyJobLabels,
-	})
+	}
 }
 
-func applyPBSPruneCfgViaAPI(ctx context.Context, logger *logging.Logger, stageRoot string, strict bool) error {
-	return applyPBSSectionCfgViaAPI(ctx, logger, stageRoot, strict, pbsSectionCfg{
+func applyPBSVerificationCfgViaAPI(ctx context.Context, logger *logging.Logger, stageRoot string, strict bool) error {
+	return applyPBSSectionCfgViaAPI(ctx, logger, stageRoot, strict, pbsVerificationSectionCfg())
+}
+
+// pbsPruneSectionCfg is the section config of prune.cfg.
+func pbsPruneSectionCfg() pbsSectionCfg {
+	return pbsSectionCfg{
 		file:     "etc/proxmox-backup/prune.cfg",
 		command:  []string{"prune-job"},
 		listKeys: []string{"id", "name"},
 		labels:   pbsPruneJobLabels,
-	})
+	}
 }
 
-func applyPBSTrafficControlCfgViaAPI(ctx context.Context, logger *logging.Logger, stageRoot string, strict bool) error {
-	return applyPBSSectionCfgViaAPI(ctx, logger, stageRoot, strict, pbsSectionCfg{
+func applyPBSPruneCfgViaAPI(ctx context.Context, logger *logging.Logger, stageRoot string, strict bool) error {
+	return applyPBSSectionCfgViaAPI(ctx, logger, stageRoot, strict, pbsPruneSectionCfg())
+}
+
+// pbsTrafficControlSectionCfg is the section config of traffic-control.cfg.
+func pbsTrafficControlSectionCfg() pbsSectionCfg {
+	return pbsSectionCfg{
 		file:     "etc/proxmox-backup/traffic-control.cfg",
 		command:  []string{"traffic-control"},
 		listKeys: []string{"name", "id"},
 		labels:   pbsTrafficControlLabels,
-	})
+	}
+}
+
+func applyPBSTrafficControlCfgViaAPI(ctx context.Context, logger *logging.Logger, stageRoot string, strict bool) error {
+	return applyPBSSectionCfgViaAPI(ctx, logger, stageRoot, strict, pbsTrafficControlSectionCfg())
 }
 
 func applyPBSNodeCfgViaAPI(ctx context.Context, stageRoot string) error {

@@ -1172,3 +1172,179 @@ func TestPBSSectionRestoreBlock_FileFallbackKeepsARemoteASyncJobUses(t *testing.
 		})
 	}
 }
+
+// pbsAPIUnavailable makes the staged apply find the PBS API unavailable.
+func pbsAPIUnavailable() {
+	pbsStagedApplyEnsurePBSServicesForAPIFn = func(context.Context, *logging.Logger) error {
+		return errors.New("proxmox-backup-proxy did not start: exit status 1")
+	}
+}
+
+const pbsAPIUnavailableWarning = "WARNING  PBS API apply unavailable; falling back to file-based staged apply where possible: proxmox-backup-proxy did not start: exit status 1"
+
+// Clean mode without the PBS API: remote.cfg is written from the backup file as
+// the same block, with the event of the datastores, and the remote of this PBS
+// the backup does not have is named as removed. The caller adds nothing more and
+// the restore ends with warnings.
+func TestPBSSectionRestoreBlock_APIUnavailableRemote(t *testing.T) {
+	const target = "/etc/proxmox-backup/remote.cfg"
+	staged := "remote: r1\n\thost 10.0.0.1\n\nremote: r2\n\thost 10.0.0.2\n"
+	runner := &FakeCommandRunner{}
+	log, warned, fakeFS := runPBSSectionRestoreStep(t, PBSRestoreBehaviorClean, []string{"pbs_remotes"}, map[string]string{"etc/proxmox-backup/remote.cfg": staged}, runner, pbsAPIUnavailable, func() {
+		if err := restoreFS.WriteFile(target, []byte("remote: r1\n\thost 10.0.0.1\n\nremote: old\n\thost 10.0.0.9\n"), 0o640); err != nil {
+			t.Fatal(err)
+		}
+	})
+	assertPBSBlockLog(t, log, []string{
+		"DEBUG    Start pbs staged apply: dryRun=false stage=/stage",
+		pbsAPIUnavailableWarning,
+		"INFO     Restoring PBS remotes...",
+		"DEBUG    PBS remote restore: mode=clean staged=/stage/etc/proxmox-backup/remote.cfg",
+		"DEBUG    PBS remote restore: backup remotes=2 names=r1,r2",
+		"INFO       Remotes to restore: 2",
+		"INFO       Names: r1, r2",
+		"INFO     The PBS API is not available",
+		"DEBUG    PBS remote restore: fallback=file target=/etc/proxmox-backup/remote.cfg source=/stage/etc/proxmox-backup/remote.cfg",
+		"DEBUG    PBS remote restore: fallback current file remotes=2 names=old,r1",
+		"DEBUG    PBS remote restore: fallback current sync jobs=0 remotes_used=",
+		"DEBUG    Start pbs staged apply remote.cfg: stage=/stage",
+		"DEBUG    pbs staged apply file: Applied etc/proxmox-backup/remote.cfg -> /etc/proxmox-backup/remote.cfg",
+		"DEBUG    End pbs staged apply remote.cfg (ok, duration=<d>)",
+		"DEBUG    PBS remote restore: fallback written",
+		"DEBUG    PBS remote restore: remote=old not in backup action=drop from file",
+		"INFO     Remote old is configured on this PBS but not present in the backup",
+		"INFO     ✓ PBS remote old: removed",
+		"WARNING  ⚠ PBS remote configuration: applied from the backup file",
+		"DEBUG    End pbs staged apply (error=remote.cfg: PBS API unavailable, duration=<d>)",
+		"DEBUG    PBS staged config apply: outcome already reported: remote.cfg: PBS API unavailable",
+	})
+	if !warned {
+		t.Fatal("restore must end with warnings")
+	}
+	if len(runner.CallsList()) != 0 {
+		t.Fatalf("no command may run without the API, calls: %v", runner.CallsList())
+	}
+	if got, err := fakeFS.ReadFile(target); err != nil || string(got) != strings.TrimSpace(staged)+"\n" {
+		t.Fatalf("remote.cfg %q (err %v), want the staged file", got, err)
+	}
+}
+
+// One table over the six section configs without the PBS API: each opens its
+// block with its own words, says the API is not available, writes only its own
+// file and names the object of this PBS the backup does not have.
+func TestPBSSectionRestoreBlock_APIUnavailablePerKind(t *testing.T) {
+	for _, k := range []struct {
+		name, category, file, prefix, key, keys string
+		opening, count, event, subject, outcome string
+		helper                                  []string
+	}{
+		{"remote", "pbs_remotes", "remote.cfg", "PBS remote restore: ", "remote", "remotes",
+			"Restoring PBS remotes...", "  Remotes to restore: 2", "Remote", "PBS remote", "PBS remote configuration",
+			[]string{"DEBUG    PBS remote restore: fallback current sync jobs=0 remotes_used=", "DEBUG    Start pbs staged apply remote.cfg: stage=/stage", "DEBUG    pbs staged apply file: Applied etc/proxmox-backup/remote.cfg -> /etc/proxmox-backup/remote.cfg", "DEBUG    End pbs staged apply remote.cfg (ok, duration=<d>)"}},
+		{"s3", "datastore_pbs", "s3.cfg", "PBS S3 endpoint restore: ", "s3-endpoint", "s3-endpoints",
+			"Restoring PBS S3 endpoints...", "  S3 endpoints to restore: 2", "S3 endpoint", "PBS S3 endpoint", "PBS S3 endpoint configuration",
+			[]string{"DEBUG    Start pbs staged apply s3.cfg: stage=/stage", "DEBUG    pbs staged apply file: Applied etc/proxmox-backup/s3.cfg -> /etc/proxmox-backup/s3.cfg", "DEBUG    End pbs staged apply s3.cfg (ok, duration=<d>)"}},
+		{"sync", "pbs_jobs", "sync.cfg", "PBS sync job restore: ", "sync-job", "sync-jobs",
+			"Restoring PBS sync jobs...", "  Sync jobs to restore: 2", "Sync job", "PBS sync job", "PBS sync job configuration",
+			[]string{"DEBUG    pbs staged apply file: Applied etc/proxmox-backup/sync.cfg -> /etc/proxmox-backup/sync.cfg"}},
+		{"verification", "pbs_jobs", "verification.cfg", "PBS verify job restore: ", "verify-job", "verify-jobs",
+			"Restoring PBS verify jobs...", "  Verify jobs to restore: 2", "Verify job", "PBS verify job", "PBS verify job configuration",
+			[]string{"DEBUG    pbs staged apply file: Applied etc/proxmox-backup/verification.cfg -> /etc/proxmox-backup/verification.cfg"}},
+		{"prune", "pbs_jobs", "prune.cfg", "PBS prune job restore: ", "prune-job", "prune-jobs",
+			"Restoring PBS prune jobs...", "  Prune jobs to restore: 2", "Prune job", "PBS prune job", "PBS prune job configuration",
+			[]string{"DEBUG    pbs staged apply file: Applied etc/proxmox-backup/prune.cfg -> /etc/proxmox-backup/prune.cfg"}},
+		{"traffic-control", "pbs_host", "traffic-control.cfg", "PBS traffic control rule restore: ", "traffic-control-rule", "traffic-control-rules",
+			"Restoring PBS traffic control rules...", "  Traffic control rules to restore: 2", "Traffic control rule", "PBS traffic control rule", "PBS traffic control configuration",
+			[]string{"DEBUG    pbs staged apply file: Applied etc/proxmox-backup/traffic-control.cfg -> /etc/proxmox-backup/traffic-control.cfg"}},
+	} {
+		t.Run(k.name, func(t *testing.T) {
+			target := "/etc/proxmox-backup/" + k.file
+			staged := "x: a1\n\tcomment staged\n\nx: a2\n\tcomment staged\n"
+			runner := &FakeCommandRunner{}
+			log, warned, fakeFS := runPBSSectionRestoreStep(t, PBSRestoreBehaviorClean, []string{k.category}, map[string]string{"etc/proxmox-backup/" + k.file: staged}, runner, pbsAPIUnavailable, func() {
+				if err := restoreFS.WriteFile(target, []byte("x: a1\n\tcomment current\n\nx: old\n\tcomment current\n"), 0o640); err != nil {
+					t.Fatal(err)
+				}
+			})
+			want := []string{
+				"INFO     " + k.opening,
+				"DEBUG    " + k.prefix + "mode=clean staged=/stage/etc/proxmox-backup/" + k.file,
+				"DEBUG    " + k.prefix + "backup " + k.keys + "=2 names=a1,a2",
+				"INFO     " + k.count,
+				"INFO       Names: a1, a2",
+				"INFO     The PBS API is not available",
+				"DEBUG    " + k.prefix + "fallback=file target=" + target + " source=/stage/etc/proxmox-backup/" + k.file,
+				"DEBUG    " + k.prefix + "fallback current file " + k.keys + "=2 names=a1,old",
+			}
+			want = append(want, k.helper...)
+			want = append(want,
+				"DEBUG    "+k.prefix+"fallback written",
+				"DEBUG    "+k.prefix+k.key+"=old not in backup action=drop from file",
+				"INFO     "+k.event+" old is configured on this PBS but not present in the backup",
+				"INFO     ✓ "+k.subject+" old: removed",
+				"WARNING  ⚠ "+k.outcome+": applied from the backup file",
+			)
+			lines := pbsBlockLogLines(log)
+			start := -1
+			for i, line := range lines {
+				if line == want[0] {
+					start = i
+				}
+			}
+			if start < 0 || start+len(want) > len(lines) || strings.Join(lines[start:start+len(want)], "\n") != strings.Join(want, "\n") {
+				t.Fatalf("block lines\n--- want ---\n%s\n--- full log ---\n%s", strings.Join(want, "\n"), strings.Join(lines, "\n"))
+			}
+			if !warned {
+				t.Fatal("restore must end with warnings")
+			}
+			if len(runner.CallsList()) != 0 {
+				t.Fatalf("no command may run without the API, calls: %v", runner.CallsList())
+			}
+			for _, unwanted := range []string{"PBS staged apply: etc/proxmox-backup/" + k.file, "PBS staged apply: " + k.file, "failed to apply", "falling back to file-based " + k.file} {
+				if strings.Contains(log, unwanted) {
+					t.Fatalf("unexpected %q in log:\n%s", unwanted, log)
+				}
+			}
+			if got, err := fakeFS.ReadFile(target); err != nil || string(got) != strings.TrimSpace(staged)+"\n" {
+				t.Fatalf("%s %q (err %v), want the staged file", k.file, got, err)
+			}
+		})
+	}
+}
+
+// Without the PBS API the three job configs each write their own file, and only
+// it, as three blocks.
+func TestPBSSectionRestoreBlock_APIUnavailableJobsWriteOneFileEach(t *testing.T) {
+	files := []string{"sync.cfg", "verification.cfg", "prune.cfg"}
+	staged := map[string]string{}
+	for _, f := range files {
+		staged["etc/proxmox-backup/"+f] = "x: from-" + f + "\n\tcomment staged\n"
+	}
+	runner := &FakeCommandRunner{}
+	log, warned, fakeFS := runPBSSectionRestoreStep(t, PBSRestoreBehaviorClean, []string{"pbs_jobs"}, staged, runner, pbsAPIUnavailable)
+	var outcomes []string
+	for _, line := range pbsVisibleLines(log) {
+		if strings.Contains(line, "configuration: ") {
+			outcomes = append(outcomes, line)
+		}
+	}
+	want := []string{
+		"WARNING  ⚠ PBS sync job configuration: applied from the backup file",
+		"WARNING  ⚠ PBS verify job configuration: applied from the backup file",
+		"WARNING  ⚠ PBS prune job configuration: applied from the backup file",
+	}
+	if strings.Join(outcomes, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("outcomes\n%s\nwant\n%s\nlog:\n%s", strings.Join(outcomes, "\n"), strings.Join(want, "\n"), log)
+	}
+	if !warned {
+		t.Fatal("restore must end with warnings")
+	}
+	if strings.Contains(log, "failed to apply") || strings.Contains(log, "job configs") {
+		t.Fatalf("the caller must add nothing, log:\n%s", log)
+	}
+	for _, f := range files {
+		if got, err := fakeFS.ReadFile("/etc/proxmox-backup/" + f); err != nil || string(got) != "x: from-"+f+"\n\tcomment staged\n" {
+			t.Fatalf("%s %q (err %v), want its own staged file", f, got, err)
+		}
+	}
+}
