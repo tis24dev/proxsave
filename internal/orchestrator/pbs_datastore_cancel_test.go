@@ -16,14 +16,16 @@ import (
 // the command matching cancelOn is the one running when the operator cancels, so
 // it cancels the context and dies; any later command run with the cancelled
 // context fails at once, as exec does. With finishes the cancelOn command
-// completes as the operator cancels. refused lists the commands PBS refuses.
+// completes as the operator cancels, with cancelErr it ends with that refusal.
+// refused lists the commands PBS refuses.
 type pbsCtxRunner struct {
-	cancelOn string
-	finishes bool
-	cancel   context.CancelFunc
-	list     string
-	refused  map[string]error
-	calls    []string
+	cancelOn  string
+	finishes  bool
+	cancelErr error
+	cancel    context.CancelFunc
+	list      string
+	refused   map[string]error
+	calls     []string
 }
 
 func (r *pbsCtxRunner) Run(ctx context.Context, name string, args ...string) ([]byte, error) {
@@ -34,6 +36,9 @@ func (r *pbsCtxRunner) Run(ctx context.Context, name string, args ...string) ([]
 	}
 	if r.cancelOn != "" && strings.HasPrefix(call, r.cancelOn) {
 		r.cancel()
+		if r.cancelErr != nil {
+			return nil, r.cancelErr
+		}
 		if r.finishes {
 			return nil, nil
 		}

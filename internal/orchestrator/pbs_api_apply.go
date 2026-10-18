@@ -1245,12 +1245,39 @@ func (r *pbsDatastoreRestore) update(name string, flags []string, keptPathEvent 
 	return nil
 }
 
+// pbsChunkStoreExistsError reports whether PBS refused a datastore create because
+// the path already holds a chunk store: "unable to create chunk store 'ds1' subdir
+// "/srv/ds1/.chunks" - ... - EEXIST: File exists" (PBS 4.2.8, measured on VM 201).
+func pbsChunkStoreExistsError(err error) bool {
+	text := pbsManagerErrorText(err)
+	return strings.Contains(text, "unable to create chunk store") && strings.Contains(text, "EEXIST")
+}
+
+// createDatastore creates the datastore name at path. When PBS refuses the create
+// because the path already holds a chunk store, it creates it again with
+// --reuse-datastore true, which PBS 4.2.8 needs to configure a datastore over the
+// data it finds there. When that is refused too, the result is the first refusal,
+// the one that says why the datastore could not be created; the second is at DEBUG.
+func (r *pbsDatastoreRestore) createDatastore(ctx context.Context, name, path string, flags []string) error {
+	args := append([]string{"datastore", "create", name, path}, flags...)
+	_, err := runPBSManager(ctx, args...)
+	if err == nil || ctx.Err() != nil || !pbsChunkStoreExistsError(err) {
+		return err
+	}
+	r.debug("datastore=%s path=%s chunk store exists action=create --reuse-datastore true", name, path)
+	reuseArgs := append(append([]string(nil), args...), "--reuse-datastore", "true")
+	if _, reuseErr := runPBSManager(ctx, reuseArgs...); reuseErr != nil {
+		r.debug("datastore=%s path=%s reuse failed error=%q", name, path, pbsManagerErrorText(reuseErr))
+		return err
+	}
+	return nil
+}
+
 // create creates a datastore this PBS does not list; when PBS refuses the create
 // (it may exist after all, e.g. when the list could not be read) the datastore is
 // updated instead. It returns only a cancellation.
 func (r *pbsDatastoreRestore) create(name, path string, flags []string) error {
-	createArgs := append([]string{"datastore", "create", name, path}, flags...)
-	if _, err := runPBSManager(r.ctx, createArgs...); err != nil {
+	if err := r.createDatastore(r.ctx, name, path, flags); err != nil {
 		if ctxErr := r.ctx.Err(); ctxErr != nil {
 			return ctxErr
 		}
@@ -1279,11 +1306,9 @@ func (r *pbsDatastoreRestore) move(name, currentPath, path string, flags []strin
 		return nil
 	}
 	r.debug("datastore=%s removed", name)
-	createArgs := append([]string{"datastore", "create", name, path}, flags...)
-	if _, err := runPBSManager(r.ctx, createArgs...); err != nil {
+	if err := r.createDatastore(r.ctx, name, path, flags); err != nil {
 		r.debug("datastore=%s create failed path=%s error=%q action=rollback rollback_path=%s", name, path, pbsManagerErrorText(err), currentPath)
-		rollbackArgs := append([]string{"datastore", "create", name, currentPath}, flags...)
-		if _, rbErr := runPBSManager(context.WithoutCancel(r.ctx), rollbackArgs...); rbErr != nil {
+		if rbErr := r.createDatastore(context.WithoutCancel(r.ctx), name, currentPath, flags); rbErr != nil {
 			r.debug("datastore=%s rollback failed path=%s error=%q", name, currentPath, pbsManagerErrorText(rbErr))
 			r.logger.Info(pathEvent, name, currentPath, path)
 			r.logger.Warning("%s PBS datastore %s: not configured, the data in %s is kept", theme.SymbolWarning, name, currentPath)
