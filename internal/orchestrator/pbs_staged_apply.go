@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/tis24dev/proxsave/internal/logging"
+	"github.com/tis24dev/proxsave/internal/ui/theme"
 )
 
 // Hookable functions for testing staged PBS apply logic without touching the real system/API.
@@ -90,9 +91,9 @@ func maybeApplyPBSConfigsFromStage(ctx context.Context, logger *logging.Logger, 
 		// Always restore file-only configs (no stable API coverage yet).
 		// ACME should be applied before node config (node.cfg references ACME accounts/plugins).
 		// The accounts are a directory, not a .cfg, so they get their own apply.
-		if err := applyPBSAcmeAccountsFromStage(logger, stageRoot); err != nil {
-			logger.Warning("PBS staged apply: %s: %v", pbsAcmeAccountsRelPath, err)
-			failedItems = append(failedItems, pbsAcmeAccountsRelPath)
+		// Each block logs its own outcome: a failure is recorded as already logged.
+		if err := applyPBSAcmeAccountsBlock(logger, stageRoot); err != nil {
+			outcomeLogged = append(outcomeLogged, err)
 		}
 		// The ACME plugins go through the PBS API as a section config. Without the
 		// API they are written from the backup file in Merge mode too, as they
@@ -108,13 +109,9 @@ func maybeApplyPBSConfigsFromStage(ctx context.Context, logger *logging.Logger, 
 		} else {
 			pbsSectionFileBlock(ctx, logger, stageRoot, strict, pbsAcmePluginsSectionCfg(), &failedItems, &outcomeLogged)
 		}
-		for _, rel := range []string{
-			"etc/proxmox-backup/metricserver.cfg",
-			"etc/proxmox-backup/proxy.cfg",
-		} {
-			if err := applyPBSConfigFileFromStage(ctx, logger, stageRoot, rel); err != nil {
-				logger.Warning("PBS staged apply: %s: %v", rel, err)
-				failedItems = append(failedItems, rel)
+		for _, f := range []pbsConfigFileBlock{pbsMetricServerFileBlock, pbsProxyFileBlock} {
+			if err := applyPBSConfigFileBlock(logger, stageRoot, f); err != nil {
+				outcomeLogged = append(outcomeLogged, err)
 			}
 		}
 
@@ -868,26 +865,57 @@ const pbsAcmeAccountsRelPath = "etc/proxmox-backup/acme/accounts"
 // 0700 backup:backup on a real PBS, so inheriting from it would hand the ACME private keys to
 // the unprivileged backup service account. PBS itself creates this directory 0700 root:root.
 func applyPBSAcmeAccountsFromStage(logger *logging.Logger, stageRoot string) error {
+	res, err := applyPBSAcmeAccounts(logger, stageRoot)
+	if err != nil {
+		return err
+	}
+	for _, rm := range res.removals {
+		if rm.err != nil {
+			return rm.err
+		}
+		logger.Info("PBS staged apply: removed ACME account not present in the backup: %s", rm.name)
+	}
+	return nil
+}
+
+// pbsAcmeAccountRemoval is one account of this PBS that the backup does not have:
+// err is why it could not be removed, nil when it was.
+type pbsAcmeAccountRemoval struct {
+	name string
+	err  error
+}
+
+// pbsAcmeAccountsResult is what applyPBSAcmeAccounts did: the accounts it wrote
+// and, in the order the directory lists them, the removals of the others.
+type pbsAcmeAccountsResult struct {
+	applied  int
+	removals []pbsAcmeAccountRemoval
+}
+
+// applyPBSAcmeAccounts is applyPBSAcmeAccountsFromStage without its lines: it
+// returns what it did for its caller to log. A removal that fails does not stop
+// the others.
+func applyPBSAcmeAccounts(logger *logging.Logger, stageRoot string) (res pbsAcmeAccountsResult, err error) {
 	stageDir := filepath.Join(stageRoot, pbsAcmeAccountsRelPath)
 
 	info, err := restoreFS.Lstat(stageDir)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			logging.DebugStep(logger, "pbs staged apply acme accounts", "Skip: %s not present in staging directory", pbsAcmeAccountsRelPath)
-			return nil
+			return res, nil
 		}
-		return fmt.Errorf("stat staged %s: %w", pbsAcmeAccountsRelPath, err)
+		return res, &pbsAcmeAccountsStagedError{fmt.Errorf("stat staged %s: %w", pbsAcmeAccountsRelPath, err)}
 	}
 	if info.Mode()&os.ModeSymlink != 0 {
-		return fmt.Errorf("staged %s must not be a symlink", pbsAcmeAccountsRelPath)
+		return res, &pbsAcmeAccountsStagedError{fmt.Errorf("staged %s must not be a symlink", pbsAcmeAccountsRelPath)}
 	}
 	if !info.IsDir() {
-		return fmt.Errorf("staged %s is not a directory", pbsAcmeAccountsRelPath)
+		return res, &pbsAcmeAccountsStagedError{fmt.Errorf("staged %s is not a directory", pbsAcmeAccountsRelPath)}
 	}
 
 	entries, err := restoreFS.ReadDir(stageDir)
 	if err != nil {
-		return fmt.Errorf("read staged %s: %w", pbsAcmeAccountsRelPath, err)
+		return res, &pbsAcmeAccountsStagedError{fmt.Errorf("read staged %s: %w", pbsAcmeAccountsRelPath, err)}
 	}
 
 	// Validate the whole staged set BEFORE the destination is touched, so a malformed
@@ -895,12 +923,12 @@ func applyPBSAcmeAccountsFromStage(logger *logging.Logger, stageRoot string) err
 	// for it.
 	names, err := readPBSAcmeStagedAccounts(stageDir, entries)
 	if err != nil {
-		return err
+		return res, &pbsAcmeAccountsStagedError{err}
 	}
 
 	destDir := filepath.Join(string(os.PathSeparator), filepath.FromSlash(pbsAcmeAccountsRelPath))
 	if err := ensurePBSAcmeAccountsDir(destDir); err != nil {
-		return err
+		return res, err
 	}
 
 	applied := make(map[string]struct{}, len(names))
@@ -909,22 +937,27 @@ func applyPBSAcmeAccountsFromStage(logger *logging.Logger, stageRoot string) err
 
 		data, err := restoreFS.ReadFile(filepath.Join(stageDir, name))
 		if err != nil {
-			return fmt.Errorf("read staged %s: %w", rel, err)
+			return res, &pbsAcmeAccountsStagedError{fmt.Errorf("read staged %s: %w", rel, err)}
 		}
 		if err := writeFileAtomic(filepath.Join(destDir, name), data, 0o600); err != nil {
-			return fmt.Errorf("write %s: %w", filepath.Join(destDir, name), err)
+			return res, fmt.Errorf("write %s: %w", filepath.Join(destDir, name), err)
 		}
 		applied[name] = struct{}{}
 	}
 
-	removed, err := removePBSAcmeAccountsNotIn(logger, destDir, applied)
-	if err != nil {
-		return err
+	res.applied = len(applied)
+	if res.removals, err = removePBSAcmeAccountsNotIn(destDir, applied); err != nil {
+		return res, err
 	}
-
+	removed := 0
+	for _, rm := range res.removals {
+		if rm.err == nil {
+			removed++
+		}
+	}
 	logging.DebugStep(logger, "pbs staged apply acme accounts",
 		"Applied %d account(s) to %s, removed %d not present in the backup", len(applied), destDir, removed)
-	return nil
+	return res, nil
 }
 
 // readPBSAcmeStagedAccounts returns the account names the staged directory carries, and
@@ -997,17 +1030,18 @@ func ensurePBSAcmeAccountsDir(destDir string) error {
 }
 
 // removePBSAcmeAccountsNotIn is the mirroring half: it drops the account entries the backup
-// did not carry. It reports how many it removed so the caller can log the whole outcome.
-func removePBSAcmeAccountsNotIn(logger *logging.Logger, destDir string, keep map[string]struct{}) (int, error) {
+// did not carry, each one even when another could not be removed, and returns every
+// removal with its result so the caller can log the whole outcome.
+func removePBSAcmeAccountsNotIn(destDir string, keep map[string]struct{}) ([]pbsAcmeAccountRemoval, error) {
 	entries, err := restoreFS.ReadDir(destDir)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return 0, nil
+			return nil, nil
 		}
-		return 0, fmt.Errorf("read %s: %w", destDir, err)
+		return nil, fmt.Errorf("read %s: %w", destDir, err)
 	}
 
-	removed := 0
+	var removals []pbsAcmeAccountRemoval
 	for _, entry := range entries {
 		if entry == nil {
 			continue
@@ -1017,13 +1051,169 @@ func removePBSAcmeAccountsNotIn(logger *logging.Logger, destDir string, keep map
 			continue
 		}
 		target := filepath.Join(destDir, name)
+		rm := pbsAcmeAccountRemoval{name: name}
 		if err := restoreFS.RemoveAll(target); err != nil {
-			return removed, fmt.Errorf("remove %s: %w", target, err)
+			rm.err = fmt.Errorf("remove %s: %w", target, err)
 		}
-		logger.Info("PBS staged apply: removed ACME account not present in the backup: %s", name)
-		removed++
+		removals = append(removals, rm)
 	}
-	return removed, nil
+	return removals, nil
+}
+
+// pbsAcmeAccountsStagedError is a failure of the ACME accounts apply on the side
+// of the backup: the staged directory or an account in it could not be read, or
+// is not what PBS writes. Any other failure is on the side of this PBS.
+type pbsAcmeAccountsStagedError struct{ err error }
+
+func (e *pbsAcmeAccountsStagedError) Error() string { return e.err.Error() }
+
+func (e *pbsAcmeAccountsStagedError) Unwrap() error { return e.err }
+
+const pbsAcmeAccountsRestoreDebug = "PBS ACME accounts restore: "
+
+// applyPBSAcmeAccountsBlock restores the ACME accounts as one block: nothing
+// visible when the backup has none, otherwise the opening line and the outcome,
+// with the event of a failure in between. A failure returns its error, whose
+// outcome is already logged.
+func applyPBSAcmeAccountsBlock(logger *logging.Logger, stageRoot string) error {
+	stageDir := filepath.Join(stageRoot, pbsAcmeAccountsRelPath)
+	if _, err := restoreFS.Lstat(stageDir); errors.Is(err, os.ErrNotExist) {
+		logger.Debug(pbsAcmeAccountsRestoreDebug+"staged=%s not in the backup action=skip", stageDir)
+		return nil
+	}
+	logger.Info("Restoring PBS ACME accounts...")
+	logger.Debug(pbsAcmeAccountsRestoreDebug+"staged=%s target=%s", stageDir, filepath.Join(string(os.PathSeparator), filepath.FromSlash(pbsAcmeAccountsRelPath)))
+	res, err := applyPBSAcmeAccounts(logger, stageRoot)
+	var staged *pbsAcmeAccountsStagedError
+	switch {
+	case err == nil:
+		return pbsAcmeAccountsOutcome(logger, res)
+	case errors.As(err, &staged):
+		logger.Debug(pbsAcmeAccountsRestoreDebug+"staged read failed error=%q", err.Error())
+		logger.Info("The ACME accounts in the backup could not be read: \"%s\"", err.Error())
+	default:
+		logger.Debug(pbsAcmeAccountsRestoreDebug+"write failed error=%q", err.Error())
+		logger.Info("The ACME accounts could not be written to this PBS: \"%s\"", err.Error())
+	}
+	logger.Warning("%s PBS ACME accounts: not applied", theme.SymbolWarning)
+	return err
+}
+
+// pbsAcmeAccountsOutcome names each account of this PBS that the backup does not
+// have, removed or not, then logs the outcome of the block: applied, or when a
+// removal failed partially applied, or not applied when nothing else was done.
+func pbsAcmeAccountsOutcome(logger *logging.Logger, res pbsAcmeAccountsResult) error {
+	var notRemoved []string
+	for _, rm := range res.removals {
+		logger.Debug(pbsAcmeAccountsRestoreDebug+"account=%s not in backup action=remove", rm.name)
+		if rm.err != nil {
+			logger.Debug(pbsAcmeAccountsRestoreDebug+"account=%s remove failed error=%q", rm.name, rm.err.Error())
+			logger.Info("ACME account %s is configured on this PBS but not present in the backup", rm.name)
+			logger.Warning("%s PBS ACME account %s: not removed", theme.SymbolWarning, rm.name)
+			notRemoved = append(notRemoved, rm.name)
+			continue
+		}
+		logger.Info("ACME account %s is configured on this PBS but not present in the backup", rm.name)
+		logger.Info("%s PBS ACME account %s: removed", theme.SymbolSuccess, rm.name)
+	}
+	switch {
+	case len(notRemoved) == 0:
+		logger.Info("%s PBS ACME accounts: applied", theme.SymbolSuccess)
+		return nil
+	case len(notRemoved) == res.applied+len(res.removals):
+		logger.Warning("%s PBS ACME accounts: not applied", theme.SymbolWarning)
+	default:
+		logger.Warning("%s PBS ACME accounts: partially applied", theme.SymbolWarning)
+	}
+	return fmt.Errorf("%d ACME account(s) not removed [%s]", len(notRemoved), strings.Join(notRemoved, ", "))
+}
+
+// pbsConfigFileBlock is a PBS configuration file restored as a file, with the
+// words of its block.
+type pbsConfigFileBlock struct {
+	rel     string
+	debug   string // DEBUG prefix
+	opening string
+	config  string // event subject: "The metric server configuration"
+	outcome string
+}
+
+var (
+	pbsMetricServerFileBlock = pbsConfigFileBlock{
+		rel:     "etc/proxmox-backup/metricserver.cfg",
+		debug:   "PBS metric server restore: ",
+		opening: "Restoring PBS metric server configuration...",
+		config:  "The metric server configuration",
+		outcome: "PBS metric server configuration",
+	}
+	pbsProxyFileBlock = pbsConfigFileBlock{
+		rel:     "etc/proxmox-backup/proxy.cfg",
+		debug:   "PBS proxy restore: ",
+		opening: "Restoring PBS proxy configuration...",
+		config:  "The proxy configuration",
+		outcome: "PBS proxy configuration",
+	}
+)
+
+// pbsConfigCommentsOnly reports whether content holds only comments and blank
+// lines.
+func pbsConfigCommentsOnly(content string) bool {
+	for _, line := range strings.Split(content, "\n") {
+		if trimmed := strings.TrimSpace(line); trimmed != "" && !strings.HasPrefix(trimmed, "#") {
+			return false
+		}
+	}
+	return true
+}
+
+// applyPBSConfigFileBlock writes one staged PBS configuration file to this PBS as
+// one block: nothing visible when the backup does not have it; a file without
+// configuration (empty, or only comments) removes the target; a file without a
+// section header is not written. A failure returns its error, whose outcome is
+// already logged.
+func applyPBSConfigFileBlock(logger *logging.Logger, stageRoot string, f pbsConfigFileBlock) error {
+	stagePath := filepath.Join(stageRoot, f.rel)
+	destPath := filepath.Join(string(os.PathSeparator), filepath.FromSlash(f.rel))
+	data, err := restoreFS.ReadFile(stagePath)
+	if errors.Is(err, os.ErrNotExist) {
+		logger.Debug(f.debug+"staged=%s not in the backup action=skip", stagePath)
+		return nil
+	}
+	logger.Info("%s", f.opening)
+	logger.Debug(f.debug+"staged=%s target=%s", stagePath, destPath)
+	notApplied := func(err error) error {
+		logger.Warning("%s %s: not applied", theme.SymbolWarning, f.outcome)
+		return err
+	}
+	if err != nil {
+		err = fmt.Errorf("read staged %s: %w", f.rel, err)
+		logger.Debug(f.debug+"staged read failed error=%q", err.Error())
+		logger.Info("%s in the backup could not be read: \"%s\"", f.config, err.Error())
+		return notApplied(err)
+	}
+	trimmed := strings.TrimSpace(string(data))
+	var writeErr error
+	switch {
+	case pbsConfigCommentsOnly(trimmed):
+		if writeErr = removeIfExists(destPath); writeErr == nil {
+			logger.Debug(f.debug+"staged file has no configuration comments_only=%v, target removed", trimmed != "")
+		}
+	case !pbsConfigHasHeader(trimmed):
+		writeErr = fmt.Errorf("%s does not look like a valid PBS config file (missing section header)", f.rel)
+	default:
+		if writeErr = writeFileAtomic(destPath, []byte(trimmed+"\n"), 0o640); writeErr != nil {
+			writeErr = fmt.Errorf("write %s: %w", destPath, writeErr)
+		} else {
+			logger.Debug("%swritten", f.debug)
+		}
+	}
+	if writeErr != nil {
+		logger.Debug(f.debug+"write failed error=%q", writeErr.Error())
+		logger.Info("%s could not be written to this PBS: \"%s\"", f.config, writeErr.Error())
+		return notApplied(writeErr)
+	}
+	logger.Info("%s %s: applied", theme.SymbolSuccess, f.outcome)
+	return nil
 }
 
 func applyPBSConfigFileFromStage(ctx context.Context, logger *logging.Logger, stageRoot, relPath string) error {
