@@ -2258,6 +2258,7 @@ func (c *CloudStorage) deleteBackupInternal(ctx context.Context, backupFile stri
 			failedFiles = append(failedFiles, rel)
 			return false
 		}
+		c.logger.Debug("Cloud storage: deleted remote file %s", rel)
 		c.removeRemoteSnapshotEntry(rel)
 		return true
 	}

@@ -736,8 +736,8 @@ func TestApplyPBSRemoteCfgViaAPI_DecodesBase64Password(t *testing.T) {
 		if !reflect.DeepEqual(runner.calls, want) {
 			t.Fatalf("calls=%v want %v", runner.calls, want)
 		}
-		if strings.Contains(logBuf.String(), "base64") {
-			t.Fatalf("expected no base64 line for a valid base64 password, got: %s", logBuf.String())
+		if strings.Contains(logBuf.String(), "not valid base64") || !strings.Contains(logBuf.String(), "DEBUG    PBS remote restore: remote=r1 password decoded from base64") {
+			t.Fatalf("expected the decode line and no invalid-base64 line for a valid base64 password, got: %s", logBuf.String())
 		}
 	})
 
@@ -804,8 +804,8 @@ func TestApplyPBSRemoteCfgViaAPI_DecodesBase64Password(t *testing.T) {
 				lines = append(lines, line)
 			}
 		}
-		if len(lines) != 1 || !strings.Contains(lines[0], "DEBUG") || !strings.Contains(lines[0], "r1") || !strings.Contains(lines[0], "password") {
-			t.Fatalf("expected one DEBUG line naming r1 and password, got: %q", logBuf.String())
+		if len(lines) != 1 || !strings.Contains(lines[0], "DEBUG    PBS remote restore: remote=r1 password is not valid base64, passing the staged value unchanged") {
+			t.Fatalf("expected the block's DEBUG line naming r1 and password, got: %q", logBuf.String())
 		}
 		if strings.Contains(logBuf.String(), verbatim) {
 			t.Fatalf("the value leaked into the log: %s", logBuf.String())

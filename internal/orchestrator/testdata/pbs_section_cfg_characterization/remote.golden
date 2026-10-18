@@ -135,6 +135,7 @@ log:
   [<TIME>] DEBUG    PBS remote restore: backup remotes=1 names=alpha
   [<TIME>] INFO       Remotes to restore: 1
   [<TIME>] INFO       Names: alpha
+  [<TIME>] DEBUG    PBS remote restore: remote=alpha password decoded from base64
   [<TIME>] DEBUG    PBS remote restore: remote=alpha created
   [<TIME>] INFO     ✓ PBS remote alpha: applied
   [<TIME>] INFO     ✓ PBS remote configuration: applied
@@ -182,12 +183,16 @@ log:
   [<TIME>] DEBUG    PBS remote restore: backup remotes=4 names=alpha,bravo,charlie,delta
   [<TIME>] INFO       Remotes to restore: 4
   [<TIME>] INFO       Names: alpha, bravo, charlie, delta
+  [<TIME>] DEBUG    PBS remote restore: remote=alpha password decoded from base64
   [<TIME>] DEBUG    PBS remote restore: remote=alpha created
   [<TIME>] INFO     ✓ PBS remote alpha: applied
+  [<TIME>] DEBUG    PBS remote restore: remote=bravo password decoded from base64
   [<TIME>] DEBUG    PBS remote restore: remote=bravo created
   [<TIME>] INFO     ✓ PBS remote bravo: applied
+  [<TIME>] DEBUG    PBS remote restore: remote=charlie password decoded from base64
   [<TIME>] DEBUG    PBS remote restore: remote=charlie created
   [<TIME>] INFO     ✓ PBS remote charlie: applied
+  [<TIME>] DEBUG    PBS remote restore: remote=delta password decoded from base64
   [<TIME>] DEBUG    PBS remote restore: remote=delta created
   [<TIME>] INFO     ✓ PBS remote delta: applied
   [<TIME>] INFO     ✓ PBS remote configuration: applied
@@ -217,6 +222,7 @@ log:
   [<TIME>] DEBUG    PBS remote restore: backup remotes=1 names=alpha
   [<TIME>] INFO       Remotes to restore: 1
   [<TIME>] INFO       Names: alpha
+  [<TIME>] DEBUG    PBS remote restore: remote=alpha password decoded from base64
   [<TIME>] DEBUG    PBS remote restore: remote=alpha created
   [<TIME>] INFO     ✓ PBS remote alpha: applied
   [<TIME>] INFO     ✓ PBS remote configuration: applied
@@ -250,6 +256,7 @@ log:
   [<TIME>] DEBUG    PBS remote restore: backup remotes=1 names=alpha
   [<TIME>] INFO       Remotes to restore: 1
   [<TIME>] INFO       Names: alpha
+  [<TIME>] DEBUG    PBS remote restore: remote=alpha password decoded from base64
   [<TIME>] DEBUG    PBS remote restore: remote=alpha created
   [<TIME>] INFO     ✓ PBS remote alpha: applied
   [<TIME>] INFO     ✓ PBS remote configuration: applied
@@ -280,6 +287,7 @@ log:
   [<TIME>] DEBUG    PBS remote restore: backup remotes=2 names=alpha,zulu
   [<TIME>] INFO       Remotes to restore: 2
   [<TIME>] INFO       Names: alpha, zulu
+  [<TIME>] DEBUG    PBS remote restore: remote=alpha password decoded from base64
   [<TIME>] DEBUG    PBS remote restore: remote=alpha created
   [<TIME>] INFO     ✓ PBS remote alpha: applied
   [<TIME>] DEBUG    PBS remote restore: remote=zulu created
@@ -323,11 +331,14 @@ log:
   [<TIME>] DEBUG    PBS remote restore: backup remotes=3 names=alpha,bravo,charlie
   [<TIME>] INFO       Remotes to restore: 3
   [<TIME>] INFO       Names: alpha, bravo, charlie
+  [<TIME>] DEBUG    PBS remote restore: remote=alpha password decoded from base64
   [<TIME>] DEBUG    PBS remote restore: remote=alpha created
   [<TIME>] INFO     ✓ PBS remote alpha: applied
+  [<TIME>] DEBUG    PBS remote restore: remote=bravo password decoded from base64
   [<TIME>] DEBUG    PBS remote restore: remote=bravo create failed error="injected create failure" action=update
   [<TIME>] DEBUG    PBS remote restore: remote=bravo updated
   [<TIME>] INFO     ✓ PBS remote bravo: applied
+  [<TIME>] DEBUG    PBS remote restore: remote=charlie password decoded from base64
   [<TIME>] DEBUG    PBS remote restore: remote=charlie created
   [<TIME>] INFO     ✓ PBS remote charlie: applied
   [<TIME>] INFO     ✓ PBS remote configuration: applied
@@ -372,12 +383,15 @@ log:
   [<TIME>] DEBUG    PBS remote restore: backup remotes=3 names=alpha,bravo,charlie
   [<TIME>] INFO       Remotes to restore: 3
   [<TIME>] INFO       Names: alpha, bravo, charlie
+  [<TIME>] DEBUG    PBS remote restore: remote=alpha password decoded from base64
   [<TIME>] DEBUG    PBS remote restore: remote=alpha created
   [<TIME>] INFO     ✓ PBS remote alpha: applied
+  [<TIME>] DEBUG    PBS remote restore: remote=bravo password decoded from base64
   [<TIME>] DEBUG    PBS remote restore: remote=bravo create failed error="injected create failure" action=update
   [<TIME>] DEBUG    PBS remote restore: remote=bravo update failed error="injected update failure"
   [<TIME>] INFO     Remote bravo was rejected by PBS: "injected create failure"
   [<TIME>] WARNING  ⚠ PBS remote bravo: not applied
+  [<TIME>] DEBUG    PBS remote restore: remote=charlie password decoded from base64
   [<TIME>] DEBUG    PBS remote restore: remote=charlie created
   [<TIME>] INFO     ✓ PBS remote charlie: applied
   [<TIME>] WARNING  ⚠ PBS remote configuration: partially applied
@@ -524,6 +538,7 @@ log:
   [<TIME>] INFO       Remotes to restore: 1
   [<TIME>] INFO       Names: alpha
   [<TIME>] DEBUG    PBS remote restore: current remotes=0 names=
+  [<TIME>] DEBUG    PBS remote restore: remote=alpha password decoded from base64
   [<TIME>] DEBUG    PBS remote restore: remote=alpha created
   [<TIME>] INFO     ✓ PBS remote alpha: applied
   [<TIME>] INFO     ✓ PBS remote configuration: applied
@@ -570,8 +585,10 @@ log:
   [<TIME>] DEBUG    PBS remote restore: remote=zeta removed
   [<TIME>] INFO     Remote zeta is configured on this PBS but not present in the backup
   [<TIME>] INFO     ✓ PBS remote zeta: removed
+  [<TIME>] DEBUG    PBS remote restore: remote=alpha password decoded from base64
   [<TIME>] DEBUG    PBS remote restore: remote=alpha created
   [<TIME>] INFO     ✓ PBS remote alpha: applied
+  [<TIME>] DEBUG    PBS remote restore: remote=charlie password decoded from base64
   [<TIME>] DEBUG    PBS remote restore: remote=charlie created
   [<TIME>] INFO     ✓ PBS remote charlie: applied
   [<TIME>] INFO     ✓ PBS remote configuration: applied
@@ -618,8 +635,10 @@ log:
   [<TIME>] DEBUG    PBS remote restore: remote=zeta removed
   [<TIME>] INFO     Remote zeta is configured on this PBS but not present in the backup
   [<TIME>] INFO     ✓ PBS remote zeta: removed
+  [<TIME>] DEBUG    PBS remote restore: remote=alpha password decoded from base64
   [<TIME>] DEBUG    PBS remote restore: remote=alpha created
   [<TIME>] INFO     ✓ PBS remote alpha: applied
+  [<TIME>] DEBUG    PBS remote restore: remote=charlie password decoded from base64
   [<TIME>] DEBUG    PBS remote restore: remote=charlie created
   [<TIME>] INFO     ✓ PBS remote charlie: applied
   [<TIME>] INFO     ✓ PBS remote configuration: applied
@@ -662,6 +681,7 @@ log:
   [<TIME>] DEBUG    PBS remote restore: remote=gamma removed
   [<TIME>] INFO     Remote gamma is configured on this PBS but not present in the backup
   [<TIME>] INFO     ✓ PBS remote gamma: removed
+  [<TIME>] DEBUG    PBS remote restore: remote=alpha password decoded from base64
   [<TIME>] DEBUG    PBS remote restore: remote=alpha created
   [<TIME>] INFO     ✓ PBS remote alpha: applied
   [<TIME>] WARNING  ⚠ PBS remote configuration: partially applied
@@ -710,6 +730,7 @@ log:
   [<TIME>] DEBUG    PBS remote restore: remote=gamma removed
   [<TIME>] INFO     Remote gamma is configured on this PBS but not present in the backup
   [<TIME>] INFO     ✓ PBS remote gamma: removed
+  [<TIME>] DEBUG    PBS remote restore: remote=alpha password decoded from base64
   [<TIME>] DEBUG    PBS remote restore: remote=alpha created
   [<TIME>] INFO     ✓ PBS remote alpha: applied
   [<TIME>] WARNING  ⚠ PBS remote configuration: partially applied
@@ -750,6 +771,7 @@ log:
   [<TIME>] DEBUG    PBS remote restore: remote=beta remove failed error="injected remove failure"
   [<TIME>] INFO     Remote beta is configured on this PBS but not present in the backup
   [<TIME>] WARNING  ⚠ PBS remote beta: not removed
+  [<TIME>] DEBUG    PBS remote restore: remote=bravo password decoded from base64
   [<TIME>] DEBUG    PBS remote restore: remote=bravo create failed error="injected create failure" action=update
   [<TIME>] DEBUG    PBS remote restore: remote=bravo update failed error="injected update failure"
   [<TIME>] INFO     Remote bravo was rejected by PBS: "injected create failure"
@@ -816,6 +838,7 @@ log:
   [<TIME>] DEBUG    PBS remote restore: remote=only-name removed
   [<TIME>] INFO     Remote only-name is configured on this PBS but not present in the backup
   [<TIME>] INFO     ✓ PBS remote only-name: removed
+  [<TIME>] DEBUG    PBS remote restore: remote=alpha password decoded from base64
   [<TIME>] DEBUG    PBS remote restore: remote=alpha created
   [<TIME>] INFO     ✓ PBS remote alpha: applied
   [<TIME>] INFO     ✓ PBS remote configuration: applied

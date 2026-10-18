@@ -19,4 +19,5 @@ DEBUG    Secondary storage: file already removed <ROOT>/backups/pve-backup-20240
 DEBUG    Secondary logs: deleted log file backup-pve-20240501-120000.log
 DEBUG    Deleted secondary backup: pve-backup-20240501-120000.tar.zst
 DEBUG    Deleting old backup: pve-backup-20240601-120000.tar.zst (created: 2024-06-01 12:00:00)
+DEBUG    Secondary storage: retention stopped by cancellation, 1 of 3 backups deleted
 DEBUG    End secondary retention (error=context canceled, duration=<D>)

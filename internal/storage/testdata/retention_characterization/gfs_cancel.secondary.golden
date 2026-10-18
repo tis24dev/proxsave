@@ -19,4 +19,5 @@ DEBUG    Secondary storage: file already removed <ROOT>/backups/pve-backup-<TS1>
 DEBUG    Secondary logs: deleted log file backup-pve-<TS1>.log
 DEBUG    Deleted secondary backup: pve-backup-<TS1>.tar.zst
 DEBUG    Deleting old backup: pve-backup-<TS2>.tar.zst (created: <DATE2>)
+DEBUG    Secondary storage: retention stopped by cancellation, 1 of 3 backups deleted
 DEBUG    End secondary retention (error=context canceled, duration=<D>)

@@ -206,16 +206,18 @@ func (r fsRetention) deleteBackup(ctx context.Context, backupFile string) (bool,
 // deleteAssociatedLog attempts to remove the log file corresponding to a backup.
 // It is best-effort and never returns an error to the caller.
 func (r fsRetention) deleteAssociatedLog(ctx context.Context, backupFile string) bool {
-	if r.config == nil {
-		return false
+	logPath := ""
+	if r.config != nil {
+		logPath = strings.TrimSpace(r.logPath)
 	}
-	logPath := strings.TrimSpace(r.logPath)
 	if logPath == "" {
+		r.logger.Debug("%s: no log folder, no log to delete for %s", r.text.logs, filepath.Base(backupFile))
 		return false
 	}
 
 	host, ts, ok := extractLogKeyFromBackup(backupFile)
 	if !ok {
+		r.logger.Debug("%s: no host and timestamp in %s, no log to delete", r.text.logs, filepath.Base(backupFile))
 		return false
 	}
 
@@ -243,12 +245,13 @@ func (r fsRetention) deleteAssociatedLog(ctx context.Context, backupFile string)
 }
 
 func (r fsRetention) countLogFiles(ctx context.Context) int {
-	if r.config == nil {
-		return -1
+	logPath := ""
+	if r.config != nil {
+		logPath = strings.TrimSpace(r.logPath)
 	}
-	logPath := strings.TrimSpace(r.logPath)
 	if logPath == "" {
 		// No log folder: there is no count of logs, not a count of zero.
+		r.logger.Debug("%s: no log folder, the log count is unknown", r.text.logs)
 		return -1
 	}
 	// Bounded against a dead/stale mount, consistent with the main backup glob. The
@@ -380,9 +383,13 @@ func (r fsRetention) applySimple(ctx context.Context, backups []*types.BackupMet
 func (r fsRetention) deleteBackups(ctx context.Context, toDelete []*types.BackupMetadata, total int, initialLogs int) (int, error) {
 	logsDeleted := 0
 	deleted := 0
+	stopped := func(err error) (int, error) {
+		r.logger.Debug("%s: retention stopped by cancellation, %d of %d backups deleted", r.text.storage, deleted, len(toDelete))
+		return deleted, err
+	}
 	for _, backup := range toDelete {
 		if err := ctx.Err(); err != nil {
-			return deleted, err
+			return stopped(err)
 		}
 
 		r.logger.Debug("Deleting old backup: %s (created: %s)",
@@ -394,7 +401,7 @@ func (r fsRetention) deleteBackups(ctx context.Context, toDelete []*types.Backup
 			if ctxErr := ctx.Err(); ctxErr != nil && errors.Is(err, ctxErr) {
 				// Cancelled before this backup was touched: stop as the check above
 				// does, without counting it as not deleted.
-				return deleted, ctxErr
+				return stopped(ctxErr)
 			}
 			if !errors.Is(err, errBackupSidecarDeleteOnly) {
 				r.text.notDeleted(r.logger, backup.BackupFile, err)

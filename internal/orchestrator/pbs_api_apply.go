@@ -348,9 +348,10 @@ var (
 // buildProxmoxManagerFlags, entry by entry, and decodes from standard base64 the value
 // of every key named in base64Keys. The staged value is trimmed before it is decoded,
 // the decoded value is passed as it is, so a password that begins or ends with a space
-// keeps it. A value that is not valid base64 is passed as staged, and one DEBUG line
-// names the section and the key, never the value.
-func pbsSectionFlags(logger *logging.Logger, kind, id string, entries []proxmoxNotificationEntry, base64Keys []string) []string {
+// keeps it. A value that is not valid base64 is passed as staged. One DEBUG line of
+// the block, through debug, says whether each such value was decoded, naming the
+// object as key=id and the setting, never the value.
+func pbsSectionFlags(debug func(format string, args ...any), key, id string, entries []proxmoxNotificationEntry, base64Keys []string) []string {
 	if len(base64Keys) == 0 {
 		return buildProxmoxManagerFlags(entries)
 	}
@@ -365,12 +366,13 @@ func pbsSectionFlags(logger *logging.Logger, kind, id string, entries []proxmoxN
 		if len(flag) != 2 {
 			continue
 		}
-		key := strings.TrimPrefix(flag[0], "--")
-		if _, ok := decode[key]; ok {
+		name := strings.TrimPrefix(flag[0], "--")
+		if _, ok := decode[name]; ok {
 			decoded, err := base64.StdEncoding.DecodeString(flag[1])
 			if err != nil {
-				logger.Debug("PBS API apply: %s %s: %s is not valid base64, passing the staged value unchanged", kind, id, key)
+				debug("%s=%s %s is not valid base64, passing the staged value unchanged", key, id, name)
 			} else {
+				debug("%s=%s %s decoded from base64", key, id, name)
 				flag[1] = string(decoded)
 			}
 		}
@@ -505,6 +507,8 @@ func (r *pbsSectionRestore) dataFile(id string, flags []string) (out []string, c
 		if decErr != nil {
 			r.debug("%s=%s %s is not valid base64, writing the staged value unchanged", r.key(), id, r.cfg.dataFileFlag)
 			data = []byte(out[i+1])
+		} else {
+			r.debug("%s=%s %s decoded from base64", r.key(), id, r.cfg.dataFileFlag)
 		}
 		dir, mkErr := os.MkdirTemp("", "proxsave-pbs-data-")
 		if mkErr != nil {
@@ -525,8 +529,7 @@ func (r *pbsSectionRestore) dataFile(id string, flags []string) (out []string, c
 // create (the object may already exist) update. It returns only a cancellation.
 func (r *pbsSectionRestore) apply(id string, s proxmoxNotificationSection) error {
 	r.attempted++
-	kind := strings.Join(r.cfg.command, " ")
-	flags := pbsSectionFlags(r.logger, kind, id, s.Entries, r.cfg.base64Values)
+	flags := pbsSectionFlags(r.debug, r.key(), id, s.Entries, r.cfg.base64Values)
 	head := []string{r.cfg.verb("create", r.cfg.createVerb)}
 	if r.cfg.createWithType {
 		head = append(head, s.Type)

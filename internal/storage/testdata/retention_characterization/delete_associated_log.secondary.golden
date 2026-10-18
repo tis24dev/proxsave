@@ -1,7 +1,9 @@
 --- nil receiver ---
 --- no config ---
 --- log folder variable not set ---
+DEBUG    Secondary logs: no log folder, no log to delete for pve-backup-20240610-120000.tar.zst
 --- name without a run key ---
+DEBUG    Secondary logs: no host and timestamp in manual-archive.tar.zst, no log to delete
 --- the log this run writes ---
 DEBUG    Secondary logs: kept backup-pve-20240620-120000.log reason=own_log
 --- absent ---
