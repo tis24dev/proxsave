@@ -1373,25 +1373,36 @@ func TestApplyPBSTrafficControlCfgViaAPI_CreateFailsThenUpdate(t *testing.T) {
 	}
 }
 
-func TestApplyPBSNodeCfgViaAPI_UsesFirstSection(t *testing.T) {
-	stageRoot, fs, runner := setupPBSAPIApplyTestDeps(t)
+// pbsNodeCfgMeasured is a node.cfg as PBS 4.2.8 wrote it on VM 201 (2026-10-18):
+// one "key: value" line per setting and the description as "#" lines. Running
+// node update with the flags built from it on an empty node.cfg wrote the same
+// file back.
+const pbsNodeCfgMeasured = "#line one\n#line two\n" +
+	"acme: account=default\n" +
+	"acmedomain0: domain=a.example.com,plugin=cf\n" +
+	"acmedomain1: domain=b.example.com,alias=c.example.com\n" +
+	"ciphers-tls-1.2: ECDHE-RSA-AES256-GCM-SHA384\n" +
+	"ciphers-tls-1.3: TLS_AES_256_GCM_SHA384\n" +
+	"consent-text: consent probe\n" +
+	"default-lang: de\n" +
+	"email-from: pbs@example.com\n" +
+	"http-proxy: http://user:pw@proxy.example:3128\n" +
+	"task-log-max-days: 7\n"
 
-	writeStageFile(t, fs, stageRoot, "etc/proxmox-backup/node.cfg",
-		"node: n1\n"+
-			"    dns1 1.1.1.1\n"+
-			"    foo_bar baz\n"+
-			"\n"+
-			"node: n2\n"+
-			"    dns1 9.9.9.9\n",
-		0o640,
-	)
+func TestApplyPBSNodeCfgViaAPI_SetsEverySetting(t *testing.T) {
+	stageRoot, fs, runner := setupPBSAPIApplyTestDeps(t)
+	writeStageFile(t, fs, stageRoot, "etc/proxmox-backup/node.cfg", pbsNodeCfgMeasured, 0o640)
 
 	if err := applyPBSNodeCfgViaAPI(context.Background(), stageRoot); err != nil {
 		t.Fatalf("applyPBSNodeCfgViaAPI error: %v", err)
 	}
 
 	want := []string{
-		"proxmox-backup-manager node update --dns1 1.1.1.1 --foo-bar baz",
+		"proxmox-backup-manager node update --acme account=default --acmedomain0 domain=a.example.com,plugin=cf" +
+			" --acmedomain1 domain=b.example.com,alias=c.example.com --ciphers-tls-1.2 ECDHE-RSA-AES256-GCM-SHA384" +
+			" --ciphers-tls-1.3 TLS_AES_256_GCM_SHA384 --consent-text consent probe --default-lang de" +
+			" --email-from pbs@example.com --http-proxy http://user:pw@proxy.example:3128 --task-log-max-days 7" +
+			" --description line one\nline two",
 	}
 	if !reflect.DeepEqual(runner.calls, want) {
 		t.Fatalf("calls=%v want %v", runner.calls, want)
@@ -1409,9 +1420,9 @@ func TestApplyPBSNodeCfgViaAPI_NoFileAndEmptyAndError(t *testing.T) {
 		}
 	})
 
-	t.Run("empty-sections", func(t *testing.T) {
+	t.Run("empty", func(t *testing.T) {
 		stageRoot, fs, runner := setupPBSAPIApplyTestDeps(t)
-		writeStageFile(t, fs, stageRoot, "etc/proxmox-backup/node.cfg", "   \n# comment\n", 0o640)
+		writeStageFile(t, fs, stageRoot, "etc/proxmox-backup/node.cfg", "   \n\n", 0o640)
 		if err := applyPBSNodeCfgViaAPI(context.Background(), stageRoot); err != nil {
 			t.Fatalf("applyPBSNodeCfgViaAPI error: %v", err)
 		}
@@ -1420,18 +1431,26 @@ func TestApplyPBSNodeCfgViaAPI_NoFileAndEmptyAndError(t *testing.T) {
 		}
 	})
 
-	t.Run("command-error", func(t *testing.T) {
+	t.Run("description-only", func(t *testing.T) {
 		stageRoot, fs, runner := setupPBSAPIApplyTestDeps(t)
-		writeStageFile(t, fs, stageRoot, "etc/proxmox-backup/node.cfg",
-			"node: n1\n"+
-				"    dns1 1.1.1.1\n",
-			0o640,
-		)
-		runner.errs = map[string]error{
-			"proxmox-backup-manager node update --dns1 1.1.1.1": errors.New("boom"),
+		writeStageFile(t, fs, stageRoot, "etc/proxmox-backup/node.cfg", "#just a description\n", 0o640)
+		if err := applyPBSNodeCfgViaAPI(context.Background(), stageRoot); err != nil {
+			t.Fatalf("applyPBSNodeCfgViaAPI error: %v", err)
 		}
-		if err := applyPBSNodeCfgViaAPI(context.Background(), stageRoot); err == nil {
-			t.Fatalf("expected error")
+		if want := []string{"proxmox-backup-manager node update --description just a description"}; !reflect.DeepEqual(runner.calls, want) {
+			t.Fatalf("calls=%v want %v", runner.calls, want)
+		}
+	})
+
+	t.Run("command-error-redacts-the-proxy", func(t *testing.T) {
+		stageRoot, fs, runner := setupPBSAPIApplyTestDeps(t)
+		writeStageFile(t, fs, stageRoot, "etc/proxmox-backup/node.cfg", "http-proxy: http://user:pw@proxy.example:3128\n", 0o640)
+		runner.errs = map[string]error{
+			"proxmox-backup-manager node update --http-proxy http://user:pw@proxy.example:3128": errors.New("boom"),
+		}
+		err := applyPBSNodeCfgViaAPI(context.Background(), stageRoot)
+		if err == nil || strings.Contains(err.Error(), "user:pw") || !strings.Contains(err.Error(), "--http-proxy <redacted>") {
+			t.Fatalf("err = %v, want the refusal with --http-proxy redacted", err)
 		}
 	})
 }

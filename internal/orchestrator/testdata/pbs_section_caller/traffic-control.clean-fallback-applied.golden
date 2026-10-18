@@ -6,5 +6,6 @@ DEBUG    PBS proxy restore: staged=/stage/etc/proxmox-backup/proxy.cfg not in th
 WARNING  PBS API apply: traffic-control failed: forced API error
 WARNING  PBS staged apply: falling back to file-based traffic-control.cfg
 DEBUG    pbs staged apply file: Applied etc/proxmox-backup/traffic-control.cfg -> /etc/proxmox-backup/traffic-control.cfg
+DEBUG    PBS node restore: staged=/stage/etc/proxmox-backup/node.cfg not in the backup action=skip
 DEBUG    End pbs staged apply (ok, duration=<d>)
 returned: <nil>

@@ -6,5 +6,6 @@ DEBUG    PBS proxy restore: staged=/stage/etc/proxmox-backup/proxy.cfg not in th
 WARNING  PBS API apply: traffic-control failed: forced API error
 WARNING  PBS staged apply: falling back to file-based traffic-control.cfg
 WARNING  PBS staged apply: traffic-control.cfg fallback: write /etc/proxmox-backup/traffic-control.cfg: rename <fakefs>/etc/proxmox-backup/traffic-control.cfg.proxsave.tmp.<n> <fakefs>/etc/proxmox-backup/traffic-control.cfg: file exists
+DEBUG    PBS node restore: staged=/stage/etc/proxmox-backup/node.cfg not in the backup action=skip
 DEBUG    End pbs staged apply (error=1 PBS config item(s) failed to apply: traffic-control.cfg, duration=<d>)
 returned: 1 PBS config item(s) failed to apply: traffic-control.cfg

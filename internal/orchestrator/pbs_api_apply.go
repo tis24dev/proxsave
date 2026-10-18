@@ -1681,6 +1681,40 @@ func applyPBSTrafficControlCfgViaAPI(ctx context.Context, logger *logging.Logger
 	return applyPBSSectionCfgViaAPI(ctx, logger, stageRoot, strict, pbsTrafficControlSectionCfg())
 }
 
+// pbsNodeSecretFlags are the node update flags whose value an error must not
+// show: the HTTP proxy URL may carry credentials.
+var pbsNodeSecretFlags = []string{"--http-proxy"}
+
+// pbsNodeUpdateFlags builds the "node update" flags of a node.cfg in the format
+// PBS 4.2.8 writes it (measured on VM 201): one "key: value" line per setting,
+// and the description as "#" lines, one per line of it. keys names the settings,
+// in the file's order, the description last.
+func pbsNodeUpdateFlags(raw string) (flags, keys []string) {
+	var description []string
+	for _, line := range strings.Split(raw, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" {
+			continue
+		}
+		if strings.HasPrefix(trimmed, "#") {
+			description = append(description, strings.TrimPrefix(trimmed, "#"))
+			continue
+		}
+		key, value, ok := strings.Cut(trimmed, ":")
+		key = strings.TrimSpace(key)
+		if !ok || key == "" {
+			continue
+		}
+		flags = append(flags, "--"+key, strings.TrimSpace(value))
+		keys = append(keys, key)
+	}
+	if len(description) > 0 {
+		flags = append(flags, "--description", strings.Join(description, "\n"))
+		keys = append(keys, "description")
+	}
+	return flags, keys
+}
+
 func applyPBSNodeCfgViaAPI(ctx context.Context, stageRoot string) error {
 	raw, present, err := readStageFileOptional(stageRoot, "etc/proxmox-backup/node.cfg")
 	if err != nil {
@@ -1689,17 +1723,13 @@ func applyPBSNodeCfgViaAPI(ctx context.Context, stageRoot string) error {
 	if !present {
 		return nil
 	}
-	sections, err := parseProxmoxNotificationSections(raw)
-	if err != nil {
-		return fmt.Errorf("parse staged node.cfg: %w", err)
-	}
-	if len(sections) == 0 {
+	flags, _ := pbsNodeUpdateFlags(raw)
+	if len(flags) == 0 {
 		return nil
 	}
-	// node update applies to the local node; use the first section.
-	flags := buildProxmoxManagerFlags(sections[0].Entries)
+	// node update applies to the local node: it sets every setting of the file.
 	args := append([]string{"node", "update"}, flags...)
-	if _, err := runPBSManager(ctx, args...); err != nil {
+	if _, err := runPBSManagerSensitive(ctx, args, pbsNodeSecretFlags...); err != nil {
 		return err
 	}
 	return nil

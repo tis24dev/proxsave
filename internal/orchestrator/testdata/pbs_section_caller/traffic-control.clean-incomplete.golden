@@ -4,5 +4,6 @@ DEBUG    PBS ACME plugin restore: staged=/stage/etc/proxmox-backup/acme/plugins.
 DEBUG    PBS metric server restore: staged=/stage/etc/proxmox-backup/metricserver.cfg not in the backup action=skip
 DEBUG    PBS proxy restore: staged=/stage/etc/proxmox-backup/proxy.cfg not in the backup action=skip
 WARNING  PBS API apply: traffic-control failed: x remove failed for 1 object(s) [old]: PBS Clean 1:1 incomplete: stale object(s) could not be removed
+DEBUG    PBS node restore: staged=/stage/etc/proxmox-backup/node.cfg not in the backup action=skip
 DEBUG    End pbs staged apply (error=1 PBS config item(s) failed to apply: traffic-control.cfg (clean 1:1 incomplete), duration=<d>)
 returned: 1 PBS config item(s) failed to apply: traffic-control.cfg (clean 1:1 incomplete)

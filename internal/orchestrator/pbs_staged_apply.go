@@ -123,19 +123,16 @@ func maybeApplyPBSConfigsFromStage(ctx context.Context, logger *logging.Logger, 
 					return stop
 				}
 			}
-			if err := pbsStagedApplyNodeCfgViaAPIFn(ctx, stageRoot); err != nil {
-				logger.Warning("PBS API apply: node config failed: %v", err)
-				if !pbsFallbackApplied(logger, "node.cfg", allowFileFallback, func() error {
-					return applyPBSConfigFileFromStage(ctx, logger, stageRoot, "etc/proxmox-backup/node.cfg")
-				}) {
-					failedItems = append(failedItems, "node.cfg")
+			if err := applyPBSNodeCfgBlock(ctx, logger, stageRoot, strict, true); err != nil {
+				if ctxErr := ctx.Err(); ctxErr != nil {
+					return ctxErr
 				}
+				outcomeLogged = append(outcomeLogged, err)
 			}
 		} else if allowFileFallback {
 			pbsSectionFileBlock(ctx, logger, stageRoot, true, pbsTrafficControlSectionCfg(), &failedItems, &outcomeLogged)
-			if err := applyPBSConfigFileFromStage(ctx, logger, stageRoot, "etc/proxmox-backup/node.cfg"); err != nil {
-				logger.Warning("PBS staged apply: %s: %v", "etc/proxmox-backup/node.cfg", err)
-				failedItems = append(failedItems, "etc/proxmox-backup/node.cfg")
+			if err := applyPBSNodeCfgBlock(ctx, logger, stageRoot, true, false); err != nil {
+				outcomeLogged = append(outcomeLogged, err)
 			}
 		} else {
 			logging.DebugStep(logger, "pbs staged apply", "Skipping node.cfg/traffic-control.cfg: merge mode requires PBS API apply")
@@ -1214,6 +1211,93 @@ func applyPBSConfigFileBlock(logger *logging.Logger, stageRoot string, f pbsConf
 	}
 	logger.Info("%s %s: applied", theme.SymbolSuccess, f.outcome)
 	return nil
+}
+
+const (
+	pbsNodeCfgRel       = "etc/proxmox-backup/node.cfg"
+	pbsNodeRestoreDebug = "PBS node restore: "
+)
+
+// applyPBSNodeCfgBlock restores node.cfg as one block. Through the PBS API
+// (apiAvailable) every setting of the staged file is applied with one
+// "node update" (Merge and Clean alike: settings this PBS has and the backup
+// does not are kept); when PBS refuses it, Clean (1:1) mode writes the staged file
+// instead and Merge mode leaves the node configuration as it is. Without the API
+// (Clean mode only) the staged file is written. Nothing visible happens when the
+// backup has no node.cfg or no setting in it. A ⚠ outcome returns its error,
+// already logged; a cancellation returns the cancellation, with no outcome.
+func applyPBSNodeCfgBlock(ctx context.Context, logger *logging.Logger, stageRoot string, strict, apiAvailable bool) error {
+	debug := func(format string, args ...any) { logger.Debug(pbsNodeRestoreDebug+format, args...) }
+	stagePath := filepath.Join(stageRoot, pbsNodeCfgRel)
+	raw, present, err := readStageFileOptional(stageRoot, pbsNodeCfgRel)
+	if err == nil && !present {
+		debug("staged=%s not in the backup action=skip", stagePath)
+		return nil
+	}
+	mode := "merge"
+	if strict {
+		mode = "clean"
+	}
+	notApplied := func(err error) error {
+		logger.Warning("%s PBS node configuration: not applied", theme.SymbolWarning)
+		return err
+	}
+	if err != nil {
+		logger.Info("Restoring PBS node configuration...")
+		debug("mode=%s staged=%s", mode, stagePath)
+		debug("staged=%s read failed error=%q", stagePath, err.Error())
+		logger.Info("The node configuration in the backup could not be read: \"%s\"", err.Error())
+		return notApplied(err)
+	}
+	_, keys := pbsNodeUpdateFlags(raw)
+	if len(keys) == 0 {
+		debug("staged=%s has no setting action=skip", stagePath)
+		return nil
+	}
+	logger.Info("Restoring PBS node configuration...")
+	debug("mode=%s staged=%s", mode, stagePath)
+
+	var cause error
+	if apiAvailable {
+		debug("action=update keys=%s", strings.Join(keys, ","))
+		updateErr := pbsStagedApplyNodeCfgViaAPIFn(ctx, stageRoot)
+		if updateErr == nil {
+			debug("updated")
+			logger.Info("%s PBS node configuration: applied", theme.SymbolSuccess)
+			return nil
+		}
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return ctxErr
+		}
+		debug("update failed error=%q", pbsManagerErrorText(updateErr))
+		logger.Info("The node configuration was rejected by PBS: \"%s\"", pbsManagerErrorLine(updateErr))
+		// The command line runPBSManager puts in front of the refusal may carry a
+		// flag value: the result keeps the refusal only.
+		cause = fmt.Errorf("node update refused: %s", pbsManagerErrorLine(updateErr))
+		if !strict {
+			return notApplied(cause)
+		}
+	} else {
+		logger.Info("%s", pbsDatastoreEventAPIUnavailable)
+		cause = errors.New("node.cfg: PBS API unavailable")
+	}
+
+	target := filepath.Join(string(os.PathSeparator), filepath.FromSlash(pbsNodeCfgRel))
+	debug("fallback=file target=%s source=%s", target, stagePath)
+	// node.cfg has no section header (its description is a block of comments):
+	// it is written as staged.
+	var writeErr error
+	if err := writeFileAtomic(target, []byte(strings.TrimSpace(raw)+"\n"), 0o640); err != nil {
+		writeErr = fmt.Errorf("write %s: %w", target, err)
+	}
+	if writeErr != nil {
+		debug("fallback write failed error=%q", writeErr.Error())
+		logger.Info("The node configuration could not be written to this PBS: \"%s\"", writeErr.Error())
+		return notApplied(fmt.Errorf("%w; file fallback: %w", cause, writeErr))
+	}
+	debug("fallback written")
+	logger.Warning("%s PBS node configuration: applied from the backup file", theme.SymbolWarning)
+	return cause
 }
 
 func applyPBSConfigFileFromStage(ctx context.Context, logger *logging.Logger, stageRoot, relPath string) error {
