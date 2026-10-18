@@ -1114,15 +1114,33 @@ func pbsManagerErrorText(err error) string {
 }
 
 // pbsManagerErrorLine is the content of the "Error: " line proxmox-backup-manager
-// writes on a failure, without the usage text it may print after it. A failure
+// writes on a failure, with the "- " lines of a refusal of several parameters
+// joined after it, and without the usage text it may print after them. A failure
 // without such a line (the command could not run at all) gives the first line of
 // its text instead.
 func pbsManagerErrorLine(err error) string {
 	text := pbsManagerErrorText(err)
-	for _, line := range strings.Split(text, "\n") {
-		if idx := strings.Index(line, "Error: "); idx >= 0 {
-			return strings.TrimSpace(line[idx+len("Error: "):])
+	lines := strings.Split(text, "\n")
+	for i, line := range lines {
+		idx := strings.Index(line, "Error: ")
+		if idx < 0 {
+			continue
 		}
+		head := strings.TrimSpace(line[idx+len("Error: "):])
+		// Several refusals at once come as "Error: ...:" and one "- ..." line
+		// each (measured on PBS 4.2.8): they are all part of the refusal.
+		var items []string
+		for _, next := range lines[i+1:] {
+			item := strings.TrimSpace(next)
+			if !strings.HasPrefix(item, "- ") {
+				break
+			}
+			items = append(items, strings.TrimSpace(strings.TrimPrefix(item, "- ")))
+		}
+		if len(items) == 0 {
+			return head
+		}
+		return head + " " + strings.Join(items, "; ")
 	}
 	first, _, _ := strings.Cut(strings.TrimSpace(text), "\n")
 	return strings.TrimSpace(first)
