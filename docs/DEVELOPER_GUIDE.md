@@ -22,7 +22,7 @@ Guide for contributing to Proxsave, including development setup, coding guidelin
 This guide covers the implementation and contributor workflow. For the operator view of collection, archives and destinations, read [How a backup runs](BACKUP_GUIDE.md#how-a-backup-runs). For routine operations, use the [dashboard guide](DASHBOARD.md)
 
 **Technology stack**:
-- **Language**: Go 1.26.9 or later (the floor `go.mod` sets and `goRuntimeMinVersion` enforces at startup)
+- **Language**: Go 1.26.10 or later (the floor `go.mod` sets and `goRuntimeMinVersion` enforces at startup)
 - **Dependencies**: See `go.mod` for complete list
 - **Build system**: Makefile + Go modules
 - **Compression**: gzip, bzip2, xz, lzma, zstd
@@ -36,7 +36,7 @@ This guide covers the implementation and contributor workflow. For the operator 
 ### Prerequisites
 
 ```bash
-# Go 1.26.9 or later
+# Go 1.26.10 or later
 go version
 
 # Build tools
