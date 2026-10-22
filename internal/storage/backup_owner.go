@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -194,13 +195,7 @@ func retentionHostAliases(local string, written []string) []string {
 		if key == "" || key == unresolvedHostname || key == localKey {
 			continue
 		}
-		duplicate := false
-		for _, seen := range aliases {
-			if seen == key {
-				duplicate = true
-				break
-			}
-		}
+		duplicate := slices.Contains(aliases, key)
 		if !duplicate {
 			aliases = append(aliases, key)
 		}

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"unicode"
@@ -52,10 +53,8 @@ func (r *storeIssueRecorder) add(issue StoreIssue) {
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	for _, existing := range r.issues {
-		if existing == issue {
-			return
-		}
+	if slices.Contains(r.issues, issue) {
+		return
 	}
 	r.issues = append(r.issues, issue)
 }

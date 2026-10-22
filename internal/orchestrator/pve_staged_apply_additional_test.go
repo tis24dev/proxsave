@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"syscall"
 	"testing"
@@ -645,12 +646,7 @@ func TestPVEStorageMountGuardItems_CoversFilteringAndFallbacks(t *testing.T) {
 }
 
 func containsGuardTarget(values []string, want string) bool {
-	for _, v := range values {
-		if v == want {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(values, want)
 }
 
 func TestMaybeApplyPVEStorageMountGuardsFromStage_EarlyAndFallback(t *testing.T) {

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -253,12 +254,7 @@ type pbsSectionCfg struct {
 }
 
 func (c pbsSectionCfg) isBuiltin(id string) bool {
-	for _, b := range c.builtin {
-		if b == id {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(c.builtin, id)
 }
 
 func (c pbsSectionCfg) verb(verb, override string) string {

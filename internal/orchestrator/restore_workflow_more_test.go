@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"testing"
 	"time"
 
@@ -253,13 +254,7 @@ func TestRunRestoreWorkflow_PBSStopsServicesAndChecksZFSWhenSelected(t *testing.
 		"systemctl start proxmox-backup",
 	}
 	for _, want := range expected {
-		found := false
-		for _, call := range cmd.Calls {
-			if call == want {
-				found = true
-				break
-			}
-		}
+		found := slices.Contains(cmd.Calls, want)
 		if !found {
 			t.Fatalf("missing command call %q; calls=%v", want, cmd.Calls)
 		}
@@ -476,13 +471,7 @@ func TestRunRestoreWorkflow_ClusterRecoveryModeStopsAndRestartsServices(t *testi
 		"systemctl start pve-ha-lrm",
 	}
 	for _, want := range wantCalls {
-		found := false
-		for _, call := range cmd.Calls {
-			if call == want {
-				found = true
-				break
-			}
-		}
+		found := slices.Contains(cmd.Calls, want)
 		if !found {
 			t.Fatalf("missing command call %q; calls=%v", want, cmd.Calls)
 		}

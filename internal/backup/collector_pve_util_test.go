@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 )
 
@@ -380,13 +381,7 @@ func TestCephConfigPaths(t *testing.T) {
 			}
 
 			for _, expected := range tt.expectContains {
-				found := false
-				for _, path := range paths {
-					if path == expected {
-						found = true
-						break
-					}
-				}
+				found := slices.Contains(paths, expected)
 				if !found {
 					t.Errorf("cephConfigPaths() should contain %q, got: %v", expected, paths)
 				}

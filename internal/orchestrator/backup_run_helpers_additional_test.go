@@ -3,6 +3,7 @@ package orchestrator
 import (
 	"errors"
 	"math"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -121,10 +122,5 @@ func TestBuildBackupCollectorConfigMergesRuntimeExcludesAndBlacklist(t *testing.
 }
 
 func containsString(values []string, want string) bool {
-	for _, value := range values {
-		if value == want {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(values, want)
 }

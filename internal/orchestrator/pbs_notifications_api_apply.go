@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 
@@ -193,21 +194,14 @@ func buildPBSNotificationDesiredState(cfgSections, privSections []proxmoxNotific
 }
 
 func appendUniquePBSString(items []string, want string) []string {
-	for _, item := range items {
-		if item == want {
-			return items
-		}
+	if slices.Contains(items, want) {
+		return items
 	}
 	return append(items, want)
 }
 
 func containsPBSApplyString(items []string, want string) bool {
-	for _, item := range items {
-		if item == want {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(items, want)
 }
 
 func pbsNotificationPrivMaps(sections []proxmoxNotificationSection) (map[string][]proxmoxNotificationEntry, map[string][]string) {

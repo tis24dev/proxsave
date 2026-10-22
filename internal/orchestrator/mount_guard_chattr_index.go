@@ -4,6 +4,7 @@ package orchestrator
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/tis24dev/proxsave/internal/logging"
@@ -121,10 +122,8 @@ func recordImmutableGuardTarget(logger *logging.Logger, target string) {
 
 	indexPath := mountGuardChattrTargetsPath()
 	existing := readImmutableGuardIndex(indexPath)
-	for _, t := range existing {
-		if t == clean {
-			return // already recorded; keep the index stable
-		}
+	if slices.Contains(existing, clean) {
+		return // already recorded; keep the index stable
 	}
 
 	payload := strings.Join(append(existing, clean), "\n") + "\n"

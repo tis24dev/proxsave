@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"os/exec"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -235,12 +236,7 @@ func TestBuildBackupCmdSetsRunIDEnv(t *testing.T) {
 }
 
 func envContains(env []string, want string) bool {
-	for _, e := range env {
-		if e == want {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(env, want)
 }
 
 // A channel NOTIFY_ON filtered did not send, so it is not pinged; but it is still configured, so its

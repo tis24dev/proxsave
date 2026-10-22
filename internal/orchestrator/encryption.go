@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"syscall"
 	"time"
@@ -620,10 +621,8 @@ func validatePassphraseStrength(pass []byte) error {
 	}
 
 	lower := strings.ToLower(passStr)
-	for _, weak := range weakPassphraseList {
-		if lower == weak {
-			return fmt.Errorf("passphrase is too common; choose a more unique phrase")
-		}
+	if slices.Contains(weakPassphraseList, lower) {
+		return fmt.Errorf("passphrase is too common; choose a more unique phrase")
 	}
 	return nil
 }

@@ -331,11 +331,9 @@ func (s *StorageAdapter) logStoreOutcome(name string, primary, setsPermissions b
 	issues := s.lastStoreIssues()
 	s.logger.Debug("%s: store issues=%v", name, issues)
 	if primary {
-		for _, issue := range issues {
-			if issue == storage.StoreIssuePermissionsNotSet {
-				s.logger.Warning("%s %s: permissions not set", theme.SymbolWarning, name)
-				return
-			}
+		if slices.Contains(issues, storage.StoreIssuePermissionsNotSet) {
+			s.logger.Warning("%s %s: permissions not set", theme.SymbolWarning, name)
+			return
 		}
 		if setsPermissions {
 			s.logger.Info("%s %s: permissions set", theme.SymbolSuccess, name)

@@ -8,6 +8,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -208,13 +209,7 @@ func TestBackupFileAndDirectory(t *testing.T) {
 
 	expected := []string{"file.txt", "dir/sub/data.txt", "link"}
 	for _, name := range expected {
-		found := false
-		for _, f := range files {
-			if f == name {
-				found = true
-				break
-			}
-		}
+		found := slices.Contains(files, name)
 		if !found {
 			t.Fatalf("expected %s in archive, got %v", name, files)
 		}
@@ -297,10 +292,8 @@ func TestCreateSafetyBackupArchivesSelectedPaths(t *testing.T) {
 	}
 
 	assertContains := func(name string) {
-		for _, entry := range entries {
-			if entry == name {
-				return
-			}
+		if slices.Contains(entries, name) {
+			return
 		}
 		t.Fatalf("archive missing %s; entries=%v", name, entries)
 	}

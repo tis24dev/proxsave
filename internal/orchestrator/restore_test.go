@@ -5,6 +5,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -212,13 +213,7 @@ func TestParseZpoolImportOutput(t *testing.T) {
 
 	expected := []string{"tank", "backup_ext"}
 	for _, want := range expected {
-		found := false
-		for _, pool := range pools {
-			if pool == want {
-				found = true
-				break
-			}
-		}
+		found := slices.Contains(pools, want)
 		if !found {
 			t.Fatalf("expected pool %q to be parsed from output", want)
 		}

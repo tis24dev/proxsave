@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"syscall"
 	"time"
@@ -367,14 +368,9 @@ func wrapperCronLines(lines []string) []string {
 // overlap is wanted: a wrapper naming /opt/site/proxsave is naming our binary.
 func basenameHasProxsaveComponent(token string) bool {
 	base := strings.ToLower(filepath.Base(strings.Trim(token, "\"'")))
-	for _, part := range strings.FieldsFunc(base, func(r rune) bool {
+	return slices.Contains(strings.FieldsFunc(base, func(r rune) bool {
 		return r == '-' || r == '_' || r == '.'
-	}) {
-		if part == "proxsave" {
-			return true
-		}
-	}
-	return false
+	}), "proxsave")
 }
 
 // pathLivesInProxsaveTree reports whether a DIRECTORY component of the command's
@@ -1213,10 +1209,8 @@ func segmentWalkCommands(words []string, vars map[string]string, visit func(stri
 			return false
 		}
 		heads := scriptWordExpansions(words[0], vars)
-		for _, head := range heads {
-			if visit(head) {
-				return true
-			}
+		if slices.ContainsFunc(heads, visit) {
+			return true
 		}
 		// A launcher reached through a variable is still a launcher: classifying on the
 		// unexpanded word ends the segment on a brace and hides whatever it was about to run,
@@ -1242,10 +1236,8 @@ func segmentWalkCommands(words []string, vars map[string]string, visit func(stri
 			return shellLauncherWalkCommands(base, words[1:], vars, visit)
 		case isIn(base, scriptOpaqueLaunchers):
 			for _, w := range words[1:] {
-				for _, candidate := range scriptWordExpansions(w, vars) {
-					if visit(candidate) {
-						return true
-					}
+				if slices.ContainsFunc(scriptWordExpansions(w, vars), visit) {
+					return true
 				}
 			}
 			return false

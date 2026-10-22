@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -373,13 +374,7 @@ CUSTOM_BACKUP_PATHS="
 		if !result.Changed {
 			t.Fatal("expected result.Changed=true when keys are missing")
 		}
-		found := false
-		for _, key := range result.MissingKeys {
-			if key == "CUSTOM_BACKUP_PATHS" {
-				found = true
-				break
-			}
-		}
+		found := slices.Contains(result.MissingKeys, "CUSTOM_BACKUP_PATHS")
 		if !found {
 			t.Fatalf("MissingKeys=%v; expected CUSTOM_BACKUP_PATHS", result.MissingKeys)
 		}

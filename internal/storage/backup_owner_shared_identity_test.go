@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -353,10 +354,8 @@ func TestCloudRetentionReportsASecondWriter(t *testing.T) {
 	cs.execCommand = func(ctx context.Context, name string, args ...string) ([]byte, error) {
 		mu.Lock()
 		defer mu.Unlock()
-		for _, a := range args {
-			if a == "lsl" {
-				return []byte(listing), nil
-			}
+		if slices.Contains(args, "lsl") {
+			return []byte(listing), nil
 		}
 		remotePath := args[len(args)-1]
 		if args[0] == "cat" {

@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
@@ -1028,13 +1029,7 @@ func TestNormalizeAndMergeLists(t *testing.T) {
 		t.Fatalf("mergeStringSlices unexpected length: %#v", merged)
 	}
 	for _, must := range []string{"a", "b", "c"} {
-		found := false
-		for _, v := range merged {
-			if v == must {
-				found = true
-				break
-			}
-		}
+		found := slices.Contains(merged, must)
 		if !found {
 			t.Fatalf("mergeStringSlices missing %s: %#v", must, merged)
 		}

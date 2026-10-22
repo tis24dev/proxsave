@@ -10,6 +10,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -2877,10 +2878,8 @@ func (c *Collector) cephConfigPaths() []string {
 			abs = filepath.Clean(filepath.Join("/", path))
 		}
 		abs = c.systemPath(abs)
-		for _, existing := range paths {
-			if existing == abs {
-				return
-			}
+		if slices.Contains(paths, abs) {
+			return
 		}
 		paths = append(paths, abs)
 	}

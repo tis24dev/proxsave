@@ -3,6 +3,7 @@ package storage
 import (
 	"context"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 
@@ -454,10 +455,8 @@ func TestApplyRetentionDoesNotDeleteOtherHostsBackups(t *testing.T) {
 	var calls []commandCall
 	cs.execCommand = func(ctx context.Context, name string, args ...string) ([]byte, error) {
 		calls = append(calls, commandCall{name: name, args: append([]string(nil), args...)})
-		for _, a := range args {
-			if a == "lsl" {
-				return []byte(listing), nil
-			}
+		if slices.Contains(args, "lsl") {
+			return []byte(listing), nil
 		}
 		// Every `cat` returns nothing usable, so attribution degrades to the
 		// filename token - the path an operator with unreadable manifests is on.

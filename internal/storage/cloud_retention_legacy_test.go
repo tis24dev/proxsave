@@ -3,6 +3,7 @@ package storage
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 
@@ -48,10 +49,8 @@ func cloudLegacyFixture(t *testing.T, ownArchiveHost, thisHost, legacySidecar st
 
 	var deletes []string
 	cs.execCommand = func(ctx context.Context, name string, args ...string) ([]byte, error) {
-		for _, a := range args {
-			if a == "lsl" {
-				return []byte(listing), nil
-			}
+		if slices.Contains(args, "lsl") {
+			return []byte(listing), nil
 		}
 		if len(args) > 0 && args[0] == "cat" {
 			target := args[len(args)-1]

@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 
 	"github.com/tis24dev/proxsave/internal/safeexec"
@@ -149,13 +150,7 @@ func isUserSpaceBracketedWorker(info procInfo, name string, safeList []string) b
 	}
 
 	// must match user-defined safe bracket names
-	for _, safe := range safeList {
-		if safe == name {
-			return true
-		}
-	}
-
-	return false
+	return slices.Contains(safeList, name)
 }
 
 func isExeInTrustedDir(path string) bool {
