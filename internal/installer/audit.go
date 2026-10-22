@@ -28,26 +28,22 @@ var (
 	postInstallAuditDisableHintRe = regexp.MustCompile(`(?i)\bset\s+([A-Z0-9_]+)=false\b`)
 	postInstallAuditANSISGRRe     = regexp.MustCompile(`\x1b\[[0-9;]*m`)
 
-	postInstallAuditAllowedKeysOnce sync.Once
-	postInstallAuditAllowedKeys     map[string]struct{}
-
 	postInstallAuditRunner = runPostInstallAuditDryRun
 )
 
-func postInstallAuditAllowedKeysSet() map[string]struct{} {
-	postInstallAuditAllowedKeysOnce.Do(func() {
-		allowed := make(map[string]struct{})
-		values := parseEnvTemplate(config.DefaultEnvTemplate())
-		for key := range values {
-			key = strings.ToUpper(strings.TrimSpace(key))
-			if strings.HasPrefix(key, "BACKUP_") {
-				allowed[key] = struct{}{}
-			}
+// postInstallAuditAllowedKeysSet is the set of BACKUP_* variables the shipped template
+// knows, computed once from the embedded template.
+var postInstallAuditAllowedKeysSet = sync.OnceValue(func() map[string]struct{} {
+	allowed := make(map[string]struct{})
+	values := parseEnvTemplate(config.DefaultEnvTemplate())
+	for key := range values {
+		key = strings.ToUpper(strings.TrimSpace(key))
+		if strings.HasPrefix(key, "BACKUP_") {
+			allowed[key] = struct{}{}
 		}
-		postInstallAuditAllowedKeys = allowed
-	})
-	return postInstallAuditAllowedKeys
-}
+	}
+	return allowed
+})
 
 func runPostInstallAuditDryRun(ctx context.Context, execPath, configPath string) (output string, exitCode int, err error) {
 	// Run a dry-run with warning-level logs to keep output minimal while still capturing
