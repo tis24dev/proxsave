@@ -3,6 +3,11 @@ package backup
 import (
 	"bytes"
 	"context"
+	"encoding/json"
+	"os"
+	"path/filepath"
+	"runtime"
+	"slices"
 	"strings"
 	"testing"
 
@@ -49,5 +54,41 @@ func TestNetworkInventoryHostSysfsMarkerGating(t *testing.T) {
 				t.Fatalf("plain prefix must not mention host sysfs; output:\n%s", out)
 			}
 		})
+	}
+}
+
+// network_inventory.json lists the interfaces in name order.
+func TestCollectNetworkInventoryListsInterfacesByName(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("the network inventory is collected on linux only")
+	}
+	root := t.TempDir()
+	for _, name := range []string{"vmbr0", "eno1", "lo"} {
+		if err := os.MkdirAll(filepath.Join(root, "sys", "class", "net", name), 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", name, err)
+		}
+	}
+	c := newTestCollector(t)
+	c.config.SystemRootPrefix = root
+	commandsDir := filepath.Join(c.tempDir, "commands")
+
+	if err := c.collectNetworkInventory(context.Background(), commandsDir, ""); err != nil {
+		t.Fatalf("collectNetworkInventory: %v", err)
+	}
+
+	data, err := os.ReadFile(filepath.Join(commandsDir, "network_inventory.json"))
+	if err != nil {
+		t.Fatalf("read inventory: %v", err)
+	}
+	var inv networkInventory
+	if err := json.Unmarshal(data, &inv); err != nil {
+		t.Fatalf("parse inventory: %v", err)
+	}
+	var got []string
+	for _, iface := range inv.Interfaces {
+		got = append(got, iface.Name)
+	}
+	if want := []string{"eno1", "lo", "vmbr0"}; !slices.Equal(got, want) {
+		t.Fatalf("interfaces = %v, want %v", got, want)
 	}
 }
