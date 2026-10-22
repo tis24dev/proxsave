@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"io"
 	"os"
 	"path/filepath"
@@ -382,8 +381,7 @@ func TestRunBackupStreamedDriver(t *testing.T) {
 	}
 	t.Cleanup(func() { backupStreamSteps = prevSteps })
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
 	var buf shell.SyncBuffer
 	session := shell.StartForTestWithOutput(ctx, shell.Config{AppName: "ProxSave", Subtitle: "Backup"}, &buf)
@@ -435,8 +433,7 @@ func TestRunBackupStreamedSupportEmailInStream(t *testing.T) {
 	}
 	t.Cleanup(func() { backupStreamSteps = prevSteps })
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
 	var buf shell.SyncBuffer
 	session := shell.StartForTestWithOutput(ctx, shell.Config{AppName: "ProxSave", Subtitle: "Backup"}, &buf)
@@ -490,8 +487,7 @@ func TestRunBackupStreamedHandsOffInStream(t *testing.T) {
 	}
 	t.Cleanup(func() { backupStreamSteps = prevSteps })
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	var buf shell.SyncBuffer
 	session := shell.StartForTestWithOutput(ctx, shell.Config{AppName: "ProxSave", Subtitle: "Backup"}, &buf)
 	bootstrap := logging.NewBootstrapLogger()
@@ -553,8 +549,7 @@ func TestRunBackupStreamedReplaysPreStreamBacklog(t *testing.T) {
 	}
 	t.Cleanup(func() { backupStreamSteps = prevSteps })
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
 	var buf shell.SyncBuffer
 	session := shell.StartForTestWithOutput(ctx, shell.Config{AppName: "ProxSave", Subtitle: "Backup"}, &buf)

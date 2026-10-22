@@ -12,8 +12,7 @@ func TestInstallRuntimeFinalizationRetainsBackendFailure(t *testing.T) {
 	f := newInstallRuntimeFixture(t)
 	f.cron = false
 	f.installErr = errors.New("start failed after enable")
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	var buf shell.SyncBuffer
 	session := shell.StartForTestWithOutput(ctx, shell.Config{AppName: "ProxSave", Subtitle: "Install Wizard"}, &buf)
 	defer session.Close()

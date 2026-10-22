@@ -77,8 +77,7 @@ func TestBuildInstallOutcomePromptUnverified(t *testing.T) {
 // composed outcome must appear on screen (inside the contained viewport), and pressing
 // Enter after done must let the driver return.
 func TestRunStreamTaskFinalizationDriver(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
 	var buf shell.SyncBuffer
 	session := shell.StartForTestWithOutput(ctx, shell.Config{AppName: "ProxSave", Subtitle: "Install Wizard"}, &buf)

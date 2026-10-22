@@ -403,8 +403,7 @@ func TestLipglossCountCountsWrappedRows(t *testing.T) {
 // emitting far more than streamFlushCount lines completes well under the
 // deadline (the old s.Send-per-line path could stall on backpressure).
 func TestEmitBufferNeverBlocks(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	buf := &shell.SyncBuffer{}
 	s := shell.StartForTestWithOutput(ctx, shell.Config{AppName: "ProxSave", Subtitle: "Backup"}, buf)
 	t.Cleanup(func() { _ = s.Close() })
@@ -432,8 +431,7 @@ func TestEmitBufferNeverBlocks(t *testing.T) {
 // TestEmitBufferCloseIdempotentNoLeak proves Close is idempotent and the flusher
 // goroutine exits (no leak / no deadlock).
 func TestEmitBufferCloseIdempotentNoLeak(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	buf := &shell.SyncBuffer{}
 	s := shell.StartForTestWithOutput(ctx, shell.Config{AppName: "ProxSave", Subtitle: "Backup"}, buf)
 	t.Cleanup(func() { _ = s.Close() })

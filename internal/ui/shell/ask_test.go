@@ -94,8 +94,7 @@ func askResult[T any](t *testing.T, ch <-chan askOutcome[T]) (T, error) {
 }
 
 func TestAskResolvesOnUserAnswer(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	s := StartForTest(ctx, Config{AppName: "ProxSave", UseColor: true})
 	defer func() { _ = s.Close() }()
 
@@ -114,8 +113,7 @@ func TestAskResolvesOnUserAnswer(t *testing.T) {
 }
 
 func TestAskFirstResolveWins(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	s := StartForTest(ctx, Config{AppName: "ProxSave", UseColor: true})
 	defer func() { _ = s.Close() }()
 
@@ -135,8 +133,7 @@ func TestAskFirstResolveWins(t *testing.T) {
 }
 
 func TestAskReturnsOnContextCancel(t *testing.T) {
-	progCtx, progCancel := context.WithCancel(context.Background())
-	defer progCancel()
+	progCtx := t.Context()
 	s := StartForTest(progCtx, Config{AppName: "ProxSave", UseColor: true})
 	defer func() { _ = s.Close() }()
 
@@ -163,8 +160,7 @@ func TestAskReturnsOnContextCancel(t *testing.T) {
 }
 
 func TestAskReturnsErrClosedOnCtrlC(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	s := StartForTest(ctx, Config{AppName: "ProxSave", UseColor: true})
 	defer func() { _ = s.Close() }()
 
@@ -253,8 +249,7 @@ func TestCloseIsIdempotentAndCleanAfterQuit(t *testing.T) {
 // TestAskStress exercises the bridge under -race: sequential Asks answered,
 // aborted, and cancelled while unrelated messages keep flowing.
 func TestAskStress(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	s := StartForTest(ctx, Config{AppName: "ProxSave", UseColor: true})
 	defer func() { _ = s.Close() }()
 

@@ -410,8 +410,7 @@ func TestEnsureWritablePath_Overwrite(t *testing.T) {
 		t.Fatalf("write: %v", err)
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	reader := bufio.NewReader(strings.NewReader("1\n"))
 
 	got, err := ensureWritablePath(ctx, reader, existing, "test")
@@ -434,8 +433,7 @@ func TestEnsureWritablePath_EnterNewPath(t *testing.T) {
 		t.Fatalf("write: %v", err)
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	reader := bufio.NewReader(strings.NewReader("2\n" + filepath.Join(tmp, "new.txt") + "\n"))
 
 	got, err := ensureWritablePath(ctx, reader, existing, "test")
@@ -459,8 +457,7 @@ func TestEnsureWritablePath_Abort(t *testing.T) {
 		t.Fatalf("write: %v", err)
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	reader := bufio.NewReader(strings.NewReader("0\n"))
 
 	_, err := ensureWritablePath(ctx, reader, existing, "test")
