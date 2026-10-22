@@ -141,16 +141,14 @@ func TestPreparePlainBundleCommon_ThreadsTimeoutIntoPlainChecksum(t *testing.T) 
 			skipped <- struct{}{}
 			return err
 		}
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			w, e := os.OpenFile(outputPath, os.O_WRONLY, 0)
 			if e != nil {
 				return
 			}
 			<-release
 			_ = w.Close()
-		}()
+		})
 		return nil
 	}
 

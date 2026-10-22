@@ -217,13 +217,11 @@ func TestLoggerConcurrentBoundedNoRace(t *testing.T) {
 	}
 	var wg sync.WaitGroup
 	for range 8 {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			for i := range 30 {
 				logger.Info("x %d", i)
 			}
-		}()
+		})
 	}
 	wg.Wait()
 	if err := logger.CloseLogFile(); err != nil {

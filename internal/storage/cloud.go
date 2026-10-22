@@ -1500,9 +1500,7 @@ func (c *CloudStorage) uploadTasksParallel(ctx context.Context, tasks []uploadTa
 	sem := make(chan struct{}, c.parallelJobs)
 
 	for _, task := range tasks {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			select {
 			case sem <- struct{}{}:
 			case <-ctx.Done():
@@ -1517,7 +1515,7 @@ func (c *CloudStorage) uploadTasksParallel(ctx context.Context, tasks []uploadTa
 				}
 				cancel()
 			}
-		}()
+		})
 	}
 
 	wg.Wait()

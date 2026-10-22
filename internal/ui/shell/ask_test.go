@@ -255,9 +255,7 @@ func TestAskStress(t *testing.T) {
 
 	var wg sync.WaitGroup
 	stop := make(chan struct{})
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
+	wg.Go(func() {
 		for {
 			select {
 			case <-stop:
@@ -267,7 +265,7 @@ func TestAskStress(t *testing.T) {
 				time.Sleep(time.Millisecond)
 			}
 		}
-	}()
+	})
 
 	for i := range 60 {
 		askCtx, askCancel := context.WithCancel(context.Background())

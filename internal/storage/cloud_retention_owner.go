@@ -68,9 +68,7 @@ func (c *CloudStorage) resolveRetentionOwners(ctx context.Context, backups []*ty
 	var wg sync.WaitGroup
 	sem := make(chan struct{}, workers)
 	for _, b := range pending {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			select {
 			case sem <- struct{}{}:
 				defer func() { <-sem }()
@@ -84,7 +82,7 @@ func (c *CloudStorage) resolveRetentionOwners(ctx context.Context, backups []*ty
 				c.storeOwner(b.BackupFile, hostname, serverID)
 			}
 			fillOwner(b, hostname, serverID)
-		}()
+		})
 	}
 	wg.Wait()
 }

@@ -552,9 +552,7 @@ func (c *Collector) runPBSPXARStep(ctx context.Context, state *pbsPxarState, fn 
 	)
 
 	for _, ds := range state.eligible {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			select {
 			case sem <- struct{}{}:
 			case <-ctx.Done():
@@ -575,7 +573,7 @@ func (c *Collector) runPBSPXARStep(ctx context.Context, state *pbsPxarState, fn 
 				errs = append(errs, err)
 				errMu.Unlock()
 			}
-		}()
+		})
 	}
 
 	wg.Wait()

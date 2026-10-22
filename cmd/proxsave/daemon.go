@@ -527,9 +527,7 @@ func (d *daemon) run(ctx context.Context) int {
 	// nothing was handed off. It returns on loopCtx.Done() and joins the waitgroup; it does NOT
 	// signal.Stop -- that is owned by run()'s defer above so the disposition is reverted only after
 	// the pidfile is gone (see the signal.Stop comment).
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
+	wg.Go(func() {
 		for {
 			select {
 			case <-loopCtx.Done():
@@ -538,19 +536,15 @@ func (d *daemon) run(ctx context.Context) int {
 				d.processManualOutcome(loopCtx)
 			}
 		}
-	}()
+	})
 
 	if d.cfg.HealthcheckEnabled {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			d.heartbeatLoop(loopCtx)
-		}()
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		})
+		wg.Go(func() {
 			d.updateCheckLoop(loopCtx)
-		}()
+		})
 	}
 
 	abandoned := d.scheduleLoop(loopCtx)
