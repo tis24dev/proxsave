@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"os"
+	"slices"
 	"strings"
 	"testing"
 
@@ -257,4 +258,25 @@ func withSingleGuardDir(t *testing.T) {
 	orig := legacyMountGuardBaseDir
 	legacyMountGuardBaseDir = mountGuardBaseDir
 	t.Cleanup(func() { legacyMountGuardBaseDir = orig })
+}
+
+// The mountpoints are gathered in a map; both lists come back sorted, so every run walks
+// the guard mounts in the same order.
+func TestGuardMountpointsFromMountinfo_ReturnsSortedLists(t *testing.T) {
+	mountinfo := strings.Join([]string{
+		"10 1 0:1 " + mountGuardBaseDir + "/g1 /mnt/visible-b rw - ext4 /dev/sda1 rw",
+		"11 1 0:1 " + mountGuardBaseDir + "/g2 /mnt/visible-a rw - ext4 /dev/sda1 rw",
+		"20 1 0:1 " + mountGuardBaseDir + "/g3 /mnt/hidden-b rw - ext4 /dev/sda1 rw",
+		"21 1 0:1 " + mountGuardBaseDir + "/g4 /mnt/hidden-a rw - ext4 /dev/sda1 rw",
+		"30 1 0:1 / /mnt/hidden-b rw - ext4 /dev/sdb1 rw",
+		"31 1 0:1 / /mnt/hidden-a rw - ext4 /dev/sdb1 rw",
+	}, "\n")
+
+	visible, hidden, _ := guardMountpointsFromMountinfo(mountinfo, guardRootMatchersFor(mountinfo, []string{mountGuardBaseDir}))
+	if want := []string{"/mnt/visible-a", "/mnt/visible-b"}; !slices.Equal(visible, want) {
+		t.Fatalf("visible=%#v want %#v", visible, want)
+	}
+	if want := []string{"/mnt/hidden-a", "/mnt/hidden-b"}; !slices.Equal(hidden, want) {
+		t.Fatalf("hidden=%#v want %#v", hidden, want)
+	}
 }
