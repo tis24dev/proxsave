@@ -141,7 +141,7 @@ func TestGetDatastoreListDisambiguatesCLIAndOverrideOutputKeyCollisions(t *testi
 			return "/usr/bin/" + cmd, nil
 		},
 		RunCommand: func(ctx context.Context, name string, args ...string) ([]byte, error) {
-			return []byte(fmt.Sprintf(`[{"name":%q,"path":"/data/runtime","comment":"main"}]`, collidingKey)), nil
+			return fmt.Appendf(nil, `[{"name":%q,"path":"/data/runtime","comment":"main"}]`, collidingKey), nil
 		},
 	})
 	collector.config.PBSDatastorePaths = []string{overridePath}
@@ -759,7 +759,7 @@ func TestCollectPBSCommands_UsesPathSafeKeyForUnsafeDatastoreName(t *testing.T) 
 			return "/bin/" + name, nil
 		},
 		RunCommand: func(_ context.Context, name string, args ...string) ([]byte, error) {
-			return []byte(fmt.Sprintf("%s %s", name, strings.Join(args, " "))), nil
+			return fmt.Appendf(nil, "%s %s", name, strings.Join(args, " ")), nil
 		},
 	})
 
@@ -804,7 +804,7 @@ func TestCollectPBSCommands_DisambiguatesStatusFilesForCollidingDatastoreKeys(t 
 			return "/bin/" + name, nil
 		},
 		RunCommand: func(_ context.Context, name string, args ...string) ([]byte, error) {
-			return []byte(fmt.Sprintf("%s %s", name, strings.Join(args, " "))), nil
+			return fmt.Appendf(nil, "%s %s", name, strings.Join(args, " ")), nil
 		},
 	})
 

@@ -518,7 +518,7 @@ func (w *WebhookNotifier) applyAuthentication(req *http.Request, auth config.Web
 		if auth.User == "" || auth.Pass == "" {
 			return fmt.Errorf("basic auth user or password is empty")
 		}
-		credentials := base64.StdEncoding.EncodeToString([]byte(fmt.Sprintf("%s:%s", auth.User, auth.Pass)))
+		credentials := base64.StdEncoding.EncodeToString(fmt.Appendf(nil, "%s:%s", auth.User, auth.Pass))
 		req.Header.Set("Authorization", fmt.Sprintf("Basic %s", credentials))
 		w.logger.Debug("Basic auth applied for user: %s", auth.User)
 		return nil

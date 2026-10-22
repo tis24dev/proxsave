@@ -366,7 +366,7 @@ func TestCloudRetentionReportsASecondWriter(t *testing.T) {
 			if strings.Contains(remotePath, "pve2-") {
 				host = "pve2"
 			}
-			return []byte(fmt.Sprintf(`{"hostname":%q,"server_id":%q}`, host, ourServerID)), nil
+			return fmt.Appendf(nil, `{"hostname":%q,"server_id":%q}`, host, ourServerID), nil
 		}
 		return nil, nil
 	}

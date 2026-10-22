@@ -240,7 +240,7 @@ func (c *backupCharChannel) Notify(ctx context.Context, stats *BackupStats) erro
 	c.rec.add("notify %s", c.Name())
 	data, err := json.MarshalIndent(stats, "", "  ")
 	if err != nil {
-		c.snapshot = []byte(fmt.Sprintf("marshal error: %v", err))
+		c.snapshot = fmt.Appendf(nil, "marshal error: %v", err)
 		return nil
 	}
 	c.snapshot = data

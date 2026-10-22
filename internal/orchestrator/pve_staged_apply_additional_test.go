@@ -51,7 +51,7 @@ func uniquePveMountTestStorageID(t *testing.T, label string) string {
 	if label == "" {
 		label = "x"
 	}
-	sum := sha256.Sum256([]byte(fmt.Sprintf("%s|%s|%d", t.Name(), label, os.Getpid())))
+	sum := sha256.Sum256(fmt.Appendf(nil, "%s|%s|%d", t.Name(), label, os.Getpid()))
 	return pveMountIntegrationStoragePrefix + hex.EncodeToString(sum[:6]) + "-" + label
 }
 
