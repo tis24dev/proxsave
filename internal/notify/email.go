@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -1104,8 +1105,8 @@ func (e *EmailNotifier) inspectMailLogStatus(ctx context.Context, queueID string
 		}
 	}
 
-	for i := len(relevant) - 1; i >= 0; i-- {
-		line := strings.TrimSpace(relevant[i])
+	for _, r := range slices.Backward(relevant) {
+		line := strings.TrimSpace(r)
 		if line == "" {
 			continue
 		}

@@ -134,8 +134,8 @@ func rcloneCause(output string, err error) string {
 // line that carries the cause ("Failed to copyto: ...: read-only file system").
 func rcloneShortCause(output string) string {
 	lines := strings.Split(strings.TrimSpace(output), "\n")
-	for i := len(lines) - 1; i >= 0; i-- {
-		line := strings.TrimSpace(rcloneTimestampPrefix.ReplaceAllString(lines[i], ""))
+	for _, raw := range slices.Backward(lines) {
+		line := strings.TrimSpace(rcloneTimestampPrefix.ReplaceAllString(raw, ""))
 		if line != "" {
 			return line
 		}

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"slices"
 	"strings"
 	"time"
 
@@ -140,9 +141,9 @@ func restartPVEServicesAfterFailedStop(logger *logging.Logger, stopped []string)
 	}
 	restartCtx, cancel := context.WithTimeout(context.Background(), pveClusterRestartTimeout())
 	defer cancel()
-	for i := len(stopped) - 1; i >= 0; i-- {
-		if err := startServiceWithRetries(restartCtx, logger, stopped[i]); err != nil && logger != nil {
-			logger.Warning("Failed to restart PVE services (%s) after the stop failed: %v", stopped[i], err)
+	for _, s := range slices.Backward(stopped) {
+		if err := startServiceWithRetries(restartCtx, logger, s); err != nil && logger != nil {
+			logger.Warning("Failed to restart PVE services (%s) after the stop failed: %v", s, err)
 		}
 	}
 }
@@ -265,9 +266,9 @@ func restartPBSServicesAfterFailedStop(logger *logging.Logger, stopped []string)
 	}
 	restartCtx, cancel := context.WithTimeout(context.Background(), 2*serviceStartTimeout+2*serviceVerifyTimeout+10*time.Second)
 	defer cancel()
-	for i := len(stopped) - 1; i >= 0; i-- {
-		if err := startServiceWithRetries(restartCtx, logger, stopped[i]); err != nil && logger != nil {
-			logger.Warning("Failed to restart PBS services (%s) after the stop failed: %v", stopped[i], err)
+	for _, s := range slices.Backward(stopped) {
+		if err := startServiceWithRetries(restartCtx, logger, s); err != nil && logger != nil {
+			logger.Warning("Failed to restart PBS services (%s) after the stop failed: %v", s, err)
 		}
 	}
 }
