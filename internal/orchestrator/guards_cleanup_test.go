@@ -280,3 +280,56 @@ func TestGuardMountpointsFromMountinfo_ReturnsSortedLists(t *testing.T) {
 		t.Fatalf("hidden=%#v want %#v", hidden, want)
 	}
 }
+
+// The visible guard mounts are unmounted in sorted order.
+func TestCleanupMountGuards_UnmountsInSortedOrder(t *testing.T) {
+	origGeteuid := cleanupGeteuid
+	origStat := cleanupStat
+	origReadFile := cleanupReadFile
+	origRemoveAll := cleanupRemoveAll
+	origUnmount := cleanupSysUnmount
+	t.Cleanup(func() {
+		cleanupGeteuid = origGeteuid
+		cleanupStat = origStat
+		cleanupReadFile = origReadFile
+		cleanupRemoveAll = origRemoveAll
+		cleanupSysUnmount = origUnmount
+	})
+
+	cleanupGeteuid = func() int { return 0 }
+	withSingleGuardDir(t)
+	cleanupStat = func(string) (os.FileInfo, error) { return nil, nil }
+
+	initialMountinfo := strings.Join([]string{
+		"10 1 0:1 " + mountGuardBaseDir + "/g1 /mnt/visible-b rw - ext4 /dev/sda1 rw",
+		"11 1 0:1 " + mountGuardBaseDir + "/g2 /mnt/visible-a rw - ext4 /dev/sda1 rw",
+	}, "\n") + "\n"
+	afterMountinfo := "30 1 0:1 / / rw - ext4 /dev/sda1 rw\n"
+	readCount := 0
+	cleanupReadFile = func(path string) ([]byte, error) {
+		if path != "/proc/self/mountinfo" {
+			return nil, os.ErrNotExist
+		}
+		readCount++
+		if readCount == 1 {
+			return []byte(initialMountinfo), nil
+		}
+		return []byte(afterMountinfo), nil
+	}
+
+	var unmounted []string
+	cleanupSysUnmount = func(target string, flags int) error {
+		_ = flags
+		unmounted = append(unmounted, target)
+		return nil
+	}
+	cleanupRemoveAll = func(string) error { return nil }
+
+	logger := logging.New(types.LogLevelError, false)
+	if _, err := cleanupMountGuards(context.Background(), logger, false); err != nil {
+		t.Fatalf("cleanupMountGuards error: %v", err)
+	}
+	if want := []string{"/mnt/visible-a", "/mnt/visible-b"}; !slices.Equal(unmounted, want) {
+		t.Fatalf("unmounted=%#v want %#v", unmounted, want)
+	}
+}
