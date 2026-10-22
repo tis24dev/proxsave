@@ -1200,3 +1200,23 @@ func indexOfLiveLinePrefix(lines []string, prefix string) int {
 	}
 	return -1
 }
+
+// The warning names the pruned deprecated keys in sorted order.
+func TestUpgradeConfigListsPrunedKeysInOrder(t *testing.T) {
+	withTemplate(t, "KEY1=default\n", func() {
+		configPath := filepath.Join(t.TempDir(), "backup.env")
+		content := "DAEMON_OPT_OUT=true\nBACKUP_USER_HOMES=false\nKEY1=custom\n"
+		if err := os.WriteFile(configPath, []byte(content), 0600); err != nil {
+			t.Fatalf("failed to seed config: %v", err)
+		}
+
+		plan, err := PlanUpgradeConfigFile(configPath)
+		if err != nil {
+			t.Fatalf("PlanUpgradeConfigFile returned error: %v", err)
+		}
+		warnings := strings.Join(plan.Warnings, "\n")
+		if want := "Removed deprecated keys from backup.env: BACKUP_USER_HOMES, DAEMON_OPT_OUT "; !strings.Contains(warnings, want) {
+			t.Fatalf("want %q in warnings, got: %s", want, warnings)
+		}
+	})
+}
