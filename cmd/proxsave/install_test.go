@@ -1481,3 +1481,37 @@ func TestPromptSanitizedNonEmptySanitizesTheDefault(t *testing.T) {
 		t.Fatalf("control characters must not be echoed into the prompt; prompt was %q", out)
 	}
 }
+
+// The summary line printed after the disables names the variables in alphabetical order.
+func TestRunPostInstallAuditCLIListsTheDisabledVariablesInOrder(t *testing.T) {
+	tmp := t.TempDir()
+	configPath := filepath.Join(tmp, "backup.env")
+	if err := os.WriteFile(configPath, []byte("BACKUP_CLUSTER_CONFIG=true\nBACKUP_ZFS_CONFIG=true\n"), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	execPath := filepath.Join(tmp, "proxsave")
+	script := strings.Join([]string{
+		"#!/bin/sh",
+		"echo 'WARNINGS/ERRORS DURING RUN (warnings=2 errors=0)'",
+		"echo '[2026-02-24 09:12:55] WARNING    ZFS pools: none found. If unused, set BACKUP_ZFS_CONFIG=false to disable.'",
+		"echo '[2026-02-24 09:12:55] WARNING    Corosync authkey: not configured. If unused, set BACKUP_CLUSTER_CONFIG=false to disable.'",
+		"exit 1",
+		"",
+	}, "\n")
+	if err := os.WriteFile(execPath, []byte(script), 0o700); err != nil {
+		t.Fatalf("write fake proxsave: %v", err)
+	}
+
+	reader := bufio.NewReader(strings.NewReader("y\ny\ny\ny\n"))
+	var err error
+	out := captureStdout(t, func() {
+		err = runPostInstallAuditCLI(context.Background(), reader, execPath, configPath, nil)
+	})
+	if err != nil {
+		t.Fatalf("runPostInstallAuditCLI: %v", err)
+	}
+	want := "disabled 2 component(s): BACKUP_CLUSTER_CONFIG, BACKUP_ZFS_CONFIG"
+	if !strings.Contains(out, want) {
+		t.Fatalf("summary does not list the variables in order; want %q in:\n%s", want, out)
+	}
+}
