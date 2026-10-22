@@ -69,16 +69,16 @@ func TestRunPBSPXARStepContinuesAllDatastoresOnError(t *testing.T) {
 	}
 
 	errBoom := errors.New("pxar failed")
-	var calls int32
+	var calls atomic.Int32
 	err := c.runPBSPXARStep(context.Background(), state, func(ctx context.Context, _ pbsDatastore, _ *pbsPxarState) error {
-		atomic.AddInt32(&calls, 1)
+		calls.Add(1)
 		return errBoom
 	})
 
 	if !errors.Is(err, errBoom) {
 		t.Fatalf("runPBSPXARStep error = %v, want %v", err, errBoom)
 	}
-	if got := atomic.LoadInt32(&calls); got != 3 {
+	if got := calls.Load(); got != 3 {
 		t.Fatalf("fn called %d times, want 3", got)
 	}
 }
@@ -112,16 +112,16 @@ func TestRunPBSPXARStepPartialFailure(t *testing.T) {
 		metaRoot: metaRoot,
 	}
 
-	var calls int32
+	var calls atomic.Int32
 	err := c.runPBSPXARStep(context.Background(), state, func(ctx context.Context, ds pbsDatastore, st *pbsPxarState) error {
-		atomic.AddInt32(&calls, 1)
+		calls.Add(1)
 		return c.collectPBSPXARMetadataForDatastore(ctx, ds, st)
 	})
 
 	if err == nil || !strings.Contains(err.Error(), "failed to create PXAR metadata directory for badds") {
 		t.Fatalf("runPBSPXARStep error = %v, want broken datastore metadata directory error", err)
 	}
-	if got := atomic.LoadInt32(&calls); got != 2 {
+	if got := calls.Load(); got != 2 {
 		t.Fatalf("fn called %d times, want 2", got)
 	}
 
