@@ -1082,14 +1082,14 @@ func splitKeyFieldEntries(keyField string) []identityKeyArm {
 		if token == "" {
 			continue
 		}
-		idx := strings.IndexByte(token, '=')
-		if idx < 0 {
+		before, after, ok := strings.Cut(token, "=")
+		if !ok {
 			out = append(out, identityKeyArm{Prefix: token})
 			continue
 		}
 		out = append(out, identityKeyArm{
-			Label:  strings.TrimSpace(token[:idx]),
-			Prefix: strings.TrimSpace(token[idx+1:]),
+			Label:  strings.TrimSpace(before),
+			Prefix: strings.TrimSpace(after),
 		})
 	}
 	return out

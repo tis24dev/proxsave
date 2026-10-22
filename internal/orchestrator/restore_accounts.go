@@ -453,8 +453,8 @@ func gidValueSet(m map[string]uint64) map[uint64]bool {
 }
 
 func colonName(line string) string {
-	if i := strings.IndexByte(line, ':'); i >= 0 {
-		return line[:i]
+	if before, _, ok := strings.Cut(line, ":"); ok {
+		return before
 	}
 	return line
 }

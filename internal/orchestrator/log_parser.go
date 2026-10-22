@@ -168,8 +168,8 @@ func classifyLogLine(line string) (entryType, message string) {
 
 	// 2) Go logger format with timestamp prefix.
 	if strings.HasPrefix(line, "[") {
-		if closeIdx := strings.Index(line, "]"); closeIdx != -1 {
-			rest := strings.TrimSpace(line[closeIdx+1:])
+		if _, after, ok := strings.Cut(line, "]"); ok {
+			rest := strings.TrimSpace(after)
 			if rest == "" {
 				return "", ""
 			}

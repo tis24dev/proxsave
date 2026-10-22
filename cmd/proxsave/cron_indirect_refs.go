@@ -882,14 +882,13 @@ func joinLineContinuations(lines []string) []string {
 
 // hereDocDelimiter returns the word that ends a here-document started on this line, or "".
 func hereDocDelimiter(line string) string {
-	idx := strings.Index(line, "<<")
-	if idx < 0 {
+	before, after, ok := strings.Cut(line, "<<")
+	if !ok {
 		return ""
 	}
 	// Only a REDIRECTION opens a body. The same two characters mean a left shift inside an
 	// arithmetic expansion and nothing at all inside a string, and treating either as an opener
 	// discards every following line of the script.
-	before := line[:idx]
 	if arithmeticOpenAt(before) {
 		return ""
 	}
@@ -897,7 +896,7 @@ func hereDocDelimiter(line string) string {
 		return ""
 	}
 	// "<<<" is a here-STRING: it carries its data inline and starts no body.
-	rest := line[idx+2:]
+	rest := after
 	if strings.HasPrefix(rest, "<") {
 		return ""
 	}

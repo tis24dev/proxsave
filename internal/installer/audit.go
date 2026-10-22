@@ -233,8 +233,8 @@ func normalizeIssueMessage(line string) string {
 	}
 	// Prefer to remove "[timestamp] LEVEL" prefix when present.
 	if strings.HasPrefix(line, "[") {
-		if idx := strings.Index(line, "]"); idx >= 0 {
-			rest := strings.TrimSpace(line[idx+1:])
+		if _, after, ok := strings.Cut(line, "]"); ok {
+			rest := strings.TrimSpace(after)
 			fields := strings.Fields(rest)
 			if len(fields) >= 2 {
 				level := fields[0]

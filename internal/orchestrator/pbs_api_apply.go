@@ -1129,11 +1129,11 @@ func pbsManagerErrorLine(err error) string {
 	text := pbsManagerErrorText(err)
 	lines := strings.Split(text, "\n")
 	for i, line := range lines {
-		idx := strings.Index(line, "Error: ")
-		if idx < 0 {
+		_, after, ok := strings.Cut(line, "Error: ")
+		if !ok {
 			continue
 		}
-		head := strings.TrimSpace(line[idx+len("Error: "):])
+		head := strings.TrimSpace(after)
 		// Several refusals at once come as "Error: ...:" and one "- ..." line
 		// each (measured on PBS 4.2.8): they are all part of the refusal.
 		var items []string

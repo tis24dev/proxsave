@@ -149,11 +149,11 @@ func whatElseLeft(level types.LogLevel, original, stripped, kind string) string 
 		return "no recognised opening to drop"
 	}
 	for _, g := range severityGlyphList {
-		idx := strings.Index(original, g)
-		if idx < 0 {
+		before, after, ok := strings.Cut(original, g)
+		if !ok {
 			continue
 		}
-		want := strings.TrimLeft(original[:idx]+original[idx+len(g):], " ")
+		want := strings.TrimLeft(before+after, " ")
 		if stripped != want {
 			return fmt.Sprintf("want %q after dropping %q", want, g)
 		}
@@ -175,8 +175,8 @@ func stripRestatement(level types.LogLevel, literal, kind string) (string, bool)
 		return "", false
 	}
 	for _, g := range severityGlyphList {
-		if idx := strings.Index(literal, g); idx >= 0 {
-			out := literal[:idx] + literal[idx+len(g):]
+		if before, after, ok := strings.Cut(literal, g); ok {
+			out := before + after
 			return strings.TrimLeft(out, " "), true
 		}
 	}

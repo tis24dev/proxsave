@@ -636,11 +636,11 @@ func pveshRefusedKeyFrom(err error, out []byte) string {
 }
 
 func afterMarkerUpTo(text, marker, stop string) string {
-	idx := strings.Index(text, marker)
-	if idx < 0 {
+	_, after, ok := strings.Cut(text, marker)
+	if !ok {
 		return ""
 	}
-	rest := strings.TrimSpace(text[idx+len(marker):])
+	rest := strings.TrimSpace(after)
 	if end := strings.IndexAny(rest, stop); end >= 0 {
 		rest = rest[:end]
 	}

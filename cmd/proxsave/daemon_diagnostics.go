@@ -342,11 +342,11 @@ const hardlinkAdvisoryPrefix = "fs.protected_hardlinks"
 // very verdict this function exists to stop. The cut is safe because there is one
 // producer, personalScriptForeignAncestorReason, and it appends the advisory last.
 func withoutHardlinkAdvisory(reason string) string {
-	start := strings.Index(reason, hardlinkAdvisoryPrefix)
-	if start < 0 {
+	before, _, ok := strings.Cut(reason, hardlinkAdvisoryPrefix)
+	if !ok {
 		return reason
 	}
-	return strings.TrimSuffix(strings.TrimSpace(reason[:start]), ";")
+	return strings.TrimSuffix(strings.TrimSpace(before), ";")
 }
 
 // parseProcEffectiveUID reads the second numeric value from Linux's Uid line:

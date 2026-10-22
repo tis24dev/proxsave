@@ -1489,8 +1489,8 @@ func extractRemoteName(cloudRemote string) string {
 	if remote == "" {
 		return ""
 	}
-	if idx := strings.Index(remote, ":"); idx != -1 {
-		return remote[:idx]
+	if before, _, ok := strings.Cut(remote, ":"); ok {
+		return before
 	}
 	return remote
 }

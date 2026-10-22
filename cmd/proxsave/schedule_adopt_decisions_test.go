@@ -25,11 +25,11 @@ const adoptBin = " /usr/local/bin/proxsave --backup"
 func logBlock(out string) []string {
 	var lines []string
 	for l := range strings.SplitSeq(strings.TrimRight(out, "\n"), "\n") {
-		i := strings.Index(l, "] ")
-		if i < 0 {
+		_, after, ok := strings.Cut(l, "] ")
+		if !ok {
 			continue
 		}
-		rest := l[i+2:]
+		rest := after
 		if len(rest) < 9 {
 			lines = append(lines, strings.TrimSpace(rest))
 			continue
