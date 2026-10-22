@@ -31,8 +31,13 @@ type FakeOwnership struct {
 	GID int
 }
 
+// NewFakeFS creates its root under fakeFSRoot, which TestMain removes at the end of the
+// run. A failed MkdirTemp panics: an empty Root would point the fake at the real tree.
 func NewFakeFS() *FakeFS {
-	root, _ := os.MkdirTemp("", "fakefs-*")
+	root, err := os.MkdirTemp(fakeFSRoot, "fakefs-*")
+	if err != nil {
+		panic(fmt.Sprintf("NewFakeFS: %v", err))
+	}
 	return &FakeFS{
 		Root:        root,
 		StatErr:     make(map[string]error),
