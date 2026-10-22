@@ -1786,8 +1786,8 @@ func pbsNodeUpdateFlags(raw string) (flags, keys []string) {
 		if trimmed == "" {
 			continue
 		}
-		if strings.HasPrefix(trimmed, "#") {
-			description = append(description, strings.TrimPrefix(trimmed, "#"))
+		if after, ok := strings.CutPrefix(trimmed, "#"); ok {
+			description = append(description, after)
 			continue
 		}
 		key, value, ok := strings.Cut(trimmed, ":")

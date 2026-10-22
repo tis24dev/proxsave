@@ -163,11 +163,11 @@ func readVMName(confPath string) string {
 	}
 	for line := range strings.SplitSeq(string(data), "\n") {
 		t := strings.TrimSpace(line)
-		if strings.HasPrefix(t, "name:") {
-			return strings.TrimSpace(strings.TrimPrefix(t, "name:"))
+		if after, ok := strings.CutPrefix(t, "name:"); ok {
+			return strings.TrimSpace(after)
 		}
-		if strings.HasPrefix(t, "hostname:") {
-			return strings.TrimSpace(strings.TrimPrefix(t, "hostname:"))
+		if after, ok := strings.CutPrefix(t, "hostname:"); ok {
+			return strings.TrimSpace(after)
 		}
 	}
 	return ""

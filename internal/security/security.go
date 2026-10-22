@@ -1192,8 +1192,8 @@ func matchesSafeProcessPattern(pattern, name string) bool {
 	// Exact or prefix match (case-insensitive)
 	lower := strings.ToLower(name)
 	pattern = strings.ToLower(pattern)
-	if strings.HasSuffix(pattern, "*") {
-		prefix := strings.TrimSuffix(pattern, "*")
+	if before, ok := strings.CutSuffix(pattern, "*"); ok {
+		prefix := before
 		return strings.HasPrefix(lower, prefix)
 	}
 	return lower == pattern

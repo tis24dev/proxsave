@@ -233,8 +233,8 @@ func (c *Collector) readDriverFromEthtool(ctx context.Context, iface string) (st
 	}
 	for line := range strings.SplitSeq(string(output), "\n") {
 		line = strings.TrimSpace(line)
-		if strings.HasPrefix(line, "driver:") {
-			return strings.TrimSpace(strings.TrimPrefix(line, "driver:")), nil
+		if after, ok := strings.CutPrefix(line, "driver:"); ok {
+			return strings.TrimSpace(after), nil
 		}
 	}
 	return "", nil

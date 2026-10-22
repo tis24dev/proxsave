@@ -216,22 +216,22 @@ func parsePvecmStatus(output string) pvecmStatusInfo {
 		if line == "" {
 			continue
 		}
-		if strings.HasPrefix(line, "Quorate:") {
-			val := strings.TrimSpace(strings.TrimPrefix(line, "Quorate:"))
+		if after, ok := strings.CutPrefix(line, "Quorate:"); ok {
+			val := strings.TrimSpace(after)
 			info.QuorateKnown = true
 			info.Quorate = strings.EqualFold(val, "Yes")
 			continue
 		}
-		if strings.HasPrefix(line, "Nodes:") {
-			info.Nodes = strings.TrimSpace(strings.TrimPrefix(line, "Nodes:"))
+		if after, ok := strings.CutPrefix(line, "Nodes:"); ok {
+			info.Nodes = strings.TrimSpace(after)
 			continue
 		}
-		if strings.HasPrefix(line, "Expected votes:") {
-			info.Expected = strings.TrimSpace(strings.TrimPrefix(line, "Expected votes:"))
+		if after, ok := strings.CutPrefix(line, "Expected votes:"); ok {
+			info.Expected = strings.TrimSpace(after)
 			continue
 		}
-		if strings.HasPrefix(line, "Total votes:") {
-			info.TotalVotes = strings.TrimSpace(strings.TrimPrefix(line, "Total votes:"))
+		if after, ok := strings.CutPrefix(line, "Total votes:"); ok {
+			info.TotalVotes = strings.TrimSpace(after)
 			continue
 		}
 		if strings.HasPrefix(line, "Ring") && strings.Contains(line, "_addr:") {
