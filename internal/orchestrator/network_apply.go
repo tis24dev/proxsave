@@ -322,10 +322,7 @@ func armNetworkRollback(ctx context.Context, logger *logging.Logger, backupPath 
 	}
 	logging.DebugStep(logger, "arm network rollback", "Script written successfully (%d bytes)", len(script))
 
-	timeoutSeconds := int(timeout.Seconds())
-	if timeoutSeconds < 1 {
-		timeoutSeconds = 1
-	}
+	timeoutSeconds := max(int(timeout.Seconds()), 1)
 
 	if commandAvailable("systemd-run") {
 		logging.DebugStep(logger, "arm network rollback", "Arm timer via systemd-run (%ds)", timeoutSeconds)

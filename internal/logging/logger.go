@@ -225,10 +225,7 @@ func (l *Logger) writeFileLocked(line string) {
 		_, _ = fileWrite(f, line) // opt-out / legacy: unbounded
 		return
 	}
-	wt := l.ioTimeout
-	if wt > logWriteTimeoutCap {
-		wt = logWriteTimeoutCap
-	}
+	wt := min(l.ioTimeout, logWriteTimeoutCap)
 	_, err := safefs.Run(context.Background(), "logwrite", f.Name(), wt, func() (int, error) {
 		return fileWrite(f, line)
 	})
@@ -258,10 +255,7 @@ func (l *Logger) disableFileSinkLocked(cause error) {
 	// re-wedge; its failure is ignored. disableFileSinkLocked is only reached with
 	// ioTimeout > 0 (the bounded write path), so mwt is always positive.
 	if f := l.logFile; f != nil {
-		mwt := l.ioTimeout
-		if mwt > logWriteTimeoutCap {
-			mwt = logWriteTimeoutCap
-		}
+		mwt := min(l.ioTimeout, logWriteTimeoutCap)
 		marker := fmt.Sprintf("[%s] %-8s log file sink disabled after I/O timeout; on-disk log truncated here\n", timestamp, types.LogLevelWarning.String())
 		_, _ = safefs.Run(context.Background(), "logwrite-marker", f.Name(), mwt, func() (int, error) {
 			return fileWrite(f, marker)

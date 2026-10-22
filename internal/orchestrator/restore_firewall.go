@@ -475,10 +475,7 @@ func armFirewallRollback(ctx context.Context, logger *logging.Logger, backupPath
 		return nil, fmt.Errorf("write rollback script: %w", err)
 	}
 
-	timeoutSeconds := int(timeout.Seconds())
-	if timeoutSeconds < 1 {
-		timeoutSeconds = 1
-	}
+	timeoutSeconds := max(int(timeout.Seconds()), 1)
 
 	if commandAvailable("systemd-run") {
 		handle.unitName = fmt.Sprintf("proxsave-firewall-rollback-%s", timestamp)

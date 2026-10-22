@@ -701,10 +701,7 @@ func (d *daemon) scheduleLoop(ctx context.Context) bool {
 			d.logScheduleNotAppliedAgain()
 		}
 		next := d.nextScheduledRun(d.now())
-		wait := next.Sub(d.now())
-		if wait < 0 {
-			wait = 0
-		}
+		wait := max(next.Sub(d.now()), 0)
 		logging.Info("daemon: next backup at %s (in %s)", next.Format("2006-01-02 15:04"), cron.WaitLabel(wait))
 
 		timer := time.NewTimer(wait)
@@ -2288,10 +2285,7 @@ const (
 // source or persisted state is needed. It uses up to 10% of Retry-After, capped at
 // five minutes. A stable spread is sufficient to avoid a synchronized retry herd.
 func daemonProvisionRetryJitter(serverID string, retryAfter time.Duration) time.Duration {
-	window := retryAfter / 10
-	if window > daemonProvisionMaxRetryJitter {
-		window = daemonProvisionMaxRetryJitter
-	}
+	window := min(retryAfter/10, daemonProvisionMaxRetryJitter)
 	if window <= 0 {
 		return 0
 	}

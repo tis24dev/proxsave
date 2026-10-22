@@ -57,10 +57,7 @@ func (r *chkSlowReader) Read(p []byte) (int, error) {
 	if r.off >= len(r.data) {
 		return 0, io.EOF
 	}
-	end := r.off + r.step
-	if end > len(r.data) {
-		end = len(r.data)
-	}
+	end := min(r.off+r.step, len(r.data))
 	n := copy(p, r.data[r.off:end])
 	r.off += n
 	return n, nil

@@ -39,10 +39,7 @@ func TruncateTelegramSetupStatusMessage(msg string) string {
 	if len(runes) <= TelegramSetupStatusMessageMaxRunes {
 		return msg
 	}
-	keep := TelegramSetupStatusMessageMaxRunes - len([]rune(telegramSetupTruncationSuffix))
-	if keep < 0 {
-		keep = 0
-	}
+	keep := max(TelegramSetupStatusMessageMaxRunes-len([]rune(telegramSetupTruncationSuffix)), 0)
 	return string(runes[:keep]) + telegramSetupTruncationSuffix
 }
 

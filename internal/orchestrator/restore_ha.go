@@ -387,10 +387,7 @@ func armHARollback(ctx context.Context, logger *logging.Logger, backupPath strin
 		return nil, fmt.Errorf("write rollback script: %w", err)
 	}
 
-	timeoutSeconds := int(timeout.Seconds())
-	if timeoutSeconds < 1 {
-		timeoutSeconds = 1
-	}
+	timeoutSeconds := max(int(timeout.Seconds()), 1)
 
 	if commandAvailable("systemd-run") {
 		handle.unitName = fmt.Sprintf("proxsave-ha-rollback-%s", timestamp)

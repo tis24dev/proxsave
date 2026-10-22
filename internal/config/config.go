@@ -1432,10 +1432,7 @@ func parseSizeToBytes(value string) (int64, error) {
 	if num < 0 {
 		return 0, fmt.Errorf("size must be positive")
 	}
-	bytes := int64(num * multiplier)
-	if bytes < 0 {
-		bytes = 0
-	}
+	bytes := max(int64(num*multiplier), 0)
 	return bytes, nil
 }
 

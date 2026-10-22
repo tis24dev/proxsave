@@ -421,10 +421,7 @@ func (r fsRetention) deleteBackups(ctx context.Context, toDelete []*types.Backup
 		}
 	}
 
-	remaining := total - deleted
-	if remaining < 0 {
-		remaining = 0
-	}
+	remaining := max(total-deleted, 0)
 
 	if logsRemaining, ok := computeRemaining(initialLogs, logsDeleted); ok {
 		r.logger.Debug("%s retention applied: deleted %d backups (logs deleted: %d), %d backups remaining (%d logs remaining)",

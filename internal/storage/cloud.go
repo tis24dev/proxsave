@@ -1276,10 +1276,7 @@ func (c *CloudStorage) uploadWithRetry(ctx context.Context, localFile, remoteFil
 	// of 3 but never clamped, so a misconfigured RCLONE_RETRIES<=0 would otherwise
 	// skip the loop entirely, never call rclone, and return a bogus
 	// "upload failed after 0 attempts: <nil>" while silently uploading nothing.
-	retries := c.config.RcloneRetries
-	if retries < 1 {
-		retries = 1
-	}
+	retries := max(c.config.RcloneRetries, 1)
 
 	attemptsMade := 0
 	// reported marks a failure that comes after at least one "  Attempt <i>/<n>
@@ -2756,10 +2753,7 @@ func (c *CloudStorage) deleteBatched(ctx context.Context, backups []*types.Backu
 		}
 	}
 
-	remaining := totalBackups - deleted
-	if remaining < 0 {
-		remaining = 0
-	}
+	remaining := max(totalBackups-deleted, 0)
 
 	if logsRemaining, ok := computeRemaining(initialLogs, logsDeleted); ok {
 		c.logger.Debug("Cloud storage retention applied: deleted %d backups (logs deleted: %d), %d backups remaining (%d logs remaining)",

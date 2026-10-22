@@ -1330,10 +1330,7 @@ func (e *EmailNotifier) buildEmailMessage(recipient, subject, htmlBody, textBody
 			encoded := base64.StdEncoding.EncodeToString(content)
 			const maxLineLength = 76
 			for i := 0; i < len(encoded); i += maxLineLength {
-				end := i + maxLineLength
-				if end > len(encoded) {
-					end = len(encoded)
-				}
+				end := min(i+maxLineLength, len(encoded))
 				email.WriteString(encoded[i:end])
 				email.WriteString("\n")
 			}

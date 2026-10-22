@@ -345,10 +345,7 @@ func (t *StreamTask) View(width, height int) string {
 	if outcome != "" {
 		reserved += lipglossCount(outcome, width) + 1 /*rule below panel*/
 	}
-	bodyH := height - reserved
-	if bodyH < 1 {
-		bodyH = 1
-	}
+	bodyH := max(height-reserved, 1)
 
 	// Size FIRST (garble fix 80704d7 / memory proxsave-charm-viewport-gotcha):
 	// SetWidth/SetHeight then SetContentLines, both here in View, so the content
@@ -492,10 +489,7 @@ func wrapLine(line string, width int) []string {
 			// whole rather than dropping it, and step past it. This keeps wrapLine
 			// total (no silent drop) and the loop always progressing.
 			chunk = ansi.Cut(line, idx, idx+2)
-			cw = ansi.StringWidth(chunk)
-			if cw < 1 {
-				cw = 1
-			}
+			cw = max(ansi.StringWidth(chunk), 1)
 		}
 		rows = append(rows, chunk)
 		idx += cw

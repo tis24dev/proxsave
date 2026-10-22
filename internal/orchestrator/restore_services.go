@@ -473,10 +473,7 @@ func (progress restoreCommandProgress) write(left time.Duration) {
 	if !progress.enabled {
 		return
 	}
-	seconds := int(left.Round(time.Second).Seconds())
-	if seconds < 0 {
-		seconds = 0
-	}
+	seconds := max(int(left.Round(time.Second).Seconds()), 0)
 	fmt.Fprintf(os.Stderr, "\rStopping %s: %s (attempt timeout in %ds)...", progress.service, progress.action, seconds)
 }
 
@@ -583,10 +580,7 @@ func (waiter serviceInactiveWaiter) writeProgress(remaining time.Duration) {
 	select {
 	case <-waiter.ticker.C:
 		if waiter.progressEnabled {
-			seconds := int(remaining.Round(time.Second).Seconds())
-			if seconds < 0 {
-				seconds = 0
-			}
+			seconds := max(int(remaining.Round(time.Second).Seconds()), 0)
 			fmt.Fprintf(os.Stderr, "\rWaiting for %s to stop (%ds remaining)...", waiter.service, seconds)
 		}
 	default:

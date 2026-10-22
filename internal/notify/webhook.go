@@ -269,10 +269,7 @@ func (w *WebhookNotifier) sendToEndpoint(ctx context.Context, endpoint config.We
 	}
 
 	// Retry loop
-	maxRetries := w.config.MaxRetries
-	if maxRetries < 0 {
-		maxRetries = 0
-	}
+	maxRetries := max(w.config.MaxRetries, 0)
 	retryDelay := w.config.RetryDelay
 	if retryDelay <= 0 {
 		retryDelay = 2

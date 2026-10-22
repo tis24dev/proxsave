@@ -752,10 +752,7 @@ func compareVersions(current, latest string) int {
 	a, aPre := normalize(current)
 	b, bPre := normalize(latest)
 
-	maxLen := len(a)
-	if len(b) > maxLen {
-		maxLen = len(b)
-	}
+	maxLen := max(len(b), len(a))
 
 	for i := 0; i < maxLen; i++ {
 		var av, bv int
