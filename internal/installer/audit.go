@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"os/exec"
 	"regexp"
-	"sort"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -204,7 +204,7 @@ func extractDisableSuggestionsFromIssueLines(issueLines []string, allowed map[st
 	for key := range byKey {
 		keys = append(keys, key)
 	}
-	sort.Strings(keys)
+	slices.Sort(keys)
 
 	out := make([]PostInstallAuditSuggestion, 0, len(keys))
 	for _, key := range keys {
@@ -212,7 +212,7 @@ func extractDisableSuggestionsFromIssueLines(issueLines []string, allowed map[st
 		for msg := range byKey[key] {
 			msgs = append(msgs, msg)
 		}
-		sort.Strings(msgs)
+		slices.Sort(msgs)
 		out = append(out, PostInstallAuditSuggestion{
 			Key:      key,
 			Messages: msgs,
