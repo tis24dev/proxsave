@@ -122,3 +122,25 @@ func TestFormatPreservedEntries(t *testing.T) {
 		})
 	}
 }
+
+// ApplyAuditDisables writes the variables in sorted order: two variables missing from the
+// file are appended alphabetically, whatever order they were selected in.
+func TestApplyAuditDisablesAppendsInSortedOrder(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "backup.env")
+	if err := os.WriteFile(configPath, []byte("KEY1=value\n"), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	if err := ApplyAuditDisables(configPath, []string{"backup_zfs_config", "BACKUP_CLUSTER_CONFIG"}); err != nil {
+		t.Fatalf("ApplyAuditDisables: %v", err)
+	}
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("read config: %v", err)
+	}
+	content := string(data)
+	cluster := strings.Index(content, "BACKUP_CLUSTER_CONFIG=false")
+	zfs := strings.Index(content, "BACKUP_ZFS_CONFIG=false")
+	if cluster < 0 || zfs < 0 || cluster > zfs {
+		t.Fatalf("want BACKUP_CLUSTER_CONFIG=false before BACKUP_ZFS_CONFIG=false, got:\n%s", content)
+	}
+}
