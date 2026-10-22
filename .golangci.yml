@@ -6,6 +6,16 @@ run:
 
 linters:
   default: standard
+  # modernize keeps the tree on the idioms of the go.mod Go version (any, range over
+  # int, slices/maps/strings helpers, min/max, ...), so the go fix sweep stays done.
+  enable:
+    - modernize
+  settings:
+    modernize:
+      disable:
+        # omitzero would drop the empty nested objects from the PBS datastore
+        # inventory JSON (`{}` becomes an absent key): an output change, kept as is.
+        - omitzero
   exclusions:
     # Deterministic whole-tree linting: report every issue in the tree, not only
     # those on lines changed since HEAD~ (the former `issues.new: true`, which
