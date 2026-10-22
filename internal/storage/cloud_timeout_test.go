@@ -246,7 +246,7 @@ func TestVerifyRemoteChecksumHealthySlowReadIsContentVerified(t *testing.T) {
 			return
 		}
 		defer func() { _ = w.Close() }()
-		for i := 0; i < chunks; i++ {
+		for range chunks {
 			time.Sleep(100 * time.Millisecond)
 			if _, werr := w.Write(chunk); werr != nil {
 				return

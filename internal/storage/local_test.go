@@ -542,7 +542,7 @@ func TestLocalStorage_ApplyGFSRetention(t *testing.T) {
 
 	// Create test backups with metadata
 	now := time.Now()
-	for i := 0; i < 10; i++ {
+	for i := range 10 {
 		timestamp := now.Add(-time.Duration(i*24) * time.Hour)
 		filename := fmt.Sprintf("backup-%s.tar.xz", timestamp.Format("2006-01-02"))
 		backupPath := filepath.Join(tempDir, filename)

@@ -34,7 +34,7 @@ func TestFormGridTabReachesCancel(t *testing.T) {
 // (unlike tab, it does not toggle), so a "mash down then Enter" submit is reliable.
 func TestFormGridDownStaysOnContinue(t *testing.T) {
 	g := NewFormGrid("Config", []*FormField{{Label: "A", Kind: FieldToggle}})
-	for i := 0; i < 4; i++ {
+	for range 4 {
 		press(t, g, "down") // 1st down -> buttons (Continue); the rest stay on Continue
 	}
 	if g.onCancel {
@@ -319,7 +319,7 @@ func TestFormGridMouseClickBandRejectsOffscreen(t *testing.T) {
 
 	// Scroll: move the cursor down so offset > 0 and fields stay hidden both
 	// ABOVE and BELOW the window.
-	for i := 0; i < 8; i++ {
+	for range 8 {
 		press(t, g, "down")
 	}
 	g.View(80, 12)
@@ -381,7 +381,7 @@ func TestFormGridMouseClickBelowWindowLeavesOffscreenSelectUnchanged(t *testing.
 
 	// Scroll: move the cursor down so offset > 0 and fields stay hidden BELOW
 	// the window (same layout math as the FieldToggle band test).
-	for i := 0; i < 8; i++ {
+	for range 8 {
 		press(t, g, "down")
 	}
 	g.View(80, 12)

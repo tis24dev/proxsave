@@ -368,7 +368,7 @@ func TestP4_RepeatedFailedReplacementsLeaveExactlyOnePreservedCopy(t *testing.T)
 	original := identityBytes(t, baseDir)
 
 	failTempFor(t, false, errors.New("canonical write boom"))
-	for i := 0; i < 6; i++ {
+	for i := range 6 {
 		if _, err := detectAs(t, baseDir, hostBravo); err != nil {
 			t.Fatalf("run %d: DetectWithContext() error = %v", i, err)
 		}

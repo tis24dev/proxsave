@@ -89,7 +89,7 @@ func TestMaterializeDedupManifestSizeCap(t *testing.T) {
 	}
 	// A manifest larger than the 32-byte test cap.
 	entries := make([]backup.DedupManifestEntry, 0, 8)
-	for i := 0; i < 8; i++ {
+	for range 8 {
 		entries = append(entries, backup.DedupManifestEntry{Path: "a/two.cfg", Mode: 0o640})
 	}
 	writeDedupManifestForTest(t, destRoot, entries)

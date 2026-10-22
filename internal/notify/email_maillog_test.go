@@ -15,7 +15,7 @@ import (
 
 func TestNewMessageID(t *testing.T) {
 	seen := map[string]bool{}
-	for i := 0; i < 50; i++ {
+	for range 50 {
 		id := newMessageID("no-reply@proxmox.example.com")
 		local, domain, ok := strings.Cut(id, "@")
 		if !ok || domain != "proxmox.example.com" || len(local) != len("proxsave-")+32 || !strings.HasPrefix(local, "proxsave-") {

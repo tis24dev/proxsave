@@ -69,7 +69,7 @@ func itemLines(out string) []string {
 
 func seedArchives(t *testing.T, dir string, n int) {
 	t.Helper()
-	for i := 0; i < n; i++ {
+	for i := range n {
 		p := filepath.Join(dir, fmt.Sprintf("host-backup-202603%02d-000000.tar.zst", i+1))
 		if err := os.WriteFile(p, []byte("x"), 0o600); err != nil {
 			t.Fatalf("seed %s: %v", p, err)
@@ -119,7 +119,7 @@ func TestAnAbandonedListingReturnsTheErrorInsteadOfOneWarningPerArchive(t *testi
 func TestUnreadableArchivesAreReportedOnceNotOncePerArchive(t *testing.T) {
 	dir := t.TempDir()
 	seedArchives(t, dir, 1)
-	for i := 0; i < 5; i++ {
+	for i := range 5 {
 		p := filepath.Join(dir, fmt.Sprintf("host-backup-202604%02d-000000.tar.zst", i+1))
 		if err := os.Symlink(p, p); err != nil { // self-link: ELOOP on stat
 			t.Fatalf("symlink %s: %v", p, err)
@@ -308,7 +308,7 @@ func TestASingleArchiveThatVanishedBetweenGlobAndStatStaysSilent(t *testing.T) {
 func TestAnAbandonedLocationProbeReturnsTheErrorNotAnEmptyList(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		dir := t.TempDir()
-		for i := 0; i < 3; i++ {
+		for i := range 3 {
 			p := filepath.Join(dir, fmt.Sprintf("host-backup-202605%02d-000000.tar.zst", i+1))
 			if err := os.Symlink(p, p); err != nil { // self-link: ELOOP, so zero archives are readable
 				t.Fatalf("symlink %s: %v", p, err)

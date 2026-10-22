@@ -157,7 +157,7 @@ func TestCollectWizardDataDeclineAll(t *testing.T) {
 	// Enter through the 11 active rows (Frequency included; Weekday and Day of month are
 	// inactive on daily) reaches Continue; the final Enter submits.
 	d.waitScreen("Configuration")
-	for i := 0; i < 12; i++ {
+	for range 12 {
 		d.keys("enter")
 	}
 
@@ -237,7 +237,7 @@ func TestCollectWizardDataPrefillNoOp(t *testing.T) {
 	// Single aligned form, everything prefilled/active: Enter through all
 	// 14 rows (Frequency included) plus the Continue button is the no-op edit.
 	d.waitScreen("Configuration")
-	for i := 0; i < 15; i++ {
+	for range 15 {
 		d.keys("enter")
 	}
 
@@ -297,7 +297,7 @@ func TestCollectWizardDataLeavesEmailFallbackToTheEngine(t *testing.T) {
 	// Same no-op-edit gesture as TestCollectWizardDataPrefillNoOp: 14 active rows
 	// plus Continue. No form row is added or removed by leaving the field nil.
 	d.waitScreen("Configuration")
-	for i := 0; i < 15; i++ {
+	for range 15 {
 		d.keys("enter")
 	}
 
@@ -347,7 +347,7 @@ func TestCollectWizardDataEditWithoutSchedulerModeDefaultsCron(t *testing.T) {
 
 	// All toggles default off -> 9 active rows (Frequency included) + Continue.
 	d.waitScreen("Configuration")
-	for i := 0; i < 10; i++ {
+	for range 10 {
 		d.keys("enter")
 	}
 

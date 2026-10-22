@@ -1347,7 +1347,7 @@ func TestMaybeRepairNICNamesCLI_MoreThan32ConflictsTriggersTruncationBranch(t *t
 	sysClassNetPath = sysDir
 
 	var ifaceJSON []string
-	for i := 0; i < 33; i++ {
+	for i := range 33 {
 		oldName := fmt.Sprintf("eno%d", i)
 		newName := fmt.Sprintf("enp%d", i)
 		mac := fmt.Sprintf("aa:bb:cc:dd:ee:%02x", i)

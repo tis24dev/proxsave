@@ -85,7 +85,7 @@ func ReadFileInRoot(root, absPath string) ([]byte, error) {
 		return nil, fmt.Errorf("read in root %q: empty relative path", root)
 	}
 
-	for hop := 0; hop < maxSymlinkHops; hop++ {
+	for range maxSymlinkHops {
 		info, lerr := r.Lstat(rel)
 		if lerr != nil {
 			return nil, lerr

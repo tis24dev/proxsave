@@ -133,7 +133,7 @@ func TestLogWriteTimeoutStrikeCounter(t *testing.T) {
 	wedgeInfo := func(msg string, workers int) { parked.Add(workers); logger.Info("%s", msg) }
 
 	// Strikes 1..(N-1): sink stays armed.
-	for i := 0; i < logSinkTimeoutStrikes-1; i++ {
+	for range logSinkTimeoutStrikes - 1 {
 		wedgeInfo("strike", 1)
 	}
 	if logger.GetLogFilePath() == "" {
@@ -158,7 +158,7 @@ func TestLogWriteTimeoutStrikeCounter(t *testing.T) {
 	mu.Lock()
 	wedge = true
 	mu.Unlock()
-	for i := 0; i < logSinkTimeoutStrikes; i++ {
+	for i := range logSinkTimeoutStrikes {
 		parks := 1
 		if i == logSinkTimeoutStrikes-1 {
 			parks = 2 // this strike also fires the (wedged) marker write
@@ -216,11 +216,11 @@ func TestLoggerConcurrentBoundedNoRace(t *testing.T) {
 		t.Fatal(err)
 	}
 	var wg sync.WaitGroup
-	for g := 0; g < 8; g++ {
+	for range 8 {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			for i := 0; i < 30; i++ {
+			for i := range 30 {
 				logger.Info("x %d", i)
 			}
 		}()
@@ -298,7 +298,7 @@ func TestLogSinkDisableWritesMarker(t *testing.T) {
 	// that crosses the threshold: that call also drives disableFileSinkLocked's
 	// marker write, a second, nested fileWrite invocation (the real-write branch
 	// above). Account the exact worker count before the call.
-	for i := 0; i < logSinkTimeoutStrikes; i++ {
+	for i := range logSinkTimeoutStrikes {
 		workers := 1
 		if i == logSinkTimeoutStrikes-1 {
 			workers = 2 // this strike also fires the marker write

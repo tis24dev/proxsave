@@ -133,7 +133,7 @@ func TestShowRestoreModeMenu_ContextCanceledReturnsErrRestoreAborted(t *testing.
 func TestShowCategorySelectionMenu_HelpNamesTheToggleRange(t *testing.T) {
 	logger := logging.New(types.LogLevelError, false)
 	many := make([]Category, 0, 12)
-	for i := 0; i < 12; i++ {
+	for i := range 12 {
 		id := fmt.Sprintf("common_%02d", i)
 		many = append(many, Category{ID: id, Name: id, Type: CategoryTypeCommon})
 	}

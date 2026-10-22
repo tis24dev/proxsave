@@ -173,7 +173,7 @@ func TestSelectorViewShowsCursorAndScrolls(t *testing.T) {
 		t.Errorf("first row missing: %q", view)
 	}
 	// Move beyond the window: the view must scroll to keep the cursor.
-	for i := 0; i < 11; i++ {
+	for range 11 {
 		press(t, s, "down")
 	}
 	view = s.View(60, 8)
@@ -189,7 +189,7 @@ func TestSelectorMouseClickAboveRowsIgnoredWhenScrolled(t *testing.T) {
 	s := NewSelector("Backup", manyItems(30))
 	cap := bindSelector(s)
 	// Scroll so offset>0: move the cursor deep, then render to set the window.
-	for i := 0; i < 20; i++ {
+	for range 20 {
 		press(t, s, "down")
 	}
 	s.View(80, 12)
@@ -209,7 +209,7 @@ func TestSelectorMouseClickAboveRowsIgnoredWhenScrolled(t *testing.T) {
 func TestSelectorMouseClickBelowWindowIgnoredWhenScrolled(t *testing.T) {
 	s := NewSelector("Backup", manyItems(30))
 	cap := bindSelector(s)
-	for i := 0; i < 20; i++ {
+	for range 20 {
 		press(t, s, "down")
 	}
 	s.View(80, 12)
@@ -232,7 +232,7 @@ func TestSelectorMouseClickBelowWindowIgnoredWhenScrolled(t *testing.T) {
 func TestSelectorMouseClickFirstVisibleRowResolvesWhenScrolled(t *testing.T) {
 	s := NewSelector("Backup", manyItems(30))
 	cap := bindSelector(s)
-	for i := 0; i < 20; i++ {
+	for range 20 {
 		press(t, s, "down")
 	}
 	s.View(80, 12)
@@ -255,7 +255,7 @@ func TestSelectorMouseClickBandWithStyledMultilinePrompt(t *testing.T) {
 	s := NewSelector("Backup", manyItems(30), WithSelectorPromptStyled[int](prompt))
 	cap := bindSelector(s)
 	// Scroll so offset>0: the first visible row is item offset, not item 0.
-	for i := 0; i < 20; i++ {
+	for range 20 {
 		press(t, s, "down")
 	}
 	s.View(80, 20)
@@ -279,7 +279,7 @@ func TestSelectorMouseClickBandWithStyledMultilinePrompt(t *testing.T) {
 	// lastRowsTop-1) must be a no-op, even though the band is shifted down.
 	s2 := NewSelector("Backup", manyItems(30), WithSelectorPromptStyled[int](prompt))
 	cap2 := bindSelector(s2)
-	for i := 0; i < 20; i++ {
+	for range 20 {
 		press(t, s2, "down")
 	}
 	s2.View(80, 20)
@@ -296,7 +296,7 @@ func TestSelectorMouseClickBandWithStyledMultilinePrompt(t *testing.T) {
 	// (body-Y == lastWindowEnd) must also be a no-op.
 	s3 := NewSelector("Backup", manyItems(30), WithSelectorPromptStyled[int](prompt))
 	cap3 := bindSelector(s3)
-	for i := 0; i < 20; i++ {
+	for range 20 {
 		press(t, s3, "down")
 	}
 	s3.View(80, 20)

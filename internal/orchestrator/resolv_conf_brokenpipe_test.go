@@ -41,7 +41,7 @@ func TestReadTarEntry_XZ_EntryNotLast_ReturnsContent(t *testing.T) {
 	}
 	write("var/lib/proxsave-info/commands/system/resolv_conf.txt", want)
 	pad := []byte(strings.Repeat("x", 65536))
-	for i := 0; i < 200; i++ {
+	for i := range 200 {
 		write("padding/f"+strings.Repeat("0", i%5)+string(rune('a'+i%26))+".dat", pad)
 	}
 	if err := tw.Close(); err != nil {

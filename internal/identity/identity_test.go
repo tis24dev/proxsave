@@ -587,7 +587,7 @@ func TestFallbackServerIDFormat(t *testing.T) {
 
 func TestCollectMACAddressesSortedAndUnique(t *testing.T) {
 	_, macs := collectMACCandidates(nil)
-	for i := 0; i < len(macs); i++ {
+	for i := range macs {
 		if macs[i] == "" {
 			t.Fatalf("unexpected empty MAC at index %d", i)
 		}

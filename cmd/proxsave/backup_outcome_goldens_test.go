@@ -139,7 +139,7 @@ func describeBackupOutcomeSGR(s string) string {
 				attrs = append(attrs, "bold")
 			case (p == "38" || p == "48") && i+4 < len(parts) && parts[i+1] == "2":
 				var rgb [3]int
-				for k := 0; k < 3; k++ {
+				for k := range 3 {
 					rgb[k], _ = strconv.Atoi(parts[i+2+k])
 				}
 				hex := fmt.Sprintf("#%02X%02X%02X", rgb[0], rgb[1], rgb[2])

@@ -226,7 +226,7 @@ func TestWhatsnewHungLogPathIsSilent(t *testing.T) {
 		t.Skipf("mkfifo unavailable: %v", err)
 	}
 	t.Cleanup(func() {
-		for i := 0; i < 20; i++ {
+		for range 20 {
 			f, err := os.OpenFile(flag, os.O_WRONLY|syscall.O_NONBLOCK, 0)
 			if err != nil {
 				return

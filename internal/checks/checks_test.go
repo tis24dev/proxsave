@@ -348,7 +348,7 @@ func TestCheckLockFile_ConcurrentCalls_OnlyOnePasses(t *testing.T) {
 
 	passed := make(chan bool, workers)
 
-	for i := 0; i < workers; i++ {
+	for range workers {
 		go func() {
 			defer wg.Done()
 			<-start

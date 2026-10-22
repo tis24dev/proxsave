@@ -479,7 +479,7 @@ func TestAbandonedWaitGoroutineDoesNotLeak(t *testing.T) {
 	script := writePersonalScript(t, dir, "slow.sh", `trap "" TERM`+"\nsleep 2")
 
 	before := runtime.NumGoroutine()
-	for i := 0; i < 10; i++ {
+	for range 10 {
 		runPersonalScript(script, nil)
 	}
 
@@ -805,7 +805,7 @@ func TestATimedOutOpenLeavesOneProbeNoMatterHowManyRuns(t *testing.T) {
 	script := fifoParentScript(t)
 	base := parkedParentOpens(t)
 
-	for i := 0; i < 8; i++ {
+	for i := range 8 {
 		if file, refusal := openPersonalScriptForExecution(script); refusal == nil {
 			_ = file.Close()
 			t.Fatalf("run %d opened a script whose parent is a FIFO", i)

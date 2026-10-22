@@ -1615,7 +1615,7 @@ func (e *EmailNotifier) sendViaSendmail(ctx context.Context, recipient, subject,
 				}
 			} else {
 				e.logger.Debug("Recent mail log entries (%d found, showing first 5):", len(recentErrors))
-				for i := 0; i < 5; i++ {
+				for i := range 5 {
 					errLine := recentErrors[i]
 					if len(errLine) > 200 {
 						errLine = errLine[:200] + "..."

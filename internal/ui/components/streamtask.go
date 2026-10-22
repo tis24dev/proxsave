@@ -199,7 +199,7 @@ func (t *StreamTask) appendRaw(raw string) {
 			// Shed exactly the wrapped rows of the oldest `drop` raw lines
 			// (computed BEFORE slicing lines), O(drop) not O(cap).
 			dropRows := 0
-			for i := 0; i < drop; i++ {
+			for i := range drop {
 				dropRows += len(wrapLine(t.lines[i], t.wrapWidth))
 			}
 			t.wrapped = t.wrapped[dropRows:]

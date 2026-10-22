@@ -174,7 +174,7 @@ func TestClassifyBackupsGFS_DailyOnly(t *testing.T) {
 	}
 
 	// Verify the newest 7 are kept
-	for i := 0; i < 7; i++ {
+	for i := range 7 {
 		if classification[backups[i]] != CategoryDaily {
 			t.Errorf("Backup %d should be daily, got %v", i, classification[backups[i]])
 		}

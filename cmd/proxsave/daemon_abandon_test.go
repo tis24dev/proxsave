@@ -875,7 +875,7 @@ func TestAStalledOrphanProbeIsNeverReissued(t *testing.T) {
 		return true
 	}
 
-	for i := 0; i < 4; i++ {
+	for range 4 {
 		if !d.pidIsAbandonedChild(4242, 7) {
 			t.Fatal("a probe that cannot answer must count as the orphan still being there")
 		}

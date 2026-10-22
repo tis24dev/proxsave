@@ -274,7 +274,7 @@ func TestAskStress(t *testing.T) {
 		}
 	}()
 
-	for i := 0; i < 60; i++ {
+	for i := range 60 {
 		askCtx, askCancel := context.WithCancel(context.Background())
 		scr := newStubScreen(i)
 		ch := startAsk[int](askCtx, s, scr)
