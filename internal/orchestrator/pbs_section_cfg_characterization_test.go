@@ -776,7 +776,6 @@ func checkPBSSectionCharInvariants(t *testing.T, k pbsSectionCharKind, run pbsSe
 
 func TestPBSSectionCfgCharacterization(t *testing.T) {
 	for _, k := range pbsSectionCharKinds {
-		k := k
 		t.Run(k.key, func(t *testing.T) {
 			goldenPath := filepath.Join("testdata", "pbs_section_cfg_characterization", k.key+".golden")
 			scenarios := pbsSectionCharScenarios(k)
@@ -789,7 +788,6 @@ func TestPBSSectionCfgCharacterization(t *testing.T) {
 
 			blocks := make([]string, 0, len(scenarios))
 			for _, sc := range scenarios {
-				sc := sc
 				t.Run(sc.name, func(t *testing.T) {
 					first := runPBSSectionCharScenario(t, k, sc)
 					got := renderPBSSectionChar(sc, first)

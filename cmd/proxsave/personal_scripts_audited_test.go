@@ -94,7 +94,6 @@ func TestPersonalScriptCommandsExecuteTheOpenedFileAfterPathReplacement(t *testi
 				t.Fatalf("the per-run gate refused a script it must accept: %v", refusal)
 			}
 			for _, file := range cmd.ExtraFiles {
-				file := file
 				t.Cleanup(func() { _ = file.Close() })
 			}
 			if err := os.Rename(replacement, path); err != nil {

@@ -203,7 +203,6 @@ func TestBaseNameFromRemoteRef(t *testing.T) {
 		{"gdrive:dir/sub/", "sub"},
 	}
 	for _, tt := range tests {
-		tt := tt
 		t.Run(tt.in, func(t *testing.T) {
 			got := baseNameFromRemoteRef(tt.in)
 			if got != tt.want {
@@ -485,7 +484,6 @@ func TestSanitizeBundleEntryName(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			got, err := sanitizeBundleEntryName(tt.input)
 			if tt.expectErr {

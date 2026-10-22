@@ -71,7 +71,6 @@ func (c *CloudStorage) resolveRetentionOwners(ctx context.Context, backups []*ty
 	var wg sync.WaitGroup
 	sem := make(chan struct{}, workers)
 	for _, b := range pending {
-		b := b
 		wg.Add(1)
 		go func() {
 			defer wg.Done()

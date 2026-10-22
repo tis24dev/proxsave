@@ -1141,7 +1141,6 @@ func TestCloudStorageRemoteNormalizationVariants(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			cfg := &config.Config{
 				CloudEnabled:    true,
@@ -1180,7 +1179,6 @@ func TestSplitRemoteRefAndBaseName(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		tt := tt
 		t.Run(tt.ref, func(t *testing.T) {
 			gotRemote, gotRel := splitRemoteRef(tt.ref)
 			if gotRemote != tt.wantRemote || gotRel != tt.wantRel {
@@ -1271,7 +1269,6 @@ func TestRemoteDirRef(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			if got := remoteDirRef(tt.ref); got != tt.want {
 				t.Fatalf("remoteDirRef(%q) = %q, want %q", tt.ref, got, tt.want)

@@ -924,7 +924,6 @@ func TestExtractLogKeyFromBackup(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			host, ts, ok := extractLogKeyFromBackup(tt.backupFile)
 			if ok != tt.wantOK {
@@ -953,7 +952,6 @@ func TestComputeRemaining(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			remain, ok := computeRemaining(tt.initial, tt.deleted)
 			if ok != tt.wantOK || remain != tt.wantRemain {

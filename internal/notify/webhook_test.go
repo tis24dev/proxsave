@@ -656,7 +656,6 @@ func TestWebhookNotifier_buildPayload_CoversFormats(t *testing.T) {
 	data := createTestNotificationData()
 	formats := []string{"discord", "slack", "teams", "generic", "unknown"}
 	for _, format := range formats {
-		format := format
 		t.Run(format, func(t *testing.T) {
 			ep := config.WebhookEndpoint{Name: "x", URL: "https://example.com", Format: format}
 			payload, err := notifier.buildPayload(ep, data)

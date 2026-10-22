@@ -552,7 +552,6 @@ func (c *Collector) runPBSPXARStep(ctx context.Context, state *pbsPxarState, fn 
 	)
 
 	for _, ds := range state.eligible {
-		ds := ds
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
