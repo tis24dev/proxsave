@@ -277,3 +277,31 @@ func TestReportNotifyOutcomesKeepsTheRowOfAFilteredChannel(t *testing.T) {
 		t.Fatalf("a switched-off channel is still pruned, got %+v", r)
 	}
 }
+
+// The child hands its results over as a map; the daemon pings and records the channels in
+// channel-name order, so the same results always reach the monitor in the same order.
+func TestReportNotifyOutcomesPingsInChannelNameOrder(t *testing.T) {
+	base := t.TempDir()
+	rid := "rid-order"
+	rep := &fakeReporter{checks: map[string]bool{
+		"notify-email":    true,
+		"notify-gotify":   true,
+		"notify-telegram": true,
+	}}
+	d := notifyDaemon(base, "self")
+	results := map[string]string{"Telegram": "ok", "Email": "error", "Gotify": "warning"}
+	if err := health.WriteNotifyResults(base, rid, time.Now().Unix(), results); err != nil {
+		t.Fatalf("WriteNotifyResults: %v", err)
+	}
+
+	d.reportNotifyOutcomes(context.Background(), rep, rid)
+
+	var got []string
+	for _, p := range rep.snapshot().pings {
+		got = append(got, p.name)
+	}
+	want := []string{"notify-email", "notify-gotify", "notify-telegram"}
+	if !slices.Equal(got, want) {
+		t.Fatalf("ping order = %v, want %v", got, want)
+	}
+}
