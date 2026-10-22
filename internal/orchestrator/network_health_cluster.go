@@ -211,7 +211,7 @@ func (i pvecmStatusInfo) Summary() string {
 
 func parsePvecmStatus(output string) pvecmStatusInfo {
 	var info pvecmStatusInfo
-	for _, line := range strings.Split(output, "\n") {
+	for line := range strings.SplitSeq(output, "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" {
 			continue

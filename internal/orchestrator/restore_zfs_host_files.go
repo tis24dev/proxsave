@@ -71,7 +71,7 @@ func listImportedZFSPools(ctx context.Context) ([]string, error) {
 		return nil, err
 	}
 	var pools []string
-	for _, line := range strings.Split(string(out), "\n") {
+	for line := range strings.SplitSeq(string(out), "\n") {
 		name := strings.TrimSpace(line)
 		if name != "" && name != "no pools available" {
 			pools = append(pools, name)

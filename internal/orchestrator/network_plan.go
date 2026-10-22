@@ -132,7 +132,7 @@ func parseIfupdownStanzaForInterface(config string, iface string) (addresses []s
 	}
 
 	var currentIface string
-	for _, raw := range strings.Split(config, "\n") {
+	for raw := range strings.SplitSeq(config, "\n") {
 		line := strings.TrimSpace(raw)
 		if line == "" || strings.HasPrefix(line, "#") {
 			continue

@@ -15,7 +15,7 @@ func (c *Collector) detectZFSUsage() (bool, string) {
 
 	// Strong indicator: ZFS filesystems currently mounted.
 	if data, err := os.ReadFile(c.systemPath("/proc/mounts")); err == nil && len(data) > 0 {
-		for _, line := range strings.Split(string(data), "\n") {
+		for line := range strings.SplitSeq(string(data), "\n") {
 			fields := strings.Fields(line)
 			if len(fields) >= 3 && fields[2] == "zfs" {
 				indicators = append(indicators, "mounted_zfs")
@@ -31,7 +31,7 @@ func (c *Collector) detectZFSUsage() (bool, string) {
 
 	// Medium indicator: fstab references ZFS.
 	if data, err := os.ReadFile(c.systemPath("/etc/fstab")); err == nil && len(data) > 0 {
-		for _, line := range strings.Split(string(data), "\n") {
+		for line := range strings.SplitSeq(string(data), "\n") {
 			line = strings.TrimSpace(line)
 			if line == "" || strings.HasPrefix(line, "#") {
 				continue

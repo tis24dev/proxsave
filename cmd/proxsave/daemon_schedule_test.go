@@ -67,7 +67,7 @@ func captureDaemonLogWith(t *testing.T, onEntry func(entry string)) func() []str
 	logging.SetDefaultLogger(l)
 	return func() []string {
 		var out []string
-		for _, line := range strings.Split(strings.TrimRight(sink.String(), "\n"), "\n") {
+		for line := range strings.SplitSeq(strings.TrimRight(sink.String(), "\n"), "\n") {
 			_, rest, ok := strings.Cut(line, "] ")
 			if !ok || len(rest) < 9 {
 				continue

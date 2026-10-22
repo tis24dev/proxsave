@@ -352,7 +352,7 @@ func withoutHardlinkAdvisory(reason string) string {
 // parseProcEffectiveUID reads the second numeric value from Linux's Uid line:
 // real, effective, saved-set, then filesystem UID.
 func parseProcEffectiveUID(data []byte) (int, error) {
-	for _, line := range strings.Split(string(data), "\n") {
+	for line := range strings.SplitSeq(string(data), "\n") {
 		fields := strings.Fields(line)
 		if len(fields) == 0 || fields[0] != "Uid:" {
 			continue

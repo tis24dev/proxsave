@@ -328,7 +328,7 @@ func inspectRcloneMetadataManifest(ctx context.Context, remoteMetadataPath, remo
 	legacy := &backup.Manifest{
 		ArchivePath: remoteArchivePath,
 	}
-	for _, rawLine := range strings.Split(string(data), "\n") {
+	for rawLine := range strings.SplitSeq(string(data), "\n") {
 		line := strings.TrimSpace(rawLine)
 		if line == "" || strings.HasPrefix(line, "#") {
 			continue

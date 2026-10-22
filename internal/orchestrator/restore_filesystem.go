@@ -253,7 +253,7 @@ var blkidKVRe = regexp.MustCompile(`([A-Za-z0-9_]+)=\"([^\"]*)\"`)
 
 func parseBlkidInventory(content string) map[string]fstabDeviceIdentity {
 	out := make(map[string]fstabDeviceIdentity)
-	for _, line := range strings.Split(content, "\n") {
+	for line := range strings.SplitSeq(content, "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" {
 			continue
@@ -687,7 +687,7 @@ func ensureFstabOption(options, option string) string {
 		return opt
 	}
 
-	for _, part := range strings.Split(opts, ",") {
+	for part := range strings.SplitSeq(opts, ",") {
 		if strings.TrimSpace(part) == opt {
 			return opts
 		}

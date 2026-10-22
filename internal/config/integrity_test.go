@@ -148,7 +148,7 @@ func TestAuditIgnoresVariablesThatConcatenateInsteadOfOverwriting(t *testing.T) 
 // template and sees nothing here.
 func TestAuditReportsAbsentAndUnknownAgainstTheEmbeddedTemplate(t *testing.T) {
 	var kept []string
-	for _, line := range strings.Split(DefaultEnvTemplate(), "\n") {
+	for line := range strings.SplitSeq(DefaultEnvTemplate(), "\n") {
 		trimmed := strings.TrimSpace(line)
 		if strings.HasPrefix(trimmed, "SCHEDULER_TIME=") || strings.HasPrefix(trimmed, "HEALTHCHECK_UPDATES_ID=") {
 			continue

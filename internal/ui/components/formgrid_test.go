@@ -244,7 +244,7 @@ func TestFormGridHintWrapsAtReadableWidth(t *testing.T) {
 	bindGrid(g)
 	view := g.View(180, 30) // very wide terminal
 	var first, second string
-	for _, l := range strings.Split(view, "\n") {
+	for l := range strings.SplitSeq(view, "\n") {
 		if strings.Contains(l, "redundant copies") {
 			first = l
 		}

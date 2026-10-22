@@ -310,7 +310,7 @@ func TestCheckLockFile_WritesExpectedContent(t *testing.T) {
 	}
 
 	var ts string
-	for _, line := range strings.Split(text, "\n") {
+	for line := range strings.SplitSeq(text, "\n") {
 		if strings.HasPrefix(line, "time=") {
 			ts = strings.TrimPrefix(line, "time=")
 			break

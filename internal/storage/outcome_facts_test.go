@@ -407,7 +407,7 @@ func TestCloudSidecarUploadFailureWithRetries(t *testing.T) {
 		t.Fatalf("Store = %v, want a StorageError with the primary saved", err)
 	}
 	var visible []string
-	for _, line := range strings.Split(stripTimes(buf.String()), "\n") {
+	for line := range strings.SplitSeq(stripTimes(buf.String()), "\n") {
 		if strings.HasPrefix(line, "INFO") || strings.HasPrefix(line, "WARNING") {
 			visible = append(visible, line)
 		}

@@ -166,7 +166,7 @@ func readIDMapOutsideZeroInfo(path string) IDMapOutsideZeroInfo {
 }
 
 func parseIDMapOutsideZero(content string) (outside0, length int64, ok bool) {
-	for _, line := range strings.Split(content, "\n") {
+	for line := range strings.SplitSeq(content, "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" {
 			continue

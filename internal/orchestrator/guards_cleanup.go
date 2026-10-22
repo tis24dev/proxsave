@@ -310,7 +310,7 @@ type mountinfoEntry struct {
 
 func parseMountinfoEntries(mountinfo string) []mountinfoEntry {
 	var entries []mountinfoEntry
-	for _, line := range strings.Split(mountinfo, "\n") {
+	for line := range strings.SplitSeq(mountinfo, "\n") {
 		fields := strings.Fields(strings.TrimSpace(line))
 		if len(fields) < 5 {
 			continue

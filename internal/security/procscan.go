@@ -38,8 +38,8 @@ func readProcInfo(pid int) procInfo {
 
 	if statusPath, err := safeexec.ProcPath(pid, "status"); err == nil {
 		if data, err := os.ReadFile(statusPath); err == nil {
-			lines := strings.Split(string(data), "\n")
-			for _, line := range lines {
+			lines := strings.SplitSeq(string(data), "\n")
+			for line := range lines {
 				if strings.HasPrefix(line, "PPid:") {
 					_, _ = fmt.Sscanf(line, "PPid:\t%d", &info.ppid)
 					break

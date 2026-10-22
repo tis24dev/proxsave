@@ -432,7 +432,7 @@ func charNormalize(raw, root string) []string {
 		return nil
 	}
 	var out []string
-	for _, line := range strings.Split(raw, "\n") {
+	for line := range strings.SplitSeq(raw, "\n") {
 		line = charStampRE.ReplaceAllString(line, "")
 		line = strings.ReplaceAll(line, root, "<ROOT>")
 		line = charDurationRE.ReplaceAllString(line, "duration=<D>)")

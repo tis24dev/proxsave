@@ -141,7 +141,7 @@ func isMountedFromMountinfo(mountinfo, path string) bool {
 		return false
 	}
 
-	for _, line := range strings.Split(mountinfo, "\n") {
+	for line := range strings.SplitSeq(mountinfo, "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" {
 			continue
@@ -169,7 +169,7 @@ func isMountedFromProcMounts(path string) (bool, error) {
 		return false, nil
 	}
 
-	for _, line := range strings.Split(string(data), "\n") {
+	for line := range strings.SplitSeq(string(data), "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" {
 			continue
@@ -288,7 +288,7 @@ func splitPath(rest string) []string {
 		return nil
 	}
 	var parts []string
-	for _, p := range strings.Split(rest, "/") {
+	for p := range strings.SplitSeq(rest, "/") {
 		if strings.TrimSpace(p) == "" {
 			continue
 		}

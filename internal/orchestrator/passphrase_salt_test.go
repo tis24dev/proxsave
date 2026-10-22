@@ -220,7 +220,7 @@ func TestPassphraseSaltForManifest(t *testing.T) {
 // recipient-file body.
 func countSaltCommentLines(content string) int {
 	n := 0
-	for _, line := range strings.Split(content, "\n") {
+	for line := range strings.SplitSeq(content, "\n") {
 		if strings.HasPrefix(strings.TrimSpace(line), passphraseSaltCommentPrefix) {
 			n++
 		}

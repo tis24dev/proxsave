@@ -589,7 +589,7 @@ func logStorageInitSummary(summary string, warn bool) {
 		return
 	}
 	lines := make([]string, 0, 8)
-	for _, line := range strings.Split(summary, "\n") {
+	for line := range strings.SplitSeq(summary, "\n") {
 		if strings.TrimSpace(line) != "" {
 			lines = append(lines, line)
 		}

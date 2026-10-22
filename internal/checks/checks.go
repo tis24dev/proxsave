@@ -352,7 +352,7 @@ type lockFileMetadata struct {
 
 func parseLockFileMetadata(content []byte) lockFileMetadata {
 	meta := lockFileMetadata{}
-	for _, line := range strings.Split(string(content), "\n") {
+	for line := range strings.SplitSeq(string(content), "\n") {
 		line = strings.TrimSpace(line)
 		switch {
 		case strings.HasPrefix(line, "pid="):

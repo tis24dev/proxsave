@@ -1213,7 +1213,7 @@ func commandLineMatches(signature, commandLine string) bool {
 		return false
 	}
 	usesPattern := strings.HasPrefix(sig, "regex:") || strings.Contains(sig, "*")
-	for _, tok := range strings.Fields(commandLine) {
+	for tok := range strings.FieldsSeq(commandLine) {
 		candidates := [2]string{tok, ""}
 		if base := filepath.Base(tok); base != tok {
 			candidates[1] = base

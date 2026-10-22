@@ -135,7 +135,7 @@ func listPVEPoolIDs(ctx context.Context) (map[string]struct{}, error) {
 	}
 
 	out := make(map[string]struct{})
-	for _, line := range strings.Split(raw, "\n") {
+	for line := range strings.SplitSeq(raw, "\n") {
 		fields := strings.Fields(strings.TrimSpace(line))
 		if len(fields) == 0 {
 			continue

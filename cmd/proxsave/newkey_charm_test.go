@@ -221,7 +221,7 @@ func TestRunNewKeyTUISavesRecipient(t *testing.T) {
 	// the sibling salt file cannot lose it). Assert both: a real recipient line
 	// and the co-located salt comment.
 	var gotRecipient, gotSaltComment bool
-	for _, line := range strings.Split(string(data), "\n") {
+	for line := range strings.SplitSeq(string(data), "\n") {
 		trimmed := strings.TrimSpace(line)
 		if strings.HasPrefix(trimmed, "age1") {
 			gotRecipient = true

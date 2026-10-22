@@ -50,7 +50,7 @@ func adapterSyncLog(t *testing.T, storeErr, retentionErr error) (string, *Backup
 	}
 
 	out := buf.String()
-	for _, line := range strings.Split(strings.TrimRight(out, "\n"), "\n") {
+	for line := range strings.SplitSeq(strings.TrimRight(out, "\n"), "\n") {
 		if strings.Contains(line, "operations completed") && closeLevelOf(t, line) != "DEBUG" {
 			t.Fatalf("a closing summary line came back above DEBUG:\n%s", line)
 		}
@@ -61,7 +61,7 @@ func adapterSyncLog(t *testing.T, storeErr, retentionErr error) (string, *Backup
 // lineWith returns the first rendered line containing want, or fails.
 func lineWith(t *testing.T, out, want string) string {
 	t.Helper()
-	for _, line := range strings.Split(strings.TrimRight(out, "\n"), "\n") {
+	for line := range strings.SplitSeq(strings.TrimRight(out, "\n"), "\n") {
 		if strings.Contains(line, want) {
 			return line
 		}

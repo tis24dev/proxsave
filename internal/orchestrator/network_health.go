@@ -302,7 +302,7 @@ func readResolvConfNameservers() ([]string, error) {
 		return nil, err
 	}
 	var out []string
-	for _, line := range strings.Split(string(data), "\n") {
+	for line := range strings.SplitSeq(string(data), "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" || strings.HasPrefix(line, "#") || strings.HasPrefix(line, ";") {
 			continue
@@ -387,7 +387,7 @@ func ipGlobalAddresses(ctx context.Context, iface string, timeout time.Duration)
 	}
 
 	var addrs []string
-	for _, line := range strings.Split(string(output), "\n") {
+	for line := range strings.SplitSeq(string(output), "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" {
 			continue

@@ -380,7 +380,7 @@ func TestStartedScriptsGetNoShellNoArgumentsAndAnUnchangedEnvironment(t *testing
 			parent[kv] = true
 		}
 		seen := map[string]bool{}
-		for _, kv := range strings.Split(strings.TrimRight(string(raw), "\n"), "\n") {
+		for kv := range strings.SplitSeq(strings.TrimRight(string(raw), "\n"), "\n") {
 			if kv == "" {
 				continue
 			}
@@ -764,7 +764,7 @@ func parkedParentOpens(t *testing.T) int {
 	buf := make([]byte, 1<<20)
 	stacks := string(buf[:runtime.Stack(buf, true)])
 	parked := 0
-	for _, goroutine := range strings.Split(stacks, "\n\n") {
+	for goroutine := range strings.SplitSeq(stacks, "\n\n") {
 		if strings.Contains(goroutine, "os.openRootNolog") || strings.Contains(goroutine, "os.OpenRoot(") {
 			parked++
 		}

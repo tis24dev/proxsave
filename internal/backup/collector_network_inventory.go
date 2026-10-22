@@ -197,7 +197,7 @@ func (c *Collector) readUdevProperties(ctx context.Context, netPath string) (map
 		return nil, err
 	}
 	props := make(map[string]string)
-	for _, line := range strings.Split(string(output), "\n") {
+	for line := range strings.SplitSeq(string(output), "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" || !strings.Contains(line, "=") {
 			continue
@@ -231,7 +231,7 @@ func (c *Collector) readDriverFromEthtool(ctx context.Context, iface string) (st
 	if err != nil {
 		return "", err
 	}
-	for _, line := range strings.Split(string(output), "\n") {
+	for line := range strings.SplitSeq(string(output), "\n") {
 		line = strings.TrimSpace(line)
 		if strings.HasPrefix(line, "driver:") {
 			return strings.TrimSpace(strings.TrimPrefix(line, "driver:")), nil
@@ -242,7 +242,7 @@ func (c *Collector) readDriverFromEthtool(ctx context.Context, iface string) (st
 
 func parseEthtoolPermanentMAC(output string) string {
 	const prefix = "permanent address:"
-	for _, line := range strings.Split(output, "\n") {
+	for line := range strings.SplitSeq(output, "\n") {
 		line = strings.TrimSpace(line)
 		lower := strings.ToLower(line)
 		if strings.HasPrefix(lower, prefix) {

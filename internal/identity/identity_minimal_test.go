@@ -156,7 +156,7 @@ func rejectedNames(t *testing.T, baseDir string) []string {
 
 func payloadParts(t *testing.T, content string) []string {
 	t.Helper()
-	for _, line := range strings.Split(content, "\n") {
+	for line := range strings.SplitSeq(content, "\n") {
 		line = strings.TrimSpace(line)
 		if !strings.HasPrefix(line, "SYSTEM_CONFIG_DATA=") {
 			continue

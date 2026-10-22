@@ -1603,7 +1603,7 @@ func hostBootUnix() int64 {
 	if err != nil {
 		return 0
 	}
-	for _, line := range strings.Split(string(data), "\n") {
+	for line := range strings.SplitSeq(string(data), "\n") {
 		rest, ok := strings.CutPrefix(line, "btime ")
 		if !ok {
 			continue

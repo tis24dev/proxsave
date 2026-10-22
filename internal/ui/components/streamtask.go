@@ -513,7 +513,7 @@ func lipglossCount(s string, width int) int {
 		width = 1
 	}
 	rows := 0
-	for _, seg := range strings.Split(s, "\n") {
+	for seg := range strings.SplitSeq(s, "\n") {
 		w := ansi.StringWidth(seg)
 		if w <= width {
 			rows++

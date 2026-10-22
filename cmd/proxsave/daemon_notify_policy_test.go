@@ -151,7 +151,7 @@ func TestRefreshNotifyPolicySendsAHandEditBeforeTheRun(t *testing.T) {
 // debugEntries is a captureDaemonDebug buffer as "LEVEL message" entries, like captureDaemonLog.
 func debugEntries(raw string) []string {
 	var out []string
-	for _, line := range strings.Split(strings.TrimRight(raw, "\n"), "\n") {
+	for line := range strings.SplitSeq(strings.TrimRight(raw, "\n"), "\n") {
 		_, rest, ok := strings.Cut(line, "] ")
 		if !ok || len(rest) < 9 {
 			continue

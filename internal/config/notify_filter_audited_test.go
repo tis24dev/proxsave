@@ -100,7 +100,7 @@ func TestTheShippedTemplateAssignsNotifyOnAtTheDefault(t *testing.T) {
 	}
 
 	var active []string
-	for _, line := range strings.Split(DefaultEnvTemplate(), "\n") {
+	for line := range strings.SplitSeq(DefaultEnvTemplate(), "\n") {
 		if strings.HasPrefix(strings.TrimSpace(line), "NOTIFY_ON=") {
 			active = append(active, line)
 		}

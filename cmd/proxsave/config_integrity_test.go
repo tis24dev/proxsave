@@ -79,7 +79,7 @@ func TestIntegrityDebugCountsPrecedeTheVerdict(t *testing.T) {
 // the run log: at DEBUG the subsystems interleave and a bare variable name has no owner.
 func TestIntegrityDebugLinesAllNameTheirSubsystem(t *testing.T) {
 	logged := renderIntegrityBlock(t, integrityReportWithFindings())
-	for _, line := range strings.Split(logged, "\n") {
+	for line := range strings.SplitSeq(logged, "\n") {
 		if !strings.Contains(line, "DEBUG") {
 			continue
 		}

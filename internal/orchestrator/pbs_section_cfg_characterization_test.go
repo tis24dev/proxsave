@@ -644,7 +644,7 @@ func runPBSSectionCharScenario(t *testing.T, k pbsSectionCharKind, sc pbsSection
 	err := k.apply(ctx, logger, pbsSectionCharStageRoot, sc.strict)
 
 	var lines []string
-	for _, line := range strings.Split(strings.TrimRight(buf.String(), "\n"), "\n") {
+	for line := range strings.SplitSeq(strings.TrimRight(buf.String(), "\n"), "\n") {
 		if line == "" {
 			continue
 		}
@@ -671,7 +671,7 @@ func renderPBSSectionChar(sc pbsSectionCharScenario, run pbsSectionCharRun) stri
 		b.WriteString("staged: (no file)\n")
 	} else {
 		b.WriteString("staged:\n")
-		for _, line := range strings.Split(*sc.staged, "\n") {
+		for line := range strings.SplitSeq(*sc.staged, "\n") {
 			fmt.Fprintf(&b, "  %s\n", strconv.Quote(line))
 		}
 	}
@@ -865,7 +865,7 @@ func loadPBSSectionCharGolden(t *testing.T, path string) (map[string]string, []s
 		}
 		blocks[current] = strings.TrimRight(strings.Join(lines, "\n"), "\n") + "\n"
 	}
-	for _, line := range strings.Split(string(raw), "\n") {
+	for line := range strings.SplitSeq(string(raw), "\n") {
 		if strings.HasPrefix(line, "### ") {
 			flush()
 			current = strings.TrimPrefix(line, "### ")

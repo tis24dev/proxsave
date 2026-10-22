@@ -114,7 +114,7 @@ func TestPersonalScriptPathsAreReadFromTheConfig(t *testing.T) {
 func TestTemplateCarriesThePersonalScriptWarningInline(t *testing.T) {
 	for _, key := range []string{"PERSONAL_SCRIPT_PRE_RUN=", "PERSONAL_SCRIPT_POST_RUN="} {
 		var found bool
-		for _, line := range strings.Split(DefaultEnvTemplate(), "\n") {
+		for line := range strings.SplitSeq(DefaultEnvTemplate(), "\n") {
 			if strings.HasPrefix(strings.TrimSpace(line), key) {
 				found = true
 				if !strings.Contains(line, personalScriptWarning) {

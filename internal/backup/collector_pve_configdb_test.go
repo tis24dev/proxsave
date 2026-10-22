@@ -150,7 +150,7 @@ func TestConfigDBRawFallbackIsLoud(t *testing.T) {
 	}
 	out := buf.String()
 	var warned bool
-	for _, l := range strings.Split(out, "\n") {
+	for l := range strings.SplitSeq(out, "\n") {
 		if strings.Contains(l, "] WARNING") && strings.Contains(l, "sqlite snapshot failed") {
 			warned = true
 		}

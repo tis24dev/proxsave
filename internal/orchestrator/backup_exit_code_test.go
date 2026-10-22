@@ -319,7 +319,7 @@ func backupExitIssueLines(logPath string) string {
 		return fmt.Sprintf("  (run log unreadable: %v)", err)
 	}
 	var lines []string
-	for _, line := range strings.Split(string(data), "\n") {
+	for line := range strings.SplitSeq(string(data), "\n") {
 		if kind, msg := classifyLogLine(line); kind != "" && msg != "" {
 			lines = append(lines, "  "+strings.TrimSpace(line))
 		}

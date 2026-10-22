@@ -209,7 +209,7 @@ func parseMailQueue(output, recipient string) (count int, entries []mailQueueEnt
 	lowerRecipient := strings.ToLower(strings.TrimSpace(recipient))
 	var currentID string
 	seen := map[string]bool{}
-	for _, line := range strings.Split(output, "\n") {
+	for line := range strings.SplitSeq(output, "\n") {
 		if len(line) > 10 && strings.Contains(line, "@") && !strings.Contains(line, "Mail queue") && !strings.Contains(line, "Total requests") {
 			count++
 		}

@@ -336,7 +336,7 @@ func TestSendViaCloudRelay_RetryLinesNameTheAttempt(t *testing.T) {
 		}, EmailRelayPayload{To: "dest@test.invalid", Subject: "subject", Report: map[string]any{"ok": true},
 			Timestamp: time.Now().Unix(), ServerMAC: "00:11:22:33:44:55", ScriptVersion: "0.0.1", ServerID: "server-id"}, logger)
 		var warnings []string
-		for _, line := range strings.Split(buf.String(), "\n") {
+		for line := range strings.SplitSeq(buf.String(), "\n") {
 			if _, rest, ok := strings.Cut(line, "WARNING"); ok {
 				warnings = append(warnings, strings.TrimSpace(rest))
 			}

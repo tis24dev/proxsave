@@ -165,7 +165,7 @@ func readVMName(confPath string) string {
 	if err != nil {
 		return ""
 	}
-	for _, line := range strings.Split(string(data), "\n") {
+	for line := range strings.SplitSeq(string(data), "\n") {
 		t := strings.TrimSpace(line)
 		if strings.HasPrefix(t, "name:") {
 			return strings.TrimSpace(strings.TrimPrefix(t, "name:"))
@@ -819,7 +819,7 @@ func parseStorageBlocks(cfgPath string) ([]storageBlock, error) {
 		}
 	}
 
-	for _, line := range strings.Split(string(data), "\n") {
+	for line := range strings.SplitSeq(string(data), "\n") {
 		trimmed := strings.TrimSpace(line)
 		if trimmed == "" {
 			flush()

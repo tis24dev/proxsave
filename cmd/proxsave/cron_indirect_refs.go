@@ -392,7 +392,7 @@ func pathLivesInProxsaveTree(token string) bool {
 	if !strings.Contains(path, "/") {
 		return false
 	}
-	for _, part := range strings.Split(strings.ToLower(filepath.Dir(path)), "/") {
+	for part := range strings.SplitSeq(strings.ToLower(filepath.Dir(path)), "/") {
 		if part == "proxsave" {
 			return true
 		}
@@ -957,7 +957,7 @@ func scriptProxsavePathVars(lines []string) map[string]string {
 			continue
 		}
 		for _, segment := range splitShellSegments(trimmed) {
-			for _, word := range strings.Fields(segment) {
+			for word := range strings.FieldsSeq(segment) {
 				idx := strings.Index(word, "=")
 				if !looksLikeEnvAssignment(word) {
 					// An assigning expansion is an assignment the shell performs inside a

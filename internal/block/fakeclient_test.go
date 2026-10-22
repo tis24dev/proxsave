@@ -83,7 +83,7 @@ func (f *fakeClient) calls(t *testing.T) []fakeCall {
 	}
 	var calls []fakeCall
 	var current *fakeCall
-	for _, line := range strings.Split(string(data), "\n") {
+	for line := range strings.SplitSeq(string(data), "\n") {
 		kind, value, _ := strings.Cut(line, " ")
 		switch kind {
 		case "call":

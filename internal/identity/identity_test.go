@@ -906,7 +906,7 @@ func TestMaybeUpgradeIdentityFileRewritesLegacyToV2WithAltMACs(t *testing.T) {
 func extractIdentityKeyField(t *testing.T, fileContent string) string {
 	t.Helper()
 
-	for _, line := range strings.Split(fileContent, "\n") {
+	for line := range strings.SplitSeq(fileContent, "\n") {
 		line = strings.TrimSpace(line)
 		if !strings.HasPrefix(line, "SYSTEM_CONFIG_DATA=") {
 			continue

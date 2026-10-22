@@ -13,7 +13,7 @@ func parseMutatedEnvTemplate(t *testing.T, template string) (map[string]string, 
 	values := make(map[string]string)
 	counts := make(map[string]int)
 
-	for _, line := range strings.Split(template, "\n") {
+	for line := range strings.SplitSeq(template, "\n") {
 		trimmed := strings.TrimSpace(line)
 		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
 			continue

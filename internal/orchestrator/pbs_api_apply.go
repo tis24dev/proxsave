@@ -705,7 +705,7 @@ func pbsSectionFileBlocks(content string) map[string][]string {
 		}
 		name, lines = "", nil
 	}
-	for _, line := range strings.Split(content, "\n") {
+	for line := range strings.SplitSeq(content, "\n") {
 		trimmed := strings.TrimSpace(line)
 		if trimmed != "" && !strings.HasPrefix(trimmed, "#") {
 			if _, header, ok := parseProxmoxNotificationHeader(trimmed); ok {
@@ -1785,7 +1785,7 @@ var pbsNodeSecretFlags = []string{"--http-proxy"}
 // in the file's order, the description last.
 func pbsNodeUpdateFlags(raw string) (flags, keys []string) {
 	var description []string
-	for _, line := range strings.Split(raw, "\n") {
+	for line := range strings.SplitSeq(raw, "\n") {
 		trimmed := strings.TrimSpace(line)
 		if trimmed == "" {
 			continue

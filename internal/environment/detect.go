@@ -649,7 +649,7 @@ func dpkgPackageInstalled(pkg string) (string, bool) {
 // that produced its verdict. Re-reading per package would let a status file that
 // became unreadable between reads come back as a clean "not installed".
 func dpkgPackageInstalledIn(data []byte, pkg string) (string, bool) {
-	for _, stanza := range strings.Split(string(data), "\n\n") {
+	for stanza := range strings.SplitSeq(string(data), "\n\n") {
 		if dpkgStanzaField(stanza, "Package") != pkg {
 			continue
 		}
@@ -669,7 +669,7 @@ func dpkgPackageInstalledIn(data []byte, pkg string) (string, bool) {
 // stanza, anchored at column 0 so an indented continuation line never matches.
 func dpkgStanzaField(stanza, key string) string {
 	prefix := key + ":"
-	for _, line := range strings.Split(stanza, "\n") {
+	for line := range strings.SplitSeq(stanza, "\n") {
 		if strings.HasPrefix(line, prefix) {
 			return strings.TrimSpace(line[len(prefix):])
 		}
@@ -776,7 +776,7 @@ func detectPBSViaVersionFile() (string, markerOutcome) {
 func extendPath() {
 	currentPath := os.Getenv("PATH")
 	pathSet := make(map[string]struct{})
-	for _, part := range strings.Split(currentPath, string(os.PathListSeparator)) {
+	for part := range strings.SplitSeq(currentPath, string(os.PathListSeparator)) {
 		pathSet[part] = struct{}{}
 	}
 

@@ -468,7 +468,7 @@ func readUdevProperties(ctx context.Context, netPath string) (map[string]string,
 		return nil, err
 	}
 	props := make(map[string]string)
-	for _, line := range strings.Split(string(output), "\n") {
+	for line := range strings.SplitSeq(string(output), "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" || !strings.Contains(line, "=") {
 			continue
@@ -485,7 +485,7 @@ func readUdevProperties(ctx context.Context, netPath string) (map[string]string,
 
 func parsePermanentMAC(output string) string {
 	const prefix = "permanent address:"
-	for _, line := range strings.Split(output, "\n") {
+	for line := range strings.SplitSeq(output, "\n") {
 		line = strings.TrimSpace(line)
 		lower := strings.ToLower(line)
 		if strings.HasPrefix(lower, prefix) {

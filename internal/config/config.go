@@ -1566,8 +1566,8 @@ func (c *Config) BuildWebhookConfig() *WebhookConfig {
 		headersStr := c.getString(prefix+"HEADERS", "")
 		if headersStr != "" {
 			// Format: "Key1:Value1,Key2:Value2"
-			pairs := strings.Split(headersStr, ",")
-			for _, pair := range pairs {
+			pairs := strings.SplitSeq(headersStr, ",")
+			for pair := range pairs {
 				parts := strings.SplitN(strings.TrimSpace(pair), ":", 2)
 				if len(parts) == 2 {
 					headers[strings.TrimSpace(parts[0])] = strings.TrimSpace(parts[1])

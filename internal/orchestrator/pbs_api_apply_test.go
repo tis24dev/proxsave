@@ -799,7 +799,7 @@ func TestApplyPBSRemoteCfgViaAPI_DecodesBase64Password(t *testing.T) {
 			t.Fatalf("calls=%v want %v", runner.calls, want)
 		}
 		var lines []string
-		for _, line := range strings.Split(strings.TrimRight(logBuf.String(), "\n"), "\n") {
+		for line := range strings.SplitSeq(strings.TrimRight(logBuf.String(), "\n"), "\n") {
 			if strings.Contains(line, "base64") {
 				lines = append(lines, line)
 			}

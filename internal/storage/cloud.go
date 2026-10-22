@@ -1811,7 +1811,7 @@ func (c *CloudStorage) remoteSHA256(ctx context.Context, remoteFile string, down
 	// Output format: "<hex-hash><spaces><path>", one line per object, on stdout. A
 	// blank hash field (backend cannot hash) yields a single field and is skipped.
 	want := remoteBaseName(remoteFile)
-	for _, line := range strings.Split(string(output.stdout), "\n") {
+	for line := range strings.SplitSeq(string(output.stdout), "\n") {
 		line = strings.TrimSpace(line)
 		fields := strings.Fields(line)
 		if len(fields) < 2 {
@@ -1894,8 +1894,8 @@ func (c *CloudStorage) verifyAlternative(ctx context.Context, remoteFile string,
 	}
 
 	// Search for filename in the listing (stdout)
-	lines := strings.Split(string(output.stdout), "\n")
-	for _, line := range lines {
+	lines := strings.SplitSeq(string(output.stdout), "\n")
+	for line := range lines {
 		line = strings.TrimSpace(line)
 		if line == "" {
 			continue
@@ -2403,7 +2403,7 @@ func (c *CloudStorage) countLogFiles(ctx context.Context) int {
 	c.markCloudLogPathAvailable()
 
 	var names []string
-	for _, line := range strings.Split(string(output.stdout), "\n") {
+	for line := range strings.SplitSeq(string(output.stdout), "\n") {
 		if name := strings.TrimSpace(line); name != "" && !strings.HasSuffix(name, "/") {
 			names = append(names, name)
 		}
@@ -2601,7 +2601,7 @@ func (c *CloudStorage) listLogNames(ctx context.Context, base string) ([]string,
 		return nil, &rcloneCommandError{msg: rcloneFailureDetail(msg, err), short: rcloneCause(msg, err), err: err}
 	}
 	var names []string
-	for _, line := range strings.Split(string(output.stdout), "\n") {
+	for line := range strings.SplitSeq(string(output.stdout), "\n") {
 		name := strings.TrimSpace(line)
 		if name == "" || strings.HasSuffix(name, "/") {
 			continue

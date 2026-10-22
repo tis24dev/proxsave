@@ -339,7 +339,7 @@ type pbsACLLine struct {
 }
 
 func isPBSACLLineFormat(content string) bool {
-	for _, line := range strings.Split(content, "\n") {
+	for line := range strings.SplitSeq(content, "\n") {
 		trimmed := strings.TrimSpace(line)
 		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
 			continue
@@ -379,7 +379,7 @@ func applyPBSACLLineFormat(raw string) error {
 	var outLines []string
 	var hasRootAdmin bool
 
-	for _, line := range strings.Split(raw, "\n") {
+	for line := range strings.SplitSeq(raw, "\n") {
 		entry, ok := parsePBSACLLine(line)
 		if !ok {
 			continue
@@ -425,7 +425,7 @@ func filterPBSACLUsers(raw string) (string, bool) {
 
 	trimmed = strings.ReplaceAll(trimmed, ",", " ")
 	var kept []string
-	for _, field := range strings.Fields(trimmed) {
+	for field := range strings.FieldsSeq(trimmed) {
 		field = strings.TrimSpace(field)
 		if field == "" {
 			continue
@@ -1117,7 +1117,7 @@ func listContains(raw, item string) bool {
 		return false
 	}
 	trimmed = strings.ReplaceAll(trimmed, ",", " ")
-	for _, field := range strings.Fields(trimmed) {
+	for field := range strings.FieldsSeq(trimmed) {
 		if strings.TrimSpace(field) == item {
 			return true
 		}
@@ -1126,7 +1126,7 @@ func listContains(raw, item string) bool {
 }
 
 func aclPathFromSectionName(name string) string {
-	for _, field := range strings.Fields(strings.TrimSpace(name)) {
+	for field := range strings.FieldsSeq(strings.TrimSpace(name)) {
 		if strings.HasPrefix(field, "/") {
 			return field
 		}

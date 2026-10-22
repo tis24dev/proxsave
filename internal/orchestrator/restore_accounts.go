@@ -527,7 +527,7 @@ func addGroupMembers(line string, add []string) string {
 	}
 	seen := map[string]bool{}
 	var members []string
-	for _, m := range strings.Split(parts[3], ",") {
+	for m := range strings.SplitSeq(parts[3], ",") {
 		m = strings.TrimSpace(m)
 		if m != "" && !seen[m] {
 			seen[m] = true
@@ -546,7 +546,7 @@ func addGroupMembers(line string, add []string) string {
 
 func splitNonEmptyLines(content string) []string {
 	var out []string
-	for _, raw := range strings.Split(content, "\n") {
+	for raw := range strings.SplitSeq(content, "\n") {
 		line := strings.TrimRight(raw, "\r")
 		if strings.TrimSpace(line) == "" {
 			continue

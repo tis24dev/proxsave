@@ -62,7 +62,7 @@ func (e *pveMappingEntry) UnmarshalJSON(data []byte) error {
 // parsePVEPropertyString splits a PVE property string "k=v,k=v" into its fields.
 func parsePVEPropertyString(s string) map[string]string {
 	out := make(map[string]string)
-	for _, part := range strings.Split(s, ",") {
+	for part := range strings.SplitSeq(s, ",") {
 		part = strings.TrimSpace(part)
 		if part == "" {
 			continue

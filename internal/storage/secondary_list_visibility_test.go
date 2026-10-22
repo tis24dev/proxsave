@@ -38,7 +38,7 @@ func newSecondaryWithCapturedLog(t *testing.T, dir string) (*SecondaryStorage, *
 
 func warningLines(out string) []string {
 	var got []string
-	for _, line := range strings.Split(out, "\n") {
+	for line := range strings.SplitSeq(out, "\n") {
 		if strings.Contains(line, "WARNING") {
 			got = append(got, line)
 		}
@@ -59,7 +59,7 @@ func warningText(out string) string { return strings.Join(warningLines(out), "\n
 // the WARNING carries the datum: the count and the consequence.
 func itemLines(out string) []string {
 	var got []string
-	for _, line := range strings.Split(out, "\n") {
+	for line := range strings.SplitSeq(out, "\n") {
 		if strings.Contains(line, "DEBUG") && strings.Contains(line, "listing incomplete - ") {
 			got = append(got, line)
 		}
@@ -267,7 +267,7 @@ func TestAVanishedLocationIsNamedInsteadOfReturningNothingInSilence(t *testing.T
 		t.Fatalf("listing gap = %+v, want 4 archives not listed, no such file or directory", s.lastListGap)
 	}
 	var detail string
-	for _, line := range strings.Split(out, "\n") {
+	for line := range strings.SplitSeq(out, "\n") {
 		if strings.Contains(line, "DEBUG") && strings.Contains(line, "location stopped answering") {
 			detail = line
 		}

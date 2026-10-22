@@ -199,8 +199,8 @@ func parseUdevNetNamingOverrideLine(line string) (name, mac string) {
 		return "", ""
 	}
 
-	parts := strings.Split(trimmed, ",")
-	for _, part := range parts {
+	parts := strings.SplitSeq(trimmed, ",")
+	for part := range parts {
 		p := strings.TrimSpace(part)
 		if p == "" {
 			continue
@@ -286,7 +286,7 @@ func parseSystemdLinkNamingOverrides(source, content string) []nicNamingOverride
 		switch section {
 		case "match":
 			if key == "macaddress" {
-				for _, raw := range strings.Fields(value) {
+				for raw := range strings.FieldsSeq(value) {
 					normalized := normalizeMAC(raw)
 					if normalized != "" {
 						macs = append(macs, normalized)

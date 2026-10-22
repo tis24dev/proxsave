@@ -221,7 +221,7 @@ EOF
 		if strings.Contains(text, "Detected queue ID") {
 			t.Fatalf("level %v: a mail queue ID was printed:\n%s", level, text)
 		}
-		for _, line := range strings.Split(text, "\n") {
+		for line := range strings.SplitSeq(text, "\n") {
 			if !strings.Contains(line, "queue ID") && !strings.Contains(line, "queue_id=") {
 				continue
 			}

@@ -553,7 +553,7 @@ func parsableVersionCore(v string) bool {
 	if v == "" {
 		return false
 	}
-	for _, part := range strings.Split(v, ".") {
+	for part := range strings.SplitSeq(v, ".") {
 		if part == "" {
 			return false
 		}
@@ -831,8 +831,8 @@ func verifyChecksum(root *os.Root, checksumName, filename string, bootstrap *log
 	}
 
 	expected := ""
-	lines := bytes.Split(checksums, []byte("\n"))
-	for _, line := range lines {
+	lines := bytes.SplitSeq(checksums, []byte("\n"))
+	for line := range lines {
 		if len(line) == 0 {
 			continue
 		}

@@ -74,7 +74,7 @@ func parseImmutableGuardTargets(data []byte) []string {
 	}
 	seen := make(map[string]struct{})
 	var out []string
-	for _, line := range strings.Split(string(data), "\n") {
+	for line := range strings.SplitSeq(string(data), "\n") {
 		clean := filepath.Clean(strings.TrimSpace(line))
 		if !isValidGuardTarget(clean) {
 			continue

@@ -915,7 +915,7 @@ func createTempFile(t *testing.T, content string) string {
 
 func parseWrittenEnvForTest(content string) map[string]string {
 	values := map[string]string{}
-	for _, line := range strings.Split(content, "\n") {
+	for line := range strings.SplitSeq(content, "\n") {
 		trimmed := strings.TrimSpace(line)
 		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
 			continue

@@ -216,7 +216,7 @@ func grubMentionsCmdlineDefault(line string) bool {
 // GRUB_CMDLINE_LINUX_DEFAULT. update-grub reads the drop-ins after /etc/default/grub,
 // so a value written there could be overridden or rebuilt.
 func grubDropInSetsCmdlineDefault(content string) bool {
-	for _, line := range strings.Split(content, "\n") {
+	for line := range strings.SplitSeq(content, "\n") {
 		if grubMentionsCmdlineDefault(line) {
 			return true
 		}
@@ -355,7 +355,7 @@ func detectBootTarget(ctx context.Context, destRoot string) bootTarget {
 	}
 	modes := map[string]bool{}
 	esps := 0
-	for _, line := range strings.Split(string(out), "\n") {
+	for line := range strings.SplitSeq(string(out), "\n") {
 		m := proxmoxBootStatusLine.FindStringSubmatch(strings.TrimSpace(line))
 		if m == nil {
 			continue
@@ -406,7 +406,7 @@ func bootPathExists(path string) bool {
 
 func nonEmptyLines(s string) []string {
 	var out []string
-	for _, line := range strings.Split(s, "\n") {
+	for line := range strings.SplitSeq(s, "\n") {
 		if strings.TrimSpace(line) != "" {
 			out = append(out, line)
 		}

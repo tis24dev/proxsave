@@ -68,7 +68,7 @@ func stagingFilesystemFacts(path string) (fsType, size string) {
 		return fsType, size
 	}
 	best := -1
-	for _, line := range strings.Split(string(data), "\n") {
+	for line := range strings.SplitSeq(string(data), "\n") {
 		fields := strings.Fields(line)
 		if len(fields) < 3 {
 			continue

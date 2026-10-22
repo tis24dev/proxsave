@@ -1341,7 +1341,7 @@ func TestNameRuleOnlyFiresWhenTheScriptCannotBeRead(t *testing.T) {
 // happily when the words it looks for have moved down into a line that level hides.
 func warningLine(t *testing.T, out string) string {
 	t.Helper()
-	for _, line := range strings.Split(out, "\n") {
+	for line := range strings.SplitSeq(out, "\n") {
 		if strings.Contains(line, "WARNING") {
 			return line
 		}

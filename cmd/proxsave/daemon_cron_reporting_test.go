@@ -227,7 +227,7 @@ func TestApplyCronModeAlwaysWritesTheCronLineAndReportsTheFinding(t *testing.T) 
 		t.Errorf("want exactly one WARNING, got %d, out=%q", got, seen)
 	}
 	warn := ""
-	for _, line := range strings.Split(seen, "\n") {
+	for line := range strings.SplitSeq(seen, "\n") {
 		if strings.Contains(line, "WARNING") {
 			warn = line
 			break
@@ -448,7 +448,7 @@ func TestApplyCronModeAdvisoryUsesOneWarning(t *testing.T) {
 	}
 	// The surviving WARNING is the ownership line, and nothing else may be promoted to it.
 	warn := ""
-	for _, line := range strings.Split(seen, "\n") {
+	for line := range strings.SplitSeq(seen, "\n") {
 		if strings.Contains(line, "WARNING") {
 			warn = line
 			break

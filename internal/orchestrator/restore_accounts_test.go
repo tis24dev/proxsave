@@ -431,7 +431,7 @@ func TestMergeGroupNewGroupDropsNonImportedMembers(t *testing.T) {
 		t.Fatalf("brand-new regular group 'team' should be imported:\n%s", merged)
 	}
 	var teamMembers string
-	for _, line := range strings.Split(merged, "\n") {
+	for line := range strings.SplitSeq(merged, "\n") {
 		if strings.HasPrefix(line, "team:") {
 			if f := strings.Split(line, ":"); len(f) >= 4 {
 				teamMembers = f[3]

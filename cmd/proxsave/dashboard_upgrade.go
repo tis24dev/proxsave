@@ -178,7 +178,7 @@ func renderReleaseNotes(notes string) string {
 	notes = strings.ReplaceAll(notes, "**", "")
 	var b strings.Builder
 	shown := 0
-	for _, raw := range strings.Split(notes, "\n") {
+	for raw := range strings.SplitSeq(notes, "\n") {
 		if shown >= maxLines {
 			b.WriteString(theme.Subtle.Render("  ..."))
 			b.WriteString("\n")

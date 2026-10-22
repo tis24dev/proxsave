@@ -2641,7 +2641,7 @@ func (c *Collector) isClusteredPVE(ctx context.Context) (clustered bool, resultE
 			return serviceState{}, &pveClusterDetectionError{reason: "cannot query " + name, cause: err}
 		}
 		values := make(map[string]string)
-		for _, line := range strings.Split(string(out), "\n") {
+		for line := range strings.SplitSeq(string(out), "\n") {
 			if key, value, ok := strings.Cut(line, "="); ok {
 				values[key] = value
 			}
@@ -2676,7 +2676,7 @@ func (c *Collector) isClusteredPVE(ctx context.Context) (clustered bool, resultE
 			return "", &pveClusterDetectionError{reason: "cannot read pmxcfs mount information", cause: err}
 		}
 		unescape := strings.NewReplacer(`\040`, " ", `\011`, "\t", `\012`, "\n", `\134`, `\`)
-		for _, line := range strings.Split(string(data), "\n") {
+		for line := range strings.SplitSeq(string(data), "\n") {
 			left, right, ok := strings.Cut(line, " - ")
 			fields, fs := strings.Fields(left), strings.Fields(right)
 			if !ok || len(fields) < 6 || len(fs) < 3 {

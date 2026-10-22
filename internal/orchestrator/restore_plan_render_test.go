@@ -26,7 +26,7 @@ func TestBuildRestorePlanTextLinesFit80Columns(t *testing.T) {
 	if !strings.Contains(text, "TFA/WebAuthn") {
 		t.Fatalf("expected the TFA/WebAuthn advisory to be present:\n%s", text)
 	}
-	for _, line := range strings.Split(text, "\n") {
+	for line := range strings.SplitSeq(text, "\n") {
 		if w := lipgloss.Width(line); w > 80 {
 			t.Errorf("plan line exceeds 80 columns (%d): %q", w, line)
 		}

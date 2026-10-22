@@ -215,7 +215,7 @@ func readTarEntry(ctx context.Context, archivePath, name string, maxBytes int64)
 }
 
 func hasNameserverEntries(content string) bool {
-	for _, line := range strings.Split(content, "\n") {
+	for line := range strings.SplitSeq(content, "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" || strings.HasPrefix(line, "#") || strings.HasPrefix(line, ";") {
 			continue

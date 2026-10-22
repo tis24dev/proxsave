@@ -35,7 +35,7 @@ func levelOf(line string) string {
 
 func warningsMatching(out, needle string) []string {
 	var hits []string
-	for _, l := range strings.Split(out, "\n") {
+	for l := range strings.SplitSeq(out, "\n") {
 		if strings.Contains(l, needle) && levelOf(l) == "WARNING" {
 			hits = append(hits, l)
 		}
@@ -245,7 +245,7 @@ func TestRunRecipeAbortTracesUnattemptedBricks(t *testing.T) {
 	}
 	for _, id := range []string{"c", "d"} {
 		found := false
-		for _, l := range strings.Split(out, "\n") {
+		for l := range strings.SplitSeq(out, "\n") {
 			if levelOf(l) == "DEBUG" && strings.Contains(l, "never ran") && strings.Contains(l, "\""+id+"\"") {
 				found = true
 			}
