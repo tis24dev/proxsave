@@ -4,6 +4,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -180,5 +181,37 @@ func TestRewriteIfupdownConfigFilesWritesBackups(t *testing.T) {
 	}
 	if string(backupContent) != original {
 		t.Fatalf("backup content=%q; want %q", string(backupContent), original)
+	}
+}
+
+// The rewritten ifupdown files are reported in sorted path order.
+func TestRewriteIfupdownConfigFilesReportsPathsInOrder(t *testing.T) {
+	origFS := restoreFS
+	origTime := restoreTime
+	t.Cleanup(func() {
+		restoreFS = origFS
+		restoreTime = origTime
+	})
+	fakeFS := NewFakeFS()
+	t.Cleanup(func() { _ = os.RemoveAll(fakeFS.Root) })
+	restoreFS = fakeFS
+	restoreTime = &FakeTime{Current: time.Date(2025, 1, 1, 1, 2, 3, 0, time.UTC)}
+
+	if err := fakeFS.MkdirAll("/etc/network/interfaces.d", 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	for _, p := range []string{"/etc/network/interfaces", "/etc/network/interfaces.d/b-vlan", "/etc/network/interfaces.d/a-bond"} {
+		if err := fakeFS.WriteFile(p, []byte("auto eno1\niface eno1 inet manual\n"), 0o644); err != nil {
+			t.Fatalf("write %s: %v", p, err)
+		}
+	}
+
+	changed, _, err := rewriteIfupdownConfigFiles(nil, map[string]string{"eno1": "enp3s0"})
+	if err != nil {
+		t.Fatalf("rewriteIfupdownConfigFiles error: %v", err)
+	}
+	want := []string{"/etc/network/interfaces", "/etc/network/interfaces.d/a-bond", "/etc/network/interfaces.d/b-vlan"}
+	if !slices.Equal(changed, want) {
+		t.Fatalf("changed=%v; want %v", changed, want)
 	}
 }
