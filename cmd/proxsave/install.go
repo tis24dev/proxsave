@@ -1521,9 +1521,6 @@ func isInstallAbortedError(err error) bool {
 	if strings.Contains(msg, "installation aborted by user") {
 		return true
 	}
-	if strings.Contains(msg, "installation aborted (existing configuration kept)") {
-		return true
-	}
 	if strings.Contains(msg, "encryption setup aborted by user") {
 		return true
 	}
