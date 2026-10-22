@@ -1626,6 +1626,8 @@ PXAR_FILE_EXCLUDE_PATTERN=         # Exclude patterns (e.g., *.tmp, *.lock)
 
 **Note (PBS snapshot behavior)**: ProxSave snapshots `PBS_CONFIG_PATH` (`/etc/proxmox-backup`) for completeness. When a PBS feature is disabled, proxsave excludes the corresponding well-known config files from that snapshot (for example, `remote.cfg` is excluded when `BACKUP_REMOTE_CONFIGS=false`) and also skips the related command outputs.
 
+**Note (ACME plugin credentials)**: with `BACKUP_PBS_ACME_PLUGINS=true` the archive also holds the output of `proxmox-backup-manager acme plugin config <id>` in `var/lib/proxsave-info/commands/pbs/acme_plugin_<id>_config.json`. Its `data` field carries the DNS provider credentials in the clear; PBS keeps the same data base64-encoded in `acme/plugins.cfg` (mode 0600), which the archive also holds.
+
 **PXAR scanning**: collects *metadata about* the `.pxar` archives inside your PBS datastores, never
 their contents. ProxSave backs up configuration, so no datastore data is copied with or
 without this setting: with it on you additionally get, per datastore, a subdirectory report
