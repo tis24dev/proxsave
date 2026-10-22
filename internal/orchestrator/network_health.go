@@ -336,7 +336,7 @@ func ipDefaultRoute(ctx context.Context, timeout time.Duration) (ipRouteInfo, er
 	if text == "" {
 		return ipRouteInfo{}, nil
 	}
-	first := strings.SplitN(text, "\n", 2)[0]
+	first, _, _ := strings.Cut(text, "\n")
 	return parseIPRouteInfo(first), nil
 }
 

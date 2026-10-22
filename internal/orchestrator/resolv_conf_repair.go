@@ -248,7 +248,7 @@ func fallbackDNSFromGateway(ctx context.Context, logger *logging.Logger) (string
 	if line == "" {
 		return dns2, dns2
 	}
-	first := strings.SplitN(line, "\n", 2)[0]
+	first, _, _ := strings.Cut(line, "\n")
 	fields := strings.Fields(first)
 	for i := 0; i < len(fields)-1; i++ {
 		if fields[i] == "via" {
