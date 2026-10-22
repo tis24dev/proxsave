@@ -573,9 +573,10 @@ func TestPVEClusterServicesSkipUnitsNotInstalled(t *testing.T) {
 	}
 }
 
-// When a stop fails after other services were stopped, the ones already stopped are
-// started again, last stopped first, and the original error is returned. A failed
-// restart is a warning and does not stop the others.
+// When a stop fails after other services were stopped, the unit that did not stop is
+// started to replace its queued stop job, the ones already stopped are started again,
+// last stopped first, and the original error is returned. A failed restart is a
+// warning and does not stop the others.
 func TestStopPVEClusterServicesRestartsWhatItStoppedWhenAStopFails(t *testing.T) {
 	origCmd := restoreCmd
 	t.Cleanup(func() { restoreCmd = origCmd })
@@ -600,10 +601,14 @@ func TestStopPVEClusterServicesRestartsWhatItStoppedWhenAStopFails(t *testing.T)
 		"systemctl stop --no-block pve-ha-lrm",
 		"systemctl stop --no-block pve-ha-crm",
 		"systemctl stop --no-block pve-cluster",
+		"systemctl start pve-cluster",
 		"systemctl start pve-ha-crm",
 		"systemctl start pve-ha-lrm",
 	)
-	for _, svc := range []string{"pve-cluster", "pvedaemon", "pveproxy", "pvestatd"} {
+	if countCalls(calls, "systemctl start pve-cluster") != 1 {
+		t.Fatalf("want one start of pve-cluster, the unit that did not stop; calls=%q", calls)
+	}
+	for _, svc := range []string{"pvedaemon", "pveproxy", "pvestatd"} {
 		if countCalls(calls, "systemctl start "+svc) != 0 {
 			t.Fatalf("%s started although it was never stopped; calls=%q", svc, calls)
 		}
