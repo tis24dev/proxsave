@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/base64"
 	"errors"
+	"maps"
 	"os"
 	"strings"
 	"testing"
@@ -857,9 +858,7 @@ func TestMaybeApplyPBSConfigsFromStage_SectionBlockOutcomeIsNotRepeated(t *testi
 			"proxmox-backup-manager sync-job create s1 --store ds1": errors.New("exit status 255: Error: refused"),
 			"proxmox-backup-manager sync-job update s1 --store ds1": errors.New("exit status 255: Error: refused"),
 		}
-		for k, v := range refused {
-			errs[k] = v
-		}
+		maps.Copy(errs, refused)
 		runner := &FakeCommandRunner{Errors: errs}
 		log, warned, _ := runPBSSectionRestoreStep(t, PBSRestoreBehaviorMerge, []string{"pbs_remotes", "pbs_jobs"}, map[string]string{
 			"etc/proxmox-backup/remote.cfg": r1,

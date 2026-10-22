@@ -3,6 +3,7 @@ package orchestrator
 import (
 	"context"
 	"errors"
+	"maps"
 	"os"
 	"reflect"
 	"strings"
@@ -258,9 +259,7 @@ func TestDetectBootTarget(t *testing.T) {
 	}
 	pbtHost := func(extra map[string]string) map[string]string {
 		files := map[string]string{"/etc/kernel/proxmox-boot-uuids": "936E-9A3F\n936F-0211\n"}
-		for k, v := range extra {
-			files[k] = v
-		}
+		maps.Copy(files, extra)
 		return files
 	}
 	which := map[string]string{"which update-grub": "/usr/sbin/update-grub\n"}

@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -188,9 +189,7 @@ func parsePBSDatastoreInventoryForDevices(logger *logging.Logger, content string
 	}
 
 	if blkid := strings.TrimSpace(report.Commands["blkid"].Output); blkid != "" {
-		for dev, id := range parseBlkidInventory(blkid) {
-			out[dev] = id
-		}
+		maps.Copy(out, parseBlkidInventory(blkid))
 	}
 	if lsblk := strings.TrimSpace(report.Commands["lsblk_json"].Output); lsblk != "" {
 		for dev, id := range parseLsblkJSONInventory(lsblk) {
