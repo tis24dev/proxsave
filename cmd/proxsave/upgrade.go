@@ -754,7 +754,7 @@ func compareVersions(current, latest string) int {
 
 	maxLen := max(len(b), len(a))
 
-	for i := 0; i < maxLen; i++ {
+	for i := range maxLen {
 		var av, bv int
 		if i < len(a) {
 			av = a[i]

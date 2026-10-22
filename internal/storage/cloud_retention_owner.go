@@ -60,10 +60,7 @@ func (c *CloudStorage) resolveRetentionOwners(ctx context.Context, backups []*ty
 	// NOTE: this deliberately does NOT skip archives whose filename token names another
 	// host. The manifest is the authoritative owner and may say the backup is ours even
 	// when the filename does not - skipping those would silently stop rotating them.
-	workers := max(c.parallelJobs, 1)
-	if workers > len(pending) {
-		workers = len(pending)
-	}
+	workers := min(max(c.parallelJobs, 1), len(pending))
 
 	var wg sync.WaitGroup
 	sem := make(chan struct{}, workers)
