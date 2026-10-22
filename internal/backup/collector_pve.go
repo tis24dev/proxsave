@@ -740,7 +740,7 @@ func (c *Collector) finalizePVERuntimeInfo(info *pveRuntimeInfo) {
 			info.Nodes = append(info.Nodes, "localhost")
 		}
 	} else {
-		sort.Strings(info.Nodes)
+		slices.Sort(info.Nodes)
 	}
 }
 
@@ -2313,8 +2313,8 @@ func (c *Collector) augmentStoragesWithConfig(storages []pveStorageEntry) []pveS
 	for _, entry := range merged {
 		result = append(result, entry)
 	}
-	sort.Slice(result, func(i, j int) bool {
-		return strings.ToLower(result[i].Name) < strings.ToLower(result[j].Name)
+	slices.SortFunc(result, func(a, b pveStorageEntry) int {
+		return strings.Compare(strings.ToLower(a.Name), strings.ToLower(b.Name))
 	})
 	return result
 }

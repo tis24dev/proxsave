@@ -2,6 +2,7 @@ package backup
 
 import (
 	"bufio"
+	"cmp"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -9,7 +10,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"sort"
+	"slices"
 	"strings"
 	"time"
 )
@@ -593,8 +594,8 @@ func (c *Collector) captureInventoryDir(ctx context.Context, sourcePath, logical
 		snap.Error = walkErr.Error()
 	}
 
-	sort.Slice(files, func(i, j int) bool {
-		return files[i].RelativePath < files[j].RelativePath
+	slices.SortFunc(files, func(a, b inventoryDirEntry) int {
+		return strings.Compare(a.RelativePath, b.RelativePath)
 	})
 	snap.Files = files
 	return snap
@@ -734,20 +735,14 @@ func mergePBSDatastoreDefinitions(cli, config []pbsDatastore) []pbsDatastoreDefi
 	}
 	assignUniquePBSDatastoreDefinitionOutputKeys(out)
 
-	sort.Slice(out, func(i, j int) bool {
-		if out[i].Name != out[j].Name {
-			return out[i].Name < out[j].Name
-		}
-		if p1, p2 := pbsDatastoreOriginSortPriority(out[i].Origin), pbsDatastoreOriginSortPriority(out[j].Origin); p1 != p2 {
-			return p1 < p2
-		}
-		if out[i].Path != out[j].Path {
-			return out[i].Path < out[j].Path
-		}
-		if out[i].OutputKey != out[j].OutputKey {
-			return out[i].OutputKey < out[j].OutputKey
-		}
-		return out[i].CLIName < out[j].CLIName
+	slices.SortFunc(out, func(a, b pbsDatastoreDefinition) int {
+		return cmp.Or(
+			strings.Compare(a.Name, b.Name),
+			cmp.Compare(pbsDatastoreOriginSortPriority(a.Origin), pbsDatastoreOriginSortPriority(b.Origin)),
+			strings.Compare(a.Path, b.Path),
+			strings.Compare(a.OutputKey, b.OutputKey),
+			strings.Compare(a.CLIName, b.CLIName),
+		)
 	})
 	return out
 }
@@ -881,7 +876,7 @@ func uniqueSortedStrings(in []string) []string {
 		seen[raw] = struct{}{}
 		out = append(out, raw)
 	}
-	sort.Strings(out)
+	slices.Sort(out)
 	return out
 }
 
@@ -982,8 +977,8 @@ func (c *Collector) captureInventoryDirFiltered(ctx context.Context, sourcePath,
 		snap.Error = walkErr.Error()
 	}
 
-	sort.Slice(files, func(i, j int) bool {
-		return files[i].RelativePath < files[j].RelativePath
+	slices.SortFunc(files, func(a, b inventoryDirEntry) int {
+		return strings.Compare(a.RelativePath, b.RelativePath)
 	})
 	snap.Files = files
 	return snap

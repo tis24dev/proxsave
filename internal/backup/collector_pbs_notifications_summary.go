@@ -6,7 +6,6 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
-	"sort"
 	"strings"
 	"time"
 )
@@ -632,7 +631,7 @@ func summarizePBSNotificationSnapshot(path string) pbsNotificationSnapshotSummar
 		}
 	}
 
-	sort.Strings(names)
+	slices.Sort(names)
 	if len(names) > 100 {
 		names = names[:100]
 	}

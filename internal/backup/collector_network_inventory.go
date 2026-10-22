@@ -7,7 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
-	"sort"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -129,8 +129,8 @@ func (c *Collector) collectNetworkInventory(ctx context.Context, commandsDir, in
 		inv.Interfaces = append(inv.Interfaces, profile)
 	}
 
-	sort.Slice(inv.Interfaces, func(i, j int) bool {
-		return inv.Interfaces[i].Name < inv.Interfaces[j].Name
+	slices.SortFunc(inv.Interfaces, func(a, b networkInterfaceProfile) int {
+		return strings.Compare(a.Name, b.Name)
 	})
 
 	data, err := json.MarshalIndent(inv, "", "  ")
