@@ -75,7 +75,7 @@ func (f fakeFileInfo) Mode() os.FileMode {
 }
 func (f fakeFileInfo) ModTime() time.Time { return time.Unix(0, 0) }
 func (f fakeFileInfo) IsDir() bool        { return f.isDir }
-func (f fakeFileInfo) Sys() interface{} {
+func (f fakeFileInfo) Sys() any {
 	return &syscall.Stat_t{Uid: uint32(f.uid), Gid: uint32(f.gid)}
 }
 

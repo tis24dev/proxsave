@@ -88,7 +88,7 @@ func (g *GotifyNotifier) Send(ctx context.Context, data *NotificationData) (*Not
 	start := time.Now()
 	result := &NotificationResult{
 		Method:   "gotify",
-		Metadata: make(map[string]interface{}),
+		Metadata: make(map[string]any),
 	}
 
 	if !g.IsEnabled() {

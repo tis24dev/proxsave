@@ -329,7 +329,7 @@ var proxmoxBootStatusLine = regexp.MustCompile(`^(\S+) is configured with: (.*)$
 func detectBootTarget(ctx context.Context, destRoot string) bootTarget {
 	grubFile := filepath.Join(destRoot, "etc/default/grub")
 	cmdlineFile := filepath.Join(destRoot, "etc/kernel/cmdline")
-	unknown := func(t bootTarget, format string, args ...interface{}) bootTarget {
+	unknown := func(t bootTarget, format string, args ...any) bootTarget {
 		t.kind, t.file, t.reason = bootLoaderUnknown, "", fmt.Sprintf(format, args...)
 		return t
 	}

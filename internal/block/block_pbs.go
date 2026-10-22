@@ -860,7 +860,7 @@ func findExcludeFiles(log *logging.Logger, treeDir string) []string {
 	return found
 }
 
-func debugf(log *logging.Logger, format string, args ...interface{}) {
+func debugf(log *logging.Logger, format string, args ...any) {
 	if log != nil {
 		log.Debug(format, args...)
 	}

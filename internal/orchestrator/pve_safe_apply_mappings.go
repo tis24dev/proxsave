@@ -43,7 +43,7 @@ func (e *pveMappingEntry) UnmarshalJSON(data []byte) error {
 		e.props = parsePVEPropertyString(s)
 		return nil
 	}
-	var obj map[string]interface{}
+	var obj map[string]any
 	if err := json.Unmarshal(data, &obj); err != nil {
 		return err
 	}

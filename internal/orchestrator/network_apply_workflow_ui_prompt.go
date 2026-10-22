@@ -260,19 +260,19 @@ func (f *networkConfigUIApplyFlow) networkApplyOptions() SystemType {
 	return f.plan.SystemType
 }
 
-func (f *networkConfigUIApplyFlow) debug(format string, args ...interface{}) {
+func (f *networkConfigUIApplyFlow) debug(format string, args ...any) {
 	if f.logger != nil {
 		f.logger.Debug(format, args...)
 	}
 }
 
-func (f *networkConfigUIApplyFlow) info(format string, args ...interface{}) {
+func (f *networkConfigUIApplyFlow) info(format string, args ...any) {
 	if f.logger != nil {
 		f.logger.Info(format, args...)
 	}
 }
 
-func (f *networkConfigUIApplyFlow) warning(format string, args ...interface{}) {
+func (f *networkConfigUIApplyFlow) warning(format string, args ...any) {
 	if f.logger != nil {
 		f.logger.Warning(format, args...)
 	}

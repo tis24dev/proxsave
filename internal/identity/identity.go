@@ -1568,13 +1568,13 @@ func isAllDigits(value string) bool {
 	return true
 }
 
-func logWarning(logger *logging.Logger, format string, args ...interface{}) {
+func logWarning(logger *logging.Logger, format string, args ...any) {
 	if logger != nil {
 		logger.Warning(format, args...)
 	}
 }
 
-func logDebug(logger *logging.Logger, format string, args ...interface{}) {
+func logDebug(logger *logging.Logger, format string, args ...any) {
 	if logger != nil {
 		logger.Debug(format, args...)
 	}

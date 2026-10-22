@@ -715,14 +715,14 @@ func buildCloudRemotePath(cloudRemote, cloudRemotePath string) string {
 	return fmt.Sprintf("%s:%s", remoteName, fullPath)
 }
 
-func logDebug(logger *logging.Logger, format string, args ...interface{}) {
+func logDebug(logger *logging.Logger, format string, args ...any) {
 	if logger == nil {
 		return
 	}
 	logger.Debug(format, args...)
 }
 
-func logWarning(logger *logging.Logger, format string, args ...interface{}) {
+func logWarning(logger *logging.Logger, format string, args ...any) {
 	if logger == nil {
 		return
 	}

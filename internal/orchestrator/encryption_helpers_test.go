@@ -83,7 +83,7 @@ func TestDedupeRecipientStringsHelpers(t *testing.T) {
 func TestParseRecipientString(t *testing.T) {
 	generateSSHPublicKey := func(t *testing.T, algo string) string {
 		t.Helper()
-		var pub interface{}
+		var pub any
 		var err error
 		switch algo {
 		case "rsa":

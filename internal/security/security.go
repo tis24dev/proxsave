@@ -327,13 +327,13 @@ func (c *Checker) binaryDependency(name string, binaries []string, required bool
 	}
 }
 
-func (c *Checker) addWarning(format string, args ...interface{}) {
+func (c *Checker) addWarning(format string, args ...any) {
 	msg := fmt.Sprintf(format, args...)
 	c.logger.Warning("%s", msg)
 	c.result.add(severityWarning, msg)
 }
 
-func (c *Checker) addError(format string, args ...interface{}) {
+func (c *Checker) addError(format string, args ...any) {
 	msg := fmt.Sprintf(format, args...)
 	c.logger.Error("%s", msg)
 	c.result.add(severityError, msg)

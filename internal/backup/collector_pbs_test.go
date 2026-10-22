@@ -927,7 +927,7 @@ func (fakeFileInfo) Size() int64        { return 0 }
 func (fakeFileInfo) Mode() os.FileMode  { return 0 }
 func (fakeFileInfo) ModTime() time.Time { return time.Time{} }
 func (fakeFileInfo) IsDir() bool        { return false }
-func (fakeFileInfo) Sys() interface{}   { return nil }
+func (fakeFileInfo) Sys() any           { return nil }
 
 func TestCollectPBSConfigSnapshotExcludesUserConfigSecretsWhenDisabled(t *testing.T) {
 	pbsRoot := t.TempDir()

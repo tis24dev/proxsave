@@ -49,11 +49,11 @@ var DefaultCloudRelayConfig = CloudRelayConfig{
 
 // EmailRelayPayload represents the JSON payload sent to the cloud worker
 type EmailRelayPayload struct {
-	To        string                 `json:"to"`
-	Subject   string                 `json:"subject"`
-	Report    map[string]interface{} `json:"report"`
-	Timestamp int64                  `json:"t"`
-	ServerMAC string                 `json:"server_mac"`
+	To        string         `json:"to"`
+	Subject   string         `json:"subject"`
+	Report    map[string]any `json:"report"`
+	Timestamp int64          `json:"t"`
+	ServerMAC string         `json:"server_mac"`
 
 	// Metadata not serialized but needed for headers
 	ScriptVersion string `json:"-"`
@@ -362,9 +362,9 @@ func isQuotaLimit(detail string) bool {
 // buildReportData builds the structured report data for cloud relay.
 // The relay worker builds the email from this shape: a key added or changed
 // here also needs the worker's template.
-func buildReportData(data *NotificationData) map[string]interface{} {
+func buildReportData(data *NotificationData) map[string]any {
 	// Nested structure read by the relay worker's template.
-	report := map[string]interface{}{
+	report := map[string]any{
 		// Top-level fields
 		"status":         data.Status.String(),
 		"status_message": data.StatusMessage,
@@ -377,7 +377,7 @@ func buildReportData(data *NotificationData) map[string]interface{} {
 		"script_version": data.ScriptVersion,
 
 		// Nested emojis object
-		"emojis": map[string]interface{}{
+		"emojis": map[string]any{
 			"primary":   GetStorageEmoji(data.LocalStatus),
 			"secondary": GetStorageEmoji(data.SecondaryStatus),
 			"cloud":     GetStorageEmoji(data.CloudStatus),
@@ -385,18 +385,18 @@ func buildReportData(data *NotificationData) map[string]interface{} {
 		},
 
 		// Nested backup object with sub-objects
-		"backup": map[string]interface{}{
-			"primary": map[string]interface{}{
+		"backup": map[string]any{
+			"primary": map[string]any{
 				"status": data.LocalStatusSummary,
 				"emoji":  GetStorageEmoji(data.LocalStatus),
 				"count":  countValue(data.LocalCount),
 			},
-			"secondary": map[string]interface{}{
+			"secondary": map[string]any{
 				"status": data.SecondaryStatusSummary,
 				"emoji":  GetStorageEmoji(data.SecondaryStatus),
 				"count":  countValue(data.SecondaryCount),
 			},
-			"cloud": map[string]interface{}{
+			"cloud": map[string]any{
 				"status": data.CloudStatusSummary,
 				"emoji":  GetStorageEmoji(data.CloudStatus),
 				"count":  countValue(data.CloudCount),
@@ -407,7 +407,7 @@ func buildReportData(data *NotificationData) map[string]interface{} {
 		"storage": buildStorageData(data),
 
 		// Nested metrics object
-		"metrics": map[string]interface{}{
+		"metrics": map[string]any{
 			"backup_file_name":  data.BackupFileName,
 			"backup_file":       data.BackupFile,                // the HTML email's "Backup File" row
 			"telegram_status":   valueOrNA(data.TelegramStatus), // the HTML email's "Telegram Status" row
@@ -422,7 +422,7 @@ func buildReportData(data *NotificationData) map[string]interface{} {
 		},
 
 		// Nested log_summary object with categories array
-		"log_summary": map[string]interface{}{
+		"log_summary": map[string]any{
 			"errors":         data.ErrorCount,
 			"warnings":       data.WarningCount,
 			"total":          data.TotalIssues,
@@ -434,7 +434,7 @@ func buildReportData(data *NotificationData) map[string]interface{} {
 		},
 
 		// Nested paths object
-		"paths": map[string]interface{}{
+		"paths": map[string]any{
 			"local":         data.LocalPath,
 			"secondary":     data.SecondaryPath,
 			"cloud":         data.CloudPath,
@@ -453,30 +453,30 @@ func buildReportData(data *NotificationData) map[string]interface{} {
 // addPBSReportData adds the PBS keys (emojis.pbs, backup.pbs, paths.pbs,
 // paths.has_pbs; storage.pbs is buildStorageData's) only when PBS is on: with PBS
 // off the report keeps the shape it had before the PBS destination existed.
-func addPBSReportData(report map[string]interface{}, data *NotificationData) {
+func addPBSReportData(report map[string]any, data *NotificationData) {
 	if !data.PBSEnabled {
 		return
 	}
-	if emojis, ok := report["emojis"].(map[string]interface{}); ok {
+	if emojis, ok := report["emojis"].(map[string]any); ok {
 		emojis["pbs"] = GetStorageEmoji(data.PBSStatus)
 	}
-	if backup, ok := report["backup"].(map[string]interface{}); ok {
-		backup["pbs"] = map[string]interface{}{
+	if backup, ok := report["backup"].(map[string]any); ok {
+		backup["pbs"] = map[string]any{
 			"status": data.PBSStatusSummary,
 			"emoji":  GetStorageEmoji(data.PBSStatus),
 			"count":  countValue(data.PBSCount),
 		}
 	}
-	if paths, ok := report["paths"].(map[string]interface{}); ok {
+	if paths, ok := report["paths"].(map[string]any); ok {
 		paths["pbs"] = data.PBSStorageID
 		paths["has_pbs"] = true
 	}
 }
 
 // buildStorageData builds the storage section: local, and secondary and pbs when on
-func buildStorageData(data *NotificationData) map[string]interface{} {
-	storage := map[string]interface{}{
-		"local": map[string]interface{}{
+func buildStorageData(data *NotificationData) map[string]any {
+	storage := map[string]any{
+		"local": map[string]any{
 			"space":       data.LocalFree, // Total space shown as free space
 			"used":        data.LocalUsed,
 			"free":        data.LocalFree,
@@ -487,7 +487,7 @@ func buildStorageData(data *NotificationData) map[string]interface{} {
 
 	// Only add secondary if enabled
 	if data.SecondaryEnabled {
-		storage["secondary"] = map[string]interface{}{
+		storage["secondary"] = map[string]any{
 			"space":       spaceValue(data.SecondaryFree, data.SecondaryFree), // Total space shown as free space
 			"used":        spaceValue(data.SecondaryFree, data.SecondaryUsed),
 			"free":        spaceValue(data.SecondaryFree, data.SecondaryFree),
@@ -498,7 +498,7 @@ func buildStorageData(data *NotificationData) map[string]interface{} {
 
 	// PBS, when on, with the same keys
 	if data.PBSEnabled {
-		storage["pbs"] = map[string]interface{}{
+		storage["pbs"] = map[string]any{
 			"space":       spaceValue(data.PBSFree, data.PBSFree), // Total space shown as free space
 			"used":        spaceValue(data.PBSFree, data.PBSUsed),
 			"free":        spaceValue(data.PBSFree, data.PBSFree),

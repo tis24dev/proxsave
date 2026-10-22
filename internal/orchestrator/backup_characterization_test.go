@@ -98,7 +98,7 @@ type backupCharRecorder struct {
 	events []string
 }
 
-func (r *backupCharRecorder) add(format string, args ...interface{}) {
+func (r *backupCharRecorder) add(format string, args ...any) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.events = append(r.events, fmt.Sprintf(format, args...))

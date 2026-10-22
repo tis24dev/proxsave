@@ -151,7 +151,7 @@ func (e *EmailNotifier) Send(ctx context.Context, data *NotificationData) (*Noti
 	startTime := time.Now()
 	result := &NotificationResult{
 		Method:   "email",
-		Metadata: make(map[string]interface{}),
+		Metadata: make(map[string]any),
 	}
 
 	if !e.config.Enabled {

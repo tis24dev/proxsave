@@ -1121,7 +1121,7 @@ func buildReinstallCronLines(lines []string, baseDir string, correctPaths []stri
 	return append(updated, fmt.Sprintf("%s %s --backup", schedule, commandToken))
 }
 
-func logBootstrapWarning(bootstrap *logging.BootstrapLogger, format string, args ...interface{}) {
+func logBootstrapWarning(bootstrap *logging.BootstrapLogger, format string, args ...any) {
 	if bootstrap != nil {
 		bootstrap.Warning(format, args...)
 		return
@@ -1129,7 +1129,7 @@ func logBootstrapWarning(bootstrap *logging.BootstrapLogger, format string, args
 	logging.Warning(format, args...)
 }
 
-func logBootstrapInfo(bootstrap *logging.BootstrapLogger, format string, args ...interface{}) {
+func logBootstrapInfo(bootstrap *logging.BootstrapLogger, format string, args ...any) {
 	if bootstrap != nil {
 		bootstrap.Info(format, args...)
 		return
@@ -1137,7 +1137,7 @@ func logBootstrapInfo(bootstrap *logging.BootstrapLogger, format string, args ..
 	logging.Info(format, args...)
 }
 
-func logBootstrapDebug(bootstrap *logging.BootstrapLogger, format string, args ...interface{}) {
+func logBootstrapDebug(bootstrap *logging.BootstrapLogger, format string, args ...any) {
 	if bootstrap != nil {
 		bootstrap.Debug(format, args...)
 		return

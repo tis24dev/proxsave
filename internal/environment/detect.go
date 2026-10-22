@@ -925,7 +925,7 @@ func MarkerSnapshot(opts DetectOptions) []string {
 // literal, which under a host prefix points at the appliance instead of the host.
 func markerLines() []string {
 	var lines []string
-	add := func(format string, args ...interface{}) {
+	add := func(format string, args ...any) {
 		lines = append(lines, fmt.Sprintf(format, args...))
 	}
 

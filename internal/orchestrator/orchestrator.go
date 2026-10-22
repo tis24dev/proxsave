@@ -294,7 +294,7 @@ func New(logger *logging.Logger, dryRun bool) *Orchestrator {
 	}
 }
 
-func (o *Orchestrator) logStep(step int, format string, args ...interface{}) {
+func (o *Orchestrator) logStep(step int, format string, args ...any) {
 	if o == nil || o.logger == nil {
 		return
 	}

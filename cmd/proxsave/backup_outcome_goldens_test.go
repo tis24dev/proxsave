@@ -57,7 +57,7 @@ var backupOutcomeGoldenEnvs = []map[string]*string{
 
 func strPtr(s string) *string { return &s }
 
-func readBackupOutcomeGoldenJSON(t *testing.T, path string, v interface{}) {
+func readBackupOutcomeGoldenJSON(t *testing.T, path string, v any) {
 	t.Helper()
 	raw, err := os.ReadFile(path)
 	if err != nil {

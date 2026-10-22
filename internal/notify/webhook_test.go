@@ -229,7 +229,7 @@ func TestWebhookNotifier_Send_Success(t *testing.T) {
 
 		// Read and verify body
 		body, _ := io.ReadAll(r.Body)
-		var payload map[string]interface{}
+		var payload map[string]any
 		if err := json.Unmarshal(body, &payload); err != nil {
 			t.Errorf("Failed to unmarshal payload: %v", err)
 		}
@@ -872,12 +872,12 @@ func TestBuildDiscordPayload(t *testing.T) {
 	}
 
 	// Verify payload structure
-	embeds, ok := payload["embeds"].([]interface{})
+	embeds, ok := payload["embeds"].([]any)
 	if !ok || len(embeds) == 0 {
 		t.Fatal("Payload missing embeds array")
 	}
 
-	embed := embeds[0].(map[string]interface{})
+	embed := embeds[0].(map[string]any)
 
 	// Check required fields
 	if _, ok := embed["title"]; !ok {
@@ -897,7 +897,7 @@ func TestBuildDiscordPayload(t *testing.T) {
 	}
 
 	// Verify fields array
-	fields := embed["fields"].([]map[string]interface{})
+	fields := embed["fields"].([]map[string]any)
 	if len(fields) < 5 {
 		t.Errorf("Expected at least 5 fields, got %d", len(fields))
 	}
@@ -913,13 +913,13 @@ func TestBuildSlackPayload(t *testing.T) {
 	}
 
 	// Verify payload structure
-	blocks, ok := payload["blocks"].([]interface{})
+	blocks, ok := payload["blocks"].([]any)
 	if !ok || len(blocks) == 0 {
 		t.Fatal("Payload missing blocks array")
 	}
 
 	// Check for header block
-	headerBlock := blocks[0].(map[string]interface{})
+	headerBlock := blocks[0].(map[string]any)
 	if headerBlock["type"] != "header" {
 		t.Error("First block should be header type")
 	}
@@ -939,17 +939,17 @@ func TestBuildTeamsPayload(t *testing.T) {
 		t.Error("Payload type should be 'message'")
 	}
 
-	attachments, ok := payload["attachments"].([]interface{})
+	attachments, ok := payload["attachments"].([]any)
 	if !ok || len(attachments) == 0 {
 		t.Fatal("Payload missing attachments array")
 	}
 
-	attachment := attachments[0].(map[string]interface{})
+	attachment := attachments[0].(map[string]any)
 	if attachment["contentType"] != "application/vnd.microsoft.card.adaptive" {
 		t.Error("Attachment contentType should be adaptive card")
 	}
 
-	content := attachment["content"].(map[string]interface{})
+	content := attachment["content"].(map[string]any)
 	if content["type"] != "AdaptiveCard" {
 		t.Error("Content type should be AdaptiveCard")
 	}
@@ -976,7 +976,7 @@ func TestBuildGenericPayload(t *testing.T) {
 	}
 
 	// Verify nested structures
-	backup, ok := payload["backup"].(map[string]interface{})
+	backup, ok := payload["backup"].(map[string]any)
 	if !ok {
 		t.Fatal("Backup field should be a map")
 	}
@@ -984,7 +984,7 @@ func TestBuildGenericPayload(t *testing.T) {
 		t.Error("Backup missing size_bytes")
 	}
 
-	storage, ok := payload["storage"].(map[string]interface{})
+	storage, ok := payload["storage"].(map[string]any)
 	if !ok {
 		t.Fatal("Storage field should be a map")
 	}

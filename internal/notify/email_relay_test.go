@@ -69,7 +69,7 @@ func TestSendViaCloudRelay_NormalizesScriptVersionHeader(t *testing.T) {
 	err := sendViaCloudRelay(context.Background(), cfg, EmailRelayPayload{
 		To:            "dest@test.invalid",
 		Subject:       "subject",
-		Report:        map[string]interface{}{"ok": true},
+		Report:        map[string]any{"ok": true},
 		Timestamp:     time.Now().Unix(),
 		ServerMAC:     "00:11:22:33:44:55",
 		ScriptVersion: "0.0.0-dev",
@@ -113,12 +113,12 @@ func TestBuildReportAndStorageData(t *testing.T) {
 	if report["status"] != data.Status.String() {
 		t.Fatalf("status mismatch: %v", report["status"])
 	}
-	emojis, ok := report["emojis"].(map[string]interface{})
+	emojis, ok := report["emojis"].(map[string]any)
 	if !ok || emojis["primary"] != GetStorageEmoji(data.LocalStatus) || emojis["cloud"] != GetStorageEmoji(data.CloudStatus) {
 		t.Fatalf("emojis missing or incorrect: %+v", emojis)
 	}
 
-	storageSection, ok := report["storage"].(map[string]interface{})
+	storageSection, ok := report["storage"].(map[string]any)
 	if !ok {
 		t.Fatal("storage section missing")
 	}
@@ -126,12 +126,12 @@ func TestBuildReportAndStorageData(t *testing.T) {
 		t.Fatal("secondary storage should be present when enabled")
 	}
 
-	logSummary, ok := report["log_summary"].(map[string]interface{})
+	logSummary, ok := report["log_summary"].(map[string]any)
 	if !ok || logSummary["color"] != getLogSummaryColor(data.ErrorCount, data.WarningCount) {
 		t.Fatalf("log_summary invalid: %+v", logSummary)
 	}
 
-	paths, ok := report["paths"].(map[string]interface{})
+	paths, ok := report["paths"].(map[string]any)
 	if !ok || paths["cloud_display"] == "" {
 		t.Fatalf("paths invalid: %+v", paths)
 	}
@@ -218,7 +218,7 @@ func TestSendViaCloudRelay_StatusHandling(t *testing.T) {
 			err := sendViaCloudRelay(context.Background(), cfg, EmailRelayPayload{
 				To:            "dest@test.invalid",
 				Subject:       "subject",
-				Report:        map[string]interface{}{"ok": true},
+				Report:        map[string]any{"ok": true},
 				Timestamp:     time.Now().Unix(),
 				ServerMAC:     "00:11:22:33:44:55",
 				ScriptVersion: testData.ScriptVersion,
@@ -268,7 +268,7 @@ func TestSendViaCloudRelay_RetryOnServerError(t *testing.T) {
 	err := sendViaCloudRelay(context.Background(), cfg, EmailRelayPayload{
 		To:            "dest@test.invalid",
 		Subject:       "subject",
-		Report:        map[string]interface{}{"ok": true},
+		Report:        map[string]any{"ok": true},
 		Timestamp:     time.Now().Unix(),
 		ServerMAC:     "00:11:22:33:44:55",
 		ScriptVersion: "0.0.1",
@@ -308,7 +308,7 @@ func TestSendViaCloudRelay_StopsRetryingWhenContextCanceled(t *testing.T) {
 	err := sendViaCloudRelay(ctx, cfg, EmailRelayPayload{
 		To:            "dest@test.invalid",
 		Subject:       "subject",
-		Report:        map[string]interface{}{"ok": true},
+		Report:        map[string]any{"ok": true},
 		Timestamp:     time.Now().Unix(),
 		ServerMAC:     "00:11:22:33:44:55",
 		ScriptVersion: "0.0.1",
@@ -333,7 +333,7 @@ func TestSendViaCloudRelay_RetryLinesNameTheAttempt(t *testing.T) {
 		logger.SetOutput(&buf)
 		_ = sendViaCloudRelay(context.Background(), CloudRelayConfig{
 			WorkerURL: url, WorkerToken: "token", HMACSecret: "secret", Timeout: 5, MaxRetries: maxRetries, RetryDelay: 0,
-		}, EmailRelayPayload{To: "dest@test.invalid", Subject: "subject", Report: map[string]interface{}{"ok": true},
+		}, EmailRelayPayload{To: "dest@test.invalid", Subject: "subject", Report: map[string]any{"ok": true},
 			Timestamp: time.Now().Unix(), ServerMAC: "00:11:22:33:44:55", ScriptVersion: "0.0.1", ServerID: "server-id"}, logger)
 		var warnings []string
 		for _, line := range strings.Split(buf.String(), "\n") {

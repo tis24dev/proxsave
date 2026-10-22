@@ -166,7 +166,7 @@ func TestDifferentLogLevels(t *testing.T) {
 
 	tests := []struct {
 		name     string
-		logFunc  func(string, ...interface{})
+		logFunc  func(string, ...any)
 		message  string
 		levelStr string
 	}{

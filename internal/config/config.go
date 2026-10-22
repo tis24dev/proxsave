@@ -1684,7 +1684,7 @@ type WebhookEndpoint struct {
 	Headers      map[string]string
 	Auth         WebhookAuth
 	Priority     int
-	CustomFields map[string]interface{}
+	CustomFields map[string]any
 }
 
 // WebhookAuth holds authentication configuration for a webhook

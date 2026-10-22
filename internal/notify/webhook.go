@@ -483,7 +483,7 @@ func (w *WebhookNotifier) sendToEndpoint(ctx context.Context, endpoint config.We
 }
 
 // buildPayload builds the webhook payload based on format
-func (w *WebhookNotifier) buildPayload(endpoint config.WebhookEndpoint, data *NotificationData) (interface{}, error) {
+func (w *WebhookNotifier) buildPayload(endpoint config.WebhookEndpoint, data *NotificationData) (any, error) {
 	format := strings.ToLower(endpoint.Format)
 	w.logger.Debug("buildPayload() called with format=%s", format)
 
