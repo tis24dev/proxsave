@@ -18,6 +18,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -994,7 +995,7 @@ func identityKeyArms(f hostFacts, macs []string, primaryMAC string) []identityKe
 		orderedMACs = append(orderedMACs, mac)
 	}
 	if len(orderedMACs) > 1 {
-		sort.Strings(orderedMACs[1:])
+		slices.Sort(orderedMACs[1:])
 	}
 
 	arms := make([]identityKeyArm, 0, len(orderedMACs)*2+3)
