@@ -6,7 +6,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
-	"sort"
+	"slices"
 	"strings"
 	"time"
 
@@ -137,7 +137,7 @@ func pruneOrphanLogs(ctx context.Context, logger *logging.Logger, t orphanLogTar
 		res.notListed = err
 		return res
 	}
-	sort.Strings(names)
+	slices.Sort(names)
 
 	listed, matched, orphans := 0, 0, 0
 	var keep, expired []string
