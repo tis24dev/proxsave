@@ -1,7 +1,7 @@
 package whatsnew
 
 import (
-	"sort"
+	"slices"
 	"strings"
 
 	"github.com/Masterminds/semver/v3"
@@ -322,10 +322,10 @@ func LookupNotes(from, to string) []Note {
 			out = append(out, n)
 		}
 	}
-	sort.SliceStable(out, func(i, j int) bool {
-		a, _ := semver.NewVersion(out[i].Version)
-		b, _ := semver.NewVersion(out[j].Version)
-		return a.LessThan(b)
+	slices.SortStableFunc(out, func(a, b Note) int {
+		va, _ := semver.NewVersion(a.Version)
+		vb, _ := semver.NewVersion(b.Version)
+		return va.Compare(vb)
 	})
 	return out
 }
