@@ -263,9 +263,11 @@ func parseLogLevel(s string) (types.LogLevel, bool) {
 	}
 }
 
-// ShowHelp displays help message and exits
+// ShowHelp displays help message and exits. An explicit --help is the output the
+// operator asked for, so it goes to stdout (`proxsave --help | less`); the usage
+// printed after a parse error stays on stderr.
 func ShowHelp() {
-	printHelp(os.Stderr, os.Args[0])
+	printHelp(os.Stdout, os.Args[0])
 	osExit(0)
 }
 

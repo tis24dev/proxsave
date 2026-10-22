@@ -246,6 +246,7 @@ func TestPrintVersion(t *testing.T) {
 
 func TestShowHelpPrintsAndExitsZero(t *testing.T) {
 	origExit := osExit
+	origStdout := os.Stdout
 	origStderr := os.Stderr
 	origCommandLine := flag.CommandLine
 	origArgs := os.Args
@@ -255,40 +256,103 @@ func TestShowHelpPrintsAndExitsZero(t *testing.T) {
 		exitCode = code
 	}
 
-	r, w, err := os.Pipe()
+	outR, outW, err := os.Pipe()
 	if err != nil {
 		t.Fatalf("os.Pipe: %v", err)
 	}
-	os.Stderr = w
+	errR, errW, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("os.Pipe: %v", err)
+	}
+	os.Stdout = outW
+	os.Stderr = errW
 
 	flag.CommandLine = flag.NewFlagSet("test", flag.ContinueOnError)
-	flag.CommandLine.SetOutput(w)
+	flag.CommandLine.SetOutput(errW)
 	flag.CommandLine.Bool("dry-run", false, "Perform a dry run")
 	os.Args = []string{"proxsave-test"}
 
 	t.Cleanup(func() {
-		_ = w.Close()
-		_ = r.Close()
+		_ = outW.Close()
+		_ = outR.Close()
+		_ = errW.Close()
+		_ = errR.Close()
 		osExit = origExit
+		os.Stdout = origStdout
 		os.Stderr = origStderr
 		flag.CommandLine = origCommandLine
 		os.Args = origArgs
 	})
 
 	ShowHelp()
-	_ = w.Close()
+	_ = outW.Close()
+	_ = errW.Close()
 
-	outBytes, err := io.ReadAll(r)
+	outBytes, err := io.ReadAll(outR)
 	if err != nil {
-		t.Fatalf("ReadAll: %v", err)
+		t.Fatalf("ReadAll stdout: %v", err)
 	}
-	out := string(outBytes)
-	if !strings.Contains(out, "Usage: proxsave-test [options]") {
-		t.Fatalf("help output missing usage line: %q", out)
+	errBytes, err := io.ReadAll(errR)
+	if err != nil {
+		t.Fatalf("ReadAll stderr: %v", err)
+	}
+	if out := string(outBytes); !strings.Contains(out, "Usage: proxsave-test [options]") || !strings.Contains(out, "-dry-run") {
+		t.Fatalf("help on stdout missing usage line or options: %q", out)
+	}
+	if len(errBytes) != 0 {
+		t.Fatalf("explicit help wrote to stderr: %q", errBytes)
 	}
 	if exitCode != 0 {
 		t.Fatalf("exit code = %d; want 0", exitCode)
 	}
+}
+
+// A parse error is not output the operator asked for: its usage stays on stderr.
+func TestParseErrorUsageStaysOnStderr(t *testing.T) {
+	origStdout, origStderr, origUsage := os.Stdout, os.Stderr, flag.Usage
+	outR, outW, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("os.Pipe: %v", err)
+	}
+	errR, errW, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("os.Pipe: %v", err)
+	}
+	os.Stdout, os.Stderr = outW, errW
+	t.Cleanup(func() {
+		_ = outR.Close()
+		_ = errR.Close()
+		os.Stdout, os.Stderr, flag.Usage = origStdout, origStderr, origUsage
+	})
+
+	_ = parseWithArgsKeepingUsage(t, []string{"--bogus"})
+	_ = outW.Close()
+	_ = errW.Close()
+
+	outBytes, _ := io.ReadAll(outR)
+	errBytes, _ := io.ReadAll(errR)
+	if len(outBytes) != 0 {
+		t.Fatalf("parse error wrote to stdout: %q", outBytes)
+	}
+	if !strings.Contains(string(errBytes), "Usage: test-binary [options]") {
+		t.Fatalf("parse error usage missing from stderr: %q", errBytes)
+	}
+}
+
+// parseWithArgsKeepingUsage is parseWithArgs without blanking flag.Usage, so the
+// usage Parse installs for a parse error is the one that runs. The real CommandLine
+// routes its usage to flag.Usage; a fresh FlagSet has to be told to.
+func parseWithArgsKeepingUsage(t *testing.T, cliArgs []string) *Args {
+	t.Helper()
+	origCommandLine, origArgs := flag.CommandLine, os.Args
+	flag.CommandLine = flag.NewFlagSet("test", flag.ContinueOnError)
+	flag.CommandLine.SetOutput(io.Discard)
+	flag.CommandLine.Usage = func() { flag.Usage() }
+	os.Args = append([]string{"test-binary"}, cliArgs...)
+	t.Cleanup(func() {
+		flag.CommandLine, os.Args = origCommandLine, origArgs
+	})
+	return Parse()
 }
 
 func TestShowVersionPrintsAndExitsZero(t *testing.T) {
