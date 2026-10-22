@@ -72,3 +72,24 @@ func TestGetDatastoreListSuccessNoFailedCount(t *testing.T) {
 		t.Fatalf("FilesFailed=%d; want 0 on success", c.stats.FilesFailed)
 	}
 }
+
+// Two entries with one identity but different base keys share one output key: the base
+// keys are walked in sorted order, so the key comes from the alphabetically first one.
+func TestAssignUniquePBSOutputKeysWalksBaseKeysInOrder(t *testing.T) {
+	type item struct{ identity, base, key string }
+	items := []item{
+		{identity: "name:store", base: "zeta"},
+		{identity: "name:store", base: "alpha"},
+	}
+	assignUniquePBSOutputKeys(items,
+		func(it item) string { return it.identity },
+		func(it item) string { return it.base },
+		func(item) int { return 0 },
+		func(it *item, key string) { it.key = key })
+
+	for i, it := range items {
+		if it.key != "alpha" {
+			t.Fatalf("items[%d].key = %q, want %q (the first base key in sorted order)", i, it.key, "alpha")
+		}
+	}
+}
