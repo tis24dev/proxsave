@@ -80,6 +80,10 @@ type Args struct {
 	DaemonSetup                      bool
 	DaemonRemove                     bool
 	DaemonStatus                     bool
+	// UnexpectedArgs holds the words left once flag parsing stopped: the flag package
+	// stops at the first word that is not a flag, so every flag after it is in here
+	// too, unread. Not a CLI flag; main refuses the run when it is not empty.
+	UnexpectedArgs []string
 }
 
 var osExit = os.Exit
@@ -184,6 +188,7 @@ func Parse() *Args {
 	} else {
 		_ = flag.CommandLine.Parse(nil)
 	}
+	args.UnexpectedArgs = flag.CommandLine.Args()
 
 	args.ConfigPath = configFlag.value
 	if configFlag.set {

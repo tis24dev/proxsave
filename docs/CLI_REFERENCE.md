@@ -15,6 +15,9 @@ through command-line flags.
 proxsave [FLAGS] [OPTIONS]
 ```
 
+ProxSave takes flags only. A word that is not a flag stops the run with
+`Unexpected argument "<word>": only flags are accepted. Nothing was run.` and exit code 2.
+
 **Mode flags do not all combine.** Each one selects an operation mode, and ProxSave refuses
 the combinations that would contradict each other rather than picking one silently: only one
 of `--daemon`, `--daemon-setup`, `--daemon-remove`, `--daemon-status` at a time and none of

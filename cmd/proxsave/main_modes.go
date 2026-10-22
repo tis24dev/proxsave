@@ -46,6 +46,13 @@ func validateModeCompatibility(args *cli.Args) []string {
 	if args == nil {
 		return []string{"command-line arguments are required"}
 	}
+	// A word that is not a flag ends flag parsing, so the flags after it were never
+	// read: `--backup extra --dry-run` would back up for real, and a lone `help` would
+	// start the default backup. The rules below judge only the flags that were read,
+	// so their verdict means nothing here, and this line is the only one printed.
+	if len(args.UnexpectedArgs) > 0 {
+		return []string{fmt.Sprintf("Unexpected argument %q: only flags are accepted. Nothing was run.", args.UnexpectedArgs[0])}
+	}
 
 	var allMessages []string
 	for _, rule := range []modeCompatibilityRule{
