@@ -648,8 +648,7 @@ func TestWriteArchiveManifestAbortsOnUnreadableSalt(t *testing.T) {
 	if err == nil {
 		t.Fatalf("writeArchiveManifest must abort when the salt is unreadable")
 	}
-	var be *BackupError
-	if !errors.As(err, &be) {
+	if _, ok := errors.AsType[*BackupError](err); !ok {
 		t.Fatalf("want *BackupError, got %T: %v", err, err)
 	}
 	if run.stats.ManifestPath != "" {

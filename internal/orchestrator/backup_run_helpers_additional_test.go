@@ -52,8 +52,7 @@ func TestBackupDiskValidationErrorWrapsDiskError(t *testing.T) {
 func TestBackupDiskValidationErrorUsesDefaultMessage(t *testing.T) {
 	err := backupDiskValidationError("", nil)
 
-	var backupErr *BackupError
-	if !errors.As(err, &backupErr) {
+	if _, ok := errors.AsType[*BackupError](err); !ok {
 		t.Fatalf("expected BackupError, got %T", err)
 	}
 	if !strings.Contains(err.Error(), "insufficient disk space") {

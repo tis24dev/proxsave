@@ -303,8 +303,7 @@ func backupExitCodeAsCmd(stats *BackupStats, err error) int {
 	if err == nil {
 		return stats.ExitCode
 	}
-	var be *BackupError
-	if errors.As(err, &be) {
+	if be, ok := errors.AsType[*BackupError](err); ok {
 		return be.Code.Int()
 	}
 	return types.ExitBackupError.Int()

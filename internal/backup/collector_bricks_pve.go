@@ -62,8 +62,7 @@ func newPVEValidationBricks() []collectionBrick {
 					if c.config.BackupClusterConfig {
 						fact, detail = c.logger.Warning, c.logger.Info
 					}
-					var diagnostic *pveClusterDetectionError
-					if errors.As(err, &diagnostic) {
+					if diagnostic, ok := errors.AsType[*pveClusterDetectionError](err); ok {
 						fact("PVE cluster detection: %s", diagnostic.reason)
 						if diagnostic.cause != nil {
 							detail("    Error: %s", safefs.SystemErrorText(diagnostic.cause))

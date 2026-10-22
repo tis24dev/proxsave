@@ -616,8 +616,7 @@ func (r cronCadenceReading) debugLines() []string {
 }
 
 func scheduleErrorReason(err error) string {
-	var scheduleErr *cronutil.ScheduleError
-	if errors.As(err, &scheduleErr) {
+	if scheduleErr, ok := errors.AsType[*cronutil.ScheduleError](err); ok {
 		return scheduleErr.Reason
 	}
 	return "unparsed"

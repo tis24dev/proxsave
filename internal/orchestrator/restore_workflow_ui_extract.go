@@ -428,8 +428,7 @@ func (w *restoreUIWorkflowRun) logStageApplyWarning(name string, err error) {
 		w.logAccessControlNotCommitted(err)
 		return
 	}
-	var logged *stageApplyOutcomeLoggedError
-	if errors.As(err, &logged) {
+	if _, ok := errors.AsType[*stageApplyOutcomeLoggedError](err); ok {
 		w.logger.Debug("%s: outcome already reported: %v", name, err)
 		return
 	}

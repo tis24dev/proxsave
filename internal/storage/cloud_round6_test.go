@@ -23,8 +23,7 @@ func TestCloudLocalDirectoryNotCreatedIsNotRetried(t *testing.T) {
 	waits := 0
 	cs.waitForRetry = func(context.Context, time.Duration) error { waits++; return nil }
 	_, err := cs.DetectFilesystem(context.Background())
-	var dirErr *DirectoryError
-	if !errors.As(err, &dirErr) {
+	if _, ok := errors.AsType[*DirectoryError](err); !ok {
 		t.Fatalf("DetectFilesystem = %v, want a DirectoryError", err)
 	}
 	if waits != 0 || len(rec.argv()) != 0 {

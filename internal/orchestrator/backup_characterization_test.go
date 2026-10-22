@@ -584,8 +584,7 @@ func renderBackupCharacterization(t *testing.T, dirs backupCharDirs, res backupC
 			exitCode = res.stats.ExitCode
 		}
 	} else {
-		var be *BackupError
-		if errors.As(res.err, &be) {
+		if be, ok := errors.AsType[*BackupError](res.err); ok {
 			fmt.Fprintf(&b, "error: BackupError phase=%s code=%d\n", be.Phase, be.Code.Int())
 			exitCode = be.Code.Int()
 		} else {

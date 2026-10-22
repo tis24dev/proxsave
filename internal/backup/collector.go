@@ -1272,8 +1272,7 @@ func (c *Collector) runAndClassifyCommand(ctx context.Context, spec CommandSpec,
 			return result, fmt.Errorf("critical command `%s` failed for %s: %w (output: %s)", cmdString, opts.description, err, result.outputSummary)
 		}
 		exitCode := -1
-		var exitErr *exec.ExitError
-		if errors.As(err, &exitErr) {
+		if exitErr, ok := errors.AsType[*exec.ExitError](err); ok {
 			exitCode = exitErr.ExitCode()
 		}
 		outputText := strings.TrimSpace(combined)

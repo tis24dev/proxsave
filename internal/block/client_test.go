@@ -106,8 +106,7 @@ func TestClientRunKeepsArgsOutputAndExitCode(t *testing.T) {
 	if result.ExitCode != 255 {
 		t.Errorf("ExitCode = %d, want 255", result.ExitCode)
 	}
-	var exitErr *exec.ExitError
-	if !errors.As(result.Err, &exitErr) {
+	if _, ok := errors.AsType[*exec.ExitError](result.Err); !ok {
 		t.Errorf("Err = %v, want an *exec.ExitError", result.Err)
 	}
 	if string(result.Stderr) != measuredConnectRefusedStderr || len(result.Stdout) != 0 {

@@ -2328,15 +2328,13 @@ func provisionRelaySecretAttemptReach(
 		return "", 0, reachNone
 	}
 	if _, err := provisionRelaySecretFn(ctx, cfg.ServerAPIHost, serverID, baseDir, logger); err != nil {
-		var limited *notify.RelayProvisionRateLimitError
-		if errors.As(err, &limited) {
+		if limited, ok := errors.AsType[*notify.RelayProvisionRateLimitError](err); ok {
 			logging.Debug(
 				"daemon: relay-secret provisioning rate limited (server backoff honored)")
 			return "", limited.RetryAfter, reachNotReady
 		}
 		logging.Debug("daemon: relay-secret provisioning attempt failed (will retry later): %v", err)
-		var te *serverbot.TransportError
-		if errors.As(err, &te) {
+		if _, ok := errors.AsType[*serverbot.TransportError](err); ok {
 			return "", 0, reachNone
 		}
 		return "", 0, reachNotReady
@@ -2703,8 +2701,7 @@ func exitCodeFromErr(err error) int {
 	if err == nil {
 		return 0
 	}
-	var ee *exec.ExitError
-	if errors.As(err, &ee) {
+	if ee, ok := errors.AsType[*exec.ExitError](err); ok {
 		return ee.ExitCode()
 	}
 	return 1

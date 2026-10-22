@@ -1453,8 +1453,7 @@ func TestApplyPBSNodeCfgViaAPI_NoFileAndEmptyAndError(t *testing.T) {
 // pbsTestHasNotRemoved reports whether err is the incomplete error of a section or
 // datastore block that names a stale object it did not remove.
 func pbsTestHasNotRemoved(err error) bool {
-	var section *pbsSectionRestoreIncompleteError
-	if errors.As(err, &section) {
+	if section, ok := errors.AsType[*pbsSectionRestoreIncompleteError](err); ok {
 		return len(section.notRemoved) > 0
 	}
 	var datastore *pbsDatastoreRestoreIncompleteError

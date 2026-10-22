@@ -1668,8 +1668,7 @@ func TestWaitForCommit_TimeoutShowsRollbackGuidance(t *testing.T) {
 	t.Run("timeout shows guidance", func(t *testing.T) {
 		ui := &fakeRestoreWorkflowUI{networkCommitErr: context.DeadlineExceeded}
 		err := makeFlow(ui).waitForCommit()
-		var notCommitted *NetworkApplyNotCommittedError
-		if !errors.As(err, &notCommitted) {
+		if _, ok := errors.AsType[*NetworkApplyNotCommittedError](err); !ok {
 			t.Fatalf("err=%v; want *NetworkApplyNotCommittedError", err)
 		}
 		if len(ui.shownMessages) == 0 {

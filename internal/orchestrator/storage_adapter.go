@@ -628,8 +628,7 @@ func (s *StorageAdapter) setStorageStatus(stats *BackupStats, status string) {
 // :1928, :2060), and on the retention arm there is no sibling line to say which backend
 // it was - collapsing it to the error alone leaves "context canceled" and nothing else.
 func storageFailureText(err error, backendName, operation string) string {
-	var se *storage.StorageError
-	if errors.As(err, &se) {
+	if _, ok := errors.AsType[*storage.StorageError](err); ok {
 		// %v, not err.Error(): a typed-nil *StorageError satisfies errors.As while
 		// panicking on Error(), and these two arms exist to log and carry on. fmt
 		// renders it "<nil>", which is what the literal they replaced already did.

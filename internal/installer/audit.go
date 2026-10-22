@@ -65,8 +65,7 @@ func runPostInstallAuditDryRun(ctx context.Context, execPath, configPath string)
 		return string(out), 0, nil
 	}
 
-	var exitErr *exec.ExitError
-	if errors.As(runErr, &exitErr) {
+	if exitErr, ok := errors.AsType[*exec.ExitError](runErr); ok {
 		// Non-zero exit codes are expected when warnings are emitted (exit code 1).
 		return string(out), exitErr.ExitCode(), nil
 	}

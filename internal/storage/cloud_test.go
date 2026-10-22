@@ -1580,8 +1580,7 @@ func TestCloudStorageCheckRemoteAccessiblePropagatesParentDeadline(t *testing.T)
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("checkRemoteAccessible() error = %v, want context.DeadlineExceeded", err)
 	}
-	var rcErr *remoteCheckError
-	if errors.As(err, &rcErr) {
+	if _, ok := errors.AsType[*remoteCheckError](err); ok {
 		t.Fatalf("checkRemoteAccessible() error = %v, want parent deadline error, not remoteCheckError", err)
 	}
 	if len(queue.calls) != 1 {
