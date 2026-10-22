@@ -44,32 +44,35 @@ func TestParseLogLevel(t *testing.T) {
 		name     string
 		input    string
 		expected types.LogLevel
+		ok       bool
 	}{
-		{"debug string", "debug", types.LogLevelDebug},
-		{"debug number", "5", types.LogLevelDebug},
-		{"info string", "info", types.LogLevelInfo},
-		{"info number", "4", types.LogLevelInfo},
-		{"warning string", "warning", types.LogLevelWarning},
-		{"warning number", "3", types.LogLevelWarning},
-		{"error string", "error", types.LogLevelError},
-		{"error number", "2", types.LogLevelError},
-		{"critical string", "critical", types.LogLevelCritical},
-		{"critical number", "1", types.LogLevelCritical},
-		{"none string", "none", types.LogLevelNone},
-		{"none number", "0", types.LogLevelNone},
-		{"unknown", "invalid", types.LogLevelInfo},
-		{"uppercase defaults", "DEBUG", types.LogLevelInfo},
-		{"mixed case defaults", "Debug", types.LogLevelInfo},
-		{"leading whitespace", " debug", types.LogLevelInfo},
-		{"trailing whitespace", "debug ", types.LogLevelInfo},
-		{"empty string", "", types.LogLevelInfo},
+		{"debug string", "debug", types.LogLevelDebug, true},
+		{"debug number", "5", types.LogLevelDebug, true},
+		{"info string", "info", types.LogLevelInfo, true},
+		{"info number", "4", types.LogLevelInfo, true},
+		{"warning string", "warning", types.LogLevelWarning, true},
+		{"warning number", "3", types.LogLevelWarning, true},
+		{"error string", "error", types.LogLevelError, true},
+		{"error number", "2", types.LogLevelError, true},
+		{"critical string", "critical", types.LogLevelCritical, true},
+		{"critical number", "1", types.LogLevelCritical, true},
+		{"uppercase", "DEBUG", types.LogLevelDebug, true},
+		{"mixed case", "Warning", types.LogLevelWarning, true},
+		{"none string refused", "none", types.LogLevelNone, false},
+		{"none number refused", "0", types.LogLevelNone, false},
+		{"out of range number refused", "6", types.LogLevelNone, false},
+		{"short form refused", "warn", types.LogLevelNone, false},
+		{"unknown refused", "invalid", types.LogLevelNone, false},
+		{"leading whitespace refused", " debug", types.LogLevelNone, false},
+		{"trailing whitespace refused", "debug ", types.LogLevelNone, false},
+		{"empty string refused", "", types.LogLevelNone, false},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := parseLogLevel(tt.input)
-			if result != tt.expected {
-				t.Errorf("parseLogLevel(%q) = %v; want %v", tt.input, result, tt.expected)
+			result, ok := parseLogLevel(tt.input)
+			if result != tt.expected || ok != tt.ok {
+				t.Errorf("parseLogLevel(%q) = (%v, %v); want (%v, %v)", tt.input, result, ok, tt.expected, tt.ok)
 			}
 		})
 	}

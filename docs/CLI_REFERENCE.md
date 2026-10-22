@@ -227,6 +227,10 @@ proxsave -l info    # debug|info|warning|error|critical
 | `error` | Errors only | Critical issues only |
 | `critical` | Critical failures only | Emergency mode |
 
+The level is matched without regard to case (`DEBUG` works). Any other value stops the run with
+`Unknown log level "<value>": use debug, info, warning, error or critical. Nothing was run.`
+and exit code 2.
+
 **Log output**:
 - **Console**: Colored output (if `USE_COLOR=true`)
 - **File**: `LOG_PATH/backup-<resolved-hostname>-YYYYMMDD-HHMMSS.log`

@@ -53,6 +53,12 @@ func validateModeCompatibility(args *cli.Args) []string {
 	if len(args.UnexpectedArgs) > 0 {
 		return []string{fmt.Sprintf("Unexpected argument %q: only flags are accepted. Nothing was run.", args.UnexpectedArgs[0])}
 	}
+	// An unknown --log-level used to become INFO, overriding DEBUG_LEVEL, so `-l DEBUG`
+	// logged less than the configuration asked for. Like the word above, it is a value
+	// that was not understood, so it is refused alone.
+	if args.InvalidLogLevel != "" {
+		return []string{fmt.Sprintf("Unknown log level %q: use debug, info, warning, error or critical. Nothing was run.", args.InvalidLogLevel)}
+	}
 
 	var allMessages []string
 	for _, rule := range []modeCompatibilityRule{
