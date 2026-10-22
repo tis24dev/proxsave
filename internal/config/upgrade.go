@@ -1,9 +1,10 @@
 package config
 
 import (
+	"cmp"
 	"fmt"
 	"os"
-	"sort"
+	"slices"
 	"strings"
 	"time"
 
@@ -257,7 +258,7 @@ func computeConfigUpgrade(configPath string) (*UpgradeResult, string, []byte, er
 		for k := range prunedKeys {
 			keys = append(keys, k)
 		}
-		sort.Strings(keys)
+		slices.Sort(keys)
 		warnings = append(warnings, fmt.Sprintf("Removed deprecated keys from backup.env: %s (obsolete or auto-managed settings no longer used by ProxSave)", strings.Join(keys, ", ")))
 	}
 
@@ -551,11 +552,11 @@ func computeConfigUpgrade(configPath string) (*UpgradeResult, string, []byte, er
 		})
 	}
 
-	sort.SliceStable(ops, func(i, j int) bool {
-		if ops[i].index != ops[j].index {
-			return ops[i].index < ops[j].index
-		}
-		return ops[i].order < ops[j].order
+	slices.SortStableFunc(ops, func(a, b insertOp) int {
+		return cmp.Or(
+			cmp.Compare(a.index, b.index),
+			cmp.Compare(a.order, b.order),
+		)
 	})
 
 	newLines := make([]string, 0, len(originalLines)+len(ops))
