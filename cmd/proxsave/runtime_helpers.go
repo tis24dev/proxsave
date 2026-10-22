@@ -35,18 +35,8 @@ type ExecInfo struct {
 	HasBase  bool
 }
 
-var (
-	execInfo     = &ExecInfo{}
-	execInfoOnce = &sync.Once{}
-)
-
-func getExecInfo() ExecInfo {
-	execInfoOnce.Do(func() {
-		info := detectExecInfo()
-		execInfo = &info
-	})
-	return *execInfo
-}
+// getExecInfo detects the running executable once per process.
+var getExecInfo = sync.OnceValue(detectExecInfo)
 
 func detectExecInfo() ExecInfo {
 	candidates := collectExecPathCandidates()
