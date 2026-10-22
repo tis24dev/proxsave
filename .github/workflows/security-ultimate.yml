@@ -41,13 +41,15 @@ jobs:
         run: go version
 
       ########################################
-      # STATICCHECK - RUNS NATIVELY ON GO 1.25
+      # STATICCHECK - must be a release that supports the go.mod Go version;
+      # an older one cannot type-check the code, and with `|| true` it
+      # passed silently while checking nothing.
       ########################################
       - name: Install Staticcheck
-        run: go install honnef.co/go/tools/cmd/staticcheck@2025.1.1
+        run: go install honnef.co/go/tools/cmd/staticcheck@2026.2.2
 
       - name: Run Staticcheck
-        run: staticcheck ./... || true
+        run: staticcheck ./...
 
       ########################################
       # GOVULNCHECK - NATIVE
