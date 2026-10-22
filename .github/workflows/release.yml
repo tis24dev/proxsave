@@ -162,7 +162,7 @@ jobs:
       - name: Run GoReleaser
         uses: goreleaser/goreleaser-action@a4f02ab5355a589de60d917a659ce617ed19b3de # v7
         with:
-          version: latest
+          version: '~> v2'
           workdir: ${{ github.workspace }}
           args: release --clean --config .github/.goreleaser.yml
         env:
