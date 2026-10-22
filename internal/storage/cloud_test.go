@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/tis24dev/proxsave/internal/config"
@@ -110,25 +111,27 @@ func TestCloudRetryBackoff(t *testing.T) {
 }
 
 func TestWaitForRetryContextReturnsOnCancellation(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	done := make(chan struct{})
+	synctest.Test(t, func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		done := make(chan struct{})
 
-	go func() {
-		time.Sleep(10 * time.Millisecond)
-		cancel()
-		close(done)
-	}()
+		go func() {
+			time.Sleep(10 * time.Millisecond)
+			cancel()
+			close(done)
+		}()
 
-	start := time.Now()
-	err := waitForRetryContext(ctx, time.Second)
-	if !errors.Is(err, context.Canceled) {
-		t.Fatalf("waitForRetryContext() error = %v, want context.Canceled", err)
-	}
-	if elapsed := time.Since(start); elapsed >= 200*time.Millisecond {
-		t.Fatalf("waitForRetryContext() returned after %v, want prompt cancellation", elapsed)
-	}
+		start := time.Now()
+		err := waitForRetryContext(ctx, time.Second)
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("waitForRetryContext() error = %v, want context.Canceled", err)
+		}
+		if elapsed := time.Since(start); elapsed >= 200*time.Millisecond {
+			t.Fatalf("waitForRetryContext() returned after %v, want prompt cancellation", elapsed)
+		}
 
-	<-done
+		<-done
+	})
 }
 
 func TestCloudStorageDetectFilesystem_RcloneMissingReturnsRecoverableError(t *testing.T) {

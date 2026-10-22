@@ -13,6 +13,7 @@ import (
 	"sync/atomic"
 	"syscall"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/tis24dev/proxsave/internal/logging"
@@ -164,22 +165,24 @@ func TestGenerateChecksumBounded_StallSkipsClose(t *testing.T) {
 // every chunk is under it, must still succeed (per-chunk budget, not whole-file)
 // and must close the handle.
 func TestGenerateChecksumBounded_SlowHealthyReaderNoFalseTimeout(t *testing.T) {
-	logger := newChkLogger()
-	data := bytes.Repeat([]byte("x"), 240)
-	rc := &chkRecordingRC{r: &chkSlowReader{data: data, step: 8, delay: 10 * time.Millisecond}} // ~30 reads * 10ms
-	withChecksumOpen(t, func(context.Context, string, time.Duration) (io.ReadCloser, error) { return rc, nil })
+	synctest.Test(t, func(t *testing.T) {
+		logger := newChkLogger()
+		data := bytes.Repeat([]byte("x"), 240)
+		rc := &chkRecordingRC{r: &chkSlowReader{data: data, step: 8, delay: 10 * time.Millisecond}} // ~30 reads * 10ms
+		withChecksumOpen(t, func(context.Context, string, time.Duration) (io.ReadCloser, error) { return rc, nil })
 
-	got, err := GenerateChecksumBounded(context.Background(), logger, "/x", 150*time.Millisecond)
-	if err != nil {
-		t.Fatalf("slow healthy read err = %v; a per-chunk budget must not accumulate across chunks", err)
-	}
-	sum := sha256.Sum256(data)
-	if got != hex.EncodeToString(sum[:]) {
-		t.Fatalf("digest mismatch")
-	}
-	if !rc.closed.Load() {
-		t.Fatal("a healthy read must close the handle")
-	}
+		got, err := GenerateChecksumBounded(context.Background(), logger, "/x", 150*time.Millisecond)
+		if err != nil {
+			t.Fatalf("slow healthy read err = %v; a per-chunk budget must not accumulate across chunks", err)
+		}
+		sum := sha256.Sum256(data)
+		if got != hex.EncodeToString(sum[:]) {
+			t.Fatalf("digest mismatch")
+		}
+		if !rc.closed.Load() {
+			t.Fatal("a healthy read must close the handle")
+		}
+	})
 }
 
 // A genuine (non-timeout) read error must propagate as "failed to read file",
