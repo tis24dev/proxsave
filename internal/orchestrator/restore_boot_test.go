@@ -5,6 +5,7 @@ import (
 	"errors"
 	"maps"
 	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -369,5 +370,28 @@ func TestBootAndZFSCommandsAreAllowedBySafeexec(t *testing.T) {
 		if _, err := safeexec.CommandContext(context.Background(), name, "--version"); err != nil {
 			t.Errorf("%s: %v", name, err)
 		}
+	}
+}
+
+// When two grub.d drop-ins both set GRUB_CMDLINE_LINUX_DEFAULT, the one reported is the
+// first in name order.
+func TestGrubDropInSettingCmdlineDefaultPicksTheFirstByName(t *testing.T) {
+	orig := restoreFS
+	t.Cleanup(func() { restoreFS = orig })
+	restoreFS = osFS{}
+	root := t.TempDir()
+	dir := filepath.Join(root, "etc/default/grub.d")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	for _, name := range []string{"b-tuning.cfg", "a-console.cfg"} {
+		content := "GRUB_CMDLINE_LINUX_DEFAULT=\"quiet\"\n"
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o644); err != nil {
+			t.Fatalf("write %s: %v", name, err)
+		}
+	}
+
+	if got, want := grubDropInSettingCmdlineDefault(root), filepath.Join(dir, "a-console.cfg"); got != want {
+		t.Fatalf("grubDropInSettingCmdlineDefault = %q, want %q", got, want)
 	}
 }
