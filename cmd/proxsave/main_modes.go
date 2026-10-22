@@ -67,7 +67,48 @@ func validateModeCompatibility(args *cli.Args) []string {
 			allMessages = append(allMessages, messages...)
 		}
 	}
+	if len(allMessages) == 0 {
+		allMessages = validateSingleMode(args)
+	}
 	return allMessages
+}
+
+// validateSingleMode refuses two operation modes in one run. Without it the pairs the
+// rules above do not name were settled by dispatch order: the first mode to handle the
+// run won and the other was never read, with no line on the console, so
+// `--backup --show-whatsnew` from cron ran no backup and exited 0. It runs only when
+// no rule above refused, so each conflict is explained by one line.
+func validateSingleMode(args *cli.Args) []string {
+	modes := enabledModes(operationModes(args))
+	if len(modes) < 2 {
+		return nil
+	}
+	return []string{fmt.Sprintf("%s cannot be combined with: %s", modes[0], strings.Join(modes[1:], ", "))}
+}
+
+// operationModes lists every flag that selects what the run does. Modifiers
+// (--dry-run, --cli, --localfile, --support, --config, --log-level and the
+// --upgrade-finalize-* values) are not in it: they change how a mode runs.
+func operationModes(args *cli.Args) []incompatibleMode {
+	return []incompatibleMode{
+		{enabled: args.Backup, label: "--backup"},
+		{enabled: args.Restore, label: "--restore"},
+		{enabled: args.Decrypt, label: "--decrypt"},
+		{enabled: args.Install, label: "--install"},
+		{enabled: args.NewInstall, label: "--new-install"},
+		{enabled: args.Upgrade, label: "--upgrade"},
+		{enabled: args.ForceNewKey, label: "--newkey"},
+		{enabled: args.UpgradeConfig, label: "--upgrade-config"},
+		{enabled: args.UpgradeConfigDry, label: "--upgrade-config-dry-run"},
+		{enabled: args.UpgradeConfigJSON, label: "--upgrade-config-json"},
+		{enabled: args.ShowWhatsnew, label: "--show-whatsnew"},
+		{enabled: args.UpgradeFinalize, label: "--upgrade-finalize"},
+		{enabled: args.CleanupGuards, label: "--cleanup-guards"},
+		{enabled: args.Daemon, label: "--daemon"},
+		{enabled: args.DaemonSetup, label: "--daemon-setup"},
+		{enabled: args.DaemonRemove, label: "--daemon-remove"},
+		{enabled: args.DaemonStatus, label: "--daemon-status"},
+	}
 }
 
 func validateCleanupGuardsCompatibility(args *cli.Args) []string {
@@ -209,6 +250,9 @@ func supportIncompatibleModes(args *cli.Args) []string {
 		{enabled: args.NewInstall, label: "--new-install"},
 		{enabled: args.UpgradeConfig || args.UpgradeConfigDry || args.UpgradeConfigJSON, label: "--upgrade-config"},
 		{enabled: args.ForceNewKey, label: "--newkey"},
+		{enabled: args.Upgrade, label: "--upgrade"},
+		{enabled: args.UpgradeFinalize, label: "--upgrade-finalize"},
+		{enabled: args.ShowWhatsnew, label: "--show-whatsnew"},
 	})
 }
 

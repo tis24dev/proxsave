@@ -25,9 +25,10 @@ them with another mode; `--install` not with `--new-install` or `--upgrade`;
 `--cleanup-guards` and `--support` each with their own short list of incompatible modes; and
 `--dry-run` refused with `--upgrade`, `--upgrade-finalize`, `--daemon`, `--daemon-setup` and
 `--daemon-remove`, none of which have ever honoured it, and with `--restore`, which cannot run
-without modifying the system (`DRY_RUN=true` refuses a restore too). The run stops with the
-reason printed. Modifiers (`--config`, `--log-level`, `--cli`) do combine with the mode they apply
-to.
+without modifying the system (`DRY_RUN=true` refuses a restore too). Any other two operation
+modes in one run are refused as well, for example `--restore` with `--decrypt`. The run stops
+with the reason printed. Modifiers (`--config`, `--log-level`, `--cli`) do combine with the mode
+they apply to.
 
 **Configuration precedence** (highest to lowest):
 1. Command-line flags
